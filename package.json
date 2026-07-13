@@ -1,0 +1,126 @@
+{
+  "name": "pi-chat",
+  "displayName": "Pi Chat",
+  "description": "在 VSCode 中与 pi coding agent 进行对话",
+  "version": "0.0.1",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Chat"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "piChat.openChat",
+        "title": "Pi Chat: 打开对话窗口",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "piChat.newSession",
+        "title": "Pi Chat: 新建会话",
+        "icon": "$(add)"
+      },
+      {
+        "command": "piChat.history",
+        "title": "Pi Chat: 历史会话",
+        "icon": "$(history)"
+      },
+      {
+        "command": "piChat.openSettings",
+        "title": "Pi Chat: 设置（编辑 models.json）",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "piChat.openHooks",
+        "title": "Pi Chat: 管理 Hooks",
+        "icon": "$(plug)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "piChatContainer",
+          "title": "Pi Chat",
+          "icon": "$(comment-discussion)"
+        }
+      ]
+    },
+    "views": {
+      "piChatContainer": [
+        {
+          "type": "webview",
+          "id": "piChat.chatView",
+          "name": "对话"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "piChat.history",
+          "when": "view == piChat.chatView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "piChat.newSession",
+          "when": "view == piChat.chatView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "piChat.openSettings",
+          "when": "view == piChat.chatView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "piChat.openHooks",
+          "when": "view == piChat.chatView",
+          "group": "navigation@4"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Pi Chat",
+      "properties": {
+        "piChat.piPath": {
+          "type": "string",
+          "default": "pi",
+          "description": "pi 可执行文件的路径。默认为 'pi'（需在 PATH 中）。"
+        },
+        "piChat.provider": {
+          "type": "string",
+          "default": "",
+          "description": "LLM provider（如 anthropic, openai, google）。留空使用 pi 默认配置。"
+        },
+        "piChat.model": {
+          "type": "string",
+          "default": "",
+          "description": "模型 pattern 或 ID（如 sonnet, gpt-4o）。留空使用 pi 默认配置。"
+        },
+        "piChat.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "传递给 pi --mode rpc 的额外命令行参数。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}

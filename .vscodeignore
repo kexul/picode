@@ -1,0 +1,8 @@
+.vscode/**
+src/**
+out/**/*.map
+tsconfig.json
+node_modules/**
+*.vsix
+verify.js
+_script.js
