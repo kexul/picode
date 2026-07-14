@@ -157,7 +157,6 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   }
   #modelBtn:hover { opacity: 0.85; }
   #modelBtn { transition: opacity 200ms; }
-  #bottomHint { font-size: 0.75em; opacity: 0.45; }
   /* @ 文件引用下拉 */
   #fileMenu {
     position: absolute; bottom: 100%; left: 0; margin-bottom: 4px; z-index: 10;
@@ -174,17 +173,14 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   /* 上下文/token 状态栏 */
   #statsBar {
     display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
-    padding: 3px 10px; font-size: 0.78em; opacity: 0.6;
+    font-size: 0.78em; opacity: 0.6;
     font-family: var(--vscode-editor-font-family, monospace);
-    border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
   }
   #statsBar:empty { display: none; }
   .bar-hidden { display: none !important; }
   #statsBar .stat { white-space: nowrap; }
   #statsBar .ctx-hi { color: var(--vscode-editorWarning-foreground, #cca700); }
   #statsBar .ctx-crit { color: var(--vscode-errorForeground); }
-  #statsBar .ctx-bar { display: inline-block; width: 40px; height: 2px; background: var(--vscode-panel-border, rgba(128,128,128,0.3)); border-radius: 1px; vertical-align: middle; margin-left: 2px; overflow: hidden; }
-  #statsBar .ctx-bar-fill { display: block; height: 100%; border-radius: 1px; transition: width 300ms ease; }
   /* 本次对话修改的文件列表 */
   #changedFiles {
     display: flex; flex-direction: column;
@@ -293,7 +289,6 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     <div id="emptyHint" class="empty-hint">输入消息开始对话…</div>
   </div>
   <div id="status"></div>
-  <div id="statsBar"></div>
   <div id="changedFiles"></div>
   <div id="ticketBar">
     <div class="tk-header">
@@ -321,7 +316,7 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     </div>
     <div id="bottomBar">
       <button id="modelBtn" title="切换模型">⚡ <span id="modelName">模型</span></button>
-      <span id="bottomHint">输入 @ 引用打开的文件</span>
+      <div id="statsBar"></div>
     </div>
   </div>
   <script nonce="${n}" src="${scriptUri}"></script>

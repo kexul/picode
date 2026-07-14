@@ -167,36 +167,72 @@
   }
 
   function renderStats(msg) {
-    const t = msg.tokens || {};
     const parts = [];
-    parts.push('<span class="stat" title="输入 token">↑ ' + fmtNum(t.input) + "</span>");
-    parts.push('<span class="stat" title="输出 token">↓ ' + fmtNum(t.output) + "</span>");
-    parts.push('<span class="stat" title="缓存读取">R ' + fmtNum(t.cacheRead) + "</span>");
-    parts.push('<span class="stat" title="缓存写入">W ' + fmtNum(t.cacheWrite) + "</span>");
     if (typeof msg.cost === "number") {
       parts.push('<span class="stat" title="会话成本">$' + msg.cost.toFixed(4) + "</span>");
     }
     const cu = msg.contextUsage;
     if (cu && typeof cu.percent === "number") {
       let cls = "stat";
-      let barColor = "var(--vscode-foreground)";
-      if (cu.percent >= 90) { cls += " ctx-crit"; barColor = "var(--vscode-errorForeground)"; }
-      else if (cu.percent >= 70) { cls += " ctx-hi"; barColor = "var(--vscode-editorWarning-foreground, #cca700)"; }
+      if (cu.percent >= 90) { cls += " ctx-crit"; }
+      else if (cu.percent >= 70) { cls += " ctx-hi"; }
       const win = cu.contextWindow ? " / " + fmtNum(cu.contextWindow) : "";
-      const barPct = Math.min(cu.percent, 100);
       parts.push(
-        '<span class="' + cls + '" title="上下文使用">▣ ' +
-        cu.percent.toFixed(1) + "% (" + fmtNum(cu.tokens) + win + ")" +
-        '<span class="ctx-bar"><span class="ctx-bar-fill" style="width:' + barPct + '%;background:' + barColor + '"></span></span></span>'
+        '<span class="' + cls + '" title="上下文使用">上下文 ' +
+        cu.percent.toFixed(1) + '% (' + fmtNum(cu.tokens) + win + ')</span>'
       );
     }
     statsBarEl.innerHTML = parts.join("");
   }
 
   let currentAssistant = null; // { el, raw }
-  let currentThinking = null;  // { wrap, body, raw, expanded }
+  let currentThinking = null;  // { wrap, body, textNode, raw, expanded }
   let currentToolRow = null;   // 连续 tool 调用的 flex 容器
   let streaming = false;
+
+  // ---- rAF 节流：delta 只标记 dirty，每帧最多做一次 renderMarkdown + innerHTML ----
+  let textDirty = false;      // 文本块有待渲染
+  let pendingThinkDelta = "";  // 思考卡片纯文本增量缓冲
+  let rafId = 0;
+
+  function scheduleFlush() {
+    if (rafId) return;
+    rafId = requestAnimationFrame(flushDeltas);
+  }
+
+  function flushDeltas() {
+    rafId = 0;
+    if (textDirty && currentAssistant) {
+      currentAssistant.el.innerHTML = renderMarkdown(currentAssistant.raw || "");
+      textDirty = false;
+    }
+    if (pendingThinkDelta && currentThinking && currentThinking.textNode) {
+      currentThinking.textNode.appendData(pendingThinkDelta);
+      pendingThinkDelta = "";
+    }
+    smoothScrollToBottom();
+  }
+
+  // 取消 pending rAF 并清空标记（定稿前调用）
+  function cancelFlush() {
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+      rafId = 0;
+    }
+    textDirty = false;
+    pendingThinkDelta = "";
+  }
+
+  // 定稿当前文本块：cancel rAF → innerHTML 替换为 markdown → 置空
+  function finalizeCurrentAssistant() {
+    cancelFlush();
+    if (currentAssistant) {
+      const el = currentAssistant.el;
+      el.innerHTML = renderMarkdown(currentAssistant.raw || "");
+      smoothScrollToBottom();
+      currentAssistant = null;
+    }
+  }
   let pendingImages = []; // [{ data, mimeType }]
   // edit/write 工具调用卡片：toolCallId -> { el, path }
   const pendingToolCards = new Map();
@@ -396,7 +432,9 @@
         !/^(#{1,6})\s/.test(lines[i]) &&
         !/^\s*[-*+]\s/.test(lines[i]) &&
         !/^\s*\d+\.\s/.test(lines[i]) &&
-        !/^\s*>\s?/.test(lines[i])
+        !/^\s*>\s?/.test(lines[i]) &&
+        // 表格行（| ... |）或表格分隔行（|---|---|）应终止段落
+        !/^\s*\|.*\|\s*$/.test(lines[i])
       ) {
         para += "\n" + lines[i];
         i++;
@@ -416,6 +454,7 @@
   // 是否"黏底"：仅当用户已在底部附近时才自动滚动，避免打断向上翻看历史
   let stickToBottom = true;
   const BOTTOM_THRESHOLD = 40; // px
+  let lerpRafId = 0;
 
   function isNearBottom() {
     return (
@@ -429,8 +468,36 @@
     stickToBottom = isNearBottom();
   });
 
+  // lerp 滚动：每帧追近目标 1/3，既有平滑惯性又快速收敛
+  function lerpScrollStep() {
+    const target = messagesEl.scrollHeight - messagesEl.clientHeight;
+    const cur = messagesEl.scrollTop;
+    const diff = target - cur;
+    if (Math.abs(diff) < 1) {
+      messagesEl.scrollTop = target;
+      lerpRafId = 0;
+      return;
+    }
+    messagesEl.scrollTop = cur + diff * 0.3;
+    lerpRafId = requestAnimationFrame(lerpScrollStep);
+  }
+
+  // 启动 lerp 滚动（若已在运行则不重复启动）
+  function smoothScrollToBottom() {
+    if (!stickToBottom) return;
+    if (!lerpRafId) {
+      lerpRafId = requestAnimationFrame(lerpScrollStep);
+    }
+  }
+
+  // 强制瞬移到底（用于新消息发送等需要立刻归位的场景）
   function scrollToBottom(force) {
     if (force || stickToBottom) {
+      // 取消进行中的 lerp，直接归位
+      if (lerpRafId) {
+        cancelAnimationFrame(lerpRafId);
+        lerpRafId = 0;
+      }
       messagesEl.scrollTop = messagesEl.scrollHeight;
       stickToBottom = true;
     }
@@ -506,9 +573,11 @@
 
     const body = document.createElement("div");
     body.className = "thinking-body";
+    const textNode = document.createTextNode("");
+    body.appendChild(textNode);
     wrap.appendChild(body);
 
-    const state = { wrap, body, raw: "", expanded: false };
+    const state = { wrap, body, textNode, raw: "", expanded: false };
     header.addEventListener("click", () => {
       state.expanded = !state.expanded;
       wrap.classList.toggle("collapsed", !state.expanded);
@@ -822,32 +891,37 @@
     const msg = event.data;
     switch (msg.type) {
       case "userMessage": {
+        finalizeCurrentAssistant();
         const label = msg.imageCount ? "[" + msg.imageCount + " 张图片] " : "";
         addPlain("user", "你", label + (msg.text || ""));
-        currentAssistant = null;
         currentThinking = null;
         scrollToBottom(true); // 发送新消息时强制回到底部
         break;
       }
       case "streamStart":
         setStreaming(true);
-        currentAssistant = null;
+        finalizeCurrentAssistant();
         currentThinking = null;
         break;
       case "streamEnd":
-        setStreaming(false);
-        currentAssistant = null;
+        // 先 flush 思考 delta（finalizeCurrentAssistant 会 cancel 所有 pending）
+        if (rafId) {
+          flushDeltas();
+        }
+        finalizeCurrentAssistant();
         currentThinking = null;
+        setStreaming(false);
         break;
       case "assistantDelta":
         if (!currentAssistant) {
           currentAssistant = { el: addMarkdown("pi", ""), raw: "" };
         }
         currentAssistant.raw += msg.delta;
-        currentAssistant.el.innerHTML = renderMarkdown(currentAssistant.raw);
-        scrollToBottom();
+        textDirty = true;
+        scheduleFlush();
         break;
       case "assistantFull":
+        finalizeCurrentAssistant();
         addMarkdown("pi", msg.text);
         currentAssistant = null;
         break;
@@ -856,16 +930,18 @@
           currentThinking = addThinking();
         }
         currentThinking.raw += msg.delta;
-        currentThinking.body.textContent = currentThinking.raw;
-        scrollToBottom();
+        pendingThinkDelta += msg.delta;
+        scheduleFlush();
         break;
       case "tool": {
+        finalizeCurrentAssistant();
         const argStr = msg.args ? JSON.stringify(msg.args) : "";
         addTool(msg.toolName, argStr);
         currentAssistant = null;
         break;
       }
       case "editCardStart": {
+        finalizeCurrentAssistant();
         const card = buildEditCard(msg.toolName, msg.label, msg.path, msg.toolCallId);
         pendingToolCards.set(msg.toolCallId, card);
         currentAssistant = null;
@@ -898,6 +974,7 @@
         addPlain("system error", null, msg.text);
         break;
       case "clear":
+        cancelFlush();
         messagesEl.innerHTML = '<div id="emptyHint" class="empty-hint">输入消息开始对话…</div>';
         statsBarEl.innerHTML = "";
         changedFilesEl.innerHTML = "";
