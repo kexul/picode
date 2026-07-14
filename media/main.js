@@ -16,6 +16,13 @@
   const ticketApplyEl = document.getElementById("ticketApply");
   const ticketClearEl = document.getElementById("ticketClear");
   const ticketActiveEl = document.getElementById("ticketActive");
+  const ticketBarEl = document.getElementById("ticketBar");
+
+  // 显示选项：控制状态栏 / 工单栏的显隐
+  function applyViewOptions(opts) {
+    statsBarEl.classList.toggle("bar-hidden", opts.showStatsBar === false);
+    ticketBarEl.classList.toggle("bar-hidden", opts.showTicketBar === false);
+  }
 
   // 工单：校验 #+数字 开头
   function isValidTicket(v) {
@@ -656,6 +663,9 @@
           const m = before.match(/(^|\s)@([^\s@]*)$/);
           filterFiles(m ? m[2] : "");
         }
+        break;
+      case "viewOptions":
+        applyViewOptions(msg);
         break;
     }
   });

@@ -116,6 +116,7 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
   }
   #statsBar:empty { display: none; }
+  .bar-hidden { display: none !important; }
   #statsBar .stat { white-space: nowrap; }
   #statsBar .ctx-hi { color: var(--vscode-editorWarning-foreground, #cca700); }
   #statsBar .ctx-crit { color: var(--vscode-errorForeground); }

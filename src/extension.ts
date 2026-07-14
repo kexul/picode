@@ -68,6 +68,12 @@ export function activate(context: vscode.ExtensionContext): void {
             HooksPanel.show(context.extensionUri);
         })
     );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand("piChat.openViewOptions", () => {
+            provider.pickViewOptions();
+        })
+    );
 }
 
 export function deactivate(): void {

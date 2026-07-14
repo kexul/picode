@@ -41,6 +41,65 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     constructor(private readonly context: vscode.ExtensionContext) {}
 
+    // ---- 显示选项（状态栏 / 工单栏显示开关）----
+    private static readonly KEY_SHOW_STATS = "piChat.showStatsBar";
+    private static readonly KEY_SHOW_TICKET = "piChat.showTicketBar";
+
+    /** 状态栏默认开启。 */
+    private getShowStatsBar(): boolean {
+        return this.context.globalState.get<boolean>(ChatViewProvider.KEY_SHOW_STATS, true);
+    }
+
+    /** 工单栏默认关闭。 */
+    private getShowTicketBar(): boolean {
+        return this.context.globalState.get<boolean>(ChatViewProvider.KEY_SHOW_TICKET, false);
+    }
+
+    /** 向 webview 推送当前显示选项。 */
+    private sendViewOptions(): void {
+        this.postToWebview({
+            type: "viewOptions",
+            showStatsBar: this.getShowStatsBar(),
+            showTicketBar: this.getShowTicketBar(),
+        });
+    }
+
+    /** 打开显示选项开关列表（多选 QuickPick）。 */
+    public async pickViewOptions(): Promise<void> {
+        const items: Array<vscode.QuickPickItem & { key: string }> = [
+            {
+                key: ChatViewProvider.KEY_SHOW_STATS,
+                label: "状态栏",
+                description: "对话框上方的 token / 上下文状态栏",
+                picked: this.getShowStatsBar(),
+            },
+            {
+                key: ChatViewProvider.KEY_SHOW_TICKET,
+                label: "工单栏",
+                description: "对话框上方的工单（ticket）栏",
+                picked: this.getShowTicketBar(),
+            },
+        ];
+        const picked = await vscode.window.showQuickPick(items, {
+            title: "显示选项",
+            placeHolder: "勾选要显示的栏（可多选）",
+            canPickMany: true,
+        });
+        if (picked === undefined) {
+            return; // 用户取消，不修改
+        }
+        const pickedKeys = new Set(picked.map((p) => p.key));
+        this.context.globalState.update(
+            ChatViewProvider.KEY_SHOW_STATS,
+            pickedKeys.has(ChatViewProvider.KEY_SHOW_STATS)
+        );
+        this.context.globalState.update(
+            ChatViewProvider.KEY_SHOW_TICKET,
+            pickedKeys.has(ChatViewProvider.KEY_SHOW_TICKET)
+        );
+        this.sendViewOptions();
+    }
+
     resolveWebviewView(webviewView: vscode.WebviewView): void {
         this.view = webviewView;
         webviewView.webview.options = {
@@ -290,6 +349,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 this.refreshStats();
                 this.sendTickets();
                 this.sendActiveTicket();
+                this.sendViewOptions();
                 break;
         }
     }

@@ -40,6 +40,11 @@
         "command": "piChat.openHooks",
         "title": "Pi Chat: 管理 Hooks",
         "icon": "$(plug)"
+      },
+      {
+        "command": "piChat.openViewOptions",
+        "title": "Pi Chat: 显示选项",
+        "icon": "$(list-selection)"
       }
     ],
     "viewsContainers": {
@@ -81,6 +86,11 @@
           "command": "piChat.openHooks",
           "when": "view == piChat.chatView",
           "group": "navigation@4"
+        },
+        {
+          "command": "piChat.openViewOptions",
+          "when": "view == piChat.chatView",
+          "group": "navigation@5"
         }
       ]
     },
