@@ -197,11 +197,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                                 this.postToWebview({ type: "assistantFull", text });
                                 text = "";
                             }
-                            this.postToWebview({
-                                type: "tool",
-                                toolName: c.name,
-                                args: c.arguments,
-                            });
+                            // edit/write 在历史回放中显示为不可点击的摘要卡片
+                            if (c.name === "edit" || c.name === "write") {
+                                const p = this.editToolPath(c.name, c.arguments);
+                                this.postToWebview({
+                                    type: "editCardStart",
+                                    toolCallId: c.id || `hist-${Math.random()}`,
+                                    toolName: c.name,
+                                    path: p || "",
+                                    label: p ? this.relativeTo(this.getCwd(), p) : "",
+                                });
+                                this.postToWebview({
+                                    type: "editCardResult",
+                                    toolCallId: c.id || `hist-${Math.random()}`,
+                                    history: true,
+                                });
+                            } else {
+                                this.postToWebview({
+                                    type: "tool",
+                                    toolName: c.name,
+                                    args: c.arguments,
+                                });
+                            }
                         }
                     }
                     if (text.trim()) {
@@ -338,6 +355,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             case "openDiff":
                 if (typeof msg.path === "string") {
                     this.openDiff(msg.path);
+                }
+                break;
+            case "openEditLocation":
+                if (typeof msg.path === "string") {
+                    this.openEditLocation(msg.path, typeof msg.line === "number" ? msg.line : 1);
                 }
                 break;
             case "setTicket":
@@ -501,14 +523,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             }
             case "tool_execution_start":
                 this.trackEditStart(evt);
-                this.postToWebview({
-                    type: "tool",
-                    toolName: evt.toolName,
-                    args: evt.args,
-                });
+                this.onToolStart(evt);
                 break;
             case "tool_execution_end":
                 this.trackEditEnd(evt);
+                this.onToolEnd(evt);
                 break;
             case "agent_settled":
             case "agent_end":
@@ -516,6 +535,70 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 this.postToWebview({ type: "streamEnd" });
                 this.refreshStats();
                 break;
+        }
+    }
+
+    /** edit/write 工具开始：推送 edit 卡片占位。其他工具走原 tool 行。 */
+    private onToolStart(evt: any): void {
+        const toolName: string = evt.toolName;
+        const isEditLike = toolName === "edit" || toolName === "write";
+        const path = isEditLike ? this.editToolPath(toolName, evt.args) : null;
+        if (path && evt.toolCallId) {
+            this.postToWebview({
+                type: "editCardStart",
+                toolCallId: evt.toolCallId,
+                toolName,
+                path,
+                label: this.relativeTo(this.getCwd(), path),
+            });
+        } else {
+            this.postToWebview({
+                type: "tool",
+                toolName,
+                args: evt.args,
+            });
+        }
+    }
+
+    /** edit/write 工具结束：回填 diff 或错误信息。 */
+    private onToolEnd(evt: any): void {
+        const toolName: string = evt.toolName;
+        if (toolName !== "edit" && toolName !== "write") {
+            return;
+        }
+        if (!evt.toolCallId) {
+            return;
+        }
+        const details = !evt.isError ? evt.result?.details : undefined;
+        const errorText = evt.isError ? this.extractErrorText(evt.result) : undefined;
+        this.postToWebview({
+            type: "editCardResult",
+            toolCallId: evt.toolCallId,
+            diff: typeof details?.diff === "string" ? details.diff : undefined,
+            firstChangedLine: typeof details?.firstChangedLine === "number"
+                ? details.firstChangedLine : undefined,
+            isError: !!evt.isError,
+            errorText,
+        });
+    }
+
+    /** 从工具返回结果中提取错误文本。 */
+    private extractErrorText(result: any): string | undefined {
+        if (!result) {
+            return undefined;
+        }
+        const content = result.content;
+        if (Array.isArray(content)) {
+            for (const c of content) {
+                if (c && c.type === "text" && typeof c.text === "string") {
+                    return c.text;
+                }
+            }
+        }
+        try {
+            return JSON.stringify(result);
+        } catch {
+            return undefined;
         }
     }
 
@@ -656,6 +739,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             );
         } catch (e: any) {
             vscode.window.showErrorMessage(`无法打开 diff: ${e.message}`);
+        }
+    }
+
+    /** 打开文件并跳转到指定行（用于 edit 卡片点击跳转）。 */
+    private async openEditLocation(path: string, line: number): Promise<void> {
+        try {
+            const uri = vscode.Uri.file(path);
+            const line0 = Math.max(0, Math.floor(line) - 1);
+            await vscode.window.showTextDocument(uri, {
+                selection: new vscode.Range(line0, 0, line0, 0),
+            });
+        } catch (e: any) {
+            vscode.window.showErrorMessage(`无法打开文件: ${e.message}`);
         }
     }
 

@@ -178,6 +178,8 @@
   let currentThinking = null;
   let streaming = false;
   let pendingImages = []; // [{ data, mimeType }]
+  // edit/write 工具调用卡片：toolCallId -> { el, path }
+  const pendingToolCards = new Map();
 
   // ---------- 语法高亮 ----------
   const KEYWORDS = new Set(
@@ -392,6 +394,70 @@
     messagesEl.appendChild(div);
     scrollToBottom();
     return body;
+  }
+
+  // 构建 edit/write 工具调用卡片（占位态），返回 { el, path, setResult }。
+  function buildEditCard(toolName, label, path) {
+    const el = document.createElement("div");
+    el.className = "msg edit-card";
+    const title = document.createElement("div");
+    title.className = "edit-title";
+    const name = document.createElement("span");
+    name.className = "et-name";
+    name.textContent = toolName + " " + (label || "");
+    title.appendChild(name);
+    const loading = document.createElement("span");
+    loading.className = "et-loading";
+    loading.textContent = "…";
+    title.appendChild(loading);
+    el.appendChild(title);
+    messagesEl.appendChild(el);
+    scrollToBottom();
+    return {
+      el,
+      path,
+      setResult(msg) {
+        loading.remove();
+        if (msg.isError) {
+          el.classList.add("error");
+          const err = document.createElement("span");
+          err.className = "et-err";
+          err.textContent = msg.errorText || "失败";
+          title.appendChild(err);
+          return;
+        }
+        if (msg.history) {
+          // 历史回放：无 diff、不可点击
+          title.style.cursor = "default";
+          return;
+        }
+        if (msg.diff) {
+          el.appendChild(renderDiffBlock(msg.diff));
+        }
+        const line = typeof msg.firstChangedLine === "number" ? msg.firstChangedLine : 1;
+        title.addEventListener("click", () => {
+          vscode.postMessage({ type: "openEditLocation", path, line });
+        });
+      },
+    };
+  }
+
+  // 把 pi 的 diff 字符串渲染成红绿行块。
+  function renderDiffBlock(diffText) {
+    const wrap = document.createElement("div");
+    wrap.className = "edit-diff";
+    const lines = String(diffText).split("\n");
+    for (const line of lines) {
+      const div = document.createElement("div");
+      div.className = "diff-line";
+      const prefix = line.charAt(0);
+      if (prefix === "+") div.classList.add("add");
+      else if (prefix === "-") div.classList.add("del");
+      else div.classList.add("ctx");
+      div.textContent = line;
+      wrap.appendChild(div);
+    }
+    return wrap;
   }
 
   function setStreaming(on) {
@@ -619,6 +685,21 @@
         currentAssistant = null;
         break;
       }
+      case "editCardStart": {
+        const card = buildEditCard(msg.toolName, msg.label, msg.path);
+        pendingToolCards.set(msg.toolCallId, card);
+        currentAssistant = null;
+        break;
+      }
+      case "editCardResult": {
+        const card = pendingToolCards.get(msg.toolCallId);
+        if (card) {
+          pendingToolCards.delete(msg.toolCallId);
+          card.setResult(msg);
+          scrollToBottom();
+        }
+        break;
+      }
       case "system":
         addPlain("system", null, msg.text);
         break;
@@ -634,6 +715,7 @@
         setActiveTicketLabel("");
         currentAssistant = null;
         currentThinking = null;
+        pendingToolCards.clear();
         break;
       case "modelChanged":
         modelNameEl.textContent = msg.modelId || "模型";

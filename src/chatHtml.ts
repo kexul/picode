@@ -143,6 +143,31 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .cf-item .cf-add { color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
   .cf-item .cf-del { color: var(--vscode-gitDecoration-deletedResourceForeground, #ad0707); }
   .cf-item .cf-stat { white-space: nowrap; }
+  /* edit/write 工具调用卡片 */
+  .edit-card {
+    margin: 6px 0; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
+    border-radius: 4px; overflow: hidden; font-size: 0.85em;
+  }
+  .edit-card.error { border-color: var(--vscode-errorForeground, rgba(255,0,0,0.5)); }
+  .edit-title {
+    display: flex; align-items: center; gap: 6px; padding: 4px 10px; cursor: pointer;
+    background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1));
+    font-family: var(--vscode-editor-font-family, monospace);
+  }
+  .edit-title:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
+  .edit-card.error .edit-title { cursor: default; }
+  .edit-card.error .edit-title:hover { background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); }
+  .edit-title .et-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .edit-title .et-loading { opacity: 0.6; }
+  .edit-title .et-err { color: var(--vscode-errorForeground); }
+  .edit-diff {
+    max-height: 200px; overflow-y: auto; padding: 4px 0;
+    font-family: var(--vscode-editor-font-family, monospace);
+  }
+  .diff-line { padding: 0 10px; white-space: pre; }
+  .diff-line.del { background: var(--vscode-diffEditor-removedLineBackground, rgba(255,0,0,0.1)); color: var(--vscode-gitDecoration-deletedResourceForeground, #ad0707); }
+  .diff-line.add { background: var(--vscode-diffEditor-insertedLineBackground, rgba(0,255,0,0.1)); color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
+  .diff-line.ctx { opacity: 0.6; }
   /* 工单（ticket）栏 */
   #ticketBar {
     display: flex; flex-direction: column; gap: 4px;
