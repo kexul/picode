@@ -37,11 +37,16 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     color: var(--vscode-foreground);
     background: var(--vscode-editor-background);
   }
-  #messages { flex: 1; overflow-y: auto; padding: 8px; }
-  .msg { margin: 6px 0; padding: 8px 10px; border-radius: 6px; word-wrap: break-word; }
-  .user { background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); white-space: pre-wrap; }
-  .assistant { background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); }
-  .system { font-style: italic; opacity: 0.75; font-size: 0.9em; white-space: pre-wrap; }
+  #messages { flex: 1; overflow-y: auto; padding: 8px 8px 16px; }
+  #messages::-webkit-scrollbar { width: 6px; }
+  #messages::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 3px; }
+  #messages::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground, rgba(128,128,128,0.6)); }
+  .msg { margin: 10px 0; padding: 10px 14px; word-wrap: break-word; }
+  .msg-enter { animation: msg-enter 250ms ease-out backwards; }
+  @keyframes msg-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  .user { max-width: 75%; margin-left: auto; border-radius: 12px; white-space: pre-wrap; background: color-mix(in srgb, var(--vscode-button-background) 18%, transparent); color: var(--vscode-foreground); }
+  .assistant { background: none; padding-left: 0; padding-right: 0; }
+  .system { font-style: italic; opacity: 0.6; font-size: 0.85em; white-space: pre-wrap; text-align: center; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-radius: 0; margin: 12px 0; }
   .error { color: var(--vscode-errorForeground); }
   .thinking { opacity: 0.75; font-size: 0.9em; border-left: 2px solid var(--vscode-descriptionForeground); padding: 0; overflow: hidden; }
   .thinking .thinking-header {
@@ -49,10 +54,11 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     padding: 4px 10px; font-size: 0.95em; user-select: none;
   }
   .thinking .thinking-header:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
-  .thinking .thinking-caret { font-size: 0.7em; opacity: 0.7; }
+  .thinking .thinking-caret { font-size: 0.7em; opacity: 0.7; transition: transform 200ms ease; }
+  .thinking:not(.collapsed) .thinking-caret { transform: rotate(90deg); }
   .thinking .thinking-label { font-weight: bold; opacity: 0.7; }
-  .thinking .thinking-body { padding: 4px 10px 8px; white-space: pre-wrap; }
-  .thinking.collapsed .thinking-body { display: none; }
+  .thinking .thinking-body { padding: 4px 10px 8px; white-space: pre-wrap; max-height: 1000px; overflow: hidden; transition: max-height 300ms ease, opacity 300ms ease, padding 300ms ease; opacity: 1; }
+  .thinking.collapsed .thinking-body { max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; }
   /* 思考中的动画指示器 */
   .typing { display: inline-flex; align-items: center; gap: 3px; vertical-align: middle; }
   .typing span {
@@ -63,46 +69,68 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .typing span:nth-child(2) { animation-delay: 0.2s; }
   .typing span:nth-child(3) { animation-delay: 0.4s; }
   @keyframes typing-blink { 0%, 60%, 100% { opacity: 0.2; } 30% { opacity: 0.9; } }
-  .tool { font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; opacity: 0.8; white-space: pre-wrap; }
+  .tool-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 14px; }
+  .tool { display: inline-block; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.7; white-space: nowrap; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); border-radius: 4px; padding: 2px 8px; cursor: pointer; transition: background 150ms, opacity 150ms; }
+  .tool:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); opacity: 1; }
+  .tool .tool-args { display: none; margin-left: 6px; white-space: pre-wrap; }
+  .tool.expanded { white-space: normal; }
+  .tool.expanded .tool-args { display: inline; }
   .role { font-weight: bold; font-size: 0.8em; opacity: 0.7; margin-bottom: 2px; }
   /* markdown */
-  .md p { margin: 0.4em 0; }
-  .md h1, .md h2, .md h3 { margin: 0.5em 0 0.3em; line-height: 1.2; }
-  .md h1 { font-size: 1.4em; } .md h2 { font-size: 1.2em; } .md h3 { font-size: 1.05em; }
-  .md ul, .md ol { margin: 0.3em 0; padding-left: 1.4em; }
-  .md li { margin: 0.15em 0; }
-  .md pre { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15)); padding: 8px 10px; border-radius: 4px; overflow-x: auto; margin: 0.4em 0; }
-  .md code { font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em; }
-  .md :not(pre) > code { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.2)); padding: 1px 4px; border-radius: 3px; }
+  .md p { margin: 0.4em 0; line-height: 1.6; text-wrap: pretty; }
+  .md h1, .md h2, .md h3 { margin: 0.5em 0 0.3em; line-height: 1.2; letter-spacing: -0.01em; }
+  .md h1 { font-size: 1.5em; font-weight: 600; } .md h2 { font-size: 1.25em; font-weight: 600; } .md h3 { font-size: 1.1em; font-weight: 500; }
+  .md ul, .md ol { margin: 0.3em 0; padding-left: 1.6em; }
+  .md li { margin: 0.25em 0; }
+  .md pre { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15)); padding: 10px 12px; border-radius: 8px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2)); overflow-x: auto; margin: 0.5em 0; }
+  .md code { font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; }
+  .md :not(pre) > code { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)); color: var(--vscode-textPreformat-foreground, var(--vscode-foreground)); padding: 1px 0; margin: 0 2px; border-radius: 3px; box-shadow: 0.25em 0 0 var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)), -0.25em 0 0 var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)); }
   .md pre code { background: none; padding: 0; }
-  .md blockquote { margin: 0.4em 0; padding-left: 10px; border-left: 3px solid var(--vscode-descriptionForeground); opacity: 0.85; }
-  .md a { color: var(--vscode-textLink-foreground); }
+  .md blockquote { margin: 0.5em 0; padding: 6px 12px; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.08)); border-left: 3px solid var(--vscode-descriptionForeground); border-radius: 0 4px 4px 0; }
+  .md a { color: var(--vscode-textLink-foreground); transition: opacity 200ms; }
+  .md a:hover { text-decoration: underline; opacity: 0.85; }
   .md hr { border: none; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); margin: 0.6em 0; }
+  .md-table-wrap { overflow-x: auto; margin: 0.5em 0; }
+  .md table { border-collapse: collapse; font-size: 0.9em; width: 100%; }
+  .md th, .md td { border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); padding: 4px 10px; }
+  .md th { background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); font-weight: 600; }
+  .md tbody tr { transition: background 150ms; }
+  .md tbody tr:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
   /* 语法高亮 token 颜色 */
   .tok-kw { color: var(--vscode-symbolIcon-keywordForeground, #c586c0); }
   .tok-str { color: var(--vscode-debugTokenExpression-string, #ce9178); }
   .tok-num { color: var(--vscode-debugTokenExpression-number, #b5cea8); }
   .tok-com { color: var(--vscode-descriptionForeground, #6a9955); font-style: italic; }
   .tok-fn { color: var(--vscode-symbolIcon-functionForeground, #dcdcaa); }
-  .code-lang { display: block; font-size: 0.75em; opacity: 0.6; margin-bottom: 4px; text-transform: uppercase; }
+  .code-lang { display: block; font-size: 0.75em; font-weight: 600; letter-spacing: 0.05em; opacity: 0.6; margin-bottom: 4px; text-transform: uppercase; }
   #inputArea { display: flex; flex-direction: column; padding: 8px; gap: 6px; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
   #imgPreview { display: flex; flex-wrap: wrap; gap: 6px; }
   #imgPreview:empty { display: none; }
   .img-thumb { position: relative; }
-  .img-thumb img { height: 48px; border-radius: 4px; border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.4)); display: block; }
+  .img-thumb img { height: 48px; border-radius: 4px; border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.4)); display: block; transition: transform 200ms; }
+  .img-thumb:hover img { transform: scale(1.05); }
   .img-thumb .rm { position: absolute; top: -6px; right: -6px; width: 16px; height: 16px; line-height: 14px; text-align: center; border-radius: 50%; background: var(--vscode-button-background); color: var(--vscode-button-foreground); cursor: pointer; font-size: 11px; }
   #inputRow { display: flex; gap: 6px; position: relative; }
+  #sendCol { display: flex; flex-direction: column; gap: 4px; width: 64px; }
+  #newBtn { height: 33.3%; min-height: 28px; font-size: 0.8em; padding: 0; background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2)); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); }
+  #newBtn:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,0.3)); }
+  #sendBtn { flex: 2; font-size: 0.9em; padding: 0; }
   #input {
     flex: 1; resize: none; min-height: 144px; max-height: 640px;
     background: var(--vscode-input-background); color: var(--vscode-input-foreground);
-    border: 1px solid var(--vscode-input-border, transparent); border-radius: 4px; padding: 6px 8px;
+    border: 1px solid var(--vscode-input-border, transparent); border-radius: 8px; padding: 6px 8px;
     font-family: inherit; font-size: inherit;
+    transition: border-color 200ms;
   }
+  #input:focus { border-color: var(--vscode-focusBorder); outline: none; }
   button {
     background: var(--vscode-button-background); color: var(--vscode-button-foreground);
     border: none; border-radius: 4px; padding: 0 12px; cursor: pointer;
+    transition: background 200ms, transform 100ms, opacity 200ms;
   }
   button:hover { background: var(--vscode-button-hoverBackground); }
+  button:active { transform: scale(0.97); }
+  button:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: 1px; }
   button:disabled { opacity: 0.5; cursor: default; }
   #status { padding: 2px 8px; font-size: 0.8em; opacity: 0.7; min-height: 1em; }
   /* 底部工具栏 */
@@ -114,7 +142,8 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     font-size: 0.8em; display: inline-flex; align-items: center; gap: 4px;
   }
   #modelBtn:hover { opacity: 0.85; }
-  #bottomHint { font-size: 0.75em; opacity: 0.55; }
+  #modelBtn { transition: opacity 200ms; }
+  #bottomHint { font-size: 0.75em; opacity: 0.45; }
   /* @ 文件引用下拉 */
   #fileMenu {
     position: absolute; bottom: 100%; left: 0; margin-bottom: 4px; z-index: 10;
@@ -122,15 +151,16 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     background: var(--vscode-dropdown-background, var(--vscode-editorWidget-background));
     border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border, rgba(128,128,128,0.4)));
     border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    opacity: 1; transform: translateY(0); transition: opacity 200ms ease, transform 200ms ease;
   }
-  #fileMenu.hidden { display: none; }
-  .file-item { padding: 4px 10px; cursor: pointer; font-size: 0.85em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #fileMenu.hidden { display: block; opacity: 0; transform: translateY(4px); pointer-events: none; visibility: hidden; }
+  .file-item { padding: 4px 10px; cursor: pointer; font-size: 0.85em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background 150ms; }
   .file-item.active, .file-item:hover { background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.3)); color: var(--vscode-list-activeSelectionForeground, inherit); }
   .file-item .dir { opacity: 0.55; font-size: 0.9em; }
   /* 上下文/token 状态栏 */
   #statsBar {
     display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
-    padding: 3px 10px; font-size: var(--vscode-font-size); opacity: 0.75;
+    padding: 3px 10px; font-size: 0.78em; opacity: 0.6;
     font-family: var(--vscode-editor-font-family, monospace);
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
   }
@@ -139,6 +169,8 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   #statsBar .stat { white-space: nowrap; }
   #statsBar .ctx-hi { color: var(--vscode-editorWarning-foreground, #cca700); }
   #statsBar .ctx-crit { color: var(--vscode-errorForeground); }
+  #statsBar .ctx-bar { display: inline-block; width: 40px; height: 2px; background: var(--vscode-panel-border, rgba(128,128,128,0.3)); border-radius: 1px; vertical-align: middle; margin-left: 2px; overflow: hidden; }
+  #statsBar .ctx-bar-fill { display: block; height: 100%; border-radius: 1px; transition: width 300ms ease; }
   /* 本次对话修改的文件列表 */
   #changedFiles {
     display: flex; flex-direction: column;
@@ -148,13 +180,14 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   #changedFiles:empty { display: none; }
   #changedFiles .cf-header {
     display: flex; align-items: center; gap: 6px;
-    padding: 3px 10px; font-size: var(--vscode-font-size); opacity: 0.7;
+    padding: 6px 10px; font-size: 0.75em; opacity: 0.7;
     text-transform: uppercase; letter-spacing: 0.03em;
   }
   .cf-item {
     display: flex; align-items: center; gap: 6px;
     padding: 3px 10px; cursor: pointer; font-size: var(--vscode-font-size);
     font-family: var(--vscode-editor-font-family, monospace);
+    transition: background 150ms;
   }
   .cf-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
   .cf-item .cf-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -172,7 +205,11 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     display: flex; align-items: center; gap: 6px; padding: 4px 10px; cursor: pointer;
     background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1));
     font-family: var(--vscode-editor-font-family, monospace);
+    transition: background 150ms;
   }
+  .edit-title .et-caret { font-size: 0.7em; opacity: 0.6; transition: transform 200ms ease; }
+  .edit-card.collapsed .et-caret { transform: rotate(-90deg); }
+  .edit-card:not(.collapsed) .et-caret { transform: rotate(90deg); }
   .edit-title:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
   .edit-card.error .edit-title { cursor: default; }
   .edit-card.error .edit-title:hover { background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); }
@@ -191,7 +228,10 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .edit-diff {
     max-height: 200px; overflow-y: auto; padding: 4px 0;
     font-family: var(--vscode-editor-font-family, monospace);
+    transition: max-height 300ms ease, opacity 300ms ease;
+    opacity: 1;
   }
+  .edit-card.collapsed .edit-diff { max-height: 0; opacity: 0; overflow: hidden; padding: 0; }
   .diff-line { padding: 0 10px; white-space: pre; }
   .diff-line.del { background: var(--vscode-diffEditor-removedLineBackground, rgba(255,0,0,0.1)); color: var(--vscode-gitDecoration-deletedResourceForeground, #ad0707); }
   .diff-line.add { background: var(--vscode-diffEditor-insertedLineBackground, rgba(0,255,0,0.1)); color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
@@ -208,14 +248,17 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     text-transform: uppercase; letter-spacing: 0.03em;
   }
   #ticketBar .tk-active { text-transform: none; opacity: 1; margin-left: auto; font-size: 0.85em; }
-  #ticketBar .tk-active.on { color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
+  #ticketBar .tk-active.on { color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); display: inline-flex; align-items: center; gap: 4px; }
+  #ticketBar .tk-active.on::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
   #ticketBar .tk-row { display: flex; gap: 6px; align-items: center; }
   #ticketInput {
     flex: 1; min-width: 0;
     background: var(--vscode-input-background); color: var(--vscode-input-foreground);
     border: 1px solid var(--vscode-input-border, transparent); border-radius: 4px;
     padding: 3px 8px; font-family: inherit; font-size: 0.85em;
+    transition: border-color 200ms;
   }
+  #ticketInput:focus { border-color: var(--vscode-focusBorder); outline: none; }
   #ticketHistory {
     background: var(--vscode-dropdown-background, var(--vscode-input-background));
     color: var(--vscode-dropdown-foreground, var(--vscode-input-foreground));
@@ -228,10 +271,13 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
   }
   #ticketBar button.tk-clear { padding: 2px 8px; }
+  .empty-hint { text-align: center; opacity: 0.35; font-size: 0.9em; padding: 40px 0; user-select: none; }
 </style>
 </head>
 <body>
-  <div id="messages"></div>
+  <div id="messages">
+    <div id="emptyHint" class="empty-hint">输入消息开始对话…</div>
+  </div>
   <div id="status"></div>
   <div id="statsBar"></div>
   <div id="changedFiles"></div>
@@ -254,7 +300,10 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     <div id="inputRow">
       <div id="fileMenu" class="hidden"></div>
       <textarea id="input" placeholder="与 pi 对话… (Enter 发送, Shift+Enter 换行, 可粘贴图片, @ 引用文件)"></textarea>
-      <button id="sendBtn">发送</button>
+      <div id="sendCol">
+        <button id="newBtn" title="新建会话">新建</button>
+        <button id="sendBtn">发送</button>
+      </div>
     </div>
     <div id="bottomBar">
       <button id="modelBtn" title="切换模型">⚡ <span id="modelName">模型</span></button>

@@ -347,6 +347,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             case "send":
                 this.handleSend(msg.text, msg.images);
                 break;
+            case "newSession":
+                this.newSession();
+                break;
             case "abort":
                 if (this.client && this.client.isRunning()) {
                     this.client.send({ type: "abort" });

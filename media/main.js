@@ -163,12 +163,15 @@
     const cu = msg.contextUsage;
     if (cu && typeof cu.percent === "number") {
       let cls = "stat";
-      if (cu.percent >= 90) cls += " ctx-crit";
-      else if (cu.percent >= 70) cls += " ctx-hi";
+      let barColor = "var(--vscode-foreground)";
+      if (cu.percent >= 90) { cls += " ctx-crit"; barColor = "var(--vscode-errorForeground)"; }
+      else if (cu.percent >= 70) { cls += " ctx-hi"; barColor = "var(--vscode-editorWarning-foreground, #cca700)"; }
       const win = cu.contextWindow ? " / " + fmtNum(cu.contextWindow) : "";
+      const barPct = Math.min(cu.percent, 100);
       parts.push(
         '<span class="' + cls + '" title="上下文使用">▣ ' +
-        cu.percent.toFixed(1) + "% (" + fmtNum(cu.tokens) + win + ")</span>"
+        cu.percent.toFixed(1) + "% (" + fmtNum(cu.tokens) + win + ")" +
+        '<span class="ctx-bar"><span class="ctx-bar-fill" style="width:' + barPct + '%;background:' + barColor + '"></span></span></span>'
       );
     }
     statsBarEl.innerHTML = parts.join("");
@@ -176,6 +179,7 @@
 
   let currentAssistant = null; // { el, raw }
   let currentThinking = null;  // { wrap, body, raw, expanded }
+  let currentToolRow = null;   // 连续 tool 调用的 flex 容器
   let streaming = false;
   let pendingImages = []; // [{ data, mimeType }]
   // edit/write 工具调用卡片：toolCallId -> { el, path }
@@ -304,6 +308,37 @@
         continue;
       }
 
+      // 表格：| 表头 | 表头 |
+      //       |---|---|
+      if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|?\s*$/.test(lines[i + 1])) {
+        closeList();
+        const parseRow = (r) => r.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map((c) => c.trim());
+        const headers = parseRow(line);
+        const aligns = parseRow(lines[i + 1]).map((s) => {
+          if (/^:.*:$/.test(s)) return "center";
+          if (/:$/.test(s)) return "right";
+          return "left";
+        });
+        i += 2;
+        let tableHtml = '<div class="md-table-wrap"><table><thead><tr>';
+        headers.forEach((h, ci) => {
+          tableHtml += '<th style="text-align:' + (aligns[ci] || "left") + "\">" + renderInline(h) + "</th>";
+        });
+        tableHtml += "</tr></thead><tbody>";
+        while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) {
+          const cells = parseRow(lines[i]);
+          tableHtml += "<tr>";
+          cells.forEach((c, ci) => {
+            tableHtml += '<td style="text-align:' + (aligns[ci] || "left") + "\">" + renderInline(c) + "</td>";
+          });
+          tableHtml += "</tr>";
+          i++;
+        }
+        tableHtml += "</tbody></table></div>";
+        html += tableHtml;
+        continue;
+      }
+
       const ul = line.match(/^\s*[-*+]\s+(.*)$/);
       if (ul) {
         if (inList !== "ul") {
@@ -357,7 +392,12 @@
   }
 
   // ---------- DOM 辅助 ----------
-  // 是否“黏底”：仅当用户已在底部附近时才自动滚动，避免打断向上翻看历史
+  // 隐藏空状态提示
+  function hideEmptyHint() {
+    const hint = document.getElementById("emptyHint");
+    if (hint) hint.remove();
+  }
+  // 是否"黏底"：仅当用户已在底部附近时才自动滚动，避免打断向上翻看历史
   let stickToBottom = true;
   const BOTTOM_THRESHOLD = 40; // px
 
@@ -381,14 +421,10 @@
   }
 
   function addPlain(cls, role, text) {
+    hideEmptyHint();
+    currentToolRow = null; // 非 tool 消息重置 tool 行
     const div = document.createElement("div");
-    div.className = "msg " + cls;
-    if (role) {
-      const r = document.createElement("div");
-      r.className = "role";
-      r.textContent = role;
-      div.appendChild(r);
-    }
+    div.className = "msg " + cls + " msg-enter";
     const body = document.createElement("div");
     body.textContent = text || "";
     div.appendChild(body);
@@ -397,15 +433,33 @@
     return body;
   }
 
-  function addMarkdown(role, raw) {
-    const div = document.createElement("div");
-    div.className = "msg assistant";
-    if (role) {
-      const r = document.createElement("div");
-      r.className = "role";
-      r.textContent = role;
-      div.appendChild(r);
+  // 添加工具调用标签：连续的 tool 放在同一 flex 行，排不下自动换行
+  function addTool(toolName, argStr) {
+    hideEmptyHint();
+    if (!currentToolRow) {
+      currentToolRow = document.createElement("div");
+      currentToolRow.className = "msg tool-row msg-enter";
+      messagesEl.appendChild(currentToolRow);
     }
+    const tag = document.createElement("span");
+    tag.className = "tool";
+    tag.textContent = "⚙ " + toolName;
+    if (argStr) {
+      const argsDiv = document.createElement("span");
+      argsDiv.className = "tool-args";
+      argsDiv.textContent = argStr;
+      tag.appendChild(argsDiv);
+      tag.addEventListener("click", () => tag.classList.toggle("expanded"));
+    }
+    currentToolRow.appendChild(tag);
+    scrollToBottom();
+  }
+
+  function addMarkdown(role, raw) {
+    hideEmptyHint();
+    currentToolRow = null;
+    const div = document.createElement("div");
+    div.className = "msg assistant msg-enter";
     const body = document.createElement("div");
     body.className = "md";
     body.innerHTML = renderMarkdown(raw || "");
@@ -417,8 +471,10 @@
 
   // 构建可折叠的思考过程卡片（默认折叠），返回 { wrap, body, raw, expanded }。
   function addThinking() {
+    hideEmptyHint();
+    currentToolRow = null;
     const wrap = document.createElement("div");
-    wrap.className = "msg thinking collapsed";
+    wrap.className = "msg thinking collapsed msg-enter";
 
     const header = document.createElement("div");
     header.className = "thinking-header";
@@ -440,7 +496,6 @@
     header.addEventListener("click", () => {
       state.expanded = !state.expanded;
       wrap.classList.toggle("collapsed", !state.expanded);
-      caret.textContent = state.expanded ? "▼" : "▶";
     });
 
     messagesEl.appendChild(wrap);
@@ -450,10 +505,16 @@
 
   // 构建 edit/write 工具调用卡片（占位态），返回 { el, path, setResult }。
   function buildEditCard(toolName, label, path, toolCallId) {
+    hideEmptyHint();
+    currentToolRow = null;
     const el = document.createElement("div");
-    el.className = "msg edit-card";
+    el.className = "msg edit-card msg-enter";
     const title = document.createElement("div");
     title.className = "edit-title";
+    const caret = document.createElement("span");
+    caret.className = "et-caret";
+    caret.textContent = "▶";
+    title.appendChild(caret);
     const name = document.createElement("span");
     name.className = "et-name";
     name.textContent = toolName + " " + (label || "");
@@ -463,6 +524,11 @@
     loading.textContent = "…";
     title.appendChild(loading);
     el.appendChild(title);
+    // 折叠/展开
+    title.addEventListener("click", (e) => {
+      if (e.target.closest(".et-revert")) return;
+      el.classList.toggle("collapsed");
+    });
     messagesEl.appendChild(el);
     scrollToBottom();
     return {
@@ -487,14 +553,20 @@
           el.appendChild(renderDiffBlock(msg.diff));
         }
         const line = typeof msg.firstChangedLine === "number" ? msg.firstChangedLine : 1;
-        title.addEventListener("click", () => {
-          // 有 toolCallId 时传它，由扩展侧用锚点重新定位当前行号；否则回退到固定行号
+        // 跳转按钮
+        const jumpBtn = document.createElement("span");
+        jumpBtn.className = "et-revert";
+        jumpBtn.textContent = "→ 跳转";
+        jumpBtn.title = "跳转到编辑位置";
+        jumpBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
           if (toolCallId) {
             vscode.postMessage({ type: "openEditLocation", path, toolCallId });
           } else {
             vscode.postMessage({ type: "openEditLocation", path, line });
           }
         });
+        title.appendChild(jumpBtn);
         // revert 按钮（仅当后端记录了快照时显示）
         if (msg.canRevert && toolCallId) {
           const revertBtn = document.createElement("span");
@@ -675,6 +747,9 @@
 
   // ---------- 事件绑定 ----------
   sendBtn.addEventListener("click", send);
+  document.getElementById("newBtn").addEventListener("click", () => {
+    vscode.postMessage({ type: "newSession" });
+  });
   modelBtn.addEventListener("click", () => vscode.postMessage({ type: "pickModel" }));
 
   function autoResize() {
@@ -771,7 +846,7 @@
         break;
       case "tool": {
         const argStr = msg.args ? JSON.stringify(msg.args) : "";
-        addPlain("tool", null, "⚙ " + msg.toolName + " " + argStr);
+        addTool(msg.toolName, argStr);
         currentAssistant = null;
         break;
       }
@@ -808,7 +883,7 @@
         addPlain("system error", null, msg.text);
         break;
       case "clear":
-        messagesEl.innerHTML = "";
+        messagesEl.innerHTML = '<div id="emptyHint" class="empty-hint">输入消息开始对话…</div>';
         statsBarEl.innerHTML = "";
         changedFilesEl.innerHTML = "";
         ticketInputEl.value = "";
@@ -817,6 +892,7 @@
         currentAssistant = null;
         currentThinking = null;
         pendingToolCards.clear();
+        inputEl.focus();
         break;
       case "modelChanged":
         modelNameEl.textContent = msg.modelId || "模型";
