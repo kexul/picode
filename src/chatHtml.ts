@@ -77,23 +77,35 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .tool.expanded .tool-args { display: inline; }
   .role { font-weight: bold; font-size: 0.8em; opacity: 0.7; margin-bottom: 2px; }
   /* markdown */
-  .md p { margin: 0.4em 0; line-height: 1.6; text-wrap: pretty; }
-  .md h1, .md h2, .md h3 { margin: 0.5em 0 0.3em; line-height: 1.2; letter-spacing: -0.01em; }
-  .md h1 { font-size: 1.5em; font-weight: 600; } .md h2 { font-size: 1.25em; font-weight: 600; } .md h3 { font-size: 1.1em; font-weight: 500; }
-  .md ul, .md ol { margin: 0.3em 0; padding-left: 1.6em; }
-  .md li { margin: 0.25em 0; }
-  .md pre { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15)); padding: 10px 12px; border-radius: 8px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2)); overflow-x: auto; margin: 0.5em 0; }
+  .md p { margin: 13px 0; line-height: 1.6; text-wrap: pretty; }
+  .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 18px 0 12px; line-height: 1.25; letter-spacing: -0.01em; scroll-margin-top: 12px; }
+  .md h1 { font-size: 1.5em; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); padding-bottom: 0.3em; }
+  .md h2 { font-size: 1.3em; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); padding-bottom: 0.3em; }
+  .md h3 { font-size: 1.15em; font-weight: 600; }
+  .md h4 { font-size: 1em; font-weight: 600; }
+  .md h5 { font-size: 0.9em; font-weight: 600; }
+  .md h6 { font-size: 0.85em; font-weight: 600; opacity: 0.8; }
+  .md ul, .md ol { margin: 7px 0; padding-left: 20px; }
+  .md li { margin: 2px 0; }
+  .md ol { list-style-type: decimal; }
+  .md ol ol { list-style-type: lower-roman; }
+  .md ol ol ol { list-style-type: lower-alpha; }
+  .md pre { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15)); padding: 13px; border-radius: 6px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2)); overflow-x: auto; margin: 13px 0; line-height: 1.45; white-space: pre-wrap; word-break: break-all; }
   .md code { font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; }
   .md :not(pre) > code { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)); color: var(--vscode-textPreformat-foreground, var(--vscode-foreground)); padding: 1px 0; margin: 0 2px; border-radius: 3px; box-shadow: 0.25em 0 0 var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)), -0.25em 0 0 var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)); }
   .md pre code { background: none; padding: 0; }
-  .md blockquote { margin: 0.5em 0; padding: 6px 12px; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.08)); border-left: 3px solid var(--vscode-descriptionForeground); border-radius: 0 4px 4px 0; }
+  .md blockquote { margin: 13px 0; padding: 1px 13px; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.08)); border-left: 4px solid var(--vscode-descriptionForeground); border-radius: 0 4px 4px 0; }
+  .md blockquote > :first-child { margin-top: 0; }
+  .md blockquote > :last-child { margin-bottom: 0; }
   .md a { color: var(--vscode-textLink-foreground); transition: opacity 200ms; }
   .md a:hover { text-decoration: underline; opacity: 0.85; }
-  .md hr { border: none; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); margin: 0.6em 0; }
-  .md-table-wrap { overflow-x: auto; margin: 0.5em 0; }
-  .md table { border-collapse: collapse; font-size: 0.9em; width: 100%; }
-  .md th, .md td { border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); padding: 4px 10px; }
-  .md th { background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); font-weight: 600; }
+  .md hr { border: none; height: 3px; background-color: var(--vscode-panel-border, rgba(128,128,128,0.4)); margin: 24px 0; }
+  .md-table-wrap { overflow-x: auto; margin: 13px 0; }
+  .md table { border-collapse: collapse; display: block; overflow-x: auto; width: fit-content; max-width: 100%; margin: 0 auto; font-size: 0.9em; }
+  .md th, .md td { padding: 5px 10px; border: none; }
+  .md th { border-top: 2px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); font-weight: 600; }
+  .md td { border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2)); }
+  .md tr:last-child td { border-bottom: 2px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); }
   .md tbody tr { transition: background 150ms; }
   .md tbody tr:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
   /* 语法高亮 token 颜色 */
