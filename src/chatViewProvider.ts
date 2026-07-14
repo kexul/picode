@@ -50,6 +50,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // ---- 显示选项（状态栏 / 工单栏显示开关）----
     private static readonly KEY_SHOW_STATS = "piChat.showStatsBar";
     private static readonly KEY_SHOW_TICKET = "piChat.showTicketBar";
+    private static readonly KEY_AUTO_LOAD_LAST = "piChat.autoLoadLastSession";
+    private static readonly KEY_SEND_KEY = "piChat.sendKey";
+
+    /** 合法的发送键组合。 */
+    private static readonly SEND_KEYS = ["enter", "shift+enter", "alt+enter", "ctrl+enter"] as const;
+
+    /** 本次激活是否已尝试过自动加载最近会话（避免重复加载）。 */
+    private autoLoadDone = false;
 
     /** 状态栏默认开启。 */
     private getShowStatsBar(): boolean {
@@ -61,49 +69,108 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return this.context.globalState.get<boolean>(ChatViewProvider.KEY_SHOW_TICKET, false);
     }
 
+    /** 自动打开最近会话，默认关闭。 */
+    private getAutoLoadLast(): boolean {
+        return this.context.globalState.get<boolean>(ChatViewProvider.KEY_AUTO_LOAD_LAST, false);
+    }
+
+    /** 发送消息的键组合，默认 enter。 */
+    private getSendKey(): string {
+        const v = this.context.globalState.get<string>(ChatViewProvider.KEY_SEND_KEY, "enter");
+        return (ChatViewProvider.SEND_KEYS as readonly string[]).includes(v) ? v : "enter";
+    }
+
     /** 向 webview 推送当前显示选项。 */
     private sendViewOptions(): void {
         this.postToWebview({
             type: "viewOptions",
             showStatsBar: this.getShowStatsBar(),
             showTicketBar: this.getShowTicketBar(),
+            autoLoadLastSession: this.getAutoLoadLast(),
+            sendKey: this.getSendKey(),
         });
     }
 
-    /** 打开显示选项开关列表（多选 QuickPick）。 */
+    /**
+     * 打开显示选项面板。
+     * 使用自建 QuickPick，所有选项（包括四态的发送键）都在同一个面板内点选，
+     * 点击某项即时切换并刷新，面板不关闭。
+     */
     public async pickViewOptions(): Promise<void> {
-        const items: Array<vscode.QuickPickItem & { key: string }> = [
-            {
-                key: ChatViewProvider.KEY_SHOW_STATS,
-                label: "状态栏",
-                description: "对话框上方的 token / 上下文状态栏",
-                picked: this.getShowStatsBar(),
-            },
-            {
-                key: ChatViewProvider.KEY_SHOW_TICKET,
-                label: "工单栏",
-                description: "对话框上方的工单（ticket）栏",
-                picked: this.getShowTicketBar(),
-            },
-        ];
-        const picked = await vscode.window.showQuickPick(items, {
-            title: "显示选项",
-            placeHolder: "勾选要显示的栏（可多选）",
-            canPickMany: true,
+        type OptItem = vscode.QuickPickItem & { action: string };
+
+        const labelMap: Record<string, string> = {
+            "enter": "Enter",
+            "shift+enter": "Shift + Enter",
+            "alt+enter": "Alt + Enter",
+            "ctrl+enter": "Ctrl + Enter",
+        };
+
+        const buildItems = (): OptItem[] => {
+            const check = (on: boolean) => (on ? "$(check) " : "$(circle-large-outline) ");
+            return [
+                {
+                    action: ChatViewProvider.KEY_SHOW_STATS,
+                    label: check(this.getShowStatsBar()) + "状态栏",
+                    description: "对话框上方的 token / 上下文状态栏",
+                },
+                {
+                    action: ChatViewProvider.KEY_SHOW_TICKET,
+                    label: check(this.getShowTicketBar()) + "工单栏",
+                    description: "对话框上方的工单（ticket）栏",
+                },
+                {
+                    action: ChatViewProvider.KEY_AUTO_LOAD_LAST,
+                    label: check(this.getAutoLoadLast()) + "启动时自动打开最近会话",
+                    description: "进入插件界面时自动加载当前工作区最近的一次会话",
+                },
+                {
+                    action: "sendKey",
+                    label: `$(keyboard) 发送键：${labelMap[this.getSendKey()]}`,
+                    description: "点击切换：Enter → Shift+Enter → Alt+Enter → Ctrl+Enter",
+                },
+            ];
+        };
+
+        const qp = vscode.window.createQuickPick<OptItem>();
+        qp.title = "显示选项";
+        qp.placeholder = "点击条目即时切换（完成后按 Esc 关闭）";
+        qp.ignoreFocusOut = true;
+        qp.items = buildItems();
+
+        qp.onDidAccept(() => {
+            const sel = qp.selectedItems[0];
+            if (!sel) {
+                return;
+            }
+            if (sel.action === "sendKey") {
+                // 四态循环切换
+                const order = ChatViewProvider.SEND_KEYS;
+                const idx = order.indexOf(this.getSendKey() as (typeof order)[number]);
+                const next = order[(idx + 1) % order.length];
+                this.context.globalState.update(ChatViewProvider.KEY_SEND_KEY, next);
+            } else {
+                // 开关取反
+                const cur =
+                    sel.action === ChatViewProvider.KEY_SHOW_STATS
+                        ? this.getShowStatsBar()
+                        : sel.action === ChatViewProvider.KEY_SHOW_TICKET
+                        ? this.getShowTicketBar()
+                        : this.getAutoLoadLast();
+                this.context.globalState.update(sel.action, !cur);
+            }
+            this.sendViewOptions();
+            // 保持选中位置并刷新勾选状态
+            const activeAction = sel.action;
+            qp.items = buildItems();
+            const again = qp.items.find((i) => i.action === activeAction);
+            if (again) {
+                qp.activeItems = [again];
+            }
         });
-        if (picked === undefined) {
-            return; // 用户取消，不修改
-        }
-        const pickedKeys = new Set(picked.map((p) => p.key));
-        this.context.globalState.update(
-            ChatViewProvider.KEY_SHOW_STATS,
-            pickedKeys.has(ChatViewProvider.KEY_SHOW_STATS)
-        );
-        this.context.globalState.update(
-            ChatViewProvider.KEY_SHOW_TICKET,
-            pickedKeys.has(ChatViewProvider.KEY_SHOW_TICKET)
-        );
-        this.sendViewOptions();
+
+        qp.onDidHide(() => qp.dispose());
+        qp.show();
     }
 
     resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -160,6 +227,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await this.loadSession(picked.file);
     }
 
+    /**
+     * 若「启动时自动打开最近会话」开关开启，则在 webview 首次就绪后
+     * 自动加载当前工作区最近修改的一次会话。每次激活只执行一次。
+     */
+    private async maybeAutoLoadLastSession(): Promise<void> {
+        if (this.autoLoadDone) {
+            return;
+        }
+        this.autoLoadDone = true;
+        if (!this.getAutoLoadLast()) {
+            return;
+        }
+        const sessions = listSessions(this.getCwd());
+        if (sessions.length === 0) {
+            return; // 没有历史会话，保持新会话
+        }
+        // listSessions 已按最近修改时间倒序，取第一个即最近的一次
+        await this.loadSession(sessions[0].file);
+    }
+
     /** 切换到指定会话文件并重建对话显示。 */
     private async loadSession(file: string): Promise<void> {
         if (!this.client || !this.client.isRunning()) {
@@ -187,6 +274,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     /** 把已有消息数组渲染到 webview。 */
     private renderMessages(messages: any[]): void {
+        // 先收集所有 toolResult（按 toolCallId 索引），用于为历史 edit 卡片重建 diff。
+        const toolResults = new Map<string, any>();
+        for (const m of messages) {
+            const parts = Array.isArray(m.content) ? m.content : [];
+            for (const c of parts) {
+                if (c && c.type === "toolResult" && c.toolCallId) {
+                    toolResults.set(c.toolCallId, c);
+                }
+            }
+        }
         for (const m of messages) {
             switch (m.role) {
                 case "user":
@@ -203,20 +300,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                                 this.postToWebview({ type: "assistantFull", text });
                                 text = "";
                             }
-                            // edit/write 在历史回放中显示为不可点击的摘要卡片
+                            // edit/write 历史卡片：重建 diff 并允许展开 / 跳转（不提供回滚）
                             if (c.name === "edit" || c.name === "write") {
                                 const p = this.editToolPath(c.name, c.arguments);
+                                const id = c.id || `hist-${Math.random()}`;
                                 this.postToWebview({
                                     type: "editCardStart",
-                                    toolCallId: c.id || `hist-${Math.random()}`,
+                                    toolCallId: id,
                                     toolName: c.name,
                                     path: p || "",
                                     label: p ? this.relativeTo(this.getCwd(), p) : "",
                                 });
+                                const info = this.historyEditInfo(c, toolResults.get(id));
                                 this.postToWebview({
                                     type: "editCardResult",
-                                    toolCallId: c.id || `hist-${Math.random()}`,
-                                    history: true,
+                                    toolCallId: id,
+                                    diff: info.diff,
+                                    firstChangedLine: info.firstChangedLine,
+                                    // 历史卡片不提供回滚（缺少可靠的“修改前”磁盘快照），
+                                    // 但仍可展开查看 diff 并跳转到当前文件位置。
+                                    canRevert: false,
                                 });
                             } else {
                                 this.postToWebview({
@@ -367,7 +470,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 }
                 break;
             case "openEditLocation":
-                if (typeof msg.toolCallId === "string") {
+                if (typeof msg.toolCallId === "string" && this.editSnapshots.has(msg.toolCallId)) {
                     // 优先用锚点在当前磁盘内容中重新定位行号（避免后续编辑导致行号偏移）
                     this.openEditByToolCall(msg.toolCallId);
                 } else if (typeof msg.path === "string") {
@@ -389,6 +492,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 this.sendTickets();
                 this.sendActiveTicket();
                 this.sendViewOptions();
+                this.maybeAutoLoadLastSession();
                 break;
         }
     }
@@ -710,6 +814,58 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             removed: c.removed,
         }));
         this.postToWebview({ type: "fileChanges", files });
+    }
+
+    /**
+     * 为历史 edit/write 卡片重建展示信息（diff 文本 + 首个变更行）。
+     * 优先使用 toolResult.details.diff；无则根据工具参数粗略重建。
+     */
+    private historyEditInfo(
+        call: any,
+        result: any
+    ): { diff?: string; firstChangedLine?: number } {
+        const details = result?.details;
+        let diff: string | undefined =
+            typeof details?.diff === "string" ? details.diff : undefined;
+        const firstChangedLine: number | undefined =
+            typeof details?.firstChangedLine === "number" ? details.firstChangedLine : undefined;
+
+        if (!diff) {
+            const args = call?.arguments ?? {};
+            if (call?.name === "edit") {
+                const oldText =
+                    typeof args.old_text === "string"
+                        ? args.old_text
+                        : typeof args.oldText === "string"
+                          ? args.oldText
+                          : "";
+                const newText =
+                    typeof args.new_text === "string"
+                        ? args.new_text
+                        : typeof args.newText === "string"
+                          ? args.newText
+                          : "";
+                if (oldText || newText) {
+                    const del = oldText ? oldText.split("\n").map((l: string) => "-" + l) : [];
+                    const add = newText ? newText.split("\n").map((l: string) => "+" + l) : [];
+                    diff = del.concat(add).join("\n");
+                }
+            } else if (call?.name === "write") {
+                const content =
+                    typeof args.content === "string"
+                        ? args.content
+                        : typeof args.text === "string"
+                          ? args.text
+                          : "";
+                if (content) {
+                    diff = content
+                        .split("\n")
+                        .map((l: string) => "+" + l)
+                        .join("\n");
+                }
+            }
+        }
+        return { diff, firstChangedLine };
     }
 
     /** 判断工具是否会修改文件，并提取目标路径。 */

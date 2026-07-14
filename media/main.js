@@ -19,9 +19,25 @@
   const ticketBarEl = document.getElementById("ticketBar");
 
   // 显示选项：控制状态栏 / 工单栏的显隐
+  var sendKeyCombo = "enter"; // enter | shift+enter | alt+enter | ctrl+enter
   function applyViewOptions(opts) {
     statsBarEl.classList.toggle("bar-hidden", opts.showStatsBar === false);
     ticketBarEl.classList.toggle("bar-hidden", opts.showTicketBar === false);
+    if (typeof opts.sendKey === "string") {
+      sendKeyCombo = opts.sendKey;
+    }
+  }
+
+  // 判断一次 keydown 是否匹配当前发送键组合
+  function isSendKey(e) {
+    if (e.key !== "Enter") { return false; }
+    switch (sendKeyCombo) {
+      case "shift+enter": return e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey;
+      case "alt+enter": return e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey;
+      case "ctrl+enter": return e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey;
+      case "enter":
+      default: return !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey;
+    }
   }
 
   // 工单：校验 #+数字 开头
@@ -560,11 +576,8 @@
         jumpBtn.title = "跳转到编辑位置";
         jumpBtn.addEventListener("click", (e) => {
           e.stopPropagation();
-          if (toolCallId) {
-            vscode.postMessage({ type: "openEditLocation", path, toolCallId });
-          } else {
-            vscode.postMessage({ type: "openEditLocation", path, line });
-          }
+          // 同时带上 toolCallId 与 path/line：有快照时按错点重定位，无快照（历史卡片）时回退行号
+          vscode.postMessage({ type: "openEditLocation", path, line, toolCallId: toolCallId || undefined });
         });
         title.appendChild(jumpBtn);
         // revert 按钮（仅当后端记录了快照时显示）
@@ -765,7 +778,7 @@
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); chooseFile(); return; }
       if (e.key === "Escape") { e.preventDefault(); hideFileMenu(); return; }
     }
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (isSendKey(e)) {
       e.preventDefault();
       send();
     }

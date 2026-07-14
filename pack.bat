@@ -41,6 +41,7 @@ for %%f in ("*.vsix") do echo   生成: %%~ff  (%%~zf 字节)
 echo(
 echo 安装命令: code --install-extension pi-chat-0.0.1.vsix
 echo(
+pause
 endlocal
 exit /b 0
 
@@ -48,5 +49,6 @@ exit /b 0
 echo(
 echo *** 打包失败，请查看上方错误信息。 ***
 echo(
+pause
 endlocal
 exit /b 1
