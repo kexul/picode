@@ -412,6 +412,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             const m = setResp?.data ?? picked.model;
             this.postToWebview({ type: "modelChanged", modelId: m.id, provider: m.provider });
             this.postToWebview({ type: "system", text: `已切换模型: ${m.id}` });
+            // 持久化到 VS Code 设置，下次启动 pi 时自动使用该模型
+            const cfg = vscode.workspace.getConfiguration("piChat");
+            cfg.update("provider", m.provider || "", vscode.ConfigurationTarget.Global);
+            cfg.update("model", m.id || "", vscode.ConfigurationTarget.Global);
         }
     }
 

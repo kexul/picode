@@ -175,7 +175,7 @@
   }
 
   let currentAssistant = null; // { el, raw }
-  let currentThinking = null;
+  let currentThinking = null;  // { wrap, body, raw, expanded }
   let streaming = false;
   let pendingImages = []; // [{ data, mimeType }]
   // edit/write 工具调用卡片：toolCallId -> { el, path }
@@ -357,8 +357,27 @@
   }
 
   // ---------- DOM 辅助 ----------
-  function scrollToBottom() {
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+  // 是否“黏底”：仅当用户已在底部附近时才自动滚动，避免打断向上翻看历史
+  let stickToBottom = true;
+  const BOTTOM_THRESHOLD = 40; // px
+
+  function isNearBottom() {
+    return (
+      messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight <=
+      BOTTOM_THRESHOLD
+    );
+  }
+
+  // 用户手动滚动时更新黏底状态
+  messagesEl.addEventListener("scroll", () => {
+    stickToBottom = isNearBottom();
+  });
+
+  function scrollToBottom(force) {
+    if (force || stickToBottom) {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      stickToBottom = true;
+    }
   }
 
   function addPlain(cls, role, text) {
@@ -394,6 +413,39 @@
     messagesEl.appendChild(div);
     scrollToBottom();
     return body;
+  }
+
+  // 构建可折叠的思考过程卡片（默认折叠），返回 { wrap, body, raw, expanded }。
+  function addThinking() {
+    const wrap = document.createElement("div");
+    wrap.className = "msg thinking collapsed";
+
+    const header = document.createElement("div");
+    header.className = "thinking-header";
+    const caret = document.createElement("span");
+    caret.className = "thinking-caret";
+    caret.textContent = "▶";
+    const label = document.createElement("span");
+    label.className = "thinking-label";
+    label.textContent = "思考过程";
+    header.appendChild(caret);
+    header.appendChild(label);
+    wrap.appendChild(header);
+
+    const body = document.createElement("div");
+    body.className = "thinking-body";
+    wrap.appendChild(body);
+
+    const state = { wrap, body, raw: "", expanded: false };
+    header.addEventListener("click", () => {
+      state.expanded = !state.expanded;
+      wrap.classList.toggle("collapsed", !state.expanded);
+      caret.textContent = state.expanded ? "▼" : "▶";
+    });
+
+    messagesEl.appendChild(wrap);
+    scrollToBottom();
+    return state;
   }
 
   // 构建 edit/write 工具调用卡片（占位态），返回 { el, path, setResult }。
@@ -463,7 +515,12 @@
   function setStreaming(on) {
     streaming = on;
     sendBtn.textContent = on ? "中止" : "发送";
-    statusEl.textContent = on ? "pi 正在思考…" : "";
+    if (on) {
+      statusEl.innerHTML =
+        '<span class="typing"><span></span><span></span><span></span></span> pi 正在思考…';
+    } else {
+      statusEl.textContent = "";
+    }
   }
 
   function renderPreview() {
@@ -648,6 +705,7 @@
         addPlain("user", "你", label + (msg.text || ""));
         currentAssistant = null;
         currentThinking = null;
+        scrollToBottom(true); // 发送新消息时强制回到底部
         break;
       }
       case "streamStart":
@@ -674,9 +732,10 @@
         break;
       case "thinkingDelta":
         if (!currentThinking) {
-          currentThinking = addPlain("thinking", "thinking", "");
+          currentThinking = addThinking();
         }
-        currentThinking.textContent += msg.delta;
+        currentThinking.raw += msg.delta;
+        currentThinking.body.textContent = currentThinking.raw;
         scrollToBottom();
         break;
       case "tool": {

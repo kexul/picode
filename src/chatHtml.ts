@@ -43,7 +43,26 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .assistant { background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); }
   .system { font-style: italic; opacity: 0.75; font-size: 0.9em; white-space: pre-wrap; }
   .error { color: var(--vscode-errorForeground); }
-  .thinking { opacity: 0.6; font-size: 0.9em; border-left: 2px solid var(--vscode-descriptionForeground); padding-left: 8px; white-space: pre-wrap; }
+  .thinking { opacity: 0.75; font-size: 0.9em; border-left: 2px solid var(--vscode-descriptionForeground); padding: 0; overflow: hidden; }
+  .thinking .thinking-header {
+    display: flex; align-items: center; gap: 6px; cursor: pointer;
+    padding: 4px 10px; font-size: 0.95em; user-select: none;
+  }
+  .thinking .thinking-header:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
+  .thinking .thinking-caret { font-size: 0.7em; opacity: 0.7; }
+  .thinking .thinking-label { font-weight: bold; opacity: 0.7; }
+  .thinking .thinking-body { padding: 4px 10px 8px; white-space: pre-wrap; }
+  .thinking.collapsed .thinking-body { display: none; }
+  /* 思考中的动画指示器 */
+  .typing { display: inline-flex; align-items: center; gap: 3px; vertical-align: middle; }
+  .typing span {
+    width: 4px; height: 4px; border-radius: 50%;
+    background: var(--vscode-foreground); opacity: 0.5;
+    animation: typing-blink 1.2s infinite ease-in-out;
+  }
+  .typing span:nth-child(2) { animation-delay: 0.2s; }
+  .typing span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes typing-blink { 0%, 60%, 100% { opacity: 0.2; } 30% { opacity: 0.9; } }
   .tool { font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; opacity: 0.8; white-space: pre-wrap; }
   .role { font-weight: bold; font-size: 0.8em; opacity: 0.7; margin-bottom: 2px; }
   /* markdown */
