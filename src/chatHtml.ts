@@ -69,7 +69,7 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .typing span:nth-child(2) { animation-delay: 0.2s; }
   .typing span:nth-child(3) { animation-delay: 0.4s; }
   @keyframes typing-blink { 0%, 60%, 100% { opacity: 0.2; } 30% { opacity: 0.9; } }
-  .tool-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 14px; }
+  .tool-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0; padding: 2px 14px; }
   .tool { display: inline-block; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.7; white-space: nowrap; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); border-radius: 4px; padding: 2px 8px; cursor: pointer; transition: background 150ms, opacity 150ms; }
   .tool:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); opacity: 1; }
   .tool .tool-args { display: none; margin-left: 6px; white-space: pre-wrap; }
