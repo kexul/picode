@@ -765,9 +765,11 @@
   });
   modelBtn.addEventListener("click", () => vscode.postMessage({ type: "pickModel" }));
 
+  // scrollHeight 包含 padding，content-box 下 height 不含 padding，
+  // 需减去 padding（6px top + 6px bottom = 12px）避免高度每次增长
   function autoResize() {
     inputEl.style.height = "auto";
-    inputEl.style.height = Math.min(Math.max(inputEl.scrollHeight, 144), 640) + "px";
+    inputEl.style.height = Math.min(Math.max(inputEl.scrollHeight - 12, 144), 640) + "px";
   }
 
   inputEl.addEventListener("keydown", (e) => {
