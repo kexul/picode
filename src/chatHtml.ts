@@ -45,7 +45,7 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .msg-enter { animation: msg-enter 250ms ease-out backwards; }
   @keyframes msg-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
   .user { max-width: 75%; margin-left: auto; border-radius: 12px; white-space: pre-wrap; background: color-mix(in srgb, var(--vscode-button-background) 18%, transparent); color: var(--vscode-foreground); }
-  .assistant { background: none; padding-left: 0; padding-right: 0; }
+  .assistant { background: none; padding: 0; }
   .system { font-style: italic; opacity: 0.6; font-size: 0.85em; white-space: pre-wrap; text-align: center; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-radius: 0; margin: 12px 0; }
   .error { color: var(--vscode-errorForeground); }
   .thinking { opacity: 0.75; font-size: 0.9em; border-left: 2px solid var(--vscode-descriptionForeground); padding: 0; overflow: hidden; }
@@ -69,7 +69,7 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .typing span:nth-child(2) { animation-delay: 0.2s; }
   .typing span:nth-child(3) { animation-delay: 0.4s; }
   @keyframes typing-blink { 0%, 60%, 100% { opacity: 0.2; } 30% { opacity: 0.9; } }
-  .tool-row { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0; padding: 2px 14px; }
+  .tool-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0; padding: 0 14px; }
   .tool { display: inline-block; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.7; white-space: nowrap; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); border-radius: 4px; padding: 2px 8px; cursor: pointer; transition: background 150ms, opacity 150ms; }
   .tool:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); opacity: 1; }
   .tool .tool-args { display: none; margin-left: 6px; white-space: pre-wrap; }
@@ -78,6 +78,8 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .role { font-weight: bold; font-size: 0.8em; opacity: 0.7; margin-bottom: 2px; }
   /* markdown */
   .md p { margin: 13px 0; line-height: 1.6; text-wrap: pretty; }
+  .md > :first-child { margin-top: 0; }
+  .md > :last-child { margin-bottom: 0; }
   .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 18px 0 12px; line-height: 1.25; letter-spacing: -0.01em; scroll-margin-top: 12px; }
   .md h1 { font-size: 1.5em; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); padding-bottom: 0.3em; }
   .md h2 { font-size: 1.3em; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); padding-bottom: 0.3em; }
