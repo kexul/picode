@@ -179,6 +179,15 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .edit-title .et-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .edit-title .et-loading { opacity: 0.6; }
   .edit-title .et-err { color: var(--vscode-errorForeground); }
+  .edit-title .et-revert {
+    flex: 0 0 auto; font-size: 0.9em; padding: 1px 8px; border-radius: 3px; cursor: pointer;
+    background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.25));
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
+  }
+  .edit-title .et-revert:hover { background: var(--vscode-button-hoverBackground, rgba(128,128,128,0.4)); }
+  .edit-card.reverted { opacity: 0.6; }
+  .edit-card.reverted .et-reverted { flex: 0 0 auto; font-size: 0.85em; opacity: 0.8; font-style: italic; }
   .edit-diff {
     max-height: 200px; overflow-y: auto; padding: 4px 0;
     font-family: var(--vscode-editor-font-family, monospace);

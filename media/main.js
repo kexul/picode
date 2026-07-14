@@ -449,7 +449,7 @@
   }
 
   // 构建 edit/write 工具调用卡片（占位态），返回 { el, path, setResult }。
-  function buildEditCard(toolName, label, path) {
+  function buildEditCard(toolName, label, path, toolCallId) {
     const el = document.createElement("div");
     el.className = "msg edit-card";
     const title = document.createElement("div");
@@ -488,8 +488,39 @@
         }
         const line = typeof msg.firstChangedLine === "number" ? msg.firstChangedLine : 1;
         title.addEventListener("click", () => {
-          vscode.postMessage({ type: "openEditLocation", path, line });
+          // 有 toolCallId 时传它，由扩展侧用锚点重新定位当前行号；否则回退到固定行号
+          if (toolCallId) {
+            vscode.postMessage({ type: "openEditLocation", path, toolCallId });
+          } else {
+            vscode.postMessage({ type: "openEditLocation", path, line });
+          }
         });
+        // revert 按钮（仅当后端记录了快照时显示）
+        if (msg.canRevert && toolCallId) {
+          const revertBtn = document.createElement("span");
+          revertBtn.className = "et-revert";
+          revertBtn.textContent = "↩ 回滚";
+          revertBtn.title = "将文件恢复到本次修改前的内容";
+          revertBtn.addEventListener("click", (e) => {
+            e.stopPropagation(); // 不触发标题的跳转
+            vscode.postMessage({ type: "revertEdit", toolCallId });
+          });
+          title.appendChild(revertBtn);
+        }
+      },
+      // 标记为已回滚：置灰并移除回滚按钮
+      markReverted() {
+        el.classList.add("reverted");
+        const btn = title.querySelector(".et-revert");
+        if (btn) {
+          btn.remove();
+        }
+        if (!title.querySelector(".et-reverted")) {
+          const tag = document.createElement("span");
+          tag.className = "et-reverted";
+          tag.textContent = "已回滚";
+          title.appendChild(tag);
+        }
       },
     };
   }
@@ -745,7 +776,7 @@
         break;
       }
       case "editCardStart": {
-        const card = buildEditCard(msg.toolName, msg.label, msg.path);
+        const card = buildEditCard(msg.toolName, msg.label, msg.path, msg.toolCallId);
         pendingToolCards.set(msg.toolCallId, card);
         currentAssistant = null;
         break;
@@ -753,10 +784,21 @@
       case "editCardResult": {
         const card = pendingToolCards.get(msg.toolCallId);
         if (card) {
-          pendingToolCards.delete(msg.toolCallId);
           card.setResult(msg);
           scrollToBottom();
+          // 保留卡片引用，供后续 revert 时更新 UI（不再从 map 删除）
+          if (!msg.canRevert) {
+            pendingToolCards.delete(msg.toolCallId);
+          }
         }
+        break;
+      }
+      case "editReverted": {
+        const card = pendingToolCards.get(msg.toolCallId);
+        if (card && card.markReverted) {
+          card.markReverted();
+        }
+        pendingToolCards.delete(msg.toolCallId);
         break;
       }
       case "system":
