@@ -398,11 +398,97 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return process.cwd();
     }
 
+    /**
+     * 检查 pi 可执行文件是否能找到。
+     * - 若 piPath 含路径分隔符，直接按文件是否存在判断；
+     * - 否则在 PATH 中搜索（Windows 下考虑 PATHEXT）。
+     * 找不到时弹出提示并返回 false。
+     */
+    private checkPiAvailable(piPath: string): boolean {
+        if (this.resolveExecutable(piPath)) {
+            return true;
+        }
+        const msg = `未找到 pi 可执行文件（当前配置："${piPath}"）。请确认已安装 pi 并加入系统 PATH，或在设置中指定 piChat.piPath 为完整路径。`;
+        this.postToWebview({ type: "systemError", text: msg });
+        vscode.window
+            .showErrorMessage(msg, "打开设置")
+            .then((choice) => {
+                if (choice === "打开设置") {
+                    vscode.commands.executeCommand(
+                        "workbench.action.openSettings",
+                        "piChat.piPath"
+                    );
+                }
+            });
+        return false;
+    }
+
+    /** 解析可执行文件的实际路径，找不到返回 undefined。 */
+    private resolveExecutable(cmd: string): string | undefined {
+        if (!cmd) {
+            return undefined;
+        }
+        const isWindows = process.platform === "win32";
+        const exts = isWindows
+            ? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+            : [""];
+
+        const existsAsFile = (p: string): boolean => {
+            try {
+                return fs.statSync(p).isFile();
+            } catch {
+                return false;
+            }
+        };
+        const tryWithExts = (base: string): string | undefined => {
+            // 已带后缀（或非 Windows）时直接判断
+            if (existsAsFile(base)) {
+                return base;
+            }
+            if (isWindows) {
+                for (const ext of exts) {
+                    const withExt = base + ext.toLowerCase();
+                    if (existsAsFile(withExt)) {
+                        return withExt;
+                    }
+                    const withExtUpper = base + ext;
+                    if (existsAsFile(withExtUpper)) {
+                        return withExtUpper;
+                    }
+                }
+            }
+            return undefined;
+        };
+
+        // 含路径分隔符：当作具体路径处理
+        if (cmd.includes("/") || cmd.includes("\\")) {
+            const abs = path.isAbsolute(cmd) ? cmd : path.resolve(this.getCwd(), cmd);
+            return tryWithExts(abs);
+        }
+
+        // 否则在 PATH 中逐目录搜索
+        const pathEnv = process.env.PATH || process.env.Path || "";
+        const sep = isWindows ? ";" : ":";
+        for (const dir of pathEnv.split(sep).filter(Boolean)) {
+            const found = tryWithExts(path.join(dir, cmd));
+            if (found) {
+                return found;
+            }
+        }
+        return undefined;
+    }
+
     private startClient(): void {
         if (this.client && this.client.isRunning()) {
             return;
         }
         const cfg = this.getConfig();
+
+        // 启动前检查 pi 是否可用（不在 PATH 中 / 路径错误时给出明确提示）。
+        if (!this.checkPiAvailable(cfg.piPath)) {
+            return;
+        }
+
         this.client = new PiClient({
             piPath: cfg.piPath,
             cwd: this.getCwd(),
