@@ -1043,24 +1043,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.postFileChanges();
     }
 
-    /** 简单的行级 diff 统计（LCS），返回新增/删除行数。 */
+    /** 行级 diff 统计（LCS 滚动数组），返回新增/删除行数。空间 O(min(n,m))。 */
     private diffLineCount(before: string, after: string): { added: number; removed: number } {
         const a = before.length ? before.split("\n") : [];
         const b = after.length ? after.split("\n") : [];
         const n = a.length;
         const m = b.length;
-        // LCS 长度矩阵（行数不大，满足日常代码文件）
-        const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+        if (n === 0) { return { added: m, removed: 0 }; }
+        if (m === 0) { return { added: 0, removed: n }; }
+        // dp[j] 始终保存"上一轮 i+1 行"的值；从右到左计算，用 diag 保存 dp[i+1][j+1]
+        const dp = new Array<number>(m + 1).fill(0);
         for (let i = n - 1; i >= 0; i--) {
+            let diag = 0; // dp[i+1][m] = 0
             for (let j = m - 1; j >= 0; j--) {
+                const tmp = dp[j]; // dp[i+1][j]
                 if (a[i] === b[j]) {
-                    dp[i][j] = dp[i + 1][j + 1] + 1;
+                    dp[j] = diag + 1;
                 } else {
-                    dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+                    dp[j] = Math.max(tmp, dp[j + 1]);
                 }
+                diag = tmp;
             }
         }
-        const lcs = dp[0][0];
+        const lcs = dp[0];
         return { added: m - lcs, removed: n - lcs };
     }
 
