@@ -463,13 +463,19 @@
     );
   }
 
-  // 用户手动滚动时更新黏底状态
+  // 用户手动滚动时更新黏底状态；向上滚时取消进行中的 lerp
   messagesEl.addEventListener("scroll", () => {
+    const wasBottom = stickToBottom;
     stickToBottom = isNearBottom();
+    if (wasBottom && !stickToBottom && lerpRafId) {
+      cancelAnimationFrame(lerpRafId);
+      lerpRafId = 0;
+    }
   });
 
   // lerp 滚动：每帧追近目标 1/3，既有平滑惯性又快速收敛
   function lerpScrollStep() {
+    if (!stickToBottom) { lerpRafId = 0; return; }
     const target = messagesEl.scrollHeight - messagesEl.clientHeight;
     const cur = messagesEl.scrollTop;
     const diff = target - cur;
