@@ -787,7 +787,8 @@
 
   function renderFileMenu() {
     if (fileMatches.length === 0) {
-      hideFileMenu();
+      // 仅隐藏菜单元素，保留 atStart，以便异步到达的 openFiles 能重新渲染
+      fileMenuEl.classList.add("hidden");
       return;
     }
     fileMenuEl.innerHTML = "";
