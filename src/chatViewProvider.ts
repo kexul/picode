@@ -4,12 +4,6 @@ import * as path from "path";
 import { PiClient } from "./piClient";
 import { getChatHtml } from "./chatHtml";
 import { listSessions } from "./sessionStore";
-import {
-    setActiveTicket,
-    getActiveTicket,
-    listTickets,
-    isValidTicket,
-} from "./hooksManager";
 
 /** 本次对话中一个被修改文件的记录。 */
 interface FileChange {
@@ -47,9 +41,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     constructor(private readonly context: vscode.ExtensionContext) {}
 
-    // ---- 显示选项（状态栏 / 工单栏显示开关）----
+    // ---- 显示选项（状态栏显示开关）----
     private static readonly KEY_SHOW_STATS = "piChat.showStatsBar";
-    private static readonly KEY_SHOW_TICKET = "piChat.showTicketBar";
     private static readonly KEY_AUTO_LOAD_LAST = "piChat.autoLoadLastSession";
     private static readonly KEY_SEND_KEY = "piChat.sendKey";
 
@@ -62,11 +55,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     /** 状态栏默认开启。 */
     private getShowStatsBar(): boolean {
         return this.context.globalState.get<boolean>(ChatViewProvider.KEY_SHOW_STATS, true);
-    }
-
-    /** 工单栏默认关闭。 */
-    private getShowTicketBar(): boolean {
-        return this.context.globalState.get<boolean>(ChatViewProvider.KEY_SHOW_TICKET, false);
     }
 
     /** 自动打开最近会话，默认关闭。 */
@@ -85,7 +73,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.postToWebview({
             type: "viewOptions",
             showStatsBar: this.getShowStatsBar(),
-            showTicketBar: this.getShowTicketBar(),
             autoLoadLastSession: this.getAutoLoadLast(),
             sendKey: this.getSendKey(),
         });
@@ -113,11 +100,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                     action: ChatViewProvider.KEY_SHOW_STATS,
                     label: check(this.getShowStatsBar()) + "状态栏",
                     description: "对话框上方的 token / 上下文状态栏",
-                },
-                {
-                    action: ChatViewProvider.KEY_SHOW_TICKET,
-                    label: check(this.getShowTicketBar()) + "工单栏",
-                    description: "对话框上方的工单（ticket）栏",
                 },
                 {
                     action: ChatViewProvider.KEY_AUTO_LOAD_LAST,
@@ -154,8 +136,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 const cur =
                     sel.action === ChatViewProvider.KEY_SHOW_STATS
                         ? this.getShowStatsBar()
-                        : sel.action === ChatViewProvider.KEY_SHOW_TICKET
-                        ? this.getShowTicketBar()
                         : this.getAutoLoadLast();
                 this.context.globalState.update(sel.action, !cur);
             }
@@ -568,15 +548,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                     this.revertEdit(msg.toolCallId);
                 }
                 break;
-            case "setTicket":
-                this.setTicket(typeof msg.ticket === "string" ? msg.ticket : "");
-                break;
             case "ready":
                 // Webview 加载完成
                 this.sendCurrentModel();
                 this.refreshStats();
-                this.sendTickets();
-                this.sendActiveTicket();
                 this.sendViewOptions();
                 this.maybeAutoLoadLastSession();
                 break;
@@ -1182,39 +1157,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         const line = this.resolveAnchorLine(current, snap.anchorText, snap.firstChangedLine);
         await this.openEditLocation(snap.path, line);
-    }
-
-    /** 设置当前工作区的激活工单（供内置 hook 读取）。 */
-    private setTicket(label: string): void {
-        const trimmed = label.trim();
-        if (trimmed && !isValidTicket(trimmed)) {
-            this.postToWebview({
-                type: "systemError",
-                text: "工单号需以 #+数字 开头，例如 #12031",
-            });
-            return;
-        }
-        setActiveTicket(this.getCwd(), trimmed);
-        if (trimmed) {
-            this.postToWebview({ type: "system", text: `已为本会话启用工单记录: ${trimmed}` });
-        } else {
-            this.postToWebview({ type: "system", text: "已取消工单记录。" });
-        }
-        this.sendTickets();
-    }
-
-    /** 把历史工单列表推送给 webview。 */
-    private sendTickets(): void {
-        const tickets = listTickets().map((t) => ({ id: t.id, label: t.label }));
-        this.postToWebview({ type: "tickets", tickets });
-    }
-
-    /** 把当前工作区激活的工单推送给 webview（用于初始恢复）。 */
-    private sendActiveTicket(): void {
-        const label = getActiveTicket(this.getCwd());
-        if (label) {
-            this.postToWebview({ type: "activeTicket", ticket: label });
-        }
     }
 
     /** 获取会话统计（token/成本/上下文）并推送给 webview。 */

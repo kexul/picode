@@ -34,17 +34,12 @@
       {
         "command": "piChat.openSettings",
         "title": "Pi Chat: 设置（编辑 models.json）",
-        "icon": "$(gear)"
-      },
-      {
-        "command": "piChat.openHooks",
-        "title": "Pi Chat: 管理 Hooks",
-        "icon": "$(plug)"
+        "icon": "$(list-selection)"
       },
       {
         "command": "piChat.openViewOptions",
         "title": "Pi Chat: 显示选项",
-        "icon": "$(list-selection)"
+        "icon": "$(gear)"
       }
     ],
     "viewsContainers": {
@@ -81,11 +76,6 @@
           "command": "piChat.openSettings",
           "when": "view == piChat.chatView",
           "group": "navigation@3"
-        },
-        {
-          "command": "piChat.openHooks",
-          "when": "view == piChat.chatView",
-          "group": "navigation@4"
         },
         {
           "command": "piChat.openViewOptions",

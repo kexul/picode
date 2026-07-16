@@ -1,29 +1,16 @@
 import * as vscode from "vscode";
 import { ChatViewProvider, DiffContentProvider } from "./chatViewProvider";
 import { SettingsPanel } from "./settingsPanel";
-import { HooksPanel } from "./hooksPanel";
-import { writeHook, readHook, ticketLogHookTemplate } from "./hooksManager";
 import { setExtensionRoot } from "./modelsConfig";
 
-/** 确保内置的工单记录 hook 已安装（内容变化时自动更新）。 */
-function ensureTicketLogHook(): void {
-    const name = "pi-chat-ticket-log";
-    const desired = ticketLogHookTemplate();
-    const existing = readHook(name);
-    if (existing && existing.content === desired) {
-        return;
-    }
-    writeHook(name, desired);
-}
+// 说明：原版本会在每次插件激活时自动写入 ~/.pi/agent/extensions/pi-chat-ticket-log.ts
+// （工单记录 hook），并提供「管理 Hooks」面板。这些 hook 相关功能均已移除。
 
 export function activate(context: vscode.ExtensionContext): void {
     // 注入插件根目录，用于定位打包资源（media/default-models.json）
     setExtensionRoot(context.extensionUri.fsPath);
 
     const provider = new ChatViewProvider(context);
-
-    // 安装/更新内置工单记录 hook（依赖它才能按工单记录会话）
-    ensureTicketLogHook();
 
     context.subscriptions.push(
         vscode.workspace.registerTextDocumentContentProvider(
@@ -60,12 +47,6 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.commands.registerCommand("piChat.openSettings", () => {
             SettingsPanel.show(context.extensionUri);
-        })
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand("piChat.openHooks", () => {
-            HooksPanel.show(context.extensionUri);
         })
     );
 

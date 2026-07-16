@@ -11,18 +11,11 @@
   const fileMenuEl = document.getElementById("fileMenu");
   const statsBarEl = document.getElementById("statsBar");
   const changedFilesEl = document.getElementById("changedFiles");
-  const ticketInputEl = document.getElementById("ticketInput");
-  const ticketHistoryEl = document.getElementById("ticketHistory");
-  const ticketApplyEl = document.getElementById("ticketApply");
-  const ticketClearEl = document.getElementById("ticketClear");
-  const ticketActiveEl = document.getElementById("ticketActive");
-  const ticketBarEl = document.getElementById("ticketBar");
 
-  // 显示选项：控制状态栏 / 工单栏的显隐
+  // 显示选项：控制状态栏的显隐
   var sendKeyCombo = "enter"; // enter | shift+enter | alt+enter | ctrl+enter
   function applyViewOptions(opts) {
     statsBarEl.classList.toggle("bar-hidden", opts.showStatsBar === false);
-    ticketBarEl.classList.toggle("bar-hidden", opts.showTicketBar === false);
     if (typeof opts.sendKey === "string") {
       sendKeyCombo = opts.sendKey;
     }
@@ -39,68 +32,6 @@
       default: return !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey;
     }
   }
-
-  // 工单：校验 #+数字 开头
-  function isValidTicket(v) {
-    return /^#\d+/.test((v || "").trim());
-  }
-
-  // 更新“当前工单”指示
-  function setActiveTicketLabel(label) {
-    if (label && isValidTicket(label)) {
-      ticketActiveEl.textContent = "记录中: " + label.trim();
-      ticketActiveEl.classList.add("on");
-    } else {
-      ticketActiveEl.textContent = "未选择工单";
-      ticketActiveEl.classList.remove("on");
-    }
-  }
-
-  // 渲染历史工单下拉
-  function renderTicketHistory(tickets) {
-    const cur = ticketHistoryEl.value;
-    ticketHistoryEl.innerHTML = '<option value="">历史工单…</option>';
-    (tickets || []).forEach((t) => {
-      const opt = document.createElement("option");
-      opt.value = t.label || t.id;
-      opt.textContent = t.label || t.id;
-      ticketHistoryEl.appendChild(opt);
-    });
-    ticketHistoryEl.value = cur;
-  }
-
-  // 应用工单（填入框内容）
-  function applyTicket() {
-    const v = (ticketInputEl.value || "").trim();
-    if (v && !isValidTicket(v)) {
-      statusEl.textContent = "工单号需以 #+数字 开头，例如 #12031";
-      return;
-    }
-    vscode.postMessage({ type: "setTicket", ticket: v });
-    setActiveTicketLabel(v);
-  }
-
-  ticketApplyEl.addEventListener("click", applyTicket);
-  ticketInputEl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      applyTicket();
-    }
-  });
-  ticketClearEl.addEventListener("click", () => {
-    ticketInputEl.value = "";
-    ticketHistoryEl.value = "";
-    vscode.postMessage({ type: "setTicket", ticket: "" });
-    setActiveTicketLabel("");
-  });
-  ticketHistoryEl.addEventListener("change", () => {
-    const v = ticketHistoryEl.value;
-    if (!v) {
-      return;
-    }
-    ticketInputEl.value = v;
-    applyTicket();
-  });
 
   // 渲染本次对话修改的文件列表
   function renderChangedFiles(files) {
@@ -985,9 +916,6 @@
         messagesEl.innerHTML = '<div id="emptyHint" class="empty-hint">输入消息开始对话…</div>';
         statsBarEl.innerHTML = "";
         changedFilesEl.innerHTML = "";
-        ticketInputEl.value = "";
-        ticketHistoryEl.value = "";
-        setActiveTicketLabel("");
         currentAssistant = null;
         currentThinking = null;
         pendingToolCards.clear();
@@ -1002,15 +930,6 @@
         break;
       case "fileChanges":
         renderChangedFiles(msg.files);
-        break;
-      case "tickets":
-        renderTicketHistory(msg.tickets);
-        break;
-      case "activeTicket":
-        if (typeof msg.ticket === "string") {
-          ticketInputEl.value = msg.ticket;
-          setActiveTicketLabel(msg.ticket);
-        }
         break;
       case "openFiles":
         openFiles = msg.files || [];

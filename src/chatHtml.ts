@@ -246,41 +246,6 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .diff-line.del { background: var(--vscode-diffEditor-removedLineBackground, rgba(255,0,0,0.1)); color: var(--vscode-gitDecoration-deletedResourceForeground, #ad0707); }
   .diff-line.add { background: var(--vscode-diffEditor-insertedLineBackground, rgba(0,255,0,0.1)); color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
   .diff-line.ctx { opacity: 0.6; }
-  /* 工单（ticket）栏 */
-  #ticketBar {
-    display: flex; flex-direction: column; gap: 4px;
-    padding: 5px 10px;
-    border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
-  }
-  #ticketBar .tk-header {
-    display: flex; align-items: center; gap: 6px;
-    font-size: var(--vscode-font-size); opacity: 0.7;
-    text-transform: uppercase; letter-spacing: 0.03em;
-  }
-  #ticketBar .tk-active { text-transform: none; opacity: 1; margin-left: auto; font-size: 0.85em; }
-  #ticketBar .tk-active.on { color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); display: inline-flex; align-items: center; gap: 4px; }
-  #ticketBar .tk-active.on::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
-  #ticketBar .tk-row { display: flex; gap: 6px; align-items: center; }
-  #ticketInput {
-    flex: 1; min-width: 0;
-    background: var(--vscode-input-background); color: var(--vscode-input-foreground);
-    border: 1px solid var(--vscode-input-border, transparent); border-radius: 4px;
-    padding: 3px 8px; font-family: inherit; font-size: 0.85em;
-    transition: border-color 200ms;
-  }
-  #ticketInput:focus { border-color: var(--vscode-focusBorder); outline: none; }
-  #ticketHistory {
-    background: var(--vscode-dropdown-background, var(--vscode-input-background));
-    color: var(--vscode-dropdown-foreground, var(--vscode-input-foreground));
-    border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border, transparent));
-    border-radius: 4px; padding: 3px 4px; font-size: 0.85em; max-width: 45%;
-  }
-  #ticketBar button {
-    font-size: 0.8em; padding: 2px 10px;
-    background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2));
-    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
-  }
-  #ticketBar button.tk-clear { padding: 2px 8px; }
   .empty-hint { text-align: center; opacity: 0.35; font-size: 0.9em; padding: 40px 0; user-select: none; }
 </style>
 </head>
@@ -290,20 +255,6 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   </div>
   <div id="status"></div>
   <div id="changedFiles"></div>
-  <div id="ticketBar">
-    <div class="tk-header">
-      工单
-      <span id="ticketActive" class="tk-active">未选择工单</span>
-    </div>
-    <div class="tk-row">
-      <input id="ticketInput" placeholder="#12031 新增hook" title="工单号以 #+数字 开头，回车应用" />
-      <select id="ticketHistory" title="选择历史工单">
-        <option value="">历史工单…</option>
-      </select>
-      <button id="ticketApply">应用</button>
-      <button id="ticketClear" class="tk-clear" title="取消工单（停止记录）">✕</button>
-    </div>
-  </div>
   <div id="inputArea">
     <div id="imgPreview"></div>
     <div id="inputRow">
