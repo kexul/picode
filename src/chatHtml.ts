@@ -72,6 +72,12 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .tool-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0; padding: 0 14px; }
   .tool { display: inline-block; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.7; white-space: nowrap; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); border-radius: 4px; padding: 2px 8px; cursor: pointer; transition: background 150ms, opacity 150ms; }
   .tool:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); opacity: 1; }
+  .tool-icon { display: inline-block; line-height: 0; vertical-align: middle; transform-origin: 50% 50%; }
+  .tool-icon > svg { display: block; }
+  .tool.running { opacity: 1; }
+  .tool.running .tool-icon { animation: tool-spin 1.1s linear infinite; }
+  @keyframes tool-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  .tool.error { opacity: 1; color: var(--vscode-errorForeground, #f48771); }
   .tool .tool-args { display: none; margin-left: 6px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
   .tool.expanded { white-space: normal; flex: 1 1 100%; min-width: 0; }
   .tool.expanded .tool-args { display: inline; }

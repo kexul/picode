@@ -119,6 +119,11 @@
   let currentAssistant = null; // { el, raw }
   let currentThinking = null;  // { wrap, body, textNode, raw, expanded }
   let currentToolRow = null;   // 连续 tool 调用的 flex 容器
+  const pendingToolTags = new Map(); // toolCallId -> 标签元素（running 态）
+
+  // 8齿齿轮 SVG：外轮廓为闭合 path（齿顶圆弧+齿根圆弧交替），内圆为轴孔。
+  // viewBox 中心 (12,12) 即几何中心，旋转不偏心。currentColor 跟随文本色。
+  const GEAR_SVG = '<span class="tool-icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M22.83,10.09 A11 11 0 0 1 22.83,13.91 L20.37,13.48 A8.5 8.5 0 0 1 18.96,16.88 A8.5 8.5 0 0 1 21.01,18.31 A11 11 0 0 1 18.31,21.01 L16.88,18.96 A8.5 8.5 0 0 1 13.48,20.37 A8.5 8.5 0 0 1 13.91,22.83 A11 11 0 0 1 10.09,22.83 L10.52,20.37 A8.5 8.5 0 0 1 7.12,18.96 A8.5 8.5 0 0 1 5.69,21.01 A11 11 0 0 1 2.99,18.31 L5.04,16.88 A8.5 8.5 0 0 1 3.63,13.48 A8.5 8.5 0 0 1 1.17,13.91 A11 11 0 0 1 1.17,10.09 L3.63,10.52 A8.5 8.5 0 0 1 5.04,7.12 A8.5 8.5 0 0 1 2.99,5.69 A11 11 0 0 1 5.69,2.99 L7.12,5.04 A8.5 8.5 0 0 1 10.52,3.63 A8.5 8.5 0 0 1 10.09,1.17 A11 11 0 0 1 13.91,1.17 L13.48,3.63 A8.5 8.5 0 0 1 16.88,5.04 A8.5 8.5 0 0 1 18.31,2.99 A11 11 0 0 1 21.01,5.69 L18.96,7.12 A8.5 8.5 0 0 1 20.37,10.52 Z"/><circle cx="12" cy="12" r="3.2"/></svg></span>';
   let streaming = false;
 
   // ---- rAF 节流：delta 只标记 dirty，每帧最多做一次 renderMarkdown + innerHTML ----
@@ -454,7 +459,7 @@
   }
 
   // 添加工具调用标签：连续的 tool 放在同一 flex 行，排不下自动换行
-  function addTool(toolName, argStr) {
+  function addTool(toolName, argStr, toolCallId) {
     hideEmptyHint();
     if (!currentToolRow) {
       currentToolRow = document.createElement("div");
@@ -462,8 +467,9 @@
       messagesEl.appendChild(currentToolRow);
     }
     const tag = document.createElement("span");
-    tag.className = "tool";
-    tag.textContent = "⚙ " + toolName;
+    tag.className = "tool" + (toolCallId ? " running" : "");
+    tag.insertAdjacentHTML("afterbegin", GEAR_SVG);
+    tag.appendChild(document.createTextNode(" " + toolName));
     if (argStr) {
       const argsDiv = document.createElement("span");
       argsDiv.className = "tool-args";
@@ -472,6 +478,9 @@
       tag.addEventListener("click", () => tag.classList.toggle("expanded"));
     }
     currentToolRow.appendChild(tag);
+    if (toolCallId) {
+      pendingToolTags.set(toolCallId, tag);
+    }
     scrollToBottom();
   }
 
@@ -874,7 +883,7 @@
       case "tool": {
         finalizeCurrentAssistant();
         const argStr = msg.args ? JSON.stringify(msg.args) : "";
-        addTool(msg.toolName, argStr);
+        addTool(msg.toolName, argStr, msg.toolCallId);
         currentAssistant = null;
         break;
       }
@@ -921,6 +930,17 @@
         pendingToolCards.clear();
         inputEl.focus();
         break;
+      case "toolResult": {
+        const tag = pendingToolTags.get(msg.toolCallId);
+        if (tag) {
+          tag.classList.remove("running");
+          if (msg.isError) {
+            tag.classList.add("error");
+          }
+          pendingToolTags.delete(msg.toolCallId);
+        }
+        break;
+      }
       case "modelChanged":
         modelNameEl.textContent = msg.modelId || "模型";
         modelBtn.title = "当前: " + (msg.provider ? msg.provider + "/" : "") + (msg.modelId || "") + "（点击切换）";

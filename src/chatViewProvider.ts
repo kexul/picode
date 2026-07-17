@@ -740,16 +740,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         } else {
             this.postToWebview({
                 type: "tool",
+                toolCallId: evt.toolCallId,
                 toolName,
                 args: evt.args,
             });
         }
     }
 
-    /** edit/write 工具结束：回填 diff 或错误信息。 */
+    /** 工具结束：edit/write 回填 diff；其他工具推送状态用于取消流光。 */
     private onToolEnd(evt: any): void {
         const toolName: string = evt.toolName;
         if (toolName !== "edit" && toolName !== "write") {
+            if (evt.toolCallId) {
+                this.postToWebview({
+                    type: "toolResult",
+                    toolCallId: evt.toolCallId,
+                    isError: !!evt.isError,
+                });
+            }
             return;
         }
         if (!evt.toolCallId) {
