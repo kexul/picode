@@ -521,6 +521,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 break;
             case "abort":
                 if (this.client && this.client.isRunning()) {
+                    // abort 中止 LLM 流式生成；abort_bash 杀掉正在运行的 bash 工具子进程。
+                    // 两个都发，覆盖“等模型吐字”和“工具在跑”两种状态。
+                    this.client.send({ type: "abort_bash" });
                     this.client.send({ type: "abort" });
                 }
                 break;
