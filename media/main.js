@@ -12,6 +12,8 @@
   const statsBarEl = document.getElementById("statsBar");
   const changedFilesEl = document.getElementById("changedFiles");
 
+  // pi 进程就绪前禁用发送按钮，避免冷启动期间点击产生困惑
+  let piReady = false;
   // 显示选项：控制状态栏的显隐
   var sendKeyCombo = "enter"; // enter | shift+enter | alt+enter | ctrl+enter
   function applyViewOptions(opts) {
@@ -125,6 +127,10 @@
   // viewBox 中心 (12,12) 即几何中心，旋转不偏心。currentColor 跟随文本色。
   const GEAR_SVG = '<span class="tool-icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M22.83,10.09 A11 11 0 0 1 22.83,13.91 L20.37,13.48 A8.5 8.5 0 0 1 18.96,16.88 A8.5 8.5 0 0 1 21.01,18.31 A11 11 0 0 1 18.31,21.01 L16.88,18.96 A8.5 8.5 0 0 1 13.48,20.37 A8.5 8.5 0 0 1 13.91,22.83 A11 11 0 0 1 10.09,22.83 L10.52,20.37 A8.5 8.5 0 0 1 7.12,18.96 A8.5 8.5 0 0 1 5.69,21.01 A11 11 0 0 1 2.99,18.31 L5.04,16.88 A8.5 8.5 0 0 1 3.63,13.48 A8.5 8.5 0 0 1 1.17,13.91 A11 11 0 0 1 1.17,10.09 L3.63,10.52 A8.5 8.5 0 0 1 5.04,7.12 A8.5 8.5 0 0 1 2.99,5.69 A11 11 0 0 1 5.69,2.99 L7.12,5.04 A8.5 8.5 0 0 1 10.52,3.63 A8.5 8.5 0 0 1 10.09,1.17 A11 11 0 0 1 13.91,1.17 L13.48,3.63 A8.5 8.5 0 0 1 16.88,5.04 A8.5 8.5 0 0 1 18.31,2.99 A11 11 0 0 1 21.01,5.69 L18.96,7.12 A8.5 8.5 0 0 1 20.37,10.52 Z"/><circle cx="12" cy="12" r="3.2"/></svg></span>';
   let streaming = false;
+
+  // 初始状态：pi 尚未就绪，禁用发送按钮并提示
+  sendBtn.disabled = true;
+  statusEl.textContent = "等待 pi 启动…";
 
   // ---- rAF 节流：delta 只标记 dirty，每帧最多做一次 renderMarkdown + innerHTML ----
   let textDirty = false;      // 文本块有待渲染
@@ -643,14 +649,35 @@
     return wrap;
   }
 
+  // 根据 streaming / piReady 综合刷新发送按钮状态
+  function updateSendState() {
+    if (streaming) {
+      sendBtn.disabled = false;
+      sendBtn.textContent = "中止";
+    } else {
+      sendBtn.textContent = "发送";
+      sendBtn.disabled = !piReady;
+    }
+  }
+
   function setStreaming(on) {
     streaming = on;
-    sendBtn.textContent = on ? "中止" : "发送";
+    updateSendState();
     if (on) {
       statusEl.innerHTML =
         '<span class="typing"><span></span><span></span><span></span></span> pi 正在思考…';
+    } else if (!piReady) {
+      statusEl.textContent = "等待 pi 启动…";
     } else {
       statusEl.textContent = "";
+    }
+  }
+
+  function setPiReady(on) {
+    piReady = on;
+    updateSendState();
+    if (!streaming) {
+      statusEl.textContent = on ? "" : "等待 pi 启动…";
     }
   }
 
@@ -679,6 +706,9 @@
     if (streaming) {
       vscode.postMessage({ type: "abort" });
       return;
+    }
+    if (!piReady) {
+      return; // 冷启动期间按钮已禁用；防御性返回
     }
     const text = inputEl.value.trim();
     if (!text && pendingImages.length === 0) {
@@ -963,6 +993,9 @@
         break;
       case "viewOptions":
         applyViewOptions(msg);
+        break;
+      case "piReady":
+        setPiReady(msg.ready === true);
         break;
     }
   });

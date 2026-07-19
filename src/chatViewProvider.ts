@@ -25,6 +25,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private view?: vscode.WebviewView;
     private client?: PiClient;
     private streaming = false;
+    private piReady = false; // pi 进程是否已 spawn 成功（webview 据此启用发送按钮）
     private reqId = 0;
     // 等待响应的命令回调，按 id 关联
     private pending = new Map<string, (resp: any) => void>();
@@ -462,6 +463,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (this.client && this.client.isRunning()) {
             return;
         }
+        // 进入启动中状态：发送按钮先禁用，待 spawn 成功后再启用
+        this.setPiReady(false);
         const cfg = this.getConfig();
 
         // 启动前检查 pi 是否可用（不在 PATH 中 / 路径错误时给出明确提示）。
@@ -489,6 +492,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.client.on("exit", (code: number | null) => {
             this.streaming = false;
             this.postToWebview({ type: "streamEnd" });
+            // 进程退出后重新允许发送（发送时会自动重启 pi）
+            this.setPiReady(true);
             this.postToWebview({
                 type: "system",
                 text: `pi 进程已退出（code=${code}）。发送消息会自动重启。`,
@@ -497,10 +502,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         try {
             this.client.start();
+            // spawn 成功即视为可用：pi 会自行缓冲 stdin 命令，启动期间的请求等就绪后处理
+            this.setPiReady(true);
             this.postToWebview({ type: "system", text: "pi 已启动，可以开始对话。" });
         } catch (e: any) {
             this.postToWebview({ type: "systemError", text: `无法启动 pi: ${e.message}` });
         }
+    }
+
+    /** 更新 pi 就绪状态并同步给 webview（控制发送按钮启用/禁用）。 */
+    private setPiReady(ready: boolean): void {
+        this.piReady = ready;
+        this.postToWebview({ type: "piReady", ready });
     }
 
     private stopClient(): void {
@@ -554,6 +567,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             case "ready":
                 // Webview 加载完成：并行拉取初始状态，避免串行等待叠加延迟/超时
                 this.sendViewOptions();
+                // 回送当前 pi 就绪状态（webview 默认禁用，避免冷启动期间按钮误以为可用）
+                this.postToWebview({ type: "piReady", ready: this.piReady });
                 void Promise.all([this.sendCurrentModel(), this.refreshStats()]);
                 this.maybeAutoLoadLastSession();
                 break;
