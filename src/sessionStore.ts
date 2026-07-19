@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import * as readline from "readline";
 
 export interface SessionInfo {
     file: string; // 绝对路径
@@ -50,7 +51,7 @@ function contentToText(content: unknown): string {
  * 读取指定 cwd 对应的所有 pi 会话，按最近修改时间倒序返回。
  * 只读取每个文件的少量行以获取标题，避免解析大文件全部内容。
  */
-export function listSessions(cwd: string): SessionInfo[] {
+export async function listSessions(cwd: string): Promise<SessionInfo[]> {
     // 尝试多种盘符大小写（VSCode 在 Windows 上可能返回小写盘符）。
     const candidates = new Set<string>([cwd]);
     const m = cwd.match(/^([a-zA-Z])(:)/);
@@ -82,24 +83,27 @@ export function listSessions(cwd: string): SessionInfo[] {
         return [];
     }
 
-    const sessions: SessionInfo[] = [];
-    for (const f of files) {
-        const full = path.join(dir, f);
-        try {
-            const stat = fs.statSync(full);
-            const info = parseSessionHead(full);
-            sessions.push({
-                file: full,
-                id: info.id,
-                mtime: stat.mtimeMs,
-                title: info.name || info.firstUserText || "(空会话)",
-                messageCount: info.messageCount,
-                name: info.name,
-            });
-        } catch {
-            /* 跳过无法读取的文件 */
-        }
-    }
+    // 并发流式解析各会话文件的头部信息，避免一次性把整个文件读进内存。
+    const entries = await Promise.all(
+        files.map(async (f) => {
+            const full = path.join(dir, f);
+            try {
+                const stat = fs.statSync(full);
+                const info = await parseSessionHead(full);
+                return {
+                    file: full,
+                    id: info.id,
+                    mtime: stat.mtimeMs,
+                    title: info.name || info.firstUserText || "(空会话)",
+                    messageCount: info.messageCount,
+                    name: info.name,
+                } as SessionInfo;
+            } catch {
+                return null;
+            }
+        })
+    );
+    const sessions = entries.filter((s): s is SessionInfo => s !== null);
 
     sessions.sort((a, b) => b.mtime - a.mtime);
     return sessions;
@@ -112,40 +116,59 @@ interface SessionHead {
     messageCount: number;
 }
 
-/** 逐行解析会话文件，提取标题所需的少量信息。 */
-function parseSessionHead(file: string): SessionHead {
-    const raw = fs.readFileSync(file, "utf8");
-    const lines = raw.split("\n");
-    let id = "";
-    let firstUserText = "";
-    let name: string | undefined;
-    let messageCount = 0;
+/**
+ * 按行流式解析会话文件，提取标题所需的少量信息。
+ * 使用 createReadStream + readline，避免把整个会话文件读入内存后
+ * 再 `split("\n")` 生成大数组（大会话文件可达数 MB）。
+ */
+function parseSessionHead(file: string): Promise<SessionHead> {
+    return new Promise((resolve) => {
+        let id = "";
+        let firstUserText = "";
+        let name: string | undefined;
+        let messageCount = 0;
 
-    for (const line of lines) {
-        const t = line.trim();
-        if (!t) {
-            continue;
-        }
-        let entry: any;
+        let stream: fs.ReadStream;
         try {
-            entry = JSON.parse(t);
+            stream = fs.createReadStream(file, { encoding: "utf8" });
         } catch {
-            continue;
+            resolve({ id, firstUserText, name, messageCount });
+            return;
         }
-        if (entry.type === "session") {
-            id = entry.id || "";
-        } else if (entry.type === "session_info" && entry.name) {
-            name = entry.name;
-        } else if (entry.type === "message" && entry.message) {
-            const role = entry.message.role;
-            if (role === "user" || role === "assistant") {
-                messageCount++;
-            }
-            if (!firstUserText && role === "user") {
-                firstUserText = contentToText(entry.message.content).replace(/\s+/g, " ").slice(0, 80);
-            }
-        }
-    }
 
-    return { id, firstUserText, name, messageCount };
+        const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+
+        rl.on("line", (line: string) => {
+            const t = line.trim();
+            if (!t) {
+                return;
+            }
+            let entry: any;
+            try {
+                entry = JSON.parse(t);
+            } catch {
+                return;
+            }
+            if (entry.type === "session") {
+                id = entry.id || "";
+            } else if (entry.type === "session_info" && entry.name) {
+                name = entry.name;
+            } else if (entry.type === "message" && entry.message) {
+                const role = entry.message.role;
+                if (role === "user" || role === "assistant") {
+                    messageCount++;
+                }
+                if (!firstUserText && role === "user") {
+                    firstUserText = contentToText(entry.message.content)
+                        .replace(/\s+/g, " ")
+                        .slice(0, 80);
+                }
+            }
+        });
+
+        const done = () => resolve({ id, firstUserText, name, messageCount });
+        rl.on("close", done);
+        rl.on("error", done);
+        stream.on("error", done);
+    });
 }

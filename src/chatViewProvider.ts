@@ -185,7 +185,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     /** 由命令触发：选择并加载历史会话。 */
     public async pickSession(): Promise<void> {
         const cwd = this.getCwd();
-        const sessions = listSessions(cwd);
+        const sessions = await listSessions(cwd);
         if (sessions.length === 0) {
             vscode.window.showInformationMessage("当前工作区没有找到 pi 历史会话。");
             return;
@@ -219,7 +219,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (!this.getAutoLoadLast()) {
             return;
         }
-        const sessions = listSessions(this.getCwd());
+        const sessions = await listSessions(this.getCwd());
         if (sessions.length === 0) {
             return; // 没有历史会话，保持新会话
         }
