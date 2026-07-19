@@ -552,10 +552,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 }
                 break;
             case "ready":
-                // Webview 加载完成
-                this.sendCurrentModel();
-                this.refreshStats();
+                // Webview 加载完成：并行拉取初始状态，避免串行等待叠加延迟/超时
                 this.sendViewOptions();
+                void Promise.all([this.sendCurrentModel(), this.refreshStats()]);
                 this.maybeAutoLoadLastSession();
                 break;
         }
