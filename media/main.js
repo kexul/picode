@@ -722,6 +722,26 @@
     renderPreview();
   }
 
+  // ---------- 双击行内代码：修剪误选的尾随空格 ----------
+  // Chromium 的词选择会跨入 <code> 后面的文本节点，把开头空格一起选上。
+  // 双击发生在行内 code 内时，等选区稳定后把末尾的空白裁掉。
+  messagesEl.addEventListener("dblclick", (e) => {
+    const code = e.target && e.target.closest ? e.target.closest("code") : null;
+    if (!code || code.closest("pre")) { return; } // 只处理行内代码
+    setTimeout(() => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) { return; }
+      let tail = 0; // 选区末尾连续空白字符数
+      const txt = sel.toString();
+      while (tail < txt.length && /\s/.test(txt[txt.length - 1 - tail])) { tail++; }
+      if (tail === 0) { return; }
+      // 仅处理焦点落在文本节点上的正向选择（双击词选择的典型形态）
+      if (sel.focusNode && sel.focusNode.nodeType === Node.TEXT_NODE && sel.focusOffset >= tail) {
+        sel.setBaseAndExtent(sel.anchorNode, sel.anchorOffset, sel.focusNode, sel.focusOffset - tail);
+      }
+    }, 0);
+  });
+
   // ---------- @ 文件引用 ----------
   let openFiles = [];      // [{ label, path }] 来自扩展
   let fileMatches = [];    // 当前过滤结果
