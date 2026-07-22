@@ -12,7 +12,6 @@
     "Other",
     "Chat"
   ],
-  "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -40,6 +39,11 @@
         "command": "piChat.openViewOptions",
         "title": "Pi Chat: 显示选项",
         "icon": "$(gear)"
+      },
+      {
+        "command": "piChat.askSelectionAndSend",
+        "title": "Pi Chat: 发送选中文本到对话框",
+        "icon": "$(comment)"
       }
     ],
     "viewsContainers": {
@@ -60,7 +64,21 @@
         }
       ]
     },
+    "keybindings": [
+      {
+        "command": "piChat.askSelectionAndSend",
+        "key": "ctrl+alt+p",
+        "mac": "cmd+alt+p",
+        "when": "editorTextFocus"
+      }
+    ],
     "menus": {
+      "editor/context": [
+        {
+          "command": "piChat.askSelectionAndSend",
+          "group": "navigation@89"
+        }
+      ],
       "view/title": [
         {
           "command": "piChat.history",
@@ -109,6 +127,11 @@
           },
           "default": [],
           "description": "传递给 pi --mode rpc 的额外命令行参数。"
+        },
+        "piChat.trustProject": {
+          "type": "boolean",
+          "default": true,
+          "description": "启动时是否信任当前项目（向 pi 传入 --approve）。pi 在 --mode rpc 非交互模式下不会弹信任提示；若不信任，项目级 .pi/skills、.agents/skills、.pi/settings.json 等资源会被静默忽略。作为 IDE 集成默认开启。"
         }
       }
     }

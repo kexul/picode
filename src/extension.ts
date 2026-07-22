@@ -3,9 +3,6 @@ import { ChatViewProvider, DiffContentProvider } from "./chatViewProvider";
 import { SettingsPanel } from "./settingsPanel";
 import { setExtensionRoot } from "./modelsConfig";
 
-// 说明：原版本会在每次插件激活时自动写入 ~/.pi/agent/extensions/pi-chat-ticket-log.ts
-// （工单记录 hook），并提供「管理 Hooks」面板。这些 hook 相关功能均已移除。
-
 export function activate(context: vscode.ExtensionContext): void {
     // 注入插件根目录，用于定位打包资源（media/default-models.json）
     setExtensionRoot(context.extensionUri.fsPath);
@@ -53,6 +50,12 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.commands.registerCommand("piChat.openViewOptions", () => {
             provider.pickViewOptions();
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand("piChat.askSelectionAndSend", () => {
+            provider.askSelectionAndSend();
         })
     );
 }

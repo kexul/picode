@@ -171,8 +171,68 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.startClient();
     }
 
+    /**
+     * 由命令触发：将当前编辑器选中文本连同可选消息发送到对话框。
+     * 若无选中文本，则取光标所在行。
+     */
+    public async askSelectionAndSend(): Promise<void> {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showWarningMessage("Pi Chat: 没有活动的编辑器。");
+            return;
+        }
+        const document = editor.document;
+        const selection = editor.selection;
+        const selectedText = document.getText(selection);
+        const hasSelection = !selection.isEmpty && selectedText.trim() !== "";
+        const codeText = hasSelection
+            ? selectedText
+            : document.lineAt(selection.active.line).text;
+        const fileRef = this.relativeTo(this.getCwd(), document.uri.fsPath);
+        const startLine = selection.start.line + 1;
+        const endLine = selection.end.line + 1;
+        const range =
+            startLine === endLine
+                ? `第 ${startLine} 行`
+                : `第 ${startLine}-${endLine} 行`;
+
+        const userText = await vscode.window.showInputBox({
+            title: "向 Pi Chat 发送选中文本",
+            prompt: "你的消息将连同选中的代码一起发送到 Pi Chat 对话框。",
+            placeHolder: "例如：解释这段代码、修复 bug、补充测试…（可留空直接发送选中文本）",
+            ignoreFocusOut: true,
+        });
+        if (userText === undefined) {
+            return;
+        }
+        if (userText.trim() === "" && !hasSelection) {
+            vscode.window.showWarningMessage("Pi Chat: 没有选中文本且消息为空。");
+            return;
+        }
+
+        const prefix = userText.trim() ? `${userText.trim()}\n\n` : "";
+        const prompt = `${prefix}上下文: ${fileRef} (${range})\n\n\`\`\`${document.languageId}\n${codeText}\n\`\`\`\n`;
+
+        await this.ensureViewVisible();
+        this.handleSend(prompt);
+        vscode.window.showInformationMessage("已发送到 Pi Chat 对话框。");
+    }
+
+    /** 确保聊天面板已展开可见，并在 webview 就绪后返回。 */
+    private async ensureViewVisible(): Promise<void> {
+        await vscode.commands.executeCommand("piChat.openChat");
+        for (let i = 0; i < 60; i++) {
+            if (this.view) {
+                return;
+            }
+            await new Promise((r) => setTimeout(r, 50));
+        }
+    }
+
     /** 由命令触发：新建会话（重启 pi 进程）。 */
     public newSession(): void {
+        // 若 pi 正在流式生成或执行工具，先中止当前 run，避免 pi 拒绝/排队 new_session。
+        this.abortActiveRun();
         this.resetFileChanges();
         this.postToWebview({ type: "clear" });
         this.postToWebview({ type: "system", text: "已开始新会话。" });
@@ -180,6 +240,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this.client.send({ type: "new_session" });
         } else {
             this.startClient();
+        }
+    }
+
+    /** 中止 pi 正在进行的流式生成或 bash 工具执行（若无则空操作）。 */
+    private abortActiveRun(): void {
+        if (this.client && this.client.isRunning() && this.streaming) {
+            // abort 中止 LLM 流式生成；abort_bash 杀掉正在运行的 bash 工具子进程。
+            // 两个都发，覆盖“等模型吐字”和“工具在跑”两种状态。
+            this.client.send({ type: "abort_bash" });
+            this.client.send({ type: "abort" });
         }
     }
 
@@ -368,6 +438,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             provider: cfg.get<string>("provider", ""),
             model: cfg.get<string>("model", ""),
             extraArgs: cfg.get<string[]>("extraArgs", []),
+            trustProject: cfg.get<boolean>("trustProject", true),
         };
     }
 
@@ -472,12 +543,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             return;
         }
 
+        // --mode rpc 为非交互模式，pi 不会弹项目信任提示；默认 ask 行为会静默忽略
+        // 项目级 .pi/skills、.agents/skills、.pi/settings.json 等资源。
+        // 作为 IDE 集成，用户已将工作区打开在 VSCode，默认显式信任项目（--approve）。
+        const extraArgs = cfg.trustProject
+            ? [...cfg.extraArgs, "--approve"]
+            : cfg.extraArgs;
+
         this.client = new PiClient({
             piPath: cfg.piPath,
             cwd: this.getCwd(),
             provider: cfg.provider || undefined,
             model: cfg.model || undefined,
-            extraArgs: cfg.extraArgs,
+            extraArgs,
         });
 
         this.client.on("event", (evt) => this.onPiEvent(evt));
@@ -533,12 +611,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 this.newSession();
                 break;
             case "abort":
-                if (this.client && this.client.isRunning()) {
-                    // abort 中止 LLM 流式生成；abort_bash 杀掉正在运行的 bash 工具子进程。
-                    // 两个都发，覆盖“等模型吐字”和“工具在跑”两种状态。
-                    this.client.send({ type: "abort_bash" });
-                    this.client.send({ type: "abort" });
-                }
+                // 与 newSession 共用：中止 LLM 流式生成 + bash 工具子进程。
+                this.abortActiveRun();
                 break;
             case "pickModel":
                 this.pickModel();
