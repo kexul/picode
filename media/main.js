@@ -129,6 +129,21 @@
     return 300;                        // 超长：最低约 2 次每秒
   }
 
+  // 用户是否正在 currentAssistant.el 内选中文本：流式渲染每帧整块重建
+  // innerHTML 会冲掉选区，导致吐字时无法选中。检测到非折叠选区落在
+  // 当前文本块内时跳过本轮刷新，保留 textDirty 待下一帧再试。
+  function isSelectingIn(el) {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+      return false;
+    }
+    const range = sel.getRangeAt(0);
+    if (!el || !el.contains(range.startContainer)) {
+      return false;
+    }
+    return true;
+  }
+
   function scheduleFlush() {
     if (rafId) return;
     rafId = requestAnimationFrame(flushDeltas);
@@ -142,6 +157,9 @@
       const interval = renderInterval(raw.length);
       // 间隔未到：延后到下一帧重试，不清除 textDirty
       if (interval > 0 && now - lastRenderAt < interval) {
+        rafId = requestAnimationFrame(flushDeltas);
+      } else if (isSelectingIn(currentAssistant.el)) {
+        // 正在选中该文本块：跳过本轮 innerHTML 重建以免冲掉选区，下帧再试
         rafId = requestAnimationFrame(flushDeltas);
       } else {
         currentAssistant.el.innerHTML = renderMarkdown(raw);
