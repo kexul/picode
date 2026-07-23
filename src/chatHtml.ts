@@ -208,9 +208,6 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .cf-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
   .cf-item .cf-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cf-item .cf-dir { opacity: 0.55; }
-  .cf-item .cf-add { color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
-  .cf-item .cf-del { color: var(--vscode-gitDecoration-deletedResourceForeground, #ad0707); }
-  .cf-item .cf-stat { white-space: nowrap; }
   /* edit/write 工具调用卡片 */
   .edit-card {
     margin: 6px 0; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));

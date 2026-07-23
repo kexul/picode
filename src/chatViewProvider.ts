@@ -11,10 +11,6 @@ interface FileChange {
     path: string;
     /** 相对工作区的显示名 */
     label: string;
-    /** 累计新增行数 */
-    added: number;
-    /** 累计删除行数 */
-    removed: number;
     /** 首次修改前的文件内容（用于 diff 的“原始”侧）；文件新建时为空串 */
     before: string;
 }
@@ -940,13 +936,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             return;
         }
 
-        // 更新“本次对话修改的文件”统计：从该文件累计中减去本次 edit 的增删
+        // 若该文件已回到首次修改前的内容，从列表移除
         const existing = this.fileChanges.get(snap.path);
         if (existing) {
-            const { added, removed } = this.diffLineCount(snap.before, snap.after);
-            existing.added = Math.max(0, existing.added - added);
-            existing.removed = Math.max(0, existing.removed - removed);
-            // 若该文件已回到首次修改前的内容，从列表移除
             let latest = "";
             try {
                 latest = fs.readFileSync(snap.path, "utf8");
@@ -970,8 +962,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const files = Array.from(this.fileChanges.values()).map((c) => ({
             path: c.path,
             label: c.label,
-            added: c.added,
-            removed: c.removed,
         }));
         this.postToWebview({ type: "fileChanges", files });
     }
@@ -1100,47 +1090,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             firstChangedLine,
             anchorText,
         });
-        const { added, removed } = this.diffLineCount(pend.before, after);
         const existing = this.fileChanges.get(pend.path);
-        if (existing) {
-            existing.added += added;
-            existing.removed += removed;
-        } else {
+        if (!existing) {
             this.fileChanges.set(pend.path, {
                 path: pend.path,
                 label: this.relativeTo(this.getCwd(), pend.path),
-                added,
-                removed,
                 before: pend.before, // 保留首次修改前的内容
             });
         }
         this.postFileChanges();
-    }
-
-    /** 行级 diff 统计（LCS 滚动数组），返回新增/删除行数。空间 O(min(n,m))。 */
-    private diffLineCount(before: string, after: string): { added: number; removed: number } {
-        const a = before.length ? before.split("\n") : [];
-        const b = after.length ? after.split("\n") : [];
-        const n = a.length;
-        const m = b.length;
-        if (n === 0) { return { added: m, removed: 0 }; }
-        if (m === 0) { return { added: 0, removed: n }; }
-        // dp[j] 始终保存"上一轮 i+1 行"的值；从右到左计算，用 diag 保存 dp[i+1][j+1]
-        const dp = new Array<number>(m + 1).fill(0);
-        for (let i = n - 1; i >= 0; i--) {
-            let diag = 0; // dp[i+1][m] = 0
-            for (let j = m - 1; j >= 0; j--) {
-                const tmp = dp[j]; // dp[i+1][j]
-                if (a[i] === b[j]) {
-                    dp[j] = diag + 1;
-                } else {
-                    dp[j] = Math.max(tmp, dp[j + 1]);
-                }
-                diag = tmp;
-            }
-        }
-        const lcs = dp[0];
-        return { added: m - lcs, removed: n - lcs };
     }
 
     /**

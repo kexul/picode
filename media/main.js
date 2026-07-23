@@ -65,25 +65,6 @@
       }
       item.appendChild(name);
 
-      const stat = document.createElement("span");
-      stat.className = "cf-stat";
-      if (f.added) {
-        const a = document.createElement("span");
-        a.className = "cf-add";
-        a.textContent = "+" + f.added;
-        stat.appendChild(a);
-      }
-      if (f.added && f.removed) {
-        stat.appendChild(document.createTextNode(" "));
-      }
-      if (f.removed) {
-        const d = document.createElement("span");
-        d.className = "cf-del";
-        d.textContent = "-" + f.removed;
-        stat.appendChild(d);
-      }
-      item.appendChild(stat);
-
       item.addEventListener("click", () => {
         vscode.postMessage({ type: "openDiff", path: f.path });
       });
@@ -132,10 +113,21 @@
   sendBtn.disabled = true;
   statusEl.textContent = "等待 pi 启动…";
 
-  // ---- rAF 节流：delta 只标记 dirty，每帧最多做一次 renderMarkdown + innerHTML ----
+  // ---- rAF 节流：delta 只标记 dirty，按文本长度自适应渲染频率 ----
+  // 短文本每帧渲染（流畅）；长文本改为按时间间隔渲染，避免每帧对增长中的全文本
+  // 重跑 renderMarkdown + 整块 innerHTML 重建导致掉帧。streamEnd/finalize 时仍会
+  // 做一次最终全量渲染，保证定稿正确。
   let textDirty = false;      // 文本块有待渲染
   let pendingThinkDelta = "";  // 思考卡片纯文本增量缓冲
   let rafId = 0;
+  let lastRenderAt = 0;        // 上次文本渲染时间戳（ms）
+  // 不同长度档位的渲染间隔（ms）。越长间隔越大，平衡流畅度与性能。
+  function renderInterval(rawLen) {
+    if (rawLen < 4000) return 0;       // ~4KB 以内：每帧渲染
+    if (rawLen < 16000) return 60;     // ~16KB 以内：约 4 帧一次
+    if (rawLen < 64000) return 150;    // ~64KB 以内：约 10 帧一次
+    return 300;                        // 超长：最低约 2 次每秒
+  }
 
   function scheduleFlush() {
     if (rafId) return;
@@ -144,9 +136,18 @@
 
   function flushDeltas() {
     rafId = 0;
+    const now = performance.now();
     if (textDirty && currentAssistant) {
-      currentAssistant.el.innerHTML = renderMarkdown(currentAssistant.raw || "");
-      textDirty = false;
+      const raw = currentAssistant.raw || "";
+      const interval = renderInterval(raw.length);
+      // 间隔未到：延后到下一帧重试，不清除 textDirty
+      if (interval > 0 && now - lastRenderAt < interval) {
+        rafId = requestAnimationFrame(flushDeltas);
+      } else {
+        currentAssistant.el.innerHTML = renderMarkdown(raw);
+        lastRenderAt = now;
+        textDirty = false;
+      }
     }
     if (pendingThinkDelta && currentThinking && currentThinking.textNode) {
       currentThinking.textNode.appendData(pendingThinkDelta);
