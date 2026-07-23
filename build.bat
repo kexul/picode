@@ -14,6 +14,7 @@ if errorlevel 1 (
 echo.
 
 echo [2/3] Compile TypeScript...
+if exist out rmdir /s /q out
 call npx tsc -p ./
 if errorlevel 1 (
     echo [ERROR] Compile failed
