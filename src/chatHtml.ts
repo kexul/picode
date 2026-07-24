@@ -250,6 +250,19 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .diff-line.add { background: var(--vscode-diffEditor-insertedLineBackground, rgba(0,255,0,0.1)); color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
   .diff-line.ctx { opacity: 0.6; }
   .empty-hint { text-align: center; opacity: 0.35; font-size: 0.9em; padding: 40px 0; user-select: none; }
+  /* 右键自定义菜单（user 消息：从此处分叉） */
+  .ctx-menu {
+    position: fixed; z-index: 9999; min-width: 150px;
+    background: var(--vscode-menu-background, var(--vscode-editor-background));
+    color: var(--vscode-menu-foreground, var(--vscode-foreground));
+    border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border, rgba(128,128,128,0.3)));
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    padding: 4px 0; font-size: var(--vscode-font-size);
+  }
+  .ctx-menu.hidden { display: none; }
+  .ctx-item { padding: 4px 14px; cursor: pointer; white-space: nowrap; }
+  .ctx-item:hover { background: var(--vscode-menu-selectionBackground, var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.25))); color: var(--vscode-menu-selectionForeground, var(--vscode-foreground)); }
 </style>
 </head>
 <body>

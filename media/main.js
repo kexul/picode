@@ -12,6 +12,36 @@
   const statsBarEl = document.getElementById("statsBar");
   const changedFilesEl = document.getElementById("changedFiles");
 
+  // ---- user 消息右键：从此处分叉 ----
+  const forkMenu = document.createElement("div");
+  forkMenu.id = "forkMenu";
+  forkMenu.className = "ctx-menu hidden";
+  document.body.appendChild(forkMenu);
+  function hideForkMenu() { forkMenu.classList.add("hidden"); }
+  document.addEventListener("contextmenu", function (e) {
+    const userMsg = e.target.closest && e.target.closest(".msg.user");
+    if (!userMsg || !userMsg.dataset.entryId) { return; }
+    e.preventDefault();
+    const entryId = userMsg.dataset.entryId;
+    forkMenu.innerHTML = "";
+    const item = document.createElement("div");
+    item.className = "ctx-item";
+    item.textContent = "⑂ 从此处分叉";
+    item.addEventListener("click", function () {
+      hideForkMenu();
+      vscode.postMessage({ type: "forkFromEntry", entryId: entryId });
+    });
+    forkMenu.appendChild(item);
+    const w = 170;
+    forkMenu.style.left = Math.min(e.clientX, window.innerWidth - w - 6) + "px";
+    forkMenu.style.top = Math.min(e.clientY, window.innerHeight - 40) + "px";
+    forkMenu.classList.remove("hidden");
+  });
+  document.addEventListener("click", hideForkMenu);
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") hideForkMenu(); });
+  document.addEventListener("scroll", hideForkMenu, true);
+  window.addEventListener("blur", hideForkMenu);
+
   // pi 进程就绪前禁用发送按钮，避免冷启动期间点击产生困惑
   let piReady = false;
   // 显示选项：控制状态栏的显隐
@@ -237,13 +267,13 @@
     src = src.replace(/`[^`\n]*`/g, (m) => stash("tok-str", m));
     // 数字
     src = src.replace(/\b(0x[0-9a-fA-F]+|\d+\.?\d*)\b/g, (m) => stash("tok-num", m));
-    // 函数调用
+    // 函数调用（关键字 span 也走 stash，避免后续正则匹配到标签里的字面量，如 class）
     src = src.replace(/\b([A-Za-z_]\w*)(?=\s*\()/g, (m, name) =>
-      KEYWORDS.has(name) ? '<span class="tok-kw">' + name + "</span>" : stash("tok-fn", name)
+      KEYWORDS.has(name) ? stash("tok-kw", name) : stash("tok-fn", name)
     );
     // 关键字
     src = src.replace(/\b([A-Za-z_]\w*)\b/g, (m, w) =>
-      KEYWORDS.has(w) ? '<span class="tok-kw">' + w + "</span>" : w
+      KEYWORDS.has(w) ? stash("tok-kw", w) : w
     );
     // 回填（哨兵由 \uE002 重复次数表示索引）
     src = src.replace(/\uE000(\uE002*)\uE001/g, (m, marks) => holders[marks.length]);
@@ -470,11 +500,12 @@
     }
   }
 
-  function addPlain(cls, role, text) {
+  function addPlain(cls, role, text, entryId) {
     hideEmptyHint();
     currentToolRow = null; // 非 tool 消息重置 tool 行
     const div = document.createElement("div");
     div.className = "msg " + cls + " msg-enter";
+    if (entryId) { div.dataset.entryId = entryId; }
     const body = document.createElement("div");
     body.textContent = text || "";
     div.appendChild(body);
@@ -909,7 +940,7 @@
       case "userMessage": {
         finalizeCurrentAssistant();
         const label = msg.imageCount ? "[" + msg.imageCount + " 张图片] " : "";
-        addPlain("user", "你", label + (msg.text || ""));
+        addPlain("user", "你", label + (msg.text || ""), msg.entryId);
         currentThinking = null;
         scrollToBottom(true); // 发送新消息时强制回到底部
         break;

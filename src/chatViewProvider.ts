@@ -35,6 +35,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         string,
         { path: string; before: string; after: string; firstChangedLine: number; anchorText: string }
     >();
+    // 当前活跃分支中可被 fork 的 user 消息（entryId + text），按顺序与渲染的 user 气泡对齐
+    private forkEntries: { entryId: string; text: string }[] = [];
 
     constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -312,10 +314,44 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             return;
         }
 
-        const msgResp = await this.request({ type: "get_messages" });
+        const [msgResp, forkResp] = await Promise.all([
+            this.request({ type: "get_messages" }),
+            this.request({ type: "get_fork_messages" }),
+        ]);
         const messages: any[] = msgResp?.data?.messages ?? [];
+        this.forkEntries = forkResp?.data?.messages ?? [];
         this.renderMessages(messages);
         this.postToWebview({ type: "system", text: `已加载会话（${messages.length} 条消息）。` });
+        this.refreshStats();
+    }
+
+    /** 从指定 user 消息处分叉新分支，并切到新分支重渲。 */
+    private async forkFromEntry(entryId: string): Promise<void> {
+        this.abortActiveRun();
+        this.postToWebview({ type: "system", text: "正在从该消息处分叉…" });
+        const resp = await this.request({ type: "fork", entryId });
+        if (!resp || resp.success === false) {
+            this.postToWebview({
+                type: "systemError",
+                text: `分叉失败: ${resp?.error ?? "未知错误"}`,
+            });
+            return;
+        }
+        if (resp.data?.cancelled) {
+            this.postToWebview({ type: "system", text: "分叉已取消。" });
+            return;
+        }
+        // fork 成功后活跃分支已是新分支，重新拉取渲染。
+        this.resetFileChanges();
+        const [msgResp, forkResp] = await Promise.all([
+            this.request({ type: "get_messages" }),
+            this.request({ type: "get_fork_messages" }),
+        ]);
+        const messages: any[] = msgResp?.data?.messages ?? [];
+        this.forkEntries = forkResp?.data?.messages ?? [];
+        this.postToWebview({ type: "clear" });
+        this.renderMessages(messages);
+        this.postToWebview({ type: "system", text: `已分叉到新分支（${messages.length} 条消息）。` });
         this.refreshStats();
     }
 
@@ -331,10 +367,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 }
             }
         }
+        let userIndex = 0;
         for (const m of messages) {
             switch (m.role) {
                 case "user":
-                    this.postToWebview({ type: "userMessage", text: this.textOf(m.content) });
+                    this.postToWebview({
+                        type: "userMessage",
+                        text: this.textOf(m.content),
+                        entryId: this.forkEntries[userIndex]?.entryId,
+                    });
+                    userIndex++;
                     break;
                 case "assistant": {
                     const parts = Array.isArray(m.content) ? m.content : [];
@@ -609,6 +651,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             case "abort":
                 // 与 newSession 共用：中止 LLM 流式生成 + bash 工具子进程。
                 this.abortActiveRun();
+                break;
+            case "forkFromEntry":
+                if (typeof msg.entryId === "string") {
+                    this.forkFromEntry(msg.entryId);
+                }
                 break;
             case "pickModel":
                 this.pickModel();
