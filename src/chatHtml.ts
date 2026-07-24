@@ -14,6 +14,12 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     const scriptUri = webview.asWebviewUri(
         vscode.Uri.joinPath(extensionUri, "media", "main.js")
     );
+    const markedUri = webview.asWebviewUri(
+        vscode.Uri.joinPath(extensionUri, "media", "marked.js")
+    );
+    const highlightUri = webview.asWebviewUri(
+        vscode.Uri.joinPath(extensionUri, "media", "highlight.js")
+    );
     // 图片来源允许 webview 资源与内联 data: URI（用于图片预览）
     const csp =
         `default-src 'none'; ` +
@@ -102,6 +108,19 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .md code { font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; }
   .md :not(pre) > code { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)); color: var(--vscode-textPreformat-foreground, var(--vscode-foreground)); padding: 1px 0; margin: 0 2px; border-radius: 3px; box-shadow: 0.25em 0 0 var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)), -0.25em 0 0 var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)); }
   .md pre code { background: none; padding: 0; }
+  /* highlight.js token 颜色（github-dark 主题，已去除 .hljs 自身背景与 padding） */
+  .hljs { color: var(--vscode-foreground, #c9d1d9); }
+  .hljs-doctag, .hljs-keyword, .hljs-meta .hljs-keyword, .hljs-template-tag, .hljs-template-variable, .hljs-type, .hljs-variable.language_ { color: #ff7b72; }
+  .hljs-title, .hljs-title.class_, .hljs-title.class_.inherited__, .hljs-title.function_ { color: #d2a8ff; }
+  .hljs-attr, .hljs-attribute, .hljs-literal, .hljs-meta, .hljs-number, .hljs-operator, .hljs-selector-attr, .hljs-selector-class, .hljs-selector-id, .hljs-variable { color: #79c0ff; }
+  .hljs-meta .hljs-string, .hljs-regexp, .hljs-string { color: #a5d6ff; }
+  .hljs-built_in, .hljs-symbol { color: #ffa657; }
+  .hljs-code, .hljs-comment, .hljs-formula { color: #8b949e; font-style: italic; }
+  .hljs-name, .hljs-quote, .hljs-selector-pseudo, .hljs-selector-tag { color: #7ee787; }
+  .hljs-section { color: #1f6feb; font-weight: 700; }
+  .hljs-bullet { color: #f2cc60; }
+  .hljs-emphasis { font-style: italic; }
+  .hljs-strong { font-weight: 700; }
   .md blockquote { margin: 13px 0; padding: 1px 13px; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.08)); border-left: 4px solid var(--vscode-descriptionForeground); border-radius: 0 4px 4px 0; }
   .md blockquote > :first-child { margin-top: 0; }
   .md blockquote > :last-child { margin-bottom: 0; }
@@ -116,13 +135,6 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .md tr:last-child td { border-bottom: 2px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); }
   .md tbody tr { transition: background 150ms; }
   .md tbody tr:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
-  /* 语法高亮 token 颜色 */
-  .tok-kw { color: var(--vscode-symbolIcon-keywordForeground, #c586c0); }
-  .tok-str { color: var(--vscode-debugTokenExpression-string, #ce9178); }
-  .tok-num { color: var(--vscode-debugTokenExpression-number, #b5cea8); }
-  .tok-com { color: var(--vscode-descriptionForeground, #6a9955); font-style: italic; }
-  .tok-fn { color: var(--vscode-symbolIcon-functionForeground, #dcdcaa); }
-  .code-lang { display: block; font-size: 0.75em; font-weight: 600; letter-spacing: 0.05em; opacity: 0.6; margin-bottom: 4px; text-transform: uppercase; }
   #inputArea { display: flex; flex-direction: column; padding: 8px; gap: 6px; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
   #imgPreview { display: flex; flex-wrap: wrap; gap: 6px; }
   #imgPreview:empty { display: none; }
@@ -286,6 +298,8 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
       <div id="statsBar"></div>
     </div>
   </div>
+  <script nonce="${n}" src="${markedUri}"></script>
+  <script nonce="${n}" src="${highlightUri}"></script>
   <script nonce="${n}" src="${scriptUri}"></script>
 </body>
 </html>`;

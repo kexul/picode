@@ -228,212 +228,38 @@
   // edit/write 工具调用卡片：toolCallId -> { el, path }
   const pendingToolCards = new Map();
 
-  // ---------- 语法高亮 ----------
-  const KEYWORDS = new Set(
-    (
-      "abstract async await boolean break byte case catch char class const continue " +
-      "debugger default delete do double else enum export extends false final finally " +
-      "float for from function goto if implements import in instanceof int interface let " +
-      "long namespace native new null package private protected public return short static " +
-      "super switch synchronized this throw throws transient true try typeof var void " +
-      "volatile while with yield def elif except lambda pass raise nonlocal global is not " +
-      "and or None True False print self func type struct map range chan go defer " +
-      "fn impl mut pub use mod match trait where loop unsafe string bool nil echo"
-    ).split(/\s+/)
-  );
-
-  function escapeHtml(s) {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // ---------- Markdown 渲染（使用 marked + highlight.js）----------
+  // 仅配一次 marked-highlight；重复 use 会重复 hook，故缓存。
+  let markedReady = false;
+  function ensureMarkedHighlight() {
+    if (markedReady) { return; }
+    markedReady = true;
+    const { hljs, markedHighlight } = globalThis.hljsBundle || {};
+    if (!hljs || !markedHighlight) { return; }
+    marked.use(markedHighlight({
+      langPrefix: "hljs language-",
+      highlight(code, lang) {
+        try {
+          // 仅对已注册语言（cpp/typescript/python 及别名）上色，其余纯文本
+          if (lang && hljs.getLanguage(lang)) {
+            return hljs.highlight(code, { language: lang }).value;
+          }
+          return hljs.highlight(code, { language: "plaintext" }).value;
+        } catch {
+          return code;
+        }
+      }
+    }));
   }
 
-  function highlightCode(raw) {
-    let src = escapeHtml(raw);
-    const holders = [];
-    const stash = (cls, text) => {
-      // 使用不含 \w / 数字的哨兵，避免被后续 数字/关键字 正则匹配
-      const key = "\uE000" + "\uE002".repeat(holders.length) + "\uE001";
-      holders.push('<span class="' + cls + '">' + text + "</span>");
-      return key;
-    };
-    // 块注释 /* */
-    src = src.replace(/\/\*[\s\S]*?\*\//g, (m) => stash("tok-com", m));
-    // 行注释 // 和 #
-    src = src.replace(/(^|\n)(\s*(?:\/\/|#)[^\n]*)/g, (m, pfx, c) => pfx + stash("tok-com", c));
-    // 字符串
-    src = src.replace(
-      /(&quot;[^&]*?&quot;|&#39;[^&]*?&#39;|'[^'\n]*'|"[^"\n]*")/g,
-      (m) => stash("tok-str", m)
-    );
-    src = src.replace(/`[^`\n]*`/g, (m) => stash("tok-str", m));
-    // 数字
-    src = src.replace(/\b(0x[0-9a-fA-F]+|\d+\.?\d*)\b/g, (m) => stash("tok-num", m));
-    // 函数调用（关键字 span 也走 stash，避免后续正则匹配到标签里的字面量，如 class）
-    src = src.replace(/\b([A-Za-z_]\w*)(?=\s*\()/g, (m, name) =>
-      KEYWORDS.has(name) ? stash("tok-kw", name) : stash("tok-fn", name)
-    );
-    // 关键字
-    src = src.replace(/\b([A-Za-z_]\w*)\b/g, (m, w) =>
-      KEYWORDS.has(w) ? stash("tok-kw", w) : w
-    );
-    // 回填（哨兵由 \uE002 重复次数表示索引）
-    src = src.replace(/\uE000(\uE002*)\uE001/g, (m, marks) => holders[marks.length]);
-    return src;
-  }
-
-  // ---------- Markdown 渲染 ----------
   function renderInline(text) {
-    let out = escapeHtml(text);
-    out = out.replace(/`([^`]+)`/g, (_, c) => "<code>" + c + "</code>");
-    out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    out = out.replace(/__([^_]+)__/g, "<strong>$1</strong>");
-    out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
-    out = out.replace(/(^|[^_])_([^_\n]+)_/g, "$1<em>$2</em>");
-    out = out.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2">$1</a>');
-    return out;
+    ensureMarkedHighlight();
+    return marked.parseInline(text, { gfm: true });
   }
 
   function renderMarkdown(source) {
-    const lines = source.replace(/\r\n/g, "\n").split("\n");
-    let html = "";
-    let i = 0;
-    let inList = null; // "ul" | "ol"
-    const closeList = () => {
-      if (inList) {
-        html += "</" + inList + ">";
-        inList = null;
-      }
-    };
-
-    while (i < lines.length) {
-      const line = lines[i];
-
-      // 代码块
-      const fence = line.match(/^\s*```(\w*)\s*$/);
-      if (fence) {
-        closeList();
-        const lang = fence[1] || "";
-        i++;
-        let code = "";
-        while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) {
-          code += lines[i] + "\n";
-          i++;
-        }
-        i++;
-        const langLabel = lang ? '<span class="code-lang">' + escapeHtml(lang) + "</span>" : "";
-        html += "<pre>" + langLabel + "<code>" + highlightCode(code.replace(/\n$/, "")) + "</code></pre>";
-        continue;
-      }
-
-      const h = line.match(/^(#{1,6})\s+(.*)$/);
-      if (h) {
-        closeList();
-        const lvl = Math.min(h[1].length, 3);
-        html += "<h" + lvl + ">" + renderInline(h[2]) + "</h" + lvl + ">";
-        i++;
-        continue;
-      }
-
-      if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
-        closeList();
-        html += "<hr/>";
-        i++;
-        continue;
-      }
-
-      if (/^\s*>\s?/.test(line)) {
-        closeList();
-        let quote = "";
-        while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
-          quote += lines[i].replace(/^\s*>\s?/, "") + "\n";
-          i++;
-        }
-        html += "<blockquote>" + renderMarkdown(quote.trim()) + "</blockquote>";
-        continue;
-      }
-
-      // 表格：| 表头 | 表头 |
-      //       |---|---|
-      if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|?\s*$/.test(lines[i + 1])) {
-        closeList();
-        const parseRow = (r) => r.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map((c) => c.trim());
-        const headers = parseRow(line);
-        const aligns = parseRow(lines[i + 1]).map((s) => {
-          if (/^:.*:$/.test(s)) return "center";
-          if (/:$/.test(s)) return "right";
-          return "left";
-        });
-        i += 2;
-        let tableHtml = '<div class="md-table-wrap"><table><thead><tr>';
-        headers.forEach((h, ci) => {
-          tableHtml += '<th style="text-align:' + (aligns[ci] || "left") + "\">" + renderInline(h) + "</th>";
-        });
-        tableHtml += "</tr></thead><tbody>";
-        while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) {
-          const cells = parseRow(lines[i]);
-          tableHtml += "<tr>";
-          cells.forEach((c, ci) => {
-            tableHtml += '<td style="text-align:' + (aligns[ci] || "left") + "\">" + renderInline(c) + "</td>";
-          });
-          tableHtml += "</tr>";
-          i++;
-        }
-        tableHtml += "</tbody></table></div>";
-        html += tableHtml;
-        continue;
-      }
-
-      const ul = line.match(/^\s*[-*+]\s+(.*)$/);
-      if (ul) {
-        if (inList !== "ul") {
-          closeList();
-          html += "<ul>";
-          inList = "ul";
-        }
-        html += "<li>" + renderInline(ul[1]) + "</li>";
-        i++;
-        continue;
-      }
-
-      const ol = line.match(/^\s*\d+\.\s+(.*)$/);
-      if (ol) {
-        if (inList !== "ol") {
-          closeList();
-          html += "<ol>";
-          inList = "ol";
-        }
-        html += "<li>" + renderInline(ol[1]) + "</li>";
-        i++;
-        continue;
-      }
-
-      if (/^\s*$/.test(line)) {
-        closeList();
-        i++;
-        continue;
-      }
-
-      // 普通段落
-      closeList();
-      let para = line;
-      i++;
-      while (
-        i < lines.length &&
-        !/^\s*$/.test(lines[i]) &&
-        !/^\s*```/.test(lines[i]) &&
-        !/^(#{1,6})\s/.test(lines[i]) &&
-        !/^\s*[-*+]\s/.test(lines[i]) &&
-        !/^\s*\d+\.\s/.test(lines[i]) &&
-        !/^\s*>\s?/.test(lines[i]) &&
-        // 表格行（| ... |）或表格分隔行（|---|---|）应终止段落
-        !/^\s*\|.*\|\s*$/.test(lines[i])
-      ) {
-        para += "\n" + lines[i];
-        i++;
-      }
-      html += "<p>" + renderInline(para).replace(/\n/g, "<br/>") + "</p>";
-    }
-    closeList();
-    return html;
+    ensureMarkedHighlight();
+    return marked.parse(source, { breaks: true, gfm: true });
   }
 
   // ---------- DOM 辅助 ----------
