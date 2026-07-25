@@ -167,6 +167,13 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   #status { padding: 2px 8px; font-size: 0.8em; opacity: 0.7; min-height: 1em; }
   /* 底部工具栏 */
   #bottomBar { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
+  #treeBtn {
+    background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2));
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+    border: none; border-radius: 4px; padding: 2px 10px; cursor: pointer;
+    font-size: 0.8em; display: inline-flex; align-items: center; gap: 4px;
+  }
+  #treeBtn:hover { opacity: 0.85; }
   #modelBtn {
     background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2));
     color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
@@ -262,19 +269,47 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .diff-line.add { background: var(--vscode-diffEditor-insertedLineBackground, rgba(0,255,0,0.1)); color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
   .diff-line.ctx { opacity: 0.6; }
   .empty-hint { text-align: center; opacity: 0.35; font-size: 0.9em; padding: 40px 0; user-select: none; }
-  /* 右键自定义菜单（user 消息：从此处分叉） */
-  .ctx-menu {
-    position: fixed; z-index: 9999; min-width: 150px;
-    background: var(--vscode-menu-background, var(--vscode-editor-background));
-    color: var(--vscode-menu-foreground, var(--vscode-foreground));
-    border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border, rgba(128,128,128,0.3)));
-    border-radius: 4px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    padding: 4px 0; font-size: var(--vscode-font-size);
+  /* 分支树浮层 */
+  #treeOverlay {
+    position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0,0,0,0.45);
+    display: flex; align-items: center; justify-content: center;
+    opacity: 1; transition: opacity 160ms ease;
   }
-  .ctx-menu.hidden { display: none; }
-  .ctx-item { padding: 4px 14px; cursor: pointer; white-space: nowrap; }
-  .ctx-item:hover { background: var(--vscode-menu-selectionBackground, var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.25))); color: var(--vscode-menu-selectionForeground, var(--vscode-foreground)); }
+  #treeOverlay.hidden { display: none; }
+  #treePanel {
+    width: min(640px, 92vw); max-height: 80vh; display: flex; flex-direction: column;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    color: var(--vscode-foreground);
+    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4));
+    border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    overflow: hidden;
+  }
+  #treeHeader {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+    padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
+  }
+  #treeHeader .tree-hint { font-weight: 400; font-size: 0.75em; opacity: 0.6; }
+  #treeBody { overflow-y: auto; padding: 6px 4px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.82em; }
+  #treeBody::-webkit-scrollbar { width: 8px; }
+  #treeBody::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 4px; }
+  .tree-row {
+    display: flex; align-items: baseline; gap: 4px; padding: 2px 8px;
+    white-space: nowrap; cursor: pointer; border-radius: 3px;
+    transition: background 120ms;
+  }
+  .tree-row:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
+  .tree-row.is-leaf { cursor: default; }
+  .tree-row.is-leaf:hover { background: transparent; }
+  .tree-row.readonly { cursor: default; }
+  .tree-row.readonly:hover { background: transparent; }
+  .tree-row.forkable { cursor: pointer; }
+  .tree-pre { white-space: pre; opacity: 0.45; user-select: none; }
+  .tree-mark { opacity: 0.6; width: 1.2em; text-align: center; user-select: none; }
+  .tree-mark.user { color: var(--vscode-textLink-foreground); opacity: 1; }
+  .tree-row.is-leaf .tree-text { font-weight: 600; }
+  .tree-text { overflow: hidden; text-overflow: ellipsis; }
+  .tree-empty { padding: 20px; text-align: center; opacity: 0.5; }
 </style>
 </head>
 <body>
@@ -294,8 +329,15 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
       </div>
     </div>
     <div id="bottomBar">
+      <button id="treeBtn" title="查看对话树 / 切换分支">⑂ 分支</button>
       <button id="modelBtn" title="切换模型">⚡ <span id="modelName">模型</span></button>
       <div id="statsBar"></div>
+    </div>
+  </div>
+  <div id="treeOverlay" class="hidden">
+    <div id="treePanel">
+      <div id="treeHeader"><span>对话树</span><span class="tree-hint">点击 user 消息新建分支 · Esc 关闭</span></div>
+      <div id="treeBody"></div>
     </div>
   </div>
   <script nonce="${n}" src="${markedUri}"></script>

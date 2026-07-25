@@ -325,7 +325,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.refreshStats();
     }
 
-    /** 从指定 user 消息处分叉新分支，并切到新分支重渲。 */
+    /** 拉取对话树并推送给 webview 渲染浮层。 */
+    private async showTree(): Promise<void> {
+        const resp = await this.request({ type: "get_tree" });
+        if (!resp || resp.success === false) {
+            this.postToWebview({
+                type: "systemError",
+                text: `获取对话树失败: ${resp?.error ?? "未知错误"}`,
+            });
+            return;
+        }
+        this.postToWebview({
+            type: "treeView",
+            tree: resp.data?.tree ?? [],
+            leafId: resp.data?.leafId ?? null,
+        });
+    }
+
+    /** 从指定消息处分叉新分支，并切到新分支重渲。 */
     private async forkFromEntry(entryId: string): Promise<void> {
         this.abortActiveRun();
         this.postToWebview({ type: "system", text: "正在从该消息处分叉…" });
@@ -652,7 +669,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 // 与 newSession 共用：中止 LLM 流式生成 + bash 工具子进程。
                 this.abortActiveRun();
                 break;
-            case "forkFromEntry":
+            case "showTree":
+                void this.showTree();
+                break;
+            case "forkAtEntry":
                 if (typeof msg.entryId === "string") {
                     this.forkFromEntry(msg.entryId);
                 }

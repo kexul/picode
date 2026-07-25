@@ -12,35 +12,176 @@
   const statsBarEl = document.getElementById("statsBar");
   const changedFilesEl = document.getElementById("changedFiles");
 
-  // ---- user 消息右键：从此处分叉 ----
-  const forkMenu = document.createElement("div");
-  forkMenu.id = "forkMenu";
-  forkMenu.className = "ctx-menu hidden";
-  document.body.appendChild(forkMenu);
-  function hideForkMenu() { forkMenu.classList.add("hidden"); }
-  document.addEventListener("contextmenu", function (e) {
-    const userMsg = e.target.closest && e.target.closest(".msg.user");
-    if (!userMsg || !userMsg.dataset.entryId) { return; }
-    e.preventDefault();
-    const entryId = userMsg.dataset.entryId;
-    forkMenu.innerHTML = "";
-    const item = document.createElement("div");
-    item.className = "ctx-item";
-    item.textContent = "⑂ 从此处分叉";
-    item.addEventListener("click", function () {
-      hideForkMenu();
-      vscode.postMessage({ type: "forkFromEntry", entryId: entryId });
-    });
-    forkMenu.appendChild(item);
-    const w = 170;
-    forkMenu.style.left = Math.min(e.clientX, window.innerWidth - w - 6) + "px";
-    forkMenu.style.top = Math.min(e.clientY, window.innerHeight - 40) + "px";
-    forkMenu.classList.remove("hidden");
+  // ---- 分支树浮层 ----
+  // 点击底部「⑂ 分支」按钮，由后端拉 get_tree 后推送 treeView 事件渲染。
+  const treeOverlay = document.getElementById("treeOverlay");
+  const treeBody = document.getElementById("treeBody");
+
+  function hideTree() { treeOverlay.classList.add("hidden"); }
+  document.getElementById("treeBtn").addEventListener("click", () => {
+    vscode.postMessage({ type: "showTree" });
   });
-  document.addEventListener("click", hideForkMenu);
-  document.addEventListener("keydown", function (e) { if (e.key === "Escape") hideForkMenu(); });
-  document.addEventListener("scroll", hideForkMenu, true);
-  window.addEventListener("blur", hideForkMenu);
+  // 点遮罩或 Esc 关闭
+  treeOverlay.addEventListener("click", (e) => {
+    if (e.target === treeOverlay) { hideTree(); }
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideTree(); });
+
+  // 把任意 entry 的 content 抽成纯文本
+  function entryText(content) {
+    if (typeof content === "string") { return content; }
+    if (Array.isArray(content)) {
+      return content.map((c) => (c && c.type === "text") ? c.text : "").join("");
+    }
+    return "";
+  }
+  // 单个树节点的一行摘要
+  function entrySummary(node) {
+    const e = node.entry;
+    if (e.type === "message") {
+      const m = e.message;
+      if (m.role === "user") { return "你：" + clip(entryText(m.content)); }
+      if (m.role === "assistant") {
+        const t = entryText(m.content);
+        if (t) { return "pi：" + clip(t); }
+        if (m.stopReason === "aborted") { return "pi：(已中止)"; }
+        if (m.errorMessage) { return "pi：" + clip(m.errorMessage); }
+        return "pi：(工具调用)";
+      }
+      if (m.role === "toolResult") { return "› 工具结果"; }
+      if (m.role === "bashExecution") { return "› bash：" + clip(m.command || ""); }
+      return "› " + m.role;
+    }
+    if (e.type === "compaction") { return "◌ 压缩摘要"; }
+    if (e.type === "branch_summary") { return "↳ 分支摘要：" + clip(e.summary); }
+    if (e.type === "model_change") { return "⟳ 模型 " + e.modelId; }
+    if (e.type === "thinking_level_change") { return "⟳ 思考 " + e.thinkingLevel; }
+    if (e.type === "session_info") { return "· 标题" + (e.name ? "：" + e.name : ""); }
+    if (e.type === "label") { return "· 标签" + (e.label ? "：" + e.label : ""); }
+    if (e.type === "custom" || e.type === "custom_message") { return "· " + e.customType; }
+    return e.type;
+  }
+  function clip(s) {
+    s = String(s || "").replace(/\s+/g, " ").trim();
+    return s.length > 64 ? s.slice(0, 64) + "…" : s;
+  }
+
+  // 需隐藏的节点：工具结果、bash 执行（与 pi default filter 一致）
+  function isHiddenNode(node) {
+    const e = node.entry;
+    if (e.type === "message") {
+      const r = e.message && e.message.role;
+      if (r === "toolResult" || r === "bashExecution") { return true; }
+    }
+    return false;
+  }
+
+  // 扁平化树为行：仅分叉点（多个子节点）才增加缩进，单子链保持平齐。
+  // 连接线 └─├─ 只画在分叉点的子节点上；兄弟分支用 gutter 竖线 │ 延续。
+  // 隐藏节点不渲染行，但仍透明参与子节点遍历，避免缩进断层。
+  function flattenTree(roots) {
+    const rows = [];
+    function walk(node, indent, gutters, isLast, showConnector, connectorPos) {
+      const hidden = isHiddenNode(node);
+      if (!hidden) {
+        rows.push({ node, indent, isLast, gutters: gutters.slice(), showConnector, connectorPos });
+      }
+      const kids = node.children || [];
+      const multiple = kids.length > 1;
+      const childIndent = multiple ? indent + 1 : indent;
+      kids.forEach((k, i) => {
+        const kIsLast = i === kids.length - 1;
+        const childShowConnector = multiple;
+        const childConnectorPos = multiple ? indent : -1;
+        const childGutters = multiple ? gutters.concat({ pos: indent, show: !kIsLast }) : gutters;
+        walk(k, childIndent, childGutters, kIsLast, childShowConnector, childConnectorPos);
+      });
+    }
+    roots.forEach((r, i) => walk(r, 0, [], i === roots.length - 1, false, -1));
+    return rows;
+  }
+
+  // 收集从 leaf 到 root 的祖先 id 集（激活路径）
+  function activePathSet(roots, leafId) {
+    const byId = new Map();
+    function visit(node) {
+      byId.set(node.entry.id, node);
+      (node.children || []).forEach(visit);
+    }
+    roots.forEach(visit);
+    const set = new Set();
+    let cur = leafId;
+    while (cur) {
+      set.add(cur);
+      const n = byId.get(cur);
+      if (!n) { break; }
+      cur = n.entry.parentId ?? null;
+    }
+    return set;
+  }
+
+  function renderTree(tree, leafId) {
+    treeBody.innerHTML = "";
+    const rows = flattenTree(tree);
+    const active = activePathSet(tree, leafId);
+    if (rows.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "tree-empty";
+      empty.textContent = "没有历史消息。";
+      treeBody.appendChild(empty);
+      return;
+    }
+    rows.forEach((row) => {
+      const e = row.node.entry;
+      const isLeaf = e.id === leafId;
+      const onPath = active.has(e.id);
+      // 前缀连接线：循环各层级，分叉子节点画 └─/├─，其余按 gutter 画 │ 或空
+      let prefix = "";
+      for (let lv = 0; lv < row.indent; lv++) {
+        if (row.showConnector && lv === row.connectorPos) {
+          prefix += row.isLast ? "└─ " : "├─ ";
+        } else {
+          const g = row.gutters.find((x) => x.pos === lv);
+          prefix += g && g.show ? "│  " : "   ";
+        }
+      }
+      const line = document.createElement("div");
+      line.className = "tree-row" + (isLeaf ? " is-leaf" : "") + (onPath ? " on-path" : "");
+      const pre = document.createElement("span");
+      pre.className = "tree-pre";
+      pre.textContent = prefix;
+      line.appendChild(pre);
+      const isUserMsg = e.type === "message" && e.message && e.message.role === "user";
+      const marker = document.createElement("span");
+      marker.className = "tree-mark" + (isUserMsg ? " user" : "");
+      marker.textContent = isUserMsg ? "●" : "";
+      line.appendChild(marker);
+      const text = document.createElement("span");
+      text.className = "tree-text";
+      text.textContent = entrySummary(row.node);
+      line.appendChild(text);
+      const isUserMsg = e.type === "message" && e.message && e.message.role === "user";
+      const forkable = isUserMsg && !isLeaf;
+      if (forkable) {
+        line.classList.add("forkable");
+        line.title = "点击在此处新建分支（可编辑该消息后重发）";
+        line.addEventListener("click", () => {
+          hideTree();
+          vscode.postMessage({ type: "forkAtEntry", entryId: e.id });
+        });
+      } else if (isLeaf) {
+        line.title = "当前位置（分支末尾）";
+      } else {
+        line.classList.add("readonly");
+        line.title = isUserMsg ? "当前位置的消息" : "仅展示（仅 user 消息可分叉）";
+      }
+      treeBody.appendChild(line);
+    });
+    // 滚到当前 leaf 附近
+    const leafEl = treeBody.querySelector(".tree-row.is-leaf");
+    if (leafEl) { leafEl.scrollIntoView({ block: "center" }); }
+    treeOverlay.classList.remove("hidden");
+  }
 
   // pi 进程就绪前禁用发送按钮，避免冷启动期间点击产生困惑
   let piReady = false;
@@ -892,6 +1033,9 @@
         break;
       case "piReady":
         setPiReady(msg.ready === true);
+        break;
+      case "treeView":
+        renderTree(msg.tree || [], msg.leafId || null);
         break;
     }
   });
