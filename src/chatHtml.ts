@@ -268,6 +268,8 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .diff-line.del { background: var(--vscode-diffEditor-removedLineBackground, rgba(255,0,0,0.1)); color: var(--vscode-gitDecoration-deletedResourceForeground, #ad0707); }
   .diff-line.add { background: var(--vscode-diffEditor-insertedLineBackground, rgba(0,255,0,0.1)); color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
   .diff-line.ctx { opacity: 0.6; }
+  .diff-line.jumpable { cursor: pointer; }
+  .diff-line.jumpable:hover { outline: 1px solid var(--vscode-focusBorder, rgba(128,128,128,0.6)); outline-offset: -1px; }
   .empty-hint { text-align: center; opacity: 0.35; font-size: 0.9em; padding: 40px 0; user-select: none; }
   /* 分支树浮层 */
   #treeOverlay {

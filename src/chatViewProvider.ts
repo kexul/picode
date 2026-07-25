@@ -375,13 +375,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     /** 把已有消息数组渲染到 webview。 */
     private renderMessages(messages: any[]): void {
         // 先收集所有 toolResult（按 toolCallId 索引），用于为历史 edit 卡片重建 diff。
+        // pi 的 toolResult 是独立消息：toolCallId/details 在消息顶层，content 是文本块。
         const toolResults = new Map<string, any>();
         for (const m of messages) {
-            const parts = Array.isArray(m.content) ? m.content : [];
-            for (const c of parts) {
-                if (c && c.type === "toolResult" && c.toolCallId) {
-                    toolResults.set(c.toolCallId, c);
-                }
+            if (m && m.role === "toolResult" && typeof m.toolCallId === "string") {
+                toolResults.set(m.toolCallId, m);
             }
         }
         let userIndex = 0;
@@ -689,7 +687,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 }
                 break;
             case "openEditLocation":
-                if (typeof msg.toolCallId === "string" && this.editSnapshots.has(msg.toolCallId)) {
+                if (typeof msg.path === "string" && typeof msg.anchor === "string" && msg.anchor) {
+                    // diff 行点击：按行内容锚点在当前文件中重定位（容忍后续编辑行号偏移）
+                    this.openEditLocationWithAnchor(
+                        msg.path,
+                        typeof msg.line === "number" ? msg.line : 1,
+                        msg.anchor
+                    );
+                } else if (typeof msg.toolCallId === "string" && this.editSnapshots.has(msg.toolCallId)) {
                     // 优先用锚点在当前磁盘内容中重新定位行号（避免后续编辑导致行号偏移）
                     this.openEditByToolCall(msg.toolCallId);
                 } else if (typeof msg.path === "string") {
@@ -1247,6 +1252,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         } catch (e: any) {
             vscode.window.showErrorMessage(`无法打开 diff: ${e.message}`);
         }
+    }
+
+    /** diff 行点击跳转：读当前文件内容，按行内容锚点重定位行号后打开。 */
+    private async openEditLocationWithAnchor(path: string, line: number, anchor: string): Promise<void> {
+        let current = "";
+        try {
+            current = fs.readFileSync(path, "utf8");
+        } catch {
+            await this.openEditLocation(path, line);
+            return;
+        }
+        await this.openEditLocation(path, this.resolveAnchorLine(current, anchor, line));
     }
 
     /** 打开文件并跳转到指定行（用于 edit 卡片点击跳转）。 */

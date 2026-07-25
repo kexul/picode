@@ -54,8 +54,6 @@
     }
     if (e.type === "compaction") { return "◌ 压缩摘要"; }
     if (e.type === "branch_summary") { return "↳ 分支摘要：" + clip(e.summary); }
-    if (e.type === "model_change") { return "⟳ 模型 " + e.modelId; }
-    if (e.type === "thinking_level_change") { return "⟳ 思考 " + e.thinkingLevel; }
     if (e.type === "session_info") { return "· 标题" + (e.name ? "：" + e.name : ""); }
     if (e.type === "label") { return "· 标签" + (e.label ? "：" + e.label : ""); }
     if (e.type === "custom" || e.type === "custom_message") { return "· " + e.customType; }
@@ -66,14 +64,31 @@
     return s.length > 64 ? s.slice(0, 64) + "…" : s;
   }
 
-  // 需隐藏的节点：工具结果、bash 执行（与 pi default filter 一致）
+  // 需隐藏的节点：工具结果、bash 执行（与 pi default filter 一致），
+  // 以及模型/思考级别切换 entry、纯工具调用的 assistant 消息（无正文）。
   function isHiddenNode(node) {
     const e = node.entry;
+    if (e.type === "model_change" || e.type === "thinking_level_change") { return true; }
     if (e.type === "message") {
-      const r = e.message && e.message.role;
+      const m = e.message;
+      const r = m && m.role;
       if (r === "toolResult" || r === "bashExecution") { return true; }
+      if (r === "assistant" && isToolCallOnlyMsg(m)) { return true; }
     }
     return false;
+  }
+
+  // 纯工具调用消息：content 中含 toolCall 但没有任何文本。
+  // （中止/报错的无文本消息仍保留显示，不视为工具调用消息。）
+  function isToolCallOnlyMsg(m) {
+    if (!Array.isArray(m.content)) { return false; }
+    let hasTool = false;
+    for (const c of m.content) {
+      if (!c) { continue; }
+      if (c.type === "text" && String(c.text || "").trim()) { return false; }
+      if (c.type === "toolCall") { hasTool = true; }
+    }
+    return hasTool;
   }
 
   // 扁平化树为行：仅分叉点（多个子节点）才增加缩进，单子链保持平齐。
@@ -160,7 +175,6 @@
       text.className = "tree-text";
       text.textContent = entrySummary(row.node);
       line.appendChild(text);
-      const isUserMsg = e.type === "message" && e.message && e.message.role === "user";
       const forkable = isUserMsg && !isLeaf;
       if (forkable) {
         line.classList.add("forkable");
@@ -604,7 +618,7 @@
           return;
         }
         if (msg.diff) {
-          el.appendChild(renderDiffBlock(msg.diff));
+          el.appendChild(renderDiffBlock(msg.diff, { path, toolCallId }));
         }
         const line = typeof msg.firstChangedLine === "number" ? msg.firstChangedLine : 1;
         // 跳转按钮
@@ -649,9 +663,14 @@
   }
 
   // 把 pi 的 diff 字符串渲染成红绿行块。
-  function renderDiffBlock(diffText) {
+  // pi diff 行格式：[+/-/空格] + 行号 + 空格 + 内容；"..." 行分隔 hunk。
+  // 变更行（+/-）可点击跳转到对应行：+ 行带新文件行号与内容锚点（容忍后续
+  // 编辑导致的行号偏移）；- 行带旧文件行号，跳到近似位置。
+  // 无行号的兼容 diff（如 write 的参数重建）不可点击，行为不变。
+  function renderDiffBlock(diffText, jumpInfo) {
     const wrap = document.createElement("div");
     wrap.className = "edit-diff";
+    const LINE_RE = /^([+-]?) *(\d+) (.*)$/;
     const lines = String(diffText).split("\n");
     for (const line of lines) {
       const div = document.createElement("div");
@@ -661,6 +680,23 @@
       else if (prefix === "-") div.classList.add("del");
       else div.classList.add("ctx");
       div.textContent = line;
+      const m = jumpInfo && line.match(LINE_RE);
+      if (m && (m[1] === "+" || m[1] === "-")) {
+        const target = parseInt(m[2], 10);
+        // 仅 + 行传内容锚点（- 行的内容已不在新文件中，锚定必然失败）
+        const anchor = m[1] === "+" ? m[3] : undefined;
+        div.classList.add("jumpable");
+        div.title = "跳转到第 " + target + " 行";
+        div.addEventListener("click", () => {
+          vscode.postMessage({
+            type: "openEditLocation",
+            path: jumpInfo.path,
+            line: target,
+            anchor,
+            toolCallId: jumpInfo.toolCallId || undefined,
+          });
+        });
+      }
       wrap.appendChild(div);
     }
     return wrap;
