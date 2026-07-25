@@ -29,11 +29,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private fileChanges = new Map<string, FileChange>();
     // 正在执行的编辑工具调用：toolCallId -> { path, beforeContent }
     private pendingEdits = new Map<string, { path: string; before: string }>();
-    // 已完成的编辑快照（用于单张卡片 revert / 精确跳转）：toolCallId -> 快照
-    // anchorText 记录“首个变更行”在修改后的文本，用于在后续编辑导致行号偏移后仍能定位
+    // 已完成的编辑快照（用于单张卡片 revert）：toolCallId -> 快照
     private editSnapshots = new Map<
         string,
-        { path: string; before: string; after: string; firstChangedLine: number; anchorText: string }
+        { path: string; before: string; after: string }
     >();
     // 当前活跃分支中可被 fork 的 user 消息（entryId + text），按顺序与渲染的 user 气泡对齐
     private forkEntries: { entryId: string; text: string }[] = [];
@@ -415,12 +414,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                                     path: p || "",
                                     label: p ? this.relativeTo(this.getCwd(), p) : "",
                                 });
-                                const info = this.historyEditInfo(c, toolResults.get(id));
                                 this.postToWebview({
                                     type: "editCardResult",
                                     toolCallId: id,
-                                    diff: info.diff,
-                                    firstChangedLine: info.firstChangedLine,
+                                    diff: this.historyEditInfo(c, toolResults.get(id)),
                                     // 历史卡片不提供回滚（缺少可靠的“修改前”磁盘快照），
                                     // 但仍可展开查看 diff 并跳转到当前文件位置。
                                     canRevert: false,
@@ -694,9 +691,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                         typeof msg.line === "number" ? msg.line : 1,
                         msg.anchor
                     );
-                } else if (typeof msg.toolCallId === "string" && this.editSnapshots.has(msg.toolCallId)) {
-                    // 优先用锚点在当前磁盘内容中重新定位行号（避免后续编辑导致行号偏移）
-                    this.openEditByToolCall(msg.toolCallId);
                 } else if (typeof msg.path === "string") {
                     this.openEditLocation(msg.path, typeof msg.line === "number" ? msg.line : 1);
                 }
@@ -928,8 +922,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             type: "editCardResult",
             toolCallId: evt.toolCallId,
             diff: typeof details?.diff === "string" ? details.diff : undefined,
-            firstChangedLine: typeof details?.firstChangedLine === "number"
-                ? details.firstChangedLine : undefined,
             isError: !!evt.isError,
             errorText,
             // 有快照才允许 revert（非错误且成功记录了 before/after）
@@ -1039,18 +1031,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * 为历史 edit/write 卡片重建展示信息（diff 文本 + 首个变更行）。
+     * 为历史 edit/write 卡片重建 diff 文本。
      * 优先使用 toolResult.details.diff；无则根据工具参数粗略重建。
      */
-    private historyEditInfo(
-        call: any,
-        result: any
-    ): { diff?: string; firstChangedLine?: number } {
+    private historyEditInfo(call: any, result: any): string | undefined {
         const details = result?.details;
         let diff: string | undefined =
             typeof details?.diff === "string" ? details.diff : undefined;
-        const firstChangedLine: number | undefined =
-            typeof details?.firstChangedLine === "number" ? details.firstChangedLine : undefined;
 
         if (!diff) {
             const args = call?.arguments ?? {};
@@ -1087,7 +1074,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 }
             }
         }
-        return { diff, firstChangedLine };
+        return diff;
     }
 
     /** 判断工具是否会修改文件，并提取目标路径。 */
@@ -1149,18 +1136,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (after === pend.before) {
             return; // 无实际变化
         }
-        // 计算首个变更行（在 after 中的行号）及其行文本作为锚点
-        const { line: firstChangedLine, anchor: anchorText } = this.firstChangedLineOf(
-            pend.before,
-            after
-        );
-        // 保存本次 edit 的快照，供单张卡片 revert / 精确跳转使用
+        // 保存本次 edit 的快照，供单张卡片 revert 使用
         this.editSnapshots.set(id, {
             path: pend.path,
             before: pend.before,
             after,
-            firstChangedLine,
-            anchorText,
         });
         const existing = this.fileChanges.get(pend.path);
         if (!existing) {
@@ -1171,26 +1151,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             });
         }
         this.postFileChanges();
-    }
-
-    /**
-     * 找出 before -> after 的首个变更行，返回该行在 after 中的 1-based 行号及行文本（锚点）。
-     * 策略：从头部跳过前后相同的公共前缀行，第一个不同位置即为首个变更行。
-     */
-    private firstChangedLineOf(
-        before: string,
-        after: string
-    ): { line: number; anchor: string } {
-        const a = before.length ? before.split("\n") : [];
-        const b = after.length ? after.split("\n") : [];
-        let i = 0;
-        while (i < a.length && i < b.length && a[i] === b[i]) {
-            i++;
-        }
-        // i 即首个不同的 0-based 行索引（在 after 中）
-        const line = Math.min(i, Math.max(b.length - 1, 0)) + 1;
-        const anchor = b[Math.min(i, b.length - 1)] ?? "";
-        return { line, anchor };
     }
 
     /**
@@ -1277,27 +1237,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         } catch (e: any) {
             vscode.window.showErrorMessage(`无法打开文件: ${e.message}`);
         }
-    }
-
-    /**
-     * 依据某次 edit 的快照，在当前磁盘内容中重新定位首个变更行并跳转。
-     * 解决同一对话中后续更靠前的编辑导致旧行号偏移的问题。
-     */
-    private async openEditByToolCall(toolCallId: string): Promise<void> {
-        const snap = this.editSnapshots.get(toolCallId);
-        if (!snap) {
-            return;
-        }
-        let current = "";
-        try {
-            current = fs.readFileSync(snap.path, "utf8");
-        } catch {
-            // 文件读不到就按原行号打开
-            await this.openEditLocation(snap.path, snap.firstChangedLine);
-            return;
-        }
-        const line = this.resolveAnchorLine(current, snap.anchorText, snap.firstChangedLine);
-        await this.openEditLocation(snap.path, line);
     }
 
     /** 获取会话统计（token/成本/上下文）并推送给 webview。 */

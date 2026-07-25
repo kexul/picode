@@ -618,20 +618,8 @@
           return;
         }
         if (msg.diff) {
-          el.appendChild(renderDiffBlock(msg.diff, { path, toolCallId }));
+          el.appendChild(renderDiffBlock(msg.diff, path));
         }
-        const line = typeof msg.firstChangedLine === "number" ? msg.firstChangedLine : 1;
-        // 跳转按钮
-        const jumpBtn = document.createElement("span");
-        jumpBtn.className = "et-revert";
-        jumpBtn.textContent = "→ 跳转";
-        jumpBtn.title = "跳转到编辑位置";
-        jumpBtn.addEventListener("click", (e) => {
-          e.stopPropagation();
-          // 同时带上 toolCallId 与 path/line：有快照时按错点重定位，无快照（历史卡片）时回退行号
-          vscode.postMessage({ type: "openEditLocation", path, line, toolCallId: toolCallId || undefined });
-        });
-        title.appendChild(jumpBtn);
         // revert 按钮（仅当后端记录了快照时显示）
         if (msg.canRevert && toolCallId) {
           const revertBtn = document.createElement("span");
@@ -667,7 +655,7 @@
   // 变更行（+/-）可点击跳转到对应行：+ 行带新文件行号与内容锚点（容忍后续
   // 编辑导致的行号偏移）；- 行带旧文件行号，跳到近似位置。
   // 无行号的兼容 diff（如 write 的参数重建）不可点击，行为不变。
-  function renderDiffBlock(diffText, jumpInfo) {
+  function renderDiffBlock(diffText, path) {
     const wrap = document.createElement("div");
     wrap.className = "edit-diff";
     const LINE_RE = /^([+-]?) *(\d+) (.*)$/;
@@ -680,7 +668,7 @@
       else if (prefix === "-") div.classList.add("del");
       else div.classList.add("ctx");
       div.textContent = line;
-      const m = jumpInfo && line.match(LINE_RE);
+      const m = path && line.match(LINE_RE);
       if (m && (m[1] === "+" || m[1] === "-")) {
         const target = parseInt(m[2], 10);
         // 仅 + 行传内容锚点（- 行的内容已不在新文件中，锚定必然失败）
@@ -688,13 +676,7 @@
         div.classList.add("jumpable");
         div.title = "跳转到第 " + target + " 行";
         div.addEventListener("click", () => {
-          vscode.postMessage({
-            type: "openEditLocation",
-            path: jumpInfo.path,
-            line: target,
-            anchor,
-            toolCallId: jumpInfo.toolCallId || undefined,
-          });
+          vscode.postMessage({ type: "openEditLocation", path, line: target, anchor });
         });
       }
       wrap.appendChild(div);
