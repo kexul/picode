@@ -151,6 +151,11 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .text-block .tb-body { display: none; white-space: pre-wrap; max-height: 220px; overflow: auto; margin-top: 6px; opacity: 0.8; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em; }
   .text-block.expanded .tb-body { display: block; }
   .text-block .tb-rm { position: absolute; top: -6px; right: -6px; width: 16px; height: 16px; line-height: 14px; text-align: center; border-radius: 50%; background: var(--vscode-button-background); color: var(--vscode-button-foreground); cursor: pointer; font-size: 11px; }
+  /* 超长用户消息：默认折叠预览，点击展开全文（限高滚动） */
+  .long-msg pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em; opacity: 0.92; }
+  .long-msg pre.full { max-height: 420px; overflow: auto; }
+  .long-msg .lm-toggle { margin-top: 6px; font-size: 0.8em; opacity: 0.7; cursor: pointer; user-select: none; display: inline-block; }
+  .long-msg .lm-toggle:hover { opacity: 1; text-decoration: underline; }
   #inputRow { display: flex; gap: 6px; position: relative; }
   #sendCol { display: flex; flex-direction: column; gap: 4px; width: 64px; }
   #newBtn { height: 33.3%; min-height: 28px; font-size: 0.8em; padding: 0; background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2)); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); }

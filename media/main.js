@@ -486,18 +486,68 @@
     }
   }
 
+  // 统计行数（仅对适中长度文本调用，避免超大文本重复遍历）
+  function countLines(text) {
+    let n = 0;
+    for (let i = 0; i < text.length; i++) {
+      if (text.charCodeAt(i) === 10) { n++; }
+    }
+    return n + 1;
+  }
+
+  // 预览行数：默认显示前若干行，其余折叠
+  const LONG_MSG_PREVIEW_LINES = 30;
+
+  // 构建可折叠的超长文本主体，返回 body 元素
+  function makeLongTextBody(text) {
+    const body = document.createElement("div");
+    body.className = "long-msg";
+    const pre = document.createElement("pre");
+    const lines = text.split("\n");
+    const total = lines.length;
+    pre.textContent = lines.slice(0, LONG_MSG_PREVIEW_LINES).join("\n") +
+      (total > LONG_MSG_PREVIEW_LINES ? "\n…" : "");
+    body.appendChild(pre);
+    if (total > LONG_MSG_PREVIEW_LINES) {
+      const toggle = document.createElement("span");
+      toggle.className = "lm-toggle";
+      toggle.textContent = "展开全部（共 " + total + " 行）";
+      let expanded = false;
+      toggle.addEventListener("click", () => {
+        expanded = !expanded;
+        if (expanded) {
+          pre.classList.add("full");
+          pre.textContent = text;
+          toggle.textContent = "收起（共 " + total + " 行）";
+        } else {
+          pre.classList.remove("full");
+          pre.textContent = lines.slice(0, LONG_MSG_PREVIEW_LINES).join("\n") + "\n…";
+          toggle.textContent = "展开全部（共 " + total + " 行）";
+        }
+      });
+      body.appendChild(toggle);
+    }
+    return body;
+  }
+
   function addPlain(cls, role, text, entryId) {
     hideEmptyHint();
     currentToolRow = null; // 非 tool 消息重置 tool 行
     const div = document.createElement("div");
     div.className = "msg " + cls + " msg-enter";
     if (entryId) { div.dataset.entryId = entryId; }
-    const body = document.createElement("div");
-    body.textContent = text || "";
-    div.appendChild(body);
+    const content = text || "";
+    // 超长用户文本折叠展示，避免上万行撑爆消息区
+    if (cls === "user" && shouldFoldText(content)) {
+      div.appendChild(makeLongTextBody(content));
+    } else {
+      const body = document.createElement("div");
+      body.textContent = content;
+      div.appendChild(body);
+    }
     messagesEl.appendChild(div);
     scrollToBottom();
-    return body;
+    return div.firstElementChild;
   }
 
   // 添加工具调用标签：连续的 tool 放在同一 flex 行，排不下自动换行
@@ -782,11 +832,7 @@
     const chars = text.length;
     if (chars > BIG_TEXT_CHARS) { return true; }
     // 行数统计：仅当字符数适中时才数行，避免超大文本重复遍历
-    let lines = 0;
-    for (let i = 0; i < text.length; i++) {
-      if (text.charCodeAt(i) === 10) { lines++; }
-    }
-    return lines + 1 > BIG_TEXT_LINES;
+    return countLines(text) > BIG_TEXT_LINES;
   }
 
   function send() {
