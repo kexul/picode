@@ -380,6 +380,11 @@
     }
   }
   let pendingImages = []; // [{ data, mimeType }]
+  // 粘贴的大文本以附件形式折叠展示，避免灌入 textarea 拖垮输入框
+  let pendingTextBlocks = []; // [{ text, lines, chars }]
+  // 超过该阈值即视为大文本，折叠为附件而非放入 textarea
+  const BIG_TEXT_LINES = 200;
+  const BIG_TEXT_CHARS = 8000;
   // edit/write 工具调用卡片：toolCallId -> { el, path }
   const pendingToolCards = new Map();
 
@@ -716,8 +721,9 @@
     }
   }
 
-  function renderPreview() {
+  function renderAttachments() {
     imgPreviewEl.innerHTML = "";
+    // 图片缩略图
     pendingImages.forEach((img, idx) => {
       const wrap = document.createElement("div");
       wrap.className = "img-thumb";
@@ -730,11 +736,57 @@
       rm.title = "移除";
       rm.addEventListener("click", () => {
         pendingImages.splice(idx, 1);
-        renderPreview();
+        renderAttachments();
       });
       wrap.appendChild(rm);
       imgPreviewEl.appendChild(wrap);
     });
+    // 大文本附件卡片
+    pendingTextBlocks.forEach((blk, idx) => {
+      const card = document.createElement("div");
+      card.className = "text-block";
+      const head = document.createElement("div");
+      head.className = "tb-head";
+      const caret = document.createElement("span");
+      caret.className = "tb-caret";
+      caret.textContent = "▶";
+      const title = document.createElement("span");
+      title.className = "tb-title";
+      title.textContent = "📎 粘贴文本 · " + blk.lines + " 行 · " + blk.chars + " 字符";
+      head.appendChild(caret);
+      head.appendChild(title);
+      const rm = document.createElement("span");
+      rm.className = "tb-rm";
+      rm.textContent = "×";
+      rm.title = "移除";
+      rm.addEventListener("click", () => {
+        pendingTextBlocks.splice(idx, 1);
+        renderAttachments();
+      });
+      const body = document.createElement("div");
+      body.className = "tb-body";
+      // 只预览前 400 行，避免超长 DOM 同样拖慢
+      const previewLines = blk.text.split("\n").slice(0, 400);
+      body.textContent = previewLines.join("\n") + (blk.lines > 400 ? "\n…（预览截断，完整内容随发送提交）" : "");
+      head.addEventListener("click", () => card.classList.toggle("expanded"));
+      card.appendChild(head);
+      card.appendChild(body);
+      card.appendChild(rm);
+      imgPreviewEl.appendChild(card);
+    });
+  }
+
+  // 判断粘贴文本是否应折叠为附件
+  function shouldFoldText(text) {
+    if (typeof text !== "string" || !text) { return false; }
+    const chars = text.length;
+    if (chars > BIG_TEXT_CHARS) { return true; }
+    // 行数统计：仅当字符数适中时才数行，避免超大文本重复遍历
+    let lines = 0;
+    for (let i = 0; i < text.length; i++) {
+      if (text.charCodeAt(i) === 10) { lines++; }
+    }
+    return lines + 1 > BIG_TEXT_LINES;
   }
 
   function send() {
@@ -745,16 +797,29 @@
     if (!piReady) {
       return; // 冷启动期间按钮已禁用；防御性返回
     }
-    const text = inputEl.value.trim();
-    if (!text && pendingImages.length === 0) {
+    const typed = inputEl.value.trim();
+    const hasImages = pendingImages.length > 0;
+    const hasTextBlocks = pendingTextBlocks.length > 0;
+    if (!typed && !hasImages && !hasTextBlocks) {
       return;
+    }
+    // 大文本附件用 fenced code block 包裹拼接到消息末尾，保护其格式并随发送一并提交
+    let text = typed;
+    if (hasTextBlocks) {
+      // 用 4 个反引号做外层 fence；内容里 4+ 连续反引号用零宽空格断开，避免破坏围栏
+      const parts = pendingTextBlocks.map((b) => {
+        const safeText = b.text.replace(/\u0060{4,}/g, (m) => m.split("").join("\u200b"));
+        return "````\n" + safeText + "\n````";
+      });
+      text = (typed ? typed + "\n\n" : "") + parts.join("\n\n");
     }
     vscode.postMessage({ type: "send", text, images: pendingImages });
     inputEl.value = "";
     inputEl.style.height = "144px";
     hideFileMenu();
     pendingImages = [];
-    renderPreview();
+    pendingTextBlocks = [];
+    renderAttachments();
   }
 
   // ---------- 双击行内代码：修剪误选的尾随空格 ----------
@@ -790,6 +855,11 @@
 
   // 检测光标前是否有 @token，若有则请求文件列表并显示菜单
   function maybeShowFileMenu() {
+    // 内容过大时跳过 @ 检测，避免 slice+正则扫描拖垮输入
+    if (inputEl.value.length > BIG_TEXT_CHARS) {
+      hideFileMenu();
+      return;
+    }
     const pos = inputEl.selectionStart;
     const before = inputEl.value.slice(0, pos);
     const m = before.match(/(^|\s)@([^\s@]*)$/);
@@ -864,11 +934,25 @@
   document.getElementById("newBtn").addEventListener("click", () => {
     vscode.postMessage({ type: "newSession" });
   });
+
+  // 新建会话快捷键 Ctrl/Cmd+Alt+N（与宿主 keybinding 互斥：宿主拦截时不会转发至此）
+  document.addEventListener("keydown", (e) => {
+    if (e.key.toLowerCase() === "n" && e.altKey && !e.shiftKey &&
+        (e.ctrlKey || e.metaKey) && !(e.ctrlKey && e.metaKey)) {
+      e.preventDefault();
+      vscode.postMessage({ type: "newSession" });
+    }
+  });
   modelBtn.addEventListener("click", () => vscode.postMessage({ type: "pickModel" }));
 
   // scrollHeight 包含 padding，content-box 下 height 不含 padding，
   // 需减去 padding（6px top + 6px bottom = 12px）避免高度每次增长
   function autoResize() {
+    // 内容过大时不再重测 scrollHeight（重排开销随文本量爆发），直接用上限高度
+    if (inputEl.value.length > BIG_TEXT_CHARS) {
+      inputEl.style.height = "640px";
+      return;
+    }
     inputEl.style.height = "auto";
     inputEl.style.height = Math.min(Math.max(inputEl.scrollHeight - 12, 144), 640) + "px";
   }
@@ -895,9 +979,28 @@
     setTimeout(hideFileMenu, 150);
   });
 
-  // 图片粘贴
+  // 粘贴处理：图片→图片附件；超过阈值的大文本→折叠附件；其余文本→交 textarea 默认处理
   inputEl.addEventListener("paste", (e) => {
-    const items = (e.clipboardData && e.clipboardData.items) || [];
+    const cd = e.clipboardData;
+    const items = (cd && cd.items) || [];
+
+    // 先判定是否有大文本需要拦截为附件
+    let folded = false;
+    for (const item of items) {
+      if (item.kind === "string" && item.type === "text/plain") {
+        const text = cd.getData("text/plain");
+        if (shouldFoldText(text)) {
+          e.preventDefault();
+          folded = true;
+          const lines = text.split("\n").length;
+          pendingTextBlocks.push({ text, lines, chars: text.length });
+        }
+        break;
+      }
+    }
+
+    // 图片：若同时拦截了大文本则也阻止默认以免重复插入
+    let handledImage = false;
     for (const item of items) {
       if (item.type && item.type.indexOf("image/") === 0) {
         const file = item.getAsFile();
@@ -905,16 +1008,21 @@
           continue;
         }
         e.preventDefault();
+        handledImage = true;
         const reader = new FileReader();
         reader.onload = () => {
           const result = String(reader.result || "");
           const comma = result.indexOf(",");
           const data = comma >= 0 ? result.slice(comma + 1) : result;
           pendingImages.push({ data, mimeType: file.type || "image/png" });
-          renderPreview();
+          renderAttachments();
         };
         reader.readAsDataURL(file);
       }
+    }
+
+    if (folded || handledImage) {
+      renderAttachments();
     }
   });
 
@@ -1013,6 +1121,9 @@
         currentAssistant = null;
         currentThinking = null;
         pendingToolCards.clear();
+        pendingImages = [];
+        pendingTextBlocks = [];
+        renderAttachments();
         inputEl.focus();
         break;
       case "toolResult": {

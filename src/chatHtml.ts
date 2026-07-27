@@ -142,6 +142,15 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .img-thumb img { height: 48px; border-radius: 4px; border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.4)); display: block; transition: transform 200ms; }
   .img-thumb:hover img { transform: scale(1.05); }
   .img-thumb .rm { position: absolute; top: -6px; right: -6px; width: 16px; height: 16px; line-height: 14px; text-align: center; border-radius: 50%; background: var(--vscode-button-background); color: var(--vscode-button-foreground); cursor: pointer; font-size: 11px; }
+  /* 粘贴的大文本附件卡片：折叠展示，避免灌入 textarea 拖垮输入框 */
+  .text-block { position: relative; flex: 1 1 100%; background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.4)); border-radius: 6px; padding: 6px 10px; font-size: 0.85em; }
+  .text-block .tb-head { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+  .text-block .tb-caret { font-size: 0.7em; opacity: 0.7; transition: transform 200ms ease; }
+  .text-block.expanded .tb-caret { transform: rotate(90deg); }
+  .text-block .tb-title { opacity: 0.8; }
+  .text-block .tb-body { display: none; white-space: pre-wrap; max-height: 220px; overflow: auto; margin-top: 6px; opacity: 0.8; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em; }
+  .text-block.expanded .tb-body { display: block; }
+  .text-block .tb-rm { position: absolute; top: -6px; right: -6px; width: 16px; height: 16px; line-height: 14px; text-align: center; border-radius: 50%; background: var(--vscode-button-background); color: var(--vscode-button-foreground); cursor: pointer; font-size: 11px; }
   #inputRow { display: flex; gap: 6px; position: relative; }
   #sendCol { display: flex; flex-direction: column; gap: 4px; width: 64px; }
   #newBtn { height: 33.3%; min-height: 28px; font-size: 0.8em; padding: 0; background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2)); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); }
@@ -326,7 +335,7 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
       <div id="fileMenu" class="hidden"></div>
       <textarea id="input" placeholder="与 pi 对话… (Enter 发送, Shift+Enter 换行, 可粘贴图片, @ 引用文件)"></textarea>
       <div id="sendCol">
-        <button id="newBtn" title="新建会话">新建</button>
+        <button id="newBtn" title="新建会话 (Ctrl+Alt+N)">新建</button>
         <button id="sendBtn">发送</button>
       </div>
     </div>
