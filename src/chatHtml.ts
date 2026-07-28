@@ -306,7 +306,7 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
   }
   #treeHeader .tree-hint { font-weight: 400; font-size: 0.75em; opacity: 0.6; }
-  #treeBody { overflow-y: auto; padding: 6px 4px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.82em; }
+  #treeBody { overflow-y: auto; padding: 6px 4px; font-family: var(--vscode-font-family, sans-serif); font-size: 0.9em; }
   #treeBody::-webkit-scrollbar { width: 8px; }
   #treeBody::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 4px; }
   .tree-row {
