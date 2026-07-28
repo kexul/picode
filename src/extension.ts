@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { ChatViewProvider, DiffContentProvider } from "./chatViewProvider";
 import { SettingsPanel } from "./settingsPanel";
+import { HistoryPanel } from "./historyPanel";
 import { setExtensionRoot } from "./modelsConfig";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -37,7 +38,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     context.subscriptions.push(
         vscode.commands.registerCommand("piChat.history", () => {
-            provider.pickSession();
+            HistoryPanel.show(context.extensionUri, provider);
         })
     );
 

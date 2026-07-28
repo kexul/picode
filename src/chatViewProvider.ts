@@ -50,6 +50,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     /** 本次激活是否已尝试过自动加载最近会话（避免重复加载）。 */
     private autoLoadDone = false;
 
+    /** 当前已加载的会话文件绝对路径（供历史面板标记/联动）。 */
+    private currentSessionPath: string | undefined;
+
+    /** 供历史面板查询当前会话路径。 */
+    public getCurrentSessionPath(): string | undefined {
+        return this.currentSessionPath;
+    }
+
+    /** 供历史面板回调：加载指定会话并聚焦到 chat 面板。 */
+    public async loadHistorySession(file: string): Promise<void> {
+        await this.loadSession(file);
+        await vscode.commands.executeCommand("workbench.view.extension.piChatContainer");
+        await vscode.commands.executeCommand("piChat.chatView.focus");
+    }
+
     /** 状态栏默认开启。 */
     private getShowStatsBar(): boolean {
         return this.context.globalState.get<boolean>(ChatViewProvider.KEY_SHOW_STATS, true);
@@ -231,6 +246,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         // 若 pi 正在流式生成或执行工具，先中止当前 run，避免 pi 拒绝/排队 new_session。
         this.abortActiveRun();
         this.resetFileChanges();
+        this.currentSessionPath = undefined;
         this.postToWebview({ type: "clear" });
         this.postToWebview({ type: "system", text: "已开始新会话。" });
         if (this.client && this.client.isRunning()) {
@@ -320,6 +336,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const messages: any[] = msgResp?.data?.messages ?? [];
         this.forkEntries = forkResp?.data?.messages ?? [];
         this.renderMessages(messages);
+        this.currentSessionPath = file;
         this.postToWebview({ type: "system", text: `已加载会话（${messages.length} 条消息）。` });
         this.refreshStats();
     }

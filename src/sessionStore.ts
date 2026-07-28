@@ -10,6 +10,10 @@ export interface SessionInfo {
     title: string; // 展示标题
     messageCount: number;
     name?: string; // 用户设置的会话名
+    userTexts: string[]; // 所有 user 消息预览（按时序）
+    topFile?: string; // 改动最多的文件 basename
+    topFileCount?: number; // 该文件的改动次数
+    totalFiles?: number; // 不重复的改动文件总数
 }
 
 /** pi 配置目录，遵循 PI_CODING_AGENT_DIR 环境变量。 */
@@ -45,6 +49,22 @@ function contentToText(content: unknown): string {
             .trim();
     }
     return "";
+}
+
+/** 从 edit/write 工具调用的 arguments 中取出目标路径，返回 basename 用于标题统计。 */
+function toolCallBasename(args: any): string | null {
+    const raw =
+        typeof args?.path === "string"
+            ? args.path
+            : typeof args?.file_path === "string"
+              ? args.file_path
+              : null;
+    if (!raw) {
+        return null;
+    }
+    // 统一分隔符后取末段作 basename，避免 Windows/Unix 路径差异。
+    const parts = raw.replace(/\\/g, "/").split("/").filter(Boolean);
+    return parts.length > 0 ? parts[parts.length - 1] : null;
 }
 
 /**
@@ -90,13 +110,18 @@ export async function listSessions(cwd: string): Promise<SessionInfo[]> {
             try {
                 const stat = fs.statSync(full);
                 const info = await parseSessionHead(full);
+                const top = info.fileStats[0];
                 return {
                     file: full,
                     id: info.id,
                     mtime: stat.mtimeMs,
-                    title: info.name || info.firstUserText || "(空会话)",
+                    title: buildTitle(info),
                     messageCount: info.messageCount,
                     name: info.name,
+                    userTexts: info.userTexts,
+                    topFile: top?.name,
+                    topFileCount: top?.count,
+                    totalFiles: info.totalEdits,
                 } as SessionInfo;
             } catch {
                 return null;
@@ -109,11 +134,29 @@ export async function listSessions(cwd: string): Promise<SessionInfo[]> {
     return sessions;
 }
 
+/** 生成展示标题：用户命名 > 改动最多的文件 > 首条 user 消息 > 空会话。 */
+function buildTitle(info: SessionHead): string {
+    if (info.name) {
+        return info.name;
+    }
+    const top = info.fileStats[0];
+    if (top) {
+        if (info.totalEdits > 1) {
+            return `${top.name}（改 ${top.count} 次，共 ${info.totalEdits} 个文件）`;
+        }
+        return `${top.name}（改 ${top.count} 次）`;
+    }
+    return info.firstUserText || "(空会话)";
+}
+
 interface SessionHead {
     id: string;
     firstUserText: string;
+    userTexts: string[];
     name?: string;
     messageCount: number;
+    fileStats: { name: string; count: number }[]; // edit/write 改动文件按次数倒序
+    totalEdits: number; // 不重复文件数
 }
 
 /**
@@ -125,14 +168,16 @@ function parseSessionHead(file: string): Promise<SessionHead> {
     return new Promise((resolve) => {
         let id = "";
         let firstUserText = "";
+        const userTexts: string[] = [];
         let name: string | undefined;
         let messageCount = 0;
+        const fileCounts = new Map<string, number>();
 
         let stream: fs.ReadStream;
         try {
             stream = fs.createReadStream(file, { encoding: "utf8" });
         } catch {
-            resolve({ id, firstUserText, name, messageCount });
+            resolve({ id, firstUserText, userTexts, name, messageCount, fileStats: [], totalEdits: 0 });
             return;
         }
 
@@ -158,15 +203,35 @@ function parseSessionHead(file: string): Promise<SessionHead> {
                 if (role === "user" || role === "assistant") {
                     messageCount++;
                 }
-                if (!firstUserText && role === "user") {
-                    firstUserText = contentToText(entry.message.content)
-                        .replace(/\s+/g, " ")
-                        .slice(0, 80);
+                if (role === "user") {
+                    const ut = contentToText(entry.message.content).replace(/\s+/g, " ");
+                    if (!firstUserText) {
+                        firstUserText = ut.slice(0, 80);
+                    }
+                    if (ut) {
+                        userTexts.push(ut.slice(0, 150));
+                    }
+                }
+                // 统计 edit/write 工具调用的目标文件，用于生成“改动最多的文件”标题。
+                if (role === "assistant" && Array.isArray(entry.message.content)) {
+                    for (const c of entry.message.content) {
+                        if (c && c.type === "toolCall" && (c.name === "edit" || c.name === "write")) {
+                            const bn = toolCallBasename(c.arguments);
+                            if (bn) {
+                                fileCounts.set(bn, (fileCounts.get(bn) || 0) + 1);
+                            }
+                        }
+                    }
                 }
             }
         });
 
-        const done = () => resolve({ id, firstUserText, name, messageCount });
+        const done = () => {
+            const fileStats = Array.from(fileCounts.entries())
+                .map(([n, c]) => ({ name: n, count: c }))
+                .sort((a, b) => b.count - a.count);
+            resolve({ id, firstUserText, userTexts, name, messageCount, fileStats, totalEdits: fileCounts.size });
+        };
         rl.on("close", done);
         rl.on("error", done);
         stream.on("error", done);
