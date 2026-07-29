@@ -1,10 +1,8 @@
 .vscode/**
 src/**
-out/**/*.map
+scripts/**
 tsconfig.json
 node_modules/**
+out/**/*.map
 *.vsix
-verify.js
-build.bat
-_script.js
-pack.bat
+**/*.ts

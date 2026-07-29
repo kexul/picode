@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { listSessions, SessionInfo } from "./sessionStore";
+import { listSessions, SessionInfo } from "../../../src/shared/sessionStore";
 
 /** 历史面板需要宿主（ChatViewProvider）提供的回调。 */
 export interface HistoryHost {

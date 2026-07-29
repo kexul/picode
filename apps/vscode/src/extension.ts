@@ -2,11 +2,11 @@ import * as vscode from "vscode";
 import { ChatViewProvider, DiffContentProvider } from "./chatViewProvider";
 import { SettingsPanel } from "./settingsPanel";
 import { HistoryPanel } from "./historyPanel";
-import { setExtensionRoot } from "./modelsConfig";
+import { setExtensionRoot } from "../../../src/shared/modelsConfig";
 
 export function activate(context: vscode.ExtensionContext): void {
-    // 注入插件根目录，用于定位打包资源（media/default-models.json）
-    setExtensionRoot(context.extensionUri.fsPath);
+    // 注入资源目录，用于定位打包的 default-models.json（位于 media/）
+    setExtensionRoot(vscode.Uri.joinPath(context.extensionUri, "media").fsPath);
 
     const provider = new ChatViewProvider(context);
 

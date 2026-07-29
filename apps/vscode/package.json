@@ -1,0 +1,73 @@
+{
+  "name": "pi-chat-vscode",
+  "displayName": "Pi Chat",
+  "description": "在 VSCode 中与 pi coding agent 进行对话",
+  "version": "0.0.3",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other", "Chat"],
+  "main": "./out/apps/vscode/src/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      { "command": "piChat.openChat", "title": "Pi Chat: 打开对话窗口", "icon": "$(comment-discussion)" },
+      { "command": "piChat.newSession", "title": "Pi Chat: 新建会话", "icon": "$(add)" },
+      { "command": "piChat.history", "title": "Pi Chat: 历史会话", "icon": "$(history)" },
+      { "command": "piChat.openSettings", "title": "Pi Chat: 设置（编辑 models.json）", "icon": "$(list-selection)" },
+      { "command": "piChat.openViewOptions", "title": "Pi Chat: 显示选项", "icon": "$(gear)" },
+      { "command": "piChat.askSelectionAndSend", "title": "Pi Chat: 发送选中文本到对话框", "icon": "$(comment)" }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "piChatContainer", "title": "Pi Chat", "icon": "$(comment-discussion)" }
+      ]
+    },
+    "views": {
+      "piChatContainer": [
+        { "type": "webview", "id": "piChat.chatView", "name": "对话" }
+      ]
+    },
+    "keybindings": [
+      { "command": "piChat.askSelectionAndSend", "key": "ctrl+alt+p", "mac": "cmd+alt+p", "when": "editorTextFocus" },
+      { "command": "piChat.newSession", "key": "ctrl+alt+n", "mac": "cmd+alt+n", "when": "focusedView == 'piChat.chatView'" }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "piChat.askSelectionAndSend", "group": "navigation@89" }
+      ],
+      "view/title": [
+        { "command": "piChat.history", "when": "view == piChat.chatView", "group": "navigation@1" },
+        { "command": "piChat.newSession", "when": "view == piChat.chatView", "group": "navigation@2" },
+        { "command": "piChat.openSettings", "when": "view == piChat.chatView", "group": "navigation@3" },
+        { "command": "piChat.openViewOptions", "when": "view == piChat.chatView", "group": "navigation@5" }
+      ]
+    },
+    "configuration": {
+      "title": "Pi Chat",
+      "properties": {
+        "piChat.piPath": { "type": "string", "default": "pi", "description": "pi 可执行文件的路径。默认为 'pi'（需在 PATH 中）。" },
+        "piChat.provider": { "type": "string", "default": "", "description": "LLM provider（如 anthropic, openai, google）。留空使用 pi 默认配置。" },
+        "piChat.model": { "type": "string", "default": "", "description": "模型 pattern 或 ID（如 sonnet, gpt-4o）。留空使用 pi 默认配置。" },
+        "piChat.extraArgs": { "type": "array", "items": { "type": "string" }, "default": [], "description": "传递给 pi --mode rpc 的额外命令行参数。" },
+        "piChat.trustProject": { "type": "boolean", "default": true, "description": "启动时是否信任当前项目（向 pi 传入 --approve）。" }
+      }
+    }
+  },
+  "scripts": {
+    "clean": "node -e \"const fs=require('fs');fs.rmSync('out',{recursive:true,force:true});for(const f of fs.readdirSync('.').filter(f=>/^pi-chat.*\\.vsix$/.test(f)))fs.rmSync(f)\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
+    "watch": "tsc -w -p tsconfig.json",
+    "vscode:prepublish": "tsc -p tsconfig.json",
+    "package": "npm run build && vsce package --allow-missing-repository"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^3.0.0"
+  }
+}

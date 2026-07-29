@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { readModelsJson, writeModelsJson, defaultModelsJson } from "./modelsConfig";
+import { readModelsJson, writeModelsJson, defaultModelsJson } from "../../../src/shared/modelsConfig";
 
 /** 管理编辑 pi models.json 的 Webview 面板（单例）。 */
 export class SettingsPanel {
@@ -102,38 +102,11 @@ export class SettingsPanel {
     color: var(--vscode-foreground);
     background: var(--vscode-editor-background);
   }
-  #toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
-  #path { font-size: 0.8em; opacity: 0.7; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
-  button {
-    background: var(--vscode-button-background); color: var(--vscode-button-foreground);
-    border: none; border-radius: 4px; padding: 4px 12px; cursor: pointer;
-  }
-  button.secondary { background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2)); color: var(--vscode-button-secondaryForeground, inherit); }
-  button:hover { opacity: 0.9; }
-  button:disabled { opacity: 0.5; cursor: default; }
-  #editor {
-    flex: 1; width: 100%; box-sizing: border-box; resize: none; border: none; outline: none;
-    padding: 12px; font-family: var(--vscode-editor-font-family, monospace);
-    font-size: var(--vscode-editor-font-size, 13px);
-    background: var(--vscode-editor-background); color: var(--vscode-editor-foreground);
-    tab-size: 2;
-  }
-  #status { padding: 6px 12px; font-size: 0.85em; min-height: 1.2em; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
-  #status.ok { color: var(--vscode-testing-iconPassed, #4caf50); }
-  #status.err { color: var(--vscode-errorForeground); }
-  #status.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
+  #settingsRoot { flex: 1; min-height: 0; display: flex; }
 </style>
 </head>
 <body>
-  <div id="toolbar">
-    <button id="saveBtn">保存</button>
-    <button id="formatBtn" class="secondary">格式化</button>
-    <button id="resetBtn" class="secondary">恢复默认</button>
-    <button id="reloadBtn" class="secondary">重新加载</button>
-    <span id="path"></span>
-  </div>
-  <textarea id="editor" spellcheck="false" placeholder="加载中…"></textarea>
-  <div id="status"></div>
+  <div id="settingsRoot"></div>
   <script nonce="${n}" src="${scriptUri}"></script>
 </body>
 </html>`;

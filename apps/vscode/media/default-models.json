@@ -1,0 +1,89 @@
+{
+    "providers": {
+        "local": {
+            "baseUrl": "http://127.0.0.1:15721/v1",
+            "apiKey": "xxx",
+            "api": "openai-completions",
+            "compat": {
+                "supportsDeveloperRole": false
+            },
+            "models": [{
+                    "id": "gpt-5.5-2026-04-24",
+                    "name": "gpt-5.5",
+                    "reasoning": true,
+                    "input": [
+                        "image",
+                        "text"
+                    ],
+                    "cost": {
+                        "input": 50,
+                        "output": 226,
+                        "cacheRead": 5,
+                        "cacheWrite": 0
+                    },
+                    "contextWindow": 968000,
+                    "maxTokens": 128000
+                }, {
+                    "id": "glm-5.2",
+                    "name": "glm-5.2",
+                    "reasoning": true,
+                    "input": [
+                        "text"
+                    ],
+                    "cost": {
+                        "input": 8,
+                        "output": 28,
+                        "cacheRead": 2,
+                        "cacheWrite": 0
+                    },
+                    "contextWindow": 980000,
+                    "maxTokens": 180000
+                }, {
+                    "id": "deepseek-v4-pro",
+                    "name": "deepseek-v4-pro",
+                    "reasoning": true,
+                    "input": [
+                        "text"
+                    ],
+                    "cost": {
+                        "input": 3,
+                        "output": 6,
+                        "cacheRead": 0.025,
+                        "cacheWrite": 0
+                    },
+                    "contextWindow": 968000,
+                    "maxTokens": 384000
+                }, {
+                    "id": "deepseek-v4-flash",
+                    "name": "deepseek-v4-flash",
+                    "reasoning": true,
+                    "input": ["text"],
+                    "cost": {
+                        "input": 1,
+                        "output": 2,
+                        "cacheRead": 0.02,
+                        "cacheWrite": 0
+                    },
+                    "contextWindow": 968000,
+                    "maxTokens": 384000
+                }, {
+                    "id": "claude-opus-4-8",
+                    "name": "claude-opus-4-8",
+                    "reasoning": true,
+                    "input": [
+                        "image",
+                        "text"
+                    ],
+                    "cost": {
+                        "input": 36,
+                        "output": 180,
+                        "cacheRead": 3.6,
+                        "cacheWrite": 45
+                    },
+                    "contextWindow": 968000,
+                    "maxTokens": 64000
+                }
+            ]
+        }
+    }
+}

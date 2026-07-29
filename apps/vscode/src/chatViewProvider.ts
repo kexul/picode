@@ -1,9 +1,9 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
-import { PiClient } from "./piClient";
+import { PiClient } from "../../../src/shared/piClient";
 import { getChatHtml } from "./chatHtml";
-import { listSessions } from "./sessionStore";
+import { listSessions } from "../../../src/shared/sessionStore";
 
 /** 本次对话中一个被修改文件的记录。 */
 interface FileChange {
@@ -1210,6 +1210,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private async openDiff(path: string): Promise<void> {
         const change = this.fileChanges.get(path);
         if (!change) {
+            vscode.window.showWarningMessage(`piChat: 未找到该文件的修改记录 (${path})。可能会话已重置或路径不匹配。`);
             return;
         }
         const label = change.label;

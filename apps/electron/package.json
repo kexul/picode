@@ -1,0 +1,31 @@
+{
+  "name": "pi-chat-electron",
+  "productName": "Pi Chat",
+  "version": "0.1.0",
+  "description": "Pi Chat 本地客户端 — 与 pi coding agent 对话的独立桌面应用",
+  "main": "./out/apps/electron/src/main.js",
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('out',{recursive:true,force:true});require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.json && node scripts/copy-assets.js",
+    "watch": "tsc -w -p tsconfig.json",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
+    "typescript": "^5.3.0"
+  },
+  "build": {
+    "appId": "dev.pi.chat-client",
+    "productName": "Pi Chat",
+    "files": [
+      "out/**"
+    ],
+    "mac": { "target": "dmg" },
+    "win": { "target": "nsis", "signAndEditExecutable": false },
+    "linux": { "target": "AppImage" }
+  }
+}

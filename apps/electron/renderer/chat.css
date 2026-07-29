@@ -1,39 +1,3 @@
-import * as vscode from "vscode";
-
-function nonce(): string {
-    let text = "";
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    for (let i = 0; i < 32; i++) {
-        text += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return text;
-}
-
-export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
-    const n = nonce();
-    const scriptUri = webview.asWebviewUri(
-        vscode.Uri.joinPath(extensionUri, "media", "main.js")
-    );
-    const markedUri = webview.asWebviewUri(
-        vscode.Uri.joinPath(extensionUri, "media", "marked.js")
-    );
-    const highlightUri = webview.asWebviewUri(
-        vscode.Uri.joinPath(extensionUri, "media", "highlight.js")
-    );
-    // 图片来源允许 webview 资源与内联 data: URI（用于图片预览）
-    const csp =
-        `default-src 'none'; ` +
-        `img-src ${webview.cspSource} data:; ` +
-        `style-src 'unsafe-inline'; ` +
-        `script-src 'nonce-${n}';`;
-
-    return `<!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="${csp}" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<style>
   :root { color-scheme: light dark; }
   html, body { height: 100%; margin: 0; padding: 0; }
   body {
@@ -178,7 +142,7 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   button:active { transform: scale(0.97); }
   button:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: 1px; }
   button:disabled { opacity: 0.5; cursor: default; }
-  #status { padding: 2px 8px; font-size: 0.8em; opacity: 0.7; min-height: 1em; }
+  #status { padding: 2px 8px; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: color-mix(in srgb, var(--vscode-foreground) 88%, transparent); min-height: 1em; }
   /* 底部工具栏 */
   #bottomBar { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
   #treeBtn {
@@ -212,8 +176,8 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   /* 上下文/token 状态栏 */
   #statsBar {
     display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
-    font-size: 0.78em; opacity: 0.6;
-    font-family: var(--vscode-editor-font-family, monospace);
+    font-family: var(--vscode-font-family); font-size: var(--vscode-font-size);
+    color: color-mix(in srgb, var(--vscode-foreground) 88%, transparent);
   }
   #statsBar:empty { display: none; }
   .bar-hidden { display: none !important; }
@@ -326,39 +290,3 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
   .tree-row.is-leaf .tree-text { font-weight: 600; }
   .tree-text { overflow: hidden; text-overflow: ellipsis; }
   .tree-empty { padding: 20px; text-align: center; opacity: 0.5; }
-</style>
-</head>
-<body>
-  <div id="messages">
-    <div id="emptyHint" class="empty-hint">输入消息开始对话…</div>
-  </div>
-  <div id="status"></div>
-  <div id="changedFiles"></div>
-  <div id="inputArea">
-    <div id="imgPreview"></div>
-    <div id="inputRow">
-      <div id="fileMenu" class="hidden"></div>
-      <textarea id="input" placeholder="与 pi 对话… (Enter 发送, Shift+Enter 换行, 可粘贴图片, @ 引用文件)"></textarea>
-      <div id="sendCol">
-        <button id="newBtn" title="新建会话 (Ctrl+Alt+N)">新建</button>
-        <button id="sendBtn">发送</button>
-      </div>
-    </div>
-    <div id="bottomBar">
-      <button id="treeBtn" title="查看对话树 / 切换分支">⑂ 分支</button>
-      <button id="modelBtn" title="切换模型">⚡ <span id="modelName">模型</span></button>
-      <div id="statsBar"></div>
-    </div>
-  </div>
-  <div id="treeOverlay" class="hidden">
-    <div id="treePanel">
-      <div id="treeHeader"><span>对话树</span><span class="tree-hint">点击 user 消息新建分支 · Esc 关闭</span></div>
-      <div id="treeBody"></div>
-    </div>
-  </div>
-  <script nonce="${n}" src="${markedUri}"></script>
-  <script nonce="${n}" src="${highlightUri}"></script>
-  <script nonce="${n}" src="${scriptUri}"></script>
-</body>
-</html>`;
-}

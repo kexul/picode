@@ -55,7 +55,7 @@ export function setExtensionRoot(root: string): void {
  */
 export function defaultModelsJson(): string {
     if (extensionRoot) {
-        const p = path.join(extensionRoot, "media", "default-models.json");
+        const p = path.join(extensionRoot, "default-models.json");
         try {
             if (fs.existsSync(p)) {
                 return fs.readFileSync(p, "utf8");
