@@ -184,26 +184,33 @@
   #statsBar .stat { white-space: nowrap; }
   #statsBar .ctx-hi { color: var(--vscode-editorWarning-foreground, #cca700); }
   #statsBar .ctx-crit { color: var(--vscode-errorForeground); }
-  /* 本次对话修改的文件列表 */
+  /* 本次对话修改的文件列表（横向标签流式排列） */
   #changedFiles {
-    display: flex; flex-direction: column;
+    display: flex; flex-direction: row; flex-wrap: wrap;
+    align-items: center; gap: 4px 6px;
     max-height: 140px; overflow-y: auto;
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
+    padding: 4px 8px;
   }
   #changedFiles:empty { display: none; }
   #changedFiles .cf-header {
+    flex: 0 0 100%;
     display: flex; align-items: center; gap: 6px;
-    padding: 6px 10px; font-size: 0.75em; opacity: 0.7;
+    padding: 2px 2px 4px; font-size: 0.75em; opacity: 0.7;
     text-transform: uppercase; letter-spacing: 0.03em;
   }
   .cf-item {
-    display: flex; align-items: center; gap: 6px;
-    padding: 3px 10px; cursor: pointer; font-size: var(--vscode-font-size);
+    flex: 0 0 auto; max-width: 100%;
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; cursor: pointer; font-size: var(--vscode-font-size);
     font-family: var(--vscode-editor-font-family, monospace);
-    transition: background 150ms;
+    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
+    border-radius: 4px;
+    background: var(--vscode-editorWidget-background, rgba(128,128,128,0.08));
+    transition: background 150ms, border-color 150ms;
   }
-  .cf-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
-  .cf-item .cf-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cf-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); border-color: var(--vscode-focusBorder, rgba(128,128,128,0.6)); }
+  .cf-item .cf-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cf-item .cf-dir { opacity: 0.55; }
   /* edit/write 工具调用卡片 */
   .edit-card {
