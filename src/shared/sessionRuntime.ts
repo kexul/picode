@@ -303,11 +303,17 @@ export class SessionRuntime {
                 if (m && m.role === "user") {
                     const parts = Array.isArray(m.content) ? m.content : [];
                     const imgs = parts.filter((c: any) => c && c.type === "image").length;
+                    const text = this.textOf(m.content);
                     this.post({
                         type: "userMessage",
-                        text: this.textOf(m.content),
+                        text,
                         imageCount: imgs > 0 ? imgs : 0,
                     });
+                    const t = (text || "").replace(/\s+/g, " ").trim();
+                    if (t) {
+                        this.title = t;
+                        this.host.broadcastTabList();
+                    }
                 }
                 break;
             }
