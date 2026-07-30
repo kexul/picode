@@ -231,22 +231,20 @@ export class SessionRuntime {
         if (!this.client || !this.client.isRunning()) {
             this.startClient();
         }
-        this.post({
-            type: "userMessage",
-            text,
-            imageCount: hasImages ? images!.length : 0,
-        });
+        // user 气泡统一由 pi 的 message_start 事件渲染（见 onPiEvent），
+        // 普通消息与 steer 投递的排队消息走同一路径，避免双发。
 
-        const cmd: Record<string, unknown> = { type: "prompt", message: text || "" };
+        // 流式响应中：发 steer 命令把消息排入 steering 队列（当前轮工具执行完后投递），
+        // 与 pi TUI 按 Enter 的语义一致；否则发普通 prompt 开启新轮。
+        const cmd: Record<string, unknown> = this.streaming
+            ? { type: "steer", message: text || "" }
+            : { type: "prompt", message: text || "" };
         if (hasImages) {
             cmd.images = images!.map((img) => ({
                 type: "image",
                 data: img.data,
                 mimeType: img.mimeType,
             }));
-        }
-        if (this.streaming) {
-            cmd.streamingBehavior = "steer";
         }
         try {
             this.client!.send(cmd);
@@ -290,6 +288,29 @@ export class SessionRuntime {
     // ---- pi 事件 ----
     private onPiEvent(evt: any): void {
         switch (evt.type) {
+            case "queue_update":
+                // steering/followUp 队列变化（steer 排队/投递/abort 后清空）
+                this.post({
+                    type: "queueUpdate",
+                    steering: Array.isArray(evt.steering) ? evt.steering : [],
+                    followUp: Array.isArray(evt.followUp) ? evt.followUp : [],
+                });
+                break;
+            case "message_start": {
+                // pi 推送 user 消息开始（含 steer 投递的排队消息）：统一在此渲染 user 气泡，
+                // 替代 handleSend 里的主动 post，使普通/steer 两种路径行为一致。
+                const m = evt.message;
+                if (m && m.role === "user") {
+                    const parts = Array.isArray(m.content) ? m.content : [];
+                    const imgs = parts.filter((c: any) => c && c.type === "image").length;
+                    this.post({
+                        type: "userMessage",
+                        text: this.textOf(m.content),
+                        imageCount: imgs > 0 ? imgs : 0,
+                    });
+                }
+                break;
+            }
             case "agent_start":
                 this.streaming = true;
                 this.post({ type: "streamStart" });

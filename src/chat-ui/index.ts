@@ -58,10 +58,13 @@ ${opts.chatCss}
 </style>
 ${head}</head>
 <body>
-${bodyTop}${tabbar}  <div id="messages"></div>
+${bodyTop}${tabbar}  <div id="messages">
+    <button id="jumpBottom" class="hidden" title="跳到最新" aria-label="跳到最新">↓</button>
+  </div>
   <div id="status"></div>
   <div id="changedFiles"></div>
   <div id="inputArea">
+    <div id="queueBar" class="hidden"></div>
     <div id="imgPreview"></div>
     <div id="inputRow">
       <div id="fileMenu" class="hidden"></div>

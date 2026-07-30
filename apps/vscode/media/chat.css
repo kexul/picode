@@ -14,6 +14,20 @@
   .tab-pane::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 3px; }
   .tab-pane::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground, rgba(128,128,128,0.6)); }
 
+  /* 跳到最新 */
+  #jumpBottom {
+    position: absolute; right: 16px; bottom: 12px; z-index: 20;
+    width: 28px; height: 28px; line-height: 26px; text-align: center;
+    border-radius: 50%; border: 1px solid var(--vscode-button-border, rgba(128,128,128,0.4));
+    background: var(--vscode-button-background, rgba(128,128,128,0.9));
+    color: var(--vscode-button-foreground, #fff);
+    cursor: pointer; font-size: 16px; padding: 0;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25); opacity: 0.92;
+    transition: opacity 0.12s ease, transform 0.12s ease;
+  }
+  #jumpBottom:hover { opacity: 1; transform: translateY(-1px); }
+  #jumpBottom.hidden { display: none; }
+
   /* ---- tab 栏 ---- */
   #tabBar { display: flex; align-items: center; gap: 4px; padding: 4px 6px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); flex: 0 0 auto; }
   #tabBarInner { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
@@ -124,6 +138,19 @@
   #inputArea { display: flex; flex-direction: column; padding: 8px; gap: 6px; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); flex: 0 0 auto; }
   #imgPreview { display: flex; flex-wrap: wrap; gap: 6px; }
   #imgPreview:empty { display: none; }
+  #queueBar { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.4)); border-radius: 4px; background: color-mix(in srgb, var(--vscode-editorInfo-background, transparent) 20%, transparent); font-size: var(--vscode-font-size); color: var(--vscode-descriptionForeground, inherit); }
+  #queueBar:empty, #queueBar.hidden { display: none; }
+  #queueBar .qb-title { font-weight: 600; color: var(--vscode-foreground); font-size: 0.9em; }
+  #queueBar .qb-block { border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.3)); border-radius: 3px; background: var(--vscode-editor-background, transparent); overflow: hidden; }
+  #queueBar .qb-head { display: flex; align-items: center; gap: 6px; padding: 3px 6px; cursor: pointer; user-select: none; }
+  #queueBar .qb-head:hover { background: color-mix(in srgb, var(--vscode-list-hoverBackground, rgba(128,128,128,0.1)) 50%, transparent); }
+  #queueBar .qb-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-charts-yellow, #cca700); animation: qb-pulse 1.2s ease-in-out infinite; flex-shrink: 0; }
+  @keyframes qb-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+  #queueBar .qb-label { font-size: 0.8em; color: var(--vscode-charts-yellow, #cca700); flex-shrink: 0; }
+  #queueBar .qb-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground, inherit); }
+  #queueBar .qb-toggle { font-size: 0.8em; color: var(--vscode-descriptionForeground, inherit); flex-shrink: 0; }
+  #queueBar .qb-body { margin: 0; padding: 4px 8px 6px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em; white-space: pre-wrap; word-break: break-word; color: var(--vscode-foreground); border-top: 1px solid var(--vscode-input-border, rgba(128,128,128,0.2)); max-height: 160px; overflow: auto; }
+  #queueBar .qb-block.collapsed .qb-body { display: none; }
   .img-thumb { position: relative; }
   .img-thumb img { height: 48px; border-radius: 4px; border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.4)); display: block; transition: transform 200ms; }
   .img-thumb:hover img { transform: scale(1.05); }

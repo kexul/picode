@@ -2,6 +2,7 @@
 (function () {
   const vscode = acquireVsCodeApi();
   const messagesEl = document.getElementById("messages"); // 容器，内含各 .tab-pane
+  const jumpBottomBtn = document.getElementById("jumpBottom");
   const inputEl = document.getElementById("input");
   const sendBtn = document.getElementById("sendBtn");
   const statusEl = document.getElementById("status");
@@ -11,6 +12,7 @@
   const fileMenuEl = document.getElementById("fileMenu");
   const statsBarEl = document.getElementById("statsBar");
   const changedFilesEl = document.getElementById("changedFiles");
+  const queueBarEl = document.getElementById("queueBar");
   const tabBarInner = document.getElementById("tabBarInner");
   const tabBarEl = document.getElementById("tabBar");
   let multiTab = false; // 收到 tabList / 带 tabId 的消息后置 true，显示 tab 栏
@@ -275,11 +277,17 @@
     messagesEl.appendChild(pane);  // 挂到 #messages 容器，否则消息渲染到脱离 DOM 的节点上不可见
     pane.addEventListener("scroll", () => {
       if (activeId !== id) { return; }
+      if (st.programmaticScroll) { st.programmaticScroll = false; return; }
       const wasBottom = st.stickToBottom;
       st.stickToBottom = isNearBottomPane(st);
       if (wasBottom && !st.stickToBottom && st.lerpRafId) {
         cancelAnimationFrame(st.lerpRafId);
         st.lerpRafId = 0;
+      }
+      // 用户手动滚到底部：清掉新内容提示
+      if (st.stickToBottom && st.hasNewContent) {
+        st.hasNewContent = false;
+        syncJumpBottom(st);
       }
     });
     st = {
@@ -299,6 +307,8 @@
       lastRenderAt: 0,
       stickToBottom: true,
       lerpRafId: 0,
+      programmaticScroll: false,
+      hasNewContent: false,
       pendingImages: [],
       pendingTextBlocks: [],
       modelId: "",
@@ -306,6 +316,8 @@
       thinkingLevel: "",
       lastStats: null,
       changedFiles: [],
+      queuedSteering: [],
+      pendingSteerRestore: null,
       // 非活跃时保存的输入状态
       inputText: "",
       inputSelectionStart: 0,
@@ -332,21 +344,36 @@
     const target = tab.paneEl.scrollHeight - tab.paneEl.clientHeight;
     const cur = tab.paneEl.scrollTop;
     const diff = target - cur;
-    if (Math.abs(diff) < 1) { tab.paneEl.scrollTop = target; tab.lerpRafId = 0; return; }
+    if (Math.abs(diff) < 1) { tab.programmaticScroll = true; tab.paneEl.scrollTop = target; tab.lerpRafId = 0; return; }
+    tab.programmaticScroll = true;
     tab.paneEl.scrollTop = cur + diff * 0.3;
     tab.lerpRafId = requestAnimationFrame(() => lerpScrollStep(tab));
   }
   function smoothScrollToBottom(tab) {
     if (activeId !== tab.id) { return; } // 仅活跃 tab 需要动画
-    if (!tab.stickToBottom) { return; }
+    if (!tab.stickToBottom) {
+      // 用户不在底部，有新内容到来：标记并显示跳转提示
+      tab.hasNewContent = true;
+      syncJumpBottom(tab);
+      return;
+    }
     if (!tab.lerpRafId) { tab.lerpRafId = requestAnimationFrame(() => lerpScrollStep(tab)); }
   }
   function scrollToBottom(tab, force) {
     if (force || tab.stickToBottom) {
       if (tab.lerpRafId) { cancelAnimationFrame(tab.lerpRafId); tab.lerpRafId = 0; }
+      tab.programmaticScroll = true;
       tab.paneEl.scrollTop = tab.paneEl.scrollHeight;
       tab.stickToBottom = true;
+      tab.hasNewContent = false;
+      syncJumpBottom(tab);
     }
+  }
+  // 控制“跳到最新”按钮显隐（仅活跃 tab 生效）
+  function syncJumpBottom(tab) {
+    if (!jumpBottomBtn) { return; }
+    const show = tab.hasNewContent && !tab.stickToBottom && activeId === tab.id;
+    jumpBottomBtn.classList.toggle("hidden", !show);
   }
 
   // ==================== 流式渲染节流 ====================
@@ -590,6 +617,44 @@
       changedFilesEl.appendChild(item);
     });
   }
+  function renderQueueBar(tab) {
+    if (activeId !== tab.id) { return; }
+    const items = tab.queuedSteering || [];
+    if (!items.length) { queueBarEl.classList.add("hidden"); queueBarEl.innerHTML = ""; return; }
+    queueBarEl.classList.remove("hidden");
+    queueBarEl.innerHTML = "";
+    const title = document.createElement("div");
+    title.className = "qb-title";
+    title.textContent = "已排队 " + items.length + " 条（工具执行后投递）";
+    queueBarEl.appendChild(title);
+    items.forEach((text, idx) => {
+      const full = typeof text === "string" ? text : "";
+      const lines = full.split("\n");
+      const lineCount = lines.length;
+      const preview = lines.slice(0, 3).join("\n") + (lineCount > 3 ? "\n…" : "");
+      const card = document.createElement("div");
+      card.className = "qb-block collapsed";
+      const head = document.createElement("div");
+      head.className = "qb-head";
+      const dot = document.createElement("span"); dot.className = "qb-dot";
+      const label = document.createElement("span"); label.className = "qb-label";
+      label.textContent = "等待投递";
+      const previewLine = document.createElement("span"); previewLine.className = "qb-preview";
+      previewLine.textContent = (lines[0] || "").trim();
+      const toggle = document.createElement("span"); toggle.className = "qb-toggle";
+      toggle.textContent = "已排队 · 点击展开（" + lineCount + " 行）";
+      head.appendChild(dot); head.appendChild(label); head.appendChild(previewLine); head.appendChild(toggle);
+      const body = document.createElement("pre"); body.className = "qb-body";
+      body.textContent = preview;
+      card.appendChild(head); card.appendChild(body);
+      head.addEventListener("click", () => {
+        const collapsed = card.classList.toggle("collapsed");
+        if (!collapsed) { body.textContent = full; toggle.textContent = "收起（" + lineCount + " 行）"; }
+        else { body.textContent = preview; toggle.textContent = "已排队 · 点击展开（" + lineCount + " 行）"; }
+      });
+      queueBarEl.appendChild(card);
+    });
+  }
   function renderStatsFor(tab) {
     if (activeId !== tab.id) { return; }
     const parts = [];
@@ -682,6 +747,8 @@
     syncModelBtn();
     renderStatsFor(tab);
     renderChangedFilesFor(tab);
+    renderQueueBar(tab);
+    syncJumpBottom(tab);
   }
 
   // ==================== tab 切换 ====================
@@ -1059,7 +1126,6 @@
   function send() {
     const tab = activeTab();
     if (!tab) { return; }
-    if (tab.streaming) { vscode.postMessage({ type: "abort", tabId: tab.id }); return; }
     if (!tab.piReady) { return; }
     const typed = inputEl.value.trim();
     const hasImages = tab.pendingImages.length > 0;
@@ -1085,8 +1151,19 @@
   }
 
   // ==================== 事件绑定 ====================
-  sendBtn.addEventListener("click", send);
+  sendBtn.addEventListener("click", () => {
+    // 流式响应中点击“中止”按钮 → abort；否则发送（streaming 时发送走 steer 排队，与 TUI 一致）
+    const tab = activeTab();
+    if (tab && tab.streaming) { tab.pendingSteerRestore = (tab.queuedSteering || []).slice(); vscode.postMessage({ type: "abort", tabId: tab.id }); return; }
+    send();
+  });
   document.getElementById("newBtn").addEventListener("click", () => { vscode.postMessage({ type: "newSession" }); });
+  if (jumpBottomBtn) {
+    jumpBottomBtn.addEventListener("click", () => {
+      const tab = activeTab();
+      if (tab) { scrollToBottom(tab, true); }
+    });
+  }
   modelBtn.addEventListener("click", () => { const tab = activeTab(); if (tab) { vscode.postMessage({ type: "pickModel", tabId: tab.id }); } });
 
   // 委托：文件/符号链接点击（在 #messages 容器上）
@@ -1121,6 +1198,8 @@
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); chooseFile(); return; }
       if (e.key === "Escape") { e.preventDefault(); hideFileMenu(); return; }
     }
+    // 复刻 pi TUI：流式生成中按 ESC 中止（文件菜单关闭时生效）
+    if (e.key === "Escape") { const ct = activeTab(); if (ct && ct.streaming) { e.preventDefault(); ct.pendingSteerRestore = (ct.queuedSteering || []).slice(); vscode.postMessage({ type: "abort", tabId: ct.id }); } return; }
     if (isSendKey(e)) { e.preventDefault(); send(); }
   });
   inputEl.addEventListener("input", () => { autoResize(); maybeShowFileMenu(); });
@@ -1378,6 +1457,21 @@
         t.thinkingLevel = msg.level || "";
         if (activeId === t.id) { syncModelBtn(); }
         break;
+      case "queueUpdate":
+        t.queuedSteering = Array.isArray(msg.steering) ? msg.steering : [];
+        // abort 后队列被清空：把未投递的 steer 文本合并写回输入框（与 TUI 一致）
+        if (t.pendingSteerRestore && t.pendingSteerRestore.length && t.queuedSteering.length === 0) {
+          const texts = t.pendingSteerRestore.filter((s) => typeof s === "string" && s);
+          t.pendingSteerRestore = null;
+          if (texts.length && activeId === t.id) {
+            const joined = texts.join("\n\n");
+            inputEl.value = inputEl.value ? (inputEl.value.replace(/\s+$/, "") + "\n\n" + joined) : joined;
+            autoResize();
+            inputEl.focus();
+          }
+        }
+        if (activeId === t.id) { renderQueueBar(t); }
+        break;
       case "stats":
         t.lastStats = msg;
         renderStatsFor(t);
@@ -1402,7 +1496,7 @@
     if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); }
     st.paneEl.remove();
     tabs.delete(id);
-    if (activeId === id) { activeId = null; }
+    if (activeId === id) { activeId = null; syncJumpBottom(st); }
   }
 
   // ==================== 设置（models.json）浮层 ====================
