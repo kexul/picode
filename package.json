@@ -11,7 +11,9 @@
     "watch:electron": "npm --prefix apps/electron run watch",
     "start:electron": "npm --prefix apps/electron run start",
     "package:vscode": "npm --prefix apps/vscode run package",
-    "dist:electron": "npm --prefix apps/electron run dist"
+    "dist:electron": "npm --prefix apps/electron run dist",
+    "analyze": "node scripts/analyze-reuse.js",
+    "analyze:json": "node scripts/analyze-reuse.js --json"
   },
   "devDependencies": {
     "typescript": "^5.3.0"

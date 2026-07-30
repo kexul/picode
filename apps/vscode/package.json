@@ -18,6 +18,7 @@
       { "command": "piChat.history", "title": "Pi Chat: 历史会话", "icon": "$(history)" },
       { "command": "piChat.openSettings", "title": "Pi Chat: 设置（编辑 models.json）", "icon": "$(list-selection)" },
       { "command": "piChat.openViewOptions", "title": "Pi Chat: 显示选项", "icon": "$(gear)" },
+      { "command": "piChat.focusInput", "title": "Pi Chat: 聚焦输入框", "icon": "$(keyboard)" },
       { "command": "piChat.askSelectionAndSend", "title": "Pi Chat: 发送选中文本到对话框", "icon": "$(comment)" }
     ],
     "viewsContainers": {
@@ -32,7 +33,7 @@
     },
     "keybindings": [
       { "command": "piChat.askSelectionAndSend", "key": "ctrl+alt+p", "mac": "cmd+alt+p", "when": "editorTextFocus" },
-      { "command": "piChat.newSession", "key": "ctrl+alt+n", "mac": "cmd+alt+n", "when": "focusedView == 'piChat.chatView'" }
+      { "command": "piChat.focusInput", "key": "ctrl+alt+i", "mac": "cmd+alt+i", "when": "editorTextFocus || terminalFocus" }
     ],
     "menus": {
       "editor/context": [
@@ -40,7 +41,6 @@
       ],
       "view/title": [
         { "command": "piChat.history", "when": "view == piChat.chatView", "group": "navigation@1" },
-        { "command": "piChat.newSession", "when": "view == piChat.chatView", "group": "navigation@2" },
         { "command": "piChat.openSettings", "when": "view == piChat.chatView", "group": "navigation@3" },
         { "command": "piChat.openViewOptions", "when": "view == piChat.chatView", "group": "navigation@5" }
       ]

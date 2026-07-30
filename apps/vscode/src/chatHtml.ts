@@ -27,11 +27,12 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     const cssPath = vscode.Uri.joinPath(extensionUri, "media", "chat.css").fsPath;
     let chatCss = "";
     try { chatCss = fs.readFileSync(cssPath, "utf8"); } catch { /* ignore */ }
+    const settingsJs = resolveUri("settings.js");
     const csp =
         `default-src 'none'; ` +
         `img-src ${webview.cspSource} data:; ` +
         `style-src 'unsafe-inline'; ` +
         `script-src 'nonce-${n}';`;
 
-    return renderHTML({ resolveUri, csp, chatCss, scriptNonce: n });
+    return renderHTML({ resolveUri, csp, chatCss, scriptNonce: n, extraScripts: [settingsJs] });
 }

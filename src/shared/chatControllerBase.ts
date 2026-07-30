@@ -1,0 +1,564 @@
+/**
+ * ChatControllerBase —— VSCode 插件与 Electron 客户端共享的会话编排层。
+ *
+ * 把“与平台无关、却被两边各写一份”的逻辑收敛到此：
+ *   - 标签管理（newTab / setActive / switchTabByDirection / closeTab / broadcastTabList）
+ *   - 拾取器浮层（showPicker / resolvePicker / handleThinkingToggle + pickerRefresher）
+ *   - 模型选择器（pickModelInteractive）+ 思考强度标签
+ *   - 路径工具（relativeTo / resolvePath / resolveExecutable / checkPiAvailable）
+ *   - 显示选项（sendViewOptions / buildViewOptionItems / showOptionsPicker + 标签常量）
+ *   - 会话加载 / 分叉（loadHistorySession / forkAtEntryInNewTab / maybeAutoLoadLastSession / showHistoryPicker）
+ *   - webview 消息分发（processMessage 的公共部分）
+ *
+ * 子类只需实现“平台钩子”：消息如何送到 webview、配置/视图选项存储、
+ * 对话框 / diff / 文件打开的实现，以及各自独有的消息类型。
+ *
+ * 本类不引用 `vscode` 或 `electron`，因此两端 tsc 都能编译。
+ */
+import * as fs from "fs";
+import * as path from "path";
+import {
+    SessionRuntime,
+    RuntimeHost,
+    FileChange,
+    ModelInfo,
+    ModelChoice,
+} from "./sessionRuntime";
+import { PiConfig } from "./sessionRuntime";
+import { listSessions } from "./sessionStore";
+
+export abstract class ChatControllerBase implements RuntimeHost {
+    // ---- 标签状态 ----
+    protected tabs = new Map<string, SessionRuntime>();
+    protected activeId: string | undefined;
+    protected tabSeq = 0;
+    protected autoLoadDone = false;
+
+    // ---- 拾取器状态 ----
+    protected pickerResolve: ((v: any | undefined) => void) | null = null;
+    protected pickerTimer: ReturnType<typeof setTimeout> | null = null;
+    protected pickerRefresher: ((nextThinking: string) => void) | null = null;
+
+    // ---- 思考强度标签 ----
+    protected static readonly THINKING_LABELS: Record<string, string> = {
+        off: "关闭", minimal: "极低", low: "低", medium: "中", high: "高", xhigh: "极高", max: "最大",
+    };
+    protected thinkingLevelLabel(lv: string): string {
+        return ChatControllerBase.THINKING_LABELS[lv] || lv;
+    }
+
+    // ---- 快捷键标签 ----
+    protected static readonly SEND_KEY_LABELS: Record<string, string> = {
+        "enter": "Enter",
+        "shift+enter": "Shift + Enter",
+        "alt+enter": "Alt + Enter",
+        "ctrl+enter": "Ctrl + Enter",
+    };
+    protected static readonly NEW_SESSION_KEY_LABELS: Record<string, string> = {
+        "ctrl+alt+n": "Ctrl+Alt+N", "ctrl+shift+n": "Ctrl+Shift+N", "ctrl+t": "Ctrl+T", "alt+n": "Alt+N",
+    };
+    protected static readonly TAB_SWITCH_KEY_LABELS: Record<string, string> = {
+        "ctrl+alt+arrows": "Ctrl+Alt+← / Ctrl+Alt+→",
+        "ctrl+alt+pgupdown": "Ctrl+Alt+PageUp / PageDown",
+        "alt+brackets": "Alt+[ / Alt+]",
+        "ctrl+alt+brackets": "Ctrl+Alt+[ / Ctrl+Alt+]",
+    };
+
+    // ========================================================================
+    //  平台钩子（子类实现）
+    // ========================================================================
+
+    /** 把一条全局（不带 tabId）消息送到 webview。 */
+    protected abstract postToWebview(msg: Record<string, unknown>): void;
+
+    // ---- RuntimeHost：配置 / cwd ----
+    public abstract getConfig(): PiConfig;
+    public abstract getCwd(): string;
+
+    // ---- RuntimeHost：UI 弹窗 / diff / 文件 / 持久化 ----
+    public abstract confirmDialog(title: string, message: string): Promise<boolean>;
+    public abstract selectDialog(title: string, options: string[]): Promise<string | undefined>;
+    public abstract inputDialog(title: string, placeholder: string, prefill: string): Promise<string | undefined>;
+    public abstract persistModel(provider: string, modelId: string): void;
+    public abstract openFileLocation(p: string, line: number, anchor?: string): void;
+    public abstract openDiff(change: FileChange): void;
+    public abstract confirmRevert(label: string): Promise<boolean>;
+
+    // ---- 显示选项：存储读写（子类）----
+    protected abstract getShowStatsBar(): boolean;
+    protected abstract getAutoLoadLast(): boolean;
+    protected abstract getSendKey(): string;
+    protected abstract getNewSessionKey(): string;
+    protected abstract getTabSwitchKey(): string;
+    /** 变更显示选项的存储（仅改存储，UI 推送由基类统一完成）。 */
+    protected abstract mutateViewOption(action: string): void;
+
+    // ---- 文件列表 / 文件打开（来自 webview 的 listFiles / openFile）----
+    protected abstract sendFileList(): void;
+    protected abstract openFileFromWebview(p: string, line?: number, col?: number): void;
+
+    /** 处理平台独有的 webview 消息；已在公共分发中匹配的不会进来。返回是否已处理。 */
+    protected abstract handlePlatformMessage(msg: any): boolean;
+
+    // ---- 可选平台钩子 ----
+    /** pi 不存在时追加的平台行为（基类已向 tab 推送 systemError）。 */
+    protected onPiMissing(_piPath: string): void { /* 默认无操作 */ }
+    /** pi 缺失提示文案（默认 electron 版；vscode 用更长文案）。 */
+    protected piMissingMessage(piPath: string): string {
+        return `未找到 pi 可执行文件（当前配置："${piPath}"）。请确认已安装 pi 并加入 PATH，或在设置中指定 piPath。`;
+    }
+    /** 加载 / 切换会话后聚焦聊天视图（vscode 需要，electron 无操作）。 */
+    protected async onFocusChat(): Promise<void> { /* 默认无操作 */ }
+    /** 在弹出历史会话拾取器前做准备（vscode 需 ensureViewVisible）。 */
+    protected async beforeHistoryPicker(): Promise<void> { /* 默认无操作 */ }
+    /** 活跃 tab 的会话路径变化时通知宿主（electron 转发，vscode 无操作）。 */
+    protected onActiveSessionChanged(_sessionPath: string | undefined): void { /* 默认无操作 */ }
+    /** 历史会话列表为空时的提示（vscode 弹信息条 / electron 推 system 消息）。 */
+    protected onNoSessions(): void { /* 默认无操作 */ }
+
+    // ========================================================================
+    //  路径工具（RuntimeHost）
+    // ========================================================================
+    public relativeTo(cwd: string, full: string): string {
+        const norm = (s: string) => s.replace(/\\/g, "/");
+        const c = norm(cwd).replace(/\/$/, "") + "/";
+        const f = norm(full);
+        if (f.toLowerCase().startsWith(c.toLowerCase())) { return f.slice(c.length); }
+        return full;
+    }
+
+    public resolvePath(p: string): string {
+        if (path.isAbsolute(p)) { return p; }
+        return path.resolve(this.getCwd(), p);
+    }
+
+    public resolveExecutable(cmd: string): string | undefined {
+        if (!cmd) { return undefined; }
+        const isWindows = process.platform === "win32";
+        const exts = isWindows
+            ? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+            : [""];
+        const existsAsFile = (p: string): boolean => {
+            try { return fs.statSync(p).isFile(); } catch { return false; }
+        };
+        const tryWithExts = (base: string): string | undefined => {
+            if (existsAsFile(base)) { return base; }
+            if (isWindows) {
+                for (const ext of exts) {
+                    const lo = base + ext.toLowerCase(); if (existsAsFile(lo)) { return lo; }
+                    const up = base + ext; if (existsAsFile(up)) { return up; }
+                }
+            }
+            return undefined;
+        };
+        if (cmd.includes("/") || cmd.includes("\\")) {
+            const abs = path.isAbsolute(cmd) ? cmd : path.resolve(this.getCwd(), cmd);
+            return tryWithExts(abs);
+        }
+        const pathEnv = process.env.PATH || process.env.Path || "";
+        const sep = isWindows ? ";" : ":";
+        for (const dir of pathEnv.split(sep).filter(Boolean)) {
+            const found = tryWithExts(path.join(dir, cmd));
+            if (found) { return found; }
+        }
+        return undefined;
+    }
+
+    public checkPiAvailable(piPath: string, tabId: string): boolean {
+        if (this.resolveExecutable(piPath)) { return true; }
+        this.postToTab(tabId, { type: "systemError", text: this.piMissingMessage(piPath) });
+        this.onPiMissing(piPath);
+        return false;
+    }
+
+    // ========================================================================
+    //  显示选项
+    // ========================================================================
+    protected sendViewOptions(): void {
+        this.postToWebview({
+            type: "viewOptions",
+            showStatsBar: this.getShowStatsBar(),
+            autoLoadLastSession: this.getAutoLoadLast(),
+            sendKey: this.getSendKey(),
+            newSessionKey: this.getNewSessionKey(),
+            tabSwitchKey: this.getTabSwitchKey(),
+        });
+    }
+
+    /** 构建显示选项浮层条目（toggle 模式）。 */
+    protected buildViewOptionItems(): Array<{ label: string; desc: string; check: boolean | null; action: string }> {
+        return [
+            {
+                action: "showStatsBar",
+                label: "状态栏",
+                desc: "对话框上方的 token / 上下文状态栏",
+                check: this.getShowStatsBar(),
+            },
+            {
+                action: "autoLoadLastSession",
+                label: "启动时自动打开最近会话",
+                desc: "进入界面时自动加载当前项目最近一次会话",
+                check: this.getAutoLoadLast(),
+            },
+            {
+                action: "sendKey",
+                label: "发送键：" + ChatControllerBase.SEND_KEY_LABELS[this.getSendKey()],
+                desc: "点击切换：Enter → Shift+Enter → Alt+Enter → Ctrl+Enter",
+                check: null,
+            },
+            {
+                action: "newSessionKey",
+                label: "新建会话：" + ChatControllerBase.NEW_SESSION_KEY_LABELS[this.getNewSessionKey()],
+                desc: "循环切换新建会话的快捷键组合",
+                check: null,
+            },
+            {
+                action: "tabSwitchKey",
+                label: "切换会话：" + ChatControllerBase.TAB_SWITCH_KEY_LABELS[this.getTabSwitchKey()],
+                desc: "在多个会话 tab 间切换上一个 / 下一个",
+                check: null,
+            },
+        ];
+    }
+
+    /** 推送显示选项浮层（toggle 模式，不等待结果）。 */
+    protected showOptionsPicker(): void {
+        this.postToWebview({
+            type: "picker",
+            kind: "options",
+            toggle: true,
+            searchable: false,
+            items: this.buildViewOptionItems(),
+        });
+    }
+
+    /** 浮层中切换某项后刷新：改存储 → 重推视图选项 → 刷新浮层。 */
+    protected doViewOptionToggle(action: string): void {
+        this.mutateViewOption(action);
+        this.sendViewOptions();
+        this.showOptionsPicker();
+    }
+
+    // ========================================================================
+    //  标签管理（RuntimeHost）
+    // ========================================================================
+    public postToTab(tabId: string, msg: Record<string, unknown>): void {
+        this.postToWebview({ ...msg, tabId });
+    }
+
+    public broadcastTabList(): void {
+        this.postToWebview({
+            type: "tabList",
+            tabs: Array.from(this.tabs.values()).map((rt) => ({
+                id: rt.id,
+                title: rt.title,
+                streaming: rt.streaming,
+                piReady: rt.piReady,
+            })),
+            activeId: this.activeId ?? null,
+        });
+    }
+
+    public onSessionChanged(tabId: string, sessionPath: string | undefined): void {
+        if (this.activeId === tabId) { this.onActiveSessionChanged(sessionPath); }
+    }
+
+    public newTab(): SessionRuntime {
+        const id = `tab-${++this.tabSeq}`;
+        const title = `会话 ${this.tabSeq}`;
+        const rt = new SessionRuntime(id, title, this);
+        this.tabs.set(id, rt);
+        this.activeId = id;
+        this.broadcastTabList();
+        this.postToWebview({ type: "tabActivated", id });
+        rt.startClient();
+        return rt;
+    }
+
+    public setActive(id: string): void {
+        if (!this.tabs.has(id) || this.activeId === id) { return; }
+        this.activeId = id;
+        this.postToWebview({ type: "tabActivated", id });
+        this.broadcastTabList();
+        const rt = this.tabs.get(id);
+        if (rt) { this.onSessionChanged(id, rt.currentSessionPath); }
+    }
+
+    /** 按方向切换到上一个/下一个 tab。 */
+    public switchTabByDirection(direction: "prev" | "next"): void {
+        const ids = Array.from(this.tabs.keys());
+        if (ids.length < 2) { return; }
+        const cur = this.activeId ? ids.indexOf(this.activeId) : 0;
+        const idx = cur < 0 ? 0 : cur;
+        const nextIdx = direction === "next" ? (idx + 1) % ids.length : (idx - 1 + ids.length) % ids.length;
+        this.setActive(ids[nextIdx]);
+    }
+
+    public closeTab(id: string): void {
+        const rt = this.tabs.get(id);
+        if (!rt) { return; }
+        rt.stopClient();
+        this.tabs.delete(id);
+        this.postToWebview({ type: "tabClosed", id });
+        if (this.activeId === id) {
+            this.activeId = this.tabs.size > 0 ? this.tabs.keys().next().value : undefined;
+            if (this.activeId) {
+                this.postToWebview({ type: "tabActivated", id: this.activeId });
+                const next = this.tabs.get(this.activeId);
+                if (next) { this.onSessionChanged(this.activeId, next.currentSessionPath); }
+            }
+        }
+        this.broadcastTabList();
+        // 全部关闭后自动新建一个空 tab，保持界面可用
+        if (this.tabs.size === 0) { this.newTab(); }
+    }
+
+    public getActive(): SessionRuntime | undefined {
+        return this.activeId ? this.tabs.get(this.activeId) : undefined;
+    }
+
+    // ========================================================================
+    //  拾取器 + 模型选择（RuntimeHost.pickModelInteractive）
+    // ========================================================================
+    /** 向 webview 推送拾取器浮层并等待用户选择（取消返回 undefined）。 */
+    protected showPicker(kind: string, items: any[], current?: string): Promise<any | undefined> {
+        this.postToWebview({ type: "picker", kind, items, current: current ?? null });
+        if (this.pickerTimer) { clearTimeout(this.pickerTimer); }
+        return new Promise<any | undefined>((resolve) => {
+            this.pickerResolve = resolve;
+            this.pickerTimer = setTimeout(() => {
+                if (this.pickerResolve) {
+                    this.pickerResolve = null;
+                    this.pickerTimer = null;
+                    this.postToWebview({ type: "pickerCancel", kind });
+                    resolve(undefined);
+                }
+            }, 120000);
+        });
+    }
+
+    protected resolvePicker(payload: any | undefined): void {
+        if (!this.pickerResolve) { return; }
+        const r = this.pickerResolve;
+        this.pickerResolve = null;
+        if (this.pickerTimer) { clearTimeout(this.pickerTimer); this.pickerTimer = null; }
+        r(payload);
+    }
+
+    /** 模型浮层中切换思考强度：发 RPC + 刷新浮层。 */
+    protected async handleThinkingToggle(value: any): Promise<void> {
+        const rt = this.getActive();
+        if (!rt || typeof value !== "string") { return; }
+        const ok = await rt.setThinkingLevel(value);
+        if (ok && this.pickerRefresher) { this.pickerRefresher(value); }
+    }
+
+    public async pickModelInteractive(
+        models: ModelInfo[],
+        thinkingLevels: string[],
+        currentThinking: string,
+        currentModelId: string
+    ): Promise<ModelChoice | undefined> {
+        const items: any[] = models.map((m) => ({
+            id: m.id, provider: m.provider, name: m.name, contextWindow: m.contextWindow,
+            current: m.id === currentModelId,
+        }));
+        if (thinkingLevels.length > 0) {
+            thinkingLevels.forEach((lv) => {
+                items.push({
+                    section: "思考强度", behavior: "toggle", action: "thinkingLevel", value: lv,
+                    label: this.thinkingLevelLabel(lv), check: lv === currentThinking,
+                });
+            });
+        }
+        this.pickerRefresher = (nextThinking: string) => {
+            const refreshed = items.map((it) =>
+                it.action === "thinkingLevel" ? { ...it, check: it.value === nextThinking } : it
+            );
+            this.postToWebview({ type: "picker", kind: "model", items: refreshed });
+        };
+        const choice = await this.showPicker("model", items, undefined);
+        this.pickerRefresher = null;
+        if (!choice) { return undefined; }
+        return { provider: choice.provider || "", modelId: choice.modelId, thinkingLevel: choice.thinkingLevel };
+    }
+
+    // ========================================================================
+    //  会话加载 / 分叉 / 历史
+    // ========================================================================
+    public newSession(): void { this.newTab(); }
+
+    public getCurrentSessionPath(): string | undefined {
+        return this.getActive()?.currentSessionPath;
+    }
+
+    public async loadHistorySession(file: string): Promise<void> {
+        // 在活跃 tab 加载；若无 tab 则新建
+        let rt = this.getActive();
+        if (!rt) {
+            rt = this.newTab();
+            await new Promise((r) => setTimeout(r, 150));
+        }
+        this.setActive(rt.id);
+        await rt.loadSession(file);
+        await this.onFocusChat();
+    }
+
+    /**
+     * 在新 tab 中打开从某条 user 消息处分叉出的新分支，源 tab 保持不动。
+     * 新建一个独立 pi 进程的 tab，先加载源会话文件，再在该 entry 处 fork ——
+     * fork 会创建新的分支会话文件并切换到它，源 tab 完全不受影响。
+     * 源会话尚未落盘时回退到原地分叉。
+     */
+    public async forkAtEntryInNewTab(source: SessionRuntime, entryId: string): Promise<void> {
+        const sourcePath = source.currentSessionPath;
+        if (!sourcePath) {
+            await source.forkFromEntry(entryId);
+            return;
+        }
+        const newRt = this.newTab();
+        await new Promise((r) => setTimeout(r, 150));
+        await newRt.loadSessionAndFork(sourcePath, entryId);
+        await this.onFocusChat();
+    }
+
+    protected async maybeAutoLoadLastSession(): Promise<void> {
+        if (this.autoLoadDone) { return; }
+        const cwd = this.getCwd();
+        if (!cwd) { return; }
+        this.autoLoadDone = true;
+        if (!this.getAutoLoadLast()) { return; }
+        const sessions = await listSessions(cwd);
+        if (sessions.length === 0) { return; }
+        const rt = this.getActive();
+        if (rt) { await rt.loadSession(sessions[0].file); }
+    }
+
+    /** 弹出历史会话拾取器并加载选中项。 */
+    public async showHistoryPicker(): Promise<void> {
+        const sessions = await listSessions(this.getCwd());
+        if (sessions.length === 0) {
+            this.onNoSessions();
+            return;
+        }
+        await this.beforeHistoryPicker();
+        const current = this.getActive()?.currentSessionPath;
+        const choice = await this.showPicker("history", sessions, current);
+        if (!choice || typeof choice.file !== "string") { return; }
+        await this.loadHistorySession(choice.file);
+    }
+
+    // ========================================================================
+    //  webview 消息分发（公共部分）
+    // ========================================================================
+    /**
+     * 处理来自 webview 的消息。先处理两宿主公共的全局消息，再交给
+     * {@link handlePlatformMessage} 处理平台独有消息，最后处理 tab 级消息。
+     */
+    public processMessage(msg: any): void {
+        // ---- 公共全局消息 ----
+        switch (msg.type) {
+            case "ready": {
+                this.sendViewOptions();
+                this.broadcastTabList();
+                if (this.tabs.size === 0) {
+                    this.newTab();
+                    void this.maybeAutoLoadLastSession();
+                } else {
+                    // 已有 tab：同步各 tab 的 piReady
+                    for (const rt of this.tabs.values()) {
+                        this.postToTab(rt.id, { type: "piReady", ready: rt.piReady });
+                    }
+                }
+                if (this.activeId) {
+                    this.postToWebview({ type: "tabActivated", id: this.activeId });
+                }
+                return;
+            }
+            case "newSession":
+                this.newTab();
+                return;
+            case "switchTab":
+                if (typeof msg.tabId === "string") { this.setActive(msg.tabId); }
+                return;
+            case "switchTabByDirection":
+                if (msg.direction === "prev" || msg.direction === "next") { this.switchTabByDirection(msg.direction); }
+                return;
+            case "closeTab":
+                if (typeof msg.tabId === "string") { this.closeTab(msg.tabId); }
+                return;
+            case "listFiles":
+                this.sendFileList();
+                return;
+            case "openFile":
+                if (typeof msg.path === "string") {
+                    this.openFileFromWebview(
+                        msg.path,
+                        typeof msg.line === "number" ? msg.line : undefined,
+                        typeof msg.col === "number" ? msg.col : undefined
+                    );
+                }
+                return;
+            case "pickerChoice":
+                this.resolvePicker(msg.payload);
+                return;
+            case "pickerCancel":
+                this.resolvePicker(undefined);
+                return;
+            case "pickerToggle":
+                if (typeof msg.action === "string") {
+                    if (msg.kind === "model" && msg.action === "thinkingLevel") {
+                        void this.handleThinkingToggle(msg.value);
+                    } else {
+                        this.doViewOptionToggle(msg.action);
+                    }
+                }
+                return;
+        }
+
+        // ---- 平台独有全局消息 ----
+        if (this.handlePlatformMessage(msg)) { return; }
+
+        // ---- 公共 tab 级消息 ----
+        const tabId: string | undefined = msg.tabId;
+        const rt = tabId ? this.tabs.get(tabId) : undefined;
+        // 命令型消息（pickModel 等）回退到活跃 tab
+        const target = rt ?? (msg.type === "pickModel" ? this.getActive() : undefined);
+        if (!target) { return; }
+
+        switch (msg.type) {
+            case "send":
+                target.handleSend(msg.text, msg.images);
+                break;
+            case "abort":
+                target.abortActiveRun();
+                break;
+            case "showTree":
+                void target.showTree();
+                break;
+            case "forkAtEntry":
+                if (typeof msg.entryId === "string") { void this.forkAtEntryInNewTab(target, msg.entryId); }
+                break;
+            case "pickModel":
+                void target.pickModel();
+                break;
+            case "openDiff":
+                if (typeof msg.path === "string") { void target.openDiff(msg.path); }
+                break;
+            case "openEditLocation":
+                if (typeof msg.path === "string" && typeof msg.anchor === "string" && msg.anchor) {
+                    void target.openEditLocationWithAnchor(
+                        msg.path,
+                        typeof msg.line === "number" ? msg.line : 1,
+                        msg.anchor
+                    );
+                } else if (typeof msg.path === "string") {
+                    void target.openEditLocation(msg.path, typeof msg.line === "number" ? msg.line : 1);
+                }
+                break;
+            case "revertEdit":
+                if (typeof msg.toolCallId === "string") { void target.revertEdit(msg.toolCallId); }
+                break;
+        }
+    }
+}

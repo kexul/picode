@@ -10,10 +10,11 @@ export interface SessionInfo {
     title: string; // 展示标题
     messageCount: number;
     name?: string; // 用户设置的会话名
-    userTexts: string[]; // 所有 user 消息预览（按时序）
+    userTexts: string[]; // user 消息预览（按时序；大文件仅前若干条）
     topFile?: string; // 改动最多的文件 basename
     topFileCount?: number; // 该文件的改动次数
     totalFiles?: number; // 不重复的改动文件总数
+    truncated?: boolean; // 是否因超过扫描上限而早停（messageCount 为下限、userTexts 不含尾部）
 }
 
 /** pi 配置目录，遵循 PI_CODING_AGENT_DIR 环境变量。 */
@@ -84,10 +85,9 @@ export async function listSessions(cwd: string): Promise<SessionInfo[]> {
     for (const c of candidates) {
         const d = path.join(sessionsRoot(), encodeCwd(c));
         try {
-            if (fs.existsSync(d)) {
-                dir = d;
-                break;
-            }
+            await fs.promises.access(d);
+            dir = d;
+            break;
         } catch {
             /* ignore */
         }
@@ -98,17 +98,18 @@ export async function listSessions(cwd: string): Promise<SessionInfo[]> {
 
     let files: string[];
     try {
-        files = fs.readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
+        files = (await fs.promises.readdir(dir)).filter((f) => f.endsWith(".jsonl"));
     } catch {
         return [];
     }
 
     // 并发流式解析各会话文件的头部信息，避免一次性把整个文件读进内存。
+    // stat 与解析均异步，避免阻塞事件循环。
     const entries = await Promise.all(
         files.map(async (f) => {
             const full = path.join(dir, f);
             try {
-                const stat = fs.statSync(full);
+                const stat = await fs.promises.stat(full);
                 const info = await parseSessionHead(full);
                 const top = info.fileStats[0];
                 return {
@@ -122,6 +123,7 @@ export async function listSessions(cwd: string): Promise<SessionInfo[]> {
                     topFile: top?.name,
                     topFileCount: top?.count,
                     totalFiles: info.totalEdits,
+                    truncated: info.truncated,
                 } as SessionInfo;
             } catch {
                 return null;
@@ -157,12 +159,17 @@ interface SessionHead {
     messageCount: number;
     fileStats: { name: string; count: number }[]; // edit/write 改动文件按次数倒序
     totalEdits: number; // 不重复文件数
+    truncated: boolean; // 是否达扫描上限早停
 }
+
+/** 扫描字节上限：超过后早停，避免逐行读完数 MB 会话文件。 */
+const MAX_SCAN_BYTES = 256 * 1024;
 
 /**
  * 按行流式解析会话文件，提取标题所需的少量信息。
- * 使用 createReadStream + readline，避免把整个会话文件读入内存后
- * 再 `split("\n")` 生成大数组（大会话文件可达数 MB）。
+ * 使用 createReadStream + readline，并在累计读取字节超过 MAX_SCAN_BYTES 后
+ * 早停（destroy 流），避免把整个会话文件读入内存。
+ * 早停时 truncated=true，messageCount 仅为窗口内下限、userTexts 不含尾部消息。
  */
 function parseSessionHead(file: string): Promise<SessionHead> {
     return new Promise((resolve) => {
@@ -172,68 +179,96 @@ function parseSessionHead(file: string): Promise<SessionHead> {
         let name: string | undefined;
         let messageCount = 0;
         const fileCounts = new Map<string, number>();
+        let truncated = false;
+
+        const empty: SessionHead = {
+            id, firstUserText, userTexts, name, messageCount,
+            fileStats: [], totalEdits: 0, truncated: false,
+        };
 
         let stream: fs.ReadStream;
         try {
             stream = fs.createReadStream(file, { encoding: "utf8" });
         } catch {
-            resolve({ id, firstUserText, userTexts, name, messageCount, fileStats: [], totalEdits: 0 });
+            resolve(empty);
             return;
         }
+
+        let bytesRead = 0;
+        let stopped = false;
+        let settled = false;
+        const finish = () => {
+            if (settled) { return; }
+            settled = true;
+            const fileStats = Array.from(fileCounts.entries())
+                .map(([n, c]) => ({ name: n, count: c }))
+                .sort((a, b) => b.count - a.count);
+            resolve({
+                id, firstUserText, userTexts, name, messageCount,
+                fileStats, totalEdits: fileCounts.size, truncated,
+            });
+        };
+        const stopScan = () => {
+            if (stopped) { return; }
+            stopped = true;
+            truncated = true;
+            // 先 resolve（直接 finish），再 destroy 释放资源；
+            // 不要依赖 destroy → readline 'close' 来 resolve，避免 Promise 挂起。
+            finish();
+            try { stream.destroy(); } catch { /* ignore */ }
+        };
 
         const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
         rl.on("line", (line: string) => {
+            if (stopped) { return; }
+            bytesRead += line.length + 1;
             const t = line.trim();
-            if (!t) {
-                return;
-            }
-            let entry: any;
-            try {
-                entry = JSON.parse(t);
-            } catch {
-                return;
-            }
-            if (entry.type === "session") {
-                id = entry.id || "";
-            } else if (entry.type === "session_info" && entry.name) {
-                name = entry.name;
-            } else if (entry.type === "message" && entry.message) {
-                const role = entry.message.role;
-                if (role === "user" || role === "assistant") {
-                    messageCount++;
+            if (t) {
+                let entry: any;
+                try {
+                    entry = JSON.parse(t);
+                } catch {
+                    /* skip */
                 }
-                if (role === "user") {
-                    const ut = contentToText(entry.message.content).replace(/\s+/g, " ");
-                    if (!firstUserText) {
-                        firstUserText = ut.slice(0, 80);
-                    }
-                    if (ut) {
-                        userTexts.push(ut.slice(0, 150));
-                    }
-                }
-                // 统计 edit/write 工具调用的目标文件，用于生成“改动最多的文件”标题。
-                if (role === "assistant" && Array.isArray(entry.message.content)) {
-                    for (const c of entry.message.content) {
-                        if (c && c.type === "toolCall" && (c.name === "edit" || c.name === "write")) {
-                            const bn = toolCallBasename(c.arguments);
-                            if (bn) {
-                                fileCounts.set(bn, (fileCounts.get(bn) || 0) + 1);
+                if (entry) {
+                    if (entry.type === "session") {
+                        id = entry.id || "";
+                    } else if (entry.type === "session_info" && entry.name) {
+                        name = entry.name;
+                    } else if (entry.type === "message" && entry.message) {
+                        const role = entry.message.role;
+                        if (role === "user" || role === "assistant") {
+                            messageCount++;
+                        }
+                        if (role === "user") {
+                            const ut = contentToText(entry.message.content).replace(/\s+/g, " ");
+                            if (!firstUserText) {
+                                firstUserText = ut.slice(0, 80);
+                            }
+                            if (ut) {
+                                userTexts.push(ut.slice(0, 150));
+                            }
+                        }
+                        // 统计 edit/write 工具调用的目标文件，用于生成“改动最多的文件”标题。
+                        if (role === "assistant" && Array.isArray(entry.message.content)) {
+                            for (const c of entry.message.content) {
+                                if (c && c.type === "toolCall" && (c.name === "edit" || c.name === "write")) {
+                                    const bn = toolCallBasename(c.arguments);
+                                    if (bn) {
+                                        fileCounts.set(bn, (fileCounts.get(bn) || 0) + 1);
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
+            if (bytesRead >= MAX_SCAN_BYTES) { stopScan(); }
         });
 
-        const done = () => {
-            const fileStats = Array.from(fileCounts.entries())
-                .map(([n, c]) => ({ name: n, count: c }))
-                .sort((a, b) => b.count - a.count);
-            resolve({ id, firstUserText, userTexts, name, messageCount, fileStats, totalEdits: fileCounts.size });
-        };
-        rl.on("close", done);
-        rl.on("error", done);
-        stream.on("error", done);
+        rl.on("close", finish);
+        rl.on("error", finish);
+        stream.on("error", finish);
     });
 }

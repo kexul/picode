@@ -38,6 +38,15 @@
   const treeOverlay = document.getElementById("treeOverlay");
   const treeBody = document.getElementById("treeBody");
 
+  // ---- 通用拾取器浮层（模型 / 历史）----
+  const pickerOverlay = document.getElementById("pickerOverlay");
+  const pickerBody = document.getElementById("pickerBody");
+  const pickerTitle = document.getElementById("pickerTitle");
+  const pickerSearch = document.getElementById("pickerSearch");
+  const pickerSearchWrap = document.getElementById("pickerSearchWrap");
+  const pickerFooter = document.getElementById("pickerFooter");
+  let pickerState = null; // { kind, items, filtered, sel, current, toggle }
+
   function hideTree() { treeOverlay.classList.add("hidden"); }
   document.getElementById("treeBtn").addEventListener("click", () => {
     const tab = activeTab();
@@ -144,10 +153,37 @@
 
   // ==================== 全局视图选项 ====================
   var sendKeyCombo = "enter";
+  var newSessionKey = "ctrl+alt+n";
+  var tabSwitchKey = "ctrl+alt+pgupdown";
+  var notifyOnTurnEnd = true;
   let openFiles = [];
   function applyViewOptions(opts) {
     statsBarEl.classList.toggle("bar-hidden", opts.showStatsBar === false);
     if (typeof opts.sendKey === "string") { sendKeyCombo = opts.sendKey; }
+    if (typeof opts.newSessionKey === "string") { newSessionKey = opts.newSessionKey; }
+    if (typeof opts.tabSwitchKey === "string") { tabSwitchKey = opts.tabSwitchKey; }
+    notifyOnTurnEnd = opts.notifyOnTurnEnd !== false;
+  }
+
+  // ── 会话结束提示音（Web Audio 合成，无外部资源） ──
+  var audioCtx = null;
+  function playTurnEndBeep() {
+    try {
+      if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+      if (audioCtx.state === "suspended") { audioCtx.resume(); }
+      var ctx = audioCtx;
+      var osc = ctx.createOscillator();
+      var gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      var t0 = ctx.currentTime;
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.15, t0 + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.25);
+      osc.start(t0);
+      osc.stop(t0 + 0.26);
+    } catch (e) { /* 忽略音频不可用 */ }
   }
   function isSendKey(e) {
     if (e.key !== "Enter") { return false; }
@@ -161,6 +197,66 @@
   }
 
   function fmtNum(n) { if (n == null) return "0"; if (n >= 1e6) return (n / 1e6).toFixed(2) + "M"; if (n >= 1e3) return (n / 1e3).toFixed(1) + "K"; return String(n); }
+
+  // ---- 全局快捷键匹配（新建会话 / 切换会话）----
+  function matchCombo(e, combo) {
+    // combo 形如 "ctrl+alt+n"
+    const mods = combo.split("+");
+    const key = mods.pop().toLowerCase();
+    const wantCtrl = mods.includes("ctrl");
+    const wantAlt = mods.includes("alt");
+    const wantShift = mods.includes("shift");
+    const wantMeta = mods.includes("meta");
+    let eKey = (e.key || "").toLowerCase();
+    // 规整键名
+    if (eKey === "[" && e.code === "BracketLeft") { /* keep */ }
+    if (eKey === "]" && e.code === "BracketRight") { /* keep */ }
+    if (e.ctrlKey !== wantCtrl) { return false; }
+    if (e.altKey !== wantAlt) { return false; }
+    if (e.shiftKey !== wantShift) { return false; }
+    if (e.metaKey !== wantMeta) { return false; }
+    return eKey === key;
+  }
+  // tabSwitchKey 方案 -> { prev: combo, next: combo }
+  function tabSwitchCombos(scheme) {
+    switch (scheme) {
+      case "alt+brackets": return { prev: "alt+[", next: "alt+]" };
+      case "ctrl+alt+brackets": return { prev: "ctrl+alt+[", next: "ctrl+alt+]" };
+      case "ctrl+alt+pgupdown": return { prev: "ctrl+alt+pageup", next: "ctrl+alt+pagedown" };
+      case "ctrl+alt+arrows":
+      default: return { prev: "ctrl+alt+arrowleft", next: "ctrl+alt+arrowright" };
+    }
+  }
+  document.addEventListener("keydown", (e) => {
+    // 不与输入框/搜索框冲突：仅当焦点不在输入元素时处理这些快捷键
+    const tag = (document.activeElement && document.activeElement.tagName) || "";
+    // 聚焦输入框（与编辑器/终端里的 Ctrl+Alt+I / Cmd+Alt+I 一致；webview 不会把此键冒泡给 VSCode，故在此本地处理）
+    if ((e.ctrlKey || e.metaKey) && e.altKey && !e.shiftKey && (e.key || "").toLowerCase() === "i") {
+      e.preventDefault();
+      inputEl.focus();
+      return;
+    }
+    // 新建会话（含输入框聚焦时，组合键不会误触普通输入）
+    if (matchCombo(e, newSessionKey)) {
+      e.preventDefault();
+      vscode.postMessage({ type: "newSession" });
+      return;
+    }
+    if (tag === "INPUT" || tag === "TEXTAREA") {
+      // Alt+ 类组合在输入框里也应允许（不输入字符），处理 tab 切换
+      const combos = tabSwitchCombos(tabSwitchKey);
+      if (matchCombo(e, combos.prev) || matchCombo(e, combos.next)) {
+        e.preventDefault();
+        const dir = matchCombo(e, combos.next) ? "next" : "prev";
+        vscode.postMessage({ type: "switchTabByDirection", direction: dir });
+      }
+      return;
+    }
+    // 切换会话
+    const combos = tabSwitchCombos(tabSwitchKey);
+    if (matchCombo(e, combos.prev)) { e.preventDefault(); vscode.postMessage({ type: "switchTabByDirection", direction: "prev" }); return; }
+    if (matchCombo(e, combos.next)) { e.preventDefault(); vscode.postMessage({ type: "switchTabByDirection", direction: "next" }); return; }
+  });
 
   // ==================== Tab 状态 ====================
   const tabs = new Map(); // id -> state
@@ -207,6 +303,7 @@
       pendingTextBlocks: [],
       modelId: "",
       provider: "",
+      thinkingLevel: "",
       lastStats: null,
       changedFiles: [],
       // 非活跃时保存的输入状态
@@ -526,8 +623,10 @@
     const tab = activeTab();
     const id = (tab && tab.modelId) || "";
     const prov = (tab && tab.provider) || "";
+    const tl = (tab && tab.thinkingLevel) || "";
     modelNameEl.textContent = id || "模型";
-    modelBtn.title = "当前: " + (prov ? prov + "/" : "") + (id || "") + "（点击切换）";
+    const tlSuffix = tl ? (" · 思考 " + tl) : "";
+    modelBtn.title = "当前: " + (prov ? prov + "/" : "") + (id || "") + tlSuffix + "（点击切换）";
   }
   function renderAttachmentsFor(tab) {
     imgPreviewEl.innerHTML = "";
@@ -723,6 +822,183 @@
     treeOverlay.classList.remove("hidden");
   }
 
+  // ==================== 通用拾取器浮层（模型 / 历史）====================
+  function hidePicker() {
+    pickerOverlay.classList.add("hidden");
+    pickerBody.innerHTML = "";
+    pickerSearch.value = "";
+    pickerFooter.innerHTML = "";
+    pickerFooter.classList.add("hidden");
+    pickerSearchWrap.classList.remove("hidden");
+    pickerState = null;
+  }
+  function pickerRelTime(mtime) {
+    if (!mtime) { return ""; }
+    const diff = Math.max(0, Date.now() - mtime);
+    const sec = Math.floor(diff / 1000);
+    if (sec < 60) { return "刚刚"; }
+    const min = Math.floor(sec / 60); if (min < 60) { return min + " 分钟前"; }
+    const hr = Math.floor(min / 60); if (hr < 24) { return hr + " 小时前"; }
+    const day = Math.floor(hr / 24); if (day < 30) { return day + " 天前"; }
+    return new Date(mtime).toLocaleDateString();
+  }
+  function pickerItemMatch(item, kind, q) {
+    if (!q) { return true; }
+    const hay = [];
+    if (kind === "model") {
+      hay.push(item.id || "", item.provider || "", item.name || "");
+    } else if (kind === "options") {
+      hay.push(item.label || "", item.desc || "");
+    } else {
+      hay.push(item.title || "", item.name || "", (item.userTexts || []).join(" "), item.topFile || "");
+    }
+    return hay.some((s) => s.toLowerCase().includes(q));
+  }
+  function renderPickerItems() {
+    const st = pickerState;
+    if (!st) { return; }
+    const q = (pickerSearch.value || "").toLowerCase().trim();
+    st.filtered = st.items.filter((it) => pickerItemMatch(it, st.kind, q));
+    if (st.sel >= st.filtered.length) { st.sel = Math.max(0, st.filtered.length - 1); }
+    pickerBody.innerHTML = "";
+    if (st.filtered.length === 0) {
+      const empty = document.createElement("div"); empty.className = "pk-empty"; empty.textContent = q ? "没有匹配项。" : "列表为空。";
+      pickerBody.appendChild(empty);
+      return;
+    }
+    let lastSection = null;
+    st.filtered.forEach((item, idx) => {
+      // 分隔标题
+      if (item.section && item.section !== lastSection) {
+        lastSection = item.section;
+        const sep = document.createElement("div"); sep.className = "pk-section"; sep.textContent = item.section;
+        pickerBody.appendChild(sep);
+      }
+      const el = document.createElement("div");
+      el.className = "pk-item" + (idx === st.sel ? " active" : "");
+      if (st.kind === "model") {
+        // 模型项 vs 思考强度项
+        if (item.action === "thinkingLevel") {
+          const t = document.createElement("div"); t.className = "pk-title";
+          const chk = document.createElement("span"); chk.className = "pk-check" + (item.check === true ? " on" : "");
+          chk.textContent = item.check === true ? "✓" : "○";
+          t.appendChild(chk);
+          t.appendChild(document.createTextNode(item.label || ""));
+          el.appendChild(t);
+        } else {
+          if (item.current) { el.classList.add("current"); }
+          const t = document.createElement("div"); t.className = "pk-title"; t.textContent = item.id;
+          if (item.current) { const b = document.createElement("span"); b.className = "pk-badge"; b.textContent = "当前"; t.appendChild(b); }
+          el.appendChild(t);
+          const desc = (item.provider ? item.provider : "") + (item.name && item.name !== item.id ? (item.provider ? " · " : "") + item.name : "");
+          if (desc) { const d = document.createElement("div"); d.className = "pk-desc"; d.textContent = desc; el.appendChild(d); }
+          if (item.contextWindow) { const det = document.createElement("div"); det.className = "pk-detail"; det.textContent = "上下文 " + Math.round(item.contextWindow / 1000) + "K"; el.appendChild(det); }
+        }
+      } else if (st.kind === "history") {
+        if (st.current && item.file === st.current) { el.classList.add("current"); }
+        const t = document.createElement("div"); t.className = "pk-title"; t.textContent = item.title || "(未命名会话)";
+        if (st.current && item.file === st.current) { const b = document.createElement("span"); b.className = "pk-badge"; b.textContent = "当前"; t.appendChild(b); }
+        el.appendChild(t);
+        const all = item.userTexts || [];
+        const count = item.truncated ? "≥" + item.messageCount + " 条" : item.messageCount + " 条";
+        const desc = count + " · " + pickerRelTime(item.mtime) + (item.topFile ? " · 改动 " + item.topFile + (item.topFileCount ? " x" + item.topFileCount : "") : "");
+        const d = document.createElement("div"); d.className = "pk-desc"; d.textContent = desc; el.appendChild(d);
+        if (all.length > 0) {
+          const preview = document.createElement("div"); preview.className = "pk-detail";
+          preview.textContent = "我：" + (all[0] || "(无内容)");
+          el.appendChild(preview);
+        }
+      } else if (st.kind === "options") {
+        const t = document.createElement("div"); t.className = "pk-title";
+        const chk = document.createElement("span"); chk.className = "pk-check" + (item.check === true ? " on" : "");
+        chk.textContent = item.check === true ? "✓" : (item.check === false ? "○" : "▶");
+        t.appendChild(chk);
+        t.appendChild(document.createTextNode(item.label || ""));
+        el.appendChild(t);
+        if (item.desc) { const d = document.createElement("div"); d.className = "pk-desc"; d.style.paddingLeft = "1.4em"; d.textContent = item.desc; el.appendChild(d); }
+      }
+      el.addEventListener("mouseenter", () => { st.sel = idx; renderPickerActive(); });
+      el.addEventListener("click", () => { confirmPicker(idx); });
+      pickerBody.appendChild(el);
+    });
+  }
+  function renderPickerActive() {
+    const st = pickerState; if (!st) { return; }
+    const items = pickerBody.querySelectorAll(".pk-item");
+    items.forEach((el, i) => el.classList.toggle("active", i === st.sel));
+    const cur = items[st.sel];
+    if (cur) { cur.scrollIntoView({ block: "nearest" }); }
+  }
+  function confirmPicker(idx) {
+    const st = pickerState; if (!st) { return; }
+    const item = st.filtered[idx];
+    if (!item) { return; }
+    const kind = st.kind;
+    // toggle 模式（显示选项）或单项声明 toggle 行为（模型浮层中的思考强度）
+    if (st.toggle || item.behavior === "toggle") {
+      // 开关/循环模式：不关闭浮层，即时回发，宿主处理后重新推送刷新
+      vscode.postMessage({ type: "pickerToggle", kind, action: item.action, value: item.value });
+      return;
+    }
+    let payload;
+    if (kind === "model") {
+      // 同时把当前选中的思考强度带上
+      const tLevel = st.items.find((it) => it.action === "thinkingLevel" && it.check === true);
+      payload = { provider: item.provider || "", modelId: item.id, thinkingLevel: tLevel ? tLevel.value : undefined };
+    } else {
+      payload = { file: item.file };
+    }
+    hidePicker();
+    vscode.postMessage({ type: "pickerChoice", kind, payload });
+  }
+  function cancelPicker() {
+    const st = pickerState; if (!st) { return; }
+    const kind = st.kind;
+    hidePicker();
+    vscode.postMessage({ type: "pickerCancel", kind });
+  }
+  function renderPicker(msg) {
+    const kind = msg.kind;
+    const toggle = !!msg.toggle;
+    const searchable = msg.searchable !== false && !toggle;
+    pickerState = {
+      kind,
+      items: Array.isArray(msg.items) ? msg.items : [],
+      filtered: [],
+      sel: 0,
+      current: msg.current || null,
+      toggle,
+    };
+    const titleMap = { model: "切换模型", history: "会话历史", options: "显示选项" };
+    pickerTitle.textContent = titleMap[kind] || "选择";
+    pickerSearch.value = "";
+    pickerSearchWrap.classList.toggle("hidden", !searchable);
+    // toggle 模式显示“关闭”按钮
+    pickerFooter.innerHTML = "";
+    if (toggle) {
+      pickerFooter.classList.remove("hidden");
+      const closeBtn = document.createElement("button"); closeBtn.className = "secondary"; closeBtn.textContent = "关闭";
+      closeBtn.addEventListener("click", () => cancelPicker());
+      pickerFooter.appendChild(closeBtn);
+    } else {
+      pickerFooter.classList.add("hidden");
+    }
+    renderPickerItems();
+    pickerOverlay.classList.remove("hidden");
+    if (searchable) { setTimeout(() => pickerSearch.focus(), 0); }
+  }
+  pickerOverlay.addEventListener("click", (e) => { if (e.target === pickerOverlay) { cancelPicker(); } });
+  pickerSearch.addEventListener("input", () => { if (pickerState) { pickerState.sel = 0; renderPickerItems(); } });
+  document.addEventListener("keydown", (e) => {
+    if (!pickerState || pickerOverlay.classList.contains("hidden")) { return; }
+    const st = pickerState;
+    if (e.key === "ArrowDown") { e.preventDefault(); if (st.filtered.length) { st.sel = (st.sel + 1) % st.filtered.length; renderPickerActive(); } }
+    else if (e.key === "ArrowUp") { e.preventDefault(); if (st.filtered.length) { st.sel = (st.sel - 1 + st.filtered.length) % st.filtered.length; renderPickerActive(); } }
+    else if (e.key === "Enter") { e.preventDefault(); confirmPicker(st.sel); }
+    else if (e.key === "Escape") { e.preventDefault(); cancelPicker(); }
+  });
+
+
   // ==================== @ 文件引用 ====================
   let fileMatches = [];
   let fileSel = 0;
@@ -811,11 +1087,6 @@
   // ==================== 事件绑定 ====================
   sendBtn.addEventListener("click", send);
   document.getElementById("newBtn").addEventListener("click", () => { vscode.postMessage({ type: "newSession" }); });
-  document.addEventListener("keydown", (e) => {
-    if (e.key.toLowerCase() === "n" && e.altKey && !e.shiftKey && (e.ctrlKey || e.metaKey) && !(e.ctrlKey && e.metaKey)) {
-      e.preventDefault(); vscode.postMessage({ type: "newSession" });
-    }
-  });
   modelBtn.addEventListener("click", () => { const tab = activeTab(); if (tab) { vscode.postMessage({ type: "pickModel", tabId: tab.id }); } });
 
   // 委托：文件/符号链接点击（在 #messages 容器上）
@@ -956,6 +1227,17 @@
       return;
     }
     if (type === "viewOptions") { applyViewOptions(msg); return; }
+    if (type === "picker") { renderPicker(msg); return; }
+    if (type === "openSettings") { openSettings(); return; }
+    if (type === "focusInput") { setTimeout(function () { inputEl.focus(); }, 0); return; }
+    if (type === "app:settings" || type === "app:settingsResult" || type === "app:defaultModels") {
+      if (settingsDispatch) {
+        if (type === "app:settings") { settingsDispatch({ type: "load", content: msg.content, existed: msg.existed, path: msg.path }); }
+        else if (type === "app:settingsResult") { settingsDispatch(msg.ok ? { type: "saved" } : { type: "error", error: msg.error }); }
+        else { settingsDispatch({ type: "default", content: msg.content }); }
+      }
+      return;
+    }
     if (type === "openFiles") {
       openFiles = msg.files || [];
       if (atStart >= 0) {
@@ -1004,6 +1286,7 @@
         finalizeCurrentAssistant(t);
         t.currentThinking = null;
         setStreaming(t, false);
+        if (notifyOnTurnEnd) { playTurnEndBeep(); }
         break;
       case "assistantDelta":
         if (!t.currentAssistant) { t.currentAssistant = { el: addMarkdown(t, ""), raw: "" }; }
@@ -1091,6 +1374,10 @@
         t.provider = msg.provider || "";
         if (activeId === t.id) { syncModelBtn(); }
         break;
+      case "thinkingChanged":
+        t.thinkingLevel = msg.level || "";
+        if (activeId === t.id) { syncModelBtn(); }
+        break;
       case "stats":
         t.lastStats = msg;
         renderStatsFor(t);
@@ -1117,6 +1404,37 @@
     tabs.delete(id);
     if (activeId === id) { activeId = null; }
   }
+
+  // ==================== 设置（models.json）浮层 ====================
+  const settingsOverlay = document.getElementById("settingsOverlay");
+  const settingsRoot = document.getElementById("settingsRoot");
+  let settingsInstance = null;
+  let settingsDispatch = null;
+
+  function openSettings() {
+    if (!settingsInstance) {
+      settingsInstance = window.mountSettings(settingsRoot, {
+        send(type, payload) {
+          if (type === "save") { vscode.postMessage({ type: "app:saveSettings", content: (payload && payload.content) || "" }); }
+          else if (type === "getDefault") { vscode.postMessage({ type: "app:getDefaultModels" }); }
+          else { vscode.postMessage({ type: "app:requestSettings" }); } // ready | reload
+        },
+        on(handler) { settingsDispatch = handler; },
+        onClose() { closeSettings(); },
+      });
+      settingsInstance.requestInitial();
+    } else {
+      settingsInstance.requestInitial(); // reload
+    }
+    settingsOverlay.classList.remove("hidden");
+  }
+  function closeSettings() {
+    settingsOverlay.classList.add("hidden");
+  }
+  settingsOverlay.addEventListener("click", (e) => { if (e.target === settingsOverlay) { closeSettings(); } });
+  // 暴露给同页面的 app.js（Electron appBar）调用
+  window.__piOpenSettings = openSettings;
+  window.__piCloseSettings = closeSettings;
 
   vscode.postMessage({ type: "ready" });
 })();

@@ -83,6 +83,19 @@ ${bodyTop}${tabbar}  <div id="messages"></div>
       <div id="treeBody"></div>
     </div>
   </div>
+  <div id="pickerOverlay" class="hidden">
+    <div id="pickerPanel">
+      <div id="pickerHeader"><span id="pickerTitle">选择</span><span class="picker-hint">↑↓ 选择 · Enter 确认 · Esc 关闭</span></div>
+      <div id="pickerSearchWrap"><input id="pickerSearch" type="text" placeholder="筛选…" autocomplete="off" spellcheck="false" /></div>
+      <div id="pickerBody"></div>
+      <div id="pickerFooter" class="hidden"></div>
+    </div>
+  </div>
+  <div id="settingsOverlay" class="hidden">
+    <div id="settingsPanel">
+      <div id="settingsRoot"></div>
+    </div>
+  </div>
 ${bodyBottom}  <script${nonceAttr} src="${markedJs}"></script>
   <script${nonceAttr} src="${highlightJs}"></script>
   <script${nonceAttr} src="${chatJs}"></script>${extraScripts}

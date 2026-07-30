@@ -44,12 +44,13 @@ function routeMessage(msg: any): void {
         case "app:pickProject": void pickProjectDialog(); break;
         case "app:switchProject": if (typeof msg.path === "string") setProject(msg.path); break;
         case "app:requestProjects": sendProjects(); break;
-        case "app:requestViewOptions": controller.sendViewOptions(); break;
+        case "app:requestViewOptions": controller.pushViewOptions(); break;
         case "app:toggleViewOption":
             if (msg.key === "showStatsBar" || msg.key === "autoLoadLastSession") controller.toggleViewOption(msg.key);
             break;
         case "app:cycleSendKey": controller.cycleSendKey(); break;
         case "app:requestHistory": void controller.showHistory(); break;
+        case "app:openViewOptions": controller.showViewOptionsPicker(); break;
         case "app:openHistory": if (typeof msg.file === "string") void controller.loadHistorySession(msg.file); break;
         case "app:requestSettings": post({ type: "app:settings", ...readModelsJson() }); break;
         case "app:saveSettings": post({ type: "app:settingsResult", ...writeModelsJson(msg.content) }); break;

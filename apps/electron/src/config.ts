@@ -15,6 +15,9 @@ export interface ViewOptions {
     showStatsBar: boolean;
     autoLoadLastSession: boolean;
     sendKey: string;
+    newSessionKey: string;
+    tabSwitchKey: string;
+    notifyOnTurnEnd: boolean;
 }
 
 export interface AppConfig {
@@ -34,7 +37,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     extraArgs: [],
     trustProject: true,
     recentProjects: [],
-    view: { showStatsBar: true, autoLoadLastSession: false, sendKey: "enter" },
+    view: { showStatsBar: true, autoLoadLastSession: false, sendKey: "enter", newSessionKey: "ctrl+alt+n", tabSwitchKey: "ctrl+alt+arrows", notifyOnTurnEnd: true },
 };
 
 export function loadConfig(): AppConfig {

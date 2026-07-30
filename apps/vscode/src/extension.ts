@@ -1,7 +1,5 @@
 import * as vscode from "vscode";
 import { ChatViewProvider, DiffContentProvider } from "./chatViewProvider";
-import { SettingsPanel } from "./settingsPanel";
-import { HistoryPanel } from "./historyPanel";
 import { setExtensionRoot } from "../../../src/shared/modelsConfig";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -15,6 +13,15 @@ export function activate(context: vscode.ExtensionContext): void {
             DiffContentProvider.scheme,
             DiffContentProvider.instance
         )
+    );
+
+    // diff 文档关闭时回收“修改前”内容副本，避免大文件快照在 Map 中泄漏。
+    context.subscriptions.push(
+        vscode.workspace.onDidCloseTextDocument((doc) => {
+            if (doc.uri.scheme === DiffContentProvider.scheme) {
+                DiffContentProvider.instance.dispose(doc.uri.query);
+            }
+        })
     );
 
     context.subscriptions.push(
@@ -38,19 +45,25 @@ export function activate(context: vscode.ExtensionContext): void {
 
     context.subscriptions.push(
         vscode.commands.registerCommand("piChat.history", () => {
-            HistoryPanel.show(context.extensionUri, provider);
+            provider.pickSession();
         })
     );
 
     context.subscriptions.push(
         vscode.commands.registerCommand("piChat.openSettings", () => {
-            SettingsPanel.show(context.extensionUri);
+            provider.openSettings();
         })
     );
 
     context.subscriptions.push(
         vscode.commands.registerCommand("piChat.openViewOptions", () => {
             provider.pickViewOptions();
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand("piChat.focusInput", () => {
+            provider.focusInput();
         })
     );
 

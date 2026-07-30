@@ -638,23 +638,4 @@
   }
 
   window.mountSettings = mountSettings;
-
-  // ── VSCode 独立面板自动初始化 ───────────────────────────────────────────────
-  if (typeof acquireVsCodeApi === "function" && document.getElementById("settingsRoot")) {
-    var vscode = acquireVsCodeApi();
-    var rootEl = document.getElementById("settingsRoot");
-    var instance = mountSettings(rootEl, {
-      send: function (type, payload) { vscode.postMessage(Object.assign({ type: type }, payload || {})); },
-      on: function (handler) {
-        window.addEventListener("message", function (e) {
-          var m = e.data; if (!m || !m.type) return;
-          if (m.type === "load") handler({ type: "load", content: m.content, existed: m.existed, path: m.path });
-          else if (m.type === "default") handler({ type: "default", content: m.content });
-          else if (m.type === "saved") handler({ type: "saved" });
-          else if (m.type === "saveError") handler({ type: "error", error: m.error });
-        });
-      },
-    });
-    instance.requestInitial();
-  }
 })();

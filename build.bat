@@ -120,6 +120,16 @@ if "%B_ELECTRON%"=="1" (
     )
 )
 
+REM ---- code reuse / duplication analysis ----
+if "%SKIP_ANALYZE%"=="1" (
+    echo [build] skip reuse analysis
+) else (
+    echo.
+    echo [build] reuse / duplication analysis
+    call node scripts\analyze-reuse.js
+    if errorlevel 1 echo [warn] reuse analysis failed (non-fatal)
+)
+
 REM ---- summary ----
 echo.
 echo [build] === build done ===
