@@ -1,7 +1,7 @@
 // @ts-nocheck
 (function () {
   const vscode = acquireVsCodeApi();
-  const messagesEl = document.getElementById("messages");
+  const messagesEl = document.getElementById("messages"); // 容器，内含各 .tab-pane
   const inputEl = document.getElementById("input");
   const sendBtn = document.getElementById("sendBtn");
   const statusEl = document.getElementById("status");
@@ -11,31 +11,615 @@
   const fileMenuEl = document.getElementById("fileMenu");
   const statsBarEl = document.getElementById("statsBar");
   const changedFilesEl = document.getElementById("changedFiles");
+  const tabBarInner = document.getElementById("tabBarInner");
+  const tabBarEl = document.getElementById("tabBar");
+  let multiTab = false; // 收到 tabList / 带 tabId 的消息后置 true，显示 tab 栏
 
-  // ---- 分支树浮层 ----
-  // 点击底部「⑂ 分支」按钮，由后端拉 get_tree 后推送 treeView 事件渲染。
+  function enterMultiTab() {
+    if (multiTab) { return; }
+    multiTab = true;
+    tabBarEl.classList.remove("hidden");
+  }
+  function ensureDefaultTab() {
+    if (tabs.size === 0) {
+      const st = createTab("default", "对话");
+      activeId = "default";
+      st.paneEl.classList.add("active");
+      restoreInputState();
+      reflectTabUI();
+    } else if (!activeId) {
+      activeId = tabs.keys().next().value;
+      tabs.get(activeId).paneEl.classList.add("active");
+    }
+    return activeTab();
+  }
+
+  // ---- 分支树浮层（全局，瞬时）----
   const treeOverlay = document.getElementById("treeOverlay");
   const treeBody = document.getElementById("treeBody");
 
   function hideTree() { treeOverlay.classList.add("hidden"); }
   document.getElementById("treeBtn").addEventListener("click", () => {
-    vscode.postMessage({ type: "showTree" });
+    const tab = activeTab();
+    if (tab) { vscode.postMessage({ type: "showTree", tabId: tab.id }); }
   });
-  // 点遮罩或 Esc 关闭
-  treeOverlay.addEventListener("click", (e) => {
-    if (e.target === treeOverlay) { hideTree(); }
-  });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideTree(); });
 
-  // 把任意 entry 的 content 抽成纯文本
-  function entryText(content) {
-    if (typeof content === "string") { return content; }
-    if (Array.isArray(content)) {
-      return content.map((c) => (c && c.type === "text") ? c.text : "").join("");
-    }
-    return "";
+  // ==================== Markdown / 文件链接 / 符号链接（纯函数，与 tab 无关）====================
+  let markedReady = false;
+  function ensureMarkedHighlight() {
+    if (markedReady) { return; }
+    markedReady = true;
+    const { hljs, markedHighlight } = globalThis.hljsBundle || {};
+    if (!hljs || !markedHighlight) { return; }
+    marked.use(markedHighlight({
+      langPrefix: "hljs language-",
+      highlight(code, lang) {
+        try {
+          if (lang && hljs.getLanguage(lang)) {
+            return hljs.highlight(code, { language: lang }).value;
+          }
+          return hljs.highlight(code, { language: "plaintext" }).value;
+        } catch { return code; }
+      }
+    }));
   }
-  // 单个树节点的一行摘要
+
+  const KNOWN_EXT = new Set([
+    "js","jsx","mjs","cjs","ts","tsx","mts","cts",
+    "json","json5","jsonc","css","scss","sass","less","styl",
+    "html","htm","xhtml","md","mdx","markdown","rst","tex",
+    "py","pyi","pyw","rb","go","rs","java","c","h","cc","cpp","cxx","hpp","hxx","cs","php","swift","kt","kts","scala","clj","cljs","cljc","edn","hs","lhs","ml","mli","fs","fsx","fsi","elm","ex","exs","erl","gleam","dart","lua","pl","pm","tcl","r","jl",
+    "sh","bash","zsh","fish","bat","cmd","ps1","psm1","vim","awk",
+    "vue","svelte","astro",
+    "yml","yaml","toml","xml","svg","plist","resx",
+    "sql","graphql","gql","proto","thrift","capnp",
+    "txt","text","diff","patch","csv","tsv",
+    "png","jpg","jpeg","gif","webp","ico","bmp","tiff","avif",
+    "wasm","vsix","crx","jar","class","war","ear",
+    "tar","gz","zip","7z","rar","bz2","xz",
+    "gradle","sbt","rake","gemspec",
+    "csproj","vbproj","fsproj","vcxproj","sln","props","targets",
+    "dockerfile","containerfile","makefile","cmake","ninja",
+  ]);
+  const FILE_RE = /^((?:[\w@-]+\/)*[\w@-]+(?:\.[A-Za-z][\w-]*)+)(?::(\d+))?(?::(\d+))?$/;
+  function lastExt(p) { const i = p.lastIndexOf("."); return i < 0 ? "" : p.slice(i + 1).toLowerCase(); }
+  function isFilePathlike(path) { return KNOWN_EXT.has(lastExt(path)); }
+  function escHtml(s) { return s.replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+  const KW_DENY = new Set([
+    "if","else","for","while","do","switch","case","break","continue","return","throw","try","catch","finally","new","delete","typeof","instanceof","in","of","let","const","var","function","class","extends","super","this","self","import","export","default","from","as","async","await","yield","static","get","set","public","private","protected","readonly","interface","type","enum","namespace","module","declare","abstract","implements",
+    "true","false","null","undefined","void","any","unknown","never","string","number","boolean","object","symbol","bigint",
+    "Promise","Array","Object","String","Number","Boolean","Map","Set","Date","JSON","Math","console","window","document","globalThis","process","require","module","exports",
+  ]);
+  const IDENT_RE = /^([A-Za-z_$][\w$]*)$/;
+  function symbolLinkHTML(name, inner) {
+    return `<a class="symbol-link" href="#" data-symbol="${escHtml(name)}">${inner != null ? inner : escHtml(name)}</a>`;
+  }
+  function fileLinkHTML(path, line, col, inner) {
+    const da = escHtml(path);
+    const tail = line ? ":" + line + (col ? ":" + col : "") : "";
+    const dl = line ? ` data-line="${line}"` : "";
+    const dc = col ? ` data-col="${col}"` : "";
+    return `<a class="file-link" href="#" data-file="${da}"${dl}${dc}>${inner != null ? inner : escHtml(path) + tail}</a>`;
+  }
+  let fileLinkReady = false;
+  function ensureFileLink() {
+    if (fileLinkReady || typeof marked === "undefined") { return; }
+    fileLinkReady = true;
+    marked.use({
+      extensions: [{
+        name: "filelink",
+        level: "inline",
+        start(src) { const m = src.match(/[\w@-]*\/[\w@.-]*|\b[\w@-]*\.[A-Za-z]/); return m ? m.index : -1; },
+        tokenizer(src) {
+          const m = /^((?:[\w@-]+\/)*[\w@-]+(?:\.[A-Za-z][\w-]*)+)(?::(\d+))?(?::(\d+))?/.exec(src);
+          if (!m) { return; }
+          const path = m[1];
+          if (!isFilePathlike(path)) { return; }
+          return { type: "filelink", raw: m[0], path, line: m[2] ? parseInt(m[2], 10) : null, col: m[3] ? parseInt(m[3], 10) : null };
+        },
+        renderer(t) { return fileLinkHTML(t.path, t.line, t.col); },
+      }],
+      renderer: {
+        codespan({ text }) {
+          const m = FILE_RE.exec(text);
+          if (m && isFilePathlike(m[1])) {
+            const line = m[2] ? parseInt(m[2], 10) : null;
+            const col = m[3] ? parseInt(m[3], 10) : null;
+            const tail = line ? ":" + line + (col ? ":" + col : "") : "";
+            return `<code>${fileLinkHTML(m[1], line, col, escHtml(m[1]) + tail)}</code>`;
+          }
+          const sm = IDENT_RE.exec(text);
+          if (sm && !KW_DENY.has(sm[1]) && globalThis.__PI_HOST__ !== "electron") {
+            return `<code>${symbolLinkHTML(sm[1])}</code>`;
+          }
+          return `<code>${escHtml(text)}</code>`;
+        },
+      },
+    });
+  }
+  function renderInline(text) { ensureMarkedHighlight(); ensureFileLink(); return marked.parseInline(text, { gfm: true }); }
+  function renderMarkdown(source) { ensureMarkedHighlight(); ensureFileLink(); return marked.parse(source, { breaks: true, gfm: true }); }
+
+  const GEAR_SVG = '<span class="tool-icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M22.83,10.09 A11 11 0 0 1 22.83,13.91 L20.37,13.48 A8.5 8.5 0 0 1 18.96,16.88 A8.5 8.5 0 0 1 21.01,18.31 A11 11 0 0 1 18.31,21.01 L16.88,18.96 A8.5 8.5 0 0 1 13.48,20.37 A8.5 8.5 0 0 1 13.91,22.83 A11 11 0 0 1 10.09,22.83 L10.52,20.37 A8.5 8.5 0 0 1 7.12,18.96 A8.5 8.5 0 0 1 5.69,21.01 A11 11 0 0 1 2.99,18.31 L5.04,16.88 A8.5 8.5 0 0 1 3.63,13.48 A8.5 8.5 0 0 1 1.17,13.91 A11 11 0 0 1 1.17,10.09 L3.63,10.52 A8.5 8.5 0 0 1 5.04,7.12 A8.5 8.5 0 0 1 2.99,5.69 A11 11 0 0 1 5.69,2.99 L7.12,5.04 A8.5 8.5 0 0 1 10.52,3.63 A8.5 8.5 0 0 1 10.09,1.17 A11 11 0 0 1 13.91,1.17 L13.48,3.63 A8.5 8.5 0 0 1 16.88,5.04 A8.5 8.5 0 0 1 18.31,2.99 A11 11 0 0 1 21.01,5.69 L18.96,7.12 A8.5 8.5 0 0 1 20.37,10.52 Z"/><circle cx="12" cy="12" r="3.2"/></svg></span>';
+
+  // ==================== 全局视图选项 ====================
+  var sendKeyCombo = "enter";
+  let openFiles = [];
+  function applyViewOptions(opts) {
+    statsBarEl.classList.toggle("bar-hidden", opts.showStatsBar === false);
+    if (typeof opts.sendKey === "string") { sendKeyCombo = opts.sendKey; }
+  }
+  function isSendKey(e) {
+    if (e.key !== "Enter") { return false; }
+    switch (sendKeyCombo) {
+      case "shift+enter": return e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey;
+      case "alt+enter": return e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey;
+      case "ctrl+enter": return e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey;
+      case "enter":
+      default: return !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey;
+    }
+  }
+
+  function fmtNum(n) { if (n == null) return "0"; if (n >= 1e6) return (n / 1e6).toFixed(2) + "M"; if (n >= 1e3) return (n / 1e3).toFixed(1) + "K"; return String(n); }
+
+  // ==================== Tab 状态 ====================
+  const tabs = new Map(); // id -> state
+  let activeId = null;
+  let lastStatsSeq = 0; // 用于避免 stats 闪烁
+
+  function activeTab() { return activeId ? tabs.get(activeId) : null; }
+
+  function createTab(id, title) {
+    let st = tabs.get(id);
+    if (st) { return st; }
+    const pane = document.createElement("div");
+    pane.className = "tab-pane";
+    pane.dataset.tabId = id;
+    pane.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
+    messagesEl.appendChild(pane);  // 挂到 #messages 容器，否则消息渲染到脱离 DOM 的节点上不可见
+    pane.addEventListener("scroll", () => {
+      if (activeId !== id) { return; }
+      const wasBottom = st.stickToBottom;
+      st.stickToBottom = isNearBottomPane(st);
+      if (wasBottom && !st.stickToBottom && st.lerpRafId) {
+        cancelAnimationFrame(st.lerpRafId);
+        st.lerpRafId = 0;
+      }
+    });
+    st = {
+      id,
+      title: title || "新会话",
+      paneEl: pane,
+      currentAssistant: null,
+      currentThinking: null,
+      currentToolRow: null,
+      pendingToolCards: new Map(),
+      pendingToolTags: new Map(),
+      streaming: false,
+      piReady: false,
+      textDirty: false,
+      pendingThinkDelta: "",
+      rafId: 0,
+      lastRenderAt: 0,
+      stickToBottom: true,
+      lerpRafId: 0,
+      pendingImages: [],
+      pendingTextBlocks: [],
+      modelId: "",
+      provider: "",
+      lastStats: null,
+      changedFiles: [],
+      // 非活跃时保存的输入状态
+      inputText: "",
+      inputSelectionStart: 0,
+      inputSelectionEnd: 0,
+      inputHeight: 144,
+      autoLoadHinted: false,
+    };
+    tabs.set(id, st);
+    return st;
+  }
+
+  function hideEmptyHint(tab) {
+    const hint = tab.paneEl.querySelector(".empty-hint");
+    if (hint) { hint.remove(); }
+  }
+
+  // ==================== 滚动 ====================
+  const BOTTOM_THRESHOLD = 40;
+  function isNearBottomPane(tab) {
+    return tab.paneEl.scrollHeight - tab.paneEl.scrollTop - tab.paneEl.clientHeight <= BOTTOM_THRESHOLD;
+  }
+  function lerpScrollStep(tab) {
+    if (!tab.stickToBottom) { tab.lerpRafId = 0; return; }
+    const target = tab.paneEl.scrollHeight - tab.paneEl.clientHeight;
+    const cur = tab.paneEl.scrollTop;
+    const diff = target - cur;
+    if (Math.abs(diff) < 1) { tab.paneEl.scrollTop = target; tab.lerpRafId = 0; return; }
+    tab.paneEl.scrollTop = cur + diff * 0.3;
+    tab.lerpRafId = requestAnimationFrame(() => lerpScrollStep(tab));
+  }
+  function smoothScrollToBottom(tab) {
+    if (activeId !== tab.id) { return; } // 仅活跃 tab 需要动画
+    if (!tab.stickToBottom) { return; }
+    if (!tab.lerpRafId) { tab.lerpRafId = requestAnimationFrame(() => lerpScrollStep(tab)); }
+  }
+  function scrollToBottom(tab, force) {
+    if (force || tab.stickToBottom) {
+      if (tab.lerpRafId) { cancelAnimationFrame(tab.lerpRafId); tab.lerpRafId = 0; }
+      tab.paneEl.scrollTop = tab.paneEl.scrollHeight;
+      tab.stickToBottom = true;
+    }
+  }
+
+  // ==================== 流式渲染节流 ====================
+  function renderInterval(rawLen) {
+    if (rawLen < 4000) return 0;
+    if (rawLen < 16000) return 60;
+    if (rawLen < 64000) return 150;
+    return 300;
+  }
+  function isSelectingIn(el) {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) { return false; }
+    const range = sel.getRangeAt(0);
+    return !!(el && el.contains(range.startContainer));
+  }
+  function scheduleFlush(tab) { if (!tab.rafId) { tab.rafId = requestAnimationFrame(() => flushDeltas(tab)); } }
+  function flushDeltas(tab) {
+    tab.rafId = 0;
+    const now = performance.now();
+    if (tab.textDirty && tab.currentAssistant) {
+      const raw = tab.currentAssistant.raw || "";
+      const interval = renderInterval(raw.length);
+      if (interval > 0 && now - tab.lastRenderAt < interval) {
+        tab.rafId = requestAnimationFrame(() => flushDeltas(tab));
+      } else if (activeId === tab.id && isSelectingIn(tab.currentAssistant.el)) {
+        tab.rafId = requestAnimationFrame(() => flushDeltas(tab));
+      } else {
+        tab.currentAssistant.el.innerHTML = renderMarkdown(raw);
+        tab.lastRenderAt = now;
+        tab.textDirty = false;
+      }
+    }
+    if (tab.pendingThinkDelta && tab.currentThinking && tab.currentThinking.textNode) {
+      tab.currentThinking.textNode.appendData(tab.pendingThinkDelta);
+      tab.pendingThinkDelta = "";
+    }
+    smoothScrollToBottom(tab);
+  }
+  function cancelFlush(tab) { if (tab.rafId) { cancelAnimationFrame(tab.rafId); tab.rafId = 0; } tab.textDirty = false; tab.pendingThinkDelta = ""; }
+  function finalizeCurrentAssistant(tab) {
+    cancelFlush(tab);
+    if (tab.currentAssistant) {
+      tab.currentAssistant.el.innerHTML = renderMarkdown(tab.currentAssistant.raw || "");
+      smoothScrollToBottom(tab);
+      tab.currentAssistant = null;
+    }
+  }
+
+  // ==================== 消息 DOM ====================
+  function countLines(text) { let n = 0; for (let i = 0; i < text.length; i++) { if (text.charCodeAt(i) === 10) { n++; } } return n + 1; }
+  const LONG_MSG_PREVIEW_LINES = 30;
+  const BIG_TEXT_LINES = 200;
+  const BIG_TEXT_CHARS = 8000;
+  function shouldFoldText(text) {
+    if (typeof text !== "string" || !text) { return false; }
+    if (text.length > BIG_TEXT_CHARS) { return true; }
+    return countLines(text) > BIG_TEXT_LINES;
+  }
+  function makeLongTextBody(text) {
+    const body = document.createElement("div");
+    body.className = "long-msg";
+    const pre = document.createElement("pre");
+    const lines = text.split("\n");
+    const total = lines.length;
+    pre.textContent = lines.slice(0, LONG_MSG_PREVIEW_LINES).join("\n") + (total > LONG_MSG_PREVIEW_LINES ? "\n…" : "");
+    body.appendChild(pre);
+    if (total > LONG_MSG_PREVIEW_LINES) {
+      const toggle = document.createElement("span");
+      toggle.className = "lm-toggle";
+      toggle.textContent = "展开全部（共 " + total + " 行）";
+      let expanded = false;
+      toggle.addEventListener("click", () => {
+        expanded = !expanded;
+        if (expanded) { pre.classList.add("full"); pre.textContent = text; toggle.textContent = "收起（共 " + total + " 行）"; }
+        else { pre.classList.remove("full"); pre.textContent = lines.slice(0, LONG_MSG_PREVIEW_LINES).join("\n") + "\n…"; toggle.textContent = "展开全部（共 " + total + " 行）"; }
+      });
+      body.appendChild(toggle);
+    }
+    return body;
+  }
+
+  function addPlain(tab, cls, role, text, entryId) {
+    hideEmptyHint(tab);
+    tab.currentToolRow = null;
+    const div = document.createElement("div");
+    div.className = "msg " + cls + " msg-enter";
+    if (entryId) { div.dataset.entryId = entryId; }
+    const content = text || "";
+    if (cls === "user" && shouldFoldText(content)) {
+      div.appendChild(makeLongTextBody(content));
+    } else {
+      const body = document.createElement("div");
+      body.textContent = content;
+      div.appendChild(body);
+    }
+    tab.paneEl.appendChild(div);
+    scrollToBottom(tab);
+    return div.firstElementChild;
+  }
+  function addMarkdown(tab, raw) {
+    hideEmptyHint(tab);
+    tab.currentToolRow = null;
+    const div = document.createElement("div");
+    div.className = "msg assistant msg-enter";
+    const body = document.createElement("div");
+    body.className = "md";
+    body.innerHTML = renderMarkdown(raw || "");
+    div.appendChild(body);
+    tab.paneEl.appendChild(div);
+    scrollToBottom(tab);
+    return body;
+  }
+  function addTool(tab, toolName, argStr, toolCallId) {
+    hideEmptyHint(tab);
+    if (!tab.currentToolRow) {
+      tab.currentToolRow = document.createElement("div");
+      tab.currentToolRow.className = "msg tool-row msg-enter";
+      tab.paneEl.appendChild(tab.currentToolRow);
+    }
+    const tag = document.createElement("span");
+    tag.className = "tool" + (toolCallId ? " running" : "");
+    tag.insertAdjacentHTML("afterbegin", GEAR_SVG);
+    tag.appendChild(document.createTextNode(" " + toolName));
+    if (argStr) {
+      const argsDiv = document.createElement("span");
+      argsDiv.className = "tool-args";
+      argsDiv.textContent = argStr;
+      tag.appendChild(argsDiv);
+      tag.addEventListener("click", () => tag.classList.toggle("expanded"));
+    }
+    tab.currentToolRow.appendChild(tag);
+    if (toolCallId) { tab.pendingToolTags.set(toolCallId, tag); }
+    scrollToBottom(tab);
+  }
+  function addThinking(tab) {
+    hideEmptyHint(tab);
+    tab.currentToolRow = null;
+    const wrap = document.createElement("div");
+    wrap.className = "msg thinking collapsed msg-enter";
+    const header = document.createElement("div");
+    header.className = "thinking-header";
+    const caret = document.createElement("span"); caret.className = "thinking-caret"; caret.textContent = "▶";
+    const label = document.createElement("span"); label.className = "thinking-label"; label.textContent = "思考过程";
+    header.appendChild(caret); header.appendChild(label);
+    wrap.appendChild(header);
+    const body = document.createElement("div"); body.className = "thinking-body";
+    const textNode = document.createTextNode(""); body.appendChild(textNode);
+    wrap.appendChild(body);
+    const state = { wrap, body, textNode, raw: "", expanded: false };
+    header.addEventListener("click", () => { state.expanded = !state.expanded; wrap.classList.toggle("collapsed", !state.expanded); });
+    tab.paneEl.appendChild(wrap);
+    scrollToBottom(tab);
+    return state;
+  }
+
+  function renderDiffBlock(tab, diffText, filePath) {
+    const wrap = document.createElement("div");
+    wrap.className = "edit-diff";
+    const LINE_RE = /^([+-]?) *(\d+) (.*)$/;
+    const lines = String(diffText).split("\n");
+    for (const line of lines) {
+      const div = document.createElement("div");
+      div.className = "diff-line";
+      const prefix = line.charAt(0);
+      if (prefix === "+") div.classList.add("add");
+      else if (prefix === "-") div.classList.add("del");
+      else div.classList.add("ctx");
+      div.textContent = line;
+      const m = filePath && line.match(LINE_RE);
+      if (m && (m[1] === "+" || m[1] === "-")) {
+        const target = parseInt(m[2], 10);
+        const anchor = m[1] === "+" ? m[3] : undefined;
+        div.classList.add("jumpable");
+        div.title = "跳转到第 " + target + " 行";
+        div.addEventListener("click", () => {
+          vscode.postMessage({ type: "openEditLocation", tabId: tab.id, path: filePath, line: target, anchor });
+        });
+      }
+      wrap.appendChild(div);
+    }
+    return wrap;
+  }
+
+  function buildEditCard(tab, toolName, label, filePath, toolCallId) {
+    hideEmptyHint(tab);
+    tab.currentToolRow = null;
+    const el = document.createElement("div");
+    el.className = "msg edit-card msg-enter";
+    const title = document.createElement("div"); title.className = "edit-title";
+    const caret = document.createElement("span"); caret.className = "et-caret"; caret.textContent = "▶";
+    title.appendChild(caret);
+    const name = document.createElement("span"); name.className = "et-name"; name.textContent = toolName + " " + (label || "");
+    title.appendChild(name);
+    const loading = document.createElement("span"); loading.className = "et-loading"; loading.textContent = "…";
+    title.appendChild(loading);
+    el.appendChild(title);
+    title.addEventListener("click", (e) => { if (e.target.closest(".et-revert")) return; el.classList.toggle("collapsed"); });
+    tab.paneEl.appendChild(el);
+    scrollToBottom(tab);
+    return {
+      el,
+      setResult(msg) {
+        loading.remove();
+        if (msg.isError) {
+          el.classList.add("error");
+          const err = document.createElement("span"); err.className = "et-err"; err.textContent = msg.errorText || "失败";
+          title.appendChild(err);
+          return;
+        }
+        if (msg.diff) { el.appendChild(renderDiffBlock(tab, msg.diff, filePath)); }
+        if (msg.canRevert && toolCallId) {
+          const revertBtn = document.createElement("span"); revertBtn.className = "et-revert"; revertBtn.textContent = "↩ 回滚";
+          revertBtn.title = "将文件恢复到本次修改前的内容";
+          revertBtn.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "revertEdit", tabId: tab.id, toolCallId }); });
+          title.appendChild(revertBtn);
+        }
+      },
+      markReverted() {
+        el.classList.add("reverted");
+        const btn = title.querySelector(".et-revert"); if (btn) { btn.remove(); }
+        if (!title.querySelector(".et-reverted")) { const t = document.createElement("span"); t.className = "et-reverted"; t.textContent = "已回滚"; title.appendChild(t); }
+      },
+    };
+  }
+
+  function renderChangedFilesFor(tab) {
+    if (activeId !== tab.id) { return; }
+    changedFilesEl.innerHTML = "";
+    const files = tab.changedFiles || [];
+    if (!files.length) { return; }
+    const header = document.createElement("div"); header.className = "cf-header"; header.textContent = "本次对话修改的文件 (" + files.length + ")";
+    changedFilesEl.appendChild(header);
+    files.forEach((f) => {
+      const item = document.createElement("div"); item.className = "cf-item"; item.title = "点击查看 diff: " + f.label;
+      const name = document.createElement("span"); name.className = "cf-name";
+      const slash = f.label.lastIndexOf("/");
+      if (slash >= 0) { const dir = document.createElement("span"); dir.className = "cf-dir"; dir.textContent = f.label.slice(0, slash + 1); name.appendChild(dir); name.appendChild(document.createTextNode(f.label.slice(slash + 1))); }
+      else { name.textContent = f.label; }
+      item.appendChild(name);
+      item.addEventListener("click", () => { vscode.postMessage({ type: "openDiff", tabId: tab.id, path: f.path }); });
+      changedFilesEl.appendChild(item);
+    });
+  }
+  function renderStatsFor(tab) {
+    if (activeId !== tab.id) { return; }
+    const parts = [];
+    const cu = tab.lastStats && tab.lastStats.contextUsage;
+    if (cu && typeof cu.percent === "number") {
+      let cls = "stat";
+      if (cu.percent >= 90) { cls += " ctx-crit"; } else if (cu.percent >= 70) { cls += " ctx-hi"; }
+      const win = cu.contextWindow ? " / " + fmtNum(cu.contextWindow) : "";
+      parts.push('<span class="' + cls + '" title="上下文使用">上下文 ' + cu.percent.toFixed(1) + '% (' + fmtNum(cu.tokens) + win + ')</span>');
+    }
+    statsBarEl.innerHTML = parts.join("");
+  }
+
+  // ==================== UI 同步（活跃 tab 驱动全局控件）====================
+  function updateSendState() {
+    const tab = activeTab();
+    const streaming = !!tab && tab.streaming;
+    const piReady = !!tab && tab.piReady;
+    if (streaming) { sendBtn.disabled = false; sendBtn.textContent = "中止"; }
+    else { sendBtn.textContent = "发送"; sendBtn.disabled = !piReady; }
+  }
+  function syncStatus() {
+    const tab = activeTab();
+    const streaming = !!tab && tab.streaming;
+    const piReady = !!tab && tab.piReady;
+    if (streaming) { statusEl.innerHTML = '<span class="typing"><span></span><span></span><span></span></span> pi 正在思考…'; }
+    else if (!piReady) { statusEl.textContent = "等待 pi 启动…"; }
+    else { statusEl.textContent = ""; }
+  }
+  function syncModelBtn() {
+    const tab = activeTab();
+    const id = (tab && tab.modelId) || "";
+    const prov = (tab && tab.provider) || "";
+    modelNameEl.textContent = id || "模型";
+    modelBtn.title = "当前: " + (prov ? prov + "/" : "") + (id || "") + "（点击切换）";
+  }
+  function renderAttachmentsFor(tab) {
+    imgPreviewEl.innerHTML = "";
+    (tab.pendingImages || []).forEach((img, idx) => {
+      const wrap = document.createElement("div"); wrap.className = "img-thumb";
+      const el = document.createElement("img"); el.src = "data:" + img.mimeType + ";base64," + img.data; wrap.appendChild(el);
+      const rm = document.createElement("span"); rm.className = "rm"; rm.textContent = "×"; rm.title = "移除";
+      rm.addEventListener("click", () => { tab.pendingImages.splice(idx, 1); renderAttachmentsFor(tab); });
+      wrap.appendChild(rm); imgPreviewEl.appendChild(wrap);
+    });
+    (tab.pendingTextBlocks || []).forEach((blk, idx) => {
+      const card = document.createElement("div"); card.className = "text-block";
+      const head = document.createElement("div"); head.className = "tb-head";
+      const caret = document.createElement("span"); caret.className = "tb-caret"; caret.textContent = "▶";
+      const title = document.createElement("span"); title.className = "tb-title"; title.textContent = "📎 粘贴文本 · " + blk.lines + " 行 · " + blk.chars + " 字符";
+      head.appendChild(caret); head.appendChild(title);
+      const rm = document.createElement("span"); rm.className = "tb-rm"; rm.textContent = "×"; rm.title = "移除";
+      rm.addEventListener("click", () => { tab.pendingTextBlocks.splice(idx, 1); renderAttachmentsFor(tab); });
+      const body = document.createElement("div"); body.className = "tb-body";
+      const previewLines = blk.text.split("\n").slice(0, 400);
+      body.textContent = previewLines.join("\n") + (blk.lines > 400 ? "\n…（预览截断，完整内容随发送提交）" : "");
+      head.addEventListener("click", () => card.classList.toggle("expanded"));
+      card.appendChild(head); card.appendChild(body); card.appendChild(rm);
+      imgPreviewEl.appendChild(card);
+    });
+  }
+
+  function saveInputState() {
+    const tab = activeTab();
+    if (!tab) { return; }
+    tab.inputText = inputEl.value;
+    tab.inputSelectionStart = inputEl.selectionStart;
+    tab.inputSelectionEnd = inputEl.selectionEnd;
+    tab.inputHeight = parseInt(inputEl.style.height, 10) || 144;
+  }
+  function restoreInputState() {
+    const tab = activeTab();
+    if (!tab) { return; }
+    inputEl.value = tab.inputText || "";
+    inputEl.style.height = (tab.inputHeight || 144) + "px";
+    try {
+      inputEl.setSelectionRange(tab.inputSelectionStart || 0, tab.inputSelectionEnd || 0);
+    } catch { /* ignore */ }
+    renderAttachmentsFor(tab);
+    hideFileMenu();
+  }
+
+  function reflectTabUI() {
+    const tab = activeTab();
+    if (!tab) { return; }
+    updateSendState();
+    syncStatus();
+    syncModelBtn();
+    renderStatsFor(tab);
+    renderChangedFilesFor(tab);
+  }
+
+  // ==================== tab 切换 ====================
+  function activateTab(id) {
+    if (!tabs.has(id)) { return; }
+    if (activeId === id) { return; }
+    saveInputState();
+    // 隐藏旧 pane
+    tabs.forEach((t) => { t.paneEl.classList.remove("active"); });
+    activeId = id;
+    const tab = tabs.get(id);
+    tab.paneEl.classList.add("active");
+    restoreInputState();
+    reflectTabUI();
+    renderTabBar();
+    inputEl.focus();
+  }
+
+  // ==================== tab 栏渲染 ====================
+  function renderTabBar() {
+    tabBarInner.innerHTML = "";
+    tabs.forEach((tab) => {
+      const el = document.createElement("div");
+      el.className = "chat-tab" + (activeId === tab.id ? " active" : "") + (tab.streaming ? " streaming" : "");
+      const spinner = document.createElement("span"); spinner.className = "ct-spinner"; el.appendChild(spinner);
+      const title = document.createElement("span"); title.className = "ct-title"; title.textContent = tab.title; el.appendChild(title);
+      const close = document.createElement("span"); close.className = "ct-close"; close.textContent = "×"; close.title = "关闭此对话";
+      close.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "closeTab", tabId: tab.id }); });
+      el.appendChild(close);
+      el.addEventListener("click", () => { vscode.postMessage({ type: "switchTab", tabId: tab.id }); });
+      tabBarInner.appendChild(el);
+    });
+  }
+
+  // ==================== 树视图 ====================
+  function entryText(content) { if (typeof content === "string") { return content; } if (Array.isArray(content)) { return content.map((c) => (c && c.type === "text") ? c.text : "").join(""); } return ""; }
+  function clip(s) { s = String(s || "").replace(/\s+/g, " ").trim(); return s.length > 64 ? s.slice(0, 64) + "…" : s; }
   function entrySummary(node) {
     const e = node.entry;
     if (e.type === "message") {
@@ -59,27 +643,16 @@
     if (e.type === "custom" || e.type === "custom_message") { return "· " + e.customType; }
     return e.type;
   }
-  function clip(s) {
-    s = String(s || "").replace(/\s+/g, " ").trim();
-    return s.length > 64 ? s.slice(0, 64) + "…" : s;
-  }
-
-  // 需隐藏的节点：工具结果、bash 执行（与 pi default filter 一致），
-  // 以及模型/思考级别切换 entry、纯工具调用的 assistant 消息（无正文）。
   function isHiddenNode(node) {
     const e = node.entry;
     if (e.type === "model_change" || e.type === "thinking_level_change") { return true; }
     if (e.type === "message") {
-      const m = e.message;
-      const r = m && m.role;
+      const m = e.message; const r = m && m.role;
       if (r === "toolResult" || r === "bashExecution") { return true; }
       if (r === "assistant" && isToolCallOnlyMsg(m)) { return true; }
     }
     return false;
   }
-
-  // 纯工具调用消息：content 中含 toolCall 但没有任何文本。
-  // （中止/报错的无文本消息仍保留显示，不视为工具调用消息。）
   function isToolCallOnlyMsg(m) {
     if (!Array.isArray(m.content)) { return false; }
     let hasTool = false;
@@ -90,875 +663,101 @@
     }
     return hasTool;
   }
-
-  // 扁平化树为行：仅分叉点（多个子节点）才增加缩进，单子链保持平齐。
-  // 连接线 └─├─ 只画在分叉点的子节点上；兄弟分支用 gutter 竖线 │ 延续。
-  // 隐藏节点不渲染行，但仍透明参与子节点遍历，避免缩进断层。
   function flattenTree(roots) {
     const rows = [];
     function walk(node, indent, gutters, isLast, showConnector, connectorPos) {
       const hidden = isHiddenNode(node);
-      if (!hidden) {
-        rows.push({ node, indent, isLast, gutters: gutters.slice(), showConnector, connectorPos });
-      }
+      if (!hidden) { rows.push({ node, indent, isLast, gutters: gutters.slice(), showConnector, connectorPos }); }
       const kids = node.children || [];
       const multiple = kids.length > 1;
       const childIndent = multiple ? indent + 1 : indent;
       kids.forEach((k, i) => {
         const kIsLast = i === kids.length - 1;
-        const childShowConnector = multiple;
-        const childConnectorPos = multiple ? indent : -1;
-        const childGutters = multiple ? gutters.concat({ pos: indent, show: !kIsLast }) : gutters;
-        walk(k, childIndent, childGutters, kIsLast, childShowConnector, childConnectorPos);
+        walk(k, childIndent, multiple ? gutters.concat({ pos: indent, show: !kIsLast }) : gutters, kIsLast, multiple, multiple ? indent : -1);
       });
     }
     roots.forEach((r, i) => walk(r, 0, [], i === roots.length - 1, false, -1));
     return rows;
   }
-
-  // 收集从 leaf 到 root 的祖先 id 集（激活路径）
   function activePathSet(roots, leafId) {
     const byId = new Map();
-    function visit(node) {
-      byId.set(node.entry.id, node);
-      (node.children || []).forEach(visit);
-    }
+    function visit(node) { byId.set(node.entry.id, node); (node.children || []).forEach(visit); }
     roots.forEach(visit);
-    const set = new Set();
-    let cur = leafId;
-    while (cur) {
-      set.add(cur);
-      const n = byId.get(cur);
-      if (!n) { break; }
-      cur = n.entry.parentId ?? null;
-    }
+    const set = new Set(); let cur = leafId;
+    while (cur) { set.add(cur); const n = byId.get(cur); if (!n) { break; } cur = n.entry.parentId ?? null; }
     return set;
   }
-
-  function renderTree(tree, leafId) {
+  function renderTree(tree, leafId, tabId) {
     treeBody.innerHTML = "";
     const rows = flattenTree(tree);
     const active = activePathSet(tree, leafId);
     if (rows.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "tree-empty";
-      empty.textContent = "没有历史消息。";
-      treeBody.appendChild(empty);
-      return;
-    }
-    rows.forEach((row) => {
-      const e = row.node.entry;
-      const isLeaf = e.id === leafId;
-      const onPath = active.has(e.id);
-      // 前缀连接线：循环各层级，分叉子节点画 └─/├─，其余按 gutter 画 │ 或空
-      let prefix = "";
-      for (let lv = 0; lv < row.indent; lv++) {
-        if (row.showConnector && lv === row.connectorPos) {
-          prefix += row.isLast ? "└─ " : "├─ ";
-        } else {
-          const g = row.gutters.find((x) => x.pos === lv);
-          prefix += g && g.show ? "│  " : "   ";
+      const empty = document.createElement("div"); empty.className = "tree-empty"; empty.textContent = "没有历史消息。"; treeBody.appendChild(empty);
+    } else {
+      rows.forEach((row) => {
+        const e = row.node.entry;
+        const isLeaf = e.id === leafId;
+        const onPath = active.has(e.id);
+        let prefix = "";
+        for (let lv = 0; lv < row.indent; lv++) {
+          if (row.showConnector && lv === row.connectorPos) { prefix += row.isLast ? "└─ " : "├─ "; }
+          else { const g = row.gutters.find((x) => x.pos === lv); prefix += g && g.show ? "│  " : "   "; }
         }
-      }
-      const line = document.createElement("div");
-      line.className = "tree-row" + (isLeaf ? " is-leaf" : "") + (onPath ? " on-path" : "");
-      const pre = document.createElement("span");
-      pre.className = "tree-pre";
-      pre.textContent = prefix;
-      line.appendChild(pre);
-      const isUserMsg = e.type === "message" && e.message && e.message.role === "user";
-      const marker = document.createElement("span");
-      marker.className = "tree-mark" + (isUserMsg ? " user" : "");
-      marker.textContent = isUserMsg ? "●" : "";
-      line.appendChild(marker);
-      const text = document.createElement("span");
-      text.className = "tree-text";
-      text.textContent = entrySummary(row.node);
-      line.appendChild(text);
-      const forkable = isUserMsg && !isLeaf;
-      if (forkable) {
-        line.classList.add("forkable");
-        line.title = "点击在此处新建分支（可编辑该消息后重发）";
-        line.addEventListener("click", () => {
-          hideTree();
-          vscode.postMessage({ type: "forkAtEntry", entryId: e.id });
-        });
-      } else if (isLeaf) {
-        line.title = "当前位置（分支末尾）";
-      } else {
-        line.classList.add("readonly");
-        line.title = isUserMsg ? "当前位置的消息" : "仅展示（仅 user 消息可分叉）";
-      }
-      treeBody.appendChild(line);
-    });
-    // 滚到当前 leaf 附近
-    const leafEl = treeBody.querySelector(".tree-row.is-leaf");
-    if (leafEl) { leafEl.scrollIntoView({ block: "center" }); }
+        const line = document.createElement("div");
+        line.className = "tree-row" + (isLeaf ? " is-leaf" : "") + (onPath ? " on-path" : "");
+        const pre = document.createElement("span"); pre.className = "tree-pre"; pre.textContent = prefix; line.appendChild(pre);
+        const isUserMsg = e.type === "message" && e.message && e.message.role === "user";
+        const marker = document.createElement("span"); marker.className = "tree-mark" + (isUserMsg ? " user" : ""); marker.textContent = isUserMsg ? "●" : ""; line.appendChild(marker);
+        const text = document.createElement("span"); text.className = "tree-text"; text.textContent = entrySummary(row.node); line.appendChild(text);
+        const forkable = isUserMsg && !isLeaf;
+        if (forkable) {
+          line.classList.add("forkable"); line.title = "点击在此处新建分支（可编辑该消息后重发）";
+          line.addEventListener("click", () => { hideTree(); vscode.postMessage({ type: "forkAtEntry", tabId: tabId, entryId: e.id }); });
+        } else if (isLeaf) { line.title = "当前位置（分支末尾）"; }
+        else { line.classList.add("readonly"); line.title = isUserMsg ? "当前位置的消息" : "仅展示（仅 user 消息可分叉）"; }
+        treeBody.appendChild(line);
+      });
+      const leafEl = treeBody.querySelector(".tree-row.is-leaf");
+      if (leafEl) { leafEl.scrollIntoView({ block: "center" }); }
+    }
     treeOverlay.classList.remove("hidden");
   }
 
-  // pi 进程就绪前禁用发送按钮，避免冷启动期间点击产生困惑
-  let piReady = false;
-  // 显示选项：控制状态栏的显隐
-  var sendKeyCombo = "enter"; // enter | shift+enter | alt+enter | ctrl+enter
-  function applyViewOptions(opts) {
-    statsBarEl.classList.toggle("bar-hidden", opts.showStatsBar === false);
-    if (typeof opts.sendKey === "string") {
-      sendKeyCombo = opts.sendKey;
-    }
-  }
-
-  // 判断一次 keydown 是否匹配当前发送键组合
-  function isSendKey(e) {
-    if (e.key !== "Enter") { return false; }
-    switch (sendKeyCombo) {
-      case "shift+enter": return e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey;
-      case "alt+enter": return e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey;
-      case "ctrl+enter": return e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey;
-      case "enter":
-      default: return !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey;
-    }
-  }
-
-  // 渲染本次对话修改的文件列表
-  function renderChangedFiles(files) {
-    changedFilesEl.innerHTML = "";
-    if (!files || files.length === 0) {
-      return;
-    }
-    const header = document.createElement("div");
-    header.className = "cf-header";
-    header.textContent = "本次对话修改的文件 (" + files.length + ")";
-    changedFilesEl.appendChild(header);
-
-    files.forEach((f) => {
-      const item = document.createElement("div");
-      item.className = "cf-item";
-      item.title = "点击查看 diff: " + f.label;
-
-      const name = document.createElement("span");
-      name.className = "cf-name";
-      const slash = f.label.lastIndexOf("/");
-      if (slash >= 0) {
-        const dir = document.createElement("span");
-        dir.className = "cf-dir";
-        dir.textContent = f.label.slice(0, slash + 1);
-        name.appendChild(dir);
-        name.appendChild(document.createTextNode(f.label.slice(slash + 1)));
-      } else {
-        name.textContent = f.label;
-      }
-      item.appendChild(name);
-
-      item.addEventListener("click", () => {
-        vscode.postMessage({ type: "openDiff", path: f.path });
-      });
-      changedFilesEl.appendChild(item);
-    });
-  }
-
-  // 格式化 token 数（如 12.3K / 1.2M）
-  function fmtNum(n) {
-    if (n == null) return "0";
-    if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
-    if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
-    return String(n);
-  }
-
-  function renderStats(msg) {
-    const parts = [];
-    const cu = msg.contextUsage;
-    if (cu && typeof cu.percent === "number") {
-      let cls = "stat";
-      if (cu.percent >= 90) { cls += " ctx-crit"; }
-      else if (cu.percent >= 70) { cls += " ctx-hi"; }
-      const win = cu.contextWindow ? " / " + fmtNum(cu.contextWindow) : "";
-      parts.push(
-        '<span class="' + cls + '" title="上下文使用">上下文 ' +
-        cu.percent.toFixed(1) + '% (' + fmtNum(cu.tokens) + win + ')</span>'
-      );
-    }
-    statsBarEl.innerHTML = parts.join("");
-  }
-
-  let currentAssistant = null; // { el, raw }
-  let currentThinking = null;  // { wrap, body, textNode, raw, expanded }
-  let currentToolRow = null;   // 连续 tool 调用的 flex 容器
-  const pendingToolTags = new Map(); // toolCallId -> 标签元素（running 态）
-
-  // 8齿齿轮 SVG：外轮廓为闭合 path（齿顶圆弧+齿根圆弧交替），内圆为轴孔。
-  // viewBox 中心 (12,12) 即几何中心，旋转不偏心。currentColor 跟随文本色。
-  const GEAR_SVG = '<span class="tool-icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M22.83,10.09 A11 11 0 0 1 22.83,13.91 L20.37,13.48 A8.5 8.5 0 0 1 18.96,16.88 A8.5 8.5 0 0 1 21.01,18.31 A11 11 0 0 1 18.31,21.01 L16.88,18.96 A8.5 8.5 0 0 1 13.48,20.37 A8.5 8.5 0 0 1 13.91,22.83 A11 11 0 0 1 10.09,22.83 L10.52,20.37 A8.5 8.5 0 0 1 7.12,18.96 A8.5 8.5 0 0 1 5.69,21.01 A11 11 0 0 1 2.99,18.31 L5.04,16.88 A8.5 8.5 0 0 1 3.63,13.48 A8.5 8.5 0 0 1 1.17,13.91 A11 11 0 0 1 1.17,10.09 L3.63,10.52 A8.5 8.5 0 0 1 5.04,7.12 A8.5 8.5 0 0 1 2.99,5.69 A11 11 0 0 1 5.69,2.99 L7.12,5.04 A8.5 8.5 0 0 1 10.52,3.63 A8.5 8.5 0 0 1 10.09,1.17 A11 11 0 0 1 13.91,1.17 L13.48,3.63 A8.5 8.5 0 0 1 16.88,5.04 A8.5 8.5 0 0 1 18.31,2.99 A11 11 0 0 1 21.01,5.69 L18.96,7.12 A8.5 8.5 0 0 1 20.37,10.52 Z"/><circle cx="12" cy="12" r="3.2"/></svg></span>';
-  let streaming = false;
-
-  // 初始状态：pi 尚未就绪，禁用发送按钮并提示
-  sendBtn.disabled = true;
-  statusEl.textContent = "等待 pi 启动…";
-
-  // ---- rAF 节流：delta 只标记 dirty，按文本长度自适应渲染频率 ----
-  // 短文本每帧渲染（流畅）；长文本改为按时间间隔渲染，避免每帧对增长中的全文本
-  // 重跑 renderMarkdown + 整块 innerHTML 重建导致掉帧。streamEnd/finalize 时仍会
-  // 做一次最终全量渲染，保证定稿正确。
-  let textDirty = false;      // 文本块有待渲染
-  let pendingThinkDelta = "";  // 思考卡片纯文本增量缓冲
-  let rafId = 0;
-  let lastRenderAt = 0;        // 上次文本渲染时间戳（ms）
-  // 不同长度档位的渲染间隔（ms）。越长间隔越大，平衡流畅度与性能。
-  function renderInterval(rawLen) {
-    if (rawLen < 4000) return 0;       // ~4KB 以内：每帧渲染
-    if (rawLen < 16000) return 60;     // ~16KB 以内：约 4 帧一次
-    if (rawLen < 64000) return 150;    // ~64KB 以内：约 10 帧一次
-    return 300;                        // 超长：最低约 2 次每秒
-  }
-
-  // 用户是否正在 currentAssistant.el 内选中文本：流式渲染每帧整块重建
-  // innerHTML 会冲掉选区，导致吐字时无法选中。检测到非折叠选区落在
-  // 当前文本块内时跳过本轮刷新，保留 textDirty 待下一帧再试。
-  function isSelectingIn(el) {
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
-      return false;
-    }
-    const range = sel.getRangeAt(0);
-    if (!el || !el.contains(range.startContainer)) {
-      return false;
-    }
-    return true;
-  }
-
-  function scheduleFlush() {
-    if (rafId) return;
-    rafId = requestAnimationFrame(flushDeltas);
-  }
-
-  function flushDeltas() {
-    rafId = 0;
-    const now = performance.now();
-    if (textDirty && currentAssistant) {
-      const raw = currentAssistant.raw || "";
-      const interval = renderInterval(raw.length);
-      // 间隔未到：延后到下一帧重试，不清除 textDirty
-      if (interval > 0 && now - lastRenderAt < interval) {
-        rafId = requestAnimationFrame(flushDeltas);
-      } else if (isSelectingIn(currentAssistant.el)) {
-        // 正在选中该文本块：跳过本轮 innerHTML 重建以免冲掉选区，下帧再试
-        rafId = requestAnimationFrame(flushDeltas);
-      } else {
-        currentAssistant.el.innerHTML = renderMarkdown(raw);
-        lastRenderAt = now;
-        textDirty = false;
-      }
-    }
-    if (pendingThinkDelta && currentThinking && currentThinking.textNode) {
-      currentThinking.textNode.appendData(pendingThinkDelta);
-      pendingThinkDelta = "";
-    }
-    smoothScrollToBottom();
-  }
-
-  // 取消 pending rAF 并清空标记（定稿前调用）
-  function cancelFlush() {
-    if (rafId) {
-      cancelAnimationFrame(rafId);
-      rafId = 0;
-    }
-    textDirty = false;
-    pendingThinkDelta = "";
-  }
-
-  // 定稿当前文本块：cancel rAF → innerHTML 替换为 markdown → 置空
-  function finalizeCurrentAssistant() {
-    cancelFlush();
-    if (currentAssistant) {
-      const el = currentAssistant.el;
-      el.innerHTML = renderMarkdown(currentAssistant.raw || "");
-      smoothScrollToBottom();
-      currentAssistant = null;
-    }
-  }
-  let pendingImages = []; // [{ data, mimeType }]
-  // 粘贴的大文本以附件形式折叠展示，避免灌入 textarea 拖垮输入框
-  let pendingTextBlocks = []; // [{ text, lines, chars }]
-  // 超过该阈值即视为大文本，折叠为附件而非放入 textarea
-  const BIG_TEXT_LINES = 200;
-  const BIG_TEXT_CHARS = 8000;
-  // edit/write 工具调用卡片：toolCallId -> { el, path }
-  const pendingToolCards = new Map();
-
-  // ---------- Markdown 渲染（使用 marked + highlight.js）----------
-  // 仅配一次 marked-highlight；重复 use 会重复 hook，故缓存。
-  let markedReady = false;
-  function ensureMarkedHighlight() {
-    if (markedReady) { return; }
-    markedReady = true;
-    const { hljs, markedHighlight } = globalThis.hljsBundle || {};
-    if (!hljs || !markedHighlight) { return; }
-    marked.use(markedHighlight({
-      langPrefix: "hljs language-",
-      highlight(code, lang) {
-        try {
-          // 仅对已注册语言（cpp/typescript/python 及别名）上色，其余纯文本
-          if (lang && hljs.getLanguage(lang)) {
-            return hljs.highlight(code, { language: lang }).value;
-          }
-          return hljs.highlight(code, { language: "plaintext" }).value;
-        } catch {
-          return code;
-        }
-      }
-    }));
-  }
-
-  function renderInline(text) {
-    ensureMarkedHighlight();
-    return marked.parseInline(text, { gfm: true });
-  }
-
-  function renderMarkdown(source) {
-    ensureMarkedHighlight();
-    return marked.parse(source, { breaks: true, gfm: true });
-  }
-
-  // ---------- DOM 辅助 ----------
-  // 隐藏空状态提示
-  function hideEmptyHint() {
-    const hint = document.getElementById("emptyHint");
-    if (hint) hint.remove();
-  }
-  // 是否"黏底"：仅当用户已在底部附近时才自动滚动，避免打断向上翻看历史
-  let stickToBottom = true;
-  const BOTTOM_THRESHOLD = 40; // px
-  let lerpRafId = 0;
-
-  function isNearBottom() {
-    return (
-      messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight <=
-      BOTTOM_THRESHOLD
-    );
-  }
-
-  // 用户手动滚动时更新黏底状态；向上滚时取消进行中的 lerp
-  messagesEl.addEventListener("scroll", () => {
-    const wasBottom = stickToBottom;
-    stickToBottom = isNearBottom();
-    if (wasBottom && !stickToBottom && lerpRafId) {
-      cancelAnimationFrame(lerpRafId);
-      lerpRafId = 0;
-    }
-  });
-
-  // lerp 滚动：每帧追近目标 1/3，既有平滑惯性又快速收敛
-  function lerpScrollStep() {
-    if (!stickToBottom) { lerpRafId = 0; return; }
-    const target = messagesEl.scrollHeight - messagesEl.clientHeight;
-    const cur = messagesEl.scrollTop;
-    const diff = target - cur;
-    if (Math.abs(diff) < 1) {
-      messagesEl.scrollTop = target;
-      lerpRafId = 0;
-      return;
-    }
-    messagesEl.scrollTop = cur + diff * 0.3;
-    lerpRafId = requestAnimationFrame(lerpScrollStep);
-  }
-
-  // 启动 lerp 滚动（若已在运行则不重复启动）
-  function smoothScrollToBottom() {
-    if (!stickToBottom) return;
-    if (!lerpRafId) {
-      lerpRafId = requestAnimationFrame(lerpScrollStep);
-    }
-  }
-
-  // 强制瞬移到底（用于新消息发送等需要立刻归位的场景）
-  function scrollToBottom(force) {
-    if (force || stickToBottom) {
-      // 取消进行中的 lerp，直接归位
-      if (lerpRafId) {
-        cancelAnimationFrame(lerpRafId);
-        lerpRafId = 0;
-      }
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-      stickToBottom = true;
-    }
-  }
-
-  // 统计行数（仅对适中长度文本调用，避免超大文本重复遍历）
-  function countLines(text) {
-    let n = 0;
-    for (let i = 0; i < text.length; i++) {
-      if (text.charCodeAt(i) === 10) { n++; }
-    }
-    return n + 1;
-  }
-
-  // 预览行数：默认显示前若干行，其余折叠
-  const LONG_MSG_PREVIEW_LINES = 30;
-
-  // 构建可折叠的超长文本主体，返回 body 元素
-  function makeLongTextBody(text) {
-    const body = document.createElement("div");
-    body.className = "long-msg";
-    const pre = document.createElement("pre");
-    const lines = text.split("\n");
-    const total = lines.length;
-    pre.textContent = lines.slice(0, LONG_MSG_PREVIEW_LINES).join("\n") +
-      (total > LONG_MSG_PREVIEW_LINES ? "\n…" : "");
-    body.appendChild(pre);
-    if (total > LONG_MSG_PREVIEW_LINES) {
-      const toggle = document.createElement("span");
-      toggle.className = "lm-toggle";
-      toggle.textContent = "展开全部（共 " + total + " 行）";
-      let expanded = false;
-      toggle.addEventListener("click", () => {
-        expanded = !expanded;
-        if (expanded) {
-          pre.classList.add("full");
-          pre.textContent = text;
-          toggle.textContent = "收起（共 " + total + " 行）";
-        } else {
-          pre.classList.remove("full");
-          pre.textContent = lines.slice(0, LONG_MSG_PREVIEW_LINES).join("\n") + "\n…";
-          toggle.textContent = "展开全部（共 " + total + " 行）";
-        }
-      });
-      body.appendChild(toggle);
-    }
-    return body;
-  }
-
-  function addPlain(cls, role, text, entryId) {
-    hideEmptyHint();
-    currentToolRow = null; // 非 tool 消息重置 tool 行
-    const div = document.createElement("div");
-    div.className = "msg " + cls + " msg-enter";
-    if (entryId) { div.dataset.entryId = entryId; }
-    const content = text || "";
-    // 超长用户文本折叠展示，避免上万行撑爆消息区
-    if (cls === "user" && shouldFoldText(content)) {
-      div.appendChild(makeLongTextBody(content));
-    } else {
-      const body = document.createElement("div");
-      body.textContent = content;
-      div.appendChild(body);
-    }
-    messagesEl.appendChild(div);
-    scrollToBottom();
-    return div.firstElementChild;
-  }
-
-  // 添加工具调用标签：连续的 tool 放在同一 flex 行，排不下自动换行
-  function addTool(toolName, argStr, toolCallId) {
-    hideEmptyHint();
-    if (!currentToolRow) {
-      currentToolRow = document.createElement("div");
-      currentToolRow.className = "msg tool-row msg-enter";
-      messagesEl.appendChild(currentToolRow);
-    }
-    const tag = document.createElement("span");
-    tag.className = "tool" + (toolCallId ? " running" : "");
-    tag.insertAdjacentHTML("afterbegin", GEAR_SVG);
-    tag.appendChild(document.createTextNode(" " + toolName));
-    if (argStr) {
-      const argsDiv = document.createElement("span");
-      argsDiv.className = "tool-args";
-      argsDiv.textContent = argStr;
-      tag.appendChild(argsDiv);
-      tag.addEventListener("click", () => tag.classList.toggle("expanded"));
-    }
-    currentToolRow.appendChild(tag);
-    if (toolCallId) {
-      pendingToolTags.set(toolCallId, tag);
-    }
-    scrollToBottom();
-  }
-
-  function addMarkdown(role, raw) {
-    hideEmptyHint();
-    currentToolRow = null;
-    const div = document.createElement("div");
-    div.className = "msg assistant msg-enter";
-    const body = document.createElement("div");
-    body.className = "md";
-    body.innerHTML = renderMarkdown(raw || "");
-    div.appendChild(body);
-    messagesEl.appendChild(div);
-    scrollToBottom();
-    return body;
-  }
-
-  // 构建可折叠的思考过程卡片（默认折叠），返回 { wrap, body, raw, expanded }。
-  function addThinking() {
-    hideEmptyHint();
-    currentToolRow = null;
-    const wrap = document.createElement("div");
-    wrap.className = "msg thinking collapsed msg-enter";
-
-    const header = document.createElement("div");
-    header.className = "thinking-header";
-    const caret = document.createElement("span");
-    caret.className = "thinking-caret";
-    caret.textContent = "▶";
-    const label = document.createElement("span");
-    label.className = "thinking-label";
-    label.textContent = "思考过程";
-    header.appendChild(caret);
-    header.appendChild(label);
-    wrap.appendChild(header);
-
-    const body = document.createElement("div");
-    body.className = "thinking-body";
-    const textNode = document.createTextNode("");
-    body.appendChild(textNode);
-    wrap.appendChild(body);
-
-    const state = { wrap, body, textNode, raw: "", expanded: false };
-    header.addEventListener("click", () => {
-      state.expanded = !state.expanded;
-      wrap.classList.toggle("collapsed", !state.expanded);
-    });
-
-    messagesEl.appendChild(wrap);
-    scrollToBottom();
-    return state;
-  }
-
-  // 构建 edit/write 工具调用卡片（占位态），返回 { el, path, setResult }。
-  function buildEditCard(toolName, label, path, toolCallId) {
-    hideEmptyHint();
-    currentToolRow = null;
-    const el = document.createElement("div");
-    el.className = "msg edit-card msg-enter";
-    const title = document.createElement("div");
-    title.className = "edit-title";
-    const caret = document.createElement("span");
-    caret.className = "et-caret";
-    caret.textContent = "▶";
-    title.appendChild(caret);
-    const name = document.createElement("span");
-    name.className = "et-name";
-    name.textContent = toolName + " " + (label || "");
-    title.appendChild(name);
-    const loading = document.createElement("span");
-    loading.className = "et-loading";
-    loading.textContent = "…";
-    title.appendChild(loading);
-    el.appendChild(title);
-    // 折叠/展开
-    title.addEventListener("click", (e) => {
-      if (e.target.closest(".et-revert")) return;
-      el.classList.toggle("collapsed");
-    });
-    messagesEl.appendChild(el);
-    scrollToBottom();
-    return {
-      el,
-      path,
-      setResult(msg) {
-        loading.remove();
-        if (msg.isError) {
-          el.classList.add("error");
-          const err = document.createElement("span");
-          err.className = "et-err";
-          err.textContent = msg.errorText || "失败";
-          title.appendChild(err);
-          return;
-        }
-        if (msg.history) {
-          // 历史回放：无 diff、不可点击
-          title.style.cursor = "default";
-          return;
-        }
-        if (msg.diff) {
-          el.appendChild(renderDiffBlock(msg.diff, path));
-        }
-        // revert 按钮（仅当后端记录了快照时显示）
-        if (msg.canRevert && toolCallId) {
-          const revertBtn = document.createElement("span");
-          revertBtn.className = "et-revert";
-          revertBtn.textContent = "↩ 回滚";
-          revertBtn.title = "将文件恢复到本次修改前的内容";
-          revertBtn.addEventListener("click", (e) => {
-            e.stopPropagation(); // 不触发标题的跳转
-            vscode.postMessage({ type: "revertEdit", toolCallId });
-          });
-          title.appendChild(revertBtn);
-        }
-      },
-      // 标记为已回滚：置灰并移除回滚按钮
-      markReverted() {
-        el.classList.add("reverted");
-        const btn = title.querySelector(".et-revert");
-        if (btn) {
-          btn.remove();
-        }
-        if (!title.querySelector(".et-reverted")) {
-          const tag = document.createElement("span");
-          tag.className = "et-reverted";
-          tag.textContent = "已回滚";
-          title.appendChild(tag);
-        }
-      },
-    };
-  }
-
-  // 把 pi 的 diff 字符串渲染成红绿行块。
-  // pi diff 行格式：[+/-/空格] + 行号 + 空格 + 内容；"..." 行分隔 hunk。
-  // 变更行（+/-）可点击跳转到对应行：+ 行带新文件行号与内容锚点（容忍后续
-  // 编辑导致的行号偏移）；- 行带旧文件行号，跳到近似位置。
-  // 无行号的兼容 diff（如 write 的参数重建）不可点击，行为不变。
-  function renderDiffBlock(diffText, path) {
-    const wrap = document.createElement("div");
-    wrap.className = "edit-diff";
-    const LINE_RE = /^([+-]?) *(\d+) (.*)$/;
-    const lines = String(diffText).split("\n");
-    for (const line of lines) {
-      const div = document.createElement("div");
-      div.className = "diff-line";
-      const prefix = line.charAt(0);
-      if (prefix === "+") div.classList.add("add");
-      else if (prefix === "-") div.classList.add("del");
-      else div.classList.add("ctx");
-      div.textContent = line;
-      const m = path && line.match(LINE_RE);
-      if (m && (m[1] === "+" || m[1] === "-")) {
-        const target = parseInt(m[2], 10);
-        // 仅 + 行传内容锚点（- 行的内容已不在新文件中，锚定必然失败）
-        const anchor = m[1] === "+" ? m[3] : undefined;
-        div.classList.add("jumpable");
-        div.title = "跳转到第 " + target + " 行";
-        div.addEventListener("click", () => {
-          vscode.postMessage({ type: "openEditLocation", path, line: target, anchor });
-        });
-      }
-      wrap.appendChild(div);
-    }
-    return wrap;
-  }
-
-  // 根据 streaming / piReady 综合刷新发送按钮状态
-  function updateSendState() {
-    if (streaming) {
-      sendBtn.disabled = false;
-      sendBtn.textContent = "中止";
-    } else {
-      sendBtn.textContent = "发送";
-      sendBtn.disabled = !piReady;
-    }
-  }
-
-  function setStreaming(on) {
-    streaming = on;
-    updateSendState();
-    if (on) {
-      statusEl.innerHTML =
-        '<span class="typing"><span></span><span></span><span></span></span> pi 正在思考…';
-    } else if (!piReady) {
-      statusEl.textContent = "等待 pi 启动…";
-    } else {
-      statusEl.textContent = "";
-    }
-  }
-
-  function setPiReady(on) {
-    piReady = on;
-    updateSendState();
-    if (!streaming) {
-      statusEl.textContent = on ? "" : "等待 pi 启动…";
-    }
-  }
-
-  function renderAttachments() {
-    imgPreviewEl.innerHTML = "";
-    // 图片缩略图
-    pendingImages.forEach((img, idx) => {
-      const wrap = document.createElement("div");
-      wrap.className = "img-thumb";
-      const el = document.createElement("img");
-      el.src = "data:" + img.mimeType + ";base64," + img.data;
-      wrap.appendChild(el);
-      const rm = document.createElement("span");
-      rm.className = "rm";
-      rm.textContent = "×";
-      rm.title = "移除";
-      rm.addEventListener("click", () => {
-        pendingImages.splice(idx, 1);
-        renderAttachments();
-      });
-      wrap.appendChild(rm);
-      imgPreviewEl.appendChild(wrap);
-    });
-    // 大文本附件卡片
-    pendingTextBlocks.forEach((blk, idx) => {
-      const card = document.createElement("div");
-      card.className = "text-block";
-      const head = document.createElement("div");
-      head.className = "tb-head";
-      const caret = document.createElement("span");
-      caret.className = "tb-caret";
-      caret.textContent = "▶";
-      const title = document.createElement("span");
-      title.className = "tb-title";
-      title.textContent = "📎 粘贴文本 · " + blk.lines + " 行 · " + blk.chars + " 字符";
-      head.appendChild(caret);
-      head.appendChild(title);
-      const rm = document.createElement("span");
-      rm.className = "tb-rm";
-      rm.textContent = "×";
-      rm.title = "移除";
-      rm.addEventListener("click", () => {
-        pendingTextBlocks.splice(idx, 1);
-        renderAttachments();
-      });
-      const body = document.createElement("div");
-      body.className = "tb-body";
-      // 只预览前 400 行，避免超长 DOM 同样拖慢
-      const previewLines = blk.text.split("\n").slice(0, 400);
-      body.textContent = previewLines.join("\n") + (blk.lines > 400 ? "\n…（预览截断，完整内容随发送提交）" : "");
-      head.addEventListener("click", () => card.classList.toggle("expanded"));
-      card.appendChild(head);
-      card.appendChild(body);
-      card.appendChild(rm);
-      imgPreviewEl.appendChild(card);
-    });
-  }
-
-  // 判断粘贴文本是否应折叠为附件
-  function shouldFoldText(text) {
-    if (typeof text !== "string" || !text) { return false; }
-    const chars = text.length;
-    if (chars > BIG_TEXT_CHARS) { return true; }
-    // 行数统计：仅当字符数适中时才数行，避免超大文本重复遍历
-    return countLines(text) > BIG_TEXT_LINES;
-  }
-
-  function send() {
-    if (streaming) {
-      vscode.postMessage({ type: "abort" });
-      return;
-    }
-    if (!piReady) {
-      return; // 冷启动期间按钮已禁用；防御性返回
-    }
-    const typed = inputEl.value.trim();
-    const hasImages = pendingImages.length > 0;
-    const hasTextBlocks = pendingTextBlocks.length > 0;
-    if (!typed && !hasImages && !hasTextBlocks) {
-      return;
-    }
-    // 大文本附件用 fenced code block 包裹拼接到消息末尾，保护其格式并随发送一并提交
-    let text = typed;
-    if (hasTextBlocks) {
-      // 用 4 个反引号做外层 fence；内容里 4+ 连续反引号用零宽空格断开，避免破坏围栏
-      const parts = pendingTextBlocks.map((b) => {
-        const safeText = b.text.replace(/\u0060{4,}/g, (m) => m.split("").join("\u200b"));
-        return "````\n" + safeText + "\n````";
-      });
-      text = (typed ? typed + "\n\n" : "") + parts.join("\n\n");
-    }
-    vscode.postMessage({ type: "send", text, images: pendingImages });
-    inputEl.value = "";
-    inputEl.style.height = "144px";
-    hideFileMenu();
-    pendingImages = [];
-    pendingTextBlocks = [];
-    renderAttachments();
-  }
-
-  // ---------- 双击行内代码：修剪误选的尾随空格 ----------
-  // Chromium 的词选择会跨入 <code> 后面的文本节点，把开头空格一起选上。
-  // 双击发生在行内 code 内时，等选区稳定后把末尾的空白裁掉。
-  messagesEl.addEventListener("dblclick", (e) => {
-    const code = e.target && e.target.closest ? e.target.closest("code") : null;
-    if (!code || code.closest("pre")) { return; } // 只处理行内代码
-    setTimeout(() => {
-      const sel = window.getSelection();
-      if (!sel || sel.isCollapsed) { return; }
-      let tail = 0; // 选区末尾连续空白字符数
-      const txt = sel.toString();
-      while (tail < txt.length && /\s/.test(txt[txt.length - 1 - tail])) { tail++; }
-      if (tail === 0) { return; }
-      // 仅处理焦点落在文本节点上的正向选择（双击词选择的典型形态）
-      if (sel.focusNode && sel.focusNode.nodeType === Node.TEXT_NODE && sel.focusOffset >= tail) {
-        sel.setBaseAndExtent(sel.anchorNode, sel.anchorOffset, sel.focusNode, sel.focusOffset - tail);
-      }
-    }, 0);
-  });
-
-  // ---------- @ 文件引用 ----------
-  let openFiles = [];      // [{ label, path }] 来自扩展
-  let fileMatches = [];    // 当前过滤结果
-  let fileSel = 0;         // 高亮项索引
-  let atStart = -1;        // @ 在输入框中的位置
-
-  function hideFileMenu() {
-    fileMenuEl.classList.add("hidden");
-    atStart = -1;
-  }
-
-  // 检测光标前是否有 @token，若有则请求文件列表并显示菜单
+  // ==================== @ 文件引用 ====================
+  let fileMatches = [];
+  let fileSel = 0;
+  let atStart = -1;
+  function hideFileMenu() { fileMenuEl.classList.add("hidden"); atStart = -1; }
   function maybeShowFileMenu() {
-    // 内容过大时跳过 @ 检测，避免 slice+正则扫描拖垮输入
-    if (inputEl.value.length > BIG_TEXT_CHARS) {
-      hideFileMenu();
-      return;
-    }
+    if (inputEl.value.length > BIG_TEXT_CHARS) { hideFileMenu(); return; }
     const pos = inputEl.selectionStart;
     const before = inputEl.value.slice(0, pos);
     const m = before.match(/(^|\s)@([^\s@]*)$/);
-    if (!m) {
-      hideFileMenu();
-      return;
-    }
-    atStart = pos - m[2].length - 1; // @ 的位置
-    // 请求最新文件列表（异步返回 openFiles 事件），同时用已有列表先渲染
+    if (!m) { hideFileMenu(); return; }
+    atStart = pos - m[2].length - 1;
     vscode.postMessage({ type: "listFiles" });
     filterFiles(m[2]);
   }
-
   function filterFiles(query) {
     const q = (query || "").toLowerCase();
     fileMatches = openFiles.filter((f) => f.label.toLowerCase().includes(q)).slice(0, 20);
     fileSel = 0;
     renderFileMenu();
   }
-
   function renderFileMenu() {
-    if (fileMatches.length === 0) {
-      // 仅隐藏菜单元素，保留 atStart，以便异步到达的 openFiles 能重新渲染
-      fileMenuEl.classList.add("hidden");
-      return;
-    }
+    if (fileMatches.length === 0) { fileMenuEl.classList.add("hidden"); return; }
     fileMenuEl.innerHTML = "";
     fileMatches.forEach((f, idx) => {
-      const item = document.createElement("div");
-      item.className = "file-item" + (idx === fileSel ? " active" : "");
+      const item = document.createElement("div"); item.className = "file-item" + (idx === fileSel ? " active" : "");
       const slash = f.label.lastIndexOf("/");
-      if (slash >= 0) {
-        const dir = document.createElement("span");
-        dir.className = "dir";
-        dir.textContent = f.label.slice(0, slash + 1);
-        item.appendChild(dir);
-        item.appendChild(document.createTextNode(f.label.slice(slash + 1)));
-      } else {
-        item.textContent = f.label;
-      }
-      item.addEventListener("mousedown", (e) => {
-        e.preventDefault();
-        fileSel = idx;
-        chooseFile();
-      });
+      if (slash >= 0) { const dir = document.createElement("span"); dir.className = "dir"; dir.textContent = f.label.slice(0, slash + 1); item.appendChild(dir); item.appendChild(document.createTextNode(f.label.slice(slash + 1))); }
+      else { item.textContent = f.label; }
+      item.addEventListener("mousedown", (e) => { e.preventDefault(); fileSel = idx; chooseFile(); });
       fileMenuEl.appendChild(item);
     });
     fileMenuEl.classList.remove("hidden");
   }
-
-  function moveFileSel(delta) {
-    if (fileMatches.length === 0) return;
-    fileSel = (fileSel + delta + fileMatches.length) % fileMatches.length;
-    renderFileMenu();
-  }
-
+  function moveFileSel(delta) { if (fileMatches.length === 0) return; fileSel = (fileSel + delta + fileMatches.length) % fileMatches.length; renderFileMenu(); }
   function chooseFile() {
     const f = fileMatches[fileSel];
     if (!f || atStart < 0) { hideFileMenu(); return; }
@@ -967,250 +766,357 @@
     inputEl.value = inputEl.value.slice(0, atStart) + ref + inputEl.value.slice(pos);
     const newPos = atStart + ref.length;
     inputEl.selectionStart = inputEl.selectionEnd = newPos;
-    hideFileMenu();
-    autoResize();
-    inputEl.focus();
+    hideFileMenu(); autoResize(); inputEl.focus();
   }
 
-  // ---------- 事件绑定 ----------
-  sendBtn.addEventListener("click", send);
-  document.getElementById("newBtn").addEventListener("click", () => {
-    vscode.postMessage({ type: "newSession" });
-  });
-
-  // 新建会话快捷键 Ctrl/Cmd+Alt+N（与宿主 keybinding 互斥：宿主拦截时不会转发至此）
-  document.addEventListener("keydown", (e) => {
-    if (e.key.toLowerCase() === "n" && e.altKey && !e.shiftKey &&
-        (e.ctrlKey || e.metaKey) && !(e.ctrlKey && e.metaKey)) {
-      e.preventDefault();
-      vscode.postMessage({ type: "newSession" });
-    }
-  });
-  modelBtn.addEventListener("click", () => vscode.postMessage({ type: "pickModel" }));
-
-  // scrollHeight 包含 padding，content-box 下 height 不含 padding，
-  // 需减去 padding（6px top + 6px bottom = 12px）避免高度每次增长
+  // ==================== 发送 ====================
   function autoResize() {
-    // 内容过大时不再重测 scrollHeight（重排开销随文本量爆发），直接用上限高度
-    if (inputEl.value.length > BIG_TEXT_CHARS) {
-      inputEl.style.height = "640px";
-      return;
-    }
+    if (inputEl.value.length > BIG_TEXT_CHARS) { inputEl.style.height = "640px"; return; }
     inputEl.style.height = "auto";
     inputEl.style.height = Math.min(Math.max(inputEl.scrollHeight - 12, 144), 640) + "px";
   }
+  function shouldFoldText(text) {
+    if (typeof text !== "string" || !text) { return false; }
+    if (text.length > BIG_TEXT_CHARS) { return true; }
+    return countLines(text) > BIG_TEXT_LINES;
+  }
+  function send() {
+    const tab = activeTab();
+    if (!tab) { return; }
+    if (tab.streaming) { vscode.postMessage({ type: "abort", tabId: tab.id }); return; }
+    if (!tab.piReady) { return; }
+    const typed = inputEl.value.trim();
+    const hasImages = tab.pendingImages.length > 0;
+    const hasTextBlocks = tab.pendingTextBlocks.length > 0;
+    if (!typed && !hasImages && !hasTextBlocks) { return; }
+    let text = typed;
+    if (hasTextBlocks) {
+      const parts = tab.pendingTextBlocks.map((b) => {
+        const safeText = b.text.replace(/\u0060{4,}/g, (m) => m.split("").join("\u200b"));
+        return "````\n" + safeText + "\n````";
+      });
+      text = (typed ? typed + "\n\n" : "") + parts.join("\n\n");
+    }
+    vscode.postMessage({ type: "send", tabId: tab.id, text, images: tab.pendingImages });
+    inputEl.value = "";
+    inputEl.style.height = "144px";
+    tab.inputText = "";
+    tab.inputHeight = 144;
+    hideFileMenu();
+    tab.pendingImages = [];
+    tab.pendingTextBlocks = [];
+    renderAttachmentsFor(tab);
+  }
+
+  // ==================== 事件绑定 ====================
+  sendBtn.addEventListener("click", send);
+  document.getElementById("newBtn").addEventListener("click", () => { vscode.postMessage({ type: "newSession" }); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key.toLowerCase() === "n" && e.altKey && !e.shiftKey && (e.ctrlKey || e.metaKey) && !(e.ctrlKey && e.metaKey)) {
+      e.preventDefault(); vscode.postMessage({ type: "newSession" });
+    }
+  });
+  modelBtn.addEventListener("click", () => { const tab = activeTab(); if (tab) { vscode.postMessage({ type: "pickModel", tabId: tab.id }); } });
+
+  // 委托：文件/符号链接点击（在 #messages 容器上）
+  messagesEl.addEventListener("click", (e) => {
+    const a = e.target.closest("a.file-link");
+    if (a) { e.preventDefault(); const path = a.getAttribute("data-file"); if (!path) { return; } const line = a.dataset.line ? parseInt(a.dataset.line, 10) : undefined; const col = a.dataset.col ? parseInt(a.dataset.col, 10) : undefined; vscode.postMessage({ type: "openFile", path, line, col }); return; }
+    const s = e.target.closest("a.symbol-link");
+    if (s) { e.preventDefault(); const name = s.getAttribute("data-symbol"); if (name) { vscode.postMessage({ type: "openSymbol", name }); } return; }
+  });
+  messagesEl.addEventListener("dblclick", (e) => {
+    const code = e.target && e.target.closest ? e.target.closest("code") : null;
+    if (!code || code.closest("pre")) { return; }
+    setTimeout(() => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) { return; }
+      let tail = 0; const txt = sel.toString();
+      while (tail < txt.length && /\s/.test(txt[txt.length - 1 - tail])) { tail++; }
+      if (tail === 0) { return; }
+      if (sel.focusNode && sel.focusNode.nodeType === Node.TEXT_NODE && sel.focusOffset >= tail) {
+        sel.setBaseAndExtent(sel.anchorNode, sel.anchorOffset, sel.focusNode, sel.focusOffset - tail);
+      }
+    }, 0);
+  });
+
+  treeOverlay.addEventListener("click", (e) => { if (e.target === treeOverlay) { hideTree(); } });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { hideTree(); } });
 
   inputEl.addEventListener("keydown", (e) => {
-    // 文件菜单导航
     if (!fileMenuEl.classList.contains("hidden")) {
       if (e.key === "ArrowDown") { e.preventDefault(); moveFileSel(1); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); moveFileSel(-1); return; }
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); chooseFile(); return; }
       if (e.key === "Escape") { e.preventDefault(); hideFileMenu(); return; }
     }
-    if (isSendKey(e)) {
-      e.preventDefault();
-      send();
-    }
+    if (isSendKey(e)) { e.preventDefault(); send(); }
   });
-  inputEl.addEventListener("input", () => {
-    autoResize();
-    maybeShowFileMenu();
-  });
-  inputEl.addEventListener("blur", () => {
-    // 延迟隐藏，让点击菜单项能先触发
-    setTimeout(hideFileMenu, 150);
-  });
-
-  // 粘贴处理：图片→图片附件；超过阈值的大文本→折叠附件；其余文本→交 textarea 默认处理
+  inputEl.addEventListener("input", () => { autoResize(); maybeShowFileMenu(); });
+  inputEl.addEventListener("blur", () => { setTimeout(hideFileMenu, 150); });
   inputEl.addEventListener("paste", (e) => {
-    const cd = e.clipboardData;
-    const items = (cd && cd.items) || [];
-
-    // 先判定是否有大文本需要拦截为附件
+    const tab = activeTab(); if (!tab) { return; }
+    const cd = e.clipboardData; const items = (cd && cd.items) || [];
     let folded = false;
     for (const item of items) {
       if (item.kind === "string" && item.type === "text/plain") {
         const text = cd.getData("text/plain");
-        if (shouldFoldText(text)) {
-          e.preventDefault();
-          folded = true;
-          const lines = text.split("\n").length;
-          pendingTextBlocks.push({ text, lines, chars: text.length });
-        }
+        if (shouldFoldText(text)) { e.preventDefault(); folded = true; const lines = text.split("\n").length; tab.pendingTextBlocks.push({ text, lines, chars: text.length }); }
         break;
       }
     }
-
-    // 图片：若同时拦截了大文本则也阻止默认以免重复插入
     let handledImage = false;
     for (const item of items) {
       if (item.type && item.type.indexOf("image/") === 0) {
-        const file = item.getAsFile();
-        if (!file) {
-          continue;
-        }
-        e.preventDefault();
-        handledImage = true;
+        const file = item.getAsFile(); if (!file) { continue; }
+        e.preventDefault(); handledImage = true;
         const reader = new FileReader();
-        reader.onload = () => {
-          const result = String(reader.result || "");
-          const comma = result.indexOf(",");
-          const data = comma >= 0 ? result.slice(comma + 1) : result;
-          pendingImages.push({ data, mimeType: file.type || "image/png" });
-          renderAttachments();
-        };
+        reader.onload = () => { const result = String(reader.result || ""); const comma = result.indexOf(","); const data = comma >= 0 ? result.slice(comma + 1) : result; tab.pendingImages.push({ data, mimeType: file.type || "image/png" }); renderAttachmentsFor(tab); };
         reader.readAsDataURL(file);
       }
     }
-
-    if (folded || handledImage) {
-      renderAttachments();
-    }
+    if (folded || handledImage) { renderAttachmentsFor(tab); }
   });
 
-  // ---------- 来自扩展的消息 ----------
+  // 初始：等待扩展推送 tabList / tabActivated
+  statusEl.textContent = "等待 pi 启动…";
+  sendBtn.disabled = true;
+
+  function setStreaming(tab, on) { tab.streaming = on; if (activeId === tab.id) { updateSendState(); syncStatus(); } renderTabBar(); }
+  function setPiReady(tab, on, force) { tab.piReady = on; if (activeId === tab.id) { updateSendState(); syncStatus(); } renderTabBar(); }
+
+  // ==================== 来自扩展的消息 ====================
   window.addEventListener("message", (event) => {
     const msg = event.data;
-    switch (msg.type) {
+    const type = msg.type;
+
+    if (type === "tabList") {
+      enterMultiTab();
+      const incoming = msg.tabs || [];
+      const seen = new Set();
+      incoming.forEach((t) => {
+        seen.add(t.id);
+        let st = tabs.get(t.id);
+        if (!st) {
+          // 占位创建 pane（此时 #messages 是容器，直接 append）
+          st = createTab(t.id, t.title);
+          if (msg.activeId === t.id) {
+            // 首次出现且为 active
+          }
+        } else {
+          st.title = t.title;
+        }
+        st.streaming = !!t.streaming;
+        st.piReady = t.piReady !== false;
+      });
+      // 移除已不存在的 tab
+      Array.from(tabs.keys()).forEach((id) => {
+        if (!seen.has(id)) { removeTab(id); }
+      });
+      const wantActive = msg.activeId;
+      if (wantActive && tabs.has(wantActive)) {
+        if (activeId !== wantActive) {
+          if (activeId) { saveInputState(); }
+          tabs.forEach((t) => t.paneEl.classList.remove("active"));
+          activeId = wantActive;
+          tabs.get(wantActive).paneEl.classList.add("active");
+          restoreInputState();
+          reflectTabUI();
+        } else if (tabs.size === 1 && !tabs.get(wantActive).paneEl.classList.contains("active")) {
+          activeId = wantActive;
+          tabs.get(wantActive).paneEl.classList.add("active");
+          restoreInputState();
+          reflectTabUI();
+        }
+      }
+      renderTabBar();
+      updateSendState(); syncStatus();
+      return;
+    }
+    if (type === "tabActivated") {
+      enterMultiTab();
+      const id = msg.id;
+      if (id && tabs.has(id)) {
+        if (activeId !== id) {
+          if (activeId) { saveInputState(); }
+          tabs.forEach((t) => t.paneEl.classList.remove("active"));
+          activeId = id;
+          tabs.get(id).paneEl.classList.add("active");
+          restoreInputState();
+          reflectTabUI();
+        }
+        renderTabBar();
+      }
+      return;
+    }
+    if (type === "tabClosed") {
+      enterMultiTab();
+      removeTab(msg.id);
+      renderTabBar();
+      return;
+    }
+    if (type === "viewOptions") { applyViewOptions(msg); return; }
+    if (type === "openFiles") {
+      openFiles = msg.files || [];
+      if (atStart >= 0) {
+        const pos = inputEl.selectionStart; const before = inputEl.value.slice(0, pos);
+        const m = before.match(/(^|\s)@([^\s@]*)$/);
+        filterFiles(m ? m[2] : "");
+      }
+      return;
+    }
+
+    // tab 级消息
+    const tabId = msg.tabId;
+    let t = null;
+    if (tabId) {
+      enterMultiTab();
+      t = tabs.get(tabId) || createTab(tabId, "新会话");
+    } else {
+      // 单 tab 宿主（如 Electron）：惰性创建默认 tab
+      t = ensureDefaultTab();
+    }
+    if (!t) { return; }
+    // 安全网：多 tab 模式下若尚无活跃 tab（tabList 未到的竞态），激活当前
+    if (multiTab && !activeId) {
+      activeId = t.id;
+      t.paneEl.classList.add("active");
+      restoreInputState();
+      reflectTabUI();
+    }
+
+    switch (type) {
       case "userMessage": {
-        finalizeCurrentAssistant();
+        finalizeCurrentAssistant(t);
         const label = msg.imageCount ? "[" + msg.imageCount + " 张图片] " : "";
-        addPlain("user", "你", label + (msg.text || ""), msg.entryId);
-        currentThinking = null;
-        scrollToBottom(true); // 发送新消息时强制回到底部
+        addPlain(t, "user", "你", label + (msg.text || ""), msg.entryId);
+        t.currentThinking = null;
+        scrollToBottom(t, true);
         break;
       }
       case "streamStart":
-        setStreaming(true);
-        finalizeCurrentAssistant();
-        currentThinking = null;
+        setStreaming(t, true);
+        finalizeCurrentAssistant(t);
+        t.currentThinking = null;
         break;
       case "streamEnd":
-        // 先 flush 思考 delta（finalizeCurrentAssistant 会 cancel 所有 pending）
-        if (rafId) {
-          flushDeltas();
-        }
-        finalizeCurrentAssistant();
-        currentThinking = null;
-        setStreaming(false);
+        if (t.rafId) { flushDeltas(t); }
+        finalizeCurrentAssistant(t);
+        t.currentThinking = null;
+        setStreaming(t, false);
         break;
       case "assistantDelta":
-        if (!currentAssistant) {
-          currentAssistant = { el: addMarkdown("pi", ""), raw: "" };
-        }
-        currentAssistant.raw += msg.delta;
-        textDirty = true;
-        scheduleFlush();
+        if (!t.currentAssistant) { t.currentAssistant = { el: addMarkdown(t, ""), raw: "" }; }
+        t.currentAssistant.raw += msg.delta;
+        t.textDirty = true;
+        scheduleFlush(t);
         break;
       case "assistantFull":
-        finalizeCurrentAssistant();
-        addMarkdown("pi", msg.text);
-        currentAssistant = null;
+        finalizeCurrentAssistant(t);
+        addMarkdown(t, msg.text);
+        t.currentAssistant = null;
         break;
       case "thinkingDelta":
-        if (!currentThinking) {
-          currentThinking = addThinking();
-        }
-        currentThinking.raw += msg.delta;
-        pendingThinkDelta += msg.delta;
-        scheduleFlush();
+        if (!t.currentThinking) { t.currentThinking = addThinking(t); }
+        t.currentThinking.raw += msg.delta;
+        t.pendingThinkDelta += msg.delta;
+        scheduleFlush(t);
         break;
       case "tool": {
-        finalizeCurrentAssistant();
+        finalizeCurrentAssistant(t);
         const argStr = msg.args ? JSON.stringify(msg.args) : "";
-        addTool(msg.toolName, argStr, msg.toolCallId);
-        currentAssistant = null;
+        addTool(t, msg.toolName, argStr, msg.toolCallId);
+        t.currentAssistant = null;
         break;
       }
       case "editCardStart": {
-        finalizeCurrentAssistant();
-        const card = buildEditCard(msg.toolName, msg.label, msg.path, msg.toolCallId);
-        pendingToolCards.set(msg.toolCallId, card);
-        currentAssistant = null;
+        finalizeCurrentAssistant(t);
+        const card = buildEditCard(t, msg.toolName, msg.label, msg.path, msg.toolCallId);
+        t.pendingToolCards.set(msg.toolCallId, card);
+        t.currentAssistant = null;
         break;
       }
       case "editCardResult": {
-        const card = pendingToolCards.get(msg.toolCallId);
+        const card = t.pendingToolCards.get(msg.toolCallId);
         if (card) {
           card.setResult(msg);
-          scrollToBottom();
-          // 保留卡片引用，供后续 revert 时更新 UI（不再从 map 删除）
-          if (!msg.canRevert) {
-            pendingToolCards.delete(msg.toolCallId);
-          }
+          scrollToBottom(t);
+          if (!msg.canRevert) { t.pendingToolCards.delete(msg.toolCallId); }
         }
         break;
       }
       case "editReverted": {
-        const card = pendingToolCards.get(msg.toolCallId);
-        if (card && card.markReverted) {
-          card.markReverted();
-        }
-        pendingToolCards.delete(msg.toolCallId);
+        const card = t.pendingToolCards.get(msg.toolCallId);
+        if (card && card.markReverted) { card.markReverted(); }
+        t.pendingToolCards.delete(msg.toolCallId);
         break;
       }
       case "system":
-        addPlain("system", null, msg.text);
+        addPlain(t, "system", null, msg.text);
         break;
       case "systemError":
-        addPlain("system error", null, msg.text);
+        addPlain(t, "system error", null, msg.text);
         break;
       case "clear":
-        cancelFlush();
-        messagesEl.innerHTML = '<div id="emptyHint" class="empty-hint">输入消息开始对话…</div>';
-        statsBarEl.innerHTML = "";
-        changedFilesEl.innerHTML = "";
-        currentAssistant = null;
-        currentThinking = null;
-        pendingToolCards.clear();
-        pendingImages = [];
-        pendingTextBlocks = [];
-        renderAttachments();
-        inputEl.focus();
+        cancelFlush(t);
+        t.paneEl.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
+        t.currentAssistant = null;
+        t.currentThinking = null;
+        t.currentToolRow = null;
+        t.pendingToolCards.clear();
+        t.pendingToolTags.clear();
+        // 重置该 tab 的输入（若是活跃 tab，同步到输入框）
+        t.pendingImages = [];
+        t.pendingTextBlocks = [];
+        t.inputText = "";
+        t.inputHeight = 144;
+        if (activeId === t.id) {
+          inputEl.value = "";
+          inputEl.style.height = "144px";
+          renderAttachmentsFor(t);
+          inputEl.focus();
+        }
         break;
       case "toolResult": {
-        const tag = pendingToolTags.get(msg.toolCallId);
-        if (tag) {
-          tag.classList.remove("running");
-          if (msg.isError) {
-            tag.classList.add("error");
-          }
-          pendingToolTags.delete(msg.toolCallId);
+        const tagEl = t.pendingToolTags.get(msg.toolCallId);
+        if (tagEl) {
+          tagEl.classList.remove("running");
+          if (msg.isError) { tagEl.classList.add("error"); }
+          t.pendingToolTags.delete(msg.toolCallId);
         }
         break;
       }
       case "modelChanged":
-        modelNameEl.textContent = msg.modelId || "模型";
-        modelBtn.title = "当前: " + (msg.provider ? msg.provider + "/" : "") + (msg.modelId || "") + "（点击切换）";
+        t.modelId = msg.modelId || "";
+        t.provider = msg.provider || "";
+        if (activeId === t.id) { syncModelBtn(); }
         break;
       case "stats":
-        renderStats(msg);
+        t.lastStats = msg;
+        renderStatsFor(t);
         break;
       case "fileChanges":
-        renderChangedFiles(msg.files);
-        break;
-      case "openFiles":
-        openFiles = msg.files || [];
-        // 若菜单正开着，根据当前 @token 重新过滤
-        if (atStart >= 0) {
-          const pos = inputEl.selectionStart;
-          const before = inputEl.value.slice(0, pos);
-          const m = before.match(/(^|\s)@([^\s@]*)$/);
-          filterFiles(m ? m[2] : "");
-        }
-        break;
-      case "viewOptions":
-        applyViewOptions(msg);
+        t.changedFiles = msg.files || [];
+        renderChangedFilesFor(t);
         break;
       case "piReady":
-        setPiReady(msg.ready === true);
+        setPiReady(t, msg.ready === true);
         break;
       case "treeView":
-        renderTree(msg.tree || [], msg.leafId || null);
+        renderTree(msg.tree || [], msg.leafId || null, t.id);
         break;
     }
   });
+
+  function removeTab(id) {
+    const st = tabs.get(id);
+    if (!st) { return; }
+    cancelFlush(st);
+    if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); }
+    st.paneEl.remove();
+    tabs.delete(id);
+    if (activeId === id) { activeId = null; }
+  }
 
   vscode.postMessage({ type: "ready" });
 })();

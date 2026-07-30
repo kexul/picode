@@ -7,14 +7,36 @@
     color: var(--vscode-foreground);
     background: var(--vscode-editor-background);
   }
-  #messages { flex: 1; overflow-y: auto; padding: 8px 8px 16px; }
-  #messages::-webkit-scrollbar { width: 6px; }
-  #messages::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 3px; }
-  #messages::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground, rgba(128,128,128,0.6)); }
-  .msg { margin: 10px 0; padding: 10px 14px; word-wrap: break-word; }
-  .msg-enter { animation: msg-enter 250ms ease-out backwards; }
+  #messages { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+  .tab-pane { flex: 1; overflow-y: auto; padding: 8px 8px 16px; display: none; }
+  .tab-pane.active { display: block; }
+  .tab-pane::-webkit-scrollbar { width: 6px; }
+  .tab-pane::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 3px; }
+  .tab-pane::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground, rgba(128,128,128,0.6)); }
+
+  /* ---- tab 栏 ---- */
+  #tabBar { display: flex; align-items: center; gap: 4px; padding: 4px 6px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); flex: 0 0 auto; }
+  #tabBarInner { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  #tabBarInner::-webkit-scrollbar { display: none; }
+  .chat-tab { display: inline-flex; align-items: center; gap: 4px; max-width: 160px; padding: 3px 6px 3px 9px; border-radius: 4px 4px 0 0; cursor: pointer; white-space: nowrap; font-size: 0.85em; color: var(--vscode-foreground); opacity: 0.7; user-select: none; }
+  .chat-tab:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
+  .chat-tab.active { opacity: 1; background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.2)); }
+  .chat-tab .ct-title { overflow: hidden; text-overflow: ellipsis; }
+  .chat-tab .ct-spinner { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-charts-blue, #3794ff); display: none; }
+  .chat-tab.streaming .ct-spinner { display: inline-block; animation: pi-spin 0.9s linear infinite; }
+  @keyframes pi-spin { to { transform: rotate(360deg); } }
+  .chat-tab .ct-close { margin-left: 2px; opacity: 0.5; padding: 0 3px; border-radius: 3px; }
+  .chat-tab .ct-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
+  #tabBar.hidden { display: none; }
+  /* 正文内的文件路径可点击链接：跳转打开对应文件 */
+  .file-link { color: var(--vscode-textLink-foreground, #3794ff); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+  .file-link:hover { text-decoration: underline; opacity: 0.85; }
+  /* 函数/符号可点击链接：跳转到定义。用虚线下划点区别于文件链接 */
+  .symbol-link { color: var(--vscode-textLink-foreground, #3794ff); text-decoration: underline dotted; text-underline-offset: 2px; cursor: pointer; }
+  .symbol-link:hover { text-decoration: underline; opacity: 0.85; }
+  .msg { margin: 10px 0; padding: 10px 14px; word-wrap: break-word; }  .msg-enter { animation: msg-enter 250ms ease-out backwards; }
   @keyframes msg-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-  .user { max-width: 75%; margin-left: auto; border-radius: 12px; white-space: pre-wrap; background: color-mix(in srgb, var(--vscode-button-background) 18%, transparent); color: var(--vscode-foreground); }
+  .user { border-radius: 12px; white-space: pre-wrap; background: color-mix(in srgb, var(--vscode-button-background) 18%, transparent); color: var(--vscode-foreground); }
   .assistant { background: none; padding: 0; }
   .system { font-style: italic; opacity: 0.6; font-size: 0.85em; white-space: pre-wrap; text-align: center; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-radius: 0; margin: 12px 0; }
   .error { color: var(--vscode-errorForeground); }
@@ -99,7 +121,7 @@
   .md tr:last-child td { border-bottom: 2px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); }
   .md tbody tr { transition: background 150ms; }
   .md tbody tr:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
-  #inputArea { display: flex; flex-direction: column; padding: 8px; gap: 6px; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
+  #inputArea { display: flex; flex-direction: column; padding: 8px; gap: 6px; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); flex: 0 0 auto; }
   #imgPreview { display: flex; flex-wrap: wrap; gap: 6px; }
   #imgPreview:empty { display: none; }
   .img-thumb { position: relative; }

@@ -15,611 +15,61 @@ interface FileChange {
     before: string;
 }
 
-export class ChatViewProvider implements vscode.WebviewViewProvider {
-    public static readonly viewType = "piChat.chatView";
-
-    private view?: vscode.WebviewView;
+/**
+ * 一个并行对话 tab 的全部运行时状态：独立的 pi 进程 + 独立的会话/编辑追踪。
+ * 多个 SessionRuntime 各自持有自己的 PiClient，因此可以真正并行流式生成。
+ */
+class SessionRuntime {
+    public id: string = "";
+    public title: string = "";
+    public streaming = false;
+    public piReady = false;
     private client?: PiClient;
-    private streaming = false;
-    private piReady = false; // pi 进程是否已 spawn 成功（webview 据此启用发送按钮）
     private reqId = 0;
-    // 等待响应的命令回调，按 id 关联
     private pending = new Map<string, (resp: any) => void>();
-    // 本次对话被修改的文件，按绝对路径索引
     private fileChanges = new Map<string, FileChange>();
-    // 正在执行的编辑工具调用：toolCallId -> { path, beforeContent }
     private pendingEdits = new Map<string, { path: string; before: string }>();
-    // 已完成的编辑快照（用于单张卡片 revert）：toolCallId -> 快照
     private editSnapshots = new Map<
         string,
         { path: string; before: string; after: string }
     >();
-    // 当前活跃分支中可被 fork 的 user 消息（entryId + text），按顺序与渲染的 user 气泡对齐
     private forkEntries: { entryId: string; text: string }[] = [];
+    public currentSessionPath: string | undefined;
 
-    constructor(private readonly context: vscode.ExtensionContext) {}
-
-    // ---- 显示选项（状态栏显示开关）----
-    private static readonly KEY_SHOW_STATS = "piChat.showStatsBar";
-    private static readonly KEY_AUTO_LOAD_LAST = "piChat.autoLoadLastSession";
-    private static readonly KEY_SEND_KEY = "piChat.sendKey";
-
-    /** 合法的发送键组合。 */
-    private static readonly SEND_KEYS = ["enter", "shift+enter", "alt+enter", "ctrl+enter"] as const;
-
-    /** 本次激活是否已尝试过自动加载最近会话（避免重复加载）。 */
-    private autoLoadDone = false;
-
-    /** 当前已加载的会话文件绝对路径（供历史面板标记/联动）。 */
-    private currentSessionPath: string | undefined;
-
-    /** 供历史面板查询当前会话路径。 */
-    public getCurrentSessionPath(): string | undefined {
-        return this.currentSessionPath;
+    constructor(id: string, title: string, private readonly mgr: ChatViewProvider) {
+        this.id = id;
+        this.title = title;
     }
 
-    /** 供历史面板回调：加载指定会话并聚焦到 chat 面板。 */
-    public async loadHistorySession(file: string): Promise<void> {
-        await this.loadSession(file);
-        await vscode.commands.executeCommand("workbench.view.extension.piChatContainer");
-        await vscode.commands.executeCommand("piChat.chatView.focus");
+    /** 推送给对应 tab 的 webview 消息（自动带 tabId）。 */
+    private post(msg: Record<string, unknown>): void {
+        this.mgr.postToTab(this.id, msg);
     }
 
-    /** 状态栏默认开启。 */
-    private getShowStatsBar(): boolean {
-        return this.context.globalState.get<boolean>(ChatViewProvider.KEY_SHOW_STATS, true);
+    /** 向 webview 同步该 tab 的会话路径（用于历史面板高亮等）。 */
+    public postCurrentSession(): void {
+        this.post({ type: "sessionPath", path: this.currentSessionPath ?? null });
     }
 
-    /** 自动打开最近会话，默认关闭。 */
-    private getAutoLoadLast(): boolean {
-        return this.context.globalState.get<boolean>(ChatViewProvider.KEY_AUTO_LOAD_LAST, false);
-    }
-
-    /** 发送消息的键组合，默认 enter。 */
-    private getSendKey(): string {
-        const v = this.context.globalState.get<string>(ChatViewProvider.KEY_SEND_KEY, "enter");
-        return (ChatViewProvider.SEND_KEYS as readonly string[]).includes(v) ? v : "enter";
-    }
-
-    /** 向 webview 推送当前显示选项。 */
-    private sendViewOptions(): void {
-        this.postToWebview({
-            type: "viewOptions",
-            showStatsBar: this.getShowStatsBar(),
-            autoLoadLastSession: this.getAutoLoadLast(),
-            sendKey: this.getSendKey(),
-        });
-    }
-
-    /**
-     * 打开显示选项面板。
-     * 使用自建 QuickPick，所有选项（包括四态的发送键）都在同一个面板内点选，
-     * 点击某项即时切换并刷新，面板不关闭。
-     */
-    public async pickViewOptions(): Promise<void> {
-        type OptItem = vscode.QuickPickItem & { action: string };
-
-        const labelMap: Record<string, string> = {
-            "enter": "Enter",
-            "shift+enter": "Shift + Enter",
-            "alt+enter": "Alt + Enter",
-            "ctrl+enter": "Ctrl + Enter",
-        };
-
-        const buildItems = (): OptItem[] => {
-            const check = (on: boolean) => (on ? "$(check) " : "$(circle-large-outline) ");
-            return [
-                {
-                    action: ChatViewProvider.KEY_SHOW_STATS,
-                    label: check(this.getShowStatsBar()) + "状态栏",
-                    description: "对话框上方的 token / 上下文状态栏",
-                },
-                {
-                    action: ChatViewProvider.KEY_AUTO_LOAD_LAST,
-                    label: check(this.getAutoLoadLast()) + "启动时自动打开最近会话",
-                    description: "进入插件界面时自动加载当前工作区最近的一次会话",
-                },
-                {
-                    action: "sendKey",
-                    label: `$(keyboard) 发送键：${labelMap[this.getSendKey()]}`,
-                    description: "点击切换：Enter → Shift+Enter → Alt+Enter → Ctrl+Enter",
-                },
-            ];
-        };
-
-        const qp = vscode.window.createQuickPick<OptItem>();
-        qp.title = "显示选项";
-        qp.placeholder = "点击条目即时切换（完成后按 Esc 关闭）";
-        qp.ignoreFocusOut = true;
-        qp.items = buildItems();
-
-        qp.onDidAccept(() => {
-            const sel = qp.selectedItems[0];
-            if (!sel) {
-                return;
-            }
-            if (sel.action === "sendKey") {
-                // 四态循环切换
-                const order = ChatViewProvider.SEND_KEYS;
-                const idx = order.indexOf(this.getSendKey() as (typeof order)[number]);
-                const next = order[(idx + 1) % order.length];
-                this.context.globalState.update(ChatViewProvider.KEY_SEND_KEY, next);
-            } else {
-                // 开关取反
-                const cur =
-                    sel.action === ChatViewProvider.KEY_SHOW_STATS
-                        ? this.getShowStatsBar()
-                        : this.getAutoLoadLast();
-                this.context.globalState.update(sel.action, !cur);
-            }
-            this.sendViewOptions();
-            // 保持选中位置并刷新勾选状态
-            const activeAction = sel.action;
-            qp.items = buildItems();
-            const again = qp.items.find((i) => i.action === activeAction);
-            if (again) {
-                qp.activeItems = [again];
-            }
-        });
-
-        qp.onDidHide(() => qp.dispose());
-        qp.show();
-    }
-
-    resolveWebviewView(webviewView: vscode.WebviewView): void {
-        this.view = webviewView;
-        webviewView.webview.options = {
-            enableScripts: true,
-            localResourceRoots: [this.context.extensionUri],
-        };
-        webviewView.webview.html = getChatHtml(webviewView.webview, this.context.extensionUri);
-
-        webviewView.webview.onDidReceiveMessage((msg) => this.onWebviewMessage(msg));
-
-        webviewView.onDidDispose(() => {
-            this.stopClient();
-        });
-
-        this.startClient();
-    }
-
-    /**
-     * 由命令触发：将当前编辑器选中文本连同可选消息发送到对话框。
-     * 若无选中文本，则取光标所在行。
-     */
-    public async askSelectionAndSend(): Promise<void> {
-        const editor = vscode.window.activeTextEditor;
-        if (!editor) {
-            vscode.window.showWarningMessage("Pi Chat: 没有活动的编辑器。");
-            return;
-        }
-        const document = editor.document;
-        const selection = editor.selection;
-        const selectedText = document.getText(selection);
-        const hasSelection = !selection.isEmpty && selectedText.trim() !== "";
-        const codeText = hasSelection
-            ? selectedText
-            : document.lineAt(selection.active.line).text;
-        const fileRef = this.relativeTo(this.getCwd(), document.uri.fsPath);
-        const startLine = selection.start.line + 1;
-        const endLine = selection.end.line + 1;
-        const range =
-            startLine === endLine
-                ? `第 ${startLine} 行`
-                : `第 ${startLine}-${endLine} 行`;
-
-        const userText = await vscode.window.showInputBox({
-            title: "向 Pi Chat 发送选中文本",
-            prompt: "你的消息将连同选中的代码一起发送到 Pi Chat 对话框。",
-            placeHolder: "例如：解释这段代码、修复 bug、补充测试…（可留空直接发送选中文本）",
-            ignoreFocusOut: true,
-        });
-        if (userText === undefined) {
-            return;
-        }
-        if (userText.trim() === "" && !hasSelection) {
-            vscode.window.showWarningMessage("Pi Chat: 没有选中文本且消息为空。");
-            return;
-        }
-
-        const prefix = userText.trim() ? `${userText.trim()}\n\n` : "";
-        const prompt = `${prefix}上下文: ${fileRef} (${range})\n\n\`\`\`${document.languageId}\n${codeText}\n\`\`\`\n`;
-
-        await this.ensureViewVisible();
-        this.handleSend(prompt);
-        vscode.window.showInformationMessage("已发送到 Pi Chat 对话框。");
-    }
-
-    /** 确保聊天面板已展开可见，并在 webview 就绪后返回。 */
-    private async ensureViewVisible(): Promise<void> {
-        await vscode.commands.executeCommand("piChat.openChat");
-        for (let i = 0; i < 60; i++) {
-            if (this.view) {
-                return;
-            }
-            await new Promise((r) => setTimeout(r, 50));
-        }
-    }
-
-    /** 由命令触发：新建会话（重启 pi 进程）。 */
-    public newSession(): void {
-        // 若 pi 正在流式生成或执行工具，先中止当前 run，避免 pi 拒绝/排队 new_session。
-        this.abortActiveRun();
-        this.resetFileChanges();
-        this.currentSessionPath = undefined;
-        this.postToWebview({ type: "clear" });
-        this.postToWebview({ type: "system", text: "已开始新会话。" });
-        if (this.client && this.client.isRunning()) {
-            this.client.send({ type: "new_session" });
-        } else {
-            this.startClient();
-        }
-    }
-
-    /** 中止 pi 正在进行的流式生成或 bash 工具执行（若无则空操作）。 */
-    private abortActiveRun(): void {
-        if (this.client && this.client.isRunning() && this.streaming) {
-            // abort 中止 LLM 流式生成；abort_bash 杀掉正在运行的 bash 工具子进程。
-            // 两个都发，覆盖“等模型吐字”和“工具在跑”两种状态。
-            this.client.send({ type: "abort_bash" });
-            this.client.send({ type: "abort" });
-        }
-    }
-
-    /** 由命令触发：选择并加载历史会话。 */
-    public async pickSession(): Promise<void> {
-        const cwd = this.getCwd();
-        const sessions = await listSessions(cwd);
-        if (sessions.length === 0) {
-            vscode.window.showInformationMessage("当前工作区没有找到 pi 历史会话。");
-            return;
-        }
-        const items = sessions.map((s) => ({
-            label: s.title,
-            description: `${s.messageCount} 条消息`,
-            detail: new Date(s.mtime).toLocaleString(),
-            file: s.file,
-        }));
-        const picked = await vscode.window.showQuickPick(items, {
-            title: "选择要加载的 pi 会话",
-            placeHolder: "按最近修改时间排序",
-            matchOnDetail: true,
-        });
-        if (!picked) {
-            return;
-        }
-        await this.loadSession(picked.file);
-    }
-
-    /**
-     * 若「启动时自动打开最近会话」开关开启，则在 webview 首次就绪后
-     * 自动加载当前工作区最近修改的一次会话。每次激活只执行一次。
-     */
-    private async maybeAutoLoadLastSession(): Promise<void> {
-        if (this.autoLoadDone) {
-            return;
-        }
-        this.autoLoadDone = true;
-        if (!this.getAutoLoadLast()) {
-            return;
-        }
-        const sessions = await listSessions(this.getCwd());
-        if (sessions.length === 0) {
-            return; // 没有历史会话，保持新会话
-        }
-        // listSessions 已按最近修改时间倒序，取第一个即最近的一次
-        await this.loadSession(sessions[0].file);
-    }
-
-    /** 切换到指定会话文件并重建对话显示。 */
-    private async loadSession(file: string): Promise<void> {
-        if (!this.client || !this.client.isRunning()) {
-            this.startClient();
-        }
-        this.resetFileChanges();
-        this.postToWebview({ type: "clear" });
-        this.postToWebview({ type: "system", text: "正在加载会话…" });
-
-        const switchResp = await this.request({ type: "switch_session", sessionPath: file });
-        if (!switchResp || switchResp.success === false) {
-            this.postToWebview({
-                type: "systemError",
-                text: `加载会话失败: ${switchResp?.error ?? "未知错误"}`,
-            });
-            return;
-        }
-
-        const [msgResp, forkResp] = await Promise.all([
-            this.request({ type: "get_messages" }),
-            this.request({ type: "get_fork_messages" }),
-        ]);
-        const messages: any[] = msgResp?.data?.messages ?? [];
-        this.forkEntries = forkResp?.data?.messages ?? [];
-        this.renderMessages(messages);
-        this.currentSessionPath = file;
-        this.postToWebview({ type: "system", text: `已加载会话（${messages.length} 条消息）。` });
-        this.refreshStats();
-    }
-
-    /** 拉取对话树并推送给 webview 渲染浮层。 */
-    private async showTree(): Promise<void> {
-        const resp = await this.request({ type: "get_tree" });
-        if (!resp || resp.success === false) {
-            this.postToWebview({
-                type: "systemError",
-                text: `获取对话树失败: ${resp?.error ?? "未知错误"}`,
-            });
-            return;
-        }
-        this.postToWebview({
-            type: "treeView",
-            tree: resp.data?.tree ?? [],
-            leafId: resp.data?.leafId ?? null,
-        });
-    }
-
-    /** 从指定消息处分叉新分支，并切到新分支重渲。 */
-    private async forkFromEntry(entryId: string): Promise<void> {
-        this.abortActiveRun();
-        this.postToWebview({ type: "system", text: "正在从该消息处分叉…" });
-        const resp = await this.request({ type: "fork", entryId });
-        if (!resp || resp.success === false) {
-            this.postToWebview({
-                type: "systemError",
-                text: `分叉失败: ${resp?.error ?? "未知错误"}`,
-            });
-            return;
-        }
-        if (resp.data?.cancelled) {
-            this.postToWebview({ type: "system", text: "分叉已取消。" });
-            return;
-        }
-        // fork 成功后活跃分支已是新分支，重新拉取渲染。
-        this.resetFileChanges();
-        const [msgResp, forkResp] = await Promise.all([
-            this.request({ type: "get_messages" }),
-            this.request({ type: "get_fork_messages" }),
-        ]);
-        const messages: any[] = msgResp?.data?.messages ?? [];
-        this.forkEntries = forkResp?.data?.messages ?? [];
-        this.postToWebview({ type: "clear" });
-        this.renderMessages(messages);
-        this.postToWebview({ type: "system", text: `已分叉到新分支（${messages.length} 条消息）。` });
-        this.refreshStats();
-    }
-
-    /** 把已有消息数组渲染到 webview。 */
-    private renderMessages(messages: any[]): void {
-        // 先收集所有 toolResult（按 toolCallId 索引），用于为历史 edit 卡片重建 diff。
-        // pi 的 toolResult 是独立消息：toolCallId/details 在消息顶层，content 是文本块。
-        const toolResults = new Map<string, any>();
-        for (const m of messages) {
-            if (m && m.role === "toolResult" && typeof m.toolCallId === "string") {
-                toolResults.set(m.toolCallId, m);
-            }
-        }
-        let userIndex = 0;
-        for (const m of messages) {
-            switch (m.role) {
-                case "user":
-                    this.postToWebview({
-                        type: "userMessage",
-                        text: this.textOf(m.content),
-                        entryId: this.forkEntries[userIndex]?.entryId,
-                    });
-                    userIndex++;
-                    break;
-                case "assistant": {
-                    const parts = Array.isArray(m.content) ? m.content : [];
-                    let text = "";
-                    for (const c of parts) {
-                        if (c.type === "text") {
-                            text += c.text;
-                        } else if (c.type === "toolCall") {
-                            if (text.trim()) {
-                                this.postToWebview({ type: "assistantFull", text });
-                                text = "";
-                            }
-                            // edit/write 历史卡片：重建 diff 并允许展开 / 跳转（不提供回滚）
-                            if (c.name === "edit" || c.name === "write") {
-                                const p = this.editToolPath(c.name, c.arguments);
-                                const id = c.id || `hist-${Math.random()}`;
-                                this.postToWebview({
-                                    type: "editCardStart",
-                                    toolCallId: id,
-                                    toolName: c.name,
-                                    path: p || "",
-                                    label: p ? this.relativeTo(this.getCwd(), p) : "",
-                                });
-                                this.postToWebview({
-                                    type: "editCardResult",
-                                    toolCallId: id,
-                                    diff: this.historyEditInfo(c, toolResults.get(id)),
-                                    // 历史卡片不提供回滚（缺少可靠的“修改前”磁盘快照），
-                                    // 但仍可展开查看 diff 并跳转到当前文件位置。
-                                    canRevert: false,
-                                });
-                            } else {
-                                this.postToWebview({
-                                    type: "tool",
-                                    toolName: c.name,
-                                    args: c.arguments,
-                                });
-                            }
-                        }
-                    }
-                    if (text.trim()) {
-                        this.postToWebview({ type: "assistantFull", text });
-                    }
-                    break;
-                }
-                // toolResult / bashExecution 等不在对话气泡中展示
-            }
-        }
-    }
-
-    private textOf(content: unknown): string {
-        if (typeof content === "string") {
-            return content;
-        }
-        if (Array.isArray(content)) {
-            return content.map((c: any) => (c.type === "text" ? c.text : "")).join("");
-        }
-        return "";
-    }
-
-    /** 发送需要响应的命令，返回带 id 的响应。 */
-    private request(cmd: Record<string, unknown>): Promise<any> {
-        return new Promise((resolve) => {
-            if (!this.client || !this.client.isRunning()) {
-                resolve(undefined);
-                return;
-            }
-            const id = `req-${++this.reqId}`;
-            this.pending.set(id, resolve);
-            const timer = setTimeout(() => {
-                if (this.pending.has(id)) {
-                    this.pending.delete(id);
-                    resolve(undefined);
-                }
-            }, 15000);
-            const wrapped = (resp: any) => {
-                clearTimeout(timer);
-                resolve(resp);
-            };
-            this.pending.set(id, wrapped);
-            try {
-                this.client.send({ ...cmd, id });
-            } catch {
-                this.pending.delete(id);
-                clearTimeout(timer);
-                resolve(undefined);
-            }
-        });
-    }
-
-    private getConfig() {
-        const cfg = vscode.workspace.getConfiguration("piChat");
-        return {
-            piPath: cfg.get<string>("piPath", "pi"),
-            provider: cfg.get<string>("provider", ""),
-            model: cfg.get<string>("model", ""),
-            extraArgs: cfg.get<string[]>("extraArgs", []),
-            trustProject: cfg.get<boolean>("trustProject", true),
-        };
-    }
-
-    private getCwd(): string {
-        const folders = vscode.workspace.workspaceFolders;
-        if (folders && folders.length > 0) {
-            return folders[0].uri.fsPath;
-        }
-        return process.cwd();
-    }
-
-    /**
-     * 检查 pi 可执行文件是否能找到。
-     * - 若 piPath 含路径分隔符，直接按文件是否存在判断；
-     * - 否则在 PATH 中搜索（Windows 下考虑 PATHEXT）。
-     * 找不到时弹出提示并返回 false。
-     */
-    private checkPiAvailable(piPath: string): boolean {
-        if (this.resolveExecutable(piPath)) {
-            return true;
-        }
-        const msg = `未找到 pi 可执行文件（当前配置："${piPath}"）。请确认已安装 pi 并加入系统 PATH，或在设置中指定 piChat.piPath 为完整路径。`;
-        this.postToWebview({ type: "systemError", text: msg });
-        vscode.window
-            .showErrorMessage(msg, "打开设置")
-            .then((choice) => {
-                if (choice === "打开设置") {
-                    vscode.commands.executeCommand(
-                        "workbench.action.openSettings",
-                        "piChat.piPath"
-                    );
-                }
-            });
-        return false;
-    }
-
-    /** 解析可执行文件的实际路径，找不到返回 undefined。 */
-    private resolveExecutable(cmd: string): string | undefined {
-        if (!cmd) {
-            return undefined;
-        }
-        const isWindows = process.platform === "win32";
-        const exts = isWindows
-            ? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
-            : [""];
-
-        const existsAsFile = (p: string): boolean => {
-            try {
-                return fs.statSync(p).isFile();
-            } catch {
-                return false;
-            }
-        };
-        const tryWithExts = (base: string): string | undefined => {
-            // 已带后缀（或非 Windows）时直接判断
-            if (existsAsFile(base)) {
-                return base;
-            }
-            if (isWindows) {
-                for (const ext of exts) {
-                    const withExt = base + ext.toLowerCase();
-                    if (existsAsFile(withExt)) {
-                        return withExt;
-                    }
-                    const withExtUpper = base + ext;
-                    if (existsAsFile(withExtUpper)) {
-                        return withExtUpper;
-                    }
-                }
-            }
-            return undefined;
-        };
-
-        // 含路径分隔符：当作具体路径处理
-        if (cmd.includes("/") || cmd.includes("\\")) {
-            const abs = path.isAbsolute(cmd) ? cmd : path.resolve(this.getCwd(), cmd);
-            return tryWithExts(abs);
-        }
-
-        // 否则在 PATH 中逐目录搜索
-        const pathEnv = process.env.PATH || process.env.Path || "";
-        const sep = isWindows ? ";" : ":";
-        for (const dir of pathEnv.split(sep).filter(Boolean)) {
-            const found = tryWithExts(path.join(dir, cmd));
-            if (found) {
-                return found;
-            }
-        }
-        return undefined;
-    }
-
-    private startClient(): void {
+    /** 启动该 tab 的 pi 进程。 */
+    public startClient(): void {
         if (this.client && this.client.isRunning()) {
             return;
         }
-        // 进入启动中状态：发送按钮先禁用，待 spawn 成功后再启用
         this.setPiReady(false);
-        const cfg = this.getConfig();
+        const cfg = this.mgr.getConfig();
 
-        // 启动前检查 pi 是否可用（不在 PATH 中 / 路径错误时给出明确提示）。
-        if (!this.checkPiAvailable(cfg.piPath)) {
+        if (!this.mgr.checkPiAvailable(cfg.piPath, this)) {
             return;
         }
 
-        // --mode rpc 为非交互模式，pi 不会弹项目信任提示；默认 ask 行为会静默忽略
-        // 项目级 .pi/skills、.agents/skills、.pi/settings.json 等资源。
-        // 作为 IDE 集成，用户已将工作区打开在 VSCode，默认显式信任项目（--approve）。
         const extraArgs = cfg.trustProject
             ? [...cfg.extraArgs, "--approve"]
             : cfg.extraArgs;
 
         this.client = new PiClient({
             piPath: cfg.piPath,
-            cwd: this.getCwd(),
+            cwd: this.mgr.getCwd(),
             provider: cfg.provider || undefined,
             model: cfg.model || undefined,
             extraArgs,
@@ -632,14 +82,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             console.error("[pi stderr]", text);
         });
         this.client.on("error", (err: Error) => {
-            this.postToWebview({ type: "systemError", text: `pi 错误: ${err.message}` });
+            this.post({ type: "systemError", text: `pi 错误: ${err.message}` });
         });
         this.client.on("exit", (code: number | null) => {
             this.streaming = false;
-            this.postToWebview({ type: "streamEnd" });
-            // 进程退出后重新允许发送（发送时会自动重启 pi）
+            this.post({ type: "streamEnd" });
+            this.mgr.broadcastTabList();
             this.setPiReady(true);
-            this.postToWebview({
+            this.post({
                 type: "system",
                 text: `pi 进程已退出（code=${code}）。发送消息会自动重启。`,
             });
@@ -647,185 +97,65 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         try {
             this.client.start();
-            // spawn 成功即视为可用：pi 会自行缓冲 stdin 命令，启动期间的请求等就绪后处理
             this.setPiReady(true);
-            this.postToWebview({ type: "system", text: "pi 已启动，可以开始对话。" });
+            this.post({ type: "system", text: "pi 已启动，可以开始对话。" });
+            this.mgr.broadcastTabList();
+            void this.sendCurrentModel();
+            void this.refreshStats();
         } catch (e: any) {
-            this.postToWebview({ type: "systemError", text: `无法启动 pi: ${e.message}` });
+            this.post({ type: "systemError", text: `无法启动 pi: ${e.message}` });
         }
     }
 
-    /** 更新 pi 就绪状态并同步给 webview（控制发送按钮启用/禁用）。 */
-    private setPiReady(ready: boolean): void {
-        this.piReady = ready;
-        this.postToWebview({ type: "piReady", ready });
-    }
-
-    private stopClient(): void {
+    public stopClient(): void {
         if (this.client) {
             this.client.stop();
             this.client = undefined;
         }
     }
 
-    // ---- Webview -> 扩展 ----
-    private onWebviewMessage(msg: any): void {
-        switch (msg.type) {
-            case "send":
-                this.handleSend(msg.text, msg.images);
-                break;
-            case "newSession":
-                this.newSession();
-                break;
-            case "abort":
-                // 与 newSession 共用：中止 LLM 流式生成 + bash 工具子进程。
-                this.abortActiveRun();
-                break;
-            case "showTree":
-                void this.showTree();
-                break;
-            case "forkAtEntry":
-                if (typeof msg.entryId === "string") {
-                    this.forkFromEntry(msg.entryId);
-                }
-                break;
-            case "pickModel":
-                this.pickModel();
-                break;
-            case "listFiles":
-                this.sendOpenFiles();
-                break;
-            case "openDiff":
-                if (typeof msg.path === "string") {
-                    this.openDiff(msg.path);
-                }
-                break;
-            case "openEditLocation":
-                if (typeof msg.path === "string" && typeof msg.anchor === "string" && msg.anchor) {
-                    // diff 行点击：按行内容锚点在当前文件中重定位（容忍后续编辑行号偏移）
-                    this.openEditLocationWithAnchor(
-                        msg.path,
-                        typeof msg.line === "number" ? msg.line : 1,
-                        msg.anchor
-                    );
-                } else if (typeof msg.path === "string") {
-                    this.openEditLocation(msg.path, typeof msg.line === "number" ? msg.line : 1);
-                }
-                break;
-            case "revertEdit":
-                if (typeof msg.toolCallId === "string") {
-                    this.revertEdit(msg.toolCallId);
-                }
-                break;
-            case "ready":
-                // Webview 加载完成：并行拉取初始状态，避免串行等待叠加延迟/超时
-                this.sendViewOptions();
-                // 回送当前 pi 就绪状态（webview 默认禁用，避免冷启动期间按钮误以为可用）
-                this.postToWebview({ type: "piReady", ready: this.piReady });
-                void Promise.all([this.sendCurrentModel(), this.refreshStats()]);
-                this.maybeAutoLoadLastSession();
-                break;
-        }
+    public isRunning(): boolean {
+        return !!this.client && this.client.isRunning();
     }
 
-    /** 列出可用模型并让用户选择切换。 */
-    private async pickModel(): Promise<void> {
-        if (!this.client || !this.client.isRunning()) {
-            this.startClient();
-        }
-        const resp = await this.request({ type: "get_available_models" });
-        const models: any[] = resp?.data?.models ?? [];
-        if (models.length === 0) {
-            vscode.window.showInformationMessage("没有可用模型（请确认 pi 已鉴权、models.json 已配置）。");
-            return;
-        }
-        const items = models.map((m) => ({
-            label: m.id,
-            description: m.provider ? `${m.provider}${m.name && m.name !== m.id ? " · " + m.name : ""}` : (m.name || ""),
-            detail: m.contextWindow ? `上下文 ${Math.round(m.contextWindow / 1000)}K` : undefined,
-            model: m,
-        }));
-        const picked = await vscode.window.showQuickPick(items, {
-            title: "切换模型",
-            placeHolder: "选择要使用的模型",
-            matchOnDescription: true,
-        });
-        if (!picked) {
-            return;
-        }
-        const setResp = await this.request({
-            type: "set_model",
-            provider: picked.model.provider,
-            modelId: picked.model.id,
-        });
-        if (setResp?.success === false) {
-            this.postToWebview({ type: "systemError", text: `切换模型失败: ${setResp.error}` });
-        } else {
-            const m = setResp?.data ?? picked.model;
-            this.postToWebview({ type: "modelChanged", modelId: m.id, provider: m.provider });
-            this.postToWebview({ type: "system", text: `已切换模型: ${m.id}` });
-            // 持久化到 VS Code 设置，下次启动 pi 时自动使用该模型
-            const cfg = vscode.workspace.getConfiguration("piChat");
-            cfg.update("provider", m.provider || "", vscode.ConfigurationTarget.Global);
-            cfg.update("model", m.id || "", vscode.ConfigurationTarget.Global);
-        }
+    private setPiReady(ready: boolean): void {
+        this.piReady = ready;
+        this.post({ type: "piReady", ready });
+        this.mgr.broadcastTabList();
     }
 
-    /** 获取当前模型并告知 webview（用于初始显示）。 */
-    private async sendCurrentModel(): Promise<void> {
+    /** 发送当前模型信息给 webview。 */
+    public async sendCurrentModel(): Promise<void> {
         const resp = await this.request({ type: "get_state" });
         const model = resp?.data?.model;
         if (model && model.id) {
-            this.postToWebview({ type: "modelChanged", modelId: model.id, provider: model.provider });
+            this.post({ type: "modelChanged", modelId: model.id, provider: model.provider });
         }
     }
 
-    /** 将 VSCode 当前打开的文件列表发给 webview（用于 @ 引用补全）。 */
-    private sendOpenFiles(): void {
-        const cwd = this.getCwd();
-        const files: Array<{ label: string; path: string }> = [];
-        const seen = new Set<string>();
-
-        const add = (uri: vscode.Uri) => {
-            if (uri.scheme !== "file") {
-                return;
-            }
-            const full = uri.fsPath;
-            if (seen.has(full)) {
-                return;
-            }
-            seen.add(full);
-            const rel = this.relativeTo(cwd, full);
-            files.push({ label: rel, path: full });
-        };
-
-        // 当前活动编辑器优先
-        if (vscode.window.activeTextEditor) {
-            add(vscode.window.activeTextEditor.document.uri);
+    /** 中止该 tab 正在进行的生成 + bash 工具。 */
+    public abortActiveRun(): void {
+        if (this.client && this.client.isRunning() && this.streaming) {
+            this.client.send({ type: "abort_bash" });
+            this.client.send({ type: "abort" });
         }
-        // 所有打开的标签页
-        for (const group of vscode.window.tabGroups.all) {
-            for (const tab of group.tabs) {
-                const input: any = tab.input;
-                if (input && input.uri instanceof vscode.Uri) {
-                    add(input.uri);
-                }
-            }
-        }
-        this.postToWebview({ type: "openFiles", files });
     }
 
-    private relativeTo(cwd: string, full: string): string {
-        const norm = (s: string) => s.replace(/\\/g, "/");
-        const c = norm(cwd).replace(/\/$/, "") + "/";
-        const f = norm(full);
-        if (f.toLowerCase().startsWith(c.toLowerCase())) {
-            return f.slice(c.length);
+    /** 在该 tab 内重置为新会话（保留进程，发 new_session）。 */
+    public resetSession(): void {
+        this.abortActiveRun();
+        this.resetFileChanges();
+        this.currentSessionPath = undefined;
+        this.post({ type: "clear" });
+        this.post({ type: "system", text: "已开始新会话。" });
+        if (this.client && this.client.isRunning()) {
+            this.client.send({ type: "new_session" });
+        } else {
+            this.startClient();
         }
-        return full;
     }
 
-    private handleSend(text: string, images?: Array<{ data: string; mimeType: string }>): void {
+    public handleSend(text: string, images?: Array<{ data: string; mimeType: string }>): void {
         const hasImages = Array.isArray(images) && images.length > 0;
         if ((!text || !text.trim()) && !hasImages) {
             return;
@@ -833,7 +163,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (!this.client || !this.client.isRunning()) {
             this.startClient();
         }
-        this.postToWebview({
+        this.post({
             type: "userMessage",
             text,
             imageCount: hasImages ? images!.length : 0,
@@ -847,23 +177,55 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 mimeType: img.mimeType,
             }));
         }
-        // 若正在流式生成，将消息作为 steering 排队
         if (this.streaming) {
             cmd.streamingBehavior = "steer";
         }
         try {
             this.client!.send(cmd);
         } catch (e: any) {
-            this.postToWebview({ type: "systemError", text: `发送失败: ${e.message}` });
+            this.post({ type: "systemError", text: `发送失败: ${e.message}` });
         }
     }
 
-    // ---- pi -> Webview ----
+    /** 发送需要响应的命令，返回带 id 的响应。 */
+    public request(cmd: Record<string, unknown>): Promise<any> {
+        return new Promise((resolve) => {
+            if (!this.client || !this.client.isRunning()) {
+                resolve(undefined);
+                return;
+            }
+            const id = `req-${++this.reqId}`;
+            const timer = setTimeout(() => {
+                if (this.pending.has(id)) {
+                    this.pending.delete(id);
+                    resolve(undefined);
+                }
+            }, 15000);
+            const cb = (resp: any) => {
+                clearTimeout(timer);
+                if (this.pending.has(id)) {
+                    this.pending.delete(id);
+                }
+                resolve(resp);
+            };
+            this.pending.set(id, cb);
+            try {
+                this.client!.send({ ...cmd, id });
+            } catch {
+                this.pending.delete(id);
+                clearTimeout(timer);
+                resolve(undefined);
+            }
+        });
+    }
+
+    // ---- pi 事件 ----
     private onPiEvent(evt: any): void {
         switch (evt.type) {
             case "agent_start":
                 this.streaming = true;
-                this.postToWebview({ type: "streamStart" });
+                this.post({ type: "streamStart" });
+                this.mgr.broadcastTabList();
                 break;
             case "message_update": {
                 const a = evt.assistantMessageEvent;
@@ -871,9 +233,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                     break;
                 }
                 if (a.type === "text_delta") {
-                    this.postToWebview({ type: "assistantDelta", delta: a.delta });
+                    this.post({ type: "assistantDelta", delta: a.delta });
                 } else if (a.type === "thinking_delta") {
-                    this.postToWebview({ type: "thinkingDelta", delta: a.delta });
+                    this.post({ type: "thinkingDelta", delta: a.delta });
                 }
                 break;
             }
@@ -888,27 +250,78 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             case "agent_settled":
             case "agent_end":
                 this.streaming = false;
-                this.postToWebview({ type: "streamEnd" });
+                this.post({ type: "streamEnd" });
                 this.refreshStats();
+                this.mgr.broadcastTabList();
                 break;
         }
     }
 
-    /** edit/write 工具开始：推送 edit 卡片占位。其他工具走原 tool 行。 */
+    private onPiResponse(resp: any): void {
+        if (resp.id && this.pending.has(resp.id)) {
+            const cb = this.pending.get(resp.id)!;
+            this.pending.delete(resp.id);
+            cb(resp);
+            return;
+        }
+        if (resp.success === false && resp.error) {
+            this.post({ type: "systemError", text: `pi: ${resp.error}` });
+        }
+    }
+
+    private onPiUiRequest(req: any): void {
+        const respond = (payload: Record<string, unknown>) => {
+            if (this.client && this.client.isRunning()) {
+                this.client.send({ type: "extension_ui_response", id: req.id, ...payload });
+            }
+        };
+        switch (req.method) {
+            case "confirm":
+                vscode.window
+                    .showInformationMessage(
+                        `${req.title ?? "确认"}\n${req.message ?? ""}`,
+                        { modal: true },
+                        "是",
+                        "否"
+                    )
+                    .then((choice) => respond({ confirmed: choice === "是" }));
+                break;
+            case "select":
+                vscode.window
+                    .showQuickPick(req.options ?? [], { title: req.title })
+                    .then((value) =>
+                        value === undefined ? respond({ cancelled: true }) : respond({ value })
+                    );
+                break;
+            case "input":
+            case "editor":
+                vscode.window
+                    .showInputBox({ title: req.title, placeHolder: req.placeholder, value: req.prefill })
+                    .then((value) =>
+                        value === undefined ? respond({ cancelled: true }) : respond({ value })
+                    );
+                break;
+            case "notify":
+                this.post({ type: "system", text: String(req.message ?? "") });
+                break;
+        }
+    }
+
+    // ---- 工具追踪 / diff ----
     private onToolStart(evt: any): void {
         const toolName: string = evt.toolName;
         const isEditLike = toolName === "edit" || toolName === "write";
-        const path = isEditLike ? this.editToolPath(toolName, evt.args) : null;
-        if (path && evt.toolCallId) {
-            this.postToWebview({
+        const p = isEditLike ? this.editToolPath(toolName, evt.args) : null;
+        if (p && evt.toolCallId) {
+            this.post({
                 type: "editCardStart",
                 toolCallId: evt.toolCallId,
                 toolName,
-                path,
-                label: this.relativeTo(this.getCwd(), path),
+                path: p,
+                label: this.mgr.relativeTo(this.mgr.getCwd(), p),
             });
         } else {
-            this.postToWebview({
+            this.post({
                 type: "tool",
                 toolCallId: evt.toolCallId,
                 toolName,
@@ -917,12 +330,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    /** 工具结束：edit/write 回填 diff；其他工具推送状态用于取消流光。 */
     private onToolEnd(evt: any): void {
         const toolName: string = evt.toolName;
         if (toolName !== "edit" && toolName !== "write") {
             if (evt.toolCallId) {
-                this.postToWebview({
+                this.post({
                     type: "toolResult",
                     toolCallId: evt.toolCallId,
                     isError: !!evt.isError,
@@ -935,18 +347,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
         const details = !evt.isError ? evt.result?.details : undefined;
         const errorText = evt.isError ? this.extractErrorText(evt.result) : undefined;
-        this.postToWebview({
+        this.post({
             type: "editCardResult",
             toolCallId: evt.toolCallId,
             diff: typeof details?.diff === "string" ? details.diff : undefined,
             isError: !!evt.isError,
             errorText,
-            // 有快照才允许 revert（非错误且成功记录了 before/after）
             canRevert: !evt.isError && this.editSnapshots.has(evt.toolCallId),
         });
     }
 
-    /** 从工具返回结果中提取错误文本。 */
     private extractErrorText(result: any): string | undefined {
         if (!result) {
             return undefined;
@@ -966,7 +376,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    /** 清空本次对话的文件修改记录并通知 webview。 */
     private resetFileChanges(): void {
         this.fileChanges.clear();
         this.pendingEdits.clear();
@@ -974,19 +383,83 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.postFileChanges();
     }
 
-    /**
-     * 回滚某一次 edit 卡片对应的修改（将文件恢复到该次 edit 之前的内容）。
-     * 若磁盘内容已不等于该次 edit 的结果（后续又被修改过），先让用户确认。
-     */
-    private async revertEdit(toolCallId: string): Promise<void> {
-        const snap = this.editSnapshots.get(toolCallId);
-        if (!snap) {
-            this.postToWebview({ type: "systemError", text: "无法回滚：缺失修改前的快照。" });
+    private postFileChanges(): void {
+        const files = Array.from(this.fileChanges.values()).map((c) => ({
+            path: c.path,
+            label: c.label,
+        }));
+        this.post({ type: "fileChanges", files });
+    }
+
+    private editToolPath(toolName: string, args: any): string | null {
+        if (toolName !== "edit" && toolName !== "write") {
+            return null;
+        }
+        const raw =
+            typeof args?.path === "string"
+                ? args.path
+                : typeof args?.file_path === "string"
+                  ? args.file_path
+                  : null;
+        if (!raw) {
+            return null;
+        }
+        return this.mgr.resolvePath(raw);
+    }
+
+    private trackEditStart(evt: any): void {
+        const p = this.editToolPath(evt.toolName, evt.args);
+        if (!p || !evt.toolCallId) {
             return;
         }
-        const label = this.relativeTo(this.getCwd(), snap.path);
+        let before = "";
+        try {
+            before = fs.readFileSync(p, "utf8");
+        } catch {
+            before = "";
+        }
+        this.pendingEdits.set(evt.toolCallId, { path: p, before });
+    }
 
-        // 读取当前磁盘内容，判断是否仍为该次 edit 的结果
+    private trackEditEnd(evt: any): void {
+        const id = evt.toolCallId;
+        if (!id) {
+            return;
+        }
+        const pend = this.pendingEdits.get(id);
+        this.pendingEdits.delete(id);
+        if (!pend || evt.isError) {
+            return;
+        }
+        let after = "";
+        try {
+            after = fs.readFileSync(pend.path, "utf8");
+        } catch {
+            return;
+        }
+        if (after === pend.before) {
+            return;
+        }
+        this.editSnapshots.set(id, { path: pend.path, before: pend.before, after });
+        const existing = this.fileChanges.get(pend.path);
+        if (!existing) {
+            this.fileChanges.set(pend.path, {
+                path: pend.path,
+                label: this.mgr.relativeTo(this.mgr.getCwd(), pend.path),
+                before: pend.before,
+            });
+        }
+        this.postFileChanges();
+    }
+
+    public async revertEdit(toolCallId: string): Promise<void> {
+        const snap = this.editSnapshots.get(toolCallId);
+        if (!snap) {
+            this.post({ type: "systemError", text: "无法回滚：缺失修改前的快照。" });
+            return;
+        }
+        const label = this.mgr.relativeTo(this.mgr.getCwd(), snap.path);
+
         let current = "";
         try {
             current = fs.readFileSync(snap.path, "utf8");
@@ -994,8 +467,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             current = "";
         }
         if (current === snap.before) {
-            this.postToWebview({ type: "system", text: `无需回滚：${label} 已是修改前的内容。` });
-            this.postToWebview({ type: "editReverted", toolCallId });
+            this.post({ type: "system", text: `无需回滚：${label} 已是修改前的内容。` });
+            this.post({ type: "editReverted", toolCallId });
             return;
         }
         if (current !== snap.after) {
@@ -1009,15 +482,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             }
         }
 
-        // 将内容写回修改前的版本
         try {
             fs.writeFileSync(snap.path, snap.before, "utf8");
         } catch (e: any) {
-            this.postToWebview({ type: "systemError", text: `回滚失败: ${e.message}` });
+            this.post({ type: "systemError", text: `回滚失败: ${e.message}` });
             return;
         }
 
-        // 若该文件已回到首次修改前的内容，从列表移除
         const existing = this.fileChanges.get(snap.path);
         if (existing) {
             let latest = "";
@@ -1032,25 +503,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this.postFileChanges();
         }
 
-        // 该快照已消费，移除，避免重复回滚
         this.editSnapshots.delete(toolCallId);
-        this.postToWebview({ type: "editReverted", toolCallId });
-        this.postToWebview({ type: "system", text: `已回滚: ${label}` });
+        this.post({ type: "editReverted", toolCallId });
+        this.post({ type: "system", text: `已回滚: ${label}` });
     }
 
-    /** 将当前文件修改列表推送到 webview。 */
-    private postFileChanges(): void {
-        const files = Array.from(this.fileChanges.values()).map((c) => ({
-            path: c.path,
-            label: c.label,
-        }));
-        this.postToWebview({ type: "fileChanges", files });
-    }
-
-    /**
-     * 为历史 edit/write 卡片重建 diff 文本。
-     * 优先使用 toolResult.details.diff；无则根据工具参数粗略重建。
-     */
     private historyEditInfo(call: any, result: any): string | undefined {
         const details = result?.details;
         let diff: string | undefined =
@@ -1094,132 +551,223 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return diff;
     }
 
-    /** 判断工具是否会修改文件，并提取目标路径。 */
-    private editToolPath(toolName: string, args: any): string | null {
-        if (toolName !== "edit" && toolName !== "write") {
-            return null;
+    // ---- 会话加载 / 树 / fork ----
+    public async loadSession(file: string): Promise<void> {
+        if (!this.client || !this.client.isRunning()) {
+            this.startClient();
+            // 等待客户端就绪后再发 switch
+            await new Promise((r) => setTimeout(r, 100));
         }
-        const raw =
-            typeof args?.path === "string"
-                ? args.path
-                : typeof args?.file_path === "string"
-                  ? args.file_path
-                  : null;
-        if (!raw) {
-            return null;
-        }
-        return this.resolvePath(raw);
-    }
+        this.resetFileChanges();
+        this.post({ type: "clear" });
+        this.post({ type: "system", text: "正在加载会话…" });
 
-    private resolvePath(p: string): string {
-        if (path.isAbsolute(p)) {
-            return p;
-        }
-        return path.resolve(this.getCwd(), p);
-    }
-
-    /** 编辑开始：快照文件修改前的内容。 */
-    private trackEditStart(evt: any): void {
-        const path = this.editToolPath(evt.toolName, evt.args);
-        if (!path || !evt.toolCallId) {
-            return;
-        }
-        let before = "";
-        try {
-            before = fs.readFileSync(path, "utf8");
-        } catch {
-            before = ""; // 新建文件
-        }
-        this.pendingEdits.set(evt.toolCallId, { path, before });
-    }
-
-    /** 编辑结束：读取修改后内容，计算行数变化并记录。 */
-    private trackEditEnd(evt: any): void {
-        const id = evt.toolCallId;
-        if (!id) {
-            return;
-        }
-        const pend = this.pendingEdits.get(id);
-        this.pendingEdits.delete(id);
-        if (!pend || evt.isError) {
-            return;
-        }
-        let after = "";
-        try {
-            after = fs.readFileSync(pend.path, "utf8");
-        } catch {
-            return;
-        }
-        if (after === pend.before) {
-            return; // 无实际变化
-        }
-        // 保存本次 edit 的快照，供单张卡片 revert 使用
-        this.editSnapshots.set(id, {
-            path: pend.path,
-            before: pend.before,
-            after,
-        });
-        const existing = this.fileChanges.get(pend.path);
-        if (!existing) {
-            this.fileChanges.set(pend.path, {
-                path: pend.path,
-                label: this.relativeTo(this.getCwd(), pend.path),
-                before: pend.before, // 保留首次修改前的内容
+        const switchResp = await this.request({ type: "switch_session", sessionPath: file });
+        if (!switchResp || switchResp.success === false) {
+            this.post({
+                type: "systemError",
+                text: `加载会话失败: ${switchResp?.error ?? "未知错误"}`,
             });
+            return;
         }
-        this.postFileChanges();
+
+        const [msgResp, forkResp] = await Promise.all([
+            this.request({ type: "get_messages" }),
+            this.request({ type: "get_fork_messages" }),
+        ]);
+        const messages: any[] = msgResp?.data?.messages ?? [];
+        this.forkEntries = forkResp?.data?.messages ?? [];
+        this.renderMessages(messages);
+        this.currentSessionPath = file;
+        this.post({ type: "system", text: `已加载会话（${messages.length} 条消息）。` });
+        this.refreshStats();
     }
 
-    /**
-     * 在当前磁盘内容中重新定位锚点行的行号（1-based）。
-     * 优先在原行号附近搜索（就近医疗），找不到再全文搜索；均失败则回退到原行号。
-     */
-    private resolveAnchorLine(currentText: string, anchor: string, fallbackLine: number): number {
-        if (!anchor) {
-            return fallbackLine;
+    public async showTree(): Promise<void> {
+        const resp = await this.request({ type: "get_tree" });
+        if (!resp || resp.success === false) {
+            this.post({
+                type: "systemError",
+                text: `获取对话树失败: ${resp?.error ?? "未知错误"}`,
+            });
+            return;
         }
-        const lines = currentText.split("\n");
-        const fb0 = Math.max(0, fallbackLine - 1);
-        // 1) 原位置已匹配，直接返回
-        if (lines[fb0] === anchor) {
-            return fallbackLine;
-        }
-        // 2) 在 fallback 附近由近及远搜索（窗口 200 行）
-        const WINDOW = 200;
-        for (let d = 1; d <= WINDOW; d++) {
-            const up = fb0 - d;
-            const down = fb0 + d;
-            if (down < lines.length && lines[down] === anchor) {
-                return down + 1;
-            }
-            if (up >= 0 && lines[up] === anchor) {
-                return up + 1;
-            }
-        }
-        // 3) 全文搜索首个完全匹配
-        for (let k = 0; k < lines.length; k++) {
-            if (lines[k] === anchor) {
-                return k + 1;
-            }
-        }
-        // 4) 悉数失败，回退到原行号（至少不越界）
-        return Math.min(fallbackLine, Math.max(lines.length, 1));
+        this.post({
+            type: "treeView",
+            tree: resp.data?.tree ?? [],
+            leafId: resp.data?.leafId ?? null,
+        });
     }
 
-    /** 打开某个文件的 diff（首次修改前 vs 当前磁盘内容）。 */
-    private async openDiff(path: string): Promise<void> {
-        const change = this.fileChanges.get(path);
+    public async forkFromEntry(entryId: string): Promise<void> {
+        this.abortActiveRun();
+        this.post({ type: "system", text: "正在从该消息处分叉…" });
+        const resp = await this.request({ type: "fork", entryId });
+        if (!resp || resp.success === false) {
+            this.post({
+                type: "systemError",
+                text: `分叉失败: ${resp?.error ?? "未知错误"}`,
+            });
+            return;
+        }
+        if (resp.data?.cancelled) {
+            this.post({ type: "system", text: "分叉已取消。" });
+            return;
+        }
+        this.resetFileChanges();
+        const [msgResp, forkResp] = await Promise.all([
+            this.request({ type: "get_messages" }),
+            this.request({ type: "get_fork_messages" }),
+        ]);
+        const messages: any[] = msgResp?.data?.messages ?? [];
+        this.forkEntries = forkResp?.data?.messages ?? [];
+        this.post({ type: "clear" });
+        this.renderMessages(messages);
+        this.post({ type: "system", text: `已分叉到新分支（${messages.length} 条消息）。` });
+        this.refreshStats();
+    }
+
+    private textOf(content: unknown): string {
+        if (typeof content === "string") {
+            return content;
+        }
+        if (Array.isArray(content)) {
+            return content.map((c: any) => (c.type === "text" ? c.text : "")).join("");
+        }
+        return "";
+    }
+
+    private renderMessages(messages: any[]): void {
+        const toolResults = new Map<string, any>();
+        for (const m of messages) {
+            if (m && m.role === "toolResult" && typeof m.toolCallId === "string") {
+                toolResults.set(m.toolCallId, m);
+            }
+        }
+        let userIndex = 0;
+        for (const m of messages) {
+            switch (m.role) {
+                case "user":
+                    this.post({
+                        type: "userMessage",
+                        text: this.textOf(m.content),
+                        entryId: this.forkEntries[userIndex]?.entryId,
+                    });
+                    userIndex++;
+                    break;
+                case "assistant": {
+                    const parts = Array.isArray(m.content) ? m.content : [];
+                    let text = "";
+                    for (const c of parts) {
+                        if (c.type === "text") {
+                            text += c.text;
+                        } else if (c.type === "toolCall") {
+                            if (text.trim()) {
+                                this.post({ type: "assistantFull", text });
+                                text = "";
+                            }
+                            if (c.name === "edit" || c.name === "write") {
+                                const p = this.editToolPath(c.name, c.arguments);
+                                const id = c.id || `hist-${Math.random()}`;
+                                this.post({
+                                    type: "editCardStart",
+                                    toolCallId: id,
+                                    toolName: c.name,
+                                    path: p || "",
+                                    label: p ? this.mgr.relativeTo(this.mgr.getCwd(), p) : "",
+                                });
+                                this.post({
+                                    type: "editCardResult",
+                                    toolCallId: id,
+                                    diff: this.historyEditInfo(c, toolResults.get(id)),
+                                    canRevert: false,
+                                });
+                            } else {
+                                this.post({
+                                    type: "tool",
+                                    toolName: c.name,
+                                    args: c.arguments,
+                                });
+                            }
+                        }
+                    }
+                    if (text.trim()) {
+                        this.post({ type: "assistantFull", text });
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    public async pickModel(): Promise<void> {
+        if (!this.client || !this.client.isRunning()) {
+            this.startClient();
+        }
+        const resp = await this.request({ type: "get_available_models" });
+        const models: any[] = resp?.data?.models ?? [];
+        if (models.length === 0) {
+            vscode.window.showInformationMessage("没有可用模型（请确认 pi 已鉴权、models.json 已配置）。");
+            return;
+        }
+        const items = models.map((m) => ({
+            label: m.id,
+            description: m.provider ? `${m.provider}${m.name && m.name !== m.id ? " · " + m.name : ""}` : (m.name || ""),
+            detail: m.contextWindow ? `上下文 ${Math.round(m.contextWindow / 1000)}K` : undefined,
+            model: m,
+        }));
+        const picked = await vscode.window.showQuickPick(items, {
+            title: "切换模型",
+            placeHolder: "选择要使用的模型",
+            matchOnDescription: true,
+        });
+        if (!picked) {
+            return;
+        }
+        const setResp = await this.request({
+            type: "set_model",
+            provider: picked.model.provider,
+            modelId: picked.model.id,
+        });
+        if (setResp?.success === false) {
+            this.post({ type: "systemError", text: `切换模型失败: ${setResp.error}` });
+        } else {
+            const m = setResp?.data ?? picked.model;
+            this.post({ type: "modelChanged", modelId: m.id, provider: m.provider });
+            this.post({ type: "system", text: `已切换模型: ${m.id}` });
+            const cfg = vscode.workspace.getConfiguration("piChat");
+            cfg.update("provider", m.provider || "", vscode.ConfigurationTarget.Global);
+            cfg.update("model", m.id || "", vscode.ConfigurationTarget.Global);
+        }
+    }
+
+    public async refreshStats(): Promise<void> {
+        const resp = await this.request({ type: "get_session_stats" });
+        const d = resp?.data;
+        if (!d) {
+            return;
+        }
+        this.post({
+            type: "stats",
+            tokens: d.tokens || null,
+            cost: typeof d.cost === "number" ? d.cost : null,
+            contextUsage: d.contextUsage || null,
+        });
+    }
+
+    // ---- 文件跳转 / diff（均相对该 tab 的 fileChanges）----
+    public async openDiff(p: string): Promise<void> {
+        const change = this.fileChanges.get(p);
         if (!change) {
-            vscode.window.showWarningMessage(`piChat: 未找到该文件的修改记录 (${path})。可能会话已重置或路径不匹配。`);
+            vscode.window.showWarningMessage(`piChat: 未找到该文件的修改记录 (${p})。可能会话已重置或路径不匹配。`);
             return;
         }
         const label = change.label;
-        // “前”侧：使用只读的虚拟文档。“后”侧：磁盘上的实际文件。
         const key = DiffContentProvider.instance.set(change.before);
         const leftUri = vscode.Uri.parse(
             `${DiffContentProvider.scheme}:${encodeURIComponent(label)}?${key}`
         );
-        const rightUri = vscode.Uri.file(path);
+        const rightUri = vscode.Uri.file(p);
         try {
             await vscode.commands.executeCommand(
                 "vscode.diff",
@@ -1232,22 +780,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    /** diff 行点击跳转：读当前文件内容，按行内容锚点重定位行号后打开。 */
-    private async openEditLocationWithAnchor(path: string, line: number, anchor: string): Promise<void> {
+    public async openEditLocationWithAnchor(p: string, line: number, anchor: string): Promise<void> {
         let current = "";
         try {
-            current = fs.readFileSync(path, "utf8");
+            current = fs.readFileSync(p, "utf8");
         } catch {
-            await this.openEditLocation(path, line);
+            await this.openEditLocation(p, line);
             return;
         }
-        await this.openEditLocation(path, this.resolveAnchorLine(current, anchor, line));
+        await this.openEditLocation(p, this.resolveAnchorLine(current, anchor, line));
     }
 
-    /** 打开文件并跳转到指定行（用于 edit 卡片点击跳转）。 */
-    private async openEditLocation(path: string, line: number): Promise<void> {
+    public async openEditLocation(p: string, line: number): Promise<void> {
         try {
-            const uri = vscode.Uri.file(path);
+            const uri = vscode.Uri.file(p);
             const line0 = Math.max(0, Math.floor(line) - 1);
             await vscode.window.showTextDocument(uri, {
                 selection: new vscode.Range(line0, 0, line0, 0),
@@ -1257,75 +803,608 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    /** 获取会话统计（token/成本/上下文）并推送给 webview。 */
-    private async refreshStats(): Promise<void> {
-        const resp = await this.request({ type: "get_session_stats" });
-        const d = resp?.data;
-        if (!d) {
-            return;
+    private resolveAnchorLine(currentText: string, anchor: string, fallbackLine: number): number {
+        if (!anchor) {
+            return fallbackLine;
         }
+        const lines = currentText.split("\n");
+        const fb0 = Math.max(0, fallbackLine - 1);
+        if (lines[fb0] === anchor) {
+            return fallbackLine;
+        }
+        const WINDOW = 200;
+        for (let d = 1; d <= WINDOW; d++) {
+            const up = fb0 - d;
+            const down = fb0 + d;
+            if (down < lines.length && lines[down] === anchor) {
+                return down + 1;
+            }
+            if (up >= 0 && lines[up] === anchor) {
+                return up + 1;
+            }
+        }
+        for (let k = 0; k < lines.length; k++) {
+            if (lines[k] === anchor) {
+                return k + 1;
+            }
+        }
+        return Math.min(fallbackLine, Math.max(lines.length, 1));
+    }
+}
+
+export class ChatViewProvider implements vscode.WebviewViewProvider {
+    public static readonly viewType = "piChat.chatView";
+
+    private view?: vscode.WebviewView;
+    private tabs = new Map<string, SessionRuntime>();
+    private activeId: string | undefined;
+    private tabSeq = 0;
+    private autoLoadDone = false;
+
+    constructor(private readonly context: vscode.ExtensionContext) {}
+
+    private static readonly KEY_SHOW_STATS = "piChat.showStatsBar";
+    private static readonly KEY_AUTO_LOAD_LAST = "piChat.autoLoadLastSession";
+    private static readonly KEY_SEND_KEY = "piChat.sendKey";
+    private static readonly SEND_KEYS = ["enter", "shift+enter", "alt+enter", "ctrl+enter"] as const;
+
+    // ---- 显示选项 ----
+    private getShowStatsBar(): boolean {
+        return this.context.globalState.get<boolean>(ChatViewProvider.KEY_SHOW_STATS, true);
+    }
+    private getAutoLoadLast(): boolean {
+        return this.context.globalState.get<boolean>(ChatViewProvider.KEY_AUTO_LOAD_LAST, false);
+    }
+    private getSendKey(): string {
+        const v = this.context.globalState.get<string>(ChatViewProvider.KEY_SEND_KEY, "enter");
+        return (ChatViewProvider.SEND_KEYS as readonly string[]).includes(v) ? v : "enter";
+    }
+    private sendViewOptions(): void {
         this.postToWebview({
-            type: "stats",
-            tokens: d.tokens || null,
-            cost: typeof d.cost === "number" ? d.cost : null,
-            contextUsage: d.contextUsage || null,
+            type: "viewOptions",
+            showStatsBar: this.getShowStatsBar(),
+            autoLoadLastSession: this.getAutoLoadLast(),
+            sendKey: this.getSendKey(),
         });
     }
 
-    private onPiResponse(resp: any): void {
-        if (resp.id && this.pending.has(resp.id)) {
-            const cb = this.pending.get(resp.id)!;
-            this.pending.delete(resp.id);
-            cb(resp);
+    public async pickViewOptions(): Promise<void> {
+        type OptItem = vscode.QuickPickItem & { action: string };
+        const labelMap: Record<string, string> = {
+            "enter": "Enter",
+            "shift+enter": "Shift + Enter",
+            "alt+enter": "Alt + Enter",
+            "ctrl+enter": "Ctrl + Enter",
+        };
+        const buildItems = (): OptItem[] => {
+            const check = (on: boolean) => (on ? "$(check) " : "$(circle-large-outline) ");
+            return [
+                {
+                    action: ChatViewProvider.KEY_SHOW_STATS,
+                    label: check(this.getShowStatsBar()) + "状态栏",
+                    description: "对话框上方的 token / 上下文状态栏",
+                },
+                {
+                    action: ChatViewProvider.KEY_AUTO_LOAD_LAST,
+                    label: check(this.getAutoLoadLast()) + "启动时自动打开最近会话",
+                    description: "进入插件界面时自动加载当前工作区最近的一次会话",
+                },
+                {
+                    action: "sendKey",
+                    label: `$(keyboard) 发送键：${labelMap[this.getSendKey()]}`,
+                    description: "点击切换：Enter → Shift+Enter → Alt+Enter → Ctrl+Enter",
+                },
+            ];
+        };
+        const qp = vscode.window.createQuickPick<OptItem>();
+        qp.title = "显示选项";
+        qp.placeholder = "点击条目即时切换（完成后按 Esc 关闭）";
+        qp.ignoreFocusOut = true;
+        qp.items = buildItems();
+        qp.onDidAccept(() => {
+            const sel = qp.selectedItems[0];
+            if (!sel) { return; }
+            if (sel.action === "sendKey") {
+                const order = ChatViewProvider.SEND_KEYS;
+                const idx = order.indexOf(this.getSendKey() as (typeof order)[number]);
+                const next = order[(idx + 1) % order.length];
+                this.context.globalState.update(ChatViewProvider.KEY_SEND_KEY, next);
+            } else {
+                const cur =
+                    sel.action === ChatViewProvider.KEY_SHOW_STATS
+                        ? this.getShowStatsBar()
+                        : this.getAutoLoadLast();
+                this.context.globalState.update(sel.action, !cur);
+            }
+            this.sendViewOptions();
+            const activeAction = sel.action;
+            qp.items = buildItems();
+            const again = qp.items.find((i) => i.action === activeAction);
+            if (again) { qp.activeItems = [again]; }
+        });
+        qp.onDidHide(() => qp.dispose());
+        qp.show();
+    }
+
+    resolveWebviewView(webviewView: vscode.WebviewView): void {
+        this.view = webviewView;
+        webviewView.webview.options = {
+            enableScripts: true,
+            localResourceRoots: [this.context.extensionUri],
+        };
+        webviewView.webview.html = getChatHtml(webviewView.webview, this.context.extensionUri);
+
+        webviewView.webview.onDidReceiveMessage((msg) => this.onWebviewMessage(msg));
+
+        webviewView.onDidDispose(() => {
+            for (const rt of this.tabs.values()) {
+                rt.stopClient();
+            }
+            this.tabs.clear();
+            this.activeId = undefined;
+        });
+    }
+
+    // ---- 共享工具 ----
+    public getConfig() {
+        const cfg = vscode.workspace.getConfiguration("piChat");
+        return {
+            piPath: cfg.get<string>("piPath", "pi"),
+            provider: cfg.get<string>("provider", ""),
+            model: cfg.get<string>("model", ""),
+            extraArgs: cfg.get<string[]>("extraArgs", []),
+            trustProject: cfg.get<boolean>("trustProject", true),
+        };
+    }
+
+    public getCwd(): string {
+        const folders = vscode.workspace.workspaceFolders;
+        if (folders && folders.length > 0) {
+            return folders[0].uri.fsPath;
+        }
+        return process.cwd();
+    }
+
+    public relativeTo(cwd: string, full: string): string {
+        const norm = (s: string) => s.replace(/\\/g, "/");
+        const c = norm(cwd).replace(/\/$/, "") + "/";
+        const f = norm(full);
+        if (f.toLowerCase().startsWith(c.toLowerCase())) {
+            return f.slice(c.length);
+        }
+        return full;
+    }
+
+    public resolvePath(p: string): string {
+        if (path.isAbsolute(p)) {
+            return p;
+        }
+        return path.resolve(this.getCwd(), p);
+    }
+
+    public checkPiAvailable(piPath: string, rt: SessionRuntime): boolean {
+        if (this.resolveExecutable(piPath)) {
+            return true;
+        }
+        const msg = `未找到 pi 可执行文件（当前配置："${piPath}"）。请确认已安装 pi 并加入系统 PATH，或在设置中指定 piChat.piPath 为完整路径。`;
+        this.mgrPostError(rt, msg);
+        vscode.window
+            .showErrorMessage(msg, "打开设置")
+            .then((choice) => {
+                if (choice === "打开设置") {
+                    vscode.commands.executeCommand(
+                        "workbench.action.openSettings",
+                        "piChat.piPath"
+                    );
+                }
+            });
+        return false;
+    }
+
+    /** 给某个 runtime 推一条 systemError（绕过 private post）。 */
+    private mgrPostError(rt: SessionRuntime, text: string): void {
+        this.postToTab(rt.id, { type: "systemError", text });
+    }
+
+    public resolveExecutable(cmd: string): string | undefined {
+        if (!cmd) { return undefined; }
+        const isWindows = process.platform === "win32";
+        const exts = isWindows
+            ? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+            : [""];
+        const existsAsFile = (p: string): boolean => {
+            try { return fs.statSync(p).isFile(); } catch { return false; }
+        };
+        const tryWithExts = (base: string): string | undefined => {
+            if (existsAsFile(base)) { return base; }
+            if (isWindows) {
+                for (const ext of exts) {
+                    const withExt = base + ext.toLowerCase();
+                    if (existsAsFile(withExt)) { return withExt; }
+                    const withExtUpper = base + ext;
+                    if (existsAsFile(withExtUpper)) { return withExtUpper; }
+                }
+            }
+            return undefined;
+        };
+        if (cmd.includes("/") || cmd.includes("\\")) {
+            const abs = path.isAbsolute(cmd) ? cmd : path.resolve(this.getCwd(), cmd);
+            return tryWithExts(abs);
+        }
+        const pathEnv = process.env.PATH || process.env.Path || "";
+        const sep = isWindows ? ";" : ":";
+        for (const dir of pathEnv.split(sep).filter(Boolean)) {
+            const found = tryWithExts(path.join(dir, cmd));
+            if (found) { return found; }
+        }
+        return undefined;
+    }
+
+    // ---- tab 管理 ----
+    public newTab(): SessionRuntime {
+        const id = `tab-${++this.tabSeq}`;
+        const title = `会话 ${this.tabSeq}`;
+        const rt = new SessionRuntime(id, title, this);
+        this.tabs.set(id, rt);
+        this.activeId = id;
+        this.broadcastTabList();
+        this.postToWebview({ type: "tabActivated", id });
+        rt.startClient();
+        return rt;
+    }
+
+    public setActive(id: string): void {
+        if (!this.tabs.has(id) || this.activeId === id) {
             return;
         }
-        if (resp.success === false && resp.error) {
-            this.postToWebview({ type: "systemError", text: `pi: ${resp.error}` });
+        this.activeId = id;
+        this.postToWebview({ type: "tabActivated", id });
+        this.broadcastTabList();
+    }
+
+    public closeTab(id: string): void {
+        const rt = this.tabs.get(id);
+        if (!rt) { return; }
+        rt.stopClient();
+        this.tabs.delete(id);
+        this.postToWebview({ type: "tabClosed", id });
+        if (this.activeId === id) {
+            this.activeId = this.tabs.size > 0 ? this.tabs.keys().next().value : undefined;
+            if (this.activeId) {
+                this.postToWebview({ type: "tabActivated", id: this.activeId });
+            }
+        }
+        this.broadcastTabList();
+        // 全部关闭后自动新建一个空 tab，保持界面可用
+        if (this.tabs.size === 0) {
+            this.newTab();
         }
     }
 
-    // extension UI 请求：对话框类需要回复
-    private onPiUiRequest(req: any): void {
-        const respond = (payload: Record<string, unknown>) => {
-            if (this.client && this.client.isRunning()) {
-                this.client.send({ type: "extension_ui_response", id: req.id, ...payload });
-            }
-        };
-        switch (req.method) {
-            case "confirm":
-                vscode.window
-                    .showInformationMessage(
-                        `${req.title ?? "确认"}\n${req.message ?? ""}`,
-                        { modal: true },
-                        "是",
-                        "否"
-                    )
-                    .then((choice) => respond({ confirmed: choice === "是" }));
-                break;
-            case "select":
-                vscode.window
-                    .showQuickPick(req.options ?? [], { title: req.title })
-                    .then((value) =>
-                        value === undefined ? respond({ cancelled: true }) : respond({ value })
-                    );
-                break;
-            case "input":
-            case "editor":
-                vscode.window
-                    .showInputBox({ title: req.title, placeHolder: req.placeholder, value: req.prefill })
-                    .then((value) =>
-                        value === undefined ? respond({ cancelled: true }) : respond({ value })
-                    );
-                break;
-            case "notify":
-                this.postToWebview({ type: "system", text: String(req.message ?? "") });
-                break;
-            // 其余 fire-and-forget 方法忽略
-        }
+    public getActive(): SessionRuntime | undefined {
+        return this.activeId ? this.tabs.get(this.activeId) : undefined;
+    }
+
+    /** 同步 tab 列表给 webview（含 streaming/piReady 用于角标）。 */
+    public broadcastTabList(): void {
+        this.postToWebview({
+            type: "tabList",
+            tabs: Array.from(this.tabs.values()).map((rt) => ({
+                id: rt.id,
+                title: rt.title,
+                streaming: rt.streaming,
+                piReady: rt.piReady,
+            })),
+            activeId: this.activeId ?? null,
+        });
+    }
+
+    public postToTab(tabId: string, msg: Record<string, unknown>): void {
+        this.view?.webview.postMessage({ ...msg, tabId });
     }
 
     private postToWebview(msg: Record<string, unknown>): void {
         this.view?.webview.postMessage(msg);
+    }
+
+    // ---- 命令入口 ----
+    /** 新建并行会话。 */
+    public newSession(): void {
+        this.newTab();
+    }
+
+    public getCurrentSessionPath(): string | undefined {
+        return this.getActive()?.currentSessionPath;
+    }
+
+    public async loadHistorySession(file: string): Promise<void> {
+        // 在活跃 tab 加载；若无 tab 则新建
+        let rt = this.getActive();
+        if (!rt) {
+            rt = this.newTab();
+            await new Promise((r) => setTimeout(r, 150));
+        }
+        this.setActive(rt.id);
+        await rt.loadSession(file);
+        await vscode.commands.executeCommand("workbench.view.extension.piChatContainer");
+        await vscode.commands.executeCommand("piChat.chatView.focus");
+    }
+
+    public async askSelectionAndSend(): Promise<void> {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showWarningMessage("Pi Chat: 没有活动的编辑器。");
+            return;
+        }
+        const document = editor.document;
+        const selection = editor.selection;
+        const selectedText = document.getText(selection);
+        const hasSelection = !selection.isEmpty && selectedText.trim() !== "";
+        const codeText = hasSelection
+            ? selectedText
+            : document.lineAt(selection.active.line).text;
+        const fileRef = this.relativeTo(this.getCwd(), document.uri.fsPath);
+        const startLine = selection.start.line + 1;
+        const endLine = selection.end.line + 1;
+        const range =
+            startLine === endLine
+                ? `第 ${startLine} 行`
+                : `第 ${startLine}-${endLine} 行`;
+
+        const userText = await vscode.window.showInputBox({
+            title: "向 Pi Chat 发送选中文本",
+            prompt: "你的消息将连同选中的代码一起发送到 Pi Chat 对话框。",
+            placeHolder: "例如：解释这段代码、修复 bug、补充测试…（可留空直接发送选中文本）",
+            ignoreFocusOut: true,
+        });
+        if (userText === undefined) { return; }
+        if (userText.trim() === "" && !hasSelection) {
+            vscode.window.showWarningMessage("Pi Chat: 没有选中文本且消息为空。");
+            return;
+        }
+
+        const prefix = userText.trim() ? `${userText.trim()}\n\n` : "";
+        const prompt = `${prefix}上下文: ${fileRef} (${range})\n\n\`\`\`${document.languageId}\n${codeText}\n\`\`\`\n`;
+
+        await this.ensureViewVisible();
+        const rt = this.getActive() ?? this.newTab();
+        this.setActive(rt.id);
+        rt.handleSend(prompt);
+        vscode.window.showInformationMessage("已发送到 Pi Chat 对话框。");
+    }
+
+    private async ensureViewVisible(): Promise<void> {
+        await vscode.commands.executeCommand("piChat.openChat");
+        for (let i = 0; i < 60; i++) {
+            if (this.view) { return; }
+            await new Promise((r) => setTimeout(r, 50));
+        }
+    }
+
+    public async pickSession(): Promise<void> {
+        const cwd = this.getCwd();
+        const sessions = await listSessions(cwd);
+        if (sessions.length === 0) {
+            vscode.window.showInformationMessage("当前工作区没有找到 pi 历史会话。");
+            return;
+        }
+        const items = sessions.map((s) => ({
+            label: s.title,
+            description: `${s.messageCount} 条消息`,
+            detail: new Date(s.mtime).toLocaleString(),
+            file: s.file,
+        }));
+        const picked = await vscode.window.showQuickPick(items, {
+            title: "选择要加载的 pi 会话",
+            placeHolder: "按最近修改时间排序",
+            matchOnDetail: true,
+        });
+        if (!picked) { return; }
+        const rt = this.getActive() ?? this.newTab();
+        this.setActive(rt.id);
+        await rt.loadSession(picked.file);
+    }
+
+    private async maybeAutoLoadLastSession(): Promise<void> {
+        if (this.autoLoadDone) { return; }
+        this.autoLoadDone = true;
+        if (!this.getAutoLoadLast()) { return; }
+        const sessions = await listSessions(this.getCwd());
+        if (sessions.length === 0) { return; }
+        const rt = this.getActive();
+        if (rt) {
+            await rt.loadSession(sessions[0].file);
+        }
+    }
+
+    /** 将 VSCode 当前打开的文件列表发给 webview（用于 @ 引用补全）。 */
+    private sendOpenFiles(): void {
+        const cwd = this.getCwd();
+        const files: Array<{ label: string; path: string }> = [];
+        const seen = new Set<string>();
+        const add = (uri: vscode.Uri) => {
+            if (uri.scheme !== "file") { return; }
+            const full = uri.fsPath;
+            if (seen.has(full)) { return; }
+            seen.add(full);
+            files.push({ label: this.relativeTo(cwd, full), path: full });
+        };
+        if (vscode.window.activeTextEditor) {
+            add(vscode.window.activeTextEditor.document.uri);
+        }
+        for (const group of vscode.window.tabGroups.all) {
+            for (const tab of group.tabs) {
+                const input: any = tab.input;
+                if (input && input.uri instanceof vscode.Uri) {
+                    add(input.uri);
+                }
+            }
+        }
+        this.postToWebview({ type: "openFiles", files });
+    }
+
+    /** 打开正文中的文件路径（全局，不依赖 tab）。 */
+    public async openFile(p: string, line?: number, col?: number): Promise<void> {
+        const selection = (): vscode.TextDocumentShowOptions => {
+            if (line == null) { return {}; }
+            const line0 = Math.max(0, Math.floor(line) - 1);
+            const col0 = col != null ? Math.max(0, Math.floor(col) - 1) : 0;
+            return { selection: new vscode.Range(line0, col0, line0, col0) };
+        };
+        const open = async (uri: vscode.Uri): Promise<void> => {
+            try { await vscode.window.showTextDocument(uri, selection()); }
+            catch (e: any) { vscode.window.showErrorMessage(`无法打开文件: ${e.message}`); }
+        };
+        const full = this.resolvePath(p);
+        if (fs.existsSync(full) && !fs.statSync(full).isDirectory()) {
+            await open(vscode.Uri.file(full));
+            return;
+        }
+        const base = path.basename(p);
+        if (base) {
+            const escapeGlob = (s: string) => s.replace(/[?*\\\[\]{}]/g, "?");
+            try {
+                const found = await vscode.workspace.findFiles(
+                    `**/${escapeGlob(base)}`,
+                    "{**/node_modules/**,**/.git/**,**/out/**,**/dist/**,**/build/**,**/.next/**,**/__pycache__/**,**/.venv/**,**/venv/**}",
+                    20
+                );
+                const files = found.filter((u) => { try { return !fs.statSync(u.fsPath).isDirectory(); } catch { return false; } });
+                if (files.length > 0) {
+                    const target = files.find((u) => u.fsPath.replace(/\\/g, "/").includes(p.replace(/\\/g, "/"))) || files[0];
+                    await open(target);
+                    return;
+                }
+            } catch { /* fallthrough */ }
+        }
+        vscode.window.showInformationMessage(`piChat: 未找到文件 ${p}`);
+    }
+
+    public async openSymbol(name: string): Promise<void> {
+        try {
+            const symbols = await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
+                "vscode.executeWorkspaceSymbolProvider",
+                name
+            );
+            const list = Array.isArray(symbols) ? symbols : [];
+            const exact = list.filter((s) => s.name === name);
+            const cand = exact.length > 0 ? exact : list;
+            if (cand.length > 0) {
+                const pick =
+                    cand.find((s) => s.kind === vscode.SymbolKind.Function) ||
+                    cand.find((s) => s.kind === vscode.SymbolKind.Method) ||
+                    cand.find((s) => s.kind === vscode.SymbolKind.Class) ||
+                    cand[0];
+                const loc = pick.location;
+                await vscode.window.showTextDocument(loc.uri, { selection: loc.range });
+                return;
+            }
+        } catch { /* fallthrough */ }
+        try {
+            const escapeGlob = (s: string) => s.replace(/[?*\\\[\]{}]/g, "?");
+            const found = await vscode.workspace.findFiles(
+                `**/${escapeGlob(name)}.*`,
+                "{**/node_modules/**,**/.git/**,**/out/**,**/dist/**,**/build/**,**/.next/**,**/__pycache__/**,**/.venv/**,**/venv/**}",
+                20
+            );
+            const files = found.filter((u) => { try { return !fs.statSync(u.fsPath).isDirectory(); } catch { return false; } });
+            if (files.length > 0) {
+                const cwd = this.getCwd();
+                const target = files.find((u) => u.fsPath.replace(/\\/g, "/").includes("/scripts/"))
+                    || files.find((u) => u.fsPath.replace(/\\/g, "/").toLowerCase().startsWith(cwd.toLowerCase().replace(/\\/g, "/")))
+                    || files[0];
+                await vscode.window.showTextDocument(target);
+                return;
+            }
+        } catch { /* fallthrough */ }
+        vscode.window.showInformationMessage(`piChat: 未找到符号或文件 ${name}`);
+    }
+
+    // ---- Webview -> 扩展 ----
+    private onWebviewMessage(msg: any): void {
+        // 全局消息（不带 tabId）
+        switch (msg.type) {
+            case "ready": {
+                this.sendViewOptions();
+                this.broadcastTabList();
+                // 确保至少有一个 tab
+                if (this.tabs.size === 0) {
+                    this.newTab();
+                    this.maybeAutoLoadLastSession();
+                } else {
+                    // 已有 tab：同步各 tab 的 piReady
+                    for (const rt of this.tabs.values()) {
+                        this.postToTab(rt.id, { type: "piReady", ready: rt.piReady });
+                    }
+                }
+                if (this.activeId) {
+                    this.postToWebview({ type: "tabActivated", id: this.activeId });
+                }
+                return;
+            }
+            case "newSession":
+                this.newTab();
+                return;
+            case "switchTab":
+                if (typeof msg.tabId === "string") { this.setActive(msg.tabId); }
+                return;
+            case "closeTab":
+                if (typeof msg.tabId === "string") { this.closeTab(msg.tabId); }
+                return;
+            case "listFiles":
+                this.sendOpenFiles();
+                return;
+            case "openFile":
+                if (typeof msg.path === "string") {
+                    void this.openFile(msg.path, typeof msg.line === "number" ? msg.line : undefined, typeof msg.col === "number" ? msg.col : undefined);
+                }
+                return;
+            case "openSymbol":
+                if (typeof msg.name === "string") { void this.openSymbol(msg.name); }
+                return;
+        }
+
+        // tab 级消息
+        const tabId: string | undefined = msg.tabId;
+        const rt = tabId ? this.tabs.get(tabId) : undefined;
+        // 命令型消息（pickModel 等）回退到活跃 tab
+        const target = rt ?? (msg.type === "pickModel" ? this.getActive() : undefined);
+        if (!target) { return; }
+
+        switch (msg.type) {
+            case "send":
+                target.handleSend(msg.text, msg.images);
+                break;
+            case "abort":
+                target.abortActiveRun();
+                break;
+            case "showTree":
+                void target.showTree();
+                break;
+            case "forkAtEntry":
+                if (typeof msg.entryId === "string") { void target.forkFromEntry(msg.entryId); }
+                break;
+            case "pickModel":
+                void target.pickModel();
+                break;
+            case "openDiff":
+                if (typeof msg.path === "string") { void target.openDiff(msg.path); }
+                break;
+            case "openEditLocation":
+                if (typeof msg.path === "string" && typeof msg.anchor === "string" && msg.anchor) {
+                    void target.openEditLocationWithAnchor(
+                        msg.path,
+                        typeof msg.line === "number" ? msg.line : 1,
+                        msg.anchor
+                    );
+                } else if (typeof msg.path === "string") {
+                    void target.openEditLocation(msg.path, typeof msg.line === "number" ? msg.line : 1);
+                }
+                break;
+            case "revertEdit":
+                if (typeof msg.toolCallId === "string") { void target.revertEdit(msg.toolCallId); }
+                break;
+        }
     }
 }
 
@@ -1337,11 +1416,9 @@ export class DiffContentProvider implements vscode.TextDocumentContentProvider {
     public static readonly scheme = "pichat-diff";
     public static readonly instance = new DiffContentProvider();
 
-    // 按唯一 key 保存“修改前”内容（放在 URI query 中）
     private contents = new Map<string, string>();
     private seq = 0;
 
-    /** 存入内容，返回可放入 URI query 的 key。 */
     set(content: string): string {
         const key = String(++this.seq);
         this.contents.set(key, content);

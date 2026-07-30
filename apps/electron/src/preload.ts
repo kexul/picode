@@ -10,6 +10,8 @@ const api = {
 };
 
 (window as any).acquireVsCodeApi = () => api;
+// 宿主标识：chat.js 据此在 Electron 下关闭符号链接（无 LSP，点了没意义）
+(window as any).__PI_HOST__ = "electron";
 
 ipcRenderer.on("ph", (_e: unknown, msg: unknown) => {
     // 转发为 window message 事件，复用 chat.js 的监听逻辑

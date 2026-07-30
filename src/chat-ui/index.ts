@@ -37,6 +37,10 @@ export function renderHTML(opts: RenderHTMLOpts): string {
     const nonceAttr = opts.scriptNonce ? ` nonce="${opts.scriptNonce}"` : "";
 
     const head = opts.extraHead ? `  ${opts.extraHead}\n` : "";
+    const tabbar =
+    `  <div id="tabBar" class="hidden">\n` +
+    `    <div id="tabBarInner"></div>\n` +
+    `  </div>\n`;
     const bodyTop = opts.extraBodyTop ? `  ${opts.extraBodyTop}\n` : "";
     const bodyBottom = opts.extraBodyBottom ? `  ${opts.extraBodyBottom}\n` : "";
     const extraScripts = (opts.extraScripts || [])
@@ -54,9 +58,7 @@ ${opts.chatCss}
 </style>
 ${head}</head>
 <body>
-${bodyTop}  <div id="messages">
-    <div id="emptyHint" class="empty-hint">输入消息开始对话…</div>
-  </div>
+${bodyTop}${tabbar}  <div id="messages"></div>
   <div id="status"></div>
   <div id="changedFiles"></div>
   <div id="inputArea">
