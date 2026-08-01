@@ -24,6 +24,9 @@ export interface PiClientOptions {
 export class PiClient extends EventEmitter {
     private proc: ChildProcessWithoutNullStreams | null = null;
     private opts: PiClientOptions;
+    /** 备用池探测用：id → 回调（池子里的进程没有 SessionRuntime，需要自己的 request 机制）。 */
+    private pending = new Map<string, (resp: any) => void>();
+    private seq = 0;
 
     constructor(opts: PiClientOptions) {
         super();
@@ -82,6 +85,54 @@ export class PiClient extends EventEmitter {
         this.proc.stdin.write(JSON.stringify(cmd) + "\n");
     }
 
+    /** 带 id 的请求（供备用池探测就绪用；普通 tab 的请求走 SessionRuntime.request）。 */
+    request(cmd: Record<string, unknown>, timeoutMs = 15000): Promise<any> {
+        return new Promise((resolve) => {
+            if (!this.proc) {
+                resolve(undefined);
+                return;
+            }
+            const id = `spare-${++this.seq}`;
+            const timer = setTimeout(() => {
+                if (this.pending.has(id)) {
+                    this.pending.delete(id);
+                    resolve(undefined);
+                }
+            }, timeoutMs);
+            const cb = (resp: any) => {
+                clearTimeout(timer);
+                if (this.pending.has(id)) {
+                    this.pending.delete(id);
+                }
+                resolve(resp);
+            };
+            this.pending.set(id, cb);
+            try {
+                this.proc.stdin.write(JSON.stringify({ ...cmd, id }) + "\n");
+            } catch {
+                this.pending.delete(id);
+                clearTimeout(timer);
+                resolve(undefined);
+            }
+        });
+    }
+
+    /** 等待进程真正就绪（首个 RPC 能成功响应）。进程退出/未启动时返回 false。 */
+    async waitReady(timeoutMs = 30000): Promise<boolean> {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            if (!this.proc) {
+                return false;
+            }
+            const resp = await this.request({ type: "get_state" }, 2000);
+            if (resp && resp.success !== false) {
+                return true;
+            }
+            await new Promise((r) => setTimeout(r, 300));
+        }
+        return false;
+    }
+
     stop(): void {
         if (this.proc) {
             try {
@@ -108,7 +159,14 @@ export class PiClient extends EventEmitter {
         }
         switch (msg.type) {
             case "response":
-                this.emit("response", msg);
+                // 备用池探测的响应直接回调；其余交给上层（SessionRuntime）处理
+                if (msg.id && this.pending.has(msg.id)) {
+                    const cb = this.pending.get(msg.id)!;
+                    this.pending.delete(msg.id);
+                    cb(msg);
+                } else {
+                    this.emit("response", msg);
+                }
                 break;
             case "extension_ui_request":
                 this.emit("ui", msg);

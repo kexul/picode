@@ -50,7 +50,6 @@ function routeMessage(msg: any): void {
             break;
         case "app:cycleSendKey": controller.cycleSendKey(); break;
         case "app:requestHistory": void controller.showHistory(); break;
-        case "app:openViewOptions": controller.showViewOptionsPicker(); break;
         case "app:openHistory": if (typeof msg.file === "string") void controller.loadHistorySession(msg.file); break;
         case "app:requestSettings": post({ type: "app:settings", ...readModelsJson() }); break;
         case "app:saveSettings": post({ type: "app:settingsResult", ...writeModelsJson(msg.content) }); break;

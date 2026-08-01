@@ -40,8 +40,7 @@ const html = renderHTML({
     <div id="projectMenu" class="hidden"></div>
     <div class="bar-spacer"></div>
     <button id="historyBtn" class="bar-btn" title="历史会话"> 历史</button>
-    <button id="viewOptsBtn" class="bar-btn" title="显示选项"> 显示</button>
-    <button id="settingsBtn" class="bar-btn" title="编辑 models.json"> 设置</button>
+    <button id="settingsBtn" class="bar-btn" title="设置"> 设置</button>
   </div>
   <div id="appOverlay" class="hidden"><div id="appModal"></div></div>`,
     extraScripts: ["settings.js", "app.js"],

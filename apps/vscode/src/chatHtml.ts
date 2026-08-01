@@ -27,6 +27,9 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     const cssPath = vscode.Uri.joinPath(extensionUri, "media", "chat.css").fsPath;
     let chatCss = "";
     try { chatCss = fs.readFileSync(cssPath, "utf8"); } catch { /* ignore */ }
+    // VSCode 专属覆盖：分支/模型/上下文改由 view title 按钮 + 状态栏承载，
+    // 隐藏 webview 内的 #bottomBar（该项为 vscode/electron 共用 DOM，不删源）。
+    const extraHead = `<style id="vscode-overrides">#bottomBar{display:none!important}</style>`;
     const settingsJs = resolveUri("settings.js");
     const csp =
         `default-src 'none'; ` +
@@ -34,5 +37,5 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
         `style-src 'unsafe-inline'; ` +
         `script-src 'nonce-${n}';`;
 
-    return renderHTML({ resolveUri, csp, chatCss, scriptNonce: n, extraScripts: [settingsJs] });
+    return renderHTML({ resolveUri, csp, chatCss, scriptNonce: n, extraHead, extraScripts: [settingsJs] });
 }

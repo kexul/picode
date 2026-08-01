@@ -39,7 +39,7 @@ export function renderHTML(opts: RenderHTMLOpts): string {
     const head = opts.extraHead ? `  ${opts.extraHead}\n` : "";
     const tabbar =
     `  <div id="tabBar" class="hidden">\n` +
-    `    <div id="tabBarInner"></div>\n` +
+    `    <div id="tabBarInner"></div><button id="newTabBtn" class="tab-bar-btn" title="新建会话 (Ctrl+Alt+N)" aria-label="新建会话">+</button>\n` +
     `  </div>\n`;
     const bodyTop = opts.extraBodyTop ? `  ${opts.extraBodyTop}\n` : "";
     const bodyBottom = opts.extraBodyBottom ? `  ${opts.extraBodyBottom}\n` : "";
@@ -69,10 +69,6 @@ ${bodyTop}${tabbar}  <div id="messages">
     <div id="inputRow">
       <div id="fileMenu" class="hidden"></div>
       <textarea id="input" placeholder="与 pi 对话… (Enter 发送, Shift+Enter 换行, 可粘贴图片, @ 引用文件)"></textarea>
-      <div id="sendCol">
-        <button id="newBtn" title="新建会话 (Ctrl+Alt+N)">新建</button>
-        <button id="sendBtn">发送</button>
-      </div>
     </div>
     <div id="bottomBar">
       <button id="treeBtn" title="查看对话树 / 切换分支">⑂ 分支</button>
@@ -96,7 +92,14 @@ ${bodyTop}${tabbar}  <div id="messages">
   </div>
   <div id="settingsOverlay" class="hidden">
     <div id="settingsPanel">
+      <div id="settingsTabs">
+        <button class="settings-tab active" data-tab="models" type="button">模型配置</button>
+        <button class="settings-tab" data-tab="options" type="button">显示选项</button>
+        <span class="settings-tabs-spacer"></span>
+        <button id="settingsClose" type="button" title="关闭 (Esc)" aria-label="关闭">✕</button>
+      </div>
       <div id="settingsRoot"></div>
+      <div id="viewOptsRoot" class="hidden"></div>
     </div>
   </div>
 ${bodyBottom}  <script${nonceAttr} src="${markedJs}"></script>

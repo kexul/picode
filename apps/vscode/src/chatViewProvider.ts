@@ -6,6 +6,7 @@ import { writeModelsJson, readModelsJson, defaultModelsJson } from "../../../src
 import {
     SessionRuntime,
     FileChange,
+    StatusInfo,
 } from "../../../src/shared/sessionRuntime";
 import { ChatControllerBase } from "../../../src/shared/chatControllerBase";
 
@@ -21,6 +22,13 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     public static readonly viewType = "piChat.chatView";
 
     private view?: vscode.WebviewView;
+    private statusBar?: vscode.StatusBarItem;
+    private statusUpdateTimer?: ReturnType<typeof setTimeout>;
+    private lastStatusInfo?: StatusInfo;
+    // LSP 符号树缓存：已打开文档 → {version, DocumentSymbol[]}
+    private symbolTreeCache = new Map<string, { version: number; symbols: vscode.DocumentSymbol[] }>();
+    private symbolSetTimer?: ReturnType<typeof setTimeout>;
+    private workspaceSubs: vscode.Disposable[] = [];
     private static readonly KEY_SHOW_STATS = "piChat.showStatsBar";
     private static readonly KEY_AUTO_LOAD_LAST = "piChat.autoLoadLastSession";
     private static readonly KEY_SEND_KEY = "piChat.sendKey";
@@ -42,7 +50,34 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         };
         webviewView.webview.html = getChatHtml(webviewView.webview, this.context.extensionUri);
 
+        // 状态栏项：显示当前活动 tab 的模型 + 上下文用量；点击弹出模型选择器。
+        if (!this.statusBar) {
+            this.statusBar = vscode.window.createStatusBarItem(
+                vscode.StatusBarAlignment.Right, 100
+            );
+            this.statusBar.command = "piChat.pickModel";
+            this.statusBar.text = "$(hubot) pi";
+            this.statusBar.tooltip = "Pi Chat：点击切换模型";
+            this.statusBar.show();
+            this.context.subscriptions.push(this.statusBar);
+        }
+
         webviewView.webview.onDidReceiveMessage((msg) => this.processMessage(msg));
+
+        // 工作区文件变化：失效/刷新符号树缓存
+        if (this.workspaceSubs.length === 0) {
+            this.workspaceSubs.push(
+                vscode.workspace.onDidOpenTextDocument(() => this.schedulePushSymbolSet()),
+                vscode.workspace.onDidCloseTextDocument((d) => {
+                    this.symbolTreeCache.delete(d.uri.fsPath);
+                    this.schedulePushSymbolSet();
+                }),
+                vscode.workspace.onDidSaveTextDocument((d) => {
+                    this.symbolTreeCache.delete(d.uri.fsPath);
+                    this.schedulePushSymbolSet();
+                }),
+            );
+        }
 
         webviewView.onDidDispose(() => {
             for (const rt of this.tabs.values()) {
@@ -50,6 +85,12 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
             }
             this.tabs.clear();
             this.activeId = undefined;
+            this.disposeSpare();
+            for (const s of this.workspaceSubs) { s.dispose(); }
+            this.workspaceSubs = [];
+            // webview 关闭后状态栏仍保留为全局入口：重置为中性态。
+            this.lastStatusInfo = undefined;
+            this.applyStatusBar(undefined);
         });
     }
 
@@ -282,6 +323,15 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
             await open(vscode.Uri.file(full));
             return;
         }
+        // 优先在 pi 本会话读写过的文件中匹配，避免大仓库全量 findFiles。
+        const known = this.getActive()?.getKnownFiles() ?? [];
+        if (known.length > 0) {
+            const hit = this.matchKnownFile(known, p);
+            if (hit) {
+                await open(vscode.Uri.file(hit));
+                return;
+            }
+        }
         const base = path.basename(p);
         if (base) {
             const escapeGlob = (s: string) => s.replace(/[?*\\\[\]{}]/g, "?");
@@ -302,50 +352,141 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         vscode.window.showInformationMessage(`piChat: 未找到文件 ${p}`);
     }
 
+    /** 在 pi 本会话触及的文件中匹配路径（相对/绝对/basename/路径后缀）。 */
+    private matchKnownFile(known: string[], query: string): string | undefined {
+        const norm = (s: string) => s.replace(/\\/g, "/").toLowerCase();
+        const q = norm(query);
+        const cwd = this.getCwd();
+        const relOf = (f: string) => norm(this.relativeTo(cwd, f));
+        const exact = known.find((f) => relOf(f) === q || norm(f) === q);
+        if (exact) { return exact; }
+        const base = q.split("/").pop() || q;
+        const cands = known.filter((f) => {
+            const r = relOf(f);
+            return r === base || r.endsWith("/" + base);
+        });
+        if (cands.length > 0) {
+            return cands.find((f) => relOf(f).includes(q)) || cands[0];
+        }
+        return undefined;
+    }
+
+    /** webview 就绪：推送当前已打开文档的符号集合。 */
+    protected onWebviewReady(): void {
+        void this.pushSymbolSet();
+    }
+
+    /** 合并 open/close/save 事件，防抖推送符号集合。 */
+    private schedulePushSymbolSet(): void {
+        if (this.symbolSetTimer) { return; }
+        this.symbolSetTimer = setTimeout(() => {
+            this.symbolSetTimer = undefined;
+            void this.pushSymbolSet();
+        }, 200);
+    }
+
+    /** 取某文件的符号树（带版本缓存：打开文档用 vscode 版本，否则用 mtime，未变复用）。 */
+    private async loadSymbolTree(p: string): Promise<vscode.DocumentSymbol[]> {
+        const cached = this.symbolTreeCache.get(p);
+        const version = this.fileSymbolVersion(p);
+        if (cached && cached.version === version) { return cached.symbols; }
+        let symbols: vscode.DocumentSymbol[] = [];
+        try {
+            const r = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+                "vscode.executeDocumentSymbolProvider", vscode.Uri.file(p));
+            if (Array.isArray(r)) { symbols = r; }
+        } catch { /* 该文件无 LS 或解析失败 */ }
+        this.symbolTreeCache.set(p, { version, symbols });
+        return symbols;
+    }
+
+    /** 缓存失效依据：编辑器已打开用文档版本，否则用文件 mtime（毫秒）。 */
+    private fileSymbolVersion(p: string): number {
+        const open = vscode.workspace.textDocuments.find((d) => d.uri.scheme === "file" && d.uri.fsPath === p);
+        if (open) { return open.version; }
+        try { return fs.statSync(p).mtimeMs; } catch { return 0; }
+    }
+
+    /** 扁平化符号树，为每个符号产出裸名 + 祖先链全限定名（Parent.child）。 */
+    private collectSymbols(syms: vscode.DocumentSymbol[], parents: string[], out: Set<string>): void {
+        for (const s of syms) {
+            out.add(s.name);
+            if (parents.length > 0) { out.add(parents.join(".") + "." + s.name); }
+            if (s.children && s.children.length > 0) {
+                this.collectSymbols(s.children, [...parents, s.name], out);
+            }
+        }
+    }
+
+    /** 合并所有 session 中 pi 工具触及过的文件符号树 → 推送 symbolSet 给 webview。 */
+    private async pushSymbolSet(): Promise<void> {
+        if (!this.view) { return; }
+        const paths = this.getAllKnownFiles();
+        const names = new Set<string>();
+        await Promise.all(paths.map(async (p) => {
+            const syms = await this.loadSymbolTree(p);
+            this.collectSymbols(syms, [], names);
+        }));
+        this.postToWebview({ type: "symbolSet", names: Array.from(names) });
+    }
+
     public async openSymbol(name: string): Promise<void> {
-        try {
-            const symbols = await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
-                "vscode.executeWorkspaceSymbolProvider",
-                name
-            );
-            const list = Array.isArray(symbols) ? symbols : [];
-            const exact = list.filter((s) => s.name === name);
-            const cand = exact.length > 0 ? exact : list;
-            if (cand.length > 0) {
-                const pick =
-                    cand.find((s) => s.kind === vscode.SymbolKind.Function) ||
-                    cand.find((s) => s.kind === vscode.SymbolKind.Method) ||
-                    cand.find((s) => s.kind === vscode.SymbolKind.Class) ||
-                    cand[0];
-                const loc = pick.location;
-                await vscode.window.showTextDocument(loc.uri, { selection: loc.range });
+        const parts = name.split(".");
+        const tail = parts.pop()!;
+        // 优先在 pi 工具触及过的文件中检索
+        for (const p of this.getAllKnownFiles()) {
+            const hit = await this.findSymbolIn(p, parts, tail);
+            if (hit) {
+                await this.openFileLocation(p, hit.selectionRange.start.line + 1);
                 return;
             }
-        } catch { /* fallthrough */ }
-        try {
-            const escapeGlob = (s: string) => s.replace(/[?*\\\[\]{}]/g, "?");
-            const found = await vscode.workspace.findFiles(
-                `**/${escapeGlob(name)}.*`,
-                "{**/node_modules/**,**/.git/**,**/out/**,**/dist/**,**/build/**,**/.next/**,**/__pycache__/**,**/.venv/**,**/venv/**}",
-                20
-            );
-            const files = found.filter((u) => { try { return !fs.statSync(u.fsPath).isDirectory(); } catch { return false; } });
-            if (files.length > 0) {
-                const cwd = this.getCwd();
-                const target = files.find((u) => u.fsPath.replace(/\\/g, "/").includes("/scripts/"))
-                    || files.find((u) => u.fsPath.replace(/\\/g, "/").toLowerCase().startsWith(cwd.toLowerCase().replace(/\\/g, "/")))
-                    || files[0];
-                await vscode.window.showTextDocument(target);
+        }
+        // 兜底：所有打开的文档
+        for (const d of vscode.workspace.textDocuments) {
+            if (d.uri.scheme !== "file") { continue; }
+            const hit = await this.findSymbolIn(d.uri.fsPath, parts, tail);
+            if (hit) {
+                await this.openFileLocation(d.uri.fsPath, hit.selectionRange.start.line + 1);
                 return;
             }
-        } catch { /* fallthrough */ }
-        vscode.window.showInformationMessage(`piChat: 未找到符号或文件 ${name}`);
+        }
+        vscode.window.showInformationMessage(`piChat: 未找到符号 ${name}`);
+    }
+
+    /** 在某文件的符号树上按限定名逐级查找（Foo.method → 找 Foo 再在其 children 里找 method）。
+     * 裸名（无点）时递归搜整棵树：TS 的 DocumentSymbol 顶层是 class，方法/属性嵌套在类 children 里。 */
+    private async findSymbolIn(
+        p: string, parts: string[], tail: string
+    ): Promise<vscode.DocumentSymbol | undefined> {
+        const syms = await this.loadSymbolTree(p);
+        if (parts.length === 0) {
+            return this.dfsFindSymbol(syms, tail);
+        }
+        let level: vscode.DocumentSymbol[] | undefined = syms;
+        for (const part of parts) {
+            const next: vscode.DocumentSymbol | undefined = level?.find((s) => s.name === part);
+            level = next?.children;
+            if (!next) { level = undefined; break; }
+        }
+        return level?.find((s) => s.name === tail);
+    }
+
+    /** DFS 递归找第一个名字匹配的符号（裸名可能嵌套在类/命名空间内）。 */
+    private dfsFindSymbol(syms: vscode.DocumentSymbol[], name: string): vscode.DocumentSymbol | undefined {
+        for (const s of syms) {
+            if (s.name === name) { return s; }
+            if (s.children && s.children.length > 0) {
+                const hit = this.dfsFindSymbol(s.children, name);
+                if (hit) { return hit; }
+            }
+        }
+        return undefined;
     }
 
     // ---- 命令入口 ----
     public async pickViewOptions(): Promise<void> {
         await this.ensureViewVisible();
-        this.showOptionsPicker();
+        this.postToWebview({ type: "openSettings", tab: "options" });
     }
 
     public async openSettings(): Promise<void> {
@@ -360,6 +501,70 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
 
     public async pickSession(): Promise<void> {
         await this.showHistoryPicker();
+    }
+
+    /** 点击状态栏模型项触发：弹出模型选择器。 */
+    public async pickModel(): Promise<void> {
+        await this.ensureViewVisible();
+        const rt = this.getActive();
+        if (rt) { await rt.pickModel(); }
+    }
+
+    /** view title 按钮触发：打开对话树/分支覆盖层。 */
+    public async showTree(): Promise<void> {
+        await this.ensureViewVisible();
+        const rt = this.getActive();
+        if (rt) { await rt.showTree(); }
+    }
+
+    /** 活跃 tab 的模型/上下文状态变化：更新状态栏（500ms 节流）。 */
+    protected onActiveStatusUpdate(info: StatusInfo): void {
+        this.lastStatusInfo = info;
+        if (this.statusUpdateTimer) { return; }
+        this.statusUpdateTimer = setTimeout(() => {
+            this.statusUpdateTimer = undefined;
+            this.applyStatusBar(this.lastStatusInfo);
+        }, 500);
+    }
+
+    /** 任一 tab 的工具触及文件集合变化：刷新符号集合（200ms 防抖）。 */
+    protected onKnownFilesChangedByHost(): void {
+        this.schedulePushSymbolSet();
+    }
+
+    private applyStatusBar(info?: StatusInfo): void {
+        const sb = this.statusBar;
+        if (!sb) { return; }
+        const modelId = info?.modelId || "";
+        const provider = info?.provider || "";
+        const modelPart = modelId ? `${provider ? provider + "/" : ""}${modelId}` : "pi";
+        let text = `$(hubot) ${modelPart}`;
+        let tooltip = "Pi Chat：点击切换模型";
+        if (info && typeof info.percent === "number") {
+            text += ` · ${info.percent.toFixed(1)}%`;
+            const tok = info.tokens != null ? info.tokens.toLocaleString() : "?";
+            const win = info.contextWindow != null ? info.contextWindow.toLocaleString() : "?";
+            const tl = info.thinkingLevel ? ` · 思考 ${info.thinkingLevel}` : "";
+            tooltip = `当前: ${modelPart}${tl}\n上下文: ${tok} / ${win} tokens (${info.percent.toFixed(1)}%)`;
+        }
+        sb.text = text;
+        sb.tooltip = tooltip;
+        if (info && typeof info.percent === "number") {
+            if (info.percent >= 90) {
+                sb.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
+                sb.color = undefined;
+            } else if (info.percent >= 70) {
+                sb.color = new vscode.ThemeColor("editorWarning.foreground");
+                sb.backgroundColor = undefined;
+            } else {
+                sb.color = undefined;
+                sb.backgroundColor = undefined;
+            }
+        } else {
+            sb.color = undefined;
+            sb.backgroundColor = undefined;
+        }
+        sb.show();
     }
 
     public async askSelectionAndSend(): Promise<void> {

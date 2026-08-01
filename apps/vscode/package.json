@@ -16,8 +16,10 @@
       { "command": "piChat.openChat", "title": "Pi Chat: 打开对话窗口", "icon": "$(comment-discussion)" },
       { "command": "piChat.newSession", "title": "Pi Chat: 新建会话", "icon": "$(add)" },
       { "command": "piChat.history", "title": "Pi Chat: 历史会话", "icon": "$(history)" },
-      { "command": "piChat.openSettings", "title": "Pi Chat: 设置（编辑 models.json）", "icon": "$(list-selection)" },
+      { "command": "piChat.openSettings", "title": "Pi Chat: 设置", "icon": "$(gear)" },
       { "command": "piChat.openViewOptions", "title": "Pi Chat: 显示选项", "icon": "$(gear)" },
+      { "command": "piChat.pickModel", "title": "Pi Chat: 切换模型", "icon": "$(hubot)" },
+      { "command": "piChat.showTree", "title": "Pi Chat: 对话分支", "icon": "$(git-branch)" },
       { "command": "piChat.focusInput", "title": "Pi Chat: 聚焦输入框", "icon": "$(keyboard)" },
       { "command": "piChat.askSelectionAndSend", "title": "Pi Chat: 发送选中文本到对话框", "icon": "$(comment)" }
     ],
@@ -40,9 +42,9 @@
         { "command": "piChat.askSelectionAndSend", "group": "navigation@89" }
       ],
       "view/title": [
-        { "command": "piChat.history", "when": "view == piChat.chatView", "group": "navigation@1" },
-        { "command": "piChat.openSettings", "when": "view == piChat.chatView", "group": "navigation@3" },
-        { "command": "piChat.openViewOptions", "when": "view == piChat.chatView", "group": "navigation@5" }
+        { "command": "piChat.history", "when": "view == piChat.chatView", "group": "navigation@2" },
+        { "command": "piChat.showTree", "when": "view == piChat.chatView", "group": "navigation@1" },
+        { "command": "piChat.openSettings", "when": "view == piChat.chatView", "group": "navigation@3" }
       ]
     },
     "configuration": {

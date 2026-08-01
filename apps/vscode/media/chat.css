@@ -30,16 +30,19 @@
 
   /* ---- tab 栏 ---- */
   #tabBar { display: flex; align-items: center; gap: 4px; padding: 4px 6px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); flex: 0 0 auto; }
-  #tabBarInner { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  #tabBarInner { display: flex; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
   #tabBarInner::-webkit-scrollbar { display: none; }
-  .chat-tab { display: flex; flex: 1 1 0; min-width: 0; align-items: center; gap: 4px; padding: 3px 6px 3px 9px; border-radius: 4px 4px 0 0; cursor: pointer; white-space: nowrap; font-size: 0.85em; color: var(--vscode-foreground); opacity: 0.7; user-select: none; }
+  #newTabBtn { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: none; background: transparent; color: var(--vscode-foreground); opacity: 0.7; font-size: 16px; line-height: 1; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  #newTabBtn:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
+  .chat-tab { display: flex; flex: 0 0 auto; min-width: 0; max-width: 200px; align-items: center; gap: 4px; padding: 3px 6px 3px 9px; border-radius: 4px 4px 0 0; cursor: pointer; white-space: nowrap; font-size: 0.85em; color: var(--vscode-foreground); opacity: 0.7; user-select: none; }
   .chat-tab:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
   .chat-tab.active { opacity: 1; background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.2)); }
-  .chat-tab .ct-title { overflow: hidden; text-overflow: ellipsis; }
-  .chat-tab .ct-spinner { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-charts-blue, #3794ff); display: none; }
-  .chat-tab.streaming .ct-spinner { display: inline-block; animation: pi-spin 0.9s linear infinite; }
-  @keyframes pi-spin { to { transform: rotate(360deg); } }
-  .chat-tab .ct-close { margin-left: 2px; opacity: 0.5; padding: 0 3px; border-radius: 3px; }
+  .chat-tab .ct-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .chat-tab .ct-spinner { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-charts-blue, #3794ff); display: none; flex-shrink: 0; }
+  .chat-tab.streaming .ct-spinner { display: inline-block; animation: pi-pulse 1.2s ease-in-out infinite; }
+  .chat-tab.loading .ct-spinner { display: inline-block; animation: pi-pulse 1.2s ease-in-out infinite; }
+  @keyframes pi-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .chat-tab .ct-close { margin-left: 2px; opacity: 0.5; padding: 1px 4px; border-radius: 3px; font-size: 14px; line-height: 1; }
   .chat-tab .ct-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
   #tabBar.hidden { display: none; }
   /* 正文内的文件路径可点击链接：跳转打开对应文件 */
@@ -108,17 +111,19 @@
   .md code { font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; }
   .md :not(pre) > code { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)); color: var(--vscode-textPreformat-foreground, var(--vscode-foreground)); padding: 1px 0; margin: 0 2px; border-radius: 3px; box-shadow: 0.25em 0 0 var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)), -0.25em 0 0 var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)); }
   .md pre code { background: none; padding: 0; }
-  /* highlight.js token 颜色（github-dark 主题，已去除 .hljs 自身背景与 padding） */
-  .hljs { color: var(--vscode-foreground, #c9d1d9); }
-  .hljs-doctag, .hljs-keyword, .hljs-meta .hljs-keyword, .hljs-template-tag, .hljs-template-variable, .hljs-type, .hljs-variable.language_ { color: #ff7b72; }
-  .hljs-title, .hljs-title.class_, .hljs-title.class_.inherited__, .hljs-title.function_ { color: #d2a8ff; }
-  .hljs-attr, .hljs-attribute, .hljs-literal, .hljs-meta, .hljs-number, .hljs-operator, .hljs-selector-attr, .hljs-selector-class, .hljs-selector-id, .hljs-variable { color: #79c0ff; }
-  .hljs-meta .hljs-string, .hljs-regexp, .hljs-string { color: #a5d6ff; }
-  .hljs-built_in, .hljs-symbol { color: #ffa657; }
-  .hljs-code, .hljs-comment, .hljs-formula { color: #8b949e; font-style: italic; }
-  .hljs-name, .hljs-quote, .hljs-selector-pseudo, .hljs-selector-tag { color: #7ee787; }
-  .hljs-section { color: #1f6feb; font-weight: 700; }
-  .hljs-bullet { color: #f2cc60; }
+  /* highlight.js token 颜色（One Dark 风格，已去除 .hljs 自身背景与 padding）
+     换风格只改下面 --hl-* 变量即可 */
+  :root { --hl-keyword:#c678dd; --hl-func:#61afef; --hl-num:#d19a66; --hl-str:#98c379; --hl-built:#e5c07b; --hl-comment:#7f848e; --hl-tag:#e06c75; --hl-section:#61afef; --hl-bullet:#d19a66; --hl-base:#abb2bf; }
+  .hljs { color: var(--hl-base); }
+  .hljs-doctag, .hljs-keyword, .hljs-meta .hljs-keyword, .hljs-template-tag, .hljs-template-variable, .hljs-type, .hljs-variable.language_ { color: var(--hl-keyword); }
+  .hljs-title, .hljs-title.class_, .hljs-title.class_.inherited__, .hljs-title.function_ { color: var(--hl-func); }
+  .hljs-attr, .hljs-attribute, .hljs-literal, .hljs-meta, .hljs-number, .hljs-operator, .hljs-selector-attr, .hljs-selector-class, .hljs-selector-id, .hljs-variable { color: var(--hl-num); }
+  .hljs-meta .hljs-string, .hljs-regexp, .hljs-string { color: var(--hl-str); }
+  .hljs-built_in, .hljs-symbol { color: var(--hl-built); }
+  .hljs-code, .hljs-comment, .hljs-formula { color: var(--hl-comment); font-style: italic; }
+  .hljs-name, .hljs-quote, .hljs-selector-pseudo, .hljs-selector-tag { color: var(--hl-tag); }
+  .hljs-section { color: var(--hl-section); font-weight: 700; }
+  .hljs-bullet { color: var(--hl-bullet); }
   .hljs-emphasis { font-style: italic; }
   .hljs-strong { font-weight: 700; }
   .md blockquote { margin: 13px 0; padding: 1px 13px; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.08)); border-left: 4px solid var(--vscode-descriptionForeground); border-radius: 0 4px 4px 0; }
@@ -170,10 +175,6 @@
   .long-msg .lm-toggle { margin-top: 6px; font-size: 0.8em; opacity: 0.7; cursor: pointer; user-select: none; display: inline-block; }
   .long-msg .lm-toggle:hover { opacity: 1; text-decoration: underline; }
   #inputRow { display: flex; gap: 6px; position: relative; }
-  #sendCol { display: flex; flex-direction: column; gap: 4px; width: 64px; }
-  #newBtn { height: 33.3%; min-height: 28px; font-size: 0.8em; padding: 0; background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2)); color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); }
-  #newBtn:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,0.3)); }
-  #sendBtn { flex: 2; font-size: 0.9em; padding: 0; }
   #input {
     flex: 1; resize: none; min-height: 144px; max-height: 640px;
     background: var(--vscode-input-background); color: var(--vscode-input-foreground);
@@ -245,7 +246,7 @@
   #changedFiles .cf-header {
     flex: 0 0 100%;
     display: flex; align-items: center; gap: 6px;
-    padding: 2px 2px 4px; font-size: 0.75em; opacity: 0.7;
+    padding: 2px 2px 4px; font-size: 0.75em; opacity: 0.9;
     text-transform: uppercase; letter-spacing: 0.03em;
   }
   .cf-item {
@@ -408,6 +409,25 @@
     overflow: hidden;
   }
   #settingsRoot { flex: 1; min-height: 0; }
+  /* 统一面板：顶部 tab 切换 */
+  #settingsTabs { display: flex; align-items: center; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); flex-shrink: 0; }
+  .settings-tab { padding: 6px 12px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--vscode-foreground); cursor: pointer; font-size: 12px; opacity: .7; border-radius: 0; }
+  .settings-tab:hover { opacity: 1; }
+  .settings-tab.active { opacity: 1; border-bottom-color: var(--vscode-focusBorder, #007acc); }
+  .settings-tabs-spacer { flex: 1; }
+  #settingsClose { background: none; border: none; color: var(--vscode-descriptionForeground); cursor: pointer; font-size: 14px; padding: 2px 8px; border-radius: 4px; line-height: 1; }
+  #settingsClose:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); color: var(--vscode-foreground); }
+  /* 统一面板：显示选项 tab */
+  #viewOptsRoot { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 4px; }
+  #viewOptsRoot.hidden { display: none; }
+  .vo-item { display: flex; align-items: flex-start; gap: 10px; padding: 9px 10px; border-radius: 5px; cursor: pointer; transition: background 120ms; }
+  .vo-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
+  .vo-check { flex-shrink: 0; width: 1.4em; text-align: center; opacity: .8; user-select: none; font-size: 13px; line-height: 1.4; }
+  .vo-check.on { color: var(--vscode-textLink-foreground); opacity: 1; }
+  .vo-text { flex: 1; min-width: 0; }
+  .vo-label { font-size: 13px; }
+  .vo-desc { font-size: 11px; opacity: .6; margin-top: 2px; }
+  .vo-empty { padding: 30px 0; text-align: center; opacity: .5; font-size: 13px; }
   .pk-section { padding: 8px 10px 4px; font-size: 0.74em; font-weight: 600; opacity: 0.55; text-transform: uppercase; letter-spacing: 0.04em; user-select: none; }
   #pickerFooter { padding: 8px 12px; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); display: flex; justify-content: flex-end; gap: 8px; }
   #pickerFooter.hidden { display: none; }

@@ -4,7 +4,6 @@
   const messagesEl = document.getElementById("messages"); // 容器，内含各 .tab-pane
   const jumpBottomBtn = document.getElementById("jumpBottom");
   const inputEl = document.getElementById("input");
-  const sendBtn = document.getElementById("sendBtn");
   const statusEl = document.getElementById("status");
   const imgPreviewEl = document.getElementById("imgPreview");
   const modelBtn = document.getElementById("modelBtn");
@@ -15,6 +14,8 @@
   const queueBarEl = document.getElementById("queueBar");
   const tabBarInner = document.getElementById("tabBarInner");
   const tabBarEl = document.getElementById("tabBar");
+  const newTabBtn = document.getElementById("newTabBtn");
+  newTabBtn.addEventListener("click", () => { vscode.postMessage({ type: "newSession" }); });
   let multiTab = false; // 收到 tabList / 带 tabId 的消息后置 true，显示 tab 栏
 
   function enterMultiTab() {
@@ -96,12 +97,8 @@
   function lastExt(p) { const i = p.lastIndexOf("."); return i < 0 ? "" : p.slice(i + 1).toLowerCase(); }
   function isFilePathlike(path) { return KNOWN_EXT.has(lastExt(path)); }
   function escHtml(s) { return s.replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
-  const KW_DENY = new Set([
-    "if","else","for","while","do","switch","case","break","continue","return","throw","try","catch","finally","new","delete","typeof","instanceof","in","of","let","const","var","function","class","extends","super","this","self","import","export","default","from","as","async","await","yield","static","get","set","public","private","protected","readonly","interface","type","enum","namespace","module","declare","abstract","implements",
-    "true","false","null","undefined","void","any","unknown","never","string","number","boolean","object","symbol","bigint",
-    "Promise","Array","Object","String","Number","Boolean","Map","Set","Date","JSON","Math","console","window","document","globalThis","process","require","module","exports",
-  ]);
-  const IDENT_RE = /^([A-Za-z_$][\w$]*)$/;
+  // LSP 符号集合（provider 推送）：命中的反引号文本渲染成可点击符号链接。
+  let symbolNames = new Set();
   function symbolLinkHTML(name, inner) {
     return `<a class="symbol-link" href="#" data-symbol="${escHtml(name)}">${inner != null ? inner : escHtml(name)}</a>`;
   }
@@ -139,9 +136,13 @@
             const tail = line ? ":" + line + (col ? ":" + col : "") : "";
             return `<code>${fileLinkHTML(m[1], line, col, escHtml(m[1]) + tail)}</code>`;
           }
-          const sm = IDENT_RE.exec(text);
-          if (sm && !KW_DENY.has(sm[1]) && globalThis.__PI_HOST__ !== "electron") {
-            return `<code>${symbolLinkHTML(sm[1])}</code>`;
+          if (symbolNames.has(text)) {
+            return `<code>${symbolLinkHTML(text)}</code>`;
+          }
+          // 函数调用形态 Foo()：剥掉末尾括号后查符号集（显示保留原文，点击跳裸名）
+          const callBare = text.replace(/\(\)$/, "");
+          if (callBare !== text && symbolNames.has(callBare)) {
+            return `<code>${symbolLinkHTML(callBare, escHtml(text))}</code>`;
           }
           return `<code>${escHtml(text)}</code>`;
         },
@@ -369,6 +370,14 @@
       syncJumpBottom(tab);
     }
   }
+  // 用户主动接管滚动（滚轮/触屏/键盘向上）：立刻停掉 lerp 追底，交还控制权。
+  // 流式中同步亮起“跳到最新”按钮；非流式不打扰（用户只是回看已结束的回复）。
+  function userTookOverScroll(tab) {
+    if (!tab.stickToBottom) { return; }
+    tab.stickToBottom = false;
+    if (tab.lerpRafId) { cancelAnimationFrame(tab.lerpRafId); tab.lerpRafId = 0; }
+    if (tab.streaming) { tab.hasNewContent = true; syncJumpBottom(tab); }
+  }
   // 控制“跳到最新”按钮显隐（仅活跃 tab 生效）
   function syncJumpBottom(tab) {
     if (!jumpBottomBtn) { return; }
@@ -402,6 +411,7 @@
         tab.rafId = requestAnimationFrame(() => flushDeltas(tab));
       } else {
         tab.currentAssistant.el.innerHTML = renderMarkdown(raw);
+        tab.currentAssistant.el.dataset.raw = raw;
         tab.lastRenderAt = now;
         tab.textDirty = false;
       }
@@ -417,6 +427,7 @@
     cancelFlush(tab);
     if (tab.currentAssistant) {
       tab.currentAssistant.el.innerHTML = renderMarkdown(tab.currentAssistant.raw || "");
+      tab.currentAssistant.el.dataset.raw = tab.currentAssistant.raw || "";
       smoothScrollToBottom(tab);
       tab.currentAssistant = null;
     }
@@ -480,6 +491,7 @@
     div.className = "msg assistant msg-enter";
     const body = document.createElement("div");
     body.className = "md";
+    body.dataset.raw = raw || "";
     body.innerHTML = renderMarkdown(raw || "");
     div.appendChild(body);
     tab.paneEl.appendChild(div);
@@ -670,17 +682,14 @@
 
   // ==================== UI 同步（活跃 tab 驱动全局控件）====================
   function updateSendState() {
-    const tab = activeTab();
-    const streaming = !!tab && tab.streaming;
-    const piReady = !!tab && tab.piReady;
-    if (streaming) { sendBtn.disabled = false; sendBtn.textContent = "中止"; }
-    else { sendBtn.textContent = "发送"; sendBtn.disabled = !piReady; }
+    // 发送/中止按钮已移除（用 Enter 发送、Esc 中止）；状态文案由 syncStatus 负责
   }
   function syncStatus() {
     const tab = activeTab();
     const streaming = !!tab && tab.streaming;
     const piReady = !!tab && tab.piReady;
-    if (streaming) { statusEl.innerHTML = '<span class="typing"><span></span><span></span><span></span></span> pi 正在思考…'; }
+    if (streaming) { statusEl.innerHTML = '<span class="typing"><span></span><span></span><span></span></span> 思考中（Esc 中止）'; }
+    else if (tab && tab.loading) { statusEl.textContent = "加载中…"; }
     else if (!piReady) { statusEl.textContent = "等待 pi 启动…"; }
     else { statusEl.textContent = ""; }
   }
@@ -772,7 +781,7 @@
     tabBarInner.innerHTML = "";
     tabs.forEach((tab) => {
       const el = document.createElement("div");
-      el.className = "chat-tab" + (activeId === tab.id ? " active" : "") + (tab.streaming ? " streaming" : "");
+      el.className = "chat-tab" + (activeId === tab.id ? " active" : "") + (tab.streaming ? " streaming" : "") + (tab.loading ? " loading" : "");
       const spinner = document.createElement("span"); spinner.className = "ct-spinner"; el.appendChild(spinner);
       const title = document.createElement("span"); title.className = "ct-title"; title.textContent = tab.title; el.appendChild(title);
       const close = document.createElement("span"); close.className = "ct-close"; close.textContent = "×"; close.title = "关闭此对话";
@@ -1151,13 +1160,6 @@
   }
 
   // ==================== 事件绑定 ====================
-  sendBtn.addEventListener("click", () => {
-    // 流式响应中点击“中止”按钮 → abort；否则发送（streaming 时发送走 steer 排队，与 TUI 一致）
-    const tab = activeTab();
-    if (tab && tab.streaming) { tab.pendingSteerRestore = (tab.queuedSteering || []).slice(); vscode.postMessage({ type: "abort", tabId: tab.id }); return; }
-    send();
-  });
-  document.getElementById("newBtn").addEventListener("click", () => { vscode.postMessage({ type: "newSession" }); });
   if (jumpBottomBtn) {
     jumpBottomBtn.addEventListener("click", () => {
       const tab = activeTab();
@@ -1188,8 +1190,49 @@
     }, 0);
   });
 
+  // 用户主动接管滚动：滚轮上滑 / 触屏上滑 打断 lerp 追底
+  messagesEl.addEventListener("wheel", (e) => {
+    if (activeId === null) { return; }
+    const t = tabs.get(activeId);
+    if (!t) { return; }
+    if (e.target.closest(".tab-pane") !== t.paneEl) { return; }
+    if (e.deltaY < 0) { userTookOverScroll(t); }
+  }, { passive: true });
+  messagesEl.addEventListener("touchstart", () => {
+    if (activeId === null) { return; }
+    const t = tabs.get(activeId);
+    if (t) { userTookOverScroll(t); }
+  }, { passive: true });
+  document.addEventListener("keydown", (e) => {
+    if (activeId === null) { return; }
+    const tag = (document.activeElement && document.activeElement.tagName) || "";
+    if (tag === "INPUT" || tag === "TEXTAREA") { return; }
+    const t = tabs.get(activeId);
+    if (!t) { return; }
+    const k = (e.key || "");
+    if (k === "PageUp" || k === "ArrowUp" || k === "Home" || k === " ") { userTookOverScroll(t); }
+  }, { passive: true });
+
+  // 流式生成中中止活跃 tab（输入框 Esc / 消息流 Esc 共用）
+  function abortActiveTab() {
+    const ct = activeTab();
+    if (!ct || !ct.streaming) { return false; }
+    ct.pendingSteerRestore = (ct.queuedSteering || []).slice();
+    vscode.postMessage({ type: "abort", tabId: ct.id });
+    return true;
+  }
+
   treeOverlay.addEventListener("click", (e) => { if (e.target === treeOverlay) { hideTree(); } });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { hideTree(); } });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") { return; }
+    // 树面板打开 → 关树；picker 打开 → 交给 picker 监听关闭
+    if (!treeOverlay.classList.contains("hidden")) { hideTree(); return; }
+    if (pickerState && !pickerOverlay.classList.contains("hidden")) { return; }
+    // 输入框聚焦时由 inputEl 的 keydown 处理（含文件菜单关闭 / 中止）
+    if (document.activeElement === inputEl) { return; }
+    // 消息流或其他区域聚焦 → 中止流式生成
+    if (abortActiveTab()) { e.preventDefault(); }
+  });
 
   inputEl.addEventListener("keydown", (e) => {
     if (!fileMenuEl.classList.contains("hidden")) {
@@ -1199,7 +1242,7 @@
       if (e.key === "Escape") { e.preventDefault(); hideFileMenu(); return; }
     }
     // 复刻 pi TUI：流式生成中按 ESC 中止（文件菜单关闭时生效）
-    if (e.key === "Escape") { const ct = activeTab(); if (ct && ct.streaming) { e.preventDefault(); ct.pendingSteerRestore = (ct.queuedSteering || []).slice(); vscode.postMessage({ type: "abort", tabId: ct.id }); } return; }
+    if (e.key === "Escape") { if (abortActiveTab()) { e.preventDefault(); } return; }
     if (isSendKey(e)) { e.preventDefault(); send(); }
   });
   inputEl.addEventListener("input", () => { autoResize(); maybeShowFileMenu(); });
@@ -1230,7 +1273,6 @@
 
   // 初始：等待扩展推送 tabList / tabActivated
   statusEl.textContent = "等待 pi 启动…";
-  sendBtn.disabled = true;
 
   function setStreaming(tab, on) { tab.streaming = on; if (activeId === tab.id) { updateSendState(); syncStatus(); } renderTabBar(); }
   function setPiReady(tab, on, force) { tab.piReady = on; if (activeId === tab.id) { updateSendState(); syncStatus(); } renderTabBar(); }
@@ -1258,6 +1300,7 @@
         }
         st.streaming = !!t.streaming;
         st.piReady = t.piReady !== false;
+        st.loading = !!t.loading;
       });
       // 移除已不存在的 tab
       Array.from(tabs.keys()).forEach((id) => {
@@ -1307,7 +1350,8 @@
     }
     if (type === "viewOptions") { applyViewOptions(msg); return; }
     if (type === "picker") { renderPicker(msg); return; }
-    if (type === "openSettings") { openSettings(); return; }
+    if (type === "openSettings") { openSettings(msg.tab); return; }
+    if (type === "viewOptionItems") { viewOptionItems = Array.isArray(msg.items) ? msg.items : []; if (settingsActiveTab === "options") { renderViewOpts(); } return; }
     if (type === "focusInput") { setTimeout(function () { inputEl.focus(); }, 0); return; }
     if (type === "app:settings" || type === "app:settingsResult" || type === "app:defaultModels") {
       if (settingsDispatch) {
@@ -1323,6 +1367,21 @@
         const pos = inputEl.selectionStart; const before = inputEl.value.slice(0, pos);
         const m = before.match(/(^|\s)@([^\s@]*)$/);
         filterFiles(m ? m[2] : "");
+      }
+      return;
+    }
+
+    if (type === "symbolSet") {
+      symbolNames = new Set(msg.names || []);
+      // 符号集合变化后，已渲染消息里的反引号可能需变成可点击链接：重渲染各 tab 的 .md；
+      // 流式中的活跃消息交给 flush 管线，避免与流式渲染竞争。
+      for (const st of tabs.values()) {
+        if (st.currentAssistant) { st.textDirty = true; scheduleFlush(st); }
+        st.paneEl.querySelectorAll(".md").forEach((el) => {
+          if (st.currentAssistant && el === st.currentAssistant.el) { return; }
+          const raw = el.dataset.raw;
+          if (typeof raw === "string") { el.innerHTML = renderMarkdown(raw); }
+        });
       }
       return;
     }
@@ -1504,21 +1563,62 @@
   const settingsRoot = document.getElementById("settingsRoot");
   let settingsInstance = null;
   let settingsDispatch = null;
+  let settingsActiveTab = "models";
+  let viewOptionItems = [];
+  const viewOptsRoot = document.getElementById("viewOptsRoot");
 
-  function openSettings() {
-    if (!settingsInstance) {
-      settingsInstance = window.mountSettings(settingsRoot, {
-        send(type, payload) {
-          if (type === "save") { vscode.postMessage({ type: "app:saveSettings", content: (payload && payload.content) || "" }); }
-          else if (type === "getDefault") { vscode.postMessage({ type: "app:getDefaultModels" }); }
-          else { vscode.postMessage({ type: "app:requestSettings" }); } // ready | reload
-        },
-        on(handler) { settingsDispatch = handler; },
-        onClose() { closeSettings(); },
+  function ensureSettingsMounted() {
+    if (settingsInstance) { return; }
+    settingsInstance = window.mountSettings(settingsRoot, {
+      send(type, payload) {
+        if (type === "save") { vscode.postMessage({ type: "app:saveSettings", content: (payload && payload.content) || "" }); }
+        else if (type === "getDefault") { vscode.postMessage({ type: "app:getDefaultModels" }); }
+        else { vscode.postMessage({ type: "app:requestSettings" }); } // ready | reload
+      },
+      on(handler) { settingsDispatch = handler; },
+      onClose() { closeSettings(); },
+    });
+  }
+
+  function applySettingsTab() {
+    document.querySelectorAll(".settings-tab").forEach((b) => {
+      b.classList.toggle("active", b.dataset.tab === settingsActiveTab);
+    });
+    settingsRoot.classList.toggle("hidden", settingsActiveTab !== "models");
+    viewOptsRoot.classList.toggle("hidden", settingsActiveTab !== "options");
+  }
+
+  function renderViewOpts() {
+    viewOptsRoot.innerHTML = "";
+    if (!viewOptionItems.length) {
+      const empty = document.createElement("div"); empty.className = "vo-empty"; empty.textContent = "没有可配置项";
+      viewOptsRoot.appendChild(empty); return;
+    }
+    viewOptionItems.forEach((it) => {
+      const row = document.createElement("div"); row.className = "vo-item";
+      const check = document.createElement("span"); check.className = "vo-check" + (it.check === true ? " on" : "");
+      check.textContent = it.check === true ? "✓" : (it.check === false ? "○" : "▶");
+      const txt = document.createElement("div"); txt.className = "vo-text";
+      const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "";
+      txt.appendChild(label);
+      if (it.desc) { const d = document.createElement("div"); d.className = "vo-desc"; d.textContent = it.desc; txt.appendChild(d); }
+      row.appendChild(check); row.appendChild(txt);
+      row.addEventListener("click", () => {
+        vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: it.value });
       });
-      settingsInstance.requestInitial();
-    } else {
-      settingsInstance.requestInitial(); // reload
+      viewOptsRoot.appendChild(row);
+    });
+  }
+
+  function openSettings(tab) {
+    const wasVisible = !settingsOverlay.classList.contains("hidden");
+    settingsActiveTab = tab === "options" ? "options" : "models";
+    ensureSettingsMounted();
+    applySettingsTab();
+    if (!wasVisible && settingsActiveTab === "models") { settingsInstance.requestInitial(); }
+    if (settingsActiveTab === "options") {
+      vscode.postMessage({ type: "requestViewOptionItems" });
+      renderViewOpts();
     }
     settingsOverlay.classList.remove("hidden");
   }
@@ -1526,6 +1626,18 @@
     settingsOverlay.classList.add("hidden");
   }
   settingsOverlay.addEventListener("click", (e) => { if (e.target === settingsOverlay) { closeSettings(); } });
+  document.querySelectorAll(".settings-tab").forEach((b) => {
+    b.addEventListener("click", () => {
+      const t = b.dataset.tab;
+      if (!t || t === settingsActiveTab) { return; }
+      settingsActiveTab = t;
+      if (t === "models") { ensureSettingsMounted(); }
+      applySettingsTab();
+      if (t === "options") { vscode.postMessage({ type: "requestViewOptionItems" }); renderViewOpts(); }
+    });
+  });
+  const settingsCloseBtn = document.getElementById("settingsClose");
+  if (settingsCloseBtn) { settingsCloseBtn.addEventListener("click", closeSettings); }
   // 暴露给同页面的 app.js（Electron appBar）调用
   window.__piOpenSettings = openSettings;
   window.__piCloseSettings = closeSettings;

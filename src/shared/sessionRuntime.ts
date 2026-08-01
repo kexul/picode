@@ -35,6 +35,19 @@ export interface ModelChoice {
     thinkingLevel?: string;
 }
 
+/** 一个 tab 当前的模型/上下文用量状态快照，供宿主展示（如 VSCode 状态栏）。 */
+export interface StatusInfo {
+    modelId?: string;
+    provider?: string;
+    thinkingLevel?: string;
+    /** 上下文使用百分比 0-100。 */
+    percent?: number;
+    /** 已用 tokens。 */
+    tokens?: number;
+    /** 上下文窗口大小。 */
+    contextWindow?: number;
+}
+
 /**
  * 平台适配层：隔离 VSCode 与 Electron 的差异。
  *
@@ -48,11 +61,19 @@ export interface RuntimeHost {
     resolvePath(p: string): string;
     /** 校验 pi 可执行文件存在；失败时自行向 tab 推送 systemError。返回是否可用。 */
     checkPiAvailable(piPath: string, tabId: string): boolean;
+    /** 领取一个已就绪的备用 pi 进程（无则 undefined）。领取后宿主会自动补新备用。 */
+    claimSpareClient?(): PiClient | undefined;
 
     postToTab(tabId: string, msg: Record<string, unknown>): void;
     broadcastTabList(): void;
     /** 当某 tab 的会话路径变化（且可能为活跃 tab）时通知宿主。可选。 */
     onSessionChanged?(tabId: string, sessionPath: string | undefined): void;
+    /** 当某 tab 的模型/上下文用量状态变化时通知宿主。可选。
+     * 宿主自行按 activeId 过滤后决定是否展示（如 VSCode 状态栏）。 */
+    onStatusUpdate?(tabId: string, info: StatusInfo): void;
+    /** 当某 tab 的工具触及文件集合（knownFiles）变化时通知宿主。可选。
+     * 宿主可据此刷新符号集合等依赖该集合的数据。 */
+    onKnownFilesChanged?(tabId: string): void;
 
     // ---- UI 弹窗（对应当 pi 的 extension_ui_request）----
     confirmDialog(title: string, message: string): Promise<boolean>;
@@ -89,7 +110,17 @@ export class SessionRuntime {
     public title: string = "";
     public streaming = false;
     public piReady = false;
+    /** 正在加载会话 / 分叉（pi 冷启动 + 切换会话期间为 true，供宿主展示加载态）。 */
+    public loading = false;
     public currentSessionPath: string | undefined;
+
+    // ---- 当前状态快照（供 host.onStatusUpdate 上报，如 VSCode 状态栏）----
+    private statusModelId?: string;
+    private statusProvider?: string;
+    private statusThinking?: string;
+    private statusPercent?: number;
+    private statusTokens?: number;
+    private statusContextWindow?: number;
 
     private client?: PiClient;
     private reqId = 0;
@@ -97,6 +128,8 @@ export class SessionRuntime {
     private fileChanges = new Map<string, FileChange>();
     private pendingEdits = new Map<string, { path: string; before: string }>();
     private editSnapshots = new Map<string, { path: string; before: string; after: string }>();
+    /** pi 本会话工具调用触及过的文件绝对路径（供宿主跳转快速定位）。 */
+    private knownFiles = new Set<string>();
     private forkEntries: { entryId: string; text: string }[] = [];
 
     constructor(id: string, title: string, private readonly host: RuntimeHost) {
@@ -109,12 +142,34 @@ export class SessionRuntime {
         this.host.postToTab(this.id, msg);
     }
 
-    /** 启动该 tab 的 pi 进程。 */
+    /** 把当前 tab 的模型/上下文状态快照上报给宿主（如 VSCode 状态栏）。
+     *  宿主自行按 activeId 过滤；这里不多嘴。 */
+    public emitStatus(): void {
+        this.host.onStatusUpdate?.(this.id, {
+            modelId: this.statusModelId,
+            provider: this.statusProvider,
+            thinkingLevel: this.statusThinking,
+            percent: this.statusPercent,
+            tokens: this.statusTokens,
+            contextWindow: this.statusContextWindow,
+        });
+    }
+
+    /** 启动该 tab 的 pi 进程。优先领取宿主预热的备用进程（免冷启动），
+     *  领不到（首 tab / 备用尚未就绪）时自行 spawn。 */
     public startClient(): void {
         if (this.client && this.client.isRunning()) {
             return;
         }
         this.setPiReady(false);
+
+        // 备用进程已就绪：直接挂上，避免 pi 冷启动等待
+        const spare = this.host.claimSpareClient?.();
+        if (spare) {
+            this.attachClient(spare);
+            return;
+        }
+
         const cfg = this.host.getConfig();
 
         if (!this.host.checkPiAvailable(cfg.piPath, this.id)) {
@@ -125,14 +180,20 @@ export class SessionRuntime {
             ? [...cfg.extraArgs, "--approve"]
             : cfg.extraArgs;
 
-        this.client = new PiClient({
-            piPath: cfg.piPath,
-            cwd: this.host.getCwd(),
-            provider: cfg.provider || undefined,
-            model: cfg.model || undefined,
-            extraArgs,
-        });
+        this.attachClient(
+            new PiClient({
+                piPath: cfg.piPath,
+                cwd: this.host.getCwd(),
+                provider: cfg.provider || undefined,
+                model: cfg.model || undefined,
+                extraArgs,
+            })
+        );
+    }
 
+    /** 把（新建或领取的）pi 客户端挂到本 tab：绑定事件并启动。 */
+    private attachClient(client: PiClient): void {
+        this.client = client;
         this.client.on("event", (evt) => this.onPiEvent(evt));
         this.client.on("response", (resp) => this.onPiResponse(resp));
         this.client.on("ui", (req) => this.onPiUiRequest(req));
@@ -185,6 +246,7 @@ export class SessionRuntime {
         this.piReady = ready;
         this.post({ type: "piReady", ready });
         this.host.broadcastTabList();
+        this.emitStatus();
     }
 
     /** 发送当前模型信息给 webview。 */
@@ -192,12 +254,16 @@ export class SessionRuntime {
         const resp = await this.request({ type: "get_state" });
         const model = resp?.data?.model;
         if (model && model.id) {
+            this.statusModelId = model.id;
+            this.statusProvider = model.provider;
             this.post({ type: "modelChanged", modelId: model.id, provider: model.provider });
         }
         const thinkingLevel = resp?.data?.thinkingLevel;
         if (thinkingLevel) {
+            this.statusThinking = thinkingLevel;
             this.post({ type: "thinkingChanged", level: thinkingLevel });
         }
+        this.emitStatus();
     }
 
     /** 中止该 tab 正在进行的生成 + bash 工具。 */
@@ -253,8 +319,8 @@ export class SessionRuntime {
         }
     }
 
-    /** 发送需要响应的命令，返回带 id 的响应。 */
-    public request(cmd: Record<string, unknown>): Promise<any> {
+    /** 发送需要响应的命令，返回带 id 的响应。timeoutMs 默认 15s，可传更短用于就绪轮询。 */
+    public request(cmd: Record<string, unknown>, timeoutMs = 15000): Promise<any> {
         return new Promise((resolve) => {
             if (!this.client || !this.client.isRunning()) {
                 resolve(undefined);
@@ -266,7 +332,7 @@ export class SessionRuntime {
                     this.pending.delete(id);
                     resolve(undefined);
                 }
-            }, 15000);
+            }, timeoutMs);
             const cb = (resp: any) => {
                 clearTimeout(timer);
                 if (this.pending.has(id)) {
@@ -283,6 +349,27 @@ export class SessionRuntime {
                 resolve(undefined);
             }
         });
+    }
+
+    /**
+     * 等待 pi 进程真正就绪（首个 RPC 能成功响应）。
+     * pi 冷启动（加载配置/模型探测）需要数秒，spawn 后立刻发命令会全部挤在
+     * 15s 超时上；这里用短超时的 get_state 轮询，就绪后立即返回。
+     * 进程未启动或已退出时立即失败。
+     */
+    public async waitReady(timeoutMs = 30000): Promise<boolean> {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            if (!this.client || !this.client.isRunning()) {
+                return false;
+            }
+            const resp = await this.request({ type: "get_state" }, 2000);
+            if (resp && resp.success !== false) {
+                return true;
+            }
+            await new Promise((r) => setTimeout(r, 300));
+        }
+        return false;
     }
 
     // ---- pi 事件 ----
@@ -402,6 +489,7 @@ export class SessionRuntime {
         const toolName: string = evt.toolName;
         const isEditLike = toolName === "edit" || toolName === "write";
         const p = isEditLike ? this.editToolPath(toolName, evt.args) : null;
+        this.collectKnownFile(toolName, evt.args);
         if (p && evt.toolCallId) {
             this.post({
                 type: "editCardStart",
@@ -470,7 +558,10 @@ export class SessionRuntime {
         this.fileChanges.clear();
         this.pendingEdits.clear();
         this.editSnapshots.clear();
+        const hadKnown = this.knownFiles.size > 0;
+        this.knownFiles.clear();
         this.postFileChanges();
+        if (hadKnown) { this.host.onKnownFilesChanged?.(this.id); }
     }
 
     private postFileChanges(): void {
@@ -479,6 +570,29 @@ export class SessionRuntime {
             label: c.label,
         }));
         this.post({ type: "fileChanges", files });
+    }
+
+    /** 收集 pi 工具调用涉及的具体文件路径（read/edit/write）。 */
+    private collectKnownFile(toolName: string, args: any): void {
+        if (toolName !== "read" && toolName !== "edit" && toolName !== "write") {
+            return;
+        }
+        const raw =
+            typeof args?.path === "string"
+                ? args.path
+                : typeof args?.file_path === "string"
+                  ? args.file_path
+                  : null;
+        if (!raw) { return; }
+        const resolved = this.host.resolvePath(raw);
+        if (this.knownFiles.has(resolved)) { return; }
+        this.knownFiles.add(resolved);
+        this.host.onKnownFilesChanged?.(this.id);
+    }
+
+    /** 本会话工具调用触及过的文件绝对路径（供宿主跳转时优先检索）。 */
+    public getKnownFiles(): string[] {
+        return Array.from(this.knownFiles);
     }
 
     private editToolPath(toolName: string, args: any): string | null {
@@ -643,15 +757,29 @@ export class SessionRuntime {
     public async loadSession(file: string): Promise<void> {
         if (!this.client || !this.client.isRunning()) {
             this.startClient();
-            // 等待客户端就绪后再发 switch
-            await new Promise((r) => setTimeout(r, 100));
         }
+        this.loading = true;
+        this.host.broadcastTabList();
         this.resetFileChanges();
         this.post({ type: "clear" });
         this.post({ type: "system", text: "正在加载会话…" });
 
+        // 等待 pi 真正就绪（冷启动需数秒），避免命令挤在超时上
+        const ready = await this.waitReady();
+        if (!ready) {
+            this.loading = false;
+            this.host.broadcastTabList();
+            this.post({
+                type: "systemError",
+                text: "pi 进程未能就绪，无法加载会话。请确认 pi 可正常启动。",
+            });
+            return;
+        }
+
         const switchResp = await this.request({ type: "switch_session", sessionPath: file });
         if (!switchResp || switchResp.success === false) {
+            this.loading = false;
+            this.host.broadcastTabList();
             this.post({
                 type: "systemError",
                 text: `加载会话失败: ${switchResp?.error ?? "未知错误"}`,
@@ -669,6 +797,8 @@ export class SessionRuntime {
         this.currentSessionPath = file;
         this.host.onSessionChanged?.(this.id, this.currentSessionPath);
         this.post({ type: "system", text: `已加载会话（${messages.length} 条消息）。` });
+        this.loading = false;
+        this.host.broadcastTabList();
         this.refreshStats();
     }
 
@@ -690,9 +820,28 @@ export class SessionRuntime {
 
     public async forkFromEntry(entryId: string): Promise<void> {
         this.abortActiveRun();
+        if (!this.client || !this.client.isRunning()) {
+            this.startClient();
+        }
+        this.loading = true;
+        this.host.broadcastTabList();
         this.post({ type: "system", text: "正在从该消息处分叉…" });
+
+        const ready = await this.waitReady();
+        if (!ready) {
+            this.loading = false;
+            this.host.broadcastTabList();
+            this.post({
+                type: "systemError",
+                text: "pi 进程未能就绪，无法分叉。请确认 pi 可正常启动。",
+            });
+            return;
+        }
+
         const resp = await this.request({ type: "fork", entryId });
         if (!resp || resp.success === false) {
+            this.loading = false;
+            this.host.broadcastTabList();
             this.post({
                 type: "systemError",
                 text: `分叉失败: ${resp?.error ?? "未知错误"}`,
@@ -700,6 +849,8 @@ export class SessionRuntime {
             return;
         }
         if (resp.data?.cancelled) {
+            this.loading = false;
+            this.host.broadcastTabList();
             this.post({ type: "system", text: "分叉已取消。" });
             return;
         }
@@ -719,6 +870,8 @@ export class SessionRuntime {
         this.post({ type: "clear" });
         this.renderMessages(messages);
         this.post({ type: "system", text: `已分叉到新分支（${messages.length} 条消息）。` });
+        this.loading = false;
+        this.host.broadcastTabList();
         this.refreshStats();
     }
 
@@ -729,15 +882,30 @@ export class SessionRuntime {
     public async loadSessionAndFork(sessionPath: string, entryId: string): Promise<void> {
         if (!this.client || !this.client.isRunning()) {
             this.startClient();
-            await new Promise((r) => setTimeout(r, 100));
         }
+        this.loading = true;
+        this.host.broadcastTabList();
         this.resetFileChanges();
         this.post({ type: "clear" });
         this.post({ type: "system", text: "正在加载源会话并分叉…" });
 
+        // 等待 pi 真正就绪（冷启动需数秒），避免命令挤在超时上
+        const ready = await this.waitReady();
+        if (!ready) {
+            this.loading = false;
+            this.host.broadcastTabList();
+            this.post({
+                type: "systemError",
+                text: "pi 进程未能就绪，无法分叉。请确认 pi 可正常启动。",
+            });
+            return;
+        }
+
         // 1. 加载源会话（不修改源文件）
         const switchResp = await this.request({ type: "switch_session", sessionPath });
         if (!switchResp || switchResp.success === false) {
+            this.loading = false;
+            this.host.broadcastTabList();
             this.post({
                 type: "systemError",
                 text: `加载源会话失败: ${switchResp?.error ?? "未知错误"}`,
@@ -750,6 +918,8 @@ export class SessionRuntime {
         // 2. 在该 entry 处分叉：创建新分支会话文件并切换到它
         const forkResp = await this.request({ type: "fork", entryId });
         if (!forkResp || forkResp.success === false) {
+            this.loading = false;
+            this.host.broadcastTabList();
             this.post({
                 type: "systemError",
                 text: `分叉失败: ${forkResp?.error ?? "未知错误"}`,
@@ -775,6 +945,8 @@ export class SessionRuntime {
         this.post({ type: "clear" });
         this.renderMessages(messages);
         this.post({ type: "system", text: `已在新 tab 打开新分支（${messages.length} 条消息）。` });
+        this.loading = false;
+        this.host.broadcastTabList();
         this.refreshStats();
         void this.sendCurrentModel();
     }
@@ -818,6 +990,7 @@ export class SessionRuntime {
                                 this.post({ type: "assistantFull", text });
                                 text = "";
                             }
+                            this.collectKnownFile(c.name, c.arguments);
                             if (c.name === "edit" || c.name === "write") {
                                 const p = this.editToolPath(c.name, c.arguments);
                                 const id = c.id || `hist-${Math.random()}`;
@@ -902,7 +1075,9 @@ export class SessionRuntime {
             if (tResp?.success === false) {
                 this.post({ type: "systemError", text: `设置思考强度失败: ${tResp.error}` });
             } else {
+                this.statusThinking = choice.thinkingLevel;
                 this.post({ type: "thinkingChanged", level: choice.thinkingLevel });
+                this.emitStatus();
             }
         }
     }
@@ -915,7 +1090,9 @@ export class SessionRuntime {
             this.post({ type: "systemError", text: `设置思考强度失败: ${resp.error}` });
             return false;
         }
+        this.statusThinking = level;
         this.post({ type: "thinkingChanged", level });
+        this.emitStatus();
         return true;
     }
 
@@ -925,12 +1102,19 @@ export class SessionRuntime {
         if (!d) {
             return;
         }
+        const cu = d.contextUsage || null;
+        if (cu) {
+            this.statusPercent = typeof cu.percent === "number" ? cu.percent : undefined;
+            this.statusTokens = typeof cu.tokens === "number" ? cu.tokens : undefined;
+            this.statusContextWindow = typeof cu.contextWindow === "number" ? cu.contextWindow : undefined;
+        }
         this.post({
             type: "stats",
             tokens: d.tokens || null,
             cost: typeof d.cost === "number" ? d.cost : null,
-            contextUsage: d.contextUsage || null,
+            contextUsage: cu,
         });
+        this.emitStatus();
     }
 
     // ---- 文件跳转 / diff（均相对该 tab 的 fileChanges）----

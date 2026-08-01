@@ -143,10 +143,6 @@ export class ChatController extends ChatControllerBase {
         this.sendViewOptions();
     }
 
-    public showViewOptionsPicker(): void {
-        this.showOptionsPicker();
-    }
-
     /** 供 main.ts 的 app:requestViewOptions 主动推送当前显示选项。 */
     public pushViewOptions(): void {
         this.sendViewOptions();

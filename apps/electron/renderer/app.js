@@ -117,7 +117,6 @@
     vscode.postMessage({ type: "app:requestHistory" });
   });
   document.getElementById("settingsBtn").addEventListener("click", () => { if (window.__piOpenSettings) window.__piOpenSettings(); });
-  document.getElementById("viewOptsBtn").addEventListener("click", () => { vscode.postMessage({ type: "app:openViewOptions" }); });
 
   window.addEventListener("message", (event) => {
     const msg = event.data;

@@ -17,14 +17,9 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import {
-    SessionRuntime,
-    RuntimeHost,
-    FileChange,
-    ModelInfo,
-    ModelChoice,
-} from "./sessionRuntime";
+import { SessionRuntime, RuntimeHost, FileChange, ModelInfo, ModelChoice, StatusInfo, } from "./sessionRuntime";
 import { PiConfig } from "./sessionRuntime";
+import { PiClient } from "./piClient";
 import { listSessions } from "./sessionStore";
 
 export abstract class ChatControllerBase implements RuntimeHost {
@@ -38,6 +33,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected pickerResolve: ((v: any | undefined) => void) | null = null;
     protected pickerTimer: ReturnType<typeof setTimeout> | null = null;
     protected pickerRefresher: ((nextThinking: string) => void) | null = null;
+
+    // ---- 备用 pi 进程池（热备，免冷启动）----
+    /** 已就绪的备用 pi 进程（不绑定任何 tab）。 */
+    protected spare: PiClient | null = null;
+    /** 正在后台预热、尚未就绪的备用进程（防止并发 spawn 多个）。 */
+    protected preparingSpare: PiClient | null = null;
 
     // ---- 思考强度标签 ----
     protected static readonly THINKING_LABELS: Record<string, string> = {
@@ -96,6 +97,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
     // ---- 文件列表 / 文件打开（来自 webview 的 listFiles / openFile）----
     protected abstract sendFileList(): void;
     protected abstract openFileFromWebview(p: string, line?: number, col?: number): void;
+
+    /** webview 首次就绪时调用（默认空，平台子类可覆盖以推送初始化数据）。 */
+    protected onWebviewReady(): void {}
 
     /** 处理平台独有的 webview 消息；已在公共分发中匹配的不会进来。返回是否已处理。 */
     protected abstract handlePlatformMessage(msg: any): boolean;
@@ -223,11 +227,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 推送显示选项浮层（toggle 模式，不等待结果）。 */
     protected showOptionsPicker(): void {
+        // 推送显示选项条目（数据）：由前端渲染进统一设置面板的「显示选项」tab。
         this.postToWebview({
-            type: "picker",
-            kind: "options",
-            toggle: true,
-            searchable: false,
+            type: "viewOptionItems",
             items: this.buildViewOptionItems(),
         });
     }
@@ -242,6 +244,76 @@ export abstract class ChatControllerBase implements RuntimeHost {
     // ========================================================================
     //  标签管理（RuntimeHost）
     // ========================================================================
+
+    // ---- 备用 pi 进程池 ----
+    /** 确保池中常备一个已就绪的备用进程；领取后由 claimSpareClient 触发补充。 */
+    protected ensureSpare(): void {
+        if (this.spare || this.preparingSpare) {
+            return;
+        }
+        const cfg = this.getConfig();
+        if (!this.resolveExecutable(cfg.piPath)) {
+            return;
+        }
+        const extraArgs = cfg.trustProject
+            ? [...cfg.extraArgs, "--approve"]
+            : cfg.extraArgs;
+        const client = new PiClient({
+            piPath: cfg.piPath,
+            cwd: this.getCwd(),
+            provider: cfg.provider || undefined,
+            model: cfg.model || undefined,
+            extraArgs,
+        });
+        this.preparingSpare = client;
+        client.on("stderr", (text: string) => console.error("[pi spare stderr]", text));
+        client.on("error", (err: Error) => console.error("[pi spare error]", err.message));
+        client.on("exit", () => {
+            // 备用进程意外退出（尚未被领取时）：清掉并补一个新的
+            if (this.spare === client) {
+                this.spare = null;
+                this.ensureSpare();
+            }
+        });
+        client.start();
+        void client.waitReady().then((ok) => {
+            if (this.preparingSpare !== client) {
+                // 已被 dispose 清理，丢弃
+                return;
+            }
+            this.preparingSpare = null;
+            if (ok && client.isRunning()) {
+                this.spare = client;
+            } else {
+                client.stop();
+                this.ensureSpare();
+            }
+        });
+    }
+
+    /** RuntimeHost.claimSpareClient：领取就绪的备用进程；领取后立即后台补新。 */
+    public claimSpareClient(): PiClient | undefined {
+        const c = this.spare ?? undefined;
+        this.spare = null;
+        if (c) {
+            this.ensureSpare();
+        }
+        return c;
+    }
+
+    /** 停止并清空所有备用进程（宿主销毁时调用，如 VSCode webview dispose）。 */
+    protected disposeSpare(): void {
+        if (this.spare) {
+            this.spare.stop();
+            this.spare = null;
+        }
+        if (this.preparingSpare) {
+            const p = this.preparingSpare;
+            this.preparingSpare = null;
+            p.stop();
+        }
+    }
+
     public postToTab(tabId: string, msg: Record<string, unknown>): void {
         this.postToWebview({ ...msg, tabId });
     }
@@ -254,6 +326,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 title: rt.title,
                 streaming: rt.streaming,
                 piReady: rt.piReady,
+                loading: rt.loading,
             })),
             activeId: this.activeId ?? null,
         });
@@ -262,6 +335,21 @@ export abstract class ChatControllerBase implements RuntimeHost {
     public onSessionChanged(tabId: string, sessionPath: string | undefined): void {
         if (this.activeId === tabId) { this.onActiveSessionChanged(sessionPath); }
     }
+
+    /** RuntimeHost.onStatusUpdate：仅活跃 tab 的状态才转发给宿主展示。 */
+    public onStatusUpdate(tabId: string, info: StatusInfo): void {
+        if (this.activeId === tabId) { this.onActiveStatusUpdate(info); }
+    }
+
+    /** RuntimeHost.onKnownFilesChanged：某 tab 的工具触及文件集合变化，转发给宿主。 */
+    public onKnownFilesChanged(_tabId: string): void {
+        this.onKnownFilesChangedByHost();
+    }
+
+    protected onKnownFilesChangedByHost(): void { /* 默认无操作 */ }
+
+    /** 活跃 tab 的状态发生变化时平台钩子（默认无操作；VSCode 重写为状态栏更新）。 */
+    protected onActiveStatusUpdate(_info: StatusInfo): void { /* 默认无操作 */ }
 
     public newTab(): SessionRuntime {
         const id = `tab-${++this.tabSeq}`;
@@ -272,6 +360,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.broadcastTabList();
         this.postToWebview({ type: "tabActivated", id });
         rt.startClient();
+        // 后台预热一个备用进程，供下一个新 tab / 切分支直接领取
+        this.ensureSpare();
         return rt;
     }
 
@@ -281,7 +371,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.postToWebview({ type: "tabActivated", id });
         this.broadcastTabList();
         const rt = this.tabs.get(id);
-        if (rt) { this.onSessionChanged(id, rt.currentSessionPath); }
+        if (rt) {
+            this.onSessionChanged(id, rt.currentSessionPath);
+            rt.emitStatus();
+        }
     }
 
     /** 按方向切换到上一个/下一个 tab。 */
@@ -305,7 +398,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
             if (this.activeId) {
                 this.postToWebview({ type: "tabActivated", id: this.activeId });
                 const next = this.tabs.get(this.activeId);
-                if (next) { this.onSessionChanged(this.activeId, next.currentSessionPath); }
+                if (next) {
+                    this.onSessionChanged(this.activeId, next.currentSessionPath);
+                    next.emitStatus();
+                }
             }
         }
         this.broadcastTabList();
@@ -315,6 +411,15 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     public getActive(): SessionRuntime | undefined {
         return this.activeId ? this.tabs.get(this.activeId) : undefined;
+    }
+
+    /** 合并所有 tab 中 pi 工具调用触及过的文件绝对路径（供宿主收集符号等）。 */
+    public getAllKnownFiles(): string[] {
+        const set = new Set<string>();
+        for (const rt of this.tabs.values()) {
+            for (const p of rt.getKnownFiles()) { set.add(p); }
+        }
+        return Array.from(set);
     }
 
     // ========================================================================
@@ -393,11 +498,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     public async loadHistorySession(file: string): Promise<void> {
-        // 在活跃 tab 加载；若无 tab 则新建
+        // 在活跃 tab 加载；若无 tab 则新建（loadSession 内部会等待 pi 就绪）
         let rt = this.getActive();
         if (!rt) {
             rt = this.newTab();
-            await new Promise((r) => setTimeout(r, 150));
         }
         this.setActive(rt.id);
         await rt.loadSession(file);
@@ -417,7 +521,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             return;
         }
         const newRt = this.newTab();
-        await new Promise((r) => setTimeout(r, 150));
+        // 不等固定 sleep：loadSessionAndFork 内部会等待新 tab 的 pi 进程就绪
         await newRt.loadSessionAndFork(sourcePath, entryId);
         await this.onFocusChat();
     }
@@ -473,6 +577,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 if (this.activeId) {
                     this.postToWebview({ type: "tabActivated", id: this.activeId });
                 }
+                this.onWebviewReady();
+                // webview 就绪后后台预热备用进程，后续新 tab / 切分支免冷启动
+                this.ensureSpare();
                 return;
             }
             case "newSession":
@@ -504,6 +611,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 return;
             case "pickerCancel":
                 this.resolvePicker(undefined);
+                return;
+            case "requestViewOptionItems":
+                this.showOptionsPicker();
                 return;
             case "pickerToggle":
                 if (typeof msg.action === "string") {

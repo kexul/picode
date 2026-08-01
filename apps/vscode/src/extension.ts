@@ -62,6 +62,18 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     context.subscriptions.push(
+        vscode.commands.registerCommand("piChat.pickModel", () => {
+            provider.pickModel();
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand("piChat.showTree", () => {
+            provider.showTree();
+        })
+    );
+
+    context.subscriptions.push(
         vscode.commands.registerCommand("piChat.focusInput", () => {
             provider.focusInput();
         })
