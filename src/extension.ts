@@ -4,6 +4,17 @@ import { ChatViewProvider, DiffContentProvider } from "./chatViewProvider";
 export function activate(context: vscode.ExtensionContext): void {
     const provider = new ChatViewProvider(context);
 
+    // URI 入口：build 脚本通过 vscode://local.pi-chat-vscode/reloadWindow 触发窗口重载。
+    context.subscriptions.push(
+        vscode.window.registerUriHandler({
+            handleUri(uri: vscode.Uri): void {
+                if (uri.path === "/reloadWindow") {
+                    void vscode.commands.executeCommand("workbench.action.reloadWindow");
+                }
+            },
+        })
+    );
+
     context.subscriptions.push(
         vscode.workspace.registerTextDocumentContentProvider(
             DiffContentProvider.scheme,

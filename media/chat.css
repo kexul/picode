@@ -57,17 +57,7 @@
   .assistant { background: none; padding: 0; }
   .system { font-style: italic; opacity: 0.6; font-size: 0.85em; white-space: pre-wrap; text-align: center; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-radius: 0; margin: 12px 0; }
   .error { color: var(--vscode-errorForeground); }
-  .thinking { opacity: 0.75; font-size: 0.9em; border-left: 2px solid var(--vscode-descriptionForeground); padding: 0; overflow: hidden; }
-  .thinking .thinking-header {
-    display: flex; align-items: center; gap: 6px; cursor: pointer;
-    padding: 4px 10px; font-size: 0.95em; user-select: none;
-  }
-  .thinking .thinking-header:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
-  .thinking .thinking-caret { font-size: 0.7em; opacity: 0.7; transition: transform 200ms ease; }
-  .thinking:not(.collapsed) .thinking-caret { transform: rotate(90deg); }
-  .thinking .thinking-label { font-weight: bold; opacity: 0.7; }
-  .thinking .thinking-body { padding: 4px 10px 8px; white-space: pre-wrap; max-height: 1000px; overflow: hidden; transition: max-height 300ms ease, opacity 300ms ease, padding 300ms ease; opacity: 1; }
-  .thinking.collapsed .thinking-body { max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; }
+  .thinking { display: none; } /* 思考过程已改到状态栏实时显示，不再出现在消息流 */
   /* 思考中的动画指示器 */
   .typing { display: inline-flex; align-items: center; gap: 3px; vertical-align: middle; }
   .typing span {
@@ -90,6 +80,21 @@
   .tool .tool-args { display: none; margin-left: 6px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
   .tool.expanded { white-space: normal; flex: 1 1 100%; min-width: 0; }
   .tool.expanded .tool-args { display: inline; }
+  /* 完整模式：TUI 风格工具卡片（整块背景色块，状态=背景色，无边框/图标/状态文字） */
+  /* 完整模式：VSCode 风格工具卡片（细边框 + 边框色表状态 + 代码块式内容区） */
+  .tool-card { position: relative; margin: 6px 14px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-radius: 4px; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.04)); overflow: hidden; }
+  .tool-card .tc-call { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 6px; padding: 6px 10px 2px; user-select: none; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; line-height: 1.45; }
+  .tool-card .tc-call-name { font-weight: bold; }
+  .tool-card .tc-call-param { color: var(--vscode-textLink-foreground, #3794ff); } /* TUI accent：pattern */
+  .tool-card .tc-call-arg { color: var(--vscode-descriptionForeground, #808080); } /* TUI toolOutput */
+  .tool-card .tc-call-warn { color: var(--vscode-editorWarning-foreground, #cca700); } /* TUI warning：行范围 */
+  .tool-card .tc-args { margin: 4px 10px 0; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; color: var(--vscode-descriptionForeground, #808080); }
+  .tool-card .tc-output { margin: 4px 10px 8px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 480px; overflow: auto; color: var(--vscode-descriptionForeground, #808080); }
+  .tool-card .tc-trunc-hint { margin-top: 4px; font-size: 0.8em; opacity: 0.75; cursor: pointer; color: var(--vscode-descriptionForeground); }
+  .tool-card .tc-trunc-hint:hover { opacity: 1; text-decoration: underline; }
+  .tool-card .tc-warn { margin-top: 4px; font-size: 0.8em; color: var(--vscode-editorWarning-foreground, #cca700); white-space: pre-wrap; }
+  .tool-card .tc-meta { margin-top: 4px; font-size: 0.8em; color: var(--vscode-descriptionForeground); white-space: pre-wrap; }
+  .tool-card .tc-error { margin-top: 4px; font-size: 0.85em; color: var(--vscode-errorForeground, #f48771); }
   .role { font-weight: bold; font-size: 0.8em; opacity: 0.7; margin-bottom: 2px; }
   /* markdown */
   .md p { margin: 13px 0; line-height: 1.6; text-wrap: pretty; }
@@ -192,7 +197,17 @@
   button:active { transform: scale(0.97); }
   button:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: 1px; }
   button:disabled { opacity: 0.5; cursor: default; }
-  #status { padding: 2px 8px; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: color-mix(in srgb, var(--vscode-foreground) 88%, transparent); min-height: 1em; }
+  #status { display: flex; align-items: center; gap: 8px; padding: 2px 8px; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: color-mix(in srgb, var(--vscode-foreground) 88%, transparent); min-height: 1.4em; overflow: hidden; }
+  /* 状态栏实时思考区：始终一行，思考内容在其中横向滚动 */
+  #status .st-head { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; font-size: 0.85em; opacity: .85; }
+  #status .st-body {
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow-x: auto; overflow-y: hidden;
+    font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em;
+    line-height: 1.45; opacity: .75;
+    scrollbar-width: none;
+  }
+  #status .st-body::-webkit-scrollbar { display: none; }
   /* 底部工具栏 */
   #bottomBar { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
   #treeBtn {
@@ -251,25 +266,26 @@
   .cf-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); border-color: var(--vscode-focusBorder, rgba(128,128,128,0.6)); }
   .cf-item .cf-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cf-item .cf-dir { opacity: 0.55; }
-  /* edit/write 工具调用卡片 */
+  /* edit 工具调用卡片（与 tool-card 统一：整块背景色块，无边框/图标） */
+  /* edit 工具调用卡片（VSCode 风格：细边框 + 边框色表状态） */
   .edit-card {
-    margin: 6px 0; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
+    margin: 6px 14px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
     border-radius: 4px; overflow: hidden; font-size: 0.85em;
+    background: var(--vscode-editorWidget-background, rgba(128,128,128,0.04));
   }
-  .edit-card.error { border-color: var(--vscode-errorForeground, rgba(255,0,0,0.5)); }
   .edit-title {
-    display: flex; align-items: center; gap: 6px; padding: 4px 10px; cursor: pointer;
-    background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1));
+    display: flex; align-items: center; gap: 6px; padding: 5px 10px; cursor: pointer;
     font-family: var(--vscode-editor-font-family, monospace);
+    background: color-mix(in srgb, var(--vscode-foreground, #d4d4d4) 6%, transparent);
     transition: background 150ms;
   }
   .edit-title .et-caret { font-size: 0.7em; opacity: 0.6; transition: transform 200ms ease; }
   .edit-card.collapsed .et-caret { transform: rotate(0deg); }
   .edit-card:not(.collapsed) .et-caret { transform: rotate(90deg); }
-  .edit-title:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
+  .edit-title:hover { background: color-mix(in srgb, var(--vscode-foreground, #d4d4d4) 9%, transparent); }
   .edit-card.error .edit-title { cursor: default; }
-  .edit-card.error .edit-title:hover { background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); }
-  .edit-title .et-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .edit-card.error .edit-title:hover { background: transparent; }
+  .edit-title .et-name { font-weight: bold; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .edit-title .et-loading { opacity: 0.6; }
   .edit-title .et-err { color: var(--vscode-errorForeground); }
   .edit-title .et-revert {

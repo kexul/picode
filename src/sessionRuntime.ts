@@ -128,6 +128,8 @@ export class SessionRuntime {
     private fileChanges = new Map<string, FileChange>();
     private pendingEdits = new Map<string, { path: string; before: string }>();
     private editSnapshots = new Map<string, { path: string; before: string; after: string }>();
+    /** 非 edit 工具的开始时间戳（toolCallId → ms），用于卡片耗时显示。 */
+    private toolStartedAt = new Map<string, number>();
     /** pi 本会话工具调用触及过的文件绝对路径（供宿主跳转快速定位）。 */
     private knownFiles = new Set<string>();
     private forkEntries: { entryId: string; text: string }[] = [];
@@ -425,6 +427,9 @@ export class SessionRuntime {
                 this.trackEditStart(evt);
                 this.onToolStart(evt);
                 break;
+            case "tool_execution_update":
+                this.onToolUpdate(evt);
+                break;
             case "tool_execution_end":
                 this.trackEditEnd(evt);
                 this.onToolEnd(evt);
@@ -489,6 +494,9 @@ export class SessionRuntime {
         const toolName: string = evt.toolName;
         const isEditLike = toolName === "edit" || toolName === "write";
         const p = isEditLike ? this.editToolPath(toolName, evt.args) : null;
+        if (evt.toolCallId && !isEditLike) {
+            this.toolStartedAt.set(evt.toolCallId, Date.now());
+        }
         this.collectKnownFile(toolName, evt.args);
         if (p && evt.toolCallId) {
             this.post({
@@ -508,14 +516,39 @@ export class SessionRuntime {
         }
     }
 
+    /** 工具执行中的部分结果（如 bash 实时输出）→ 推送卡片增量更新。 */
+    private onToolUpdate(evt: any): void {
+        const toolName: string = evt.toolName;
+        if (toolName === "edit" || toolName === "write") {
+            return;
+        }
+        const id: string = evt.toolCallId;
+        if (!id) {
+            return;
+        }
+        const started = this.toolStartedAt.get(id);
+        this.post({
+            type: "toolResultUpdate",
+            toolCallId: id,
+            resultText: this.extractResultText(evt.partialResult),
+            durationMs: typeof started === "number" ? Date.now() - started : undefined,
+        });
+    }
+
     private onToolEnd(evt: any): void {
         const toolName: string = evt.toolName;
         if (toolName !== "edit" && toolName !== "write") {
             if (evt.toolCallId) {
+                const started = this.toolStartedAt.get(evt.toolCallId);
+                this.toolStartedAt.delete(evt.toolCallId);
+                const truncation = this.extractTruncation(evt.result);
                 this.post({
                     type: "toolResult",
                     toolCallId: evt.toolCallId,
                     isError: !!evt.isError,
+                    resultText: this.extractResultText(evt.result),
+                    durationMs: typeof started === "number" ? Date.now() - started : undefined,
+                    truncation,
                 });
             }
             return;
@@ -533,6 +566,60 @@ export class SessionRuntime {
             errorText,
             canRevert: !evt.isError && this.editSnapshots.has(evt.toolCallId),
         });
+    }
+
+    /** 从工具结果 / 部分结果（或历史 toolResult 消息）中提取展示文本。 */
+    private extractResultText(result: any): string | undefined {
+        if (!result) {
+            return undefined;
+        }
+        const content = Array.isArray(result) ? result : result.content;
+        if (Array.isArray(content)) {
+            const parts = content
+                .map((c: any) => (c && c.type === "text" && typeof c.text === "string" ? c.text : ""))
+                .filter((s: string) => s.length > 0);
+            if (parts.length > 0) {
+                return this.cleanToolOutput(parts.join("\n"));
+            }
+        }
+        if (typeof result === "string") {
+            return this.cleanToolOutput(result);
+        }
+        if (typeof result.text === "string") {
+            return this.cleanToolOutput(result.text);
+        }
+        return undefined;
+    }
+
+    /** 提取 bash 等工具的截断信息与全量输出路径（供卡片渲染元信息）。 */
+    private extractTruncation(
+        result: any
+    ): { truncated: boolean; truncatedBy?: string; outputLines?: number; totalLines?: number; fullOutputPath?: string } | undefined {
+        const details = result?.details;
+        const t = details?.truncation;
+        if (!t || !t.truncated) {
+            return undefined;
+        }
+        return {
+            truncated: true,
+            truncatedBy: typeof t.truncatedBy === "string" ? t.truncatedBy : undefined,
+            outputLines: typeof t.outputLines === "number" ? t.outputLines : undefined,
+            totalLines: typeof t.totalLines === "number" ? t.totalLines : undefined,
+            fullOutputPath: typeof details?.fullOutputPath === "string" ? details.fullOutputPath : undefined,
+        };
+    }
+
+    /** 清理输出：去 ANSI 转义 / 回车 / 控制字符，并限制长度避免 DOM 过大。 */
+    private cleanToolOutput(text: string): string {
+        let s = text
+            .replace(/\r/g, "")
+            .replace(/\x1b\][^\x07]*?(?:\x07|\x1b\\)/g, "")
+            .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "")
+            .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
+        if (s.length > 200_000) {
+            s = s.slice(0, 200_000) + "\n…(输出过长已截断)";
+        }
+        return s;
     }
 
     private extractErrorText(result: any): string | undefined {
@@ -1008,11 +1095,23 @@ export class SessionRuntime {
                                     canRevert: false,
                                 });
                             } else {
+                                const id = c.id || `hist-${Math.random()}`;
+                                const res = toolResults.get(id);
                                 this.post({
                                     type: "tool",
                                     toolName: c.name,
                                     args: c.arguments,
+                                    toolCallId: id,
                                 });
+                                if (res) {
+                                    this.post({
+                                        type: "toolResult",
+                                        toolCallId: id,
+                                        isError: !!res.isError,
+                                        resultText: this.extractResultText(res.content ?? res),
+                                        truncation: this.extractTruncation(res),
+                                    });
+                                }
                             }
                         }
                     }

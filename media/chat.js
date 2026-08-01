@@ -169,12 +169,14 @@
   var newSessionKey = "ctrl+alt+n";
   var tabSwitchKey = "ctrl+alt+pgupdown";
   var notifyOnTurnEnd = true;
+  var toolDisplayMode = "compact"; // compact=简洁标签 | full=TUI 风格卡片
   let openFiles = [];
   function applyViewOptions(opts) {
     if (typeof opts.sendKey === "string") { sendKeyCombo = opts.sendKey; }
     if (typeof opts.newSessionKey === "string") { newSessionKey = opts.newSessionKey; }
     if (typeof opts.tabSwitchKey === "string") { tabSwitchKey = opts.tabSwitchKey; }
     notifyOnTurnEnd = opts.notifyOnTurnEnd !== false;
+    if (opts.toolDisplay === "full" || opts.toolDisplay === "compact") { toolDisplayMode = opts.toolDisplay; }
   }
 
   // ── 会话结束提示音（Web Audio 合成，无外部资源） ──
@@ -304,14 +306,14 @@
       title: title || "新会话",
       paneEl: pane,
       currentAssistant: null,
-      currentThinking: null,
+      thinkingText: "",
       currentToolRow: null,
       pendingToolCards: new Map(),
       pendingToolTags: new Map(),
+      pendingToolCardsFull: new Map(),
       streaming: false,
       piReady: false,
       textDirty: false,
-      pendingThinkDelta: "",
       rafId: 0,
       lastRenderAt: 0,
       stickToBottom: true,
@@ -423,13 +425,9 @@
         tab.textDirty = false;
       }
     }
-    if (tab.pendingThinkDelta && tab.currentThinking && tab.currentThinking.textNode) {
-      tab.currentThinking.textNode.appendData(tab.pendingThinkDelta);
-      tab.pendingThinkDelta = "";
-    }
     smoothScrollToBottom(tab);
   }
-  function cancelFlush(tab) { if (tab.rafId) { cancelAnimationFrame(tab.rafId); tab.rafId = 0; } tab.textDirty = false; tab.pendingThinkDelta = ""; }
+  function cancelFlush(tab) { if (tab.rafId) { cancelAnimationFrame(tab.rafId); tab.rafId = 0; } tab.textDirty = false; }
   function finalizeCurrentAssistant(tab) {
     cancelFlush(tab);
     if (tab.currentAssistant) {
@@ -507,6 +505,10 @@
   }
   function addTool(tab, toolName, argStr, toolCallId) {
     hideEmptyHint(tab);
+    if (toolDisplayMode === "full") {
+      addToolCard(tab, toolName, argStr, toolCallId);
+      return;
+    }
     if (!tab.currentToolRow) {
       tab.currentToolRow = document.createElement("div");
       tab.currentToolRow.className = "msg tool-row msg-enter";
@@ -527,27 +529,249 @@
     if (toolCallId) { tab.pendingToolTags.set(toolCallId, tag); }
     scrollToBottom(tab);
   }
-  function addThinking(tab) {
-    hideEmptyHint(tab);
-    tab.currentToolRow = null;
-    const wrap = document.createElement("div");
-    wrap.className = "msg thinking collapsed msg-enter";
-    const header = document.createElement("div");
-    header.className = "thinking-header";
-    const caret = document.createElement("span"); caret.className = "thinking-caret"; caret.textContent = "▶";
-    const label = document.createElement("span"); label.className = "thinking-label"; label.textContent = "思考过程";
-    header.appendChild(caret); header.appendChild(label);
-    wrap.appendChild(header);
-    const body = document.createElement("div"); body.className = "thinking-body";
-    const textNode = document.createTextNode(""); body.appendChild(textNode);
-    wrap.appendChild(body);
-    const state = { wrap, body, textNode, raw: "", expanded: false };
-    header.addEventListener("click", () => { state.expanded = !state.expanded; wrap.classList.toggle("collapsed", !state.expanded); });
-    tab.paneEl.appendChild(wrap);
-    scrollToBottom(tab);
-    return state;
+
+  // ==================== 完整模式：TUI 风格工具卡片 ====================
+  // 有定制调用行摘要的工具（与 pi TUI 一致），其余工具回退为加粗工具名 + pretty JSON 参数。
+  const CUSTOM_CALL_TOOLS = new Set(["bash", "grep", "find", "ls", "read"]);
+  const TOOL_PREVIEW_LINES = 5; // 结果预览行数（同 TUI BASH_PREVIEW_LINES）
+
+  function prettyJson(argStr) {
+    try { return JSON.stringify(JSON.parse(argStr), null, 2); }
+    catch { return argStr; }
+  }
+  function formatDur(ms) {
+    const s = ms / 1000;
+    if (s < 60) { return s.toFixed(1) + "s"; }
+    const m = Math.floor(s / 60);
+    const rs = Math.round(s % 60);
+    return m + "m" + (rs ? rs + "s" : "");
+  }
+  /** 生成工具 call 行（对齐 TUI renderCall：加粗工具名 + accent pattern + 灰参数）。 */
+  function buildToolCallEl(toolName, argStr) {
+    const call = document.createElement("div");
+    call.className = "tc-call";
+    let a = null;
+    try { a = argStr ? JSON.parse(argStr) : {}; } catch { a = null; }
+    const span = (cls, text) => { const s = document.createElement("span"); s.className = cls; s.textContent = text; call.appendChild(s); };
+    const strArg = (key) => (a && typeof a[key] === "string" ? a[key] : undefined);
+    switch (toolName) {
+      case "bash":
+        span("tc-call-name", "$ " + (strArg("command") || "..."));
+        if (a && typeof a.timeout === "number") { span("tc-call-arg", " (timeout " + a.timeout + "s)"); }
+        break;
+      case "grep":
+        span("tc-call-name", "grep");
+        span("tc-call-param", " /" + (strArg("pattern") || "") + "/");
+        span("tc-call-arg", " in " + (strArg("path") || "."));
+        if (a && a.glob) { span("tc-call-arg", " (" + a.glob + ")"); }
+        if (a && typeof a.limit === "number") { span("tc-call-arg", " limit " + a.limit); }
+        break;
+      case "find":
+        span("tc-call-name", "find");
+        span("tc-call-param", " " + (strArg("pattern") || ""));
+        span("tc-call-arg", " in " + (strArg("path") || "."));
+        if (a && typeof a.limit === "number") { span("tc-call-arg", " (limit " + a.limit + ")"); }
+        break;
+      case "ls":
+        span("tc-call-name", "ls");
+        span("tc-call-arg", " " + (strArg("path") || "."));
+        if (a && typeof a.limit === "number") { span("tc-call-arg", " (limit " + a.limit + ")"); }
+        break;
+      case "read": {
+        span("tc-call-name", "read");
+        span("tc-call-arg", " " + (strArg("file_path") || strArg("path") || ""));
+        const off = a && typeof a.offset === "number" ? a.offset : undefined;
+        const lim = a && typeof a.limit === "number" ? a.limit : undefined;
+        if (off !== undefined || lim !== undefined) {
+          // 行范围：start = offset ?? 1，end = start + limit - 1（同 TUI formatReadLineRange）
+          const start = off ?? 1;
+          const end = lim !== undefined ? start + lim - 1 : start;
+          span("tc-call-warn", " " + start + ":" + end);
+        }
+        break;
+      }
+      case "write":
+      case "edit":
+        span("tc-call-name", toolName);
+        span("tc-call-arg", " " + (strArg("file_path") || strArg("path") || ""));
+        break;
+      default:
+        span("tc-call-name", toolName);
+    }
+    return call;
   }
 
+  /** write 参数区：内容预览（前 10 行，同 TUI formatWriteCall），超出可点击展开。 */
+  function buildWritePreviewEl(argStr) {
+    let a = null;
+    try { a = argStr ? JSON.parse(argStr) : {}; } catch { a = null; }
+    const content = a && typeof a.content === "string" ? a.content : "";
+    if (!content) { return null; }
+    const lines = content.split("\n");
+    const total = lines.length;
+    const MAX_LINES = 10;
+    const preview = lines.slice(0, MAX_LINES).join("\n");
+    const wrap = document.createElement("div");
+    wrap.className = "tc-args";
+    wrap.textContent = preview;
+    if (total > MAX_LINES) {
+      const hint = document.createElement("div");
+      hint.className = "tc-trunc-hint";
+      hint.textContent = "... (" + (total - MAX_LINES) + " 行未显示,共 " + total + " 行 · 点击展开)";
+      hint.addEventListener("click", () => {
+        if (wrap.textContent === preview) {
+          wrap.textContent = content;
+          wrap.style.maxHeight = "none";
+          hint.textContent = "收起";
+        } else {
+          wrap.textContent = preview;
+          wrap.style.maxHeight = "";
+          hint.textContent = "... (" + (total - MAX_LINES) + " 行未显示,共 " + total + " 行 · 点击展开)";
+        }
+      });
+      wrap.appendChild(hint);
+    }
+    return wrap;
+  }
+
+  /** 完整模式：每个工具调用一张卡片（对齐 TUI：整块背景，call+结果连续，状态用背景色）。 */
+  function addToolCard(tab, toolName, argStr, toolCallId) {
+    hideEmptyHint(tab);
+    tab.currentToolRow = null;
+    const card = document.createElement("div");
+    card.className = "tool-card running msg-enter";
+    card._toolName = toolName;
+    const call = buildToolCallEl(toolName, argStr);
+    call.title = argStr || toolName;
+    card.appendChild(call);
+    // 参数区：write 显示内容预览（前 10 行，同 TUI），其余回退工具显示 pretty JSON
+    if (toolName === "write") {
+      const p = buildWritePreviewEl(argStr);
+      if (p) { card.appendChild(p); }
+    } else if (!CUSTOM_CALL_TOOLS.has(toolName) && argStr) {
+      const argsPre = document.createElement("pre"); argsPre.className = "tc-args";
+      argsPre.textContent = prettyJson(argStr);
+      card.appendChild(argsPre);
+    }
+    const resultEl = document.createElement("div"); resultEl.className = "tc-output";
+    card.appendChild(resultEl);
+    card._resultEl = resultEl;
+    tab.paneEl.appendChild(card);
+    scrollToBottom(tab);
+    if (!toolCallId) {
+      // 历史/静态调用：无结果事件，直接定格为完成态
+      card.classList.remove("running"); card.classList.add("done");
+      return;
+    }
+    // 运行中：JS 计时更新 meta 的 Elapsed（read 很快，不显示时间，同 TUI 展开后才有）
+    card._elapsedStart = Date.now();
+    let timer = null;
+    if (toolName !== "read") {
+      timer = setInterval(() => {
+        if (card._elapsedStart && card.classList.contains("running") && card._elapsedEl) {
+          card._elapsedEl.textContent = "Elapsed " + formatDur(Date.now() - card._elapsedStart);
+        }
+      }, 500);
+    }
+    tab.pendingToolCardsFull.set(toolCallId, { card, resultEl, timer });
+  }
+
+  /** 卡片结果区渲染：预览截断（尾部 N 行，同 TUI）+ 元信息 + 展开/收起。 */
+  function setToolResult(card, resultText, meta) {
+    card._resultText = resultText || "";
+    card._resultMeta = meta || {};
+    renderToolResultInner(card);
+  }
+  function renderToolResultInner(card) {
+    const resultEl = card._resultEl;
+    if (!resultEl) { return; }
+    const meta = card._resultMeta || {};
+    const toolName = card._toolName || "";
+    const isBash = toolName === "bash";
+    const isRead = toolName === "read";
+    let text = card._resultText || "";
+    resultEl.innerHTML = "";
+    // 剥掉 bash 结果里内嵌的截断脚注（元信息里单独渲染，同 TUI 处理）
+    if (meta.truncation && meta.truncation.truncated && meta.truncation.fullOutputPath && text.endsWith("]")) {
+      const fi = text.lastIndexOf("\n\n[");
+      if (fi !== -1 && text.slice(fi).includes(meta.truncation.fullOutputPath)) {
+        text = text.slice(0, fi).replace(/\s+$/, "");
+      }
+    }
+    const lines = text ? text.split("\n") : [];
+    // read 对齐 TUI：默认不显示内容（只有 call 行），点击展开后才显示前 10 行；错误时直接显示
+    if (isRead && !meta.isError && !card._resultExpanded) {
+      const hint = document.createElement("div");
+      hint.className = "tc-trunc-hint";
+      hint.textContent = lines.length ? "… " + lines.length + " 行 · 点击展开文件内容" : "… 点击展开文件内容";
+      hint.addEventListener("click", () => { card._resultExpanded = true; renderToolResultInner(card); });
+      resultEl.appendChild(hint);
+      return;
+    }
+    // bash 预览尾部 N 行（同 TUI），read 前 10 行、grep/ls/find 前 15 行（同 TUI）
+    const maxLines = isBash ? TOOL_PREVIEW_LINES : (isRead ? 10 : 15);
+    let shown = lines, hidden = 0;
+    if (lines.length > maxLines && !card._resultExpanded) {
+      hidden = lines.length - maxLines;
+      shown = isBash ? lines.slice(-maxLines) : lines.slice(0, maxLines);
+    }
+    if (text) {
+      const pre = document.createElement("pre"); pre.className = "tc-output";
+      pre.textContent = shown.join("\n");
+      resultEl.appendChild(pre);
+    }
+    if (hidden > 0) {
+      const hint = document.createElement("div");
+      hint.className = "tc-trunc-hint";
+      hint.textContent = (isBash ? "… (" + hidden + " 行更早内容" : "… (" + hidden + " 行被截断") + " · 点击展开完整结果)";
+      hint.addEventListener("click", (e) => { e.stopPropagation(); card._resultExpanded = true; renderToolResultInner(card); });
+      resultEl.appendChild(hint);
+    } else if (card._resultExpanded && (isRead || lines.length > maxLines)) {
+      const fold = document.createElement("div");
+      fold.className = "tc-trunc-hint"; fold.textContent = "收起";
+      fold.addEventListener("click", (e) => { e.stopPropagation(); card._resultExpanded = false; renderToolResultInner(card); });
+      resultEl.appendChild(fold);
+    }
+    // 截断警告（对齐 TUI：[Showing lines X-Y of Z. Full output: path] / [Truncated: ...]）
+    const tr = meta.truncation;
+    const warnings = [];
+    if (tr && tr.truncated) {
+      if (isBash) {
+        if (tr.truncatedBy === "lines" && typeof tr.outputLines === "number" && typeof tr.totalLines === "number") {
+          warnings.push("Showing lines " + (tr.totalLines - tr.outputLines + 1) + "-" + tr.totalLines + " of " + tr.totalLines + " lines");
+        } else if (typeof tr.outputLines === "number") {
+          warnings.push("Showing " + tr.outputLines + " lines");
+        }
+        if (tr.fullOutputPath) { warnings.push("Full output: " + tr.fullOutputPath); }
+      } else if (isRead && tr.truncatedBy === "lines" && typeof tr.totalLines === "number") {
+        warnings.push("Truncated: showing " + tr.outputLines + " of " + tr.totalLines + " lines");
+      } else if (typeof tr.outputLines === "number") {
+        warnings.push("Truncated: " + tr.outputLines + " lines shown");
+      }
+    }
+    if (warnings.length) {
+      const w = document.createElement("div"); w.className = "tc-warn";
+      w.textContent = "[" + warnings.join(". ") + "]";
+      resultEl.appendChild(w);
+    }
+    // 耗时（read 不显示时间，同 TUI 未展开无耗时）
+    const isPartial = meta.isPartial;
+    const durationMs = meta.durationMs;
+    if (!isRead && isPartial && (typeof durationMs === "number" || card._elapsedStart)) {
+      const t = document.createElement("div"); t.className = "tc-meta";
+      t.textContent = "Elapsed " + formatDur(typeof durationMs === "number" ? durationMs : Date.now() - card._elapsedStart);
+      card._elapsedEl = t;
+      resultEl.appendChild(t);
+    } else if (!isPartial && typeof durationMs === "number" && !isNaN(durationMs)) {
+      const t = document.createElement("div"); t.className = "tc-meta";
+      t.textContent = "Took " + formatDur(durationMs);
+      resultEl.appendChild(t);
+    }
+    if (meta.isError && !text) {
+      const err = document.createElement("div"); err.className = "tc-error"; err.textContent = "工具执行失败";
+      resultEl.appendChild(err);
+    }
+  }
   function renderDiffBlock(tab, diffText, filePath) {
     const wrap = document.createElement("div");
     wrap.className = "edit-diff";
@@ -602,6 +826,7 @@
           title.appendChild(err);
           return;
         }
+        el.classList.add("done");
         if (msg.diff) { el.appendChild(renderDiffBlock(tab, msg.diff, filePath)); }
         if (msg.canRevert && toolCallId) {
           const revertBtn = document.createElement("span"); revertBtn.className = "et-revert"; revertBtn.textContent = "↩ 回滚";
@@ -679,14 +904,33 @@
   function updateSendState() {
     // 发送/中止按钮已移除（用 Enter 发送、Esc 中止）；状态文案由 syncStatus 负责
   }
+  // 实时把思考过程渲染到状态栏（#status）；show=true 时始终用同一套结构，正文随内容填充
+  function statusThinking(show, text) {
+    if (show) {
+      if (!statusEl.querySelector(".st-body")) {
+        statusEl.innerHTML = '<div class="st-head"><span class="typing"><span></span><span></span><span></span></span> 思考中… · Esc 中止</div><div class="st-body"></div>';
+      }
+      const body = statusEl.querySelector(".st-body");
+      if (body && body.textContent !== text) {
+        body.textContent = text;
+        body.scrollLeft = body.scrollWidth; // 始终滚到最新内容
+      }
+    } else {
+      statusEl.innerHTML = "";
+    }
+  }
   function syncStatus() {
     const tab = activeTab();
     const streaming = !!tab && tab.streaming;
     const piReady = !!tab && tab.piReady;
-    if (streaming) { statusEl.innerHTML = '<span class="typing"><span></span><span></span><span></span></span> 思考中（Esc 中止）'; }
-    else if (tab && tab.loading) { statusEl.textContent = "加载中…"; }
-    else if (!piReady) { statusEl.textContent = "等待 pi 启动…"; }
-    else { statusEl.textContent = ""; }
+    if (streaming) {
+      statusThinking(true, (tab && tab.thinkingText) || "");
+    } else {
+      statusThinking(false);
+      if (tab && tab.loading) { statusEl.textContent = "加载中…"; }
+      else if (!piReady) { statusEl.textContent = "等待 pi 启动…"; }
+      else { statusEl.textContent = ""; }
+    }
   }
   function syncModelBtn() {
     const tab = activeTab();
@@ -1441,19 +1685,19 @@
         finalizeCurrentAssistant(t);
         const label = msg.imageCount ? "[" + msg.imageCount + " 张图片] " : "";
         addPlain(t, "user", "你", label + (msg.text || ""), msg.entryId);
-        t.currentThinking = null;
+        t.thinkingText = "";
         scrollToBottom(t, true);
         break;
       }
       case "streamStart":
         setStreaming(t, true);
         finalizeCurrentAssistant(t);
-        t.currentThinking = null;
+        t.thinkingText = "";
         break;
       case "streamEnd":
         if (t.rafId) { flushDeltas(t); }
         finalizeCurrentAssistant(t);
-        t.currentThinking = null;
+        t.thinkingText = "";
         setStreaming(t, false);
         if (notifyOnTurnEnd) { playTurnEndBeep(); }
         break;
@@ -1469,10 +1713,8 @@
         t.currentAssistant = null;
         break;
       case "thinkingDelta":
-        if (!t.currentThinking) { t.currentThinking = addThinking(t); }
-        t.currentThinking.raw += msg.delta;
-        t.pendingThinkDelta += msg.delta;
-        scheduleFlush(t);
+        t.thinkingText += msg.delta;
+        if (activeId === t.id) { syncStatus(); }
         break;
       case "tool": {
         finalizeCurrentAssistant(t);
@@ -1513,10 +1755,12 @@
         cancelFlush(t);
         t.paneEl.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
         t.currentAssistant = null;
-        t.currentThinking = null;
+        t.thinkingText = "";
         t.currentToolRow = null;
         t.pendingToolCards.clear();
         t.pendingToolTags.clear();
+        for (const e of t.pendingToolCardsFull.values()) { clearInterval(e.timer); }
+        t.pendingToolCardsFull.clear();
         // 重置该 tab 的输入（若是活跃 tab，同步到输入框）
         t.pendingImages = [];
         t.pendingTextBlocks = [];
@@ -1529,7 +1773,31 @@
           inputEl.focus();
         }
         break;
+      case "toolResultUpdate": {
+        const entry = t.pendingToolCardsFull.get(msg.toolCallId);
+        if (entry) {
+          if (typeof msg.durationMs === "number") { entry.card._elapsedStart = Date.now() - msg.durationMs; }
+          setToolResult(entry.card, msg.resultText, { isPartial: true, durationMs: msg.durationMs });
+          scrollToBottom(t);
+        }
+        break;
+      }
       case "toolResult": {
+        const entry = t.pendingToolCardsFull.get(msg.toolCallId);
+        if (entry) {
+          const card = entry.card;
+          card.classList.remove("running");
+          card.classList.add("done");
+          if (msg.isError) { card.classList.add("error"); }
+          clearInterval(entry.timer);
+          setToolResult(card, msg.resultText, {
+            isError: !!msg.isError,
+            durationMs: msg.durationMs,
+            truncation: msg.truncation || null,
+          });
+          t.pendingToolCardsFull.delete(msg.toolCallId);
+          scrollToBottom(t);
+        }
         const tagEl = t.pendingToolTags.get(msg.toolCallId);
         if (tagEl) {
           tagEl.classList.remove("running");
@@ -1580,6 +1848,7 @@
     if (!st) { return; }
     cancelFlush(st);
     if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); }
+    for (const e of st.pendingToolCardsFull.values()) { clearInterval(e.timer); }
     st.paneEl.remove();
     tabs.delete(id);
     if (activeId === id) { activeId = null; syncJumpBottom(st); }

@@ -95,6 +95,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract getSendKey(): string;
     protected abstract getNewSessionKey(): string;
     protected abstract getTabSwitchKey(): string;
+    /** 工具调用显示："compact"（简洁标签）| "full"（TUI 风格卡片）。 */
+    protected abstract getToolDisplay(): string;
     /** 变更显示选项的存储（仅改存储，UI 推送由基类统一完成）。value 为按钮组点选的明确值。 */
     protected abstract mutateViewOption(action: string, value?: string): void;
 
@@ -187,6 +189,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             sendKey: this.getSendKey(),
             newSessionKey: this.getNewSessionKey(),
             tabSwitchKey: this.getTabSwitchKey(),
+            toolDisplay: this.getToolDisplay(),
         });
     }
 
@@ -225,6 +228,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 check: null,
                 value: this.getTabSwitchKey(),
                 options: ChatControllerBase.keyOptions(ChatControllerBase.TAB_SWITCH_KEY_LABELS),
+            },
+            {
+                action: "toolDisplay",
+                label: "工具调用显示",
+                desc: "完整模式：每个工具调用以卡片展示（TUI 风格：调用行、实时输出、结果、耗时）",
+                check: null,
+                value: this.getToolDisplay(),
+                options: [
+                    { value: "compact", label: "简洁" },
+                    { value: "full", label: "完整" },
+                ],
             },
         ];
     }

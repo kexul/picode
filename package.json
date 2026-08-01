@@ -2,7 +2,7 @@
   "name": "pi-chat-vscode",
   "displayName": "Pi Chat",
   "description": "在 VSCode 中与 pi coding agent 进行对话",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "local",
   "license": "MIT",
   "engines": {

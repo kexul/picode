@@ -32,6 +32,7 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     private static readonly KEY_SEND_KEY = "piChat.sendKey";
     private static readonly KEY_NEW_SESSION_KEY = "piChat.newSessionKey";
     private static readonly KEY_TAB_SWITCH_KEY = "piChat.tabSwitchKey";
+    private static readonly KEY_TOOL_DISPLAY = "piChat.toolDisplay";
     private static readonly SEND_KEYS = ["enter", "shift+enter", "alt+enter", "ctrl+enter"] as const;
     private static readonly NEW_SESSION_KEYS = ["ctrl+alt+n", "ctrl+shift+n", "ctrl+t", "alt+n"] as const;
     private static readonly TAB_SWITCH_KEYS = ["ctrl+alt+arrows", "ctrl+alt+pgupdown", "alt+brackets", "ctrl+alt+brackets"] as const;
@@ -217,6 +218,11 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         const v = this.context.globalState.get<string>(ChatViewProvider.KEY_TAB_SWITCH_KEY, "ctrl+alt+arrows");
         return (ChatViewProvider.TAB_SWITCH_KEYS as readonly string[]).includes(v) ? v : "ctrl+alt+arrows";
     }
+    /** 工具调用显示："compact"（简洁标签）| "full"（TUI 风格卡片）。 */
+    protected getToolDisplay(): string {
+        const v = this.context.globalState.get<string>(ChatViewProvider.KEY_TOOL_DISPLAY, "compact");
+        return v === "full" ? "full" : "compact";
+    }
 
     protected mutateViewOption(action: string, value?: string): void {
         if (action === "sendKey") {
@@ -240,6 +246,14 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
                     ? value
                     : order[(order.indexOf(this.getTabSwitchKey() as (typeof order)[number]) + 1) % order.length];
             this.context.globalState.update(ChatViewProvider.KEY_TAB_SWITCH_KEY, next);
+        } else if (action === "toolDisplay") {
+            const next =
+                value === "full" || value === "compact"
+                    ? value
+                    : this.getToolDisplay() === "full"
+                      ? "compact"
+                      : "full";
+            this.context.globalState.update(ChatViewProvider.KEY_TOOL_DISPLAY, next);
         } else {
             this.context.globalState.update(ChatViewProvider.KEY_AUTO_LOAD_LAST, !this.getAutoLoadLast());
         }
