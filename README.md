@@ -19,7 +19,6 @@ src/                          插件 TypeScript 源码（tsc 编译到 out/）
   modelsConfig.ts              models.json 读写与内置默认模板
 media/                        对话前端资源（chat.js、chat.css、marked.js、highlight.js、
                               settings.js）；webview 直接加载，无需拷贝
-scripts/                      （已移除：analyze-reuse.js 随双宿主结构一并删除）
 ```
 
 ## 环境要求
@@ -33,12 +32,15 @@ scripts/                      （已移除：analyze-reuse.js 随双宿主结构
 双击或命令行运行：
 
 ```bat
-build.bat           # 含 npm install，产出 vsix
-build.bat skip      # 跳过依赖安装（已装好时用，更快）
+build.bat           # npm install + 打包 + 自动安装到 VSCode 并重载窗口
+build.bat skip      # 跳过 npm install（已装好时用，更快）
+build.bat noauto    # 只打包 vsix，不自动安装/重载
 ```
 
+> 默认构建完会自动 `code --install-extension` 并触发窗口重载（首次安装时可能需手动 Reload Window 一次）；不想自动部署时加 `noauto`。
+
 产物：
-- `pi-chat-*.vsix`（VSCode 插件，自包含约 84KB）
+- `pi-chat-*.vsix`（VSCode 插件，自包含约 115KB）
 
 ## 开发
 
@@ -55,7 +57,7 @@ VSCode 里 F5 直接调试（`.vscode/launch.json` 已配置 extensionHost）。
 | 配置 | 存储 |
 |------|------|
 | piPath / provider / model / extraArgs / trustProject | `piChat.*` 设置 |
-| 显示选项（状态栏/发送键/自动加载/新建会话键/tab 切换键） | globalState |
+| 显示选项（发送键/新建会话键/tab 切换键/工具显示模式/自动加载上次会话） | globalState |
 | pi 的 models.json | `~/.pi/agent/models.json`（应用内设置面板编辑） |
 
 ## 改前端注意事项

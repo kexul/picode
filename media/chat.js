@@ -718,6 +718,8 @@
     if (text) {
       const pre = document.createElement("pre"); pre.className = "tc-output";
       pre.textContent = shown.join("\n");
+      // 展开后取消内部滚动（否则卡片内滚动条 + 主面板滚动条 = 双滚动条）
+      if (card._resultExpanded) { pre.style.maxHeight = "none"; }
       resultEl.appendChild(pre);
     }
     if (hidden > 0) {
@@ -1141,7 +1143,7 @@
         line.className = "tree-row" + (isLeaf ? " is-leaf" : "") + (onPath ? " on-path" : "");
         const pre = document.createElement("span"); pre.className = "tree-pre"; pre.textContent = prefix; line.appendChild(pre);
         const isUserMsg = e.type === "message" && e.message && e.message.role === "user";
-        const marker = document.createElement("span"); marker.className = "tree-mark" + (isUserMsg ? " user" : ""); marker.textContent = isUserMsg ? "●" : ""; line.appendChild(marker);
+        const marker = document.createElement("span"); marker.className = "tree-mark" + (isUserMsg ? " user" : ""); line.appendChild(marker);
         const text = document.createElement("span"); text.className = "tree-text"; text.textContent = entrySummary(row.node); line.appendChild(text);
         const forkable = isUserMsg && !isLeaf;
         if (forkable) {
