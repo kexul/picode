@@ -699,17 +699,8 @@
       }
     }
     const lines = text ? text.split("\n") : [];
-    // read 对齐 TUI：默认不显示内容（只有 call 行），点击展开后才显示前 10 行；错误时直接显示
-    if (isRead && !meta.isError && !card._resultExpanded) {
-      const hint = document.createElement("div");
-      hint.className = "tc-trunc-hint";
-      hint.textContent = lines.length ? "… " + lines.length + " 行 · 点击展开文件内容" : "… 点击展开文件内容";
-      hint.addEventListener("click", () => { card._resultExpanded = true; renderToolResultInner(card); });
-      resultEl.appendChild(hint);
-      return;
-    }
-    // bash 预览尾部 N 行（同 TUI），read 前 10 行、grep/ls/find 前 15 行（同 TUI）
-    const maxLines = isBash ? TOOL_PREVIEW_LINES : (isRead ? 10 : 15);
+    // 预览行数：bash 尾部 5 行、read 前 5 行、其余前 15 行
+    const maxLines = isBash || isRead ? TOOL_PREVIEW_LINES : 15;
     let shown = lines, hidden = 0;
     if (lines.length > maxLines && !card._resultExpanded) {
       hidden = lines.length - maxLines;
@@ -728,7 +719,7 @@
       hint.textContent = (isBash ? "… (" + hidden + " 行更早内容" : "… (" + hidden + " 行被截断") + " · 点击展开完整结果)";
       hint.addEventListener("click", (e) => { e.stopPropagation(); card._resultExpanded = true; renderToolResultInner(card); });
       resultEl.appendChild(hint);
-    } else if (card._resultExpanded && (isRead || lines.length > maxLines)) {
+    } else if (card._resultExpanded && lines.length > maxLines) {
       const fold = document.createElement("div");
       fold.className = "tc-trunc-hint"; fold.textContent = "收起";
       fold.addEventListener("click", (e) => { e.stopPropagation(); card._resultExpanded = false; renderToolResultInner(card); });
