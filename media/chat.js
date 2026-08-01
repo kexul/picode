@@ -808,14 +808,13 @@
     const el = document.createElement("div");
     el.className = "msg edit-card msg-enter";
     const title = document.createElement("div"); title.className = "edit-title";
-    const caret = document.createElement("span"); caret.className = "et-caret"; caret.textContent = "▶";
-    title.appendChild(caret);
-    const name = document.createElement("span"); name.className = "et-name"; name.textContent = toolName + " " + (label || "");
+    const name = document.createElement("span"); name.className = "et-name"; name.textContent = toolName;
     title.appendChild(name);
+    const path = document.createElement("span"); path.className = "et-path"; path.textContent = label || "";
+    title.appendChild(path);
     const loading = document.createElement("span"); loading.className = "et-loading"; loading.textContent = "…";
     title.appendChild(loading);
     el.appendChild(title);
-    title.addEventListener("click", (e) => { if (e.target.closest(".et-revert")) return; el.classList.toggle("collapsed"); });
     tab.paneEl.appendChild(el);
     scrollToBottom(tab);
     return {

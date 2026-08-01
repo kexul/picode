@@ -84,7 +84,6 @@
   .tool.expanded .tool-args { display: inline; }
   /* 完整模式：工具卡片（圆角 + 轻阴影，状态用边框色：运行蓝 / 失败红） */
   .tool-card { position: relative; margin: 6px 14px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 4px 12px rgba(0,0,0,0.06); background: var(--vscode-editorWidget-background, #f3f3f3); overflow: hidden; }
-  .tool-card.running { border-color: var(--vscode-textLink-foreground, #3794ff); }
   .tool-card.error { border-color: var(--vscode-errorForeground, #f14c4c); }
   .tool-card .tc-call { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 6px; padding: 6px 10px 2px; user-select: none; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; line-height: 1.45; background: color-mix(in srgb, var(--vscode-foreground, #d4d4d4) 4%, transparent); }
   .tool-card .tc-call-name { font-weight: bold; }
@@ -269,27 +268,21 @@
   .cf-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); border-color: var(--vscode-focusBorder, rgba(128,128,128,0.6)); }
   .cf-item .cf-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cf-item .cf-dir { opacity: 0.55; }
-  /* edit 工具调用卡片（与 tool-card 统一：圆角 + 轻阴影，失败红边框） */
+  /* edit 工具调用卡片（与 tool-card 统一：圆角 + 轻阴影，失败红边框；无 msg 内边距，标题条通栏贴边） */
   .edit-card {
-    margin: 6px 14px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35));
+    margin: 6px 14px; padding: 0; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35));
     border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 4px 12px rgba(0,0,0,0.06);
     overflow: hidden; font-size: 0.85em;
     background: var(--vscode-editorWidget-background, #f3f3f3);
   }
   .edit-card.error { border-color: var(--vscode-errorForeground, #f14c4c); }
   .edit-title {
-    display: flex; align-items: center; gap: 6px; padding: 5px 10px; cursor: pointer;
+    display: flex; align-items: center; gap: 6px; padding: 6px 10px 2px; line-height: 1.45;
     font-family: var(--vscode-editor-font-family, monospace);
     background: color-mix(in srgb, var(--vscode-foreground, #d4d4d4) 4%, transparent);
-    transition: background 150ms;
   }
-  .edit-title .et-caret { font-size: 0.7em; opacity: 0.6; transition: transform 200ms ease; }
-  .edit-card.collapsed .et-caret { transform: rotate(0deg); }
-  .edit-card:not(.collapsed) .et-caret { transform: rotate(90deg); }
-  .edit-title:hover { background: color-mix(in srgb, var(--vscode-foreground, #d4d4d4) 9%, transparent); }
-  .edit-card.error .edit-title { cursor: default; }
-  .edit-card.error .edit-title:hover { background: transparent; }
-  .edit-title .et-name { font-weight: bold; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .edit-title .et-name { font-weight: bold; flex: 0 0 auto; }
+  .edit-title .et-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground, #808080); }
   .edit-title .et-loading { opacity: 0.6; }
   .edit-title .et-err { color: var(--vscode-errorForeground); }
   .edit-title .et-revert {
@@ -303,12 +296,9 @@
   .edit-card.reverted { opacity: 0.6; }
   .edit-card.reverted .et-reverted { flex: 0 0 auto; font-size: 0.85em; opacity: 0.8; font-style: italic; font-family: var(--vscode-font-family); }
   .edit-diff {
-    max-height: 200px; overflow-y: auto; padding: 4px 0;
+    max-height: 480px; overflow-y: auto; padding: 4px 0;
     font-family: var(--vscode-editor-font-family, monospace);
-    transition: max-height 300ms ease, opacity 300ms ease;
-    opacity: 1;
   }
-  .edit-card.collapsed .edit-diff { max-height: 0; opacity: 0; overflow: hidden; padding: 0; }
   /* 卡片内滚动条：透明轨道 + 圆角滑块（避免默认白色轨道在深色卡片里出戏） */
   .tool-card .tc-args::-webkit-scrollbar,
   .tool-card .tc-output::-webkit-scrollbar,
