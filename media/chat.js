@@ -9,13 +9,15 @@
   const modelBtn = document.getElementById("modelBtn");
   const modelNameEl = document.getElementById("modelName");
   const fileMenuEl = document.getElementById("fileMenu");
-  const statsBarEl = document.getElementById("statsBar");
   const changedFilesEl = document.getElementById("changedFiles");
   const queueBarEl = document.getElementById("queueBar");
   const tabBarInner = document.getElementById("tabBarInner");
   const tabBarEl = document.getElementById("tabBar");
   const newTabBtn = document.getElementById("newTabBtn");
-  newTabBtn.addEventListener("click", () => { vscode.postMessage({ type: "newSession" }); });
+  newTabBtn.addEventListener("click", () => {
+    clearPendingForkDraft();
+    vscode.postMessage({ type: "newSession" });
+  });
   let multiTab = false; // 收到 tabList / 带 tabId 的消息后置 true，显示 tab 栏
 
   function enterMultiTab() {
@@ -40,6 +42,14 @@
   // ---- 分支树浮层（全局，瞬时）----
   const treeOverlay = document.getElementById("treeOverlay");
   const treeBody = document.getElementById("treeBody");
+
+  // ---- 分支分叉草稿：fork 到新 tab 后把被点击的 user 消息救回输入框 ----
+  let pendingForkDraft = null;        // 被点击分叉的 user 消息文本
+  let pendingForkKnownTabs = null;    // 点击瞬间已存在的 tab 集合（仅新 tab 应用草稿）
+  function clearPendingForkDraft() {
+    pendingForkDraft = null;
+    pendingForkKnownTabs = null;
+  }
 
   // ---- 通用拾取器浮层（模型 / 历史）----
   const pickerOverlay = document.getElementById("pickerOverlay");
@@ -161,7 +171,6 @@
   var notifyOnTurnEnd = true;
   let openFiles = [];
   function applyViewOptions(opts) {
-    statsBarEl.classList.toggle("bar-hidden", opts.showStatsBar === false);
     if (typeof opts.sendKey === "string") { sendKeyCombo = opts.sendKey; }
     if (typeof opts.newSessionKey === "string") { newSessionKey = opts.newSessionKey; }
     if (typeof opts.tabSwitchKey === "string") { tabSwitchKey = opts.tabSwitchKey; }
@@ -264,7 +273,6 @@
   // ==================== Tab 状态 ====================
   const tabs = new Map(); // id -> state
   let activeId = null;
-  let lastStatsSeq = 0; // 用于避免 stats 闪烁
 
   function activeTab() { return activeId ? tabs.get(activeId) : null; }
 
@@ -315,7 +323,6 @@
       modelId: "",
       provider: "",
       thinkingLevel: "",
-      lastStats: null,
       changedFiles: [],
       queuedSteering: [],
       pendingSteerRestore: null,
@@ -667,18 +674,6 @@
       queueBarEl.appendChild(card);
     });
   }
-  function renderStatsFor(tab) {
-    if (activeId !== tab.id) { return; }
-    const parts = [];
-    const cu = tab.lastStats && tab.lastStats.contextUsage;
-    if (cu && typeof cu.percent === "number") {
-      let cls = "stat";
-      if (cu.percent >= 90) { cls += " ctx-crit"; } else if (cu.percent >= 70) { cls += " ctx-hi"; }
-      const win = cu.contextWindow ? " / " + fmtNum(cu.contextWindow) : "";
-      parts.push('<span class="' + cls + '" title="上下文使用">上下文 ' + cu.percent.toFixed(1) + '% (' + fmtNum(cu.tokens) + win + ')</span>');
-    }
-    statsBarEl.innerHTML = parts.join("");
-  }
 
   // ==================== UI 同步（活跃 tab 驱动全局控件）====================
   function updateSendState() {
@@ -748,13 +743,30 @@
     hideFileMenu();
   }
 
+  /** fork 到新 tab 后，把被点击分叉的 user 消息救回输入框（可编辑后重发）。 */
+  function maybeApplyForkDraft() {
+    if (!pendingForkDraft || !pendingForkKnownTabs) { return; }
+    const tab = activeTab();
+    if (!tab || pendingForkKnownTabs.has(tab.id)) { return; } // 只在新 tab 上应用，不动既有 tab 的草稿
+    inputEl.value = pendingForkDraft;
+    inputEl.style.height = "auto";
+    autoResize();
+    const end = inputEl.value.length;
+    inputEl.setSelectionRange(end, end);
+    tab.inputText = inputEl.value;
+    tab.inputSelectionStart = end;
+    tab.inputSelectionEnd = end;
+    clearPendingForkDraft();
+    updateSendState();
+    inputEl.focus();
+  }
+
   function reflectTabUI() {
     const tab = activeTab();
     if (!tab) { return; }
     updateSendState();
     syncStatus();
     syncModelBtn();
-    renderStatsFor(tab);
     renderChangedFilesFor(tab);
     renderQueueBar(tab);
     syncJumpBottom(tab);
@@ -784,10 +796,13 @@
       el.className = "chat-tab" + (activeId === tab.id ? " active" : "") + (tab.streaming ? " streaming" : "") + (tab.loading ? " loading" : "");
       const spinner = document.createElement("span"); spinner.className = "ct-spinner"; el.appendChild(spinner);
       const title = document.createElement("span"); title.className = "ct-title"; title.textContent = tab.title; el.appendChild(title);
-      const close = document.createElement("span"); close.className = "ct-close"; close.textContent = "×"; close.title = "关闭此对话";
+      const close = document.createElement("span"); close.className = "ct-close"; close.title = "关闭此对话";
+      // 用 SVG 画叉：文本 “×” 在 Segoe UI 等字体下 ink 偏上，flex 居中无法修正；
+      // SVG 笔画由 viewBox 几何决定，天然居中（与 VS Code 自带关闭图标同法）。
+      close.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 2.5 L13.5 13.5 M13.5 2.5 L2.5 13.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>';
       close.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "closeTab", tabId: tab.id }); });
       el.appendChild(close);
-      el.addEventListener("click", () => { vscode.postMessage({ type: "switchTab", tabId: tab.id }); });
+      el.addEventListener("click", () => { clearPendingForkDraft(); vscode.postMessage({ type: "switchTab", tabId: tab.id }); });
       tabBarInner.appendChild(el);
     });
   }
@@ -887,7 +902,17 @@
         const forkable = isUserMsg && !isLeaf;
         if (forkable) {
           line.classList.add("forkable"); line.title = "点击在此处新建分支（可编辑该消息后重发）";
-          line.addEventListener("click", () => { hideTree(); vscode.postMessage({ type: "forkAtEntry", tabId: tabId, entryId: e.id }); });
+          line.addEventListener("click", () => {
+            const forkText = entryText(e.message ? e.message.content : "");
+            if (forkText) {
+              pendingForkDraft = forkText;
+              pendingForkKnownTabs = new Set(tabs.keys());
+            } else {
+              clearPendingForkDraft();
+            }
+            hideTree();
+            vscode.postMessage({ type: "forkAtEntry", tabId: tabId, entryId: e.id });
+          });
         } else if (isLeaf) { line.title = "当前位置（分支末尾）"; }
         else { line.classList.add("readonly"); line.title = isUserMsg ? "当前位置的消息" : "仅展示（仅 user 消息可分叉）"; }
         treeBody.appendChild(line);
@@ -957,7 +982,7 @@
         if (item.action === "thinkingLevel") {
           const t = document.createElement("div"); t.className = "pk-title";
           const chk = document.createElement("span"); chk.className = "pk-check" + (item.check === true ? " on" : "");
-          chk.textContent = item.check === true ? "✓" : "○";
+          chk.textContent = item.check === true ? "✓" : "";
           t.appendChild(chk);
           t.appendChild(document.createTextNode(item.label || ""));
           el.appendChild(t);
@@ -987,11 +1012,11 @@
       } else if (st.kind === "options") {
         const t = document.createElement("div"); t.className = "pk-title";
         const chk = document.createElement("span"); chk.className = "pk-check" + (item.check === true ? " on" : "");
-        chk.textContent = item.check === true ? "✓" : (item.check === false ? "○" : "▶");
+        chk.textContent = item.check === true ? "✓" : "";
         t.appendChild(chk);
         t.appendChild(document.createTextNode(item.label || ""));
         el.appendChild(t);
-        if (item.desc) { const d = document.createElement("div"); d.className = "pk-desc"; d.style.paddingLeft = "1.4em"; d.textContent = item.desc; el.appendChild(d); }
+        if (item.desc) { const d = document.createElement("div"); d.className = "pk-desc"; d.style.paddingLeft = "20px"; d.textContent = item.desc; el.appendChild(d); }
       }
       el.addEventListener("mouseenter", () => { st.sel = idx; renderPickerActive(); });
       el.addEventListener("click", () => { confirmPicker(idx); });
@@ -1286,12 +1311,14 @@
       enterMultiTab();
       const incoming = msg.tabs || [];
       const seen = new Set();
+      let sawNewTab = false;
       incoming.forEach((t) => {
         seen.add(t.id);
         let st = tabs.get(t.id);
         if (!st) {
           // 占位创建 pane（此时 #messages 是容器，直接 append）
           st = createTab(t.id, t.title);
+          sawNewTab = true;
           if (msg.activeId === t.id) {
             // 首次出现且为 active
           }
@@ -1324,6 +1351,9 @@
       }
       renderTabBar();
       updateSendState(); syncStatus();
+      // fork 到新 tab：把被点击的 user 消息救回输入框；若没出现新 tab（原地分叉/普通切换）则丢弃
+      maybeApplyForkDraft();
+      if (pendingForkDraft && !sawNewTab) { clearPendingForkDraft(); }
       return;
     }
     if (type === "tabActivated") {
@@ -1340,6 +1370,7 @@
         }
         renderTabBar();
       }
+      maybeApplyForkDraft();
       return;
     }
     if (type === "tabClosed") {
@@ -1393,7 +1424,7 @@
       enterMultiTab();
       t = tabs.get(tabId) || createTab(tabId, "新会话");
     } else {
-      // 单 tab 宿主（如 Electron）：惰性创建默认 tab
+      // 兜底：无 tabId 的消息（后端尚未推送 tabList）时惰性创建默认 tab
       t = ensureDefaultTab();
     }
     if (!t) { return; }
@@ -1531,10 +1562,6 @@
         }
         if (activeId === t.id) { renderQueueBar(t); }
         break;
-      case "stats":
-        t.lastStats = msg;
-        renderStatsFor(t);
-        break;
       case "fileChanges":
         t.changedFiles = msg.files || [];
         renderChangedFilesFor(t);
@@ -1572,8 +1599,7 @@
     settingsInstance = window.mountSettings(settingsRoot, {
       send(type, payload) {
         if (type === "save") { vscode.postMessage({ type: "app:saveSettings", content: (payload && payload.content) || "" }); }
-        else if (type === "getDefault") { vscode.postMessage({ type: "app:getDefaultModels" }); }
-        else { vscode.postMessage({ type: "app:requestSettings" }); } // ready | reload
+        else { vscode.postMessage({ type: "app:requestSettings" }); } // ready
       },
       on(handler) { settingsDispatch = handler; },
       onClose() { closeSettings(); },
@@ -1596,16 +1622,37 @@
     }
     viewOptionItems.forEach((it) => {
       const row = document.createElement("div"); row.className = "vo-item";
-      const check = document.createElement("span"); check.className = "vo-check" + (it.check === true ? " on" : "");
-      check.textContent = it.check === true ? "✓" : (it.check === false ? "○" : "▶");
-      const txt = document.createElement("div"); txt.className = "vo-text";
-      const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "";
-      txt.appendChild(label);
-      if (it.desc) { const d = document.createElement("div"); d.className = "vo-desc"; d.textContent = it.desc; txt.appendChild(d); }
-      row.appendChild(check); row.appendChild(txt);
-      row.addEventListener("click", () => {
-        vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: it.value });
-      });
+      if (Array.isArray(it.options) && it.options.length) {
+        // 按钮组：直接点选某个选项
+        row.classList.add("vo-item-group");
+        const txt = document.createElement("div"); txt.className = "vo-text";
+        const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "";
+        txt.appendChild(label);
+        if (it.desc) { const d = document.createElement("div"); d.className = "vo-desc"; d.textContent = it.desc; txt.appendChild(d); }
+        row.appendChild(txt);
+        const group = document.createElement("div"); group.className = "vo-group";
+        it.options.forEach((opt) => {
+          const b = document.createElement("button"); b.type = "button";
+          b.className = "vo-group-btn" + (opt.value === it.value ? " on" : "");
+          b.textContent = opt.label;
+          b.addEventListener("click", () => {
+            vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: opt.value });
+          });
+          group.appendChild(b);
+        });
+        row.appendChild(group);
+      } else {
+        const check = document.createElement("span"); check.className = "vo-check" + (it.check === true ? " on" : "");
+        check.textContent = it.check === true ? "✓" : "";
+        const txt = document.createElement("div"); txt.className = "vo-text";
+        const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "";
+        txt.appendChild(label);
+        if (it.desc) { const d = document.createElement("div"); d.className = "vo-desc"; d.textContent = it.desc; txt.appendChild(d); }
+        row.appendChild(check); row.appendChild(txt);
+        row.addEventListener("click", () => {
+          vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: it.value });
+        });
+      }
       viewOptsRoot.appendChild(row);
     });
   }
@@ -1638,9 +1685,6 @@
   });
   const settingsCloseBtn = document.getElementById("settingsClose");
   if (settingsCloseBtn) { settingsCloseBtn.addEventListener("click", closeSettings); }
-  // 暴露给同页面的 app.js（Electron appBar）调用
-  window.__piOpenSettings = openSettings;
-  window.__piCloseSettings = closeSettings;
 
   vscode.postMessage({ type: "ready" });
 })();

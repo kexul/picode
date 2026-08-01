@@ -1,21 +1,75 @@
 {
-  "name": "pi-chat",
-  "private": true,
-  "version": "0.0.0",
-  "scripts": {
-    "compile": "npm --prefix apps/vscode run build",
-    "watch": "npm --prefix apps/vscode run watch",
-    "build:vscode": "npm --prefix apps/vscode run build",
-    "build:electron": "npm --prefix apps/electron run build",
-    "watch:vscode": "npm --prefix apps/vscode run watch",
-    "watch:electron": "npm --prefix apps/electron run watch",
-    "start:electron": "npm --prefix apps/electron run start",
-    "package:vscode": "npm --prefix apps/vscode run package",
-    "dist:electron": "npm --prefix apps/electron run dist",
-    "analyze": "node scripts/analyze-reuse.js",
-    "analyze:json": "node scripts/analyze-reuse.js --json"
+  "name": "pi-chat-vscode",
+  "displayName": "Pi Chat",
+  "description": "在 VSCode 中与 pi coding agent 进行对话",
+  "version": "0.0.3",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
   },
+  "categories": ["Other", "Chat"],
+  "main": "./out/src/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      { "command": "piChat.openChat", "title": "Pi Chat: 打开对话窗口", "icon": "$(comment-discussion)" },
+      { "command": "piChat.newSession", "title": "Pi Chat: 新建会话", "icon": "$(add)" },
+      { "command": "piChat.history", "title": "Pi Chat: 历史会话", "icon": "$(history)" },
+      { "command": "piChat.openSettings", "title": "Pi Chat: 设置", "icon": "$(gear)" },
+      { "command": "piChat.openViewOptions", "title": "Pi Chat: 显示选项", "icon": "$(gear)" },
+      { "command": "piChat.pickModel", "title": "Pi Chat: 切换模型", "icon": "$(hubot)" },
+      { "command": "piChat.showTree", "title": "Pi Chat: 对话分支", "icon": "$(git-branch)" },
+      { "command": "piChat.focusInput", "title": "Pi Chat: 聚焦输入框", "icon": "$(keyboard)" },
+      { "command": "piChat.askSelectionAndSend", "title": "Pi Chat: 发送选中文本到对话框", "icon": "$(comment)" }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "piChatContainer", "title": "Pi Chat", "icon": "$(comment-discussion)" }
+      ]
+    },
+    "views": {
+      "piChatContainer": [
+        { "type": "webview", "id": "piChat.chatView", "name": "对话" }
+      ]
+    },
+    "keybindings": [
+      { "command": "piChat.askSelectionAndSend", "key": "ctrl+alt+p", "mac": "cmd+alt+p", "when": "editorTextFocus" },
+      { "command": "piChat.focusInput", "key": "ctrl+alt+i", "mac": "cmd+alt+i", "when": "editorTextFocus || terminalFocus" }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "piChat.askSelectionAndSend", "group": "navigation@89" }
+      ],
+      "view/title": [
+        { "command": "piChat.history", "when": "view == piChat.chatView", "group": "navigation@2" },
+        { "command": "piChat.showTree", "when": "view == piChat.chatView", "group": "navigation@1" },
+        { "command": "piChat.openSettings", "when": "view == piChat.chatView", "group": "navigation@3" }
+      ]
+    },
+    "configuration": {
+      "title": "Pi Chat",
+      "properties": {
+        "piChat.piPath": { "type": "string", "default": "pi", "description": "pi 可执行文件的路径。默认为 'pi'（需在 PATH 中）。" },
+        "piChat.provider": { "type": "string", "default": "", "description": "LLM provider（如 anthropic, openai, google）。留空使用 pi 默认配置。" },
+        "piChat.model": { "type": "string", "default": "", "description": "模型 pattern 或 ID（如 sonnet, gpt-4o）。留空使用 pi 默认配置。" },
+        "piChat.extraArgs": { "type": "array", "items": { "type": "string" }, "default": [], "description": "传递给 pi --mode rpc 的额外命令行参数。" },
+        "piChat.trustProject": { "type": "boolean", "default": true, "description": "启动时是否信任当前项目（向 pi 传入 --approve）。" }
+      }
+    }
+  },
+  "scripts": {
+    "clean": "node -e \"const fs=require('fs');fs.rmSync('out',{recursive:true,force:true});for(const f of fs.readdirSync('.').filter(f=>/^pi-chat.*\\.vsix$/.test(f)))fs.rmSync(f)\"",
+    "compile": "tsc -p tsconfig.json",
+    "build": "npm run clean && npm run compile",
+    "watch": "tsc -w -p tsconfig.json",
+    "vscode:prepublish": "npm run compile",
+    "package": "npm run build && vsce package --allow-missing-repository"
+  },
+  "dependencies": {},
   "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
     "typescript": "^5.3.0"
   }
 }

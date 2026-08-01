@@ -2,21 +2,20 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
 import { getChatHtml } from "./chatHtml";
-import { writeModelsJson, readModelsJson, defaultModelsJson } from "../../../src/shared/modelsConfig";
+import { writeModelsJson, readModelsJson } from "./modelsConfig";
 import {
     SessionRuntime,
     FileChange,
     StatusInfo,
-} from "../../../src/shared/sessionRuntime";
-import { ChatControllerBase } from "../../../src/shared/chatControllerBase";
+} from "./sessionRuntime";
+import { ChatControllerBase } from "./chatControllerBase";
 
 /**
  * VSCode 插件的聊天视图提供者。
  *
  * 平台相关部分（webview 装载、globalState 存储读写、vscode API 弹窗 / diff /
- * 文件打开、选中文本发送、符号跳转、models.json 编辑）在此实现；其余与
- * Electron 共享的会话编排逻辑（标签管理、拾取器、模型选择、消息分发等）
- * 继承自 {@link ChatControllerBase}。
+ * 文件打开、选中文本发送、符号跳转、models.json 编辑）在此实现；其余会话编排
+ * 逻辑（标签管理、拾取器、模型选择、消息分发等）继承自 {@link ChatControllerBase}。
  */
 export class ChatViewProvider extends ChatControllerBase implements vscode.WebviewViewProvider {
     public static readonly viewType = "piChat.chatView";
@@ -29,7 +28,6 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     private symbolTreeCache = new Map<string, { version: number; symbols: vscode.DocumentSymbol[] }>();
     private symbolSetTimer?: ReturnType<typeof setTimeout>;
     private workspaceSubs: vscode.Disposable[] = [];
-    private static readonly KEY_SHOW_STATS = "piChat.showStatsBar";
     private static readonly KEY_AUTO_LOAD_LAST = "piChat.autoLoadLastSession";
     private static readonly KEY_SEND_KEY = "piChat.sendKey";
     private static readonly KEY_NEW_SESSION_KEY = "piChat.newSessionKey";
@@ -204,9 +202,6 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     }
 
     // ---- 显示选项存储（globalState）----
-    protected getShowStatsBar(): boolean {
-        return this.context.globalState.get<boolean>(ChatViewProvider.KEY_SHOW_STATS, true);
-    }
     protected getAutoLoadLast(): boolean {
         return this.context.globalState.get<boolean>(ChatViewProvider.KEY_AUTO_LOAD_LAST, false);
     }
@@ -223,25 +218,30 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         return (ChatViewProvider.TAB_SWITCH_KEYS as readonly string[]).includes(v) ? v : "ctrl+alt+arrows";
     }
 
-    protected mutateViewOption(action: string): void {
+    protected mutateViewOption(action: string, value?: string): void {
         if (action === "sendKey") {
             const order = ChatViewProvider.SEND_KEYS;
-            const idx = order.indexOf(this.getSendKey() as (typeof order)[number]);
-            this.context.globalState.update(ChatViewProvider.KEY_SEND_KEY, order[(idx + 1) % order.length]);
+            const next =
+                value && (order as readonly string[]).includes(value)
+                    ? value
+                    : order[(order.indexOf(this.getSendKey() as (typeof order)[number]) + 1) % order.length];
+            this.context.globalState.update(ChatViewProvider.KEY_SEND_KEY, next);
         } else if (action === "newSessionKey") {
             const order = ChatViewProvider.NEW_SESSION_KEYS;
-            const idx = order.indexOf(this.getNewSessionKey() as (typeof order)[number]);
-            this.context.globalState.update(ChatViewProvider.KEY_NEW_SESSION_KEY, order[(idx + 1) % order.length]);
+            const next =
+                value && (order as readonly string[]).includes(value)
+                    ? value
+                    : order[(order.indexOf(this.getNewSessionKey() as (typeof order)[number]) + 1) % order.length];
+            this.context.globalState.update(ChatViewProvider.KEY_NEW_SESSION_KEY, next);
         } else if (action === "tabSwitchKey") {
             const order = ChatViewProvider.TAB_SWITCH_KEYS;
-            const idx = order.indexOf(this.getTabSwitchKey() as (typeof order)[number]);
-            this.context.globalState.update(ChatViewProvider.KEY_TAB_SWITCH_KEY, order[(idx + 1) % order.length]);
+            const next =
+                value && (order as readonly string[]).includes(value)
+                    ? value
+                    : order[(order.indexOf(this.getTabSwitchKey() as (typeof order)[number]) + 1) % order.length];
+            this.context.globalState.update(ChatViewProvider.KEY_TAB_SWITCH_KEY, next);
         } else {
-            const cur =
-                action === ChatViewProvider.KEY_SHOW_STATS
-                    ? this.getShowStatsBar()
-                    : this.getAutoLoadLast();
-            this.context.globalState.update(action, !cur);
+            this.context.globalState.update(ChatViewProvider.KEY_AUTO_LOAD_LAST, !this.getAutoLoadLast());
         }
     }
 
@@ -266,10 +266,6 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
                         this.postToWebview({ type: "app:settingsResult", ok: false, error: result.error });
                     }
                 }
-                return true;
-            }
-            case "app:getDefaultModels": {
-                this.postToWebview({ type: "app:defaultModels", content: defaultModelsJson() });
                 return true;
             }
         }

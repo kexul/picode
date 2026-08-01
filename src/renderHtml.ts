@@ -1,14 +1,13 @@
 /**
- * chat-ui —— 对话前端共用模块。
+ * renderHtml —— 生成聊天界面 HTML 骨架。
  *
  * 导出 renderHTML(opts)：生成聊天界面 HTML。
- * 聊天 DOM 结构 + CSS + chat.js 三边共用一份；各宿主通过 opts 注入 URI 解析、
+ * 聊天 DOM 结构 + CSS + chat.js 在此定义；调用方通过 opts 注入 URI 解析、
  * CSP、CSS 文本、额外 head/body。
  *
- * 前端资源（chat.js / marked.js / highlight.js 等）的单一真源是 apps/vscode/media
- * （vscode 插件打包根内，无需拷贝即可被 vsce 纳入）；Electron 在 build 时从
- * 该目录拷到 out/.../renderer/。chat.css 由调用方读取文本后通过 opts.chatCss
- * 传入（避免本模块运行时读文件）。
+ * 前端资源（chat.js / marked.js / highlight.js 等）位于 media/
+ * （vscode 插件打包根内，无需拷贝即可被 vsce 纳入）。chat.css 由调用方读取文本后
+ * 通过 opts.chatCss 传入（避免本模块运行时读文件）。
  */
 
 export interface RenderHTMLOpts {
@@ -24,9 +23,9 @@ export interface RenderHTMLOpts {
     extraBodyTop?: string;
     /** 注入 <body> 结尾、<script> 之前的额外 DOM。 */
     extraBodyBottom?: string;
-    /** 给 <script> 标签加的 nonce 值（VSCode CSP 需要）；Electron 留空。 */
+    /** 给 <script> 标签加的 nonce 值（VSCode CSP 需要）。 */
     scriptNonce?: string;
-    /** 额外 <script src> 的 URI 列表（如 Electron 的 app.js），放在 chat.js 之后。 */
+    /** 额外 <script src> 的 URI 列表，放在 chat.js 之后。 */
     extraScripts?: string[];
 }
 
@@ -73,7 +72,6 @@ ${bodyTop}${tabbar}  <div id="messages">
     <div id="bottomBar">
       <button id="treeBtn" title="查看对话树 / 切换分支">⑂ 分支</button>
       <button id="modelBtn" title="切换模型">⚡ <span id="modelName">模型</span></button>
-      <div id="statsBar"></div>
     </div>
   </div>
   <div id="treeOverlay" class="hidden">
@@ -94,7 +92,7 @@ ${bodyTop}${tabbar}  <div id="messages">
     <div id="settingsPanel">
       <div id="settingsTabs">
         <button class="settings-tab active" data-tab="models" type="button">模型配置</button>
-        <button class="settings-tab" data-tab="options" type="button">显示选项</button>
+        <button class="settings-tab" data-tab="options" type="button">插件选项</button>
         <span class="settings-tabs-spacer"></span>
         <button id="settingsClose" type="button" title="关闭 (Esc)" aria-label="关闭">✕</button>
       </div>

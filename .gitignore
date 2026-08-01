@@ -2,16 +2,3 @@ node_modules/
 out/
 *.vsix
 .vscode-test/
-
-# VSCode 插件 build 产物
-apps/vscode/out/
-
-# Electron 客户端 build 产物
-apps/electron/out/
-apps/electron/dist/
-apps/electron/release/
-
-# 迁移前残留的旧目录（被占用删不掉，重启后可清理）
-/app/
-build.log
-b.log

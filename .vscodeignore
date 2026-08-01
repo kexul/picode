@@ -6,3 +6,10 @@ node_modules/**
 out/**/*.map
 *.vsix
 **/*.ts
+
+# 开发仓库文件，不打进插件
+.git/**
+.gitignore
+.npmrc
+build.bat
+.github/**

@@ -3,7 +3,7 @@
     "module": "commonjs",
     "target": "ES2021",
     "outDir": "out",
-    "rootDir": "../..",
+    "rootDir": ".",
     "lib": ["ES2021", "DOM"],
     "sourceMap": true,
     "strict": true,
@@ -11,6 +11,6 @@
     "skipLibCheck": true,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*.ts", "../../src/shared/**/*.ts", "../../src/chat-ui/**/*.ts"],
-  "exclude": ["node_modules", "renderer", "scripts"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules"]
 }

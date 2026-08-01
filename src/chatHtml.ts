@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
-import { renderHTML } from "../../../src/chat-ui";
+import { renderHTML } from "./renderHtml";
 
 function nonce(): string {
     let text = "";
@@ -14,8 +14,8 @@ function nonce(): string {
 
 /**
  * 生成聊天 Webview 的 HTML。
- * 聊天 DOM/JS 来自共用源 src/chat-ui（编译进 out），这里注入 VSCode 特有的
- * URI 解析、CSP（含 nonce + cspSource）、chat.css 文本。
+ * 聊天 DOM/JS 由 renderHtml.ts 生成骨架，这里注入 VSCode 特有的 URI 解析、
+ * CSP（含 nonce + cspSource）、chat.css 文本。
  * 前端资源（chat.js/marked.js/highlight.js/chat.css）的源就是本插件 media/ 目录
  * （位于 vsce 打包根内，无需拷贝，直接由 webview 加载 / 读取内联）。
  */
@@ -28,7 +28,7 @@ export function getChatHtml(webview: vscode.Webview, extensionUri: vscode.Uri): 
     let chatCss = "";
     try { chatCss = fs.readFileSync(cssPath, "utf8"); } catch { /* ignore */ }
     // VSCode 专属覆盖：分支/模型/上下文改由 view title 按钮 + 状态栏承载，
-    // 隐藏 webview 内的 #bottomBar（该项为 vscode/electron 共用 DOM，不删源）。
+    // 隐藏 webview 内的 #bottomBar（该项为共用 DOM，不删源）。
     const extraHead = `<style id="vscode-overrides">#bottomBar{display:none!important}</style>`;
     const settingsJs = resolveUri("settings.js");
     const csp =

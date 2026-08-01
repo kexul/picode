@@ -1,14 +1,14 @@
 // @ts-nocheck
 /**
- * models.json 结构化配置界面（共用：VSCode 面板 + Electron modal）。
+ * models.json 结构化配置界面（VSCode 侧边栏设置面板）。
  *
  * 导出 window.mountSettings(root, api)：
  *   root        容器元素（渲染器在其中绘制 整套 UI）
  *   api = {
- *     send(type, payload)   外发消息：'ready' | 'reload' | 'getDefault' | 'save'
+ *     send(type, payload)   外发消息：'ready' | 'save'
  *     on(handler)           注册入站回调：handler({type, content?, existed?, path?, error?})
- *                           type: 'load' | 'default' | 'saved' | 'error'
- *     onClose?()            可选；提供则渲染「关闭」按钮（Electron 用，VSCode 不传）
+ *                           type: 'load' | 'saved' | 'error'
+ *     onClose?()            可选；提供则渲染「关闭」按钮
  *   }
  *   返回 { requestInitial() }
  *
@@ -57,12 +57,14 @@
       ".ms-sub{font-size:11px;opacity:.6;font-family:var(--vscode-editor-font-family,monospace);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".ms-spacer{flex:1}",
       ".ms-modeToggle{display:flex;align-items:center;gap:6px;font-size:12px;opacity:.8;cursor:pointer;user-select:none}",
-      ".ms-modeToggle input{accent-color:var(--vscode-button-background)}",
+      ".ms-modeToggle input{appearance:none;-webkit-appearance:none;width:14px;height:14px;margin:0;flex-shrink:0;border:1px solid var(--vscode-checkbox-border,rgba(128,128,128,.55));border-radius:3px;background:var(--vscode-checkbox-background,transparent);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;position:relative}",
+      ".ms-modeToggle input:checked{background:var(--vscode-checkbox-background,#0e639c);border-color:var(--vscode-focusBorder,#007acc)}",
+      ".ms-modeToggle input:checked::after{content:\"✓\";font-size:10px;line-height:1;color:var(--vscode-checkbox-foreground,#fff);position:absolute}",
       ".ms-body{flex:1;display:flex;min-height:0}",
       ".ms-tree{width:214px;flex-shrink:0;border-right:1px solid var(--vscode-panel-border);display:flex;flex-direction:column;background:var(--vscode-editorWidget-background,var(--vscode-editor-background))}",
       ".ms-tree-list{flex:1;overflow-y:auto;padding:6px}",
       ".ms-tree-prov{margin-bottom:2px}",
-      ".ms-row{display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:5px;cursor:pointer}",
+      ".ms-row{display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:4px;cursor:pointer}",
       ".ms-row:hover{background:var(--vscode-list-hoverBackground)}",
       ".ms-row.sel{background:var(--vscode-list-activeSelectionBackground);color:var(--vscode-list-activeSelectionForeground)}",
       ".ms-row .ms-ico{flex-shrink:0;opacity:.7;display:flex;align-items:center}",
@@ -70,11 +72,11 @@
       ".ms-row .ms-mon{font-family:var(--vscode-editor-font-family,monospace)}",
       ".ms-row.model{padding-left:24px}",
       ".ms-row.model .ms-name{font-size:11px;opacity:.85}",
-      ".ms-badge{font-size:9px;padding:1px 4px;border-radius:3px;background:rgba(99,102,241,.15);color:rgba(99,102,241,.9);flex-shrink:0}",
-      ".ms-treeAdd{display:flex;align-items:center;gap:5px;padding:5px 8px 5px 24px;border-radius:5px;cursor:pointer;color:var(--vscode-descriptionForeground);font-size:11px}",
+      ".ms-badge{font-size:9px;padding:1px 4px;border-radius:3px;background:var(--vscode-badge-background,rgba(128,128,128,.3));color:var(--vscode-badge-foreground,inherit);flex-shrink:0}",
+      ".ms-treeAdd{display:flex;align-items:center;gap:5px;padding:5px 8px 5px 24px;border-radius:4px;cursor:pointer;color:var(--vscode-descriptionForeground);font-size:11px}",
       ".ms-treeAdd:hover{color:var(--vscode-button-background);background:var(--vscode-list-hoverBackground)}",
       ".ms-tree-foot{border-top:1px solid var(--vscode-panel-border);padding:8px 6px}",
-      ".ms-addProv{width:100%;padding:6px 0;background:none;border:1px dashed var(--vscode-panel-border);border-radius:5px;color:var(--vscode-descriptionForeground);cursor:pointer;font-size:12px}",
+      ".ms-addProv{width:100%;padding:6px 0;background:none;border:1px solid var(--vscode-panel-border);border-radius:4px;color:var(--vscode-descriptionForeground);cursor:pointer;font-size:12px}",
       ".ms-addProv:hover{border-color:var(--vscode-focusBorder);color:var(--vscode-foreground)}",
       ".ms-detail{flex:1;overflow-y:auto;padding:18px;min-width:0}",
       ".ms-empty{height:100%;display:flex;align-items:center;justify-content:center;color:var(--vscode-descriptionForeground);font-size:13px}",
@@ -82,7 +84,7 @@
       ".ms-secTitle{font-size:11px;font-weight:600;opacity:.65;text-transform:uppercase;letter-spacing:.06em}",
       ".ms-field{display:flex;flex-direction:column;gap:4px}",
       ".ms-label{font-size:11px;opacity:.7;font-weight:500}",
-      ".ms-input{padding:6px 9px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border);border-radius:5px;font-size:12px;outline:none;width:100%;box-sizing:border-box;font-family:inherit}",
+      ".ms-input{padding:6px 9px;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border);border-radius:4px;font-size:12px;outline:none;width:100%;box-sizing:border-box;font-family:inherit}",
       ".ms-input:focus{border-color:var(--vscode-focusBorder)}",
       ".ms-input.mono{font-family:var(--vscode-editor-font-family,monospace)}",
       ".ms-grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}",
@@ -90,15 +92,17 @@
       ".ms-stack{display:flex;flex-direction:column;gap:14px}",
       ".ms-checks{display:flex;gap:18px;flex-wrap:wrap}",
       ".ms-check{display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;opacity:.85}",
-      ".ms-check input{accent-color:var(--vscode-button-background)}",
+      ".ms-check input{appearance:none;-webkit-appearance:none;width:14px;height:14px;margin:0;flex-shrink:0;border:1px solid var(--vscode-checkbox-border,rgba(128,128,128,.55));border-radius:3px;background:var(--vscode-checkbox-background,transparent);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;position:relative}",
+      ".ms-check input:checked{background:var(--vscode-checkbox-background,#0e639c);border-color:var(--vscode-focusBorder,#007acc)}",
+      ".ms-check input:checked::after{content:\"✓\";font-size:10px;line-height:1;color:var(--vscode-checkbox-foreground,#fff);position:absolute}",
       ".ms-secret{position:relative;width:100%;box-sizing:border-box}",
       ".ms-secret .ms-input{padding-right:32px}",
       ".ms-eye{position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--vscode-descriptionForeground);cursor:pointer;padding:4px;display:flex}",
-      ".ms-btn{padding:5px 12px;border:none;border-radius:5px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);cursor:pointer;font-size:12px}",
+      ".ms-btn{padding:5px 12px;border:none;border-radius:4px;background:var(--vscode-button-background);color:var(--vscode-button-foreground);cursor:pointer;font-size:12px}",
       ".ms-btn:hover{background:var(--vscode-button-hoverBackground,var(--vscode-button-background))}",
       ".ms-btn.sec{background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground)}",
       ".ms-btn.sec:hover{background:var(--vscode-button-secondaryHoverBackground,var(--vscode-button-secondaryBackground))}",
-      ".ms-btn.danger{background:none;border:1px solid rgba(239,68,68,.35);color:#ef4444}",
+      ".ms-btn.danger{background:none;border:1px solid var(--vscode-errorForeground,rgba(239,68,68,.35));color:var(--vscode-errorForeground,#ef4444)}",
       ".ms-btn:disabled{opacity:.5;cursor:default}",
       ".ms-split{display:flex;gap:8px;align-items:center;flex-wrap:wrap}",
       ".ms-kv{display:flex;flex-direction:column;gap:6px}",
@@ -111,7 +115,7 @@
       ".ms-status.ok{color:var(--vscode-testing-iconPassed);opacity:1}",
       ".ms-status.err{color:var(--vscode-errorForeground);opacity:1}",
       ".ms-rawWrap{flex:1;display:flex;min-height:0}",
-      ".ms-raw{flex:1;margin:14px;width:auto;box-sizing:border-box;resize:none;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border);border-radius:5px;padding:10px;font-family:var(--vscode-editor-font-family,monospace);font-size:12px;tab-size:2;outline:none}",
+      ".ms-raw{flex:1;margin:14px;width:auto;box-sizing:border-box;resize:none;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border);border-radius:4px;padding:10px;font-family:var(--vscode-editor-font-family,monospace);font-size:12px;tab-size:2;outline:none}",
       ".ms-raw:focus{border-color:var(--vscode-focusBorder)}",
     ].join("");
     document.head.appendChild(s);
@@ -150,7 +154,6 @@
     api.on(function (msg) {
       switch (msg.type) {
         case "load": onLoad(msg.content, msg.existed, msg.path); break;
-        case "default": applyDefault(msg.content); break;
         case "saved": state.dirty = false; refreshDirty(); setStatus("已保存 ✓  " + new Date().toLocaleTimeString(), "ok"); break;
         case "error": setStatus(msg.error || "保存失败", "err"); break;
       }
@@ -183,31 +186,8 @@
       else setStatus("JSON 解析失败，已切换到原始模式：" + state.parseError, "err");
     }
 
-    function applyDefault(content) {
-      try {
-        var obj = JSON.parse(content);
-        if (!obj.providers) obj.providers = {};
-        state.config = obj;
-        state.parseError = null;
-        state.mode = "form";
-        var keys = Object.keys(obj.providers);
-        state.selection = keys.length ? { type: "provider", name: keys[0] } : null;
-        state.dirty = true;
-        renderBody();
-        refreshDirty();
-        updateSub();
-        setStatus("已恢复默认 models（尚未保存，点击保存写入）", "ok");
-      } catch (e) {
-        setStatus("默认模板解析失败：" + e.message, "err");
-      }
-    }
-
     // ── 外发 ────────────────────────────────────────────────────────────────
     function requestInitial() { api.send("ready"); }
-    function doReload() { if (!confirmIfDirty("重新加载将丢弃当前修改，确定？")) return; api.send("reload"); }
-    function doGetDefault() { if (!confirmIfDirty("恢复默认将丢弃当前修改，确定？")) return; api.send("getDefault"); }
-
-    function confirmIfDirty(text) { return !state.dirty || confirm(text); }
 
     function serialize() { return JSON.stringify(state.config, null, 2) + "\n"; }
 
@@ -318,10 +298,6 @@
       var footer = el("div", { class: "ms-footer" });
       dom.status = el("span", { class: "ms-status" });
       footer.appendChild(dom.status);
-      dom.resetBtn = el("button", { class: "ms-btn sec", onclick: doGetDefault }, "恢复默认");
-      dom.reloadBtn = el("button", { class: "ms-btn sec", onclick: doReload }, "重新加载");
-      footer.appendChild(dom.resetBtn);
-      footer.appendChild(dom.reloadBtn);
       if (api.onClose) footer.appendChild(el("button", { class: "ms-btn sec", onclick: api.onClose }, "关闭"));
       dom.saveBtn = el("button", { class: "ms-btn", onclick: doSave }, "保存");
       footer.appendChild(dom.saveBtn);

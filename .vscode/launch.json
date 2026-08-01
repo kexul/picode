@@ -5,8 +5,8 @@
       "name": "运行插件",
       "type": "extensionHost",
       "request": "launch",
-      "args": ["--extensionDevelopmentPath=${workspaceFolder}/apps/vscode"],
-      "outFiles": ["${workspaceFolder}/apps/vscode/out/**/*.js"],
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "outFiles": ["${workspaceFolder}/out/**/*.js"],
       "preLaunchTask": "npm: compile"
     }
   ]

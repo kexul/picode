@@ -1,7 +1,7 @@
 /**
- * ChatControllerBase —— VSCode 插件与 Electron 客户端共享的会话编排层。
+ * ChatControllerBase —— VSCode 插件的会话编排层。
  *
- * 把“与平台无关、却被两边各写一份”的逻辑收敛到此：
+ * 把“与平台无关”的逻辑收敛到此：
  *   - 标签管理（newTab / setActive / switchTabByDirection / closeTab / broadcastTabList）
  *   - 拾取器浮层（showPicker / resolvePicker / handleThinkingToggle + pickerRefresher）
  *   - 模型选择器（pickModelInteractive）+ 思考强度标签
@@ -13,7 +13,7 @@
  * 子类只需实现“平台钩子”：消息如何送到 webview、配置/视图选项存储、
  * 对话框 / diff / 文件打开的实现，以及各自独有的消息类型。
  *
- * 本类不引用 `vscode` 或 `electron`，因此两端 tsc 都能编译。
+ * 本类不引用 `vscode`，便于独立测试/复用。
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -65,6 +65,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
         "ctrl+alt+brackets": "Ctrl+Alt+[ / Ctrl+Alt+]",
     };
 
+    /** 把标签映射转成按钮组选项列表。 */
+    protected static keyOptions(labels: Record<string, string>): Array<{ value: string; label: string }> {
+        return Object.entries(labels).map(([value, label]) => ({ value, label }));
+    }
+
     // ========================================================================
     //  平台钩子（子类实现）
     // ========================================================================
@@ -86,13 +91,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
     public abstract confirmRevert(label: string): Promise<boolean>;
 
     // ---- 显示选项：存储读写（子类）----
-    protected abstract getShowStatsBar(): boolean;
     protected abstract getAutoLoadLast(): boolean;
     protected abstract getSendKey(): string;
     protected abstract getNewSessionKey(): string;
     protected abstract getTabSwitchKey(): string;
-    /** 变更显示选项的存储（仅改存储，UI 推送由基类统一完成）。 */
-    protected abstract mutateViewOption(action: string): void;
+    /** 变更显示选项的存储（仅改存储，UI 推送由基类统一完成）。value 为按钮组点选的明确值。 */
+    protected abstract mutateViewOption(action: string, value?: string): void;
 
     // ---- 文件列表 / 文件打开（来自 webview 的 listFiles / openFile）----
     protected abstract sendFileList(): void;
@@ -107,17 +111,15 @@ export abstract class ChatControllerBase implements RuntimeHost {
     // ---- 可选平台钩子 ----
     /** pi 不存在时追加的平台行为（基类已向 tab 推送 systemError）。 */
     protected onPiMissing(_piPath: string): void { /* 默认无操作 */ }
-    /** pi 缺失提示文案（默认 electron 版；vscode 用更长文案）。 */
+    /** pi 缺失提示文案（基类默认；vscode 覆盖为更长文案并弹设置入口）。 */
     protected piMissingMessage(piPath: string): string {
         return `未找到 pi 可执行文件（当前配置："${piPath}"）。请确认已安装 pi 并加入 PATH，或在设置中指定 piPath。`;
     }
-    /** 加载 / 切换会话后聚焦聊天视图（vscode 需要，electron 无操作）。 */
+    /** 加载 / 切换会话后聚焦聊天视图（vscode 覆盖为聚焦侧栏）。 */
     protected async onFocusChat(): Promise<void> { /* 默认无操作 */ }
     /** 在弹出历史会话拾取器前做准备（vscode 需 ensureViewVisible）。 */
     protected async beforeHistoryPicker(): Promise<void> { /* 默认无操作 */ }
-    /** 活跃 tab 的会话路径变化时通知宿主（electron 转发，vscode 无操作）。 */
-    protected onActiveSessionChanged(_sessionPath: string | undefined): void { /* 默认无操作 */ }
-    /** 历史会话列表为空时的提示（vscode 弹信息条 / electron 推 system 消息）。 */
+    /** 历史会话列表为空时的提示（vscode 覆盖为信息条）。 */
     protected onNoSessions(): void { /* 默认无操作 */ }
 
     // ========================================================================
@@ -181,7 +183,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected sendViewOptions(): void {
         this.postToWebview({
             type: "viewOptions",
-            showStatsBar: this.getShowStatsBar(),
             autoLoadLastSession: this.getAutoLoadLast(),
             sendKey: this.getSendKey(),
             newSessionKey: this.getNewSessionKey(),
@@ -189,15 +190,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
         });
     }
 
-    /** 构建显示选项浮层条目（toggle 模式）。 */
-    protected buildViewOptionItems(): Array<{ label: string; desc: string; check: boolean | null; action: string }> {
+    /** 构建显示选项浮层条目（toggle / 按钮组模式）。 */
+    protected buildViewOptionItems(): Array<{
+        label: string; desc: string; check: boolean | null; action: string;
+        value?: string; options?: Array<{ value: string; label: string }>;
+    }> {
         return [
-            {
-                action: "showStatsBar",
-                label: "状态栏",
-                desc: "对话框上方的 token / 上下文状态栏",
-                check: this.getShowStatsBar(),
-            },
             {
                 action: "autoLoadLastSession",
                 label: "启动时自动打开最近会话",
@@ -206,21 +204,27 @@ export abstract class ChatControllerBase implements RuntimeHost {
             },
             {
                 action: "sendKey",
-                label: "发送键：" + ChatControllerBase.SEND_KEY_LABELS[this.getSendKey()],
-                desc: "点击切换：Enter → Shift+Enter → Alt+Enter → Ctrl+Enter",
+                label: "发送键",
+                desc: "发送消息的快捷键",
                 check: null,
+                value: this.getSendKey(),
+                options: ChatControllerBase.keyOptions(ChatControllerBase.SEND_KEY_LABELS),
             },
             {
                 action: "newSessionKey",
-                label: "新建会话：" + ChatControllerBase.NEW_SESSION_KEY_LABELS[this.getNewSessionKey()],
-                desc: "循环切换新建会话的快捷键组合",
+                label: "新建会话",
+                desc: "新建会话的快捷键",
                 check: null,
+                value: this.getNewSessionKey(),
+                options: ChatControllerBase.keyOptions(ChatControllerBase.NEW_SESSION_KEY_LABELS),
             },
             {
                 action: "tabSwitchKey",
-                label: "切换会话：" + ChatControllerBase.TAB_SWITCH_KEY_LABELS[this.getTabSwitchKey()],
+                label: "切换会话",
                 desc: "在多个会话 tab 间切换上一个 / 下一个",
                 check: null,
+                value: this.getTabSwitchKey(),
+                options: ChatControllerBase.keyOptions(ChatControllerBase.TAB_SWITCH_KEY_LABELS),
             },
         ];
     }
@@ -235,8 +239,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /** 浮层中切换某项后刷新：改存储 → 重推视图选项 → 刷新浮层。 */
-    protected doViewOptionToggle(action: string): void {
-        this.mutateViewOption(action);
+    protected doViewOptionToggle(action: string, value?: string): void {
+        this.mutateViewOption(action, value);
         this.sendViewOptions();
         this.showOptionsPicker();
     }
@@ -332,9 +336,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         });
     }
 
-    public onSessionChanged(tabId: string, sessionPath: string | undefined): void {
-        if (this.activeId === tabId) { this.onActiveSessionChanged(sessionPath); }
-    }
+    public onSessionChanged(_tabId: string, _sessionPath: string | undefined): void { /* 默认无操作 */ }
 
     /** RuntimeHost.onStatusUpdate：仅活跃 tab 的状态才转发给宿主展示。 */
     public onStatusUpdate(tabId: string, info: StatusInfo): void {
@@ -515,15 +517,34 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 源会话尚未落盘时回退到原地分叉。
      */
     public async forkAtEntryInNewTab(source: SessionRuntime, entryId: string): Promise<void> {
-        const sourcePath = source.currentSessionPath;
+        // 取源会话文件路径。currentSessionPath 只在加载历史 / 分叉成功后赋值，
+        // 全新 tab 普通对话后从未同步 —— 直接向源 pi 查询真实 sessionFile，
+        // 避免误判“未落盘”而在当前 tab 原地分叉。
+        let sourcePath = source.currentSessionPath;
         if (!sourcePath) {
-            await source.forkFromEntry(entryId);
-            return;
+            const state = await source.request({ type: "get_state" });
+            sourcePath = state?.data?.sessionFile;
+            if (sourcePath) {
+                source.currentSessionPath = sourcePath;
+            }
         }
-        const newRt = this.newTab();
-        // 不等固定 sleep：loadSessionAndFork 内部会等待新 tab 的 pi 进程就绪
-        await newRt.loadSessionAndFork(sourcePath, entryId);
-        await this.onFocusChat();
+        // pi 在首条 assistant 回复到达前不把会话写入磁盘：文件可能已创建路径
+        // 但尚未落盘，短轮询等它出现；仍不存在才回退原地分叉（会中止源 tab 生成）。
+        if (sourcePath) {
+            const abs = this.resolvePath(sourcePath);
+            const deadline = Date.now() + 8000;
+            while (!fs.existsSync(abs) && Date.now() < deadline) {
+                await new Promise((r) => setTimeout(r, 250));
+            }
+            if (fs.existsSync(abs)) {
+                const newRt = this.newTab();
+                // 不等固定 sleep：loadSessionAndFork 内部会等待新 tab 的 pi 进程就绪
+                await newRt.loadSessionAndFork(abs, entryId);
+                await this.onFocusChat();
+                return;
+            }
+        }
+        await source.forkFromEntry(entryId);
     }
 
     protected async maybeAutoLoadLastSession(): Promise<void> {
@@ -620,7 +641,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                     if (msg.kind === "model" && msg.action === "thinkingLevel") {
                         void this.handleThinkingToggle(msg.value);
                     } else {
-                        this.doViewOptionToggle(msg.action);
+                        this.doViewOptionToggle(msg.action, typeof msg.value === "string" ? msg.value : undefined);
                     }
                 }
                 return;

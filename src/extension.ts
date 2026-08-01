@@ -1,11 +1,7 @@
 import * as vscode from "vscode";
 import { ChatViewProvider, DiffContentProvider } from "./chatViewProvider";
-import { setExtensionRoot } from "../../../src/shared/modelsConfig";
 
 export function activate(context: vscode.ExtensionContext): void {
-    // 注入资源目录，用于定位打包的 default-models.json（位于 media/）
-    setExtensionRoot(vscode.Uri.joinPath(context.extensionUri, "media").fsPath);
-
     const provider = new ChatViewProvider(context);
 
     context.subscriptions.push(

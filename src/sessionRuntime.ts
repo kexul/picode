@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import { PiClient } from "./piClient";
 
-/** 平台无关的 pi 运行时配置（vscode / electron 共用）。 */
+/** 平台无关的 pi 运行时配置。 */
 export interface PiConfig {
     piPath: string;
     provider: string;
@@ -49,10 +49,10 @@ export interface StatusInfo {
 }
 
 /**
- * 平台适配层：隔离 VSCode 与 Electron 的差异。
+ * 平台适配层：把 VSCode 的 UI / 存储 / 文件差异隔离在插件实现里。
  *
  * shared 的 SessionRuntime 只依赖本接口 + PiClient + Node 内置 fs，
- * 不引用 `vscode`，因此两端的 tsc 都能编译。
+ * 不引用 `vscode`，便于独立测试/复用。
  */
 export interface RuntimeHost {
     getConfig(): PiConfig;
@@ -103,7 +103,7 @@ export interface RuntimeHost {
  * 多个 SessionRuntime 各自持有自己的 PiClient，因此可以真正并行流式生成。
  *
  * 平台差异（UI 弹窗、diff、文件打开、配置持久化）全部经由 RuntimeHost 注入，
- * 本类不引用 `vscode`，供 VSCode 插件与 Electron 客户端共用。
+ * 本类不引用 `vscode`，便于独立测试/复用。
  */
 export class SessionRuntime {
     public id: string = "";

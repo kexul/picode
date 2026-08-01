@@ -13,10 +13,9 @@ export function modelsJsonPath(): string {
 }
 
 /**
- * 内置兜底模板。仅当打包的 media/default-models.json 读取失败时使用。
- * 请以 media/default-models.json 作为标准 models（会被打包进插件）。
+ * 内置默认模板（原 media/default-models.json，已并入内置常量）。
  */
-const FALLBACK_MODELS_JSON = `{
+const DEFAULT_MODELS_JSON = `{
   "providers": {
     "local": {
       "baseUrl": "http://127.0.0.1:15721/v1",
@@ -34,6 +33,42 @@ const FALLBACK_MODELS_JSON = `{
           "cost": { "input": 50, "output": 226, "cacheRead": 5, "cacheWrite": 0 },
           "contextWindow": 968000,
           "maxTokens": 128000
+        },
+        {
+          "id": "glm-5.2",
+          "name": "glm-5.2",
+          "reasoning": true,
+          "input": ["text"],
+          "cost": { "input": 8, "output": 28, "cacheRead": 2, "cacheWrite": 0 },
+          "contextWindow": 980000,
+          "maxTokens": 180000
+        },
+        {
+          "id": "deepseek-v4-pro",
+          "name": "deepseek-v4-pro",
+          "reasoning": true,
+          "input": ["text"],
+          "cost": { "input": 3, "output": 6, "cacheRead": 0.025, "cacheWrite": 0 },
+          "contextWindow": 968000,
+          "maxTokens": 384000
+        },
+        {
+          "id": "deepseek-v4-flash",
+          "name": "deepseek-v4-flash",
+          "reasoning": true,
+          "input": ["text"],
+          "cost": { "input": 1, "output": 2, "cacheRead": 0.02, "cacheWrite": 0 },
+          "contextWindow": 968000,
+          "maxTokens": 384000
+        },
+        {
+          "id": "claude-opus-4-8",
+          "name": "claude-opus-4-8",
+          "reasoning": true,
+          "input": ["image", "text"],
+          "cost": { "input": 36, "output": 180, "cacheRead": 3.6, "cacheWrite": 45 },
+          "contextWindow": 968000,
+          "maxTokens": 64000
         }
       ]
     }
@@ -41,30 +76,9 @@ const FALLBACK_MODELS_JSON = `{
 }
 `;
 
-/** 插件根目录，由 extension.ts 在激活时注入。 */
-let extensionRoot: string | undefined;
-
-/** 由扩展激活时调用，用于定位打包资源（media/default-models.json）。 */
-export function setExtensionRoot(root: string): void {
-    extensionRoot = root;
-}
-
-/**
- * 读取打包在插件中的标准 models.json 模板。
- * 优先读取 media/default-models.json，失败时回退到内置字符串。
- */
+/** 默认 models 模板（用户 models.json 不存在时使用）。 */
 export function defaultModelsJson(): string {
-    if (extensionRoot) {
-        const p = path.join(extensionRoot, "default-models.json");
-        try {
-            if (fs.existsSync(p)) {
-                return fs.readFileSync(p, "utf8");
-            }
-        } catch {
-            /* fallthrough to fallback */
-        }
-    }
-    return FALLBACK_MODELS_JSON;
+    return DEFAULT_MODELS_JSON;
 }
 
 /** 读取 models.json，不存在时返回默认模板。返回 { content, existed }。 */
