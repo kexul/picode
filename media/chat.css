@@ -53,7 +53,7 @@
   .symbol-link:hover { text-decoration: underline; opacity: 0.85; }
   .msg { margin: 10px 0; padding: 10px 14px; word-wrap: break-word; }  .msg-enter { animation: msg-enter 250ms ease-out backwards; }
   @keyframes msg-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-  .user { white-space: pre-wrap; background: color-mix(in srgb, var(--vscode-button-background) 18%, transparent); color: var(--vscode-foreground); }
+  .user { white-space: pre-wrap; background: color-mix(in srgb, var(--vscode-button-background) 18%, transparent); color: var(--vscode-foreground); border-radius: 8px; }
   /* 用户消息气泡左右缩进，外缘与 AI 回复文本对齐（pane padding 8px + msg padding 14px） */
   .msg.user { margin: 10px 14px; }
   .assistant { background: none; padding: 10px 14px; }
