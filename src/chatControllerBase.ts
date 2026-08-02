@@ -3,8 +3,8 @@
  *
  * 把“与平台无关”的逻辑收敛到此：
  *   - 标签管理（newTab / setActive / switchTabByDirection / closeTab / broadcastTabList）
- *   - 拾取器浮层（showPicker / resolvePicker / handleThinkingToggle + pickerRefresher）
- *   - 模型选择器（pickModelInteractive）+ 思考强度标签
+ *   - 拾取器浮层（showPicker / resolvePicker）
+ *   - 模型选择器（pickModelInteractive）+ 模型内思考强度
  *   - 路径工具（relativeTo / resolvePath / resolveExecutable / checkPiAvailable）
  *   - 显示选项（sendViewOptions / buildViewOptionItems / showOptionsPicker + 标签常量）
  *   - 会话加载 / 分叉（loadHistorySession / forkAtEntryInNewTab / maybeAutoLoadLastSession / showHistoryPicker）
@@ -13,7 +13,7 @@
  * 子类只需实现“平台钩子”：消息如何送到 webview、配置/视图选项存储、
  * 对话框 / diff / 文件打开的实现，以及各自独有的消息类型。
  *
- * 本类不引用 `vscode`，便于独立测试/复用。
+ * 本类不引用 `vscode`，便于单测时 mock RuntimeHost。
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -21,6 +21,7 @@ import { SessionRuntime, RuntimeHost, FileChange, ModelInfo, ModelChoice, Status
 import { PiConfig } from "./sessionRuntime";
 import { PiClient } from "./piClient";
 import { listSessions } from "./sessionStore";
+import type { RpcSessionState } from "./piRpc";
 
 export abstract class ChatControllerBase implements RuntimeHost {
     // ---- 标签状态 ----
@@ -28,25 +29,19 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected activeId: string | undefined;
     protected tabSeq = 0;
     protected autoLoadDone = false;
+    /** tabList 节流：流式 activity 变更很频繁，合并到下一帧附近推送。 */
+    private tabListTimer: ReturnType<typeof setTimeout> | null = null;
+    private static readonly TAB_LIST_THROTTLE_MS = 48;
 
     // ---- 拾取器状态 ----
     protected pickerResolve: ((v: any | undefined) => void) | null = null;
     protected pickerTimer: ReturnType<typeof setTimeout> | null = null;
-    protected pickerRefresher: ((nextThinking: string) => void) | null = null;
 
     // ---- 备用 pi 进程池（热备，免冷启动）----
     /** 已就绪的备用 pi 进程（不绑定任何 tab）。 */
     protected spare: PiClient | null = null;
     /** 正在后台预热、尚未就绪的备用进程（防止并发 spawn 多个）。 */
     protected preparingSpare: PiClient | null = null;
-
-    // ---- 思考强度标签 ----
-    protected static readonly THINKING_LABELS: Record<string, string> = {
-        off: "关闭", minimal: "极低", low: "低", medium: "中", high: "高", xhigh: "极高", max: "最大",
-    };
-    protected thinkingLevelLabel(lv: string): string {
-        return ChatControllerBase.THINKING_LABELS[lv] || lv;
-    }
 
     // ---- 快捷键标签 ----
     protected static readonly SEND_KEY_LABELS: Record<string, string> = {
@@ -336,13 +331,37 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.postToWebview({ ...msg, tabId });
     }
 
-    public broadcastTabList(): void {
+    /**
+     * 推送 tab 列表。默认节流（合并短时间内多次 activity/title 更新）；
+     * 结构变更（新建/关闭/切换）传 immediate=true 立刻推送。
+     */
+    public broadcastTabList(immediate = false): void {
+        if (immediate) {
+            if (this.tabListTimer) {
+                clearTimeout(this.tabListTimer);
+                this.tabListTimer = null;
+            }
+            this.emitTabList();
+            return;
+        }
+        if (this.tabListTimer) {
+            return;
+        }
+        this.tabListTimer = setTimeout(() => {
+            this.tabListTimer = null;
+            this.emitTabList();
+        }, ChatControllerBase.TAB_LIST_THROTTLE_MS);
+    }
+
+    private emitTabList(): void {
         this.postToWebview({
             type: "tabList",
             tabs: Array.from(this.tabs.values()).map((rt) => ({
                 id: rt.id,
                 title: rt.title,
                 streaming: rt.streaming,
+                activity: rt.activity,
+                activityDetail: rt.activityDetail,
                 piReady: rt.piReady,
                 loading: rt.loading,
             })),
@@ -373,7 +392,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const rt = new SessionRuntime(id, title, this);
         this.tabs.set(id, rt);
         this.activeId = id;
-        this.broadcastTabList();
+        this.broadcastTabList(true);
         this.postToWebview({ type: "tabActivated", id });
         rt.startClient();
         // 后台预热一个备用进程，供下一个新 tab / 切分支直接领取
@@ -385,7 +404,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!this.tabs.has(id) || this.activeId === id) { return; }
         this.activeId = id;
         this.postToWebview({ type: "tabActivated", id });
-        this.broadcastTabList();
+        this.broadcastTabList(true);
         const rt = this.tabs.get(id);
         if (rt) {
             this.onSessionChanged(id, rt.currentSessionPath);
@@ -420,7 +439,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 }
             }
         }
-        this.broadcastTabList();
+        this.broadcastTabList(true);
         // 全部关闭后自动新建一个空 tab，保持界面可用
         if (this.tabs.size === 0) { this.newTab(); }
     }
@@ -466,42 +485,33 @@ export abstract class ChatControllerBase implements RuntimeHost {
         r(payload);
     }
 
-    /** 模型浮层中切换思考强度：发 RPC + 刷新浮层。 */
-    protected async handleThinkingToggle(value: any): Promise<void> {
-        const rt = this.getActive();
-        if (!rt || typeof value !== "string") { return; }
-        const ok = await rt.setThinkingLevel(value);
-        if (ok && this.pickerRefresher) { this.pickerRefresher(value); }
-    }
-
     public async pickModelInteractive(
         models: ModelInfo[],
-        thinkingLevels: string[],
         currentThinking: string,
+        currentProvider: string,
         currentModelId: string
     ): Promise<ModelChoice | undefined> {
+        const currentKey = `${currentProvider || ""}\u0000${currentModelId || ""}`;
         const items: any[] = models.map((m) => ({
-            id: m.id, provider: m.provider, name: m.name, contextWindow: m.contextWindow,
-            current: m.id === currentModelId,
+            id: m.id,
+            provider: m.provider,
+            name: m.name,
+            contextWindow: m.contextWindow,
+            reasoning: m.reasoning === true,
+            thinkingLevels: Array.isArray(m.thinkingLevels) ? m.thinkingLevels : [],
+            current: `${m.provider || ""}\u0000${m.id || ""}` === currentKey
+                || (m.id === currentModelId && (!currentProvider || !m.provider || m.provider === currentProvider)),
+            currentThinking: `${m.provider || ""}\u0000${m.id || ""}` === currentKey
+                || (m.id === currentModelId && (!currentProvider || !m.provider || m.provider === currentProvider))
+                ? currentThinking : "",
         }));
-        if (thinkingLevels.length > 0) {
-            thinkingLevels.forEach((lv) => {
-                items.push({
-                    section: "思考强度", behavior: "toggle", action: "thinkingLevel", value: lv,
-                    label: this.thinkingLevelLabel(lv), check: lv === currentThinking,
-                });
-            });
-        }
-        this.pickerRefresher = (nextThinking: string) => {
-            const refreshed = items.map((it) =>
-                it.action === "thinkingLevel" ? { ...it, check: it.value === nextThinking } : it
-            );
-            this.postToWebview({ type: "picker", kind: "model", items: refreshed });
-        };
-        const choice = await this.showPicker("model", items, undefined);
-        this.pickerRefresher = null;
+        const choice = await this.showPicker("model", items, currentKey);
         if (!choice) { return undefined; }
-        return { provider: choice.provider || "", modelId: choice.modelId, thinkingLevel: choice.thinkingLevel };
+        return {
+            provider: choice.provider || "",
+            modelId: choice.modelId,
+            thinkingLevel: choice.thinkingLevel,
+        };
     }
 
     // ========================================================================
@@ -536,7 +546,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         // 避免误判“未落盘”而在当前 tab 原地分叉。
         let sourcePath = source.currentSessionPath;
         if (!sourcePath) {
-            const state = await source.request({ type: "get_state" });
+            const state = await source.request<RpcSessionState>({ type: "get_state" });
             sourcePath = state?.data?.sessionFile;
             if (sourcePath) {
                 source.currentSessionPath = sourcePath;
@@ -575,12 +585,14 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 弹出历史会话拾取器并加载选中项。 */
     public async showHistoryPicker(): Promise<void> {
+        // 先确保视图可见（VSCode 下会打开侧栏面板）。否则在工作区从未跑过 pi、
+        // listSessions 返回空时会直接 return，面板根本不打开，表现为"点击无反应"。
+        await this.beforeHistoryPicker();
         const sessions = await listSessions(this.getCwd());
         if (sessions.length === 0) {
             this.onNoSessions();
             return;
         }
-        await this.beforeHistoryPicker();
         const current = this.getActive()?.currentSessionPath;
         const choice = await this.showPicker("history", sessions, current);
         if (!choice || typeof choice.file !== "string") { return; }
@@ -651,12 +663,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 this.showOptionsPicker();
                 return;
             case "pickerToggle":
-                if (typeof msg.action === "string") {
-                    if (msg.kind === "model" && msg.action === "thinkingLevel") {
-                        void this.handleThinkingToggle(msg.value);
-                    } else {
-                        this.doViewOptionToggle(msg.action, typeof msg.value === "string" ? msg.value : undefined);
-                    }
+                if (typeof msg.action === "string" && msg.kind !== "model") {
+                    this.doViewOptionToggle(msg.action, typeof msg.value === "string" ? msg.value : undefined);
                 }
                 return;
         }

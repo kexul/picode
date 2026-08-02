@@ -1,6 +1,7 @@
 import { spawn, ChildProcessWithoutNullStreams } from "child_process";
 import { StringDecoder } from "string_decoder";
 import { EventEmitter } from "events";
+import type { RpcCommand, RpcResponse } from "./piRpc";
 
 export interface PiClientOptions {
     piPath: string;
@@ -16,16 +17,17 @@ export interface PiClientOptions {
  *
  * 事件：
  *   - "event"    (evt)   pi 发出的 agent 事件
- *   - "response" (resp)  命令响应
+ *   - "response" (resp)  未被 request() 认领的命令响应（如无 id 的错误）
  *   - "ui"       (req)   extension_ui_request
  *   - "error"    (err)   进程/解析错误
  *   - "exit"     (code)  进程退出
+ *
+ * 带 id 的请求统一走 request()：pending 回调只活在本类，避免与 SessionRuntime 双份状态。
  */
 export class PiClient extends EventEmitter {
     private proc: ChildProcessWithoutNullStreams | null = null;
     private opts: PiClientOptions;
-    /** 备用池探测用：id → 回调（池子里的进程没有 SessionRuntime，需要自己的 request 机制）。 */
-    private pending = new Map<string, (resp: any) => void>();
+    private pending = new Map<string, (resp: RpcResponse | undefined) => void>();
     private seq = 0;
 
     constructor(opts: PiClientOptions) {
@@ -58,7 +60,6 @@ export class PiClient extends EventEmitter {
 
         this.attachJsonlReader(this.proc.stdout, (line) => this.handleLine(line));
 
-        // stderr 用于诊断
         this.proc.stderr.on("data", (chunk: Buffer) => {
             this.emit("stderr", chunk.toString("utf8"));
         });
@@ -69,6 +70,8 @@ export class PiClient extends EventEmitter {
 
         this.proc.on("exit", (code) => {
             this.proc = null;
+            // 进程退出时立刻释放在途请求，避免挂到超时
+            this.rejectAllPending();
             this.emit("exit", code);
         });
     }
@@ -77,7 +80,7 @@ export class PiClient extends EventEmitter {
         return this.proc !== null;
     }
 
-    /** 发送一条 JSONL 命令到 pi。 */
+    /** 发送一条 JSONL 命令到 pi（fire-and-forget，如 prompt/abort）。 */
     send(cmd: Record<string, unknown>): void {
         if (!this.proc) {
             throw new Error("pi 进程未运行");
@@ -85,26 +88,30 @@ export class PiClient extends EventEmitter {
         this.proc.stdin.write(JSON.stringify(cmd) + "\n");
     }
 
-    /** 带 id 的请求（供备用池探测就绪用；普通 tab 的请求走 SessionRuntime.request）。 */
-    request(cmd: Record<string, unknown>, timeoutMs = 15000): Promise<any> {
+    /**
+     * 带 id 的请求-响应。超时 / 进程不在 / 发送失败时返回 undefined。
+     * 所有 tab 与 spare 池共用这一条路径。
+     */
+    request<T = unknown>(
+        cmd: RpcCommand | Record<string, unknown>,
+        timeoutMs = 15000
+    ): Promise<RpcResponse<T> | undefined> {
         return new Promise((resolve) => {
             if (!this.proc) {
                 resolve(undefined);
                 return;
             }
-            const id = `spare-${++this.seq}`;
+            const id = `req-${++this.seq}`;
             const timer = setTimeout(() => {
                 if (this.pending.has(id)) {
                     this.pending.delete(id);
                     resolve(undefined);
                 }
             }, timeoutMs);
-            const cb = (resp: any) => {
+            const cb = (resp: RpcResponse | undefined) => {
                 clearTimeout(timer);
-                if (this.pending.has(id)) {
-                    this.pending.delete(id);
-                }
-                resolve(resp);
+                this.pending.delete(id);
+                resolve(resp as RpcResponse<T> | undefined);
             };
             this.pending.set(id, cb);
             try {
@@ -143,6 +150,19 @@ export class PiClient extends EventEmitter {
             this.proc.kill();
             this.proc = null;
         }
+        this.rejectAllPending();
+    }
+
+    /** 让所有在途 request 立刻以 undefined 结束。 */
+    private rejectAllPending(): void {
+        if (this.pending.size === 0) {
+            return;
+        }
+        const cbs = Array.from(this.pending.values());
+        this.pending.clear();
+        for (const cb of cbs) {
+            cb(undefined);
+        }
     }
 
     private handleLine(line: string): void {
@@ -153,26 +173,27 @@ export class PiClient extends EventEmitter {
         let msg: any;
         try {
             msg = JSON.parse(trimmed);
-        } catch (e) {
+        } catch {
             this.emit("error", new Error("无法解析 pi 输出: " + trimmed));
             return;
         }
         switch (msg.type) {
-            case "response":
-                // 备用池探测的响应直接回调；其余交给上层（SessionRuntime）处理
-                if (msg.id && this.pending.has(msg.id)) {
-                    const cb = this.pending.get(msg.id)!;
-                    this.pending.delete(msg.id);
-                    cb(msg);
+            case "response": {
+                const id = typeof msg.id === "string" ? msg.id : undefined;
+                if (id && this.pending.has(id)) {
+                    const cb = this.pending.get(id)!;
+                    this.pending.delete(id);
+                    cb(msg as RpcResponse);
                 } else {
+                    // 无匹配 pending：交给上层（例如无 id 的错误提示）
                     this.emit("response", msg);
                 }
                 break;
+            }
             case "extension_ui_request":
                 this.emit("ui", msg);
                 break;
             default:
-                // 其余均视为 agent 事件
                 this.emit("event", msg);
                 break;
         }

@@ -90,6 +90,8 @@
   .tool-card .tc-call-param { color: var(--vscode-textLink-foreground, #3794ff); } /* TUI accent：pattern */
   .tool-card .tc-call-arg { color: var(--vscode-descriptionForeground, #808080); } /* TUI toolOutput */
   .tool-card .tc-call-warn { color: var(--vscode-editorWarning-foreground, #cca700); } /* TUI warning：行范围 */
+  .tool-card .tc-jump { margin-left: auto; align-self: center; flex: none; cursor: pointer; user-select: none; padding: 1px 8px; border: 1px solid color-mix(in srgb, var(--vscode-textLink-foreground, #3794ff) 45%, transparent); border-radius: 4px; color: var(--vscode-textLink-foreground, #3794ff); background: color-mix(in srgb, var(--vscode-textLink-foreground, #3794ff) 8%, transparent); font-size: 0.8em; line-height: 1.5; }
+  .tool-card .tc-jump:hover { background: color-mix(in srgb, var(--vscode-textLink-foreground, #3794ff) 18%, transparent); text-decoration: none; }
   .tool-card .tc-args { margin: 4px 10px 0; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; color: var(--vscode-descriptionForeground, #808080); }
   .tool-card .tc-output { margin: 4px 10px 8px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 480px; overflow: auto; color: var(--vscode-descriptionForeground, #808080); }
   .tool-card .tc-trunc-hint { margin-top: 4px; font-size: 0.8em; opacity: 0.75; cursor: pointer; color: var(--vscode-descriptionForeground); }
@@ -117,10 +119,10 @@
   .md pre { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15)); padding: 13px; border-radius: 6px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2)); overflow-x: auto; margin: 13px 0; line-height: 1.45; white-space: pre-wrap; word-break: break-all; }
   .md code { font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; }
   .md :not(pre) > code { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)); color: var(--vscode-textPreformat-foreground, var(--vscode-foreground)); padding: 1px 0; margin: 0 2px; border-radius: 3px; box-shadow: 0.25em 0 0 var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)), -0.25em 0 0 var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)); }
-  .md pre code { background: none; padding: 0; }
+  .md pre code { background: none; padding: 0; color: var(--hl-base, var(--vscode-editor-foreground, var(--vscode-foreground, #d4d4d4))); }
   /* highlight.js token 颜色（One Dark 风格，已去除 .hljs 自身背景与 padding）
-     换风格只改下面 --hl-* 变量即可 */
-  :root { --hl-keyword:#c678dd; --hl-func:#61afef; --hl-num:#d19a66; --hl-str:#98c379; --hl-built:#e5c07b; --hl-comment:#7f848e; --hl-tag:#e06c75; --hl-section:#61afef; --hl-bullet:#d19a66; --hl-base:#abb2bf; }
+     换风格只改下面 --hl-* 变量即可。基础色跟随 VSCode 主题，避免未命中语法时整块被固定成灰色。 */
+  :root { --hl-keyword:#c678dd; --hl-func:#61afef; --hl-num:#d19a66; --hl-str:#98c379; --hl-built:#e5c07b; --hl-comment:#7f848e; --hl-tag:#e06c75; --hl-section:#61afef; --hl-bullet:#d19a66; --hl-base:var(--vscode-editor-foreground, var(--vscode-foreground, #d4d4d4)); }
   .hljs { color: var(--hl-base); }
   .hljs-doctag, .hljs-keyword, .hljs-meta .hljs-keyword, .hljs-template-tag, .hljs-template-variable, .hljs-type, .hljs-variable.language_ { color: var(--hl-keyword); }
   .hljs-title, .hljs-title.class_, .hljs-title.class_.inherited__, .hljs-title.function_ { color: var(--hl-func); }
@@ -200,7 +202,7 @@
   button:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: 1px; }
   button:disabled { opacity: 0.5; cursor: default; }
   #status { display: flex; align-items: center; gap: 8px; padding: 2px 8px; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: color-mix(in srgb, var(--vscode-foreground) 88%, transparent); min-height: 1.4em; overflow: hidden; }
-  /* 状态栏实时思考区：始终一行，思考内容在其中横向滚动 */
+  /* 状态栏实时活动区：始终一行，思考内容 / 工具名在其中横向滚动 */
   #status .st-head { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; font-size: 0.85em; opacity: .85; }
   #status .st-body {
     flex: 1; min-width: 0;
@@ -296,9 +298,12 @@
   .edit-card.reverted { opacity: 0.6; }
   .edit-card.reverted .et-reverted { flex: 0 0 auto; font-size: 0.85em; opacity: 0.8; font-style: italic; font-family: var(--vscode-font-family); }
   .edit-diff {
-    max-height: 480px; overflow-y: auto; padding: 4px 0;
+    max-height: 480px; overflow: auto; padding: 4px 0;
     font-family: var(--vscode-editor-font-family, monospace);
   }
+  /* 内层收缩包裹：宽度 = max(卡片宽度, 最宽行内容)；所有行作为其子块填充同一宽度，
+     使 add/del/ctx 的背景色在横向滚动时也一起铺满到滚动区最右（避免短行背景在右侧断色） */
+  .edit-diff-inner { width: max-content; min-width: 100%; box-sizing: border-box; }
   /* 卡片内滚动条：透明轨道 + 圆角滑块（避免默认白色轨道在深色卡片里出戏） */
   .tool-card .tc-args::-webkit-scrollbar,
   .tool-card .tc-output::-webkit-scrollbar,
@@ -321,7 +326,7 @@
   .edit-diff::-webkit-scrollbar-thumb:hover {
     background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100,100,100,0.7));
   }
-  .diff-line { padding: 0 10px; white-space: pre; }
+  .diff-line { padding: 0 10px; white-space: pre; box-sizing: border-box; }
   .diff-line.del { background: var(--vscode-diffEditor-removedLineBackground, rgba(255,0,0,0.1)); color: var(--vscode-gitDecoration-deletedResourceForeground, #ad0707); }
   .diff-line.add { background: var(--vscode-diffEditor-insertedLineBackground, rgba(0,255,0,0.1)); color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
   .diff-line.ctx { opacity: 0.6; }
@@ -393,7 +398,7 @@
 
   /* 通用拾取器浮层（模型 / 历史），与分支树浮层同风格 */
   #pickerPanel {
-    width: min(640px, 92vw); max-height: 80vh; display: flex; flex-direction: column;
+    width: min(720px, 94vw); max-height: 80vh; display: flex; flex-direction: column;
   }
   #pickerHeader {
     display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
@@ -417,6 +422,27 @@
   .pk-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
   .pk-item.active { background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.3)); color: var(--vscode-list-activeSelectionForeground, inherit); }
   .pk-item.current { box-shadow: inset 3px 0 0 0 var(--vscode-focusBorder, #007acc); }
+  /* 模型项：左侧模型信息，右侧仅在当前聚焦项展开推理档位。 */
+  .pk-model-item {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, 220px);
+    align-items: center; gap: 14px; min-height: 58px; padding: 8px 10px;
+    border: 1px solid transparent;
+  }
+  .pk-model-item.pending { border-color: var(--vscode-focusBorder, #007acc); }
+  .pk-model-main { min-width: 0; }
+  .pk-model-thinking { min-width: 0; min-height: 28px; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+  .pk-model-thinking.has-content { padding-left: 10px; border-left: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
+  .pk-thinking-label { font-size: 0.74em; opacity: 0.65; }
+  .pk-thinking-options { display: flex; flex-wrap: wrap; gap: 4px; }
+  .pk-thinking-btn {
+    min-width: 0; padding: 3px 8px; border: 1px solid var(--vscode-button-border, rgba(128,128,128,0.35));
+    border-radius: 4px; background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2));
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground)); font-size: 0.82em; cursor: pointer;
+  }
+  .pk-thinking-btn:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,0.35)); }
+  .pk-thinking-btn.on { background: var(--vscode-button-background, #007acc); color: var(--vscode-button-foreground, #fff); border-color: var(--vscode-focusBorder, #007acc); }
+  .pk-thinking-unsupported { font-size: 0.82em; opacity: 0.58; }
+  .pending-badge { background: var(--vscode-editorInfo-background, rgba(0,122,204,0.2)); }
   .pk-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pk-desc { font-size: 0.82em; opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
   .pk-detail { font-size: 0.78em; opacity: 0.55; margin-top: 1px; }
@@ -480,6 +506,16 @@
   #pickerFooter.hidden { display: none; }
   #pickerFooter button { min-width: 72px; padding: 4px 14px; border-radius: 4px; cursor: pointer; }
   #pickerFooter button.secondary { background: var(--vscode-button-secondaryBackground, #f0f0f0); color: var(--vscode-button-secondaryForeground, inherit); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); }
+  #pickerFooter button.primary { background: var(--vscode-button-background, #007acc); color: var(--vscode-button-foreground, #fff); border: 1px solid var(--vscode-button-background, #007acc); }
+  #pickerFooter.pk-model-footer { align-items: center; justify-content: space-between; gap: 12px; }
+  .pk-footer-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.78; font-size: 0.84em; }
+  .pk-footer-actions { display: flex; flex: none; gap: 8px; }
+  @media (max-width: 560px) {
+    .pk-model-item { grid-template-columns: 1fr; gap: 7px; }
+    .pk-model-thinking.has-content { padding-left: 0; padding-top: 7px; border-left: 0; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
+    #pickerFooter.pk-model-footer { align-items: stretch; flex-direction: column; }
+    .pk-footer-actions { justify-content: flex-end; }
+  }
   .pk-check {
     display: inline-flex; align-items: center; justify-content: center;
     width: 14px; height: 14px; margin-right: 6px; vertical-align: -2px;

@@ -12,9 +12,13 @@ src/                          插件 TypeScript 源码（tsc 编译到 out/）
   chatViewProvider.ts          聊天视图提供者（webview 装载、vscode API、会话编排宿主）
   chatHtml.ts                  webview HTML：注入 VSCode 特有的 URI 解析 / CSP / chat.css
   renderHtml.ts                聊天界面 HTML 骨架生成（renderHTML()）
-  piClient.ts                  pi --mode rpc 客户端（JSONL 协议、流式/thinking/工具调用）
-  sessionRuntime.ts            单个对话 tab 的运行时（独立 pi 进程 + 会话/编辑追踪）
-  chatControllerBase.ts        会话编排基类（标签管理、拾取器、模型选择、消息分发）
+  piClient.ts                  pi --mode rpc 客户端（JSONL 协议；统一 request/pending）
+  piRpc.ts                     RPC 命令/响应轻量类型与辅助函数
+  runtimeTypes.ts              PiConfig / RuntimeHost / FileChange 等共享类型
+  messageUtils.ts              消息/工具结果/对话树纯函数（可单测）
+  editTracker.ts               工具卡片 + edit 快照/回滚/knownFiles
+  sessionRuntime.ts            单个对话 tab 的运行时（独立 pi 进程 + 会话编排）
+  chatControllerBase.ts        会话编排基类（标签管理含 tabList 节流、拾取器、模型选择）
   sessionStore.ts              pi 会话文件的扫描 / 读取 / 元数据
   modelsConfig.ts              models.json 读写与内置默认模板
 media/                        对话前端资源（chat.js、chat.css、marked.js、highlight.js、
@@ -47,6 +51,7 @@ build.bat noauto    # 只打包 vsix，不自动安装/重载
 ```bash
 npm install
 npm run build    # tsc 编译到 out/
+npm test         # 编译 + node:test（messageUtils / piRpc 纯逻辑）
 npm run package  # 打包 VSIX
 ```
 

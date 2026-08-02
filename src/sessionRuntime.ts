@@ -1,114 +1,60 @@
 import * as fs from "fs";
 import { PiClient } from "./piClient";
+import { EditTracker } from "./editTracker";
+import {
+    countImages,
+    extractResultText,
+    extractTruncation,
+    getModelThinkingLevels,
+    resolveAnchorLine,
+    slimTree,
+    textOf,
+} from "./messageUtils";
+import {
+    forkSelectedText,
+    isRpcOk,
+    rpcErrorMessage,
+    type RpcForkMessage,
+    type RpcForkResult,
+    type RpcModelInfo,
+    type RpcResponse,
+    type RpcSessionStats,
+    type RpcSessionState,
+    type RpcTreeNode,
+} from "./piRpc";
+import type {
+    ModelInfo,
+    RuntimeActivity,
+    RuntimeHost,
+} from "./runtimeTypes";
 
-/** 平台无关的 pi 运行时配置。 */
-export interface PiConfig {
-    piPath: string;
-    provider: string;
-    model: string;
-    extraArgs: string[];
-    trustProject: boolean;
-}
-
-/** 本次对话中一个被修改文件的记录。 */
-export interface FileChange {
-    /** 绝对路径 */
-    path: string;
-    /** 相对工作区的显示名 */
-    label: string;
-    /** 首次修改前的文件内容（用于 diff 的“原始”侧）；文件新建时为空串 */
-    before: string;
-}
-
-/** 可选模型信息（来自 pi get_available_models）。 */
-export interface ModelInfo {
-    id: string;
-    provider?: string;
-    name?: string;
-    contextWindow?: number;
-}
-
-/** 用户在模型选择器中选中的结果。 */
-export interface ModelChoice {
-    provider: string;
-    modelId: string;
-    thinkingLevel?: string;
-}
-
-/** 一个 tab 当前的模型/上下文用量状态快照，供宿主展示（如 VSCode 状态栏）。 */
-export interface StatusInfo {
-    modelId?: string;
-    provider?: string;
-    thinkingLevel?: string;
-    /** 上下文使用百分比 0-100。 */
-    percent?: number;
-    /** 已用 tokens。 */
-    tokens?: number;
-    /** 上下文窗口大小。 */
-    contextWindow?: number;
-}
-
-/**
- * 平台适配层：把 VSCode 的 UI / 存储 / 文件差异隔离在插件实现里。
- *
- * shared 的 SessionRuntime 只依赖本接口 + PiClient + Node 内置 fs，
- * 不引用 `vscode`，便于独立测试/复用。
- */
-export interface RuntimeHost {
-    getConfig(): PiConfig;
-    getCwd(): string;
-    relativeTo(cwd: string, full: string): string;
-    resolvePath(p: string): string;
-    /** 校验 pi 可执行文件存在；失败时自行向 tab 推送 systemError。返回是否可用。 */
-    checkPiAvailable(piPath: string, tabId: string): boolean;
-    /** 领取一个已就绪的备用 pi 进程（无则 undefined）。领取后宿主会自动补新备用。 */
-    claimSpareClient?(): PiClient | undefined;
-
-    postToTab(tabId: string, msg: Record<string, unknown>): void;
-    broadcastTabList(): void;
-    /** 当某 tab 的会话路径变化（且可能为活跃 tab）时通知宿主。可选。 */
-    onSessionChanged?(tabId: string, sessionPath: string | undefined): void;
-    /** 当某 tab 的模型/上下文用量状态变化时通知宿主。可选。
-     * 宿主自行按 activeId 过滤后决定是否展示（如 VSCode 状态栏）。 */
-    onStatusUpdate?(tabId: string, info: StatusInfo): void;
-    /** 当某 tab 的工具触及文件集合（knownFiles）变化时通知宿主。可选。
-     * 宿主可据此刷新符号集合等依赖该集合的数据。 */
-    onKnownFilesChanged?(tabId: string): void;
-
-    // ---- UI 弹窗（对应当 pi 的 extension_ui_request）----
-    confirmDialog(title: string, message: string): Promise<boolean>;
-    selectDialog(title: string, options: string[]): Promise<string | undefined>;
-    inputDialog(title: string, placeholder: string, prefill: string): Promise<string | undefined>;
-    /** 模型选择器；取消返回 undefined。同时返回可选的思考强度及当前值。 */
-    pickModelInteractive(
-        models: ModelInfo[],
-        thinkingLevels: string[],
-        currentThinking: string,
-        currentModelId: string
-    ): Promise<ModelChoice | undefined>;
-    /** 持久化用户选中的 model（写各自配置存储）。 */
-    persistModel(provider: string, modelId: string): void;
-
-    // ---- 文件跳转 / diff ----
-    /** 打开文件到指定行（1-based）。anchor 为高亮定位行文本，可选。 */
-    openFileLocation(path: string, line: number, anchor?: string): void;
-    /** 打开本次会话修改文件的 diff 或查看器。 */
-    openDiff(change: FileChange): void;
-    /** 回滚前的二次确认（文件在修改后又被改动时）。返回是否继续。 */
-    confirmRevert(label: string): Promise<boolean>;
-}
+// 对外仍从 sessionRuntime 导出类型，保持既有 import 路径稳定。
+export type {
+    FileChange,
+    ModelChoice,
+    ModelInfo,
+    PiConfig,
+    RuntimeActivity,
+    RuntimeHost,
+    StatusInfo,
+} from "./runtimeTypes";
 
 /**
  * 一个并行对话 tab 的全部运行时状态：独立的 pi 进程 + 独立的会话/编辑追踪。
  * 多个 SessionRuntime 各自持有自己的 PiClient，因此可以真正并行流式生成。
  *
  * 平台差异（UI 弹窗、diff、文件打开、配置持久化）全部经由 RuntimeHost 注入，
- * 本类不引用 `vscode`，便于独立测试/复用。
+ * 本类不引用 `vscode`。消息/树/工具结果的纯逻辑见 messageUtils；RPC 类型见 piRpc。
  */
 export class SessionRuntime {
     public id: string = "";
     public title: string = "";
+    /** Agent 是否仍在运行；这是 steer / Esc 等整体生命周期判断使用的状态。 */
     public streaming = false;
+    /** Agent 当前更细的活动阶段，供 webview 区分处理中 / 思考 / 工具调用。 */
+    public activity: RuntimeActivity = "idle";
+    /** 当前阶段的附加信息，例如正在执行的工具名。 */
+    public activityDetail = "";
     public piReady = false;
     /** 正在加载会话 / 分叉（pi 冷启动 + 切换会话期间为 true，供宿主展示加载态）。 */
     public loading = false;
@@ -123,20 +69,20 @@ export class SessionRuntime {
     private statusContextWindow?: number;
 
     private client?: PiClient;
-    private reqId = 0;
-    private pending = new Map<string, (resp: any) => void>();
-    private fileChanges = new Map<string, FileChange>();
-    private pendingEdits = new Map<string, { path: string; before: string }>();
-    private editSnapshots = new Map<string, { path: string; before: string; after: string }>();
-    /** 非 edit 工具的开始时间戳（toolCallId → ms），用于卡片耗时显示。 */
-    private toolStartedAt = new Map<string, number>();
-    /** pi 本会话工具调用触及过的文件绝对路径（供宿主跳转快速定位）。 */
-    private knownFiles = new Set<string>();
+    private readonly edits: EditTracker;
     private forkEntries: { entryId: string; text: string }[] = [];
 
     constructor(id: string, title: string, private readonly host: RuntimeHost) {
         this.id = id;
         this.title = title;
+        this.edits = new EditTracker({
+            getCwd: () => this.host.getCwd(),
+            relativeTo: (cwd, full) => this.host.relativeTo(cwd, full),
+            resolvePath: (p) => this.host.resolvePath(p),
+            post: (msg) => this.post(msg),
+            onKnownFilesChanged: () => this.host.onKnownFilesChanged?.(this.id),
+            confirmRevert: (label) => this.host.confirmRevert(label),
+        });
     }
 
     /** 推送给对应 tab 的消息（自动带 tabId）。 */
@@ -207,13 +153,9 @@ export class SessionRuntime {
         });
         this.client.on("exit", (code: number | null) => {
             this.streaming = false;
-            // 进程退出时清理所有在途请求，避免它们挂到超时才返回
-            for (const cb of this.pending.values()) {
-                cb(undefined);
-            }
-            this.pending.clear();
-            this.post({ type: "streamEnd" });
-            this.host.broadcastTabList();
+            // 在途 request 由 PiClient 在 exit 时统一释放
+            this.post({ type: "streamEnd", activity: "idle" });
+            this.setActivity("idle");
             this.setPiReady(true);
             this.post({
                 type: "system",
@@ -253,7 +195,7 @@ export class SessionRuntime {
 
     /** 发送当前模型信息给 webview。 */
     public async sendCurrentModel(): Promise<void> {
-        const resp = await this.request({ type: "get_state" });
+        const resp = await this.request<RpcSessionState>({ type: "get_state" });
         const model = resp?.data?.model;
         if (model && model.id) {
             this.statusModelId = model.id;
@@ -279,7 +221,7 @@ export class SessionRuntime {
     /** 在该 tab 内重置为新会话（保留进程，发 new_session）。 */
     public resetSession(): void {
         this.abortActiveRun();
-        this.resetFileChanges();
+        this.edits.reset();
         this.currentSessionPath = undefined;
         this.host.onSessionChanged?.(this.id, this.currentSessionPath);
         this.post({ type: "clear" });
@@ -321,57 +263,34 @@ export class SessionRuntime {
         }
     }
 
-    /** 发送需要响应的命令，返回带 id 的响应。timeoutMs 默认 15s，可传更短用于就绪轮询。 */
-    public request(cmd: Record<string, unknown>, timeoutMs = 15000): Promise<any> {
-        return new Promise((resolve) => {
-            if (!this.client || !this.client.isRunning()) {
-                resolve(undefined);
-                return;
-            }
-            const id = `req-${++this.reqId}`;
-            const timer = setTimeout(() => {
-                if (this.pending.has(id)) {
-                    this.pending.delete(id);
-                    resolve(undefined);
-                }
-            }, timeoutMs);
-            const cb = (resp: any) => {
-                clearTimeout(timer);
-                if (this.pending.has(id)) {
-                    this.pending.delete(id);
-                }
-                resolve(resp);
-            };
-            this.pending.set(id, cb);
-            try {
-                this.client!.send({ ...cmd, id });
-            } catch {
-                this.pending.delete(id);
-                clearTimeout(timer);
-                resolve(undefined);
-            }
-        });
+    /** 发送需要响应的命令（委托 PiClient；timeoutMs 默认 15s）。 */
+    public request<T = unknown>(
+        cmd: Record<string, unknown>,
+        timeoutMs = 15000
+    ): Promise<RpcResponse<T> | undefined> {
+        if (!this.client || !this.client.isRunning()) {
+            return Promise.resolve(undefined);
+        }
+        return this.client.request<T>(cmd, timeoutMs);
     }
 
-    /**
-     * 等待 pi 进程真正就绪（首个 RPC 能成功响应）。
-     * pi 冷启动（加载配置/模型探测）需要数秒，spawn 后立刻发命令会全部挤在
-     * 15s 超时上；这里用短超时的 get_state 轮询，就绪后立即返回。
-     * 进程未启动或已退出时立即失败。
-     */
+    /** 等待 pi 进程真正就绪（委托 PiClient 短超时轮询 get_state）。 */
     public async waitReady(timeoutMs = 30000): Promise<boolean> {
-        const deadline = Date.now() + timeoutMs;
-        while (Date.now() < deadline) {
-            if (!this.client || !this.client.isRunning()) {
-                return false;
-            }
-            const resp = await this.request({ type: "get_state" }, 2000);
-            if (resp && resp.success !== false) {
-                return true;
-            }
-            await new Promise((r) => setTimeout(r, 300));
+        if (!this.client) {
+            return false;
         }
-        return false;
+        return this.client.waitReady(timeoutMs);
+    }
+
+    /** 更新当前 agent 阶段，并同步给 webview / tab 列表。 */
+    private setActivity(activity: RuntimeActivity, detail = ""): void {
+        if (this.activity === activity && this.activityDetail === detail) {
+            return;
+        }
+        this.activity = activity;
+        this.activityDetail = detail;
+        this.post({ type: "activityChanged", activity, detail });
+        this.host.broadcastTabList();
     }
 
     // ---- pi 事件 ----
@@ -390,9 +309,8 @@ export class SessionRuntime {
                 // 替代 handleSend 里的主动 post，使普通/steer 两种路径行为一致。
                 const m = evt.message;
                 if (m && m.role === "user") {
-                    const parts = Array.isArray(m.content) ? m.content : [];
-                    const imgs = parts.filter((c: any) => c && c.type === "image").length;
-                    const text = this.textOf(m.content);
+                    const imgs = countImages(m.content);
+                    const text = textOf(m.content);
                     this.post({
                         type: "userMessage",
                         text,
@@ -408,49 +326,79 @@ export class SessionRuntime {
             }
             case "agent_start":
                 this.streaming = true;
-                this.post({ type: "streamStart" });
-                this.host.broadcastTabList();
+                // agent_start 只说明 agent 开始工作，不代表已经进入 thinking block。
+                this.post({ type: "streamStart", activity: "working", detail: "" });
+                this.setActivity("working");
                 break;
             case "message_update": {
                 const a = evt.assistantMessageEvent;
                 if (!a) {
                     break;
                 }
-                if (a.type === "text_delta") {
-                    this.post({ type: "assistantDelta", delta: a.delta });
-                } else if (a.type === "thinking_delta") {
-                    this.post({ type: "thinkingDelta", delta: a.delta });
+                switch (a.type) {
+                    case "thinking_start":
+                        this.setActivity("thinking");
+                        break;
+                    case "thinking_delta":
+                        // 某些 provider 可能省略 thinking_start，收到 delta 也应进入 thinking。
+                        this.setActivity("thinking");
+                        this.post({ type: "thinkingDelta", delta: a.delta });
+                        break;
+                    case "thinking_end":
+                        this.setActivity("working");
+                        break;
+                    case "text_start":
+                    case "text_delta":
+                        this.setActivity("working");
+                        if (a.type === "text_delta") {
+                            this.post({ type: "assistantDelta", delta: a.delta });
+                        }
+                        break;
+                    case "toolcall_start":
+                    case "toolcall_delta":
+                    case "toolcall_end":
+                        // 这里仍在生成工具调用参数，真正执行工具时再切到 tool。
+                        this.setActivity("working");
+                        break;
                 }
                 break;
             }
             case "tool_execution_start":
-                this.trackEditStart(evt);
-                this.onToolStart(evt);
+                this.setActivity("tool", typeof evt.toolName === "string" ? evt.toolName : "");
+                this.edits.trackEditStart(evt);
+                this.edits.onToolStart(evt);
                 break;
             case "tool_execution_update":
-                this.onToolUpdate(evt);
+                this.edits.onToolUpdate(evt);
                 break;
             case "tool_execution_end":
-                this.trackEditEnd(evt);
-                this.onToolEnd(evt);
+                this.edits.trackEditEnd(evt);
+                this.edits.onToolEnd(evt);
+                this.setActivity("working");
+                break;
+            case "compaction_start":
+            case "auto_retry_start":
+            case "summarization_retry_scheduled":
+            case "summarization_retry_attempt_start":
+                // 这些阶段仍属于 agent 工作中，但不是模型 thinking block。
+                this.setActivity("working");
+                break;
+            case "agent_end":
+                // agent_end 只是一次底层 run 结束；后面可能还有重试、压缩或排队续跑。
+                // 不能在这里发送 streamEnd，等 agent_settled 才算真正空闲。
+                this.setActivity("working");
                 break;
             case "agent_settled":
-            case "agent_end":
                 this.streaming = false;
-                this.post({ type: "streamEnd" });
+                this.post({ type: "streamEnd", activity: "idle" });
+                this.setActivity("idle");
                 this.refreshStats();
-                this.host.broadcastTabList();
                 break;
         }
     }
 
-    private onPiResponse(resp: any): void {
-        if (resp.id && this.pending.has(resp.id)) {
-            const cb = this.pending.get(resp.id)!;
-            this.pending.delete(resp.id);
-            cb(resp);
-            return;
-        }
+    /** 未被 request() 认领的响应（例如无 id 的错误）。带 id 的响应已在 PiClient 内消化。 */
+    private onPiResponse(resp: RpcResponse): void {
         if (resp.success === false && resp.error) {
             this.post({ type: "systemError", text: `pi: ${resp.error}` });
         }
@@ -489,355 +437,13 @@ export class SessionRuntime {
         }
     }
 
-    // ---- 工具追踪 / diff ----
-    private onToolStart(evt: any): void {
-        const toolName: string = evt.toolName;
-        const isEditLike = toolName === "edit" || toolName === "write";
-        const p = isEditLike ? this.editToolPath(toolName, evt.args) : null;
-        if (evt.toolCallId && !isEditLike) {
-            this.toolStartedAt.set(evt.toolCallId, Date.now());
-        }
-        this.collectKnownFile(toolName, evt.args);
-        if (p && evt.toolCallId) {
-            this.post({
-                type: "editCardStart",
-                toolCallId: evt.toolCallId,
-                toolName,
-                path: p,
-                label: this.host.relativeTo(this.host.getCwd(), p),
-            });
-        } else {
-            this.post({
-                type: "tool",
-                toolCallId: evt.toolCallId,
-                toolName,
-                args: evt.args,
-            });
-        }
-    }
-
-    /** 工具执行中的部分结果（如 bash 实时输出）→ 推送卡片增量更新。 */
-    private onToolUpdate(evt: any): void {
-        const toolName: string = evt.toolName;
-        if (toolName === "edit" || toolName === "write") {
-            return;
-        }
-        const id: string = evt.toolCallId;
-        if (!id) {
-            return;
-        }
-        const started = this.toolStartedAt.get(id);
-        this.post({
-            type: "toolResultUpdate",
-            toolCallId: id,
-            resultText: this.extractResultText(evt.partialResult),
-            durationMs: typeof started === "number" ? Date.now() - started : undefined,
-        });
-    }
-
-    private onToolEnd(evt: any): void {
-        const toolName: string = evt.toolName;
-        if (toolName !== "edit" && toolName !== "write") {
-            if (evt.toolCallId) {
-                const started = this.toolStartedAt.get(evt.toolCallId);
-                this.toolStartedAt.delete(evt.toolCallId);
-                const truncation = this.extractTruncation(evt.result);
-                this.post({
-                    type: "toolResult",
-                    toolCallId: evt.toolCallId,
-                    isError: !!evt.isError,
-                    resultText: this.extractResultText(evt.result),
-                    durationMs: typeof started === "number" ? Date.now() - started : undefined,
-                    truncation,
-                });
-            }
-            return;
-        }
-        if (!evt.toolCallId) {
-            return;
-        }
-        const details = !evt.isError ? evt.result?.details : undefined;
-        const errorText = evt.isError ? this.extractErrorText(evt.result) : undefined;
-        this.post({
-            type: "editCardResult",
-            toolCallId: evt.toolCallId,
-            diff: typeof details?.diff === "string" ? details.diff : undefined,
-            isError: !!evt.isError,
-            errorText,
-            canRevert: !evt.isError && this.editSnapshots.has(evt.toolCallId),
-        });
-    }
-
-    /** 从工具结果 / 部分结果（或历史 toolResult 消息）中提取展示文本。 */
-    private extractResultText(result: any): string | undefined {
-        if (!result) {
-            return undefined;
-        }
-        const content = Array.isArray(result) ? result : result.content;
-        if (Array.isArray(content)) {
-            const parts = content
-                .map((c: any) => (c && c.type === "text" && typeof c.text === "string" ? c.text : ""))
-                .filter((s: string) => s.length > 0);
-            if (parts.length > 0) {
-                return this.cleanToolOutput(parts.join("\n"));
-            }
-        }
-        if (typeof result === "string") {
-            return this.cleanToolOutput(result);
-        }
-        if (typeof result.text === "string") {
-            return this.cleanToolOutput(result.text);
-        }
-        return undefined;
-    }
-
-    /** 提取 bash 等工具的截断信息与全量输出路径（供卡片渲染元信息）。 */
-    private extractTruncation(
-        result: any
-    ): { truncated: boolean; truncatedBy?: string; outputLines?: number; totalLines?: number; fullOutputPath?: string } | undefined {
-        const details = result?.details;
-        const t = details?.truncation;
-        if (!t || !t.truncated) {
-            return undefined;
-        }
-        return {
-            truncated: true,
-            truncatedBy: typeof t.truncatedBy === "string" ? t.truncatedBy : undefined,
-            outputLines: typeof t.outputLines === "number" ? t.outputLines : undefined,
-            totalLines: typeof t.totalLines === "number" ? t.totalLines : undefined,
-            fullOutputPath: typeof details?.fullOutputPath === "string" ? details.fullOutputPath : undefined,
-        };
-    }
-
-    /** 清理输出：去 ANSI 转义 / 回车 / 控制字符，并限制长度避免 DOM 过大。 */
-    private cleanToolOutput(text: string): string {
-        let s = text
-            .replace(/\r/g, "")
-            .replace(/\x1b\][^\x07]*?(?:\x07|\x1b\\)/g, "")
-            .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "")
-            .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "");
-        if (s.length > 200_000) {
-            s = s.slice(0, 200_000) + "\n…(输出过长已截断)";
-        }
-        return s;
-    }
-
-    private extractErrorText(result: any): string | undefined {
-        if (!result) {
-            return undefined;
-        }
-        const content = result.content;
-        if (Array.isArray(content)) {
-            for (const c of content) {
-                if (c && c.type === "text" && typeof c.text === "string") {
-                    return c.text;
-                }
-            }
-        }
-        try {
-            return JSON.stringify(result);
-        } catch {
-            return undefined;
-        }
-    }
-
-    private resetFileChanges(): void {
-        this.fileChanges.clear();
-        this.pendingEdits.clear();
-        this.editSnapshots.clear();
-        const hadKnown = this.knownFiles.size > 0;
-        this.knownFiles.clear();
-        this.postFileChanges();
-        if (hadKnown) { this.host.onKnownFilesChanged?.(this.id); }
-    }
-
-    private postFileChanges(): void {
-        const files = Array.from(this.fileChanges.values()).map((c) => ({
-            path: c.path,
-            label: c.label,
-        }));
-        this.post({ type: "fileChanges", files });
-    }
-
-    /** 收集 pi 工具调用涉及的具体文件路径（read/edit/write）。 */
-    private collectKnownFile(toolName: string, args: any): void {
-        if (toolName !== "read" && toolName !== "edit" && toolName !== "write") {
-            return;
-        }
-        const raw =
-            typeof args?.path === "string"
-                ? args.path
-                : typeof args?.file_path === "string"
-                  ? args.file_path
-                  : null;
-        if (!raw) { return; }
-        const resolved = this.host.resolvePath(raw);
-        if (this.knownFiles.has(resolved)) { return; }
-        this.knownFiles.add(resolved);
-        this.host.onKnownFilesChanged?.(this.id);
-    }
-
-    /** 本会话工具调用触及过的文件绝对路径（供宿主跳转时优先检索）。 */
+    // ---- 工具追踪 / diff（委托 EditTracker）----
     public getKnownFiles(): string[] {
-        return Array.from(this.knownFiles);
-    }
-
-    private editToolPath(toolName: string, args: any): string | null {
-        if (toolName !== "edit" && toolName !== "write") {
-            return null;
-        }
-        const raw =
-            typeof args?.path === "string"
-                ? args.path
-                : typeof args?.file_path === "string"
-                  ? args.file_path
-                  : null;
-        if (!raw) {
-            return null;
-        }
-        return this.host.resolvePath(raw);
-    }
-
-    private trackEditStart(evt: any): void {
-        const p = this.editToolPath(evt.toolName, evt.args);
-        if (!p || !evt.toolCallId) {
-            return;
-        }
-        let before = "";
-        try {
-            before = fs.readFileSync(p, "utf8");
-        } catch {
-            before = "";
-        }
-        this.pendingEdits.set(evt.toolCallId, { path: p, before });
-    }
-
-    private trackEditEnd(evt: any): void {
-        const id = evt.toolCallId;
-        if (!id) {
-            return;
-        }
-        const pend = this.pendingEdits.get(id);
-        this.pendingEdits.delete(id);
-        if (!pend || evt.isError) {
-            return;
-        }
-        let after = "";
-        try {
-            after = fs.readFileSync(pend.path, "utf8");
-        } catch {
-            return;
-        }
-        if (after === pend.before) {
-            return;
-        }
-        this.editSnapshots.set(id, { path: pend.path, before: pend.before, after });
-        const existing = this.fileChanges.get(pend.path);
-        if (!existing) {
-            this.fileChanges.set(pend.path, {
-                path: pend.path,
-                label: this.host.relativeTo(this.host.getCwd(), pend.path),
-                before: pend.before,
-            });
-        }
-        this.postFileChanges();
+        return this.edits.getKnownFiles();
     }
 
     public async revertEdit(toolCallId: string): Promise<void> {
-        const snap = this.editSnapshots.get(toolCallId);
-        if (!snap) {
-            this.post({ type: "systemError", text: "无法回滚：缺失修改前的快照。" });
-            return;
-        }
-        const label = this.host.relativeTo(this.host.getCwd(), snap.path);
-
-        let current = "";
-        try {
-            current = fs.readFileSync(snap.path, "utf8");
-        } catch {
-            current = "";
-        }
-        if (current === snap.before) {
-            this.post({ type: "system", text: `无需回滚：${label} 已是修改前的内容。` });
-            this.post({ type: "editReverted", toolCallId });
-            return;
-        }
-        if (current !== snap.after) {
-            const ok = await this.host.confirmRevert(
-                `${label} 在此次修改后又被变更过，回滚将丢弃那些后续变更。确定继续？`
-            );
-            if (!ok) {
-                return;
-            }
-        }
-
-        try {
-            fs.writeFileSync(snap.path, snap.before, "utf8");
-        } catch (e: any) {
-            this.post({ type: "systemError", text: `回滚失败: ${e.message}` });
-            return;
-        }
-
-        const existing = this.fileChanges.get(snap.path);
-        if (existing) {
-            let latest = "";
-            try {
-                latest = fs.readFileSync(snap.path, "utf8");
-            } catch {
-                latest = "";
-            }
-            if (latest === existing.before) {
-                this.fileChanges.delete(snap.path);
-            }
-            this.postFileChanges();
-        }
-
-        this.editSnapshots.delete(toolCallId);
-        this.post({ type: "editReverted", toolCallId });
-        this.post({ type: "system", text: `已回滚: ${label}` });
-    }
-
-    private historyEditInfo(call: any, result: any): string | undefined {
-        const details = result?.details;
-        let diff: string | undefined =
-            typeof details?.diff === "string" ? details.diff : undefined;
-
-        if (!diff) {
-            const args = call?.arguments ?? {};
-            if (call?.name === "edit") {
-                const oldText =
-                    typeof args.old_text === "string"
-                        ? args.old_text
-                        : typeof args.oldText === "string"
-                          ? args.oldText
-                          : "";
-                const newText =
-                    typeof args.new_text === "string"
-                        ? args.new_text
-                        : typeof args.newText === "string"
-                          ? args.newText
-                          : "";
-                if (oldText || newText) {
-                    const del = oldText ? oldText.split("\n").map((l: string) => "-" + l) : [];
-                    const add = newText ? newText.split("\n").map((l: string) => "+" + l) : [];
-                    diff = del.concat(add).join("\n");
-                }
-            } else if (call?.name === "write") {
-                const content =
-                    typeof args.content === "string"
-                        ? args.content
-                        : typeof args.text === "string"
-                          ? args.text
-                          : "";
-                if (content) {
-                    diff = content
-                        .split("\n")
-                        .map((l: string) => "+" + l)
-                        .join("\n");
-                }
-            }
-        }
-        return diff;
+        return this.edits.revertEdit(toolCallId);
     }
 
     // ---- 会话加载 / 树 / fork ----
@@ -847,7 +453,7 @@ export class SessionRuntime {
         }
         this.loading = true;
         this.host.broadcastTabList();
-        this.resetFileChanges();
+        this.edits.reset();
         this.post({ type: "clear" });
         this.post({ type: "system", text: "正在加载会话…" });
 
@@ -875,8 +481,8 @@ export class SessionRuntime {
         }
 
         const [msgResp, forkResp] = await Promise.all([
-            this.request({ type: "get_messages" }),
-            this.request({ type: "get_fork_messages" }),
+            this.request<{ messages: any[] }>({ type: "get_messages" }),
+            this.request<{ messages: RpcForkMessage[] }>({ type: "get_fork_messages" }),
         ]);
         const messages: any[] = msgResp?.data?.messages ?? [];
         this.forkEntries = forkResp?.data?.messages ?? [];
@@ -890,19 +496,34 @@ export class SessionRuntime {
     }
 
     public async showTree(): Promise<void> {
-        const resp = await this.request({ type: "get_tree" });
-        if (!resp || resp.success === false) {
+        const resp = await this.request<{ tree: RpcTreeNode[]; leafId?: string | null }>({ type: "get_tree" });
+        if (!isRpcOk(resp)) {
             this.post({
                 type: "systemError",
-                text: `获取对话树失败: ${resp?.error ?? "未知错误"}`,
+                text: `获取对话树失败: ${rpcErrorMessage(resp)}`,
             });
             return;
         }
-        this.post({
-            type: "treeView",
-            tree: resp.data?.tree ?? [],
-            leafId: resp.data?.leafId ?? null,
-        });
+        const tree = resp.data?.tree ?? [];
+        const leafId = resp.data?.leafId ?? null;
+        // slimTree：去掉 bash/diff 等大字段；user 原文完整保留（fork 后 setInput 回填）
+        const slim = slimTree(tree);
+        // 完整树消息可达数百 KB~数 MB，VSCode webview postMessage 对较大消息会静默丢弃。
+        // 改为字符串分块发送（每块 ~60KB），webview 端拼接后再渲染。
+        const json = JSON.stringify({ tree: slim, leafId });
+        const batchId = `tree-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const CHUNK = 60000;
+        const total = Math.max(1, Math.ceil(json.length / CHUNK));
+        for (let i = 0; i < total; i++) {
+            this.post({
+                type: "treeViewChunk",
+                batchId,
+                index: i,
+                total,
+                text: json.slice(i * CHUNK, (i + 1) * CHUNK),
+            });
+        }
+        this.post({ type: "treeViewEnd", batchId, leafId, jsonLen: json.length });
     }
 
     public async forkFromEntry(entryId: string): Promise<void> {
@@ -925,13 +546,13 @@ export class SessionRuntime {
             return;
         }
 
-        const resp = await this.request({ type: "fork", entryId });
-        if (!resp || resp.success === false) {
+        const resp = await this.request<RpcForkResult>({ type: "fork", entryId });
+        if (!isRpcOk(resp)) {
             this.loading = false;
             this.host.broadcastTabList();
             this.post({
                 type: "systemError",
-                text: `分叉失败: ${resp?.error ?? "未知错误"}`,
+                text: `分叉失败: ${rpcErrorMessage(resp)}`,
             });
             return;
         }
@@ -941,11 +562,13 @@ export class SessionRuntime {
             this.post({ type: "system", text: "分叉已取消。" });
             return;
         }
-        this.resetFileChanges();
+        // pi fork(position=before) 会返回被分叉的 user 消息原文，供编辑后重发（对齐 TUI）
+        const selectedText = forkSelectedText(resp);
+        this.edits.reset();
         const [msgResp, forkResp, stateResp] = await Promise.all([
-            this.request({ type: "get_messages" }),
-            this.request({ type: "get_fork_messages" }),
-            this.request({ type: "get_state" }),
+            this.request<{ messages: any[] }>({ type: "get_messages" }),
+            this.request<{ messages: RpcForkMessage[] }>({ type: "get_fork_messages" }),
+            this.request<RpcSessionState>({ type: "get_state" }),
         ]);
         const messages: any[] = msgResp?.data?.messages ?? [];
         this.forkEntries = forkResp?.data?.messages ?? [];
@@ -956,6 +579,10 @@ export class SessionRuntime {
         }
         this.post({ type: "clear" });
         this.renderMessages(messages);
+        // clear 会清空输入框，必须在其后把 user 消息救回（对齐 TUI）
+        if (selectedText) {
+            this.post({ type: "setInput", text: selectedText });
+        }
         this.post({ type: "system", text: `已分叉到新分支（${messages.length} 条消息）。` });
         this.loading = false;
         this.host.broadcastTabList();
@@ -972,7 +599,7 @@ export class SessionRuntime {
         }
         this.loading = true;
         this.host.broadcastTabList();
-        this.resetFileChanges();
+        this.edits.reset();
         this.post({ type: "clear" });
         this.post({ type: "system", text: "正在加载源会话并分叉…" });
 
@@ -1003,25 +630,30 @@ export class SessionRuntime {
         this.host.onSessionChanged?.(this.id, this.currentSessionPath);
 
         // 2. 在该 entry 处分叉：创建新分支会话文件并切换到它
-        const forkResp = await this.request({ type: "fork", entryId });
-        if (!forkResp || forkResp.success === false) {
+        const forkResp = await this.request<RpcForkResult>({ type: "fork", entryId });
+        if (!isRpcOk(forkResp)) {
             this.loading = false;
             this.host.broadcastTabList();
             this.post({
                 type: "systemError",
-                text: `分叉失败: ${forkResp?.error ?? "未知错误"}`,
+                text: `分叉失败: ${rpcErrorMessage(forkResp)}`,
             });
             return;
         }
         if (forkResp.data?.cancelled) {
+            this.loading = false;
+            this.host.broadcastTabList();
             this.post({ type: "system", text: "分叉已取消。" });
+            return;
         }
+        // pi fork(position=before) 返回被分叉的 user 消息原文，供编辑后重发
+        const selectedText = forkSelectedText(forkResp);
 
         // 3. 读取新分支消息并同步会话路径
         const [msgResp, forkMsgResp, stateResp] = await Promise.all([
-            this.request({ type: "get_messages" }),
-            this.request({ type: "get_fork_messages" }),
-            this.request({ type: "get_state" }),
+            this.request<{ messages: any[] }>({ type: "get_messages" }),
+            this.request<{ messages: RpcForkMessage[] }>({ type: "get_fork_messages" }),
+            this.request<RpcSessionState>({ type: "get_state" }),
         ]);
         const messages: any[] = msgResp?.data?.messages ?? [];
         this.forkEntries = forkMsgResp?.data?.messages ?? [];
@@ -1031,21 +663,15 @@ export class SessionRuntime {
         }
         this.post({ type: "clear" });
         this.renderMessages(messages);
+        // clear 会清空输入框，必须在其后把 user 消息救回（对齐 TUI）
+        if (selectedText) {
+            this.post({ type: "setInput", text: selectedText });
+        }
         this.post({ type: "system", text: `已在新 tab 打开新分支（${messages.length} 条消息）。` });
         this.loading = false;
         this.host.broadcastTabList();
         this.refreshStats();
         void this.sendCurrentModel();
-    }
-
-    private textOf(content: unknown): string {
-        if (typeof content === "string") {
-            return content;
-        }
-        if (Array.isArray(content)) {
-            return content.map((c: any) => (c.type === "text" ? c.text : "")).join("");
-        }
-        return "";
     }
 
     private renderMessages(messages: any[]): void {
@@ -1061,7 +687,7 @@ export class SessionRuntime {
                 case "user":
                     this.post({
                         type: "userMessage",
-                        text: this.textOf(m.content),
+                        text: textOf(m.content),
                         entryId: this.forkEntries[userIndex]?.entryId,
                     });
                     userIndex++;
@@ -1077,9 +703,9 @@ export class SessionRuntime {
                                 this.post({ type: "assistantFull", text });
                                 text = "";
                             }
-                            this.collectKnownFile(c.name, c.arguments);
+                            this.edits.collectKnownFile(c.name, c.arguments);
                             if (c.name === "edit" || c.name === "write") {
-                                const p = this.editToolPath(c.name, c.arguments);
+                                const p = this.edits.editToolPath(c.name, c.arguments);
                                 const id = c.id || `hist-${Math.random()}`;
                                 this.post({
                                     type: "editCardStart",
@@ -1091,7 +717,7 @@ export class SessionRuntime {
                                 this.post({
                                     type: "editCardResult",
                                     toolCallId: id,
-                                    diff: this.historyEditInfo(c, toolResults.get(id)),
+                                    diff: this.edits.historyDiff(c, toolResults.get(id)),
                                     canRevert: false,
                                 });
                             } else {
@@ -1108,8 +734,8 @@ export class SessionRuntime {
                                         type: "toolResult",
                                         toolCallId: id,
                                         isError: !!res.isError,
-                                        resultText: this.extractResultText(res.content ?? res),
-                                        truncation: this.extractTruncation(res),
+                                        resultText: extractResultText(res.content ?? res),
+                                        truncation: extractTruncation(res),
                                     });
                                 }
                             }
@@ -1128,12 +754,21 @@ export class SessionRuntime {
         if (!this.client || !this.client.isRunning()) {
             this.startClient();
         }
-        const [resp, levelsResp, stateResp] = await Promise.all([
-            this.request({ type: "get_available_models" }),
-            this.request({ type: "get_available_thinking_levels" }),
-            this.request({ type: "get_state" }),
+        // 首次打开只取模型列表和当前状态；思考档位从各模型的元数据中懒展示，
+        // 不再额外请求“当前模型”的 get_available_thinking_levels。
+        const [resp, stateResp] = await Promise.all([
+            this.request<{ models: RpcModelInfo[] }>({ type: "get_available_models" }),
+            this.request<RpcSessionState>({ type: "get_state" }),
         ]);
-        const models: ModelInfo[] = resp?.data?.models ?? [];
+        const rawModels = resp?.data?.models ?? [];
+        const models: ModelInfo[] = rawModels.map((m) => ({
+            id: m.id,
+            provider: m.provider,
+            name: m.name,
+            contextWindow: m.contextWindow,
+            reasoning: !!m.reasoning,
+            thinkingLevels: getModelThinkingLevels(m),
+        }));
         if (models.length === 0) {
             this.post({
                 type: "system",
@@ -1141,43 +776,67 @@ export class SessionRuntime {
             });
             return;
         }
-        const thinkingLevels: string[] = levelsResp?.data?.levels ?? [];
+        const stateModel: RpcModelInfo = stateResp?.data?.model ?? { id: "" };
         const currentThinking: string = stateResp?.data?.thinkingLevel ?? "";
-        const currentModelId = stateResp?.data?.model?.id ?? "";
+        const currentProvider: string = stateModel.provider ?? "";
+        const currentModelId: string = stateModel.id ?? "";
         const choice = await this.host.pickModelInteractive(
             models,
-            thinkingLevels,
             currentThinking,
+            currentProvider,
             currentModelId
         );
         if (!choice) {
             return;
         }
-        const setResp = await this.request({
-            type: "set_model",
-            provider: choice.provider,
-            modelId: choice.modelId,
-        });
-        if (setResp?.success === false) {
-            this.post({ type: "systemError", text: `切换模型失败: ${setResp.error}` });
-            return;
+
+        const modelChanged = choice.provider !== currentProvider || choice.modelId !== currentModelId;
+        let model: RpcModelInfo = stateModel;
+        if (modelChanged) {
+            const setResp = await this.request<RpcModelInfo>({
+                type: "set_model",
+                provider: choice.provider,
+                modelId: choice.modelId,
+            });
+            if (setResp?.success === false) {
+                this.post({ type: "systemError", text: `切换模型失败: ${setResp.error}` });
+                return;
+            }
+            model = setResp?.data ?? { id: choice.modelId, provider: choice.provider };
+            this.post({ modelId: model.id, provider: model.provider, type: "modelChanged" });
+            this.host.persistModel(model.provider || "", model.id || "");
+            // 切换模型可能自动钳制 thinking level，先同步一次当前状态。
+            await this.sendCurrentModel();
         }
-        const m = setResp?.data ?? { id: choice.modelId, provider: choice.provider };
-        this.post({ type: "modelChanged", modelId: m.id, provider: m.provider });
-        this.post({ type: "system", text: `已切换模型: ${m.id}` });
-        this.host.persistModel(m.provider || "", m.id || "");
-        // 同步思考强度（切换模型可能改变可用/当前 thinking level）
-        await this.sendCurrentModel();
-        // 若用户选了思考强度，单独设置
-        if (choice.thinkingLevel && thinkingLevels.includes(choice.thinkingLevel)) {
-            const tResp = await this.request({ type: "set_thinking_level", level: choice.thinkingLevel });
+
+        const selectedModel = models.find((m) =>
+            m.id === choice.modelId && (m.provider || "") === (choice.provider || "")
+        );
+        const availableThinking = selectedModel?.thinkingLevels ?? [];
+        const thinkingLevel = choice.thinkingLevel && availableThinking.includes(choice.thinkingLevel)
+            ? choice.thinkingLevel
+            : undefined;
+        const thinkingChanged = thinkingLevel !== undefined && thinkingLevel !== currentThinking;
+        if (thinkingChanged) {
+            const tResp = await this.request({ type: "set_thinking_level", level: thinkingLevel });
             if (tResp?.success === false) {
                 this.post({ type: "systemError", text: `设置思考强度失败: ${tResp.error}` });
             } else {
-                this.statusThinking = choice.thinkingLevel;
-                this.post({ type: "thinkingChanged", level: choice.thinkingLevel });
+                this.statusThinking = thinkingLevel;
+                this.post({ type: "thinkingChanged", level: thinkingLevel });
                 this.emitStatus();
             }
+        }
+
+        const notices: string[] = [];
+        if (modelChanged) {
+            notices.push(`已切换模型: ${model.id || choice.modelId}`);
+        }
+        if (thinkingChanged) {
+            notices.push(`思考强度: ${thinkingLevel}`);
+        }
+        if (notices.length > 0) {
+            this.post({ type: "system", text: notices.join(" · ") });
         }
     }
 
@@ -1196,7 +855,7 @@ export class SessionRuntime {
     }
 
     public async refreshStats(): Promise<void> {
-        const resp = await this.request({ type: "get_session_stats" });
+        const resp = await this.request<RpcSessionStats>({ type: "get_session_stats" });
         const d = resp?.data;
         if (!d) {
             return;
@@ -1216,9 +875,9 @@ export class SessionRuntime {
         this.emitStatus();
     }
 
-    // ---- 文件跳转 / diff（均相对该 tab 的 fileChanges）----
+    // ---- 文件跳转 / diff（均相对该 tab 的 EditTracker）----
     public async openDiff(p: string): Promise<void> {
-        const change = this.fileChanges.get(p);
+        const change = this.edits.getFileChange(p);
         if (!change) {
             this.post({
                 type: "systemError",
@@ -1237,38 +896,10 @@ export class SessionRuntime {
             this.host.openFileLocation(p, line);
             return;
         }
-        this.host.openFileLocation(p, this.resolveAnchorLine(current, anchor, line), anchor);
+        this.host.openFileLocation(p, resolveAnchorLine(current, anchor, line), anchor);
     }
 
     public openEditLocation(p: string, line: number): void {
         this.host.openFileLocation(p, line);
-    }
-
-    private resolveAnchorLine(currentText: string, anchor: string, fallbackLine: number): number {
-        if (!anchor) {
-            return fallbackLine;
-        }
-        const lines = currentText.split("\n");
-        const fb0 = Math.max(0, fallbackLine - 1);
-        if (lines[fb0] === anchor) {
-            return fallbackLine;
-        }
-        const WINDOW = 200;
-        for (let d = 1; d <= WINDOW; d++) {
-            const up = fb0 - d;
-            const down = fb0 + d;
-            if (down < lines.length && lines[down] === anchor) {
-                return down + 1;
-            }
-            if (up >= 0 && lines[up] === anchor) {
-                return up + 1;
-            }
-        }
-        for (let k = 0; k < lines.length; k++) {
-            if (lines[k] === anchor) {
-                return k + 1;
-            }
-        }
-        return Math.min(fallbackLine, Math.max(lines.length, 1));
     }
 }

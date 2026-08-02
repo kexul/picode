@@ -15,7 +15,6 @@
   const tabBarEl = document.getElementById("tabBar");
   const newTabBtn = document.getElementById("newTabBtn");
   newTabBtn.addEventListener("click", () => {
-    clearPendingForkDraft();
     vscode.postMessage({ type: "newSession" });
   });
   let multiTab = false; // 收到 tabList / 带 tabId 的消息后置 true，显示 tab 栏
@@ -43,14 +42,6 @@
   const treeOverlay = document.getElementById("treeOverlay");
   const treeBody = document.getElementById("treeBody");
 
-  // ---- 分支分叉草稿：fork 到新 tab 后把被点击的 user 消息救回输入框 ----
-  let pendingForkDraft = null;        // 被点击分叉的 user 消息文本
-  let pendingForkKnownTabs = null;    // 点击瞬间已存在的 tab 集合（仅新 tab 应用草稿）
-  function clearPendingForkDraft() {
-    pendingForkDraft = null;
-    pendingForkKnownTabs = null;
-  }
-
   // ---- 通用拾取器浮层（模型 / 历史）----
   const pickerOverlay = document.getElementById("pickerOverlay");
   const pickerBody = document.getElementById("pickerBody");
@@ -58,7 +49,7 @@
   const pickerSearch = document.getElementById("pickerSearch");
   const pickerSearchWrap = document.getElementById("pickerSearchWrap");
   const pickerFooter = document.getElementById("pickerFooter");
-  let pickerState = null; // { kind, items, filtered, sel, current, toggle }
+  let pickerState = null; // { kind, items, filtered, sel, current, draftModel, draftThinking, toggle }
 
   function hideTree() { treeOverlay.classList.add("hidden"); }
   document.getElementById("treeBtn").addEventListener("click", () => {
@@ -68,6 +59,23 @@
 
   // ==================== Markdown / 文件链接 / 符号链接（纯函数，与 tab 无关）====================
   let markedReady = false;
+  // 当前 highlight.js 是精简 bundle，只内置了 C++ / TypeScript / Python / plaintext。
+  // 常见的 javascript/json 标签可安全按 TypeScript（JS 的超集）处理；未知标签则保持
+  // 普通文本，但不能因此让整块代码继承一套固定的灰色基色。
+  const HIGHLIGHT_LANGUAGE_ALIASES = Object.freeze({
+    javascript: "typescript",
+    ecmascript: "typescript",
+    node: "typescript",
+    nodejs: "typescript",
+    json: "typescript",
+    jsonc: "typescript",
+  });
+  function resolveHighlightLanguage(hljs, lang) {
+    const label = String(lang || "").trim().toLowerCase().split(/\s+/)[0] || "";
+    const normalized = label.replace(/^language[-_:]/, "");
+    const candidate = HIGHLIGHT_LANGUAGE_ALIASES[normalized] || normalized;
+    return candidate && hljs.getLanguage(candidate) ? candidate : "";
+  }
   function ensureMarkedHighlight() {
     if (markedReady) { return; }
     markedReady = true;
@@ -77,8 +85,9 @@
       langPrefix: "hljs language-",
       highlight(code, lang) {
         try {
-          if (lang && hljs.getLanguage(lang)) {
-            return hljs.highlight(code, { language: lang }).value;
+          const language = resolveHighlightLanguage(hljs, lang);
+          if (language) {
+            return hljs.highlight(code, { language }).value;
           }
           return hljs.highlight(code, { language: "plaintext" }).value;
         } catch { return code; }
@@ -312,6 +321,8 @@
       pendingToolTags: new Map(),
       pendingToolCardsFull: new Map(),
       streaming: false,
+      activity: "idle",
+      activityDetail: "",
       piReady: false,
       textDirty: false,
       rafId: 0,
@@ -643,6 +654,23 @@
     card._toolName = toolName;
     const call = buildToolCallEl(toolName, argStr);
     call.title = argStr || toolName;
+    // write 卡片：右侧“打开文件”跳转按钮（复用 openFile 消息，与正文 file-link 一致）
+    if (toolName === "write") {
+      let a = null;
+      try { a = argStr ? JSON.parse(argStr) : {}; } catch { a = null; }
+      const wPath = a && (typeof a.file_path === "string" ? a.file_path : (typeof a.path === "string" ? a.path : ""));
+      if (wPath) {
+        const jump = document.createElement("span");
+        jump.className = "tc-jump";
+        jump.textContent = "打开文件 ↗";
+        jump.title = "在编辑器中打开 " + wPath;
+        jump.addEventListener("click", (e) => {
+          e.stopPropagation();
+          vscode.postMessage({ type: "openFile", path: wPath });
+        });
+        call.appendChild(jump);
+      }
+    }
     card.appendChild(call);
     // 参数区：write 显示内容预览（前 10 行，同 TUI），其余回退工具显示 pretty JSON
     if (toolName === "write") {
@@ -768,6 +796,10 @@
   function renderDiffBlock(tab, diffText, filePath) {
     const wrap = document.createElement("div");
     wrap.className = "edit-diff";
+    // 内层收缩包裹：宽度 = max(卡片宽, 最宽行)，让所有行背景一致铺满，横向滚动时短行不断色
+    const inner = document.createElement("div");
+    inner.className = "edit-diff-inner";
+    wrap.appendChild(inner);
     const LINE_RE = /^([+-]?) *(\d+) (.*)$/;
     const lines = String(diffText).split("\n");
     for (const line of lines) {
@@ -788,7 +820,7 @@
           vscode.postMessage({ type: "openEditLocation", tabId: tab.id, path: filePath, line: target, anchor });
         });
       }
-      wrap.appendChild(div);
+      inner.appendChild(div);
     }
     return wrap;
   }
@@ -896,29 +928,46 @@
   function updateSendState() {
     // 发送/中止按钮已移除（用 Enter 发送、Esc 中止）；状态文案由 syncStatus 负责
   }
-  // 实时把思考过程渲染到状态栏（#status）；show=true 时始终用同一套结构，正文随内容填充
-  function statusThinking(show, text) {
-    if (show) {
-      if (!statusEl.querySelector(".st-body")) {
-        statusEl.innerHTML = '<div class="st-head"><span class="typing"><span></span><span></span><span></span></span> 思考中… · Esc 中止</div><div class="st-body"></div>';
-      }
-      const body = statusEl.querySelector(".st-body");
-      if (body && body.textContent !== text) {
-        body.textContent = text;
-        body.scrollLeft = body.scrollWidth; // 始终滚到最新内容
-      }
-    } else {
+  // 实时把 agent 活动阶段渲染到状态栏（#status）。thinking 时额外显示思考增量，
+  // working / tool 阶段只显示阶段文案（工具阶段可附带工具名）。
+  function statusActivity(activity, text) {
+    if (!activity || activity === "idle") {
       statusEl.innerHTML = "";
+      delete statusEl.dataset.activity;
+      return;
+    }
+    const labels = {
+      working: "处理中…",
+      thinking: "思考中…",
+      tool: "执行工具…",
+    };
+    const label = labels[activity] || labels.working;
+    const wantsBody = activity === "thinking" || (activity === "tool" && !!text);
+    const current = statusEl.dataset.activity || "";
+    const hasBody = !!statusEl.querySelector(".st-body");
+    if (current !== activity || wantsBody !== hasBody) {
+      statusEl.dataset.activity = activity;
+      statusEl.innerHTML = '<div class="st-head"><span class="typing"><span></span><span></span><span></span></span> <span class="st-label"></span> · Esc 中止</div>' +
+        (wantsBody ? '<div class="st-body"></div>' : "");
+    }
+    const labelEl = statusEl.querySelector(".st-label");
+    if (labelEl) { labelEl.textContent = label; }
+    const body = statusEl.querySelector(".st-body");
+    if (body && body.textContent !== (text || "")) {
+      body.textContent = text || "";
+      body.scrollLeft = body.scrollWidth; // 始终滚到最新内容
     }
   }
   function syncStatus() {
     const tab = activeTab();
     const streaming = !!tab && tab.streaming;
     const piReady = !!tab && tab.piReady;
-    if (streaming) {
-      statusThinking(true, (tab && tab.thinkingText) || "");
+    const activity = streaming ? ((tab && tab.activity) || "working") : "idle";
+    if (streaming && activity !== "idle") {
+      const detail = activity === "thinking" ? ((tab && tab.thinkingText) || "") : ((tab && tab.activityDetail) || "");
+      statusActivity(activity, detail);
     } else {
-      statusThinking(false);
+      statusActivity("idle", "");
       if (tab && tab.loading) { statusEl.textContent = "加载中…"; }
       else if (!piReady) { statusEl.textContent = "等待 pi 启动…"; }
       else { statusEl.textContent = ""; }
@@ -979,22 +1028,21 @@
     hideFileMenu();
   }
 
-  /** fork 到新 tab 后，把被点击分叉的 user 消息救回输入框（可编辑后重发）。 */
-  function maybeApplyForkDraft() {
-    if (!pendingForkDraft || !pendingForkKnownTabs) { return; }
-    const tab = activeTab();
-    if (!tab || pendingForkKnownTabs.has(tab.id)) { return; } // 只在新 tab 上应用，不动既有 tab 的草稿
-    inputEl.value = pendingForkDraft;
-    inputEl.style.height = "auto";
-    autoResize();
-    const end = inputEl.value.length;
-    inputEl.setSelectionRange(end, end);
-    tab.inputText = inputEl.value;
-    tab.inputSelectionStart = end;
-    tab.inputSelectionEnd = end;
-    clearPendingForkDraft();
-    updateSendState();
-    inputEl.focus();
+  /** 把文本写入指定 tab 的输入框（fork 后把 user 消息救回，可编辑后重发）。 */
+  function applyInputText(tab, text) {
+    if (!tab) { return; }
+    const value = typeof text === "string" ? text : "";
+    tab.inputText = value;
+    tab.inputSelectionStart = value.length;
+    tab.inputSelectionEnd = value.length;
+    if (activeId === tab.id) {
+      inputEl.value = value;
+      inputEl.style.height = "auto";
+      autoResize();
+      try { inputEl.setSelectionRange(value.length, value.length); } catch { /* ignore */ }
+      updateSendState();
+      inputEl.focus();
+    }
   }
 
   function reflectTabUI() {
@@ -1038,7 +1086,7 @@
       close.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 2.5 L13.5 13.5 M13.5 2.5 L2.5 13.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>';
       close.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "closeTab", tabId: tab.id }); });
       el.appendChild(close);
-      el.addEventListener("click", () => { clearPendingForkDraft(); vscode.postMessage({ type: "switchTab", tabId: tab.id }); });
+      el.addEventListener("click", () => { vscode.postMessage({ type: "switchTab", tabId: tab.id }); });
       tabBarInner.appendChild(el);
     });
   }
@@ -1114,49 +1162,48 @@
     return set;
   }
   function renderTree(tree, leafId, tabId) {
+    const dt = tabs.get(tabId);
+    try {
     treeBody.innerHTML = "";
-    const rows = flattenTree(tree);
+    // 浮层只展示 user 消息（历史提问列表），点任意一条即可从该处开分支。
+    const users = [];
+    (function walk(nodes) {
+      for (const n of nodes) {
+        const e = n && n.entry;
+        if (e && e.type === "message" && e.message && e.message.role === "user") {
+          users.push(n);
+        }
+        walk(n.children || []);
+      }
+    })(tree);
     const active = activePathSet(tree, leafId);
-    if (rows.length === 0) {
+    if (users.length === 0) {
       const empty = document.createElement("div"); empty.className = "tree-empty"; empty.textContent = "没有历史消息。"; treeBody.appendChild(empty);
     } else {
-      rows.forEach((row) => {
-        const e = row.node.entry;
+      users.forEach((node) => {
+        const e = node.entry;
         const isLeaf = e.id === leafId;
         const onPath = active.has(e.id);
-        let prefix = "";
-        for (let lv = 0; lv < row.indent; lv++) {
-          if (row.showConnector && lv === row.connectorPos) { prefix += row.isLast ? "└─ " : "├─ "; }
-          else { const g = row.gutters.find((x) => x.pos === lv); prefix += g && g.show ? "│  " : "   "; }
-        }
         const line = document.createElement("div");
         line.className = "tree-row" + (isLeaf ? " is-leaf" : "") + (onPath ? " on-path" : "");
-        const pre = document.createElement("span"); pre.className = "tree-pre"; pre.textContent = prefix; line.appendChild(pre);
-        const isUserMsg = e.type === "message" && e.message && e.message.role === "user";
-        const marker = document.createElement("span"); marker.className = "tree-mark" + (isUserMsg ? " user" : ""); line.appendChild(marker);
-        const text = document.createElement("span"); text.className = "tree-text"; text.textContent = entrySummary(row.node); line.appendChild(text);
-        const forkable = isUserMsg && !isLeaf;
-        if (forkable) {
+        const marker = document.createElement("span"); marker.className = "tree-mark user"; line.appendChild(marker);
+        const text = document.createElement("span"); text.className = "tree-text"; text.textContent = entrySummary(node); line.appendChild(text);
+        if (!isLeaf) {
           line.classList.add("forkable"); line.title = "点击在此处新建分支（可编辑该消息后重发）";
           line.addEventListener("click", () => {
-            const forkText = entryText(e.message ? e.message.content : "");
-            if (forkText) {
-              pendingForkDraft = forkText;
-              pendingForkKnownTabs = new Set(tabs.keys());
-            } else {
-              clearPendingForkDraft();
-            }
             hideTree();
             vscode.postMessage({ type: "forkAtEntry", tabId: tabId, entryId: e.id });
           });
-        } else if (isLeaf) { line.title = "当前位置（分支末尾）"; }
-        else { line.classList.add("readonly"); line.title = isUserMsg ? "当前位置的消息" : "仅展示（仅 user 消息可分叉）"; }
+        } else { line.title = "当前位置（分支末尾）"; }
         treeBody.appendChild(line);
       });
       const leafEl = treeBody.querySelector(".tree-row.is-leaf");
       if (leafEl) { leafEl.scrollIntoView({ block: "center" }); }
     }
     treeOverlay.classList.remove("hidden");
+    } catch (e) {
+      if (dt) { addPlain(dt, "system error", null, "对话树渲染失败: " + (e && e.message ? e.message : String(e))); }
+    }
   }
 
   // ==================== 通用拾取器浮层（模型 / 历史）====================
@@ -1166,6 +1213,7 @@
     pickerSearch.value = "";
     pickerFooter.innerHTML = "";
     pickerFooter.classList.add("hidden");
+    pickerFooter.classList.remove("pk-model-footer");
     pickerSearchWrap.classList.remove("hidden");
     pickerState = null;
   }
@@ -1191,21 +1239,180 @@
     }
     return hay.some((s) => s.toLowerCase().includes(q));
   }
+  const THINKING_LABELS = {
+    off: "关闭", minimal: "极低", low: "低", medium: "中", high: "高", xhigh: "极高", max: "最大",
+  };
+  const THINKING_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+  function thinkingLabel(level) { return THINKING_LABELS[level] || level || ""; }
+  function modelKey(item) { return (item.provider || "") + "\u0000" + (item.id || ""); }
+  function modelThinkingLevels(item) { return Array.isArray(item.thinkingLevels) ? item.thinkingLevels : []; }
+  function isCurrentModel(st, item) {
+    return !!item && (modelKey(item) === st.current || item.current === true);
+  }
+  function currentModelItem(st) {
+    return st.items.find((item) => isCurrentModel(st, item)) || null;
+  }
+  function currentThinkingLevel(st) {
+    const item = currentModelItem(st);
+    return item && item.reasoning ? (item.currentThinking || "medium") : "";
+  }
+  function defaultThinkingForModel(st, item) {
+    if (!item || !item.reasoning) { return undefined; }
+    const levels = modelThinkingLevels(item);
+    if (levels.length === 0) { return undefined; }
+    // 尽量保留当前档位；不支持时按 pi 的默认 medium 进行就近钳制。
+    const current = currentThinkingLevel(st);
+    if (current && levels.includes(current)) { return current; }
+    const preferredIndex = THINKING_ORDER.indexOf("medium");
+    for (let i = preferredIndex; i < THINKING_ORDER.length; i++) {
+      if (levels.includes(THINKING_ORDER[i])) { return THINKING_ORDER[i]; }
+    }
+    for (let i = preferredIndex - 1; i >= 0; i--) {
+      if (levels.includes(THINKING_ORDER[i])) { return THINKING_ORDER[i]; }
+    }
+    return levels[0];
+  }
+  function modelDraftChanged(st) {
+    if (!st.draftModel) { return false; }
+    if (!isCurrentModel(st, st.draftModel)) { return true; }
+    const draftLevel = st.draftModel.reasoning ? (st.draftThinking || "medium") : "";
+    return draftLevel !== currentThinkingLevel(st);
+  }
+  function selectModelIndex(st, idx, scroll) {
+    const item = st.filtered[idx];
+    if (!item) { return; }
+    st.sel = idx;
+    st.draftModel = item;
+    st.draftThinking = defaultThinkingForModel(st, item);
+    renderPickerItems();
+    if (scroll) {
+      const active = pickerBody.querySelector(".pk-model-item.active");
+      if (active) { active.scrollIntoView({ block: "nearest" }); }
+    }
+  }
+  function moveModelThinking(delta) {
+    const st = pickerState;
+    if (!st || st.kind !== "model" || !st.draftModel || !st.draftModel.reasoning) { return; }
+    const levels = modelThinkingLevels(st.draftModel);
+    if (levels.length === 0) { return; }
+    let index = levels.indexOf(st.draftThinking);
+    if (index < 0) { index = 0; }
+    st.draftThinking = levels[(index + delta + levels.length) % levels.length];
+    renderPickerItems();
+  }
+  function renderModelThinking(item, st, right) {
+    if (st.draftModel !== item) { return; }
+    right.classList.add("has-content");
+    const label = document.createElement("div"); label.className = "pk-thinking-label"; label.textContent = "推理强度";
+    right.appendChild(label);
+    if (!item.reasoning) {
+      const unsupported = document.createElement("div"); unsupported.className = "pk-thinking-unsupported"; unsupported.textContent = "不支持推理";
+      right.appendChild(unsupported);
+      return;
+    }
+    const levels = modelThinkingLevels(item);
+    if (levels.length === 0) {
+      const failed = document.createElement("div"); failed.className = "pk-thinking-unsupported"; failed.textContent = "无法获取设置";
+      right.appendChild(failed);
+      return;
+    }
+    const options = document.createElement("div"); options.className = "pk-thinking-options";
+    levels.forEach((level) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "pk-thinking-btn" + (level === st.draftThinking ? " on" : "");
+      button.textContent = thinkingLabel(level);
+      button.title = level;
+      button.setAttribute("aria-pressed", level === st.draftThinking ? "true" : "false");
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        st.draftThinking = level;
+        renderPickerItems();
+      });
+      options.appendChild(button);
+    });
+    right.appendChild(options);
+  }
+  function renderModelFooter(st) {
+    pickerFooter.innerHTML = "";
+    pickerFooter.classList.remove("hidden");
+    pickerFooter.classList.add("pk-model-footer");
+    const summary = document.createElement("div"); summary.className = "pk-footer-summary";
+    if (!st.draftModel) {
+      summary.textContent = "选择模型以查看推理设置";
+    } else {
+      const modelName = st.draftModel.name && st.draftModel.name !== st.draftModel.id
+        ? st.draftModel.name + " · " + st.draftModel.id : st.draftModel.id;
+      const levelText = st.draftModel.reasoning
+        ? (st.draftThinking ? "推理 " + thinkingLabel(st.draftThinking) : "推理未选择")
+        : "不支持推理";
+      summary.textContent = "待应用：" + modelName + " · " + levelText;
+    }
+    pickerFooter.appendChild(summary);
+    const actions = document.createElement("div"); actions.className = "pk-footer-actions";
+    const cancelBtn = document.createElement("button"); cancelBtn.type = "button"; cancelBtn.className = "secondary"; cancelBtn.textContent = "取消";
+    cancelBtn.addEventListener("click", () => cancelPicker());
+    actions.appendChild(cancelBtn);
+    const confirmBtn = document.createElement("button"); confirmBtn.type = "button"; confirmBtn.className = "primary"; confirmBtn.textContent = "确认切换";
+    const ready = !!st.draftModel && (!st.draftModel.reasoning || modelThinkingLevels(st.draftModel).length > 0);
+    confirmBtn.disabled = !ready || !modelDraftChanged(st);
+    confirmBtn.addEventListener("click", () => submitModelPicker());
+    actions.appendChild(confirmBtn);
+    pickerFooter.appendChild(actions);
+  }
   function renderPickerItems() {
     const st = pickerState;
     if (!st) { return; }
     const q = (pickerSearch.value || "").toLowerCase().trim();
     st.filtered = st.items.filter((it) => pickerItemMatch(it, st.kind, q));
-    if (st.sel >= st.filtered.length) { st.sel = Math.max(0, st.filtered.length - 1); }
+    if (st.kind === "model") {
+      if (st.draftModel) {
+        const draftIndex = st.filtered.indexOf(st.draftModel);
+        if (draftIndex >= 0) {
+          st.sel = draftIndex;
+        } else {
+          st.sel = -1;
+          st.draftModel = null;
+          st.draftThinking = undefined;
+        }
+      } else if (st.sel >= st.filtered.length) {
+        st.sel = -1;
+      }
+    } else if (st.sel >= st.filtered.length) {
+      st.sel = Math.max(0, st.filtered.length - 1);
+    }
     pickerBody.innerHTML = "";
     if (st.filtered.length === 0) {
       const empty = document.createElement("div"); empty.className = "pk-empty"; empty.textContent = q ? "没有匹配项。" : "列表为空。";
       pickerBody.appendChild(empty);
+      if (st.kind === "model") { renderModelFooter(st); }
       return;
     }
     let lastSection = null;
     st.filtered.forEach((item, idx) => {
-      // 分隔标题
+      if (st.kind === "model") {
+        const el = document.createElement("div");
+        const isSelected = st.draftModel === item;
+        el.className = "pk-item pk-model-item" + (isSelected ? " active" : "");
+        if (item.current) { el.classList.add("current"); }
+        if (isSelected && !isCurrentModel(st, item)) { el.classList.add("pending"); }
+
+        const main = document.createElement("div"); main.className = "pk-model-main";
+        const title = document.createElement("div"); title.className = "pk-title"; title.textContent = item.id || "(未命名模型)";
+        if (item.current) { const badge = document.createElement("span"); badge.className = "pk-badge"; badge.textContent = "当前"; title.appendChild(badge); }
+        if (isSelected && !isCurrentModel(st, item)) { const badge = document.createElement("span"); badge.className = "pk-badge pending-badge"; badge.textContent = "待应用"; title.appendChild(badge); }
+        main.appendChild(title);
+        const desc = (item.provider ? item.provider : "") + (item.name && item.name !== item.id ? (item.provider ? " · " : "") + item.name : "");
+        if (desc) { const d = document.createElement("div"); d.className = "pk-desc"; d.textContent = desc; main.appendChild(d); }
+        if (item.contextWindow) { const det = document.createElement("div"); det.className = "pk-detail"; det.textContent = "上下文 " + Math.round(item.contextWindow / 1000) + "K"; main.appendChild(det); }
+        const right = document.createElement("div"); right.className = "pk-model-thinking";
+        renderModelThinking(item, st, right);
+        el.appendChild(main); el.appendChild(right);
+        el.addEventListener("click", () => selectModelIndex(st, idx, true));
+        pickerBody.appendChild(el);
+        return;
+      }
+
       if (item.section && item.section !== lastSection) {
         lastSection = item.section;
         const sep = document.createElement("div"); sep.className = "pk-section"; sep.textContent = item.section;
@@ -1213,25 +1420,7 @@
       }
       const el = document.createElement("div");
       el.className = "pk-item" + (idx === st.sel ? " active" : "");
-      if (st.kind === "model") {
-        // 模型项 vs 思考强度项
-        if (item.action === "thinkingLevel") {
-          const t = document.createElement("div"); t.className = "pk-title";
-          const chk = document.createElement("span"); chk.className = "pk-check" + (item.check === true ? " on" : "");
-          chk.textContent = item.check === true ? "✓" : "";
-          t.appendChild(chk);
-          t.appendChild(document.createTextNode(item.label || ""));
-          el.appendChild(t);
-        } else {
-          if (item.current) { el.classList.add("current"); }
-          const t = document.createElement("div"); t.className = "pk-title"; t.textContent = item.id;
-          if (item.current) { const b = document.createElement("span"); b.className = "pk-badge"; b.textContent = "当前"; t.appendChild(b); }
-          el.appendChild(t);
-          const desc = (item.provider ? item.provider : "") + (item.name && item.name !== item.id ? (item.provider ? " · " : "") + item.name : "");
-          if (desc) { const d = document.createElement("div"); d.className = "pk-desc"; d.textContent = desc; el.appendChild(d); }
-          if (item.contextWindow) { const det = document.createElement("div"); det.className = "pk-detail"; det.textContent = "上下文 " + Math.round(item.contextWindow / 1000) + "K"; el.appendChild(det); }
-        }
-      } else if (st.kind === "history") {
+      if (st.kind === "history") {
         if (st.current && item.file === st.current) { el.classList.add("current"); }
         const t = document.createElement("div"); t.className = "pk-title"; t.textContent = item.title || "(未命名会话)";
         if (st.current && item.file === st.current) { const b = document.createElement("span"); b.className = "pk-badge"; b.textContent = "当前"; t.appendChild(b); }
@@ -1258,6 +1447,7 @@
       el.addEventListener("click", () => { confirmPicker(idx); });
       pickerBody.appendChild(el);
     });
+    if (st.kind === "model") { renderModelFooter(st); }
   }
   function renderPickerActive() {
     const st = pickerState; if (!st) { return; }
@@ -1266,25 +1456,30 @@
     const cur = items[st.sel];
     if (cur) { cur.scrollIntoView({ block: "nearest" }); }
   }
+  function submitModelPicker() {
+    const st = pickerState;
+    if (!st || st.kind !== "model" || !st.draftModel) { return; }
+    const ready = !st.draftModel.reasoning || modelThinkingLevels(st.draftModel).length > 0;
+    if (!ready || !modelDraftChanged(st)) { return; }
+    const payload = {
+      provider: st.draftModel.provider || "",
+      modelId: st.draftModel.id,
+      thinkingLevel: st.draftThinking,
+    };
+    hidePicker();
+    vscode.postMessage({ type: "pickerChoice", kind: "model", payload });
+  }
   function confirmPicker(idx) {
     const st = pickerState; if (!st) { return; }
+    if (st.kind === "model") { submitModelPicker(); return; }
     const item = st.filtered[idx];
     if (!item) { return; }
     const kind = st.kind;
-    // toggle 模式（显示选项）或单项声明 toggle 行为（模型浮层中的思考强度）
     if (st.toggle || item.behavior === "toggle") {
-      // 开关/循环模式：不关闭浮层，即时回发，宿主处理后重新推送刷新
       vscode.postMessage({ type: "pickerToggle", kind, action: item.action, value: item.value });
       return;
     }
-    let payload;
-    if (kind === "model") {
-      // 同时把当前选中的思考强度带上
-      const tLevel = st.items.find((it) => it.action === "thinkingLevel" && it.check === true);
-      payload = { provider: item.provider || "", modelId: item.id, thinkingLevel: tLevel ? tLevel.value : undefined };
-    } else {
-      payload = { file: item.file };
-    }
+    const payload = { file: item.file };
     hidePicker();
     vscode.postMessage({ type: "pickerChoice", kind, payload });
   }
@@ -1302,17 +1497,21 @@
       kind,
       items: Array.isArray(msg.items) ? msg.items : [],
       filtered: [],
-      sel: 0,
+      sel: kind === "model" ? -1 : 0,
       current: msg.current || null,
+      draftModel: null,
+      draftThinking: undefined,
       toggle,
     };
     const titleMap = { model: "切换模型", history: "会话历史", options: "显示选项" };
     pickerTitle.textContent = titleMap[kind] || "选择";
     pickerSearch.value = "";
     pickerSearchWrap.classList.toggle("hidden", !searchable);
-    // toggle 模式显示“关闭”按钮
+    pickerFooter.classList.remove("pk-model-footer");
     pickerFooter.innerHTML = "";
-    if (toggle) {
+    if (kind === "model") {
+      pickerFooter.classList.remove("hidden");
+    } else if (toggle) {
       pickerFooter.classList.remove("hidden");
       const closeBtn = document.createElement("button"); closeBtn.className = "secondary"; closeBtn.textContent = "关闭";
       closeBtn.addEventListener("click", () => cancelPicker());
@@ -1325,10 +1524,35 @@
     if (searchable) { setTimeout(() => pickerSearch.focus(), 0); }
   }
   pickerOverlay.addEventListener("click", (e) => { if (e.target === pickerOverlay) { cancelPicker(); } });
-  pickerSearch.addEventListener("input", () => { if (pickerState) { pickerState.sel = 0; renderPickerItems(); } });
+  pickerSearch.addEventListener("input", () => {
+    if (!pickerState) { return; }
+    pickerState.sel = pickerState.kind === "model" ? -1 : 0;
+    renderPickerItems();
+  });
   document.addEventListener("keydown", (e) => {
     if (!pickerState || pickerOverlay.classList.contains("hidden")) { return; }
     const st = pickerState;
+    if (st.kind === "model") {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        if (st.filtered.length) {
+          const delta = e.key === "ArrowDown" ? 1 : -1;
+          let next = st.sel < 0 ? (delta > 0 ? 0 : st.filtered.length - 1) : st.sel + delta;
+          next = (next + st.filtered.length) % st.filtered.length;
+          selectModelIndex(st, next, true);
+        }
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        moveModelThinking(e.key === "ArrowRight" ? 1 : -1);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        submitModelPicker();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        cancelPicker();
+      }
+      return;
+    }
     if (e.key === "ArrowDown") { e.preventDefault(); if (st.filtered.length) { st.sel = (st.sel + 1) % st.filtered.length; renderPickerActive(); } }
     else if (e.key === "ArrowUp") { e.preventDefault(); if (st.filtered.length) { st.sel = (st.sel - 1 + st.filtered.length) % st.filtered.length; renderPickerActive(); } }
     else if (e.key === "Enter") { e.preventDefault(); confirmPicker(st.sel); }
@@ -1536,32 +1760,41 @@
   statusEl.textContent = "等待 pi 启动…";
 
   function setStreaming(tab, on) { tab.streaming = on; if (activeId === tab.id) { updateSendState(); syncStatus(); } renderTabBar(); }
+  function setActivity(tab, activity, detail) {
+    tab.activity = activity || (tab.streaming ? "working" : "idle");
+    tab.activityDetail = detail || "";
+    if (activeId === tab.id) { syncStatus(); }
+    renderTabBar();
+  }
   function setPiReady(tab, on, force) { tab.piReady = on; if (activeId === tab.id) { updateSendState(); syncStatus(); } renderTabBar(); }
 
   // ==================== 来自扩展的消息 ====================
   window.addEventListener("message", (event) => {
     const msg = event.data;
+    // VSCode webview 宿主会投递非业务消息（视图聚焦/状态同步等），event.data 可能为 null
+    // 或非 {type:string} 结构。直接忽略，避免 msg.type 崩溃导致后续消息（如 treeView）被跳过。
+    if (!msg || typeof msg.type !== "string") { return; }
     const type = msg.type;
 
     if (type === "tabList") {
       enterMultiTab();
       const incoming = msg.tabs || [];
       const seen = new Set();
-      let sawNewTab = false;
       incoming.forEach((t) => {
         seen.add(t.id);
         let st = tabs.get(t.id);
         if (!st) {
           // 占位创建 pane（此时 #messages 是容器，直接 append）
           st = createTab(t.id, t.title);
-          sawNewTab = true;
-          if (msg.activeId === t.id) {
-            // 首次出现且为 active
-          }
         } else {
           st.title = t.title;
         }
         st.streaming = !!t.streaming;
+        const incomingActivity = t.activity;
+        st.activity = incomingActivity === "working" || incomingActivity === "thinking" || incomingActivity === "tool" || incomingActivity === "idle"
+          ? incomingActivity
+          : (st.streaming ? "working" : "idle");
+        st.activityDetail = typeof t.activityDetail === "string" ? t.activityDetail : "";
         st.piReady = t.piReady !== false;
         st.loading = !!t.loading;
       });
@@ -1587,9 +1820,6 @@
       }
       renderTabBar();
       updateSendState(); syncStatus();
-      // fork 到新 tab：把被点击的 user 消息救回输入框；若没出现新 tab（原地分叉/普通切换）则丢弃
-      maybeApplyForkDraft();
-      if (pendingForkDraft && !sawNewTab) { clearPendingForkDraft(); }
       return;
     }
     if (type === "tabActivated") {
@@ -1606,7 +1836,6 @@
         }
         renderTabBar();
       }
-      maybeApplyForkDraft();
       return;
     }
     if (type === "tabClosed") {
@@ -1682,6 +1911,8 @@
         break;
       }
       case "streamStart":
+        t.activity = msg.activity || "working";
+        t.activityDetail = msg.detail || "";
         setStreaming(t, true);
         finalizeCurrentAssistant(t);
         t.thinkingText = "";
@@ -1690,8 +1921,13 @@
         if (t.rafId) { flushDeltas(t); }
         finalizeCurrentAssistant(t);
         t.thinkingText = "";
+        t.activity = msg.activity || "idle";
+        t.activityDetail = msg.detail || "";
         setStreaming(t, false);
         if (notifyOnTurnEnd) { playTurnEndBeep(); }
+        break;
+      case "activityChanged":
+        setActivity(t, msg.activity, msg.detail);
         break;
       case "assistantDelta":
         if (!t.currentAssistant) { t.currentAssistant = { el: addMarkdown(t, ""), raw: "" }; }
@@ -1705,6 +1941,8 @@
         t.currentAssistant = null;
         break;
       case "thinkingDelta":
+        // 兼容较旧后端：即使没有先收到 activityChanged，也按 thinking 渲染。
+        if (t.activity !== "thinking") { t.activity = "thinking"; }
         t.thinkingText += msg.delta;
         if (activeId === t.id) { syncStatus(); }
         break;
@@ -1764,6 +2002,10 @@
           renderAttachmentsFor(t);
           inputEl.focus();
         }
+        break;
+      case "setInput":
+        // fork 成功后由后端推送被分叉的 user 消息原文（clear 之后），可编辑后重发
+        applyInputText(t, msg.text);
         break;
       case "toolResultUpdate": {
         const entry = t.pendingToolCardsFull.get(msg.toolCallId);
@@ -1830,7 +2072,25 @@
         setPiReady(t, msg.ready === true);
         break;
       case "treeView":
+        // 兼容旧格式：整树一次性发送
         renderTree(msg.tree || [], msg.leafId || null, t.id);
+        break;
+      case "treeViewChunk":
+        if (!t.treeChunks || t.treeChunks.batchId !== msg.batchId) { t.treeChunks = { batchId: msg.batchId, parts: [], total: msg.total }; }
+        t.treeChunks.parts[msg.index] = msg.text;
+        break;
+      case "treeViewEnd":
+        if (t.treeChunks && t.treeChunks.batchId === msg.batchId) {
+          const parts = t.treeChunks.parts;
+          t.treeChunks = null;
+          try {
+            const json = parts.join("");
+            const data = JSON.parse(json);
+            renderTree(data.tree || [], data.leafId ?? msg.leafId ?? null, t.id);
+          } catch (e) {
+            addPlain(t, "system error", null, "对话树数据解析失败: " + (e && e.message ? e.message : String(e)));
+          }
+        }
         break;
     }
   });

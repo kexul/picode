@@ -21,6 +21,8 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     public static readonly viewType = "piChat.chatView";
 
     private view?: vscode.WebviewView;
+    /** webview 的 JS 是否已加载完成并建立消息监听（收到 ready 后为 true）。 */
+    private webviewReady = false;
     private statusBar?: vscode.StatusBarItem;
     private statusUpdateTimer?: ReturnType<typeof setTimeout>;
     private lastStatusInfo?: StatusInfo;
@@ -84,6 +86,7 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
             }
             this.tabs.clear();
             this.activeId = undefined;
+            this.webviewReady = false;
             this.disposeSpare();
             for (const s of this.workspaceSubs) { s.dispose(); }
             this.workspaceSubs = [];
@@ -99,8 +102,10 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     }
 
     /** webview 尚未就绪时不弹拾取器，直接视为取消。 */
-    protected showPicker(kind: string, items: any[], current?: string): Promise<any | undefined> {
+    protected async showPicker(kind: string, items: any[], current?: string): Promise<any | undefined> {
         if (!this.view) { return Promise.resolve(undefined); }
+        // 等 JS 就绪再推送 picker，否则消息会被静默丢弃（表现为点击无反应）。
+        await this.waitWebviewReady();
         return super.showPicker(kind, items, current);
     }
 
@@ -381,8 +386,9 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         return undefined;
     }
 
-    /** webview 就绪：推送当前已打开文档的符号集合。 */
+    /** webview 就绪：标记就绪（供推送前等待）+ 推送当前已打开文档的符号集合。 */
     protected onWebviewReady(): void {
+        this.webviewReady = true;
         void this.pushSymbolSet();
     }
 
@@ -633,12 +639,20 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         vscode.window.showInformationMessage("当前工作区没有找到 pi 历史会话。");
     }
 
-    private async ensureViewVisible(): Promise<void> {
-        await vscode.commands.executeCommand("piChat.openChat");
-        for (let i = 0; i < 60; i++) {
-            if (this.view) { return; }
+    /** 等待 webview JS 就绪（消息监听已建立）。超时后继续，避免死锁。 */
+    private async waitWebviewReady(timeoutMs = 10000): Promise<void> {
+        const deadline = Date.now() + timeoutMs;
+        while (!this.webviewReady) {
+            if (Date.now() > deadline) { return; }
             await new Promise((r) => setTimeout(r, 50));
         }
+    }
+
+    private async ensureViewVisible(): Promise<void> {
+        await vscode.commands.executeCommand("piChat.openChat");
+        // 视图已可见但 webview JS 可能尚未加载完：此时 postMessage 会被丢弃
+        // （ready 之前 webview 尚未建立消息监听）。等 JS 就绪后再发送。
+        await this.waitWebviewReady();
     }
 
     // forkAtEntryInNewTab 在 vscode 仍需聚焦侧栏（基类的 onFocusChat 已覆盖）。
