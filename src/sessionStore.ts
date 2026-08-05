@@ -1,21 +1,54 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import * as readline from "readline";
 
-export interface SessionInfo {
+/**
+ * 会话存储读取：历史列表的家族树 + 尾读预览。
+ *
+ * 设计：
+ *   - {@link buildSessionTree} 全量读每个会话文件第一行 header（仅几十毫秒），
+ *     按 parentSession 链构建家族树，按根 timestamp 倒序排列。
+ *   - {@link readTailPreview} 从文件末尾取 8KB，按角色拼最后几条消息成预览。
+ *   - {@link flattenTreeByFamilies} 按家族切片（不在家族中段截断），供首屏 / 加载更多。
+ */
+
+/** 单个会话的 header 信息（仅读文件第一行得到）。 */
+export interface SessionHeader {
     file: string; // 绝对路径
     id: string; // session uuid
-    mtime: number; // 修改时间（用于排序）
-    title: string; // 展示标题
-    messageCount: number;
-    name?: string; // 用户设置的会话名
-    userTexts: string[]; // user 消息预览（按时序；大文件仅前若干条）
-    topFile?: string; // 改动最多的文件 basename
-    topFileCount?: number; // 该文件的改动次数
-    totalFiles?: number; // 不重复的改动文件总数
-    truncated?: boolean; // 是否因超过扫描上限而早停（messageCount 为下限、userTexts 不含尾部）
+    timestamp: string; // 创建时间 ISO 字符串（根家族排序用）
+    parentSession?: string; // 父会话绝对路径（分支会话才有）
 }
+
+/** 家族树节点（按 parentSession 链构建）。 */
+export interface SessionTreeNode {
+    header: SessionHeader;
+    depth: number; // 0=根，1=一级分支…
+    children: SessionTreeNode[];
+}
+
+/** 扁平化后的会话条目（带缩进层级）。 */
+export interface FlatSessionEntry extends SessionHeader {
+    depth: number;
+}
+
+/** 渲染用的会话条目：header + 尾读预览。 */
+export interface SessionItem {
+    file: string;
+    id: string;
+    timestamp: string; // 创建时间
+    depth: number; // 缩进层级
+    preview: string; // 尾读预览（带“我：/AI：”前缀，已截断）
+}
+
+/** 每批加载的家族数（按家族切片，不在家族中段截断）。 */
+export const SESSION_FAMILY_PAGE_SIZE = 20;
+
+/** 尾读块大小：从文件末尾取的字节数。8KB 通常覆盖最后几条消息。 */
+const TAIL_BYTES = 8 * 1024;
+
+/** 预览目标字符数。 */
+const PREVIEW_CHARS = 150;
 
 /** pi 配置目录，遵循 PI_CODING_AGENT_DIR 环境变量。 */
 function agentDir(): string {
@@ -29,13 +62,21 @@ function sessionsRoot(): string {
     );
 }
 
-/** 将 cwd 转换为 pi 使用的目录名。
+/**
+ * 将 cwd 转换为 pi 使用的目录名。
  * pi 的规则：把路径中的分隔符（/ 、 \ 、 :）都替换为 `-`，两端加 `--`。
  * 例如 `D:\BackUp\pi_plugin` -> `--D--BackUp-pi_plugin--`（冒号和反斜杠都变 `-`，因此 `D:` 后成为 `--`）。
  */
 function encodeCwd(cwd: string): string {
     const dashed = cwd.replace(/[\\/:]/g, "-");
     return "--" + dashed + "--";
+}
+
+/** 路径归一化：统一分隔符、小写、去盘符，用于 parentSession（盘符大小写可能不一致）匹配。 */
+function normPath(p: string): string {
+    let s = p.replace(/\\/g, "/").toLowerCase();
+    s = s.replace(/^[a-z]:/, "");
+    return s;
 }
 
 /** 从一段 content（string 或 content blocks）提取纯文本。 */
@@ -52,223 +93,332 @@ function contentToText(content: unknown): string {
     return "";
 }
 
-/** 从 edit/write 工具调用的 arguments 中取出目标路径，返回 basename 用于标题统计。 */
-function toolCallBasename(args: any): string | null {
-    const raw =
-        typeof args?.path === "string"
-            ? args.path
-            : typeof args?.file_path === "string"
-              ? args.file_path
-              : null;
-    if (!raw) {
-        return null;
-    }
-    // 统一分隔符后取末段作 basename，避免 Windows/Unix 路径差异。
-    const parts = raw.replace(/\\/g, "/").split("/").filter(Boolean);
-    return parts.length > 0 ? parts[parts.length - 1] : null;
+/** ISO timestamp 比较（缺省/非法视为最早）。倒序时大的在前。 */
+function compareTs(a: string | undefined, b: string | undefined): number {
+    const ta = a ? Date.parse(a) : 0;
+    const tb = b ? Date.parse(b) : 0;
+    return (Number.isNaN(ta) ? 0 : ta) - (Number.isNaN(tb) ? 0 : tb);
 }
 
-/**
- * 读取指定 cwd 对应的所有 pi 会话，按最近修改时间倒序返回。
- * 只读取每个文件的少量行以获取标题，避免解析大文件全部内容。
- */
-export async function listSessions(cwd: string): Promise<SessionInfo[]> {
-    // 尝试多种盘符大小写（VSCode 在 Windows 上可能返回小写盘符）。
+/** 解析 cwd 对应的会话目录（处理盘符大小写差异）。 */
+async function resolveSessionDir(cwd: string): Promise<string | undefined> {
     const candidates = new Set<string>([cwd]);
     const m = cwd.match(/^([a-zA-Z])(:)/);
     if (m) {
         candidates.add(m[1].toUpperCase() + cwd.slice(1));
         candidates.add(m[1].toLowerCase() + cwd.slice(1));
     }
-
-    let dir: string | undefined;
     for (const c of candidates) {
         const d = path.join(sessionsRoot(), encodeCwd(c));
         try {
             await fs.promises.access(d);
-            dir = d;
-            break;
+            return d;
         } catch {
             /* ignore */
         }
     }
-    if (!dir) {
-        return [];
-    }
+    return undefined;
+}
 
+/** 读文件第一行并解析为 session header。失败返回 null。 */
+function readHeaderLine(file: string): Promise<SessionHeader | null> {
+    return new Promise((resolve) => {
+        let stream: fs.ReadStream;
+        try {
+            stream = fs.createReadStream(file, { encoding: "utf8" });
+        } catch {
+            resolve(null);
+            return;
+        }
+        let buf = "";
+        let done = false;
+        const finish = (v: SessionHeader | null) => {
+            if (done) { return; }
+            done = true;
+            resolve(v);
+        };
+        stream.on("data", (chunk) => {
+            const d = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+            buf += d;
+            const i = buf.indexOf("\n");
+            if (i >= 0) {
+                stream.destroy();
+                try {
+                    const o = JSON.parse(buf.slice(0, i));
+                    if (o && o.type === "session" && o.id) {
+                        finish({
+                            file,
+                            id: o.id,
+                            timestamp: o.timestamp || "",
+                            parentSession: o.parentSession || undefined,
+                        });
+                        return;
+                    }
+                } catch {
+                    /* fallthrough */
+                }
+                finish(null);
+            }
+        });
+        stream.on("end", () => {
+            // 文件可能只有一行（无换行）
+            if (done) { return; }
+            try {
+                const o = JSON.parse(buf);
+                if (o && o.type === "session" && o.id) {
+                    finish({
+                        file,
+                        id: o.id,
+                        timestamp: o.timestamp || "",
+                        parentSession: o.parentSession || undefined,
+                    });
+                    return;
+                }
+            } catch {
+                /* ignore */
+            }
+            finish(null);
+        });
+        stream.on("error", () => finish(null));
+    });
+}
+
+/**
+ * 全量读 cwd 下所有会话文件的第一行 header，构建家族树。
+ * 家族间按根 timestamp 倒序（最近创建的家族在前）；
+ * 家族内子会话按 timestamp 倒序（最近分叉的在前）。
+ */
+export async function buildSessionTree(cwd: string): Promise<SessionTreeNode[]> {
+    const dir = await resolveSessionDir(cwd);
+    if (!dir) { return []; }
     let files: string[];
     try {
         files = (await fs.promises.readdir(dir)).filter((f) => f.endsWith(".jsonl"));
     } catch {
         return [];
     }
-
-    // 并发流式解析各会话文件的头部信息，避免一次性把整个文件读进内存。
-    // stat 与解析均异步，避免阻塞事件循环。
-    const entries = await Promise.all(
-        files.map(async (f) => {
-            const full = path.join(dir, f);
-            try {
-                const stat = await fs.promises.stat(full);
-                const info = await parseSessionHead(full);
-                const top = info.fileStats[0];
-                return {
-                    file: full,
-                    id: info.id,
-                    mtime: stat.mtimeMs,
-                    title: buildTitle(info),
-                    messageCount: info.messageCount,
-                    name: info.name,
-                    userTexts: info.userTexts,
-                    topFile: top?.name,
-                    topFileCount: top?.count,
-                    totalFiles: info.totalEdits,
-                    truncated: info.truncated,
-                } as SessionInfo;
-            } catch {
-                return null;
-            }
-        })
+    // 并发读第一行 header
+    const headers = await Promise.all(
+        files.map((f) => readHeaderLine(path.join(dir, f)))
     );
-    const sessions = entries.filter((s): s is SessionInfo => s !== null);
+    const valid = headers.filter((h): h is SessionHeader => h !== null);
+    if (valid.length === 0) { return []; }
 
-    sessions.sort((a, b) => b.mtime - a.mtime);
-    return sessions;
-}
+    // 路径 -> header 映射（盘符大小写不敏感）
+    const byNormFile = new Map<string, SessionHeader>();
+    for (const h of valid) { byNormFile.set(normPath(h.file), h); }
 
-/** 生成展示标题：用户命名 > 改动最多的文件 > 首条 user 消息 > 空会话。 */
-function buildTitle(info: SessionHead): string {
-    if (info.name) {
-        return info.name;
-    }
-    const top = info.fileStats[0];
-    if (top) {
-        if (info.totalEdits > 1) {
-            return `${top.name}（改 ${top.count} 次，共 ${info.totalEdits} 个文件）`;
+    // 建立子列表：parentId -> children
+    const childrenOf = new Map<string, SessionHeader[]>();
+    const roots: SessionHeader[] = [];
+    for (const h of valid) {
+        let parent: SessionHeader | undefined;
+        if (h.parentSession) {
+            parent = byNormFile.get(normPath(h.parentSession));
         }
-        return `${top.name}（改 ${top.count} 次）`;
+        if (parent) {
+            const arr = childrenOf.get(parent.id) || [];
+            arr.push(h);
+            childrenOf.set(parent.id, arr);
+        } else {
+            roots.push(h);
+        }
     }
-    return info.firstUserText || "(空会话)";
-}
+    // 根按 timestamp 倒序
+    roots.sort((a, b) => compareTs(b.timestamp, a.timestamp));
 
-interface SessionHead {
-    id: string;
-    firstUserText: string;
-    userTexts: string[];
-    name?: string;
-    messageCount: number;
-    fileStats: { name: string; count: number }[]; // edit/write 改动文件按次数倒序
-    totalEdits: number; // 不重复文件数
-    truncated: boolean; // 是否达扫描上限早停
+    const build = (h: SessionHeader, depth: number): SessionTreeNode => {
+        const kids = (childrenOf.get(h.id) || [])
+            .slice()
+            .sort((a, b) => compareTs(b.timestamp, a.timestamp));
+        return { header: h, depth, children: kids.map((k) => build(k, depth + 1)) };
+    };
+    return roots.map((r) => build(r, 0));
 }
-
-/** 扫描字节上限：超过后早停，避免逐行读完数 MB 会话文件。 */
-const MAX_SCAN_BYTES = 256 * 1024;
 
 /**
- * 按行流式解析会话文件，提取标题所需的少量信息。
- * 使用 createReadStream + readline，并在累计读取字节超过 MAX_SCAN_BYTES 后
- * 早停（destroy 流），避免把整个会话文件读入内存。
- * 早停时 truncated=true，messageCount 仅为窗口内下限、userTexts 不含尾部消息。
+ * 把家族树扁平化成展示列表，按家族切片（不在家族中段截断）。
+ * limit <= 0 表示取到末尾。返回按“根在前、子孙缩进跟随”的先序遍历顺序。
  */
-function parseSessionHead(file: string): Promise<SessionHead> {
+export function flattenTreeByFamilies(
+    roots: SessionTreeNode[],
+    familyOffset: number,
+    familyLimit: number
+): FlatSessionEntry[] {
+    if (roots.length === 0) { return []; }
+    const start = Math.max(0, Math.min(familyOffset, roots.length));
+    const end = familyLimit <= 0 ? roots.length : Math.min(start + familyLimit, roots.length);
+    const out: FlatSessionEntry[] = [];
+    const walk = (node: SessionTreeNode): void => {
+        out.push({ ...node.header, depth: node.depth });
+        for (const c of node.children) { walk(c); }
+    };
+    for (const root of roots.slice(start, end)) { walk(root); }
+    return out;
+}
+
+/**
+ * 按是否分支选择预览读取方式：
+ * - 根会话：读开头（会话从什么问题开始，代表主题）
+ * - 分支会话：读末尾（这个分支最后聊到哪，区别于父和兄弟）
+ */
+export function readSessionPreview(
+    file: string,
+    isBranch: boolean
+): Promise<string> {
+    return isBranch ? readTailPreview(file) : readHeadPreview(file);
+}
+
+/**
+ * 从文件开头读前 {@link HEAD_BYTES} 字节，正序找前几条 user/assistant 消息，
+ * 按角色拼成预览（带“我：/AI：”前缀），截断到 {@link PREVIEW_CHARS} 字。
+ * 保证至少各一条 user / assistant 后再按配额拼。
+ */
+export function readHeadPreview(file: string): Promise<string> {
     return new Promise((resolve) => {
-        let id = "";
-        let firstUserText = "";
-        const userTexts: string[] = [];
-        let name: string | undefined;
-        let messageCount = 0;
-        const fileCounts = new Map<string, number>();
-        let truncated = false;
-
-        const empty: SessionHead = {
-            id, firstUserText, userTexts, name, messageCount,
-            fileStats: [], totalEdits: 0, truncated: false,
-        };
-
         let stream: fs.ReadStream;
         try {
             stream = fs.createReadStream(file, { encoding: "utf8" });
         } catch {
-            resolve(empty);
+            resolve("");
             return;
         }
-
+        let buf = "";
+        const lines: string[] = [];
         let bytesRead = 0;
         let stopped = false;
-        let settled = false;
-        const finish = () => {
-            if (settled) { return; }
-            settled = true;
-            const fileStats = Array.from(fileCounts.entries())
-                .map(([n, c]) => ({ name: n, count: c }))
-                .sort((a, b) => b.count - a.count);
-            resolve({
-                id, firstUserText, userTexts, name, messageCount,
-                fileStats, totalEdits: fileCounts.size, truncated,
-            });
-        };
-        const stopScan = () => {
+        const finish = (v: string) => {
             if (stopped) { return; }
             stopped = true;
-            truncated = true;
-            // 先 resolve（直接 finish），再 destroy 释放资源；
-            // 不要依赖 destroy → readline 'close' 来 resolve，避免 Promise 挂起。
-            finish();
-            try { stream.destroy(); } catch { /* ignore */ }
+            resolve(v);
         };
-
-        const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-
-        rl.on("line", (line: string) => {
-            if (stopped) { return; }
-            bytesRead += line.length + 1;
-            const t = line.trim();
-            if (t) {
-                let entry: any;
-                try {
-                    entry = JSON.parse(t);
-                } catch {
-                    /* skip */
-                }
-                if (entry) {
-                    if (entry.type === "session") {
-                        id = entry.id || "";
-                    } else if (entry.type === "session_info" && entry.name) {
-                        name = entry.name;
-                    } else if (entry.type === "message" && entry.message) {
-                        const role = entry.message.role;
-                        if (role === "user" || role === "assistant") {
-                            messageCount++;
-                        }
-                        if (role === "user") {
-                            const ut = contentToText(entry.message.content).replace(/\s+/g, " ");
-                            if (!firstUserText) {
-                                firstUserText = ut.slice(0, 80);
-                            }
-                            if (ut) {
-                                userTexts.push(ut.slice(0, 150));
-                            }
-                        }
-                        // 统计 edit/write 工具调用的目标文件，用于生成“改动最多的文件”标题。
-                        if (role === "assistant" && Array.isArray(entry.message.content)) {
-                            for (const c of entry.message.content) {
-                                if (c && c.type === "toolCall" && (c.name === "edit" || c.name === "write")) {
-                                    const bn = toolCallBasename(c.arguments);
-                                    if (bn) {
-                                        fileCounts.set(bn, (fileCounts.get(bn) || 0) + 1);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+        stream.on("data", (chunk) => {
+            const d = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+            buf += d;
+            let i: number;
+            while ((i = buf.indexOf("\n")) >= 0) {
+                lines.push(buf.slice(0, i));
+                buf = buf.slice(i + 1);
+                bytesRead += lines[lines.length - 1].length;
             }
-            if (bytesRead >= MAX_SCAN_BYTES) { stopScan(); }
+            if (bytesRead >= HEAD_BYTES) {
+                try { stream.destroy(); } catch { /* ignore */ }
+                finish(buildPreviewFromHead(lines));
+            }
         });
+        stream.on("end", () => {
+            if (buf) { lines.push(buf); }
+            finish(buildPreviewFromHead(lines));
+        });
+        stream.on("error", () => finish(""));
+    });
+}
 
-        rl.on("close", finish);
-        rl.on("error", finish);
-        stream.on("error", finish);
+/** 读文件开头取的字节数。 */
+const HEAD_BYTES = 16 * 1024;
+
+/** 正序从已读行中取前几条 user/assistant 文本，拼成预览。 */
+function buildPreviewFromHead(lines: string[]): string {
+    const cand: Array<{ role: "user" | "assistant"; text: string }> = [];
+    let sawUser = false;
+    let sawAssistant = false;
+    for (const line of lines) {
+        let e: any;
+        try { e = JSON.parse(line); } catch { continue; }
+        if (!e || e.type !== "message" || !e.message) { continue; }
+        const role = e.message.role;
+        if (role !== "user" && role !== "assistant") { continue; }
+        const t = contentToText(e.message.content).replace(/\s+/g, " ");
+        if (!t) { continue; }
+        cand.push({ role, text: t.slice(0, PREVIEW_CHARS) });
+        if (role === "user") { sawUser = true; } else { sawAssistant = true; }
+        if (sawUser && sawAssistant) { break; }
+    }
+    const perPart = (sawUser && sawAssistant)
+        ? Math.floor(PREVIEW_CHARS / 2)
+        : PREVIEW_CHARS;
+    const parts: string[] = [];
+    let chars = 0;
+    for (const c of cand) {
+        if (chars >= PREVIEW_CHARS) { break; }
+        const remain = Math.min(perPart, PREVIEW_CHARS - chars);
+        const t = c.text.slice(0, remain);
+        if (t) {
+            parts.push((c.role === "user" ? "我：" : "AI：") + t);
+            chars += t.length;
+        }
+    }
+    return parts.join(" ").slice(0, PREVIEW_CHARS);
+}
+
+/** 倒序从已读行中取最后几条 user/assistant 文本，拼成预览（最新的在后）。 */
+function buildPreviewFromTail(lines: string[]): string {
+    const cand: Array<{ role: "user" | "assistant"; text: string }> = [];
+    let sawUser = false;
+    let sawAssistant = false;
+    for (let i = lines.length - 1; i >= 0; i--) {
+        let e: any;
+        try { e = JSON.parse(lines[i]); } catch { continue; }
+        if (!e || e.type !== "message" || !e.message) { continue; }
+        const role = e.message.role;
+        if (role !== "user" && role !== "assistant") { continue; }
+        const t = contentToText(e.message.content).replace(/\s+/g, " ");
+        if (!t) { continue; }
+        cand.unshift({ role, text: t.slice(0, PREVIEW_CHARS) });
+        if (role === "user") { sawUser = true; } else { sawAssistant = true; }
+        if (sawUser && sawAssistant) { break; }
+    }
+    const perPart = (sawUser && sawAssistant)
+        ? Math.floor(PREVIEW_CHARS / 2)
+        : PREVIEW_CHARS;
+    const parts: string[] = [];
+    let chars = 0;
+    for (const c of cand) {
+        if (chars >= PREVIEW_CHARS) { break; }
+        const remain = Math.min(perPart, PREVIEW_CHARS - chars);
+        const t = c.text.slice(0, remain);
+        if (t) {
+            parts.push((c.role === "user" ? "我：" : "AI：") + t);
+            chars += t.length;
+        }
+    }
+    return parts.join(" ").slice(0, PREVIEW_CHARS);
+}
+
+/**
+ * 从文件末尾取 {@link TAIL_BYTES} 字节，倒序找最后几条 user/assistant 消息，
+ * 按角色拼成预览（带“我：/AI：”前缀），截断到 {@link PREVIEW_CHARS} 字。
+ * 分支会话的重放段在文件开头，尾读天然拿到分支独有的最新内容。
+ * 无 message 条目时返回空串（调用方按需过滤）。
+ */
+export function readTailPreview(file: string): Promise<string> {
+    return new Promise((resolve) => {
+        fs.stat(file, (err, st) => {
+            if (err || !st.isFile()) { resolve(""); return; }
+            const size = st.size;
+            if (size === 0) { resolve(""); return; }
+            const start = Math.max(0, size - TAIL_BYTES);
+            const stream = fs.createReadStream(file, {
+                encoding: "utf8",
+                start,
+                end: size - 1,
+            });
+            let buf = "";
+            const lines: string[] = [];
+            stream.on("data", (chunk) => {
+                const d = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+                buf += d;
+                let i: number;
+                while ((i = buf.indexOf("\n")) >= 0) {
+                    lines.push(buf.slice(0, i));
+                    buf = buf.slice(i + 1);
+                }
+            });
+            stream.on("end", () => {
+                if (buf) { lines.push(buf); }
+                resolve(buildPreviewFromTail(lines));
+            });
+            stream.on("error", () => resolve(""));
+        });
     });
 }

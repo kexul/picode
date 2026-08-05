@@ -35,6 +35,7 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     private static readonly KEY_NEW_SESSION_KEY = "piChat.newSessionKey";
     private static readonly KEY_TAB_SWITCH_KEY = "piChat.tabSwitchKey";
     private static readonly KEY_TOOL_DISPLAY = "piChat.toolDisplay";
+    private static readonly KEY_FONT_SIZE = "piChat.fontSize";
     private static readonly SEND_KEYS = ["enter", "shift+enter", "alt+enter", "ctrl+enter"] as const;
     private static readonly NEW_SESSION_KEYS = ["ctrl+alt+n", "ctrl+shift+n", "ctrl+t", "alt+n"] as const;
     private static readonly TAB_SWITCH_KEYS = ["ctrl+alt+arrows", "ctrl+alt+pgupdown", "alt+brackets", "ctrl+alt+brackets"] as const;
@@ -228,6 +229,10 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         const v = this.context.globalState.get<string>(ChatViewProvider.KEY_TOOL_DISPLAY, "compact");
         return v === "full" ? "full" : "compact";
     }
+    protected getFontSize(): string {
+        const v = this.context.globalState.get<string>(ChatViewProvider.KEY_FONT_SIZE, "14");
+        return /^\d+$/.test(v) ? v : "14";
+    }
 
     protected mutateViewOption(action: string, value?: string): void {
         if (action === "sendKey") {
@@ -259,6 +264,9 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
                       ? "compact"
                       : "full";
             this.context.globalState.update(ChatViewProvider.KEY_TOOL_DISPLAY, next);
+        } else if (action === "fontSize") {
+            const next = typeof value === "string" && /^\d+$/.test(value) ? value : "";
+            this.context.globalState.update(ChatViewProvider.KEY_FONT_SIZE, next);
         } else {
             this.context.globalState.update(ChatViewProvider.KEY_AUTO_LOAD_LAST, !this.getAutoLoadLast());
         }

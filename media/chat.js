@@ -180,7 +180,12 @@
   var notifyOnTurnEnd = true;
   var toolDisplayMode = "compact"; // compact=简洁标签 | full=TUI 风格卡片
   let openFiles = [];
+  function applyFontSize(px) {
+    var val = (typeof px === "string" && /^\d+$/.test(px)) ? px + "px" : "";
+    [document.documentElement, document.body].forEach(function (el) { el.style[val ? "setProperty" : "removeProperty"]("--vscode-font-size", val); });
+  }
   function applyViewOptions(opts) {
+    if (typeof opts.fontSize === "string") { applyFontSize(opts.fontSize); }
     if (typeof opts.sendKey === "string") { sendKeyCombo = opts.sendKey; }
     if (typeof opts.newSessionKey === "string") { newSessionKey = opts.newSessionKey; }
     if (typeof opts.tabSwitchKey === "string") { tabSwitchKey = opts.tabSwitchKey; }
@@ -529,13 +534,14 @@
     tag.className = "tool" + (toolCallId ? " running" : "");
     tag.insertAdjacentHTML("afterbegin", GEAR_SVG);
     tag.appendChild(document.createTextNode(" " + toolName));
-    if (argStr) {
-      const argsDiv = document.createElement("span");
-      argsDiv.className = "tool-args";
-      argsDiv.textContent = argStr;
-      tag.appendChild(argsDiv);
-      tag.addEventListener("click", () => tag.classList.toggle("expanded"));
-    }
+    // 简洁模式：标签默认只显示工具名；点击后展开为完整模式同款卡片（call+参数+结果）
+    tag._toolName = toolName;
+    tag._argStr = argStr;
+    tag._resultText = "";
+    tag._resultMeta = {};
+    tag._isError = false;
+    tag._done = !toolCallId; // 无 id 的静态调用无结果事件，按已完成处理
+    tag.addEventListener("click", () => toggleCompactToolCard(tag));
     tab.currentToolRow.appendChild(tag);
     if (toolCallId) { tab.pendingToolTags.set(toolCallId, tag); }
     scrollToBottom(tab);
@@ -645,10 +651,9 @@
     return wrap;
   }
 
-  /** 完整模式：每个工具调用一张卡片（对齐 TUI：整块背景，call+结果连续，状态用背景色）。 */
-  function addToolCard(tab, toolName, argStr, toolCallId) {
-    hideEmptyHint(tab);
-    tab.currentToolRow = null;
+  /** 构建工具卡片 DOM（call + 参数 + 空 result 区），不挂载、不注册计时器。
+   *  供 full 模式直接挂载与简洁模式点击展开复用，保证两模式卡片样式完全一致。 */
+  function buildToolCardDom(toolName, argStr) {
     const card = document.createElement("div");
     card.className = "tool-card running msg-enter";
     card._toolName = toolName;
@@ -684,6 +689,14 @@
     const resultEl = document.createElement("div"); resultEl.className = "tc-output";
     card.appendChild(resultEl);
     card._resultEl = resultEl;
+    return card;
+  }
+
+  /** 完整模式：每个工具调用一张卡片（对齐 TUI：整块背景，call+结果连续，状态用背景色）。 */
+  function addToolCard(tab, toolName, argStr, toolCallId) {
+    hideEmptyHint(tab);
+    tab.currentToolRow = null;
+    const card = buildToolCardDom(toolName, argStr);
     tab.paneEl.appendChild(card);
     scrollToBottom(tab);
     if (!toolCallId) {
@@ -701,7 +714,50 @@
         }
       }, 500);
     }
-    tab.pendingToolCardsFull.set(toolCallId, { card, resultEl, timer });
+    tab.pendingToolCardsFull.set(toolCallId, { card, resultEl: card._resultEl, timer });
+  }
+
+  /** 简洁模式：点击工具标签，展开为完整模式同款卡片（挂到 .tool-row 之后），再次点击收起。 */
+  function toggleCompactToolCard(tag) {
+    const row = tag.parentElement;
+    if (!row) { return; }
+    let card = tag._card;
+    if (!card) {
+      card = buildToolCardDom(tag._toolName, tag._argStr);
+      card.classList.remove("msg-enter"); // 点击展开无需入场动画，避免切换有延迟感
+      card.classList.add("tool-card-compact");
+      tag._card = card;
+      if (tag._done) {
+        // 结果已到（含历史回放）：直接定格完成态
+        card.classList.remove("running"); card.classList.add("done");
+        if (tag._isError) { card.classList.add("error"); }
+        setToolResult(card, tag._resultText || "", tag._resultMeta || {});
+      } else {
+        // 运行中：先渲染已收到的部分结果（若有），再启动耗时计时器（read 不计时，同 full 模式）
+        if (tag._resultText) { setToolResult(card, tag._resultText, tag._resultMeta || { isPartial: true }); }
+        if (tag._toolName !== "read") {
+          const dm = tag._resultMeta && typeof tag._resultMeta.durationMs === "number" ? tag._resultMeta.durationMs : null;
+          card._elapsedStart = dm != null ? Date.now() - dm : Date.now();
+          tag._timer = setInterval(() => {
+            if (card._elapsedStart && card.classList.contains("running") && card._elapsedEl) {
+              card._elapsedEl.textContent = "Elapsed " + formatDur(Date.now() - card._elapsedStart);
+            }
+          }, 500);
+        }
+      }
+      // 插到 .tool-row 之后（跳过已展开的同类卡片，保持多卡按点击顺序排列）
+      let anchor = row;
+      let next;
+      while ((next = anchor.nextElementSibling) && next.classList.contains("tool-card-compact")) { anchor = next; }
+      anchor.after(card);
+      tag.classList.add("expanded");
+    } else if (card.hidden) {
+      card.hidden = false;
+      tag.classList.add("expanded");
+    } else {
+      card.hidden = true;
+      tag.classList.remove("expanded");
+    }
   }
 
   /** 卡片结果区渲染：预览截断（尾部 N 行，同 TUI）+ 元信息 + 展开/收起。 */
@@ -1227,6 +1283,16 @@
     const day = Math.floor(hr / 24); if (day < 30) { return day + " 天前"; }
     return new Date(mtime).toLocaleDateString();
   }
+  /** ISO timestamp -> MM-DD HH:MM，用作历史会话行的行首错点。 */
+  function formatSessionTs(iso) {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) { return ""; }
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mi = String(d.getMinutes()).padStart(2, "0");
+    return mm + "-" + dd + " " + hh + ":" + mi;
+  }
   function pickerItemMatch(item, kind, q) {
     if (!q) { return true; }
     const hay = [];
@@ -1235,7 +1301,7 @@
     } else if (kind === "options") {
       hay.push(item.label || "", item.desc || "");
     } else {
-      hay.push(item.title || "", item.name || "", (item.userTexts || []).join(" "), item.topFile || "");
+      hay.push(item.preview || "", item.timestamp || "");
     }
     return hay.some((s) => s.toLowerCase().includes(q));
   }
@@ -1383,8 +1449,25 @@
     }
     pickerBody.innerHTML = "";
     if (st.filtered.length === 0) {
-      const empty = document.createElement("div"); empty.className = "pk-empty"; empty.textContent = q ? "没有匹配项。" : "列表为空。";
+      const empty = document.createElement("div"); empty.className = "pk-empty";
+      if (q) {
+        // 搜索无结果：history 分页下提示只搜了已加载范围，可加载更多再搜。
+        if (st.kind === "history" && st.historyLoadedFamilies !== null && st.historyTotalFamilies !== null && st.historyLoadedFamilies < st.historyTotalFamilies) {
+          empty.textContent = "在已加载 " + st.historyLoadedFamilies + " / " + st.historyTotalFamilies + " 个家族中未命中。";
+          empty.classList.add("pk-empty-paged");
+        } else if (st.kind === "history" && st.historyLoadedFamilies !== null && st.historyTotalFamilies !== null) {
+          empty.textContent = "在全部 " + st.historyTotalFamilies + " 个家族中未命中。";
+        } else {
+          empty.textContent = "没有匹配项。";
+        }
+      } else {
+        empty.textContent = "列表为空。";
+      }
       pickerBody.appendChild(empty);
+      // 有匹配项为空但仍有更多未加载时，同样给出加载更多入口。
+      if (st.kind === "history" && st.historyLoadedFamilies !== null && st.historyTotalFamilies !== null && st.historyLoadedFamilies < st.historyTotalFamilies) {
+        pickerBody.appendChild(buildHistoryLoadMoreBtn(st));
+      }
       if (st.kind === "model") { renderModelFooter(st); }
       return;
     }
@@ -1422,18 +1505,16 @@
       el.className = "pk-item" + (idx === st.sel ? " active" : "");
       if (st.kind === "history") {
         if (st.current && item.file === st.current) { el.classList.add("current"); }
-        const t = document.createElement("div"); t.className = "pk-title"; t.textContent = item.title || "(未命名会话)";
-        if (st.current && item.file === st.current) { const b = document.createElement("span"); b.className = "pk-badge"; b.textContent = "当前"; t.appendChild(b); }
-        el.appendChild(t);
-        const all = item.userTexts || [];
-        const count = item.truncated ? "≥" + item.messageCount + " 条" : item.messageCount + " 条";
-        const desc = count + " · " + pickerRelTime(item.mtime) + (item.topFile ? " · 改动 " + item.topFile + (item.topFileCount ? " x" + item.topFileCount : "") : "");
-        const d = document.createElement("div"); d.className = "pk-desc"; d.textContent = desc; el.appendChild(d);
-        if (all.length > 0) {
-          const preview = document.createElement("div"); preview.className = "pk-detail";
-          preview.textContent = "我：" + (all[0] || "(无内容)");
-          el.appendChild(preview);
-        }
+        // 缩进体现父子分支：depth 0 无额外缩进，子会话逐级缩进。
+        const depth = typeof item.depth === "number" ? item.depth : 0;
+        if (depth > 0) { el.style.paddingLeft = (12 + depth * 20) + "px"; }
+        // 单行：MM-DD HH:MM  预览字符（预览已带“我：/AI：”前缀）
+        const line = document.createElement("div"); line.className = "pk-history-line";
+        const ts = item.timestamp ? formatSessionTs(item.timestamp) : "";
+        if (ts) { const t = document.createElement("span"); t.className = "pk-history-ts"; t.textContent = ts; line.appendChild(t); }
+        const pv = item.preview || "(空)";
+        line.appendChild(document.createTextNode(" " + pv));
+        el.appendChild(line);
       } else if (st.kind === "options") {
         const t = document.createElement("div"); t.className = "pk-title";
         const chk = document.createElement("span"); chk.className = "pk-check" + (item.check === true ? " on" : "");
@@ -1447,7 +1528,27 @@
       el.addEventListener("click", () => { confirmPicker(idx); });
       pickerBody.appendChild(el);
     });
+    // history 分页：列表底部追加“加载更多”按钮。
+    if (st.kind === "history" && st.historyLoadedFamilies !== null && st.historyTotalFamilies !== null && st.historyLoadedFamilies < st.historyTotalFamilies) {
+      pickerBody.appendChild(buildHistoryLoadMoreBtn(st));
+    }
     if (st.kind === "model") { renderModelFooter(st); }
+  }
+  function buildHistoryLoadMoreBtn(st) {
+    const btn = document.createElement("button");
+    btn.className = "pk-loadmore secondary";
+    const remaining = (st.historyTotalFamilies || 0) - (st.historyLoadedFamilies || 0);
+    btn.textContent = st.historyLoading
+      ? "加载中…"
+      : "加载更多（剩余 " + remaining + " / 共 " + st.historyTotalFamilies + " 个家族）";
+    btn.disabled = !!st.historyLoading;
+    btn.addEventListener("click", () => {
+      if (st.historyLoading) { return; }
+      st.historyLoading = true;
+      renderPickerItems();
+      vscode.postMessage({ type: "historyLoadMore" });
+    });
+    return btn;
   }
   function renderPickerActive() {
     const st = pickerState; if (!st) { return; }
@@ -1502,6 +1603,10 @@
       draftModel: null,
       draftThinking: undefined,
       toggle,
+      // history 分页：已加载家族数 / 总家族数。缺省时按旧逻辑不分页。
+      historyTotalFamilies: typeof msg.totalFamilies === "number" ? msg.totalFamilies : null,
+      historyLoadedFamilies: typeof msg.loadedFamilies === "number" ? msg.loadedFamilies : null,
+      historyLoading: false,
     };
     const titleMap = { model: "切换模型", history: "会话历史", options: "显示选项" };
     pickerTitle.textContent = titleMap[kind] || "选择";
@@ -1846,6 +1951,26 @@
     }
     if (type === "viewOptions") { applyViewOptions(msg); return; }
     if (type === "picker") { renderPicker(msg); return; }
+    if (type === "historyPageAppend") {
+      const st = pickerState;
+      if (st && st.kind === "history") {
+        const more = Array.isArray(msg.items) ? msg.items : [];
+        st.items = st.items.concat(more);
+        st.historyLoadedFamilies = typeof msg.loadedFamilies === "number" ? msg.loadedFamilies : st.historyLoadedFamilies;
+        st.historyTotalFamilies = typeof msg.totalFamilies === "number" ? msg.totalFamilies : st.historyTotalFamilies;
+        st.historyLoading = false;
+        renderPickerItems();
+      }
+      return;
+    }
+    if (type === "historyPageEnd") {
+      const st = pickerState;
+      if (st && st.kind === "history") {
+        st.historyLoading = false;
+        renderPickerItems();
+      }
+      return;
+    }
     if (type === "openSettings") { openSettings(msg.tab); return; }
     if (type === "viewOptionItems") { viewOptionItems = Array.isArray(msg.items) ? msg.items : []; if (settingsActiveTab === "options") { renderViewOpts(); } return; }
     if (type === "focusInput") { setTimeout(function () { inputEl.focus(); }, 0); return; }
@@ -1988,6 +2113,7 @@
         t.thinkingText = "";
         t.currentToolRow = null;
         t.pendingToolCards.clear();
+        for (const tg of t.pendingToolTags.values()) { clearInterval(tg._timer); }
         t.pendingToolTags.clear();
         for (const e of t.pendingToolCardsFull.values()) { clearInterval(e.timer); }
         t.pendingToolCardsFull.clear();
@@ -2014,6 +2140,16 @@
           setToolResult(entry.card, msg.resultText, { isPartial: true, durationMs: msg.durationMs });
           scrollToBottom(t);
         }
+        // 简洁模式：缓存部分结果；若该标签已展开，实时刷新卡片
+        const tagEl = t.pendingToolTags.get(msg.toolCallId);
+        if (tagEl) {
+          tagEl._resultText = msg.resultText || "";
+          tagEl._resultMeta = { isPartial: true, durationMs: msg.durationMs };
+          if (tagEl._card) {
+            if (typeof msg.durationMs === "number") { tagEl._card._elapsedStart = Date.now() - msg.durationMs; }
+            setToolResult(tagEl._card, msg.resultText, tagEl._resultMeta);
+          }
+        }
         break;
       }
       case "toolResult": {
@@ -2036,6 +2172,18 @@
         if (tagEl) {
           tagEl.classList.remove("running");
           if (msg.isError) { tagEl.classList.add("error"); }
+          // 记录结果，供点击展开时渲染；若已展开，立即刷新卡片
+          tagEl._done = true;
+          tagEl._isError = !!msg.isError;
+          tagEl._resultText = msg.resultText || "";
+          tagEl._resultMeta = { isError: !!msg.isError, durationMs: msg.durationMs, truncation: msg.truncation || null };
+          if (tagEl._card) {
+            tagEl._card.classList.remove("running");
+            tagEl._card.classList.add("done");
+            if (msg.isError) { tagEl._card.classList.add("error"); }
+            clearInterval(tagEl._timer);
+            setToolResult(tagEl._card, msg.resultText, tagEl._resultMeta);
+          }
           t.pendingToolTags.delete(msg.toolCallId);
         }
         break;
@@ -2101,6 +2249,7 @@
     cancelFlush(st);
     if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); }
     for (const e of st.pendingToolCardsFull.values()) { clearInterval(e.timer); }
+    for (const tg of st.pendingToolTags.values()) { clearInterval(tg._timer); }
     st.paneEl.remove();
     tabs.delete(id);
     if (activeId === id) { activeId = null; syncJumpBottom(st); }
@@ -2143,6 +2292,7 @@
     }
     viewOptionItems.forEach((it) => {
       const row = document.createElement("div"); row.className = "vo-item";
+      if (it.kind === "slider") { renderSliderRow(row, it); viewOptsRoot.appendChild(row); return; }
       if (Array.isArray(it.options) && it.options.length) {
         // 按钮组：直接点选某个选项
         row.classList.add("vo-item-group");
@@ -2176,6 +2326,36 @@
       }
       viewOptsRoot.appendChild(row);
     });
+  }
+  function renderSliderRow(row, it) {
+    row.classList.add("vo-item-slider");
+    const txt = document.createElement("div"); txt.className = "vo-text";
+    const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "";
+    txt.appendChild(label);
+    if (it.desc) { const d = document.createElement("div"); d.className = "vo-desc"; d.textContent = it.desc; txt.appendChild(d); }
+    row.appendChild(txt);
+    const ctrl = document.createElement("div"); ctrl.className = "vo-slider";
+    const range = document.createElement("input");
+    range.type = "range";
+    range.min = String(it.min ?? 0); range.max = String(it.max ?? 100); range.step = String(it.step ?? 1);
+    // 当前值：有存值用存值；否则读 body 实际字号，让滑块初始位置反映现状
+    const cur = it.value && /^\d+$/.test(String(it.value))
+      ? Number(it.value)
+      : Math.round(parseFloat(getComputedStyle(document.body).fontSize) || 13);
+    range.value = String(cur);
+    const out = document.createElement("span"); out.className = "vo-slider-val"; out.textContent = cur + (it.unit || "");
+    range.addEventListener("input", () => { out.textContent = range.value + (it.unit || ""); });
+    range.addEventListener("change", () => {
+      vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: range.value });
+    });
+    ctrl.appendChild(range); ctrl.appendChild(out);
+    row.appendChild(ctrl);
+    const reset = document.createElement("button"); reset.type = "button"; reset.className = "vo-slider-reset";
+    reset.textContent = "跟随 VSCode";
+    reset.addEventListener("click", () => {
+      vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: "" });
+    });
+    row.appendChild(reset);
   }
 
   function openSettings(tab) {

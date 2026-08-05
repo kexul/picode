@@ -20,7 +20,14 @@ import * as path from "path";
 import { SessionRuntime, RuntimeHost, FileChange, ModelInfo, ModelChoice, StatusInfo, } from "./sessionRuntime";
 import { PiConfig } from "./sessionRuntime";
 import { PiClient } from "./piClient";
-import { listSessions } from "./sessionStore";
+import {
+    buildSessionTree,
+    flattenTreeByFamilies,
+    readSessionPreview,
+    SESSION_FAMILY_PAGE_SIZE,
+    SessionTreeNode,
+    SessionItem,
+} from "./sessionStore";
 import type { RpcSessionState } from "./piRpc";
 
 export abstract class ChatControllerBase implements RuntimeHost {
@@ -36,6 +43,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
     // ---- 拾取器状态 ----
     protected pickerResolve: ((v: any | undefined) => void) | null = null;
     protected pickerTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // ---- 历史拾取器分页状态 ----
+    /** 全量会话家族树（buildSessionTree 一次构建，加载更多时复用）。 */
+    protected historyTree: SessionTreeNode[] = [];
+    /** 已加载到第几个家族（加载更多时累加）。 */
+    protected historyFamilyOffset = 0;
 
     // ---- 备用 pi 进程池（热备，免冷启动）----
     /** 已就绪的备用 pi 进程（不绑定任何 tab）。 */
@@ -92,6 +105,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract getTabSwitchKey(): string;
     /** 工具调用显示："compact"（简洁标签）| "full"（TUI 风格卡片）。 */
     protected abstract getToolDisplay(): string;
+    /** 字号（px 字符串，如 "13"；空串表示跟随 VSCode 设置）。 */
+    protected abstract getFontSize(): string;
     /** 变更显示选项的存储（仅改存储，UI 推送由基类统一完成）。value 为按钮组点选的明确值。 */
     protected abstract mutateViewOption(action: string, value?: string): void;
 
@@ -185,6 +200,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             newSessionKey: this.getNewSessionKey(),
             tabSwitchKey: this.getTabSwitchKey(),
             toolDisplay: this.getToolDisplay(),
+            fontSize: this.getFontSize(),
         });
     }
 
@@ -192,6 +208,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected buildViewOptionItems(): Array<{
         label: string; desc: string; check: boolean | null; action: string;
         value?: string; options?: Array<{ value: string; label: string }>;
+        kind?: string; min?: number; max?: number; step?: number; unit?: string;
     }> {
         return [
             {
@@ -234,6 +251,15 @@ export abstract class ChatControllerBase implements RuntimeHost {
                     { value: "compact", label: "简洁" },
                     { value: "full", label: "完整" },
                 ],
+            },
+            {
+                action: "fontSize",
+                label: "字号",
+                desc: "拖动调整对话内容字号（默认跟随 VSCode 设置）",
+                check: null,
+                kind: "slider",
+                value: this.getFontSize(),
+                min: 11, max: 22, step: 1, unit: "px",
             },
         ];
     }
@@ -577,26 +603,118 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!cwd) { return; }
         this.autoLoadDone = true;
         if (!this.getAutoLoadLast()) { return; }
-        const sessions = await listSessions(cwd);
-        if (sessions.length === 0) { return; }
+        // 仅需最近一个根会话：buildSessionTree 后取首个根。
+        const tree = await buildSessionTree(cwd);
+        if (tree.length === 0) { return; }
         const rt = this.getActive();
-        if (rt) { await rt.loadSession(sessions[0].file); }
+        if (rt) { await rt.loadSession(tree[0].header.file); }
     }
 
     /** 弹出历史会话拾取器并加载选中项。 */
     public async showHistoryPicker(): Promise<void> {
         // 先确保视图可见（VSCode 下会打开侧栏面板）。否则在工作区从未跑过 pi、
-        // listSessions 返回空时会直接 return，面板根本不打开，表现为"点击无反应"。
+        // 会话列表为空时会直接 return，面板根本不打开，表现为“点击无反应”。
         await this.beforeHistoryPicker();
-        const sessions = await listSessions(this.getCwd());
-        if (sessions.length === 0) {
+        // 全量读 header 建家族树（~80ms），首屏只解析前 N 个家族的尾读预览；
+        // 其余点“加载更多”时按需解析，避免会话文件多时首屏卡顿。
+        const tree = await buildSessionTree(this.getCwd());
+        this.historyTree = tree;
+        this.historyFamilyOffset = 0;
+        if (tree.length === 0) {
+            this.onNoSessions();
+            return;
+        }
+        const first = await this.loadHistoryFamilyPage(0, SESSION_FAMILY_PAGE_SIZE);
+        if (first.items.length === 0) {
             this.onNoSessions();
             return;
         }
         const current = this.getActive()?.currentSessionPath;
-        const choice = await this.showPicker("history", sessions, current);
+        const choice = await this.showHistoryPickerPaged(
+            first.items,
+            tree.length,
+            this.historyFamilyOffset,
+            current
+        );
         if (!choice || typeof choice.file !== "string") { return; }
         await this.loadHistorySession(choice.file);
+    }
+
+    /**
+     * 加载家族树指定区间的尾读预览，过滤空预览会话（不显示）。
+     * 返回解析后的条目和实际加载到的家族数。
+     */
+    protected async loadHistoryFamilyPage(
+        offset: number,
+        limit: number
+    ): Promise<{ items: SessionItem[]; loadedFamilies: number }> {
+        const flat = flattenTreeByFamilies(this.historyTree, offset, limit);
+        const items = await Promise.all(
+            flat.map(async (e) => {
+                const preview = await readSessionPreview(e.file, !!e.parentSession);
+                return {
+                    file: e.file,
+                    id: e.id,
+                    timestamp: e.timestamp,
+                    depth: e.depth,
+                    preview,
+                } as SessionItem;
+            })
+        );
+        // 空预览会话不显示。
+        const nonEmpty = items.filter((it) => it.preview.length > 0);
+        const loadedFamilies = Math.min(offset + limit, this.historyTree.length) - offset;
+        return { items: nonEmpty, loadedFamilies };
+    }
+
+    /**
+     * 推送带分页信息的历史拾取器浮层并等待用户选择。
+     * 多带 totalFamilies / loadedFamilies 供前端渲染“加载更多”。
+     */
+    protected showHistoryPickerPaged(
+        items: SessionItem[],
+        totalFamilies: number,
+        loadedFamilies: number,
+        current?: string
+    ): Promise<any | undefined> {
+        this.postToWebview({
+            type: "picker",
+            kind: "history",
+            items,
+            current: current ?? null,
+            totalFamilies,
+            loadedFamilies,
+        });
+        if (this.pickerTimer) { clearTimeout(this.pickerTimer); }
+        return new Promise<any | undefined>((resolve) => {
+            this.pickerResolve = resolve;
+            this.pickerTimer = setTimeout(() => {
+                if (this.pickerResolve) {
+                    this.pickerResolve = null;
+                    this.pickerTimer = null;
+                    this.postToWebview({ type: "pickerCancel", kind: "history" });
+                    resolve(undefined);
+                }
+            }, 120000);
+        });
+    }
+
+    /** 响应 webview “加载更多历史”：解析下一批并追加分页条目。 */
+    public async loadMoreHistory(): Promise<void> {
+        if (this.historyTree.length === 0) { return; }
+        const offset = this.historyFamilyOffset;
+        if (offset >= this.historyTree.length) {
+            this.postToWebview({ type: "historyPageEnd", totalFamilies: this.historyTree.length });
+            return;
+        }
+        const result = await this.loadHistoryFamilyPage(offset, SESSION_FAMILY_PAGE_SIZE);
+        this.historyFamilyOffset += result.loadedFamilies;
+        this.postToWebview({
+            type: "historyPageAppend",
+            items: result.items,
+            totalFamilies: this.historyTree.length,
+            loadedFamilies: this.historyFamilyOffset,
+        });
     }
 
     // ========================================================================
@@ -658,6 +776,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 return;
             case "pickerCancel":
                 this.resolvePicker(undefined);
+                return;
+            case "historyLoadMore":
+                void this.loadMoreHistory();
                 return;
             case "requestViewOptionItems":
                 this.showOptionsPicker();
