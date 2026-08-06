@@ -550,7 +550,7 @@
   // ==================== 完整模式：TUI 风格工具卡片 ====================
   // 有定制调用行摘要的工具（与 pi TUI 一致），其余工具回退为加粗工具名 + pretty JSON 参数。
   const CUSTOM_CALL_TOOLS = new Set(["bash", "grep", "find", "ls", "read"]);
-  const TOOL_PREVIEW_LINES = 5; // 结果预览行数（同 TUI BASH_PREVIEW_LINES）
+  const TOOL_PREVIEW_LINES = 6; // 结果预览行数（同 TUI BASH_PREVIEW_LINES +1，因底部截断标记更紧凑）
 
   function prettyJson(argStr) {
     try { return JSON.stringify(JSON.parse(argStr), null, 2); }
@@ -797,17 +797,22 @@
       if (card._resultExpanded) { pre.style.maxHeight = "none"; }
       resultEl.appendChild(pre);
     }
+    // 底部行容器：耗时在左、截断标记在右（左右两个固定容器，不依赖 DOM 顺序）。
+    const footer = document.createElement("div"); footer.className = "tc-footer";
+    const fLeft = document.createElement("span"); fLeft.className = "tc-footer-left";
+    const fRight = document.createElement("span"); fRight.className = "tc-footer-right";
     if (hidden > 0) {
-      const hint = document.createElement("div");
-      hint.className = "tc-trunc-hint";
-      hint.textContent = (isBash ? "… (" + hidden + " 行更早内容" : "… (" + hidden + " 行被截断") + " · 点击展开完整结果)";
-      hint.addEventListener("click", (e) => { e.stopPropagation(); card._resultExpanded = true; renderToolResultInner(card); });
-      resultEl.appendChild(hint);
+      const mark = document.createElement("span");
+      mark.className = "tc-trunc-mark";
+      mark.textContent = "…";
+      mark.title = (isBash ? hidden + " 行更早内容" : hidden + " 行被截断") + " · 点击展开完整结果";
+      mark.addEventListener("click", (e) => { e.stopPropagation(); card._resultExpanded = true; renderToolResultInner(card); });
+      fRight.appendChild(mark);
     } else if (card._resultExpanded && lines.length > maxLines) {
-      const fold = document.createElement("div");
-      fold.className = "tc-trunc-hint"; fold.textContent = "收起";
+      const fold = document.createElement("span");
+      fold.className = "tc-trunc-mark"; fold.textContent = "收起";
       fold.addEventListener("click", (e) => { e.stopPropagation(); card._resultExpanded = false; renderToolResultInner(card); });
-      resultEl.appendChild(fold);
+      fRight.appendChild(fold);
     }
     // 截断警告（对齐 TUI：[Showing lines X-Y of Z. Full output: path] / [Truncated: ...]）
     const tr = meta.truncation;
@@ -835,14 +840,17 @@
     const isPartial = meta.isPartial;
     const durationMs = meta.durationMs;
     if (!isRead && isPartial && (typeof durationMs === "number" || card._elapsedStart)) {
-      const t = document.createElement("div"); t.className = "tc-meta";
+      const t = document.createElement("span"); t.className = "tc-meta";
       t.textContent = "Elapsed " + formatDur(typeof durationMs === "number" ? durationMs : Date.now() - card._elapsedStart);
       card._elapsedEl = t;
-      resultEl.appendChild(t);
+      fLeft.appendChild(t);
     } else if (!isPartial && typeof durationMs === "number" && !isNaN(durationMs)) {
-      const t = document.createElement("div"); t.className = "tc-meta";
+      const t = document.createElement("span"); t.className = "tc-meta";
       t.textContent = "Took " + formatDur(durationMs);
-      resultEl.appendChild(t);
+      fLeft.appendChild(t);
+    }
+    if (fLeft.childNodes.length || fRight.childNodes.length) {
+      footer.appendChild(fLeft); footer.appendChild(fRight); resultEl.appendChild(footer);
     }
     if (meta.isError && !text) {
       const err = document.createElement("div"); err.className = "tc-error"; err.textContent = "工具执行失败";

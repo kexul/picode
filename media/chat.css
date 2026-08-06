@@ -96,7 +96,11 @@
   .tool-card .tc-trunc-hint { margin-top: 4px; font-size: 0.8em; opacity: 0.75; cursor: pointer; color: var(--vscode-descriptionForeground); }
   .tool-card .tc-trunc-hint:hover { opacity: 1; text-decoration: underline; }
   .tool-card .tc-warn { margin-top: 4px; font-size: 0.8em; color: var(--vscode-editorWarning-foreground, #cca700); white-space: pre-wrap; }
-  .tool-card .tc-meta { margin-top: 4px; font-size: 0.8em; color: var(--vscode-descriptionForeground); white-space: pre-wrap; }
+  .tool-card .tc-footer { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 4px; }
+  .tool-card .tc-footer-left, .tool-card .tc-footer-right { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+  .tool-card .tc-trunc-mark { font-size: 0.95em; opacity: 0.7; cursor: pointer; color: var(--vscode-descriptionForeground); }
+  .tool-card .tc-trunc-mark:hover { opacity: 1; text-decoration: underline; }
+  .tool-card .tc-meta { font-size: 0.8em; color: var(--vscode-descriptionForeground); }
   .tool-card .tc-error { margin-top: 4px; font-size: 0.85em; color: var(--vscode-errorForeground, #f48771); }
   .role { font-weight: bold; font-size: 0.8em; opacity: 0.7; margin-bottom: 2px; }
   /* markdown */
