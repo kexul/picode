@@ -57,6 +57,12 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     context.subscriptions.push(
+        vscode.commands.registerCommand("piChat.exportConversation", () => {
+            void provider.exportConversation();
+        })
+    );
+
+    context.subscriptions.push(
         vscode.commands.registerCommand("piChat.openSettings", () => {
             provider.openSettings();
         })

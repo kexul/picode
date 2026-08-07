@@ -172,6 +172,7 @@
   function renderMarkdown(source) { ensureMarkedHighlight(); ensureFileLink(); return marked.parse(source, { breaks: true, gfm: true }); }
 
   const GEAR_SVG = '<span class="tool-icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M22.83,10.09 A11 11 0 0 1 22.83,13.91 L20.37,13.48 A8.5 8.5 0 0 1 18.96,16.88 A8.5 8.5 0 0 1 21.01,18.31 A11 11 0 0 1 18.31,21.01 L16.88,18.96 A8.5 8.5 0 0 1 13.48,20.37 A8.5 8.5 0 0 1 13.91,22.83 A11 11 0 0 1 10.09,22.83 L10.52,20.37 A8.5 8.5 0 0 1 7.12,18.96 A8.5 8.5 0 0 1 5.69,21.01 A11 11 0 0 1 2.99,18.31 L5.04,16.88 A8.5 8.5 0 0 1 3.63,13.48 A8.5 8.5 0 0 1 1.17,13.91 A11 11 0 0 1 1.17,10.09 L3.63,10.52 A8.5 8.5 0 0 1 5.04,7.12 A8.5 8.5 0 0 1 2.99,5.69 A11 11 0 0 1 5.69,2.99 L7.12,5.04 A8.5 8.5 0 0 1 10.52,3.63 A8.5 8.5 0 0 1 10.09,1.17 A11 11 0 0 1 13.91,1.17 L13.48,3.63 A8.5 8.5 0 0 1 16.88,5.04 A8.5 8.5 0 0 1 18.31,2.99 A11 11 0 0 1 21.01,5.69 L18.96,7.12 A8.5 8.5 0 0 1 20.37,10.52 Z"/><circle cx="12" cy="12" r="3.2"/></svg></span>';
+  const COPY_SVG = '<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
 
   // ==================== 全局视图选项 ====================
   var sendKeyCombo = "enter";
@@ -487,12 +488,22 @@
     return body;
   }
 
+  async function copyToClipboard(text) {
+    try { await navigator.clipboard.writeText(text); return; } catch {}
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); } catch {}
+    ta.remove();
+  }
+
   function addPlain(tab, cls, role, text, entryId) {
     hideEmptyHint(tab);
     tab.currentToolRow = null;
     const div = document.createElement("div");
     div.className = "msg " + cls + " msg-enter";
     if (entryId) { div.dataset.entryId = entryId; }
+    if (cls === "user") { div.dataset.raw = text || ""; }
     const content = text || "";
     if (cls === "user" && shouldFoldText(content)) {
       div.appendChild(makeLongTextBody(content));
@@ -501,10 +512,24 @@
       body.textContent = content;
       div.appendChild(body);
     }
+    if (cls === "assistant") { attachCopyBtn(div, () => content); }
     tab.paneEl.appendChild(div);
     scrollToBottom(tab);
     return div.firstElementChild;
   }
+  /** 给消息气泡右下角挂一个复制按钮（hover 时显示），getText 返回要复制的原文。 */
+  function attachCopyBtn(div, getText) {
+    const btn = document.createElement("button");
+    btn.className = "msg-copy"; btn.type = "button"; btn.title = "复制回复";
+    btn.innerHTML = COPY_SVG;
+    btn.addEventListener("click", async () => {
+      await copyToClipboard(getText() || "");
+      btn.classList.add("copied"); btn.title = "已复制";
+      setTimeout(() => { btn.classList.remove("copied"); btn.title = "复制回复"; }, 1500);
+    });
+    div.appendChild(btn);
+  }
+
   function addMarkdown(tab, raw) {
     hideEmptyHint(tab);
     tab.currentToolRow = null;
@@ -514,6 +539,7 @@
     body.className = "md";
     body.dataset.raw = raw || "";
     body.innerHTML = renderMarkdown(raw || "");
+    attachCopyBtn(div, () => body.dataset.raw || "");
     div.appendChild(body);
     tab.paneEl.appendChild(div);
     scrollToBottom(tab);
@@ -1309,7 +1335,7 @@
     } else if (kind === "options") {
       hay.push(item.label || "", item.desc || "");
     } else {
-      hay.push(item.preview || "", item.timestamp || "");
+      hay.push(item.userPreview || "", item.assistantPreview || "", item.timestamp || "");
     }
     return hay.some((s) => s.toLowerCase().includes(q));
   }
@@ -1512,17 +1538,42 @@
       const el = document.createElement("div");
       el.className = "pk-item" + (idx === st.sel ? " active" : "");
       if (st.kind === "history") {
+        el.classList.add("pk-history");
         if (st.current && item.file === st.current) { el.classList.add("current"); }
         // 缩进体现父子分支：depth 0 无额外缩进，子会话逐级缩进。
         const depth = typeof item.depth === "number" ? item.depth : 0;
         if (depth > 0) { el.style.paddingLeft = (12 + depth * 20) + "px"; }
-        // 单行：MM-DD HH:MM  预览字符（预览已带“我：/AI：”前缀）
-        const line = document.createElement("div"); line.className = "pk-history-line";
+        // 元信息行：时间 + 分支标记
+        const meta = document.createElement("div"); meta.className = "pk-history-meta";
         const ts = item.timestamp ? formatSessionTs(item.timestamp) : "";
-        if (ts) { const t = document.createElement("span"); t.className = "pk-history-ts"; t.textContent = ts; line.appendChild(t); }
-        const pv = item.preview || "(空)";
-        line.appendChild(document.createTextNode(" " + pv));
-        el.appendChild(line);
+        if (ts) { const t = document.createElement("span"); t.className = "pk-history-ts"; t.textContent = ts; meta.appendChild(t); }
+        if (depth > 0) {
+          const br = document.createElement("span"); br.className = "pk-history-branch"; br.textContent = "分支";
+          meta.appendChild(br);
+        }
+        el.appendChild(meta);
+        // 我：用户提问（主题，最多两行）
+        const u = (item.userPreview || "").trim();
+        if (u) {
+          const ur = document.createElement("div"); ur.className = "pk-history-user";
+          const ul = document.createElement("span"); ul.className = "pk-history-role"; ul.textContent = "我";
+          const ut = document.createElement("span"); ut.className = "pk-history-text"; ut.textContent = u;
+          ur.appendChild(ul); ur.appendChild(ut);
+          el.appendChild(ur);
+        }
+        // AI：摘要（一行）
+        const a = (item.assistantPreview || "").trim();
+        if (a) {
+          const ar = document.createElement("div"); ar.className = "pk-history-ai";
+          const al = document.createElement("span"); al.className = "pk-history-role pk-history-role-ai"; al.textContent = "AI";
+          const at = document.createElement("span"); at.className = "pk-history-text"; at.textContent = a;
+          ar.appendChild(al); ar.appendChild(at);
+          el.appendChild(ar);
+        }
+        if (!u && !a) {
+          const em = document.createElement("div"); em.className = "pk-history-empty"; em.textContent = "(空)";
+          el.appendChild(em);
+        }
       } else if (st.kind === "options") {
         const t = document.createElement("div"); t.className = "pk-title";
         const chk = document.createElement("span"); chk.className = "pk-check" + (item.check === true ? " on" : "");
@@ -1881,6 +1932,55 @@
   }
   function setPiReady(tab, on, force) { tab.piReady = on; if (activeId === tab.id) { updateSendState(); syncStatus(); } renderTabBar(); }
 
+  // ==================== 会话导出 ====================
+  function exportActiveConversation(tabId, requestId) {
+    const tab = tabs.get(tabId);
+    if (!tab) { return; }
+    // 复制当前 tab，避免导出操作改变正在进行的流式渲染状态；同时把所有
+    // markdown 节点按原始文本重绘，确保导出时不会遗漏最后一小段流式内容。
+    const liveIndex = tab.currentAssistant
+      ? Array.from(tab.paneEl.querySelectorAll(".md")).indexOf(tab.currentAssistant.el)
+      : -1;
+    const liveRaw = tab.currentAssistant ? (tab.currentAssistant.raw || "") : "";
+    const pane = tab.paneEl.cloneNode(true);
+    pane.querySelectorAll(".msg-copy").forEach((el) => el.remove());
+    const markdownEls = pane.querySelectorAll(".md[data-raw]");
+    markdownEls.forEach((el, index) => {
+      const raw = index === liveIndex ? liveRaw : (el.dataset.raw || "");
+      el.innerHTML = renderMarkdown(raw);
+      el.dataset.raw = raw;
+    });
+    const style = Array.from(document.querySelectorAll("style"))
+      .map((el) => el.textContent || "").join("\n");
+    // 独立 HTML 没有 VS Code webview 注入的主题变量；用户气泡的最终颜色
+    // 直接写入导出 CSS，避免 color-mix() 因变量缺失而变成透明。
+    const vars = [];
+    const userSource = tab.paneEl.querySelector(".msg.user");
+    const userComputed = userSource ? getComputedStyle(userSource) : null;
+    const userBackground = userComputed?.backgroundColor || "rgba(90, 150, 220, 0.18)";
+    const userColor = userComputed?.color || "inherit";
+    const rootStyle = getComputedStyle(document.documentElement);
+    const names = new Set((style.match(/--vscode-[\\w-]+/g) || []));
+    names.forEach((name) => {
+      const value = rootStyle.getPropertyValue(name).trim();
+      if (value) { vars.push(`${name}:${value};`); }
+    });
+    const title = String(tab.title || "Pi 会话").replace(/[<>&\"']/g, "");
+    const exportCss = `${style}\n:root{${vars.join("")}}\n` +
+      `html,body{height:auto;min-height:100%;margin:0}` +
+      `body{display:block;background:var(--vscode-editor-background,#fff);color:var(--vscode-foreground,#222)}` +
+      `#messages{display:block;min-height:0}` +
+      `.tab-pane{position:static!important;inset:auto!important;visibility:visible!important;pointer-events:auto!important;overflow:visible!important;padding:16px 8px 24px}` +
+      `.msg.user{background:${userBackground}!important;color:${userColor}!important}` +
+      `.msg.user,.msg.user>div{white-space:pre-wrap!important;overflow-wrap:anywhere;word-break:break-word}` +
+      `.msg.user .long-msg{white-space:normal!important}` +
+      `.msg.user .long-msg pre{white-space:pre-wrap!important}` +
+      `.msg-enter{animation:none!important}` +
+      `#jumpBottom,#status,#changedFiles,#inputArea,#tabBar,#treeOverlay,#pickerOverlay,#settingsOverlay{display:none!important}`;
+    const html = `<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${exportCss}</style></head><body><main id="messages">${pane.outerHTML}</main></body></html>`;
+    vscode.postMessage({ type: "exportConversationResult", tabId, requestId, html });
+  }
+
   // ==================== 来自扩展的消息 ====================
   window.addEventListener("message", (event) => {
     const msg = event.data;
@@ -1958,6 +2058,10 @@
       return;
     }
     if (type === "viewOptions") { applyViewOptions(msg); return; }
+    if (type === "exportConversationRequest") {
+      exportActiveConversation(msg.tabId, msg.requestId);
+      return;
+    }
     if (type === "picker") { renderPicker(msg); return; }
     if (type === "historyPageAppend") {
       const st = pickerState;

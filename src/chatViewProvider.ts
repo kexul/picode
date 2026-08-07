@@ -29,6 +29,7 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     // LSP 符号树缓存：已打开文档 → {version, DocumentSymbol[]}
     private symbolTreeCache = new Map<string, { version: number; symbols: vscode.DocumentSymbol[] }>();
     private symbolSetTimer?: ReturnType<typeof setTimeout>;
+    private exportRequestSeq = 0;
     private workspaceSubs: vscode.Disposable[] = [];
     private static readonly KEY_AUTO_LOAD_LAST = "piChat.autoLoadLastSession";
     private static readonly KEY_SEND_KEY = "piChat.sendKey";
@@ -64,7 +65,13 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
             this.context.subscriptions.push(this.statusBar);
         }
 
-        webviewView.webview.onDidReceiveMessage((msg) => this.processMessage(msg));
+        webviewView.webview.onDidReceiveMessage((msg) => {
+            if (msg?.type === "exportConversationResult" && typeof msg.tabId === "string" && typeof msg.html === "string") {
+                void this.saveExportedConversation(msg.tabId, msg.html);
+                return;
+            }
+            this.processMessage(msg);
+        });
 
         // 工作区文件变化：失效/刷新符号树缓存
         if (this.workspaceSubs.length === 0) {
@@ -297,6 +304,33 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
             }
         }
         return false;
+    }
+
+    /** 让 webview 把当前 tab 的最终 DOM 快照交给宿主保存为独立 HTML。 */
+    public async exportConversation(): Promise<void> {
+        await this.ensureViewVisible();
+        const rt = this.getActive();
+        if (!rt) { return; }
+        const requestId = `export-${++this.exportRequestSeq}`;
+        this.postToWebview({ type: "exportConversationRequest", tabId: rt.id, requestId });
+    }
+
+    private async saveExportedConversation(tabId: string, html: string): Promise<void> {
+        if (!html || !this.tabs.has(tabId)) { return; }
+        const rt = this.tabs.get(tabId);
+        const safeTitle = (rt?.title || "pi-会话").replace(/[\\/:*?"<>|]+/g, "-").trim() || "pi-会话";
+        const uri = await vscode.window.showSaveDialog({
+            defaultUri: vscode.Uri.file(path.join(this.getCwd(), `${safeTitle}.html`)),
+            filters: { "HTML 文件": ["html"], "所有文件": ["*"] },
+            saveLabel: "导出会话",
+        });
+        if (!uri) { return; }
+        try {
+            await fs.promises.writeFile(uri.fsPath, html, "utf8");
+            vscode.window.showInformationMessage(`会话已导出：${path.basename(uri.fsPath)}`);
+        } catch (e: any) {
+            vscode.window.showErrorMessage(`导出会话失败：${e?.message || String(e)}`);
+        }
     }
 
     // ---- 文件列表 / 文件打开（listFiles / openFile）----

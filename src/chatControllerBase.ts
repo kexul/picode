@@ -651,18 +651,21 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const flat = flattenTreeByFamilies(this.historyTree, offset, limit);
         const items = await Promise.all(
             flat.map(async (e) => {
-                const preview = await readSessionPreview(e.file, !!e.parentSession);
+                const p = await readSessionPreview(e.file, !!e.parentSession, e.timestamp);
                 return {
                     file: e.file,
                     id: e.id,
                     timestamp: e.timestamp,
                     depth: e.depth,
-                    preview,
+                    userPreview: p.user,
+                    assistantPreview: p.assistant,
                 } as SessionItem;
             })
         );
-        // 空预览会话不显示。
-        const nonEmpty = items.filter((it) => it.preview.length > 0);
+        // 空 pair 会话不显示。
+        const nonEmpty = items.filter(
+            (it) => it.userPreview.length > 0 || it.assistantPreview.length > 0
+        );
         const loadedFamilies = Math.min(offset + limit, this.historyTree.length) - offset;
         return { items: nonEmpty, loadedFamilies };
     }

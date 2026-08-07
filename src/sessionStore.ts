@@ -8,7 +8,8 @@ import * as os from "os";
  * 设计：
  *   - {@link buildSessionTree} 全量读每个会话文件第一行 header（仅几十毫秒），
  *     按 parentSession 链构建家族树，按根 timestamp 倒序排列。
- *   - {@link readTailPreview} 从文件末尾取 8KB，按角色拼最后几条消息成预览。
+ *   - {@link readBranchForkPreview} 分支会话定位 fork 点（重放段后首条新消息）取预览；
+ *     纯重放分支退回 {@link readTailPreview}（末尾 8KB = fork 上下文）。
  *   - {@link flattenTreeByFamilies} 按家族切片（不在家族中段截断），供首屏 / 加载更多。
  */
 
@@ -32,13 +33,16 @@ export interface FlatSessionEntry extends SessionHeader {
     depth: number;
 }
 
-/** 渲染用的会话条目：header + 尾读预览。 */
+/** 渲染用的会话条目：header + 角色拆分的预览（前端分行渲染）。 */
 export interface SessionItem {
     file: string;
     id: string;
     timestamp: string; // 创建时间
     depth: number; // 缩进层级
-    preview: string; // 尾读预览（带“我：/AI：”前缀，已截断）
+    /** 第一条 / 最后一条 user 文本（无前缀，已截断）——会话主题锚点。 */
+    userPreview: string;
+    /** 配对的 assistant 文本（无前缀，已截断）——会话摘要佐证。 */
+    assistantPreview: string;
 }
 
 /** 每批加载的家族数（按家族切片，不在家族中段截断）。 */
@@ -47,8 +51,17 @@ export const SESSION_FAMILY_PAGE_SIZE = 20;
 /** 尾读块大小：从文件末尾取的字节数。8KB 通常覆盖最后几条消息。 */
 const TAIL_BYTES = 8 * 1024;
 
-/** 预览目标字符数。 */
-const PREVIEW_CHARS = 150;
+/** 预览角色拆分结果。前端把 user / assistant 分别渲染成两行，便于扫读会话主题。 */
+export interface PreviewPair {
+    user: string;
+    assistant: string;
+}
+/** user 预览上限（提问即主题，给更宽以利扫读）。 */
+const USER_PREVIEW_CHARS = 160;
+/** assistant 预览上限（摘要佐证，略短）。 */
+const ASSISTANT_PREVIEW_CHARS = 110;
+/** 空 pair：无消息或读取失败时返回，前端按需过滤。 */
+const EMPTY_PREVIEW: PreviewPair = { user: "", assistant: "" };
 
 /** pi 配置目录，遵循 PI_CODING_AGENT_DIR 环境变量。 */
 function agentDir(): string {
@@ -260,34 +273,221 @@ export function flattenTreeByFamilies(
 /**
  * 按是否分支选择预览读取方式：
  * - 根会话：读开头（会话从什么问题开始，代表主题）
- * - 分支会话：读末尾（这个分支最后聊到哪，区别于父和兄弟）
+ * - 分支会话：读 fork 点（重放段后首条新 user/assistant = 分支自己的开头，
+ *   能看出从父会话何处分出去后问了什么）；纯重放分支（无新消息）退回尾读
+ *   （末尾几条 = fork 上下文）。headerTimestamp 为分支创建时间（header.timestamp）。
  */
 export function readSessionPreview(
     file: string,
-    isBranch: boolean
-): Promise<string> {
-    return isBranch ? readTailPreview(file) : readHeadPreview(file);
+    isBranch: boolean,
+    headerTimestamp?: string
+): Promise<PreviewPair> {
+    if (isBranch) {
+        return readBranchForkPreview(file, headerTimestamp || "");
+    }
+    return readHeadPreview(file);
+}
+
+/** 二分探测时单次读取的字节数。 */
+const PROBE_CHUNK = 8 * 1024;
+/** 从 fork 点向后读取的字节数：足以覆盖首条 user/assistant 往返。 */
+const FORK_POINT_BYTES = 64 * 1024;
+
+/**
+ * 分支会话预览：定位 fork 点（重放段后第一条 timestamp >= 创建时间的 message），
+ * 取其后首条 user/assistant（分支自己的开头）。分支文件里重放消息的时间戳
+ * 都早于分支创建时间、新消息 >= 创建时间且单调，故按时间戳阈值判定边界。
+ * 纯重放分支（无新消息）退回 {@link readTailPreview}（末尾几条 = fork 上下文）。
+ */
+export function readBranchForkPreview(
+    file: string,
+    headerTimestamp: string
+): Promise<PreviewPair> {
+    return new Promise((resolve) => {
+        fs.stat(file, (err, st) => {
+            if (err || !st.isFile()) { resolve(EMPTY_PREVIEW); return; }
+            const size = st.size;
+            if (size === 0 || !headerTimestamp) {
+                resolve(readTailPreview(file));
+                return;
+            }
+            findForkOffset(file, headerTimestamp, size).then(
+                (off) => {
+                    if (off < 0) { resolve(readTailPreview(file)); return; }
+                    resolve(streamPreviewFromOffset(file, off, size));
+                },
+                () => resolve(readTailPreview(file))
+            );
+        });
+    });
+}
+
+/** 从字节偏移 offset（某 message 行起始）处读一块，按 fromHead 取首条 user/assistant。 */
+function streamPreviewFromOffset(
+    file: string,
+    offset: number,
+    size: number
+): Promise<PreviewPair> {
+    return new Promise((resolve) => {
+        const end = Math.min(offset + FORK_POINT_BYTES, size) - 1;
+        let stream: fs.ReadStream;
+        try {
+            stream = fs.createReadStream(file, { encoding: "utf8", start: offset, end });
+        } catch {
+            resolve(EMPTY_PREVIEW);
+            return;
+        }
+        let buf = "";
+        const lines: string[] = [];
+        stream.on("data", (chunk) => {
+            const d = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+            buf += d;
+            let i: number;
+            while ((i = buf.indexOf("\n")) >= 0) {
+                lines.push(buf.slice(0, i));
+                buf = buf.slice(i + 1);
+            }
+        });
+        stream.on("end", () => {
+            if (buf) { lines.push(buf); }
+            resolve(pickPreviewPair(lines, true));
+        });
+        stream.on("error", () => resolve(EMPTY_PREVIEW));
+    });
+}
+
+/**
+ * 二分按字节偏移找第一条 timestamp >= threshold 的 message 行的起始偏移。
+ * 依赖 message timestamps 单调不减（写文件顺序 = 时间顺序）。返回 -1 表示无此消息
+ * （纯重放分支）。以 {@link PROBE_CHUNK} 为探测步长，大文件仅 O(log) 次小读。
+ */
+function findForkOffset(
+    file: string,
+    threshold: string,
+    size: number
+): Promise<number> {
+    return new Promise(async (resolve) => {
+        let lo = 0;
+        let hi = size;
+        let ans = -1;
+        try {
+            for (let iter = 0; iter < 48 && lo < hi; iter++) {
+                const mid = lo + ((hi - lo) >> 1);
+                const probe = await probeFirstMessage(file, mid, size);
+                if (!probe) {
+                    // mid 起到 EOF 无 message：答案（若有）在 mid 之前
+                    hi = mid;
+                    continue;
+                }
+                if (compareTs(probe.ts, threshold) >= 0) {
+                    ans = probe.lineStart;
+                    hi = probe.lineStart;
+                } else {
+                    // 此消息在阈值前，答案在其后
+                    lo = probe.lineStart + 1;
+                }
+            }
+            resolve(ans);
+        } catch {
+            resolve(-1);
+        }
+    });
+}
+
+/**
+ * 从字节偏移 offset 起向后读，返回第一条完整 message 行的 { lineStart, ts }。
+ * offset>0 时跳过开头不完整的半行。跨 {@link PROBE_CHUNK} 续读直到命中 message 或 EOF。
+ * 用 Buffer 按 0x0A 切行，避免 utf8 字符/字节偏移错位（中文会话尤其重要）。
+ * 返回 null 表示 offset 起到末尾无 message 行（或读取出错）。
+ */
+function probeFirstMessage(
+    file: string,
+    offset: number,
+    size: number
+): Promise<{ lineStart: number; ts: string } | null> {
+    return new Promise((resolve) => {
+        if (offset >= size) { resolve(null); return; }
+        let buf = Buffer.alloc(0);
+        let base = offset; // buf[0] 对应的文件字节偏移
+        let pos = offset; // 下一次读取起点
+        let skipped = !(offset > 0); // offset>0 时需先跳过半行
+        const readNext = () => {
+            if (pos >= size) { resolve(null); return; }
+            const end = Math.min(pos + PROBE_CHUNK, size) - 1;
+            let stream: fs.ReadStream;
+            try {
+                stream = fs.createReadStream(file, { start: pos, end });
+            } catch {
+                resolve(null);
+                return;
+            }
+            stream.on("data", (chunk) => {
+                const b = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+                buf = Buffer.concat([buf, b]);
+            });
+            stream.on("end", () => {
+                pos = end + 1; // 已读到 end（含），下次从 end+1
+                if (!skipped) {
+                    const nl = buf.indexOf(0x0a);
+                    if (nl < 0) {
+                        if (pos >= size) { resolve(null); return; }
+                        // 整块都在一行内：丢弃已读，base 前移到 pos，继续找换行
+                        base = pos;
+                        buf = Buffer.alloc(0);
+                        readNext();
+                        return;
+                    }
+                    buf = buf.slice(nl + 1);
+                    base = base + nl + 1;
+                    skipped = true;
+                }
+                let cursor = 0;
+                for (;;) {
+                    const nl = buf.indexOf(0x0a, cursor);
+                    if (nl < 0) {
+                        // 当前行不完整：保留 tail，续读
+                        buf = buf.slice(cursor);
+                        base += cursor;
+                        readNext();
+                        return;
+                    }
+                    const lineBytes = buf.slice(cursor, nl);
+                    const lineStart = base + cursor;
+                    try {
+                        const o = JSON.parse(lineBytes.toString("utf8"));
+                        if (o && o.type === "message" && typeof o.timestamp === "string") {
+                            resolve({ lineStart, ts: o.timestamp });
+                            return;
+                        }
+                    } catch { /* 跳过非法行 */ }
+                    cursor = nl + 1;
+                }
+            });
+            stream.on("error", () => resolve(null));
+        };
+        readNext();
+    });
 }
 
 /**
  * 从文件开头读前 {@link HEAD_BYTES} 字节，正序找前几条 user/assistant 消息，
- * 按角色拼成预览（带“我：/AI：”前缀），截断到 {@link PREVIEW_CHARS} 字。
- * 保证至少各一条 user / assistant 后再按配额拼。
+ * 按角色拆成预览（无前缀，前端分行渲染）。user 取首条提问（主题），
+ * assistant 取其后的首条回复。无 message 条目时返回空 pair。
  */
-export function readHeadPreview(file: string): Promise<string> {
+export function readHeadPreview(file: string): Promise<PreviewPair> {
     return new Promise((resolve) => {
         let stream: fs.ReadStream;
         try {
             stream = fs.createReadStream(file, { encoding: "utf8" });
         } catch {
-            resolve("");
+            resolve(EMPTY_PREVIEW);
             return;
         }
         let buf = "";
         const lines: string[] = [];
         let bytesRead = 0;
         let stopped = false;
-        const finish = (v: string) => {
+        const finish = (v: PreviewPair) => {
             if (stopped) { return; }
             stopped = true;
             resolve(v);
@@ -303,26 +503,33 @@ export function readHeadPreview(file: string): Promise<string> {
             }
             if (bytesRead >= HEAD_BYTES) {
                 try { stream.destroy(); } catch { /* ignore */ }
-                finish(buildPreviewFromHead(lines));
+                finish(pickPreviewPair(lines, true));
             }
         });
         stream.on("end", () => {
             if (buf) { lines.push(buf); }
-            finish(buildPreviewFromHead(lines));
+            finish(pickPreviewPair(lines, true));
         });
-        stream.on("error", () => finish(""));
+        stream.on("error", () => finish(EMPTY_PREVIEW));
     });
 }
 
 /** 读文件开头取的字节数。 */
 const HEAD_BYTES = 16 * 1024;
 
-/** 正序从已读行中取前几条 user/assistant 文本，拼成预览。 */
-function buildPreviewFromHead(lines: string[]): string {
+/**
+ * 从已解析行中按角色各取一条文本（去空白、截断），供前端分行渲染。
+ * fromHead=true：取最早出现的 user + 之后的 assistant（根会话主题）。
+ * fromHead=false：取最晚一条 user 与最晚一条 assistant（分支最新走向）；
+ * 倒序扫描并保持时间顺序，配对到最近一次 user→assistant 往返。
+ * 无对应角色时该字段为空串。
+ */
+function pickPreviewPair(lines: string[], fromHead: boolean): PreviewPair {
     const cand: Array<{ role: "user" | "assistant"; text: string }> = [];
     let sawUser = false;
     let sawAssistant = false;
-    for (const line of lines) {
+    const order: readonly string[] = fromHead ? lines : [...lines].reverse();
+    for (const line of order) {
         let e: any;
         try { e = JSON.parse(line); } catch { continue; }
         if (!e || e.type !== "message" || !e.message) { continue; }
@@ -330,73 +537,37 @@ function buildPreviewFromHead(lines: string[]): string {
         if (role !== "user" && role !== "assistant") { continue; }
         const t = contentToText(e.message.content).replace(/\s+/g, " ");
         if (!t) { continue; }
-        cand.push({ role, text: t.slice(0, PREVIEW_CHARS) });
+        if (fromHead) {
+            cand.push({ role, text: t });
+        } else {
+            cand.unshift({ role, text: t });
+        }
         if (role === "user") { sawUser = true; } else { sawAssistant = true; }
         if (sawUser && sawAssistant) { break; }
     }
-    const perPart = (sawUser && sawAssistant)
-        ? Math.floor(PREVIEW_CHARS / 2)
-        : PREVIEW_CHARS;
-    const parts: string[] = [];
-    let chars = 0;
-    for (const c of cand) {
-        if (chars >= PREVIEW_CHARS) { break; }
-        const remain = Math.min(perPart, PREVIEW_CHARS - chars);
-        const t = c.text.slice(0, remain);
-        if (t) {
-            parts.push((c.role === "user" ? "我：" : "AI：") + t);
-            chars += t.length;
-        }
-    }
-    return parts.join(" ").slice(0, PREVIEW_CHARS);
-}
-
-/** 倒序从已读行中取最后几条 user/assistant 文本，拼成预览（最新的在后）。 */
-function buildPreviewFromTail(lines: string[]): string {
-    const cand: Array<{ role: "user" | "assistant"; text: string }> = [];
-    let sawUser = false;
-    let sawAssistant = false;
-    for (let i = lines.length - 1; i >= 0; i--) {
-        let e: any;
-        try { e = JSON.parse(lines[i]); } catch { continue; }
-        if (!e || e.type !== "message" || !e.message) { continue; }
-        const role = e.message.role;
-        if (role !== "user" && role !== "assistant") { continue; }
-        const t = contentToText(e.message.content).replace(/\s+/g, " ");
-        if (!t) { continue; }
-        cand.unshift({ role, text: t.slice(0, PREVIEW_CHARS) });
-        if (role === "user") { sawUser = true; } else { sawAssistant = true; }
-        if (sawUser && sawAssistant) { break; }
-    }
-    const perPart = (sawUser && sawAssistant)
-        ? Math.floor(PREVIEW_CHARS / 2)
-        : PREVIEW_CHARS;
-    const parts: string[] = [];
-    let chars = 0;
-    for (const c of cand) {
-        if (chars >= PREVIEW_CHARS) { break; }
-        const remain = Math.min(perPart, PREVIEW_CHARS - chars);
-        const t = c.text.slice(0, remain);
-        if (t) {
-            parts.push((c.role === "user" ? "我：" : "AI：") + t);
-            chars += t.length;
-        }
-    }
-    return parts.join(" ").slice(0, PREVIEW_CHARS);
+    const pick = (r: "user" | "assistant"): string => {
+        const matches = cand.filter((x) => x.role === r);
+        if (matches.length === 0) { return ""; }
+        // head 取首条（主题），tail 取末条（最新）
+        const c = fromHead ? matches[0] : matches[matches.length - 1];
+        const limit = r === "user" ? USER_PREVIEW_CHARS : ASSISTANT_PREVIEW_CHARS;
+        return c.text.slice(0, limit);
+    };
+    return { user: pick("user"), assistant: pick("assistant") };
 }
 
 /**
  * 从文件末尾取 {@link TAIL_BYTES} 字节，倒序找最后几条 user/assistant 消息，
- * 按角色拼成预览（带“我：/AI：”前缀），截断到 {@link PREVIEW_CHARS} 字。
- * 分支会话的重放段在文件开头，尾读天然拿到分支独有的最新内容。
- * 无 message 条目时返回空串（调用方按需过滤）。
+ * 按角色拆成预览（无前缀，前端分行渲染）。分支会话的重放段在文件开头，
+ * 尾读天然拿到分支独有的最新内容。user/assistant 取最近一条（最新走向）。
+ * 无 message 条目时返回空 pair（调用方按需过滤）。
  */
-export function readTailPreview(file: string): Promise<string> {
+export function readTailPreview(file: string): Promise<PreviewPair> {
     return new Promise((resolve) => {
         fs.stat(file, (err, st) => {
-            if (err || !st.isFile()) { resolve(""); return; }
+            if (err || !st.isFile()) { resolve(EMPTY_PREVIEW); return; }
             const size = st.size;
-            if (size === 0) { resolve(""); return; }
+            if (size === 0) { resolve(EMPTY_PREVIEW); return; }
             const start = Math.max(0, size - TAIL_BYTES);
             const stream = fs.createReadStream(file, {
                 encoding: "utf8",
@@ -416,9 +587,9 @@ export function readTailPreview(file: string): Promise<string> {
             });
             stream.on("end", () => {
                 if (buf) { lines.push(buf); }
-                resolve(buildPreviewFromTail(lines));
+                resolve(pickPreviewPair(lines, false));
             });
-            stream.on("error", () => resolve(""));
+            stream.on("error", () => resolve(EMPTY_PREVIEW));
         });
     });
 }

@@ -16,6 +16,7 @@
       { "command": "piChat.openChat", "title": "Pi Chat: 打开对话窗口", "icon": "$(comment-discussion)" },
       { "command": "piChat.newSession", "title": "Pi Chat: 新建会话", "icon": "$(add)" },
       { "command": "piChat.history", "title": "Pi Chat: 历史会话", "icon": "$(history)" },
+      { "command": "piChat.exportConversation", "title": "Pi Chat: 分享当前会话", "icon": "$(share)" },
       { "command": "piChat.openSettings", "title": "Pi Chat: 设置", "icon": "$(gear)" },
       { "command": "piChat.openViewOptions", "title": "Pi Chat: 显示选项", "icon": "$(gear)" },
       { "command": "piChat.pickModel", "title": "Pi Chat: 切换模型", "icon": "$(hubot)" },
@@ -42,9 +43,10 @@
         { "command": "piChat.askSelectionAndSend", "group": "navigation@89" }
       ],
       "view/title": [
-        { "command": "piChat.history", "when": "view == piChat.chatView", "group": "navigation@2" },
         { "command": "piChat.showTree", "when": "view == piChat.chatView", "group": "navigation@1" },
-        { "command": "piChat.openSettings", "when": "view == piChat.chatView", "group": "navigation@3" }
+        { "command": "piChat.history", "when": "view == piChat.chatView", "group": "navigation@2" },
+        { "command": "piChat.openSettings", "when": "view == piChat.chatView", "group": "navigation@3" },
+        { "command": "piChat.exportConversation", "when": "view == piChat.chatView", "group": "navigation@4" }
       ]
     },
     "configuration": {
