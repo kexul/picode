@@ -343,6 +343,7 @@
       provider: "",
       thinkingLevel: "",
       changedFiles: [],
+      changedFilesExpanded: false,
       queuedSteering: [],
       pendingSteerRestore: null,
       // 非活跃时保存的输入状态
@@ -957,23 +958,92 @@
     };
   }
 
+  function fileBaseName(label) {
+    const s = String(label || "");
+    const slash = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+    return slash >= 0 ? s.slice(slash + 1) : s;
+  }
+  function appendChangedFileChip(tab, f, nameOnly) {
+    const item = document.createElement("div");
+    item.className = "cf-item";
+    item.title = "点击查看 diff: " + f.label;
+    const name = document.createElement("span");
+    name.className = "cf-name";
+    if (nameOnly) {
+      name.textContent = fileBaseName(f.label);
+    } else {
+      const slash = f.label.lastIndexOf("/");
+      if (slash >= 0) {
+        const dir = document.createElement("span");
+        dir.className = "cf-dir";
+        dir.textContent = f.label.slice(0, slash + 1);
+        name.appendChild(dir);
+        name.appendChild(document.createTextNode(f.label.slice(slash + 1)));
+      } else {
+        name.textContent = f.label;
+      }
+    }
+    item.appendChild(name);
+    item.addEventListener("click", (e) => {
+      e.stopPropagation();
+      vscode.postMessage({ type: "openDiff", tabId: tab.id, path: f.path });
+    });
+    changedFilesEl.appendChild(item);
+    return item;
+  }
   function renderChangedFilesFor(tab) {
     if (activeId !== tab.id) { return; }
     changedFilesEl.innerHTML = "";
     const files = tab.changedFiles || [];
-    if (!files.length) { return; }
-    const header = document.createElement("div"); header.className = "cf-header"; header.textContent = "本次对话修改的文件 (" + files.length + ")";
-    changedFilesEl.appendChild(header);
-    files.forEach((f) => {
-      const item = document.createElement("div"); item.className = "cf-item"; item.title = "点击查看 diff: " + f.label;
-      const name = document.createElement("span"); name.className = "cf-name";
-      const slash = f.label.lastIndexOf("/");
-      if (slash >= 0) { const dir = document.createElement("span"); dir.className = "cf-dir"; dir.textContent = f.label.slice(0, slash + 1); name.appendChild(dir); name.appendChild(document.createTextNode(f.label.slice(slash + 1))); }
-      else { name.textContent = f.label; }
-      item.appendChild(name);
-      item.addEventListener("click", () => { vscode.postMessage({ type: "openDiff", tabId: tab.id, path: f.path }); });
-      changedFilesEl.appendChild(item);
+    if (!files.length) {
+      changedFilesEl.classList.remove("expanded", "collapsed");
+      return;
+    }
+    const expanded = !!tab.changedFilesExpanded;
+    changedFilesEl.classList.toggle("expanded", expanded);
+    changedFilesEl.classList.toggle("collapsed", !expanded);
+
+    const header = document.createElement("div");
+    header.className = "cf-header";
+    header.title = expanded ? "点击折叠" : "点击展开全部修改文件";
+    header.setAttribute("role", "button");
+    header.tabIndex = 0;
+    const chevron = document.createElement("span");
+    chevron.className = "cf-chevron";
+    chevron.textContent = expanded ? "▾" : "▸";
+    const title = document.createElement("span");
+    title.className = "cf-title";
+    title.textContent = "本次修改 (" + files.length + ")";
+    header.appendChild(chevron);
+    header.appendChild(title);
+
+    const toggle = () => {
+      tab.changedFilesExpanded = !tab.changedFilesExpanded;
+      renderChangedFilesFor(tab);
+    };
+    header.addEventListener("click", toggle);
+    header.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
     });
+    changedFilesEl.appendChild(header);
+
+    if (!expanded) {
+      // 折叠：单行摘要，只显示文件名，超出用 +N
+      const previewN = 3;
+      const preview = files.slice(0, previewN);
+      preview.forEach((f) => appendChangedFileChip(tab, f, true));
+      if (files.length > previewN) {
+        const more = document.createElement("span");
+        more.className = "cf-more";
+        more.textContent = "+" + (files.length - previewN);
+        more.title = "还有 " + (files.length - previewN) + " 个文件，点击展开";
+        more.addEventListener("click", (e) => { e.stopPropagation(); toggle(); });
+        changedFilesEl.appendChild(more);
+      }
+      return;
+    }
+
+    files.forEach((f) => appendChangedFileChip(tab, f, false));
   }
   function renderQueueBar(tab) {
     if (activeId !== tab.id) { return; }

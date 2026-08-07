@@ -249,31 +249,64 @@
   .file-item { padding: 4px 10px; cursor: pointer; font-size: 0.85em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background 150ms; }
   .file-item.active, .file-item:hover { background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.3)); color: var(--vscode-list-activeSelectionForeground, inherit); }
   .file-item .dir { opacity: 0.55; font-size: 0.9em; }
-  /* 本次对话修改的文件列表（横向标签流式排列） */
+  /* 本次对话修改的文件列表（默认折叠为单行摘要） */
   #changedFiles {
     display: flex; flex-direction: row; flex-wrap: wrap;
     align-items: center; gap: 4px 6px;
-    max-height: 140px; overflow-x: hidden; overflow-y: auto;
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
-    padding: 4px 8px;
+    padding: 3px 8px;
+    min-height: 0;
   }
   #changedFiles:empty { display: none; }
-  #changedFiles .cf-header {
-    flex: 0 0 100%;
-    display: flex; align-items: center; gap: 6px;
-    padding: 2px 2px 4px; font-size: 0.75em; opacity: 0.9;
-    text-transform: uppercase; letter-spacing: 0.03em;
+  #changedFiles.collapsed {
+    flex-wrap: nowrap;
+    overflow: hidden;
   }
+  #changedFiles.expanded {
+    max-height: 96px;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+  #changedFiles .cf-header {
+    flex: 0 0 auto;
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 4px 2px 2px;
+    font-size: 0.75em; opacity: 0.9;
+    letter-spacing: 0.02em;
+    cursor: pointer; user-select: none;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  #changedFiles.expanded .cf-header {
+    flex: 0 0 100%;
+    padding: 2px 2px 4px;
+  }
+  #changedFiles .cf-header:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); opacity: 1; }
+  #changedFiles .cf-header:focus { outline: 1px solid var(--vscode-focusBorder, rgba(128,128,128,0.6)); outline-offset: 1px; }
+  #changedFiles .cf-chevron {
+    display: inline-block; width: 0.9em; text-align: center; opacity: 0.75; font-size: 0.95em;
+  }
+  #changedFiles .cf-title { opacity: 0.95; }
+  #changedFiles .cf-more {
+    flex: 0 0 auto;
+    font-size: 0.8em; opacity: 0.7;
+    padding: 2px 6px; border-radius: 3px;
+    cursor: pointer; white-space: nowrap;
+    color: var(--vscode-descriptionForeground, inherit);
+  }
+  #changedFiles .cf-more:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
   .cf-item {
     flex: 0 0 auto; max-width: 100%; min-width: 0;
     display: inline-flex; align-items: center; gap: 4px;
-    padding: 2px 8px; cursor: pointer; font-size: var(--vscode-font-size);
+    padding: 1px 7px; cursor: pointer;
+    font-size: 0.9em;
     font-family: var(--vscode-editor-font-family, monospace);
     border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
     border-radius: 4px;
     background: var(--vscode-editorWidget-background, rgba(128,128,128,0.08));
     transition: background 150ms, border-color 150ms;
   }
+  #changedFiles.collapsed .cf-item { max-width: 9em; }
   .cf-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); border-color: var(--vscode-focusBorder, rgba(128,128,128,0.6)); }
   .cf-item .cf-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cf-item .cf-dir { opacity: 0.55; }
