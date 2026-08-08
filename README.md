@@ -20,9 +20,12 @@ src/                          插件 TypeScript 源码（tsc 编译到 out/）
   sessionRuntime.ts            单个对话 tab 的运行时（独立 pi 进程 + 会话编排）
   chatControllerBase.ts        会话编排基类（标签管理含 tabList 节流、拾取器、模型选择）
   sessionStore.ts              pi 会话文件的扫描 / 读取 / 元数据
+  canvasData.ts                历史画布：家族消息图合并（共享前缀 / 分叉）
+  historyCanvasPanel.ts        编辑器区会话画布 WebviewPanel
+  historyCanvasHtml.ts         画布 HTML / CSP
   modelsConfig.ts              models.json 读写与内置默认模板
-media/                        对话前端资源（chat.js、chat.css、marked.js、highlight.js、
-                              settings.js）；webview 直接加载，无需拷贝
+media/                        对话前端资源（chat.js、chat.css、historyCanvas.js/css、
+                              marked.js、highlight.js、settings.js）；webview 直接加载
 ```
 
 ## 环境要求

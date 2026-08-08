@@ -9,6 +9,7 @@ import {
     StatusInfo,
 } from "./sessionRuntime";
 import { ChatControllerBase } from "./chatControllerBase";
+import { HistoryCanvasPanel } from "./historyCanvasPanel";
 
 /**
  * VSCode 插件的聊天视图提供者。
@@ -41,8 +42,17 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     private static readonly NEW_SESSION_KEYS = ["ctrl+alt+n", "ctrl+shift+n", "ctrl+t", "alt+n"] as const;
     private static readonly TAB_SWITCH_KEYS = ["ctrl+alt+arrows", "ctrl+alt+pgupdown", "alt+brackets", "ctrl+alt+brackets"] as const;
 
+    private historyCanvas: HistoryCanvasPanel;
+
     constructor(private readonly context: vscode.ExtensionContext) {
         super();
+        this.historyCanvas = new HistoryCanvasPanel(context, {
+            getCwd: () => this.getCwd(),
+            getActiveSessionPath: () => this.getCurrentSessionPath(),
+            openSessionAtEntry: (file, entryId) => this.openSessionAtEntry(file, entryId),
+            forkAtEntryFromPath: (file, entryId) => this.forkAtEntryFromPath(file, entryId),
+        });
+        context.subscriptions.push({ dispose: () => this.historyCanvas.dispose() });
     }
 
     resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -558,7 +568,7 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     }
 
     public async pickSession(): Promise<void> {
-        await this.showHistoryPicker();
+        await this.historyCanvas.show({ focusCurrent: false });
     }
 
     /** 点击状态栏模型项触发：弹出模型选择器。 */

@@ -688,7 +688,8 @@ export class SessionRuntime {
                     this.post({
                         type: "userMessage",
                         text: textOf(m.content),
-                        entryId: this.forkEntries[userIndex]?.entryId,
+                        // forkEntries 与树 entry id 对齐；回退 m.id（若 pi 带回）
+                        entryId: this.forkEntries[userIndex]?.entryId || m.id,
                     });
                     userIndex++;
                     break;
@@ -713,6 +714,7 @@ export class SessionRuntime {
                                     toolName: c.name,
                                     path: p || "",
                                     label: p ? this.host.relativeTo(this.host.getCwd(), p) : "",
+                                    args: c.arguments,
                                 });
                                 this.post({
                                     type: "editCardResult",
@@ -742,7 +744,11 @@ export class SessionRuntime {
                         }
                     }
                     if (text.trim()) {
-                        this.post({ type: "assistantFull", text });
+                        this.post({
+                            type: "assistantFull",
+                            text,
+                            entryId: typeof m.id === "string" ? m.id : undefined,
+                        });
                     }
                     break;
                 }

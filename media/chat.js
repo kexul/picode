@@ -531,11 +531,12 @@
     div.appendChild(btn);
   }
 
-  function addMarkdown(tab, raw) {
+  function addMarkdown(tab, raw, entryId) {
     hideEmptyHint(tab);
     tab.currentToolRow = null;
     const div = document.createElement("div");
     div.className = "msg assistant msg-enter";
+    if (entryId) { div.dataset.entryId = entryId; }
     const body = document.createElement("div");
     body.className = "md";
     body.dataset.raw = raw || "";
@@ -545,6 +546,26 @@
     tab.paneEl.appendChild(div);
     scrollToBottom(tab);
     return body;
+  }
+
+  /** 画布跳转：滚到带 data-entry-id 的消息气泡。 */
+  function scrollToEntry(tab, entryId) {
+    if (!tab || !entryId || !tab.paneEl) { return false; }
+    let el = null;
+    const nodes = tab.paneEl.querySelectorAll(".msg[data-entry-id]");
+    for (let i = 0; i < nodes.length; i++) {
+      if (nodes[i].dataset.entryId === entryId) { el = nodes[i]; break; }
+    }
+    if (!el) { return false; }
+    tab.stickToBottom = false;
+    try {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    } catch {
+      el.scrollIntoView(true);
+    }
+    el.classList.add("entry-flash");
+    setTimeout(() => { el.classList.remove("entry-flash"); }, 1600);
+    return true;
   }
   function addTool(tab, toolName, argStr, toolCallId) {
     hideEmptyHint(tab);
@@ -916,7 +937,7 @@
     return wrap;
   }
 
-  function buildEditCard(tab, toolName, label, filePath, toolCallId) {
+  function buildEditCard(tab, toolName, label, filePath, toolCallId, argStr) {
     hideEmptyHint(tab);
     tab.currentToolRow = null;
     const el = document.createElement("div");
@@ -929,6 +950,11 @@
     const loading = document.createElement("span"); loading.className = "et-loading"; loading.textContent = "…";
     title.appendChild(loading);
     el.appendChild(title);
+    // write 卡片：展示写入内容预览（前 10 行，可展开；替代整文件 diff）
+    if (toolName === "write") {
+      const pv = buildWritePreviewEl(argStr);
+      if (pv) { el.appendChild(pv); }
+    }
     tab.paneEl.appendChild(el);
     scrollToBottom(tab);
     return {
@@ -942,8 +968,18 @@
           return;
         }
         el.classList.add("done");
-        if (msg.diff) { el.appendChild(renderDiffBlock(tab, msg.diff, filePath)); }
-        if (msg.canRevert && toolCallId) {
+        // write 用内容预览代替整文件 diff；edit 仍展示 diff
+        if (toolName !== "write" && msg.diff) { el.appendChild(renderDiffBlock(tab, msg.diff, filePath)); }
+        if (toolName === "write" && filePath) {
+          // 右上角：跳转按钮（打开文件）
+          const jumpBtn = document.createElement("span"); jumpBtn.className = "et-jump"; jumpBtn.textContent = "跳转 ↗";
+          jumpBtn.title = "在编辑器中打开 " + (label || filePath);
+          jumpBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            vscode.postMessage({ type: "openFile", path: filePath, line: 1 });
+          });
+          title.appendChild(jumpBtn);
+        } else if (msg.canRevert && toolCallId) {
           const revertBtn = document.createElement("span"); revertBtn.className = "et-revert"; revertBtn.textContent = "↩ 回滚";
           revertBtn.title = "将文件恢复到本次修改前的内容";
           revertBtn.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "revertEdit", tabId: tab.id, toolCallId }); });
@@ -2244,8 +2280,20 @@
         break;
       case "assistantFull":
         finalizeCurrentAssistant(t);
-        addMarkdown(t, msg.text);
+        addMarkdown(t, msg.text, msg.entryId);
         t.currentAssistant = null;
+        break;
+      case "scrollToEntry":
+        if (typeof msg.entryId === "string") {
+          // 消息可能仍在渲染：短重试
+          if (!scrollToEntry(t, msg.entryId)) {
+            let tries = 0;
+            const timer = setInterval(() => {
+              tries += 1;
+              if (scrollToEntry(t, msg.entryId) || tries >= 10) { clearInterval(timer); }
+            }, 100);
+          }
+        }
         break;
       case "thinkingDelta":
         // 兼容较旧后端：即使没有先收到 activityChanged，也按 thinking 渲染。
@@ -2262,7 +2310,7 @@
       }
       case "editCardStart": {
         finalizeCurrentAssistant(t);
-        const card = buildEditCard(t, msg.toolName, msg.label, msg.path, msg.toolCallId);
+        const card = buildEditCard(t, msg.toolName, msg.label, msg.path, msg.toolCallId, msg.args ? JSON.stringify(msg.args) : "");
         t.pendingToolCards.set(msg.toolCallId, card);
         t.currentAssistant = null;
         break;

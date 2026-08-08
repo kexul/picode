@@ -69,6 +69,7 @@ export class EditTracker {
                 toolName,
                 path: p,
                 label: this.host.relativeTo(this.host.getCwd(), p),
+                args: evt.args,
             });
         } else {
             this.host.post({

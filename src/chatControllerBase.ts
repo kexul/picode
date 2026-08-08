@@ -560,6 +560,60 @@ export abstract class ChatControllerBase implements RuntimeHost {
         await this.onFocusChat();
     }
 
+    /** 路径归一化比较（盘符 / 分隔符）。 */
+    protected samePath(a: string | undefined, b: string | undefined): boolean {
+        if (!a || !b) { return false; }
+        const norm = (p: string) => {
+            let s = p.replace(/\\/g, "/").toLowerCase();
+            s = s.replace(/^[a-z]:/, "");
+            return s;
+        };
+        return norm(a) === norm(b);
+    }
+
+    /** 查找已打开该会话文件的 tab。 */
+    protected findTabBySessionFile(file: string): SessionRuntime | undefined {
+        for (const rt of this.tabs.values()) {
+            if (this.samePath(rt.currentSessionPath, file)) {
+                return rt;
+            }
+        }
+        return undefined;
+    }
+
+    /**
+     * 画布双击消息：复用已有 tab 或新建 tab 加载会话，并尝试滚到对应 entry。
+     */
+    public async openSessionAtEntry(file: string, entryId: string): Promise<void> {
+        let rt = this.findTabBySessionFile(file);
+        if (rt) {
+            this.setActive(rt.id);
+        } else {
+            // 未打开则新 tab，避免覆盖正在进行的对话
+            rt = this.newTab();
+            await rt.loadSession(file);
+        }
+        // 稍等 DOM 渲染后再滚（load 会 clear + 重绘）
+        this.postToTab(rt.id, { type: "scrollToEntry", entryId });
+        setTimeout(() => {
+            this.postToTab(rt.id, { type: "scrollToEntry", entryId });
+        }, 200);
+        await this.onFocusChat();
+    }
+
+    /**
+     * 画布「在此分支」：新 tab 加载会话文件并在 entry 处 fork。
+     */
+    public async forkAtEntryFromPath(file: string, entryId: string): Promise<void> {
+        const abs = this.resolvePath(file);
+        if (!fs.existsSync(abs)) {
+            return;
+        }
+        const newRt = this.newTab();
+        await newRt.loadSessionAndFork(abs, entryId);
+        await this.onFocusChat();
+    }
+
     /**
      * 在新 tab 中打开从某条 user 消息处分叉出的新分支，源 tab 保持不动。
      * 新建一个独立 pi 进程的 tab，先加载源会话文件，再在该 entry 处 fork ——

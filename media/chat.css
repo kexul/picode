@@ -327,14 +327,21 @@
   .edit-title .et-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground, #808080); }
   .edit-title .et-loading { opacity: 0.6; }
   .edit-title .et-err { color: var(--vscode-errorForeground); }
-  .edit-title .et-revert {
+  .edit-title .et-revert,
+  .edit-title .et-jump {
     flex: 0 0 auto; font-size: 0.9em; padding: 1px 8px; border-radius: 3px; cursor: pointer;
     font-family: var(--vscode-font-family);
     background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.25));
     color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
     border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
   }
-  .edit-title .et-revert:hover { background: var(--vscode-button-hoverBackground, rgba(128,128,128,0.4)); }
+  .edit-title .et-revert:hover,
+  .edit-title .et-jump:hover { background: var(--vscode-button-hoverBackground, rgba(128,128,128,0.4)); }
+  /* write 卡片右上角跳转按钮（替代回滚，样式与回滚一致） */
+  /* write 卡片内容预览（复用 tool-card 的 tc-args 样式，扩展选择器到 edit-card） */
+  .edit-card .tc-args { margin: 4px 10px 6px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; color: var(--vscode-descriptionForeground, #808080); }
+  .edit-card .tc-trunc-hint { margin-top: 4px; font-size: 0.8em; opacity: 0.75; cursor: pointer; color: var(--vscode-descriptionForeground); }
+  .edit-card .tc-trunc-hint:hover { opacity: 1; text-decoration: underline; }
   .edit-card.reverted { opacity: 0.6; }
   .edit-card.reverted .et-reverted { flex: 0 0 auto; font-size: 0.85em; opacity: 0.8; font-style: italic; font-family: var(--vscode-font-family); }
   .edit-diff {
@@ -347,23 +354,27 @@
   /* 卡片内滚动条：透明轨道 + 圆角滑块（避免默认白色轨道在深色卡片里出戏） */
   .tool-card .tc-args::-webkit-scrollbar,
   .tool-card .tc-output::-webkit-scrollbar,
-  .edit-diff::-webkit-scrollbar {
+  .edit-diff::-webkit-scrollbar,
+  .edit-card .tc-args::-webkit-scrollbar {
     width: 8px; height: 8px;
   }
   .tool-card .tc-args::-webkit-scrollbar-track,
   .tool-card .tc-output::-webkit-scrollbar-track,
-  .edit-diff::-webkit-scrollbar-track {
+  .edit-diff::-webkit-scrollbar-track,
+  .edit-card .tc-args::-webkit-scrollbar-track {
     background: transparent;
   }
   .tool-card .tc-args::-webkit-scrollbar-thumb,
   .tool-card .tc-output::-webkit-scrollbar-thumb,
-  .edit-diff::-webkit-scrollbar-thumb {
+  .edit-diff::-webkit-scrollbar-thumb,
+  .edit-card .tc-args::-webkit-scrollbar-thumb {
     background: var(--vscode-scrollbarSlider-background, rgba(121,121,121,0.4));
     border-radius: 4px;
   }
   .tool-card .tc-args::-webkit-scrollbar-thumb:hover,
   .tool-card .tc-output::-webkit-scrollbar-thumb:hover,
-  .edit-diff::-webkit-scrollbar-thumb:hover {
+  .edit-diff::-webkit-scrollbar-thumb:hover,
+  .edit-card .tc-args::-webkit-scrollbar-thumb:hover {
     background: var(--vscode-scrollbarSlider-hoverBackground, rgba(100,100,100,0.7));
   }
   .diff-line { padding: 0 10px; white-space: pre; box-sizing: border-box; }
@@ -594,4 +605,15 @@
     background: var(--vscode-checkbox-background, #0e639c);
     border-color: var(--vscode-focusBorder, #007acc);
     color: var(--vscode-checkbox-foreground, #fff);
+  }
+
+  /* 画布跳转到某条消息时的短暂高亮 */
+  .msg.entry-flash {
+    outline: 2px solid var(--vscode-focusBorder, #007acc);
+    outline-offset: 2px;
+    animation: entry-flash-pulse 1.4s ease-out;
+  }
+  @keyframes entry-flash-pulse {
+    0% { outline-color: var(--vscode-focusBorder, #007acc); }
+    100% { outline-color: transparent; }
   }
