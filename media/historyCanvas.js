@@ -7,6 +7,10 @@
   const V_GAP = 28;
   const FAMILY_GAP = 120;
   const COLLAPSE_LINES = 40;
+  // 长线性对话折叠：保留首尾各几条，中间折叠成占位节点
+  const RUN_KEEP_HEAD = 2;
+  const RUN_KEEP_TAIL = 2;
+  const RUN_MIN_HIDDEN = 3;
 
   const viewport = document.getElementById("viewport");
   const world = document.getElementById("world");
@@ -25,6 +29,9 @@
     loadedFamilies: 0,
     focus: null,
   };
+
+  /** 本次会话已展开的折叠占位 key，跨渲染保持 */
+  const expandedPh = new Set();
 
   let panX = 40;
   let panY = 40;
@@ -302,6 +309,105 @@
     return { el, body, more };
   }
 
+  /** 折叠占位节点：代表长线性对话被折叠的中间部分，点击展开。 */
+  function createPlaceholderEl(node) {
+    const el = document.createElement("div");
+    el.className = "node placeholder" + (node.onPath ? " on-path" : "");
+    el.dataset.id = node.id;
+    el.tabIndex = 0;
+    el.title = "点击展开被折叠的 " + node.count + " 条消息";
+    const label = document.createElement("div");
+    label.className = "ph-label";
+    label.textContent = "⋯ 已折叠 " + node.count + " 条消息 · 点击展开";
+    el.appendChild(label);
+    const expand = () => {
+      if (panMoved) { return; }
+      expandedPh.add(node.id);
+      renderAll({ fit: false });
+    };
+    el.addEventListener("click", (e) => { e.stopPropagation(); expand(); });
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); expand(); }
+    });
+    return { el };
+  }
+
+  /**
+   * 折叠长线性对话链（单父且单子的连续段）：保留首部 RUN_KEEP_HEAD 条、
+   * 尾部 RUN_KEEP_TAIL 条，中间换成一个占位节点。
+   * 分叉点（多子节点）与各分支起始始终保留，故分支处永远完整可见。
+   * @param {Set<string>} expandedKeys 本轮已展开的占位 key
+   * @param {Set<string>} pathIds 聚焦路径 id，仅用于给占位节点标 on-path
+   * @returns {{ messages: any[], roots: string[] }}
+   */
+  function buildDisplay(family, expandedKeys, pathIds) {
+    const messages = family.messages || [];
+    const byId = new Map(messages.map((m) => [m.id, m]));
+    const hidden = new Set();
+    const placeholders = [];
+
+    // 链起点：无父 / 父不在图中 / 父有多个孩子（分支之一）
+    const chainStarts = messages.filter((m) => {
+      if (!m.parentId || !byId.has(m.parentId)) { return true; }
+      return (byId.get(m.parentId).children || []).length !== 1;
+    });
+
+    for (const start of chainStarts) {
+      const chain = [start];
+      let cur = start;
+      while ((cur.children || []).length === 1) {
+        const kid = byId.get(cur.children[0]);
+        if (!kid) { break; }
+        chain.push(kid);
+        cur = kid;
+      }
+      const len = chain.length;
+      if (len - RUN_KEEP_HEAD - RUN_KEEP_TAIL < RUN_MIN_HIDDEN) { continue; }
+      const hidIds = chain.slice(RUN_KEEP_HEAD, len - RUN_KEEP_TAIL).map((m) => m.id);
+      const key = "ph:" + hidIds[0];
+      if (expandedKeys.has(key)) { continue; }
+      for (const id of hidIds) { hidden.add(id); }
+      placeholders.push({
+        key,
+        parentId: chain[RUN_KEEP_HEAD - 1].id,
+        childId: chain[len - RUN_KEEP_TAIL].id,
+        ids: hidIds,
+        onPath: hidIds.some((id) => pathIds.has(id)),
+      });
+    }
+
+    const vMsgs = [];
+    for (const m of messages) {
+      if (hidden.has(m.id)) { continue; }
+      vMsgs.push(Object.assign({}, m, { children: [] }));
+    }
+    for (const ph of placeholders) {
+      vMsgs.push({
+        id: ph.key,
+        placeholder: true,
+        count: ph.ids.length,
+        onPath: ph.onPath,
+        role: "assistant",
+        text: "",
+        parentId: ph.parentId,
+        children: [],
+        files: [],
+      });
+    }
+    const vById = new Map(vMsgs.map((m) => [m.id, m]));
+    for (const ph of placeholders) {
+      const child = vById.get(ph.childId);
+      if (child) { child.parentId = ph.key; }
+    }
+    for (const m of vMsgs) {
+      if (m.parentId && vById.has(m.parentId)) { vById.get(m.parentId).children.push(m.id); }
+    }
+    const roots = vMsgs
+      .filter((m) => !m.parentId || !vById.has(m.parentId))
+      .map((m) => m.id);
+    return { messages: vMsgs, roots };
+  }
+
   function drawEdges(edges, positions, pathIds, offsetX, offsetY) {
     const ns = "http://www.w3.org/2000/svg";
     for (const e of edges) {
@@ -373,25 +479,35 @@
       // 若 focus 指定了 family 但不是这个，path 为空
       const effectivePath =
         focusFamilyId && focusFamilyId !== family.id ? new Set() : pathIds;
+      const disp = buildDisplay(family, expandedPh, effectivePath);
       const nodeMap = new Map();
       const heights = new Map();
-      for (const msg of family.messages || []) {
-        const created = createNodeEl(msg, family, effectivePath.has(msg.id), highlightFile);
+      for (const msg of disp.messages) {
+        const created = msg.placeholder
+          ? createPlaceholderEl(msg)
+          : createNodeEl(msg, family, effectivePath.has(msg.id), highlightFile);
         created.el.style.visibility = "hidden";
         created.el.style.left = "0px";
         created.el.style.top = "0px";
         nodesEl.appendChild(created.el);
         // collapse long content
-        const lineHeight = parseFloat(getComputedStyle(created.body).lineHeight) || 18;
-        const maxH = lineHeight * COLLAPSE_LINES;
-        if (created.body.scrollHeight > maxH + 8) {
-          created.body.classList.add("collapsed");
-          created.more.classList.remove("hidden");
+        if (created.body) {
+          const lineHeight = parseFloat(getComputedStyle(created.body).lineHeight) || 18;
+          const maxH = lineHeight * COLLAPSE_LINES;
+          if (created.body.scrollHeight > maxH + 8) {
+            created.body.classList.add("collapsed");
+            created.more.classList.remove("hidden");
+          }
         }
         heights.set(msg.id, created.el.offsetHeight || 80);
         nodeMap.set(msg.id, created);
       }
-      prepared.push({ family, pathIds: effectivePath, nodeMap, heights });
+      // on-path 占位节点也计入路径集合，保证黄线/聚焦框连续
+      const dispPath = new Set(effectivePath);
+      for (const msg of disp.messages) {
+        if (msg.placeholder && msg.onPath) { dispPath.add(msg.id); }
+      }
+      prepared.push({ family, disp, pathIds: dispPath, nodeMap, heights });
     }
 
     // 第二遍：布局 + 定位
@@ -405,7 +521,7 @@
 
     for (let fi = 0; fi < prepared.length; fi++) {
       const prep = prepared[fi];
-      const layout = layoutFamily(prep.family, prep.heights);
+      const layout = layoutFamily(prep.disp, prep.heights);
       const ox = offsetX;
       const oy = 0;
 
@@ -422,7 +538,7 @@
       }
 
       // 高度可能因 collapsed 变化，再 layout 一次更稳
-      const layout2 = layoutFamily(prep.family, prep.heights);
+      const layout2 = layoutFamily(prep.disp, prep.heights);
       for (const [id, pos] of layout2.positions) {
         const n = prep.nodeMap.get(id);
         if (!n) { continue; }

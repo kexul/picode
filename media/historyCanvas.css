@@ -106,6 +106,23 @@ html, body {
   box-shadow: 0 0 0 1px var(--path), 0 2px 10px rgba(0,0,0,0.18);
 }
 .node:hover { filter: brightness(1.05); }
+
+/* 长对话折叠占位节点 */
+.node.placeholder {
+  border-style: dashed;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  padding: 5px 10px;
+}
+.node.placeholder:hover { background: var(--btn-bg); filter: none; }
+.ph-label {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.85em;
+  padding: 1px 0;
+  user-select: none;
+}
 .node:focus-visible {
   outline: 2px solid var(--vscode-focusBorder, #007fd4);
   outline-offset: 2px;

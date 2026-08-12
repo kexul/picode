@@ -306,7 +306,7 @@
     background: var(--vscode-editorWidget-background, rgba(128,128,128,0.08));
     transition: background 150ms, border-color 150ms;
   }
-  #changedFiles.collapsed .cf-item { max-width: 9em; }
+  #changedFiles.collapsed .cf-item { max-width: 100%; }
   .cf-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); border-color: var(--vscode-focusBorder, rgba(128,128,128,0.6)); }
   .cf-item .cf-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cf-item .cf-dir { opacity: 0.55; }
