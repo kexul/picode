@@ -51,7 +51,7 @@
     var s = document.createElement("style");
     s.id = STYLE_ID;
     s.textContent = [
-      ".ms-root{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--vscode-editor-background);color:var(--vscode-foreground);font-family:var(--vscode-font-family);font-size:var(--vscode-font-size)}",
+      ".ms-root{display:flex;flex-direction:column;height:100%;min-height:0;position:relative;background:var(--vscode-editor-background);color:var(--vscode-foreground);font-family:var(--vscode-font-family);font-size:var(--vscode-font-size)}",
       ".ms-header{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--vscode-panel-border);flex-shrink:0}",
       ".ms-title{font-size:14px;font-weight:700}",
       ".ms-sub{font-size:11px;opacity:.6;font-family:var(--vscode-editor-font-family,monospace);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
@@ -117,6 +117,18 @@
       ".ms-rawWrap{flex:1;display:flex;min-height:0}",
       ".ms-raw{flex:1;margin:14px;width:auto;box-sizing:border-box;resize:none;background:var(--vscode-input-background);color:var(--vscode-input-foreground);border:1px solid var(--vscode-input-border);border-radius:4px;padding:10px;font-family:var(--vscode-editor-font-family,monospace);font-size:12px;tab-size:2;outline:none}",
       ".ms-raw:focus{border-color:var(--vscode-focusBorder)}",
+      ".ms-overlay{position:absolute;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35)}",
+      ".ms-panel{width:min(440px,92%);max-height:82%;display:flex;flex-direction:column;background:var(--vscode-editorWidget-background,var(--vscode-editor-background));border:1px solid var(--vscode-panel-border);border-radius:6px;box-shadow:0 6px 24px rgba(0,0,0,.35)}",
+      ".ms-panel-head{padding:12px 14px;border-bottom:1px solid var(--vscode-panel-border);display:flex;flex-direction:column;gap:2px}",
+      ".ms-panel-title{font-size:13px;font-weight:600}",
+      ".ms-panel-sub{font-size:11px;opacity:.6;font-family:var(--vscode-editor-font-family,monospace)}",
+      ".ms-panel-list{flex:1;overflow-y:auto;padding:6px;min-height:60px}",
+      ".ms-pickRow{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:4px;cursor:pointer}",
+      ".ms-pickRow:hover{background:var(--vscode-list-hoverBackground)}",
+      ".ms-pickRow .ms-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}",
+      ".ms-pickRow.disabled{opacity:.5;cursor:default}",
+      ".ms-pickRow.disabled:hover{background:none}",
+      ".ms-panel-foot{display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid var(--vscode-panel-border)}",
     ].join("");
     document.head.appendChild(s);
   }
@@ -145,6 +157,7 @@
       parseError: null,
       rawText: "",
       renameDraft: null,     // 当前 provider 的重命名草稿
+      probeBusy: null,       // 正在探测模型的 provider 名
     };
 
     var dom = {};
@@ -156,6 +169,7 @@
         case "load": onLoad(msg.content, msg.existed, msg.path); break;
         case "saved": state.dirty = false; refreshDirty(); setStatus("已保存 ✓  " + new Date().toLocaleTimeString(), "ok"); break;
         case "error": setStatus(msg.error || "保存失败", "err"); break;
+        case "probeResult": onProbeResult(msg); break;
       }
     });
 
@@ -267,6 +281,38 @@
       state.selection = { type: "provider", name: providerName };
       markDirty(); reRender();
     }
+    function probeModels(providerName) {
+      var p = providers()[providerName]; if (!p) return;
+      if (!p.baseUrl || !p.baseUrl.trim()) { setStatus("请先填写 Base URL 再探测", "err"); return; }
+      state.probeBusy = providerName;
+      setStatus("探测 " + p.baseUrl.trim().replace(/\/+$/, "") + "/models …", "");
+      reRender();
+      api.send("probeModels", { baseUrl: p.baseUrl, apiKey: p.apiKey, api: p.api });
+    }
+    function onProbeResult(msg) {
+      var providerName = state.probeBusy;
+      state.probeBusy = null;
+      if (!providerName || !providers()[providerName]) { reRender(); return; }
+      if (!msg.ok) { reRender(); setStatus("探测失败：" + (msg.error || "未知错误"), "err"); return; }
+      var models = Array.isArray(msg.models) ? msg.models : [];
+      if (models.length === 0) { reRender(); setStatus("未探测到任何模型", "err"); return; }
+      var existingIds = new Set((Array.isArray((providers()[providerName] || {}).models) ? providers()[providerName].models : []).map(function (m) { return m && m.id; }));
+      if (models.every(function (m) { return existingIds.has(m.id); })) {
+        reRender(); setStatus("探测到 " + models.length + " 个模型，均已在列表中", "ok"); return;
+      }
+      reRender();
+      showProbePicker(providerName, models);
+    }
+    function addProbedModels(providerName, picked) {
+      var p = providers()[providerName];
+      if (p && picked.length) {
+        if (!Array.isArray(p.models)) p.models = [];
+        picked.forEach(function (m) { p.models.push(m.name ? { id: m.id, name: m.name } : { id: m.id }); });
+        markDirty();
+      }
+      reRender();
+      if (picked.length) setStatus("已添加 " + picked.length + " 个模型（记得保存）", "ok");
+    }
     function currentSelectionTarget() {
       var s = state.selection; if (!s) return null;
       if (s.type === "provider") return providers()[s.name] || null;
@@ -275,6 +321,79 @@
     }
 
     // ── 渲染骨架 ─────────────────────────────────────────────────────────────
+    function showProbePicker(providerName, models) {
+      var p = providers()[providerName]; if (!p) return;
+      var existing = new Set((Array.isArray(p.models) ? p.models : []).map(function (m) { return m && m.id; }));
+      var selected = new Set();
+      models.forEach(function (m) { if (!existing.has(m.id)) selected.add(m.id); });
+
+      var overlay = el("div", { class: "ms-overlay" });
+      var panel = el("div", { class: "ms-panel" });
+      panel.appendChild(el("div", { class: "ms-panel-head" }, [
+        el("div", { class: "ms-panel-title" }, "选择要添加的模型"),
+        el("div", { class: "ms-panel-sub" }, providerName + " · 探测到 " + models.length + " 个模型"),
+      ]));
+
+      var list = el("div", { class: "ms-panel-list" });
+      models.forEach(function (m) {
+        var added = existing.has(m.id);
+        var row;
+        if (added) {
+          row = el("div", { class: "ms-pickRow disabled" }, [
+            el("input", { type: "checkbox", disabled: true }),
+            el("span", { class: "ms-name ms-mon" }, m.id),
+            el("span", { class: "ms-badge" }, "已添加"),
+          ]);
+        } else {
+          var chk = el("input", { type: "checkbox", checked: true });
+          chk.addEventListener("change", function () {
+            if (chk.checked) selected.add(m.id); else selected.delete(m.id);
+            refreshFoot();
+          });
+          row = el("label", { class: "ms-pickRow" }, [
+            chk,
+            el("span", { class: "ms-name ms-mon" }, m.id),
+            m.name && m.name !== m.id ? el("span", { class: "ms-hint" }, m.name) : null,
+          ]);
+        }
+        list.appendChild(row);
+      });
+      panel.appendChild(list);
+
+      var foot = el("div", { class: "ms-panel-foot" });
+      var toggleBtn = el("button", { class: "ms-btn sec" });
+      toggleBtn.addEventListener("click", function () {
+        var fresh = models.filter(function (m) { return !existing.has(m.id); });
+        var all = selected.size === fresh.length;
+        selected = all ? new Set() : new Set(fresh.map(function (m) { return m.id; }));
+        list.querySelectorAll("input[type=checkbox]").forEach(function (c) { if (!c.disabled) c.checked = !all; });
+        refreshFoot();
+      });
+      foot.appendChild(toggleBtn);
+      foot.appendChild(el("span", { class: "ms-spacer" }));
+      foot.appendChild(el("button", { class: "ms-btn sec", onclick: cleanup }, "取消"));
+      var addBtn = el("button", { class: "ms-btn" });
+      addBtn.addEventListener("click", function () {
+        var picked = models.filter(function (m) { return selected.has(m.id); });
+        cleanup();
+        addProbedModels(providerName, picked);
+      });
+      foot.appendChild(addBtn);
+      panel.appendChild(foot);
+      function refreshFoot() {
+        var unadded = models.filter(function (m) { return !existing.has(m.id); }).length;
+        addBtn.textContent = "添加 (" + selected.size + ")";
+        addBtn.disabled = selected.size === 0;
+        toggleBtn.textContent = (selected.size > 0 && selected.size === unadded) ? "全不选" : "全选";
+      }
+
+      overlay.appendChild(panel);
+      overlay.addEventListener("mousedown", function (e) { if (e.target === overlay) cleanup(); });
+      function cleanup() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+      root.appendChild(overlay);
+      refreshFoot();
+    }
+
     function build() {
       clear(root);
       root.className = "ms-root";
@@ -472,8 +591,17 @@
       // 头部
       var toolbar = el("div", { class: "ms-toolbar" });
       toolbar.appendChild(el("div", { class: "ms-secTitle" }, "Provider"));
-      var delBtn = el("button", { class: "ms-btn danger", onclick: function () { deleteProvider(name); } }, "删除");
-      toolbar.appendChild(delBtn);
+      var actions = el("div", { style: { display: "flex", gap: "8px" } });
+      var busy = state.probeBusy === name;
+      var probeBtn = el("button", {
+        class: "ms-btn sec",
+        disabled: busy,
+        onclick: function () { probeModels(name); },
+      }, busy ? "探测中…" : "探测模型");
+      probeBtn.title = "请求 " + ((p.baseUrl || "").trim().replace(/\/+$/, "") || "<base-url>") + "/models，勾选后加入模型列表";
+      actions.appendChild(probeBtn);
+      actions.appendChild(el("button", { class: "ms-btn danger", onclick: function () { deleteProvider(name); } }, "删除"));
+      toolbar.appendChild(actions);
       stack.appendChild(toolbar);
 
       // 名称（可重命名）

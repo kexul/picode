@@ -64,8 +64,9 @@ export interface RuntimeHost {
     resolvePath(p: string): string;
     /** 校验 pi 可执行文件存在；失败时自行向 tab 推送 systemError。返回是否可用。 */
     checkPiAvailable(piPath: string, tabId: string): boolean;
-    /** 领取一个已就绪的备用 pi 进程（无则 undefined）。领取后宿主会自动补新备用。 */
-    claimSpareClient?(): PiClient | undefined;
+    /** 领取一个已就绪的备用 pi 进程（无则 undefined）。领取后宿主会自动补新备用。
+     *  返回值附带该进程启动时使用的模型，供领取方判断是否需要补发 set_model。 */
+    claimSpareClient?(): { client: PiClient; provider?: string; modelId?: string } | undefined;
 
     postToTab(tabId: string, msg: Record<string, unknown>): void;
     /**
@@ -79,6 +80,8 @@ export interface RuntimeHost {
     onStatusUpdate?(tabId: string, info: StatusInfo): void;
     /** 当某 tab 的工具触及文件集合（knownFiles）变化时通知宿主。可选。 */
     onKnownFilesChanged?(tabId: string): void;
+    /** 当某 tab 的 agent 完全落定（agent_settled）时通知宿主。可选（分屏自动接力用）。 */
+    onAgentSettled?(tabId: string): void;
 
     // ---- UI 弹窗（对应当 pi 的 extension_ui_request）----
     confirmDialog(title: string, message: string): Promise<boolean>;

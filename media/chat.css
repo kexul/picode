@@ -32,8 +32,10 @@
   #tabBar { display: flex; align-items: center; gap: 4px; padding: 4px 6px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); flex: 0 0 auto; }
   #tabBarInner { display: flex; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
   #tabBarInner::-webkit-scrollbar { display: none; }
-  #newTabBtn { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: none; background: transparent; color: var(--vscode-foreground); opacity: 0.7; font-size: 16px; line-height: 1; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-  #newTabBtn:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
+  #newTabBtn, #splitBtn { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: none; background: transparent; color: var(--vscode-foreground); opacity: 0.7; font-size: 16px; line-height: 1; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  #newTabBtn:hover, #splitBtn:not(:disabled):hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
+  #splitBtn:disabled { opacity: 0.3; cursor: default; background: transparent; }
+  #splitBtn:disabled:hover { background: transparent; }
   .chat-tab { display: flex; flex: 0 0 auto; min-width: 0; max-width: 200px; align-items: center; gap: 4px; padding: 3px 6px 3px 9px; border-radius: 4px 4px 0 0; cursor: pointer; white-space: nowrap; font-size: 0.85em; color: var(--vscode-foreground); opacity: 0.7; user-select: none; }
   .chat-tab:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
   .chat-tab.active { opacity: 1; background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.2)); }
@@ -83,6 +85,14 @@
   .tool.running .tool-icon { animation: tool-spin 1.1s linear infinite; }
   @keyframes tool-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .tool.error { opacity: 1; color: var(--vscode-errorForeground, #f48771); }
+/* 摘要（medium）模式：每次调用独占一行；超长时换行完整显示，不截断（无齿轮图标） */
+.tool.tool-medium { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.tool-dur { opacity: 0.75; white-space: pre; }
+/* 摘要内的调用行排版与 full 模式卡片同源（粗体/accent/灰参数/黄行号） */
+.tool .tc-call-name { font-weight: bold; }
+.tool .tc-call-param { color: var(--vscode-textLink-foreground, #3794ff); }
+.tool .tc-call-arg { color: var(--vscode-descriptionForeground, #808080); }
+.tool .tc-call-warn { color: var(--vscode-editorWarning-foreground, #cca700); }
   /* 简洁模式：点击标签展开为完整模式同款卡片（卡片作为 .tool-row 的兄弟插入），标签仅作高亮指示 */
   .tool.expanded { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder, #007fd4) 55%, transparent); }
   /* 完整模式：工具卡片（圆角 + 轻阴影，状态用边框色：运行蓝 / 失败红） */
@@ -186,7 +196,7 @@
   .text-block.expanded .tb-body { display: block; }
   .text-block .tb-rm { position: absolute; top: -6px; right: -6px; width: 16px; height: 16px; line-height: 14px; text-align: center; border-radius: 50%; background: var(--vscode-button-background); color: var(--vscode-button-foreground); cursor: pointer; font-size: 11px; }
   /* 超长用户消息：默认折叠预览，点击展开全文（限高滚动） */
-  .long-msg pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em; opacity: 0.92; }
+  .long-msg pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 0.9em; opacity: 0.92; }
   .long-msg pre.full { max-height: 420px; overflow: auto; }
   .long-msg .lm-toggle { margin-top: 6px; font-size: 0.8em; opacity: 0.7; cursor: pointer; user-select: none; display: inline-block; }
   .long-msg .lm-toggle:hover { opacity: 1; text-decoration: underline; }
@@ -208,17 +218,13 @@
   button:active { transform: scale(0.97); }
   button:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: 1px; }
   button:disabled { opacity: 0.5; cursor: default; }
-  #status { display: flex; align-items: center; gap: 8px; padding: 2px 8px; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: color-mix(in srgb, var(--vscode-foreground) 88%, transparent); min-height: 1.4em; overflow: hidden; }
-  /* 状态栏实时活动区：始终一行，思考内容 / 工具名在其中横向滚动 */
+  #status { display: flex; align-items: center; gap: 8px; padding: 2px 8px; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: color-mix(in srgb, var(--vscode-foreground) 88%, transparent); min-height: 1.4em; overflow: hidden; cursor: pointer; }
+  #status:hover .st-model { text-decoration: underline; }
+  /* 状态栏实时活动区：始终一行（不再展示思考流式内容，改为模型名 · 百分比 · 速度 · 阶段） */
   #status .st-head { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; font-size: 0.85em; opacity: .85; }
-  #status .st-body {
-    flex: 1; min-width: 0;
-    white-space: nowrap; overflow-x: auto; overflow-y: hidden;
-    font-family: var(--vscode-font-family); font-size: 0.85em;
-    line-height: 1.45; opacity: .75;
-    scrollbar-width: none;
-  }
-  #status .st-body::-webkit-scrollbar { display: none; }
+  /* 状态栏里的模型名与上下文用量百分比（≥70% 黄、≥90% 红，只对百分比变色） */
+  #status .st-pct.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
+  #status .st-pct.err { color: var(--vscode-errorForeground, #f14c4c); }
   /* 底部工具栏 */
   #bottomBar { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
   #treeBtn {
@@ -228,14 +234,6 @@
     font-size: 0.8em; display: inline-flex; align-items: center; gap: 4px;
   }
   #treeBtn:hover { opacity: 0.85; }
-  #modelBtn {
-    background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2));
-    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
-    border: none; border-radius: 4px; padding: 2px 10px; cursor: pointer;
-    font-size: 0.8em; display: inline-flex; align-items: center; gap: 4px;
-  }
-  #modelBtn:hover { opacity: 0.85; }
-  #modelBtn { transition: opacity 200ms; }
   /* @ 文件引用下拉 */
   #fileMenu {
     position: absolute; bottom: 100%; left: 0; margin-bottom: 4px; z-index: 10;
@@ -572,6 +570,15 @@
   }
   .vo-item-slider { flex-direction: column; align-items: stretch; gap: 8px; cursor: default; }
   .vo-item-slider:hover { background: transparent; }
+  /* 文本输入项（如转发注入前缀模板） */
+  .vo-item-text { flex-direction: column; align-items: stretch; gap: 6px; cursor: default; }
+  .vo-text-input {
+    width: 100%; box-sizing: border-box; resize: vertical; min-height: 56px;
+    background: var(--vscode-input-background, #fff); color: var(--vscode-input-foreground, inherit);
+    border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.4)); border-radius: 4px;
+    padding: 6px 8px; font-family: inherit; font-size: 0.92em; line-height: 1.5;
+  }
+  .vo-text-input:focus { outline: none; border-color: var(--vscode-focusBorder, #007acc); }
   .vo-slider { display: flex; align-items: center; gap: 8px; }
   .vo-slider input[type=range] { flex: 1; accent-color: var(--vscode-button-background, #007acc); }
   .vo-slider-val { font-size: 11px; opacity: .75; min-width: 38px; text-align: right; font-variant-numeric: tabular-nums; }
@@ -617,3 +624,62 @@
     0% { outline-color: var(--vscode-focusBorder, #007acc); }
     100% { outline-color: transparent; }
   }
+
+  /* ---- 分屏模式 ---- */
+  /* 顶部控制条：链接开关 / 接力档位 / 进度与提示 */
+  #splitBar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); flex: 0 0 auto; }
+  #splitBar.hidden { display: none; }
+  .sb-btn {
+    background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2));
+    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+    border: 1px solid var(--vscode-button-border, transparent);
+    border-radius: 4px; padding: 2px 8px; font-size: 0.8em; cursor: pointer;
+  }
+  .sb-btn:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,0.35)); }
+  .sb-btn.on { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: var(--vscode-focusBorder, #007acc); }
+  .sb-btn.hidden { display: none; }
+  .sb-text { font-size: 0.78em; opacity: 0.8; white-space: nowrap; }
+  .sb-notice { color: var(--vscode-editorInfo-foreground, var(--vscode-textLink-foreground, #3794ff)); }
+
+  /* 分屏布局：隐藏 tab 栏与全局状态栏，两个 .in-split pane 改为 flex 并排（固定 50/50） */
+  .split-mode #tabBar { display: none !important; }
+  .split-mode #status { display: none !important; }
+  .split-mode #messages { flex-direction: row; }
+  .split-mode .tab-pane { display: none; }
+  .split-mode .tab-pane.in-split {
+    display: block; position: static; inset: auto;
+    visibility: visible; pointer-events: auto;
+    flex: 1 1 0; min-width: 0; overflow-y: auto;
+  }
+  .split-mode .tab-pane.in-split.split-right { border-left: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
+  .split-mode .tab-pane.in-split.split-focus { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder, #007fd4) 45%, transparent); }
+
+  /* pane 头部（仅分屏时显示）：标题 · 模型（点击切换）· 流式指示 · 关闭 */
+  .pane-head { display: none; }
+  .split-mode .tab-pane.in-split .pane-head {
+    display: flex; align-items: center; gap: 6px;
+    position: sticky; top: -8px; z-index: 5;
+    margin: -8px -8px 4px; padding: 4px 8px;
+    background: var(--vscode-editor-background);
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
+    font-size: 0.82em;
+  }
+  .pane-head .ph-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-charts-blue, #3794ff); display: none; flex-shrink: 0; }
+  .pane-head.ph-streaming .ph-dot { display: inline-block; animation: pi-pulse 1.2s ease-in-out infinite; }
+  .pane-head .ph-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.9; }
+
+  /* 分屏状态栏：底部原 #status 位置左右各一条，与上方 pane 对齐 */
+  #statusSplit { display: flex; align-items: center; flex: 0 0 auto; min-height: 1.4em; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); font-size: var(--vscode-font-size); }
+  #statusSplit.hidden { display: none; }
+  .ss-cell { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; overflow: hidden; white-space: nowrap; cursor: pointer; color: color-mix(in srgb, var(--vscode-foreground) 88%, transparent); }
+  .ss-cell + .ss-cell { border-left: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
+  .ss-cell:hover .st-model { text-decoration: underline; }
+  .ss-cell:not(.ss-focus) { opacity: 0.6; }
+  .pane-head .ph-close { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 3px; opacity: 0.5; cursor: pointer; }
+  .pane-head .ph-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
+
+  /* assistant 气泡 hover 的“转发到另一侧”按钮（仅分屏时可见） */
+  .msg-relay { position: absolute; bottom: 2px; right: 34px; display: none; align-items: center; padding: 3px 5px; border: 0; border-radius: 4px; background: transparent; color: var(--vscode-descriptionForeground, #999); font-size: 12px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity 120ms ease; }
+  .split-mode .msg.assistant .msg-relay { display: inline-flex; }
+  .split-mode .msg.assistant:hover .msg-relay, .msg-relay:focus-visible { opacity: 1; }
+  .msg-relay:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.18)); color: var(--vscode-foreground); }

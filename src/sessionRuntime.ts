@@ -103,18 +103,44 @@ export class SessionRuntime {
         });
     }
 
+    /** 本 tab 最后一次已知的模型（模型跟 tab 关联：新 tab 默认继承它）。未知返回 undefined。 */
+    public currentModel(): { provider?: string; modelId?: string } | undefined {
+        if (!this.statusModelId) {
+            return undefined;
+        }
+        return { provider: this.statusProvider, modelId: this.statusModelId };
+    }
+
     /** 启动该 tab 的 pi 进程。优先领取宿主预热的备用进程（免冷启动），
-     *  领不到（首 tab / 备用尚未就绪）时自行 spawn。 */
-    public startClient(): void {
+     *  领不到（首 tab / 备用尚未就绪）时自行 spawn。
+     *  @param modelOverride 指定启动模型（新 tab 继承活跃 tab 传入）；
+     *  缺省时用本 tab 最后已知模型，再缺省才回落宿主全局配置。 */
+    public startClient(modelOverride?: { provider?: string; modelId?: string }): void {
         if (this.client && this.client.isRunning()) {
             return;
         }
         this.setPiReady(false);
 
+        const want = modelOverride ?? this.currentModel();
+
         // 备用进程已就绪：直接挂上，避免 pi 冷启动等待
         const spare = this.host.claimSpareClient?.();
         if (spare) {
-            this.attachClient(spare);
+            this.attachClient(spare.client);
+            // 备用进程按全局配置启动；与继承目标不符时补发一次 set_model
+            const mismatch = want && (
+                spare.modelId !== want.modelId
+                || (spare.provider || "") !== (want.provider || "")
+            );
+            if (mismatch && want) {
+                void this
+                    .request<RpcModelInfo>({
+                        type: "set_model",
+                        provider: want.provider,
+                        modelId: want.modelId,
+                    })
+                    .then(() => this.sendCurrentModel());
+            }
             return;
         }
 
@@ -132,8 +158,8 @@ export class SessionRuntime {
             new PiClient({
                 piPath: cfg.piPath,
                 cwd: this.host.getCwd(),
-                provider: cfg.provider || undefined,
-                model: cfg.model || undefined,
+                provider: want?.provider || cfg.provider || undefined,
+                model: want?.modelId || cfg.model || undefined,
                 extraArgs,
             })
         );
@@ -282,6 +308,12 @@ export class SessionRuntime {
         return this.client.waitReady(timeoutMs);
     }
 
+    /** 取本会话最后一条 assistant 回复的文本；无则空串（分屏接力用）。 */
+    public async getLastAssistantText(): Promise<string> {
+        const resp = await this.request<{ text: string | null }>({ type: "get_last_assistant_text" });
+        return (resp?.data?.text ?? "").trim();
+    }
+
     /** 更新当前 agent 阶段，并同步给 webview / tab 列表。 */
     private setActivity(activity: RuntimeActivity, detail = ""): void {
         if (this.activity === activity && this.activityDetail === detail) {
@@ -393,6 +425,7 @@ export class SessionRuntime {
                 this.post({ type: "streamEnd", activity: "idle" });
                 this.setActivity("idle");
                 this.refreshStats();
+                this.host.onAgentSettled?.(this.id);
                 break;
         }
     }
@@ -668,6 +701,89 @@ export class SessionRuntime {
             this.post({ type: "setInput", text: selectedText });
         }
         this.post({ type: "system", text: `已在新 tab 打开新分支（${messages.length} 条消息）。` });
+        this.loading = false;
+        this.host.broadcastTabList();
+        this.refreshStats();
+        void this.sendCurrentModel();
+    }
+
+    /**
+     * 加载指定会话文件后，在当前位置 clone 到新会话文件。
+     * 用于分屏：新 pane 拿到与源会话完全对齐的副本，两侧从此并行，源 tab 不受影响。
+     */
+    public async loadSessionAndClone(sessionPath: string): Promise<void> {
+        if (!this.client || !this.client.isRunning()) {
+            this.startClient();
+        }
+        this.loading = true;
+        this.host.broadcastTabList();
+        this.edits.reset();
+        this.post({ type: "clear" });
+        this.post({ type: "system", text: "正在克隆会话…" });
+        const t0 = Date.now();
+
+        const ready = await this.waitReady();
+        if (!ready) {
+            this.loading = false;
+            this.host.broadcastTabList();
+            this.post({
+                type: "systemError",
+                text: "pi 进程未能就绪，无法克隆会话。请确认 pi 可正常启动。",
+            });
+            return;
+        }
+        console.log(`[clone] waitReady ${Date.now() - t0}ms`);
+
+        // 1. 加载源会话（不修改源文件）
+        const switchResp = await this.request({ type: "switch_session", sessionPath });
+        if (!switchResp || switchResp.success === false) {
+            this.loading = false;
+            this.host.broadcastTabList();
+            this.post({
+                type: "systemError",
+                text: `加载源会话失败: ${switchResp?.error ?? "未知错误"}`,
+            });
+            return;
+        }
+        console.log(`[clone] switch_session ${Date.now() - t0}ms`);
+        this.currentSessionPath = sessionPath;
+        this.host.onSessionChanged?.(this.id, this.currentSessionPath);
+
+        // 2. 在当前位置 clone：创建新会话文件并切换过去（不碰源文件）
+        const cloneResp = await this.request<{ cancelled?: boolean }>({ type: "clone" });
+        if (!isRpcOk(cloneResp)) {
+            this.loading = false;
+            this.host.broadcastTabList();
+            this.post({
+                type: "systemError",
+                text: `克隆失败: ${rpcErrorMessage(cloneResp)}`,
+            });
+            return;
+        }
+        if (cloneResp.data?.cancelled) {
+            this.loading = false;
+            this.host.broadcastTabList();
+            this.post({ type: "system", text: "克隆已取消。" });
+            return;
+        }
+        console.log(`[clone] clone 命令 ${Date.now() - t0}ms`);
+
+        // 3. 读取新会话消息并同步会话路径
+        const cloneMsgs = await Promise.all([
+            this.request<{ messages: any[] }>({ type: "get_messages" }),
+            this.request<{ messages: RpcForkMessage[] }>({ type: "get_fork_messages" }),
+            this.request<RpcSessionState>({ type: "get_state" }),
+        ]);
+        const messages: any[] = cloneMsgs[0]?.data?.messages ?? [];
+        this.forkEntries = cloneMsgs[1]?.data?.messages ?? [];
+        if (cloneMsgs[2]?.data?.sessionFile) {
+            this.currentSessionPath = cloneMsgs[2].data.sessionFile;
+            this.host.onSessionChanged?.(this.id, this.currentSessionPath);
+        }
+        this.post({ type: "clear" });
+        this.renderMessages(messages);
+        this.post({ type: "system", text: `已克隆为新会话（${messages.length} 条消息），两侧可并行对话。` });
+        console.log(`[clone] 回传+渲染共 ${Date.now() - t0}ms`);
         this.loading = false;
         this.host.broadcastTabList();
         this.refreshStats();

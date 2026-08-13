@@ -36,6 +36,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected activeId: string | undefined;
     protected tabSeq = 0;
     protected autoLoadDone = false;
+
+    // ---- 分屏 / 接力状态（纯临时视图状态，不落盘）----
+    protected splitState?: { leftId: string; rightId: string; linked: boolean; focus: "left" | "right" };
+    /** 自动接力循环：模式、总轮数、已注入次数、当前等待落定的 tab、该 tab 注入前的最后回复（防重复）。 */
+    protected relayState?: { mode: "review" | "debate"; total: number; done: number; waitingTabId: string; baseline: string };
+    protected static readonly RELAY_DEFAULT_ROUNDS = 6;
+    protected static readonly RELAY_TEMPLATES: Record<string, string> = {
+        review: "【对端会话的最新回复 · 请审查】\n请审查以下内容，指出问题与改进建议。工作区是共享的，你可以直接读取相关文件核验。\n\n---\n\n",
+        debate: "【对端会话的最新观点 · 请回应】\n请针对以下观点进行反驳、补充或修正，给出你的论证。工作区是共享的，你可以直接读取相关文件核验。\n\n---\n\n",
+    };
     /** tabList 节流：流式 activity 变更很频繁，合并到下一帧附近推送。 */
     private tabListTimer: ReturnType<typeof setTimeout> | null = null;
     private static readonly TAB_LIST_THROTTLE_MS = 48;
@@ -55,6 +65,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected spare: PiClient | null = null;
     /** 正在后台预热、尚未就绪的备用进程（防止并发 spawn 多个）。 */
     protected preparingSpare: PiClient | null = null;
+    /** 备用进程启动时使用的模型（领取时随进程一起返回，供继承比对）。 */
+    protected spareMeta?: { provider?: string; modelId?: string };
 
     // ---- 快捷键标签 ----
     protected static readonly SEND_KEY_LABELS: Record<string, string> = {
@@ -71,6 +83,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
         "ctrl+alt+pgupdown": "Ctrl+Alt+PageUp / PageDown",
         "alt+brackets": "Alt+[ / Alt+]",
         "ctrl+alt+brackets": "Ctrl+Alt+[ / Ctrl+Alt+]",
+    };
+    protected static readonly SPLIT_KEY_LABELS: Record<string, string> = {
+        "ctrl+alt+s": "Ctrl+Alt+S",
+        "ctrl+shift+s": "Ctrl+Shift+S",
     };
 
     /** 把标签映射转成按钮组选项列表。 */
@@ -103,6 +119,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract getSendKey(): string;
     protected abstract getNewSessionKey(): string;
     protected abstract getTabSwitchKey(): string;
+    /** 分屏快捷键（如 "ctrl+alt+s"）。 */
+    protected abstract getSplitKey(): string;
+    /** 转发注入前缀模板（{model}/{模型名称} 替换为模型名；空串为裸转发）。 */
+    protected abstract getRelayPrefix(): string;
     /** 工具调用显示："compact"（简洁标签）| "full"（TUI 风格卡片）。 */
     protected abstract getToolDisplay(): string;
     /** 字号（px 字符串，如 "13"；空串表示跟随 VSCode 设置）。 */
@@ -201,6 +221,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             tabSwitchKey: this.getTabSwitchKey(),
             toolDisplay: this.getToolDisplay(),
             fontSize: this.getFontSize(),
+            splitKey: this.getSplitKey(),
         });
     }
 
@@ -242,13 +263,30 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 options: ChatControllerBase.keyOptions(ChatControllerBase.TAB_SWITCH_KEY_LABELS),
             },
             {
+                action: "splitKey",
+                label: "分屏快捷键",
+                desc: "clone 当前会话到右侧 pane 并排对话（一次发送两边）",
+                check: null,
+                value: this.getSplitKey(),
+                options: ChatControllerBase.keyOptions(ChatControllerBase.SPLIT_KEY_LABELS),
+            },
+            {
+                action: "relayPrefix",
+                kind: "text",
+                label: "转发注入前缀",
+                desc: "🔁 转发回复到另一侧时自动加的前缀；{模型名称} / {model} 替换为源侧模型名。留空则裸转发",
+                check: null,
+                value: this.getRelayPrefix(),
+            },
+            {
                 action: "toolDisplay",
                 label: "工具调用显示",
-                desc: "完整模式：每个工具调用以卡片展示（TUI 风格：调用行、实时输出、结果、耗时）",
+                desc: "简洁：仅工具名标签 · 摘要：标签含调用摘要与耗时 · 完整：TUI 风格卡片（调用行、实时输出、结果、耗时）",
                 check: null,
                 value: this.getToolDisplay(),
                 options: [
                     { value: "compact", label: "简洁" },
+                    { value: "medium", label: "摘要" },
                     { value: "full", label: "完整" },
                 ],
             },
@@ -304,6 +342,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
             model: cfg.model || undefined,
             extraArgs,
         });
+        // 记住备用进程的启动模型：新 tab 领取时按继承目标比对，不符则补发 set_model
+        this.spareMeta = {
+            provider: cfg.provider || undefined,
+            modelId: cfg.model || undefined,
+        };
         this.preparingSpare = client;
         client.on("stderr", (text: string) => console.error("[pi spare stderr]", text));
         client.on("error", (err: Error) => console.error("[pi spare error]", err.message));
@@ -330,14 +373,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
         });
     }
 
-    /** RuntimeHost.claimSpareClient：领取就绪的备用进程；领取后立即后台补新。 */
-    public claimSpareClient(): PiClient | undefined {
+    /** RuntimeHost.claimSpareClient：领取就绪的备用进程（附带其启动模型）；领取后立即后台补新。 */
+    public claimSpareClient(): { client: PiClient; provider?: string; modelId?: string } | undefined {
         const c = this.spare ?? undefined;
+        const meta = this.spareMeta;
         this.spare = null;
+        this.spareMeta = undefined;
         if (c) {
             this.ensureSpare();
+            return { client: c, provider: meta?.provider, modelId: meta?.modelId };
         }
-        return c;
+        return undefined;
     }
 
     /** 停止并清空所有备用进程（宿主销毁时调用，如 VSCode webview dispose）。 */
@@ -413,6 +459,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected onActiveStatusUpdate(_info: StatusInfo): void { /* 默认无操作 */ }
 
     public newTab(): SessionRuntime {
+        // 分屏中新建 tab：先退出分屏（新 tab 在分屏视图里不可见）
+        if (this.splitState) { this.exitSplit(); }
+        // 模型跟 tab 关联：新 tab 继承当前活跃 tab 的模型；无 tab 时回落全局配置（startClient 内部处理）
+        const inherited = this.getActive()?.currentModel();
         const id = `tab-${++this.tabSeq}`;
         const title = `会话 ${this.tabSeq}`;
         const rt = new SessionRuntime(id, title, this);
@@ -420,7 +470,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.activeId = id;
         this.broadcastTabList(true);
         this.postToWebview({ type: "tabActivated", id });
-        rt.startClient();
+        rt.startClient(inherited);
         // 后台预热一个备用进程，供下一个新 tab / 切分支直接领取
         this.ensureSpare();
         return rt;
@@ -451,6 +501,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
     public closeTab(id: string): void {
         const rt = this.tabs.get(id);
         if (!rt) { return; }
+        // 关闭分屏任一 pane：退出分屏并解散链接组
+        if (this.isSplitMember(id)) {
+            this.stopRelay();
+            this.splitState = undefined;
+            this.broadcastSplitState();
+        }
         rt.stopClient();
         this.tabs.delete(id);
         this.postToWebview({ type: "tabClosed", id });
@@ -481,6 +537,235 @@ export abstract class ChatControllerBase implements RuntimeHost {
             for (const p of rt.getKnownFiles()) { set.add(p); }
         }
         return Array.from(set);
+    }
+
+    // ========================================================================
+    //  分屏（两个 pane 并排，链接组广播输入）
+    // ========================================================================
+
+    protected broadcastSplitState(): void {
+        const s = this.splitState;
+        this.postToWebview({
+            type: "splitState",
+            state: s ? { leftId: s.leftId, rightId: s.rightId, linked: s.linked, focus: s.focus } : null,
+        });
+    }
+
+    public isSplitMember(tabId: string): boolean {
+        return !!this.splitState && (this.splitState.leftId === tabId || this.splitState.rightId === tabId);
+    }
+
+    /** 链接中且 tab 在分屏组内 → 返回两个 pane；否则仅该 tab（发送 / abort 共用）。 */
+    protected linkedGroupOf(tabId: string): SessionRuntime[] {
+        const rt = this.tabs.get(tabId);
+        if (!rt) { return []; }
+        const s = this.splitState;
+        if (s && s.linked && this.isSplitMember(tabId) && s.leftId !== s.rightId) {
+            const l = this.tabs.get(s.leftId);
+            const r = this.tabs.get(s.rightId);
+            if (l && r) { return [l, r]; }
+        }
+        return [rt];
+    }
+
+    /**
+     * 分屏：clone 当前活跃会话到新 pane（上下文对齐），自动建立链接。
+     * 立即进入分屏视图（右 pane 先显示加载态），clone 异步完成；
+     * 源会话迟迟未落盘时降级为“右侧新建空会话 + 链接”。
+     */
+    public async splitActiveTab(): Promise<void> {
+        const src = this.getActive();
+        if (!src || this.splitState) { return; }
+        // 1. 立即建右 pane 并进分屏，用户马上看到分屏布局 + 加载指示
+        const newRt = this.newTab();
+        newRt.loading = true;
+        this.splitState = { leftId: src.id, rightId: newRt.id, linked: true, focus: "right" };
+        this.broadcastTabList(true);
+        this.broadcastSplitState();
+
+        // 2. 取源会话状态（sessionFile + 消息数）：0 条消息的全新会话无可复制，立即跳过 clone
+        const tStart = Date.now();
+        const state = await src.request<RpcSessionState>({ type: "get_state" });
+        let sourcePath = src.currentSessionPath || state?.data?.sessionFile;
+        if (sourcePath && !src.currentSessionPath) { src.currentSessionPath = sourcePath; }
+        const messageCount = typeof state?.data?.messageCount === "number" ? state.data.messageCount : -1;
+        let cloned = false;
+        if (sourcePath && messageCount !== 0) {
+            const abs = this.resolvePath(sourcePath);
+            const deadline = Date.now() + 8000;
+            while (!fs.existsSync(abs) && Date.now() < deadline) {
+                await new Promise((r) => setTimeout(r, 250));
+            }
+            if (fs.existsSync(abs)) {
+                await newRt.loadSessionAndClone(abs);
+                cloned = true;
+            }
+        } else {
+            console.log(`[split] 跳过 clone（messageCount=${messageCount}）`);
+        }
+        if (!cloned) {
+            newRt.loading = false;
+            // 有内容但克隆未果才提示；全新空会话无需提示
+            if (messageCount !== 0) {
+                this.postToTab(newRt.id, {
+                    type: "system",
+                    text: "源会话尚未保存到磁盘，右侧为全新会话（可直接开始对话）。",
+                });
+            }
+        }
+        console.log(`[split] 分屏完成，共 ${Date.now() - tStart}ms`);
+        this.broadcastTabList(true);
+    }
+
+    /** 退出分屏（保留两个 tab），返回 tab 栏视图。 */
+    public exitSplit(): void {
+        if (!this.splitState) { return; }
+        this.stopRelay();
+        const focusId = this.splitState.focus === "left" ? this.splitState.leftId : this.splitState.rightId;
+        this.splitState = undefined;
+        this.broadcastSplitState();
+        if (this.tabs.has(focusId)) { this.setActive(focusId); }
+        this.broadcastTabList(true);
+    }
+
+    /** 点击 pane 聚焦：更新分屏焦点并同步 activeId（状态栏 / 拾取器跟随）。 */
+    public setSplitFocus(tabId: string): void {
+        const s = this.splitState;
+        if (!s) { return; }
+        if (tabId === s.leftId) { s.focus = "left"; }
+        else if (tabId === s.rightId) { s.focus = "right"; }
+        else { return; }
+        this.setActive(tabId);
+        this.broadcastSplitState();
+    }
+
+    protected setSplitLinked(linked: boolean): void {
+        const s = this.splitState;
+        if (!s || s.linked === linked) { return; }
+        s.linked = linked;
+        if (!linked) { this.stopRelay(); }
+        this.broadcastSplitState();
+    }
+
+    public toggleSplitLink(): void {
+        const s = this.splitState;
+        if (!s) { return; }
+        this.setSplitLinked(!s.linked);
+    }
+
+    public onAgentSettled(tabId: string): void {
+        void this.advanceRelayOnSettled(tabId);
+    }
+
+    // ========================================================================
+    //  会话接力（插件级中继：把一方回复注入另一方）
+    // ========================================================================
+
+    /** 推送接力循环状态（running=false 带 notice 用于终止提示）。 */
+    protected broadcastRelayState(notice = ""): void {
+        const s = this.relayState;
+        if (s) {
+            this.postToWebview({ type: "relayState", state: { running: true, mode: s.mode, done: s.done, total: s.total, notice } });
+        } else {
+            this.postToWebview({ type: "relayState", state: notice ? { running: false, notice } : null });
+        }
+    }
+
+    public stopRelay(): void {
+        if (!this.relayState) { return; }
+        this.relayState = undefined;
+        this.broadcastRelayState();
+    }
+
+    /** 转发注入前缀包装：{model} / {模型名称} 替换为源 pane 的模型名；空模板则裸转发。 */
+    protected wrapRelayText(source: SessionRuntime, text: string): string {
+        const tpl = this.getRelayPrefix();
+        if (!tpl || !tpl.trim()) { return text; }
+        const m = source.currentModel();
+        const model = m?.modelId || "对端会话";
+        const prefix = tpl
+            .replace(/\{model\}/g, model)
+            .replace(/\{模型名称\}/g, model);
+        return prefix + text;
+    }
+
+    /** 转发一次：把 fromTab（缺省聚焦 pane）的最新回复加前缀注入另一侧；可指定历史消息文本。 */
+    public async relayOnce(fromTabId?: string, text?: string): Promise<void> {
+        const s = this.splitState;
+        if (!s) { return; }
+        const srcId = fromTabId && this.isSplitMember(fromTabId)
+            ? fromTabId
+            : (s.focus === "left" ? s.leftId : s.rightId);
+        const dstId = srcId === s.leftId ? s.rightId : s.leftId;
+        const src = this.tabs.get(srcId);
+        const dst = this.tabs.get(dstId);
+        if (!src || !dst) { return; }
+        let payload = typeof text === "string" ? text.trim() : "";
+        if (!payload) {
+            payload = await src.getLastAssistantText();
+        }
+        if (!payload) {
+            this.broadcastRelayState("没有可转发的回复内容");
+            return;
+        }
+        dst.handleSend(this.wrapRelayText(src, payload));
+    }
+
+    /** 自动接力：聚焦 pane 的最新回复为首棒，注入另一侧后按 agent_settled 交替推进。 */
+    public async startRelay(mode: "review" | "debate"): Promise<void> {
+        const s = this.splitState;
+        if (!s || this.relayState) { return; }
+        const srcId = s.focus === "left" ? s.leftId : s.rightId;
+        const dstId = srcId === s.leftId ? s.rightId : s.leftId;
+        const src = this.tabs.get(srcId);
+        const dst = this.tabs.get(dstId);
+        if (!src || !dst) { return; }
+        const text = await src.getLastAssistantText();
+        if (!text) {
+            this.broadcastRelayState("聚焦侧还没有回复，无法开始自动对话");
+            return;
+        }
+        const baseline = await dst.getLastAssistantText();
+        this.relayState = {
+            mode,
+            total: ChatControllerBase.RELAY_DEFAULT_ROUNDS,
+            done: 1,
+            waitingTabId: dstId,
+            baseline,
+        };
+        this.broadcastRelayState();
+        dst.handleSend(ChatControllerBase.RELAY_TEMPLATES[mode] + text);
+    }
+
+    /** 某 tab 落定：若正是接力等待的一方，取其新回复注入另一侧（无新回复/到轮数则止）。 */
+    protected async advanceRelayOnSettled(tabId: string): Promise<void> {
+        const rl = this.relayState;
+        if (!rl || rl.waitingTabId !== tabId) { return; }
+        const s = this.splitState;
+        const cur = this.tabs.get(tabId);
+        if (!s || !cur) { this.relayState = undefined; this.broadcastRelayState(); return; }
+        const text = await cur.getLastAssistantText();
+        if (this.relayState !== rl) { return; } // 等待期间被停止 / 退出分屏
+        if (!text || text === rl.baseline) {
+            this.relayState = undefined;
+            this.broadcastRelayState("本轮无新回复，自动循环结束");
+            return;
+        }
+        if (rl.done >= rl.total) {
+            this.relayState = undefined;
+            this.broadcastRelayState(`自动循环已完成（共 ${rl.total} 轮）`);
+            return;
+        }
+        const dstId = tabId === s.leftId ? s.rightId : s.leftId;
+        const dst = this.tabs.get(dstId);
+        if (!dst) { this.relayState = undefined; this.broadcastRelayState(); return; }
+        const baseline = await dst.getLastAssistantText();
+        if (this.relayState !== rl) { return; }
+        rl.done += 1;
+        rl.waitingTabId = dstId;
+        rl.baseline = baseline;
+        this.broadcastRelayState();
+        dst.handleSend(ChatControllerBase.RELAY_TEMPLATES[rl.mode] + text);
     }
 
     // ========================================================================
@@ -550,6 +835,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     public async loadHistorySession(file: string): Promise<void> {
+        // 分屏中加载历史：作用于聚焦 pane，上下文不同步了，自动解除链接
+        this.setSplitLinked(false);
         // 在活跃 tab 加载；若无 tab 则新建（loadSession 内部会等待 pi 就绪）
         let rt = this.getActive();
         if (!rt) {
@@ -585,8 +872,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 画布双击消息：复用已有 tab 或新建 tab 加载会话，并尝试滚到对应 entry。
      */
     public async openSessionAtEntry(file: string, entryId: string): Promise<void> {
+        this.setSplitLinked(false);
         let rt = this.findTabBySessionFile(file);
         if (rt) {
+            // 命中的是分屏之外的隐藏 tab：先退出分屏，避免 active 指向不可见 pane
+            if (this.splitState && !this.isSplitMember(rt.id)) { this.exitSplit(); }
             this.setActive(rt.id);
         } else {
             // 未打开则新 tab，避免覆盖正在进行的对话
@@ -605,6 +895,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 画布「在此分支」：新 tab 加载会话文件并在 entry 处 fork。
      */
     public async forkAtEntryFromPath(file: string, entryId: string): Promise<void> {
+        this.setSplitLinked(false);
         const abs = this.resolvePath(file);
         if (!fs.existsSync(abs)) {
             return;
@@ -621,6 +912,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 源会话尚未落盘时回退到原地分叉。
      */
     public async forkAtEntryInNewTab(source: SessionRuntime, entryId: string): Promise<void> {
+        // 会新建 tab：分屏视图中新 tab 不可见，先退出分屏
+        if (this.splitState) { this.exitSplit(); }
         // 取源会话文件路径。currentSessionPath 只在加载历史 / 分叉成功后赋值，
         // 全新 tab 普通对话后从未同步 —— 直接向源 pi 查询真实 sessionFile，
         // 避免误判“未落盘”而在当前 tab 原地分叉。
@@ -787,6 +1080,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             case "ready": {
                 this.sendViewOptions();
                 this.broadcastTabList();
+                this.broadcastSplitState();
                 if (this.tabs.size === 0) {
                     this.newTab();
                     void this.maybeAutoLoadLastSession();
@@ -845,6 +1139,30 @@ export abstract class ChatControllerBase implements RuntimeHost {
                     this.doViewOptionToggle(msg.action, typeof msg.value === "string" ? msg.value : undefined);
                 }
                 return;
+            case "splitTab":
+                void this.splitActiveTab();
+                return;
+            case "exitSplit":
+                this.exitSplit();
+                return;
+            case "splitFocus":
+                if (typeof msg.tabId === "string") { this.setSplitFocus(msg.tabId); }
+                return;
+            case "toggleSplitLink":
+                this.toggleSplitLink();
+                return;
+            case "relayOnce":
+                void this.relayOnce(
+                    typeof msg.fromTabId === "string" ? msg.fromTabId : undefined,
+                    typeof msg.text === "string" ? msg.text : undefined
+                );
+                return;
+            case "relayStart":
+                void this.startRelay(msg.mode === "debate" ? "debate" : "review");
+                return;
+            case "relayStop":
+                this.stopRelay();
+                return;
         }
 
         // ---- 平台独有全局消息 ----
@@ -858,12 +1176,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!target) { return; }
 
         switch (msg.type) {
-            case "send":
-                target.handleSend(msg.text, msg.images);
+            case "send": {
+                // 分屏链接中：一次发送同时进两个 pane；否则只进目标 tab
+                for (const t of this.linkedGroupOf(target.id)) { t.handleSend(msg.text, msg.images); }
                 break;
-            case "abort":
-                target.abortActiveRun();
+            }
+            case "abort": {
+                // 分屏链接中：停止同时中断两侧
+                for (const t of this.linkedGroupOf(target.id)) { t.abortActiveRun(); }
                 break;
+            }
             case "showTree":
                 void target.showTree();
                 break;

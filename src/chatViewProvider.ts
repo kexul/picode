@@ -3,10 +3,10 @@ import * as fs from "fs";
 import * as path from "path";
 import { getChatHtml } from "./chatHtml";
 import { writeModelsJson, readModelsJson } from "./modelsConfig";
+import { probeProviderModels } from "./probeModels";
 import {
     SessionRuntime,
     FileChange,
-    StatusInfo,
 } from "./sessionRuntime";
 import { ChatControllerBase } from "./chatControllerBase";
 import { HistoryCanvasPanel } from "./historyCanvasPanel";
@@ -24,9 +24,6 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     private view?: vscode.WebviewView;
     /** webview 的 JS 是否已加载完成并建立消息监听（收到 ready 后为 true）。 */
     private webviewReady = false;
-    private statusBar?: vscode.StatusBarItem;
-    private statusUpdateTimer?: ReturnType<typeof setTimeout>;
-    private lastStatusInfo?: StatusInfo;
     // LSP 符号树缓存：已打开文档 → {version, DocumentSymbol[]}
     private symbolTreeCache = new Map<string, { version: number; symbols: vscode.DocumentSymbol[] }>();
     private symbolSetTimer?: ReturnType<typeof setTimeout>;
@@ -36,11 +33,15 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     private static readonly KEY_SEND_KEY = "piChat.sendKey";
     private static readonly KEY_NEW_SESSION_KEY = "piChat.newSessionKey";
     private static readonly KEY_TAB_SWITCH_KEY = "piChat.tabSwitchKey";
+    private static readonly KEY_SPLIT_KEY = "piChat.splitKey";
+    private static readonly KEY_RELAY_PREFIX = "piChat.relayPrefix";
+    private static readonly DEFAULT_RELAY_PREFIX = "以下是 {模型名称} 的结论，请检查该结论是否正确：\n\n";
     private static readonly KEY_TOOL_DISPLAY = "piChat.toolDisplay";
     private static readonly KEY_FONT_SIZE = "piChat.fontSize";
     private static readonly SEND_KEYS = ["enter", "shift+enter", "alt+enter", "ctrl+enter"] as const;
     private static readonly NEW_SESSION_KEYS = ["ctrl+alt+n", "ctrl+shift+n", "ctrl+t", "alt+n"] as const;
     private static readonly TAB_SWITCH_KEYS = ["ctrl+alt+arrows", "ctrl+alt+pgupdown", "alt+brackets", "ctrl+alt+brackets"] as const;
+    private static readonly SPLIT_KEYS = ["ctrl+alt+s", "ctrl+shift+s"] as const;
 
     private historyCanvas: HistoryCanvasPanel;
 
@@ -62,18 +63,6 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
             localResourceRoots: [this.context.extensionUri],
         };
         webviewView.webview.html = getChatHtml(webviewView.webview, this.context.extensionUri);
-
-        // 状态栏项：显示当前活动 tab 的模型 + 上下文用量；点击弹出模型选择器。
-        if (!this.statusBar) {
-            this.statusBar = vscode.window.createStatusBarItem(
-                vscode.StatusBarAlignment.Right, 100
-            );
-            this.statusBar.command = "piChat.pickModel";
-            this.statusBar.text = "$(hubot) pi";
-            this.statusBar.tooltip = "Pi Chat：点击切换模型";
-            this.statusBar.show();
-            this.context.subscriptions.push(this.statusBar);
-        }
 
         webviewView.webview.onDidReceiveMessage((msg) => {
             if (msg?.type === "exportConversationResult" && typeof msg.tabId === "string" && typeof msg.html === "string") {
@@ -104,13 +93,12 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
             }
             this.tabs.clear();
             this.activeId = undefined;
+            this.splitState = undefined;
+            this.relayState = undefined;
             this.webviewReady = false;
             this.disposeSpare();
             for (const s of this.workspaceSubs) { s.dispose(); }
             this.workspaceSubs = [];
-            // webview 关闭后状态栏仍保留为全局入口：重置为中性态。
-            this.lastStatusInfo = undefined;
-            this.applyStatusBar(undefined);
         });
     }
 
@@ -241,10 +229,21 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         const v = this.context.globalState.get<string>(ChatViewProvider.KEY_TAB_SWITCH_KEY, "ctrl+alt+arrows");
         return (ChatViewProvider.TAB_SWITCH_KEYS as readonly string[]).includes(v) ? v : "ctrl+alt+arrows";
     }
-    /** 工具调用显示："compact"（简洁标签）| "full"（TUI 风格卡片）。 */
+    protected getSplitKey(): string {
+        const v = this.context.globalState.get<string>(ChatViewProvider.KEY_SPLIT_KEY, "ctrl+alt+s");
+        return (ChatViewProvider.SPLIT_KEYS as readonly string[]).includes(v) ? v : "ctrl+alt+s";
+    }
+    /** 转发注入前缀模板；未设置时回落默认模板（显式清空则裸转发）。 */
+    protected getRelayPrefix(): string {
+        return this.context.globalState.get<string>(
+            ChatViewProvider.KEY_RELAY_PREFIX,
+            ChatViewProvider.DEFAULT_RELAY_PREFIX
+        );
+    }
+    /** 工具调用显示："compact"（简洁标签）| "medium"（摘要标签）| "full"（TUI 风格卡片）。 */
     protected getToolDisplay(): string {
         const v = this.context.globalState.get<string>(ChatViewProvider.KEY_TOOL_DISPLAY, "compact");
-        return v === "full" ? "full" : "compact";
+        return v === "full" || v === "medium" ? v : "compact";
     }
     protected getFontSize(): string {
         const v = this.context.globalState.get<string>(ChatViewProvider.KEY_FONT_SIZE, "14");
@@ -273,13 +272,22 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
                     ? value
                     : order[(order.indexOf(this.getTabSwitchKey() as (typeof order)[number]) + 1) % order.length];
             this.context.globalState.update(ChatViewProvider.KEY_TAB_SWITCH_KEY, next);
-        } else if (action === "toolDisplay") {
+        } else if (action === "relayPrefix") {
+            this.context.globalState.update(ChatViewProvider.KEY_RELAY_PREFIX, typeof value === "string" ? value : "");
+        } else if (action === "splitKey") {
+            const order = ChatViewProvider.SPLIT_KEYS;
             const next =
-                value === "full" || value === "compact"
+                value && (order as readonly string[]).includes(value)
                     ? value
-                    : this.getToolDisplay() === "full"
-                      ? "compact"
-                      : "full";
+                    : order[(order.indexOf(this.getSplitKey() as (typeof order)[number]) + 1) % order.length];
+            this.context.globalState.update(ChatViewProvider.KEY_SPLIT_KEY, next);
+        } else if (action === "toolDisplay") {
+            const order = ["compact", "medium", "full"] as const;
+            const cur = this.getToolDisplay();
+            const next =
+                value !== undefined && (order as readonly string[]).includes(value)
+                    ? value
+                    : order[((order as readonly string[]).indexOf(cur) + 1) % order.length];
             this.context.globalState.update(ChatViewProvider.KEY_TOOL_DISPLAY, next);
         } else if (action === "fontSize") {
             const next = typeof value === "string" && /^\d+$/.test(value) ? value : "";
@@ -306,10 +314,23 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
                     if (result.ok) {
                         this.postToWebview({ type: "app:settingsResult", ok: true });
                         vscode.window.showInformationMessage("已保存 models.json");
+                        // 丢弃预热的 pi 进程：其 models.json 是启动时读入的旧副本，
+                        // 丢弃后下一个新会话会按新配置启动（现有会话不受影响，重启后生效）。
+                        this.disposeSpare();
                     } else {
                         this.postToWebview({ type: "app:settingsResult", ok: false, error: result.error });
                     }
                 }
+                return true;
+            }
+            case "app:probeModels": {
+                void probeProviderModels(
+                    typeof msg.baseUrl === "string" ? msg.baseUrl : "",
+                    typeof msg.apiKey === "string" ? msg.apiKey : "",
+                    typeof msg.api === "string" ? msg.api : undefined,
+                ).then((result) => {
+                    this.postToWebview({ type: "app:probeModelsResult", ...result });
+                });
                 return true;
             }
         }
@@ -585,54 +606,9 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         if (rt) { await rt.showTree(); }
     }
 
-    /** 活跃 tab 的模型/上下文状态变化：更新状态栏（500ms 节流）。 */
-    protected onActiveStatusUpdate(info: StatusInfo): void {
-        this.lastStatusInfo = info;
-        if (this.statusUpdateTimer) { return; }
-        this.statusUpdateTimer = setTimeout(() => {
-            this.statusUpdateTimer = undefined;
-            this.applyStatusBar(this.lastStatusInfo);
-        }, 500);
-    }
-
     /** 任一 tab 的工具触及文件集合变化：刷新符号集合（200ms 防抖）。 */
     protected onKnownFilesChangedByHost(): void {
         this.schedulePushSymbolSet();
-    }
-
-    private applyStatusBar(info?: StatusInfo): void {
-        const sb = this.statusBar;
-        if (!sb) { return; }
-        const modelId = info?.modelId || "";
-        const provider = info?.provider || "";
-        const modelPart = modelId ? `${provider ? provider + "/" : ""}${modelId}` : "pi";
-        let text = `$(hubot) ${modelPart}`;
-        let tooltip = "Pi Chat：点击切换模型";
-        if (info && typeof info.percent === "number") {
-            text += ` · ${info.percent.toFixed(1)}%`;
-            const tok = info.tokens != null ? info.tokens.toLocaleString() : "?";
-            const win = info.contextWindow != null ? info.contextWindow.toLocaleString() : "?";
-            const tl = info.thinkingLevel ? ` · 思考 ${info.thinkingLevel}` : "";
-            tooltip = `当前: ${modelPart}${tl}\n上下文: ${tok} / ${win} tokens (${info.percent.toFixed(1)}%)`;
-        }
-        sb.text = text;
-        sb.tooltip = tooltip;
-        if (info && typeof info.percent === "number") {
-            if (info.percent >= 90) {
-                sb.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
-                sb.color = undefined;
-            } else if (info.percent >= 70) {
-                sb.color = new vscode.ThemeColor("editorWarning.foreground");
-                sb.backgroundColor = undefined;
-            } else {
-                sb.color = undefined;
-                sb.backgroundColor = undefined;
-            }
-        } else {
-            sb.color = undefined;
-            sb.backgroundColor = undefined;
-        }
-        sb.show();
     }
 
     public async askSelectionAndSend(): Promise<void> {
@@ -674,7 +650,8 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         await this.ensureViewVisible();
         const rt = this.getActive() ?? this.newTab();
         this.setActive(rt.id);
-        rt.handleSend(prompt);
+        // 分屏链接中：选中文本同时发两侧；否则只发当前 tab
+        for (const t of this.linkedGroupOf(rt.id)) { t.handleSend(prompt); }
         vscode.window.showInformationMessage("已发送到 Pi Chat 对话框。");
     }
 

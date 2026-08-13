@@ -38,7 +38,13 @@ export function renderHTML(opts: RenderHTMLOpts): string {
     const head = opts.extraHead ? `  ${opts.extraHead}\n` : "";
     const tabbar =
     `  <div id="tabBar" class="hidden">\n` +
-    `    <div id="tabBarInner"></div><button id="newTabBtn" class="tab-bar-btn" title="新建会话 (Ctrl+Alt+N)" aria-label="新建会话">+</button>\n` +
+    `    <div id="tabBarInner"></div><button id="splitBtn" class="tab-bar-btn" title="分屏：clone 当前会话到右侧并排对话 (Ctrl+Alt+S)" aria-label="分屏">⊞</button><button id="newTabBtn" class="tab-bar-btn" title="新建会话 (Ctrl+Alt+N)" aria-label="新建会话">+</button>\n` +
+    `  </div>\n`;
+    const splitbar =
+    `  <div id="splitBar" class="hidden">\n` +
+    `    <button id="sbLink" class="sb-btn" title="切换链接：链接中一次发送两边">🔗 已链接</button>\n` +
+    `    <button id="sbExit" class="sb-btn" title="退出分屏（保留两个会话）">退出分屏</button>\n` +
+    `    <span id="sbNotice" class="sb-text sb-notice"></span>\n` +
     `  </div>\n`;
     const bodyTop = opts.extraBodyTop ? `  ${opts.extraBodyTop}\n` : "";
     const bodyBottom = opts.extraBodyBottom ? `  ${opts.extraBodyBottom}\n` : "";
@@ -57,10 +63,11 @@ ${opts.chatCss}
 </style>
 ${head}</head>
 <body>
-${bodyTop}${tabbar}  <div id="messages">
+${bodyTop}${tabbar}${splitbar}  <div id="messages">
     <button id="jumpBottom" class="hidden" title="跳到最新" aria-label="跳到最新">↓</button>
   </div>
   <div id="status"></div>
+  <div id="statusSplit" class="hidden"><div class="ss-cell"></div><div class="ss-cell"></div></div>
   <div id="changedFiles"></div>
   <div id="inputArea">
     <div id="queueBar" class="hidden"></div>
@@ -71,7 +78,6 @@ ${bodyTop}${tabbar}  <div id="messages">
     </div>
     <div id="bottomBar">
       <button id="treeBtn" title="查看对话树 / 切换分支">⑂ 分支</button>
-      <button id="modelBtn" title="切换模型">⚡ <span id="modelName">模型</span></button>
     </div>
   </div>
   <div id="treeOverlay" class="hidden">
