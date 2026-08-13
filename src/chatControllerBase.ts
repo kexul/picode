@@ -37,15 +37,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected tabSeq = 0;
     protected autoLoadDone = false;
 
-    // ---- 分屏 / 接力状态（纯临时视图状态，不落盘）----
+    // ---- 分屏状态（纯临时视图状态，不落盘）----
     protected splitState?: { leftId: string; rightId: string; linked: boolean; focus: "left" | "right" };
-    /** 自动接力循环：模式、总轮数、已注入次数、当前等待落定的 tab、该 tab 注入前的最后回复（防重复）。 */
-    protected relayState?: { mode: "review" | "debate"; total: number; done: number; waitingTabId: string; baseline: string };
-    protected static readonly RELAY_DEFAULT_ROUNDS = 6;
-    protected static readonly RELAY_TEMPLATES: Record<string, string> = {
-        review: "【对端会话的最新回复 · 请审查】\n请审查以下内容，指出问题与改进建议。工作区是共享的，你可以直接读取相关文件核验。\n\n---\n\n",
-        debate: "【对端会话的最新观点 · 请回应】\n请针对以下观点进行反驳、补充或修正，给出你的论证。工作区是共享的，你可以直接读取相关文件核验。\n\n---\n\n",
-    };
     /** tabList 节流：流式 activity 变更很频繁，合并到下一帧附近推送。 */
     private tabListTimer: ReturnType<typeof setTimeout> | null = null;
     private static readonly TAB_LIST_THROTTLE_MS = 48;
@@ -503,7 +496,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!rt) { return; }
         // 关闭分屏任一 pane：退出分屏并解散链接组
         if (this.isSplitMember(id)) {
-            this.stopRelay();
             this.splitState = undefined;
             this.broadcastSplitState();
         }
@@ -620,7 +612,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 退出分屏（保留两个 tab），返回 tab 栏视图。 */
     public exitSplit(): void {
         if (!this.splitState) { return; }
-        this.stopRelay();
         const focusId = this.splitState.focus === "left" ? this.splitState.leftId : this.splitState.rightId;
         this.splitState = undefined;
         this.broadcastSplitState();
@@ -643,7 +634,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const s = this.splitState;
         if (!s || s.linked === linked) { return; }
         s.linked = linked;
-        if (!linked) { this.stopRelay(); }
         this.broadcastSplitState();
     }
 
@@ -653,29 +643,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.setSplitLinked(!s.linked);
     }
 
-    public onAgentSettled(tabId: string): void {
-        void this.advanceRelayOnSettled(tabId);
-    }
-
     // ========================================================================
-    //  会话接力（插件级中继：把一方回复注入另一方）
+    //  手动转发（把一方回复注入另一侧，一次性）
     // ========================================================================
-
-    /** 推送接力循环状态（running=false 带 notice 用于终止提示）。 */
-    protected broadcastRelayState(notice = ""): void {
-        const s = this.relayState;
-        if (s) {
-            this.postToWebview({ type: "relayState", state: { running: true, mode: s.mode, done: s.done, total: s.total, notice } });
-        } else {
-            this.postToWebview({ type: "relayState", state: notice ? { running: false, notice } : null });
-        }
-    }
-
-    public stopRelay(): void {
-        if (!this.relayState) { return; }
-        this.relayState = undefined;
-        this.broadcastRelayState();
-    }
 
     /** 转发注入前缀包装：{model} / {模型名称} 替换为源 pane 的模型名；空模板则裸转发。 */
     protected wrapRelayText(source: SessionRuntime, text: string): string {
@@ -704,68 +674,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!payload) {
             payload = await src.getLastAssistantText();
         }
-        if (!payload) {
-            this.broadcastRelayState("没有可转发的回复内容");
-            return;
-        }
+        if (!payload) { return; }
         dst.handleSend(this.wrapRelayText(src, payload));
-    }
-
-    /** 自动接力：聚焦 pane 的最新回复为首棒，注入另一侧后按 agent_settled 交替推进。 */
-    public async startRelay(mode: "review" | "debate"): Promise<void> {
-        const s = this.splitState;
-        if (!s || this.relayState) { return; }
-        const srcId = s.focus === "left" ? s.leftId : s.rightId;
-        const dstId = srcId === s.leftId ? s.rightId : s.leftId;
-        const src = this.tabs.get(srcId);
-        const dst = this.tabs.get(dstId);
-        if (!src || !dst) { return; }
-        const text = await src.getLastAssistantText();
-        if (!text) {
-            this.broadcastRelayState("聚焦侧还没有回复，无法开始自动对话");
-            return;
-        }
-        const baseline = await dst.getLastAssistantText();
-        this.relayState = {
-            mode,
-            total: ChatControllerBase.RELAY_DEFAULT_ROUNDS,
-            done: 1,
-            waitingTabId: dstId,
-            baseline,
-        };
-        this.broadcastRelayState();
-        dst.handleSend(ChatControllerBase.RELAY_TEMPLATES[mode] + text);
-    }
-
-    /** 某 tab 落定：若正是接力等待的一方，取其新回复注入另一侧（无新回复/到轮数则止）。 */
-    protected async advanceRelayOnSettled(tabId: string): Promise<void> {
-        const rl = this.relayState;
-        if (!rl || rl.waitingTabId !== tabId) { return; }
-        const s = this.splitState;
-        const cur = this.tabs.get(tabId);
-        if (!s || !cur) { this.relayState = undefined; this.broadcastRelayState(); return; }
-        const text = await cur.getLastAssistantText();
-        if (this.relayState !== rl) { return; } // 等待期间被停止 / 退出分屏
-        if (!text || text === rl.baseline) {
-            this.relayState = undefined;
-            this.broadcastRelayState("本轮无新回复，自动循环结束");
-            return;
-        }
-        if (rl.done >= rl.total) {
-            this.relayState = undefined;
-            this.broadcastRelayState(`自动循环已完成（共 ${rl.total} 轮）`);
-            return;
-        }
-        const dstId = tabId === s.leftId ? s.rightId : s.leftId;
-        const dst = this.tabs.get(dstId);
-        if (!dst) { this.relayState = undefined; this.broadcastRelayState(); return; }
-        const baseline = await dst.getLastAssistantText();
-        if (this.relayState !== rl) { return; }
-        rl.done += 1;
-        rl.waitingTabId = dstId;
-        rl.baseline = baseline;
-        this.broadcastRelayState();
-        dst.handleSend(ChatControllerBase.RELAY_TEMPLATES[rl.mode] + text);
     }
 
     // ========================================================================
@@ -1156,12 +1066,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
                     typeof msg.fromTabId === "string" ? msg.fromTabId : undefined,
                     typeof msg.text === "string" ? msg.text : undefined
                 );
-                return;
-            case "relayStart":
-                void this.startRelay(msg.mode === "debate" ? "debate" : "review");
-                return;
-            case "relayStop":
-                this.stopRelay();
                 return;
         }
 

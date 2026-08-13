@@ -94,7 +94,6 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
             this.tabs.clear();
             this.activeId = undefined;
             this.splitState = undefined;
-            this.relayState = undefined;
             this.webviewReady = false;
             this.disposeSpare();
             for (const s of this.workspaceSubs) { s.dispose(); }

@@ -626,20 +626,13 @@
   }
 
   /* ---- 分屏模式 ---- */
-  /* 顶部控制条：链接开关 / 接力档位 / 进度与提示 */
-  #splitBar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); flex: 0 0 auto; }
-  #splitBar.hidden { display: none; }
-  .sb-btn {
-    background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2));
-    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
-    border: 1px solid var(--vscode-button-border, transparent);
-    border-radius: 4px; padding: 2px 8px; font-size: 0.8em; cursor: pointer;
-  }
-  .sb-btn:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,0.35)); }
-  .sb-btn.on { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: var(--vscode-focusBorder, #007acc); }
-  .sb-btn.hidden { display: none; }
-  .sb-text { font-size: 0.78em; opacity: 0.8; white-space: nowrap; }
-  .sb-notice { color: var(--vscode-editorInfo-foreground, var(--vscode-textLink-foreground, #3794ff)); }
+  /* 分屏中央分隔器：§ 表示链接，点击断开/恢复；下方接力进度提示 */
+  #splitDivider { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 8; display: flex; flex-direction: column; align-items: center; gap: 4px; pointer-events: none; }
+  #splitDivider.hidden { display: none; }
+  .split-mode #splitDivider { display: flex; }
+  #splitLinkBtn { pointer-events: auto; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); background: var(--vscode-editor-background); color: var(--vscode-focusBorder, #007fd4); font-size: 15px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; opacity: 0.9; }
+  #splitLinkBtn:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
+  #splitLinkBtn.unlinked { color: var(--vscode-descriptionForeground, #999); opacity: 0.55; }
 
   /* 分屏布局：隐藏 tab 栏与全局状态栏，两个 .in-split pane 改为 flex 并排（固定 50/50） */
   .split-mode #tabBar { display: none !important; }

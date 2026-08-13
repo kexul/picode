@@ -425,7 +425,6 @@ export class SessionRuntime {
                 this.post({ type: "streamEnd", activity: "idle" });
                 this.setActivity("idle");
                 this.refreshStats();
-                this.host.onAgentSettled?.(this.id);
                 break;
         }
     }

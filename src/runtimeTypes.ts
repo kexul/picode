@@ -80,8 +80,6 @@ export interface RuntimeHost {
     onStatusUpdate?(tabId: string, info: StatusInfo): void;
     /** 当某 tab 的工具触及文件集合（knownFiles）变化时通知宿主。可选。 */
     onKnownFilesChanged?(tabId: string): void;
-    /** 当某 tab 的 agent 完全落定（agent_settled）时通知宿主。可选（分屏自动接力用）。 */
-    onAgentSettled?(tabId: string): void;
 
     // ---- UI 弹窗（对应当 pi 的 extension_ui_request）----
     confirmDialog(title: string, message: string): Promise<boolean>;

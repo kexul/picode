@@ -23,9 +23,8 @@
   }
   let multiTab = false; // 收到 tabList / 带 tabId 的消息后置 true，显示 tab 栏
 
-  // ---- 分屏 / 接力本地状态（后端 splitState / relayState 消息驱动）----
+  // ---- 分屏本地状态（后端 splitState 消息驱动）----
   let splitView = null;   // { leftId, rightId, linked, focus: "left"|"right" }
-  let relayView = null;   // { running, mode, done, total, notice }
   let splitKeyCombo = "ctrl+alt+s";
 
   function enterMultiTab() {
@@ -1470,12 +1469,12 @@
   }
 
   // ==================== 分屏 / 接力 ====================
-  const splitBarEl = document.getElementById("splitBar");
-  const sbLinkEl = document.getElementById("sbLink");
-  const sbNoticeEl = document.getElementById("sbNotice");
-  const sbExitEl = document.getElementById("sbExit");
-  if (sbLinkEl) { sbLinkEl.addEventListener("click", () => { vscode.postMessage({ type: "toggleSplitLink" }); }); }
-  if (sbExitEl) { sbExitEl.addEventListener("click", () => { vscode.postMessage({ type: "exitSplit" }); }); }
+  const splitDividerEl = document.getElementById("splitDivider");
+  const splitLinkBtnEl = document.getElementById("splitLinkBtn");
+  // § 符号表示链接：点击断开 / 恢复链接（两侧可各自输入）
+  if (splitLinkBtnEl) {
+    splitLinkBtnEl.addEventListener("click", () => { vscode.postMessage({ type: "toggleSplitLink" }); });
+  }
 
   // 分屏状态栏：底部左右各一条，点击切对应 pane 的模型
   const statusSplitEl = document.getElementById("statusSplit");
@@ -1576,9 +1575,9 @@
     title.textContent = tab.title || "对话";
     const close = document.createElement("span");
     close.className = "ph-close";
-    close.title = "关闭此会话（退出分屏）";
+    close.title = "退出分屏（保留两个会话）";
     close.innerHTML = PH_CLOSE_SVG;
-    close.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "closeTab", tabId: tab.id }); });
+    close.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "exitSplit" }); });
     head.appendChild(dot);
     head.appendChild(title);
     head.appendChild(close);
@@ -1602,14 +1601,13 @@
     syncSplitStatus();
   }
 
-  /** 刷新顶部控制条：链接开关 + 提示文案。 */
-  function renderSplitBar() {
-    if (!splitBarEl) { return; }
-    if (!splitView) { splitBarEl.classList.add("hidden"); return; }
-    splitBarEl.classList.remove("hidden");
-    sbLinkEl.textContent = splitView.linked ? "🔗 已链接" : "🔓 未链接";
-    sbLinkEl.classList.toggle("on", !!splitView.linked);
-    sbNoticeEl.textContent = (relayView && relayView.notice) ? relayView.notice : "";
+  /** 刷新中央分隔器：§ 链接态。 */
+  function renderSplitDivider() {
+    if (splitDividerEl) { splitDividerEl.classList.toggle("hidden", !splitView); }
+    if (splitLinkBtnEl) {
+      splitLinkBtnEl.classList.toggle("unlinked", !(splitView && splitView.linked));
+      splitLinkBtnEl.title = splitView && splitView.linked ? "已链接：点击断开，两侧可各自输入" : "未链接：点击恢复链接，一次发送两边";
+    }
   }
 
   /** splitState 消息落定：进出分屏模式的全量应用。 */
@@ -1618,13 +1616,12 @@
     if (splitView) {
       enterMultiTab();
       if (statusSplitEl) { statusSplitEl.classList.remove("hidden"); }
-      renderSplitBar();
+      renderSplitDivider();
       updatePaneHeads();
       renderChangedFilesFor(tabs.get(activeId));
     } else {
-      relayView = null;
       if (statusSplitEl) { statusSplitEl.classList.add("hidden"); }
-      renderSplitBar();
+      renderSplitDivider();
       renderTabBar();
       reflectTabUI();
     }
@@ -2484,7 +2481,7 @@
       }
       renderTabBar();
       updateSendState(); syncStatus();
-      if (splitView) { applySplitClasses(); updatePaneHeads(); renderSplitBar(); }
+      if (splitView) { applySplitClasses(); updatePaneHeads(); renderSplitDivider(); }
       return;
     }
     if (type === "tabActivated") {
@@ -2512,11 +2509,6 @@
     if (type === "splitState") {
       splitView = msg.state || null;
       applySplitView();
-      return;
-    }
-    if (type === "relayState") {
-      relayView = msg.state || null;
-      renderSplitBar();
       return;
     }
     if (type === "viewOptions") { applyViewOptions(msg); return; }
