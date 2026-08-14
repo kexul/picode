@@ -1088,6 +1088,39 @@
     changedFilesEl.appendChild(item);
     return item;
   }
+  /** 折叠行：按单行可用宽度尽量多放文件 chips，放不下的收敛为 +N。
+   *  items: [{ tab, f }]；toggle: 展开回调 */
+  function layoutCollapsedChips(items, toggle) {
+    const gap = 6;
+    const els = items.map((it) => appendChangedFileChip(it.tab, it.f, true));
+    const more = document.createElement("span");
+    more.className = "cf-more";
+    more.textContent = "+" + items.length;
+    more.addEventListener("click", (e) => { e.stopPropagation(); toggle(); });
+    changedFilesEl.appendChild(more);
+    const cs = getComputedStyle(changedFilesEl);
+    const headerW = (changedFilesEl.querySelector(".cf-header")?.offsetWidth || 0) + gap;
+    const avail = changedFilesEl.clientWidth
+      - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - headerW;
+    if (avail <= 0) { return; } // 未渲染出宽度，保持现状（overflow 会裁剪）
+    const prefix = [0];
+    els.forEach((el, i) => { prefix.push(prefix[i] + el.offsetWidth + (i ? gap : 0)); });
+    let keep = els.length;
+    for (let iter = 0; iter < 8; iter++) {
+      const hiddenN = items.length - keep;
+      if (!hiddenN) { break; }
+      more.textContent = "+" + hiddenN;
+      more.title = "还有 " + hiddenN + " 个文件，点击展开";
+      const moreW = more.offsetWidth + gap;
+      let k = els.length;
+      while (k > 0 && prefix[k] + moreW > avail) { k--; }
+      if (k === keep) { break; }
+      keep = k;
+    }
+    els.forEach((el, i) => { el.style.display = i < keep ? "" : "none"; });
+    if (keep === items.length) { more.remove(); }
+  }
+
   function renderChangedFilesFor(tab) {
     if (splitView) { renderSplitChangedFiles(); return; }
     if (activeId !== tab.id) { return; }
@@ -1126,18 +1159,8 @@
     changedFilesEl.appendChild(header);
 
     if (!expanded) {
-      // 折叠：单行摘要，只显示文件名，超出用 +N
-      const previewN = 3;
-      const preview = files.slice(0, previewN);
-      preview.forEach((f) => appendChangedFileChip(tab, f, true));
-      if (files.length > previewN) {
-        const more = document.createElement("span");
-        more.className = "cf-more";
-        more.textContent = "+" + (files.length - previewN);
-        more.title = "还有 " + (files.length - previewN) + " 个文件，点击展开";
-        more.addEventListener("click", (e) => { e.stopPropagation(); toggle(); });
-        changedFilesEl.appendChild(more);
-      }
+      // 折叠：单行摘要，按行宽自适应显示文件名，放不下用 +N
+      layoutCollapsedChips(files.map((f) => ({ tab, f })), toggle);
       return;
     }
 
@@ -1188,22 +1211,23 @@
     changedFilesEl.appendChild(header);
 
     if (!expanded) {
-      // 折叠：单行摘要，只显示文件名，超出用 +N
-      const previewN = 3;
-      entries.slice(0, previewN).forEach((ent) => appendChangedFileChip(ent.tab, ent.f, true));
-      if (entries.length > previewN) {
-        const more = document.createElement("span");
-        more.className = "cf-more";
-        more.textContent = "+" + (entries.length - previewN);
-        more.title = "还有 " + (entries.length - previewN) + " 个文件，点击展开";
-        more.addEventListener("click", (e) => { e.stopPropagation(); toggle(); });
-        changedFilesEl.appendChild(more);
-      }
+      // 折叠：单行摘要，按行宽自适应显示文件名，放不下用 +N
+      layoutCollapsedChips(entries, toggle);
       return;
     }
 
     entries.forEach((ent) => appendChangedFileChip(ent.tab, ent.f, false));
   }
+  // webview 宽度变化时重新布局折叠的文件行
+  let cfResizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(cfResizeTimer);
+    cfResizeTimer = setTimeout(() => {
+      if (splitView) { renderSplitChangedFiles(); return; }
+      const t = tabs.get(activeId);
+      if (t) { renderChangedFilesFor(t); }
+    }, 120);
+  });
   function renderQueueBar(tab) {
     if (activeId !== tab.id) { return; }
     const items = tab.queuedSteering || [];
