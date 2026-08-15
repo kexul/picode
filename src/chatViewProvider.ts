@@ -10,6 +10,9 @@ import {
 } from "./sessionRuntime";
 import { ChatControllerBase } from "./chatControllerBase";
 import { HistoryCanvasPanel } from "./historyCanvasPanel";
+import { OneShotReview } from "./oneShotReview";
+import { getModelThinkingLevels } from "./messageUtils";
+import type { RpcModelInfo } from "./piRpc";
 
 /**
  * VSCode 插件的聊天视图提供者。
@@ -34,16 +37,31 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     private static readonly KEY_NEW_SESSION_KEY = "piChat.newSessionKey";
     private static readonly KEY_TAB_SWITCH_KEY = "piChat.tabSwitchKey";
     private static readonly KEY_SPLIT_KEY = "piChat.splitKey";
+    private static readonly KEY_REVIEW_KEY = "piChat.reviewKey";
+    private static readonly KEY_REVIEW_PROMPT = "piChat.reviewPrompt";
+    private static readonly KEY_REVIEW_MODEL = "piChat.reviewModel";
     private static readonly KEY_RELAY_PREFIX = "piChat.relayPrefix";
     private static readonly DEFAULT_RELAY_PREFIX = "以下是 {模型名称} 的结论，请检查该结论是否正确：\n\n";
+    private static readonly DEFAULT_REVIEW_PROMPT = "请逐条比对两个 agent 的结论：每一项写明双方是否一致；不一致时判断谁对，并引用原文中的证据（代码、数据、标定结果等）说明理由；最后给出合并版结论（可采纳的共识、错误方的更正、双方都不确定的遗留问题）。";
     private static readonly KEY_TOOL_DISPLAY = "piChat.toolDisplay";
     private static readonly KEY_FONT_SIZE = "piChat.fontSize";
     private static readonly SEND_KEYS = ["enter", "shift+enter", "alt+enter", "ctrl+enter"] as const;
     private static readonly NEW_SESSION_KEYS = ["ctrl+alt+n", "ctrl+shift+n", "ctrl+t", "alt+n"] as const;
     private static readonly TAB_SWITCH_KEYS = ["ctrl+alt+arrows", "ctrl+alt+pgupdown", "alt+brackets", "ctrl+alt+brackets"] as const;
     private static readonly SPLIT_KEYS = ["ctrl+alt+s", "ctrl+shift+s"] as const;
+    private static readonly REVIEW_KEYS = ["ctrl+alt+r", "ctrl+shift+r"] as const;
 
     private historyCanvas: HistoryCanvasPanel;
+    /** 当前正在跑的 one-shot 评审进程（关浮层时回收）。 */
+    private activeReview: OneShotReview | null = null;
+    /** 本轮评审的来源会话（打开浮层时定；裁决注入时用）。 */
+    private reviewSources: SessionRuntime[] = [];
+    /** 本轮评审的裁决全文（“发往两侧”用）。 */
+    private reviewBuf = "";
+    /** 评审模型配置（开浮层时定，发送时用）。 */
+    private reviewModelCfg?: { modelPattern?: string; provider?: string; modelId?: string };
+    /** 本轮评审是否被用户中止（决定退出时推“已停止”还是“完成”）。 */
+    private reviewAborted = false;
 
     constructor(private readonly context: vscode.ExtensionContext) {
         super();
@@ -66,7 +84,7 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
 
         webviewView.webview.onDidReceiveMessage((msg) => {
             if (msg?.type === "exportConversationResult" && typeof msg.tabId === "string" && typeof msg.html === "string") {
-                void this.saveExportedConversation(msg.tabId, msg.html);
+                void this.saveExportedConversation(msg.tabId, msg.html, typeof msg.markdown === "string" ? msg.markdown : "");
                 return;
             }
             this.processMessage(msg);
@@ -232,6 +250,22 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         const v = this.context.globalState.get<string>(ChatViewProvider.KEY_SPLIT_KEY, "ctrl+alt+s");
         return (ChatViewProvider.SPLIT_KEYS as readonly string[]).includes(v) ? v : "ctrl+alt+s";
     }
+    protected getReviewKey(): string {
+        const v = this.context.globalState.get<string>(ChatViewProvider.KEY_REVIEW_KEY, "ctrl+alt+r");
+        return (ChatViewProvider.REVIEW_KEYS as readonly string[]).includes(v) ? v : "ctrl+alt+r";
+    }
+    /** One-shot 互评：浮层预填提示词（显示选项可改；留空回落默认）。 */
+    protected getReviewPrompt(): string {
+        const v = this.context.globalState.get<string>(
+            ChatViewProvider.KEY_REVIEW_PROMPT,
+            ChatViewProvider.DEFAULT_REVIEW_PROMPT
+        );
+        return v && v.trim() ? v : ChatViewProvider.DEFAULT_REVIEW_PROMPT;
+    }
+    /** One-shot 互评：模型串（如 "local/qwen3.8-max:low"），空串跟随聚焦 pane。 */
+    protected getReviewModel(): string {
+        return (this.context.globalState.get<string>(ChatViewProvider.KEY_REVIEW_MODEL, "") || "").trim();
+    }
     /** 转发注入前缀模板；未设置时回落默认模板（显式清空则裸转发）。 */
     protected getRelayPrefix(): string {
         return this.context.globalState.get<string>(
@@ -280,6 +314,17 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
                     ? value
                     : order[(order.indexOf(this.getSplitKey() as (typeof order)[number]) + 1) % order.length];
             this.context.globalState.update(ChatViewProvider.KEY_SPLIT_KEY, next);
+        } else if (action === "reviewKey") {
+            const order = ChatViewProvider.REVIEW_KEYS;
+            const next =
+                value && (order as readonly string[]).includes(value)
+                    ? value
+                    : order[(order.indexOf(this.getReviewKey() as (typeof order)[number]) + 1) % order.length];
+            this.context.globalState.update(ChatViewProvider.KEY_REVIEW_KEY, next);
+        } else if (action === "reviewPrompt") {
+            this.context.globalState.update(ChatViewProvider.KEY_REVIEW_PROMPT, typeof value === "string" ? value : "");
+        } else if (action === "reviewModel") {
+            this.context.globalState.update(ChatViewProvider.KEY_REVIEW_MODEL, typeof value === "string" ? value : "");
         } else if (action === "toolDisplay") {
             const order = ["compact", "medium", "full"] as const;
             const cur = this.getToolDisplay();
@@ -299,6 +344,27 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     // ---- 平台独有消息 ----
     protected handlePlatformMessage(msg: any): boolean {
         switch (msg.type) {
+            case "reviewNow":
+                void this.startReview();
+                return true;
+            case "reviewRun":
+                void this.runReview(typeof msg.text === "string" ? msg.text : "");
+                return true;
+            case "reviewInject": {
+                const payload = this.reviewBuf.trim();
+                if (payload) {
+                    for (const rt of this.reviewSources) {
+                        if (this.tabs.has(rt.id)) { rt.handleSend(payload); }
+                    }
+                }
+                return true;
+            }
+            case "reviewPickModel":
+                void this.pickReviewModel();
+                return true;
+            case "reviewClose":
+                if (msg.abort) { this.abortActiveReview(); }
+                return true;
             case "openSymbol":
                 if (typeof msg.name === "string") { void this.openSymbol(msg.name); }
                 return true;
@@ -336,6 +402,182 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         return false;
     }
 
+    // ========================================================================
+    //  One-shot 互评（拉取两 pane 最新结论 → pi -p 独立裁决 → 浮窗）
+    // ========================================================================
+
+    /** 非分屏时的来源选择：从所有 tab 中依次选两个。 */
+    private async pickReviewSources(): Promise<SessionRuntime[] | undefined> {
+        const list = Array.from(this.tabs.values());
+        if (list.length < 2) {
+            vscode.window.showInformationMessage("互评需要至少 2 个会话，请先分屏（Ctrl+Alt+S）。");
+            return undefined;
+        }
+        const pick = async (title: string, exclude?: SessionRuntime) => {
+            const items = list
+                .filter((r) => r !== exclude)
+                .map((r) => ({ label: r.title || r.id, rt: r }));
+            return vscode.window.showQuickPick(items, { title, placeHolder: "选择会话" });
+        };
+        const a = await pick("选择要评审的第 1 个会话");
+        if (!a) { return undefined; }
+        const b = await pick("选择要评审的第 2 个会话", a.rt);
+        if (!b) { return undefined; }
+        return [a.rt, b.rt];
+    }
+
+    /** 发起 One-shot 互评：分屏中取两 pane，否则拾取两个 tab。 */
+    public async startReview(): Promise<void> {
+        // 1. 来源：分屏时取两 pane；否则选两个 tab
+        const s = this.splitState;
+        let srcs: SessionRuntime[];
+        if (s) {
+            const l = this.tabs.get(s.leftId);
+            const r = this.tabs.get(s.rightId);
+            if (!l || !r) { return; }
+            srcs = [l, r];
+        } else {
+            const picked = await this.pickReviewSources();
+            if (!picked) { return; }
+            srcs = picked;
+        }
+
+        // 2. 拉取两侧最新结论（要预填进输入框）
+        const texts: string[] = [];
+        for (const rt of srcs) {
+            const t = await rt.getLastAssistantText();
+            if (!t) {
+                vscode.window.showWarningMessage(`还评不了：“${rt.title}” 没有助手回复`);
+                return;
+            }
+            texts.push(t);
+        }
+
+        // 3. 模型：配置的 reviewModel 优先；否则跟随分屏聚焦 pane
+        const modelPattern = this.getReviewModel();
+        let provider: string | undefined;
+        let modelId: string | undefined;
+        if (!modelPattern) {
+            const focusId = s ? (s.focus === "left" ? s.leftId : s.rightId) : srcs[0].id;
+            const m = this.tabs.get(focusId)?.currentModel();
+            provider = m?.provider;
+            modelId = m?.modelId;
+        }
+        this.reviewModelCfg = { modelPattern: modelPattern || undefined, provider, modelId };
+
+        // 4. 打开浮层：输入框预填完整 prompt（指令 + 两侧结论），回车才开跑
+        const cfg = this.getConfig();
+        if (!this.checkPiAvailable(cfg.piPath, srcs[0].id)) { return; }
+        this.reviewSources = srcs;
+        const prompt = this.getReviewPrompt() + "\n\n" + srcs
+            .map((rt, i) => `=== “${rt.title}” 最新结论 ===\n${texts[i]}`)
+            .join("\n\n");
+        this.postToWebview({
+            type: "reviewStart",
+            prompt,
+            modelLabel: this.reviewModelLabel(),
+            sources: srcs.map((rt) => rt.title || rt.id),
+        });
+    }
+
+    /** 当前互评生效模型的可读标签。 */
+    private reviewModelLabel(): string {
+        const c = this.reviewModelCfg || {};
+        if (c.modelPattern) { return c.modelPattern; }
+        return [c.provider, c.modelId].filter(Boolean).join("/") || "默认模型";
+    }
+
+    /** 浮层状态栏切模型：借源会话的模型列表，QuickPick 选（含思考档位）。 */
+    private async pickReviewModel(): Promise<void> {
+        const src = this.reviewSources.find((rt) => this.tabs.has(rt.id)) ?? this.getActive();
+        if (!src) { return; }
+        const resp = await src.request<{ models: RpcModelInfo[] }>({ type: "get_available_models" });
+        const raw = resp?.data?.models ?? [];
+        if (raw.length === 0) {
+            vscode.window.showInformationMessage("拿不到模型列表（源会话的 pi 未就绪）");
+            return;
+        }
+        interface Item { label: string; description: string; pattern: string | null; }
+        const items: Item[] = [{ label: "跟随分屏聚焦 pane", description: "清除互评专用模型", pattern: null }];
+        for (const m of raw) {
+            const base = [m.provider, m.id].filter(Boolean).join("/");
+            if (!base) { continue; }
+            const levels = getModelThinkingLevels(m);
+            if (levels.length === 0) {
+                items.push({ label: base, description: m.name || "", pattern: base });
+            } else {
+                for (const lv of levels) {
+                    items.push({ label: `${base}:${lv}`, description: m.name || "", pattern: `${base}:${lv}` });
+                }
+            }
+        }
+        const choice = await vscode.window.showQuickPick(items, {
+            title: "选择互评模型",
+            placeHolder: `当前：${this.reviewModelLabel()}`,
+        });
+        if (!choice) { return; }
+        if (choice.pattern === null) {
+            const focusId = this.splitState
+                ? (this.splitState.focus === "left" ? this.splitState.leftId : this.splitState.rightId)
+                : undefined;
+            const m = (focusId ? this.tabs.get(focusId) : src)?.currentModel();
+            this.reviewModelCfg = { modelPattern: undefined, provider: m?.provider, modelId: m?.modelId };
+        } else {
+            this.reviewModelCfg = { modelPattern: choice.pattern, provider: undefined, modelId: undefined };
+        }
+        this.postToWebview({ type: "reviewModelChanged", modelLabel: this.reviewModelLabel() });
+    }
+
+    /** 执行一轮评审：输入框内容原样开跑（结论已在预填里）。 */
+    private async runReview(instruction: string): Promise<void> {
+        const prompt = instruction.trim();
+        if (!prompt) { return; }
+
+        const cfg = this.getConfig();
+        const m = this.reviewModelCfg || {};
+        this.activeReview?.abort();
+        const run = new OneShotReview({
+            piPath: cfg.piPath,
+            cwd: this.getCwd(),
+            modelPattern: m.modelPattern,
+            provider: m.provider,
+            modelId: m.modelId,
+            approve: cfg.trustProject,
+        });
+        this.activeReview = run;
+        this.reviewAborted = false;
+        this.reviewBuf = "";
+        let stderrBuf = "";
+
+        run.on("delta", (chunk: string) => {
+            this.reviewBuf += chunk;
+            this.postToWebview({ type: "reviewDelta", text: chunk });
+        });
+        run.on("stderr", (chunk: string) => { stderrBuf += chunk; });
+        run.on("exit", (_code: number | null, full: string) => {
+            if (this.activeReview === run) { this.activeReview = null; }
+            if (full) { this.reviewBuf = full; }
+            this.postToWebview({ type: "reviewDone", aborted: this.reviewAborted });
+            if (!(full || "").trim() && !this.reviewAborted && stderrBuf.trim()) {
+                this.postToWebview({ type: "reviewFail", message: stderrBuf.trim().slice(-500) });
+            }
+        });
+        run.on("error", (err: Error) => {
+            this.postToWebview({ type: "reviewFail", message: err.message || String(err) });
+            if (this.activeReview === run) { this.activeReview = null; }
+        });
+
+        run.start(prompt);
+    }
+
+    /** 中止当前评审进程（关浮层时用）。 */
+    private abortActiveReview(): void {
+        if (!this.activeReview) { return; }
+        this.reviewAborted = true;
+        this.activeReview.abort();
+        this.activeReview = null;
+    }
+
     /** 让 webview 把当前 tab 的最终 DOM 快照交给宿主保存为独立 HTML。 */
     public async exportConversation(): Promise<void> {
         await this.ensureViewVisible();
@@ -345,18 +587,25 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         this.postToWebview({ type: "exportConversationRequest", tabId: rt.id, requestId });
     }
 
-    private async saveExportedConversation(tabId: string, html: string): Promise<void> {
+    private async saveExportedConversation(tabId: string, html: string, markdown: string): Promise<void> {
         if (!html || !this.tabs.has(tabId)) { return; }
         const rt = this.tabs.get(tabId);
         const safeTitle = (rt?.title || "pi-会话").replace(/[\\/:*?"<>|]+/g, "-").trim() || "pi-会话";
         const uri = await vscode.window.showSaveDialog({
             defaultUri: vscode.Uri.file(path.join(this.getCwd(), `${safeTitle}.html`)),
-            filters: { "HTML 文件": ["html"], "所有文件": ["*"] },
+            filters: { "HTML 文件": ["html"], "Markdown 文件": ["md"], "所有文件": ["*"] },
             saveLabel: "导出会话",
         });
         if (!uri) { return; }
+        // 按所选文件类型写入：.md 写 Markdown，其他默认写 HTML
+        const isMd = /\.md$/i.test(uri.fsPath);
+        const content = isMd ? markdown : html;
+        if (!content) {
+            vscode.window.showErrorMessage("导出会话失败：Markdown 内容为空");
+            return;
+        }
         try {
-            await fs.promises.writeFile(uri.fsPath, html, "utf8");
+            await fs.promises.writeFile(uri.fsPath, content, "utf8");
             vscode.window.showInformationMessage(`会话已导出：${path.basename(uri.fsPath)}`);
         } catch (e: any) {
             vscode.window.showErrorMessage(`导出会话失败：${e?.message || String(e)}`);

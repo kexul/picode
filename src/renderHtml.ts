@@ -60,7 +60,7 @@ ${head}</head>
 <body>
 ${bodyTop}${tabbar}  <div id="messages">
     <button id="jumpBottom" class="hidden" title="跳到最新" aria-label="跳到最新">↓</button>
-    <div id="splitDivider" class="hidden"><button id="splitLinkBtn">§</button></div>
+    <div id="splitDivider" class="hidden"><button id="splitLinkBtn">§</button><button id="splitReviewBtn" title="One-shot 互评：拉取两侧结论交独立模型裁决 (Ctrl+Alt+R)">⚖</button></div>
   </div>
   <div id="status"></div>
   <div id="statusSplit" class="hidden"><div class="ss-cell"></div><div class="ss-cell"></div></div>
@@ -100,6 +100,21 @@ ${bodyTop}${tabbar}  <div id="messages">
       </div>
       <div id="settingsRoot"></div>
       <div id="viewOptsRoot" class="hidden"></div>
+    </div>
+  </div>
+  <div id="reviewOverlay" class="hidden">
+    <div id="reviewPanel">
+      <div id="reviewHeader">
+        <span id="reviewTitle">One-shot 互评</span>
+        <span id="reviewMeta"></span>
+        <button id="reviewCloseBtn" type="button" title="关闭 (Esc)" aria-label="关闭">✕</button>
+      </div>
+      <div id="reviewMessages"></div>
+      <div id="reviewStatus">
+        <span id="reviewModelSel" title="点击切换互评模型"></span>
+        <button id="reviewInjectBtn" type="button" disabled title="把裁决全文发送到两个源会话">发往两侧</button>
+        <span id="reviewActivity"></span>
+      </div>
     </div>
   </div>
 ${bodyBottom}  <script${nonceAttr} src="${markedJs}"></script>

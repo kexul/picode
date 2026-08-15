@@ -2,7 +2,7 @@
   "name": "pi-chat-vscode",
   "displayName": "Pi Chat",
   "description": "在 VSCode 中与 pi coding agent 进行对话",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "local",
   "license": "MIT",
   "engines": {
@@ -22,7 +22,8 @@
       { "command": "piChat.pickModel", "title": "Pi Chat: 切换模型", "icon": "$(hubot)" },
       { "command": "piChat.showTree", "title": "Pi Chat: 对话分支", "icon": "$(git-branch)" },
       { "command": "piChat.focusInput", "title": "Pi Chat: 聚焦输入框", "icon": "$(keyboard)" },
-      { "command": "piChat.askSelectionAndSend", "title": "Pi Chat: 发送选中文本到对话框", "icon": "$(comment)" }
+      { "command": "piChat.askSelectionAndSend", "title": "Pi Chat: 发送选中文本到对话框", "icon": "$(comment)" },
+      { "command": "piChat.reviewNow", "title": "Pi Chat: One-shot 互评（拉取两侧结论裁决）", "icon": "$(law)" }
     ],
     "viewsContainers": {
       "activitybar": [

@@ -26,6 +26,7 @@
   // ---- 分屏本地状态（后端 splitState 消息驱动）----
   let splitView = null;   // { leftId, rightId, linked, focus: "left"|"right" }
   let splitKeyCombo = "ctrl+alt+s";
+  let reviewKeyCombo = "ctrl+alt+r";
 
   function enterMultiTab() {
     if (multiTab) { return; }
@@ -201,6 +202,7 @@
     notifyOnTurnEnd = opts.notifyOnTurnEnd !== false;
     if (opts.toolDisplay === "full" || opts.toolDisplay === "medium" || opts.toolDisplay === "compact") { toolDisplayMode = opts.toolDisplay; }
     if (typeof opts.splitKey === "string") { splitKeyCombo = opts.splitKey; }
+    if (typeof opts.reviewKey === "string") { reviewKeyCombo = opts.reviewKey; }
   }
 
   // ── 会话结束提示音（Web Audio 合成，无外部资源） ──
@@ -284,6 +286,12 @@
     if (matchCombo(e, splitKeyCombo)) {
       e.preventDefault();
       vscode.postMessage({ type: "splitTab" });
+      return;
+    }
+    // One-shot 互评：拉取两侧结论交独立模型裁决（分屏中/非分屏均可，后端判断来源）
+    if (matchCombo(e, reviewKeyCombo)) {
+      e.preventDefault();
+      vscode.postMessage({ type: "reviewNow" });
       return;
     }
     if (tag === "INPUT" || tag === "TEXTAREA") {
@@ -1499,6 +1507,11 @@
   if (splitLinkBtnEl) {
     splitLinkBtnEl.addEventListener("click", () => { vscode.postMessage({ type: "toggleSplitLink" }); });
   }
+  // ⚖ One-shot 互评：拉取两 pane 最新结论交独立模型裁决，结果进浮窗
+  const splitReviewBtnEl = document.getElementById("splitReviewBtn");
+  if (splitReviewBtnEl) {
+    splitReviewBtnEl.addEventListener("click", () => { vscode.postMessage({ type: "reviewNow" }); });
+  }
 
   // 分屏状态栏：底部左右各一条，点击切对应 pane 的模型
   const statusSplitEl = document.getElementById("statusSplit");
@@ -2252,6 +2265,8 @@
     return countLines(text) > BIG_TEXT_LINES;
   }
   function send() {
+    // 评审模式：Enter 走 one-shot 评审流程，不进任何 pane
+    if (reviewActive) { sendReviewFromInput(); return; }
     const tab = activeTab();
     if (!tab) { return; }
     if (!tab.piReady) { return; }
@@ -2345,6 +2360,8 @@
   treeOverlay.addEventListener("click", (e) => { if (e.target === treeOverlay) { hideTree(); } });
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") { return; }
+    // 互评浮层打开 → 关浮层（运行中同时中止评审）
+    if (reviewOverlayEl && !reviewOverlayEl.classList.contains("hidden")) { e.preventDefault(); requestCloseReview(); return; }
     // 树面板打开 → 关树；picker 打开 → 交给 picker 监听关闭
     if (!treeOverlay.classList.contains("hidden")) { hideTree(); return; }
     if (pickerState && !pickerOverlay.classList.contains("hidden")) { return; }
@@ -2448,9 +2465,83 @@
       `.msg.user .long-msg{white-space:normal!important}` +
       `.msg.user .long-msg pre{white-space:pre-wrap!important}` +
       `.msg-enter{animation:none!important}` +
-      `#jumpBottom,#status,#changedFiles,#inputArea,#tabBar,#treeOverlay,#pickerOverlay,#settingsOverlay{display:none!important}`;
+      `#jumpBottom,#status,#changedFiles,#inputArea,#tabBar,#treeOverlay,#pickerOverlay,#settingsOverlay,#reviewOverlay{display:none!important}`;
     const html = `<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${exportCss}</style></head><body><main id="messages">${pane.outerHTML}</main></body></html>`;
-    vscode.postMessage({ type: "exportConversationResult", tabId, requestId, html });
+    const markdown = buildMarkdownExport(tab);
+    vscode.postMessage({ type: "exportConversationResult", tabId, requestId, html, markdown });
+  }
+
+  // ---------------- Markdown 导出辅助 ----------------
+  /** 计算一个比正文中最长反引号串还长的围栏，避免正文内容逃出代码块。 */
+  function mdFence(text) {
+    let max = 0, cur = 0;
+    for (let i = 0; i < text.length; i++) {
+      if (text.charCodeAt(i) === 96) { cur++; if (cur > max) { max = cur; } }
+      else { cur = 0; }
+    }
+    return "`".repeat(Math.max(3, max + 1));
+  }
+  function truncateLines(text, maxLines) {
+    const lines = String(text).split("\n");
+    if (lines.length <= maxLines) { return text; }
+    return lines.slice(0, maxLines).join("\n") + "\n… (省略 " + (lines.length - maxLines) + " 行)";
+  }
+  function escapeHtmlInline(text) {
+    return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  /** 单次工具调用的 Markdown：摘要单行；有结果时包进可折叠的 details。 */
+  function toolMarkdown(toolName, argStr, resultText) {
+    let summary = "";
+    try { summary = buildMediumSummary(toolName || "tool", argStr || "").textContent.trim(); } catch (e) { summary = ""; }
+    if (!summary) { summary = toolName || "tool"; }
+    if (!resultText || !resultText.trim()) { return ["> 🔧 " + summary, ""]; }
+    const fence = mdFence(resultText);
+    return [
+      "<details>",
+      "<summary>🔧 " + escapeHtmlInline(summary) + "</summary>",
+      "",
+      fence + "text",
+      truncateLines(String(resultText).trimEnd(), 100),
+      fence,
+      "",
+      "</details>",
+      "",
+    ];
+  }
+
+  /** 按时间顺序遍历当前 tab 的消息 DOM，转成 Markdown 文本（只读，不碰渲染状态）。 */
+  function buildMarkdownExport(tab) {
+    const parts = [];
+    parts.push("# " + String(tab.title || "Pi 会话"), "", "> 导出时间：" + new Date().toLocaleString(), "");
+    const children = tab.paneEl.children;
+    for (let i = 0; i < children.length; i++) {
+      const el = children[i];
+      if (!el.classList) { continue; }
+      if (el.classList.contains("user")) {
+        parts.push("## 👤 用户", "", String(el.dataset.raw || "").trim() || "(空消息)", "");
+      } else if (el.classList.contains("assistant")) {
+        const md = el.querySelector(":scope > .md");
+        let raw = "";
+        if (md) {
+          raw = (tab.currentAssistant && tab.currentAssistant.el === md) ? (tab.currentAssistant.raw || "") : (md.dataset.raw || "");
+        } else { raw = el.textContent || ""; }
+        raw = String(raw).trim();
+        if (raw) { parts.push("## 🤖 助手", "", raw, ""); }
+      } else if (el.classList.contains("system")) {
+        const text = (el.textContent || "").trim();
+        if (text) { parts.push("> ℹ️ " + text.split(/\n+/).join(" "), ""); }
+      } else if (el.classList.contains("tool-row")) {
+        el.querySelectorAll(":scope > .tool").forEach((tag) => {
+          parts.push(...toolMarkdown(tag._toolName, tag._argStr, tag._resultText));
+        });
+      } else if (el.classList.contains("tool-card")) {
+        const callEl = el.querySelector(".tc-call");
+        const argStr = callEl && typeof callEl.title === "string" && callEl.title !== el._toolName ? callEl.title : "";
+        parts.push(...toolMarkdown(el._toolName, argStr, el._resultText));
+      }
+    }
+    return parts.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
   }
 
   // ==================== 来自扩展的消息 ====================
@@ -2528,6 +2619,36 @@
       enterMultiTab();
       removeTab(msg.id);
       renderTabBar();
+      return;
+    }
+    if (type === "reviewStart") {
+      openReview(msg.prompt, msg.modelLabel, msg.sources);
+      return;
+    }
+    if (type === "reviewDelta") {
+      reviewBuf += (msg.text || "");
+      reviewRenderBubble();
+      return;
+    }
+    if (type === "reviewDone") {
+      reviewRunning = false;
+      if (reviewTickTimer) { clearInterval(reviewTickTimer); reviewTickTimer = null; }
+      reviewRenderBubble();
+      if (reviewActivityEl) { reviewActivityEl.textContent = msg.aborted ? "已停止" : "完成"; }
+      reviewSetInjectBtn();
+      return;
+    }
+    if (type === "reviewFail") {
+      reviewRunning = false;
+      reviewBubbleEl = null;
+      if (reviewTickTimer) { clearInterval(reviewTickTimer); reviewTickTimer = null; }
+      if (reviewActivityEl) { reviewActivityEl.textContent = ""; }
+      reviewAddBubble("system", escapeHtmlInline("评审失败：" + (msg.message || "未知错误")));
+      reviewSetInjectBtn();
+      return;
+    }
+    if (type === "reviewModelChanged") {
+      if (reviewModelSelEl) { reviewModelSelEl.textContent = msg.modelLabel || ""; }
       return;
     }
     if (type === "splitState") {
@@ -2887,6 +3008,146 @@
         break;
     }
   });
+
+  // ==================== One-shot 互评浮层（只做展示；发送统一走主输入框） ====================
+  const reviewOverlayEl = document.getElementById("reviewOverlay");
+  const reviewMetaEl = document.getElementById("reviewMeta");
+  const reviewMessagesEl = document.getElementById("reviewMessages");
+  const reviewModelSelEl = document.getElementById("reviewModelSel");
+  const reviewInjectBtnEl = document.getElementById("reviewInjectBtn");
+  const reviewActivityEl = document.getElementById("reviewActivity");
+  const reviewCloseBtnEl = document.getElementById("reviewCloseBtn");
+
+  let reviewActive = false;       // 评审模式：主输入框已被换入评审内容，Enter 会路由到评审
+  let reviewSavedInput = "";      // 换入前的输入框内容（Esc 取消时恢复）
+  let reviewRunning = false;      // 当前评审是否在生成
+  let reviewBuf = "";             // 当前流式裁决累计文本
+  let reviewBubbleEl = null;      // 当前流式 assistant 气泡
+  let reviewStartTs = 0;
+  let reviewTickTimer = null;
+
+  function reviewAddBubble(cls, html) {
+    const div = document.createElement("div");
+    div.className = "msg " + cls + " msg-enter";
+    div.innerHTML = html;
+    reviewMessagesEl.appendChild(div);
+    reviewMessagesEl.scrollTop = reviewMessagesEl.scrollHeight;
+    return div;
+  }
+
+  /** 用户气泡：长文（含两份结论）默认折叠，只显示首行摘要。 */
+  function reviewAddUserBubble(text) {
+    const short = (text.split("\n")[0] || "").slice(0, 80);
+    if (text.length <= 200 && text.indexOf("\n") === -1) {
+      return reviewAddBubble("user", escapeHtmlInline(text));
+    }
+    const html = '<details>' +
+      '<summary class="msg-user-fold">' + escapeHtmlInline(short) + '…（' + text.length + ' 字符，展开查看）</summary>' +
+      '<div class="review-user-text">' + escapeHtmlInline(text) + '</div></details>';
+    return reviewAddBubble("user", html);
+  }
+
+  function reviewRenderBubble() {
+    if (!reviewBubbleEl) { return; }
+    let html = "";
+    if (reviewBuf) {
+      try { html = renderMarkdown(reviewBuf); } catch { html = ""; }
+    }
+    reviewBubbleEl.innerHTML = html + (reviewRunning ? '<span class="review-caret"></span>' : "");
+    reviewMessagesEl.scrollTop = reviewMessagesEl.scrollHeight;
+  }
+
+  function reviewStartTick() {
+    if (reviewTickTimer) { clearInterval(reviewTickTimer); }
+    reviewTickTimer = setInterval(() => {
+      if (!reviewRunning) { clearInterval(reviewTickTimer); reviewTickTimer = null; return; }
+      const sec = Math.max(0, Math.floor((Date.now() - reviewStartTs) / 1000));
+      if (reviewActivityEl) { reviewActivityEl.textContent = "生成中 " + sec + "s"; }
+    }, 1000);
+  }
+
+  /** 「发往两侧」按钮：仅当有裁决文本且不在生成中时可用。 */
+  function reviewSetInjectBtn() {
+    if (!reviewInjectBtnEl) { return; }
+    reviewInjectBtnEl.disabled = reviewRunning || !reviewBuf.trim();
+  }
+
+  /** 同步主输入框文本与活动 tab 的输入状态（避免 restoreInputState 把内容冲掉）。 */
+  function setMainInputText(text) {
+    inputEl.value = text;
+    const t = activeTab();
+    if (t) { t.inputText = text; }
+    autoResize();
+  }
+
+  /** 打开浮层：只盖住输入框以上区域；主输入框预填完整评审内容。 */
+  function openReview(prompt, modelLabel, sources) {
+    if (reviewActive || reviewRunning) { return; }
+    const inputAreaEl = document.getElementById("inputArea");
+    if (reviewOverlayEl && inputAreaEl) { reviewOverlayEl.style.bottom = inputAreaEl.offsetHeight + "px"; }
+    reviewActive = true;
+    reviewBuf = "";
+    reviewBubbleEl = null;
+    const srcLine = (sources || []).join("  vs  ");
+    if (reviewMessagesEl) { reviewMessagesEl.innerHTML = ""; }
+    if (reviewMetaEl) {
+      reviewMetaEl.textContent = (srcLine ? "来源：" + srcLine + " · " : "") +
+        "评审内容已预填下方输入框，Enter 发送（不会发进两侧会话）· Esc 取消";
+    }
+    if (reviewModelSelEl) { reviewModelSelEl.textContent = modelLabel || ""; }
+    if (reviewActivityEl) { reviewActivityEl.textContent = ""; }
+    if (reviewInjectBtnEl) { reviewInjectBtnEl.disabled = true; reviewInjectBtnEl.textContent = "发往两侧"; }
+    if (reviewTickTimer) { clearInterval(reviewTickTimer); reviewTickTimer = null; }
+    reviewSavedInput = inputEl.value;
+    setMainInputText(prompt || "");
+    if (reviewOverlayEl) { reviewOverlayEl.classList.remove("hidden"); }
+  }
+
+  /** 评审模式发送：主输入框内容原样开跑，发送后回到正常聊天模式。 */
+  function sendReviewFromInput() {
+    const text = inputEl.value.trim();
+    if (!text || reviewRunning) { return; }
+    reviewActive = false;
+    setMainInputText("");
+    reviewAddUserBubble(text);
+    reviewBuf = "";
+    reviewBubbleEl = reviewAddBubble("assistant", '<span class="review-caret"></span>');
+    reviewRunning = true;
+    reviewStartTs = Date.now();
+    if (reviewActivityEl) { reviewActivityEl.textContent = "生成中 0s"; }
+    reviewStartTick();
+    vscode.postMessage({ type: "reviewRun", text });
+  }
+
+  function requestCloseReview() {
+    if (!reviewOverlayEl || reviewOverlayEl.classList.contains("hidden")) { return; }
+    if (reviewActive && !reviewRunning) {
+      // 还没发过就取消：恢复原输入内容
+      setMainInputText(reviewSavedInput);
+    }
+    const wasRunning = reviewRunning;
+    reviewActive = false;
+    reviewRunning = false;
+    if (reviewTickTimer) { clearInterval(reviewTickTimer); reviewTickTimer = null; }
+    reviewOverlayEl.classList.add("hidden");
+    vscode.postMessage({ type: "reviewClose", abort: wasRunning });
+  }
+
+  if (reviewCloseBtnEl) { reviewCloseBtnEl.addEventListener("click", requestCloseReview); }
+  if (reviewOverlayEl) {
+    reviewOverlayEl.addEventListener("click", (e) => { if (e.target === reviewOverlayEl) { requestCloseReview(); } });
+  }
+  if (reviewModelSelEl) {
+    reviewModelSelEl.addEventListener("click", () => vscode.postMessage({ type: "reviewPickModel" }));
+  }
+  if (reviewInjectBtnEl) {
+    reviewInjectBtnEl.addEventListener("click", () => {
+      if (reviewInjectBtnEl.disabled) { return; }
+      vscode.postMessage({ type: "reviewInject" });
+      reviewInjectBtnEl.textContent = "已发送";
+      setTimeout(() => { reviewInjectBtnEl.textContent = "发往两侧"; }, 1500);
+    });
+  }
 
   function removeTab(id) {
     const st = tabs.get(id);

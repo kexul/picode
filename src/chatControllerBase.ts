@@ -81,6 +81,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
         "ctrl+alt+s": "Ctrl+Alt+S",
         "ctrl+shift+s": "Ctrl+Shift+S",
     };
+    protected static readonly REVIEW_KEY_LABELS: Record<string, string> = {
+        "ctrl+alt+r": "Ctrl+Alt+R",
+        "ctrl+shift+r": "Ctrl+Shift+R",
+    };
 
     /** 把标签映射转成按钮组选项列表。 */
     protected static keyOptions(labels: Record<string, string>): Array<{ value: string; label: string }> {
@@ -114,6 +118,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract getTabSwitchKey(): string;
     /** 分屏快捷键（如 "ctrl+alt+s"）。 */
     protected abstract getSplitKey(): string;
+    /** One-shot 互评快捷键（如 "ctrl+alt+r"）。 */
+    protected abstract getReviewKey(): string;
+    /** One-shot 互评：浮层预填提示词。 */
+    protected abstract getReviewPrompt(): string;
+    /** One-shot 互评：模型串（如 "local/qwen3.8-max:low"）；空串跟随分屏聚焦 pane。 */
+    protected abstract getReviewModel(): string;
     /** 转发注入前缀模板（{model}/{模型名称} 替换为模型名；空串为裸转发）。 */
     protected abstract getRelayPrefix(): string;
     /** 工具调用显示："compact"（简洁标签）| "full"（TUI 风格卡片）。 */
@@ -215,6 +225,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             toolDisplay: this.getToolDisplay(),
             fontSize: this.getFontSize(),
             splitKey: this.getSplitKey(),
+            reviewKey: this.getReviewKey(),
         });
     }
 
@@ -262,6 +273,30 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 check: null,
                 value: this.getSplitKey(),
                 options: ChatControllerBase.keyOptions(ChatControllerBase.SPLIT_KEY_LABELS),
+            },
+            {
+                action: "reviewKey",
+                label: "互评快捷键",
+                desc: "One-shot 互评：拉取分屏两侧最终结论，交独立评审模型裁决（浮窗显示）",
+                check: null,
+                value: this.getReviewKey(),
+                options: ChatControllerBase.keyOptions(ChatControllerBase.REVIEW_KEY_LABELS),
+            },
+            {
+                action: "reviewPrompt",
+                kind: "text",
+                label: "互评提示词",
+                desc: "⚖ 打开互评浮层时预填的指令；发送时自动附上两侧最新结论",
+                check: null,
+                value: this.getReviewPrompt(),
+            },
+            {
+                action: "reviewModel",
+                kind: "text",
+                label: "互评模型",
+                desc: "互评用的模型，如 local/qwen3.8-max:low；留空则跟随分屏聚焦 pane 的模型",
+                check: null,
+                value: this.getReviewModel(),
             },
             {
                 action: "relayPrefix",
