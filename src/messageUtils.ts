@@ -93,6 +93,37 @@ export function extractTruncation(result: unknown): TruncationInfo | undefined {
     };
 }
 
+/**
+ * 把 pi / provider 的原始错误文本整理成可读形式。
+ * 常见形态：`401 {"error":{"message":"Invalid API key"}}`、
+ * `529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`。
+ * 解析失败时原样返回（仅截断超长文本）。
+ */
+export function formatPiError(raw: string): string {
+    const s = (raw || "").trim();
+    if (!s) {
+        return s;
+    }
+    const brace = s.indexOf("{");
+    if (brace >= 0) {
+        try {
+            const j: any = JSON.parse(s.slice(brace));
+            const m =
+                typeof j?.error?.message === "string" ? j.error.message :
+                typeof j?.message === "string" ? j.message :
+                typeof j?.error?.type === "string" ? j.error.type :
+                typeof j?.type === "string" ? j.type : "";
+            if (m.trim()) {
+                const prefix = brace > 0 ? s.slice(0, brace).trim() : "";
+                return prefix ? `${prefix} ${m}` : m;
+            }
+        } catch {
+            // 不是合法 JSON（可能截断），原样返回
+        }
+    }
+    return s.length > 300 ? s.slice(0, 300) + "…" : s;
+}
+
 /** 错误结果的展示文本。 */
 export function extractErrorText(result: unknown): string | undefined {
     if (!result) {

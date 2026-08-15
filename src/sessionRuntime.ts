@@ -5,6 +5,7 @@ import {
     countImages,
     extractResultText,
     extractTruncation,
+    formatPiError,
     getModelThinkingLevels,
     resolveAnchorLine,
     slimTree,
@@ -71,6 +72,8 @@ export class SessionRuntime {
     private client?: PiClient;
     private readonly edits: EditTracker;
     private forkEntries: { entryId: string; text: string }[] = [];
+    /** 本轮已展示过的错误文本；防止重试期间同一错误刷屏。agent_start 时重置。 */
+    private lastShownRunError = "";
 
     constructor(id: string, title: string, private readonly host: RuntimeHost) {
         this.id = id;
@@ -314,6 +317,21 @@ export class SessionRuntime {
         return (resp?.data?.text ?? "").trim();
     }
 
+    /** 把 pi 上报的模型错误展示给 webview；同一 run 内重复文本只展示一次。
+     *  返回是否真实展示了（供调用方在同文本重复时补发简短提示）。 */
+    private announceRunError(raw: unknown, prefix = "pi 错误: "): boolean {
+        if (typeof raw !== "string" || !raw.trim()) {
+            return false;
+        }
+        const text = formatPiError(raw);
+        if (!text || text === this.lastShownRunError) {
+            return false;
+        }
+        this.lastShownRunError = text;
+        this.post({ type: "systemError", text: prefix + text });
+        return true;
+    }
+
     /** 更新当前 agent 阶段，并同步给 webview / tab 列表。 */
     private setActivity(activity: RuntimeActivity, detail = ""): void {
         if (this.activity === activity && this.activityDetail === detail) {
@@ -353,11 +371,20 @@ export class SessionRuntime {
                         this.title = t;
                         this.host.broadcastTabList();
                     }
+                } else if (
+                    m && m.role === "assistant"
+                    && m.stopReason === "error"
+                    && typeof m.errorMessage === "string"
+                ) {
+                    // LLM 调用失败（鉴权/限流/溢出等）时 pi 不发专门的错误事件，
+                    // 而是发一条带 errorMessage 的 assistant 消息（stopReason=error）。
+                    this.announceRunError(m.errorMessage);
                 }
                 break;
             }
             case "agent_start":
                 this.streaming = true;
+                this.lastShownRunError = "";
                 // agent_start 只说明 agent 开始工作，不代表已经进入 thinking block。
                 this.post({ type: "streamStart", activity: "working", detail: "" });
                 this.setActivity("working");
@@ -409,11 +436,60 @@ export class SessionRuntime {
                 this.setActivity("working");
                 break;
             case "compaction_start":
-            case "auto_retry_start":
-            case "summarization_retry_scheduled":
             case "summarization_retry_attempt_start":
                 // 这些阶段仍属于 agent 工作中，但不是模型 thinking block。
                 this.setActivity("working");
+                break;
+            case "auto_retry_start":
+                // 瞬时错误（overloaded / 限流 / 5xx）触发的自动重试。
+                // 错误文本可能已由失败 assistant 消息展示过，announceRunError 内部去重。
+                this.setActivity("working");
+                this.announceRunError(evt.errorMessage);
+                {
+                    const sec = typeof evt.delayMs === "number"
+                        ? Math.max(0, Math.round(evt.delayMs / 100) / 10)
+                        : undefined;
+                    const parts = ["遇到错误，准备重试"];
+                    if (typeof evt.attempt === "number" && typeof evt.maxAttempts === "number") {
+                        parts.push(`${evt.attempt}/${evt.maxAttempts}`);
+                    }
+                    if (sec !== undefined) {
+                        parts.push(`${sec}s 后`);
+                    }
+                    this.post({ type: "system", text: parts.join(" ") });
+                }
+                break;
+            case "auto_retry_end":
+                this.setActivity("working");
+                if (evt.success === false) {
+                    // 错误文本与之前重复时不刷屏，但仍给出“重试耗尽”的收尾信号。
+                    if (!this.announceRunError(evt.finalError, "重试失败: ")) {
+                        this.post({
+                            type: "systemError",
+                            text: "重试失败，已停止自动重试。",
+                        });
+                    }
+                }
+                break;
+            case "summarization_retry_scheduled":
+                this.setActivity("working");
+                this.announceRunError(evt.errorMessage);
+                break;
+            case "compaction_end":
+                this.setActivity("working");
+                if (!evt.aborted && typeof evt.errorMessage === "string" && evt.errorMessage) {
+                    this.post({
+                        type: "systemError",
+                        text: `压缩失败: ${formatPiError(evt.errorMessage)}`,
+                    });
+                }
+                break;
+            case "extension_error":
+                this.post({
+                    type: "systemError",
+                    text: `扩展错误${evt.extensionPath ? ` (${evt.extensionPath})` : ""}`
+                        + `${evt.event ? ` [${evt.event}]` : ""}: ${evt.error ?? "未知错误"}`,
+                });
                 break;
             case "agent_end":
                 // agent_end 只是一次底层 run 结束；后面可能还有重试、压缩或排队续跑。
@@ -791,6 +867,7 @@ export class SessionRuntime {
 
     private renderMessages(messages: any[]): void {
         const toolResults = new Map<string, any>();
+        let lastHistoryError = "";
         for (const m of messages) {
             if (m && m.role === "toolResult" && typeof m.toolCallId === "string") {
                 toolResults.set(m.toolCallId, m);
@@ -863,6 +940,20 @@ export class SessionRuntime {
                             type: "assistantFull",
                             text,
                             entryId: typeof m.id === "string" ? m.id : undefined,
+                        });
+                    }
+                    // 历史中的失败消息（stopReason=error）：展示错误文本；
+                    // 自动重试可能留下连续多条相同错误，只显示第一条。
+                    if (
+                        m.stopReason === "error"
+                        && typeof m.errorMessage === "string"
+                        && m.errorMessage.trim()
+                        && m.errorMessage !== lastHistoryError
+                    ) {
+                        lastHistoryError = m.errorMessage;
+                        this.post({
+                            type: "systemError",
+                            text: "pi 错误: " + formatPiError(m.errorMessage),
                         });
                     }
                     break;

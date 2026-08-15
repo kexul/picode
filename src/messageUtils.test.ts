@@ -6,6 +6,7 @@ import {
     extractErrorText,
     extractResultText,
     extractTruncation,
+    formatPiError,
     getModelThinkingLevels,
     historyEditInfo,
     resolveAnchorLine,
@@ -14,6 +15,37 @@ import {
     toolFilePath,
 } from "./messageUtils";
 import { forkSelectedText, isRpcOk, rpcErrorMessage } from "./piRpc";
+
+describe("formatPiError", () => {
+    it("extracts message from status + JSON provider error", () => {
+        const raw = '401 {"error":{"message":"Invalid API key","type":"authentication_error"}}';
+        assert.equal(formatPiError(raw), "401 Invalid API key");
+    });
+
+    it("handles nested error.error.message (overloaded shape)", () => {
+        const raw =
+            '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
+        assert.equal(formatPiError(raw), "529 Overloaded");
+    });
+
+    it("passes through plain text", () => {
+        assert.equal(formatPiError("Something broke"), "Something broke");
+    });
+
+    it("keeps invalid JSON as-is", () => {
+        const raw = '500 {"error":{"message":"trunca';
+        assert.equal(formatPiError(raw), raw);
+    });
+
+    it("truncates very long errors", () => {
+        const raw = "x".repeat(500);
+        assert.equal(formatPiError(raw).length, 301); // 300 chars + ellipsis
+    });
+
+    it("returns empty string as-is", () => {
+        assert.equal(formatPiError(""), "");
+    });
+});
 
 describe("textOf", () => {
     it("handles string content", () => {
