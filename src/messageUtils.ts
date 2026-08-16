@@ -45,6 +45,38 @@ export function cleanToolOutput(text: string, maxLen = 200_000): string {
     return s;
 }
 
+/** 工具调用一行摘要（会话跨 panel 导出用）：只留关键参数，不含结果正文。 */
+export function summarizeToolCall(name: string, args: unknown): string {
+    const a = (args ?? {}) as Record<string, unknown>;
+    const str = (v: unknown): string =>
+        typeof v === "string" ? v : (v === undefined || v === null ? "" : JSON.stringify(v));
+    let summary = "";
+    switch (name) {
+        case "bash":
+            summary = str(a.command);
+            break;
+        case "read":
+        case "write":
+        case "edit":
+        case "ls":
+            summary = str(a.path);
+            break;
+        case "grep":
+            summary = str(a.pattern) + (a.path ? ` in ${str(a.path)}` : "");
+            break;
+        case "find":
+            summary = str(a.pattern) || str(a.path);
+            break;
+        default: {
+            const s = JSON.stringify(args ?? {});
+            summary = s && s !== "{}" ? s : "";
+            break;
+        }
+    }
+    if (summary.length > 120) { summary = summary.slice(0, 120) + "…"; }
+    return summary;
+}
+
 /** 从工具结果 / 部分结果（或历史 toolResult 消息）中提取展示文本。 */
 export function extractResultText(result: unknown): string | undefined {
     if (!result) {

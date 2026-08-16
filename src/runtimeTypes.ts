@@ -75,7 +75,6 @@ export interface RuntimeHost {
      */
     broadcastTabList(immediate?: boolean): void;
     /** 当某 tab 的会话路径变化（且可能为活跃 tab）时通知宿主。可选。 */
-    onSessionChanged?(tabId: string, sessionPath: string | undefined): void;
     /** 当某 tab 的模型/上下文用量状态变化时通知宿主。可选。 */
     onStatusUpdate?(tabId: string, info: StatusInfo): void;
     /** 当某 tab 的工具触及文件集合（knownFiles）变化时通知宿主。可选。 */
@@ -85,12 +84,14 @@ export interface RuntimeHost {
     confirmDialog(title: string, message: string): Promise<boolean>;
     selectDialog(title: string, options: string[]): Promise<string | undefined>;
     inputDialog(title: string, placeholder: string, prefill: string): Promise<string | undefined>;
-    /** 模型选择器；取消返回 undefined。同时返回可选的思考强度及当前值。 */
+    /** 模型选择器；取消返回 undefined。同时返回可选的思考强度及当前值。
+     *  echo：透传给 webview 的调试字段（如点击计时），原样附在 picker 消息上。 */
     pickModelInteractive(
         models: ModelInfo[],
         currentThinking: string,
         currentProvider: string,
-        currentModelId: string
+        currentModelId: string,
+        echo?: Record<string, unknown>
     ): Promise<ModelChoice | undefined>;
     /** 持久化用户选中的 model（写各自配置存储）。 */
     persistModel(provider: string, modelId: string): void;

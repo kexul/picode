@@ -1,8 +1,15 @@
 /**
  * ChatControllerBase —— VSCode 插件的会话编排层。
  *
- * 把“与平台无关”的逻辑收敛到此：
- *   - 标签管理（newTab / setActive / switchTabByDirection / closeTab / broadcastTabList）
+ * 两级模型：
+ *   - Tab（容器）：tab 栏上的一个条目。每个 tab 持有自己的**布局树**
+ *     （递归二叉树：panel 叶子 | 横/竖分叉节点），tab 间互不影响。
+ *   - Panel（会话）：一个 SessionRuntime = 一个独立 pi 进程。
+ *     Panel 通过拖拽在布局内移动、跨 tab 搬家、拖到空白处新建 tab。
+ *
+ * 本类收敛“与平台无关”的逻辑：
+ *   - Tab / panel 管理（newTab / setActive / switchTabByDirection / closeTab /
+ *     closePanel / addPanel / forkPanel / movePanel / focusPanel）
  *   - 拾取器浮层（showPicker / resolvePicker）
  *   - 模型选择器（pickModelInteractive）+ 模型内思考强度
  *   - 路径工具（relativeTo / resolvePath / resolveExecutable / checkPiAvailable）
@@ -28,17 +35,110 @@ import {
     SessionTreeNode,
     SessionItem,
 } from "./sessionStore";
+import { randomNameParts, composeName } from "./names";
 import type { RpcSessionState } from "./piRpc";
 
+// ============================================================================
+//  布局树（tab 内的 panel 排布）
+// ============================================================================
+
+export type SplitOrientation = "h" | "v";
+
+/** 布局节点：panel 叶子，或横/竖分叉（children 同层等分）。 */
+export type LayoutNode =
+    | { kind: "panel"; panelId: string }
+    | { kind: "split"; orientation: SplitOrientation; children: LayoutNode[] };
+
+/** 一个 tab（容器）：tab 栏条目 + 布局树 + 焦点 panel。 */
+export interface TabContainer {
+    id: string;
+    root: LayoutNode;
+    /** 最后点击的 panel；驱动输入框发送、状态栏、fork 等操作目标。 */
+    focusPanelId?: string;
+}
+
+/** 拖动落点方位（相对目标 panel）。center = 替换目标。 */
+export type DropZone = "left" | "right" | "top" | "bottom" | "center";
+
+/** 收集布局树中的全部 panel id（深度优先序）。 */
+export function layoutLeaves(node: LayoutNode): string[] {
+    if (node.kind === "panel") { return [node.panelId]; }
+    const out: string[] = [];
+    for (const c of node.children) { out.push(...layoutLeaves(c)); }
+    return out;
+}
+
+/** 从布局树中摘除某 panel；父分叉只剩一子时坍缩为那一子。整树空返回 null。 */
+export function layoutRemove(node: LayoutNode, panelId: string): LayoutNode | null {
+    if (node.kind === "panel") { return node.panelId === panelId ? null : node; }
+    const kids: LayoutNode[] = [];
+    for (const c of node.children) {
+        const r = layoutRemove(c, panelId);
+        if (r) { kids.push(r); }
+    }
+    if (kids.length === 0) { return null; }
+    if (kids.length === 1) { return kids[0]; }
+    return { kind: "split", orientation: node.orientation, children: kids };
+}
+
+/** 把 anchor 叶子原地替换成 repl（anchor 不存在时原样返回）。 */
+export function layoutReplaceLeaf(node: LayoutNode, anchorId: string, repl: LayoutNode): LayoutNode {
+    if (node.kind === "panel") { return node.panelId === anchorId ? repl : node; }
+    return { kind: "split", orientation: node.orientation, children: node.children.map((c) => layoutReplaceLeaf(c, anchorId, repl)) };
+}
+
+/** zone → 相对 anchor 的分叉方向与插入位置。 */
+function zoneToInsert(zone: DropZone): { orientation: SplitOrientation; before: boolean } {
+    switch (zone) {
+        case "left": return { orientation: "h", before: true };
+        case "top": return { orientation: "v", before: true };
+        case "bottom": return { orientation: "v", before: false };
+        case "right":
+        default: return { orientation: "h", before: false };
+    }
+}
+
+/**
+ * 把 leaf 插入 anchor 叶子旁边。
+ * - anchor 所在父分叉方向一致：直接插进 children（保持扁平）；
+ * - 否则把 anchor 包进一个新分叉节点。
+ */
+export function layoutInsertAdjacent(
+    node: LayoutNode, anchorId: string, leaf: LayoutNode,
+    orientation: SplitOrientation, before: boolean
+): LayoutNode {
+    if (node.kind === "panel") {
+        if (node.panelId !== anchorId) { return node; }
+        return { kind: "split", orientation, children: before ? [leaf, node] : [node, leaf] };
+    }
+    const idx = node.children.findIndex((c) => c.kind === "panel" && c.panelId === anchorId);
+    if (idx >= 0) {
+        const kids = node.children.slice();
+        if (node.orientation === orientation) {
+            kids.splice(before ? idx : idx + 1, 0, leaf);
+        } else {
+            kids[idx] = { kind: "split", orientation, children: before ? [leaf, kids[idx]] : [kids[idx], leaf] };
+        }
+        return { kind: "split", orientation: node.orientation, children: kids };
+    }
+    return {
+        kind: "split",
+        orientation: node.orientation,
+        children: node.children.map((c) => layoutInsertAdjacent(c, anchorId, leaf, orientation, before)),
+    };
+}
+
 export abstract class ChatControllerBase implements RuntimeHost {
-    // ---- 标签状态 ----
-    protected tabs = new Map<string, SessionRuntime>();
-    protected activeId: string | undefined;
+    // ---- panel（会话运行时）----
+    protected panels = new Map<string, SessionRuntime>();
+    protected panelSeq = 0;
+
+    // ---- tab（容器）----
+    protected tabContainers = new Map<string, TabContainer>();
+    protected activeTabId: string | undefined; // 活跃 tab（容器）id（前端同名变量是焦点 panel id，注意区分）
     protected tabSeq = 0;
     protected autoLoadDone = false;
 
-    // ---- 分屏状态（纯临时视图状态，不落盘）----
-    protected splitState?: { leftId: string; rightId: string; linked: boolean; focus: "left" | "right" };
     /** tabList 节流：流式 activity 变更很频繁，合并到下一帧附近推送。 */
     private tabListTimer: ReturnType<typeof setTimeout> | null = null;
     private static readonly TAB_LIST_THROTTLE_MS = 48;
@@ -54,7 +154,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected historyFamilyOffset = 0;
 
     // ---- 备用 pi 进程池（热备，免冷启动）----
-    /** 已就绪的备用 pi 进程（不绑定任何 tab）。 */
+    /** 已就绪的备用 pi 进程（不绑定任何 panel）。 */
     protected spare: PiClient | null = null;
     /** 正在后台预热、尚未就绪的备用进程（防止并发 spawn 多个）。 */
     protected preparingSpare: PiClient | null = null;
@@ -76,14 +176,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         "ctrl+alt+pgupdown": "Ctrl+Alt+PageUp / PageDown",
         "alt+brackets": "Alt+[ / Alt+]",
         "ctrl+alt+brackets": "Ctrl+Alt+[ / Ctrl+Alt+]",
-    };
-    protected static readonly SPLIT_KEY_LABELS: Record<string, string> = {
-        "ctrl+alt+s": "Ctrl+Alt+S",
-        "ctrl+shift+s": "Ctrl+Shift+S",
-    };
-    protected static readonly REVIEW_KEY_LABELS: Record<string, string> = {
-        "ctrl+alt+r": "Ctrl+Alt+R",
-        "ctrl+shift+r": "Ctrl+Shift+R",
     };
 
     /** 把标签映射转成按钮组选项列表。 */
@@ -116,14 +208,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract getSendKey(): string;
     protected abstract getNewSessionKey(): string;
     protected abstract getTabSwitchKey(): string;
-    /** 分屏快捷键（如 "ctrl+alt+s"）。 */
-    protected abstract getSplitKey(): string;
-    /** One-shot 互评快捷键（如 "ctrl+alt+r"）。 */
-    protected abstract getReviewKey(): string;
-    /** One-shot 互评：浮层预填提示词。 */
-    protected abstract getReviewPrompt(): string;
-    /** One-shot 互评：模型串（如 "local/qwen3.8-max:low"）；空串跟随分屏聚焦 pane。 */
-    protected abstract getReviewModel(): string;
     /** 转发注入前缀模板（{model}/{模型名称} 替换为模型名；空串为裸转发）。 */
     protected abstract getRelayPrefix(): string;
     /** 工具调用显示："compact"（简洁标签）| "full"（TUI 风格卡片）。 */
@@ -144,7 +228,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract handlePlatformMessage(msg: any): boolean;
 
     // ---- 可选平台钩子 ----
-    /** pi 不存在时追加的平台行为（基类已向 tab 推送 systemError）。 */
+    /** pi 不存在时追加的平台行为（基类已向 panel 推送 systemError）。 */
     protected onPiMissing(_piPath: string): void { /* 默认无操作 */ }
     /** pi 缺失提示文案（基类默认；vscode 覆盖为更长文案并弹设置入口）。 */
     protected piMissingMessage(piPath: string): string {
@@ -205,9 +289,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return undefined;
     }
 
-    public checkPiAvailable(piPath: string, tabId: string): boolean {
+    public checkPiAvailable(piPath: string, panelId: string): boolean {
         if (this.resolveExecutable(piPath)) { return true; }
-        this.postToTab(tabId, { type: "systemError", text: this.piMissingMessage(piPath) });
+        this.postToTab(panelId, { type: "systemError", text: this.piMissingMessage(piPath) });
         this.onPiMissing(piPath);
         return false;
     }
@@ -224,8 +308,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
             tabSwitchKey: this.getTabSwitchKey(),
             toolDisplay: this.getToolDisplay(),
             fontSize: this.getFontSize(),
-            splitKey: this.getSplitKey(),
-            reviewKey: this.getReviewKey(),
         });
     }
 
@@ -260,49 +342,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
             },
             {
                 action: "tabSwitchKey",
-                label: "切换会话",
-                desc: "在多个会话 tab 间切换上一个 / 下一个",
+                label: "切换 tab",
+                desc: "在多个 tab 间切换上一个 / 下一个",
                 check: null,
                 value: this.getTabSwitchKey(),
                 options: ChatControllerBase.keyOptions(ChatControllerBase.TAB_SWITCH_KEY_LABELS),
             },
             {
-                action: "splitKey",
-                label: "分屏快捷键",
-                desc: "clone 当前会话到右侧 pane 并排对话（一次发送两边）",
-                check: null,
-                value: this.getSplitKey(),
-                options: ChatControllerBase.keyOptions(ChatControllerBase.SPLIT_KEY_LABELS),
-            },
-            {
-                action: "reviewKey",
-                label: "互评快捷键",
-                desc: "One-shot 互评：拉取分屏两侧最终结论，交独立评审模型裁决（浮窗显示）",
-                check: null,
-                value: this.getReviewKey(),
-                options: ChatControllerBase.keyOptions(ChatControllerBase.REVIEW_KEY_LABELS),
-            },
-            {
-                action: "reviewPrompt",
-                kind: "text",
-                label: "互评提示词",
-                desc: "⚖ 打开互评浮层时预填的指令；发送时自动附上两侧最新结论",
-                check: null,
-                value: this.getReviewPrompt(),
-            },
-            {
-                action: "reviewModel",
-                kind: "text",
-                label: "互评模型",
-                desc: "互评用的模型，如 local/qwen3.8-max:low；留空则跟随分屏聚焦 pane 的模型",
-                check: null,
-                value: this.getReviewModel(),
-            },
-            {
                 action: "relayPrefix",
                 kind: "text",
                 label: "转发注入前缀",
-                desc: "🔁 转发回复到另一侧时自动加的前缀；{模型名称} / {model} 替换为源侧模型名。留空则裸转发",
+                desc: "🔁 转发回复到别的 panel 时自动加的前缀；{模型名称} / {model} 替换为源侧模型名。留空则裸转发",
                 check: null,
                 value: this.getRelayPrefix(),
             },
@@ -347,7 +397,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     // ========================================================================
-    //  标签管理（RuntimeHost）
+    //  Tab（容器）/ Panel（会话）管理
     // ========================================================================
 
     // ---- 备用 pi 进程池 ----
@@ -370,7 +420,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             model: cfg.model || undefined,
             extraArgs,
         });
-        // 记住备用进程的启动模型：新 tab 领取时按继承目标比对，不符则补发 set_model
+        // 记住备用进程的启动模型：新 panel 领取时按继承目标比对，不符则补发 set_model
         this.spareMeta = {
             provider: cfg.provider || undefined,
             modelId: cfg.model || undefined,
@@ -427,13 +477,334 @@ export abstract class ChatControllerBase implements RuntimeHost {
         }
     }
 
-    public postToTab(tabId: string, msg: Record<string, unknown>): void {
-        this.postToWebview({ ...msg, tabId });
+    public postToTab(panelId: string, msg: Record<string, unknown>): void {
+        this.postToWebview({ ...msg, tabId: panelId });
     }
 
+    // ---- 查找 ----
+    /** panel 所在的 tab（容器）。 */
+    public containerOfPanel(panelId: string): TabContainer | undefined {
+        for (const c of this.tabContainers.values()) {
+            if (layoutLeaves(c.root).includes(panelId)) { return c; }
+        }
+        return undefined;
+    }
+
+    /** 当前焦点 panel：活跃 tab 的 focusPanelId（缺省取布局第一个叶子）。 */
+    public getActive(): SessionRuntime | undefined {
+        const c = this.activeTabId ? this.tabContainers.get(this.activeTabId) : undefined;
+        if (!c) { return undefined; }
+        const leaves = layoutLeaves(c.root);
+        const pid = c.focusPanelId && this.panels.has(c.focusPanelId) && leaves.includes(c.focusPanelId)
+            ? c.focusPanelId
+            : leaves[0];
+        return pid ? this.panels.get(pid) : undefined;
+    }
+
+    /** 某 panel 是否为当前焦点 panel（状态栏上报过滤用）。 */
+    protected isFocusedPanel(panelId: string): boolean {
+        return this.getActive()?.id === panelId;
+    }
+
+    // ---- 创建 ----
+    /** 新建一个 panel 运行时（随机命名，启动 pi 进程；不挂入任何布局）。 */
+    protected createPanelRuntime(inherited?: { provider?: string; modelId?: string }): SessionRuntime {
+        const id = `panel-${++this.panelSeq}`;
+        const rt = new SessionRuntime(id, randomNameParts(), this);
+        this.panels.set(id, rt);
+        rt.startClient(inherited);
+        return rt;
+    }
+
+    /** 新建 tab（容器）：内含一个空 panel，成为活跃 tab。 */
+    public newTab(): TabContainer {
+        // 模型跟 panel 关联：继承当前焦点 panel 的模型（startClient 内部回落全局配置）
+        const inherited = this.getActive()?.currentModel();
+        const rt = this.createPanelRuntime(inherited);
+        const c: TabContainer = {
+            id: `tab-${++this.tabSeq}`,
+            root: { kind: "panel", panelId: rt.id },
+            focusPanelId: rt.id,
+        };
+        this.tabContainers.set(c.id, c);
+        this.activeTabId = c.id;
+        this.broadcastTabList(true);
+        this.postToWebview({ type: "tabActivated", id: c.id });
+        // 后台预热一个备用进程，供下一个新 panel / 切分支直接领取
+        this.ensureSpare();
+        return c;
+    }
+
+    /** tab 内新增一个空 panel：插入到 anchor（缺省焦点 panel）右侧。 */
+    public addPanel(anchorPanelId?: string): SessionRuntime | undefined {
+        const anchorId = anchorPanelId || this.getActive()?.id;
+        const c = anchorId ? this.containerOfPanel(anchorId) : undefined;
+        if (!anchorId || !c || !layoutLeaves(c.root).includes(anchorId)) { return undefined; }
+        const inherited = this.panels.get(anchorId)?.currentModel();
+        const rt = this.createPanelRuntime(inherited);
+        c.root = layoutInsertAdjacent(
+            c.root, anchorId, { kind: "panel", panelId: rt.id }, "h", false
+        );
+        c.focusPanelId = rt.id;
+        this.broadcastTabList(true);
+        return rt;
+    }
+
+    // ---- 切换 / 焦点 ----
+    public setActive(id: string): void {
+        if (!this.tabContainers.has(id) || this.activeTabId === id) { return; }
+        this.activeTabId = id;
+        this.postToWebview({ type: "tabActivated", id });
+        this.broadcastTabList(true);
+        this.getActive()?.emitStatus();
+    }
+
+    /** 按方向切换到上一个/下一个 tab。 */
+    public switchTabByDirection(direction: "prev" | "next"): void {
+        const ids = Array.from(this.tabContainers.keys());
+        if (ids.length < 2) { return; }
+        const curIdx = this.activeTabId ? ids.indexOf(this.activeTabId) : 0;
+        const delta = direction === "next" ? 1 : -1;
+        const nextIdx = (curIdx + delta + ids.length) % ids.length;
+        this.setActive(ids[nextIdx]);
+    }
+
+    /** 点击 pane 聚焦 panel：决定输入框发送、状态栏、fork 等目标。 */
+    public focusPanel(panelId: string): void {
+        const c = this.containerOfPanel(panelId);
+        if (!c || c.focusPanelId === panelId) { return; }
+        c.focusPanelId = panelId;
+        const rt = this.panels.get(panelId);
+        if (rt && this.isFocusedPanel(panelId)) { rt.emitStatus(); }
+        this.broadcastTabList();
+    }
+
+    // ---- 关闭 ----
+    /** 关闭 panel：杀进程、摘叶坍缩；tab 内 0 panel 时连 tab 一起关。 */
+    public closePanel(panelId: string): void {
+        const rt = this.panels.get(panelId);
+        if (!rt) { return; }
+        const c = this.containerOfPanel(panelId);
+        rt.stopClient();
+        this.panels.delete(panelId);
+        if (c) {
+            const next = layoutRemove(c.root, panelId);
+            if (!next || layoutLeaves(next).length === 0) {
+                this.tabContainers.delete(c.id);
+                this.postToWebview({ type: "tabClosed", id: c.id });
+                if (this.activeTabId === c.id) {
+                    this.activeTabId = this.tabContainers.size > 0 ? this.tabContainers.keys().next().value : undefined;
+                    if (this.activeTabId) { this.postToWebview({ type: "tabActivated", id: this.activeTabId }); }
+                }
+            } else {
+                c.root = next;
+                if (c.focusPanelId === panelId || !layoutLeaves(next).includes(c.focusPanelId || "")) {
+                    c.focusPanelId = layoutLeaves(next)[0];
+                    this.getActive()?.emitStatus();
+                }
+            }
+        }
+        this.broadcastTabList(true);
+        // 全部关闭后自动新建一个空 tab，保持界面可用
+        if (this.tabContainers.size === 0) { this.newTab(); }
+    }
+
+    /** 关闭 tab：内部全部 panel 杀进程。 */
+    public closeTab(id: string): void {
+        const c = this.tabContainers.get(id);
+        if (!c) { return; }
+        for (const pid of layoutLeaves(c.root)) {
+            const rt = this.panels.get(pid);
+            if (rt) { rt.stopClient(); this.panels.delete(pid); }
+        }
+        this.tabContainers.delete(id);
+        this.postToWebview({ type: "tabClosed", id });
+        if (this.activeTabId === id) {
+            this.activeTabId = this.tabContainers.size > 0 ? this.tabContainers.keys().next().value : undefined;
+            if (this.activeTabId) { this.postToWebview({ type: "tabActivated", id: this.activeTabId }); }
+        }
+        this.broadcastTabList(true);
+        // 全部关闭后自动新建一个空 tab，保持界面可用
+        if (this.tabContainers.size === 0) { this.newTab(); }
+    }
+
+    // ---- Fork（原生克隆会话到新 panel）----
     /**
-     * 推送 tab 列表。默认节流（合并短时间内多次 activity/title 更新）；
-     * 结构变更（新建/关闭/切换）传 immediate=true 立刻推送。
+     * Fork 某 panel：克隆其会话到同 tab 内新 panel（右侧并排）。
+     * 源会话尚未落盘时短轮询等待；拿不到则放弃（提示走源 panel）。
+     */
+    public async forkPanel(panelId: string): Promise<void> {
+        const src = this.panels.get(panelId);
+        const c = this.containerOfPanel(panelId);
+        if (!src || !c) { return; }
+        const cfg = this.getConfig();
+        if (!this.checkPiAvailable(cfg.piPath, panelId)) { return; }
+
+        const newRt = this.createPanelRuntime(src.currentModel());
+        newRt.loading = true;
+        c.root = layoutInsertAdjacent(
+            c.root, panelId, { kind: "panel", panelId: newRt.id }, "h", false
+        );
+        c.focusPanelId = newRt.id;
+        this.broadcastTabList(true);
+
+        // 取源会话状态（sessionFile + 消息数）：0 条消息的全新会话无可复制
+        // （pi 请求失败时 state 为 undefined，messageCount 保持 -1：区分“没落盘”与“pi 不可用”）
+        const state = await src.request<RpcSessionState>({ type: "get_state" });
+        // 异步窗口防护：等待期间新 panel / 源 panel 被关掉或 pi 异常 → 放弃克隆
+        if (!this.panels.has(newRt.id) || !this.panels.has(panelId)) {
+            if (this.panels.has(newRt.id)) {
+                this.panels.get(newRt.id)!.loading = false;
+                this.broadcastTabList(true);
+            }
+            return;
+        }
+        let sourcePath = src.currentSessionPath || state?.data?.sessionFile;
+        if (sourcePath && !src.currentSessionPath) { src.currentSessionPath = sourcePath; }
+        const messageCount = typeof state?.data?.messageCount === "number" ? state.data.messageCount : -1;
+        let cloned = false;
+        if (!state && !sourcePath) {
+            // 源 pi 无响应（不可用）：不误报“未落盘”
+            newRt.loading = false;
+            this.postToTab(newRt.id, { type: "system", text: "源会话状态不可用（pi 无响应），无法克隆。" });
+        } else if (sourcePath && messageCount !== 0) {
+            const abs = this.resolvePath(sourcePath);
+            const deadline = Date.now() + 8000;
+            while (!fs.existsSync(abs) && Date.now() < deadline) {
+                await new Promise((r) => setTimeout(r, 250));
+            }
+            if (fs.existsSync(abs)) {
+                await newRt.loadSessionAndClone(abs);
+                cloned = true;
+            }
+        }
+        if (!cloned) {
+            newRt.loading = false;
+            if (messageCount > 0) {
+                this.postToTab(newRt.id, {
+                    type: "system",
+                    text: "源会话尚未保存到磁盘，无法克隆上下文（可先发送任意消息让会话落盘后再 fork）。",
+                });
+            }
+        }
+        this.broadcastTabList(true);
+    }
+
+    // ---- 拖拽：panel 移动（同 tab 重排 / 跨 tab 搬家 / 拖出新建 tab）----
+    /**
+     * panel 拖放落定。
+     * - targetTabId：搬到该 tab（插入其焦点 panel 旁），当前视图跟过去；
+     * - targetPanelId + zone：插到目标 panel 的指定方位（center = 替换）；
+     *   目标与本 panel 同 tab 时为纯重排，否则跨 tab 搬家；
+     * - 都没给：新建一个 tab 带走该 panel。
+     */
+    public movePanel(opts: { panelId: string; targetTabId?: string; targetPanelId?: string; zone?: DropZone }): void {
+        const rt = this.panels.get(opts.panelId);
+        if (!rt) { return; }
+        const src = this.containerOfPanel(opts.panelId);
+        if (!src) { return; }
+        const leaf: LayoutNode = { kind: "panel", panelId: opts.panelId };
+
+        // 目标 panel 就是自己：无操作
+        if (opts.targetPanelId === opts.panelId) { return; }
+
+        if (opts.targetTabId) {
+            const dst = this.tabContainers.get(opts.targetTabId);
+            if (!dst || dst === src) { return; }
+            this.detachPanelFromContainer(src, opts.panelId);
+            const anchor = layoutLeaves(dst.root).includes(dst.focusPanelId || "")
+                ? dst.focusPanelId!
+                : layoutLeaves(dst.root)[0];
+            dst.root = layoutInsertAdjacent(dst.root, anchor, leaf, "h", false);
+            dst.focusPanelId = opts.panelId;
+            this.activeTabId = dst.id;
+            this.postToWebview({ type: "tabActivated", id: dst.id });
+            this.broadcastTabList(true);
+            return;
+        }
+
+        if (opts.targetPanelId) {
+            const dst = this.containerOfPanel(opts.targetPanelId);
+            if (!dst) { return; }
+            const zone = opts.zone || "right";
+            if (dst === src) {
+                // 同 tab 重排：先摘除再插入（目标仍在树中，layoutRemove 不会返 null）
+                const shrunk = layoutRemove(src.root, opts.panelId);
+                if (!shrunk) { return; }
+                src.root = zone === "center"
+                    ? layoutReplaceLeaf(shrunk, opts.targetPanelId, leaf)
+                    : (() => {
+                        const z = zoneToInsert(zone as DropZone);
+                        return layoutInsertAdjacent(shrunk, opts.targetPanelId, leaf, z.orientation, z.before);
+                    })();
+                if (zone === "center") { this.disposePanelRuntime(opts.targetPanelId); }
+            } else {
+                // 跨 tab 搬家
+                this.detachPanelFromContainer(src, opts.panelId);
+                if (zone === "center") {
+                    dst.root = layoutReplaceLeaf(dst.root, opts.targetPanelId, leaf);
+                    this.disposePanelRuntime(opts.targetPanelId);
+                } else {
+                    const z = zoneToInsert(zone as DropZone);
+                    dst.root = layoutInsertAdjacent(dst.root, opts.targetPanelId, leaf, z.orientation, z.before);
+                }
+                this.activeTabId = dst.id;
+                this.postToWebview({ type: "tabActivated", id: dst.id });
+            }
+            dst.focusPanelId = opts.panelId;
+            this.broadcastTabList(true);
+            return;
+        }
+
+        // 拖到空白：新 tab 带走（源 tab 若是唯一 panel 则整个消失）
+        this.detachPanelFromContainer(src, opts.panelId);
+        const c: TabContainer = {
+            id: `tab-${++this.tabSeq}`,
+            root: leaf,
+            focusPanelId: opts.panelId,
+        };
+        this.tabContainers.set(c.id, c);
+        this.activeTabId = c.id;
+        this.postToWebview({ type: "tabActivated", id: c.id });
+        this.broadcastTabList(true);
+    }
+
+    /** 从容器中摘除 panel（不杀进程）。容器变空则删除容器。 */
+    protected detachPanelFromContainer(c: TabContainer, panelId: string): void {
+        const next = layoutRemove(c.root, panelId);
+        if (!next || layoutLeaves(next).length === 0) {
+            this.tabContainers.delete(c.id);
+            this.postToWebview({ type: "tabClosed", id: c.id });
+            if (this.activeTabId === c.id) { this.activeTabId = undefined; }
+            return;
+        }
+        c.root = next;
+        if (!layoutLeaves(next).includes(c.focusPanelId || "")) {
+            c.focusPanelId = layoutLeaves(next)[0];
+        }
+    }
+
+    /** 销毁 panel 运行时（center 落点替换：被顶掉的 panel 杀进程）。 */
+    protected disposePanelRuntime(panelId: string): void {
+        const rt = this.panels.get(panelId);
+        if (!rt) { return; }
+        rt.stopClient();
+        this.panels.delete(panelId);
+    }
+
+    /** 合并所有 panel 中 pi 工具调用触及过的文件绝对路径（供宿主收集符号等）。 */
+    public getAllKnownFiles(): string[] {
+        const set = new Set<string>();
+        for (const rt of this.panels.values()) {
+            for (const p of rt.getKnownFiles()) { set.add(p); }
+        }
+        return Array.from(set);
+    }
+
+    // ---- tabList 广播 ----
+    /**
+     * 推送 tab 列表（含布局树）。默认节流（合并短时间内多次 activity 更新）；
+     * 结构变更（新建/关闭/移动）传 immediate=true 立刻推送。
      */
     public broadcastTabList(immediate = false): void {
         if (immediate) {
@@ -453,236 +824,173 @@ export abstract class ChatControllerBase implements RuntimeHost {
         }, ChatControllerBase.TAB_LIST_THROTTLE_MS);
     }
 
+    /** 布局树 → webview 可渲染结构（panel 叶子附带显示状态）。 */
+    private serializeLayout(node: LayoutNode): unknown {
+        if (node.kind === "panel") {
+            const rt = this.panels.get(node.panelId);
+            return {
+                kind: "panel",
+                panelId: node.panelId,
+                name: rt?.title || node.panelId,
+                streaming: !!rt?.streaming,
+                activity: rt?.activity || "idle",
+                activityDetail: rt?.activityDetail || "",
+                piReady: rt ? rt.piReady : true,
+                loading: !!rt?.loading,
+                // 状态栏恢复：webview 重建（视图隐藏重开/窗口重载）后 tabList 是唯一信源，
+                // 仅靠一次性 modelChanged 推送会导致模型名丢失
+                modelId: rt?.modelId,
+                provider: rt?.provider,
+                thinkingLevel: rt?.thinkingLevel,
+                percent: rt?.contextPercent,
+            };
+        }
+        return {
+            kind: "split",
+            orientation: node.orientation,
+            children: node.children.map((c) => this.serializeLayout(c)),
+        };
+    }
+
+    /** tab 栏显示名（从 panel 派生，容器无独立名，拖来拖去名字不丢）：
+     *  单 panel → 完整名（“沉静的雪豹”）；多 panel → 布局序名词以 · 拼接。 */
+    protected containerDisplayName(c: TabContainer): string {
+        const leaves = layoutLeaves(c.root);
+        const rts = leaves.map((pid) => this.panels.get(pid)).filter((rt) => !!rt);
+        if (rts.length === 0) { return "新对话"; }
+        if (rts.length === 1) { return composeName(rts[0]!.nameParts); }
+        return rts.map((rt) => rt!.noun).join("·");
+    }
+
     private emitTabList(): void {
         this.postToWebview({
             type: "tabList",
-            tabs: Array.from(this.tabs.values()).map((rt) => ({
-                id: rt.id,
-                title: rt.title,
-                streaming: rt.streaming,
-                activity: rt.activity,
-                activityDetail: rt.activityDetail,
-                piReady: rt.piReady,
-                loading: rt.loading,
-            })),
-            activeId: this.activeId ?? null,
+            tabs: Array.from(this.tabContainers.values()).map((c) => {
+                const leaves = layoutLeaves(c.root);
+                return {
+                    id: c.id,
+                    name: this.containerDisplayName(c),
+                    focusPanelId: c.focusPanelId ?? null,
+                    streaming: leaves.some((pid) => !!this.panels.get(pid)?.streaming),
+                    loading: leaves.some((pid) => !!this.panels.get(pid)?.loading),
+                    root: this.serializeLayout(c.root),
+                };
+            }),
+            activeId: this.activeTabId ?? null,
         });
     }
 
-    public onSessionChanged(_tabId: string, _sessionPath: string | undefined): void { /* 默认无操作 */ }
 
-    /** RuntimeHost.onStatusUpdate：仅活跃 tab 的状态才转发给宿主展示。 */
-    public onStatusUpdate(tabId: string, info: StatusInfo): void {
-        if (this.activeId === tabId) { this.onActiveStatusUpdate(info); }
+    /** RuntimeHost.onStatusUpdate：仅当前焦点 panel 的状态才转发给宿主展示。 */
+    public onStatusUpdate(panelId: string, info: StatusInfo): void {
+        if (this.isFocusedPanel(panelId)) { this.onActiveStatusUpdate(info); }
     }
 
-    /** RuntimeHost.onKnownFilesChanged：某 tab 的工具触及文件集合变化，转发给宿主。 */
-    public onKnownFilesChanged(_tabId: string): void {
+    /** RuntimeHost.onKnownFilesChanged：某 panel 的工具触及文件集合变化，转发给宿主。 */
+    public onKnownFilesChanged(_panelId: string): void {
         this.onKnownFilesChangedByHost();
     }
 
     protected onKnownFilesChangedByHost(): void { /* 默认无操作 */ }
 
-    /** 活跃 tab 的状态发生变化时平台钩子（默认无操作；VSCode 重写为状态栏更新）。 */
+    /** 焦点 panel 的状态发生变化时平台钩子（默认无操作；VSCode 重写为状态栏更新）。 */
     protected onActiveStatusUpdate(_info: StatusInfo): void { /* 默认无操作 */ }
 
-    public newTab(): SessionRuntime {
-        // 分屏中新建 tab：先退出分屏（新 tab 在分屏视图里不可见）
-        if (this.splitState) { this.exitSplit(); }
-        // 模型跟 tab 关联：新 tab 继承当前活跃 tab 的模型；无 tab 时回落全局配置（startClient 内部处理）
-        const inherited = this.getActive()?.currentModel();
-        const id = `tab-${++this.tabSeq}`;
-        const title = `会话 ${this.tabSeq}`;
-        const rt = new SessionRuntime(id, title, this);
-        this.tabs.set(id, rt);
-        this.activeId = id;
-        this.broadcastTabList(true);
-        this.postToWebview({ type: "tabActivated", id });
-        rt.startClient(inherited);
-        // 后台预热一个备用进程，供下一个新 tab / 切分支直接领取
-        this.ensureSpare();
-        return rt;
+    // ========================================================================
+    //  发送 / 中止（tab 级广播：当前 tab 内所有 panel）
+    // ========================================================================
+
+    protected panelIdsOf(panelId: string): string[] {
+        const c = this.containerOfPanel(panelId);
+        return c ? layoutLeaves(c.root) : [panelId];
     }
 
-    public setActive(id: string): void {
-        if (!this.tabs.has(id) || this.activeId === id) { return; }
-        this.activeId = id;
-        this.postToWebview({ type: "tabActivated", id });
-        this.broadcastTabList(true);
-        const rt = this.tabs.get(id);
-        if (rt) {
-            this.onSessionChanged(id, rt.currentSessionPath);
-            rt.emitStatus();
+    /** tab 级发送：消息进该 tab 内所有 panel（对照实验语义）。 */
+    protected broadcastSendToTab(panelId: string, text: string, images?: Array<{ data: string; mimeType: string }>): void {
+        for (const pid of this.panelIdsOf(panelId)) {
+            this.panels.get(pid)?.handleSend(text, images);
         }
     }
 
-    /** 按方向切换到上一个/下一个 tab。 */
-    public switchTabByDirection(direction: "prev" | "next"): void {
-        const ids = Array.from(this.tabs.keys());
-        if (ids.length < 2) { return; }
-        const cur = this.activeId ? ids.indexOf(this.activeId) : 0;
-        const idx = cur < 0 ? 0 : cur;
-        const nextIdx = direction === "next" ? (idx + 1) % ids.length : (idx - 1 + ids.length) % ids.length;
-        this.setActive(ids[nextIdx]);
+    /** tab 级中止：停掉该 tab 内所有正在生成的 panel。 */
+    protected broadcastAbortToTab(panelId: string): void {
+        const c = this.containerOfPanel(panelId);
+        const ids = c ? layoutLeaves(c.root) : [panelId];
+        for (const pid of ids) { this.panels.get(pid)?.abortActiveRun(); }
     }
 
-    public closeTab(id: string): void {
-        const rt = this.tabs.get(id);
-        if (!rt) { return; }
-        // 关闭分屏任一 pane：退出分屏并解散链接组
-        if (this.isSplitMember(id)) {
-            this.splitState = undefined;
-            this.broadcastSplitState();
-        }
-        rt.stopClient();
-        this.tabs.delete(id);
-        this.postToWebview({ type: "tabClosed", id });
-        if (this.activeId === id) {
-            this.activeId = this.tabs.size > 0 ? this.tabs.keys().next().value : undefined;
-            if (this.activeId) {
-                this.postToWebview({ type: "tabActivated", id: this.activeId });
-                const next = this.tabs.get(this.activeId);
-                if (next) {
-                    this.onSessionChanged(this.activeId, next.currentSessionPath);
-                    next.emitStatus();
-                }
-            }
-        }
-        this.broadcastTabList(true);
-        // 全部关闭后自动新建一个空 tab，保持界面可用
-        if (this.tabs.size === 0) { this.newTab(); }
-    }
-
-    public getActive(): SessionRuntime | undefined {
-        return this.activeId ? this.tabs.get(this.activeId) : undefined;
-    }
-
-    /** 合并所有 tab 中 pi 工具调用触及过的文件绝对路径（供宿主收集符号等）。 */
-    public getAllKnownFiles(): string[] {
-        const set = new Set<string>();
-        for (const rt of this.tabs.values()) {
-            for (const p of rt.getKnownFiles()) { set.add(p); }
-        }
-        return Array.from(set);
+    /** 向当前活跃 tab 的所有 panel 发送一条消息（命令入口用）。 */
+    public sendActiveTabText(text: string): void {
+        const c = this.activeTabId ? this.tabContainers.get(this.activeTabId) : undefined;
+        if (!c) { return; }
+        for (const pid of layoutLeaves(c.root)) { this.panels.get(pid)?.handleSend(text); }
     }
 
     // ========================================================================
-    //  分屏（两个 pane 并排，链接组广播输入）
+    //  上下文获取（# 引用：把会话文本流注入输入框草稿）
     // ========================================================================
 
-    protected broadcastSplitState(): void {
-        const s = this.splitState;
+    /** 体积可读化（UTF-8 字节数）。 */
+    private formatByteSize(text: string): string {
+        const bytes = Buffer.byteLength(text, "utf8");
+        if (bytes >= 1024 * 1024) { return (bytes / (1024 * 1024)).toFixed(1) + "MB"; }
+        if (bytes >= 1024) { return (bytes / 1024).toFixed(1) + "KB"; }
+        return bytes + "B";
+    }
+
+    /** # 引用取数：panelId → 单会话；tabId → tab 内全部 panel 拼接（布局序）。
+     *  结果回 fetchChatResult（带 requestId），webview 推入输入框草稿卡片。 */
+    protected async handleFetchChat(msg: any): Promise<void> {
+        const requestId = typeof msg.requestId === "number" ? msg.requestId : 0;
+        const noticeTarget = this.getActive()?.id;
+        const notice = (text: string) => {
+            if (noticeTarget) { this.postToTab(noticeTarget, { type: "system", text }); }
+        };
+
+        const collect = async (pid: string) => {
+            const rt = this.panels.get(pid);
+            if (!rt) { return undefined; }
+            const out = await rt.exportChatText();
+            if (!out || out.messageCount === 0) { return undefined; }
+            return { title: rt.title, text: out.text, count: out.messageCount };
+        };
+
+        let cardTitle = "";
+        let sections: Array<{ title: string; text: string; count: number }>;
+        if (typeof msg.panelId === "string") {
+            const rt = this.panels.get(msg.panelId);
+            if (!rt) { return; }
+            const one = await collect(rt.id);
+            if (!one) { notice(`会话 “${rt.title}” 还没有内容，无获取。`); return; }
+            sections = [one];
+            cardTitle = `💬 ${rt.title}`;
+        } else if (typeof msg.tabId === "string") {
+            const c = this.tabContainers.get(msg.tabId);
+            if (!c) { return; }
+            // 并发取数，但按 layoutLeaves 序拼回（完成序不定）
+            const results = await Promise.all(layoutLeaves(c.root).map((pid) => collect(pid)));
+            sections = results.filter((s): s is { title: string; text: string; count: number } => !!s);
+            if (!sections.length) { notice("该 tab 内会话均为空，无内容可获取。"); return; }
+            cardTitle = `💬 ${this.containerDisplayName(c)}（${sections.length} 个会话）`;
+        } else {
+            return;
+        }
+
+        const body = sections.map((s) => `## 会话: ${s.title}\n\n${s.text}`).join("\n\n");
+        const totalCount = sections.reduce((n, s) => n + s.count, 0);
         this.postToWebview({
-            type: "splitState",
-            state: s ? { leftId: s.leftId, rightId: s.rightId, linked: s.linked, focus: s.focus } : null,
+            type: "fetchChatResult",
+            requestId,
+            title: `${cardTitle} · ${totalCount} 条消息 · ${this.formatByteSize(body)}`,
+            text: body,
         });
     }
 
-    public isSplitMember(tabId: string): boolean {
-        return !!this.splitState && (this.splitState.leftId === tabId || this.splitState.rightId === tabId);
-    }
-
-    /** 链接中且 tab 在分屏组内 → 返回两个 pane；否则仅该 tab（发送 / abort 共用）。 */
-    protected linkedGroupOf(tabId: string): SessionRuntime[] {
-        const rt = this.tabs.get(tabId);
-        if (!rt) { return []; }
-        const s = this.splitState;
-        if (s && s.linked && this.isSplitMember(tabId) && s.leftId !== s.rightId) {
-            const l = this.tabs.get(s.leftId);
-            const r = this.tabs.get(s.rightId);
-            if (l && r) { return [l, r]; }
-        }
-        return [rt];
-    }
-
-    /**
-     * 分屏：clone 当前活跃会话到新 pane（上下文对齐），自动建立链接。
-     * 立即进入分屏视图（右 pane 先显示加载态），clone 异步完成；
-     * 源会话迟迟未落盘时降级为“右侧新建空会话 + 链接”。
-     */
-    public async splitActiveTab(): Promise<void> {
-        const src = this.getActive();
-        if (!src || this.splitState) { return; }
-        // 1. 立即建右 pane 并进分屏，用户马上看到分屏布局 + 加载指示
-        const newRt = this.newTab();
-        newRt.loading = true;
-        this.splitState = { leftId: src.id, rightId: newRt.id, linked: true, focus: "right" };
-        this.broadcastTabList(true);
-        this.broadcastSplitState();
-
-        // 2. 取源会话状态（sessionFile + 消息数）：0 条消息的全新会话无可复制，立即跳过 clone
-        const tStart = Date.now();
-        const state = await src.request<RpcSessionState>({ type: "get_state" });
-        let sourcePath = src.currentSessionPath || state?.data?.sessionFile;
-        if (sourcePath && !src.currentSessionPath) { src.currentSessionPath = sourcePath; }
-        const messageCount = typeof state?.data?.messageCount === "number" ? state.data.messageCount : -1;
-        let cloned = false;
-        if (sourcePath && messageCount !== 0) {
-            const abs = this.resolvePath(sourcePath);
-            const deadline = Date.now() + 8000;
-            while (!fs.existsSync(abs) && Date.now() < deadline) {
-                await new Promise((r) => setTimeout(r, 250));
-            }
-            if (fs.existsSync(abs)) {
-                await newRt.loadSessionAndClone(abs);
-                cloned = true;
-            }
-        } else {
-            console.log(`[split] 跳过 clone（messageCount=${messageCount}）`);
-        }
-        if (!cloned) {
-            newRt.loading = false;
-            // 有内容但克隆未果才提示；全新空会话无需提示
-            if (messageCount !== 0) {
-                this.postToTab(newRt.id, {
-                    type: "system",
-                    text: "源会话尚未保存到磁盘，右侧为全新会话（可直接开始对话）。",
-                });
-            }
-        }
-        console.log(`[split] 分屏完成，共 ${Date.now() - tStart}ms`);
-        this.broadcastTabList(true);
-    }
-
-    /** 退出分屏（保留两个 tab），返回 tab 栏视图。 */
-    public exitSplit(): void {
-        if (!this.splitState) { return; }
-        const focusId = this.splitState.focus === "left" ? this.splitState.leftId : this.splitState.rightId;
-        this.splitState = undefined;
-        this.broadcastSplitState();
-        if (this.tabs.has(focusId)) { this.setActive(focusId); }
-        this.broadcastTabList(true);
-    }
-
-    /** 点击 pane 聚焦：更新分屏焦点并同步 activeId（状态栏 / 拾取器跟随）。 */
-    public setSplitFocus(tabId: string): void {
-        const s = this.splitState;
-        if (!s) { return; }
-        if (tabId === s.leftId) { s.focus = "left"; }
-        else if (tabId === s.rightId) { s.focus = "right"; }
-        else { return; }
-        this.setActive(tabId);
-        this.broadcastSplitState();
-    }
-
-    protected setSplitLinked(linked: boolean): void {
-        const s = this.splitState;
-        if (!s || s.linked === linked) { return; }
-        s.linked = linked;
-        this.broadcastSplitState();
-    }
-
-    public toggleSplitLink(): void {
-        const s = this.splitState;
-        if (!s) { return; }
-        this.setSplitLinked(!s.linked);
-    }
-
     // ========================================================================
-    //  手动转发（把一方回复注入另一侧，一次性）
+    //  转发（把某 panel 的回复注入任意指定 panel）
     // ========================================================================
 
-    /** 转发注入前缀包装：{model} / {模型名称} 替换为源 pane 的模型名；空模板则裸转发。 */
+    /** 转发注入前缀包装：{model} / {模型名称} 替换为源 panel 的模型名；空模板则裸转发。 */
     protected wrapRelayText(source: SessionRuntime, text: string): string {
         const tpl = this.getRelayPrefix();
         if (!tpl || !tpl.trim()) { return text; }
@@ -694,31 +1002,57 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return prefix + text;
     }
 
-    /** 转发一次：把 fromTab（缺省聚焦 pane）的最新回复加前缀注入另一侧；可指定历史消息文本。 */
-    public async relayOnce(fromTabId?: string, text?: string): Promise<void> {
-        const s = this.splitState;
-        if (!s) { return; }
-        const srcId = fromTabId && this.isSplitMember(fromTabId)
-            ? fromTabId
-            : (s.focus === "left" ? s.leftId : s.rightId);
-        const dstId = srcId === s.leftId ? s.rightId : s.leftId;
-        const src = this.tabs.get(srcId);
-        const dst = this.tabs.get(dstId);
-        if (!src || !dst) { return; }
+    /** 转发：源 panel 的指定（或最新）回复，选择目标（tab 广播 / 单个 panel）注入。 */
+    public async relayToPanel(fromPanelId: string, text?: string): Promise<void> {
+        const src = this.panels.get(fromPanelId);
+        if (!src) { return; }
         let payload = typeof text === "string" ? text.trim() : "";
         if (!payload) {
             payload = await src.getLastAssistantText();
         }
         if (!payload) { return; }
-        dst.handleSend(this.wrapRelayText(src, payload));
+        // 候选：树形 —— tab 分组头（广播）+ panel 子项（点对点）；源 panel 不出现，
+        // 只剩源一个 panel 的 tab 整组隐藏。
+        const items: Array<Record<string, unknown>> = [];
+        for (const c of this.tabContainers.values()) {
+            const siblings = layoutLeaves(c.root).filter((pid) => pid !== fromPanelId);
+            if (siblings.length === 0) { continue; }
+            const tabLabel = this.containerDisplayName(c);
+            items.push({ kind: "tab", id: c.id, label: tabLabel, count: siblings.length });
+            for (const pid of siblings) {
+                const rt = this.panels.get(pid);
+                if (!rt) { continue; }
+                items.push({ kind: "panel", id: pid, label: rt.title || pid, tabName: tabLabel });
+            }
+        }
+        if (items.length === 0) {
+            this.postToTab(fromPanelId, { type: "system", text: "没有其他 panel 可转发。" });
+            return;
+        }
+        const choice = await this.showPicker("relay", items, null);
+        if (!choice) { return; }
+        const wrapped = this.wrapRelayText(src, payload);
+        if (typeof choice.tabId === "string") {
+            // 广播：发给该 tab 内除源以外的所有 panel
+            const c = this.tabContainers.get(choice.tabId);
+            if (!c) { return; }
+            for (const pid of layoutLeaves(c.root)) {
+                if (pid === fromPanelId) { continue; }
+                this.panels.get(pid)?.handleSend(wrapped);
+            }
+            return;
+        }
+        if (typeof choice.id === "string") {
+            this.panels.get(choice.id)?.handleSend(wrapped);
+        }
     }
 
     // ========================================================================
     //  拾取器 + 模型选择（RuntimeHost.pickModelInteractive）
     // ========================================================================
     /** 向 webview 推送拾取器浮层并等待用户选择（取消返回 undefined）。 */
-    protected showPicker(kind: string, items: any[], current?: string): Promise<any | undefined> {
-        this.postToWebview({ type: "picker", kind, items, current: current ?? null });
+    protected showPicker(kind: string, items: any[], current?: string | null, echo?: Record<string, unknown>): Promise<any | undefined> {
+        this.postToWebview({ type: "picker", kind, items, current: current ?? null, ...(echo || {}) });
         if (this.pickerTimer) { clearTimeout(this.pickerTimer); }
         return new Promise<any | undefined>((resolve) => {
             this.pickerResolve = resolve;
@@ -745,9 +1079,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
         models: ModelInfo[],
         currentThinking: string,
         currentProvider: string,
-        currentModelId: string
+        currentModelId: string,
+        echo?: Record<string, unknown>
     ): Promise<ModelChoice | undefined> {
         const currentKey = `${currentProvider || ""}\u0000${currentModelId || ""}`;
+        const isCurrent = (m: ModelInfo) =>
+            `${m.provider || ""}\u0000${m.id || ""}` === currentKey
+            || (m.id === currentModelId && (!currentProvider || !m.provider || m.provider === currentProvider));
         const items: any[] = models.map((m) => ({
             id: m.id,
             provider: m.provider,
@@ -755,13 +1093,28 @@ export abstract class ChatControllerBase implements RuntimeHost {
             contextWindow: m.contextWindow,
             reasoning: m.reasoning === true,
             thinkingLevels: Array.isArray(m.thinkingLevels) ? m.thinkingLevels : [],
-            current: `${m.provider || ""}\u0000${m.id || ""}` === currentKey
-                || (m.id === currentModelId && (!currentProvider || !m.provider || m.provider === currentProvider)),
-            currentThinking: `${m.provider || ""}\u0000${m.id || ""}` === currentKey
-                || (m.id === currentModelId && (!currentProvider || !m.provider || m.provider === currentProvider))
-                ? currentThinking : "",
+            current: isCurrent(m),
+            currentThinking: isCurrent(m) ? currentThinking : "",
         }));
-        const choice = await this.showPicker("model", items, currentKey);
+        // 展示序：当前模型所在 provider 分组整组置顶（组内当前模型排第一位），
+        // 其余分组保持 models.json 原序，无 provider 的排最后（webview 渲染为“其他”）。
+        const provOf = (it: any) => (typeof it.provider === "string" ? it.provider : "");
+        const current = items.find((it) => it.current);
+        const groupKeys: string[] = [];
+        for (const it of items) {
+            const k = provOf(it);
+            if (!groupKeys.includes(k)) { groupKeys.push(k); }
+        }
+        const curKey = current ? provOf(current) : null;
+        const order: string[] = [
+            ...(curKey !== null ? [curKey] : []),
+            ...groupKeys.filter((k) => k !== curKey && k !== ""),
+            // 空 provider 兜底“其他”排最后；若它本身就是当前组则已在队首，不重复
+            ...(curKey !== "" && groupKeys.includes("") ? [""] : []),
+        ];
+        const grouped = order.flatMap((k) => items.filter((it) => provOf(it) === k));
+        const ordered = current ? [current, ...grouped.filter((it) => it !== current)] : grouped;
+        const choice = await this.showPicker("model", ordered, currentKey, echo);
         if (!choice) { return undefined; }
         return {
             provider: choice.provider || "",
@@ -780,14 +1133,15 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     public async loadHistorySession(file: string): Promise<void> {
-        // 分屏中加载历史：作用于聚焦 pane，上下文不同步了，自动解除链接
-        this.setSplitLinked(false);
-        // 在活跃 tab 加载；若无 tab 则新建（loadSession 内部会等待 pi 就绪）
+        // 在焦点 panel 加载；若无任何 tab 则新建
         let rt = this.getActive();
         if (!rt) {
-            rt = this.newTab();
+            const c = this.newTab();
+            rt = this.panels.get(layoutLeaves(c.root)[0]);
         }
-        this.setActive(rt.id);
+        if (!rt) { return; }
+        const c = this.containerOfPanel(rt.id);
+        if (c) { this.setActive(c.id); }
         await rt.loadSession(file);
         await this.onFocusChat();
     }
@@ -803,9 +1157,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return norm(a) === norm(b);
     }
 
-    /** 查找已打开该会话文件的 tab。 */
-    protected findTabBySessionFile(file: string): SessionRuntime | undefined {
-        for (const rt of this.tabs.values()) {
+    /** 查找已打开该会话文件的 panel。 */
+    protected findPanelBySessionFile(file: string): SessionRuntime | undefined {
+        for (const rt of this.panels.values()) {
             if (this.samePath(rt.currentSessionPath, file)) {
                 return rt;
             }
@@ -814,18 +1168,19 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /**
-     * 画布双击消息：复用已有 tab 或新建 tab 加载会话，并尝试滚到对应 entry。
+     * 画布双击消息：复用已有 panel 或新建 tab 加载会话，并尝试滚到对应 entry。
      */
     public async openSessionAtEntry(file: string, entryId: string): Promise<void> {
-        this.setSplitLinked(false);
-        let rt = this.findTabBySessionFile(file);
-        if (rt) {
-            // 命中的是分屏之外的隐藏 tab：先退出分屏，避免 active 指向不可见 pane
-            if (this.splitState && !this.isSplitMember(rt.id)) { this.exitSplit(); }
-            this.setActive(rt.id);
+        const found = this.findPanelBySessionFile(file);
+        let rt: SessionRuntime;
+        if (found) {
+            rt = found;
+            const c = this.containerOfPanel(rt.id);
+            if (c) { this.setActive(c.id); this.focusPanel(rt.id); }
         } else {
             // 未打开则新 tab，避免覆盖正在进行的对话
-            rt = this.newTab();
+            const c = this.newTab();
+            rt = this.panels.get(layoutLeaves(c.root)[0])!;
             await rt.loadSession(file);
         }
         // 稍等 DOM 渲染后再滚（load 会 clear + 重绘）
@@ -840,28 +1195,27 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 画布「在此分支」：新 tab 加载会话文件并在 entry 处 fork。
      */
     public async forkAtEntryFromPath(file: string, entryId: string): Promise<void> {
-        this.setSplitLinked(false);
         const abs = this.resolvePath(file);
         if (!fs.existsSync(abs)) {
             return;
         }
-        const newRt = this.newTab();
-        await newRt.loadSessionAndFork(abs, entryId);
+        const c = this.newTab();
+        const rt = this.panels.get(layoutLeaves(c.root)[0]);
+        if (!rt) { return; }
+        await rt.loadSessionAndFork(abs, entryId);
         await this.onFocusChat();
     }
 
     /**
-     * 在新 tab 中打开从某条 user 消息处分叉出的新分支，源 tab 保持不动。
-     * 新建一个独立 pi 进程的 tab，先加载源会话文件，再在该 entry 处 fork ——
-     * fork 会创建新的分支会话文件并切换到它，源 tab 完全不受影响。
+     * 在新 tab 中打开从某条 user 消息处分叉出的新分支，源 panel 保持不动。
+     * 新建一个独立 pi 进程的 panel，先加载源会话文件，再在该 entry 处 fork ——
+     * fork 会创建新的分支会话文件并切换到它，源 panel 完全不受影响。
      * 源会话尚未落盘时回退到原地分叉。
      */
     public async forkAtEntryInNewTab(source: SessionRuntime, entryId: string): Promise<void> {
-        // 会新建 tab：分屏视图中新 tab 不可见，先退出分屏
-        if (this.splitState) { this.exitSplit(); }
         // 取源会话文件路径。currentSessionPath 只在加载历史 / 分叉成功后赋值，
-        // 全新 tab 普通对话后从未同步 —— 直接向源 pi 查询真实 sessionFile，
-        // 避免误判“未落盘”而在当前 tab 原地分叉。
+        // 全新 panel 普通对话后从未同步 —— 直接向源 pi 查询真实 sessionFile，
+        // 避免误判“未落盘”而在当前 panel 原地分叉。
         let sourcePath = source.currentSessionPath;
         if (!sourcePath) {
             const state = await source.request<RpcSessionState>({ type: "get_state" });
@@ -871,7 +1225,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             }
         }
         // pi 在首条 assistant 回复到达前不把会话写入磁盘：文件可能已创建路径
-        // 但尚未落盘，短轮询等它出现；仍不存在才回退原地分叉（会中止源 tab 生成）。
+        // 但尚未落盘，短轮询等它出现；仍不存在才回退原地分叉（会中止源面板生成）。
         if (sourcePath) {
             const abs = this.resolvePath(sourcePath);
             const deadline = Date.now() + 8000;
@@ -879,9 +1233,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 await new Promise((r) => setTimeout(r, 250));
             }
             if (fs.existsSync(abs)) {
-                const newRt = this.newTab();
-                // 不等固定 sleep：loadSessionAndFork 内部会等待新 tab 的 pi 进程就绪
-                await newRt.loadSessionAndFork(abs, entryId);
+                const c = this.newTab();
+                const rt = this.panels.get(layoutLeaves(c.root)[0]);
+                if (!rt) { return; }
+                // 不等固定 sleep：loadSessionAndFork 内部会等待新 panel 的 pi 进程就绪
+                await rt.loadSessionAndFork(abs, entryId);
                 await this.onFocusChat();
                 return;
             }
@@ -1016,8 +1372,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
     //  webview 消息分发（公共部分）
     // ========================================================================
     /**
-     * 处理来自 webview 的消息。先处理两宿主公共的全局消息，再交给
-     * {@link handlePlatformMessage} 处理平台独有消息，最后处理 tab 级消息。
+     * 处理来自 webview 的消息。先处理两宿主公共的全局消息，再交由
+     * {@link handlePlatformMessage} 处理平台独有消息，最后处理 panel 级消息。
      */
     public processMessage(msg: any): void {
         // ---- 公共全局消息 ----
@@ -1025,21 +1381,20 @@ export abstract class ChatControllerBase implements RuntimeHost {
             case "ready": {
                 this.sendViewOptions();
                 this.broadcastTabList();
-                this.broadcastSplitState();
-                if (this.tabs.size === 0) {
+                if (this.tabContainers.size === 0) {
                     this.newTab();
                     void this.maybeAutoLoadLastSession();
                 } else {
-                    // 已有 tab：同步各 tab 的 piReady
-                    for (const rt of this.tabs.values()) {
+                    // 已有 panel：同步各 panel 的 piReady
+                    for (const rt of this.panels.values()) {
                         this.postToTab(rt.id, { type: "piReady", ready: rt.piReady });
                     }
                 }
-                if (this.activeId) {
-                    this.postToWebview({ type: "tabActivated", id: this.activeId });
+                if (this.activeTabId) {
+                    this.postToWebview({ type: "tabActivated", id: this.activeTabId });
                 }
                 this.onWebviewReady();
-                // webview 就绪后后台预热备用进程，后续新 tab / 切分支免冷启动
+                // webview 就绪后后台预热备用进程，后续新 panel / 切分支免冷启动
                 this.ensureSpare();
                 return;
             }
@@ -1055,8 +1410,33 @@ export abstract class ChatControllerBase implements RuntimeHost {
             case "closeTab":
                 if (typeof msg.tabId === "string") { this.closeTab(msg.tabId); }
                 return;
+            case "closePanel":
+                if (typeof msg.panelId === "string") { this.closePanel(msg.panelId); }
+                return;
+            case "focusPanel":
+                if (typeof msg.panelId === "string") { this.focusPanel(msg.panelId); }
+                return;
+            case "addPanel":
+                this.addPanel(typeof msg.panelId === "string" ? msg.panelId : undefined);
+                return;
+            case "forkPanel":
+                if (typeof msg.panelId === "string") { void this.forkPanel(msg.panelId); }
+                return;
+            case "movePanel":
+                if (typeof msg.panelId === "string") {
+                    this.movePanel({
+                        panelId: msg.panelId,
+                        targetTabId: typeof msg.targetTabId === "string" ? msg.targetTabId : undefined,
+                        targetPanelId: typeof msg.targetPanelId === "string" ? msg.targetPanelId : undefined,
+                        zone: typeof msg.zone === "string" ? msg.zone : undefined,
+                    });
+                }
+                return;
             case "listFiles":
                 this.sendFileList();
+                return;
+            case "fetchChat":
+                void this.handleFetchChat(msg);
                 return;
             case "openFile":
                 if (typeof msg.path === "string") {
@@ -1084,21 +1464,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
                     this.doViewOptionToggle(msg.action, typeof msg.value === "string" ? msg.value : undefined);
                 }
                 return;
-            case "splitTab":
-                void this.splitActiveTab();
-                return;
-            case "exitSplit":
-                this.exitSplit();
-                return;
-            case "splitFocus":
-                if (typeof msg.tabId === "string") { this.setSplitFocus(msg.tabId); }
-                return;
-            case "toggleSplitLink":
-                this.toggleSplitLink();
-                return;
             case "relayOnce":
-                void this.relayOnce(
-                    typeof msg.fromTabId === "string" ? msg.fromTabId : undefined,
+                void this.relayToPanel(
+                    typeof msg.fromTabId === "string" ? msg.fromTabId : "",
                     typeof msg.text === "string" ? msg.text : undefined
                 );
                 return;
@@ -1107,22 +1475,22 @@ export abstract class ChatControllerBase implements RuntimeHost {
         // ---- 平台独有全局消息 ----
         if (this.handlePlatformMessage(msg)) { return; }
 
-        // ---- 公共 tab 级消息 ----
-        const tabId: string | undefined = msg.tabId;
-        const rt = tabId ? this.tabs.get(tabId) : undefined;
-        // 命令型消息（pickModel 等）回退到活跃 tab
+        // ---- 公共 panel 级消息 ----
+        const panelId: string | undefined = msg.tabId;
+        const rt = panelId ? this.panels.get(panelId) : undefined;
+        // 命令型消息（pickModel 等）回退到焦点 panel
         const target = rt ?? (msg.type === "pickModel" ? this.getActive() : undefined);
         if (!target) { return; }
 
         switch (msg.type) {
             case "send": {
-                // 分屏链接中：一次发送同时进两个 pane；否则只进目标 tab
-                for (const t of this.linkedGroupOf(target.id)) { t.handleSend(msg.text, msg.images); }
+                // tab 级广播：消息同时进该 tab 内所有 panel
+                this.broadcastSendToTab(target.id, msg.text, msg.images);
                 break;
             }
             case "abort": {
-                // 分屏链接中：停止同时中断两侧
-                for (const t of this.linkedGroupOf(target.id)) { t.abortActiveRun(); }
+                // tab 级中止：一停全停
+                this.broadcastAbortToTab(target.id);
                 break;
             }
             case "showTree":
@@ -1132,7 +1500,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 if (typeof msg.entryId === "string") { void this.forkAtEntryInNewTab(target, msg.entryId); }
                 break;
             case "pickModel":
-                void target.pickModel();
+                void target.pickModel(typeof msg.t0 === "number" ? msg.t0 : undefined);
                 break;
             case "openDiff":
                 if (typeof msg.path === "string") { void target.openDiff(msg.path); }

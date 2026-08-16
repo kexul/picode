@@ -86,12 +86,6 @@ export function activate(context: vscode.ExtensionContext): void {
             provider.askSelectionAndSend();
         })
     );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand("piChat.reviewNow", () => {
-            void provider.startReview();
-        })
-    );
 }
 
 export function deactivate(): void {

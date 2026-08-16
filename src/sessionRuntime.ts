@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import { PiClient } from "./piClient";
+import { NameParts, composeName } from "./names";
 import { EditTracker } from "./editTracker";
 import {
     countImages,
@@ -7,6 +8,7 @@ import {
     extractTruncation,
     formatPiError,
     getModelThinkingLevels,
+    summarizeToolCall,
     resolveAnchorLine,
     slimTree,
     textOf,
@@ -49,7 +51,14 @@ export type {
  */
 export class SessionRuntime {
     public id: string = "";
-    public title: string = "";
+    /** 名字两部分（形容词/名词）：创建时分配后终身不变；
+     *  title 供 pane-head / picker / 导出，tab 栏派生名另由宿主用 noun 拼接。 */
+    public readonly nameParts: NameParts = { adjective: "", noun: "" };
+
+    /** 完整显示名（“沉静的雪豹”）。 */
+    public get title(): string { return composeName(this.nameParts); }
+    /** 名词部分：tab 栏多 panel 拼接名只用它。 */
+    public get noun(): string { return this.nameParts.noun; }
     /** Agent 是否仍在运行；这是 steer / Esc 等整体生命周期判断使用的状态。 */
     public streaming = false;
     /** Agent 当前更细的活动阶段，供 webview 区分处理中 / 思考 / 工具调用。 */
@@ -68,6 +77,9 @@ export class SessionRuntime {
     private statusPercent?: number;
     private statusTokens?: number;
     private statusContextWindow?: number;
+    /** 模型列表缓存：pi 启动时读一次 models.json，进程存活期间不变；
+     *  点击状态栏弹选择器直接读缓存，避免每次都等 RPC 往返（多 panel 时尤其卡）。 */
+    private cachedModels?: ModelInfo[];
 
     private client?: PiClient;
     private readonly edits: EditTracker;
@@ -75,9 +87,9 @@ export class SessionRuntime {
     /** 本轮已展示过的错误文本；防止重试期间同一错误刷屏。agent_start 时重置。 */
     private lastShownRunError = "";
 
-    constructor(id: string, title: string, private readonly host: RuntimeHost) {
+    constructor(id: string, name: NameParts, private readonly host: RuntimeHost) {
         this.id = id;
-        this.title = title;
+        this.nameParts = name;
         this.edits = new EditTracker({
             getCwd: () => this.host.getCwd(),
             relativeTo: (cwd, full) => this.host.relativeTo(cwd, full),
@@ -94,7 +106,7 @@ export class SessionRuntime {
     }
 
     /** 把当前 tab 的模型/上下文状态快照上报给宿主（如 VSCode 状态栏）。
-     *  宿主自行按 activeId 过滤；这里不多嘴。 */
+     *  宿主自行按焦点 panel 过滤；这里不多嘴。 */
     public emitStatus(): void {
         this.host.onStatusUpdate?.(this.id, {
             modelId: this.statusModelId,
@@ -105,6 +117,12 @@ export class SessionRuntime {
             contextWindow: this.statusContextWindow,
         });
     }
+
+    // ---- 状态快照只读视图（供 tabList 携带，webview 重建后恢复状态栏）----
+    public get modelId(): string | undefined { return this.statusModelId; }
+    public get provider(): string | undefined { return this.statusProvider; }
+    public get thinkingLevel(): string | undefined { return this.statusThinking; }
+    public get contextPercent(): number | undefined { return this.statusPercent; }
 
     /** 本 tab 最后一次已知的模型（模型跟 tab 关联：新 tab 默认继承它）。未知返回 undefined。 */
     public currentModel(): { provider?: string; modelId?: string } | undefined {
@@ -171,6 +189,8 @@ export class SessionRuntime {
     /** 把（新建或领取的）pi 客户端挂到本 tab：绑定事件并启动。 */
     private attachClient(client: PiClient): void {
         this.client = client;
+        // 新进程 = 重新读 models.json：旧缓存作废
+        this.cachedModels = undefined;
         this.client.on("event", (evt) => this.onPiEvent(evt));
         this.client.on("response", (resp) => this.onPiResponse(resp));
         this.client.on("ui", (req) => this.onPiUiRequest(req));
@@ -199,6 +219,8 @@ export class SessionRuntime {
             this.host.broadcastTabList();
             void this.sendCurrentModel();
             void this.refreshStats();
+            // 预取模型列表：点状态栏选模型时直接读缓存，不等 RPC
+            void this.refreshModels();
         } catch (e: any) {
             this.post({ type: "systemError", text: `无法启动 pi: ${e.message}` });
         }
@@ -252,7 +274,6 @@ export class SessionRuntime {
         this.abortActiveRun();
         this.edits.reset();
         this.currentSessionPath = undefined;
-        this.host.onSessionChanged?.(this.id, this.currentSessionPath);
         this.post({ type: "clear" });
         this.post({ type: "system", text: "已开始新会话。" });
         if (this.client && this.client.isRunning()) {
@@ -311,6 +332,48 @@ export class SessionRuntime {
         return this.client.waitReady(timeoutMs);
     }
 
+    /** 导出会话全文本流（跨 panel 上下文获取用）：
+     *  user/assistant 正文 + 工具调用一行摘要；toolResult 正文不进（v1 定规）。 */
+    public async exportChatText(): Promise<{ text: string; messageCount: number } | undefined> {
+        if (!this.client || !this.client.isRunning()) {
+            return undefined;
+        }
+        const resp = await this.request<{ messages: any[] }>({ type: "get_messages" });
+        const messages: any[] = resp?.data?.messages ?? [];
+        const sections: string[] = [];
+        let messageCount = 0;
+        for (const m of messages) {
+            if (m?.role === "user") {
+                const t = textOf(m.content).trim();
+                if (t) {
+                    sections.push(`### 👤 用户\n${t}`);
+                    messageCount++;
+                }
+            } else if (m?.role === "assistant") {
+                const parts = Array.isArray(m.content) ? m.content : [];
+                const blocks: string[] = [];
+                let buf = "";
+                for (const c of parts) {
+                    if (c?.type === "text" && typeof c.text === "string") {
+                        buf += c.text;
+                    } else if (c?.type === "toolCall") {
+                        if (buf.trim()) { blocks.push(buf.trim()); buf = ""; }
+                        const toolName = typeof c.name === "string" ? c.name : "tool";
+                        const s = summarizeToolCall(toolName, c.arguments);
+                        blocks.push(`> 🔧 ${toolName}${s ? `: ${s}` : ""}`);
+                    }
+                }
+                if (buf.trim()) { blocks.push(buf.trim()); }
+                if (blocks.length) {
+                    sections.push(`### 🤖 助手\n${blocks.join("\n\n")}`);
+                    messageCount++;
+                }
+            }
+            // toolResult 角色：不含结果正文，直接跳过
+        }
+        return { text: sections.join("\n\n"), messageCount };
+    }
+
     /** 取本会话最后一条 assistant 回复的文本；无则空串（分屏接力用）。 */
     public async getLastAssistantText(): Promise<string> {
         const resp = await this.request<{ text: string | null }>({ type: "get_last_assistant_text" });
@@ -366,11 +429,7 @@ export class SessionRuntime {
                         text,
                         imageCount: imgs > 0 ? imgs : 0,
                     });
-                    const t = (text || "").replace(/\s+/g, " ").trim();
-                    if (t) {
-                        this.title = t;
-                        this.host.broadcastTabList();
-                    }
+                    // panel 名字：创建时命名后终身保留，不随用户消息更新。
                 } else if (
                     m && m.role === "assistant"
                     && m.stopReason === "error"
@@ -596,7 +655,6 @@ export class SessionRuntime {
         this.forkEntries = forkResp?.data?.messages ?? [];
         this.renderMessages(messages);
         this.currentSessionPath = file;
-        this.host.onSessionChanged?.(this.id, this.currentSessionPath);
         this.post({ type: "system", text: `已加载会话（${messages.length} 条消息）。` });
         this.loading = false;
         this.host.broadcastTabList();
@@ -683,7 +741,6 @@ export class SessionRuntime {
         // fork 会切换到新的分支会话文件，需同步路径
         if (stateResp?.data?.sessionFile) {
             this.currentSessionPath = stateResp.data.sessionFile;
-            this.host.onSessionChanged?.(this.id, this.currentSessionPath);
         }
         this.post({ type: "clear" });
         this.renderMessages(messages);
@@ -735,7 +792,6 @@ export class SessionRuntime {
             return;
         }
         this.currentSessionPath = sessionPath;
-        this.host.onSessionChanged?.(this.id, this.currentSessionPath);
 
         // 2. 在该 entry 处分叉：创建新分支会话文件并切换到它
         const forkResp = await this.request<RpcForkResult>({ type: "fork", entryId });
@@ -767,7 +823,6 @@ export class SessionRuntime {
         this.forkEntries = forkMsgResp?.data?.messages ?? [];
         if (stateResp?.data?.sessionFile) {
             this.currentSessionPath = stateResp.data.sessionFile;
-            this.host.onSessionChanged?.(this.id, this.currentSessionPath);
         }
         this.post({ type: "clear" });
         this.renderMessages(messages);
@@ -822,7 +877,6 @@ export class SessionRuntime {
         }
         console.log(`[clone] switch_session ${Date.now() - t0}ms`);
         this.currentSessionPath = sessionPath;
-        this.host.onSessionChanged?.(this.id, this.currentSessionPath);
 
         // 2. 在当前位置 clone：创建新会话文件并切换过去（不碰源文件）
         const cloneResp = await this.request<{ cancelled?: boolean }>({ type: "clone" });
@@ -853,7 +907,6 @@ export class SessionRuntime {
         this.forkEntries = cloneMsgs[1]?.data?.messages ?? [];
         if (cloneMsgs[2]?.data?.sessionFile) {
             this.currentSessionPath = cloneMsgs[2].data.sessionFile;
-            this.host.onSessionChanged?.(this.id, this.currentSessionPath);
         }
         this.post({ type: "clear" });
         this.renderMessages(messages);
@@ -962,18 +1015,14 @@ export class SessionRuntime {
         }
     }
 
-    public async pickModel(): Promise<void> {
-        if (!this.client || !this.client.isRunning()) {
-            this.startClient();
+    /** 拉取并缓存模型列表（models.json 在 pi 启动后不变，缓存全程有效）。 */
+    public async refreshModels(): Promise<ModelInfo[]> {
+        const resp = await this.request<{ models: RpcModelInfo[] }>({ type: "get_available_models" });
+        if (!resp?.data) {
+            // RPC 失败（进程未就绪/超时）：不动缓存，下次点击重试
+            return this.cachedModels ?? [];
         }
-        // 首次打开只取模型列表和当前状态；思考档位从各模型的元数据中懒展示，
-        // 不再额外请求“当前模型”的 get_available_thinking_levels。
-        const [resp, stateResp] = await Promise.all([
-            this.request<{ models: RpcModelInfo[] }>({ type: "get_available_models" }),
-            this.request<RpcSessionState>({ type: "get_state" }),
-        ]);
-        const rawModels = resp?.data?.models ?? [];
-        const models: ModelInfo[] = rawModels.map((m) => ({
+        this.cachedModels = (resp.data.models ?? []).map((m) => ({
             id: m.id,
             provider: m.provider,
             name: m.name,
@@ -981,6 +1030,16 @@ export class SessionRuntime {
             reasoning: !!m.reasoning,
             thinkingLevels: getModelThinkingLevels(m),
         }));
+        return this.cachedModels;
+    }
+
+    public async pickModel(echoT0?: number): Promise<void> {
+        if (!this.client || !this.client.isRunning()) {
+            this.startClient();
+        }
+        // 模型列表：启动时已预取，命中缓存即零 RPC；未命中才现查（首屏冷启动兼容）。
+        // 当前模型/思考档位直接读本地状态缓存（pi 事件已在同步），不再额外 get_state。
+        const models = this.cachedModels ?? (await this.refreshModels());
         if (models.length === 0) {
             this.post({
                 type: "system",
@@ -988,22 +1047,22 @@ export class SessionRuntime {
             });
             return;
         }
-        const stateModel: RpcModelInfo = stateResp?.data?.model ?? { id: "" };
-        const currentThinking: string = stateResp?.data?.thinkingLevel ?? "";
-        const currentProvider: string = stateModel.provider ?? "";
-        const currentModelId: string = stateModel.id ?? "";
+        const currentThinking: string = this.statusThinking ?? "";
+        const currentProvider: string = this.statusProvider ?? "";
+        const currentModelId: string = this.statusModelId ?? "";
         const choice = await this.host.pickModelInteractive(
             models,
             currentThinking,
             currentProvider,
-            currentModelId
+            currentModelId,
+            typeof echoT0 === "number" ? { t0: echoT0 } : undefined
         );
         if (!choice) {
             return;
         }
 
         const modelChanged = choice.provider !== currentProvider || choice.modelId !== currentModelId;
-        let model: RpcModelInfo = stateModel;
+        let model: RpcModelInfo = { id: currentModelId, provider: currentProvider };
         if (modelChanged) {
             const setResp = await this.request<RpcModelInfo>({
                 type: "set_model",

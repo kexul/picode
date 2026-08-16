@@ -8,8 +8,8 @@
     background: var(--vscode-editor-background);
   }
   #messages { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
-  .tab-pane { position: absolute; inset: 0; overflow-y: auto; padding: 8px 8px 16px; visibility: hidden; pointer-events: none; }
-  .tab-pane.active { visibility: visible; pointer-events: auto; }
+  /* tab-pane 挂在布局树叶子里（布局树负责可见性） */
+  .tab-pane { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: 8px 8px 16px; }
   .tab-pane::-webkit-scrollbar { width: 6px; }
   .tab-pane::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 3px; }
   .tab-pane::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground, rgba(128,128,128,0.6)); }
@@ -32,11 +32,10 @@
   #tabBar { display: flex; align-items: center; gap: 4px; padding: 4px 6px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); flex: 0 0 auto; }
   #tabBarInner { display: flex; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
   #tabBarInner::-webkit-scrollbar { display: none; }
-  #newTabBtn, #splitBtn { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: none; background: transparent; color: var(--vscode-foreground); opacity: 0.7; font-size: 16px; line-height: 1; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-  #newTabBtn:hover, #splitBtn:not(:disabled):hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
-  #splitBtn:disabled { opacity: 0.3; cursor: default; background: transparent; }
-  #splitBtn:disabled:hover { background: transparent; }
-  .chat-tab { display: flex; flex: 0 0 auto; min-width: 0; max-width: 200px; align-items: center; gap: 4px; padding: 3px 6px 3px 9px; border-radius: 4px 4px 0 0; cursor: pointer; white-space: nowrap; font-size: 0.85em; color: var(--vscode-foreground); opacity: 0.7; user-select: none; }
+  #newTabBtn { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: none; background: transparent; color: var(--vscode-foreground); opacity: 0.7; font-size: 16px; line-height: 1; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  #newTabBtn:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
+    /* 不设 max-width：多 panel 拼接名（名词串）可撑宽，tab 栏溢出时横向滚动 */
+  .chat-tab { display: flex; flex: 0 0 auto; min-width: 0; align-items: center; gap: 4px; padding: 3px 6px 3px 9px; border-radius: 4px 4px 0 0; cursor: pointer; white-space: nowrap; font-size: 0.85em; color: var(--vscode-foreground); opacity: 0.7; user-select: none; }
   .chat-tab:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
   .chat-tab.active { opacity: 1; background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.2)); }
   .chat-tab .ct-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -218,13 +217,9 @@
   button:active { transform: scale(0.97); }
   button:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: 1px; }
   button:disabled { opacity: 0.5; cursor: default; }
-  #status { display: flex; align-items: center; gap: 8px; padding: 2px 8px; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: color-mix(in srgb, var(--vscode-foreground) 88%, transparent); min-height: 1.4em; overflow: hidden; cursor: pointer; }
-  #status:hover .st-model { text-decoration: underline; }
-  /* 状态栏实时活动区：始终一行（不再展示思考流式内容，改为模型名 · 百分比 · 速度 · 阶段） */
-  #status .st-head { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; font-size: 0.85em; opacity: .85; }
-  /* 状态栏里的模型名与上下文用量百分比（≥70% 黄、≥90% 红，只对百分比变色） */
-  #status .st-pct.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
-  #status .st-pct.err { color: var(--vscode-errorForeground, #f14c4c); }
+  /* 状态栏模型名与上下文用量百分比（≥70% 黄、≥90% 红，只对百分比变色） */
+  .st-pct.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
+  .st-pct.err { color: var(--vscode-errorForeground, #f14c4c); }
   /* 底部工具栏 */
   #bottomBar { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
   #treeBtn {
@@ -247,6 +242,8 @@
   .file-item { padding: 4px 10px; cursor: pointer; font-size: 0.85em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background 150ms; }
   .file-item.active, .file-item:hover { background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.3)); color: var(--vscode-list-activeSelectionForeground, inherit); }
   .file-item .dir { opacity: 0.55; font-size: 0.9em; }
+  /* # 会话引用菜单：tab 组行略加重，与 panel 行区分 */
+  .file-item.hash-tab-row { font-weight: 600; }
   /* 本次对话修改的文件列表（默认折叠为单行摘要） */
   #changedFiles {
     display: flex; flex-direction: row; flex-wrap: wrap;
@@ -384,15 +381,15 @@
   .diff-line.jumpable:hover { outline: 1px solid var(--vscode-focusBorder, rgba(128,128,128,0.6)); outline-offset: -1px; }
   .empty-hint { text-align: center; opacity: 0.35; font-size: 0.9em; padding: 40px 0; user-select: none; }
   /* 分支树浮层 */
-  #treeOverlay, #pickerOverlay, #settingsOverlay, #reviewOverlay {
+  #treeOverlay, #pickerOverlay, #settingsOverlay {
     position: fixed; inset: 0; z-index: 1000;
     background: rgba(0,0,0,0.45);
     display: flex; align-items: center; justify-content: center;
     opacity: 1; transition: opacity 160ms ease;
   }
-  #treeOverlay.hidden, #pickerOverlay.hidden, #settingsOverlay.hidden, #reviewOverlay.hidden { display: none; }
-  /* 统一浮层面板外观（分支树 / 拾取器 / 设置 / 互评） */
-  #treePanel, #pickerPanel, #settingsPanel, #reviewPanel {
+  #treeOverlay.hidden, #pickerOverlay.hidden, #settingsOverlay.hidden { display: none; }
+  /* 统一浮层面板外观（分支树 / 拾取器 / 设置） */
+  #treePanel, #pickerPanel, #settingsPanel {
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
     color: var(--vscode-foreground);
     border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border, rgba(128,128,128,0.4)));
@@ -400,51 +397,6 @@
     box-shadow: 0 1px 4px rgba(0,0,0,0.2), 0 6px 20px rgba(0,0,0,0.25);
     overflow: hidden;
   }
-  /* One-shot 互评浮层（迷你聊天：消息流 + 输入框） */
-  #reviewOverlay { bottom: 0; }
-  #reviewPanel { width: min(900px, 96vw); height: 100%; display: flex; flex-direction: column; }
-  #reviewHeader {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
-  }
-  #reviewHeader #reviewTitle { flex: 0 0 auto; }
-  #reviewMeta { flex: 1; font-weight: 400; font-size: 0.75em; opacity: 0.7; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #reviewCloseBtn {
-    flex: 0 0 auto; border: none; background: transparent; color: var(--vscode-foreground);
-    opacity: 0.6; cursor: pointer; font-size: 13px; padding: 2px 6px; border-radius: 3px;
-  }
-  #reviewCloseBtn:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
-  #reviewMessages { flex: 1; overflow-y: auto; padding: 2px 8px 6px; }
-  #reviewMessages::-webkit-scrollbar { width: 8px; }
-  #reviewMessages::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 4px; }
-  #reviewMessages pre { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.12)); padding: 8px; border-radius: 4px; overflow-x: auto; }
-  #reviewMessages code { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.12)); padding: 1px 4px; border-radius: 3px; }
-  #reviewMessages pre code { background: none; padding: 0; }
-  #reviewMessages table { border-collapse: collapse; }
-  #reviewMessages th, #reviewMessages td { border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); padding: 3px 8px; }
-  #reviewMessages h1, #reviewMessages h2, #reviewMessages h3 { border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); padding-bottom: 3px; }
-  #reviewMessages .msg { max-height: none; }
-  #reviewMessages .msg-user-fold { cursor: pointer; }
-  #reviewMessages .review-user-text { white-space: pre-wrap; font-size: 0.92em; }
-  .review-caret { display: inline-block; width: 7px; height: 13px; background: var(--vscode-foreground); opacity: 0.7; animation: reviewBlink 1s steps(2) infinite; vertical-align: text-bottom; }
-  @keyframes reviewBlink { 50% { opacity: 0; } }
-  #reviewStatus {
-    flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
-    padding: 4px 12px; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
-    font-size: 0.75em; color: var(--vscode-descriptionForeground, #999);
-  }
-  #reviewModelSel {
-    cursor: pointer; padding: 1px 6px; border-radius: 3px; max-width: 60%;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  #reviewModelSel:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); color: var(--vscode-foreground); }
-  #reviewInjectBtn {
-    border: none; border-radius: 3px; padding: 1px 8px; font-size: 1em; cursor: pointer;
-    background: var(--vscode-button-background); color: var(--vscode-button-foreground);
-  }
-  #reviewInjectBtn:hover:not(:disabled) { background: var(--vscode-button-hoverBackground); }
-  #reviewInjectBtn:disabled { opacity: 0.4; cursor: default; }
-  #reviewActivity { flex: 1; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #treePanel {
     width: min(640px, 92vw); max-height: 80vh; display: flex; flex-direction: column;
   }
@@ -545,6 +497,12 @@
   .pk-empty { padding: 28px 0; text-align: center; opacity: 0.5; }
   .pk-empty.pk-empty-paged { padding: 18px 0 4px; }
   .pk-history { padding: 8px 10px; }
+  /* 转发选择器：tab 分组头（整行 = 广播）+ 缩进 panel 子行 */
+  .pk-relay-tab { display: flex; align-items: center; gap: 6px; background: color-mix(in srgb, var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)) 55%, transparent); margin-top: 2px; }
+  .pk-relay-tab .pk-relay-name { font-weight: 600; }
+  .pk-relay-tab .pk-relay-count { opacity: 0.6; font-size: 0.9em; }
+  .pk-relay-tab .pk-relay-bcast { margin-left: auto; flex-shrink: 0; font-size: 0.85em; padding: 1px 8px; border-radius: 3px; border: 1px solid var(--vscode-button-border, rgba(128,128,128,0.4)); background: var(--vscode-button-background); color: var(--vscode-button-foreground, #fff); }
+  .pk-relay-panel { padding-left: 24px; }
   .pk-history-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
   .pk-history-branch { font-size: 0.66em; padding: 1px 5px; border-radius: 3px; opacity: 0.75; background: var(--vscode-badge-background, rgba(128,128,128,0.3)); color: var(--vscode-badge-foreground, inherit); }
   .pk-history-user, .pk-history-ai { display: flex; align-items: baseline; gap: 6px; }
@@ -631,6 +589,19 @@
   .vo-slider-reset { padding: 2px 8px; background: none; border: 1px solid var(--vscode-input-border, rgba(128,128,128,.4)); border-radius: 4px; color: var(--vscode-foreground); cursor: pointer; font-size: 11px; }
   .vo-slider-reset:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.18)); }
   .pk-section { padding: 8px 10px 4px; font-size: 0.74em; font-weight: 600; opacity: 0.55; text-transform: uppercase; letter-spacing: 0.04em; user-select: none; }
+  /* 模型选择器 provider 分组：居中分割线样式（左右横线 + 中间名称计数） */
+  .pk-section.pk-provider {
+    display: flex; align-items: center; gap: 8px;
+    margin: 10px 10px 6px; padding: 0;
+    font-size: 0.78em; font-weight: 600; opacity: 0.75;
+    white-space: nowrap;
+  }
+  .pk-section.pk-provider::before, .pk-section.pk-provider::after {
+    content: ""; flex: 1 1 0; height: 1px;
+    background: var(--vscode-panel-border, rgba(128,128,128,0.45));
+  }
+  /* 首个分组紧挨搜索框：压缩上边距 */
+  .pk-section.pk-provider:first-child { margin-top: 4px; }
   #pickerFooter { padding: 8px 12px; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); display: flex; justify-content: flex-end; gap: 8px; }
   #pickerFooter.hidden { display: none; }
   #pickerFooter button { min-width: 72px; padding: 4px 14px; border-radius: 4px; cursor: pointer; }
@@ -671,54 +642,89 @@
     100% { outline-color: transparent; }
   }
 
-  /* ---- 分屏模式 ---- */
-  /* 分屏中央分隔器：§ 表示链接，点击断开/恢复；下方接力进度提示 */
-  #splitDivider { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 8; display: flex; flex-direction: column; align-items: center; gap: 4px; pointer-events: none; }
-  #splitDivider.hidden { display: none; }
-  .split-mode #splitDivider { display: flex; }
-  #splitLinkBtn, #splitReviewBtn { pointer-events: auto; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); background: var(--vscode-editor-background); color: var(--vscode-focusBorder, #007fd4); font-size: 15px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; opacity: 0.9; }
-  #splitLinkBtn:hover, #splitReviewBtn:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
-  #splitLinkBtn.unlinked { color: var(--vscode-descriptionForeground, #999); opacity: 0.55; }
-
-  /* 分屏布局：隐藏 tab 栏与全局状态栏，两个 .in-split pane 改为 flex 并排（固定 50/50） */
-  .split-mode #tabBar { display: none !important; }
-  .split-mode #status { display: none !important; }
-  .split-mode #messages { flex-direction: row; }
-  .split-mode .tab-pane { display: none; }
-  .split-mode .tab-pane.in-split {
-    display: block; position: static; inset: auto;
-    visibility: visible; pointer-events: auto;
-    flex: 1 1 0; min-width: 0; overflow-y: auto;
+  /* ---- tab 内布局树（panel 网格 / 拖拽）---- */
+  .layout-root { position: absolute; inset: 0; display: flex; flex-direction: column; }
+  .layout-split { display: flex; flex: 1 1 0; min-width: 0; min-height: 0; }
+  .layout-root > .layout-leaf { flex: 1 1 0; }
+  .layout-root > .layout-split { flex: 1 1 0; }
+  .layout-split.layout-h { flex-direction: row; }
+  .layout-split.layout-v { flex-direction: column; }
+  .layout-split > .layout-leaf, .layout-split > .layout-split { flex: 1 1 0; min-width: 0; min-height: 0; }
+  .layout-split.layout-h > * + * { border-left: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
+  .layout-split.layout-v > * + * { border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
+  .layout-leaf { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .layout-leaf .tab-pane { position: static; flex: 1 1 0; min-height: 0; }
+  /* 焦点 pane：仅将头部标题变淡蓝（pane-head 只在多 panel 时显示，
+     单 panel 时自然无选中态）；不再画焦点环 */
+  .layout-leaf.focus .pane-head .ph-title { color: var(--vscode-focusBorder, #007fd4); opacity: 1; }
+  /* 每个 panel 自己的底部状态栏：始终显示，点击切换该 panel 模型 */
+  .pane-status {
+    display: flex; align-items: center; gap: 6px; flex: 0 0 auto;
+    min-height: 1.4em; padding: 2px 8px; overflow: hidden; white-space: nowrap;
+    border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
+    font-size: var(--vscode-font-size); cursor: pointer;
+    color: color-mix(in srgb, var(--vscode-foreground) 88%, transparent);
   }
-  .split-mode .tab-pane.in-split.split-right { border-left: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
-  .split-mode .tab-pane.in-split.split-focus { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder, #007fd4) 45%, transparent); }
+  .pane-status:not(.ps-focus) { opacity: 0.6; }
+  .pane-status.ps-focus { opacity: 1; }
+  .pane-status:hover .st-model { text-decoration: underline; }
+  /* 拖拽 panel 时的全局光标反馈 */
+  body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; }
+  body.panel-dragging .layout-leaf.drop-hover { cursor: move; }
+  /* 双击 pane-head 最大化：只显示目标叶子，其余隐藏（树保留） */
+  .layout-root.maximized .layout-leaf:not(.maximized) { display: none; }
+  .layout-root.maximized .layout-leaf.maximized { border-left: 0 !important; border-top: 0 !important; }
 
-  /* pane 头部（仅分屏时显示）：标题 · 模型（点击切换）· 流式指示 · 关闭 */
-  .pane-head { display: none; }
-  .split-mode .tab-pane.in-split .pane-head {
-    display: flex; align-items: center; gap: 6px;
+  /* pane 头部（tab 内 ≥2 个 panel 时显示）：状态点 · 名字 · 关闭；可拖拽 */
+  .pane-head {
+    display: none; align-items: center; gap: 6px;
     position: sticky; top: -8px; z-index: 5;
     margin: -8px -8px 4px; padding: 4px 8px;
     background: var(--vscode-editor-background);
     border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
-    font-size: 0.82em;
+    font-size: 0.82em; cursor: grab; user-select: none; flex: 0 0 auto;
   }
+  .layout-root.multi .pane-head { display: flex; }
+  .pane-head:active { cursor: grabbing; }
   .pane-head .ph-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-charts-blue, #3794ff); display: none; flex-shrink: 0; }
   .pane-head.ph-streaming .ph-dot { display: inline-block; animation: pi-pulse 1.2s ease-in-out infinite; }
   .pane-head .ph-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.9; }
-
-  /* 分屏状态栏：底部原 #status 位置左右各一条，与上方 pane 对齐 */
-  #statusSplit { display: flex; align-items: center; flex: 0 0 auto; min-height: 1.4em; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); font-size: var(--vscode-font-size); }
-  #statusSplit.hidden { display: none; }
-  .ss-cell { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; overflow: hidden; white-space: nowrap; cursor: pointer; color: color-mix(in srgb, var(--vscode-foreground) 88%, transparent); }
-  .ss-cell + .ss-cell { border-left: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
-  .ss-cell:hover .st-model { text-decoration: underline; }
-  .ss-cell:not(.ss-focus) { opacity: 0.6; }
   .pane-head .ph-close { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 3px; opacity: 0.5; cursor: pointer; }
   .pane-head .ph-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
 
-  /* assistant 气泡 hover 的“转发到另一侧”按钮（仅分屏时可见） */
-  .msg-relay { position: absolute; bottom: 2px; right: 34px; display: none; align-items: center; padding: 3px 5px; border: 0; border-radius: 4px; background: transparent; color: var(--vscode-descriptionForeground, #999); font-size: 12px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity 120ms ease; }
-  .split-mode .msg.assistant .msg-relay { display: inline-flex; }
-  .split-mode .msg.assistant:hover .msg-relay, .msg-relay:focus-visible { opacity: 1; }
+  /* 拖拽落点指示（四分占位 + 中心替换） */
+  .drop-indicator { position: absolute; inset: 0; z-index: 30; display: none; pointer-events: none; }
+  .layout-leaf.drop-hover .drop-indicator { display: block; }
+  .drop-indicator .dz { position: absolute; box-sizing: border-box; border: 1px dashed var(--vscode-focusBorder, #007fd4); background: color-mix(in srgb, var(--vscode-focusBorder, #007fd4) 18%, transparent); opacity: 0; border-radius: 3px; display: flex; align-items: center; justify-content: center; }
+  .drop-indicator .dz.on { opacity: 1; }
+  .drop-indicator .dz .dz-mark { font-size: 18px; color: var(--vscode-focusBorder, #007fd4); opacity: 0.9; user-select: none; }
+  /* 跨 tab 拖动：整格合并提示，隐藏方位热区 */
+  .layout-leaf.drop-merge .drop-indicator .dz { display: none; }
+  .drop-merge-hint { display: none; }
+  .layout-leaf.drop-merge .drop-indicator .drop-merge-hint {
+    display: flex; align-items: center; justify-content: center; position: absolute; inset: 0;
+    border: 2px solid var(--vscode-focusBorder, #007fd4); border-radius: 4px;
+    background: color-mix(in srgb, var(--vscode-focusBorder, #007fd4) 14%, transparent);
+    color: var(--vscode-foreground); font-size: 0.95em; user-select: none;
+  }
+  .drop-indicator .dz-left { left: 0; top: 12%; width: 50%; height: 76%; }
+  .drop-indicator .dz-right { right: 0; top: 12%; width: 50%; height: 76%; }
+  .drop-indicator .dz-top { top: 0; left: 12%; height: 50%; width: 76%; }
+  .drop-indicator .dz-bottom { bottom: 0; left: 12%; height: 50%; width: 76%; }
+  .drop-indicator .dz-center { left: 27%; top: 27%; width: 46%; height: 46%; }
+
+  /* tab 栏拖拽落点（拖到某个 tab 上 = 搬进该 tab；空白处 = 新 tab 带走） */
+  .chat-tab.drop-hint { outline: 1px dashed var(--vscode-focusBorder, #007fd4); outline-offset: -2px; background: color-mix(in srgb, var(--vscode-focusBorder, #007fd4) 14%, transparent); }
+  #tabBar.drop-hint { background: color-mix(in srgb, var(--vscode-focusBorder, #007fd4) 10%, transparent); }
+
+  /* pane-head 右键菜单 */
+  .pane-menu { position: fixed; z-index: 2000; min-width: 170px; padding: 3px; border-radius: 5px; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); color: var(--vscode-menu-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, rgba(128,128,128,0.4))); box-shadow: 0 4px 14px rgba(0,0,0,0.3); font-size: 0.85em; }
+  .pane-menu .pm-item { padding: 4px 12px; border-radius: 3px; cursor: pointer; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .pane-menu .pm-item:hover { background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground, rgba(128,128,128,0.15))); }
+  .pane-menu .pm-sep { height: 1px; margin: 3px 6px; background: var(--vscode-panel-border, rgba(128,128,128,0.3)); }
+
+  /* assistant 气泡 hover 的转发按钮（转发到任意 panel）；无其他 panel 时隐藏 */
+  .msg-relay { position: absolute; bottom: 2px; right: 34px; display: inline-flex; align-items: center; padding: 3px 5px; border: 0; border-radius: 4px; background: transparent; color: var(--vscode-descriptionForeground, #999); font-size: 12px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity 120ms ease; }
+  body.no-relay-target .msg-relay { display: none !important; }
+  .msg.assistant:hover .msg-relay, .msg-relay:focus-visible { opacity: 1; }
   .msg-relay:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.18)); color: var(--vscode-foreground); }

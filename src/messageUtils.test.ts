@@ -11,6 +11,7 @@ import {
     historyEditInfo,
     resolveAnchorLine,
     slimTree,
+    summarizeToolCall,
     textOf,
     toolFilePath,
 } from "./messageUtils";
@@ -281,5 +282,25 @@ describe("piRpc helpers", () => {
         assert.equal(forkSelectedText({ type: "response", data: { text: "hi" } }), "hi");
         assert.equal(forkSelectedText({ type: "response", data: { cancelled: true } }), "");
         assert.equal(forkSelectedText(undefined), "");
+    });
+});
+
+describe("summarizeToolCall", () => {
+    it("提取已知工具的关键参数", () => {
+        assert.equal(summarizeToolCall("bash", { command: "npm test" }), "npm test");
+        assert.equal(summarizeToolCall("read", { path: "src/a.ts" }), "src/a.ts");
+        assert.equal(summarizeToolCall("grep", { pattern: "foo", path: "src" }), "foo in src");
+        assert.equal(summarizeToolCall("ls", { path: "." }), ".");
+    });
+    it("未知工具回退 JSON 入参", () => {
+        assert.equal(summarizeToolCall("custom", { a: 1 }), '{"a":1}'
+        );
+        assert.equal(summarizeToolCall("custom", {}), "");
+    });
+    it("截断超长摘要", () => {
+        const long = "x".repeat(300);
+        const s = summarizeToolCall("bash", { command: long });
+        assert.equal(s.length, 121); // 120 + “…”
+        assert.ok(s.endsWith("…"));
     });
 });

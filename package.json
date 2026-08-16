@@ -22,8 +22,7 @@
       { "command": "piChat.pickModel", "title": "Pi Chat: 切换模型", "icon": "$(hubot)" },
       { "command": "piChat.showTree", "title": "Pi Chat: 对话分支", "icon": "$(git-branch)" },
       { "command": "piChat.focusInput", "title": "Pi Chat: 聚焦输入框", "icon": "$(keyboard)" },
-      { "command": "piChat.askSelectionAndSend", "title": "Pi Chat: 发送选中文本到对话框", "icon": "$(comment)" },
-      { "command": "piChat.reviewNow", "title": "Pi Chat: One-shot 互评（拉取两侧结论裁决）", "icon": "$(law)" }
+      { "command": "piChat.askSelectionAndSend", "title": "Pi Chat: 发送选中文本到对话框", "icon": "$(comment)" }
     ],
     "viewsContainers": {
       "activitybar": [
@@ -66,7 +65,7 @@
     "compile": "tsc -p tsconfig.json",
     "build": "npm run clean && npm run compile",
     "watch": "tsc -w -p tsconfig.json",
-    "test": "npm run compile && node --test out/src/messageUtils.test.js out/src/canvasData.test.js",
+    "test": "npm run compile && node --test out/src/messageUtils.test.js out/src/canvasData.test.js out/src/layoutTree.test.js",
     "package": "npm run build && vsce package --allow-missing-repository"
   },
   "dependencies": {},
