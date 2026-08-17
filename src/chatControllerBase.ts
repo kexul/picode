@@ -926,6 +926,15 @@ export abstract class ChatControllerBase implements RuntimeHost {
         for (const pid of layoutLeaves(c.root)) { this.panels.get(pid)?.handleSend(text); }
     }
 
+    /** webview / 命令菜单取数：问焦点 panel 的 pi 进程要命令列表
+     *  （技能 / 提示模板 / 扩展命令），返回可直接渲染的菜单条目。 */
+    protected async handleListCommands(): Promise<void> {
+        const rt = this.getActive();
+        if (!rt) { return; }
+        const items = await rt.getSlashCommandItems();
+        this.postToWebview({ type: "commandList", items });
+    }
+
     // ========================================================================
     //  上下文获取（# 引用：把会话文本流注入输入框草稿）
     // ========================================================================
@@ -1439,6 +1448,9 @@ ${s.text}`).join("\n\n");
                 return;
             case "listFiles":
                 this.sendFileList();
+                return;
+            case "listCommands":
+                void this.handleListCommands();
                 return;
             case "fetchChat":
                 void this.handleFetchChat(msg);

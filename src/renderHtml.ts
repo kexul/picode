@@ -67,7 +67,7 @@ ${bodyTop}${tabbar}  <div id="messages">
     <div id="imgPreview"></div>
     <div id="inputRow">
       <div id="fileMenu" class="hidden"></div>
-      <textarea id="input" placeholder="与 pi 对话… (Enter 发送, Shift+Enter 换行, 可粘贴图片, @ 引用文件)"></textarea>
+      <textarea id="input" placeholder="与 pi 对话… (Enter 发送, Shift+Enter 换行, 可粘贴图片, @ 引用文件, # 引用对话, / 命令)"></textarea>
     </div>
     <div id="bottomBar">
       <button id="treeBtn" title="查看对话树 / 切换分支">⑂ 分支</button>

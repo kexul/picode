@@ -24,6 +24,7 @@ export type RpcCommand =
     | { type: "get_fork_messages" }
     | { type: "get_tree" }
     | { type: "get_messages" }
+    | { type: "get_commands" }
     | { type: "extension_ui_response"; id: string; [k: string]: unknown };
 
 export interface RpcImage {
@@ -60,6 +61,16 @@ export interface RpcSessionState {
     sessionId?: string;
     sessionName?: string;
     messageCount?: number;
+}
+
+/** get_commands 返回的一条命令（扩展命令 / 提示模板 / 技能）。
+ *  技能条目 name 带 "skill:" 前缀，如 "skill:grill-me"。 */
+export interface RpcCommandInfo {
+    name: string;
+    description?: string;
+    source?: "extension" | "prompt" | "skill";
+    location?: string;
+    path?: string;
 }
 
 export interface RpcContextUsage {

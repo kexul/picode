@@ -244,6 +244,14 @@
   .file-item .dir { opacity: 0.55; font-size: 0.9em; }
   /* # 会话引用菜单：tab 组行略加重，与 panel 行区分 */
   .file-item.hash-tab-row { font-weight: 600; }
+  /* / 命令菜单：来源徽标（技能 / 模板 / 扩展命令） */
+  .file-item .cmd-badge {
+    margin-left: 6px; padding: 0 5px; border-radius: 3px; font-size: 0.8em;
+    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4));
+  }
+  .file-item .cmd-badge.cmd-skill { color: var(--vscode-charts-green, #89d185); }
+  .file-item .cmd-badge.cmd-prompt { color: var(--vscode-charts-blue, #75beff); }
+  .file-item .cmd-badge.cmd-extension { color: var(--vscode-charts-purple, #b180d7); }
   /* 本次对话修改的文件列表（默认折叠为单行摘要） */
   #changedFiles {
     display: flex; flex-direction: row; flex-wrap: wrap;

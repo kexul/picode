@@ -2549,6 +2549,86 @@
     inputEl.focus();
   }
 
+  // ==================== / 命令菜单（技能 / 提示模板 / 扩展命令） ====================
+  /** 宿主 get_commands 结果缓存：[{insert, name, description, source}]；
+   *  宿主 pi 进程启动/刷新时会主动推 commandList 覆盖。 */
+  let commandListCache = [];
+  /** 上次向宿主要列表的时间：空结果时 5s 内不重复请求（避免每次敲 / 都打一次 RPC）。 */
+  let commandListReqAt = 0;
+  let slashMatches = [];
+  let slashSel = 0;
+  let slashOpen = false;
+  function requestCommandList() {
+    if (commandListCache.length > 0) { return; }
+    const now = Date.now();
+    if (commandListReqAt && now - commandListReqAt < 5000) { return; }
+    commandListReqAt = now;
+    vscode.postMessage({ type: "listCommands" });
+  }
+  function closeSlashMenu() { slashOpen = false; slashMatches = []; }
+  function maybeShowSlashMenu() {
+    if (inputEl.value.length > BIG_TEXT_CHARS) { closeSlashMenu(); return; }
+    // 输入整体是单个 / 开头的 token（命令 + 正在输入的名字）才弹菜单；
+    // 敲了空格/其它内容就不再弹，交给用户继续写参数。
+    const m = inputEl.value.match(/^\/(\S*)$/);
+    if (!m) { closeSlashMenu(); return; }
+    // 三个菜单共用同一个浮层节点：接管前重置兄弟菜单状态
+    atStart = -1; hashOpen = false; hashStart = -1;
+    slashOpen = true;
+    requestCommandList();
+    filterSlashMenu(m[1]);
+  }
+  function filterSlashMenu(query) {
+    const q = (query || "").toLowerCase();
+    slashMatches = commandListCache
+      .filter((it) => !q || (it.name || "").toLowerCase().includes(q))
+      .slice(0, 30);
+    slashSel = 0;
+    renderSlashMenu();
+  }
+  function renderSlashMenu() {
+    if (!slashMatches.length) { fileMenuEl.classList.add("hidden"); return; }
+    fileMenuEl.innerHTML = "";
+    slashMatches.forEach((it, idx) => {
+      const item = document.createElement("div");
+      item.className = "file-item" + (idx === slashSel ? " active" : "");
+      const nameSpan = document.createElement("span");
+      nameSpan.textContent = it.insert || ("/" + (it.name || ""));
+      item.appendChild(nameSpan);
+      if (it.source) {
+        const badge = document.createElement("span");
+        badge.className = "cmd-badge cmd-" + it.source;
+        badge.textContent = it.source === "skill" ? "技能" : it.source === "prompt" ? "模板" : it.source === "extension" ? "命令" : "";
+        item.appendChild(badge);
+      }
+      if (it.description) {
+        const sub = document.createElement("span");
+        sub.className = "dir";
+        sub.textContent = "  " + it.description;
+        item.appendChild(sub);
+      }
+      item.addEventListener("mousedown", (e) => { e.preventDefault(); slashSel = idx; chooseSlash(); });
+      fileMenuEl.appendChild(item);
+    });
+    fileMenuEl.classList.remove("hidden");
+  }
+  function moveSlashSel(delta) {
+    if (!slashMatches.length) { return; }
+    slashSel = (slashSel + delta + slashMatches.length) % slashMatches.length;
+    renderSlashMenu();
+  }
+  /** 选中候选：替换整个输入框内容为 "/name "（光标在末尾，继续敲参数）。 */
+  function chooseSlash() {
+    const it = slashMatches[slashSel];
+    if (!it) { closeSlashMenu(); return; }
+    inputEl.value = (it.insert || ("/" + (it.name || ""))) + " ";
+    closeSlashMenu();
+    fileMenuEl.classList.add("hidden");
+    autoResize();
+    inputEl.focus();
+    inputEl.selectionStart = inputEl.selectionEnd = inputEl.value.length;
+  }
+
   // ==================== 发送 ====================
   function autoResize() {
     if (inputEl.value.length > BIG_TEXT_CHARS) { inputEl.style.height = "640px"; return; }
@@ -2585,7 +2665,7 @@
     d.height = 144;
     d.images = [];
     d.textBlocks = [];
-    hideFileMenu();
+    hideFileMenu(); hideHashMenu(); closeSlashMenu(); fileMenuEl.classList.add("hidden");
     renderAttachmentsFor();
   }
 
@@ -2673,6 +2753,12 @@
 
   inputEl.addEventListener("keydown", (e) => {
     if (!fileMenuEl.classList.contains("hidden")) {
+      if (slashOpen) {
+        if (e.key === "ArrowDown") { e.preventDefault(); moveSlashSel(1); return; }
+        if (e.key === "ArrowUp") { e.preventDefault(); moveSlashSel(-1); return; }
+        if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); chooseSlash(); return; }
+        if (e.key === "Escape") { e.preventDefault(); closeSlashMenu(); fileMenuEl.classList.add("hidden"); return; }
+      }
       if (hashOpen) {
         if (e.key === "ArrowDown") { e.preventDefault(); moveHashSel(1); return; }
         if (e.key === "ArrowUp") { e.preventDefault(); moveHashSel(-1); return; }
@@ -2688,8 +2774,8 @@
     if (e.key === "Escape") { if (abortActiveTab()) { e.preventDefault(); } return; }
     if (isSendKey(e)) { e.preventDefault(); send(); }
   });
-  inputEl.addEventListener("input", () => { autoResize(); maybeShowFileMenu(); maybeShowHashMenu(); });
-  inputEl.addEventListener("blur", () => { setTimeout(() => { hideFileMenu(); hideHashMenu(); }, 150); });
+  inputEl.addEventListener("input", () => { autoResize(); maybeShowFileMenu(); maybeShowHashMenu(); maybeShowSlashMenu(); });
+  inputEl.addEventListener("blur", () => { setTimeout(() => { hideFileMenu(); hideHashMenu(); closeSlashMenu(); fileMenuEl.classList.add("hidden"); }, 150); });
   inputEl.addEventListener("paste", (e) => {
     if (!activeTab()) { return; }
     const d = draftOfTab();
@@ -3049,6 +3135,16 @@
         const pos = inputEl.selectionStart; const before = inputEl.value.slice(0, pos);
         const m = before.match(/(^|\s)@([^\s@]*)$/);
         filterFiles(m ? m[2] : "");
+      }
+      return;
+    }
+
+    if (type === "commandList") {
+      commandListCache = Array.isArray(msg.items) ? msg.items : [];
+      if (commandListCache.length > 0) { commandListReqAt = 0; }
+      if (slashOpen) {
+        const m = inputEl.value.match(/^\/(\S*)$/);
+        if (m) { filterSlashMenu(m[1]); } else { closeSlashMenu(); }
       }
       return;
     }

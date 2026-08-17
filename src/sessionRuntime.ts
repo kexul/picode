@@ -17,6 +17,7 @@ import {
     forkSelectedText,
     isRpcOk,
     rpcErrorMessage,
+    type RpcCommandInfo,
     type RpcForkMessage,
     type RpcForkResult,
     type RpcModelInfo,
@@ -41,6 +42,74 @@ export type {
     RuntimeHost,
     StatusInfo,
 } from "./runtimeTypes";
+
+// ============================================================================
+//  / 命令（技能 / 提示模板 / 扩展命令）纯函数
+// ============================================================================
+
+/** / 命令菜单的一条候选：插入文本 + 基础名 + 描述 + 来源。 */
+export interface SlashCommandItem {
+    /** 菜单选中后插入输入框的文本，如 "/grill-me"（技能用简写，发送时改写回 /skill:）。 */
+    insert: string;
+    /** 基础命令名（技能已去掉 "skill:" 前缀）。 */
+    name: string;
+    description: string;
+    /** "extension" | "prompt" | "skill"。 */
+    source: string;
+}
+
+/** 命令来源优先级（同名冲突时保留高优者）：与 pi 内部处理顺序一致。 */
+function commandSourcePriority(source: string | undefined): number {
+    if (source === "extension") { return 0; }
+    if (source === "prompt") { return 1; }
+    if (source === "skill") { return 2; }
+    return 9;
+}
+
+/** 把 get_commands 原始条目整理成菜单行：
+ *  - 技能（name 为 "skill:xxx"）显示基础名，插入简写 "/xxx"（发送时改写为 "/skill:xxx"）；
+ *  - 基础名冲突时按 pi 优先级保留：扩展命令 > 提示模板 > 技能；
+ *  - 结果按名字字母序排列。 */
+export function commandMenuItems(commands: RpcCommandInfo[]): SlashCommandItem[] {
+    const picked = new Map<string, RpcCommandInfo>();
+    for (const c of commands) {
+        if (!c || typeof c.name !== "string" || !c.name) { continue; }
+        const name = c.name.startsWith("skill:") ? c.name.slice("skill:".length) : c.name;
+        if (!name) { continue; }
+        const prev = picked.get(name);
+        if (!prev || commandSourcePriority(c.source) < commandSourcePriority(prev.source)) {
+            picked.set(name, c);
+        }
+    }
+    return Array.from(picked.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([name, c]) => ({
+            insert: "/" + name,
+            name,
+            description: typeof c.description === "string" ? c.description : "",
+            source: c.source === "skill" || c.source === "prompt" || c.source === "extension"
+                ? c.source
+                : "other",
+        }));
+}
+
+/** / 简写改写："/grill-me args" → "/skill:grill-me args"。
+ *  仅当首 token 命中技能、且不与扩展命令 / 提示模板同名时才改写；
+ *  已是 "/skill:" 全写、或非 "/" 开头的文本原样返回。 */
+export function expandSlashCommand(text: string, commands: RpcCommandInfo[]): string {
+    if (typeof text !== "string" || commands.length === 0) { return text; }
+    const m = text.match(/^\/(\S+)([\s\S]*)$/);
+    if (!m) { return text; }
+    const name = m[1];
+    const rest = m[2];
+    if (name.startsWith("skill:")) { return text; } // 全写形式，pi 原生处理
+    const base = (n: string) => (n.startsWith("skill:") ? n.slice("skill:".length) : n);
+    const has = (src: string) => commands.some((c) => c.source === src && base(c.name) === name);
+    if (has("extension")) { return text; } // 扩展命令最先被 pi 检查，保持原样
+    if (has("prompt")) { return text; }    // 提示模板 /name 由 pi 原生展开
+    if (has("skill")) { return "/skill:" + name + rest; }
+    return text;
+}
 
 /**
  * 一个并行对话 tab 的全部运行时状态：独立的 pi 进程 + 独立的会话/编辑追踪。
@@ -80,6 +149,9 @@ export class SessionRuntime {
     /** 模型列表缓存：pi 启动时读一次 models.json，进程存活期间不变；
      *  点击状态栏弹选择器直接读缓存，避免每次都等 RPC 往返（多 panel 时尤其卡）。 */
     private cachedModels?: ModelInfo[];
+    /** 命令列表缓存（get_commands）：供 / 命令菜单展示与简写改写；
+     *  进程存活期间有效，attachClient 时失效并预取。 */
+    private cachedCommands?: RpcCommandInfo[];
 
     private client?: PiClient;
     private readonly edits: EditTracker;
@@ -189,8 +261,9 @@ export class SessionRuntime {
     /** 把（新建或领取的）pi 客户端挂到本 tab：绑定事件并启动。 */
     private attachClient(client: PiClient): void {
         this.client = client;
-        // 新进程 = 重新读 models.json：旧缓存作废
+        // 新进程 = 重新读 models.json / 重新扫描技能：旧缓存作废
         this.cachedModels = undefined;
+        this.cachedCommands = undefined;
         this.client.on("event", (evt) => this.onPiEvent(evt));
         this.client.on("response", (resp) => this.onPiResponse(resp));
         this.client.on("ui", (req) => this.onPiUiRequest(req));
@@ -221,6 +294,8 @@ export class SessionRuntime {
             void this.refreshStats();
             // 预取模型列表：点状态栏选模型时直接读缓存，不等 RPC
             void this.refreshModels();
+            // 预取命令列表（技能/模板/扩展命令）：/ 菜单与简写改写直接用缓存
+            void this.refreshCommands();
         } catch (e: any) {
             this.post({ type: "systemError", text: `无法启动 pi: ${e.message}` });
         }
@@ -291,14 +366,23 @@ export class SessionRuntime {
         if (!this.client || !this.client.isRunning()) {
             this.startClient();
         }
+        // 技能/模板简写改写："/grill-me" → "/skill:grill-me"（命中缓存才改写；
+        // 缓存未就绪时原样透传，同时后台补拉，下次可用）
+        let message = text || "";
+        if (message.startsWith("/")) {
+            message = expandSlashCommand(message, this.cachedCommands ?? []);
+            if (!this.cachedCommands) {
+                void this.refreshCommands();
+            }
+        }
         // user 气泡统一由 pi 的 message_start 事件渲染（见 onPiEvent），
         // 普通消息与 steer 投递的排队消息走同一路径，避免双发。
 
         // 流式响应中：发 steer 命令把消息排入 steering 队列（当前轮工具执行完后投递），
         // 与 pi TUI 按 Enter 的语义一致；否则发普通 prompt 开启新轮。
         const cmd: Record<string, unknown> = this.streaming
-            ? { type: "steer", message: text || "" }
-            : { type: "prompt", message: text || "" };
+            ? { type: "steer", message }
+            : { type: "prompt", message };
         if (hasImages) {
             cmd.images = images!.map((img) => ({
                 type: "image",
@@ -1033,6 +1117,39 @@ export class SessionRuntime {
             thinkingLevels: getModelThinkingLevels(m),
         }));
         return this.cachedModels;
+    }
+
+    /** 拉取并缓存命令列表（扩展命令 / 提示模板 / 技能，get_commands）。
+     *  成功时同步推一份给 webview（/ 命令菜单缓存）；失败不动旧缓存。 */
+    public async refreshCommands(): Promise<RpcCommandInfo[]> {
+        if (!this.client || !this.client.isRunning()) {
+            return this.cachedCommands ?? [];
+        }
+        const ok = await this.client.waitReady(8000);
+        if (!ok || !this.client.isRunning()) {
+            return this.cachedCommands ?? [];
+        }
+        const resp = await this.request<{ commands?: unknown }>({ type: "get_commands" });
+        const raw = Array.isArray(resp?.data?.commands) ? resp!.data!.commands : undefined;
+        if (!raw) {
+            return this.cachedCommands ?? [];
+        }
+        const list: RpcCommandInfo[] = [];
+        for (const c of raw) {
+            if (c && typeof c.name === "string" && c.name) {
+                list.push(c as RpcCommandInfo);
+            }
+        }
+        this.cachedCommands = list;
+        // 同步给 webview：pi 进程重启 / 技能变更后菜单不掉队
+        this.post({ type: "commandList", items: commandMenuItems(list) });
+        return list;
+    }
+
+    /** / 命令菜单条目（webview listCommands 用）：命中缓存则零 RPC，否则现拉。 */
+    public async getSlashCommandItems(): Promise<SlashCommandItem[]> {
+        const list = this.cachedCommands ?? (await this.refreshCommands());
+        return commandMenuItems(list);
     }
 
     public async pickModel(echoT0?: number): Promise<void> {
