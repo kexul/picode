@@ -352,7 +352,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 action: "relayPrefix",
                 kind: "text",
                 label: "转发注入前缀",
-                desc: "🔁 转发回复到别的 panel 时自动加的前缀；{模型名称} / {model} 替换为源侧模型名。留空则裸转发",
+                desc: "🔁 转发回复到别的 panel 时自动加的前缀；{panel_name} 替换为源 panel 名，{模型名称} / {model} 替换为源侧模型名。留空则裸转发",
                 check: null,
                 value: this.getRelayPrefix(),
             },
@@ -976,7 +976,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
             return;
         }
 
-        const body = sections.map((s) => `## 会话: ${s.title}\n\n${s.text}`).join("\n\n");
+        const body = sections.map((s) => `会话: ${s.title}
+${s.text}`).join("\n\n");
         const totalCount = sections.reduce((n, s) => n + s.count, 0);
         this.postToWebview({
             type: "fetchChatResult",
@@ -990,13 +991,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
     //  转发（把某 panel 的回复注入任意指定 panel）
     // ========================================================================
 
-    /** 转发注入前缀包装：{model} / {模型名称} 替换为源 panel 的模型名；空模板则裸转发。 */
+    /** 转发注入前缀包装：{panel_name} / {panel} 替换为源 panel 名；
+     *  {model} / {模型名称} 替换为源 panel 的模型名；空模板则裸转发。 */
     protected wrapRelayText(source: SessionRuntime, text: string): string {
         const tpl = this.getRelayPrefix();
         if (!tpl || !tpl.trim()) { return text; }
         const m = source.currentModel();
         const model = m?.modelId || "对端会话";
+        const name = source.title || "对端会话";
         const prefix = tpl
+            .replace(/\{panel_name\}/g, name)
+            .replace(/\{panel\}/g, name)
             .replace(/\{model\}/g, model)
             .replace(/\{模型名称\}/g, model);
         return prefix + text;

@@ -332,21 +332,23 @@ export class SessionRuntime {
         return this.client.waitReady(timeoutMs);
     }
 
-    /** 导出会话全文本流（跨 panel 上下文获取用）：
-     *  user/assistant 正文 + 工具调用一行摘要；toolResult 正文不进（v1 定规）。 */
+    /** 导出会话全文本流（跨 panel 上下文获取 / # 引用用）：
+     *  格式：`    用户: xxx` / `    {panel 名}: xxx`，便于区分不同 panel 的结论；
+     *  工具调用为一行摘要；toolResult 正文不进（v1 定规）。调用方自行加 `会话: {title}` 头。 */
     public async exportChatText(): Promise<{ text: string; messageCount: number } | undefined> {
         if (!this.client || !this.client.isRunning()) {
             return undefined;
         }
         const resp = await this.request<{ messages: any[] }>({ type: "get_messages" });
         const messages: any[] = resp?.data?.messages ?? [];
+        const name = this.title || "助手";
         const sections: string[] = [];
         let messageCount = 0;
         for (const m of messages) {
             if (m?.role === "user") {
                 const t = textOf(m.content).trim();
                 if (t) {
-                    sections.push(`### 👤 用户\n${t}`);
+                    sections.push(`    用户: ${t}`);
                     messageCount++;
                 }
             } else if (m?.role === "assistant") {
@@ -360,12 +362,12 @@ export class SessionRuntime {
                         if (buf.trim()) { blocks.push(buf.trim()); buf = ""; }
                         const toolName = typeof c.name === "string" ? c.name : "tool";
                         const s = summarizeToolCall(toolName, c.arguments);
-                        blocks.push(`> 🔧 ${toolName}${s ? `: ${s}` : ""}`);
+                        blocks.push(`🔧 ${toolName}${s ? `: ${s}` : ""}`);
                     }
                 }
                 if (buf.trim()) { blocks.push(buf.trim()); }
                 if (blocks.length) {
-                    sections.push(`### 🤖 助手\n${blocks.join("\n\n")}`);
+                    sections.push(`    ${name}: ${blocks[0]}${blocks.length > 1 ? "\n\n" + blocks.slice(1).join("\n\n") : ""}`);
                     messageCount++;
                 }
             }

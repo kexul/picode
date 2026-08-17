@@ -34,7 +34,7 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     private static readonly KEY_NEW_SESSION_KEY = "piChat.newSessionKey";
     private static readonly KEY_TAB_SWITCH_KEY = "piChat.tabSwitchKey";
     private static readonly KEY_RELAY_PREFIX = "piChat.relayPrefix";
-    private static readonly DEFAULT_RELAY_PREFIX = "以下是 {模型名称} 的结论，请检查该结论是否正确：\n\n";
+    private static readonly DEFAULT_RELAY_PREFIX = "以下是 {panel_name} 的结论，请检查该结论是否正确。\n\n";
     private static readonly KEY_TOOL_DISPLAY = "piChat.toolDisplay";
     private static readonly KEY_FONT_SIZE = "piChat.fontSize";
     private static readonly SEND_KEYS = ["enter", "shift+enter", "alt+enter", "ctrl+enter"] as const;
