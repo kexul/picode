@@ -35,6 +35,31 @@ export function randomNameParts(): NameParts {
     };
 }
 
+/**
+ * 从全名池分配一个未使用名字。池耗尽后在完整名字后追加递增序号，
+ * 因而即使同时打开超过 2500 个 panel 也不会重名。
+ */
+export function uniqueNameParts(used: ReadonlySet<string>): NameParts {
+    const pairs = ADJECTIVES.length * NOUNS.length;
+    const start = Math.floor(Math.random() * pairs);
+    for (let step = 0; step < pairs; step++) {
+        const index = (start + step) % pairs;
+        const parts = {
+            adjective: ADJECTIVES[Math.floor(index / NOUNS.length)],
+            noun: NOUNS[index % NOUNS.length],
+        };
+        if (!used.has(composeName(parts))) { return parts; }
+    }
+    // 所有基础组合均在用：随机挑一个基础名，再为它找最小可用序号。
+    const index = Math.floor(Math.random() * pairs);
+    const adjective = ADJECTIVES[Math.floor(index / NOUNS.length)];
+    const noun = NOUNS[index % NOUNS.length];
+    for (let suffix = 2; ; suffix++) {
+        const parts = { adjective, noun: `${noun} ${suffix}` };
+        if (!used.has(composeName(parts))) { return parts; }
+    }
+}
+
 /** 由两部分拼出完整显示名（"沉静的雪豹"）。 */
 export function composeName(parts: NameParts): string {
     return `${parts.adjective}的${parts.noun}`;

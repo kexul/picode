@@ -85,7 +85,15 @@
   @keyframes tool-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .tool.error { opacity: 1; color: var(--vscode-errorForeground, #f48771); }
 /* 摘要（medium）模式：每次调用独占一行；超长时换行完整显示，不截断（无齿轮图标） */
-.tool.tool-medium { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+/* 摘要展开：复用原 .tool-medium 作为完整卡片标题，不再生成第二条调用行。 */
+.tool-card-medium > .tool.tool-medium {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 6px;
+  margin: 0; max-width: none; padding: 6px 10px 2px; border-radius: 0;
+  background: color-mix(in srgb, var(--vscode-foreground, #d4d4d4) 4%, transparent);
+  font-size: 0.85em; line-height: 1.45; opacity: 1;
+}
+.tool-card-medium > .tool.tool-medium:hover { background: color-mix(in srgb, var(--vscode-foreground, #d4d4d4) 8%, transparent); }
+.tool-card-medium > .tool.tool-medium .tc-inline { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 6px; }
 .tool-dur { opacity: 0.75; white-space: pre; }
 /* 摘要内的调用行排版与 full 模式卡片同源（粗体/accent/灰参数/黄行号） */
 .tool .tc-call-name { font-weight: bold; }

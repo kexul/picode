@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, it } from "node:test";
 import {
+    buildCanvasFamily,
     buildContentMessages,
     keepLastAssistantPerRound,
     pathIdsToRoot,
@@ -40,6 +44,29 @@ describe("buildContentMessages", () => {
         assert.equal(msgs.length, 1);
         assert.equal(msgs[0].id, "a");
         assert.equal(msgs[0].parentId, null);
+    });
+});
+
+describe("session titles", () => {
+    it("reads the newest session_info name for the history list", async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-chat-title-"));
+        const file = path.join(dir, "session.jsonl");
+        try {
+            fs.writeFileSync(file, [
+                JSON.stringify({ type: "session", id: "s1", timestamp: "2026-01-01T00:00:00.000Z" }),
+                JSON.stringify({ type: "message", id: "u1", parentId: null, timestamp: "2026-01-01T00:00:01.000Z", message: { role: "user", content: "修复登录问题" } }),
+                JSON.stringify({ type: "session_info", id: "i1", parentId: "u1", timestamp: "2026-01-01T00:00:02.000Z", name: "修复登录重定向" }),
+                JSON.stringify({ type: "session_info", id: "i2", parentId: "i1", timestamp: "2026-01-01T00:00:03.000Z", name: "修复 OAuth 登录重定向" }),
+            ].join("\n"), "utf8");
+            const family = await buildCanvasFamily({
+                header: { id: "s1", file, timestamp: "2026-01-01T00:00:00.000Z" },
+                depth: 0,
+                children: [],
+            });
+            assert.equal(family.sessions[0].name, "修复 OAuth 登录重定向");
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
     });
 });
 

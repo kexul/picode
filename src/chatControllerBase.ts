@@ -128,7 +128,16 @@ export function layoutInsertAdjacent(
     };
 }
 
+export interface ChatReferenceItem {
+    kind: "tab" | "panel";
+    id: string;
+    label: string;
+    sub: string;
+    tabId: string;
+}
+
 export abstract class ChatControllerBase implements RuntimeHost {
+    protected constructor(public readonly workspaceId: string) {}
     // ---- panel（会话运行时）----
     protected panels = new Map<string, SessionRuntime>();
     protected panelSeq = 0;
@@ -537,11 +546,15 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return this.getActive()?.id === panelId;
     }
 
+    /** 子类可接入跨工作区的全局唯一名字池。 */
+    protected allocatePanelName() { return randomNameParts(); }
+    protected releasePanelName(_parts: { adjective: string; noun: string }): void { /* default: local names */ }
+
     // ---- 创建 ----
     /** 新建一个 panel 运行时（随机命名，启动 pi 进程；不挂入任何布局）。 */
     protected createPanelRuntime(inherited?: { provider?: string; modelId?: string }): SessionRuntime {
-        const id = `panel-${++this.panelSeq}`;
-        const rt = new SessionRuntime(id, randomNameParts(), this);
+        const id = `${this.workspaceId}:panel-${++this.panelSeq}`;
+        const rt = new SessionRuntime(id, this.allocatePanelName(), this);
         this.panels.set(id, rt);
         rt.startClient(inherited);
         return rt;
@@ -554,7 +567,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const inherited = this.getActive()?.currentModel();
         const rt = this.createPanelRuntime(inherited);
         const c: TabContainer = {
-            id: `tab-${++this.tabSeq}`,
+            id: `${this.workspaceId}:tab-${++this.tabSeq}`,
             root: { kind: "panel", panelId: rt.id },
             focusPanelId: rt.id,
         };
@@ -618,6 +631,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!rt) { return; }
         const c = this.containerOfPanel(panelId);
         rt.stopClient();
+        this.releasePanelName(rt.nameParts);
         this.panels.delete(panelId);
         if (c) {
             const next = layoutRemove(c.root, panelId);
@@ -647,7 +661,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!c) { return; }
         for (const pid of layoutLeaves(c.root)) {
             const rt = this.panels.get(pid);
-            if (rt) { rt.stopClient(); this.panels.delete(pid); }
+            if (rt) { rt.stopClient(); this.releasePanelName(rt.nameParts); this.panels.delete(pid); }
         }
         this.tabContainers.delete(id);
         this.postToWebview({ type: "tabClosed", id });
@@ -791,7 +805,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         // 拖到空白：新 tab 带走（源 tab 若是唯一 panel 则整个消失）
         this.detachPanelFromContainer(src, opts.panelId);
         const c: TabContainer = {
-            id: `tab-${++this.tabSeq}`,
+            id: `${this.workspaceId}:tab-${++this.tabSeq}`,
             root: leaf,
             focusPanelId: opts.panelId,
         };
@@ -821,6 +835,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const rt = this.panels.get(panelId);
         if (!rt) { return; }
         rt.stopClient();
+        this.releasePanelName(rt.nameParts);
         this.panels.delete(panelId);
     }
 
@@ -884,15 +899,53 @@ export abstract class ChatControllerBase implements RuntimeHost {
         };
     }
 
-    /** tab 栏显示名（从 panel 派生，容器无独立名，拖来拖去名字不丢）：
-     *  单 panel → 完整名（“沉静的雪豹”）；多 panel → 布局序名词以 · 拼接。 */
-    protected containerDisplayName(c: TabContainer): string {
+    /** 原始 tab 显示名：单 panel 完整名，多 panel 为布局序名词拼接。 */
+    protected baseContainerDisplayName(c: TabContainer): string {
         const leaves = layoutLeaves(c.root);
         const rts = leaves.map((pid) => this.panels.get(pid)).filter((rt) => !!rt);
         if (rts.length === 0) { return "新对话"; }
         if (rts.length === 1) { return composeName(rts[0]!.nameParts); }
         return rts.map((rt) => rt!.noun).join("·");
     }
+
+    /** 子类可将原始名映射到全局唯一 tab 标签。 */
+    protected containerDisplayName(c: TabContainer): string {
+        return this.baseContainerDisplayName(c);
+    }
+
+    /** 供全局命名器计算冲突序号。 */
+    public getTabNameBases(): Array<{ id: string; base: string }> {
+        return Array.from(this.tabContainers.values()).map((c) => ({ id: c.id, base: this.baseContainerDisplayName(c) }));
+    }
+
+    /** 指定的全局 tab / panel id 是否属于当前工作区。 */
+    public hasChatReference(id: string): boolean {
+        return this.panels.has(id) || this.tabContainers.has(id);
+    }
+
+    /** 当前工作区可供 # 引用的 tab / panel 列表。 */
+    public getChatReferenceItems(excludePanelId?: string): ChatReferenceItem[] {
+        const items: ChatReferenceItem[] = [];
+        for (const c of this.tabContainers.values()) {
+            const kids = layoutLeaves(c.root).filter((pid) => pid !== excludePanelId);
+            if (!kids.length) { continue; }
+            const label = this.containerDisplayName(c);
+            items.push({ kind: "tab", id: c.id, label, sub: `${kids.length} 个会话`, tabId: c.id });
+            for (const pid of kids) {
+                const rt = this.panels.get(pid);
+                if (rt) { items.push({ kind: "panel", id: pid, label: rt.title, sub: label, tabId: c.id }); }
+            }
+        }
+        return items;
+    }
+
+    /** 宿主下发全局引用目录。 */
+    public updateChatReferences(items: ChatReferenceItem[]): void {
+        this.postToWebview({ type: "chatReferences", items });
+    }
+
+    /** tab / panel 结构或焦点发生变化后，让子类刷新跨工作区引用目录。 */
+    protected onChatStructureChanged(): void { /* default: no global registry */ }
 
     private emitTabList(): void {
         this.postToWebview({
@@ -910,6 +963,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             }),
             activeId: this.activeTabId ?? null,
         });
+        this.onChatStructureChanged();
     }
 
 
@@ -979,15 +1033,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return bytes + "B";
     }
 
-    /** # 引用取数：panelId → 单会话；tabId → tab 内全部 panel 拼接（布局序）。
-     *  结果回 fetchChatResult（带 requestId），webview 推入输入框草稿卡片。 */
-    protected async handleFetchChat(msg: any): Promise<void> {
-        const requestId = typeof msg.requestId === "number" ? msg.requestId : 0;
-        const noticeTarget = this.getActive()?.id;
-        const notice = (text: string) => {
-            if (noticeTarget) { this.postToTab(noticeTarget, { type: "system", text }); }
-        };
-
+    /**
+     * 为本工作区中的一个 tab / panel 生成 # 引用快照。
+     * 来源可以仍在流式生成；pi 的 get_messages 返回选择时已有内容，结果不再跟踪更新。
+     */
+    public async buildChatReference(msg: any): Promise<{ title: string; text: string } | undefined> {
         const collect = async (pid: string) => {
             const rt = this.panels.get(pid);
             if (!rt) { return undefined; }
@@ -1000,32 +1050,41 @@ export abstract class ChatControllerBase implements RuntimeHost {
         let sections: Array<{ title: string; text: string; count: number }>;
         if (typeof msg.panelId === "string") {
             const rt = this.panels.get(msg.panelId);
-            if (!rt) { return; }
+            if (!rt) { return undefined; }
             const one = await collect(rt.id);
-            if (!one) { notice(`会话 “${rt.title}” 还没有内容，无获取。`); return; }
+            if (!one) { return undefined; }
             sections = [one];
             cardTitle = `💬 ${rt.title}`;
         } else if (typeof msg.tabId === "string") {
             const c = this.tabContainers.get(msg.tabId);
-            if (!c) { return; }
-            // 并发取数，但按 layoutLeaves 序拼回（完成序不定）
+            if (!c) { return undefined; }
             const results = await Promise.all(layoutLeaves(c.root).map((pid) => collect(pid)));
             sections = results.filter((s): s is { title: string; text: string; count: number } => !!s);
-            if (!sections.length) { notice("该 tab 内会话均为空，无内容可获取。"); return; }
+            if (!sections.length) { return undefined; }
             cardTitle = `💬 ${this.containerDisplayName(c)}（${sections.length} 个会话）`;
         } else {
-            return;
+            return undefined;
         }
 
-        const body = sections.map((s) => `会话: ${s.title}
-${s.text}`).join("\n\n");
+        const body = sections.map((s) => `会话: ${s.title}\n${s.text}`).join("\n\n");
         const totalCount = sections.reduce((n, s) => n + s.count, 0);
-        this.postToWebview({
-            type: "fetchChatResult",
-            requestId,
-            title: `${cardTitle} · ${totalCount} 条消息 · ${this.formatByteSize(body)}`,
-            text: body,
-        });
+        return { title: `${cardTitle} · ${totalCount} 条消息 · ${this.formatByteSize(body)}`, text: body };
+    }
+
+    /** 将来源生成的快照回传给发起 # 引用的 webview。 */
+    public receiveChatReference(requestId: number, reference: { title: string; text: string } | undefined): void {
+        if (reference) {
+            this.postToWebview({ type: "fetchChatResult", requestId, ...reference });
+        } else {
+            const target = this.getActive()?.id;
+            if (target) { this.postToTab(target, { type: "system", text: "所选会话暂无可引用的消息。" }); }
+        }
+    }
+
+    /** 本地引用的兼容入口；跨工作区宿主会改由 buildChatReference 调度。 */
+    protected async handleFetchChat(msg: any): Promise<void> {
+        const requestId = typeof msg.requestId === "number" ? msg.requestId : 0;
+        this.receiveChatReference(requestId, await this.buildChatReference(msg));
     }
 
     // ========================================================================

@@ -18,7 +18,7 @@ export interface HistoryCanvasHost {
 }
 
 /**
- * 编辑器区历史画布 WebviewPanel。
+ * 历史会话 WebviewPanel：邮件客户端式列表与阅读预览。
  * 快照加载：打开 / 刷新 / 加载更多时读盘；不订阅实时消息。
  */
 export class HistoryCanvasPanel {
@@ -39,7 +39,7 @@ export class HistoryCanvasPanel {
         private readonly host: HistoryCanvasHost
     ) {}
 
-    /** 打开或揭示画布。focusCurrent=true 时聚焦当前 tab 会话家族并高亮 path。 */
+    /** 打开或揭示历史会话。focusCurrent=true 时选中当前 tab 所在的会话线程。 */
     public async show(opts?: { focusCurrent?: boolean }): Promise<void> {
         const focusCurrent = !!opts?.focusCurrent;
         this.focusSessionPath = focusCurrent ? this.host.getActiveSessionPath() : undefined;
@@ -51,7 +51,7 @@ export class HistoryCanvasPanel {
             this.pendingPost = undefined;
             this.panel = vscode.window.createWebviewPanel(
                 HistoryCanvasPanel.viewType,
-                "Pi Chat 会话画布",
+                "Pi Chat 历史会话",
                 { viewColumn: vscode.ViewColumn.One, preserveFocus: false },
                 {
                     enableScripts: true,

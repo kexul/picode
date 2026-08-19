@@ -1,6 +1,11 @@
 // @ts-nocheck
 (function () {
   const vscode = acquireVsCodeApi();
+  // 供扩展宿主选择“最后活动的 Pi Chat”；pointerdown 覆盖大多数 webview
+  // 内部交互，focus 覆盖 Ctrl+Tab / 编辑器组切换后的焦点恢复。
+  const notifyHostFocus = () => vscode.postMessage({ type: "hostFocus" });
+  window.addEventListener("focus", notifyHostFocus);
+  document.addEventListener("pointerdown", notifyHostFocus, { capture: true });
   const messagesEl = document.getElementById("messages"); // 容器，内含各 .tab-pane
   const jumpBottomBtn = document.getElementById("jumpBottom");
   const inputEl = document.getElementById("input");
@@ -813,10 +818,14 @@
     tab.pendingToolCardsFull.set(toolCallId, { card, resultEl: card._resultEl, timer });
   }
 
-  /** 简洁模式：点击工具标签，展开为完整模式同款卡片（挂到 .tool-row 之后），再次点击收起。 */
+  /**
+   * 点击工具摘要展开详情。摘要模式复用原来的摘要行作为卡片标题，避免同一条
+   * 调用在“摘要标签 + 卡片调用行”中重复；再次点击会把它还原到原始摘要行。
+   */
   function toggleCompactToolCard(tag) {
     const row = tag.parentElement;
     if (!row) { return; }
+    const isMedium = !!tag._medium;
     let card = tag._card;
     if (!card) {
       card = buildToolCardDom(tag._toolName, tag._argStr);
@@ -841,12 +850,35 @@
           }, 500);
         }
       }
-      // 插到 .tool-row 之后（跳过已展开的同类卡片，保持多卡按点击顺序排列）
+      if (isMedium) {
+        // 摘要模式每行只有一个 tag：移走新卡片生成的重复调用行，原 tag 原地升级为标题。
+        card.querySelector(".tc-call")?.remove();
+        card.classList.add("tool-card-medium");
+        card.prepend(tag);
+        card._mediumRow = row;
+        row.replaceWith(card);
+        tag.classList.add("expanded");
+        return;
+      }
+      // 简洁模式：插到 .tool-row 之后（跳过已展开的同类卡片，保持多卡按点击顺序排列）
       let anchor = row;
       let next;
       while ((next = anchor.nextElementSibling) && next.classList.contains("tool-card-compact")) { anchor = next; }
       anchor.after(card);
       tag.classList.add("expanded");
+    } else if (isMedium) {
+      const originalRow = card._mediumRow || row;
+      if (card.isConnected) {
+        // 还原最初的单行摘要（row 保留，避免影响同一轮后的消息顺序）。
+        card.replaceWith(originalRow);
+        originalRow.appendChild(tag);
+        tag.classList.remove("expanded");
+      } else {
+        // 摘要模式收起后卡片不在 DOM 中；再次点击将原摘要行重新提升为卡片标题。
+        originalRow.replaceWith(card);
+        card.prepend(tag);
+        tag.classList.add("expanded");
+      }
     } else if (card.hidden) {
       card.hidden = false;
       tag.classList.add("expanded");
@@ -2509,6 +2541,8 @@
   let hashStart = -1;     // # 触发字符在输入框的位置
   let hashOpen = false;
   let hashReqSeq = 0;
+  // 宿主下发的全局目录：覆盖侧边栏和所有当前打开的编辑器 Pi Chat。
+  let chatReferences = [];
   function hideHashMenu() { fileMenuEl.classList.add("hidden"); hashStart = -1; hashOpen = false; }
   function maybeShowHashMenu() {
     if (inputEl.value.length > BIG_TEXT_CHARS) { hideHashMenu(); return; }
@@ -2522,21 +2556,9 @@
     filterHashMenu(m[2]);
   }
 
-  /** 候选：tab 组行（获取整个 tab）+ panel 行；排除当前焦点 panel（relay 同款语义）。
-   *  数据全在本地（tabViews/tabs），不等宿主往返。 */
+  /** # 引用候选由扩展统一下发，因而可跨侧边栏与编辑器工作区。 */
   function hashMenuItems() {
-    const items = [];
-    tabViews.forEach((tv) => {
-      const kids = leavesOf(tv.root).filter((pid) => pid !== activeId);
-      if (!kids.length) { return; }
-      items.push({ kind: "tab", id: tv.id, label: tv.name || "tab", sub: kids.length + " 个会话", tabId: tv.id });
-      kids.forEach((pid) => {
-        const st = tabs.get(pid);
-        if (!st) { return; }
-        items.push({ kind: "panel", id: pid, label: st.title || "对话", sub: tv.name || "", tabId: tv.id });
-      });
-    });
-    return items;
+    return chatReferences;
   }
 
   function filterHashMenu(query) {
@@ -3020,6 +3042,11 @@
     const type = msg.type;
 
     if (type === "fetchChatResult") { applyFetchChatResult(msg); return; }
+    if (type === "chatReferences") {
+      chatReferences = Array.isArray(msg.items) ? msg.items : [];
+      if (hashOpen) { maybeShowHashMenu(); }
+      return;
+    }
 
     if (type === "tabList") {
       enterMultiTab();

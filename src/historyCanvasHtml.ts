@@ -10,7 +10,7 @@ function nonce(): string {
     return text;
 }
 
-/** 生成历史画布 WebviewPanel HTML。 */
+/** 生成历史会话 WebviewPanel HTML。 */
 export function getHistoryCanvasHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     const n = nonce();
     const uri = (name: string) =>
@@ -40,25 +40,37 @@ ${css}
 </head>
 <body>
   <div id="toolbar">
-    <div class="tb-left">
-      <span class="tb-title">会话画布</span>
-      <span id="tbMeta" class="tb-meta"></span>
-    </div>
-    <div class="tb-right">
-      <button type="button" id="btnFit" title="适应画布">适应</button>
-      <button type="button" id="btnRefresh" title="重新加载">刷新</button>
-      <button type="button" id="btnLoadMore" class="hidden" title="加载更早的家族">加载更多</button>
-    </div>
+    <span class="tb-title">历史会话</span>
+    <span id="tbMeta" class="tb-meta"></span>
+    <span class="tb-spacer"></span>
+    <button type="button" id="btnRefresh" title="重新加载会话">刷新</button>
+    <button type="button" id="btnLoadMore" class="hidden" title="加载更早的会话">加载更多</button>
   </div>
-  <div id="viewport">
-    <div id="empty" class="hidden">当前工作区没有会话记录。</div>
-    <div id="world">
-      <svg id="edges" xmlns="http://www.w3.org/2000/svg"></svg>
-      <div id="nodes"></div>
-    </div>
-  </div>
-  <script nonce="${n}" src="${uri("marked.js")}"></script>
-  <script nonce="${n}" src="${uri("highlight.js")}"></script>
+  <main id="mail">
+    <aside id="listPane" aria-label="会话列表">
+      <div id="searchWrap">
+        <input id="search" type="search" autocomplete="off" placeholder="搜索已加载会话" aria-label="搜索会话" />
+      </div>
+      <div id="threadList" role="list"></div>
+      <div id="noResults" class="hidden">没有匹配的会话。</div>
+    </aside>
+    <section id="readingPane" aria-label="会话预览">
+      <div id="emptyReading">从左侧选择一个会话以预览内容。</div>
+      <article id="threadDetail" class="hidden">
+        <header class="detail-top">
+          <div class="detail-title-row">
+            <h1 id="detailTitle"></h1>
+            <div class="detail-actions">
+              <button id="btnOpenThread" class="detail-action" type="button">打开会话</button>
+            </div>
+          </div>
+          <div id="detailMeta"></div>
+          <div id="branchBar" aria-label="会话分支"></div>
+        </header>
+        <div id="messages"></div>
+      </article>
+    </section>
+  </main>
   <script nonce="${n}" src="${uri("historyCanvas.js")}"></script>
 </body>
 </html>`;

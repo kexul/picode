@@ -14,6 +14,7 @@
   "contributes": {
     "commands": [
       { "command": "piChat.openChat", "title": "Pi Chat: 打开对话窗口", "icon": "$(comment-discussion)" },
+      { "command": "piChat.openEditorChat", "title": "Pi Chat: 在编辑器中打开新的 Pi Chat", "icon": "$(empty-window)" },
       { "command": "piChat.newSession", "title": "Pi Chat: 新建会话", "icon": "$(add)" },
       { "command": "piChat.history", "title": "Pi Chat: 历史会话", "icon": "$(history)" },
       { "command": "piChat.exportConversation", "title": "Pi Chat: 分享当前会话", "icon": "$(share)" },
@@ -46,6 +47,7 @@
         { "command": "piChat.askSelectionAndSend", "group": "navigation@89" }
       ],
       "view/title": [
+        { "command": "piChat.openEditorChat", "when": "view == piChat.chatView", "group": "navigation@0" },
         { "command": "piChat.showTree", "when": "view == piChat.chatView", "group": "navigation@1" },
         { "command": "piChat.history", "when": "view == piChat.chatView", "group": "navigation@2" },
         { "command": "piChat.openSettings", "when": "view == piChat.chatView", "group": "navigation@3" },

@@ -29,6 +29,8 @@ export interface CanvasSessionMeta {
     file: string;
     timestamp: string;
     parentSession?: string;
+    /** 会话显示名称（由 Pi 的 set_session_name 持久化），未命名时为空。 */
+    name?: string;
     /** 该 session 时间序上最后一条有文本消息 id。 */
     leafId: string | null;
 }
@@ -49,6 +51,8 @@ interface RawEntry {
     text?: string;
     timestamp?: string;
     isContent: boolean;
+    /** session_info 条目的会话名。 */
+    sessionName?: string;
 }
 
 function compareTs(a: string | undefined, b: string | undefined): number {
@@ -85,6 +89,15 @@ export async function readSessionEntries(file: string): Promise<RawEntry[]> {
             continue;
         }
         const parentId = typeof o.parentId === "string" ? o.parentId : null;
+        if (o.type === "session_info") {
+            entries.push({
+                id: o.id,
+                parentId,
+                isContent: false,
+                sessionName: typeof o.name === "string" ? o.name.trim() : undefined,
+            });
+            continue;
+        }
         if (o.type === "message" && o.message) {
             const role = o.message.role;
             if (role === "user" || role === "assistant") {
@@ -185,6 +198,10 @@ export async function buildCanvasFamily(root: SessionTreeNode): Promise<CanvasFa
     for (const s of sessions) {
         const entries = await readSessionEntries(s.header.file);
         const content = buildContentMessages(entries);
+        const sessionName = entries.reduce<string | undefined>(
+            (latest, entry) => entry.sessionName || latest,
+            undefined
+        );
         let leafId: string | null = null;
         for (const m of content) {
             leafId = m.id;
@@ -208,6 +225,7 @@ export async function buildCanvasFamily(root: SessionTreeNode): Promise<CanvasFa
             file: s.header.file,
             timestamp: s.header.timestamp,
             parentSession: s.header.parentSession,
+            name: sessionName,
             leafId,
         });
     }

@@ -34,8 +34,14 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     context.subscriptions.push(
+        vscode.commands.registerCommand("piChat.openEditorChat", () => {
+            provider.openEditorChat();
+        })
+    );
+
+    context.subscriptions.push(
         vscode.commands.registerCommand("piChat.newSession", () => {
-            provider.newSession();
+            void provider.newSessionAtLastActive();
         })
     );
 

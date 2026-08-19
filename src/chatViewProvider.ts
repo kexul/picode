@@ -8,8 +8,10 @@ import {
     SessionRuntime,
     FileChange,
 } from "./sessionRuntime";
-import { ChatControllerBase } from "./chatControllerBase";
+import { ChatControllerBase, type ChatReferenceItem, type TabContainer } from "./chatControllerBase";
+import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { HistoryCanvasPanel } from "./historyCanvasPanel";
+import { EditorChatPanel, type EditorChatPanelOwner } from "./editorChatPanel";
 
 /**
  * VSCode 插件的聊天视图提供者。
@@ -18,7 +20,7 @@ import { HistoryCanvasPanel } from "./historyCanvasPanel";
  * 文件打开、选中文本发送、符号跳转、models.json 编辑）在此实现；其余会话编排
  * 逻辑（标签管理、拾取器、模型选择、消息分发等）继承自 {@link ChatControllerBase}。
  */
-export class ChatViewProvider extends ChatControllerBase implements vscode.WebviewViewProvider {
+export class ChatViewProvider extends ChatControllerBase implements vscode.WebviewViewProvider, EditorChatPanelOwner {
     public static readonly viewType = "piChat.chatView";
 
     private view?: vscode.WebviewView;
@@ -44,9 +46,15 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     private static readonly FOCUS_INPUT_KEYS = ["ctrlAltI", "ctrlShiftI", "altI", "ctrlAltSpace"] as const;
 
     private historyCanvas: HistoryCanvasPanel;
+    /** 独立编辑器聊天工作区；不注册 serializer，窗口重载后不会恢复。 */
+    private editorChats = new Set<EditorChatPanel>();
+    private lastActiveChat: EditorChatPanel | "sidebar" | undefined;
+    /** 当前打开的各工作区共用；panel 关闭后会释放对应名字。 */
+    private readonly usedChatNames = new Set<string>();
+    private editorWorkspaceSeq = 0;
 
     constructor(private readonly context: vscode.ExtensionContext) {
-        super();
+        super("sidebar");
         this.historyCanvas = new HistoryCanvasPanel(context, {
             getCwd: () => this.getCwd(),
             getActiveSessionPath: () => this.getCurrentSessionPath(),
@@ -54,6 +62,10 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
             forkAtEntryFromPath: (file, entryId) => this.forkAtEntryFromPath(file, entryId),
         });
         context.subscriptions.push({ dispose: () => this.historyCanvas.dispose() });
+        context.subscriptions.push({ dispose: () => {
+            for (const panel of this.editorChats) { panel.dispose(); }
+            this.editorChats.clear();
+        }});
         this.syncFocusInputKeyContext();
     }
 
@@ -66,6 +78,7 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         webviewView.webview.html = getChatHtml(webviewView.webview, this.context.extensionUri);
 
         webviewView.webview.onDidReceiveMessage((msg) => {
+            this.lastActiveChat = "sidebar";
             if (msg?.type === "exportConversationResult" && typeof msg.tabId === "string" && typeof msg.html === "string") {
                 void this.saveExportedConversation(msg.tabId, msg.html, typeof msg.markdown === "string" ? msg.markdown : "");
                 return;
@@ -91,15 +104,26 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         webviewView.onDidDispose(() => {
             for (const rt of this.panels.values()) {
                 rt.stopClient();
+                this.releasePanelName(rt.nameParts);
             }
             this.panels.clear();
             this.tabContainers.clear();
+            this.broadcastChatReferences();
             this.activeTabId = undefined;
             this.webviewReady = false;
             this.disposeSpare();
             for (const s of this.workspaceSubs) { s.dispose(); }
             this.workspaceSubs = [];
         });
+    }
+
+    /** 全局引用调度：# 选择项携带的 ID 已带工作区前缀，故不会碰撞。 */
+    public override processMessage(msg: any): void {
+        if (msg?.type === "fetchChat") {
+            void this.fetchGlobalChatReference(this, msg);
+            return;
+        }
+        super.processMessage(msg);
     }
 
     // ---- transport ----
@@ -114,6 +138,52 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         await this.waitWebviewReady();
         return super.showPicker(kind, items, current, echo);
     }
+
+    public allocateChatName(): NameParts {
+        const parts = uniqueNameParts(this.usedChatNames);
+        this.usedChatNames.add(composeName(parts));
+        return parts;
+    }
+
+    public releaseChatName(parts: NameParts): void {
+        this.usedChatNames.delete(composeName(parts));
+    }
+
+    /** tab 保持原派生命名；不同 tab 撞名时只给后续项追加序号。 */
+    public uniqueTabName(base: string, tabId: string): string {
+        const same = this.allChatControllers().flatMap((controller) => controller.getTabNameBases())
+            .filter((entry) => entry.base === base);
+        const index = same.findIndex((entry) => entry.id === tabId);
+        return same.length > 1 && index > 0 ? `${base} ${index + 1}` : base;
+    }
+
+    public getGlobalChatReferences(excludePanelId?: string): ChatReferenceItem[] {
+        return this.allChatControllers().flatMap((controller) => controller.getChatReferenceItems(excludePanelId));
+    }
+
+    public broadcastChatReferences(): void {
+        for (const controller of this.allChatControllers()) {
+            controller.updateChatReferences(this.getGlobalChatReferences(controller.getActive()?.id));
+        }
+    }
+
+    public async fetchGlobalChatReference(requester: ChatControllerBase, msg: any): Promise<void> {
+        const id = typeof msg.panelId === "string" ? msg.panelId : typeof msg.tabId === "string" ? msg.tabId : "";
+        const source = this.allChatControllers().find((controller) => controller.hasChatReference(id));
+        const requestId = typeof msg.requestId === "number" ? msg.requestId : 0;
+        requester.receiveChatReference(requestId, source ? await source.buildChatReference(msg) : undefined);
+    }
+
+    private allChatControllers(): ChatControllerBase[] {
+        return [this, ...Array.from(this.editorChats).filter((panel) => !panel.isDisposed())];
+    }
+
+    protected override allocatePanelName(): NameParts { return this.allocateChatName(); }
+    protected override releasePanelName(parts: NameParts): void { this.releaseChatName(parts); }
+    protected override containerDisplayName(c: TabContainer): string {
+        return this.uniqueTabName(this.baseContainerDisplayName(c), c.id);
+    }
+    protected override onChatStructureChanged(): void { this.broadcastChatReferences(); }
 
     // ---- RuntimeHost：配置 / cwd ----
     public getConfig() {
@@ -217,19 +287,19 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     protected getAutoLoadLast(): boolean {
         return this.context.globalState.get<boolean>(ChatViewProvider.KEY_AUTO_LOAD_LAST, false);
     }
-    protected getSendKey(): string {
+    public getSendKey(): string {
         const v = this.context.globalState.get<string>(ChatViewProvider.KEY_SEND_KEY, "enter");
         return (ChatViewProvider.SEND_KEYS as readonly string[]).includes(v) ? v : "enter";
     }
-    protected getNewSessionKey(): string {
+    public getNewSessionKey(): string {
         const v = this.context.globalState.get<string>(ChatViewProvider.KEY_NEW_SESSION_KEY, "ctrl+alt+n");
         return (ChatViewProvider.NEW_SESSION_KEYS as readonly string[]).includes(v) ? v : "ctrl+alt+n";
     }
-    protected getTabSwitchKey(): string {
+    public getTabSwitchKey(): string {
         const v = this.context.globalState.get<string>(ChatViewProvider.KEY_TAB_SWITCH_KEY, "ctrl+alt+arrows");
         return (ChatViewProvider.TAB_SWITCH_KEYS as readonly string[]).includes(v) ? v : "ctrl+alt+arrows";
     }
-    protected getFocusInputKey(): string {
+    public getFocusInputKey(): string {
         const v = this.context.globalState.get<string>(ChatViewProvider.KEY_FOCUS_INPUT_KEY, "ctrlAltI");
         return (ChatViewProvider.FOCUS_INPUT_KEYS as readonly string[]).includes(v) ? v : "ctrlAltI";
     }
@@ -237,23 +307,23 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         void vscode.commands.executeCommand("setContext", "piChat.focusInputKey", value);
     }
     /** 转发注入前缀模板；未设置时回落默认模板（显式清空则裸转发）。 */
-    protected getRelayPrefix(): string {
+    public getRelayPrefix(): string {
         return this.context.globalState.get<string>(
             ChatViewProvider.KEY_RELAY_PREFIX,
             ChatViewProvider.DEFAULT_RELAY_PREFIX
         );
     }
     /** 工具调用显示："compact"（简洁标签）| "medium"（摘要标签）| "full"（TUI 风格卡片）。 */
-    protected getToolDisplay(): string {
+    public getToolDisplay(): string {
         const v = this.context.globalState.get<string>(ChatViewProvider.KEY_TOOL_DISPLAY, "compact");
         return v === "full" || v === "medium" ? v : "compact";
     }
-    protected getFontSize(): string {
+    public getFontSize(): string {
         const v = this.context.globalState.get<string>(ChatViewProvider.KEY_FONT_SIZE, "14");
         return /^\d+$/.test(v) ? v : "14";
     }
 
-    protected mutateViewOption(action: string, value?: string): void {
+    public mutateViewOption(action: string, value?: string): void {
         if (action === "sendKey") {
             const order = ChatViewProvider.SEND_KEYS;
             const next =
@@ -300,6 +370,9 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     // ---- 平台独有消息 ----
     protected handlePlatformMessage(msg: any): boolean {
         switch (msg.type) {
+            case "hostFocus":
+                this.lastActiveChat = "sidebar";
+                return true;
             case "openSymbol":
                 if (typeof msg.name === "string") { void this.openSymbol(msg.name); }
                 return true;
@@ -316,7 +389,7 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
                         vscode.window.showInformationMessage("已保存 models.json");
                         // 丢弃预热的 pi 进程：其 models.json 是启动时读入的旧副本，
                         // 丢弃后下一个新会话会按新配置启动（现有会话不受影响，重启后生效）。
-                        this.disposeSpare();
+                        this.modelsChanged();
                     } else {
                         this.postToWebview({ type: "app:settingsResult", ok: false, error: result.error });
                     }
@@ -371,29 +444,28 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     }
 
     // ---- 文件列表 / 文件打开（listFiles / openFile）----
-    protected sendFileList(): void {
+    /** 编辑器聊天请求时使用同一份已打开文件清单，但发往调用方自己的 webview。 */
+    public getOpenFiles(): Array<{ label: string; path: string }> {
         const cwd = this.getCwd();
         const files: Array<{ label: string; path: string }> = [];
         const seen = new Set<string>();
         const add = (uri: vscode.Uri) => {
-            if (uri.scheme !== "file") { return; }
-            const full = uri.fsPath;
-            if (seen.has(full)) { return; }
-            seen.add(full);
-            files.push({ label: this.relativeTo(cwd, full), path: full });
+            if (uri.scheme !== "file" || seen.has(uri.fsPath)) { return; }
+            seen.add(uri.fsPath);
+            files.push({ label: this.relativeTo(cwd, uri.fsPath), path: uri.fsPath });
         };
-        if (vscode.window.activeTextEditor) {
-            add(vscode.window.activeTextEditor.document.uri);
-        }
+        if (vscode.window.activeTextEditor) { add(vscode.window.activeTextEditor.document.uri); }
         for (const group of vscode.window.tabGroups.all) {
             for (const tab of group.tabs) {
                 const input: any = tab.input;
-                if (input && input.uri instanceof vscode.Uri) {
-                    add(input.uri);
-                }
+                if (input?.uri instanceof vscode.Uri) { add(input.uri); }
             }
         }
-        this.postToWebview({ type: "openFiles", files });
+        return files;
+    }
+
+    protected sendFileList(): void {
+        this.postToWebview({ type: "openFiles", files: this.getOpenFiles() });
     }
 
     protected openFileFromWebview(p: string, line?: number, col?: number): void {
@@ -468,6 +540,7 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     /** webview 就绪：标记就绪（供推送前等待）+ 推送当前已打开文档的符号集合。 */
     protected onWebviewReady(): void {
         this.webviewReady = true;
+        this.broadcastChatReferences();
         void this.pushSymbolSet();
     }
 
@@ -578,6 +651,64 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         return undefined;
     }
 
+    /** 侧边栏最左按钮：每次均创建一个新的、互不共享状态的编辑器聊天工作区。 */
+    public openEditorChat(): void {
+        const panel = new EditorChatPanel(this.context, this, `editor-${++this.editorWorkspaceSeq}`);
+        this.editorChats.add(panel);
+        this.markEditorChatActive(panel);
+        this.broadcastChatReferences();
+    }
+
+    public markEditorChatActive(panel: EditorChatPanel): void {
+        if (!panel.isDisposed()) { this.lastActiveChat = panel; }
+    }
+
+    public removeEditorChat(panel: EditorChatPanel): void {
+        this.editorChats.delete(panel);
+        if (this.lastActiveChat === panel) { this.lastActiveChat = undefined; }
+        this.broadcastChatReferences();
+    }
+
+    /** models.json 修改后让所有工作区丢弃按旧配置预热的备用进程。 */
+    public modelsChanged(): void {
+        this.disposeSpare();
+        for (const panel of this.editorChats) { panel.discardSpare(); }
+    }
+
+    /** EditorChatPanel 使用与侧边栏一致的 pi 不存在提示。 */
+    public showPiMissing(piPath: string): void { this.onPiMissing(piPath); }
+
+    private getLastActiveEditorChat(): EditorChatPanel | undefined {
+        return this.lastActiveChat instanceof EditorChatPanel && !this.lastActiveChat.isDisposed()
+            ? this.lastActiveChat
+            : undefined;
+    }
+
+    private async focusSidebarInput(): Promise<void> {
+        await this.ensureViewVisible();
+        this.lastActiveChat = "sidebar";
+        this.postToWebview({ type: "focusInput" });
+    }
+
+    private async sendToSidebar(text: string): Promise<void> {
+        await this.focusSidebarInput();
+        if (!this.getActive()) { this.newSession(); }
+        this.sendActiveTabText(text);
+    }
+
+    /** 全局“新建会话”：优先作用于最后活动的编辑器聊天，否则回退侧边栏。 */
+    public async newSessionAtLastActive(): Promise<void> {
+        const editor = this.getLastActiveEditorChat();
+        if (editor) {
+            await editor.revealAndFocus();
+            editor.newSession();
+            return;
+        }
+        await this.ensureViewVisible();
+        this.lastActiveChat = "sidebar";
+        this.newSession();
+    }
+
     // ---- 命令入口 ----
     public async pickViewOptions(): Promise<void> {
         await this.ensureViewVisible();
@@ -590,8 +721,12 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     }
 
     public async focusInput(): Promise<void> {
-        await this.ensureViewVisible();
-        this.postToWebview({ type: "focusInput" });
+        const editor = this.getLastActiveEditorChat();
+        if (editor) {
+            await editor.revealAndFocus();
+            return;
+        }
+        await this.focusSidebarInput();
     }
 
     public async pickSession(): Promise<void> {
@@ -653,10 +788,13 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         const prefix = userText.trim() ? `${userText.trim()}\n\n` : "";
         const prompt = `${prefix}上下文: ${fileRef} (${range})\n\n\`\`\`${document.languageId}\n${codeText}\n\`\`\`\n`;
 
-        await this.ensureViewVisible();
-        // 无 tab 时新建；发送走 tab 级广播（该 tab 内所有 panel 都收到）
-        if (!this.getActive()) { this.newTab(); }
-        this.sendActiveTabText(prompt);
+        const target = this.getLastActiveEditorChat();
+        if (target) {
+            await target.sendTextAndFocus(prompt);
+        } else {
+            // 没有活动编辑器聊天（包括面板已关闭）时，按设计回退到侧边栏。
+            await this.sendToSidebar(prompt);
+        }
         vscode.window.showInformationMessage("已发送到 Pi Chat 对话框。");
     }
 

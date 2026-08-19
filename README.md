@@ -9,7 +9,8 @@
 ```
 src/                          插件 TypeScript 源码（tsc 编译到 out/）
   extension.ts                 入口：注册命令、webview view、diff 文档 provider
-  chatViewProvider.ts          聊天视图提供者（webview 装载、vscode API、会话编排宿主）
+  chatViewProvider.ts          侧边栏聊天提供者（webview 装载、VSCode API、会话编排宿主）
+  editorChatPanel.ts           编辑器区独立聊天 WebviewPanel（关闭/重载即终止）
   chatHtml.ts                  webview HTML：注入 VSCode 特有的 URI 解析 / CSP / chat.css
   renderHtml.ts                聊天界面 HTML 骨架生成（renderHTML()）
   piClient.ts                  pi --mode rpc 客户端（JSONL 协议；统一 request/pending）
@@ -20,9 +21,9 @@ src/                          插件 TypeScript 源码（tsc 编译到 out/）
   sessionRuntime.ts            单个对话 tab 的运行时（独立 pi 进程 + 会话编排）
   chatControllerBase.ts        会话编排基类（标签管理含 tabList 节流、拾取器、模型选择）
   sessionStore.ts              pi 会话文件的扫描 / 读取 / 元数据
-  canvasData.ts                历史画布：家族消息图合并（共享前缀 / 分叉）
-  historyCanvasPanel.ts        编辑器区会话画布 WebviewPanel
-  historyCanvasHtml.ts         画布 HTML / CSP
+  canvasData.ts                历史会话：家族消息图合并（共享前缀 / 分叉）
+  historyCanvasPanel.ts        编辑器区历史会话（邮件列表 + 阅读预览）WebviewPanel
+  historyCanvasHtml.ts         历史会话 HTML / CSP
   modelsConfig.ts              models.json 读写与内置默认模板
 media/                        对话前端资源（chat.js、chat.css、historyCanvas.js/css、
                               marked.js、highlight.js、settings.js）；webview 直接加载
