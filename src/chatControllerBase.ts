@@ -160,6 +160,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected preparingSpare: PiClient | null = null;
     /** 备用进程启动时使用的模型（领取时随进程一起返回，供继承比对）。 */
     protected spareMeta?: { provider?: string; modelId?: string };
+    /** 备用进程延迟预热定时器（disposeSpare 清理）。 */
+    protected spareTimer?: ReturnType<typeof setTimeout>;
+    /** 启动路径预热备用进程的延迟：错开首个 tab 的 pi 冷启动，避免两个 pi 同时加载抢占 VSCode 窗口恢复期的资源。 */
+    protected static readonly SPARE_PREWARM_DELAY_MS = 5000;
 
     // ---- 快捷键标签 ----
     protected static readonly SEND_KEY_LABELS: Record<string, string> = {
@@ -411,9 +415,22 @@ export abstract class ChatControllerBase implements RuntimeHost {
     // ========================================================================
 
     // ---- 备用 pi 进程池 ----
-    /** 确保池中常备一个已就绪的备用进程；领取后由 claimSpareClient 触发补充。 */
-    protected ensureSpare(): void {
+    /** 确保池中常备一个已就绪的备用进程；领取后由 claimSpareClient 触发补充。
+     *  @param delayMs 延迟多少毫秒后再启动（启动路径用：错开首个 tab 的 pi 冷启动）；0 表示立即启动。 */
+    protected ensureSpare(delayMs = 0): void {
         if (this.spare || this.preparingSpare) {
+            return;
+        }
+        if (this.spareTimer) {
+            if (delayMs > 0) { return; } // 已有延迟任务在排队；立即启动的请求则取消排队直接走下面流程
+            clearTimeout(this.spareTimer);
+            this.spareTimer = undefined;
+        }
+        if (delayMs > 0) {
+            this.spareTimer = setTimeout(() => {
+                this.spareTimer = undefined;
+                this.ensureSpare();
+            }, delayMs);
             return;
         }
         const cfg = this.getConfig();
@@ -476,6 +493,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 停止并清空所有备用进程（宿主销毁时调用，如 VSCode webview dispose）。 */
     protected disposeSpare(): void {
+        if (this.spareTimer) {
+            clearTimeout(this.spareTimer);
+            this.spareTimer = undefined;
+        }
         if (this.spare) {
             this.spare.stop();
             this.spare = null;
@@ -526,8 +547,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return rt;
     }
 
-    /** 新建 tab（容器）：内含一个空 panel，成为活跃 tab。 */
-    public newTab(): TabContainer {
+    /** 新建 tab（容器）：内含一个空 panel，成为活跃 tab。
+     *  @param spareDelayMs 备用进程预热的延迟毫秒数（启动路径传 SPARE_PREWARM_DELAY_MS）。 */
+    public newTab(spareDelayMs = 0): TabContainer {
         // 模型跟 panel 关联：继承当前焦点 panel 的模型（startClient 内部回落全局配置）
         const inherited = this.getActive()?.currentModel();
         const rt = this.createPanelRuntime(inherited);
@@ -540,8 +562,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.activeTabId = c.id;
         this.broadcastTabList(true);
         this.postToWebview({ type: "tabActivated", id: c.id });
-        // 后台预热一个备用进程，供下一个新 panel / 切分支直接领取
-        this.ensureSpare();
+        // 后台预热一个备用进程，供下一个新 panel / 切分支直接领取（启动路径延迟执行，避免双冷启动）
+        this.ensureSpare(spareDelayMs);
         return c;
     }
 
@@ -1407,7 +1429,7 @@ ${s.text}`).join("\n\n");
                 this.sendViewOptions();
                 this.broadcastTabList();
                 if (this.tabContainers.size === 0) {
-                    this.newTab();
+                    this.newTab(ChatControllerBase.SPARE_PREWARM_DELAY_MS);
                     void this.maybeAutoLoadLastSession();
                 } else {
                     // 已有 panel：同步各 panel 的 piReady
@@ -1419,8 +1441,10 @@ ${s.text}`).join("\n\n");
                     this.postToWebview({ type: "tabActivated", id: this.activeTabId });
                 }
                 this.onWebviewReady();
-                // webview 就绪后后台预热备用进程，后续新 panel / 切分支免冷启动
-                this.ensureSpare();
+                // webview 就绪后后台预热备用进程，后续新 panel / 切分支免冷启动。
+                // 启动路径延迟执行：首个 tab 的 pi 正在冷启动，同时再拉起备用进程会在
+                // VSCode 窗口恢复期叠加出明显的 CPU/IO 峰值（两个 pi 各需 ~3s 加载）。
+                this.ensureSpare(ChatControllerBase.SPARE_PREWARM_DELAY_MS);
                 return;
             }
             case "newSession":
