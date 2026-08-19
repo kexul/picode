@@ -1991,6 +1991,19 @@
   function thinkingLabel(level) { return THINKING_LABELS[level] || level || ""; }
   function modelKey(item) { return (item.provider || "") + "\u0000" + (item.id || ""); }
   function modelThinkingLevels(item) { return Array.isArray(item.thinkingLevels) ? item.thinkingLevels : []; }
+  /** 模型价格（$/M tokens）：cost 存在且有有效费率时返回 { text, tip }。 */
+  function modelCostInfo(item) {
+    const c = item && item.cost;
+    if (!c || typeof c !== "object") { return null; }
+    const nIn = typeof c.input === "number" ? c.input : 0;
+    const nOut = typeof c.output === "number" ? c.output : 0;
+    if (!(nIn > 0) && !(nOut > 0)) { return null; }
+    const text = "入 $" + nIn + " / 出 $" + nOut + "/M";
+    const lines = ["输入：$" + nIn, "输出：$" + nOut];
+    if (typeof c.cacheRead === "number" && c.cacheRead > 0) { lines.push("缓存读：$" + c.cacheRead); }
+    if (typeof c.cacheWrite === "number" && c.cacheWrite > 0) { lines.push("缓存写：$" + c.cacheWrite); }
+    return { text: text, tip: "每百万 tokens 价格\n" + lines.join("\n") };
+  }
   function isCurrentModel(st, item) {
     return !!item && (modelKey(item) === st.current || item.current === true);
   }
@@ -2091,7 +2104,8 @@
       const levelText = st.draftModel.reasoning
         ? (st.draftThinking ? "推理 " + thinkingLabel(st.draftThinking) : "推理未选择")
         : "不支持推理";
-      summary.textContent = "待应用：" + modelName + " · " + levelText;
+      const costInfo = modelCostInfo(st.draftModel);
+      summary.textContent = "待应用：" + modelName + " · " + levelText + (costInfo ? " · " + costInfo.text : "");
     }
     pickerFooter.appendChild(summary);
     const actions = document.createElement("div"); actions.className = "pk-footer-actions";
@@ -2197,7 +2211,16 @@
         main.appendChild(title);
         const desc = (item.provider ? item.provider : "") + (item.name && item.name !== item.id ? (item.provider ? " · " : "") + item.name : "");
         if (desc) { const d = document.createElement("div"); d.className = "pk-desc"; d.textContent = desc; main.appendChild(d); }
-        if (item.contextWindow) { const det = document.createElement("div"); det.className = "pk-detail"; det.textContent = "上下文 " + Math.round(item.contextWindow / 1000) + "K"; main.appendChild(det); }
+        const details = [];
+        if (item.contextWindow) { details.push("上下文 " + Math.round(item.contextWindow / 1000) + "K"); }
+        const priceInfo = modelCostInfo(item);
+        if (priceInfo) { details.push(priceInfo.text); }
+        if (details.length) {
+          const det = document.createElement("div"); det.className = "pk-detail";
+          det.textContent = details.join(" · ");
+          if (priceInfo) { det.title = priceInfo.tip; }
+          main.appendChild(det);
+        }
         const right = document.createElement("div"); right.className = "pk-model-thinking";
         renderModelThinking(item, st, right);
         el.appendChild(main); el.appendChild(right);

@@ -1115,6 +1115,14 @@ export class SessionRuntime {
             contextWindow: m.contextWindow,
             reasoning: !!m.reasoning,
             thinkingLevels: getModelThinkingLevels(m),
+            cost: m.cost
+                ? {
+                    input: m.cost.input,
+                    output: m.cost.output,
+                    cacheRead: m.cost.cacheRead,
+                    cacheWrite: m.cost.cacheWrite,
+                }
+                : undefined,
         }));
         return this.cachedModels;
     }

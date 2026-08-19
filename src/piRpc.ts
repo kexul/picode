@@ -43,12 +43,22 @@ export interface RpcResponse<T = unknown> {
     error?: string;
 }
 
+/** 每百万 token 费率（pi models.json 的 cost，单位 $）。 */
+export interface RpcModelCost {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+}
+
 export interface RpcModelInfo {
     id: string;
     provider?: string;
     name?: string;
     contextWindow?: number;
     reasoning?: boolean;
+    /** 每百万 token 价格；models.json 未配置时 pi 返回全 0。 */
+    cost?: RpcModelCost;
     /** provider 原始 thinkingLevelMap；key 为档位名，null 表示禁用。 */
     thinkingLevelMap?: Record<string, string | null>;
 }

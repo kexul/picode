@@ -29,6 +29,8 @@ export interface ModelInfo {
     reasoning?: boolean;
     /** Thinking levels derived from the model's thinkingLevelMap metadata. */
     thinkingLevels?: string[];
+    /** 每百万 token 价格（$）；未配置或全 0 时视为未定价。 */
+    cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
 }
 
 /** 用户在模型选择器中选中的结果。 */

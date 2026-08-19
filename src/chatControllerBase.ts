@@ -1107,6 +1107,7 @@ ${s.text}`).join("\n\n");
             contextWindow: m.contextWindow,
             reasoning: m.reasoning === true,
             thinkingLevels: Array.isArray(m.thinkingLevels) ? m.thinkingLevels : [],
+            cost: m.cost,
             current: isCurrent(m),
             currentThinking: isCurrent(m) ? currentThinking : "",
         }));
