@@ -1531,6 +1531,40 @@
     return tags.join(" · ");
   }
 
+  /** 状态栏结构签名：签名不变时原位更新文字，避免重建 innerHTML 导致 .typing 动画重启。 */
+  function statusSig(t) {
+    if (t.loading) { return "loading"; }
+    if (!t.piReady) { return "wait"; }
+    const pctCls = (typeof t.percent === "number")
+      ? (t.percent >= 90 ? "err" : (t.percent >= 70 ? "warn" : "ok"))
+      : "";
+    const hasTps = typeof currentTps(t) === "number" ? "t" : "";
+    const act = t.streaming ? (t.activity || "working") : "";
+    return [(t.streaming ? "s" : "i"), modelPartFor(t) ? "m" : "", pctCls, hasTps, act].join("|");
+  }
+  /** 签名相同时只替换数字文本，不动 .typing 等动画节点。 */
+  function updateStatusInPlace(el, t) {
+    const m = el.querySelector(".st-model");
+    if (m) { m.textContent = modelPartFor(t); }
+    if (typeof t.percent === "number") {
+      const p = el.querySelector(".st-pct");
+      if (p) {
+        p.textContent = t.percent.toFixed(1) + "%";
+        p.className = "st-pct" + (t.percent >= 90 ? " err" : (t.percent >= 70 ? " warn" : ""));
+      }
+    }
+    const tps = currentTps(t);
+    if (typeof tps === "number") {
+      const s = el.querySelector(".st-tps");
+      if (s) { s.textContent = tps.toFixed(1) + " t/s"; }
+    }
+    if (t.streaming) {
+      const labels = { working: "处理中…", thinking: "思考中…", tool: "执行工具…" };
+      const l = el.querySelector(".st-label");
+      if (l) { l.textContent = (labels[t.activity] || labels.working) + " · Esc 中止"; }
+    }
+  }
+
   /** 刷新所有 panel 的底部状态栏内容与焦点高亮。 */
   function syncPaneStatuses() {
     tabs.forEach((t) => {
@@ -1538,7 +1572,13 @@
         ? t.paneEl.parentElement.querySelector(":scope > .pane-status")
         : null;
       if (!el) { return; }
-      el.innerHTML = paneStatusHtml(t);
+      const sig = statusSig(t);
+      if (el._sig === sig) {
+        updateStatusInPlace(el, t);   // 保留 .typing 动画节点，只换变化文字
+      } else {
+        el._sig = sig;
+        el.innerHTML = paneStatusHtml(t);
+      }
       el.classList.toggle("ps-focus", activeId === t.id);
       const mp = modelPartFor(t);
       el.title = "当前: " + (mp || "未配置") + (t.thinkingLevel ? (" · 思考 " + t.thinkingLevel) : "") + "（点击切换模型）";
