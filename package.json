@@ -36,7 +36,10 @@
     },
     "keybindings": [
       { "command": "piChat.askSelectionAndSend", "key": "ctrl+alt+p", "mac": "cmd+alt+p", "when": "editorTextFocus" },
-      { "command": "piChat.focusInput", "key": "ctrl+alt+i", "mac": "cmd+alt+i", "when": "editorTextFocus || terminalFocus" }
+      { "command": "piChat.focusInput", "key": "ctrl+alt+i", "mac": "cmd+alt+i", "when": "piChat.focusInputKey == ctrlAltI" },
+      { "command": "piChat.focusInput", "key": "ctrl+shift+i", "mac": "cmd+shift+i", "when": "piChat.focusInputKey == ctrlShiftI" },
+      { "command": "piChat.focusInput", "key": "alt+i", "when": "piChat.focusInputKey == altI" },
+      { "command": "piChat.focusInput", "key": "ctrl+alt+space", "mac": "cmd+alt+space", "when": "piChat.focusInputKey == ctrlAltSpace" }
     ],
     "menus": {
       "editor/context": [

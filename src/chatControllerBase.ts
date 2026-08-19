@@ -177,6 +177,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
         "alt+brackets": "Alt+[ / Alt+]",
         "ctrl+alt+brackets": "Ctrl+Alt+[ / Ctrl+Alt+]",
     };
+    protected static readonly FOCUS_INPUT_KEY_LABELS: Record<string, string> = {
+        "ctrlAltI": "Ctrl+Alt+I", "ctrlShiftI": "Ctrl+Shift+I",
+        "altI": "Alt+I", "ctrlAltSpace": "Ctrl+Alt+Space",
+    };
 
     /** 把标签映射转成按钮组选项列表。 */
     protected static keyOptions(labels: Record<string, string>): Array<{ value: string; label: string }> {
@@ -208,6 +212,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract getSendKey(): string;
     protected abstract getNewSessionKey(): string;
     protected abstract getTabSwitchKey(): string;
+    protected abstract getFocusInputKey(): string;
     /** 转发注入前缀模板（{model}/{模型名称} 替换为模型名；空串为裸转发）。 */
     protected abstract getRelayPrefix(): string;
     /** 工具调用显示："compact"（简洁标签）| "full"（TUI 风格卡片）。 */
@@ -306,6 +311,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             sendKey: this.getSendKey(),
             newSessionKey: this.getNewSessionKey(),
             tabSwitchKey: this.getTabSwitchKey(),
+            focusInputKey: this.getFocusInputKey(),
             toolDisplay: this.getToolDisplay(),
             fontSize: this.getFontSize(),
         });
@@ -347,6 +353,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 check: null,
                 value: this.getTabSwitchKey(),
                 options: ChatControllerBase.keyOptions(ChatControllerBase.TAB_SWITCH_KEY_LABELS),
+            },
+            {
+                action: "focusInputKey", label: "聚焦输入框", desc: "在任意 VS Code 焦点位置打开 Pi Chat 并聚焦输入框", check: null,
+                value: this.getFocusInputKey(), options: ChatControllerBase.keyOptions(ChatControllerBase.FOCUS_INPUT_KEY_LABELS),
             },
             {
                 action: "relayPrefix",

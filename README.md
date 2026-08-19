@@ -65,7 +65,7 @@ VSCode 里 F5 直接调试（`.vscode/launch.json` 已配置 extensionHost）。
 | 配置 | 存储 |
 |------|------|
 | piPath / provider / model / extraArgs / trustProject | `piChat.*` 设置 |
-| 显示选项（发送键/新建会话键/tab 切换键/工具显示模式/自动加载上次会话） | globalState |
+| 显示选项（发送键/新建会话键/tab 切换键/聚焦输入框快捷键/工具显示模式/自动加载上次会话） | `globalState` |
 | pi 的 models.json | `~/.pi/agent/models.json`（应用内设置面板编辑） |
 
 ## 改前端注意事项

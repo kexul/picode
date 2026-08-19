@@ -33,6 +33,7 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     private static readonly KEY_SEND_KEY = "piChat.sendKey";
     private static readonly KEY_NEW_SESSION_KEY = "piChat.newSessionKey";
     private static readonly KEY_TAB_SWITCH_KEY = "piChat.tabSwitchKey";
+    private static readonly KEY_FOCUS_INPUT_KEY = "piChat.focusInputKey";
     private static readonly KEY_RELAY_PREFIX = "piChat.relayPrefix";
     private static readonly DEFAULT_RELAY_PREFIX = "以下是 {panel_name} 的结论，请检查该结论是否正确。\n\n";
     private static readonly KEY_TOOL_DISPLAY = "piChat.toolDisplay";
@@ -40,6 +41,7 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     private static readonly SEND_KEYS = ["enter", "shift+enter", "alt+enter", "ctrl+enter"] as const;
     private static readonly NEW_SESSION_KEYS = ["ctrl+alt+n", "ctrl+shift+n", "ctrl+t", "alt+n"] as const;
     private static readonly TAB_SWITCH_KEYS = ["ctrl+alt+arrows", "ctrl+alt+pgupdown", "alt+brackets", "ctrl+alt+brackets"] as const;
+    private static readonly FOCUS_INPUT_KEYS = ["ctrlAltI", "ctrlShiftI", "altI", "ctrlAltSpace"] as const;
 
     private historyCanvas: HistoryCanvasPanel;
 
@@ -52,6 +54,7 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
             forkAtEntryFromPath: (file, entryId) => this.forkAtEntryFromPath(file, entryId),
         });
         context.subscriptions.push({ dispose: () => this.historyCanvas.dispose() });
+        this.syncFocusInputKeyContext();
     }
 
     resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -226,6 +229,13 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         const v = this.context.globalState.get<string>(ChatViewProvider.KEY_TAB_SWITCH_KEY, "ctrl+alt+arrows");
         return (ChatViewProvider.TAB_SWITCH_KEYS as readonly string[]).includes(v) ? v : "ctrl+alt+arrows";
     }
+    protected getFocusInputKey(): string {
+        const v = this.context.globalState.get<string>(ChatViewProvider.KEY_FOCUS_INPUT_KEY, "ctrlAltI");
+        return (ChatViewProvider.FOCUS_INPUT_KEYS as readonly string[]).includes(v) ? v : "ctrlAltI";
+    }
+    private syncFocusInputKeyContext(value = this.getFocusInputKey()): void {
+        void vscode.commands.executeCommand("setContext", "piChat.focusInputKey", value);
+    }
     /** 转发注入前缀模板；未设置时回落默认模板（显式清空则裸转发）。 */
     protected getRelayPrefix(): string {
         return this.context.globalState.get<string>(
@@ -265,6 +275,10 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
                     ? value
                     : order[(order.indexOf(this.getTabSwitchKey() as (typeof order)[number]) + 1) % order.length];
             this.context.globalState.update(ChatViewProvider.KEY_TAB_SWITCH_KEY, next);
+        } else if (action === "focusInputKey") {
+            const next = value && (ChatViewProvider.FOCUS_INPUT_KEYS as readonly string[]).includes(value) ? value : this.getFocusInputKey();
+            void this.context.globalState.update(ChatViewProvider.KEY_FOCUS_INPUT_KEY, next);
+            this.syncFocusInputKeyContext(next);
         } else if (action === "relayPrefix") {
             this.context.globalState.update(ChatViewProvider.KEY_RELAY_PREFIX, typeof value === "string" ? value : "");
         } else if (action === "toolDisplay") {
