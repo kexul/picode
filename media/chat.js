@@ -2946,6 +2946,8 @@
     const title = String(tab.title || "Pi 会话").replace(/[<>&\"']/g, "");
     const exportCss = `${style}\n:root{${vars.join("")}}\n` +
       `html,body{height:auto;min-height:100%;margin:0}` +
+      // 导出页改由文档根节点滚动；明确保留滚动条槽位，避免浏览器自动隐藏它。
+      `html{overflow-y:scroll;scrollbar-gutter:stable}` +
       `body{display:block;background:var(--vscode-editor-background,#fff);color:var(--vscode-foreground,#222)}` +
       `#messages{display:block;min-height:0}` +
       `.tab-pane{display:block!important;position:static!important;inset:auto!important;visibility:visible!important;pointer-events:auto!important;overflow:visible!important;padding:16px 8px 24px}` +
