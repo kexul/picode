@@ -4,21 +4,20 @@
   const threadList = document.getElementById("threadList");
   const search = document.getElementById("search");
   const noResults = document.getElementById("noResults");
-  const tbMeta = document.getElementById("tbMeta");
-  const btnRefresh = document.getElementById("btnRefresh");
+  const listFooter = document.getElementById("listFooter");
   const btnLoadMore = document.getElementById("btnLoadMore");
   const emptyReading = document.getElementById("emptyReading");
   const threadDetail = document.getElementById("threadDetail");
   const detailTitle = document.getElementById("detailTitle");
   const detailMeta = document.getElementById("detailMeta");
-  const branchBar = document.getElementById("branchBar");
   const messagesEl = document.getElementById("messages");
-  const btnOpenThread = document.getElementById("btnOpenThread");
 
   /** @type {{families:any[], totalFamilies:number, loadedFamilies:number, focus:any}} */
   let state = { families: [], totalFamilies: 0, loadedFamilies: 0, focus: null };
   let selectedFamilyId = null;
   let selectedSessionFile = null;
+  let graphResizeObserver = null;
+  let branchPreviewTimer = null;
 
   function normFile(p) {
     return String(p || "").replace(/\\/g, "/").toLowerCase().replace(/^[a-z]:/, "");
@@ -37,16 +36,20 @@
   function sortedFamilies() {
     return state.families.slice().sort((a, b) => familyActivity(b) - familyActivity(a));
   }
+  function compactLine(value, limit) {
+    const text = String(value || "").replace(/\s+/g, " ").trim();
+    return text.length > limit ? text.slice(0, Math.max(0, limit - 1)) + "…" : text;
+  }
   function firstUserText(family) {
     const messages = (family.messages || []).slice().sort((a, b) => timestamp(a.timestamp) - timestamp(b.timestamp));
     const user = messages.find((m) => m.role === "user" && String(m.text || "").trim());
     const first = messages.find((m) => String(m.text || "").trim());
-    return String((user || first || {}).text || "未命名会话").replace(/\s+/g, " ").trim();
+    return compactLine((user || first || {}).text || "未命名会话", 140);
   }
   function sessionTitle(family, file) {
     const session = (family.sessions || []).find((s) => normFile(s.file) === normFile(file)) || latestSession(family);
     const name = String((session || {}).name || "").replace(/\s+/g, " ").trim();
-    return name || firstUserText(family);
+    return compactLine(name || firstUserText(family), 160);
   }
   function pathForSession(family, file) {
     const session = (family.sessions || []).find((s) => normFile(s.file) === normFile(file)) || latestSession(family);
@@ -65,7 +68,7 @@
   function summaryFor(family, file) {
     const path = pathForSession(family, file);
     const last = path[path.length - 1];
-    return String((last || {}).text || firstUserText(family)).replace(/\s+/g, " ").trim();
+    return compactLine((last || {}).text || firstUserText(family), 180);
   }
   function displayTime(value) {
     const d = new Date(value || "");
@@ -96,21 +99,45 @@
   function selectedSession(family) {
     return (family.sessions || []).find((s) => normFile(s.file) === normFile(selectedSessionFile)) || latestSession(family);
   }
-  function setMeta() {
-    if (!state.families.length) { tbMeta.textContent = ""; return; }
-    tbMeta.textContent = "已加载 " + state.loadedFamilies + " / " + state.totalFamilies + " 个会话线程";
-  }
   function updateLoadMore() {
     const more = state.loadedFamilies < state.totalFamilies;
-    btnLoadMore.classList.toggle("hidden", !more);
+    listFooter.classList.toggle("hidden", !more);
     btnLoadMore.disabled = false;
-    if (more) { btnLoadMore.textContent = "加载更多（剩余 " + (state.totalFamilies - state.loadedFamilies) + "）"; }
+    if (more) {
+      btnLoadMore.textContent = "加载更多（剩余 " + (state.totalFamilies - state.loadedFamilies) + "）";
+      btnLoadMore.title = "加载更早的会话";
+    }
+  }
+  /**
+   * 为分叉轨迹上的消息取其最早所属会话。
+   * 后续子分支会复用父分支消息；最早文件就是该节点所在轨迹的本体分支。
+   */
+  function branchSessionForMessage(family, message) {
+    const files = new Set((message.files || []).map(normFile));
+    return (family.sessions || [])
+      .filter((session) => session.file && files.has(normFile(session.file)))
+      .sort((a, b) => timestamp(a.timestamp) - timestamp(b.timestamp))[0] || null;
+  }
+  function cancelBranchPreview() {
+    if (branchPreviewTimer !== null) {
+      clearTimeout(branchPreviewTimer);
+      branchPreviewTimer = null;
+    }
   }
   function selectFamily(family, file) {
+    cancelBranchPreview();
     selectedFamilyId = family.id;
     const session = file ? (family.sessions || []).find((s) => normFile(s.file) === normFile(file)) : latestSession(family);
     selectedSessionFile = (session || latestSession(family) || {}).file || null;
     render();
+  }
+  function previewBranch(family, session) {
+    cancelBranchPreview();
+    // 延后单击预览，给原生 dblclick 一个机会，避免第一次 click 重绘掉目标行。
+    branchPreviewTimer = setTimeout(() => {
+      branchPreviewTimer = null;
+      selectFamily(family, session.file);
+    }, 220);
   }
   function ensureSelection() {
     const families = sortedFamilies();
@@ -141,6 +168,7 @@
     noResults.classList.toggle("hidden", !noItems);
     if (noItems) {
       noResults.textContent = state.families.length ? "没有匹配的会话。" : "当前工作区没有会话记录。";
+      threadList.appendChild(noResults);
     }
     let lastGroup = "";
     for (const family of families) {
@@ -183,11 +211,186 @@
       threadList.appendChild(row);
     }
   }
-  function openSession(family, file) {
+  function openSession(family, file, entryId) {
     const session = (family.sessions || []).find((s) => normFile(s.file) === normFile(file)) || latestSession(family);
-    if (!session || !session.file || !session.leafId) { return; }
-    vscode.postMessage({ type: "openEntry", file: session.file, entryId: session.leafId });
+    const targetEntryId = entryId || (session || {}).leafId;
+    if (!session || !session.file || !targetEntryId) { return; }
+    vscode.postMessage({ type: "openEntry", file: session.file, entryId: targetEntryId });
   }
+  /** 将合并后的消息图按固定时间顺序拉平，切换分支时只更新高亮而不重排。 */
+  function treeRowsFor(family, activePath) {
+    const byId = new Map((family.messages || []).map((m) => [m.id, m]));
+    let roots = (family.roots || []).filter((id) => byId.has(id));
+    if (!roots.length) {
+      roots = (family.messages || []).filter((m) => !m.parentId || !byId.has(m.parentId)).map((m) => m.id);
+    }
+
+    // messages / children 已在构建数据时按时间排序；保持该顺序以稳定图形布局。
+    const ordered = (ids) => ids.filter((id) => byId.has(id));
+
+    const rows = [];
+    const renderStack = [];
+    const orderedRoots = ordered(roots);
+    for (let i = orderedRoots.length - 1; i >= 0; i--) {
+      renderStack.push({ id: orderedRoots[i], indent: 0 });
+    }
+    const rendered = new Set();
+    while (renderStack.length) {
+      const row = renderStack.pop();
+      if (rendered.has(row.id)) { continue; }
+      rendered.add(row.id);
+      rows.push(row);
+      const children = ordered(byId.get(row.id).children || []);
+      const branches = children.length > 1;
+      const childIndent = branches ? row.indent + 1 : row.indent;
+      for (let i = children.length - 1; i >= 0; i--) {
+        renderStack.push({
+          id: children[i],
+          indent: childIndent,
+        });
+      }
+    }
+    return { rows, byId };
+  }
+
+  function treeSummary(text) {
+    const normalized = String(text || "").replace(/\s+/g, " ").trim();
+    return normalized.length > 220 ? normalized.slice(0, 219) + "…" : normalized;
+  }
+
+  function svgElement(name, attrs) {
+    const element = document.createElementNS("http://www.w3.org/2000/svg", name);
+    for (const key of Object.keys(attrs)) { element.setAttribute(key, String(attrs[key])); }
+    return element;
+  }
+
+  /** 在消息行左侧绘制 Git 图式轨迹：圆点代表消息，曲线代表父子关系。 */
+  function drawGitGraph(tree, rows, byId, activePath) {
+    const oldGraph = tree.querySelector(".tree-graph");
+    if (oldGraph) { oldGraph.remove(); }
+    if (!tree.isConnected) { return; }
+
+    const bounds = tree.getBoundingClientRect();
+    const width = Math.max(1, Math.ceil(bounds.width));
+    const height = Math.max(1, Math.ceil(bounds.height));
+    const graph = svgElement("svg", {
+      class: "tree-graph",
+      width,
+      height,
+      viewBox: "0 0 " + width + " " + height,
+      "aria-hidden": "true",
+    });
+    const rowElements = tree.querySelectorAll(".tree-row");
+    const points = new Map();
+    for (let i = 0; i < rows.length && i < rowElements.length; i++) {
+      const rect = rowElements[i].getBoundingClientRect();
+      points.set(rows[i].id, {
+        x: 14 + rows[i].indent * 22,
+        y: rect.top - bounds.top + rect.height / 2,
+        current: rowElements[i].classList.contains("current-leaf"),
+      });
+    }
+
+    for (const rowData of rows) {
+      const message = byId.get(rowData.id);
+      const from = points.get(rowData.id);
+      if (!message || !from) { continue; }
+      const children = (message.children || []).filter((id) => points.has(id));
+      for (const childId of children) {
+        const to = points.get(childId);
+        const bend = Math.min(10, Math.max(4, Math.abs(to.y - from.y) / 2));
+        const path = from.x === to.x
+          ? "M " + from.x + " " + from.y + " V " + to.y
+          : "M " + from.x + " " + from.y + " V " + (to.y - bend) +
+            " Q " + from.x + " " + to.y + " " + (from.x + Math.sign(to.x - from.x) * bend) + " " + to.y +
+            " H " + to.x;
+        const active = activePath.has(rowData.id) && activePath.has(childId);
+        graph.appendChild(svgElement("path", { class: "tree-link" + (active ? " active" : ""), d: path }));
+      }
+    }
+
+    for (const rowData of rows) {
+      const point = points.get(rowData.id);
+      if (!point) { continue; }
+      const active = activePath.has(rowData.id);
+      const classes = "tree-node" + (active ? " active" : "") + (point.current ? " current" : "");
+      graph.appendChild(svgElement("circle", {
+        class: classes,
+        cx: point.x,
+        cy: point.y,
+        r: point.current ? 4.3 : (active ? 3.3 : 2.6),
+      }));
+    }
+    tree.insertBefore(graph, tree.firstChild);
+  }
+
+  /** 右侧显示完整消息树；分叉后的节点可单击切换、双击加载。 */
+  function renderMessageTree(family, activePath) {
+    if (graphResizeObserver) {
+      graphResizeObserver.disconnect();
+      graphResizeObserver = null;
+    }
+    messagesEl.innerHTML = "";
+    const data = treeRowsFor(family, activePath);
+    if (!data.rows.length) {
+      const empty = document.createElement("div");
+      empty.className = "tree-empty";
+      empty.textContent = "该会话尚未包含可显示的文本消息。";
+      messagesEl.appendChild(empty);
+      return;
+    }
+    const tree = document.createElement("div");
+    tree.className = "message-tree";
+    for (const rowData of data.rows) {
+      const msg = data.byId.get(rowData.id);
+      const row = document.createElement("div");
+      const onActivePath = activePath.has(msg.id);
+      row.className = "tree-row" + (onActivePath ? " on-active-path" : "");
+      row.style.setProperty("--tree-depth", String(rowData.indent));
+      if (onActivePath && (msg.children || []).every((id) => !activePath.has(id))) {
+        row.classList.add("current-leaf");
+      }
+      // indent > 0 表示该行处于某次分叉之后；公共主干不绑定某个特定分支。
+      const branchSession = rowData.indent > 0 ? branchSessionForMessage(family, msg) : null;
+      row.title = (msg.role === "user" ? "我" : "Pi") + ": " + String(msg.text || "");
+      if (branchSession) {
+        row.classList.add("branch-target");
+        row.title += "\n单击切换到此分支 · 双击加载到对话";
+        row.addEventListener("click", () => previewBranch(family, branchSession));
+        row.addEventListener("dblclick", (event) => {
+          event.preventDefault();
+          cancelBranchPreview();
+          selectFamily(family, branchSession.file);
+          openSession(family, branchSession.file, msg.id);
+        });
+      }
+
+      const role = document.createElement("span");
+      role.className = "tree-role " + msg.role;
+      role.textContent = msg.role === "user" ? "我" : "Pi";
+      const text = document.createElement("span");
+      text.className = "tree-text";
+      text.textContent = treeSummary(msg.text);
+      row.append(role, text);
+      tree.appendChild(row);
+    }
+    messagesEl.appendChild(tree);
+
+    let animationFrame = null;
+    const scheduleGraphDraw = () => {
+      if (animationFrame !== null) { return; }
+      animationFrame = requestAnimationFrame(() => {
+        animationFrame = null;
+        drawGitGraph(tree, data.rows, data.byId, activePath);
+      });
+    };
+    if (typeof ResizeObserver !== "undefined") {
+      graphResizeObserver = new ResizeObserver(scheduleGraphDraw);
+      graphResizeObserver.observe(tree);
+    }
+    scheduleGraphDraw();
+  }
+
   function renderDetail() {
     const family = selectedFamily();
     emptyReading.classList.toggle("hidden", !!family);
@@ -195,81 +398,25 @@
     if (!family) { return; }
     const session = selectedSession(family);
     const file = (session || {}).file;
+    const activePath = new Set(pathForSession(family, file).map((msg) => msg.id));
     detailTitle.textContent = sessionTitle(family, file);
     const sessionCount = (family.sessions || []).length;
-    const msgPath = pathForSession(family, file);
-    detailMeta.textContent = (session ? displayTime(session.timestamp) : "") + " · " + msgPath.length + " 条消息" + (sessionCount > 1 ? " · " + sessionCount + " 个分支" : "");
-    btnOpenThread.disabled = !session || !session.leafId;
-    branchBar.innerHTML = "";
-    const branches = (family.sessions || []).slice().sort((a, b) => timestamp(b.timestamp) - timestamp(a.timestamp));
-    for (let i = 0; i < branches.length; i++) {
-      const branch = branches[i];
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "branch-button" + (normFile(branch.file) === normFile(file) ? " selected" : "");
-      button.textContent = i === 0 ? "最新分支 · " + displayTime(branch.timestamp) : "分支 " + (i + 1) + " · " + displayTime(branch.timestamp);
-      button.title = "查看此分支";
-      button.addEventListener("click", () => selectFamily(family, branch.file));
-      branchBar.appendChild(button);
-    }
-    messagesEl.innerHTML = "";
-    if (!msgPath.length) {
-      const empty = document.createElement("div");
-      empty.className = "message empty";
-      empty.textContent = "该会话尚未包含可显示的文本消息。";
-      messagesEl.appendChild(empty);
-      return;
-    }
-    for (const msg of msgPath) {
-      const message = document.createElement("article");
-      message.className = "message " + (msg.role === "user" ? "user" : "assistant");
-      const head = document.createElement("div");
-      head.className = "message-head";
-      const role = document.createElement("span");
-      role.className = "message-role";
-      role.textContent = msg.role === "user" ? "我" : "Pi";
-      head.appendChild(role);
-      if (msg.timestamp) {
-        const time = document.createElement("span");
-        time.className = "message-time";
-        time.textContent = new Date(msg.timestamp).toLocaleString();
-        head.appendChild(time);
-      }
-      if (msg.role === "user") {
-        const fork = document.createElement("button");
-        fork.type = "button";
-        fork.className = "message-action";
-        fork.textContent = "从此分支";
-        fork.addEventListener("click", () => {
-          if (file) { vscode.postMessage({ type: "forkEntry", file, entryId: msg.id }); }
-        });
-        head.appendChild(fork);
-      }
-      const body = document.createElement("div");
-      body.className = "message-body";
-      body.textContent = msg.text || "";
-      message.append(head, body);
-      messagesEl.appendChild(message);
-    }
+    const messageCount = (family.messages || []).length;
+    detailMeta.textContent = messageCount + " 条消息 · " + sessionCount + " 个会话";
+    renderMessageTree(family, activePath);
   }
   function render() {
     ensureSelection();
-    setMeta();
     updateLoadMore();
     renderList();
     renderDetail();
   }
 
   search.addEventListener("input", renderList);
-  btnRefresh.addEventListener("click", () => vscode.postMessage({ type: "refresh" }));
   btnLoadMore.addEventListener("click", () => {
     btnLoadMore.disabled = true;
     btnLoadMore.textContent = "加载中…";
     vscode.postMessage({ type: "loadMore" });
-  });
-  btnOpenThread.addEventListener("click", () => {
-    const family = selectedFamily();
-    if (family) { openSession(family, selectedSessionFile); }
   });
 
   window.addEventListener("message", (event) => {
@@ -286,8 +433,9 @@
       state.loadedFamilies = msg.loadedFamilies || state.loadedFamilies;
       render();
     } else if (msg.type === "error") {
-      tbMeta.textContent = msg.text || "加载失败";
       btnLoadMore.disabled = false;
+      btnLoadMore.textContent = "加载失败，重试";
+      btnLoadMore.title = msg.text || "加载失败";
     }
   });
 

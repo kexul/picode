@@ -59,7 +59,6 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
             getCwd: () => this.getCwd(),
             getActiveSessionPath: () => this.getCurrentSessionPath(),
             openSessionAtEntry: (file, entryId) => this.openSessionAtEntry(file, entryId),
-            forkAtEntryFromPath: (file, entryId) => this.forkAtEntryFromPath(file, entryId),
         });
         context.subscriptions.push({ dispose: () => this.historyCanvas.dispose() });
         context.subscriptions.push({ dispose: () => {

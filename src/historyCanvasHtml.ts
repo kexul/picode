@@ -39,33 +39,25 @@ ${css}
 </style>
 </head>
 <body>
-  <div id="toolbar">
-    <span class="tb-title">历史会话</span>
-    <span id="tbMeta" class="tb-meta"></span>
-    <span class="tb-spacer"></span>
-    <button type="button" id="btnRefresh" title="重新加载会话">刷新</button>
-    <button type="button" id="btnLoadMore" class="hidden" title="加载更早的会话">加载更多</button>
-  </div>
   <main id="mail">
     <aside id="listPane" aria-label="会话列表">
       <div id="searchWrap">
         <input id="search" type="search" autocomplete="off" placeholder="搜索已加载会话" aria-label="搜索会话" />
       </div>
-      <div id="threadList" role="list"></div>
-      <div id="noResults" class="hidden">没有匹配的会话。</div>
+      <div id="threadList" role="list">
+        <div id="noResults" class="hidden">没有匹配的会话。</div>
+      </div>
+      <div id="listFooter" class="hidden">
+        <button type="button" id="btnLoadMore" title="加载更早的会话">加载更多</button>
+      </div>
     </aside>
     <section id="readingPane" aria-label="会话预览">
       <div id="emptyReading">从左侧选择一个会话以预览内容。</div>
       <article id="threadDetail" class="hidden">
         <header class="detail-top">
-          <div class="detail-title-row">
-            <h1 id="detailTitle"></h1>
-            <div class="detail-actions">
-              <button id="btnOpenThread" class="detail-action" type="button">打开会话</button>
-            </div>
-          </div>
+          <h1 id="detailTitle"></h1>
           <div id="detailMeta"></div>
-          <div id="branchBar" aria-label="会话分支"></div>
+          <div id="treeLegend">高亮轨迹为当前分支</div>
         </header>
         <div id="messages"></div>
       </article>

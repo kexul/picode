@@ -138,6 +138,13 @@ export class SessionRuntime {
     /** 正在加载会话 / 分叉（pi 冷启动 + 切换会话期间为 true，供宿主展示加载态）。 */
     public loading = false;
     public currentSessionPath: string | undefined;
+    /** 当前界面是否已有用户或助手消息；用于历史会话打开时复用空 tab。 */
+    private hasConversation = false;
+
+    /** 当前 panel 是否尚未承载会话内容，且不在加载过程中。 */
+    public isConversationEmpty(): boolean {
+        return !this.hasConversation && !this.loading;
+    }
 
     // ---- 当前状态快照（供 host.onStatusUpdate 上报，如 VSCode 状态栏）----
     private statusModelId?: string;
@@ -349,6 +356,7 @@ export class SessionRuntime {
         this.abortActiveRun();
         this.edits.reset();
         this.currentSessionPath = undefined;
+        this.hasConversation = false;
         this.post({ type: "clear" });
         this.post({ type: "system", text: "已开始新会话。" });
         if (this.client && this.client.isRunning()) {
@@ -363,6 +371,8 @@ export class SessionRuntime {
         if ((!text || !text.trim()) && !hasImages) {
             return;
         }
+        // 发送即占用当前 tab：等待 pi 回传 message_start 的间隙也不能被历史会话覆盖。
+        this.hasConversation = true;
         if (!this.client || !this.client.isRunning()) {
             this.startClient();
         }
@@ -507,6 +517,9 @@ export class SessionRuntime {
                 // pi 推送 user 消息开始（含 steer 投递的排队消息）：统一在此渲染 user 气泡，
                 // 替代 handleSend 里的主动 post，使普通/steer 两种路径行为一致。
                 const m = evt.message;
+                if (m && (m.role === "user" || m.role === "assistant")) {
+                    this.hasConversation = true;
+                }
                 if (m && m.role === "user") {
                     const imgs = countImages(m.content);
                     const text = textOf(m.content);
@@ -707,6 +720,7 @@ export class SessionRuntime {
         this.loading = true;
         this.host.broadcastTabList();
         this.edits.reset();
+        this.hasConversation = false;
         this.post({ type: "clear" });
         this.post({ type: "system", text: "正在加载会话…" });
 
@@ -851,6 +865,7 @@ export class SessionRuntime {
         this.loading = true;
         this.host.broadcastTabList();
         this.edits.reset();
+        this.hasConversation = false;
         this.post({ type: "clear" });
         this.post({ type: "system", text: "正在加载源会话并分叉…" });
 
@@ -934,6 +949,7 @@ export class SessionRuntime {
         this.loading = true;
         this.host.broadcastTabList();
         this.edits.reset();
+        this.hasConversation = false;
         this.post({ type: "clear" });
         this.post({ type: "system", text: "正在克隆会话…" });
         const t0 = Date.now();
@@ -1005,6 +1021,9 @@ export class SessionRuntime {
     }
 
     private renderMessages(messages: any[]): void {
+        this.hasConversation = messages.some((m) =>
+            m && (m.role === "user" || m.role === "assistant")
+        );
         const toolResults = new Map<string, any>();
         let lastHistoryError = "";
         for (const m of messages) {

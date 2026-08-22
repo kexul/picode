@@ -14,7 +14,6 @@ export interface HistoryCanvasHost {
     getCwd(): string;
     getActiveSessionPath(): string | undefined;
     openSessionAtEntry(file: string, entryId: string): Promise<void>;
-    forkAtEntryFromPath(file: string, entryId: string): Promise<void>;
 }
 
 /**
@@ -232,11 +231,6 @@ export class HistoryCanvasPanel {
             case "openEntry":
                 if (typeof msg.file === "string" && typeof msg.entryId === "string") {
                     await this.host.openSessionAtEntry(msg.file, msg.entryId);
-                }
-                return;
-            case "forkEntry":
-                if (typeof msg.file === "string" && typeof msg.entryId === "string") {
-                    await this.host.forkAtEntryFromPath(msg.file, msg.entryId);
                 }
                 return;
             default:

@@ -546,6 +546,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return this.getActive()?.id === panelId;
     }
 
+    /** 活跃 tab 的所有 panel 都未承载会话内容时，才视为可复用的空 tab。 */
+    protected isActiveTabEmpty(): boolean {
+        const c = this.activeTabId ? this.tabContainers.get(this.activeTabId) : undefined;
+        if (!c) { return false; }
+        const panelIds = layoutLeaves(c.root);
+        return panelIds.length > 0 && panelIds.every((id) =>
+            this.panels.get(id)?.isConversationEmpty() === true
+        );
+    }
+
     /** 子类可接入跨工作区的全局唯一名字池。 */
     protected allocatePanelName() { return randomNameParts(); }
     protected releasePanelName(_parts: { adjective: string; noun: string }): void { /* default: local names */ }
@@ -1239,8 +1249,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     public async loadHistorySession(file: string): Promise<void> {
-        // 在焦点 panel 加载；若无任何 tab 则新建
-        let rt = this.getActive();
+        // 优先复用当前空 tab；已有会话时新建 tab，避免历史选择覆盖正在进行的对话。
+        let rt = this.isActiveTabEmpty() ? this.getActive() : undefined;
         if (!rt) {
             const c = this.newTab();
             rt = this.panels.get(layoutLeaves(c.root)[0]);
@@ -1274,7 +1284,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /**
-     * 画布双击消息：复用已有 panel 或新建 tab 加载会话，并尝试滚到对应 entry。
+     * 画布双击消息：复用已有 panel；否则优先复用当前空 tab，再新建 tab 加载会话，并尝试滚到对应 entry。
      */
     public async openSessionAtEntry(file: string, entryId: string): Promise<void> {
         const found = this.findPanelBySessionFile(file);
@@ -1284,9 +1294,14 @@ export abstract class ChatControllerBase implements RuntimeHost {
             const c = this.containerOfPanel(rt.id);
             if (c) { this.setActive(c.id); this.focusPanel(rt.id); }
         } else {
-            // 未打开则新 tab，避免覆盖正在进行的对话
-            const c = this.newTab();
-            rt = this.panels.get(layoutLeaves(c.root)[0])!;
+            // 空 tab 可直接承载历史会话；已有对话（或正在加载）的 tab 一律新建，避免覆盖内容。
+            const reusable = this.isActiveTabEmpty() ? this.getActive() : undefined;
+            if (reusable) {
+                rt = reusable;
+            } else {
+                const c = this.newTab();
+                rt = this.panels.get(layoutLeaves(c.root)[0])!;
+            }
             await rt.loadSession(file);
         }
         // 稍等 DOM 渲染后再滚（load 会 clear + 重绘）
@@ -1294,21 +1309,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         setTimeout(() => {
             this.postToTab(rt.id, { type: "scrollToEntry", entryId });
         }, 200);
-        await this.onFocusChat();
-    }
-
-    /**
-     * 画布「在此分支」：新 tab 加载会话文件并在 entry 处 fork。
-     */
-    public async forkAtEntryFromPath(file: string, entryId: string): Promise<void> {
-        const abs = this.resolvePath(file);
-        if (!fs.existsSync(abs)) {
-            return;
-        }
-        const c = this.newTab();
-        const rt = this.panels.get(layoutLeaves(c.root)[0]);
-        if (!rt) { return; }
-        await rt.loadSessionAndFork(abs, entryId);
         await this.onFocusChat();
     }
 
