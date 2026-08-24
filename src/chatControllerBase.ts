@@ -1249,6 +1249,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     public async loadHistorySession(file: string): Promise<void> {
+        // 先揭示并等待聊天 Webview 就绪。否则首次从历史画布打开时，loadSession
+        // 在 Webview 尚未建立监听器前发出的 clear/消息会丢失，最终只剩空 tab。
+        await this.onFocusChat();
         // 优先复用当前空 tab；已有会话时新建 tab，避免历史选择覆盖正在进行的对话。
         let rt = this.isActiveTabEmpty() ? this.getActive() : undefined;
         if (!rt) {
@@ -1259,7 +1262,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const c = this.containerOfPanel(rt.id);
         if (c) { this.setActive(c.id); }
         await rt.loadSession(file);
-        await this.onFocusChat();
     }
 
     /** 路径归一化比较（盘符 / 分隔符）。 */
@@ -1287,6 +1289,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 画布双击消息：复用已有 panel；否则优先复用当前空 tab，再新建 tab 加载会话，并尝试滚到对应 entry。
      */
     public async openSessionAtEntry(file: string, entryId: string): Promise<void> {
+        // 与普通历史加载相同：先让聊天 Webview 就绪，随后才开始加载，既不会
+        // 丢失首批渲染消息，也能立刻展示 loading 状态。
+        await this.onFocusChat();
         const found = this.findPanelBySessionFile(file);
         let rt: SessionRuntime;
         if (found) {
@@ -1309,7 +1314,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         setTimeout(() => {
             this.postToTab(rt.id, { type: "scrollToEntry", entryId });
         }, 200);
-        await this.onFocusChat();
     }
 
     /**

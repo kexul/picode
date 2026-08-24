@@ -396,6 +396,30 @@
   .diff-line.jumpable { cursor: pointer; }
   .diff-line.jumpable:hover { outline: 1px solid var(--vscode-focusBorder, rgba(128,128,128,0.6)); outline-offset: -1px; }
   .empty-hint { text-align: center; opacity: 0.35; font-size: 0.9em; padding: 40px 0; user-select: none; }
+  /* 历史会话加载：覆盖空 pane 的明确进度反馈，避免只看到一个空 tab。 */
+  .session-loading {
+    position: absolute; inset: 0; z-index: 10;
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px; text-align: center; pointer-events: none;
+    background: color-mix(in srgb, var(--vscode-editor-background) 86%, transparent);
+    animation: session-loading-fade-in 140ms ease-out;
+  }
+  .session-loading-card {
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    color: var(--vscode-foreground);
+  }
+  .session-loading-spinner {
+    width: 28px; height: 28px; border: 3px solid color-mix(in srgb, var(--vscode-focusBorder, #007acc) 25%, transparent);
+    border-top-color: var(--vscode-focusBorder, #007acc); border-radius: 50%;
+    animation: session-loading-spin .8s linear infinite;
+  }
+  .session-loading-label { font-size: 1em; font-weight: 600; }
+  .session-loading-detail { color: var(--vscode-descriptionForeground, var(--vscode-foreground)); font-size: .86em; }
+  @keyframes session-loading-spin { to { transform: rotate(360deg); } }
+  @keyframes session-loading-fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    .session-loading, .session-loading-spinner { animation: none; }
+  }
   /* 分支树浮层 */
   #treeOverlay, #pickerOverlay, #settingsOverlay {
     position: fixed; inset: 0; z-index: 1000;
@@ -669,7 +693,7 @@
   .layout-split.layout-h > * + * { border-left: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
   .layout-split.layout-v > * + * { border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
   .layout-leaf { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-  .layout-leaf .tab-pane { position: static; flex: 1 1 0; min-height: 0; }
+  .layout-leaf .tab-pane { position: relative; flex: 1 1 0; min-height: 0; }
   /* 焦点 pane：仅将头部标题变淡蓝（pane-head 只在多 panel 时显示，
      单 panel 时自然无选中态）；不再画焦点环 */
   .layout-leaf.focus .pane-head .ph-title { color: var(--vscode-focusBorder, #007fd4); opacity: 1; }

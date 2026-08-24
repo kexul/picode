@@ -377,6 +377,35 @@
     if (hint) { hint.remove(); }
   }
 
+  /** 历史会话切换可能要等待 pi 冷启动和读盘；用 pane 内遮罩明确反馈进度。 */
+  function syncSessionLoading(tab) {
+    const existing = tab.paneEl.querySelector(":scope > .session-loading");
+    if (!tab.loading) {
+      if (existing) { existing.remove(); }
+      return;
+    }
+    if (existing) { return; }
+
+    const overlay = document.createElement("div");
+    overlay.className = "session-loading";
+    overlay.setAttribute("role", "status");
+    overlay.setAttribute("aria-live", "polite");
+    const card = document.createElement("div");
+    card.className = "session-loading-card";
+    const spinner = document.createElement("span");
+    spinner.className = "session-loading-spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    const label = document.createElement("div");
+    label.className = "session-loading-label";
+    label.textContent = "正在加载会话";
+    const detail = document.createElement("div");
+    detail.className = "session-loading-detail";
+    detail.textContent = "正在启动 Pi 并还原消息…";
+    card.append(spinner, label, detail);
+    overlay.appendChild(card);
+    tab.paneEl.appendChild(overlay);
+  }
+
   // ==================== 滚动 ====================
   const BOTTOM_THRESHOLD = 40;
   function isNearBottomPane(tab) {
@@ -3087,6 +3116,7 @@
             st.activityDetail = typeof node.activityDetail === "string" ? node.activityDetail : "";
             st.piReady = node.piReady !== false;
             st.loading = !!node.loading;
+            syncSessionLoading(st);
             // webview 重建（视图隐藏重开/窗口重载）后 tabList 是唯一信源：
             // modelChanged 是一次性推送，不在此恢复会导致状态栏模型名丢失。
             // 字段缺失（后端尚未拿到）时保留本地已有值。
@@ -3385,6 +3415,9 @@
         cancelFlush(t);
         t.paneEl.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
         ensurePaneHead(t);
+        // 后端可能在 loading 状态中再次 clear（例如切换完成后重绘消息），
+        // 不能因此把进行中的加载反馈一并清掉。
+        syncSessionLoading(t);
         t.currentAssistant = null;
         t.thinkingText = "";
         t.currentToolRow = null;
