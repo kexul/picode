@@ -75,7 +75,7 @@ ${bodyTop}${tabbar}  <div id="messages">
   </div>
   <div id="treeOverlay" class="hidden">
     <div id="treePanel">
-      <div id="treeHeader"><span>对话树</span><span class="tree-hint">点击 user 消息新建分支 · Esc 关闭</span></div>
+      <div id="treeHeader"><span>对话树</span><span class="tree-hint">单击 user 消息定位 · 双击新建分支 · Esc 关闭</span></div>
       <div id="treeBody"></div>
     </div>
   </div>

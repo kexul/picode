@@ -49,7 +49,18 @@
   // ---- 分支树浮层（全局，瞬时）----
   const treeOverlay = document.getElementById("treeOverlay");
   const treeBody = document.getElementById("treeBody");
+  let treeClickTimer = null;
 
+  function cancelTreeClick() {
+    if (treeClickTimer !== null) {
+      clearTimeout(treeClickTimer);
+      treeClickTimer = null;
+    }
+  }
+  function hideTree() {
+    cancelTreeClick();
+    treeOverlay.classList.add("hidden");
+  }
   // ---- 通用拾取器浮层（模型 / 历史）----
   const pickerOverlay = document.getElementById("pickerOverlay");
   const pickerBody = document.getElementById("pickerBody");
@@ -59,7 +70,6 @@
   const pickerFooter = document.getElementById("pickerFooter");
   let pickerState = null; // { kind, items, filtered, sel, current, draftModel, draftThinking, toggle }
 
-  function hideTree() { treeOverlay.classList.add("hidden"); }
   document.getElementById("treeBtn").addEventListener("click", () => {
     const tab = activeTab();
     if (tab) { vscode.postMessage({ type: "showTree", tabId: tab.id }); }
@@ -1959,7 +1969,7 @@
     const dt = tabs.get(tabId);
     try {
     treeBody.innerHTML = "";
-    // 浮层只展示 user 消息（历史提问列表），点任意一条即可从该处开分支。
+    // 浮层只展示 user 消息：单击定位原消息，双击才从该处开分支。
     const users = [];
     (function walk(nodes) {
       for (const n of nodes) {
@@ -1982,13 +1992,27 @@
         line.className = "tree-row" + (isLeaf ? " is-leaf" : "") + (onPath ? " on-path" : "");
         const marker = document.createElement("span"); marker.className = "tree-mark user"; line.appendChild(marker);
         const text = document.createElement("span"); text.className = "tree-text"; text.textContent = entrySummary(node); line.appendChild(text);
+        line.title = isLeaf
+          ? "单击定位到当前消息（当前分支末尾，无需新建分支）"
+          : "单击定位到聊天消息 · 双击在此处新建分支（可编辑该消息后重发）";
+        // 原生 dblclick 会先触发两次 click；延后单击动作，确保双击不会先关闭浮层。
+        line.addEventListener("click", () => {
+          cancelTreeClick();
+          treeClickTimer = setTimeout(() => {
+            treeClickTimer = null;
+            hideTree();
+            scrollToEntry(dt, e.id);
+          }, 500);
+        });
         if (!isLeaf) {
-          line.classList.add("forkable"); line.title = "点击在此处新建分支（可编辑该消息后重发）";
-          line.addEventListener("click", () => {
+          line.classList.add("forkable");
+          line.addEventListener("dblclick", (event) => {
+            event.preventDefault();
+            cancelTreeClick();
             hideTree();
             vscode.postMessage({ type: "forkAtEntry", tabId: tabId, entryId: e.id });
           });
-        } else { line.title = "当前位置（分支末尾）"; }
+        }
         treeBody.appendChild(line);
       });
       const leafEl = treeBody.querySelector(".tree-row.is-leaf");

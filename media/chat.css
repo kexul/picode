@@ -454,8 +454,8 @@
     transition: background 120ms;
   }
   .tree-row:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
-  .tree-row.is-leaf { cursor: default; }
-  .tree-row.is-leaf:hover { background: transparent; }
+  .tree-row.is-leaf { cursor: pointer; }
+  .tree-row.is-leaf:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
   .tree-row.readonly { cursor: default; }
   .tree-row.readonly:hover { background: transparent; }
   .tree-row.forkable { cursor: pointer; }
