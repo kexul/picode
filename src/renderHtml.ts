@@ -77,6 +77,10 @@ ${bodyTop}${tabbar}  <div id="messages">
     <div id="treePanel">
       <div id="treeHeader"><span>对话树</span><span class="tree-hint">单击 user 消息定位 · 双击新建分支 · Esc 关闭</span></div>
       <div id="treeBody"></div>
+      <div id="treeFooter">
+        <span class="tree-footer-hint">复制出一条独立分支会话，源对话不受影响</span>
+        <button type="button" id="treeCloneBtn" title="把当前分支完整复制到右侧新分屏 panel">⧉ 复制完整对话到分屏</button>
+      </div>
     </div>
   </div>
   <div id="pickerOverlay" class="hidden">

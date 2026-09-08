@@ -49,6 +49,9 @@
   // ---- 分支树浮层（全局，瞬时）----
   const treeOverlay = document.getElementById("treeOverlay");
   const treeBody = document.getElementById("treeBody");
+  const treeCloneBtn = document.getElementById("treeCloneBtn");
+  /** 浮层当前展示的 panel（前端 tab id == 后端 panelId）；底部按钮的复制目标。 */
+  let treePanelId = null;
   let treeClickTimer = null;
 
   function cancelTreeClick() {
@@ -61,6 +64,14 @@
     cancelTreeClick();
     treeOverlay.classList.add("hidden");
   }
+  // 底部按钮：把当前分支完整复制到同 tab 右侧新分屏 panel（pi clone）。
+  // 源 panel 不动，新 panel 是独立分支会话，两侧可并行对话。
+  treeCloneBtn.addEventListener("click", () => {
+    const id = treePanelId;
+    if (!id || treeCloneBtn.disabled) { return; }
+    hideTree();
+    vscode.postMessage({ type: "forkPanel", panelId: id });
+  });
   // ---- 通用拾取器浮层（模型 / 历史）----
   const pickerOverlay = document.getElementById("pickerOverlay");
   const pickerBody = document.getElementById("pickerBody");
@@ -2018,6 +2029,13 @@
       const leafEl = treeBody.querySelector(".tree-row.is-leaf");
       if (leafEl) { leafEl.scrollIntoView({ block: "center" }); }
     }
+    // 底部“复制完整对话”按钮：只对当前展示的这个 panel 生效
+    treePanelId = tabId;
+    const copyable = Array.isArray(tree) && tree.length > 0;
+    treeCloneBtn.disabled = !copyable;
+    treeCloneBtn.title = copyable
+      ? "把当前分支完整复制到同 tab 右侧新分屏 panel（新分支会话，源对话不受影响）"
+      : "当前没有可复制的对话";
     treeOverlay.classList.remove("hidden");
     } catch (e) {
       if (dt) { addPlain(dt, "system error", null, "对话树渲染失败: " + (e && e.message ? e.message : String(e))); }
