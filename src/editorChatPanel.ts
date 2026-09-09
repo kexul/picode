@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ChatControllerBase, type ChatReferenceItem, type TabContainer } from "./chatControllerBase";
+import { ChatControllerBase, type ChatReferenceItem, type TabContainer, type TransferPayload } from "./chatControllerBase";
 import type { NameParts } from "./names";
 import { getChatHtml } from "./chatHtml";
 import { readModelsJson, writeModelsJson } from "./modelsConfig";
@@ -18,6 +18,8 @@ export class EditorChatPanel extends ChatControllerBase {
     private readonly panel: vscode.WebviewPanel;
     private webviewReady = false;
     private disposed = false;
+    /** 即将接管活体迁入的会话：webview 就绪时不先建空 tab（省一个会被丢掉的 pi 进程）。 */
+    private pendingAdopt = false;
 
     constructor(
         private readonly context: vscode.ExtensionContext,
@@ -46,7 +48,17 @@ export class EditorChatPanel extends ChatControllerBase {
         this.panel.onDidDispose(() => this.dispose());
     }
 
-    public isDisposed(): boolean { return this.disposed; }
+    public override isDisposed(): boolean { return this.disposed; }
+
+    /** 为即将进行的移交做准备：本工作区首屏不建空 tab，直接给迁入会话。 */
+    public prepareForAdopt(): void { this.pendingAdopt = true; }
+
+    protected override shouldCreateInitialTab(): boolean { return !this.pendingAdopt; }
+
+    public override async adoptPanels(payload: TransferPayload): Promise<void> {
+        this.pendingAdopt = false;
+        return super.adoptPanels(payload);
+    }
 
     /** 揭示面板、等待 webview 接收器就绪，并聚焦其输入框。 */
     public async revealAndFocus(): Promise<void> {
@@ -101,6 +113,12 @@ export class EditorChatPanel extends ChatControllerBase {
         if (!this.disposed) { void this.panel.webview.postMessage(msg); }
     }
 
+    /** 跨工作区移交编排用：向本工作区 webview 推送消息。 */
+    public override postToWebviewPublic(msg: Record<string, unknown>): void { this.postToWebview(msg); }
+
+    /** 右键菜单：本工作区的 panel 只能“移回侧边栏”。 */
+    protected override transferDestination(): string { return "侧边栏"; }
+
     public getConfig(): PiConfig { return this.owner.getConfig(); }
     public getCwd(): string { return this.owner.getCwd(); }
     public async confirmDialog(title: string, message: string): Promise<boolean> {
@@ -150,6 +168,9 @@ export class EditorChatPanel extends ChatControllerBase {
         switch (msg.type) {
             case "hostFocus":
                 this.owner.markEditorChatActive(this);
+                return true;
+            case "transferOut":
+                void this.owner.transferOutPanels(this, msg);
                 return true;
             case "openSymbol":
                 if (typeof msg.name === "string") { void this.owner.openSymbol(msg.name); }
@@ -222,4 +243,6 @@ export interface EditorChatPanelOwner {
     fetchGlobalChatReference(requester: ChatControllerBase, msg: any): Promise<void>;
     markEditorChatActive(panel: EditorChatPanel): void;
     removeEditorChat(panel: EditorChatPanel): void;
+    /** 把本编辑器工作区的 panel / tab 活体迁回侧边栏（与侧边栏共用同一编排）。 */
+    transferOutPanels(source: ChatControllerBase, msg: any): Promise<void>;
 }

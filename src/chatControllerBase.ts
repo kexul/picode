@@ -136,6 +136,25 @@ export interface ChatReferenceItem {
     tabId: string;
 }
 
+/** 活体移交载荷：一批 panel 运行时（含 pi 进程）+ 它们在源工作区的相对布局。 */
+export interface TransferPayload {
+    runtimes: SessionRuntime[];
+    root: LayoutNode;
+    focusPanelId?: string;
+}
+
+/** 按 old → new 映射重写布局树里的 panelId（迁入时归入新工作区命名空间）。 */
+function remapLayout(node: LayoutNode, map: Map<string, string>): LayoutNode {
+    if (node.kind === "panel") {
+        return { kind: "panel", panelId: map.get(node.panelId) ?? node.panelId };
+    }
+    return {
+        kind: "split",
+        orientation: node.orientation,
+        children: node.children.map((c) => remapLayout(c, map)),
+    };
+}
+
 export abstract class ChatControllerBase implements RuntimeHost {
     protected constructor(public readonly workspaceId: string) {}
     // ---- panel（会话运行时）----
@@ -258,6 +277,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected async beforeHistoryPicker(): Promise<void> { /* 默认无操作 */ }
     /** 历史会话列表为空时的提示（vscode 覆盖为信息条）。 */
     protected onNoSessions(): void { /* 默认无操作 */ }
+    /** 活体移交菜单的目标工作区名（"编辑器" / "侧边栏"）；undefined 则 webview 不显示该菜单项。 */
+    protected transferDestination(): string | undefined { return undefined; }
+    /** webview 首次就绪且一个 tab 也没有时，是否自动建空 tab；
+     *  子类在“即将接管迁入会话”时可返回 false，免得白起一个会被丢掉的 pi 进程。 */
+    protected shouldCreateInitialTab(): boolean { return true; }
 
     // ========================================================================
     //  路径工具（RuntimeHost）
@@ -847,6 +871,112 @@ export abstract class ChatControllerBase implements RuntimeHost {
         rt.stopClient();
         this.releasePanelName(rt.nameParts);
         this.panels.delete(panelId);
+    }
+
+    /** 某 tab（容器）内的全部 panel id（布局深度优先序）。 */
+    public panelsOfContainer(containerId: string): string[] {
+        const c = this.tabContainers.get(containerId);
+        return c ? layoutLeaves(c.root) : [];
+    }
+
+    /** 保证至少有一个 tab（移交失败等路径的兜底）。 */
+    public ensureSomeTab(): void {
+        if (this.tabContainers.size === 0) { this.newTab(); }
+    }
+
+    /** 宿主是否已销毁（跨工作区移交编排用于放弃已关闭的目标）。 */
+    public isDisposed(): boolean { return false; }
+
+    /** 向本工作区 webview 推送消息（跨工作区编排用的公开入口）。 */
+    public postToWebviewPublic(msg: Record<string, unknown>): void { this.postToWebview(msg); }
+
+    // ========================================================================
+    //  活体移交（跨工作区：侧边栏 ↔ 编辑器面板）
+    // ========================================================================
+    /**
+     * 移交源：把一批 panel 连同布局子树摘出本工作区——**不杀 pi 进程、不释放名字**，
+     * 运行时状态由 {@link adoptPanels} 在新宿主里接管。
+     * 只支持两种粒度：单个 panel，或某个 tab 的全部 panel（布局树整棵带走）。
+     * 返回 undefined 表示请求已过时（panel 已关闭 / 粒度不支持），调用方放弃即可。
+     */
+    public detachPanelsForTransfer(panelIds: string[]): TransferPayload | undefined {
+        if (panelIds.length === 0) { return undefined; }
+        const runtimes: SessionRuntime[] = [];
+        for (const id of panelIds) {
+            const rt = this.panels.get(id);
+            // 有一个已失效就整体放弃：不留“搬了一半”的状态
+            if (!rt) { return undefined; }
+            runtimes.push(rt);
+        }
+        const container = this.containerOfPanel(panelIds[0]);
+        if (!container) { return undefined; }
+        const leaves = layoutLeaves(container.root);
+        const wholeTab = panelIds.length === leaves.length;
+        if (!wholeTab && panelIds.length > 1) { return undefined; }
+
+        const root: LayoutNode = wholeTab ? container.root : { kind: "panel", panelId: panelIds[0] };
+        const focusPanelId = wholeTab ? container.focusPanelId : panelIds[0];
+
+        if (wholeTab) {
+            this.tabContainers.delete(container.id);
+            this.postToWebview({ type: "tabClosed", id: container.id });
+            if (this.activeTabId === container.id) {
+                this.activeTabId = this.tabContainers.size > 0 ? this.tabContainers.keys().next().value : undefined;
+                if (this.activeTabId) { this.postToWebview({ type: "tabActivated", id: this.activeTabId }); }
+            }
+        } else {
+            this.detachPanelFromContainer(container, panelIds[0]);
+        }
+        for (const id of panelIds) { this.panels.delete(id); }
+        this.broadcastTabList(true);
+        // 源工作区被搬空：补一个空 tab，界面保持可用（与 closeTab 一致）
+        if (this.tabContainers.size === 0) { this.newTab(); }
+        return { runtimes, root, focusPanelId };
+    }
+
+    /**
+     * 移交目标：接管一批 panel 运行时，在本工作区新建（或复用空的活跃）tab 承载，
+     * 换绑宿主后把已有对话重放进本 webview。调用前必须确保本 webview 已就绪，
+     * 否则重放消息会被静默丢弃。
+     */
+    public async adoptPanels(payload: TransferPayload): Promise<void> {
+        const { runtimes, root } = payload;
+        if (runtimes.length === 0) { return; }
+        // panel id 归入本工作区命名空间（源 id 前缀是别的工作区，留着易混淆）
+        const idMap = new Map<string, string>();
+        for (const rt of runtimes) {
+            idMap.set(rt.id, `${this.workspaceId}:panel-${++this.panelSeq}`);
+        }
+        for (const rt of runtimes) {
+            const nextId = idMap.get(rt.id)!;
+            rt.rebindHost(this);
+            rt.id = nextId;
+            this.panels.set(nextId, rt);
+        }
+        const newRoot = remapLayout(root, idMap);
+        const leaves = layoutLeaves(newRoot);
+        const focus = idMap.get(payload.focusPanelId ?? "") ?? leaves[0];
+
+        // 空的活跃 tab 直接承载迁入会话：新建工作区时不会留下多余的空 tab / pi 进程
+        const reusable = this.activeTabId ? this.tabContainers.get(this.activeTabId) : undefined;
+        let c: TabContainer;
+        if (reusable && this.isActiveTabEmpty()) {
+            for (const pid of layoutLeaves(reusable.root)) { this.disposePanelRuntime(pid); }
+            reusable.root = newRoot;
+            reusable.focusPanelId = focus;
+            c = reusable;
+        } else {
+            c = { id: `${this.workspaceId}:tab-${++this.tabSeq}`, root: newRoot, focusPanelId: focus };
+            this.tabContainers.set(c.id, c);
+        }
+        this.activeTabId = c.id;
+        this.postToWebview({ type: "tabActivated", id: c.id });
+        // 先推结构（webview 据此建好各 pane），再重放消息
+        this.broadcastTabList(true);
+        await Promise.all(runtimes.map((rt) => rt.replayHistory()));
+        this.broadcastTabList(true);
+        // 迁入会话的 knownFiles 也要能在新宿主变成可点击符号
+        this.onKnownFilesChangedByHost();
     }
 
     /** 合并所有 panel 中 pi 工具调用触及过的文件绝对路径（供宿主收集符号等）。 */
@@ -1490,10 +1620,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
         switch (msg.type) {
             case "ready": {
                 this.sendViewOptions();
+                this.postToWebview({ type: "transferCaps", dest: this.transferDestination() ?? null });
                 this.broadcastTabList();
                 if (this.tabContainers.size === 0) {
-                    this.newTab(ChatControllerBase.SPARE_PREWARM_DELAY_MS);
-                    void this.maybeAutoLoadLastSession();
+                    if (this.shouldCreateInitialTab()) {
+                        this.newTab(ChatControllerBase.SPARE_PREWARM_DELAY_MS);
+                        void this.maybeAutoLoadLastSession();
+                    }
                 } else {
                     // 已有 panel：同步各 panel 的 piReady
                     for (const rt of this.panels.values()) {

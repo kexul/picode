@@ -166,7 +166,7 @@ export class SessionRuntime {
     /** 本轮已展示过的错误文本；防止重试期间同一错误刷屏。agent_start 时重置。 */
     private lastShownRunError = "";
 
-    constructor(id: string, name: NameParts, private readonly host: RuntimeHost) {
+    constructor(id: string, name: NameParts, private host: RuntimeHost) {
         this.id = id;
         this.nameParts = name;
         this.edits = new EditTracker({
@@ -182,6 +182,16 @@ export class SessionRuntime {
     /** 推送给对应 tab 的消息（自动带 tabId）。 */
     private post(msg: Record<string, unknown>): void {
         this.host.postToTab(this.id, msg);
+    }
+
+    /**
+     * 活体迁移：换绑宿主（侧边栏 ↔ 编辑器工作区之间搬移 panel 时用）。
+     * pi 进程、编辑快照、模型/上下文状态全部原样保留，只是渲染出口改到新宿主；
+     * EditTracker 的回调都动态读 this.host，故无需重建。迁移后由新宿主调用
+     * {@link replayHistory} 把已有对话重放进新 webview。
+     */
+    public rebindHost(host: RuntimeHost): void {
+        this.host = host;
     }
 
     /** 把当前 tab 的模型/上下文状态快照上报给宿主（如 VSCode 状态栏）。
@@ -1020,7 +1030,56 @@ export class SessionRuntime {
         void this.sendCurrentModel();
     }
 
-    private renderMessages(messages: any[]): void {
+    /**
+     * 活体迁移到新宿主后重放对话：进程仍活着，不重新 switch_session，
+     * 直接向 pi 取当前消息树重绘到新 webview（消息带新 tabId）。
+     */
+    public async replayHistory(): Promise<void> {
+        this.post({ type: "clear" });
+        this.post({ type: "piReady", ready: this.piReady });
+        if (!this.client || !this.client.isRunning()) {
+            this.post({
+                type: "system",
+                text: "会话已迁入本工作区（pi 进程当前未运行；发送消息会自动重启）。",
+            });
+            return;
+        }
+        const [msgResp, forkResp] = await Promise.all([
+            this.request<{ messages: any[] }>({ type: "get_messages" }),
+            this.request<{ messages: RpcForkMessage[] }>({ type: "get_fork_messages" }),
+        ]);
+        if (!msgResp) {
+            this.post({ type: "systemError", text: "迁移后重放对话失败（pi 无响应）。" });
+            return;
+        }
+        const messages: any[] = msgResp.data?.messages ?? [];
+        this.forkEntries = forkResp?.data?.messages ?? [];
+        // 快照随运行时一起迁过来了：迁移前的 edit/write 仍可回滚
+        this.renderMessages(messages, { revertable: true });
+        // 本次会话改过的文件清单也要到新宿主（回滚 / diff 按钮依赖它）
+        this.edits.republishFileChanges();
+        this.emitStatus();
+        const count = messages.filter((m) => m && (m.role === "user" || m.role === "assistant")).length;
+        this.post({
+            type: "system",
+            text: `会话已迁入本工作区（${count} 条消息，pi 进程与上下文原样保留）。`,
+        });
+        if (this.streaming) {
+            this.post({
+                type: "system",
+                text: "该会话正在生成中：迁移前已输出的增量不带过来，后续输出会继续显示。",
+            });
+        }
+        this.host.broadcastTabList();
+    }
+
+    /**
+     * 重绘一批历史消息。
+     * @param revertable edit/write 卡片是否按内存快照开放“回滚”：活体迁移时快照
+     * 还在（true），单纯加载历史会话时快照并不存在（缺省 false）。
+     */
+    private renderMessages(messages: any[], opts?: { revertable?: boolean }): void {
+        const revertable = opts?.revertable === true;
         this.hasConversation = messages.some((m) =>
             m && (m.role === "user" || m.role === "assistant")
         );
@@ -1070,7 +1129,7 @@ export class SessionRuntime {
                                     type: "editCardResult",
                                     toolCallId: id,
                                     diff: this.edits.historyDiff(c, toolResults.get(id)),
-                                    canRevert: false,
+                                    canRevert: revertable && this.edits.hasSnapshot(id),
                                 });
                             } else {
                                 const id = c.id || `hist-${Math.random()}`;

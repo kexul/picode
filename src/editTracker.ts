@@ -264,6 +264,16 @@ export class EditTracker {
         return historyEditInfo(call, result);
     }
 
+    /** 是否存在该次修改的“修改前”快照（活体迁移后重放用：快照还在就能回滚）。 */
+    public hasSnapshot(toolCallId: string): boolean {
+        return this.editSnapshots.has(toolCallId);
+    }
+
+    /** 活体迁移后：把本会话已记录的文件改动重推给新宿主的 webview。 */
+    public republishFileChanges(): void {
+        this.postFileChanges();
+    }
+
     private postFileChanges(): void {
         const files = Array.from(this.fileChanges.values()).map((c) => ({
             path: c.path,

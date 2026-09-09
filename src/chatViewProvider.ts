@@ -49,6 +49,12 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     /** 独立编辑器聊天工作区；不注册 serializer，窗口重载后不会恢复。 */
     private editorChats = new Set<EditorChatPanel>();
     private lastActiveChat: EditorChatPanel | "sidebar" | undefined;
+    /** 最近使用过的编辑器工作区：活体移交的目标选择用它（不受侧边栏抢焦点影响）。 */
+    private mostRecentEditorChat: EditorChatPanel | undefined;
+    /** 移交并发闸：等目标 webview 就绪期间重复右键不叠加发起。 */
+    private transferInFlight = false;
+    /** 即将接管迁入会话：侧栏首屏也不建空 tab（与编辑器工作区同理，省一个会被丢掉的 pi）。 */
+    private pendingAdopt = false;
     /** 当前打开的各工作区共用；panel 关闭后会释放对应名字。 */
     private readonly usedChatNames = new Set<string>();
     private editorWorkspaceSeq = 0;
@@ -183,6 +189,8 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         return this.uniqueTabName(this.baseContainerDisplayName(c), c.id);
     }
     protected override onChatStructureChanged(): void { this.broadcastChatReferences(); }
+    protected override transferDestination(): string { return "编辑器"; }
+    protected override shouldCreateInitialTab(): boolean { return !this.pendingAdopt; }
 
     // ---- RuntimeHost：配置 / cwd ----
     public getConfig() {
@@ -371,6 +379,9 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         switch (msg.type) {
             case "hostFocus":
                 this.lastActiveChat = "sidebar";
+                return true;
+            case "transferOut":
+                void this.transferOutPanels(this, msg);
                 return true;
             case "openSymbol":
                 if (typeof msg.name === "string") { void this.openSymbol(msg.name); }
@@ -651,20 +662,93 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     }
 
     /** 侧边栏最左按钮：每次均创建一个新的、互不共享状态的编辑器聊天工作区。 */
-    public openEditorChat(): void {
+    public openEditorChat(): EditorChatPanel { return this.createEditorChat(); }
+
+    private createEditorChat(): EditorChatPanel {
         const panel = new EditorChatPanel(this.context, this, `editor-${++this.editorWorkspaceSeq}`);
         this.editorChats.add(panel);
         this.markEditorChatActive(panel);
         this.broadcastChatReferences();
+        return panel;
+    }
+
+    /** 移交目标工作区：最近使用的编辑器面板 > 唯一存活的 > 新建一个。 */
+    private pickEditorTarget(): EditorChatPanel {
+        const live = Array.from(this.editorChats).filter((p) => !p.isDisposed());
+        const recent = this.mostRecentEditorChat;
+        if (recent && !recent.isDisposed()) { return recent; }
+        if (live.length === 1) { return live[0]; }
+        const created = this.createEditorChat();
+        // 新工作区首屏直接给迁入会话，不先起一个会被丢掉的空 tab
+        created.prepareForAdopt();
+        return created;
+    }
+
+    /**
+     * 右键菜单：把 panel（或整个 tab）连同 pi 进程活体迁到另一个工作区。
+     * 侧边栏 → 编辑器面板；编辑器面板 → 侧边栏。
+     * 必须先把目标 webview 等到就绪，再从源摆下 panel，避免重放消息丢失。
+     */
+    public async transferOutPanels(source: ChatControllerBase, msg: any): Promise<void> {
+        if (this.transferInFlight) { return; }
+        const toEditor = source === this;
+        const containerId = typeof msg.containerId === "string" ? msg.containerId : undefined;
+        const panelId = typeof msg.panelId === "string" ? msg.panelId : undefined;
+        const panelIds = containerId
+            ? source.panelsOfContainer(containerId)
+            : panelId ? [panelId] : [];
+        if (panelIds.length === 0) { return; }
+
+        this.transferInFlight = true;
+        try {
+            if (toEditor) {
+                const editor = this.pickEditorTarget();
+                await editor.revealAndFocus();   // 内含等待目标 webview ready
+                await this.finishTransfer(source, editor, panelIds);
+            } else {
+                this.pendingAdopt = true;          // 侧栏可能刚重建：就绪时直接给迁入会话
+                await this.ensureViewVisible();  // 打开侧栏并等 webview ready（可能刚重建）
+                this.lastActiveChat = "sidebar"; // 后续命令（新建会话 / 聚焦输入框）跟到侧栏
+                await this.finishTransfer(source, this, panelIds);
+            }
+        } finally {
+            this.transferInFlight = false;
+        }
+    }
+
+    /** 移交下半段：源摆下 → 目标接管重放 → 聚焦输入框。 */
+    private async finishTransfer(
+        source: ChatControllerBase, target: ChatControllerBase, panelIds: string[]
+    ): Promise<void> {
+        try {
+            if (target.isDisposed() || source === target) { return; }
+            const payload = source.detachPanelsForTransfer(panelIds);
+            if (!payload) {
+                // 新工作区可能因此一个 tab 也没有：补一个空 tab 兜底
+                target.ensureSomeTab();
+                vscode.window.showInformationMessage("Pi Chat: 会话已不在原工作区（可能已被关闭），未执行迁移。");
+                return;
+            }
+            await target.adoptPanels(payload);
+            target.ensureSomeTab();
+            target.postToWebviewPublic({ type: "focusInput" });
+        } finally {
+            // 失败路径也要清：否则侧栏下次重建就绪时不会建首个 tab
+            this.pendingAdopt = false;
+        }
     }
 
     public markEditorChatActive(panel: EditorChatPanel): void {
-        if (!panel.isDisposed()) { this.lastActiveChat = panel; }
+        if (!panel.isDisposed()) {
+            this.lastActiveChat = panel;
+            this.mostRecentEditorChat = panel;
+        }
     }
 
     public removeEditorChat(panel: EditorChatPanel): void {
         this.editorChats.delete(panel);
         if (this.lastActiveChat === panel) { this.lastActiveChat = undefined; }
+        if (this.mostRecentEditorChat === panel) { this.mostRecentEditorChat = undefined; }
         this.broadcastChatReferences();
     }
 

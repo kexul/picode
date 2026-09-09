@@ -70,7 +70,7 @@
     "compile": "tsc -p tsconfig.json",
     "build": "npm run clean && npm run compile",
     "watch": "tsc -w -p tsconfig.json",
-    "test": "npm run compile && node --test out/src/messageUtils.test.js out/src/canvasData.test.js out/src/layoutTree.test.js out/src/slashCommands.test.js",
+    "test": "npm run compile && node --test out/src/messageUtils.test.js out/src/canvasData.test.js out/src/layoutTree.test.js out/src/slashCommands.test.js out/src/transferPanels.test.js",
     "package": "npm run build && vsce package --allow-missing-repository"
   },
   "dependencies": {},

@@ -29,6 +29,8 @@
   const tabDrafts = new Map();  // tabId -> { text, selStart, selEnd, height }（输入草稿按 tab 存）
   const maximized = new Map();  // tabId -> panelId（双击 pane-head 最大化，纯前端临时态）
   let draggingPanelId = null;   // 正在拖拽的 panel id
+  // 活体移交菜单目标工作区名（"编辑器" / "侧边栏"）；宿主未下发时为 null，菜单不显示移交项。
+  let transferDest = null;
 
   function enterMultiTab() {
     if (multiTab) { return; }
@@ -1515,6 +1517,13 @@
           e.stopPropagation();
           showPaneMenu(e.clientX, e.clientY, panelIds[0]);
         });
+      } else {
+        // 多 panel tab：条目自身右键 → 整个 tab（含分屏布局）的操作菜单
+        el.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          showTabMenu(e.clientX, e.clientY, tv, panelIds.length);
+        });
       }
       tabBarInner.appendChild(el);
     });
@@ -1667,7 +1676,7 @@
     });
   }
 
-  // ---- pane-head 右键菜单 ----
+  // ---- pane-head / tab chip 右键菜单 ----
   let paneMenuEl = null;
   function hidePaneMenu() {
     if (!paneMenuEl) { return; }
@@ -1675,28 +1684,53 @@
     paneMenuEl.remove();
     paneMenuEl = null;
   }
-  function showPaneMenu(x, y, panelId) {
+  /** 通用浮层菜单：items 为 {label, fn}；label 为空表示分隔线。 */
+  function showMenu(x, y, items) {
     hidePaneMenu();
-    paneMenuEl = document.createElement("div");
-    paneMenuEl.className = "pane-menu";
-    const mk = (label, fn) => {
-      const it = document.createElement("div");
-      it.className = "pm-item";
-      it.textContent = label;
-      it.addEventListener("click", () => { hidePaneMenu(); fn(); });
-      paneMenuEl.appendChild(it);
-    };
-    mk("＋ 新建空 panel", () => vscode.postMessage({ type: "addPanel", panelId }));
-    mk("⑂ Fork 会话（克隆上下文到新 panel）", () => vscode.postMessage({ type: "forkPanel", panelId }));
-    const sep = document.createElement("div"); sep.className = "pm-sep"; paneMenuEl.appendChild(sep);
-    mk("✕ 关闭 panel", () => vscode.postMessage({ type: "closePanel", panelId }));
-    document.body.appendChild(paneMenuEl);
-    const r = paneMenuEl.getBoundingClientRect();
-    paneMenuEl.style.left = Math.min(x, window.innerWidth - r.width - 8) + "px";
-    paneMenuEl.style.top = Math.min(y, window.innerHeight - r.height - 8) + "px";
+    const menu = document.createElement("div");
+    menu.className = "pane-menu";
+    items.forEach((it) => {
+      if (!it || !it.label) {
+        const s = document.createElement("div"); s.className = "pm-sep"; menu.appendChild(s); return;
+      }
+      const el = document.createElement("div");
+      el.className = "pm-item";
+      el.textContent = it.label;
+      el.title = it.hint || "";
+      el.addEventListener("click", () => { hidePaneMenu(); it.fn(); });
+      menu.appendChild(el);
+    });
+    paneMenuEl = menu;
+    document.body.appendChild(menu);
+    const r = menu.getBoundingClientRect();
+    menu.style.left = Math.min(x, window.innerWidth - r.width - 8) + "px";
+    menu.style.top = Math.min(y, window.innerHeight - r.height - 8) + "px";
     const closer = (ev) => { if (paneMenuEl && !paneMenuEl.contains(ev.target)) { hidePaneMenu(); } };
-    paneMenuEl._closer = closer;
+    menu._closer = closer;
     document.addEventListener("mousedown", closer, true);
+  }
+  /** 活体移交菜单项：连同会话与 pi 进程一起搬到另一个工作区。 */
+  function transferItem(label, msg) {
+    if (!transferDest) { return null; }
+    return { label, hint: "连同会话上下文与 pi 进程一起搬过去，不重启、不丢历史", fn: () => vscode.postMessage(msg) };
+  }
+  function showPaneMenu(x, y, panelId) {
+    showMenu(x, y, [
+      { label: "＋ 新建空 panel", fn: () => vscode.postMessage({ type: "addPanel", panelId }) },
+      { label: "⑂ Fork 会话（克隆上下文到新 panel）", fn: () => vscode.postMessage({ type: "forkPanel", panelId }) },
+      transferItem("⤢ 移到" + transferDest + "（保留 pi 进程）", { type: "transferOut", panelId }),
+      { label: null },
+      { label: "✕ 关闭 panel", fn: () => vscode.postMessage({ type: "closePanel", panelId }) },
+    ].filter(Boolean));
+  }
+  /** 多 panel tab 的右键菜单：整个 tab（连同分屏布局）移交 / 关闭。
+   *  单 panel tab 的条目本身就是那个 panel，复用 pane 菜单。 */
+  function showTabMenu(x, y, tv, count) {
+    const items = [];
+    const t = transferItem("⤢ 整个 tab 移到" + transferDest + "（" + count + " 个会话）", { type: "transferOut", containerId: tv.id });
+    if (t) { items.push(t, { label: null }); }
+    items.push({ label: "✕ 关闭 tab（内部 panel 全部关闭）", fn: () => vscode.postMessage({ type: "closeTab", tabId: tv.id }) });
+    showMenu(x, y, items);
   }
 
   // ---- 布局 DOM ----
@@ -3251,6 +3285,10 @@
       return;
     }
     if (type === "viewOptions") { applyViewOptions(msg); return; }
+    if (type === "transferCaps") {
+      transferDest = typeof msg.dest === "string" && msg.dest ? msg.dest : null;
+      return;
+    }
     if (type === "exportConversationRequest") {
       exportActiveConversation(msg.tabId, msg.requestId);
       return;
