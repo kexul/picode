@@ -940,6 +940,58 @@
     }
   }
 
+  // ==================== 工具结果内联图片（read 读图等） ====================
+  /** Lightbox：点击缩略图全屏查看原图，点任意处关闭。 */
+  let lightboxEl = null;
+  function openLightbox(src) {
+    if (!lightboxEl) {
+      lightboxEl = document.createElement("div");
+      lightboxEl.className = "lightbox hidden";
+      lightboxEl.appendChild(document.createElement("img"));
+      lightboxEl.addEventListener("click", () => { lightboxEl.classList.add("hidden"); });
+      document.body.appendChild(lightboxEl);
+    }
+    lightboxEl.firstChild.src = src;
+    lightboxEl.classList.remove("hidden");
+  }
+
+  /** 图片原始尺寸写进调用行（read xxx 后面）；medium 模式无调用行则写进标签标题。 */
+  function applyImageDims(card, w, h) {
+    if (!card || card._dimsApplied || !w || !h) { return; }
+    card._dimsApplied = true;
+    const host = card.querySelector(".tc-call") || card.querySelector("span.tool");
+    if (!host) { return; }
+    let s = host.querySelector(".tc-dims");
+    if (!s) {
+      s = document.createElement("span"); s.className = "tc-dims";
+      host.appendChild(s);
+    }
+    s.textContent = w + "x" + h;
+  }
+
+  /** 结果区图片块：缩略图 + 点击放大；后端对超大图只传 tooLarge 占位。 */
+  function renderResultImages(resultEl, images, card) {
+    if (!Array.isArray(images) || images.length === 0) { return; }
+    const wrap = document.createElement("div"); wrap.className = "tc-images";
+    for (const img of images) {
+      if (!img || img.tooLarge || typeof img.data !== "string" || !img.data) {
+        const ph = document.createElement("div"); ph.className = "tc-img-too-large";
+        const mb = img && typeof img.bytes === "number" ? (img.bytes / 1048576).toFixed(1) + " MB" : "超过上限";
+        ph.textContent = "[图片过大 " + mb + "，未内联显示]";
+        wrap.appendChild(ph);
+        continue;
+      }
+      const el = document.createElement("img");
+      el.className = "tc-img";
+      el.src = "data:" + (img.mimeType || "image/png") + ";base64," + img.data;
+      el.title = "点击放大";
+      el.addEventListener("click", (e) => { e.stopPropagation(); openLightbox(el.src); });
+      el.addEventListener("load", () => { applyImageDims(card, el.naturalWidth, el.naturalHeight); }, { once: true });
+      wrap.appendChild(el);
+    }
+    resultEl.appendChild(wrap);
+  }
+
   /** 卡片结果区渲染：预览截断（尾部 N 行，同 TUI）+ 元信息 + 展开/收起。 */
   function setToolResult(card, resultText, meta) {
     card._resultText = resultText || "";
@@ -962,21 +1014,24 @@
         text = text.slice(0, fi).replace(/\s+$/, "");
       }
     }
+    const hasImages = Array.isArray(meta.images) && meta.images.length > 0;
     const lines = text ? text.split("\n") : [];
     // 预览行数：bash 尾部 5 行、read 前 5 行、其余前 15 行
     const maxLines = isBash || isRead ? TOOL_PREVIEW_LINES : 15;
     let shown = lines, hidden = 0;
-    if (lines.length > maxLines && !card._resultExpanded) {
+    if (lines.length > maxLines && !card._resultExpanded && !(isRead && hasImages)) {
       hidden = lines.length - maxLines;
       shown = isBash ? lines.slice(-maxLines) : lines.slice(0, maxLines);
     }
-    if (text) {
+    // read 读图："Read image file …/[Image: original …]" 文本冗余，只留图片；尺寸已上移到调用行
+    if (text && !(isRead && hasImages)) {
       const pre = document.createElement("pre"); pre.className = "tc-output";
       pre.textContent = shown.join("\n");
       // 展开后取消内部滚动（否则卡片内滚动条 + 主面板滚动条 = 双滚动条）
       if (card._resultExpanded) { pre.style.maxHeight = "none"; }
       resultEl.appendChild(pre);
     }
+    renderResultImages(resultEl, meta.images, card);
     // 底部行容器：耗时在左、截断标记在右（左右两个固定容器，不依赖 DOM 顺序）。
     const footer = document.createElement("div"); footer.className = "tc-footer";
     const fLeft = document.createElement("span"); fLeft.className = "tc-footer-left";
@@ -988,7 +1043,7 @@
       mark.title = (isBash ? hidden + " 行更早内容" : hidden + " 行被截断") + " · 点击展开完整结果";
       mark.addEventListener("click", (e) => { e.stopPropagation(); card._resultExpanded = true; renderToolResultInner(card); });
       fRight.appendChild(mark);
-    } else if (card._resultExpanded && lines.length > maxLines) {
+    } else if (card._resultExpanded && lines.length > maxLines && !(isRead && hasImages)) {
       const fold = document.createElement("span");
       fold.className = "tc-trunc-mark"; fold.textContent = "收起";
       fold.addEventListener("click", (e) => { e.stopPropagation(); card._resultExpanded = false; renderToolResultInner(card); });
@@ -3554,6 +3609,7 @@
             isError: !!msg.isError,
             durationMs: msg.durationMs,
             truncation: msg.truncation || null,
+            images: msg.images || null,
           });
           t.pendingToolCardsFull.delete(msg.toolCallId);
           scrollToBottom(t);
@@ -3574,7 +3630,11 @@
           tagEl._done = true;
           tagEl._isError = !!msg.isError;
           tagEl._resultText = msg.resultText || "";
-          tagEl._resultMeta = { isError: !!msg.isError, durationMs: msg.durationMs, truncation: msg.truncation || null };
+          tagEl._resultMeta = { isError: !!msg.isError, durationMs: msg.durationMs, truncation: msg.truncation || null, images: msg.images || null };
+          // read 读图：简洁/摘要模式下也自动展开成卡片直接出图（用户可再点标签收起）
+          if (!tagEl._card && tagEl._toolName === "read" && Array.isArray(msg.images) && msg.images.length > 0) {
+            toggleCompactToolCard(tagEl);
+          }
           if (tagEl._card) {
             tagEl._card.classList.remove("running");
             tagEl._card.classList.add("done");

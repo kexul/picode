@@ -4,6 +4,7 @@ import { NameParts, composeName } from "./names";
 import { EditTracker } from "./editTracker";
 import {
     countImages,
+    extractResultImages,
     extractResultText,
     extractTruncation,
     formatPiError,
@@ -1147,6 +1148,7 @@ export class SessionRuntime {
                                         isError: !!res.isError,
                                         resultText: extractResultText(res.content ?? res),
                                         truncation: extractTruncation(res),
+                                        images: extractResultImages(res.content ?? res),
                                     });
                                 }
                             }

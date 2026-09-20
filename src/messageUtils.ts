@@ -78,6 +78,47 @@ export function summarizeToolCall(name: string, args: unknown): string {
 }
 
 /** 从工具结果 / 部分结果（或历史 toolResult 消息）中提取展示文本。 */
+/** 工具结果里的图片块（read 读图等）：{ data(base64), mimeType }。 */
+export interface ResultImageBlock {
+    data: string;
+    mimeType: string;
+    /** base64 超过上限时为 true，data 置空，仅传占位信息。 */
+    tooLarge?: boolean;
+    /** 解码后的近似字节数（占位提示用）。 */
+    bytes?: number;
+}
+
+/** 单张图 base64 字符数上限（约 8MB 解码体积），超过只给占位不内联。 */
+export const MAX_RESULT_IMAGE_B64 = 8 * 1024 * 1024;
+
+/**
+ * 提取工具结果 content 里的 image 块（ pi read 读图返回 {type:"image",data,mimeType} ）。
+ * 超大图不内联：返回 tooLarge 占位块，避免 base64 灌爆 webview postMessage。
+ */
+export function extractResultImages(result: unknown, maxB64Chars: number = MAX_RESULT_IMAGE_B64): ResultImageBlock[] {
+    if (!result) {
+        return [];
+    }
+    const r = result as any;
+    const content = Array.isArray(result) ? result : r.content;
+    if (!Array.isArray(content)) {
+        return [];
+    }
+    const out: ResultImageBlock[] = [];
+    for (const c of content) {
+        if (!c || c.type !== "image" || typeof c.data !== "string" || c.data.length === 0) {
+            continue;
+        }
+        const mimeType = typeof c.mimeType === "string" && c.mimeType ? c.mimeType : "image/png";
+        if (c.data.length > maxB64Chars) {
+            out.push({ data: "", mimeType, tooLarge: true, bytes: Math.round((c.data.length * 3) / 4) });
+        } else {
+            out.push({ data: c.data, mimeType });
+        }
+    }
+    return out;
+}
+
 export function extractResultText(result: unknown): string | undefined {
     if (!result) {
         return undefined;

@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import {
     extractErrorText,
+    extractResultImages,
     extractResultText,
     extractTruncation,
     historyEditInfo,
@@ -113,6 +114,7 @@ export class EditTracker {
                     resultText: extractResultText(evt.result),
                     durationMs: typeof started === "number" ? Date.now() - started : undefined,
                     truncation,
+                    images: extractResultImages(evt.result),
                 });
             }
             return;

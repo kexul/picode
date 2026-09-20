@@ -4,6 +4,7 @@ import {
     cleanToolOutput,
     countImages,
     extractErrorText,
+    extractResultImages,
     extractResultText,
     extractTruncation,
     formatPiError,
@@ -105,6 +106,37 @@ describe("extractResultText", () => {
     it("returns undefined when empty", () => {
         assert.equal(extractResultText(undefined), undefined);
         assert.equal(extractResultText({ content: [] }), undefined);
+    });
+});
+
+describe("extractResultImages", () => {
+    it("extracts image blocks with data and mimeType", () => {
+        assert.deepEqual(
+            extractResultImages({ content: [{ type: "text", text: "x" }, { type: "image", data: "QUJD", mimeType: "image/png" }] }),
+            [{ data: "QUJD", mimeType: "image/png" }]
+        );
+    });
+
+    it("defaults mimeType to image/png and skips broken blocks", () => {
+        assert.deepEqual(
+            extractResultImages([{ type: "image", data: "ZA==" }, { type: "image", data: "" }, null]),
+            [{ data: "ZA==", mimeType: "image/png" }]
+        );
+    });
+
+    it("returns tooLarge placeholder (no payload) over the limit", () => {
+        const big = "A".repeat(8 * 1024 * 1024 + 4);
+        const out = extractResultImages({ content: [{ type: "image", data: big, mimeType: "image/jpeg" }] });
+        assert.equal(out.length, 1);
+        assert.equal(out[0].tooLarge, true);
+        assert.equal(out[0].data, "");
+        assert.equal(typeof out[0].bytes, "number");
+    });
+
+    it("returns [] for non-image results", () => {
+        assert.deepEqual(extractResultImages({ content: [{ type: "text", text: "ok" }] }), []);
+        assert.deepEqual(extractResultImages("plain"), []);
+        assert.deepEqual(extractResultImages(undefined), []);
     });
 });
 

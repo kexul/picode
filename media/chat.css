@@ -787,3 +787,12 @@
   body.no-relay-target .msg-relay { display: none !important; }
   .msg.assistant:hover .msg-relay, .msg-relay:focus-visible { opacity: 1; }
   .msg-relay:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.18)); color: var(--vscode-foreground); }
+
+  /* 工具结果内联图片（read 读图等）：缩略图 + 点击放大 */
+  .tc-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }
+  .tc-img { max-width: 100%; max-height: 320px; border-radius: 6px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); background: rgba(128,128,128,0.08); cursor: zoom-in; }
+  .tc-img-too-large { font-size: 12px; opacity: 0.75; padding: 4px 0; }
+  .lightbox { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.72); }
+  .lightbox.hidden { display: none; }
+  .lightbox img { max-width: 96vw; max-height: 96vh; border-radius: 8px; box-shadow: 0 8px 40px rgba(0,0,0,0.5); cursor: zoom-out; }
+  .tc-dims { margin-left: 6px; opacity: 0.75; font-weight: normal; }
