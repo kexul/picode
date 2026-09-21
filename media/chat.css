@@ -105,17 +105,19 @@
   /* 完整模式：工具卡片（圆角 + 轻阴影，状态用边框色：运行蓝 / 失败红） */
   .tool-card { position: relative; margin: 6px 14px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 4px 12px rgba(0,0,0,0.06); background: var(--vscode-editorWidget-background, #f3f3f3); overflow: hidden; }
   .tool-card.error { border-color: var(--vscode-errorForeground, #f14c4c); }
-  .tool-card .tc-call { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 6px; padding: 6px 10px 2px; user-select: none; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; line-height: 1.45; background: color-mix(in srgb, var(--vscode-foreground, #d4d4d4) 4%, transparent); }
+  /* 标题栏上下 padding 对称，确保右侧“打开文件/跳转/回滚”按钮在栏内垂直居中 */
+  .tool-card .tc-call { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 6px; padding: 4px 10px; user-select: none; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; line-height: 1.45; background: color-mix(in srgb, var(--vscode-foreground, #d4d4d4) 4%, transparent); }
   .tool-card .tc-call-name { font-weight: bold; }
   .tool-card .tc-call-param { color: var(--vscode-textLink-foreground, #3794ff); } /* TUI accent：pattern */
   .tool-card .tc-call-arg { color: var(--vscode-descriptionForeground, #808080); } /* TUI toolOutput */
   .tool-card .tc-call-warn { color: var(--vscode-editorWarning-foreground, #cca700); } /* TUI warning：行范围 */
   .tool-card .tc-jump { margin-left: auto; align-self: center; flex: none; cursor: pointer; user-select: none; padding: 1px 8px; border: 1px solid color-mix(in srgb, var(--vscode-textLink-foreground, #3794ff) 45%, transparent); border-radius: 4px; color: var(--vscode-textLink-foreground, #3794ff); background: color-mix(in srgb, var(--vscode-textLink-foreground, #3794ff) 8%, transparent); font-size: 0.8em; line-height: 1.5; }
   .tool-card .tc-jump:hover { background: color-mix(in srgb, var(--vscode-textLink-foreground, #3794ff) 18%, transparent); text-decoration: none; }
-  .tool-card .tc-args { margin: 4px 10px 0; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; color: var(--vscode-descriptionForeground, #808080); }
+  .tool-card .tc-args { margin: 2px 10px 0; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; color: var(--vscode-descriptionForeground, #808080); }
   .tool-card .tc-output { margin: 4px 10px 8px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.95em; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 480px; overflow: auto; color: var(--vscode-descriptionForeground, #808080); }
-  .tool-card .tc-trunc-hint { margin-top: 4px; font-size: 0.8em; opacity: 0.75; cursor: pointer; color: var(--vscode-descriptionForeground); }
-  .tool-card .tc-trunc-hint:hover { opacity: 1; text-decoration: underline; }
+  .tool-card .tc-call + .tc-output { margin-top: 2px; }
+  /* 截断提示仅作说明，不可点击（完整内容通过标题栏跳转按钮查看） */
+  .tool-card .tc-trunc-hint { margin-top: 4px; font-size: 0.8em; opacity: 0.75; cursor: default; color: var(--vscode-descriptionForeground); }
   .tool-card .tc-warn { margin-top: 4px; font-size: 0.8em; color: var(--vscode-editorWarning-foreground, #cca700); white-space: pre-wrap; }
   .tool-card .tc-footer { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 4px; }
   .tool-card .tc-footer-left, .tool-card .tc-footer-right { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
@@ -331,7 +333,8 @@
   }
   .edit-card.error { border-color: var(--vscode-errorForeground, #f14c4c); }
   .edit-title {
-    display: flex; align-items: center; gap: 6px; padding: 6px 10px 2px; line-height: 1.45;
+    /* 上下 padding 对称：让 et-jump / et-revert 按钮在标题栏内垂直居中 */
+    display: flex; align-items: center; gap: 6px; padding: 4px 10px; line-height: 1.45;
     font-family: var(--vscode-editor-font-family, monospace);
     background: color-mix(in srgb, var(--vscode-foreground, #d4d4d4) 4%, transparent);
   }
@@ -351,13 +354,12 @@
   .edit-title .et-jump:hover { background: var(--vscode-button-hoverBackground, rgba(128,128,128,0.4)); }
   /* write 卡片右上角跳转按钮（替代回滚，样式与回滚一致） */
   /* write 卡片内容预览（复用 tool-card 的 tc-args 样式，扩展选择器到 edit-card） */
-  .edit-card .tc-args { margin: 4px 10px 6px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; color: var(--vscode-descriptionForeground, #808080); }
-  .edit-card .tc-trunc-hint { margin-top: 4px; font-size: 0.8em; opacity: 0.75; cursor: pointer; color: var(--vscode-descriptionForeground); }
-  .edit-card .tc-trunc-hint:hover { opacity: 1; text-decoration: underline; }
+  .edit-card .tc-args { margin: 2px 10px 6px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; color: var(--vscode-descriptionForeground, #808080); }
+  .edit-card .tc-trunc-hint { margin-top: 4px; font-size: 0.8em; opacity: 0.75; cursor: default; color: var(--vscode-descriptionForeground); }
   .edit-card.reverted { opacity: 0.6; }
   .edit-card.reverted .et-reverted { flex: 0 0 auto; font-size: 0.85em; opacity: 0.8; font-style: italic; font-family: var(--vscode-font-family); }
   .edit-diff {
-    max-height: 480px; overflow: auto; padding: 4px 0;
+    max-height: 480px; overflow: auto; padding: 2px 0 4px;
     font-family: var(--vscode-editor-font-family, monospace);
   }
   /* 内层收缩包裹：宽度 = max(卡片宽度, 最宽行内容)；所有行作为其子块填充同一宽度，

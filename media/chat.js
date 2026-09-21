@@ -771,7 +771,8 @@
     return call;
   }
 
-  /** write 参数区：内容预览（前 10 行，同 TUI formatWriteCall），超出可点击展开。 */
+  /** write 参数区：内容预览（前 10 行，同 TUI formatWriteCall）。
+   *  截断部分不支持点击展开（卡片内展开体验差且容易误触），改用右上角“跳转”按钮打开完整文件。 */
   function buildWritePreviewEl(argStr) {
     let a = null;
     try { a = argStr ? JSON.parse(argStr) : {}; } catch { a = null; }
@@ -783,22 +784,12 @@
     const preview = lines.slice(0, MAX_LINES).join("\n");
     const wrap = document.createElement("div");
     wrap.className = "tc-args";
-    wrap.textContent = preview;
+    wrap.appendChild(document.createTextNode(preview));
     if (total > MAX_LINES) {
       const hint = document.createElement("div");
       hint.className = "tc-trunc-hint";
-      hint.textContent = "... (" + (total - MAX_LINES) + " 行未显示,共 " + total + " 行 · 点击展开)";
-      hint.addEventListener("click", () => {
-        if (wrap.textContent === preview) {
-          wrap.textContent = content;
-          wrap.style.maxHeight = "none";
-          hint.textContent = "收起";
-        } else {
-          wrap.textContent = preview;
-          wrap.style.maxHeight = "";
-          hint.textContent = "... (" + (total - MAX_LINES) + " 行未显示,共 " + total + " 行 · 点击展开)";
-        }
-      });
+      hint.textContent = "... (" + (total - MAX_LINES) + " 行未显示,共 " + total + " 行)";
+      hint.title = "点击右上角“跳转”按钮查看完整文件";
       wrap.appendChild(hint);
     }
     return wrap;
