@@ -6,6 +6,8 @@
   const notifyHostFocus = () => vscode.postMessage({ type: "hostFocus" });
   window.addEventListener("focus", notifyHostFocus);
   document.addEventListener("pointerdown", notifyHostFocus, { capture: true });
+  // 第一次用户交互时把音频上下文提前建好并恢复，避免后面“跑完了却不响”。
+  document.addEventListener("pointerdown", function warmOnce() { warmUpAudio(); }, { capture: true, once: true });
   const messagesEl = document.getElementById("messages"); // 容器，内含各 .tab-pane
   const jumpBottomBtn = document.getElementById("jumpBottom");
   const inputEl = document.getElementById("input");
@@ -224,29 +226,55 @@
     if (typeof opts.sendKey === "string") { sendKeyCombo = opts.sendKey; }
     if (typeof opts.newSessionKey === "string") { newSessionKey = opts.newSessionKey; }
     if (typeof opts.tabSwitchKey === "string") { tabSwitchKey = opts.tabSwitchKey; }
-    notifyOnTurnEnd = opts.notifyOnTurnEnd !== false;
+    notifyOnTurnEnd = opts.notifyOnTurnEnd !== false && opts.notifyBeep !== false;
     if (opts.toolDisplay === "full" || opts.toolDisplay === "medium" || opts.toolDisplay === "compact") { toolDisplayMode = opts.toolDisplay; }
   }
 
   // ── 会话结束提示音（Web Audio 合成，无外部资源） ──
+  // 由扩展宿主发 "beep" 消息触发，不再只看焦点 session（多 tab / 分屏时谁跑完都响）。
+  // 网页被隐藏时（窗口切到后台、侧边栏被切走、面板在后台标签里）不出声：
+  // 那时 Chrome 会把音频上下文挂起，响了也听不见，交给 Windows 系统通知去提醒。
   var audioCtx = null;
+  var lastBeepAt = 0;
+  var BEEP_THROTTLE_MS = 600; // 多个 session 同时收尾时，只响一声
   function playTurnEndBeep() {
     try {
+      if (document.hidden) { return; }
+      var now = Date.now();
+      if (now - lastBeepAt < BEEP_THROTTLE_MS) { return; }
+      lastBeepAt = now;
       if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
-      if (audioCtx.state === "suspended") { audioCtx.resume(); }
-      var ctx = audioCtx;
-      var osc = ctx.createOscillator();
-      var gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.type = "sine";
-      osc.frequency.value = 880;
-      var t0 = ctx.currentTime;
-      gain.gain.setValueAtTime(0.0001, t0);
-      gain.gain.exponentialRampToValueAtTime(0.15, t0 + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.25);
-      osc.start(t0);
-      osc.stop(t0 + 0.26);
+      if (audioCtx.state === "suspended") {
+        // resume() 是异步的：第一次可能被吞掉（这正是切回来后“没声音”的常见原因），
+        // 所以恢复后重试一次；重试仍被挂起才放弃。
+        audioCtx.resume().then(function () {
+          if (audioCtx && audioCtx.state === "running" && !document.hidden) { playBeepTone(audioCtx); }
+        }).catch(function () { /* 音频不可用就忽略 */ });
+        return;
+      }
+      playBeepTone(audioCtx);
     } catch (e) { /* 忽略音频不可用 */ }
+  }
+  /** 880Hz 正弦短音，约 0.25 秒渐弱。 */
+  function playBeepTone(ctx) {
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.type = "sine";
+    osc.frequency.value = 880;
+    var t0 = ctx.currentTime;
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(0.15, t0 + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.25);
+    osc.start(t0);
+    osc.stop(t0 + 0.26);
+  }
+  /** 预先建好音频上下文（网页刚加载、还“可见且可交互”时），降低被挂起的概率。 */
+  function warmUpAudio() {
+    try {
+      if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+      if (audioCtx.state === "suspended") { audioCtx.resume().catch(function () { /* ignore */ }); }
+    } catch (e) { /* ignore */ }
   }
   function isSendKey(e) {
     if (e.key !== "Enter") { return false; }
@@ -3363,6 +3391,8 @@
     if (type === "openSettings") { openSettings(msg.tab); return; }
     if (type === "viewOptionItems") { viewOptionItems = Array.isArray(msg.items) ? msg.items : []; if (settingsActiveTab === "options") { renderViewOpts(); } return; }
     if (type === "focusInput") { setTimeout(function () { inputEl.focus(); }, 0); return; }
+    // 扩展宿主在某个 session 收尾时下发的提示音请求（所有 session 都会收到，不再只看焦点）。
+    if (type === "beep") { if (notifyOnTurnEnd) { playTurnEndBeep(); } return; }
     if (type === "app:settings" || type === "app:settingsResult" || type === "app:defaultModels") {
       if (settingsDispatch) {
         if (type === "app:settings") { settingsDispatch({ type: "load", content: msg.content, existed: msg.existed, path: msg.path }); }
@@ -3464,8 +3494,8 @@
         t.activity = msg.activity || "idle";
         t.activityDetail = msg.detail || "";
         setStreaming(t, false);
-        // tab 级广播：只对焦点 panel 提示音，避免多 pane 齐响
-        if (notifyOnTurnEnd && activeId === t.id) { playTurnEndBeep(); }
+        // 提示音改由扩展宿主在“一轮真正结束”时下发 beep 消息（见 notifyOnTurnEnd），
+        // 这里不再对焦点 session 单独出声：多 tab / 分屏时后台 session 跑完也能听见。
         break;
       case "activityChanged":
         setActivity(t, msg.activity, msg.detail);

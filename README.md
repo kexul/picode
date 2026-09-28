@@ -20,6 +20,9 @@ src/                          插件 TypeScript 源码（tsc 编译到 out/）
   editTracker.ts               工具卡片 + edit 快照/回滚/knownFiles
   sessionRuntime.ts            单个对话 tab 的运行时（独立 pi 进程 + 会话编排）
   chatControllerBase.ts        会话编排基类（标签管理含 tabList 节流、拾取器、模型选择）
+  turnNotifier.ts              会话跑完的提醒：发 Windows 系统通知 + 界面内提示
+  toastScript.ts               生成“弹 Windows 通知”的 PowerShell 脚本（不依赖 vscode，可单测）
+  toastAppId.ts                插件激活时写当前用户注册表，让通知来源显示为“Pi Chat”
   sessionStore.ts              pi 会话文件的扫描 / 读取 / 元数据
   canvasData.ts                历史会话：家族消息图合并（共享前缀 / 分叉）
   historyCanvasPanel.ts        编辑器区历史会话（邮件列表 + 阅读预览）WebviewPanel
@@ -66,8 +69,29 @@ VSCode 里 F5 直接调试（`.vscode/launch.json` 已配置 extensionHost）。
 | 配置 | 存储 |
 |------|------|
 | piPath / provider / model / extraArgs / trustProject | `piChat.*` 设置 |
-| 显示选项（发送键/新建会话键/tab 切换键/聚焦输入框快捷键/工具显示模式/自动加载上次会话） | `globalState` |
+| 显示选项（发送键/新建会话键/tab 切换键/聚焦输入框快捷键/工具显示模式/自动加载上次会话/会话结束提示音） | `globalState` |
 | pi 的 models.json | `~/.pi/agent/models.json`（应用内设置面板编辑） |
+| 通知的“应用标识”（想换成别的来源名/图标时用） | 环境变量 `PICHAT_TOAST_APPID`；PowerShell 路径可用 `PICHAT_POWERSHELL` 指定 |
+
+## 会话跑完的提醒
+
+任何 session（侧边栏的、编辑器区各工作区的，包括没在前台的 tab）跑完一轮，都会：
+
+1. 弹一条 Windows 系统通知（屏幕右下角卡片）。卡片第一行是会话名，
+   第二行是改动文件数 / 累计花费；本轮出错时改写“本轮出错结束”。
+   卡片在右下角停约 7 秒（系统默认）后收进通知中心，60 秒后连通知中心里的记录一起消失，
+   不用你自己去清（失效秒数在 `toastScript.ts` 的 `TOAST_EXPIRE_SECONDS` 里改）。
+   通知走 PowerShell 调 Windows 自带的通知接口，插件不加任何第三方依赖。
+   每发一批通知，那个 PowerShell 进程会多活约 70 秒才退（失效时间是系统在它身上执行的，
+   它退早了通知就一直留在通知中心里）；不发通知时没有常驻进程。
+2. 在 VS Code 界面里出一条提示；窗口不在前台时它还会让 Windows 闪烁任务栏图标。
+3. 界面可见时响一声提示音（880Hz 短音）；多个会话几乎同时跑完只响一声。
+   提示音可在“显示选项 → 会话结束提示音”里关掉，系统通知不受这个开关影响。
+
+提示音放在网页视图里发是为了不加依赖；网页视图被隐藏或窗口切到后台时它发不出声，
+这种场景由上面的系统通知与任务栏闪烁补上。
+
+注：中止（Esc）的一轮不算“任务完成”，不发通知。
 
 ## 改前端注意事项
 

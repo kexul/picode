@@ -1,8 +1,15 @@
 import * as vscode from "vscode";
 import { ChatViewProvider, DiffContentProvider } from "./chatViewProvider";
+import { ensureToastAppId, vsCodeIconPath } from "./toastAppId";
 
 export function activate(context: vscode.ExtensionContext): void {
-    const provider = new ChatViewProvider(context);
+    // 先在注册表里登记本插件的通知标识（写一次），让 Windows 通知的来源显示成“Pi Chat”。
+    let toastAppId: string | undefined;
+    try {
+        toastAppId = ensureToastAppId("Pi Chat", vsCodeIconPath());
+    } catch { /* 写不进去就用系统自带标识，不影响通知发得出去 */ }
+
+    const provider = new ChatViewProvider(context, toastAppId);
 
     context.subscriptions.push(
         vscode.workspace.registerTextDocumentContentProvider(

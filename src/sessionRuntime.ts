@@ -31,6 +31,7 @@ import type {
     ModelInfo,
     RuntimeActivity,
     RuntimeHost,
+    TurnEndStatus,
 } from "./runtimeTypes";
 
 // 对外仍从 sessionRuntime 导出类型，保持既有 import 路径稳定。
@@ -42,6 +43,8 @@ export type {
     RuntimeActivity,
     RuntimeHost,
     StatusInfo,
+    TurnEndInfo,
+    TurnEndStatus,
 } from "./runtimeTypes";
 
 // ============================================================================
@@ -154,6 +157,8 @@ export class SessionRuntime {
     private statusPercent?: number;
     private statusTokens?: number;
     private statusContextWindow?: number;
+    /** 本会话累计花费（美元），来自 get_session_stats；收尾提示里展示。 */
+    private statusCost?: number;
     /** 模型列表缓存：pi 启动时读一次 models.json，进程存活期间不变；
      *  点击状态栏弹选择器直接读缓存，避免每次都等 RPC 往返（多 panel 时尤其卡）。 */
     private cachedModels?: ModelInfo[];
@@ -166,6 +171,10 @@ export class SessionRuntime {
     private forkEntries: { entryId: string; text: string }[] = [];
     /** 本轮已展示过的错误文本；防止重试期间同一错误刷屏。agent_start 时重置。 */
     private lastShownRunError = "";
+    /** 本轮是否真的跑起来过：防止没发消息就收到 agent_settled 时误报“完成”。 */
+    private runStarted = false;
+    /** 用户是否主动中止了本轮：中止不算“任务完成”，不发系统通知。agent_start 时重置。 */
+    private abortRequested = false;
 
     constructor(id: string, name: NameParts, private host: RuntimeHost) {
         this.id = id;
@@ -357,6 +366,7 @@ export class SessionRuntime {
     /** 中止该 tab 正在进行的生成 + bash 工具。 */
     public abortActiveRun(): void {
         if (this.client && this.client.isRunning() && this.streaming) {
+            this.abortRequested = true;
             this.client.send({ type: "abort_bash" });
             this.client.send({ type: "abort" });
         }
@@ -553,6 +563,8 @@ export class SessionRuntime {
             }
             case "agent_start":
                 this.streaming = true;
+                this.runStarted = true;
+                this.abortRequested = false;
                 this.lastShownRunError = "";
                 // agent_start 只说明 agent 开始工作，不代表已经进入 thinking block。
                 this.post({ type: "streamStart", activity: "working", detail: "" });
@@ -669,7 +681,28 @@ export class SessionRuntime {
                 this.streaming = false;
                 this.post({ type: "streamEnd", activity: "idle" });
                 this.setActivity("idle");
-                this.refreshStats();
+                // 收尾提示：这一轮真正开始过才报；中止过的一轮只算取消，不打扰用户。
+                if (this.runStarted) {
+                    const status: TurnEndStatus = this.abortRequested
+                        ? "cancelled"
+                        : this.lastShownRunError ? "error" : "done";
+                    // 等一次统计刷新，好把本轮花费一并写进提示；刷新失败也不影响提示。
+                    void this.refreshStats().then(() => {
+                        this.host.onTurnEnd({
+                            panelId: this.id,
+                            panelName: this.title,
+                            // tab 名由宿主自己算（它才知道全局唯一名），这里先空着。
+                            tabName: "",
+                            workspaceId: this.host.workspaceId,
+                            status,
+                            errorText: status === "error" ? this.lastShownRunError : undefined,
+                            costUsd: this.statusCost,
+                            changedFileCount: this.edits.getKnownFiles().length,
+                        });
+                    });
+                }
+                this.runStarted = false;
+                this.abortRequested = false;
                 break;
         }
     }
@@ -1344,6 +1377,7 @@ export class SessionRuntime {
             this.statusTokens = typeof cu.tokens === "number" ? cu.tokens : undefined;
             this.statusContextWindow = typeof cu.contextWindow === "number" ? cu.contextWindow : undefined;
         }
+        this.statusCost = typeof d.cost === "number" ? d.cost : undefined;
         this.post({
             type: "stats",
             tokens: d.tokens || null,

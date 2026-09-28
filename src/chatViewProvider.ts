@@ -12,6 +12,8 @@ import { ChatControllerBase, type ChatReferenceItem, type TabContainer } from ".
 import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { HistoryCanvasPanel } from "./historyCanvasPanel";
 import { EditorChatPanel, type EditorChatPanelOwner } from "./editorChatPanel";
+import { TurnNotifier } from "./turnNotifier";
+import type { TurnEndInfo } from "./runtimeTypes";
 
 /**
  * VSCode 插件的聊天视图提供者。
@@ -40,6 +42,7 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     private static readonly DEFAULT_RELAY_PREFIX = "以下是 {panel_name} 的结论，请检查该结论是否正确。\n\n";
     private static readonly KEY_TOOL_DISPLAY = "piChat.toolDisplay";
     private static readonly KEY_FONT_SIZE = "piChat.fontSize";
+    private static readonly KEY_NOTIFY_BEEP = "piChat.notifyBeep";
     private static readonly SEND_KEYS = ["enter", "shift+enter", "alt+enter", "ctrl+enter"] as const;
     private static readonly NEW_SESSION_KEYS = ["ctrl+alt+n", "ctrl+shift+n", "ctrl+t", "alt+n"] as const;
     private static readonly TAB_SWITCH_KEYS = ["ctrl+alt+arrows", "ctrl+alt+pgupdown", "alt+brackets", "ctrl+alt+brackets"] as const;
@@ -59,7 +62,11 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     private readonly usedChatNames = new Set<string>();
     private editorWorkspaceSeq = 0;
 
-    constructor(private readonly context: vscode.ExtensionContext) {
+    /** @param toastAppId 插件启动时登记好的 Windows 通知应用标识；缺省用系统自带的回落标识。 */
+    constructor(
+        private readonly context: vscode.ExtensionContext,
+        private readonly toastAppId?: string,
+    ) {
         super("sidebar");
         this.historyCanvas = new HistoryCanvasPanel(context, {
             getCwd: () => this.getCwd(),
@@ -72,6 +79,30 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
             this.editorChats.clear();
         }});
         this.syncFocusInputKeyContext();
+        // Windows 系统通知：窗口切到后台或侧边栏被切走时，立刻把攒着的一批发出去，
+        // 免得用户回到桌面前还多等一会儿。（窗口在前台时走正常合并窗口）
+        context.subscriptions.push(
+            vscode.window.onDidChangeWindowState((e) => { if (!e.focused) { this.turnNotifier?.hide(); } }),
+        );
+    }
+
+    // ---- 会话收尾的系统通知（Windows toast）----
+    /** 通知中心：侧边栏与所有编辑器工作区共用一个（插件激活时建好）。 */
+    private turnNotifierInstance?: TurnNotifier;
+    private get turnNotifier(): TurnNotifier {
+        if (!this.turnNotifierInstance) {
+            this.turnNotifierInstance = new TurnNotifier({ appUserModelId: this.toastAppId });
+        }
+        return this.turnNotifierInstance;
+    }
+
+    protected override notifyTurnEnd(info: TurnEndInfo): void {
+        this.turnNotifier.handleTurnEnd(info);
+    }
+
+    /** EditorChatPanelOwner：编辑器工作区的收尾通知也走同一个通知中心。 */
+    public notifyTurnEndFor(info: TurnEndInfo): void {
+        this.turnNotifier.handleTurnEnd(info);
     }
 
     resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -106,6 +137,10 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
             );
         }
 
+        webviewView.onDidChangeVisibility(() => {
+            if (!webviewView.visible) { this.turnNotifier?.hide(); }
+        });
+
         webviewView.onDidDispose(() => {
             for (const rt of this.panels.values()) {
                 rt.stopClient();
@@ -117,6 +152,8 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
             this.activeTabId = undefined;
             this.webviewReady = false;
             this.disposeSpare();
+            this.turnNotifierInstance?.dispose();
+            this.turnNotifierInstance = undefined;
             for (const s of this.workspaceSubs) { s.dispose(); }
             this.workspaceSubs = [];
         });
@@ -329,6 +366,11 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         const v = this.context.globalState.get<string>(ChatViewProvider.KEY_FONT_SIZE, "14");
         return /^\d+$/.test(v) ? v : "14";
     }
+    /** 会话结束提示音（所有 session 都响）；与 Windows 系统通知互不影响。 */
+    public getNotifyBeep(): boolean {
+        return this.context.globalState.get<boolean>(ChatViewProvider.KEY_NOTIFY_BEEP, true);
+    }
+    protected notifyBeepEnabled(): boolean { return this.getNotifyBeep(); }
 
     public mutateViewOption(action: string, value?: string): void {
         if (action === "sendKey") {
@@ -369,6 +411,8 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         } else if (action === "fontSize") {
             const next = typeof value === "string" && /^\d+$/.test(value) ? value : "";
             this.context.globalState.update(ChatViewProvider.KEY_FONT_SIZE, next);
+        } else if (action === "notifyBeep") {
+            this.context.globalState.update(ChatViewProvider.KEY_NOTIFY_BEEP, !this.getNotifyBeep());
         } else {
             this.context.globalState.update(ChatViewProvider.KEY_AUTO_LOAD_LAST, !this.getAutoLoadLast());
         }

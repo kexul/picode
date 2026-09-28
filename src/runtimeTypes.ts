@@ -55,11 +55,41 @@ export interface StatusInfo {
 
 export type RuntimeActivity = "idle" | "working" | "thinking" | "tool";
 
+/** 一轮对话收尾时的结果状态。 */
+export type TurnEndStatus =
+    /** 正常跑完 */
+    | "done"
+    /** 本轮报过错（模型调用失败 / 重试耗尽等） */
+    | "error"
+    /** 用户主动中止 */
+    | "cancelled";
+
+/** 一轮对话收尾信息，交给宿主决定怎么提示（系统通知 / 提示音）。 */
+export interface TurnEndInfo {
+    /** 收尾的 panel（会话）id */
+    panelId: string;
+    /** panel 显示名，如“沉静的雪豹” */
+    panelName: string;
+    /** panel 所属 tab（容器）的显示名 */
+    tabName: string;
+    /** 工作区位置："sidebar" = 侧边栏，其余为编辑器工作区 id */
+    workspaceId: string;
+    status: TurnEndStatus;
+    /** 本轮报错文本（status 为 error 时有值） */
+    errorText?: string;
+    /** 本次会话累计花费（美元），未知时为 undefined */
+    costUsd?: number;
+    /** 本次会话中被工具改过的文件数 */
+    changedFileCount?: number;
+}
+
 /**
  * 平台适配层：把 VSCode 的 UI / 存储 / 文件差异隔离在插件实现里。
  * SessionRuntime 只依赖本接口 + PiClient + Node 内置 fs。
  */
 export interface RuntimeHost {
+    /** 工作区标识：侧边栏固定为 "sidebar"，编辑器工作区为各自面板 id。 */
+    readonly workspaceId: string;
     getConfig(): PiConfig;
     getCwd(): string;
     relativeTo(cwd: string, full: string): string;
@@ -81,6 +111,10 @@ export interface RuntimeHost {
     onStatusUpdate?(tabId: string, info: StatusInfo): void;
     /** 当某 tab 的工具触及文件集合（knownFiles）变化时通知宿主。可选。 */
     onKnownFilesChanged?(tabId: string): void;
+
+    /** 某 panel 的一轮对话真正结束（pi 发出 agent_settled）时调用：
+     *  宿主据此发系统通知（Windows toast）并决定是否让界面响提示音。 */
+    onTurnEnd(info: TurnEndInfo): void;
 
     // ---- UI 弹窗（对应当 pi 的 extension_ui_request）----
     confirmDialog(title: string, message: string): Promise<boolean>;

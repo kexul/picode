@@ -24,7 +24,7 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import { SessionRuntime, RuntimeHost, FileChange, ModelInfo, ModelChoice, StatusInfo, } from "./sessionRuntime";
+import { SessionRuntime, RuntimeHost, FileChange, ModelInfo, ModelChoice, StatusInfo, TurnEndInfo, } from "./sessionRuntime";
 import { PiConfig } from "./sessionRuntime";
 import { PiClient } from "./piClient";
 import {
@@ -253,6 +253,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract getFontSize(): string;
     /** 变更显示选项的存储（仅改存储，UI 推送由基类统一完成）。value 为按钮组点选的明确值。 */
     protected abstract mutateViewOption(action: string, value?: string): void;
+    /** 会话结束提示音是否开启（系统通知不受它影响，由平台层固定发）。 */
+    protected abstract notifyBeepEnabled(): boolean;
+    /** 把一轮对话收尾事件交给平台层（Windows toast 等）。 */
+    protected abstract notifyTurnEnd(info: TurnEndInfo): void;
 
     // ---- 文件列表 / 文件打开（来自 webview 的 listFiles / openFile）----
     protected abstract sendFileList(): void;
@@ -351,6 +355,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             focusInputKey: this.getFocusInputKey(),
             toolDisplay: this.getToolDisplay(),
             fontSize: this.getFontSize(),
+            notifyBeep: this.notifyBeepEnabled(),
         });
     }
 
@@ -423,6 +428,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 kind: "slider",
                 value: this.getFontSize(),
                 min: 11, max: 22, step: 1, unit: "px",
+            },
+            {
+                action: "notifyBeep",
+                label: "会话结束提示音",
+                desc: "任何 session 跑完都响一声（不再只对焦点 session）；界面被隐藏时不出声，改由 Windows 通知提醒。系统通知不受本开关影响，始终发送",
+                check: this.notifyBeepEnabled(),
             },
         ];
     }
@@ -1115,6 +1126,28 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** RuntimeHost.onKnownFilesChanged：某 panel 的工具触及文件集合变化，转发给宿主。 */
     public onKnownFilesChanged(_panelId: string): void {
         this.onKnownFilesChangedByHost();
+    }
+
+    /**
+     * RuntimeHost.onTurnEnd：一个会话跑完了一轮。
+     *
+     * 基类只做“与平台无关”的两件事：
+     *   1. 补齐 tab 显示名后交给平台层（子类）发系统通知；
+     *   2. 提示音不再只看焦点 panel —— 当前 tab 里所有 session 跑完都响一声。
+     *      隐藏 tab / 隐藏工作区的 session 界面看不见，就不响。
+     */
+    public onTurnEnd(info: TurnEndInfo): void {
+        const c = this.containerOfPanel(info.panelId);
+        const full: TurnEndInfo = {
+            ...info,
+            tabName: c ? this.containerDisplayName(c) : info.tabName,
+            workspaceId: this.workspaceId,
+        };
+        this.notifyTurnEnd(full);
+        if (!this.notifyBeepEnabled()) { return; }
+        // 发给当前 tab 里的所有 panel：界面可见就响（网页那边会自己拦下隐藏情况）；
+        // panel 在隐藏的 tab 里时只发给它自己，界面看不见，不会响。
+        for (const id of this.panelIdsOf(info.panelId)) { this.postToTab(id, { type: "beep" }); }
     }
 
     protected onKnownFilesChangedByHost(): void { /* 默认无操作 */ }

@@ -9,7 +9,7 @@ import { strict as assert } from "assert";
 import { describe, it } from "node:test";
 import { SessionRuntime } from "./sessionRuntime";
 import { randomNameParts } from "./names";
-import type { FileChange, PiConfig } from "./runtimeTypes";
+import type { FileChange, PiConfig, TurnEndInfo } from "./runtimeTypes";
 import {
     ChatControllerBase,
     layoutLeaves,
@@ -60,6 +60,8 @@ class TestController extends ChatControllerBase {
     protected getToolDisplay(): string { return "compact"; }
     protected getFontSize(): string { return "14"; }
     protected mutateViewOption(): void { /* noop */ }
+    protected notifyBeepEnabled(): boolean { return false; }
+    protected notifyTurnEnd(_info: TurnEndInfo): void { /* noop */ }
     protected sendFileList(): void { /* noop */ }
     protected openFileFromWebview(): void { /* noop */ }
     protected handlePlatformMessage(): boolean { return false; }

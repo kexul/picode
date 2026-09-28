@@ -4,7 +4,7 @@ import type { NameParts } from "./names";
 import { getChatHtml } from "./chatHtml";
 import { readModelsJson, writeModelsJson } from "./modelsConfig";
 import { probeProviderModels } from "./probeModels";
-import type { FileChange, PiConfig } from "./runtimeTypes";
+import type { FileChange, PiConfig, TurnEndInfo } from "./runtimeTypes";
 
 /**
  * 编辑器区中的一个独立 Pi Chat 工作区。
@@ -146,6 +146,8 @@ export class EditorChatPanel extends ChatControllerBase {
     protected getRelayPrefix(): string { return this.owner.getRelayPrefix(); }
     protected getToolDisplay(): string { return this.owner.getToolDisplay(); }
     protected getFontSize(): string { return this.owner.getFontSize(); }
+    protected notifyBeepEnabled(): boolean { return this.owner.getNotifyBeep(); }
+    protected notifyTurnEnd(info: TurnEndInfo): void { this.owner.notifyTurnEndFor(info); }
     protected mutateViewOption(action: string, value?: string): void {
         this.owner.mutateViewOption(action, value);
     }
@@ -230,6 +232,10 @@ export interface EditorChatPanelOwner {
     getRelayPrefix(): string;
     getToolDisplay(): string;
     getFontSize(): string;
+    /** 会话结束提示音是否开启（与侧边栏共用一份设置）。 */
+    getNotifyBeep(): boolean;
+    /** 把本工作区的会话收尾事件交给全局通知中心（弹 Windows 通知）。 */
+    notifyTurnEndFor(info: TurnEndInfo): void;
     mutateViewOption(action: string, value?: string): void;
     getOpenFiles(): Array<{ label: string; path: string }>;
     openFile(p: string, line?: number, col?: number): Promise<void>;
