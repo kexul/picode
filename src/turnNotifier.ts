@@ -5,6 +5,8 @@ import * as os from "os";
 import * as path from "path";
 import type { TurnEndInfo } from "./runtimeTypes";
 import { POWERSHELL_APP_USER_MODEL_ID, TOAST_EXPIRE_SECONDS, buildToastScript, encodePowerShell } from "./toastScript";
+// 提醒里显示什么字（会话名取哪个 / 标题与摘要怎么拼）在 turnNotifyText.ts，那边不依赖 vscode、可单测。
+import { notifyBody, notifySummary, notifyTitle, type TurnToastItem } from "./turnNotifyText";
 
 /**
  * turnNotifier —— 一轮对话结束时提醒用户。
@@ -13,7 +15,7 @@ import { POWERSHELL_APP_USER_MODEL_ID, TOAST_EXPIRE_SECONDS, buildToastScript, e
  * 网页视图被隐藏或窗口切到后台时，它的音频与定时器会被降速甚至挂起，
  * 结果就是“会话跑完了却一点动静都没有”。扩展宿主进程一直在跑，不受窗口可见性影响。
  *
- * 提醒分两条腿：
+ * 提醒分两条腿（两边的会话名都优先用 pi 自己给的会话标题，没有才用插件分配的随机名）：
  *   1. Windows 系统通知（屏幕右下角卡片，同时进通知中心）—— 走 PowerShell 调系统的
  *      通知接口，插件本身零第三方依赖。窗口在前台也会发（用户要求“只要任务完成就弹”）。
  *   2. VS Code 界面里的一条提示 —— 用 window.withProgress(Location.Window)。
@@ -28,16 +30,6 @@ import { POWERSHELL_APP_USER_MODEL_ID, TOAST_EXPIRE_SECONDS, buildToastScript, e
  *   - 脚本每发完一批通知会写一个 .done 标记文件；扩展看到它就知道“发出去了”，
  *     等不到就认定这台机器发不出来，改在 VS Code 界面里提示，不会静默失败。
  */
-
-/** 一条通知里的文字条目。 */
-export interface TurnToastItem {
-    /** 通知第一行（粗体标题） */
-    title: string;
-    /** 通知第二行（说明） */
-    body: string;
-    /** 通知左下角的来源标签 */
-    attribution: string;
-}
 
 /** 同一段时间内收尾的多个会话合并成一条通知，避免并行会话刷屏。 */
 const BATCH_WINDOW_MS = 800;
@@ -176,8 +168,8 @@ export class TurnNotifier {
         const kept = batch.slice(0, MAX_ITEMS_PER_TOAST);
         const rest = batch.length - kept.length;
         const items: TurnToastItem[] = kept.map((info) => ({
-            title: this.titleOf(info),
-            body: this.bodyOf(info),
+            title: notifyTitle(info),
+            body: notifyBody(info),
             attribution: APP_LABEL,
         }));
         if (rest > 0) {
@@ -188,43 +180,6 @@ export class TurnNotifier {
         spawnToast(items, this.appUserModelId, (reason) => this.showInApp(batch, reason));
         // 窗口不在前台时，界面内提示顺带让 Windows 闪烁任务栏图标。
         if (!vscode.window.state.focused) { this.showInApp(batch, undefined); }
-    }
-
-    /** 通知第一行：会话名 + 跑完了没有。 */
-    private titleOf(info: TurnEndInfo): string {
-        const name = info.panelName || info.tabName || "会话";
-        switch (info.status) {
-            case "error": return `${name}：本轮出错结束`;
-            case "cancelled": return `${name}：已中止`;
-            default: return `${name}：任务完成`;
-        }
-    }
-
-    /** 通知第二行：本轮概况（改了哪个文件 / 累计花费 / 错误摘要）。 */
-    private bodyOf(info: TurnEndInfo): string {
-        const parts: string[] = [];
-        if (info.status === "cancelled") { parts.push("用户中止"); }
-        else if (typeof info.changedFileCount === "number" && info.changedFileCount > 0) {
-            parts.push(`改动 ${info.changedFileCount} 个文件`);
-        }
-        if (typeof info.costUsd === "number" && info.costUsd > 0) {
-            parts.push(`累计 $${info.costUsd < 0.01 ? info.costUsd.toFixed(4) : info.costUsd.toFixed(2)}`);
-        }
-        if (info.status === "error" && info.errorText) { parts.push(shorten(info.errorText, 60)); }
-        return parts.join(" · ");
-    }
-
-    /** 界面内提示的摘要：一行说完这批会话。 */
-    private summarize(batch: TurnEndInfo[]): string {
-        const names = batch.map((info) => info.panelName || info.tabName || "会话");
-        const shown = names.slice(0, 3).join("、");
-        const more = names.length > 3 ? ` 等 ${names.length} 个会话` : "";
-        const result = batch.some((info) => info.status === "error")
-            ? "有会话出错结束"
-            : batch.some((info) => info.status === "cancelled")
-                ? "有会话被中止"
-                : "任务完成";
-        return `${shown}${more} ${result}`;
     }
 
     /**
@@ -242,14 +197,8 @@ export class TurnNotifier {
             );
         }
         void vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Window, title: `Pi Chat：${this.summarize(batch)}` },
+            { location: vscode.ProgressLocation.Window, title: `Pi Chat：${notifySummary(batch)}` },
             async () => { await new Promise<void>((resolve) => setTimeout(resolve, IN_APP_NOTICE_MS)); },
         );
     }
-}
-
-/** 截断长文本（错误消息可能很长）。 */
-function shorten(text: string, max: number): string {
-    const oneLine = String(text).replace(/\s+/g, " ").trim();
-    return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
 }

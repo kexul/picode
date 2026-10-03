@@ -55,6 +55,15 @@ export interface StatusInfo {
 
 export type RuntimeActivity = "idle" | "working" | "thinking" | "tool";
 
+/**
+ * 收尾提醒最多等 pi 的会话标题多久（毫秒）。
+ *
+ * 会话标题由 pi 那边的自动命名扩展在第一轮跑完后生成（额外问一次模型），比提醒本身慢一两秒，
+ * 所以等一下再用；等不到就用会话显示名兜底，提醒一定发得出去。
+ * 可在设置面板的“显示选项”里改成不等（0 秒）或等更久。
+ */
+export const DEFAULT_TURN_TITLE_WAIT_MS = 3000;
+
 /** 一轮对话收尾时的结果状态。 */
 export type TurnEndStatus =
     /** 正常跑完 */
@@ -72,6 +81,9 @@ export interface TurnEndInfo {
     panelName: string;
     /** panel 所属 tab（容器）的显示名 */
     tabName: string;
+    /** pi 自己给的会话标题（自动命名扩展或 /name 命令写的）；还没有时为空串。
+     *  提醒里优先用它，这样用户一眼能认出是哪个任务跑完了。 */
+    sessionTitle?: string;
     /** 工作区位置："sidebar" = 侧边栏，其余为编辑器工作区 id */
     workspaceId: string;
     status: TurnEndStatus;

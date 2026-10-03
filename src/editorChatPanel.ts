@@ -147,6 +147,8 @@ export class EditorChatPanel extends ChatControllerBase {
     protected getToolDisplay(): string { return this.owner.getToolDisplay(); }
     protected getFontSize(): string { return this.owner.getFontSize(); }
     protected notifyBeepEnabled(): boolean { return this.owner.getNotifyBeep(); }
+    /** 收尾提醒等 pi 会话标题的秒数：与侧边栏共用一份设置。 */
+    public override getTurnTitleWaitSeconds(): number { return this.owner.getTurnTitleWaitSeconds(); }
     protected notifyTurnEnd(info: TurnEndInfo): void { this.owner.notifyTurnEndFor(info); }
     protected mutateViewOption(action: string, value?: string): void {
         this.owner.mutateViewOption(action, value);
@@ -234,6 +236,8 @@ export interface EditorChatPanelOwner {
     getFontSize(): string;
     /** 会话结束提示音是否开启（与侧边栏共用一份设置）。 */
     getNotifyBeep(): boolean;
+    /** 收尾提醒最多等 pi 的会话标题几秒（与侧边栏共用一份设置）。 */
+    getTurnTitleWaitSeconds(): number;
     /** 把本工作区的会话收尾事件交给全局通知中心（弹 Windows 通知）。 */
     notifyTurnEndFor(info: TurnEndInfo): void;
     mutateViewOption(action: string, value?: string): void;

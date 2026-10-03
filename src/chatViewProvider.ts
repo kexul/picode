@@ -13,7 +13,7 @@ import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { HistoryCanvasPanel } from "./historyCanvasPanel";
 import { EditorChatPanel, type EditorChatPanelOwner } from "./editorChatPanel";
 import { TurnNotifier } from "./turnNotifier";
-import type { TurnEndInfo } from "./runtimeTypes";
+import { DEFAULT_TURN_TITLE_WAIT_MS, type TurnEndInfo } from "./runtimeTypes";
 
 /**
  * VSCode 插件的聊天视图提供者。
@@ -43,6 +43,9 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     private static readonly KEY_TOOL_DISPLAY = "piChat.toolDisplay";
     private static readonly KEY_FONT_SIZE = "piChat.fontSize";
     private static readonly KEY_NOTIFY_BEEP = "piChat.notifyBeep";
+    private static readonly KEY_TURN_TITLE_WAIT = "piChat.turnTitleWaitSeconds";
+    /** 收尾提醒等 pi 会话标题的可选秒数（显示选项里的按钮组）。 */
+    private static readonly TURN_TITLE_WAIT_CHOICES = [0, 1, 3, 5, 10];
     private static readonly SEND_KEYS = ["enter", "shift+enter", "alt+enter", "ctrl+enter"] as const;
     private static readonly NEW_SESSION_KEYS = ["ctrl+alt+n", "ctrl+shift+n", "ctrl+t", "alt+n"] as const;
     private static readonly TAB_SWITCH_KEYS = ["ctrl+alt+arrows", "ctrl+alt+pgupdown", "alt+brackets", "ctrl+alt+brackets"] as const;
@@ -372,6 +375,19 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     }
     protected notifyBeepEnabled(): boolean { return this.getNotifyBeep(); }
 
+    /**
+     * 收尾提醒最多等 pi 的会话标题几秒；0 = 不等（直接用会话显示名）。
+     * 编辑器工作区与侧边栏共用这一份设置（见 EditorChatPanelOwner）。
+     */
+    public override getTurnTitleWaitSeconds(): number {
+        const stored = this.context.globalState.get<number>(
+            ChatViewProvider.KEY_TURN_TITLE_WAIT,
+            DEFAULT_TURN_TITLE_WAIT_MS / 1000,
+        );
+        const seconds = typeof stored === "number" && Number.isFinite(stored) ? Math.round(stored) : NaN;
+        return seconds >= 0 && seconds <= 60 ? seconds : DEFAULT_TURN_TITLE_WAIT_MS / 1000;
+    }
+
     public mutateViewOption(action: string, value?: string): void {
         if (action === "sendKey") {
             const order = ChatViewProvider.SEND_KEYS;
@@ -413,6 +429,10 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
             this.context.globalState.update(ChatViewProvider.KEY_FONT_SIZE, next);
         } else if (action === "notifyBeep") {
             this.context.globalState.update(ChatViewProvider.KEY_NOTIFY_BEEP, !this.getNotifyBeep());
+        } else if (action === "turnTitleWait") {
+            const n = Number.parseInt(typeof value === "string" ? value : "", 10);
+            const next = ChatViewProvider.TURN_TITLE_WAIT_CHOICES.includes(n) ? n : DEFAULT_TURN_TITLE_WAIT_MS / 1000;
+            this.context.globalState.update(ChatViewProvider.KEY_TURN_TITLE_WAIT, next);
         } else {
             this.context.globalState.update(ChatViewProvider.KEY_AUTO_LOAD_LAST, !this.getAutoLoadLast());
         }

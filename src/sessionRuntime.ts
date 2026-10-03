@@ -130,6 +130,8 @@ export class SessionRuntime {
 
     /** 完整显示名（“沉静的雪豹”）。 */
     public get title(): string { return composeName(this.nameParts); }
+    /** pi 自己给的会话标题（自动命名扩展 / /name 写的）；空串表示还没有。 */
+    public get sessionTitle(): string { return this.piSessionTitle; }
     /** 名词部分：tab 栏多 panel 拼接名只用它。 */
     public get noun(): string { return this.nameParts.noun; }
     /** Agent 是否仍在运行；这是 steer / Esc 等整体生命周期判断使用的状态。 */
@@ -144,6 +146,13 @@ export class SessionRuntime {
     public currentSessionPath: string | undefined;
     /** 当前界面是否已有用户或助手消息；用于历史会话打开时复用空 tab。 */
     private hasConversation = false;
+    /** pi 上报的会话标题；来源是 session_info_changed 事件与 get_state 响应里的 sessionName。 */
+    private piSessionTitle = "";
+    /** 会话被换掉（新建 / 切换 / 分叉 / 克隆）时递增：
+     *  正在等旧标题的人据此知道“这个标题不会来了”，不会把新会话的标题安给旧通知。 */
+    private sessionGeneration = 0;
+    /** 正在等会话标题的唤醒回调。 */
+    private titleWaiters: Array<() => void> = [];
 
     /** 当前 panel 是否尚未承载会话内容，且不在加载过程中。 */
     public isConversationEmpty(): boolean {
@@ -287,8 +296,9 @@ export class SessionRuntime {
 
     /** 把（新建或领取的）pi 客户端挂到本 tab：绑定事件并启动。 */
     private attachClient(client: PiClient): void {
+        // 新进程 = 新会话 = 重新读 models.json / 重新扫描技能：旧标题、旧缓存都作废。
+        this.noteSessionReplaced();
         this.client = client;
-        // 新进程 = 重新读 models.json / 重新扫描技能：旧缓存作废
         this.cachedModels = undefined;
         this.cachedCommands = undefined;
         this.client.on("event", (evt) => this.onPiEvent(evt));
@@ -333,6 +343,77 @@ export class SessionRuntime {
             this.client.stop();
             this.client = undefined;
         }
+        // 进程没了，标题也不会再来：让等着的通知立刻收尾（回落到会话显示名）。
+        this.wakeTitleWaiters();
+    }
+
+    /**
+     * 等 pi 的会话标题。
+     *
+     * 已经有标题就立刻返回；没有就最多等 timeoutMs 毫秒。
+     * 等不到的常见原因：用户没装自动命名扩展、或者它这一轮没生成成功。
+     * 等待期间会话被换掉（新建 / 切换 / 分叉 / 克隆）也立刻返回空串。
+     */
+    public waitForSessionTitle(timeoutMs: number): Promise<string> {
+        // 没标题、不打算等、或 pi 进程已不在（标题不可能再来）：立刻收尾。
+        if (this.piSessionTitle || timeoutMs <= 0 || !this.client || !this.client.isRunning()) {
+            return Promise.resolve(this.piSessionTitle);
+        }
+        const generation = this.sessionGeneration;
+        return new Promise<string>((resolve) => {
+            let done = false;
+            const finish = (): void => {
+                if (done) { return; }
+                done = true;
+                clearTimeout(timer);
+                const at = this.titleWaiters.indexOf(wake);
+                if (at >= 0) { this.titleWaiters.splice(at, 1); }
+                resolve(generation === this.sessionGeneration ? this.piSessionTitle : "");
+            };
+            const wake = (): void => { finish(); };
+            const timer = setTimeout(finish, timeoutMs);
+            this.titleWaiters.push(wake);
+        });
+    }
+
+    /** 记下 pi 上报的会话标题；真的变了才唤醒等待者。 */
+    private setSessionTitle(name: unknown): void {
+        const next = typeof name === "string" ? name.trim() : "";
+        if (next === this.piSessionTitle) { return; }
+        this.piSessionTitle = next;
+        this.wakeTitleWaiters();
+    }
+
+    private wakeTitleWaiters(): void {
+        const waiters = this.titleWaiters;
+        this.titleWaiters = [];
+        for (const wake of waiters) { wake(); }
+    }
+
+    /** 会话被换掉：旧标题作废，正在等的人立刻拿到空结果。 */
+    private noteSessionReplaced(): void {
+        this.sessionGeneration++;
+        this.piSessionTitle = "";
+        this.wakeTitleWaiters();
+    }
+
+    /**
+     * 从 get_state 响应里读会话标题（pi 只在改名时发事件，加载已有会话得靠这里补）。
+     *
+     * 响应里没带 sessionName 就维持原样，不清空：换会话的路径（新建 / 切换 / 分叉 / 克隆 / 新进程）
+     * 已经先调过 noteSessionReplaced 清掉了；反过来清会误伤——get_state 的回包可能比
+     * session_info_changed 事件更早发出，到手时标题已经更新过了。
+     */
+    private captureSessionName(state?: RpcSessionState | null): void {
+        if (state && typeof state.sessionName === "string" && state.sessionName.trim()) {
+            this.setSessionTitle(state.sessionName);
+        }
+    }
+
+    /** 主动问 pi 一次当前会话标题（切换到已有会话后用）。 */
+    private async refreshSessionTitle(): Promise<void> {
+        const resp = await this.request<RpcSessionState>({ type: "get_state" });
+        this.captureSessionName(resp?.data);
     }
 
     public isRunning(): boolean {
@@ -349,6 +430,7 @@ export class SessionRuntime {
     /** 发送当前模型信息给 webview。 */
     public async sendCurrentModel(): Promise<void> {
         const resp = await this.request<RpcSessionState>({ type: "get_state" });
+        this.captureSessionName(resp?.data);
         const model = resp?.data?.model;
         if (model && model.id) {
             this.statusModelId = model.id;
@@ -376,6 +458,7 @@ export class SessionRuntime {
     public resetSession(): void {
         this.abortActiveRun();
         this.edits.reset();
+        this.noteSessionReplaced();
         this.currentSessionPath = undefined;
         this.hasConversation = false;
         this.post({ type: "clear" });
@@ -672,6 +755,10 @@ export class SessionRuntime {
                         + `${evt.event ? ` [${evt.event}]` : ""}: ${evt.error ?? "未知错误"}`,
                 });
                 break;
+            case "session_info_changed":
+                // pi 的会话标题变了（自动命名扩展生成、或用户自己 /name 改的）：收尾提醒要用它。
+                this.setSessionTitle(evt.name);
+                break;
             case "agent_end":
                 // agent_end 只是一次底层 run 结束；后面可能还有重试、压缩或排队续跑。
                 // 不能在这里发送 streamEnd，等 agent_settled 才算真正空闲。
@@ -693,6 +780,8 @@ export class SessionRuntime {
                             panelName: this.title,
                             // tab 名由宿主自己算（它才知道全局唯一名），这里先空着。
                             tabName: "",
+                            // pi 的会话标题；第一轮往往还没生成，宿主会再等一会（见 turnTitleWaitMs）。
+                            sessionTitle: this.piSessionTitle,
                             workspaceId: this.host.workspaceId,
                             status,
                             errorText: status === "error" ? this.lastShownRunError : undefined,
@@ -797,8 +886,11 @@ export class SessionRuntime {
         ]);
         const messages: any[] = msgResp?.data?.messages ?? [];
         this.forkEntries = forkResp?.data?.messages ?? [];
+        this.noteSessionReplaced();
         this.renderMessages(messages);
         this.currentSessionPath = file;
+        // 已有会话的标题不会走 session_info_changed，得主动问一次
+        void this.refreshSessionTitle();
         this.post({ type: "system", text: `已加载会话（${messages.length} 条消息）。` });
         this.loading = false;
         this.host.broadcastTabList();
@@ -882,10 +974,12 @@ export class SessionRuntime {
         ]);
         const messages: any[] = msgResp?.data?.messages ?? [];
         this.forkEntries = forkResp?.data?.messages ?? [];
-        // fork 会切换到新的分支会话文件，需同步路径
+        // fork 会切换到新的分支会话文件：路径与标题都换成新分支的
+        this.noteSessionReplaced();
         if (stateResp?.data?.sessionFile) {
             this.currentSessionPath = stateResp.data.sessionFile;
         }
+        this.captureSessionName(stateResp?.data);
         this.post({ type: "clear" });
         this.renderMessages(messages);
         // clear 会清空输入框，必须在其后把 user 消息救回（对齐 TUI）
@@ -966,9 +1060,12 @@ export class SessionRuntime {
         ]);
         const messages: any[] = msgResp?.data?.messages ?? [];
         this.forkEntries = forkMsgResp?.data?.messages ?? [];
+        // 分叉到的是新会话文件：旧标题作废，标题改从新的 get_state 里读
+        this.noteSessionReplaced();
         if (stateResp?.data?.sessionFile) {
             this.currentSessionPath = stateResp.data.sessionFile;
         }
+        this.captureSessionName(stateResp?.data);
         this.post({ type: "clear" });
         this.renderMessages(messages);
         // clear 会清空输入框，必须在其后把 user 消息救回（对齐 TUI）
@@ -1051,9 +1148,12 @@ export class SessionRuntime {
         ]);
         const messages: any[] = cloneMsgs[0]?.data?.messages ?? [];
         this.forkEntries = cloneMsgs[1]?.data?.messages ?? [];
+        // 克隆出的是新会话文件：旧标题作废，标题改从新的 get_state 里读
+        this.noteSessionReplaced();
         if (cloneMsgs[2]?.data?.sessionFile) {
             this.currentSessionPath = cloneMsgs[2].data.sessionFile;
         }
+        this.captureSessionName(cloneMsgs[2]?.data);
         this.post({ type: "clear" });
         this.renderMessages(messages);
         this.post({ type: "system", text: `已克隆为新会话（${messages.length} 条消息），两侧可并行对话。` });
@@ -1247,7 +1347,8 @@ export class SessionRuntime {
             return this.cachedCommands ?? [];
         }
         const ok = await this.client.waitReady(8000);
-        if (!ok || !this.client.isRunning()) {
+        // 等的这段时间里 panel 可能已经关掉（stopClient 把 client 置空），得再查一次。
+        if (!ok || !this.client || !this.client.isRunning()) {
             return this.cachedCommands ?? [];
         }
         const resp = await this.request<{ commands?: unknown }>({ type: "get_commands" });
