@@ -12,6 +12,7 @@ export type RpcCommand =
     | { type: "follow_up"; message: string; images?: RpcImage[] }
     | { type: "abort" }
     | { type: "abort_bash" }
+    | { type: "clear_queue" }
     | { type: "new_session"; parentSession?: string }
     | { type: "get_state" }
     | { type: "set_model"; provider: string; modelId: string }

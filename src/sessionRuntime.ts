@@ -445,11 +445,15 @@ export class SessionRuntime {
         this.emitStatus();
     }
 
-    /** 中止该 tab 正在进行的生成 + bash 工具。 */
+    /** 中止该 tab 正在进行的生成 + bash 工具。
+     *  与 pi TUI 的 Esc 一致：先 clear_queue 再 abort。否则当前轮结束后 pi 会在轮次边界
+     *  把 steering 队列投递出去再被 abort 停掉，表现为“消息先投递一次才中止”。
+     *  清空后 pi 推送空队列的 queueUpdate，webview 侧把未投递文本写回输入框。 */
     public abortActiveRun(): void {
         if (this.client && this.client.isRunning() && this.streaming) {
             this.abortRequested = true;
             this.client.send({ type: "abort_bash" });
+            this.client.send({ type: "clear_queue" });
             this.client.send({ type: "abort" });
         }
     }
