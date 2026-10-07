@@ -1172,10 +1172,14 @@ export class SessionRuntime {
     }
 
     /**
-     * 活体迁移到新宿主后重放对话：进程仍活着，不重新 switch_session，
-     * 直接向 pi 取当前消息树重绘到新 webview（消息带新 tabId）。
+     * 把已有对话整屏重画一遍：pi 进程仍活着，不重新 switch_session，
+     * 直接向 pi 取当前消息树重绘（消息带新的 panel 编号）。
+     *
+     * 两种情况用它：活体迁移到另一个工作区（会话搬家），以及浏览器页面刷新 / 重连。
+     * @param opts.note 重画后额外给用户的一行提示。缺省为“会话已迁入本工作区（…）”；
+     *                  传空串表示不发提示；文本里的 {count} 会换成消息条数。
      */
-    public async replayHistory(): Promise<void> {
+    public async replayHistory(opts?: { note?: string }): Promise<void> {
         this.post({ type: "clear" });
         this.post({ type: "piReady", ready: this.piReady });
         if (!this.client || !this.client.isRunning()) {
@@ -1201,10 +1205,13 @@ export class SessionRuntime {
         this.edits.republishFileChanges();
         this.emitStatus();
         const count = messages.filter((m) => m && (m.role === "user" || m.role === "assistant")).length;
-        this.post({
-            type: "system",
-            text: `会话已迁入本工作区（${count} 条消息，pi 进程与上下文原样保留）。`,
-        });
+        const note = opts?.note === undefined
+            ? "会话已迁入本工作区（{count} 条消息，pi 进程与上下文原样保留）。"
+            : opts.note;
+        const noteText = note.replace("{count}", String(count));
+        if (noteText) {
+            this.post({ type: "system", text: noteText });
+        }
         if (this.streaming) {
             this.post({
                 type: "system",

@@ -9,6 +9,7 @@ import {
     FileChange,
 } from "./sessionRuntime";
 import { ChatControllerBase, type ChatReferenceItem, type TabContainer } from "./chatControllerBase";
+import type { BrowserChatOwner, ExternalChatWorkspace } from "./browserChatController";
 import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { HistoryCanvasPanel } from "./historyCanvasPanel";
 import { EditorChatPanel, type EditorChatPanelOwner } from "./editorChatPanel";
@@ -22,7 +23,7 @@ import { DEFAULT_TURN_TITLE_WAIT_MS, type TurnEndInfo } from "./runtimeTypes";
  * 文件打开、选中文本发送、符号跳转、models.json 编辑）在此实现；其余会话编排
  * 逻辑（标签管理、拾取器、模型选择、消息分发等）继承自 {@link ChatControllerBase}。
  */
-export class ChatViewProvider extends ChatControllerBase implements vscode.WebviewViewProvider, EditorChatPanelOwner {
+export class ChatViewProvider extends ChatControllerBase implements vscode.WebviewViewProvider, EditorChatPanelOwner, BrowserChatOwner {
     public static readonly viewType = "piChat.chatView";
 
     private view?: vscode.WebviewView;
@@ -64,6 +65,11 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     /** 当前打开的各工作区共用；panel 关闭后会释放对应名字。 */
     private readonly usedChatNames = new Set<string>();
     private editorWorkspaceSeq = 0;
+
+    /** 侧边栏、编辑器区之外的工作区（现在只有“浏览器里对话”那份）。
+     *  登记在这里是为了：tab 名不撞车、# 对话引用能把它们列出来、
+     *  models.json 改了以后一起丢掉预热好的备用进程。 */
+    private readonly externalWorkspaces = new Set<ExternalChatWorkspace>();
 
     /** @param toastAppId 插件启动时登记好的 Windows 通知应用标识；缺省用系统自带的回落标识。 */
     constructor(
@@ -220,7 +226,27 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     }
 
     private allChatControllers(): ChatControllerBase[] {
-        return [this, ...Array.from(this.editorChats).filter((panel) => !panel.isDisposed())];
+        return [
+            this,
+            ...Array.from(this.editorChats).filter((panel) => !panel.isDisposed()),
+            ...Array.from(this.externalWorkspaces).filter((controller) => !controller.isDisposed()),
+        ];
+    }
+
+    /** BrowserChatOwner：浏览器工作区建好时登记。 */
+    public registerExternalWorkspace(controller: ExternalChatWorkspace): void {
+        this.externalWorkspaces.add(controller);
+    }
+
+    /** BrowserChatOwner：浏览器工作区关掉时注销，并重新广播一次 # 对话引用。 */
+    public unregisterExternalWorkspace(controller: ExternalChatWorkspace): void {
+        this.externalWorkspaces.delete(controller);
+        this.broadcastChatReferences();
+    }
+
+    /** BrowserChatOwner：浏览器工作区没有自己的提示条，借 VSCode 弹一条。 */
+    public showInfo(text: string): void {
+        void vscode.window.showInformationMessage(text);
     }
 
     protected override allocatePanelName(): NameParts { return this.allocateChatName(); }
@@ -492,10 +518,11 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
         this.postToWebview({ type: "exportConversationRequest", tabId: rt.id, requestId });
     }
 
-    private async saveExportedConversation(tabId: string, html: string, markdown: string): Promise<void> {
-        if (!html || !this.panels.has(tabId)) { return; }
+    public async saveExportedConversation(tabId: string, html: string, markdown: string, fallbackTitle?: string): Promise<void> {
         const rt = this.panels.get(tabId);
-        const safeTitle = (rt?.title || "pi-会话").replace(/[\\/:*?"<>|]+/g, "-").trim() || "pi-会话";
+        // 不是本工作区的 tab 时（例如来自浏览器那份会话），必须同时带了标题才继续
+        if (!html || (!rt && typeof fallbackTitle !== "string")) { return; }
+        const safeTitle = ((rt?.title || fallbackTitle) || "pi-会话").replace(/[\\/:*?"<>|]+/g, "-").trim() || "pi-会话";
         const uri = await vscode.window.showSaveDialog({
             defaultUri: vscode.Uri.file(path.join(this.getCwd(), `${safeTitle}.html`)),
             filters: { "HTML 文件": ["html"], "Markdown 文件": ["md"], "所有文件": ["*"] },
@@ -820,6 +847,7 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     public modelsChanged(): void {
         this.disposeSpare();
         for (const panel of this.editorChats) { panel.discardSpare(); }
+        for (const controller of this.externalWorkspaces) { controller.discardSpare(); }
     }
 
     /** EditorChatPanel 使用与侧边栏一致的 pi 不存在提示。 */

@@ -1,0 +1,149 @@
+/*
+  browserTheme —— 浏览器页面专用的样式补丁。
+
+  两件事：
+  1. 颜色。VSCode 会往网页视图里注入一整套 --vscode-* 变量（颜色、字体、边框），
+     界面样式全靠它们；浏览器里没有 VSCode，这些变量一个都不存在，界面会变成白底没颜色。
+     这里按 VSCode 浅色主题（Light Modern）的取值把它们补齐，网页端就是白底深字。
+     代码块的高亮颜色（chat.css 里那套 One Dark）也一并换成浅色底看得清的 One Light。
+  2. 输入框起步高度。VSCode 那份固定占 144px（约七行）；网页端只要一行，
+     这里把 --pichat-input-min-height 设小，chat.js 会读这个值当最小高度，
+     打字打多了照样往上涨（最高 640px 不变）。VSCode 里没这个变量，仍然是 144px。
+
+  本文件只在浏览器那份页面里加载（media/chat.js 与 chat.css 不动），
+  而且排在 chat.css 之后加载，所以同优先级的规则以这里为准。
+  界面自己设字号时会在行内改 --vscode-font-size，行内样式优先级更高，覆盖这里的值。
+*/
+
+:root {
+  color-scheme: light;
+
+  /* 输入框起步高度：一行（打字后自动长高，上限仍是 chat.css 里的 640px） */
+  --pichat-input-min-height: 30px;
+
+  /* 字体 */
+  --vscode-font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  --vscode-editor-font-family: Consolas, "Cascadia Code", "JetBrains Mono", Menlo, monospace;
+  --vscode-font-size: 13px;
+
+  /* 基础前景 / 背景 */
+  --vscode-foreground: #1f1f1f;
+  --vscode-editor-foreground: #1f1f1f;
+  --vscode-editor-background: #ffffff;
+  --vscode-descriptionForeground: #5f5f5f;
+  --vscode-errorForeground: #e51400;
+  --vscode-focusBorder: #0090f1;
+
+  /* 边框 / 分隔 */
+  --vscode-panel-border: #e5e5e5;
+  --vscode-widget-border: #d4d4d4;
+  --vscode-menu-border: #d4d4d4;
+
+  /* 按钮 */
+  --vscode-button-background: #007acc;
+  --vscode-button-foreground: #ffffff;
+  --vscode-button-hoverBackground: #026ec1;
+  --vscode-button-border: transparent;
+  --vscode-button-secondaryBackground: #e8e8e8;
+  --vscode-button-secondaryForeground: #1f1f1f;
+  --vscode-button-secondaryHoverBackground: #d6d6d6;
+
+  /* 输入框 / 下拉 / 勾选框 */
+  --vscode-input-background: #ffffff;
+  --vscode-input-foreground: #1f1f1f;
+  --vscode-input-border: #cecece;
+  --vscode-dropdown-background: #ffffff;
+  --vscode-dropdown-border: #cecece;
+  --vscode-checkbox-background: #ffffff;
+  --vscode-checkbox-foreground: #1f1f1f;
+  --vscode-checkbox-border: #cecece;
+
+  /* 列表 / 菜单 / 浮层 */
+  --vscode-list-hoverBackground: #e8e8e8;
+  --vscode-list-activeSelectionBackground: #0060c0;
+  --vscode-list-activeSelectionForeground: #ffffff;
+  --vscode-menu-background: #f8f8f8;
+  --vscode-menu-foreground: #1f1f1f;
+  --vscode-menu-selectionBackground: #0060c0;
+  --vscode-editorWidget-background: #f8f8f8;
+  --vscode-editorInfo-background: #f8f8f8;
+  --vscode-editorWarning-foreground: #bf8803;
+  --vscode-toolbar-hoverBackground: #e8e8e8;
+
+  /* 标记 / 文本片段 / 链接 */
+  --vscode-badge-background: #c4c4c4;
+  --vscode-badge-foreground: #333333;
+  --vscode-textCodeBlock-background: #f4f4f4;
+  --vscode-textLink-foreground: #006ab1;
+  --vscode-textPreformat-foreground: #a31515;
+
+  /* 滚动条 */
+  --vscode-scrollbarSlider-background: rgba(100, 100, 100, 0.4);
+  --vscode-scrollbarSlider-hoverBackground: rgba(75, 75, 75, 0.7);
+
+  /* 改动的增 / 删底色 */
+  --vscode-diffEditor-insertedLineBackground: rgba(155, 185, 85, 0.28);
+  --vscode-diffEditor-removedLineBackground: rgba(255, 0, 0, 0.16);
+
+  /* 图表用色 */
+  --vscode-charts-blue: #2b7cd3;
+  --vscode-charts-green: #4b9c4b;
+  --vscode-charts-purple: #9762b5;
+  --vscode-charts-yellow: #bf8803;
+
+  /* 文件状态颜色（git） */
+  --vscode-gitDecoration-addedResourceForeground: #587c0c;
+  --vscode-gitDecoration-deletedResourceForeground: #ad0707;
+
+  /* 代码高亮：chat.css 里那套是给深色底调的（One Dark），
+     白底上会看不清，这里换成 One Light 的取值。 */
+  --hl-keyword: #a626a4;
+  --hl-func: #4078f2;
+  --hl-num: #986801;
+  --hl-str: #50a14f;
+  --hl-built: #c18401;
+  --hl-comment: #a0a1a7;
+  --hl-tag: #e45649;
+  --hl-section: #4078f2;
+  --hl-bullet: #986801;
+  --hl-base: var(--vscode-editor-foreground, #1f1f1f);
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--vscode-editor-background);
+}
+
+/*
+  底部按钮条：VSCode 里那些按钮（历史会话 / 设置 / 模型）在面板标题栏上，
+  浏览器里没有标题栏，所以 media/browserBridge.js 把它们补到了这条上。
+  chat.css 只按编号 #treeBtn 写了样式（新按钮没有编号），这里给整条上的按钮
+  统一补一份，让它们长得和"⑂ 分支"那颗一样。
+*/
+#bottomBar button {
+  background: var(--vscode-button-secondaryBackground, rgba(128, 128, 128, 0.2));
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  border: none;
+  border-radius: 4px;
+  padding: 2px 10px;
+  cursor: pointer;
+  font-size: 0.8em;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#bottomBar button:hover {
+  opacity: 0.85;
+}
+
+/*
+  输入框：chat.css 里写死了 min-height: 144px（约七行），网页端只要一行。
+  这条要压过 chat.css，所以放在它后面加载的文件里写同一条选择器。
+  行高按 13px 字号算约 18px，加上下内边距 12px 与边框 2px，一行大概 30px。
+*/
+#input {
+  min-height: var(--pichat-input-min-height, 30px);
+}

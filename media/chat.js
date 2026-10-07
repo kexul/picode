@@ -18,6 +18,18 @@
   const tabBarInner = document.getElementById("tabBarInner");
   const tabBarEl = document.getElementById("tabBar");
   const newTabBtn = document.getElementById("newTabBtn");
+  // 输入框的起步高度：固定占 144px（约七行）；浏览器那份页面在 CSS 里把
+  // --pichat-input-min-height 设成了一行，这里读出来当最小高度（读不到就用默认值，
+  // 所以 VSCode 里的行为不变）。打字多了照样往上涨，上限仍然是 autoResize 里的 640px。
+  const INPUT_MIN_HEIGHT_DEFAULT = 144;
+  const INPUT_MIN_HEIGHT = (function () {
+    try {
+      const text = getComputedStyle(document.documentElement).getPropertyValue("--pichat-input-min-height");
+      const parsed = parseInt(text, 10);
+      if (Number.isFinite(parsed) && parsed >= 20 && parsed <= INPUT_MIN_HEIGHT_DEFAULT) { return parsed; }
+    } catch { /* 读不到就用默认值 */ }
+    return INPUT_MIN_HEIGHT_DEFAULT;
+  })();
   newTabBtn.addEventListener("click", () => {
     vscode.postMessage({ type: "newSession" });
   });
@@ -415,7 +427,7 @@
       inputText: "",
       inputSelectionStart: 0,
       inputSelectionEnd: 0,
-      inputHeight: 144,
+      inputHeight: INPUT_MIN_HEIGHT,
       autoLoadHinted: false,
     };
     tabs.set(id, st);
@@ -1457,7 +1469,7 @@
 
   function draftOfTab() {
     if (!tabDrafts.has(activeTabId)) {
-      tabDrafts.set(activeTabId, { text: "", selStart: 0, selEnd: 0, height: 144, images: [], textBlocks: [] });
+      tabDrafts.set(activeTabId, { text: "", selStart: 0, selEnd: 0, height: INPUT_MIN_HEIGHT, images: [], textBlocks: [] });
     }
     const d = tabDrafts.get(activeTabId);
     if (!Array.isArray(d.images)) { d.images = []; }
@@ -1469,12 +1481,12 @@
     d.text = inputEl.value;
     d.selStart = inputEl.selectionStart;
     d.selEnd = inputEl.selectionEnd;
-    d.height = parseInt(inputEl.style.height, 10) || 144;
+    d.height = parseInt(inputEl.style.height, 10) || INPUT_MIN_HEIGHT;
   }
   function restoreInputState() {
     const d = draftOfTab();
     inputEl.value = d.text || "";
-    inputEl.style.height = (d.height || 144) + "px";
+    inputEl.style.height = (d.height || INPUT_MIN_HEIGHT) + "px";
     try {
       inputEl.setSelectionRange(d.selStart || 0, d.selEnd || 0);
     } catch { /* ignore */ }
@@ -2191,7 +2203,8 @@
     } else if (kind === "relay") {
       hay.push(item.label || "", item.tabName || "", item.id || "");
     } else {
-      hay.push(item.userPreview || "", item.assistantPreview || "", item.timestamp || "");
+      // 没有专属排版的那几种（如浏览器界面里的选择列表）：除了历史会话的预览，也按标题筛
+      hay.push(item.label || "", item.userPreview || "", item.assistantPreview || "", item.timestamp || "");
     }
     return hay.some((s) => s.toLowerCase().includes(q));
   }
@@ -2511,6 +2524,12 @@
           el.appendChild(t);
         }
       }
+      // 其他种类（没有专属排版的，如浏览器界面里问“选哪一项”）：直接渲染标题
+      if (st.kind !== "history" && st.kind !== "options" && st.kind !== "relay" && item.label) {
+        const t = document.createElement("div"); t.className = "pk-title";
+        t.textContent = String(item.label);
+        el.appendChild(t);
+      }
       el.addEventListener("mouseenter", () => { st.sel = idx; renderPickerActive(); });
       el.addEventListener("click", () => { confirmPicker(idx); });
       pickerBody.appendChild(el);
@@ -2599,7 +2618,7 @@
       historyLoading: false,
     };
     const titleMap = { model: "切换模型", history: "会话历史", options: "显示选项", relay: "转发到…" };
-    pickerTitle.textContent = titleMap[kind] || "选择";
+    pickerTitle.textContent = titleMap[kind] || (typeof msg.title === "string" && msg.title ? msg.title : "选择");
     pickerSearch.value = "";
     pickerSearchWrap.classList.toggle("hidden", !searchable);
     pickerFooter.classList.remove("pk-model-footer");
@@ -2897,7 +2916,7 @@
   function autoResize() {
     if (inputEl.value.length > BIG_TEXT_CHARS) { inputEl.style.height = "640px"; return; }
     inputEl.style.height = "auto";
-    inputEl.style.height = Math.min(Math.max(inputEl.scrollHeight - 12, 144), 640) + "px";
+    inputEl.style.height = Math.min(Math.max(inputEl.scrollHeight - 12, INPUT_MIN_HEIGHT), 640) + "px";
   }
   function shouldFoldText(text) {
     if (typeof text !== "string" || !text) { return false; }
@@ -2924,9 +2943,9 @@
     // 发送走 tab 级广播：后端把消息（含同一份附件）投给该 tab 内所有 panel
     vscode.postMessage({ type: "send", tabId: tab.id, text, images: d.images });
     inputEl.value = "";
-    inputEl.style.height = "144px";
+    inputEl.style.height = INPUT_MIN_HEIGHT + "px";
     d.text = "";
-    d.height = 144;
+    d.height = INPUT_MIN_HEIGHT;
     d.images = [];
     d.textBlocks = [];
     hideFileMenu(); hideHashMenu(); closeSlashMenu(); fileMenuEl.classList.add("hidden");
@@ -3586,11 +3605,11 @@
         if (activeId === t.id) {
           const d = draftOfTab();
           d.text = "";
-          d.height = 144;
+          d.height = INPUT_MIN_HEIGHT;
           d.images = [];
           d.textBlocks = [];
           inputEl.value = "";
-          inputEl.style.height = "144px";
+          inputEl.style.height = INPUT_MIN_HEIGHT + "px";
           renderAttachmentsFor();
           inputEl.focus();
         }
