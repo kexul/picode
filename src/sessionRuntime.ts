@@ -777,22 +777,25 @@ export class SessionRuntime {
                     const status: TurnEndStatus = this.abortRequested
                         ? "cancelled"
                         : this.lastShownRunError ? "error" : "done";
-                    // 等一次统计刷新，好把本轮花费一并写进提示；刷新失败也不影响提示。
-                    void this.refreshStats().then(() => {
-                        this.host.onTurnEnd({
-                            panelId: this.id,
-                            panelName: this.title,
-                            // tab 名由宿主自己算（它才知道全局唯一名），这里先空着。
-                            tabName: "",
-                            // pi 的会话标题；第一轮往往还没生成，宿主会再等一会（见 turnTitleWaitMs）。
-                            sessionTitle: this.piSessionTitle,
-                            workspaceId: this.host.workspaceId,
-                            status,
-                            errorText: status === "error" ? this.lastShownRunError : undefined,
-                            costUsd: this.statusCost,
-                            changedFileCount: this.edits.getKnownFiles().length,
+                    // 通知第二行要用本轮最后一条 AI 回复的首尾句；取不到（出错/为空）就不显示。
+                    void this.getLastAssistantText()
+                        .catch(() => "")
+                        .then((replyText) => {
+                            this.host.onTurnEnd({
+                                panelId: this.id,
+                                panelName: this.title,
+                                // tab 名由宿主自己算（它才知道全局唯一名），这里先空着。
+                                tabName: "",
+                                // pi 的会话标题；第一轮往往还没生成，宿主会再等一会（见 turnTitleWaitMs）。
+                                sessionTitle: this.piSessionTitle,
+                                workspaceId: this.host.workspaceId,
+                                status,
+                                errorText: status === "error" ? this.lastShownRunError : undefined,
+                                lastReplyText: replyText,
+                            });
                         });
-                    });
+                    // 界面上的花费统计照旧刷新，只是通知里不再显示。
+                    void this.refreshStats();
                 }
                 this.runStarted = false;
                 this.abortRequested = false;

@@ -3,17 +3,20 @@
  *
  * 重点盯两件事：
  *   1. 会话名优先用 pi 自己给的标题，没有才退回插件分配的随机名 / tab 名；
- *   2. 标题太长或带换行时只收成一行并截断，别把 Windows 通知卡片撑爆。
+ *   2. 标题太长或带换行时只收成一行并截断，别把 Windows 通知卡片撑爆；
+ *   3. 第二行显示最后一条 AI 回复的首尾句摘要（不再显示改动文件数和花费）。
  */
 import { strict as assert } from "assert";
 import { describe, it } from "node:test";
 import {
     MAX_NAME_CHARS,
+    MAX_REPLY_CHARS,
     notifyBody,
     notifySessionName,
     notifySummary,
     notifyTitle,
     shorten,
+    summarizeReply,
 } from "./turnNotifyText";
 import type { TurnEndInfo } from "./runtimeTypes";
 
@@ -56,11 +59,29 @@ describe("收尾提醒的文字", () => {
         assert.equal(shorten("  a \n b  ", 20), "a b");
     });
 
-    it("第二行：改动文件数 + 累计花费（小于 1 分时多留两位小数）", () => {
-        assert.equal(notifyBody(turn({ changedFileCount: 2, costUsd: 0.0421 })), "改动 2 个文件 · 累计 $0.04");
-        assert.equal(notifyBody(turn({ changedFileCount: 0, costUsd: 0.00421 })), "累计 $0.0042");
-        assert.equal(notifyBody(turn({ changedFileCount: 3, costUsd: 1.5 })), "改动 3 个文件 · 累计 $1.50");
+    it("第二行：显示最后一条 AI 回复的首尾句，中间用省略号；花费和文件数都不再显示", () => {
+        assert.equal(
+            notifyBody(turn({ lastReplyText: "已经把登录页改好了。表单校验也加上了。测试全部通过，可以提交了！" })),
+            "已经把登录页改好了。……测试全部通过，可以提交了！",
+        );
+        assert.equal(notifyBody(turn({ lastReplyText: "只有一句话的回复", costUsd: 0.0421 })), "只有一句话的回复");
+        assert.equal(notifyBody(turn({})), "");
         assert.equal(notifyBody(turn({ status: "cancelled", costUsd: 0 })), "用户中止");
+    });
+
+    it("回复摘要：换行也算一句结束，空回复返回空串", () => {
+        assert.equal(summarizeReply("第一句。\n第二句。\n第三句。"), "第一句。……第三句。");
+        assert.equal(summarizeReply("   "), "");
+        assert.equal(summarizeReply(""), "");
+        // 英文叹号/问号也认（半角句点不算句末，这是确认过的规则）
+        assert.equal(summarizeReply("Done! Great work! All good."), "Done!……All good.");
+    });
+
+    it("回复摘要：整体超长时首尾各裁一半，总长不超上限", () => {
+        const body = summarizeReply(`${"很长的第一句".repeat(10)}。中间省略。${"很长的最后一句".repeat(10)}。`);
+        assert.ok(body.length <= MAX_REPLY_CHARS, `长度 ${body.length} 超过 ${MAX_REPLY_CHARS}`);
+        assert.ok(body.includes("……"));
+        assert.ok(body.endsWith("…"));
     });
 
     it("出错时第二行带错误摘要，且同样截断", () => {

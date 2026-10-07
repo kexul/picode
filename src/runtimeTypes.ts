@@ -91,8 +91,8 @@ export interface TurnEndInfo {
     errorText?: string;
     /** 本次会话累计花费（美元），未知时为 undefined */
     costUsd?: number;
-    /** 本次会话中被工具改过的文件数 */
-    changedFileCount?: number;
+    /** 本轮最后一条 AI 回复的原文（通知里摘首尾句用）；取不到时为 undefined */
+    lastReplyText?: string;
 }
 
 /**

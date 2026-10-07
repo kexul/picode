@@ -22,6 +22,9 @@ export const MAX_NAME_CHARS = 48;
 /** 通知第二行里错误摘要最多显示多长。 */
 export const MAX_ERROR_CHARS = 60;
 
+/** 通知第二行里回复摘要（首尾句加省略号）最多显示多长。 */
+export const MAX_REPLY_CHARS = 80;
+
 /** 界面内提示一次最多列几个会话名，超出的并进“等 N 个会话”。 */
 const MAX_NAMES_IN_SUMMARY = 3;
 
@@ -46,18 +49,37 @@ export function notifyTitle(info: TurnEndInfo): string {
     }
 }
 
-/** 通知第二行：本轮概况（改了哪个文件 / 累计花费 / 错误摘要）。 */
+/** 通知第二行：本轮最后一条 AI 回复的首尾句摘要 / 错误摘要。 */
 export function notifyBody(info: TurnEndInfo): string {
     const parts: string[] = [];
     if (info.status === "cancelled") { parts.push("用户中止"); }
-    else if (typeof info.changedFileCount === "number" && info.changedFileCount > 0) {
-        parts.push(`改动 ${info.changedFileCount} 个文件`);
-    }
-    if (typeof info.costUsd === "number" && info.costUsd > 0) {
-        parts.push(`累计 $${info.costUsd < 0.01 ? info.costUsd.toFixed(4) : info.costUsd.toFixed(2)}`);
+    else {
+        const reply = summarizeReply(info.lastReplyText ?? "");
+        if (reply) { parts.push(reply); }
     }
     if (info.status === "error" && info.errorText) { parts.push(shorten(info.errorText, MAX_ERROR_CHARS)); }
     return parts.join(" · ");
+}
+
+/**
+ * 从一条 AI 回复里摘出「第一句……最后一句」；只有一句就只显示那一句。
+ *
+ * 句子按句末标点（。！？!?）或换行切分；取不到任何句子（回复为空等）返回空串。
+ */
+export function summarizeReply(text: string, max: number = MAX_REPLY_CHARS): string {
+    // 换行也算一句话结束；句末标点保留在句尾，显示出来更自然。
+    const sentences = String(text)
+        .split(/(?<=[。！？!?])|\r?\n/)
+        .map((s) => s.trim())
+        .filter((s) => /[^。！？!?\s]/.test(s));
+    if (sentences.length === 0) { return ""; }
+    const first = sentences[0];
+    const last = sentences[sentences.length - 1];
+    const body = sentences.length === 1 ? first : `${first}……${last}`;
+    if (body.length <= max) { return body; }
+    // 整体超长时把首尾两句各裁一半，保证「最后一句」不被截没（减 1 是给中间省略号留位置）。
+    const half = Math.max(1, Math.floor((max - 1) / 2));
+    return `${shorten(first, half)}……${shorten(last, half)}`;
 }
 
 /** 界面内提示的摘要：一行说完这批会话。 */

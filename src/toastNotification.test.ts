@@ -29,7 +29,7 @@ const isWindows = process.platform === "win32";
 const ITEMS = [
     {
         title: "沉静的雪豹：任务完成",
-        body: "改动 2 个文件 · 累计 $0.0421 · it's a <test> & `ok`",
+        body: "已经改好了登录页，共 2 个文件。表单校验也加上了，测试全部通过 · it's a <test> & `ok`",
         attribution: "Pi Chat",
     },
 ];
