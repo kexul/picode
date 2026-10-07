@@ -1564,6 +1564,8 @@
     if (info.role === "child") { return "c:" + (info.state || "") + ":" + (info.deliveries || 0) + ":" + (info.name || ""); }
     return "p:" + (info.children || []).map((k) => k.id + (k.state || "")).join(",");
   }
+  /** 上次已经滚到位的活跃 tab id（写在 renderTabBar 前头：免得初始化期间被调用时踩到未初始化） */
+  let tabBarRevealedActive = null;
   function renderTabBar() {
     if (draggingPanelId) { tabBarDirty = true; return; }
     const sig = Array.from(tabViews.values()).map((tv) =>
@@ -1571,12 +1573,16 @@
     ).join("|");
     if (sig === tabBarSig) { return; }
     tabBarSig = sig;
+    // 重建会把滚动位置清零：tab 多了以后，流式期间名字一变就跳回最左边，后面的 tab 根本够不着。
+    // 所以先记住、重建完再放回去。
+    const keepScroll = tabBarInner.scrollLeft;
     tabBarInner.innerHTML = "";
     tabViews.forEach((tv) => {
       const panelIds = leavesOf(tv.root);
       const single = panelIds.length === 1;
       const el = document.createElement("div");
       el.className = "chat-tab" + (activeTabId === tv.id ? " active" : "") + (tv.streaming ? " streaming" : "") + (tv.loading ? " loading" : "");
+      el.dataset.tabId = tv.id;
       const spinner = document.createElement("span"); spinner.className = "ct-spinner"; el.appendChild(spinner);
       const title = document.createElement("span"); title.className = "ct-title"; title.textContent = tv.name; title.title = tv.name; el.appendChild(title);
       // 派子会话（taba）标记：子会话一个“↳”，派了活出去的显示“⇢几个”
@@ -1654,6 +1660,25 @@
       }
       tabBarInner.appendChild(el);
     });
+    tabBarInner.scrollLeft = keepScroll;
+    // 换了活跃 tab（点开一个在屏幕外的）要滚过去；同一个 tab 反复重建时不动，
+    // 免得用户自己滚到别处看别的 tab 时，视图被拽回来。
+    if (activeTabId !== tabBarRevealedActive) {
+      tabBarRevealedActive = activeTabId;
+      revealTabInBar(activeTabId);
+    }
+  }
+
+  /** 让某个 tab 在滑动条里露出来：看不见就滚过去，已经看得见就不动。 */
+  function revealTabInBar(tabId) {
+    if (!tabId) { return; }
+    const el = tabBarInner.querySelector('.chat-tab[data-tab-id="' + tabId + '"]');
+    if (!el) { return; }
+    const box = tabBarInner.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || box.width <= 0) { return; }
+    if (r.right > box.right) { tabBarInner.scrollLeft += (r.right - box.right) + 8; }
+    else if (r.left < box.left) { tabBarInner.scrollLeft -= (box.left - r.left) + 8; }
   }
 
   // ==================== 布局树渲染（tab 内的 panel 网格 / 拖拽） ====================
@@ -2085,6 +2110,15 @@
     if (e.relatedTarget && tabBarEl.contains(e.relatedTarget)) { return; }
     tabBarEl.classList.remove("drop-hint");
   });
+  // 滚轮落在 tab 栏上：竖着滚改成左右滚（原来什么反应都没有，只能拖那根细滑动条或者拉宽窗口）。
+  // 没有溢出时不拦，页面照常滚。
+  tabBarInner.addEventListener("wheel", (e) => {
+    if (tabBarInner.scrollWidth - tabBarInner.clientWidth <= 2) { return; }
+    const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    if (!d) { return; }
+    e.preventDefault();
+    tabBarInner.scrollLeft += d;
+  }, { passive: false });
   tabBarEl.addEventListener("drop", (e) => {
     tabBarEl.classList.remove("drop-hint");
     if (!draggingPanelId) { return; }

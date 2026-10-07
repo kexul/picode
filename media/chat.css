@@ -30,8 +30,13 @@
 
   /* ---- tab 栏 ---- */
   #tabBar { display: flex; align-items: center; gap: 4px; padding: 4px 6px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); flex: 0 0 auto; }
-  #tabBarInner { display: flex; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
-  #tabBarInner::-webkit-scrollbar { display: none; }
+  /* tab 多了会溢出：这里给一根看得见的细滑动条（原来把滑动条藏了，用户只能把窗口拉宽才能找着后面的 tab）。
+     chat.js 那边还配了两件事：重建 tab 栏时保住滚动位置；滚轮上下滚改成横向滚。 */
+  #tabBarInner { display: flex; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background, rgba(121,121,121,0.45)) transparent; }
+  #tabBarInner::-webkit-scrollbar { height: 7px; }
+  #tabBarInner::-webkit-scrollbar-track { background: transparent; }
+  #tabBarInner::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(121,121,121,0.45)); border-radius: 4px; }
+  #tabBarInner::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground, rgba(159,159,159,0.72)); }
   #newTabBtn { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: none; background: transparent; color: var(--vscode-foreground); opacity: 0.7; font-size: 16px; line-height: 1; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
   #newTabBtn:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
     /* 不设 max-width：多 panel 拼接名（名词串）可撑宽，tab 栏溢出时横向滚动 */

@@ -69,16 +69,16 @@ build.bat skip      # 跳过 npm install（依赖已装好时用，更快）；�
 npm i -g @vscode/vsce
 ```
 
-产物：`pi-chat-vscode-<版本号>.vsix`（0.0.8 是 50 个文件、约 301 KB；插件本身不带第三方依赖）。
+产物：`pi-chat-vscode-<版本号>.vsix`（0.0.9 是 50 个文件、约 303 KB；插件本身不带第三方依赖）。
 
 **装进编辑器**（用哪个编辑器就跑哪个命令，版本号换成实际的）：
 
 ```bat
 :: VSCodium（PATH 里没有就写全路径，例如 "D:\Program Files (x86)\VSCodium\bin\codium.cmd"）
-codium --install-extension pi-chat-vscode-0.0.8.vsix
+codium --install-extension pi-chat-vscode-0.0.9.vsix
 
 :: VSCode
-code --install-extension pi-chat-vscode-0.0.8.vsix
+code --install-extension pi-chat-vscode-0.0.9.vsix
 ```
 
 装完要**重载窗口**（命令面板 → `Developer: Reload Window`）新版本才生效。
@@ -234,6 +234,7 @@ VSCode 这边的每个会话启动 pi 时都带上 `-e <那个文件>`（备用�
 - 右键子会话的 tab：把结果交回派活的会话 / 打开派活的那个会话 / 变成独立会话（不再自动交回）。
 - 右键派活那边的 tab：列出它派出去的子会话，点一个就切过去。
 - 派活与交回时，两边的对话里各有一行灰字提示（这些提示不进对话记录，只是界面上的一行）。
+- tab 一多，tab 栏底下有一根细滑动条：滚轮落在栏上就是左右滚，切到屏幕外的 tab 会自动滚过去。
 
 **几条规则**：
 
