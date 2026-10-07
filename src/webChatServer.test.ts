@@ -183,6 +183,8 @@ test("页面与界面资源能取到，白名单外的文件取不到", async ()
         assert.ok(bridgeAt < chatAt, "桥接脚本要排在 chat.js 前面");
         assert.match(html, /--vscode-editor-background: #ffffff/, "网页端是白底（浅色主题）");
         assert.match(html, /--pichat-input-min-height/, "网页端把输入框起步高度设成一行");
+        assert.match(html, /#bottomBar \{ display: none !important/, "网页端把底部按钮条整条藏掉");
+        assert.match(html, /#browserMenuBtn/, "网页端有顶部⋯菜单按钮的样式");
         assert.ok(
             html.indexOf('id="browser-theme"') > html.indexOf("--vscode-textCodeBlock-background"),
             "网页专用的样式要排在 chat.css 之后（否则压不过它那套固定取值）",

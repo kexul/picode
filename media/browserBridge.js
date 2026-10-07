@@ -167,25 +167,24 @@
     permanent("此页面已被新打开的 Pi Chat 页面接管。", true);
   }
 
-  // ==================== 底部按钮条补按钮 ====================
-  // VSCode 里"分支 / 历史 / 设置"这些按钮在面板标题栏上；浏览器里没有标题栏，
-  // 所以补到底部的按钮条上（那条里原本只有一个"⑂ 分支"按钮）。
-  // 这些消息由插件侧的浏览器工作区（browserChatController.ts）接。
-  function addBarButton(label, title, onClick) {
-    var bar = document.getElementById("bottomBar");
+  // ==================== 顶部标签栏最右边的“⋯”菜单 ====================
+  // 分支 / 模型 / 历史会话 / 导出 / 设置都收进这一颗（VSCode 里这些在面板标题栏上，
+  // 网页端没有标题栏；消息由插件侧的浏览器工作区 browserChatController.ts 接，
+  // 点开的是界面自带的那个浮层选择器）。
+  // 标签栏平时只有一个标签时是藏着的，网页端要常显，否则这颗按钮没地方放。
+  // 顺带的好处：新建标签的那颗“+”也一直可见可点。
+  (function () {
+    var bar = document.getElementById("tabBar");
     if (!bar) { return; }
+    bar.classList.remove("hidden");
     var btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = label;
-    if (title) { btn.title = title; }
-    btn.addEventListener("click", onClick);
+    btn.id = "browserMenuBtn";
+    btn.textContent = "⋯";
+    btn.title = "更多操作：分支 / 模型 / 历史会话 / 导出 / 设置";
+    btn.addEventListener("click", function () { enqueue({ type: "openBrowserMenu" }); });
     bar.appendChild(btn);
-  }
-
-  addBarButton("🤖 模型", "切换模型（与 VSCode 里同一个选择器）", function () { enqueue({ type: "pickModel" }); });
-  addBarButton("🕘 历史会话", "打开这台机器上的 pi 历史会话，选一个接着聊", function () { enqueue({ type: "openHistory" }); });
-  addBarButton("📤 导出", "把当前会话存成文件（在 VSCode 里选保存位置）", function () { enqueue({ type: "exportConversation" }); });
-  addBarButton("⚙ 设置", "模型配置与显示选项", function () { enqueue({ type: "openSettingsPanel" }); });
+  })();
 
   connect();
 })();

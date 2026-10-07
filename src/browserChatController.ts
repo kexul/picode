@@ -295,6 +295,58 @@ export class BrowserChatController extends ChatControllerBase {
         }
     }
 
+    /**
+     * 网页端顶部那颗“⋯”按钮的菜单：分支 / 模型 / 历史会话 / 导出 / 设置。
+     * 用界面自带的浮层选择器（与模型选择器同一套，带筛选与键盘操作），
+     * 选中后在本工作区内直接执行对应动作。
+     */
+    private async openBrowserMenu(): Promise<void> {
+        const items = [
+            { label: "⑂ 分支与分屏…", file: "tree" },
+            { label: "🤖 切换模型…", file: "model" },
+            { label: "🕘 历史会话…", file: "history" },
+            { label: "📤 导出当前会话…", file: "export" },
+            { label: "⚙ 设置…", file: "settings" },
+        ];
+        const choice = await this.showPicker("browserMenu", items, null, { title: "更多操作" });
+        const action = choice && typeof choice.file === "string" ? choice.file : "";
+        switch (action) {
+            case "tree": {
+                const rt = this.getActive();
+                if (rt) { void rt.showTree(); }
+                return;
+            }
+            case "model": {
+                const rt = this.getActive();
+                if (rt) { void rt.pickModel(); }
+                return;
+            }
+            case "history":
+                void this.showHistoryPicker();
+                return;
+            case "export":
+                this.exportActiveConversation();
+                return;
+            case "settings":
+                this.postToWebview({ type: "openSettings" });
+                return;
+        }
+    }
+
+    /** 让页面把当前焦点会话导出成 HTML / Markdown（内容存盘在 VSCode 里选位置）。 */
+    private exportActiveConversation(): void {
+        const rt = this.getActive();
+        if (!rt) {
+            this.owner.showInfo("当前没有可导出的会话。");
+            return;
+        }
+        this.postToWebview({
+            type: "exportConversationRequest",
+            tabId: rt.id,
+            requestId: `browser-export-${rt.id}`,
+        });
+    }
+
     // ========================================================================
     //  浏览器这份工作区独有的消息
     // ========================================================================
@@ -308,22 +360,15 @@ export class BrowserChatController extends ChatControllerBase {
             case "openHistory":
                 void this.showHistoryPicker();
                 return true;
+            case "openBrowserMenu":
+                void this.openBrowserMenu();
+                return true;
             case "openSettingsPanel":
                 this.postToWebview({ type: "openSettings", tab: typeof msg.tab === "string" ? msg.tab : undefined });
                 return true;
-            case "exportConversation": {
-                const rt = this.getActive();
-                if (!rt) {
-                    this.owner.showInfo("当前没有可导出的会话。");
-                    return true;
-                }
-                this.postToWebview({
-                    type: "exportConversationRequest",
-                    tabId: rt.id,
-                    requestId: `browser-export-${rt.id}`,
-                });
+            case "exportConversation":
+                this.exportActiveConversation();
                 return true;
-            }
             case "exportConversationResult":
                 if (typeof msg.tabId === "string" && typeof msg.html === "string") {
                     void this.owner.saveExportedConversation(

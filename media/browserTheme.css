@@ -1,7 +1,7 @@
 /*
   browserTheme —— 浏览器页面专用的样式补丁。
 
-  两件事：
+  三件事：
   1. 颜色。VSCode 会往网页视图里注入一整套 --vscode-* 变量（颜色、字体、边框），
      界面样式全靠它们；浏览器里没有 VSCode，这些变量一个都不存在，界面会变成白底没颜色。
      这里按 VSCode 浅色主题（Light Modern）的取值把它们补齐，网页端就是白底深字。
@@ -9,6 +9,7 @@
   2. 输入框起步高度。VSCode 那份固定占 144px（约七行）；网页端只要一行，
      这里把 --pichat-input-min-height 设小，chat.js 会读这个值当最小高度，
      打字打多了照样往上涨（最高 640px 不变）。VSCode 里没这个变量，仍然是 144px。
+  3. 顶部标签栏常显 + 最右边的“⋯”菜单按钮，底部按钮条整条藏掉（详见下面那两段注释）。
 
   本文件只在浏览器那份页面里加载（media/chat.js 与 chat.css 不动），
   而且排在 chat.css 之后加载，所以同优先级的规则以这里为准。
@@ -117,26 +118,38 @@ html, body {
 }
 
 /*
-  底部按钮条：VSCode 里那些按钮（历史会话 / 设置 / 模型）在面板标题栏上，
-  浏览器里没有标题栏，所以 media/browserBridge.js 把它们补到了这条上。
-  chat.css 只按编号 #treeBtn 写了样式（新按钮没有编号），这里给整条上的按钮
-  统一补一份，让它们长得和"⑂ 分支"那颗一样。
+  底部按钮条：网页端整条藏掉（里面的“⑂ 分支”也一并收进了顶部那颗“⋯”菜单），
+  省出这一行的竖向空间。VSCode 那份原本就藏它（chatHtml.ts 里另外注入了同一条规则）。
 */
-#bottomBar button {
-  background: var(--vscode-button-secondaryBackground, rgba(128, 128, 128, 0.2));
-  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+#bottomBar { display: none !important; }
+
+/*
+  顶部标签栏最右边的“⋯”按钮：分支 / 模型 / 历史会话 / 导出 / 设置都收进这个菜单。
+  样式照着左边那颗“+”抄（chat.css 里按编号 #newTabBtn 写的，这里拿不到），
+  再用 margin-left: auto 把它顶到这一行的最右边。
+*/
+#browserMenuBtn {
+  flex: 0 0 auto;
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
   border: none;
+  background: transparent;
+  color: var(--vscode-foreground);
+  opacity: 0.7;
+  font-size: 14px;
+  line-height: 1;
   border-radius: 4px;
-  padding: 2px 10px;
   cursor: pointer;
-  font-size: 0.8em;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
 }
 
-#bottomBar button:hover {
-  opacity: 0.85;
+#browserMenuBtn:hover {
+  opacity: 1;
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.15));
 }
 
 /*

@@ -13,7 +13,8 @@ import { renderHTML } from "./renderHtml";
  *      换成网页服务上的收发），并补一份网页专用的样式（颜色与输入框高度）。
  *
  * 另外一份差别：VSCode 那份会藏掉界面底部的按钮条（那些按钮由 VSCode 面板标题栏提供），
- * 浏览器里没有标题栏，所以按钮条照常显示，并由 browserBridge.js 往里面补几个按钮。
+ * 浏览器里也没有标题栏，那排按钮收进了顶部标签栏最右边的“⋯”菜单（见 browserBridge.js
+ * 与 browserTheme.css），底部那条在浏览器里同样整条藏掉。
  */
 
 /**
