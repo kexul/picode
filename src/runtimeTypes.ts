@@ -1,4 +1,5 @@
 import type { PiClient } from "./piClient";
+import type { TabaRequest } from "./tabaProtocol";
 
 /** 平台无关的 pi 运行时配置。 */
 export interface PiConfig {
@@ -7,6 +8,31 @@ export interface PiConfig {
     model: string;
     extraArgs: string[];
     trustProject: boolean;
+    /**
+     * “派子会话”要加载的 pi 扩展文件路径（插件写在 ~/.pi/pichat/ 下）。
+     * 空串或缺省表示这个工作区不开这个能力（例如浏览器那份）：
+     * 不给 pi 加载扩展，模型那边就不会出现 taba 这几个工具。
+     */
+    tabaExtension?: string;
+    /** 上面那个扩展要用到的资源目录（插件自带的角色文件在里面）。 */
+    tabaDir?: string;
+}
+
+/**
+ * 一个 panel（会话）启动 pi 时的额外要求。
+ *
+ * 普通会话不用传；派出来的子会话要传（它有自己的会话文件、提示词、工具白名单，
+ * 而且不能再派下级）。
+ */
+export interface PanelLaunch {
+    /** 额外命令行参数（--session / --append-system-prompt / --tools 之类）。 */
+    extraArgs?: string[];
+    /** 不领取预热好的备用进程（参数不一样，必须新起一个）。 */
+    skipSpare?: boolean;
+    /** 不加载“派子会话”那个扩展（子会话不能再派）。 */
+    noTaba?: boolean;
+    /** 覆盖工作目录（角色文件里指定的时候）。 */
+    cwd?: string;
 }
 
 /** 本次对话中一个被修改文件的记录。 */
@@ -127,6 +153,12 @@ export interface RuntimeHost {
     /** 某 panel 的一轮对话真正结束（pi 发出 agent_settled）时调用：
      *  宿主据此发系统通知（Windows toast）并决定是否让界面响提示音。 */
     onTurnEnd(info: TurnEndInfo): void;
+
+    /**
+     * 某个 panel 里的 pi 扩展要求“派子会话”（从那个进程的 stderr 里读到暗号）。
+     * 不开这个能力的工作区（浏览器那份）不会收到。可选。
+     */
+    onTabaRequest?(panelId: string, request: TabaRequest): void;
 
     // ---- UI 弹窗（对应当 pi 的 extension_ui_request）----
     confirmDialog(title: string, message: string): Promise<boolean>;

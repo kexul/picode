@@ -33,6 +33,14 @@ src/                          插件 TypeScript 源码（tsc 编译到 out/）
   browserChatController.ts     “在浏览器里对话”这个工作区（第三个宿主，与侧边栏、编辑器区平级）
   browserHtml.ts               浏览器那份页面的 HTML（复用 renderHtml，补上主题变量与桥接脚本）
   webTransport.ts              网页服务的判断零件：资源白名单 / 本机地址判断 / 请求来源判断 / 消息缓冲（可单测）
+  tabaProtocol.ts              派子会话：从 pi 进程 stderr 里挑暗号行的解析（可单测）
+  tabaRoles.ts                 派子会话：角色文件（agents 目录里的 .md）的读取与解析（可单测）
+  tabaTask.ts                  派子会话：子会话文件怎么写、第一条消息怎么拼（可单测）
+  tabaRegistry.ts              派子会话：子会话登记表、状态、交回去的文字（可单测）
+  tabaRunFiles.ts              派子会话：写到 ~/.pi/pichat/taba-runs/ 的那份名录（taba_peek 读它）（可单测）
+  tabaLaunch.ts                派子会话：优先级怎么算、启动参数怎么拼（可单测）
+  tabaBridgeSource.ts          塞进 pi 进程里那个扩展的源码（字符串；运行时写到 ~/.pi/pichat/）
+  tabaAssets.ts                把上面那个扩展与自带角色文件写到 ~/.pi/pichat/（可单测）
 media/                        对话前端资源（chat.js、chat.css、historyCanvas.js/css、
                               marked.js、highlight.js、settings.js）；webview 直接加载
                               browserBridge.js / browserTheme.css 只有浏览器那份页面用
@@ -44,27 +52,45 @@ media/                        对话前端资源（chat.js、chat.css、historyC
 - npm（自带）
 - pi 已全局安装并鉴权（`npm i -g --ignore-scripts @earendil-works/pi-coding-agent`，再 `pi` + `/login`，或设置 API Key 环境变量）
 
-## 一键构建
-
-双击或命令行运行：
+## 构建与安装
 
 ```bat
-build.bat           # npm install + 打包 + 自动安装到 VSCode 并重载窗口
-build.bat skip      # 跳过 npm install（已装好时用，更快）
-build.bat noauto    # 只打包 vsix，不自动安装/重载
+build.bat           # npm install + 编译 + 打包 vsix
+build.bat skip      # 跳过 npm install（依赖已装好时用，更快）；也可以设环境变量 SKIP_INSTALL=1
 ```
 
-> 默认构建完会自动 `code --install-extension` 并触发窗口重载（首次安装时可能需手动 Reload Window 一次）；不想自动部署时加 `noauto`。
+`build.bat` **只负责打出 vsix**：跑完 `npm run package`，找出 `pi-chat-*.vsix`，把文件名打印出来就结束了，
+不会自动装进编辑器、也不会重载窗口（脚本只认 `skip` 这一个参数，传别的会报 unknown argument；
+下面“装进编辑器”那一步要自己跑）。
 
-产物：
-- `pi-chat-*.vsix`（VSCode 插件，自包含约 115KB）
+打包要用 `vsce`，它不在 `devDependencies` 里，得先全局装一次：
+
+```bash
+npm i -g @vscode/vsce
+```
+
+产物：`pi-chat-vscode-<版本号>.vsix`（0.0.8 是 50 个文件、约 301 KB；插件本身不带第三方依赖）。
+
+**装进编辑器**（用哪个编辑器就跑哪个命令，版本号换成实际的）：
+
+```bat
+:: VSCodium（PATH 里没有就写全路径，例如 "D:\Program Files (x86)\VSCodium\bin\codium.cmd"）
+codium --install-extension pi-chat-vscode-0.0.8.vsix
+
+:: VSCode
+code --install-extension pi-chat-vscode-0.0.8.vsix
+```
+
+装完要**重载窗口**（命令面板 → `Developer: Reload Window`）新版本才生效。
+注意重载会把插件里所有正在跑的 pi 进程一起结束掉，也就是所有还开着的对话都会没
+（编辑器区那些工作区本来就是关掉即终止），所以有活在跑的时候别急着重载。
 
 ## 开发
 
 ```bash
 npm install
 npm run build    # tsc 编译到 out/
-npm test         # 编译 + node:test（会话逻辑纯函数；以及网页服务的传输与端到端检查）
+npm test         # 编译 + node:test（会话逻辑纯函数；网页服务的传输与端到端检查；派子会话的解析/角色/交回）
 npm run package  # 打包 VSIX
 ```
 
@@ -77,6 +103,9 @@ VSCode 里 F5 直接调试（`.vscode/launch.json` 已配置 extensionHost）。
 | piPath / provider / model / extraArgs / trustProject | `piChat.*` 设置 |
 | 显示选项（发送键/新建会话键/tab 切换键/聚焦输入框快捷键/工具显示模式/自动加载上次会话/会话结束提示音/收尾提醒等会话标题） | `globalState` |
 | 网页服务（开关 / 端口 / 监听地址） | `piChat.webServer.*` 设置 |
+| 派子会话（开关） | `piChat.taba.enabled` 设置 |
+| 派子会话用的 pi 扩展文件、自带角色、子会话名录 | `~/.pi/pichat/`（插件激活时写；自带角色只在文件不存在时写；
+名录在 `taba-runs/` 下，激活时清掉 7 天前的） |
 | pi 的 models.json | `~/.pi/agent/models.json`（应用内设置面板编辑） |
 | 通知的“应用标识”（想换成别的来源名/图标时用） | 环境变量 `PICHAT_TOAST_APPID`；PowerShell 路径可用 `PICHAT_POWERSHELL` 指定 |
 
@@ -148,6 +177,111 @@ VSCode 里 F5 直接调试（`.vscode/launch.json` 已配置 extensionHost）。
 | `enabled` | `true` | 插件启动时开网页服务。改成 `false` 就不监听端口，状态栏入口也隐藏 |
 | `port` | `51883` | 监听端口。填 `0` 表示自动挑一个空闲端口；填的端口被占时（比如开了两个 VSCode 窗口）也会自动改挑，实际用的地址看状态栏提示 |
 | `host` | `127.0.0.1` | 监听地址。改成 `0.0.0.0` 才能让手机等设备访问（见上面“安全”那段） |
+
+## 派子会话（taba）
+
+一个会话可以把活派给另一个会话：派出去的子会话在**新 tab** 里跑，
+跑完第一轮后，它的最后一条回复会自动交回派活的那个会话，那个会话接着往下干。
+派活不等结果：模型调完工具立刻拿到“已经派出去了”，可以继续做别的，也可以一次派好几个并行跑。
+
+做法参考 [pi-interactive-subagents](https://github.com/HazAT/pi-interactive-subagents)：
+那边把子会话开在终端分屏里（要 tmux / cmux 那类工具），这边直接开在插件的 tab 里，
+所以既不需要终端管理器，也不需要靠轮询文件猜子会话死没死——子进程的 RPC 事件本来就在插件手里。
+
+**模型那边多四个工具**（名字用 `taba` 前缀，避开你全局装的那些扩展：重名的话 pi 会直接起不来）：
+
+| 工具 | 干什么 |
+|---|---|
+| `taba` | 派一个子会话去干一件事，立刻返回不等结果 |
+| `taba_list` | 列出可以指名的角色 |
+| `taba_stop` | 停掉某个子会话正在跑的这一轮（它的 tab 还留着） |
+| `taba_peek` | 看某个子会话现在的情况：状态、跑了多久、会话文件在哪、多大多少行、最后一条回复的开头一段 |
+
+`taba` 的参数：`name`（显示名）与 `task`（任务说明）必填；`agent`（角色名）、`model`、`thinking`、
+`tools`（工具白名单）、`cwd`（工作目录）、`fork`（带上派活那边的对话）都可选。
+`taba_stop` 与 `taba_peek` 的参数都是 `id`（派活时返回的编号）或 `name`（显示名），至少给一个，
+而且只能指定**本会话派出去的**那些。
+
+**主对话里的 AI 想看子会话在干什么**，用 `taba_peek`。它不返回整段对话——只返回情况摘要加**那个子会话的
+`.jsonl` 路径**，要看细节由 AI 自己拿 `read` / `bash` 去读（pi 是一条记录一行、即时追加写的，所以子会话还在跑
+就能读到；返回里也带了文件多大、多少行，以及"别一次整个读进来，用 offset/limit 从末尾往上翻或者 grep 挑重点"的提醒）。
+
+这条路要落地一份很小的名录文件，因为**路径只有插件知道**（全新会话的文件名是 pi 自己起的，带上下文那两档是插件
+造的编号），而 pi 进程到插件只有 stderr 那条单向暗号、插件没法直接回话给工具。所以插件在子会话状态变化时
+（派出去、任务发出、跑完交回、变成独立会话、tab 关掉）写一份：
+
+```
+~/.pi/pichat/taba-runs/<子会话编号>.json
+{ v, id, name, task, agent, state, stateText, startedAt, endedAt, deliveries,
+  sessionMode, sessionFile, parentSessionFile, lastReplyPreview, writtenAt }
+```
+
+`taba_peek` 读的就是它（按名字找时用 `parentSessionFile` 比对，别人的子会话读不到）。里面的
+`lastReplyPreview` 是子会话最后一条回复的头 200 字：想知道"那边有结论没有"时看这一段就够，不必去读大文件。
+子 tab 关掉以后名录与那个 `.jsonl` 都留着（状态写成 `tab 已经关闭`），事后还能查；插件激活时会清掉 7 天前的名录。
+
+**插件这边怎么连起来的**：插件激活时把一个很小的 pi 扩展写到 `~/.pi/pichat/taba-bridge-<版本号>.ts`，
+VSCode 这边的每个会话启动 pi 时都带上 `-e <那个文件>`（备用进程也带）。扩展的工具被调用时，
+只往**它自己那个进程的 stderr** 写一行暗号：`##PICHAT_TABA##` 后面跟 base64 的 JSON。
+插件本来就在读每个 pi 进程的 stderr，读到暗号就知道是哪个会话要派活、要派什么，于是开 tab、发任务。
+所以不开端口、不用管道；结果交回也是插件直接对派活那个会话发 RPC 消息做的，不需要扩展参与。
+子会话那个 tab **不加载**这个扩展，所以子会话不能再往下派；就算请求真冒出来了，插件也会挡下来。
+
+**界面上看得到什么**：
+
+- 子会话 tab 的名字就是派活时给的那个名字，左边一道竖线加一个 `↳` 标记；
+  派活那边的 tab 上有个 `⇢N` 小标，N 是还在跑的子会话个数。鼠标悬在标记上能看到状态、模型、交回过几次。
+- 右键子会话的 tab：把结果交回派活的会话 / 打开派活的那个会话 / 变成独立会话（不再自动交回）。
+- 右键派活那边的 tab：列出它派出去的子会话，点一个就切过去。
+- 派活与交回时，两边的对话里各有一行灰字提示（这些提示不进对话记录，只是界面上的一行）。
+
+**几条规则**：
+
+- 结果**自动交回只发生一次**：子会话把派给它的那一轮跑完就交；之后你在子会话 tab 里打字接管了就不再自动交，
+  改由右键菜单里“把结果交回”手动触发。
+- 子会话的 tab 一直留着，不自动关（要看全过程、要接着问都在那儿）。
+- 派活那个会话被关掉了，子会话就变成独立会话，界面上写一句。
+- 子会话的 tab 在结果交回之前被关掉，会给派活那个会话补一句“tab 被关掉了，没有交回结果”，免得那边一直等。
+- 子会话跑完是报错还是被中止，结果照样交回（文字里写清楚是哪种），不然派活那边会一直等。
+- 浏览器里那份会话不开这个功能（子会话要开在 VSCode 的 tab 里）。
+- 整个功能可以在设置里关掉：`piChat.taba.enabled`（关掉后要新建会话才生效）。
+
+**子会话的内容从哪来**（三种，叫法跟 pi-interactive-subagents 一致）：
+
+| 模式 | 子会话看到什么 |
+|---|---|
+| `standalone`（默认） | 全新会话，只看到包装过的任务文本 |
+| `lineage-only` | 全新会话，但会话文件里记着父会话是谁（翻历史会话能看出关系） |
+| `fork` | 带上派活那个会话之前的对话 |
+
+由派发方决定，优先级：派活时的 `fork: true` > 角色文件里的 `session-mode` > 全新会话。
+带上下文那两档要先写一个会话文件出来（写在 pi 自己的会话目录里，格式跟 pi 一样：一行会话头 + 复制过来的记录，
+截到派活那句之前），再用 `--session` 让 pi 打开它。派活的会话还没落盘时自动退回全新会话，界面上说一句。
+
+**角色文件**（可选）：一个 `.md`，前置元数据 + 正文（正文就是这个角色的说明书，会交给子会话）。
+按优先级找三个地方：项目 `.pi/agents/` > 全局 `~/.pi/agent/agents/` > 插件自带的。
+插件自带四个，写在 `~/.pi/pichat/taba-roles/`：`scout`（只读摸底）、`worker`（施工，能改）、
+`reviewer`（只读评审，只挑毛病）、`planner`（做计划，默认带上下文）。
+自带的角色文件**只在不存在时才写**：你自己改过的不会被改回去；想让插件重写一遍，把那个目录删掉再重载窗口。
+
+字段名跟 pi-interactive-subagents 那份保持一致，你已有的角色文件能直接用：
+
+| 字段 | 说明 |
+|---|---|
+| `name` / `description` | 指名用的名字、一句话说明（`taba_list` 里显示） |
+| `model` / `thinking` | 这个角色用什么模型、什么思考强度（拼成 `模型:强度`）；不写就跟着派活那个会话 |
+| `tools` | 工具白名单，逗号分隔，例如 `read, bash`；不写就不限制 |
+| `skills` | 要自动加载的技能名，逗号分隔；拼在任务文本最前面让 pi 自己展开 |
+| `session-mode` | `standalone` / `lineage-only` / `fork` |
+| `system-prompt` | `append`（加在默认提示词后面）或 `replace`（整个换掉）：正文改走系统提示词，不再跟任务一起发。不写就跟任务一起发 |
+| `cwd` | 这个角色的工作目录（相对项目根或绝对路径） |
+| `disable-model-invocation` | `true` 时不在 `taba_list` 里显示，但指名仍能派 |
+
+认不出的字段一律忽略；写了 `runner:`（那是给外部命令行工具用的角色）的文件会被跳过，我们的 tab 只能跑 pi。
+
+顺带修掉的一个坑：Windows 下插件是带 shell 启动 pi 的，而 Node 在 `shell: true` 时**不给参数加引号**，
+只是用空格拼起来，所以带空格的路径（比如用户名是 `John Doe` 时的家目录）会被切成两半。
+现在带空格的参数会自己引起来（`quoteArgForWindowsShell`，有单测）。
 
 ## 会话跑完的提醒
 

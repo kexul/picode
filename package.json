@@ -2,7 +2,7 @@
   "name": "pi-chat-vscode",
   "displayName": "Pi Chat",
   "description": "在 VSCode 中与 pi coding agent 进行对话",
-  "version": "0.0.6",
+  "version": "0.0.8",
   "publisher": "local",
   "license": "MIT",
   "engines": {
@@ -64,6 +64,7 @@
         "piChat.model": { "type": "string", "default": "", "description": "模型 pattern 或 ID（如 sonnet, gpt-4o）。留空使用 pi 默认配置。" },
         "piChat.extraArgs": { "type": "array", "items": { "type": "string" }, "default": [], "description": "传递给 pi --mode rpc 的额外命令行参数。" },
         "piChat.trustProject": { "type": "boolean", "default": true, "description": "启动时是否信任当前项目（向 pi 传入 --approve）。" },
+        "piChat.taba.enabled": { "type": "boolean", "default": true, "description": "是否开“派子会话”（taba）：开了就会给 VSCode 这边的每个会话加载一个 pi 扩展，模型能用 taba 这个工具新开一个 tab 把活派出去，子会话跑完第一轮后结果自动交回。浏览器里那份会话不受这个开关影响，总是不开。关掉后要新建会话才生效（已经开着的 pi 进程还是带着旧参数）。" },
         "piChat.webServer.enabled": { "type": "boolean", "default": true, "description": "插件启动时开一个本机网页服务，让你在浏览器里也能对话。浏览器里那份是独立会话，与侧边栏互不干扰。" },
         "piChat.webServer.port": { "type": "number", "default": 51883, "description": "网页服务的端口。填 0 表示自动挑一个空闲端口（每次启动可能不一样）；填的端口被占用时也会自动改挑，实际用的地址看状态栏提示。" },
         "piChat.webServer.host": { "type": "string", "default": "127.0.0.1", "description": "网页服务监听的地址。默认 127.0.0.1：只有本机能访问。想让手机等设备访问就改成 0.0.0.0：这等于对同一网络里的所有设备开放，服务不要口令，那些设备只要知道地址就能读写这台机器上的文件、运行命令。只在信得过的网络里改。" }
@@ -75,7 +76,7 @@
     "compile": "tsc -p tsconfig.json",
     "build": "npm run clean && npm run compile",
     "watch": "tsc -w -p tsconfig.json",
-    "test": "npm run compile && node --test out/src/messageUtils.test.js out/src/canvasData.test.js out/src/layoutTree.test.js out/src/slashCommands.test.js out/src/transferPanels.test.js out/src/toastNotification.test.js out/src/turnNotifyText.test.js out/src/sessionTitleWait.test.js out/src/webTransport.test.js out/src/webChatServer.test.js",
+    "test": "npm run compile && node --test out/src/messageUtils.test.js out/src/canvasData.test.js out/src/layoutTree.test.js out/src/slashCommands.test.js out/src/transferPanels.test.js out/src/toastNotification.test.js out/src/turnNotifyText.test.js out/src/sessionTitleWait.test.js out/src/webTransport.test.js out/src/webChatServer.test.js out/src/tabaProtocol.test.js out/src/tabaRoles.test.js out/src/tabaTask.test.js out/src/tabaRegistry.test.js out/src/tabaAssets.test.js out/src/tabaLaunch.test.js out/src/tabaFlow.test.js out/src/tabaRunFiles.test.js out/src/piClientArgs.test.js out/src/frontendSyntax.test.js",
     "package": "npm run build && vsce package --allow-missing-repository"
   },
   "dependencies": {},

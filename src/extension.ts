@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { ChatViewProvider, DiffContentProvider } from "./chatViewProvider";
 import { ensureToastAppId, vsCodeIconPath } from "./toastAppId";
 import { PiChatWebServer, type WebServerSettings } from "./webChatServer";
+import { ensureTabaAssets } from "./tabaAssets";
 
 /** 读网页服务那几项配置。 */
 function readWebServerSettings(): WebServerSettings {
@@ -20,6 +21,15 @@ export function activate(context: vscode.ExtensionContext): void {
     try {
         toastAppId = ensureToastAppId("Pi Chat", vsCodeIconPath());
     } catch { /* 写不进去就用系统自带标识，不影响通知发得出去 */ }
+
+    // 派子会话要用的两样东西（那个 pi 扩展文件、自带的角色文件）先写到 ~/.pi/pichat/：
+    // 每个会话启动 pi 时都要用这个路径，必须赶在第一个 tab 开出来之前写好。
+    const version = String((context.extension?.packageJSON as any)?.version ?? "0");
+    const tabaAssets = ensureTabaAssets(version);
+    if (!tabaAssets.ok) {
+        // 写不了就不开这个能力：不影响对话，只是模型那边不会出现 taba 那几个工具
+        console.error("[Pi Chat] 派子会话的文件没写成：", tabaAssets.error);
+    }
 
     const provider = new ChatViewProvider(context, toastAppId);
 
@@ -115,6 +125,12 @@ export function activate(context: vscode.ExtensionContext): void {
     // ---- 网页服务：浏览器里也能对话（一份独立会话，与侧边栏互不干扰）----
     const output = vscode.window.createOutputChannel("Pi Chat");
     context.subscriptions.push(output);
+    if (tabaAssets.ok) {
+        output.appendLine(`派子会话用的扩展：${tabaAssets.extensionPath}`);
+        output.appendLine(`插件自带的角色文件：${path.join(tabaAssets.resourceDir, "taba-roles")}`);
+    } else {
+        output.appendLine(`派子会话的功能没开（文件没写成：${tabaAssets.error}）`);
+    }
 
     // 状态栏入口：不弹提示也能随时找到地址
     const webItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);

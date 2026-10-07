@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import { PiClient } from "./piClient";
+import { TabaFrameParser } from "./tabaProtocol";
 import { NameParts, composeName } from "./names";
 import { EditTracker } from "./editTracker";
 import {
@@ -29,6 +30,7 @@ import {
 } from "./piRpc";
 import type {
     ModelInfo,
+    PanelLaunch,
     RuntimeActivity,
     RuntimeHost,
     TurnEndStatus,
@@ -39,6 +41,7 @@ export type {
     FileChange,
     ModelChoice,
     ModelInfo,
+    PanelLaunch,
     PiConfig,
     RuntimeActivity,
     RuntimeHost,
@@ -176,6 +179,10 @@ export class SessionRuntime {
     private cachedCommands?: RpcCommandInfo[];
 
     private client?: PiClient;
+    /** 本 panel 启动 pi 时的额外要求（子会话才有）；进程重启时照原样再用一次。 */
+    private launch?: PanelLaunch;
+    /** 从本进程 stderr 里挑出“派子会话”暗号行的攒行器。 */
+    private readonly tabaFrames = new TabaFrameParser();
     private readonly edits: EditTracker;
     private forkEntries: { entryId: string; text: string }[] = [];
     /** 本轮已展示过的错误文本；防止重试期间同一错误刷屏。agent_start 时重置。 */
@@ -243,17 +250,20 @@ export class SessionRuntime {
     /** 启动该 tab 的 pi 进程。优先领取宿主预热的备用进程（免冷启动），
      *  领不到（首 tab / 备用尚未就绪）时自行 spawn。
      *  @param modelOverride 指定启动模型（新 tab 继承活跃 tab 传入）；
-     *  缺省时用本 tab 最后已知模型，再缺省才回落宿主全局配置。 */
-    public startClient(modelOverride?: { provider?: string; modelId?: string }): void {
+     *  缺省时用本 tab 最后已知模型，再缺省才回落宿主全局配置。
+     *  @param launch 额外启动要求（子会话用：自己的会话文件、提示词、工具白名单，且不能再派）。
+     *  传过的 launch 会记住：pi 进程退出后重发消息会自动重启，那时要照原样再起一次。 */
+    public startClient(modelOverride?: { provider?: string; modelId?: string }, launch?: PanelLaunch): void {
         if (this.client && this.client.isRunning()) {
             return;
         }
+        if (launch) { this.launch = launch; }
         this.setPiReady(false);
 
         const want = modelOverride ?? this.currentModel();
 
-        // 备用进程已就绪：直接挂上，避免 pi 冷启动等待
-        const spare = this.host.claimSpareClient?.();
+        // 备用进程已就绪：直接挂上，避免 pi 冷启动等待（子会话不行：它的启动参数不一样）
+        const spare = this.launch?.skipSpare ? undefined : this.host.claimSpareClient?.();
         if (spare) {
             this.attachClient(spare.client);
             // 备用进程按全局配置启动；与继承目标不符时补发一次 set_model
@@ -281,15 +291,24 @@ export class SessionRuntime {
 
         const extraArgs = cfg.trustProject
             ? [...cfg.extraArgs, "--approve"]
-            : cfg.extraArgs;
+            : [...cfg.extraArgs];
+
+        // “派子会话”那个扩展：配置里有路径、且本 panel 不是子会话时才加载（子会话不能再派）
+        const tabaExtension = this.launch?.noTaba ? "" : cfg.tabaExtension || "";
+        if (tabaExtension) { extraArgs.push("-e", tabaExtension); }
+        if (this.launch?.extraArgs && this.launch.extraArgs.length > 0) {
+            extraArgs.push(...this.launch.extraArgs);
+        }
 
         this.attachClient(
             new PiClient({
                 piPath: cfg.piPath,
-                cwd: this.host.getCwd(),
+                cwd: this.launch?.cwd || this.host.getCwd(),
                 provider: want?.provider || cfg.provider || undefined,
                 model: want?.modelId || cfg.model || undefined,
                 extraArgs,
+                // 那个扩展靠这个环境变量找插件自带的角色文件
+                env: cfg.tabaDir ? { PICHAT_TABA_DIR: cfg.tabaDir } : undefined,
             })
         );
     }
@@ -306,6 +325,10 @@ export class SessionRuntime {
         this.client.on("ui", (req) => this.onPiUiRequest(req));
         this.client.on("stderr", (text: string) => {
             console.error("[pi stderr]", text);
+            // 那个扩展把“派子会话”的请求写在 stderr 里（pi 自己的诊断也走这条路，不是暗号行就丢掉）
+            for (const req of this.tabaFrames.feed(text)) {
+                this.host.onTabaRequest?.(this.id, req);
+            }
         });
         this.client.on("error", (err: Error) => {
             this.post({ type: "systemError", text: `pi 错误: ${err.message}` });
@@ -465,6 +488,9 @@ export class SessionRuntime {
         this.noteSessionReplaced();
         this.currentSessionPath = undefined;
         this.hasConversation = false;
+        // 子会话在这里点“新建会话”就不再是那个派来的会话了：
+        // 丢掉子会话专用的启动参数（--session 等），以后重起进程也按普通会话起。
+        this.launch = undefined;
         this.post({ type: "clear" });
         this.post({ type: "system", text: "已开始新会话。" });
         if (this.client && this.client.isRunning()) {

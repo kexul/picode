@@ -1541,10 +1541,33 @@
   // ==================== tab 栏渲染（容器） ====================
   let tabBarSig = "";      // 内容签名：不变则跳过重建（流式期间 tabList 每 48ms 一推）
   let tabBarDirty = false; // 拖拽中跳过重建，dragend 后补一次
+  /** 子会话（taba）的情况说明：鼠标悬到 tab 上那个标记时显示。 */
+  function tabaTip(info) {
+    if (!info) { return ""; }
+    if (info.role === "child") {
+      const from = info.parentName ? ("由「" + info.parentName + "」派来") : "已变成独立会话";
+      const lines = ["子会话：" + (info.name || ""), from, "状态：" + (info.stateText || info.state || "")];
+      if (info.modelLabel) { lines.push("模型：" + info.modelLabel); }
+      if (info.deliveries > 0) { lines.push("结果已交回 " + info.deliveries + " 次"); }
+      lines.push("右键这个 tab 可以把结果交回去、或改成独立会话。");
+      return lines.join("\n");
+    }
+    const kids = info.children || [];
+    const lines = ["这个会话派出去 " + kids.length + " 个子会话："];
+    kids.forEach((k) => { lines.push("- " + k.name + "（" + (k.stateText || k.state) + "）"); });
+    lines.push("右键这个 tab 可以直接切过去。");
+    return lines.join("\n");
+  }
+  /** 子会话状态的签名：变了才重建 tab 条（用时不进签名，否则每推一次都重建）。 */
+  function tabaSig(info) {
+    if (!info) { return ""; }
+    if (info.role === "child") { return "c:" + (info.state || "") + ":" + (info.deliveries || 0) + ":" + (info.name || ""); }
+    return "p:" + (info.children || []).map((k) => k.id + (k.state || "")).join(",");
+  }
   function renderTabBar() {
     if (draggingPanelId) { tabBarDirty = true; return; }
     const sig = Array.from(tabViews.values()).map((tv) =>
-      tv.id + ":" + tv.name + ":" + (activeTabId === tv.id ? 1 : 0) + ":" + (tv.streaming ? 1 : 0) + ":" + (tv.loading ? 1 : 0)
+      tv.id + ":" + tv.name + ":" + (activeTabId === tv.id ? 1 : 0) + ":" + (tv.streaming ? 1 : 0) + ":" + (tv.loading ? 1 : 0) + ":" + tabaSig(tv.taba)
     ).join("|");
     if (sig === tabBarSig) { return; }
     tabBarSig = sig;
@@ -1556,6 +1579,24 @@
       el.className = "chat-tab" + (activeTabId === tv.id ? " active" : "") + (tv.streaming ? " streaming" : "") + (tv.loading ? " loading" : "");
       const spinner = document.createElement("span"); spinner.className = "ct-spinner"; el.appendChild(spinner);
       const title = document.createElement("span"); title.className = "ct-title"; title.textContent = tv.name; title.title = tv.name; el.appendChild(title);
+      // 派子会话（taba）标记：子会话一个“↳”，派了活出去的显示“⇢几个”
+      const tb = tv.taba;
+      if (tb && tb.role === "child") {
+        el.classList.add("taba-child");
+        const mark = document.createElement("span");
+        mark.className = "ct-taba ct-taba-child";
+        mark.textContent = "↳";
+        mark.title = tabaTip(tb);
+        el.insertBefore(mark, title);
+      } else if (tb && tb.role === "parent" && (tb.children || []).length) {
+        el.classList.add("taba-parent");
+        const running = (tb.children || []).filter((k) => k.state === "starting" || k.state === "running").length;
+        const badge = document.createElement("span");
+        badge.className = "ct-taba ct-taba-count" + (running > 0 ? " running" : "");
+        badge.textContent = "⇢" + (running > 0 ? running : tb.children.length);
+        badge.title = tabaTip(tb);
+        el.appendChild(badge);
+      }
       const close = document.createElement("span"); close.className = "ct-close"; close.title = "关闭 tab（内部 panel 全部关闭）";
       // 用 SVG 画叉：文本 “×” 在 Segoe UI 等字体下 ink 偏上，flex 居中无法修正；
       // SVG 笔画由 viewBox 几何决定，天然居中（与 VS Code 自带关闭图标同法）。
@@ -1800,11 +1841,37 @@
     if (!transferDest) { return null; }
     return { label, hint: "连同会话上下文与 pi 进程一起搬过去，不重启、不丢历史", fn: () => vscode.postMessage(msg) };
   }
+  /** 子会话（taba）相关的右键菜单项：子会话那边是“交回 / 打开父会话 / 变独立”，派了活的那边列出去哪几个。 */
+  function tabaMenuItems(panelId) {
+    const t = tabs.get(panelId);
+    const info = t && t.taba;
+    if (!info) { return []; }
+    if (info.role === "child") {
+      if (!info.parentName) { return []; }
+      return [
+        {
+          label: "⇪ 把结果交回「" + info.parentName + "」",
+          hint: "把这个会话最后一条回复当成一条新消息发过去（跑完第一轮时已经自动交过一次）",
+          fn: () => vscode.postMessage({ type: "tabaDeliver", panelId }),
+        },
+        { label: "↗ 打开派活的那个会话", fn: () => vscode.postMessage({ type: "tabaGoParent", panelId }) },
+        { label: "⛓ 变成独立会话（不再自动交回）", fn: () => vscode.postMessage({ type: "tabaDetach", panelId }) },
+      ];
+    }
+    return (info.children || []).map((k) => ({
+      label: "↳ " + k.name + "（" + (k.stateText || k.state) + "）",
+      hint: k.tabName ? ("切到 tab「" + k.tabName + "」") : "",
+      fn: () => vscode.postMessage({ type: "tabaOpenTab", tabId: k.tabId, panelId: k.panelId }),
+    }));
+  }
+
   function showPaneMenu(x, y, panelId) {
+    const tabaItems = tabaMenuItems(panelId);
     showMenu(x, y, [
       { label: "＋ 新建空 panel", fn: () => vscode.postMessage({ type: "addPanel", panelId }) },
       { label: "⑂ Fork 会话（克隆上下文到新 panel）", fn: () => vscode.postMessage({ type: "forkPanel", panelId }) },
       transferItem("⤢ 移到" + transferDest + "（保留 pi 进程）", { type: "transferOut", panelId }),
+      ...(tabaItems.length ? [{ label: null }, ...tabaItems] : []),
       { label: null },
       { label: "✕ 关闭 panel", fn: () => vscode.postMessage({ type: "closePanel", panelId }) },
     ].filter(Boolean));
@@ -3266,6 +3333,8 @@
         }
         tv.streaming = !!t.streaming;
         tv.loading = !!t.loading;
+        // 派子会话：这个 tab 是子会话，或者它派过子会话（前端据此画标记与右键菜单）
+        tv.taba = t.taba || null;
         // panel 状态同步（递归布局树）
         const syncNode = (node) => {
           if (!node) { return; }
@@ -3293,6 +3362,7 @@
             if (typeof node.provider === "string") { st.provider = node.provider; }
             if (typeof node.thinkingLevel === "string") { st.thinkingLevel = node.thinkingLevel; }
             if (typeof node.percent === "number") { st.percent = node.percent; }
+            st.taba = node.taba || null;
           } else if (node.kind === "split") {
             (node.children || []).forEach(syncNode);
           }

@@ -159,7 +159,12 @@ export class BrowserChatController extends ChatControllerBase {
     //  配置 / 显示选项（与侧边栏共用同一份设置）
     // ========================================================================
 
-    public getConfig(): PiConfig { return this.owner.getConfig(); }
+    /** 浏览器那份不开“派子会话”：子会话要开在 VSCode 的 tab 里，网页这边开了也没地方显示。
+     *  把扩展路径清空，pi 那边就不会加载它，模型也就看不到 taba 这几个工具。 */
+    public getConfig(): PiConfig {
+        const cfg = this.owner.getConfig();
+        return { ...cfg, tabaExtension: "", tabaDir: "" };
+    }
     public getCwd(): string { return this.owner.getCwd(); }
 
     protected getAutoLoadLast(): boolean { return false; }  // 浏览器这份总是空白开始，不自动接上次会话

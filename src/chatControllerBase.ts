@@ -24,6 +24,7 @@
  */
 import * as fs from "fs";
 import * as path from "path";
+import { randomUUID } from "crypto";
 import { SessionRuntime, RuntimeHost, FileChange, ModelInfo, ModelChoice, StatusInfo, TurnEndInfo, } from "./sessionRuntime";
 import { PiConfig } from "./sessionRuntime";
 import { PiClient } from "./piClient";
@@ -37,6 +38,29 @@ import {
 } from "./sessionStore";
 import { randomNameParts, composeName } from "./names";
 import { DEFAULT_TURN_TITLE_WAIT_MS } from "./runtimeTypes";
+import type { PanelLaunch, TurnEndStatus } from "./runtimeTypes";
+import type { TabaRequest, TabaSpawnRequest, TabaStopRequest } from "./tabaProtocol";
+import {
+    TabaRegistry,
+    buildChildClosedNotice,
+    buildChildIntro,
+    buildDeliveryText,
+    buildSpawnFailure,
+    buildSpawnNotice,
+    describeChildState,
+    formatElapsedMs,
+    type TabaChild,
+} from "./tabaRegistry";
+import { loadRoles, piAgentDir, pickRoleByName, type TabaRole, type TabaSessionMode } from "./tabaRoles";
+import { buildChildSessionLines, childSessionFileName, piSessionDirFor } from "./tabaTask";
+import {
+    buildTabaExtraArgs,
+    buildTabaLaunch,
+    buildTabaTaskText,
+    resolveTabaSpawn,
+} from "./tabaLaunch";
+import { tabaPromptsDir, tabaRolesDir } from "./tabaAssets";
+import { buildRunRecord, tabaRunsDir, writeRunRecord, type TabaRunState } from "./tabaRunFiles";
 import type { RpcSessionState } from "./piRpc";
 
 // ============================================================================
@@ -503,13 +527,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
         }
         const extraArgs = cfg.trustProject
             ? [...cfg.extraArgs, "--approve"]
-            : cfg.extraArgs;
+            : [...cfg.extraArgs];
+        // 备用进程也要带上“派子会话”那个扩展：它会被下一个新 panel 领走，那个 panel 一样得能派活
+        if (cfg.tabaExtension) { extraArgs.push("-e", cfg.tabaExtension); }
         const client = new PiClient({
             piPath: cfg.piPath,
             cwd: this.getCwd(),
             provider: cfg.provider || undefined,
             model: cfg.model || undefined,
             extraArgs,
+            env: cfg.tabaDir ? { PICHAT_TABA_DIR: cfg.tabaDir } : undefined,
         });
         // 记住备用进程的启动模型：新 panel 领取时按继承目标比对，不符则补发 set_model
         this.spareMeta = {
@@ -617,11 +644,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     // ---- 创建 ----
     /** 新建一个 panel 运行时（随机命名，启动 pi 进程；不挂入任何布局）。 */
-    protected createPanelRuntime(inherited?: { provider?: string; modelId?: string }): SessionRuntime {
+    protected createPanelRuntime(inherited?: { provider?: string; modelId?: string }, launch?: PanelLaunch): SessionRuntime {
         const id = `${this.workspaceId}:panel-${++this.panelSeq}`;
         const rt = new SessionRuntime(id, this.allocatePanelName(), this);
         this.panels.set(id, rt);
-        rt.startClient(inherited);
+        rt.startClient(inherited, launch);
         return rt;
     }
 
@@ -695,6 +722,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const rt = this.panels.get(panelId);
         if (!rt) { return; }
         const c = this.containerOfPanel(panelId);
+        this.notePanelGoneForTaba(panelId);
         rt.stopClient();
         this.releasePanelName(rt.nameParts);
         this.panels.delete(panelId);
@@ -726,7 +754,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!c) { return; }
         for (const pid of layoutLeaves(c.root)) {
             const rt = this.panels.get(pid);
-            if (rt) { rt.stopClient(); this.releasePanelName(rt.nameParts); this.panels.delete(pid); }
+            if (rt) { this.notePanelGoneForTaba(pid); rt.stopClient(); this.releasePanelName(rt.nameParts); this.panels.delete(pid); }
         }
         this.tabContainers.delete(id);
         this.postToWebview({ type: "tabClosed", id });
@@ -799,6 +827,519 @@ export abstract class ChatControllerBase implements RuntimeHost {
             }
         }
         this.broadcastTabList(true);
+    }
+
+    // ========================================================================
+    //  派子会话（taba）：一个会话把活派给另一个会话，子会话开在新 tab 里
+    // ========================================================================
+
+    /** 子会话登记表。 */
+    protected readonly taba = new TabaRegistry();
+    /** 正在派活中的编号：同一个请求重复送过来时不要开出两个 tab。 */
+    private readonly tabaInFlight = new Set<string>();
+    /** 子会话用的临时提示词文件（角色说明当系统提示词时用），panel 关掉时删。 */
+    private readonly tabaPromptFiles = new Map<string, string>();
+    /** 等子会话的 pi 起来最多等多久（冷启动要加载扩展，比领备用进程慢）。 */
+    protected static readonly TABA_CHILD_READY_TIMEOUT_MS = 40000;
+    /** tab 名里子会话名字最多占多长。 */
+    private static readonly TABA_TAB_NAME_MAX = 28;
+
+    /** RuntimeHost.onTabaRequest：某个会话里的 pi 扩展要派子会话 / 停子会话。 */
+    public onTabaRequest(panelId: string, request: TabaRequest): void {
+        if (request.kind === "spawn") {
+            void this.tabaSpawn(panelId, request);
+            return;
+        }
+        this.tabaStopByRef(panelId, request);
+    }
+
+    /** 派活没成：界面上打一行，同时把原因交给模型（它那边的工具已经回了“已派出”）。 */
+    protected tabaFailSpawn(parentRt: SessionRuntime, name: string, reason: string): void {
+        this.postToTab(parentRt.id, { type: "system", text: buildSpawnFailure({ name, reason }) });
+        parentRt.handleSend(`【派子会话没成】「${name}」：${reason}`);
+    }
+
+    /**
+     * 派一个子会话：新开一个 tab（不抢当前焦点），把任务发过去。
+     * 它跑完第一轮后，最后一条回复会自动交回这个会话（见 tabaOnTurnEnd）。
+     */
+    protected async tabaSpawn(parentPanelId: string, req: TabaSpawnRequest): Promise<void> {
+        const parentRt = this.panels.get(parentPanelId);
+        if (!parentRt) { return; }
+        // 子会话不能再往下派：它那个 tab 本来就不加载这个扩展，这里再挡一道
+        if (this.taba.byChildPanel(parentPanelId)) {
+            this.postToTab(parentPanelId, { type: "system", text: "子会话不能再派子会话。" });
+            return;
+        }
+        if (this.taba.has(req.id) || this.tabaInFlight.has(req.id)) { return; }
+        this.tabaInFlight.add(req.id);
+        try {
+            const cfg = this.getConfig();
+
+            // 角色（可选）：找不到、或者这个角色我们的 tab 跑不了，都要如实回话
+            let roles: TabaRole[] = [];
+            try {
+                roles = loadRoles(this.getCwd(), cfg.tabaDir ? tabaRolesDir(cfg.tabaDir) : undefined);
+            } catch (e: any) {
+                console.error("[taba] 读角色文件失败:", e?.message ?? e);
+            }
+            const role = req.agent ? pickRoleByName(roles, req.agent) : undefined;
+            if (req.agent && !role) {
+                this.tabaFailSpawn(parentRt, req.name, `没有叫「${req.agent}」这个角色`);
+                return;
+            }
+            if (role?.unusable) {
+                this.tabaFailSpawn(parentRt, req.name, `角色「${role.name}」跑不了：${role.unusable}`);
+                return;
+            }
+
+            // 子会话怎么起：工作目录 / 会话内容从哪来 / 模型 / 工具白名单 都在这里面算
+            const plan = resolveTabaSpawn({
+                req,
+                role,
+                parentCwd: this.getCwd(),
+                parentModelId: parentRt.modelId,
+                parentProvider: parentRt.provider,
+                resolvePath: (p) => this.resolvePath(p),
+            });
+            const { cwd, mode } = plan;
+
+            // 带上下文那两档：先把子会话文件写出来，pi 用 --session 打开它
+            let sessionFile: string | undefined;
+            let note = "";
+            if (mode !== "standalone") {
+                const parentSession = req.parentSessionFile || parentRt.currentSessionPath || "";
+                const seeded = await this.tabaSeedChildSession(parentSession, mode, cwd);
+                if (seeded) { sessionFile = seeded; }
+                else { note = "（没能带上这个会话之前的对话：它还没写到磁盘上，这次按全新会话派的）"; }
+            }
+
+            // 角色说明放哪：角色文件里写了 system-prompt 就当系统提示词，否则跟任务一起发
+            let promptFile: string | undefined;
+            if (role && role.body && role.systemPromptMode && cfg.tabaDir) {
+                promptFile = await this.tabaWritePromptFile(cfg.tabaDir, role.name, req.id, role.body);
+                if (promptFile) { this.tabaPromptFiles.set(`pending:${req.id}`, promptFile); }
+            }
+            // 写不出去（没有资源目录之类）就退回跟任务一起发，说明总得让子会话看到
+            const bodyInTask = !promptFile;
+            const extraArgs = buildTabaExtraArgs({
+                sessionFile,
+                promptFile,
+                systemPromptMode: role?.systemPromptMode,
+                tools: plan.tools,
+            });
+
+            const created = this.createBackgroundTab(buildTabaLaunch(extraArgs, cwd), plan.modelOverride);
+            if (!created) {
+                this.tabaFailSpawn(parentRt, req.name, "新 tab 开不出来（pi 可执行文件没找到？）");
+                return;
+            }
+            const { container, rt } = created;
+            const pendingPrompt = this.tabaPromptFiles.get(`pending:${req.id}`);
+            this.tabaPromptFiles.delete(`pending:${req.id}`);
+            if (pendingPrompt) { this.tabaPromptFiles.set(rt.id, pendingPrompt); }
+
+            const child: TabaChild = {
+                id: req.id,
+                name: req.name,
+                task: req.task,
+                agent: req.agent ?? role?.name,
+                parentPanelId,
+                parentSessionFile: req.parentSessionFile || "",
+                childPanelId: rt.id,
+                childTabId: container.id,
+                state: "starting",
+                startedAt: Date.now(),
+                deliveries: 0,
+                sessionMode: mode,
+                sessionFile,
+                modelLabel: plan.modelSpec || undefined,
+            };
+            if (!this.taba.add(child)) {
+                // 同一个编号又来了一次（理论上不会）：把刚开的 tab 收回去
+                this.closeTab(container.id);
+                return;
+            }
+            this.tabaWriteRun(child);
+
+            const parentTab = this.containerOfPanel(parentPanelId);
+            this.postToTab(parentPanelId, {
+                type: "system",
+                text: buildSpawnNotice({ child, tabName: this.containerDisplayName(container), mode }) + note,
+            });
+            this.postToTab(rt.id, {
+                type: "system",
+                text: buildChildIntro({
+                    child,
+                    parentTabName: parentTab ? this.containerDisplayName(parentTab) : undefined,
+                }),
+            });
+            this.broadcastTabList(true);
+
+            const taskText = buildTabaTaskText({ role, bodyInTask, task: req.task });
+            const ready = await rt.waitReady(ChatControllerBase.TABA_CHILD_READY_TIMEOUT_MS);
+            // 等待期间 tab 被关掉了：登记在关 tab 时已经清掉了，这里什么都不用做
+            if (!this.panels.has(rt.id)) { return; }
+            if (!ready) {
+                this.taba.noteTurnEnd(req.id, "error", Date.now());
+                this.postToTab(rt.id, { type: "systemError", text: "子会话的 pi 没起来（等超时了）。" });
+                this.tabaDeliver(child, { resultText: "", status: "error", manual: false });
+                return;
+            }
+            rt.handleSend(taskText);
+            this.taba.noteTaskSent(req.id);
+            this.tabaWriteRun(this.taba.get(req.id));
+            this.broadcastTabList();
+            // 问出子会话与父会话的 .jsonl 路径写到名录里（全新会话要等 pi 落盘才有）
+            void this.tabaResolveSessionFiles(req.id, rt, parentRt);
+        } finally {
+            this.tabaInFlight.delete(req.id);
+        }
+    }
+
+    /** 把某个子会话的情况写到名录文件里（模型那边 taba_peek 读的就是它）。 */
+    protected tabaWriteRun(child: TabaChild | undefined, state?: TabaRunState): void {
+        if (!child) { return; }
+        const cfg = this.getConfig();
+        if (!cfg.tabaDir) { return; }
+        writeRunRecord(tabaRunsDir(cfg.tabaDir), buildRunRecord({ child, state }));
+    }
+
+    /**
+     * 问出子会话（必要时也问父会话）的 .jsonl 路径，写到名录里。
+     * 全新会话的文件要等 pi 把第一条消息落盘才会出现，所以短轮询最多等 15 秒；
+     * 中途 tab 被关掉、或者两边路径都拿到了就停。
+     */
+    protected async tabaResolveSessionFiles(id: string, childRt: SessionRuntime, parentRt: SessionRuntime): Promise<void> {
+        const deadline = Date.now() + 15000;
+        while (Date.now() < deadline) {
+            const child = this.taba.get(id);
+            if (!child) { return; }
+            // pi 进程不在了（被关掉 / 启动失败）：再问也问不出来，不白等
+            if (!childRt.isRunning()) { return; }
+            let changed = false;
+            if (!child.sessionFile && this.panels.has(childRt.id)) {
+                const resp = await childRt.request<RpcSessionState>({ type: "get_state" }, 3000);
+                const file = resp?.data?.sessionFile;
+                if (typeof file === "string" && file) {
+                    child.sessionFile = file;
+                    childRt.currentSessionPath = file;
+                    changed = true;
+                }
+            }
+            if (!child.parentSessionFile && this.panels.has(parentRt.id)) {
+                let file = parentRt.currentSessionPath;
+                if (!file) {
+                    const resp = await parentRt.request<RpcSessionState>({ type: "get_state" }, 3000);
+                    file = resp?.data?.sessionFile;
+                }
+                if (typeof file === "string" && file) {
+                    child.parentSessionFile = file;
+                    changed = true;
+                }
+            }
+            if (changed) { this.tabaWriteRun(child); }
+            if (child.sessionFile && child.parentSessionFile) { return; }
+            await new Promise((r) => setTimeout(r, 500));
+        }
+    }
+
+    /** 写一个“带上下文”的子会话文件，返回路径；写不了返回 undefined。 */
+    protected async tabaSeedChildSession(
+        parentSessionFile: string,
+        mode: TabaSessionMode,
+        cwd: string
+    ): Promise<string | undefined> {
+        if (!parentSessionFile) { return undefined; }
+        const parentAbs = this.resolvePath(parentSessionFile);
+        if (!parentAbs || !fs.existsSync(parentAbs)) { return undefined; }
+        let parentLines: string[];
+        try {
+            parentLines = (await fs.promises.readFile(parentAbs, "utf8")).split("\n");
+        } catch (e: any) {
+            console.error("[taba] 读父会话文件失败:", e?.message ?? e);
+            return undefined;
+        }
+        const sessionId = randomUUID();
+        const timestamp = new Date().toISOString();
+        const dir = piSessionDirFor(cwd, piAgentDir());
+        const file = path.join(dir, childSessionFileName(timestamp, sessionId));
+        const lines = buildChildSessionLines({
+            mode: mode === "fork" ? "fork" : "lineage-only",
+            sessionId,
+            cwd,
+            timestamp,
+            parentSessionFile: parentAbs,
+            parentLines,
+        });
+        try {
+            await fs.promises.mkdir(dir, { recursive: true });
+            await fs.promises.writeFile(file, lines.join("\n") + "\n", "utf8");
+        } catch (e: any) {
+            console.error("[taba] 写子会话文件失败:", e?.message ?? e);
+            return undefined;
+        }
+        return file;
+    }
+
+    /** 角色说明当系统提示词时写成文件（pi 的 --append-system-prompt 收文件路径）。 */
+    protected async tabaWritePromptFile(
+        resourceDir: string,
+        roleName: string,
+        id: string,
+        body: string
+    ): Promise<string | undefined> {
+        try {
+            const dir = tabaPromptsDir(resourceDir);
+            await fs.promises.mkdir(dir, { recursive: true });
+            const safe = roleName.replace(/[^A-Za-z0-9._\u4e00-\u9fff-]/g, "-").slice(0, 40) || "role";
+            const file = path.join(dir, `${safe}-${id}.md`);
+            await fs.promises.writeFile(file, body, "utf8");
+            return file;
+        } catch (e: any) {
+            console.error("[taba] 写角色说明文件失败:", e?.message ?? e);
+            return undefined;
+        }
+    }
+
+    /** 新开一个后台 tab：不抢当前焦点（一次派好几个时不该把正在看的会话顶走）。 */
+    protected createBackgroundTab(
+        launch: PanelLaunch,
+        modelOverride?: { provider?: string; modelId?: string }
+    ): { container: TabContainer; rt: SessionRuntime } | undefined {
+        const cfg = this.getConfig();
+        if (!this.resolveExecutable(cfg.piPath)) { return undefined; }
+        const rt = this.createPanelRuntime(modelOverride, launch);
+        const c: TabContainer = {
+            id: `${this.workspaceId}:tab-${++this.tabSeq}`,
+            root: { kind: "panel", panelId: rt.id },
+            focusPanelId: rt.id,
+        };
+        this.tabContainers.set(c.id, c);
+        this.broadcastTabList(true);
+        return { container: c, rt };
+    }
+
+    /** 模型指名停某个子会话当前这一轮（tab 和会话都留着）。 */
+    protected tabaStopByRef(parentPanelId: string, req: TabaStopRequest): void {
+        const parentRt = this.panels.get(parentPanelId);
+        const child = this.taba.findByRef(parentPanelId, { id: req.id, name: req.name });
+        if (!child) {
+            parentRt?.handleSend(
+                `【停子会话没成】找不到「${req.name || req.id || "那个子会话"}」：不是这个会话派出去的，或者它的 tab 已经关掉了。`
+            );
+            return;
+        }
+        const rt = child.childPanelId ? this.panels.get(child.childPanelId) : undefined;
+        if (!rt) { return; }
+        rt.abortActiveRun();
+        this.postToTab(rt.id, { type: "system", text: "派活给你的那个会话让你停下当前这一轮。" });
+        this.postToTab(parentPanelId, {
+            type: "system",
+            text: `已让子会话「${child.name}」停下当前这一轮（它的 tab 还留着）。`,
+        });
+    }
+
+    /** 子会话跑完一轮：第一轮的结果自动交回派活的会话（只交一次），之后用户接管就不再自动交。 */
+    protected tabaOnTurnEnd(info: TurnEndInfo): void {
+        const child = this.taba.byChildPanel(info.panelId);
+        if (!child) { return; }
+        // 第一轮：记下结束时间，把结果交回去（tabaDeliver 里会重写名录）
+        if (child.endedAt === undefined && child.deliveries === 0) {
+            this.taba.noteTurnEnd(child.id, info.status, Date.now());
+            this.tabaDeliver(child, { resultText: info.lastReplyText ?? "", status: info.status, manual: false });
+            return;
+        }
+        // 后面的轮次（一般是用户在子 tab 里接管了）：不再自动交回，
+        // 但名录要跟上，否则主对话那边 taba_peek 看到的“最后一条回复的开头”一直停在旧的
+        if (info.lastReplyText) { child.result = info.lastReplyText; }
+        this.tabaWriteRun(child);
+    }
+
+    /** 把子会话的结果交到派活那个会话里（当成一条新消息发过去）。 */
+    protected tabaDeliver(
+        child: TabaChild,
+        opts: { resultText?: string; status?: TurnEndStatus; manual?: boolean }
+    ): boolean {
+        const parentRt = child.parentPanelId ? this.panels.get(child.parentPanelId) : undefined;
+        const parentTab = parentRt ? this.containerOfPanel(parentRt.id) : undefined;
+        const result = (opts.resultText ?? child.result ?? "").trim();
+        child.result = result;
+        if (!parentRt || !parentTab) {
+            if (child.childPanelId) {
+                this.postToTab(child.childPanelId, {
+                    type: "system",
+                    text: "派你来干这个活的会话已经关掉了，结果交不回去；你现在是独立会话。",
+                });
+            }
+            this.tabaWriteRun(child);
+            return false;
+        }
+        const childTab = child.childTabId ? this.tabContainers.get(child.childTabId) : undefined;
+        const text = buildDeliveryText({
+            child,
+            result,
+            elapsedMs: Math.max(0, (child.endedAt ?? Date.now()) - child.startedAt),
+            status: opts.status ?? child.lastStatus ?? "done",
+            childTabName: childTab ? this.containerDisplayName(childTab) : undefined,
+            manual: opts.manual,
+        });
+        parentRt.handleSend(text);
+        this.taba.markDelivered(child.id, result);
+        this.postToTab(parentRt.id, { type: "system", text: `已把子会话「${child.name}」的结果交回本会话。` });
+        if (child.childPanelId) {
+            this.postToTab(child.childPanelId, {
+                type: "system",
+                text: `结果已交回「${this.containerDisplayName(parentTab)}」。这个 tab 还留着，你可以接着问。`,
+            });
+        }
+        this.broadcastTabList(true);
+        this.tabaWriteRun(child);
+        return true;
+    }
+
+    /** 界面上的“交回结果”：拿当前最后一条回复交回去（第一轮还没跑完也能交）。 */
+    public async tabaDeliverManual(panelId: string): Promise<void> {
+        const child = this.taba.byChildPanel(panelId);
+        if (!child) { return; }
+        const rt = this.panels.get(panelId);
+        let text = "";
+        if (rt) {
+            try { text = (await rt.getLastAssistantText()) || ""; } catch { text = ""; }
+        }
+        if (child.endedAt === undefined) { child.lastStatus = "done"; }
+        this.tabaDeliver(child, { resultText: text, manual: true });
+    }
+
+    /** 界面上的“变成独立会话”：断掉跟派活那边的关系，不再自动交回。 */
+    public tabaDetachChild(panelId: string): void {
+        const child = this.taba.byChildPanel(panelId);
+        if (!child) { return; }
+        const parentPanelId = child.parentPanelId;
+        child.parentPanelId = undefined;
+        child.state = "detached";
+        this.postToTab(panelId, { type: "system", text: "已变成独立会话：结果不会再自动交回原来那个会话。" });
+        if (parentPanelId && this.panels.has(parentPanelId)) {
+            this.postToTab(parentPanelId, {
+                type: "system",
+                text: `子会话「${child.name}」被用户改成了独立会话，结果不会再交回。`,
+            });
+        }
+        this.broadcastTabList(true);
+        this.tabaWriteRun(child);
+    }
+
+    /** 界面上的“打开派活的那个会话”。 */
+    public tabaGoParent(panelId: string): void {
+        const parentPanelId = this.taba.byChildPanel(panelId)?.parentPanelId;
+        if (!parentPanelId) { return; }
+        const c = this.containerOfPanel(parentPanelId);
+        if (!c) { return; }
+        this.setActive(c.id);
+        this.focusPanel(parentPanelId);
+    }
+
+    /** 切到某个 tab（可选：同时聚焦其中某个 panel）。 */
+    public tabaOpenTab(tabId: string, panelId?: string): void {
+        if (!this.tabContainers.has(tabId)) { return; }
+        this.setActive(tabId);
+        if (panelId && this.panels.has(panelId)) { this.focusPanel(panelId); }
+    }
+
+    /** 某个 tab 的显示名（不在就返回空串）。 */
+    protected tabNameOf(tabId: string): string {
+        const c = this.tabContainers.get(tabId);
+        return c ? this.containerDisplayName(c) : "";
+    }
+
+    /** 子会话 tab 在 tab 栗上显示的名字（比随机名字好认）。 */
+    protected tabaTabNameOf(name: string): string {
+        const t = name.trim() || "子会话";
+        return t.length > ChatControllerBase.TABA_TAB_NAME_MAX
+            ? t.slice(0, ChatControllerBase.TABA_TAB_NAME_MAX) + "…"
+            : t;
+    }
+
+    /** panel 被关掉（或搬去另一个工作区）时收尾：它派的子会话变独立；它自己是子会话就摸掉登记并告知父会话。
+     *  @param quiet 搬到另一个工作区时传 true：panel 并没有被关掉，不发那些“关掉了”的提示
+     *  （两边的 panel 编号会变，登记本来就对不上了，清掉就行）。 */
+    protected notePanelGoneForTaba(panelId: string, opts?: { quiet?: boolean }): void {
+        const detached = this.taba.detachChildrenOf(panelId);
+        for (const c of detached) {
+            if (!opts?.quiet && c.childPanelId && this.panels.has(c.childPanelId)) {
+                this.postToTab(c.childPanelId, {
+                    type: "system",
+                    text: "派你来干这个活的会话已经关掉了：你现在是独立会话，结果不会再自动交回。",
+                });
+            }
+            this.tabaWriteRun(c);
+        }
+        const promptFile = this.tabaPromptFiles.get(panelId);
+        if (promptFile) {
+            this.tabaPromptFiles.delete(panelId);
+            try { fs.rmSync(promptFile, { force: true }); } catch { /* 删不掉就算了 */ }
+        }
+        const child = this.taba.byChildPanel(panelId);
+        if (child) {
+            const parentRt = child.parentPanelId ? this.panels.get(child.parentPanelId) : undefined;
+            const undelivered = child.deliveries === 0 && child.endedAt === undefined;
+            // 名录里留下最后一条（写成 tab 已关闭）：事后模型还能读到那个 .jsonl
+            this.tabaWriteRun(child, "closed");
+            this.taba.forgetChildPanel(panelId);
+            if (parentRt && undelivered && !opts?.quiet) {
+                parentRt.handleSend(buildChildClosedNotice({ child }));
+                this.postToTab(parentRt.id, {
+                    type: "system",
+                    text: `子会话「${child.name}」的 tab 关掉了，已把这件事交回本会话。`,
+                });
+            }
+        }
+        if (detached.length > 0) { this.broadcastTabList(true); }
+    }
+
+    /** 某个 panel 的子会话信息（交给前端画标记与右键菜单）。 */
+    protected tabaPanelInfo(panelId: string): Record<string, unknown> | undefined {
+        const asChild = this.taba.byChildPanel(panelId);
+        if (asChild) {
+            const parentTab = asChild.parentPanelId ? this.containerOfPanel(asChild.parentPanelId) : undefined;
+            return {
+                role: "child",
+                id: asChild.id,
+                name: asChild.name,
+                state: asChild.state,
+                stateText: describeChildState(asChild.state),
+                deliveries: asChild.deliveries,
+                sessionMode: asChild.sessionMode,
+                modelLabel: asChild.modelLabel ?? "",
+                elapsedMs: Math.max(0, (asChild.endedAt ?? Date.now()) - asChild.startedAt),
+                elapsedText: formatElapsedMs(Math.max(0, (asChild.endedAt ?? Date.now()) - asChild.startedAt)),
+                parentTabId: parentTab?.id ?? "",
+                parentName: parentTab ? this.containerDisplayName(parentTab) : "",
+            };
+        }
+        const kids = this.taba.liveChildrenOf(panelId);
+        if (kids.length === 0) { return undefined; }
+        return {
+            role: "parent",
+            children: kids.map((k) => ({
+                id: k.id,
+                name: k.name,
+                state: k.state,
+                stateText: describeChildState(k.state),
+                panelId: k.childPanelId ?? "",
+                tabId: k.childTabId ?? "",
+                tabName: k.childTabId ? this.tabNameOf(k.childTabId) : "",
+            })),
+        };
+    }
+
+    /** 某个 tab（容器）的子会话信息：先看它是不是个子会话 tab，再看它派过子会话没有。 */
+    protected tabaTabInfo(c: TabContainer): Record<string, unknown> | undefined {
+        for (const pid of layoutLeaves(c.root)) {
+            const info = this.tabaPanelInfo(pid);
+            if (info) { return info; }
+        }
+        return undefined;
     }
 
     // ---- 拖拽：panel 移动（同 tab 重排 / 跨 tab 搬家 / 拖出新建 tab）----
@@ -899,6 +1440,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected disposePanelRuntime(panelId: string): void {
         const rt = this.panels.get(panelId);
         if (!rt) { return; }
+        this.notePanelGoneForTaba(panelId);
         rt.stopClient();
         this.releasePanelName(rt.nameParts);
         this.panels.delete(panelId);
@@ -958,7 +1500,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         } else {
             this.detachPanelFromContainer(container, panelIds[0]);
         }
-        for (const id of panelIds) { this.panels.delete(id); }
+        for (const id of panelIds) { this.notePanelGoneForTaba(id, { quiet: true }); this.panels.delete(id); }
         this.broadcastTabList(true);
         // 源工作区被搬空：补一个空 tab，界面保持可用（与 closeTab 一致）
         if (this.tabContainers.size === 0) { this.newTab(); }
@@ -1061,6 +1603,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 provider: rt?.provider,
                 thinkingLevel: rt?.thinkingLevel,
                 percent: rt?.contextPercent,
+                // 派子会话：这个 panel 是子会话、或者它派过子会话（前端据此画标记与菜单）
+                taba: this.tabaPanelInfo(node.panelId) ?? null,
             };
         }
         return {
@@ -1075,7 +1619,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const leaves = layoutLeaves(c.root);
         const rts = leaves.map((pid) => this.panels.get(pid)).filter((rt) => !!rt);
         if (rts.length === 0) { return "新对话"; }
-        if (rts.length === 1) { return composeName(rts[0]!.nameParts); }
+        if (rts.length === 1) {
+            // 子会话 tab：用它自己的活名（比“沉静的雪豹”好认）
+            const child = this.taba.byChildPanel(rts[0]!.id);
+            if (child) { return this.tabaTabNameOf(child.name); }
+            return composeName(rts[0]!.nameParts);
+        }
         return rts.map((rt) => rt!.noun).join("·");
     }
 
@@ -1129,6 +1678,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                     focusPanelId: c.focusPanelId ?? null,
                     streaming: leaves.some((pid) => !!this.panels.get(pid)?.streaming),
                     loading: leaves.some((pid) => !!this.panels.get(pid)?.loading),
+                    taba: this.tabaTabInfo(c) ?? null,
                     root: this.serializeLayout(c.root),
                 };
             }),
@@ -1158,6 +1708,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
      *   2. 系统提醒等一等 pi 的会话标题再发，标题到手（或等超时）才交给平台层。
      */
     public onTurnEnd(info: TurnEndInfo): void {
+        // 子会话跑完第一轮：结果先交回派活的那个会话（不等会话标题）
+        this.tabaOnTurnEnd(info);
         if (this.notifyBeepEnabled()) {
             // 发给当前 tab 里的所有 panel：界面可见就响（网页那边会自己拦下隐藏情况）；
             // panel 在隐藏的 tab 里时只发给它自己，界面看不见，不会响。
@@ -1791,6 +2343,23 @@ export abstract class ChatControllerBase implements RuntimeHost {
                     typeof msg.fromTabId === "string" ? msg.fromTabId : "",
                     typeof msg.text === "string" ? msg.text : undefined
                 );
+                return;
+            case "tabaDeliver":
+            case "tabaDetach":
+            case "tabaGoParent": {
+                // 这三条认 panelId（前端从 panel 右键菜单发）；兼容只带 tabId 的写法
+                const pid = typeof msg.panelId === "string" ? msg.panelId
+                    : (typeof msg.tabId === "string" ? msg.tabId : "");
+                if (!pid) { return; }
+                if (msg.type === "tabaDeliver") { void this.tabaDeliverManual(pid); }
+                else if (msg.type === "tabaDetach") { this.tabaDetachChild(pid); }
+                else { this.tabaGoParent(pid); }
+                return;
+            }
+            case "tabaOpenTab":
+                if (typeof msg.tabId === "string" && msg.tabId) {
+                    this.tabaOpenTab(msg.tabId, typeof msg.panelId === "string" ? msg.panelId : undefined);
+                }
                 return;
         }
 

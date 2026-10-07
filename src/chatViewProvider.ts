@@ -13,6 +13,7 @@ import type { BrowserChatOwner, ExternalChatWorkspace } from "./browserChatContr
 import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { HistoryCanvasPanel } from "./historyCanvasPanel";
 import { EditorChatPanel, type EditorChatPanelOwner } from "./editorChatPanel";
+import { getTabaAssets } from "./tabaAssets";
 import { TurnNotifier } from "./turnNotifier";
 import { DEFAULT_TURN_TITLE_WAIT_MS, type TurnEndInfo } from "./runtimeTypes";
 
@@ -261,12 +262,16 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     // ---- RuntimeHost：配置 / cwd ----
     public getConfig() {
         const cfg = vscode.workspace.getConfiguration("piChat");
+        // 派子会话：只给 VSCode 这边的会话开（浏览器那份由它自己把这两项清空）
+        const taba = cfg.get<boolean>("taba.enabled", true) ? getTabaAssets() : undefined;
         return {
             piPath: cfg.get<string>("piPath", "pi"),
             provider: cfg.get<string>("provider", ""),
             model: cfg.get<string>("model", ""),
             extraArgs: cfg.get<string[]>("extraArgs", []),
             trustProject: cfg.get<boolean>("trustProject", true),
+            tabaExtension: taba?.ok ? taba.extensionPath : "",
+            tabaDir: taba?.ok ? taba.resourceDir : "",
         };
     }
 

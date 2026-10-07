@@ -45,6 +45,12 @@
   @keyframes pi-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   .chat-tab .ct-close { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 16px; height: 16px; margin-left: 2px; opacity: 0.5; padding: 0; border-radius: 3px; }
   .chat-tab .ct-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
+  /* 派子会话（taba）：tab 上的标记。子会话左边一道竖线 + “↳”，派了活的显示“⇢几个”。 */
+  .chat-tab.taba-child { border-left: 2px solid var(--vscode-charts-purple, #b180d7); padding-left: 7px; }
+  .chat-tab .ct-taba { flex: 0 0 auto; line-height: 1; opacity: 0.9; cursor: help; }
+  .chat-tab .ct-taba-child { color: var(--vscode-charts-purple, #b180d7); font-size: 0.95em; }
+  .chat-tab .ct-taba-count { padding: 0 4px; border-radius: 8px; font-size: 0.78em; background: var(--vscode-badge-background, rgba(128,128,128,0.35)); color: var(--vscode-badge-foreground, var(--vscode-foreground)); }
+  .chat-tab .ct-taba-count.running { background: var(--vscode-charts-blue, #3794ff); color: var(--vscode-editor-background, #1e1e1e); animation: pi-pulse 1.6s ease-in-out infinite; }
   #tabBar.hidden { display: none; }
   /* 正文内的文件路径可点击链接：跳转打开对应文件 */
   .file-link { color: var(--vscode-textLink-foreground, #3794ff); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }

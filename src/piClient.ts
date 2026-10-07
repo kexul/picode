@@ -13,6 +13,20 @@ export interface PiClientOptions {
 }
 
 /**
+ * Windows 下我们是带 shell 启动 pi 的（pi 是个 .cmd 脚本，不这样起不来），
+ * 而 Node 在 shell: true 时**不会**给参数加引号，只是用空格把它们拼起来。
+ * 所以带空格的参数（例如家目录带空格时那个扩展文件路径）必须自己加引号，否则会被切成两半。
+ *
+ * 规则：不含空格/制表符就原样返回；已经自己带着成对引号也原样返回；其余情况用双引号包起来。
+ */
+export function quoteArgForWindowsShell(arg: string): string {
+    if (!arg) { return arg; }
+    if (/^["'][^"']*["']$/.test(arg)) { return arg; }
+    if (!/[\s"]/.test(arg)) { return arg; }
+    return '"' + arg.replace(/"/g, '\\"') + '"';
+}
+
+/**
  * 封装 `pi --mode rpc` 子进程，处理 JSONL 协议的读写。
  *
  * 事件：
@@ -52,7 +66,10 @@ export class PiClient extends EventEmitter {
 
         // Windows 下 pi 通常是 .cmd 脚本，需要 shell 才能正确解析
         const isWindows = process.platform === "win32";
-        this.proc = spawn(this.opts.piPath, args, {
+        // shell 启动时参数不会被自动加引号：带空格的（扩展文件路径、cwd 之类）要自己包好
+        const command = isWindows ? quoteArgForWindowsShell(this.opts.piPath) : this.opts.piPath;
+        const finalArgs = isWindows ? args.map(quoteArgForWindowsShell) : args;
+        this.proc = spawn(command, finalArgs, {
             cwd: this.opts.cwd,
             env: { ...process.env, ...this.opts.env },
             shell: isWindows,
