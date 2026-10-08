@@ -1788,32 +1788,43 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     // ========================================================================
-    //  上下文获取（# 引用：把会话文本流注入输入框草稿）
+    //  上下文获取（# 引用：给模型其他会话记录文件的路径，需要时自己读）
     // ========================================================================
 
-    /** 体积可读化（UTF-8 字节数）。 */
-    private formatByteSize(text: string): string {
-        const bytes = Buffer.byteLength(text, "utf8");
+    /** 体积可读化（字节数 → 980B / 120.3KB / 1.2MB）。 */
+    private formatSize(bytes: number): string {
         if (bytes >= 1024 * 1024) { return (bytes / (1024 * 1024)).toFixed(1) + "MB"; }
         if (bytes >= 1024) { return (bytes / 1024).toFixed(1) + "KB"; }
         return bytes + "B";
     }
 
     /**
-     * 为本工作区中的一个 tab / panel 生成 # 引用快照。
-     * 来源可以仍在流式生成；pi 的 get_messages 返回选择时已有内容，结果不再跟踪更新。
+     * 为本工作区中的一个 tab / panel 生成 # 引用内容。
+     * 不再导出会话全文（会话越长越肥，且模型未必需要）：只给一段指向该会话
+     * 记录文件（.jsonl）的指引，要细节时模型自己按需读。
+     * 路径向来源 panel 的 pi 进程问（get_state）；来源可以仍在流式生成，
+     * pi 对这份文件即时追加，模型读到的是它读取那一刻的内容。
      */
     public async buildChatReference(msg: any): Promise<{ title: string; text: string } | undefined> {
         const collect = async (pid: string) => {
             const rt = this.panels.get(pid);
             if (!rt) { return undefined; }
-            const out = await rt.exportChatText();
-            if (!out || out.messageCount === 0) { return undefined; }
-            return { title: rt.title, text: out.text, count: out.messageCount };
+            let sessionFile = rt.currentSessionPath;
+            if (!sessionFile) {
+                const state = await rt.request<RpcSessionState>({ type: "get_state" });
+                sessionFile = state?.data?.sessionFile;
+                if (sessionFile) { rt.currentSessionPath = sessionFile; }
+            }
+            if (!sessionFile) { return undefined; }
+            const abs = this.resolvePath(sessionFile);
+            let size = 0;
+            try { size = fs.statSync(abs).size; } catch { return undefined; }   // 尚未落盘 / 已被清理
+            if (size <= 0) { return undefined; }
+            return { title: rt.title, file: abs.replace(/\\/g, "/"), size, streaming: rt.streaming };
         };
 
         let cardTitle = "";
-        let sections: Array<{ title: string; text: string; count: number }>;
+        let sections: Array<{ title: string; file: string; size: number; streaming: boolean }>;
         if (typeof msg.panelId === "string") {
             const rt = this.panels.get(msg.panelId);
             if (!rt) { return undefined; }
@@ -1825,16 +1836,25 @@ export abstract class ChatControllerBase implements RuntimeHost {
             const c = this.tabContainers.get(msg.tabId);
             if (!c) { return undefined; }
             const results = await Promise.all(layoutLeaves(c.root).map((pid) => collect(pid)));
-            sections = results.filter((s): s is { title: string; text: string; count: number } => !!s);
+            sections = results.filter((s): s is { title: string; file: string; size: number; streaming: boolean } => !!s);
             if (!sections.length) { return undefined; }
             cardTitle = `💬 ${this.containerDisplayName(c)}（${sections.length} 个会话）`;
         } else {
             return undefined;
         }
 
-        const body = sections.map((s) => `会话: ${s.title}\n${s.text}`).join("\n\n");
-        const totalCount = sections.reduce((n, s) => n + s.count, 0);
-        return { title: `${cardTitle} · ${totalCount} 条消息 · ${this.formatByteSize(body)}`, text: body };
+        const lines = sections.map((s) =>
+            `- 会话「${s.title}」：${s.file}（约 ${this.formatSize(s.size)}${s.streaming ? "，仍在持续追加" : ""}）`);
+        const body = [
+            "以下是其他会话的记录文件，需要了解其内容时再读取，不必现在读：",
+            ...lines,
+            "pi 会话文件是 JSON Lines 格式，每行一个 JSON 对象，对话内容在 type 为",
+            "\"message\" 的行里（助手消息里还有 thinking 块，按需忽略）。文件可能很大，",
+            "不要整读：可以先用 grep -n 定位感兴趣的行，再用 read 按行号分段读，",
+            "或用 node / python 写几行脚本只抽取需要的字段。",
+        ].join("\n");
+        const totalSize = sections.reduce((n, s) => n + s.size, 0);
+        return { title: `${cardTitle} · ${this.formatSize(totalSize)}`, text: body };
     }
 
     /** 将来源生成的快照回传给发起 # 引用的 webview。 */
