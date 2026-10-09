@@ -5,7 +5,17 @@ import * as os from "os";
 import * as path from "path";
 import { getBrowserChatHtml } from "./browserHtml";
 import { BrowserChatController, type BrowserChatOwner } from "./browserChatController";
-import { contentTypeOf, isAllowedMediaFile, isLoopbackHostHeader, isLoopbackName, isSameOrigin, isWildcardHost, localHostnames } from "./webTransport";
+import {
+    contentTypeOf,
+    isAllowedMediaFile,
+    isLoopbackHostHeader,
+    isLoopbackName,
+    isSameOrigin,
+    isWildcardHost,
+    localHostnames,
+    PageChannels,
+    type PageChannel,
+} from "./webTransport";
 
 /**
  * PiChatWebServer —— 插件自带的网页服务：让你在浏览器里也能对话。
@@ -16,7 +26,8 @@ import { contentTypeOf, isAllowedMediaFile, isLoopbackHostHeader, isLoopbackName
  *     页面发给插件的消息（`/api`）；
  *   - 插件 → 页面用"服务器推送"（浏览器的 EventSource，长连接，服务器随时能写）；
  *     页面 → 插件用普通请求（POST），按到达顺序交给会话控制器；
- *   - 一个页面占一条推送连接。再开一个页面时，前一个被顶掉（避免两个页面同时改一份会话）。
+ *   - 一个页面占一条推送连接，几个页面（手机 + 电脑）可以同时连着，插件推的消息发给每一个；
+ *     确认框、选项浮层只发给"人最近在里面动过"的那个页面。
  *
  * 界面复用现有那一份：HTML 骨架、chat.js、chat.css 与 VSCode 里的网页视图完全同源，
  * 只有通道不同（由 media/browserBridge.js 把"VSCode 网页视图消息通道"接到这里）。
@@ -27,8 +38,26 @@ import { contentTypeOf, isAllowedMediaFile, isLoopbackHostHeader, isLoopbackName
 
 /** 页面发来的单个请求允许的最大字节数（粘贴图片会是好几 MB）。 */
 const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
-/** 推送连接的保活间隔：每隔这么久写一条注释行，防止中间设备掐掉空闲连接。 */
+/** 心跳间隔：每隔这么久给每条推送连接写一个页面收得到的 tick，同时巡检一遍死连接。
+ *  一来防止中间设备掐掉空闲连接，二来页面靠"多久没收到 tick"自己判断连接是不是已经死了。 */
 const HEARTBEAT_MS = 25_000;
+/** 页面超过这么久没有任何动静（报活或发消息）就把它那条连接收掉。
+ *  手机退到后台后定时器被冻住，报活自然停了：那条连接多半已经死了，占着只会白攒消息。
+ *  页面回到前台会自己重连，重连后插件给它整屏重画一遍（见 browserChatController.resyncPage）。 */
+const PAGE_STALE_MS = 90_000;
+/** 一条推送连接最多积压多少字节：页面不读了（屏黑了 / 网络卡住）就别再往里塞，
+ *  掐掉让它重连重画。不掐的话这些字节全堆在插件进程里，回来时也不会被 GC 回收。 */
+const STREAM_BACKLOG_BYTES = 8 * 1024 * 1024;
+
+/** 时间与上限的可调部分（测试里传小值，不用真的等一分钟）。 */
+export interface WebServerTimings {
+    /** 心跳与死连接巡检的间隔（毫秒）。 */
+    heartbeatMs?: number;
+    /** 页面静默多久算死（毫秒）。 */
+    pageStaleMs?: number;
+    /** 一条连接的积压上限（字节）。 */
+    backlogBytes?: number;
+}
 
 /** 网页服务的设置（来自 piChat.webServer.* 配置项）。 */
 export interface WebServerSettings {
@@ -54,20 +83,26 @@ export class PiChatWebServer {
     private boundPort = 0;
     /** 这台机器合法的地址写法（对照请求里的 Origin，挡别的网站偷偷发来的请求）。 */
     private ownHostnames: string[] = [];
-    /** 当前占着推送流的那个页面标识（页面自己生成的随机串）。 */
-    private activePageId = "";
-    private activeRes?: http.ServerResponse;
-    /** 刚取过页面、但推送连接还没建好的那个页面标识。
-     *  页面加载时 chat.js 发的 ready 可能比推送连接先到，这时不能把它当过期页面拒掉。 */
-    private issuedPageId = "";
+    /** 连着的页面（一个页面一条推送连接）；也记着服务发出过哪些页面标识。 */
+    private readonly pages = new PageChannels();
+    /** 页面标识 → 它那条连接的响应对象（心跳要往里写 tick）。 */
+    private readonly streams = new Map<string, http.ServerResponse>();
     private heartbeat?: ReturnType<typeof setInterval>;
+    private readonly heartbeatMs: number;
+    private readonly pageStaleMs: number;
+    private readonly backlogBytes: number;
     private settings: WebServerSettings = { enabled: false, port: 0, host: "127.0.0.1" };
 
     constructor(
         private readonly mediaDir: string,
         private readonly owner: BrowserChatOwner,
         private readonly hooks: WebServerHooks,
-    ) {}
+        timings?: WebServerTimings,
+    ) {
+        this.heartbeatMs = timings?.heartbeatMs ?? HEARTBEAT_MS;
+        this.pageStaleMs = timings?.pageStaleMs ?? PAGE_STALE_MS;
+        this.backlogBytes = timings?.backlogBytes ?? STREAM_BACKLOG_BYTES;
+    }
 
     // ========================================================================
     //  启动 / 停止
@@ -148,7 +183,7 @@ export class PiChatWebServer {
             server.close();
             return;
         }
-        this.heartbeat = setInterval(() => this.writeHeartbeat(), HEARTBEAT_MS);
+        this.heartbeat = setInterval(() => this.writeHeartbeat(), this.heartbeatMs);
         this.hooks.log(`网页服务已启动：${this.url ?? "(地址未知)"}`);
         this.logLanAddresses();
         this.hooks.onUrlChanged?.(this.url);
@@ -180,13 +215,16 @@ export class PiChatWebServer {
         }
     }
 
-    /** 同步收摊：断推送连接、结束会话工作区（其中的 pi 进程一起结束）、清心跳。 */
+    /** 同步收摊：断掉每条推送连接、结束会话工作区（其中的 pi 进程一起结束）、清心跳。 */
     private teardown(): void {
         if (this.heartbeat) { clearInterval(this.heartbeat); this.heartbeat = undefined; }
-        this.closeActiveChannel("网页服务已停止。");
-        this.activePageId = "";
-        this.issuedPageId = "";
+        for (const channel of this.pages.removeAll()) {
+            // 告别话要给：页面收到 end 就不再重连（服务真的停了，重连也没用）
+            channel.close("网页服务已停止。");
+        }
+        this.streams.clear();
         if (this.controller) {
+            this.controller.setHub(undefined);
             this.controller.dispose();
             this.controller = undefined;
         }
@@ -297,7 +335,9 @@ export class PiChatWebServer {
             return;
         }
         this.ensureController();
-        this.issuedPageId = id;
+        // 记下"这个标识是本服务发出的"：页面里 chat.js 发的 ready 可能比推送连接先到，
+        // 那时也得收下它的消息（否则会被当成过期页面拒掉）
+        this.pages.markIssued(id);
         res.writeHead(200, {
             "Content-Type": "text/html; charset=utf-8",
             "Cache-Control": "no-store",
@@ -337,78 +377,157 @@ export class PiChatWebServer {
     //  推送连接（插件 → 页面）
     // ========================================================================
 
+    /**
+     * 一个页面来开推送连接。
+     *
+     * 几个页面可以同时连着（手机一个、电脑一个），谁都不是"唯一的"：插件推的消息发给每一个。
+     * 同一个页面又连了一次（手机退到后台再回来、网络断了又通），把它那条旧连接安静收掉就行，
+     * 不发"你被别的页面顶掉了"那种话——那只是它自己重连。
+     */
     private openChannel(req: http.IncomingMessage, res: http.ServerResponse, pageId: string): void {
-        this.ensureController();
-        // 同一时间只让一个页面收消息：新页面来了就顶掉旧的
-        if (this.activeRes && this.activeRes !== res) {
-            this.closeActiveChannel("此页面已被新打开的 Pi Chat 页面接管。可点下面的按钮接管回来。");
-        }
+        const controller = this.ensureController();
+        // 页面标识正常都是服务发出页面时写进去的那个；万一没有就自己编一个，别把好几个页面混成一条
+        const id = pageId || `p-anon-${crypto.randomUUID()}`;
+        const { channel, replaced } = this.pages.add(
+            id,
+            (msg) => { this.writeChunk(channel, res, `event: msg\ndata: ${JSON.stringify(msg)}\n\n`); },
+            (note) => { this.endStream(res, note); },
+        );
+        this.streams.set(id, res);
         res.writeHead(200, {
             "Content-Type": "text/event-stream; charset=utf-8",
             "Cache-Control": "no-store, no-transform",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         });
+        // retry 是给浏览器看的：万一由浏览器自己重连，隔 1 秒就来一次（页面那头也会自己管重连）
+        res.write("retry: 1000\n\n");
         res.write(": connected\n\n");
         res.socket?.setNoDelay(true);
-        this.activeRes = res;
-        this.activePageId = pageId;
-        this.issuedPageId = pageId;
-        const controller = this.controller;
-        if (controller) {
-            controller.attachChannel({ send: (msg) => this.pushToPage(res, msg) });
-        }
-        const onClose = () => {
-            if (this.activeRes !== res) { return; } // 已被新页面顶掉，不必清理
-            this.activeRes = undefined;
-            this.activePageId = "";
-            if (this.issuedPageId === pageId) { this.issuedPageId = ""; }
-            this.controller?.detachChannel();
-        };
+        if (replaced) { replaced.close(""); }   // 同一个页面的旧连接：安静断掉，页面那头不会弹提示
+        const onClose = () => { this.dropChannel(channel); };
         req.on("close", onClose);
         req.on("error", onClose);
         res.on("error", onClose);
+        // 断线这段时间插件攒下的消息补给这个页面（页面自己还会再要求整屏重画，两边都对得上）
+        controller.onPageConnected(id);
     }
 
-    /** 把一条消息写成推送事件（JSON 一行，符合推送格式）。 */
-    private pushToPage(res: http.ServerResponse, msg: Record<string, unknown>): void {
-        if (res.writableEnded) { return; }
+    /**
+     * 往一条推送连接写一段内容。
+     *
+     * 写不动了就把它注销掉：页面那头（手机屏黑了、退到后台、网络断了）多半已经收不到，
+     * 继续往里塞只是把这些字节堆在插件进程里。积压超过上限直接掐掉连接，页面回来会自己重连，
+     * 重连后插件给它整屏重画一遍，内容不会少。
+     */
+    private writeChunk(channel: PageChannel, res: http.ServerResponse, chunk: string): void {
+        if (res.writableEnded || res.destroyed) { this.dropChannel(channel); return; }
         try {
-            res.write(`event: msg\ndata: ${JSON.stringify(msg)}\n\n`);
-        } catch { /* 连接已断：交给 onClose 处理 */ }
+            const flushed = res.write(chunk);
+            if (!flushed && res.writableLength > this.backlogBytes) {
+                this.hooks.log(`页面 ${channel.id} 有一阵子没在读推送流（积压 ${Math.round(res.writableLength / 1024)} KB），` +
+                    "掐掉这条连接。页面回到前台会自己重连，重连后整屏重画一遍。");
+                channel.close("");
+                this.dropChannel(channel);
+            }
+        } catch {
+            this.dropChannel(channel);
+        }
     }
 
+    /** 断开一条推送连接（页面走了 / 死连接被巡检掐掉 / 积压太多）。 */
+    private dropChannel(channel: PageChannel): void {
+        // 同一个页面标识的新连接已经顶上来了：那是它重连后的新连接，不能跟着一起注销
+        if (this.pages.get(channel.id) !== channel) { return; }
+        this.pages.remove(channel.id);
+        if (this.streams.get(channel.id) !== undefined) { this.streams.delete(channel.id); }
+        this.controller?.onPageDisconnected(channel.id);
+    }
+
+    /** 结束一条推送连接。@param note 告别话：给了就先写给页面（页面收到就不再重连），空串表示安静地断。 */
+    private endStream(res: http.ServerResponse, note: string): void {
+        if (res.writableEnded || res.destroyed) { return; }
+        try {
+            if (note) {
+                res.write(`event: end\ndata: ${JSON.stringify({ note })}\n\n`);
+                res.end();
+            } else {
+                res.destroy();
+            }
+        } catch { /* 连接已经断了 */ }
+    }
+
+    /** 每隔一个心跳周期：先收掉半天没动静的连接，再给每条连接写一个页面收得到的 tick。 */
     private writeHeartbeat(): void {
-        const res = this.activeRes;
-        if (!res || res.writableEnded) { return; }
-        try { res.write(": keep-alive\n\n"); } catch { /* 连接已断 */ }
+        const now = Date.now();
+        for (const id of this.pages.staleIds(this.pageStaleMs)) {
+            const stale = this.pages.get(id);
+            if (!stale) { continue; }
+            this.hooks.log(`页面 ${id} 已经 ${Math.round(this.pageStaleMs / 1000)} 秒没有任何动静（多半是退到后台了），` +
+                "先把它的推送连接收掉。页面回来会自己重连并重画。");
+            this.pages.remove(id);
+            this.streams.delete(id);
+            stale.close("");
+            this.controller?.onPageDisconnected(id);
+        }
+        this.pages.forEach((channel) => {
+            const res = this.streams.get(channel.id);
+            if (!res) { return; }
+            this.writeChunk(channel, res, `event: tick\ndata: ${JSON.stringify({ t: now })}\n\n`);
+        });
     }
 
-    private closeActiveChannel(note: string): void {
-        const res = this.activeRes;
-        this.activeRes = undefined;
-        this.activePageId = "";
-        this.issuedPageId = "";
-        this.controller?.detachChannel();
-        if (!res || res.writableEnded) { return; }
-        try {
-            res.write(`event: end\ndata: ${JSON.stringify({ note })}\n\n`);
-            res.end();
-        } catch { /* 连接已断 */ }
+    // ---- 会话工作区往外发消息用的出口（PageChannelHub） ----
+
+    /** 发给所有连着的页面。一个页面都没连着返回 false（工作区会先把消息攒着）。 */
+    public broadcast(msg: Record<string, unknown>): boolean {
+        let any = false;
+        this.pages.forEach((channel) => { any = true; channel.send(msg); });
+        return any;
+    }
+
+    /** 只发给一个页面（给它整屏重画时用）。那个页面已经不在了返回 false。 */
+    public sendTo(pageId: string, msg: Record<string, unknown>): boolean {
+        const channel = this.pages.get(pageId);
+        if (!channel) { return false; }
+        channel.send(msg);
+        return true;
+    }
+
+    /** 人最近在里面动过的那个页面（确认框、选项浮层发给它）。 */
+    public recentPageId(): string | undefined {
+        return this.pages.recent()?.id;
+    }
+
+    /** 有没有页面连着。 */
+    public anyPage(): boolean {
+        return this.pages.size > 0;
     }
 
     // ========================================================================
     //  页面发来的消息（页面 → 插件）
     // ========================================================================
 
+    /**
+     * 页面发来一条消息。
+     *
+     * 不再挑"哪一个页面才算数"：几个页面可以同时用（手机 + 电脑）。只有本服务从没见过的
+     * 页面标识才拒掉——那多半是服务重启前留下的旧页面，让它刷新一下比默默收下更清楚。
+     * 页面断开、正在重连的那段时间发来的消息也照收（标识还在"发出过"那份名单里），
+     * 回的东西先攒着，等它连上补发；这正是手机退到后台再回来时最容易踩的那一瞬间。
+     */
+    /**
+     * 页面发来一条消息。
+     *
+     * 不再挑"哪一个页面才算数"：手机、电脑可以同时开着，谁发消息都收。
+     * 只有一件事要挡：本服务从来没见过的页面标识（多半是服务重启前留下的旧页面），
+     * 那种收下也没有出口，明确让它刷新比默默吃掉好。
+     * 页面暂时断开（手机退到后台再回来）时发来的消息照常收下：那时它多半正在重连，
+     * 回的东西由会话工作区攒着，连接回来一次补齐，再整屏重画一遍。
+     */
     private async handleApi(req: http.IncomingMessage, res: http.ServerResponse, pageId: string): Promise<void> {
-        // 谁的页面在说话：
-        //   - 正在收推送的那个页面：正常放行；
-        //   - 刚取过页面、推送连接还没建好的那个页面：也放行（回的消息先攒着，连上再补发）；
-        //   - 其余一律当作已经被顶掉的旧页面，拒绝并让它提示用户。
-        const accepted = pageId !== "" && (pageId === this.activePageId || (this.activePageId === "" && pageId === this.issuedPageId));
-        if (!accepted) {
-            this.sendText(res, 409, "此页面已被新打开的 Pi Chat 页面接管。");
+        if (!this.pages.isKnown(pageId)) {
+            this.sendText(res, 409, "此页面不是当前这个网页服务发出的（服务可能重启过）。刷新页面就好。");
             return;
         }
         const text = await readBody(req, MAX_REQUEST_BYTES);
@@ -423,11 +542,17 @@ export class PiChatWebServer {
             this.sendText(res, 400, "请求内容不是合法的 JSON。");
             return;
         }
-        const controller = this.ensureController();
-        try {
-            controller.processMessage(msg);
-        } catch (err: any) {
-            this.hooks.log(`处理页面消息出错：${err?.message ?? String(err)}`);
+        if (msg && msg.type === "channelPing") {
+            // 页面报活：只说明它还活着，不算"人在里面动过"
+            this.pages.beat(pageId);
+        } else {
+            this.pages.touch(pageId, true);
+            const controller = this.ensureController();
+            try {
+                controller.processMessage(msg, pageId);
+            } catch (err: any) {
+                this.hooks.log(`处理页面消息出错：${err?.message ?? String(err)}`);
+            }
         }
         res.writeHead(204, { "Cache-Control": "no-store" });
         res.end();
@@ -436,13 +561,11 @@ export class PiChatWebServer {
     /** 会话工作区：第一次有页面进来时创建，之后一直复用（页面刷新不丢会话）。 */
     private ensureController(): BrowserChatController {
         if (this.controller && !this.controller.isDisposed()) { return this.controller; }
-        this.controller = new BrowserChatController(this.owner);
-        // 页面可能先发了消息、推送连接后到：这种情况由控制器内部的消息缓冲兜住
-        if (this.activeRes) {
-            const res = this.activeRes;
-            this.controller.attachChannel({ send: (msg) => this.pushToPage(res, msg) });
-        }
-        return this.controller;
+        const controller = new BrowserChatController(this.owner);
+        // 往外发消息的出口就是本服务自己（推给所有连着的页面）
+        controller.setHub(this);
+        this.controller = controller;
+        return controller;
     }
 }
 

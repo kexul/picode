@@ -271,8 +271,16 @@ export class EditTracker {
         return this.editSnapshots.has(toolCallId);
     }
 
-    /** 活体迁移后：把本会话已记录的文件改动重推给新宿主的 webview。 */
-    public republishFileChanges(): void {
+    /**
+     * 活体迁移后：把本会话已记录的文件改动重推给新宿主的 webview。
+     * @param sink 只推给这一个出口（给浏览器里某一个页面重画时用）；缺省推给整个工作区。
+     */
+    public republishFileChanges(sink?: (msg: Record<string, unknown>) => void): void {
+        const files = Array.from(this.fileChanges.values()).map((c) => ({
+            path: c.path,
+            label: c.label,
+        }));
+        if (sink) { sink({ type: "fileChanges", files }); return; }
         this.postFileChanges();
     }
 

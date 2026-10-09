@@ -4,7 +4,7 @@ import * as os from "os";
  * webTransport —— 网页服务的传输层零件（不引用 vscode，便于单测）。
  *
  * 放在这里的都是"判断能不能放行"这类无副作用的东西：
- * 静态资源的类型与白名单、请求来源是否是本机、访问口令比较、页面没连上时的消息缓冲。
+ * 静态资源的类型与白名单、请求来源是否是本机、页面连接的登记簿、页面没连上时的消息缓冲。
  * 网页服务本身（http 服务、推送流、路由）在 webChatServer.ts。
  */
 
@@ -138,7 +138,174 @@ export function isSameOrigin(originHeader: string | undefined, port: number, own
 }
 
 /**
- * 页面还没连上（或正在重连）时的消息缓冲。
+ * 一个连着推送流的页面。
+ *
+ * 每个页面各占一条推送连接（浏览器打开页面就开一条，手机上退到后台再回来会重开一条）。
+ * 插件推的消息发给每一条；确认框、选项浮层只发给"人最近在里面动过"的那一条（见 recent）。
+ *
+ * 这个登记簿自己不碰网络：往连接里写、把连接关掉，都是网页服务传进来的函数。
+ */
+export interface PageChannel {
+    /** 页面标识：服务送出页面时生成并写在页面里。 */
+    readonly id: string;
+    /** 往这条连接写一条消息。写不了（页面走远了）由实现方自行注销本条。 */
+    send(msg: Record<string, unknown>): void;
+    /** 关掉这条连接（页面没了、积压太多、服务停了）。@param note 写给页面的告别话；不写就传空串。 */
+    close(note: string): void;
+    /** 这个页面最后一次有动静的时刻（毫秒时间戳）。用于掐掉"半天没声音"的死连接。 */
+    lastSeenAt: number;
+}
+
+/** 登记簿 add 的结果：新登记的连接，以及同标识被顶下来的那条（如果有）。 */
+export interface PageChannelAddResult {
+    channel: PageChannel;
+    /** 同一个页面标识又连了一次（页面重连）：之前那条，调用方自己安静地关掉它。 */
+    replaced?: PageChannel;
+}
+
+/**
+ * 页面连接的登记簿：谁连着、谁的标识是本服务发出的、谁最近有人在动。
+ *
+ * 这里不做任何网络操作（不碰 http），只管记录，方便单测。
+ *
+ * 没有"哪一个页面才算数"这一说：几个页面（手机 + 电脑）可以同时连着，都收得到消息。
+ * 以前那套是"同时只认一个页面"，手机上退到后台再回来会被误判成"被别的页面顶掉"。
+ */
+export class PageChannels {
+    private readonly channels = new Map<string, PageChannel>();
+    /** 本服务发出过页面、或连过推送流的标识（含已断开的），旧的先挤掉。 */
+    private readonly issued: string[] = [];
+    /** 最近"人在里面动过"的那个页面标识。 */
+    private recentId = "";
+
+    /**
+     * @param limitIssued 最多记住多少个页面标识（防止长时间运行攒太多）
+     * @param now 取当前时刻（毫秒）：测试里可以传一个自己推得动的时钟
+     */
+    constructor(
+        private readonly limitIssued = 32,
+        private readonly now: () => number = () => Date.now(),
+    ) {}
+
+    /** 记下"这个标识是本服务发出的"：页面刚取走、推送流还没连上时，它的消息也要收下。 */
+    public markIssued(id: string): void {
+        if (!id) { return; }
+        const at = this.issued.indexOf(id);
+        if (at >= 0) { this.issued.splice(at, 1); }
+        this.issued.push(id);
+        if (this.issued.length > this.limitIssued) { this.issued.splice(0, this.issued.length - this.limitIssued); }
+    }
+
+    public get(id: string): PageChannel | undefined {
+        return this.channels.get(id);
+    }
+
+    public has(id: string): boolean {
+        return this.channels.has(id);
+    }
+
+    /**
+     * 这个页面标识能不能收发消息：连着推送流，或者是本服务发出过的（页面刚取走还没连上、
+     * 以及连着的时候断了正在重连，都算）。从没见过的标识（例如服务重启前的旧页面）不算。
+     */
+    public isKnown(id: string): boolean {
+        return id !== "" && (this.channels.has(id) || this.issued.includes(id));
+    }
+
+    /**
+     * 登记一条推送连接。同一个标识连了第二次（页面重连）时，把前一条顶下来交给调用方，
+     * 由它安静地关掉——那只是同一个页面自己重连，不能当成"被别的页面顶掉"告诉用户。
+     */
+    public add(
+        id: string,
+        send: (msg: Record<string, unknown>) => void,
+        close: (note: string) => void,
+    ): PageChannelAddResult {
+        const replaced = this.channels.get(id);
+        const channel: PageChannel = { id, send, close, lastSeenAt: this.now() };
+        this.channels.set(id, channel);
+        this.markIssued(id);
+        this.recentId = id;
+        return { channel, replaced };
+    }
+
+    /** 注销一条连接（页面关了 / 连接断了 / 被超时掐掉）。标识仍然算"发出过"。 */
+    public remove(id: string): void {
+        this.channels.delete(id);
+        if (this.recentId === id) {
+            // 最近动过的那个页面走了：把"最近"交给还连着的最后一条（没有就是空）
+            this.recentId = this.lastConnectedId();
+        }
+    }
+
+    /** 注销全部（停服务时用）。返回被注销的那些，调用方去关连接。 */
+    public removeAll(): PageChannel[] {
+        const all = Array.from(this.channels.values());
+        this.channels.clear();
+        this.recentId = "";
+        return all;
+    }
+
+    /** 最后登记的那条连接（一个都没有时是 undefined）。 */
+    private lastConnected(): PageChannel | undefined {
+        const all = Array.from(this.channels.values());
+        return all.length > 0 ? all[all.length - 1] : undefined;
+    }
+
+    private lastConnectedId(): string {
+        return this.lastConnected()?.id ?? "";
+    }
+
+    /** 当前连着的页面数。 */
+    public get size(): number {
+        return this.channels.size;
+    }
+
+    /** 遍历当前连着的每一个页面（先快照一份再走，避免回调里增删把迭代搞乱）。 */
+    public forEach(fn: (channel: PageChannel) => void): void {
+        for (const channel of Array.from(this.channels.values())) {
+            fn(channel);
+        }
+    }
+
+    /**
+     * 记一笔"这个页面有动静"。
+     * @param userAction 是不是人做出来的动作（发消息、点按钮）。
+     *   报活（keepalive）只算"还活着"，不算动作：不然一个退到后台还在报活的页面
+     *   会一直抢着当"最近在动的那个"，确认框就弹到没人看的页面上去了。
+     */
+    public touch(id: string, userAction: boolean): void {
+        const channel = this.channels.get(id);
+        if (channel) { channel.lastSeenAt = this.now(); }
+        if (userAction) { this.recentId = id; }
+    }
+
+    /** 只更新"还活着"的时刻（页面报活）。 */
+    public beat(id: string): void {
+        this.touch(id, false);
+    }
+
+    /** 最近有人在动过的那个页面（确认框、选项浮层发给它）；一个都没连着时 undefined。 */
+    public recent(): PageChannel | undefined {
+        return this.channels.get(this.recentId) ?? this.lastConnected();
+    }
+
+    /**
+     * 超过 maxAgeMs 没有任何动静的页面标识（连接多半已经死了，浏览器还没告诉我们）。
+     * @param maxAgeMs 允许的静默时长
+     */
+    public staleIds(maxAgeMs: number): string[] {
+        const at = this.now();
+        const found: string[] = [];
+        for (const channel of this.channels.values()) {
+            if (at - channel.lastSeenAt >= maxAgeMs) { found.push(channel.id); }
+        }
+        return found;
+    }
+}
+
+/**
+ * 一个都没有页面连着时的消息缓冲。
  *
  * 浏览器页面的加载顺序是：先发起推送连接，再由 chat.js 发出 ready。
  * 两者是并行的，ready 可能先到，此时插件回的消息还没有出口，先攒在这里，

@@ -10,6 +10,7 @@
   document.addEventListener("pointerdown", function warmOnce() { warmUpAudio(); }, { capture: true, once: true });
   const messagesEl = document.getElementById("messages"); // 容器，内含各 .tab-pane
   const jumpBottomBtn = document.getElementById("jumpBottom");
+  const stopBtn = document.getElementById("stopBtn"); // 网页端输入框里的“停止生成”图标；VSCode 这份页面里没有这颗元素
   const inputEl = document.getElementById("input");
   const imgPreviewEl = document.getElementById("imgPreview");
   const fileMenuEl = document.getElementById("fileMenu");
@@ -1385,8 +1386,27 @@
   }
 
   // ==================== UI 同步（活跃 tab 驱动全局控件）====================
+  /** 当前 tab 里正在生成的 panel：Esc 中止与网页端的“停止生成”图标共用这一处判断。 */
+  function activeStreamingLeaves() {
+    const tv = tabViews.get(activeTabId);
+    if (!tv) { return []; }
+    return leavesOf(tv.root).filter((pid) => {
+      const t = tabs.get(pid);
+      return !!t && t.streaming;
+    });
+  }
+
+  /** 输入框里那颗“停止生成”图标（只有网页端有）：当前 tab 里还有 panel 在生成时才露面。 */
+  function syncStopBtn() {
+    if (!stopBtn) { return; }
+    stopBtn.classList.toggle("hidden", activeStreamingLeaves().length === 0);
+    stopBtn.disabled = false;
+  }
+
   function updateSendState() {
-    // 发送/中止按钮已移除（用 Enter 发送、Esc 中止）；状态文案由 syncStatus 负责
+    // VSCode 里发送/中止只看键盘（Enter 发送、Esc 中止），没有按钮；状态文案由 syncStatus 负责。
+    // 网页端（尤其手机）没有 Esc：输入框里那颗“停止生成”图标随生成中与否显示 / 隐藏。
+    syncStopBtn();
   }
   // 状态栏常显模型：这些纯函数拼出模型名前缀与用量百分比标签。
   function modelPartFor(tab) {
@@ -3110,17 +3130,23 @@
 
   // 流式生成中中止：当前 tab 内所有生成中的 panel 一停全停
   function abortActiveTab() {
-    const tv = tabViews.get(activeTabId);
-    if (!tv) { return false; }
-    const streamingLeaves = leavesOf(tv.root).filter((pid) => {
-      const t = tabs.get(pid);
-      return !!t && t.streaming;
-    });
-    if (streamingLeaves.length === 0) { return false; }
+    if (activeStreamingLeaves().length === 0) { return false; }
     const focus = tabs.get(activeId);
     if (focus) { focus.pendingSteerRestore = (focus.queuedSteering || []).slice(); }
     vscode.postMessage({ type: "abort", tabId: activeId });
     return true;
+  }
+
+  // 网页端：点输入框里那颗“停止生成”图标 = 给当前 tab 按 Esc。
+  if (stopBtn) {
+    stopBtn.addEventListener("click", () => {
+      if (!abortActiveTab()) { syncStopBtn(); return; }
+      // 先藏起来并禁用，等宿主的 streamEnd 回来再由 updateSendState 按真实状态刷新；
+      // 万一点击没送到（连接断了），过一会儿按真实状态重新算：还在生成就把图标放回来。
+      stopBtn.disabled = true;
+      stopBtn.classList.add("hidden");
+      setTimeout(syncStopBtn, 1500);
+    });
   }
 
   treeOverlay.addEventListener("click", (e) => { if (e.target === treeOverlay) { hideTree(); } });
@@ -3198,6 +3224,8 @@
       });
     }
     if (activeId === tab.id) { updateSendState(); syncStatus(); }
+    // 非焦点 panel 也在当前 tab 里：停止按钮跟着整 tab 的状态变（焦点 panel 上面已带）
+    else { syncStopBtn(); }
     renderTabBar(); updatePaneHeads();
   }
   function setActivity(tab, activity, detail) {
@@ -3867,7 +3895,7 @@
     for (const tg of st.pendingToolTags.values()) { clearInterval(tg._timer); }
     st.paneEl.remove();
     tabs.delete(id);
-    if (activeId === id) { activeId = null; syncJumpBottom(st); }
+    if (activeId === id) { activeId = null; syncJumpBottom(st); syncStopBtn(); }
   }
 
   // ==================== 设置（models.json）浮层 ====================

@@ -159,4 +159,24 @@ html, body {
 */
 #input {
   min-height: var(--pichat-input-min-height, 30px);
+  padding-right: 42px; /* 右边给生成中的“停止生成”图标留位置，文字不会钻到图标底下 */
 }
+
+/*
+  输入框右下角的“停止生成”图标（图是 browserBridge.js 建的，显示与隐藏由 chat.js 管）：
+  只有生成中才露面（默认带 .hidden），手机上点它等于给当前 tab 按 Esc。
+  VSCode 那份页面里没有这颗元素，所以样式只写在网页端这份里。
+*/
+#stopBtn {
+  position: absolute; right: 8px; bottom: 8px; z-index: 5;
+  width: 28px; height: 28px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--vscode-button-border, rgba(128, 128, 128, 0.4));
+  border-radius: 6px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  font-size: 12px; line-height: 1; cursor: pointer;
+}
+
+#stopBtn:hover { background: var(--vscode-button-hoverBackground); }
+#stopBtn.hidden { display: none; }

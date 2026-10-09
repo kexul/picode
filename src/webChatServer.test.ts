@@ -61,10 +61,14 @@ function baseOf(url: string): string {
     return `${parsed.protocol}//${parsed.host}`;
 }
 
-/** 起一个服务，测试结束时自动关掉。 */
-async function withServer(run: (url: string, logs: string[]) => Promise<void>): Promise<void> {
+/** 起一个服务，测试结束时自动关掉。
+ *  @param timings 心跳间隔 / 页面静默上限；测试里传小值（默认 25 秒 / 90 秒等不起） */
+async function withServer(
+    run: (url: string, logs: string[]) => Promise<void>,
+    timings?: { heartbeatMs?: number; pageStaleMs?: number },
+): Promise<void> {
     const logs: string[] = [];
-    const server = new PiChatWebServer(MEDIA_DIR, fakeOwner(), { log: (t) => logs.push(t) });
+    const server = new PiChatWebServer(MEDIA_DIR, fakeOwner(), { log: (t) => logs.push(t) }, timings);
     await server.applySettings({ enabled: true, port: 0, host: "127.0.0.1" });
     const url = server.url;
     assert.ok(url, "服务应该给出访问地址");
@@ -120,6 +124,25 @@ async function openStream(url: string, pageId: string, signal: AbortSignal) {
             return buffer;
         },
         received: () => buffer,
+        /** 一直读到服务那头把连接断开为止（读报错也算断了），回读到的全部内容。 */
+        async readToEnd(timeoutMs = 3000): Promise<string> {
+            for (;;) {
+                let chunk: { value?: Uint8Array; done?: boolean };
+                try {
+                    chunk = await Promise.race([
+                        reader.read(),
+                        new Promise<never>((_ok, no) => setTimeout(
+                            () => no(new Error(`等流断开超时；已收到：${buffer.slice(0, 400)}`)),
+                            timeoutMs,
+                        )),
+                    ]);
+                } catch {
+                    return buffer;   // 服务那头直接把连接掐了：这就是我们要的结局
+                }
+                if (chunk.value) { buffer += decoder.decode(chunk.value, { stream: true }); }
+                if (chunk.done) { return buffer; }
+            }
+        },
         /** 把流关掉：不读完的响应会让测试结束不了。 */
         async close(): Promise<void> {
             try { await reader.cancel(); } catch { /* 已经关了 */ }
@@ -247,8 +270,14 @@ test("页面还没连上就发消息：回应先攒着，连上后照原顺序�
             // 刚才攒下的那条回应这时补发出来
             assert.match(await stream.readUntil('"type":"openSettings"'), /"tab":"models"/);
 
-            // 别的页面（例如已被顶掉的旧页面）发消息：拒掉
-            assert.equal(await postMessage(url, "p-别的页面", { type: "hostFocus" }), 409);
+            // 服务从没见过的页面标识（服务重启前的旧页面）发消息：拒掉，并让它刷新
+            const refused = await fetch(`${baseOf(url)}/api?pageId=p-别的页面`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ type: "hostFocus" }),
+            });
+            assert.equal(refused.status, 409);
+            assert.match(await refused.text(), /刷新/);
         } finally {
             await stream?.close();
             abort.abort();
@@ -256,34 +285,149 @@ test("页面还没连上就发消息：回应先攒着，连上后照原顺序�
     });
 });
 
-test("再开一个页面会顶掉前一个：旧页面收到结束事件，且不能再发消息", async () => {
+test("手机和电脑同时开着：插件推的消息两边都收到，谁也不会把谁顶掉", async () => {
+    await withServer(async (url) => {
+        const abortPhone = new AbortController();
+        const abortPc = new AbortController();
+        let phone: Stream | undefined;
+        let pc: Stream | undefined;
+        try {
+            phone = await openStream(url, "p-phone", abortPhone.signal);
+            await phone.readUntil(": connected");
+            pc = await openStream(url, "p-pc", abortPc.signal);
+            await pc.readUntil(": connected");
+
+            // 先连上来的那个页面没被顶掉，两边都能继续发消息
+            assert.equal(await postMessage(url, "p-phone", { type: "openSettingsPanel", tab: "models" }), 204);
+            assert.equal(await postMessage(url, "p-pc", { type: "openSettingsPanel", tab: "options" }), 204);
+
+            // 插件回的消息，两个页面都收得到
+            assert.match(await phone.readUntil('"tab":"options"'), /"type":"openSettings"/);
+            assert.match(await pc.readUntil('"tab":"options"'), /"type":"openSettings"/);
+            assert.doesNotMatch(phone.received(), /event: end/, "先来的页面不该收到「你被顶掉了」");
+            assert.doesNotMatch(pc.received(), /接管/, "谁都不该被说成「接管了别人的会话」");
+        } finally {
+            await phone?.close();
+            await pc?.close();
+            abortPhone.abort();
+            abortPc.abort();
+        }
+    });
+});
+
+test("同一个页面重连（手机退到后台再回来）：旧连接安静收掉，不发「被接管」", async () => {
     await withServer(async (url) => {
         const abortOld = new AbortController();
         const abortNew = new AbortController();
-        let old: Stream | undefined;
-        let fresh: Stream | undefined;
+        let before: Stream | undefined;
+        let after: Stream | undefined;
         try {
-            old = await openStream(url, "p-old", abortOld.signal);
-            await old.readUntil(": connected");
+            before = await openStream(url, "p-phone", abortOld.signal);
+            await before.readUntil(": connected");
 
-            fresh = await openStream(url, "p-new", abortNew.signal);
-            await fresh.readUntil(": connected");
+            // 同一个页面标识又来了一条连接：这是它自己重连，不是别的页面来抢
+            after = await openStream(url, "p-phone", abortNew.signal);
+            await after.readUntil(": connected");
 
-            assert.match(await old.readUntil("event: end", 3000), /event: end/);
+            const received = await before.readToEnd();
+            assert.doesNotMatch(received, /接管/, "同一个页面重连，不能说成「被别的页面接管」");
+            assert.doesNotMatch(received, /event: end/, "重连不用跟旧连接道别：页面那头早就不在听了");
 
-            // 被顶掉的页面还在发消息：明确拒绝，让它提示用户
-            assert.equal(await postMessage(url, "p-old", { type: "openSettingsPanel" }), 409);
-
-            // 新页面照常用
-            assert.equal(await postMessage(url, "p-new", { type: "hostFocus" }), 204);
+            // 重连之后照常能用
+            assert.equal(await postMessage(url, "p-phone", { type: "openSettingsPanel", tab: "options" }), 204);
+            assert.match(await after.readUntil('"type":"openSettings"'), /"tab":"options"/);
         } finally {
-            await old?.close();
-            await fresh?.close();
+            await before?.close();
+            await after?.close();
             abortOld.abort();
             abortNew.abort();
         }
     });
 });
+
+test("页面断开、正在重连的那一下发来的消息照收：回应先攒着，重连后补发", async () => {
+    await withServer(async (url) => {
+        const { pageId } = await fetchPage(url);
+        const abortFirst = new AbortController();
+        const abortAgain = new AbortController();
+        let first: Stream | undefined;
+        let again: Stream | undefined;
+        try {
+            first = await openStream(url, pageId, abortFirst.signal);
+            await first.readUntil(": connected");
+
+            // 手机退到后台：连接断了（服务那头也察觉了），页面标识没变
+            await first.close();
+            abortFirst.abort();
+            await sleep(200);
+
+            // 回到前台那一下，消息往往比推送连接先出去：这一条以前会被当成「被顶掉的旧页面」拒掉
+            assert.equal(
+                await postMessage(url, pageId, { type: "openSettingsPanel", tab: "options" }),
+                204,
+                "同一个页面在重连之前发的消息也要收下（手机上「此页面已被接管」就是这么来的）",
+            );
+
+            again = await openStream(url, pageId, abortAgain.signal);
+            await again.readUntil(": connected");
+            assert.match(
+                await again.readUntil('"type":"openSettings"'),
+                /"tab":"options"/,
+                "断线时攒下的回应，连上之后要补发出来",
+            );
+        } finally {
+            await first?.close();
+            await again?.close();
+            abortFirst.abort();
+            abortAgain.abort();
+        }
+    });
+});
+
+test("页面收得到心跳；一直不报活的连接会被服务收掉，报活的就不会", async () => {
+    await withServer(async (url, logs) => {
+        const abortDead = new AbortController();
+        const abortAlive = new AbortController();
+        let dead: Stream | undefined;
+        let alive: Stream | undefined;
+        try {
+            dead = await openStream(url, "p-dead", abortDead.signal);
+            await dead.readUntil(": connected");
+            // 心跳得是页面收得到的（页面靠它判断「连接是不是其实已经死了」），不能是看不见的注释行
+            assert.match(await dead.readUntil("event: tick"), /event: tick/);
+
+            alive = await openStream(url, "p-alive", abortAlive.signal);
+            await alive.readUntil(": connected");
+
+            // 一条不报活（像退到后台那样），另一条每 40 毫秒报一次活
+            const keepAlive = setInterval(() => { void postMessage(url, "p-alive", { type: "channelPing" }); }, 40);
+            const received = await dead.readToEnd(3000);
+            clearInterval(keepAlive);
+
+            assert.doesNotMatch(received, /event: end/, "当成死连接的，安静收掉就行（页面会自己重连）");
+            assert.ok(
+                logs.some((line) => line.includes("p-dead")),
+                "日志里要写清哪个页面因为没动静被收掉了：" + logs.join(" | "),
+            );
+
+            // 一直报活的那条还连着：能继续收消息
+            assert.equal(await postMessage(url, "p-alive", { type: "openSettingsPanel", tab: "options" }), 204);
+            assert.match(await alive.readUntil('"type":"openSettings"'), /"tab":"options"/);
+            // 报活本身不会让插件推东西回来（它只是"我还在"，不是一条会话消息）
+            assert.doesNotMatch(alive.received(), /channelPing/, "报活的内容不该被回给页面");
+        } finally {
+            await dead?.close();
+            await alive?.close();
+            abortDead.abort();
+            abortAlive.abort();
+        }
+    }, { heartbeatMs: 60, pageStaleMs: 250 });
+});
+
+/** 等一会儿（让服务那头的异步清理跑完）。 */
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 test("不合法的请求地址不会一律变成 500", async () => {
     await withServer(async (url) => {

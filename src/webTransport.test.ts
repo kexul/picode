@@ -10,6 +10,7 @@ import {
     isSameOrigin,
     isWildcardHost,
     localHostnames,
+    PageChannels,
 } from "./webTransport";
 
 test("media 资源白名单：只要名单内的文件，且不允许带路径", () => {
@@ -109,4 +110,82 @@ test("消息缓冲：顺序不变，满了丢最老的，取走后清空", () =>
     box.push({ type: "e" });
     box.clear();
     assert.equal(box.size, 0, "清空后什么都没有了");
+});
+
+test("页面连接登记簿：几个页面同时连着，谁也不是唯一的", () => {
+    const closed: string[] = [];
+    const sent: string[] = [];
+    const pages = new PageChannels();
+    const send = (id: string) => (msg: Record<string, unknown>) => sent.push(`${id}:${String(msg.type)}`);
+
+    const { channel: phone } = pages.add("p-phone", send("p-phone"), (note) => closed.push(`phone:${note}`));
+    const { channel: pc } = pages.add("p-pc", send("p-pc"), (note) => closed.push(`pc:${note}`));
+    assert.equal(pages.size, 2, "两个页面同时连着");
+
+    // 广播：每个页面都收到
+    let reached = 0;
+    pages.forEach((page) => { reached += 1; page.send({ type: "hello" }); });
+    assert.equal(reached, 2);
+    assert.deepEqual(sent, ["p-phone:hello", "p-pc:hello"]);
+
+    // "最近有人在动过"的那个：确认框发给它
+    assert.equal(pages.recent()?.id, "p-pc", "刚连上来的那个算最近");
+    pages.beat("p-phone");   // 报活只算还活着，不算人在动
+    assert.equal(pages.recent()?.id, "p-pc", "报活不该把确认框抢走");
+    pages.touch("p-phone", true);
+    assert.equal(pages.recent()?.id, "p-phone", "人真的在里面动了才算");
+
+    // 一个页面走了：另一个继续收消息，"最近"落到还连着的那个上
+    pages.remove("p-phone");
+    assert.equal(pages.size, 1);
+    assert.equal(pages.recent()?.id, "p-pc");
+    pages.remove("p-pc");
+    assert.equal(pages.recent(), undefined, "一个都没连着");
+    assert.deepEqual(closed, [], "登记簿自己不关连接，关连接是调用方的事");
+});
+
+test("登记簿：同一个页面又连一次（重连）会把旧那条交回来，不发“被顶掉”那种提示", () => {
+    const closed: string[] = [];
+    const pages = new PageChannels();
+    const first = pages.add("p-phone", () => {}, (note) => closed.push(`first:${note}`));
+    assert.equal(first.replaced, undefined, "头一条连接没有谁被顶下来");
+
+    const second = pages.add("p-phone", () => {}, (note) => closed.push(`second:${note}`));
+    assert.ok(second.replaced, "同一个页面标识又来了一条：旧的要交回给调用方");
+    assert.equal(pages.size, 1, "登记簿里始终只有这一条");
+    second.replaced!.close("");
+    assert.deepEqual(closed, ["first:"], "重连不用跟旧连接道别（告别话是空的）");
+});
+
+test("登记簿：服务发出过的页面标识，断开之后发来的消息也还算数", () => {
+    const pages = new PageChannels(2);
+    pages.markIssued("p-one");
+    assert.equal(pages.isKnown("p-one"), true, "刚取走页面、推送连接还没连上，也算数");
+    assert.equal(pages.isKnown("p-two"), false, "从没见过的标识不算");
+
+    const two = pages.add("p-two", () => {}, () => {});
+    assert.equal(pages.isKnown("p-two"), true, "连上了当然算数");
+    pages.remove("p-two");
+    assert.equal(pages.isKnown("p-two"), true, "断开了、正在重连：仍然算数（手机回到前台那一下就靠它）");
+
+    pages.add("p-three", () => {}, () => {});
+    assert.equal(pages.isKnown("p-three"), true);
+    assert.equal(pages.isKnown("p-one"), false, "名单有长度上限，最老的会被挤掉");
+    void two;
+});
+
+test("登记簿：半天没动静的连接挑得出来（服务据此掐掉死连接）", () => {
+    let now = 0;                 // 时钟自己推，不用真的等一分钟
+    const pages = new PageChannels(32, () => now);
+    pages.add("p-a", () => {}, () => {});
+    pages.add("p-b", () => {}, () => {});
+
+    now = 6_000;
+    pages.beat("p-a");           // 手机那条还在报活，另一条从连上就没动静了
+    now = 10_000;
+    assert.deepEqual(pages.staleIds(5_000), ["p-b"], "刚报过活的挑不出来，一直没动静的挑得出来");
+
+    now = 12_000;
+    assert.deepEqual(pages.staleIds(5_000), ["p-a", "p-b"], "再往后两条都算死了");
+    assert.deepEqual(pages.staleIds(60_000), [], "上限给得宽就谁都不算死");
 });

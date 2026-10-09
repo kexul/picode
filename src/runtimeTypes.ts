@@ -81,6 +81,9 @@ export interface StatusInfo {
 
 export type RuntimeActivity = "idle" | "working" | "thinking" | "tool";
 
+/** 一条消息的出口：往一个页面（或一批页面）写一条要显示的消息。 */
+export type MessageSink = (msg: Record<string, unknown>) => void;
+
 /**
  * 收尾提醒最多等 pi 的会话标题多久（毫秒）。
  *

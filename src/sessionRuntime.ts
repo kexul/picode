@@ -28,6 +28,7 @@ import {
     type RpcTreeNode,
 } from "./piRpc";
 import type {
+    MessageSink,
     ModelInfo,
     PanelLaunch,
     RuntimeActivity,
@@ -38,6 +39,7 @@ import type {
 // 对外仍从 sessionRuntime 导出类型，保持既有 import 路径稳定。
 export type {
     FileChange,
+    MessageSink,
     ModelChoice,
     ModelInfo,
     PanelLaunch,
@@ -1159,12 +1161,21 @@ export class SessionRuntime {
      * 两种情况用它：活体迁移到另一个工作区（会话搬家），以及浏览器页面刷新 / 重连。
      * @param opts.note 重画后额外给用户的一行提示。缺省为“会话已迁入本工作区（…）”；
      *                  传空串表示不发提示；文本里的 {count} 会换成消息条数。
+     * @param opts.sink 只把这批重画消息交给这个出口（浏览器那边一个页面一份重画时用）。
+     *                  传了 sink 就不再广播 tab 列表（那份数据每个页面都一样，
+     *                  重连的页面本来就有；刚加载的页面由 ready 那条路统一发）。
      */
-    public async replayHistory(opts?: { note?: string }): Promise<void> {
-        this.post({ type: "clear" });
-        this.post({ type: "piReady", ready: this.piReady });
+    public async replayHistory(opts?: { note?: string; sink?: MessageSink }): Promise<void> {
+        // 缺省出口是这个 tab 的常规广播；传了 sink 就是"只给某一个页面重画"。
+        // 两条路都要带上 tabId：界面靠它认出消息属于哪一个会话窗格。
+        const sink = opts?.sink;
+        const emit: MessageSink = sink
+            ? ((msg) => sink({ ...msg, tabId: this.id }))
+            : ((msg) => this.host.postToTab(this.id, msg));
+        emit({ type: "clear" });
+        emit({ type: "piReady", ready: this.piReady });
         if (!this.client || !this.client.isRunning()) {
-            this.post({
+            emit({
                 type: "system",
                 text: "会话已迁入本工作区（pi 进程当前未运行；发送消息会自动重启）。",
             });
@@ -1175,15 +1186,15 @@ export class SessionRuntime {
             this.request<{ messages: RpcForkMessage[] }>({ type: "get_fork_messages" }),
         ]);
         if (!msgResp) {
-            this.post({ type: "systemError", text: "迁移后重放对话失败（pi 无响应）。" });
+            emit({ type: "systemError", text: "迁移后重放对话失败（pi 无响应）。" });
             return;
         }
         const messages: any[] = msgResp.data?.messages ?? [];
         this.forkEntries = forkResp?.data?.messages ?? [];
         // 快照随运行时一起迁过来了：迁移前的 edit/write 仍可回滚
-        this.renderMessages(messages, { revertable: true });
+        this.renderMessages(messages, { revertable: true, sink: emit });
         // 本次会话改过的文件清单也要到新宿主（回滚 / diff 按钮依赖它）
-        this.edits.republishFileChanges();
+        this.edits.republishFileChanges(sink ? emit : undefined);
         this.emitStatus();
         const count = messages.filter((m) => m && (m.role === "user" || m.role === "assistant")).length;
         const note = opts?.note === undefined
@@ -1191,23 +1202,27 @@ export class SessionRuntime {
             : opts.note;
         const noteText = note.replace("{count}", String(count));
         if (noteText) {
-            this.post({ type: "system", text: noteText });
+            emit({ type: "system", text: noteText });
         }
         if (this.streaming) {
-            this.post({
+            emit({
                 type: "system",
                 text: "该会话正在生成中：迁移前已输出的增量不带过来，后续输出会继续显示。",
             });
         }
-        this.host.broadcastTabList();
+        // 只给一个页面重画时不再广播 tab 列表：那份数据每个页面都一模一样，重连的页面本来就有
+        if (!sink) { this.host.broadcastTabList(); }
     }
 
     /**
      * 重绘一批历史消息。
      * @param revertable edit/write 卡片是否按内存快照开放“回滚”：活体迁移时快照
      * 还在（true），单纯加载历史会话时快照并不存在（缺省 false）。
+     * @param sink 只发给这一个出口（给某一个页面重画时用）；缺省发给整个工作区。
      */
-    private renderMessages(messages: any[], opts?: { revertable?: boolean }): void {
+    private renderMessages(messages: any[], opts?: { revertable?: boolean; sink?: MessageSink }): void {
+        // 缺省还是走这个 tab 的常规广播；给了 sink 就只发给那一个页面（消息已经带了 tabId）
+        const emit: MessageSink = opts?.sink ?? ((msg) => this.post(msg));
         const revertable = opts?.revertable === true;
         this.hasConversation = messages.some((m) =>
             m && (m.role === "user" || m.role === "assistant")
@@ -1223,7 +1238,7 @@ export class SessionRuntime {
         for (const m of messages) {
             switch (m.role) {
                 case "user":
-                    this.post({
+                    emit({
                         type: "userMessage",
                         text: textOf(m.content),
                         // forkEntries 与树 entry id 对齐；回退 m.id（若 pi 带回）
@@ -1239,14 +1254,14 @@ export class SessionRuntime {
                             text += c.text;
                         } else if (c.type === "toolCall") {
                             if (text.trim()) {
-                                this.post({ type: "assistantFull", text });
+                                emit({ type: "assistantFull", text });
                                 text = "";
                             }
                             this.edits.collectKnownFile(c.name, c.arguments);
                             if (c.name === "edit" || c.name === "write") {
                                 const p = this.edits.editToolPath(c.name, c.arguments);
                                 const id = c.id || `hist-${Math.random()}`;
-                                this.post({
+                                emit({
                                     type: "editCardStart",
                                     toolCallId: id,
                                     toolName: c.name,
@@ -1254,7 +1269,7 @@ export class SessionRuntime {
                                     label: p ? this.host.relativeTo(this.host.getCwd(), p) : "",
                                     args: c.arguments,
                                 });
-                                this.post({
+                                emit({
                                     type: "editCardResult",
                                     toolCallId: id,
                                     diff: this.edits.historyDiff(c, toolResults.get(id)),
@@ -1263,14 +1278,14 @@ export class SessionRuntime {
                             } else {
                                 const id = c.id || `hist-${Math.random()}`;
                                 const res = toolResults.get(id);
-                                this.post({
+                                emit({
                                     type: "tool",
                                     toolName: c.name,
                                     args: c.arguments,
                                     toolCallId: id,
                                 });
                                 if (res) {
-                                    this.post({
+                                    emit({
                                         type: "toolResult",
                                         toolCallId: id,
                                         isError: !!res.isError,
@@ -1283,7 +1298,7 @@ export class SessionRuntime {
                         }
                     }
                     if (text.trim()) {
-                        this.post({
+                        emit({
                             type: "assistantFull",
                             text,
                             entryId: typeof m.id === "string" ? m.id : undefined,
@@ -1298,7 +1313,7 @@ export class SessionRuntime {
                         && m.errorMessage !== lastHistoryError
                     ) {
                         lastHistoryError = m.errorMessage;
-                        this.post({
+                        emit({
                             type: "systemError",
                             text: "pi 错误: " + formatPiError(m.errorMessage),
                         });
