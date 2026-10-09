@@ -523,11 +523,16 @@ export class SessionRuntime {
         // user 气泡统一由 pi 的 message_start 事件渲染（见 onPiEvent），
         // 普通消息与 steer 投递的排队消息走同一路径，避免双发。
 
-        // 流式响应中：发 steer 命令把消息排入 steering 队列（当前轮工具执行完后投递），
-        // 与 pi TUI 按 Enter 的语义一致；否则发普通 prompt 开启新轮。
+        // 两条路都发 prompt + streamingBehavior，堵住“插件这边看着空闲、pi 那边其实已经在跑”的间隙
+        // （两个子会话同时交回结果时，两条消息背靠背发出去：第一条开了轮，第二条还是普通 prompt，
+        // pi 就报 “Agent is already processing”，消息直接丢掉）：
+        // - 本地看着空闲：prompt + followUp。pi 空闲就是普通新轮次；其实在忙就排进 followUp 队列，
+        //   当前轮跑完接着处理，不报错不丢消息；
+        // - 本地看着在跑：prompt + steer。pi 真在忙就排进 steering 队列（当前轮工具执行完就投递，
+        //   与原来发 steer 命令等效）；其实已经跑完（结束事件还没送到）就直接开新轮次，消息不会卡在队列里。
         const cmd: Record<string, unknown> = this.streaming
-            ? { type: "steer", message }
-            : { type: "prompt", message };
+            ? { type: "prompt", message, streamingBehavior: "steer" }
+            : { type: "prompt", message, streamingBehavior: "followUp" };
         if (hasImages) {
             cmd.images = images!.map((img) => ({
                 type: "image",

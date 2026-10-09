@@ -7,7 +7,7 @@
 
 /** 发给 pi 的命令（stdin JSONL）。 */
 export type RpcCommand =
-    | { type: "prompt"; message: string; images?: RpcImage[] }
+    | { type: "prompt"; message: string; images?: RpcImage[]; streamingBehavior?: "steer" | "followUp" }
     | { type: "steer"; message: string; images?: RpcImage[] }
     | { type: "follow_up"; message: string; images?: RpcImage[] }
     | { type: "abort" }

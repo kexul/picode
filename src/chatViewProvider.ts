@@ -262,7 +262,7 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
     // ---- RuntimeHost：配置 / cwd ----
     public getConfig() {
         const cfg = vscode.workspace.getConfiguration("piChat");
-        // 派子会话：只给 VSCode 这边的会话开（浏览器那份由它自己把这两项清空）
+        // 派子会话的总开关：侧边栏、编辑器区、浏览器三份会话都按这个来（关掉后要新建会话才生效）
         const taba = cfg.get<boolean>("taba.enabled", true) ? getTabaAssets() : undefined;
         return {
             piPath: cfg.get<string>("piPath", "pi"),

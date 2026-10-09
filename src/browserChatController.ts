@@ -186,12 +186,10 @@ export class BrowserChatController extends ChatControllerBase {
     //  配置 / 显示选项（与侧边栏共用同一份设置）
     // ========================================================================
 
-    /** 浏览器那份不开“派子会话”：子会话要开在 VSCode 的 tab 里，网页这边开了也没地方显示。
-     *  把扩展路径清空，pi 那边就不会加载它，模型也就看不到 taba 这几个工具。 */
-    public getConfig(): PiConfig {
-        const cfg = this.owner.getConfig();
-        return { ...cfg, tabaExtension: "", tabaDir: "" };
-    }
+    /** 浏览器那份也开“派子会话”：子会话的 tab 开在浏览器页面的标签栏里，
+     *  编排、自动交回、名录都与侧边栏同一套。总开关是设置里的 piChat.taba.enabled
+     *  （在 ChatViewProvider.getConfig 里判断，三份会话共用）。 */
+    public getConfig(): PiConfig { return this.owner.getConfig(); }
     public getCwd(): string { return this.owner.getCwd(); }
 
     protected getAutoLoadLast(): boolean { return false; }  // 浏览器这份总是空白开始，不自动接上次会话

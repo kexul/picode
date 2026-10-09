@@ -1715,7 +1715,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
             // panel 在隐藏的 tab 里时只发给它自己，界面看不见，不会响。
             for (const id of this.panelIdsOf(info.panelId)) { this.postToTab(id, { type: "beep" }); }
         }
-        void this.notifyTurnEndWithTitle(info);
+        // 子会话不发系统通知：结果会交回派活的会话，那边跑完自会提醒；
+        // 几个子会话一齐收工时一张接一张的卡片只会刷屏。已经「变成独立会话」的
+        // 不再算子会话，照常提醒。
+        const asChild = this.taba.byChildPanel(info.panelId);
+        if (!asChild || asChild.parentPanelId === undefined) {
+            void this.notifyTurnEndWithTitle(info);
+        }
     }
 
     /**

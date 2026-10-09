@@ -50,10 +50,20 @@
   @keyframes pi-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   .chat-tab .ct-close { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 16px; height: 16px; margin-left: 2px; opacity: 0.5; padding: 0; border-radius: 3px; }
   .chat-tab .ct-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
-  /* 派子会话（taba）：tab 上的标记。子会话左边一道竖线 + “↳”，派了活的显示“⇢几个”。 */
-  .chat-tab.taba-child { border-left: 2px solid var(--vscode-charts-purple, #b180d7); padding-left: 7px; }
+  /* 派子会话（taba）：派了活的 tab 显示“⇢几个”；子会话收进一张「子会话」标签（点开贴着标签的小列表）。 */
   .chat-tab .ct-taba { flex: 0 0 auto; line-height: 1; opacity: 0.9; cursor: help; }
-  .chat-tab .ct-taba-child { color: var(--vscode-charts-purple, #b180d7); font-size: 0.95em; }
+  .chat-tab.taba-stack .ts-mark { flex: 0 0 auto; line-height: 1; opacity: 0.9; }
+  /* 折叠标签的小列表：还在跑的子会话行首有颗呼吸小点（跟 tab 上那颗同款，跑完就消失；出错＝红），
+     行尾小叉关闭（鼠标悬停出现；触屏常显）。 */
+  .pane-menu .sm-row .sm-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; }
+  .pane-menu .sm-row .sm-dot.running { background: var(--vscode-charts-blue, #3794ff); animation: pi-pulse 1.2s ease-in-out infinite; }
+  .pane-menu .sm-row .sm-dot.error { background: var(--vscode-charts-red, #f14c4c); }
+  .pane-menu .sm-row .sm-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .pane-menu .sm-row.sm-current { background: var(--vscode-menu-selectionBackground, var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.2))); }
+  .pane-menu .sm-row .sm-close { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 3px; opacity: 0; }
+  .pane-menu .sm-row:hover .sm-close { opacity: 0.6; }
+  .pane-menu .sm-row .sm-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
+  @media (hover: none) { .pane-menu .sm-row .sm-close { opacity: 0.6; } }
   .chat-tab .ct-taba-count { padding: 0 4px; border-radius: 8px; font-size: 0.78em; background: var(--vscode-badge-background, rgba(128,128,128,0.35)); color: var(--vscode-badge-foreground, var(--vscode-foreground)); }
   .chat-tab .ct-taba-count.running { background: var(--vscode-charts-blue, #3794ff); color: var(--vscode-editor-background, #1e1e1e); animation: pi-pulse 1.6s ease-in-out infinite; }
   #tabBar.hidden { display: none; }
@@ -525,6 +535,7 @@
   }
   #pickerHeader .picker-hint { font-weight: 400; font-size: 0.75em; opacity: 0.6; }
   #pickerSearchWrap { padding: 8px 12px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2)); }
+  #pickerSearchWrap.hidden { display: none; }
   #pickerSearch {
     width: 100%; box-sizing: border-box;
     background: var(--vscode-input-background, #fff); color: var(--vscode-input-foreground, inherit);

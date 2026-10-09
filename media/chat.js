@@ -1569,13 +1569,13 @@
       const lines = ["子会话：" + (info.name || ""), from, "状态：" + (info.stateText || info.state || "")];
       if (info.modelLabel) { lines.push("模型：" + info.modelLabel); }
       if (info.deliveries > 0) { lines.push("结果已交回 " + info.deliveries + " 次"); }
-      lines.push("右键这个 tab 可以把结果交回去、或改成独立会话。");
+      lines.push("在列表里右键它，可以把结果交回去、或改成独立会话。");
       return lines.join("\n");
     }
     const kids = info.children || [];
     const lines = ["这个会话派出去 " + kids.length + " 个子会话："];
     kids.forEach((k) => { lines.push("- " + k.name + "（" + (k.stateText || k.state) + "）"); });
-    lines.push("右键这个 tab 可以直接切过去。");
+    lines.push("点旁边的「子会话」标签可以列出并切过去。");
     return lines.join("\n");
   }
   /** 子会话状态的签名：变了才重建 tab 条（用时不进签名，否则每推一次都重建）。 */
@@ -1584,13 +1584,165 @@
     if (info.role === "child") { return "c:" + (info.state || "") + ":" + (info.deliveries || 0) + ":" + (info.name || ""); }
     return "p:" + (info.children || []).map((k) => k.id + (k.state || "")).join(",");
   }
+  // ---- 派子会话（taba）：子会话收进父 tab 后面的一张“子会话”标签 ----
+  /** 是不是收进折叠标签的子会话：是子会话且派活的 tab 还在（变独立的、父关掉的不算，回标签栏当普通 tab）。 */
+  function isStackedChildTab(tv) {
+    return !!(tv && tv.taba && tv.taba.role === "child" && tv.taba.parentName && tv.taba.parentTabId);
+  }
+  /** 把收进折叠标签的子会话按父 tab 分组（父 tab id → 子会话数组，保持 tabList 顺序）。 */
+  function stackedChildrenByParent() {
+    const byParent = new Map();
+    tabViews.forEach((tv) => {
+      if (!isStackedChildTab(tv)) { return; }
+      const list = byParent.get(tv.taba.parentTabId);
+      if (list) { list.push(tv); } else { byParent.set(tv.taba.parentTabId, [tv]); }
+    });
+    return byParent;
+  }
+  /** 折叠标签：平时显示「子会话」，正在看某个子会话时显示它的名字；点开贴着标签的小列表。样式跟普通 tab 一致。 */
+  function buildStackTab(parentTv, kids) {
+    const el = document.createElement("div");
+    el.className = "chat-tab taba-stack";
+    el.dataset.stackFor = parentTv.id;
+    const activeChild = kids.find((k) => k.id === activeTabId);
+    if (activeChild) { el.classList.add("active"); }
+    if (activeChild && activeChild.streaming) { el.classList.add("streaming"); }
+    else if (activeChild && activeChild.loading) { el.classList.add("loading"); }
+    const spinner = document.createElement("span"); spinner.className = "ct-spinner"; el.appendChild(spinner);
+    const mark = document.createElement("span"); mark.className = "ts-mark"; mark.textContent = "↳"; el.appendChild(mark);
+    const title = document.createElement("span"); title.className = "ct-title";
+    title.textContent = activeChild ? activeChild.name : "子会话";
+    title.title = activeChild
+      ? (tabaTip(activeChild.taba) || activeChild.name)
+      : (tabaTip(parentTv.taba) || "这个会话派出去的子会话");
+    el.appendChild(title);
+    // 蓝色呼吸的小标：数字是还在跑的子会话个数；没有在跑的就不显示
+    const running = kids.filter((k) => k.taba && (k.taba.state === "starting" || k.taba.state === "running")).length;
+    if (running > 0) {
+      const count = document.createElement("span");
+      count.className = "ct-taba ct-taba-count running";
+      count.textContent = String(running);
+      el.appendChild(count);
+    }
+    el.addEventListener("click", () => {
+      // 刚点标签把列表收起来了：这一次点击别又把它弹开（收起 / 弹开的开关）
+      if (stackToggleGuard && stackToggleGuard.for === parentTv.id && Date.now() - stackToggleGuard.at < 350) {
+        stackToggleGuard = null;
+        return;
+      }
+      stackToggleGuard = null;
+      if (stackMenu) { hideStackMenu(); return; }
+      openStackMenu(el, parentTv.id, kids);
+    });
+    // 右键也弹这个列表（交回 / 变独立那些在列表行的右键菜单里）
+    el.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openStackMenu(el, parentTv.id, kids);
+    });
+    return el;
+  }
+  // ---- 折叠标签的小列表：贴着标签出（不是居中大浮层）----
+  let stackMenu = null;          // { menu, parentTabId, closer, keyHandler }
+  let stackToggleGuard = null;   // 刚点标签收起列表时的开关保护
+  function hideStackMenu() {
+    if (!stackMenu) { return; }
+    document.removeEventListener("mousedown", stackMenu.closer, true);
+    document.removeEventListener("keydown", stackMenu.keyHandler, true);
+    stackMenu.menu.remove();
+    stackMenu = null;
+  }
+  /** 行首的状态小点：跟 tab 上那颗呼吸点同一画法——只有还在跑的才显示（蓝点呼吸），
+     跑完就消失；出错的显示红点。 */
+  function stateDot(taba) {
+    const st = taba ? taba.state : "";
+    if (st === "starting" || st === "running") { return " running"; }
+    if (st === "error") { return " error"; }
+    return "";
+  }
+  function openStackMenu(anchorEl, parentTabId, kids) {
+    hidePaneMenu();
+    hideStackMenu();
+    const menu = document.createElement("div");
+    menu.className = "pane-menu stack-menu";
+    kids.forEach((k) => {
+      const row = document.createElement("div");
+      row.className = "pm-item sm-row" + (activeTabId === k.id ? " sm-current" : "");
+      const dot = document.createElement("span");
+      dot.className = "sm-dot" + stateDot(k.taba);
+      row.appendChild(dot);
+      const label = document.createElement("span");
+      label.className = "sm-name";
+      label.textContent = k.name;
+      label.title = tabaTip(k.taba) || k.name;
+      row.appendChild(label);
+      const x = document.createElement("span");
+      x.className = "sm-close";
+      x.title = "关闭这个子会话";
+      x.innerHTML = PH_CLOSE_SVG;
+      // 只关不切：别让这一下冒泡成“切过去”
+      x.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "closeTab", tabId: k.id }); });
+      row.appendChild(x);
+      row.addEventListener("click", () => { hideStackMenu(); vscode.postMessage({ type: "switchTab", tabId: k.id }); });
+      row.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        // 下拉框留在原地不收：右键只是在这行旁边弹操作菜单；点外面时两样各自收起
+        showPaneMenu(e.clientX, e.clientY, leavesOf(k.root)[0] || k.focusPanelId);
+      });
+      menu.appendChild(row);
+    });
+    document.body.appendChild(menu);
+    // 默认贴在标签正下方；快贴到屏幕边就收进来
+    const r = anchorEl.getBoundingClientRect();
+    menu.style.left = "0px";
+    menu.style.top = "0px";
+    const mr = menu.getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - mr.width - 8)) + "px";
+    menu.style.top = Math.min(r.bottom + 3, window.innerHeight - mr.height - 8) + "px";
+    const closer = (ev) => {
+      if (stackMenu && !stackMenu.menu.contains(ev.target)) {
+        // 行右键弹出的操作菜单开着时，点它不算点在外面：下拉框要留着
+        if (paneMenuEl && paneMenuEl.contains(ev.target)) { return; }
+        // 点在标签自己身上：记一笔，让随后的 click 把它当成“收起”而不是“又弹开”
+        if (anchorEl.contains(ev.target)) { stackToggleGuard = { at: Date.now(), for: parentTabId }; }
+        hideStackMenu();
+      }
+    };
+    const keyHandler = (ev) => {
+      if (ev.key !== "Escape") { return; }
+      // 有操作菜单先收它，再按一次才收下拉框
+      if (paneMenuEl) { hidePaneMenu(); return; }
+      hideStackMenu();
+    };
+    stackMenu = { menu, parentTabId, closer, keyHandler };
+    document.addEventListener("mousedown", closer, true);
+    document.addEventListener("keydown", keyHandler, true);
+  }
+  /** 小列表开着时跟着 tabList 刷新：子会话增减 / 状态变化都能跟上；父 tab 没了就整个收起。 */
+  function refreshStackMenu() {
+    const kids = stackedChildrenByParent().get(stackMenu.parentTabId);
+    const anchor = tabBarInner.querySelector('.chat-tab.taba-stack[data-stack-for="' + stackMenu.parentTabId + '"]');
+    if (!anchor || !kids || kids.length === 0) { hideStackMenu(); return; }
+    openStackMenu(anchor, stackMenu.parentTabId, kids);
+  }
+
   /** 上次已经滚到位的活跃 tab id（写在 renderTabBar 前头：免得初始化期间被调用时踩到未初始化） */
   let tabBarRevealedActive = null;
   function renderTabBar() {
     if (draggingPanelId) { tabBarDirty = true; return; }
-    const sig = Array.from(tabViews.values()).map((tv) =>
-      tv.id + ":" + tv.name + ":" + (activeTabId === tv.id ? 1 : 0) + ":" + (tv.streaming ? 1 : 0) + ":" + (tv.loading ? 1 : 0) + ":" + tabaSig(tv.taba)
-    ).join("|");
+    const byParent = stackedChildrenByParent();
+    const sig = Array.from(tabViews.values())
+      .filter((tv) => !isStackedChildTab(tv))
+      .map((tv) =>
+        tv.id + ":" + tv.name + ":" + (activeTabId === tv.id ? 1 : 0) + ":" + (tv.streaming ? 1 : 0) + ":" + (tv.loading ? 1 : 0) + ":" + tabaSig(tv.taba)
+      )
+      .concat(Array.from(byParent.entries()).map(([pid, kids]) =>
+        "s:" + pid + ":" + kids.map((k) =>
+          k.id + ":" + (activeTabId === k.id ? 1 : 0) + ":" + (k.streaming ? 1 : 0) + ":" + (k.loading ? 1 : 0) + ":" + tabaSig(k.taba)
+        ).join(",")
+      ))
+      .join("|");
     if (sig === tabBarSig) { return; }
     tabBarSig = sig;
     // 重建会把滚动位置清零：tab 多了以后，流式期间名字一变就跳回最左边，后面的 tab 根本够不着。
@@ -1598,6 +1750,8 @@
     const keepScroll = tabBarInner.scrollLeft;
     tabBarInner.innerHTML = "";
     tabViews.forEach((tv) => {
+      // 子会话（taba）收进父会话后面的折叠标签，不单独占位
+      if (isStackedChildTab(tv)) { return; }
       const panelIds = leavesOf(tv.root);
       const single = panelIds.length === 1;
       const el = document.createElement("div");
@@ -1605,24 +1759,6 @@
       el.dataset.tabId = tv.id;
       const spinner = document.createElement("span"); spinner.className = "ct-spinner"; el.appendChild(spinner);
       const title = document.createElement("span"); title.className = "ct-title"; title.textContent = tv.name; title.title = tv.name; el.appendChild(title);
-      // 派子会话（taba）标记：子会话一个“↳”，派了活出去的显示“⇢几个”
-      const tb = tv.taba;
-      if (tb && tb.role === "child") {
-        el.classList.add("taba-child");
-        const mark = document.createElement("span");
-        mark.className = "ct-taba ct-taba-child";
-        mark.textContent = "↳";
-        mark.title = tabaTip(tb);
-        el.insertBefore(mark, title);
-      } else if (tb && tb.role === "parent" && (tb.children || []).length) {
-        el.classList.add("taba-parent");
-        const running = (tb.children || []).filter((k) => k.state === "starting" || k.state === "running").length;
-        const badge = document.createElement("span");
-        badge.className = "ct-taba ct-taba-count" + (running > 0 ? " running" : "");
-        badge.textContent = "⇢" + (running > 0 ? running : tb.children.length);
-        badge.title = tabaTip(tb);
-        el.appendChild(badge);
-      }
       const close = document.createElement("span"); close.className = "ct-close"; close.title = "关闭 tab（内部 panel 全部关闭）";
       // 用 SVG 画叉：文本 “×” 在 Segoe UI 等字体下 ink 偏上，flex 居中无法修正；
       // SVG 笔画由 viewBox 几何决定，天然居中（与 VS Code 自带关闭图标同法）。
@@ -1679,6 +1815,9 @@
         });
       }
       tabBarInner.appendChild(el);
+      // 派了活的主 tab：后面跟一张「子会话」标签，把它的子会话收进去
+      const kids = byParent.get(tv.id);
+      if (kids && kids.length > 0) { tabBarInner.appendChild(buildStackTab(tv, kids)); }
     });
     tabBarInner.scrollLeft = keepScroll;
     // 换了活跃 tab（点开一个在屏幕外的）要滚过去；同一个 tab 反复重建时不动，
@@ -1687,12 +1826,21 @@
       tabBarRevealedActive = activeTabId;
       revealTabInBar(activeTabId);
     }
+    // 小列表开着时跟着 tabList 刷新（子会话增减 / 状态变化；父 tab 没了就收起）
+    if (stackMenu) { refreshStackMenu(); }
   }
 
   /** 让某个 tab 在滑动条里露出来：看不见就滚过去，已经看得见就不动。 */
   function revealTabInBar(tabId) {
     if (!tabId) { return; }
-    const el = tabBarInner.querySelector('.chat-tab[data-tab-id="' + tabId + '"]');
+    let el = tabBarInner.querySelector('.chat-tab[data-tab-id="' + tabId + '"]');
+    if (!el) {
+      // 折进折叠标签里的子会话：露出它父会话后面那个标签
+      const tv = tabViews.get(tabId);
+      if (tv && isStackedChildTab(tv)) {
+        el = tabBarInner.querySelector('.chat-tab.taba-stack[data-stack-for="' + tv.taba.parentTabId + '"]');
+      }
+    }
     if (!el) { return; }
     const box = tabBarInner.getBoundingClientRect();
     const r = el.getBoundingClientRect();

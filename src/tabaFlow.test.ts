@@ -14,6 +14,7 @@ import { randomNameParts } from "./names";
 import type { FileChange, PanelLaunch, PiConfig, TurnEndInfo } from "./runtimeTypes";
 import { ChatControllerBase, layoutLeaves, type TabContainer } from "./chatControllerBase";
 import { readRunRecord, tabaRunsDir } from "./tabaRunFiles";
+import { BrowserChatController, type BrowserChatOwner } from "./browserChatController";
 
 /** 记下每个 panel 都收到了什么。 */
 class TabaTestController extends ChatControllerBase {
@@ -107,7 +108,8 @@ class TabaTestController extends ChatControllerBase {
     protected getFontSize(): string { return "14"; }
     protected mutateViewOption(): void { /* noop */ }
     protected notifyBeepEnabled(): boolean { return false; }
-    protected notifyTurnEnd(_info: TurnEndInfo): void { /* noop */ }
+    public readonly notified: TurnEndInfo[] = [];
+    protected notifyTurnEnd(info: TurnEndInfo): void { this.notified.push(info); }
     protected sendFileList(): void { /* noop */ }
     protected openFileFromWebview(): void { /* noop */ }
     protected handlePlatformMessage(): boolean { return false; }
@@ -566,6 +568,49 @@ test("名录文件：变成独立会话后跟着改状态，父会话路径留�
     assert.equal(rec!.state, "detached");
     assert.equal(rec!.stateText, "已经变成独立会话");
     assert.equal(rec!.parentSessionFile, parentSession, "原来那个会话仍然能按名字找到它");
+});
+
+test("收尾提醒：子会话跑完不发系统通知；变成独立之后就照常提醒", async () => {
+    const { c, parent, parentTab } = setup();
+    c.onTabaRequest(parent, spawnReq({ id: "n1" }) as any);
+    await new Promise((r) => setTimeout(r, 60));
+    const child = c.leavesOf(c.tabs().find((t) => t !== parentTab)!)[0];
+
+    turnEnd(c, child, "看完了。");
+    assert.equal(c.notified.length, 0, "子会话跑完不发系统通知");
+
+    // 用户接管：变成独立会话之后，它就是自己的会话了，照常提醒
+    c.tabaDetachChild(child);
+    turnEnd(c, child, "独立之后又跑完一轮。");
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(c.notified.length, 1, "独立会话照常提醒");
+    assert.equal(c.notified[0].panelId, child);
+});
+
+test("浏览器那份的配置：派子会话的两项原样透传，不再清空", () => {
+    const cfg: PiConfig = {
+        piPath: "pi",
+        provider: "",
+        model: "",
+        extraArgs: [],
+        trustProject: true,
+        tabaExtension: path.join(tmp, "taba-bridge-test.ts"),
+        tabaDir: tmp,
+    };
+    // 这次只走配置和登记这两个口子，宿主其余成员不会被碰到
+    const owner = {
+        getConfig: () => cfg,
+        getCwd: () => tmp,
+        registerExternalWorkspace: () => {},
+        unregisterExternalWorkspace: () => {},
+    } as unknown as BrowserChatOwner;
+    const c = new BrowserChatController(owner);
+    try {
+        assert.equal(c.getConfig().tabaExtension, cfg.tabaExtension);
+        assert.equal(c.getConfig().tabaDir, cfg.tabaDir);
+    } finally {
+        c.dispose();
+    }
 });
 
 test("名录文件：派活的会话关掉了，子会话那份也改成独立", async () => {

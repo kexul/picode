@@ -10,7 +10,7 @@ export interface PiConfig {
     trustProject: boolean;
     /**
      * “派子会话”要加载的 pi 扩展文件路径（插件写在 ~/.pi/pichat/ 下）。
-     * 空串或缺省表示这个工作区不开这个能力（例如浏览器那份）：
+     * 空串或缺省表示这个工作区不开这个能力：
      * 不给 pi 加载扩展，模型那边就不会出现 taba 这几个工具。
      */
     tabaExtension?: string;
