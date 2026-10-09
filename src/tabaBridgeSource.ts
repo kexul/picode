@@ -13,8 +13,8 @@ export const TABA_BRIDGE_SOURCE = String.raw`/**
  *
  * 作用：给模型三个工具，让它能派子会话。
  *   taba        新开一个 tab，派一个子会话去干一件事（不等结果）
- *   taba_list   列出可以指名的角色
  *   taba_stop   停掉某个子会话正在跑的这一轮
+ *   taba_peek   看某个子会话的情况
  *
  * 工具被调用时，这里只往本进程的 stderr 写一行暗号：
  *   ##PICHAT_TABA## 后面跟 base64 编码的 JSON
@@ -23,7 +23,6 @@ export const TABA_BRIDGE_SOURCE = String.raw`/**
  * 所以这里不用等插件回话，也不用联网、不开端口。
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
@@ -46,78 +45,7 @@ function text(v: unknown, limit: number): string | undefined {
     return t.length > limit ? t.slice(0, limit) : t;
 }
 
-/** 角色文件的三个来源目录，优先级从高到低：项目 > 全局 > 插件自带。 */
-function roleDirs(cwd: string): Array<{ dir: string; origin: string }> {
-    const home = process.env.USERPROFILE || process.env.HOME || homedir();
-    const agentDir = process.env.PI_CODING_AGENT_DIR || join(home, ".pi", "agent");
-    const out: Array<{ dir: string; origin: string }> = [];
-    if (cwd) { out.push({ dir: join(cwd, ".pi", "agents"), origin: "项目" }); }
-    out.push({ dir: join(agentDir, "agents"), origin: "全局" });
-    const bundled = process.env.PICHAT_TABA_DIR;
-    if (bundled) { out.push({ dir: join(bundled, "taba-roles"), origin: "插件自带" }); }
-    return out;
-}
-
-interface RoleBrief {
-    name: string;
-    description: string;
-    origin: string;
-    /** 这个角色我们的 tab 跑不了（例如声明了要用外部命令行工具）。 */
-    unusable?: string;
-}
-
-/** 从前置元数据里只取用得上那几项（够列清单用）。 */
-function parseRoleBrief(raw: string, fallbackName: string, origin: string): RoleBrief | undefined {
-    const lines = raw.replace(/^\uFEFF/, "").split(/\r?\n/);
-    if (lines.length === 0 || lines[0].trim() !== "---") {
-        return fallbackName ? { name: fallbackName, description: "", origin } : undefined;
-    }
-    const front: Record<string, string> = {};
-    let closed = false;
-    for (let i = 1; i < lines.length; i++) {
-        if (lines[i].trim() === "---") { closed = true; break; }
-        const m = /^([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.*)$/.exec(lines[i]);
-        if (m && !(m[1] in front)) { front[m[1]] = m[2].trim(); }
-    }
-    if (!closed) {
-        // 前置元数据没写完：整份文件当说明书，名字用文件名
-        return fallbackName ? { name: fallbackName, description: "", origin } : undefined;
-    }
-    const name = (front.name || fallbackName).replace(/^["']|["']$/g, "").trim();
-    if (!name) { return undefined; }
-    const brief: RoleBrief = { name, description: (front.description || "").replace(/^["']|["']$/g, "").trim(), origin };
-    if ("runner" in front) { brief.unusable = "声明了要用外部命令行工具跑，我们的 tab 只能跑 pi"; }
-    const hide = (front["disable-model-invocation"] || "").toLowerCase();
-    if (hide === "true" || hide === "yes") { return undefined; }
-    return brief;
-}
-
-/** 读齐三个目录里的角色，同名只留优先级最高的那个。 */
-function collectRoles(cwd: string): RoleBrief[] {
-    const out: RoleBrief[] = [];
-    const seen = new Set<string>();
-    for (const { dir, origin } of roleDirs(cwd)) {
-        let files: string[];
-        try {
-            files = readdirSync(dir).filter((f) => f.toLowerCase().endsWith(".md")).sort();
-        } catch {
-            continue;
-        }
-        for (const file of files) {
-            let raw = "";
-            try { raw = readFileSync(join(dir, file), "utf8"); } catch { continue; }
-            const brief = parseRoleBrief(raw, file.slice(0, -3), origin);
-            if (!brief) { continue; }
-            const key = brief.name.toLowerCase();
-            if (seen.has(key)) { continue; }
-            seen.add(key);
-            out.push(brief);
-        }
-    }
-    return out;
-}
-
-/** 拿到本进程的会话文件路径（父会话要带上下文时插件需要它）。 */
+/** 拿到本进程的会话文件路径（名录里按名字找子会话时靠它确认是不是本会话派的）。 */
 function sessionFileOf(ctx: any): string {
     try {
         const got = ctx?.sessionManager?.getSessionFile?.();
@@ -213,13 +141,11 @@ const TABA_PARAMS = {
     type: "object",
     properties: {
         name: { type: "string", description: "显示名，一眼能看出这个子会话去干什么，例如“侦察: 认证模块”。" },
-        task: { type: "string", description: "任务说明。要自包含：默认开的是全新会话，它看不到你这边的对话，需要的背景都得写进去。" },
-        agent: { type: "string", description: "角色名（见 taba_list）。不填就没有角色说明，按任务原文干。" },
+        task: { type: "string", description: "任务说明。要自包含：子会话开的是全新会话，看不到你这边的对话，需要的背景都得写进去；要它看什么文件就把路径写进任务，它自己会去读。" },
         model: { type: "string", description: "指定模型，例如 local/glm-5.3-flash。不填跟随你这边的模型。" },
         thinking: { type: "string", description: "指定思考强度：minimal / low / medium / high / xhigh / max。" },
-        tools: { type: "string", description: "工具白名单，逗号分隔，例如 read,bash,edit,write。不填按角色定义，角色也没写就全给。" },
+        tools: { type: "string", description: "工具白名单，逗号分隔。真要改文件的活不传（默认 read,bash,edit,write；bash 能改文件，带它就不算只读）；只读摸底传 read,grep,find,ls；要跑命令或测试的调查传 read,bash,grep,find,ls。" },
         cwd: { type: "string", description: "子会话的工作目录。不填跟你这边一样。" },
-        fork: { type: "boolean", description: "把你这边之前的对话带给子会话（适合它需要上下文才能干活的时候）。默认不带。" },
     },
     required: ["name", "task"],
     additionalProperties: false,
@@ -279,15 +205,12 @@ export default function tabaBridge(pi: any): void {
                 cwd: cwdOf(ctx),
                 parentSessionFile: sessionFileOf(ctx),
             };
-            const agent = text(params?.agent, 80);
             const model = text(params?.model, 120);
             const thinking = text(params?.thinking, 40);
             const tools = text(params?.tools, 400);
-            if (agent) { payload.agent = agent; }
             if (model) { payload.model = model; }
             if (thinking) { payload.thinking = thinking; }
             if (tools) { payload.tools = tools; }
-            if (params?.fork === true) { payload.fork = true; }
             emit(payload);
             const lines = [
                 "已派出子会话「" + name + "」（编号 " + id + "）。它会在插件里新开一个 tab 跑。",
@@ -295,30 +218,6 @@ export default function tabaBridge(pi: any): void {
                 "在那之前不要猜测、不要编造它的结果，也不用反复查看：继续做别的能独立推进的事，或者结束这一轮告诉用户在等它。",
             ];
             return { content: [{ type: "text", text: lines.join("\n") }], details: { id, name } };
-        },
-    });
-
-    safeRegister(pi, {
-        name: "taba_list",
-        label: "子会话角色清单",
-        description:
-            "列出派子会话时可以指名的角色（agents 目录下的那些 .md 文件），带上每个角色的一句话说明、用什么模型、给了哪些工具。" +
-            "只在需要挑角色的时候调用一次，不要反复调。",
-        parameters: { type: "object", properties: {}, additionalProperties: false },
-        async execute(_toolCallId: string, _params: any, _signal: any, _onUpdate: any, ctx: any) {
-            const roles = collectRoles(cwdOf(ctx));
-            if (roles.length === 0) {
-                return {
-                    content: [{ type: "text", text: "没有任何角色文件。派活时不填 agent 也可以：直接按任务原文开一个子会话。" }],
-                    details: { count: 0 },
-                };
-            }
-            const lines: string[] = ["可以指名的角色（同名时项目里的优先）："];
-            for (const r of roles) {
-                const unusable = r.unusable ? "（不可用：" + r.unusable + "）" : "";
-                lines.push("- " + r.name + " [" + r.origin + "]" + (r.description ? "：" + r.description : "") + unusable);
-            }
-            return { content: [{ type: "text", text: lines.join("\n") }], details: { count: roles.length } };
         },
     });
 

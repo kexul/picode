@@ -20,10 +20,10 @@ import type { TabaChild } from "./tabaRegistry";
 
 function kid(over: Partial<TabaChild> = {}): TabaChild {
     return {
-        id: "a1b2c3d4", name: "侦察: 认证", task: "看看认证模块", agent: "scout",
+        id: "a1b2c3d4", name: "侦察: 认证", task: "看看认证模块",
         parentPanelId: "sidebar:panel-1", parentSessionFile: "/sessions/parent.jsonl",
         childPanelId: "sidebar:panel-2", childTabId: "sidebar:tab-2",
-        state: "running", startedAt: 1000, deliveries: 0, sessionMode: "standalone",
+        state: "running", startedAt: 1000, deliveries: 0,
         sessionFile: "/sessions/kid.jsonl", ...over,
     };
 }
@@ -68,7 +68,6 @@ test("名录记录：字段都对得上，状态可以被覆盖成 closed", () =
     assert.equal(rec.id, "a1b2c3d4");
     assert.equal(rec.name, "侦察: 认证");
     assert.equal(rec.task, "看看认证模块");
-    assert.equal(rec.agent, "scout");
     assert.equal(rec.state, "running");
     assert.equal(rec.stateText, "运行中");
     assert.equal(rec.startedAt, 1000);
@@ -83,9 +82,6 @@ test("名录记录：字段都对得上，状态可以被覆盖成 closed", () =
     assert.equal(closed.stateText, "tab 已经关闭");
     assert.equal(closed.endedAt, 9000);
     assert.equal(closed.lastReplyPreview, "看过了，认证在 src/auth.ts。");
-
-    const noAgent = buildRunRecord({ child: kid({ agent: undefined }) });
-    assert.equal(noAgent.agent, "");
 });
 
 test("写出去再读回来是同一份；版本不对或文件没有都返回 undefined", () => {

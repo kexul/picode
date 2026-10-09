@@ -76,7 +76,7 @@
     "compile": "tsc -p tsconfig.json",
     "build": "npm run clean && npm run compile",
     "watch": "tsc -w -p tsconfig.json",
-    "test": "npm run compile && node --test out/src/messageUtils.test.js out/src/canvasData.test.js out/src/layoutTree.test.js out/src/slashCommands.test.js out/src/transferPanels.test.js out/src/toastNotification.test.js out/src/turnNotifyText.test.js out/src/sessionTitleWait.test.js out/src/webTransport.test.js out/src/webChatServer.test.js out/src/replaySink.test.js out/src/tabaProtocol.test.js out/src/tabaRoles.test.js out/src/tabaTask.test.js out/src/tabaRegistry.test.js out/src/tabaAssets.test.js out/src/tabaLaunch.test.js out/src/tabaFlow.test.js out/src/tabaRunFiles.test.js out/src/piClientArgs.test.js out/src/frontendSyntax.test.js out/src/tabBarScroll.test.js",
+    "test": "npm run compile && node --test out/src/messageUtils.test.js out/src/canvasData.test.js out/src/layoutTree.test.js out/src/slashCommands.test.js out/src/transferPanels.test.js out/src/toastNotification.test.js out/src/turnNotifyText.test.js out/src/sessionTitleWait.test.js out/src/webTransport.test.js out/src/webChatServer.test.js out/src/replaySink.test.js out/src/tabaProtocol.test.js out/src/tabaTask.test.js out/src/tabaRegistry.test.js out/src/tabaAssets.test.js out/src/tabaLaunch.test.js out/src/tabaFlow.test.js out/src/tabaRunFiles.test.js out/src/piClientArgs.test.js out/src/frontendSyntax.test.js out/src/tabBarScroll.test.js",
     "package": "npm run build && vsce package --allow-missing-repository"
   },
   "dependencies": {},

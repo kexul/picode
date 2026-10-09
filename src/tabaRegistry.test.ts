@@ -18,7 +18,7 @@ function kid(over: Partial<TabaChild> = {}): TabaChild {
     return {
         id: "a1", name: "侦察: 认证", task: "看看认证模块",
         parentPanelId: "sidebar:panel-1", state: "starting", startedAt: 0, deliveries: 0,
-        sessionMode: "standalone", ...over,
+        ...over,
     };
 }
 
@@ -150,13 +150,11 @@ test("交回去的正文：跑完 / 出错 / 没内容 三种写法", () => {
 
 test("界面上那几行提示怎么写", () => {
     const child = kid({ name: "侦察: 认证", task: "看看认证模块\n第二行" });
-    const notice = buildSpawnNotice({ child, tabName: "↳ 侦察: 认证", mode: "standalone" });
+    const notice = buildSpawnNotice({ child, tabName: "↳ 侦察: 认证" });
     assert.ok(notice.includes("已派出子会话「侦察: 认证」"));
     assert.ok(notice.includes("新 tab「↳ 侦察: 认证」"));
     assert.ok(notice.includes("全新会话"));
     assert.ok(notice.includes("自动交回"));
-    assert.ok(buildSpawnNotice({ child, tabName: "t", mode: "fork" }).includes("带上了本会话之前的对话"));
-    assert.ok(buildSpawnNotice({ child, tabName: "t", mode: "lineage-only" }).includes("只记着是本会话派的"));
 
     const intro = buildChildIntro({ child, parentTabName: "沉静的雪豹" });
     assert.ok(intro.includes("由「沉静的雪豹」派来"));

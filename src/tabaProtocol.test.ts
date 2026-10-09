@@ -75,19 +75,19 @@ test("派活请求：缺名字或缺任务都算不合法", () => {
     assert.equal(normalizeTabaRequest({ kind: "unknown" }), undefined);
 });
 
-test("派活请求：可选字段只有真有内容才带上", () => {
+test("派活请求：可选字段只有真有内容才带上；agent / fork 这种已取消的字段直接丢掉", () => {
     const req: any = normalizeTabaRequest({
         kind: "spawn", id: "i", name: " n ", task: " t ",
-        agent: "  ", model: "", thinking: null, tools: "read,bash", cwd: "", fork: false,
+        agent: "scout", model: "", thinking: null, tools: "read,bash", cwd: "", fork: true,
     });
     assert.equal(req.name, "n");
     assert.equal(req.task, "t");
     assert.equal(req.tools, "read,bash");
-    assert.equal("agent" in req, false);
+    assert.equal("agent" in req, false, "没有角色这回事了，带了也丢掉");
+    assert.equal("fork" in req, false, "子会话一律全新会话，fork 丢掉");
     assert.equal("model" in req, false);
     assert.equal("thinking" in req, false);
     assert.equal("cwd" in req, false);
-    assert.equal("fork" in req, false, "fork 只有明确为 true 才带");
 });
 
 test("派活请求：超长任务被截断而不是整条丢掉", () => {

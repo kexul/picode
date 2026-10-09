@@ -24,7 +24,6 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import { randomUUID } from "crypto";
 import { SessionRuntime, RuntimeHost, FileChange, ModelInfo, ModelChoice, StatusInfo, TurnEndInfo, } from "./sessionRuntime";
 import { PiConfig } from "./sessionRuntime";
 import { PiClient } from "./piClient";
@@ -51,15 +50,12 @@ import {
     formatElapsedMs,
     type TabaChild,
 } from "./tabaRegistry";
-import { loadRoles, piAgentDir, pickRoleByName, type TabaRole, type TabaSessionMode } from "./tabaRoles";
-import { buildChildSessionLines, childSessionFileName, piSessionDirFor } from "./tabaTask";
+import { buildTaskText } from "./tabaTask";
 import {
     buildTabaExtraArgs,
     buildTabaLaunch,
-    buildTabaTaskText,
     resolveTabaSpawn,
 } from "./tabaLaunch";
-import { tabaPromptsDir, tabaRolesDir } from "./tabaAssets";
 import { buildRunRecord, tabaRunsDir, writeRunRecord, type TabaRunState } from "./tabaRunFiles";
 import type { RpcSessionState } from "./piRpc";
 
@@ -837,8 +833,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected readonly taba = new TabaRegistry();
     /** 正在派活中的编号：同一个请求重复送过来时不要开出两个 tab。 */
     private readonly tabaInFlight = new Set<string>();
-    /** 子会话用的临时提示词文件（角色说明当系统提示词时用），panel 关掉时删。 */
-    private readonly tabaPromptFiles = new Map<string, string>();
     /** 等子会话的 pi 起来最多等多久（冷启动要加载扩展，比领备用进程慢）。 */
     protected static readonly TABA_CHILD_READY_TIMEOUT_MS = 40000;
     /** tab 名里子会话名字最多占多长。 */
@@ -874,60 +868,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (this.taba.has(req.id) || this.tabaInFlight.has(req.id)) { return; }
         this.tabaInFlight.add(req.id);
         try {
-            const cfg = this.getConfig();
-
-            // 角色（可选）：找不到、或者这个角色我们的 tab 跑不了，都要如实回话
-            let roles: TabaRole[] = [];
-            try {
-                roles = loadRoles(this.getCwd(), cfg.tabaDir ? tabaRolesDir(cfg.tabaDir) : undefined);
-            } catch (e: any) {
-                console.error("[taba] 读角色文件失败:", e?.message ?? e);
-            }
-            const role = req.agent ? pickRoleByName(roles, req.agent) : undefined;
-            if (req.agent && !role) {
-                this.tabaFailSpawn(parentRt, req.name, `没有叫「${req.agent}」这个角色`);
-                return;
-            }
-            if (role?.unusable) {
-                this.tabaFailSpawn(parentRt, req.name, `角色「${role.name}」跑不了：${role.unusable}`);
-                return;
-            }
-
-            // 子会话怎么起：工作目录 / 会话内容从哪来 / 模型 / 工具白名单 都在这里面算
+            // 子会话怎么起：工作目录 / 模型 / 工具白名单 都在这里面算（子会话一律全新会话，pi 自己建会话文件）
             const plan = resolveTabaSpawn({
                 req,
-                role,
                 parentCwd: this.getCwd(),
                 parentModelId: parentRt.modelId,
                 parentProvider: parentRt.provider,
                 resolvePath: (p) => this.resolvePath(p),
             });
-            const { cwd, mode } = plan;
+            const { cwd } = plan;
 
-            // 带上下文那两档：先把子会话文件写出来，pi 用 --session 打开它
-            let sessionFile: string | undefined;
-            let note = "";
-            if (mode !== "standalone") {
-                const parentSession = req.parentSessionFile || parentRt.currentSessionPath || "";
-                const seeded = await this.tabaSeedChildSession(parentSession, mode, cwd);
-                if (seeded) { sessionFile = seeded; }
-                else { note = "（没能带上这个会话之前的对话：它还没写到磁盘上，这次按全新会话派的）"; }
-            }
-
-            // 角色说明放哪：角色文件里写了 system-prompt 就当系统提示词，否则跟任务一起发
-            let promptFile: string | undefined;
-            if (role && role.body && role.systemPromptMode && cfg.tabaDir) {
-                promptFile = await this.tabaWritePromptFile(cfg.tabaDir, role.name, req.id, role.body);
-                if (promptFile) { this.tabaPromptFiles.set(`pending:${req.id}`, promptFile); }
-            }
-            // 写不出去（没有资源目录之类）就退回跟任务一起发，说明总得让子会话看到
-            const bodyInTask = !promptFile;
-            const extraArgs = buildTabaExtraArgs({
-                sessionFile,
-                promptFile,
-                systemPromptMode: role?.systemPromptMode,
-                tools: plan.tools,
-            });
+            const extraArgs = buildTabaExtraArgs({ tools: plan.tools });
 
             const created = this.createBackgroundTab(buildTabaLaunch(extraArgs, cwd), plan.modelOverride);
             if (!created) {
@@ -935,15 +886,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 return;
             }
             const { container, rt } = created;
-            const pendingPrompt = this.tabaPromptFiles.get(`pending:${req.id}`);
-            this.tabaPromptFiles.delete(`pending:${req.id}`);
-            if (pendingPrompt) { this.tabaPromptFiles.set(rt.id, pendingPrompt); }
-
             const child: TabaChild = {
                 id: req.id,
                 name: req.name,
                 task: req.task,
-                agent: req.agent ?? role?.name,
                 parentPanelId,
                 parentSessionFile: req.parentSessionFile || "",
                 childPanelId: rt.id,
@@ -951,8 +897,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 state: "starting",
                 startedAt: Date.now(),
                 deliveries: 0,
-                sessionMode: mode,
-                sessionFile,
                 modelLabel: plan.modelSpec || undefined,
             };
             if (!this.taba.add(child)) {
@@ -965,7 +909,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             const parentTab = this.containerOfPanel(parentPanelId);
             this.postToTab(parentPanelId, {
                 type: "system",
-                text: buildSpawnNotice({ child, tabName: this.containerDisplayName(container), mode }) + note,
+                text: buildSpawnNotice({ child, tabName: this.containerDisplayName(container) }),
             });
             this.postToTab(rt.id, {
                 type: "system",
@@ -976,7 +920,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             });
             this.broadcastTabList(true);
 
-            const taskText = buildTabaTaskText({ role, bodyInTask, task: req.task });
+            const taskText = buildTaskText({ task: req.task });
             const ready = await rt.waitReady(ChatControllerBase.TABA_CHILD_READY_TIMEOUT_MS);
             // 等待期间 tab 被关掉了：登记在关 tab 时已经清掉了，这里什么都不用做
             if (!this.panels.has(rt.id)) { return; }
@@ -1041,64 +985,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
             if (changed) { this.tabaWriteRun(child); }
             if (child.sessionFile && child.parentSessionFile) { return; }
             await new Promise((r) => setTimeout(r, 500));
-        }
-    }
-
-    /** 写一个“带上下文”的子会话文件，返回路径；写不了返回 undefined。 */
-    protected async tabaSeedChildSession(
-        parentSessionFile: string,
-        mode: TabaSessionMode,
-        cwd: string
-    ): Promise<string | undefined> {
-        if (!parentSessionFile) { return undefined; }
-        const parentAbs = this.resolvePath(parentSessionFile);
-        if (!parentAbs || !fs.existsSync(parentAbs)) { return undefined; }
-        let parentLines: string[];
-        try {
-            parentLines = (await fs.promises.readFile(parentAbs, "utf8")).split("\n");
-        } catch (e: any) {
-            console.error("[taba] 读父会话文件失败:", e?.message ?? e);
-            return undefined;
-        }
-        const sessionId = randomUUID();
-        const timestamp = new Date().toISOString();
-        const dir = piSessionDirFor(cwd, piAgentDir());
-        const file = path.join(dir, childSessionFileName(timestamp, sessionId));
-        const lines = buildChildSessionLines({
-            mode: mode === "fork" ? "fork" : "lineage-only",
-            sessionId,
-            cwd,
-            timestamp,
-            parentSessionFile: parentAbs,
-            parentLines,
-        });
-        try {
-            await fs.promises.mkdir(dir, { recursive: true });
-            await fs.promises.writeFile(file, lines.join("\n") + "\n", "utf8");
-        } catch (e: any) {
-            console.error("[taba] 写子会话文件失败:", e?.message ?? e);
-            return undefined;
-        }
-        return file;
-    }
-
-    /** 角色说明当系统提示词时写成文件（pi 的 --append-system-prompt 收文件路径）。 */
-    protected async tabaWritePromptFile(
-        resourceDir: string,
-        roleName: string,
-        id: string,
-        body: string
-    ): Promise<string | undefined> {
-        try {
-            const dir = tabaPromptsDir(resourceDir);
-            await fs.promises.mkdir(dir, { recursive: true });
-            const safe = roleName.replace(/[^A-Za-z0-9._\u4e00-\u9fff-]/g, "-").slice(0, 40) || "role";
-            const file = path.join(dir, `${safe}-${id}.md`);
-            await fs.promises.writeFile(file, body, "utf8");
-            return file;
-        } catch (e: any) {
-            console.error("[taba] 写角色说明文件失败:", e?.message ?? e);
-            return undefined;
         }
     }
 
@@ -1274,11 +1160,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
             }
             this.tabaWriteRun(c);
         }
-        const promptFile = this.tabaPromptFiles.get(panelId);
-        if (promptFile) {
-            this.tabaPromptFiles.delete(panelId);
-            try { fs.rmSync(promptFile, { force: true }); } catch { /* 删不掉就算了 */ }
-        }
         const child = this.taba.byChildPanel(panelId);
         if (child) {
             const parentRt = child.parentPanelId ? this.panels.get(child.parentPanelId) : undefined;
@@ -1309,7 +1190,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 state: asChild.state,
                 stateText: describeChildState(asChild.state),
                 deliveries: asChild.deliveries,
-                sessionMode: asChild.sessionMode,
                 modelLabel: asChild.modelLabel ?? "",
                 elapsedMs: Math.max(0, (asChild.endedAt ?? Date.now()) - asChild.startedAt),
                 elapsedText: formatElapsedMs(Math.max(0, (asChild.endedAt ?? Date.now()) - asChild.startedAt)),

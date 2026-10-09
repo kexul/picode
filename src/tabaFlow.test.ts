@@ -116,30 +116,12 @@ class TabaTestController extends ChatControllerBase {
 }
 
 let tmp = "";
-/** 临时目录 + 一份角色文件（写盘那部分走真代码）。 */
 before(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pichat-taba-flow-"));
-    fs.mkdirSync(path.join(tmp, "taba-roles"), { recursive: true });
     fs.writeFileSync(path.join(tmp, "taba-bridge-0.0.7.ts"), "// 假的桥扩展\n", "utf8");
-    fs.writeFileSync(path.join(tmp, "taba-roles", "scout.md"), [
-        "---",
-        "name: scout",
-        "description: 只读摸底",
-        "tools: read, bash",
-        "thinking: low",
-        "---",
-        "",
-        "# 侦察角色",
-        "",
-        "你是摸底角色，只读不写。",
-        "",
-    ].join("\n"), "utf8");
-    // 子会话文件默认写到 ~/.pi/agent/sessions/…，测试里改到临时目录，别弄脏真的会话目录
-    process.env.PI_CODING_AGENT_DIR = tmp;
 });
 
 after(() => {
-    delete process.env.PI_CODING_AGENT_DIR;
     fs.rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -169,7 +151,7 @@ function turnEnd(c: TabaTestController, panelId: string, lastReplyText: string, 
 
 test("派活：新开一个 tab，不抢当前焦点，任务发过去，两边都有提示", async () => {
     const { c, parent, parentTab } = setup();
-    c.onTabaRequest(parent, spawnReq({ agent: "scout" }) as any);
+    c.onTabaRequest(parent, spawnReq() as any);
     await new Promise((r) => setTimeout(r, 60));
 
     const tabs = c.tabs();
@@ -183,20 +165,17 @@ test("派活：新开一个 tab，不抢当前焦点，任务发过去，两边�
     assert.equal(kid!.name, "侦察: 认证");
     assert.equal(kid!.parentPanelId, parent);
     assert.equal(kid!.state, "running", "任务已经发出去了");
-    assert.equal(kid!.agent, "scout");
-    assert.equal(kid!.sessionMode, "standalone", "角色没写 session-mode，就是全新会话");
 
-    // 子会话的启动参数：角色定的工具白名单、不给它加载桥扩展、不用备用进程
+    // 子会话的启动参数：没指定工具白名单就不传 --tools；不给它加载桥扩展、不用备用进程
     assert.equal(c.launches.length, 1);
-    assert.deepEqual(c.launches[0].extraArgs, ["--tools", "read,bash"]);
+    assert.deepEqual(c.launches[0].extraArgs, []);
     assert.equal(c.launches[0].noTaba, true);
     assert.equal(c.launches[0].skipSpare, true);
-    assert.deepEqual(c.modelOverrides[0], { provider: "local", modelId: "glm-5.3-flash:low" }, "角色没写模型，跟着父会话走；思考强度用角色定的");
+    assert.deepEqual(c.modelOverrides[0], { provider: "local", modelId: "glm-5.3-flash" }, "没指定模型就跟着父会话走");
 
-    // 任务文本：角色正文 + 任务 + 收尾要求；技能那一段没有
+    // 任务文本：任务 + 收尾要求
     const task = (c.sent.get(child) ?? [])[0];
     assert.ok(task, "任务发到子会话了");
-    assert.ok(task.includes("你是摸底角色，只读不写。"), "角色说明跟任务一起发");
     assert.ok(task.includes("看看认证模块"));
     assert.ok(task.includes("最后一条回复会被自动送回"));
 
@@ -306,92 +285,12 @@ test("同一个派活编号重复送过来只开一个 tab", async () => {
     assert.equal(c.tabs().length, 2, "只多了一个 tab");
 });
 
-test("角色不存在：不开 tab，把原因交回父会话", async () => {
-    const { c, parent, parentTab } = setup();
-    c.onTabaRequest(parent, spawnReq({ id: "bad", agent: "没有这个角色" }) as any);
+test("旧请求里的 agent 字段：直接忽略，照常派全新会话", async () => {
+    const { c, parent } = setup();
+    c.onTabaRequest(parent, spawnReq({ id: "noagent", agent: "随便什么角色" }) as any);
     await new Promise((r) => setTimeout(r, 60));
-    assert.deepEqual(c.tabs(), [parentTab], "没有多开 tab");
-    const toParent = (c.sent.get(parent) ?? []).join("\n");
-    assert.ok(toParent.includes("【派子会话没成】"), toParent);
-    assert.ok(toParent.includes("没有叫「没有这个角色」这个角色"));
-    assert.ok(c.messages(parent, "system").some((m) => String(m.text).includes("没派出去")));
-});
-
-test("带上上下文：先写一个子会话文件，用 --session 打开它", async () => {
-    const { c, parent, parentTab } = setup();
-    // 父会话已经落盘的文件
-    const parentSession = path.join(tmp, "parent-session.jsonl");
-    const line = (o: unknown) => JSON.stringify(o);
-    const parentLines = [
-        line({ type: "session", version: 3, id: "parent-id", cwd: tmp }),
-        line({ type: "message", id: "m1", parentId: "parent-id", message: { role: "user", content: [{ type: "text", text: "第一句" }] } }),
-        line({ type: "message", id: "m2", parentId: "m1", message: { role: "assistant", content: [{ type: "text", text: "第一答" }] } }),
-        line({ type: "message", id: "m3", parentId: "m2", message: { role: "user", content: [{ type: "text", text: "派活那一句" }] } }),
-    ];
-    fs.writeFileSync(parentSession, parentLines.join("\n") + "\n", "utf8");
-
-    c.onTabaRequest(parent, spawnReq({ id: "fork1", fork: true, parentSessionFile: parentSession }) as any);
-    await new Promise((r) => setTimeout(r, 120));
-
-    const args = c.launches[0].extraArgs!;
-    const at = args.indexOf("--session");
-    assert.ok(at >= 0, "带上了 --session");
-    const file = args[at + 1];
-    assert.ok(fs.existsSync(file), "子会话文件写出来了: " + file);
-    const written = fs.readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l));
-    assert.equal(written[0].type, "session");
-    assert.equal(written[0].parentSession, parentSession, "记着父会话是谁");
-    assert.equal(written.length, 3, "会话头 + 派活之前那两条");
-    assert.equal(written.some((w) => w.type === "session" && w.id === "parent-id"), false, "父会话的头没带过去");
-    assert.equal(written.some((w: any) => w.message?.content?.[0]?.text === "派活那一句"), false, "派活那一句没带过去");
-
-    const child = c.leavesOf(c.tabs().find((t) => t !== parentTab)!)[0];
-    assert.equal(c.childOf(child)!.sessionMode, "fork");
-    assert.ok(c.messages(parent, "system").some((m) => String(m.text).includes("带上了本会话之前的对话")));
-});
-
-test("父会话还没落盘时：退回全新会话，并在提示里说清楚", async () => {
-    const { c, parent, parentTab } = setup();
-    c.onTabaRequest(parent, spawnReq({ id: "nofile", fork: true, parentSessionFile: path.join(tmp, "不存在.jsonl") }) as any);
-    await new Promise((r) => setTimeout(r, 60));
-    assert.equal(c.launches[0].extraArgs!.includes("--session"), false);
-    const child = c.leavesOf(c.tabs().find((t) => t !== parentTab)!)[0];
-    assert.equal(c.childOf(child)!.sessionMode, "fork", "模式还是 fork，只是没带上");
-    assert.ok(c.messages(parent, "system").some((m) => String(m.text).includes("没能带上这个会话之前的对话")));
-});
-
-test("角色说明走系统提示词时，写成文件传给 pi，任务里不重复", async () => {
-    const roleDir = path.join(tmp, "taba-roles");
-    const file = path.join(roleDir, "writer.md");
-    fs.writeFileSync(file, [
-        "---",
-        "name: writer",
-        "description: 写文档",
-        "system-prompt: append",
-        "---",
-        "",
-        "你是写文档的角色。",
-        "",
-    ].join("\n"), "utf8");
-    try {
-        const { c, parent, parentTab } = setup();
-        c.onTabaRequest(parent, spawnReq({ id: "sp1", agent: "writer", task: "写个说明" }) as any);
-        await new Promise((r) => setTimeout(r, 60));
-        const args = c.launches[0].extraArgs!;
-        const at = args.indexOf("--append-system-prompt");
-        assert.ok(at >= 0, "带上了 --append-system-prompt");
-        assert.ok(fs.existsSync(args[at + 1]), "提示词文件写出来了");
-        assert.ok(fs.readFileSync(args[at + 1], "utf8").includes("你是写文档的角色。"));
-        const child = c.leavesOf(c.tabs().find((t) => t !== parentTab)!)[0];
-        const task = (c.sent.get(child) ?? [])[0];
-        assert.equal(task.includes("你是写文档的角色。"), false, "任务里不重复角色说明");
-        assert.ok(task.includes("写个说明"));
-        // 关掉子 tab 会把这个临时文件删掉
-        c.closeTab(c.tabs().find((t) => t !== parentTab)!);
-        assert.equal(fs.existsSync(args[at + 1]), false);
-    } finally {
-        fs.rmSync(file, { force: true });
-    }
+    assert.equal(c.tabs().length, 2, "照常开 tab");
+    assert.equal(c.allChildren().length, 1, "照常登记");
 });
 
 test("派活的会话关掉了：子会话变成独立会话，不再自动交回", async () => {
@@ -481,7 +380,6 @@ test("名录文件：派出去就写，状态一变就更新", async () => {
     assert.equal(rec!.task, "看看认证模块");
     assert.equal(rec!.state, "running");
     assert.equal(rec!.stateText, "运行中");
-    assert.equal(rec!.sessionMode, "standalone");
     assert.equal(rec!.deliveries, 0);
     assert.equal(rec!.lastReplyPreview, "", "还没结论就没有预览");
     assert.equal(rec!.sessionFile, "", "假进程不会落盘，所以路径还是空的");
@@ -522,23 +420,6 @@ test("名录文件：接管后那一轮出错了，也不该把已有结论擦�
     turnEnd(c, child, "第一轮的结论。");
     turnEnd(c, child, "", "error");
     assert.equal(runFile("peek7")!.lastReplyPreview, "第一轮的结论。");
-});
-
-test("名录文件：带上下文那档写的就是我们造出来的那个会话文件", async () => {
-    const { c, parent, parentTab } = setup();
-    const parentSession = path.join(tmp, "parent-for-peek.jsonl");
-    fs.writeFileSync(parentSession, JSON.stringify({ type: "message", id: "m1", message: { role: "user", content: [{ type: "text", text: "第一句" }] } }) + "\n", "utf8");
-    c.onTabaRequest(parent, spawnReq({ id: "peek2", fork: true, parentSessionFile: parentSession }) as any);
-    await new Promise((r) => setTimeout(r, 120));
-
-    const args = c.launches[c.launches.length - 1].extraArgs!;
-    const seeded = args[args.indexOf("--session") + 1];
-    const rec = runFile("peek2");
-    assert.ok(rec);
-    assert.equal(rec!.sessionMode, "fork");
-    assert.equal(rec!.sessionFile, seeded, "名录里给的就是子会话那个 .jsonl");
-    assert.equal(rec!.parentSessionFile, parentSession, "按名字找子会话时靠它认是不是本会话派的");
-    assert.ok(fs.existsSync(seeded));
 });
 
 test("名录文件：子 tab 关掉后还在，写成 tab 已关闭", async () => {

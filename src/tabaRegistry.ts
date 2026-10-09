@@ -7,7 +7,6 @@
  * 本文件不碰文件、不碰 vscode，全是内存里的东西，方便单测。
  */
 import type { TurnEndStatus } from "./runtimeTypes";
-import type { TabaSessionMode } from "./tabaRoles";
 
 /**
  * 子会话现在处于哪一步：
@@ -24,8 +23,6 @@ export interface TabaChild {
     id: string;
     name: string;
     task: string;
-    /** 派活时指的角色名。 */
-    agent?: string;
     /** 派活的那个 panel；那个会话关掉后为 undefined。 */
     parentPanelId?: string;
     /** 子会话自己的 panel / tab。 */
@@ -41,11 +38,10 @@ export interface TabaChild {
     deliveries: number;
     /** 子会话最后一轮的回复（交回去用）。 */
     result?: string;
-    /** 子会话的会话文件路径（带上下文那两档一开始就有；全新会话要等 pi 落盘后才能问到）。 */
+    /** 子会话的会话文件路径（全新会话要等 pi 落盘后才能问到）。 */
     sessionFile?: string;
     /** 派活那个会话的会话文件路径（名录文件里用：按名字找子会话时靠它确认是不是本会话派的）。 */
     parentSessionFile?: string;
-    sessionMode: TabaSessionMode;
     /** 给界面看的一句话：用什么模型跑的。 */
     modelLabel?: string;
 }
@@ -213,11 +209,8 @@ export function buildDeliveryText(p: {
 }
 
 /** 派活成功时在父会话界面上打的一行提示。 */
-export function buildSpawnNotice(p: { child: TabaChild; tabName: string; mode: TabaSessionMode }): string {
-    const modeText = p.mode === "fork"
-        ? "带上了本会话之前的对话"
-        : p.mode === "lineage-only" ? "全新会话（只记着是本会话派的）" : "全新会话";
-    return `已派出子会话「${p.child.name}」→ 新 tab「${p.tabName}」（${modeText}）。`
+export function buildSpawnNotice(p: { child: TabaChild; tabName: string }): string {
+    return `已派出子会话「${p.child.name}」→ 新 tab「${p.tabName}」（全新会话）。`
         + `它跑完第一轮后，结果会自动交回本会话。`;
 }
 

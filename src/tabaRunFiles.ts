@@ -1,8 +1,8 @@
 /**
  * 派子会话（taba）：给模型看的"名录"文件。
  *
- * 为什么要有这个文件：子会话的 .jsonl 在哪只有插件知道（全新会话的文件名是 pi 自己起的，
- * 带上下文那两档是插件自己造的编号），而 pi 进程到插件只有 stderr 那条单向暗号，
+ * 为什么要有这个文件：子会话的 .jsonl 在哪只有插件知道（全新会话的文件名是 pi 自己起的），
+ * 而 pi 进程到插件只有 stderr 那条单向暗号，
  * 插件没法直接回话给工具。所以插件在子会话状态变化时往这里写一份很小的名录，
  * 桥扩展里的 taba_peek 读它，把 .jsonl 的路径交给模型，剩下的让模型自己用 read / bash 去读。
  *
@@ -26,8 +26,6 @@ export interface TabaRunRecord {
     name: string;
     /** 派给它的任务原文，方便模型确认自己看的是不是那一个。 */
     task: string;
-    /** 用的角色名（没指名角色就是空串）。 */
-    agent: string;
     state: TabaRunState;
     /** 状态的人话说法（插件写好，扩展直接显示，不重复一套文案）。 */
     stateText: string;
@@ -36,8 +34,6 @@ export interface TabaRunRecord {
     endedAt: number;
     /** 结果交回去过几次。 */
     deliveries: number;
-    /** 会话内容从哪来：standalone / lineage-only / fork。 */
-    sessionMode: string;
     /** 子会话的 .jsonl 路径；全新会话在第一条消息落盘以前是空串。 */
     sessionFile: string;
     /** 派活那个会话的 .jsonl 路径；按名字找子会话时靠它确认是不是本会话派的。 */
@@ -98,13 +94,11 @@ export function buildRunRecord(p: {
         id: c.id,
         name: c.name,
         task: c.task,
-        agent: c.agent ?? "",
         state,
         stateText: runStateText(state),
         startedAt: c.startedAt,
         endedAt: c.endedAt ?? 0,
         deliveries: c.deliveries,
-        sessionMode: c.sessionMode,
         sessionFile: c.sessionFile ?? "",
         parentSessionFile: p.parentSessionFile ?? c.parentSessionFile ?? "",
         lastReplyPreview: makeLastReplyPreview(c.result ?? ""),

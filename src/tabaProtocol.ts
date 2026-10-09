@@ -26,7 +26,6 @@ const LIMITS = {
     id: 64,
     name: 80,
     task: 20000,
-    agent: 80,
     model: 120,
     thinking: 40,
     tools: 400,
@@ -43,8 +42,6 @@ export interface TabaSpawnRequest {
     name: string;
     /** 任务说明。 */
     task: string;
-    /** 角色名（对应角色文件的名字），可空。 */
-    agent?: string;
     /** 指定模型，可空（空则跟随父会话）。 */
     model?: string;
     /** 指定思考强度，可空。 */
@@ -53,8 +50,6 @@ export interface TabaSpawnRequest {
     tools?: string;
     /** 子会话的工作目录，可空（空则跟父会话一样）。 */
     cwd?: string;
-    /** 是否带上父会话之前的对话，可空。 */
-    fork?: boolean;
     /** 父会话文件路径（扩展从它自己的进程里拿到的），可空。 */
     parentSessionFile?: string;
 }
@@ -93,19 +88,16 @@ export function normalizeTabaRequest(raw: unknown): TabaRequest | undefined {
         const task = str(o.task, LIMITS.task);
         if (!id || !name || !task) { return undefined; }
         const req: TabaSpawnRequest = { kind: "spawn", id, name, task };
-        const agent = str(o.agent, LIMITS.agent);
         const model = str(o.model, LIMITS.model);
         const thinking = str(o.thinking, LIMITS.thinking);
         const tools = str(o.tools, LIMITS.tools);
         const cwd = str(o.cwd, LIMITS.cwd);
         const parentSessionFile = str(o.parentSessionFile, LIMITS.parentSessionFile);
-        if (agent) { req.agent = agent; }
         if (model) { req.model = model; }
         if (thinking) { req.thinking = thinking; }
         if (tools) { req.tools = tools; }
         if (cwd) { req.cwd = cwd; }
         if (parentSessionFile) { req.parentSessionFile = parentSessionFile; }
-        if (o.fork === true) { req.fork = true; }
         return req;
     }
     if (o.kind === "stop") {
