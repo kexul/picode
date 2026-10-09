@@ -850,7 +850,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 派活没成：界面上打一行，同时把原因交给模型（它那边的工具已经回了“已派出”）。 */
     protected tabaFailSpawn(parentRt: SessionRuntime, name: string, reason: string): void {
         this.postToTab(parentRt.id, { type: "system", text: buildSpawnFailure({ name, reason }) });
-        parentRt.handleSend(`【派子会话没成】「${name}」：${reason}`);
+        parentRt.handleSend(`【派子会话没成】「${name}」：${reason}`, undefined, { followUp: true });
     }
 
     /**
@@ -930,7 +930,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 this.tabaDeliver(child, { resultText: "", status: "error", manual: false });
                 return;
             }
-            rt.handleSend(taskText);
+            rt.handleSend(taskText, undefined, { followUp: true });
             this.taba.noteTaskSent(req.id);
             this.tabaWriteRun(this.taba.get(req.id));
             this.broadcastTabList();
@@ -1012,7 +1012,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const child = this.taba.findByRef(parentPanelId, { id: req.id, name: req.name });
         if (!child) {
             parentRt?.handleSend(
-                `【停子会话没成】找不到「${req.name || req.id || "那个子会话"}」：不是这个会话派出去的，或者它的 tab 已经关掉了。`
+                `【停子会话没成】找不到「${req.name || req.id || "那个子会话"}」：不是这个会话派出去的，或者它的 tab 已经关掉了。`,
+                undefined,
+                { followUp: true }
             );
             return;
         }
@@ -1070,7 +1072,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
             childTabName: childTab ? this.containerDisplayName(childTab) : undefined,
             manual: opts.manual,
         });
-        parentRt.handleSend(text);
+        // 交回一律按 followUp 排队：父会话在跑就不从半路插进去，跑完再作为新的一轮处理。
+        parentRt.handleSend(text, undefined, { followUp: true });
         this.taba.markDelivered(child.id, result);
         this.postToTab(parentRt.id, { type: "system", text: `已把子会话「${child.name}」的结果交回本会话。` });
         if (child.childPanelId) {
@@ -1168,7 +1171,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             this.tabaWriteRun(child, "closed");
             this.taba.forgetChildPanel(panelId);
             if (parentRt && undelivered && !opts?.quiet) {
-                parentRt.handleSend(buildChildClosedNotice({ child }));
+                parentRt.handleSend(buildChildClosedNotice({ child }), undefined, { followUp: true });
                 this.postToTab(parentRt.id, {
                     type: "system",
                     text: `子会话「${child.name}」的 tab 关掉了，已把这件事交回本会话。`,

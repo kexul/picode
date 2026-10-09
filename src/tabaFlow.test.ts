@@ -23,6 +23,8 @@ class TabaTestController extends ChatControllerBase {
     public readonly modelOverrides: Array<{ provider?: string; modelId?: string } | undefined> = [];
     /** panelId → 发过去的消息文本（handleSend）。 */
     public readonly sent = new Map<string, string[]>();
+    /** panelId → 每条发送是否带了 followUp: true（插件代发的消息固定带）。 */
+    public readonly sentFollowUp = new Map<string, boolean[]>();
     public readonly aborts: string[] = [];
     /** panelId → getLastAssistantText 假装返回什么。 */
     public readonly lastText = new Map<string, string>();
@@ -37,10 +39,13 @@ class TabaTestController extends ChatControllerBase {
         this.panels.set(id, rt);
         // 故意不 startClient：下面把要观察的几个方法换成假的
         (rt as any).waitReady = async () => this.readyResult;
-        (rt as any).handleSend = (text: string) => {
+        (rt as any).handleSend = (text: string, _images: unknown, opts?: { followUp?: boolean }) => {
             const list = this.sent.get(id) ?? [];
             list.push(text);
             this.sent.set(id, list);
+            const flags = this.sentFollowUp.get(id) ?? [];
+            flags.push(opts?.followUp === true);
+            this.sentFollowUp.set(id, flags);
         };
         (rt as any).abortActiveRun = () => { this.aborts.push(id); };
         (rt as any).getLastAssistantText = async () => this.lastText.get(id) ?? "";
@@ -178,6 +183,7 @@ test("派活：新开一个 tab，不抢当前焦点，任务发过去，两边�
     assert.ok(task, "任务发到子会话了");
     assert.ok(task.includes("看看认证模块"));
     assert.ok(task.includes("最后一条回复会被自动送回"));
+    assert.deepEqual(c.sentFollowUp.get(child), [true], "派下去的任务也按 followUp 排队");
 
     // 父会话那边有一行提示，子会话那边有一行开场提示
     const parentNotice = c.messages(parent, "system").map((m) => String(m.text)).join("\n");
@@ -207,6 +213,7 @@ test("结果自动交回：只在第一轮跑完时交一次，之后用户接�
     const toParent = (c.sent.get(parent) ?? []).join("\n");
     assert.ok(toParent.includes("【子会话「侦察: 认证」跑完了"), toParent);
     assert.ok(toParent.includes("看完了，认证在 src/auth.ts。"));
+    assert.deepEqual(c.sentFollowUp.get(parent), [true], "交回按 followUp 排队，不从半路插进去");
     assert.equal(c.childOf(child)!.deliveries, 1);
     assert.equal(c.childOf(child)!.state, "waiting");
 
