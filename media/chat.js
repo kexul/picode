@@ -1543,6 +1543,12 @@
   }
 
   // ==================== tab 切换（容器） ====================
+  // 触屏设备（手机/平板）上切 tab 不要自动聚焦输入框：程序聚焦会把输入法拉起来，
+  // 键盘挡住半屏。电脑上保持原行为：切完 tab 焦点落在输入框，直接能打字。
+  const IS_TOUCH_DEVICE = (function () {
+    try { return window.matchMedia("(hover: none) and (pointer: coarse)").matches; }
+    catch { return false; }
+  })();
   function activateTabView(id) {
     if (!tabViews.has(id) || activeTabId === id) { return; }
     saveInputState();
@@ -1555,7 +1561,7 @@
     restoreInputState();
     reflectTabUI();
     renderTabBar();
-    inputEl.focus();
+    if (!IS_TOUCH_DEVICE) { inputEl.focus(); }
   }
 
   // ==================== tab 栏渲染（容器） ====================
