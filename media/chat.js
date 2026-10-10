@@ -703,25 +703,37 @@
     }
     const tag = document.createElement("span");
     tag.className = "tool" + (toolCallId ? " running" : "");
-    // medium：标签内嵌 TUI 式调用摘要（单行省略，title 悬浮见全文）；compact：齿轮 + 工具名
+    // medium：标签内嵌 TUI 式调用摘要（单行省略）；compact：齿轮 + 工具名
     if (toolDisplayMode === "medium") {
       const summary = buildMediumSummary(toolName, argStr);
       tag.classList.add("tool-medium");
       tag.appendChild(summary);
-      tag.title = summary.textContent.trim() || toolName;
       tag._medium = true;
     } else {
       tag.insertAdjacentHTML("afterbegin", GEAR_SVG);
       tag.appendChild(document.createTextNode(" " + toolName));
     }
-    // 简洁模式：标签默认只显示工具名；点击后展开为完整模式同款卡片（call+参数+结果）
+    // 点击展开已移除：改为自绘悬浮提示显示调用与结果（见 showTagTip）。
+    // 唯一例外是 read 读图：结果到达后自动展开卡片且不再收起（见 expandReadImageCard）。
     tag._toolName = toolName;
     tag._argStr = argStr;
     tag._resultText = "";
     tag._resultMeta = {};
     tag._isError = false;
     tag._done = !toolCallId; // 无 id 的静态调用无结果事件，按已完成处理
-    tag.addEventListener("click", () => toggleCompactToolCard(tag));
+    // 提示内容：运行中显示调用参数（输入）；结果到达后由 setTagTip 填入全部原文（输出）
+    tag._tipCall = tagTipCallText(toolName, argStr);
+    tag._tipBody = "";
+    if (IS_TOUCH_DEVICE) {
+      // 触屏没有悬浮：点一下显示提示框，再点一下（或点提示框外面）关闭
+      tag.addEventListener("click", () => {
+        if (tagTipTag === tag) { hideTagTip(); } else { showTagTip(tag); }
+      });
+    } else {
+      // 电脑悬浮显示；从标签移进提示框不收，两边都离开才收（见 scheduleTagTipHide）
+      tag.addEventListener("mouseenter", () => showTagTip(tag));
+      tag.addEventListener("mouseleave", scheduleTagTipHide);
+    }
     tab.currentToolRow.appendChild(tag);
     if (toolCallId) { tab.pendingToolTags.set(toolCallId, tag); }
     scrollToBottom(tab);
@@ -811,6 +823,128 @@
     }
     return call;
   }
+
+  // ==================== 工具标签提示框 ====================
+  // 鼠标停在工具标签上（触屏设备改为点一下标签），用自绘的提示框显示调用与结果。
+  // 系统自带的 title 提示要等约一秒才出现，这里电脑上悬浮 TAG_TIP_DELAY_MS 就出。
+  // 运行中只显示调用参数（输入）；结果到达后显示「调用 + 结果」两块，结果放
+  // pi 发来的全部原文不再截断——提示框内容区可滚动。关闭方式：电脑鼠标移开或点别处，
+  // 触屏点提示框外面或再点一下标签。
+  /** 调用摘要的单行纯文本（复用摘要排版，如 bash → "$ npm test"）。 */
+  function tagTipCallText(toolName, argStr) {
+    try { return buildMediumSummary(toolName, argStr).textContent.trim() || toolName; }
+    catch (e) { return toolName; }
+  }
+  /** 结果到达后更新标签提示：结果放全部原文；note 非空时用它替代（如 read 读图）。 */
+  function setTagTip(tag, resultText, note) {
+    tag._tipBody = note || (resultText || "");
+    refreshTagTipIfShowing(tag);
+  }
+
+  // 自绘提示框：全局复用同一个元素。外框（含右上角关闭按钮）+ 内容区（可滚动）。
+  // 内容区分两块：调用一行（输入）、结果一块稍深底色（输出）。
+  const TAG_TIP_DELAY_MS = 200; // 电脑上悬浮多久后出现
+  const TAG_TIP_HIDE_GRACE_MS = 150; // 电脑上鼠标离开后宽限多久再收（移进提示框的间隙不闪没）
+  let tagTipEl = null;      // 外框
+  let tagTipContent = null; // 内容区（可滚动）
+  let tagTipTimer = 0;      // 电脑上的悬浮延迟计时
+  let tagTipHideTimer = 0;  // 电脑上的鼠标离开宽限计时
+  let tagTipTag = null;
+
+  function hideTagTip() {
+    if (tagTipHideTimer) { clearTimeout(tagTipHideTimer); tagTipHideTimer = 0; }
+    if (tagTipTimer) { clearTimeout(tagTipTimer); tagTipTimer = 0; }
+    tagTipTag = null;
+    if (tagTipEl) { tagTipEl.classList.add("hidden"); }
+  }
+  function cancelTagTipHide() {
+    if (tagTipHideTimer) { clearTimeout(tagTipHideTimer); tagTipHideTimer = 0; }
+  }
+  /** 电脑上鼠标离开标签/提示框后，宽限片刻再收，期间移回任一方就取消。 */
+  function scheduleTagTipHide() {
+    cancelTagTipHide();
+    tagTipHideTimer = setTimeout(() => { tagTipHideTimer = 0; hideTagTip(); }, TAG_TIP_HIDE_GRACE_MS);
+  }
+  /** 把标签的调用与结果填进内容区：调用一行稍深底色（输入），结果原样（输出）。 */
+  function fillTagTip(tag) {
+    tagTipContent.textContent = "";
+    const call = document.createElement("div");
+    call.className = "tag-tip-call";
+    call.textContent = tag._tipCall || "";
+    tagTipContent.appendChild(call);
+    if (tag._tipBody) {
+      const result = document.createElement("div");
+      result.className = "tag-tip-result";
+      result.textContent = tag._tipBody;
+      tagTipContent.appendChild(result);
+    }
+  }
+  function showTagTip(tag) {
+    // 已在显示同一个标签（如鼠标从提示框移回标签）：只刷新位置，不闪没再闪出
+    if (tagTipTag === tag && tagTipEl && !tagTipEl.classList.contains("hidden")) {
+      cancelTagTipHide();
+      placeTagTip(tagTipEl, tag);
+      return;
+    }
+    hideTagTip();
+    if (!tag._tipCall) { return; }
+    tagTipTag = tag;
+    const render = () => {
+      tagTipTimer = 0;
+      if (tagTipTag !== tag || !tag.isConnected) { return; }
+      if (!tagTipEl) {
+        tagTipEl = document.createElement("div");
+        tagTipEl.className = "tag-tip hidden";
+        tagTipContent = document.createElement("div");
+        tagTipContent.className = "tag-tip-content";
+        tagTipEl.appendChild(tagTipContent);
+        document.body.appendChild(tagTipEl);
+        if (!IS_TOUCH_DEVICE) {
+          // 电脑：鼠标在提示框上不算离开，从标签移进来不收，再移出去才收
+          tagTipEl.addEventListener("mouseenter", cancelTagTipHide);
+          tagTipEl.addEventListener("mouseleave", scheduleTagTipHide);
+        }
+      }
+      fillTagTip(tag);
+      tagTipEl.classList.remove("hidden");
+      placeTagTip(tagTipEl, tag);
+    };
+    // 触屏设备没有悬浮：点一下是明确动作，立即显示；电脑上悬浮短暂停留后再显示
+    if (IS_TOUCH_DEVICE) { render(); } else { tagTipTimer = setTimeout(render, TAG_TIP_DELAY_MS); }
+  }
+  /** 显示期间内容更新（如结果刚到）时，刷新正在显示的提示内容与位置。 */
+  function refreshTagTipIfShowing(tag) {
+    if (tagTipTag !== tag || !tagTipEl || tagTipEl.classList.contains("hidden")) { return; }
+    fillTagTip(tag);
+    placeTagTip(tagTipEl, tag);
+  }
+  function placeTagTip(el, tag) {
+    const r = tag.getBoundingClientRect();
+    el.style.maxWidth = Math.max(160, Math.min(640, window.innerWidth - 16)) + "px";
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    let x = Math.max(8, Math.min(r.left, window.innerWidth - 8 - w));
+    let y = r.bottom + 6;
+    if (y + h > window.innerHeight - 8) {
+      const above = r.top - h - 6;
+      y = above >= 8 ? above : Math.max(8, window.innerHeight - 8 - h);
+    }
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+  }
+  // 内容滚动或窗口变化后提示位置会错位，直接收起；滚动提示框自己（看长结果）不算。
+  document.addEventListener("scroll", (e) => {
+    if (tagTipEl && tagTipEl.contains(e.target)) { return; }
+    hideTagTip();
+  }, true);
+  window.addEventListener("resize", hideTagTip);
+  // 点提示框和当前标签以外任何地方关闭提示框（触屏主要靠这个和右上角 × 收）。
+  document.addEventListener("click", (e) => {
+    if (!tagTipEl || tagTipEl.classList.contains("hidden")) { return; }
+    if (tagTipEl.contains(e.target)) { return; } // 点提示框本身不关（要滚动看内容）
+    if (tagTipTag && tagTipTag.contains(e.target)) { return; } // 点当前标签交给标签自己处理（切换关闭）
+    hideTagTip();
+  });
 
   /** write 参数区：内容预览（前 10 行，同 TUI formatWriteCall）。
    *  截断部分不支持点击展开（卡片内展开体验差且容易误触），改用右上角“跳转”按钮打开完整文件。 */
@@ -903,73 +1037,35 @@
   }
 
   /**
-   * 点击工具摘要展开详情。摘要模式复用原来的摘要行作为卡片标题，避免同一条
-   * 调用在“摘要标签 + 卡片调用行”中重复；再次点击会把它还原到原始摘要行。
+   * read 读图：结果到达后自动展开完整模式同款卡片直接出图，展开后不再收起。
+   * 摘要模式复用原摘要行作为卡片标题，避免同一条调用在「摘要标签 + 卡片调用行」中重复。
    */
-  function toggleCompactToolCard(tag) {
+  function expandReadImageCard(tag) {
     const row = tag.parentElement;
-    if (!row) { return; }
-    const isMedium = !!tag._medium;
-    let card = tag._card;
-    if (!card) {
-      card = buildToolCardDom(tag._toolName, tag._argStr);
-      card.classList.remove("msg-enter"); // 点击展开无需入场动画，避免切换有延迟感
-      card.classList.add("tool-card-compact");
-      tag._card = card;
-      if (tag._done) {
-        // 结果已到（含历史回放）：直接定格完成态
-        card.classList.remove("running"); card.classList.add("done");
-        if (tag._isError) { card.classList.add("error"); }
-        setToolResult(card, tag._resultText || "", tag._resultMeta || {});
-      } else {
-        // 运行中：先渲染已收到的部分结果（若有），再启动耗时计时器（read 不计时，同 full 模式）
-        if (tag._resultText) { setToolResult(card, tag._resultText, tag._resultMeta || { isPartial: true }); }
-        if (tag._toolName !== "read") {
-          const dm = tag._resultMeta && typeof tag._resultMeta.durationMs === "number" ? tag._resultMeta.durationMs : null;
-          card._elapsedStart = dm != null ? Date.now() - dm : Date.now();
-          tag._timer = setInterval(() => {
-            if (card._elapsedStart && card.classList.contains("running") && card._elapsedEl) {
-              card._elapsedEl.textContent = "Elapsed " + formatDur(Date.now() - card._elapsedStart);
-            }
-          }, 500);
-        }
-      }
-      if (isMedium) {
-        // 摘要模式每行只有一个 tag：移走新卡片生成的重复调用行，原 tag 原地升级为标题。
-        card.querySelector(".tc-call")?.remove();
-        card.classList.add("tool-card-medium");
-        card.prepend(tag);
-        card._mediumRow = row;
-        row.replaceWith(card);
-        tag.classList.add("expanded");
-        return;
-      }
-      // 简洁模式：插到 .tool-row 之后（跳过已展开的同类卡片，保持多卡按点击顺序排列）
+    if (!row || tag._card) { return; }
+    const card = buildToolCardDom(tag._toolName, tag._argStr);
+    card.classList.remove("msg-enter"); // 自动展开无需入场动画
+    card.classList.add("tool-card-compact");
+    tag._card = card;
+    // 只在结果到达后调用，直接定格完成态
+    card.classList.remove("running"); card.classList.add("done");
+    if (tag._isError) { card.classList.add("error"); }
+    setToolResult(card, tag._resultText || "", tag._resultMeta || {});
+    if (tag._medium) {
+      // 摘要模式每行只有一个 tag：移走新卡片生成的重复调用行，原 tag 原地升级为标题。
+      card.querySelector(".tc-call")?.remove();
+      card.classList.add("tool-card-medium");
+      card.prepend(tag);
+      row.replaceWith(card);
+    } else {
+      // 简洁模式：插到 .tool-row 之后（跳过已展开的同类卡片，保持多卡按调用顺序排列）
       let anchor = row;
       let next;
       while ((next = anchor.nextElementSibling) && next.classList.contains("tool-card-compact")) { anchor = next; }
       anchor.after(card);
-      tag.classList.add("expanded");
-    } else if (isMedium) {
-      const originalRow = card._mediumRow || row;
-      if (card.isConnected) {
-        // 还原最初的单行摘要（row 保留，避免影响同一轮后的消息顺序）。
-        card.replaceWith(originalRow);
-        originalRow.appendChild(tag);
-        tag.classList.remove("expanded");
-      } else {
-        // 摘要模式收起后卡片不在 DOM 中；再次点击将原摘要行重新提升为卡片标题。
-        originalRow.replaceWith(card);
-        card.prepend(tag);
-        tag.classList.add("expanded");
-      }
-    } else if (card.hidden) {
-      card.hidden = false;
-      tag.classList.add("expanded");
-    } else {
-      card.hidden = true;
-      tag.classList.remove("expanded");
     }
+    tag.classList.add("expanded");
+    hideTagTip(); // 若鼠标正停在标签上，收起悬浮提示，让位给卡片
   }
 
   // ==================== 工具结果内联图片（read 读图等） ====================
@@ -1448,7 +1544,7 @@
   function statusTags(tab) {
     const parts = [];
     const mp = modelPartFor(tab);
-    if (mp) { parts.push('<span class="st-model">' + mp + '</span>'); }
+    if (mp) { parts.push('<span class="st-model">' + mp + (tab.thinkingLevel ? "/" + tab.thinkingLevel : "") + '</span>'); }
     const pct = pctTag(tab);
     if (pct) { parts.push(pct); }
     const tps = currentTps(tab);
@@ -1551,6 +1647,7 @@
   })();
   function activateTabView(id) {
     if (!tabViews.has(id) || activeTabId === id) { return; }
+    hideTagTip();
     saveInputState();
     activeTabId = id;
     const tv = tabViews.get(id);
@@ -1962,7 +2059,7 @@
   /** 签名相同时只替换数字文本，不动 .typing 等动画节点。 */
   function updateStatusInPlace(el, t) {
     const m = el.querySelector(".st-model");
-    if (m) { m.textContent = modelPartFor(t); }
+    if (m) { m.textContent = modelPartFor(t) + (t.thinkingLevel ? "/" + t.thinkingLevel : ""); }
     if (typeof t.percent === "number") {
       const p = el.querySelector(".st-pct");
       if (p) {
@@ -3874,6 +3971,7 @@
         break;
       case "clear":
         cancelFlush(t);
+        hideTagTip();
         t.paneEl.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
         ensurePaneHead(t);
         // 后端可能在 loading 状态中再次 clear（例如切换完成后重绘消息），
@@ -3954,14 +4052,15 @@
             const inline = tagEl.querySelector(".tc-inline");
             (inline || tagEl).appendChild(dur);
           }
-          // 记录结果，供点击展开时渲染；若已展开，立即刷新卡片
+          // 记录结果，并更新悬浮提示为「调用 + 结果」；若已展开，立即刷新卡片
           tagEl._done = true;
           tagEl._isError = !!msg.isError;
           tagEl._resultText = msg.resultText || "";
           tagEl._resultMeta = { isError: !!msg.isError, durationMs: msg.durationMs, truncation: msg.truncation || null, images: msg.images || null };
-          // read 读图：简洁/摘要模式下也自动展开成卡片直接出图（用户可再点标签收起）
-          if (!tagEl._card && tagEl._toolName === "read" && Array.isArray(msg.images) && msg.images.length > 0) {
-            toggleCompactToolCard(tagEl);
+          setTagTip(tagEl, tagEl._resultText, Array.isArray(msg.images) && msg.images.length > 0 ? "（结果为图片）" : "");
+          // read 读图：简洁/摘要模式下自动展开成卡片直接出图，展开后不再收起
+          if (tagEl._toolName === "read" && Array.isArray(msg.images) && msg.images.length > 0) {
+            expandReadImageCard(tagEl);
           }
           if (tagEl._card) {
             tagEl._card.classList.remove("running");

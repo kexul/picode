@@ -97,7 +97,7 @@
   .typing span:nth-child(3) { animation-delay: 0.4s; }
   @keyframes typing-blink { 0%, 60%, 100% { opacity: 0.2; } 30% { opacity: 0.9; } }
   .tool-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0; padding: 0 14px; }
-  .tool { display: inline-block; min-width: 0; max-width: 100%; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.7; white-space: normal; overflow-wrap: anywhere; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); border-radius: 4px; padding: 2px 8px; cursor: pointer; transition: background 150ms, opacity 150ms; }
+  .tool { display: inline-block; min-width: 0; max-width: 100%; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.7; white-space: normal; overflow-wrap: anywhere; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); border-radius: 4px; padding: 2px 8px; cursor: default; transition: background 150ms, opacity 150ms; }
   .tool:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); opacity: 1; }
   .tool-icon { display: inline-block; line-height: 0; vertical-align: middle; transform-origin: 50% 50%; }
   .tool-icon > svg { display: block; }
@@ -121,8 +121,16 @@
 .tool .tc-call-param { color: var(--vscode-textLink-foreground, #3794ff); }
 .tool .tc-call-arg { color: var(--vscode-descriptionForeground, #808080); }
 .tool .tc-call-warn { color: var(--vscode-editorWarning-foreground, #cca700); }
-  /* 简洁模式：点击标签展开为完整模式同款卡片（卡片作为 .tool-row 的兄弟插入），标签仅作高亮指示 */
+  /* 点击展开已移除（悬浮提示代替）；读图自动展开后标签保持高亮，提示详情就在下方 */
   .tool.expanded { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder, #007fd4) 55%, transparent); }
+  /* 工具标签自绘提示框（系统 title 提示要等约一秒，改用短延迟的自绘框），随主题配色；
+     手机电脑统一：内容可滚动看全部结果；电脑鼠标移开收起，触屏点外面收起 */
+  .tag-tip { position: fixed; z-index: 900; display: flex; flex-direction: column; max-width: 640px; max-height: 60vh; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-panel-border, rgba(128,128,128,0.35))); background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, #252526)); color: var(--vscode-editorHoverWidget-foreground, var(--vscode-editor-foreground, inherit)); font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
+  .tag-tip-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* 输入（调用参数）块：比外框稍深一点的底色（5% 黑色透明叠加），和输出（结果）区分开 */
+  .tag-tip-call { padding: 4px 8px; border-radius: 4px; background: rgba(0,0,0,0.05); }
+  .tag-tip-result { margin-top: 6px; }
+  .tag-tip.hidden { display: none; }
   /* 完整模式：工具卡片（圆角 + 轻阴影，状态用边框色：运行蓝 / 失败红） */
   .tool-card { position: relative; margin: 6px 14px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 4px 12px rgba(0,0,0,0.06); background: var(--vscode-editorWidget-background, #f3f3f3); overflow: hidden; }
   .tool-card.error { border-color: var(--vscode-errorForeground, #f14c4c); }
@@ -745,6 +753,7 @@
     display: flex; align-items: center; gap: 6px; flex: 0 0 auto;
     min-height: 1.4em; padding: 2px 8px; overflow: hidden; white-space: nowrap;
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
+    font-family: var(--vscode-editor-font-family, monospace);
     font-size: var(--vscode-font-size); cursor: pointer;
     color: color-mix(in srgb, var(--vscode-foreground) 88%, transparent);
   }
