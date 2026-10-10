@@ -59,6 +59,9 @@
   var GIVE_UP_BANNER_AT = 6;
 
   // ==================== 对外：假装成 VSCode 的网页视图接口 ====================
+  // chat.js 用这个标记分辫自己跑在网页里还是 VSCode 网页视图里
+  // （必须在 chat.js 加载前就位，chat.js 一开头就读它）。
+  window.pichatBrowser = true;
   var apiState;
   var apiInstance;
   window.acquireVsCodeApi = function () {

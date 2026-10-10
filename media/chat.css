@@ -387,6 +387,21 @@
   .edit-card .tc-trunc-hint { margin-top: 4px; font-size: 0.8em; opacity: 0.75; cursor: default; color: var(--vscode-descriptionForeground); }
   .edit-card.reverted { opacity: 0.6; }
   .edit-card.reverted .et-reverted { flex: 0 0 auto; font-size: 0.85em; opacity: 0.8; font-style: italic; font-family: var(--vscode-font-family); }
+  /* 网页端 edit/write 卡片默认收起：标题可点展开/收起，正文（diff / 写入预览）藏起 */
+  .edit-card .edit-title.et-toggleable { cursor: pointer; user-select: none; }
+  .edit-card .et-chev { flex: 0 0 auto; opacity: 0.6; font-size: 0.85em; }
+  .edit-card.collapsed .edit-body { display: none; }
+  /* 顶部「加载更早的消息」按钮（网页端只发最近一段历史，更早的从这里取） */
+  .history-more {
+    display: block; margin: 10px auto 6px; padding: 4px 14px;
+    font-size: 0.85em; opacity: 0.75; cursor: pointer;
+    font-family: var(--vscode-font-family);
+    background: transparent; color: var(--vscode-descriptionForeground, #999);
+    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35));
+    border-radius: 10px;
+  }
+  .history-more:hover { opacity: 1; color: var(--vscode-foreground, #ccc); }
+  .history-more:disabled { opacity: 0.45; cursor: default; }
   .edit-diff {
     max-height: 480px; overflow: auto; padding: 2px 0 4px;
     font-family: var(--vscode-editor-font-family, monospace);

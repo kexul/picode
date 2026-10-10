@@ -599,6 +599,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.postToWebview({ ...msg, tabId: panelId });
     }
 
+    /** RuntimeHost.wantsTrimmedHistory：VSCode 这两家整屏重画照旧全量；网页端那份覆写成 true。 */
+    public wantsTrimmedHistory(): boolean { return false; }
+
     // ---- 查找 ----
     /** panel 所在的 tab（容器）。 */
     public containerOfPanel(panelId: string): TabContainer | undefined {
@@ -2320,6 +2323,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 break;
             case "revertEdit":
                 if (typeof msg.toolCallId === "string") { void target.revertEdit(msg.toolCallId); }
+                break;
+            case "loadOlderHistory":
+                // 网页端顶部的「加载更早的消息」按钮：把当前窗口之前的一段补发过来。
+                // 只在开过历史窗口的会话上有意义；没开过窗口时运行时自己会忽略。
+                void target.loadOlderHistory();
                 break;
         }
     }

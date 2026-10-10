@@ -1,6 +1,9 @@
 // @ts-nocheck
 (function () {
   const vscode = acquireVsCodeApi();
+  // 是否运行在网页服务的页面里（browserBridge.js 会先于本文件设这个标记）。
+  // 网页端与 VSCode 共用这份脚本，少数行为按此区分：edit/write 卡片默认收起等。
+  const IS_BROWSER = window.pichatBrowser === true;
   // 供扩展宿主选择“最后活动的 Pi Chat”；pointerdown 覆盖大多数 webview
   // 内部交互，focus 覆盖 Ctrl+Tab / 编辑器组切换后的焦点恢复。
   const notifyHostFocus = () => vscode.postMessage({ type: "hostFocus" });
@@ -406,6 +409,11 @@
       pendingToolCards: new Map(),
       pendingToolTags: new Map(),
       pendingToolCardsFull: new Map(),
+      // 历史窗口（网页端「只发最近一段」）：顶部按钮、加载更早的暂存区等
+      hasMoreHistory: false,
+      _historyBtn: null,
+      _stage: null,
+      _stageDropped: false,
       streaming: false,
       activity: "idle",
       activityDetail: "",
@@ -1265,8 +1273,43 @@
     const loading = document.createElement("span"); loading.className = "et-loading"; loading.textContent = "…";
     title.appendChild(loading);
     el.appendChild(title);
+    // 网页端默认收起卡片正文（diff / 写入预览）：长会话重放时几十张卡片全铺开，
+    // 渲染慢又占屏。收着只画标题一行，点标题展开；VSCode 里保持老样子（直接铺开）。
+    const collapseBody = IS_BROWSER;
+    let bodyBuilt = false;
+    let bodyWrap = null;
+    let chev = null;
+    let pendingResult = null;   // 收着时到的结果：diff 存起来，展开时再渲染
+    function ensureBody() {
+      if (bodyBuilt) { return; }
+      bodyBuilt = true;
+      bodyWrap = document.createElement("div");
+      bodyWrap.className = "edit-body";
+      // write 卡片：写入内容预览（前 10 行；替代整文件 diff）
+      if (toolName === "write") {
+        const pv = buildWritePreviewEl(argStr);
+        if (pv) { bodyWrap.appendChild(pv); }
+      }
+      // edit 卡片：完整 diff
+      if (toolName !== "write" && pendingResult && pendingResult.diff) {
+        bodyWrap.appendChild(renderDiffBlock(tab, pendingResult.diff, filePath));
+      }
+      el.appendChild(bodyWrap);
+    }
+    function setExpanded(open) {
+      el.classList.toggle("collapsed", !open);
+      if (open) { ensureBody(); }
+      if (chev) { chev.textContent = open ? "▾" : "▸"; }
+    }
+    if (collapseBody) {
+      chev = document.createElement("span"); chev.className = "et-chev"; chev.textContent = "▸";
+      title.insertBefore(chev, name);
+      title.classList.add("et-toggleable");
+      title.addEventListener("click", () => { setExpanded(el.classList.contains("collapsed")); });
+      el.classList.add("collapsed");
+    }
     // write 卡片：展示写入内容预览（前 10 行，可展开；替代整文件 diff）
-    if (toolName === "write") {
+    if (toolName === "write" && !collapseBody) {
       const pv = buildWritePreviewEl(argStr);
       if (pv) { el.appendChild(pv); }
     }
@@ -1284,7 +1327,19 @@
         }
         el.classList.add("done");
         // write 用内容预览代替整文件 diff；edit 仍展示 diff
-        if (toolName !== "write" && msg.diff) { el.appendChild(renderDiffBlock(tab, msg.diff, filePath)); }
+        if (collapseBody) {
+          if (bodyBuilt) {
+            // 已经展开过：结果到的晚，diff 直接补进正文（正文藏不藏由收起态决定）
+            if (toolName !== "write" && msg.diff && bodyWrap) {
+              bodyWrap.appendChild(renderDiffBlock(tab, msg.diff, filePath));
+            }
+          } else {
+            pendingResult = msg;
+            if (!el.classList.contains("collapsed")) { ensureBody(); }
+          }
+        } else if (toolName !== "write" && msg.diff) {
+          el.appendChild(renderDiffBlock(tab, msg.diff, filePath));
+        }
         if (toolName === "write" && filePath) {
           // 右上角：跳转按钮（打开文件）
           const jumpBtn = document.createElement("span"); jumpBtn.className = "et-jump"; jumpBtn.textContent = "跳转 ↗";
@@ -3845,6 +3900,16 @@
     }
 
     // tab 级消息
+    applyPanelMessage(msg);
+  });
+
+  /**
+   * panel 级消息（带 tabId）：用户消息、流式增量、工具卡片、历史窗口等，逐条应用到对应窗格。
+   * 抽成独立函数：网页端「加载更早」那批历史消息会包在 historyBatchEvent 里逐条送来，
+   * 渲染进暂存区时也要走同一套分发（见 historyBatchEvent 那个 case）。
+   */
+  function applyPanelMessage(msg) {
+    const type = msg.type;
     const tabId = msg.tabId;
     let t = null;
     if (tabId) {
@@ -3973,6 +4038,11 @@
         cancelFlush(t);
         hideTagTip();
         t.paneEl.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
+        // 历史窗口状态一并重置：按钮随 innerHTML 清掉了；暂存区里若有没插完的
+        // 「加载更早」那批也作废（会话已换，再插进去就串了），置个丢弃标记等 End 来清
+        t._historyBtn = null;
+        t.hasMoreHistory = false;
+        if (t._stage) { t._stage = null; t._stageDropped = true; }
         ensurePaneHead(t);
         // 后端可能在 loading 状态中再次 clear（例如切换完成后重绘消息），
         // 不能因此把进行中的加载反馈一并清掉。
@@ -4138,8 +4208,107 @@
           }
         }
         break;
+      case "historyWindow":
+        // 网页端「只发最近一段历史」：hasMore 为真时在顶部画「加载更早的消息」按钮
+        setHistoryWindow(t, msg.hasMore === true, typeof msg.hidden === "number" ? msg.hidden : 0);
+        break;
+      case "historyBatchEvent": {
+        // 「加载更早」那批消息：逐条包在 event 里送来。先渲染进暂存区（不在页面上），
+        // historyBatchEnd 到了再整体插到顶部——中间若穿插流式消息，它们照常走真实窗格，不会串序。
+        if (t._stageDropped) { break; }
+        const inner = msg.event && typeof msg.event === "object" ? msg.event : null;
+        if (!inner) { break; }
+        if (!t._stage) { t._stage = document.createElement("div"); }
+        inner.tabId = msg.tabId;
+        const realPane = t.paneEl;
+        const savedStick = t.stickToBottom;
+        const savedProgrammatic = t.programmaticScroll;
+        t.paneEl = t._stage;
+        try { applyPanelMessage(inner); }
+        finally {
+          t.paneEl = realPane;
+          // 渲染进暂存区时的滚动状态调整（scrollToBottom 等）不该影响真实窗格
+          t.stickToBottom = savedStick;
+          t.programmaticScroll = savedProgrammatic;
+        }
+        break;
+      }
+      case "historyBatchEnd":
+        flushHistoryBatch(t, msg.hasMore === true, typeof msg.hidden === "number" ? msg.hidden : 0);
+        break;
     }
-  });
+  }
+
+  // ==================== 历史窗口（网页端「只发最近一段历史」） ====================
+
+  /**
+   * 顶部「加载更早的消息」按钮。
+   * hasMore 为假时移除按钮；hidden 是还没显示的更早消息条数，拼进按钮文字。
+   * 按钮插在窗格最顶上，往后渲染的消息都排在它后面。
+   */
+  function setHistoryWindow(t, hasMore, hidden) {
+    t.hasMoreHistory = hasMore;
+    const pane = t.paneEl;
+    let btn = t._historyBtn;
+    if (!hasMore) {
+      if (btn) { btn.remove(); t._historyBtn = null; }
+      return;
+    }
+    if (!btn || btn.parentNode !== pane) {
+      if (btn) { btn.remove(); }
+      btn = document.createElement("button");
+      btn.className = "history-more";
+      btn.type = "button";
+      btn.addEventListener("click", () => {
+        if (btn.disabled || t._stage) { return; }
+        btn.disabled = true;
+        btn.textContent = "加载中…";
+        vscode.postMessage({ type: "loadOlderHistory", tabId: t.id });
+      });
+      t._historyBtn = btn;
+      // 面板头（拖动条）永远留在最顶上，按钮排在它后面
+      const head = pane.querySelector(":scope > .pane-head");
+      if (head) { pane.insertBefore(btn, head.nextSibling); }
+      else { pane.insertBefore(btn, pane.firstChild); }
+    }
+    btn.disabled = false;
+    btn.textContent = "加载更早的消息" + (hidden > 0 ? "（还有 " + hidden + " 条）" : "");
+  }
+
+  /**
+   * 「加载更早」那批消息渲染完了：把暂存区的内容整体插到按钮下方，
+   * 并把滚动位置同步下移，让视野还停在原来那几条消息上。
+   * 会话在加载途中被切换过（clear 已把暂存区作废）就不插了。
+   */
+  function flushHistoryBatch(t, hasMore, hidden) {
+    const stage = t._stage;
+    t._stage = null;
+    const dropped = t._stageDropped === true;
+    t._stageDropped = false;
+    if (dropped) {
+      // 会话已换：那批作废，按钮也一并收掉（新会话自己的 historyWindow 会重新决定要不要按钮）
+      setHistoryWindow(t, false, 0);
+      return;
+    }
+    setHistoryWindow(t, hasMore, hidden);
+    if (!stage || !stage.childNodes.length) { return; }
+    const pane = t.paneEl;
+    const btn = t._historyBtn;
+    let anchor;
+    if (btn && btn.parentNode === pane) {
+      anchor = btn.nextSibling;
+    } else {
+      // 没按钮就插在面板头后面（面板头永远留在最顶上）
+      const head = pane.querySelector(":scope > .pane-head");
+      anchor = head ? head.nextSibling : pane.firstChild;
+    }
+    const beforeHeight = pane.scrollHeight;
+    while (stage.firstChild) { pane.insertBefore(stage.firstChild, anchor); }
+    if (pane.isConnected) {
+      // 上方变高了：滚动位置同步下移，让视野还停在原来那几条消息上
+      pane.scrollTop += pane.scrollHeight - beforeHeight;
+    }
+  }
 
   function removeTab(id) {
     const st = tabs.get(id);

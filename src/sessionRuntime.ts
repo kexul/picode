@@ -186,6 +186,15 @@ export class SessionRuntime {
     private readonly tabaFrames = new TabaFrameParser();
     private readonly edits: EditTracker;
     private forkEntries: { entryId: string; text: string }[] = [];
+    // ---- 网页端「只发最近一段历史」的窗口（宿主 wantsTrimmedHistory 为 true 时启用）----
+    /** 当前窗口在完整消息数组里的起点下标；-1 表示没开窗口（全量发过 / 非网页端）。 */
+    private historyWindowStart = -1;
+    /** 开窗口时第一条消息的指纹：往前补消息前用它校验会话有没有换过（换会话/换分支则作废）。 */
+    private historyWindowFingerprint = "";
+    /** 开窗口时完整消息数组的长度；长度变短说明底下换过会话，旧下标作废。 */
+    private historyWindowLength = 0;
+    /** 开窗口时窗口前还有多少条 user/assistant 消息（按钮上「还有 N 条」用）。 */
+    private historyWindowHidden = 0;
     /** 本轮已展示过的错误文本；防止重试期间同一错误刷屏。agent_start 时重置。 */
     private lastShownRunError = "";
     /** 本轮是否真的跑起来过：防止没发消息就收到 agent_settled 时误报“完成”。 */
@@ -890,7 +899,7 @@ export class SessionRuntime {
         const messages: any[] = msgResp?.data?.messages ?? [];
         this.forkEntries = forkResp?.data?.messages ?? [];
         this.noteSessionReplaced();
-        this.renderMessages(messages);
+        this.renderWindowed(messages);
         this.currentSessionPath = file;
         // 已有会话的标题不会走 session_info_changed，得主动问一次
         void this.refreshSessionTitle();
@@ -984,7 +993,7 @@ export class SessionRuntime {
         }
         this.captureSessionName(stateResp?.data);
         this.post({ type: "clear" });
-        this.renderMessages(messages);
+        this.renderWindowed(messages);
         // clear 会清空输入框，必须在其后把 user 消息救回（对齐 TUI）
         if (selectedText) {
             this.post({ type: "setInput", text: selectedText });
@@ -1070,7 +1079,7 @@ export class SessionRuntime {
         }
         this.captureSessionName(stateResp?.data);
         this.post({ type: "clear" });
-        this.renderMessages(messages);
+        this.renderWindowed(messages);
         // clear 会清空输入框，必须在其后把 user 消息救回（对齐 TUI）
         if (selectedText) {
             this.post({ type: "setInput", text: selectedText });
@@ -1158,7 +1167,7 @@ export class SessionRuntime {
         }
         this.captureSessionName(cloneMsgs[2]?.data);
         this.post({ type: "clear" });
-        this.renderMessages(messages);
+        this.renderWindowed(messages);
         this.post({ type: "system", text: `已克隆为新会话（${messages.length} 条消息），两侧可并行对话。` });
         console.log(`[clone] 回传+渲染共 ${Date.now() - t0}ms`);
         this.loading = false;
@@ -1207,7 +1216,15 @@ export class SessionRuntime {
         const messages: any[] = msgResp.data?.messages ?? [];
         this.forkEntries = forkResp?.data?.messages ?? [];
         // 快照随运行时一起迁过来了：迁移前的 edit/write 仍可回滚
-        this.renderMessages(messages, { revertable: true, sink: emit });
+        // 网页端只发最近一段历史：先裁窗口、告诉页面还有没有更早的，再渲染窗口里那几条
+        const win = this.host.wantsTrimmedHistory?.() ? this.sliceHistoryWindow(messages) : null;
+        if (win) {
+            this.noteHistoryWindow(win, messages);
+            emit({ type: "historyWindow", hasMore: win.hasMore, hidden: win.hidden });
+        } else {
+            this.historyWindowStart = -1;
+        }
+        this.renderMessages(win ? win.list : messages, { revertable: true, sink: emit, entryOffset: win?.entryOffset ?? 0 });
         // 本次会话改过的文件清单也要到新宿主（回滚 / diff 按钮依赖它）
         this.edits.republishFileChanges(sink ? emit : undefined);
         this.emitStatus();
@@ -1229,13 +1246,138 @@ export class SessionRuntime {
         if (!sink) { this.host.broadcastTabList(); }
     }
 
+    // ========================================================================
+    //  网页端「只发最近一段历史」（历史窗口）
+    // ========================================================================
+
+    /** 网页端一次最多发多少条 user/assistant 消息（更早的由页面点「加载更早的消息」再取）。 */
+    private static readonly WEB_HISTORY_WINDOW = 30;
+
+    /** 一条消息的指纹：优先用 pi 带回的 id；没有就用角色 + 正文开头（反正在同一会话里足够独特）。 */
+    private messageFingerprint(m: any): string {
+        if (!m) { return ""; }
+        if (typeof m.id === "string" && m.id) { return m.id; }
+        return `${m.role}:${textOf(m.content).slice(0, 100)}`;
+    }
+
+    /**
+     * 从完整消息数组里裁出「最近一段」窗口。
+     *
+     * 计数单位是 user/assistant 消息（工具调用与结果跟在所属的 assistant 消息后面，
+     * 窗口起点只落在 user/assistant 消息上，不会把它们拆散）。
+     * @param endBefore 只考虑这条下标之前的消息（往前补更早一段时用）；缺省到末尾。
+     * @returns 裁好的片段与窗口信息；调用方保证宿主已开「只发一段」。
+     */
+    private sliceHistoryWindow(messages: any[], endBefore: number = messages.length): {
+        list: any[];
+        start: number;
+        hasMore: boolean;
+        hidden: number;
+        entryOffset: number;
+    } {
+        const roles: number[] = [];
+        for (let i = 0; i < endBefore; i++) {
+            const m = messages[i];
+            if (m && (m.role === "user" || m.role === "assistant")) { roles.push(i); }
+        }
+        const total = roles.length;
+        const start = total > SessionRuntime.WEB_HISTORY_WINDOW
+            ? roles[total - SessionRuntime.WEB_HISTORY_WINDOW]
+            : 0;
+        let userCount = 0;
+        let hidden = 0;
+        for (let i = 0; i < start; i++) {
+            const m = messages[i];
+            if (!m) { continue; }
+            if (m.role === "user") { userCount++; }
+            if (m.role === "user" || m.role === "assistant") { hidden++; }
+        }
+        return {
+            list: messages.slice(start, endBefore),
+            start,
+            hasMore: start > 0,
+            hidden,
+            entryOffset: userCount,
+        };
+    }
+
+    /** 记下当前窗口位置（起点、指纹、长度），供「加载更早」时校验。 */
+    private noteHistoryWindow(
+        win: { start: number; hidden: number },
+        messages: any[],
+    ): void {
+        this.historyWindowStart = win.start;
+        this.historyWindowHidden = win.hidden;
+        this.historyWindowFingerprint = this.messageFingerprint(messages[win.start]);
+        this.historyWindowLength = messages.length;
+    }
+
+    /**
+     * 重绘历史消息（带网页端窗口）。
+     *
+     * 宿主要「只发最近一段」时：先发一条 historyWindow 告诉页面还有没有更早的消息
+     * （页面据此在顶部画/收按钮），再渲染窗口里那几条；否则原样全量渲染。
+     * @param opts.sink 只发给这一个出口（给某一个页面重画时用）；缺省发给整个工作区。
+     */
+    private renderWindowed(messages: any[], opts?: { revertable?: boolean; sink?: MessageSink }): void {
+        const emit: MessageSink = opts?.sink ?? ((msg) => this.post(msg));
+        if (!this.host.wantsTrimmedHistory?.()) {
+            this.historyWindowStart = -1;
+            this.renderMessages(messages, opts);
+            return;
+        }
+        const win = this.sliceHistoryWindow(messages);
+        this.noteHistoryWindow(win, messages);
+        emit({ type: "historyWindow", hasMore: win.hasMore, hidden: win.hidden });
+        this.renderMessages(win.list, { ...opts, sink: emit, entryOffset: win.entryOffset });
+    }
+
+    /**
+     * 网页端顶部的「加载更早的消息」按钮：把当前窗口之前的一段补发给页面。
+     *
+     * 补发的那批消息逐条包在 historyBatchEvent 里（页面把它们渲染进暂存区），
+     * 最后一条 historyBatchEnd 让页面把暂存区整体插到顶部，并更新按钮。
+     * 广播发给所有页面：几个页面同时开着时内容保持一致，谁也不用自己重算窗口。
+     *
+     * 会话在底下换过（换会话 / 换分支后长度变短或第一条对不上）时，旧下标作废，
+     * 不往前补了，直接整屏重画一遍重置窗口。
+     */
+    public async loadOlderHistory(): Promise<void> {
+        if (this.historyWindowStart < 0) { return; }  // 没开过窗口（非网页端 / 全量发过）：按钮不该出现
+        const [msgResp, forkResp] = await Promise.all([
+            this.request<{ messages: any[] }>({ type: "get_messages" }),
+            this.request<{ messages: RpcForkMessage[] }>({ type: "get_fork_messages" }),
+        ]);
+        if (!msgResp) {
+            this.post({ type: "historyBatchEnd", hasMore: this.historyWindowStart > 0, hidden: this.historyWindowHidden });
+            return;
+        }
+        const messages: any[] = msgResp.data?.messages ?? [];
+        if (forkResp?.data?.messages) { this.forkEntries = forkResp.data.messages; }
+        if (
+            messages.length < this.historyWindowLength
+            || this.messageFingerprint(messages[this.historyWindowStart]) !== this.historyWindowFingerprint
+        ) {
+            // 窗口记的那份会话已经不在了：不往前补，整屏重画一遍把窗口重置到最近一段
+            await this.replayHistory({ note: "" });
+            return;
+        }
+        const win = this.sliceHistoryWindow(messages, this.historyWindowStart);
+        this.noteHistoryWindow(win, messages);
+        const emit: MessageSink = (msg) => {
+            this.host.postToTab(this.id, { type: "historyBatchEvent", event: msg });
+        };
+        this.renderMessages(win.list, { sink: emit, entryOffset: win.entryOffset });
+        this.post({ type: "historyBatchEnd", hasMore: win.hasMore, hidden: win.hidden });
+    }
+
     /**
      * 重绘一批历史消息。
      * @param revertable edit/write 卡片是否按内存快照开放“回滚”：活体迁移时快照
      * 还在（true），单纯加载历史会话时快照并不存在（缺省 false）。
      * @param sink 只发给这一个出口（给某一个页面重画时用）；缺省发给整个工作区。
      */
-    private renderMessages(messages: any[], opts?: { revertable?: boolean; sink?: MessageSink }): void {
+    private renderMessages(messages: any[], opts?: { revertable?: boolean; sink?: MessageSink; entryOffset?: number }): void {
         // 缺省还是走这个 tab 的常规广播；给了 sink 就只发给那一个页面（消息已经带了 tabId）
         const emit: MessageSink = opts?.sink ?? ((msg) => this.post(msg));
         const revertable = opts?.revertable === true;
@@ -1249,7 +1391,7 @@ export class SessionRuntime {
                 toolResults.set(m.toolCallId, m);
             }
         }
-        let userIndex = 0;
+        let userIndex = opts?.entryOffset ?? 0;
         for (const m of messages) {
             switch (m.role) {
                 case "user":

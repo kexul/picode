@@ -223,6 +223,10 @@ export class BrowserChatController extends ChatControllerBase {
     public getConfig(): PiConfig { return this.owner.getConfig(); }
     public getCwd(): string { return this.owner.getCwd(); }
 
+    /** 网页端整屏重画 / 加载会话只发最近一段历史：长会话全量发下来太慢，
+     *  更早的由页面顶部的「加载更早的消息」按钮再取（见 SessionRuntime）。 */
+    public override wantsTrimmedHistory(): boolean { return true; }
+
     protected getAutoLoadLast(): boolean { return false; }  // 浏览器这份总是空白开始，不自动接上次会话
     protected getSendKey(): string { return this.owner.getSendKey(); }
     protected getNewSessionKey(): string { return this.owner.getNewSessionKey(); }
