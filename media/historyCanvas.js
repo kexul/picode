@@ -2,7 +2,6 @@
 (function () {
   const vscode = acquireVsCodeApi();
   const threadList = document.getElementById("threadList");
-  const search = document.getElementById("search");
   const noResults = document.getElementById("noResults");
   const listFooter = document.getElementById("listFooter");
   const btnLoadMore = document.getElementById("btnLoadMore");
@@ -157,17 +156,12 @@
       ? focusFile : ((latestSession(chosen) || {}).file || null);
   }
   function renderList() {
-    const query = search.value.trim().toLowerCase();
-    const families = sortedFamilies().filter((family) => {
-      if (!query) { return true; }
-      const haystack = [sessionTitle(family, (latestSession(family) || {}).file), firstUserText(family), ...((family.messages || []).map((m) => m.text || ""))].join(" ").toLowerCase();
-      return haystack.includes(query);
-    });
+    const families = sortedFamilies();
     threadList.innerHTML = "";
     const noItems = families.length === 0;
     noResults.classList.toggle("hidden", !noItems);
     if (noItems) {
-      noResults.textContent = state.families.length ? "没有匹配的会话。" : "当前工作区没有会话记录。";
+      noResults.textContent = "当前工作区没有会话记录。";
       threadList.appendChild(noResults);
     }
     let lastGroup = "";
@@ -412,7 +406,6 @@
     renderDetail();
   }
 
-  search.addEventListener("input", renderList);
   btnLoadMore.addEventListener("click", () => {
     btnLoadMore.disabled = true;
     btnLoadMore.textContent = "加载中…";

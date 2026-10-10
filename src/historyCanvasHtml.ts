@@ -41,9 +41,6 @@ ${css}
 <body>
   <main id="mail">
     <aside id="listPane" aria-label="会话列表">
-      <div id="searchWrap">
-        <input id="search" type="search" autocomplete="off" placeholder="搜索已加载会话" aria-label="搜索会话" />
-      </div>
       <div id="threadList" role="list">
         <div id="noResults" class="hidden">没有匹配的会话。</div>
       </div>
