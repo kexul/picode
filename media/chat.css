@@ -763,14 +763,19 @@
   /* 焦点 pane：仅将头部标题变淡蓝（pane-head 只在多 panel 时显示，
      单 panel 时自然无选中态）；不再画焦点环 */
   .layout-leaf.focus .pane-head .ph-title { color: var(--vscode-focusBorder, #007fd4); opacity: 1; }
-  /* 每个 panel 自己的底部状态栏：始终显示，点击切换该 panel 模型 */
+  /* 每个 panel 自己的底部状态栏：始终显示，点击切换该 panel 模型。
+     基础字体用 UI 字体：等宽字体里中文会掉到宋体那类，观感差；
+     模型名 / 百分比 / t/s 这些数字记号单独保持等宽，对齐不丢。 */
   .pane-status {
     display: flex; align-items: center; gap: 6px; flex: 0 0 auto;
     min-height: 1.4em; padding: 2px 8px; overflow: hidden; white-space: nowrap;
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
-    font-family: var(--vscode-editor-font-family, monospace);
+    font-family: var(--vscode-font-family, system-ui, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif);
     font-size: var(--vscode-font-size); cursor: pointer;
     color: color-mix(in srgb, var(--vscode-foreground) 88%, transparent);
+  }
+  .pane-status .st-model, .pane-status .st-pct, .pane-status .st-tps {
+    font-family: var(--vscode-editor-font-family, monospace);
   }
   .pane-status:not(.ps-focus) { opacity: 0.6; }
   .pane-status.ps-focus { opacity: 1; }
