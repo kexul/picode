@@ -406,37 +406,21 @@ export class BrowserChatController extends ChatControllerBase {
     }
 
     /**
-     * 网页端顶部那颗“⋯”按钮的菜单：分支 / 模型 / 历史会话 / 导出 / 设置。
-     * 用界面自带的浮层选择器（与模型选择器同一套，带键盘操作），
-     * 只有五项、不用筛选，所以不给筛选框。
+     * 网页端顶部那颗“⋯”按钮的菜单：历史会话 / 设置。
+     * 用界面自带的浮层选择器（带键盘操作），
+     * 只有两项、不用筛选，所以不给筛选框。
      * 选中后在本工作区内直接执行对应动作。
      */
     private async openBrowserMenu(): Promise<void> {
         const items = [
-            { label: "⑂ 分支与分屏…", file: "tree" },
-            { label: "🤖 切换模型…", file: "model" },
             { label: "🕘 历史会话…", file: "history" },
-            { label: "📤 导出当前会话…", file: "export" },
             { label: "⚙ 设置…", file: "settings" },
         ];
         const choice = await this.showPicker("browserMenu", items, null, { title: "更多操作", searchable: false });
         const action = choice && typeof choice.file === "string" ? choice.file : "";
         switch (action) {
-            case "tree": {
-                const rt = this.getActive();
-                if (rt) { void rt.showTree(); }
-                return;
-            }
-            case "model": {
-                const rt = this.getActive();
-                if (rt) { void rt.pickModel(); }
-                return;
-            }
             case "history":
                 void this.showHistoryPicker();
-                return;
-            case "export":
-                this.exportActiveConversation();
                 return;
             case "settings":
                 this.postToWebview({ type: "openSettings" });

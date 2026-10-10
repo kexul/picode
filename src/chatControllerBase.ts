@@ -2110,6 +2110,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
             current: current ?? null,
             totalFamilies,
             loadedFamilies,
+            // 两端（网页 / VSCode）都不给筛选框：直接滚动列表选择。
+            searchable: false,
         });
         if (this.pickerTimer) { clearTimeout(this.pickerTimer); }
         return new Promise<any | undefined>((resolve) => {

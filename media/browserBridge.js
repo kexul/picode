@@ -412,7 +412,7 @@
   }
 
   // ==================== 顶部标签栏最右边的“⋯”菜单 ====================
-  // 分支 / 模型 / 历史会话 / 导出 / 设置都收进这一颗（VSCode 里这些在面板标题栏上，
+  // 历史会话 / 设置都收进这一颗（VSCode 里这些在面板标题栏上，
   // 网页端没有标题栏；消息由插件侧的浏览器工作区 browserChatController.ts 接，
   // 点开的是界面自带的那个浮层选择器）。
   // 标签栏平时只有一个标签时是藏着的，网页端要常显，否则这颗按钮没地方放。
@@ -425,7 +425,7 @@
     btn.type = "button";
     btn.id = "browserMenuBtn";
     btn.textContent = "⋯";
-    btn.title = "更多操作：分支 / 模型 / 历史会话 / 导出 / 设置";
+    btn.title = "更多操作：历史会话 / 设置";
     btn.addEventListener("click", function () { enqueue({ type: "openBrowserMenu" }); });
     bar.appendChild(btn);
   })();
