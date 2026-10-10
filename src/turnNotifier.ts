@@ -42,7 +42,8 @@ const APP_LABEL = "Pi Chat";
 
 /**
  * 通知的“应用标识”（AppUserModelId）：Windows 用它决定通知卡片显示的来源名与图标。
- * 正常由插件激活时登记自己的标识（见 toastAppId.ts，来源显示“Pi Chat”）；
+ * 正常由插件激活后在后台登记自己的标识（见 toastAppId.ts，来源显示“Pi Chat”），
+ * 传进来时可能还没登记完（那是个承诺，发通知前会等它出结果，结果一定能用）；
  * 没传进来时借用 PowerShell 自带的标识（系统自带，一定能弹，但来源显示 Windows PowerShell）。
  * 也可以用环境变量 PICHAT_TOAST_APPID 手动指定。
  */
@@ -129,17 +130,31 @@ function spawnToast(items: TurnToastItem[], appUserModelId: string, onFailed: (r
 export class TurnNotifier {
     private pending: TurnEndInfo[] = [];
     private timer?: ReturnType<typeof setTimeout>;
-    private readonly appUserModelId: string;
+    private readonly appUserModelId?: string | Promise<string>;
+    /** 定下来的标识（只算一次）：发通知前等它，登记还在后台跑时第一次发通知会稍等一下。 */
+    private appUserModelIdResolved?: Promise<string>;
+    /** 已经不用了：不再发任何通知。 */
+    private disposed = false;
     /** 系统通知发送失败的解释只说一次，免得每次都弹一条警告。 */
     private warnedAboutToastFailure = false;
 
     constructor(options?: {
-        /** 覆盖通知的应用标识（一般由插件激活时登记后传入）。 */
-        appUserModelId?: string;
+        /** 覆盖通知的应用标识（一般由插件激活后在后台登记，传进来的可能是还没登记完的承诺）。 */
+        appUserModelId?: string | Promise<string>;
     }) {
-        this.appUserModelId = options?.appUserModelId
-            || (process.env.PICHAT_TOAST_APPID ?? "").trim()
-            || DEFAULT_APP_USER_MODEL_ID;
+        this.appUserModelId = options?.appUserModelId;
+    }
+
+    /** 把标识定下来：传了的等它出结果，没传就看环境变量，再不然用系统回落标识。 */
+    private resolveAppUserModelId(): Promise<string> {
+        if (!this.appUserModelIdResolved) {
+            const direct = this.appUserModelId;
+            this.appUserModelIdResolved = (direct
+                ? Promise.resolve(direct)
+                : Promise.resolve((process.env.PICHAT_TOAST_APPID ?? "").trim() || DEFAULT_APP_USER_MODEL_ID)
+            ).catch(() => DEFAULT_APP_USER_MODEL_ID);
+        }
+        return this.appUserModelIdResolved;
     }
 
     public handleTurnEnd(info: TurnEndInfo): void {
@@ -154,6 +169,7 @@ export class TurnNotifier {
     }
 
     public dispose(): void {
+        this.disposed = true;
         if (this.timer) { clearTimeout(this.timer); }
         this.timer = undefined;
         this.pending = [];
@@ -176,8 +192,12 @@ export class TurnNotifier {
             items.push({ title: "还有其它会话", body: `…另有 ${rest} 个也跑完了`, attribution: APP_LABEL });
         }
 
-        // 系统通知先发；发不出去时 onFailed 会在界面里补一条（带失败原因）。
-        spawnToast(items, this.appUserModelId, (reason) => this.showInApp(batch, reason));
+        // 等标识定下来再发系统通知（标识可能还在后台登记；结果一定是个能用的标识）。
+        // 发不出去时 onFailed 会在界面里补一条（带失败原因）。
+        void this.resolveAppUserModelId().then((appUserModelId) => {
+            if (this.disposed) { return; }
+            spawnToast(items, appUserModelId, (reason) => this.showInApp(batch, reason));
+        });
         // 窗口不在前台时，界面内提示顺带让 Windows 闪烁任务栏图标。
         if (!vscode.window.state.focused) { this.showInApp(batch, undefined); }
     }

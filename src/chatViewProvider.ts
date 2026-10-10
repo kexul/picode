@@ -72,10 +72,10 @@ export class ChatViewProvider extends ChatControllerBase implements vscode.Webvi
      *  models.json 改了以后一起丢掉预热好的备用进程。 */
     private readonly externalWorkspaces = new Set<ExternalChatWorkspace>();
 
-    /** @param toastAppId 插件启动时登记好的 Windows 通知应用标识；缺省用系统自带的回落标识。 */
+    /** @param toastAppId 插件登记的 Windows 通知应用标识（后台登记中，是个承诺）；缺省用系统自带的回落标识。 */
     constructor(
         private readonly context: vscode.ExtensionContext,
-        private readonly toastAppId?: string,
+        private readonly toastAppId?: string | Promise<string>,
     ) {
         super("sidebar");
         this.historyCanvas = new HistoryCanvasPanel(context, {
