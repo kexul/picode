@@ -5,6 +5,7 @@ import {
 import type { NameParts } from "./names";
 import { readModelsJson, writeModelsJson } from "./modelsConfig";
 import { probeProviderModels } from "./probeModels";
+import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { MessageBuffer } from "./webTransport";
 import type { FileChange, MessageSink, PiConfig, TurnEndInfo } from "./runtimeTypes";
 
@@ -442,6 +443,25 @@ export class BrowserChatController extends ChatControllerBase {
         });
     }
 
+    /**
+     * 网页端标签栏那颗“桌面截图”按钮：截一张这台电脑的桌面，只发回请求它的那个页面
+     * （别的页面不跟着弹图）。截屏要一两秒，异步做；截完时页面已经断开的话就白截
+     * （sendTo 送不出去，直接丢）。成功发 desktopScreenshot（图片 base64），
+     * 失败发 desktopScreenshotResult（错误文本，页面上弹一句）。
+     */
+    private sendDesktopScreenshot(): void {
+        const pageId = this.messageFromPage;
+        const hub = this.hub;
+        if (!pageId || !hub) { return; }
+        void captureDesktopScreenshot().then((result) => {
+            if (result.ok) {
+                hub.sendTo(pageId, { type: "desktopScreenshot", data: result.data, mimeType: result.mimeType });
+            } else {
+                hub.sendTo(pageId, { type: "desktopScreenshotResult", ok: false, error: result.error });
+            }
+        });
+    }
+
     // ========================================================================
     //  浏览器这份工作区独有的消息
     // ========================================================================
@@ -473,6 +493,9 @@ export class BrowserChatController extends ChatControllerBase {
                 return true;
             case "openBrowserMenu":
                 void this.openBrowserMenu();
+                return true;
+            case "requestDesktopScreenshot":
+                this.sendDesktopScreenshot();
                 return true;
             case "openSettingsPanel":
                 this.postToWebview({ type: "openSettings", tab: typeof msg.tab === "string" ? msg.tab : undefined });

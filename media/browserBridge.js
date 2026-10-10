@@ -177,6 +177,8 @@
   function dispatch(data) {
     var type = data && data.type;
     if (type === "browserDialog") { handleDialog(data); return; }
+    if (type === "desktopScreenshot") { showDesktopScreenshot(data); return; }
+    if (type === "desktopScreenshotResult") { handleDesktopScreenshotResult(data); return; }
     if (type === "hello") {
       // 连接建立：先于一切带序号的消息到达（插件那头保证顺序）。
       liveFromSeq = typeof data.seq === "number" ? data.seq : 0;
@@ -411,6 +413,53 @@
     bannerText(text, withReload !== false);
   }
 
+  // ==================== 桌面截图 ====================
+  // 标签栏顶部的“📷”按钮：请插件截一张这台电脑的桌面（可能就是本机，
+  // 也可能是你在手机浏览器里看的这台开发机），截好推回来全屏显示。
+  // 消息由插件那头的 browserChatController.ts 接：
+  //   requestDesktopScreenshot → desktopScreenshot（图片 base64）/ desktopScreenshotResult（失败）。
+  var shotBtn = null;
+  var shotBusyTimer = null;
+
+  /** 截屏从点击到图推回来要一两秒：期间按钮压暗并暂时点不动。 */
+  function setShotBusy(busy) {
+    if (shotBusyTimer) { clearTimeout(shotBusyTimer); shotBusyTimer = null; }
+    if (!shotBtn) { return; }
+    if (busy) { shotBtn.classList.add("busy"); } else { shotBtn.classList.remove("busy"); }
+  }
+
+  /** 全屏显示推回来的截图，点任意处关闭（复用 chat.css 里 .lightbox 那套看图样式）。 */
+  function showDesktopScreenshot(data) {
+    setShotBusy(false);
+    var base64 = data && typeof data.data === "string" ? data.data : "";
+    if (!base64) { return; }
+    var overlay = document.createElement("div");
+    overlay.className = "lightbox";
+    var img = document.createElement("img");
+    img.alt = "桌面截图";
+    img.src = "data:" + (data && typeof data.mimeType === "string" && data.mimeType ? data.mimeType : "image/png") + ";base64," + base64;
+    overlay.appendChild(img);
+    overlay.addEventListener("click", function () {
+      if (overlay.parentNode) { overlay.parentNode.removeChild(overlay); }
+    });
+    document.body.appendChild(overlay);
+  }
+
+  /** 截图失败：按钮还原，弹一句原因。 */
+  function handleDesktopScreenshotResult(data) {
+    setShotBusy(false);
+    var error = data && typeof data.error === "string" && data.error ? data.error : "桌面截图失败。";
+    window.alert(error);
+  }
+
+  function requestDesktopScreenshot() {
+    if (shotBtn && shotBtn.classList.contains("busy")) { return; }   // 上一张还没回来，别连点
+    setShotBusy(true);
+    // 截屏迟迟没有回音（插件那头卡住了）：过一会儿放开按钮，允许再点一次
+    shotBusyTimer = setTimeout(function () { setShotBusy(false); }, 25000);
+    enqueue({ type: "requestDesktopScreenshot" });
+  }
+
   // ==================== 顶部标签栏最右边的“⋯”菜单 ====================
   // 历史会话 / 设置都收进这一颗（VSCode 里这些在面板标题栏上，
   // 网页端没有标题栏；消息由插件侧的浏览器工作区 browserChatController.ts 接，
@@ -421,6 +470,14 @@
     var bar = document.getElementById("tabBar");
     if (!bar) { return; }
     bar.classList.remove("hidden");
+    shotBtn = document.createElement("button");
+    shotBtn.type = "button";
+    shotBtn.id = "browserScreenshotBtn";
+    shotBtn.textContent = "📷";
+    shotBtn.title = "查看桌面截图（截的是运行 VSCode 的这台电脑）";
+    shotBtn.addEventListener("click", requestDesktopScreenshot);
+    bar.appendChild(shotBtn);
+
     var btn = document.createElement("button");
     btn.type = "button";
     btn.id = "browserMenuBtn";

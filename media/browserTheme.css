@@ -9,7 +9,8 @@
   2. 输入框起步高度。VSCode 那份固定占 144px（约七行）；网页端只要一行，
      这里把 --pichat-input-min-height 设小，chat.js 会读这个值当最小高度，
      打字打多了照样往上涨（最高 640px 不变）。VSCode 里没这个变量，仍然是 144px。
-  3. 顶部标签栏常显 + 最右边的“⋯”菜单按钮，底部按钮条整条藏掉（详见下面那两段注释）。
+  3. 顶部标签栏常显 + 最右边的“📷 桌面截图”与“⋯ 菜单”两颗按钮，底部按钮条整条藏掉
+     （详见下面那两段注释）。
 
   本文件只在浏览器那份页面里加载（media/chat.js 与 chat.css 不动），
   而且排在 chat.css 之后加载，所以同优先级的规则以这里为准。
@@ -124,13 +125,42 @@ html, body {
 #bottomBar { display: none !important; }
 
 /*
-  顶部标签栏最右边的“⋯”按钮：分支 / 模型 / 历史会话 / 导出 / 设置都收进这个菜单。
-  样式照着左边那颗“+”抄（chat.css 里按编号 #newTabBtn 写的，这里拿不到），
-  再用 margin-left: auto 把它顶到这一行的最右边。
+  顶部标签栏最右边的两颗按钮：“📷 桌面截图”和“⋯ 更多操作”（分支 / 模型 / 历史会话 /
+  导出 / 设置都收进这个菜单）。样式照着左边那颗“+”抄（chat.css 里按编号 #newTabBtn
+  写的，这里拿不到）；“📷”用 margin-left: auto 把两颗一起顶到这一行的最右边。
 */
-#browserMenuBtn {
+#browserScreenshotBtn {
   flex: 0 0 auto;
   margin-left: auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--vscode-foreground);
+  opacity: 0.7;
+  font-size: 13px;
+  line-height: 1;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#browserScreenshotBtn:hover {
+  opacity: 1;
+  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+/* 截屏从点击到图推回来要一两秒：期间压暗并暂时点不动（见 browserBridge.js 的 busy 状态） */
+#browserScreenshotBtn.busy {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+#browserMenuBtn {
+  flex: 0 0 auto;
   width: 22px;
   height: 22px;
   padding: 0;

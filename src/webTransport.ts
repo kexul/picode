@@ -320,6 +320,10 @@ export const PAGE_TRANSIENT_MESSAGE_TYPES: ReadonlySet<string> = new Set([
     "openSettings",              // 打开设置面板
     "beep",                      // 提示音
     "scrollToEntry",             // 滚到某条消息（错过就不滚，不该回来时自己动）
+    // 下面两条走 sendTo 定向发给请求它的那个页面，本来就不进补发暂存；列在这里是
+    // 防以后改走广播时，把几 MB 的截图塞进补发暂存，把真正的历史消息挤掉。
+    "desktopScreenshot",         // 桌面截图（网页端“桌面截图”按钮）
+    "desktopScreenshotResult",   // 桌面截图的失败提示
 ]);
 
 /**
