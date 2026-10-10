@@ -305,6 +305,24 @@ export class PageChannels {
 }
 
 /**
+ * 推给页面的消息里属于「当时的一次性动作」的那些类型。
+ *
+ * 页面断线重连后，插件把断线期间漏掉的消息补发给它（见 webChatServer 的 catchUp）。
+ * 补发只面向「状态与流内容」——错过一条就少一块内容的那类。下面这些不补：
+ * 页面断开时插件那头已经把它们按取消处理了（确认框、浮层选择器），
+ * 补发只会让回来的页面重复弹一次窗，或者莫名其妙替人做一次动作。
+ */
+export const PAGE_TRANSIENT_MESSAGE_TYPES: ReadonlySet<string> = new Set([
+    "browserDialog",             // 确认框 / 输入框（断开时已按取消处理）
+    "picker",                    // 浮层选择器
+    "pickerCancel",              // 浮层超时取消
+    "exportConversationRequest", // 让页面导出会话
+    "openSettings",              // 打开设置面板
+    "beep",                      // 提示音
+    "scrollToEntry",             // 滚到某条消息（错过就不滚，不该回来时自己动）
+]);
+
+/**
  * 一个都没有页面连着时的消息缓冲。
  *
  * 浏览器页面的加载顺序是：先发起推送连接，再由 chat.js 发出 ready。

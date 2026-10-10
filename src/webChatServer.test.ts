@@ -62,10 +62,10 @@ function baseOf(url: string): string {
 }
 
 /** 起一个服务，测试结束时自动关掉。
- *  @param timings 心跳间隔 / 页面静默上限；测试里传小值（默认 25 秒 / 90 秒等不起） */
+ *  @param timings 心跳间隔 / 页面静默上限 / 补发暂存上限；测试里传小值（默认 25 秒 / 90 秒等不起） */
 async function withServer(
     run: (url: string, logs: string[]) => Promise<void>,
-    timings?: { heartbeatMs?: number; pageStaleMs?: number },
+    timings?: { heartbeatMs?: number; pageStaleMs?: number; catchupLogEntries?: number; catchupLogBytes?: number },
 ): Promise<void> {
     const logs: string[] = [];
     const server = new PiChatWebServer(MEDIA_DIR, fakeOwner(), { log: (t) => logs.push(t) }, timings);
@@ -159,6 +159,21 @@ async function postMessage(url: string, pageId: string, msg: Record<string, unkn
     });
     await res.text();
     return res.status;
+}
+
+/** 从收到的内容里抽出 hello（连接建立时那条）带的序号。 */
+function helloSeqOf(buffer: string): number {
+    const match = buffer.match(/\{"type":"hello","seq":(\d+)\}/);
+    assert.ok(match, "连接建立时应该先收到一条带序号的 hello：" + buffer.slice(0, 200));
+    return Number(match![1]);
+}
+
+/** 收到的内容里最后一个序号（推给页面的实时消息都带 seq，最后一条就是处理到的位置）。 */
+function lastSeqIn(buffer: string): number {
+    let last = -1;
+    for (const m of buffer.matchAll(/"seq":(\d+)/g)) { last = Number(m[1]); }
+    assert.ok(last >= 0, "收到的内容里应该有带序号的消息：" + buffer.slice(0, 200));
+    return last;
 }
 
 test("访问地址是干净的：不用带口令，手机上一输就能开", async () => {
@@ -382,6 +397,148 @@ test("页面断开、正在重连的那一下发来的消息照收：回应先�
             abortAgain.abort();
         }
     });
+});
+
+test("重连补发：断线期间漏掉的消息按原样补回来，补完对齐（syncPoint）", async () => {
+    await withServer(async (url) => {
+        const abortPhone = new AbortController();
+        const abortPhoneAgain = new AbortController();
+        const abortOther = new AbortController();
+        let phone: Stream | undefined;
+        let phoneAgain: Stream | undefined;
+        let other: Stream | undefined;
+        try {
+            // 另一个页面一直连着：断线期间的广播不算「一个页面都没连着」，
+            // 不会进另一份缓冲，待会儿补发的来源只有补发暂存这一份，数量才数得准
+            other = await openStream(url, "p-other", abortOther.signal);
+            await other.readUntil(": connected");
+
+            phone = await openStream(url, "p-phone", abortPhone.signal);
+            const hello1 = helloSeqOf(await phone.readUntil('"type":"hello"'));
+
+            // 连着时收一条（实时）
+            assert.equal(await postMessage(url, "p-phone", { type: "requestViewOptionItems" }), 204);
+            await phone.readUntil('"type":"viewOptionItems"');
+            const lastSeen = lastSeqIn(phone.received());
+
+            // 退到后台：连接断了
+            await phone.close();
+            abortPhone.abort();
+            await sleep(200);
+
+            // 断线期间插件推了三条（另一个页面还连着，照常收得到）
+            for (let i = 0; i < 3; i++) {
+                assert.equal(await postMessage(url, "p-other", { type: "requestViewOptionItems" }), 204);
+            }
+            await other.readUntil('"type":"viewOptionItems"');
+
+            // 回到前台：重连，报上断线前处理到的序号
+            phoneAgain = await openStream(url, "p-phone", abortPhoneAgain.signal);
+            const hello2 = helloSeqOf(await phoneAgain.readUntil('"type":"hello"'));
+            assert.ok(hello2 > lastSeen, "断线期间序号往前走了");
+            assert.equal(await postMessage(url, "p-phone", { type: "browserResync", lastSeq: lastSeen }), 204);
+
+            const got = await phoneAgain.readUntil('"type":"syncPoint"');
+            // 漏掉的三条都补回来了（各带当时的序号），正好三条，最后 syncPoint 对齐
+            assert.equal(got.match(/"type":"viewOptionItems"/g)!.length, 3);
+            assert.match(got, /"type":"syncPoint"/);
+            assert.match(got, new RegExp(`"type":"syncPoint","seq":${hello2}`));
+
+            // 之后照常实时收
+            assert.equal(await postMessage(url, "p-phone", { type: "requestViewOptionItems" }), 204);
+            await phoneAgain.readUntil('"type":"viewOptionItems"');
+        } finally {
+            await phone?.close();
+            await phoneAgain?.close();
+            await other?.close();
+            abortPhone.abort();
+            abortPhoneAgain.abort();
+            abortOther.abort();
+        }
+    });
+});
+
+test("重连补发：一条不缺就什么都不发，页面保持原样", async () => {
+    await withServer(async (url) => {
+        const abortFirst = new AbortController();
+        const abortAgain = new AbortController();
+        let first: Stream | undefined;
+        let again: Stream | undefined;
+        try {
+            first = await openStream(url, "p-a", abortFirst.signal);
+            const hello1 = helloSeqOf(await first.readUntil('"type":"hello"'));
+
+            await first.close();
+            abortFirst.abort();
+            await sleep(200);
+
+            // 断线期间什么都没发生
+            again = await openStream(url, "p-a", abortAgain.signal);
+            const hello2 = helloSeqOf(await again.readUntil('"type":"hello"'));
+            assert.equal(hello2, hello1, "没有广播就没有新序号");
+            assert.equal(await postMessage(url, "p-a", { type: "browserResync", lastSeq: hello1 }), 204);
+
+            // 报账之后紧跟一条实时消息：它之前不该有 syncPoint（既没补发也没对齐）
+            assert.equal(await postMessage(url, "p-a", { type: "requestViewOptionItems" }), 204);
+            const got = await again.readUntil('"type":"viewOptionItems"');
+            assert.doesNotMatch(got, /"type":"syncPoint"/);
+        } finally {
+            await first?.close();
+            await again?.close();
+            abortFirst.abort();
+            abortAgain.abort();
+        }
+    });
+});
+
+test("重连补发：缺得太多补不上，退回整屏重画（对齐 syncPoint）", async () => {
+    await withServer(async (url) => {
+        const abortFirst = new AbortController();
+        const abortAgain = new AbortController();
+        const abortOther = new AbortController();
+        let first: Stream | undefined;
+        let again: Stream | undefined;
+        let other: Stream | undefined;
+        try {
+            // 暂存只留 2 条；另一个页面一直连着，让断线期间的广播只进补发暂存这一份
+            other = await openStream(url, "p-other", abortOther.signal);
+            await other.readUntil(": connected");
+
+            first = await openStream(url, "p-a", abortFirst.signal);
+            await first.readUntil('"type":"hello"');
+
+            // 连着时收一条
+            assert.equal(await postMessage(url, "p-a", { type: "requestViewOptionItems" }), 204);
+            await first.readUntil('"type":"viewOptionItems"');
+            const lastSeen = lastSeqIn(first.received());
+
+            await first.close();
+            abortFirst.abort();
+            await sleep(200);
+
+            // 断线期间推四条：暂存只留得下最后两条，开头的补不上了
+            for (let i = 0; i < 4; i++) {
+                assert.equal(await postMessage(url, "p-other", { type: "requestViewOptionItems" }), 204);
+            }
+            await other.readUntil('"type":"viewOptionItems"');
+
+            again = await openStream(url, "p-a", abortAgain.signal);
+            await again.readUntil('"type":"hello"');
+            assert.equal(await postMessage(url, "p-a", { type: "browserResync", lastSeq: lastSeen }), 204);
+
+            // 补不全：退回整屏重画。这里没建会话，重画没有内容可画，
+            // 但 syncPoint 要发（序号对齐到当前，页面下次重连报的数才是准的）
+            const got = await again.readUntil('"type":"syncPoint"');
+            assert.equal(got.match(/"type":"viewOptionItems"/g), null, "补不上的那段不会乱补");
+        } finally {
+            await first?.close();
+            await again?.close();
+            await other?.close();
+            abortFirst.abort();
+            abortAgain.abort();
+            abortOther.abort();
+        }
+    }, { catchupLogEntries: 2 });
 });
 
 test("页面收得到心跳；一直不报活的连接会被服务收掉，报活的就不会", async () => {

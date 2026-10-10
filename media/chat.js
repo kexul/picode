@@ -3887,8 +3887,10 @@
         t.pendingToolTags.clear();
         for (const e of t.pendingToolCardsFull.values()) { clearInterval(e.timer); }
         t.pendingToolCardsFull.clear();
-        // 重置当前 tab 的输入草稿（若该 panel 在当前 tab，同步到输入框）
-        if (activeId === t.id) {
+        // 重置当前 tab 的输入草稿（若该 panel 在当前 tab，同步到输入框）。
+        // 整屏重画（页面刷新 / 重连后补内容）也走 clear：那种 clear 带 keepDraft，
+        // 不能把人打了一半的字和附件抹掉，也不要把键盘拉起来。
+        if (!msg.keepDraft && activeId === t.id) {
           const d = draftOfTab();
           d.text = "";
           d.height = INPUT_MIN_HEIGHT;

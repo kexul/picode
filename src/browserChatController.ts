@@ -24,10 +24,19 @@ import type { FileChange, MessageSink, PiConfig, TurnEndInfo } from "./runtimeTy
 
 /** 页面连接的出口（由网页服务实现）：插件推给页面的消息都从这里出去。 */
 export interface PageChannelHub {
-    /** 把一条消息发给所有连着的页面。一个页面都没连着时返回 false（消息由工作区自己攒着）。 */
+    /** 把一条消息发给所有连着的页面（消息会被记上序号）。一个页面都没连着时返回 false（消息由工作区自己攒着）。 */
     broadcast(msg: Record<string, unknown>): boolean;
     /** 只发给某一个页面（刚连上 / 重连的页面要整屏重画时用）。那个页面已经不在了返回 false。 */
     sendTo(pageId: string, msg: Record<string, unknown>): boolean;
+    /** 有没有这个页面连着（整屏重画送不出去就先记着，等它连上再画）。 */
+    hasPage(pageId: string): boolean;
+    /**
+     * 页面重连后补发它错过的消息（页面随 browserResync 报上自己处理到第几条）。
+     * 返回 false 表示补不了（页面不在了，或缺得太多暂存里没有）——调用方退回整屏重画。
+     */
+    catchUp(pageId: string, lastSeq: number): boolean;
+    /** 当前的消息序号（整屏重画完让页面对齐到这个位置）。 */
+    currentSeq(): number;
     /** 最近有人在里面动过的那个页面标识（确认框、选项浮层发给它）；一个都没连着时 undefined。 */
     recentPageId(): string | undefined;
     /** 有没有页面连着。 */
@@ -90,6 +99,13 @@ export class BrowserChatController extends ChatControllerBase {
     private hub: PageChannelHub | undefined;
     /** 一个页面都没连着时的消息缓冲：页面一连上就按原顺序冲出去。 */
     private readonly outbox = new MessageBuffer();
+    /**
+     * 等着整屏重画的页面（页面标识 → 重画后给的那行提示）。
+     * 页面的 ready / 重连请求可能比它的推送连接先到，那时重画送不出去，先记下，等它一连上就画。
+     */
+    private readonly pendingResyncPages = new Map<string, string>();
+    /** 正在整屏重画的页面：重画没画完。这种页面中途断了的话，得等它回来重新整画一遍（见 onPageDisconnected）。 */
+    private readonly resyncingPages = new Set<string>();
     /** 正在等浏览器原生对话框回复的请求（记着是问哪个页面的，那个页面走了就改成取消）。 */
     private readonly pendingDialogs = new Map<number, { resolve: (value: unknown) => void; pageId: string }>();
     private dialogSeq = 0;
@@ -115,12 +131,20 @@ export class BrowserChatController extends ChatControllerBase {
             // 服务停了：在等的确认框不能再干等（回落到 VSCode 里问），攒着的消息也没用了
             this.cancelPendingDialogs();
             this.outbox.clear();
+            this.pendingResyncPages.clear();
+            this.resyncingPages.clear();
         }
     }
 
-    /** 一个页面刚连上：把攒着的消息补给它（其他页面早就拿到过了，不重复发）。 */
+    /** 一个页面刚连上：把等着的整屏重画补上（如果它早先要求过），再把攒着的消息补给它
+     *  （其他页面早就拿到过了，不重复发）。 */
     public onPageConnected(pageId: string): void {
         if (this.disposed) { return; }
+        const note = this.pendingResyncPages.get(pageId);
+        if (note !== undefined) {
+            this.pendingResyncPages.delete(pageId);
+            void this.resyncPage(pageId, note);
+        }
         const hub = this.hub;
         if (!hub || this.outbox.size === 0) { return; }
         for (const msg of this.outbox.drain()) {
@@ -131,6 +155,11 @@ export class BrowserChatController extends ChatControllerBase {
     /** 一个页面的连接没了（关掉 / 死连接被掐掉）：它那个没人答的确认框改成取消。 */
     public onPageDisconnected(pageId: string): void {
         this.cancelPendingDialogs(pageId);
+        // 整屏重画画到一半页面走了：重画的内容不进补发暂存，它回来对账时会“看似不缺”，
+        // 内容却缺一截。记下来，它一连上就重新整画一遍。
+        if (this.resyncingPages.delete(pageId)) {
+            this.pendingResyncPages.set(pageId, "");
+        }
     }
 
     /**
@@ -171,6 +200,7 @@ export class BrowserChatController extends ChatControllerBase {
         if (this.disposed) { return; }
         this.disposed = true;
         this.setHub(undefined);
+        this.pendingResyncPages.clear();
         for (const rt of this.panels.values()) {
             rt.stopClient();
             this.releasePanelName(rt.nameParts);
@@ -331,28 +361,48 @@ export class BrowserChatController extends ChatControllerBase {
     /** 页面加载完成：刷新 # 引用，并把已有的对话重画一遍给这个页面（页面刷新不丢内容）。 */
     protected override onWebviewReady(): void {
         this.owner.broadcastChatReferences();
-        this.resyncPage("页面已重新连接（{count} 条消息，pi 进程与上下文原样保留）。");
+        void this.resyncPage(this.messageFromPage, "页面已重新连接（{count} 条消息，pi 进程与上下文原样保留）。");
     }
 
     /**
-     * 把已有的对话整屏重画一遍：页面刚加载、或推送连接重连之后（手机退到后台再回来）都用它。
+     * 把已有的对话整屏重画一遍：页面刚加载、或重连后补发补不上（缺得太多）时用它。
+     *
+     * 页面刚加载的那种情况（ready 里的）：对话重画；重连补不上时（browserResync 里 note 为空串）：
+     * 补发失败说明漏得太多，重画是补回来的唯一办法。
      *
      * 只画给发消息来的那个页面——手机回到前台重连时，电脑那边开着的页面不该跟着白闪一下，
      * 更不该把正在生成的半句话清掉。
-     * @param note 重画后给这个页面的一行提示；空串表示不给（重连时不给，不然一回到前台就多一行）
+     * @param pageId 要重画给哪个页面；空串表示不知道是哪个（理论上不会），退回广播。
+     * @param note 重画后给这个页面的一行提示；空串表示不给（重连时不给，不然一回到前台就多一行）。
+     * @returns 重画（含最后的对齐）完成；页面的重画请求比它的推送连接先到时，等连上才真的画，
+     *          那时这个 Promise 早就结束了。
      */
-    private resyncPage(note: string): void {
-        const pageId = this.messageFromPage;
+    private resyncPage(pageId: string, note: string): Promise<void> {
         const hub = this.hub;
+        if (pageId && hub && !hub.hasPage(pageId)) {
+            // 页面的重画请求到得比它的推送连接还早（刚刷新的那一瞬间）：现在送也是白送，
+            // 先记下来，它一连上就画（见 onPageConnected）。
+            this.pendingResyncPages.set(pageId, note);
+            return Promise.resolve();
+        }
         // 拿不到是哪个页面（理论上不会）就退回广播：宁可多画一次，也不能让页面缺内容
         const sink: MessageSink | undefined = pageId && hub
             ? ((msg) => { hub.sendTo(pageId, msg); })
             : undefined;
+        const replays: Array<Promise<void>> = [];
+        if (pageId) { this.resyncingPages.add(pageId); }
         for (const rt of this.panels.values()) {
             // 刚建的空会话不用重画：newTab 已经把它需要的东西发过去了
             if (rt.isConversationEmpty()) { continue; }
-            void rt.replayHistory({ note, sink });
+            replays.push(rt.replayHistory({ note, sink }));
         }
+        return Promise.all(replays).then(() => {
+            // 重画的消息不带序号（它们只发给这一个页面）。这里把页面对齐到当前序号：
+            // 重画的内容已经包含到这里为止的一切，下次重连它报上来的数才是准的。
+            if (pageId && hub) { hub.sendTo(pageId, { type: "syncPoint", seq: hub.currentSeq() }); }
+        }).finally(() => {
+            if (pageId) { this.resyncingPages.delete(pageId); }
+        });
     }
 
     /**
@@ -413,11 +463,22 @@ export class BrowserChatController extends ChatControllerBase {
     // ========================================================================
     protected handlePlatformMessage(msg: any): boolean {
         switch (msg.type) {
-            case "browserResync":
-                // 页面的推送连接重连上了（手机回到前台、网络断开又通）：只给这个页面重画一遍。
-                // 它不在的时候插件推给它的消息都写进了断掉的连接，重画是补回来的唯一办法。
-                this.resyncPage("");
+            case "browserResync": {
+                // 页面的推送连接重连上了（手机回到前台、网络断开又通）：它报上自己处理到第几条，
+                // 把断线期间漏掉的消息补发过去——一条不缺就什么都不用动，页面保持原样；
+                // 缺的都在补发暂存里就只补缺的那几条，页面上消息接着往下长。
+                // 补不上（没报序号——旧版页面脚本，或缺得太多）才整屏重画兜底。
+                // 序号是 0 也照报：那说明从没广播过东西，对账本身就是“一条不缺”。
+                const pageId = this.messageFromPage;
+                const hub = this.hub;
+                const lastSeq = typeof msg.lastSeq === "number" && Number.isFinite(msg.lastSeq)
+                    ? msg.lastSeq : -1;
+                if (pageId && hub && lastSeq >= 0 && hub.catchUp(pageId, lastSeq)) {
+                    return true;
+                }
+                void this.resyncPage(pageId, "");
                 return true;
+            }
             case "hostFocus":
                 return true;  // 浏览器页面获得焦点：这里没有"最后活动的工作区"概念，忽略
             case "browserDialogResult":

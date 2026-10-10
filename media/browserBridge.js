@@ -18,12 +18,14 @@
  * 页面退到后台，系统会把这条挂着不动的连接掐掉，页面里的定时器也一起冻住；回到前台时
  * 冻住的定时器全醒过来，几条消息挤着往外发。所以：
  *   - 重连自己管（不信浏览器自己那次重连：它要等一会儿，手机回到前台后还常常一直卡在
- *     "正在连接"不动）。出错就关掉重开，回到前台 / 网络恢复 / 从冻结里醒来时立刻重开。
- *   - 靠插件每 25 秒发来的心跳判断连接是不是"看着还在、其实已经死了"（手机换过网络之后
+ *     “正在连接”不动）。出错就关掉重开，回到前台 / 网络恢复 / 从冻结里醒来时立刻重开。
+ *   - 靠插件每 25 秒发来的心跳判断连接是不是“看着还在、其实已经死了”（手机换过网络之后
  *     常见）。浏览器对这种连接是不报错的，只能自己数着心跳。
- *   - 每次重新连上都请插件把整屏对话重画一遍（消息类型 browserResync）。不在这边的时候
- *     插件推来的消息都写进了断掉的连接，是收不回来的，只有重画才补得回来。
- *     刚加载的那一次不用请：chat.js 跑完自己会报一声 ready，插件那边照样整屏画一遍。
+ *   - 插件推来的每条实时消息都带一个递增的序号（seq），页面记着自己处理到第几条。
+ *     每次重新连上都把这个数报给插件（消息类型 browserResync），插件把断线这段时间
+ *     漏掉的消息按序号补发过来：一条不缺就什么都不动（界面、输入框草稿都保持原样），
+ *     缺几条就补几条，页面上消息接着往下长；缺得太多补不上时插件才整屏重画一遍。
+ *     刚加载的那一次不用报：chat.js 跑完自己会报一声 ready，插件那边照样整屏画一遍。
  *   - 每 25 秒报一次活（channelPing），回到前台立刻再报一次。插件那头超过 90 秒收不到
  *     报活就把这条连接收掉，免得往一个没人读的连接里白攒消息。
  *
@@ -149,10 +151,22 @@
   }
 
   // ==================== 入站：推送流 ====================
+  // 消息序号：插件推来的每条实时消息都带一个递增的 seq（一次性消息如确认框也带，但不补发）。
+  // 页面记着三本账：
+  //   lastSeq        处理过的最大序号；重连时报给插件的就是它（插件从这里往后补）。
+  //   liveFromSeq    本条连接的“实时消息从这个序号起”，来自连接建立时插件发来的 hello。
+  //                  比它大的是这条连接的实时消息，不大于它的是补回来的漏掉的消息。
+  //   catchUpThrough 补发补到第几条了。hello 时从 lastSeq 起步，补一条进一条；
+  //                  插件在补完后（或整屏重画后）发 syncPoint 把它和 lastSeq 一起对齐。
+  //                  补发和重连重试可能重叠，靠它把补过的丢掉，消息才不会重复两遍。
+  var lastSeq = 0;
+  var liveFromSeq = 0;
+  var catchUpThrough = 0;
+
   var source = null;
   /** 服务明确说了再见（服务停了）：不再重连，只给用户一条带刷新按钮的提示。 */
   var stopped = false;
-  /** 连上过至少一次：之后每次重新连上都要请插件重画一遍。 */
+  /** 连上过至少一次：之后每次重新连上都要报一次账，请插件把漏掉的消息补发过来。 */
   var openedOnce = false;
   var retryIndex = 0;
   var retryTimer = null;
@@ -163,6 +177,34 @@
   function dispatch(data) {
     var type = data && data.type;
     if (type === "browserDialog") { handleDialog(data); return; }
+    if (type === "hello") {
+      // 连接建立：先于一切带序号的消息到达（插件那头保证顺序）。
+      liveFromSeq = typeof data.seq === "number" ? data.seq : 0;
+      catchUpThrough = lastSeq;
+      return;
+    }
+    if (type === "syncPoint") {
+      // 插件说“到这里为止你都有全的”（补发完 / 整屏重画完）：账本对齐到这个位置。
+      if (typeof data.seq === "number") {
+        if (data.seq > lastSeq) { lastSeq = data.seq; }
+        if (data.seq > catchUpThrough) { catchUpThrough = data.seq; }
+      }
+      return;
+    }
+    if (data && typeof data.seq === "number") {
+      if (data.seq > liveFromSeq) {
+        // 这条连接的实时消息：按序号来，只来一次，记下进度。
+        if (data.seq > lastSeq) { lastSeq = data.seq; }
+      } else if (data.seq <= catchUpThrough) {
+        return;   // 补发里跟已收到过的重叠（重连重试会这样）：丢掉
+      } else {
+        // 断线期间漏掉、这会儿补回来的：照常往下接。进度记进补发那本账（重连重试的
+        // 补发可能重叠，靠它去重）；lastSeq 也跟着走，它是“处理过的最大序号”，
+        // 下次重连报的就是它。
+        catchUpThrough = data.seq;
+        if (data.seq > lastSeq) { lastSeq = data.seq; }
+      }
+    }
     // 其余消息一律按 VSCode 网页视图的样子投给 window，chat.js 那边照原样处理
     window.dispatchEvent(new MessageEvent("message", { data: data }));
   }
@@ -221,9 +263,11 @@
       lastTickAt = Date.now();
       hideBanner();
       ping();
-      // 刚打开的那一次不用请插件重画：chat.js 加载完自己会报一声 ready，插件那边照样整屏画一遍。
-      // 之后每次重新连上都要请一次，不在的这段时间漏掉的内容才补得回来。
-      if (openedOnce) { enqueue({ type: "browserResync" }); }
+      // 刚打开的那一次不用报账：chat.js 加载完自己会报一声 ready，插件那边照样整屏画一遍。
+      // 之后每次重新连上都报一次“我处理到第几条”，插件把断线期间漏掉的消息补发过来。
+      // 这个数在报的瞬间定格：断线期间漏掉的序号比这条连接上后来的实时消息小，
+      // 不能被它们推高，否则补发范围就算错了。
+      if (openedOnce) { enqueue({ type: "browserResync", lastSeq: lastSeq }); }
       openedOnce = true;
     };
   }

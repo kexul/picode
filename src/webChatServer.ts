@@ -13,6 +13,7 @@ import {
     isSameOrigin,
     isWildcardHost,
     localHostnames,
+    PAGE_TRANSIENT_MESSAGE_TYPES,
     PageChannels,
     type PageChannel,
 } from "./webTransport";
@@ -43,11 +44,17 @@ const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
 const HEARTBEAT_MS = 25_000;
 /** 页面超过这么久没有任何动静（报活或发消息）就把它那条连接收掉。
  *  手机退到后台后定时器被冻住，报活自然停了：那条连接多半已经死了，占着只会白攒消息。
- *  页面回到前台会自己重连，重连后插件给它整屏重画一遍（见 browserChatController.resyncPage）。 */
+ *  页面回到前台会自己重连，报上自己处理到第几条消息，插件把漏掉的补发给它；
+ *  补不上的才整屏重画（见 browserChatController 的 browserResync）。 */
 const PAGE_STALE_MS = 90_000;
 /** 一条推送连接最多积压多少字节：页面不读了（屏黑了 / 网络卡住）就别再往里塞，
  *  掐掉让它重连重画。不掐的话这些字节全堆在插件进程里，回来时也不会被 GC 回收。 */
 const STREAM_BACKLOG_BYTES = 8 * 1024 * 1024;
+
+/** 重连补发用的消息暂存默认条数：超过先丢最老的（丢了就补不上，只能整屏重画）。 */
+const CATCHUP_LOG_ENTRIES = 2000;
+/** 重连补发用的消息暂存默认字节数（消息里可能带大图，光按条数不可靠）。 */
+const CATCHUP_LOG_BYTES = 8 * 1024 * 1024;
 
 /** 时间与上限的可调部分（测试里传小值，不用真的等一分钟）。 */
 export interface WebServerTimings {
@@ -57,6 +64,10 @@ export interface WebServerTimings {
     pageStaleMs?: number;
     /** 一条连接的积压上限（字节）。 */
     backlogBytes?: number;
+    /** 补发暂存的条数上限。 */
+    catchupLogEntries?: number;
+    /** 补发暂存的字节上限。 */
+    catchupLogBytes?: number;
 }
 
 /** 网页服务的设置（来自 piChat.webServer.* 配置项）。 */
@@ -87,6 +98,15 @@ export class PiChatWebServer {
     private readonly pages = new PageChannels();
     /** 页面标识 → 它那条连接的响应对象（心跳要往里写 tick）。 */
     private readonly streams = new Map<string, http.ServerResponse>();
+    /** 推给页面的消息序号：每广播一条加一。页面靠它报「我处理到第几条」。 */
+    private seqCounter = 0;
+    /** 最近广播的消息（重连补发用）。序号连续；一次性消息只占位不补发（msg 为 null）。 */
+    private readonly catchupLog: Array<{ seq: number; bytes: number; msg: Record<string, unknown> | null }> = [];
+    private catchupLogBytes = 0;
+    private readonly catchupLogEntries: number;
+    private readonly catchupLogBytesLimit: number;
+    /** 页面当前这条推送连接建立时的序号：比它大的都是这条连接的实时消息（见 openChannel 的 hello）。 */
+    private readonly openSeqByPage = new Map<string, number>();
     private heartbeat?: ReturnType<typeof setInterval>;
     private readonly heartbeatMs: number;
     private readonly pageStaleMs: number;
@@ -102,6 +122,8 @@ export class PiChatWebServer {
         this.heartbeatMs = timings?.heartbeatMs ?? HEARTBEAT_MS;
         this.pageStaleMs = timings?.pageStaleMs ?? PAGE_STALE_MS;
         this.backlogBytes = timings?.backlogBytes ?? STREAM_BACKLOG_BYTES;
+        this.catchupLogEntries = timings?.catchupLogEntries ?? CATCHUP_LOG_ENTRIES;
+        this.catchupLogBytesLimit = timings?.catchupLogBytes ?? CATCHUP_LOG_BYTES;
     }
 
     // ========================================================================
@@ -223,6 +245,9 @@ export class PiChatWebServer {
             channel.close("网页服务已停止。");
         }
         this.streams.clear();
+        this.openSeqByPage.clear();
+        this.catchupLog.length = 0;
+        this.catchupLogBytes = 0;
         if (this.controller) {
             this.controller.setHub(undefined);
             this.controller.dispose();
@@ -403,6 +428,12 @@ export class PiChatWebServer {
         // retry 是给浏览器看的：万一由浏览器自己重连，隔 1 秒就来一次（页面那头也会自己管重连）
         res.write("retry: 1000\n\n");
         res.write(": connected\n\n");
+        // 这条连接建立时的序号。比它大的消息都会写给这条连接（实时消息）；
+        // 页面手里更老的序号对应的是断线期间漏掉的，重连后由它报数、插件补发。
+        // hello 必须走在一切带序号的消息前面：页面靠它分清实时和补发（见 browserBridge.js）。
+        const openSeq = this.seqCounter;
+        this.openSeqByPage.set(id, openSeq);
+        this.writeChunk(channel, res, `event: msg\ndata: ${JSON.stringify({ type: "hello", seq: openSeq })}\n\n`);
         res.socket?.setNoDelay(true);
         if (replaced) { replaced.close(""); }   // 同一个页面的旧连接：安静断掉，页面那头不会弹提示
         const onClose = () => { this.dropChannel(channel); };
@@ -441,6 +472,7 @@ export class PiChatWebServer {
         if (this.pages.get(channel.id) !== channel) { return; }
         this.pages.remove(channel.id);
         if (this.streams.get(channel.id) !== undefined) { this.streams.delete(channel.id); }
+        this.openSeqByPage.delete(channel.id);
         this.controller?.onPageDisconnected(channel.id);
     }
 
@@ -464,9 +496,10 @@ export class PiChatWebServer {
             const stale = this.pages.get(id);
             if (!stale) { continue; }
             this.hooks.log(`页面 ${id} 已经 ${Math.round(this.pageStaleMs / 1000)} 秒没有任何动静（多半是退到后台了），` +
-                "先把它的推送连接收掉。页面回来会自己重连并重画。");
+                "先把它的推送连接收掉。页面回来会自己重连并补拉漏掉的消息。");
             this.pages.remove(id);
             this.streams.delete(id);
+            this.openSeqByPage.delete(id);
             stale.close("");
             this.controller?.onPageDisconnected(id);
         }
@@ -479,19 +512,86 @@ export class PiChatWebServer {
 
     // ---- 会话工作区往外发消息用的出口（PageChannelHub） ----
 
-    /** 发给所有连着的页面。一个页面都没连着返回 false（工作区会先把消息攒着）。 */
+    /**
+     * 发给所有连着的页面，并给消息记上一个递增的序号（哪怕当时一个页面都没连着）。
+     * 一个页面都没连着返回 false（工作区会先把消息攒着）；
+     * 但序号和补发暂存都照记：页面重连后就是靠这些序号补拉漏掉的消息的。
+     */
     public broadcast(msg: Record<string, unknown>): boolean {
+        const seq = ++this.seqCounter;
+        msg.seq = seq;
+        this.rememberForCatchup(seq, msg);
         let any = false;
         this.pages.forEach((channel) => { any = true; channel.send(msg); });
         return any;
     }
 
-    /** 只发给一个页面（给它整屏重画时用）。那个页面已经不在了返回 false。 */
+    /** 只发给一个页面（给它整屏重画 / 补发时用）。这类消息不带序号、不进补发暂存。 */
     public sendTo(pageId: string, msg: Record<string, unknown>): boolean {
         const channel = this.pages.get(pageId);
         if (!channel) { return false; }
         channel.send(msg);
         return true;
+    }
+
+    /** 有没有这个页面连着（整屏重画送得出去吗；送不出去就先记着，等它连上再画）。 */
+    public hasPage(pageId: string): boolean {
+        return this.pages.has(pageId);
+    }
+
+    /** 当前的消息序号（整屏重画完让页面对齐到这个位置，下次重连它报的数才是准的）。 */
+    public currentSeq(): number {
+        return this.seqCounter;
+    }
+
+    /**
+     * 页面重连后补发它错过的消息。
+     *
+     * @param lastSeq 页面报上来的「我处理到的最后一个序号」。
+                断线期间广播出去的消息序号都记在暂存里，把 (lastSeq, 这条连接建立时的序号]
+                这一段补给它，再发一条 syncPoint 告诉它「补齐到第几条了」。
+     * @returns true 表示已经办好（补了该补的，或本来就一条不缺）；
+     *          false 表示补不了（页面不在了，或缺得太多暂存里已经没有）——调用方退回整屏重画。
+     */
+    public catchUp(pageId: string, lastSeq: number): boolean {
+        if (!Number.isFinite(lastSeq) || lastSeq < 0) { return false; }
+        const channel = this.pages.get(pageId);
+        const openSeq = this.openSeqByPage.get(pageId);
+        if (!channel || openSeq === undefined) { return false; }
+        if (lastSeq >= openSeq) { return true; }   // 一条不缺，什么都不用补
+        const oldest = this.catchupLog.length > 0 ? this.catchupLog[0].seq : undefined;
+        // 暂存里的序号是连续的；最老的那条比页面报的还新，说明中间缺的已经丢了，补不全
+        if (oldest === undefined || oldest > lastSeq + 1) { return false; }
+        for (const entry of this.catchupLog) {
+            if (entry.seq <= lastSeq) { continue; }
+            if (entry.seq > openSeq) { break; }
+            if (entry.msg) { channel.send(entry.msg); }
+        }
+        channel.send({ type: "syncPoint", seq: openSeq });
+        return true;
+    }
+
+    /**
+     * 把刚广播的一条消息记进补发暂存。
+     * 「一次性消息」（确认框、浮层这类）只占个序号位不存内容：它们不补发（见 webTransport 的名单）。
+     * 超过条数或字节上限就从最老的开始丢；丢了的那段补不上，页面只能整屏重画。
+     */
+    private rememberForCatchup(seq: number, msg: Record<string, unknown>): void {
+        const transient = typeof msg.type === "string" && PAGE_TRANSIENT_MESSAGE_TYPES.has(msg.type);
+        let bytes = 0;
+        if (!transient) {
+            try { bytes = Buffer.byteLength(JSON.stringify(msg), "utf8"); } catch { bytes = 0; }
+        }
+        this.catchupLog.push({ seq, bytes, msg: transient ? null : msg });
+        this.catchupLogBytes += bytes;
+        while (
+            this.catchupLog.length > this.catchupLogEntries
+            || (this.catchupLogBytes > this.catchupLogBytesLimit && this.catchupLog.length > 1)
+        ) {
+            const dropped = this.catchupLog.shift();
+            if (!dropped) { break; }
+            this.catchupLogBytes -= dropped.bytes;
+        }
     }
 
     /** 人最近在里面动过的那个页面（确认框、选项浮层发给它）。 */

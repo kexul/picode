@@ -1185,7 +1185,9 @@ export class SessionRuntime {
         const emit: MessageSink = sink
             ? ((msg) => sink({ ...msg, tabId: this.id }))
             : ((msg) => this.host.postToTab(this.id, msg));
-        emit({ type: "clear" });
+        // keepDraft：重画不清输入框里没发出去的文字和附件。重画只是把对话内容重新递一遪，
+        // 人打了一半的字不该被抹掉（换会话那种 clear 不带这个标记，草稿仍会重置）。
+        emit({ type: "clear", keepDraft: true });
         emit({ type: "piReady", ready: this.piReady });
         if (!this.client || !this.client.isRunning()) {
             emit({
