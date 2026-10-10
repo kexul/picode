@@ -1451,6 +1451,12 @@
 
   /** 合并后的修改文件列表渲染（tab 级）。 */
   function renderMergedChangedFiles(entries) {
+    // 网页端不显示「本次修改」条：改了哪些文件看消息里的 edit/write 卡片就够了。
+    if (IS_BROWSER) {
+      changedFilesEl.innerHTML = "";
+      changedFilesEl.classList.remove("expanded", "collapsed");
+      return;
+    }
     changedFilesEl.innerHTML = "";
     if (!entries.length) {
       changedFilesEl.classList.remove("expanded", "collapsed");
