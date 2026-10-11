@@ -9,12 +9,12 @@
  *
  * 本类收敛“与平台无关”的逻辑：
  *   - Tab / panel 管理（newTab / setActive / switchTabByDirection / closeTab /
- *     closePanel / addPanel / forkPanel / movePanel / focusPanel）
+ *     closePanel / movePanel / focusPanel）
  *   - 拾取器浮层（showPicker / resolvePicker）
  *   - 模型选择器（pickModelInteractive）+ 模型内思考强度
  *   - 路径工具（relativeTo / resolvePath / resolveExecutable / checkPiAvailable）
  *   - 显示选项（sendViewOptions / buildViewOptionItems / showOptionsPicker + 标签常量）
- *   - 会话加载 / 分叉（loadHistorySession / forkAtEntryInNewTab / maybeAutoLoadLastSession / showHistoryPicker）
+ *   - 会话加载 / 历史（loadHistorySession / maybeAutoLoadLastSession / showHistoryPicker）
  *   - webview 消息分发（processMessage 的公共部分）
  *
  * 子类只需实现“平台钩子”：消息如何送到 webview、配置/视图选项存储、
@@ -24,16 +24,15 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import { SessionRuntime, RuntimeHost, FileChange, ModelInfo, ModelChoice, StatusInfo, TurnEndInfo, } from "./sessionRuntime";
+import { SessionRuntime, RuntimeHost, ModelInfo, ModelChoice, StatusInfo, TurnEndInfo, } from "./sessionRuntime";
 import { PiConfig } from "./sessionRuntime";
 import { PiClient } from "./piClient";
 import {
-    buildSessionTree,
-    flattenTreeByFamilies,
-    readSessionPreview,
-    SESSION_FAMILY_PAGE_SIZE,
-    SessionTreeNode,
-    SessionItem,
+    listSessionFiles,
+    scanSessionInfo,
+    type HistoryPickerItem,
+    type SessionFileEntry,
+    type SessionListItem,
 } from "./sessionStore";
 import { randomNameParts, composeName } from "./names";
 import { DEFAULT_TURN_TITLE_WAIT_MS } from "./runtimeTypes";
@@ -157,25 +156,6 @@ export interface ChatReferenceItem {
     tabId: string;
 }
 
-/** 活体移交载荷：一批 panel 运行时（含 pi 进程）+ 它们在源工作区的相对布局。 */
-export interface TransferPayload {
-    runtimes: SessionRuntime[];
-    root: LayoutNode;
-    focusPanelId?: string;
-}
-
-/** 按 old → new 映射重写布局树里的 panelId（迁入时归入新工作区命名空间）。 */
-function remapLayout(node: LayoutNode, map: Map<string, string>): LayoutNode {
-    if (node.kind === "panel") {
-        return { kind: "panel", panelId: map.get(node.panelId) ?? node.panelId };
-    }
-    return {
-        kind: "split",
-        orientation: node.orientation,
-        children: node.children.map((c) => remapLayout(c, map)),
-    };
-}
-
 export abstract class ChatControllerBase implements RuntimeHost {
     protected constructor(public readonly workspaceId: string) {}
     // ---- panel（会话运行时）----
@@ -195,12 +175,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
     // ---- 拾取器状态 ----
     protected pickerResolve: ((v: any | undefined) => void) | null = null;
     protected pickerTimer: ReturnType<typeof setTimeout> | null = null;
-
-    // ---- 历史拾取器分页状态 ----
-    /** 全量会话家族树（buildSessionTree 一次构建，加载更多时复用）。 */
-    protected historyTree: SessionTreeNode[] = [];
-    /** 已加载到第几个家族（加载更多时累加）。 */
-    protected historyFamilyOffset = 0;
+    /** 当前浮层开在哪个界面（子类挑的目标标识）；空串 = 没开浮层。 */
+    private pickerTarget = "";
+    /** 当前浮层的类型：超时 / 被新浮层顶掉时，回给界面的 pickerCancel 要带上它。 */
+    private pickerKind = "";
 
     // ---- 备用 pi 进程池（热备，免冷启动）----
     /** 已就绪的备用 pi 进程（不绑定任何 panel）。 */
@@ -257,7 +235,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     public abstract inputDialog(title: string, placeholder: string, prefill: string): Promise<string | undefined>;
     public abstract persistModel(provider: string, modelId: string): void;
     public abstract openFileLocation(p: string, line: number, anchor?: string): void;
-    public abstract openDiff(change: FileChange): void;
     public abstract confirmRevert(label: string): Promise<boolean>;
 
     // ---- 显示选项：存储读写（子类）----
@@ -266,10 +243,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract getNewSessionKey(): string;
     protected abstract getTabSwitchKey(): string;
     protected abstract getFocusInputKey(): string;
-    /** 转发注入前缀模板（{model}/{模型名称} 替换为模型名；空串为裸转发）。 */
-    protected abstract getRelayPrefix(): string;
-    /** 工具调用显示："compact"（简洁标签）| "full"（TUI 风格卡片）。 */
-    protected abstract getToolDisplay(): string;
     /** 字号（px 字符串，如 "13"；空串表示跟随 VSCode 设置）。 */
     protected abstract getFontSize(): string;
     /** 变更显示选项的存储（仅改存储，UI 推送由基类统一完成）。value 为按钮组点选的明确值。 */
@@ -306,11 +279,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected async beforeHistoryPicker(): Promise<void> { /* 默认无操作 */ }
     /** 历史会话列表为空时的提示（vscode 覆盖为信息条）。 */
     protected onNoSessions(): void { /* 默认无操作 */ }
-    /** 活体移交菜单的目标工作区名（"编辑器" / "侧边栏"）；undefined 则 webview 不显示该菜单项。 */
-    protected transferDestination(): string | undefined { return undefined; }
-    /** webview 首次就绪且一个 tab 也没有时，是否自动建空 tab；
-     *  子类在“即将接管迁入会话”时可返回 false，免得白起一个会被丢掉的 pi 进程。 */
-    protected shouldCreateInitialTab(): boolean { return true; }
 
     // ========================================================================
     //  路径工具（RuntimeHost）
@@ -378,11 +346,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
             newSessionKey: this.getNewSessionKey(),
             tabSwitchKey: this.getTabSwitchKey(),
             focusInputKey: this.getFocusInputKey(),
-            toolDisplay: this.getToolDisplay(),
             fontSize: this.getFontSize(),
             notifyBeep: this.notifyBeepEnabled(),
+            ...this.viewOptionsExtra(),
         });
     }
+
+    /** 子类往 viewOptions 消息里附带的额外字段（缺省无）。 */
+    protected viewOptionsExtra(): Record<string, unknown> | undefined { return undefined; }
+    /** 子类往显示选项浮层里追加的条目（缺省无）。 */
+    protected viewOptionItemsExtra(): Array<{ label: string; desc: string; check: boolean | null; action: string; value?: string; options?: Array<{ value: string; label: string }> }> { return []; }
 
     /** 构建显示选项浮层条目（toggle / 按钮组模式）。 */
     protected buildViewOptionItems(): Array<{
@@ -426,26 +399,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 value: this.getFocusInputKey(), options: ChatControllerBase.keyOptions(ChatControllerBase.FOCUS_INPUT_KEY_LABELS),
             },
             {
-                action: "relayPrefix",
-                kind: "text",
-                label: "转发注入前缀",
-                desc: "🔁 转发回复到别的 panel 时自动加的前缀；{panel_name} 替换为源 panel 名，{模型名称} / {model} 替换为源侧模型名。留空则裸转发",
-                check: null,
-                value: this.getRelayPrefix(),
-            },
-            {
-                action: "toolDisplay",
-                label: "工具调用显示",
-                desc: "简洁：仅工具名标签 · 摘要：标签含调用摘要与耗时 · 完整：TUI 风格卡片（调用行、实时输出、结果、耗时）",
-                check: null,
-                value: this.getToolDisplay(),
-                options: [
-                    { value: "compact", label: "简洁" },
-                    { value: "medium", label: "摘要" },
-                    { value: "full", label: "完整" },
-                ],
-            },
-            {
                 action: "fontSize",
                 label: "字号",
                 desc: "拖动调整对话内容字号（默认跟随 VSCode 设置）",
@@ -483,7 +436,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         // 推送显示选项条目（数据）：由前端渲染进统一设置面板的「显示选项」tab。
         this.postToWebview({
             type: "viewOptionItems",
-            items: this.buildViewOptionItems(),
+            items: [...this.buildViewOptionItems(), ...this.viewOptionItemsExtra()],
         });
     }
 
@@ -671,21 +624,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return c;
     }
 
-    /** tab 内新增一个空 panel：插入到 anchor（缺省焦点 panel）右侧。 */
-    public addPanel(anchorPanelId?: string): SessionRuntime | undefined {
-        const anchorId = anchorPanelId || this.getActive()?.id;
-        const c = anchorId ? this.containerOfPanel(anchorId) : undefined;
-        if (!anchorId || !c || !layoutLeaves(c.root).includes(anchorId)) { return undefined; }
-        const inherited = this.panels.get(anchorId)?.currentModel();
-        const rt = this.createPanelRuntime(inherited);
-        c.root = layoutInsertAdjacent(
-            c.root, anchorId, { kind: "panel", panelId: rt.id }, "h", false
-        );
-        c.focusPanelId = rt.id;
-        this.broadcastTabList(true);
-        return rt;
-    }
-
     // ---- 切换 / 焦点 ----
     public setActive(id: string): void {
         if (!this.tabContainers.has(id) || this.activeTabId === id) { return; }
@@ -767,67 +705,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     // ---- Fork（原生克隆会话到新 panel）----
-    /**
-     * Fork 某 panel：克隆其会话到同 tab 内新 panel（右侧并排）。
-     * 源会话尚未落盘时短轮询等待；拿不到则放弃（提示走源 panel）。
-     */
-    public async forkPanel(panelId: string): Promise<void> {
-        const src = this.panels.get(panelId);
-        const c = this.containerOfPanel(panelId);
-        if (!src || !c) { return; }
-        const cfg = this.getConfig();
-        if (!this.checkPiAvailable(cfg.piPath, panelId)) { return; }
-
-        const newRt = this.createPanelRuntime(src.currentModel());
-        newRt.loading = true;
-        c.root = layoutInsertAdjacent(
-            c.root, panelId, { kind: "panel", panelId: newRt.id }, "h", false
-        );
-        c.focusPanelId = newRt.id;
-        this.broadcastTabList(true);
-
-        // 取源会话状态（sessionFile + 消息数）：0 条消息的全新会话无可复制
-        // （pi 请求失败时 state 为 undefined，messageCount 保持 -1：区分“没落盘”与“pi 不可用”）
-        const state = await src.request<RpcSessionState>({ type: "get_state" });
-        // 异步窗口防护：等待期间新 panel / 源 panel 被关掉或 pi 异常 → 放弃克隆
-        if (!this.panels.has(newRt.id) || !this.panels.has(panelId)) {
-            if (this.panels.has(newRt.id)) {
-                this.panels.get(newRt.id)!.loading = false;
-                this.broadcastTabList(true);
-            }
-            return;
-        }
-        let sourcePath = src.currentSessionPath || state?.data?.sessionFile;
-        if (sourcePath && !src.currentSessionPath) { src.currentSessionPath = sourcePath; }
-        const messageCount = typeof state?.data?.messageCount === "number" ? state.data.messageCount : -1;
-        let cloned = false;
-        if (!state && !sourcePath) {
-            // 源 pi 无响应（不可用）：不误报“未落盘”
-            newRt.loading = false;
-            this.postToTab(newRt.id, { type: "system", text: "源会话状态不可用（pi 无响应），无法克隆。" });
-        } else if (sourcePath && messageCount !== 0) {
-            const abs = this.resolvePath(sourcePath);
-            const deadline = Date.now() + 8000;
-            while (!fs.existsSync(abs) && Date.now() < deadline) {
-                await new Promise((r) => setTimeout(r, 250));
-            }
-            if (fs.existsSync(abs)) {
-                await newRt.loadSessionAndClone(abs);
-                cloned = true;
-            }
-        }
-        if (!cloned) {
-            newRt.loading = false;
-            if (messageCount > 0) {
-                this.postToTab(newRt.id, {
-                    type: "system",
-                    text: "源会话尚未保存到磁盘，无法克隆上下文（可先发送任意消息让会话落盘后再 fork）。",
-                });
-            }
-        }
-        this.broadcastTabList(true);
-    }
-
     // ========================================================================
     //  派子会话（taba）：一个会话把活派给另一个会话，子会话开在新 tab 里
     // ========================================================================
@@ -1332,110 +1209,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.panels.delete(panelId);
     }
 
-    /** 某 tab（容器）内的全部 panel id（布局深度优先序）。 */
-    public panelsOfContainer(containerId: string): string[] {
-        const c = this.tabContainers.get(containerId);
-        return c ? layoutLeaves(c.root) : [];
-    }
-
-    /** 保证至少有一个 tab（移交失败等路径的兜底）。 */
+    /** 保证至少有一个 tab（全部关掉后自动补空的路径用）。 */
     public ensureSomeTab(): void {
         if (this.tabContainers.size === 0) { this.newTab(); }
-    }
-
-    /** 宿主是否已销毁（跨工作区移交编排用于放弃已关闭的目标）。 */
-    public isDisposed(): boolean { return false; }
-
-    /** 向本工作区 webview 推送消息（跨工作区编排用的公开入口）。 */
-    public postToWebviewPublic(msg: Record<string, unknown>): void { this.postToWebview(msg); }
-
-    // ========================================================================
-    //  活体移交（跨工作区：侧边栏 ↔ 编辑器面板）
-    // ========================================================================
-    /**
-     * 移交源：把一批 panel 连同布局子树摘出本工作区——**不杀 pi 进程、不释放名字**，
-     * 运行时状态由 {@link adoptPanels} 在新宿主里接管。
-     * 只支持两种粒度：单个 panel，或某个 tab 的全部 panel（布局树整棵带走）。
-     * 返回 undefined 表示请求已过时（panel 已关闭 / 粒度不支持），调用方放弃即可。
-     */
-    public detachPanelsForTransfer(panelIds: string[]): TransferPayload | undefined {
-        if (panelIds.length === 0) { return undefined; }
-        const runtimes: SessionRuntime[] = [];
-        for (const id of panelIds) {
-            const rt = this.panels.get(id);
-            // 有一个已失效就整体放弃：不留“搬了一半”的状态
-            if (!rt) { return undefined; }
-            runtimes.push(rt);
-        }
-        const container = this.containerOfPanel(panelIds[0]);
-        if (!container) { return undefined; }
-        const leaves = layoutLeaves(container.root);
-        const wholeTab = panelIds.length === leaves.length;
-        if (!wholeTab && panelIds.length > 1) { return undefined; }
-
-        const root: LayoutNode = wholeTab ? container.root : { kind: "panel", panelId: panelIds[0] };
-        const focusPanelId = wholeTab ? container.focusPanelId : panelIds[0];
-
-        if (wholeTab) {
-            this.tabContainers.delete(container.id);
-            this.postToWebview({ type: "tabClosed", id: container.id });
-            if (this.activeTabId === container.id) {
-                this.activeTabId = this.tabContainers.size > 0 ? this.tabContainers.keys().next().value : undefined;
-                if (this.activeTabId) { this.postToWebview({ type: "tabActivated", id: this.activeTabId }); }
-            }
-        } else {
-            this.detachPanelFromContainer(container, panelIds[0]);
-        }
-        for (const id of panelIds) { this.notePanelGoneForTaba(id, { quiet: true }); this.panels.delete(id); }
-        this.broadcastTabList(true);
-        // 源工作区被搬空：补一个空 tab，界面保持可用（与 closeTab 一致）
-        if (this.tabContainers.size === 0) { this.newTab(); }
-        return { runtimes, root, focusPanelId };
-    }
-
-    /**
-     * 移交目标：接管一批 panel 运行时，在本工作区新建（或复用空的活跃）tab 承载，
-     * 换绑宿主后把已有对话重放进本 webview。调用前必须确保本 webview 已就绪，
-     * 否则重放消息会被静默丢弃。
-     */
-    public async adoptPanels(payload: TransferPayload): Promise<void> {
-        const { runtimes, root } = payload;
-        if (runtimes.length === 0) { return; }
-        // panel id 归入本工作区命名空间（源 id 前缀是别的工作区，留着易混淆）
-        const idMap = new Map<string, string>();
-        for (const rt of runtimes) {
-            idMap.set(rt.id, `${this.workspaceId}:panel-${++this.panelSeq}`);
-        }
-        for (const rt of runtimes) {
-            const nextId = idMap.get(rt.id)!;
-            rt.rebindHost(this);
-            rt.id = nextId;
-            this.panels.set(nextId, rt);
-        }
-        const newRoot = remapLayout(root, idMap);
-        const leaves = layoutLeaves(newRoot);
-        const focus = idMap.get(payload.focusPanelId ?? "") ?? leaves[0];
-
-        // 空的活跃 tab 直接承载迁入会话：新建工作区时不会留下多余的空 tab / pi 进程
-        const reusable = this.activeTabId ? this.tabContainers.get(this.activeTabId) : undefined;
-        let c: TabContainer;
-        if (reusable && this.isActiveTabEmpty()) {
-            for (const pid of layoutLeaves(reusable.root)) { this.disposePanelRuntime(pid); }
-            reusable.root = newRoot;
-            reusable.focusPanelId = focus;
-            c = reusable;
-        } else {
-            c = { id: `${this.workspaceId}:tab-${++this.tabSeq}`, root: newRoot, focusPanelId: focus };
-            this.tabContainers.set(c.id, c);
-        }
-        this.activeTabId = c.id;
-        this.postToWebview({ type: "tabActivated", id: c.id });
-        // 先推结构（webview 据此建好各 pane），再重放消息
-        this.broadcastTabList(true);
-        await Promise.all(runtimes.map((rt) => rt.replayHistory()));
-        this.broadcastTabList(true);
-        // 迁入会话的 knownFiles 也要能在新宿主变成可点击符号
-        this.onKnownFilesChangedByHost();
     }
 
     /** 合并所有 panel 中 pi 工具调用触及过的文件绝对路径（供宿主收集符号等）。 */
@@ -1766,88 +1542,75 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     // ========================================================================
-    //  转发（把某 panel 的回复注入任意指定 panel）
-    // ========================================================================
-
-    /** 转发注入前缀包装：{panel_name} / {panel} 替换为源 panel 名；
-     *  {model} / {模型名称} 替换为源 panel 的模型名；空模板则裸转发。 */
-    protected wrapRelayText(source: SessionRuntime, text: string): string {
-        const tpl = this.getRelayPrefix();
-        if (!tpl || !tpl.trim()) { return text; }
-        const m = source.currentModel();
-        const model = m?.modelId || "对端会话";
-        const name = source.title || "对端会话";
-        const prefix = tpl
-            .replace(/\{panel_name\}/g, name)
-            .replace(/\{panel\}/g, name)
-            .replace(/\{model\}/g, model)
-            .replace(/\{模型名称\}/g, model);
-        return prefix + text;
-    }
-
-    /** 转发：源 panel 的指定（或最新）回复，选择目标（tab 广播 / 单个 panel）注入。 */
-    public async relayToPanel(fromPanelId: string, text?: string): Promise<void> {
-        const src = this.panels.get(fromPanelId);
-        if (!src) { return; }
-        let payload = typeof text === "string" ? text.trim() : "";
-        if (!payload) {
-            payload = await src.getLastAssistantText();
-        }
-        if (!payload) { return; }
-        // 候选：树形 —— tab 分组头（广播）+ panel 子项（点对点）；源 panel 不出现，
-        // 只剩源一个 panel 的 tab 整组隐藏。
-        const items: Array<Record<string, unknown>> = [];
-        for (const c of this.tabContainers.values()) {
-            const siblings = layoutLeaves(c.root).filter((pid) => pid !== fromPanelId);
-            if (siblings.length === 0) { continue; }
-            const tabLabel = this.containerDisplayName(c);
-            items.push({ kind: "tab", id: c.id, label: tabLabel, count: siblings.length });
-            for (const pid of siblings) {
-                const rt = this.panels.get(pid);
-                if (!rt) { continue; }
-                items.push({ kind: "panel", id: pid, label: rt.title || pid, tabName: tabLabel });
-            }
-        }
-        if (items.length === 0) {
-            this.postToTab(fromPanelId, { type: "system", text: "没有其他 panel 可转发。" });
-            return;
-        }
-        const choice = await this.showPicker("relay", items, null);
-        if (!choice) { return; }
-        const wrapped = this.wrapRelayText(src, payload);
-        if (typeof choice.tabId === "string") {
-            // 广播：发给该 tab 内除源以外的所有 panel
-            const c = this.tabContainers.get(choice.tabId);
-            if (!c) { return; }
-            for (const pid of layoutLeaves(c.root)) {
-                if (pid === fromPanelId) { continue; }
-                this.panels.get(pid)?.handleSend(wrapped);
-            }
-            return;
-        }
-        if (typeof choice.id === "string") {
-            this.panels.get(choice.id)?.handleSend(wrapped);
-        }
-    }
-
-    // ========================================================================
     //  拾取器 + 模型选择（RuntimeHost.pickModelInteractive）
     // ========================================================================
-    /** 向 webview 推送拾取器浮层并等待用户选择（取消返回 undefined）。 */
+    /**
+     * 浮层该发给哪个界面。
+     *
+     * 多界面宿主（侧边栏 + 网页页面）在这里挑“人最近在动的那一个”；单界面宿主
+     * （编辑器面板 / 测试）不需要挑，返回空串，{@link sendOverlayTo} 的默认实现只有一个出口。
+     */
+    protected pickOverlayTarget(): string { return ""; }
+
+    /**
+     * 把浮层消息发给挑好的那个界面。
+     *
+     * 默认走 postToWebview——单界面宿主只有这一个出口。多界面宿主覆写成“只发给那一个”，
+     * 让浮层只出现在人正在看的那块屏上，别的屏不受影响。
+     * @returns 发没发出去；发不出去时调用方按取消处理（别让等的人干等）。
+     */
+    protected sendOverlayTo(_target: string, msg: Record<string, unknown>): boolean {
+        this.postToWebview(msg);
+        return true;
+    }
+
+    /** 向界面推送拾取器浮层并等待用户选择（取消返回 undefined）。 */
     protected showPicker(kind: string, items: any[], current?: string | null, echo?: Record<string, unknown>): Promise<any | undefined> {
-        this.postToWebview({ type: "picker", kind, items, current: current ?? null, ...(echo || {}) });
-        if (this.pickerTimer) { clearTimeout(this.pickerTimer); }
+        return this.openPicker(kind, { items, current: current ?? null, ...(echo || {}) });
+    }
+
+    /**
+     * 推送一个浮层并等回复。
+     * @param target 指定发给哪个界面；不填就现挑“人最近在动的那一个”。
+     */
+    protected openPicker(kind: string, body: Record<string, unknown>, target?: string): Promise<any | undefined> {
+        // 上一个还没关的浮层：先让它的界面收起来（同一个界面连开两个、或换界面都走这里）
+        this.dropPicker(true);
+        const to = target ?? this.pickOverlayTarget();
+        if (!to || !this.sendOverlayTo(to, { type: "picker", kind, ...body })) {
+            return Promise.resolve(undefined);
+        }
+        this.pickerTarget = to;
+        this.pickerKind = kind;
         return new Promise<any | undefined>((resolve) => {
             this.pickerResolve = resolve;
-            this.pickerTimer = setTimeout(() => {
-                if (this.pickerResolve) {
-                    this.pickerResolve = null;
-                    this.pickerTimer = null;
-                    this.postToWebview({ type: "pickerCancel", kind });
-                    resolve(undefined);
-                }
-            }, 120000);
+            this.pickerTimer = setTimeout(() => { this.dropPicker(true); }, 120000);
         });
+    }
+
+    /** 收掉正在等的浮层：按需让它的界面收起来，再把等的人按取消放行。 */
+    private dropPicker(notify: boolean): void {
+        const resolve = this.pickerResolve;
+        const timer = this.pickerTimer;
+        const target = this.pickerTarget;
+        const kind = this.pickerKind;
+        this.pickerResolve = null;
+        this.pickerTimer = null;
+        this.pickerTarget = "";
+        this.pickerKind = "";
+        if (timer) { clearTimeout(timer); }
+        if (!resolve) { return; }
+        if (notify && kind) { this.sendOverlayTo(target, { type: "pickerCancel", kind }); }
+        resolve(undefined);
+    }
+
+    /**
+     * 浮层挂着的那个界面没了（页面关掉 / 手机退到后台被收掉）：按取消收掉。
+     * 那边已经不在了，不用发消息；等的人也不用干等 120 秒。
+     */
+    protected dropPickerForClient(target: string): void {
+        if (!target || target !== this.pickerTarget || !this.pickerResolve) { return; }
+        this.dropPicker(false);
     }
 
     protected resolvePicker(payload: any | undefined): void {
@@ -1855,6 +1618,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const r = this.pickerResolve;
         this.pickerResolve = null;
         if (this.pickerTimer) { clearTimeout(this.pickerTimer); this.pickerTimer = null; }
+        // 界面那头自己已经把浮层收了（取消 / 选中都会先关），这里只清状态、把结果交给等的人。
+        this.pickerTarget = "";
+        this.pickerKind = "";
         r(payload);
     }
 
@@ -1943,209 +1709,68 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return norm(a) === norm(b);
     }
 
-    /** 查找已打开该会话文件的 panel。 */
-    protected findPanelBySessionFile(file: string): SessionRuntime | undefined {
-        for (const rt of this.panels.values()) {
-            if (this.samePath(rt.currentSessionPath, file)) {
-                return rt;
-            }
-        }
-        return undefined;
-    }
+    // ========================================================================
+    //  历史会话列表（pi /resume 风格：标题 + 条数 + 相对时间，每批 10 条）
+    // ========================================================================
+    /** 本次列表的文件清单（按修改时间倒序）；每次打开列表时重建。 */
+    private historyFiles: SessionFileEntry[] = [];
+    /** 已展示到第几个文件（「加载更多」接着往后扫）。 */
+    private historyOffset = 0;
+    /** 每批展示/扫描的文件数。 */
+    private static readonly HISTORY_BATCH_SIZE = 10;
 
     /**
-     * 画布双击消息：复用已有 panel；否则优先复用当前空 tab，再新建 tab 加载会话，并尝试滚到对应 entry。
+     * 弹出历史会话列表并加载选中项。
+     * @param fromPage 来源是网页页面：不用把侧边栏拽出来。
+     * @param target 列表弹给哪个界面（界面标识）；不填就现挑“人最近在动的那一个”。
      */
-    public async openSessionAtEntry(file: string, entryId: string): Promise<void> {
-        // 与普通历史加载相同：先让聊天 Webview 就绪，随后才开始加载，既不会
-        // 丢失首批渲染消息，也能立刻展示 loading 状态。
-        await this.onFocusChat();
-        const found = this.findPanelBySessionFile(file);
-        let rt: SessionRuntime;
-        if (found) {
-            rt = found;
-            const c = this.containerOfPanel(rt.id);
-            if (c) { this.setActive(c.id); this.focusPanel(rt.id); }
-        } else {
-            // 空 tab 可直接承载历史会话；已有对话（或正在加载）的 tab 一律新建，避免覆盖内容。
-            const reusable = this.isActiveTabEmpty() ? this.getActive() : undefined;
-            if (reusable) {
-                rt = reusable;
-            } else {
-                const c = this.newTab();
-                rt = this.panels.get(layoutLeaves(c.root)[0])!;
-            }
-            await rt.loadSession(file);
-        }
-        // 稍等 DOM 渲染后再滚（load 会 clear + 重绘）
-        this.postToTab(rt.id, { type: "scrollToEntry", entryId });
-        setTimeout(() => {
-            this.postToTab(rt.id, { type: "scrollToEntry", entryId });
-        }, 200);
+    public async showHistoryPicker(fromPage = false, target?: string): Promise<void> {
+        if (!fromPage) { await this.beforeHistoryPicker(); }
+        this.historyFiles = await listSessionFiles(this.getCwd());
+        this.historyOffset = 0;
+        if (this.historyFiles.length === 0) { this.onNoSessions(); return; }
+        const items = await this.scanHistoryBatch();
+        if (items.length === 0) { this.onNoSessions(); return; }
+        const choice = await this.promptHistoryPicker(items, this.historyOffset < this.historyFiles.length, target);
+        if (!choice || typeof choice.file !== "string") { return; }
+        await this.loadHistorySession(choice.file);
     }
 
-    /**
-     * 在新 tab 中打开从某条 user 消息处分叉出的新分支，源 panel 保持不动。
-     * 新建一个独立 pi 进程的 panel，先加载源会话文件，再在该 entry 处 fork ——
-     * fork 会创建新的分支会话文件并切换到它，源 panel 完全不受影响。
-     * 源会话尚未落盘时回退到原地分叉。
-     */
-    public async forkAtEntryInNewTab(source: SessionRuntime, entryId: string): Promise<void> {
-        // 取源会话文件路径。currentSessionPath 只在加载历史 / 分叉成功后赋值，
-        // 全新 panel 普通对话后从未同步 —— 直接向源 pi 查询真实 sessionFile，
-        // 避免误判“未落盘”而在当前 panel 原地分叉。
-        let sourcePath = source.currentSessionPath;
-        if (!sourcePath) {
-            const state = await source.request<RpcSessionState>({ type: "get_state" });
-            sourcePath = state?.data?.sessionFile;
-            if (sourcePath) {
-                source.currentSessionPath = sourcePath;
-            }
-        }
-        // pi 在首条 assistant 回复到达前不把会话写入磁盘：文件可能已创建路径
-        // 但尚未落盘，短轮询等它出现；仍不存在才回退原地分叉（会中止源面板生成）。
-        if (sourcePath) {
-            const abs = this.resolvePath(sourcePath);
-            const deadline = Date.now() + 8000;
-            while (!fs.existsSync(abs) && Date.now() < deadline) {
-                await new Promise((r) => setTimeout(r, 250));
-            }
-            if (fs.existsSync(abs)) {
-                const c = this.newTab();
-                const rt = this.panels.get(layoutLeaves(c.root)[0]);
-                if (!rt) { return; }
-                // 不等固定 sleep：loadSessionAndFork 内部会等待新 panel 的 pi 进程就绪
-                await rt.loadSessionAndFork(abs, entryId);
-                await this.onFocusChat();
-                return;
-            }
-        }
-        await source.forkFromEntry(entryId);
+    /** 「加载更多」：扫描下一批文件，把新条目追加进开着的列表（只发给开列表的那个界面）。 */
+    public async loadMoreHistory(): Promise<void> {
+        const batch = this.historyFiles.slice(this.historyOffset, this.historyOffset + ChatControllerBase.HISTORY_BATCH_SIZE);
+        if (batch.length === 0) { this.sendOverlayTo(this.pickerTarget, { type: "historyPageEnd" }); return; }
+        const items = await this.scanHistoryBatch();
+        this.sendOverlayTo(this.pickerTarget, { type: "historyPageAppend", items, hasMore: this.historyOffset < this.historyFiles.length });
     }
 
+    /** 扫描下一批文件，返回展示条目（带“是不是当前焦点会话”）。 */
+    private async scanHistoryBatch(): Promise<HistoryPickerItem[]> {
+        const batch = this.historyFiles.slice(this.historyOffset, this.historyOffset + ChatControllerBase.HISTORY_BATCH_SIZE);
+        this.historyOffset += batch.length;
+        const current = this.getActive()?.currentSessionPath;
+        const scanned = await Promise.all(batch.map((f) => scanSessionInfo(f.file)));
+        return scanned
+            .filter((s): s is SessionListItem => s !== null)
+            .map((s) => ({ ...s, current: this.samePath(s.file, current) }));
+    }
+
+    /** 推送历史列表浮层并等待选择（取消返回 undefined）。@param target 指定弹给哪个界面。 */
+    protected promptHistoryPicker(items: HistoryPickerItem[], hasMore: boolean, target?: string): Promise<any | undefined> {
+        return this.openPicker("history", { items, current: null, hasMore, searchable: false }, target);
+    }
+
+    /** 启动时自动打开最近会话（显示选项可关）：只取修改时间最新的一个会话文件。 */
     protected async maybeAutoLoadLastSession(): Promise<void> {
         if (this.autoLoadDone) { return; }
         const cwd = this.getCwd();
         if (!cwd) { return; }
         this.autoLoadDone = true;
         if (!this.getAutoLoadLast()) { return; }
-        // 仅需最近一个根会话：buildSessionTree 后取首个根。
-        const tree = await buildSessionTree(cwd);
-        if (tree.length === 0) { return; }
+        const files = await listSessionFiles(cwd);
+        if (files.length === 0) { return; }
         const rt = this.getActive();
-        if (rt) { await rt.loadSession(tree[0].header.file); }
-    }
-
-    /** 弹出历史会话拾取器并加载选中项。 */
-    public async showHistoryPicker(): Promise<void> {
-        // 先确保视图可见（VSCode 下会打开侧栏面板）。否则在工作区从未跑过 pi、
-        // 会话列表为空时会直接 return，面板根本不打开，表现为“点击无反应”。
-        await this.beforeHistoryPicker();
-        // 全量读 header 建家族树（~80ms），首屏只解析前 N 个家族的尾读预览；
-        // 其余点“加载更多”时按需解析，避免会话文件多时首屏卡顿。
-        const tree = await buildSessionTree(this.getCwd());
-        this.historyTree = tree;
-        this.historyFamilyOffset = 0;
-        if (tree.length === 0) {
-            this.onNoSessions();
-            return;
-        }
-        const first = await this.loadHistoryFamilyPage(0, SESSION_FAMILY_PAGE_SIZE);
-        if (first.items.length === 0) {
-            this.onNoSessions();
-            return;
-        }
-        const current = this.getActive()?.currentSessionPath;
-        const choice = await this.showHistoryPickerPaged(
-            first.items,
-            tree.length,
-            this.historyFamilyOffset,
-            current
-        );
-        if (!choice || typeof choice.file !== "string") { return; }
-        await this.loadHistorySession(choice.file);
-    }
-
-    /**
-     * 加载家族树指定区间的尾读预览，过滤空预览会话（不显示）。
-     * 返回解析后的条目和实际加载到的家族数。
-     */
-    protected async loadHistoryFamilyPage(
-        offset: number,
-        limit: number
-    ): Promise<{ items: SessionItem[]; loadedFamilies: number }> {
-        const flat = flattenTreeByFamilies(this.historyTree, offset, limit);
-        const items = await Promise.all(
-            flat.map(async (e) => {
-                const p = await readSessionPreview(e.file, !!e.parentSession, e.timestamp);
-                return {
-                    file: e.file,
-                    id: e.id,
-                    timestamp: e.timestamp,
-                    depth: e.depth,
-                    userPreview: p.user,
-                    assistantPreview: p.assistant,
-                } as SessionItem;
-            })
-        );
-        // 空 pair 会话不显示。
-        const nonEmpty = items.filter(
-            (it) => it.userPreview.length > 0 || it.assistantPreview.length > 0
-        );
-        const loadedFamilies = Math.min(offset + limit, this.historyTree.length) - offset;
-        return { items: nonEmpty, loadedFamilies };
-    }
-
-    /**
-     * 推送带分页信息的历史拾取器浮层并等待用户选择。
-     * 多带 totalFamilies / loadedFamilies 供前端渲染“加载更多”。
-     */
-    protected showHistoryPickerPaged(
-        items: SessionItem[],
-        totalFamilies: number,
-        loadedFamilies: number,
-        current?: string
-    ): Promise<any | undefined> {
-        this.postToWebview({
-            type: "picker",
-            kind: "history",
-            items,
-            current: current ?? null,
-            totalFamilies,
-            loadedFamilies,
-            // 两端（网页 / VSCode）都不给筛选框：直接滚动列表选择。
-            searchable: false,
-        });
-        if (this.pickerTimer) { clearTimeout(this.pickerTimer); }
-        return new Promise<any | undefined>((resolve) => {
-            this.pickerResolve = resolve;
-            this.pickerTimer = setTimeout(() => {
-                if (this.pickerResolve) {
-                    this.pickerResolve = null;
-                    this.pickerTimer = null;
-                    this.postToWebview({ type: "pickerCancel", kind: "history" });
-                    resolve(undefined);
-                }
-            }, 120000);
-        });
-    }
-
-    /** 响应 webview “加载更多历史”：解析下一批并追加分页条目。 */
-    public async loadMoreHistory(): Promise<void> {
-        if (this.historyTree.length === 0) { return; }
-        const offset = this.historyFamilyOffset;
-        if (offset >= this.historyTree.length) {
-            this.postToWebview({ type: "historyPageEnd", totalFamilies: this.historyTree.length });
-            return;
-        }
-        const result = await this.loadHistoryFamilyPage(offset, SESSION_FAMILY_PAGE_SIZE);
-        this.historyFamilyOffset += result.loadedFamilies;
-        this.postToWebview({
-            type: "historyPageAppend",
-            items: result.items,
-            totalFamilies: this.historyTree.length,
-            loadedFamilies: this.historyFamilyOffset,
-        });
+        if (rt) { await rt.loadSession(files[0].file); }
     }
 
     // ========================================================================
@@ -2160,13 +1785,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
         switch (msg.type) {
             case "ready": {
                 this.sendViewOptions();
-                this.postToWebview({ type: "transferCaps", dest: this.transferDestination() ?? null });
                 this.broadcastTabList();
                 if (this.tabContainers.size === 0) {
-                    if (this.shouldCreateInitialTab()) {
-                        this.newTab(ChatControllerBase.SPARE_PREWARM_DELAY_MS);
-                        void this.maybeAutoLoadLastSession();
-                    }
+                    this.newTab(ChatControllerBase.SPARE_PREWARM_DELAY_MS);
+                    void this.maybeAutoLoadLastSession();
                 } else {
                     // 已有 panel：同步各 panel 的 piReady
                     for (const rt of this.panels.values()) {
@@ -2200,12 +1822,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 return;
             case "focusPanel":
                 if (typeof msg.panelId === "string") { this.focusPanel(msg.panelId); }
-                return;
-            case "addPanel":
-                this.addPanel(typeof msg.panelId === "string" ? msg.panelId : undefined);
-                return;
-            case "forkPanel":
-                if (typeof msg.panelId === "string") { void this.forkPanel(msg.panelId); }
                 return;
             case "movePanel":
                 if (typeof msg.panelId === "string") {
@@ -2252,12 +1868,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
                     this.doViewOptionToggle(msg.action, typeof msg.value === "string" ? msg.value : undefined);
                 }
                 return;
-            case "relayOnce":
-                void this.relayToPanel(
-                    typeof msg.fromTabId === "string" ? msg.fromTabId : "",
-                    typeof msg.text === "string" ? msg.text : undefined
-                );
-                return;
             case "tabaDeliver":
             case "tabaDetach":
             case "tabaGoParent": {
@@ -2298,17 +1908,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 this.broadcastAbortToTab(target.id);
                 break;
             }
-            case "showTree":
-                void target.showTree();
-                break;
-            case "forkAtEntry":
-                if (typeof msg.entryId === "string") { void this.forkAtEntryInNewTab(target, msg.entryId); }
-                break;
             case "pickModel":
                 void target.pickModel(typeof msg.t0 === "number" ? msg.t0 : undefined);
-                break;
-            case "openDiff":
-                if (typeof msg.path === "string") { void target.openDiff(msg.path); }
                 break;
             case "openEditLocation":
                 if (typeof msg.path === "string" && typeof msg.anchor === "string" && msg.anchor) {

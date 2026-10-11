@@ -3,7 +3,7 @@
  * 不依赖 vscode / 进程，便于单测与从 SessionRuntime 瘦身。
  */
 
-import type { RpcModelInfo, RpcTreeEntry, RpcTreeNode } from "./piRpc";
+import type { RpcModelInfo } from "./piRpc";
 
 export const THINKING_LEVEL_ORDER = [
     "off", "minimal", "low", "medium", "high", "xhigh", "max",
@@ -338,48 +338,3 @@ export function resolveAnchorLine(
     return Math.min(fallbackLine, Math.max(lines.length, 1));
 }
 
-export function slimTree(nodes: RpcTreeNode[] | unknown[]): RpcTreeNode[] {
-    if (!Array.isArray(nodes)) {
-        return [];
-    }
-    return nodes.map((n: any) => {
-        const e = n?.entry ?? {};
-        const entry: RpcTreeEntry = {
-            type: e.type,
-            id: e.id,
-            parentId: e.parentId ?? null,
-        };
-        if (e.type === "message" && e.message) {
-            entry.message = { role: e.message.role };
-            if (e.message.role === "user") {
-                const text = textOf(e.message.content);
-                if (text) {
-                    entry.message.content = [{ type: "text", text }];
-                }
-            } else {
-                const text = textOf(e.message.content).replace(/\s+/g, " ").trim().slice(0, 120);
-                if (text) {
-                    entry.message.content = [{ type: "text", text }];
-                }
-            }
-            if (e.message.stopReason === "aborted") {
-                entry.message.stopReason = "aborted";
-            }
-            if (e.message.errorMessage) {
-                entry.message.errorMessage = e.message.errorMessage;
-            }
-            if (typeof e.message.command === "string") {
-                entry.message.command = e.message.command;
-            }
-        } else if (e.type === "branch_summary") {
-            entry.summary = e.summary;
-        } else if (e.type === "session_info") {
-            entry.name = e.name;
-        } else if (e.type === "label") {
-            entry.label = e.label;
-        } else if (e.type === "custom" || e.type === "custom_message") {
-            entry.customType = e.customType;
-        }
-        return { entry, children: slimTree(n.children || []) };
-    });
-}

@@ -11,10 +11,9 @@ import * as os from "os";
 import * as path from "path";
 import { SessionRuntime } from "./sessionRuntime";
 import { randomNameParts } from "./names";
-import type { FileChange, PanelLaunch, PiConfig, TurnEndInfo } from "./runtimeTypes";
+import type { PanelLaunch, PiConfig, TurnEndInfo } from "./runtimeTypes";
 import { ChatControllerBase, layoutLeaves, type TabContainer } from "./chatControllerBase";
 import { readRunRecord, tabaRunsDir } from "./tabaRunFiles";
-import { BrowserChatController, type BrowserChatOwner } from "./browserChatController";
 
 /** 记下每个 panel 都收到了什么。 */
 class TabaTestController extends ChatControllerBase {
@@ -101,15 +100,12 @@ class TabaTestController extends ChatControllerBase {
     public async inputDialog(): Promise<string | undefined> { return undefined; }
     public persistModel(): void { /* noop */ }
     public openFileLocation(): void { /* noop */ }
-    public openDiff(_c: FileChange): void { /* noop */ }
     public async confirmRevert(): Promise<boolean> { return false; }
     protected getAutoLoadLast(): boolean { return false; }
     protected getSendKey(): string { return "enter"; }
     protected getNewSessionKey(): string { return "ctrl+alt+n"; }
     protected getTabSwitchKey(): string { return "ctrl+alt+arrows"; }
     protected getFocusInputKey(): string { return "ctrlAltI"; }
-    protected getRelayPrefix(): string { return ""; }
-    protected getToolDisplay(): string { return "compact"; }
     protected getFontSize(): string { return "14"; }
     protected mutateViewOption(): void { /* noop */ }
     protected notifyBeepEnabled(): boolean { return false; }
@@ -475,31 +471,9 @@ test("收尾提醒：子会话跑完不发系统通知；变成独立之后就�
     assert.equal(c.notified[0].panelId, child);
 });
 
-test("浏览器那份的配置：派子会话的两项原样透传，不再清空", () => {
-    const cfg: PiConfig = {
-        piPath: "pi",
-        provider: "",
-        model: "",
-        extraArgs: [],
-        trustProject: true,
-        tabaExtension: path.join(tmp, "taba-bridge-test.ts"),
-        tabaDir: tmp,
-    };
-    // 这次只走配置和登记这两个口子，宿主其余成员不会被碰到
-    const owner = {
-        getConfig: () => cfg,
-        getCwd: () => tmp,
-        registerExternalWorkspace: () => {},
-        unregisterExternalWorkspace: () => {},
-    } as unknown as BrowserChatOwner;
-    const c = new BrowserChatController(owner);
-    try {
-        assert.equal(c.getConfig().tabaExtension, cfg.tabaExtension);
-        assert.equal(c.getConfig().tabaDir, cfg.tabaDir);
-    } finally {
-        c.dispose();
-    }
-});
+// 旧版这里还有一条“浏览器那份的配置：派子会话的两项原样透传”的检查：
+// 那是给独立的浏览器工作区（BrowserChatController）准备的。现在浏览器页面
+// 直接接在侧边栏这份会话工作区上，没有第二份 getConfig 了，那条检查随之取消。
 
 test("名录文件：派活的会话关掉了，子会话那份也改成独立", async () => {
     const { c, parent, parentTab } = setup();

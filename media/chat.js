@@ -3,7 +3,6 @@
   const vscode = acquireVsCodeApi();
   // 是否运行在网页服务的页面里（browserBridge.js 会先于本文件设这个标记）。
   // 网页端与 VSCode 共用这份脚本，少数行为按此区分：edit/write 卡片默认收起等。
-  const IS_BROWSER = window.pichatBrowser === true;
   // 供扩展宿主选择“最后活动的 Pi Chat”；pointerdown 覆盖大多数 webview
   // 内部交互，focus 覆盖 Ctrl+Tab / 编辑器组切换后的焦点恢复。
   const notifyHostFocus = () => vscode.postMessage({ type: "hostFocus" });
@@ -13,11 +12,31 @@
   document.addEventListener("pointerdown", function warmOnce() { warmUpAudio(); }, { capture: true, once: true });
   const messagesEl = document.getElementById("messages"); // 容器，内含各 .tab-pane
   const jumpBottomBtn = document.getElementById("jumpBottom");
-  const stopBtn = document.getElementById("stopBtn"); // 网页端输入框里的“停止生成”图标；VSCode 这份页面里没有这颗元素
+  const stopBtn = document.getElementById("stopBtn"); // 停止生成图标：browserBridge.js 在两种页面里都会创建
+  // VSCode 官方 codicon 的 chevron-right 折线图标（从 @vscode/codicons 包取出）。
+  // 各处折叠小三角用同一份：画的是朝右，展开时靠 CSS transform 转成朝下。
+  const CHEVRON_SVG =
+    '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true">' +
+    '<path d="M6.14601 3.14579C5.95101 3.34079 5.95101 3.65779 6.14601 3.85279L10.292 7.99879L6.14601 12.1448C5.95101 12.3398 5.95101 12.6568 6.14601 12.8518C6.34101 13.0468 6.65801 13.0468 6.85301 12.8518L11.353 8.35179C11.548 8.15679 11.548 7.83979 11.353 7.64478L6.85301 3.14479C6.65801 2.94979 6.34101 2.95079 6.14601 3.14579Z"/></svg>';
+  // 其余小图标：同样取自 @vscode/codicons 包，fill=currentColor 跟随文字色（files 是 24 视图）。
+  const ICONS = {
+    close: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8.70701 8.00001L12.353 4.35401C12.548 4.15901 12.548 3.84201 12.353 3.64701C12.158 3.45201 11.841 3.45201 11.646 3.64701L8.00001 7.29301L4.35401 3.64701C4.15901 3.45201 3.84201 3.45201 3.64701 3.64701C3.45201 3.84201 3.45201 4.15901 3.64701 4.35401L7.29301 8.00001L3.64701 11.646C3.45201 11.841 3.45201 12.158 3.64701 12.353C3.74501 12.451 3.87301 12.499 4.00101 12.499C4.12901 12.499 4.25701 12.45 4.35501 12.353L8.00101 8.70701L11.647 12.353C11.745 12.451 11.873 12.499 12.001 12.499C12.129 12.499 12.257 12.45 12.355 12.353C12.55 12.158 12.55 11.841 12.355 11.646L8.70901 8.00001H8.70701Z"/></svg>',
+    "link-external": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M15 9.5V12.5C15 13.879 13.879 15 12.5 15H3.5C2.121 15 1 13.879 1 12.5V3.5C1 2.121 2.121 1 3.5 1H6.5C6.776 1 7 1.224 7 1.5C7 1.776 6.776 2 6.5 2H3.5C2.673 2 2 2.673 2 3.5V12.5C2 13.327 2.673 14 3.5 14H12.5C13.327 14 14 13.327 14 12.5V9.5C14 9.224 14.224 9 14.5 9C14.776 9 15 9.224 15 9.5ZM14.5 1H9.5C9.224 1 9 1.224 9 1.5C9 1.776 9.224 2 9.5 2H13.293L9.147 6.146C8.952 6.341 8.952 6.658 9.147 6.853C9.245 6.951 9.373 6.999 9.501 6.999C9.629 6.999 9.757 6.95 9.855 6.853L14.001 2.707V6.5C14.001 6.776 14.225 7 14.501 7C14.777 7 15.001 6.776 15.001 6.5V1.5C15.001 1.224 14.777 1 14.501 1H14.5Z"/></svg>',
+    discard: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M3.00098 2.5C3.00098 2.22386 3.22483 2 3.50098 2C3.77712 2 4.00098 2.22386 4.00098 2.5V6.34262L7.17202 3.17157C8.73412 1.60948 11.2668 1.60948 12.8289 3.17157C14.391 4.73367 14.391 7.26633 12.8289 8.82843L7.80375 13.8536C7.60849 14.0488 7.2919 14.0488 7.09664 13.8536C6.90138 13.6583 6.90138 13.3417 7.09664 13.1464L12.1218 8.12132C13.2933 6.94975 13.2933 5.05025 12.1218 3.87868C10.9502 2.70711 9.0507 2.70711 7.87913 3.87868L4.75781 7H8.50098C8.77712 7 9.00098 7.22386 9.00098 7.5C9.00098 7.77614 8.77712 8 8.50098 8H3.60098C3.26961 8 3.00098 7.73137 3.00098 7.4V2.5Z"/></svg>',
+    check: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13.6572 3.13573C13.8583 2.9465 14.175 2.95614 14.3643 3.15722C14.5535 3.35831 14.5438 3.675 14.3428 3.86425L5.84277 11.8642C5.64597 12.0494 5.33756 12.0446 5.14648 11.8535L1.64648 8.35351C1.45121 8.15824 1.45121 7.84174 1.64648 7.64647C1.84174 7.45121 2.15825 7.45121 2.35351 7.64647L5.50976 10.8027L13.6572 3.13573Z"/></svg>',
+    clippy: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M5.08535 2.00049C5.29127 1.41789 5.84689 1.00049 6.5 1.00049H9.5C10.1531 1.00049 10.7087 1.41789 10.9146 2.00049H11.5C12.3284 2.00049 13 2.67206 13 3.50049V8.10026C12.919 8.12889 12.8402 8.16457 12.7646 8.20715C12.4603 8.37833 12.2253 8.65027 12.1 8.97611L12 8.87618V3.50049C12 3.22435 11.7761 3.00049 11.5 3.00049H10.9146C10.7087 3.58308 10.1531 4.00049 9.5 4.00049H6.5C5.84689 4.00049 5.29127 3.58308 5.08535 3.00049H4.5C4.22386 3.00049 4 3.22435 4 3.50049V13.5005C4 13.7766 4.22386 14.0005 4.5 14.0005H8V14.5001C8.00164 14.6722 8.03284 14.8413 8.09101 15.0005H4.5C3.67157 15.0005 3 14.3289 3 13.5005V3.50049C3 2.67206 3.67157 2.00049 4.5 2.00049H5.08535ZM6.5 2.00049C6.22386 2.00049 6 2.22435 6 2.50049C6 2.77663 6.22386 3.00049 6.5 3.00049H9.5C9.77614 3.00049 10 2.77663 10 2.50049C10 2.22435 9.77614 2.00049 9.5 2.00049H6.5Z"/><path d="M11.916 10.7783C11.971 10.6959 12.0002 10.599 12 10.5C11.9998 10.4345 11.9869 10.3696 11.962 10.309C11.937 10.2484 11.9003 10.1934 11.854 10.147L9.85401 8.147C9.80801 8.09999 9.75288 8.0629 9.69201 8.038C9.63109 8.01296 9.56587 8.00005 9.50001 8C9.36766 8.00003 9.24071 8.05253 9.14701 8.146L7.14701 10.146C7.10043 10.1924 7.06346 10.2476 7.03824 10.3084C7.01301 10.3691 7.00002 10.4342 7.00001 10.5C6.99943 10.5993 7.02844 10.6965 7.08334 10.7793C7.13824 10.8621 7.21655 10.9266 7.30827 10.9647C7.39999 11.0028 7.50098 11.0127 7.59835 10.9931C7.69572 10.9736 7.78507 10.9255 7.85501 10.855L9.00001 9.708L9.00001 14.5C9.00001 14.6326 9.05269 14.7598 9.14645 14.8536C9.24022 14.9473 9.3674 15 9.50001 15C9.63262 15 9.75979 14.9473 9.85356 14.8536C9.94733 14.7598 10 14.6326 10 14.5L10 9.708L11.146 10.854C11.2159 10.9241 11.3051 10.9719 11.4022 10.9912C11.4993 11.0106 11.6 11.0007 11.6915 10.9628C11.7829 10.9249 11.8611 10.8606 11.916 10.7783Z"/><path d="M11.084 13.2217C11.0291 13.3041 10.9998 13.401 11 13.5C11.0002 13.5655 11.0131 13.6304 11.038 13.691C11.063 13.7516 11.0997 13.8066 11.146 13.853L13.146 15.853C13.192 15.9 13.2471 15.9371 13.308 15.962C13.3689 15.987 13.4341 16 13.5 16C13.6324 16 13.7593 15.9475 13.853 15.854L15.853 13.854C15.8996 13.8076 15.9365 13.7524 15.9618 13.6916C15.987 13.6309 16 13.5658 16 13.5C16.0006 13.4007 15.9716 13.3035 15.9167 13.2207C15.8618 13.1379 15.7835 13.0734 15.6917 13.0353C15.6 12.9972 15.499 12.9873 15.4017 13.0069C15.3043 13.0264 15.2149 13.0745 15.145 13.145L14 14.292V9.5C14 9.36739 13.9473 9.24021 13.8536 9.14645C13.7598 9.05268 13.6326 9 13.5 9C13.3674 9 13.2402 9.05268 13.1464 9.14645C13.0527 9.24021 13 9.36739 13 9.5V14.292L11.854 13.146C11.7841 13.0759 11.6949 13.0281 11.5978 13.0088C11.5007 12.9894 11.4 12.9993 11.3085 13.0372C11.2171 13.0751 11.1389 13.1394 11.084 13.2217Z"/></svg>',
+    comment: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M1 4.5C1 3.11929 2.11929 2 3.5 2H12.5C13.8807 2 15 3.11929 15 4.5V9.5C15 10.8807 13.8807 12 12.5 12H8.68787L5.62533 14.6797C4.99168 15.2342 4 14.7842 4 13.9422V12H3.5C2.11929 12 1 10.8807 1 9.5V4.5ZM3.5 3C2.67157 3 2 3.67157 2 4.5V9.5C2 10.3284 2.67157 11 3.5 11H5V13.8981L8.31213 11H12.5C13.3284 11 14 10.3284 14 9.5V4.5C14 3.67157 13.3284 3 12.5 3H3.5Z"/></svg>',
+    files: '<svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M7.5 22.5H17.595C17.07 23.4 16.11 24 15 24H7.5C4.185 24 1.5 21.315 1.5 18V6C1.5 4.89 2.1 3.93 3 3.405V18C3 20.475 5.025 22.5 7.5 22.5ZM21 8.121V18C21 19.6545 19.6545 21 18 21H7.5C5.8455 21 4.5 19.6545 4.5 18V3C4.5 1.3455 5.8455 0 7.5 0H12.879C13.4715 0 14.0505 0.24 14.4705 0.6585L20.3415 6.5295C20.766 6.954 21 7.5195 21 8.121ZM13.5 6.75C13.5 7.164 13.8375 7.5 14.25 7.5H19.1895L13.5 1.8105V6.75ZM19.5 18V9H14.25C13.0095 9 12 7.9905 12 6.75V1.5H7.5C6.672 1.5 6 2.1735 6 3V18C6 18.8265 6.672 19.5 7.5 19.5H18C18.828 19.5 19.5 18.8265 19.5 18Z"/></svg>',
+    "arrow-left": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13.5 8.00023H3.70701L7.85301 3.85423C8.04801 3.65923 8.04801 3.34223 7.85301 3.14723C7.65801 2.95223 7.34101 2.95223 7.14601 3.14723L2.14601 8.14723C1.95101 8.34223 1.95101 8.65923 2.14601 8.85423L7.14601 13.8542C7.24401 13.9522 7.37201 14.0002 7.50001 14.0002C7.62801 14.0002 7.75601 13.9512 7.85401 13.8542C8.04901 13.6592 8.04901 13.3422 7.85401 13.1472L3.70801 9.00123H13.501C13.777 9.00123 14.001 8.77723 14.001 8.50123C14.001 8.22523 13.777 8.00123 13.501 8.00123L13.5 8.00023Z"/></svg>',
+    "arrow-right": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13.854 8.14576L8.854 3.14576C8.659 2.95076 8.342 2.95076 8.147 3.14576C7.952 3.34076 7.952 3.65776 8.147 3.85276L12.293 7.99876H2.5C2.224 7.99876 2 8.22276 2 8.49876C2 8.77476 2.224 8.99876 2.5 8.99876H12.293L8.147 13.1448C7.952 13.3398 7.952 13.6568 8.147 13.8518C8.245 13.9498 8.373 13.9978 8.501 13.9978C8.629 13.9978 8.757 13.9488 8.855 13.8518L13.855 8.85176C14.05 8.65676 14.05 8.33976 13.855 8.14476L13.854 8.14576Z"/></svg>',
+    "arrow-up": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13.854 7.14576L8.85401 2.14576C8.65901 1.95076 8.34201 1.95076 8.14701 2.14576L3.14601 7.14576C2.95101 7.34076 2.95101 7.65776 3.14601 7.85276C3.34101 8.04776 3.65801 8.04776 3.85301 7.85276L7.99901 3.70676V13.4998C7.99901 13.7758 8.22301 13.9998 8.49901 13.9998C8.77501 13.9998 8.99901 13.7758 8.99901 13.4998V3.70676L13.145 7.85276C13.243 7.95076 13.371 7.99876 13.499 7.99876C13.627 7.99876 13.755 7.94976 13.853 7.85276C14.048 7.65776 14.048 7.34076 13.853 7.14576H13.854Z"/></svg>',
+    "arrow-down": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13.854 8.146C13.659 7.951 13.342 7.951 13.147 8.146L9.00096 12.292V2.5C9.00096 2.224 8.77696 2 8.50096 2C8.22496 2 8.00096 2.224 8.00096 2.5V12.293L3.85496 8.147C3.65996 7.952 3.34296 7.952 3.14796 8.147C2.95296 8.342 2.95296 8.659 3.14796 8.854L8.14796 13.854C8.24596 13.952 8.37396 14 8.50196 14C8.62996 14 8.75796 13.951 8.85596 13.854L13.856 8.854C14.051 8.659 14.051 8.342 13.856 8.147L13.854 8.146Z"/></svg>',
+    "git-branch": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M14 5.5C14 4.121 12.879 3 11.5 3C10.121 3 9 4.121 9 5.5C9 6.682 9.826 7.669 10.93 7.928C10.744 8.546 10.177 9 9.5 9H6.5C5.935 9 5.419 9.195 5 9.512V4.949C6.14 4.717 7 3.707 7 2.5C7 1.121 5.879 0 4.5 0C3.121 0 2 1.121 2 2.5C2 3.708 2.86 4.717 4 4.949V11.05C2.86 11.282 2 12.292 2 13.499C2 14.878 3.121 15.999 4.5 15.999C5.879 15.999 7 14.878 7 13.499C7 12.317 6.174 11.33 5.07 11.071C5.256 10.453 5.823 9.999 6.5 9.999H9.5C10.723 9.999 11.74 9.115 11.954 7.953C13.116 7.738 14 6.723 14 5.5ZM3 2.5C3 1.673 3.673 1 4.5 1C5.327 1 6 1.673 6 2.5C6 3.327 5.327 4 4.5 4C3.673 4 3 3.327 3 2.5ZM6 13.5C6 14.327 5.327 15 4.5 15C3.673 15 3 14.327 3 13.5C3 12.673 3.673 12 4.5 12C5.327 12 6 12.673 6 13.5ZM11.5 7C10.673 7 10 6.327 10 5.5C10 4.673 10.673 4 11.5 4C12.327 4 13 4.673 13 5.5C13 6.327 12.327 7 11.5 7Z"/></svg>',
+    "merge-into": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13 13.5C13 13.776 12.776 14 12.5 14C9.46198 14 6.99998 11.538 6.99998 8.50001V3.70701L4.35398 6.35301C4.15898 6.54801 3.84198 6.54801 3.64698 6.35301C3.45198 6.15801 3.45198 5.84101 3.64698 5.64601L7.14698 2.14601C7.34198 1.95101 7.65898 1.95101 7.85398 2.14601L11.354 5.64601C11.549 5.84101 11.549 6.15801 11.354 6.35301C11.159 6.54801 10.842 6.54801 10.647 6.35301L8.00098 3.70701V8.50001C8.00098 10.985 10.016 13 12.501 13C12.777 13 13.001 13.224 13.001 13.5H13Z"/></svg>',
+  };
   const inputEl = document.getElementById("input");
   const imgPreviewEl = document.getElementById("imgPreview");
   const fileMenuEl = document.getElementById("fileMenu");
-  const changedFilesEl = document.getElementById("changedFiles");
   const queueBarEl = document.getElementById("queueBar");
   const tabBarInner = document.getElementById("tabBarInner");
   const tabBarEl = document.getElementById("tabBar");
@@ -47,8 +66,7 @@
   const tabDrafts = new Map();  // tabId -> { text, selStart, selEnd, height }（输入草稿按 tab 存）
   const maximized = new Map();  // tabId -> panelId（双击 pane-head 最大化，纯前端临时态）
   let draggingPanelId = null;   // 正在拖拽的 panel id
-  // 活体移交菜单目标工作区名（"编辑器" / "侧边栏"）；宿主未下发时为 null，菜单不显示移交项。
-  let transferDest = null;
+
 
   function enterMultiTab() {
     if (multiTab) { return; }
@@ -66,45 +84,15 @@
     return activeTab();
   }
 
-  // ---- 分支树浮层（全局，瞬时）----
-  const treeOverlay = document.getElementById("treeOverlay");
-  const treeBody = document.getElementById("treeBody");
-  const treeCloneBtn = document.getElementById("treeCloneBtn");
-  /** 浮层当前展示的 panel（前端 tab id == 后端 panelId）；底部按钮的复制目标。 */
-  let treePanelId = null;
-  let treeClickTimer = null;
-
-  function cancelTreeClick() {
-    if (treeClickTimer !== null) {
-      clearTimeout(treeClickTimer);
-      treeClickTimer = null;
-    }
-  }
-  function hideTree() {
-    cancelTreeClick();
-    treeOverlay.classList.add("hidden");
-  }
-  // 底部按钮：把当前分支完整复制到同 tab 右侧新分屏 panel（pi clone）。
-  // 源 panel 不动，新 panel 是独立分支会话，两侧可并行对话。
-  treeCloneBtn.addEventListener("click", () => {
-    const id = treePanelId;
-    if (!id || treeCloneBtn.disabled) { return; }
-    hideTree();
-    vscode.postMessage({ type: "forkPanel", panelId: id });
-  });
   // ---- 通用拾取器浮层（模型 / 历史）----
   const pickerOverlay = document.getElementById("pickerOverlay");
   const pickerBody = document.getElementById("pickerBody");
   const pickerTitle = document.getElementById("pickerTitle");
+  const pickerHeader = document.getElementById("pickerHeader");
   const pickerSearch = document.getElementById("pickerSearch");
   const pickerSearchWrap = document.getElementById("pickerSearchWrap");
   const pickerFooter = document.getElementById("pickerFooter");
   let pickerState = null; // { kind, items, filtered, sel, current, draftModel, draftThinking, toggle }
-
-  document.getElementById("treeBtn").addEventListener("click", () => {
-    const tab = activeTab();
-    if (tab) { vscode.postMessage({ type: "showTree", tabId: tab.id }); }
-  });
 
   // ==================== Markdown / 文件链接 / 符号链接（纯函数，与 tab 无关）====================
   let markedReady = false;
@@ -223,15 +211,11 @@
   const GEAR_SVG = '<span class="tool-icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M22.83,10.09 A11 11 0 0 1 22.83,13.91 L20.37,13.48 A8.5 8.5 0 0 1 18.96,16.88 A8.5 8.5 0 0 1 21.01,18.31 A11 11 0 0 1 18.31,21.01 L16.88,18.96 A8.5 8.5 0 0 1 13.48,20.37 A8.5 8.5 0 0 1 13.91,22.83 A11 11 0 0 1 10.09,22.83 L10.52,20.37 A8.5 8.5 0 0 1 7.12,18.96 A8.5 8.5 0 0 1 5.69,21.01 A11 11 0 0 1 2.99,18.31 L5.04,16.88 A8.5 8.5 0 0 1 3.63,13.48 A8.5 8.5 0 0 1 1.17,13.91 A11 11 0 0 1 1.17,10.09 L3.63,10.52 A8.5 8.5 0 0 1 5.04,7.12 A8.5 8.5 0 0 1 2.99,5.69 A11 11 0 0 1 5.69,2.99 L7.12,5.04 A8.5 8.5 0 0 1 10.52,3.63 A8.5 8.5 0 0 1 10.09,1.17 A11 11 0 0 1 13.91,1.17 L13.48,3.63 A8.5 8.5 0 0 1 16.88,5.04 A8.5 8.5 0 0 1 18.31,2.99 A11 11 0 0 1 21.01,5.69 L18.96,7.12 A8.5 8.5 0 0 1 20.37,10.52 Z"/><circle cx="12" cy="12" r="3.2"/></svg></span>';
   // 复制按钮图标：VS Code 官方 codicon copy 原始 path（fill 系图标，与 VS Code 界面同款）
   const COPY_SVG = '<svg viewBox="0 0 16 16" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M3 5V12.73C2.4 12.38 2 11.74 2 11V5C2 2.79 3.79 1 6 1H9C9.74 1 10.38 1.4 10.73 2H6C4.35 2 3 3.35 3 5ZM11 15H6C4.897 15 4 14.103 4 13V5C4 3.897 4.897 3 6 3H11C12.103 3 13 3.897 13 5V13C13 14.103 12.103 15 11 15ZM12 5C12 4.448 11.552 4 11 4H6C5.448 4 5 4.448 5 5V13C5 13.552 5.448 14 6 14H11C11.552 14 12 13.552 12 13V5Z"/></svg>';
-  // 转发按钮图标：VS Code 官方 codicon share 原始 path（fill 系图标，与右上角 $(share) 按钮同款）
-  const RELAY_SVG = '<svg viewBox="0 0 16 16" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M11.307 1.10533C11.1562 0.988085 10.9519 0.966945 10.7803 1.05085C10.6088 1.13475 10.5 1.30904 10.5 1.5V3.49274C10.4571 3.49456 10.4122 3.49701 10.3654 3.5002C9.96247 3.52766 9.41128 3.61105 8.82119 3.83704C8.11343 4.10809 7.34877 4.58508 6.72601 5.41126C6.10338 6.23727 5.64499 7.38259 5.50206 8.95474C5.48301 9.16438 5.5973 9.36351 5.78793 9.4528C5.97857 9.54209 6.20471 9.50241 6.35356 9.35356C7.54248 8.16464 8.72298 7.57773 9.59562 7.28685C9.9558 7.16679 10.2643 7.09693 10.5 7.0563V9C10.5 9.1969 10.6156 9.37546 10.7952 9.45612C10.9748 9.53678 11.185 9.50452 11.3322 9.37371L15.8322 5.37371C15.9432 5.27502 16.0046 5.13207 15.9997 4.98361C15.9949 4.83514 15.9242 4.69653 15.807 4.60533L11.307 1.10533ZM10.9429 4.49679L10.9457 4.49705C11.0865 4.51223 11.2279 4.46706 11.3335 4.37257C11.4394 4.27772 11.5 4.14223 11.5 4V2.52232L14.7186 5.02564L11.5 7.88658V6.5C11.5 6.22386 11.2762 6 11 6L10.9989 6L10.9976 6.00001L10.9943 6.00003L10.9848 6.00014L10.9552 6.00087C10.9307 6.00166 10.897 6.00316 10.8544 6.00599C10.7695 6.01166 10.6495 6.02268 10.4996 6.04409C10.1999 6.08691 9.77971 6.17139 9.2794 6.33816C8.55493 6.57965 7.66479 6.99299 6.7319 7.69863C6.9264 6.98158 7.2077 6.43355 7.52456 6.01319C8.01593 5.36132 8.61523 4.98675 9.17883 4.7709C9.65371 4.58903 10.1025 4.52044 10.4334 4.49788C10.5981 4.48666 10.7314 4.48699 10.8211 4.48988C10.866 4.49133 10.8997 4.49341 10.9209 4.49498L10.9429 4.49679ZM3.5 2C2.11929 2 1 3.11929 1 4.5V12.5C1 13.8807 2.11929 15 3.5 15H11.5C12.8807 15 14 13.8807 14 12.5V9.5C14 9.22386 13.7761 9 13.5 9C13.2239 9 13 9.22386 13 9.5V12.5C13 13.3284 12.3284 14 11.5 14H3.5C2.67157 14 2 13.3284 2 12.5V4.5C2 3.67157 2.67157 3 3.5 3H7.5C7.77614 3 8 2.77614 8 2.5C8 2.22386 7.77614 2 7.5 2H3.5Z"/></svg>';
-
   // ==================== 全局视图选项 ====================
   var sendKeyCombo = "enter";
   var newSessionKey = "ctrl+alt+n";
   var tabSwitchKey = "ctrl+alt+pgupdown";
   var notifyOnTurnEnd = true;
-  var toolDisplayMode = "compact"; // compact=简洁标签 | medium=摘要标签 | full=TUI 风格卡片
   let openFiles = [];
   function applyFontSize(px) {
     var val = (typeof px === "string" && /^\d+$/.test(px)) ? px + "px" : "";
@@ -243,7 +227,6 @@
     if (typeof opts.newSessionKey === "string") { newSessionKey = opts.newSessionKey; }
     if (typeof opts.tabSwitchKey === "string") { tabSwitchKey = opts.tabSwitchKey; }
     notifyOnTurnEnd = opts.notifyOnTurnEnd !== false && opts.notifyBeep !== false;
-    if (opts.toolDisplay === "full" || opts.toolDisplay === "medium" || opts.toolDisplay === "compact") { toolDisplayMode = opts.toolDisplay; }
   }
 
   // ── 会话结束提示音（Web Audio 合成，无外部资源） ──
@@ -408,7 +391,10 @@
       currentToolRow: null,
       pendingToolCards: new Map(),
       pendingToolTags: new Map(),
-      pendingToolCardsFull: new Map(),
+      lastTagHost: null,
+      lastAssistantEl: null,
+      // 刚挂过"工具图片块"（read 读图）：下面的工具调用要另起一行，不再钻进上面的正文里
+      afterToolImage: false,
       // 历史窗口（网页端「只发最近一段」）：顶部按钮、加载更早的暂存区等
       hasMoreHistory: false,
       _historyBtn: null,
@@ -428,8 +414,6 @@
       modelId: "",
       provider: "",
       thinkingLevel: "",
-      changedFiles: [],
-      changedFilesExpanded: false,
       queuedSteering: [],
       pendingSteerRestore: null,
       // 非活跃时保存的输入状态（草稿已提升为 tab 级 tabDrafts，此处仅保留占位避免旧引用报错）
@@ -615,12 +599,13 @@
     ta.remove();
   }
 
-  function addPlain(tab, cls, role, text, entryId) {
+  function addPlain(tab, cls, role, text) {
     hideEmptyHint(tab);
     tab.currentToolRow = null;
+    tab.lastTagHost = null; // 新消息块：工具标签不再往上一段后面续
+    tab.lastAssistantEl = null;
     const div = document.createElement("div");
     div.className = "msg " + cls + " msg-enter";
-    if (entryId) { div.dataset.entryId = entryId; }
     if (cls === "user") { div.dataset.raw = text || ""; }
     const content = text || "";
     if (cls === "user" && shouldFoldText(content)) {
@@ -630,7 +615,7 @@
       body.textContent = content;
       div.appendChild(body);
     }
-    if (cls === "assistant") { attachCopyBtn(div, () => content); attachRelayBtn(div, () => content, tab); }
+    if (cls === "assistant") { attachCopyBtn(div, () => content); }
     tab.paneEl.appendChild(div);
     scrollToBottom(tab);
     return div.firstElementChild;
@@ -648,88 +633,86 @@
     div.appendChild(btn);
   }
 
-  /** 消息气泡的转发按钮：可挑任意历史回复转发到任意 panel。 */
-  function attachRelayBtn(div, getText, tab) {
-    const btn = document.createElement("button");
-    btn.className = "msg-relay"; btn.type = "button"; btn.title = "转发到…（选择目标 panel）";
-    btn.innerHTML = RELAY_SVG;
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      vscode.postMessage({ type: "relayOnce", fromTabId: tab.id, text: getText() || "" });
-    });
-    div.appendChild(btn);
-  }
-
-  function addMarkdown(tab, raw, entryId) {
+  function addMarkdown(tab, raw) {
     hideEmptyHint(tab);
     tab.currentToolRow = null;
+    tab.lastTagHost = null; // 新正文块：工具标签不再往上一段后面续
     const div = document.createElement("div");
     div.className = "msg assistant msg-enter";
-    if (entryId) { div.dataset.entryId = entryId; }
     const body = document.createElement("div");
     body.className = "md";
     body.dataset.raw = raw || "";
     body.innerHTML = renderMarkdown(raw || "");
     attachCopyBtn(div, () => body.dataset.raw || "");
-    attachRelayBtn(div, () => body.dataset.raw || "", tab);
     div.appendChild(body);
     tab.paneEl.appendChild(div);
+    tab.lastAssistantEl = body; // 工具标签要接在这条正文的行尾
     scrollToBottom(tab);
     return body;
   }
 
-  /** 画布跳转：滚到带 data-entry-id 的消息气泡。 */
-  function scrollToEntry(tab, entryId) {
-    if (!tab || !entryId || !tab.paneEl) { return false; }
-    let el = null;
-    const nodes = tab.paneEl.querySelectorAll(".msg[data-entry-id]");
-    for (let i = 0; i < nodes.length; i++) {
-      if (nodes[i].dataset.entryId === entryId) { el = nodes[i]; break; }
+  /** 工具标签挂载点：优先接在上一条助手消息正文的行尾（行内续排）；
+   *  正文以代码块 / 表格等块级元素结尾时跟在块后面；
+   *  还没有任何正文（工具先于文字）时退回独立一行。 */
+  function toolTagHost(tab) {
+    // 刚挂过"工具图片块"（read 读图）：它下面的工具从新的一行开始排。
+    // 这里把上一行的状态全清掉，否则标签会回到图片块上面那条正文里（顺序就反了）。
+    if (tab.afterToolImage) {
+      tab.afterToolImage = false;
+      tab.lastAssistantEl = null;
+      tab.lastTagHost = null;
+      tab.currentToolRow = null;
     }
-    if (!el) { return false; }
-    tab.stickToBottom = false;
-    try {
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
-    } catch {
-      el.scrollIntoView(true);
+    // 注意：tool 事件到达前会先 finalizeCurrentAssistant（它会清空 currentAssistant），
+    // 所以“上一条助手正文”主要靠 lastAssistantEl 这个持久引用。
+    const asstEl = (tab.currentAssistant && tab.currentAssistant.el && tab.currentAssistant.el.isConnected)
+      ? tab.currentAssistant.el
+      : (tab.lastAssistantEl && tab.lastAssistantEl.isConnected ? tab.lastAssistantEl : null);
+    if (asstEl) {
+      const last = asstEl.lastElementChild;
+      // 普通段落 / 列表项结尾：标签进段落里，跟正文同一行内续排
+      if (last && (last.tagName === "P" || last.tagName === "LI")) { return last; }
+      return asstEl;
     }
-    el.classList.add("entry-flash");
-    setTimeout(() => { el.classList.remove("entry-flash"); }, 1600);
-    return true;
-  }
-  function addTool(tab, toolName, argStr, toolCallId) {
-    hideEmptyHint(tab);
-    if (toolDisplayMode === "full") {
-      addToolCard(tab, toolName, argStr, toolCallId);
-      return;
-    }
-    // medium：每次调用独占一行；compact：同一轮的标签收拢进同一个 .tool-row
-    if (toolDisplayMode === "medium" || !tab.currentToolRow) {
+    // 连续多个工具调用：继续追加到上一个标签所在的宿主
+    if (tab.lastTagHost && tab.lastTagHost.isConnected) { return tab.lastTagHost; }
+    // 兜底：独立一行
+    if (!tab.currentToolRow) {
       tab.currentToolRow = document.createElement("div");
       tab.currentToolRow.className = "msg tool-row msg-enter";
       tab.paneEl.appendChild(tab.currentToolRow);
     }
+    return tab.currentToolRow;
+  }
+
+  /** 把标签挂进宿主：行内宿主在首个标签前补个空格与正文隔开。 */
+  function mountToolTag(tab, tag) {
+    const host = toolTagHost(tab);
+    const inline = host !== tab.currentToolRow;
+    if (inline && !host._hasTags) {
+      host.appendChild(document.createTextNode(" "));
+      host._hasTags = true;
+    }
+    host.appendChild(tag);
+    if (inline) { tab.lastTagHost = host; }
+  }
+
+  function addTool(tab, toolName, argStr, toolCallId) {
+    hideEmptyHint(tab);
     const tag = document.createElement("span");
     tag.className = "tool" + (toolCallId ? " running" : "");
-    // medium：标签内嵌 TUI 式调用摘要（单行省略）；compact：齿轮 + 工具名
-    if (toolDisplayMode === "medium") {
-      const summary = buildMediumSummary(toolName, argStr);
-      tag.classList.add("tool-medium");
-      tag.appendChild(summary);
-      tag._medium = true;
-    } else {
-      tag.insertAdjacentHTML("afterbegin", GEAR_SVG);
-      tag.appendChild(document.createTextNode(" " + toolName));
-    }
-    // 点击展开已移除：改为自绘悬浮提示显示调用与结果（见 showTagTip）。
-    // 唯一例外是 read 读图：结果到达后自动展开卡片且不再收起（见 expandReadImageCard）。
+    tag.insertAdjacentHTML("afterbegin", GEAR_SVG);
+    tag.appendChild(document.createTextNode(" " + toolName));
+    // 悬浮提示显示调用与结果（见 showTagTip）；read 读图的结果也在提示框里出图。
     tag._toolName = toolName;
     tag._argStr = argStr;
     tag._resultText = "";
     tag._resultMeta = {};
     tag._isError = false;
     tag._done = !toolCallId; // 无 id 的静态调用无结果事件，按已完成处理
-    // 提示内容：运行中显示调用参数（输入）；结果到达后由 setTagTip 填入全部原文（输出）
+    // 提示内容：运行中显示调用参数（输入）；结果到达后由 setTagTip 填入全部原文（输出）。
+    // 带图片的结果（read 读图这类）不走提示框：结果到了会把这个标签整个换成对话里的一块图，
+    // 见 mountToolImageBlock。
     tag._tipCall = tagTipCallText(toolName, argStr);
     tag._tipBody = "";
     if (IS_TOUCH_DEVICE) {
@@ -742,7 +725,7 @@
       tag.addEventListener("mouseenter", () => showTagTip(tag));
       tag.addEventListener("mouseleave", scheduleTagTipHide);
     }
-    tab.currentToolRow.appendChild(tag);
+    mountToolTag(tab, tag);
     if (toolCallId) { tab.pendingToolTags.set(toolCallId, tag); }
     scrollToBottom(tab);
   }
@@ -876,6 +859,9 @@
   /** 把标签的调用与结果填进内容区：调用一行稍深底色（输入），结果原样（输出）。 */
   function fillTagTip(tag) {
     tagTipContent.textContent = "";
+    // 自定义内容钩子（edit/write 标签用：标题行 + diff / 写入预览 + 跳转 / 回滚按钮）
+    if (tag._tipFill) { tag._tipFill(tagTipContent); return; }
+    tagTipContent.textContent = "";
     const call = document.createElement("div");
     call.className = "tag-tip-call";
     call.textContent = tag._tipCall || "";
@@ -895,7 +881,7 @@
       return;
     }
     hideTagTip();
-    if (!tag._tipCall) { return; }
+    if (!tag._tipCall && !tag._tipFill) { return; }
     tagTipTag = tag;
     const render = () => {
       tagTipTimer = 0;
@@ -978,104 +964,6 @@
     return wrap;
   }
 
-  /** 构建工具卡片 DOM（call + 参数 + 空 result 区），不挂载、不注册计时器。
-   *  供 full 模式直接挂载与简洁模式点击展开复用，保证两模式卡片样式完全一致。 */
-  function buildToolCardDom(toolName, argStr) {
-    const card = document.createElement("div");
-    card.className = "tool-card running msg-enter";
-    card._toolName = toolName;
-    const call = buildToolCallEl(toolName, argStr);
-    call.title = argStr || toolName;
-    // write 卡片：右侧“打开文件”跳转按钮（复用 openFile 消息，与正文 file-link 一致）
-    if (toolName === "write") {
-      let a = null;
-      try { a = argStr ? JSON.parse(argStr) : {}; } catch { a = null; }
-      const wPath = a && (typeof a.file_path === "string" ? a.file_path : (typeof a.path === "string" ? a.path : ""));
-      if (wPath) {
-        const jump = document.createElement("span");
-        jump.className = "tc-jump";
-        jump.textContent = "打开文件 ↗";
-        jump.title = "在编辑器中打开 " + wPath;
-        jump.addEventListener("click", (e) => {
-          e.stopPropagation();
-          vscode.postMessage({ type: "openFile", path: wPath });
-        });
-        call.appendChild(jump);
-      }
-    }
-    card.appendChild(call);
-    // 参数区：write 显示内容预览（前 10 行，同 TUI），其余回退工具显示 pretty JSON
-    if (toolName === "write") {
-      const p = buildWritePreviewEl(argStr);
-      if (p) { card.appendChild(p); }
-    } else if (!CUSTOM_CALL_TOOLS.has(toolName) && argStr) {
-      const argsPre = document.createElement("pre"); argsPre.className = "tc-args";
-      argsPre.textContent = prettyJson(argStr);
-      card.appendChild(argsPre);
-    }
-    const resultEl = document.createElement("div"); resultEl.className = "tc-output";
-    card.appendChild(resultEl);
-    card._resultEl = resultEl;
-    return card;
-  }
-
-  /** 完整模式：每个工具调用一张卡片（对齐 TUI：整块背景，call+结果连续，状态用背景色）。 */
-  function addToolCard(tab, toolName, argStr, toolCallId) {
-    hideEmptyHint(tab);
-    tab.currentToolRow = null;
-    const card = buildToolCardDom(toolName, argStr);
-    tab.paneEl.appendChild(card);
-    scrollToBottom(tab);
-    if (!toolCallId) {
-      // 历史/静态调用：无结果事件，直接定格为完成态
-      card.classList.remove("running"); card.classList.add("done");
-      return;
-    }
-    // 运行中：JS 计时更新 meta 的 Elapsed（read 很快，不显示时间，同 TUI 展开后才有）
-    card._elapsedStart = Date.now();
-    let timer = null;
-    if (toolName !== "read") {
-      timer = setInterval(() => {
-        if (card._elapsedStart && card.classList.contains("running") && card._elapsedEl) {
-          card._elapsedEl.textContent = "Elapsed " + formatDur(Date.now() - card._elapsedStart);
-        }
-      }, 500);
-    }
-    tab.pendingToolCardsFull.set(toolCallId, { card, resultEl: card._resultEl, timer });
-  }
-
-  /**
-   * read 读图：结果到达后自动展开完整模式同款卡片直接出图，展开后不再收起。
-   * 摘要模式复用原摘要行作为卡片标题，避免同一条调用在「摘要标签 + 卡片调用行」中重复。
-   */
-  function expandReadImageCard(tag) {
-    const row = tag.parentElement;
-    if (!row || tag._card) { return; }
-    const card = buildToolCardDom(tag._toolName, tag._argStr);
-    card.classList.remove("msg-enter"); // 自动展开无需入场动画
-    card.classList.add("tool-card-compact");
-    tag._card = card;
-    // 只在结果到达后调用，直接定格完成态
-    card.classList.remove("running"); card.classList.add("done");
-    if (tag._isError) { card.classList.add("error"); }
-    setToolResult(card, tag._resultText || "", tag._resultMeta || {});
-    if (tag._medium) {
-      // 摘要模式每行只有一个 tag：移走新卡片生成的重复调用行，原 tag 原地升级为标题。
-      card.querySelector(".tc-call")?.remove();
-      card.classList.add("tool-card-medium");
-      card.prepend(tag);
-      row.replaceWith(card);
-    } else {
-      // 简洁模式：插到 .tool-row 之后（跳过已展开的同类卡片，保持多卡按调用顺序排列）
-      let anchor = row;
-      let next;
-      while ((next = anchor.nextElementSibling) && next.classList.contains("tool-card-compact")) { anchor = next; }
-      anchor.after(card);
-    }
-    tag.classList.add("expanded");
-    hideTagTip(); // 若鼠标正停在标签上，收起悬浮提示，让位给卡片
-  }
-
   // ==================== 工具结果内联图片（read 读图等） ====================
   /** Lightbox：点击缩略图全屏查看原图，点任意处关闭。 */
   let lightboxEl = null;
@@ -1095,7 +983,7 @@
   function applyImageDims(card, w, h) {
     if (!card || card._dimsApplied || !w || !h) { return; }
     card._dimsApplied = true;
-    const host = card.querySelector(".tc-call") || card.querySelector("span.tool");
+    const host = card.querySelector(".tc-call") || card.querySelector("span.tool") || card.querySelector(".tib-head");
     if (!host) { return; }
     let s = host.querySelector(".tc-dims");
     if (!s) {
@@ -1128,106 +1016,61 @@
     resultEl.appendChild(wrap);
   }
 
+  /** 从工具参数里取出文件名（只留最后一段）：参数长这样 {"file_path":"D:/a/b.png"} 或 {"path":"..."}。
+   *  取不到就返回空串，调用方回退到原来的摘要文字。 */
+  function fileNameFromArgs(argStr) {
+    try {
+      const a = JSON.parse(argStr || "{}");
+      const raw = a && (a.file_path || a.path);
+      if (typeof raw !== "string" || !raw) { return ""; }
+      const parts = raw.split(/[\\/]/).filter(Boolean);
+      return parts.length > 0 ? parts[parts.length - 1] : raw;
+    } catch (e) {
+      return "";
+    }
+  }
+
+  /**
+   * 工具结果带图片（read 读图这类）：把这个小标签换成对话里的一整块 ——
+   * 上面一行说明（齿轮 + 工具名 / 文件名，图片尺寸到了再补上），下面把图完整铺出来。
+   *
+   * 为什么不用悬浮提示：图藏在提示框里要鼠标悬上去才看得到，而"读了哪张图"本身就是对话内容。
+   * 块自己占一行（不跟正文挤在同一行里）；它后面的工具调用另起一行重新排
+   * （见 toolTagHost 的 afterToolImage）。
+   */
+  function mountToolImageBlock(tab, tagEl, images) {
+    if (!Array.isArray(images) || images.length === 0) { return; }
+    const block = document.createElement("div");
+    block.className = "tool-image-block msg-enter";
+    const head = document.createElement("div");
+    head.className = "tib-head";
+    head.insertAdjacentHTML("afterbegin", GEAR_SVG);
+    const text = document.createElement("span");
+    text.className = "tib-text";
+    // 说明行只写文件名（整条路径太长，把图片挤下去了）；想看完整路径就把鼠标停在上面
+    const name = tagEl._toolName || "";
+    const file = fileNameFromArgs(tagEl._argStr);
+    text.textContent = name && file ? (name + " " + file) : (tagEl._tipCall || (tagEl.textContent || "").trim());
+    text.title = tagEl._tipCall || text.textContent;
+    head.appendChild(text);
+    block.appendChild(head);
+    // 图直接接在说明行下面；图加载完成后尺寸会写回说明行（见 applyImageDims）
+    renderResultImages(block, images, block);
+    // 原来那个小标签收掉：它跟图片本来就是一回事，不留两份
+    const host = tagEl.parentElement;
+    tagEl.remove();
+    // 标签所在的段落/行被收空了就一起收掉（同一行还有别的工具或正文时不收）
+    if (host && host !== tab.paneEl
+      && (host.tagName === "P" || host.tagName === "LI" || host.classList.contains("tool-row"))
+      && !host.textContent.trim() && host.childElementCount === 0) {
+      host.remove();
+    }
+    tab.paneEl.appendChild(block);
+    tab.afterToolImage = true;
+    scrollToBottom(tab);
+  }
+
   /** 卡片结果区渲染：预览截断（尾部 N 行，同 TUI）+ 元信息 + 展开/收起。 */
-  function setToolResult(card, resultText, meta) {
-    card._resultText = resultText || "";
-    card._resultMeta = meta || {};
-    renderToolResultInner(card);
-  }
-  function renderToolResultInner(card) {
-    const resultEl = card._resultEl;
-    if (!resultEl) { return; }
-    const meta = card._resultMeta || {};
-    const toolName = card._toolName || "";
-    const isBash = toolName === "bash";
-    const isRead = toolName === "read";
-    let text = card._resultText || "";
-    resultEl.innerHTML = "";
-    // 剥掉 bash 结果里内嵌的截断脚注（元信息里单独渲染，同 TUI 处理）
-    if (meta.truncation && meta.truncation.truncated && meta.truncation.fullOutputPath && text.endsWith("]")) {
-      const fi = text.lastIndexOf("\n\n[");
-      if (fi !== -1 && text.slice(fi).includes(meta.truncation.fullOutputPath)) {
-        text = text.slice(0, fi).replace(/\s+$/, "");
-      }
-    }
-    const hasImages = Array.isArray(meta.images) && meta.images.length > 0;
-    const lines = text ? text.split("\n") : [];
-    // 预览行数：bash 尾部 5 行、read 前 5 行、其余前 15 行
-    const maxLines = isBash || isRead ? TOOL_PREVIEW_LINES : 15;
-    let shown = lines, hidden = 0;
-    if (lines.length > maxLines && !card._resultExpanded && !(isRead && hasImages)) {
-      hidden = lines.length - maxLines;
-      shown = isBash ? lines.slice(-maxLines) : lines.slice(0, maxLines);
-    }
-    // read 读图："Read image file …/[Image: original …]" 文本冗余，只留图片；尺寸已上移到调用行
-    if (text && !(isRead && hasImages)) {
-      const pre = document.createElement("pre"); pre.className = "tc-output";
-      pre.textContent = shown.join("\n");
-      // 展开后取消内部滚动（否则卡片内滚动条 + 主面板滚动条 = 双滚动条）
-      if (card._resultExpanded) { pre.style.maxHeight = "none"; }
-      resultEl.appendChild(pre);
-    }
-    renderResultImages(resultEl, meta.images, card);
-    // 底部行容器：耗时在左、截断标记在右（左右两个固定容器，不依赖 DOM 顺序）。
-    const footer = document.createElement("div"); footer.className = "tc-footer";
-    const fLeft = document.createElement("span"); fLeft.className = "tc-footer-left";
-    const fRight = document.createElement("span"); fRight.className = "tc-footer-right";
-    if (hidden > 0) {
-      const mark = document.createElement("span");
-      mark.className = "tc-trunc-mark";
-      mark.textContent = "…";
-      mark.title = (isBash ? hidden + " 行更早内容" : hidden + " 行被截断") + " · 点击展开完整结果";
-      mark.addEventListener("click", (e) => { e.stopPropagation(); card._resultExpanded = true; renderToolResultInner(card); });
-      fRight.appendChild(mark);
-    } else if (card._resultExpanded && lines.length > maxLines && !(isRead && hasImages)) {
-      const fold = document.createElement("span");
-      fold.className = "tc-trunc-mark"; fold.textContent = "收起";
-      fold.addEventListener("click", (e) => { e.stopPropagation(); card._resultExpanded = false; renderToolResultInner(card); });
-      fRight.appendChild(fold);
-    }
-    // 截断警告（对齐 TUI：[Showing lines X-Y of Z. Full output: path] / [Truncated: ...]）
-    const tr = meta.truncation;
-    const warnings = [];
-    if (tr && tr.truncated) {
-      if (isBash) {
-        if (tr.truncatedBy === "lines" && typeof tr.outputLines === "number" && typeof tr.totalLines === "number") {
-          warnings.push("Showing lines " + (tr.totalLines - tr.outputLines + 1) + "-" + tr.totalLines + " of " + tr.totalLines + " lines");
-        } else if (typeof tr.outputLines === "number") {
-          warnings.push("Showing " + tr.outputLines + " lines");
-        }
-        if (tr.fullOutputPath) { warnings.push("Full output: " + tr.fullOutputPath); }
-      } else if (isRead && tr.truncatedBy === "lines" && typeof tr.totalLines === "number") {
-        warnings.push("Truncated: showing " + tr.outputLines + " of " + tr.totalLines + " lines");
-      } else if (typeof tr.outputLines === "number") {
-        warnings.push("Truncated: " + tr.outputLines + " lines shown");
-      }
-    }
-    if (warnings.length) {
-      const w = document.createElement("div"); w.className = "tc-warn";
-      w.textContent = "[" + warnings.join(". ") + "]";
-      resultEl.appendChild(w);
-    }
-    // 耗时（read 不显示时间，同 TUI 未展开无耗时）
-    const isPartial = meta.isPartial;
-    const durationMs = meta.durationMs;
-    if (!isRead && isPartial && (typeof durationMs === "number" || card._elapsedStart)) {
-      const t = document.createElement("span"); t.className = "tc-meta";
-      t.textContent = "Elapsed " + formatDur(typeof durationMs === "number" ? durationMs : Date.now() - card._elapsedStart);
-      card._elapsedEl = t;
-      fLeft.appendChild(t);
-    } else if (!isPartial && typeof durationMs === "number" && !isNaN(durationMs)) {
-      const t = document.createElement("span"); t.className = "tc-meta";
-      t.textContent = "Took " + formatDur(durationMs);
-      fLeft.appendChild(t);
-    }
-    if (fLeft.childNodes.length || fRight.childNodes.length) {
-      footer.appendChild(fLeft); footer.appendChild(fRight); resultEl.appendChild(footer);
-    }
-    if (meta.isError && !text) {
-      const err = document.createElement("div"); err.className = "tc-error"; err.textContent = "工具执行失败";
-      resultEl.appendChild(err);
-    }
-  }
   function renderDiffBlock(tab, diffText, filePath) {
     const wrap = document.createElement("div");
     wrap.className = "edit-diff";
@@ -1262,247 +1105,86 @@
 
   function buildEditCard(tab, toolName, label, filePath, toolCallId, argStr) {
     hideEmptyHint(tab);
-    tab.currentToolRow = null;
-    const el = document.createElement("div");
-    el.className = "msg edit-card msg-enter";
-    const title = document.createElement("div"); title.className = "edit-title";
-    const name = document.createElement("span"); name.className = "et-name"; name.textContent = toolName;
-    title.appendChild(name);
-    const path = document.createElement("span"); path.className = "et-path"; path.textContent = label || "";
-    title.appendChild(path);
-    const loading = document.createElement("span"); loading.className = "et-loading"; loading.textContent = "…";
-    title.appendChild(loading);
-    el.appendChild(title);
-    // 网页端默认收起卡片正文（diff / 写入预览）：长会话重放时几十张卡片全铺开，
-    // 渲染慢又占屏。收着只画标题一行，点标题展开；VSCode 里保持老样子（直接铺开）。
-    const collapseBody = IS_BROWSER;
-    let bodyBuilt = false;
-    let bodyWrap = null;
-    let chev = null;
-    let pendingResult = null;   // 收着时到的结果：diff 存起来，展开时再渲染
-    function ensureBody() {
-      if (bodyBuilt) { return; }
-      bodyBuilt = true;
-      bodyWrap = document.createElement("div");
-      bodyWrap.className = "edit-body";
-      // write 卡片：写入内容预览（前 10 行；替代整文件 diff）
-      if (toolName === "write") {
-        const pv = buildWritePreviewEl(argStr);
-        if (pv) { bodyWrap.appendChild(pv); }
-      }
-      // edit 卡片：完整 diff
-      if (toolName !== "write" && pendingResult && pendingResult.diff) {
-        bodyWrap.appendChild(renderDiffBlock(tab, pendingResult.diff, filePath));
-      }
-      el.appendChild(bodyWrap);
-    }
-    function setExpanded(open) {
-      el.classList.toggle("collapsed", !open);
-      if (open) { ensureBody(); }
-      if (chev) { chev.textContent = open ? "▾" : "▸"; }
-    }
-    if (collapseBody) {
-      chev = document.createElement("span"); chev.className = "et-chev"; chev.textContent = "▸";
-      title.insertBefore(chev, name);
-      title.classList.add("et-toggleable");
-      title.addEventListener("click", () => { setExpanded(el.classList.contains("collapsed")); });
-      el.classList.add("collapsed");
-    }
-    // write 卡片：展示写入内容预览（前 10 行，可展开；替代整文件 diff）
-    if (toolName === "write" && !collapseBody) {
-      const pv = buildWritePreviewEl(argStr);
-      if (pv) { el.appendChild(pv); }
-    }
-    tab.paneEl.appendChild(el);
+    // 收起态：跟普通工具调用一样的「齿轮 + 工具名」小标签，混进工具标签行；文件路径在悬浮提示里看。
+    const pill = document.createElement("span");
+    pill.className = "tool et-pill" + (toolCallId ? " running" : "");
+    pill.insertAdjacentHTML("afterbegin", GEAR_SVG);
+    pill.appendChild(document.createTextNode(" " + toolName));
+    mountToolTag(tab, pill);
     scrollToBottom(tab);
-    return {
-      el,
-      setResult(msg) {
-        loading.remove();
-        if (msg.isError) {
-          el.classList.add("error");
-          const err = document.createElement("span"); err.className = "et-err"; err.textContent = msg.errorText || "失败";
-          title.appendChild(err);
-          return;
-        }
-        el.classList.add("done");
-        // write 用内容预览代替整文件 diff；edit 仍展示 diff
-        if (collapseBody) {
-          if (bodyBuilt) {
-            // 已经展开过：结果到的晚，diff 直接补进正文（正文藏不藏由收起态决定）
-            if (toolName !== "write" && msg.diff && bodyWrap) {
-              bodyWrap.appendChild(renderDiffBlock(tab, msg.diff, filePath));
-            }
-          } else {
-            pendingResult = msg;
-            if (!el.classList.contains("collapsed")) { ensureBody(); }
+
+    let pendingResult = null;   // 结果（含 diff）：提示框随取随画
+    let resultDone = false;
+    let reverted = false;
+
+    /** 悬浮提示内容：标题行（工具名 + 路径 + 状态）+ diff / 写入预览 + 跳转 / 回滚按钮。 */
+    function fillTip(content) {
+      const head = document.createElement("div");
+      head.className = "tag-tip-call";
+      head.textContent = toolName + " " + (label || filePath || "") + (reverted ? "（已回滚）" : "");
+      content.appendChild(head);
+      if (resultDone && pendingResult) {
+        if (pendingResult.isError) {
+          const err = document.createElement("div");
+          err.className = "tip-err";
+          err.textContent = pendingResult.errorText || "失败";
+          content.appendChild(err);
+        } else {
+          // edit 显示完整 diff；write 显示写入内容预览（前 10 行）
+          if (toolName !== "write" && pendingResult.diff) {
+            content.appendChild(renderDiffBlock(tab, pendingResult.diff, filePath));
+          } else if (toolName === "write") {
+            const pv = buildWritePreviewEl(argStr);
+            if (pv) { content.appendChild(pv); }
           }
-        } else if (toolName !== "write" && msg.diff) {
-          el.appendChild(renderDiffBlock(tab, msg.diff, filePath));
+          // 按钮：write 给「跳转」，edit 成功且可回滚给「回滚」
+          if (toolName === "write" && filePath) {
+            const jumpBtn = document.createElement("span"); jumpBtn.className = "et-jump"; jumpBtn.innerHTML = '跳转 ' + ICONS["link-external"];
+            jumpBtn.title = "在编辑器中打开 " + (label || filePath);
+            jumpBtn.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "openFile", path: filePath, line: 1 }); });
+            content.appendChild(jumpBtn);
+          } else if (pendingResult.canRevert && toolCallId && !reverted) {
+            const revertBtn = document.createElement("span"); revertBtn.className = "et-revert"; revertBtn.innerHTML = ICONS.discard + ' 回滚';
+            revertBtn.title = "将文件恢复到本次修改前的内容";
+            revertBtn.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "revertEdit", tabId: tab.id, toolCallId }); });
+            content.appendChild(revertBtn);
+          }
         }
-        if (toolName === "write" && filePath) {
-          // 右上角：跳转按钮（打开文件）
-          const jumpBtn = document.createElement("span"); jumpBtn.className = "et-jump"; jumpBtn.textContent = "跳转 ↗";
-          jumpBtn.title = "在编辑器中打开 " + (label || filePath);
-          jumpBtn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            vscode.postMessage({ type: "openFile", path: filePath, line: 1 });
-          });
-          title.appendChild(jumpBtn);
-        } else if (msg.canRevert && toolCallId) {
-          const revertBtn = document.createElement("span"); revertBtn.className = "et-revert"; revertBtn.textContent = "↩ 回滚";
-          revertBtn.title = "将文件恢复到本次修改前的内容";
-          revertBtn.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "revertEdit", tabId: tab.id, toolCallId }); });
-          title.appendChild(revertBtn);
-        }
+      } else if (toolCallId) {
+        const loading = document.createElement("div");
+        loading.className = "tip-loading";
+        loading.textContent = "生成中…";
+        content.appendChild(loading);
+      }
+    }
+    pill._tipFill = fillTip;
+
+    // 与普通工具标签同一套触发：触屏点按切换（点外面关），桌面悬浮（带延迟与宽限）
+    if (IS_TOUCH_DEVICE) {
+      pill.addEventListener("click", () => {
+        if (tagTipTag === pill) { hideTagTip(); } else { showTagTip(pill); }
+      });
+    } else {
+      pill.addEventListener("mouseenter", () => showTagTip(pill));
+      pill.addEventListener("mouseleave", scheduleTagTipHide);
+    }
+
+    return {
+      setResult(msg) {
+        resultDone = true;
+        pendingResult = msg;
+        pill.classList.remove("running");
+        if (msg.isError) { pill.classList.add("error"); }
+        refreshTagTipIfShowing(pill);
       },
       markReverted() {
-        el.classList.add("reverted");
-        const btn = title.querySelector(".et-revert"); if (btn) { btn.remove(); }
-        if (!title.querySelector(".et-reverted")) { const t = document.createElement("span"); t.className = "et-reverted"; t.textContent = "已回滚"; title.appendChild(t); }
+        reverted = true;
+        pill.classList.remove("running");
+        pill.classList.add("reverted");
+        refreshTagTipIfShowing(pill);
       },
     };
   }
-
-  function fileBaseName(label) {
-    const s = String(label || "");
-    const slash = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
-    return slash >= 0 ? s.slice(slash + 1) : s;
-  }
-  function appendChangedFileChip(tab, f, nameOnly) {
-    const item = document.createElement("div");
-    item.className = "cf-item";
-    item.title = "点击查看 diff: " + f.label;
-    const name = document.createElement("span");
-    name.className = "cf-name";
-    if (nameOnly) {
-      name.textContent = fileBaseName(f.label);
-    } else {
-      const slash = f.label.lastIndexOf("/");
-      if (slash >= 0) {
-        const dir = document.createElement("span");
-        dir.className = "cf-dir";
-        dir.textContent = f.label.slice(0, slash + 1);
-        name.appendChild(dir);
-        name.appendChild(document.createTextNode(f.label.slice(slash + 1)));
-      } else {
-        name.textContent = f.label;
-      }
-    }
-    item.appendChild(name);
-    item.addEventListener("click", (e) => {
-      e.stopPropagation();
-      vscode.postMessage({ type: "openDiff", tabId: tab.id, path: f.path });
-    });
-    changedFilesEl.appendChild(item);
-    return item;
-  }
-  /** 折叠行：按单行可用宽度尽量多放文件 chips，放不下的收敛为 +N。
-   *  items: [{ tab, f }]；toggle: 展开回调 */
-  function layoutCollapsedChips(items, toggle) {
-    const gap = 6;
-    const els = items.map((it) => appendChangedFileChip(it.tab, it.f, true));
-    const more = document.createElement("span");
-    more.className = "cf-more";
-    more.textContent = "+" + items.length;
-    more.addEventListener("click", (e) => { e.stopPropagation(); toggle(); });
-    changedFilesEl.appendChild(more);
-    const cs = getComputedStyle(changedFilesEl);
-    const headerW = (changedFilesEl.querySelector(".cf-header")?.offsetWidth || 0) + gap;
-    const avail = changedFilesEl.clientWidth
-      - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - headerW;
-    if (avail <= 0) { return; } // 未渲染出宽度，保持现状（overflow 会裁剪）
-    const prefix = [0];
-    els.forEach((el, i) => { prefix.push(prefix[i] + el.offsetWidth + (i ? gap : 0)); });
-    let keep = els.length;
-    for (let iter = 0; iter < 8; iter++) {
-      const hiddenN = items.length - keep;
-      if (!hiddenN) { break; }
-      more.textContent = "+" + hiddenN;
-      more.title = "还有 " + hiddenN + " 个文件，点击展开";
-      const moreW = more.offsetWidth + gap;
-      let k = els.length;
-      while (k > 0 && prefix[k] + moreW > avail) { k--; }
-      if (k === keep) { break; }
-      keep = k;
-    }
-    els.forEach((el, i) => { el.style.display = i < keep ? "" : "none"; });
-    if (keep === items.length) { more.remove(); }
-  }
-
-  function renderChangedFilesFor(tab) {
-    if (activeId !== tab.id) { return; }
-    // tab 级合并：当前 tab 内所有 panel 的修改文件（同路径去重）
-    const tv = tabViews.get(activeTabId);
-    if (!tv) { changedFilesEl.innerHTML = ""; return; }
-    renderMergedChangedFiles(tabChangedEntries(tv));
-  }
-
-  /** 当前 tab 所有 panel 的修改文件（按路径去重；同路径保留后见者）。 */
-  function tabChangedEntries(tv) {
-    const byPath = new Map();
-    leavesOf(tv.root).forEach((pid) => {
-      const t = tabs.get(pid);
-      if (!t) { return; }
-      (t.changedFiles || []).forEach((f) => { if (f && f.path) { byPath.set(f.path, { tab: t, f }); } });
-    });
-    return Array.from(byPath.values());
-  }
-
-  /** 合并后的修改文件列表渲染（tab 级）。 */
-  function renderMergedChangedFiles(entries) {
-    // 网页端不显示「本次修改」条：改了哪些文件看消息里的 edit/write 卡片就够了。
-    if (IS_BROWSER) {
-      changedFilesEl.innerHTML = "";
-      changedFilesEl.classList.remove("expanded", "collapsed");
-      return;
-    }
-    changedFilesEl.innerHTML = "";
-    if (!entries.length) {
-      changedFilesEl.classList.remove("expanded", "collapsed");
-      return;
-    }
-    const expanded = !!mergedChangedExpanded;
-    changedFilesEl.classList.toggle("expanded", expanded);
-    changedFilesEl.classList.toggle("collapsed", !expanded);
-
-    const header = document.createElement("div");
-    header.className = "cf-header";
-    header.title = expanded ? "点击折叠" : "点击展开全部修改文件";
-    header.setAttribute("role", "button");
-    header.tabIndex = 0;
-    const chevron = document.createElement("span");
-    chevron.className = "cf-chevron";
-    chevron.textContent = expanded ? "▾" : "▸";
-    const title = document.createElement("span");
-    title.className = "cf-title";
-    title.textContent = "本次修改 (" + entries.length + ")";
-    header.appendChild(chevron);
-    header.appendChild(title);
-    const toggle = () => { mergedChangedExpanded = !mergedChangedExpanded; renderMergedChangedFiles(entries); };
-    header.addEventListener("click", toggle);
-    header.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
-    });
-    changedFilesEl.appendChild(header);
-
-    if (!expanded) {
-      // 折叠：单行摘要，按行宽自适应显示文件名，放不下用 +N
-      layoutCollapsedChips(entries, toggle);
-      return;
-    }
-    entries.forEach((ent) => appendChangedFileChip(ent.tab, ent.f, false));
-  }
-  let mergedChangedExpanded = false;
-  // webview 宽度变化时重新布局折叠的文件行
-  let cfResizeTimer = null;
-  window.addEventListener("resize", () => {
-    clearTimeout(cfResizeTimer);
-    cfResizeTimer = setTimeout(() => {
-      const t = tabs.get(activeId);
-      if (t) { renderChangedFilesFor(t); }
-    }, 120);
-  });
   function renderQueueBar(tab) {
     if (activeId !== tab.id) { return; }
     const items = tab.queuedSteering || [];
@@ -1622,18 +1304,19 @@
     (d.images || []).forEach((img, idx) => {
       const wrap = document.createElement("div"); wrap.className = "img-thumb";
       const el = document.createElement("img"); el.src = "data:" + img.mimeType + ";base64," + img.data; wrap.appendChild(el);
-      const rm = document.createElement("span"); rm.className = "rm"; rm.textContent = "×"; rm.title = "移除";
+      const rm = document.createElement("span"); rm.className = "rm"; rm.innerHTML = ICONS.close; rm.title = "移除";
       rm.addEventListener("click", () => { d.images.splice(idx, 1); renderAttachmentsFor(); });
       wrap.appendChild(rm); imgPreviewEl.appendChild(wrap);
     });
     (d.textBlocks || []).forEach((blk, idx) => {
       const card = document.createElement("div"); card.className = "text-block";
       const head = document.createElement("div"); head.className = "tb-head";
-      const caret = document.createElement("span"); caret.className = "tb-caret"; caret.textContent = "▶";
+      const caret = document.createElement("span"); caret.className = "tb-caret"; caret.innerHTML = CHEVRON_SVG;
       const title = document.createElement("span"); title.className = "tb-title"; title.title = blk.title || "";
-      title.textContent = blk.title || ("📎 粘贴文本 · " + blk.lines + " 行 · " + blk.chars + " 字符");
+      const titleText = blk.title || ("粘贴文本 · " + blk.lines + " 行 · " + blk.chars + " 字符");
+      title.innerHTML = ICONS.clippy + '<span>' + escHtml(titleText) + '</span>';
       head.appendChild(caret); head.appendChild(title);
-      const rm = document.createElement("span"); rm.className = "tb-rm"; rm.textContent = "×"; rm.title = "移除";
+      const rm = document.createElement("span"); rm.className = "tb-rm"; rm.innerHTML = ICONS.close; rm.title = "移除";
       rm.addEventListener("click", () => { d.textBlocks.splice(idx, 1); renderAttachmentsFor(); });
       const body = document.createElement("div"); body.className = "tb-body";
       const previewLines = blk.text.split("\n").slice(0, 400);
@@ -1660,6 +1343,24 @@
     d.selEnd = inputEl.selectionEnd;
     d.height = parseInt(inputEl.style.height, 10) || INPUT_MIN_HEIGHT;
   }
+  /**
+   * 页面刚打开那一两秒还没有 tab，输入区里的字记在"没有 tab"那份草稿（键是 null）下。
+   * 第一个 tab 出现时要把它搬过去：不然切到新 tab 会加载空草稿，把刚打的字冲掉
+   * （表现为"打开界面马上打字，字自己没了"）。输入框里的实时内容以输入框为准，
+   * 附件（粘的图、折叠文本块）在草稿里。
+   */
+  function carryComposerToTab(tabId) {
+    const pending = tabDrafts.get(null);
+    tabDrafts.set(tabId, {
+      text: inputEl.value,
+      selStart: inputEl.selectionStart,
+      selEnd: inputEl.selectionEnd,
+      height: parseInt(inputEl.style.height, 10) || INPUT_MIN_HEIGHT,
+      images: (pending && pending.images) || [],
+      textBlocks: (pending && pending.textBlocks) || [],
+    });
+    tabDrafts.delete(null);
+  }
   function restoreInputState() {
     const d = draftOfTab();
     inputEl.value = d.text || "";
@@ -1671,30 +1372,11 @@
     hideFileMenu();
   }
 
-  /** 把文本写入当前 tab 的输入框（fork 后把 user 消息救回，可编辑后重发）。 */
-  function applyInputText(tab, text) {
-    if (!tab) { return; }
-    const value = typeof text === "string" ? text : "";
-    const tv = tabViews.get(activeTabId);
-    if (!tv || !leavesOf(tv.root).includes(tab.id)) { return; }
-    const d = draftOfTab();
-    d.text = value;
-    d.selStart = value.length;
-    d.selEnd = value.length;
-    inputEl.value = value;
-    inputEl.style.height = "auto";
-    autoResize();
-    try { inputEl.setSelectionRange(value.length, value.length); } catch { /* ignore */ }
-    updateSendState();
-    inputEl.focus();
-  }
-
   function reflectTabUI() {
     const tab = activeTab();
     if (!tab) { return; }
     updateSendState();
     syncStatus();
-    renderChangedFilesFor(tab);
     renderQueueBar(tab);
     syncJumpBottom(tab);
   }
@@ -1709,7 +1391,7 @@
   function activateTabView(id) {
     if (!tabViews.has(id) || activeTabId === id) { return; }
     hideTagTip();
-    saveInputState();
+    if (activeTabId !== null) { saveInputState(); } else { carryComposerToTab(id); }
     activeTabId = id;
     const tv = tabViews.get(id);
     activeId = (tv.focusPanelId && leavesOf(tv.root).includes(tv.focusPanelId))
@@ -1720,6 +1402,8 @@
     reflectTabUI();
     renderTabBar();
     if (!IS_TOUCH_DEVICE) { inputEl.focus(); }
+    // 切到别的 tab：排在"还没有 tab"名下的消息现在有主了，能发就发
+    flushPendingSend();
   }
 
   // ==================== tab 栏渲染（容器） ====================
@@ -1773,7 +1457,7 @@
     if (activeChild && activeChild.streaming) { el.classList.add("streaming"); }
     else if (activeChild && activeChild.loading) { el.classList.add("loading"); }
     const spinner = document.createElement("span"); spinner.className = "ct-spinner"; el.appendChild(spinner);
-    const mark = document.createElement("span"); mark.className = "ts-mark"; mark.textContent = "↳"; el.appendChild(mark);
+      const mark = document.createElement("span"); mark.className = "ts-mark"; mark.innerHTML = ICONS["git-branch"]; el.appendChild(mark);
     const title = document.createElement("span"); title.className = "ct-title";
     title.textContent = activeChild ? activeChild.name : "子会话";
     title.title = activeChild
@@ -1796,12 +1480,6 @@
       }
       stackToggleGuard = null;
       if (stackMenu) { hideStackMenu(); return; }
-      openStackMenu(el, parentTv.id, kids);
-    });
-    // 右键也弹这个列表（交回 / 变独立那些在列表行的右键菜单里）
-    el.addEventListener("contextmenu", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
       openStackMenu(el, parentTv.id, kids);
     });
     return el;
@@ -1848,12 +1526,6 @@
       x.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "closeTab", tabId: k.id }); });
       row.appendChild(x);
       row.addEventListener("click", () => { hideStackMenu(); vscode.postMessage({ type: "switchTab", tabId: k.id }); });
-      row.addEventListener("contextmenu", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        // 下拉框留在原地不收：右键只是在这行旁边弹操作菜单；点外面时两样各自收起
-        showPaneMenu(e.clientX, e.clientY, leavesOf(k.root)[0] || k.focusPanelId);
-      });
       menu.appendChild(row);
     });
     document.body.appendChild(menu);
@@ -1964,21 +1636,7 @@
           clearAllDropHints();
           if (tabBarDirty) { tabBarDirty = false; tabBarSig = ""; renderTabBar(); }
         });
-        // 右键菜单：单 panel 没有 pane-head，菜单挂 tab 条目上
-        el.addEventListener("contextmenu", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          showPaneMenu(e.clientX, e.clientY, panelIds[0]);
-        });
-      } else {
-        // 多 panel tab：条目自身右键 → 整个 tab（含分屏布局）的操作菜单
-        el.addEventListener("contextmenu", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          showTabMenu(e.clientX, e.clientY, tv, panelIds.length);
-        });
-      }
-      tabBarInner.appendChild(el);
+      }      tabBarInner.appendChild(el);
       // 派了活的主 tab：后面跟一张「子会话」标签，把它的子会话收进去
       const kids = byParent.get(tv.id);
       if (kids && kids.length > 0) { tabBarInner.appendChild(buildStackTab(tv, kids)); }
@@ -2037,7 +1695,7 @@
     const head = document.createElement("div");
     head.className = "pane-head";
     head.draggable = true;
-    head.title = "拖动移动 panel · 双击最大化/还原 · 右键菜单";
+    head.title = "拖动移动 panel · 双击最大化/还原";
     const dot = document.createElement("span"); dot.className = "ph-dot";
     const title = document.createElement("span");
     title.className = "ph-title";
@@ -2058,10 +1716,6 @@
       if (activeId !== tab.id) { focusPanelLocal(tab.id); }
     });
     head.addEventListener("dblclick", (e) => { e.stopPropagation(); toggleMaximize(tab.id); });
-    head.addEventListener("contextmenu", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      showPaneMenu(e.clientX, e.clientY, tab.id);
-    });
     head.addEventListener("dragstart", (e) => {
       draggingPanelId = tab.id;
       e.dataTransfer.effectAllowed = "move";
@@ -2096,11 +1750,10 @@
     if (!t.piReady) { return '<span class="st-text">等待 pi 启动…</span>'; }
     const tags = statusTags(t);
     if (t.streaming) {
-      const labels = { working: "处理中…", thinking: "思考中…", tool: "执行工具…" };
-      const label = labels[t.activity] || labels.working;
+      // 生成中只留打点动画和模型 / 进度 / 速度标签；状态词（处理中 / 思考中 / 执行工具）
+      // 与 “Esc 中止” 提示已按需求去掉，中止入口是 Esc 键与停止生成图标。
       return '<span class="typing"><span></span><span></span><span></span></span> ' +
-        (tags.length ? tags.join(" · ") + " · " : "") +
-        '<span class="st-label">' + label + ' · Esc 中止</span>';
+        (tags.length ? tags.join(" · ") : "");
     }
     if (!tags.length) { return '<span class="st-text">未配置模型（点击选择）</span>'; }
     return tags.join(" · ");
@@ -2114,8 +1767,7 @@
       ? (t.percent >= 90 ? "err" : (t.percent >= 70 ? "warn" : "ok"))
       : "";
     const hasTps = typeof currentTps(t) === "number" ? "t" : "";
-    const act = t.streaming ? (t.activity || "working") : "";
-    return [(t.streaming ? "s" : "i"), modelPartFor(t) ? "m" : "", pctCls, hasTps, act].join("|");
+    return [(t.streaming ? "s" : "i"), modelPartFor(t) ? "m" : "", pctCls, hasTps].join("|");
   }
   /** 签名相同时只替换数字文本，不动 .typing 等动画节点。 */
   function updateStatusInPlace(el, t) {
@@ -2132,11 +1784,6 @@
     if (typeof tps === "number") {
       const s = el.querySelector(".st-tps");
       if (s) { s.textContent = tps.toFixed(1) + " t/s"; }
-    }
-    if (t.streaming) {
-      const labels = { working: "处理中…", thinking: "思考中…", tool: "执行工具…" };
-      const l = el.querySelector(".st-label");
-      if (l) { l.textContent = (labels[t.activity] || labels.working) + " · Esc 中止"; }
     }
   }
 
@@ -2168,81 +1815,6 @@
     paneMenuEl.remove();
     paneMenuEl = null;
   }
-  /** 通用浮层菜单：items 为 {label, fn}；label 为空表示分隔线。 */
-  function showMenu(x, y, items) {
-    hidePaneMenu();
-    const menu = document.createElement("div");
-    menu.className = "pane-menu";
-    items.forEach((it) => {
-      if (!it || !it.label) {
-        const s = document.createElement("div"); s.className = "pm-sep"; menu.appendChild(s); return;
-      }
-      const el = document.createElement("div");
-      el.className = "pm-item";
-      el.textContent = it.label;
-      el.title = it.hint || "";
-      el.addEventListener("click", () => { hidePaneMenu(); it.fn(); });
-      menu.appendChild(el);
-    });
-    paneMenuEl = menu;
-    document.body.appendChild(menu);
-    const r = menu.getBoundingClientRect();
-    menu.style.left = Math.min(x, window.innerWidth - r.width - 8) + "px";
-    menu.style.top = Math.min(y, window.innerHeight - r.height - 8) + "px";
-    const closer = (ev) => { if (paneMenuEl && !paneMenuEl.contains(ev.target)) { hidePaneMenu(); } };
-    menu._closer = closer;
-    document.addEventListener("mousedown", closer, true);
-  }
-  /** 活体移交菜单项：连同会话与 pi 进程一起搬到另一个工作区。 */
-  function transferItem(label, msg) {
-    if (!transferDest) { return null; }
-    return { label, hint: "连同会话上下文与 pi 进程一起搬过去，不重启、不丢历史", fn: () => vscode.postMessage(msg) };
-  }
-  /** 子会话（taba）相关的右键菜单项：子会话那边是“交回 / 打开父会话 / 变独立”，派了活的那边列出去哪几个。 */
-  function tabaMenuItems(panelId) {
-    const t = tabs.get(panelId);
-    const info = t && t.taba;
-    if (!info) { return []; }
-    if (info.role === "child") {
-      if (!info.parentName) { return []; }
-      return [
-        {
-          label: "⇪ 把结果交回「" + info.parentName + "」",
-          hint: "把这个会话最后一条回复当成一条新消息发过去（跑完第一轮时已经自动交过一次）",
-          fn: () => vscode.postMessage({ type: "tabaDeliver", panelId }),
-        },
-        { label: "↗ 打开派活的那个会话", fn: () => vscode.postMessage({ type: "tabaGoParent", panelId }) },
-        { label: "⛓ 变成独立会话（不再自动交回）", fn: () => vscode.postMessage({ type: "tabaDetach", panelId }) },
-      ];
-    }
-    return (info.children || []).map((k) => ({
-      label: "↳ " + k.name + "（" + (k.stateText || k.state) + "）",
-      hint: k.tabName ? ("切到 tab「" + k.tabName + "」") : "",
-      fn: () => vscode.postMessage({ type: "tabaOpenTab", tabId: k.tabId, panelId: k.panelId }),
-    }));
-  }
-
-  function showPaneMenu(x, y, panelId) {
-    const tabaItems = tabaMenuItems(panelId);
-    showMenu(x, y, [
-      { label: "＋ 新建空 panel", fn: () => vscode.postMessage({ type: "addPanel", panelId }) },
-      { label: "⑂ Fork 会话（克隆上下文到新 panel）", fn: () => vscode.postMessage({ type: "forkPanel", panelId }) },
-      transferItem("⤢ 移到" + transferDest + "（保留 pi 进程）", { type: "transferOut", panelId }),
-      ...(tabaItems.length ? [{ label: null }, ...tabaItems] : []),
-      { label: null },
-      { label: "✕ 关闭 panel", fn: () => vscode.postMessage({ type: "closePanel", panelId }) },
-    ].filter(Boolean));
-  }
-  /** 多 panel tab 的右键菜单：整个 tab（连同分屏布局）移交 / 关闭。
-   *  单 panel tab 的条目本身就是那个 panel，复用 pane 菜单。 */
-  function showTabMenu(x, y, tv, count) {
-    const items = [];
-    const t = transferItem("⤢ 整个 tab 移到" + transferDest + "（" + count + " 个会话）", { type: "transferOut", containerId: tv.id });
-    if (t) { items.push(t, { label: null }); }
-    items.push({ label: "✕ 关闭 tab（内部 panel 全部关闭）", fn: () => vscode.postMessage({ type: "closeTab", tabId: tv.id }) });
-    showMenu(x, y, items);
-  }
-
   // ---- 布局 DOM ----
   /** 拖拽悬停区判定：边缘 28% 为上下左右，中心为替换。返回 zone 并高亮。 */
   function zoneFromEvent(leaf, e) {
@@ -2286,7 +1858,7 @@
     // 落点指示层（四个方位 + 中心替换）；跨 tab 拖动时改显示整格“合并”提示
     const ind = document.createElement("div");
     ind.className = "drop-indicator";
-    const ZONE_MARKS = { left: "←", right: "→", top: "↑", bottom: "↓", center: "⤫" };
+    const ZONE_MARKS = { left: ICONS["arrow-left"], right: ICONS["arrow-right"], top: ICONS["arrow-up"], bottom: ICONS["arrow-down"], center: ICONS.close };
     const ZONE_TITLES = { left: "插到左侧", right: "插到右侧", top: "插到上方", bottom: "插到下方", center: "替换此 panel" };
     ["left", "right", "top", "bottom", "center"].forEach((z) => {
       const d = document.createElement("div");
@@ -2295,13 +1867,13 @@
       d.title = ZONE_TITLES[z];
       const mark = document.createElement("span");
       mark.className = "dz-mark";
-      mark.textContent = ZONE_MARKS[z];
+      mark.innerHTML = ZONE_MARKS[z];
       d.appendChild(mark);
       ind.appendChild(d);
     });
     const mergeHint = document.createElement("div");
     mergeHint.className = "drop-merge-hint";
-    mergeHint.textContent = "⇲ 合并进此 tab";
+    mergeHint.innerHTML = ICONS["merge-into"] + '<span> 合并进此 tab</span>';
     ind.appendChild(mergeHint);
     leaf.appendChild(ind);
     leaf.addEventListener("dragover", (e) => {
@@ -2394,11 +1966,9 @@
         p.scrollTop = t.lastScrollTop;
       }
     });
-    // 重挂载会让 CSS 动画重播：剥掉历史气泡的一次性动画（入场/高亮），避免整窗“抖一下”或高亮重闪
-    rootEl.querySelectorAll(".msg-enter, .entry-flash").forEach((el) => {
+    // 重挂载会让 CSS 动画重播：剥掉历史气泡的入场动画，避免整窗“抖一下”
+    rootEl.querySelectorAll(".msg-enter").forEach((el) => {
       el.classList.remove("msg-enter");
-      // entry-flash 有自己的定时清理；切走再切回时不再重闪，直接移除
-      el.classList.remove("entry-flash");
     });
     applyFocusClasses();
     updatePaneHeads();
@@ -2459,172 +2029,32 @@
     vscode.postMessage({ type: "movePanel", panelId: draggingPanelId });
   });
 
-  // ==================== 树视图 ====================
-  function entryText(content) { if (typeof content === "string") { return content; } if (Array.isArray(content)) { return content.map((c) => (c && c.type === "text") ? c.text : "").join(""); } return ""; }
-  function clip(s) { s = String(s || "").replace(/\s+/g, " ").trim(); return s.length > 64 ? s.slice(0, 64) + "…" : s; }
-  function entrySummary(node) {
-    const e = node.entry;
-    if (e.type === "message") {
-      const m = e.message;
-      if (m.role === "user") { return "你：" + clip(entryText(m.content)); }
-      if (m.role === "assistant") {
-        const t = entryText(m.content);
-        if (t) { return "pi：" + clip(t); }
-        if (m.stopReason === "aborted") { return "pi：(已中止)"; }
-        if (m.errorMessage) { return "pi：" + clip(m.errorMessage); }
-        return "pi：(工具调用)";
-      }
-      if (m.role === "toolResult") { return "› 工具结果"; }
-      if (m.role === "bashExecution") { return "› bash：" + clip(m.command || ""); }
-      return "› " + m.role;
-    }
-    if (e.type === "compaction") { return "◌ 压缩摘要"; }
-    if (e.type === "branch_summary") { return "↳ 分支摘要：" + clip(e.summary); }
-    if (e.type === "session_info") { return "· 标题" + (e.name ? "：" + e.name : ""); }
-    if (e.type === "label") { return "· 标签" + (e.label ? "：" + e.label : ""); }
-    if (e.type === "custom" || e.type === "custom_message") { return "· " + e.customType; }
-    return e.type;
-  }
-  function isHiddenNode(node) {
-    const e = node.entry;
-    if (e.type === "model_change" || e.type === "thinking_level_change") { return true; }
-    if (e.type === "message") {
-      const m = e.message; const r = m && m.role;
-      if (r === "toolResult" || r === "bashExecution") { return true; }
-      if (r === "assistant" && isToolCallOnlyMsg(m)) { return true; }
-    }
-    return false;
-  }
-  function isToolCallOnlyMsg(m) {
-    if (!Array.isArray(m.content)) { return false; }
-    let hasTool = false;
-    for (const c of m.content) {
-      if (!c) { continue; }
-      if (c.type === "text" && String(c.text || "").trim()) { return false; }
-      if (c.type === "toolCall") { hasTool = true; }
-    }
-    return hasTool;
-  }
-  function flattenTree(roots) {
-    const rows = [];
-    function walk(node, indent, gutters, isLast, showConnector, connectorPos) {
-      const hidden = isHiddenNode(node);
-      if (!hidden) { rows.push({ node, indent, isLast, gutters: gutters.slice(), showConnector, connectorPos }); }
-      const kids = node.children || [];
-      const multiple = kids.length > 1;
-      const childIndent = multiple ? indent + 1 : indent;
-      kids.forEach((k, i) => {
-        const kIsLast = i === kids.length - 1;
-        walk(k, childIndent, multiple ? gutters.concat({ pos: indent, show: !kIsLast }) : gutters, kIsLast, multiple, multiple ? indent : -1);
-      });
-    }
-    roots.forEach((r, i) => walk(r, 0, [], i === roots.length - 1, false, -1));
-    return rows;
-  }
-  function activePathSet(roots, leafId) {
-    const byId = new Map();
-    function visit(node) { byId.set(node.entry.id, node); (node.children || []).forEach(visit); }
-    roots.forEach(visit);
-    const set = new Set(); let cur = leafId;
-    while (cur) { set.add(cur); const n = byId.get(cur); if (!n) { break; } cur = n.entry.parentId ?? null; }
-    return set;
-  }
-  function renderTree(tree, leafId, tabId) {
-    const dt = tabs.get(tabId);
-    try {
-    treeBody.innerHTML = "";
-    // 浮层只展示 user 消息：单击定位原消息，双击才从该处开分支。
-    const users = [];
-    (function walk(nodes) {
-      for (const n of nodes) {
-        const e = n && n.entry;
-        if (e && e.type === "message" && e.message && e.message.role === "user") {
-          users.push(n);
-        }
-        walk(n.children || []);
-      }
-    })(tree);
-    const active = activePathSet(tree, leafId);
-    if (users.length === 0) {
-      const empty = document.createElement("div"); empty.className = "tree-empty"; empty.textContent = "没有历史消息。"; treeBody.appendChild(empty);
-    } else {
-      users.forEach((node) => {
-        const e = node.entry;
-        const isLeaf = e.id === leafId;
-        const onPath = active.has(e.id);
-        const line = document.createElement("div");
-        line.className = "tree-row" + (isLeaf ? " is-leaf" : "") + (onPath ? " on-path" : "");
-        const marker = document.createElement("span"); marker.className = "tree-mark user"; line.appendChild(marker);
-        const text = document.createElement("span"); text.className = "tree-text"; text.textContent = entrySummary(node); line.appendChild(text);
-        line.title = isLeaf
-          ? "单击定位到当前消息（当前分支末尾，无需新建分支）"
-          : "单击定位到聊天消息 · 双击在此处新建分支（可编辑该消息后重发）";
-        // 原生 dblclick 会先触发两次 click；延后单击动作，确保双击不会先关闭浮层。
-        line.addEventListener("click", () => {
-          cancelTreeClick();
-          treeClickTimer = setTimeout(() => {
-            treeClickTimer = null;
-            hideTree();
-            scrollToEntry(dt, e.id);
-          }, 500);
-        });
-        if (!isLeaf) {
-          line.classList.add("forkable");
-          line.addEventListener("dblclick", (event) => {
-            event.preventDefault();
-            cancelTreeClick();
-            hideTree();
-            vscode.postMessage({ type: "forkAtEntry", tabId: tabId, entryId: e.id });
-          });
-        }
-        treeBody.appendChild(line);
-      });
-      const leafEl = treeBody.querySelector(".tree-row.is-leaf");
-      if (leafEl) { leafEl.scrollIntoView({ block: "center" }); }
-    }
-    // 底部“复制完整对话”按钮：只对当前展示的这个 panel 生效
-    treePanelId = tabId;
-    const copyable = Array.isArray(tree) && tree.length > 0;
-    treeCloneBtn.disabled = !copyable;
-    treeCloneBtn.title = copyable
-      ? "把当前分支完整复制到同 tab 右侧新分屏 panel（新分支会话，源对话不受影响）"
-      : "当前没有可复制的对话";
-    treeOverlay.classList.remove("hidden");
-    } catch (e) {
-      if (dt) { addPlain(dt, "system error", null, "对话树渲染失败: " + (e && e.message ? e.message : String(e))); }
-    }
-  }
-
   // ==================== 通用拾取器浮层（模型 / 历史）====================
   function hidePicker() {
     pickerOverlay.classList.add("hidden");
+    pickerOverlay.classList.remove("pk-drawer");
     pickerBody.innerHTML = "";
     pickerSearch.value = "";
     pickerFooter.innerHTML = "";
     pickerFooter.classList.add("hidden");
     pickerFooter.classList.remove("pk-model-footer");
+    pickerFooter.classList.remove("pk-history-footer");
+    const leftoverClose = document.getElementById("pickerClose");
+    if (leftoverClose) { leftoverClose.remove(); }
     pickerSearchWrap.classList.remove("hidden");
     pickerState = null;
   }
-  function pickerRelTime(mtime) {
-    if (!mtime) { return ""; }
-    const diff = Math.max(0, Date.now() - mtime);
-    const sec = Math.floor(diff / 1000);
-    if (sec < 60) { return "刚刚"; }
-    const min = Math.floor(sec / 60); if (min < 60) { return min + " 分钟前"; }
-    const hr = Math.floor(min / 60); if (hr < 24) { return hr + " 小时前"; }
-    const day = Math.floor(hr / 24); if (day < 30) { return day + " 天前"; }
-    return new Date(mtime).toLocaleDateString();
-  }
-  /** ISO timestamp -> MM-DD HH:MM，用作历史会话行的行首错点。 */
-  function formatSessionTs(iso) {
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) { return ""; }
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    const hh = String(d.getHours()).padStart(2, "0");
-    const mi = String(d.getMinutes()).padStart(2, "0");
-    return mm + "-" + dd + " " + hh + ":" + mi;
+  /** pi /resume 列表的相对时间：now / 5m / 3h / 2d / 3w / 2mo / 1y。 */
+  function pickerRelTime(ms) {
+    if (!ms) { return ""; }
+    const diffMin = Math.floor(Math.max(0, Date.now() - ms) / 60000);
+    if (diffMin < 1) { return "now"; }
+    if (diffMin < 60) { return diffMin + "m"; }
+    const hr = Math.floor(diffMin / 60); if (hr < 24) { return hr + "h"; }
+    const day = Math.floor(hr / 24); if (day < 7) { return day + "d"; }
+    if (day < 30) { return Math.floor(day / 7) + "w"; }
+    if (day < 365) { return Math.floor(day / 30) + "mo"; }
+    return Math.floor(day / 365) + "y";
   }
   function pickerItemMatch(item, kind, q) {
     if (!q) { return true; }
@@ -2633,11 +2063,9 @@
       hay.push(item.id || "", item.provider || "", item.name || "");
     } else if (kind === "options") {
       hay.push(item.label || "", item.desc || "");
-    } else if (kind === "relay") {
-      hay.push(item.label || "", item.tabName || "", item.id || "");
     } else {
-      // 没有专属排版的那几种（如浏览器界面里的选择列表）：除了历史会话的预览，也按标题筛
-      hay.push(item.label || "", item.userPreview || "", item.assistantPreview || "", item.timestamp || "");
+      // 没有专属排版的那几种（如浏览器界面里的选择列表）：按标题筛
+      hay.push(item.label || "", item.title || "");
     }
     return hay.some((s) => s.toLowerCase().includes(q));
   }
@@ -2780,28 +2208,7 @@
     const st = pickerState;
     if (!st) { return; }
     const q = (pickerSearch.value || "").toLowerCase().trim();
-    if (st.kind === "relay") {
-      // 树形过滤：tab 名命中 → 整组保留；否则仅保留自身命中的 panel 子项，空组剔除
-      st.filtered = [];
-      let i = 0;
-      while (i < st.items.length) {
-        const it = st.items[i];
-        if (it.kind !== "tab") { i++; continue; }
-        const tabMatch = pickerItemMatch(it, "relay", q);
-        let j = i + 1;
-        const kids = [];
-        while (j < st.items.length && st.items[j].kind !== "tab") {
-          if (tabMatch || pickerItemMatch(st.items[j], "relay", q)) { kids.push(st.items[j]); }
-          j++;
-        }
-        if (kids.length > 0) {
-          st.filtered.push(it, ...kids);
-        }
-        i = j;
-      }
-    } else {
-      st.filtered = st.items.filter((it) => pickerItemMatch(it, st.kind, q));
-    }
+    st.filtered = st.items.filter((it) => pickerItemMatch(it, st.kind, q));
     if (st.kind === "model") {
       if (st.draftModel) {
         const draftIndex = st.filtered.indexOf(st.draftModel);
@@ -2821,24 +2228,9 @@
     pickerBody.innerHTML = "";
     if (st.filtered.length === 0) {
       const empty = document.createElement("div"); empty.className = "pk-empty";
-      if (q) {
-        // 搜索无结果：history 分页下提示只搜了已加载范围，可加载更多再搜。
-        if (st.kind === "history" && st.historyLoadedFamilies !== null && st.historyTotalFamilies !== null && st.historyLoadedFamilies < st.historyTotalFamilies) {
-          empty.textContent = "在已加载 " + st.historyLoadedFamilies + " / " + st.historyTotalFamilies + " 个家族中未命中。";
-          empty.classList.add("pk-empty-paged");
-        } else if (st.kind === "history" && st.historyLoadedFamilies !== null && st.historyTotalFamilies !== null) {
-          empty.textContent = "在全部 " + st.historyTotalFamilies + " 个家族中未命中。";
-        } else {
-          empty.textContent = "没有匹配项。";
-        }
-      } else {
-        empty.textContent = "列表为空。";
-      }
+      empty.textContent = q ? "没有匹配项。" : "列表为空。";
       pickerBody.appendChild(empty);
-      // 有匹配项为空但仍有更多未加载时，同样给出加载更多入口。
-      if (st.kind === "history" && st.historyLoadedFamilies !== null && st.historyTotalFamilies !== null && st.historyLoadedFamilies < st.historyTotalFamilies) {
-        pickerBody.appendChild(buildHistoryLoadMoreBtn(st));
-      }
+      if (st.kind === "history" && st.historyHasMore) { pickerBody.appendChild(buildHistoryLoadMoreBtn(st)); }
       if (st.kind === "model") { renderModelFooter(st); }
       return;
     }
@@ -2895,70 +2287,28 @@
       el.className = "pk-item" + (idx === st.sel ? " active" : "");
       if (st.kind === "history") {
         el.classList.add("pk-history");
-        if (st.current && item.file === st.current) { el.classList.add("current"); }
-        // 缩进体现父子分支：depth 0 无额外缩进，子会话逐级缩进。
-        const depth = typeof item.depth === "number" ? item.depth : 0;
-        if (depth > 0) { el.style.paddingLeft = (12 + depth * 20) + "px"; }
-        // 元信息行：时间 + 分支标记
-        const meta = document.createElement("div"); meta.className = "pk-history-meta";
-        const ts = item.timestamp ? formatSessionTs(item.timestamp) : "";
-        if (ts) { const t = document.createElement("span"); t.className = "pk-history-ts"; t.textContent = ts; meta.appendChild(t); }
-        if (depth > 0) {
-          const br = document.createElement("span"); br.className = "pk-history-branch"; br.textContent = "分支";
-          meta.appendChild(br);
-        }
-        el.appendChild(meta);
-        // 我：用户提问（主题，最多两行）
-        const u = (item.userPreview || "").trim();
-        if (u) {
-          const ur = document.createElement("div"); ur.className = "pk-history-user";
-          const ul = document.createElement("span"); ul.className = "pk-history-role"; ul.textContent = "我";
-          const ut = document.createElement("span"); ut.className = "pk-history-text"; ut.textContent = u;
-          ur.appendChild(ul); ur.appendChild(ut);
-          el.appendChild(ur);
-        }
-        // AI：摘要（一行）
-        const a = (item.assistantPreview || "").trim();
-        if (a) {
-          const ar = document.createElement("div"); ar.className = "pk-history-ai";
-          const al = document.createElement("span"); al.className = "pk-history-role pk-history-role-ai"; al.textContent = "AI";
-          const at = document.createElement("span"); at.className = "pk-history-text"; at.textContent = a;
-          ar.appendChild(al); ar.appendChild(at);
-          el.appendChild(ar);
-        }
-        if (!u && !a) {
-          const em = document.createElement("div"); em.className = "pk-history-empty"; em.textContent = "(空)";
-          el.appendChild(em);
-        }
+        if (item.current) { el.classList.add("current"); }
+        const main = document.createElement("div"); main.className = "pk-history-main";
+        const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.title || "(无消息)";
+        main.appendChild(title);
+        const right = document.createElement("span"); right.className = "pk-history-right";
+        const count = document.createElement("span"); count.className = "pk-history-count"; count.textContent = String(item.count ?? 0);
+        const age = document.createElement("span"); age.className = "pk-history-age"; age.textContent = pickerRelTime(item.lastActivity);
+        right.appendChild(count); right.appendChild(age);
+        main.appendChild(right);
+        el.appendChild(main);
+        el.title = item.title || "";
       } else if (st.kind === "options") {
         const t = document.createElement("div"); t.className = "pk-title";
         const chk = document.createElement("span"); chk.className = "pk-check" + (item.check === true ? " on" : "");
-        chk.textContent = item.check === true ? "✓" : "";
+        chk.innerHTML = item.check === true ? ICONS.check : "";
         t.appendChild(chk);
         t.appendChild(document.createTextNode(item.label || ""));
         el.appendChild(t);
         if (item.desc) { const d = document.createElement("div"); d.className = "pk-desc"; d.style.paddingLeft = "20px"; d.textContent = item.desc; el.appendChild(d); }
-      } else if (st.kind === "relay") {
-        if (item.kind === "tab") {
-          // tab 分组头：整行 = 广播动作（行尾 ⟶ 按钮为视觉锚点）
-          el.classList.add("pk-relay-tab");
-          const name = document.createElement("span"); name.className = "pk-relay-name";
-          name.textContent = "「" + (item.label || "") + "」";
-          const count = document.createElement("span"); count.className = "pk-relay-count";
-          count.textContent = item.count + " 个 panel";
-          const bcast = document.createElement("span"); bcast.className = "pk-relay-bcast";
-          bcast.textContent = "⟶ 发给全部";
-          el.appendChild(name); el.appendChild(count); el.appendChild(bcast);
-        } else {
-          // panel 行：点对点
-          el.classList.add("pk-relay-panel");
-          const t = document.createElement("div"); t.className = "pk-title";
-          t.textContent = item.label || item.id || "";
-          el.appendChild(t);
-        }
       }
       // 其他种类（没有专属排版的，如浏览器界面里问“选哪一项”）：直接渲染标题
-      if (st.kind !== "history" && st.kind !== "options" && st.kind !== "relay" && item.label) {
+      if (st.kind !== "history" && st.kind !== "options" && item.label) {
         const t = document.createElement("div"); t.className = "pk-title";
         t.textContent = String(item.label);
         el.appendChild(t);
@@ -2967,8 +2317,8 @@
       el.addEventListener("click", () => { confirmPicker(idx); });
       pickerBody.appendChild(el);
     });
-    // history 分页：列表底部追加“加载更多”按钮。
-    if (st.kind === "history" && st.historyLoadedFamilies !== null && st.historyTotalFamilies !== null && st.historyLoadedFamilies < st.historyTotalFamilies) {
+    // history「加载更多」：列表底部追加按钮。
+    if (st.kind === "history" && st.historyHasMore) {
       pickerBody.appendChild(buildHistoryLoadMoreBtn(st));
     }
     if (st.kind === "model") { renderModelFooter(st); }
@@ -2976,10 +2326,7 @@
   function buildHistoryLoadMoreBtn(st) {
     const btn = document.createElement("button");
     btn.className = "pk-loadmore secondary";
-    const remaining = (st.historyTotalFamilies || 0) - (st.historyLoadedFamilies || 0);
-    btn.textContent = st.historyLoading
-      ? "加载中…"
-      : "加载更多（剩余 " + remaining + " / 共 " + st.historyTotalFamilies + " 个家族）";
+    btn.textContent = st.historyLoading ? "加载中…" : "加载更多";
     btn.disabled = !!st.historyLoading;
     btn.addEventListener("click", () => {
       if (st.historyLoading) { return; }
@@ -3019,10 +2366,7 @@
       vscode.postMessage({ type: "pickerToggle", kind, action: item.action, value: item.value });
       return;
     }
-    // 转发：tab 行 = 广播（tabId）；panel 行 = 点对点（id）
-    const payload = kind === "relay"
-      ? (item.kind === "tab" ? { tabId: item.id } : { id: item.id })
-      : { file: item.file };
+    const payload = { file: item.file };
     hidePicker();
     vscode.postMessage({ type: "pickerChoice", kind, payload });
   }
@@ -3045,16 +2389,16 @@
       draftModel: null,
       draftThinking: undefined,
       toggle,
-      // history 分页：已加载家族数 / 总家族数。缺省时按旧逻辑不分页。
-      historyTotalFamilies: typeof msg.totalFamilies === "number" ? msg.totalFamilies : null,
-      historyLoadedFamilies: typeof msg.loadedFamilies === "number" ? msg.loadedFamilies : null,
+      // history「加载更多」：宿主说还有没有下一批。
+      historyHasMore: msg.hasMore === true,
       historyLoading: false,
     };
-    const titleMap = { model: "切换模型", history: "会话历史", options: "显示选项", relay: "转发到…" };
+    const titleMap = { model: "切换模型", history: "会话历史", options: "显示选项" };
     pickerTitle.textContent = titleMap[kind] || (typeof msg.title === "string" && msg.title ? msg.title : "选择");
     pickerSearch.value = "";
     pickerSearchWrap.classList.toggle("hidden", !searchable);
     pickerFooter.classList.remove("pk-model-footer");
+    pickerFooter.classList.remove("pk-history-footer");
     pickerFooter.innerHTML = "";
     if (kind === "model") {
       pickerFooter.classList.remove("hidden");
@@ -3065,6 +2409,21 @@
         pickerState.draftModel = cur;
         pickerState.draftThinking = defaultThinkingForModel(pickerState, cur);
       }
+    } else if (kind === "history") {
+      // 历史会话面板：头部加一颗关闭按钮（面板占满整屏高，窄屏幕上遮罩只剩
+      // 一条缝，点不到），底部留一行「设置」——点它先收起面板，再打开设置浮层。
+      pickerFooter.classList.remove("hidden");
+      pickerFooter.classList.add("pk-history-footer");
+      const headerClose = document.createElement("button");
+      headerClose.type = "button"; headerClose.id = "pickerClose";
+      headerClose.title = "关闭 (Esc)"; headerClose.setAttribute("aria-label", "关闭");
+      headerClose.innerHTML = ICONS.close;
+      headerClose.addEventListener("click", () => cancelPicker());
+      pickerHeader.appendChild(headerClose);
+      const settingsBtn = document.createElement("button"); settingsBtn.type = "button";
+      settingsBtn.className = "secondary"; settingsBtn.textContent = "⚙ 设置";
+      settingsBtn.addEventListener("click", () => { cancelPicker(); openSettings(); });
+      pickerFooter.appendChild(settingsBtn);
     } else if (toggle) {
       pickerFooter.classList.remove("hidden");
       const closeBtn = document.createElement("button"); closeBtn.className = "secondary"; closeBtn.textContent = "关闭";
@@ -3073,6 +2432,8 @@
     } else {
       pickerFooter.classList.add("hidden");
     }
+    // 历史会话从右侧滑进来（整屏高的面板）；其余拾取器照旧居中弹出
+    pickerOverlay.classList.toggle("pk-drawer", kind === "history");
     renderPickerItems();
     pickerOverlay.classList.remove("hidden");
     // 计时：若宿主回显了 t0，输出点击 → picker 可见的往返耗时（多 panel 卡顿排查用）
@@ -3197,7 +2558,7 @@
     const all = hashMenuItems();
     if (!q) { hashMatches = all; }
     else {
-      // tab 名命中 → 整组保留；否则只留自身命中的 panel 行，空组剔除（同 relay 过滤器语义）
+      // tab 名命中 → 整组保留；否则只留自身命中的 panel 行，空组剔除
       const keptTabs = new Set();
       all.forEach((it) => {
         if (it.kind === "tab" && it.label.toLowerCase().includes(q)) { keptTabs.add(it.tabId); }
@@ -3223,7 +2584,10 @@
     hashMatches.forEach((it, idx) => {
       const item = document.createElement("div");
       item.className = "file-item" + (idx === hashSel ? " active" : "") + (it.kind === "tab" ? " hash-tab-row" : "");
-      item.appendChild(document.createTextNode((it.kind === "tab" ? "🗂 " : "💬 ") + it.label));
+      const kindIcon = document.createElement("span"); kindIcon.className = "hash-kind";
+      kindIcon.innerHTML = it.kind === "tab" ? ICONS.files : ICONS.comment;
+      item.appendChild(kindIcon);
+      item.appendChild(document.createTextNode(" " + it.label));
       if (it.sub) {
         const sub = document.createElement("span"); sub.className = "dir"; sub.textContent = "  " + it.sub;
         item.appendChild(sub);
@@ -3356,10 +2720,30 @@
     if (text.length > BIG_TEXT_CHARS) { return true; }
     return countLines(text) > BIG_TEXT_LINES;
   }
+  // ==================== 会话没就绪时按的回车 ====================
+  // 刚打开界面的一两秒里，pi 进程还在起（tab.piReady 还是 false）。这时候按回车，
+  // 以前是悄然丢掉：不发送，也不告诉你（字还留在输入框里，得像没事一样再按一次）。
+  // 现在把这次回车记下来：字照旧留在输入框里，等会话就绪（piReady 变 true）自动补发一次。
+  //
+  // 为什么不让字离开输入框（比如先在对话里摆一条"排队中"的气泡）：那样得在 pi 回显时
+  // 再把临时气泡收掉，还得保证两边不重不漏。字留在框里最省事，也不会出现同一句话两遍；
+  // 给用户的反馈就是"字没丢，还在框里"。
+  let pendingAutoSend = null;
+
+  /** 会话就绪了：把"按了回车但还没发出去"的那条补发出去。 */
+  function flushPendingSend() {
+    if (pendingAutoSend === null) { return; }
+    const tab = activeTab();
+    if (!tab || !tab.piReady) { return; }
+    const text = pendingAutoSend;
+    pendingAutoSend = null;
+    // 等待期间用户又改了输入框内容：那是他新的意思，不替他发
+    if (inputEl.value.trim() !== text.trim()) { return; }
+    send();
+  }
+
   function send() {
     const tab = activeTab();
-    if (!tab) { return; }
-    if (!tab.piReady) { return; }
     const d = draftOfTab();
     const typed = inputEl.value.trim();
     const hasImages = (d.images || []).length > 0;
@@ -3373,8 +2757,19 @@
       });
       text = (typed ? typed + "\n\n" : "") + parts.join("\n\n");
     }
+    // 会话还没就绪（刚打开界面那一两秒）：记下这次回车，字留在输入框里，就绪后自动补发
+    if (!tab || !tab.piReady) {
+      pendingAutoSend = text;
+      return;
+    }
+    pendingAutoSend = null;
     // 发送走 tab 级广播：后端把消息（含同一份附件）投给该 tab 内所有 panel
     vscode.postMessage({ type: "send", tabId: tab.id, text, images: d.images });
+    resetComposer(d);
+  }
+
+  /** 发出去（真的发出去）以后把输入区恢复原样。 */
+  function resetComposer(d) {
     inputEl.value = "";
     inputEl.style.height = INPUT_MIN_HEIGHT + "px";
     d.text = "";
@@ -3461,11 +2856,8 @@
     });
   }
 
-  treeOverlay.addEventListener("click", (e) => { if (e.target === treeOverlay) { hideTree(); } });
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") { return; }
-    // 树面板打开 → 关树；picker 打开 → 交给 picker 监听关闭
-    if (!treeOverlay.classList.contains("hidden")) { hideTree(); return; }
     if (pickerState && !pickerOverlay.classList.contains("hidden")) { return; }
     // 输入框聚焦时由 inputEl 的 keydown 处理（含文件菜单关闭 / 中止）
     if (document.activeElement === inputEl) { return; }
@@ -3547,138 +2939,20 @@
     renderTabBar();
     updatePaneHeads();
   }
-  function setPiReady(tab, on, force) { tab.piReady = on; if (activeId === tab.id) { updateSendState(); syncStatus(); } renderTabBar(); updatePaneHeads(); }
-
-  // ==================== 会话导出 ====================
-  function exportActiveConversation(tabId, requestId) {
-    const tab = tabs.get(tabId);
-    if (!tab) { return; }
-    // 复制当前 tab，避免导出操作改变正在进行的流式渲染状态；同时把所有
-    // markdown 节点按原始文本重绘，确保导出时不会遗漏最后一小段流式内容。
-    const liveIndex = tab.currentAssistant
-      ? Array.from(tab.paneEl.querySelectorAll(".md")).indexOf(tab.currentAssistant.el)
-      : -1;
-    const liveRaw = tab.currentAssistant ? (tab.currentAssistant.raw || "") : "";
-    const pane = tab.paneEl.cloneNode(true);
-    pane.querySelectorAll(".msg-copy").forEach((el) => el.remove());
-    const markdownEls = pane.querySelectorAll(".md[data-raw]");
-    markdownEls.forEach((el, index) => {
-      const raw = index === liveIndex ? liveRaw : (el.dataset.raw || "");
-      el.innerHTML = renderMarkdown(raw);
-      el.dataset.raw = raw;
-    });
-    const style = Array.from(document.querySelectorAll("style"))
-      .map((el) => el.textContent || "").join("\n");
-    // 独立 HTML 没有 VS Code webview 注入的主题变量；用户气泡的最终颜色
-    // 直接写入导出 CSS，避免 color-mix() 因变量缺失而变成透明。
-    const vars = [];
-    const userSource = tab.paneEl.querySelector(".msg.user");
-    const userComputed = userSource ? getComputedStyle(userSource) : null;
-    const userBackground = userComputed?.backgroundColor || "rgba(90, 150, 220, 0.18)";
-    const userColor = userComputed?.color || "inherit";
-    const rootStyle = getComputedStyle(document.documentElement);
-    const names = new Set((style.match(/--vscode-[\\w-]+/g) || []));
-    names.forEach((name) => {
-      const value = rootStyle.getPropertyValue(name).trim();
-      if (value) { vars.push(`${name}:${value};`); }
-    });
-    const title = String(tab.title || "Pi 会话").replace(/[<>&\"']/g, "");
-    const exportCss = `${style}\n:root{${vars.join("")}}\n` +
-      `html,body{height:auto;min-height:100%;margin:0}` +
-      // 导出页改由文档根节点滚动；明确保留滚动条槽位，避免浏览器自动隐藏它。
-      `html{overflow-y:scroll;scrollbar-gutter:stable}` +
-      `body{display:block;background:var(--vscode-editor-background,#fff);color:var(--vscode-foreground,#222)}` +
-      `#messages{display:block;min-height:0}` +
-      `.tab-pane{display:block!important;position:static!important;inset:auto!important;visibility:visible!important;pointer-events:auto!important;overflow:visible!important;padding:16px 8px 24px}` +
-      `.msg.user{background:${userBackground}!important;color:${userColor}!important}` +
-      `.msg.user,.msg.user>div{white-space:pre-wrap!important;overflow-wrap:anywhere;word-break:break-word}` +
-      `.msg.user .long-msg{white-space:normal!important}` +
-      `.msg.user .long-msg pre{white-space:pre-wrap!important}` +
-      `.msg-enter{animation:none!important}` +
-      `#jumpBottom,#status,#changedFiles,#inputArea,#tabBar,#treeOverlay,#pickerOverlay,#settingsOverlay{display:none!important}`;
-    const html = `<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>${exportCss}</style></head><body><main id="messages">${pane.outerHTML}</main></body></html>`;
-    const markdown = buildMarkdownExport(tab);
-    vscode.postMessage({ type: "exportConversationResult", tabId, requestId, html, markdown });
-  }
-
-  // ---------------- Markdown 导出辅助 ----------------
-  /** 计算一个比正文中最长反引号串还长的围栏，避免正文内容逃出代码块。 */
-  function mdFence(text) {
-    let max = 0, cur = 0;
-    for (let i = 0; i < text.length; i++) {
-      if (text.charCodeAt(i) === 96) { cur++; if (cur > max) { max = cur; } }
-      else { cur = 0; }
-    }
-    return "`".repeat(Math.max(3, max + 1));
-  }
-  function truncateLines(text, maxLines) {
-    const lines = String(text).split("\n");
-    if (lines.length <= maxLines) { return text; }
-    return lines.slice(0, maxLines).join("\n") + "\n… (省略 " + (lines.length - maxLines) + " 行)";
-  }
-  function escapeHtmlInline(text) {
-    return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-
-  /** 单次工具调用的 Markdown：摘要单行；有结果时包进可折叠的 details。 */
-  function toolMarkdown(toolName, argStr, resultText) {
-    let summary = "";
-    try { summary = buildMediumSummary(toolName || "tool", argStr || "").textContent.trim(); } catch (e) { summary = ""; }
-    if (!summary) { summary = toolName || "tool"; }
-    if (!resultText || !resultText.trim()) { return ["> 🔧 " + summary, ""]; }
-    const fence = mdFence(resultText);
-    return [
-      "<details>",
-      "<summary>🔧 " + escapeHtmlInline(summary) + "</summary>",
-      "",
-      fence + "text",
-      truncateLines(String(resultText).trimEnd(), 100),
-      fence,
-      "",
-      "</details>",
-      "",
-    ];
-  }
-
-  /** 按时间顺序遍历当前 tab 的消息 DOM，转成 Markdown 文本（只读，不碰渲染状态）。 */
-  function buildMarkdownExport(tab) {
-    const parts = [];
-    parts.push("# " + String(tab.title || "Pi 会话"), "", "> 导出时间：" + new Date().toLocaleString(), "");
-    const children = tab.paneEl.children;
-    for (let i = 0; i < children.length; i++) {
-      const el = children[i];
-      if (!el.classList) { continue; }
-      if (el.classList.contains("user")) {
-        parts.push("## 👤 用户", "", String(el.dataset.raw || "").trim() || "(空消息)", "");
-      } else if (el.classList.contains("assistant")) {
-        const md = el.querySelector(":scope > .md");
-        let raw = "";
-        if (md) {
-          raw = (tab.currentAssistant && tab.currentAssistant.el === md) ? (tab.currentAssistant.raw || "") : (md.dataset.raw || "");
-        } else { raw = el.textContent || ""; }
-        raw = String(raw).trim();
-        if (raw) { parts.push("## 🤖 助手", "", raw, ""); }
-      } else if (el.classList.contains("system")) {
-        const text = (el.textContent || "").trim();
-        if (text) { parts.push("> ℹ️ " + text.split(/\n+/).join(" "), ""); }
-      } else if (el.classList.contains("tool-row")) {
-        el.querySelectorAll(":scope > .tool").forEach((tag) => {
-          parts.push(...toolMarkdown(tag._toolName, tag._argStr, tag._resultText));
-        });
-      } else if (el.classList.contains("tool-card")) {
-        const callEl = el.querySelector(".tc-call");
-        const argStr = callEl && typeof callEl.title === "string" && callEl.title !== el._toolName ? callEl.title : "";
-        parts.push(...toolMarkdown(el._toolName, argStr, el._resultText));
-      }
-    }
-    return parts.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+  function setPiReady(tab, on, force) {
+    tab.piReady = on;
+    if (activeId === tab.id) { updateSendState(); syncStatus(); }
+    renderTabBar();
+    updatePaneHeads();
+    // 会话就绪：把"按了回车但没发出去"的那条补发出去（见 flushPendingSend）
+    if (on) { flushPendingSend(); }
   }
 
   // ==================== 来自扩展的消息 ====================
   window.addEventListener("message", (event) => {
     const msg = event.data;
     // VSCode webview 宿主会投递非业务消息（视图聚焦/状态同步等），event.data 可能为 null
-    // 或非 {type:string} 结构。直接忽略，避免 msg.type 崩溃导致后续消息（如 treeView）被跳过。
+    // 或非 {type:string} 结构。直接忽略，避免 msg.type 崩溃导致后续消息被跳过。
     if (!msg || typeof msg.type !== "string") { return; }
     const type = msg.type;
 
@@ -3758,7 +3032,7 @@
       const wantActive = msg.activeId;
       if (wantActive && tabViews.has(wantActive)) {
         if (activeTabId !== wantActive) {
-          if (activeTabId !== null) { saveInputState(); }
+          if (activeTabId !== null) { saveInputState(); } else { carryComposerToTab(wantActive); }
           activeTabId = wantActive;
           const tv = tabViews.get(wantActive);
           activeId = (tv.focusPanelId && leavesOf(tv.root).includes(tv.focusPanelId))
@@ -3782,11 +3056,10 @@
           if (sig !== layoutSig) { renderLayout(); }
         }
       }
-      // 全项目仅剩源 panel 时无转发目标：全局隐藏气泡转发按钮（存量/新增自动生效）
-      const totalPanels = incoming.reduce((n, t) => n + leavesOf(t.root || { kind: "panel" }).length, 0);
-      document.body.classList.toggle("no-relay-target", totalPanels <= 1);
       renderTabBar();
       updateSendState(); syncStatus(); updatePaneHeads();
+      // 刚连上的这一批 tab 里可能已经有就绪的：把排队中的消息发出去
+      flushPendingSend();
       return;
     }
     if (type === "tabActivated") {
@@ -3822,22 +3095,15 @@
       return;
     }
     if (type === "viewOptions") { applyViewOptions(msg); return; }
-    if (type === "transferCaps") {
-      transferDest = typeof msg.dest === "string" && msg.dest ? msg.dest : null;
-      return;
-    }
-    if (type === "exportConversationRequest") {
-      exportActiveConversation(msg.tabId, msg.requestId);
-      return;
-    }
     if (type === "picker") { renderPicker(msg); return; }
+    // 插件那头把浮层收了（超时、被新的浮层顶掉、页面被换下）：这边跟着收起来，别留一个点不动的空壳。
+    if (type === "pickerCancel") { hidePicker(); return; }
     if (type === "historyPageAppend") {
       const st = pickerState;
       if (st && st.kind === "history") {
         const more = Array.isArray(msg.items) ? msg.items : [];
         st.items = st.items.concat(more);
-        st.historyLoadedFamilies = typeof msg.loadedFamilies === "number" ? msg.loadedFamilies : st.historyLoadedFamilies;
-        st.historyTotalFamilies = typeof msg.totalFamilies === "number" ? msg.totalFamilies : st.historyTotalFamilies;
+        st.historyHasMore = msg.hasMore === true;
         st.historyLoading = false;
         renderPickerItems();
       }
@@ -3926,10 +3192,11 @@
       t = ensureDefaultTab();
     }
     if (!t) { return; }
-    // 安全网：多 tab 模式下若尚无活跃 tab（tabList 未到的竞态），激活当前
+    // 安全网：多 tab 模式下若尚无活跃 tab（tabList 未到的竞态），激活当前面板。
+    // 注意别在这里碰输入框：这时 activeTabId 还是空的（tabList 没到，草稿还没有主），
+    // restoreInputState 会拿空草稿把用户刚打的字冲掉。搬运与恢复交给 tabList 那段做。
     if (multiTab && !activeId) {
       activeId = t.id;
-      restoreInputState();
       reflectTabUI();
     }
 
@@ -3937,7 +3204,7 @@
       case "userMessage": {
         finalizeCurrentAssistant(t);
         const label = msg.imageCount ? "[" + msg.imageCount + " 张图片] " : "";
-        addPlain(t, "user", "你", label + (msg.text || ""), msg.entryId);
+        addPlain(t, "user", "你", label + (msg.text || ""));
         t.thinkingText = "";
         scrollToBottom(t, true);
         break;
@@ -3983,20 +3250,8 @@
         break;
       case "assistantFull":
         finalizeCurrentAssistant(t);
-        addMarkdown(t, msg.text, msg.entryId);
+        addMarkdown(t, msg.text);
         t.currentAssistant = null;
-        break;
-      case "scrollToEntry":
-        if (typeof msg.entryId === "string") {
-          // 消息可能仍在渲染：短重试
-          if (!scrollToEntry(t, msg.entryId)) {
-            let tries = 0;
-            const timer = setInterval(() => {
-              tries += 1;
-              if (scrollToEntry(t, msg.entryId) || tries >= 10) { clearInterval(timer); }
-            }, 100);
-          }
-        }
         break;
       case "thinkingDelta":
         // 兼容较旧后端：即使没有先收到 activityChanged，也按 thinking 渲染。
@@ -4056,11 +3311,11 @@
         t.currentAssistant = null;
         t.thinkingText = "";
         t.currentToolRow = null;
+        t.lastTagHost = null;
+        t.lastAssistantEl = null;
         t.pendingToolCards.clear();
         for (const tg of t.pendingToolTags.values()) { clearInterval(tg._timer); }
         t.pendingToolTags.clear();
-        for (const e of t.pendingToolCardsFull.values()) { clearInterval(e.timer); }
-        t.pendingToolCardsFull.clear();
         // 重置当前 tab 的输入草稿（若该 panel 在当前 tab，同步到输入框）。
         // 整屏重画（页面刷新 / 重连后补内容）也走 clear：那种 clear 带 keepDraft，
         // 不能把人打了一半的字和附件抹掉，也不要把键盘拉起来。
@@ -4076,74 +3331,31 @@
           inputEl.focus();
         }
         break;
-      case "setInput":
-        // fork 成功后由后端推送被分叉的 user 消息原文（clear 之后），可编辑后重发
-        applyInputText(t, msg.text);
-        break;
       case "toolResultUpdate": {
-        const entry = t.pendingToolCardsFull.get(msg.toolCallId);
-        if (entry) {
-          if (typeof msg.durationMs === "number") { entry.card._elapsedStart = Date.now() - msg.durationMs; }
-          setToolResult(entry.card, msg.resultText, { isPartial: true, durationMs: msg.durationMs });
-          scrollToBottom(t);
-        }
-        // 简洁模式：缓存部分结果；若该标签已展开，实时刷新卡片
+        // 缓存部分结果，悬浮提示随取随画
         const tagEl = t.pendingToolTags.get(msg.toolCallId);
         if (tagEl) {
           tagEl._resultText = msg.resultText || "";
           tagEl._resultMeta = { isPartial: true, durationMs: msg.durationMs };
-          if (tagEl._card) {
-            if (typeof msg.durationMs === "number") { tagEl._card._elapsedStart = Date.now() - msg.durationMs; }
-            setToolResult(tagEl._card, msg.resultText, tagEl._resultMeta);
-          }
+          setTagTip(tagEl, tagEl._resultText, "");
         }
         break;
       }
       case "toolResult": {
-        const entry = t.pendingToolCardsFull.get(msg.toolCallId);
-        if (entry) {
-          const card = entry.card;
-          card.classList.remove("running");
-          card.classList.add("done");
-          if (msg.isError) { card.classList.add("error"); }
-          clearInterval(entry.timer);
-          setToolResult(card, msg.resultText, {
-            isError: !!msg.isError,
-            durationMs: msg.durationMs,
-            truncation: msg.truncation || null,
-            images: msg.images || null,
-          });
-          t.pendingToolCardsFull.delete(msg.toolCallId);
-          scrollToBottom(t);
-        }
         const tagEl = t.pendingToolTags.get(msg.toolCallId);
         if (tagEl) {
           tagEl.classList.remove("running");
           if (msg.isError) { tagEl.classList.add("error"); }
-          // medium 标签：耗时接在命令文本末尾（两个空格分隔），不另起一行
-          if (tagEl._medium && typeof msg.durationMs === "number") {
-            const dur = document.createElement("span");
-            dur.className = "tool-dur";
-            dur.textContent = "  " + formatDur(msg.durationMs);
-            const inline = tagEl.querySelector(".tc-inline");
-            (inline || tagEl).appendChild(dur);
-          }
-          // 记录结果，并更新悬浮提示为「调用 + 结果」；若已展开，立即刷新卡片
+          // 记录结果：文字结果供悬浮提示用（见 setTagTip），带图的走另一条路
           tagEl._done = true;
           tagEl._isError = !!msg.isError;
           tagEl._resultText = msg.resultText || "";
           tagEl._resultMeta = { isError: !!msg.isError, durationMs: msg.durationMs, truncation: msg.truncation || null, images: msg.images || null };
-          setTagTip(tagEl, tagEl._resultText, Array.isArray(msg.images) && msg.images.length > 0 ? "（结果为图片）" : "");
-          // read 读图：简洁/摘要模式下自动展开成卡片直接出图，展开后不再收起
-          if (tagEl._toolName === "read" && Array.isArray(msg.images) && msg.images.length > 0) {
-            expandReadImageCard(tagEl);
-          }
-          if (tagEl._card) {
-            tagEl._card.classList.remove("running");
-            tagEl._card.classList.add("done");
-            if (msg.isError) { tagEl._card.classList.add("error"); }
-            clearInterval(tagEl._timer);
-            setToolResult(tagEl._card, msg.resultText, tagEl._resultMeta);
+          // read 读图：小标签直接换成对话里的一整块图（不再走悬浮提示）
+          if (Array.isArray(msg.images) && msg.images.length > 0) {
+            mountToolImageBlock(t, tagEl, msg.images);
+          } else {
+            setTagTip(tagEl, tagEl._resultText, "");
           }
           t.pendingToolTags.delete(msg.toolCallId);
         }
@@ -4186,33 +3398,8 @@
         }
         if (activeId === t.id) { renderQueueBar(t); }
         break;
-      case "fileChanges":
-        t.changedFiles = msg.files || [];
-        renderChangedFilesFor(t);
-        break;
       case "piReady":
         setPiReady(t, msg.ready === true);
-        break;
-      case "treeView":
-        // 兼容旧格式：整树一次性发送
-        renderTree(msg.tree || [], msg.leafId || null, t.id);
-        break;
-      case "treeViewChunk":
-        if (!t.treeChunks || t.treeChunks.batchId !== msg.batchId) { t.treeChunks = { batchId: msg.batchId, parts: [], total: msg.total }; }
-        t.treeChunks.parts[msg.index] = msg.text;
-        break;
-      case "treeViewEnd":
-        if (t.treeChunks && t.treeChunks.batchId === msg.batchId) {
-          const parts = t.treeChunks.parts;
-          t.treeChunks = null;
-          try {
-            const json = parts.join("");
-            const data = JSON.parse(json);
-            renderTree(data.tree || [], data.leafId ?? msg.leafId ?? null, t.id);
-          } catch (e) {
-            addPlain(t, "system error", null, "对话树数据解析失败: " + (e && e.message ? e.message : String(e)));
-          }
-        }
         break;
       case "historyWindow":
         // 网页端「只发最近一段历史」：hasMore 为真时在顶部画「加载更早的消息」按钮
@@ -4321,7 +3508,6 @@
     if (!st) { return; }
     cancelFlush(st);
     if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); }
-    for (const e of st.pendingToolCardsFull.values()) { clearInterval(e.timer); }
     for (const tg of st.pendingToolTags.values()) { clearInterval(tg._timer); }
     st.paneEl.remove();
     tabs.delete(id);
@@ -4374,7 +3560,6 @@
     viewOptionItems.forEach((it) => {
       const row = document.createElement("div"); row.className = "vo-item";
       if (it.kind === "slider") { renderSliderRow(row, it); viewOptsRoot.appendChild(row); return; }
-      if (it.kind === "text") { renderTextRow(row, it); viewOptsRoot.appendChild(row); return; }
       if (Array.isArray(it.options) && it.options.length) {
         // 按钮组：直接点选某个选项
         row.classList.add("vo-item-group");
@@ -4396,7 +3581,7 @@
         row.appendChild(group);
       } else {
         const check = document.createElement("span"); check.className = "vo-check" + (it.check === true ? " on" : "");
-        check.textContent = it.check === true ? "✓" : "";
+        check.innerHTML = it.check === true ? ICONS.check : "";
         const txt = document.createElement("div"); txt.className = "vo-text";
         const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "";
         txt.appendChild(label);
@@ -4408,25 +3593,6 @@
       }
       viewOptsRoot.appendChild(row);
     });
-  }
-  /** 文本输入项（失焦 / 换出时提交，避免每键一字重渲染面板）。 */
-  function renderTextRow(row, it) {
-    row.classList.add("vo-item-text");
-    const txt = document.createElement("div"); txt.className = "vo-text";
-    const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "";
-    txt.appendChild(label);
-    if (it.desc) { const d = document.createElement("div"); d.className = "vo-desc"; d.textContent = it.desc; txt.appendChild(d); }
-    row.appendChild(txt);
-    const ta = document.createElement("textarea");
-    ta.className = "vo-text-input";
-    ta.rows = 3;
-    ta.value = typeof it.value === "string" ? it.value : "";
-    ta.placeholder = "（留空则裸转发）";
-    ta.spellcheck = false;
-    ta.addEventListener("change", () => {
-      vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: ta.value });
-    });
-    row.appendChild(ta);
   }
   function renderSliderRow(row, it) {
     row.classList.add("vo-item-slider");

@@ -11,12 +11,11 @@ import {
     getModelThinkingLevels,
     historyEditInfo,
     resolveAnchorLine,
-    slimTree,
     summarizeToolCall,
     textOf,
     toolFilePath,
 } from "./messageUtils";
-import { forkSelectedText, isRpcOk, rpcErrorMessage } from "./piRpc";
+import { isRpcOk, rpcErrorMessage } from "./piRpc";
 
 describe("formatPiError", () => {
     it("extracts message from status + JSON provider error", () => {
@@ -208,48 +207,6 @@ describe("getModelThinkingLevels", () => {
     });
 });
 
-describe("slimTree", () => {
-    it("keeps full user text and clips assistant", () => {
-        const longAssistant = "z".repeat(200);
-        const tree = slimTree([
-            {
-                entry: {
-                    type: "message",
-                    id: "u1",
-                    parentId: null,
-                    message: {
-                        role: "user",
-                        content: [{ type: "text", text: "  keep   spaces  " }],
-                    },
-                },
-                children: [
-                    {
-                        entry: {
-                            type: "message",
-                            id: "a1",
-                            parentId: "u1",
-                            message: { role: "assistant", content: longAssistant },
-                        },
-                        children: [],
-                    },
-                ],
-            },
-        ]);
-        const userText = (tree[0].entry.message?.content as any[])[0].text;
-        assert.equal(userText, "  keep   spaces  ");
-        const asstText = (tree[0].children![0].entry.message?.content as any[])[0].text;
-        assert.equal(asstText.length, 120);
-        assert.equal(asstText, "z".repeat(120));
-    });
-
-    it("preserves branch_summary", () => {
-        const tree = slimTree([
-            { entry: { type: "branch_summary", id: "b1", summary: "sum" }, children: [] },
-        ]);
-        assert.equal(tree[0].entry.summary, "sum");
-    });
-});
-
 describe("historyEditInfo", () => {
     it("prefers details.diff", () => {
         assert.equal(
@@ -302,7 +259,7 @@ describe("resolveAnchorLine", () => {
 });
 
 describe("piRpc helpers", () => {
-    it("isRpcOk / rpcErrorMessage / forkSelectedText", () => {
+    it("isRpcOk / rpcErrorMessage", () => {
         assert.equal(isRpcOk(undefined), false);
         assert.equal(isRpcOk({ type: "response", success: false, error: "x" }), false);
         assert.equal(isRpcOk({ type: "response", success: true, data: {} }), true);
@@ -310,10 +267,6 @@ describe("piRpc helpers", () => {
 
         assert.equal(rpcErrorMessage(undefined, "fb"), "fb");
         assert.equal(rpcErrorMessage({ type: "response", error: "nope" }), "nope");
-
-        assert.equal(forkSelectedText({ type: "response", data: { text: "hi" } }), "hi");
-        assert.equal(forkSelectedText({ type: "response", data: { cancelled: true } }), "");
-        assert.equal(forkSelectedText(undefined), "");
     });
 });
 

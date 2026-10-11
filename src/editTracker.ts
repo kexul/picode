@@ -7,8 +7,6 @@ import {
     historyEditInfo,
     toolFilePath,
 } from "./messageUtils";
-import type { FileChange } from "./runtimeTypes";
-
 /** EditTracker 对外依赖（由 SessionRuntime 注入，避免环依赖）。 */
 export interface EditTrackerHost {
     getCwd(): string;
@@ -24,7 +22,6 @@ export interface EditTrackerHost {
  * 从 SessionRuntime 拆出，降低编排类体积。
  */
 export class EditTracker {
-    private fileChanges = new Map<string, FileChange>();
     private pendingEdits = new Map<string, { path: string; before: string }>();
     private editSnapshots = new Map<string, { path: string; before: string; after: string }>();
     /** 非 edit 工具的开始时间戳（toolCallId → ms），用于卡片耗时显示。 */
@@ -34,22 +31,16 @@ export class EditTracker {
 
     constructor(private readonly host: EditTrackerHost) {}
 
-    public getFileChange(path: string): FileChange | undefined {
-        return this.fileChanges.get(path);
-    }
-
     public getKnownFiles(): string[] {
         return Array.from(this.knownFiles);
     }
 
     public reset(): void {
-        this.fileChanges.clear();
         this.pendingEdits.clear();
         this.editSnapshots.clear();
         this.toolStartedAt.clear();
         const hadKnown = this.knownFiles.size > 0;
         this.knownFiles.clear();
-        this.postFileChanges();
         if (hadKnown) {
             this.host.onKnownFilesChanged();
         }
@@ -168,15 +159,6 @@ export class EditTracker {
             return;
         }
         this.editSnapshots.set(id, { path: pend.path, before: pend.before, after });
-        const existing = this.fileChanges.get(pend.path);
-        if (!existing) {
-            this.fileChanges.set(pend.path, {
-                path: pend.path,
-                label: this.host.relativeTo(this.host.getCwd(), pend.path),
-                before: pend.before,
-            });
-        }
-        this.postFileChanges();
     }
 
     public async revertEdit(toolCallId: string): Promise<void> {
@@ -212,20 +194,6 @@ export class EditTracker {
         } catch (e: any) {
             this.host.post({ type: "systemError", text: `回滚失败: ${e.message}` });
             return;
-        }
-
-        const existing = this.fileChanges.get(snap.path);
-        if (existing) {
-            let latest = "";
-            try {
-                latest = fs.readFileSync(snap.path, "utf8");
-            } catch {
-                latest = "";
-            }
-            if (latest === existing.before) {
-                this.fileChanges.delete(snap.path);
-            }
-            this.postFileChanges();
         }
 
         this.editSnapshots.delete(toolCallId);
@@ -271,24 +239,4 @@ export class EditTracker {
         return this.editSnapshots.has(toolCallId);
     }
 
-    /**
-     * 活体迁移后：把本会话已记录的文件改动重推给新宿主的 webview。
-     * @param sink 只推给这一个出口（给浏览器里某一个页面重画时用）；缺省推给整个工作区。
-     */
-    public republishFileChanges(sink?: (msg: Record<string, unknown>) => void): void {
-        const files = Array.from(this.fileChanges.values()).map((c) => ({
-            path: c.path,
-            label: c.label,
-        }));
-        if (sink) { sink({ type: "fileChanges", files }); return; }
-        this.postFileChanges();
-    }
-
-    private postFileChanges(): void {
-        const files = Array.from(this.fileChanges.values()).map((c) => ({
-            path: c.path,
-            label: c.label,
-        }));
-        this.host.post({ type: "fileChanges", files });
-    }
 }

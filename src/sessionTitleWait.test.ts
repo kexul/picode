@@ -61,7 +61,6 @@ function fakeHost(spare?: FakePiClient): RuntimeHost {
         pickModelInteractive: async () => undefined,
         persistModel: () => { /* noop */ },
         openFileLocation: () => { /* noop */ },
-        openDiff: () => { /* noop */ },
         confirmRevert: async () => false,
     };
     return host as RuntimeHost;

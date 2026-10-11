@@ -34,7 +34,6 @@ function fakeHost(): FakeHost {
         pickModelInteractive: async () => undefined,
         persistModel: () => {},
         openFileLocation: () => {},
-        openDiff: () => {},
         confirmRevert: async () => true,
     };
     box.host = host as RuntimeHost;
@@ -70,7 +69,7 @@ test("重画只发给一个页面时：消息全走那个出口，带着 tabId�
 
     assert.deepEqual(
         toPage.map((msg) => msg.type),
-        ["clear", "piReady", "userMessage", "assistantFull", "fileChanges", "system"],
+        ["clear", "piReady", "userMessage", "assistantFull", "system"],
         "重画那一整套都要发给这个页面",
     );
     assert.ok(toPage.every((msg) => msg.tabId === "test:panel-1"), "每条都要带 tabId（界面靠它认出是哪个窗格）");
@@ -88,7 +87,7 @@ test("重画发给整个工作区时（没有指定出口）：照常广播，�
 
     assert.deepEqual(
         box.posted.map((msg) => msg.type),
-        ["clear", "piReady", "userMessage", "assistantFull", "fileChanges"],
+        ["clear", "piReady", "userMessage", "assistantFull"],
         "整套重画都从常规出口出去",
     );
     assert.ok(box.posted.every((msg) => msg.tabId === "test:panel-1"), "tabId 照旧带上");

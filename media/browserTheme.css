@@ -1,114 +1,23 @@
 /*
-  browserTheme —— 浏览器页面专用的样式补丁。
+  browserTheme —— 网页端那套界面件的结构样式（侧边栏与网页端共用，chatHtml.ts /
+  browserHtml.ts 都把它内联进页面）。
 
-  三件事：
-  1. 颜色。VSCode 会往网页视图里注入一整套 --vscode-* 变量（颜色、字体、边框），
-     界面样式全靠它们；浏览器里没有 VSCode，这些变量一个都不存在，界面会变成白底没颜色。
-     这里按 VSCode 浅色主题（Light Modern）的取值把它们补齐，网页端就是白底深字。
-     代码块的高亮颜色（chat.css 里那套 One Dark）也一并换成浅色底看得清的 One Light。
-  2. 输入框起步高度。VSCode 那份固定占 144px（约七行）；网页端只要一行，
+  颜色不在这里：两套调色板（浅 / 深）在 browserBridge.js 里，按显示选项的
+  「界面颜色」切换。这里只管结构：
+
+  1. 输入框起步高度。VSCode 老界面固定占 144px（约七行）；网页端只要一行，
      这里把 --pichat-input-min-height 设小，chat.js 会读这个值当最小高度，
-     打字打多了照样往上涨（最高 640px 不变）。VSCode 里没这个变量，仍然是 144px。
-  3. 顶部标签栏常显 + 最右边的“📷 桌面截图”与“⋯ 菜单”两颗按钮，底部按钮条整条藏掉
-     （详见下面那两段注释）。
+     打字打多了照样往上涨（最高 640px 不变）。
+  2. 顶部标签栏常显 + 最右边的“📷 桌面截图”与“⋯ 历史会话”两颗按钮，底部按钮条整条藏掉。
+  3. 输入框右下角的“停止生成”按钮。
 
-  本文件只在浏览器那份页面里加载（media/chat.js 与 chat.css 不动），
-  而且排在 chat.css 之后加载，所以同优先级的规则以这里为准。
+  本文件排在 chat.css 之后加载（页面 HTML 里写在它后面），同优先级的规则以这里为准。
   界面自己设字号时会在行内改 --vscode-font-size，行内样式优先级更高，覆盖这里的值。
 */
 
 :root {
-  color-scheme: light;
-
   /* 输入框起步高度：一行（打字后自动长高，上限仍是 chat.css 里的 640px） */
   --pichat-input-min-height: 30px;
-
-  /* 字体 */
-  --vscode-font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
-  --vscode-editor-font-family: Consolas, "Cascadia Code", "JetBrains Mono", Menlo, monospace;
-  --vscode-font-size: 13px;
-
-  /* 基础前景 / 背景 */
-  --vscode-foreground: #1f1f1f;
-  --vscode-editor-foreground: #1f1f1f;
-  --vscode-editor-background: #ffffff;
-  --vscode-descriptionForeground: #5f5f5f;
-  --vscode-errorForeground: #e51400;
-  --vscode-focusBorder: #0090f1;
-
-  /* 边框 / 分隔 */
-  --vscode-panel-border: #e5e5e5;
-  --vscode-widget-border: #d4d4d4;
-  --vscode-menu-border: #d4d4d4;
-
-  /* 按钮 */
-  --vscode-button-background: #007acc;
-  --vscode-button-foreground: #ffffff;
-  --vscode-button-hoverBackground: #026ec1;
-  --vscode-button-border: transparent;
-  --vscode-button-secondaryBackground: #e8e8e8;
-  --vscode-button-secondaryForeground: #1f1f1f;
-  --vscode-button-secondaryHoverBackground: #d6d6d6;
-
-  /* 输入框 / 下拉 / 勾选框 */
-  --vscode-input-background: #ffffff;
-  --vscode-input-foreground: #1f1f1f;
-  --vscode-input-border: #cecece;
-  --vscode-dropdown-background: #ffffff;
-  --vscode-dropdown-border: #cecece;
-  --vscode-checkbox-background: #ffffff;
-  --vscode-checkbox-foreground: #1f1f1f;
-  --vscode-checkbox-border: #cecece;
-
-  /* 列表 / 菜单 / 浮层 */
-  --vscode-list-hoverBackground: #e8e8e8;
-  --vscode-list-activeSelectionBackground: #0060c0;
-  --vscode-list-activeSelectionForeground: #ffffff;
-  --vscode-menu-background: #f8f8f8;
-  --vscode-menu-foreground: #1f1f1f;
-  --vscode-menu-selectionBackground: #0060c0;
-  --vscode-editorWidget-background: #f8f8f8;
-  --vscode-editorInfo-background: #f8f8f8;
-  --vscode-editorWarning-foreground: #bf8803;
-  --vscode-toolbar-hoverBackground: #e8e8e8;
-
-  /* 标记 / 文本片段 / 链接 */
-  --vscode-badge-background: #c4c4c4;
-  --vscode-badge-foreground: #333333;
-  --vscode-textCodeBlock-background: #f4f4f4;
-  --vscode-textLink-foreground: #006ab1;
-  --vscode-textPreformat-foreground: #a31515;
-
-  /* 滚动条 */
-  --vscode-scrollbarSlider-background: rgba(100, 100, 100, 0.4);
-  --vscode-scrollbarSlider-hoverBackground: rgba(75, 75, 75, 0.7);
-
-  /* 改动的增 / 删底色 */
-  --vscode-diffEditor-insertedLineBackground: rgba(155, 185, 85, 0.28);
-  --vscode-diffEditor-removedLineBackground: rgba(255, 0, 0, 0.16);
-
-  /* 图表用色 */
-  --vscode-charts-blue: #2b7cd3;
-  --vscode-charts-green: #4b9c4b;
-  --vscode-charts-purple: #9762b5;
-  --vscode-charts-yellow: #bf8803;
-
-  /* 文件状态颜色（git） */
-  --vscode-gitDecoration-addedResourceForeground: #587c0c;
-  --vscode-gitDecoration-deletedResourceForeground: #ad0707;
-
-  /* 代码高亮：chat.css 里那套是给深色底调的（One Dark），
-     白底上会看不清，这里换成 One Light 的取值。 */
-  --hl-keyword: #a626a4;
-  --hl-func: #4078f2;
-  --hl-num: #986801;
-  --hl-str: #50a14f;
-  --hl-built: #c18401;
-  --hl-comment: #a0a1a7;
-  --hl-tag: #e45649;
-  --hl-section: #4078f2;
-  --hl-bullet: #986801;
-  --hl-base: var(--vscode-editor-foreground, #1f1f1f);
 }
 
 html, body {
@@ -119,15 +28,10 @@ html, body {
 }
 
 /*
-  底部按钮条：网页端整条藏掉（里面的“⑂ 分支”也一并收进了顶部那颗“⋯”菜单），
-  省出这一行的竖向空间。VSCode 那份原本就藏它（chatHtml.ts 里另外注入了同一条规则）。
-*/
-#bottomBar { display: none !important; }
-
-/*
-  顶部标签栏最右边的两颗按钮：“📷 桌面截图”和“⋯ 更多操作”（分支 / 模型 / 历史会话 /
-  导出 / 设置都收进这个菜单）。样式照着左边那颗“+”抄（chat.css 里按编号 #newTabBtn
-  写的，这里拿不到）；“📷”用 margin-left: auto 把两颗一起顶到这一行的最右边。
+  顶部标签栏最右边的两颗按钮：“📷 桌面截图”和“⋯ 历史会话”（点它从右侧
+  滑入会话列表，列表底部还有一行「设置」）。样式照着左边那颗“+”抄
+  （chat.css 里按编号 #newTabBtn 写的，这里拿不到）；“📷”用 margin-left: auto
+  把两颗一起顶到这一行的最右边。
 */
 #browserScreenshotBtn {
   flex: 0 0 auto;
@@ -168,7 +72,6 @@ html, body {
   background: transparent;
   color: var(--vscode-foreground);
   opacity: 0.7;
-  font-size: 14px;
   line-height: 1;
   border-radius: 4px;
   cursor: pointer;
@@ -176,6 +79,10 @@ html, body {
   align-items: center;
   justify-content: center;
 }
+
+/* 图标是 browserBridge.js 内联的 codicon SVG，尺寸在这里控制。 */
+#browserScreenshotBtn svg,
+#browserMenuBtn svg { width: 14px; height: 14px; display: block; }
 
 #browserMenuBtn:hover {
   opacity: 1;
@@ -195,7 +102,6 @@ html, body {
 /*
   输入框右下角的“停止生成”图标（图是 browserBridge.js 建的，显示与隐藏由 chat.js 管）：
   只有生成中才露面（默认带 .hidden），手机上点它等于给当前 tab 按 Esc。
-  VSCode 那份页面里没有这颗元素，所以样式只写在网页端这份里。
 */
 #stopBtn {
   position: absolute; right: 8px; bottom: 8px; z-index: 5;
@@ -205,8 +111,11 @@ html, body {
   border-radius: 6px;
   background: var(--vscode-button-background);
   color: var(--vscode-button-foreground);
-  font-size: 12px; line-height: 1; cursor: pointer;
+  cursor: pointer;
 }
+
+/* 图标是 browserBridge.js 内联的 VSCode debug-stop SVG，尺寸在这里控制。 */
+#stopBtn svg { width: 16px; height: 16px; display: block; }
 
 #stopBtn:hover { background: var(--vscode-button-hoverBackground); }
 #stopBtn.hidden { display: none; }

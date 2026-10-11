@@ -1,7 +1,7 @@
 import { bootMark } from "./bootMark"; // 放第一个：记下插件代码开始加载的时间点
 import * as path from "path";
 import * as vscode from "vscode";
-import { ChatViewProvider, DiffContentProvider } from "./chatViewProvider";
+import { ChatViewProvider } from "./chatViewProvider";
 import { ensureToastAppIdAsync, PICHAT_APP_USER_MODEL_ID, vsCodeIconPath } from "./toastAppId";
 import { PiChatWebServer, type WebServerSettings } from "./webChatServer";
 import { ensureTabaAssets } from "./tabaAssets";
@@ -55,22 +55,6 @@ export function activate(context: vscode.ExtensionContext): void {
     const provider = new ChatViewProvider(context, toastAppIdReady);
 
     context.subscriptions.push(
-        vscode.workspace.registerTextDocumentContentProvider(
-            DiffContentProvider.scheme,
-            DiffContentProvider.instance
-        )
-    );
-
-    // diff 文档关闭时回收“修改前”内容副本，避免大文件快照在 Map 中泄漏。
-    context.subscriptions.push(
-        vscode.workspace.onDidCloseTextDocument((doc) => {
-            if (doc.uri.scheme === DiffContentProvider.scheme) {
-                DiffContentProvider.instance.dispose(doc.uri.query);
-            }
-        })
-    );
-
-    context.subscriptions.push(
         vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, provider, {
             webviewOptions: { retainContextWhenHidden: true },
         })
@@ -84,12 +68,6 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     context.subscriptions.push(
-        vscode.commands.registerCommand("piChat.openEditorChat", () => {
-            provider.openEditorChat();
-        })
-    );
-
-    context.subscriptions.push(
         vscode.commands.registerCommand("piChat.newSession", () => {
             void provider.newSessionAtLastActive();
         })
@@ -98,12 +76,6 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
         vscode.commands.registerCommand("piChat.history", () => {
             provider.pickSession();
-        })
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand("piChat.exportConversation", () => {
-            void provider.exportConversation();
         })
     );
 
@@ -126,12 +98,6 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     context.subscriptions.push(
-        vscode.commands.registerCommand("piChat.showTree", () => {
-            provider.showTree();
-        })
-    );
-
-    context.subscriptions.push(
         vscode.commands.registerCommand("piChat.focusInput", () => {
             provider.focusInput();
         })
@@ -144,7 +110,7 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     step("创建对话界面、登记命令");
 
-    // ---- 网页服务：浏览器里也能对话（一份独立会话，与侧边栏互不干扰）----
+    // ---- 网页服务：浏览器里也能对话（页面接在侧边栏那份会话上，两边看到的内容同步）----
     if (tabaAssets.ok) {
         output.appendLine(`派子会话用的扩展：${tabaAssets.extensionPath}`);
         output.appendLine(`插件自带的角色文件：${path.join(tabaAssets.resourceDir, "taba-roles")}`);
@@ -234,7 +200,7 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
-    // WebviewView 的 onDidDispose 会负责关闭 pi 进程
+    // pi 进程的收摊在 ChatViewProvider 构造时登记的 dispose 里做（网页服务同理）
 }
 
 // 插件代码到这里全部加载完。配合最上面 bootMark 记下的时间点，

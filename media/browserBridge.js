@@ -1,20 +1,20 @@
 // @ts-nocheck
 /**
- * browserBridge —— 浏览器里的消息通道（只在网页服务送出来的那份页面里加载）。
+ * browserBridge —— 界面桥：补上"chat.js 认的 VSCode 网页视图通道"，并带上网页端那套界面件。
+ * 一份代码跑在两种页面里：
+ *  1. 网页服务的页面（手机 / 电脑浏览器，有 meta[name="pichat-page"]）：
+ *     通道整个换成网页服务——出去的消息按顺序 POST /api，进来的消息从 /events
+ *     （浏览器原生的推送流）收；重连、心跳、断线补发都归它管。
+ *  2. VSCode 侧边栏（与网页端同源的那份界面，由 chatHtml.ts 加载）：
+ *     通道保持网页视图的 postMessage 不变（chat.js 感觉不到），只取三样：
+ *     网页端的界面件（常显标签栏、桌面截图 / ⋯ / 停止生成按钮）、一行起步的输入框、
+ *     按配置上色（显示选项里的「界面颜色」，浅 / 深两套调色板见下面）。
  *
  * chat.js 认的是 VSCode 网页视图那套通道：往外发用 acquireVsCodeApi().postMessage，
- * 往里收靠 window 上的 message 事件。这个文件把两头接到网页服务上，chat.js 因此
- * 一行都不用改：
- *   - 提供 window.acquireVsCodeApi()；
- *   - 出去的消息按顺序用 POST /api 发（排队，不让并行请求打乱顺序）；
- *   - 进来的消息从 /events（浏览器原生的推送流）收，转成 window 的 message 事件；
- *   - 插件要的确认框 / 输入框在这里用浏览器原生对话框实现，结果发回插件；
- *   - 界面底部的按钮条补几个按钮（VSCode 里这些按钮在面板标题栏上，浏览器里没有）。
+ * 往里收靠 window 上的 message 事件。本文件必须比 chat.js 先加载（chat.js 一开头
+ * 就调用 acquireVsCodeApi）。
  *
- * 必须比 chat.js 先加载（chat.js 开头就会调用 acquireVsCodeApi）。
- * 依赖：无，只用浏览器自带的 EventSource 与 fetch。
- *
- * ---- 手机上的情况（这个文件里一半的代码都是为它写的）----
+ * ---- 手机上的情况（网页模式里一半的代码都是为它写的）----
  * 页面退到后台，系统会把这条挂着不动的连接掐掉，页面里的定时器也一起冻住；回到前台时
  * 冻住的定时器全醒过来，几条消息挤着往外发。所以：
  *   - 重连自己管（不信浏览器自己那次重连：它要等一会儿，手机回到前台后还常常一直卡在
@@ -35,15 +35,260 @@
 (function () {
   "use strict";
 
-  var meta = document.querySelector('meta[name="pichat-page"]');
-  // 页面标识：服务在送出页面时写进来的。服务靠它认出"这条连接是哪一个页面的"；
-  // 从没见过的标识（服务重启前的旧页面）会被回绝（409），那时只能刷新页面。
-  var pageId = meta ? meta.getAttribute("content") || "" : "";
-  if (!pageId) {
-    pageId = "p-fallback-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
-  }
-  var query = "pageId=" + encodeURIComponent(pageId);
+  // VSCode 网页视图里本来就有 acquireVsCodeApi（而且只能取一次）；网页里没有，由本文件补一份。
+  var IN_WEBVIEW = typeof window.acquireVsCodeApi === "function";
 
+  // 标签栏那两颗按钮的图标：VSCode 官方 codicon（@vscode/codicons 包），
+  // fill=currentColor 跟随文字色，尺寸由 browserTheme.css 控制。
+  var ICON_CAMERA = '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M11 8C11 9.65685 9.65685 11 8 11C6.34315 11 5 9.65685 5 8C5 6.34315 6.34315 5 8 5C9.65685 5 11 6.34315 11 8ZM10 8C10 6.89543 9.10457 6 8 6C6.89543 6 6 6.89543 6 8C6 9.10457 6.89543 10 8 10C9.10457 10 10 9.10457 10 8ZM6.61803 2C6.04988 2 5.53048 2.321 5.27639 2.82918L4.69098 4H4C2.89543 4 2 4.89543 2 6V11C2 12.1046 2.89543 13 4 13H12C13.1046 13 14 12.1046 14 11V6C14 4.89543 13.1046 4 12 4H11.309L10.7236 2.82918C10.4695 2.321 9.95012 2 9.38197 2H6.61803ZM6.17082 3.27639C6.25552 3.107 6.42865 3 6.61803 3H9.38197C9.57135 3 9.74448 3.107 9.82918 3.27639L10.5528 4.72361C10.6375 4.893 10.8106 5 11 5H12C12.5523 5 13 5.44772 13 6V11C13 11.5523 12.5523 12 12 12H4C3.44772 12 3 11.5523 3 11V6C3 5.44772 3.67157 5 4 5H5C5.18939 5 5.36252 4.893 5.44721 4.72361L6.17082 3.27639Z"/></svg>';
+  var ICON_ELLIPSIS = '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M5 8C5 8.55229 4.55228 9 4 9C3.44772 9 3 8.55229 3 8C3 7.44772 3.44772 7 4 7C4.55228 7 5 7.44772 5 8ZM9 8C9 8.55229 8.55229 9 8 9C7.44772 9 7 8.55229 7 8C7 7.44772 7 7 8 7C8.55229 7 9 7.44772 9 8ZM12 9C12.5523 9 13 8.55229 13 8C13 7.44772 12.5523 7 12 7C11.4477 7 11 7.44772 11 8C11 8.55229 11.4477 9 12 9Z"/></svg>';
+
+  // ==================== 界面颜色（显示选项里的「界面颜色」） ====================
+  // 网页里没有 VSCode 注入主题变量，这里自己补两套调色板：浅色照 VSCode 浅色主题
+  //（Light Modern）的取值，深色照深色主题（Dark Modern）的取值。写死不跟随主题，
+  // 两边（侧边栏 / 网页）看到的颜色才一致。侧边栏里 VSCode 注入的变量会被
+  // body 上的行内变量盖过（仅限调色板里有的那些键，其余仍跟随主题）。
+  // 代码高亮：浅色给 One Light 的取值；深色不覆盖——chat.css 默认那套就是深底用的 One Dark。
+  var FONT_STACK = 'system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif';
+  var CODE_FONT_STACK = 'Consolas, "Cascadia Code", "JetBrains Mono", Menlo, monospace';
+  var LIGHT_VARS = {
+    "--vscode-font-family": FONT_STACK,
+    "--vscode-editor-font-family": CODE_FONT_STACK,
+    "--vscode-font-size": "13px",
+    "--vscode-foreground": "#1f1f1f",
+    "--vscode-editor-foreground": "#1f1f1f",
+    "--vscode-editor-background": "#ffffff",
+    "--vscode-descriptionForeground": "#5f5f5f",
+    "--vscode-errorForeground": "#e51400",
+    "--vscode-focusBorder": "#0090f1",
+    "--vscode-panel-border": "#e5e5e5",
+    "--vscode-widget-border": "#d4d4d4",
+    "--vscode-menu-border": "#d4d4d4",
+    "--vscode-button-background": "#007acc",
+    "--vscode-button-foreground": "#ffffff",
+    "--vscode-button-hoverBackground": "#026ec1",
+    "--vscode-button-border": "transparent",
+    "--vscode-button-secondaryBackground": "#e8e8e8",
+    "--vscode-button-secondaryForeground": "#1f1f1f",
+    "--vscode-button-secondaryHoverBackground": "#d6d6d6",
+    "--vscode-input-background": "#ffffff",
+    "--vscode-input-foreground": "#1f1f1f",
+    "--vscode-input-border": "#cecece",
+    "--vscode-dropdown-background": "#ffffff",
+    "--vscode-dropdown-border": "#cecece",
+    "--vscode-checkbox-background": "#ffffff",
+    "--vscode-checkbox-foreground": "#1f1f1f",
+    "--vscode-checkbox-border": "#cecece",
+    "--vscode-list-hoverBackground": "#e8e8e8",
+    "--vscode-list-activeSelectionBackground": "#0060c0",
+    "--vscode-list-activeSelectionForeground": "#ffffff",
+    "--vscode-menu-background": "#f8f8f8",
+    "--vscode-menu-foreground": "#1f1f1f",
+    "--vscode-menu-selectionBackground": "#0060c0",
+    "--vscode-editorWidget-background": "#f8f8f8",
+    "--vscode-editorInfo-background": "#f8f8f8",
+    "--vscode-editorWarning-foreground": "#bf8803",
+    "--vscode-toolbar-hoverBackground": "#e8e8e8",
+    "--vscode-badge-background": "#c4c4c4",
+    "--vscode-badge-foreground": "#333333",
+    "--vscode-textCodeBlock-background": "#f4f4f4",
+    "--vscode-textLink-foreground": "#006ab1",
+    "--vscode-textPreformat-foreground": "#a31515",
+    "--vscode-scrollbarSlider-background": "rgba(100, 100, 100, 0.4)",
+    "--vscode-scrollbarSlider-hoverBackground": "rgba(75, 75, 75, 0.7)",
+    "--vscode-diffEditor-insertedLineBackground": "rgba(155, 185, 85, 0.28)",
+    "--vscode-diffEditor-removedLineBackground": "rgba(255, 0, 0, 0.16)",
+    "--vscode-charts-blue": "#2b7cd3",
+    "--vscode-charts-green": "#4b9c4b",
+    "--vscode-charts-purple": "#9762b5",
+    "--vscode-charts-yellow": "#bf8803",
+    "--vscode-gitDecoration-addedResourceForeground": "#587c0c",
+    "--vscode-gitDecoration-deletedResourceForeground": "#ad0707",
+    "--hl-keyword": "#a626a4",
+    "--hl-func": "#4078f2",
+    "--hl-num": "#986801",
+    "--hl-str": "#50a14f",
+    "--hl-built": "#c18401",
+    "--hl-comment": "#a0a1a7",
+    "--hl-tag": "#e45649",
+    "--hl-section": "#4078f2",
+    "--hl-bullet": "#986801",
+    "--hl-base": "#1f1f1f"
+  };
+  var DARK_VARS = {
+    "--vscode-font-family": FONT_STACK,
+    "--vscode-editor-font-family": CODE_FONT_STACK,
+    "--vscode-font-size": "13px",
+    "--vscode-foreground": "#cccccc",
+    "--vscode-editor-foreground": "#cccccc",
+    "--vscode-editor-background": "#1f1f1f",
+    "--vscode-descriptionForeground": "#9d9d9d",
+    "--vscode-errorForeground": "#f14c4c",
+    "--vscode-focusBorder": "#0078d4",
+    "--vscode-panel-border": "#2b2b2b",
+    "--vscode-widget-border": "#313131",
+    "--vscode-menu-border": "#454545",
+    "--vscode-button-background": "#0078d4",
+    "--vscode-button-foreground": "#ffffff",
+    "--vscode-button-hoverBackground": "#026ec1",
+    "--vscode-button-border": "transparent",
+    "--vscode-button-secondaryBackground": "#313131",
+    "--vscode-button-secondaryForeground": "#cccccc",
+    "--vscode-button-secondaryHoverBackground": "#3c3c3c",
+    "--vscode-input-background": "#313131",
+    "--vscode-input-foreground": "#cccccc",
+    "--vscode-input-border": "#3c3c3c",
+    "--vscode-dropdown-background": "#313131",
+    "--vscode-dropdown-border": "#3c3c3c",
+    "--vscode-checkbox-background": "#313131",
+    "--vscode-checkbox-foreground": "#cccccc",
+    "--vscode-checkbox-border": "#3c3c3c",
+    "--vscode-list-hoverBackground": "#2a2d2e",
+    "--vscode-list-activeSelectionBackground": "#04395e",
+    "--vscode-list-activeSelectionForeground": "#ffffff",
+    "--vscode-menu-background": "#1f1f1f",
+    "--vscode-menu-foreground": "#cccccc",
+    "--vscode-menu-selectionBackground": "#04395e",
+    "--vscode-editorWidget-background": "#1f1f1f",
+    "--vscode-editorInfo-background": "#1f1f1f",
+    "--vscode-editorWarning-foreground": "#cca700",
+    "--vscode-toolbar-hoverBackground": "#2a2d2e",
+    "--vscode-badge-background": "#4d4d4d",
+    "--vscode-badge-foreground": "#ffffff",
+    "--vscode-textCodeBlock-background": "#292929",
+    "--vscode-textLink-foreground": "#4daafc",
+    "--vscode-textPreformat-foreground": "#ce9178",
+    "--vscode-scrollbarSlider-background": "rgba(121, 121, 121, 0.4)",
+    "--vscode-scrollbarSlider-hoverBackground": "rgba(100, 100, 100, 0.7)",
+    "--vscode-diffEditor-insertedLineBackground": "rgba(21, 130, 87, 0.4)",
+    "--vscode-diffEditor-removedLineBackground": "rgba(204, 21, 21, 0.25)",
+    "--vscode-charts-blue": "#3b8eea",
+    "--vscode-charts-green": "#3d9463",
+    "--vscode-charts-purple": "#b180d7",
+    "--vscode-charts-yellow": "#cca700",
+    "--vscode-gitDecoration-addedResourceForeground": "#81b88b",
+    "--vscode-gitDecoration-deletedResourceForeground": "#c74e39"
+  };
+
+  var appliedVarKeys = [];
+  var themeStyleEl = null;
+
+  /**
+   * 按配置上色。
+   * 行内写在 body 上（压得过 VSCode 注入的主题变量，两边的颜色才一致）；
+   * 同时维护一个 <style id="pichat-theme-vars">：导出会话时 chat.js 只抓 <style> 里的
+   * 内容，颜色也要跟着进导出的 HTML。
+   */
+  function applyTheme(mode) {
+    var vars = mode === "dark" ? DARK_VARS : LIGHT_VARS;
+    for (var i = 0; i < appliedVarKeys.length; i++) {
+      document.body.style.removeProperty(appliedVarKeys[i]);
+    }
+    appliedVarKeys = [];
+    var cssText = "";
+    for (var name in vars) {
+      if (!Object.prototype.hasOwnProperty.call(vars, name)) { continue; }
+      document.body.style.setProperty(name, vars[name]);
+      appliedVarKeys.push(name);
+      cssText += name + ":" + vars[name] + ";";
+    }
+    if (!themeStyleEl) {
+      themeStyleEl = document.createElement("style");
+      themeStyleEl.id = "pichat-theme-vars";
+      document.head.appendChild(themeStyleEl);
+    }
+    themeStyleEl.textContent = ":root{" + cssText + "}";
+    document.documentElement.style.colorScheme = mode;
+  }
+
+  var metaTheme = document.querySelector('meta[name="pichat-theme"]');
+  applyTheme(metaTheme && metaTheme.getAttribute("content") === "dark" ? "dark" : "light");
+
+  // ==================== 出站：往插件发消息 ====================
+  var chain = Promise.resolve();
+  /** 连续发不出去几次（连上就清零），到 6 次就把提示换成"连不上插件"（网页模式用）。 */
+  var sendFailures = 0;
+
+  function enqueue(msg) {
+    if (IN_WEBVIEW) {
+      // 网页视图的 postMessage 本来就保序可靠，直接发
+      realApi.postMessage(msg);
+      return;
+    }
+    chain = chain.then(function () { return post(msg, 1); }).catch(function () { /* 单条失败不影响后续 */ });
+  }
+
+  // ==================== 入站：两类消息两处都要拦 ====================
+  /** 插件要的确认框 / 输入框：用浏览器原生对话框，结果发回去。 */
+  function handleDialog(d) {
+    var value;
+    if (d.kind === "prompt") {
+      var label = [d.title || "", d.placeholder || ""].filter(Boolean).join("\n");
+      value = window.prompt(label || "请输入", d.prefill || "");
+    } else {
+      var text = [d.title || "", d.message || ""].filter(Boolean).join("\n\n");
+      value = window.confirm(text || "是否继续？");
+    }
+    enqueue({ type: "browserDialogResult", id: d.id, value: value === undefined ? null : value });
+  }
+
+  /** 两处页面都要自己接的消息：界面颜色跟随、浏览器对话框。 */
+  function inspectIncoming(data) {
+    var type = data && data.type;
+    if (type === "browserDialog") { handleDialog(data); return true; }
+    if (type === "viewOptions" && data.themeMode) {
+      applyTheme(data.themeMode === "dark" ? "dark" : "light");
+    }
+    return false;
+  }
+
+  // ==================== chat.js 认的接口 ====================
+  var apiState = null;
+  var apiInstance = null;
+  var realApi = null;
+
+  if (IN_WEBVIEW) {
+    // 先把真的接口取过来（每个网页视图只许取一次），之后 chat.js 调到的都是这份包装。
+    realApi = window.acquireVsCodeApi();
+    window.acquireVsCodeApi = function () {
+      if (apiInstance) {
+        return apiInstance;
+      }
+      apiInstance = {
+        postMessage: function (msg) { enqueue(msg); },
+        getState: function () { return realApi.getState(); },
+        setState: function (value) { return realApi.setState(value); },
+      };
+      return apiInstance;
+    };
+    // 入站：插件发来的消息本来就是 window 的 message 事件，chat.js 自己会收；
+    // 这里只拦需要处理的那几类（界面颜色、对话框），不转发（转发就重复了）。
+    window.addEventListener("message", function (ev) {
+      var d = ev.data;
+      if (d && typeof d === "object") { inspectIncoming(d); }
+    });
+  } else {
+    window.acquireVsCodeApi = function () {
+      if (apiInstance) {
+        console.warn("[pi-chat] acquireVsCodeApi 被调用了多次，返回同一个对象。");
+        return apiInstance;
+      }
+      apiInstance = {
+        postMessage: function (msg) { enqueue(msg); },
+        getState: function () { return apiState; },
+        setState: function (value) { apiState = value; return value; },
+      };
+      return apiInstance;
+    };
+  }
+
+  // ============================================================================
+  //  以下只有网页模式的页面用：重连、心跳、断线补发、提示条
+  // ============================================================================
+
+  /** 页面标识：服务在送出页面时写进来的。服务靠它认出"这条连接是哪一个页面的"。 */
+  var pageId = "";
+  var query = "";
   // ==================== 几个时间（与 webChatServer.ts 里的常量对得上） ====================
   /** 插件发心跳（tick）的间隔。 */
   var HEARTBEAT_MS = 25000;
@@ -58,39 +303,19 @@
   /** 连续失败到第几次就把提示换成"连不上插件"（后台仍在照着重试）。 */
   var GIVE_UP_BANNER_AT = 6;
 
-  // ==================== 对外：假装成 VSCode 的网页视图接口 ====================
-  // chat.js 用这个标记分辫自己跑在网页里还是 VSCode 网页视图里
-  // （必须在 chat.js 加载前就位，chat.js 一开头就读它）。
-  window.pichatBrowser = true;
-  var apiState;
-  var apiInstance;
-  window.acquireVsCodeApi = function () {
-    if (apiInstance) {
-      console.warn("[pi-chat] acquireVsCodeApi 被调用了多次，返回同一个对象。");
-      return apiInstance;
+  if (!IN_WEBVIEW) {
+    var meta = document.querySelector('meta[name="pichat-page"]');
+    pageId = meta ? meta.getAttribute("content") || "" : "";
+    if (!pageId) {
+      pageId = "p-fallback-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
     }
-    apiInstance = {
-      postMessage: function (msg) { enqueue(msg); },
-      getState: function () { return apiState; },
-      setState: function (value) { apiState = value; return value; },
-    };
-    return apiInstance;
-  };
-
-  // ==================== 出站：排队发送，保顺序 ====================
-  var chain = Promise.resolve();
-  /** 连续发不出去几次（连上就清零），到 GIVE_UP_BANNER_AT 就把提示换成"连不上插件"。 */
-  var sendFailures = 0;
-
-  function enqueue(msg) {
-    chain = chain.then(function () { return post(msg, 1); }).catch(function () { /* 单条失败不影响后续 */ });
+    query = "pageId=" + encodeURIComponent(pageId);
   }
 
   /**
-   * 发一条消息给插件。
-   *
-   * 发不出去就一直重试（等待阶梯见 RETRY_DELAYS_MS）；页面在后台时不空转，等回到前台再试。
-   * 只有服务明确回了"不认识这个页面"（409，多半是插件重启过）或"来源不被接受"（403）才认输。
+   * 发一条消息给插件（网页模式：POST /api）。
+   * 发不出去就一直重试；只有服务明确回了"不认识这个页面"（409，多半是插件重启过）
+   * 或"来源不被接受"（403）才认输。
    */
   function post(msg, attempt) {
     return fetch("/api?" + query, {
@@ -179,7 +404,7 @@
 
   function dispatch(data) {
     var type = data && data.type;
-    if (type === "browserDialog") { handleDialog(data); return; }
+    if (inspectIncoming(data)) { return; }
     if (type === "desktopScreenshot") { showDesktopScreenshot(data); return; }
     if (type === "desktopScreenshotResult") { handleDesktopScreenshotResult(data); return; }
     if (type === "hello") {
@@ -212,19 +437,6 @@
     }
     // 其余消息一律按 VSCode 网页视图的样子投给 window，chat.js 那边照原样处理
     window.dispatchEvent(new MessageEvent("message", { data: data }));
-  }
-
-  /** 插件要的确认框 / 输入框：用浏览器原生对话框，结果发回去。 */
-  function handleDialog(d) {
-    var value;
-    if (d.kind === "prompt") {
-      var label = [d.title || "", d.placeholder || ""].filter(Boolean).join("\n");
-      value = window.prompt(label || "请输入", d.prefill || "");
-    } else {
-      var text = [d.title || "", d.message || ""].filter(Boolean).join("\n\n");
-      value = window.confirm(text || "是否继续？");
-    }
-    enqueue({ type: "browserDialogResult", id: d.id, value: value === undefined ? null : value });
   }
 
   function connect() {
@@ -356,17 +568,6 @@
     if (!watchdogTimer) { watchdogTimer = setInterval(watch, WATCHDOG_MS); }
   }
 
-  document.addEventListener("visibilitychange", function () {
-    if (document.visibilityState === "visible") { wake(); }
-  });
-  window.addEventListener("online", wake);
-  // 从"往返缓存"里整页取回来：连接其实全是死的，直接重连
-  window.addEventListener("pageshow", function (ev) {
-    if (ev.persisted) { reconnectNow(); }
-  });
-  // 页面生命周期事件（安卓那边的浏览器有）：冻住之后醒过来
-  document.addEventListener("resume", wake);
-
   // ==================== 提示条 ====================
   var bannerEl = null;
 
@@ -419,7 +620,7 @@
   // ==================== 桌面截图 ====================
   // 标签栏顶部的“📷”按钮：请插件截一张这台电脑的桌面（可能就是本机，
   // 也可能是你在手机浏览器里看的这台开发机），截好推回来全屏显示。
-  // 消息由插件那头的 browserChatController.ts 接：
+  // 消息由插件那头的 ChatViewProvider 接：
   //   requestDesktopScreenshot → desktopScreenshot（图片 base64）/ desktopScreenshotResult（失败）。
   var shotBtn = null;
   var shotBusyTimer = null;
@@ -463,10 +664,8 @@
     enqueue({ type: "requestDesktopScreenshot" });
   }
 
-  // ==================== 顶部标签栏最右边的“⋯”菜单 ====================
-  // 历史会话 / 设置都收进这一颗（VSCode 里这些在面板标题栏上，
-  // 网页端没有标题栏；消息由插件侧的浏览器工作区 browserChatController.ts 接，
-  // 点开的是界面自带的那个浮层选择器）。
+  // ==================== 顶部标签栏最右边的“⋯”按钮 ====================
+  // 点它直接让历史会话列表从右侧滑进来（消息由插件侧的 ChatViewProvider 接）。
   // 标签栏平时只有一个标签时是藏着的，网页端要常显，否则这颗按钮没地方放。
   // 顺带的好处：新建标签的那颗“+”也一直可见可点。
   (function () {
@@ -476,7 +675,7 @@
     shotBtn = document.createElement("button");
     shotBtn.type = "button";
     shotBtn.id = "browserScreenshotBtn";
-    shotBtn.textContent = "📷";
+    shotBtn.innerHTML = ICON_CAMERA;
     shotBtn.title = "查看桌面截图（截的是运行 VSCode 的这台电脑）";
     shotBtn.addEventListener("click", requestDesktopScreenshot);
     bar.appendChild(shotBtn);
@@ -484,31 +683,46 @@
     var btn = document.createElement("button");
     btn.type = "button";
     btn.id = "browserMenuBtn";
-    btn.textContent = "⋯";
-    btn.title = "更多操作：历史会话 / 设置";
-    btn.addEventListener("click", function () { enqueue({ type: "openBrowserMenu" }); });
+    btn.innerHTML = ICON_ELLIPSIS;
+    btn.title = "历史会话";
+    btn.addEventListener("click", function () { enqueue({ type: "openHistory" }); });
     bar.appendChild(btn);
   })();
 
-  // ==================== 网页端的输入框小改动 ====================
-  // 1) 提示语去掉键盘说明：手机上既没有 Enter / Shift+Enter，也用不上 @ / # / 斜杠那几套。
-  // 2) 生成中在输入框右下角露出一颗“停止生成”图标：手机没有 Esc，否则中止不了。
-  //    这颗图标什么时候显示由 chat.js 按当前 tab 是否在生成控制（那边会来找 #stopBtn）。
+  // ==================== 输入框的小改动 ====================
+  // 生成中在输入框右下角露出一颗“停止生成”图标：手机没有 Esc，否则中止不了；
+  // 侧边栏配上它之后与网页端一致（显示与隐藏由 chat.js 按当前 tab 是否在生成控制，
+  // 那边会来找 #stopBtn；VSCode 里本来也有 Esc，两颗并存不冲突）。
   (function () {
-    var input = document.getElementById("input");
-    if (input) { input.placeholder = "与 pi 对话…"; }
     var row = document.getElementById("inputRow");
     if (!row) { return; }
     var stop = document.createElement("button");
     stop.type = "button";
     stop.id = "stopBtn";
     stop.className = "hidden";
-    stop.textContent = "■";
+    // 图用 VSCode 官方 codicon 的 debug-stop（圆角描边方块），fill=currentColor 跟随按钮文字色。
+    stop.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true">' +
+      '<path d="M12.5 3.5V12.5H3.5V3.5H12.5ZM12.5 2H3.5C2.672 2 2 2.672 2 3.5V12.5C2 13.328 2.672 14 3.5 14H12.5C13.328 14 14 13.328 14 12.5V3.5C14 2.672 13.328 2 12.5 2Z"/>' +
+      '</svg>';
     stop.title = "停止生成";
     stop.setAttribute("aria-label", "停止生成");
     row.appendChild(stop);
   })();
 
-  startTimers();
-  connect();
+  if (!IN_WEBVIEW) {
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") { wake(); }
+    });
+    window.addEventListener("online", wake);
+    // 从"往返缓存"里整页取回来：连接其实全是死的，直接重连
+    window.addEventListener("pageshow", function (ev) {
+      if (ev.persisted) { reconnectNow(); }
+    });
+    // 页面生命周期事件（安卓那边的浏览器有）：冻住之后醒过来
+    document.addEventListener("resume", wake);
+
+    startTimers();
+    connect();
+  }
 })();

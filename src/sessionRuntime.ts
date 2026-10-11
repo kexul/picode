@@ -11,21 +11,16 @@ import {
     formatPiError,
     getModelThinkingLevels,
     resolveAnchorLine,
-    slimTree,
     textOf,
 } from "./messageUtils";
 import {
-    forkSelectedText,
     isRpcOk,
     rpcErrorMessage,
     type RpcCommandInfo,
-    type RpcForkMessage,
-    type RpcForkResult,
     type RpcModelInfo,
     type RpcResponse,
     type RpcSessionStats,
     type RpcSessionState,
-    type RpcTreeNode,
 } from "./piRpc";
 import type {
     MessageSink,
@@ -38,7 +33,6 @@ import type {
 
 // 对外仍从 sessionRuntime 导出类型，保持既有 import 路径稳定。
 export type {
-    FileChange,
     MessageSink,
     ModelChoice,
     ModelInfo,
@@ -185,7 +179,6 @@ export class SessionRuntime {
     /** 从本进程 stderr 里挑出“派子会话”暗号行的攒行器。 */
     private readonly tabaFrames = new TabaFrameParser();
     private readonly edits: EditTracker;
-    private forkEntries: { entryId: string; text: string }[] = [];
     // ---- 网页端「只发最近一段历史」的窗口（宿主 wantsTrimmedHistory 为 true 时启用）----
     /** 当前窗口在完整消息数组里的起点下标；-1 表示没开窗口（全量发过 / 非网页端）。 */
     private historyWindowStart = -1;
@@ -218,16 +211,6 @@ export class SessionRuntime {
     /** 推送给对应 tab 的消息（自动带 tabId）。 */
     private post(msg: Record<string, unknown>): void {
         this.host.postToTab(this.id, msg);
-    }
-
-    /**
-     * 活体迁移：换绑宿主（侧边栏 ↔ 编辑器工作区之间搬移 panel 时用）。
-     * pi 进程、编辑快照、模型/上下文状态全部原样保留，只是渲染出口改到新宿主；
-     * EditTracker 的回调都动态读 this.host，故无需重建。迁移后由新宿主调用
-     * {@link replayHistory} 把已有对话重放进新 webview。
-     */
-    public rebindHost(host: RuntimeHost): void {
-        this.host = host;
     }
 
     /** 把当前 tab 的模型/上下文状态快照上报给宿主（如 VSCode 状态栏）。
@@ -857,7 +840,7 @@ export class SessionRuntime {
         return this.edits.revertEdit(toolCallId);
     }
 
-    // ---- 会话加载 / 树 / fork ----
+    // ---- 会话加载 ----
     public async loadSession(file: string): Promise<void> {
         if (!this.client || !this.client.isRunning()) {
             this.startClient();
@@ -892,12 +875,8 @@ export class SessionRuntime {
             return;
         }
 
-        const [msgResp, forkResp] = await Promise.all([
-            this.request<{ messages: any[] }>({ type: "get_messages" }),
-            this.request<{ messages: RpcForkMessage[] }>({ type: "get_fork_messages" }),
-        ]);
+        const msgResp = await this.request<{ messages: any[] }>({ type: "get_messages" });
         const messages: any[] = msgResp?.data?.messages ?? [];
-        this.forkEntries = forkResp?.data?.messages ?? [];
         this.noteSessionReplaced();
         this.renderWindowed(messages);
         this.currentSessionPath = file;
@@ -907,273 +886,6 @@ export class SessionRuntime {
         this.loading = false;
         this.host.broadcastTabList();
         this.refreshStats();
-    }
-
-    public async showTree(): Promise<void> {
-        const resp = await this.request<{ tree: RpcTreeNode[]; leafId?: string | null }>({ type: "get_tree" });
-        if (!isRpcOk(resp)) {
-            this.post({
-                type: "systemError",
-                text: `获取对话树失败: ${rpcErrorMessage(resp)}`,
-            });
-            return;
-        }
-        const tree = resp.data?.tree ?? [];
-        const leafId = resp.data?.leafId ?? null;
-        // slimTree：去掉 bash/diff 等大字段；user 原文完整保留（fork 后 setInput 回填）
-        const slim = slimTree(tree);
-        // 完整树消息可达数百 KB~数 MB，VSCode webview postMessage 对较大消息会静默丢弃。
-        // 改为字符串分块发送（每块 ~60KB），webview 端拼接后再渲染。
-        const json = JSON.stringify({ tree: slim, leafId });
-        const batchId = `tree-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        const CHUNK = 60000;
-        const total = Math.max(1, Math.ceil(json.length / CHUNK));
-        for (let i = 0; i < total; i++) {
-            this.post({
-                type: "treeViewChunk",
-                batchId,
-                index: i,
-                total,
-                text: json.slice(i * CHUNK, (i + 1) * CHUNK),
-            });
-        }
-        this.post({ type: "treeViewEnd", batchId, leafId, jsonLen: json.length });
-    }
-
-    public async forkFromEntry(entryId: string): Promise<void> {
-        this.abortActiveRun();
-        if (!this.client || !this.client.isRunning()) {
-            this.startClient();
-        }
-        this.loading = true;
-        this.host.broadcastTabList();
-        this.post({ type: "system", text: "正在从该消息处分叉…" });
-
-        const ready = await this.waitReady();
-        if (!ready) {
-            this.loading = false;
-            this.host.broadcastTabList();
-            this.post({
-                type: "systemError",
-                text: "pi 进程未能就绪，无法分叉。请确认 pi 可正常启动。",
-            });
-            return;
-        }
-
-        const resp = await this.request<RpcForkResult>({ type: "fork", entryId });
-        if (!isRpcOk(resp)) {
-            this.loading = false;
-            this.host.broadcastTabList();
-            this.post({
-                type: "systemError",
-                text: `分叉失败: ${rpcErrorMessage(resp)}`,
-            });
-            return;
-        }
-        if (resp.data?.cancelled) {
-            this.loading = false;
-            this.host.broadcastTabList();
-            this.post({ type: "system", text: "分叉已取消。" });
-            return;
-        }
-        // pi fork(position=before) 会返回被分叉的 user 消息原文，供编辑后重发（对齐 TUI）
-        const selectedText = forkSelectedText(resp);
-        this.edits.reset();
-        const [msgResp, forkResp, stateResp] = await Promise.all([
-            this.request<{ messages: any[] }>({ type: "get_messages" }),
-            this.request<{ messages: RpcForkMessage[] }>({ type: "get_fork_messages" }),
-            this.request<RpcSessionState>({ type: "get_state" }),
-        ]);
-        const messages: any[] = msgResp?.data?.messages ?? [];
-        this.forkEntries = forkResp?.data?.messages ?? [];
-        // fork 会切换到新的分支会话文件：路径与标题都换成新分支的
-        this.noteSessionReplaced();
-        if (stateResp?.data?.sessionFile) {
-            this.currentSessionPath = stateResp.data.sessionFile;
-        }
-        this.captureSessionName(stateResp?.data);
-        this.post({ type: "clear" });
-        this.renderWindowed(messages);
-        // clear 会清空输入框，必须在其后把 user 消息救回（对齐 TUI）
-        if (selectedText) {
-            this.post({ type: "setInput", text: selectedText });
-        }
-        this.post({ type: "system", text: `已分叉到新分支（${messages.length} 条消息）。` });
-        this.loading = false;
-        this.host.broadcastTabList();
-        this.refreshStats();
-    }
-
-    /**
-     * 加载指定会话文件后，从 entryId 处分叉到新分支。
-     * 用于“在新 tab 打开分支”：由新建的空 tab 调用本方法，源 tab 完全不受影响。
-     */
-    public async loadSessionAndFork(sessionPath: string, entryId: string): Promise<void> {
-        if (!this.client || !this.client.isRunning()) {
-            this.startClient();
-        }
-        this.loading = true;
-        this.host.broadcastTabList();
-        this.edits.reset();
-        this.hasConversation = false;
-        this.post({ type: "clear" });
-        this.post({ type: "system", text: "正在加载源会话并分叉…" });
-
-        // 等待 pi 真正就绪（冷启动需数秒），避免命令挤在超时上
-        const ready = await this.waitReady();
-        if (!ready) {
-            this.loading = false;
-            this.host.broadcastTabList();
-            this.post({
-                type: "systemError",
-                text: "pi 进程未能就绪，无法分叉。请确认 pi 可正常启动。",
-            });
-            return;
-        }
-
-        // 1. 加载源会话（不修改源文件）
-        const switchResp = await this.request({ type: "switch_session", sessionPath });
-        if (!switchResp || switchResp.success === false) {
-            this.loading = false;
-            this.host.broadcastTabList();
-            this.post({
-                type: "systemError",
-                text: `加载源会话失败: ${switchResp?.error ?? "未知错误"}`,
-            });
-            return;
-        }
-        this.currentSessionPath = sessionPath;
-
-        // 2. 在该 entry 处分叉：创建新分支会话文件并切换到它
-        const forkResp = await this.request<RpcForkResult>({ type: "fork", entryId });
-        if (!isRpcOk(forkResp)) {
-            this.loading = false;
-            this.host.broadcastTabList();
-            this.post({
-                type: "systemError",
-                text: `分叉失败: ${rpcErrorMessage(forkResp)}`,
-            });
-            return;
-        }
-        if (forkResp.data?.cancelled) {
-            this.loading = false;
-            this.host.broadcastTabList();
-            this.post({ type: "system", text: "分叉已取消。" });
-            return;
-        }
-        // pi fork(position=before) 返回被分叉的 user 消息原文，供编辑后重发
-        const selectedText = forkSelectedText(forkResp);
-
-        // 3. 读取新分支消息并同步会话路径
-        const [msgResp, forkMsgResp, stateResp] = await Promise.all([
-            this.request<{ messages: any[] }>({ type: "get_messages" }),
-            this.request<{ messages: RpcForkMessage[] }>({ type: "get_fork_messages" }),
-            this.request<RpcSessionState>({ type: "get_state" }),
-        ]);
-        const messages: any[] = msgResp?.data?.messages ?? [];
-        this.forkEntries = forkMsgResp?.data?.messages ?? [];
-        // 分叉到的是新会话文件：旧标题作废，标题改从新的 get_state 里读
-        this.noteSessionReplaced();
-        if (stateResp?.data?.sessionFile) {
-            this.currentSessionPath = stateResp.data.sessionFile;
-        }
-        this.captureSessionName(stateResp?.data);
-        this.post({ type: "clear" });
-        this.renderWindowed(messages);
-        // clear 会清空输入框，必须在其后把 user 消息救回（对齐 TUI）
-        if (selectedText) {
-            this.post({ type: "setInput", text: selectedText });
-        }
-        this.post({ type: "system", text: `已在新 tab 打开新分支（${messages.length} 条消息）。` });
-        this.loading = false;
-        this.host.broadcastTabList();
-        this.refreshStats();
-        void this.sendCurrentModel();
-    }
-
-    /**
-     * 加载指定会话文件后，在当前位置 clone 到新会话文件。
-     * 用于分屏：新 pane 拿到与源会话完全对齐的副本，两侧从此并行，源 tab 不受影响。
-     */
-    public async loadSessionAndClone(sessionPath: string): Promise<void> {
-        if (!this.client || !this.client.isRunning()) {
-            this.startClient();
-        }
-        this.loading = true;
-        this.host.broadcastTabList();
-        this.edits.reset();
-        this.hasConversation = false;
-        this.post({ type: "clear" });
-        this.post({ type: "system", text: "正在克隆会话…" });
-        const t0 = Date.now();
-
-        const ready = await this.waitReady();
-        if (!ready) {
-            this.loading = false;
-            this.host.broadcastTabList();
-            this.post({
-                type: "systemError",
-                text: "pi 进程未能就绪，无法克隆会话。请确认 pi 可正常启动。",
-            });
-            return;
-        }
-        console.log(`[clone] waitReady ${Date.now() - t0}ms`);
-
-        // 1. 加载源会话（不修改源文件）
-        const switchResp = await this.request({ type: "switch_session", sessionPath });
-        if (!switchResp || switchResp.success === false) {
-            this.loading = false;
-            this.host.broadcastTabList();
-            this.post({
-                type: "systemError",
-                text: `加载源会话失败: ${switchResp?.error ?? "未知错误"}`,
-            });
-            return;
-        }
-        console.log(`[clone] switch_session ${Date.now() - t0}ms`);
-        this.currentSessionPath = sessionPath;
-
-        // 2. 在当前位置 clone：创建新会话文件并切换过去（不碰源文件）
-        const cloneResp = await this.request<{ cancelled?: boolean }>({ type: "clone" });
-        if (!isRpcOk(cloneResp)) {
-            this.loading = false;
-            this.host.broadcastTabList();
-            this.post({
-                type: "systemError",
-                text: `克隆失败: ${rpcErrorMessage(cloneResp)}`,
-            });
-            return;
-        }
-        if (cloneResp.data?.cancelled) {
-            this.loading = false;
-            this.host.broadcastTabList();
-            this.post({ type: "system", text: "克隆已取消。" });
-            return;
-        }
-        console.log(`[clone] clone 命令 ${Date.now() - t0}ms`);
-
-        // 3. 读取新会话消息并同步会话路径
-        const cloneMsgs = await Promise.all([
-            this.request<{ messages: any[] }>({ type: "get_messages" }),
-            this.request<{ messages: RpcForkMessage[] }>({ type: "get_fork_messages" }),
-            this.request<RpcSessionState>({ type: "get_state" }),
-        ]);
-        const messages: any[] = cloneMsgs[0]?.data?.messages ?? [];
-        this.forkEntries = cloneMsgs[1]?.data?.messages ?? [];
-        // 克隆出的是新会话文件：旧标题作废，标题改从新的 get_state 里读
-        this.noteSessionReplaced();
-        if (cloneMsgs[2]?.data?.sessionFile) {
-            this.currentSessionPath = cloneMsgs[2].data.sessionFile;
-        }
-        this.captureSessionName(cloneMsgs[2]?.data);
-        this.post({ type: "clear" });
-        this.renderWindowed(messages);
-        this.post({ type: "system", text: `已克隆为新会话（${messages.length} 条消息），两侧可并行对话。` });
-        console.log(`[clone] 回传+渲染共 ${Date.now() - t0}ms`);
-        this.loading = false;
-        this.host.broadcastTabList();
-        this.refreshStats();
-        void this.sendCurrentModel();
     }
 
     /**
@@ -1205,16 +917,12 @@ export class SessionRuntime {
             });
             return;
         }
-        const [msgResp, forkResp] = await Promise.all([
-            this.request<{ messages: any[] }>({ type: "get_messages" }),
-            this.request<{ messages: RpcForkMessage[] }>({ type: "get_fork_messages" }),
-        ]);
+        const msgResp = await this.request<{ messages: any[] }>({ type: "get_messages" });
         if (!msgResp) {
             emit({ type: "systemError", text: "迁移后重放对话失败（pi 无响应）。" });
             return;
         }
         const messages: any[] = msgResp.data?.messages ?? [];
-        this.forkEntries = forkResp?.data?.messages ?? [];
         // 快照随运行时一起迁过来了：迁移前的 edit/write 仍可回滚
         // 网页端只发最近一段历史：先裁窗口、告诉页面还有没有更早的，再渲染窗口里那几条
         const win = this.host.wantsTrimmedHistory?.() ? this.sliceHistoryWindow(messages) : null;
@@ -1224,9 +932,7 @@ export class SessionRuntime {
         } else {
             this.historyWindowStart = -1;
         }
-        this.renderMessages(win ? win.list : messages, { revertable: true, sink: emit, entryOffset: win?.entryOffset ?? 0 });
-        // 本次会话改过的文件清单也要到新宿主（回滚 / diff 按钮依赖它）
-        this.edits.republishFileChanges(sink ? emit : undefined);
+        this.renderMessages(win ? win.list : messages, { revertable: true, sink: emit });
         this.emitStatus();
         const count = messages.filter((m) => m && (m.role === "user" || m.role === "assistant")).length;
         const note = opts?.note === undefined
@@ -1273,7 +979,6 @@ export class SessionRuntime {
         start: number;
         hasMore: boolean;
         hidden: number;
-        entryOffset: number;
     } {
         const roles: number[] = [];
         for (let i = 0; i < endBefore; i++) {
@@ -1284,12 +989,10 @@ export class SessionRuntime {
         const start = total > SessionRuntime.WEB_HISTORY_WINDOW
             ? roles[total - SessionRuntime.WEB_HISTORY_WINDOW]
             : 0;
-        let userCount = 0;
         let hidden = 0;
         for (let i = 0; i < start; i++) {
             const m = messages[i];
             if (!m) { continue; }
-            if (m.role === "user") { userCount++; }
             if (m.role === "user" || m.role === "assistant") { hidden++; }
         }
         return {
@@ -1297,7 +1000,6 @@ export class SessionRuntime {
             start,
             hasMore: start > 0,
             hidden,
-            entryOffset: userCount,
         };
     }
 
@@ -1329,7 +1031,7 @@ export class SessionRuntime {
         const win = this.sliceHistoryWindow(messages);
         this.noteHistoryWindow(win, messages);
         emit({ type: "historyWindow", hasMore: win.hasMore, hidden: win.hidden });
-        this.renderMessages(win.list, { ...opts, sink: emit, entryOffset: win.entryOffset });
+        this.renderMessages(win.list, { ...opts, sink: emit });
     }
 
     /**
@@ -1344,16 +1046,12 @@ export class SessionRuntime {
      */
     public async loadOlderHistory(): Promise<void> {
         if (this.historyWindowStart < 0) { return; }  // 没开过窗口（非网页端 / 全量发过）：按钮不该出现
-        const [msgResp, forkResp] = await Promise.all([
-            this.request<{ messages: any[] }>({ type: "get_messages" }),
-            this.request<{ messages: RpcForkMessage[] }>({ type: "get_fork_messages" }),
-        ]);
+        const msgResp = await this.request<{ messages: any[] }>({ type: "get_messages" });
         if (!msgResp) {
             this.post({ type: "historyBatchEnd", hasMore: this.historyWindowStart > 0, hidden: this.historyWindowHidden });
             return;
         }
         const messages: any[] = msgResp.data?.messages ?? [];
-        if (forkResp?.data?.messages) { this.forkEntries = forkResp.data.messages; }
         if (
             messages.length < this.historyWindowLength
             || this.messageFingerprint(messages[this.historyWindowStart]) !== this.historyWindowFingerprint
@@ -1367,7 +1065,7 @@ export class SessionRuntime {
         const emit: MessageSink = (msg) => {
             this.host.postToTab(this.id, { type: "historyBatchEvent", event: msg });
         };
-        this.renderMessages(win.list, { sink: emit, entryOffset: win.entryOffset });
+        this.renderMessages(win.list, { sink: emit });
         this.post({ type: "historyBatchEnd", hasMore: win.hasMore, hidden: win.hidden });
     }
 
@@ -1377,7 +1075,7 @@ export class SessionRuntime {
      * 还在（true），单纯加载历史会话时快照并不存在（缺省 false）。
      * @param sink 只发给这一个出口（给某一个页面重画时用）；缺省发给整个工作区。
      */
-    private renderMessages(messages: any[], opts?: { revertable?: boolean; sink?: MessageSink; entryOffset?: number }): void {
+    private renderMessages(messages: any[], opts?: { revertable?: boolean; sink?: MessageSink }): void {
         // 缺省还是走这个 tab 的常规广播；给了 sink 就只发给那一个页面（消息已经带了 tabId）
         const emit: MessageSink = opts?.sink ?? ((msg) => this.post(msg));
         const revertable = opts?.revertable === true;
@@ -1391,17 +1089,13 @@ export class SessionRuntime {
                 toolResults.set(m.toolCallId, m);
             }
         }
-        let userIndex = opts?.entryOffset ?? 0;
         for (const m of messages) {
             switch (m.role) {
                 case "user":
                     emit({
                         type: "userMessage",
                         text: textOf(m.content),
-                        // forkEntries 与树 entry id 对齐；回退 m.id（若 pi 带回）
-                        entryId: this.forkEntries[userIndex]?.entryId || m.id,
                     });
-                    userIndex++;
                     break;
                 case "assistant": {
                     const parts = Array.isArray(m.content) ? m.content : [];
@@ -1458,7 +1152,6 @@ export class SessionRuntime {
                         emit({
                             type: "assistantFull",
                             text,
-                            entryId: typeof m.id === "string" ? m.id : undefined,
                         });
                     }
                     // 历史中的失败消息（stopReason=error）：展示错误文本；
@@ -1656,18 +1349,6 @@ export class SessionRuntime {
     }
 
     // ---- 文件跳转 / diff（均相对该 tab 的 EditTracker）----
-    public async openDiff(p: string): Promise<void> {
-        const change = this.edits.getFileChange(p);
-        if (!change) {
-            this.post({
-                type: "systemError",
-                text: `未找到该文件的修改记录 (${p})。可能会话已重置或路径不匹配。`,
-            });
-            return;
-        }
-        this.host.openDiff(change);
-    }
-
     public async openEditLocationWithAnchor(p: string, line: number, anchor: string): Promise<void> {
         let current = "";
         try {

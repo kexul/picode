@@ -37,7 +37,6 @@ function fakeHost(trimmed: boolean): { host: RuntimeHost; posted: Array<Record<s
         pickModelInteractive: async () => undefined,
         persistModel: () => {},
         openFileLocation: () => {},
-        openDiff: () => {},
         confirmRevert: async () => true,
     };
     return { host: host as RuntimeHost, posted };
@@ -49,15 +48,7 @@ function makeRuntime(box: { host: RuntimeHost }, messages: any[]): SessionRuntim
     (rt as any).client = {
         isRunning: () => true,
         request: async (cmd: any) => (
-            cmd?.type === "get_messages"
-                ? { data: { messages } }
-                : {
-                    data: {
-                        messages: messages
-                            .filter((m: any) => m.role === "user")
-                            .map((m: any) => ({ entryId: m.id, text: m.content })),
-                    },
-                }
+            cmd?.type === "get_messages" ? { data: { messages } } : undefined
         ),
     };
     return rt;
@@ -80,18 +71,6 @@ test("网页宿主整屏重画：只发最近 30 条 user/assistant，historyWin
     assert.ok(box.posted.every((msg) => msg.tabId === "test:panel-1"), "每条都带 tabId");
 });
 
-test("窗口里 user 消息的 fork 条目跟着往后对齐（entryOffset）", async () => {
-    const box = fakeHost(true);
-    const history = makeHistory(35);
-    const rt = makeRuntime(box, history);
-
-    await rt.replayHistory({ note: "" });
-
-    const users = box.posted.filter((msg) => msg.type === "userMessage");
-    assert.equal(users[0].entryId, "e20", "窗口第一条是第 21 问，fork 条目也要取第 21 个");
-    assert.equal(users[users.length - 1].entryId, "e34");
-});
-
 test("加载更早：补发一批包装过的消息（historyBatchEvent），窗口往前挪", async () => {
     const box = fakeHost(true);
     const history = makeHistory(35);
@@ -106,7 +85,6 @@ test("加载更早：补发一批包装过的消息（historyBatchEvent），窗
     assert.ok(batches.every((msg) => msg.tabId === "test:panel-1"), "外层带 tabId");
     const innerTypes = batches.map((msg) => (msg.event as any)?.type);
     assert.deepEqual(innerTypes.slice(0, 2), ["userMessage", "assistantFull"], "里面还是原来那套消息");
-    assert.equal((batches[0].event as any).entryId, "e5", "这批从第 11 条消息（第 6 问）开始，条目对齐跟着挪");
     const end = box.posted.find((msg) => msg.type === "historyBatchEnd")!;
     assert.equal(end.hasMore, true, "再往前还有");
     assert.equal(end.hidden, 10, "窗口前还剩 10 条");

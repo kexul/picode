@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
 import * as path from "path";
-import { PiChatWebServer } from "./webChatServer";
-import type { BrowserChatOwner, ExternalChatWorkspace } from "./browserChatController";
-import type { ChatControllerBase } from "./chatControllerBase";
+import { PiChatWebServer, type WebServerHost } from "./webChatServer";
+import { ChatBroadcaster } from "./chatBroadcaster";
+import { MessageBuffer } from "./webTransport";
 
 /**
  * 网页服务的端到端检查（真的起一个服务、真的发请求）。
@@ -16,42 +16,48 @@ import type { ChatControllerBase } from "./chatControllerBase";
 
 const MEDIA_DIR = path.join(__dirname, "..", "..", "media");
 
-function fakeOwner(): BrowserChatOwner {
+/**
+ * 假的会话工作区：只模拟侧边栏工作区对页面通道的那几件事（真实实现在 ChatViewProvider）：
+ * 收到页面的消息 → 把回应广播给所有页面；一个页面都没连上时先攒着，连接进来再补发。
+ * 不建会话、不启动 pi。补发暂存的上限跟测试的 timings 走（要验“缺得太多补不上”那条路）。
+ */
+function fakeHost(timings?: { catchupLogEntries?: number; catchupLogBytes?: number }): WebServerHost {
+    const broadcaster = new ChatBroadcaster(timings);
+    const outbox = new MessageBuffer();
+    let on = false;
+    const send = (m: Record<string, unknown>): void => {
+        if (!on) { return; }
+        if (!broadcaster.broadcast(m)) { outbox.push(m); }
+    };
     return {
-        getConfig: () => ({ piPath: "pi", provider: "", model: "", extraArgs: [], trustProject: true }),
-        getCwd: () => process.cwd(),
-        confirmDialog: async () => true,
-        selectDialog: async () => undefined,
-        inputDialog: async () => undefined,
-        showInfo: () => {},
-        persistModel: () => {},
-        openFileLocation: async () => {},
-        openFile: async () => {},
-        openSymbol: async () => {},
-        openDiff: async () => {},
-        confirmRevert: async () => true,
-        saveExportedConversation: async () => {},
-        getSendKey: () => "enter",
-        getNewSessionKey: () => "ctrl+alt+n",
-        getTabSwitchKey: () => "ctrl+alt+arrows",
-        getFocusInputKey: () => "ctrlAltI",
-        getRelayPrefix: () => "",
-        getToolDisplay: () => "compact",
-        getFontSize: () => "",
-        getNotifyBeep: () => true,
-        getTurnTitleWaitSeconds: () => 3,
-        notifyTurnEndFor: () => {},
-        mutateViewOption: () => {},
-        getOpenFiles: () => [],
-        showPiMissing: () => {},
-        modelsChanged: () => {},
-        allocateChatName: () => ({ adjective: "测试", noun: "豹子" }),
-        releaseChatName: () => {},
-        uniqueTabName: (base: string) => base,
-        broadcastChatReferences: () => {},
-        fetchGlobalChatReference: async (_requester: ChatControllerBase, _msg: any) => {},
-        registerExternalWorkspace: (_c: ExternalChatWorkspace) => {},
-        unregisterExternalWorkspace: (_c: ExternalChatWorkspace) => {},
+        getBroadcaster: () => broadcaster,
+        processPageMessage: (msg, pageId) => {
+            if (msg?.type === "openSettingsPanel") {
+                send({ type: "openSettings", tab: typeof msg.tab === "string" ? msg.tab : undefined });
+                return;
+            }
+            if (msg?.type === "requestViewOptionItems") {
+                send({ type: "viewOptionItems", items: [] });
+                return;
+            }
+            if (msg?.type === "browserResync") {
+                // 页面重连报账：能补就补（补完 broadcaster 自己发 syncPoint 对齐）；
+                // 补不上退回整屏重画——这里没建会话，重画没内容，但 syncPoint 要发。
+                const lastSeq = typeof msg.lastSeq === "number" && Number.isFinite(msg.lastSeq) ? msg.lastSeq : -1;
+                if (lastSeq >= 0 && broadcaster.catchUp(pageId, lastSeq)) { return; }
+                broadcaster.sendTo(pageId, { type: "syncPoint", seq: broadcaster.currentSeq() });
+                return;
+            }
+        },
+        onPageConnected: (pageId) => {
+            for (const m of outbox.drain()) {
+                if (!broadcaster.sendTo(pageId, m)) { break; }
+            }
+        },
+        onPageDisconnected: () => {},
+        onServerStarted: () => { on = true; },
+        onServerStopped: () => { on = false; outbox.clear(); },
+        getThemeMode: () => "light",
     };
 }
 
@@ -68,7 +74,7 @@ async function withServer(
     timings?: { heartbeatMs?: number; pageStaleMs?: number; catchupLogEntries?: number; catchupLogBytes?: number },
 ): Promise<void> {
     const logs: string[] = [];
-    const server = new PiChatWebServer(MEDIA_DIR, fakeOwner(), { log: (t) => logs.push(t) }, timings);
+    const server = new PiChatWebServer(MEDIA_DIR, fakeHost(timings), { log: (t) => logs.push(t) }, timings);
     await server.applySettings({ enabled: true, port: 0, host: "127.0.0.1" });
     const url = server.url;
     assert.ok(url, "服务应该给出访问地址");
@@ -212,6 +218,7 @@ test("页面与界面资源能取到，白名单外的文件取不到", async ()
 
         assert.match(html, /Content-Security-Policy/, "页面里要有安全策略");
         assert.match(html, /name="pichat-page"/, "页面里要写有本页面标识");
+        assert.match(html, /name="pichat-theme" content="light"/, "页面里要写有初始界面颜色");
         assert.doesNotMatch(html, /pichat-token/, "不再需要访问口令");
         assert.match(html, /browserBridge\.js/, "桥接脚本必须在页面里");
         // 按真的 <script src> 比位置：样式文件的注释里也提到过这些文件名，不能拿文件名直接找
@@ -219,15 +226,21 @@ test("页面与界面资源能取到，白名单外的文件取不到", async ()
         const chatAt = html.indexOf('src="/media/chat.js"');
         assert.ok(bridgeAt > 0 && chatAt > 0, "两个脚本都该在页面里");
         assert.ok(bridgeAt < chatAt, "桥接脚本要排在 chat.js 前面");
-        assert.match(html, /--vscode-editor-background: #ffffff/, "网页端是白底（浅色主题）");
         assert.match(html, /--pichat-input-min-height/, "网页端把输入框起步高度设成一行");
-        assert.match(html, /#bottomBar \{ display: none !important/, "网页端把底部按钮条整条藏掉");
-        assert.match(html, /#browserMenuBtn/, "网页端有顶部⋯菜单按钮的样式");
+        assert.doesNotMatch(html, /bottomBar|treeOverlay/, "底部按钮条与对话树浮层已经收进顶部标签栏，DOM 不再有它们");
+        assert.match(html, /#browserMenuBtn/, "网页端有顶部⋯按钮的样式（点开历史会话，列表从右侧滑入）");
         assert.ok(
-            html.indexOf('id="browser-theme"') > html.indexOf("--vscode-textCodeBlock-background"),
+            html.indexOf('id="browser-theme"') > html.indexOf("#inputRow { display: flex"),
             "网页专用的样式要排在 chat.css 之后（否则压不过它那套固定取值）",
         );
         assert.match(html, /id="input"/, "对话界面的输入框要在");
+
+        // 浅 / 深两套调色板在桥接脚本里（网页里没有 VSCode 注入主题变量，颜色由它上）
+        const bridge = await fetch(`${base}/media/browserBridge.js`);
+        const bridgeText = await bridge.text();
+        assert.equal(bridge.status, 200);
+        assert.match(bridgeText, /--vscode-editor-background": "#ffffff/, "浅色调色板要有白底");
+        assert.match(bridgeText, /--vscode-editor-background": "#1f1f1f/, "深色调色板要有深底");
 
         const js = await fetch(`${base}/media/chat.js`);
         const jsText = await js.text();
@@ -235,6 +248,8 @@ test("页面与界面资源能取到，白名单外的文件取不到", async ()
         assert.match(js.headers.get("content-type") || "", /javascript/);
         assert.equal(js.headers.get("cache-control"), "no-store");
         assert.ok(jsText.length > 10000, "chat.js 应该是完整的那份");
+        assert.match(jsText, /pk-drawer/, "历史会话列表要从右侧滑入（面板带 pk-drawer 摆放方式）");
+        assert.match(jsText, /⚙ 设置/, "历史会话面板底部要有「设置」一行");
 
         // 白名单外的文件（同目录下的历史画布资源、已经内联进页面的那份样式）不给
         assert.equal(await statusOf(`${base}/media/historyCanvas.js`), 404);
@@ -599,9 +614,9 @@ test("不合法的请求地址不会一律变成 500", async () => {
 test("端口被占用时自动改挑一个，并把这件事写进日志", async () => {
     // 先占住一个真端口（避免写死 51883：万一这台机器上已经有东西在用）
     const port = await freePort();
-    const first = new PiChatWebServer(MEDIA_DIR, fakeOwner(), { log: () => {} });
+    const first = new PiChatWebServer(MEDIA_DIR, fakeHost(), { log: () => {} });
     const logs: string[] = [];
-    const second = new PiChatWebServer(MEDIA_DIR, fakeOwner(), { log: (t) => logs.push(t) });
+    const second = new PiChatWebServer(MEDIA_DIR, fakeHost(), { log: (t) => logs.push(t) });
     try {
         await first.applySettings({ enabled: true, port, host: "127.0.0.1" });
         const firstUrl = first.url!;
@@ -635,7 +650,7 @@ async function freePort(): Promise<number> {
 }
 
 test("停掉以后端口就不再监听了", async () => {
-    const server = new PiChatWebServer(MEDIA_DIR, fakeOwner(), { log: () => {} });
+    const server = new PiChatWebServer(MEDIA_DIR, fakeHost(), { log: () => {} });
     await server.applySettings({ enabled: true, port: 0, host: "127.0.0.1" });
     const url = server.url!;
     assert.ok(url);
@@ -647,7 +662,7 @@ test("停掉以后端口就不再监听了", async () => {
 
 test("配置改成不开启时就把服务停掉，并报出'没有地址了'", async () => {
     const seen: Array<string | undefined> = [];
-    const server = new PiChatWebServer(MEDIA_DIR, fakeOwner(), {
+    const server = new PiChatWebServer(MEDIA_DIR, fakeHost(), {
         log: () => {},
         onUrlChanged: (url) => seen.push(url),
     });
@@ -661,7 +676,7 @@ test("配置改成不开启时就把服务停掉，并报出'没有地址了'", 
 
 test("从没开过又改成不开启：不白报'没有地址了'", async () => {
     const seen: Array<string | undefined> = [];
-    const server = new PiChatWebServer(MEDIA_DIR, fakeOwner(), {
+    const server = new PiChatWebServer(MEDIA_DIR, fakeHost(), {
         log: () => {},
         onUrlChanged: (url) => seen.push(url),
     });

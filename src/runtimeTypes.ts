@@ -35,16 +35,6 @@ export interface PanelLaunch {
     cwd?: string;
 }
 
-/** 本次对话中一个被修改文件的记录。 */
-export interface FileChange {
-    /** 绝对路径 */
-    path: string;
-    /** 相对工作区的显示名 */
-    label: string;
-    /** 首次修改前的文件内容（用于 diff 的“原始”侧）；文件新建时为空串 */
-    before: string;
-}
-
 /** 可选模型信息（来自 pi get_available_models）。 */
 export interface ModelInfo {
     id: string;
@@ -189,8 +179,6 @@ export interface RuntimeHost {
     // ---- 文件跳转 / diff ----
     /** 打开文件到指定行（1-based）。anchor 为高亮定位行文本，可选。 */
     openFileLocation(path: string, line: number, anchor?: string): void;
-    /** 打开本次会话修改文件的 diff 或查看器。 */
-    openDiff(change: FileChange): void;
     /** 回滚前的二次确认（文件在修改后又被改动时）。返回是否继续。 */
     confirmRevert(label: string): Promise<boolean>;
 }

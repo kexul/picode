@@ -20,10 +20,6 @@ export type RpcCommand =
     | { type: "set_thinking_level"; level: string }
     | { type: "get_session_stats" }
     | { type: "switch_session"; sessionPath: string }
-    | { type: "fork"; entryId: string }
-    | { type: "clone" }
-    | { type: "get_fork_messages" }
-    | { type: "get_tree" }
     | { type: "get_messages" }
     | { type: "get_commands" }
     | { type: "extension_ui_response"; id: string; [k: string]: unknown };
@@ -96,38 +92,6 @@ export interface RpcSessionStats {
     contextUsage?: RpcContextUsage | null;
 }
 
-export interface RpcForkResult {
-    text?: string;
-    cancelled?: boolean;
-}
-
-export interface RpcForkMessage {
-    entryId: string;
-    text: string;
-}
-
-export interface RpcTreeNode {
-    entry: RpcTreeEntry;
-    children?: RpcTreeNode[];
-}
-
-export interface RpcTreeEntry {
-    type?: string;
-    id?: string;
-    parentId?: string | null;
-    message?: {
-        role?: string;
-        content?: unknown;
-        stopReason?: string;
-        errorMessage?: string;
-        command?: string;
-    };
-    summary?: unknown;
-    name?: unknown;
-    label?: unknown;
-    customType?: unknown;
-}
-
 /** request() 失败原因（超时 / 进程挂了等）。成功时 reason 为 undefined。 */
 export type RpcFailReason = "not_running" | "timeout" | "send_failed" | "process_exit";
 
@@ -145,8 +109,3 @@ export function rpcErrorMessage(resp: RpcResponse | undefined | null, fallback =
     return fallback;
 }
 
-/** 从 fork 响应取出可回填输入框的 user 原文。 */
-export function forkSelectedText(resp: RpcResponse<RpcForkResult> | undefined | null): string {
-    const text = resp?.data?.text;
-    return typeof text === "string" ? text : "";
-}

@@ -24,6 +24,11 @@
     "google-generative-ai",
   ];
 
+  // 删除按钮的图标：VSCode 官方 codicon close（@vscode/codicons 包），fill=currentColor。
+  var ICON_CLOSE = '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8.70701 8.00001L12.353 4.35401C12.548 4.15901 12.548 3.84201 12.353 3.64701C12.158 3.45201 11.841 3.45201 11.646 3.64701L8.00001 7.29301L4.35401 3.64701C4.15901 3.45201 3.84201 3.45201 3.64701 3.64701C3.45201 3.84201 3.45201 4.15901 3.64701 4.35401L7.29301 8.00001L3.64701 11.646C3.45201 11.841 3.45201 12.158 3.64701 12.353C3.74501 12.451 3.87301 12.499 4.00101 12.499C4.12901 12.499 4.25701 12.45 4.35501 12.353L8.00101 8.70701L11.647 12.353C11.745 12.451 11.873 12.499 12.001 12.499C12.129 12.499 12.257 12.45 12.355 12.353C12.55 12.158 12.55 11.841 12.355 11.646L8.70901 8.00001H8.70701Z"/></svg>';
+  // 勾选框里那个勾：CSS content 塞不了 SVG，改用 mask + currentColor（同一份 codicon check）。
+  var CHECK_MASK = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M13.6572 3.13573C13.8583 2.9465 14.175 2.95614 14.3643 3.15722C14.5535 3.35831 14.5438 3.675 14.3428 3.86425L5.84277 11.8642C5.64597 12.0494 5.33756 12.0446 5.14648 11.8535L1.64648 8.35351C1.45121 8.15824 1.45121 7.84174 1.64648 7.64647C1.84174 7.45121 2.15825 7.45121 2.35351 7.64647L5.50976 10.8027L13.6572 3.13573Z'/%3E%3C/svg%3E\") center/contain no-repeat";
+
   // ── 极简 DOM helper ────────────────────────────────────────────────────────
   function el(tag, props, kids) {
     var n = document.createElement(tag);
@@ -59,7 +64,7 @@
       ".ms-modeToggle{display:flex;align-items:center;gap:6px;font-size:12px;opacity:.8;cursor:pointer;user-select:none}",
       ".ms-modeToggle input{appearance:none;-webkit-appearance:none;width:14px;height:14px;margin:0;flex-shrink:0;border:1px solid var(--vscode-checkbox-border,rgba(128,128,128,.55));border-radius:3px;background:var(--vscode-checkbox-background,transparent);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;position:relative}",
       ".ms-modeToggle input:checked{background:var(--vscode-checkbox-background,#0e639c);border-color:var(--vscode-focusBorder,#007acc)}",
-      ".ms-modeToggle input:checked::after{content:\"✓\";font-size:10px;line-height:1;color:var(--vscode-checkbox-foreground,#fff);position:absolute}",
+      ".ms-modeToggle input:checked::after{content:\"\";width:10px;height:10px;position:absolute;background-color:currentColor;-webkit-mask:" + CHECK_MASK + ";mask:" + CHECK_MASK + "}",
       ".ms-body{flex:1;display:flex;min-height:0}",
       ".ms-tree{width:214px;flex-shrink:0;border-right:1px solid var(--vscode-panel-border);display:flex;flex-direction:column;background:var(--vscode-editorWidget-background,var(--vscode-editor-background))}",
       ".ms-tree-list{flex:1;overflow-y:auto;padding:6px}",
@@ -94,7 +99,7 @@
       ".ms-check{display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;opacity:.85}",
       ".ms-check input{appearance:none;-webkit-appearance:none;width:14px;height:14px;margin:0;flex-shrink:0;border:1px solid var(--vscode-checkbox-border,rgba(128,128,128,.55));border-radius:3px;background:var(--vscode-checkbox-background,transparent);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;position:relative}",
       ".ms-check input:checked{background:var(--vscode-checkbox-background,#0e639c);border-color:var(--vscode-focusBorder,#007acc)}",
-      ".ms-check input:checked::after{content:\"✓\";font-size:10px;line-height:1;color:var(--vscode-checkbox-foreground,#fff);position:absolute}",
+      ".ms-check input:checked::after{content:\"\";width:10px;height:10px;position:absolute;background-color:currentColor;-webkit-mask:" + CHECK_MASK + ";mask:" + CHECK_MASK + "}",
       ".ms-secret{position:relative;width:100%;box-sizing:border-box}",
       ".ms-secret .ms-input{padding-right:32px}",
       ".ms-eye{position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--vscode-descriptionForeground);cursor:pointer;padding:4px;display:flex}",
@@ -103,6 +108,7 @@
       ".ms-btn.sec{background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground)}",
       ".ms-btn.sec:hover{background:var(--vscode-button-secondaryHoverBackground,var(--vscode-button-secondaryBackground))}",
       ".ms-btn.danger{background:none;border:1px solid var(--vscode-errorForeground,rgba(239,68,68,.35));color:var(--vscode-errorForeground,#ef4444)}",
+      ".ms-btn.danger svg{width:12px;height:12px;display:inline-block;vertical-align:middle}",
       ".ms-btn:disabled{opacity:.5;cursor:default}",
       ".ms-split{display:flex;gap:8px;align-items:center;flex-wrap:wrap}",
       ".ms-kv{display:flex;flex-direction:column;gap:6px}",
@@ -651,7 +657,8 @@
               valInp = el("input", { class: "ms-input mono", type: "text", value: String(val), oninput: function () { comp[key] = coerceVal(valInp.value); markDirty(); } });
               valInp.style.flex = "1";
             }
-            var rm = el("button", { class: "ms-btn danger", onclick: function () { delete comp[key]; if (Object.keys(comp).length === 0) { delete owner.compat; comp = null; } markDirty(); renderRows(); } }, "×");
+            var rm = el("button", { class: "ms-btn danger", onclick: function () { delete comp[key]; if (Object.keys(comp).length === 0) { delete owner.compat; comp = null; } markDirty(); renderRows(); } });
+            rm.innerHTML = ICON_CLOSE;
             rm.style.minWidth = "28px";
             row.appendChild(keyInp); row.appendChild(el("span", { style: { flex: isBool ? "0 0 auto" : "1", display: "flex", alignItems: "center" } }, valInp)); row.appendChild(rm);
             kv.appendChild(row);
