@@ -1803,10 +1803,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (this.historyFiles.length === 0 && !opts?.withNewSession) { this.onNoSessions(); return; }
         const items = await this.scanHistoryBatch();
         if (opts?.withNewSession) {
+            // action: "new" 让界面画成带加号图标的动作行（与“项目与会话”面板里那一行同款）。
             items.unshift({
                 file: ChatControllerBase.NEW_SESSION_ROW,
                 id: "",
-                title: "＋ 在这个目录里新建会话",
+                title: "新建会话",
+                action: "new",
                 count: 0,
                 lastActivity: 0,
                 current: false,

@@ -259,10 +259,13 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         this.historyFiles = await listSessionFiles(cwd);
         this.historyOffset = 0;
         const sessions = await this.scanHistoryBatch();
+        // action: "new" 让界面把这一行画成带加号图标的动作行，不像一条会话记录；
+        // 文案只写“新建会话”——它头顶的分节标题已经带着目录名了。
         sessions.unshift({
             file: ChatHostBase.NEW_SESSION_ROW,
             id: "",
-            title: "＋ 在这个目录里新建会话",
+            title: "新建会话",
+            action: "new",
             count: 0,
             lastActivity: 0,
             current: false,
@@ -273,7 +276,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         this.workspaceRest = projects.filter((p) => !this.sameDir(p.cwd, cwd));
         this.workspaceOffset = 0;
         const head: any[] = [
-            { label: "＋ 浏览文件夹…", file: ChatHostBase.BROWSE_ROW, action: "browse", folderPath: "别的目录也能用：挑一个文件夹当工作区" },
+            { label: "浏览文件夹…", file: ChatHostBase.BROWSE_ROW, action: "browse", folderPath: "挑一个文件夹当工作区" },
             {
                 label: this.dirName(cwd),
                 file: cwd,
@@ -321,19 +324,6 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
             items,
             hasMore: this.workspaceOffset < this.workspaceRest.length,
         });
-    }
-
-    /**
-     * 面板里搜索框一打字就把剩下的工作区一次全取回去：
-     * 搜索是在已经拿到的行里筛的，不把后面的取回来就永远搜不到它们。
-     */
-    public async loadAllWorkspaces(): Promise<void> {
-        if (this.pickerKind !== "workspace") { return; }
-        const items = this.takeWorkspacePage();
-        while (this.workspaceOffset < this.workspaceRest.length) {
-            items.push(...this.takeWorkspacePage());
-        }
-        this.sendOverlayTo(this.pickerTarget, { type: "workspacePageAppend", items, hasMore: false });
     }
 
     /**
@@ -852,10 +842,6 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
             case "workspaceLoadMore":
                 // 工作区那块的「加载更多」：再送一批（一次 10 个）。
                 void this.loadMoreWorkspaces();
-                return true;
-            case "workspaceLoadAll":
-                // 在搜索框里打字：把剩下的工作区一次全取回去，不然搜不到还没加载的那几条。
-                void this.loadAllWorkspaces();
                 return true;
             case "requestDesktopScreenshot":
                 this.sendDesktopScreenshot();

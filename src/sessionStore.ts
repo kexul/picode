@@ -30,6 +30,8 @@ export interface SessionListItem {
 export interface HistoryPickerItem extends SessionListItem {
     /** 是当前焦点 panel 正在使用的那个会话（前端高亮用）。 */
     current: boolean;
+    /** 特殊行标记："new" = “新建会话”动作行（前端画成带加号图标的强调色行，不当会话记录渲染）。 */
+    action?: string;
 }
 
 /** 目录里一个会话文件的登记（扫描前的排序依据，来自 stat，几乎免费）。 */

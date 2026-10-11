@@ -33,6 +33,11 @@
     "arrow-down": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13.854 8.146C13.659 7.951 13.342 7.951 13.147 8.146L9.00096 12.292V2.5C9.00096 2.224 8.77696 2 8.50096 2C8.22496 2 8.00096 2.224 8.00096 2.5V12.293L3.85496 8.147C3.65996 7.952 3.34296 7.952 3.14796 8.147C2.95296 8.342 2.95296 8.659 3.14796 8.854L8.14796 13.854C8.24596 13.952 8.37396 14 8.50196 14C8.62996 14 8.75796 13.951 8.85596 13.854L13.856 8.854C14.051 8.659 14.051 8.342 13.856 8.147L13.854 8.146Z"/></svg>',
     "git-branch": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M14 5.5C14 4.121 12.879 3 11.5 3C10.121 3 9 4.121 9 5.5C9 6.682 9.826 7.669 10.93 7.928C10.744 8.546 10.177 9 9.5 9H6.5C5.935 9 5.419 9.195 5 9.512V4.949C6.14 4.717 7 3.707 7 2.5C7 1.121 5.879 0 4.5 0C3.121 0 2 1.121 2 2.5C2 3.708 2.86 4.717 4 4.949V11.05C2.86 11.282 2 12.292 2 13.499C2 14.878 3.121 15.999 4.5 15.999C5.879 15.999 7 14.878 7 13.499C7 12.317 6.174 11.33 5.07 11.071C5.256 10.453 5.823 9.999 6.5 9.999H9.5C10.723 9.999 11.74 9.115 11.954 7.953C13.116 7.738 14 6.723 14 5.5ZM3 2.5C3 1.673 3.673 1 4.5 1C5.327 1 6 1.673 6 2.5C6 3.327 5.327 4 4.5 4C3.673 4 3 3.327 3 2.5ZM6 13.5C6 14.327 5.327 15 4.5 15C3.673 15 3 14.327 3 13.5C3 12.673 3.673 12 4.5 12C5.327 12 6 12.673 6 13.5ZM11.5 7C10.673 7 10 6.327 10 5.5C10 4.673 10.673 4 11.5 4C12.327 4 13 4.673 13 5.5C13 6.327 12.327 7 11.5 7Z"/></svg>',
     "merge-into": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13 13.5C13 13.776 12.776 14 12.5 14C9.46198 14 6.99998 11.538 6.99998 8.50001V3.70701L4.35398 6.35301C4.15898 6.54801 3.84198 6.54801 3.64698 6.35301C3.45198 6.15801 3.45198 5.84101 3.64698 5.64601L7.14698 2.14601C7.34198 1.95101 7.65898 1.95101 7.85398 2.14601L11.354 5.64601C11.549 5.84101 11.549 6.15801 11.354 6.35301C11.159 6.54801 10.842 6.54801 10.647 6.35301L8.00098 3.70701V8.50001C8.00098 10.985 10.016 13 12.501 13C12.777 13 13.001 13.224 13.001 13.5H13Z"/></svg>',
+    // 下面三个给“项目与会话”抽屉面板用：加号（新建会话动作行）、文件夹（工作区/浏览行）、
+    // 两根滑杆（底部“设置”，比 ⚙ 字符在各主题下都稳定）。
+    plus: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M14 7v1H8v6H7V8H1V7h6V1h1v6h6z"/></svg>',
+    folder: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M1.5 1A1.5 1.5 0 0 0 0 2.5v10.997A1.5 1.5 0 0 0 1.5 15h12.987a1.5 1.5 0 0 0 1.5-1.5V4.5a1.5 1.5 0 0 0-1.5-1.5H8.707L7.361 1.654A1.5 1.5 0 0 0 6.207 1H1.5Z"/></svg>',
+    sliders: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4.5h6.2M11.8 4.5H14M2 11.5h1.7M7.3 11.5H14"/><circle cx="10" cy="4.5" r="1.8"/><circle cx="5.5" cy="11.5" r="1.8"/></svg>',
   };
   const inputEl = document.getElementById("input");
   const imgPreviewEl = document.getElementById("imgPreview");
@@ -2292,7 +2297,16 @@
 
       if (item.section && item.section !== lastSection) {
         lastSection = item.section;
-        const sep = document.createElement("div"); sep.className = "pk-section"; sep.textContent = item.section;
+        const sep = document.createElement("div"); sep.className = "pk-section";
+        // “会话 · 目录名”：目录名弱化成附注（它是背景信息，不是标题本身）。
+        const at = st.kind === "workspace" ? item.section.indexOf(" · ") : -1;
+        if (at > 0) {
+          const head = document.createElement("span"); head.textContent = item.section.slice(0, at);
+          const tail = document.createElement("span"); tail.className = "pk-section-sub"; tail.textContent = " · " + item.section.slice(at + 3);
+          sep.appendChild(head); sep.appendChild(tail);
+        } else {
+          sep.textContent = item.section;
+        }
         pickerBody.appendChild(sep);
       }
       // “项目与会话”面板：下半（工作区）开始之前，把会话那块的「加载更多」卡在它末尾。
@@ -2305,16 +2319,27 @@
       if (st.kind === "history" || (st.kind === "workspace" && item.__section === "session")) {
         el.classList.add("pk-history");
         if (item.current) { el.classList.add("current"); }
-        const main = document.createElement("div"); main.className = "pk-history-main";
-        const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.title || "(无消息)";
-        main.appendChild(title);
-        const right = document.createElement("span"); right.className = "pk-history-right";
-        const count = document.createElement("span"); count.className = "pk-history-count"; count.textContent = String(item.count ?? 0);
-        const age = document.createElement("span"); age.className = "pk-history-age"; age.textContent = pickerRelTime(item.lastActivity);
-        right.appendChild(count); right.appendChild(age);
-        main.appendChild(right);
-        el.appendChild(main);
-        el.title = item.title || "";
+        if (item.action === "new") {
+          // 「新建会话」动作行：加号图标 + 强调色，一眼看出它不是一条会话记录。
+          el.classList.add("pk-action");
+          const main = document.createElement("div"); main.className = "pk-history-main";
+          const icon = document.createElement("span"); icon.className = "pk-row-icon"; icon.innerHTML = ICONS.plus;
+          main.appendChild(icon);
+          const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.title || "新建会话";
+          main.appendChild(title);
+          el.appendChild(main);
+        } else {
+          const main = document.createElement("div"); main.className = "pk-history-main";
+          const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.title || "(无消息)";
+          main.appendChild(title);
+          const right = document.createElement("span"); right.className = "pk-history-right";
+          // 条数为 0 不显示（新建会话行、空目录工作区挂着个“0”只有噪声）。
+          if (item.count > 0) { const count = document.createElement("span"); count.className = "pk-history-count"; count.textContent = String(item.count); right.appendChild(count); }
+          if (item.lastActivity) { const age = document.createElement("span"); age.className = "pk-history-age"; age.textContent = pickerRelTime(item.lastActivity); right.appendChild(age); }
+          if (right.childNodes.length) { main.appendChild(right); }
+          el.appendChild(main);
+          el.title = item.title || "";
+        }
       } else if (st.kind === "options") {
         const t = document.createElement("div"); t.className = "pk-title";
         const chk = document.createElement("span"); chk.className = "pk-check" + (item.check === true ? " on" : "");
@@ -2324,22 +2349,29 @@
         el.appendChild(t);
         if (item.desc) { const d = document.createElement("div"); d.className = "pk-desc"; d.style.paddingLeft = "20px"; d.textContent = item.desc; el.appendChild(d); }
       } else if (st.kind === "workspace" && item.__section === "space") {
-        // 工作区行：名字在左，会话条数与最后活动时间在右，路径另起一行（手机上一行放不下）。
+        // 工作区行：文件夹图标 + 名字一行，路径另起一行弱化（全路径长，但它就是辨认同名目录的关键）。
         el.classList.add("pk-history");
         if (item.current) { el.classList.add("current"); }
         const main = document.createElement("div"); main.className = "pk-history-main";
-        const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.label || "";
-        main.appendChild(title);
-        const right = document.createElement("span"); right.className = "pk-history-right";
-        if (item.count !== undefined && item.count !== null) {
-          const c = document.createElement("span"); c.className = "pk-history-count"; c.textContent = String(item.count); right.appendChild(c);
+        const icon = document.createElement("span"); icon.className = "pk-row-icon"; icon.innerHTML = ICONS.folder;
+        main.appendChild(icon);
+        if (item.action === "browse") {
+          // 「浏览文件夹…」动作行：跟“新建会话”同款强调色，附注一行说明它干什么。
+          el.classList.add("pk-action");
+          const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.label || "";
+          main.appendChild(title);
+          el.appendChild(main);
+          if (item.folderPath) { const d = document.createElement("div"); d.className = "pk-browse-desc"; d.textContent = item.folderPath; el.appendChild(d); }
+        } else {
+          const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.label || "";
+          main.appendChild(title);
+          const right = document.createElement("span"); right.className = "pk-history-right";
+          if (item.count > 0) { const c = document.createElement("span"); c.className = "pk-history-count"; c.textContent = String(item.count); right.appendChild(c); }
+          if (item.lastActivity) { const a = document.createElement("span"); a.className = "pk-history-age"; a.textContent = pickerRelTime(item.lastActivity); right.appendChild(a); }
+          if (right.childNodes.length) { main.appendChild(right); }
+          el.appendChild(main);
+          if (item.folderPath) { const p = document.createElement("div"); p.className = "pk-space-path"; p.textContent = item.folderPath; el.appendChild(p); }
         }
-        if (item.lastActivity) {
-          const a = document.createElement("span"); a.className = "pk-history-age"; a.textContent = pickerRelTime(item.lastActivity); right.appendChild(a);
-        }
-        if (right.childNodes.length) { main.appendChild(right); }
-        el.appendChild(main);
-        if (item.folderPath) { const p = document.createElement("div"); p.className = "pk-desc"; p.textContent = item.folderPath; el.appendChild(p); }
         el.title = item.folderPath || item.label || "";
       } else if (st.kind === "folders") {
         const t = document.createElement("div"); t.className = "pk-title"; t.textContent = item.label || "";
@@ -2457,7 +2489,9 @@
   function renderPicker(msg) {
     const kind = msg.kind;
     const toggle = !!msg.toggle;
-    const searchable = msg.searchable !== false && !toggle;
+    // “项目与会话”面板不放搜索框：上半会话、下半工作区两块结构，这个框帮不上忙还占一截
+    // （要找项目看路径就行）；历史面板的搜索留着。
+    const searchable = msg.searchable !== false && !toggle && kind !== "workspace";
     pickerState = {
       kind,
       items: kind === "workspace" ? workspaceFlatItems(msg) : (Array.isArray(msg.items) ? msg.items : []),
@@ -2473,6 +2507,11 @@
       spacesHasMore: kind === "workspace" ? !!(msg.spaces && msg.spaces.hasMore) : false,
       spacesLoading: false,
     };
+    // 默认选中“当前会话”那一行；没有当前会话（刚换过目录、新环境）就给 -1 不预选——
+    // 别让最上面的“新建会话”一直顶着整块选中底色，看着像误触了它。
+    if (kind === "workspace") {
+      pickerState.sel = pickerState.items.findIndex((it) => it.current && it.__section === "session");
+    }
     const titleMap = { model: "切换模型", history: "会话历史", options: "显示选项" };
     pickerTitle.textContent = titleMap[kind] || (typeof msg.title === "string" && msg.title ? msg.title : "选择");
     pickerSearch.value = "";
@@ -2494,6 +2533,10 @@
       // 一条缝，点不到），底部留一行「设置」——点它先收起面板，再打开设置浮层。
       pickerFooter.classList.remove("hidden");
       pickerFooter.classList.add("pk-history-footer");
+      // 面板重画（切换工作区、追加数据走 renderPicker）不会先过 hidePicker，
+      // 头部的关闭按钮是 append 进去的：先把旧的那颗摘掉，不然越摘越多。
+      const staleClose = document.getElementById("pickerClose");
+      if (staleClose) { staleClose.remove(); }
       const headerClose = document.createElement("button");
       headerClose.type = "button"; headerClose.id = "pickerClose";
       headerClose.title = "关闭 (Esc)"; headerClose.setAttribute("aria-label", "关闭");
@@ -2501,7 +2544,9 @@
       headerClose.addEventListener("click", () => cancelPicker());
       pickerHeader.appendChild(headerClose);
       const settingsBtn = document.createElement("button"); settingsBtn.type = "button";
-      settingsBtn.className = "secondary"; settingsBtn.textContent = "⚙ 设置";
+      settingsBtn.className = "secondary pk-footer-settings";
+      settingsBtn.title = "打开设置";
+      settingsBtn.innerHTML = ICONS.sliders + "<span>设置</span>";
       settingsBtn.addEventListener("click", () => { cancelPicker(); openSettings(); });
       pickerFooter.appendChild(settingsBtn);
     } else if (toggle) {
@@ -2527,14 +2572,6 @@
     if (!pickerState) { return; }
     pickerState.sel = pickerState.kind === "model" ? -1 : 0;
     renderPickerItems();
-    // 项目与会话面板：一打字就把剩下的工作区全取回来（搜索是在已拿到的行里筛的，
-    // 不取回来就永远搜不到还没加载的那几条）；只取一次。
-    const st = pickerState;
-    if (st.kind === "workspace" && st.spacesHasMore && !st.spacesLoading && (pickerSearch.value || "").trim()) {
-      st.spacesLoading = true;
-      renderPickerItems();
-      vscode.postMessage({ type: "workspaceLoadAll" });
-    }
   });
   document.addEventListener("keydown", (e) => {
     if (!pickerState || pickerOverlay.classList.contains("hidden")) { return; }
