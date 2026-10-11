@@ -13,7 +13,7 @@ import { renderHTML } from "./renderHtml";
  *      （browserBridge.js 一加载就按它上色）。
  *
  * 另外一份差别：VSCode 那份会把界面底部的按钮条藏掉（那些按钮由 VSCode 面板标题栏提供），
- * 浏览器里也没有标题栏，历史会话收进了顶部标签栏最右边的"⋯"按钮（点它从右侧滑入
+ * 浏览器里也没有标题栏，项目与会话收进了顶部标签栏最右边的"<<<"按钮（点它从右侧滑入
  * 会话列表，见 browserBridge.js 与 browserTheme.css），底部那条在浏览器里同样整条藏掉。
  */
 
@@ -62,12 +62,16 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
     const extraBodyBottom = `<script src="${mediaUrl("browserBridge.js")}"></script>`;
 
     return renderHTML({
-        resolveUri: mediaUrl,
         csp,
         chatCss,
         extraHead,
         extraBodyBottom,
-        extraScripts: [mediaUrl("settings.js")],
+        scripts: [
+            { src: mediaUrl("marked.js") },
+            { src: mediaUrl("highlight.js") },
+            { src: mediaUrl("chat.js") },
+            { src: mediaUrl("settings.js") },
+        ],
     });
 }
 

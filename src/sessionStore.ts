@@ -38,6 +38,18 @@ export interface SessionFileEntry {
     mtime: number;
 }
 
+/** 一个"项目"：pi 在里面跑过会话的工作目录。 */
+export interface ProjectEntry {
+    /** 真实工作目录（从会话文件第一行读出来的） */
+    cwd: string;
+    /** 给人看的名字：目录名（最后一个分隔符后面那段） */
+    name: string;
+    /** 这个目录里最新一个会话文件的修改时间（毫秒） */
+    lastActivity: number;
+    /** 这个目录里的会话文件个数 */
+    sessionCount: number;
+}
+
 /** 标题上限：超长由前端按宽度截断，这里只防极端长文本。 */
 const TITLE_MAX_CHARS = 200;
 
@@ -201,4 +213,167 @@ export function scanSessionInfo(file: string): Promise<SessionListItem | null> {
         stream.on("end", finish);
         stream.on("error", () => resolve(null));
     });
+}
+
+/** 一次最多同时扫几个会话文件夹：文件夹可能上百个，全放出去会同时开一堆文件句柄。 */
+const PROJECT_SCAN_CONCURRENCY = 8;
+
+/** 读会话文件开头时最多读这么多字节：header 很小，这个上限防的是没有换行的坏文件。 */
+const FIRST_LINE_MAX_BYTES = 16 * 1024;
+
+/** 按固定并发数跑任务，结果数组与输入一一对应。 */
+async function mapLimit<T, R>(
+    items: readonly T[],
+    limit: number,
+    fn: (item: T) => Promise<R>
+): Promise<R[]> {
+    const results = new Array<R>(items.length);
+    let next = 0;
+    const worker = async (): Promise<void> => {
+        for (;;) {
+            const i = next++;
+            if (i >= items.length) { return; }
+            results[i] = await fn(items[i]);
+        }
+    };
+    const workers: Promise<void>[] = [];
+    for (let i = 0; i < Math.min(limit, items.length); i++) {
+        workers.push(worker());
+    }
+    await Promise.all(workers);
+    return results;
+}
+
+/**
+ * 只读文件开头，取第一行的文本；读不到返回 null。
+ *
+ * 会话文件后面可能有几 MB 的消息，而确认工作目录只需要第一行的 header，
+ * 所以按块读、读到第一个换行就停，不把整个文件读进来。
+ */
+async function readFirstLine(file: string): Promise<string | null> {
+    let handle: fs.promises.FileHandle | undefined;
+    try {
+        handle = await fs.promises.open(file, "r");
+        const buf = Buffer.alloc(FIRST_LINE_MAX_BYTES);
+        let total = 0;
+        while (total < buf.length) {
+            const { bytesRead } = await handle.read(buf, total, buf.length - total, total);
+            if (bytesRead <= 0) { break; }
+            total += bytesRead;
+            const nl = buf.subarray(0, total).indexOf(0x0a);
+            if (nl >= 0) { return buf.subarray(0, nl).toString("utf8"); }
+        }
+        // 一直没换行（或正好读满上限）：把已读到的当第一行，交给 JSON.parse 去判
+        return buf.subarray(0, total).toString("utf8");
+    } catch {
+        return null;
+    } finally {
+        if (handle) { await handle.close().catch(() => undefined); }
+    }
+}
+
+/** 从真实路径取显示名：最后一个分隔符后面那段；取不到就用原路径顶着。 */
+function projectName(cwd: string): string {
+    const parts = cwd.split(/[\\/]+/).filter((p) => p.length > 0);
+    return parts.length > 0 ? parts[parts.length - 1] : cwd;
+}
+
+/**
+ * 合并同一个目录用的键。
+ * 同一个真实目录可能因为盘符大小写不同（D: 与 d:）被记到两个文件夹里，所以要合并；
+ * Windows 整个路径不区分大小写，其它系统只把盘符这种形式统一小写，路径本身仍区分。
+ */
+function cwdMergeKey(cwd: string): string {
+    if (process.platform === "win32") { return cwd.toLowerCase(); }
+    return cwd.replace(/^([a-zA-Z]):/, (_m, drive: string) => `${drive.toLowerCase()}:`);
+}
+
+/**
+ * 扫一个会话文件夹，产出一条项目；文件夹里没有可用的会话文件就返回 null。
+ *
+ * 文件夹名是把 cwd 里的 / \ : 全换成 - 拼出来的，不同路径可能编出同一个名字，
+ * 反解回去会有歧义（这正是 encodeCwd 只能单向用的原因）；
+ * 所以真实路径只认会话文件第一行的 cwd，不拿文件夹名去猜。
+ */
+async function scanProjectFolder(dir: string): Promise<ProjectEntry | null> {
+    let names: string[];
+    try {
+        names = (await fs.promises.readdir(dir)).filter((f) => f.endsWith(".jsonl"));
+    } catch {
+        return null;
+    }
+    if (names.length === 0) { return null; }
+    const stats = await Promise.all(
+        names.map(async (name) => {
+            const file = path.join(dir, name);
+            try {
+                const st = await fs.promises.stat(file);
+                return { file, mtime: st.mtimeMs };
+            } catch {
+                return null;
+            }
+        })
+    );
+    const files = stats.filter((s): s is { file: string; mtime: number } => s !== null);
+    if (files.length === 0) { return null; }
+    files.sort((a, b) => b.mtime - a.mtime);
+    const newest = files[0];
+    const firstLine = await readFirstLine(newest.file);
+    if (firstLine === null) { return null; }
+    let header: unknown;
+    try {
+        header = JSON.parse(firstLine);
+    } catch {
+        // 写到一半或者版本不同的文件：跳过这个文件夹，别让一份坏文件把整份清单带崩
+        return null;
+    }
+    const cwd = (header as { cwd?: unknown } | null)?.cwd;
+    // 老版本的会话文件没有 cwd；空串也算没有
+    if (typeof cwd !== "string" || cwd.trim() === "") { return null; }
+    return {
+        cwd,
+        name: projectName(cwd),
+        lastActivity: newest.mtime,
+        sessionCount: names.length,
+    };
+}
+
+/** 列出用 pi 跑过会话的工作目录，按最后活动时间倒序。 */
+export async function listProjects(options?: { limit?: number }): Promise<ProjectEntry[]> {
+    const root = sessionsRoot();
+    let entries: fs.Dirent[];
+    try {
+        entries = await fs.promises.readdir(root, { withFileTypes: true });
+    } catch {
+        // 这台机器还没跑过 pi（目录不存在 / 不是目录）：空清单，不抛
+        return [];
+    }
+    const dirs = entries
+        .filter((e) => e.isDirectory())
+        .map((e) => path.join(root, e.name))
+        .sort();
+    const found = await mapLimit(dirs, PROJECT_SCAN_CONCURRENCY, (dir) =>
+        scanProjectFolder(dir)
+    );
+    const byCwd = new Map<string, ProjectEntry>();
+    for (const p of found) {
+        if (!p) { continue; }
+        const key = cwdMergeKey(p.cwd);
+        const prev = byCwd.get(key);
+        if (!prev) {
+            byCwd.set(key, p);
+            continue;
+        }
+        // 同一个真实目录：会话数相加，时间和展示用的名字取更新的那份
+        const newer = p.lastActivity > prev.lastActivity ? p : prev;
+        byCwd.set(key, {
+            cwd: newer.cwd,
+            name: newer.name,
+            lastActivity: Math.max(prev.lastActivity, p.lastActivity),
+            sessionCount: prev.sessionCount + p.sessionCount,
+        });
+    }
+    const list = Array.from(byCwd.values()).sort((a, b) => b.lastActivity - a.lastActivity);
+    if (options?.limit === undefined) { return list; }
+    return list.slice(0, Math.max(0, options.limit));
 }

@@ -1,6 +1,4 @@
-import * as vscode from "vscode";
 import * as cp from "child_process";
-import * as fs from "fs";
 import { POWERSHELL_APP_USER_MODEL_ID, encodePowerShell, quote } from "./toastScript";
 
 /**
@@ -15,7 +13,7 @@ import { POWERSHELL_APP_USER_MODEL_ID, encodePowerShell, quote } from "./toastSc
  * 会回落到 PowerShell 标识，保证通知一定还能发出去。
  *
  * 登记要跑一次 PowerShell，有的机器上这一下要好几秒，所以放在后台异步做：
- * 插件激活不等它，第一次要弹通知时才等结果（见 turnNotifier.ts）。
+ * 插件激活不等它，第一次要弹通知时才等结果（见 turnToast.ts）。
  * 登记成功一次就记住（存在 VSCode 的 globalState 里），插件版本或图标路径没变
  * 就不再重复写注册表，之后每次重载窗口这一步零开销。
  */
@@ -132,18 +130,4 @@ function runPowerShellAsync(script: string): Promise<void> {
             },
         );
     });
-}
-
-/** VS Code 的可执行文件路径（拿它的图标当通知图标）；找不到返回 undefined。 */
-export function vsCodeIconPath(): string | undefined {
-    try {
-        const candidates = [
-            vscode.Uri.joinPath(vscode.Uri.file(vscode.env.appRoot), "..", "Code.exe").fsPath,
-            vscode.Uri.joinPath(vscode.Uri.file(vscode.env.appRoot), "..", "Code - Insiders.exe").fsPath,
-        ];
-        for (const c of candidates) {
-            if (fs.existsSync(c)) { return c; }
-        }
-    } catch { /* 忽略 */ }
-    return undefined;
 }

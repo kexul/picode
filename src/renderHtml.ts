@@ -2,17 +2,21 @@
  * renderHtml —— 生成聊天界面 HTML 骨架。
  *
  * 导出 renderHTML(opts)：生成聊天界面 HTML。
- * 聊天 DOM 结构 + CSS + chat.js 在此定义；调用方通过 opts 注入 URI 解析、
- * CSP、CSS 文本、额外 head/body。
+ * 聊天 DOM 结构 + CSS + 脚本位次在此定义；调用方通过 opts 注入 CSP、
+ * chat.css 文本、脚本清单（外链或内联）、额外 head/body。
  *
- * 前端资源（chat.js / marked.js / highlight.js 等）位于 media/
- * （vscode 插件打包根内，无需拷贝即可被 vsce 纳入）。chat.css 由调用方读取文本后
- * 通过 opts.chatCss 传入（避免本模块运行时读文件）。
+ * chat.css 由调用方读取文本后通过 opts.chatCss 传入（本模块运行时不读文件）。
  */
 
+/** 脚本清单里的一项：要么给外链地址，要么给内联内容，二选一。 */
+export interface RenderScript {
+    /** 外链脚本的地址（浏览器页面用：/media/xxx）。 */
+    src?: string;
+    /** 内联的脚本内容（VSCode 面板用）；调用方要先做 </script> 转义。 */
+    content?: string;
+}
+
 export interface RenderHTMLOpts {
-    /** 把资源文件名解析为可放入 HTML 的 URI 字符串。 */
-    resolveUri: (name: string) => string;
     /** CSP 字符串（各宿主自行构造，含各自 nonce/cspSource）。 */
     csp: string;
     /** chat.css 的文本内容（由调用方读取后传入）。 */
@@ -25,8 +29,8 @@ export interface RenderHTMLOpts {
     extraBodyBottom?: string;
     /** 给 <script> 标签加的 nonce 值（VSCode CSP 需要）。 */
     scriptNonce?: string;
-    /** 额外 <script src> 的 URI 列表，放在 chat.js 之后。 */
-    extraScripts?: string[];
+    /** 要加载的脚本，按顺序排在 body 末尾（marked → highlight → chat → 各页面自己的）。 */
+    scripts: RenderScript[];
 }
 
 /**
@@ -38,10 +42,12 @@ const ICON_ARROW_DOWN = '<svg width="14" height="14" viewBox="0 0 16 16" xmlns="
 const ICON_CLOSE = '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8.70701 8.00001L12.353 4.35401C12.548 4.15901 12.548 3.84201 12.353 3.64701C12.158 3.45201 11.841 3.45201 11.646 3.64701L8.00001 7.29301L4.35401 3.64701C4.15901 3.45201 3.84201 3.45201 3.64701 3.64701C3.45201 3.84201 3.45201 4.15901 3.64701 4.35401L7.29301 8.00001L3.64701 11.646C3.45201 11.841 3.45201 12.158 3.64701 12.353C3.74501 12.451 3.87301 12.499 4.00101 12.499C4.12901 12.499 4.25701 12.45 4.35501 12.353L8.00101 8.70701L11.647 12.353C11.745 12.451 11.873 12.499 12.001 12.499C12.129 12.499 12.257 12.45 12.355 12.353C12.55 12.158 12.55 11.841 12.355 11.646L8.70901 8.00001H8.70701Z"/></svg>';
 
 export function renderHTML(opts: RenderHTMLOpts): string {
-    const chatJs = opts.resolveUri("chat.js");
-    const markedJs = opts.resolveUri("marked.js");
-    const highlightJs = opts.resolveUri("highlight.js");
     const nonceAttr = opts.scriptNonce ? ` nonce="${opts.scriptNonce}"` : "";
+    const scriptTags = opts.scripts
+        .map((s) => s.src !== undefined
+            ? `\n  <script${nonceAttr} src="${s.src}"></script>`
+            : `\n  <script${nonceAttr}>${s.content ?? ""}</script>`)
+        .join("");
 
     const head = opts.extraHead ? `  ${opts.extraHead}\n` : "";
     const tabbar =
@@ -51,9 +57,6 @@ export function renderHTML(opts: RenderHTMLOpts): string {
 
     const bodyTop = opts.extraBodyTop ? `  ${opts.extraBodyTop}\n` : "";
     const bodyBottom = opts.extraBodyBottom ? `  ${opts.extraBodyBottom}\n` : "";
-    const extraScripts = (opts.extraScripts || [])
-        .map((s) => `\n  <script${nonceAttr} src="${s}"></script>`)
-        .join("");
 
     return `<!DOCTYPE html>
 <html lang="zh">
@@ -97,9 +100,7 @@ ${bodyTop}${tabbar}  <div id="messages">
       <div id="viewOptsRoot" class="hidden"></div>
     </div>
   </div>
-${bodyBottom}  <script${nonceAttr} src="${markedJs}"></script>
-  <script${nonceAttr} src="${highlightJs}"></script>
-  <script${nonceAttr} src="${chatJs}"></script>${extraScripts}
+${bodyBottom}${scriptTags}
 </body>
 </html>`;
 }

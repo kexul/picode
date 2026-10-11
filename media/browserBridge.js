@@ -7,7 +7,7 @@
  *     （浏览器原生的推送流）收；重连、心跳、断线补发都归它管。
  *  2. VSCode 侧边栏（与网页端同源的那份界面，由 chatHtml.ts 加载）：
  *     通道保持网页视图的 postMessage 不变（chat.js 感觉不到），只取三样：
- *     网页端的界面件（常显标签栏、桌面截图 / ⋯ / 停止生成按钮）、一行起步的输入框、
+ *     网页端的界面件（常显标签栏、桌面截图 / <<< / 停止生成按钮）、一行起步的输入框、
  *     按配置上色（显示选项里的「界面颜色」，浅 / 深两套调色板见下面）。
  *
  * chat.js 认的是 VSCode 网页视图那套通道：往外发用 acquireVsCodeApi().postMessage，
@@ -38,10 +38,13 @@
   // VSCode 网页视图里本来就有 acquireVsCodeApi（而且只能取一次）；网页里没有，由本文件补一份。
   var IN_WEBVIEW = typeof window.acquireVsCodeApi === "function";
 
-  // 标签栏那两颗按钮的图标：VSCode 官方 codicon（@vscode/codicons 包），
+  // 标签栏那两颗按钮的图标：相机那个是 VSCode 官方 codicon（@vscode/codicons 包），
   // fill=currentColor 跟随文字色，尺寸由 browserTheme.css 控制。
   var ICON_CAMERA = '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M11 8C11 9.65685 9.65685 11 8 11C6.34315 11 5 9.65685 5 8C5 6.34315 6.34315 5 8 5C9.65685 5 11 6.34315 11 8ZM10 8C10 6.89543 9.10457 6 8 6C6.89543 6 6 6.89543 6 8C6 9.10457 6.89543 10 8 10C9.10457 10 10 9.10457 10 8ZM6.61803 2C6.04988 2 5.53048 2.321 5.27639 2.82918L4.69098 4H4C2.89543 4 2 4.89543 2 6V11C2 12.1046 2.89543 13 4 13H12C13.1046 13 14 12.1046 14 11V6C14 4.89543 13.1046 4 12 4H11.309L10.7236 2.82918C10.4695 2.321 9.95012 2 9.38197 2H6.61803ZM6.17082 3.27639C6.25552 3.107 6.42865 3 6.61803 3H9.38197C9.57135 3 9.74448 3.107 9.82918 3.27639L10.5528 4.72361C10.6375 4.893 10.8106 5 11 5H12C12.5523 5 13 5.44772 13 6V11C13 11.5523 12.5523 12 12 12H4C3.44772 12 3 11.5523 3 11V6C3 5.44772 3.67157 5 4 5H5C5.18939 5 5.36252 4.893 5.44721 4.72361L6.17082 3.27639Z"/></svg>';
-  var ICON_ELLIPSIS = '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M5 8C5 8.55229 4.55228 9 4 9C3.44772 9 3 8.55229 3 8C3 7.44772 3.44772 7 4 7C4.55228 7 5 7.44772 5 8ZM9 8C9 8.55229 8.55229 9 8 9C7.44772 9 7 8.55229 7 8C7 7.44772 7 7 8 7C8.55229 7 9 7.44772 9 8ZM12 9C12.5523 9 13 8.55229 13 8C13 7.44772 12.5523 7 12 7C11.4477 7 11 7.44772 11 8C11 8.55229 11.4477 9 12 9Z"/></svg>';
+  // 菜单按钮（项目与会话）的图标：三根往左的尖角（面板从右边滑出来，尖角指进去）。
+  // 为什么不直接用 codicon：官方那套里没有三层尖括号（只有单个的 chevron-left）。
+  // 自己画三根，笔画风格跟 codicon 的箭头一致（细笔画 + 圆头）。
+  var ICON_MENU_LEFT = '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.7 3.6 3.2 8l3.5 4.4"/><path d="M10.1 3.6 6.6 8l3.5 4.4"/><path d="M13.5 3.6 10 8l3.5 4.4"/></svg>';
 
   // ==================== 界面颜色（显示选项里的「界面颜色」） ====================
   // 网页里没有 VSCode 注入主题变量，这里自己补两套调色板：浅色照 VSCode 浅色主题
@@ -664,8 +667,10 @@
     enqueue({ type: "requestDesktopScreenshot" });
   }
 
-  // ==================== 顶部标签栏最右边的“⋯”按钮 ====================
-  // 点它直接让历史会话列表从右侧滑进来（消息由插件侧的 ChatViewProvider 接）。
+  // ==================== 顶部标签栏最右边的“<<<”按钮 ====================
+  // 点它让项目列表从右侧滑进来（消息由插件侧的 ChatHostBase 接）：
+  // 最上面是“浏览文件夹…”与当前目录，下面是用 pi 跑过会话的其它项目。
+  // 点一个项目进去就是那个项目的会话列表（第一行是“在这个目录里新建会话”）。
   // 标签栏平时只有一个标签时是藏着的，网页端要常显，否则这颗按钮没地方放。
   // 顺带的好处：新建标签的那颗“+”也一直可见可点。
   (function () {
@@ -683,9 +688,9 @@
     var btn = document.createElement("button");
     btn.type = "button";
     btn.id = "browserMenuBtn";
-    btn.innerHTML = ICON_ELLIPSIS;
-    btn.title = "历史会话";
-    btn.addEventListener("click", function () { enqueue({ type: "openHistory" }); });
+    btn.innerHTML = ICON_MENU_LEFT;
+    btn.title = "项目与会话";
+    btn.addEventListener("click", function () { enqueue({ type: "openWorkspace" }); });
     bar.appendChild(btn);
   })();
 

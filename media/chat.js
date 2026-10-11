@@ -433,10 +433,6 @@
       currentToolRow: null,
       pendingToolCards: new Map(),
       pendingToolTags: new Map(),
-      lastTagHost: null,
-      lastAssistantEl: null,
-      // 刚挂过"工具图片块"（read 读图）：下面的工具调用要另起一行，不再钻进上面的正文里
-      afterToolImage: false,
       // 历史窗口（网页端「只发最近一段」）：顶部按钮、加载更早的暂存区等
       hasMoreHistory: false,
       _historyBtn: null,
@@ -643,9 +639,7 @@
 
   function addPlain(tab, cls, role, text) {
     hideEmptyHint(tab);
-    tab.currentToolRow = null;
-    tab.lastTagHost = null; // 新消息块：工具标签不再往上一段后面续
-    tab.lastAssistantEl = null;
+    tab.currentToolRow = null; // 新消息块：工具标签另起一行，不往上一段后面续
     const div = document.createElement("div");
     div.className = "msg " + cls + " msg-enter";
     if (cls === "user") { div.dataset.raw = text || ""; }
@@ -677,8 +671,7 @@
 
   function addMarkdown(tab, raw) {
     hideEmptyHint(tab);
-    tab.currentToolRow = null;
-    tab.lastTagHost = null; // 新正文块：工具标签不再往上一段后面续
+    tab.currentToolRow = null; // 新正文块：工具标签另起一行，不往上一段后面续
     const div = document.createElement("div");
     div.className = "msg assistant msg-enter";
     const body = document.createElement("div");
@@ -688,55 +681,29 @@
     attachCopyBtn(div, () => body.dataset.raw || "");
     div.appendChild(body);
     tab.paneEl.appendChild(div);
-    tab.lastAssistantEl = body; // 工具标签要接在这条正文的行尾
     scrollToBottom(tab);
     return body;
   }
 
-  /** 工具标签挂载点：优先接在上一条助手消息正文的行尾（行内续排）；
-   *  正文以代码块 / 表格等块级元素结尾时跟在块后面；
-   *  还没有任何正文（工具先于文字）时退回独立一行。 */
+  /** 工具标签挂载点：所有工具调用单独占一行，跟正文分开（这是要求，别再把标签接回正文段落里）；
+   *  同一批（两条正文之间的）调用收拢在同一个 .tool-row 里，下一条正文到来时另起一行；
+   *  一条放不下的就折行（见 chat.css 的 .tool-row）。 */
   function toolTagHost(tab) {
-    // 刚挂过"工具图片块"（read 读图）：它下面的工具从新的一行开始排。
-    // 这里把上一行的状态全清掉，否则标签会回到图片块上面那条正文里（顺序就反了）。
-    if (tab.afterToolImage) {
-      tab.afterToolImage = false;
-      tab.lastAssistantEl = null;
-      tab.lastTagHost = null;
-      tab.currentToolRow = null;
-    }
-    // 注意：tool 事件到达前会先 finalizeCurrentAssistant（它会清空 currentAssistant），
-    // 所以“上一条助手正文”主要靠 lastAssistantEl 这个持久引用。
-    const asstEl = (tab.currentAssistant && tab.currentAssistant.el && tab.currentAssistant.el.isConnected)
-      ? tab.currentAssistant.el
-      : (tab.lastAssistantEl && tab.lastAssistantEl.isConnected ? tab.lastAssistantEl : null);
-    if (asstEl) {
-      const last = asstEl.lastElementChild;
-      // 普通段落 / 列表项结尾：标签进段落里，跟正文同一行内续排
-      if (last && (last.tagName === "P" || last.tagName === "LI")) { return last; }
-      return asstEl;
-    }
-    // 连续多个工具调用：继续追加到上一个标签所在的宿主
-    if (tab.lastTagHost && tab.lastTagHost.isConnected) { return tab.lastTagHost; }
-    // 兜底：独立一行
-    if (!tab.currentToolRow) {
+    // 行还有效吗：判定不看 isConnected —— 整屏重放发生在 pane 被布局树挂进页面之前
+    // （刷新后 tabList/重画先到、布局后挂），那会儿 pane 里所有节点 isConnected 都是 false，
+    // 每个标签都会被误判"行没了"而各自新建一行，重放出来的工具调用就竖着排了。
+    // 看爹更可靠：行被收掉（图块收编后删空行）或 pane 被清空（innerHTML 重写）时爹就没了。
+    if (!tab.currentToolRow || tab.currentToolRow.parentElement !== tab.paneEl) {
       tab.currentToolRow = document.createElement("div");
       tab.currentToolRow.className = "msg tool-row msg-enter";
-      tab.paneEl.appendChild(tab.currentToolRow);
+        tab.paneEl.appendChild(tab.currentToolRow);
     }
     return tab.currentToolRow;
   }
 
-  /** 把标签挂进宿主：行内宿主在首个标签前补个空格与正文隔开。 */
+  /** 把标签挂进这条工具调用行。 */
   function mountToolTag(tab, tag) {
-    const host = toolTagHost(tab);
-    const inline = host !== tab.currentToolRow;
-    if (inline && !host._hasTags) {
-      host.appendChild(document.createTextNode(" "));
-      host._hasTags = true;
-    }
-    host.appendChild(tag);
-    if (inline) { tab.lastTagHost = host; }
+    toolTagHost(tab).appendChild(tag);
   }
 
   function addTool(tab, toolName, argStr, toolCallId) {
@@ -1077,8 +1044,8 @@
    * 上面一行说明（齿轮 + 工具名 / 文件名，图片尺寸到了再补上），下面把图完整铺出来。
    *
    * 为什么不用悬浮提示：图藏在提示框里要鼠标悬上去才看得到，而"读了哪张图"本身就是对话内容。
-   * 块自己占一行（不跟正文挤在同一行里）；它后面的工具调用另起一行重新排
-   * （见 toolTagHost 的 afterToolImage）。
+   * 块自己占一行（不跟正文挤在同一行里）；标签原来所在的那行空了就一并收掉，
+   * 后面的工具调用会另起一行重新排（见 toolTagHost）。
    */
   function mountToolImageBlock(tab, tagEl, images) {
     if (!Array.isArray(images) || images.length === 0) { return; }
@@ -1098,17 +1065,15 @@
     block.appendChild(head);
     // 图直接接在说明行下面；图加载完成后尺寸会写回说明行（见 applyImageDims）
     renderResultImages(block, images, block);
-    // 原来那个小标签收掉：它跟图片本来就是一回事，不留两份
+    // 原来那个小标签收掉：它跟图片本来就是一回事，不留两份。
+    // 标签每次调用独占一行，收掉标签后那行就空了，连同这一行一起收掉。
     const host = tagEl.parentElement;
     tagEl.remove();
-    // 标签所在的段落/行被收空了就一起收掉（同一行还有别的工具或正文时不收）
-    if (host && host !== tab.paneEl
-      && (host.tagName === "P" || host.tagName === "LI" || host.classList.contains("tool-row"))
+    if (host && host !== tab.paneEl && host.classList.contains("tool-row")
       && !host.textContent.trim() && host.childElementCount === 0) {
       host.remove();
     }
     tab.paneEl.appendChild(block);
-    tab.afterToolImage = true;
     scrollToBottom(tab);
   }
 
@@ -1147,7 +1112,7 @@
 
   function buildEditCard(tab, toolName, label, filePath, toolCallId, argStr) {
     hideEmptyHint(tab);
-    // 收起态：跟普通工具调用一样的「齿轮 + 工具名」小标签，混进工具标签行；文件路径在悬浮提示里看。
+    // 收起态：跟普通工具调用一样的「齿轮 + 工具名」小标签，收进那条工具调用行；文件路径在悬浮提示里看。
     const pill = document.createElement("span");
     pill.className = "tool et-pill" + (toolCallId ? " running" : "");
     pill.insertAdjacentHTML("afterbegin", GEAR_SVG);
@@ -2105,6 +2070,9 @@
       hay.push(item.id || "", item.provider || "", item.name || "");
     } else if (kind === "options") {
       hay.push(item.label || "", item.desc || "");
+    } else if (kind === "folders" || kind === "workspace") {
+      // 文件夹 / 项目与会话：名字和路径都能搜（手机上找项目时往往记得路径里的一个词）。
+      hay.push(item.label || "", item.folderPath || "");
     } else {
       // 没有专属排版的那几种（如浏览器界面里的选择列表）：按标题筛
       hay.push(item.label || "", item.title || "");
@@ -2272,12 +2240,14 @@
       const empty = document.createElement("div"); empty.className = "pk-empty";
       empty.textContent = q ? "没有匹配项。" : "列表为空。";
       pickerBody.appendChild(empty);
-      if (st.kind === "history" && st.historyHasMore) { pickerBody.appendChild(buildHistoryLoadMoreBtn(st)); }
+      if ((st.kind === "history" || st.kind === "workspace") && st.historyHasMore) { pickerBody.appendChild(buildLoadMoreBtn(st, "sessions")); }
       if (st.kind === "model") { renderModelFooter(st); }
       return;
     }
     let lastSection = null;
     let lastModelProv = null;
+    /** 项目与会话面板里「加载更多」已经插过了吗（它要卡在会话那块的末尾）。 */
+    let loadMorePlaced = false;
     st.filtered.forEach((item, idx) => {
       if (st.kind === "model") {
         // provider 分组分隔线：host 已按 provider 排序，同 provider 项连续；
@@ -2325,9 +2295,14 @@
         const sep = document.createElement("div"); sep.className = "pk-section"; sep.textContent = item.section;
         pickerBody.appendChild(sep);
       }
+      // “项目与会话”面板：下半（工作区）开始之前，把会话那块的「加载更多」卡在它末尾。
+      if (st.kind === "workspace" && item.__section === "space" && !loadMorePlaced) {
+        loadMorePlaced = true;
+        if (st.historyHasMore) { pickerBody.appendChild(buildLoadMoreBtn(st, "sessions")); }
+      }
       const el = document.createElement("div");
       el.className = "pk-item" + (idx === st.sel ? " active" : "");
-      if (st.kind === "history") {
+      if (st.kind === "history" || (st.kind === "workspace" && item.__section === "session")) {
         el.classList.add("pk-history");
         if (item.current) { el.classList.add("current"); }
         const main = document.createElement("div"); main.className = "pk-history-main";
@@ -2348,9 +2323,31 @@
         t.appendChild(document.createTextNode(item.label || ""));
         el.appendChild(t);
         if (item.desc) { const d = document.createElement("div"); d.className = "pk-desc"; d.style.paddingLeft = "20px"; d.textContent = item.desc; el.appendChild(d); }
+      } else if (st.kind === "workspace" && item.__section === "space") {
+        // 工作区行：名字在左，会话条数与最后活动时间在右，路径另起一行（手机上一行放不下）。
+        el.classList.add("pk-history");
+        if (item.current) { el.classList.add("current"); }
+        const main = document.createElement("div"); main.className = "pk-history-main";
+        const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.label || "";
+        main.appendChild(title);
+        const right = document.createElement("span"); right.className = "pk-history-right";
+        if (item.count !== undefined && item.count !== null) {
+          const c = document.createElement("span"); c.className = "pk-history-count"; c.textContent = String(item.count); right.appendChild(c);
+        }
+        if (item.lastActivity) {
+          const a = document.createElement("span"); a.className = "pk-history-age"; a.textContent = pickerRelTime(item.lastActivity); right.appendChild(a);
+        }
+        if (right.childNodes.length) { main.appendChild(right); }
+        el.appendChild(main);
+        if (item.folderPath) { const p = document.createElement("div"); p.className = "pk-desc"; p.textContent = item.folderPath; el.appendChild(p); }
+        el.title = item.folderPath || item.label || "";
+      } else if (st.kind === "folders") {
+        const t = document.createElement("div"); t.className = "pk-title"; t.textContent = item.label || "";
+        el.appendChild(t);
+        if (item.folderPath) { const p = document.createElement("div"); p.className = "pk-desc"; p.textContent = item.folderPath; el.appendChild(p); }
       }
       // 其他种类（没有专属排版的，如浏览器界面里问“选哪一项”）：直接渲染标题
-      if (st.kind !== "history" && st.kind !== "options" && item.label) {
+      if (["history", "options", "workspace", "folders"].indexOf(st.kind) < 0 && item.label) {
         const t = document.createElement("div"); t.className = "pk-title";
         t.textContent = String(item.label);
         el.appendChild(t);
@@ -2359,22 +2356,35 @@
       el.addEventListener("click", () => { confirmPicker(idx); });
       pickerBody.appendChild(el);
     });
-    // history「加载更多」：列表底部追加按钮。
+    // 「加载更多」：历史面板在列表底部；项目与会话面板会话那块在中间（上面插过了），
+    // 工作区那块在最后。
     if (st.kind === "history" && st.historyHasMore) {
-      pickerBody.appendChild(buildHistoryLoadMoreBtn(st));
+      pickerBody.appendChild(buildLoadMoreBtn(st, "sessions"));
+    }
+    if (st.kind === "workspace" && st.historyHasMore && !loadMorePlaced) {
+      pickerBody.appendChild(buildLoadMoreBtn(st, "sessions"));
+    }
+    if (st.kind === "workspace" && st.spacesHasMore) {
+      pickerBody.appendChild(buildLoadMoreBtn(st, "spaces"));
     }
     if (st.kind === "model") { renderModelFooter(st); }
   }
-  function buildHistoryLoadMoreBtn(st) {
+  /**
+   * 「加载更多」那颗按钮。which = "sessions" 是上半会话那块的，"spaces" 是下半工作区那块的；
+   * 两块各记各的加载中状态（同时点也不会互相把按钮弄乱）。
+   */
+  function buildLoadMoreBtn(st, which) {
+    const isSpaces = which === "spaces";
+    const loading = isSpaces ? st.spacesLoading : st.historyLoading;
     const btn = document.createElement("button");
     btn.className = "pk-loadmore secondary";
-    btn.textContent = st.historyLoading ? "加载中…" : "加载更多";
-    btn.disabled = !!st.historyLoading;
+    btn.textContent = loading ? "加载中…" : "加载更多";
+    btn.disabled = !!loading;
     btn.addEventListener("click", () => {
-      if (st.historyLoading) { return; }
-      st.historyLoading = true;
+      if (loading) { return; }
+      if (isSpaces) { st.spacesLoading = true; } else { st.historyLoading = true; }
       renderPickerItems();
-      vscode.postMessage({ type: "historyLoadMore" });
+      vscode.postMessage({ type: isSpaces ? "workspaceLoadMore" : "historyLoadMore" });
     });
     return btn;
   }
@@ -2408,6 +2418,12 @@
       vscode.postMessage({ type: "pickerToggle", kind, action: item.action, value: item.value });
       return;
     }
+    // “项目与会话”面板：点下半的工作区**不关面板**，只让宿主把上半那份会话列表换成它的；
+    // “浏览文件夹…”那一行例外（它不是工作区，是要跳去文件夹面板）。
+    if (kind === "workspace" && item.__section === "space" && item.action !== "browse") {
+      vscode.postMessage({ type: "workspacePick", path: item.file });
+      return;
+    }
     const payload = { file: item.file };
     hidePicker();
     vscode.postMessage({ type: "pickerChoice", kind, payload });
@@ -2418,22 +2434,44 @@
     hidePicker();
     vscode.postMessage({ type: "pickerCancel", kind });
   }
+  /**
+   * “项目与会话”面板：宿主给的是两块（会话 / 工作区），这里拉平成一个数组交给通用渲染。
+   * 会话在前、工作区在后；每行记着自己是哪一块（__section），下面渲染分行、
+   * 点行为也不一样（点会话关面板切过去，点工作区只换上半）。
+   */
+  function workspaceFlatItems(msg) {
+    const ss = (msg.sessions && Array.isArray(msg.sessions.items)) ? msg.sessions.items : [];
+    const sp = (msg.spaces && Array.isArray(msg.spaces.items)) ? msg.spaces.items : [];
+    const head = "会话 · " + ((msg.sessions && msg.sessions.name) || "当前目录");
+    const withSection = (it, sec, headText) => {
+      const copy = {};
+      for (const k in it) { if (Object.prototype.hasOwnProperty.call(it, k)) { copy[k] = it[k]; } }
+      copy.__section = sec;
+      copy.section = headText;
+      return copy;
+    };
+    return ss.map((it) => withSection(it, "session", head))
+      .concat(sp.map((it) => withSection(it, "space", "工作区")));
+  }
+
   function renderPicker(msg) {
     const kind = msg.kind;
     const toggle = !!msg.toggle;
     const searchable = msg.searchable !== false && !toggle;
     pickerState = {
       kind,
-      items: Array.isArray(msg.items) ? msg.items : [],
+      items: kind === "workspace" ? workspaceFlatItems(msg) : (Array.isArray(msg.items) ? msg.items : []),
       filtered: [],
       sel: kind === "model" ? -1 : 0,
       current: msg.current || null,
       draftModel: null,
       draftThinking: undefined,
       toggle,
-      // history「加载更多」：宿主说还有没有下一批。
-      historyHasMore: msg.hasMore === true,
+      // 「加载更多」：history 看 msg.hasMore，项目与会话分两块（会话 sessions.hasMore、工作区 spaces.hasMore）。
+      historyHasMore: kind === "workspace" ? !!(msg.sessions && msg.sessions.hasMore) : msg.hasMore === true,
       historyLoading: false,
+      spacesHasMore: kind === "workspace" ? !!(msg.spaces && msg.spaces.hasMore) : false,
+      spacesLoading: false,
     };
     const titleMap = { model: "切换模型", history: "会话历史", options: "显示选项" };
     pickerTitle.textContent = titleMap[kind] || (typeof msg.title === "string" && msg.title ? msg.title : "选择");
@@ -2451,8 +2489,8 @@
         pickerState.draftModel = cur;
         pickerState.draftThinking = defaultThinkingForModel(pickerState, cur);
       }
-    } else if (kind === "history") {
-      // 历史会话面板：头部加一颗关闭按钮（面板占满整屏高，窄屏幕上遮罩只剩
+    } else if (kind === "history" || kind === "workspace") {
+      // 历史会话 / 项目与会话面板：头部加一颗关闭按钮（面板占满整屏高，窄屏幕上遮罩只剩
       // 一条缝，点不到），底部留一行「设置」——点它先收起面板，再打开设置浮层。
       pickerFooter.classList.remove("hidden");
       pickerFooter.classList.add("pk-history-footer");
@@ -2474,8 +2512,8 @@
     } else {
       pickerFooter.classList.add("hidden");
     }
-    // 历史会话从右侧滑进来（整屏高的面板）；其余拾取器照旧居中弹出
-    pickerOverlay.classList.toggle("pk-drawer", kind === "history");
+    // 历史会话与项目与会话从右侧滑进来（整屏高的面板）；其余拾取器照旧居中弹出
+    pickerOverlay.classList.toggle("pk-drawer", kind === "history" || kind === "workspace");
     renderPickerItems();
     pickerOverlay.classList.remove("hidden");
     // 计时：若宿主回显了 t0，输出点击 → picker 可见的往返耗时（多 panel 卡顿排查用）
@@ -2489,6 +2527,14 @@
     if (!pickerState) { return; }
     pickerState.sel = pickerState.kind === "model" ? -1 : 0;
     renderPickerItems();
+    // 项目与会话面板：一打字就把剩下的工作区全取回来（搜索是在已拿到的行里筛的，
+    // 不取回来就永远搜不到还没加载的那几条）；只取一次。
+    const st = pickerState;
+    if (st.kind === "workspace" && st.spacesHasMore && !st.spacesLoading && (pickerSearch.value || "").trim()) {
+      st.spacesLoading = true;
+      renderPickerItems();
+      vscode.postMessage({ type: "workspaceLoadAll" });
+    }
   });
   document.addEventListener("keydown", (e) => {
     if (!pickerState || pickerOverlay.classList.contains("hidden")) { return; }
@@ -2781,6 +2827,13 @@
     pendingAutoSend = null;
     // 等待期间用户又改了输入框内容：那是他新的意思，不替他发
     if (inputEl.value.trim() !== text.trim()) { return; }
+    send();
+  }
+
+  /** 宿主替用户发一条（命令入口用）：跟输入框回车完全同一条路。 */
+  function sendFromHost(text) {
+    if (typeof text !== "string" || text === "") { return; }
+    inputEl.value = text;
     send();
   }
 
@@ -3142,9 +3195,25 @@
     if (type === "pickerCancel") { hidePicker(); return; }
     if (type === "historyPageAppend") {
       const st = pickerState;
-      if (st && st.kind === "history") {
-        const more = Array.isArray(msg.items) ? msg.items : [];
-        st.items = st.items.concat(more);
+      if (st && (st.kind === "history" || st.kind === "workspace")) {
+        const more = (Array.isArray(msg.items) ? msg.items : []).map((it) => {
+          if (st.kind !== "workspace") { return it; }
+          // 面板里新来的一批是会话：补上分块标记（不然渲染不出会话样式）
+          const copy = {};
+          for (const k in it) { if (Object.prototype.hasOwnProperty.call(it, k)) { copy[k] = it[k]; } }
+          copy.__section = "session";
+          copy.section = st.items.length && st.items[0].section ? st.items[0].section : "会话";
+          return copy;
+        });
+        if (st.kind === "workspace") {
+          // 会话在上、工作区在下：新来的一批要插在工作区前面，不能接到末尾。
+          let at = -1;
+          for (let i = 0; i < st.items.length; i++) { if (st.items[i].__section === "space") { at = i; break; } }
+          const insertAt = at < 0 ? st.items.length : at;
+          Array.prototype.splice.apply(st.items, [insertAt, 0].concat(more));
+        } else {
+          st.items = st.items.concat(more);
+        }
         st.historyHasMore = msg.hasMore === true;
         st.historyLoading = false;
         renderPickerItems();
@@ -3153,8 +3222,26 @@
     }
     if (type === "historyPageEnd") {
       const st = pickerState;
-      if (st && st.kind === "history") {
+      if (st && (st.kind === "history" || st.kind === "workspace")) {
         st.historyLoading = false;
+        renderPickerItems();
+      }
+      return;
+    }
+    if (type === "workspacePageAppend") {
+      // 工作区那块的下一批（点「加载更多」或一搜索就全取回来时走这里）；接在已有的工作区行后面。
+      const st = pickerState;
+      if (st && st.kind === "workspace") {
+        const more = (Array.isArray(msg.items) ? msg.items : []).map((it) => {
+          const copy = {};
+          for (const k in it) { if (Object.prototype.hasOwnProperty.call(it, k)) { copy[k] = it[k]; } }
+          copy.__section = "space";
+          copy.section = "工作区";
+          return copy;
+        });
+        st.items = st.items.concat(more);
+        st.spacesHasMore = msg.hasMore === true;
+        st.spacesLoading = false;
         renderPickerItems();
       }
       return;
@@ -3162,6 +3249,9 @@
     if (type === "openSettings") { openSettings(msg.tab); return; }
     if (type === "viewOptionItems") { viewOptionItems = Array.isArray(msg.items) ? msg.items : []; if (settingsActiveTab === "options") { renderViewOpts(); } return; }
     if (type === "focusInput") { setTimeout(function () { inputEl.focus(); }, 0); return; }
+    // 宿主（VSCode 的命令入口，比如"发送选中文本"）替用户发一条：当作他打进输入框的，
+    // 走同一条路（会话还没就绪就先留着、就绪了自动补发）
+    if (type === "sendFromHost") { sendFromHost(msg.text); return; }
     // 扩展宿主在某个 session 收尾时下发的提示音请求（所有 session 都会收到，不再只看焦点）。
     if (type === "beep") { if (notifyOnTurnEnd) { playTurnEndBeep(); } return; }
     if (type === "app:settings" || type === "app:settingsResult" || type === "app:defaultModels") {
@@ -3303,14 +3393,14 @@
         if (activeId === t.id) { syncStatus(); }
         break;
       case "tool": {
-        finalizeCurrentAssistant(t);
+            finalizeCurrentAssistant(t);
         const argStr = msg.args ? JSON.stringify(msg.args) : "";
         addTool(t, msg.toolName, argStr, msg.toolCallId);
         t.currentAssistant = null;
         break;
       }
       case "editCardStart": {
-        finalizeCurrentAssistant(t);
+            finalizeCurrentAssistant(t);
         const card = buildEditCard(t, msg.toolName, msg.label, msg.path, msg.toolCallId, msg.args ? JSON.stringify(msg.args) : "");
         t.pendingToolCards.set(msg.toolCallId, card);
         t.currentAssistant = null;
@@ -3353,8 +3443,6 @@
         t.currentAssistant = null;
         t.thinkingText = "";
         t.currentToolRow = null;
-        t.lastTagHost = null;
-        t.lastAssistantEl = null;
         t.pendingToolCards.clear();
         for (const tg of t.pendingToolTags.values()) { clearInterval(tg._timer); }
         t.pendingToolTags.clear();
@@ -3384,7 +3472,7 @@
         break;
       }
       case "toolResult": {
-        const tagEl = t.pendingToolTags.get(msg.toolCallId);
+            const tagEl = t.pendingToolTags.get(msg.toolCallId);
         if (tagEl) {
           tagEl.classList.remove("running");
           if (msg.isError) { tagEl.classList.add("error"); }

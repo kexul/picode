@@ -1,16 +1,10 @@
+// src 下全部源码编一遍，落到 out/test：单测要同时用到插件侧与后端侧的东西，
+// 它俩各自的配置又只编自己那半边，所以测试用这份全量的。
+// 编辑器默认认这份配置（改动时全仓库一起检查，两个入口都到不了的文件也能查出来）。
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "module": "commonjs",
-    "target": "ES2021",
-    "outDir": "out",
-    "rootDir": ".",
-    "lib": ["ES2021", "DOM"],
-    "sourceMap": true,
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "resolveJsonModule": true
+    "outDir": "out/test"
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": ["src/**/*.ts"]
 }

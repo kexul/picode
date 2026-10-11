@@ -1,0 +1,301 @@
+#!/usr/bin/env node
+// @ts-nocheck
+/**
+ * fakePi —— 假的 pi：按剧本演戏的 `pi --mode rpc`。
+ *
+ * 为什么要有它：用真模型验界面，一句话要等几十秒，还经常不按剧本走（不调工具、
+ * 调的顺序不对），界面调试等不起。把 piPath 指到这个脚本，会话编排、历史、
+ * 整屏重放、工具结果、读图——整条链路全是真的，只有"模型"是假的，秒回。
+ *
+ * 协议与真 pi 一致（stdin/stdout JSONL，见 pi 的 dist/modes/rpc/rpc-mode.js）：
+ *   - 命令进来回 {type:"response", id, command, success, data}
+ *   - 事件直接往外发：agent_start / message_start / message_update(assistantMessageEvent)
+ *     / tool_execution_start|end / message_end / agent_end / agent_settled / session_info_changed
+ *   - get_messages 回自己记的历史（assistant 消息 content 里是 thinking/text/toolCall，
+ *     toolResult 单独成条）——这正是整屏重放时界面上看到的东西，所以重放路径也验得到。
+ *
+ * 剧本（每轮照着演一遍，可在文件顶部改）：
+ *   1. 说一句话（逐字推，模拟流式）
+ *   2. 工具：read 一张图（结果带 image，走"读图变图片块"那条路）
+ *   3. 工具：bash
+ *   4. 工具：edit（会真的改 dev/.scratch 下的一个文件，diff 卡片有东西可看）
+ *   5. 再说一句收尾
+ *
+ * 用法（不用记参数，插件的 piPath 指过来就行）：
+ *   node dev/fakePi.js --mode rpc          # 参数收下但不看，照常演戏
+ *
+ * 配合调试工具（PICHAT_HOME 指到调试目录，不动真配置）：
+ *   npm run web:dev -- --fake-pi
+ *   npm run web:shot -- --fake-pi --send "随便" --shot x.png   # 秒回
+ */
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
+
+// ---------------------------------------------------------------------------
+// 剧本参数
+// ---------------------------------------------------------------------------
+
+/** 每轮开始前停多久（毫秒）：给"正在工作"的状态一点出场时间；0 = 完全秒回。 */
+const THINK_MS = Number(process.env.FAKEPI_THINK_MS || 0);
+/** 文字流式输出的间隔（毫秒）。 */
+const TEXT_TICK_MS = Number(process.env.FAKEPI_TICK_MS || 0);
+/** 单张图片的结果（base64 的小 png）：走 read 读图那条渲染路。 */
+const SAMPLE_PNG_BASE64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEUlEQVR4nGP8z0AswAKTQNYA" +
+    "AEGYAVfrEXvAAAAAAElFTkSuQmCC";
+
+// ---------------------------------------------------------------------------
+// 状态
+// ---------------------------------------------------------------------------
+
+/** 本会话的消息历史（get_messages 原样给出去；形状照抄真 pi 的会话文件）。 */
+const messages = [];
+let seq = 0;
+const nextId = (prefix) => `${prefix}-${++seq}-${Date.now().toString(36)}`;
+const sleep = (ms) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
+
+const MODEL = { id: "fake-model", provider: "fake", name: "假模型（秒回）", contextWindow: 128000 };
+
+// ---------------------------------------------------------------------------
+// 输出
+// ---------------------------------------------------------------------------
+
+function write(obj) {
+    process.stdout.write(JSON.stringify(obj) + "\n");
+}
+function respond(id, command, data) {
+    write({ id, type: "response", command, success: true, ...(data === undefined ? {} : { data }) });
+}
+
+// ---------------------------------------------------------------------------
+// 事件：照真 pi 的顺序与形状发
+// ---------------------------------------------------------------------------
+
+async function runScript(userText) {
+    const emit = (evt) => write(evt);
+    const now = () => new Date().toISOString();
+
+    emit({ type: "agent_start" });
+
+    // ---- 用户消息（pi 会把 prompt 作为 user 消息推一遍） ----
+    const userMsg = { role: "user", content: [{ type: "text", text: userText }], timestamp: now() };
+    messages.push(userMsg);
+    emit({ type: "message_start", message: userMsg });
+    emit({ type: "message_end", message: userMsg });
+
+    // ---- 助手消息：文字 → 工具 ×3 → 文字，最后整条进历史 ----
+    const assistantMsg = { role: "assistant", content: [], timestamp: now(), usage: {}, model: `${MODEL.provider}/${MODEL.id}` };
+    emit({ type: "message_start", message: assistantMsg });
+
+    /** 把已积累的内容条推进历史（message_update 的 partial 懒得发，界面靠增量事件就够了）。 */
+    const say = async (text) => {
+        const piece = { type: "text", text };
+        emit({
+            type: "message_update",
+            usage: {},
+            assistantMessageEvent: { type: "text_start", contentIndex: assistantMsg.content.length },
+        });
+        // 逐字推：模拟流式（FAKEPI_TICK_MS=0 时一次性给完）
+        for (let i = 0; i < text.length; i += 6) {
+            const delta = text.slice(i, i + 6);
+            emit({
+                type: "message_update",
+                usage: {},
+                assistantMessageEvent: { type: "text_delta", contentIndex: assistantMsg.content.length, delta },
+            });
+            await sleep(TEXT_TICK_MS);
+        }
+        emit({
+            type: "message_update",
+            usage: {},
+            assistantMessageEvent: { type: "text_end", contentIndex: assistantMsg.content.length },
+        });
+        assistantMsg.content.push(piece);
+    };
+
+    /** 演一个工具调用：toolcall 事件 → 执行 → 结果进历史。 */
+    const act = async (toolName, args, result) => {
+        const id = nextId("call");
+        // 参数是"正在生成"的部分：toolcall_start/delta/end 各发一条（界面在此期间只显示"工作中"）
+        emit({
+            type: "message_update",
+            usage: {},
+            assistantMessageEvent: { type: "toolcall_start", contentIndex: assistantMsg.content.length, id, toolName },
+        });
+        emit({
+            type: "message_update",
+            usage: {},
+            assistantMessageEvent: {
+                type: "toolcall_end", contentIndex: assistantMsg.content.length, id, toolName,
+                partial: { type: "toolCall", id, name: toolName, arguments: args },
+            },
+        });
+        assistantMsg.content.push({ type: "toolCall", id, name: toolName, arguments: args });
+
+        emit({ type: "tool_execution_start", toolCallId: id, toolName, args });
+        await sleep(THINK_MS);
+        const toolResult = {
+            role: "toolResult",
+            toolCallId: id,
+            content: result.content,
+            isError: false,
+            timestamp: now(),
+        };
+        emit({
+            type: "tool_execution_end",
+            toolCallId: id,
+            toolName,
+            args,
+            result: result.raw,
+            isError: false,
+            durationMs: THINK_MS,
+        });
+        messages.push(toolResult);
+        emit({ type: "message_start", message: toolResult });
+        emit({ type: "message_end", message: toolResult });
+    };
+
+    await say("好，我用三个工具给你演示一遍（假模型秒回）：");
+    await act("read", { path: "示例图片.png" }, {
+        content: [
+            { type: "text", text: "Read image file [image/png]" },
+            { type: "image", data: SAMPLE_PNG_BASE64, mimeType: "image/png" },
+        ],
+        raw: { content: [{ type: "text", text: "Read image file [image/png]" }], details: { dims: "10x10" } },
+    });
+    await act("bash", { command: "ls" }, {
+        content: [{ type: "text", text: "示例.js\n示例图片.png\n说明.txt" }],
+        raw: { content: [{ type: "text", text: "示例.js\n示例图片.png\n说明.txt" }], exitCode: 0 },
+    });
+    await act("edit", { path: "说明.txt", oldText: "调试", newText: "调试（假模型改的）" }, {
+        content: [{ type: "text", text: "已编辑" }],
+        raw: {
+            content: [{ type: "text", text: "已编辑" }],
+            details: { diff: "--- 说明.txt\n+++ 说明.txt\n@@ -1 +1 @@\n-这是 Pi Chat 插件的调试用工作目录（dev/.scratch）。\n+这是 Pi Chat 插件的调试用工作目录（dev/.scratch）（假模型改的）。\n" },
+        },
+    });
+    await say("完事。三个工具都跑过了：read（带图）、bash、edit。");
+
+    assistantMsg.stopReason = "stop";
+    messages.push(assistantMsg);
+    emit({ type: "message_end", message: assistantMsg });
+    emit({ type: "agent_end", messages });
+    emit({ type: "agent_settled" });
+}
+
+// ---------------------------------------------------------------------------
+// 命令分发
+// ---------------------------------------------------------------------------
+
+const SCRIPT_FILE = "说明.txt";
+
+/** edit 工具真的改文件：编辑卡片（diff）才有东西可看，回滚也有的滚。 */
+function applyFakeEdit(args) {
+    try {
+        const p = path.resolve(process.cwd(), args.path || SCRIPT_FILE);
+        const text = fs.readFileSync(p, "utf8");
+        if (typeof args.oldText === "string" && text.includes(args.oldText)) {
+            fs.writeFileSync(p, text.replace(args.oldText, args.newText ?? ""), "utf8");
+            return true;
+        }
+    } catch { /* 改不了就算了，剧本照演 */ }
+    return false;
+}
+
+async function handle(cmd) {
+    const id = cmd.id;
+    switch (cmd.type) {
+        case "prompt": {
+            // 真 pi：preflight 成功先回一次 response，然后事件流，最后 agent_settled
+            respond(id, "prompt", { disposition: "handled" });
+            void runScript(String(cmd.message || ""));
+            return;
+        }
+        case "get_state":
+            respond(id, "get_state", {
+                model: MODEL,
+                thinkingLevel: "off",
+                isStreaming: false,
+                sessionFile: path.join(process.cwd(), "fake-session.jsonl"),
+                sessionId: "fake-session",
+                sessionName: "假会话（fakePi）",
+                messageCount: messages.length,
+            });
+            return;
+        case "get_available_models":
+            respond(id, "get_available_models", { models: [{ ...MODEL, reasoning: false, cost: { input: 0, output: 0 } }] });
+            return;
+        case "set_model":
+            respond(id, "set_model", MODEL);
+            return;
+        case "set_thinking_level":
+        case "new_session":
+            if (cmd.type === "new_session") { messages.length = 0; }
+            respond(id, cmd.type, {});
+            return;
+        case "get_session_stats":
+            respond(id, "get_session_stats", { tokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, cost: 0, contextUsage: { percent: 1, tokens: 1000, contextWindow: MODEL.contextWindow } });
+            return;
+        case "get_commands":
+            respond(id, "get_commands", { commands: [{ name: "fake-hello", description: "假命令", source: "extension" }] });
+            return;
+        case "get_messages":
+            respond(id, "get_messages", { messages });
+            return;
+        case "get_last_assistant_text": {
+            const last = [...messages].reverse().find((m) => m.role === "assistant");
+            const text = last ? (last.content || []).filter((c) => c.type === "text").map((c) => c.text).join("") : "";
+            respond(id, "get_last_assistant_text", { text });
+            return;
+        }
+        case "switch_session":
+            messages.length = 0;
+            respond(id, "switch_session", { cancelled: false });
+            return;
+        case "abort":
+        case "abort_bash":
+        case "clear_queue":
+            respond(id, cmd.type, {});
+            return;
+        case "bash":
+            respond(id, "bash", { content: [{ type: "text", text: "（假模型不执行 bash）" }], exitCode: 0 });
+            return;
+        default:
+            respond(id, cmd.type, {});
+    }
+}
+
+// ---------------------------------------------------------------------------
+// stdin JSONL
+// ---------------------------------------------------------------------------
+
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+    buffer += chunk;
+    while (true) {
+        const idx = buffer.indexOf("\n");
+        if (idx === -1) { break; }
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (!line) { continue; }
+        let cmd;
+        try { cmd = JSON.parse(line); } catch { continue; }
+        if (cmd && cmd.type === "edit") { applyFakeEdit(cmd); } // 理论上不会来，兜一手
+        void handle(cmd);
+    }
+});
+process.stdin.on("end", () => process.exit(0));
+
+// 起来就绪：真 pi 起进程也要一小会，这里留个可调的延迟，测"会话还没就绪"的界面时用
+const BOOT_MS = Number(process.env.FAKEPI_BOOT_MS || 0);
+if (BOOT_MS > 0) {
+    const t0 = Date.now();
+    const busy = () => {
+        if (Date.now() - t0 >= BOOT_MS) { return; }
+        setTimeout(busy, 50);
+    };
+    busy();
+}

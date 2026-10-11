@@ -176,9 +176,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected pickerResolve: ((v: any | undefined) => void) | null = null;
     protected pickerTimer: ReturnType<typeof setTimeout> | null = null;
     /** 当前浮层开在哪个界面（子类挑的目标标识）；空串 = 没开浮层。 */
-    private pickerTarget = "";
+    protected pickerTarget = "";
     /** 当前浮层的类型：超时 / 被新浮层顶掉时，回给界面的 pickerCancel 要带上它。 */
-    private pickerKind = "";
+    protected pickerKind = "";
 
     // ---- 备用 pi 进程池（热备，免冷启动）----
     /** 已就绪的备用 pi 进程（不绑定任何 panel）。 */
@@ -291,9 +291,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return full;
     }
 
-    public resolvePath(p: string): string {
+    public resolvePath(p: string, cwd?: string): string {
         if (path.isAbsolute(p)) { return p; }
-        return path.resolve(this.getCwd(), p);
+        return path.resolve(cwd ?? this.getCwd(), p);
+    }
+
+    /** 两个目录是不是同一个（Windows 上不分大小写；只比字符串，不解析软链接）。 */
+    protected sameDir(a: string, b: string): boolean {
+        if (!a || !b) { return false; }
+        const na = path.resolve(a);
+        const nb = path.resolve(b);
+        return process.platform === "win32" ? na.toLowerCase() === nb.toLowerCase() : na === nb;
     }
 
     public resolveExecutable(cmd: string): string | undefined {
@@ -610,6 +618,38 @@ export abstract class ChatControllerBase implements RuntimeHost {
         // 模型跟 panel 关联：继承当前焦点 panel 的模型（startClient 内部回落全局配置）
         const inherited = this.getActive()?.currentModel();
         const rt = this.createPanelRuntime(inherited);
+        const c = this.attachNewTab(rt);
+        // 后台预热一个备用进程，供下一个新 panel / 切分支直接领取（启动路径延迟执行，避免双冷启动）
+        this.ensureSpare(spareDelayMs);
+        return c;
+    }
+
+    /**
+     * 新建一个 tab（成为活跃 tab），pi 进程按 launch 起：指定工作目录、带额外启动参数这些。
+     * 为什么另开一个口子：newTab 只管"在当前目录新开"，而手机上要能在别的项目里开（见 newSessionInDir）、
+     * 历史里点开别的项目的会话也要按那个项目的目录起进程。
+     */
+    protected newTabWithLaunch(launch: PanelLaunch, spareDelayMs = 0): SessionRuntime | undefined {
+        const cfg = this.getConfig();
+        if (!this.resolveExecutable(cfg.piPath)) { return undefined; }
+        const rt = this.createPanelRuntime(this.getActive()?.currentModel(), launch);
+        this.attachNewTab(rt);
+        this.ensureSpare(spareDelayMs);
+        return rt;
+    }
+
+    /**
+     * 在指定目录新开一个会话（手机上“在某个项目里开新会话”用）。
+     * 目录跟宿主默认目录不一样时不领备用进程：备用进程是按默认目录起的，领过来就跑错地方了。
+     */
+    public newSessionInDir(dir: string): SessionRuntime | undefined {
+        const target = path.resolve(dir);
+        const launch: PanelLaunch = this.sameDir(target, this.getCwd()) ? {} : { cwd: target, skipSpare: true };
+        return this.newTabWithLaunch(launch);
+    }
+
+    /** 把一个 panel 运行时挂成一个 tab（成为活跃 tab），返回容器。 */
+    private attachNewTab(rt: SessionRuntime): TabContainer {
         const c: TabContainer = {
             id: `${this.workspaceId}:tab-${++this.tabSeq}`,
             root: { kind: "panel", panelId: rt.id },
@@ -619,8 +659,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.activeTabId = c.id;
         this.broadcastTabList(true);
         this.postToWebview({ type: "tabActivated", id: c.id });
-        // 后台预热一个备用进程，供下一个新 panel / 切分支直接领取（启动路径延迟执行，避免双冷启动）
-        this.ensureSpare(spareDelayMs);
         return c;
     }
 
@@ -751,10 +789,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
             // 子会话怎么起：工作目录 / 模型 / 工具白名单 都在这里面算（子会话一律全新会话，pi 自己建会话文件）
             const plan = resolveTabaSpawn({
                 req,
-                parentCwd: this.getCwd(),
+                // 子会话默认跑在"派活那个会话自己的目录"里：那个会话可能是在别的项目里开的
+                // （手机上开的），不能拿宿主默认目录当它的目录。
+                parentCwd: parentRt.cwd,
                 parentModelId: parentRt.modelId,
                 parentProvider: parentRt.provider,
-                resolvePath: (p) => this.resolvePath(p),
+                resolvePath: (p) => this.resolvePath(p, parentRt.cwd),
             });
             const { cwd } = plan;
 
@@ -1329,14 +1369,29 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** tab / panel 结构或焦点发生变化后，让子类刷新跨工作区引用目录。 */
     protected onChatStructureChanged(): void { /* default: no global registry */ }
 
+    /**
+     * 这个 tab 的会话跑在哪个目录（取焦点 panel 的；没有焦点就取第一个 panel）。
+     * 用在 tab 标题上：同一个窗口里可能有跑在别的项目上的会话，标题上不标就分不出谁是谁。
+     */
+    private containerCwd(c: TabContainer): string {
+        const focus = c.focusPanelId ? this.panels.get(c.focusPanelId) : undefined;
+        if (focus) { return focus.cwd; }
+        const first = layoutLeaves(c.root)[0];
+        return (first ? this.panels.get(first)?.cwd : undefined) ?? this.getCwd();
+    }
+
     private emitTabList(): void {
+        const defaultCwd = this.getCwd();
         this.postToWebview({
             type: "tabList",
             tabs: Array.from(this.tabContainers.values()).map((c) => {
                 const leaves = layoutLeaves(c.root);
+                const name = this.containerDisplayName(c);
+                const cwd = this.containerCwd(c);
                 return {
                     id: c.id,
-                    name: this.containerDisplayName(c),
+                    // 跑在别的目录上的会话，标题后面挂上目录名（默认目录的不挂，免得满屏后缀）。
+                    name: this.sameDir(cwd, defaultCwd) ? name : `${name} · ${path.basename(cwd) || cwd}`,
                     focusPanelId: c.focusPanelId ?? null,
                     streaming: leaves.some((pid) => !!this.panels.get(pid)?.streaming),
                     loading: leaves.some((pid) => !!this.panels.get(pid)?.loading),
@@ -1682,15 +1737,21 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return this.getActive()?.currentSessionPath;
     }
 
-    public async loadHistorySession(file: string): Promise<void> {
+    /**
+     * 加载一个历史会话。会话在哪个目录，pi 进程就得跑在哪个目录：
+     * pi 的 switch_session 只换会话文件，不会换进程的工作目录，所以跨项目的会话要按它的目录起进程。
+     * @param folder 会话所在的目录；不填 = 当前焦点会话自己的目录。
+     */
+    public async loadHistorySession(file: string, folder?: string): Promise<void> {
         // 先揭示并等待聊天 Webview 就绪。否则首次从历史画布打开时，loadSession
         // 在 Webview 尚未建立监听器前发出的 clear/消息会丢失，最终只剩空 tab。
         await this.onFocusChat();
-        // 优先复用当前空 tab；已有会话时新建 tab，避免历史选择覆盖正在进行的对话。
-        let rt = this.isActiveTabEmpty() ? this.getActive() : undefined;
+        const cwd = folder ? path.resolve(folder) : (this.getActive()?.cwd ?? this.getCwd());
+        const active = this.getActive();
+        // 优先复用当前空 tab（目录也得对）；已有会话时新建 tab，避免历史选择覆盖正在进行的对话。
+        let rt = active && this.isActiveTabEmpty() && this.sameDir(active.cwd, cwd) ? active : undefined;
         if (!rt) {
-            const c = this.newTab();
-            rt = this.panels.get(layoutLeaves(c.root)[0]);
+            rt = this.newTabWithLaunch(this.sameDir(cwd, this.getCwd()) ? {} : { cwd, skipSpare: true });
         }
         if (!rt) { return; }
         const c = this.containerOfPanel(rt.id);
@@ -1713,27 +1774,49 @@ export abstract class ChatControllerBase implements RuntimeHost {
     //  历史会话列表（pi /resume 风格：标题 + 条数 + 相对时间，每批 10 条）
     // ========================================================================
     /** 本次列表的文件清单（按修改时间倒序）；每次打开列表时重建。 */
-    private historyFiles: SessionFileEntry[] = [];
+    protected historyFiles: SessionFileEntry[] = [];
     /** 已展示到第几个文件（「加载更多」接着往后扫）。 */
-    private historyOffset = 0;
+    protected historyOffset = 0;
     /** 每批展示/扫描的文件数。 */
     private static readonly HISTORY_BATCH_SIZE = 10;
+
+    /** 历史列表里“在这个目录新建会话”那一行的标识（会话文件是绝对路径，撞不上这种带 \0 的）。 */
+    protected static readonly NEW_SESSION_ROW = "\u0000pichat:new-session";
 
     /**
      * 弹出历史会话列表并加载选中项。
      * @param fromPage 来源是网页页面：不用把侧边栏拽出来。
      * @param target 列表弹给哪个界面（界面标识）；不填就现挑“人最近在动的那一个”。
+     * @param opts.folder 列哪个目录的会话；不填 = 当前焦点会话自己的目录（可能是别的项目）。
+     * @param opts.withNewSession 列表第一行加一条“在这个目录里新建会话”（项目拾取器进来的那条路）。
      */
-    public async showHistoryPicker(fromPage = false, target?: string): Promise<void> {
+    public async showHistoryPicker(
+        fromPage = false,
+        target?: string,
+        opts?: { folder?: string; withNewSession?: boolean },
+    ): Promise<void> {
         if (!fromPage) { await this.beforeHistoryPicker(); }
-        this.historyFiles = await listSessionFiles(this.getCwd());
+        const cwd = opts?.folder ? path.resolve(opts.folder) : (this.getActive()?.cwd ?? this.getCwd());
+        this.historyFiles = await listSessionFiles(cwd);
         this.historyOffset = 0;
-        if (this.historyFiles.length === 0) { this.onNoSessions(); return; }
+        // 带“新建会话”那一行时，目录里一个会话都没有也要把列表开出来（不然人没法在那个目录里开新会话）。
+        if (this.historyFiles.length === 0 && !opts?.withNewSession) { this.onNoSessions(); return; }
         const items = await this.scanHistoryBatch();
+        if (opts?.withNewSession) {
+            items.unshift({
+                file: ChatControllerBase.NEW_SESSION_ROW,
+                id: "",
+                title: "＋ 在这个目录里新建会话",
+                count: 0,
+                lastActivity: 0,
+                current: false,
+            });
+        }
         if (items.length === 0) { this.onNoSessions(); return; }
         const choice = await this.promptHistoryPicker(items, this.historyOffset < this.historyFiles.length, target);
         if (!choice || typeof choice.file !== "string") { return; }
-        await this.loadHistorySession(choice.file);
+        if (choice.file === ChatControllerBase.NEW_SESSION_ROW) { this.newSessionInDir(cwd); return; }
+        await this.loadHistorySession(choice.file, cwd);
     }
 
     /** 「加载更多」：扫描下一批文件，把新条目追加进开着的列表（只发给开列表的那个界面）。 */
@@ -1745,7 +1828,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /** 扫描下一批文件，返回展示条目（带“是不是当前焦点会话”）。 */
-    private async scanHistoryBatch(): Promise<HistoryPickerItem[]> {
+    protected async scanHistoryBatch(): Promise<HistoryPickerItem[]> {
         const batch = this.historyFiles.slice(this.historyOffset, this.historyOffset + ChatControllerBase.HISTORY_BATCH_SIZE);
         this.historyOffset += batch.length;
         const current = this.getActive()?.currentSessionPath;

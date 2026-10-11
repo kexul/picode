@@ -9,8 +9,8 @@ import * as os from "os";
  */
 
 /** 浏览器页面允许加载的 media/ 文件名白名单（其余一律 404，防目录穿越）。
- *  注：browserTheme.css 不在里——它的内容是直接写进页面 HTML 的（导出会话时要靠它），
- *  不走静态文件这条路。 */
+ *  注：browserTheme.css 在网页端页面里是直接写进 HTML 的（不走静态文件这条路），
+ *  但侧边栏面板要从这儿取它，所以也在名单里。 */
 export const ALLOWED_MEDIA_FILES: ReadonlySet<string> = new Set([
     "chat.js",
     "chat.css",
@@ -18,6 +18,7 @@ export const ALLOWED_MEDIA_FILES: ReadonlySet<string> = new Set([
     "highlight.js",
     "settings.js",
     "browserBridge.js",
+    "browserTheme.css",
 ]);
 
 /** 扩展名 → Content-Type（只列白名单里会出现的几种）。 */

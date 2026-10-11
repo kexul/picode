@@ -124,7 +124,8 @@ export interface RuntimeHost {
     getConfig(): PiConfig;
     getCwd(): string;
     relativeTo(cwd: string, full: string): string;
-    resolvePath(p: string): string;
+    /** 把相对路径变成绝对路径。cwd 不传就用宿主默认目录；会话级的路径要传会话自己的目录（子会话 / 别的项目里开的会话）。 */
+    resolvePath(p: string, cwd?: string): string;
     /** 校验 pi 可执行文件存在；失败时自行向 tab 推送 systemError。返回是否可用。 */
     checkPiAvailable(piPath: string, tabId: string): boolean;
     /** 领取一个已就绪的备用 pi 进程（无则 undefined）。领取后宿主会自动补新备用。

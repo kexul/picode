@@ -1,0 +1,10 @@
+// 后端（pichat）那一侧：只编 serverMain.ts 自己能 import 到的文件。
+// 和插件侧各自编各自的（两边会各有一份 serverPaths / serverState / renderHtml），
+// 这样插件包里干净，后端装在别处也能单独跑。
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "out/server"
+  },
+  "include": ["src/serverMain.ts"]
+}

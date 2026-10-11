@@ -132,6 +132,12 @@ export class SessionRuntime {
     public get sessionTitle(): string { return this.piSessionTitle; }
     /** 名词部分：tab 栏多 panel 拼接名只用它。 */
     public get noun(): string { return this.nameParts.noun; }
+    /**
+     * 本会话的 pi 进程跑在哪个目录。
+     * 多数会话跟宿主默认目录一致；子会话、以及“在别的项目里开的会话”（启动时的 launch.cwd）不一样，
+     * 历史列表、文件相对路径、派子会话的默认目录都要看它，不能看宿主那一份。
+     */
+    public get cwd(): string { return this.launch?.cwd || this.host.getCwd(); }
     /** Agent 是否仍在运行；这是 steer / Esc 等整体生命周期判断使用的状态。 */
     public streaming = false;
     /** Agent 当前更细的活动阶段，供 webview 区分处理中 / 思考 / 工具调用。 */
@@ -199,9 +205,9 @@ export class SessionRuntime {
         this.id = id;
         this.nameParts = name;
         this.edits = new EditTracker({
-            getCwd: () => this.host.getCwd(),
+            getCwd: () => this.cwd,
             relativeTo: (cwd, full) => this.host.relativeTo(cwd, full),
-            resolvePath: (p) => this.host.resolvePath(p),
+            resolvePath: (p) => this.host.resolvePath(p, this.cwd),
             post: (msg) => this.post(msg),
             onKnownFilesChanged: () => this.host.onKnownFilesChanged?.(this.id),
             confirmRevert: (label) => this.host.confirmRevert(label),
@@ -296,7 +302,7 @@ export class SessionRuntime {
         this.attachClient(
             new PiClient({
                 piPath: cfg.piPath,
-                cwd: this.launch?.cwd || this.host.getCwd(),
+                cwd: this.cwd,
                 provider: want?.provider || cfg.provider || undefined,
                 model: want?.modelId || cfg.model || undefined,
                 extraArgs,
@@ -1117,7 +1123,7 @@ export class SessionRuntime {
                                     toolCallId: id,
                                     toolName: c.name,
                                     path: p || "",
-                                    label: p ? this.host.relativeTo(this.host.getCwd(), p) : "",
+                                    label: p ? this.host.relativeTo(this.cwd, p) : "",
                                     args: c.arguments,
                                 });
                                 emit({

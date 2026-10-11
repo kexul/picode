@@ -2,7 +2,7 @@
  * 一轮对话收尾提醒的文字组装（纯函数）。
  *
  * 单独成一个文件、且不引用 vscode：这段只是字符串拼装，离开扩展宿主也能直接跑单测
- * （见 turnNotifyText.test.ts）。真正去发通知的代码在 turnNotifier.ts。
+ * （见 turnNotifyText.test.ts）。真正去发通知的代码在 turnToast.ts（后端那侧）。
  */
 import type { TurnEndInfo } from "./runtimeTypes";
 

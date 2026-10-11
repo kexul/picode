@@ -1,4 +1,3 @@
-import * as vscode from "vscode";
 import * as cp from "child_process";
 import * as fs from "fs";
 import * as os from "os";
@@ -6,29 +5,26 @@ import * as path from "path";
 import type { TurnEndInfo } from "./runtimeTypes";
 import { POWERSHELL_APP_USER_MODEL_ID, TOAST_EXPIRE_SECONDS, buildToastScript, encodePowerShell } from "./toastScript";
 // 提醒里显示什么字（会话名取哪个 / 标题与摘要怎么拼）在 turnNotifyText.ts，那边不依赖 vscode、可单测。
-import { notifyBody, notifySummary, notifyTitle, type TurnToastItem } from "./turnNotifyText";
+import { notifyBody, notifyTitle, type TurnToastItem } from "./turnNotifyText";
 
 /**
- * turnNotifier —— 一轮对话结束时提醒用户。
+ * turnToast —— 一轮对话结束时发 Windows 系统通知。
  *
- * 为什么放在扩展宿主、不再只靠网页视图（webview）里的提示音：
+ * 这个文件不引用 vscode：独立后端（pichat，纯 Node）也要弹同一套通知，
+ * 所以“发通知”本身和它的合并逻辑都放在这里；在编辑器界面里补提示是宿主自己的事
+ * （第二步后 VSCode 插件不再自己跑会话，通知都在后端这边发。）
+ *
+ * 为什么不能只靠网页视图（webview）里的提示音：
  * 网页视图被隐藏或窗口切到后台时，它的音频与定时器会被降速甚至挂起，
- * 结果就是“会话跑完了却一点动静都没有”。扩展宿主进程一直在跑，不受窗口可见性影响。
- *
- * 提醒分两条腿（两边的会话名都优先用 pi 自己给的会话标题，没有才用插件分配的随机名）：
- *   1. Windows 系统通知（屏幕右下角卡片，同时进通知中心）—— 走 PowerShell 调系统的
- *      通知接口，插件本身零第三方依赖。窗口在前台也会发（用户要求“只要任务完成就弹”）。
- *   2. VS Code 界面里的一条提示 —— 用 window.withProgress(Location.Window)。
- *      窗口不在前台时，它还会让 Windows 闪烁任务栏图标，最小化也能被看到；
- *      系统通知已经发成功、且窗口在前台时就不重复发（卡片本身已经带声音和提醒）。
+ * 结果就是“会话跑完了却一点动静都没有”。而独立后端 / 扩展宿主进程一直在跑，不受窗口可见性影响。
  *
  * toast 的实现细节：
  *   - 本批通知的文字先写成一个 UTF-8 JSON 临时文件，PowerShell 读它；
  *   - PowerShell 脚本本身用 base64（UTF-16LE）经 -EncodedCommand 传入，
  *     这样脚本正文和通知文字都不用担心引号、反引号、$ 符、中文编码问题；
  *   - 卡片在右下角停约 7 秒（系统默认）后收进通知中心，60 秒后连记录一起消失；
- *   - 脚本每发完一批通知会写一个 .done 标记文件；扩展看到它就知道“发出去了”，
- *     等不到就认定这台机器发不出来，改在 VS Code 界面里提示，不会静默失败。
+ *   - 脚本每发完一批通知会写一个 .done 标记文件；看到它就知道“发出去了”，
+ *     等不到就认定这台机器发不出来，把原因交给 onBatch，宿主可以据此补一条提示，不会静默失败。
  */
 
 /** 同一段时间内收尾的多个会话合并成一条通知，避免并行会话刷屏。 */
@@ -42,7 +38,7 @@ const APP_LABEL = "Pi Chat";
 
 /**
  * 通知的“应用标识”（AppUserModelId）：Windows 用它决定通知卡片显示的来源名与图标。
- * 正常由插件激活后在后台登记自己的标识（见 toastAppId.ts，来源显示“Pi Chat”），
+ * 正常由宿主激活后在后台登记自己的标识（见 toastAppId.ts，来源显示“Pi Chat”），
  * 传进来时可能还没登记完（那是个承诺，发通知前会等它出结果，结果一定能用）；
  * 没传进来时借用 PowerShell 自带的标识（系统自带，一定能弹，但来源显示 Windows PowerShell）。
  * 也可以用环境变量 PICHAT_TOAST_APPID 手动指定。
@@ -52,9 +48,6 @@ const DEFAULT_APP_USER_MODEL_ID = POWERSHELL_APP_USER_MODEL_ID;
 /** 发完通知后 PowerShell 还留着多久：系统要靠这个进程执行“到点失效”，
  *  所以要大于通知的失效秒数（多留 10 秒当余量），否则通知会一直留在通知中心里。 */
 const TOAST_KEEPALIVE_MS = (TOAST_EXPIRE_SECONDS + 10) * 1000;
-
-/** VS Code 界面内提示挂多久。 */
-const IN_APP_NOTICE_MS = 20000;
 
 /** 生成一个不会被撞上的临时文件名。 */
 function tempName(prefix: string): string {
@@ -71,8 +64,9 @@ function powershellPath(): string {
 /**
  * 真正去弹这一批通知。
  *
- * @param onFailed 发不出去时把原因交给调用方，由它在 VS Code 界面里提示。
- *        成功时也会在 .done 出现后顺手清理临时文件。
+ * @param onFailed 发不出去时调一次，把原因交出来让宿主解释一句；
+ *        发成功时不调（“这批发出去了”那一声由 TurnToast 在派活的时候立刻报，不等这里）。
+ *        无论成败都会顺手清理临时文件。
  */
 function spawnToast(items: TurnToastItem[], appUserModelId: string, onFailed: (reason: string) => void): void {
     const dataFile = tempName("pi-chat-toast");
@@ -101,6 +95,7 @@ function spawnToast(items: TurnToastItem[], appUserModelId: string, onFailed: (r
     );
 
     let settled = false;
+    /** 收工：清掉临时文件；有 reason 就是没发出去，把原因交出去。 */
     const finish = (reason?: string): void => {
         if (settled) { return; }
         settled = true;
@@ -122,12 +117,17 @@ function spawnToast(items: TurnToastItem[], appUserModelId: string, onFailed: (r
 }
 
 /**
- * 会话收尾通知中心：侧边栏与各个编辑器工作区共用一个实例。
+ * 会话收尾通知中心：侧边栏与各个编辑器工作区共用一个实例，独立后端也用一个实例。
  *
  * 用法：会话跑完时调 {@link handleTurnEnd}；窗口切到后台或侧边栏被切走时调 {@link hide}，
  * 让攒着的这批立刻发出去，不等合并窗口。
+ *
+ * 两个回调分得很清楚（为什么不在一个回调里用“有没有原因”区分：那样“这批去发了”
+ * 就只能等到 PowerShell 回话才通知宿主，窗口不在前台时闪任务栏会晚好几秒）：
+ *   - {@link onBatch}：这批去发了，立刻回调；宿主拿它做“窗口不在前台就补一条编辑器内提示”。
+ *   - {@link onBatchFailed}：这批没能发出去，晚些回调，带上原因；宿主拿它解释一句。
  */
-export class TurnNotifier {
+export class TurnToast {
     private pending: TurnEndInfo[] = [];
     private timer?: ReturnType<typeof setTimeout>;
     private readonly appUserModelId?: string | Promise<string>;
@@ -135,14 +135,20 @@ export class TurnNotifier {
     private appUserModelIdResolved?: Promise<string>;
     /** 已经不用了：不再发任何通知。 */
     private disposed = false;
-    /** 系统通知发送失败的解释只说一次，免得每次都弹一条警告。 */
-    private warnedAboutToastFailure = false;
+    private readonly onBatch?: (batch: TurnEndInfo[]) => void;
+    private readonly onBatchFailed?: (batch: TurnEndInfo[], reason: string) => void;
 
     constructor(options?: {
-        /** 覆盖通知的应用标识（一般由插件激活后在后台登记，传进来的可能是还没登记完的承诺）。 */
+        /** 覆盖通知的应用标识（一般由宿主激活后在后台登记，传进来的可能是还没登记完的承诺）。 */
         appUserModelId?: string | Promise<string>;
+        /** 一批通知去发了（立刻回调，不通知成败）。 */
+        onBatch?: (batch: TurnEndInfo[]) => void;
+        /** 一批通知没发出去（带原因）。 */
+        onBatchFailed?: (batch: TurnEndInfo[], reason: string) => void;
     }) {
         this.appUserModelId = options?.appUserModelId;
+        this.onBatch = options?.onBatch;
+        this.onBatchFailed = options?.onBatchFailed;
     }
 
     /** 把标识定下来：传了的等它出结果，没传就看环境变量，再不然用系统回落标识。 */
@@ -192,33 +198,13 @@ export class TurnNotifier {
             items.push({ title: "还有其它会话", body: `…另有 ${rest} 个也跑完了`, attribution: APP_LABEL });
         }
 
-        // 等标识定下来再发系统通知（标识可能还在后台登记；结果一定是个能用的标识）。
-        // 发不出去时 onFailed 会在界面里补一条（带失败原因）。
+        // “这批去发了”立刻报给宿主（窗口不在前台时，闪任务栏的提示要马上出现，
+        // 不能等 PowerShell 那边回话——那一等最长 6 秒）；
+        // 发不出去时再补一次回调，把原因带上，宿主好解释一句。
+        this.onBatch?.(batch);
         void this.resolveAppUserModelId().then((appUserModelId) => {
             if (this.disposed) { return; }
-            spawnToast(items, appUserModelId, (reason) => this.showInApp(batch, reason));
+            spawnToast(items, appUserModelId, (reason) => this.onBatchFailed?.(batch, reason));
         });
-        // 窗口不在前台时，界面内提示顺带让 Windows 闪烁任务栏图标。
-        if (!vscode.window.state.focused) { this.showInApp(batch, undefined); }
-    }
-
-    /**
-     * VS Code 界面里的一条提示。
-     *
-     * 用 withProgress(Location.Window) 而不是 showInformationMessage：前者在 VS Code
-     * 不在前台时会让 Windows 闪烁任务栏图标，窗口最小化时也能被看到。
-     * @param reason 系统通知发送失败的原因（成功时为 undefined）。
-     */
-    private showInApp(batch: TurnEndInfo[], reason?: string): void {
-        if (reason && !this.warnedAboutToastFailure) {
-            this.warnedAboutToastFailure = true;
-            void vscode.window.showWarningMessage(
-                `Pi Chat：Windows 系统通知发送失败（${reason}），已改用编辑器内提示。本次 VS Code 会话不再重复解释。`
-            );
-        }
-        void vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Window, title: `Pi Chat：${notifySummary(batch)}` },
-            async () => { await new Promise<void>((resolve) => setTimeout(resolve, IN_APP_NOTICE_MS)); },
-        );
     }
 }

@@ -5,6 +5,7 @@ import * as os from "os";
 import * as path from "path";
 import { getBrowserChatHtml } from "./browserHtml";
 import type { ChatBroadcaster } from "./chatBroadcaster";
+import type { ScreenRegistry } from "./screenRegistry";
 import {
     contentTypeOf,
     isAllowedMediaFile,
@@ -17,20 +18,22 @@ import {
 } from "./webTransport";
 
 /**
- * PiChatWebServer —— 插件自带的网页服务：让你在浏览器里也能对话。
+ * PiChatWebServer —— 独立后端的网页服务：一个地址，手机和电脑都看这一份会话。
  *
- * 做的事：
- *   - 用 Node 自带的 http 模块起一个服务（不引入任何第三方依赖），只送四类东西：
- *     对话页面（`/`）、界面资源（`/media/…`）、插件推给页面的消息流（`/events`）、
- *     页面发给插件的消息（`/api`）；
- *   - 插件 → 页面用"服务器推送"（浏览器的 EventSource，长连接，服务器随时能写）；
- *     页面 → 插件用普通请求（POST），按到达顺序交给会话工作区；
- *   - 一个页面占一条推送连接，几个页面（手机 + 电脑）可以同时连着，插件推的消息发给每一个；
- *     确认框、选项浮层只发给"人最近在里面动过"的那个页面。
+ * 两条线：
+ *   - **页面线**（浏览器 / 手机，以及 VS Code 里的那块网页视图）：对话页面（`/`）、
+ *     界面资源（`/media/…`）、后端推给页面的消息流（`/events`）、页面发给后端的消息（`/api`）。
+ *     VS Code 里的网页视图走同样的 `/events` + `/api`（只是中间隔着插件进程转发），
+ *     界面代码完全一样；
+ *   - **屏线**（VS Code 窗口，`/screen` + `/screenapi`）：窗口在后端登记自己是打开着哪些
+ *     文件夹的，好让"用编辑器打开这个文件"这类活得有人干。
+ *   另外有一个 `/health`，给单实例判断探活用。
  *
- * 会话只有一份：侧边栏就是那份会话工作区，网页页面是接在它上面的几个"额外的屏"。
- * 本服务不拥有会话，只负责把页面的连接登记进 {@link ChatBroadcaster}、把页面发来的
- * 消息转交给宿主（侧边栏那个 ChatViewProvider）。服务停了会话照常活着，侧边栏不受影响。
+ * 方向：后端 → 页面/屏用"服务器推送"（长连接，随时能写）；页面/屏 → 后端用普通请求（POST）。
+ * 一个页面占一条推送连接，几个页面（手机 + 电脑 + 几个 VS Code 窗口）可以同时连着，
+ * 推的消息发给每一个；确认框、选项浮层只发给"人最近在里面动过"的那个页面。
+ *
+ * 会话只有一份：全在独立后端里。服务停了会话照常活着（后端进程退出时才停）。
  */
 
 /** 页面发来的单个请求允许的最大字节数（粘贴图片会是好几 MB）。 */
@@ -40,8 +43,8 @@ const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
 const HEARTBEAT_MS = 25_000;
 /** 页面超过这么久没有任何动静（报活或发消息）就把它那条连接收掉。
  *  手机退到后台后定时器被冻住，报活自然停了：那条连接多半已经死了，占着只会白攒消息。
- *  页面回到前台会自己重连，报上自己处理到第几条消息，插件把漏掉的补发给它；
- *  补不上的才整屏重画（见 ChatViewProvider 的 browserResync）。 */
+ *  页面回到前台会自己重连，报上自己处理到第几条消息，后端把漏掉的补发给它；
+ *  补不上的才整屏重画。VS Code 窗口也一样。 */
 const PAGE_STALE_MS = 90_000;
 /** 一条推送连接最多积压多少字节：页面不读了（屏黑了 / 网络卡住）就别再往里塞，
  *  掐掉让它重连重画。不掐的话这些字节全堆在插件进程里，回来时也不会被 GC 回收。 */
@@ -63,7 +66,7 @@ export interface WebServerSettings {
     enabled: boolean;
     /** 监听端口；0 表示自动挑一个空闲端口。 */
     port: number;
-    /** 监听地址；默认 127.0.0.1（只有本机能访问）。 */
+    /** 监听地址；默认 0.0.0.0（同一网络里的设备都能访问）。 */
     host: string;
 }
 
@@ -72,8 +75,24 @@ export interface WebServerSettings {
  * 服务不拥有会话：页面只是接在工作区上的"额外的屏"。
  */
 export interface WebServerHost {
-    /** 页面连接的登记簿 + 推送序号（与侧边栏共用同一份）。 */
+    /** 页面连接的登记簿 + 推送序号（所有页面共用一份）。 */
     getBroadcaster(): ChatBroadcaster;
+    /** 屏（VS Code 窗口）的登记簿：网页服务拿它做死连接巡检、写心跳。 */
+    getScreens(): ScreenRegistry;
+    /**
+     * 一个 VS Code 窗口连上来了。
+     * @param folders 这个窗口打开着的文件夹（能力活该不该它干，就看这个）。
+     * @param send 往后端推话的出口。
+     */
+    attachScreen(screenId: string, folders: string[], send: (msg: Record<string, unknown>) => void): void;
+    /** 一条屏连接断了（窗口关了 / 网断了）。 */
+    detachScreen(screenId: string): void;
+    /**
+     * 屏发来一条消息（`/screenapi`）。
+     * @returns 需要回话时返回一个值，服务把它当 JSON 回给这个窗口（比如"给我一个页面标识"）；
+     *          不用回话就不返回。
+     */
+    processScreenMessage(msg: any, screenId: string): unknown;
     /** 页面发来一条消息（/api POST）。 */
     processPageMessage(msg: any, pageId: string): void;
     /** 一条推送连接建立（页面连上 / 重连）。 */
@@ -93,6 +112,11 @@ export interface WebServerHooks {
     onUrlChanged?(url: string | undefined): void;
     /** 写一行日志（输出面板）。 */
     log(text: string): void;
+    /**
+     * `/health` 里附加的信息（独立后端启动器会用它塞版本号之类）。
+     * 本服务自己的身份字段（ok/app/pid/startedAt）由服务填写，不受这里影响；没给就不加。
+     */
+    info?(): Record<string, unknown>;
 }
 
 export class PiChatWebServer {
@@ -103,11 +127,15 @@ export class PiChatWebServer {
     private ownHostnames: string[] = [];
     /** 页面标识 → 它那条连接的响应对象（心跳要往里写 tick）。 */
     private readonly streams = new Map<string, http.ServerResponse>();
+    /** 屏标识 → 它那条连接的响应对象。 */
+    private readonly screenStreams = new Map<string, http.ServerResponse>();
     private heartbeat?: ReturnType<typeof setInterval>;
     private readonly heartbeatMs: number;
     private readonly pageStaleMs: number;
     private readonly backlogBytes: number;
-    private settings: WebServerSettings = { enabled: false, port: 0, host: "127.0.0.1" };
+    /** 本次监听开始服务的时刻（`/health` 报出去；重启会更新）。 */
+    private startedAt = 0;
+    private settings: WebServerSettings = { enabled: false, port: 0, host: "0.0.0.0" };
 
     constructor(
         private readonly mediaDir: string,
@@ -160,7 +188,7 @@ export class PiChatWebServer {
 
     private async start(settings: WebServerSettings): Promise<void> {
         this.settings = settings;
-        const host = settings.host.trim() || "127.0.0.1";
+        const host = settings.host.trim() || "0.0.0.0";
         const server = http.createServer((req, res) => this.route(req, res));
         // 大图片粘贴成 base64 时请求体会比较大；不限时长，长度有 MAX_REQUEST_BYTES 兜底
         server.requestTimeout = 0;
@@ -199,6 +227,7 @@ export class PiChatWebServer {
             server.close();
             return;
         }
+        this.startedAt = Date.now();
         this.heartbeat = setInterval(() => this.writeHeartbeat(), this.heartbeatMs);
         this.host.onServerStarted();
         this.hooks.log(`网页服务已启动：${this.url ?? "(地址未知)"}`);
@@ -226,13 +255,13 @@ export class PiChatWebServer {
         if (isLoopbackName(this.boundHost)) { return; }
         const found = lanIpv4Addresses();
         this.hooks.log("注意：网页服务现在不只本机可用。同一网络里的任何设备打开下面这个地址，");
-        this.hooks.log("      就能读写这台机器上的文件、运行命令（背后是 pi）。不想这样就把 piChat.webServer.host 改回 127.0.0.1。");
+        this.hooks.log("      就能读写这台机器上的文件、运行命令（背后是 pi）。只想自己用就把 piChat.webServer.host 改成 127.0.0.1。");
         if (found.length > 0) {
             this.hooks.log("手机等设备可用：" + found.map((ip) => `http://${ip}:${this.boundPort}/`).join("  "));
         }
     }
 
-    /** 同步收摊：断掉每条推送连接、清心跳。会话工作区不动（侧边栏照常用）。 */
+    /** 同步收摊：断掉每条推送连接、清心跳。会话不动（后端进程自己退不退是启动器的事）。 */
     private teardown(): void {
         if (this.heartbeat) { clearInterval(this.heartbeat); this.heartbeat = undefined; }
         const broadcaster = this.host.getBroadcaster();
@@ -241,6 +270,11 @@ export class PiChatWebServer {
             channel.close("网页服务已停止。");
         }
         this.streams.clear();
+        for (const [id, res] of this.screenStreams) {
+            this.host.detachScreen(id);
+            this.endStream(res, "服务已停止。");
+        }
+        this.screenStreams.clear();
         this.host.onServerStopped();
         this.boundHost = "";
         this.boundPort = 0;
@@ -298,6 +332,10 @@ export class PiChatWebServer {
                 this.sendText(res, 400, "请求地址不合法。");
                 return;
             }
+            if (pathname === "/health") {
+                this.sendHealth(req, res);
+                return;
+            }
             if (pathname === "/" || pathname === "/index.html") {
                 this.sendPage(res, url.searchParams.get("pageId") ?? "");
                 return;
@@ -314,6 +352,16 @@ export class PiChatWebServer {
             if (pathname === "/api") {
                 if (req.method !== "POST") { this.sendText(res, 405, "只接受 POST。"); return; }
                 void this.handleApi(req, res, url.searchParams.get("pageId") ?? "");
+                return;
+            }
+            if (pathname === "/screen") {
+                if (req.method !== "GET") { this.sendText(res, 405, "只接受 GET。"); return; }
+                this.openScreen(res, url.searchParams.get("screenId") ?? "", url.searchParams.get("folders") ?? "");
+                return;
+            }
+            if (pathname === "/screenapi") {
+                if (req.method !== "POST") { this.sendText(res, 405, "只接受 POST。"); return; }
+                void this.handleScreenApi(req, res, url.searchParams.get("screenId") ?? "");
                 return;
             }
             this.sendText(res, 404, "没有这个地址。");
@@ -371,6 +419,36 @@ export class PiChatWebServer {
             });
             res.end(data);
         });
+    }
+
+    /**
+     * 健康检查：先探一眼这个地址上是不是活着的 pichat 后端（别的实例在跑就不重复启动）。
+     * 只报身份，不放路径、配置这些不该外露的东西。
+     * 不带 Origin 头也放行：本机探活就是这么发的（见 originAllowed 对无 Origin 请求的处理）。
+     */
+    private sendHealth(req: http.IncomingMessage, res: http.ServerResponse): void {
+        if (req.method !== "GET") { this.sendText(res, 405, "只接受 GET。"); return; }
+        // info 先铺、本服务的身份后压：即使 info 里凑巧带了同名键，
+        // 也不能把探活判断依据（app/pid/startedAt）盖掉。
+        const payload: Record<string, unknown> = {
+            ...(this.hooks.info?.() ?? {}),
+            ok: true,
+            app: "pichat",
+            pid: process.pid,
+            startedAt: this.startedAt,
+        };
+        this.sendJson(res, 200, payload);
+    }
+
+    private sendJson(res: http.ServerResponse, status: number, value: unknown): void {
+        const body = Buffer.from(JSON.stringify(value), "utf8");
+        if (res.headersSent) { res.end(); return; }
+        res.writeHead(status, {
+            "Content-Type": "application/json; charset=utf-8",
+            "Cache-Control": "no-store",
+            "Content-Length": body.length,
+        });
+        res.end(body);
     }
 
     private sendText(res: http.ServerResponse, status: number, text: string): void {
@@ -486,6 +564,21 @@ export class PiChatWebServer {
             if (!res) { return; }
             this.writeChunk(channel, res, `event: tick\ndata: ${JSON.stringify({ t: now })}\n\n`);
         });
+        // 屏那边同样收一遍：VS Code 窗口半天没动静（死机、网断了没通知到）就别留在登记簿里，
+        // 否则点文件会被派给一个已经不在的窗口。
+        const screens = this.host.getScreens();
+        for (const id of screens.staleIds(this.pageStaleMs)) {
+            this.hooks.log(`屏 ${id} 已经 ${Math.round(this.pageStaleMs / 1000)} 秒没有任何动静，` +
+                "把它从登记簿里拿掉（插件会自己重连）。");
+            const res = this.screenStreams.get(id);
+            this.dropScreen(id);
+            if (res) { this.endStream(res, ""); }
+        }
+        for (const screen of screens.list()) {
+            const res = this.screenStreams.get(screen.id);
+            if (!res) { continue; }
+            this.writeScreenChunk(screen.id, res, `event: tick\ndata: ${JSON.stringify({ t: now })}\n\n`);
+        }
     }
 
     // ========================================================================
@@ -532,6 +625,100 @@ export class PiChatWebServer {
         }
         res.writeHead(204, { "Cache-Control": "no-store" });
         res.end();
+    }
+
+    // ========================================================================
+    //  屏的连接（VS Code 窗口 ↔ 后端）
+    // ========================================================================
+
+    /**
+     * 一个 VS Code 窗口来开屏连接。
+     *
+     * 同一个窗口又连了一次（插件重载、网断了又通）：把旧连接安静收掉就行。
+     * 打开着的文件夹写在查询参数里（连上的那一刻就要用：这个窗口到了该干活的目录时
+     * 得立刻能派活，不必等它再发一条消息）。
+     */
+    private openScreen(res: http.ServerResponse, screenId: string, foldersJson: string): void {
+        const id = screenId || `s-${crypto.randomUUID()}`;
+        let folders: string[] = [];
+        try {
+            const parsed = JSON.parse(foldersJson || "[]");
+            if (Array.isArray(parsed)) { folders = parsed.filter((f): f is string => typeof f === "string" && f !== ""); }
+        } catch { /* 参数写坏了就当空窗口：什么都不认，比乱认强 */ }
+        res.writeHead(200, {
+            "Content-Type": "text/event-stream; charset=utf-8",
+            "Cache-Control": "no-store, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        });
+        res.write("retry: 1000\n\n");
+        res.write(": connected\n\n");
+        res.socket?.setNoDelay(true);
+        // 同一个窗口重连：旧的那条安静收掉（它多半已经断了，只是没通知到）
+        const old = this.screenStreams.get(id);
+        this.screenStreams.set(id, res);
+        if (old && old !== res) { try { old.destroy(); } catch { /* 已经断了 */ } }
+        const onClose = () => { this.dropScreen(id); };
+        res.on("close", onClose);
+        res.on("error", onClose);
+        this.host.attachScreen(id, folders, (msg) => {
+            this.writeScreenChunk(id, res, `event: msg\ndata: ${JSON.stringify(msg)}\n\n`);
+        });
+    }
+
+    /** 往一条屏连接写一段内容；写不动了就把它注销掉（插件那边会自己重连）。 */
+    private writeScreenChunk(id: string, res: http.ServerResponse, chunk: string): void {
+        if (res.writableEnded || res.destroyed) { this.dropScreen(id); return; }
+        try {
+            const flushed = res.write(chunk);
+            if (!flushed && res.writableLength > this.backlogBytes) {
+                this.hooks.log(`屏 ${id} 有一阵子没在读推送流（积压 ${Math.round(res.writableLength / 1024)} KB），" +
+                    "掐掉这条连接，插件会自己重连。`);
+                this.dropScreen(id);
+            }
+        } catch {
+            this.dropScreen(id);
+        }
+    }
+
+    /** 断开一条屏连接（窗口关了 / 网断了 / 积压太多）。 */
+    private dropScreen(id: string): void {
+        if (!this.screenStreams.has(id)) { return; }
+        this.screenStreams.delete(id);
+        this.host.detachScreen(id);
+    }
+
+    /** 屏发来一条消息（能力执行结果、符号集合、要个页面标识……）。 */
+    private async handleScreenApi(req: http.IncomingMessage, res: http.ServerResponse, screenId: string): Promise<void> {
+        if (!this.host.getScreens().get(screenId)) {
+            this.sendText(res, 409, "这个窗口不在后端登记簿里（后端可能重启过）。插件会自己重连。");
+            return;
+        }
+        this.host.getScreens().markSeen(screenId);
+        const text = await readBody(req, MAX_REQUEST_BYTES);
+        if (text === undefined) {
+            this.sendText(res, 413, "请求内容过大。");
+            return;
+        }
+        let msg: any;
+        try {
+            msg = JSON.parse(text);
+        } catch {
+            this.sendText(res, 400, "请求内容不是合法的 JSON。");
+            return;
+        }
+        let answer: unknown;
+        try {
+            answer = this.host.processScreenMessage(msg, screenId);
+        } catch (err: any) {
+            this.hooks.log(`处理屏消息出错：${err?.message ?? String(err)}`);
+        }
+        if (answer === undefined) {
+            res.writeHead(204, { "Cache-Control": "no-store" });
+            res.end();
+            return;
+        }
+        this.sendJson(res, 200, answer);
     }
 }
 

@@ -1,0 +1,15 @@
+// 三份编译配置共用的编译器选项，不单独产出东西。
+// 各份配置只写自己那点差别（输出目录、编哪些文件），其余靠 extends 这份。
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "ES2021",
+    "rootDir": "src",
+    "lib": ["ES2021", "DOM"],
+    "sourceMap": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true
+  }
+}

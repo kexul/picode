@@ -1,13 +1,16 @@
 // @ts-nocheck
 /**
- * harness —— 调试脚手架：把真插件代码跑在纯 Node 里，起一个网页服务让你在浏览器里看界面。
+ * harness —— 调试脚手架：把真代码跑在纯 Node 里，起一个网页服务让你在浏览器里看界面。
  *
- * 做法只有两步：
- *   1. 在 require 里把 "vscode" 这个模块换成 dev/fakeVscode.js（插件代码毫无察觉）；
- *   2. 按插件的正常用法创建 ChatViewProvider 与 PiChatWebServer：
- *      真会话编排、真会话进程（真的拉起 pi）、真网页服务、真界面文件（media/）。
+ * 做法只有三步：
+ *   1. 在 require 里把 "vscode" 这个模块换成 dev/fakeVscode.js（插件代码毫无察觉），
+ *      按插件的正常用法创建 ChatViewProvider（编辑器这屏，纯客户端）；
+ *   2. 用真后端自己的启动函数 startBackend 起一个后端（真会话编排、真会话进程、
+ *      真网页服务、真界面文件），浏览器打开的是它给的地址；
+ *   3. 后端的设置 / 状态 / 地址文件都指到调试目录（PICHAT_HOME），不动用户真正的
+ *      ~/.pi/pichat；插件那侧也靠它找到同一个后端。
  *
- * 所以浏览器里看到的就是**真插件**的界面与真会话，只是少了 VS Code 那一圈外壳。
+ * 所以浏览器里看到的就是**真界面与真会话**，只是少了 VS Code 那一圈外壳。
  * 验不到的东西（diff 编辑器、符号跳转、系统通知、侧边栏网页视图本身）见 fakeVscode.js 顶部说明。
  *
  * 用法见 dev/browserHost.js（常驻）与 dev/visit.js（自动开浏览器、点几下、截图）。
@@ -17,10 +20,17 @@ const path = require("path");
 const Module = require("module");
 
 const repoRoot = path.resolve(__dirname, "..");
-const OUT_ENTRY = path.join(repoRoot, "out", "src", "chatViewProvider.js");
+// 插件那侧编在 out/extension，后端那侧编在 out/server（见 scripts/compile.mjs）：
+// 调试时两边都要真货——插件侧那屏 + 后端那个进程。
+const OUT_ENTRY = path.join(repoRoot, "out", "extension", "chatViewProvider.js");
+const OUT_SERVER = path.join(repoRoot, "out", "server", "serverMain.js");
+const OUT_CONFIG = path.join(repoRoot, "out", "server", "serverConfig.js");
+const OUT_TABA = path.join(repoRoot, "out", "server", "tabaAssets.js");
 const MEDIA_DIR = path.join(repoRoot, "media");
 /** 调试会话的工作目录：pi 进程在这里跑。单独一个空目录，免得调试时动到插件仓库本身。 */
 const SCRATCH_DIR = path.join(__dirname, ".scratch");
+/** 调试后端的文件（设置 / 状态 / 地址）放这里；PICHAT_HOME 指过来就不碰用户真配置。 */
+const SCRATCH_PICHAT_DIR = path.join(SCRATCH_DIR, "pichat");
 
 let installed = false;
 
@@ -62,6 +72,16 @@ function ensureScratchDir(dir) {
     return dir;
 }
 
+/** 本仓库的版本号（写进后端的地址文件、派子会话要用的文件目录名）。 */
+function packageVersion() {
+    try {
+        const parsed = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+        return typeof parsed.version === "string" ? parsed.version : "0";
+    } catch {
+        return "0";
+    }
+}
+
 /**
  * 起一个调试用的会话工作区 + 网页服务。
  *
@@ -69,41 +89,57 @@ function ensureScratchDir(dir) {
  * @param {string} [options.cwd]      会话的工作目录（默认 dev/.scratch）
  * @param {number} [options.port]     监听端口；0 = 自动挑一个（默认 51999）
  * @param {string} [options.host]     监听地址（默认 127.0.0.1）
- * @param {string} [options.model]    覆盖 piChat.model（默认用你 pi 自己的配置）
- * @param {string} [options.provider] 覆盖 piChat.provider
- * @param {string} [options.piPath]   覆盖 piChat.piPath（默认 "pi"，走 PATH）
+ * @param {string} [options.model]    覆盖设置里的 model（默认用你 pi 自己的配置）
+ * @param {string} [options.provider] 覆盖设置里的 provider
+ * @param {boolean} [options.fakePi]  用假模型（dev/fakePi.js）：不调真模型，按剧本秒回（界面调试用）
+ * @param {string} [options.piPath]   覆盖设置里的 piPath（默认 "pi"，走 PATH）
  * @param {string} [options.theme]    界面颜色："light" 或 "dark"（默认 light）
  * @param {boolean} [options.toast]   会话跑完要不要发 Windows 通知（默认不要：调试时太吵）
  * @param {(text: string) => void} [options.log] 日志出口（默认打到标准输出）
- * @returns {{ provider: any, server: any, start: () => Promise<string>, stop: () => Promise<void>, url: () => string, cwd: string }}
+ * @returns {{ provider: any, start: () => Promise<string>, stop: () => Promise<void>, url: () => string|undefined, cwd: string }}
  */
 function createHarness(options = {}) {
     const log = options.log || ((text) => console.log(text));
     const cwd = ensureScratchDir(path.resolve(options.cwd || SCRATCH_DIR));
 
-    if (!fs.existsSync(OUT_ENTRY)) {
-        throw new Error(`还没编译：找不到 ${OUT_ENTRY}。先跑 npm run compile（npm run web:dev / web:shot 会自动带上）。`);
+    if (!fs.existsSync(OUT_ENTRY) || !fs.existsSync(OUT_SERVER)) {
+        throw new Error(`还没编译：找不到 out/extension 或 out/server 里的文件。先跑 npm run compile（npm run web:dev / web:shot 会自动带上）。`);
     }
 
-    const config = {};
-    if (options.model !== undefined) { config.model = options.model; }
-    if (options.provider !== undefined) { config.provider = options.provider; }
-    if (options.piPath !== undefined) { config.piPath = options.piPath; }
+    // 后端与插件两侧都靠这个环境变量找同一份地址文件（客户端照它连后端）；
+    // 指到调试目录，调试时写的设置、状态、地址都不会碰到用户真正的 ~/.pi/pichat。
+    process.env.PICHAT_HOME = SCRATCH_PICHAT_DIR;
 
     const fake = installFakeVscode({
         cwd,
-        config,
         theme: options.theme === "dark" ? "dark" : "light",
-        options: {
-            // 会话跑完的提醒（Windows 通知 + 界面提示音）在调试里默认关掉
-            "piChat.notifyBeep": options.toast === true,
-            "piChat.themeMode": options.theme === "dark" ? "dark" : "light",
-        },
         log: (text) => log(text),
     });
 
     const { ChatViewProvider } = require(OUT_ENTRY);
-    const { PiChatWebServer } = require(path.join(repoRoot, "out", "src", "webChatServer.js"));
+    const { startBackend } = require(OUT_SERVER);
+    const { updateServerConfig } = require(OUT_CONFIG);
+    const { ensureTabaAssets } = require(OUT_TABA);
+    const version = packageVersion();
+
+    // 调试用的设置写进后端那份 config.json：模型 / pi 路径这些跟真后端一样从文件读，
+    // 界面颜色与"跑完响不响"也在这里定（后端没有人给它 VSCode 的设置）。
+    const patch = {
+        themeMode: options.theme === "dark" ? "dark" : "light",
+        notifyBeep: options.toast === true,
+    };
+    if (options.model !== undefined) { patch.model = options.model; }
+    if (options.provider !== undefined) { patch.provider = options.provider; }
+    if (options.fakePi) {
+        // 假模型就是 piPath 指到本仓库的 dev/fake-pi.cmd（协议与真 pi 一致，只是按剧本演戏）；
+        // piPath 在 Windows 上得是 .cmd 才能被 shell 起来，所以包了一层。
+        patch.piPath = path.join(__dirname, process.platform === "win32" ? "fake-pi.cmd" : "fake-pi.sh");
+    }
+    if (options.piPath !== undefined) { patch.piPath = options.piPath; }
+    updateServerConfig(patch, SCRATCH_PICHAT_DIR);
+
+    // 派子会话要用的文件：真后端启动器会写，这里也得写一份（不然调试时派子会话是坏的）
+    ensureTabaAssets(version);
 
     const context = {
         subscriptions: [],
@@ -112,41 +148,39 @@ function createHarness(options = {}) {
         extension: { packageJSON: { version: "0.0.0-dev" } },
     };
 
-    const provider = new ChatViewProvider(context);
-    // 会话跑完的提醒会真的弹 Windows 通知，调试时默认掐掉（见上面的 toast 参数）。
-    if (options.toast !== true) { provider.notifyTurnEnd = () => { }; }
+    // 编辑器这屏：真插件代码，消息转给后端（后端起来前它自己会一直重试）
+    const output = fake.window.createOutputChannel("Pi Chat");
+    const provider = new ChatViewProvider(context, output);
 
-    const server = new PiChatWebServer(MEDIA_DIR, provider, {
-        log: (text) => log(`[网页服务] ${text}`),
-        onUrlChanged: () => { },
-    });
-
-    let started = false;
+    let started = null;
     return {
         provider,
-        server,
         cwd,
-        url: () => server.url,
-        /** 起服务，返回访问地址。 */
+        url: () => started && started.url,
+        /** 起后端，返回访问地址。 */
         async start() {
-            if (started) { return server.url; }
-            await server.applySettings({
-                enabled: true,
+            if (started) { return started.url; }
+            started = await startBackend({
+                cwd,
                 port: Number.isInteger(options.port) ? options.port : 51999,
                 host: options.host || "127.0.0.1",
+                log,
             });
-            started = true;
-            if (!server.url) { throw new Error("网页服务没起来（看看上面的日志）。"); }
-            return server.url;
+            // 会话跑完后端会真的弹 Windows 系统通知；调试里默认掐掉（要看就加 --toast）。
+            if (options.toast !== true) { started.host.notifyTurnEnd = () => { }; }
+            return started.url;
         },
-        /** 收摊：停网页服务、杀会话进程（不然 Node 进程退不出去）。 */
+        /** 收摊：停后端（连带杀掉会话进程）、放掉插件那侧注册的东西。 */
         async stop() {
-            try { await server.stop(); } catch { /* 已经停了 */ }
+            const running = started;
+            started = null;
+            if (running) { try { await running.stop(); } catch { /* 收摊出错不拦路 */ } }
             for (const item of context.subscriptions.splice(0)) {
                 try { item.dispose(); } catch { /* 收摊出错不拦路 */ }
             }
+            try { output.dispose(); } catch { /* 已经收了 */ }
         },
     };
 }
 
-module.exports = { createHarness, ensureScratchDir, repoRoot, MEDIA_DIR, SCRATCH_DIR };
+module.exports = { createHarness, ensureScratchDir, repoRoot, MEDIA_DIR, SCRATCH_DIR, SCRATCH_PICHAT_DIR };
