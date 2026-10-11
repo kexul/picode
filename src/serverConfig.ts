@@ -1,9 +1,9 @@
 /**
  * 独立后端（pichat 服务）的设置文件读写。
  *
- * 为什么单独有这份文件：侧边栏的设置存在 VSCode 的 settings.json 里，独立后端没有 VSCode，
- * 得自己有一份 JSON。属性名跟 VSCode 的设置项一一对应（piPath / provider / model 这些
- * 对应 piChat.*），两边对照着看就知道改的是哪一项。
+ * 后端所有设置（pi 路径、默认模型、网页服务、界面选项）都存在这一份 JSON 里，
+ * VSCode 插件、网页页面、独立后端共用同一份；旧版曾把一部分放在 VSCode 的
+ * settings.json 里，现已全部收拢到这份文件（~/.pi/pichat/config.json）。
  *
  * 读的时候不管文件里是什么都不抛异常：后端在启动早期就要这份配置，抛出去只会让人连界面
  * 都打不开。坏 JSON、类型不对的项一律回落默认值，把原因收集进 warnings 交上去给人看。
@@ -184,7 +184,7 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
         warnings.push(`配置里有不认识的项：${unknownKeys.join("、")}`);
     }
 
-    // ---- 启动 pi 用的参数（对应 piChat.piPath / provider / model / extraArgs / trustProject）----
+    // ---- 启动 pi 用的参数（config.json 顶层：piPath / provider / model / extraArgs / trustProject）----
     config.piPath = pickNonEmptyString(raw.piPath, DEFAULT_SERVER_CONFIG.piPath, "piPath", warnings);
     config.provider = pickString(raw.provider, DEFAULT_SERVER_CONFIG.provider, "provider", warnings);
     config.model = pickString(raw.model, DEFAULT_SERVER_CONFIG.model, "model", warnings);
@@ -230,7 +230,7 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
         raw.turnTitleWaitSeconds, 0, 60, DEFAULT_TURN_TITLE_WAIT_SECONDS, "turnTitleWaitSeconds", warnings,
     );
 
-    // ---- 网页服务（对应 piChat.webServer.*）----
+    // ---- 网页服务（config.json 的 webServer 一节）----
     const web = raw.webServer;
     if (web !== undefined) {
         if (!isPlainObject(web)) {

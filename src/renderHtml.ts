@@ -77,7 +77,9 @@ ${bodyTop}${tabbar}  <div id="messages">
     <div id="imgPreview"></div>
     <div id="inputRow">
       <div id="fileMenu" class="hidden"></div>
-      <textarea id="input"></textarea>
+      <!-- rows=1：autoResize 把 height 设回 auto 时，textarea 的高度由 rows 决定
+           （不写默认两行），网页端输入框起步只有一行，会被它顶高、清空后也回不去 -->
+      <textarea id="input" rows="1"></textarea>
     </div>
   </div>
   <div id="pickerOverlay" class="hidden">

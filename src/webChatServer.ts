@@ -60,7 +60,7 @@ export interface WebServerTimings {
     backlogBytes?: number;
 }
 
-/** 网页服务的设置（来自 piChat.webServer.* 配置项）。 */
+/** 网页服务的设置（来自 ~/.pi/pichat/config.json 的 webServer 一节）。 */
 export interface WebServerSettings {
     /** 是否开启网页服务（关闭时不监听端口，界面上也不显示入口）。 */
     enabled: boolean;
@@ -255,7 +255,7 @@ export class PiChatWebServer {
         if (isLoopbackName(this.boundHost)) { return; }
         const found = lanIpv4Addresses();
         this.hooks.log("注意：网页服务现在不只本机可用。同一网络里的任何设备打开下面这个地址，");
-        this.hooks.log("      就能读写这台机器上的文件、运行命令（背后是 pi）。只想自己用就把 piChat.webServer.host 改成 127.0.0.1。");
+        this.hooks.log("      就能读写这台机器上的文件、运行命令（背后是 pi）。只想自己用就把 ~/.pi/pichat/config.json 里的 webServer.host 改成 127.0.0.1。");
         if (found.length > 0) {
             this.hooks.log("手机等设备可用：" + found.map((ip) => `http://${ip}:${this.boundPort}/`).join("  "));
         }

@@ -269,9 +269,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
     // ---- 可选平台钩子 ----
     /** pi 不存在时追加的平台行为（基类已向 panel 推送 systemError）。 */
     protected onPiMissing(_piPath: string): void { /* 默认无操作 */ }
-    /** pi 缺失提示文案（基类默认；vscode 覆盖为更长文案并弹设置入口）。 */
+    /** pi 缺失提示文案（基类默认；独立后端覆盖为按实际目录算的路径）。 */
     protected piMissingMessage(piPath: string): string {
-        return `未找到 pi 可执行文件（当前配置："${piPath}"）。请确认已安装 pi 并加入 PATH，或在设置中指定 piPath。`;
+        return `未找到 pi 可执行文件（当前配置："${piPath}"）。请确认已安装 pi 并加入系统 PATH，`
+            + `或改 ~/.pi/pichat/config.json 里的 piPath。`;
     }
     /** 加载 / 切换会话后聚焦聊天视图（vscode 覆盖为聚焦侧栏）。 */
     protected async onFocusChat(): Promise<void> { /* 默认无操作 */ }
