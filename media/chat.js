@@ -208,6 +208,48 @@
   function renderInline(text) { ensureMarkedHighlight(); ensureFileLink(); return marked.parseInline(text, { gfm: true }); }
   function renderMarkdown(source) { ensureMarkedHighlight(); ensureFileLink(); return marked.parse(source, { breaks: true, gfm: true }); }
 
+  /**
+   * 按当前符号集合，把已渲染正文里的行内代码就地变成可点击的符号链接（或还原回普通文字）。
+   *
+   * 为什么整段重画（el.innerHTML = renderMarkdown(el.dataset.raw)）不行：工具标签、edit/write
+   * 小标签是运行时挂进 .md 里的 DOM，重画只认 markdown 原文，会把这些节点一起抹掉——
+   * 表现就是"工具调用时不时不见了"。只改行内 code 节点，别的东西一律不动。
+   *
+   * 判断规则与 marked 的 codespan 渲染器保持一致：文件路径优先（那类已经是文件链接，不动），
+   * 再看整段文本、或去掉结尾 () 的裸名在不在符号集合里。
+   */
+  function applySymbolLinks(mdEl) {
+    // 先还原：符号集合变小了（文件关掉、换会话），原来挂上去的链接就该不再可点
+    mdEl.querySelectorAll("a.symbol-link").forEach((a) => {
+      const name = a.getAttribute("data-symbol") || "";
+      if (symbolNames.has(name)) { return; }
+      const code = a.parentElement;
+      a.replaceWith(document.createTextNode(a.textContent || ""));
+      if (code) { code.normalize(); }
+    });
+    mdEl.querySelectorAll("code").forEach((code) => {
+      if (code.parentElement && code.parentElement.tagName === "PRE") { return; } // 代码块里的不碰
+      if (code.firstElementChild) { return; } // 已经有链接（文件或符号）
+      const text = code.textContent || "";
+      if (!text) { return; }
+      const m = FILE_RE.exec(text);
+      if (m && isFilePathlike(m[1])) { return; }
+      let name = text;
+      if (!symbolNames.has(name)) {
+        const bare = text.replace(/\(\)$/, "");
+        if (bare === text || !symbolNames.has(bare)) { return; }
+        name = bare;
+      }
+      const a = document.createElement("a");
+      a.className = "symbol-link";
+      a.href = "#";
+      a.setAttribute("data-symbol", name);
+      a.textContent = text;
+      code.textContent = "";
+      code.appendChild(a);
+    });
+  }
+
   const GEAR_SVG = '<span class="tool-icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M22.83,10.09 A11 11 0 0 1 22.83,13.91 L20.37,13.48 A8.5 8.5 0 0 1 18.96,16.88 A8.5 8.5 0 0 1 21.01,18.31 A11 11 0 0 1 18.31,21.01 L16.88,18.96 A8.5 8.5 0 0 1 13.48,20.37 A8.5 8.5 0 0 1 13.91,22.83 A11 11 0 0 1 10.09,22.83 L10.52,20.37 A8.5 8.5 0 0 1 7.12,18.96 A8.5 8.5 0 0 1 5.69,21.01 A11 11 0 0 1 2.99,18.31 L5.04,16.88 A8.5 8.5 0 0 1 3.63,13.48 A8.5 8.5 0 0 1 1.17,13.91 A11 11 0 0 1 1.17,10.09 L3.63,10.52 A8.5 8.5 0 0 1 5.04,7.12 A8.5 8.5 0 0 1 2.99,5.69 A11 11 0 0 1 5.69,2.99 L7.12,5.04 A8.5 8.5 0 0 1 10.52,3.63 A8.5 8.5 0 0 1 10.09,1.17 A11 11 0 0 1 13.91,1.17 L13.48,3.63 A8.5 8.5 0 0 1 16.88,5.04 A8.5 8.5 0 0 1 18.31,2.99 A11 11 0 0 1 21.01,5.69 L18.96,7.12 A8.5 8.5 0 0 1 20.37,10.52 Z"/><circle cx="12" cy="12" r="3.2"/></svg></span>';
   // 复制按钮图标：VS Code 官方 codicon copy 原始 path（fill 系图标，与 VS Code 界面同款）
   const COPY_SVG = '<svg viewBox="0 0 16 16" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M3 5V12.73C2.4 12.38 2 11.74 2 11V5C2 2.79 3.79 1 6 1H9C9.74 1 10.38 1.4 10.73 2H6C4.35 2 3 3.35 3 5ZM11 15H6C4.897 15 4 14.103 4 13V5C4 3.897 4.897 3 6 3H11C12.103 3 13 3.897 13 5V13C13 14.103 12.103 15 11 15ZM12 5C12 4.448 11.552 4 11 4H6C5.448 4 5 4.448 5 5V13C5 13.552 5.448 14 6 14H11C11.552 14 12 13.552 12 13V5Z"/></svg>';
@@ -3158,14 +3200,14 @@
 
     if (type === "symbolSet") {
       symbolNames = new Set(msg.names || []);
-      // 符号集合变化后，已渲染消息里的反引号可能需变成可点击链接：重渲染各 tab 的 .md；
-      // 流式中的活跃消息交给 flush 管线，避免与流式渲染竞争。
+      // 符号集合变化后，已渲染消息里的反引号可能需要变成可点击链接：就地补/去掉链接。
+      // 注意不能整段重画 .md（会把运行时挂进去的工具标签抹掉，见 applySymbolLinks）；
+      // 流式中的活跃消息交给 flush 管线，它下次重画时自然带上新符号集。
       for (const st of tabs.values()) {
         if (st.currentAssistant) { st.textDirty = true; scheduleFlush(st); }
         st.paneEl.querySelectorAll(".md").forEach((el) => {
           if (st.currentAssistant && el === st.currentAssistant.el) { return; }
-          const raw = el.dataset.raw;
-          if (typeof raw === "string") { el.innerHTML = renderMarkdown(raw); }
+          applySymbolLinks(el);
         });
       }
       return;

@@ -646,8 +646,8 @@
   .tool-image-block .tib-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tool-image-block .tc-dims { flex: 0 0 auto; }
   .tool-image-block .tc-images { margin: 0; }
-  /* 完整显示：按原图比例拉到对话宽度（窄图也拉满，长图就往下长）；点开还能看原图 */
-  .tool-image-block .tc-img { max-height: none; width: 100%; height: auto; }
+  /* 图块封顶：长图别把对话顶出好几屏（宽图缩到对话宽度、窄图不放大），点开还能看原图 */
+  .tool-image-block .tc-img { max-height: 320px; width: auto; max-width: 100%; height: auto; }
   .lightbox { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.72); }
   .lightbox.hidden { display: none; }
   .lightbox img { max-width: 96vw; max-height: 96vh; border-radius: 8px; box-shadow: 0 8px 40px rgba(0,0,0,0.5); cursor: zoom-out; }
