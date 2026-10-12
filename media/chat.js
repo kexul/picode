@@ -1080,12 +1080,12 @@
   // 鼠标停上去，提示框里把它们一条一条列出来（调用 + 结果），见 fillGroupTip。
   //
   // 不合并的（每次单独一个标签，连着来也各占一个）：
-  //   · taba / taba_stop / taba_peek（派子会话）、codemode（跑 JavaScript）—— 各自单独看一眼更清楚；
+  //   · taba / taba_stop / taba_peek（派子会话）—— 每次派的活不一样，各自单独看一眼更清楚；
   //   · write / edit —— 本来就不是小标签，是带 diff 的卡片（见 buildEditCard）；
   //   · 结果带图的 read —— 是不是图要等结果回来才知道，那条到了会从组里摘出去，
   //     在对话里铺成一整块图（见 removeEntryFromGroup）。
   // 一条正文（或用户消息）到来就换行、另起一批，上批的标签不再攒数。
-  const NO_MERGE_TOOLS = new Set(["write", "edit", "taba", "taba_stop", "taba_peek", "codemode"]);
+  const NO_MERGE_TOOLS = new Set(["write", "edit", "taba", "taba_stop", "taba_peek"]);
   const GROUP_RUNNING_TEXT = "运行中…";
 
   function addTool(st, toolName, argStr, toolCallId) {

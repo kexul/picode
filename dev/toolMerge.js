@@ -8,7 +8,7 @@
  *     名字不同 → 各占一个；中间夹了别的调用（不同名的、编辑卡片）不影响它攒数；
  *   · 鼠标停上去 → 提示框里一条条列出各条的调用与结果；
  *   · 结果乱序回来、有的失败、有一条还在跑 → 各自归位，标签上跟着标红、转圈；
- *   · taba / codemode（点名不合并）各自单独一个；
+ *   · taba（点名不合并）单独一个；codemode 跟别的工具一样收成一个（带次数）；
  *   · 结果带图的 read → 从组里摘出去，在对话里铺成一整块图（组里剩几条，小方块里的数字跟着重算）。
  *
  *   npm run web:shot -- --width 1000 --height 760 --script dev/toolMerge.js
@@ -99,23 +99,41 @@ module.exports = async (page) => {
     ]);
     console.log("\n第二幕（grep,grep,read,grep,ls —— 同名的一个标签，不同名各占一个）：\n" + await dump(page));
 
-    // ---- 第三幕：不合并的（codemode / taba）各自单独一个，编辑卡片也不影响同名的攒数 ----
+    // ---- 第三幕：codemode 跟普通工具一样收成一个（带次数），只剩 taba 单独一个；编辑卡片也不影响同名的攒数 ----
     await post(page, [
         call("c1", "codemode", { code: "return 1" }),
         call("c2", "bash", { command: "node scripts/compile.mjs --check" }),
         call("c3", "bash", { command: "npm run compile" }),
         ...editCard("c4", "edit", "media/chat.css"),
         call("c5", "bash", { command: "git diff --stat" }),
-        call("c6", "taba", { name: "侦察: 工具调用显示", task: "看一遍 chat.js" }),
-        call("c7", "find", { pattern: "**/*.md", path: "dev" }),
+        call("c6", "codemode", { code: "return 2" }),
+        call("c7", "taba", { name: "侦察: 工具调用显示", task: "看一遍 chat.js" }),
+        call("c8", "find", { pattern: "**/*.md", path: "dev" }),
         done("c1", "1"),
         done("c2", "文件在"),
         done("c3", "编译完成"),
         done("c5", " media/chat.js | 40 +++---"),
-        done("c6", "派了子会话（假数据，没真派）"),
-        done("c7", "dev/README.md"),
+        done("c6", "2"),
+        done("c7", "派了子会话（假数据，没真派）"),
+        done("c8", "dev/README.md"),
     ]);
-    console.log("\n第三幕（codemode,bash,bash,edit,bash,taba,find —— 三个 bash 算一起，标签停在第一个 bash 的位置）：\n" + await dump(page));
+    console.log("\n第三幕（codemode,bash,bash,edit,bash,codemode,taba,find —— 两个 codemode 和三个 bash 各算一起，taba 单独一个）：\n" + await dump(page));
+
+    // codemode 收成一个之后，鼠标停上去：两次调用（带结果）应该一条条列出来
+    await page.eval(`
+        const el = Array.from(document.querySelectorAll(".tool-group")).find((t) => t.textContent.trim().startsWith("codemode"));
+        if (!el) { throw new Error("页面上没有 codemode 标签"); }
+        el.dispatchEvent(new MouseEvent("mouseenter"));
+        return true;
+    `);
+    await page.sleep(500);
+    await page.shot("merge-codemode-tip.png");
+    await page.eval(`
+        const el = Array.from(document.querySelectorAll(".tool-group")).find((t) => t.textContent.trim().startsWith("codemode"));
+        if (el) { el.dispatchEvent(new MouseEvent("mouseleave")); }
+        return true;
+    `);
+    await page.sleep(200);
 
     // ---- 第四幕：同名组里夹着一条"读图"（结果带图）——那一条摘出去单独铺一块图，方块里的数字跟着减 ----
     await post(page, [
