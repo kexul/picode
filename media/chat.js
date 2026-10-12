@@ -671,7 +671,12 @@
   }, true);
   window.addEventListener("resize", () => { if (sessionMenuOpen) { placeSessionMenu(); } });
 
+  // 空提示每个窗格只可能有一份：查过一次就记住，别再对着几百条消息的子树反复
+  // querySelector（整屏重画时每条消息都查一次，那是 n²；实测占掉打开长会话 11% 的时间）。
+  // clear 会把窗格重写成带空提示的一屏，那时重置这个标记（见 clear 分支）。
   function hideEmptyHint(st) {
+    if (st.emptyHintGone) { return; }
+    st.emptyHintGone = true;
     const hint = st.paneEl.querySelector(".empty-hint");
     if (hint) { hint.remove(); }
   }
@@ -731,15 +736,25 @@
     }
     if (!st.lerpRafId) { st.lerpRafId = requestAnimationFrame(() => lerpScrollStep(st)); }
   }
+  /**
+   * 滚到底。两点讲究（都是从“打开长会话要好几秒”那个坑里总结出来的）：
+   *   · 不读 scrollHeight：读它会让浏览器立刻做一次完整重排；整屏重画是几百条消息
+   *     挨个进来的，每条读一次就是几百次重排（总量是 n²）。给一个足够大的数，
+   *     浏览器自己会夹到最大滚动位置。
+   *   · 一帧里只滚一次：整屏重画是一个同步循环，中间那些滚动本来就没人看得见。
+   */
   function scrollToBottom(st, force) {
-    if (force || st.stickToBottom) {
-      if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); st.lerpRafId = 0; }
+    if (!force && !st.stickToBottom) { return; }
+    if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); st.lerpRafId = 0; }
+    st.stickToBottom = true;
+    st.hasNewContent = false;
+    syncJumpBottom(st);
+    if (st.scrollRafId) { return; }
+    st.scrollRafId = requestAnimationFrame(() => {
+      st.scrollRafId = 0;
       st.programmaticScroll = true;
-      st.paneEl.scrollTop = st.paneEl.scrollHeight;
-      st.stickToBottom = true;
-      st.hasNewContent = false;
-      syncJumpBottom(st);
-    }
+      st.paneEl.scrollTop = 1e9;   // 夹到最大：没有读，就不会逼出一次同步重排
+    });
   }
   // 用户主动接管滚动（滚轮/触屏/键盘向上）：立刻停掉 lerp 追底，交还控制权。
   // 流式中同步亮起“跳到最新”按钮；非流式不打扰（用户只是回看已结束的回复）。
@@ -3397,6 +3412,7 @@
         cancelFlush(t);
         hideTagTip();
         t.paneEl.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
+        t.emptyHintGone = false;   // 空提示又回来了（见 hideEmptyHint）
         // 历史窗口状态一并重置：按钮随 innerHTML 清掉了；暂存区里若有没插完的
         // 「加载更早」那批也作废（会话已换，再插进去就串了），置个丢弃标记等 End 来清
         t._historyBtn = null;

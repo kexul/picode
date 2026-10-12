@@ -14,6 +14,19 @@ const path = require("path");
 const { createHarness } = require("./harness.js");
 const { openPage, sleep } = require("./cdp.js");
 
+/** 一个正在长的超大代码块（模型一口气吐一大段代码时的最坏情况）。 */
+function buildBigCode(lines) {
+    const out = ["先看代码：\n\n```typescript\n"];
+    for (let i = 0; i < lines; i++) {
+        out.push(`function step${i}(input: string, count: number): string {\n`);
+        out.push(`  const parts = input.split("\\n").filter((line) => line.length > ${i});\n`);
+        out.push(`  return parts.slice(0, count).join("\\n");\n}\n`);
+    }
+    out.push("```\n");
+    return out.join("");
+}
+
+
 /** 一段像真模型回复的内容（长文 + 几个代码块）：用来量流式渲染的开销。 */
 function buildAnswer(paragraphs, codeBlocks) {
     const out = ["## 结论\n\n下面按你问的三件事分开说。\n"];
@@ -59,6 +72,7 @@ async function main() {
     const flag = (name) => argv.includes("--" + name);
     const seconds = Number(arg("seconds", 15));
     const toSend = arg("send", "");
+    const bigCode = Number(arg("bigcode", 0));
     const stream = flag("stream");
     const charsPerSec = Number(arg("chars-per-sec", 200));
     const prefill = Number(arg("prefill", 0));
@@ -90,7 +104,7 @@ async function main() {
         console.log(`地址：${url}  （视口 412x915 @3x，${stream ? "流式回复中" : toSend ? "发消息后" : "什么都不做"}，量 ${seconds} 秒）`);
 
         if (stream) {
-            const answer = buildAnswer(6, 2);
+            const answer = bigCode > 0 ? buildBigCode(bigCode) : buildAnswer(6, 2);
             const chunk = Math.max(1, Math.round(charsPerSec * 0.025));   // 每 25 毫秒投一批
             console.log(`投流式内容：${answer.length} 个字符，每 25 毫秒一批 ${chunk} 个字符（约 ${charsPerSec} 字符/秒）`);
             await page.eval(`
@@ -123,6 +137,45 @@ async function main() {
             // 让它先跑一会儿再开始计数
             await sleep(3000);
         }
+        if (batch > 0) {
+            // 模拟刚打开一个长会话：后端整屏重画（clear + 一条条消息）。
+            // 这里把“注入脚本要多久”与“之后浏览器把这一大堆内容排版出来要多久”分开量：
+            // 前者是拿消息那段循环（纯脚本），后者是随后静置这段时间的主线程占用（主要是排版与绘制）。
+            const template = buildAnswer(1, 1).slice(0, 2000);
+            const items = [];
+            for (let i = 0; i < batch; i++) {
+                items.push({ type: "userMessage", text: "第 " + (i + 1) + " 轮：请解释一下这段实现。" });
+                // 每条消息的代码不一样：真实历史里内容各不相同，高亮缓存不会全命中
+                items.push({ type: "assistantFull", text: template.replace(/step0_0_/g, "m" + i + "_") });
+            }
+            const batchBefore = await metrics(cdp);
+            await cdp.send("Profiler.enable");
+            await cdp.send("Profiler.setSamplingInterval", { interval: 200 });
+            await cdp.send("Profiler.start");
+            const took = await page.eval(`
+                const pane = document.querySelector(".session-pane");
+                const sessionId = pane.dataset.sessionId;
+                const send = function (msg) {
+                    window.dispatchEvent(new MessageEvent("message", { data: Object.assign({ sessionId: sessionId }, msg) }));
+                };
+                const items = ${JSON.stringify(items)};
+                const t0 = performance.now();
+                send({ type: "clear" });
+                for (const msg of items) { send(msg); }
+                return Math.round(performance.now() - t0);
+            `);
+            const injectWall = 2.5;
+            const batchProfile = (await cdp.send("Profiler.stop")).profile;
+            await sleep(injectWall * 1000);
+            const batchAfter = await metrics(cdp);
+            const bDelta = (k) => Math.max(0, (batchAfter[k] || 0) - (batchBefore[k] || 0));
+            const bPct = (v) => ((v * 1000 / (injectWall * 1000)) * 100).toFixed(1) + "%";
+            console.log(`整屏重画 ${items.length} 条消息（约 ${Math.round(items.length * 2000 / 1024)} KB）：`);
+            console.log(`  跑消息那段循环（纯脚本）  ：${took} 毫秒`);
+            console.log(`  这 ${injectWall} 秒里主线程忙     ：${bPct(bDelta("TaskDuration"))}（排版 ${bPct(bDelta("LayoutDuration"))}，算样式 ${bPct(bDelta("RecalcStyleDuration"))}）`);
+            console.log(`  排版次数 ${bDelta("LayoutCount")}，算样式次数 ${bDelta("RecalcStyleCount")}`);
+            printHotspots(batchProfile, "整屏重画期间的热点");
+        }
         if (scrollSwipes > 0) {
             // 先把一段长内容一次性投进去（像刚打开一个长会话），再像看消息那样往上滑着看
             const answer = buildAnswer(6, 2).slice(0, Math.max(4000, prefill));
@@ -138,29 +191,6 @@ async function main() {
                 return true;
             `);
             await sleep(1500);
-        }
-        if (batch > 0) {
-            // 模拟刚打开一个长会话：后端整屏重画（clear + 一条条消息）
-            const one = buildAnswer(1, 1).slice(0, 2000);
-            const items = [];
-            for (let i = 0; i < batch; i++) {
-                items.push({ type: "userMessage", text: "第 " + (i + 1) + " 轮：请解释一下这段实现。" });
-                items.push({ type: "assistantFull", text: one });
-            }
-            const took = await page.eval(`
-                const pane = document.querySelector(".session-pane");
-                const sessionId = pane.dataset.sessionId;
-                const send = function (msg) {
-                    window.dispatchEvent(new MessageEvent("message", { data: Object.assign({ sessionId: sessionId }, msg) }));
-                };
-                const items = ${JSON.stringify(items)};
-                const t0 = performance.now();
-                send({ type: "clear" });
-                for (const msg of items) { send(msg); }
-                return Math.round(performance.now() - t0);
-            `);
-            console.log(`整屏重画 ${items.length} 条消息（约 ${Math.round(items.length * 2000 / 1024)} KB）花了 ${took} 毫秒（只算脚本，不含排版绘制）`);
-            await sleep(3000);
         }
         if (toSend) { await page.send(toSend); }
 
@@ -218,6 +248,9 @@ async function main() {
                 assistantChars: Array.from(document.querySelectorAll(".msg.assistant .md")).map(function (e) { return e.textContent.length; }),
                 paneScrollHeight: pane ? pane.scrollHeight : 0,
                 paneHeight: pane ? pane.clientHeight : 0,
+                paneScrollTop: pane ? pane.scrollTop : -1,
+                paneAtBottom: pane ? (pane.scrollHeight - pane.scrollTop - pane.clientHeight) < 4 : null,
+                emptyHints: document.querySelectorAll(".empty-hint").length,
             };
         `);
 
@@ -239,6 +272,7 @@ async function main() {
         console.log("DOM：" + domInfo.nodes + " 个元素，消息 " + domInfo.messages + " 条，工具卡片 " + domInfo.toolCards + " 个");
         console.log("助手消息渲染出的字数：" + JSON.stringify(domInfo.assistantChars));
         console.log("会话窗格：" + domInfo.paneScrollHeight + " 像素内容 / " + domInfo.paneHeight + " 像素可见");
+        console.log("滚动位置：scrollTop=" + domInfo.paneScrollTop + "，到底了吗：" + domInfo.paneAtBottom + "，残留的空提示：" + domInfo.emptyHints);
         console.log("");
         console.log("这段时间在跑的动画（开始）：" + (animationsA.length ? JSON.stringify(animationsA, null, 0) : "没有"));
         console.log("这段时间在跑的动画（结束）：" + (animationsB.length ? JSON.stringify(animationsB, null, 0) : "没有"));
@@ -259,7 +293,7 @@ async function main() {
 main().catch((err) => { console.error("\n出错了：" + (err?.message || err)); process.exit(1); });
 
 /** 把采样剖析里的"自己花时间最多"的函数挑出来打印。 */
-function printHotspots(profile) {
+function printHotspots(profile, title) {
     if (!profile || !profile.nodes) { return; }
     const byId = new Map();
     for (const n of profile.nodes) { byId.set(n.id, n); }
@@ -278,7 +312,7 @@ function printHotspots(profile) {
     rows.sort((a, b) => b.hits - a.hits);
     const total = (profile.samples || []).length;
     const perSample = (profile.timeDeltas || []).reduce((a, b) => a + b, 0) / 1e6 / (total || 1);
-    console.log("=== CPU 采样热点（共 " + total + " 个采样，每个约 " + (perSample * 1000).toFixed(2) + " 毫秒） ===");
+    console.log("=== CPU 采样热点" + (title ? "（" + title + "）" : "") + "（共 " + total + " 个采样，每个约 " + (perSample * 1000).toFixed(2) + " 毫秒） ===");
     const seen = new Set();
     let printed = 0;
     for (const row of rows) {
