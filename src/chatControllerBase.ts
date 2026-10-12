@@ -946,8 +946,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
             // 这个会话跑在哪个目录：界面拿它把会话归到「项目与会话」面板的对应工作区里
             // （切了工作区之后，上半只列那个目录里开着的会话）。
             cwd,
-            // 跑在别的目录上的会话，名字后面挂上目录名（默认目录的不挂，免得满屏后缀）。
-            name: this.sameDir(cwd, this.getCwd()) ? name : `${name} · ${path.basename(cwd) || cwd}`,
+            // 名字不带目录后缀：顶条名字底下已经有一行完整路径，「项目与会话」面板
+            // 也按工作区分了组，后缀只会重复。（# 引用菜单仍用附注行标目录，见 getChatReferenceItems。）
+            name,
             // pi 那边给会话起的标题（自动命名扩展 / /name 写的）；还没起就是空串，
             // 界面拿它当会话名，空的时候回落 name。
             title: rt.sessionTitle || "",

@@ -56,6 +56,8 @@
   // 顶条名字底下那行小字：当前会话跑在哪个目录（内容由 renderSessionBar 填）
   const sessionPathEl = document.getElementById("sessionPath");
   const sessionPathTextEl = sessionPathEl ? sessionPathEl.querySelector(".sp-text") : null;
+  // 顶条中间那一列（会话名 + 目录两行）：两行合起来就是一块可点区域，见下面的点击监听
+  const sessionCenterEl = document.getElementById("sessionCenter");
   // 输入框的起步高度：固定占 144px（约七行）；浏览器那份页面在 CSS 里把
   // --pichat-input-min-height 设成了一行，这里读出来当最小高度（读不到就用默认值，
   // 所以 VSCode 里的行为不变）。打字多了照样往上涨，上限仍然是 autoResize 里的 640px。
@@ -71,8 +73,9 @@
   newSessionBtn.addEventListener("click", () => {
     vscode.postMessage({ type: "newSession" });
   });
-  // 顶条中间那颗会话名：点它掉出一张清单，里面是开着的会话（点一行就切过去）。
-  sessionNameBtn.addEventListener("click", () => { toggleSessionMenu(); });
+  // 顶条中间那一列（会话名 + 底下那行目录）：点哪一行都掉出同一张清单。
+  // 挂在整列上而不是名字那颗按钮上：两行都得是可点区域；按钮上按回车出来的点击也会冒到这里。
+  sessionCenterEl.addEventListener("click", () => { toggleSessionMenu(); });
   // 名字后面那颗朝下的小箭头：只在开着两个以上会话时露面（提示这里点得开、能换）。
   // 画的还是那份 chevron（画的是朝右），转 90° 成朝下。
   const sessionCaret = document.createElement("span");
@@ -538,8 +541,9 @@
     sessionNameBtn.classList.toggle("unread", Array.from(sessions.values()).some((s) => s.unread));
     // 就一个主会话时不必提示“这里能换”（点开还是同一张清单：里面就它自己）
     sessionCaret.classList.toggle("hidden", sessionMenuItems().length < 2);
-    // 清单开着的时候它会跟着变（换会话、改标题、某个会话跑完了）
-    if (sessionMenuOpen) { renderSessionMenu(); }
+    // 清单开着的时候它会跟着变（换会话、改标题、某个会话跑完了）：重画完还要重新摆——
+    // 内容变宽变窄了，贴着屏幕边的位置就不对了。
+    if (sessionMenuOpen) { renderSessionMenu(); placeSessionMenu(); }
   }
 
   // ==================== 顶条那颗会话名的下拉框 ====================
@@ -553,13 +557,24 @@
   document.body.appendChild(sessionMenuEl);
   let sessionMenuOpen = false;
 
-  /** 把清单贴在名字底下：先按名字中心摆，再往两边收一收，别跑出屏幕。 */
+  /** 把清单贴在中间那一列底下（名字与目录两行都在它上面，清单别盖住目录行）：
+   *  先量准宽度，再把整块夹进屏幕里（左右各留 8px）。 */
   function placeSessionMenu() {
-    const rect = sessionNameBtn.getBoundingClientRect();
-    const half = sessionMenuEl.offsetWidth / 2;
-    const cx = Math.min(Math.max(rect.left + rect.width / 2, half + 8), window.innerWidth - half - 8);
-    sessionMenuEl.style.left = Math.round(cx) + "px";
-    sessionMenuEl.style.top = Math.round(rect.bottom + 4) + "px";
+    const anchor = (sessionCenterEl || sessionNameBtn).getBoundingClientRect();
+    const margin = 8;
+    // 量之前先把上一次留下的 left / width 清掉：left 留着会挤小可用宽度、
+    // 上一次钉死的 width 会掩盖内容的自然宽度，两种都会把宽度量成错的。
+    sessionMenuEl.style.left = "0px";
+    sessionMenuEl.style.width = "";
+    const room = Math.max(140, window.innerWidth - margin * 2);
+    const natural = sessionMenuEl.offsetWidth;
+    const width = Math.min(natural, room);
+    // 比一屏还宽就在这儿钉住（CSS 的 max-width 会管，但那是以内容盒算的，这里按整块算）
+    if (natural > room) { sessionMenuEl.style.width = width + "px"; }
+    const wantLeft = anchor.left + anchor.width / 2 - width / 2;
+    const left = Math.max(margin, Math.min(wantLeft, window.innerWidth - margin - width));
+    sessionMenuEl.style.left = Math.round(left) + "px";
+    sessionMenuEl.style.top = Math.round(anchor.bottom + 4) + "px";
   }
 
   /**
@@ -577,14 +592,24 @@
     sessionMenuItems().forEach((item) => {
       const el = document.createElement("div");
       el.className = "sm-item" + (item.current ? " current" : "");
-      el.title = item.label || "";
+      el.title = (item.label || "") + (item.cwd ? "\n" + item.cwd : "");
       const dot = document.createElement("span");
       dot.className = "sm-dot" + openDotClass(item);
       el.appendChild(dot);
+      // 一行两段：上面会话名，下面它跑在哪个目录（子会话不在这个清单里）
+      const body = document.createElement("div");
+      body.className = "sm-body";
       const name = document.createElement("span");
       name.className = "sm-name";
       name.textContent = item.label || "";
-      el.appendChild(name);
+      body.appendChild(name);
+      if (item.cwd) {
+        const dir = document.createElement("span");
+        dir.className = "sm-path";
+        dir.textContent = item.cwd;
+        body.appendChild(dir);
+      }
+      el.appendChild(body);
       // 行尾不再挂「当前」/「在跑」：当前那条整行有底色，在跑 / 有新消息看名字前头那颗小点。
       el.addEventListener("click", () => {
         closeSessionMenu();
@@ -617,7 +642,7 @@
   // 点别处 / 按 Esc 收起来；窗口尺寸变了重新贴回名字底下。
   document.addEventListener("pointerdown", (e) => {
     if (!sessionMenuOpen) { return; }
-    if (sessionMenuEl.contains(e.target) || sessionNameBtn.contains(e.target)) { return; }
+    if (sessionMenuEl.contains(e.target) || sessionCenterEl.contains(e.target)) { return; }
     closeSessionMenu();
   }, true);
   document.addEventListener("keydown", (e) => {
@@ -1491,7 +1516,7 @@
 
   function draftOfSession() {
     if (!sessionDrafts.has(activeId)) {
-      sessionDrafts.set(activeId, { text: "", selStart: 0, selEnd: 0, height: INPUT_MIN_HEIGHT, images: [], textBlocks: [] });
+      sessionDrafts.set(activeId, { text: "", selStart: 0, selEnd: 0, images: [], textBlocks: [] });
     }
     const d = sessionDrafts.get(activeId);
     if (!Array.isArray(d.images)) { d.images = []; }
@@ -1503,7 +1528,6 @@
     d.text = inputEl.value;
     d.selStart = inputEl.selectionStart;
     d.selEnd = inputEl.selectionEnd;
-    d.height = parseInt(inputEl.style.height, 10) || INPUT_MIN_HEIGHT;
   }
   /**
    * 页面刚打开那一两秒还没有会话，输入区里的字记在“还没有会话”那份草稿（键是 null）下。
@@ -1517,7 +1541,6 @@
       text: inputEl.value,
       selStart: inputEl.selectionStart,
       selEnd: inputEl.selectionEnd,
-      height: parseInt(inputEl.style.height, 10) || INPUT_MIN_HEIGHT,
       images: (pending && pending.images) || [],
       textBlocks: (pending && pending.textBlocks) || [],
     });
@@ -1526,7 +1549,9 @@
   function restoreInputState() {
     const d = draftOfSession();
     inputEl.value = d.text || "";
-    inputEl.style.height = (d.height || INPUT_MIN_HEIGHT) + "px";
+    // 高度按当前内容重算（autoResize）：草稿里不存高度——存下来的那个可能是
+    // 另一个窗口宽度下算出来的，用在这儿要么矮一截（冒滚动条）、要么空一大块。
+    autoResize();
     try {
       inputEl.setSelectionRange(d.selStart || 0, d.selEnd || 0);
     } catch { /* ignore */ }
@@ -1681,6 +1706,8 @@
         taba: st.taba || null,
         depth,
         pendingClose: pendingCloseId === st.id,
+        // 下拉框里第二行显示它跑在哪个目录（同名会话靠它分辨）
+        cwd: st.cwd || "",
       });
     };
     ordered.forEach((st) => {
@@ -2670,6 +2697,14 @@
       : inputEl.scrollHeight - padding;
     inputEl.style.height = Math.min(Math.max(height, INPUT_MIN_HEIGHT), 640) + "px";
   }
+
+  // 窗口（侧边栏）宽度变了：同一段字会折成不同的行数，高度得跟着重算——
+  // 不然框比内容矮一截，右边就冒出一根滚动条。拖侧边栏会连发很多次，一帧合一次。
+  let autoResizeFrame = 0;
+  window.addEventListener("resize", () => {
+    if (autoResizeFrame) { return; }
+    autoResizeFrame = requestAnimationFrame(() => { autoResizeFrame = 0; autoResize(); });
+  });
   function shouldFoldText(text) {
     if (typeof text !== "string" || !text) { return false; }
     if (text.length > BIG_TEXT_CHARS) { return true; }
@@ -2734,7 +2769,6 @@
     inputEl.value = "";
     inputEl.style.height = INPUT_MIN_HEIGHT + "px";
     d.text = "";
-    d.height = INPUT_MIN_HEIGHT;
     d.images = [];
     d.textBlocks = [];
     hideFileMenu(); hideHashMenu(); closeSlashMenu(); fileMenuEl.classList.add("hidden");
@@ -3255,7 +3289,6 @@
         if (!msg.keepDraft && activeId === t.id) {
           const d = draftOfSession();
           d.text = "";
-          d.height = INPUT_MIN_HEIGHT;
           d.images = [];
           d.textBlocks = [];
           inputEl.value = "";

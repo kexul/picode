@@ -38,7 +38,13 @@
     display: flex; align-items: flex-start; gap: 6px; flex: 0 0 auto;
     padding: 5px 8px 4px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
   }
-  #sessionCenter { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+  /* 整列（名字 + 目录两行）合起来是一块可点区域：点哪一行都开同一张清单，
+     悬停时两行一起亮。用了不可选中：拖选文字也会把手势变成一次点击。 */
+  #sessionCenter {
+    flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column;
+    border-radius: 4px; cursor: pointer; user-select: none;
+  }
+  #sessionCenter:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
   /* 加号：竖着撑满整个顶条（上下留白由顶条自己的内边距给），好点、不误触 */
   #newSessionBtn {
     flex: 0 0 auto; align-self: stretch; width: 32px; padding: 0; border: none; background: transparent;
@@ -54,7 +60,6 @@
     color: var(--vscode-foreground); font-family: inherit; font-size: 0.95em;
     cursor: pointer; user-select: none;
   }
-  #sessionName:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
   #sessionName .sn-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.85; }
   #sessionName .sn-dot {
     flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%;
@@ -85,19 +90,29 @@
   /* ---- 顶条那颗会话名的下拉 ---- */
   /* 贴在名字底下的一张清单：开着的主会话一行一个（子会话不在里面，去「项目与会话」面板看）。 */
   #sessionMenu {
-    position: fixed; z-index: 30; min-width: 180px; max-width: min(320px, calc(100vw - 16px));
+    position: fixed; z-index: 30; box-sizing: border-box;
+    min-width: 180px; max-width: min(420px, calc(100vw - 16px));
     max-height: 60vh; overflow-y: auto; padding: 4px;
     background: var(--vscode-dropdown-background, var(--vscode-editorWidget-background));
     border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border, rgba(128,128,128,0.4)));
     border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,0.35);
     font-family: var(--vscode-font-family); font-size: 13px;
-    opacity: 1; transform: translateX(-50%);
+    opacity: 1;
+    /* 不靠 translateX(-50%) 居中：位置由 chat.js 量好宽度再算，
+       夹进屏幕时才知道自己有多宽（见 placeSessionMenu）。 */
   }
   #sessionMenu.hidden { display: block; opacity: 0; pointer-events: none; visibility: hidden; }
   .sm-item { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 4px; cursor: pointer; user-select: none; }
   .sm-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
   .sm-item.current { background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.28)); color: var(--vscode-list-activeSelectionForeground, inherit); }
   .sm-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9em; }
+  /* 一行两段：名在上、路径在下 */
+  .sm-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+  /* 路径小一号、淡一点；长了从前面截、保住尾巴（哪个文件夹一眼看得出） */
+  .sm-path {
+    font-size: 0.76em; opacity: 0.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    direction: rtl; text-align: left;
+  }
   /* 小点：在跑＝蓝点呼吸，有新消息＝蓝点不闪，出错＝红点，其余不显示（但位置留着，名字才对得齐）。 */
   .sm-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; }
   .sm-dot.running { background: var(--vscode-charts-blue, #3794ff); animation: pi-pulse 1.2s ease-in-out infinite; }
@@ -590,12 +605,15 @@
     margin: 3px 0 0 24px; font-size: 11px;
     color: var(--vscode-descriptionForeground, inherit); opacity: 0.85;
   }
-  /* 工作区行的路径：默认不占第二行；完整路径仍在 title 属性中，可悬停确认。 */
+  /* 工作区行的路径：另起一行整条列出来（同名目录靠它分辨）。一行放不下时从前面截、留尾巴：
+     父目录那一段优先保住（末尾的文件夹名上面那行就是，截掉不心疼）。
+     左边截用 direction: rtl（行尾在左边，省略号就落在开头）；文字还是左对齐。 */
   #pickerOverlay.pk-drawer .pk-space-path {
     margin: 3px 0 0 24px; font-size: 11px; opacity: 0.55;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    direction: rtl; text-align: left;
   }
-  #pickerOverlay.pk-workspace .pk-space-path,
+  /* 「浏览文件夹…」那行的说明文字在项目与会话面板里不占地方（工作区行自己的路径照常显示）。 */
   #pickerOverlay.pk-workspace .pk-browse-desc { display: none; }
   /* 工作区是资源树，不显示会话条数与相对时间；会话仍在右侧保留更新时间。 */
   #pickerOverlay.pk-workspace .pk-space .pk-history-right { display: none; }
