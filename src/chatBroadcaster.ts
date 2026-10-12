@@ -5,10 +5,10 @@ import {
 } from "./webTransport";
 
 /**
- * ChatBroadcaster —— 侧边栏与网页页面共用的消息出口。
+ * ChatBroadcaster —— 插件里的对话面板与浏览器页面共用的消息出口。
  *
  * 会话编排（ChatControllerBase）往外推的每条消息从这里发给所有"页面"：
- * 侧边栏那份 webview 走 postMessage（不走这里），浏览器页面走网页服务的推送流。
+ * 插件里那份对话面板走 postMessage（不走这里），浏览器页面走网页服务的推送流。
  * 网页可以同时连着好几个（手机 + 电脑），推的消息发给每一个；
  * 每条实时消息记一个递增序号并进补发暂存，页面重连后按序号补拉漏掉的消息。
  *
@@ -145,7 +145,7 @@ export class ChatBroadcaster {
 
     /**
      * 人最后一次做动作的页面与时刻（报活不算动作）。
-     * 确认框弹到哪个页面、还是弹回 VSCode，靠它与侧边栏的最近动静比新旧。
+     * 确认框弹到哪个页面、还是弹回 VSCode，靠它与插件里对话面板的最近动静比新旧。
      */
     public recentActionPage(): { id: string; at: number } | undefined {
         let best: { id: string; at: number } | undefined;

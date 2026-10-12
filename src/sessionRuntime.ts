@@ -203,7 +203,7 @@ export class SessionRuntime {
             resolvePath: (p) => this.host.resolvePath(p, this.cwd),
             post: (msg) => this.post(msg),
             onKnownFilesChanged: () => this.host.onKnownFilesChanged?.(this.id),
-            confirmRevert: (label) => this.host.confirmRevert(label),
+            confirmRevert: (label) => this.host.confirmRevert(label, this.id),
         });
     }
 
@@ -413,6 +413,10 @@ export class SessionRuntime {
     public async sendCurrentModel(): Promise<void> {
         const resp = await this.request<RpcSessionState>({ type: "get_state" });
         this.captureSessionName(resp?.data);
+        // 会话文件也顺手记下来：界面上“这个会话被关掉了，重新打开”要靠它；
+        // 另外“这个历史会话是不是已经开着”也是比这个路径（见 sessionRunningFile）。
+        const sessionFile = resp?.data?.sessionFile;
+        if (sessionFile) { this.currentSessionPath = sessionFile; }
         const model = resp?.data?.model;
         if (model && model.id) {
             this.statusModelId = model.id;
@@ -766,13 +770,14 @@ export class SessionRuntime {
         };
         switch (req.method) {
             case "confirm":
+                // 带上会话：弹给正在看这个会话的那块屏（两个窗口时别弹到没在看它的那边去）
                 this.host
-                    .confirmDialog(req.title ?? "确认", req.message ?? "")
+                    .confirmDialog(req.title ?? "确认", req.message ?? "", this.id)
                     .then((ok) => respond({ confirmed: ok }));
                 break;
             case "select":
                 this.host
-                    .selectDialog(req.title, req.options ?? [])
+                    .selectDialog(req.title, req.options ?? [], this.id)
                     .then((value) =>
                         value === undefined ? respond({ cancelled: true }) : respond({ value })
                     );
@@ -780,7 +785,7 @@ export class SessionRuntime {
             case "input":
             case "editor":
                 this.host
-                    .inputDialog(req.title, req.placeholder, req.prefill)
+                    .inputDialog(req.title, req.placeholder, req.prefill, this.id)
                     .then((value) =>
                         value === undefined ? respond({ cancelled: true }) : respond({ value })
                     );
@@ -1194,7 +1199,7 @@ export class SessionRuntime {
         return commandMenuItems(list);
     }
 
-    public async pickModel(echoT0?: number): Promise<void> {
+    public async pickModel(echoT0?: number, clientId?: string): Promise<void> {
         if (!this.client || !this.client.isRunning()) {
             this.startClient();
         }
@@ -1216,7 +1221,9 @@ export class SessionRuntime {
             currentThinking,
             currentProvider,
             currentModelId,
-            typeof echoT0 === "number" ? { t0: echoT0 } : undefined
+            typeof echoT0 === "number" ? { t0: echoT0 } : undefined,
+            // 点的是哪块屏，选择器就弹在哪块屏：别的窗口最近动过不代表它该弹到那边去
+            clientId,
         );
         if (!choice) {
             return;

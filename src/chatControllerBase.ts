@@ -53,6 +53,7 @@ import {
 } from "./tabaLaunch";
 import { buildRunRecord, closedRunState, tabaRunsDir, writeRunRecord, type TabaRunState } from "./tabaRunFiles";
 import type { RpcSessionState } from "./piRpc";
+import type { ProjectEntry } from "./sessionStore";
 
 /** # 引用菜单里的一行：一个会话（或其某个子会话）。 */
 export interface ChatReferenceItem {
@@ -61,26 +62,84 @@ export interface ChatReferenceItem {
     sub: string;
 }
 
+/**
+ * 一块屏开着的浮层那一摊（历史列表 / 项目与会话 / 文件夹 / 模型）。
+ * 按屏分开存：两个窗口各自开着自己的列表，“加载更多”、选完以后用哪份数据，各算各的。
+ */
+export interface PickerState {
+    /** 浮层类型（history / workspace / folders / model 这类）；空串 = 这块屏上没开浮层。 */
+    kind: string;
+    /** 等用户选择那个 Promise 的放行函数；没人等就是 null。 */
+    resolve: ((v: any | undefined) => void) | null;
+    /** 没人答就收掉，这个定时器在挂着。 */
+    timer?: ReturnType<typeof setTimeout>;
+    /** 这个浮层列的是哪些会话文件（历史列表 / 项目面板上半段）；开列表时重建。 */
+    historyFiles: SessionFileEntry[];
+    /** 已经扫到第几个文件（「加载更多」接着往后扫）。 */
+    historyOffset: number;
+    /** 项目面板现在显示的是哪个目录（点下面的工作区会变）。 */
+    workspaceFolder: string;
+    /** 项目面板下半段还没拿出来的人和游标。 */
+    workspaceRest: ProjectEntry[];
+    workspaceOffset: number;
+}
+
 export abstract class ChatControllerBase implements RuntimeHost {
+    /**
+     * 本机那块界面的固定标识（VSCode 里就是插件里那块对话面板）；独立后端没有这块屏，用不上。
+     * 一块屏 = 本机界面或一个浏览器页面：每块屏各自记着“我在看哪个会话”（见 clientSessions）。
+     */
+    protected static readonly LOCAL_CLIENT_ID = "sidebar";
+
     protected constructor(public readonly workspaceId: string) {}
     // ---- 会话（一个 SessionRuntime = 一个 pi 进程）----
     protected panels = new Map<string, SessionRuntime>();
     protected panelSeq = 0;
-    /** 当前正在界面上显示的会话 id（前端一次只看一个会话）。 */
-    protected activePanelId: string | undefined;
-    protected autoLoadDone = false;
+    /**
+     * 每块屏各自在看哪个会话（屏标识 → 会话标识）。
+     * 一块屏 = 一个 VSCode 窗口的网页视图，或一个浏览器页面：各看各的，互不打扰
+     * （同一个后端里可以同时开着好几个项目聊）。
+     */
+    private readonly clientSessions = new Map<string, string>();
+    /** 最近有人切过去的那个会话：某块屏还没挑过时先给它看这个（它还没开口，只能这么猜）。 */
+    private lastFocusedPanelId: string | undefined;
+    /** 每个会话最近一次“成了某块屏正在看的那个”的时刻（一个目录里开着好几个时挑最近用过的）。 */
+    private readonly panelUsedAt = new Map<string, number>();
+    /** 正在说话的那块屏：处理谁发来的消息时就是谁（页面标识 / 本机界面标识）。 */
+    protected currentPageId: string = ChatControllerBase.LOCAL_CLIENT_ID;
+    /** 已经试过“启动时自动打开最近会话”的屏（每块屏只管自己头一次）。 */
+    private readonly autoLoadTried = new Set<string>();
+    /**
+     * 刚被关掉的会话（会话标识 → 目录 / 会话文件）。
+     * 有屏还看着它（画面留着）的时候，人接着往里发消息，就靠这份记录把它重新打开。
+     * 只留最近一小批：更早的会话重开也没人认得出。
+     */
+    private readonly closedSessions = new Map<string, { cwd: string; file?: string }>();
+    private static readonly CLOSED_REMEMBER_MAX = 20;
 
     /** sessionList 节流：流式 activity 变更很频繁，合并到下一帧附近推送。 */
     private sessionListTimer: ReturnType<typeof setTimeout> | null = null;
     private static readonly SESSION_LIST_THROTTLE_MS = 48;
+    /** 浮层没人答就收掉：等这么久（毫秒）。 */
+    private static readonly PICKER_TIMEOUT_MS = 120000;
 
-    // ---- 拾取器状态 ----
-    protected pickerResolve: ((v: any | undefined) => void) | null = null;
-    protected pickerTimer: ReturnType<typeof setTimeout> | null = null;
-    /** 当前浮层开在哪个界面（子类挑的目标标识）；空串 = 没开浮层。 */
-    protected pickerTarget = "";
-    /** 当前浮层的类型：超时 / 被新浮层顶掉时，回给界面的 pickerCancel 要带上它。 */
-    protected pickerKind = "";
+    // ---- 浮层（拾取器）状态：按屏分，各开各的 ----
+    /** 每块屏自己开着的浮层那一摊（历史列表 / 项目与会话 / 模型 / 文件夹）。 */
+    private readonly pickers = new Map<string, PickerState>();
+
+    /** 某块屏的浮层状态（还没开过就建一份空的）。 */
+    protected pickerStateOf(clientId: string = this.currentPageId): PickerState {
+        let st = this.pickers.get(clientId);
+        if (!st) {
+            st = {
+                kind: "", resolve: null,
+                historyFiles: [], historyOffset: 0,
+                workspaceFolder: "", workspaceRest: [], workspaceOffset: 0,
+            };
+            this.pickers.set(clientId, st);
+        }
+        return st;
+    }
 
     // ---- 备用 pi 进程池（热备，免冷启动）----
     /** 已就绪的备用 pi 进程（不绑定任何 panel）。 */
@@ -127,17 +186,51 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 把一条全局（不带 sessionId）消息送到 webview。 */
     protected abstract postToWebview(msg: Record<string, unknown>): void;
 
+    /**
+     * 只发一块屏（本机界面 / 某个页面）。默认实现：这个宿主只有一块屏，就当成广播。
+     * 多屏宿主（独立后端）覆写成“只发给那一块”。
+     */
+    protected postToOneClient(_clientId: string, msg: Record<string, unknown>): void {
+        this.postToWebview(msg);
+    }
+
+    /**
+     * 把一份消息分别发给每一块“现在连着的屏”（会话列表要各带各的“当前是哪一个”，只能一块一块发）。
+     * 默认实现：这个宿主只有一块屏。
+     */
+    protected forEachClient(fn: (clientId: string, send: (msg: Record<string, unknown>) => void) => void): void {
+        fn(this.currentPageId, (msg) => this.postToWebview(msg));
+    }
+
+    /**
+     * 这块屏该用哪个目录（VSCode 窗口 = 它打开着的第一个文件夹；别的宿主 / 浏览器页面 = 空串）。
+     * 一块屏头一次连上时，后端按它决定去哪个目录里找 / 开它要看的那个会话。
+     */
+    protected preferredDirForClient(_clientId: string): string { return ""; }
+
+    /** 某块屏看的会话变了（宿主可以记下来：VSCode 窗口重连领了新的页面标识时，接着看原来那个）。 */
+    protected onClientSessionChanged(_clientId: string, _panelId: string): void { /* 默认不用做 */ }
+
+    /** 把“谁在看哪个会话”的账本清空（宿主收摊 / 会话全部没了）。 */
+    protected forgetAllClients(): void {
+        this.clientSessions.clear();
+        this.autoLoadTried.clear();
+        this.panelUsedAt.clear();
+        this.closedSessions.clear();
+        this.lastFocusedPanelId = undefined;
+    }
+
     // ---- RuntimeHost：配置 / cwd ----
     public abstract getConfig(): PiConfig;
     public abstract getCwd(): string;
 
     // ---- RuntimeHost：UI 弹窗 / diff / 文件 / 持久化 ----
-    public abstract confirmDialog(title: string, message: string): Promise<boolean>;
-    public abstract selectDialog(title: string, options: string[]): Promise<string | undefined>;
-    public abstract inputDialog(title: string, placeholder: string, prefill: string): Promise<string | undefined>;
+    public abstract confirmDialog(title: string, message: string, sessionId?: string): Promise<boolean>;
+    public abstract selectDialog(title: string, options: string[], sessionId?: string): Promise<string | undefined>;
+    public abstract inputDialog(title: string, placeholder: string, prefill: string, sessionId?: string): Promise<string | undefined>;
     public abstract persistModel(provider: string, modelId: string): void;
     public abstract openFileLocation(p: string, line: number, anchor?: string): void;
-    public abstract confirmRevert(label: string): Promise<boolean>;
+    public abstract confirmRevert(label: string, sessionId?: string): Promise<boolean>;
 
     // ---- 显示选项：存储读写（子类）----
     protected abstract getAutoLoadLast(): boolean;
@@ -452,19 +545,48 @@ export abstract class ChatControllerBase implements RuntimeHost {
     public wantsTrimmedHistory(): boolean { return false; }
 
     // ---- 查找 ----
-    /** 当前显示的会话（界面上那一个）。 */
-    public getActive(): SessionRuntime | undefined {
-        return this.activePanelId ? this.panels.get(this.activePanelId) : undefined;
+    /** 这块屏现在显示的会话（不传 = 正在说话的那块屏）。 */
+    public getActive(clientId: string = this.currentPageId): SessionRuntime | undefined {
+        const own = this.clientSessions.get(clientId);
+        if (own && this.panels.has(own)) { return this.panels.get(own); }
+        // 它还没挑过、或者它看的那个刚被关掉：先按“最近有人切过去的那个”顶一下（不记档）
+        return this.lastFocusedPanelId ? this.panels.get(this.lastFocusedPanelId) : undefined;
     }
 
-    /** 某会话是不是当前显示的会话（状态栏上报过滤用）。 */
+    /** 这块屏自己挑的是哪个会话（没挑过、或挑的那个已经被关掉就是 undefined）。 */
+    public focusedIdFor(clientId: string): string | undefined {
+        const id = this.clientSessions.get(clientId);
+        return id && this.panels.has(id) ? id : undefined;
+    }
+
+    /**
+     * 直接把某块屏记成在看某个会话（不发消息、不广播）。
+     * 用在“这块屏换了个新标识、但它原来就是在看这个会话”的场合（VSCode 窗口重连）。
+     */
+    public adoptClientSession(clientId: string, panelId: string): void {
+        if (this.panels.has(panelId)) { this.clientSessions.set(clientId, panelId); }
+    }
+
+    /** 有没有屏在看这个会话（状态上报这类“只跟人正在看的会话走”的事看它）。 */
     protected isFocusedPanel(panelId: string): boolean {
-        return this.getActive()?.id === panelId;
+        for (const id of this.clientSessions.values()) {
+            if (id === panelId) { return true; }
+        }
+        return false;
+    }
+
+    /** 现在正看着这个会话的屏（一个都没在看就是空表）。 */
+    public clientsViewing(panelId: string): string[] {
+        const out: string[] = [];
+        for (const [clientId, id] of this.clientSessions) {
+            if (id === panelId) { out.push(clientId); }
+        }
+        return out;
     }
 
     /** 当前会话还没承载任何对话内容时，才算可以顶掉它（打开历史会话时复用）。 */
-    protected isActiveSessionEmpty(): boolean {
-        return this.getActive()?.isConversationEmpty() === true;
+    protected isActiveSessionEmpty(clientId: string = this.currentPageId): boolean {
+        return this.getActive(clientId)?.isConversationEmpty() === true;
     }
 
     /** 子类可接入跨工作区的全局唯一名字池。 */
@@ -481,12 +603,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return rt;
     }
 
-    /** 新建一个会话并切过去。
-     *  跑在哪个目录：跟当前这个会话走（顶条上那个会话在别的项目里，新会话也开在那个项目里）。
+    /** 新建一个会话并切过去（成为这块屏现在看的会话）。
+     *  跑在哪个目录：跟这块屏现在看的会话走（顶条上那个会话在别的项目里，新会话也开在那个项目里）。
      *  一个会话都没有时（刚启动、刚把最后几个会话关完）用宿主自己的默认目录。
-     *  @param spareDelayMs 备用进程预热的延迟毫秒数（启动路径传 SPARE_PREWARM_DELAY_MS）。 */
-    public newSession(spareDelayMs = 0): SessionRuntime {
-        const active = this.getActive();
+     *  @param spareDelayMs 备用进程预热的延迟毫秒数（启动路径传 SPARE_PREWARM_DELAY_MS）。
+     *  @param clientId 给哪块屏新建（默认 = 正在说话的那块）。 */
+    public newSession(spareDelayMs = 0, clientId: string = this.currentPageId): SessionRuntime {
+        const active = this.getActive(clientId);
         // 模型跟会话走：继承当前会话的模型（startClient 内部回落全局配置）
         const inherited = active?.currentModel();
         // 目录也跟会话走；没有会话时回落宿主默认目录
@@ -494,76 +617,141 @@ export abstract class ChatControllerBase implements RuntimeHost {
         // 不是默认目录就别领备用进程：它是按默认目录起的，领过来就跑错地方了
         const launch: PanelLaunch = this.sameDir(dir, this.getCwd()) ? {} : { cwd: dir, skipSpare: true };
         const rt = this.createPanelRuntime(inherited, launch);
-        this.activateSession(rt);
+        this.activateSession(rt, clientId);
         // 后台预热一个备用进程，供下一个新会话直接领取（启动路径延迟执行，避免双冷启动）
         this.ensureSpare(spareDelayMs);
         return rt;
     }
 
     /**
-     * 新建一个会话（成为当前会话），pi 进程按 launch 起：指定工作目录、带额外启动参数这些。
-     * 为什么另开一个口子：newSession 只能在当前会话那个目录里新开，而面板里要能在别的工作区开
-     * （见 newSessionInDir）、历史里点开别的项目的会话也要按那个项目的目录起进程。
+     * 新建一个会话，pi 进程按 launch 起：指定工作目录、带额外启动参数这些。
+     * 为什么另开一个口子：newSession 只能在（这块屏看的）那个会话的目录里新开，而面板里要能在
+     * 别的工作区开（见 newSessionInDir）、历史里点开别的项目的会话也要按那个项目的目录起进程。
      */
-    protected newSessionWithLaunch(launch: PanelLaunch, spareDelayMs = 0): SessionRuntime | undefined {
+    protected newSessionWithLaunch(
+        launch: PanelLaunch,
+        spareDelayMs = 0,
+        clientId: string = this.currentPageId,
+    ): SessionRuntime | undefined {
         const cfg = this.getConfig();
         if (!this.resolveExecutable(cfg.piPath)) { return undefined; }
-        const rt = this.createPanelRuntime(this.getActive()?.currentModel(), launch);
-        this.activateSession(rt);
+        const rt = this.createPanelRuntime(this.getActive(clientId)?.currentModel(), launch);
+        this.activateSession(rt, clientId);
         this.ensureSpare(spareDelayMs);
         return rt;
     }
 
     /**
-     * 在指定目录新开一个会话（手机上“在某个项目里开新会话”用）。
+     * 在指定目录新开一个会话（面板里“在某个项目里开新会话”、VSCode 窗口认自己的工作区都用它）。
      * 目录跟宿主默认目录不一样时不领备用进程：备用进程是按默认目录起的，领过来就跑错地方了。
      */
-    public newSessionInDir(dir: string): SessionRuntime | undefined {
+    public newSessionInDir(
+        dir: string,
+        opts?: { clientId?: string; spareDelayMs?: number },
+    ): SessionRuntime | undefined {
         const target = path.resolve(dir);
         const launch: PanelLaunch = this.sameDir(target, this.getCwd()) ? {} : { cwd: target, skipSpare: true };
-        return this.newSessionWithLaunch(launch);
+        return this.newSessionWithLaunch(launch, opts?.spareDelayMs ?? 0, opts?.clientId ?? this.currentPageId);
     }
 
-    /** 把一个会话设为当前会话并广播。 */
-    private activateSession(rt: SessionRuntime): void {
-        this.activePanelId = rt.id;
-        this.broadcastSessionList(true);
-        this.postToWebview({ type: "sessionActivated", sessionId: rt.id });
+    /** 把一个会话设为某块屏（默认正在说话的那块）现在看的会话。 */
+    private activateSession(rt: SessionRuntime, clientId: string = this.currentPageId): void {
+        this.setActiveSession(rt.id, clientId);
     }
 
     // ---- 切换 ----
-    /** 切到某个会话（不新开、不重载：那个会话的进程一直跑着）。 */
-    public setActiveSession(panelId: string): void {
-        if (!this.panels.has(panelId) || this.activePanelId === panelId) { return; }
-        this.activePanelId = panelId;
-        this.postToWebview({ type: "sessionActivated", sessionId: panelId });
+    /** 把某块屏（默认正在说话的那块）切到某个会话：不新开、不重载，那个会话的进程一直跑着。 */
+    public setActiveSession(panelId: string, clientId: string = this.currentPageId): void {
+        if (!this.panels.has(panelId) || this.clientSessions.get(clientId) === panelId) { return; }
+        this.clientSessions.set(clientId, panelId);
+        this.lastFocusedPanelId = panelId;
+        this.panelUsedAt.set(panelId, Date.now());
+        this.onClientSessionChanged(clientId, panelId);
+        // 先发列表，再说“你看的是哪一个”：界面上要先生出这个会话的壳，才认得这个标识
         this.broadcastSessionList(true);
-        this.getActive()?.emitStatus();
+        // 只告诉动手的这块屏：别的屏各看各的，不跟着切
+        this.postToOneClient(clientId, { type: "sessionActivated", sessionId: panelId });
+        this.getActive(clientId)?.emitStatus();
     }
 
     /** 按方向切到上一个 / 下一个会话（按会话的建立顺序）。 */
     public switchSessionByDirection(direction: "prev" | "next"): void {
         const ids = Array.from(this.panels.keys());
         if (ids.length < 2) { return; }
-        const curIdx = this.activePanelId ? ids.indexOf(this.activePanelId) : 0;
+        const cur = this.focusedIdFor(this.currentPageId) ?? this.lastFocusedPanelId;
+        const curIdx = cur ? ids.indexOf(cur) : 0;
         const delta = direction === "next" ? 1 : -1;
         const nextIdx = (curIdx + delta + ids.length) % ids.length;
         this.setActiveSession(ids[nextIdx]);
     }
 
-    // ---- 关闭 ----
-    /** 关闭一个会话：杀进程、释放名字；它要是当前会话就换到剩下的一个；一个都不剩就补一个空的。 */
-    public closeSession(panelId: string): void {
-        const rt = this.panels.get(panelId);
-        if (!rt) { return; }
-        this.disposePanelRuntime(panelId);
-        if (!this.activePanelId || !this.panels.has(this.activePanelId)) {
-            this.activePanelId = this.panels.keys().next().value;
-            if (this.activePanelId) { this.postToWebview({ type: "sessionActivated", sessionId: this.activePanelId }); }
+    // ---- 某块屏该看哪个会话（它刚连上时挑 / 开一个）----
+    /**
+     * 保证某块屏有一个会话可看（它刚连上、后端还没记过它看哪个时调）。
+     *
+     * 挑法：知道它该用哪个目录（VSCode 窗口的工作区，见 preferredDirForClient）就先在那个目录里
+     * 找已经开着的会话（同一个目录开着好几个就挑最近用过的那个），没有才在那个目录新开一个；
+     * 不知道该用哪个目录（浏览器页面）就看“最近有人切过去的那个”，一个会话都没有才新开一个。
+     *
+     * @returns 是不是刚刚为它新建了一个会话（新建的才要走“启动时自动打开最近会话”那条路）
+     */
+    public ensureClientSession(clientId: string): boolean {
+        if (this.focusedIdFor(clientId)) { return false; }
+        const dir = this.preferredDirForClient(clientId);
+        if (dir) {
+            const existing = this.sessionInDir(dir);
+            if (existing) { this.setActiveSession(existing.id, clientId); return false; }
+            const created = this.newSessionInDir(dir, {
+                clientId,
+                // 错开这块屏首个会话的 pi 冷启动（跟启动路径同一个理由：别让两个 pi 一起加载）
+                spareDelayMs: ChatControllerBase.SPARE_PREWARM_DELAY_MS,
+            });
+            // pi 不在（没装 / 路径不对）就没有会话可看：界面那边自己会报“找不到 pi”
+            return !!created;
         }
+        const last = this.lastFocusedPanelId ? this.panels.get(this.lastFocusedPanelId) : undefined;
+        const pick = last ?? this.panels.values().next().value;
+        if (pick) { this.setActiveSession(pick.id, clientId); return false; }
+        this.newSession(ChatControllerBase.SPARE_PREWARM_DELAY_MS, clientId);
+        return true;
+    }
+
+    /** 某个目录里已经开着的会话：同一个目录开着好几个时，挑最近用过的那个（子会话排在后面）。 */
+    public sessionInDir(dir: string): SessionRuntime | undefined {
+        const target = path.resolve(dir);
+        const cands: SessionRuntime[] = [];
+        for (const rt of this.panels.values()) {
+            if (this.sameDir(rt.cwd, target)) { cands.push(rt); }
+        }
+        if (cands.length === 0) { return undefined; }
+        const notChild = cands.filter((rt) => !this.taba.byChildPanel(rt.id));
+        const pool = notChild.length > 0 ? notChild : cands;
+        return pool.reduce((best, rt) =>
+            (this.panelUsedAt.get(rt.id) ?? 0) > (this.panelUsedAt.get(best.id) ?? 0) ? rt : best);
+    }
+
+    // ---- 关闭 ----
+    /**
+     * 关闭一个会话：杀进程、释放名字。
+     *
+     * 动手关它的那块屏自己换到别的会话去；别的还在看它的屏留在原地不动
+     * （画面还留着，界面那边会显示“这个会话已被关闭”和一颗重新打开的按钮）。
+     * 一个都不剩就补一个空的，保持界面可用。
+     */
+    public closeSession(panelId: string): void {
+        if (!this.panels.has(panelId)) { return; }
+        const requester = this.currentPageId;
+        this.noteClosedSession(panelId);
+        this.disposePanelRuntime(panelId);
+        if (this.clientSessions.get(requester) === panelId) {
+            const next = this.panels.keys().next().value;
+            if (next) { this.setActiveSession(next, requester); }
+            else { this.clientSessions.delete(requester); }
+        }
+        if (this.lastFocusedPanelId === panelId) { this.lastFocusedPanelId = this.panels.keys().next().value; }
         this.broadcastSessionList(true);
         // 全部关完自动新建一个空会话，保持界面可用
-        if (this.panels.size === 0) { this.newSession(); }
+        if (this.panels.size === 0) { this.newSession(0, requester); }
     }
 
     // ---- Fork（原生克隆会话到新 panel）----
@@ -777,7 +965,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             const closeAfter = shouldCloseAfterFirstTurn({
                 status: info.status,
                 hasParent: !!child.parentPanelId && this.panels.has(child.parentPanelId),
-                isBeingWatched: !!childPanelId && this.activePanelId === childPanelId,
+                isBeingWatched: !!childPanelId && this.isFocusedPanel(childPanelId),
             });
             // 先把结果交回（交回的文字里要说清楚那个 tab 会被关掉），再关，顺序不能反
             this.tabaDeliver(child, {
@@ -897,6 +1085,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         rt.stopClient();
         this.releasePanelName(rt.nameParts);
         this.panels.delete(panelId);
+        this.panelUsedAt.delete(panelId);
     }
 
     /** 保证至少有一个会话（全部关掉后自动补一个空的路径用）。 */
@@ -1037,13 +1226,29 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 会话结构或当前会话发生变化后，让子类刷新跨工作区引用目录。 */
     protected onChatStructureChanged(): void { /* default: no global registry */ }
 
-    private emitSessionList(): void {
-        this.postToWebview({
+    /**
+     * 会话列表长什么样：列表内容所有屏一样，“当前是哪一个”各是各的。
+     * 所以每块屏各发一份（带它自己那个 activeId）。
+     */
+    private sessionListMessage(clientId: string): Record<string, unknown> {
+        return {
             type: "sessionList",
             sessions: Array.from(this.panels.values()).map((rt) => this.serializeSession(rt)),
-            activeId: this.activePanelId ?? null,
-        });
+            // 这块屏自己看的是哪一个（它还没挑过就是 null）。界面以本地那一份为准，
+            // 别的屏切会话不会牵动它（后端也不再广播“大家切到哪一个”这件事）。
+            activeId: this.focusedIdFor(clientId) ?? null,
+        };
+    }
+
+    /** 推送会话列表：新建 / 关闭这类结构变更所有屏都要知道，所以一块一块各发一份。 */
+    private emitSessionList(): void {
+        this.forEachClient((clientId, send) => { send(this.sessionListMessage(clientId)); });
         this.onChatStructureChanged();
+    }
+
+    /** 单独给一块屏发一份最新的会话列表（它刚连上 / 刚重连 / 网页视图重建时用）。 */
+    public sendSessionListTo(clientId: string): void {
+        this.postToOneClient(clientId, this.sessionListMessage(clientId));
     }
 
 
@@ -1069,8 +1274,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
     public onTurnEnd(info: TurnEndInfo): void {
         // 子会话跑完第一轮：结果先交回派活的那个会话（不等会话标题）
         this.tabaOnTurnEnd(info);
-        // 只发给这一个会话：界面那边自己判断看不看得见（切到别的会话就不标、窗口隐藏就不响）。
-        for (const id of this.panelIdsOf(info.panelId)) { this.postToSession(id, { type: "turnEnd" }); }
+        // 每条屏都收到（没在看它也要把“有新消息”标上），但响不响按“这条屏是不是正看着它”算：
+        // 会话跑完的声音只该在看着它的那块屏上响（两个窗口开着时不跟着互相响）。
+        // 具体响不响是界面按显示选项定的：关了声音，新消息还得看得见。
+        this.forEachClient((clientId, send) => {
+            send({ type: "turnEnd", sessionId: info.panelId, beep: this.focusedIdFor(clientId) === info.panelId });
+        });
     }
 
     protected onKnownFilesChangedByHost(): void { /* 默认无操作 */ }
@@ -1108,10 +1317,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** webview / 命令菜单取数：问焦点 panel 的 pi 进程要命令列表
      *  （技能 / 提示模板 / 扩展命令），返回可直接渲染的菜单条目。 */
     protected async handleListCommands(): Promise<void> {
-        const rt = this.getActive();
+        const clientId = this.currentPageId;
+        const rt = this.getActive(clientId);
         if (!rt) { return; }
         const items = await rt.getSlashCommandItems();
-        this.postToWebview({ type: "commandList", items });
+        // 命令列表是这个会话自己的（技能 / 提示模板），只回给问它的那块屏
+        this.postToOneClient(clientId, { type: "commandList", items });
     }
 
     // ========================================================================
@@ -1176,19 +1387,26 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /** 将来源生成的快照回传给发起 # 引用的 webview。 */
-    public receiveChatReference(requestId: number, reference: { title: string; text: string } | undefined): void {
+    public receiveChatReference(
+        requestId: number,
+        reference: { title: string; text: string } | undefined,
+        clientId: string = this.currentPageId,
+    ): void {
         if (reference) {
-            this.postToWebview({ type: "fetchChatResult", requestId, ...reference });
+            // 这是“谁问的给谁”：几块屏同时用 # 引用时，各自的请求编号可能撞上
+            this.postToOneClient(clientId, { type: "fetchChatResult", requestId, ...reference });
         } else {
-            const target = this.getActive()?.id;
+            const target = this.getActive(clientId)?.id;
             if (target) { this.postToSession(target, { type: "system", text: "所选会话暂无可引用的消息。" }); }
         }
     }
 
     /** 本地引用的兼容入口；跨工作区宿主会改由 buildChatReference 调度。 */
     protected async handleFetchChat(msg: any): Promise<void> {
+        // 取快照是异步的（要问 pi 要会话文件），跑回来时得还给问的那块屏
+        const clientId = this.currentPageId;
         const requestId = typeof msg.requestId === "number" ? msg.requestId : 0;
-        this.receiveChatReference(requestId, await this.buildChatReference(msg));
+        this.receiveChatReference(requestId, await this.buildChatReference(msg), clientId);
     }
 
     // ========================================================================
@@ -1197,7 +1415,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /**
      * 浮层该发给哪个界面。
      *
-     * 多界面宿主（侧边栏 + 网页页面）在这里挑“人最近在动的那一个”；单界面宿主
+     * 多界面宿主（插件里的对话面板 + 浏览器页面）在这里挑“人最近在动的那一个”；单界面宿主
      * （编辑器面板 / 测试）不需要挑，返回空串，{@link sendOverlayTo} 的默认实现只有一个出口。
      */
     protected pickOverlayTarget(): string { return ""; }
@@ -1214,9 +1432,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return true;
     }
 
-    /** 向界面推送拾取器浮层并等待用户选择（取消返回 undefined）。 */
-    protected showPicker(kind: string, items: any[], current?: string | null, echo?: Record<string, unknown>): Promise<any | undefined> {
-        return this.openPicker(kind, { items, current: current ?? null, ...(echo || {}) });
+    /** 向界面推送拾取器浮层并等待用户选择（取消返回 undefined）。
+     *  @param target 弹给哪块屏（界面标识）；不填就现挑“人最近在动的那一块”。 */
+    protected showPicker(
+        kind: string,
+        items: any[],
+        current?: string | null,
+        echo?: Record<string, unknown>,
+        target?: string,
+    ): Promise<any | undefined> {
+        return this.openPicker(kind, { items, current: current ?? null, ...(echo || {}) }, target);
     }
 
     /**
@@ -1224,33 +1449,32 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * @param target 指定发给哪个界面；不填就现挑“人最近在动的那一个”。
      */
     protected openPicker(kind: string, body: Record<string, unknown>, target?: string): Promise<any | undefined> {
-        // 上一个还没关的浮层：先让它的界面收起来（同一个界面连开两个、或换界面都走这里）
-        this.dropPicker(true);
         const to = target ?? this.pickOverlayTarget();
+        // 这块屏上还开着的上一个浮层：先让它收起来（同一块屏连开两个就走这一道）；
+        // 别的屏开着什么不管：各开各的（两个窗口同时开着会话列表互不影响）。
+        this.dropPicker(to, true);
         if (!to || !this.sendOverlayTo(to, { type: "picker", kind, ...body })) {
             return Promise.resolve(undefined);
         }
-        this.pickerTarget = to;
-        this.pickerKind = kind;
+        const st = this.pickerStateOf(to);
+        st.kind = kind;
         return new Promise<any | undefined>((resolve) => {
-            this.pickerResolve = resolve;
-            this.pickerTimer = setTimeout(() => { this.dropPicker(true); }, 120000);
+            st.resolve = resolve;
+            st.timer = setTimeout(() => { this.dropPicker(to, true); }, ChatControllerBase.PICKER_TIMEOUT_MS);
         });
     }
 
-    /** 收掉正在等的浮层：按需让它的界面收起来，再把等的人按取消放行。 */
-    private dropPicker(notify: boolean): void {
-        const resolve = this.pickerResolve;
-        const timer = this.pickerTimer;
-        const target = this.pickerTarget;
-        const kind = this.pickerKind;
-        this.pickerResolve = null;
-        this.pickerTimer = null;
-        this.pickerTarget = "";
-        this.pickerKind = "";
-        if (timer) { clearTimeout(timer); }
+    /** 收掉某块屏上开着的浮层：按需让它收起来，再把等的人按取消放行。 */
+    private dropPicker(clientId: string, notify: boolean): void {
+        const st = clientId ? this.pickers.get(clientId) : undefined;
+        if (!st) { return; }
+        const resolve = st.resolve;
+        const kind = st.kind;
+        st.resolve = null;
+        st.kind = "";
+        if (st.timer) { clearTimeout(st.timer); st.timer = undefined; }
         if (!resolve) { return; }
-        if (notify && kind) { this.sendOverlayTo(target, { type: "pickerCancel", kind }); }
+        if (notify && kind) { this.sendOverlayTo(clientId, { type: "pickerCancel", kind }); }
         resolve(undefined);
     }
 
@@ -1259,18 +1483,19 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 那边已经不在了，不用发消息；等的人也不用干等 120 秒。
      */
     protected dropPickerForClient(target: string): void {
-        if (!target || target !== this.pickerTarget || !this.pickerResolve) { return; }
-        this.dropPicker(false);
+        if (!target) { return; }
+        this.dropPicker(target, false);
     }
 
+    /** 界面那头回了一条（选了 / 取消了）：把正在等的那一块屏放行。 */
     protected resolvePicker(payload: any | undefined): void {
-        if (!this.pickerResolve) { return; }
-        const r = this.pickerResolve;
-        this.pickerResolve = null;
-        if (this.pickerTimer) { clearTimeout(this.pickerTimer); this.pickerTimer = null; }
+        const st = this.pickers.get(this.currentPageId);
+        if (!st || !st.resolve) { return; }
+        const r = st.resolve;
+        st.resolve = null;
+        if (st.timer) { clearTimeout(st.timer); st.timer = undefined; }
         // 界面那头自己已经把浮层收了（取消 / 选中都会先关），这里只清状态、把结果交给等的人。
-        this.pickerTarget = "";
-        this.pickerKind = "";
+        st.kind = "";
         r(payload);
     }
 
@@ -1279,7 +1504,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
         currentThinking: string,
         currentProvider: string,
         currentModelId: string,
-        echo?: Record<string, unknown>
+        echo?: Record<string, unknown>,
+        clientId?: string,
     ): Promise<ModelChoice | undefined> {
         const currentKey = `${currentProvider || ""}\u0000${currentModelId || ""}`;
         const isCurrent = (m: ModelInfo) =>
@@ -1314,7 +1540,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         ];
         const grouped = order.flatMap((k) => items.filter((it) => provOf(it) === k));
         const ordered = current ? [current, ...grouped.filter((it) => it !== current)] : grouped;
-        const choice = await this.showPicker("model", ordered, currentKey, echo);
+        const choice = await this.showPicker("model", ordered, currentKey, echo, clientId);
         if (!choice) { return undefined; }
         return {
             provider: choice.provider || "",
@@ -1345,21 +1571,22 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 在它自己的目录里启动 pi（pi 的 switch_session 只换会话文件，不换进程工作目录）。
      * @param folder 会话所在的目录；不填 = 当前会话自己的目录。
      */
-    public async loadHistorySession(file: string, folder?: string): Promise<void> {
+    public async loadHistorySession(file: string, folder?: string, clientId: string = this.currentPageId): Promise<void> {
+        // clientId 在这里就取好：这段活是异步的，跑到后面 currentPageId 已经不一定还是刚才那块屏了
         // 先揭示并等待聊天界面就绪。否则首次从历史画布打开时，loadSession
         // 在界面尚未建立监听器前发出的 clear/消息会丢失，最终只剩一个空会话。
         await this.onFocusChat();
         const already = this.sessionRunningFile(file);
-        if (already) { this.setActiveSession(already.id); return; }
-        const cwd = folder ? path.resolve(folder) : (this.getActive()?.cwd ?? this.getCwd());
-        const active = this.getActive();
+        if (already) { this.setActiveSession(already.id, clientId); return; }
+        const cwd = folder ? path.resolve(folder) : (this.getActive(clientId)?.cwd ?? this.getCwd());
+        const active = this.getActive(clientId);
         // 优先复用当前空会话（目录也得对）；已有对话时新建一个会话，避免历史选择覆盖正在进行的对话。
-        let rt = active && this.isActiveSessionEmpty() && this.sameDir(active.cwd, cwd) ? active : undefined;
+        let rt = active && this.isActiveSessionEmpty(clientId) && this.sameDir(active.cwd, cwd) ? active : undefined;
         if (!rt) {
-            rt = this.newSessionWithLaunch(this.sameDir(cwd, this.getCwd()) ? {} : { cwd, skipSpare: true });
+            rt = this.newSessionWithLaunch(this.sameDir(cwd, this.getCwd()) ? {} : { cwd, skipSpare: true }, 0, clientId);
         }
         if (!rt) { return; }
-        this.setActiveSession(rt.id);
+        this.setActiveSession(rt.id, clientId);
         await rt.loadSession(file);
     }
 
@@ -1377,49 +1604,50 @@ export abstract class ChatControllerBase implements RuntimeHost {
     // ========================================================================
     //  历史会话列表（pi /resume 风格：标题 + 条数 + 相对时间，每批 10 条）
     // ========================================================================
-    /** 本次列表的文件清单（按修改时间倒序）；每次打开列表时重建。 */
-    protected historyFiles: SessionFileEntry[] = [];
-    /** 已展示到第几个文件（「加载更多」接着往后扫）。 */
-    protected historyOffset = 0;
     /** 每批展示/扫描的文件数。 */
     private static readonly HISTORY_BATCH_SIZE = 10;
 
     /**
      * 弹出历史会话列表并加载选中项。
-     * @param fromPage 来源是网页页面：不用把侧边栏拽出来。
-     * @param target 列表弹给哪个界面（界面标识）；不填就现挑“人最近在动的那一个”。
-     * @param opts.folder 列哪个目录的会话；不填 = 当前焦点会话自己的目录（可能是别的项目）。
+     * @param fromPage 来源是浏览器页面：不用把插件里的对话面板拽出来。
+     * @param target 列表弹给哪个界面（界面标识）；不填就用正在说话的那一块。
+     * @param opts.folder 列哪个目录的会话；不填 = 这块屏当前会话自己的目录（可能是别的项目）。
      */
     public async showHistoryPicker(
         fromPage = false,
         target?: string,
         opts?: { folder?: string },
     ): Promise<void> {
+        const clientId = target || this.currentPageId;
         if (!fromPage) { await this.beforeHistoryPicker(); }
-        const cwd = opts?.folder ? path.resolve(opts.folder) : (this.getActive()?.cwd ?? this.getCwd());
-        this.historyFiles = await listSessionFiles(cwd);
-        this.historyOffset = 0;
-        if (this.historyFiles.length === 0) { this.onNoSessions(); return; }
-        const items = await this.scanHistoryBatch();
+        const cwd = opts?.folder ? path.resolve(opts.folder) : (this.getActive(clientId)?.cwd ?? this.getCwd());
+        const state = this.pickerStateOf(clientId);
+        state.historyFiles = await listSessionFiles(cwd);
+        state.historyOffset = 0;
+        if (state.historyFiles.length === 0) { this.onNoSessions(); return; }
+        const items = await this.scanHistoryBatch(clientId);
         if (items.length === 0) { this.onNoSessions(); return; }
-        const choice = await this.promptHistoryPicker(items, this.historyOffset < this.historyFiles.length, target);
+        const choice = await this.promptHistoryPicker(items, state.historyOffset < state.historyFiles.length, clientId);
         if (!choice || typeof choice.file !== "string") { return; }
-        await this.loadHistorySession(choice.file, cwd);
+        await this.loadHistorySession(choice.file, cwd, clientId);
     }
 
-    /** 「加载更多」：扫描下一批文件，把新条目追加进开着的列表（只发给开列表的那个界面）。 */
+    /** 「加载更多」：扫描下一批文件，把新条目追加进开着的列表（只发给开列表的那一块屏）。 */
     public async loadMoreHistory(): Promise<void> {
-        const batch = this.historyFiles.slice(this.historyOffset, this.historyOffset + ChatControllerBase.HISTORY_BATCH_SIZE);
-        if (batch.length === 0) { this.sendOverlayTo(this.pickerTarget, { type: "historyPageEnd" }); return; }
-        const items = await this.scanHistoryBatch();
-        this.sendOverlayTo(this.pickerTarget, { type: "historyPageAppend", items, hasMore: this.historyOffset < this.historyFiles.length });
+        const clientId = this.currentPageId;
+        const state = this.pickerStateOf(clientId);
+        const batch = state.historyFiles.slice(state.historyOffset, state.historyOffset + ChatControllerBase.HISTORY_BATCH_SIZE);
+        if (batch.length === 0) { this.sendOverlayTo(clientId, { type: "historyPageEnd" }); return; }
+        const items = await this.scanHistoryBatch(clientId);
+        this.sendOverlayTo(clientId, { type: "historyPageAppend", items, hasMore: state.historyOffset < state.historyFiles.length });
     }
 
     /** 扫描下一批文件，返回展示条目（带“是不是当前焦点会话”）。 */
-    protected async scanHistoryBatch(): Promise<HistoryPickerItem[]> {
-        const batch = this.historyFiles.slice(this.historyOffset, this.historyOffset + ChatControllerBase.HISTORY_BATCH_SIZE);
-        this.historyOffset += batch.length;
-        const current = this.getActive()?.currentSessionPath;
+    protected async scanHistoryBatch(clientId: string = this.currentPageId): Promise<HistoryPickerItem[]> {
+        const state = this.pickerStateOf(clientId);
+        const batch = state.historyFiles.slice(state.historyOffset, state.historyOffset + ChatControllerBase.HISTORY_BATCH_SIZE);
+        state.historyOffset += batch.length;
+        const current = this.getActive(clientId)?.currentSessionPath;
         const scanned = await Promise.all(batch.map((f) => scanSessionInfo(f.file)));
         return scanned
             .filter((s): s is SessionListItem => s !== null)
@@ -1431,22 +1659,61 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return this.openPicker("history", { items, current: null, hasMore, searchable: false }, target);
     }
 
-    /** 启动时自动打开最近会话（显示选项可关）：只取修改时间最新的一个会话文件。 */
-    protected async maybeAutoLoadLastSession(): Promise<void> {
-        if (this.autoLoadDone) { return; }
-        const cwd = this.getCwd();
-        if (!cwd) { return; }
-        this.autoLoadDone = true;
+    /**
+     * 启动时自动打开最近会话（显示选项可关）：只管某一块屏刚建出来的那个空会话，
+     * 目录用那个会话自己的（VSCode 窗口里就是它工作区那个项目）。
+     */
+    protected async maybeAutoLoadLastSession(clientId: string = this.currentPageId): Promise<void> {
+        if (this.autoLoadTried.has(clientId)) { return; }
+        this.autoLoadTried.add(clientId);
         if (!this.getAutoLoadLast()) { return; }
-        const files = await listSessionFiles(cwd);
+        const rt = this.getActive(clientId);
+        if (!rt || !rt.isConversationEmpty()) { return; }
+        const files = await listSessionFiles(rt.cwd);
         if (files.length === 0) { return; }
-        const rt = this.getActive();
-        if (rt) { await rt.loadSession(files[0].file); }
+        // 等文件的功夫里这块屏可能又切走了（或那个会话被关了）：别把历史塞进别的会话
+        if (this.getActive(clientId)?.id !== rt.id) { return; }
+        await rt.loadSession(files[0].file);
     }
 
     // ========================================================================
     //  webview 消息分发（公共部分）
     // ========================================================================
+    /** 记下“这个会话刚被关掉”：还看着它的屏接着往里发消息时，靠这份记录重新打开它。 */
+    private noteClosedSession(panelId: string): void {
+        const rt = this.panels.get(panelId);
+        if (!rt) { return; }
+        this.closedSessions.set(panelId, { cwd: rt.cwd, file: rt.currentSessionPath });
+        while (this.closedSessions.size > ChatControllerBase.CLOSED_REMEMBER_MAX) {
+            const oldest = this.closedSessions.keys().next().value;
+            if (oldest === undefined) { break; }
+            this.closedSessions.delete(oldest);
+        }
+    }
+
+    /**
+     * 往一个已经关掉的会话里发消息：按它原来的目录与会话文件重新打开一个
+     * （跟从历史里打开一个会话是同一条路），再把这句话送过去。
+     * @returns 认不认得这个刚关掉的会话；不认得就当没这回事（界面上什么都不会发生）。
+     */
+    protected reopenClosedSession(panelId: string, clientId: string, text: unknown, images: unknown): boolean {
+        const closed = this.closedSessions.get(panelId);
+        if (!closed) { return false; }
+        if (typeof text !== "string" || !text.trim()) { return true; }
+        void (async () => {
+            if (closed.file) {
+                await this.loadHistorySession(closed.file, closed.cwd, clientId);
+            } else {
+                // 从没往盘上写过东西的会话：没有可以接着聊的记录，只能在同一目录开一个空会话顶上
+                this.newSessionInDir(closed.cwd, { clientId });
+            }
+            const rt = this.getActive(clientId);
+            if (!rt) { return; }
+            rt.handleSend(text, Array.isArray(images) ? images as Array<{ data: string; mimeType: string }> : undefined);
+        })();
+        return true;
+    }
+
     /**
      * 处理来自 webview 的消息。先处理两宿主公共的全局消息，再交由
      * {@link handlePlatformMessage} 处理平台独有消息，最后处理 panel 级消息。
@@ -1455,21 +1722,23 @@ export abstract class ChatControllerBase implements RuntimeHost {
         // ---- 公共全局消息 ----
         switch (msg.type) {
             case "ready": {
+                const clientId = this.currentPageId;
                 this.sendViewOptions();
-                this.broadcastSessionList();
-                if (this.panels.size === 0) {
-                    this.newSession(ChatControllerBase.SPARE_PREWARM_DELAY_MS);
-                    void this.maybeAutoLoadLastSession();
-                } else {
-                    // 已有会话：同步各会话的 piReady
-                    for (const rt of this.panels.values()) {
-                        this.postToSession(rt.id, { type: "piReady", ready: rt.piReady });
-                    }
+                // 这块屏本来就看着的那个（网页视图重建时靠它把画面接回去）
+                const had = this.focusedIdFor(clientId);
+                // 这块屏还没挑过会话（刚连上 / 它看的那个被关过）：按它自己的规矩挑一个或开一个
+                const fresh = this.ensureClientSession(clientId);
+                // 列表先给（界面上那些会话壳靠它建起来），再说“你看的是哪一个”
+                this.sendSessionListTo(clientId);
+                // 各会话的 piReady 同步给这块屏
+                for (const rt of this.panels.values()) {
+                    this.postToSession(rt.id, { type: "piReady", ready: rt.piReady });
                 }
-                if (this.activePanelId) {
-                    this.postToWebview({ type: "sessionActivated", sessionId: this.activePanelId });
-                }
+                // 刚刚挑 / 开过的，上面那两步已经说过一次了；本来就在看的这里再说一遍
+                // （网页视图重建后它本地什么都没有，得靠这一条把画面接回去）
+                if (had) { this.postToOneClient(clientId, { type: "sessionActivated", sessionId: had }); }
                 this.onWebviewReady();
+                if (fresh) { void this.maybeAutoLoadLastSession(clientId); }
                 // webview 就绪后后台预热备用进程，后续新会话免冷启动。
                 // 启动路径延迟执行：首个会话的 pi 正在冷启动，同时再拉起备用进程会在
                 // VSCode 窗口恢复期叠加出明显的 CPU/IO 峰值（两个 pi 各需 ~3s 加载）。
@@ -1531,6 +1800,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
         // ---- 公共会话级消息 ----
         const panelId: string | undefined = typeof msg.sessionId === "string" ? msg.sessionId : msg.tabId;
         const rt = panelId ? this.panels.get(panelId) : undefined;
+        // 会话已经被关掉了，但界面那头还留着它的画面（别的窗口关的）：往它里头发消息，
+        // 就把那个会话重新打开，再把这句话送过去（跟“进程退出、发消息会自动重启”一个路子）。
+        if (!rt && panelId && msg.type === "send") {
+            if (this.reopenClosedSession(panelId, this.currentPageId, msg.text, msg.images)) { return; }
+        }
         // 命令型消息（pickModel 等）回退到当前会话
         const target = rt ?? (msg.type === "pickModel" ? this.getActive() : undefined);
         if (!target) { return; }
@@ -1545,7 +1819,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 break;
             }
             case "pickModel":
-                void target.pickModel(typeof msg.t0 === "number" ? msg.t0 : undefined);
+                // 模型选择器弹在点它的那块屏上（不是“人最近在动的那一块”：两个窗口时容易弹错地方）
+                void target.pickModel(typeof msg.t0 === "number" ? msg.t0 : undefined, this.currentPageId);
                 break;
             case "openEditLocation":
                 if (typeof msg.path === "string" && typeof msg.anchor === "string" && msg.anchor) {

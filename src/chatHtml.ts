@@ -2,7 +2,7 @@ import * as http from "http";
 import { renderHTML } from "./renderHtml";
 
 /**
- * chatHtml —— 侧边栏那块网页视图的界面从哪儿来。
+ * chatHtml —— 插件里那块对话面板的界面从哪儿来。
  *
  * 界面文件（chat.js / chat.css / marked.js / highlight.js / browserBridge.js /
  * browserTheme.css）不从插件自己的 media/ 目录读，而是从正在跑的
@@ -109,7 +109,7 @@ function endsInDoubleEscape(code: string): boolean {
 }
 
 /**
- * 拼侧边栏面板的 HTML：CSS 与全部 JS 内联，脚本顺序与浏览器页面一致
+ * 拼插件里那块对话面板的 HTML：CSS 与全部 JS 内联，脚本顺序与浏览器页面一致
  * （桥在最前 → marked → highlight → chat → settings）。
  *
  * @param imgCspSource webview 的 cspSource：消息里的图片仍按老规矩只放数据地址

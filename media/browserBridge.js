@@ -5,7 +5,7 @@
  *  1. 网页服务的页面（手机 / 电脑浏览器，有 meta[name="pichat-page"]）：
  *     通道整个换成网页服务——出去的消息按顺序 POST /api，进来的消息从 /events
  *     （浏览器原生的推送流）收；重连、心跳、断线补发都归它管。
- *  2. VSCode 侧边栏（与网页端同源的那份界面，由 chatHtml.ts 加载）：
+ *  2. 插件里的对话面板（与浏览器页面同源的那份界面，由 chatHtml.ts 加载）：
  *     通道保持网页视图的 postMessage 不变（chat.js 感觉不到），只取三样：
  *     网页端的界面件（桌面截图 / <<< / 停止生成按钮）、一行起步的输入框、
  *     按配置上色（显示选项里的「界面颜色」，浅 / 深两套调色板见下面）。
@@ -19,8 +19,13 @@
  * 冻住的定时器全醒过来，几条消息挤着往外发。所以：
  *   - 重连自己管（不信浏览器自己那次重连：它要等一会儿，手机回到前台后还常常一直卡在
  *     “正在连接”不动）。出错就关掉重开，回到前台 / 网络恢复 / 从冻结里醒来时立刻重开。
+ *   - 回到前台（页面从后台回来）时，只要在外头待过几秒，就把连接重开一次，不管它看着
+ *     死没死：锁屏期间连接常常是悄悄断的（运营商把会话收掉），浏览器却还当成“已连接”，
+ *     最后那几下心跳也早在手里——看着一切正常，这期间的消息其实全丢了。页面只在重连
+ *     时跟插件对账（补发漏掉的消息 + 一份最新的会话列表），不重开就会一直卡在旧状态上
+ *     （比如会话早跑完了，界面上还显示着“正在输出”）。
  *   - 靠插件每 25 秒发来的心跳判断连接是不是“看着还在、其实已经死了”（手机换过网络之后
- *     常见）。浏览器对这种连接是不报错的，只能自己数着心跳。
+ *     常见）。浏览器对这种连接是不报错的，只能自己数着心跳。心跳断到 75 秒就重开兜底。
  *   - 插件推来的每条实时消息都带一个递增的序号（seq），页面记着自己处理到第几条。
  *     每次重新连上都把这个数报给插件（消息类型 browserResync），插件把断线这段时间
  *     漏掉的消息按序号补发过来：一条不缺就什么都不动（界面、输入框草稿都保持原样），
@@ -49,7 +54,7 @@
   // ==================== 界面颜色（显示选项里的「界面颜色」） ====================
   // 网页里没有 VSCode 注入主题变量，这里自己补两套调色板：浅色照 VSCode 浅色主题
   //（Light Modern）的取值，深色照深色主题（Dark Modern）的取值。写死不跟随主题，
-  // 两边（侧边栏 / 网页）看到的颜色才一致。侧边栏里 VSCode 注入的变量会被
+  // 两边（插件里 / 浏览器里）看到的颜色才一致。插件面板里 VSCode 注入的变量会被
   // body 上的行内变量盖过（仅限调色板里有的那些键，其余仍跟随主题）。
   // 代码高亮：浅色给 One Light 的取值；深色不覆盖——chat.css 默认那套就是深底用的 One Dark。
   var FONT_STACK = 'system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif';
@@ -239,8 +244,8 @@
   function inspectIncoming(data) {
     var type = data && data.type;
     if (type === "browserDialog") { handleDialog(data); return true; }
-    // 桌面截图：两颗按钮（网页端与侧边栏）都挂，图推回来也只有这里能接。
-    // chat.js 不认识这两个类型，转发给它等于什么都不发生（侧边栏以前就是这样：
+    // 桌面截图：两颗按钮（浏览器页面与插件里的对话面板）都挂，图推回来也只有这里能接。
+    // chat.js 不认识这两个类型，转发给它等于什么都不发生（插件面板以前就是这样：
     // 按钮压暗一会儿自己弹回来，图永远不出来）。
     if (type === "desktopScreenshot") { showDesktopScreenshot(data); return true; }
     if (type === "desktopScreenshotResult") { handleDesktopScreenshotResult(data); return true; }
@@ -554,11 +559,34 @@
     }
   }
 
-  /** 回到前台 / 网络恢复 / 从冻结里醒来：先报到一声，再看连接还活着没有。 */
+  /**
+   * 回前台时，“在外头待过这么久”就干脆把连接重开一次（不管它看着死没死）。
+   *
+   * 为什么要按“离开了多久”而不是只看连接死没死：手机锁屏期间那条连接往往已经
+   * 悄悄断了，浏览器却还当成“已连接”，回来时最后几下心跳也早在手里，看着一切正常。
+   * 不重开的话，断线那段时间的消息（包括“这一轮跑完了”）就永远收不到，界面卡在
+   * 旧状态上，要等“75 秒没收到心跳”的看门狗才发现。重开一次必然带来一次对账，
+   * 界面不闪、草稿不丢。
+   * 几秒钟以内来回切（切一下别的标签页）不重开：那点时间连接基本不会断，少折腾。
+   */
+  var HIDDEN_RESYNC_MS = 3000;
+  /** 页面是什么时候躲到后头的（0 = 现在在台上）。锁屏、切后台、被系统冻住时记上。 */
+  var hiddenAt = 0;
+
+  /** 记下“从这会儿起不在台上了”。已经记着就不动（重复的事件不改时间点）。 */
+  function markHidden() {
+    if (!hiddenAt) { hiddenAt = Date.now(); }
+  }
+
+  /** 回到前台 / 网络恢复 / 从冻结里醒来：先报到一声，再看这条连接值不值得接着信。 */
   function wake() {
     if (stopped) { return; }
     ping();
-    if (!source || source.readyState !== EventSource.OPEN || Date.now() - lastTickAt > TICK_TIMEOUT_MS) {
+    var awayMs = hiddenAt ? Date.now() - hiddenAt : 0;
+    hiddenAt = 0;
+    if (awayMs >= HIDDEN_RESYNC_MS
+      || !source || source.readyState !== EventSource.OPEN
+      || Date.now() - lastTickAt > TICK_TIMEOUT_MS) {
       reconnectNow();
     }
   }
@@ -700,7 +728,7 @@
 
   // ==================== 输入框的小改动 ====================
   // 生成中在输入框右下角露出一颗“停止生成”图标：手机没有 Esc，否则中止不了；
-  // 侧边栏配上它之后与网页端一致（显示与隐藏由 chat.js 按当前会话是否在生成控制，
+  // 插件里的对话面板配上它之后与浏览器页面一致（显示与隐藏由 chat.js 按当前会话是否在生成控制，
   // 那边会来找 #stopBtn；VSCode 里本来也有 Esc，两颗并存不冲突）。
   (function () {
     var row = document.getElementById("inputRow");
@@ -721,15 +749,19 @@
 
   if (!IN_WEBVIEW) {
     document.addEventListener("visibilitychange", function () {
-      if (document.visibilityState === "visible") { wake(); }
+      if (document.visibilityState === "visible") { wake(); } else { markHidden(); }
     });
+    // 整页被收走（往前翻一页、手机把标签页冻起来）也算离开，回来时照样重开一次
+    window.addEventListener("pagehide", markHidden);
+    // 页面生命周期事件（安卓那边的浏览器有）：冻住之后醒过来算回前台，
+    // 只醒过来没报“回前台”的（冻住时不发 visibilitychange 的那种）也靠它记上
+    document.addEventListener("freeze", markHidden);
+    document.addEventListener("resume", wake);
     window.addEventListener("online", wake);
     // 从"往返缓存"里整页取回来：连接其实全是死的，直接重连
     window.addEventListener("pageshow", function (ev) {
-      if (ev.persisted) { reconnectNow(); }
+      if (ev.persisted) { hiddenAt = 0; reconnectNow(); }
     });
-    // 页面生命周期事件（安卓那边的浏览器有）：冻住之后醒过来
-    document.addEventListener("resume", wake);
 
     startTimers();
     connect();

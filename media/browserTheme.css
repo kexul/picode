@@ -1,5 +1,5 @@
 /*
-  browserTheme —— 网页端那套界面件的结构样式（侧边栏与网页端共用，chatHtml.ts /
+  browserTheme —— 网页端那套界面件的结构样式（插件里的对话面板与浏览器页面共用，chatHtml.ts /
   browserHtml.ts 都把它内联进页面）。
 
   颜色不在这里：两套调色板（浅 / 深）在 browserBridge.js 里，按显示选项的

@@ -10,7 +10,7 @@ import * as os from "os";
 
 /** 浏览器页面允许加载的 media/ 文件名白名单（其余一律 404，防目录穿越）。
  *  注：browserTheme.css 在网页端页面里是直接写进 HTML 的（不走静态文件这条路），
- *  但侧边栏面板要从这儿取它，所以也在名单里。 */
+ *  但插件里的对话面板要从这儿取它，所以也在名单里。 */
 export const ALLOWED_MEDIA_FILES: ReadonlySet<string> = new Set([
     "chat.js",
     "chat.css",

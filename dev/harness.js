@@ -157,6 +157,8 @@ function createHarness(options = {}) {
         provider,
         cwd,
         url: () => started && started.url,
+        /** 起好的后端宿主（调试用：直接调它验后端那套逻辑，比如“每块屏各看各的会话”）。 */
+        host: () => (started ? started.host : undefined),
         /** 起后端，返回访问地址。 */
         async start() {
             if (started) { return started.url; }

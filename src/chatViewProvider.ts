@@ -8,7 +8,7 @@ import { VscodeScreen } from "./vscodeScreen";
  *
  * 第二步之后会话不再跑在插件进程里：会话、网页服务、项目 / 会话面板都在独立后端（pichat）里，
  * 插件这边只剩两件事：
- *   1. **一屏界面**：侧边栏的网页视图装的是同一份界面代码，消息由 {@link BackendClient} 转给后端，
+ *   1. **一屏界面**：插件里那块对话面板装的是同一份界面代码，消息由 {@link BackendClient} 转给后端，
  *      后端推的消息再转回来。界面代码完全不用改（它以为还在跟插件进程说话）；
  *   2. **一双能打开文件的手**：后端派来的"打开这个文件 / 找这个符号 / 报编辑器里开了哪些文件"
  *      由 {@link VscodeScreen} 这个窗口干（只干它自己打开着的那个目录的活）。
@@ -206,19 +206,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     //  命令入口（命令面板 / 快捷键 / 状态栏）
     // ========================================================================
 
-    /** 打开侧边栏、等界面就绪（消息发早了界面还没建立监听）。 */
+    /** 打开插件里的对话面板、等界面就绪（消息发早了界面还没建立监听）。 */
     private async reveal(): Promise<void> {
         await vscode.commands.executeCommand("piChat.openChat");
         await this.waitLocalReady();
     }
 
-    /** 全局"新建会话"：打开侧边栏并新建一个会话。 */
+    /** 全局"新建会话"：打开插件里的对话面板并新建一个会话。 */
     public async newSessionAtLastActive(): Promise<void> {
         await this.reveal();
         this.client.sendPage({ type: "newSession" });
     }
 
-    /** 命令面板 / 快捷键入口：打开侧边栏并弹出历史会话列表（与顶栏那颗按钮同一份）。 */
+    /** 命令面板 / 快捷键入口：打开插件里的对话面板并弹出历史会话列表（与顶栏那颗按钮同一份）。 */
     public async pickSession(): Promise<void> {
         await this.reveal();
         this.client.sendPage({ type: "openHistory" });

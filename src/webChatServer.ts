@@ -71,7 +71,7 @@ export interface WebServerSettings {
 }
 
 /**
- * 网页服务对会话工作区（侧边栏的 ChatViewProvider）的依赖。
+ * 网页服务对会话工作区（插件那边负责对话面板的 ChatViewProvider）的依赖。
  * 服务不拥有会话：页面只是接在工作区上的"额外的屏"。
  */
 export interface WebServerHost {

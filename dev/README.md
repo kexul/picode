@@ -6,7 +6,7 @@
 
 原理：整条链只有两处换成调试用的：
 
-- 插件调用 VS Code 的那一层（弹窗、配置存储、diff、侧边栏网页视图）换成 `dev/fakeVscode.js`，
+- 插件调用 VS Code 的那一层（弹窗、配置存储、diff、插件里那块对话面板的网页视图）换成 `dev/fakeVscode.js`，
   再按正常用法建一个 `chatViewProvider.ts`（第二步之后它只是后端的一个客户端）；
 - 后端不起另一个进程，就在这个进程里用真启动函数 `startBackend()` 起（见 `serverMain.ts`）。
 
@@ -68,6 +68,18 @@ FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev
 # 不能被甩到底部（ROUNDS 攒消息轮数，AT_BOTTOM=1 是“贴底时点”那种）：
 npm run web:shot -- --fake-pi --script dev/historyScroll.js
 
+# 验“每块屏各看各的会话”（两块浏览器页面各开会话互不牵动；模拟的 VSCode 窗口
+# 会不会认自己工作区里的会话；别的屏把会话关了，这块屏留在原地、发消息就自动重开）：
+node dev/focusCheck.js
+
+# 验断线重连（锁屏 / 切后台 / 断网 / 反复锁屏 / 反复弄断连接）：
+#   场景一 冻住、场景二 断网、场景三 冻住+断网、场景四 反复冻住解冻、
+#   场景五 反复把连接弄断（验序号补发不重不漏）、
+#   场景六 锁屏期间连接悄悄断了（正文到了、尾巴丢了），回来页面自己重开连接补回丢失的消息
+node dev/reconnect.js                    # 全部
+node dev/reconnect.js --scene taillost    # 只跑某一个（逗号可写多个）
+RECON_HOLD_MS=60000 node dev/reconnect.js --scene both   # 锁屏时长自己定（毫秒）
+
 # 看浏览器本来的滚动条（截图默认把滚动条藏起来；查“输入框冒出一根滚动条”这类毛病要打开）：
 npm run web:shot -- --scrollbars --send "你好" --shot send.png
 node dev/inputProbe.js            # 量输入框的高度与滚动状态，每步裁一张小图到 dev/shots/
@@ -104,7 +116,7 @@ node dev/markdownBlocksCheck.js
   （它默认就用真滚动条，还会把输入框的高度与滚动状态打印出来）。
 - **需要 Node 22 以上**（用到内置的 WebSocket 跟浏览器说话），浏览器用本机的 Chrome 或 Edge。
 - **验不到的东西**：diff 编辑器、符号跳转、剪贴板、命令面板入口、状态栏、
-  侧边栏网页视图本身 —— 这些还是得用 VSCodium / VS Code 的 F5 开发宿主看。
+  插件里那块对话面板的网页视图本身 —— 这些还是得用 VSCodium / VS Code 的 F5 开发宿主看。
 
 ## 跟独立后端（`pichat`）什么关系
 
@@ -129,6 +141,8 @@ node dev/markdownBlocksCheck.js
 | `cdp.js` | 浏览器驱动：开 Chrome / Edge、执行页面脚本、等条件、截图（零依赖，走浏览器自带的调试接口） |
 | `browserHost.js` | `npm run web:dev` 的入口：起服务后常驻 |
 | `visit.js` | `npm run web:shot` 的入口：按动作跑一遍并截图 |
+| `focusCheck.js` | 验“每块屏各看各的会话”（两块浏览页面 + 模拟的 VSCode 窗口）：`node dev/focusCheck.js` |
+| `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接）：`node dev/reconnect.js` |
 | `options.js` | 两条命令共用的命令行参数 |
 | `fakePi.js` | 假的 pi（`--fake-pi` 用）：协议跟真 pi 一样，模型换成按剧本演戏，界面调试秒回 |
 | `fake-pi.cmd` / `.sh` | 上面那个的包装：Windows 上 piPath 得是 .cmd 才能被 shell 起来 |

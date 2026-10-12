@@ -149,7 +149,7 @@
   @keyframes typing-blink { 0%, 60%, 100% { opacity: 0.2; } 30% { opacity: 0.9; } }
   /* 一批工具调用收在同一条单独的行里（跟正文分开）：一条放不下就折行，不横向滑 */
   .tool-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0; padding: 0 14px; }
-  .tool { display: inline-block; min-width: 0; max-width: 100%; margin: 2px 4px 0 0; vertical-align: middle; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.7; white-space: normal; overflow-wrap: anywhere; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); border-radius: 4px; padding: 2px 8px; cursor: default; transition: background 150ms, opacity 150ms; }
+  .tool { display: inline-block; position: relative; min-width: 0; max-width: 100%; margin: 2px 4px 0 0; vertical-align: middle; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.7; white-space: normal; overflow-wrap: anywhere; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); border-radius: 4px; padding: 2px 6px; cursor: default; transition: background 150ms, opacity 150ms; }
   .tool-row .tool { margin: 0; }
   .tool:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); opacity: 1; }
   .tool-icon { display: inline-block; line-height: 0; vertical-align: middle; transform-origin: 50% 50%; }
@@ -160,8 +160,25 @@
   .tool.error { opacity: 1; color: var(--vscode-errorForeground, #f48771); }
   .tool.et-pill { cursor: pointer; }
   .tool.reverted { text-decoration: line-through; opacity: 0.6; }
-  /* 合并标签（连着来的同名调用收成一个）：工具名 × 次数（只调一次不写数字） */
-  .tool.tool-group .tg-count { opacity: 0.65; }
+  /* 合并标签（连着来的同名调用收成一个）：工具名 + 次数小方块（只调一次就不写数字）。
+     次数不用乘号：标签字号是正文的 0.8 倍，乘号在这个尺寸只剩几个像素，两条斜线
+     怎么画都发虚；改成一个小色块把数字框住，一眼看得出这是"几次"。
+     方块自己是个居中盒子（数字在里头横竖都居中）；对外用 vertical-align: baseline ——
+     数字跟工具名坐在同一条基线上（原来用 middle 是按名字的身高居中，数字就比名字低一线，
+     看着像名字往上跑）。方块里的数字靠上下不对称的内边距居中，跟这条基线对齐不矛盾。
+     左边距取 0.5em（差不多是工具名前面那个空格的宽度）：工具名前后两边的空档差不多一样大，
+     看起来才是"名字夹在齿轮和数字正中间"。这里原来给的 0.25em 太窄，名字贴着数字，显偏右。
+     上下内边距故意不一样（上 0.12em、下 0.05em）：文字的行盒是照整个字体的上下留白分的，
+     底下那截留给字母的尾巴，数字没有尾巴，照行盒居中会顶在上半个，实际量出来偏上约 1 像素。
+     上边只给 0.12em 不给更多，是因为方块比名字那一行还高一点的话，会把整条标签里的
+     文字往下顶（一排里带数字的标签文字就比别的高/低一线）。0.12em 刚好不顶。 */
+  .tool.tool-group .tg-count { display: inline-flex; align-items: center; justify-content: center; line-height: 1; padding: 0.12em 0.32em 0.05em; margin-left: 0.5em; border-radius: 3px; background: rgba(128,128,128,0.28); vertical-align: baseline; }
+  /* 只调一次时不写次数：空的方块整个不出现，免得留一块没字的灰 */
+  .tool.tool-group .tg-count:empty { display: none; }
+  /* 新摞上一条调用时，次数方块上飘一个「+1」（见 chat.js 的 popPlusOne）：
+     从方块上方浮起来一点、淡掉；不占位置、不挡鼠标（飘过去的这一下不该打断看的人）。 */
+  .tg-plus { position: absolute; transform: translateX(-50%); font-size: 0.95em; line-height: 1; white-space: nowrap; color: var(--vscode-charts-green, #3fb950); pointer-events: none; user-select: none; animation: tg-plus-float 900ms ease-out forwards; }
+  @keyframes tg-plus-float { from { opacity: 1; transform: translate(-50%, 0); } to { opacity: 0; transform: translate(-50%, -1.1em); } }
   /* 工具标签自绘提示框（系统 title 提示要等约一秒，改用短延迟的自绘框），随主题配色；
      手机电脑统一：内容可滚动看全部结果；电脑鼠标移开收起，触屏点外面收起 */
   .tag-tip { position: fixed; z-index: 900; display: flex; flex-direction: column; max-width: 640px; max-height: 60vh; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-panel-border, rgba(128,128,128,0.35))); background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, #252526)); color: var(--vscode-editorHoverWidget-foreground, var(--vscode-editor-foreground, inherit)); font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
@@ -424,7 +441,6 @@
     display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
     padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
   }
-  #pickerHeader .picker-hint { font-weight: 400; font-size: 0.75em; opacity: 0.6; }
   /* 面板头部的关闭按钮：跟会话行尾那颗同一颗叉、同一个尺寸。
      不像行尾那颗那样淡着——面板里就这一颗「关」，得一眼看见。 */
   #pickerHeader #pickerClose {
@@ -503,7 +519,6 @@
   .pk-loadmore:hover:not(:disabled) { opacity: 1; color: var(--vscode-foreground, #ccc); }
   .pk-loadmore:disabled { opacity: 0.45; cursor: default; }
   /* ==== 抽屉面板（历史 / 项目与会话）的排版：只在 pk-drawer 下生效，居中的模型/选项拾取器不受影响 ==== */
-  #pickerOverlay.pk-drawer .picker-hint { display: none; }
   #pickerOverlay.pk-drawer #pickerHeader { align-items: center; padding: 10px 8px 10px 14px; }
   #pickerOverlay.pk-drawer #pickerHeader #pickerTitle { font-size: 13px; }
   #pickerOverlay.pk-drawer #pickerBody { padding: 2px 8px 12px; font-size: 13px; }
@@ -557,8 +572,6 @@
   #pickerOverlay.pk-folders #pickerPanel { width: min(560px, 94vw); max-height: 76vh; }
   #pickerOverlay.pk-folders #pickerHeader { align-items: center; padding: 8px 12px 2px; border-bottom: 0; }
   #pickerOverlay.pk-folders #pickerHeader #pickerTitle { font-size: 13px; }
-  /* 手把手的提示不折行：面板窄的时候它被挤成两行，看着像块补丁 */
-  #pickerOverlay.pk-folders #pickerHeader .picker-hint { flex: 0 0 auto; white-space: nowrap; }
   /* 这一格的分割线改挂在目录那条下面（标题与目录之间不再画线） */
   #pickerOverlay.pk-folders #pickerSubtitle { padding-bottom: 8px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2)); }
   #pickerOverlay.pk-folders #pickerBody { padding: 4px 0 8px; font-size: 13px; }
@@ -812,9 +825,10 @@
   /* 工具图片块（read 读图这类）：直接铺在对话里，自己占一行；说明行 + 图
      它后面的工具标签会另起一行（见 chat.js 的 toolTagHost / afterToolImage） */
   .tool-image-block { margin: 4px 0 12px; padding: 0 14px; }
-  /* 说明行往右 8 像素（= 小标签自己的内边距）：齿轮跟上面那行小标签的齿轮一条竖线，
-     不然它会比上面那一行向左边多伸出来 8 像素。图片不动，仍然跟小标签的灰底盒子左边齐。 */
-  .tool-image-block .tib-head { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; padding-left: 8px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.75; }
+  /* 说明行跟上面那行小标签穿一样的衣服（同样的灰底、圆角、内边距、透明度、字号），
+     看起来就是一次普通的工具调用；名字太长就在盒子里面省略号收尾。
+     盒子左边跟图片左边对齐（都在 .tool-image-block 的 14 像素内边距上）。 */
+  .tool-image-block .tib-head { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; margin: 0 0 6px; padding: 2px 6px; border-radius: 4px; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.7; }
   .tool-image-block .tib-head .tool-icon { flex: 0 0 auto; }
   .tool-image-block .tib-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tool-image-block .tc-dims { flex: 0 0 auto; }

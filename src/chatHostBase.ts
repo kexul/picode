@@ -4,7 +4,7 @@
  * 一份会话工作区（{@link ChatControllerBase} 那套：标签、会话进程、消息分发）可以挂在
  * 不同的宿主上，本类装的是两家都要做的事：
  *   - "好几块屏"的出口：网页服务接进来的浏览器页面（手机 / 电脑浏览器，可以同时开着好几个），
- *     以及宿主自己可能带的一块本机界面（VSCode 那边是侧边栏 webview，独立后端没有）；
+ *     以及宿主自己可能带的一块本机界面（VSCode 那边是插件里那块对话面板，独立后端没有）；
  *   - 页面连接的登记、推送序号、断线补发、整屏重画；
  *   - 浮层（历史列表、模型选择、确认框）该弹在哪块屏上，以及对话框的收发；
  *   - 显示选项（界面颜色、字号、快捷键、提醒开关）的读写入口：候选值与默认值在
@@ -45,8 +45,8 @@ import {
 } from "./viewOptions";
 
 export abstract class ChatHostBase extends ChatControllerBase implements WebServerHost {
-    /** 本机那块界面的固定标识：VSCode 那边就是侧边栏 webview；独立后端没有这块屏，用不上。 */
-    protected static readonly LOCAL_CLIENT_ID = "sidebar";
+    /** 本机那块界面的固定标识：VSCode 那边就是插件里那块对话面板；独立后端没有这块屏，用不上。 */
+    protected static readonly LOCAL_CLIENT_ID = ChatControllerBase.LOCAL_CLIENT_ID;
 
     /** 项目列表里“浏览文件夹”那一行的标识（会话文件、目录都是绝对路径，撞不上这种带 \0 的）。 */
     private static readonly BROWSE_ROW = "\u0000pichat:browse";
@@ -70,8 +70,8 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     /** 正在等浏览器对话框回复的请求（记着是问哪个页面的，那个页面走了就改成取消）。 */
     private readonly pendingDialogs = new Map<number, { resolve: (value: unknown) => void; pageId: string }>();
     private dialogSeq = 0;
-    /** 正在处理哪一个来源发来的消息（本机界面固定标识；页面是它自己的标识）。 */
-    protected currentPageId = ChatHostBase.LOCAL_CLIENT_ID;
+    // 正在处理哪一个来源发来的消息，以及“每块屏各自在看哪个会话”，都在基类里管
+    // （见 ChatControllerBase.currentPageId / clientSessions）：本类只管“屏”这一层。
     /** 人最近在本机界面里动过的时刻：浮层弹到哪块屏上，靠它和页面的动作时刻比。 */
     protected localActiveAt = 0;
 
@@ -97,7 +97,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     /** 写一个显示选项。 */
     protected abstract writeOption(key: string, value: unknown): void;
 
-    /** 往本机界面（VSCode 侧边栏）发一条消息；没有本机界面的宿主不用实现。 */
+    /** 往本机界面（VSCode 里就是插件里那块对话面板）发一条消息；没有本机界面的宿主不用实现。 */
     protected postToLocalClient(_msg: Record<string, unknown>): void { /* 默认没有本机界面 */ }
     /** 本机界面现在能不能收消息（VSCode 那边是 webview 在不在）。 */
     protected hasLocalClient(): boolean { return false; }
@@ -168,13 +168,20 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
      * 挑中的是本机界面时，等它的 JS 就绪再推（否则消息会被静默丢弃，表现为点击无反应）；
      * 挑不出屏（本机界面没开、也没有页面）直接按取消。
      */
-    protected override async showPicker(kind: string, items: any[], current?: string | null, echo?: Record<string, unknown>): Promise<any | undefined> {
-        const target = this.pickOverlayTarget();
-        if (!target) { return Promise.resolve(undefined); }
-        if (target === ChatHostBase.LOCAL_CLIENT_ID) {
+    protected override async showPicker(
+        kind: string,
+        items: any[],
+        current?: string | null,
+        echo?: Record<string, unknown>,
+        target?: string,
+    ): Promise<any | undefined> {
+        // 调用方指定了弹给哪块屏就用它（模型选择器这种“点它的人自己要看”）；不然现挑“人最近在动的那一块”
+        const to = target ?? this.pickOverlayTarget();
+        if (!to) { return Promise.resolve(undefined); }
+        if (to === ChatHostBase.LOCAL_CLIENT_ID) {
             await this.waitLocalReady();
         }
-        return this.openPicker(kind, { items, current: current ?? null, ...(echo || {}) }, target);
+        return this.openPicker(kind, { items, current: current ?? null, ...(echo || {}) }, to);
     }
 
     // ========================================================================
@@ -200,65 +207,63 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         return listDirectories(dir);
     }
 
-    /** 工作区面板当前显示的是哪个目录的会话（点下面的工作区之后会变）。 */
-    private workspaceFolder = "";
-    /** 下半工作区那串还没拿出来的人和游标（一次给 10 个，见 takeWorkspacePage）。 */
-    private workspaceRest: ProjectEntry[] = [];
-    private workspaceOffset = 0;
-    /** 工作区一次给几个。 */
-    /** 工作区可见项目数：当前工作区固定占一行，其余再取四行，总数是五个。 */
+    /** 工作区一次给几个（当前工作区固定占一行，其余再取四行，总数五个）。 */
     private static readonly WORKSPACE_BATCH = 4;
 
     /**
      * “项目与会话”面板：上半是当前工作区的会话列表，下半是工作区（用 pi 跑过会话的目录）。
      * 点下面的工作区**只换上半那份列表**（面板不关，见 switchWorkspacePanel），
      * 点会话才关掉面板切过去；下半最上面那行是“浏览文件夹…”，走原来的逛文件夹那条路。
+     * 面板那一摊数据按屏存（见 pickerStateOf）：两个窗口各自开着互不影响。
      */
     public async showWorkspacePicker(target?: string): Promise<void> {
-        const folder = this.getActive()?.cwd ?? this.getCwd();
-        const choice = await this.openWorkspacePanel(folder, target);
+        const clientId = target || this.currentPageId;
+        const folder = this.getActive(clientId)?.cwd ?? this.getCwd();
+        const choice = await this.openWorkspacePanel(folder, clientId);
         if (!choice || typeof choice.file !== "string") { return; }
-        const folderNow = this.workspaceFolder || folder;
+        const folderNow = this.pickerStateOf(clientId).workspaceFolder || folder;
         if (choice.file === ChatHostBase.BROWSE_ROW) {
-            await this.showFolderPicker(folderNow, target);
+            await this.showFolderPicker(folderNow, clientId);
             return;
         }
-        await this.loadHistorySession(choice.file, folderNow);
+        await this.loadHistorySession(choice.file, folderNow, clientId);
     }
 
     /** 打开面板（画出来并等选择）。 */
-    private async openWorkspacePanel(folder: string, target?: string): Promise<any | undefined> {
-        const payload = await this.buildWorkspacePanel(folder);
-        return this.openPicker("workspace", payload, target);
+    private async openWorkspacePanel(folder: string, clientId: string): Promise<any | undefined> {
+        const payload = await this.buildWorkspacePanel(folder, clientId);
+        return this.openPicker("workspace", payload, clientId);
     }
 
     /**
      * 点了下面某个工作区：只把上半那份会话列表换成那个目录的，面板留着不关。
      * 面板已经被关掉（人在别处点了）就什么都不做——免得画到一个已经没了的面板上。
      */
-    public async switchWorkspacePanel(folder: string, _target?: string): Promise<void> {
-        if (this.pickerKind !== "workspace") { return; }
-        const payload = await this.buildWorkspacePanel(folder);
-        if (this.pickerKind !== "workspace") { return; }   // 画之前又被关了
-        this.sendOverlayTo(this.pickerTarget, { type: "picker", kind: "workspace", ...payload });
+    public async switchWorkspacePanel(folder: string, target?: string): Promise<void> {
+        const clientId = target || this.currentPageId;
+        if (this.pickerStateOf(clientId).kind !== "workspace") { return; }
+        const payload = await this.buildWorkspacePanel(folder, clientId);
+        if (this.pickerStateOf(clientId).kind !== "workspace") { return; }   // 画之前又被关了
+        this.sendOverlayTo(clientId, { type: "picker", kind: "workspace", ...payload });
     }
 
     /**
      * 面板的内容：上半会话（当前目录的历史会话）、下半工作区。
-     * 会话那份复用历史列表那套机器（historyFiles / historyOffset / scanHistoryBatch），
+     * 会话那份复用历史列表那套机器（pickerState 里的 historyFiles / historyOffset / scanHistoryBatch），
      * 工作区那份自己分页：当前目录固定显示，另外一次取 4 个，总共显示 5 个工作区；下面留一颗“加载更多”。
      */
-    private async buildWorkspacePanel(folder: string): Promise<Record<string, unknown>> {
+    private async buildWorkspacePanel(folder: string, clientId: string): Promise<Record<string, unknown>> {
         const cwd = path.resolve(folder);
-        this.workspaceFolder = cwd;
-        this.historyFiles = await listSessionFiles(cwd);
-        this.historyOffset = 0;
-        const sessions = await this.scanHistoryBatch();
+        const state = this.pickerStateOf(clientId);
+        state.workspaceFolder = cwd;
+        state.historyFiles = await listSessionFiles(cwd);
+        state.historyOffset = 0;
+        const sessions = await this.scanHistoryBatch(clientId);
         const projects = await this.listProjectsForPicker();
         const current = projects.find((p) => this.sameDir(p.cwd, cwd));
         // 分页的那串：去掉当前目录那条（它固定在第一），剩下的按最后活动时间排（清单本来就是倒序的）。
-        this.workspaceRest = projects.filter((p) => !this.sameDir(p.cwd, cwd));
-        this.workspaceOffset = 0;
+        state.workspaceRest = projects.filter((p) => !this.sameDir(p.cwd, cwd));
+        state.workspaceOffset = 0;
         const head: any[] = [
             { label: "打开文件夹…", file: ChatHostBase.BROWSE_ROW, action: "browse", folderPath: "挑一个文件夹当工作区" },
             {
@@ -274,22 +279,23 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
             title: "项目与会话",
             sessions: {
                 items: sessions,
-                hasMore: this.historyOffset < this.historyFiles.length,
+                hasMore: state.historyOffset < state.historyFiles.length,
                 folder: cwd,
                 name: this.dirName(cwd),
             },
             spaces: {
-                items: head.concat(this.takeWorkspacePage()),
+                items: head.concat(this.takeWorkspacePage(clientId)),
                 current: cwd,
-                hasMore: this.workspaceOffset < this.workspaceRest.length,
+                hasMore: state.workspaceOffset < state.workspaceRest.length,
             },
         };
     }
 
     /** 取下一批工作区行（一次 WORKSPACE_BATCH 个）。 */
-    private takeWorkspacePage(): any[] {
-        const batch = this.workspaceRest.slice(this.workspaceOffset, this.workspaceOffset + ChatHostBase.WORKSPACE_BATCH);
-        this.workspaceOffset += batch.length;
+    private takeWorkspacePage(clientId: string): any[] {
+        const state = this.pickerStateOf(clientId);
+        const batch = state.workspaceRest.slice(state.workspaceOffset, state.workspaceOffset + ChatHostBase.WORKSPACE_BATCH);
+        state.workspaceOffset += batch.length;
         return batch.map((p) => ({
             label: p.name,
             file: p.cwd,
@@ -301,12 +307,14 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
 
     /** 面板里点工作区那块的「加载更多」：再送一批过去。 */
     public async loadMoreWorkspaces(): Promise<void> {
-        if (this.pickerKind !== "workspace") { return; }
-        const items = this.takeWorkspacePage();
-        this.sendOverlayTo(this.pickerTarget, {
+        const clientId = this.currentPageId;
+        const state = this.pickerStateOf(clientId);
+        if (state.kind !== "workspace") { return; }
+        const items = this.takeWorkspacePage(clientId);
+        this.sendOverlayTo(clientId, {
             type: "workspacePageAppend",
             items,
-            hasMore: this.workspaceOffset < this.workspaceRest.length,
+            hasMore: state.workspaceOffset < state.workspaceRest.length,
         });
     }
 
@@ -317,8 +325,10 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
      * 每一项都带一个图标名（icon），界面照名字在行首画一颗（见 media/chat.js 的 FOLDER_ROW_ICONS）：
      * "folder" 子目录、"up" 上一层（换一个盘也一样是往上走）、"check" 用这个目录。
      * 图标写在数据里、不在文字前面拼符号：符号在有的字体下对不齐，也没法按名字换。
+     *
+     * @param clientId 这个浮层是哪块屏开的（它自己收自己的回复）。
      */
-    public async showFolderPicker(dir: string, target?: string): Promise<void> {
+    public async showFolderPicker(dir: string, clientId: string = this.currentPageId): Promise<void> {
         const listing = await this.listDirsForPicker(dir);
         // 判"这是盘符列表"只认空路径：dirBrowse 把盘根（D:\）也标成 roots，
         // 但那是个真目录（可以选它当项目目录，也是上一层能到的地方），不能跟盘符列表混为一谈。
@@ -351,17 +361,17 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         // 盘符列表没有路径可报，写一句“此电脑”——跟 Windows 资源管理器里那一层的叫法一致。
         const subtitle = driveList ? "此电脑" : listing.path;
         // 不给筛选框：一层目录就几行，用上下键挑名字比打字快，框还占一截地方。
-        const choice = await this.openPicker("folders", { items, searchable: false, title, subtitle }, target);
+        const choice = await this.openPicker("folders", { items, searchable: false, title, subtitle }, clientId);
         if (!choice || typeof choice.file !== "string" || !choice.file) { return; }
         if (choice.file === ChatHostBase.USE_DIR_ROW) {
-            this.newSessionInDir(listing.path);
+            this.newSessionInDir(listing.path, { clientId });
             return;
         }
         if (choice.file === ChatHostBase.ROOTS_ROW) {
-            await this.showFolderPicker("", target);
+            await this.showFolderPicker("", clientId);
             return;
         }
-        await this.showFolderPicker(choice.file, target);
+        await this.showFolderPicker(choice.file, clientId);
     }
 
     // ========================================================================
@@ -413,10 +423,17 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
             this.pendingResyncPages.delete(pageId);
             void this.resyncPage(pageId, note);
         }
-        if (!this.pageDeliveryOn || this.outbox.size === 0) { return; }
-        for (const msg of this.outbox.drain()) {
-            if (!this.broadcaster.sendTo(pageId, msg)) { return; }
+        if (this.pageDeliveryOn && this.outbox.size > 0) {
+            for (const msg of this.outbox.drain()) {
+                if (!this.broadcaster.sendTo(pageId, msg)) { break; }
+            }
         }
+        // 这块屏（重新）连上：把“你在看哪个会话”和一份最新的会话列表单发给它。
+        // 断线期间漏掉的变化（会话关了、新开了）靠它补齐——会话列表不再进补发暂存了
+        // （里面带着“每块屏在看哪一个”，补发给别的屏会把人家的画面带偏）。
+        const mine = this.focusedIdFor(pageId);
+        if (mine) { this.postToOneClient(pageId, { type: "sessionActivated", sessionId: mine }); }
+        this.sendSessionListTo(pageId);
     }
 
     /** 一条推送连接断了（页面关掉 / 死连接被掐掉）：它那个没人答的确认框改成取消，
@@ -455,10 +472,22 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     }
 
     /**
-     * 要弹对话框时问哪一块屏：默认“人最近在里面动过的那个”。
-     * 报活不算动作，不然退到后台的页面也会一直抢着当“最近在动的那个”。
+     * 要弹对话框时问哪一块屏。
+     *
+     * 先看“谁正在看着这个会话”（调用方把会话标识给进来时）：一个会话的提问弹到没在看它的
+     * 窗口去，容易被当成莫名其妙的东西。没人看着它（或调用方没说会话）才退到老规矩：
+     * 问“人最近在里面动过的那个”。报活不算动作，不然退到后台的页面会一直抢着当“最近在动的那个”。
      */
-    protected pickDialogClient(): string | undefined {
+    protected pickDialogClient(sessionId?: string): string | undefined {
+        if (sessionId) {
+            const viewing = this.clientsViewing(sessionId);
+            if (viewing.length > 0) {
+                // 几块屏都在看：挑最近有人在里面动过的那个（都在看就是同一件事，弹哪边都对）
+                const recent = this.broadcaster.recentActionPage();
+                if (recent && viewing.includes(recent.id)) { return recent.id; }
+                return viewing[0];
+            }
+        }
         const page = this.broadcaster.recentActionPage();
         if (!page) { return undefined; }
         return page.at >= this.localActiveAt ? page.id : undefined;
@@ -466,10 +495,11 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
 
     /**
      * 让一块屏弹一个对话框并等回复。
+     * @param sessionId 哪个会话问的：优先问正在看它的那块屏（见 pickDialogClient）。
      * 返回 undefined 表示没等着（没有“人在动”的屏，也没有兜底可挑），调用方换自己的办法。
      */
-    protected askPage(kind: "confirm" | "prompt", fields: Record<string, string>): Promise<unknown> {
-        const pageId = this.pickDialogClient() ?? this.pageForDialogFallback();
+    protected askPage(kind: "confirm" | "prompt", fields: Record<string, string>, sessionId?: string): Promise<unknown> {
+        const pageId = this.pickDialogClient(sessionId) ?? this.pickDialogClient() ?? this.pageForDialogFallback();
         if (!pageId) { return Promise.resolve(undefined); }
         const id = ++this.dialogSeq;
         return new Promise<unknown>((resolve) => {
@@ -543,9 +573,9 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         this.usedChatNames.delete(composeName(parts));
     }
 
-    /** # 对话引用目录刷新：只有这一份会话工作区（本机界面 + 接在它上面的网页页面）。 */
+    /** # 对话引用目录刷新：每一块屏都会拿到全部会话，自己那一个由界面按本地当前会话滤掉。 */
     public broadcastChatReferences(): void {
-        this.updateChatReferences(this.getChatReferenceItems(this.getActive()?.id));
+        this.updateChatReferences(this.getChatReferenceItems());
     }
 
     protected override allocatePanelName(): NameParts { return this.allocateChatName(); }
@@ -608,7 +638,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
             {
                 action: "theme",
                 label: "界面颜色",
-                desc: "对话界面的深浅配色，侧边栏与网页端共用这一份（浅色即网页端的白底那套，深色按 VSCode 深色主题的取值）",
+                desc: "对话界面的深浅配色，插件里的对话面板与浏览器页面共用这一份（浅色即网页端的白底那套，深色按 VSCode 深色主题的取值）",
                 check: null,
                 value: this.getThemeMode(),
                 options: [
@@ -656,6 +686,18 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     private readonly screens = new ScreenRegistry();
     /** 每个窗口算出来的符号名字（窗口标识 → 名字）：界面以认到这些名字就画成可点的链接。 */
     private readonly symbolNamesByScreen = new Map<string, string[]>();
+    /** 页面标识 → 它是哪个窗口领的（插件的网页视图由插件用自己的屏连接去领页面标识）。 */
+    private readonly pageScreen = new Map<string, string>();
+    /** 窗口标识 → 它最近领的页面标识（窗口重连换新标识时靠它扫干净旧的）。 */
+    private readonly screenPage = new Map<string, string>();
+    /**
+     * 窗口标识 → 它上次在看哪个会话。
+     * 插件重连会领一个新的页面标识，基类那本“哪块屏在看哪个会话”的账就断了；
+     * 窗口这一层记一份，新页面接上时接着看原来那个（不然窗口会被拨回它工作区的会话）。
+     */
+    private readonly screenSession = new Map<string, string>();
+    /** 最近一次问某个窗口“编辑器里开着哪些文件”的是哪块屏（回话要回给问的那块）。 */
+    private readonly fileListAsker = new Map<string, string>();
 
     /** 屏的登记簿（网页服务拿它做死连接巡检、写心跳）。 */
     public getScreens(): ScreenRegistry { return this.screens; }
@@ -666,9 +708,44 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         this.pushSessionFiles(screenId);
     }
 
+    /**
+     * 只发一块屏（本机界面或某个页面）：控制器那边"只给动手的那块屏"的消息走这里。
+     * 那块屏现在没连着（断线间隙）就丢掉：它连回来时后端会单发一份状态给它。
+     */
+    protected override postToOneClient(clientId: string, msg: Record<string, unknown>): void {
+        if (!clientId) { this.postToWebview(msg); return; }
+        this.sendToOneClient(clientId, msg);
+    }
+
+    /** 现在连着的每一块屏（本机界面 + 所有页面）：会话列表要一块一块各发一份，走这里。 */
+    protected override forEachClient(
+        fn: (clientId: string, send: (msg: Record<string, unknown>) => void) => void,
+    ): void {
+        if (this.hasLocalClient()) { fn(ChatHostBase.LOCAL_CLIENT_ID, (msg) => this.postToLocalClient(msg)); }
+        this.broadcaster.forEachChannel((channel) => {
+            fn(channel.id, (msg) => { this.broadcaster.sendTo(channel.id, msg); });
+        });
+    }
+
+    /** 这块屏该用哪个目录：插件的网页视图是它那个窗口打开着的第一个文件夹（浏览器页面没有）。 */
+    protected override preferredDirForClient(clientId: string): string {
+        const screenId = this.pageScreen.get(clientId);
+        if (!screenId) { return ""; }
+        return this.screens.get(screenId)?.folders[0] ?? "";
+    }
+
+    /** 某块屏看的会话变了：在窗口那一层也记一份（窗口重连换了页面标识后接着看原来那个）。 */
+    protected override onClientSessionChanged(clientId: string, panelId: string): void {
+        const screenId = this.pageScreen.get(clientId);
+        if (screenId) { this.screenSession.set(screenId, panelId); }
+    }
+
     public detachScreen(screenId: string): void {
         this.screens.remove(screenId);
         this.symbolNamesByScreen.delete(screenId);
+        // 页面与窗口的对应表清掉（screenSession 留着：窗口重连的间隙里还得靠它接上原来那个会话）
+        const pageId = this.screenPage.get(screenId);
+        if (pageId) { this.pageScreen.delete(pageId); this.screenPage.delete(screenId); }
         this.pushSymbolNames();
     }
 
@@ -686,14 +763,24 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
                 this.pushSymbolNames();
                 return undefined;
             }
-            case "files":
-                // 窗口报"编辑器里开着这些文件"：原样转给界面（# 引用列表用）。
-                this.postToWebview({ type: "openFiles", files: Array.isArray(msg.files) ? msg.files : [] });
+            case "files": {
+                // 窗口报“编辑器里开着这些文件”：回给问的那块屏（# 引用列表用）。
+                const files = Array.isArray(msg.files) ? msg.files : [];
+                const asker = this.fileListAsker.get(screenId);
+                if (asker) { this.postToOneClient(asker, { type: "openFiles", files }); }
+                else { this.postToWebview({ type: "openFiles", files }); }
                 return undefined;
+            }
             case "newPage": {
                 // 插件也要一块"页面"（它的网页视图要走 /api + /events）：后端发它一个标识。
                 const id = `p-${crypto.randomUUID()}`;
                 this.broadcaster.markIssued(id);
+                // 记下这个页面是哪个窗口的：窗口里的网页视图头一次连上要按窗口的工作区挑会话，
+                // 窗口重连换了新标识时也要接着看原来那个会话。
+                this.pageScreen.set(id, screenId);
+                this.screenPage.set(screenId, id);
+                const remembered = this.screenSession.get(screenId);
+                if (remembered) { this.adoptClientSession(id, remembered); }
                 return { pageId: id };
             }
             case "failed":
@@ -765,10 +852,18 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     }
 
     protected sendFileList(): void {
+        const asker = this.currentPageId;
+        const cwd = this.activeCwd();
+        const screen = this.screens.pick(cwd);
         // 没人开着这个工作区就回个空的：界面上的 # 引用列表宁可空着，也别一直等。
-        if (!this.routeToScreen("listFiles", {}, "列编辑器里打开着的文件")) {
-            this.postToWebview({ type: "openFiles", files: [] });
+        if (!screen) {
+            this.onNotice(`这台机器上没有打开 ${cwd} 的 VS Code 窗口，这件事（列编辑器里打开着的文件）没人做。`);
+            this.postToOneClient(asker, { type: "openFiles", files: [] });
+            return;
         }
+        // 这块屏问的：窗口把文件清单报回来时只回给它（同一个后端可能好几块屏各问各的）
+        this.fileListAsker.set(screen.id, asker);
+        screen.send({ kind: "listFiles", cwd });
     }
 
     /** 会话触及的文件变了：重新推给各个窗口（它们的符号表要跟着更新）。 */
@@ -797,8 +892,13 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
                     ? msg.lastSeq : -1;
                 if (pageId && pageId !== ChatHostBase.LOCAL_CLIENT_ID
                     && lastSeq >= 0 && this.broadcaster.catchUp(pageId, lastSeq)) {
+                    // 补发的是断线前的老消息（里面可能有那个会话被关掉之前的内容）：
+                    // 补完再给它一份最新的会话列表，“已经不存在的会话”就不会在它上面留在那儿。
+                    this.sendSessionListTo(pageId);
                     return true;
                 }
+                // 会话列表先给它（界面上那些会话壳先建起来），再整屏重画。
+                this.sendSessionListTo(pageId);
                 void this.resyncPage(pageId, "");
                 return true;
             }
@@ -830,7 +930,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
                 // 面板里「正在对话」那组的「＋ 在 xxx 新建会话」：目录用界面上写着的那一个
                 // （面板切过工作区就是那个），而不是顶条上当前会话那个目录（那个是加号用的规则）。
                 this.newSessionInDir(
-                    typeof msg.path === "string" && msg.path ? msg.path : (this.workspaceFolder || this.activeCwd()),
+                    typeof msg.path === "string" && msg.path ? msg.path : (this.pickerStateOf(this.currentPageId).workspaceFolder || this.activeCwd()),
                 );
                 return true;
             case "requestDesktopScreenshot":
@@ -866,25 +966,26 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     // ========================================================================
     //  弹窗 / 会话收尾
     // ========================================================================
-    /** 确认框：先问“人最近在动”的那块屏；挑不出来时交给子类兜底（返回值表示没问着）。 */
-    public async confirmDialog(title: string, message: string): Promise<boolean> {
-        const answer = await this.askPage("confirm", { title, message });
+    /** 确认框：先问正在看这个会话的那块屏，再问“人最近在动”的那块屏；挑不出来时交给子类兜底。 */
+    public async confirmDialog(title: string, message: string, sessionId?: string): Promise<boolean> {
+        const answer = await this.askPage("confirm", { title, message }, sessionId);
         return answer === undefined ? this.confirmDialogFallback(title, message) : answer === true;
     }
 
-    /** 输入框：先问页面；问不着时交给子类兜底。 */
-    public async inputDialog(title: string, placeholder: string, prefill: string): Promise<string | undefined> {
-        const answer = await this.askPage("prompt", { title, placeholder, prefill });
+    /** 输入框：同上（先问看着这个会话的屏）；问不着时交给子类兜底。 */
+    public async inputDialog(title: string, placeholder: string, prefill: string, sessionId?: string): Promise<string | undefined> {
+        const answer = await this.askPage("prompt", { title, placeholder, prefill }, sessionId);
         if (answer === undefined) { return this.inputDialogFallback(title, placeholder, prefill); }
         if (answer === null) { return undefined; }  // 用户按了取消
         return String(answer);
     }
 
     /** 选项列表：先问页面（样式与模型选择器一致）；问不着时交给子类兜底。 */
-    public async selectDialog(title: string, options: string[]): Promise<string | undefined> {
-        if (this.pickDialogClient() ?? this.pageForDialogFallback()) {
+    public async selectDialog(title: string, options: string[], sessionId?: string): Promise<string | undefined> {
+        const target = this.pickDialogClient(sessionId) ?? this.pickDialogClient() ?? this.pageForDialogFallback();
+        if (target) {
             const items = options.map((option, index) => ({ label: option, file: String(index) }));
-            const choice = await this.showPicker("browserSelect", items, null, { title });
+            const choice = await this.showPicker("browserSelect", items, null, { title }, target);
             const index = Number(choice && typeof choice.file === "string" ? choice.file : NaN);
             if (Number.isInteger(index) && index >= 0 && index < options.length) { return options[index]; }
             // 浮层开在页面上的时候，页面那头就是全部答案来源（用户点了取消也在这里）；
@@ -902,8 +1003,12 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     protected async selectDialogFallback(_title: string, _options: string[]): Promise<string | undefined> { return undefined; }
 
     /** 回滚确认：危险动作，默认走确认框那条路（VSCode 那边覆写成原生警告框）。 */
-    public async confirmRevert(label: string): Promise<boolean> {
-        return this.confirmDialog("回滚修改", `${label} 在此次修改后又被变更过，回滚将丢弃那些后续变更。确定继续？`);
+    public async confirmRevert(label: string, sessionId?: string): Promise<boolean> {
+        return this.confirmDialog(
+            "回滚修改",
+            `${label} 在此次修改后又被变更过，回滚将丢弃那些后续变更。确定继续？`,
+            sessionId,
+        );
     }
 
     /** 停掉本工作区的所有 pi 进程（宿主收摊时用；页面与界面的生死与此无关）。 */
@@ -913,7 +1018,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
             this.releasePanelName(rt.nameParts);
         }
         this.panels.clear();
-        this.activePanelId = undefined;
+        this.forgetAllClients();
         this.disposeSpare();
     }
 }

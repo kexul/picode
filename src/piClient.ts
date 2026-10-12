@@ -77,6 +77,10 @@ export class PiClient extends EventEmitter {
 
         this.attachJsonlReader(this.proc.stdout, (line) => this.handleLine(line));
 
+        // 子进程先没了、我们还在往它 stdin 里写：报出来的是 EPIPE。
+        // 这个不用当回事（exit 回调会把在途请求和状态收尾），更不该让它变成未捕获异常。
+        this.proc.stdin.on("error", () => { /* 写不进去就算了 */ });
+
         this.proc.stderr.on("data", (chunk: Buffer) => {
             this.emit("stderr", chunk.toString("utf8"));
         });

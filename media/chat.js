@@ -93,6 +93,8 @@
   const sessionDrafts = new Map();   // sessionId -> { text, selStart, selEnd, height }（输入草稿按会话存）
   let sessionOrder = [];             // 后端给的会话顺序（列表段按它画）
   let activeId = null;               // 当前显示的会话 id
+  // 后端说“你这块屏切到这个会话”但那个会话的壳还没建出来（列表在路上）：记下来等它到了一起用
+  let pendingActivateId = null;
   // 会话列表里点过“关闭”的那一行：等第二次点击确认（几秒后自动撤销，防误触）。
   let pendingCloseId = null;
   let pendingCloseTimer = null;
@@ -316,7 +318,7 @@
 
   // ── 会话结束提示音（Web Audio 合成，无外部资源） ──
   // 由扩展宿主发 "turnEnd" 消息触发，不再只看当前会话（别的会话跑完也响）。
-  // 网页被隐藏时（窗口切到后台、侧边栏被切走、面板在后台标签里）不出声：
+  // 页面被隐藏时（窗口切到后台、插件里的对话面板被切走、页面在后台标签里）不出声：
   // 那时 Chrome 会把音频上下文挂起，响了也听不见。
   var audioCtx = null;
   var lastBeepAt = 0;
@@ -497,6 +499,8 @@
       toolGroupEntries: new Map(),
       pendingToolCards: new Map(),
       pendingToolTags: new Map(),
+      // 正在重放历史（切会话、重连、加载更早的一批）时不飘 +1：那些是老消息，不是新涨的
+      noCountPop: true,
       // 历史窗口（网页端「只发最近一段」）：顶部按钮、加载更早的暂存区等
       hasMoreHistory: false,
       _historyBtn: null,
@@ -1070,7 +1074,7 @@
   }
 
   // ==================== 工具标签：合并 ====================
-  // 一条工具调用行（= 两条正文之间的一批）里，同一个工具名只出一个标签：工具名 × 次数（这批里一共调了几次，
+  // 一条工具调用行（= 两条正文之间的一批）里，同一个工具名只出一个标签：工具名 + 次数小方块（这批里一共调了几次，
   // 只有一次时不写数字）。标签就停在**第一次**出现这个名字的位置；中间夹了别的工具调用（不同名的、
   // 或者编辑卡片）不影响它攒数，数都记在同一个标签上。
   // 鼠标停上去，提示框里把它们一条一条列出来（调用 + 结果），见 fillGroupTip。
@@ -1130,7 +1134,8 @@
       tag.appendChild(nameEl);
       tag.appendChild(countEl);
       // 合并标签上不挂单条结果（_toolName / _resultText 那一套）：每条的数据都在 g.entries 里
-      g = { row, tag, nameEl, countEl, name: toolName, entries: [] };
+      // plusAt / plusEl：这条标签上「+1」小动画的上一次时间与正在飘的那个（见 popPlusOne）
+      g = { row, tag, nameEl, countEl, name: toolName, entries: [], plusAt: 0, plusEl: null };
       tag._tipFill = (content) => fillGroupTip(g, content);
       attachTagTipHandlers(tag);
       batch.byName.set(toolName, g);
@@ -1150,16 +1155,41 @@
     g.entries.push(entry);
     if (toolCallId) { st.toolGroupEntries.set(toolCallId, entry); }
     syncGroupTag(g);
+    // 方块上飘个 +1：只有“本来就是它、又攒了一条”才飘，重放历史时（noCountPop）不飘
+    if (g.entries.length > 1 && !st.noCountPop) { popPlusOne(g); }
     scrollToBottom(st);
     return entry;
   }
 
-  /** 合并标签长什么样：工具名 × 一共调了几次（只调一次就不写数字）；
+  // 同一颗标签上「+1」最快隔这么久才飘一次：连着一串调用时不至于一直跳
+  const PLUS_MIN_GAP_MS = 600;
+
+  /** 次数方块上飘一个「+1」：从方块上方浮起来一点、淡掉，飘完自己从页面上收走。
+   *  锚在标签里（标签自己是 position: relative），不占布局位置、不挡鼠标。
+   *  同一颗标签上有间隔限制（PLUS_MIN_GAP_MS）：太密就不飘，免得一串调用看得人眼花。 */
+  function popPlusOne(g) {
+    const count = g.countEl;
+    if (!count || !count.offsetWidth) { return; }
+    const now = Date.now();
+    if (now - (g.plusAt || 0) < PLUS_MIN_GAP_MS) { return; }
+    g.plusAt = now;
+    if (g.plusEl) { g.plusEl.remove(); }   // 上一个还在飘：换成新的，重新从底下飘一遍
+    const pop = document.createElement("span");
+    pop.className = "tg-plus";
+    pop.textContent = "+1";
+    g.tag.appendChild(pop);
+    pop.style.left = (count.offsetLeft + count.offsetWidth / 2) + "px";
+    pop.style.top = (count.offsetTop - (pop.offsetHeight || 10) - 1) + "px";   // 方块正上方，不盖住数字
+    g.plusEl = pop;
+    setTimeout(() => { pop.remove(); if (g.plusEl === pop) { g.plusEl = null; } }, 900);
+  }
+
+  /** 合并标签长什么样：工具名 + 次数（一个写着数字的小方块；只调一次就不写数字）；
    *  有一条还在跑就转圈，有失败就标红。 */
   function syncGroupTag(g) {
     g.nameEl.textContent = " " + (g.name || "");
     const total = g.entries.length;
-    g.countEl.textContent = total > 1 ? " ×" + total : "";
+    g.countEl.textContent = total > 1 ? String(total) : "";
     g.tag.classList.toggle("running", g.entries.some((e) => !e.done));
     g.tag.classList.toggle("error", g.entries.some((e) => e.isError));
     refreshTagTipIfShowing(g.tag);
@@ -2821,7 +2851,7 @@
   let hashStart = -1;     // # 触发字符在输入框的位置
   let hashOpen = false;
   let hashReqSeq = 0;
-  // 宿主下发的全局目录：覆盖侧边栏和所有当前打开的编辑器 Pi Chat。
+  // 宿主下发的全局目录：覆盖插件里的对话面板和所有当前打开的编辑器 Pi Chat。
   let chatReferences = [];
   function hideHashMenu() { fileMenuEl.classList.add("hidden"); hashStart = -1; hashOpen = false; }
   function maybeShowHashMenu() {
@@ -2836,9 +2866,9 @@
     filterHashMenu(m[2]);
   }
 
-  /** # 引用候选由扩展统一下发，因而可跨侧边栏与编辑器工作区。 */
+  /** # 引用候选由扩展统一下发（含所有会话）；自己正在看的那个不用列进去。 */
   function hashMenuItems() {
-    return chatReferences;
+    return chatReferences.filter((it) => it.id !== activeId);
   }
 
   function filterHashMenu(query) {
@@ -2996,8 +3026,8 @@
     inputEl.style.height = Math.min(Math.max(height, INPUT_MIN_HEIGHT), 640) + "px";
   }
 
-  // 窗口（侧边栏）宽度变了：同一段字会折成不同的行数，高度得跟着重算——
-  // 不然框比内容矮一截，右边就冒出一根滚动条。拖侧边栏会连发很多次，一帧合一次。
+  // 宽度变了（VSCode 里拖插件面板的边、浏览器里改窗口大小）：同一段字会折成不同的行数，
+  // 高度得跟着重算——不然框比内容矮一截，右边就冒出一根滚动条。拖动会连发很多次，一帧合一次。
   let autoResizeFrame = 0;
   window.addEventListener("resize", () => {
     if (autoResizeFrame) { return; }
@@ -3300,24 +3330,27 @@
         st.cwd = typeof s.cwd === "string" ? s.cwd : "";
       });
       sessionOrder = order;
-      // 已经关掉的会话：把它的壳和草稿一起丢掉
+      // 已经不在列表里的会话（被关掉了）：壳和草稿一起丢掉。
+      // 本屏正在看的那个例外：画面留在原地（后端那头还认着它，接着往里发消息会自动把它重开），
+      // 不硬生生把这边拽到别的会话去——别的窗口关掉它时会这样（自己点的那颗 × 不在此列）。
       Array.from(sessions.keys()).forEach((id) => {
-        if (!seen.has(id)) {
-          if (pendingCloseId === id) { pendingCloseId = null; }
-          removeSession(id);
-        }
+        if (seen.has(id)) { return; }
+        if (id === activeId && pendingCloseId !== id) { return; }
+        if (pendingCloseId === id) { pendingCloseId = null; }
+        removeSession(id);
       });
-      // 当前会话：后端说切了才切（没切就只刷新状态）
-      const wantActive = msg.activeId;
-      if (wantActive && sessions.has(wantActive)) {
-        if (activeId !== wantActive) {
-          activateSessionView(wantActive);
-        } else {
-          mountActiveSession();
-          syncPaneStatuses();
-        }
-      } else if (!wantActive) {
-        activeId = null;
+      // 当前会话是这块屏自己的事：别的屏切了会话（sessionList 里那个 activeId）不管，
+      // 只有后端单发给本屏的 sessionActivated 才会切。这里只把画面重新挂好、状态刷一遍。
+      // 后端说的“你看这个”比会话壳先到时先记着（见上面 sessionActivated 那段）：
+      // 这批列表里有了就切过去；这批里也没有就当它已经过时（会话被关了之类），不再压着。
+      if (pendingActivateId) {
+        const pending = pendingActivateId;
+        pendingActivateId = null;
+        if (sessions.has(pending)) { activateSessionView(pending); }
+        else if (activeId && sessions.has(activeId)) { mountActiveSession(); syncPaneStatuses(); }
+      } else if (activeId && sessions.has(activeId)) {
+        mountActiveSession();
+        syncPaneStatuses();
       }
       renderSessionBar();
       updateSendState();
@@ -3329,7 +3362,9 @@
     }
     if (type === "sessionActivated") {
       const id = msg.sessionId;
-      if (id && sessions.has(id)) { activateSessionView(id); }
+      // 会话壳要先在（列表可能晚一步）：不在就先记着，等它出现在列表里再切
+      if (id && sessions.has(id)) { pendingActivateId = null; activateSessionView(id); }
+      else if (id) { pendingActivateId = id; }
       return;
     }
     if (type === "viewOptions") { applyViewOptions(msg); return; }
@@ -3399,7 +3434,8 @@
     // 你没在看那个会话就把它标成“有新消息”。子会话不标：它跑完的结果会交回派它的会话，
     // 那边收到后会再跑一轮，到时候标那边就够了（子会话会挂在父会话下面，标了反而多一颗点）。
     if (type === "turnEnd") {
-      if (notifyOnTurnEnd) { playTurnEndBeep(); }
+      // beep：后端说“这块屏正看着这个会话，该响”（别的屏跑完的不在这儿响，见后端那边）
+      if (notifyOnTurnEnd && msg.beep !== false) { playTurnEndBeep(); }
       const done = msg.sessionId ? sessions.get(msg.sessionId) : null;
       if (done && done.id !== activeId && !(done.parentId && sessions.has(done.parentId))) {
         markSessionUnread(done);
@@ -3462,8 +3498,10 @@
     }
     if (!t) { return; }
     // 安全网：界面刚起来、sessionList 还没到时，先把当前会话定下来。
+    // 但后端已经说了“你看的是哪一个”（还在等它的会话壳）：不许拿“第一条冒出来的消息”顶上去，
+    // 否则会暂时锚到别的会话，草稿也跟着认错主。
     // 注意别在这里碰输入框（草稿还没有主）；搬运与恢复交给 sessionList 那段做。
-    if (!activeId) {
+    if (!activeId && !pendingActivateId) {
       activeId = t.id;
       mountActiveSession();
       renderSessionBar();
@@ -3472,6 +3510,7 @@
 
     switch (type) {
       case "userMessage": {
+        t.noCountPop = false;   // 自己这边开始的一轮：后面涨的次数是真新长出来的，+1 该飘
         finalizeCurrentAssistant(t);
         const label = msg.imageCount ? "[" + msg.imageCount + " 张图片] " : "";
         addPlain(t, "user", "你", label + (msg.text || ""));
@@ -3480,6 +3519,7 @@
         break;
       }
       case "streamStart":
+        t.noCountPop = false;   // 模型开始回了：这一轮里后面长出来的次数都是新的
         t.activity = msg.activity || "working";
         t.activityDetail = msg.detail || "";
         setStreaming(t, true);
@@ -3568,6 +3608,8 @@
       case "clear":
         cancelFlush(t);
         hideTagTip();
+        // 重画历史（切会话 / 重连）随之开始：这之后涌进来的工具调用都是老消息，别飘 +1
+        t.noCountPop = true;
         t.paneEl.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
         t.emptyHintGone = false;   // 空提示又回来了（见 hideEmptyHint）
         // 历史窗口状态一并重置：按钮随 innerHTML 清掉了；暂存区里若有没插完的
@@ -3701,6 +3743,7 @@
       case "historyBatchEvent": {
         // 「加载更早」那批消息：逐条包在 event 里送来。先渲染进暂存区（不在页面上），
         // historyBatchEnd 到了再整体插到顶部——中间若穿插流式消息，它们照常走真实窗格，不会串序。
+        t.noCountPop = true;   // 补齐更早的历史，同样别飘 +1
         if (t._stageDropped) { break; }
         const inner = msg.event && typeof msg.event === "object" ? msg.event : null;
         if (!inner) { break; }

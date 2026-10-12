@@ -7,7 +7,7 @@ import { ChatBroadcaster } from "./chatBroadcaster";
 import { ScreenRegistry } from "./screenRegistry";
 
 /**
- * 侧边栏界面从后端现取这条线的检查：
+ * 插件里的对话面板从后端现取界面这条线的检查：
  * 真的起一个网页服务，真的把界面文件抓回来，真的把 HTML 拼一遍。
  * 不建会话、不启动 pi、不碰 vscode。
  */

@@ -93,7 +93,7 @@ ${bodyTop}${sessionBar}  <div id="messages">
   </div>
   <div id="pickerOverlay" class="hidden">
     <div id="pickerPanel">
-      <div id="pickerHeader"><span id="pickerTitle">选择</span><span class="picker-hint">↑↓ 选择 · Enter 确认 · Esc 关闭</span></div>
+      <div id="pickerHeader"><span id="pickerTitle">选择</span></div>
       <div id="pickerSubtitle" class="hidden"></div>
       <div id="pickerSearchWrap"><input id="pickerSearch" type="text" placeholder="筛选…" autocomplete="off" spellcheck="false" /></div>
       <div id="pickerBody"></div>

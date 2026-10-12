@@ -4,12 +4,12 @@
  *
  * 真让模型按剧本一口气调一堆工具不好凑，这里直接往页面里投工具调用消息（跟后端推的是同一种消息），
  * 一次验这几件事：
- *   · 同一个名字一个标签（工具名 × 次数，这批里一共调了几次，只调一次就不写数字）；
+ *   · 同一个名字一个标签（工具名 + 一个写着次数的小方块，这批里一共调了几次，只调一次就不写数字）；
  *     名字不同 → 各占一个；中间夹了别的调用（不同名的、编辑卡片）不影响它攒数；
  *   · 鼠标停上去 → 提示框里一条条列出各条的调用与结果；
  *   · 结果乱序回来、有的失败、有一条还在跑 → 各自归位，标签上跟着标红、转圈；
  *   · taba / codemode（点名不合并）各自单独一个；
- *   · 结果带图的 read → 从组里摘出去，在对话里铺成一整块图（组里剩几条，×几 跟着重算）。
+ *   · 结果带图的 read → 从组里摘出去，在对话里铺成一整块图（组里剩几条，小方块里的数字跟着重算）。
  *
  *   npm run web:shot -- --width 1000 --height 760 --script dev/toolMerge.js
  * 图落在 dev/shots/。
@@ -31,11 +31,17 @@ function post(page, messages) {
 function dump(page) {
     return page.eval(`
         const rows = [];
+        // 标签上可能正飘着“+1”小动画（见 chat.js 的 popPlusOne）：它只是动画，不算标签的文字
+        const tagText = (el) => {
+            const c = el.cloneNode(true);
+            for (const n of c.querySelectorAll(".tg-plus")) { n.remove(); }
+            return c.textContent.trim().replace(/\\s+/g, " ");
+        };
         for (const pane of document.querySelectorAll(".session-pane")) {
             for (const el of pane.children) {
                 const cls = el.className || "";
                 if (cls.indexOf("tool-row") >= 0) {
-                    rows.push("工具行：" + Array.from(el.children).map((c) => "[" + c.textContent.trim().replace(/\\s+/g, " ") + "]").join(""));
+                    rows.push("工具行：" + Array.from(el.children).map((c) => "[" + tagText(c) + "]").join(""));
                 } else if (cls.indexOf("tool-image-block") >= 0) {
                     rows.push("图片块：" + el.querySelector(".tib-text").textContent.trim());
                 } else if (cls.indexOf("assistant") >= 0) {
@@ -65,7 +71,7 @@ module.exports = async (page) => {
         { type: "toolResult", toolCallId: "a3", isError: true, resultText: "src/chatViewProvider.ts(12,3): error TS2304: 找不到名称「x」。", durationMs: 3200 },
         done("a1", " M media/chat.js\n M media/chat.css"),
         done("a2", " media/chat.js | 40 +++---\n media/chat.css |  5 ++"),
-        // 还在跑的一条（带部分结果）：×几 接着涨、齿轮转圈，提示框里那一条显示部分结果
+        // 还在跑的一条（带部分结果）：方块里的数字接着涨、齿轮转圈，提示框里那一条显示部分结果
         call("a4", "bash", { command: "npm test" }),
         { type: "toolResultUpdate", toolCallId: "a4", resultText: "✔ 53 个测试都过了\n（还在跑…）", durationMs: 400 },
     ]);
@@ -76,7 +82,7 @@ module.exports = async (page) => {
     await page.shot("merge-tip.png");
     await leave(page, ".tool-group");
     await page.sleep(300);
-    console.log("第一幕（连着 4 条同名，结果乱序、一条失败、最后一条还在跑）——标签上应该写 bash ×4：\n" + await dump(page));
+    console.log("第一幕（连着 4 条同名，结果乱序、一条失败、最后一条还在跑）——标签上应该写 bash 加一个「4」的方块：\n" + await dump(page));
 
     // ---- 第二幕：同名的并成一个、不同名的各占一个（中间夹了别的调用也照样攒数）----
     await post(page, [
@@ -111,7 +117,7 @@ module.exports = async (page) => {
     ]);
     console.log("\n第三幕（codemode,bash,bash,edit,bash,taba,find —— 三个 bash 算一起，标签停在第一个 bash 的位置）：\n" + await dump(page));
 
-    // ---- 第四幕：同名组里夹着一条"读图"（结果带图）——那一条摘出去单独铺一块图，×几 跟着减 ----
+    // ---- 第四幕：同名组里夹着一条"读图"（结果带图）——那一条摘出去单独铺一块图，方块里的数字跟着减 ----
     await post(page, [
         { type: "assistantFull", text: "再看一眼这张图：" },
         call("d1", "read", { path: "media/chat.css" }),
@@ -128,7 +134,7 @@ module.exports = async (page) => {
     await page.sleep(400);
     await leave(page, ".tool-group");
     await page.sleep(300);
-    console.log("\n第四幕（read ×3 里夹着一张图：摘出去之后剩 read ×2）：\n" + await dump(page));
+    console.log("\n第四幕（read 调了 3 次里夹着一张图：摘出去之后剩下 read 和「2」）：\n" + await dump(page));
     await page.shot("merge-scenes.png");
 
     // ---- 收场：整屏重放一遍，看合并标签在刷新/重连后是不是一样 ----
@@ -144,7 +150,7 @@ module.exports = async (page) => {
         { type: "assistantFull", text: "重放之后还是收成一个标签（刷新、重连、翻历史都走这条路）。" },
     ]);
     await page.sleep(400);
-    console.log("\n整屏重放后（连着 2 条 bash → bash ×2，grep 单独一个）：\n" + await dump(page));
+    console.log("\n整屏重放后（连着 2 条 bash → bash 加一个「2」，grep 单独一个）：\n" + await dump(page));
     await page.shot("merge-replay.png");
 };
 

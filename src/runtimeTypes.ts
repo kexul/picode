@@ -97,7 +97,7 @@ export interface TurnEndInfo {
  * SessionRuntime 只依赖本接口 + PiClient + Node 内置 fs。
  */
 export interface RuntimeHost {
-    /** 工作区标识：侧边栏固定为 "sidebar"，编辑器工作区为各自面板 id。 */
+    /** 工作区标识：插件里的对话面板固定为 "sidebar"，编辑器工作区为各自面板 id。 */
     readonly workspaceId: string;
     getConfig(): PiConfig;
     getCwd(): string;
@@ -139,17 +139,20 @@ export interface RuntimeHost {
     onTabaRequest?(panelId: string, request: TabaRequest): void;
 
     // ---- UI 弹窗（对应当 pi 的 extension_ui_request）----
-    confirmDialog(title: string, message: string): Promise<boolean>;
-    selectDialog(title: string, options: string[]): Promise<string | undefined>;
-    inputDialog(title: string, placeholder: string, prefill: string): Promise<string | undefined>;
+    /** @param sessionId 这是哪个会话问的：优先弹给正在看这个会话的那块屏（没人看才找“人最近动的”）。 */
+    confirmDialog(title: string, message: string, sessionId?: string): Promise<boolean>;
+    selectDialog(title: string, options: string[], sessionId?: string): Promise<string | undefined>;
+    inputDialog(title: string, placeholder: string, prefill: string, sessionId?: string): Promise<string | undefined>;
     /** 模型选择器；取消返回 undefined。同时返回可选的思考强度及当前值。
-     *  echo：透传给 webview 的调试字段（如点击计时），原样附在 picker 消息上。 */
+     *  echo：透传给 webview 的调试字段（如点击计时），原样附在 picker 消息上。
+     *  clientId：该把选择器弹给哪块屏（不填就现挑“人最近在动的那一块”）。 */
     pickModelInteractive(
         models: ModelInfo[],
         currentThinking: string,
         currentProvider: string,
         currentModelId: string,
-        echo?: Record<string, unknown>
+        echo?: Record<string, unknown>,
+        clientId?: string,
     ): Promise<ModelChoice | undefined>;
     /** 持久化用户选中的 model（写各自配置存储）。 */
     persistModel(provider: string, modelId: string): void;
@@ -157,6 +160,7 @@ export interface RuntimeHost {
     // ---- 文件跳转 / diff ----
     /** 打开文件到指定行（1-based）。anchor 为高亮定位行文本，可选。 */
     openFileLocation(path: string, line: number, anchor?: string): void;
-    /** 回滚前的二次确认（文件在修改后又被改动时）。返回是否继续。 */
-    confirmRevert(label: string): Promise<boolean>;
+    /** 回滚前的二次确认（文件在修改后又被改动时）。返回是否继续。
+     *  @param sessionId 哪个会话要回滚：优先弹给正在看它的那块屏。 */
+    confirmRevert(label: string, sessionId?: string): Promise<boolean>;
 }
