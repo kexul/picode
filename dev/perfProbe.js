@@ -215,6 +215,7 @@ async function main() {
                 nodes: document.getElementsByTagName("*").length,
                 messages: document.querySelectorAll(".msg").length,
                 toolCards: document.querySelectorAll(".tool").length,
+                assistantChars: Array.from(document.querySelectorAll(".msg.assistant .md")).map(function (e) { return e.textContent.length; }),
                 paneScrollHeight: pane ? pane.scrollHeight : 0,
                 paneHeight: pane ? pane.clientHeight : 0,
             };
@@ -236,6 +237,7 @@ async function main() {
         console.log("堆内存：" + (delta("JSHeapUsedSize") / 1048576).toFixed(1) + " MB 增量，当前 " + ((after.JSHeapUsedSize || 0) / 1048576).toFixed(1) + " MB");
         console.log("");
         console.log("DOM：" + domInfo.nodes + " 个元素，消息 " + domInfo.messages + " 条，工具卡片 " + domInfo.toolCards + " 个");
+        console.log("助手消息渲染出的字数：" + JSON.stringify(domInfo.assistantChars));
         console.log("会话窗格：" + domInfo.paneScrollHeight + " 像素内容 / " + domInfo.paneHeight + " 像素可见");
         console.log("");
         console.log("这段时间在跑的动画（开始）：" + (animationsA.length ? JSON.stringify(animationsA, null, 0) : "没有"));

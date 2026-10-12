@@ -69,6 +69,10 @@ node dev/perfProbe.js                                     # 开着什么都不�
 node dev/perfProbe.js --stream --prefill 24000 --cpu 4     # 模型正在流式回答（先垫 2.4 万字）
 node dev/perfProbe.js --scroll 10 --prefill 24000          # 手指滑动看长会话
 node dev/perfProbe.js --batch 30                           # 打开长会话时的整屏重画
+
+# 流式正文现在是按块切开渲染的（只重画尾巴）：改过媒体端渲染逻辑后跑一遍，
+# 逐个样例对一下“按块渲染出来的文字”跟“整段渲染的文字”是否一字不差：
+node dev/markdownBlocksCheck.js
 ```
 
 完整参数：`npm run web:shot -- --help`（或 `node dev/visit.js --help`）。
