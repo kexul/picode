@@ -444,6 +444,15 @@
     padding: 6px 8px; font-family: inherit; font-size: inherit;
   }
   #pickerSearch:focus { outline: none; border-color: var(--vscode-focusBorder, #007acc); }
+  /* 标题下面那行小字（目前只有文件夹选择器用：正在看的是哪个目录）。
+     路径长了从前面截、留尾巴（末尾那层目录名是最要紧的那截）。 */
+  #pickerSubtitle {
+    padding: 0 12px 8px; font-size: 11px;
+    color: var(--vscode-descriptionForeground, inherit); opacity: 0.85;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    direction: rtl; text-align: left;
+  }
+  #pickerSubtitle.hidden { display: none; }
   #pickerBody { overflow-y: auto; padding: 6px 4px; font-size: 0.9em; }
   #pickerBody::-webkit-scrollbar { width: 8px; }
   #pickerBody::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 4px; }
@@ -543,6 +552,24 @@
   #pickerOverlay.pk-workspace .pk-space-pane {
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
   }
+  /* ==== 文件夹选择器（一层一层追目录那个）：按 VS Code 资源管理器的列表画：
+     每行就一行（行首一格图标 + 名字）、行矮、选中是方角的整行底色；不给筛选框。==== */
+  #pickerOverlay.pk-folders #pickerPanel { width: min(560px, 94vw); max-height: 76vh; }
+  #pickerOverlay.pk-folders #pickerHeader { align-items: center; padding: 8px 12px 2px; border-bottom: 0; }
+  #pickerOverlay.pk-folders #pickerHeader #pickerTitle { font-size: 13px; }
+  /* 手把手的提示不折行：面板窄的时候它被挤成两行，看着像块补丁 */
+  #pickerOverlay.pk-folders #pickerHeader .picker-hint { flex: 0 0 auto; white-space: nowrap; }
+  /* 这一格的分割线改挂在目录那条下面（标题与目录之间不再画线） */
+  #pickerOverlay.pk-folders #pickerSubtitle { padding-bottom: 8px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2)); }
+  #pickerOverlay.pk-folders #pickerBody { padding: 4px 0 8px; font-size: 13px; }
+  #pickerOverlay.pk-folders .pk-item { padding: 3px 12px; border-radius: 0; }
+  /* 图标与名字挨得比抽屉里紧一点（抽屉的一行里还有颗状态点，这一行只有图标加名字） */
+  #pickerOverlay.pk-folders .pk-history-main { gap: 6px; }
+  /* 键盘上下键走到哪一行、鼠标停在哪一行：都是这层整行的选中色（方角，跟资源管理器一样） */
+  #pickerOverlay.pk-folders .pk-item.active {
+    background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.3));
+    color: var(--vscode-list-activeSelectionForeground, inherit);
+  }
   /* ---- 列表上半段「正在对话」：现在开着的会话 ---- */
   /* 一行里：小点 · 名字 · 标记 · 关闭叉（叉在最右边，不会跟名字挤在一起）。 */
   #pickerOverlay.pk-drawer .pk-item.pk-open { display: flex; align-items: center; gap: 4px; }
@@ -597,11 +624,13 @@
     background: var(--vscode-button-background, #0e639c); color: var(--vscode-button-foreground, #fff); border-color: transparent;
   }
   /* 行内图标（加号 / 文件夹）：固定宽度，名字对得齐 */
-  #pickerOverlay.pk-drawer .pk-row-icon {
+  #pickerOverlay.pk-drawer .pk-row-icon,
+  #pickerOverlay.pk-folders .pk-row-icon {
     flex: none; width: 14px; height: 14px; align-self: center;
     display: inline-flex; opacity: 0.8;
   }
-  #pickerOverlay.pk-drawer .pk-row-icon svg { width: 14px; height: 14px; display: block; }
+  #pickerOverlay.pk-drawer .pk-row-icon svg,
+  #pickerOverlay.pk-folders .pk-row-icon svg { width: 14px; height: 14px; display: block; }
   /* 动作行（新建会话 / 浏览文件夹…）：强调色文字，一眼看出不是普通记录；
     选中时也用这个颜色：选中背景是悬浮灰，改成“选中前景色”会是白字压浅灰，看不见 */
   #pickerOverlay.pk-drawer .pk-item.pk-action { color: var(--vscode-textLink-foreground, #3794ff); }

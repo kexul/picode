@@ -45,6 +45,8 @@
     // 用 SVG 而不是文字符号：箭头在 Segoe UI 等字体里居中不对，画出来天然齐。
     child: '<svg width="14" height="14" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.2 1.6V8.4H12.6"/><path d="M9.8 5.6L12.8 8.4L9.8 11.2"/></svg>',
   };
+  /** 文件夹选择器里行首那颗图标：名字由宿主给（见 chatHostBase.showFolderPicker 的 items）。 */
+  const FOLDER_ROW_ICONS = { check: ICONS.check, up: ICONS["arrow-up"], folder: ICONS.folder };
   /** 抽屉列表里“磁盘上存着的会话”那一段的标题：历史抽屉与「项目与会话」上半共用。 */
   const HISTORY_SECTION = "历史会话";
   const inputEl = document.getElementById("input");
@@ -99,6 +101,16 @@
   const pickerOverlay = document.getElementById("pickerOverlay");
   const pickerBody = document.getElementById("pickerBody");
   const pickerTitle = document.getElementById("pickerTitle");
+  const pickerSubtitle = document.getElementById("pickerSubtitle");
+  /**
+   * 标题下面那行小字（目前只有文件夹选择器用：正在看的是哪个目录）。
+   * 骨架里没这个元素时（插件与后端的版本对不上：界面文件是现从后端取的）就当没有，不能让浮层打不开。
+   */
+  function setPickerSubtitle(text) {
+    if (!pickerSubtitle) { return; }
+    pickerSubtitle.textContent = text || "";
+    pickerSubtitle.classList.toggle("hidden", !text);
+  }
   const pickerHeader = document.getElementById("pickerHeader");
   const pickerSearch = document.getElementById("pickerSearch");
   const pickerSearchWrap = document.getElementById("pickerSearchWrap");
@@ -2054,8 +2066,10 @@
     pickerOverlay.classList.add("hidden");
     pickerOverlay.classList.remove("pk-drawer");
     pickerOverlay.classList.remove("pk-workspace");
+    pickerOverlay.classList.remove("pk-folders");
     pickerBody.innerHTML = "";
     pickerSearch.value = "";
+    setPickerSubtitle("");
     pickerFooter.innerHTML = "";
     pickerFooter.classList.add("hidden");
     pickerFooter.classList.remove("pk-model-footer");
@@ -2467,9 +2481,20 @@
         }
         el.title = item.folderPath || item.label || "";
       } else if (st.kind === "folders") {
-        const t = document.createElement("div"); t.className = "pk-title"; t.textContent = item.label || "";
-        el.appendChild(t);
-        if (item.folderPath) { const p = document.createElement("div"); p.className = "pk-desc"; p.textContent = item.folderPath; el.appendChild(p); }
+        // 文件夹行按资源管理器的样子画：行首一格图标 + 名字一行。
+        // 正在看的是哪个目录写在标题下面那行小字里（宿主的 subtitle），行里不再重复。
+        el.classList.add("pk-history");
+        const main = document.createElement("div"); main.className = "pk-history-main";
+        const iconHtml = FOLDER_ROW_ICONS[item.icon];
+        if (iconHtml) {
+          const icon = document.createElement("span"); icon.className = "pk-row-icon";
+          icon.innerHTML = iconHtml; main.appendChild(icon);
+        }
+        const title = document.createElement("span"); title.className = "pk-history-title";
+        title.textContent = item.label || "";
+        main.appendChild(title);
+        el.appendChild(main);
+        el.title = item.label || "";
       }
       // 其他种类（没有专属排版的，如浏览器界面里问“选哪一项”）：直接渲染标题
       if (["history", "options", "workspace", "folders"].indexOf(st.kind) < 0 && item.label) {
@@ -2647,6 +2672,8 @@
     }
     const titleMap = { model: "切换模型", history: "会话历史", options: "显示选项" };
     pickerTitle.textContent = titleMap[kind] || (typeof msg.title === "string" && msg.title ? msg.title : "选择");
+    // 标题下面那行小字（现在只有文件夹选择器用：正在看的是哪个目录）；没有就收起来
+    setPickerSubtitle(typeof msg.subtitle === "string" ? msg.subtitle : "");
     pickerSearch.value = "";
     pickerSearchWrap.classList.toggle("hidden", !searchable);
     pickerFooter.classList.remove("pk-model-footer");
@@ -2693,6 +2720,8 @@
     // 历史会话与项目与会话从右侧滑进来（整屏高的面板）；其余拾取器照旧居中弹出
     pickerOverlay.classList.toggle("pk-drawer", kind === "history" || kind === "workspace");
     pickerOverlay.classList.toggle("pk-workspace", kind === "workspace");
+    // 文件夹选择器：不给筛选框那一截地方，列表按资源管理器的密度与排版画
+    pickerOverlay.classList.toggle("pk-folders", kind === "folders");
     renderPickerItems();
     pickerOverlay.classList.remove("hidden");
     // 计时：若宿主回显了 t0，输出点击 → picker 可见的往返耗时（多 panel 卡顿排查用）

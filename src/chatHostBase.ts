@@ -313,6 +313,10 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     /**
      * 一层一层追文件夹：点子目录进去、点“上一层”退回去，最后点“就用这个目录”在那里开新会话。
      * 起点给空串就是列盘符（Windows）/ 根目录。
+     *
+     * 每一项都带一个图标名（icon），界面照名字在行首画一颗（见 media/chat.js 的 FOLDER_ROW_ICONS）：
+     * "folder" 子目录、"up" 上一层（换一个盘也一样是往上走）、"check" 用这个目录。
+     * 图标写在数据里、不在文字前面拼符号：符号在有的字体下对不齐，也没法按名字换。
      */
     public async showFolderPicker(dir: string, target?: string): Promise<void> {
         const listing = await this.listDirsForPicker(dir);
@@ -324,24 +328,30 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         // 只留一条退回去的路，人自己往上走。
         if (!driveList && !listing.error) {
             items.push({
-                label: "✓ 就用这个目录（在这里新建会话）",
+                label: "就用这个目录（在这里新建会话）",
                 file: ChatHostBase.USE_DIR_ROW,
                 folderPath: listing.path,
+                icon: "check",
             });
         }
         if (listing.parent) {
-            items.push({ label: "↑ 上一层", file: listing.parent });
+            items.push({ label: "上一层", file: listing.parent, icon: "up" });
         } else if (!driveList) {
             // 到了盘根就没法再往上：给一条回到盘符列表的路，否则换不了盘。
-            items.push({ label: "<<< 回到最上层（换一个盘）", file: ChatHostBase.ROOTS_ROW });
+            items.push({ label: "回到最上层（换一个盘）", file: ChatHostBase.ROOTS_ROW, icon: "up" });
         }
-        for (const d of listing.dirs) { items.push({ label: d.name, file: d.path }); }
+        for (const d of listing.dirs) { items.push({ label: d.name, file: d.path, icon: "folder" }); }
         if (items.length === 0) { items.push({ label: "（这里没有子文件夹）", file: "" }); }
         // 列不出来的原因（没权限、目录没了）写进标题里，人一眼知道为什么是空的。
+        // 正在看的目录写在标题下面那行小字（subtitle）里：标题只报“在干啥”，
+        // 路径再长也不会把标题顶成两行。
         const title = driveList
             ? "选择盘"
-            : (listing.error ? `选择文件夹（${listing.error}）` : `选择文件夹：${listing.path}`);
-        const choice = await this.openPicker("folders", { items, searchable: true, title }, target);
+            : (listing.error ? `选择文件夹（${listing.error}）` : "选择文件夹");
+        // 盘符列表没有路径可报，写一句“此电脑”——跟 Windows 资源管理器里那一层的叫法一致。
+        const subtitle = driveList ? "此电脑" : listing.path;
+        // 不给筛选框：一层目录就几行，用上下键挑名字比打字快，框还占一截地方。
+        const choice = await this.openPicker("folders", { items, searchable: false, title, subtitle }, target);
         if (!choice || typeof choice.file !== "string" || !choice.file) { return; }
         if (choice.file === ChatHostBase.USE_DIR_ROW) {
             this.newSessionInDir(listing.path);
