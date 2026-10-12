@@ -63,6 +63,12 @@ FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev
 # 看浏览器本来的滚动条（截图默认把滚动条藏起来；查“输入框冒出一根滚动条”这类毛病要打开）：
 npm run web:shot -- --scrollbars --send "你好" --shot send.png
 node dev/inputProbe.js            # 量输入框的高度与滚动状态，每步裁一张小图到 dev/shots/
+
+# 量界面吃了多少 CPU（查“手机发烫”这类性能问题；--cpu 4 ≈ 把 CPU 降速到手机的档位）：
+node dev/perfProbe.js                                     # 开着什么都不做
+node dev/perfProbe.js --stream --prefill 24000 --cpu 4     # 模型正在流式回答（先垫 2.4 万字）
+node dev/perfProbe.js --scroll 10 --prefill 24000          # 手指滑动看长会话
+node dev/perfProbe.js --batch 30                           # 打开长会话时的整屏重画
 ```
 
 完整参数：`npm run web:shot -- --help`（或 `node dev/visit.js --help`）。
