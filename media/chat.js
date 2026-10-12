@@ -273,6 +273,9 @@
   function applyFontSize(px) {
     var val = (typeof px === "string" && /^\d+$/.test(px)) ? px + "px" : "";
     [document.documentElement, document.body].forEach(function (el) { el.style[val ? "setProperty" : "removeProperty"]("--vscode-font-size", val); });
+    // 字号一变，同一行字占的高度也跟着变：输入框的高度得按新字号重算，
+    // 否则框还是旧字号时量出来的那么高，右边就冒出一根滚动条（见 autoResize）。
+    autoResize();
   }
   function applyViewOptions(opts) {
     if (typeof opts.fontSize === "string") { applyFontSize(opts.fontSize); }
@@ -2767,7 +2770,9 @@
   /** 发出去（真的发出去）以后把输入区恢复原样。 */
   function resetComposer(d) {
     inputEl.value = "";
-    inputEl.style.height = INPUT_MIN_HEIGHT + "px";
+    // 高度按空内容重算（autoResize），不要写死 INPUT_MIN_HEIGHT：
+    // 那是高度的下限，字号大一点时一行空内容就比它高，写死的话右边会冒出一根滚动条。
+    autoResize();
     d.text = "";
     d.images = [];
     d.textBlocks = [];
@@ -3292,7 +3297,7 @@
           d.images = [];
           d.textBlocks = [];
           inputEl.value = "";
-          inputEl.style.height = INPUT_MIN_HEIGHT + "px";
+          autoResize();   // 同上：清空后按空内容重算高度，别写死下限那个值
           renderAttachmentsFor();
           inputEl.focus();
         }

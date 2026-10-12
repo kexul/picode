@@ -79,6 +79,7 @@ async function main() {
         width: options.width,
         height: options.height,
         timeoutMs: options.timeoutMs,
+        scrollbars: options.scrollbars,
         shotDir: options.shotDir ? path.resolve(options.shotDir) : undefined,
     });
     const { page } = open;

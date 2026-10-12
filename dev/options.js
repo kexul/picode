@@ -37,6 +37,7 @@ function parseArgs(argv, options = {}) {
         if (arg === "--headed") { parsed.headed = true; continue; }
         if (arg === "--keep") { parsed.keep = true; continue; }
         if (arg === "--skip-ready") { parsed.skipReady = true; continue; }
+        if (arg === "--scrollbars") { parsed.scrollbars = true; continue; }
 
         if (arg === "--wait-answer") {
             // 这个动作后面的文字可给可不给（不给我就是"等随便一句回复"），所以要看一眼下一项
@@ -95,6 +96,7 @@ function usage() {
         "  --timeout MS       等文字出现的默认上限（默认 60000）",
         "  --script FILE      用脚本文件代替命令行动作：module.exports = async (page) => { … }",
         "  --skip-ready       不等会话就绪就动手（调试「刚打开就发消息」这类启动时序问题时用）",
+        "  --scrollbars       截图用浏览器本来的滚动条（默认藏起来）：看滚动条这类毛病要它",
         "  --open             起完服务就用系统默认浏览器打开（web:dev）",
         "",
         "动作（按写的先后顺序执行）：",

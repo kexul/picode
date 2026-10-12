@@ -100,6 +100,7 @@ class Cdp {
  * @param {number} [options.width]  视口宽（默认 420，手机大小）
  * @param {number} [options.height] 视口高（默认 900）
  * @param {boolean} [options.keep]  true = 跑完不关浏览器窗口
+ * @param {boolean} [options.scrollbars] true = 用浏览器本来的滚动条（默认藏起来，截图里不会有滚动条）
  * @param {string} [options.profileDir] 浏览器数据目录（默认临时目录，跑完删掉）
  */
 async function openPage(options) {
@@ -112,9 +113,11 @@ async function openPage(options) {
         "--no-default-browser-check",
         "--disable-extensions",
         "--disable-gpu",
-        "--hide-scrollbars",
         "--window-size=" + (options.width || 420) + "," + (options.height || 900),
     ];
+    // 默认藏掉滚动条（截图干净）；想看“浏览器里真正的样子”就给 scrollbars: true。
+    // 注意这是有代价的：藏起来时滚动条不占宽度，页面里能塞下的字比真实浏览器多一行半行。
+    if (!options.scrollbars) { args.push("--hide-scrollbars"); }
     if (!options.headed) { args.push("--headless=new"); }
     args.push("about:blank");
 

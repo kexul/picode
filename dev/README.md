@@ -59,6 +59,10 @@ npm run web:shot -- --fake-pi --script dev/sessionFlow.js
 # 验派子会话（说一句带“派活”的话就会派一个）：跑完自动关、没跑完不关、
 # 正看着就不关；子会话跑得比人手快，配慢一点儿的假 pi 才来得及点进去
 FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaFlow.js
+
+# 看浏览器本来的滚动条（截图默认把滚动条藏起来；查“输入框冒出一根滚动条”这类毛病要打开）：
+npm run web:shot -- --scrollbars --send "你好" --shot send.png
+node dev/inputProbe.js            # 量输入框的高度与滚动状态，每步裁一张小图到 dev/shots/
 ```
 
 完整参数：`npm run web:shot -- --help`（或 `node dev/visit.js --help`）。
@@ -77,6 +81,9 @@ FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev
   （以前是悄声丢掉，得像没事一样再按一次）。要故意在"还没就绪"时动手，加 `--skip-ready`。
   注意无头浏览器在页面刚加载的那几百毫秒里有时会把按键事件丢掉（探针的坑）：脚本里可以先
   `page.sleep(1000)` 再按回车。
+- **截图默认把滚动条藏掉**（`--hide-scrollbars`）：图干净，但滚动条也就占不了宽度，
+  跟浏览器里看到的会差一行半行。要照真样子看就加 `--scrollbars`，或者用 `node dev/inputProbe.js`
+  （它默认就用真滚动条，还会把输入框的高度与滚动状态打印出来）。
 - **需要 Node 22 以上**（用到内置的 WebSocket 跟浏览器说话），浏览器用本机的 Chrome 或 Edge。
 - **验不到的东西**：diff 编辑器、符号跳转、剪贴板、命令面板入口、状态栏、
   侧边栏网页视图本身 —— 这些还是得用 VSCodium / VS Code 的 F5 开发宿主看。
