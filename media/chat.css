@@ -171,8 +171,10 @@
   .role { font-weight: bold; font-size: 0.8em; opacity: 0.7; margin-bottom: 2px; }
   /* markdown */
   .md p { margin: 13px 0; line-height: 1.6; text-wrap: pretty; }
-  .md > :first-child { margin-top: 0; }
-  .md > :last-child { margin-bottom: 0; }
+  .md > :first-child, .md > .md-block:first-child > :first-child { margin-top: 0; }
+  .md > :last-child, .md > .md-block:last-child > :last-child { margin-bottom: 0; }
+  /* 流式正文的块容器：只为把“已定型的块”与“正在长的尾巴”分开，本身不出任何盒子
+     （不加内外边距/边框，子元素的外边距才能穿透出去跟相邻块折叠，视觉上跟整段渲染一样） */
   .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 18px 0 12px; line-height: 1.25; letter-spacing: -0.01em; scroll-margin-top: 12px; }
   .md h1 { font-size: 1.5em; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); padding-bottom: 0.3em; }
   .md h2 { font-size: 1.3em; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); padding-bottom: 0.3em; }

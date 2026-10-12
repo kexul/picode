@@ -133,14 +133,27 @@
       langPrefix: "hljs language-",
       highlight(code, lang) {
         try {
-          const language = resolveHighlightLanguage(hljs, lang);
-          if (language) {
-            return hljs.highlight(code, { language }).value;
-          }
-          return hljs.highlight(code, { language: "plaintext" }).value;
+          const language = resolveHighlightLanguage(hljs, lang) || "plaintext";
+          return highlightCached(hljs, language, code);
         } catch { return code; }
       }
     }));
+  }
+  /**
+   * 语法高亮的结果缓存：同一块代码（语言一样、内容一字不差）不重复高亮。
+   * 流式里前面的代码块会随着整段重画反复出现，缓存命中后大段的重新着色就没了；
+   * 只有正在长的那一块每次都变，那时才会真的重算。
+   */
+  const HIGHLIGHT_CACHE = new Map();
+  const HIGHLIGHT_CACHE_MAX = 200;
+  function highlightCached(hljs, language, code) {
+    const key = language + "\u0000" + code;
+    const hit = HIGHLIGHT_CACHE.get(key);
+    if (hit !== undefined) { return hit; }
+    const value = hljs.highlight(code, { language }).value;
+    if (HIGHLIGHT_CACHE.size >= HIGHLIGHT_CACHE_MAX) { HIGHLIGHT_CACHE.clear(); }
+    HIGHLIGHT_CACHE.set(key, value);
+    return value;
   }
 
   const KNOWN_EXT = new Set([
@@ -216,8 +229,12 @@
       },
     });
   }
+  // marked 的解析选项：整段渲染与按块渲染必须用同一套，否则两种路径出来的东西会不一样。
+  // 每回给一份新的：marked 会往传进去的选项对象上写东西（加 tokenizer 字段），
+  // 共享或冻结的对象会直接被它撞坏（症状是静默地报错回退）。
+  function mdOptions() { return { breaks: true, gfm: true }; }
   function renderInline(text) { ensureMarkedHighlight(); ensureFileLink(); return marked.parseInline(text, { gfm: true }); }
-  function renderMarkdown(source) { ensureMarkedHighlight(); ensureFileLink(); return marked.parse(source, { breaks: true, gfm: true }); }
+  function renderMarkdown(source) { ensureMarkedHighlight(); ensureFileLink(); return marked.parse(source, mdOptions()); }
 
   /**
    * 按当前符号集合，把已渲染正文里的行内代码就地变成可点击的符号链接（或还原回普通文字）。
@@ -752,6 +769,113 @@
     const range = sel.getRangeAt(0);
     return !!(el && el.contains(range.startContainer));
   }
+  // ==================== 流式正文：按块渲染 ====================
+  // 为什么不是整段重画：整段重画每次都要把全文重新解析、重新高亮、把全部节点换掉，
+  // 长回复下越画越贵（手机上能把一颗核心跑满）。这里把正文按顶层块切开：
+  //   · 已经定型的块（后面还跟着两块以上的）只渲染一次，以后不再解析也不再动 DOM；
+  //   · 只重画尾巴，而且只对尾巴重新切块（不在全文上重跑解析）。
+  // 尾巴留两块：没写完的标记（***、#、缩进、表格分隔行）可能把前一块的延续打掉。
+  const STREAM_TAIL_BLOCKS = 2;
+
+  /** 从 text 切出顶层块；有不能安全独立成块的（引用式定义、HTML 块）返回 null。 */
+  function lexTopBlocks(text) {
+    let tokens;
+    try { tokens = marked.lexer(text, mdOptions()); } catch (e) { return null; }
+    for (const tk of tokens) {
+      if (!tk || typeof tk.raw !== "string") { return null; }
+      // 引用式定义会影响全文里别的链接/图片；HTML 块里可能有跨块的标签：这两种回退整段渲染
+      if (tk.type === "def" || tk.type === "html") { return null; }
+    }
+    return tokens;
+  }
+
+  /** 前 count 个块在原文里共占多少个字符（切块只认原文长度，不靠位置对象）。 */
+  function blocksChars(tokens, count) {
+    let n = 0;
+    for (let i = 0; i < count; i++) { n += tokens[i].raw.length; }
+    return n;
+  }
+
+  /** 渲染一个块：空格块不产节点（块级元素自带外边距，空行没有视觉）。 */
+  function buildStreamBlock(token) {
+    const box = document.createElement("div");
+    box.className = "md-block";
+    const html = streamBlockHtml(token);
+    if (html === null) { return null; }
+    box.innerHTML = html;
+    return box;
+  }
+
+  /** 一个块渲染成的 HTML；空格块给 null。 */
+  function streamBlockHtml(token) {
+    if (token.type === "space") { return null; }
+    ensureMarkedHighlight();
+    ensureFileLink();
+    try { return marked.parser([token], mdOptions()); } catch (e) { return escapedText(token.raw); }
+  }
+  function escapedText(text) {
+    const d = document.createElement("div");
+    d.textContent = text;
+    return d.innerHTML;
+  }
+
+  /**
+   * 把流式正文按块同步进 cur.el。返回 false 表示这次不能按块渲染（调用方退回整段）。
+   * 状态记在 cur.blocks 上：tokens（本轮全部块）、frozenCount / frozenOffset（已定型到哪儿）、
+   * els（每个块对应的容器，与 tokens 下标一一对应，空格块是 null）。
+   */
+  function syncStreamBlocks(cur, raw) {
+    let state = cur.blocks;
+    if (state && raw.length < state.rawLen) { state = null; }   // 正文变短（不是追加）：从头来
+    if (!state) {
+      cur.el.textContent = "";
+      state = cur.blocks = { tokens: [], frozenCount: 0, frozenOffset: 0, els: [], rawLen: 0 };
+    }
+
+    // 只重新切尾巴：冻结部分不再进解析器
+    const tailTokens = lexTopBlocks(raw.slice(state.frozenOffset));
+    if (!tailTokens) { return false; }
+    const tokens = state.tokens.slice(0, state.frozenCount).concat(tailTokens);
+    // 冻结线：留最后两块不冻。只增不退：块数变少时（尾巴合并了）不把已冻结的收回来
+    const freeze = Math.max(state.frozenCount, tokens.length - STREAM_TAIL_BLOCKS);
+
+    // 尾巴：内容与上一轮一字不差的块留着容器，其余重画
+    const frozenEls = state.els.slice(0, state.frozenCount);
+    const tailEls = [];
+    for (let i = state.frozenCount; i < tokens.length; i++) {
+      const old = state.tokens[i];
+      const oldEl = state.els[i];
+      if (old && oldEl && oldEl.parentElement === cur.el && old.type === tokens[i].type && old.raw === tokens[i].raw) {
+        tailEls.push(oldEl);
+      } else {
+        tailEls.push(buildStreamBlock(tokens[i]));
+      }
+    }
+    // 旧的尾巴容器：没被复用的删掉
+    for (let i = state.frozenCount; i < state.els.length; i++) {
+      const el = state.els[i];
+      if (el && el.parentElement === cur.el && tailEls.indexOf(el) < 0) { el.remove(); }
+    }
+    // 按顺序接上（复用的容器跟着挪到末尾，顺序就对了）
+    for (const el of tailEls) { if (el) { cur.el.appendChild(el); } }
+
+    state.frozenOffset += blocksChars(tailTokens, freeze - state.frozenCount);
+    state.els = frozenEls.concat(tailEls);
+    state.tokens = tokens;
+    state.frozenCount = freeze;
+    state.rawLen = raw.length;
+    return true;
+  }
+
+  /** 渲染流式正文（按块；不能切块时回退整段重画）。 */
+  function renderStreamBody(st, raw) {
+    const cur = st.currentAssistant;
+    cur.el.dataset.raw = raw;
+    if (syncStreamBlocks(cur, raw)) { return; }
+    cur.blocks = null;
+    cur.el.innerHTML = renderMarkdown(raw);
+  }
+
   function scheduleFlush(st) { if (!st.rafId) { st.rafId = requestAnimationFrame(() => flushDeltas(st)); } }
   function flushDeltas(st) {
     st.rafId = 0;
@@ -764,8 +888,7 @@
       } else if (activeId === st.id && isSelectingIn(st.currentAssistant.el)) {
         st.rafId = requestAnimationFrame(() => flushDeltas(st));
       } else {
-        st.currentAssistant.el.innerHTML = renderMarkdown(raw);
-        st.currentAssistant.el.dataset.raw = raw;
+        renderStreamBody(st, raw);
         st.lastRenderAt = now;
         st.textDirty = false;
       }
