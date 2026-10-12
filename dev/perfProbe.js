@@ -141,7 +141,8 @@ async function main() {
             // 模拟刚打开一个长会话：后端整屏重画（clear + 一条条消息）。
             // 这里把“注入脚本要多久”与“之后浏览器把这一大堆内容排版出来要多久”分开量：
             // 前者是拿消息那段循环（纯脚本），后者是随后静置这段时间的主线程占用（主要是排版与绘制）。
-            const template = buildAnswer(1, 1).slice(0, 2000);
+            const perMsg = Number(arg("batch-bytes", 2000));
+            const template = buildAnswer(Math.max(1, Math.ceil(perMsg / 3000)), 2).slice(0, perMsg);
             const items = [];
             for (let i = 0; i < batch; i++) {
                 items.push({ type: "userMessage", text: "第 " + (i + 1) + " 轮：请解释一下这段实现。" });
@@ -170,7 +171,8 @@ async function main() {
             const batchAfter = await metrics(cdp);
             const bDelta = (k) => Math.max(0, (batchAfter[k] || 0) - (batchBefore[k] || 0));
             const bPct = (v) => ((v * 1000 / (injectWall * 1000)) * 100).toFixed(1) + "%";
-            console.log(`整屏重画 ${items.length} 条消息（约 ${Math.round(items.length * 2000 / 1024)} KB）：`);
+            const totalChars = items.reduce((n, it) => n + (it.text ? it.text.length : 0), 0);
+            console.log(`整屏重画 ${items.length} 条消息（约 ${Math.round(totalChars / 1024)} KB，每条 ${template.length} 字符）：`);
             console.log(`  跑消息那段循环（纯脚本）  ：${took} 毫秒`);
             console.log(`  这 ${injectWall} 秒里主线程忙     ：${bPct(bDelta("TaskDuration"))}（排版 ${bPct(bDelta("LayoutDuration"))}，算样式 ${bPct(bDelta("RecalcStyleDuration"))}）`);
             console.log(`  排版次数 ${bDelta("LayoutCount")}，算样式次数 ${bDelta("RecalcStyleCount")}`);

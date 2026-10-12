@@ -160,12 +160,16 @@
   .tool.error { opacity: 1; color: var(--vscode-errorForeground, #f48771); }
   .tool.et-pill { cursor: pointer; }
   .tool.reverted { text-decoration: line-through; opacity: 0.6; }
+  /* 合并标签（连着来的同名调用收成一个）：工具名 × 次数（只调一次不写数字） */
+  .tool.tool-group .tg-count { opacity: 0.65; }
   /* 工具标签自绘提示框（系统 title 提示要等约一秒，改用短延迟的自绘框），随主题配色；
      手机电脑统一：内容可滚动看全部结果；电脑鼠标移开收起，触屏点外面收起 */
   .tag-tip { position: fixed; z-index: 900; display: flex; flex-direction: column; max-width: 640px; max-height: 60vh; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-panel-border, rgba(128,128,128,0.35))); background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, #252526)); color: var(--vscode-editorHoverWidget-foreground, var(--vscode-editor-foreground, inherit)); font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
   .tag-tip-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
   /* 输入（调用参数）块：比外框稍深一点的底色（5% 黑色透明叠加），和输出（结果）区分开 */
   .tag-tip-call { padding: 4px 8px; border-radius: 4px; background: rgba(0,0,0,0.05); }
+  /* 合并标签的提示框：一组里不止一条调用，第二块起往上拉开距离，好一条条分开看 */
+  .tag-tip-call-next { margin-top: 10px; }
   .tag-tip-result { margin-top: 6px; }
   .tag-tip.hidden { display: none; }
   .role { font-weight: bold; font-size: 0.8em; opacity: 0.7; margin-bottom: 2px; }
@@ -779,7 +783,9 @@
   /* 工具图片块（read 读图这类）：直接铺在对话里，自己占一行；说明行 + 图
      它后面的工具标签会另起一行（见 chat.js 的 toolTagHost / afterToolImage） */
   .tool-image-block { margin: 4px 0 12px; padding: 0 14px; }
-  .tool-image-block .tib-head { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.75; }
+  /* 说明行往右 8 像素（= 小标签自己的内边距）：齿轮跟上面那行小标签的齿轮一条竖线，
+     不然它会比上面那一行向左边多伸出来 8 像素。图片不动，仍然跟小标签的灰底盒子左边齐。 */
+  .tool-image-block .tib-head { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; padding-left: 8px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.75; }
   .tool-image-block .tib-head .tool-icon { flex: 0 0 auto; }
   .tool-image-block .tib-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tool-image-block .tc-dims { flex: 0 0 auto; }

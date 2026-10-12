@@ -478,6 +478,11 @@
       tpsStart: 0,
       tpsTokens: 0,
       currentToolRow: null,
+      // 这一批（一条工具调用行）里按工具名归拢的合并标签（见 addToolToGroup）：
+      // { row, byName }，byName 记 工具名 → 组里那一条；行一换（来了正文）就是新的一批。
+      // toolGroupEntries 记 callId → 组里那一条，结果回来时按它找到该更新哪一条。
+      toolGroups: null,
+      toolGroupEntries: new Map(),
       pendingToolCards: new Map(),
       pendingToolTags: new Map(),
       // 历史窗口（网页端「只发最近一段」）：顶部按钮、加载更早的暂存区等
@@ -749,11 +754,17 @@
     st.stickToBottom = true;
     st.hasNewContent = false;
     syncJumpBottom(st);
+    // 窗格没挂在页面上（「加载更早」那批消息的暂存区、后台会话）时只记状态，不排追底那一帧。
+    // 排了的话，等这一帧真跑起来时 paneEl 可能已经换人（暂存区用完就还回真窗格了），
+    // 结果滚的是真窗格——点「加载更早」视野就无缘无故甩到底部。
+    const pane = st.paneEl;
+    if (!pane.isConnected) { return; }
     if (st.scrollRafId) { return; }
     st.scrollRafId = requestAnimationFrame(() => {
       st.scrollRafId = 0;
+      if (st.paneEl !== pane || !pane.isConnected) { return; }
       st.programmaticScroll = true;
-      st.paneEl.scrollTop = 1e9;   // 夹到最大：没有读，就不会逼出一次同步重排
+      pane.scrollTop = 1e9;   // 夹到最大：没有读，就不会逼出一次同步重排
     });
   }
   // 用户主动接管滚动（滚轮/触屏/键盘向上）：立刻停掉 lerp 追底，交还控制权。
@@ -1032,8 +1043,38 @@
     toolTagHost(st).appendChild(tag);
   }
 
+  /** 标签的悬浮/点按触发：触屏点一下显示、再点一下（或点外面）关闭；电脑悬浮显示，
+   *  从标签移进提示框不收，两边都离开才收（见 scheduleTagTipHide）。
+   *  单个标签、编辑卡片标签、合并标签共用这一套。 */
+  function attachTagTipHandlers(tag) {
+    if (IS_TOUCH_DEVICE) {
+      tag.addEventListener("click", () => {
+        if (tagTipTag === tag) { hideTagTip(); } else { showTagTip(tag); }
+      });
+    } else {
+      tag.addEventListener("mouseenter", () => showTagTip(tag));
+      tag.addEventListener("mouseleave", scheduleTagTipHide);
+    }
+  }
+
+  // ==================== 工具标签：合并 ====================
+  // 一条工具调用行（= 两条正文之间的一批）里，同一个工具名只出一个标签：工具名 × 次数（这批里一共调了几次，
+  // 只有一次时不写数字）。标签就停在**第一次**出现这个名字的位置；中间夹了别的工具调用（不同名的、
+  // 或者编辑卡片）不影响它攒数，数都记在同一个标签上。
+  // 鼠标停上去，提示框里把它们一条一条列出来（调用 + 结果），见 fillGroupTip。
+  //
+  // 不合并的（每次单独一个标签，连着来也各占一个）：
+  //   · taba / taba_stop / taba_peek（派子会话）、codemode（跑 JavaScript）—— 各自单独看一眼更清楚；
+  //   · write / edit —— 本来就不是小标签，是带 diff 的卡片（见 buildEditCard）；
+  //   · 结果带图的 read —— 是不是图要等结果回来才知道，那条到了会从组里摘出去，
+  //     在对话里铺成一整块图（见 removeEntryFromGroup）。
+  // 一条正文（或用户消息）到来就换行、另起一批，上批的标签不再攒数。
+  const NO_MERGE_TOOLS = new Set(["write", "edit", "taba", "taba_stop", "taba_peek", "codemode"]);
+  const GROUP_RUNNING_TEXT = "运行中…";
+
   function addTool(st, toolName, argStr, toolCallId) {
     hideEmptyHint(st);
+    if (!NO_MERGE_TOOLS.has(toolName)) { addToolToGroup(st, toolName, argStr, toolCallId); return; }
     const tag = document.createElement("span");
     tag.className = "tool" + (toolCallId ? " running" : "");
     tag.insertAdjacentHTML("afterbegin", GEAR_SVG);
@@ -1050,19 +1091,119 @@
     // 见 mountToolImageBlock。
     tag._tipCall = tagTipCallText(toolName, argStr);
     tag._tipBody = "";
-    if (IS_TOUCH_DEVICE) {
-      // 触屏没有悬浮：点一下显示提示框，再点一下（或点提示框外面）关闭
-      tag.addEventListener("click", () => {
-        if (tagTipTag === tag) { hideTagTip(); } else { showTagTip(tag); }
-      });
-    } else {
-      // 电脑悬浮显示；从标签移进提示框不收，两边都离开才收（见 scheduleTagTipHide）
-      tag.addEventListener("mouseenter", () => showTagTip(tag));
-      tag.addEventListener("mouseleave", scheduleTagTipHide);
-    }
+    attachTagTipHandlers(tag);
     mountToolTag(st, tag);
     if (toolCallId) { st.pendingToolTags.set(toolCallId, tag); }
     scrollToBottom(st);
+  }
+
+  /** 往这一批里加一条调用：同名就并到已有那个标签上（标签停在第一次调用的位置），
+   *  没见过的名字新开一个标签。 */
+  function addToolToGroup(st, toolName, argStr, toolCallId) {
+    const row = toolTagHost(st);
+    let batch = st.toolGroups;
+    if (!batch || batch.row !== row) {
+      batch = { row, byName: new Map() };
+      st.toolGroups = batch;
+    }
+    let g = batch.byName.get(toolName);
+    if (!g || g.tag.parentElement !== row) {
+      const tag = document.createElement("span");
+      tag.className = "tool tool-group";
+      tag.insertAdjacentHTML("afterbegin", GEAR_SVG);
+      const nameEl = document.createElement("span");
+      nameEl.className = "tg-name";
+      const countEl = document.createElement("span");
+      countEl.className = "tg-count";
+      tag.appendChild(nameEl);
+      tag.appendChild(countEl);
+      // 合并标签上不挂单条结果（_toolName / _resultText 那一套）：每条的数据都在 g.entries 里
+      g = { row, tag, nameEl, countEl, name: toolName, entries: [] };
+      tag._tipFill = (content) => fillGroupTip(g, content);
+      attachTagTipHandlers(tag);
+      batch.byName.set(toolName, g);
+      mountToolTag(st, tag);
+    }
+    const entry = {
+      group: g,
+      id: toolCallId || "",
+      name: toolName,
+      argStr: argStr || "",
+      tipCall: tagTipCallText(toolName, argStr),
+      resultText: "",
+      meta: {},
+      isError: false,
+      done: !toolCallId, // 无 id 的静态调用无结果事件，按已完成处理
+    };
+    g.entries.push(entry);
+    if (toolCallId) { st.toolGroupEntries.set(toolCallId, entry); }
+    syncGroupTag(g);
+    scrollToBottom(st);
+    return entry;
+  }
+
+  /** 合并标签长什么样：工具名 × 一共调了几次（只调一次就不写数字）；
+   *  有一条还在跑就转圈，有失败就标红。 */
+  function syncGroupTag(g) {
+    g.nameEl.textContent = " " + (g.name || "");
+    const total = g.entries.length;
+    g.countEl.textContent = total > 1 ? " ×" + total : "";
+    g.tag.classList.toggle("running", g.entries.some((e) => !e.done));
+    g.tag.classList.toggle("error", g.entries.some((e) => e.isError));
+    refreshTagTipIfShowing(g.tag);
+  }
+
+  /** 合并标签的提示内容：一条调用一行（输入），下面紧跟它的结果（输出），一条条排下来。 */
+  function fillGroupTip(g, content) {
+    content.textContent = "";
+    g.entries.forEach((e, i) => {
+      const call = document.createElement("div");
+      call.className = "tag-tip-call" + (i > 0 ? " tag-tip-call-next" : "");
+      call.textContent = e.tipCall || e.name;
+      content.appendChild(call);
+      const res = document.createElement("div");
+      if (e.done) {
+        res.className = "tag-tip-result";
+        res.textContent = e.resultText || "（没有输出）";
+      } else if (e.resultText) {
+        // 还在跑、但已经拿到部分结果（toolResultUpdate）：先把拿到的部分显示出来
+        res.className = "tag-tip-result tip-loading";
+        res.textContent = e.resultText;
+      } else {
+        res.className = "tag-tip-result tip-loading";
+        res.textContent = GROUP_RUNNING_TEXT;
+      }
+      content.appendChild(res);
+    });
+  }
+
+  /** 结果带图（read 读图这类）：把这一条从合并组里摘出去，在对话里铺成一整块图。
+   *  组被摘空了就连标签带那条工具行一起收掉，后面的调用会另起一行、另起一组。 */
+  function removeEntryFromGroup(st, entry, images) {
+    const g = entry.group;
+    const i = g.entries.indexOf(entry);
+    if (i >= 0) { g.entries.splice(i, 1); }
+    st.toolGroupEntries.delete(entry.id);
+    if (g.entries.length === 0) {
+      const row = g.tag.parentElement;
+      g.tag.remove();
+      const batch = st.toolGroups;
+      if (batch && batch.byName.get(g.name) === g) { batch.byName.delete(g.name); }
+      dropToolRow(st, row);
+    } else {
+      syncGroupTag(g);
+    }
+    mountToolImageBlock(st, { toolName: entry.name, argStr: entry.argStr, tipCall: entry.tipCall }, images);
+  }
+
+  /** 收掉一个工具标签；它所在那条工具行空了就连行一起收掉（不留空行）。 */
+  function dropToolTag(st, tag) {
+    const row = tag.parentElement;
+    tag.remove();
+    dropToolRow(st, row);
+  }
+  function dropToolRow(st, row) {
+    if (row && row !== st.paneEl && row.classList.contains("tool-row") && row.childElementCount === 0) { row.remove(); }
   }
 
   // ==================== 完整模式：TUI 风格工具卡片 ====================
@@ -1366,15 +1507,17 @@
   }
 
   /**
-   * 工具结果带图片（read 读图这类）：把这个小标签换成对话里的一整块 ——
+   * 工具结果带图片（read 读图这类）：把这条调用换成对话里的一整块 ——
    * 上面一行说明（齿轮 + 工具名 / 文件名，图片尺寸到了再补上），下面把图完整铺出来。
    *
    * 为什么不用悬浮提示：图藏在提示框里要鼠标悬上去才看得到，而"读了哪张图"本身就是对话内容。
-   * 块自己占一行（不跟正文挤在同一行里）；标签原来所在的那行空了就一并收掉，
-   * 后面的工具调用会另起一行重新排（见 toolTagHost）。
+   * 块自己占一行（不跟正文挤在同一行里）；原来那个小标签由调用方先收掉（见 dropToolTag /
+   * removeEntryFromGroup），那条工具行空了也一并收掉，后面的工具调用会另起一行重新排
+   * （见 toolTagHost）。调用方传 at：{ toolName, argStr, tipCall }。
    */
-  function mountToolImageBlock(st, tagEl, images) {
+  function mountToolImageBlock(st, at, images) {
     if (!Array.isArray(images) || images.length === 0) { return; }
+    const call = at || {};
     const block = document.createElement("div");
     block.className = "tool-image-block msg-enter";
     const head = document.createElement("div");
@@ -1383,22 +1526,14 @@
     const text = document.createElement("span");
     text.className = "tib-text";
     // 说明行只写文件名（整条路径太长，把图片挤下去了）；想看完整路径就把鼠标停在上面
-    const name = tagEl._toolName || "";
-    const file = fileNameFromArgs(tagEl._argStr);
-    text.textContent = name && file ? (name + " " + file) : (tagEl._tipCall || (tagEl.textContent || "").trim());
-    text.title = tagEl._tipCall || text.textContent;
+    const name = call.toolName || "";
+    const file = fileNameFromArgs(call.argStr);
+    text.textContent = name && file ? (name + " " + file) : (call.tipCall || name);
+    text.title = call.tipCall || text.textContent;
     head.appendChild(text);
     block.appendChild(head);
     // 图直接接在说明行下面；图加载完成后尺寸会写回说明行（见 applyImageDims）
     renderResultImages(block, images, block);
-    // 原来那个小标签收掉：它跟图片本来就是一回事，不留两份。
-    // 标签每次调用独占一行，收掉标签后那行就空了，连同这一行一起收掉。
-    const host = tagEl.parentElement;
-    tagEl.remove();
-    if (host && host !== st.paneEl && host.classList.contains("tool-row")
-      && !host.textContent.trim() && host.childElementCount === 0) {
-      host.remove();
-    }
     st.paneEl.appendChild(block);
     scrollToBottom(st);
   }
@@ -1443,6 +1578,7 @@
     pill.className = "tool et-pill" + (toolCallId ? " running" : "");
     pill.insertAdjacentHTML("afterbegin", GEAR_SVG);
     pill.appendChild(document.createTextNode(" " + toolName));
+    attachTagTipHandlers(pill);
     mountToolTag(st, pill);
     scrollToBottom(st);
 
@@ -1492,15 +1628,7 @@
     }
     pill._tipFill = fillTip;
 
-    // 与普通工具标签同一套触发：触屏点按切换（点外面关），桌面悬浮（带延迟与宽限）
-    if (IS_TOUCH_DEVICE) {
-      pill.addEventListener("click", () => {
-        if (tagTipTag === pill) { hideTagTip(); } else { showTagTip(pill); }
-      });
-    } else {
-      pill.addEventListener("mouseenter", () => showTagTip(pill));
-      pill.addEventListener("mouseleave", scheduleTagTipHide);
-    }
+    // 与普通工具标签同一套触发（见 attachTagTipHandlers）
 
     return {
       setResult(msg) {
@@ -3424,6 +3552,8 @@
         t.currentAssistant = null;
         t.thinkingText = "";
         t.currentToolRow = null;
+        t.toolGroups = null;
+        t.toolGroupEntries.clear();
         t.pendingToolCards.clear();
         for (const tg of t.pendingToolTags.values()) { clearInterval(tg._timer); }
         t.pendingToolTags.clear();
@@ -3443,6 +3573,13 @@
         break;
       case "toolResultUpdate": {
         // 缓存部分结果，悬浮提示随取随画
+        const groupEntry = t.toolGroupEntries.get(msg.toolCallId);
+        if (groupEntry) {
+          groupEntry.resultText = msg.resultText || "";
+          groupEntry.meta = { isPartial: true, durationMs: msg.durationMs };
+          refreshTagTipIfShowing(groupEntry.group.tag);
+          break;
+        }
         const tagEl = t.pendingToolTags.get(msg.toolCallId);
         if (tagEl) {
           tagEl._resultText = msg.resultText || "";
@@ -3452,7 +3589,23 @@
         break;
       }
       case "toolResult": {
-            const tagEl = t.pendingToolTags.get(msg.toolCallId);
+        const groupEntry = t.toolGroupEntries.get(msg.toolCallId);
+        if (groupEntry) {
+          // 合并组里的那一条：结果填回组里（提示框里那条的结果），标签上的条数/转圈/标红跟着重算
+          if (Array.isArray(msg.images) && msg.images.length > 0) {
+            removeEntryFromGroup(t, groupEntry, msg.images);
+          } else {
+            groupEntry.done = true;
+            groupEntry.isError = !!msg.isError;
+            groupEntry.resultText = msg.resultText || "";
+            groupEntry.meta = { isError: !!msg.isError, durationMs: msg.durationMs, truncation: msg.truncation || null };
+            t.toolGroupEntries.delete(msg.toolCallId);
+            syncGroupTag(groupEntry.group);
+            scrollToBottom(t);
+          }
+          break;
+        }
+        const tagEl = t.pendingToolTags.get(msg.toolCallId);
         if (tagEl) {
           tagEl.classList.remove("running");
           if (msg.isError) { tagEl.classList.add("error"); }
@@ -3461,13 +3614,14 @@
           tagEl._isError = !!msg.isError;
           tagEl._resultText = msg.resultText || "";
           tagEl._resultMeta = { isError: !!msg.isError, durationMs: msg.durationMs, truncation: msg.truncation || null, images: msg.images || null };
-          // read 读图：小标签直接换成对话里的一整块图（不再走悬浮提示）
+          t.pendingToolTags.delete(msg.toolCallId);
+          // read 读图：小标签收掉，换成对话里的一整块图（不再走悬浮提示）
           if (Array.isArray(msg.images) && msg.images.length > 0) {
-            mountToolImageBlock(t, tagEl, msg.images);
+            dropToolTag(t, tagEl);
+            mountToolImageBlock(t, { toolName: tagEl._toolName, argStr: tagEl._argStr, tipCall: tagEl._tipCall }, msg.images);
           } else {
             setTagTip(tagEl, tagEl._resultText, "");
           }
-          t.pendingToolTags.delete(msg.toolCallId);
         }
         break;
       }
@@ -3602,10 +3756,17 @@
       anchor = pane.firstChild;
     }
     const beforeHeight = pane.scrollHeight;
+    // 这一下由我们自己补滚动位置：先把浏览器的滚动锚定临时关掉，
+    // 它也会因为“上方变高”补一次，两边叠起来视野就被推下去一整批的高度。
+    // 关掉再插、读完高度就还回去，别的地方（图片后到、高亮重排）还是交给它锚。
+    const prevAnchorStyle = pane.style.overflowAnchor;
+    pane.style.overflowAnchor = "none";
     while (stage.firstChild) { pane.insertBefore(stage.firstChild, anchor); }
+    const grew = pane.scrollHeight - beforeHeight;
+    pane.style.overflowAnchor = prevAnchorStyle;
     if (pane.isConnected) {
       // 上方变高了：滚动位置同步下移，让视野还停在原来那几条消息上
-      pane.scrollTop += pane.scrollHeight - beforeHeight;
+      pane.scrollTop += grew;
     }
   }
 

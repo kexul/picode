@@ -50,8 +50,12 @@ npm run web:shot -- --script dev/myFlow.js
 npm run web:dev -- --fake-pi
 npm run web:shot -- --fake-pi --send "随便说点什么" --shot fake.png
 
-# 验“一批工具调用全挤在同一条线上”（往页面里投十几条工具消息，前后加正文，截图）：
+# 验“一批工具调用全挤在同一条线上”（往页面里投一批工具消息，前后加正文，截图）：
+# 同一个名字只出一个标签（标签停在第一次调用的位置），不同名的各占一个，一条线上还是能排好几个
 npm run web:shot -- --width 1000 --height 620 --script dev/toolRow.js
+
+# 验合并本身（同名的收成一个、悬浮提示里一条条列出来、读图那条摘出去、不合并的那几个、重放后一样）：
+npm run web:shot -- --width 1000 --height 760 --script dev/toolMerge.js
 
 # 验会话那套（顶条名字跟着 pi 标题变 / 切会话 / 列表里关会话）：
 npm run web:shot -- --fake-pi --script dev/sessionFlow.js
@@ -59,6 +63,10 @@ npm run web:shot -- --fake-pi --script dev/sessionFlow.js
 # 验派子会话（说一句带“派活”的话就会派一个）：跑完自动关、没跑完不关、
 # 正看着就不关；子会话跑得比人手快，配慢一点儿的假 pi 才来得及点进去
 FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaFlow.js
+
+# 验顶部「加载更早的消息」（网页端只发最近一段历史）：点完视野得留在原来那几条消息上，
+# 不能被甩到底部（ROUNDS 攒消息轮数，AT_BOTTOM=1 是“贴底时点”那种）：
+npm run web:shot -- --fake-pi --script dev/historyScroll.js
 
 # 看浏览器本来的滚动条（截图默认把滚动条藏起来；查“输入框冒出一根滚动条”这类毛病要打开）：
 npm run web:shot -- --scrollbars --send "你好" --shot send.png
