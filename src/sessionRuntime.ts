@@ -114,7 +114,7 @@ export function expandSlashCommand(text: string, commands: RpcCommandInfo[]): st
 }
 
 /**
- * 一个并行对话 tab 的全部运行时状态：独立的 pi 进程 + 独立的会话/编辑追踪。
+ * 一个会话的全部运行时状态：独立的 pi 进程 + 独立的会话/编辑追踪。
  * 多个 SessionRuntime 各自持有自己的 PiClient，因此可以真正并行流式生成。
  *
  * 平台差异（UI 弹窗、diff、文件打开、配置持久化）全部经由 RuntimeHost 注入，
@@ -123,15 +123,13 @@ export function expandSlashCommand(text: string, commands: RpcCommandInfo[]): st
 export class SessionRuntime {
     public id: string = "";
     /** 名字两部分（形容词/名词）：创建时分配后终身不变；
-     *  title 供 pane-head / picker / 导出，tab 栏派生名另由宿主用 noun 拼接。 */
+     *  title 供会话列表 / 拾取器 / 导出用；随机名部分（nameParts）在宿主那边用。 */
     public readonly nameParts: NameParts = { adjective: "", noun: "" };
 
     /** 完整显示名（“沉静的雪豹”）。 */
     public get title(): string { return composeName(this.nameParts); }
     /** pi 自己给的会话标题（自动命名扩展 / /name 写的）；空串表示还没有。 */
     public get sessionTitle(): string { return this.piSessionTitle; }
-    /** 名词部分：tab 栏多 panel 拼接名只用它。 */
-    public get noun(): string { return this.nameParts.noun; }
     /**
      * 本会话的 pi 进程跑在哪个目录。
      * 多数会话跟宿主默认目录一致；子会话、以及“在别的项目里开的会话”（启动时的 launch.cwd）不一样，
@@ -148,15 +146,10 @@ export class SessionRuntime {
     /** 正在加载会话 / 分叉（pi 冷启动 + 切换会话期间为 true，供宿主展示加载态）。 */
     public loading = false;
     public currentSessionPath: string | undefined;
-    /** 当前界面是否已有用户或助手消息；用于历史会话打开时复用空 tab。 */
+    /** 当前界面是否已有用户或助手消息；用于历史会话打开时复用空会话。 */
     private hasConversation = false;
     /** pi 上报的会话标题；来源是 session_info_changed 事件与 get_state 响应里的 sessionName。 */
     private piSessionTitle = "";
-    /** 会话被换掉（新建 / 切换 / 分叉 / 克隆）时递增：
-     *  正在等旧标题的人据此知道“这个标题不会来了”，不会把新会话的标题安给旧通知。 */
-    private sessionGeneration = 0;
-    /** 正在等会话标题的唤醒回调。 */
-    private titleWaiters: Array<() => void> = [];
 
     /** 当前 panel 是否尚未承载会话内容，且不在加载过程中。 */
     public isConversationEmpty(): boolean {
@@ -198,7 +191,7 @@ export class SessionRuntime {
     private lastShownRunError = "";
     /** 本轮是否真的跑起来过：防止没发消息就收到 agent_settled 时误报“完成”。 */
     private runStarted = false;
-    /** 用户是否主动中止了本轮：中止不算“任务完成”，不发系统通知。agent_start 时重置。 */
+    /** 用户是否主动中止了本轮：中止不算“任务完成”。agent_start 时重置。 */
     private abortRequested = false;
 
     constructor(id: string, name: NameParts, private host: RuntimeHost) {
@@ -214,12 +207,12 @@ export class SessionRuntime {
         });
     }
 
-    /** 推送给对应 tab 的消息（自动带 tabId）。 */
+    /** 推送给对应会话的消息（自动带 sessionId）。 */
     private post(msg: Record<string, unknown>): void {
-        this.host.postToTab(this.id, msg);
+        this.host.postToSession(this.id, msg);
     }
 
-    /** 把当前 tab 的模型/上下文状态快照上报给宿主（如 VSCode 状态栏）。
+    /** 把当前会话的模型/上下文状态快照上报给宿主（如 VSCode 状态栏）。
      *  宿主自行按焦点 panel 过滤；这里不多嘴。 */
     public emitStatus(): void {
         this.host.onStatusUpdate?.(this.id, {
@@ -232,13 +225,13 @@ export class SessionRuntime {
         });
     }
 
-    // ---- 状态快照只读视图（供 tabList 携带，webview 重建后恢复状态栏）----
+    // ---- 状态快照只读视图（供 sessionList 携带，界面重建后恢复状态栏）----
     public get modelId(): string | undefined { return this.statusModelId; }
     public get provider(): string | undefined { return this.statusProvider; }
     public get thinkingLevel(): string | undefined { return this.statusThinking; }
     public get contextPercent(): number | undefined { return this.statusPercent; }
 
-    /** 本 tab 最后一次已知的模型（模型跟 tab 关联：新 tab 默认继承它）。未知返回 undefined。 */
+    /** 本会话最后一次已知的模型（模型跟会话关联：新会话默认继承它）。未知返回 undefined。 */
     public currentModel(): { provider?: string; modelId?: string } | undefined {
         if (!this.statusModelId) {
             return undefined;
@@ -246,10 +239,10 @@ export class SessionRuntime {
         return { provider: this.statusProvider, modelId: this.statusModelId };
     }
 
-    /** 启动该 tab 的 pi 进程。优先领取宿主预热的备用进程（免冷启动），
-     *  领不到（首 tab / 备用尚未就绪）时自行 spawn。
-     *  @param modelOverride 指定启动模型（新 tab 继承活跃 tab 传入）；
-     *  缺省时用本 tab 最后已知模型，再缺省才回落宿主全局配置。
+    /** 启动该会话的 pi 进程。优先领取宿主预热的备用进程（免冷启动），
+     *  领不到（首个会话 / 备用尚未就绪）时自行 spawn。
+     *  @param modelOverride 指定启动模型（新会话继承当前会话传入）；
+     *  缺省时用本会话最后已知模型，再缺省才回落宿主全局配置。
      *  @param launch 额外启动要求（子会话用：自己的会话文件、提示词、工具白名单，且不能再派）。
      *  传过的 launch 会记住：pi 进程退出后重发消息会自动重启，那时要照原样再起一次。 */
     public startClient(modelOverride?: { provider?: string; modelId?: string }, launch?: PanelLaunch): void {
@@ -312,7 +305,7 @@ export class SessionRuntime {
         );
     }
 
-    /** 把（新建或领取的）pi 客户端挂到本 tab：绑定事件并启动。 */
+    /** 把（新建或领取的）pi 客户端挂到本会话：绑定事件并启动。 */
     private attachClient(client: PiClient): void {
         // 新进程 = 新会话 = 重新读 models.json / 重新扫描技能：旧标题、旧缓存都作废。
         this.noteSessionReplaced();
@@ -323,9 +316,14 @@ export class SessionRuntime {
         this.client.on("response", (resp) => this.onPiResponse(resp));
         this.client.on("ui", (req) => this.onPiUiRequest(req));
         this.client.on("stderr", (text: string) => {
-            console.error("[pi stderr]", text);
-            // 那个扩展把“派子会话”的请求写在 stderr 里（pi 自己的诊断也走这条路，不是暗号行就丢掉）
-            for (const req of this.tabaFrames.feed(text)) {
+            // 那个扩展把“派子会话”的请求写在 stderr 里（一行是一大串 base64，不能整行打进日志，
+            // 不然控制台被刷没）；pi 自己的诊断输出照打 —— 攒行器把两样分开。
+            const requests = this.tabaFrames.feed(text);
+            for (const line of this.tabaFrames.takeOtherLines()) { console.error("[pi stderr]", line); }
+            for (const req of requests) {
+                console.error(req.kind === "spawn"
+                    ? `[派子会话] 收到派活请求：「${req.name}」（${req.id}，任务 ${req.task.length} 字）`
+                    : `[派子会话] 收到停止请求：「${req.name || req.id || ""}」`);
                 this.host.onTabaRequest?.(this.id, req);
             }
         });
@@ -348,7 +346,7 @@ export class SessionRuntime {
             this.client.start();
             this.setPiReady(true);
             this.post({ type: "system", text: "pi 已启动，可以开始对话。" });
-            this.host.broadcastTabList();
+            this.host.broadcastSessionList();
             void this.sendCurrentModel();
             void this.refreshStats();
             // 预取模型列表：点状态栏选模型时直接读缓存，不等 RPC
@@ -365,58 +363,20 @@ export class SessionRuntime {
             this.client.stop();
             this.client = undefined;
         }
-        // 进程没了，标题也不会再来：让等着的通知立刻收尾（回落到会话显示名）。
-        this.wakeTitleWaiters();
     }
 
-    /**
-     * 等 pi 的会话标题。
-     *
-     * 已经有标题就立刻返回；没有就最多等 timeoutMs 毫秒。
-     * 等不到的常见原因：用户没装自动命名扩展、或者它这一轮没生成成功。
-     * 等待期间会话被换掉（新建 / 切换 / 分叉 / 克隆）也立刻返回空串。
-     */
-    public waitForSessionTitle(timeoutMs: number): Promise<string> {
-        // 没标题、不打算等、或 pi 进程已不在（标题不可能再来）：立刻收尾。
-        if (this.piSessionTitle || timeoutMs <= 0 || !this.client || !this.client.isRunning()) {
-            return Promise.resolve(this.piSessionTitle);
-        }
-        const generation = this.sessionGeneration;
-        return new Promise<string>((resolve) => {
-            let done = false;
-            const finish = (): void => {
-                if (done) { return; }
-                done = true;
-                clearTimeout(timer);
-                const at = this.titleWaiters.indexOf(wake);
-                if (at >= 0) { this.titleWaiters.splice(at, 1); }
-                resolve(generation === this.sessionGeneration ? this.piSessionTitle : "");
-            };
-            const wake = (): void => { finish(); };
-            const timer = setTimeout(finish, timeoutMs);
-            this.titleWaiters.push(wake);
-        });
-    }
-
-    /** 记下 pi 上报的会话标题；真的变了才唤醒等待者。 */
+    /** 记下 pi 上报的会话标题；真的变了才通知界面重推会话列表。 */
     private setSessionTitle(name: unknown): void {
         const next = typeof name === "string" ? name.trim() : "";
         if (next === this.piSessionTitle) { return; }
         this.piSessionTitle = next;
-        this.wakeTitleWaiters();
+        // 界面上显示的会话名跟着换（顶条中间那行 + 会话列表）：通知宿主重推一次。
+        this.host.broadcastSessionList();
     }
 
-    private wakeTitleWaiters(): void {
-        const waiters = this.titleWaiters;
-        this.titleWaiters = [];
-        for (const wake of waiters) { wake(); }
-    }
-
-    /** 会话被换掉：旧标题作废，正在等的人立刻拿到空结果。 */
+    /** 会话被换掉：旧标题作废。 */
     private noteSessionReplaced(): void {
-        this.sessionGeneration++;
         this.piSessionTitle = "";
-        this.wakeTitleWaiters();
     }
 
     /**
@@ -445,7 +405,7 @@ export class SessionRuntime {
     private setPiReady(ready: boolean): void {
         this.piReady = ready;
         this.post({ type: "piReady", ready });
-        this.host.broadcastTabList();
+        this.host.broadcastSessionList();
         this.emitStatus();
     }
 
@@ -467,7 +427,7 @@ export class SessionRuntime {
         this.emitStatus();
     }
 
-    /** 中止该 tab 正在进行的生成 + bash 工具。
+    /** 中止该会话正在进行的生成 + bash 工具。
      *  与 pi TUI 的 Esc 一致：先 clear_queue 再 abort。否则当前轮结束后 pi 会在轮次边界
      *  把 steering 队列投递出去再被 abort 停掉，表现为“消息先投递一次才中止”。
      *  清空后 pi 推送空队列的 queueUpdate，webview 侧把未投递文本写回输入框。 */
@@ -480,7 +440,7 @@ export class SessionRuntime {
         }
     }
 
-    /** 在该 tab 内重置为新会话（保留进程，发 new_session）。 */
+    /** 在该会话内重置为新会话（保留进程，发 new_session）。 */
     public resetSession(): void {
         this.abortActiveRun();
         this.edits.reset();
@@ -508,7 +468,7 @@ export class SessionRuntime {
         if ((!text || !text.trim()) && !hasImages) {
             return;
         }
-        // 发送即占用当前 tab：等待 pi 回传 message_start 的间隙也不能被历史会话覆盖。
+        // 发送即占用当前会话：等待 pi 回传 message_start 的间隙也不能被历史会话覆盖。
         this.hasConversation = true;
         if (!this.client || !this.client.isRunning()) {
             this.startClient();
@@ -531,9 +491,9 @@ export class SessionRuntime {
         // - 插件代发的消息（opts.followUp，子会话结果交回、派活补话这类）：一律 followUp。
         //   结果是异步到的数据，不该在正在跑的那轮半路插进去改方向；pi 在忙就排进 followUp
         //   队列，当前这轮整个跑完再作为新的一轮处理；空闲就直接开新轮次；
-        // - 人打的消息、tab 看着空闲：prompt + followUp。pi 空闲就是普通新轮次；其实在忙就排进
+        // - 人打的消息、会话看着空闲：prompt + followUp。pi 空闲就是普通新轮次；其实在忙就排进
         //   followUp 队列，当前轮跑完接着处理，不报错不丢消息；
-        // - 人打的消息、tab 看着在跑：prompt + steer。pi 真在忙就排进 steering 队列（当前轮工具
+        // - 人打的消息、会话看着在跑：prompt + steer。pi 真在忙就排进 steering 队列（当前轮工具
         //   执行完就投递，与原来发 steer 命令等效）；其实已经跑完（结束事件还没送到）就直接开
         //   新轮次，消息不会卡在队列里。
         const cmd: Record<string, unknown> = !opts?.followUp && this.streaming
@@ -593,7 +553,7 @@ export class SessionRuntime {
         return true;
     }
 
-    /** 更新当前 agent 阶段，并同步给 webview / tab 列表。 */
+    /** 更新当前 agent 阶段，并同步给界面 / 会话列表。 */
     private setActivity(activity: RuntimeActivity, detail = ""): void {
         if (this.activity === activity && this.activityDetail === detail) {
             return;
@@ -601,7 +561,7 @@ export class SessionRuntime {
         this.activity = activity;
         this.activityDetail = detail;
         this.post({ type: "activityChanged", activity, detail });
-        this.host.broadcastTabList();
+        this.host.broadcastSessionList();
     }
 
     // ---- pi 事件 ----
@@ -754,7 +714,7 @@ export class SessionRuntime {
                 });
                 break;
             case "session_info_changed":
-                // pi 的会话标题变了（自动命名扩展生成、或用户自己 /name 改的）：收尾提醒要用它。
+                // pi 的会话标题变了（自动命名扩展生成、或用户自己 /name 改的）：界面上的会话名跟着换。
                 this.setSessionTitle(evt.name);
                 break;
             case "agent_end":
@@ -766,29 +726,23 @@ export class SessionRuntime {
                 this.streaming = false;
                 this.post({ type: "streamEnd", activity: "idle" });
                 this.setActivity("idle");
-                // 收尾提示：这一轮真正开始过才报；中止过的一轮只算取消，不打扰用户。
+                // 收尾：这一轮真正开始过才报；中止过的一轮只算取消，不打扰用户。
                 if (this.runStarted) {
                     const status: TurnEndStatus = this.abortRequested
                         ? "cancelled"
                         : this.lastShownRunError ? "error" : "done";
-                    // 通知第二行要用本轮最后一条 AI 回复的首尾句；取不到（出错/为空）就不显示。
+                    // 子会话把结果交回派活的会话，要用本轮最后一条 AI 回复的原文；
+                    // 取不到（出错 / 为空）就是空串。
                     void this.getLastAssistantText()
                         .catch(() => "")
                         .then((replyText) => {
                             this.host.onTurnEnd({
                                 panelId: this.id,
-                                panelName: this.title,
-                                // tab 名由宿主自己算（它才知道全局唯一名），这里先空着。
-                                tabName: "",
-                                // pi 的会话标题；第一轮往往还没生成，宿主会再等一会（见 turnTitleWaitMs）。
-                                sessionTitle: this.piSessionTitle,
-                                workspaceId: this.host.workspaceId,
                                 status,
-                                errorText: status === "error" ? this.lastShownRunError : undefined,
                                 lastReplyText: replyText,
                             });
                         });
-                    // 界面上的花费统计照旧刷新，只是通知里不再显示。
+                    // 界面上的花费统计照旧刷新。
                     void this.refreshStats();
                 }
                 this.runStarted = false;
@@ -852,7 +806,7 @@ export class SessionRuntime {
             this.startClient();
         }
         this.loading = true;
-        this.host.broadcastTabList();
+        this.host.broadcastSessionList();
         this.edits.reset();
         this.hasConversation = false;
         this.post({ type: "clear" });
@@ -862,7 +816,7 @@ export class SessionRuntime {
         const ready = await this.waitReady();
         if (!ready) {
             this.loading = false;
-            this.host.broadcastTabList();
+            this.host.broadcastSessionList();
             this.post({
                 type: "systemError",
                 text: "pi 进程未能就绪，无法加载会话。请确认 pi 可正常启动。",
@@ -873,7 +827,7 @@ export class SessionRuntime {
         const switchResp = await this.request({ type: "switch_session", sessionPath: file });
         if (!switchResp || switchResp.success === false) {
             this.loading = false;
-            this.host.broadcastTabList();
+            this.host.broadcastSessionList();
             this.post({
                 type: "systemError",
                 text: `加载会话失败: ${switchResp?.error ?? "未知错误"}`,
@@ -890,7 +844,7 @@ export class SessionRuntime {
         void this.refreshSessionTitle();
         this.post({ type: "system", text: `已加载会话（${messages.length} 条消息）。` });
         this.loading = false;
-        this.host.broadcastTabList();
+        this.host.broadcastSessionList();
         this.refreshStats();
     }
 
@@ -902,16 +856,16 @@ export class SessionRuntime {
      * @param opts.note 重画后额外给用户的一行提示。缺省为“会话已迁入本工作区（…）”；
      *                  传空串表示不发提示；文本里的 {count} 会换成消息条数。
      * @param opts.sink 只把这批重画消息交给这个出口（浏览器那边一个页面一份重画时用）。
-     *                  传了 sink 就不再广播 tab 列表（那份数据每个页面都一样，
+     *                  传了 sink 就不再广播会话列表（那份数据每个页面都一样，
      *                  重连的页面本来就有；刚加载的页面由 ready 那条路统一发）。
      */
     public async replayHistory(opts?: { note?: string; sink?: MessageSink }): Promise<void> {
-        // 缺省出口是这个 tab 的常规广播；传了 sink 就是"只给某一个页面重画"。
-        // 两条路都要带上 tabId：界面靠它认出消息属于哪一个会话窗格。
+        // 缺省出口是这个会话的常规广播；传了 sink 就是"只给某一个页面重画"。
+        // 两条路都要带上 sessionId：界面靠它认出消息属于哪一个会话。
         const sink = opts?.sink;
         const emit: MessageSink = sink
-            ? ((msg) => sink({ ...msg, tabId: this.id }))
-            : ((msg) => this.host.postToTab(this.id, msg));
+            ? ((msg) => sink({ ...msg, sessionId: this.id }))
+            : ((msg) => this.host.postToSession(this.id, msg));
         // keepDraft：重画不清输入框里没发出去的文字和附件。重画只是把对话内容重新递一遪，
         // 人打了一半的字不该被抹掉（换会话那种 clear 不带这个标记，草稿仍会重置）。
         emit({ type: "clear", keepDraft: true });
@@ -954,8 +908,8 @@ export class SessionRuntime {
                 text: "该会话正在生成中：迁移前已输出的增量不带过来，后续输出会继续显示。",
             });
         }
-        // 只给一个页面重画时不再广播 tab 列表：那份数据每个页面都一模一样，重连的页面本来就有
-        if (!sink) { this.host.broadcastTabList(); }
+        // 只给一个页面重画时不再广播会话列表：那份数据每个页面都一模一样，重连的页面本来就有
+        if (!sink) { this.host.broadcastSessionList(); }
     }
 
     // ========================================================================
@@ -1069,7 +1023,7 @@ export class SessionRuntime {
         const win = this.sliceHistoryWindow(messages, this.historyWindowStart);
         this.noteHistoryWindow(win, messages);
         const emit: MessageSink = (msg) => {
-            this.host.postToTab(this.id, { type: "historyBatchEvent", event: msg });
+            this.host.postToSession(this.id, { type: "historyBatchEvent", event: msg });
         };
         this.renderMessages(win.list, { sink: emit });
         this.post({ type: "historyBatchEnd", hasMore: win.hasMore, hidden: win.hidden });
@@ -1082,7 +1036,7 @@ export class SessionRuntime {
      * @param sink 只发给这一个出口（给某一个页面重画时用）；缺省发给整个工作区。
      */
     private renderMessages(messages: any[], opts?: { revertable?: boolean; sink?: MessageSink }): void {
-        // 缺省还是走这个 tab 的常规广播；给了 sink 就只发给那一个页面（消息已经带了 tabId）
+        // 缺省还是走这个会话的常规广播；给了 sink 就只发给那一个页面（消息已经带了 sessionId）
         const emit: MessageSink = opts?.sink ?? ((msg) => this.post(msg));
         const revertable = opts?.revertable === true;
         this.hasConversation = messages.some((m) =>
@@ -1354,7 +1308,7 @@ export class SessionRuntime {
         this.emitStatus();
     }
 
-    // ---- 文件跳转 / diff（均相对该 tab 的 EditTracker）----
+    // ---- 文件跳转 / diff（均相对该会话的 EditTracker）----
     public async openEditLocationWithAnchor(p: string, line: number, anchor: string): Promise<void> {
         let current = "";
         try {

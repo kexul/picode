@@ -26,16 +26,29 @@ test("暗号行：任务里有换行、引号、反斜杠都不影响", () => {
     assert.equal(req.task, task);
 });
 
-test("pi 自己的 stderr 输出不会被当成暗号", () => {
+test("pi 自己的 stderr 输出不会被当成暗号（但要留给调用方打日志）", () => {
     const parser = new TabaFrameParser();
     const out = parser.feed(
         "Error: Failed to load extension \"C:\\x\\y.ts\": boom\nHint: Start without extensions using \"pi -ne\".\n(node:1234) Warning: something\n"
     );
-    assert.deepEqual(out, []);
+    assert.deepEqual(out, [], "不是暗号就不出请求");
+    assert.deepEqual(parser.takeOtherLines(), [
+        "Error: Failed to load extension \"C:\\x\\y.ts\": boom",
+        'Hint: Start without extensions using "pi -ne".',
+        "(node:1234) Warning: something",
+    ]);
+    assert.deepEqual(parser.takeOtherLines(), [], "取过就该清空");
 });
 
-test("一行被切成两块也能拼回来", () => {
-    const line = encodeTabaFrame({ kind: "spawn", id: "abc", name: "施工", task: "改个 bug" }) + "\n";
+test("暗号行不能出现在日志里（只出请求，不进普通输出行）", () => {
+    const frame = encodeTabaFrame({ kind: "spawn", id: "a1", name: "施工", task: "改个 bug" });
+    const parser = new TabaFrameParser();
+    const out = parser.feed(`先一行普通输出\n${frame}\n后一行普通输出\n`);
+    assert.equal(out.length, 1);
+    assert.deepEqual(parser.takeOtherLines(), ["先一行普通输出", "后一行普通输出"]);
+});
+
+test("一行被切成两块也能拼回来", () => {    const line = encodeTabaFrame({ kind: "spawn", id: "abc", name: "施工", task: "改个 bug" }) + "\n";
     const parser = new TabaFrameParser();
     const cut = 7;
     assert.deepEqual(parser.feed(line.slice(0, cut)), [], "半行不该出结果");

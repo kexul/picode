@@ -56,7 +56,7 @@ export interface ModelChoice {
     thinkingLevel?: string;
 }
 
-/** 一个 tab 当前的模型/上下文用量状态快照，供宿主展示（如 VSCode 状态栏）。 */
+/** 一个会话当前的模型/上下文用量状态快照，供宿主展示（如 VSCode 状态栏）。 */
 export interface StatusInfo {
     modelId?: string;
     provider?: string;
@@ -74,15 +74,6 @@ export type RuntimeActivity = "idle" | "working" | "thinking" | "tool";
 /** 一条消息的出口：往一个页面（或一批页面）写一条要显示的消息。 */
 export type MessageSink = (msg: Record<string, unknown>) => void;
 
-/**
- * 收尾提醒最多等 pi 的会话标题多久（毫秒）。
- *
- * 会话标题由 pi 那边的自动命名扩展在第一轮跑完后生成（额外问一次模型），比提醒本身慢一两秒，
- * 所以等一下再用；等不到就用会话显示名兜底，提醒一定发得出去。
- * 可在设置面板的“显示选项”里改成不等（0 秒）或等更久。
- */
-export const DEFAULT_TURN_TITLE_WAIT_MS = 3000;
-
 /** 一轮对话收尾时的结果状态。 */
 export type TurnEndStatus =
     /** 正常跑完 */
@@ -92,25 +83,12 @@ export type TurnEndStatus =
     /** 用户主动中止 */
     | "cancelled";
 
-/** 一轮对话收尾信息，交给宿主决定怎么提示（系统通知 / 提示音）。 */
+/** 一轮对话收尾信息，交给宿主决定怎么提示（提示音；子会话把结果交回派活的会话也走这条）。 */
 export interface TurnEndInfo {
-    /** 收尾的 panel（会话）id */
+    /** 收尾的会话 id */
     panelId: string;
-    /** panel 显示名，如“沉静的雪豹” */
-    panelName: string;
-    /** panel 所属 tab（容器）的显示名 */
-    tabName: string;
-    /** pi 自己给的会话标题（自动命名扩展或 /name 命令写的）；还没有时为空串。
-     *  提醒里优先用它，这样用户一眼能认出是哪个任务跑完了。 */
-    sessionTitle?: string;
-    /** 工作区位置："sidebar" = 侧边栏，其余为编辑器工作区 id */
-    workspaceId: string;
     status: TurnEndStatus;
-    /** 本轮报错文本（status 为 error 时有值） */
-    errorText?: string;
-    /** 本次会话累计花费（美元），未知时为 undefined */
-    costUsd?: number;
-    /** 本轮最后一条 AI 回复的原文（通知里摘首尾句用）；取不到时为 undefined */
+    /** 本轮最后一条 AI 回复的原文（子会话把结果交回派活的会话时用）；取不到时为 undefined */
     lastReplyText?: string;
 }
 
@@ -126,13 +104,13 @@ export interface RuntimeHost {
     relativeTo(cwd: string, full: string): string;
     /** 把相对路径变成绝对路径。cwd 不传就用宿主默认目录；会话级的路径要传会话自己的目录（子会话 / 别的项目里开的会话）。 */
     resolvePath(p: string, cwd?: string): string;
-    /** 校验 pi 可执行文件存在；失败时自行向 tab 推送 systemError。返回是否可用。 */
-    checkPiAvailable(piPath: string, tabId: string): boolean;
+    /** 校验 pi 可执行文件存在；失败时自行向该会话推送 systemError。返回是否可用。 */
+    checkPiAvailable(piPath: string, sessionId: string): boolean;
     /** 领取一个已就绪的备用 pi 进程（无则 undefined）。领取后宿主会自动补新备用。
      *  返回值附带该进程启动时使用的模型，供领取方判断是否需要补发 set_model。 */
     claimSpareClient?(): { client: PiClient; provider?: string; modelId?: string } | undefined;
 
-    postToTab(tabId: string, msg: Record<string, unknown>): void;
+    postToSession(sessionId: string, msg: Record<string, unknown>): void;
     /**
      * 宿主是否要「整屏重画 / 加载会话时只发最近一段历史」。
      * 网页端是 true：长会话全量发下来太慢，只发最近 WEB_HISTORY_WINDOW 条消息，
@@ -141,22 +119,21 @@ export interface RuntimeHost {
      */
     wantsTrimmedHistory?(): boolean;
     /**
-     * 推送 tab 列表到 webview。
-     * @param immediate 结构变更（新建/关闭/切换 tab）传 true，跳过节流立刻推送。
+     * 推送会话列表到 webview（所有开着的会话 + 当前是哪一个）。
+     * @param immediate 结构变更（新建/关闭/切换）传 true，跳过节流立刻推送。
      */
-    broadcastTabList(immediate?: boolean): void;
-    /** 当某 tab 的会话路径变化（且可能为活跃 tab）时通知宿主。可选。 */
-    /** 当某 tab 的模型/上下文用量状态变化时通知宿主。可选。 */
-    onStatusUpdate?(tabId: string, info: StatusInfo): void;
-    /** 当某 tab 的工具触及文件集合（knownFiles）变化时通知宿主。可选。 */
-    onKnownFilesChanged?(tabId: string): void;
+    broadcastSessionList(immediate?: boolean): void;
+    /** 当某会话的模型/上下文用量状态变化时通知宿主。可选。 */
+    onStatusUpdate?(sessionId: string, info: StatusInfo): void;
+    /** 当某会话的工具触及文件集合（knownFiles）变化时通知宿主。可选。 */
+    onKnownFilesChanged?(sessionId: string): void;
 
     /** 某 panel 的一轮对话真正结束（pi 发出 agent_settled）时调用：
-     *  宿主据此发系统通知（Windows toast）并决定是否让界面响提示音。 */
+     *  宿主据此决定是否让界面响提示音、并把子会话的结果交回去。 */
     onTurnEnd(info: TurnEndInfo): void;
 
     /**
-     * 某个 panel 里的 pi 扩展要求“派子会话”（从那个进程的 stderr 里读到暗号）。
+     * 某个会话里的 pi 扩展要求“派子会话”（从那个进程的 stderr 里读到暗号）。
      * 不开这个能力的工作区（浏览器那份）不会收到。可选。
      */
     onTabaRequest?(panelId: string, request: TabaRequest): void;

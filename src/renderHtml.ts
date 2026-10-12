@@ -36,10 +36,12 @@ export interface RenderHTMLOpts {
 /**
  * 骨架里那几颗图标按钮的 SVG：取自 VSCode 官方 codicon（@vscode/codicons 包），
  * fill=currentColor 跟随文字色；尺寸由 chat.css 里对应按钮的规则控制。
+ * ICON_CLOSE 是例外：不是 codicon，而是自画的一颗粗叉——跟会话行尾那颗关闭叉长得一样，
+ * 面板头部的「关闭」要用同一颗。
  */
 const ICON_ADD = '<svg width="14" height="14" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8 1.5C8 1.22386 7.77614 1 7.5 1C7.22386 1 7 1.22386 7 1.5V7H1.5C1.22386 7 1 7.22386 1 7.5C1 7.77614 1.22386 8 1.5 8H7V13.5C7 13.7761 7.22386 14 7.5 14C7.77614 14 8 13.7761 8 13.5V8H13.5C13.7761 8 14 7.77614 14 7.5C14 7.22386 13.7761 7 13.5 7H8V1.5Z"/></svg>';
 const ICON_ARROW_DOWN = '<svg width="14" height="14" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13.854 8.146C13.659 7.951 13.342 7.951 13.147 8.146L9.00096 12.292V2.5C9.00096 2.224 8.77696 2 8.50096 2C8.22496 2 8.00096 2.224 8.00096 2.5V12.293L3.85496 8.147C3.65996 7.952 3.34296 7.952 3.14796 8.147C2.95296 8.342 2.95296 8.659 3.14796 8.854L8.14796 13.854C8.24596 13.952 8.37396 14 8.50196 14C8.62996 14 8.75796 13.951 8.85596 13.854L13.856 8.854C14.051 8.659 14.051 8.342 13.856 8.147L13.854 8.146Z"/></svg>';
-const ICON_CLOSE = '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8.70701 8.00001L12.353 4.35401C12.548 4.15901 12.548 3.84201 12.353 3.64701C12.158 3.45201 11.841 3.45201 11.646 3.64701L8.00001 7.29301L4.35401 3.64701C4.15901 3.45201 3.84201 3.45201 3.64701 3.64701C3.45201 3.84201 3.45201 4.15901 3.64701 4.35401L7.29301 8.00001L3.64701 11.646C3.45201 11.841 3.45201 12.158 3.64701 12.353C3.74501 12.451 3.87301 12.499 4.00101 12.499C4.12901 12.499 4.25701 12.45 4.35501 12.353L8.00101 8.70701L11.647 12.353C11.745 12.451 11.873 12.499 12.001 12.499C12.129 12.499 12.257 12.45 12.355 12.353C12.55 12.158 12.55 11.841 12.355 11.646L8.70901 8.00001H8.70701Z"/></svg>';
+const ICON_CLOSE = '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.5 2.5 L13.5 13.5 M13.5 2.5 L2.5 13.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>';
 
 export function renderHTML(opts: RenderHTMLOpts): string {
     const nonceAttr = opts.scriptNonce ? ` nonce="${opts.scriptNonce}"` : "";
@@ -50,9 +52,16 @@ export function renderHTML(opts: RenderHTMLOpts): string {
         .join("");
 
     const head = opts.extraHead ? `  ${opts.extraHead}\n` : "";
-    const tabbar =
-    `  <div id="tabBar" class="hidden">\n` +
-    `    <div id="tabBarInner"></div><button id="newTabBtn" class="tab-bar-btn" title="新建 tab (Ctrl+Alt+N)" aria-label="新建 tab">${ICON_ADD}</button>\n` +
+    // 顶条：左边加号，中间一列（上头会话名、底下当前目录），右边两颗网页端按钮。
+    // 中间那一列包成 #sessionCenter：路径行就落在会话名正下方，两者一样宽、都居中。
+    const sessionBar =
+    `  <div id="sessionBar">\n` +
+    `    <button id="newSessionBtn" title="新建会话 (Ctrl+Alt+N)" aria-label="新建会话">${ICON_ADD}</button>\n` +
+    `    <div id="sessionCenter">\n` +
+    `      <button id="sessionName" title="当前会话 · 点这里换会话" aria-label="当前会话"><span class="sn-dot"></span><span class="sn-text"></span></button>\n` +
+    `      <div id="sessionPath" class="hidden"><span class="sp-text"></span></div>\n` +
+    `    </div>\n` +
+    `    <div id="sessionBarTail"></div>\n` +
     `  </div>\n`;
 
     const bodyTop = opts.extraBodyTop ? `  ${opts.extraBodyTop}\n` : "";
@@ -69,7 +78,7 @@ ${opts.chatCss}
 </style>
 ${head}</head>
 <body>
-${bodyTop}${tabbar}  <div id="messages">
+${bodyTop}${sessionBar}  <div id="messages">
     <button id="jumpBottom" class="hidden" title="跳到最新" aria-label="跳到最新">${ICON_ARROW_DOWN}</button>
   </div>
   <div id="inputArea">
@@ -93,13 +102,11 @@ ${bodyTop}${tabbar}  <div id="messages">
   <div id="settingsOverlay" class="hidden">
     <div id="settingsPanel">
       <div id="settingsTabs">
-        <button class="settings-tab active" data-tab="models" type="button">模型配置</button>
-        <button class="settings-tab" data-tab="options" type="button">插件选项</button>
+        <span id="settingsTitle">设置</span>
         <span class="settings-tabs-spacer"></span>
-        <button id="settingsClose" type="button" title="关闭 (Esc)" aria-label="关闭">${ICON_CLOSE}</button>
+        <button id="settingsClose" type="button" title="关闭" aria-label="关闭">${ICON_CLOSE}</button>
       </div>
-      <div id="settingsRoot"></div>
-      <div id="viewOptsRoot" class="hidden"></div>
+      <div id="viewOptsRoot"></div>
     </div>
   </div>
 ${bodyBottom}${scriptTags}

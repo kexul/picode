@@ -18,7 +18,7 @@ export interface EditTrackerHost {
 }
 
 /**
- * 单个 tab 内的工具卡片推送 + edit/write 快照 / 回滚 / knownFiles。
+ * 单个会话内的工具卡片推送 + edit/write 快照 / 回滚 / knownFiles。
  * 从 SessionRuntime 拆出，降低编排类体积。
  */
 export class EditTracker {

@@ -33,7 +33,6 @@ function parseArgs(argv, options = {}) {
         const arg = argv[i];
         if (arg === "--help" || arg === "-h") { parsed.help = true; continue; }
         if (arg === "--open") { parsed.open = true; continue; }
-        if (arg === "--toast") { parsed.toast = true; continue; }
         if (arg === "--fake-pi") { parsed.fakePi = true; continue; }
         if (arg === "--headed") { parsed.headed = true; continue; }
         if (arg === "--keep") { parsed.keep = true; continue; }
@@ -88,7 +87,6 @@ function usage() {
         "  --provider P       覆盖 provider",
         "  --piPath PATH      覆盖 pi 可执行文件路径",
         "  --theme light|dark 界面颜色（默认 light）",
-        "  --toast            打开会话跑完的 Windows 通知（默认关，调试时太吵）",
         "  --fake-pi          用假模型（dev/fakePi.js）：不调真模型，按剧本秒回，验界面不用等",
         "  --headed           显示浏览器窗口（默认无头）；配合 --keep 可以留在现场点",
         "  --chrome PATH      浏览器可执行文件（默认自动找 Chrome / Edge）",
@@ -111,7 +109,7 @@ function usage() {
         "",
         "例子：",
         '  npm run web:shot -- --send "只回复两个字：收到" --wait-answer 收到 --shot reply.png',
-        '  npm run web:shot -- --theme dark --click "#newTab" --shot dark.png',
+        '  npm run web:shot -- --theme dark --click "#newSessionBtn" --shot dark.png',
         "  npm run web:shot -- --url http://127.0.0.1:51999/ --script dev/myFlow.js",
     ].join("\n");
 }

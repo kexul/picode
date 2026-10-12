@@ -107,7 +107,7 @@ export class PiClient extends EventEmitter {
 
     /**
      * 带 id 的请求-响应。超时 / 进程不在 / 发送失败时返回 undefined。
-     * 所有 tab 与 spare 池共用这一条路径。
+     * 所有会话与 spare 池共用这一条路径。
      */
     request<T = unknown>(
         cmd: RpcCommand | Record<string, unknown>,

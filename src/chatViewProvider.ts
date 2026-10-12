@@ -212,7 +212,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await this.waitLocalReady();
     }
 
-    /** 全局"新建会话"：打开侧边栏并新建一个 tab。 */
+    /** 全局"新建会话"：打开侧边栏并新建一个会话。 */
     public async newSessionAtLastActive(): Promise<void> {
         await this.reveal();
         this.client.sendPage({ type: "newSession" });
@@ -242,7 +242,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     public async pickViewOptions(): Promise<void> {
         await this.reveal();
-        this.postToWebview({ type: "openSettings", tab: "options" });
+        this.postToWebview({ type: "openSettings" });
     }
 
     /** 选中代码发送：把编辑器里的选区拼成一段话，交给界面发出去。 */

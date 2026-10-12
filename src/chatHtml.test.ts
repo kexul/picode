@@ -67,18 +67,17 @@ function fakeFiles(overrides?: Partial<ChatUiFiles>): ChatUiFiles {
         highlightJs: "/*HIGHLIGHT*/",
         chatJs: "/*CHAT_JS*/",
         bridgeJs: "/*BRIDGE*/",
-        settingsJs: "/*SETTINGS*/",
         ...overrides,
     };
 }
 
 test("拼出来的 HTML：CSS 内联、脚本按序内联且带同一个 nonce", () => {
     const html = getChatHtml(fakeFiles(), { themeMode: "dark", imgCspSource: "https://csp.test" });
-    // 顺序：桥在最前（比 chat.js 先加载），然后 marked → highlight → chat → settings
-    const order = ["/*BRIDGE*/", "/*MARKED*/", "/*HIGHLIGHT*/", "/*CHAT_JS*/", "/*SETTINGS*/"]
+    // 顺序：桥在最前（比 chat.js 先加载），然后 marked → highlight → chat
+    const order = ["/*BRIDGE*/", "/*MARKED*/", "/*HIGHLIGHT*/", "/*CHAT_JS*/"]
         .map((marker) => html.indexOf(marker));
-    assert.ok(order.every((pos) => pos >= 0), "五份脚本都应该内联进 HTML");
-    assert.deepEqual([...order].sort((a, b) => a - b), order, "脚本顺序应该是桥最前、chat 在 settings 前");
+    assert.ok(order.every((pos) => pos >= 0), "四份脚本都应该内联进 HTML");
+    assert.deepEqual([...order].sort((a, b) => a - b), order, "脚本顺序应该是桥最前、chat 最后");
     // CSS：界面样式进 <style>，网页端配色单独一份
     assert.ok(html.includes("/*CHAT_CSS*/"), "chat.css 应该内联");
     assert.ok(html.includes('<style id="browser-theme">/*BROWSER_CSS*/'), "browserTheme.css 应该单独内联");
@@ -87,7 +86,7 @@ test("拼出来的 HTML：CSS 内联、脚本按序内联且带同一个 nonce",
     assert.ok(html.includes("img-src https://csp.test data:"), "CSP 里要有图片来源");
     // 所有内联脚本共用一个 nonce
     const nonces = [...html.matchAll(/<script nonce="([0-9a-zA-Z]+)">/g)].map((m) => m[1]);
-    assert.ok(nonces.length >= 5, "五份内联脚本都应该带 nonce");
+    assert.ok(nonces.length >= 4, "四份内联脚本都应该带 nonce");
     assert.ok(new Set(nonces).size === 1, "nonce 应该是同一个");
 });
 

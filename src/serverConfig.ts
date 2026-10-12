@@ -20,7 +20,6 @@ import {
     DEFAULT_SEND_KEY,
     DEFAULT_TAB_SWITCH_KEY,
     DEFAULT_THEME_MODE,
-    DEFAULT_TURN_TITLE_WAIT_SECONDS,
     FOCUS_INPUT_KEYS,
     NEW_SESSION_KEYS,
     SEND_KEYS,
@@ -49,7 +48,6 @@ export interface ServerConfig {
     fontSize: string;
     notifyBeep: boolean;
     themeMode: "light" | "dark";
-    turnTitleWaitSeconds: number;
     webServer: ServerWebSettings;
 }
 
@@ -71,7 +69,6 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = deepFreeze({
     fontSize: DEFAULT_FONT_SIZE,
     notifyBeep: DEFAULT_NOTIFY_BEEP,
     themeMode: DEFAULT_THEME_MODE,
-    turnTitleWaitSeconds: DEFAULT_TURN_TITLE_WAIT_SECONDS,
     // 默认对所有网卡开放（手机等设备打开地址就能用）；只给自己用就改 127.0.0.1，或启动时加 --host 127.0.0.1
     webServer: { enabled: true, port: 51883, host: "0.0.0.0" },
 });
@@ -95,6 +92,9 @@ function defaults(): ServerConfig {
         webServer: { ...DEFAULT_SERVER_CONFIG.webServer },
     };
 }
+
+/** 已经去掉的功能留下的键：老设置文件里可能还写着，读到时安静丢掉，不刷“不认识的项”。 */
+const RETIRED_KEYS = new Set(["turnTitleWaitSeconds"]);
 
 /** JSON 里的对象（数组和 null 都不算）。 */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -178,7 +178,7 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
     }
 
     const knownKeys = new Set(Object.keys(DEFAULT_SERVER_CONFIG));
-    const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.has(key));
+    const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.has(key) && !RETIRED_KEYS.has(key));
     if (unknownKeys.length > 0) {
         // 多半是名字拼错了；留着也没用，说一声就丢
         warnings.push(`配置里有不认识的项：${unknownKeys.join("、")}`);
@@ -226,9 +226,6 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
             warnings.push(`themeMode 只能是 light 或 dark，已用默认值${showDefault(DEFAULT_THEME_MODE)}`);
         }
     }
-    config.turnTitleWaitSeconds = pickInt(
-        raw.turnTitleWaitSeconds, 0, 60, DEFAULT_TURN_TITLE_WAIT_SECONDS, "turnTitleWaitSeconds", warnings,
-    );
 
     // ---- 网页服务（config.json 的 webServer 一节）----
     const web = raw.webServer;

@@ -37,12 +37,13 @@ function findBrowser() {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** 极简的调试接口客户端：发命令、等结果。 */
+/** 极简的调试接口客户端：发命令、等结果、把事件转给订阅者。 */
 class Cdp {
     constructor(url) {
         this.url = url;
         this.nextId = 0;
         this.pending = new Map();
+        this.handlers = new Map();   // 事件名 -> [处理函数]（message)里没 id 的那些）
         this.sessionId = undefined;
     }
 
@@ -57,12 +58,23 @@ class Cdp {
         });
         this.ws.onmessage = (event) => {
             const message = JSON.parse(String(event.data));
-            const waiting = message.id ? this.pending.get(message.id) : undefined;
+            if (!message.id) {
+                for (const fn of this.handlers.get(message.method) || []) { fn(message.params); }
+                return;
+            }
+            const waiting = this.pending.get(message.id);
             if (!waiting) { return; }
             this.pending.delete(message.id);
             if (message.error) { waiting.reject(new Error(`${waiting.method}: ${JSON.stringify(message.error)}`)); }
             else { waiting.resolve(message.result); }
         };
+    }
+
+    /** 订阅浏览器事件（如 Runtime.exceptionThrown）；页面报错就靠它收。 */
+    on(method, handler) {
+        const list = this.handlers.get(method) || [];
+        list.push(handler);
+        this.handlers.set(method, list);
     }
 
     send(method, params = {}) {
@@ -135,6 +147,18 @@ async function openPage(options) {
     cdp.sessionId = attached.sessionId;
     await cdp.send("Page.enable");
     await cdp.send("Runtime.enable");
+    // 页面报错 / console.error 都收下来：界面出问题时能直接看到原因（不用手工开 devtools）
+    const pageErrors = [];
+    cdp.on("Runtime.exceptionThrown", (params) => {
+        const d = (params && params.exceptionDetails) || {};
+        const text = (d.exception && (d.exception.description || d.exception.value)) || d.text || "未知错误";
+        pageErrors.push(String(text).split("\n")[0]);
+    });
+    cdp.on("Runtime.consoleAPICalled", (params) => {
+        if (!params || params.type !== "error") { return; }
+        const text = (params.args || []).map((a) => (a && (a.value ?? a.description)) || "").join(" ");
+        pageErrors.push("[console.error] " + text);
+    });
     await cdp.send("Emulation.setDeviceMetricsOverride", {
         width: options.width || 420,
         height: options.height || 900,
@@ -144,6 +168,7 @@ async function openPage(options) {
     await cdp.send("Page.navigate", { url: options.url });
 
     const page = new Page(cdp, options);
+    page.pageErrors = pageErrors;   // 页面报错（Runtime.exceptionThrown / console.error）
     const close = async () => {
         cdp.close();
         child.kill();

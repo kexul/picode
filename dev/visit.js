@@ -123,6 +123,13 @@ async function main() {
                 console.log(`  · 截图：${file}`);
             }
         }
+        // 页面上报的错（异常 / console.error）集中打一下：界面出问题时不用再开 devtools
+        const errs = page.pageErrors || [];
+        if (errs.length) {
+            console.log("");
+            console.log("页面报错（" + errs.length + " 条）：");
+            for (const e of errs.slice(0, 10)) { console.log("  ! " + e); }
+        }
         console.log("");
         console.log("完成。截图：" + (shots.length ? shots.join("  ") : "（这次没截图）"));
     } finally {

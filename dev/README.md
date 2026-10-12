@@ -36,8 +36,8 @@ npm run web:shot
 # 发一句话，等模型的回复，截图
 npm run web:shot -- --send "只回复两个字：收到" --wait-answer 收到 --shot reply.png
 
-# 深色界面，点一下新建标签，截图
-npm run web:shot -- --theme dark --click "#newTab" --shot dark.png
+# 深色界面，点一下新建会话，截图
+npm run web:shot -- --theme dark --click "#newSessionBtn" --shot dark.png
 
 # 显示浏览器窗口，跑完不关，自己接着点（调试布局时最顺手）
 npm run web:shot -- --headed --keep
@@ -52,6 +52,13 @@ npm run web:shot -- --fake-pi --send "随便说点什么" --shot fake.png
 
 # 验“一批工具调用全挤在同一条线上”（往页面里投十几条工具消息，前后加正文，截图）：
 npm run web:shot -- --width 1000 --height 620 --script dev/toolRow.js
+
+# 验会话那套（顶条名字跟着 pi 标题变 / 切会话 / 列表里关会话）：
+npm run web:shot -- --fake-pi --script dev/sessionFlow.js
+
+# 验派子会话（说一句带“派活”的话就会派一个）：跑完自动关、没跑完不关、
+# 正看着就不关；子会话跑得比人手快，配慢一点儿的假 pi 才来得及点进去
+FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaFlow.js
 ```
 
 完整参数：`npm run web:shot -- --help`（或 `node dev/visit.js --help`）。
@@ -71,7 +78,7 @@ npm run web:shot -- --width 1000 --height 620 --script dev/toolRow.js
   注意无头浏览器在页面刚加载的那几百毫秒里有时会把按键事件丢掉（探针的坑）：脚本里可以先
   `page.sleep(1000)` 再按回车。
 - **需要 Node 22 以上**（用到内置的 WebSocket 跟浏览器说话），浏览器用本机的 Chrome 或 Edge。
-- **验不到的东西**：diff 编辑器、符号跳转、系统通知、剪贴板、命令面板入口、状态栏、
+- **验不到的东西**：diff 编辑器、符号跳转、剪贴板、命令面板入口、状态栏、
   侧边栏网页视图本身 —— 这些还是得用 VSCodium / VS Code 的 F5 开发宿主看。
 
 ## 跟独立后端（`pichat`）什么关系

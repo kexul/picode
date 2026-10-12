@@ -121,8 +121,8 @@ test("插件连上后端：状态变 online，这个窗口登记进去，后端�
         assert.match(c.client.currentPageId, /^p-/, "后端发了一个页面标识");
 
         // 后端推给页面的消息：原样转到插件这边（插件再给网页视图）
-        backend.broadcaster.broadcast({ type: "tabList", tabs: [], activeId: null });
-        await waitFor(() => c.pageEvents.some((m) => m.type === "tabList"));
+        backend.broadcaster.broadcast({ type: "sessionList", sessions: [], activeId: null });
+        await waitFor(() => c.pageEvents.some((m) => m.type === "sessionList"));
 
         // 网页视图发的消息：原样转给后端（带的是后端发的那块页面标识）
         c.client.sendPage({ type: "newSession" });

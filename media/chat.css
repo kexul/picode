@@ -8,11 +8,12 @@
     background: var(--vscode-editor-background);
   }
   #messages { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
-  /* tab-pane 挂在布局树叶子里（布局树负责可见性） */
-  .tab-pane { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: 8px 8px 16px; }
-  .tab-pane::-webkit-scrollbar { width: 6px; }
-  .tab-pane::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 3px; }
-  .tab-pane::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground, rgba(128,128,128,0.6)); }
+  /* 一个会话一层壳：消息窗格（.session-pane）滚，底下一行状态栏。 */
+  .session-view { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+  .session-pane { position: relative; flex: 1 1 0; min-height: 0; overflow-y: auto; padding: 8px 8px 16px; }
+  .session-pane::-webkit-scrollbar { width: 6px; }
+  .session-pane::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 3px; }
+  .session-pane::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground, rgba(128,128,128,0.6)); }
 
   /* 跳到最新 */
   #jumpBottom {
@@ -29,47 +30,79 @@
   #jumpBottom.hidden { display: none; }
   #jumpBottom svg { width: 14px; height: 14px; display: block; }
 
-  /* ---- tab 栏 ---- */
-  #tabBar { display: flex; align-items: center; gap: 4px; padding: 4px 6px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); flex: 0 0 auto; }
-  /* tab 多了会溢出：这里给一根看得见的细滑动条（原来把滑动条藏了，用户只能把窗口拉宽才能找着后面的 tab）。
-     chat.js 那边还配了两件事：重建 tab 栏时保住滚动位置；滚轮上下滚改成横向滚。 */
-  #tabBarInner { display: flex; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: var(--vscode-scrollbarSlider-background, rgba(121,121,121,0.45)) transparent; }
-  #tabBarInner::-webkit-scrollbar { height: 7px; }
-  #tabBarInner::-webkit-scrollbar-track { background: transparent; }
-  #tabBarInner::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(121,121,121,0.45)); border-radius: 4px; }
-  #tabBarInner::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground, rgba(159,159,159,0.72)); }
-  #newTabBtn { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: none; background: transparent; color: var(--vscode-foreground); opacity: 0.7; line-height: 1; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-  #newTabBtn svg { width: 14px; height: 14px; display: block; }
-  #newTabBtn:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
-    /* 不设 max-width：多 panel 拼接名（名词串）可撑宽，tab 栏溢出时横向滚动 */
-  .chat-tab { display: flex; flex: 0 0 auto; min-width: 0; align-items: center; gap: 4px; padding: 3px 6px 3px 9px; border-radius: 4px 4px 0 0; cursor: pointer; white-space: nowrap; font-size: 0.85em; color: var(--vscode-foreground); opacity: 0.7; user-select: none; }
-  .chat-tab:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
-  .chat-tab.active { opacity: 1; background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.2)); }
-  .chat-tab .ct-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .chat-tab .ct-spinner { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-charts-blue, #3794ff); display: none; flex-shrink: 0; }
-  .chat-tab.streaming .ct-spinner { display: inline-block; animation: pi-pulse 1.2s ease-in-out infinite; }
-  .chat-tab.loading .ct-spinner { display: inline-block; animation: pi-pulse 1.2s ease-in-out infinite; }
+  /* ---- 顶条：左边加号，中间会话名与当前目录，右边截图与列表按钮 ---- */
+  /* 一次只看一个会话；换会话走中间那颗名字（点开列表）或最右边的 <<。
+     中间那一列（#sessionCenter）自己竖着放两样：会话名，底下一行目录；
+     左右三颗按钮竖着撑满整条（align-self: stretch），上下留白由顶条的内边距给。 */
+  #sessionBar {
+    display: flex; align-items: flex-start; gap: 6px; flex: 0 0 auto;
+    padding: 5px 8px 4px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
+  }
+  #sessionCenter { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+  /* 加号：竖着撑满整个顶条（上下留白由顶条自己的内边距给），好点、不误触 */
+  #newSessionBtn {
+    flex: 0 0 auto; align-self: stretch; width: 32px; padding: 0; border: none; background: transparent;
+    color: var(--vscode-foreground); opacity: 0.7; line-height: 1; border-radius: 5px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #newSessionBtn svg { width: 18px; height: 18px; display: block; }
+  #newSessionBtn:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
+  /* 当前会话名：占中间那一列，长了省略；右边那颗小点表示在跑。 */
+  #sessionName {
+    flex: 0 0 auto; width: 100%; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 6px;
+    height: 26px; padding: 0 8px; border: none; background: transparent; border-radius: 4px;
+    color: var(--vscode-foreground); font-family: inherit; font-size: 0.95em;
+    cursor: pointer; user-select: none;
+  }
+  #sessionName:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
+  #sessionName .sn-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.85; }
+  #sessionName .sn-dot {
+    flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--vscode-charts-blue, #3794ff); display: none;
+  }
+  #sessionName.streaming .sn-dot { display: inline-block; animation: pi-pulse 1.2s ease-in-out infinite; }
+  /* 别的会话有新消息：同一颗点，亮着但不闪（当前会话在跑时这颗点拿去闪了，不抢）。 */
+  #sessionName.unread:not(.streaming) .sn-dot { display: inline-block; }
+  #sessionName.streaming .sn-text { opacity: 1; }
+  /* 名字后面那颗朝下的小箭头：主会话多过一个才露面（暗示点得开、能换）。 */
+  #sessionName .sn-caret { flex: 0 0 auto; display: inline-flex; opacity: 0.6; }
+  #sessionName .sn-caret svg { width: 12px; height: 12px; display: block; transform: rotate(90deg); }
+  #sessionName .sn-caret.hidden { display: none; }
+  /* 顶条最右边：网页端的两颗按钮（截图 / 项目与会话）由 browserBridge.js 挂在这里；
+     跟左边加号一样竖着撑满（见 browserTheme.css 里那两颗的尺寸）。 */
+  #sessionBarTail { flex: 0 0 auto; align-self: stretch; display: flex; align-items: stretch; gap: 4px; margin-left: auto; }
+  /* 名字正下方那行小字：当前会话跑在哪个目录。跟名字同一列、一样居中；
+     灰一点、小一号。路径太长时末尾省略，完整路径在 title 提示里（悬停或长按能看）。 */
+  #sessionPath {
+    display: flex; justify-content: center; margin-top: 1px; min-width: 0;
+    font-size: 0.78em; line-height: 1.45; color: var(--vscode-descriptionForeground, #999);
+  }
+  /* 内层这个 span 才是会省略的那一段：它最宽只能到整列那么宽，居中由外层给 */
+  #sessionPath .sp-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #sessionPath.hidden { display: none; }
+  /* 会话在跑：小点呼吸一下（顶条那颗名字上的、下拉清单里的共用）。 */
   @keyframes pi-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-  .chat-tab .ct-close { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 16px; height: 16px; margin-left: 2px; opacity: 0.5; padding: 0; border-radius: 3px; }
-  .chat-tab .ct-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
-  /* 派子会话（taba）：派了活的 tab 显示“⇢几个”；子会话收进一张「子会话」标签（点开贴着标签的小列表）。 */
-  .chat-tab .ct-taba { flex: 0 0 auto; line-height: 1; opacity: 0.9; cursor: help; }
-  .chat-tab.taba-stack .ts-mark { flex: 0 0 auto; line-height: 1; opacity: 0.9; display: flex; align-items: center; }
-  .chat-tab.taba-stack .ts-mark svg { width: 12px; height: 12px; display: block; }
-  /* 折叠标签的小列表：还在跑的子会话行首有颗呼吸小点（跟 tab 上那颗同款，跑完就消失；出错＝红），
-     行尾小叉关闭（鼠标悬停出现；触屏常显）。 */
-  .pane-menu .sm-row .sm-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; }
-  .pane-menu .sm-row .sm-dot.running { background: var(--vscode-charts-blue, #3794ff); animation: pi-pulse 1.2s ease-in-out infinite; }
-  .pane-menu .sm-row .sm-dot.error { background: var(--vscode-charts-red, #f14c4c); }
-  .pane-menu .sm-row .sm-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .pane-menu .sm-row.sm-current { background: var(--vscode-menu-selectionBackground, var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.2))); }
-  .pane-menu .sm-row .sm-close { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 3px; opacity: 0; }
-  .pane-menu .sm-row:hover .sm-close { opacity: 0.6; }
-  .pane-menu .sm-row .sm-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
-  @media (hover: none) { .pane-menu .sm-row .sm-close { opacity: 0.6; } }
-  .chat-tab .ct-taba-count { padding: 0 4px; border-radius: 8px; font-size: 0.78em; background: var(--vscode-badge-background, rgba(128,128,128,0.35)); color: var(--vscode-badge-foreground, var(--vscode-foreground)); }
-  .chat-tab .ct-taba-count.running { background: var(--vscode-charts-blue, #3794ff); color: var(--vscode-editor-background, #1e1e1e); animation: pi-pulse 1.6s ease-in-out infinite; }
-  #tabBar.hidden { display: none; }
+  /* ---- 顶条那颗会话名的下拉 ---- */
+  /* 贴在名字底下的一张清单：开着的主会话一行一个（子会话不在里面，去「项目与会话」面板看）。 */
+  #sessionMenu {
+    position: fixed; z-index: 30; min-width: 180px; max-width: min(320px, calc(100vw - 16px));
+    max-height: 60vh; overflow-y: auto; padding: 4px;
+    background: var(--vscode-dropdown-background, var(--vscode-editorWidget-background));
+    border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border, rgba(128,128,128,0.4)));
+    border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+    font-family: var(--vscode-font-family); font-size: 13px;
+    opacity: 1; transform: translateX(-50%);
+  }
+  #sessionMenu.hidden { display: block; opacity: 0; pointer-events: none; visibility: hidden; }
+  .sm-item { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 4px; cursor: pointer; user-select: none; }
+  .sm-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
+  .sm-item.current { background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.28)); color: var(--vscode-list-activeSelectionForeground, inherit); }
+  .sm-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9em; }
+  /* 小点：在跑＝蓝点呼吸，有新消息＝蓝点不闪，出错＝红点，其余不显示（但位置留着，名字才对得齐）。 */
+  .sm-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; }
+  .sm-dot.running { background: var(--vscode-charts-blue, #3794ff); animation: pi-pulse 1.2s ease-in-out infinite; }
+  .sm-dot.error { background: var(--vscode-charts-red, #f14c4c); }
+  .sm-dot.unread { background: var(--vscode-charts-blue, #3794ff); }
   /* 正文内的文件路径可点击链接：跳转打开对应文件 */
   .file-link { color: var(--vscode-textLink-foreground, #3794ff); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
   .file-link:hover { text-decoration: underline; opacity: 0.85; }
@@ -173,18 +206,16 @@
   #inputArea { display: flex; flex-direction: column; padding: 8px; gap: 6px; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); flex: 0 0 auto; }
   #imgPreview { display: flex; flex-wrap: wrap; gap: 6px; }
   #imgPreview:empty { display: none; }
-  #queueBar { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.4)); border-radius: 4px; background: color-mix(in srgb, var(--vscode-editorInfo-background, transparent) 20%, transparent); font-size: var(--vscode-font-size); color: var(--vscode-descriptionForeground, inherit); }
+  #queueBar { display: flex; flex-direction: column; gap: 2px; padding: 0; border: none; background: transparent; font-size: var(--vscode-font-size); color: var(--vscode-descriptionForeground, inherit); }
   #queueBar:empty, #queueBar.hidden { display: none; }
-  #queueBar .qb-title { font-weight: 600; color: var(--vscode-foreground); font-size: 0.9em; }
-  #queueBar .qb-block { border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.3)); border-radius: 3px; background: var(--vscode-editor-background, transparent); overflow: hidden; }
-  #queueBar .qb-head { display: flex; align-items: center; gap: 6px; padding: 3px 6px; cursor: pointer; user-select: none; }
+  #queueBar .qb-block { overflow: hidden; }
+  #queueBar .qb-head { display: flex; align-items: center; gap: 6px; padding: 2px 0; border-radius: 3px; cursor: pointer; user-select: none; }
   #queueBar .qb-head:hover { background: color-mix(in srgb, var(--vscode-list-hoverBackground, rgba(128,128,128,0.1)) 50%, transparent); }
-  #queueBar .qb-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-charts-yellow, #cca700); animation: qb-pulse 1.2s ease-in-out infinite; flex-shrink: 0; }
+  #queueBar .qb-head:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+  #queueBar .qb-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--vscode-charts-yellow, #cca700); animation: qb-pulse 1.2s ease-in-out infinite; flex-shrink: 0; }
   @keyframes qb-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
-  #queueBar .qb-label { font-size: 0.8em; color: var(--vscode-charts-yellow, #cca700); flex-shrink: 0; }
-  #queueBar .qb-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground, inherit); }
-  #queueBar .qb-toggle { font-size: 0.8em; color: var(--vscode-descriptionForeground, inherit); flex-shrink: 0; }
-  #queueBar .qb-body { margin: 0; padding: 4px 8px 6px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.9em; white-space: pre-wrap; word-break: break-word; color: var(--vscode-foreground); border-top: 1px solid var(--vscode-input-border, rgba(128,128,128,0.2)); max-height: 160px; overflow: auto; }
+  #queueBar .qb-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground, inherit); }
+  #queueBar .qb-body { margin: 1px 0 3px 12px; padding: 0; font-family: inherit; font-size: 0.9em; white-space: pre-wrap; word-break: break-word; color: var(--vscode-foreground); max-height: 160px; overflow: auto; }
   #queueBar .qb-block.collapsed .qb-body { display: none; }
   .img-thumb { position: relative; }
   .img-thumb img { height: 48px; border-radius: 4px; border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.4)); display: block; transition: transform 200ms; }
@@ -242,8 +273,6 @@
   .file-item .dir { opacity: 0.55; font-size: 0.9em; }
   .file-item .hash-kind { display: inline-block; }
   .file-item .hash-kind svg { width: 1em; height: 1em; vertical-align: -0.15em; margin-right: 4px; }
-  /* # 会话引用菜单：tab 组行略加重，与 panel 行区分 */
-  .file-item.hash-tab-row { font-weight: 600; }
   /* / 命令菜单：来源徽标（技能 / 模板 / 扩展命令） */
   .file-item .cmd-badge {
     margin-left: 6px; padding: 0 5px; border-radius: 3px; font-size: 0.8em;
@@ -316,7 +345,7 @@
   .diff-line.jumpable { cursor: pointer; }
   .diff-line.jumpable:hover { outline: 1px solid var(--vscode-focusBorder, rgba(128,128,128,0.6)); outline-offset: -1px; }
   .empty-hint { text-align: center; opacity: 0.35; font-size: 0.9em; padding: 40px 0; user-select: none; }
-  /* 历史会话加载：覆盖空 pane 的明确进度反馈，避免只看到一个空 tab。 */
+  /* 历史会话加载：覆盖空窗格的明确进度反馈，避免只看到一个空会话。 */
   .session-loading {
     position: absolute; inset: 0; z-index: 10;
     display: flex; align-items: center; justify-content: center;
@@ -375,11 +404,13 @@
     padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
   }
   #pickerHeader .picker-hint { font-weight: 400; font-size: 0.75em; opacity: 0.6; }
-  /* 历史会话面板（从右侧滑入的那份）头部的关闭按钮 */
+  /* 面板头部的关闭按钮：跟会话行尾那颗同一颗叉、同一个尺寸。
+     不像行尾那颗那样淡着——面板里就这一颗「关」，得一眼看见。 */
   #pickerHeader #pickerClose {
-    align-self: center; flex: 0 0 auto; background: none; border: none;
-    color: var(--vscode-descriptionForeground, inherit); cursor: pointer;
-    padding: 2px 6px; border-radius: 4px; line-height: 1;
+    align-self: center; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; padding: 0; border-radius: 3px;
+    background: none; border: none;
+    color: var(--vscode-descriptionForeground, inherit); cursor: pointer; line-height: 1;
   }
   #pickerHeader #pickerClose svg { width: 12px; height: 12px; display: block; }
   #pickerHeader #pickerClose:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); color: var(--vscode-foreground); }
@@ -431,10 +462,16 @@
   .pk-history-main { display: flex; align-items: baseline; gap: 10px; }
   .pk-history-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pk-history-right { flex: 0 0 auto; display: flex; gap: 8px; font-size: 0.78em; opacity: 0.6; font-variant-numeric: tabular-nums; }
-  .pk-loadmore { display: block; width: calc(100% - 8px); margin: 8px 4px; padding: 8px 12px; border-radius: 4px; cursor: pointer; text-align: center; font-size: 0.86em; }
-  .pk-loadmore.secondary { background: var(--vscode-button-secondaryBackground, #f0f0f0); color: var(--vscode-button-secondaryForeground, inherit); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); }
-  .pk-loadmore.secondary:hover:not(:disabled) { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,0.35)); }
-  .pk-loadmore:disabled { opacity: 0.6; cursor: default; }
+  /* 「加载更多」：跟会话顶上那颗「加载更早的消息」同款小胶囊（透明底 + 细描边），居中摆一行。 */
+  .pk-loadmore {
+    display: block; width: max-content; margin: 8px auto 6px; padding: 4px 14px;
+    border-radius: 10px; cursor: pointer; font-size: 0.85em; opacity: 0.75;
+    font-family: var(--vscode-font-family);
+    background: transparent; color: var(--vscode-descriptionForeground, #999);
+    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35));
+  }
+  .pk-loadmore:hover:not(:disabled) { opacity: 1; color: var(--vscode-foreground, #ccc); }
+  .pk-loadmore:disabled { opacity: 0.45; cursor: default; }
   /* ==== 抽屉面板（历史 / 项目与会话）的排版：只在 pk-drawer 下生效，居中的模型/选项拾取器不受影响 ==== */
   #pickerOverlay.pk-drawer .picker-hint { display: none; }
   #pickerOverlay.pk-drawer #pickerHeader { align-items: center; padding: 10px 8px 10px 14px; }
@@ -445,12 +482,99 @@
   #pickerOverlay.pk-drawer .pk-item.current {
     background: var(--vscode-list-inactiveSelectionBackground, rgba(128,128,128,0.12));
   }
-  #pickerOverlay.pk-drawer .pk-section {
-    margin: 14px 6px 6px; padding: 0;
-    font-size: 11px; letter-spacing: 0.05em; text-transform: none;
-    color: var(--vscode-descriptionForeground, inherit); opacity: 1;
+  /* 悬停 / 键盘选中得比「当前」那层底色更重，光标走到这一行上才看得出变化
+     （项目与会话面板自己有另一套灰底规则，写在下面，会盖掉这条） */
+  #pickerOverlay.pk-drawer .pk-item.current.active,
+  #pickerOverlay.pk-drawer .pk-item.current:hover {
+    background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.3));
+    color: var(--vscode-list-activeSelectionForeground, inherit);
   }
-  #pickerOverlay.pk-drawer .pk-section-sub { opacity: 0.75; font-weight: 400; }
+  /* 分节标题（正在对话 / 历史会话 / 工作区）：左对齐，上面一条细线把它跟上一节断开；
+     标题用正文字色（原来是一行居中、低对比度的灰字，三节看着一样）。 */
+  #pickerOverlay.pk-drawer .pk-section {
+    margin: 14px 8px 5px; padding: 10px 0 0; text-align: left;
+    border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35));
+    font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: none;
+    color: var(--vscode-foreground); opacity: 0.9;
+  }
+  /* 第一节上面不画线：面板头自己就有一条，再画就是双线 */
+  #pickerOverlay.pk-drawer .pk-section:first-child { margin-top: 4px; padding-top: 4px; border-top: 0; }
+  /* 项目与会话单独按 VS Code 资源管理器的密度画；历史会话抽屉保持原样。 */
+  #pickerOverlay.pk-workspace .pk-item { min-height: 22px; padding: 3px 8px; border-radius: 0; }
+  /* 当前会话 / 当前工作区这两行：底色和左边那条 3px 蓝边跟上面 pk-drawer 那条同款，不在这里覆盖 */
+  /* 悬停 / 键盘上下键选中：所有行同一层灰底反馈；走到「当前」那一行上换更重的选中色 */
+  #pickerOverlay.pk-workspace .pk-item.active {
+    background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18));
+    color: inherit;
+  }
+  #pickerOverlay.pk-workspace .pk-item.current.active {
+    background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.3));
+    color: inherit;
+  }
+  #pickerOverlay.pk-workspace #pickerBody.pk-workspace-body {
+    display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0;
+    padding: 0; overflow: hidden;
+  }
+  /* 会话和工作区各自滚动；滚动一个区域不会带走另一个区域。 */
+  #pickerOverlay.pk-workspace .pk-workspace-pane {
+    flex: 1 1 0; min-height: 0; overflow-y: auto; padding: 2px 8px 8px;
+  }
+  #pickerOverlay.pk-workspace .pk-space-pane {
+    border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
+  }
+  /* ---- 列表上半段「正在对话」：现在开着的会话 ---- */
+  /* 一行里：小点 · 名字 · 标记 · 关闭叉（叉在最右边，不会跟名字挤在一起）。 */
+  #pickerOverlay.pk-drawer .pk-item.pk-open { display: flex; align-items: center; gap: 4px; }
+  #pickerOverlay.pk-drawer .pk-item.pk-open .pk-history-main { flex: 1 1 auto; min-width: 0; }
+  /* 行首一颗小点：在跑＝蓝点呼吸；有新消息＝蓝点不闪；出错＝红点；其余不显示。 */
+  #pickerOverlay.pk-drawer .pk-item.pk-open .pk-open-dot {
+    flex: none; width: 7px; height: 7px; border-radius: 50%; margin-right: 2px;
+    background: transparent; align-self: center;
+  }
+  #pickerOverlay.pk-drawer .pk-item.pk-open .pk-open-dot.running {
+    background: var(--vscode-charts-blue, #3794ff); animation: pi-pulse 1.2s ease-in-out infinite;
+  }
+  #pickerOverlay.pk-drawer .pk-item.pk-open .pk-open-dot.error { background: var(--vscode-charts-red, #f14c4c); }
+  #pickerOverlay.pk-drawer .pk-item.pk-open .pk-open-dot.unread { background: var(--vscode-charts-blue, #3794ff); }
+  /* 子会话：名字前面一个拐角箭头（“↳”），再把缩进减到一点点 ——
+     箭头的竖笔就落在父会话那一行的左边缘下头，看着像从上面分出来的。 */
+  #pickerOverlay.pk-drawer .pk-item.pk-open-child { padding-left: 4px; }
+  /* 子会话这一行里箭头 · 状态点 · 名字 挨得紧一点（基础行距是 10px，看着太散） */
+  #pickerOverlay.pk-drawer .pk-item.pk-open-child .pk-history-main { gap: 4px; }
+  #pickerOverlay.pk-drawer .pk-item.pk-open-child .pk-open-arrow {
+    flex: none; display: inline-flex; align-items: center; align-self: center;
+    opacity: 0.7; color: var(--vscode-foreground);
+  }
+  #pickerOverlay.pk-drawer .pk-item.pk-open-child .pk-open-arrow svg { display: block; }
+  #pickerOverlay.pk-drawer .pk-item.pk-open-child .pk-history-title { opacity: 0.9; }
+  /* 行尾不摆「当前」/「在跑」小标记：当前那条整行有底色，在跑 / 有新消息看行首那颗小点 */
+  /* 历史行上的“已打开”：它对应的会话已经开着了，在「正在对话」里能找到。 */
+  #pickerOverlay.pk-drawer .pk-open-tag {
+    font-size: 10.5px; line-height: 1; padding: 2px 6px; border-radius: 8px;
+    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.45)); opacity: 0.8;
+  }
+  /* 行尾那颗关闭叉：平时淡、悬停 / 触屏上变清楚（点击后还要再确认一下）。 */
+  #pickerOverlay.pk-drawer .pk-item.pk-open .pk-open-close {
+    flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; margin-left: 2px; border-radius: 3px;
+    opacity: 0.45; align-self: center;
+  }
+  #pickerOverlay.pk-drawer .pk-item.pk-open .pk-open-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
+  @media (hover: none) { #pickerOverlay.pk-drawer .pk-item.pk-open .pk-open-close { opacity: 0.6; } }
+  /* 确认条：整行变成“关闭？关闭 / 取消”，跟普通行长得完全不一样，防误触。 */
+  #pickerOverlay.pk-drawer .pk-item.pk-open-confirm { background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 12%, transparent); }
+  #pickerOverlay.pk-drawer .pk-item.pk-open-confirm .pk-open-bar { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; }
+  #pickerOverlay.pk-drawer .pk-item.pk-open-confirm .pk-open-ask {
+    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #pickerOverlay.pk-drawer .pk-item.pk-open-confirm button {
+    flex: none; padding: 2px 10px; border-radius: 4px; cursor: pointer;
+    font-family: inherit; font-size: 0.92em; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4));
+    background: transparent; color: var(--vscode-foreground);
+  }
+  #pickerOverlay.pk-drawer .pk-item.pk-open-confirm .pk-open-yes {
+    background: var(--vscode-button-background, #0e639c); color: var(--vscode-button-foreground, #fff); border-color: transparent;
+  }
   /* 行内图标（加号 / 文件夹）：固定宽度，名字对得齐 */
   #pickerOverlay.pk-drawer .pk-row-icon {
     flex: none; width: 14px; height: 14px; align-self: center;
@@ -458,35 +582,30 @@
   }
   #pickerOverlay.pk-drawer .pk-row-icon svg { width: 14px; height: 14px; display: block; }
   /* 动作行（新建会话 / 浏览文件夹…）：强调色文字，一眼看出不是普通记录；
-    被键盘/悬停选中时交还给选中色，别蓝底上再叠链接色 */
+    选中时也用这个颜色：选中背景是悬浮灰，改成“选中前景色”会是白字压浅灰，看不见 */
   #pickerOverlay.pk-drawer .pk-item.pk-action { color: var(--vscode-textLink-foreground, #3794ff); }
   #pickerOverlay.pk-drawer .pk-item.pk-action:hover { color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground, #3794ff)); }
-  #pickerOverlay.pk-drawer .pk-item.pk-action.active { color: var(--vscode-list-activeSelectionForeground, inherit); }
+  #pickerOverlay.pk-drawer .pk-item.pk-action.active { color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground, #3794ff)); }
   #pickerOverlay.pk-drawer .pk-browse-desc {
     margin: 3px 0 0 24px; font-size: 11px;
     color: var(--vscode-descriptionForeground, inherit); opacity: 0.85;
   }
-  /* 工作区行的路径：第二行、弱化；左缩进对齐名字（图标 14px + 间距 10px） */
+  /* 工作区行的路径：默认不占第二行；完整路径仍在 title 属性中，可悬停确认。 */
   #pickerOverlay.pk-drawer .pk-space-path {
     margin: 3px 0 0 24px; font-size: 11px; opacity: 0.55;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  #pickerOverlay.pk-drawer .pk-history-right { gap: 8px; }
+  #pickerOverlay.pk-workspace .pk-space-path,
+  #pickerOverlay.pk-workspace .pk-browse-desc { display: none; }
+  /* 工作区是资源树，不显示会话条数与相对时间；会话仍在右侧保留更新时间。 */
+  #pickerOverlay.pk-workspace .pk-space .pk-history-right { display: none; }
   #pickerOverlay.pk-drawer .pk-history-count {
     font-size: 10.5px; line-height: 1; padding: 2px 6px; border-radius: 8px;
     background: rgba(128,128,128,0.16); opacity: 0.9;
   }
-  #pickerOverlay.pk-drawer .pk-history-age { font-size: 11.5px; }
-  /* 「加载更多」：从整宽灰块改成居中的幽灵按钮 */
-  #pickerOverlay.pk-drawer .pk-loadmore { margin: 6px 4px 2px; }
-  #pickerOverlay.pk-drawer .pk-loadmore.secondary {
-    background: transparent; border: none;
-    color: var(--vscode-descriptionForeground, inherit);
-  }
-  #pickerOverlay.pk-drawer .pk-loadmore.secondary:hover:not(:disabled) {
-    background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18));
-    color: var(--vscode-foreground);
-  }
+  /* 会话数只是内部统计，不是未读状态；项目与会话里不把它画成一排徽标。 */
+  #pickerOverlay.pk-workspace .pk-history-count { display: none; }
+  #pickerOverlay.pk-drawer .pk-history-right { gap: 8px; }
   /* 底部「设置」：左下角一颗安静的幽灵按钮，不再占满整行 */
   #pickerOverlay.pk-drawer #pickerFooter.pk-history-footer { padding: 6px 10px; }
   #pickerOverlay.pk-drawer #pickerFooter.pk-history-footer button {
@@ -502,24 +621,28 @@
   }
   #pickerOverlay.pk-drawer #pickerFooter.pk-history-footer button svg { width: 13px; height: 13px; display: block; }
 
-  /* 设置（models.json）浮层，与分支树同风格，但更大 */
+  /* 设置浮层：模型（models.json）不再在这里配了，面板里只剩插件选项那一页 */
   #settingsPanel {
-    width: min(960px, 94vw); height: min(82vh, 760px); display: flex; flex-direction: column;
+    width: min(640px, 94vw); height: min(82vh, 760px); display: flex; flex-direction: column;
   }
-  #settingsRoot { flex: 1; min-height: 0; }
-  #settingsRoot.hidden { display: none; }
-  /* 统一面板：顶部 tab 切换 */
-  #settingsTabs { display: flex; align-items: center; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); flex-shrink: 0; }
-  .settings-tab { padding: 6px 12px; background: none; border: none; border-bottom: 2px solid transparent; color: var(--vscode-foreground); cursor: pointer; font-size: 12px; opacity: .7; border-radius: 0; }
-  .settings-tab:hover { opacity: 1; }
-  .settings-tab.active { opacity: 1; border-bottom-color: var(--vscode-focusBorder, #007acc); }
+  /* 面板头部：左边标题，右边关闭 */
+  #settingsTabs { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); flex-shrink: 0; }
+  #settingsTitle { font-size: 13px; font-weight: 600; }
   .settings-tabs-spacer { flex: 1; }
-  #settingsClose { background: none; border: none; color: var(--vscode-descriptionForeground); cursor: pointer; font-size: 14px; padding: 2px 8px; border-radius: 4px; line-height: 1; }
+  #settingsClose {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; padding: 0; border-radius: 3px;
+    background: none; border: none; color: var(--vscode-descriptionForeground); cursor: pointer; line-height: 1;
+  }
   #settingsClose svg { width: 12px; height: 12px; display: block; }
   #settingsClose:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); color: var(--vscode-foreground); }
-  /* 统一面板：显示选项 tab */
+  /* 手机上设置面板铺满整屏：一页选项列表，留着边边角角不划算 */
+  @media (max-width: 560px) {
+    #settingsPanel { width: 100%; height: 100%; max-height: none; border: none; border-radius: 0; }
+    #settingsTabs { padding: 8px 10px; }
+  }
+  /* 设置面板里的选项列表 */
   #viewOptsRoot { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 4px; }
-  #viewOptsRoot.hidden { display: none; }
   .vo-item { display: flex; align-items: flex-start; gap: 10px; padding: 9px 10px; border-radius: 5px; cursor: pointer; transition: background 120ms; }
   .vo-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
   .vo-check {
@@ -612,22 +735,7 @@
     color: var(--vscode-checkbox-foreground, #fff);
   }
 
-  /* ---- tab 内布局树（panel 网格 / 拖拽）---- */
-  .layout-root { position: absolute; inset: 0; display: flex; flex-direction: column; }
-  .layout-split { display: flex; flex: 1 1 0; min-width: 0; min-height: 0; }
-  .layout-root > .layout-leaf { flex: 1 1 0; }
-  .layout-root > .layout-split { flex: 1 1 0; }
-  .layout-split.layout-h { flex-direction: row; }
-  .layout-split.layout-v { flex-direction: column; }
-  .layout-split > .layout-leaf, .layout-split > .layout-split { flex: 1 1 0; min-width: 0; min-height: 0; }
-  .layout-split.layout-h > * + * { border-left: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
-  .layout-split.layout-v > * + * { border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
-  .layout-leaf { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-  .layout-leaf .tab-pane { position: relative; flex: 1 1 0; min-height: 0; }
-  /* 焦点 pane：仅将头部标题变淡蓝（pane-head 只在多 panel 时显示，
-     单 panel 时自然无选中态）；不再画焦点环 */
-  .layout-leaf.focus .pane-head .ph-title { color: var(--vscode-focusBorder, #007fd4); opacity: 1; }
-  /* 每个 panel 自己的底部状态栏：始终显示，点击切换该 panel 模型。
+  /* 当前会话底部状态栏：始终显示，点击切换这个会话的模型。
      基础字体用 UI 字体：等宽字体里中文会掉到宋体那类，观感差；
      模型名 / 百分比 / t/s 这些数字记号单独保持等宽，对齐不丢。 */
   .pane-status {
@@ -644,63 +752,6 @@
   .pane-status:not(.ps-focus) { opacity: 0.6; }
   .pane-status.ps-focus { opacity: 1; }
   .pane-status:hover .st-model { text-decoration: underline; }
-  /* 拖拽 panel 时的全局光标反馈 */
-  body.panel-dragging, body.panel-dragging * { cursor: grabbing !important; }
-  body.panel-dragging .layout-leaf.drop-hover { cursor: move; }
-  /* 双击 pane-head 最大化：只显示目标叶子，其余隐藏（树保留） */
-  .layout-root.maximized .layout-leaf:not(.maximized) { display: none; }
-  .layout-root.maximized .layout-leaf.maximized { border-left: 0 !important; border-top: 0 !important; }
-
-  /* pane 头部（tab 内 ≥2 个 panel 时显示）：状态点 · 名字 · 关闭；可拖拽 */
-  .pane-head {
-    display: none; align-items: center; gap: 6px;
-    position: sticky; top: -8px; z-index: 5;
-    margin: -8px -8px 4px; padding: 4px 8px;
-    background: var(--vscode-editor-background);
-    border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
-    font-size: 0.82em; cursor: grab; user-select: none; flex: 0 0 auto;
-  }
-  .layout-root.multi .pane-head { display: flex; }
-  .pane-head:active { cursor: grabbing; }
-  .pane-head .ph-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-charts-blue, #3794ff); display: none; flex-shrink: 0; }
-  .pane-head.ph-streaming .ph-dot { display: inline-block; animation: pi-pulse 1.2s ease-in-out infinite; }
-  .pane-head .ph-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.9; }
-  .pane-head .ph-close { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 3px; opacity: 0.5; cursor: pointer; }
-  .pane-head .ph-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
-
-  /* 拖拽落点指示（四分占位 + 中心替换） */
-  .drop-indicator { position: absolute; inset: 0; z-index: 30; display: none; pointer-events: none; }
-  .layout-leaf.drop-hover .drop-indicator { display: block; }
-  .drop-indicator .dz { position: absolute; box-sizing: border-box; border: 1px dashed var(--vscode-focusBorder, #007fd4); background: color-mix(in srgb, var(--vscode-focusBorder, #007fd4) 18%, transparent); opacity: 0; border-radius: 3px; display: flex; align-items: center; justify-content: center; }
-  .drop-indicator .dz.on { opacity: 1; }
-  .drop-indicator .dz .dz-mark { font-size: 18px; color: var(--vscode-focusBorder, #007fd4); opacity: 0.9; user-select: none; }
-  .drop-indicator .dz .dz-mark svg { width: 18px; height: 18px; display: block; }
-  /* 跨 tab 拖动：整格合并提示，隐藏方位热区 */
-  .layout-leaf.drop-merge .drop-indicator .dz { display: none; }
-  .drop-merge-hint { display: none; }
-  .layout-leaf.drop-merge .drop-indicator .drop-merge-hint {
-    display: flex; align-items: center; justify-content: center; position: absolute; inset: 0;
-    border: 2px solid var(--vscode-focusBorder, #007fd4); border-radius: 4px;
-    background: color-mix(in srgb, var(--vscode-focusBorder, #007fd4) 14%, transparent);
-    color: var(--vscode-foreground); font-size: 0.95em; user-select: none;
-  }
-  .drop-merge-hint svg { width: 16px; height: 16px; display: block; margin-right: 6px; }
-  .drop-indicator .dz-left { left: 0; top: 12%; width: 50%; height: 76%; }
-  .drop-indicator .dz-right { right: 0; top: 12%; width: 50%; height: 76%; }
-  .drop-indicator .dz-top { top: 0; left: 12%; height: 50%; width: 76%; }
-  .drop-indicator .dz-bottom { bottom: 0; left: 12%; height: 50%; width: 76%; }
-  .drop-indicator .dz-center { left: 27%; top: 27%; width: 46%; height: 46%; }
-
-  /* tab 栏拖拽落点（拖到某个 tab 上 = 搬进该 tab；空白处 = 新 tab 带走） */
-  .chat-tab.drop-hint { outline: 1px dashed var(--vscode-focusBorder, #007fd4); outline-offset: -2px; background: color-mix(in srgb, var(--vscode-focusBorder, #007fd4) 14%, transparent); }
-  #tabBar.drop-hint { background: color-mix(in srgb, var(--vscode-focusBorder, #007fd4) 10%, transparent); }
-
-  /* pane-head 右键菜单 */
-  .pane-menu { position: fixed; z-index: 2000; min-width: 170px; padding: 3px; border-radius: 5px; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); color: var(--vscode-menu-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, rgba(128,128,128,0.4))); box-shadow: 0 4px 14px rgba(0,0,0,0.3); font-size: 0.85em; }
-  .pane-menu .pm-item { padding: 4px 12px; border-radius: 3px; cursor: pointer; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-  .pane-menu .pm-item:hover { background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground, rgba(128,128,128,0.15))); }
-  .pane-menu .pm-sep { height: 1px; margin: 3px 6px; background: var(--vscode-panel-border, rgba(128,128,128,0.3)); }
-
   /* 工具结果内联图片（read 读图等）：缩略图 + 点击放大 */
   .tc-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }
   .tc-img { max-width: 100%; max-height: 320px; border-radius: 6px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); background: rgba(128,128,128,0.08); cursor: zoom-in; }

@@ -27,8 +27,6 @@ import { dirInsideFolders, ScreenRegistry } from "./screenRegistry";
 import type { WebServerHost } from "./webChatServer";
 import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
-import { readModelsJson, writeModelsJson } from "./modelsConfig";
-import { probeProviderModels } from "./probeModels";
 import {
     DEFAULT_AUTO_LOAD_LAST,
     DEFAULT_FOCUS_INPUT_KEY,
@@ -38,12 +36,10 @@ import {
     DEFAULT_SEND_KEY,
     DEFAULT_TAB_SWITCH_KEY,
     DEFAULT_THEME_MODE,
-    DEFAULT_TURN_TITLE_WAIT_SECONDS,
     FOCUS_INPUT_KEYS,
     NEW_SESSION_KEYS,
     SEND_KEYS,
     TAB_SWITCH_KEYS,
-    TURN_TITLE_WAIT_CHOICES,
     inList,
     nextInList,
 } from "./viewOptions";
@@ -88,7 +84,6 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     protected static readonly KEY_FONT_SIZE = "piChat.fontSize";
     protected static readonly KEY_NOTIFY_BEEP = "piChat.notifyBeep";
     protected static readonly KEY_THEME = "piChat.themeMode";
-    protected static readonly KEY_TURN_TITLE_WAIT = "piChat.turnTitleWaitSeconds";
 
     /** 会话显示名用的名字池：panel 关闭后会释放对应名字。 */
     private readonly usedChatNames = new Set<string>();
@@ -211,7 +206,8 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     private workspaceRest: ProjectEntry[] = [];
     private workspaceOffset = 0;
     /** 工作区一次给几个。 */
-    private static readonly WORKSPACE_BATCH = 10;
+    /** 工作区可见项目数：当前工作区固定占一行，其余再取四行，总数是五个。 */
+    private static readonly WORKSPACE_BATCH = 4;
 
     /**
      * “项目与会话”面板：上半是当前工作区的会话列表，下半是工作区（用 pi 跑过会话的目录）。
@@ -227,7 +223,6 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
             await this.showFolderPicker(folderNow, target);
             return;
         }
-        if (choice.file === ChatHostBase.NEW_SESSION_ROW) { this.newSessionInDir(folderNow); return; }
         await this.loadHistorySession(choice.file, folderNow);
     }
 
@@ -249,9 +244,9 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     }
 
     /**
-     * 面板的内容：上半会话（含“在这个目录里新建会话”那一行）、下半工作区。
+     * 面板的内容：上半会话（当前目录的历史会话）、下半工作区。
      * 会话那份复用历史列表那套机器（historyFiles / historyOffset / scanHistoryBatch），
-     * 工作区那份自己分页：一次先给 10 个，下面留一颗“加载更多”（项目多的时候不能一屏子全倒出来）。
+     * 工作区那份自己分页：当前目录固定显示，另外一次取 4 个，总共显示 5 个工作区；下面留一颗“加载更多”。
      */
     private async buildWorkspacePanel(folder: string): Promise<Record<string, unknown>> {
         const cwd = path.resolve(folder);
@@ -259,24 +254,13 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         this.historyFiles = await listSessionFiles(cwd);
         this.historyOffset = 0;
         const sessions = await this.scanHistoryBatch();
-        // action: "new" 让界面把这一行画成带加号图标的动作行，不像一条会话记录；
-        // 文案只写“新建会话”——它头顶的分节标题已经带着目录名了。
-        sessions.unshift({
-            file: ChatHostBase.NEW_SESSION_ROW,
-            id: "",
-            title: "新建会话",
-            action: "new",
-            count: 0,
-            lastActivity: 0,
-            current: false,
-        });
         const projects = await this.listProjectsForPicker();
         const current = projects.find((p) => this.sameDir(p.cwd, cwd));
         // 分页的那串：去掉当前目录那条（它固定在第一），剩下的按最后活动时间排（清单本来就是倒序的）。
         this.workspaceRest = projects.filter((p) => !this.sameDir(p.cwd, cwd));
         this.workspaceOffset = 0;
         const head: any[] = [
-            { label: "浏览文件夹…", file: ChatHostBase.BROWSE_ROW, action: "browse", folderPath: "挑一个文件夹当工作区" },
+            { label: "打开文件夹…", file: ChatHostBase.BROWSE_ROW, action: "browse", folderPath: "挑一个文件夹当工作区" },
             {
                 label: this.dirName(cwd),
                 file: cwd,
@@ -522,7 +506,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         if (!isLocal && pageId) { this.resyncingPages.add(pageId); }
         const replays: Array<Promise<void>> = [];
         for (const rt of this.panels.values()) {
-            // 刚建的空会话不用重画：newTab 已经把它需要的东西发过去了
+            // 刚建的空会话不用重画：newSession 已经把它需要的东西发过去了
             if (rt.isConversationEmpty()) { continue; }
             replays.push(rt.replayHistory({ note, sink }));
         }
@@ -585,7 +569,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         const v = this.readOption<string>(ChatHostBase.KEY_FONT_SIZE, DEFAULT_FONT_SIZE);
         return typeof v === "string" && /^\d+$/.test(v) ? v : DEFAULT_FONT_SIZE;
     }
-    /** 会话结束提示音（所有 session 都响）；与 Windows 系统通知互不影响。 */
+    /** 会话结束提示音（所有 session 都响）。 */
     public getNotifyBeep(): boolean {
         return this.readOption<boolean>(ChatHostBase.KEY_NOTIFY_BEEP, DEFAULT_NOTIFY_BEEP) === true;
     }
@@ -625,13 +609,6 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         ];
     }
 
-    /** 收尾提醒最多等 pi 的会话标题几秒；0 = 不等（直接用会话显示名）。 */
-    public override getTurnTitleWaitSeconds(): number {
-        const stored = this.readOption<number>(ChatHostBase.KEY_TURN_TITLE_WAIT, DEFAULT_TURN_TITLE_WAIT_SECONDS);
-        const seconds = typeof stored === "number" && Number.isFinite(stored) ? Math.round(stored) : NaN;
-        return seconds >= 0 && seconds <= 60 ? seconds : DEFAULT_TURN_TITLE_WAIT_SECONDS;
-    }
-
     public mutateViewOption(action: string, value?: string): void {
         if (action === "sendKey") {
             const next = inList(SEND_KEYS, value) ? value : nextInList(SEND_KEYS, this.getSendKey());
@@ -650,10 +627,6 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
             this.writeOption(ChatHostBase.KEY_FONT_SIZE, next);
         } else if (action === "notifyBeep") {
             this.writeOption(ChatHostBase.KEY_NOTIFY_BEEP, !this.getNotifyBeep());
-        } else if (action === "turnTitleWait") {
-            const n = Number.parseInt(typeof value === "string" ? value : "", 10);
-            const next = (TURN_TITLE_WAIT_CHOICES as readonly number[]).includes(n) ? n : DEFAULT_TURN_TITLE_WAIT_SECONDS;
-            this.writeOption(ChatHostBase.KEY_TURN_TITLE_WAIT, next);
         } else if (action === "theme") {
             const next = value === "dark" || value === "light"
                 ? value
@@ -823,7 +796,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
                 this.resolveDialog(msg.id, msg.value);
                 return true;
             case "openHistory":
-                // 顶部标签栏那颗“⋯”按钮（以及命令面板的历史入口）：列表从右侧滑入，
+                // 顶条最右边那颗“<<<”按钮（以及命令面板的历史入口）：列表从右侧滑入，
                 // 只弹在点它的那块屏上（另一个浏览器 / 本机界面不跟着弹）。
                 void this.showHistoryPicker(
                     this.currentPageId !== ChatHostBase.LOCAL_CLIENT_ID,
@@ -843,43 +816,20 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
                 // 工作区那块的「加载更多」：再送一批（一次 10 个）。
                 void this.loadMoreWorkspaces();
                 return true;
+            case "newSessionInWorkspace":
+                // 面板里「正在对话」那组的「＋ 在 xxx 新建会话」：目录用界面上写着的那一个
+                // （面板切过工作区就是那个），而不是顶条上当前会话那个目录（那个是加号用的规则）。
+                this.newSessionInDir(
+                    typeof msg.path === "string" && msg.path ? msg.path : (this.workspaceFolder || this.activeCwd()),
+                );
+                return true;
             case "requestDesktopScreenshot":
                 this.sendDesktopScreenshot();
                 return true;
             case "openSettingsPanel":
                 // 弹设置界面的请求：只回给请求它的那块屏。
-                this.sendToOneClient(this.currentPageId, { type: "openSettings", tab: typeof msg.tab === "string" ? msg.tab : undefined });
+                this.sendToOneClient(this.currentPageId, { type: "openSettings" });
                 return true;
-            case "app:requestSettings": {
-                const r = readModelsJson();
-                this.postToWebview({ type: "app:settings", content: r.content, existed: r.existed, path: r.path });
-                return true;
-            }
-            case "app:saveSettings": {
-                if (typeof msg.content === "string") {
-                    const result = writeModelsJson(msg.content);
-                    if (result.ok) {
-                        this.postToWebview({ type: "app:settingsResult", ok: true });
-                        this.onNotice("已保存 models.json");
-                        // 丢弃预热的 pi 进程：其 models.json 是启动时读入的旧副本，
-                        // 丢弃后下一个新会话会按新配置启动（现有会话不受影响，重启后生效）。
-                        this.modelsChanged();
-                    } else {
-                        this.postToWebview({ type: "app:settingsResult", ok: false, error: result.error });
-                    }
-                }
-                return true;
-            }
-            case "app:probeModels": {
-                void probeProviderModels(
-                    typeof msg.baseUrl === "string" ? msg.baseUrl : "",
-                    typeof msg.apiKey === "string" ? msg.apiKey : "",
-                    typeof msg.api === "string" ? msg.api : undefined,
-                ).then((result) => {
-                    this.postToWebview({ type: "app:probeModelsResult", ...result });
-                });
-                return true;
-            }
         }
         return this.handleHostMessage(msg);
     }
@@ -888,7 +838,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     protected handleHostMessage(_msg: any): boolean { return false; }
 
     /**
-     * 标签栏那颗“桌面截图”按钮：截一张这台电脑的桌面，只发回请求它的那块屏
+     * 顶条上那颗“桌面截图”按钮：截一张这台电脑的桌面，只发回请求它的那块屏
      * （别的页面 / 本机界面不跟着弹图）。截屏要一两秒，异步做；截完时请求方已经不在
      * 就白截（送不出去，直接丢）。成功发 desktopScreenshot（图片 base64），
      * 失败发 desktopScreenshotResult（错误文本，界面上弹一句）。
@@ -903,15 +853,9 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         });
     }
 
-    /** models.json 修改后丢弃按旧配置预热的备用进程。 */
-    public modelsChanged(): void {
-        this.disposeSpare();
-    }
-
     // ========================================================================
     //  弹窗 / 会话收尾
     // ========================================================================
-
     /** 确认框：先问“人最近在动”的那块屏；挑不出来时交给子类兜底（返回值表示没问着）。 */
     public async confirmDialog(title: string, message: string): Promise<boolean> {
         const answer = await this.askPage("confirm", { title, message });
@@ -959,8 +903,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
             this.releasePanelName(rt.nameParts);
         }
         this.panels.clear();
-        this.tabContainers.clear();
-        this.activeTabId = undefined;
+        this.activePanelId = undefined;
         this.disposeSpare();
     }
 }

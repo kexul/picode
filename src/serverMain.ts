@@ -16,9 +16,8 @@ import * as path from "path";
 import { PiChatWebServer, type WebServerSettings } from "./webChatServer";
 import { ServerChatHost } from "./serverChatHost";
 import { readServerConfig, updateServerConfig } from "./serverConfig";
-import { ServerStateStore, clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
+import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
 import { ensureTabaAssets } from "./tabaAssets";
-import { ensureToastAppIdAsync } from "./toastAppId";
 import { serverConfigFile } from "./serverPaths";
 
 /** 安装根目录（out/server → 根）。 */
@@ -161,21 +160,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         log(`派子会话的功能没开（文件没写成：${tabaAssets.error}）`);
     }
 
-    const stateStore = new ServerStateStore();
-    // 登记通知标识要的是个很小的存取口（get 只需一个参数）；这里把它对到状态文件上。
-    const toastStore = {
-        get: (key: string): unknown => stateStore.all()[key],
-        update: async (key: string, value: unknown): Promise<void> => { stateStore.update(key, value); },
-    };
-    const toastAppId = ensureToastAppIdAsync(toastStore, VERSION, "Pi Chat");
-
     let started: StartedBackend;
     try {
         started = await startBackend({
             cwd: path.resolve(args.cwd ?? process.cwd()),
             port: args.port ?? cfg.webServer.port,
             host: args.host ?? cfg.webServer.host,
-            toastAppId,
             log,
         });
     } catch (err: any) {
@@ -218,8 +208,6 @@ export interface StartBackendOptions {
     port?: number;
     /** 监听地址；不填 = 0.0.0.0（同一网络里的设备都能访问）。 */
     host?: string;
-    /** 通知的应用标识（登记中，是个承诺）。 */
-    toastAppId?: string | Promise<string>;
     /** 日志出口。 */
     log?: (text: string) => void;
 }
@@ -246,7 +234,7 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
     const cwd = path.resolve(options.cwd);
     const bindHost = options.host ?? "0.0.0.0";
 
-    const host = new ServerChatHost({ cwd, version: VERSION, toastAppId: options.toastAppId, log });
+    const host = new ServerChatHost({ cwd, log });
     const server = new PiChatWebServer(MEDIA_DIR, host, {
         log: (text) => log(`[网页服务] ${text}`),
         onUrlChanged: () => { /* 启动器自己会打印地址，这里不用管 */ },

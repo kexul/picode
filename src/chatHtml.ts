@@ -5,7 +5,7 @@ import { renderHTML } from "./renderHtml";
  * chatHtml —— 侧边栏那块网页视图的界面从哪儿来。
  *
  * 界面文件（chat.js / chat.css / marked.js / highlight.js / browserBridge.js /
- * browserTheme.css / settings.js）不从插件自己的 media/ 目录读，而是从正在跑的
+ * browserTheme.css）不从插件自己的 media/ 目录读，而是从正在跑的
  * 后端（pichat）的 /media/ 现取：面板看到的界面版本永远跟后端一致，后端升级后
  * 重连一次就换新版，插件自己那份 media/ 只是后端要用的一份拷贝。
  *
@@ -25,7 +25,6 @@ export interface ChatUiFiles {
     highlightJs: string;
     chatJs: string;
     bridgeJs: string;
-    settingsJs: string;
 }
 
 function nonce(): string {
@@ -49,16 +48,15 @@ export async function fetchChatUiFiles(baseUrl: string, timeoutMs = 5000): Promi
         return fetchText(url, timeoutMs);
     };
     try {
-        const [chatCss, browserCss, markedJs, highlightJs, chatJs, bridgeJs, settingsJs] = await Promise.all([
+        const [chatCss, browserCss, markedJs, highlightJs, chatJs, bridgeJs] = await Promise.all([
             grab("chat.css"),
             grab("browserTheme.css"),
             grab("marked.js"),
             grab("highlight.js"),
             grab("chat.js"),
             grab("browserBridge.js"),
-            grab("settings.js"),
         ]);
-        return { chatCss, browserCss, markedJs, highlightJs, chatJs, bridgeJs, settingsJs };
+        return { chatCss, browserCss, markedJs, highlightJs, chatJs, bridgeJs };
     } catch {
         return undefined;
     }
@@ -129,7 +127,6 @@ export function getChatHtml(
         ["marked.js", files.markedJs],
         ["highlight.js", files.highlightJs],
         ["chat.js", files.chatJs],
-        ["settings.js", files.settingsJs],
     ];
     for (const [name, code] of jsFiles) {
         if (endsInDoubleEscape(escapeInlineScript(code))) {
@@ -163,7 +160,6 @@ export function getChatHtml(
             { content: escapeInlineScript(files.markedJs) },
             { content: escapeInlineScript(files.highlightJs) },
             { content: escapeInlineScript(files.chatJs) },
-            { content: escapeInlineScript(files.settingsJs) },
         ],
     });
 }

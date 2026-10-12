@@ -11,7 +11,7 @@
  *      ~/.pi/pichat；插件那侧也靠它找到同一个后端。
  *
  * 所以浏览器里看到的就是**真界面与真会话**，只是少了 VS Code 那一圈外壳。
- * 验不到的东西（diff 编辑器、符号跳转、系统通知、侧边栏网页视图本身）见 fakeVscode.js 顶部说明。
+ * 验不到的东西（diff 编辑器、符号跳转、侧边栏网页视图本身）见 fakeVscode.js 顶部说明。
  *
  * 用法见 dev/browserHost.js（常驻）与 dev/visit.js（自动开浏览器、点几下、截图）。
  */
@@ -94,7 +94,6 @@ function packageVersion() {
  * @param {boolean} [options.fakePi]  用假模型（dev/fakePi.js）：不调真模型，按剧本秒回（界面调试用）
  * @param {string} [options.piPath]   覆盖设置里的 piPath（默认 "pi"，走 PATH）
  * @param {string} [options.theme]    界面颜色："light" 或 "dark"（默认 light）
- * @param {boolean} [options.toast]   会话跑完要不要发 Windows 通知（默认不要：调试时太吵）
  * @param {(text: string) => void} [options.log] 日志出口（默认打到标准输出）
  * @returns {{ provider: any, start: () => Promise<string>, stop: () => Promise<void>, url: () => string|undefined, cwd: string }}
  */
@@ -126,7 +125,8 @@ function createHarness(options = {}) {
     // 界面颜色与"跑完响不响"也在这里定（后端没有人给它 VSCode 的设置）。
     const patch = {
         themeMode: options.theme === "dark" ? "dark" : "light",
-        notifyBeep: options.toast === true,
+        // 调试时默认关掉会话结束提示音（自动化跑一遍会一直响，太吵）
+        notifyBeep: false,
     };
     if (options.model !== undefined) { patch.model = options.model; }
     if (options.provider !== undefined) { patch.provider = options.provider; }
@@ -166,8 +166,6 @@ function createHarness(options = {}) {
                 host: options.host || "127.0.0.1",
                 log,
             });
-            // 会话跑完后端会真的弹 Windows 系统通知；调试里默认掐掉（要看就加 --toast）。
-            if (options.toast !== true) { started.host.notifyTurnEnd = () => { }; }
             return started.url;
         },
         /** 收摊：停后端（连带杀掉会话进程）、放掉插件那侧注册的东西。 */

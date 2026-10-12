@@ -7,7 +7,7 @@
  *     （浏览器原生的推送流）收；重连、心跳、断线补发都归它管。
  *  2. VSCode 侧边栏（与网页端同源的那份界面，由 chatHtml.ts 加载）：
  *     通道保持网页视图的 postMessage 不变（chat.js 感觉不到），只取三样：
- *     网页端的界面件（常显标签栏、桌面截图 / <<< / 停止生成按钮）、一行起步的输入框、
+ *     网页端的界面件（桌面截图 / <<< / 停止生成按钮）、一行起步的输入框、
  *     按配置上色（显示选项里的「界面颜色」，浅 / 深两套调色板见下面）。
  *
  * chat.js 认的是 VSCode 网页视图那套通道：往外发用 acquireVsCodeApi().postMessage，
@@ -38,7 +38,7 @@
   // VSCode 网页视图里本来就有 acquireVsCodeApi（而且只能取一次）；网页里没有，由本文件补一份。
   var IN_WEBVIEW = typeof window.acquireVsCodeApi === "function";
 
-  // 标签栏那两颗按钮的图标：相机那个是 VSCode 官方 codicon（@vscode/codicons 包），
+  // 顶条最右边那两颗按钮的图标：相机那个是 VSCode 官方 codicon（@vscode/codicons 包），
   // fill=currentColor 跟随文字色，尺寸由 browserTheme.css 控制。
   var ICON_CAMERA = '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M11 8C11 9.65685 9.65685 11 8 11C6.34315 11 5 9.65685 5 8C5 6.34315 6.34315 5 8 5C9.65685 5 11 6.34315 11 8ZM10 8C10 6.89543 9.10457 6 8 6C6.89543 6 6 6.89543 6 8C6 9.10457 6.89543 10 8 10C9.10457 10 10 9.10457 10 8ZM6.61803 2C6.04988 2 5.53048 2.321 5.27639 2.82918L4.69098 4H4C2.89543 4 2 4.89543 2 6V11C2 12.1046 2.89543 13 4 13H12C13.1046 13 14 12.1046 14 11V6C14 4.89543 13.1046 4 12 4H11.309L10.7236 2.82918C10.4695 2.321 9.95012 2 9.38197 2H6.61803ZM6.17082 3.27639C6.25552 3.107 6.42865 3 6.61803 3H9.38197C9.57135 3 9.74448 3.107 9.82918 3.27639L10.5528 4.72361C10.6375 4.893 10.8106 5 11 5H12C12.5523 5 13 5.44772 13 6V11C13 11.5523 12.5523 12 12 12H4C3.44772 12 3 11.5523 3 11V6C3 5.44772 3.67157 5 4 5H5C5.18939 5 5.36252 4.893 5.44721 4.72361L6.17082 3.27639Z"/></svg>';
   // 菜单按钮（项目与会话）的图标：三根往左的尖角（面板从右边滑出来，尖角指进去）。
@@ -221,7 +221,7 @@
     chain = chain.then(function () { return post(msg, 1); }).catch(function () { /* 单条失败不影响后续 */ });
   }
 
-  // ==================== 入站：两类消息两处都要拦 ====================
+  // ==================== 入站：两处页面都要自己拦的消息 ====================
   /** 插件要的确认框 / 输入框：用浏览器原生对话框，结果发回去。 */
   function handleDialog(d) {
     var value;
@@ -235,10 +235,15 @@
     enqueue({ type: "browserDialogResult", id: d.id, value: value === undefined ? null : value });
   }
 
-  /** 两处页面都要自己接的消息：界面颜色跟随、浏览器对话框。 */
+  /** 两处页面都要自己接的消息：界面颜色跟随、浏览器对话框、桌面截图。 */
   function inspectIncoming(data) {
     var type = data && data.type;
     if (type === "browserDialog") { handleDialog(data); return true; }
+    // 桌面截图：两颗按钮（网页端与侧边栏）都挂，图推回来也只有这里能接。
+    // chat.js 不认识这两个类型，转发给它等于什么都不发生（侧边栏以前就是这样：
+    // 按钮压暗一会儿自己弹回来，图永远不出来）。
+    if (type === "desktopScreenshot") { showDesktopScreenshot(data); return true; }
+    if (type === "desktopScreenshotResult") { handleDesktopScreenshotResult(data); return true; }
     if (type === "viewOptions" && data.themeMode) {
       applyTheme(data.themeMode === "dark" ? "dark" : "light");
     }
@@ -408,8 +413,6 @@
   function dispatch(data) {
     var type = data && data.type;
     if (inspectIncoming(data)) { return; }
-    if (type === "desktopScreenshot") { showDesktopScreenshot(data); return; }
-    if (type === "desktopScreenshotResult") { handleDesktopScreenshotResult(data); return; }
     if (type === "hello") {
       // 连接建立：先于一切带序号的消息到达（插件那头保证顺序）。
       liveFromSeq = typeof data.seq === "number" ? data.seq : 0;
@@ -621,10 +624,12 @@
   }
 
   // ==================== 桌面截图 ====================
-  // 标签栏顶部的“📷”按钮：请插件截一张这台电脑的桌面（可能就是本机，
+  // 顶条上的“📷”按钮：请插件截一张这台电脑的桌面（可能就是本机，
   // 也可能是你在手机浏览器里看的这台开发机），截好推回来全屏显示。
   // 消息由插件那头的 ChatViewProvider 接：
   //   requestDesktopScreenshot → desktopScreenshot（图片 base64）/ desktopScreenshotResult（失败）。
+  // 推回来的这两条在 inspectIncoming 里接（两种页面都走那儿），别只挂在下面的
+  // dispatch 上：那条路只有网页端走。
   var shotBtn = null;
   var shotBusyTimer = null;
 
@@ -667,16 +672,15 @@
     enqueue({ type: "requestDesktopScreenshot" });
   }
 
-  // ==================== 顶部标签栏最右边的“<<<”按钮 ====================
-  // 点它让项目列表从右侧滑进来（消息由插件侧的 ChatHostBase 接）：
-  // 最上面是“浏览文件夹…”与当前目录，下面是用 pi 跑过会话的其它项目。
-  // 点一个项目进去就是那个项目的会话列表（第一行是“在这个目录里新建会话”）。
-  // 标签栏平时只有一个标签时是藏着的，网页端要常显，否则这颗按钮没地方放。
-  // 顺带的好处：新建标签的那颗“+”也一直可见可点。
+  // ==================== 顶栏最右边的“📷”与“<<<”两颗按钮 ====================
+  // 都挂在 #sessionBarTail 里（顶层会话条的最右边）：
+  //  - 📷：把开发机的桌面截一张发回页面看（手机上常用）；
+  //  - <<<：点它让“项目与会话”列表从右侧滑进来（消息由插件侧的 ChatHostBase 接）：
+  //    最上面是“浏览文件夹…”与当前目录，下面是用 pi 跑过会话的其它项目；
+  //    点一个项目进去就是那个项目的会话列表。
   (function () {
-    var bar = document.getElementById("tabBar");
+    var bar = document.getElementById("sessionBarTail");
     if (!bar) { return; }
-    bar.classList.remove("hidden");
     shotBtn = document.createElement("button");
     shotBtn.type = "button";
     shotBtn.id = "browserScreenshotBtn";
@@ -696,7 +700,7 @@
 
   // ==================== 输入框的小改动 ====================
   // 生成中在输入框右下角露出一颗“停止生成”图标：手机没有 Esc，否则中止不了；
-  // 侧边栏配上它之后与网页端一致（显示与隐藏由 chat.js 按当前 tab 是否在生成控制，
+  // 侧边栏配上它之后与网页端一致（显示与隐藏由 chat.js 按当前会话是否在生成控制，
   // 那边会来找 #stopBtn；VSCode 里本来也有 Esc，两颗并存不冲突）。
   (function () {
     var row = document.getElementById("inputRow");
@@ -705,10 +709,10 @@
     stop.type = "button";
     stop.id = "stopBtn";
     stop.className = "hidden";
-    // 图用 VSCode 官方 codicon 的 debug-stop（圆角描边方块），fill=currentColor 跟随按钮文字色。
+    // 实心方块直接表达“停止”，不再套一层描边方框。
     stop.innerHTML =
       '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true">' +
-      '<path d="M12.5 3.5V12.5H3.5V3.5H12.5ZM12.5 2H3.5C2.672 2 2 2.672 2 3.5V12.5C2 13.328 2.672 14 3.5 14H12.5C13.328 14 14 13.328 14 12.5V3.5C14 2.672 13.328 2 12.5 2Z"/>' +
+      '<rect x="2" y="2" width="12" height="12" rx="1.5" />' +
       '</svg>';
     stop.title = "停止生成";
     stop.setAttribute("aria-label", "停止生成");

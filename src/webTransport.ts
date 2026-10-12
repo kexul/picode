@@ -16,7 +16,6 @@ export const ALLOWED_MEDIA_FILES: ReadonlySet<string> = new Set([
     "chat.css",
     "marked.js",
     "highlight.js",
-    "settings.js",
     "browserBridge.js",
     "browserTheme.css",
 ]);
@@ -318,7 +317,7 @@ export const PAGE_TRANSIENT_MESSAGE_TYPES: ReadonlySet<string> = new Set([
     "picker",                    // 浮层选择器
     "pickerCancel",              // 浮层超时取消
     "openSettings",              // 打开设置面板
-    "beep",                      // 提示音
+    "turnEnd",                   // 某个会话跑完了一轮（提示音 + “有新消息”那颗点）
     // 下面两条走 sendTo 定向发给请求它的那个页面，本来就不进补发暂存；列在这里是
     // 防以后改走广播时，把几 MB 的截图塞进补发暂存，把真正的历史消息挤掉。
     "desktopScreenshot",         // 桌面截图（网页端“桌面截图”按钮）

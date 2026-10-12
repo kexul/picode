@@ -24,7 +24,7 @@ npm run web:shot -- --headed --keep                 # 显示窗口、跑完不�
   不然调试时模型会改到真代码。
 - **等状态栏显示模型名以后再发消息**：刚打开的一两秒界面已经能打字，但会话进程还没就绪，
   这时候发出去的会丢（`web:shot` 自己会等）。
-- **验不到的**：diff 编辑器、符号跳转、系统通知、剪贴板、命令面板入口、状态栏、
+- **验不到的**：diff 编辑器、符号跳转、剪贴板、命令面板入口、状态栏、
   侧边栏网页视图本身，以及"插件连后端 + 后端派活给窗口"这整条路（它要真 VSCode 才算数）。
   这些用 VS Code / VSCodium 的 F5 开发宿主看（`.vscode/launch.json` 已配好）。
 - 详细用法和参数：`dev/README.md`，或 `npm run web:shot -- --help`。
@@ -45,3 +45,5 @@ PICHAT_HOME=/tmp/pichat-test npm run server -- --cwd /tmp/pichat-test/work --por
 ```
 
 （`--port 0` = 自动挑空闲端口。）
+
+测试前端表现的时候不要真给ai发消息，用假数据即可。

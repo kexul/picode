@@ -10,7 +10,7 @@
   document.addEventListener("pointerdown", notifyHostFocus, { capture: true });
   // 第一次用户交互时把音频上下文提前建好并恢复，避免后面“跑完了却不响”。
   document.addEventListener("pointerdown", function warmOnce() { warmUpAudio(); }, { capture: true, once: true });
-  const messagesEl = document.getElementById("messages"); // 容器，内含各 .tab-pane
+  const messagesEl = document.getElementById("messages"); // 容器，内含各 .session-pane
   const jumpBottomBtn = document.getElementById("jumpBottom");
   const stopBtn = document.getElementById("stopBtn"); // 停止生成图标：browserBridge.js 在两种页面里都会创建
   // VSCode 官方 codicon 的 chevron-right 折线图标（从 @vscode/codicons 包取出）。
@@ -21,6 +21,8 @@
   // 其余小图标：同样取自 @vscode/codicons 包，fill=currentColor 跟随文字色（files 是 24 视图）。
   const ICONS = {
     close: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8.70701 8.00001L12.353 4.35401C12.548 4.15901 12.548 3.84201 12.353 3.64701C12.158 3.45201 11.841 3.45201 11.646 3.64701L8.00001 7.29301L4.35401 3.64701C4.15901 3.45201 3.84201 3.45201 3.64701 3.64701C3.45201 3.84201 3.45201 4.15901 3.64701 4.35401L7.29301 8.00001L3.64701 11.646C3.45201 11.841 3.45201 12.158 3.64701 12.353C3.74501 12.451 3.87301 12.499 4.00101 12.499C4.12901 12.499 4.25701 12.45 4.35501 12.353L8.00101 8.70701L11.647 12.353C11.745 12.451 11.873 12.499 12.001 12.499C12.129 12.499 12.257 12.45 12.355 12.353C12.55 12.158 12.55 11.841 12.355 11.646L8.70901 8.00001H8.70701Z"/></svg>',
+    // 粗一点的关闭叉：会话行尾、面板头部「关掉这一屏」的地方共用这一颗，大小一致。
+    "close-bold": '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.5 2.5 L13.5 13.5 M13.5 2.5 L2.5 13.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>',
     "link-external": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M15 9.5V12.5C15 13.879 13.879 15 12.5 15H3.5C2.121 15 1 13.879 1 12.5V3.5C1 2.121 2.121 1 3.5 1H6.5C6.776 1 7 1.224 7 1.5C7 1.776 6.776 2 6.5 2H3.5C2.673 2 2 2.673 2 3.5V12.5C2 13.327 2.673 14 3.5 14H12.5C13.327 14 14 13.327 14 12.5V9.5C14 9.224 14.224 9 14.5 9C14.776 9 15 9.224 15 9.5ZM14.5 1H9.5C9.224 1 9 1.224 9 1.5C9 1.776 9.224 2 9.5 2H13.293L9.147 6.146C8.952 6.341 8.952 6.658 9.147 6.853C9.245 6.951 9.373 6.999 9.501 6.999C9.629 6.999 9.757 6.95 9.855 6.853L14.001 2.707V6.5C14.001 6.776 14.225 7 14.501 7C14.777 7 15.001 6.776 15.001 6.5V1.5C15.001 1.224 14.777 1 14.501 1H14.5Z"/></svg>',
     discard: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M3.00098 2.5C3.00098 2.22386 3.22483 2 3.50098 2C3.77712 2 4.00098 2.22386 4.00098 2.5V6.34262L7.17202 3.17157C8.73412 1.60948 11.2668 1.60948 12.8289 3.17157C14.391 4.73367 14.391 7.26633 12.8289 8.82843L7.80375 13.8536C7.60849 14.0488 7.2919 14.0488 7.09664 13.8536C6.90138 13.6583 6.90138 13.3417 7.09664 13.1464L12.1218 8.12132C13.2933 6.94975 13.2933 5.05025 12.1218 3.87868C10.9502 2.70711 9.0507 2.70711 7.87913 3.87868L4.75781 7H8.50098C8.77712 7 9.00098 7.22386 9.00098 7.5C9.00098 7.77614 8.77712 8 8.50098 8H3.60098C3.26961 8 3.00098 7.73137 3.00098 7.4V2.5Z"/></svg>',
     check: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13.6572 3.13573C13.8583 2.9465 14.175 2.95614 14.3643 3.15722C14.5535 3.35831 14.5438 3.675 14.3428 3.86425L5.84277 11.8642C5.64597 12.0494 5.33756 12.0446 5.14648 11.8535L1.64648 8.35351C1.45121 8.15824 1.45121 7.84174 1.64648 7.64647C1.84174 7.45121 2.15825 7.45121 2.35351 7.64647L5.50976 10.8027L13.6572 3.13573Z"/></svg>',
@@ -33,19 +35,27 @@
     "arrow-down": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13.854 8.146C13.659 7.951 13.342 7.951 13.147 8.146L9.00096 12.292V2.5C9.00096 2.224 8.77696 2 8.50096 2C8.22496 2 8.00096 2.224 8.00096 2.5V12.293L3.85496 8.147C3.65996 7.952 3.34296 7.952 3.14796 8.147C2.95296 8.342 2.95296 8.659 3.14796 8.854L8.14796 13.854C8.24596 13.952 8.37396 14 8.50196 14C8.62996 14 8.75796 13.951 8.85596 13.854L13.856 8.854C14.051 8.659 14.051 8.342 13.856 8.147L13.854 8.146Z"/></svg>',
     "git-branch": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M14 5.5C14 4.121 12.879 3 11.5 3C10.121 3 9 4.121 9 5.5C9 6.682 9.826 7.669 10.93 7.928C10.744 8.546 10.177 9 9.5 9H6.5C5.935 9 5.419 9.195 5 9.512V4.949C6.14 4.717 7 3.707 7 2.5C7 1.121 5.879 0 4.5 0C3.121 0 2 1.121 2 2.5C2 3.708 2.86 4.717 4 4.949V11.05C2.86 11.282 2 12.292 2 13.499C2 14.878 3.121 15.999 4.5 15.999C5.879 15.999 7 14.878 7 13.499C7 12.317 6.174 11.33 5.07 11.071C5.256 10.453 5.823 9.999 6.5 9.999H9.5C10.723 9.999 11.74 9.115 11.954 7.953C13.116 7.738 14 6.723 14 5.5ZM3 2.5C3 1.673 3.673 1 4.5 1C5.327 1 6 1.673 6 2.5C6 3.327 5.327 4 4.5 4C3.673 4 3 3.327 3 2.5ZM6 13.5C6 14.327 5.327 15 4.5 15C3.673 15 3 14.327 3 13.5C3 12.673 3.673 12 4.5 12C5.327 12 6 12.673 6 13.5ZM11.5 7C10.673 7 10 6.327 10 5.5C10 4.673 10.673 4 11.5 4C12.327 4 13 4.673 13 5.5C13 6.327 12.327 7 11.5 7Z"/></svg>',
     "merge-into": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13 13.5C13 13.776 12.776 14 12.5 14C9.46198 14 6.99998 11.538 6.99998 8.50001V3.70701L4.35398 6.35301C4.15898 6.54801 3.84198 6.54801 3.64698 6.35301C3.45198 6.15801 3.45198 5.84101 3.64698 5.64601L7.14698 2.14601C7.34198 1.95101 7.65898 1.95101 7.85398 2.14601L11.354 5.64601C11.549 5.84101 11.549 6.15801 11.354 6.35301C11.159 6.54801 10.842 6.54801 10.647 6.35301L8.00098 3.70701V8.50001C8.00098 10.985 10.016 13 12.501 13C12.777 13 13.001 13.224 13.001 13.5H13Z"/></svg>',
-    // 下面三个给“项目与会话”抽屉面板用：加号（新建会话动作行）、文件夹（工作区/浏览行）、
-    // 两根滑杆（底部“设置”，比 ⚙ 字符在各主题下都稳定）。
-    plus: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M14 7v1H8v6H7V8H1V7h6V1h1v6h6z"/></svg>',
+    // 下面两个给“项目与会话”抽屉面板用：文件夹（工作区/浏览行）、两根滑杆（底部“设置”，
+    // 比 ⚙ 字符在各主题下都稳定）。
     folder: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M1.5 1A1.5 1.5 0 0 0 0 2.5v10.997A1.5 1.5 0 0 0 1.5 15h12.987a1.5 1.5 0 0 0 1.5-1.5V4.5a1.5 1.5 0 0 0-1.5-1.5H8.707L7.361 1.654A1.5 1.5 0 0 0 6.207 1H1.5Z"/></svg>',
+    // 加号：面板里「在新工作区新建会话」那一行用（跟顶条那颗新建会话同一颗图标）。
+    add: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8 1.5C8 1.22386 7.77614 1 7.5 1C7.22386 1 7 1.22386 7 1.5V7H1.5C1.22386 7 1 7.22386 1 7.5C1 7.77614 1.22386 8 1.5 8H7V13.5C7 13.7761 7.22386 14 7.5 14C7.77614 14 8 13.7761 8 13.5V8H13.5C13.7761 8 14 7.77614 14 7.5C14 7.22386 13.7761 7 13.5 7H8V1.5Z"/></svg>',
     sliders: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4.5h6.2M11.8 4.5H14M2 11.5h1.7M7.3 11.5H14"/><circle cx="10" cy="4.5" r="1.8"/><circle cx="5.5" cy="11.5" r="1.8"/></svg>',
+    // 子会话的拐角箭头（“↳”）：先从上面下来、再向右拐，像个挂在父会话下面的分叉。
+    // 用 SVG 而不是文字符号：箭头在 Segoe UI 等字体里居中不对，画出来天然齐。
+    child: '<svg width="14" height="14" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.2 1.6V8.4H12.6"/><path d="M9.8 5.6L12.8 8.4L9.8 11.2"/></svg>',
   };
+  /** 抽屉列表里“磁盘上存着的会话”那一段的标题：历史抽屉与「项目与会话」上半共用。 */
+  const HISTORY_SECTION = "历史会话";
   const inputEl = document.getElementById("input");
   const imgPreviewEl = document.getElementById("imgPreview");
   const fileMenuEl = document.getElementById("fileMenu");
   const queueBarEl = document.getElementById("queueBar");
-  const tabBarInner = document.getElementById("tabBarInner");
-  const tabBarEl = document.getElementById("tabBar");
-  const newTabBtn = document.getElementById("newTabBtn");
+  const newSessionBtn = document.getElementById("newSessionBtn");
+  const sessionNameBtn = document.getElementById("sessionName");
+  // 顶条名字底下那行小字：当前会话跑在哪个目录（内容由 renderSessionBar 填）
+  const sessionPathEl = document.getElementById("sessionPath");
+  const sessionPathTextEl = sessionPathEl ? sessionPathEl.querySelector(".sp-text") : null;
   // 输入框的起步高度：固定占 144px（约七行）；浏览器那份页面在 CSS 里把
   // --pichat-input-min-height 设成了一行，这里读出来当最小高度（读不到就用默认值，
   // 所以 VSCode 里的行为不变）。打字多了照样往上涨，上限仍然是 autoResize 里的 640px。
@@ -58,36 +68,29 @@
     } catch { /* 读不到就用默认值 */ }
     return INPUT_MIN_HEIGHT_DEFAULT;
   })();
-  newTabBtn.addEventListener("click", () => {
+  newSessionBtn.addEventListener("click", () => {
     vscode.postMessage({ type: "newSession" });
   });
-  let multiTab = false; // 收到 tabList / 带 tabId 的消息后置 true，显示 tab 栏
+  // 顶条中间那颗会话名：点它掉出一张清单，里面是开着的会话（点一行就切过去）。
+  sessionNameBtn.addEventListener("click", () => { toggleSessionMenu(); });
+  // 名字后面那颗朝下的小箭头：只在开着两个以上会话时露面（提示这里点得开、能换）。
+  // 画的还是那份 chevron（画的是朝右），转 90° 成朝下。
+  const sessionCaret = document.createElement("span");
+  sessionCaret.className = "sn-caret hidden";
+  sessionCaret.setAttribute("aria-hidden", "true");
+  sessionCaret.innerHTML = CHEVRON_SVG;
+  sessionNameBtn.appendChild(sessionCaret);
 
-  // ---- tab（容器）/ panel 本地状态（后端 tabList 消息驱动）----
-  // tabs map = panel（会话）渲染状态；tabViews map = tab（容器）布局与焦点。
-  const tabViews = new Map();   // tabId -> { id, name, root, focusPanelId }
-  let activeTabId = null;       // 活跃 tab（容器）id
-  let layoutSig = "";           // 当前渲染的布局签名（变化时重建布局 DOM）
-  const tabDrafts = new Map();  // tabId -> { text, selStart, selEnd, height }（输入草稿按 tab 存）
-  const maximized = new Map();  // tabId -> panelId（双击 pane-head 最大化，纯前端临时态）
-  let draggingPanelId = null;   // 正在拖拽的 panel id
-
-
-  function enterMultiTab() {
-    if (multiTab) { return; }
-    multiTab = true;
-    tabBarEl.classList.remove("hidden");
-  }
-  function ensureDefaultTab() {
-    if (tabs.size === 0) {
-      const st = createTab("default", "对话");
-      activeId = "default";
-      reflectTabUI();
-    } else if (!activeId) {
-      activeId = tabs.keys().next().value;
-    }
-    return activeTab();
-  }
+  // ---- 会话本地状态（后端 sessionList 消息驱动）----
+  // sessions：一个会话一份状态（消息窗格 + 底部状态栏 + 名字 / 状态 / 父子关系）。
+  // 一次只看一个会话：activeId 就是当前这个，其余会话的 DOM 留在内存里，切回去接着看。
+  const sessions = new Map();        // sessionId -> state
+  const sessionDrafts = new Map();   // sessionId -> { text, selStart, selEnd, height }（输入草稿按会话存）
+  let sessionOrder = [];             // 后端给的会话顺序（列表段按它画）
+  let activeId = null;               // 当前显示的会话 id
+  // 会话列表里点过“关闭”的那一行：等第二次点击确认（几秒后自动撤销，防误触）。
+  let pendingCloseId = null;
+  let pendingCloseTimer = null;
 
   // ---- 通用拾取器浮层（模型 / 历史）----
   const pickerOverlay = document.getElementById("pickerOverlay");
@@ -99,7 +102,7 @@
   const pickerFooter = document.getElementById("pickerFooter");
   let pickerState = null; // { kind, items, filtered, sel, current, draftModel, draftThinking, toggle }
 
-  // ==================== Markdown / 文件链接 / 符号链接（纯函数，与 tab 无关）====================
+  // ==================== Markdown / 文件链接 / 符号链接（纯函数，与是哪个会话无关）====================
   let markedReady = false;
   // 当前 highlight.js 是精简 bundle，只内置了 C++ / TypeScript / Python / plaintext。
   // 常见的 javascript/json 标签可安全按 TypeScript（JS 的超集）处理；未知标签则保持
@@ -277,9 +280,9 @@
   }
 
   // ── 会话结束提示音（Web Audio 合成，无外部资源） ──
-  // 由扩展宿主发 "beep" 消息触发，不再只看焦点 session（多 tab / 分屏时谁跑完都响）。
+  // 由扩展宿主发 "turnEnd" 消息触发，不再只看当前会话（别的会话跑完也响）。
   // 网页被隐藏时（窗口切到后台、侧边栏被切走、面板在后台标签里）不出声：
-  // 那时 Chrome 会把音频上下文挂起，响了也听不见，交给 Windows 系统通知去提醒。
+  // 那时 Chrome 会把音频上下文挂起，响了也听不见。
   var audioCtx = null;
   var lastBeepAt = 0;
   var BEEP_THROTTLE_MS = 600; // 多个 session 同时收尾时，只响一声
@@ -385,30 +388,41 @@
       if (matchCombo(e, combos.prev) || matchCombo(e, combos.next)) {
         e.preventDefault();
         const dir = matchCombo(e, combos.next) ? "next" : "prev";
-        vscode.postMessage({ type: "switchTabByDirection", direction: dir });
+        vscode.postMessage({ type: "switchSessionByDirection", direction: dir });
       }
       return;
     }
-    // 切换 tab
+    // 切换会话
     const combos = tabSwitchCombos(tabSwitchKey);
-    if (matchCombo(e, combos.prev)) { e.preventDefault(); vscode.postMessage({ type: "switchTabByDirection", direction: "prev" }); return; }
-    if (matchCombo(e, combos.next)) { e.preventDefault(); vscode.postMessage({ type: "switchTabByDirection", direction: "next" }); return; }
+    if (matchCombo(e, combos.prev)) { e.preventDefault(); vscode.postMessage({ type: "switchSessionByDirection", direction: "prev" }); return; }
+    if (matchCombo(e, combos.next)) { e.preventDefault(); vscode.postMessage({ type: "switchSessionByDirection", direction: "next" }); return; }
   });
 
-  // ==================== Tab 状态 ====================
-  const tabs = new Map(); // id -> state
-  let activeId = null;
+  // ==================== 会话状态 ====================
+  function activeSession() { return activeId ? sessions.get(activeId) : null; }
 
-  function activeTab() { return activeId ? tabs.get(activeId) : null; }
-
-  function createTab(id, title) {
-    let st = tabs.get(id);
+  function createSession(id, title) {
+    let st = sessions.get(id);
     if (st) { return st; }
+    // 一个会话 = 一层壳（.session-view）：消息窗格 + 底部状态栏。
+    // 壳一直留着（切走只是从 #messages 里摘下来），切回去时消息、滚动位置、草稿都还在。
+    const view = document.createElement("div");
+    view.className = "session-view";
+    view.dataset.sessionId = id;
     const pane = document.createElement("div");
-    pane.className = "tab-pane";
-    pane.dataset.tabId = id;
+    pane.className = "session-pane";
+    pane.dataset.sessionId = id;
     pane.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
-    // 不再直接挂到 #messages：由布局树渲染时挂进 layout-leaf
+    view.appendChild(pane);
+    const stBar = document.createElement("div");
+    stBar.className = "pane-status";
+    // 拦掉 mousedown 冒泡：状态栏自己处理点击（弹模型选择器）
+    stBar.addEventListener("mousedown", (e) => { e.stopPropagation(); });
+    stBar.addEventListener("click", (e) => {
+      e.stopPropagation();
+      vscode.postMessage({ type: "pickModel", sessionId: id, t0: performance.now() });
+    });
+    view.appendChild(stBar);
     pane.addEventListener("scroll", () => {
       if (!pane.isConnected) { return; }
       st.lastScrollTop = pane.scrollTop; // 滚动位置缓存：布局重建后恢复用
@@ -429,6 +443,11 @@
       id,
       title: title || "新会话",
       paneEl: pane,
+      viewEl: view,
+      statusEl: stBar,
+      // 后端给的会话元信息（sessionList 每推一次覆盖一次）
+      parentId: null,
+      taba: null,
       currentAssistant: null,
       thinkingText: "",
       // 生成速度统计：本轮累计估算 token 数 / 起点时间；tps 为上一轮最终均值
@@ -444,6 +463,7 @@
       _stage: null,
       _stageDropped: false,
       streaming: false,
+      unread: false,
       activity: "idle",
       activityDetail: "",
       piReady: false,
@@ -459,27 +479,162 @@
       thinkingLevel: "",
       queuedSteering: [],
       pendingSteerRestore: null,
-      // 非活跃时保存的输入状态（草稿已提升为 tab 级 tabDrafts，此处仅保留占位避免旧引用报错）
-      inputText: "",
-      inputSelectionStart: 0,
-      inputSelectionEnd: 0,
-      inputHeight: INPUT_MIN_HEIGHT,
       autoLoadHinted: false,
     };
-    tabs.set(id, st);
-    ensurePaneHead(st);
+    sessions.set(id, st);
     return st;
   }
 
-  function hideEmptyHint(tab) {
-    const hint = tab.paneEl.querySelector(".empty-hint");
+  /** 把一个会话的壳挂进 #messages（同时把别的摘下来）；已经挂着的就不动。 */
+  function mountActiveSession() {
+    const target = activeId ? sessions.get(activeId) : null;
+    if (target && target.viewEl.parentElement === messagesEl) { return; }
+    document.querySelectorAll("#messages .session-view").forEach((el) => {
+      if (el.dataset.sessionId !== activeId) { el.remove(); }
+    });
+    const st = target;
+    if (!st) { return; }
+    messagesEl.appendChild(st.viewEl);
+    // 重挂载后把滚动位置恢复回去（贴底的直接贴底）
+    const p = st.paneEl;
+    if (st.stickToBottom) {
+      st.programmaticScroll = true;
+      p.scrollTop = p.scrollHeight;
+      st.lastScrollTop = p.scrollTop;
+    } else if (typeof st.lastScrollTop === "number") {
+      p.scrollTop = st.lastScrollTop;
+    }
+    // 重挂载会让 CSS 动画重播：剥掉历史气泡的入场动画，避免整窗“抖一下”
+    st.viewEl.querySelectorAll(".msg-enter").forEach((el) => { el.classList.remove("msg-enter"); });
+  }
+
+  /**
+   * 会话在界面上显示的名字：优先用 pi 起的标题（自动命名扩展 / /name 写的，如“上传插件到 GitHub”），
+   * 它还没出来时用我们自己的随机名（“沉静的雪豹”）。
+   */
+  function sessionLabel(st) {
+    if (!st) { return "新会话"; }
+    return st.piTitle || st.title || "新会话";
+  }
+
+  /** 顶条中间那行字：当前会话名（带在跑的小点；主会话多过一个就再挂一颗朝下的小箭头）。 */
+  function renderSessionBar() {
+    const st = activeId ? sessions.get(activeId) : null;
+    const text = sessionLabel(st);
+    const textEl = sessionNameBtn.querySelector(".sn-text");
+    if (textEl) { textEl.textContent = text; }
+    sessionNameBtn.title = "当前会话：" + text + "（点这里换会话）";
+    // 名字底下那行小字：当前会话跑在哪个目录（会话在别的项目里开的时候就看得出差别）。
+    // 拿不到目录（列表还没到、会话已关）就不占行，顶条高度不跳。
+    const dir = st && typeof st.cwd === "string" ? st.cwd : "";
+    if (sessionPathTextEl) { sessionPathTextEl.textContent = dir; }
+    if (sessionPathEl) {
+      sessionPathEl.title = dir;
+      sessionPathEl.classList.toggle("hidden", !dir);
+    }
+    sessionNameBtn.classList.toggle("streaming", !!(st && (st.streaming || st.loading)));
+    // 别的会话跑完了你没看（“有新消息”）：名字左边那颗小点亮着，不闪；切过去看就灭。
+    // 当前这个会话正在跑时那颗点拿去闪了（streaming 优先），未读还得点开清单看。
+    sessionNameBtn.classList.toggle("unread", Array.from(sessions.values()).some((s) => s.unread));
+    // 就一个主会话时不必提示“这里能换”（点开还是同一张清单：里面就它自己）
+    sessionCaret.classList.toggle("hidden", sessionMenuItems().length < 2);
+    // 清单开着的时候它会跟着变（换会话、改标题、某个会话跑完了）
+    if (sessionMenuOpen) { renderSessionMenu(); }
+  }
+
+  // ==================== 顶条那颗会话名的下拉框 ====================
+  // 点顶条中间那颗名字 → 从它下面掉出一张清单，里面是**开着的主会话**，点一行就切过去（不新开、不重载）。
+  // 子会话不占这里的行（清单只当主会话的快速切换用）：要看 / 要点进子会话去
+  // 「项目与会话」面板的「正在对话」那一段，那里子会话照旧缩进挂在派它的会话下面。
+  // 看历史 / 换工作区 / 在别的目录里开会话也走那个面板。
+  const sessionMenuEl = document.createElement("div");
+  sessionMenuEl.id = "sessionMenu";
+  sessionMenuEl.className = "hidden";
+  document.body.appendChild(sessionMenuEl);
+  let sessionMenuOpen = false;
+
+  /** 把清单贴在名字底下：先按名字中心摆，再往两边收一收，别跑出屏幕。 */
+  function placeSessionMenu() {
+    const rect = sessionNameBtn.getBoundingClientRect();
+    const half = sessionMenuEl.offsetWidth / 2;
+    const cx = Math.min(Math.max(rect.left + rect.width / 2, half + 8), window.innerWidth - half - 8);
+    sessionMenuEl.style.left = Math.round(cx) + "px";
+    sessionMenuEl.style.top = Math.round(rect.bottom + 4) + "px";
+  }
+
+  /**
+   * 这张清单要列的行：只列主会话（子会话不在标题下拉框里露面）。
+   * 父会话已经关掉的子会话会以主会话的身份出现在 openSessionItems() 里（depth 为 0），
+   * 那种照列——它已经是一个独立会话了。
+   */
+  function sessionMenuItems() {
+    return openSessionItems().filter((item) => !item.depth);
+  }
+
+  /** 画一遍清单内容：开着的主会话一行一个。 */
+  function renderSessionMenu() {
+    sessionMenuEl.innerHTML = "";
+    sessionMenuItems().forEach((item) => {
+      const el = document.createElement("div");
+      el.className = "sm-item" + (item.current ? " current" : "");
+      el.title = item.label || "";
+      const dot = document.createElement("span");
+      dot.className = "sm-dot" + openDotClass(item);
+      el.appendChild(dot);
+      const name = document.createElement("span");
+      name.className = "sm-name";
+      name.textContent = item.label || "";
+      el.appendChild(name);
+      // 行尾不再挂「当前」/「在跑」：当前那条整行有底色，在跑 / 有新消息看名字前头那颗小点。
+      el.addEventListener("click", () => {
+        closeSessionMenu();
+        if (!item.current) { vscode.postMessage({ type: "switchSession", sessionId: item.sessionId }); }
+      });
+      sessionMenuEl.appendChild(el);
+    });
+  }
+
+  function openSessionMenu() {
+    // 一个主会话都没有（刚打开、后端还没说话）：没东西可切，不开这张空壳
+    if (!sessionMenuItems().length) { return; }
+    renderSessionMenu();
+    sessionMenuEl.classList.remove("hidden");
+    sessionMenuOpen = true;
+    placeSessionMenu();
+  }
+
+  function closeSessionMenu() {
+    if (!sessionMenuOpen) { return; }
+    sessionMenuOpen = false;
+    sessionMenuEl.classList.add("hidden");
+  }
+
+  function toggleSessionMenu() {
+    if (sessionMenuOpen) { closeSessionMenu(); return; }
+    openSessionMenu();
+  }
+
+  // 点别处 / 按 Esc 收起来；窗口尺寸变了重新贴回名字底下。
+  document.addEventListener("pointerdown", (e) => {
+    if (!sessionMenuOpen) { return; }
+    if (sessionMenuEl.contains(e.target) || sessionNameBtn.contains(e.target)) { return; }
+    closeSessionMenu();
+  }, true);
+  document.addEventListener("keydown", (e) => {
+    // 捕获阶段收掉，别让它顺手把正在生成的这一轮也中止了（Esc 另有中止的用途）
+    if (e.key === "Escape" && sessionMenuOpen) { e.stopPropagation(); closeSessionMenu(); }
+  }, true);
+  window.addEventListener("resize", () => { if (sessionMenuOpen) { placeSessionMenu(); } });
+
+  function hideEmptyHint(st) {
+    const hint = st.paneEl.querySelector(".empty-hint");
     if (hint) { hint.remove(); }
   }
 
   /** 历史会话切换可能要等待 pi 冷启动和读盘；用 pane 内遮罩明确反馈进度。 */
-  function syncSessionLoading(tab) {
-    const existing = tab.paneEl.querySelector(":scope > .session-loading");
-    if (!tab.loading) {
+  function syncSessionLoading(st) {
+    const existing = st.paneEl.querySelector(":scope > .session-loading");
+    if (!st.loading) {
       if (existing) { existing.remove(); }
       return;
     }
@@ -502,57 +657,57 @@
     detail.textContent = "正在启动 Pi 并还原消息…";
     card.append(spinner, label, detail);
     overlay.appendChild(card);
-    tab.paneEl.appendChild(overlay);
+    st.paneEl.appendChild(overlay);
   }
 
   // ==================== 滚动 ====================
   const BOTTOM_THRESHOLD = 40;
-  function isNearBottomPane(tab) {
-    return tab.paneEl.scrollHeight - tab.paneEl.scrollTop - tab.paneEl.clientHeight <= BOTTOM_THRESHOLD;
+  function isNearBottomPane(st) {
+    return st.paneEl.scrollHeight - st.paneEl.scrollTop - st.paneEl.clientHeight <= BOTTOM_THRESHOLD;
   }
-  function lerpScrollStep(tab) {
-    if (!tab.stickToBottom) { tab.lerpRafId = 0; return; }
-    const target = tab.paneEl.scrollHeight - tab.paneEl.clientHeight;
-    const cur = tab.paneEl.scrollTop;
+  function lerpScrollStep(st) {
+    if (!st.stickToBottom) { st.lerpRafId = 0; return; }
+    const target = st.paneEl.scrollHeight - st.paneEl.clientHeight;
+    const cur = st.paneEl.scrollTop;
     const diff = target - cur;
-    if (Math.abs(diff) < 1) { tab.programmaticScroll = true; tab.paneEl.scrollTop = target; tab.lerpRafId = 0; return; }
-    tab.programmaticScroll = true;
-    tab.paneEl.scrollTop = cur + diff * 0.3;
-    tab.lerpRafId = requestAnimationFrame(() => lerpScrollStep(tab));
+    if (Math.abs(diff) < 1) { st.programmaticScroll = true; st.paneEl.scrollTop = target; st.lerpRafId = 0; return; }
+    st.programmaticScroll = true;
+    st.paneEl.scrollTop = cur + diff * 0.3;
+    st.lerpRafId = requestAnimationFrame(() => lerpScrollStep(st));
   }
-  function smoothScrollToBottom(tab) {
-    // 只对挂载在 DOM 里的 pane（当前 tab 布局内的）追底
-    if (!tab.paneEl.isConnected) { return; }
-    if (!tab.stickToBottom) {
+  function smoothScrollToBottom(st) {
+    // 只对挂在页面上的窗格（当前会话那个）追底
+    if (!st.paneEl.isConnected) { return; }
+    if (!st.stickToBottom) {
       // 用户不在底部，有新内容到来：标记并显示跳转提示
-      tab.hasNewContent = true;
-      syncJumpBottom(tab);
+      st.hasNewContent = true;
+      syncJumpBottom(st);
       return;
     }
-    if (!tab.lerpRafId) { tab.lerpRafId = requestAnimationFrame(() => lerpScrollStep(tab)); }
+    if (!st.lerpRafId) { st.lerpRafId = requestAnimationFrame(() => lerpScrollStep(st)); }
   }
-  function scrollToBottom(tab, force) {
-    if (force || tab.stickToBottom) {
-      if (tab.lerpRafId) { cancelAnimationFrame(tab.lerpRafId); tab.lerpRafId = 0; }
-      tab.programmaticScroll = true;
-      tab.paneEl.scrollTop = tab.paneEl.scrollHeight;
-      tab.stickToBottom = true;
-      tab.hasNewContent = false;
-      syncJumpBottom(tab);
+  function scrollToBottom(st, force) {
+    if (force || st.stickToBottom) {
+      if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); st.lerpRafId = 0; }
+      st.programmaticScroll = true;
+      st.paneEl.scrollTop = st.paneEl.scrollHeight;
+      st.stickToBottom = true;
+      st.hasNewContent = false;
+      syncJumpBottom(st);
     }
   }
   // 用户主动接管滚动（滚轮/触屏/键盘向上）：立刻停掉 lerp 追底，交还控制权。
   // 流式中同步亮起“跳到最新”按钮；非流式不打扰（用户只是回看已结束的回复）。
-  function userTookOverScroll(tab) {
-    if (!tab.stickToBottom) { return; }
-    tab.stickToBottom = false;
-    if (tab.lerpRafId) { cancelAnimationFrame(tab.lerpRafId); tab.lerpRafId = 0; }
-    if (tab.streaming) { tab.hasNewContent = true; syncJumpBottom(tab); }
+  function userTookOverScroll(st) {
+    if (!st.stickToBottom) { return; }
+    st.stickToBottom = false;
+    if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); st.lerpRafId = 0; }
+    if (st.streaming) { st.hasNewContent = true; syncJumpBottom(st); }
   }
-  // 控制“跳到最新”按钮显隐（仅活跃 tab 生效）
-  function syncJumpBottom(tab) {
+  // 控制“跳到最新”按钮显隐（只对当前会话生效）
+  function syncJumpBottom(st) {
     if (!jumpBottomBtn) { return; }
-    const show = tab.hasNewContent && !tab.stickToBottom && activeId === tab.id;
+    const show = st.hasNewContent && !st.stickToBottom && activeId === st.id;
     jumpBottomBtn.classList.toggle("hidden", !show);
   }
 
@@ -569,34 +724,34 @@
     const range = sel.getRangeAt(0);
     return !!(el && el.contains(range.startContainer));
   }
-  function scheduleFlush(tab) { if (!tab.rafId) { tab.rafId = requestAnimationFrame(() => flushDeltas(tab)); } }
-  function flushDeltas(tab) {
-    tab.rafId = 0;
+  function scheduleFlush(st) { if (!st.rafId) { st.rafId = requestAnimationFrame(() => flushDeltas(st)); } }
+  function flushDeltas(st) {
+    st.rafId = 0;
     const now = performance.now();
-    if (tab.textDirty && tab.currentAssistant) {
-      const raw = tab.currentAssistant.raw || "";
+    if (st.textDirty && st.currentAssistant) {
+      const raw = st.currentAssistant.raw || "";
       const interval = renderInterval(raw.length);
-      if (interval > 0 && now - tab.lastRenderAt < interval) {
-        tab.rafId = requestAnimationFrame(() => flushDeltas(tab));
-      } else if (activeId === tab.id && isSelectingIn(tab.currentAssistant.el)) {
-        tab.rafId = requestAnimationFrame(() => flushDeltas(tab));
+      if (interval > 0 && now - st.lastRenderAt < interval) {
+        st.rafId = requestAnimationFrame(() => flushDeltas(st));
+      } else if (activeId === st.id && isSelectingIn(st.currentAssistant.el)) {
+        st.rafId = requestAnimationFrame(() => flushDeltas(st));
       } else {
-        tab.currentAssistant.el.innerHTML = renderMarkdown(raw);
-        tab.currentAssistant.el.dataset.raw = raw;
-        tab.lastRenderAt = now;
-        tab.textDirty = false;
+        st.currentAssistant.el.innerHTML = renderMarkdown(raw);
+        st.currentAssistant.el.dataset.raw = raw;
+        st.lastRenderAt = now;
+        st.textDirty = false;
       }
     }
-    smoothScrollToBottom(tab);
+    smoothScrollToBottom(st);
   }
-  function cancelFlush(tab) { if (tab.rafId) { cancelAnimationFrame(tab.rafId); tab.rafId = 0; } tab.textDirty = false; }
-  function finalizeCurrentAssistant(tab) {
-    cancelFlush(tab);
-    if (tab.currentAssistant) {
-      tab.currentAssistant.el.innerHTML = renderMarkdown(tab.currentAssistant.raw || "");
-      tab.currentAssistant.el.dataset.raw = tab.currentAssistant.raw || "";
-      smoothScrollToBottom(tab);
-      tab.currentAssistant = null;
+  function cancelFlush(st) { if (st.rafId) { cancelAnimationFrame(st.rafId); st.rafId = 0; } st.textDirty = false; }
+  function finalizeCurrentAssistant(st) {
+    cancelFlush(st);
+    if (st.currentAssistant) {
+      st.currentAssistant.el.innerHTML = renderMarkdown(st.currentAssistant.raw || "");
+      st.currentAssistant.el.dataset.raw = st.currentAssistant.raw || "";
+      smoothScrollToBottom(st);
+      st.currentAssistant = null;
     }
   }
 
@@ -642,9 +797,9 @@
     ta.remove();
   }
 
-  function addPlain(tab, cls, role, text) {
-    hideEmptyHint(tab);
-    tab.currentToolRow = null; // 新消息块：工具标签另起一行，不往上一段后面续
+  function addPlain(st, cls, role, text) {
+    hideEmptyHint(st);
+    st.currentToolRow = null; // 新消息块：工具标签另起一行，不往上一段后面续
     const div = document.createElement("div");
     div.className = "msg " + cls + " msg-enter";
     if (cls === "user") { div.dataset.raw = text || ""; }
@@ -657,8 +812,8 @@
       div.appendChild(body);
     }
     if (cls === "assistant") { attachCopyBtn(div, () => content); }
-    tab.paneEl.appendChild(div);
-    scrollToBottom(tab);
+    st.paneEl.appendChild(div);
+    scrollToBottom(st);
     return div.firstElementChild;
   }
   /** 给消息气泡右下角挂一个复制按钮（hover 时显示），getText 返回要复制的原文。 */
@@ -674,9 +829,9 @@
     div.appendChild(btn);
   }
 
-  function addMarkdown(tab, raw) {
-    hideEmptyHint(tab);
-    tab.currentToolRow = null; // 新正文块：工具标签另起一行，不往上一段后面续
+  function addMarkdown(st, raw) {
+    hideEmptyHint(st);
+    st.currentToolRow = null; // 新正文块：工具标签另起一行，不往上一段后面续
     const div = document.createElement("div");
     div.className = "msg assistant msg-enter";
     const body = document.createElement("div");
@@ -685,34 +840,34 @@
     body.innerHTML = renderMarkdown(raw || "");
     attachCopyBtn(div, () => body.dataset.raw || "");
     div.appendChild(body);
-    tab.paneEl.appendChild(div);
-    scrollToBottom(tab);
+    st.paneEl.appendChild(div);
+    scrollToBottom(st);
     return body;
   }
 
   /** 工具标签挂载点：所有工具调用单独占一行，跟正文分开（这是要求，别再把标签接回正文段落里）；
    *  同一批（两条正文之间的）调用收拢在同一个 .tool-row 里，下一条正文到来时另起一行；
    *  一条放不下的就折行（见 chat.css 的 .tool-row）。 */
-  function toolTagHost(tab) {
-    // 行还有效吗：判定不看 isConnected —— 整屏重放发生在 pane 被布局树挂进页面之前
-    // （刷新后 tabList/重画先到、布局后挂），那会儿 pane 里所有节点 isConnected 都是 false，
+  function toolTagHost(st) {
+    // 行还有效吗：判定不看 isConnected —— 整屏重放发生在窗格被挂进页面之前
+    // （刷新后 sessionList / 重画先到、窗格后挂），那会儿 pane 里所有节点 isConnected 都是 false，
     // 每个标签都会被误判"行没了"而各自新建一行，重放出来的工具调用就竖着排了。
     // 看爹更可靠：行被收掉（图块收编后删空行）或 pane 被清空（innerHTML 重写）时爹就没了。
-    if (!tab.currentToolRow || tab.currentToolRow.parentElement !== tab.paneEl) {
-      tab.currentToolRow = document.createElement("div");
-      tab.currentToolRow.className = "msg tool-row msg-enter";
-        tab.paneEl.appendChild(tab.currentToolRow);
+    if (!st.currentToolRow || st.currentToolRow.parentElement !== st.paneEl) {
+      st.currentToolRow = document.createElement("div");
+      st.currentToolRow.className = "msg tool-row msg-enter";
+        st.paneEl.appendChild(st.currentToolRow);
     }
-    return tab.currentToolRow;
+    return st.currentToolRow;
   }
 
   /** 把标签挂进这条工具调用行。 */
-  function mountToolTag(tab, tag) {
-    toolTagHost(tab).appendChild(tag);
+  function mountToolTag(st, tag) {
+    toolTagHost(st).appendChild(tag);
   }
 
-  function addTool(tab, toolName, argStr, toolCallId) {
-    hideEmptyHint(tab);
+  function addTool(st, toolName, argStr, toolCallId) {
+    hideEmptyHint(st);
     const tag = document.createElement("span");
     tag.className = "tool" + (toolCallId ? " running" : "");
     tag.insertAdjacentHTML("afterbegin", GEAR_SVG);
@@ -739,9 +894,9 @@
       tag.addEventListener("mouseenter", () => showTagTip(tag));
       tag.addEventListener("mouseleave", scheduleTagTipHide);
     }
-    mountToolTag(tab, tag);
-    if (toolCallId) { tab.pendingToolTags.set(toolCallId, tag); }
-    scrollToBottom(tab);
+    mountToolTag(st, tag);
+    if (toolCallId) { st.pendingToolTags.set(toolCallId, tag); }
+    scrollToBottom(st);
   }
 
   // ==================== 完整模式：TUI 风格工具卡片 ====================
@@ -1052,7 +1207,7 @@
    * 块自己占一行（不跟正文挤在同一行里）；标签原来所在的那行空了就一并收掉，
    * 后面的工具调用会另起一行重新排（见 toolTagHost）。
    */
-  function mountToolImageBlock(tab, tagEl, images) {
+  function mountToolImageBlock(st, tagEl, images) {
     if (!Array.isArray(images) || images.length === 0) { return; }
     const block = document.createElement("div");
     block.className = "tool-image-block msg-enter";
@@ -1074,16 +1229,16 @@
     // 标签每次调用独占一行，收掉标签后那行就空了，连同这一行一起收掉。
     const host = tagEl.parentElement;
     tagEl.remove();
-    if (host && host !== tab.paneEl && host.classList.contains("tool-row")
+    if (host && host !== st.paneEl && host.classList.contains("tool-row")
       && !host.textContent.trim() && host.childElementCount === 0) {
       host.remove();
     }
-    tab.paneEl.appendChild(block);
-    scrollToBottom(tab);
+    st.paneEl.appendChild(block);
+    scrollToBottom(st);
   }
 
   /** 卡片结果区渲染：预览截断（尾部 N 行，同 TUI）+ 元信息 + 展开/收起。 */
-  function renderDiffBlock(tab, diffText, filePath) {
+  function renderDiffBlock(st, diffText, filePath) {
     const wrap = document.createElement("div");
     wrap.className = "edit-diff";
     // 内层收缩包裹：宽度 = max(卡片宽, 最宽行)，让所有行背景一致铺满，横向滚动时短行不断色
@@ -1107,7 +1262,7 @@
         div.classList.add("jumpable");
         div.title = "跳转到第 " + target + " 行";
         div.addEventListener("click", () => {
-          vscode.postMessage({ type: "openEditLocation", tabId: tab.id, path: filePath, line: target, anchor });
+          vscode.postMessage({ type: "openEditLocation", sessionId: st.id, path: filePath, line: target, anchor });
         });
       }
       inner.appendChild(div);
@@ -1115,15 +1270,15 @@
     return wrap;
   }
 
-  function buildEditCard(tab, toolName, label, filePath, toolCallId, argStr) {
-    hideEmptyHint(tab);
+  function buildEditCard(st, toolName, label, filePath, toolCallId, argStr) {
+    hideEmptyHint(st);
     // 收起态：跟普通工具调用一样的「齿轮 + 工具名」小标签，收进那条工具调用行；文件路径在悬浮提示里看。
     const pill = document.createElement("span");
     pill.className = "tool et-pill" + (toolCallId ? " running" : "");
     pill.insertAdjacentHTML("afterbegin", GEAR_SVG);
     pill.appendChild(document.createTextNode(" " + toolName));
-    mountToolTag(tab, pill);
-    scrollToBottom(tab);
+    mountToolTag(st, pill);
+    scrollToBottom(st);
 
     let pendingResult = null;   // 结果（含 diff）：提示框随取随画
     let resultDone = false;
@@ -1144,7 +1299,7 @@
         } else {
           // edit 显示完整 diff；write 显示写入内容预览（前 10 行）
           if (toolName !== "write" && pendingResult.diff) {
-            content.appendChild(renderDiffBlock(tab, pendingResult.diff, filePath));
+            content.appendChild(renderDiffBlock(st, pendingResult.diff, filePath));
           } else if (toolName === "write") {
             const pv = buildWritePreviewEl(argStr);
             if (pv) { content.appendChild(pv); }
@@ -1158,7 +1313,7 @@
           } else if (pendingResult.canRevert && toolCallId && !reverted) {
             const revertBtn = document.createElement("span"); revertBtn.className = "et-revert"; revertBtn.innerHTML = ICONS.discard + ' 回滚';
             revertBtn.title = "将文件恢复到本次修改前的内容";
-            revertBtn.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "revertEdit", tabId: tab.id, toolCallId }); });
+            revertBtn.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "revertEdit", sessionId: st.id, toolCallId }); });
             content.appendChild(revertBtn);
           }
         }
@@ -1197,60 +1352,55 @@
       },
     };
   }
-  function renderQueueBar(tab) {
-    if (activeId !== tab.id) { return; }
-    const items = tab.queuedSteering || [];
+  function renderQueueBar(st) {
+    if (activeId !== st.id) { return; }
+    const items = st.queuedSteering || [];
     if (!items.length) { queueBarEl.classList.add("hidden"); queueBarEl.innerHTML = ""; return; }
     queueBarEl.classList.remove("hidden");
     queueBarEl.innerHTML = "";
-    const title = document.createElement("div");
-    title.className = "qb-title";
-    title.textContent = "已排队 " + items.length + " 条（工具执行后投递）";
-    queueBarEl.appendChild(title);
-    items.forEach((text, idx) => {
+    items.forEach((text) => {
       const full = typeof text === "string" ? text : "";
       const lines = full.split("\n");
-      const lineCount = lines.length;
-      const preview = lines.slice(0, 3).join("\n") + (lineCount > 3 ? "\n…" : "");
+      const preview = lines.slice(0, 3).join("\n") + (lines.length > 3 ? "\n…" : "");
       const card = document.createElement("div");
       card.className = "qb-block collapsed";
       const head = document.createElement("div");
       head.className = "qb-head";
+      head.title = "点击展开或收起排队消息";
+      head.setAttribute("role", "button");
+      head.setAttribute("tabindex", "0");
+      head.setAttribute("aria-expanded", "false");
       const dot = document.createElement("span"); dot.className = "qb-dot";
-      const label = document.createElement("span"); label.className = "qb-label";
-      label.textContent = "等待投递";
       const previewLine = document.createElement("span"); previewLine.className = "qb-preview";
       previewLine.textContent = (lines[0] || "").trim();
-      const toggle = document.createElement("span"); toggle.className = "qb-toggle";
-      toggle.textContent = "已排队 · 点击展开（" + lineCount + " 行）";
-      head.appendChild(dot); head.appendChild(label); head.appendChild(previewLine); head.appendChild(toggle);
       const body = document.createElement("pre"); body.className = "qb-body";
       body.textContent = preview;
-      card.appendChild(head); card.appendChild(body);
-      head.addEventListener("click", () => {
+      const toggle = () => {
         const collapsed = card.classList.toggle("collapsed");
-        if (!collapsed) { body.textContent = full; toggle.textContent = "收起（" + lineCount + " 行）"; }
-        else { body.textContent = preview; toggle.textContent = "已排队 · 点击展开（" + lineCount + " 行）"; }
+        head.setAttribute("aria-expanded", String(!collapsed));
+        body.textContent = collapsed ? preview : full;
+      };
+      head.appendChild(dot); head.appendChild(previewLine);
+      card.appendChild(head); card.appendChild(body);
+      head.addEventListener("click", toggle);
+      head.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); }
       });
       queueBarEl.appendChild(card);
     });
   }
 
-  // ==================== UI 同步（活跃 tab 驱动全局控件）====================
-  /** 当前 tab 里正在生成的 panel：Esc 中止与网页端的“停止生成”图标共用这一处判断。 */
-  function activeStreamingLeaves() {
-    const tv = tabViews.get(activeTabId);
-    if (!tv) { return []; }
-    return leavesOf(tv.root).filter((pid) => {
-      const t = tabs.get(pid);
-      return !!t && t.streaming;
-    });
+  // ==================== UI 同步（当前会话驱动全局控件）====================
+  /** 当前会话在不在生成：Esc 中止与网页端的“停止生成”图标共用这一处判断。 */
+  function activeSessionStreaming() {
+    const st = activeSession();
+    return !!(st && st.streaming);
   }
 
-  /** 输入框里那颗“停止生成”图标（只有网页端有）：当前 tab 里还有 panel 在生成时才露面。 */
+  /** 输入框里那颗“停止生成”图标（只有网页端有）：当前会话在生成时才露面。 */
   function syncStopBtn() {
     if (!stopBtn) { return; }
-    stopBtn.classList.toggle("hidden", activeStreamingLeaves().length === 0);
+    stopBtn.classList.toggle("hidden", !activeSessionStreaming());
     stopBtn.disabled = false;
   }
 
@@ -1260,22 +1410,22 @@
     syncStopBtn();
   }
   // 状态栏常显模型：这些纯函数拼出模型名前缀与用量百分比标签。
-  function modelPartFor(tab) {
-    const id = (tab && tab.modelId) || "";
-    const prov = (tab && tab.provider) || "";
+  function modelPartFor(st) {
+    const id = (st && st.modelId) || "";
+    const prov = (st && st.provider) || "";
     return id ? ((prov ? prov + "/" : "") + id) : "";
   }
   let tpsSyncAt = 0;
-  // delta 高频到达，速度刷新做 250ms 节流（当前 tab 内所有可见 pane 都要刷）
+  // delta 高频到达，速度刷新做 250ms 节流（当前会话的状态栏要刷）
   function noteTpsProgress(t) {
     if (!t.paneEl.isConnected) { return; }
     const now = Date.now();
-    if (now - tpsSyncAt >= 250) { tpsSyncAt = now; if (activeId === t.id) { syncStatus(); } updatePaneHeads(); }
+    if (now - tpsSyncAt >= 250) { tpsSyncAt = now; if (activeId === t.id) { syncStatus(); } syncPaneStatuses(); }
   }
-  function pctTag(tab) {
-    if (!tab || typeof tab.percent !== "number") { return ""; }
-    const cls = tab.percent >= 90 ? " err" : (tab.percent >= 70 ? " warn" : "");
-    return '<span class="st-pct' + cls + '">' + tab.percent.toFixed(1) + '%</span>';
+  function pctTag(st) {
+    if (!st || typeof st.percent !== "number") { return ""; }
+    const cls = st.percent >= 90 ? " err" : (st.percent >= 70 ? " warn" : "");
+    return '<span class="st-pct' + cls + '">' + st.percent.toFixed(1) + '%</span>';
   }
   // 用流式 delta 估算生成速度：CJK 字符按 1 token/字，其余约 4 字符/token
   function estTokens(text) {
@@ -1288,30 +1438,30 @@
     return cjk + (text.length - cjk) / 4;
   }
   // 流式中返回实时均值，空闲时返回上一轮的最终均值
-  function currentTps(tab) {
-    if (!tab) { return undefined; }
-    if (tab.streaming && tab.tpsStart > 0 && tab.tpsTokens > 0) {
-      const secs = (Date.now() - tab.tpsStart) / 1000;
-      return secs > 0.3 ? (tab.tpsTokens / secs) : undefined;
+  function currentTps(st) {
+    if (!st) { return undefined; }
+    if (st.streaming && st.tpsStart > 0 && st.tpsTokens > 0) {
+      const secs = (Date.now() - st.tpsStart) / 1000;
+      return secs > 0.3 ? (st.tpsTokens / secs) : undefined;
     }
-    return tab.tps;
+    return st.tps;
   }
-  function statusTags(tab) {
+  function statusTags(st) {
     const parts = [];
-    const mp = modelPartFor(tab);
-    if (mp) { parts.push('<span class="st-model">' + mp + (tab.thinkingLevel ? "/" + tab.thinkingLevel : "") + '</span>'); }
-    const pct = pctTag(tab);
+    const mp = modelPartFor(st);
+    if (mp) { parts.push('<span class="st-model">' + mp + (st.thinkingLevel ? "/" + st.thinkingLevel : "") + '</span>'); }
+    const pct = pctTag(st);
     if (pct) { parts.push(pct); }
-    const tps = currentTps(tab);
+    const tps = currentTps(st);
     if (typeof tps === "number") { parts.push('<span class="st-tps">' + tps.toFixed(1) + ' t/s</span>'); }
     return parts;
   }
   // 状态栏已全部下沉到每个 panel 底部（.pane-status）；此别名保留既有调用点。
   function syncStatus() { syncPaneStatuses(); }
 
-  /** 附件预览：随 tab 级草稿（图片 / 折叠文本块与输入文字同层）。 */
+  /** 附件预览：随会话级草稿（图片 / 折叠文本块与输入文字同层）。 */
   function renderAttachmentsFor() {
-    const d = draftOfTab();
+    const d = draftOfSession();
     imgPreviewEl.innerHTML = "";
     (d.images || []).forEach((img, idx) => {
       const wrap = document.createElement("div"); wrap.className = "img-thumb";
@@ -1339,31 +1489,31 @@
     });
   }
 
-  function draftOfTab() {
-    if (!tabDrafts.has(activeTabId)) {
-      tabDrafts.set(activeTabId, { text: "", selStart: 0, selEnd: 0, height: INPUT_MIN_HEIGHT, images: [], textBlocks: [] });
+  function draftOfSession() {
+    if (!sessionDrafts.has(activeId)) {
+      sessionDrafts.set(activeId, { text: "", selStart: 0, selEnd: 0, height: INPUT_MIN_HEIGHT, images: [], textBlocks: [] });
     }
-    const d = tabDrafts.get(activeTabId);
+    const d = sessionDrafts.get(activeId);
     if (!Array.isArray(d.images)) { d.images = []; }
     if (!Array.isArray(d.textBlocks)) { d.textBlocks = []; }
     return d;
   }
   function saveInputState() {
-    const d = draftOfTab();
+    const d = draftOfSession();
     d.text = inputEl.value;
     d.selStart = inputEl.selectionStart;
     d.selEnd = inputEl.selectionEnd;
     d.height = parseInt(inputEl.style.height, 10) || INPUT_MIN_HEIGHT;
   }
   /**
-   * 页面刚打开那一两秒还没有 tab，输入区里的字记在"没有 tab"那份草稿（键是 null）下。
-   * 第一个 tab 出现时要把它搬过去：不然切到新 tab 会加载空草稿，把刚打的字冲掉
-   * （表现为"打开界面马上打字，字自己没了"）。输入框里的实时内容以输入框为准，
+   * 页面刚打开那一两秒还没有会话，输入区里的字记在“还没有会话”那份草稿（键是 null）下。
+   * 第一个会话出现时要把它搬过去：不然切过去会加载空草稿，把刚打的字冲掉
+   * （表现为“打开界面马上打字，字自己没了”）。输入框里的实时内容以输入框为准，
    * 附件（粘的图、折叠文本块）在草稿里。
    */
-  function carryComposerToTab(tabId) {
-    const pending = tabDrafts.get(null);
-    tabDrafts.set(tabId, {
+  function carryComposerToSession(sessionId) {
+    const pending = sessionDrafts.get(null);
+    sessionDrafts.set(sessionId, {
       text: inputEl.value,
       selStart: inputEl.selectionStart,
       selEnd: inputEl.selectionEnd,
@@ -1371,10 +1521,10 @@
       images: (pending && pending.images) || [],
       textBlocks: (pending && pending.textBlocks) || [],
     });
-    tabDrafts.delete(null);
+    sessionDrafts.delete(null);
   }
   function restoreInputState() {
-    const d = draftOfTab();
+    const d = draftOfSession();
     inputEl.value = d.text || "";
     inputEl.style.height = (d.height || INPUT_MIN_HEIGHT) + "px";
     try {
@@ -1384,378 +1534,16 @@
     hideFileMenu();
   }
 
-  function reflectTabUI() {
-    const tab = activeTab();
-    if (!tab) { return; }
+  function reflectSessionUI() {
+    const st = activeSession();
+    if (!st) { return; }
     updateSendState();
     syncStatus();
-    renderQueueBar(tab);
-    syncJumpBottom(tab);
+    renderQueueBar(st);
+    syncJumpBottom(st);
   }
 
-  // ==================== tab 切换（容器） ====================
-  // 触屏设备（手机/平板）上切 tab 不要自动聚焦输入框：程序聚焦会把输入法拉起来，
-  // 键盘挡住半屏。电脑上保持原行为：切完 tab 焦点落在输入框，直接能打字。
-  const IS_TOUCH_DEVICE = (function () {
-    try { return window.matchMedia("(hover: none) and (pointer: coarse)").matches; }
-    catch { return false; }
-  })();
-  function activateTabView(id) {
-    if (!tabViews.has(id) || activeTabId === id) { return; }
-    hideTagTip();
-    if (activeTabId !== null) { saveInputState(); } else { carryComposerToTab(id); }
-    activeTabId = id;
-    const tv = tabViews.get(id);
-    activeId = (tv.focusPanelId && leavesOf(tv.root).includes(tv.focusPanelId))
-      ? tv.focusPanelId
-      : (leavesOf(tv.root)[0] || null);
-    renderLayout();
-    restoreInputState();
-    reflectTabUI();
-    renderTabBar();
-    if (!IS_TOUCH_DEVICE) { inputEl.focus(); }
-    // 切到别的 tab：排在"还没有 tab"名下的消息现在有主了，能发就发
-    flushPendingSend();
-  }
-
-  // ==================== tab 栏渲染（容器） ====================
-  let tabBarSig = "";      // 内容签名：不变则跳过重建（流式期间 tabList 每 48ms 一推）
-  let tabBarDirty = false; // 拖拽中跳过重建，dragend 后补一次
-  /** 子会话（taba）的情况说明：鼠标悬到 tab 上那个标记时显示。 */
-  function tabaTip(info) {
-    if (!info) { return ""; }
-    if (info.role === "child") {
-      const from = info.parentName ? ("由「" + info.parentName + "」派来") : "已变成独立会话";
-      const lines = ["子会话：" + (info.name || ""), from, "状态：" + (info.stateText || info.state || "")];
-      if (info.modelLabel) { lines.push("模型：" + info.modelLabel); }
-      if (info.deliveries > 0) { lines.push("结果已交回 " + info.deliveries + " 次"); }
-      lines.push("在列表里右键它，可以把结果交回去、或改成独立会话。");
-      return lines.join("\n");
-    }
-    const kids = info.children || [];
-    const lines = ["这个会话派出去 " + kids.length + " 个子会话："];
-    kids.forEach((k) => { lines.push("- " + k.name + "（" + (k.stateText || k.state) + "）"); });
-    lines.push("点旁边的「子会话」标签可以列出并切过去。");
-    return lines.join("\n");
-  }
-  /** 子会话状态的签名：变了才重建 tab 条（用时不进签名，否则每推一次都重建）。 */
-  function tabaSig(info) {
-    if (!info) { return ""; }
-    if (info.role === "child") { return "c:" + (info.state || "") + ":" + (info.deliveries || 0) + ":" + (info.name || ""); }
-    return "p:" + (info.children || []).map((k) => k.id + (k.state || "")).join(",");
-  }
-  // ---- 派子会话（taba）：子会话收进父 tab 后面的一张“子会话”标签 ----
-  /** 是不是收进折叠标签的子会话：是子会话且派活的 tab 还在（变独立的、父关掉的不算，回标签栏当普通 tab）。 */
-  function isStackedChildTab(tv) {
-    return !!(tv && tv.taba && tv.taba.role === "child" && tv.taba.parentName && tv.taba.parentTabId);
-  }
-  /** 把收进折叠标签的子会话按父 tab 分组（父 tab id → 子会话数组，保持 tabList 顺序）。 */
-  function stackedChildrenByParent() {
-    const byParent = new Map();
-    tabViews.forEach((tv) => {
-      if (!isStackedChildTab(tv)) { return; }
-      const list = byParent.get(tv.taba.parentTabId);
-      if (list) { list.push(tv); } else { byParent.set(tv.taba.parentTabId, [tv]); }
-    });
-    return byParent;
-  }
-  /** 折叠标签：平时显示「子会话」，正在看某个子会话时显示它的名字；点开贴着标签的小列表。样式跟普通 tab 一致。 */
-  function buildStackTab(parentTv, kids) {
-    const el = document.createElement("div");
-    el.className = "chat-tab taba-stack";
-    el.dataset.stackFor = parentTv.id;
-    const activeChild = kids.find((k) => k.id === activeTabId);
-    if (activeChild) { el.classList.add("active"); }
-    if (activeChild && activeChild.streaming) { el.classList.add("streaming"); }
-    else if (activeChild && activeChild.loading) { el.classList.add("loading"); }
-    const spinner = document.createElement("span"); spinner.className = "ct-spinner"; el.appendChild(spinner);
-      const mark = document.createElement("span"); mark.className = "ts-mark"; mark.innerHTML = ICONS["git-branch"]; el.appendChild(mark);
-    const title = document.createElement("span"); title.className = "ct-title";
-    title.textContent = activeChild ? activeChild.name : "子会话";
-    title.title = activeChild
-      ? (tabaTip(activeChild.taba) || activeChild.name)
-      : (tabaTip(parentTv.taba) || "这个会话派出去的子会话");
-    el.appendChild(title);
-    // 蓝色呼吸的小标：数字是还在跑的子会话个数；没有在跑的就不显示
-    const running = kids.filter((k) => k.taba && (k.taba.state === "starting" || k.taba.state === "running")).length;
-    if (running > 0) {
-      const count = document.createElement("span");
-      count.className = "ct-taba ct-taba-count running";
-      count.textContent = String(running);
-      el.appendChild(count);
-    }
-    el.addEventListener("click", () => {
-      // 刚点标签把列表收起来了：这一次点击别又把它弹开（收起 / 弹开的开关）
-      if (stackToggleGuard && stackToggleGuard.for === parentTv.id && Date.now() - stackToggleGuard.at < 350) {
-        stackToggleGuard = null;
-        return;
-      }
-      stackToggleGuard = null;
-      if (stackMenu) { hideStackMenu(); return; }
-      openStackMenu(el, parentTv.id, kids);
-    });
-    return el;
-  }
-  // ---- 折叠标签的小列表：贴着标签出（不是居中大浮层）----
-  let stackMenu = null;          // { menu, parentTabId, closer, keyHandler }
-  let stackToggleGuard = null;   // 刚点标签收起列表时的开关保护
-  function hideStackMenu() {
-    if (!stackMenu) { return; }
-    document.removeEventListener("mousedown", stackMenu.closer, true);
-    document.removeEventListener("keydown", stackMenu.keyHandler, true);
-    stackMenu.menu.remove();
-    stackMenu = null;
-  }
-  /** 行首的状态小点：跟 tab 上那颗呼吸点同一画法——只有还在跑的才显示（蓝点呼吸），
-     跑完就消失；出错的显示红点。 */
-  function stateDot(taba) {
-    const st = taba ? taba.state : "";
-    if (st === "starting" || st === "running") { return " running"; }
-    if (st === "error") { return " error"; }
-    return "";
-  }
-  function openStackMenu(anchorEl, parentTabId, kids) {
-    hidePaneMenu();
-    hideStackMenu();
-    const menu = document.createElement("div");
-    menu.className = "pane-menu stack-menu";
-    kids.forEach((k) => {
-      const row = document.createElement("div");
-      row.className = "pm-item sm-row" + (activeTabId === k.id ? " sm-current" : "");
-      const dot = document.createElement("span");
-      dot.className = "sm-dot" + stateDot(k.taba);
-      row.appendChild(dot);
-      const label = document.createElement("span");
-      label.className = "sm-name";
-      label.textContent = k.name;
-      label.title = tabaTip(k.taba) || k.name;
-      row.appendChild(label);
-      const x = document.createElement("span");
-      x.className = "sm-close";
-      x.title = "关闭这个子会话";
-      x.innerHTML = PH_CLOSE_SVG;
-      // 只关不切：别让这一下冒泡成“切过去”
-      x.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "closeTab", tabId: k.id }); });
-      row.appendChild(x);
-      row.addEventListener("click", () => { hideStackMenu(); vscode.postMessage({ type: "switchTab", tabId: k.id }); });
-      menu.appendChild(row);
-    });
-    document.body.appendChild(menu);
-    // 默认贴在标签正下方；快贴到屏幕边就收进来
-    const r = anchorEl.getBoundingClientRect();
-    menu.style.left = "0px";
-    menu.style.top = "0px";
-    const mr = menu.getBoundingClientRect();
-    menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - mr.width - 8)) + "px";
-    menu.style.top = Math.min(r.bottom + 3, window.innerHeight - mr.height - 8) + "px";
-    const closer = (ev) => {
-      if (stackMenu && !stackMenu.menu.contains(ev.target)) {
-        // 行右键弹出的操作菜单开着时，点它不算点在外面：下拉框要留着
-        if (paneMenuEl && paneMenuEl.contains(ev.target)) { return; }
-        // 点在标签自己身上：记一笔，让随后的 click 把它当成“收起”而不是“又弹开”
-        if (anchorEl.contains(ev.target)) { stackToggleGuard = { at: Date.now(), for: parentTabId }; }
-        hideStackMenu();
-      }
-    };
-    const keyHandler = (ev) => {
-      if (ev.key !== "Escape") { return; }
-      // 有操作菜单先收它，再按一次才收下拉框
-      if (paneMenuEl) { hidePaneMenu(); return; }
-      hideStackMenu();
-    };
-    stackMenu = { menu, parentTabId, closer, keyHandler };
-    document.addEventListener("mousedown", closer, true);
-    document.addEventListener("keydown", keyHandler, true);
-  }
-  /** 小列表开着时跟着 tabList 刷新：子会话增减 / 状态变化都能跟上；父 tab 没了就整个收起。 */
-  function refreshStackMenu() {
-    const kids = stackedChildrenByParent().get(stackMenu.parentTabId);
-    const anchor = tabBarInner.querySelector('.chat-tab.taba-stack[data-stack-for="' + stackMenu.parentTabId + '"]');
-    if (!anchor || !kids || kids.length === 0) { hideStackMenu(); return; }
-    openStackMenu(anchor, stackMenu.parentTabId, kids);
-  }
-
-  /** 上次已经滚到位的活跃 tab id（写在 renderTabBar 前头：免得初始化期间被调用时踩到未初始化） */
-  let tabBarRevealedActive = null;
-  function renderTabBar() {
-    if (draggingPanelId) { tabBarDirty = true; return; }
-    const byParent = stackedChildrenByParent();
-    const sig = Array.from(tabViews.values())
-      .filter((tv) => !isStackedChildTab(tv))
-      .map((tv) =>
-        tv.id + ":" + tv.name + ":" + (activeTabId === tv.id ? 1 : 0) + ":" + (tv.streaming ? 1 : 0) + ":" + (tv.loading ? 1 : 0) + ":" + tabaSig(tv.taba)
-      )
-      .concat(Array.from(byParent.entries()).map(([pid, kids]) =>
-        "s:" + pid + ":" + kids.map((k) =>
-          k.id + ":" + (activeTabId === k.id ? 1 : 0) + ":" + (k.streaming ? 1 : 0) + ":" + (k.loading ? 1 : 0) + ":" + tabaSig(k.taba)
-        ).join(",")
-      ))
-      .join("|");
-    if (sig === tabBarSig) { return; }
-    tabBarSig = sig;
-    // 重建会把滚动位置清零：tab 多了以后，流式期间名字一变就跳回最左边，后面的 tab 根本够不着。
-    // 所以先记住、重建完再放回去。
-    const keepScroll = tabBarInner.scrollLeft;
-    tabBarInner.innerHTML = "";
-    tabViews.forEach((tv) => {
-      // 子会话（taba）收进父会话后面的折叠标签，不单独占位
-      if (isStackedChildTab(tv)) { return; }
-      const panelIds = leavesOf(tv.root);
-      const single = panelIds.length === 1;
-      const el = document.createElement("div");
-      el.className = "chat-tab" + (activeTabId === tv.id ? " active" : "") + (tv.streaming ? " streaming" : "") + (tv.loading ? " loading" : "");
-      el.dataset.tabId = tv.id;
-      const spinner = document.createElement("span"); spinner.className = "ct-spinner"; el.appendChild(spinner);
-      const title = document.createElement("span"); title.className = "ct-title"; title.textContent = tv.name; title.title = tv.name; el.appendChild(title);
-      const close = document.createElement("span"); close.className = "ct-close"; close.title = "关闭 tab（内部 panel 全部关闭）";
-      // 用 SVG 画叉：文本 “×” 在 Segoe UI 等字体下 ink 偏上，flex 居中无法修正；
-      // SVG 笔画由 viewBox 几何决定，天然居中（与 VS Code 自带关闭图标同法）。
-      close.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 2.5 L13.5 13.5 M13.5 2.5 L2.5 13.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>';
-      close.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "closeTab", tabId: tv.id }); });
-      el.appendChild(close);
-      el.addEventListener("click", () => { vscode.postMessage({ type: "switchTab", tabId: tv.id }); });
-      // panel 拖到该 tab 上 → 搬进该 tab
-      el.addEventListener("dragover", (e) => {
-        if (!draggingPanelId) { return; }
-        e.preventDefault();
-        e.stopPropagation();
-        el.classList.add("drop-hint");
-      });
-      el.addEventListener("dragleave", (e) => {
-        if (el.contains(e.relatedTarget)) { return; }
-        el.classList.remove("drop-hint");
-      });
-      el.addEventListener("drop", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        el.classList.remove("drop-hint");
-        if (!draggingPanelId) { return; }
-        vscode.postMessage({ type: "movePanel", panelId: draggingPanelId, targetTabId: tv.id });
-      });
-      // 单 panel tab：tab 条目就是该 panel 的身份 —— 可直接拖到别的 tab 上合并过去
-      if (single) {
-        el.draggable = true;
-        title.title = tv.name + "（拖到别的 tab 上合并过去）";
-        el.addEventListener("dragstart", (e) => {
-          draggingPanelId = panelIds[0];
-          e.dataTransfer.effectAllowed = "move";
-          try { e.dataTransfer.setData("text/plain", panelIds[0]); } catch { /* ignore */ }
-          document.body.classList.add("panel-dragging");
-        });
-        el.addEventListener("dragend", () => {
-          draggingPanelId = null;
-          document.body.classList.remove("panel-dragging");
-          clearAllDropHints();
-          if (tabBarDirty) { tabBarDirty = false; tabBarSig = ""; renderTabBar(); }
-        });
-      }      tabBarInner.appendChild(el);
-      // 派了活的主 tab：后面跟一张「子会话」标签，把它的子会话收进去
-      const kids = byParent.get(tv.id);
-      if (kids && kids.length > 0) { tabBarInner.appendChild(buildStackTab(tv, kids)); }
-    });
-    tabBarInner.scrollLeft = keepScroll;
-    // 换了活跃 tab（点开一个在屏幕外的）要滚过去；同一个 tab 反复重建时不动，
-    // 免得用户自己滚到别处看别的 tab 时，视图被拽回来。
-    if (activeTabId !== tabBarRevealedActive) {
-      tabBarRevealedActive = activeTabId;
-      revealTabInBar(activeTabId);
-    }
-    // 小列表开着时跟着 tabList 刷新（子会话增减 / 状态变化；父 tab 没了就收起）
-    if (stackMenu) { refreshStackMenu(); }
-  }
-
-  /** 让某个 tab 在滑动条里露出来：看不见就滚过去，已经看得见就不动。 */
-  function revealTabInBar(tabId) {
-    if (!tabId) { return; }
-    let el = tabBarInner.querySelector('.chat-tab[data-tab-id="' + tabId + '"]');
-    if (!el) {
-      // 折进折叠标签里的子会话：露出它父会话后面那个标签
-      const tv = tabViews.get(tabId);
-      if (tv && isStackedChildTab(tv)) {
-        el = tabBarInner.querySelector('.chat-tab.taba-stack[data-stack-for="' + tv.taba.parentTabId + '"]');
-      }
-    }
-    if (!el) { return; }
-    const box = tabBarInner.getBoundingClientRect();
-    const r = el.getBoundingClientRect();
-    if (r.width <= 0 || box.width <= 0) { return; }
-    if (r.right > box.right) { tabBarInner.scrollLeft += (r.right - box.right) + 8; }
-    else if (r.left < box.left) { tabBarInner.scrollLeft -= (box.left - r.left) + 8; }
-  }
-
-  // ==================== 布局树渲染（tab 内的 panel 网格 / 拖拽） ====================
-  const PH_CLOSE_SVG = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M2.5 2.5 L13.5 13.5 M13.5 2.5 L2.5 13.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>';
-
-  /** 布局树叶子（panel id）深度优先序。 */
-  function leavesOf(node) {
-    if (!node) { return []; }
-    if (node.kind === "panel") { return [node.panelId]; }
-    return (node.children || []).flatMap(leavesOf);
-  }
-
-  /** 查 panel 所属的 tab id（不在任何 tab 中返回 null）。 */
-  function panelTabOf(panelId) {
-    for (const tv of tabViews.values()) {
-      if (leavesOf(tv.root).includes(panelId)) { return tv.id; }
-    }
-    return null;
-  }
-
-  /** pane-head：创建一次常驻（tab 内 ≥2 个 panel 时由 CSS 显示）。 */
-  function ensurePaneHead(tab) {
-    if (!tab || tab.paneEl.querySelector(".pane-head")) { return; }
-    const head = document.createElement("div");
-    head.className = "pane-head";
-    head.draggable = true;
-    head.title = "拖动移动 panel · 双击最大化/还原";
-    const dot = document.createElement("span"); dot.className = "ph-dot";
-    const title = document.createElement("span");
-    title.className = "ph-title";
-    title.textContent = tab.title || "对话";
-    const close = document.createElement("span");
-    close.className = "ph-close";
-    close.title = "关闭 panel（杀进程）";
-    close.innerHTML = PH_CLOSE_SVG;
-    close.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "closePanel", panelId: tab.id }); });
-    head.appendChild(dot);
-    head.appendChild(title);
-    head.appendChild(close);
-    // 同 statusbar：拦 mousedown 冒泡，避免 leaf 抢焦点重建 DOM 导致子元素 click 丢失；
-    // 点击头部自身仍完成聚焦（关闭按钮有 stopPropagation 不受影响）。
-    head.addEventListener("mousedown", (e) => { e.stopPropagation(); });
-    head.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (activeId !== tab.id) { focusPanelLocal(tab.id); }
-    });
-    head.addEventListener("dblclick", (e) => { e.stopPropagation(); toggleMaximize(tab.id); });
-    head.addEventListener("dragstart", (e) => {
-      draggingPanelId = tab.id;
-      e.dataTransfer.effectAllowed = "move";
-      try { e.dataTransfer.setData("text/plain", tab.id); } catch { /* ignore */ }
-      document.body.classList.add("panel-dragging");
-    });
-    head.addEventListener("dragend", () => {
-      draggingPanelId = null;
-      document.body.classList.remove("panel-dragging");
-      clearAllDropHints();
-      if (tabBarDirty) { tabBarDirty = false; tabBarSig = ""; renderTabBar(); }
-    });
-    tab.paneEl.insertBefore(head, tab.paneEl.firstChild);
-  }
-
-  /** 刷新各 pane 头部（标题 / 流式灯）+ 每 panel 底部状态栏。 */
-  function updatePaneHeads() {
-    tabs.forEach((t) => {
-      const head = t.paneEl.querySelector(".pane-head");
-      if (!head) { return; }
-      head.classList.toggle("ph-streaming", !!(t.streaming || t.loading));
-      const titleEl = head.querySelector(".ph-title");
-      if (titleEl) { titleEl.textContent = t.title || "对话"; titleEl.title = t.title || ""; }
-    });
-    syncPaneStatuses();
-  }
-
-  /** 单个 panel 底部状态栏的 HTML。 */
+  /** 一个会话底部状态栏的 HTML。 */
   function paneStatusHtml(t) {
     if (!t) { return ""; }
     if (t.loading) { return '<span class="st-text">加载中…</span>'; }
@@ -1799,12 +1587,10 @@
     }
   }
 
-  /** 刷新所有 panel 的底部状态栏内容与焦点高亮。 */
+  /** 刷新所有会话的底部状态栏内容与当前高亮。 */
   function syncPaneStatuses() {
-    tabs.forEach((t) => {
-      const el = t.paneEl.parentElement
-        ? t.paneEl.parentElement.querySelector(":scope > .pane-status")
-        : null;
+    sessions.forEach((t) => {
+      const el = t.statusEl;
       if (!el) { return; }
       const sig = statusSig(t);
       if (el._sig === sig) {
@@ -1819,232 +1605,159 @@
     });
   }
 
-  // ---- pane-head / tab chip 右键菜单 ----
-  let paneMenuEl = null;
-  function hidePaneMenu() {
-    if (!paneMenuEl) { return; }
-    if (paneMenuEl._closer) { document.removeEventListener("mousedown", paneMenuEl._closer, true); }
-    paneMenuEl.remove();
-    paneMenuEl = null;
-  }
-  // ---- 布局 DOM ----
-  /** 拖拽悬停区判定：边缘 28% 为上下左右，中心为替换。返回 zone 并高亮。 */
-  function zoneFromEvent(leaf, e) {
-    const r = leaf.getBoundingClientRect();
-    const x = (e.clientX - r.left) / Math.max(1, r.width);
-    const y = (e.clientY - r.top) / Math.max(1, r.height);
-    const edge = 0.28;
-    const zone = y < edge ? "top" : (y > 1 - edge ? "bottom" : (x < edge ? "left" : (x > 1 - edge ? "right" : "center")));
-    leaf.querySelectorAll(".dz").forEach((d) => d.classList.toggle("on", d.dataset.zone === zone));
-    return zone;
-  }
-  function clearAllDropHints() {
-    document.querySelectorAll(".layout-leaf.drop-hover").forEach((el) => el.classList.remove("drop-hover", "drop-merge"));
-    document.querySelectorAll(".dz.on").forEach((el) => el.classList.remove("on"));
-    document.querySelectorAll(".chat-tab.drop-hint").forEach((el) => el.classList.remove("drop-hint"));
-    tabBarEl.classList.remove("drop-hint");
+  // ==================== 切换会话 ====================
+  // 触屏设备（手机/平板）上切会话不要自动聚焦输入框：程序聚焦会把输入法拉起来，
+  // 键盘挡住半屏。电脑上保持原行为：切完焦点落在输入框，直接能打字。
+  const IS_TOUCH_DEVICE = (function () {
+    try { return window.matchMedia("(hover: none) and (pointer: coarse)").matches; }
+    catch { return false; }
+  })();
+  /** 切到某个会话：把它的壳挂回 #messages，草稿跟着换（打了一半的字留在各自会话里）。 */
+  function activateSessionView(id) {
+    if (!sessions.has(id) || activeId === id) { return; }
+    hideTagTip();
+    if (activeId !== null) { saveInputState(); } else { carryComposerToSession(id); }
+    activeId = id;
+    // 看过了：那颗“有新消息”的小蓝点收掉
+    const shown = sessions.get(id);
+    if (shown && shown.unread) { shown.unread = false; }
+    mountActiveSession();
+    restoreInputState();
+    reflectSessionUI();
+    renderSessionBar();
+    refreshOpenSessionsInPicker();
+    if (!IS_TOUCH_DEVICE) { inputEl.focus(); }
+    // 切到这个会话：排在"还没有会话"名下的消息现在有主了，能发就发
+    flushPendingSend();
   }
 
-  function buildLeafDom(panelId) {
-    const t = tabs.get(panelId);
-    const leaf = document.createElement("div");
-    leaf.className = "layout-leaf";
-    leaf.dataset.panelId = panelId;
-    if (t) {
-      leaf.appendChild(t.paneEl);
-      // 每个 panel 自己的底部状态栏（多 panel 时显示；点击切换该 panel 模型）
-      const stBar = document.createElement("div");
-      stBar.className = "pane-status";
-      // 拦掉 mousedown 冒泡：否则 leaf 的 mousedown 会先切焦点，
-      // 焦点切换重建 statusbar DOM（mousedown↟click 之间目标节点被换掉），
-      // 导致随后的 click 丢失，模型选择器弹不出来。聚焦改在 click 里自己做。
-      stBar.addEventListener("mousedown", (e) => { e.stopPropagation(); });
-      stBar.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (activeId !== panelId) { focusPanelLocal(panelId); }
-        // t0：点击↟弹出的往返计时（宿主随 picker 消息回显，renderPicker 里打日志）
-        vscode.postMessage({ type: "pickModel", tabId: panelId, t0: performance.now() });
+  /** 这份会话文件是不是有会话正开着（列表里把这种历史行标成“已打开”）。 */
+  function sessionOpenForFile(file) {
+    if (!file) { return false; }
+    const norm = (p) => String(p).replace(/\\/g, "/").toLowerCase();
+    const want = norm(file);
+    for (const st of sessions.values()) {
+      if (st.sessionFile && norm(st.sessionFile) === want) { return true; }
+    }
+    return false;
+  }
+
+  /** 两个目录是不是同一个（斜杠、末尾斜杠、大小写都归一化再比）。 */
+  function sameDir(a, b) {
+    const norm = (p) => String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    return norm(a) === norm(b);
+  }
+
+  /**
+   * 「正在对话」这些行列首那颗小点的样式名（顶条下拉框与面板共用同一套）：
+   * 在跑＝蓝点呼吸，出错＝红点，有新消息（未读）＝蓝点不闪，其余不显示。
+   */
+  function openDotClass(item) {
+    if (item.streaming || item.loading) { return " running"; }
+    if (item.taba && item.taba.state === "error") { return " error"; }
+    return item.unread ? " unread" : "";
+  }
+
+  /**
+   * 会话列表里「正在对话」那一段的行：主会话在前，子会话缩进挂在它下面。
+   * 数据取自本地这份状态（列表是浮层，内容由宿主给；这一段只有界面自己知道）。
+   *
+   * @param folder 只列跑在这个目录里的会话（「项目与会话」面板跟着当前显示的
+   *               工作区走）；不传就是全部开着的会话（顶条那颗会话名的下拉用）。
+   */
+  function openSessionItems(folder) {
+    const ordered = sessionOrder.map((id) => sessions.get(id)).filter(Boolean);
+    const items = [];
+    const push = (st, depth) => {
+      items.push({
+        __section: "open",
+        sessionId: st.id,
+        label: sessionLabel(st),
+        section: "正在对话",
+        current: st.id === activeId,
+        streaming: !!st.streaming,
+        loading: !!st.loading,
+        unread: !!st.unread,
+        taba: st.taba || null,
+        depth,
+        pendingClose: pendingCloseId === st.id,
       });
-      leaf.appendChild(stBar);
+    };
+    ordered.forEach((st) => {
+      // 子会话不单独占一行：挂在父会话下面（缩进一格）
+      if (st.parentId && sessions.has(st.parentId)) { return; }
+      const kids = ordered.filter((kid) => kid.parentId === st.id);
+      // 一家子只要有一个跑在这个目录里就整家一起列：子会话可能被派到别的目录里去跑
+      if (folder && !sameDir(st.cwd, folder) && !kids.some((kid) => sameDir(kid.cwd, folder))) { return; }
+      push(st, 0);
+      kids.forEach((kid) => { push(kid, 1); });
+    });
+    return items;
+  }
+
+  /** 请求关闭某个会话：第一次点击只是把那一行变成确认条，再点一下才真关（防误触）。 */
+  function askCloseSession(id) {
+    if (pendingCloseId !== id) {
+      pendingCloseId = id;
+      if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
+      pendingCloseTimer = setTimeout(() => {
+        pendingCloseId = null;
+        pendingCloseTimer = null;
+        refreshOpenSessionsInPicker();
+      }, 4000);
+      refreshOpenSessionsInPicker();
+      return;
     }
-    // 落点指示层（四个方位 + 中心替换）；跨 tab 拖动时改显示整格“合并”提示
-    const ind = document.createElement("div");
-    ind.className = "drop-indicator";
-    const ZONE_MARKS = { left: ICONS["arrow-left"], right: ICONS["arrow-right"], top: ICONS["arrow-up"], bottom: ICONS["arrow-down"], center: ICONS.close };
-    const ZONE_TITLES = { left: "插到左侧", right: "插到右侧", top: "插到上方", bottom: "插到下方", center: "替换此 panel" };
-    ["left", "right", "top", "bottom", "center"].forEach((z) => {
-      const d = document.createElement("div");
-      d.className = "dz dz-" + z;
-      d.dataset.zone = z;
-      d.title = ZONE_TITLES[z];
-      const mark = document.createElement("span");
-      mark.className = "dz-mark";
-      mark.innerHTML = ZONE_MARKS[z];
-      d.appendChild(mark);
-      ind.appendChild(d);
-    });
-    const mergeHint = document.createElement("div");
-    mergeHint.className = "drop-merge-hint";
-    mergeHint.innerHTML = ICONS["merge-into"] + '<span> 合并进此 tab</span>';
-    ind.appendChild(mergeHint);
-    leaf.appendChild(ind);
-    leaf.addEventListener("dragover", (e) => {
-      if (!draggingPanelId || draggingPanelId === panelId) { return; }
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-      leaf.classList.add("drop-hover");
-      // 跨 tab 拖动：整格合并提示；同 tab 重排：四分方位热区
-      const sameTab = panelTabOf(draggingPanelId) === panelTabOf(panelId);
-      leaf.classList.toggle("drop-merge", !sameTab);
-      if (sameTab) { zoneFromEvent(leaf, e); }
-    });
-    leaf.addEventListener("dragleave", (e) => {
-      if (leaf.contains(e.relatedTarget)) { return; }
-      leaf.classList.remove("drop-hover", "drop-merge");
-      leaf.querySelectorAll(".dz.on").forEach((d) => d.classList.remove("on"));
-    });
-    leaf.addEventListener("drop", (e) => {
-      e.preventDefault();
-      leaf.classList.remove("drop-hover", "drop-merge");
-      leaf.querySelectorAll(".dz.on").forEach((d) => d.classList.remove("on"));
-      if (!draggingPanelId || draggingPanelId === panelId) { return; }
-      const sameTab = panelTabOf(draggingPanelId) === panelTabOf(panelId);
-      if (sameTab) {
-        const zone = zoneFromEvent(leaf, e);
-        vscode.postMessage({ type: "movePanel", panelId: draggingPanelId, targetPanelId: panelId, zone });
-      } else {
-        const targetTabId = panelTabOf(panelId);
-        if (targetTabId) {
-          vscode.postMessage({ type: "movePanel", panelId: draggingPanelId, targetTabId });
-        }
-      }
-    });
-    leaf.addEventListener("mousedown", () => {
-      if (activeId !== panelId) { focusPanelLocal(panelId); }
-    });
-    return leaf;
+    if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
+    pendingCloseTimer = null;
+    pendingCloseId = null;
+    // 列表不关：关掉一条后马上就能接着关下一条（那一行会跟着会话列表自己消失）
+    vscode.postMessage({ type: "closeSession", sessionId: id });
   }
 
-  function buildNodeDom(node) {
-    if (node.kind === "panel") { return buildLeafDom(node.panelId); }
-    const el = document.createElement("div");
-    el.className = "layout-split layout-" + (node.orientation === "v" ? "v" : "h");
-    (node.children || []).forEach((c) => el.appendChild(buildNodeDom(c)));
-    return el;
+  /**
+   * 「正在对话」那一段的内容指纹（只算真会影响列表长相的字段）。
+   * 带上开着的会话各自是哪个文件：上半那些「历史会话」行靠它标「已打开」。
+   */
+  function openSessionsSignature(items) {
+    const files = Array.from(sessions.values()).map((t) => t.sessionFile || "").sort().join(",");
+    return files + "\u0000" + items.map((it) => [
+      it.sessionId, it.label || "", it.depth || 0, it.current ? 1 : 0,
+      it.streaming ? 1 : 0, it.loading ? 1 : 0, it.unread ? 1 : 0,
+      (it.taba && it.taba.state) || "", it.pendingClose ? 1 : 0,
+    ].join("|")).join("\n");
+  }
+  /** 界面上正画着的那份「正在对话」内容的指纹（见上面那个函数）。 */
+  let openSessionsShown = "";
+
+  /**
+   * 会话增减 / 状态变化 / 确认条状态变化：列表开着就重画一遍。
+   * 两处讲究：
+   *  - 只换「正在对话」那一段，后面原样接回去——「加载更多」追加进来的行只存在 st.items 里，
+   *    不能拿宿主最初给的那份数据整份重拼，否则点出来的行会被下一次状态推送抹掉；
+   *  - 内容跟屏幕上那份一模一样就不画：会话在跑的时候状态推送很密，
+   *    白白重画一遍只会把滚动位置顶回顶部。
+   */
+  function refreshOpenSessionsInPicker() {
+    const st = pickerState;
+    if (!st || (st.kind !== "workspace" && st.kind !== "history")) { return; }
+    // 「项目与会话」面板只列当前显示的工作区里的会话；历史抽屉没有工作区这个概念，列全部。
+    const openItems = openSessionItems(st.kind === "workspace" ? st.folder : "");
+    const signature = openSessionsSignature(openItems);
+    if (signature === openSessionsShown) { return; }
+    openSessionsShown = signature;
+    // 「新建会话」那一行固定在最前：它跟「正在对话」同一个分组，不能跟着会话一起被换到后面去。
+    const rest = st.items.filter((it) => it.__section !== "open" && it.__section !== "openNew");
+    st.items = (st.newSessionItem ? [st.newSessionItem] : []).concat(openItems, rest);
+    renderPickerItems();
   }
 
-  /** 布局结构签名：只看形态（树结构 + 焦点 + 最大化），不含 streaming/activity 等易变字段。 */
-  function structSig(node) {
-    if (!node) { return ""; }
-    if (node.kind === "panel") { return "P(" + node.panelId + ")"; }
-    return (node.orientation === "v" ? "V[" : "H[") + (node.children || []).map(structSig).join(",") + "]";
-  }
-  function layoutSignature() {
-    const tv = tabViews.get(activeTabId);
-    if (!tv) { return ""; }
-    // 注意：焦点（focusPanelId）不入签名 —— 焦点变化只刷 focus 类/状态栏，不该重建布局
-    return activeTabId + "|" + structSig(tv.root) + "|" + (maximized.get(activeTabId) || "");
-  }
-
-  /** 重建当前 tab 的布局 DOM（挂载到 #messages）。按缓存恢复各 pane 滚动位置。 */
-  function renderLayout() {
-    document.querySelectorAll("#messages .layout-root").forEach((el) => el.remove());
-    const tv = tabViews.get(activeTabId);
-    if (!tv) { return; }
-    layoutSig = layoutSignature();
-    const leaves = leavesOf(tv.root);
-    const rootEl = document.createElement("div");
-    rootEl.className = "layout-root" + (leaves.length > 1 ? " multi" : "");
-    const max = maximized.get(activeTabId);
-    if (max && leaves.length > 1 && leaves.includes(max)) {
-      rootEl.classList.add("maximized");
-    }
-    rootEl.appendChild(buildNodeDom(tv.root));
-    if (max && leaves.length > 1 && leaves.includes(max)) {
-      rootEl.querySelectorAll(".layout-leaf").forEach((lf) => {
-        if (lf.dataset.panelId === max) { lf.classList.add("maximized"); }
-      });
-    }
-    messagesEl.appendChild(rootEl);
-    // 恢复所有新挂载 pane 的滚动位置（优先 panel 状态缓存；贴底状态直接贴底）
-    rootEl.querySelectorAll(".layout-leaf .tab-pane").forEach((p) => {
-      const t = tabs.get(p.dataset.tabId);
-      if (!t) { return; }
-      if (t.stickToBottom) {
-        t.programmaticScroll = true;
-        p.scrollTop = p.scrollHeight;
-        t.lastScrollTop = p.scrollTop;
-      } else if (typeof t.lastScrollTop === "number") {
-        p.scrollTop = t.lastScrollTop;
-      }
-    });
-    // 重挂载会让 CSS 动画重播：剥掉历史气泡的入场动画，避免整窗“抖一下”
-    rootEl.querySelectorAll(".msg-enter").forEach((el) => {
-      el.classList.remove("msg-enter");
-    });
-    applyFocusClasses();
-    updatePaneHeads();
-  }
-
-  function applyFocusClasses() {
-    document.querySelectorAll("#messages .layout-leaf").forEach((lf) => {
-      lf.classList.toggle("focus", lf.dataset.panelId === activeId);
-    });
-    syncPaneStatuses();
-  }
-
-  /** 焦点 panel（本地先切 + 后端同步）。输入框草稿按 tab 存，切焦点不动草稿。 */
-  function focusPanelLocal(panelId) {
-    if (activeId === panelId) { return; }
-    const tv = tabViews.get(activeTabId);
-    if (!tv || !leavesOf(tv.root).includes(panelId)) { return; }
-    activeId = panelId;
-    tv.focusPanelId = panelId;
-    applyFocusClasses();
-    reflectTabUI();
-    renderAttachmentsFor();
-    vscode.postMessage({ type: "focusPanel", panelId });
-  }
-
-  /** 双击 pane-head：最大化 / 还原（纯前端，树保留）。 */
-  function toggleMaximize(panelId) {
-    if (maximized.get(activeTabId) === panelId) { maximized.delete(activeTabId); }
-    else { maximized.set(activeTabId, panelId); }
-    renderLayout();
-  }
-
-  // ---- tab 栏作为 panel 拖拽落点（拖到某 tab 上 = 搬进去；空白 = 新 tab 带走）----
-  tabBarEl.addEventListener("dragover", (e) => {
-    if (!draggingPanelId) { return; }
-    if (e.target.closest(".chat-tab")) { tabBarEl.classList.remove("drop-hint"); return; }
-    e.preventDefault();
-    tabBarEl.classList.add("drop-hint");
-  });
-  tabBarEl.addEventListener("dragleave", (e) => {
-    if (e.relatedTarget && tabBarEl.contains(e.relatedTarget)) { return; }
-    tabBarEl.classList.remove("drop-hint");
-  });
-  // 滚轮落在 tab 栏上：竖着滚改成左右滚（原来什么反应都没有，只能拖那根细滑动条或者拉宽窗口）。
-  // 没有溢出时不拦，页面照常滚。
-  tabBarInner.addEventListener("wheel", (e) => {
-    if (tabBarInner.scrollWidth - tabBarInner.clientWidth <= 2) { return; }
-    const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-    if (!d) { return; }
-    e.preventDefault();
-    tabBarInner.scrollLeft += d;
-  }, { passive: false });
-  tabBarEl.addEventListener("drop", (e) => {
-    tabBarEl.classList.remove("drop-hint");
-    if (!draggingPanelId) { return; }
-    if (e.target.closest(".chat-tab")) { return; } // tab chip 自己的 drop 处理
-    e.preventDefault();
-    vscode.postMessage({ type: "movePanel", panelId: draggingPanelId });
-  });
 
   // ==================== 通用拾取器浮层（模型 / 历史）====================
   function hidePicker() {
     pickerOverlay.classList.add("hidden");
     pickerOverlay.classList.remove("pk-drawer");
+    pickerOverlay.classList.remove("pk-workspace");
     pickerBody.innerHTML = "";
     pickerSearch.value = "";
     pickerFooter.innerHTML = "";
@@ -2054,6 +1767,10 @@
     const leftoverClose = document.getElementById("pickerClose");
     if (leftoverClose) { leftoverClose.remove(); }
     pickerSearchWrap.classList.remove("hidden");
+    // “关闭会话”的确认条只在列表里有效：列表一关就撤销（下次打开不要停在确认态）
+    if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
+    pendingCloseTimer = null;
+    pendingCloseId = null;
     pickerState = null;
   }
   /** pi /resume 列表的相对时间：now / 5m / 3h / 2d / 3w / 2mo / 1y。 */
@@ -2240,13 +1957,37 @@
     } else if (st.sel >= st.filtered.length) {
       st.sel = Math.max(0, st.filtered.length - 1);
     }
+    // 重画前先把滚动位置记下来（渲染完再放回去）：会话状态推送一来就会重画一遍，
+    // 不能把人正看着的那一段顶回顶部。会话 / 工作区两块各滚各的，分开记。
+    const prevSessionPane = pickerBody.querySelector(".pk-session-pane");
+    const prevSpacePane = pickerBody.querySelector(".pk-space-pane");
+    const keepScroll = {
+      body: pickerBody.scrollTop,
+      session: prevSessionPane ? prevSessionPane.scrollTop : 0,
+      space: prevSpacePane ? prevSpacePane.scrollTop : 0,
+    };
     pickerBody.innerHTML = "";
+    pickerBody.classList.toggle("pk-workspace-body", st.kind === "workspace");
+    let sessionPane = null;
+    let spacePane = null;
+    /** 渲染完把滚动位置放回原处（内容变短时浏览器自己会夹到最底下）。 */
+    const restoreScroll = () => {
+      pickerBody.scrollTop = keepScroll.body;
+      if (sessionPane) { sessionPane.scrollTop = keepScroll.session; }
+      if (spacePane) { spacePane.scrollTop = keepScroll.space; }
+    };
+    if (st.kind === "workspace") {
+      sessionPane = document.createElement("div"); sessionPane.className = "pk-workspace-pane pk-session-pane";
+      spacePane = document.createElement("div"); spacePane.className = "pk-workspace-pane pk-space-pane";
+      pickerBody.appendChild(sessionPane); pickerBody.appendChild(spacePane);
+    }
     if (st.filtered.length === 0) {
       const empty = document.createElement("div"); empty.className = "pk-empty";
       empty.textContent = q ? "没有匹配项。" : "列表为空。";
       pickerBody.appendChild(empty);
       if ((st.kind === "history" || st.kind === "workspace") && st.historyHasMore) { pickerBody.appendChild(buildLoadMoreBtn(st, "sessions")); }
       if (st.kind === "model") { renderModelFooter(st); }
+      restoreScroll();
       return;
     }
     let lastSection = null;
@@ -2295,51 +2036,107 @@
         return;
       }
 
+      const sectionPane = st.kind === "workspace" && item.__section === "space" ? spacePane : sessionPane;
+      // “项目与会话”面板：会话的「加载更多」必须放在会话末尾、工作区标题之前，
+      // 否则看起来会像是工作区的操作。
+      if (st.kind === "workspace" && item.__section === "space" && !loadMorePlaced) {
+        loadMorePlaced = true;
+        if (st.historyHasMore) { sessionPane.appendChild(buildLoadMoreBtn(st, "sessions")); }
+      }
       if (item.section && item.section !== lastSection) {
         lastSection = item.section;
         const sep = document.createElement("div"); sep.className = "pk-section";
-        // “会话 · 目录名”：目录名弱化成附注（它是背景信息，不是标题本身）。
-        const at = st.kind === "workspace" ? item.section.indexOf(" · ") : -1;
-        if (at > 0) {
-          const head = document.createElement("span"); head.textContent = item.section.slice(0, at);
-          const tail = document.createElement("span"); tail.className = "pk-section-sub"; tail.textContent = " · " + item.section.slice(at + 3);
-          sep.appendChild(head); sep.appendChild(tail);
-        } else {
-          sep.textContent = item.section;
-        }
-        pickerBody.appendChild(sep);
-      }
-      // “项目与会话”面板：下半（工作区）开始之前，把会话那块的「加载更多」卡在它末尾。
-      if (st.kind === "workspace" && item.__section === "space" && !loadMorePlaced) {
-        loadMorePlaced = true;
-        if (st.historyHasMore) { pickerBody.appendChild(buildLoadMoreBtn(st, "sessions")); }
+        sep.textContent = item.section;
+        (sectionPane || pickerBody).appendChild(sep);
       }
       const el = document.createElement("div");
       el.className = "pk-item" + (idx === st.sel ? " active" : "");
-      if (st.kind === "history" || (st.kind === "workspace" && item.__section === "session")) {
-        el.classList.add("pk-history");
+      if (st.kind === "workspace" && item.__section === "space") {
+        el.classList.add("pk-space");
+      } else if (st.kind === "workspace" && item.__section === "session") {
+        el.classList.add("pk-session");
+      }
+      if (item.__section === "openNew") {
+        // 「正在对话」那组里的「＋ 在 xxx 新建会话」：在这个面板当前显示的目录里开新会话。
+        el.classList.add("pk-history", "pk-action");
+        const main = document.createElement("div"); main.className = "pk-history-main";
+        const icon = document.createElement("span"); icon.className = "pk-row-icon"; icon.innerHTML = ICONS.add;
+        main.appendChild(icon);
+        const title = document.createElement("span"); title.className = "pk-history-title";
+        title.textContent = "在 " + (item.name || item.folder) + " 新建会话";
+        main.appendChild(title);
+        el.appendChild(main);
+        el.title = "在 " + item.folder + " 新建会话";
+      } else if (item.__section === "open") {
+        // 「正在对话」：开着的会话（子会话缩进挂在主会话下面）。
+        // 主会话只有在建会话、当前会话、在跑的才加粗 / 点蓝；历史列表里那套字号不动。
+        el.classList.add("pk-history", "pk-open");
         if (item.current) { el.classList.add("current"); }
-        if (item.action === "new") {
-          // 「新建会话」动作行：加号图标 + 强调色，一眼看出它不是一条会话记录。
-          el.classList.add("pk-action");
-          const main = document.createElement("div"); main.className = "pk-history-main";
-          const icon = document.createElement("span"); icon.className = "pk-row-icon"; icon.innerHTML = ICONS.plus;
-          main.appendChild(icon);
-          const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.title || "新建会话";
-          main.appendChild(title);
-          el.appendChild(main);
+        if (item.depth > 0) { el.classList.add("pk-open-child"); }
+        if (item.pendingClose) {
+          el.classList.add("pk-open-confirm");
+          const bar = document.createElement("div"); bar.className = "pk-open-bar";
+          const ask = document.createElement("span"); ask.className = "pk-open-ask";
+          ask.textContent = "关闭「" + (item.label || "") + "」？";
+          bar.appendChild(ask);
+          const yes = document.createElement("button");
+          yes.type = "button"; yes.className = "pk-open-yes"; yes.textContent = "关闭";
+          yes.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(item.sessionId); });
+          const no = document.createElement("button");
+          no.type = "button"; no.className = "pk-open-no"; no.textContent = "取消";
+          no.addEventListener("click", (e) => {
+            e.stopPropagation();
+            pendingCloseId = null;
+            if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
+            pendingCloseTimer = null;
+            refreshOpenSessionsInPicker();
+          });
+          bar.appendChild(yes); bar.appendChild(no);
+          el.appendChild(bar);
         } else {
           const main = document.createElement("div"); main.className = "pk-history-main";
-          const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.title || "(无消息)";
+          // 子会话：名字前面挂一个拐角箭头（“↳”），一眼看出它是挂在上面那个会话下面的
+          if (item.depth > 0) {
+            const arrow = document.createElement("span");
+            arrow.className = "pk-open-arrow";
+            arrow.innerHTML = ICONS.child;
+            main.appendChild(arrow);
+          }
+          const dot = document.createElement("span");
+          dot.className = "pk-open-dot" + openDotClass(item);
+          main.appendChild(dot);
+          const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.label || "";
           main.appendChild(title);
-          const right = document.createElement("span"); right.className = "pk-history-right";
-          // 条数为 0 不显示（新建会话行、空目录工作区挂着个“0”只有噪声）。
-          if (item.count > 0) { const count = document.createElement("span"); count.className = "pk-history-count"; count.textContent = String(item.count); right.appendChild(count); }
-          if (item.lastActivity) { const age = document.createElement("span"); age.className = "pk-history-age"; age.textContent = pickerRelTime(item.lastActivity); right.appendChild(age); }
-          if (right.childNodes.length) { main.appendChild(right); }
+          // 行尾不再挂「当前」/「在跑」：当前那条靠整行的底色认，在跑 / 有新消息靠行首那颗小点。
           el.appendChild(main);
-          el.title = item.title || "";
+          // 关闭按钮放行尾：点行是切过去（大目标），点这颗才关（还要再确认一下）。
+          const close = document.createElement("span");
+          close.className = "pk-open-close";
+          close.title = "关闭这个会话";
+          close.setAttribute("aria-label", "关闭这个会话");
+          close.innerHTML = ICONS["close-bold"];
+          close.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(item.sessionId); });
+          el.appendChild(close);
         }
+        el.title = item.label || "";
+      } else if (st.kind === "history" || (st.kind === "workspace" && item.__section === "session")) {
+        el.classList.add("pk-history");
+        if (item.current) { el.classList.add("current"); }
+        const main = document.createElement("div"); main.className = "pk-history-main";
+        const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.title || "(无消息)";
+        main.appendChild(title);
+        const right = document.createElement("span"); right.className = "pk-history-right";
+        // 已经开着的会话（在「正在对话」里已经有一行）：标一下，免得看着像两条不同的会话。
+        if (sessionOpenForFile(item.file)) {
+          const open = document.createElement("span"); open.className = "pk-open-tag"; open.textContent = "已打开";
+          right.appendChild(open);
+        }
+        // 条数为 0 不显示（空目录工作区挂着个“0”只有噪声）。
+        if (item.count > 0) { const count = document.createElement("span"); count.className = "pk-history-count"; count.textContent = String(item.count); right.appendChild(count); }
+        if (item.lastActivity) { const age = document.createElement("span"); age.className = "pk-history-age"; age.textContent = pickerRelTime(item.lastActivity); right.appendChild(age); }
+        if (right.childNodes.length) { main.appendChild(right); }
+        el.appendChild(main);
+        el.title = item.title || "";
       } else if (st.kind === "options") {
         const t = document.createElement("div"); t.className = "pk-title";
         const chk = document.createElement("span"); chk.className = "pk-check" + (item.check === true ? " on" : "");
@@ -2356,7 +2153,7 @@
         const icon = document.createElement("span"); icon.className = "pk-row-icon"; icon.innerHTML = ICONS.folder;
         main.appendChild(icon);
         if (item.action === "browse") {
-          // 「浏览文件夹…」动作行：跟“新建会话”同款强调色，附注一行说明它干什么。
+          // 「浏览文件夹…」动作行：强调色，附注一行说明它干什么。
           el.classList.add("pk-action");
           const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.label || "";
           main.appendChild(title);
@@ -2386,20 +2183,20 @@
       }
       el.addEventListener("mouseenter", () => { st.sel = idx; renderPickerActive(); });
       el.addEventListener("click", () => { confirmPicker(idx); });
-      pickerBody.appendChild(el);
+      (sectionPane || pickerBody).appendChild(el);
     });
-    // 「加载更多」：历史面板在列表底部；项目与会话面板会话那块在中间（上面插过了），
-    // 工作区那块在最后。
+    // 两个面板各有自己的滚动区和加载按钮。
     if (st.kind === "history" && st.historyHasMore) {
       pickerBody.appendChild(buildLoadMoreBtn(st, "sessions"));
     }
     if (st.kind === "workspace" && st.historyHasMore && !loadMorePlaced) {
-      pickerBody.appendChild(buildLoadMoreBtn(st, "sessions"));
+      sessionPane.appendChild(buildLoadMoreBtn(st, "sessions"));
     }
     if (st.kind === "workspace" && st.spacesHasMore) {
-      pickerBody.appendChild(buildLoadMoreBtn(st, "spaces"));
+      spacePane.appendChild(buildLoadMoreBtn(st, "spaces"));
     }
     if (st.kind === "model") { renderModelFooter(st); }
+    restoreScroll();
   }
   /**
    * 「加载更多」那颗按钮。which = "sessions" 是上半会话那块的，"spaces" 是下半工作区那块的；
@@ -2409,7 +2206,7 @@
     const isSpaces = which === "spaces";
     const loading = isSpaces ? st.spacesLoading : st.historyLoading;
     const btn = document.createElement("button");
-    btn.className = "pk-loadmore secondary";
+    btn.className = "pk-loadmore";
     btn.textContent = loading ? "加载中…" : "加载更多";
     btn.disabled = !!loading;
     btn.addEventListener("click", () => {
@@ -2450,6 +2247,22 @@
       vscode.postMessage({ type: "pickerToggle", kind, action: item.action, value: item.value });
       return;
     }
+    // 「正在对话」那组里的「＋ 在 xxx 新建会话」：收起面板、就在这个目录里开一个
+    // （宿主按面板当前显示的工作区开，不是后端启动时那个默认目录）。
+    if (item.__section === "openNew") {
+      hidePicker();
+      // 目录明写在消息里：面板可能同时在两块屏上开着，后端记的“当前工作区”是最后一人换的那个，
+      // 不能拿它当这块屏上写着的那一个。
+      vscode.postMessage({ type: "newSessionInWorkspace", path: item.folder });
+      return;
+    }
+    // 「正在对话」段：点行就是切过去（不新开、不重载），行尾那颗 × 是关闭（要再点一下确认）。
+    if (item.__section === "open") {
+      if (item.pendingClose) { askCloseSession(item.sessionId); return; }
+      hidePicker();
+      vscode.postMessage({ type: "switchSession", sessionId: item.sessionId });
+      return;
+    }
     // “项目与会话”面板：点下半的工作区**不关面板**，只让宿主把上半那份会话列表换成它的；
     // “浏览文件夹…”那一行例外（它不是工作区，是要跳去文件夹面板）。
     if (kind === "workspace" && item.__section === "space" && item.action !== "browse") {
@@ -2474,7 +2287,7 @@
   function workspaceFlatItems(msg) {
     const ss = (msg.sessions && Array.isArray(msg.sessions.items)) ? msg.sessions.items : [];
     const sp = (msg.spaces && Array.isArray(msg.spaces.items)) ? msg.spaces.items : [];
-    const head = "会话 · " + ((msg.sessions && msg.sessions.name) || "当前目录");
+    const head = HISTORY_SECTION;
     const withSection = (it, sec, headText) => {
       const copy = {};
       for (const k in it) { if (Object.prototype.hasOwnProperty.call(it, k)) { copy[k] = it[k]; } }
@@ -2489,12 +2302,35 @@
   function renderPicker(msg) {
     const kind = msg.kind;
     const toggle = !!msg.toggle;
+    // 面板与顶条那颗下拉是同一个位置上的两种界面：开面板就把下拉收掉。
+    closeSessionMenu();
     // “项目与会话”面板不放搜索框：上半会话、下半工作区两块结构，这个框帮不上忙还占一截
     // （要找项目看路径就行）；历史面板的搜索留着。
     const searchable = msg.searchable !== false && !toggle && kind !== "workspace";
+    // 宿主给的这一半（磁盘上的历史会话 / 工作区）和界面自己拼的「正在对话」合成一份：
+    // 之后就只换「正在对话」那一段（见 refreshOpenSessionsInPicker），
+    // 免得把「加载更多」追加进来的行弄丢。
+    // 历史抽屉里磁盘上那批会话也归成一节（「历史会话」）：没有这一节，它们会并到
+    // 「正在对话」底下，看着像是那些开着的会话的续行。
+    const rawHostItems = Array.isArray(msg.items) ? msg.items : [];
+    const hostItems = kind === "workspace" ? workspaceFlatItems(msg)
+      : (kind === "history" ? rawHostItems.map((it) => (it.section ? it : Object.assign({}, it, { section: HISTORY_SECTION }))) : rawHostItems);
+    // 「项目与会话」面板当前显示的是哪个工作区（切工作区时宿主会重发一份，这里跟着换）：
+    // 上半「正在对话」只列这个目录里开着的会话，那颗「在 xxx 新建会话」也在这个目录里开。
+    const folder = kind === "workspace"
+      ? String((msg.sessions && msg.sessions.folder) || (msg.spaces && msg.spaces.current) || "")
+      : "";
+    const newSessionItem = kind === "workspace" && folder
+      ? { __section: "openNew", section: "正在对话", folder, name: (msg.sessions && msg.sessions.name) || folder }
+      : null;
+    const openItems = (kind === "workspace" || kind === "history") ? openSessionItems(folder) : [];
+    // 刚画出来的「正在对话」长什么样：之后状态推送内容没变就不重画（见 refreshOpenSessionsInPicker）
+    openSessionsShown = openSessionsSignature(openItems);
     pickerState = {
       kind,
-      items: kind === "workspace" ? workspaceFlatItems(msg) : (Array.isArray(msg.items) ? msg.items : []),
+      folder,
+      newSessionItem,
+      items: (newSessionItem ? [newSessionItem] : []).concat(openItems, hostItems),
       filtered: [],
       sel: kind === "model" ? -1 : 0,
       current: msg.current || null,
@@ -2507,10 +2343,11 @@
       spacesHasMore: kind === "workspace" ? !!(msg.spaces && msg.spaces.hasMore) : false,
       spacesLoading: false,
     };
-    // 默认选中“当前会话”那一行；没有当前会话（刚换过目录、新环境）就给 -1 不预选——
-    // 别让最上面的“新建会话”一直顶着整块选中底色，看着像误触了它。
-    if (kind === "workspace") {
-      pickerState.sel = pickerState.items.findIndex((it) => it.current && it.__section === "session");
+    // 抽屉列表刚打开时不预选任何一行：哪条会话是“当前”由行尾那颗胶囊说，
+    // 预选只会给那一行铺一层灰底（.pk-item.active），看着像又选中了一条。
+    // 上下键按下去才出现选中行（sel 从 -1 开头，取首/末的那段见 ArrowDown / ArrowUp）。
+    if (kind === "workspace" || kind === "history") {
+      pickerState.sel = -1;
     }
     const titleMap = { model: "切换模型", history: "会话历史", options: "显示选项" };
     pickerTitle.textContent = titleMap[kind] || (typeof msg.title === "string" && msg.title ? msg.title : "选择");
@@ -2540,7 +2377,7 @@
       const headerClose = document.createElement("button");
       headerClose.type = "button"; headerClose.id = "pickerClose";
       headerClose.title = "关闭 (Esc)"; headerClose.setAttribute("aria-label", "关闭");
-      headerClose.innerHTML = ICONS.close;
+      headerClose.innerHTML = ICONS["close-bold"];
       headerClose.addEventListener("click", () => cancelPicker());
       pickerHeader.appendChild(headerClose);
       const settingsBtn = document.createElement("button"); settingsBtn.type = "button";
@@ -2559,6 +2396,7 @@
     }
     // 历史会话与项目与会话从右侧滑进来（整屏高的面板）；其余拾取器照旧居中弹出
     pickerOverlay.classList.toggle("pk-drawer", kind === "history" || kind === "workspace");
+    pickerOverlay.classList.toggle("pk-workspace", kind === "workspace");
     renderPickerItems();
     pickerOverlay.classList.remove("hidden");
     // 计时：若宿主回显了 t0，输出点击 → picker 可见的往返耗时（多 panel 卡顿排查用）
@@ -2597,8 +2435,8 @@
       }
       return;
     }
-    if (e.key === "ArrowDown") { e.preventDefault(); if (st.filtered.length) { st.sel = (st.sel + 1) % st.filtered.length; renderPickerActive(); } }
-    else if (e.key === "ArrowUp") { e.preventDefault(); if (st.filtered.length) { st.sel = (st.sel - 1 + st.filtered.length) % st.filtered.length; renderPickerActive(); } }
+    if (e.key === "ArrowDown") { e.preventDefault(); if (st.filtered.length) { st.sel = st.sel < 0 ? 0 : (st.sel + 1) % st.filtered.length; renderPickerActive(); } }
+    else if (e.key === "ArrowUp") { e.preventDefault(); if (st.filtered.length) { st.sel = st.sel < 0 ? st.filtered.length - 1 : (st.sel - 1 + st.filtered.length) % st.filtered.length; renderPickerActive(); } }
     else if (e.key === "Enter") { e.preventDefault(); confirmPicker(st.sel); }
     else if (e.key === "Escape") { e.preventDefault(); cancelPicker(); }
   });
@@ -2652,8 +2490,8 @@
     hideFileMenu(); autoResize(); inputEl.focus();
   }
 
-  // ==================== # 会话引用（获取其他 panel/tab 的上下文） ====================
-  let hashMatches = [];   // [{kind:"tab"|"panel", id, label, sub}]
+  // ==================== # 会话引用（给模型别的会话的记录文件路径） ====================
+  let hashMatches = [];   // [{id, label, sub}]：「引用哪个会话的记录文件」的候选（子会话用 sub 标注）
   let hashSel = 0;
   let hashStart = -1;     // # 触发字符在输入框的位置
   let hashOpen = false;
@@ -2681,24 +2519,10 @@
   function filterHashMenu(query) {
     const q = (query || "").toLowerCase();
     const all = hashMenuItems();
-    if (!q) { hashMatches = all; }
-    else {
-      // tab 名命中 → 整组保留；否则只留自身命中的 panel 行，空组剔除
-      const keptTabs = new Set();
-      all.forEach((it) => {
-        if (it.kind === "tab" && it.label.toLowerCase().includes(q)) { keptTabs.add(it.tabId); }
-      });
-      const kept = [];
-      all.forEach((it) => {
-        if (it.kind === "tab") {
-          if (keptTabs.has(it.id)) { kept.push(it); }
-        } else if (keptTabs.has(it.tabId) || it.label.toLowerCase().includes(q)) {
-          kept.push(it);
-          keptTabs.add(it.tabId);
-        }
-      });
-      hashMatches = kept;
-    }
+    // 会话名字和内容都能筛（子会话那一行带着“子会话 · 父会话名”的附注，也能被父名命中）
+    hashMatches = q
+      ? all.filter((it) => (it.label + " " + (it.sub || "")).toLowerCase().includes(q))
+      : all;
     hashSel = 0;
     renderHashMenu();
   }
@@ -2708,9 +2532,9 @@
     fileMenuEl.innerHTML = "";
     hashMatches.forEach((it, idx) => {
       const item = document.createElement("div");
-      item.className = "file-item" + (idx === hashSel ? " active" : "") + (it.kind === "tab" ? " hash-tab-row" : "");
+      item.className = "file-item" + (idx === hashSel ? " active" : "");
       const kindIcon = document.createElement("span"); kindIcon.className = "hash-kind";
-      kindIcon.innerHTML = it.kind === "tab" ? ICONS.files : ICONS.comment;
+      kindIcon.innerHTML = ICONS.comment;
       item.appendChild(kindIcon);
       item.appendChild(document.createTextNode(" " + it.label));
       if (it.sub) {
@@ -2736,16 +2560,14 @@
     inputEl.selectionStart = inputEl.selectionEnd = hashStart;
     hideHashMenu(); autoResize(); inputEl.focus();
     hashReqSeq++;
-    vscode.postMessage(it.kind === "tab"
-      ? { type: "fetchChat", tabId: it.id, requestId: hashReqSeq }
-      : { type: "fetchChat", panelId: it.id, requestId: hashReqSeq });
+    vscode.postMessage({ type: "fetchChat", sessionId: it.id, requestId: hashReqSeq });
   }
 
   /** fetchChatResult：会话内容入草稿卡片（标题/体积由宿主算好）。 */
   function applyFetchChatResult(msg) {
     if (msg.requestId !== hashReqSeq) { return; }   // 过期 / 竞态结果丢弃
-    if (!activeTab()) { return; }
-    const d = draftOfTab();
+    if (!activeSession()) { return; }
+    const d = draftOfSession();
     const text = typeof msg.text === "string" ? msg.text : "";
     if (!text) { return; }
     const lines = text.split("\n").length;
@@ -2838,7 +2660,15 @@
   function autoResize() {
     if (inputEl.value.length > BIG_TEXT_CHARS) { inputEl.style.height = "640px"; return; }
     inputEl.style.height = "auto";
-    inputEl.style.height = Math.min(Math.max(inputEl.scrollHeight - 12, INPUT_MIN_HEIGHT), 640) + "px";
+    const style = getComputedStyle(inputEl);
+    const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    const border = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+    // VSCode 输入框是 content-box；网页输入框是 border-box，30px 必须包含内边距和边框。
+    // scrollHeight 包含内边距、不包含边框，所以两种盒模型需要换算成各自的 height 值。
+    const height = style.boxSizing === "border-box"
+      ? inputEl.scrollHeight + border
+      : inputEl.scrollHeight - padding;
+    inputEl.style.height = Math.min(Math.max(height, INPUT_MIN_HEIGHT), 640) + "px";
   }
   function shouldFoldText(text) {
     if (typeof text !== "string" || !text) { return false; }
@@ -2846,7 +2676,7 @@
     return countLines(text) > BIG_TEXT_LINES;
   }
   // ==================== 会话没就绪时按的回车 ====================
-  // 刚打开界面的一两秒里，pi 进程还在起（tab.piReady 还是 false）。这时候按回车，
+  // 刚打开界面的一两秒里，pi 进程还在起（会话还没就绪）。这时候按回车，
   // 以前是悄然丢掉：不发送，也不告诉你（字还留在输入框里，得像没事一样再按一次）。
   // 现在把这次回车记下来：字照旧留在输入框里，等会话就绪（piReady 变 true）自动补发一次。
   //
@@ -2858,8 +2688,8 @@
   /** 会话就绪了：把"按了回车但还没发出去"的那条补发出去。 */
   function flushPendingSend() {
     if (pendingAutoSend === null) { return; }
-    const tab = activeTab();
-    if (!tab || !tab.piReady) { return; }
+    const st = activeSession();
+    if (!st || !st.piReady) { return; }
     const text = pendingAutoSend;
     pendingAutoSend = null;
     // 等待期间用户又改了输入框内容：那是他新的意思，不替他发
@@ -2875,8 +2705,8 @@
   }
 
   function send() {
-    const tab = activeTab();
-    const d = draftOfTab();
+    const st = activeSession();
+    const d = draftOfSession();
     const typed = inputEl.value.trim();
     const hasImages = (d.images || []).length > 0;
     const hasTextBlocks = (d.textBlocks || []).length > 0;
@@ -2890,13 +2720,12 @@
       text = (typed ? typed + "\n\n" : "") + parts.join("\n\n");
     }
     // 会话还没就绪（刚打开界面那一两秒）：记下这次回车，字留在输入框里，就绪后自动补发
-    if (!tab || !tab.piReady) {
+    if (!st || !st.piReady) {
       pendingAutoSend = text;
       return;
     }
     pendingAutoSend = null;
-    // 发送走 tab 级广播：后端把消息（含同一份附件）投给该 tab 内所有 panel
-    vscode.postMessage({ type: "send", tabId: tab.id, text, images: d.images });
+    vscode.postMessage({ type: "send", sessionId: st.id, text, images: d.images });
     resetComposer(d);
   }
 
@@ -2915,8 +2744,8 @@
   // ==================== 事件绑定 ====================
   if (jumpBottomBtn) {
     jumpBottomBtn.addEventListener("click", () => {
-      const tab = activeTab();
-      if (tab) { scrollToBottom(tab, true); }
+      const st = activeSession();
+      if (st) { scrollToBottom(st, true); }
     });
   }
   // 每个 panel 底部都有自己的状态栏（.pane-status）：点击 = 切该 panel 模型
@@ -2945,38 +2774,38 @@
 
   // 用户主动接管滚动：滚轮上滑 / 触屏上滑 打断 lerp 追底（按实际滚动到的 pane 判定）
   messagesEl.addEventListener("wheel", (e) => {
-    const pane = e.target.closest(".tab-pane");
+    const pane = e.target.closest(".session-pane");
     if (!pane) { return; }
-    const t = tabs.get(pane.dataset.tabId);
+    const t = sessions.get(pane.dataset.sessionId);
     if (!t) { return; }
     if (e.deltaY < 0) { userTookOverScroll(t); }
   }, { passive: true });
   messagesEl.addEventListener("touchstart", (e) => {
-    const pane = e.target.closest(".tab-pane");
+    const pane = e.target.closest(".session-pane");
     if (!pane) { return; }
-    const t = tabs.get(pane.dataset.tabId);
+    const t = sessions.get(pane.dataset.sessionId);
     if (t) { userTookOverScroll(t); }
   }, { passive: true });
   document.addEventListener("keydown", (e) => {
     if (activeId === null) { return; }
     const tag = (document.activeElement && document.activeElement.tagName) || "";
     if (tag === "INPUT" || tag === "TEXTAREA") { return; }
-    const t = tabs.get(activeId);
+    const t = sessions.get(activeId);
     if (!t) { return; }
     const k = (e.key || "");
     if (k === "PageUp" || k === "ArrowUp" || k === "Home" || k === " ") { userTookOverScroll(t); }
   }, { passive: true });
 
-  // 流式生成中中止：当前 tab 内所有生成中的 panel 一停全停
+  // 流式生成中中止：停掉当前会话正在跑的这一轮
   function abortActiveTab() {
-    if (activeStreamingLeaves().length === 0) { return false; }
-    const focus = tabs.get(activeId);
+    if (!activeSessionStreaming()) { return false; }
+    const focus = sessions.get(activeId);
     if (focus) { focus.pendingSteerRestore = (focus.queuedSteering || []).slice(); }
-    vscode.postMessage({ type: "abort", tabId: activeId });
+    vscode.postMessage({ type: "abort", sessionId: activeId });
     return true;
   }
 
-  // 网页端：点输入框里那颗“停止生成”图标 = 给当前 tab 按 Esc。
+  // 网页端：点输入框里那颗“停止生成”图标 = 给当前会话按 Esc。
   if (stopBtn) {
     stopBtn.addEventListener("click", () => {
       if (!abortActiveTab()) { syncStopBtn(); return; }
@@ -3023,8 +2852,8 @@
   inputEl.addEventListener("input", () => { autoResize(); maybeShowFileMenu(); maybeShowHashMenu(); maybeShowSlashMenu(); });
   inputEl.addEventListener("blur", () => { setTimeout(() => { hideFileMenu(); hideHashMenu(); closeSlashMenu(); fileMenuEl.classList.add("hidden"); }, 150); });
   inputEl.addEventListener("paste", (e) => {
-    if (!activeTab()) { return; }
-    const d = draftOfTab();
+    if (!activeSession()) { return; }
+    const d = draftOfSession();
     const cd = e.clipboardData; const items = (cd && cd.items) || [];
     let folded = false;
     for (const item of items) {
@@ -3047,35 +2876,37 @@
     if (folded || handledImage) { renderAttachmentsFor(); }
   });
 
-  // 初始：等待扩展推送 tabList / tabActivated
+  // 初始：等待后端推送 sessionList / sessionActivated
 
-  function setStreaming(tab, on) {
-    tab.streaming = on;
-    // tab chip 流式灯：聚合当前 tab 内所有 panel
-    const tv = tabViews.get(activeTabId);
-    if (tv && leavesOf(tv.root).includes(tab.id)) {
-      tv.streaming = leavesOf(tv.root).some((pid) => {
-        const t = tabs.get(pid);
-        return !!t && t.streaming;
-      });
-    }
-    if (activeId === tab.id) { updateSendState(); syncStatus(); }
-    // 非焦点 panel 也在当前 tab 里：停止按钮跟着整 tab 的状态变（焦点 panel 上面已带）
-    else { syncStopBtn(); }
-    renderTabBar(); updatePaneHeads();
+  /**
+   * 某个会话有新消息了（它跑完一轮时你没有在看它）：名字那颗小蓝点亮着，不闪。
+   * 切过去看就灭（见 activateSessionView）。三处都跟着变：顶条、标题下拉框、面板。
+   */
+  function markSessionUnread(st) {
+    if (st.unread) { return; }
+    st.unread = true;
+    renderSessionBar();
+    refreshOpenSessionsInPicker();
   }
-  function setActivity(tab, activity, detail) {
-    tab.activity = activity || (tab.streaming ? "working" : "idle");
-    tab.activityDetail = detail || "";
-    if (activeId === tab.id) { syncStatus(); }
-    renderTabBar();
-    updatePaneHeads();
+
+  function setStreaming(st, on) {
+    st.streaming = on;
+    if (activeId === st.id) { updateSendState(); syncStatus(); }
+    renderSessionBar();
+    syncPaneStatuses();
+    refreshOpenSessionsInPicker();
   }
-  function setPiReady(tab, on, force) {
-    tab.piReady = on;
-    if (activeId === tab.id) { updateSendState(); syncStatus(); }
-    renderTabBar();
-    updatePaneHeads();
+  function setActivity(st, activity, detail) {
+    st.activity = activity || (st.streaming ? "working" : "idle");
+    st.activityDetail = detail || "";
+    if (activeId === st.id) { syncStatus(); }
+    syncPaneStatuses();
+    refreshOpenSessionsInPicker();
+  }
+  function setPiReady(st, on, force) {
+    st.piReady = on;
+    if (activeId === st.id) { updateSendState(); syncStatus(); }
+    syncPaneStatuses();
     // 会话就绪：把"按了回车但没发出去"的那条补发出去（见 flushPendingSend）
     if (on) { flushPendingSend(); }
   }
@@ -3095,135 +2926,76 @@
       return;
     }
 
-    if (type === "tabList") {
-      enterMultiTab();
-      const incoming = msg.tabs || [];
-      const seenTabs = new Set();
-      const seenPanels = new Set();
-      incoming.forEach((t) => {
-        seenTabs.add(t.id);
-        let tv = tabViews.get(t.id);
-        if (!tv) {
-          tv = { id: t.id, name: t.name || "tab", root: t.root, focusPanelId: t.focusPanelId || null };
-          tabViews.set(t.id, tv);
-        } else {
-          tv.name = t.name || tv.name;
-          tv.root = t.root || tv.root;
-          tv.focusPanelId = t.focusPanelId || tv.focusPanelId;
+    if (type === "sessionList") {
+      const incoming = msg.sessions || [];
+      const seen = new Set();
+      const order = [];
+      incoming.forEach((s) => {
+        seen.add(s.id);
+        order.push(s.id);
+        let st = sessions.get(s.id);
+        if (!st) {
+          st = createSession(s.id, s.name || "新会话");
+        } else if (s.name) {
+          st.title = s.name;
         }
-        tv.streaming = !!t.streaming;
-        tv.loading = !!t.loading;
-        // 派子会话：这个 tab 是子会话，或者它派过子会话（前端据此画标记与右键菜单）
-        tv.taba = t.taba || null;
-        // panel 状态同步（递归布局树）
-        const syncNode = (node) => {
-          if (!node) { return; }
-          if (node.kind === "panel") {
-            seenPanels.add(node.panelId);
-            let st = tabs.get(node.panelId);
-            if (!st) {
-              st = createTab(node.panelId, node.name || "新会话");
-            } else if (node.name) {
-              st.title = node.name;
-            }
-            st.streaming = !!node.streaming;
-            const incomingActivity = node.activity;
-            st.activity = incomingActivity === "working" || incomingActivity === "thinking" || incomingActivity === "tool" || incomingActivity === "idle"
-              ? incomingActivity
-              : (st.streaming ? "working" : "idle");
-            st.activityDetail = typeof node.activityDetail === "string" ? node.activityDetail : "";
-            st.piReady = node.piReady !== false;
-            st.loading = !!node.loading;
-            syncSessionLoading(st);
-            // webview 重建（视图隐藏重开/窗口重载）后 tabList 是唯一信源：
-            // modelChanged 是一次性推送，不在此恢复会导致状态栏模型名丢失。
-            // 字段缺失（后端尚未拿到）时保留本地已有值。
-            if (typeof node.modelId === "string") { st.modelId = node.modelId; }
-            if (typeof node.provider === "string") { st.provider = node.provider; }
-            if (typeof node.thinkingLevel === "string") { st.thinkingLevel = node.thinkingLevel; }
-            if (typeof node.percent === "number") { st.percent = node.percent; }
-            st.taba = node.taba || null;
-          } else if (node.kind === "split") {
-            (node.children || []).forEach(syncNode);
-          }
-        };
-        syncNode(t.root);
+        st.parentId = s.parentId || null;
+        // pi 起的标题（没有就空串）；界面上显示名字的地方一律走 sessionLabel()
+        st.piTitle = typeof s.title === "string" ? s.title : "";
+        st.streaming = !!s.streaming;
+        const incomingActivity = s.activity;
+        st.activity = incomingActivity === "working" || incomingActivity === "thinking" || incomingActivity === "tool" || incomingActivity === "idle"
+          ? incomingActivity
+          : (st.streaming ? "working" : "idle");
+        st.activityDetail = typeof s.activityDetail === "string" ? s.activityDetail : "";
+        st.piReady = s.piReady !== false;
+        st.loading = !!s.loading;
+        syncSessionLoading(st);
+        // 界面重建（网页重连、视图隐藏重开、窗口重载）后 sessionList 是唯一信源：
+        // modelChanged 是一次性推送，不在此恢复会导致状态栏模型名丢失。
+        // 字段缺失（后端尚未拿到）时保留本地已有值。
+        if (typeof s.modelId === "string") { st.modelId = s.modelId; }
+        if (typeof s.provider === "string") { st.provider = s.provider; }
+        if (typeof s.thinkingLevel === "string") { st.thinkingLevel = s.thinkingLevel; }
+        if (typeof s.percent === "number") { st.percent = s.percent; }
+        // 派子会话：这个会话是子会话、或者它派过子会话（列表里据此画标记与缩进）
+        st.taba = s.taba || null;
+        // 当前用的会话文件（用来把列表里的历史行标成“已打开”）；路径比法两边同归一化
+        st.sessionFile = typeof s.file === "string" ? s.file : "";
+        // 这个会话跑在哪个目录：面板里按它把会话归到当前显示的那个工作区下面
+        st.cwd = typeof s.cwd === "string" ? s.cwd : "";
       });
-      // 移除已不存在的 tab / panel
-      Array.from(tabViews.keys()).forEach((id) => {
-        if (!seenTabs.has(id)) {
-          tabViews.delete(id);
-          tabDrafts.delete(id);
-          maximized.delete(id);
+      sessionOrder = order;
+      // 已经关掉的会话：把它的壳和草稿一起丢掉
+      Array.from(sessions.keys()).forEach((id) => {
+        if (!seen.has(id)) {
+          if (pendingCloseId === id) { pendingCloseId = null; }
+          removeSession(id);
         }
       });
-      Array.from(tabs.keys()).forEach((id) => {
-        if (!seenPanels.has(id)) { removeTab(id); }
-      });
-      // 活跃 tab 切换 / 焦点同步
+      // 当前会话：后端说切了才切（没切就只刷新状态）
       const wantActive = msg.activeId;
-      if (wantActive && tabViews.has(wantActive)) {
-        if (activeTabId !== wantActive) {
-          if (activeTabId !== null) { saveInputState(); } else { carryComposerToTab(wantActive); }
-          activeTabId = wantActive;
-          const tv = tabViews.get(wantActive);
-          activeId = (tv.focusPanelId && leavesOf(tv.root).includes(tv.focusPanelId))
-            ? tv.focusPanelId
-            : (leavesOf(tv.root)[0] || null);
-          renderLayout();
-          restoreInputState();
-          reflectTabUI();
+      if (wantActive && sessions.has(wantActive)) {
+        if (activeId !== wantActive) {
+          activateSessionView(wantActive);
         } else {
-          const tv = tabViews.get(wantActive);
-          const wantFocus = (tv.focusPanelId && leavesOf(tv.root).includes(tv.focusPanelId))
-            ? tv.focusPanelId
-            : (leavesOf(tv.root)[0] || null);
-          if (wantFocus && wantFocus !== activeId) {
-            activeId = wantFocus;
-            applyFocusClasses();
-            reflectTabUI();
-            renderAttachmentsFor();
-          }
-          const sig = layoutSignature();
-          if (sig !== layoutSig) { renderLayout(); }
+          mountActiveSession();
+          syncPaneStatuses();
         }
+      } else if (!wantActive) {
+        activeId = null;
       }
-      renderTabBar();
-      updateSendState(); syncStatus(); updatePaneHeads();
-      // 刚连上的这一批 tab 里可能已经有就绪的：把排队中的消息发出去
+      renderSessionBar();
+      updateSendState();
+      syncStatus();
+      refreshOpenSessionsInPicker();
+      // 刚连上的这一批会话里可能已经有就绪的：把排队中的消息发出去
       flushPendingSend();
       return;
     }
-    if (type === "tabActivated") {
-      enterMultiTab();
-      const id = msg.id;
-      if (id && tabViews.has(id)) {
-        activateTabView(id);
-      }
-      return;
-    }
-    if (type === "tabClosed") {
-      enterMultiTab();
-      const wasActive = activeTabId === msg.id;
-      tabViews.delete(msg.id);
-      tabDrafts.delete(msg.id);
-      maximized.delete(msg.id);
-      // panel 由后续 tabList diff 清理；先切换视图避免空白
-      if (wasActive) {
-        activeTabId = tabViews.keys().next().value || null;
-        if (activeTabId) {
-          const tv = tabViews.get(activeTabId);
-          activeId = (tv.focusPanelId && leavesOf(tv.root).includes(tv.focusPanelId))
-            ? tv.focusPanelId
-            : (leavesOf(tv.root)[0] || null);
-          renderLayout();
-          restoreInputState();
-          reflectTabUI();
-        } else {
-          activeId = null;
-        }
-      }
-      renderTabBar();
+    if (type === "sessionActivated") {
+      const id = msg.sessionId;
+      if (id && sessions.has(id)) { activateSessionView(id); }
       return;
     }
     if (type === "viewOptions") { applyViewOptions(msg); return; }
@@ -3239,7 +3011,7 @@
           const copy = {};
           for (const k in it) { if (Object.prototype.hasOwnProperty.call(it, k)) { copy[k] = it[k]; } }
           copy.__section = "session";
-          copy.section = st.items.length && st.items[0].section ? st.items[0].section : "会话";
+          copy.section = HISTORY_SECTION;
           return copy;
         });
         if (st.kind === "workspace") {
@@ -3283,25 +3055,20 @@
       }
       return;
     }
-    if (type === "openSettings") { openSettings(msg.tab); return; }
-    if (type === "viewOptionItems") { viewOptionItems = Array.isArray(msg.items) ? msg.items : []; if (settingsActiveTab === "options") { renderViewOpts(); } return; }
+    if (type === "openSettings") { openSettings(); return; }
+    if (type === "viewOptionItems") { viewOptionItems = Array.isArray(msg.items) ? msg.items : []; renderViewOpts(); return; }
     if (type === "focusInput") { setTimeout(function () { inputEl.focus(); }, 0); return; }
     // 宿主（VSCode 的命令入口，比如"发送选中文本"）替用户发一条：当作他打进输入框的，
     // 走同一条路（会话还没就绪就先留着、就绪了自动补发）
     if (type === "sendFromHost") { sendFromHost(msg.text); return; }
-    // 扩展宿主在某个 session 收尾时下发的提示音请求（所有 session 都会收到，不再只看焦点）。
-    if (type === "beep") { if (notifyOnTurnEnd) { playTurnEndBeep(); } return; }
-    if (type === "app:settings" || type === "app:settingsResult" || type === "app:defaultModels") {
-      if (settingsDispatch) {
-        if (type === "app:settings") { settingsDispatch({ type: "load", content: msg.content, existed: msg.existed, path: msg.path }); }
-        else if (type === "app:settingsResult") { settingsDispatch(msg.ok ? { type: "saved" } : { type: "error", error: msg.error }); }
-        else { settingsDispatch({ type: "default", content: msg.content }); }
-      }
-      return;
-    }
-    if (type === "app:probeModelsResult") {
-      if (settingsDispatch) {
-        settingsDispatch({ type: "probeResult", ok: !!msg.ok, models: msg.models || [], error: msg.error });
+    // 宿主在某个会话跑完一轮时下发的消息（所有会话都会收到，带 sessionId）：按显示选项响一声，
+    // 你没在看那个会话就把它标成“有新消息”。子会话不标：它跑完的结果会交回派它的会话，
+    // 那边收到后会再跑一轮，到时候标那边就够了（子会话会挂在父会话下面，标了反而多一颗点）。
+    if (type === "turnEnd") {
+      if (notifyOnTurnEnd) { playTurnEndBeep(); }
+      const done = msg.sessionId ? sessions.get(msg.sessionId) : null;
+      if (done && done.id !== activeId && !(done.parentId && sessions.has(done.parentId))) {
+        markSessionUnread(done);
       }
       return;
     }
@@ -3330,7 +3097,7 @@
       // 符号集合变化后，已渲染消息里的反引号可能需要变成可点击链接：就地补/去掉链接。
       // 注意不能整段重画 .md（会把运行时挂进去的工具标签抹掉，见 applySymbolLinks）；
       // 流式中的活跃消息交给 flush 管线，它下次重画时自然带上新符号集。
-      for (const st of tabs.values()) {
+      for (const st of sessions.values()) {
         if (st.currentAssistant) { st.textDirty = true; scheduleFlush(st); }
         st.paneEl.querySelectorAll(".md").forEach((el) => {
           if (st.currentAssistant && el === st.currentAssistant.el) { return; }
@@ -3340,33 +3107,33 @@
       return;
     }
 
-    // tab 级消息
+    // 会话级消息
     applyPanelMessage(msg);
   });
 
   /**
-   * panel 级消息（带 tabId）：用户消息、流式增量、工具卡片、历史窗口等，逐条应用到对应窗格。
+   * 会话级消息（带 sessionId）：用户消息、流式增量、工具卡片、历史窗口等，逐条应用到对应窗格。
    * 抽成独立函数：网页端「加载更早」那批历史消息会包在 historyBatchEvent 里逐条送来，
    * 渲染进暂存区时也要走同一套分发（见 historyBatchEvent 那个 case）。
    */
   function applyPanelMessage(msg) {
     const type = msg.type;
-    const tabId = msg.tabId;
+    const sessionId = msg.sessionId;
     let t = null;
-    if (tabId) {
-      enterMultiTab();
-      t = tabs.get(tabId) || createTab(tabId, "新会话");
+    if (sessionId) {
+      t = sessions.get(sessionId) || createSession(sessionId, "新会话");
     } else {
-      // 兜底：无 tabId 的消息（后端尚未推送 tabList）时惰性创建默认 tab
-      t = ensureDefaultTab();
+      // 兜底：无 sessionId 的消息（后端尚未推送 sessionList）时用当前会话
+      t = activeSession();
     }
     if (!t) { return; }
-    // 安全网：多 tab 模式下若尚无活跃 tab（tabList 未到的竞态），激活当前面板。
-    // 注意别在这里碰输入框：这时 activeTabId 还是空的（tabList 没到，草稿还没有主），
-    // restoreInputState 会拿空草稿把用户刚打的字冲掉。搬运与恢复交给 tabList 那段做。
-    if (multiTab && !activeId) {
+    // 安全网：界面刚起来、sessionList 还没到时，先把当前会话定下来。
+    // 注意别在这里碰输入框（草稿还没有主）；搬运与恢复交给 sessionList 那段做。
+    if (!activeId) {
       activeId = t.id;
-      reflectTabUI();
+      mountActiveSession();
+      renderSessionBar();
+      reflectSessionUI();
     }
 
     switch (type) {
@@ -3403,8 +3170,8 @@
         t.activity = msg.activity || "idle";
         t.activityDetail = msg.detail || "";
         setStreaming(t, false);
-        // 提示音改由扩展宿主在“一轮真正结束”时下发 beep 消息（见 notifyOnTurnEnd），
-        // 这里不再对焦点 session 单独出声：多 tab / 分屏时后台 session 跑完也能听见。
+        // 提示音与新消息标记改由扩展宿主在“一轮真正结束”时下发 turnEnd 消息
+        // （见 notifyOnTurnEnd），这里不再对当前会话单独出声：后台的会话跑完也能听见。
         break;
       case "activityChanged":
         setActivity(t, msg.activity, msg.detail);
@@ -3473,7 +3240,6 @@
         t._historyBtn = null;
         t.hasMoreHistory = false;
         if (t._stage) { t._stage = null; t._stageDropped = true; }
-        ensurePaneHead(t);
         // 后端可能在 loading 状态中再次 clear（例如切换完成后重绘消息），
         // 不能因此把进行中的加载反馈一并清掉。
         syncSessionLoading(t);
@@ -3483,11 +3249,11 @@
         t.pendingToolCards.clear();
         for (const tg of t.pendingToolTags.values()) { clearInterval(tg._timer); }
         t.pendingToolTags.clear();
-        // 重置当前 tab 的输入草稿（若该 panel 在当前 tab，同步到输入框）。
+        // 重置当前会话的输入草稿（该会话就是当前那个，同步到输入框）。
         // 整屏重画（页面刷新 / 重连后补内容）也走 clear：那种 clear 带 keepDraft，
         // 不能把人打了一半的字和附件抹掉，也不要把键盘拉起来。
         if (!msg.keepDraft && activeId === t.id) {
-          const d = draftOfTab();
+          const d = draftOfSession();
           d.text = "";
           d.height = INPUT_MIN_HEIGHT;
           d.images = [];
@@ -3532,7 +3298,7 @@
         t.modelId = msg.modelId || "";
         t.provider = msg.provider || "";
         if (activeId === t.id) { syncStatus(); }
-        updatePaneHeads();
+        syncPaneStatuses();
         break;
       case "thinkingChanged":
         t.thinkingLevel = msg.level || "";
@@ -3547,7 +3313,7 @@
           if (typeof cu.contextWindow === "number") { t.contextWindow = cu.contextWindow; }
         }
         if (activeId === t.id) { syncStatus(); }
-        updatePaneHeads();
+        syncPaneStatuses();
         break;
       }
       case "queueUpdate":
@@ -3579,7 +3345,7 @@
         const inner = msg.event && typeof msg.event === "object" ? msg.event : null;
         if (!inner) { break; }
         if (!t._stage) { t._stage = document.createElement("div"); }
-        inner.tabId = msg.tabId;
+        inner.sessionId = msg.sessionId;
         const realPane = t.paneEl;
         const savedStick = t.stickToBottom;
         const savedProgrammatic = t.programmaticScroll;
@@ -3623,13 +3389,11 @@
         if (btn.disabled || t._stage) { return; }
         btn.disabled = true;
         btn.textContent = "加载中…";
-        vscode.postMessage({ type: "loadOlderHistory", tabId: t.id });
+        vscode.postMessage({ type: "loadOlderHistory", sessionId: t.id });
       });
       t._historyBtn = btn;
-      // 面板头（拖动条）永远留在最顶上，按钮排在它后面
-      const head = pane.querySelector(":scope > .pane-head");
-      if (head) { pane.insertBefore(btn, head.nextSibling); }
-      else { pane.insertBefore(btn, pane.firstChild); }
+      // 「加载更早」按钮永远留在窗格最顶上，往后渲染的消息都排在它后面。
+      pane.insertBefore(btn, pane.firstChild);
     }
     btn.disabled = false;
     btn.textContent = "加载更早的消息" + (hidden > 0 ? "（还有 " + hidden + " 条）" : "");
@@ -3658,9 +3422,7 @@
     if (btn && btn.parentNode === pane) {
       anchor = btn.nextSibling;
     } else {
-      // 没按钮就插在面板头后面（面板头永远留在最顶上）
-      const head = pane.querySelector(":scope > .pane-head");
-      anchor = head ? head.nextSibling : pane.firstChild;
+      anchor = pane.firstChild;
     }
     const beforeHeight = pane.scrollHeight;
     while (stage.firstChild) { pane.insertBefore(stage.firstChild, anchor); }
@@ -3670,53 +3432,23 @@
     }
   }
 
-  function removeTab(id) {
-    const st = tabs.get(id);
+  function removeSession(id) {
+    const st = sessions.get(id);
     if (!st) { return; }
     cancelFlush(st);
     if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); }
     for (const tg of st.pendingToolTags.values()) { clearInterval(tg._timer); }
-    st.paneEl.remove();
-    tabs.delete(id);
+    st.viewEl.remove();
+    sessions.delete(id);
+    sessionDrafts.delete(id);
     if (activeId === id) { activeId = null; syncJumpBottom(st); syncStopBtn(); }
   }
 
-  // ==================== 设置（models.json）浮层 ====================
+  // ==================== 设置浮层（插件选项）====================
+  // 模型（models.json）从这里撤了：那是 pi 自己的配置，插件不再读写它，界面上也不再出现。
   const settingsOverlay = document.getElementById("settingsOverlay");
-  const settingsRoot = document.getElementById("settingsRoot");
-  let settingsInstance = null;
-  let settingsDispatch = null;
-  let settingsActiveTab = "models";
   let viewOptionItems = [];
   const viewOptsRoot = document.getElementById("viewOptsRoot");
-
-  function ensureSettingsMounted() {
-    if (settingsInstance) { return; }
-    settingsInstance = window.mountSettings(settingsRoot, {
-      send(type, payload) {
-        if (type === "save") { vscode.postMessage({ type: "app:saveSettings", content: (payload && payload.content) || "" }); }
-        else if (type === "probeModels") {
-          vscode.postMessage({
-            type: "app:probeModels",
-            baseUrl: (payload && payload.baseUrl) || "",
-            apiKey: (payload && payload.apiKey) || "",
-            api: (payload && payload.api) || "",
-          });
-        }
-        else { vscode.postMessage({ type: "app:requestSettings" }); } // ready
-      },
-      on(handler) { settingsDispatch = handler; },
-      onClose() { closeSettings(); },
-    });
-  }
-
-  function applySettingsTab() {
-    document.querySelectorAll(".settings-tab").forEach((b) => {
-      b.classList.toggle("active", b.dataset.tab === settingsActiveTab);
-    });
-    settingsRoot.classList.toggle("hidden", settingsActiveTab !== "models");
-    viewOptsRoot.classList.toggle("hidden", settingsActiveTab !== "options");
-  }
 
   function renderViewOpts() {
     viewOptsRoot.innerHTML = "";
@@ -3792,32 +3524,17 @@
     row.appendChild(reset);
   }
 
-  function openSettings(tab) {
-    const wasVisible = !settingsOverlay.classList.contains("hidden");
-    settingsActiveTab = tab === "options" ? "options" : "models";
-    ensureSettingsMounted();
-    applySettingsTab();
-    if (!wasVisible && settingsActiveTab === "models") { settingsInstance.requestInitial(); }
-    if (settingsActiveTab === "options") {
-      vscode.postMessage({ type: "requestViewOptionItems" });
-      renderViewOpts();
-    }
+  function openSettings() {
+    // 每次打开都重问一遍选项的当前值：真正存着的是后端那份插件设置，
+    // 别的窗口 / 别的设备改过之后，这边不能拿着旧值显示。
+    vscode.postMessage({ type: "requestViewOptionItems" });
+    renderViewOpts();
     settingsOverlay.classList.remove("hidden");
   }
   function closeSettings() {
     settingsOverlay.classList.add("hidden");
   }
   settingsOverlay.addEventListener("click", (e) => { if (e.target === settingsOverlay) { closeSettings(); } });
-  document.querySelectorAll(".settings-tab").forEach((b) => {
-    b.addEventListener("click", () => {
-      const t = b.dataset.tab;
-      if (!t || t === settingsActiveTab) { return; }
-      settingsActiveTab = t;
-      if (t === "models") { ensureSettingsMounted(); }
-      applySettingsTab();
-      if (t === "options") { vscode.postMessage({ type: "requestViewOptionItems" }); renderViewOpts(); }
-    });
-  });
   const settingsCloseBtn = document.getElementById("settingsClose");
   if (settingsCloseBtn) { settingsCloseBtn.addEventListener("click", closeSettings); }
 

@@ -5,7 +5,6 @@
  *   - 设置从 `~/.pi/pichat/config.json` 读（人改的），显示选项存 `state.json`（界面改的）；
  *   - 默认工作目录就是起后端时指定的目录（--cwd，默认你敲命令时所在的目录）；
  *   - 弹窗只有页面可问（问不着就按"否 / 取消"，宁可不动也不乱来）；
- *   - 会话跑完照样弹 Windows 系统通知（走 turnToast，不依赖 VSCode）；
  *   - 编辑器才有的那些（点开文件、符号跳转）派给连上来的 VS Code 窗口（见基类的 routeToScreen）。
  *
  * 页面连接的登记、断线补发、浮层该弹哪块屏、活该派给哪个窗口这些跟 VSCode 无关的事
@@ -15,17 +14,11 @@ import { ChatHostBase } from "./chatHostBase";
 import { ServerStateStore } from "./serverState";
 import { readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
 import { getTabaAssets } from "./tabaAssets";
-import { TurnToast } from "./turnToast";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
-import type { TurnEndInfo } from "./runtimeTypes";
 
 export interface ServerChatHostOptions {
     /** 默认工作目录（会话默认跑在这里）。 */
     cwd: string;
-    /** 本后端的版本号（写地址文件、登记通知标识用）。 */
-    version: string;
-    /** 通知的应用标识（登记中，是个承诺）。 */
-    toastAppId?: string | Promise<string>;
     /** 日志出口（默认打标准输出）。 */
     log?: (text: string) => void;
     /** 设置与状态文件的目录（测试里换掉；默认 ~/.pi/pichat）。 */
@@ -36,7 +29,6 @@ export class ServerChatHost extends ChatHostBase {
     private readonly state: ServerStateStore;
     private readonly log: (text: string) => void;
     private readonly dir?: string;
-    private toast?: TurnToast;
     private disposed = false;
 
     constructor(private readonly options: ServerChatHostOptions) {
@@ -73,7 +65,6 @@ export class ServerChatHost extends ChatHostBase {
             case ServerChatHost.KEY_FOCUS_INPUT_KEY: return cfg.focusInputKey;
             case ServerChatHost.KEY_NOTIFY_BEEP: return cfg.notifyBeep;
             case ServerChatHost.KEY_AUTO_LOAD_LAST: return cfg.autoLoadLast;
-            case ServerChatHost.KEY_TURN_TITLE_WAIT: return cfg.turnTitleWaitSeconds;
             default: return undefined;
         }
     }
@@ -138,26 +129,10 @@ export class ServerChatHost extends ChatHostBase {
         return false;
     }
 
-    // ---- 会话跑完的系统通知 ----
-    protected override notifyTurnEnd(info: TurnEndInfo): void {
-        if (!this.toast) {
-            this.toast = new TurnToast({
-                appUserModelId: this.options.toastAppId,
-                onBatchFailed: (_batch, reason) => {
-                    // 通知发不出去时至少留一行日志：不然"会话跑完了没动静"没人查得出来。
-                    this.log(`[提醒] Windows 系统通知没发出去：${reason}`);
-                },
-            });
-        }
-        this.toast.handleTurnEnd(info);
-    }
-
-    /** 收摊：停掉所有 pi 进程、收掉通知中心（网页服务的收摊由启动器负责）。 */
+    /** 收摊：停掉所有 pi 进程（网页服务的收摊由启动器负责）。 */
     public dispose(): void {
         if (this.disposed) { return; }
         this.disposed = true;
-        this.toast?.dispose();
-        this.toast = undefined;
         this.disposeAllConversations();
     }
 }

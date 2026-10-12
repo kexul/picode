@@ -20,10 +20,6 @@ export const DEFAULT_THEME_MODE: "light" | "dark" = "light";
 export const DEFAULT_NOTIFY_BEEP = true;
 export const DEFAULT_AUTO_LOAD_LAST = false;
 
-/** 收尾提醒最多等 pi 会话标题的秒数（显示选项里的按钮组）。 */
-export const TURN_TITLE_WAIT_CHOICES = [0, 1, 3, 5, 10] as const;
-export const DEFAULT_TURN_TITLE_WAIT_SECONDS = 3;
-
 /** 取候选列表里的下一个值（用在“点一下换下一个”的按钮上）；当前值不在列表里就从第一个开始。 */
 export function nextInList(list: readonly string[], current: string): string {
     const at = list.indexOf(current);

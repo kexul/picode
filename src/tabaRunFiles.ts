@@ -16,8 +16,8 @@ import type { TabaChild } from "./tabaRegistry";
 /** 名录文件的格式版本；两边不一致就当作认不出来。 */
 export const TABA_RUN_FILE_VERSION = 1;
 
-/** 名录里记的状态：登记表那几个状态，加上"tab 已关闭"。 */
-export type TabaRunState = TabaChild["state"] | "closed";
+/** 名录里记的状态：登记表那几个状态，加上两款“tab 已关闭”。 */
+export type TabaRunState = TabaChild["state"] | "closed" | "closed_done";
 
 /** 名录文件里的一条记录（桥扩展那边读的就是这个结构）。 */
 export interface TabaRunRecord {
@@ -54,7 +54,7 @@ export function runFilePath(runsDir: string, id: string): string {
     return path.join(runsDir, `${id}.json`);
 }
 
-/** 状态的人话说法（含"tab 已关闭"这一档）。 */
+/** 状态的人话说法（含两款“tab 已关闭”）。 */
 export function runStateText(state: TabaRunState): string {
     switch (state) {
         case "starting": return "正在开";
@@ -62,6 +62,7 @@ export function runStateText(state: TabaRunState): string {
         case "waiting": return "第一轮跑完了，tab 还留着";
         case "error": return "第一轮出错了";
         case "detached": return "已经变成独立会话";
+        case "closed_done": return "第一轮跑完了，结果已交回，tab 已经关掉";
         case "closed": return "tab 已经关闭";
         default: return String(state);
     }
@@ -77,6 +78,15 @@ export function makeLastReplyPreview(text: string, maxChars = 200): string {
     const at = Math.max(cut.lastIndexOf("。"), cut.lastIndexOf("；"), cut.lastIndexOf(" "), cut.lastIndexOf("."));
     if (at >= Math.floor(maxChars * 0.5)) { cut = cut.slice(0, at); }
     return cut.trim() + "…";
+}
+
+/**
+ * 关掉一个 tab 时，名录里该写哪一档“已关闭”。
+ * 第一轮已经跑完而且结果交回过，就跟“没跑完就被关掉”分开写：
+ * 不分开的话，模型回头看名录会以为活没干完。
+ */
+export function closedRunState(child: Pick<TabaChild, "endedAt" | "deliveries">): TabaRunState {
+    return child.endedAt !== undefined && child.deliveries > 0 ? "closed_done" : "closed";
 }
 
 /** 造一条名录记录（不写盘）。 */

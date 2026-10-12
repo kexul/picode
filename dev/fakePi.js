@@ -53,6 +53,8 @@ const SAMPLE_PNG_BASE64 =
 /** 本会话的消息历史（get_messages 原样给出去；形状照抄真 pi 的会话文件）。 */
 const messages = [];
 let seq = 0;
+/** 剧本自己的状态（比如“标题已经报过了”）：不进行消息历史。 */
+const scriptState = {};
 const nextId = (prefix) => `${prefix}-${++seq}-${Date.now().toString(36)}`;
 const sleep = (ms) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
 
@@ -76,6 +78,20 @@ function respond(id, command, data) {
 async function runScript(userText) {
     const emit = (evt) => write(evt);
     const now = () => new Date().toISOString();
+
+    // 用户的话里带“派活”就假装模型调了 taba_spawn（子会话收到的任务正文里也有“派活”两个字，
+    // 那种要排除掉，不然子进程也会发一条）：往 stderr 写一行暗号（格式与真扩展一致，
+    // 见 src/tabaProtocol.ts）。这条路径能验到：新开后台会话、父子关系、列表里缩进。
+    if (/派活/.test(userText) && !/【任务】/.test(userText) && !scriptState.spawnSent) {
+        scriptState.spawnSent = true;
+        const frame = "##PICHAT_TABA##" + Buffer.from(JSON.stringify({
+            kind: "spawn",
+            id: "deadbeef",
+            name: "假子会话",
+            task: "看看子会话在列表里会不会缩进",
+        }), "utf8").toString("base64");
+        process.stderr.write(frame + "\n");
+    }
 
     emit({ type: "agent_start" });
 
@@ -182,6 +198,18 @@ async function runScript(userText) {
     messages.push(assistantMsg);
     emit({ type: "message_end", message: assistantMsg });
     emit({ type: "agent_end", messages });
+    // 假装装了一个自动命名扩展：第一轮跑完后把会话标题报上来（真 pi 里是扩展发的）。
+    // 界面顶条中间那行 / 会话列表都读这个标题；没标题时才回落随机名。
+    if (!scriptState.titleSent) {
+        scriptState.titleSent = true;
+        const firstUser = messages.find((m) => m && m.role === "user");
+        const firstText = firstUser && Array.isArray(firstUser.content)
+            ? (firstUser.content.find((c) => c && c.type === "text") || {}).text
+            : "";
+        const title = "假标题：" + String(firstText || "新会话").replace(/s+/g, " ").trim().slice(0, 12);
+        messages.push({ role: "system", content: [{ type: "text", text: "会话标题已设置" }], sessionName: title });
+        emit({ type: "session_info_changed", name: title });
+    }
     emit({ type: "agent_settled" });
 }
 
@@ -207,6 +235,8 @@ function applyFakeEdit(args) {
 async function handle(cmd) {
     const id = cmd.id;
     switch (cmd.type) {
+        // 剧本（每轮照着演一遍）：1 说一句 → 2 read 图 → 3 bash → 4 edit → 5 收尾。
+        // 用户这句话里带“派活”时，先往 stderr 写一行暗号（假扮模型调了 taba_spawn）。
         case "prompt": {
             // 真 pi：preflight 成功先回一次 response，然后事件流，最后 agent_settled
             respond(id, "prompt", { disposition: "handled" });

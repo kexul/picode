@@ -1,8 +1,8 @@
 /**
- * names —— tab / panel 的随机中文命名（"形容词的noun"，如"沉静的雪豹"）。
+ * names —— 会话的随机中文命名（"形容词的noun"，如"沉静的雪豹"）。
  *
- * 创建时一次性分配，之后永不变化：panel 名（pane-head）与 tab 栏派生名稳定可认。
- * tab 栏显示规则由宿主派生（见 chatControllerBase.containerDisplayName）：
+ * 创建时一次性分配，之后永不变化：会话窗口、会话列表里看到的都是它。
+ * 会话显示规则由宿主派生（见 chatControllerBase.sessionDisplayName）：
  * 单 panel → 完整名；多 panel → 布局序名词以 "·" 拼接（形容词不参与）。
  */
 
