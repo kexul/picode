@@ -53,13 +53,17 @@ export function renderHTML(opts: RenderHTMLOpts): string {
 
     const head = opts.extraHead ? `  ${opts.extraHead}\n` : "";
     // 顶条：左边加号，中间一列（上头会话名、底下当前目录），右边两颗网页端按钮。
-    // 中间那一列包成 #sessionCenter：路径行就落在会话名正下方，两者一样宽、都居中。
+    // 中间那一列包成 #sessionCenter（一块可点区域）：里头那颗按钮装着两行——会话名在上、
+    // 路径在下。那颗小点与箭头也是这颗按钮里的两头，跟两行整体居中（不是只对着会话名那一行）。
+    // 路径行用 span 不用 div：按钮里只允许放行内内容。
     const sessionBar =
     `  <div id="sessionBar">\n` +
     `    <button id="newSessionBtn" title="新建会话 (Ctrl+Alt+N)" aria-label="新建会话">${ICON_ADD}</button>\n` +
     `    <div id="sessionCenter">\n` +
-    `      <button id="sessionName" title="当前会话 · 点这里换会话" aria-label="当前会话"><span class="sn-dot"></span><span class="sn-text"></span></button>\n` +
-    `      <div id="sessionPath" class="hidden"><span class="sp-text"></span></div>\n` +
+    `      <button id="sessionName" title="当前会话 · 点这里换会话" aria-label="当前会话">\n` +
+    `        <span class="sn-dot"></span>\n` +
+    `        <span class="sn-lines"><span class="sn-title"><span class="sn-text"></span></span><span id="sessionPath" class="hidden"><span class="sp-text"></span></span></span>\n` +
+    `      </button>\n` +
     `    </div>\n` +
     `    <div id="sessionBarTail"></div>\n` +
     `  </div>\n`;

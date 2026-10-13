@@ -10,6 +10,8 @@
  *   3 子会话跑完等着（waiting）    → 不亮
  *   4 子会话在跑 + 别的会话有新消息 → 亮、呼吸（呼吸优先，不变成不闪的那种）
  *   5 本会话自己在跑                → 亮、呼吸（老样子）
+ * 最后再量一下位置：那颗点与箭头是贴着“会话名 + 目录两行”整体居中的，
+ * 不是只贴着会话名那一行（目录行收起来时它们才回到名字上）。
  *
  *   npm run web:shot -- --width 900 --height 620 --script dev/childDot.js
  * 图落在 dev/shots/（名字带 child-dot-）。
@@ -143,5 +145,39 @@ module.exports = async (page) => {
       `（按钮类名 "${got.cls}"，顶条中间写着「${got.center}」）→ ${path.basename(file)}`
     );
   }
-  if (bad > 0) { throw new Error(`有 ${bad} 个情形画得不对（见上面 × 那几行）`); }
+
+  // ---- 那颗点与箭头落在哪一行：都该贴着“两行合起来”那条的中线 ----
+  // 以前它们是贴着会话名那一行居中的（看着偏上）；现在两行都在同一颗按钮里，
+  // 点与箭头跟着这颗按钮上下居中。量之前先把两样都弄出来：本会话在跑（点亮），
+  // 清单里两个主会话（箭头才露面）。
+  await inject([
+    session({ streaming: true, title: "长尾 drop 门审计与 +19072 全 0 结案" }),
+    other(),
+  ]);
+  const pos = await page.eval(`
+    const btn = document.getElementById("sessionName");
+    const mid = (el) => { const r = el.getBoundingClientRect(); return (r.top + r.bottom) / 2; };
+    const dotMid = ["#sessionName .sn-dot", "#sessionName .sn-caret"].map((sel) => mid(btn.querySelector(sel)));
+    return {
+      dotMid,
+      linesMid: mid(btn.querySelector(".sn-lines")),
+      nameMid: mid(btn.querySelector(".sn-text")),
+      pathMid: mid(document.getElementById("sessionPath")),
+      pathVisible: getComputedStyle(document.getElementById("sessionPath")).display !== "none",
+    };
+  `);
+  for (const [i, what] of ["小点", "箭头"].entries()) {
+    const off = pos.dotMid[i] - pos.linesMid;
+    // 三件事：目录行得在（不然只剩一行，“两行中间”无从谈起）；
+    // 点 / 箭头的中心跟两行那块的中心齐（差 1px 以内）；它得在会话名那行之下、目录那行往上。
+    const ok = pos.pathVisible && Math.abs(off) <= 1
+      && pos.dotMid[i] > pos.nameMid && pos.dotMid[i] < pos.pathMid;
+    if (!ok) { bad++; }
+    console.log(
+      `${ok ? "√" : "×"} ${what}竖直位置：落在两行中间（两行中线 ${pos.linesMid.toFixed(1)}，它在 ${pos.dotMid[i].toFixed(1)}，` +
+      `会话名那行中线 ${pos.nameMid.toFixed(1)}、目录那行 ${pos.pathMid.toFixed(1)}，差 ${off.toFixed(1)}px` +
+      (pos.pathVisible ? "）" : "；目录行没显示）")
+    );
+  }
+  if (bad > 0) { throw new Error(`有 ${bad} 处画得不对（见上面 × 那几行）`); }
 };

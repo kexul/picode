@@ -79,7 +79,9 @@
   // 顶条中间那一列（会话名 + 底下那行目录）：点哪一行都掉出同一张清单。
   // 挂在整列上而不是名字那颗按钮上：两行都得是可点区域；按钮上按回车出来的点击也会冒到这里。
   sessionCenterEl.addEventListener("click", () => { toggleSessionMenu(); });
-  // 名字后面那颗朝下的小箭头：只在开着两个以上会话时露面（提示这里点得开、能换）。
+  // 两行右边那颗朝下的小箭头：只在开着两个以上会话时露面（提示这里点得开、能换）。
+  // 挂在装着两行的这颗按钮上（它是按钮里最后一个孩子，所以落在右边）：
+  // 竖直方向跟着两行一起居中，不单对着会话名那一行（见 chat.css 的 #sessionName）。
   // 画的还是那份 chevron（画的是朝右），转 90° 成朝下。
   const sessionCaret = document.createElement("span");
   sessionCaret.className = "sn-caret hidden";
@@ -606,7 +608,7 @@
     sessionCaret.classList.toggle("hidden", sessionMenuItems().length < 2);
     // 清单开着的时候它会跟着变（换会话、改标题、某个会话跑完了）：重画完还要重新摆——
     // 内容变宽变窄了，贴着屏幕边的位置就不对了。
-    if (sessionMenuOpen) { renderSessionMenu(); placeSessionMenu(); }
+    refreshSessionMenu();
   }
 
   // ==================== 顶条那颗会话名的下拉框 ====================
@@ -649,37 +651,76 @@
     return openSessionItems().filter((item) => !item.depth);
   }
 
-  /** 画一遍清单内容：开着的主会话一行一个。 */
+  /** 画一遍清单内容：开着的主会话一行一个（行尾一颗关闭叉，点了先变确认条，再点一下才真关）。 */
   function renderSessionMenu() {
     sessionMenuEl.innerHTML = "";
     sessionMenuItems().forEach((item) => {
       const el = document.createElement("div");
       el.className = "sm-item" + (item.current ? " current" : "");
       el.title = (item.label || "") + (item.cwd ? "\n" + item.cwd : "");
-      const dot = document.createElement("span");
-      dot.className = "sm-dot" + openDotClass(item);
-      el.appendChild(dot);
-      // 一行两段：上面会话名，下面它跑在哪个目录（子会话不在这个清单里）
-      const body = document.createElement("div");
-      body.className = "sm-body";
-      const name = document.createElement("span");
-      name.className = "sm-name";
-      name.textContent = item.label || "";
-      body.appendChild(name);
-      if (item.cwd) {
-        const dir = document.createElement("span");
-        dir.className = "sm-path";
-        dir.textContent = item.cwd;
-        body.appendChild(dir);
+      if (item.pendingClose) {
+        // 点过行尾那颗叉：整行换成「关闭「名字」？ 关闭 / 取消」，跟普通行长得完全不一样，防误触。
+        el.classList.add("sm-confirm");
+        const ask = document.createElement("span");
+        ask.className = "sm-ask";
+        ask.textContent = "关闭「" + (item.label || "") + "」？";
+        el.appendChild(ask);
+        const yes = document.createElement("button");
+        yes.type = "button"; yes.className = "sm-yes"; yes.textContent = "关闭";
+        yes.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(item.sessionId); });
+        const no = document.createElement("button");
+        no.type = "button"; no.className = "sm-no"; no.textContent = "取消";
+        no.addEventListener("click", (e) => {
+          e.stopPropagation();
+          pendingCloseId = null;
+          if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
+          pendingCloseTimer = null;
+          refreshSessionMenu();
+        });
+        el.appendChild(yes); el.appendChild(no);
+      } else {
+        const dot = document.createElement("span");
+        dot.className = "sm-dot" + openDotClass(item);
+        el.appendChild(dot);
+        // 一行两段：上面会话名，下面它跑在哪个目录（子会话不在这个清单里）
+        const body = document.createElement("div");
+        body.className = "sm-body";
+        const name = document.createElement("span");
+        name.className = "sm-name";
+        name.textContent = item.label || "";
+        body.appendChild(name);
+        if (item.cwd) {
+          const dir = document.createElement("span");
+          dir.className = "sm-path";
+          dir.textContent = item.cwd;
+          body.appendChild(dir);
+        }
+        el.appendChild(body);
+        // 行尾不再挂「当前」/「在跑」：当前那条整行有底色，在跑 / 有新消息看名字前头那颗小点。
+        // 行尾这颗叉：点行是切过去（大目标），点叉才关（还要再确认一下）。
+        const close = document.createElement("span");
+        close.className = "sm-close";
+        close.title = "关闭这个会话";
+        close.setAttribute("aria-label", "关闭这个会话");
+        close.innerHTML = ICONS["close-bold"];
+        close.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(item.sessionId); });
+        el.appendChild(close);
+        el.addEventListener("click", () => {
+          closeSessionMenu();
+          if (!item.current) { vscode.postMessage({ type: "switchSession", sessionId: item.sessionId }); }
+        });
       }
-      el.appendChild(body);
-      // 行尾不再挂「当前」/「在跑」：当前那条整行有底色，在跑 / 有新消息看名字前头那颗小点。
-      el.addEventListener("click", () => {
-        closeSessionMenu();
-        if (!item.current) { vscode.postMessage({ type: "switchSession", sessionId: item.sessionId }); }
-      });
       sessionMenuEl.appendChild(el);
     });
+  }
+
+  /** 清单开着就重画一遍（关会话的确认条变来变去）；重画完还得重新摆位（内容宽窄变了）。 */
+  function refreshSessionMenu() {
+    if (!sessionMenuOpen) { return; }
+    // 行都关没了就先收起这张空壳（全关完时后端会补一个空会话，等新列表到了再说）
+    if (!sessionMenuItems().length) { closeSessionMenu(); return; }
+    renderSessionMenu();
+    placeSessionMenu();
   }
 
   function openSessionMenu() {
@@ -2114,8 +2155,10 @@
         pendingCloseId = null;
         pendingCloseTimer = null;
         refreshOpenSessionsInPicker();
+        refreshSessionMenu();
       }, 4000);
       refreshOpenSessionsInPicker();
+      refreshSessionMenu();
       return;
     }
     if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }

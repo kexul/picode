@@ -60,11 +60,16 @@ npm run web:shot -- --width 1000 --height 760 --script dev/toolMerge.js
 # 验会话那套（顶条名字跟着 pi 标题变 / 切会话 / 列表里关会话）：
 npm run web:shot -- --fake-pi --script dev/sessionFlow.js
 
+# 验顶条会话名下拉框里每行那颗关闭叉（点叉先出确认条，再点「关闭」才真关；
+# 点「取消」或者干等 4 秒，确认条自己收回）：
+npm run web:shot -- --fake-pi --script dev/sessionMenuClose.js
+
 # 验派子会话（说一句带“派活”的话就会派一个）：跑完自动关、没跑完不关、
 # 正看着就不关；子会话跑得比人手快，配慢一点儿的假 pi 才来得及点进去
 FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaFlow.js
 
-# 验顶条中间那颗小点（本会话闲着、派出去的子会话还在跑时也亮着呼吸；投假会话列表，不真派活）：
+# 验顶条中间那颗小点（本会话闲着、派出去的子会话还在跑时也亮着呼吸；
+# 小点与箭头是落在“会话名 + 目录两行”中间，不是只对着会话名那一行；投假会话列表，不真派活）：
 npm run web:shot -- --width 900 --height 620 --script dev/childDot.js
 
 # 验「模型的思考也显示成工具行里的一种条目」（当场生成 / 刷新重放 / 同批两段收成一个带次数的标签）：
@@ -160,11 +165,12 @@ node dev/markdownBlocksCheck.js
 | `visit.js` | `npm run web:shot` 的入口：按动作跑一遍并截图 |
 | `focusCheck.js` | 验“每块屏各看各的会话”（两块浏览页面 + 模拟的 VSCode 窗口）：`node dev/focusCheck.js` |
 | `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接）：`node dev/reconnect.js` |
-| `childDot.js` | 验顶条那颗小点（子会话在跑时父会话那颗点也呼吸）：`npm run web:shot -- --script dev/childDot.js` |
+| `childDot.js` | 验顶条那颗小点（子会话在跑时父会话那颗点也呼吸；它与箭头落在两行中间）：`npm run web:shot -- --script dev/childDot.js` |
 | `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |
 | `continueBtn.js` | 验输入框角上的「继续」（点它发一条“继续”、打的字留着、生成中换成“停止生成”）：`FAKEPI_THINK_MS=1200 npm run web:shot -- --fake-pi --script dev/continueBtn.js` |
 | `askQuestion.js` | 验 `ask_choice`（模型问你选择题）：真模型 → 真 pi（插件给它 `-e` 了桥扩展）→ 浮层 → 回话文件 → 工具结果，单选 / 多选 / 自己写三条路 |
 | `askDialog.js` + `askDialogTrigger.ts` | 验“要你打字 / 要你点是或否”两个框（页面自己画的）与普通的“选一个”列表：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |
+| `sessionMenuClose.js` | 验顶条会话名下拉框里每行的关闭叉（确认条 / 取消 / 超时 / 真关掉）：`npm run web:shot -- --fake-pi --script dev/sessionMenuClose.js` |
 | `options.js` | 两条命令共用的命令行参数 |
 | `fakePi.js` | 假的 pi（`--fake-pi` 用）：协议跟真 pi 一样，模型换成按剧本演戏，界面调试秒回 |
 | `fake-pi.cmd` / `.sh` | 上面那个的包装：Windows 上 piPath 得是 .cmd 才能被 shell 起来 |
