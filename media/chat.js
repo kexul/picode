@@ -1202,6 +1202,7 @@
       // plusAt / plusEl：这条标签上「+1」小动画的上一次时间与正在飘的那个（见 popPlusOne）
       g = { row, tag, nameEl, countEl, name: toolName, entries: [], plusAt: 0, plusEl: null };
       tag._tipFill = (content) => fillGroupTip(g, content);
+      tag._tipGroup = g;   // 提示框那边靠它看这组还在不在长（见 tipContentIsGrowing）
       attachTagTipHandlers(tag);
       batch.byName.set(toolName, g);
       mountToolTag(st, tag);
@@ -1453,13 +1454,27 @@
   // 内容区分两块：调用一行（输入）、结果一块稍深底色（输出）。
   const TAG_TIP_DELAY_MS = 200; // 电脑上悬浮多久后出现
   const TAG_TIP_HIDE_GRACE_MS = 150; // 电脑上鼠标离开后宽限多久再收（移进提示框的间隙不闪没）
+  // 还在长的内容（正在想的思考、正在跑的工具）多久重画一次。
+  // 为什么不像别的更新那样“一变就重画”：重画一次等于把提示框内容整个重排一次，代价随内容长度涨
+  // （上十万字的思考一次就好几毫秒），思考/工具的增量却是一秒几十条 —— 每条都来一次就能把主线程占满，
+  // 卡到浏览器报「页面无响应」（复现与量法见 dev/thinkTipPerf.js）。所以长的内容按固定间隔重画，
+  // 短内容（几百字，排版不到一毫秒）照旧每变必画。
+  const TAG_TIP_STREAM_MIN_CHARS = 4000;
+  const TAG_TIP_STREAM_INTERVAL_MS = 300;
   let tagTipEl = null;      // 外框
   let tagTipContent = null; // 内容区（可滚动）
   let tagTipTimer = 0;      // 电脑上的悬浮延迟计时
   let tagTipHideTimer = 0;  // 电脑上的鼠标离开宽限计时
+  let tagTipPaintTimer = 0; // 节流：攒着的下一次重画（下一帧再定画不画）
+  let tagTipPaintAt = 0;    // 上一次重画的时刻（performance.now）
+  let tagTipFollow = true;  // 还在长的内容要不要跟着贴底（用户往回滚过就不跟了）
   let tagTipTag = null;
 
+  function cancelTagTipPaint() {
+    if (tagTipPaintTimer) { cancelAnimationFrame(tagTipPaintTimer); tagTipPaintTimer = 0; }
+  }
   function hideTagTip() {
+    cancelTagTipPaint();
     if (tagTipHideTimer) { clearTimeout(tagTipHideTimer); tagTipHideTimer = 0; }
     if (tagTipTimer) { clearTimeout(tagTipTimer); tagTipTimer = 0; }
     tagTipTag = null;
@@ -1515,19 +1530,58 @@
           tagTipEl.addEventListener("mouseenter", cancelTagTipHide);
           tagTipEl.addEventListener("mouseleave", scheduleTagTipHide);
         }
+        // 用户自己往回滚了（滚到离底还远的地方）就不再跟着新内容往下走
+        tagTipContent.addEventListener("scroll", () => {
+          if (tagTipContent.scrollHeight - tagTipContent.scrollTop - tagTipContent.clientHeight > 8) { tagTipFollow = false; }
+        });
       }
-      fillTagTip(tag);
       tagTipEl.classList.remove("hidden");
-      placeTagTip(tagTipEl, tag);
+      tagTipFollow = true;   // 这次打开从“跟着最新一段走”开始
+      paintTagTip(tag, tipContentIsGrowing(tag));
     };
     // 触屏设备没有悬浮：点一下是明确动作，立即显示；电脑上悬浮短暂停留后再显示
     if (IS_TOUCH_DEVICE) { render(); } else { tagTipTimer = setTimeout(render, TAG_TIP_DELAY_MS); }
   }
-  /** 显示期间内容更新（如结果刚到）时，刷新正在显示的提示内容与位置。 */
+  /** 显示期间内容更新（思考增量、结果刚到）时，刷新正在显示的提示内容与位置。
+   *  内容还在长、又已经很长时按 TAG_TIP_STREAM_INTERVAL_MS 节流（见上面常量的说明）。 */
   function refreshTagTipIfShowing(tag) {
     if (tagTipTag !== tag || !tagTipEl || tagTipEl.classList.contains("hidden")) { return; }
+    const growing = tipContentIsGrowing(tag);
+    if (growing) {
+      const wait = TAG_TIP_STREAM_INTERVAL_MS - (performance.now() - tagTipPaintAt);
+      if (wait > 0) {
+        // 还没到该画的点：先攒着，下一帧再定（这几帧里到的增量就并成一次重画）
+        if (!tagTipPaintTimer) {
+          tagTipPaintTimer = requestAnimationFrame(() => {
+            tagTipPaintTimer = 0;
+            if (tagTipTag === tag && tagTipEl && !tagTipEl.classList.contains("hidden")) { refreshTagTipIfShowing(tag); }
+          });
+        }
+        return;
+      }
+    }
+    paintTagTip(tag, growing);
+  }
+  /** 这个标签还在长吗：内容已经攒长了，而且这一条（这一组）还有在跑的。
+   *  合并组看组里的条目（think、同名工具）；单独一个标签的（taba 这类不合并的）看它自己。 */
+  function tipContentIsGrowing(tag) {
+    const g = tag._tipGroup;
+    if (g) {
+      if (!g.entries.some((e) => !e.done)) { return false; }
+      let chars = 0;
+      for (const e of g.entries) { chars += (e.resultText || "").length + (e.tipCall || "").length; }
+      return chars >= TAG_TIP_STREAM_MIN_CHARS;
+    }
+    if (tag._done !== false) { return false; }
+    return ((tag._tipBody || "").length + (tag._tipCall || "").length) >= TAG_TIP_STREAM_MIN_CHARS;
+  }
+  /** 真画一次：填内容、量尺寸、摆好位置。followNewest：还在长的内容让内容区跟着贴底。 */
+  function paintTagTip(tag, followNewest) {
+    tagTipPaintAt = performance.now();
     fillTagTip(tag);
     placeTagTip(tagTipEl, tag);
+    // 跟着贴底：新想到的那段不会落在视野外；用户往回滚过就不跟（见 tagTipFollow）
+    if (followNewest && tagTipFollow) { tagTipContent.scrollTop = 1e9; }   // 夹到最大：没有读，就不会逼出一次同步重排
   }
   function placeTagTip(el, tag) {
     const r = tag.getBoundingClientRect();

@@ -75,6 +75,10 @@ npm run web:shot -- --width 900 --height 620 --script dev/childDot.js
 # 验「模型的思考也显示成工具行里的一种条目」（当场生成 / 刷新重放 / 同批两段收成一个带次数的标签）：
 FAKEPI_TICK_MS=20 npm run web:shot -- --fake-pi --script dev/thinkRow.js
 
+# 验「think 提示框开着、思考还在往外吐」这条路（以前每条增量都重画一遍提示框，思考一长就把主线程占满，
+# 浏览器报「页面无响应」）：量开销、看节流有没有生效、内容区跟不跟着贴底、往回滚了还跟不跟：
+npm run web:shot -- --fake-pi --script dev/thinkTipPerf.js
+
 # 验顶部「加载更早的消息」（网页端只发最近一段历史）：点完视野得留在原来那几条消息上，
 # 不能被甩到底部（ROUNDS 攒消息轮数，AT_BOTTOM=1 是“贴底时点”那种）：
 npm run web:shot -- --fake-pi --script dev/historyScroll.js
@@ -167,6 +171,7 @@ node dev/markdownBlocksCheck.js
 | `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接）：`node dev/reconnect.js` |
 | `childDot.js` | 验顶条那颗小点（子会话在跑时父会话那颗点也呼吸；它与箭头落在两行中间）：`npm run web:shot -- --script dev/childDot.js` |
 | `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |
+| `thinkTipPerf.js` | 验 `think` 提示框开着时思考边流边长的开销与表现（节流、跟着贴底、往回滚就不跟）：`npm run web:shot -- --fake-pi --script dev/thinkTipPerf.js` |
 | `continueBtn.js` | 验输入框角上的「继续」（点它发一条“继续”、打的字留着、生成中换成“停止生成”）：`FAKEPI_THINK_MS=1200 npm run web:shot -- --fake-pi --script dev/continueBtn.js` |
 | `askQuestion.js` | 验 `ask_choice`（模型问你选择题）：真模型 → 真 pi（插件给它 `-e` 了桥扩展）→ 浮层 → 回话文件 → 工具结果，单选 / 多选 / 自己写三条路 |
 | `askDialog.js` + `askDialogTrigger.ts` | 验“要你打字 / 要你点是或否”两个框（页面自己画的）与普通的“选一个”列表：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |
