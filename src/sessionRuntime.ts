@@ -623,6 +623,8 @@ export class SessionRuntime {
                 switch (a.type) {
                     case "thinking_start":
                         this.setActivity("thinking");
+                        // 先给界面一个开场信号：标签马上出现、带着转圈，增量还没来也不干等
+                        this.post({ type: "thinkingStart" });
                         break;
                     case "thinking_delta":
                         // 某些 provider 可能省略 thinking_start，收到 delta 也应进入 thinking。
@@ -630,6 +632,11 @@ export class SessionRuntime {
                         this.post({ type: "thinkingDelta", delta: a.delta });
                         break;
                     case "thinking_end":
+                        // pi 在收尾事件里带整段思考文本（个别 provider 只给收尾、不给逐字增量）：
+                        // 发给界面把这一段补全（见 media/chat.js 的 endThinking）。
+                        if (typeof a.content === "string" && a.content) {
+                            this.post({ type: "thinkingFull", text: a.content });
+                        }
                         this.setActivity("working");
                         break;
                     case "text_start":
@@ -1068,6 +1075,16 @@ export class SessionRuntime {
                     for (const c of parts) {
                         if (c.type === "text") {
                             text += c.text;
+                        } else if (c.type === "thinking") {
+                            // 思考块：跟当场生成时一样，在工具行里出一个「think」标签（内容在提示框里看）。
+                            // 先把手头攒的正文发出去：免得思考排到了它前面（同 toolCall 那条）。
+                            if (typeof c.thinking === "string" && c.thinking.trim()) {
+                                if (text.trim()) {
+                                    emit({ type: "assistantFull", text });
+                                    text = "";
+                                }
+                                emit({ type: "thinkingFull", text: c.thinking });
+                            }
                         } else if (c.type === "toolCall") {
                             if (text.trim()) {
                                 emit({ type: "assistantFull", text });

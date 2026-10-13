@@ -139,7 +139,6 @@
   .msg-copy.copied { color: var(--vscode-charts-green, #3fb950); opacity: 1; }
   .system { font-style: italic; opacity: 0.6; font-size: 0.85em; white-space: pre-wrap; text-align: center; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-radius: 0; margin: 12px 0; }
   .error { color: var(--vscode-errorForeground); }
-  .thinking { display: none; } /* 思考过程已改到状态栏实时显示，不再出现在消息流 */
   /* 思考中的动画指示器 */
   .typing { display: inline-flex; align-items: center; gap: 3px; vertical-align: middle; }
   .typing span {

@@ -15,11 +15,12 @@
  *     toolResult 单独成条）——这正是整屏重放时界面上看到的东西，所以重放路径也验得到。
  *
  * 剧本（每轮照着演一遍，可在文件顶部改）：
- *   1. 说一句话（逐字推，模拟流式）
- *   2. 工具：read 一张图（结果带 image，走"读图变图片块"那条路）
- *   3. 工具：bash
- *   4. 工具：edit（会真的改 dev/.scratch 下的一个文件，diff 卡片有东西可看）
- *   5. 再说一句收尾
+ *   1. 先想一段（thinking_start / 增量 / thinking_end，界面上出一个 think 标签）
+ *   2. 说一句话（逐字推，模拟流式）
+ *   3. 工具：read 一张图（结果带 image，走"读图变图片块"那条路）
+ *   4. 工具：bash
+ *   5. 工具：edit（会真的改 dev/.scratch 下的一个文件，diff 卡片有东西可看）
+ *   6. 再说一句收尾
  *
  * 用法（不用记参数，插件的 piPath 指过来就行）：
  *   node dev/fakePi.js --mode rpc          # 参数收下但不看，照常演戏
@@ -131,6 +132,30 @@ async function runScript(userText) {
         assistantMsg.content.push(piece);
     };
 
+    /** 演一段思考：thinking_start → 逐字增量 → thinking_end（带整段文本），并把这段记进历史。 */
+    const think = async (text) => {
+        const piece = { type: "thinking", thinking: text };
+        emit({
+            type: "message_update",
+            usage: {},
+            assistantMessageEvent: { type: "thinking_start", contentIndex: assistantMsg.content.length },
+        });
+        for (let i = 0; i < text.length; i += 6) {
+            emit({
+                type: "message_update",
+                usage: {},
+                assistantMessageEvent: { type: "thinking_delta", contentIndex: assistantMsg.content.length, delta: text.slice(i, i + 6) },
+            });
+            await sleep(TEXT_TICK_MS);
+        }
+        emit({
+            type: "message_update",
+            usage: {},
+            assistantMessageEvent: { type: "thinking_end", contentIndex: assistantMsg.content.length, content: text },
+        });
+        assistantMsg.content.push(piece);
+    };
+
     /** 演一个工具调用：toolcall 事件 → 执行 → 结果进历史。 */
     const act = async (toolName, args, result) => {
         const id = nextId("call");
@@ -173,6 +198,7 @@ async function runScript(userText) {
         emit({ type: "message_end", message: toolResult });
     };
 
+    await think("用户要的是演示，那就按老剧本走一遍：先读图，再 bash，再改一下文件。");
     await say("好，我用三个工具给你演示一遍（假模型秒回）：");
     await act("read", { path: "示例图片.png" }, {
         content: [

@@ -486,7 +486,8 @@
       parentId: null,
       taba: null,
       currentAssistant: null,
-      thinkingText: "",
+      // 正在想的那一段（见 startThinking）：这一段还没想完时挂在它身上，增量往它上面加
+      thinkingEntry: null,
       // 生成速度统计：本轮累计估算 token 数 / 起点时间；tps 为上一轮最终均值
       tps: undefined,
       tpsStart: 0,
@@ -1104,6 +1105,8 @@
   // 一条正文（或用户消息）到来就换行、另起一批，上批的标签不再攒数。
   const NO_MERGE_TOOLS = new Set(["write", "edit", "taba", "taba_stop", "taba_peek"]);
   const GROUP_RUNNING_TEXT = "运行中…";
+  /** 模型的思考也算这一批里的一种条目：名字固定叫这个（不并进 NO_MERGE_TOOLS：同名照常合并）。 */
+  const THINKING_NAME = "think";
 
   function addTool(st, toolName, argStr, toolCallId) {
     hideEmptyHint(st);
@@ -1263,6 +1266,40 @@
   }
   function dropToolRow(st, row) {
     if (row && row !== st.paneEl && row.classList.contains("tool-row") && row.childElementCount === 0) { row.remove(); }
+  }
+
+  // ==================== 思考 ====================
+  // 模型的思考（reasoning）也算这一批条目里的一种：名字固定「think」，跟同名工具一样合并成一个标签，
+  // 内容只在提示框里看（标签上不露文字）。正在想的那一段挂在 st.thinkingEntry 上，
+  // 增量来一条往它上面加一条；收尾见 endThinking。
+
+  /** 模型开始想了：在工具行里开出「think」这个条目（已经在想就直接用现成的那条）。 */
+  function startThinking(st) {
+    if (st.thinkingEntry) { return st.thinkingEntry; }
+    hideEmptyHint(st);
+    const entry = addToolToGroup(st, THINKING_NAME, "", "");
+    // 没有 callId 的条目默认按完成（见 addToolToGroup）：这一段落还在跑，得改回来
+    entry.done = false;
+    entry.tipCall = THINKING_NAME;
+    st.thinkingEntry = entry;
+    syncGroupTag(entry.group);
+    return entry;
+  }
+
+  /** 想完一段：整段文本补上、标签停住。历史重放只来一条全文（没有开始事件），这里现开一个再收尾。
+   *  forceNew：往暂存区补更早的历史时用（正在想的那一条在真的窗格里，别动它）。 */
+  function endThinking(st, text, forceNew) {
+    let entry = forceNew ? null : st.thinkingEntry;
+    if (!entry) {
+      if (!text) { return; }   // 没在想的、又没有文本（重复收尾）：不用管
+      entry = addToolToGroup(st, THINKING_NAME, "", "");
+      entry.tipCall = THINKING_NAME;
+    }
+    if (st.thinkingEntry === entry) { st.thinkingEntry = null; }
+    entry.done = true;
+    if (text) { entry.resultText = text; }
+    syncGroupTag(entry.group);
+    scrollToBottom(st);
   }
 
   // ==================== 完整模式：TUI 风格工具卡片 ====================
@@ -3531,7 +3568,7 @@
         finalizeCurrentAssistant(t);
         const label = msg.imageCount ? "[" + msg.imageCount + " 张图片] " : "";
         addPlain(t, "user", "你", label + (msg.text || ""));
-        t.thinkingText = "";
+        endThinking(t, "");
         scrollToBottom(t, true);
         break;
       }
@@ -3541,7 +3578,7 @@
         t.activityDetail = msg.detail || "";
         setStreaming(t, true);
         finalizeCurrentAssistant(t);
-        t.thinkingText = "";
+        endThinking(t, "");
         // 新一轮生成：速度计时重新开始，上一轮均值先清零（有数据后由实时值接管）
         t.tps = undefined;
         t.tpsStart = Date.now();
@@ -3550,7 +3587,7 @@
       case "streamEnd":
         if (t.rafId) { flushDeltas(t); }
         finalizeCurrentAssistant(t);
-        t.thinkingText = "";
+        endThinking(t, "");   // 想一半被中止（或后端没发收尾）：标签也得停住
         // 结算本轮速度均值（必须在 setStreaming(false) 前算，之后 currentTps 改用 t.tps）
         {
           const secs = t.tpsStart > 0 ? (Date.now() - t.tpsStart) / 1000 : 0;
@@ -3566,6 +3603,8 @@
         break;
       case "activityChanged":
         setActivity(t, msg.activity, msg.detail);
+        // 离开「思考中」就说明这一段想完了：个别 provider 不发 thinking_end 时在这里兜底收尾
+        if (msg.activity !== "thinking") { endThinking(t, ""); }
         break;
       case "assistantDelta":
         if (!t.currentAssistant) { t.currentAssistant = { el: addMarkdown(t, ""), raw: "" }; }
@@ -3580,12 +3619,23 @@
         addMarkdown(t, msg.text);
         t.currentAssistant = null;
         break;
-      case "thinkingDelta":
-        // 兼容较旧后端：即使没有先收到 activityChanged，也按 thinking 渲染。
+      case "thinkingStart":
+        startThinking(t);
+        break;
+      case "thinkingDelta": {
+        // 兼容较旧后端：即使没有先收到 thinkingStart，也按正在思考渲染。
         if (t.activity !== "thinking") { t.activity = "thinking"; }
-        t.thinkingText += msg.delta;
+        const thinking = startThinking(t);
+        thinking.resultText += msg.delta;
+        refreshTagTipIfShowing(thinking.group.tag);   // 提示框开着时跟着长大
         t.tpsTokens += estTokens(msg.delta);
         if (activeId === t.id) { syncStatus(); }
+        break;
+      }
+      case "thinkingFull":
+        // 想完一段：整段文本随 pi 的 thinking_end 过来（历史重放也只来这一条），见 endThinking。
+        // 正在往暂存区补更早的历史（t._stage）时另开一条，别动手头正在想的那一条。
+        endThinking(t, msg.text, !!t._stage);
         break;
       case "tool": {
             finalizeCurrentAssistant(t);
@@ -3638,7 +3688,7 @@
         // 不能因此把进行中的加载反馈一并清掉。
         syncSessionLoading(t);
         t.currentAssistant = null;
-        t.thinkingText = "";
+        t.thinkingEntry = null;
         t.currentToolRow = null;
         t.toolGroups = null;
         t.toolGroupEntries.clear();
