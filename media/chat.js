@@ -13,6 +13,7 @@
   const messagesEl = document.getElementById("messages"); // 容器，内含各 .session-pane
   const jumpBottomBtn = document.getElementById("jumpBottom");
   const stopBtn = document.getElementById("stopBtn"); // 停止生成图标：browserBridge.js 在两种页面里都会创建
+  const continueBtn = document.getElementById("continueBtn"); // “继续”快捷按钮：同上，与停止图标共用一个位置
   // VSCode 官方 codicon 的 chevron-right 折线图标（从 @vscode/codicons 包取出）。
   // 各处折叠小三角用同一份：画的是朝右，展开时靠 CSS transform 转成朝下。
   const CHEVRON_SVG =
@@ -1784,23 +1785,37 @@
   }
 
   // ==================== UI 同步（当前会话驱动全局控件）====================
-  /** 当前会话在不在生成：Esc 中止与网页端的“停止生成”图标共用这一处判断。 */
+  /** 当前会话在不在生成：Esc 中止与输入框角上那颗“停止生成”按钮共用这一处判断。 */
   function activeSessionStreaming() {
     const st = activeSession();
     return !!(st && st.streaming);
   }
 
-  /** 输入框里那颗“停止生成”图标（只有网页端有）：当前会话在生成时才露面。 */
-  function syncStopBtn() {
-    if (!stopBtn) { return; }
-    stopBtn.classList.toggle("hidden", !activeSessionStreaming());
-    stopBtn.disabled = false;
+  /**
+   * 输入框右下角那颗小按钮：生成中是“停止生成”，空闲时是“继续”——两颗共用一个位置，
+   * 同一时刻只露面一颗。两颗都是 browserBridge.js 建的（两种页面里都有）。
+   */
+  function syncComposerButtons() {
+    const st = activeSession();
+    const streaming = !!(st && st.streaming);
+    // 会话还没就绪（pi 进程刚起）或正在加载会话时，点了也发不出去：这时候不出“继续”。
+    const canContinue = !!(st && st.piReady && !st.loading && !streaming);
+    if (continueBtn) {
+      continueBtn.classList.toggle("hidden", !canContinue);
+      // “继续”带字、比停止图标宽：露面时输入框右边的留白要跟着加宽（见 browserTheme.css）
+      if (continueBtn.parentElement) { continueBtn.parentElement.classList.toggle("has-continue", canContinue); }
+    }
+    if (stopBtn) {
+      stopBtn.classList.toggle("hidden", !streaming);
+      stopBtn.disabled = false;
+    }
   }
 
   function updateSendState() {
     // VSCode 里发送/中止只看键盘（Enter 发送、Esc 中止），没有按钮；状态文案由 syncStatus 负责。
-    // 网页端（尤其手机）没有 Esc：输入框里那颗“停止生成”图标随生成中与否显示 / 隐藏。
-    syncStopBtn();
+    // 网页端（尤其手机）没有 Esc：输入框角上那颗按钮随当前会话换脸——生成中是“停止生成”，
+    // 闲着且会话能收消息时是“继续”。
+    syncComposerButtons();
   }
   // 状态栏常显模型：这些纯函数拼出模型名前缀与用量百分比标签。
   function modelPartFor(st) {
@@ -3345,15 +3360,28 @@
     return true;
   }
 
+  // 输入框角上那颗“继续”：点一下直接发一条“继续”。
+  // 不走 send()：那条路发的是输入框里的内容，还会把输入框清空——打了一半的字得留着。
+  if (continueBtn) {
+    continueBtn.addEventListener("click", () => {
+      const st = activeSession();
+      // 这颗按钮只在会话就绪且闲着时露面，这里是防手快点到的边界情况（刚开始生成的那一下）
+      if (!st || !st.piReady || st.loading || st.streaming) { return; }
+      vscode.postMessage({ type: "send", sessionId: st.id, text: "继续", images: [] });
+      // 焦点还回输入框：留在按钮上的话，接着按回车会又点一次这颗按钮
+      if (!IS_TOUCH_DEVICE) { inputEl.focus(); }
+    });
+  }
+
   // 网页端：点输入框里那颗“停止生成”图标 = 给当前会话按 Esc。
   if (stopBtn) {
     stopBtn.addEventListener("click", () => {
-      if (!abortActiveTab()) { syncStopBtn(); return; }
+      if (!abortActiveTab()) { syncComposerButtons(); return; }
       // 先藏起来并禁用，等宿主的 streamEnd 回来再由 updateSendState 按真实状态刷新；
       // 万一点击没送到（连接断了），过一会儿按真实状态重新算：还在生成就把图标放回来。
       stopBtn.disabled = true;
       stopBtn.classList.add("hidden");
-      setTimeout(syncStopBtn, 1500);
+      setTimeout(syncComposerButtons, 1500);
     });
   }
 
@@ -4046,7 +4074,7 @@
     st.viewEl.remove();
     sessions.delete(id);
     sessionDrafts.delete(id);
-    if (activeId === id) { activeId = null; syncJumpBottom(st); syncStopBtn(); }
+    if (activeId === id) { activeId = null; syncJumpBottom(st); syncComposerButtons(); }
   }
 
   // ==================== 设置浮层（插件选项）====================

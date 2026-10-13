@@ -81,6 +81,14 @@ node dev/focusCheck.js
 # 验 ask_choice（模型问你选择题的那个工具）：单选 / 多选 / 自己写三条路走一遍
 npm run web:shot -- --script dev/askQuestion.js
 
+# 验“要你打字”和“要你点是 / 否”两个框（页面自己画的，不是浏览器原生弹框），
+# 顺手验普通的“选一个”列表：先把 dev/askDialogTrigger.ts 复制到 ~/.pi/agent/extensions/，跑完删掉
+npm run web:shot -- --script dev/askDialog.js
+
+# 验输入框角上那颗「继续」（闲着时露面、点它直接发一条“继续”且输入框里打了一半的字留着、
+# 生成中那颗位置换成“停止生成”、跑完再换回来；假模型得每轮停一下才看得见生成中那一下）：
+FAKEPI_THINK_MS=1200 npm run web:shot -- --fake-pi --script dev/continueBtn.js
+
 # 验断线重连（锁屏 / 切后台 / 断网 / 反复锁屏 / 反复弄断连接）：
 #   场景一 冻住、场景二 断网、场景三 冻住+断网、场景四 反复冻住解冻、
 #   场景五 反复把连接弄断（验序号补发不重不漏）、
@@ -154,7 +162,9 @@ node dev/markdownBlocksCheck.js
 | `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接）：`node dev/reconnect.js` |
 | `childDot.js` | 验顶条那颗小点（子会话在跑时父会话那颗点也呼吸）：`npm run web:shot -- --script dev/childDot.js` |
 | `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |
+| `continueBtn.js` | 验输入框角上的「继续」（点它发一条“继续”、打的字留着、生成中换成“停止生成”）：`FAKEPI_THINK_MS=1200 npm run web:shot -- --fake-pi --script dev/continueBtn.js` |
 | `askQuestion.js` | 验 `ask_choice`（模型问你选择题）：真模型 → 真 pi（插件给它 `-e` 了桥扩展）→ 浮层 → 回话文件 → 工具结果，单选 / 多选 / 自己写三条路 |
+| `askDialog.js` + `askDialogTrigger.ts` | 验“要你打字 / 要你点是或否”两个框（页面自己画的）与普通的“选一个”列表：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |
 | `options.js` | 两条命令共用的命令行参数 |
 | `fakePi.js` | 假的 pi（`--fake-pi` 用）：协议跟真 pi 一样，模型换成按剧本演戏，界面调试秒回 |
 | `fake-pi.cmd` / `.sh` | 上面那个的包装：Windows 上 piPath 得是 .cmd 才能被 shell 起来 |
