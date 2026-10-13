@@ -65,7 +65,9 @@ export async function fetchChatUiFiles(baseUrl: string, timeoutMs = 5000): Promi
 /** GET 一个地址，拿回应的文本；非 200、超时、连不上都算失败。 */
 function fetchText(url: URL, timeoutMs: number): Promise<string> {
     return new Promise((resolve, reject) => {
-        const req = http.get(url, (res) => {
+        // 明确要原文：这份抓回来的内容要直接内联进面板的 HTML，本函数不会解压。
+        // （后端对能收 gzip 的请求会压了再发；带上这个头就不用依赖“Node 默认不发 Accept-Encoding”这件事。）
+        const req = http.get(url, { headers: { "Accept-Encoding": "identity" } }, (res) => {
             if (res.statusCode !== 200) {
                 res.resume();
                 reject(new Error(`HTTP ${res.statusCode}`));

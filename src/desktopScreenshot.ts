@@ -69,10 +69,10 @@ function runScreenshotPowerShell(file: string): Promise<void> {
 }
 
 /**
- * 拼出截屏用的 PowerShell 脚本全文（单测里检查它）。
+ * 拼出截屏用的 PowerShell 脚本全文。
  * @param file 截图存到的 JPEG 路径；路径里的单引号按 PowerShell 的规矩写成两个
  */
-export function screenshotPowerShellScript(file: string): string {
+function screenshotPowerShellScript(file: string): string {
     const psFile = file.replace(/'/g, "''");
     return [
         "$ErrorActionPreference = 'Stop'",

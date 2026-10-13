@@ -87,11 +87,14 @@ npm run web:shot -- --fake-pi --script dev/historyScroll.js
 # 会不会认自己工作区里的会话；别的屏把会话关了，这块屏留在原地、发消息就自动重开）：
 node dev/focusCheck.js
 
-# 验 ask_choice（模型问你选择题的那个工具）：单选 / 多选 / 自己写三条路走一遍
+# 验问话卡片（模型问的选择题、扩展问的确认 / 输入 / 选一个：都长在会话的消息流里）；
+# 假数据、秒回：单选 / 多选 / 自己写 / 停止生成 / 确认 / 输入 / 选一个 / 刷新页面 各走一遍
+npm run web:shot -- --fake-pi --script dev/askCards.js
+
+# 真模型那条（慢，一句要等几十秒）：真 pi 加载插件的桥扩展，走完整条协议
 npm run web:shot -- --script dev/askQuestion.js
 
-# 验“要你打字”和“要你点是 / 否”两个框（页面自己画的，不是浏览器原生弹框），
-# 顺手验普通的“选一个”列表：先把 dev/askDialogTrigger.ts 复制到 ~/.pi/agent/extensions/，跑完删掉
+# 真扩展那条：先把 dev/askDialogTrigger.ts 复制到 ~/.pi/agent/extensions/，跑完删掉
 npm run web:shot -- --script dev/askDialog.js
 
 # 验输入框角上那颗「继续」（闲着时露面、点它直接发一条“继续”且输入框里打了一半的字留着、
@@ -119,6 +122,14 @@ node dev/perfProbe.js --batch 30                           # 打开长会话时�
 # 流式正文现在是按块切开渲染的（只重画尾巴）：改过媒体端渲染逻辑后跑一遍，
 # 逐个样例对一下“按块渲染出来的文字”跟“整段渲染的文字”是否一字不差：
 node dev/markdownBlocksCheck.js
+
+# 验「项目与会话」面板（顶条最右边那颗 <<<）：打开 → 两块各是几行 → 两块各点一次「加载更多」→ 截图：
+npm run web:shot -- --script dev/workspacePanel.js
+
+# 量那颗 <<< 打开一次要多少毫秒、滑入动画顺不顺（长任务 = 一眼能看出的停顿）：
+# 默认按手机的样子量（412x915@3x、CPU 降速 4 倍）：
+npm run web:shot -- --script dev/sidebarPerf.js
+SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf.js   # 先垫 40 轮长对话、开关 5 轮
 ```
 
 完整参数：`npm run web:shot -- --help`（或 `node dev/visit.js --help`）。
@@ -173,11 +184,14 @@ node dev/markdownBlocksCheck.js
 | `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |
 | `thinkTipPerf.js` | 验 `think` 提示框开着时思考边流边长的开销与表现（节流、跟着贴底、往回滚就不跟）：`npm run web:shot -- --fake-pi --script dev/thinkTipPerf.js` |
 | `continueBtn.js` | 验输入框角上的「继续」（点它发一条“继续”、打的字留着、生成中换成“停止生成”）：`FAKEPI_THINK_MS=1200 npm run web:shot -- --fake-pi --script dev/continueBtn.js` |
-| `askQuestion.js` | 验 `ask_choice`（模型问你选择题）：真模型 → 真 pi（插件给它 `-e` 了桥扩展）→ 浮层 → 回话文件 → 工具结果，单选 / 多选 / 自己写三条路 |
-| `askDialog.js` + `askDialogTrigger.ts` | 验“要你打字 / 要你点是或否”两个框（页面自己画的）与普通的“选一个”列表：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |
+| `askCards.js` | 验问话卡片（长在消息流里）：假 pi 演模型调 `ask_choice` 与扩展问用户，单选 / 多选 / 自己写 / 停止生成 / 确认 / 输入 / 选一个 / 刷新页面各走一遍：`npm run web:shot -- --fake-pi --script dev/askCards.js` |
+| `askQuestion.js` | 同上但那一条是真路的：真模型 → 真 pi（插件给它 `-e` 了桥扩展）→ 卡片 → 回话文件 → 工具结果（慢） |
+| `askDialog.js` + `askDialogTrigger.ts` | 验真扩展问的“要你打字 / 要你点是或否 / 选一个”：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |
 | `sessionMenuClose.js` | 验顶条会话名下拉框里每行的关闭叉（确认条 / 取消 / 超时 / 真关掉）：`npm run web:shot -- --fake-pi --script dev/sessionMenuClose.js` |
+| `workspacePanel.js` | 验「项目与会话」面板（那颗 `<<<`）：打开、两块各几行、两块各点一次「加载更多」、截图：`npm run web:shot -- --script dev/workspacePanel.js` |
+| `sidebarPerf.js` | 量那颗 `<<<` 打开一次多少毫秒、滑入动画有没有被顶住（长任务 / 逐帧间隔）：`npm run web:shot -- --script dev/sidebarPerf.js` |
 | `options.js` | 两条命令共用的命令行参数 |
-| `fakePi.js` | 假的 pi（`--fake-pi` 用）：协议跟真 pi 一样，模型换成按剧本演戏，界面调试秒回 |
+| `fakePi.js` | 假的 pi（`--fake-pi` 用）：协议跟真 pi 一样，模型换成按剧本演戏，界面调试秒回。说一句「问单选 / 问多选 / 问确认 / 问输入 / 问选项」就演一次问话 |
 | `fake-pi.cmd` / `.sh` | 上面那个的包装：Windows 上 piPath 得是 .cmd 才能被 shell 起来 |
 | `makePng.js` | 生成示例图片（不依赖任何第三方库）：调试工作目录里那张 1600x400 的图就是它写的 |
 | `shots/` | 截图（不进版本库） |

@@ -14,6 +14,7 @@ import {
     getModelThinkingLevels,
     resolveAnchorLine,
     textOf,
+    type ResultImageBlock,
 } from "./messageUtils";
 import {
     isRpcOk,
@@ -189,6 +190,18 @@ export class SessionRuntime {
     private historyWindowLength = 0;
     /** 开窗口时窗口前还有多少条 user/assistant 消息（按钮上「还有 N 条」用）。 */
     private historyWindowHidden = 0;
+    /** 网页端首屏一次最多内联多少图片数据（base64 字符数）。
+     *
+     * 为什么要这个预算：一屏里最常见的大块头就是图（截图动不动几百 KB 一张），手机上
+     * 这一屏动辄好几 MB，界面就空着等它传完。现在从最新一张往前数，数到预算为止，
+     * 更早的只发一个占位（界面上点开再取）。 */
+    private static readonly WEB_INLINE_IMAGE_CHARS = 400 * 1024;
+    /** 首屏没带过来的那些图，最多在内存里留多少（base64 字符数）：点开再取时直接从这儿给，
+     *  不用再去问 pi。超过上限就从最早留的开始丢（丢了的那张点开时现取）。 */
+    private static readonly OMITTED_IMAGE_KEEP_CHARS = 64 * 1024 * 1024;
+    /** 首屏没带过来的图（toolCallId → 图块）与它们的总大小。 */
+    private readonly omittedImages = new Map<string, ResultImageBlock[]>();
+    private omittedImageChars = 0;
     /** 本轮已展示过的错误文本；防止重试期间同一错误刷屏。agent_start 时重置。 */
     private lastShownRunError = "";
     /** 本轮是否真的跑起来过：防止没发消息就收到 agent_settled 时误报“完成”。 */
@@ -925,7 +938,12 @@ export class SessionRuntime {
         } else {
             this.historyWindowStart = -1;
         }
-        this.renderMessages(win ? win.list : messages, { revertable: true, sink: emit });
+        this.renderMessages(win ? win.list : messages, {
+            revertable: true,
+            sink: emit,
+            // 网页端这一份只带最近的图（更早的界面上点开再取），否则首屏要传的字节数会很大
+            inlineImages: win ? this.planInlineImages(win.list) : undefined,
+        });
         this.emitStatus();
         const count = messages.filter((m) => m && (m.role === "user" || m.role === "assistant")).length;
         const note = opts?.note === undefined
@@ -951,6 +969,103 @@ export class SessionRuntime {
 
     /** 网页端一次最多发多少条 user/assistant 消息（更早的由页面点「加载更早的消息」再取）。 */
     private static readonly WEB_HISTORY_WINDOW = 30;
+
+    /**
+     * 定下这一屏里哪些图真带数据（其余的只发占位，界面上点开再取）。
+     *
+     * 从最新一条往前数，累计到预算为止；最新那一张无论多大都带（不然打开来一张图都没有，
+     * 反而像坏了）。返回值是 toolCallId 的集合——一张工具结果里的图要么全带、要么全不带。
+     */
+    private planInlineImages(list: any[]): Set<string> {
+        const budget = SessionRuntime.WEB_INLINE_IMAGE_CHARS;
+        const inline = new Set<string>();
+        let used = 0;
+        for (let i = list.length - 1; i >= 0; i -= 1) {
+            const m = list[i];
+            if (!m || m.role !== "toolResult" || typeof m.toolCallId !== "string") { continue; }
+            const images = extractResultImages(m.content ?? m);
+            let chars = 0;
+            for (const img of images) { chars += img.data.length; }
+            if (chars === 0) { continue; }
+            if (inline.size > 0 && used + chars > budget) { continue; }
+            inline.add(m.toolCallId);
+            used += chars;
+        }
+        return inline;
+    }
+
+    /**
+     * 一条工具结果的图要不要真带数据：不在“带”名单里的换成占位（界面上点开再取）。
+     * 占位的同时把真图留在内存里（见 rememberOmittedImages），点开时就不用再问 pi 了。
+     */
+    private prepareResultImages(
+        toolCallId: string,
+        images: ResultImageBlock[],
+        inline?: Set<string>,
+    ): ResultImageBlock[] {
+        if (!inline || inline.has(toolCallId) || !images.some((img) => !!img.data)) {
+            return images;
+        }
+        this.rememberOmittedImages(toolCallId, images);
+        return images.map((img) => img.data
+            ? { data: "", mimeType: img.mimeType, onDemand: true, bytes: Math.round((img.data.length * 3) / 4) }
+            : img);
+    }
+
+    /** 把“这一屏没带过去的图”记在内存里（点开再取时直接从这儿给）；超上限就从最早的开始丢。 */
+    private rememberOmittedImages(toolCallId: string, images: ResultImageBlock[]): void {
+        const chars = images.reduce((n, img) => n + img.data.length, 0);
+        if (chars === 0) { return; }
+        const prev = this.omittedImages.get(toolCallId);
+        if (prev) {
+            this.omittedImageChars -= prev.reduce((n, img) => n + img.data.length, 0);
+            this.omittedImages.delete(toolCallId);
+        }
+        this.omittedImages.set(toolCallId, images);
+        this.omittedImageChars += chars;
+        while (this.omittedImageChars > SessionRuntime.OMITTED_IMAGE_KEEP_CHARS) {
+            const oldest = this.omittedImages.keys().next().value;
+            if (oldest === undefined) { break; }
+            const dropped = this.omittedImages.get(oldest) ?? [];
+            this.omittedImages.delete(oldest);
+            this.omittedImageChars -= dropped.reduce((n, img) => n + img.data.length, 0);
+        }
+    }
+
+    /** 从一份完整消息里找出某条工具结果的图（内存里没留着时现取的那条路用）。 */
+    private imagesOfToolCall(messages: any[], toolCallId: string): ResultImageBlock[] | undefined {
+        for (const m of messages) {
+            if (m && m.role === "toolResult" && m.toolCallId === toolCallId) {
+                const images = extractResultImages(m.content ?? m);
+                return images.length > 0 ? images : undefined;
+            }
+        }
+        return undefined;
+    }
+
+    /**
+     * 界面上点开一张“首屏没带过来”的图：把那张单发回去。
+     *
+     * 图一般就留在内存里（重画时记的）；没留到（进程重启过 / 已经挤掉了）就去 pi 那里
+     * 现取一份完整消息再找。找不到就回一条带 error 的，界面把占位标成“取不到了”。
+     *
+     * @param toolCallId 哪一次工具调用的结果
+     * @param index 这次结果里的第几张图（从 0 数）
+     */
+    public async loadResultImage(toolCallId: string, index: number): Promise<void> {
+        let images = this.omittedImages.get(toolCallId);
+        if (!images) {
+            const resp = await this.request<{ messages: any[] }>({ type: "get_messages" });
+            images = this.imagesOfToolCall(resp?.data?.messages ?? [], toolCallId);
+            if (images) { this.rememberOmittedImages(toolCallId, images); }
+        }
+        const img = images ? images[index] : undefined;
+        if (!img || !img.data) {
+            this.post({ type: "resultImage", toolCallId, index, error: "这张图取不到了。" });
+            return;
+        }
+        this.post({ type: "resultImage", toolCallId, index, data: img.data, mimeType: img.mimeType });
+    }
 
     /** 一条消息的指纹：优先用 pi 带回的 id；没有就用角色 + 正文开头（反正在同一会话里足够独特）。 */
     private messageFingerprint(m: any): string {
@@ -996,8 +1111,7 @@ export class SessionRuntime {
         };
     }
 
-    /** 记下当前窗口位置（起点、指纹、长度），供「加载更早」时校验。 */
-    private noteHistoryWindow(
+    /** 记下当前窗口位置（起点、指纹、长度），供「加载更早」时校验。 */private noteHistoryWindow(
         win: { start: number; hidden: number },
         messages: any[],
     ): void {
@@ -1024,7 +1138,7 @@ export class SessionRuntime {
         const win = this.sliceHistoryWindow(messages);
         this.noteHistoryWindow(win, messages);
         emit({ type: "historyWindow", hasMore: win.hasMore, hidden: win.hidden });
-        this.renderMessages(win.list, { ...opts, sink: emit });
+        this.renderMessages(win.list, { ...opts, sink: emit, inlineImages: this.planInlineImages(win.list) });
     }
 
     /**
@@ -1058,7 +1172,7 @@ export class SessionRuntime {
         const emit: MessageSink = (msg) => {
             this.host.postToSession(this.id, { type: "historyBatchEvent", event: msg });
         };
-        this.renderMessages(win.list, { sink: emit });
+        this.renderMessages(win.list, { sink: emit, inlineImages: this.planInlineImages(win.list) });
         this.post({ type: "historyBatchEnd", hasMore: win.hasMore, hidden: win.hidden });
     }
 
@@ -1067,8 +1181,10 @@ export class SessionRuntime {
      * @param revertable edit/write 卡片是否按内存快照开放“回滚”：活体迁移时快照
      * 还在（true），单纯加载历史会话时快照并不存在（缺省 false）。
      * @param sink 只发给这一个出口（给某一个页面重画时用）；缺省发给整个工作区。
+     * @param inlineImages 只有这些 toolCallId 的图真带数据，其余只发占位（见 planInlineImages）；
+     *                     不给就是全部带（本机面板、导出等场景）。
      */
-    private renderMessages(messages: any[], opts?: { revertable?: boolean; sink?: MessageSink }): void {
+    private renderMessages(messages: any[], opts?: { revertable?: boolean; sink?: MessageSink; inlineImages?: Set<string> }): void {
         // 缺省还是走这个会话的常规广播；给了 sink 就只发给那一个页面（消息已经带了 sessionId）
         const emit: MessageSink = opts?.sink ?? ((msg) => this.post(msg));
         const revertable = opts?.revertable === true;
@@ -1145,7 +1261,7 @@ export class SessionRuntime {
                                         isError: !!res.isError,
                                         resultText: extractResultText(res.content ?? res),
                                         truncation: extractTruncation(res),
-                                        images: extractResultImages(res.content ?? res),
+                                        images: this.prepareResultImages(id, extractResultImages(res.content ?? res), opts?.inlineImages),
                                     });
                                 }
                             }

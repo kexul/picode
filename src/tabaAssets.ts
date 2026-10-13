@@ -48,10 +48,10 @@ const LEGACY_DIRS = ["taba-roles", "taba-prompts"];
 
 /**
  * 把桥扩展写进 rootDir。
- * @param rootDir 一般是 ~/.pi/pichat；单测里传临时目录
+ * @param rootDir 一般是 ~/.pi/pichat
  * @param version 插件版本（写进扩展文件名，好让旧版本的文件能认出来并删掉）
  */
-export function writeTabaAssets(rootDir: string, version: string): TabaAssets {
+function writeTabaAssets(rootDir: string, version: string): TabaAssets {
     const safe = safeVersionForFile(version);
     const extensionPath = path.join(rootDir, `taba-bridge-${safe}.ts`);
     const resourceDir = rootDir;
@@ -95,9 +95,4 @@ export function ensureTabaAssets(version: string): TabaAssets {
 /** 拿记住的路径（还没写过就是 undefined）。 */
 export function getTabaAssets(): TabaAssets | undefined {
     return cached;
-}
-
-/** 清掉记住的路径（改配置或单测里用）。 */
-export function resetTabaAssetsCache(): void {
-    cached = undefined;
 }

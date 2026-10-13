@@ -1,6 +1,6 @@
 /**
  * 与 pi 消息 / 工具结果 / 对话树相关的纯函数。
- * 不依赖 vscode / 进程，便于单测与从 SessionRuntime 瘦身。
+ * 不依赖 vscode / 进程，是从 SessionRuntime 里分出来的。
  */
 
 import type { RpcModelInfo } from "./piRpc";
@@ -45,38 +45,6 @@ export function cleanToolOutput(text: string, maxLen = 200_000): string {
     return s;
 }
 
-/** 工具调用一行摘要（会话跨 panel 导出用）：只留关键参数，不含结果正文。 */
-export function summarizeToolCall(name: string, args: unknown): string {
-    const a = (args ?? {}) as Record<string, unknown>;
-    const str = (v: unknown): string =>
-        typeof v === "string" ? v : (v === undefined || v === null ? "" : JSON.stringify(v));
-    let summary = "";
-    switch (name) {
-        case "bash":
-            summary = str(a.command);
-            break;
-        case "read":
-        case "write":
-        case "edit":
-        case "ls":
-            summary = str(a.path);
-            break;
-        case "grep":
-            summary = str(a.pattern) + (a.path ? ` in ${str(a.path)}` : "");
-            break;
-        case "find":
-            summary = str(a.pattern) || str(a.path);
-            break;
-        default: {
-            const s = JSON.stringify(args ?? {});
-            summary = s && s !== "{}" ? s : "";
-            break;
-        }
-    }
-    if (summary.length > 120) { summary = summary.slice(0, 120) + "…"; }
-    return summary;
-}
-
 /** 从工具结果 / 部分结果（或历史 toolResult 消息）中提取展示文本。 */
 /** 工具结果里的图片块（read 读图等）：{ data(base64), mimeType }。 */
 export interface ResultImageBlock {
@@ -86,6 +54,12 @@ export interface ResultImageBlock {
     tooLarge?: boolean;
     /** 解码后的近似字节数（占位提示用）。 */
     bytes?: number;
+    /**
+     * 首屏没带过来、要等界面上“点开”再取时为 true（data 置空，仅传 mimeType/bytes）。
+     * 为什么：手机上刷新一次要把这一屏的图全传过去，一屏能有好几 MB（都是截图），
+     * 界面就一直空着等它。现在只带最近几张，更早的给占位，点开再单独取（见 sessionRuntime）。
+     */
+    onDemand?: boolean;
 }
 
 /** 单张图 base64 字符数上限（约 8MB 解码体积），超过只给占位不内联。 */

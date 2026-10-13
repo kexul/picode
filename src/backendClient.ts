@@ -2,7 +2,7 @@ import * as http from "http";
 import { readServerAddress, probeServer } from "./serverState";
 
 /**
- * BackendClient —— 插件连独立后端的那条线（不引用 vscode，可以单测）。
+ * BackendClient —— 插件连独立后端的那条线（不引用 vscode）。
  *
  * 插件这边有两条流，都连在同一个后端上：
  *   - **页面流**（`/events` + `/api`）：网页视图那一屏的收发。插件只是转手——
@@ -44,12 +44,6 @@ export interface BackendClientOptions {
     url?: string;
     /** 屏标识：同一个窗口重连时不变（后端认得它，不会越连越多）。 */
     screenId?: string;
-    timings?: {
-        pingMs?: number;
-        watchdogMs?: number;
-        tickTimeoutMs?: number;
-        retryDelaysMs?: number[];
-    };
 }
 
 function sleep(ms: number): Promise<void> {
@@ -166,10 +160,10 @@ interface Session {
 export class BackendClient {
     private readonly options: BackendClientOptions;
     private readonly screenId: string;
-    private readonly pingMs: number;
-    private readonly watchdogMs: number;
-    private readonly tickTimeoutMs: number;
-    private readonly retryDelaysMs: number[];
+    private readonly pingMs = PING_MS;
+    private readonly watchdogMs = WATCHDOG_MS;
+    private readonly tickTimeoutMs = TICK_TIMEOUT_MS;
+    private readonly retryDelaysMs = RETRY_DELAYS_MS;
 
     private running = false;
     private currentState: BackendState = "offline";
@@ -197,15 +191,9 @@ export class BackendClient {
     constructor(options: BackendClientOptions) {
         this.options = options;
         this.screenId = options.screenId ?? `s-${Math.random().toString(36).slice(2, 10)}`;
-        this.pingMs = options.timings?.pingMs ?? PING_MS;
-        this.watchdogMs = options.timings?.watchdogMs ?? WATCHDOG_MS;
-        this.tickTimeoutMs = options.timings?.tickTimeoutMs ?? TICK_TIMEOUT_MS;
-        this.retryDelaysMs = options.timings?.retryDelaysMs ?? RETRY_DELAYS_MS;
     }
 
     public get state(): BackendState { return this.currentState; }
-    /** 这个窗口在后端那头的标识（日志、测试用）。 */
-    public get id(): string { return this.screenId; }
     /** 后端现在的地址（状态栏、"在浏览器里打开"用）。 */
     public get url(): string | undefined { return this.base?.toString(); }
     public get currentPageId(): string { return this.pageId; }

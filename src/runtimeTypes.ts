@@ -123,7 +123,7 @@ export interface RuntimeHost {
      * 宿主是否要「整屏重画 / 加载会话时只发最近一段历史」。
      * 网页端是 true：长会话全量发下来太慢，只发最近 WEB_HISTORY_WINDOW 条消息，
      * 更早的由页面点「加载更早的消息」按钮再取。VSCode 两家维持全量。
-     * 可选：缺省当 false（单测里的假宿主不用实现）。
+     * 可选：缺省当 false。
      */
     wantsTrimmedHistory?(): boolean;
     /**

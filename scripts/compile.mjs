@@ -2,7 +2,8 @@
  * 把三份编译配置一次跑完。
  *
  * 为什么要分三份：插件那侧（一屏界面 + 一双打开文件的手）与后端那侧（会话、网页服务）
- * 编到不同目录，打进插件包里的只有插件那侧；测试同时要用到两侧的东西，编到第三份目录。
+ * 编到不同目录，打进插件包里的只有插件那侧；第三份不产出文件，只把 src 下全部源码
+ * 过一遍类型检查（两个入口都到不了的文件靠它查）。
  * 一个 tsc 一次只有一个输出目录，所以这里挨个跑、或者各起一个。
  *
  *   node scripts/compile.mjs           挨个跑一遍，哪份错了就停在那里（npm run compile）
@@ -25,8 +26,8 @@ try {
 const projects = [
     { label: "插件侧", config: "tsconfig.extension.json" },
     { label: "后端侧", config: "tsconfig.server.json" },
-    // 这份就是 tsconfig.json：src 下全量编一遍，单测与编辑器的类型检查都用它。
-    { label: "全量", config: "tsconfig.json" },
+    // 这份就是 tsconfig.json：src 下全量过一遍类型检查（不产出文件），编辑器也认它。
+    { label: "全量检查", config: "tsconfig.json" },
 ];
 
 const watch = process.argv.includes("--watch");

@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { renderHTML } from "./renderHtml";
+import { mediaVersion } from "./mediaVersion";
 
 /**
  * browserHtml —— 生成"在浏览器里打开"的对话页面 HTML。
@@ -37,7 +38,12 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
     const chatCss = readMedia("chat.css");
     const browserCss = readMedia("browserTheme.css");
 
-    const mediaUrl = (name: string) => `/media/${name}`;
+    // 地址里带上这份文件的内容指纹：文件没变时浏览器直接用自己存的那份（手机上刷新就不用
+    // 每次重下 233KB 的 chat.js），文件改了地址跟着变，不会看到旧界面（见 mediaVersion.ts）。
+    const mediaUrl = (name: string) => {
+        const version = mediaVersion(mediaDir, name);
+        return version ? `/media/${name}?v=${version}` : `/media/${name}`;
+    };
 
     // 浏览器页面的安全策略（无内联脚本、不加载外部站点的东西）
     const csp =

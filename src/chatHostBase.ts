@@ -11,7 +11,7 @@
  *     viewOptions.ts，存储由子类给（VSCode 存 globalState，独立后端存 state.json）；
  *   - 名字池、# 引用目录、桌面截图这类跟平台无关的杂事。
  *
- * 本类不引用 `vscode`，可以单测；平台相关的东西（设置从哪读、弹窗用谁家的、文件怎么打开、
+ * 本类不引用 `vscode`；平台相关的东西（设置从哪读、弹窗用谁家的、文件怎么打开、
  * 会话跑完怎么提醒）留在子类里。
  */
 import * as crypto from "crypto";
@@ -20,8 +20,13 @@ import type { AskRequest } from "./askProtocol";
 import { writeAskAnswer } from "./askProtocol";
 import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase } from "./chatControllerBase";
-import { listProjects, listSessionFiles, type ProjectEntry } from "./sessionStore";
-import { listDirectories, type DirListing } from "./dirBrowse";
+import {
+    listProjectDirs,
+    listSessionFilesNewestFirst,
+    readProjectDirForCwd,
+    readProjectEntry,
+} from "./sessionStore";
+import { listDirectories } from "./dirBrowse";
 import { ChatBroadcaster } from "./chatBroadcaster";
 import { MessageBuffer } from "./webTransport";
 import { pickOverlayClient } from "./overlayTarget";
@@ -46,6 +51,29 @@ import {
     nextInList,
 } from "./viewOptions";
 
+/**
+ * 一张还等着的问话卡片：模型问的选择题（ask_choice）、扩展问的确认 / 输入 / 选一个。
+ * 卡片画在那个会话的消息流里（不再弹浮层），这里记的是发给了哪些屏、答案交给谁。
+ */
+interface OpenCard {
+    /** 哪个会话在问：卡片画在那个会话的消息流里；哪块屏切到这个会话，卡片就补发给它。 */
+    sessionId?: string;
+    /** 卡片内容（界面上怎么画，见 media/chat.js 的 renderAskCard）。 */
+    card: Record<string, unknown>;
+    /** 提问方的编号（ask_choice 那次提问的编号）：扩展不等了时靠它认领这张卡片。 */
+    srcId: string;
+    /** 现在还挂着这张卡片的屏（答了 / 断开了就摘掉）。 */
+    screens: Set<string>;
+    /** 一块屏都不剩（都断开了）时还等不等：问答题等（切回来还能答），扩展问的那些不等。 */
+    hangOn: boolean;
+    /** 答案已经定了（有人答了 / 到点了 / 没人能答了）。 */
+    settled: boolean;
+    /** 到点就按没作答收掉。 */
+    timer?: ReturnType<typeof setTimeout>;
+    /** 把答案交出去（undefined = 没作答）。 */
+    settle: (answer: any | undefined) => void;
+}
+
 export abstract class ChatHostBase extends ChatControllerBase implements WebServerHost {
     /** 本机那块界面的固定标识：VSCode 那边就是插件里那块对话面板；独立后端没有这块屏，用不上。 */
     protected static readonly LOCAL_CLIENT_ID = ChatControllerBase.LOCAL_CLIENT_ID;
@@ -69,9 +97,10 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     private readonly pendingResyncPages = new Map<string, string>();
     /** 正在整屏重画的页面：重画没画完页面就断了的话，得等它回来重新整画一遍。 */
     private readonly resyncingPages = new Set<string>();
-    /** 正在等浏览器对话框回复的请求（记着是问哪个页面的，那个页面走了就改成取消）。 */
-    private readonly pendingDialogs = new Map<number, { resolve: (value: unknown) => void; pageId: string }>();
-    private dialogSeq = 0;
+    /** 还等着的问话卡片：卡片编号（宿主自己发）→ 这一摊。 */
+    private readonly openCards = new Map<string, OpenCard>();
+    /** 卡片编号发到几了（界面上只拿它认领"哪张卡"、并把答案送回来）。 */
+    private cardSeq = 0;
     // 正在处理哪一个来源发来的消息，以及“每块屏各自在看哪个会话”，都在基类里管
     // （见 ChatControllerBase.currentPageId / clientSessions）：本类只管“屏”这一层。
     /** 人最近在本机界面里动过的时刻：浮层弹到哪块屏上，靠它和页面的动作时刻比。 */
@@ -111,8 +140,8 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     protected onNotice(_text: string): void { /* 默认丢掉 */ }
 
     /**
-     * 人最近动过的那块屏挑不出来时的兜底（独立后端用：没有 VSCode 弹窗可用，
-     * 就随便挑一块连着的屏来问，总比没人答好）。默认 undefined = 用宿主自己的弹窗。
+     * 人最近动过的那块屏挑不出来时的兜底（独立后端用：没有 VSCode 原生对话框可用，
+     * 就随便挑一块连着的屏来问，总比没人答好）。默认 undefined = 用宿主自己的对话框。
      */
     protected pageForDialogFallback(): string | undefined { return undefined; }
 
@@ -197,19 +226,6 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         return base && base !== path.sep ? base : p;
     }
 
-    /**
-     * 项目清单（做成可覆写的方法：单测里换成固定的几条数据，不去扫真实目录。
-     * 真实实现在 sessionStore.listProjects）。
-     */
-    protected async listProjectsForPicker(): Promise<ProjectEntry[]> {
-        return listProjects();
-    }
-
-    /** 目录清单（同上，单测可覆写；真实实现在 dirBrowse.listDirectories）。 */
-    protected async listDirsForPicker(dir: string): Promise<DirListing> {
-        return listDirectories(dir);
-    }
-
     /** 工作区一次给几个（当前工作区固定占一行，其余再取四行，总数五个）。 */
     private static readonly WORKSPACE_BATCH = 4;
 
@@ -254,19 +270,24 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
      * 面板的内容：上半会话（当前目录的历史会话）、下半工作区。
      * 会话那份复用历史列表那套机器（pickerState 里的 historyFiles / historyOffset / scanHistoryBatch），
      * 工作区那份自己分页：当前目录固定显示，另外一次取 4 个，总共显示 5 个工作区；下面留一颗“加载更多”。
+     *
+     * 两半都只碰最前面那几个（要显示的那些）：会话那份只扫要画的十个文件，
+     * 工作区那份先只拿“目录清单”（每个目录 stat 一下），进目录里翻文件留到真要画它那一行（见 takeWorkspacePage）。
      */
     private async buildWorkspacePanel(folder: string, clientId: string): Promise<Record<string, unknown>> {
         const cwd = path.resolve(folder);
         const state = this.pickerStateOf(clientId);
         state.workspaceFolder = cwd;
-        state.historyFiles = await listSessionFiles(cwd);
+        state.historyFiles = await listSessionFilesNewestFirst(cwd);
         state.historyOffset = 0;
         const sessions = await this.scanHistoryBatch(clientId);
-        const projects = await this.listProjectsForPicker();
-        const current = projects.find((p) => this.sameDir(p.cwd, cwd));
-        // 分页的那串：去掉当前目录那条（它固定在第一），剩下的按最后活动时间排（清单本来就是倒序的）。
-        state.workspaceRest = projects.filter((p) => !this.sameDir(p.cwd, cwd));
+        const currentDir = await readProjectDirForCwd(cwd);
+        const current = currentDir ? await readProjectEntry(currentDir) : null;
+        // 每个目录 readdir 一下 + stat 最新那一个会话文件（见 sessionStore.listProjectDirs）
+        state.workspaceDirs = await listProjectDirs();
         state.workspaceOffset = 0;
+        // 当前工作区固定占上面那一行（下面那份里遇上它、遇上同一个目录的另一个文件夹就跳过）
+        state.workspaceSeen = new Set([this.dirKey(cwd)]);
         const head: any[] = [
             { label: "打开文件夹…", file: ChatHostBase.BROWSE_ROW, action: "browse", folderPath: "挑一个文件夹当工作区" },
             {
@@ -287,25 +308,42 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
                 name: this.dirName(cwd),
             },
             spaces: {
-                items: head.concat(this.takeWorkspacePage(clientId)),
+                items: head.concat(await this.takeWorkspacePage(clientId)),
                 current: cwd,
-                hasMore: state.workspaceOffset < state.workspaceRest.length,
+                hasMore: state.workspaceOffset < state.workspaceDirs.length,
             },
         };
     }
 
-    /** 取下一批工作区行（一次 WORKSPACE_BATCH 个）。 */
-    private takeWorkspacePage(clientId: string): any[] {
+    /** 拿一个目录当“同一个目录”用的键（跟 sameDir 一个规矩：Windows 上不区分大小写）。 */
+    private dirKey(p: string): string {
+        const s = path.resolve(p);
+        return process.platform === "win32" ? s.toLowerCase() : s;
+    }
+
+    /**
+     * 取下一批工作区行（一次 WORKSPACE_BATCH 个）。
+     * 到这里才真进目录（readdir + 读一个会话文件的开头）—— 只对真要显示的那几行做。
+     */
+    private async takeWorkspacePage(clientId: string): Promise<any[]> {
         const state = this.pickerStateOf(clientId);
-        const batch = state.workspaceRest.slice(state.workspaceOffset, state.workspaceOffset + ChatHostBase.WORKSPACE_BATCH);
-        state.workspaceOffset += batch.length;
-        return batch.map((p) => ({
-            label: p.name,
-            file: p.cwd,
-            folderPath: p.cwd,
-            count: p.sessionCount,
-            lastActivity: p.lastActivity,
-        }));
+        const rows: any[] = [];
+        while (rows.length < ChatHostBase.WORKSPACE_BATCH && state.workspaceOffset < state.workspaceDirs.length) {
+            const entry = state.workspaceDirs[state.workspaceOffset++];
+            const p = await readProjectEntry(entry);
+            if (!p) { continue; }                                // 空目录 / 坏文件：跳过，不占一行
+            const key = this.dirKey(p.cwd);
+            if (state.workspaceSeen.has(key)) { continue; }       // 当前工作区另有上面那一行；同一个目录只占一行
+            state.workspaceSeen.add(key);
+            rows.push({
+                label: p.name,
+                file: p.cwd,
+                folderPath: p.cwd,
+                count: p.sessionCount,
+                lastActivity: p.lastActivity,
+            });
+        }
+        return rows;
     }
 
     /** 面板里点工作区那块的「加载更多」：再送一批过去。 */
@@ -313,11 +351,11 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         const clientId = this.currentPageId;
         const state = this.pickerStateOf(clientId);
         if (state.kind !== "workspace") { return; }
-        const items = this.takeWorkspacePage(clientId);
+        const items = await this.takeWorkspacePage(clientId);
         this.sendOverlayTo(clientId, {
             type: "workspacePageAppend",
             items,
-            hasMore: state.workspaceOffset < state.workspaceRest.length,
+            hasMore: state.workspaceOffset < state.workspaceDirs.length,
         });
     }
 
@@ -332,7 +370,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
      * @param clientId 这个浮层是哪块屏开的（它自己收自己的回复）。
      */
     public async showFolderPicker(dir: string, clientId: string = this.currentPageId): Promise<void> {
-        const listing = await this.listDirsForPicker(dir);
+        const listing = await listDirectories(dir);
         // 判"这是盘符列表"只认空路径：dirBrowse 把盘根（D:\）也标成 roots，
         // 但那是个真目录（可以选它当项目目录，也是上一层能到的地方），不能跟盘符列表混为一谈。
         const driveList = !listing.path;
@@ -439,10 +477,10 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         this.sendSessionListTo(pageId);
     }
 
-    /** 一条推送连接断了（页面关掉 / 死连接被掐掉）：它那个没人答的确认框改成取消，
+    /** 一条推送连接断了（页面关掉 / 死连接被掐掉）：它上面等着的问话卡片摘掉，
      *  它上面开着的浮层也按取消收掉（等的人不用干等）。 */
     public onPageDisconnected(pageId: string): void {
-        this.cancelPendingDialogs(pageId);
+        this.dropCardsForClient(pageId);
         this.dropPickerForClient(pageId);
         // 整屏重画画到一半页面走了：重画的内容不进补发暂存，它回来对账时会“看似不缺”，
         // 内容却缺一截。记下来，它一连上就重新整画一遍。
@@ -459,69 +497,23 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     /** 网页服务停了：页面都收到告别话了，缓冲与等着的重画清掉。会话本体不动。 */
     public onServerStopped(): void {
         this.pageDeliveryOn = false;
-        this.cancelPendingDialogs();
         this.outbox.clear();
         this.pendingResyncPages.clear();
         this.resyncingPages.clear();
     }
 
-    /** 把在等的确认框按取消处理（pi 那边会改用宿主自己的弹窗问，不会干等）。 */
-    private cancelPendingDialogs(pageId?: string): void {
-        for (const [id, pending] of Array.from(this.pendingDialogs.entries())) {
-            if (pageId !== undefined && pending.pageId !== pageId) { continue; }
-            this.pendingDialogs.delete(id);
-            pending.resolve(undefined);
+    /** 这块屏没了：它上面等着的问话卡片都摘掉（问答题留着等它回来，扩展问的那些算没作答）。 */
+    private dropCardsForClient(target: string): void {
+        if (!target) { return; }
+        for (const [id, state] of Array.from(this.openCards.entries())) {
+            if (!state.screens.delete(target)) { continue; }
+            if (state.screens.size === 0 && !state.hangOn) { this.settleCard(id, undefined); }
         }
     }
 
-    /**
-     * 要弹对话框时问哪一块屏。
-     *
-     * 先看“谁正在看着这个会话”（调用方把会话标识给进来时）：一个会话的提问弹到没在看它的
-     * 窗口去，容易被当成莫名其妙的东西。没人看着它（或调用方没说会话）才退到老规矩：
-     * 问“人最近在里面动过的那个”。报活不算动作，不然退到后台的页面会一直抢着当“最近在动的那个”。
-     */
-    protected pickDialogClient(sessionId?: string): string | undefined {
-        if (sessionId) {
-            const viewing = this.clientsViewing(sessionId);
-            if (viewing.length > 0) {
-                // 几块屏都在看：挑最近有人在里面动过的那个（都在看就是同一件事，弹哪边都对）
-                const recent = this.broadcaster.recentActionPage();
-                if (recent && viewing.includes(recent.id)) { return recent.id; }
-                return viewing[0];
-            }
-        }
-        const page = this.broadcaster.recentActionPage();
-        if (!page) { return undefined; }
-        return page.at >= this.localActiveAt ? page.id : undefined;
-    }
-
-    /**
-     * 让一块屏弹一个对话框并等回复。
-     * @param sessionId 哪个会话问的：优先问正在看它的那块屏（见 pickDialogClient）。
-     * 返回 undefined 表示没等着（没有“人在动”的屏，也没有兜底可挑），调用方换自己的办法。
-     */
-    protected askPage(kind: "confirm" | "prompt", fields: Record<string, string>, sessionId?: string): Promise<unknown> {
-        const pageId = this.pickDialogClient(sessionId) ?? this.pickDialogClient() ?? this.pageForDialogFallback();
-        if (!pageId) { return Promise.resolve(undefined); }
-        const id = ++this.dialogSeq;
-        return new Promise<unknown>((resolve) => {
-            this.pendingDialogs.set(id, { resolve, pageId });
-            // 只发给那一块屏：别的屏不跟着弹同一个框（弹了也没人答，还会把等的人拖住）。
-            if (!this.broadcaster.sendTo(pageId, { type: "browserDialog", id, kind, ...fields })) {
-                this.pendingDialogs.delete(id);
-                resolve(undefined);
-            }
-        });
-    }
-
-    /** 页面回了对话框结果 / 页面走了：结束对应的等待。 */
-    private resolveDialog(id: unknown, value: unknown): void {
-        const key = typeof id === "number" ? id : undefined;
-        if (key === undefined || !this.pendingDialogs.has(key)) { return; }
-        const pending = this.pendingDialogs.get(key)!;
-        this.pendingDialogs.delete(key);
-        pending.resolve(value);
+    /** 有没有正在看这个会话、能把卡片画给它的屏（没人的话调用方换自己的兜底办法）。 */
+    private hasCardViewer(sessionId?: string): boolean {
+        return !!sessionId && this.clientsViewing(sessionId).length > 0;
     }
 
     /**
@@ -554,6 +546,8 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
             replays.push(rt.replayHistory({ note, sink }));
         }
         return Promise.all(replays).then(() => {
+            // 重画把还等着的问话卡片也抹掉了：重发给这块屏（见 resendCardsTo）
+            this.resendCardsTo(pageId);
             // 重画的消息不带序号（它们只发给这一块屏）。页面重画完把对齐到当前序号：
             // 重画的内容已经包含到这里为止的一切，下次重连它报上来的数才是准的。
             if (!isLocal && pageId) { this.broadcaster.sendTo(pageId, { type: "syncPoint", seq: this.broadcaster.currentSeq() }); }
@@ -741,6 +735,10 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     protected override onClientSessionChanged(clientId: string, panelId: string): void {
         const screenId = this.pageScreen.get(clientId);
         if (screenId) { this.screenSession.set(screenId, panelId); }
+        // 这个会话正有问话在等：卡片也发给这块屏（新开的页面、切过去的窗口都走这里）
+        for (const [id, state] of this.openCards) {
+            if (state.sessionId === panelId) { this.sendCardToScreen(id, state, clientId); }
+        }
     }
 
     public detachScreen(screenId: string): void {
@@ -905,9 +903,6 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
                 void this.resyncPage(pageId, "");
                 return true;
             }
-            case "browserDialogResult":
-                this.resolveDialog(msg.id, msg.value);
-                return true;
             case "openHistory":
                 // 顶条最右边那颗“<<<”按钮（以及命令面板的历史入口）：列表从右侧滑入，
                 // 只弹在点它的那块屏上（另一个浏览器 / 本机界面不跟着弹）。
@@ -969,81 +964,176 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     // ========================================================================
     //  弹窗 / 会话收尾
     // ========================================================================
-    /** 确认框：先问正在看这个会话的那块屏，再问“人最近在动”的那块屏；挑不出来时交给子类兜底。 */
+    /** 确认框：正在看这个会话的屏上出一张卡片（是 / 否）；没人看着它时交给子类兜底（VSCode 弹原生框）。 */
     public async confirmDialog(title: string, message: string, sessionId?: string): Promise<boolean> {
-        const answer = await this.askPage("confirm", { title, message }, sessionId);
-        return answer === undefined ? this.confirmDialogFallback(title, message) : answer === true;
+        if (!this.hasCardViewer(sessionId)) { return this.confirmDialogFallback(title, message); }
+        const answer = await this.askOnScreens(sessionId, { kind: "confirm", title, message }, ChatHostBase.DIALOG_WAIT_MS);
+        return answer?.yes === true;
     }
 
-    /** 输入框：同上（先问看着这个会话的屏）；问不着时交给子类兜底。 */
+    /** 输入框：同上（在看着这个会话的屏上出一张卡片）；没人看着它时交给子类兜底。 */
     public async inputDialog(title: string, placeholder: string, prefill: string, sessionId?: string): Promise<string | undefined> {
-        const answer = await this.askPage("prompt", { title, placeholder, prefill }, sessionId);
-        if (answer === undefined) { return this.inputDialogFallback(title, placeholder, prefill); }
-        if (answer === null) { return undefined; }  // 用户按了取消
-        return String(answer);
+        if (!this.hasCardViewer(sessionId)) { return this.inputDialogFallback(title, placeholder, prefill); }
+        const answer = await this.askOnScreens(sessionId, { kind: "prompt", title, placeholder, prefill }, ChatHostBase.DIALOG_WAIT_MS);
+        if (!answer || answer.cancelled === true) { return undefined; }   // 按了取消 / 到点没人答
+        return String(answer.text ?? "");
     }
 
-    /** 选项列表：先问页面（样式与模型选择器一致）；问不着时交给子类兜底。 */
+    /** 选项列表：在看着这个会话的屏上出一张卡片（单选）；没人看着它时交给子类兜底。 */
     public async selectDialog(title: string, options: string[], sessionId?: string): Promise<string | undefined> {
-        const target = this.pickDialogClient(sessionId) ?? this.pickDialogClient() ?? this.pageForDialogFallback();
-        if (target) {
-            const items = options.map((option, index) => ({ label: option, file: String(index) }));
-            const choice = await this.showPicker("browserSelect", items, null, { title }, target);
-            const index = Number(choice && typeof choice.file === "string" ? choice.file : NaN);
-            if (Number.isInteger(index) && index >= 0 && index < options.length) { return options[index]; }
-            // 浮层开在页面上的时候，页面那头就是全部答案来源（用户点了取消也在这里）；
-            // 没挑着屏时才落到子类的兜底上。
-            return undefined;
-        }
-        return this.selectDialogFallback(title, options);
+        if (!this.hasCardViewer(sessionId)) { return this.selectDialogFallback(title, options); }
+        const answer = await this.askOnScreens(sessionId, {
+            kind: "choice",
+            question: title || "选一个",
+            options,
+            multi: false,
+            recommended: [],
+            allowText: false,
+        }, ChatHostBase.DIALOG_WAIT_MS);
+        const picked: string[] = Array.isArray(answer?.picks) ? answer.picks : [];
+        return options.find((option) => picked.indexOf(option) >= 0);
     }
 
     // ========================================================================
-    //  问话（ask_choice）：pi 扩展要用户答一个选择题
+    //  问话卡片：要用户答一句（模型问的选择题、扩展问的确认 / 输入 / 选一个）
     // ========================================================================
-    /** 问话浮层等多久（用户可能要想一会儿）。扩展那边等 30 分钟，这里稍短：让它先拿到“没作答”。 */
+    /** 问答题（ask_choice）卡片等多久：用户可能要想一会儿。扩展那边等 30 分钟，这里稍短：让它先拿到“没作答”。 */
     private static readonly ASK_WAIT_MS = 25 * 60 * 1000;
-    /** 还开着的问话：提问编号 → 弹在哪块屏上（扩展不等了时按编号收掉）。 */
-    private readonly openAsks = new Map<string, string>();
+    /** 扩展问的那几种（确认 / 输入 / 选一个）等多久：跟以前浮层的等待时间一致。 */
+    private static readonly DIALOG_WAIT_MS = 2 * 60 * 1000;
 
     /**
-     * pi 扩展要问用户一个选择题：弹给正在看这个会话的那块屏，用户答完写一份回话文件
-     * （扩展在轮询那个文件）。没人在看、用户把浮层关了、等太久了 —— 都写一份“没作答”交回去。
+     * 把一张问话卡片发到"正在看这个会话"的每一块屏上，等第一个作答（谁先答算谁的）。
+     * 卡片画在那个会话的消息流里（见 media/chat.js 的 renderAskCard），不弹浮层、不挡别的会话。
+     * 一块屏都没在看这个会话就先不发：哪块屏切过去时补发（见 onClientSessionChanged），
+     * 整屏重画后也补发（见 resendCardsTo）。等到 waitMs 还是没人答就按没作答收掉。
+     * @param sessionId 哪个会话在问；没给（理论上不会）就没人看得到。
+     * @param card 卡片内容：{ kind: "choice" | "confirm" | "prompt", … }。
+     * @param waitMs 最多等多久（毫秒）。
+     * @param srcId 提问方的编号（ask_choice 那次提问的编号）：扩展不等了时靠它认领这张卡片。
+     * @param hangOn 一块屏都不剩（都断开了）时还等不等：问答题等（切回来还能答），扩展问的那些不等。
+     * @returns 用户答的那几样（picks / text / yes / cancelled）；没作答或到点是 undefined。
+     */
+    protected askOnScreens(
+        sessionId: string | undefined,
+        card: Record<string, unknown>,
+        waitMs: number,
+        srcId = "",
+        hangOn = false,
+    ): Promise<any | undefined> {
+        const id = `card-${++this.cardSeq}`;
+        return new Promise<any | undefined>((resolve) => {
+            const state: OpenCard = {
+                sessionId,
+                card,
+                srcId,
+                screens: new Set<string>(),
+                hangOn,
+                settled: false,
+                timer: undefined,
+                settle: resolve,
+            };
+            this.openCards.set(id, state);
+            if (waitMs > 0) { state.timer = setTimeout(() => { this.settleCard(id, undefined); }, waitMs); }
+            if (sessionId) {
+                for (const target of this.clientsViewing(sessionId)) { this.sendCardToScreen(id, state, target); }
+            }
+        });
+    }
+
+    /** 把卡片发给某一块屏（这块屏已经有了就不重发）。发不出去就当它没收到。 */
+    private sendCardToScreen(id: string, state: OpenCard, target: string): void {
+        if (state.settled || !target || state.screens.has(target)) { return; }
+        if (!this.sendOverlayTo(target, { type: "askCard", id, sessionId: state.sessionId, card: state.card })) { return; }
+        state.screens.add(target);
+    }
+
+    /**
+     * 这张卡片收尾：把还挂着它的屏都改成"已答 / 没作答"，再把答案交给等的人。
+     * 谁先答算谁的：答了以后别的屏上那张卡片跟着定住（自己答过的那块屏再收一次也没关系）。
+     */
+    private settleCard(id: string, answer: any | undefined): void {
+        const state = this.openCards.get(id);
+        if (!state || state.settled) { return; }
+        state.settled = true;
+        if (state.timer) { clearTimeout(state.timer); state.timer = undefined; }
+        this.openCards.delete(id);
+        for (const target of Array.from(state.screens)) {
+            this.sendOverlayTo(target, { type: "askCardDone", id, answer: answer ?? null });
+        }
+        state.screens.clear();
+        state.settle(answer ?? undefined);
+    }
+
+    /** 界面上答了一张卡片（见 media/chat.js）。 */
+    protected override handleAskCardAnswer(msg: any): void {
+        const id = typeof msg?.id === "string" ? msg.id : "";
+        const state = id ? this.openCards.get(id) : undefined;
+        if (!state || state.settled) { return; }
+        this.settleCard(id, {
+            picks: Array.isArray(msg.picks) ? msg.picks.filter((x: unknown) => typeof x === "string") : [],
+            text: typeof msg.text === "string" ? msg.text : "",
+            yes: msg.yes === true,
+            cancelled: msg.cancelled === true,
+        });
+    }
+
+    /**
+     * 这块屏上这张卡片不答了（界面上现在没有这颗按钮 —— 想不答就直接把这一轮停掉；
+     * 这条消息留着是因为"某块屏声明自己不答了"是协议里正式的一步，页面 / 脚本都能发）：
+     * 摘掉它，谁也不剩就算没作答（还有别的屏看着就接着等）。
+     */
+    protected override handleAskCardCancel(msg: any): void {
+        const id = typeof msg?.id === "string" ? msg.id : "";
+        const state = id ? this.openCards.get(id) : undefined;
+        if (!state || state.settled) { return; }
+        if (!state.screens.delete(this.currentPageId)) { return; }
+        // 明说“不答了”（不是掉线）：没人能答了就当场收掉，别让模型白等 25 分钟
+        if (state.screens.size === 0) { this.settleCard(id, undefined); }
+    }
+
+    /**
+     * pi 扩展要问用户一个选择题：把卡片发到正在看这个会话的每一块屏上（后切过去的也算），
+     * 谁先答算谁的。用户答完写一份回话文件（扩展在轮询那个文件）；一直没人答就写一份“没作答”。
      */
     public async askQuestion(req: AskRequest, sessionId?: string): Promise<void> {
         const answerDir = this.getConfig().askDir ?? "";
-        const target = this.pickDialogClient(sessionId) ?? this.pickDialogClient() ?? this.pageForDialogFallback();
-        if (!target) {
-            writeAskAnswer(answerDir, { id: req.id, cancelled: true, picked: [], text: "" });
-            return;
-        }
-        const items = req.options.map((label, index) => ({ label, file: String(index) }));
-        this.openAsks.set(req.id, target);
-        try {
-            const choice = await this.showPicker("question", items, null, {
-                title: req.question,
-                multi: req.multi,
-                recommended: req.recommended,
-                allowText: req.allowText,
-                // 问题列表不给搜索框（就几个选项，占一截还挤掉说明）
-                searchable: false,
-            }, target, ChatHostBase.ASK_WAIT_MS);
-            const picked = Array.isArray(choice?.picks)
-                ? choice.picks.filter((x: unknown) => typeof x === "string")
-                : [];
-            const text = typeof choice?.text === "string" ? choice.text.trim() : "";
-            writeAskAnswer(answerDir, { id: req.id, cancelled: !choice, picked, text });
-        } finally {
-            this.openAsks.delete(req.id);
+        const answer = await this.askOnScreens(sessionId, {
+            kind: "choice",
+            question: req.question,
+            options: req.options,
+            multi: req.multi,
+            recommended: req.recommended,
+            allowText: req.allowText,
+            // 界面靠它把这行卡片挂到那条工具行下面
+            ...(req.toolCallId ? { toolCallId: req.toolCallId } : {}),
+        }, ChatHostBase.ASK_WAIT_MS, req.id, true);
+        const picked: string[] = Array.isArray(answer?.picks)
+            ? answer.picks.filter((x: unknown) => typeof x === "string")
+            : [];
+        const text = typeof answer?.text === "string" ? answer.text.trim() : "";
+        writeAskAnswer(answerDir, { id: req.id, cancelled: !answer || (picked.length === 0 && !text), picked, text });
+    }
+
+    /** 扩展不等这次提问了（超时 / 这一轮被停）：把还开着的那张卡片收掉（按没作答交回去）。 */
+    public cancelAsk(id: string): void {
+        for (const [cardId, state] of Array.from(this.openCards.entries())) {
+            if (state.srcId === id) { this.settleCard(cardId, undefined); }
         }
     }
 
-    /** 扩展不等这次提问了（超时 / 这一轮被停）：把还开着的那块屏上的浮层收掉。 */
-    public cancelAsk(id: string): void {
-        const target = this.openAsks.get(id);
-        if (!target) { return; }
-        this.openAsks.delete(id);
-        this.cancelOverlay(target);
+    /**
+     * 整屏重画之后：这块屏画过的卡片都随重画没了，还等着的重新发一遍（画回那个会话的消息流里）。
+     * 重画前记着“发过了”的名单在这里作废：不发的话，这张卡片在界面上就永远消失了。
+     */
+    private resendCardsTo(pageId: string): void {
+        if (!pageId) { return; }
+        for (const [id, state] of Array.from(this.openCards.entries())) {
+            if (!state.screens.delete(pageId)) { continue; }
+            if (state.sessionId && this.clientsViewing(state.sessionId).indexOf(pageId) >= 0) {
+                this.sendCardToScreen(id, state, pageId);
+            }
+        }
     }
 
     /** 确认框问不着页面时的兜底（VSCode 弹原生框；独立后端没屏可问就按“否”）。 */

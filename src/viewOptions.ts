@@ -3,7 +3,7 @@
  *
  * 单独放一个文件：两份宿主（插件、独立后端）都要用同一套候选与默认值，
  * 存储各自不同（VSCode 存 globalState，独立后端存 state.json）。这里只放取值，
- * 不碰存储、不引用 vscode，可以单测。
+ * 不碰存储、不引用 vscode。
  */
 
 export const SEND_KEYS = ["enter", "shift+enter", "alt+enter", "ctrl+enter"] as const;

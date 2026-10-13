@@ -5,10 +5,13 @@ import * as path from "path";
 /**
  * 会话存储读取：历史列表的数据源。
  *
- * 按 pi TUI 的 /resume 列表同款逻辑取数据：
- *   - 目录里每个会话文件按修改时间倒序排（最新在最前），每批取 N 个；
- *   - 只对取走的那几个文件做整文件扫描：标题（文件里最新一条 session_info
- *     条目的 name，没有命名就用第一条用户消息）、消息条数、最后活动时间。
+ * 列表（历史会话 / 「项目与会话」面板）每一屏只显示最前面那几个，所以这里也只看最前面那几个：
+ *   - 会话清单：按文件名倒序 —— pi 起名时把创建时间写在最前面（2026-07-14T02-12-04-764Z_….jsonl），
+ *     这样只读一次目录就拿到顺序，不用把目录里每个文件都 stat 一遍；每批取 N 个，
+ *     只对取走的那几个文件做整文件扫描：标题（文件里最新一条 session_info 条目的 name，
+ *     没有命名就用第一条用户消息）、消息条数、最后活动时间。
+ *   - 项目清单：每个目录只看一眼（readdir 拿文件名清单 + stat 最新那一个），不进目录里逐个 stat，
+ *     更不读内容；真要显示哪一行了，才读那个目录最新那个会话文件的开头（拿真实路径）。
  *   - 只列当前项目（cwd 对应目录）的会话。
  */
 
@@ -118,8 +121,33 @@ function entryActivityMs(entry: any): number {
 }
 
 /**
+ * 列出 cwd 会话目录里的会话文件，最新的在前。
+ *
+ * 排序只看文件名：pi 给会话文件起名时把创建时间摆在最前面
+ * （2026-07-14T02-12-04-764Z_019f5e65-….jsonl），名字倒序就是最新的在前。
+ * 于是这里只读一次目录就能定顺序 —— 列表一屏只显示最前面那几个，没必要为了排序
+ * 把目录里每个文件都 stat 一遍（会话攒多的目录里，那一遍就是几十毫秒）。
+ * 目录不存在（该项目没跑过 pi）返回空。
+ */
+export async function listSessionFilesNewestFirst(cwd: string): Promise<string[]> {
+    const dir = await resolveSessionDir(cwd);
+    if (!dir) { return []; }
+    let names: string[];
+    try {
+        names = (await fs.promises.readdir(dir)).filter((f) => f.endsWith(".jsonl"));
+    } catch {
+        return [];
+    }
+    // 名字倒序 = 创建时间倒序（同一毫秒里撞上就按 uuid 排，无所谓）
+    names.sort((a, b) => b.localeCompare(a));
+    return names.map((n) => path.join(dir, n));
+}
+
+/**
  * 列出 cwd 会话目录里的全部会话文件，按文件修改时间倒序（最新的在前）。
- * 只做 readdir + stat，不读内容。目录不存在（该项目没跑过 pi）返回空。
+ * 要挨个 stat 才知道修改时间，所以它是“全碰一遍”的那一个：
+ * 只有“启动时自动打开最近会话”用它（而且只看第一项）——判断“最近聊过哪个”绕不开这一遍；
+ * 列表那种一屏只显示最前面几个的地方走 listSessionFilesNewestFirst。
  */
 export async function listSessionFiles(cwd: string): Promise<SessionFileEntry[]> {
     const dir = await resolveSessionDir(cwd);
@@ -215,7 +243,7 @@ export function scanSessionInfo(file: string): Promise<SessionListItem | null> {
     });
 }
 
-/** 一次最多同时扫几个会话文件夹：文件夹可能上百个，全放出去会同时开一堆文件句柄。 */
+/** 一次最多同时进几个项目目录：目录可能上百个，全放出去会同时开一堆文件句柄。 */
 const PROJECT_SCAN_CONCURRENCY = 8;
 
 /** 读会话文件开头时最多读这么多字节：header 很小，这个上限防的是没有换行的坏文件。 */
@@ -278,24 +306,43 @@ function projectName(cwd: string): string {
     return parts.length > 0 ? parts[parts.length - 1] : cwd;
 }
 
-/**
- * 合并同一个目录用的键。
- * 同一个真实目录可能因为盘符大小写不同（D: 与 d:）被记到两个文件夹里，所以要合并；
- * Windows 整个路径不区分大小写，其它系统只把盘符这种形式统一小写，路径本身仍区分。
- */
-function cwdMergeKey(cwd: string): string {
-    if (process.platform === "win32") { return cwd.toLowerCase(); }
-    return cwd.replace(/^([a-zA-Z]):/, (_m, drive: string) => `${drive.toLowerCase()}:`);
+/** 一个项目目录的登记：还没读会话文件的内容。 */
+export interface ProjectDirEntry {
+    /** 会话目录的绝对路径（sessions 根底下那一层） */
+    dir: string;
+    /** 目录里最新的那个会话文件（名字里带着创建时间，名字最大的就是最新的） */
+    newest: string;
+    /** 上面那个文件的修改时间（毫秒）—— 排“最近待过的项目”看的就是它 */
+    lastActivity: number;
+    /** 目录里的会话文件个数 */
+    sessionCount: number;
 }
 
 /**
- * 扫一个会话文件夹，产出一条项目；文件夹里没有可用的会话文件就返回 null。
+ * 列出项目目录本身，按最近活动倒序。
  *
- * 文件夹名是把 cwd 里的 / \ : 全换成 - 拼出来的，不同路径可能编出同一个名字，
- * 反解回去会有歧义（这正是 encodeCwd 只能单向用的原因）；
- * 所以真实路径只认会话文件第一行的 cwd，不拿文件夹名去猜。
+ * 一个目录只碰两下：readdir 看一眼里面有哪些会话文件（顺便得个数），再 stat 最新的那一个。
+ * 不再把每个项目里每个会话文件都 stat 一遍（上百个项目加起来往往上千个，那一遍就是几十毫秒），
+ * 更不读文件内容 —— 那一行到底是谁、要画几行，留到真要显示时再看（见 readProjectEntry）。
+ * 没跑过 pi（目录不存在 / 不是目录）就是空清单，不抛。
  */
-async function scanProjectFolder(dir: string): Promise<ProjectEntry | null> {
+export async function listProjectDirs(): Promise<ProjectDirEntry[]> {
+    const root = sessionsRoot();
+    let entries: fs.Dirent[];
+    try {
+        entries = await fs.promises.readdir(root, { withFileTypes: true });
+    } catch {
+        return [];
+    }
+    const dirs = entries.filter((e) => e.isDirectory()).map((e) => path.join(root, e.name));
+    const found = await mapLimit(dirs, PROJECT_SCAN_CONCURRENCY, (dir) => scanProjectDir(dir));
+    return found
+        .filter((d): d is ProjectDirEntry => d !== null)
+        .sort((a, b) => b.lastActivity - a.lastActivity);
+}
+
+/** 看一眼一个项目目录：有哪些会话文件、最新那个是谁、它什么时候改的。 */
+async function scanProjectDir(dir: string): Promise<ProjectDirEntry | null> {
     let names: string[];
     try {
         names = (await fs.promises.readdir(dir)).filter((f) => f.endsWith(".jsonl"));
@@ -303,28 +350,32 @@ async function scanProjectFolder(dir: string): Promise<ProjectEntry | null> {
         return null;
     }
     if (names.length === 0) { return null; }
-    const stats = await Promise.all(
-        names.map(async (name) => {
-            const file = path.join(dir, name);
-            try {
-                const st = await fs.promises.stat(file);
-                return { file, mtime: st.mtimeMs };
-            } catch {
-                return null;
-            }
-        })
-    );
-    const files = stats.filter((s): s is { file: string; mtime: number } => s !== null);
-    if (files.length === 0) { return null; }
-    files.sort((a, b) => b.mtime - a.mtime);
-    const newest = files[0];
-    const firstLine = await readFirstLine(newest.file);
+    names.sort((a, b) => b.localeCompare(a));
+    const newest = path.join(dir, names[0]);
+    try {
+        const st = await fs.promises.stat(newest);
+        return { dir, newest, lastActivity: st.mtimeMs, sessionCount: names.length };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * 把一条目录登记读成展示条目：进目录里读它最新那个会话文件的第一行，拿真实工作目录。
+ * 一行只读一个文件的开头（几百字节），所以只对真要画的那几行做。
+ *
+ * 文件夹名是把 cwd 里的 / \ : 全换成 - 拼出来的，不同路径可能编出同一个名字，
+ * 反解回去会有歧义（这正是 encodeCwd 只能单向用的原因）；
+ * 所以真实路径只认会话文件第一行的 cwd，不拿文件夹名去猜。
+ */
+export async function readProjectEntry(entry: ProjectDirEntry): Promise<ProjectEntry | null> {
+    const firstLine = await readFirstLine(entry.newest);
     if (firstLine === null) { return null; }
     let header: unknown;
     try {
         header = JSON.parse(firstLine);
     } catch {
-        // 写到一半或者版本不同的文件：跳过这个文件夹，别让一份坏文件把整份清单带崩
+        // 写到一半或者版本不同的文件：跳过这个目录，别让一份坏文件把整份清单带崩
         return null;
     }
     const cwd = (header as { cwd?: unknown } | null)?.cwd;
@@ -333,47 +384,13 @@ async function scanProjectFolder(dir: string): Promise<ProjectEntry | null> {
     return {
         cwd,
         name: projectName(cwd),
-        lastActivity: newest.mtime,
-        sessionCount: names.length,
+        lastActivity: entry.lastActivity,
+        sessionCount: entry.sessionCount,
     };
 }
 
-/** 列出用 pi 跑过会话的工作目录，按最后活动时间倒序。 */
-export async function listProjects(options?: { limit?: number }): Promise<ProjectEntry[]> {
-    const root = sessionsRoot();
-    let entries: fs.Dirent[];
-    try {
-        entries = await fs.promises.readdir(root, { withFileTypes: true });
-    } catch {
-        // 这台机器还没跑过 pi（目录不存在 / 不是目录）：空清单，不抛
-        return [];
-    }
-    const dirs = entries
-        .filter((e) => e.isDirectory())
-        .map((e) => path.join(root, e.name))
-        .sort();
-    const found = await mapLimit(dirs, PROJECT_SCAN_CONCURRENCY, (dir) =>
-        scanProjectFolder(dir)
-    );
-    const byCwd = new Map<string, ProjectEntry>();
-    for (const p of found) {
-        if (!p) { continue; }
-        const key = cwdMergeKey(p.cwd);
-        const prev = byCwd.get(key);
-        if (!prev) {
-            byCwd.set(key, p);
-            continue;
-        }
-        // 同一个真实目录：会话数相加，时间和展示用的名字取更新的那份
-        const newer = p.lastActivity > prev.lastActivity ? p : prev;
-        byCwd.set(key, {
-            cwd: newer.cwd,
-            name: newer.name,
-            lastActivity: Math.max(prev.lastActivity, p.lastActivity),
-            sessionCount: prev.sessionCount + p.sessionCount,
-        });
-    }
-    const list = Array.from(byCwd.values()).sort((a, b) => b.lastActivity - a.lastActivity);
-    if (options?.limit === undefined) { return list; }
-    return list.slice(0, Math.max(0, options.limit));
+/** 某个工作目录自己的项目登记（面板上“当前工作区”那行用）；没跑过 pi 就是 null。 */
+export async function readProjectDirForCwd(cwd: string): Promise<ProjectDirEntry | null> {
+    const dir = await resolveSessionDir(cwd);
+    return dir ? scanProjectDir(dir) : null;
 }

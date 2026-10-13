@@ -167,7 +167,7 @@ function pickInt(value: unknown, min: number, max: number, fallback: number, lab
     return value;
 }
 
-/** 把任意来源的对象规范化成 ServerConfig。这层全是纯函数，测试重点在这里。 */
+/** 把任意来源的对象规范化成 ServerConfig。这层全是纯函数。 */
 export function normalizeServerConfig(raw: unknown): { config: ServerConfig; warnings: string[] } {
     const warnings: string[] = [];
     const config = defaults();

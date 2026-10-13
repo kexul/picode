@@ -61,6 +61,60 @@ const sleep = (ms) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.
 
 const MODEL = { id: "fake-model", provider: "fake", name: "假模型（秒回）", contextWindow: 128000 };
 
+/** 回话文件放在哪（插件用 PICHAT_ASK_DIR 告诉本进程，见 src/askAssets.ts 与 askProtocol.ts）。 */
+const ASK_DIR = process.env.PICHAT_ASK_DIR || "";
+
+/** 这一轮被停掉了（收到 abort 命令）：问话那一段看到它就当"没作答"交回去（真扩展看的是 signal）。 */
+let aborted = false;
+
+/**
+ * 等插件把问话的答案写回来（真扩展也是这么轮询的，见 askBridgeSource.ts）。
+ * 先写临时文件再改名，所以读到一半的 JSON 不会出现；读到了就把它删掉。
+ */
+async function waitAskAnswer(id, waitMs) {
+    const file = ASK_DIR ? path.join(ASK_DIR, "ask-answers", id + ".json") : "";
+    const deadline = Date.now() + waitMs;
+    while (file && Date.now() < deadline && !aborted) {
+        try {
+            const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+            try { fs.rmSync(file, { force: true }); } catch { /* 删不掉不影响 */ }
+            if (parsed && parsed.id === id) { return parsed; }
+        } catch { /* 还没写 / 写了一半：接着等 */ }
+        await sleep(150);
+    }
+    return null;
+}
+
+/** 把回话文件里的答案念成扩展给模型的工具结果文本（跟 askBridgeSource.ts 里那几句一样）。 */
+function answerText(answer) {
+    if (!answer || answer.cancelled) { return "用户没作答。"; }
+    const picked = Array.isArray(answer.picked) ? answer.picked : [];
+    const written = typeof answer.text === "string" ? answer.text.trim() : "";
+    const lines = [];
+    if (picked.length === 1) { lines.push("用户选了：" + picked[0]); }
+    else if (picked.length > 1) { lines.push("用户选了这几项：" + picked.join("、")); }
+    if (written) { lines.push("用户还自己写了一句：" + written); }
+    return lines.length ? lines.join("\n") : "用户没作答。";
+}
+
+/** 还等着的“扩展问用户”（extension_ui_request）：编号 → 收尾函数。 */
+const uiWaiters = new Map();
+let uiSeq = 0;
+
+/**
+ * 演一次“扩展问用户”（pi 的 extension_ui_request）：confirm / input / select 三种。
+ * 等插件回一条 extension_ui_response（见 src/sessionRuntime.ts 的 onPiUiRequest）。
+ * 真 pi 里这是扩展在跑工具中间问的；这里由剧本直接发，界面上看到的是同一张卡片。
+ */
+function askExtensionUi(method, fields, waitMs) {
+    const id = `ui-${++uiSeq}-${Date.now().toString(36)}`;
+    return new Promise((resolve) => {
+        const timer = setTimeout(() => { uiWaiters.delete(id); resolve(null); }, waitMs);
+        uiWaiters.set(id, (value) => { clearTimeout(timer); uiWaiters.delete(id); resolve(value); });
+        write({ type: "extension_ui_request", id, method, ...fields });
+    });
+}
+
 // ---------------------------------------------------------------------------
 // 输出
 // ---------------------------------------------------------------------------
@@ -79,6 +133,7 @@ function respond(id, command, data) {
 async function runScript(userText) {
     const emit = (evt) => write(evt);
     const now = () => new Date().toISOString();
+    aborted = false;
 
     // 用户的话里带“派活”就假装模型调了 taba_spawn（子会话收到的任务正文里也有“派活”两个字，
     // 那种要排除掉，不然子进程也会发一条）：往 stderr 写一行暗号（格式与真扩展一致，
@@ -198,9 +253,125 @@ async function runScript(userText) {
         emit({ type: "message_end", message: toolResult });
     };
 
+    /**
+     * 演一次“模型问用户选择题”（ask_choice）：真扩展那套协议一模一样 ——
+     * 工具调用进历史 → 往 stderr 写一行暗号（见 src/askProtocol.ts）→ 等插件写回话文件 → 工具结果。
+     * 界面靠 toolCallId 把问话卡片挂到那条工具行下面，所以暗号里也带一份。
+     */
+    const askChoice = async (ask) => {
+        const callId = nextId("call");
+        const askId = nextId("ask");
+        const args = {
+            question: ask.question,
+            options: ask.options,
+            multi: ask.multi === true,
+            recommended: ask.recommended || [],
+            allowText: ask.allowText !== false,
+        };
+        emit({
+            type: "message_update",
+            usage: {},
+            assistantMessageEvent: { type: "toolcall_start", contentIndex: assistantMsg.content.length, id: callId, toolName: "ask_choice" },
+        });
+        emit({
+            type: "message_update",
+            usage: {},
+            assistantMessageEvent: {
+                type: "toolcall_end", contentIndex: assistantMsg.content.length, id: callId, toolName: "ask_choice",
+                partial: { type: "toolCall", id: callId, name: "ask_choice", arguments: args },
+            },
+        });
+        assistantMsg.content.push({ type: "toolCall", id: callId, name: "ask_choice", arguments: args });
+        emit({ type: "tool_execution_start", toolCallId: callId, toolName: "ask_choice", args });
+
+        // 暗号：真扩展写在 stderr 上的一行（一行、base64，见 src/askProtocol.ts）
+        process.stderr.write("##PICHAT_ASK##" + Buffer.from(JSON.stringify({
+            kind: "ask",
+            id: askId,
+            ...args,
+            toolCallId: callId,
+        }), "utf8").toString("base64") + "\n");
+
+        const answer = await waitAskAnswer(askId, 120000);
+        if (!answer) {
+            // 不等了（这一轮被停 / 等超时）：跟插件说一声，把界面上那张卡片收掉
+            //（跟真扩展一样，见 askBridgeSource.ts 的 ask-done）
+            process.stderr.write("##PICHAT_ASK##" + Buffer.from(JSON.stringify(
+                { kind: "ask-done", id: askId },
+            ), "utf8").toString("base64") + "\n");
+        }
+        const text = answerText(answer);
+        const toolResult = {
+            role: "toolResult",
+            toolCallId: callId,
+            content: [{ type: "text", text }],
+            isError: false,
+            timestamp: now(),
+        };
+        emit({
+            type: "tool_execution_end", toolCallId: callId, toolName: "ask_choice", args,
+            result: { content: [{ type: "text", text }], details: { id: askId } },
+            isError: false, durationMs: 0,
+        });
+        messages.push(toolResult);
+        emit({ type: "message_start", message: toolResult });
+        emit({ type: "message_end", message: toolResult });
+        return text;
+    };
+
+    /** 这一轮演完了：收尾（下面两条路都走它）。 */
+    const finish = () => {
+        assistantMsg.stopReason = "stop";
+        messages.push(assistantMsg);
+        emit({ type: "message_end", message: assistantMsg });
+        emit({ type: "agent_end", messages });
+        // 假装装了一个自动命名扩展：第一轮跑完后把会话标题报上来（真 pi 里是扩展发的）。
+        // 界面顶条中间那行 / 会话列表都读这个标题；没标题时才回落随机名。
+        if (!scriptState.titleSent) {
+            scriptState.titleSent = true;
+            const firstUser = messages.find((m) => m && m.role === "user");
+            const firstText = firstUser && Array.isArray(firstUser.content)
+                ? (firstUser.content.find((c) => c && c.type === "text") || {}).text
+                : "";
+            const title = "假标题：" + String(firstText || "新会话").replace(/s+/g, " ").trim().slice(0, 12);
+            messages.push({ role: "system", content: [{ type: "text", text: "会话标题已设置" }], sessionName: title });
+            emit({ type: "session_info_changed", name: title });
+        }
+        emit({ type: "agent_settled" });
+    };
+
+    // ---- 问话那几种（调试用：一句话就演一类，不用真模型；见 dev/askCards.js）----
+    // 前两种是模型调 ask_choice（走 stderr 暗号 + 回话文件），后三种是扩展在中间问用户
+    // （走 extension_ui_request，跟真的扩展提问同一条路）。
+    const askKind = /问多选/.test(userText) ? "multi"
+        : /问单选/.test(userText) ? "single"
+            : /问确认/.test(userText) ? "confirm"
+                : /问输入/.test(userText) ? "input"
+                    : /问选项/.test(userText) ? "select" : "";
+    if (askKind) {
+        await say("（假模型）我演一次问话：" + askKind);
+        let reply = "";
+        if (askKind === "single") {
+            reply = await askChoice({ question: "选 A 还是 B？", options: ["A", "B"], recommended: [1] });
+        } else if (askKind === "multi") {
+            reply = await askChoice({ question: "哪几项要？", options: ["甲", "乙", "丙"], multi: true, recommended: [1, 3] });
+        } else if (askKind === "confirm") {
+            const back = await askExtensionUi("confirm", { title: "要跑这条命令吗？", message: "rm -rf /tmp/x" }, 120000);
+            reply = back ? "扩展收到 confirmed=" + String(back.confirmed) : "扩展没等到回话。";
+        } else if (askKind === "input") {
+            const back = await askExtensionUi("input", { title: "会话叫什么名字？", placeholder: "写一个", prefill: "默认名" }, 120000);
+            reply = back ? "扩展收到 " + JSON.stringify(back.cancelled ? null : back.value) : "扩展没等到回话。";
+        } else {
+            const back = await askExtensionUi("select", { title: "用哪个？", options: ["第一个", "第二个", "第三个"] }, 120000);
+            reply = back ? "扩展收到 " + JSON.stringify(back.cancelled ? null : back.value) : "扩展没等到回话。";
+        }
+        await say("问话结束 —— " + reply);
+        finish();
+        return;
+    }
+
     await think("用户要的是演示，那就按老剧本走一遍：先读图，再 bash，再改一下文件。");
-    await say("好，我用三个工具给你演示一遍（假模型秒回）：");
-    await act("read", { path: "示例图片.png" }, {
+    await say("好，我用三个工具给你演示一遍（假模型秒回）：");    await act("read", { path: "示例图片.png" }, {
         content: [
             { type: "text", text: "Read image file [image/png]" },
             { type: "image", data: SAMPLE_PNG_BASE64, mimeType: "image/png" },
@@ -219,24 +390,7 @@ async function runScript(userText) {
         },
     });
     await say("完事。三个工具都跑过了：read（带图）、bash、edit。");
-
-    assistantMsg.stopReason = "stop";
-    messages.push(assistantMsg);
-    emit({ type: "message_end", message: assistantMsg });
-    emit({ type: "agent_end", messages });
-    // 假装装了一个自动命名扩展：第一轮跑完后把会话标题报上来（真 pi 里是扩展发的）。
-    // 界面顶条中间那行 / 会话列表都读这个标题；没标题时才回落随机名。
-    if (!scriptState.titleSent) {
-        scriptState.titleSent = true;
-        const firstUser = messages.find((m) => m && m.role === "user");
-        const firstText = firstUser && Array.isArray(firstUser.content)
-            ? (firstUser.content.find((c) => c && c.type === "text") || {}).text
-            : "";
-        const title = "假标题：" + String(firstText || "新会话").replace(/s+/g, " ").trim().slice(0, 12);
-        messages.push({ role: "system", content: [{ type: "text", text: "会话标题已设置" }], sessionName: title });
-        emit({ type: "session_info_changed", name: title });
-    }
-    emit({ type: "agent_settled" });
+    finish();
 }
 
 // ---------------------------------------------------------------------------
@@ -261,6 +415,12 @@ function applyFakeEdit(args) {
 async function handle(cmd) {
     const id = cmd.id;
     switch (cmd.type) {
+        // 扩展问用户的回话（见上边的 askExtensionUi）
+        case "extension_ui_response": {
+            const waiter = uiWaiters.get(cmd.id);
+            if (waiter) { waiter(cmd); }
+            return;
+        }
         // 剧本（每轮照着演一遍）：1 说一句 → 2 read 图 → 3 bash → 4 edit → 5 收尾。
         // 用户这句话里带“派活”时，先往 stderr 写一行暗号（假扮模型调了 taba_spawn）。
         case "prompt": {
@@ -313,6 +473,8 @@ async function handle(cmd) {
         case "abort":
         case "abort_bash":
         case "clear_queue":
+            // 停掉这一轮：正等着的问话也当没作答（真扩展那边是工具的 signal 触发的）
+            if (cmd.type === "abort") { aborted = true; }
             respond(id, cmd.type, {});
             return;
         case "bash":

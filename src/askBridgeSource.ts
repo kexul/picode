@@ -152,7 +152,7 @@ const ASK_DESCRIPTION =
     "一次只问一个问题：前一个答完了再问下一个。问题和你给的选项都要短（各占一行最好）。" +
     "问之前先把你自己的推荐和理由写在正文里（工具调用之前那段话）。" +
     "作答回来的可能是勾中的选项，也可能是用户自己写的一句话（那种按「用户自己的说法」理解）。" +
-    "用户把框关了、或者一直没答（等半小时），就当作没作答：不要再重复问同一个问题，等用户开口。";
+    "用户不答了、或者一直没答（等半小时），就当作没作答：不要再重复问同一个问题，等用户开口。";
 
 /** 注册一个工具；名字被别人占了就跳过（不要让整个 pi 起不来）。 */
 function safeRegister(pi: any, def: any): void {
@@ -172,7 +172,7 @@ export default function askBridge(pi: any): void {
         parameters: ASK_PARAMS,
         // 一次只问一个：几个问题同时弹出来会互相抢界面
         executionMode: "sequential",
-        async execute(_toolCallId: string, params: any, signal: any, _onUpdate: any, ctx: any) {
+        async execute(toolCallId: string, params: any, signal: any, _onUpdate: any, ctx: any) {
             const question = text(params?.question, 4000);
             const rawOptions = Array.isArray(params?.options) ? params.options : [];
             const options: string[] = [];
@@ -197,13 +197,15 @@ export default function askBridge(pi: any): void {
                 multi: params?.multi === true,
                 recommended: recommendedIndexes(params?.recommended, options.length),
                 allowText: params?.allowText !== false,
+                // 界面拿这个把问话卡片挂到这条工具行下面（插件那边收到后原样传给界面）
+                toolCallId: typeof toolCallId === "string" ? toolCallId.slice(0, 128) : "",
                 parentSessionFile: sessionFileOf(ctx),
             };
             emit(payload);
 
             const waited = await waitAnswer(id, signal);
             if (waited.why !== "answered") {
-                // 不等了：跟插件说一声，把可能还开着的那个浮层收掉
+                // 不等了：跟插件说一声，把界面上还等着的那张卡片收掉
                 emit({ kind: "ask-done", id });
                 const why = waited.why === "cancelled"
                     ? "这一轮被停掉了，用户没来得及作答。"

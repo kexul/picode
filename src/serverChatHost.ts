@@ -22,21 +22,17 @@ export interface ServerChatHostOptions {
     cwd: string;
     /** 日志出口（默认打标准输出）。 */
     log?: (text: string) => void;
-    /** 设置与状态文件的目录（测试里换掉；默认 ~/.pi/pichat）。 */
-    dir?: string;
 }
 
 export class ServerChatHost extends ChatHostBase {
     private readonly state: ServerStateStore;
     private readonly log: (text: string) => void;
-    private readonly dir?: string;
     private disposed = false;
 
     constructor(private readonly options: ServerChatHostOptions) {
         super("server");
         this.log = options.log ?? ((text) => console.log(text));
-        this.dir = options.dir;
-        this.state = new ServerStateStore(serverStateFile(options.dir));
+        this.state = new ServerStateStore(serverStateFile());
     }
 
     // ---- 显示选项的存储：state.json（界面改的），读的时候先看它，再看配置文件里预设的 ----
@@ -56,7 +52,7 @@ export class ServerChatHost extends ChatHostBase {
 
     /** 显示选项在配置文件里的对应项。 */
     private configPreset(key: string): unknown {
-        const cfg: ServerConfig = readServerConfig(this.dir).config;
+        const cfg: ServerConfig = readServerConfig().config;
         switch (key) {
             case ServerChatHost.KEY_THEME: return cfg.themeMode;
             case ServerChatHost.KEY_FONT_SIZE: return cfg.fontSize;
@@ -84,7 +80,7 @@ export class ServerChatHost extends ChatHostBase {
 
     // ---- RuntimeHost：配置 / cwd ----
     public getConfig() {
-        const cfg = readServerConfig(this.dir).config;
+        const cfg = readServerConfig().config;
         const taba = cfg.tabaEnabled ? getTabaAssets() : undefined;
         const ask = getAskAssets();
         return {
@@ -106,7 +102,7 @@ export class ServerChatHost extends ChatHostBase {
 
     protected piMissingMessage(piPath: string): string {
         return `未找到 pi 可执行文件（当前配置："${piPath}"）。请确认已安装 pi 并加入系统 PATH，`
-            + `或改 ${serverConfigFile(this.dir)} 里的 piPath。`;
+            + `或改 ${serverConfigFile()} 里的 piPath。`;
     }
 
     protected onPiMissing(piPath: string): void {
@@ -114,7 +110,7 @@ export class ServerChatHost extends ChatHostBase {
     }
 
     public persistModel(provider: string, modelId: string): void {
-        updateServerConfig({ provider, model: modelId }, this.dir);
+        updateServerConfig({ provider, model: modelId });
     }
 
     // ---- 编辑器才有的那几样：基类已经派给打开着这个工作区的 VS Code 窗口，这里不用再写 ----

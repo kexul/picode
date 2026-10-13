@@ -17,7 +17,7 @@
  * 子类只需实现“平台钩子”：消息如何送到 webview、配置/视图选项存储、
  * 对话框 / diff / 文件打开的实现，以及各自独有的消息类型。
  *
- * 本类不引用 `vscode`，便于单测时 mock RuntimeHost。
+ * 本类不引用 `vscode`：平台相关的事都从 RuntimeHost 走。
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -26,9 +26,9 @@ import { PiConfig } from "./sessionRuntime";
 import { PiClient } from "./piClient";
 import {
     listSessionFiles,
+    listSessionFilesNewestFirst,
     scanSessionInfo,
     type HistoryPickerItem,
-    type SessionFileEntry,
     type SessionListItem,
 } from "./sessionStore";
 import { randomNameParts, composeName } from "./names";
@@ -55,7 +55,7 @@ import {
 } from "./tabaLaunch";
 import { buildRunRecord, closedRunState, tabaRunsDir, writeRunRecord, type TabaRunState } from "./tabaRunFiles";
 import type { RpcSessionState } from "./piRpc";
-import type { ProjectEntry } from "./sessionStore";
+import type { ProjectDirEntry } from "./sessionStore";
 
 /** # 引用菜单里的一行：一个会话（或其某个子会话）。 */
 export interface ChatReferenceItem {
@@ -75,15 +75,18 @@ export interface PickerState {
     resolve: ((v: any | undefined) => void) | null;
     /** 没人答就收掉，这个定时器在挂着。 */
     timer?: ReturnType<typeof setTimeout>;
-    /** 这个浮层列的是哪些会话文件（历史列表 / 项目面板上半段）；开列表时重建。 */
-    historyFiles: SessionFileEntry[];
+    /** 这个浮层列的是哪些会话文件（历史列表 / 项目面板上半段）；开列表时重建。
+     *  顺序 = 最新的在前（按文件名倒序，见 sessionStore.listSessionFilesNewestFirst）。 */
+    historyFiles: string[];
     /** 已经扫到第几个文件（「加载更多」接着往后扫）。 */
     historyOffset: number;
     /** 项目面板现在显示的是哪个目录（点下面的工作区会变）。 */
     workspaceFolder: string;
-    /** 项目面板下半段还没拿出来的人和游标。 */
-    workspaceRest: ProjectEntry[];
+    /** 项目面板下半段还没拿出来的项目目录（按最近活动倒序）与游标。 */
+    workspaceDirs: ProjectDirEntry[];
     workspaceOffset: number;
+    /** 已经列过的目录（按真实路径归一，见 dirKey）：同一个项目只占一行。 */
+    workspaceSeen: Set<string>;
 }
 
 export abstract class ChatControllerBase implements RuntimeHost {
@@ -136,7 +139,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             st = {
                 kind: "", resolve: null,
                 historyFiles: [], historyOffset: 0,
-                workspaceFolder: "", workspaceRest: [], workspaceOffset: 0,
+                workspaceFolder: "", workspaceDirs: [], workspaceOffset: 0, workspaceSeen: new Set(),
             };
             this.pickers.set(clientId, st);
         }
@@ -570,7 +573,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 用在“这块屏换了个新标识、但它原来就是在看这个会话”的场合（VSCode 窗口重连）。
      */
     public adoptClientSession(clientId: string, panelId: string): void {
-        if (this.panels.has(panelId)) { this.clientSessions.set(clientId, panelId); }
+        if (!this.panels.has(panelId)) { return; }
+        this.clientSessions.set(clientId, panelId);
+        // 换了个新标识但还看原来那个会话（窗口重连）：跟“切过去”一样走一遍通知
+        this.onClientSessionChanged(clientId, panelId);
     }
 
     /** 有没有屏在看这个会话（状态上报这类“只跟人正在看的会话走”的事看它）。 */
@@ -844,7 +850,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
             this.postToSession(parentPanelId, {
                 type: "system",
-                text: buildSpawnNotice({ child, sessionName: this.sessionDisplayName(rt) }),
+                text: buildSpawnNotice({ child }),
             });
             this.postToSession(rt.id, {
                 type: "system",
@@ -1419,24 +1425,21 @@ export abstract class ChatControllerBase implements RuntimeHost {
     //  拾取器 + 模型选择（RuntimeHost.pickModelInteractive）
     // ========================================================================
     /**
-     * 浮层该发给哪个界面。
-     *
-     * 多界面宿主（插件里的对话面板 + 浏览器页面）在这里挑“人最近在动的那一个”；单界面宿主
-     * （编辑器面板 / 测试）不需要挑，返回空串，{@link sendOverlayTo} 的默认实现只有一个出口。
+     * 浮层该发给哪个界面：多界面宿主（插件里的对话面板 + 浏览器页面）在这里挑
+     * “人最近在动的那一个”。
      */
-    protected pickOverlayTarget(): string { return ""; }
+    protected abstract pickOverlayTarget(): string;
 
     /**
-     * 把浮层消息发给挑好的那个界面。
-     *
-     * 默认走 postToWebview——单界面宿主只有这一个出口。多界面宿主覆写成“只发给那一个”，
-     * 让浮层只出现在人正在看的那块屏上，别的屏不受影响。
+     * 把浮层消息发给挑好的那个界面：只发给那一块屏，别的屏不受影响。
      * @returns 发没发出去；发不出去时调用方按取消处理（别让等的人干等）。
      */
-    protected sendOverlayTo(_target: string, msg: Record<string, unknown>): boolean {
-        this.postToWebview(msg);
-        return true;
-    }
+    protected abstract sendOverlayTo(target: string, msg: Record<string, unknown>): boolean;
+
+    /** 界面上答了一张开在消息流里的问话卡片（见 ChatHostBase.askOnScreens）。 */
+    protected handleAskCardAnswer(_msg: any): void { /* 默认不收这种消息：只有带问话卡片的宿主用得上 */ }
+    /** 界面上把一张问话卡片“不答了”。 */
+    protected handleAskCardCancel(_msg: any): void { /* 同上 */ }
 
     /** 向界面推送拾取器浮层并等待用户选择（取消返回 undefined）。
      *  @param target 弹给哪块屏（界面标识）；不填就现挑“人最近在动的那一块”。 */
@@ -1634,7 +1637,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!fromPage) { await this.beforeHistoryPicker(); }
         const cwd = opts?.folder ? path.resolve(opts.folder) : (this.getActive(clientId)?.cwd ?? this.getCwd());
         const state = this.pickerStateOf(clientId);
-        state.historyFiles = await listSessionFiles(cwd);
+        state.historyFiles = await listSessionFilesNewestFirst(cwd);
         state.historyOffset = 0;
         if (state.historyFiles.length === 0) { this.onNoSessions(); return; }
         const items = await this.scanHistoryBatch(clientId);
@@ -1660,9 +1663,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const batch = state.historyFiles.slice(state.historyOffset, state.historyOffset + ChatControllerBase.HISTORY_BATCH_SIZE);
         state.historyOffset += batch.length;
         const current = this.getActive(clientId)?.currentSessionPath;
-        const scanned = await Promise.all(batch.map((f) => scanSessionInfo(f.file)));
+        const scanned = await Promise.all(batch.map((f) => scanSessionInfo(f)));
         return scanned
             .filter((s): s is SessionListItem => s !== null)
+            // 这一批是按“哪个文件新”取的（文件名里的创建时间），扫完知道各自最后说话是什么时候，
+            // 就按那个排一遍 —— 屏幕上这一屏看上去仍然是“刚聊过的在前面”。
+            .sort((a, b) => b.lastActivity - a.lastActivity)
             .map((s) => ({ ...s, current: this.samePath(s.file, current) }));
     }
 
@@ -1793,6 +1799,14 @@ export abstract class ChatControllerBase implements RuntimeHost {
             case "pickerCancel":
                 this.resolvePicker(undefined);
                 return;
+            case "askCardAnswer":
+                // 界面上答了一张开在消息流里的问话卡片（见 ChatHostBase.askOnScreens）
+                this.handleAskCardAnswer(msg);
+                return;
+            case "askCardCancel":
+                // 界面上把一张问话卡片"不答了"
+                this.handleAskCardCancel(msg);
+                return;
             case "historyLoadMore":
                 void this.loadMoreHistory();
                 return;
@@ -1852,6 +1866,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 // 网页端顶部的「加载更早的消息」按钮：把当前窗口之前的一段补发过来。
                 // 只在开过历史窗口的会话上有意义；没开过窗口时运行时自己会忽略。
                 void target.loadOlderHistory();
+                break;
+            case "loadResultImage":
+                // 界面上点开一张"首屏没带过来"的图（见 sessionRuntime 的图片预算）：把那张单发回去。
+                if (typeof msg.toolCallId === "string") {
+                    void target.loadResultImage(msg.toolCallId, typeof msg.index === "number" ? msg.index : 0);
+                }
                 break;
         }
     }

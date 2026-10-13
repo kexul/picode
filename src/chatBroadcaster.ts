@@ -13,19 +13,13 @@ import {
  * 每条实时消息记一个递增序号并进补发暂存，页面重连后按序号补拉漏掉的消息。
  *
  * 这里不碰网络：往连接里写、把连接关掉，都是网页服务传进来的函数
- * （与 webTransport.PageChannels 同一个思路，方便单测）。
+ * （与 webTransport.PageChannels 同一个思路）。
  */
 
 /** 补发暂存的默认条数：超过先丢最老的（丢了就补不上，只能整屏重画）。 */
 const CATCHUP_LOG_ENTRIES = 2000;
 /** 补发暂存的默认字节数（消息里可能带大图，光按条数不可靠）。 */
 const CATCHUP_LOG_BYTES = 8 * 1024 * 1024;
-
-/** 补发暂存上限的可调部分（测试里传小值，不用真的攒两千条）。 */
-export interface BroadcasterTimings {
-    catchupLogEntries?: number;
-    catchupLogBytes?: number;
-}
 
 /** 登记一条连接的结果：新连接、被顶下来的旧连接（页面自己重连时才有）、hello 带的序号。 */
 export interface ChannelAddResult {
@@ -43,15 +37,10 @@ export class ChatBroadcaster {
     /** 最近广播的消息（重连补发用）。序号连续；一次性消息只占位不补发（msg 为 null）。 */
     private readonly catchupLog: Array<{ seq: number; bytes: number; msg: Record<string, unknown> | null }> = [];
     private catchupLogBytes = 0;
-    private readonly catchupLogEntries: number;
-    private readonly catchupLogBytesLimit: number;
+    private readonly catchupLogEntries = CATCHUP_LOG_ENTRIES;
+    private readonly catchupLogBytesLimit = CATCHUP_LOG_BYTES;
     /** 页面当前这条推送连接建立时的序号：比它大的都是这条连接的实时消息。 */
     private readonly openSeqByPage = new Map<string, number>();
-
-    constructor(timings?: BroadcasterTimings) {
-        this.catchupLogEntries = timings?.catchupLogEntries ?? CATCHUP_LOG_ENTRIES;
-        this.catchupLogBytesLimit = timings?.catchupLogBytes ?? CATCHUP_LOG_BYTES;
-    }
 
     // ========================================================================
     //  连接登记（网页服务的推送连接从这里进出）

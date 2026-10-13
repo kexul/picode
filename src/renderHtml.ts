@@ -101,11 +101,6 @@ ${bodyTop}${sessionBar}  <div id="messages">
       <div id="pickerSubtitle" class="hidden"></div>
       <div id="pickerSearchWrap"><input id="pickerSearch" type="text" placeholder="筛选…" autocomplete="off" spellcheck="false" /></div>
       <div id="pickerBody"></div>
-      <!-- 「选一个」这种浮层的自由填写那行：选项都在上面，想写别的就在这儿写（回车算答案）。
-           不是这种浮层时收起来（见 chat.js 的 renderPicker）。 -->
-      <div id="pickerInputWrap" class="hidden">
-        <input id="pickerInput" type="text" placeholder="或者自己写…" autocomplete="off" spellcheck="false" />
-      </div>
       <div id="pickerFooter" class="hidden"></div>
     </div>
   </div>

@@ -1,7 +1,7 @@
 import * as os from "os";
 
 /**
- * webTransport —— 网页服务的传输层零件（不引用 vscode，便于单测）。
+ * webTransport —— 网页服务的传输层零件（不引用 vscode）。
  *
  * 放在这里的都是"判断能不能放行"这类无副作用的东西：
  * 静态资源的类型与白名单、请求来源是否是本机、页面连接的登记簿、页面没连上时的消息缓冲。
@@ -166,26 +166,20 @@ export interface PageChannelAddResult {
 /**
  * 页面连接的登记簿：谁连着、谁的标识是本服务发出的、谁最近有人在动。
  *
- * 这里不做任何网络操作（不碰 http），只管记录，方便单测。
+ * 这里不做任何网络操作（不碰 http），只管记录。
  *
  * 没有"哪一个页面才算数"这一说：几个页面（手机 + 电脑）可以同时连着，都收得到消息。
  * 以前那套是"同时只认一个页面"，手机上退到后台再回来会被误判成"被别的页面顶掉"。
  */
 export class PageChannels {
+    /** 最多记住多少个页面标识（防止长时间运行攒太多）。 */
+    private static readonly LIMIT_ISSUED = 32;
+
     private readonly channels = new Map<string, PageChannel>();
     /** 本服务发出过页面、或连过推送流的标识（含已断开的），旧的先挤掉。 */
     private readonly issued: string[] = [];
     /** 最近"人在里面动过"的那个页面标识。 */
     private recentId = "";
-
-    /**
-     * @param limitIssued 最多记住多少个页面标识（防止长时间运行攒太多）
-     * @param now 取当前时刻（毫秒）：测试里可以传一个自己推得动的时钟
-     */
-    constructor(
-        private readonly limitIssued = 32,
-        private readonly now: () => number = () => Date.now(),
-    ) {}
 
     /** 记下"这个标识是本服务发出的"：页面刚取走、推送流还没连上时，它的消息也要收下。 */
     public markIssued(id: string): void {
@@ -193,7 +187,7 @@ export class PageChannels {
         const at = this.issued.indexOf(id);
         if (at >= 0) { this.issued.splice(at, 1); }
         this.issued.push(id);
-        if (this.issued.length > this.limitIssued) { this.issued.splice(0, this.issued.length - this.limitIssued); }
+        if (this.issued.length > PageChannels.LIMIT_ISSUED) { this.issued.splice(0, this.issued.length - PageChannels.LIMIT_ISSUED); }
     }
 
     public get(id: string): PageChannel | undefined {
@@ -222,7 +216,7 @@ export class PageChannels {
         close: (note: string) => void,
     ): PageChannelAddResult {
         const replaced = this.channels.get(id);
-        const channel: PageChannel = { id, send, close, lastSeenAt: this.now() };
+        const channel: PageChannel = { id, send, close, lastSeenAt: Date.now() };
         this.channels.set(id, channel);
         this.markIssued(id);
         this.recentId = id;
@@ -276,7 +270,7 @@ export class PageChannels {
      */
     public touch(id: string, userAction: boolean): void {
         const channel = this.channels.get(id);
-        if (channel) { channel.lastSeenAt = this.now(); }
+        if (channel) { channel.lastSeenAt = Date.now(); }
         if (userAction) { this.recentId = id; }
     }
 
@@ -295,7 +289,7 @@ export class PageChannels {
      * @param maxAgeMs 允许的静默时长
      */
     public staleIds(maxAgeMs: number): string[] {
-        const at = this.now();
+        const at = Date.now();
         const found: string[] = [];
         for (const channel of this.channels.values()) {
             if (at - channel.lastSeenAt >= maxAgeMs) { found.push(channel.id); }
@@ -313,7 +307,8 @@ export class PageChannels {
  * 补发只会让回来的页面重复弹一次窗，或者莫名其妙替人做一次动作。
  */
 export const PAGE_TRANSIENT_MESSAGE_TYPES: ReadonlySet<string> = new Set([
-    "browserDialog",             // 确认框 / 输入框（断开时已按取消处理）
+    "askCard",                   // 问话卡片（问答题 / 扩展问的确认、输入、选一个）
+    "askCardDone",               // 卡片收尾（答了 / 到点了）：重画后由插件重发还没收尾的那些
     "picker",                    // 浮层选择器
     "pickerCancel",              // 浮层超时取消
     "openSettings",              // 打开设置面板

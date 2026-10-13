@@ -8,7 +8,7 @@
  * 为什么要共用这一个切割器：两种暗号混在同一条 stderr 上。各切各的话，对方那种暗号行
  * 会被当成"普通输出"打出来 —— 那是一大串 base64（问题/任务全文都在里面），日志会被刷没。
  *
- * 本文件不依赖 vscode，全部可单测。
+ * 本文件不依赖 vscode。
  */
 
 /** 一种暗号：名字 + 前缀 + 解码函数（解不出来就返回 undefined，那一行按普通输出处理）。 */
@@ -37,7 +37,7 @@ export class StderrFrameSplitter {
 
     /**
      * 喂一块 stderr，吐出这块里凑齐的那些暗号。
-     * @param decoders 传进来的那一批解码器（每次调用都可以不一样：方便单测只喂一种）
+     * @param decoders 传进来的那一批解码器（一般不用传，构造时给过了）
      */
     public feed(chunk: string, decoders: Array<FrameDecoder<string, unknown>> = this.decoders): DecodedFrame[] {
         if (!chunk) { return []; }

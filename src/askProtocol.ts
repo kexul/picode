@@ -5,14 +5,14 @@
  * 所以这里多一份"回话文件"：
  *
  *   工具被调用   → 往本进程 stderr 写一行暗号（##PICHAT_ASK## + base64 的 JSON）
- *   插件读到     → 弹问话浮层 → 用户答完 → 写 <资源目录>/ask-answers/<编号>.json
+ *   插件读到     → 在那个会话的消息流里出一张问话卡片 → 用户答完 → 写 <资源目录>/ask-answers/<编号>.json
  *   工具轮询读到 → 当作工具结果交回模型，顺手把那个文件删掉
  *
  * 暗号行的切法与 taba 那条一致（见 tabaProtocol.ts 的说明）：一行、base64，
  * 内容里有换行或中文标点也切不坏。写文件走"先写临时文件再改名"，
  * 轮询那头永远不会读到写了一半的 JSON。
  *
- * 本文件不依赖 vscode，全部可单测。
+ * 本文件不依赖 vscode。
  */
 
 import * as fs from "fs";
@@ -31,6 +31,7 @@ const LIMITS = {
     option: 400,
     options: 8,
     sessionFile: 4096,
+    toolCallId: 128,
 };
 
 /** 问话请求：要用户答一个问题。 */
@@ -38,7 +39,7 @@ export interface AskRequest {
     kind: "ask";
     /** 提问编号（工具生成，一次一问，插件按它写回话文件）。 */
     id: string;
-    /** 问题本身（浮层的标题）。 */
+    /** 问题本身（卡片上的标题）。 */
     question: string;
     /** 选项，2 到 8 个。 */
     options: string[];
@@ -48,11 +49,16 @@ export interface AskRequest {
     recommended: number[];
     /** 要不要"自己写"那一行（默认要）。 */
     allowText: boolean;
+    /**
+     * 这次工具调用的编号（pi 给 ask_choice 那次调用的 id）。
+     * 界面拿它把问话卡片挂到那条工具行下面；拿不到就退到消息流末尾。
+     */
+    toolCallId?: string;
     /** 提问那个会话的文件路径（扩展从自己的进程里拿到的），可空。 */
     parentSessionFile?: string;
 }
 
-/** 工具不再等这个问题的通知（超时 / 这一轮被中止）：插件据此把还开着的浮层收掉。 */
+/** 工具不再等这个问题的通知（超时 / 这一轮被中止）：插件据此把界面上还等着的那张卡片收掉。 */
 export interface AskDoneNotice {
     kind: "ask-done";
     id: string;
@@ -62,7 +68,7 @@ export interface AskDoneNotice {
 export interface AskAnswer {
     /** 对应哪个提问。 */
     id: string;
-    /** 用户把浮层关了、没作答。 */
+    /** 用户按了「不答了」、没作答。 */
     cancelled: boolean;
     /** 勾中的选项（单选就是一项；空数组表示用户没勾）。 */
     picked: string[];
@@ -118,6 +124,12 @@ export function normalizeAskRequest(raw: unknown): AskRequest | undefined {
         recommended,
         allowText: o.allowText !== false,
     };
+    // 工具调用编号只用来在界面上认领那一行，字符集放宽一点（模型那边的 id 可能带点、冒号）。
+    // 它不是文件名、也不进 HTML，只当界面上的一张查表用，截断就行。
+    if (typeof o.toolCallId === "string") {
+        const callId = o.toolCallId.trim().replace(/[^A-Za-z0-9_.:-]/g, "").slice(0, LIMITS.toolCallId);
+        if (callId) { req.toolCallId = callId; }
+    }
     const sessionFile = str(o.parentSessionFile, LIMITS.sessionFile);
     if (sessionFile) { req.parentSessionFile = sessionFile; }
     return req;
@@ -142,11 +154,6 @@ export function decodeAskFrame(line: string): AskRequest | AskDoneNotice | undef
         return isAskId(id) ? { kind: "ask-done", id } : undefined;
     }
     return normalizeAskRequest(parsed);
-}
-
-/** 造一行暗号（写测试、以及扩展那份源码要保持一致的格式）。 */
-export function encodeAskFrame(payload: Record<string, unknown>): string {
-    return ASK_FRAME_PREFIX + Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
 }
 
 /** 交给 stderr 切割器（见 piFrames.ts）：认领这一种暗号。 */
@@ -188,24 +195,6 @@ export function writeAskAnswer(resourceDir: string, answer: AskAnswer): boolean 
         return true;
     } catch {
         return false;
-    }
-}
-
-/** 读一份回话文件（测试用；扩展那边是它源码里自己那份）。 */
-export function readAskAnswer(resourceDir: string, id: string): AskAnswer | undefined {
-    const file = askAnswerFile(resourceDir, id);
-    if (!file) { return undefined; }
-    try {
-        const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as AskAnswer;
-        if (!parsed || parsed.id !== id) { return undefined; }
-        return {
-            id,
-            cancelled: parsed.cancelled === true,
-            picked: Array.isArray(parsed.picked) ? parsed.picked.filter((x) => typeof x === "string") : [],
-            text: typeof parsed.text === "string" ? parsed.text : "",
-        };
-    } catch {
-        return undefined;
     }
 }
 

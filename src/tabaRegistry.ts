@@ -4,7 +4,7 @@
  * 一个子会话就是一条记录：谁派的、派去干什么、开在哪个 tab、跑到哪一步、结果交回去几次。
  * 界面（会话列表里「正在对话」那段的标记）和"结果自动交回"都读这张表。
  *
- * 本文件不碰文件、不碰 vscode，全是内存里的东西，方便单测。
+ * 本文件不碰文件、不碰 vscode，全是内存里的东西。
  */
 import type { TurnEndStatus } from "./runtimeTypes";
 
@@ -126,13 +126,13 @@ export class TabaRegistry {
     }
 }
 
-/** 第一轮跑完后的状态（纯函数，便于单测）。 */
+/** 第一轮跑完后的状态（纯函数）。 */
 export function stateAfterTurnEnd(status: TurnEndStatus): TabaChildState {
     return status === "done" ? "waiting" : "error";
 }
 
 /**
- * 第一轮跑完、结果交回之后，要不要把这个子会话的 tab 关掉（纯函数，便于单测）。
+ * 第一轮跑完、结果交回之后，要不要把这个子会话的 tab 关掉（纯函数）。
  * 不关的三种情况：没正常跑完（出错、被停）、父会话已经没了（没人接结果）、用户当时正看着它。
  */
 export function shouldCloseAfterFirstTurn(p: {
@@ -187,35 +187,30 @@ export function buildDeliveryText(p: {
         : `【子会话「${p.child.name}」没有正常跑完（${describeTurnStatus(p.status)}），已用 ${formatElapsedMs(p.elapsedMs)}】`;
     const body = p.result.trim() || "（没有拿到任何回复）";
     const tail = p.tabClosed
-        ? "（这个子会话的 tab 已经自动关掉，它的对话记录还在磁盘上；要看细节可以用 taba_peek 问到会话文件，要接着做就再派一个。）"
+        ? "（tab 已经自动关掉，要接着做就再派一个。）"
         : p.childSessionName
-            ? `（这个子会话还开着（「${p.childSessionName}」），用户可以在那边继续问；要补做点什么可以再派一个。）`
-            : "（要补做点什么可以再派一个子会话。）";
+            ? `（tab 还开着（「${p.childSessionName}」），可以到那边接着问。）`
+            : "（要补做点什么就再派一个。）";
     return [head, "", body, "", tail].join("\n");
 }
 
 /** 派活成功时在父会话界面上打的一行提示。 */
-export function buildSpawnNotice(p: { child: TabaChild; sessionName: string }): string {
-    return `已派出子会话「${p.child.name}」→ 新会话「${p.sessionName}」（全新会话）。`
-        + `它跑完第一轮后，结果会自动交回本会话，那个 tab 也会自动关掉`
-        + `（出错、或者你当时正看着它，就留着不关）。`;
+export function buildSpawnNotice(p: { child: TabaChild }): string {
+    return `已派出子会话「${p.child.name}」。`;
 }
 
 /** 子会话里打的一行开场提示（只给用户看，不进对话记录）。 */
 export function buildChildIntro(p: { child: TabaChild; parentName?: string }): string {
-    const from = p.child.parentPanelId && p.parentName ? `由「${p.parentName}」派来` : "独立会话";
-    return `子会话「${p.child.name}」（${from}）：${p.child.task.trim().split("\n")[0].slice(0, 80)}`
-        + "（跑完第一轮，结果自动交回派活的会话，这个 tab 跟着关掉；出错或者你正看着它的时候会留着。）";
+    const from = p.child.parentPanelId && p.parentName ? `（由「${p.parentName}」派来）` : "";
+    return `子会话「${p.child.name}」${from}：${p.child.task.trim().split("\n")[0].slice(0, 80)}`;
 }
 
 /** 子会话被关掉、结果还没交回时，给派活那个会话补一句。 */
 export function buildChildClosedNotice(p: { child: TabaChild }): string {
-    const ran = p.child.endedAt !== undefined;
-    return `【子会话「${p.child.name}」被关掉了，没有交回结果】`
-        + (ran
-            ? `它跑完了第一轮（用时 ${formatElapsedMs((p.child.endedAt ?? 0) - p.child.startedAt)}），但结果没来得及交回。`
-            : "它第一轮还没跑完。")
-        + "需要的话可以重新派一个。";
+    const howFar = p.child.endedAt !== undefined
+        ? `第一轮跑完了，用时 ${formatElapsedMs((p.child.endedAt ?? 0) - p.child.startedAt)}`
+        : "第一轮还没跑完";
+    return `【子会话「${p.child.name}」被关掉了（${howFar}），没交回结果，要接着做就重新派一个】`;
 }
 
 /** 派活失败时在父会话界面上打的一行提示。 */

@@ -2,7 +2,7 @@
  * 派子会话（taba）：把"派活请求"算成"子会话该怎么起"。
  *
  * 只算，不碰文件、不碰 vscode：子会话一律是全新会话（会话文件 pi 自己新建），
- * 这里只定工作目录、模型、工具白名单。这样每一条优先级规则都能单测。
+ * 这里只定工作目录、模型、工具白名单。
  */
 import type { PanelLaunch } from "./runtimeTypes";
 import type { TabaSpawnRequest } from "./tabaProtocol";
@@ -16,7 +16,7 @@ export interface TabaSpawnResolutionInput {
     /** 派活那个会话正在用的模型（子会话没指定时跟着它）。 */
     parentModelId?: string;
     parentProvider?: string;
-    /** 把相对路径变成绝对路径（各宿主自己实现，测试里塞个假的）。 */
+    /** 把相对路径变成绝对路径（各宿主自己实现）。 */
     resolvePath: (p: string) => string;
 }
 

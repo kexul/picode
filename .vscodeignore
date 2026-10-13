@@ -4,14 +4,12 @@ scripts/**
 tsconfig*.json
 node_modules/**
 out/**/*.map
-out/**/*.test.js
 *.vsix
 **/*.ts
 
 # 插件包里只装插件那一侧：后端编在 out/server（它是独立进程，靠 npm i -g . 装的那份跑，
-# 插件从不加载它），测试编在 out/test；bin/pichat.js 是给 npm 装命令行用的，也不进插件包。
+# 插件从不加载它）；bin/pichat.js 是给 npm 装命令行用的，也不进插件包。
 out/server/**
-out/test/**
 bin/**
 
 # 界面文件也不进插件包：面板的界面从后端现取（见 chatHtml.ts），插件自己不读 media/。

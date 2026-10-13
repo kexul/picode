@@ -13,7 +13,7 @@
   const messagesEl = document.getElementById("messages"); // 容器，内含各 .session-pane
   const jumpBottomBtn = document.getElementById("jumpBottom");
   const stopBtn = document.getElementById("stopBtn"); // 停止生成图标：browserBridge.js 在两种页面里都会创建
-  const continueBtn = document.getElementById("continueBtn"); // “继续”快捷按钮：同上，与停止图标共用一个位置
+  const continueBtn = document.getElementById("continueBtn"); // “继续”快捷按钮：同上，摆在停止图标左边
   // VSCode 官方 codicon 的 chevron-right 折线图标（从 @vscode/codicons 包取出）。
   // 各处折叠小三角用同一份：画的是朝右，展开时靠 CSS transform 转成朝下。
   const CHEVRON_SVG =
@@ -120,9 +120,6 @@
   const pickerSearch = document.getElementById("pickerSearch");
   const pickerSearchWrap = document.getElementById("pickerSearchWrap");
   const pickerFooter = document.getElementById("pickerFooter");
-  /** 「选一个」浮层底下那行自由填写（选项都不合适时自己写）。 */
-  const pickerInput = document.getElementById("pickerInput");
-  const pickerInputWrap = document.getElementById("pickerInputWrap");
   let pickerState = null; // { kind, items, filtered, sel, current, draftModel, draftThinking, toggle }
 
   // ==================== Markdown / 文件链接 / 符号链接（纯函数，与是哪个会话无关）====================
@@ -506,6 +503,8 @@
       toolGroupEntries: new Map(),
       pendingToolCards: new Map(),
       pendingToolTags: new Map(),
+      // 这个会话消息流里的问话卡片：卡片编号 → { el, kind, multi, picked, done }（见 renderAskCard）
+      askCards: new Map(),
       // 正在重放历史（切会话、重连、加载更早的一批）时不飘 +1：那些是老消息，不是新涨的
       noCountPop: true,
       // 历史窗口（网页端「只发最近一段」）：顶部按钮、加载更早的暂存区等
@@ -1174,6 +1173,8 @@
     tag._tipBody = "";
     attachTagTipHandlers(tag);
     mountToolTag(st, tag);
+    // 问话卡片有时候比这条工具行先到（两条通道各有快慢）：把它挪到这一行下面
+    dockAskCardToRow(st, toolCallId, tag.parentElement);
     if (toolCallId) { st.pendingToolTags.set(toolCallId, tag); }
     scrollToBottom(st);
   }
@@ -1221,6 +1222,8 @@
     g.entries.push(entry);
     if (toolCallId) { st.toolGroupEntries.set(toolCallId, entry); }
     syncGroupTag(g);
+    // 问话卡片有时候比这条工具行先到（两条通道各有快慢）：把它挪到这一行下面
+    dockAskCardToRow(st, toolCallId, g.row);
     // 方块上飘个 +1：只有“本来就是它、又攒了一条”才飘，重放历史时（noCountPop）不飘
     if (g.entries.length > 1 && !st.noCountPop) { popPlusOne(g); }
     scrollToBottom(st);
@@ -1301,7 +1304,7 @@
     } else {
       syncGroupTag(g);
     }
-    mountToolImageBlock(st, { toolName: entry.name, argStr: entry.argStr, tipCall: entry.tipCall }, images);
+    mountToolImageBlock(st, { toolName: entry.name, argStr: entry.argStr, tipCall: entry.tipCall, toolCallId: entry.id }, images);
   }
 
   /** 收掉一个工具标签；它所在那条工具行空了就连行一起收掉（不留空行）。 */
@@ -1664,27 +1667,72 @@
     s.textContent = w + "x" + h;
   }
 
-  /** 结果区图片块：缩略图 + 点击放大；后端对超大图只传 tooLarge 占位。 */
-  function renderResultImages(resultEl, images, card) {
+  /** 结果区图片块：缩略图 + 点击放大；后端对超大图只传 tooLarge 占位，
+   *  对“首屏没带过来”的图只传 onDemand 占位（点一下再单独取，见 sessionRuntime 的图片预算）。 */
+  function renderResultImages(resultEl, images, card, at) {
     if (!Array.isArray(images) || images.length === 0) { return; }
     const wrap = document.createElement("div"); wrap.className = "tc-images";
-    for (const img of images) {
-      if (!img || img.tooLarge || typeof img.data !== "string" || !img.data) {
-        const ph = document.createElement("div"); ph.className = "tc-img-too-large";
-        const mb = img && typeof img.bytes === "number" ? (img.bytes / 1048576).toFixed(1) + " MB" : "超过上限";
-        ph.textContent = "[图片过大 " + mb + "，未内联显示]";
-        wrap.appendChild(ph);
-        continue;
-      }
-      const el = document.createElement("img");
-      el.className = "tc-img";
-      el.src = "data:" + (img.mimeType || "image/png") + ";base64," + img.data;
-      el.title = "点击放大";
-      el.addEventListener("click", (e) => { e.stopPropagation(); openLightbox(el.src); });
-      el.addEventListener("load", () => { applyImageDims(card, el.naturalWidth, el.naturalHeight); }, { once: true });
-      wrap.appendChild(el);
-    }
+    images.forEach((img, index) => { wrap.appendChild(resultImageNode(img, card, at, index)); });
     resultEl.appendChild(wrap);
+  }
+
+  /** 一张结果图：真带数据就画出来，占位（过大 / 没带过来）就单独处理。 */
+  function resultImageNode(img, card, at, index) {
+    if (img && img.onDemand) { return resultImageChip(img, at, index); }
+    if (!img || img.tooLarge || typeof img.data !== "string" || !img.data) {
+      const ph = document.createElement("div"); ph.className = "tc-img-too-large";
+      const mb = img && typeof img.bytes === "number" ? (img.bytes / 1048576).toFixed(1) + " MB" : "超过上限";
+      ph.textContent = "[图片过大 " + mb + "，未内联显示]";
+      return ph;
+    }
+    return resultImageEl(img, card);
+  }
+
+  /** 真图那个 <img>：点击放大，图片尺寸到了再把宽高补到工具行上。 */
+  function resultImageEl(img, card) {
+    const el = document.createElement("img");
+    el.className = "tc-img";
+    el.src = "data:" + (img.mimeType || "image/png") + ";base64," + img.data;
+    el.title = "点击放大";
+    el.addEventListener("click", (e) => { e.stopPropagation(); openLightbox(el.src); });
+    el.addEventListener("load", () => { applyImageDims(card, el.naturalWidth, el.naturalHeight); }, { once: true });
+    return el;
+  }
+
+  /**
+   * “首屏没带过来”的那张图的占位：点一下才单独去后端取这一张。
+   *
+   * 为什么要有它：手机上刷新一次，一屏的图（都是截图）动不动好几 MB，界面得空着等传完；
+   * 现在只带最近几张，更早的就在这儿等你想看时再取。
+   */
+  function resultImageChip(img, at, index) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "tc-img-ondemand";
+    const bytes = img && typeof img.bytes === "number" ? img.bytes : 0;
+    btn.textContent = "点开看这张图" + (bytes > 0 ? "（约 " + formatBytes(bytes) + "）" : "");
+    const toolCallId = at && typeof at.toolCallId === "string" ? at.toolCallId : "";
+    if (toolCallId) { btn.setAttribute("data-result-img", imageKey(toolCallId, index)); }
+    btn.addEventListener("click", () => {
+      if (btn.disabled || !toolCallId || !at.st) { return; }
+      btn.disabled = true;
+      btn.textContent = "正在取图…";
+      vscode.postMessage({ type: "loadResultImage", sessionId: at.st.id, toolCallId: toolCallId, index: index });
+    });
+    return btn;
+  }
+
+  /** 占位与回来的那张图靠这个对上（同一张可能有好几处：重画过 / 暂存区里还有一份）。 */
+  function imageKey(toolCallId, index) {
+    // 属性值里放不了引号与反斜杠（工具调用 id 是 pi 给的，这里只是防万一）
+    return String(toolCallId).replace(/["\\]/g, "") + "#" + index;
+  }
+
+  /** 字节数写成短的给人看（大约就行）：500 KB / 1.2 MB。 */
+  function formatBytes(n) {
+    if (!(n > 0)) { return ""; }
+    if (n < 1024 * 1024) { return Math.max(1, Math.round(n / 1024)) + " KB"; }
+    return (n / 1048576).toFixed(1) + " MB";
   }
 
   /** 从工具参数里取出文件名（只留最后一段）：参数长这样 {"file_path":"D:/a/b.png"} 或 {"path":"..."}。
@@ -1708,7 +1756,8 @@
    * 为什么不用悬浮提示：图藏在提示框里要鼠标悬上去才看得到，而"读了哪张图"本身就是对话内容。
    * 块自己占一行（不跟正文挤在同一行里）；原来那个小标签由调用方先收掉（见 dropToolTag /
    * removeEntryFromGroup），那条工具行空了也一并收掉，后面的工具调用会另起一行重新排
-   * （见 toolTagHost）。调用方传 at：{ toolName, argStr, tipCall }。
+   * （见 toolTagHost）。调用方传 at：{ toolName, argStr, tipCall, toolCallId }（toolCallId 用来
+   * 认“首屏没带过来的那张图”，见 resultImageChip）。
    */
   function mountToolImageBlock(st, at, images) {
     if (!Array.isArray(images) || images.length === 0) { return; }
@@ -1728,7 +1777,7 @@
     head.appendChild(text);
     block.appendChild(head);
     // 图直接接在说明行下面；图加载完成后尺寸会写回说明行（见 applyImageDims）
-    renderResultImages(block, images, block);
+    renderResultImages(block, images, block, { st: st, toolCallId: call.toolCallId });
     st.paneEl.appendChild(block);
     scrollToBottom(st);
   }
@@ -1887,8 +1936,8 @@
   }
 
   /**
-   * 输入框右下角那颗小按钮：生成中是“停止生成”，空闲时是“继续”——两颗共用一个位置，
-   * 同一时刻只露面一颗。两颗都是 browserBridge.js 建的（两种页面里都有）。
+   * 输入框右下角那两颗小按钮：生成中是“停止生成”，空闲时是“继续”——「继续」摆在停止
+   * 那格的左边，同一时刻只露面一颗。两颗都是 browserBridge.js 建的（两种页面里都有）。
    */
   function syncComposerButtons() {
     const st = activeSession();
@@ -2260,7 +2309,252 @@
   }
 
 
+  // ==================== 问话卡片（要用户答一句）====================
+  //
+  // 模型问的选择题（ask_choice）、扩展问的确认 / 输入 / 选一个，都长在会话的消息流里，
+  // 不弹浮层、不挡别的会话：插在那条 ask_choice 工具行下面（宿主把工具调用编号一起发来了），
+  // 没得插就接在当前内容末尾。答完卡片不消失：就地定住，底下那一套按钮收掉，
+  // 选中的那几行留着高亮（自己写的 / 是或否 / 没作答这三种看不出来的才补一行字），
+  // 翻回去还看得见当时问了什么、答了什么。
+  //
+  // 三种长相（宿主给的 card.kind）：
+  //   choice   标题 + 几行选项（单选点一行就是答案；多选勾完按「确定」）+ 可选的"自己写"一行
+  //            单选底下不留按钮：点一行就走了，自己写那行按回车交；多选留一颗「确定」
+  //   confirm  标题 + 说明 + 「是」「否」
+  //   prompt   标题 + 一行输入 + 「确定」「取消」
+  // 同一个会话可能几块屏同时开着：谁先答算谁的，别的屏上那张由宿主发 askCardDone 定住。
+
+  /**
+   * 这张卡片底下要写的那行结果；空串 = 不用写（选中那几行留着高亮就够了）。
+   * 自己写的那句、是 / 否、没作答这三样没法用高亮表示，得写出来。
+   */
+  function askAnswerText(rec, answer) {
+    if (!answer || answer.cancelled === true) { return "没作答"; }
+    if (rec.kind === "confirm") { return answer.yes === true ? "你答：是" : "你答：否"; }
+    const text = String(answer.text || "").trim();
+    if (rec.kind === "prompt") { return text ? "你写的是：" + text : "你没写内容"; }
+    // 单选 / 多选：选的是哪几行已经留在那儿亮着了，不用再把它们重说一遍
+    return text ? "你自己写的是：" + text : "";
+  }
+
+  /**
+   * 答完了（自己答的 / 别的屏答的 / 到点）：这张卡片定住。
+   * 交互那一块（按钮、输入行、说明）整个收掉 —— 点完就已经回复了，不用留一堆按不动的按钮；
+   * 选中的那几行留着高亮，要不要再写一行结果见 askAnswerText。
+   */
+  function settleAskCard(st, id, answer) {
+    const rec = id ? st.askCards.get(id) : undefined;
+    if (!rec || rec.done) { return; }
+    rec.done = true;
+    const el = rec.el;
+    el.classList.add("done");
+    el.querySelectorAll(".ask-foot, .ask-input").forEach((node) => { node.remove(); });
+    rec.okBtn = null;
+    rec.input = null;
+    const picks = answer && Array.isArray(answer.picks) ? answer.picks : [];
+    el.querySelectorAll(".ask-opt").forEach((b) => {
+      if (picks.indexOf(b.dataset.opt || "") >= 0) { b.classList.add("picked"); }
+    });
+    const text = askAnswerText(rec, answer);
+    if (text) {
+      const line = document.createElement("div");
+      line.className = "ask-answer";
+      line.textContent = text;
+      el.appendChild(line);
+    }
+    scrollToBottom(st);
+  }
+
+  /** 交答案：卡片先自己定住（等宿主那声 askCardDone 也行，但先定住免得让人点两下）。 */
+  function submitAskCard(st, rec, answer) {
+    if (rec.done) { return; }
+    settleAskCard(st, rec.id, answer);
+    const msg = { type: "askCardAnswer", id: rec.id };
+    if (Array.isArray(answer.picks)) { msg.picks = answer.picks; }
+    if (typeof answer.text === "string") { msg.text = answer.text; }
+    if (answer.yes !== undefined) { msg.yes = answer.yes; }
+    if (answer.cancelled === true) { msg.cancelled = true; }
+    vscode.postMessage(msg);
+  }
+
+  /** 卡片底下的一颗小按钮（确定 / 取消 / 是 / 否）。 */
+  function askButton(row, label, primary, onClick) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ask-btn" + (primary ? " primary" : "");
+    btn.textContent = label;
+    btn.addEventListener("click", onClick);
+    row.appendChild(btn);
+    return btn;
+  }
+
+  /** 多选那种卡片上「确定」交回去的东西：勾中的几项 + "自己写"那一行写的。 */
+  function askCardAnswer(rec) {
+    const text = String(rec.input && rec.input.value || "").trim();
+    const answer = { picks: rec.picked.slice() };
+    if (text) { answer.text = text; }
+    return answer;
+  }
+
+  /** 多选那颗粒「确定」能不能按：勾了东西、或者自己写了话，才让它按得下去。 */
+  function syncAskFoot(rec) {
+    if (!rec.okBtn) { return; }
+    const text = String(rec.input && rec.input.value || "").trim();
+    rec.okBtn.disabled = rec.picked.length === 0 && !text;
+  }
+
+  /** 这张卡片插在哪条工具行下面（还在的话）；找不到就接在当前内容末尾。 */
+  function askCardAnchor(st, toolCallId) {
+    if (typeof toolCallId !== "string" || !toolCallId) { return null; }
+    const tag = st.pendingToolTags.get(toolCallId);
+    if (tag && tag.parentElement) { return tag.parentElement; }
+    const entry = st.toolGroupEntries.get(toolCallId);
+    const groupTag = entry && entry.group ? entry.group.tag : null;
+    return groupTag && groupTag.parentElement ? groupTag.parentElement : null;
+  }
+
+  /**
+   * 问话卡片有时候比它那条工具行先到（工具调用走一条通道、问话暗号走 stderr 另一条，快慢不一定）：
+   * 工具行一出来就把卡片挪到它下面（卡片本来就是"挂在这条调用下面"的东西）。
+   */
+  function dockAskCardToRow(st, toolCallId, row) {
+    if (!toolCallId || !row || !st.askCards || st.askCards.size === 0) { return; }
+    for (const rec of st.askCards.values()) {
+      if (rec.toolCallId !== toolCallId) { continue; }
+      if (rec.el.previousElementSibling === row) { return; }   // 已经在下边了
+      row.after(rec.el);
+      return;
+    }
+  }
+
+  /** 画一张问话卡片（宿主发来的 askCard）。同一张卡片重发（整屏重画后补发）就换掉旧的。 */
+  function renderAskCard(st, msg) {
+    const id = String(msg && msg.id || "");
+    if (!id) { return; }
+    const card = msg.card && typeof msg.card === "object" ? msg.card : {};
+    const kind = card.kind === "confirm" || card.kind === "prompt" ? card.kind : "choice";
+    const old = st.askCards.get(id);
+    if (old) { old.el.remove(); }
+    hideEmptyHint(st);
+    const rec = {
+      id,
+      kind,
+      multi: kind === "choice" && card.multi === true,
+      toolCallId: typeof card.toolCallId === "string" ? card.toolCallId : "",
+      picked: [],          // 多选勾中的那几项（按选项原文记）
+      input: null,
+      okBtn: null,
+      el: null,
+      done: false,
+    };
+    const el = document.createElement("div");
+    el.className = "msg ask-card msg-enter";
+    el.dataset.askId = id;
+    rec.el = el;
+
+    const title = document.createElement("div");
+    title.className = "ask-title";
+    title.textContent = String(
+      kind === "choice" ? (card.question || "选一个") : (card.title || (kind === "confirm" ? "确认" : "请输入")),
+    );
+    el.appendChild(title);
+
+    const foot = document.createElement("div");
+    foot.className = "ask-foot";
+
+    if (kind === "confirm") {
+      const body = document.createElement("div");
+      body.className = "ask-body";
+      body.textContent = String(card.message || "");
+      if (body.textContent) { el.appendChild(body); }
+      askButton(foot, "是", true, () => submitAskCard(st, rec, { yes: true }));
+      askButton(foot, "否", false, () => submitAskCard(st, rec, { yes: false }));
+    } else if (kind === "prompt") {
+      const input = document.createElement("input");
+      input.className = "ask-input";
+      input.type = "text";
+      input.value = typeof card.prefill === "string" ? card.prefill : "";
+      if (typeof card.placeholder === "string") { input.placeholder = card.placeholder; }
+      // 回车 = 交答案（不是"发送"）：拦住别往上冒到输入框那层
+      input.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter") { return; }
+        e.preventDefault();
+        e.stopPropagation();
+        submitAskCard(st, rec, { text: input.value });
+      });
+      rec.input = input;
+      el.appendChild(input);
+      askButton(foot, "确定", true, () => submitAskCard(st, rec, { text: input.value }));
+      askButton(foot, "取消", false, () => submitAskCard(st, rec, { cancelled: true }));
+    } else {
+      const list = document.createElement("div");
+      list.className = "ask-opts";
+      const options = Array.isArray(card.options) ? card.options : [];
+      const recommended = Array.isArray(card.recommended) ? card.recommended : [];
+      options.forEach((raw, index) => {
+        const label = String(raw);
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "ask-opt";
+        btn.dataset.opt = label;
+        const text = document.createElement("span");
+        text.className = "ask-opt-text";
+        text.textContent = label;
+        btn.appendChild(text);
+        if (recommended.indexOf(index + 1) >= 0) {
+          const badge = document.createElement("span");
+          badge.className = "ask-rec";
+          badge.textContent = "我推荐";
+          btn.appendChild(badge);
+        }
+        btn.addEventListener("click", () => {
+          if (rec.done) { return; }
+          // 单选：点一行就是答案；多选：点一下勾上 / 再点取消，勾完按底下的「确定」
+          if (!rec.multi) { submitAskCard(st, rec, { picks: [label] }); return; }
+          const at = rec.picked.indexOf(label);
+          if (at >= 0) { rec.picked.splice(at, 1); } else { rec.picked.push(label); }
+          btn.classList.toggle("on", at < 0);
+          syncAskFoot(rec);
+        });
+        list.appendChild(btn);
+      });
+      el.appendChild(list);
+
+      // "自己写"那一行：选项里都不合适时用（ask_choice 默认给，扩展问的"选一个"不给）
+      if (card.allowText !== false) {
+        const input = document.createElement("input");
+        input.className = "ask-input";
+        input.type = "text";
+        input.placeholder = "或者自己写…";
+        input.addEventListener("keydown", (e) => {
+          if (e.key !== "Enter") { return; }
+          e.preventDefault();
+          e.stopPropagation();
+          submitAskCard(st, rec, askCardAnswer(rec));
+        });
+        input.addEventListener("input", () => { syncAskFoot(rec); });
+        rec.input = input;
+        el.appendChild(input);
+      }
+      // 多选：勾完得按一下「确定」（单选不用：点一行就是答案，"自己写"那行里按回车交回去）
+      if (rec.multi) {
+        rec.okBtn = askButton(foot, "确定", true, () => submitAskCard(st, rec, askCardAnswer(rec)));
+      }
+    }
+    // 底下那一行：单选与确认卡片都没有（答案就在上面那几行里），只有多选与输入留一颗按钮
+    if (foot.childElementCount > 0) { el.appendChild(foot); }
+    if (kind === "choice") { syncAskFoot(rec); }
+
+    const anchor = askCardAnchor(st, card.toolCallId);
+    if (anchor) { anchor.after(el); } else { st.paneEl.appendChild(el); }
+    // 卡片算一道坎：后面的工具标签另起一行（画在卡片下面，不往上面那条工具行里钻）
+    st.currentToolRow = null;
+    st.askCards.set(id, rec);
+    scrollToBottom(st);
+  }
+
   // ==================== 通用拾取器浮层（模型 / 历史）====================
+
   function hidePicker() {
     pickerOverlay.classList.add("hidden");
     pickerOverlay.classList.remove("pk-drawer");
@@ -2268,17 +2562,11 @@
     pickerOverlay.classList.remove("pk-folders");
     pickerBody.innerHTML = "";
     pickerSearch.value = "";
-    if (pickerInput && pickerInputWrap) {
-      pickerInput.value = "";
-      pickerInputWrap.classList.add("hidden");
-      if (document.activeElement === pickerInput) { pickerInput.blur(); }
-    }
     setPickerSubtitle("");
     pickerFooter.innerHTML = "";
     pickerFooter.classList.add("hidden");
     pickerFooter.classList.remove("pk-model-footer");
     pickerFooter.classList.remove("pk-history-footer");
-    pickerFooter.classList.remove("pk-question-footer");
     const leftoverClose = document.getElementById("pickerClose");
     if (leftoverClose) { leftoverClose.remove(); }
     pickerSearchWrap.classList.remove("hidden");
@@ -2451,44 +2739,6 @@
     actions.appendChild(confirmBtn);
     pickerFooter.appendChild(actions);
   }
-  /**
-   * 问话（多选）底下那一行：左边说勾了几项，右边「取消 / 确定」。
-   * 单选不用这个 —— 点一行就是答案，没有“下一步”。
-   */
-  function renderQuestionFooter(st) {
-    pickerFooter.innerHTML = "";
-    pickerFooter.classList.remove("hidden");
-    pickerFooter.classList.add("pk-question-footer");
-    const summary = document.createElement("div"); summary.className = "pk-footer-summary";
-    const written = String(pickerInput && pickerInput.value || "").trim();
-    summary.textContent = st.picked.size > 0
-      ? "已勾 " + st.picked.size + " 项"
-      : (written ? "按上面写的交回去" : "一项都没勾");
-    pickerFooter.appendChild(summary);
-    const actions = document.createElement("div"); actions.className = "pk-footer-actions";
-    const cancelBtn = document.createElement("button");
-    cancelBtn.type = "button"; cancelBtn.className = "secondary"; cancelBtn.textContent = "取消";
-    cancelBtn.addEventListener("click", () => cancelPicker());
-    actions.appendChild(cancelBtn);
-    const okBtn = document.createElement("button");
-    okBtn.type = "button"; okBtn.className = "primary"; okBtn.textContent = "确定";
-    okBtn.addEventListener("click", () => submitQuestion());
-    actions.appendChild(okBtn);
-    pickerFooter.appendChild(actions);
-  }
-
-  /**
-   * 问话：把勾中的项和“自己写”的那句一起交回去。两样都可能是空的 —— 都空等于没作答，
-   * 模型那边收到的就是“用户没作答”（跟按取消一个意思）。
-   */
-  function submitQuestion() {
-    const st = pickerState; if (!st) { return; }
-    const picks = Array.from(st.picked);
-    const text = String(pickerInput && pickerInput.value || "").trim();
-    hidePicker();
-    vscode.postMessage({ type: "pickerChoice", kind: "question", payload: { picks, text } });
-  }
-
   function renderPickerItems() {
     const st = pickerState;
     if (!st) { return; }
@@ -2604,24 +2854,7 @@
       }
       const el = document.createElement("div");
       el.className = "pk-item" + (idx === st.sel ? " active" : "");
-      if (st.kind === "question") {
-        // 问话的选项行：多选前面一颗方框（勾上/没勾），单选不加标记（靠行上的高亮）；
-        // 推荐的那几项挂一个小标记。
-        const t = document.createElement("div"); t.className = "pk-title";
-        const checked = st.picked.has(String(item.label || ""));
-        if (st.multi) {
-          const box = document.createElement("span"); box.className = "pk-check" + (checked ? " on" : "");
-          box.innerHTML = checked ? ICONS.check : "";
-          t.appendChild(box);
-        }
-        t.appendChild(document.createTextNode(String(item.label || "")));
-        if (st.recommended.indexOf(idx + 1) >= 0) {
-          const badge = document.createElement("span"); badge.className = "pk-recommend"; badge.textContent = "我推荐";
-          t.appendChild(badge);
-        }
-        el.appendChild(t);
-        if (checked) { el.classList.add("pk-picked"); }
-      } else if (st.kind === "workspace" && item.__section === "space") {
+      if (st.kind === "workspace" && item.__section === "space") {
         el.classList.add("pk-space");
       } else if (st.kind === "workspace" && item.__section === "session") {
         el.classList.add("pk-session");
@@ -2757,8 +2990,7 @@
         el.title = item.label || "";
       }
       // 其他种类（没有专属排版的）：直接渲染标题。
-      // 问话（question）有自己那一段（前面画过了），不能在这儿再画一遍。
-      if (["history", "options", "workspace", "folders", "question"].indexOf(st.kind) < 0 && item.label) {
+      if (["history", "options", "workspace", "folders"].indexOf(st.kind) < 0 && item.label) {
         const t = document.createElement("div"); t.className = "pk-title";
         t.textContent = String(item.label);
         el.appendChild(t);
@@ -2778,7 +3010,6 @@
       spacePane.appendChild(buildLoadMoreBtn(st, "spaces"));
     }
     if (st.kind === "model") { renderModelFooter(st); }
-    if (st.kind === "question" && st.multi) { renderQuestionFooter(st); }
     restoreScroll();
   }
   /**
@@ -2826,18 +3057,6 @@
     const item = st.filtered[idx];
     if (!item) { return; }
     const kind = st.kind;
-    // 问话（ask_choice）：单选点一行就是答案；多选点一下勾上 / 再点取消，勾完按底下的「确定」。
-    if (kind === "question") {
-      if (!st.multi) {
-        hidePicker();
-        vscode.postMessage({ type: "pickerChoice", kind, payload: { picks: [String(item.label || "")], text: "" } });
-        return;
-      }
-      const key = String(item.label || "");
-      if (st.picked.has(key)) { st.picked.delete(key); } else { st.picked.add(key); }
-      renderPickerItems();
-      return;
-    }
     if (st.toggle || item.behavior === "toggle") {
       vscode.postMessage({ type: "pickerToggle", kind, action: item.action, value: item.value });
       return;
@@ -2933,11 +3152,6 @@
       draftModel: null,
       draftThinking: undefined,
       toggle,
-      // 问话（ask_choice）：能勾多个吗、推荐哪几项（从 1 数起）、已勾中了哪几项。
-      // 单选点一行就是答案；多选点一下勾上，勾完按底下的「确定」。
-      multi: kind === "question" && msg.multi === true,
-      recommended: kind === "question" && Array.isArray(msg.recommended) ? msg.recommended : [],
-      picked: new Set(),
       // 「加载更多」：history 看 msg.hasMore，项目与会话分两块（会话 sessions.hasMore、工作区 spaces.hasMore）。
       historyHasMore: kind === "workspace" ? !!(msg.sessions && msg.sessions.hasMore) : msg.hasMore === true,
       historyLoading: false,
@@ -2954,23 +3168,10 @@
     pickerTitle.textContent = titleMap[kind] || (typeof msg.title === "string" && msg.title ? msg.title : "选择");
     // 标题下面那行小字（现在只有文件夹选择器用：正在看的是哪个目录）；没有就收起来
     setPickerSubtitle(typeof msg.subtitle === "string" ? msg.subtitle : "");
-    if (kind === "question" && pickerState.multi) {
-      // 多选交回去得按一下（单选是点一行就走）：这句告诉人家勾完怎么办
-      setPickerSubtitle("可多选：点一下勾上（再点取消），勾完按「确定」");
-    }
     pickerSearch.value = "";
     pickerSearchWrap.classList.toggle("hidden", !searchable);
-    // 「选一个」这种浮层（pi 扩展问的选项题）：列表底下来一行自由填写。
-    // 选项是短的、可能不齐，想写别的就在这一行写，回车就当答案交回去。
-    // 底下这一行“自己写”只有问话（ask_choice）用。
-    const freeText = kind === "question" && msg.allowText !== false;
-    if (pickerInput && pickerInputWrap) {
-      pickerInput.value = "";
-      pickerInputWrap.classList.toggle("hidden", !freeText);
-    }
     pickerFooter.classList.remove("pk-model-footer");
     pickerFooter.classList.remove("pk-history-footer");
-    pickerFooter.classList.remove("pk-question-footer");
     pickerFooter.innerHTML = "";
     if (kind === "model") {
       pickerFooter.classList.remove("hidden");
@@ -3022,7 +3223,6 @@
       console.log("[pi] picker(" + kind + ") 点击→弹出: " + Math.round(performance.now() - msg.t0) + "ms");
     }
     if (searchable) { setTimeout(() => pickerSearch.focus(), 0); }
-    else if (freeText && pickerInput) { setTimeout(() => pickerInput.focus(), 0); }
   }
   pickerOverlay.addEventListener("click", (e) => { if (e.target === pickerOverlay) { cancelPicker(); } });
   pickerSearch.addEventListener("input", () => {
@@ -3030,12 +3230,6 @@
     pickerState.sel = pickerState.kind === "model" ? -1 : 0;
     renderPickerItems();
   });
-  // 问话（多选）：在底下那行写字时，底下那句“已勾 / 一项都没勾”跟着变
-  if (pickerInput) {
-    pickerInput.addEventListener("input", () => {
-      if (pickerState && pickerState.kind === "question" && pickerState.multi) { renderQuestionFooter(pickerState); }
-    });
-  }
   document.addEventListener("keydown", (e) => {
     if (!pickerState || pickerOverlay.classList.contains("hidden")) { return; }
     const st = pickerState;
@@ -3066,21 +3260,7 @@
     }
     if (e.key === "ArrowDown") { e.preventDefault(); if (st.filtered.length) { st.sel = st.sel < 0 ? 0 : (st.sel + 1) % st.filtered.length; renderPickerActive(); } }
     else if (e.key === "ArrowUp") { e.preventDefault(); if (st.filtered.length) { st.sel = st.sel < 0 ? st.filtered.length - 1 : (st.sel - 1 + st.filtered.length) % st.filtered.length; renderPickerActive(); } }
-    else if (e.key === "Enter") {
-      e.preventDefault();
-      if (st.kind === "question") {
-        // 问话：多选交回去（勾中的 + 上面写的）；单选就是高亮那一行 ——
-        // 上面写了字就当“自己写的答案”。
-        if (st.multi) { submitQuestion(); return; }
-        if (pickerInput && document.activeElement === pickerInput && pickerInput.value.trim()) { submitQuestion(); return; }
-        confirmPicker(st.sel);
-        return;
-      }
-      // 自由填写那一行只有问话有（上面已经处理完了）：能走到这儿就是高亮那一项
-      confirmPicker(st.sel);
-    }
-    // 多选：空格勾上 / 取消光标停的那一行（在下面那行写字时空格还是空格）
-    else if (e.key === " " && st.kind === "question" && st.multi && document.activeElement !== pickerInput) { e.preventDefault(); confirmPicker(st.sel); }
+    else if (e.key === "Enter") { e.preventDefault(); confirmPicker(st.sel); }
     else if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); cancelPicker(); }
   });
 
@@ -3948,6 +4128,8 @@
         t.pendingToolCards.clear();
         for (const tg of t.pendingToolTags.values()) { clearInterval(tg._timer); }
         t.pendingToolTags.clear();
+        // 流里的问话卡片也随重画一起没：还等着的那几张由宿主重发（见 resendCardsTo）
+        t.askCards.clear();
         // 重置当前会话的输入草稿（该会话就是当前那个，同步到输入框）。
         // 整屏重画（页面刷新 / 重连后补内容）也走 clear：那种 clear 带 keepDraft，
         // 不能把人打了一半的字和附件抹掉，也不要把键盘拉起来。
@@ -4009,13 +4191,38 @@
           // read 读图：小标签收掉，换成对话里的一整块图（不再走悬浮提示）
           if (Array.isArray(msg.images) && msg.images.length > 0) {
             dropToolTag(t, tagEl);
-            mountToolImageBlock(t, { toolName: tagEl._toolName, argStr: tagEl._argStr, tipCall: tagEl._tipCall }, msg.images);
+            mountToolImageBlock(t, { toolName: tagEl._toolName, argStr: tagEl._argStr, tipCall: tagEl._tipCall, toolCallId: msg.toolCallId }, msg.images);
           } else {
             setTagTip(tagEl, tagEl._resultText, "");
           }
         }
         break;
       }
+      case "resultImage": {
+        // 点开的那张图回来了：把占位换成真图（同一张占位可能有好几处：重画过、或还在暂存区里）
+        const key = imageKey(msg.toolCallId, typeof msg.index === "number" ? msg.index : 0);
+        const chips = Array.from(document.querySelectorAll("[data-result-img]"))
+          .filter((el) => el.getAttribute("data-result-img") === key);
+        const data = typeof msg.data === "string" ? msg.data : "";
+        for (const chip of chips) {
+          if (!data) {
+            chip.disabled = true;
+            chip.textContent = typeof msg.error === "string" && msg.error ? msg.error : "这张图取不到了";
+            continue;
+          }
+          const card = chip.closest(".tool-image-block") || chip.parentElement;
+          chip.replaceWith(resultImageEl({ data: data, mimeType: msg.mimeType }, card));
+        }
+        break;
+      }
+      case "askCard":
+        // 问话卡片（模型问的选择题、扩展问的确认 / 输入 / 选一个）：长在这个会话的消息流里
+        renderAskCard(t, msg);
+        break;
+      case "askCardDone":
+        // 这张卡片收尾了（自己答的 / 别的屏答的 / 到点没答）：定住并写上一行结果
+        settleAskCard(t, String(msg.id || ""), msg.answer || null);
+        break;
       case "modelChanged":
         t.modelId = msg.modelId || "";
         t.provider = msg.provider || "";

@@ -1,9 +1,11 @@
 import * as crypto from "crypto";
 import * as fs from "fs";
+import * as zlib from "zlib";
 import * as http from "http";
 import * as os from "os";
 import * as path from "path";
 import { getBrowserChatHtml } from "./browserHtml";
+import { mediaStamp, mediaVersion } from "./mediaVersion";
 import type { ChatBroadcaster } from "./chatBroadcaster";
 import type { ScreenRegistry } from "./screenRegistry";
 import {
@@ -49,15 +51,25 @@ const PAGE_STALE_MS = 90_000;
 /** 一条推送连接最多积压多少字节：页面不读了（屏黑了 / 网络卡住）就别再往里塞，
  *  掐掉让它重连重画。不掐的话这些字节全堆在插件进程里，回来时也不会被 GC 回收。 */
 const STREAM_BACKLOG_BYTES = 8 * 1024 * 1024;
+/** 小于这么多字节就不费劲压了（压完省不了几个字节，还白搭一次 CPU）。 */
+const GZIP_MIN_BYTES = 1024;
+/** 压缩结果最多缓存多少份（界面文件就那几个，纯粹防着缓存无限长大）。 */
+const GZIP_CACHE_MAX = 64;
 
-/** 时间与上限的可调部分（测试里传小值，不用真的等一分钟）。 */
-export interface WebServerTimings {
-    /** 心跳与死连接巡检的间隔（毫秒）。 */
-    heartbeatMs?: number;
-    /** 页面静默多久算死（毫秒）。 */
-    pageStaleMs?: number;
-    /** 一条连接的积压上限（字节）。 */
-    backlogBytes?: number;
+/**
+ * 请求方能不能收 gzip（按 Accept-Encoding 一个字一个字看，q=0 表示"别给我这个"）。
+ * 浏览器都会发 `gzip, deflate, br`；手工 curl 不带这个头时照旧发原文。
+ */
+function wantsGzip(accept: string | string[] | undefined): boolean {
+    const value = Array.isArray(accept) ? accept.join(",") : accept;
+    if (!value) { return false; }
+    for (const part of value.split(",")) {
+        const [name, ...params] = part.trim().split(";");
+        if (name.trim().toLowerCase() !== "gzip") { continue; }
+        const q = params.map((p) => p.trim()).find((p) => p.startsWith("q="));
+        return !(q && Number(q.slice(2)) === 0);
+    }
+    return false;
 }
 
 /** 网页服务的设置（来自 ~/.pi/pichat/config.json 的 webServer 一节）。 */
@@ -130,9 +142,11 @@ export class PiChatWebServer {
     /** 屏标识 → 它那条连接的响应对象。 */
     private readonly screenStreams = new Map<string, http.ServerResponse>();
     private heartbeat?: ReturnType<typeof setInterval>;
-    private readonly heartbeatMs: number;
-    private readonly pageStaleMs: number;
-    private readonly backlogBytes: number;
+    private readonly heartbeatMs = HEARTBEAT_MS;
+    private readonly pageStaleMs = PAGE_STALE_MS;
+    private readonly backlogBytes = STREAM_BACKLOG_BYTES;
+    /** 压缩结果缓存：界面文件的内容没变时不用重压（键是"文件名@修改标记"，见 sendMedia）。 */
+    private readonly gzipCache = new Map<string, Buffer>();
     /** 本次监听开始服务的时刻（`/health` 报出去；重启会更新）。 */
     private startedAt = 0;
     private settings: WebServerSettings = { enabled: false, port: 0, host: "0.0.0.0" };
@@ -141,12 +155,7 @@ export class PiChatWebServer {
         private readonly mediaDir: string,
         private readonly host: WebServerHost,
         private readonly hooks: WebServerHooks,
-        timings?: WebServerTimings,
-    ) {
-        this.heartbeatMs = timings?.heartbeatMs ?? HEARTBEAT_MS;
-        this.pageStaleMs = timings?.pageStaleMs ?? PAGE_STALE_MS;
-        this.backlogBytes = timings?.backlogBytes ?? STREAM_BACKLOG_BYTES;
-    }
+    ) {}
 
     // ========================================================================
     //  启动 / 停止
@@ -320,16 +329,16 @@ export class PiChatWebServer {
         try {
             const url = parseRequestUrl(req.url);
             if (!url) {
-                this.sendText(res, 400, "请求地址不合法。");
+                this.sendText(req, res, 400, "请求地址不合法。");
                 return;
             }
             if (!this.originAllowed(req)) {
-                this.sendText(res, 403, "请求来源不被接受。请直接在浏览器里打开服务给的地址。");
+                this.sendText(req, res, 403, "请求来源不被接受。请直接在浏览器里打开服务给的地址。");
                 return;
             }
             const pathname = safeDecode(url.pathname);
             if (pathname === undefined) {
-                this.sendText(res, 400, "请求地址不合法。");
+                this.sendText(req, res, 400, "请求地址不合法。");
                 return;
             }
             if (pathname === "/health") {
@@ -337,37 +346,37 @@ export class PiChatWebServer {
                 return;
             }
             if (pathname === "/" || pathname === "/index.html") {
-                this.sendPage(res, url.searchParams.get("pageId") ?? "");
+                this.sendPage(req, res, url.searchParams.get("pageId") ?? "");
                 return;
             }
             if (pathname.startsWith("/media/")) {
-                this.sendMedia(res, pathname.slice("/media/".length));
+                this.sendMedia(req, res, pathname.slice("/media/".length), url.searchParams.get("v") ?? "");
                 return;
             }
             if (pathname === "/events") {
-                if (req.method !== "GET") { this.sendText(res, 405, "只接受 GET。"); return; }
+                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
                 this.openChannel(req, res, url.searchParams.get("pageId") ?? "");
                 return;
             }
             if (pathname === "/api") {
-                if (req.method !== "POST") { this.sendText(res, 405, "只接受 POST。"); return; }
+                if (req.method !== "POST") { this.sendText(req, res, 405, "只接受 POST。"); return; }
                 void this.handleApi(req, res, url.searchParams.get("pageId") ?? "");
                 return;
             }
             if (pathname === "/screen") {
-                if (req.method !== "GET") { this.sendText(res, 405, "只接受 GET。"); return; }
+                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
                 this.openScreen(res, url.searchParams.get("screenId") ?? "", url.searchParams.get("folders") ?? "");
                 return;
             }
             if (pathname === "/screenapi") {
-                if (req.method !== "POST") { this.sendText(res, 405, "只接受 POST。"); return; }
+                if (req.method !== "POST") { this.sendText(req, res, 405, "只接受 POST。"); return; }
                 void this.handleScreenApi(req, res, url.searchParams.get("screenId") ?? "");
                 return;
             }
-            this.sendText(res, 404, "没有这个地址。");
+            this.sendText(req, res, 404, "没有这个地址。");
         } catch (err: any) {
             this.hooks.log(`处理请求出错：${err?.message ?? String(err)}`);
-            try { this.sendText(res, 500, "服务内部错误。"); } catch { /* 连接可能已断 */ }
+            try { this.sendText(req, res, 500, "服务内部错误。"); } catch { /* 连接可能已断 */ }
         }
     }
 
@@ -385,7 +394,7 @@ export class PiChatWebServer {
         return isSameOrigin(req.headers.origin as string | undefined, this.boundPort, this.ownHostnames);
     }
 
-    private sendPage(res: http.ServerResponse, pageId: string): void {
+    private sendPage(req: http.IncomingMessage, res: http.ServerResponse, pageId: string): void {
         // 页面标识由服务生成并写进页面：页面加载时它还没运行任何脚本，
         // 不可能自己报标识；而 chat.js 一跑完就发消息，服务得认得它。
         const id = pageId || `p-${crypto.randomUUID()}`;
@@ -393,31 +402,37 @@ export class PiChatWebServer {
         try {
             html = getBrowserChatHtml(this.mediaDir, id, this.host.getThemeMode());
         } catch (err: any) {
-            this.sendText(res, 500, `生成页面失败：${err?.message ?? String(err)}`);
+            this.sendText(req, res, 500, `生成页面失败：${err?.message ?? String(err)}`);
             return;
         }
         this.host.getBroadcaster().markIssued(id);
-        res.writeHead(200, {
+        this.writeBody(req, res, 200, Buffer.from(html, "utf8"), {
             "Content-Type": "text/html; charset=utf-8",
             "Cache-Control": "no-store",
-            "Content-Length": Buffer.byteLength(html, "utf8"),
         });
-        res.end(html);
     }
 
-    private sendMedia(res: http.ServerResponse, name: string): void {
+    /**
+     * 发一个界面文件（/media/…）。
+     *
+     * 地址上带着内容指纹时才允许浏览器长期缓存（页面 HTML 里就是这么引的，见 browserHtml.ts）：
+     * 文件改了指纹就变、地址跟着变，所以“长期缓存”不会让谁看到旧界面。
+     * 指纹对不上（老页面、手敲的地址）或没带 → 照旧 no-store，保证看到的是当前这一份。
+     */
+    private sendMedia(req: http.IncomingMessage, res: http.ServerResponse, name: string, version: string): void {
         if (!isAllowedMediaFile(name)) {
-            this.sendText(res, 404, "没有这个资源。");
+            this.sendText(req, res, 404, "没有这个资源。");
             return;
         }
+        const fresh = mediaVersion(this.mediaDir, name);
+        const cacheable = !!fresh && version === fresh;
+        const stamp = mediaStamp(this.mediaDir, name);
         fs.readFile(path.join(this.mediaDir, name), (err, data) => {
-            if (err) { this.sendText(res, 404, "没有这个资源。"); return; }
-            res.writeHead(200, {
+            if (err) { this.sendText(req, res, 404, "没有这个资源。"); return; }
+            this.writeBody(req, res, 200, data, {
                 "Content-Type": contentTypeOf(name),
-                "Cache-Control": "no-store",
-                "Content-Length": data.length,
-            });
-            res.end(data);
+                "Cache-Control": cacheable ? "public, max-age=31536000, immutable" : "no-store",
+            }, stamp ? `${name}@${stamp}` : undefined);
         });
     }
 
@@ -427,7 +442,7 @@ export class PiChatWebServer {
      * 不带 Origin 头也放行：本机探活就是这么发的（见 originAllowed 对无 Origin 请求的处理）。
      */
     private sendHealth(req: http.IncomingMessage, res: http.ServerResponse): void {
-        if (req.method !== "GET") { this.sendText(res, 405, "只接受 GET。"); return; }
+        if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
         // info 先铺、本服务的身份后压：即使 info 里凑巧带了同名键，
         // 也不能把探活判断依据（app/pid/startedAt）盖掉。
         const payload: Record<string, unknown> = {
@@ -437,29 +452,78 @@ export class PiChatWebServer {
             pid: process.pid,
             startedAt: this.startedAt,
         };
-        this.sendJson(res, 200, payload);
+        this.sendJson(req, res, 200, payload);
     }
 
-    private sendJson(res: http.ServerResponse, status: number, value: unknown): void {
+    private sendJson(req: http.IncomingMessage, res: http.ServerResponse, status: number, value: unknown): void {
         const body = Buffer.from(JSON.stringify(value), "utf8");
-        if (res.headersSent) { res.end(); return; }
-        res.writeHead(status, {
+        this.writeBody(req, res, status, body, {
             "Content-Type": "application/json; charset=utf-8",
             "Cache-Control": "no-store",
-            "Content-Length": body.length,
         });
-        res.end(body);
     }
 
-    private sendText(res: http.ServerResponse, status: number, text: string): void {
+    private sendText(req: http.IncomingMessage, res: http.ServerResponse, status: number, text: string): void {
         const body = Buffer.from(text, "utf8");
-        if (res.headersSent) { res.end(); return; }
-        res.writeHead(status, {
+        this.writeBody(req, res, status, body, {
             "Content-Type": "text/plain; charset=utf-8",
             "Cache-Control": "no-store",
-            "Content-Length": body.length,
         });
-        res.end(body);
+    }
+
+    /**
+     * 写一个响应体（页面 / 界面文件 / JSON / 纯文本）。
+     *
+     * 请求头说能收 gzip、内容又够大时就压了再发：浏览器页面的 HTML 里内联着 72KB 样式、
+     * 界面脚本 350KB，压完只剩三成左右（手机网速下这是好几百毫秒的差别）。
+     * 压不了 / 对方不收就发原文；够大的响应都带上 Vary，让中间的缓存别把两种混起来。
+     *
+     * @param cacheKey 给了就按它缓存压缩结果（界面文件那种“内容不变、每台设备各下一次”的最划算）；
+     *                 不给就每次现压（页面 HTML 每个页面标识都不同，缓存没意义）。
+     */
+    private writeBody(
+        req: http.IncomingMessage,
+        res: http.ServerResponse,
+        status: number,
+        body: Buffer,
+        headers: Record<string, string>,
+        cacheKey?: string,
+    ): void {
+        if (res.headersSent) { res.end(); return; }
+        const gzipped = this.gzipFor(req, body, cacheKey);
+        const out: Record<string, string | number> = { ...headers };
+        if (body.length >= GZIP_MIN_BYTES) { out["Vary"] = "Accept-Encoding"; }
+        if (gzipped) {
+            out["Content-Encoding"] = "gzip";
+            out["Content-Length"] = gzipped.length;
+        } else {
+            out["Content-Length"] = body.length;
+        }
+        res.writeHead(status, out);
+        res.end(gzipped ?? body);
+    }
+
+    /** 该不该压、压出来的字节；不值得压（对方不收 / 内容太小）时给 undefined。 */
+    private gzipFor(req: http.IncomingMessage, body: Buffer, cacheKey?: string): Buffer | undefined {
+        if (body.length < GZIP_MIN_BYTES || !wantsGzip(req.headers["accept-encoding"])) {
+            return undefined;
+        }
+        if (cacheKey) {
+            const hit = this.gzipCache.get(cacheKey);
+            if (hit) { return hit; }
+        }
+        let out: Buffer;
+        try {
+            out = zlib.gzipSync(body);
+        } catch {
+            return undefined;   // 压不了就发原文，别把响应弄坏
+        }
+        if (cacheKey) {
+            // 只留最近这些份：界面文件就那几个，够用了
+            if (this.gzipCache.size >= GZIP_CACHE_MAX) { this.gzipCache.clear(); }
+            this.gzipCache.set(cacheKey, out);
+        }
+        return out;
     }
 
     // ========================================================================
@@ -597,19 +661,19 @@ export class PiChatWebServer {
     private async handleApi(req: http.IncomingMessage, res: http.ServerResponse, pageId: string): Promise<void> {
         const broadcaster = this.host.getBroadcaster();
         if (!broadcaster.isKnown(pageId)) {
-            this.sendText(res, 409, "此页面不是当前这个网页服务发出的（服务可能重启过）。刷新页面就好。");
+            this.sendText(req, res, 409, "此页面不是当前这个网页服务发出的（服务可能重启过）。刷新页面就好。");
             return;
         }
         const text = await readBody(req, MAX_REQUEST_BYTES);
         if (text === undefined) {
-            this.sendText(res, 413, "请求内容过大。");
+            this.sendText(req, res, 413, "请求内容过大。");
             return;
         }
         let msg: any;
         try {
             msg = JSON.parse(text);
         } catch {
-            this.sendText(res, 400, "请求内容不是合法的 JSON。");
+            this.sendText(req, res, 400, "请求内容不是合法的 JSON。");
             return;
         }
         if (msg && msg.type === "channelPing") {
@@ -691,20 +755,20 @@ export class PiChatWebServer {
     /** 屏发来一条消息（能力执行结果、符号集合、要个页面标识……）。 */
     private async handleScreenApi(req: http.IncomingMessage, res: http.ServerResponse, screenId: string): Promise<void> {
         if (!this.host.getScreens().get(screenId)) {
-            this.sendText(res, 409, "这个窗口不在后端登记簿里（后端可能重启过）。插件会自己重连。");
+            this.sendText(req, res, 409, "这个窗口不在后端登记簿里（后端可能重启过）。插件会自己重连。");
             return;
         }
         this.host.getScreens().markSeen(screenId);
         const text = await readBody(req, MAX_REQUEST_BYTES);
         if (text === undefined) {
-            this.sendText(res, 413, "请求内容过大。");
+            this.sendText(req, res, 413, "请求内容过大。");
             return;
         }
         let msg: any;
         try {
             msg = JSON.parse(text);
         } catch {
-            this.sendText(res, 400, "请求内容不是合法的 JSON。");
+            this.sendText(req, res, 400, "请求内容不是合法的 JSON。");
             return;
         }
         let answer: unknown;
@@ -718,7 +782,7 @@ export class PiChatWebServer {
             res.end();
             return;
         }
-        this.sendJson(res, 200, answer);
+        this.sendJson(req, res, 200, answer);
     }
 }
 

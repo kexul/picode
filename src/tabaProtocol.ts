@@ -12,7 +12,7 @@
  * 只有单向：插件不需要回话给扩展。子会话编号由扩展自己生成并报上来，
  * 子会话跑完之后的"结果交回父会话"是插件直接对父会话发 RPC 命令做的。
  *
- * 本文件不依赖 vscode，全部可单测。
+ * 本文件不依赖 vscode。
  */
 
 import type { FrameDecoder } from "./piFrames";
@@ -134,11 +134,6 @@ export function decodeTabaFrame(line: string): TabaRequest | undefined {
         return undefined;
     }
     return normalizeTabaRequest(parsed);
-}
-
-/** 造一行暗号（写测试、以及扩展那份源码要保持一致的格式）。 */
-export function encodeTabaFrame(payload: Record<string, unknown>): string {
-    return TABA_FRAME_PREFIX + Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
 }
 
 /** 交给 stderr 切割器（见 piFrames.ts）：认领这一种暗号。 */

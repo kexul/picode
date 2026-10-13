@@ -39,10 +39,10 @@ const BRIDGE_FILE_RE = /^ask-bridge-.*\.ts$/;
 
 /**
  * 把桥扩展写进 rootDir。
- * @param rootDir 一般是 pichatDir()；单测里传临时目录
+ * @param rootDir 一般是 pichatDir()
  * @param version 插件版本（写进扩展文件名，好让旧版本的文件能认出来并删掉）
  */
-export function writeAskAssets(rootDir: string, version: string): AskAssets {
+function writeAskAssets(rootDir: string, version: string): AskAssets {
     const extensionPath = path.join(rootDir, `ask-bridge-${safeVersionForFile(version)}.ts`);
     try {
         fs.mkdirSync(rootDir, { recursive: true });
@@ -80,9 +80,4 @@ export function ensureAskAssets(version: string): AskAssets {
 /** 拿记住的路径（还没写过就是 undefined）。 */
 export function getAskAssets(): AskAssets | undefined {
     return cached;
-}
-
-/** 清掉记住的路径（单测里用）。 */
-export function resetAskAssetsCache(): void {
-    cached = undefined;
 }

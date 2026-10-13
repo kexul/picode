@@ -207,7 +207,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     process.on("SIGTERM", () => onSignal("SIGTERM"));
 }
 
-/** 起后端时用的东西（测试直接用它，不用碰信号与打印那套）。 */
+/** 起后端时用的东西（调试工具直接用它，不用碰信号与打印那套）。 */
 export interface StartBackendOptions {
     /** 会话默认跑在哪个目录。 */
     cwd: string;

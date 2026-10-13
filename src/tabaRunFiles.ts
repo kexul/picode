@@ -128,18 +128,6 @@ export function writeRunRecord(runsDir: string, record: TabaRunRecord): boolean 
     }
 }
 
-/** 读一条名录；读不到或版本不对返回 undefined（测试与排查用）。 */
-export function readRunRecord(runsDir: string, id: string): TabaRunRecord | undefined {
-    try {
-        const raw = fs.readFileSync(runFilePath(runsDir, id), "utf8");
-        const parsed = JSON.parse(raw);
-        if (!parsed || parsed.v !== TABA_RUN_FILE_VERSION) { return undefined; }
-        return parsed as TabaRunRecord;
-    } catch {
-        return undefined;
-    }
-}
-
 /** 名录最多留多久（毫秒）：默认 7 天。 */
 export const TABA_RUN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 

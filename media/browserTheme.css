@@ -9,8 +9,8 @@
      这里把 --pichat-input-min-height 设小，chat.js 会读这个值当最小高度，
      打字打多了照样往上涨（最高 640px 不变）。
   2. 顶条最右边的“📷 桌面截图”与“<<< 项目与会话”两颗按钮（见 chat.css 的 #sessionBarTail），底部按钮条整条藏掉。
-  3. 输入框右下角的两颗小按钮：闲着时的“继续”与生成中的“停止生成”（共用一个位置，
-     同一时刻只露面一颗）。
+  3. 输入框右下角的两颗小按钮：闲着时的“继续”与生成中的“停止生成”（「继续」摆在
+     停止那一格的左边，同一时刻只露面一颗）。
 
   本文件排在 chat.css 之后加载（页面 HTML 里写在它后面），同优先级的规则以这里为准。
   界面自己设字号时会在行内改 --vscode-font-size，行内样式优先级更高，覆盖这里的值。
@@ -125,11 +125,12 @@ html, body {
 
 /*
   输入框内的“继续”按钮（按钮是 browserBridge.js 建的，显示与隐藏由 chat.js 管）：
-  会话闲着、能收消息时露面，点它直接发一条“继续”。跟上面那颗停止图标共用一个位置，
-  生成中这里让给停止图标。
+  会话闲着、能收消息时露面，点它直接发一条“继续”。摆在“停止生成”那格的左边，
+  不是叠在同一处：停止贴右 8px、宽 22px，这里再空开 6px，所以 right 是 8 + 22 + 6 = 36px。
+  两颗不同时露面，但位置错开之后，手快连点那一下不会一停就顺手又发出一个“继续”。
 */
 #continueBtn {
-  position: absolute; right: 8px; top: 50%; transform: translateY(-50%); z-index: 5;
+  position: absolute; right: 36px; top: 50%; transform: translateY(-50%); z-index: 5;
   height: 22px; padding: 0 8px;
   display: flex; align-items: center; justify-content: center;
   border: none;
@@ -146,7 +147,9 @@ html, body {
 #continueBtn.hidden { display: none; }
 
 /*
-  “继续”是一颗带字的按钮，比停止图标宽：它露面时把输入框右边的留白加宽，
-  打进去的字不会钻到按钮底下（只留停止图标那份留白见上面的 #input 规则）。
+  “继续”是一颗带字的按钮，比停止图标宽，位置又比它靠左：它露面时输入框右边的留白
+  要跟着加宽到 36（「继续」离右边的距离）+ 40（按钮宽 = 8 + “继续”两字 24 + 8）
+  + 8（字与按钮之间的空隙）= 84px，打进去的字不会钻到按钮底下
+  （只留停止图标那份留白见上面的 #input 规则）。
 */
-#inputRow.has-continue #input { padding-right: 60px; }
+#inputRow.has-continue #input { padding-right: 84px; }
