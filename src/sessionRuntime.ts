@@ -1,6 +1,8 @@
 import * as fs from "fs";
 import { PiClient } from "./piClient";
-import { TabaFrameParser } from "./tabaProtocol";
+import { ASK_DECODER, AskDoneNotice, AskRequest } from "./askProtocol";
+import { StderrFrameSplitter } from "./piFrames";
+import { TABA_DECODER, TabaRequest } from "./tabaProtocol";
 import { NameParts, composeName } from "./names";
 import { EditTracker } from "./editTracker";
 import {
@@ -175,8 +177,8 @@ export class SessionRuntime {
     private client?: PiClient;
     /** 本 panel 启动 pi 时的额外要求（子会话才有）；进程重启时照原样再用一次。 */
     private launch?: PanelLaunch;
-    /** 从本进程 stderr 里挑出“派子会话”暗号行的攒行器。 */
-    private readonly tabaFrames = new TabaFrameParser();
+    /** 从本进程 stderr 里挑暗号行的切割器（派子会话、问话两种暗号都走它）。 */
+    private readonly piFrames = new StderrFrameSplitter([TABA_DECODER, ASK_DECODER]);
     private readonly edits: EditTracker;
     // ---- 网页端「只发最近一段历史」的窗口（宿主 wantsTrimmedHistory 为 true 时启用）----
     /** 当前窗口在完整消息数组里的起点下标；-1 表示没开窗口（全量发过 / 非网页端）。 */
@@ -288,6 +290,8 @@ export class SessionRuntime {
         // “派子会话”那个扩展：配置里有路径、且本 panel 不是子会话时才加载（子会话不能再派）
         const tabaExtension = this.launch?.noTaba ? "" : cfg.tabaExtension || "";
         if (tabaExtension) { extraArgs.push("-e", tabaExtension); }
+        // “问话”那个扩展（ask_choice）：每个会话都带（子会话也可能要问用户）
+        if (cfg.askExtension) { extraArgs.push("-e", cfg.askExtension); }
         if (this.launch?.extraArgs && this.launch.extraArgs.length > 0) {
             extraArgs.push(...this.launch.extraArgs);
         }
@@ -299,8 +303,11 @@ export class SessionRuntime {
                 provider: want?.provider || cfg.provider || undefined,
                 model: want?.modelId || cfg.model || undefined,
                 extraArgs,
-                // 那个扩展靠这个环境变量找插件自带的角色文件
-                env: cfg.tabaDir ? { PICHAT_TABA_DIR: cfg.tabaDir } : undefined,
+                // 两个扩展各靠一个环境变量找自己的资源目录（taba：子会话名录；ask：回话文件）
+                env: {
+                    ...(cfg.tabaDir ? { PICHAT_TABA_DIR: cfg.tabaDir } : {}),
+                    ...(cfg.askDir ? { PICHAT_ASK_DIR: cfg.askDir } : {}),
+                },
             })
         );
     }
@@ -316,15 +323,29 @@ export class SessionRuntime {
         this.client.on("response", (resp) => this.onPiResponse(resp));
         this.client.on("ui", (req) => this.onPiUiRequest(req));
         this.client.on("stderr", (text: string) => {
-            // 那个扩展把“派子会话”的请求写在 stderr 里（一行是一大串 base64，不能整行打进日志，
-            // 不然控制台被刷没）；pi 自己的诊断输出照打 —— 攒行器把两样分开。
-            const requests = this.tabaFrames.feed(text);
-            for (const line of this.tabaFrames.takeOtherLines()) { console.error("[pi stderr]", line); }
-            for (const req of requests) {
-                console.error(req.kind === "spawn"
-                    ? `[派子会话] 收到派活请求：「${req.name}」（${req.id}，任务 ${req.task.length} 字）`
-                    : `[派子会话] 收到停止请求：「${req.name || req.id || ""}」`);
-                this.host.onTabaRequest?.(this.id, req);
+            // 两类暗号都写在 stderr 里（一行一帧，base64）：派子会话、问用户选择题。
+            // 两种都不能整行打日志（base64 会把控制台刷没）；pi 自己的诊断输出照打 —— 切割器把两样分开。
+            const frames = this.piFrames.feed(text);
+            for (const line of this.piFrames.takeOtherLines()) { console.error("[pi stderr]", line); }
+            for (const frame of frames) {
+                if (frame.kind === "taba") {
+                    const req = frame.value as TabaRequest;
+                    console.error(req.kind === "spawn"
+                        ? `[派子会话] 收到派活请求：「${req.name}」（${req.id}，任务 ${req.task.length} 字）`
+                        : `[派子会话] 收到停止请求：「${req.name || req.id || ""}」`);
+                    this.host.onTabaRequest?.(this.id, req);
+                    continue;
+                }
+                if (frame.kind === "ask") {
+                    const req = frame.value as AskRequest | AskDoneNotice;
+                    if (req.kind === "ask") {
+                        console.error(`[问话] 收到提问：「${req.question}」（${req.id}，${req.options.length} 个选项${req.multi ? "，可多选" : ""}）`);
+                        this.host.askQuestion?.(req, this.id);
+                    } else {
+                        // 扩展不等了（超时/这一轮被停）：把还开着的那个浮层收掉
+                        this.host.cancelAsk?.(req.id);
+                    }
+                }
             }
         });
         this.client.on("error", (err: Error) => {

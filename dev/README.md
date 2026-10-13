@@ -78,6 +78,9 @@ npm run web:shot -- --fake-pi --script dev/historyScroll.js
 # 会不会认自己工作区里的会话；别的屏把会话关了，这块屏留在原地、发消息就自动重开）：
 node dev/focusCheck.js
 
+# 验 ask_choice（模型问你选择题的那个工具）：单选 / 多选 / 自己写三条路走一遍
+npm run web:shot -- --script dev/askQuestion.js
+
 # 验断线重连（锁屏 / 切后台 / 断网 / 反复锁屏 / 反复弄断连接）：
 #   场景一 冻住、场景二 断网、场景三 冻住+断网、场景四 反复冻住解冻、
 #   场景五 反复把连接弄断（验序号补发不重不漏）、
@@ -151,6 +154,7 @@ node dev/markdownBlocksCheck.js
 | `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接）：`node dev/reconnect.js` |
 | `childDot.js` | 验顶条那颗小点（子会话在跑时父会话那颗点也呼吸）：`npm run web:shot -- --script dev/childDot.js` |
 | `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |
+| `askQuestion.js` | 验 `ask_choice`（模型问你选择题）：真模型 → 真 pi（插件给它 `-e` 了桥扩展）→ 浮层 → 回话文件 → 工具结果，单选 / 多选 / 自己写三条路 |
 | `options.js` | 两条命令共用的命令行参数 |
 | `fakePi.js` | 假的 pi（`--fake-pi` 用）：协议跟真 pi 一样，模型换成按剧本演戏，界面调试秒回 |
 | `fake-pi.cmd` / `.sh` | 上面那个的包装：Windows 上 piPath 得是 .cmd 才能被 shell 起来 |

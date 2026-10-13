@@ -462,6 +462,16 @@
     padding: 6px 8px; font-family: inherit; font-size: inherit;
   }
   #pickerSearch:focus { outline: none; border-color: var(--vscode-focusBorder, #007acc); }
+  /* 「选一个」浮层底下那行自由填写：跟上面那个筛选框一个长相，位置在列表下面、不跟着滚。 */
+  #pickerInputWrap { padding: 8px 12px; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2)); }
+  #pickerInputWrap.hidden { display: none; }
+  #pickerInput {
+    width: 100%; box-sizing: border-box;
+    background: var(--vscode-input-background, #fff); color: var(--vscode-input-foreground, inherit);
+    border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.4)); border-radius: 4px;
+    padding: 6px 8px; font-family: inherit; font-size: inherit;
+  }
+  #pickerInput:focus { outline: none; border-color: var(--vscode-focusBorder, #007acc); }
   /* 标题下面那行小字（目前只有文件夹选择器用：正在看的是哪个目录）。
      路径长了从前面截、留尾巴（末尾那层目录名是最要紧的那截）。 */
   #pickerSubtitle {
@@ -776,6 +786,17 @@
   #pickerFooter button.secondary { background: var(--vscode-button-secondaryBackground, #f0f0f0); color: var(--vscode-button-secondaryForeground, inherit); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); }
   #pickerFooter button.primary { background: var(--vscode-button-background, #007acc); color: var(--vscode-button-foreground, #fff); border: 1px solid var(--vscode-button-background, #007acc); }
   #pickerFooter.pk-model-footer { align-items: center; justify-content: space-between; gap: 12px; }
+  /* 问话（多选）底下那一行：左边“已勾几项”，右边取消/确定 —— 跟模型选择器那一行同一种排法 */
+  #pickerFooter.pk-question-footer { align-items: center; justify-content: space-between; gap: 12px; }
+  /* “我推荐”那个小标记：接在选项文字后面 */
+  .pk-recommend {
+    font-size: 0.72em; padding: 1px 5px; border-radius: 3px; margin-left: 6px;
+    vertical-align: 1px;
+    background: color-mix(in srgb, var(--vscode-button-background, #007acc) 16%, transparent);
+    color: var(--vscode-button-background, #007acc);
+  }
+  /* 多选里已勾上的行：整行淡淡铺一层，跟行首那颗方框一起说明“这项要交回去” */
+  .pk-item.pk-picked { background: color-mix(in srgb, var(--vscode-button-background, #007acc) 10%, transparent); }
   .pk-footer-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.78; font-size: 0.84em; }
   .pk-footer-actions { display: flex; flex: none; gap: 8px; }
   /* 历史会话面板底部的「设置」一行：左对齐、占满整行 */

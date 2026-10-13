@@ -15,6 +15,8 @@
  * 本文件不依赖 vscode，全部可单测。
  */
 
+import type { FrameDecoder } from "./piFrames";
+
 /** 暗号行的前缀。 */
 export const TABA_FRAME_PREFIX = "##PICHAT_TABA##";
 
@@ -62,7 +64,6 @@ export interface TabaStopRequest {
 }
 
 export type TabaRequest = TabaSpawnRequest | TabaStopRequest;
-
 /** 取字符串字段：非字符串或空串都当没有；顺带截断。 */
 function str(raw: unknown, limit: number): string | undefined {
     if (typeof raw !== "string") { return undefined; }
@@ -140,53 +141,9 @@ export function encodeTabaFrame(payload: Record<string, unknown>): string {
     return TABA_FRAME_PREFIX + Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
 }
 
-/** 攒太多时保留的尾巴长度（一行暗号最长不会超过任务上限的 base64 长度）。 */
-const TABA_FRAME_SAFE_TAIL = 64 * 1024;
-
-/**
- * stderr 攒行器：stderr 是按块来的，一行可能被切在两块里。
- * 喂进去一块，吐出这块里凑齐的那些请求；没凑齐的半行留着等下一块。
- *
- * 不是暗号的那些完整行（pi 自己的诊断输出）不当垃圾丢掉，
- * 攒起来等调用方用 takeOtherLines() 取走打日志 —— 暗号行不能打：
- * 它是一大串 base64（任务全文在里面），整行打进控制台会把日志刷没。
- */
-export class TabaFrameParser {
-    private buffer = "";
-    /** 攒下来的普通输出行（等调用方取走打日志）。 */
-    private otherLines: string[] = [];
-    /** 攒着的半行最多留这么长，超了就丢掉（防止某个东西狂写 stderr 把内存吃光）。 */
-    private static readonly MAX_PENDING = 256 * 1024;
-    /** 普通输出行最多留这么多行（没人来取也不能无限攒）。 */
-    private static readonly MAX_OTHER_LINES = 200;
-
-    public feed(chunk: string): TabaRequest[] {
-        if (!chunk) { return []; }
-        this.buffer += chunk;
-        const out: TabaRequest[] = [];
-        while (true) {
-            const idx = this.buffer.indexOf("\n");
-            if (idx < 0) { break; }
-            let line = this.buffer.slice(0, idx);
-            this.buffer = this.buffer.slice(idx + 1);
-            if (line.endsWith("\r")) { line = line.slice(0, -1); }
-            const req = decodeTabaFrame(line);
-            if (req) { out.push(req); }
-            else if (line.trim()) {
-                this.otherLines.push(line);
-                if (this.otherLines.length > TabaFrameParser.MAX_OTHER_LINES) { this.otherLines.shift(); }
-            }
-        }
-        if (this.buffer.length > TabaFrameParser.MAX_PENDING) {
-            this.buffer = this.buffer.slice(this.buffer.length - TABA_FRAME_SAFE_TAIL);
-        }
-        return out;
-    }
-
-    /** 取走攒下的普通输出行（取完清空）。 */
-    public takeOtherLines(): string[] {
-        const lines = this.otherLines;
-        this.otherLines = [];
-        return lines;
-    }
-}
+/** 交给 stderr 切割器（见 piFrames.ts）：认领这一种暗号。 */
+export const TABA_DECODER: FrameDecoder<"taba", TabaRequest> = {
+    kind: "taba",
+    prefix: TABA_FRAME_PREFIX,
+    decode: decodeTabaFrame,
+};

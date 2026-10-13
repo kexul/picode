@@ -16,6 +16,8 @@
  */
 import * as crypto from "crypto";
 import * as path from "path";
+import type { AskRequest } from "./askProtocol";
+import { writeAskAnswer } from "./askProtocol";
 import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase } from "./chatControllerBase";
 import { listProjects, listSessionFiles, type ProjectEntry } from "./sessionStore";
@@ -174,6 +176,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         current?: string | null,
         echo?: Record<string, unknown>,
         target?: string,
+        timeoutMs?: number,
     ): Promise<any | undefined> {
         // 调用方指定了弹给哪块屏就用它（模型选择器这种“点它的人自己要看”）；不然现挑“人最近在动的那一块”
         const to = target ?? this.pickOverlayTarget();
@@ -181,7 +184,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         if (to === ChatHostBase.LOCAL_CLIENT_ID) {
             await this.waitLocalReady();
         }
-        return this.openPicker(kind, { items, current: current ?? null, ...(echo || {}) }, to);
+        return this.openPicker(kind, { items, current: current ?? null, ...(echo || {}) }, to, timeoutMs);
     }
 
     // ========================================================================
@@ -993,6 +996,54 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
             return undefined;
         }
         return this.selectDialogFallback(title, options);
+    }
+
+    // ========================================================================
+    //  问话（ask_choice）：pi 扩展要用户答一个选择题
+    // ========================================================================
+    /** 问话浮层等多久（用户可能要想一会儿）。扩展那边等 30 分钟，这里稍短：让它先拿到“没作答”。 */
+    private static readonly ASK_WAIT_MS = 25 * 60 * 1000;
+    /** 还开着的问话：提问编号 → 弹在哪块屏上（扩展不等了时按编号收掉）。 */
+    private readonly openAsks = new Map<string, string>();
+
+    /**
+     * pi 扩展要问用户一个选择题：弹给正在看这个会话的那块屏，用户答完写一份回话文件
+     * （扩展在轮询那个文件）。没人在看、用户把浮层关了、等太久了 —— 都写一份“没作答”交回去。
+     */
+    public async askQuestion(req: AskRequest, sessionId?: string): Promise<void> {
+        const answerDir = this.getConfig().askDir ?? "";
+        const target = this.pickDialogClient(sessionId) ?? this.pickDialogClient() ?? this.pageForDialogFallback();
+        if (!target) {
+            writeAskAnswer(answerDir, { id: req.id, cancelled: true, picked: [], text: "" });
+            return;
+        }
+        const items = req.options.map((label, index) => ({ label, file: String(index) }));
+        this.openAsks.set(req.id, target);
+        try {
+            const choice = await this.showPicker("question", items, null, {
+                title: req.question,
+                multi: req.multi,
+                recommended: req.recommended,
+                allowText: req.allowText,
+                // 问题列表不给搜索框（就几个选项，占一截还挤掉说明）
+                searchable: false,
+            }, target, ChatHostBase.ASK_WAIT_MS);
+            const picked = Array.isArray(choice?.picks)
+                ? choice.picks.filter((x: unknown) => typeof x === "string")
+                : [];
+            const text = typeof choice?.text === "string" ? choice.text.trim() : "";
+            writeAskAnswer(answerDir, { id: req.id, cancelled: !choice, picked, text });
+        } finally {
+            this.openAsks.delete(req.id);
+        }
+    }
+
+    /** 扩展不等这次提问了（超时 / 这一轮被停）：把还开着的那块屏上的浮层收掉。 */
+    public cancelAsk(id: string): void {
+        const target = this.openAsks.get(id);
+        if (!target) { return; }
+        this.openAsks.delete(id);
+        this.cancelOverlay(target);
     }
 
     /** 确认框问不着页面时的兜底（VSCode 弹原生框；独立后端没屏可问就按“否”）。 */

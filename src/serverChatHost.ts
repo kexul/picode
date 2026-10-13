@@ -13,6 +13,7 @@
 import { ChatHostBase } from "./chatHostBase";
 import { ServerStateStore } from "./serverState";
 import { readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
+import { getAskAssets } from "./askAssets";
 import { getTabaAssets } from "./tabaAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
 
@@ -85,6 +86,7 @@ export class ServerChatHost extends ChatHostBase {
     public getConfig() {
         const cfg = readServerConfig(this.dir).config;
         const taba = cfg.tabaEnabled ? getTabaAssets() : undefined;
+        const ask = getAskAssets();
         return {
             piPath: cfg.piPath,
             provider: cfg.provider,
@@ -93,6 +95,8 @@ export class ServerChatHost extends ChatHostBase {
             trustProject: cfg.trustProject,
             tabaExtension: taba?.ok ? taba.extensionPath : "",
             tabaDir: taba?.ok ? taba.resourceDir : "",
+            askExtension: ask?.ok ? ask.extensionPath : "",
+            askDir: ask?.ok ? ask.resourceDir : "",
         };
     }
 

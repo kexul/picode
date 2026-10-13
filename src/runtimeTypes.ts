@@ -1,4 +1,5 @@
 import type { PiClient } from "./piClient";
+import type { AskRequest } from "./askProtocol";
 import type { TabaRequest } from "./tabaProtocol";
 
 /** 平台无关的 pi 运行时配置。 */
@@ -16,6 +17,13 @@ export interface PiConfig {
     tabaExtension?: string;
     /** 上面那个扩展要用到的资源目录（插件自带的角色文件在里面）。 */
     tabaDir?: string;
+    /**
+     * “问话”（ask_choice）要加载的 pi 扩展文件路径（插件写在 pichat 的目录里）。
+     * 空串或缺省表示这个工作区不带这个能力：不给 pi 加载扩展，模型那边就没有 ask_choice 这个工具。
+     */
+    askExtension?: string;
+    /** 上面那个扩展的资源目录：回话文件写在它的 ask-answers/ 下面。 */
+    askDir?: string;
 }
 
 /**
@@ -137,6 +145,14 @@ export interface RuntimeHost {
      * 不开这个能力的工作区（浏览器那份）不会收到。可选。
      */
     onTabaRequest?(panelId: string, request: TabaRequest): void;
+
+    /**
+     * 某个会话里的 pi 扩展要问用户一个选择题（ask_choice）：弹给正在看这个会话的那块屏，
+     * 用户答完把答案写成回话文件（扩展那边在轮询那个文件）。不必等它结束。可选。
+     */
+    askQuestion?(request: AskRequest, sessionId?: string): void;
+    /** 扩展不等这次提问了（超时/这一轮被停）：把还开着的那个浮层收掉。可选。 */
+    cancelAsk?(id: string): void;
 
     // ---- UI 弹窗（对应当 pi 的 extension_ui_request）----
     /** @param sessionId 这是哪个会话问的：优先弹给正在看这个会话的那块屏（没人看才找“人最近动的”）。 */

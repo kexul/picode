@@ -26,6 +26,7 @@ const OUT_ENTRY = path.join(repoRoot, "out", "extension", "chatViewProvider.js")
 const OUT_SERVER = path.join(repoRoot, "out", "server", "serverMain.js");
 const OUT_CONFIG = path.join(repoRoot, "out", "server", "serverConfig.js");
 const OUT_TABA = path.join(repoRoot, "out", "server", "tabaAssets.js");
+const OUT_ASK = path.join(repoRoot, "out", "server", "askAssets.js");
 const MEDIA_DIR = path.join(repoRoot, "media");
 /** 调试会话的工作目录：pi 进程在这里跑。单独一个空目录，免得调试时动到插件仓库本身。 */
 const SCRATCH_DIR = path.join(__dirname, ".scratch");
@@ -119,6 +120,7 @@ function createHarness(options = {}) {
     const { startBackend } = require(OUT_SERVER);
     const { updateServerConfig } = require(OUT_CONFIG);
     const { ensureTabaAssets } = require(OUT_TABA);
+    const { ensureAskAssets } = require(OUT_ASK);
     const version = packageVersion();
 
     // 调试用的设置写进后端那份 config.json：模型 / pi 路径这些跟真后端一样从文件读，
@@ -140,6 +142,8 @@ function createHarness(options = {}) {
 
     // 派子会话要用的文件：真后端启动器会写，这里也得写一份（不然调试时派子会话是坏的）
     ensureTabaAssets(version);
+    // 问话（ask_choice）那个工具要用的扩展：同理
+    ensureAskAssets(version);
 
     const context = {
         subscriptions: [],

@@ -117,6 +117,9 @@
   const pickerSearch = document.getElementById("pickerSearch");
   const pickerSearchWrap = document.getElementById("pickerSearchWrap");
   const pickerFooter = document.getElementById("pickerFooter");
+  /** 「选一个」浮层底下那行自由填写（选项都不合适时自己写）。 */
+  const pickerInput = document.getElementById("pickerInput");
+  const pickerInputWrap = document.getElementById("pickerInputWrap");
   let pickerState = null; // { kind, items, filtered, sel, current, draftModel, draftThinking, toggle }
 
   // ==================== Markdown / 文件链接 / 符号链接（纯函数，与是哪个会话无关）====================
@@ -2153,11 +2156,17 @@
     pickerOverlay.classList.remove("pk-folders");
     pickerBody.innerHTML = "";
     pickerSearch.value = "";
+    if (pickerInput && pickerInputWrap) {
+      pickerInput.value = "";
+      pickerInputWrap.classList.add("hidden");
+      if (document.activeElement === pickerInput) { pickerInput.blur(); }
+    }
     setPickerSubtitle("");
     pickerFooter.innerHTML = "";
     pickerFooter.classList.add("hidden");
     pickerFooter.classList.remove("pk-model-footer");
     pickerFooter.classList.remove("pk-history-footer");
+    pickerFooter.classList.remove("pk-question-footer");
     const leftoverClose = document.getElementById("pickerClose");
     if (leftoverClose) { leftoverClose.remove(); }
     pickerSearchWrap.classList.remove("hidden");
@@ -2330,6 +2339,44 @@
     actions.appendChild(confirmBtn);
     pickerFooter.appendChild(actions);
   }
+  /**
+   * 问话（多选）底下那一行：左边说勾了几项，右边「取消 / 确定」。
+   * 单选不用这个 —— 点一行就是答案，没有“下一步”。
+   */
+  function renderQuestionFooter(st) {
+    pickerFooter.innerHTML = "";
+    pickerFooter.classList.remove("hidden");
+    pickerFooter.classList.add("pk-question-footer");
+    const summary = document.createElement("div"); summary.className = "pk-footer-summary";
+    const written = String(pickerInput && pickerInput.value || "").trim();
+    summary.textContent = st.picked.size > 0
+      ? "已勾 " + st.picked.size + " 项"
+      : (written ? "按上面写的交回去" : "一项都没勾");
+    pickerFooter.appendChild(summary);
+    const actions = document.createElement("div"); actions.className = "pk-footer-actions";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button"; cancelBtn.className = "secondary"; cancelBtn.textContent = "取消";
+    cancelBtn.addEventListener("click", () => cancelPicker());
+    actions.appendChild(cancelBtn);
+    const okBtn = document.createElement("button");
+    okBtn.type = "button"; okBtn.className = "primary"; okBtn.textContent = "确定";
+    okBtn.addEventListener("click", () => submitQuestion());
+    actions.appendChild(okBtn);
+    pickerFooter.appendChild(actions);
+  }
+
+  /**
+   * 问话：把勾中的项和“自己写”的那句一起交回去。两样都可能是空的 —— 都空等于没作答，
+   * 模型那边收到的就是“用户没作答”（跟按取消一个意思）。
+   */
+  function submitQuestion() {
+    const st = pickerState; if (!st) { return; }
+    const picks = Array.from(st.picked);
+    const text = String(pickerInput && pickerInput.value || "").trim();
+    hidePicker();
+    vscode.postMessage({ type: "pickerChoice", kind: "question", payload: { picks, text } });
+  }
+
   function renderPickerItems() {
     const st = pickerState;
     if (!st) { return; }
@@ -2445,7 +2492,24 @@
       }
       const el = document.createElement("div");
       el.className = "pk-item" + (idx === st.sel ? " active" : "");
-      if (st.kind === "workspace" && item.__section === "space") {
+      if (st.kind === "question") {
+        // 问话的选项行：多选前面一颗方框（勾上/没勾），单选不加标记（靠行上的高亮）；
+        // 推荐的那几项挂一个小标记。
+        const t = document.createElement("div"); t.className = "pk-title";
+        const checked = st.picked.has(String(item.label || ""));
+        if (st.multi) {
+          const box = document.createElement("span"); box.className = "pk-check" + (checked ? " on" : "");
+          box.innerHTML = checked ? ICONS.check : "";
+          t.appendChild(box);
+        }
+        t.appendChild(document.createTextNode(String(item.label || "")));
+        if (st.recommended.indexOf(idx + 1) >= 0) {
+          const badge = document.createElement("span"); badge.className = "pk-recommend"; badge.textContent = "我推荐";
+          t.appendChild(badge);
+        }
+        el.appendChild(t);
+        if (checked) { el.classList.add("pk-picked"); }
+      } else if (st.kind === "workspace" && item.__section === "space") {
         el.classList.add("pk-space");
       } else if (st.kind === "workspace" && item.__section === "session") {
         el.classList.add("pk-session");
@@ -2580,8 +2644,9 @@
         el.appendChild(main);
         el.title = item.label || "";
       }
-      // 其他种类（没有专属排版的，如浏览器界面里问“选哪一项”）：直接渲染标题
-      if (["history", "options", "workspace", "folders"].indexOf(st.kind) < 0 && item.label) {
+      // 其他种类（没有专属排版的）：直接渲染标题。
+      // 问话（question）有自己那一段（前面画过了），不能在这儿再画一遍。
+      if (["history", "options", "workspace", "folders", "question"].indexOf(st.kind) < 0 && item.label) {
         const t = document.createElement("div"); t.className = "pk-title";
         t.textContent = String(item.label);
         el.appendChild(t);
@@ -2601,6 +2666,7 @@
       spacePane.appendChild(buildLoadMoreBtn(st, "spaces"));
     }
     if (st.kind === "model") { renderModelFooter(st); }
+    if (st.kind === "question" && st.multi) { renderQuestionFooter(st); }
     restoreScroll();
   }
   /**
@@ -2648,6 +2714,18 @@
     const item = st.filtered[idx];
     if (!item) { return; }
     const kind = st.kind;
+    // 问话（ask_choice）：单选点一行就是答案；多选点一下勾上 / 再点取消，勾完按底下的「确定」。
+    if (kind === "question") {
+      if (!st.multi) {
+        hidePicker();
+        vscode.postMessage({ type: "pickerChoice", kind, payload: { picks: [String(item.label || "")], text: "" } });
+        return;
+      }
+      const key = String(item.label || "");
+      if (st.picked.has(key)) { st.picked.delete(key); } else { st.picked.add(key); }
+      renderPickerItems();
+      return;
+    }
     if (st.toggle || item.behavior === "toggle") {
       vscode.postMessage({ type: "pickerToggle", kind, action: item.action, value: item.value });
       return;
@@ -2678,6 +2756,7 @@
     hidePicker();
     vscode.postMessage({ type: "pickerChoice", kind, payload });
   }
+
   function cancelPicker() {
     const st = pickerState; if (!st) { return; }
     const kind = st.kind;
@@ -2742,6 +2821,11 @@
       draftModel: null,
       draftThinking: undefined,
       toggle,
+      // 问话（ask_choice）：能勾多个吗、推荐哪几项（从 1 数起）、已勾中了哪几项。
+      // 单选点一行就是答案；多选点一下勾上，勾完按底下的「确定」。
+      multi: kind === "question" && msg.multi === true,
+      recommended: kind === "question" && Array.isArray(msg.recommended) ? msg.recommended : [],
+      picked: new Set(),
       // 「加载更多」：history 看 msg.hasMore，项目与会话分两块（会话 sessions.hasMore、工作区 spaces.hasMore）。
       historyHasMore: kind === "workspace" ? !!(msg.sessions && msg.sessions.hasMore) : msg.hasMore === true,
       historyLoading: false,
@@ -2758,10 +2842,23 @@
     pickerTitle.textContent = titleMap[kind] || (typeof msg.title === "string" && msg.title ? msg.title : "选择");
     // 标题下面那行小字（现在只有文件夹选择器用：正在看的是哪个目录）；没有就收起来
     setPickerSubtitle(typeof msg.subtitle === "string" ? msg.subtitle : "");
+    if (kind === "question" && pickerState.multi) {
+      // 多选交回去得按一下（单选是点一行就走）：这句告诉人家勾完怎么办
+      setPickerSubtitle("可多选：点一下勾上（再点取消），勾完按「确定」");
+    }
     pickerSearch.value = "";
     pickerSearchWrap.classList.toggle("hidden", !searchable);
+    // 「选一个」这种浮层（pi 扩展问的选项题）：列表底下来一行自由填写。
+    // 选项是短的、可能不齐，想写别的就在这一行写，回车就当答案交回去。
+    // 底下这一行“自己写”只有问话（ask_choice）用。
+    const freeText = kind === "question" && msg.allowText !== false;
+    if (pickerInput && pickerInputWrap) {
+      pickerInput.value = "";
+      pickerInputWrap.classList.toggle("hidden", !freeText);
+    }
     pickerFooter.classList.remove("pk-model-footer");
     pickerFooter.classList.remove("pk-history-footer");
+    pickerFooter.classList.remove("pk-question-footer");
     pickerFooter.innerHTML = "";
     if (kind === "model") {
       pickerFooter.classList.remove("hidden");
@@ -2813,6 +2910,7 @@
       console.log("[pi] picker(" + kind + ") 点击→弹出: " + Math.round(performance.now() - msg.t0) + "ms");
     }
     if (searchable) { setTimeout(() => pickerSearch.focus(), 0); }
+    else if (freeText && pickerInput) { setTimeout(() => pickerInput.focus(), 0); }
   }
   pickerOverlay.addEventListener("click", (e) => { if (e.target === pickerOverlay) { cancelPicker(); } });
   pickerSearch.addEventListener("input", () => {
@@ -2820,6 +2918,12 @@
     pickerState.sel = pickerState.kind === "model" ? -1 : 0;
     renderPickerItems();
   });
+  // 问话（多选）：在底下那行写字时，底下那句“已勾 / 一项都没勾”跟着变
+  if (pickerInput) {
+    pickerInput.addEventListener("input", () => {
+      if (pickerState && pickerState.kind === "question" && pickerState.multi) { renderQuestionFooter(pickerState); }
+    });
+  }
   document.addEventListener("keydown", (e) => {
     if (!pickerState || pickerOverlay.classList.contains("hidden")) { return; }
     const st = pickerState;
@@ -2840,14 +2944,32 @@
         submitModelPicker();
       } else if (e.key === "Escape") {
         e.preventDefault();
+        // 收回这只浮层，同时把这条按键就地处掉：后面那个 document 上的监听会用 Esc 中止
+        // 正在生成的那一轮，它开头那句“浮层开着就跳开”的判断这会儿已经被 cancelPicker 改掉了
+        // （两个监听都在 document 上，按注册顺序跑，靠 stopImmediatePropagation 拦下来才管用）。
+        e.stopImmediatePropagation();
         cancelPicker();
       }
       return;
     }
     if (e.key === "ArrowDown") { e.preventDefault(); if (st.filtered.length) { st.sel = st.sel < 0 ? 0 : (st.sel + 1) % st.filtered.length; renderPickerActive(); } }
     else if (e.key === "ArrowUp") { e.preventDefault(); if (st.filtered.length) { st.sel = st.sel < 0 ? st.filtered.length - 1 : (st.sel - 1 + st.filtered.length) % st.filtered.length; renderPickerActive(); } }
-    else if (e.key === "Enter") { e.preventDefault(); confirmPicker(st.sel); }
-    else if (e.key === "Escape") { e.preventDefault(); cancelPicker(); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      if (st.kind === "question") {
+        // 问话：多选交回去（勾中的 + 上面写的）；单选就是高亮那一行 ——
+        // 上面写了字就当“自己写的答案”。
+        if (st.multi) { submitQuestion(); return; }
+        if (pickerInput && document.activeElement === pickerInput && pickerInput.value.trim()) { submitQuestion(); return; }
+        confirmPicker(st.sel);
+        return;
+      }
+      // 自由填写那一行只有问话有（上面已经处理完了）：能走到这儿就是高亮那一项
+      confirmPicker(st.sel);
+    }
+    // 多选：空格勾上 / 取消光标停的那一行（在下面那行写字时空格还是空格）
+    else if (e.key === " " && st.kind === "question" && st.multi && document.activeElement !== pickerInput) { e.preventDefault(); confirmPicker(st.sel); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); cancelPicker(); }
   });
 
 
@@ -3264,7 +3386,13 @@
       if (e.key === "Escape") { e.preventDefault(); hideFileMenu(); return; }
     }
     // 复刻 pi TUI：流式生成中按 ESC 中止（文件菜单关闭时生效）
-    if (e.key === "Escape") { if (abortActiveTab()) { e.preventDefault(); } return; }
+    if (e.key === "Escape") {
+      // 浮层开着的时候这条键归浮层（收回它）：别顺手把正在生成的那一轮也中止了。
+      // 这里只管“不中止”，收回浮层由 document 上那个监听做。
+      if (pickerState && !pickerOverlay.classList.contains("hidden")) { return; }
+      if (abortActiveTab()) { e.preventDefault(); }
+      return;
+    }
     if (isSendKey(e)) { e.preventDefault(); send(); }
   });
   inputEl.addEventListener("input", () => { autoResize(); maybeShowFileMenu(); maybeShowHashMenu(); maybeShowSlashMenu(); });

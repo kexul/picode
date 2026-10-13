@@ -54,7 +54,7 @@
     "compile": "node scripts/compile.mjs",
     "build": "npm run clean && npm run compile",
     "watch": "node scripts/compile.mjs --watch",
-    "test": "npm run compile && node --test out/test/webTransport.test.js out/test/chatHtml.test.js out/test/tabaProtocol.test.js out/test/tabaLaunch.test.js out/test/screenRegistry.test.js out/test/backendClient.test.js out/test/tabaRegistry.test.js out/test/tabaRunFiles.test.js out/test/sessionFocus.test.js",
+    "test": "npm run compile && node --test out/test/webTransport.test.js out/test/chatHtml.test.js out/test/tabaProtocol.test.js out/test/tabaLaunch.test.js out/test/screenRegistry.test.js out/test/backendClient.test.js out/test/tabaRegistry.test.js out/test/tabaRunFiles.test.js out/test/sessionFocus.test.js out/test/piFrames.test.js out/test/askProtocol.test.js out/test/askAssets.test.js",
     "package": "npm run build && vsce package --allow-missing-repository",
     "web:dev": "npm run compile && node dev/browserHost.js",
     "web:shot": "npm run compile && node dev/visit.js",

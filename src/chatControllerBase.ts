@@ -34,7 +34,9 @@ import {
 import { randomNameParts, composeName } from "./names";
 import type { PanelLaunch, TurnEndStatus } from "./runtimeTypes";
 import type { TabaRequest, TabaSpawnRequest, TabaStopRequest } from "./tabaProtocol";
-import { TabaFrameParser } from "./tabaProtocol";
+import { TABA_DECODER } from "./tabaProtocol";
+import { ASK_DECODER } from "./askProtocol";
+import { StderrFrameSplitter } from "./piFrames";
 import {
     TabaRegistry,
     buildChildClosedNotice,
@@ -460,15 +462,19 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const extraArgs = cfg.trustProject
             ? [...cfg.extraArgs, "--approve"]
             : [...cfg.extraArgs];
-        // 备用进程也要带上“派子会话”那个扩展：它会被下一个新 panel 领走，那个 panel 一样得能派活
+        // 备用进程也要带上那两个扩展：它会被下一个新 panel 领走，那个 panel 一样得能派活、能问用户
         if (cfg.tabaExtension) { extraArgs.push("-e", cfg.tabaExtension); }
+        if (cfg.askExtension) { extraArgs.push("-e", cfg.askExtension); }
         const client = new PiClient({
             piPath: cfg.piPath,
             cwd: this.getCwd(),
             provider: cfg.provider || undefined,
             model: cfg.model || undefined,
             extraArgs,
-            env: cfg.tabaDir ? { PICHAT_TABA_DIR: cfg.tabaDir } : undefined,
+            env: {
+                ...(cfg.tabaDir ? { PICHAT_TABA_DIR: cfg.tabaDir } : {}),
+                ...(cfg.askDir ? { PICHAT_ASK_DIR: cfg.askDir } : {}),
+            },
         });
         // 记住备用进程的启动模型：新 panel 领取时按继承目标比对，不符则补发 set_model
         this.spareMeta = {
@@ -477,8 +483,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
         };
         this.preparingSpare = client;
         // 备用进程的 stderr 只记“不是暗号行”的那些（暗号是一大串 base64，整行打出来把日志刷没）。
-        // 派活请求由领走它的那个会话解析（这里不解析，不然同一行会被处理两次）。
-        const spareStderr = new TabaFrameParser();
+        // 请求由领走它的那个会话解析（这里只切割、不处理，不然同一行会被处理两次）。
+        const spareStderr = new StderrFrameSplitter([TABA_DECODER, ASK_DECODER]);
         client.on("stderr", (text: string) => {
             spareStderr.feed(text);
             for (const line of spareStderr.takeOtherLines()) { console.error("[pi spare stderr]", line); }
@@ -1440,15 +1446,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
         current?: string | null,
         echo?: Record<string, unknown>,
         target?: string,
+        timeoutMs?: number,
     ): Promise<any | undefined> {
-        return this.openPicker(kind, { items, current: current ?? null, ...(echo || {}) }, target);
+        return this.openPicker(kind, { items, current: current ?? null, ...(echo || {}) }, target, timeoutMs);
     }
 
     /**
      * 推送一个浮层并等回复。
      * @param target 指定发给哪个界面；不填就现挑“人最近在动的那一个”。
      */
-    protected openPicker(kind: string, body: Record<string, unknown>, target?: string): Promise<any | undefined> {
+    protected openPicker(kind: string, body: Record<string, unknown>, target?: string, timeoutMs?: number): Promise<any | undefined> {
         const to = target ?? this.pickOverlayTarget();
         // 这块屏上还开着的上一个浮层：先让它收起来（同一块屏连开两个就走这一道）；
         // 别的屏开着什么不管：各开各的（两个窗口同时开着会话列表互不影响）。
@@ -1460,8 +1467,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
         st.kind = kind;
         return new Promise<any | undefined>((resolve) => {
             st.resolve = resolve;
-            st.timer = setTimeout(() => { this.dropPicker(to, true); }, ChatControllerBase.PICKER_TIMEOUT_MS);
+            st.timer = setTimeout(() => { this.dropPicker(to, true); }, timeoutMs ?? ChatControllerBase.PICKER_TIMEOUT_MS);
         });
+    }
+
+    /** 让某块屏上开着的浮层收起来（当用户按了 Esc）：扩展不等那次提问时用。 */
+    protected cancelOverlay(clientId: string): void {
+        this.dropPicker(clientId, true);
     }
 
     /** 收掉某块屏上开着的浮层：按需让它收起来，再把等的人按取消放行。 */

@@ -17,6 +17,7 @@ import { PiChatWebServer, type WebServerSettings } from "./webChatServer";
 import { ServerChatHost } from "./serverChatHost";
 import { readServerConfig, updateServerConfig } from "./serverConfig";
 import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
+import { ensureAskAssets } from "./askAssets";
 import { ensureTabaAssets } from "./tabaAssets";
 import { serverConfigFile } from "./serverPaths";
 
@@ -158,6 +159,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     const tabaAssets = ensureTabaAssets(VERSION);
     if (!tabaAssets.ok) {
         log(`派子会话的功能没开（文件没写成：${tabaAssets.error}）`);
+    }
+
+    // 问话（ask_choice）要用的那个 pi 扩展：同样先写好（它不依赖上面那个开关）
+    const askAssets = ensureAskAssets(VERSION);
+    if (!askAssets.ok) {
+        log(`问话（ask_choice）这个工具没开（文件没写成：${askAssets.error}）`);
     }
 
     let started: StartedBackend;
