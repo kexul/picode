@@ -65,9 +65,12 @@
     flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%;
     background: var(--vscode-charts-blue, #3794ff); display: none;
   }
-  #sessionName.streaming .sn-dot { display: inline-block; animation: pi-pulse 1.2s ease-in-out infinite; }
-  /* 别的会话有新消息：同一颗点，亮着但不闪（当前会话在跑时这颗点拿去闪了，不抢）。 */
-  #sessionName.unread:not(.streaming) .sn-dot { display: inline-block; }
+  /* 本会话在跑、或者它派出去的子会话还在跑：同一颗点，一样呼吸
+     （子会话那种是本会话自己闲着、活在外面干，点亮着才知道没停）。 */
+  #sessionName.streaming .sn-dot,
+  #sessionName.child-running .sn-dot { display: inline-block; animation: pi-pulse 1.2s ease-in-out infinite; }
+  /* 别的会话有新消息：同一颗点，亮着但不闪（这颗点拿去闪的时候它不抢）。 */
+  #sessionName.unread:not(.streaming):not(.child-running) .sn-dot { display: inline-block; }
   #sessionName.streaming .sn-text { opacity: 1; }
   /* 名字后面那颗朝下的小箭头：主会话多过一个才露面（暗示点得开、能换）。 */
   #sessionName .sn-caret { flex: 0 0 auto; display: inline-flex; opacity: 0.6; }

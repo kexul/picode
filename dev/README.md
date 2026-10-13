@@ -64,6 +64,9 @@ npm run web:shot -- --fake-pi --script dev/sessionFlow.js
 # 正看着就不关；子会话跑得比人手快，配慢一点儿的假 pi 才来得及点进去
 FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaFlow.js
 
+# 验顶条中间那颗小点（本会话闲着、派出去的子会话还在跑时也亮着呼吸；投假会话列表，不真派活）：
+npm run web:shot -- --width 900 --height 620 --script dev/childDot.js
+
 # 验顶部「加载更早的消息」（网页端只发最近一段历史）：点完视野得留在原来那几条消息上，
 # 不能被甩到底部（ROUNDS 攒消息轮数，AT_BOTTOM=1 是“贴底时点”那种）：
 npm run web:shot -- --fake-pi --script dev/historyScroll.js
@@ -143,6 +146,7 @@ node dev/markdownBlocksCheck.js
 | `visit.js` | `npm run web:shot` 的入口：按动作跑一遍并截图 |
 | `focusCheck.js` | 验“每块屏各看各的会话”（两块浏览页面 + 模拟的 VSCode 窗口）：`node dev/focusCheck.js` |
 | `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接）：`node dev/reconnect.js` |
+| `childDot.js` | 验顶条那颗小点（子会话在跑时父会话那颗点也呼吸）：`npm run web:shot -- --script dev/childDot.js` |
 | `options.js` | 两条命令共用的命令行参数 |
 | `fakePi.js` | 假的 pi（`--fake-pi` 用）：协议跟真 pi 一样，模型换成按剧本演戏，界面调试秒回 |
 | `fake-pi.cmd` / `.sh` | 上面那个的包装：Windows 上 piPath 得是 .cmd 才能被 shell 起来 |

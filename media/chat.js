@@ -561,6 +561,20 @@
     return st.piTitle || st.title || "新会话";
   }
 
+  /**
+   * 这个会话派出去的子会话里，还有没有在跑的：子会话自己在跑（正在答、或者刚开始
+   * 那一轮），或者刚派出去、任务还没发完（taba 那边是 starting）。
+   * 顶条中间那颗名字上的小点用它：本会话自己闲着、子会话还在干活时照样亮着呼吸。
+   */
+  function hasRunningChild(id) {
+    return Array.from(sessions.values()).some((s) => {
+      if (s.parentId !== id) { return false; }
+      if (s.streaming || s.loading) { return true; }
+      const state = s.taba ? s.taba.state : "";
+      return state === "starting" || state === "running";
+    });
+  }
+
   /** 顶条中间那行字：当前会话名（带在跑的小点；主会话多过一个就再挂一颗朝下的小箭头）。 */
   function renderSessionBar() {
     const st = activeId ? sessions.get(activeId) : null;
@@ -577,6 +591,9 @@
       sessionPathEl.classList.toggle("hidden", !dir);
     }
     sessionNameBtn.classList.toggle("streaming", !!(st && (st.streaming || st.loading)));
+    // 派出去的子会话还在跑：本会话自己闲着也把那颗点亮出来（一样呼吸），
+    // 一眼看得出这一家子还在干活（等的是子会话，不是本会话在答）。
+    sessionNameBtn.classList.toggle("child-running", !!(st && hasRunningChild(st.id)));
     // 别的会话跑完了你没看（“有新消息”）：名字左边那颗小点亮着，不闪；切过去看就灭。
     // 当前这个会话正在跑时那颗点拿去闪了（streaming 优先），未读还得点开清单看。
     sessionNameBtn.classList.toggle("unread", Array.from(sessions.values()).some((s) => s.unread));
