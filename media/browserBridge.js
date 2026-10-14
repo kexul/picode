@@ -289,11 +289,14 @@
   /** 页面标识：服务在送出页面时写进来的。服务靠它认出"这条连接是哪一个页面的"。 */
   var pageId = "";
   var query = "";
-  // ==================== 几个时间（与 webChatServer.ts 里的常量对得上） ====================
+  // ==================== 几个时间 ====================
+  // 这三个数以握手时后端报的数（hello 里的 heartbeatMs / tickTimeoutMs / pingMs）为准，
+  // 它们写在后端一处：src/chatProtocol.ts。下面这几个只是没收到 hello 时的兜底值，
+  // 改后端那份数这里不用动。
   /** 插件发心跳（tick）的间隔。 */
   var HEARTBEAT_MS = 25000;
-  /** 连着丢三个心跳还没见到，就认定这条连接已经死了（看着还在，其实收不到任何东西）。 */
-  var TICK_TIMEOUT_MS = HEARTBEAT_MS * 3;
+  /** 连着丢几个心跳还没见到就认定连接死了（看着还在，其实收不到任何东西）。 */
+  var TICK_TIMEOUT_MS = 75000;
   /** 页面报活的间隔：比插件判"死了"的那个上限（90 秒）短得多，正常情况绝不会被误判。 */
   var PING_MS = 25000;
   /** 多久检查一次"连接是不是其实已经死了"。 */
@@ -409,6 +412,18 @@
       // 连接建立：先于一切带序号的消息到达（插件那头保证顺序）。
       liveFromSeq = typeof data.seq === "number" ? data.seq : 0;
       catchUpThrough = lastSeq;
+      // 三个时间以后端说的为准（后端一处写死，这里不再抄、也不再自己定规则）
+      if (typeof data.heartbeatMs === "number" && data.heartbeatMs > 0) {
+        HEARTBEAT_MS = data.heartbeatMs;
+      }
+      if (typeof data.tickTimeoutMs === "number" && data.tickTimeoutMs > 0) {
+        TICK_TIMEOUT_MS = data.tickTimeoutMs;
+      }
+      if (typeof data.pingMs === "number" && data.pingMs > 0 && data.pingMs !== PING_MS) {
+        PING_MS = data.pingMs;
+        // 报活的定时器已经开着，按新周期重开一次
+        if (pingTimer) { clearInterval(pingTimer); pingTimer = setInterval(ping, PING_MS); }
+      }
       return;
     }
     if (type === "syncPoint") {

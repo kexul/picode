@@ -30,7 +30,12 @@ import { randomBytes } from "node:crypto";
 const FRAME_PREFIX = "##PICHAT_ASK##";
 /** 隔多久看一次回话文件。 */
 const POLL_MS = 150;
-/** 最多等多久（用户一直没答就放弃：别把这一轮永久堵住）。 */
+/**
+ * 最多等多久（用户一直没答就放弃：别把这一轮永久堵住）。
+ *
+ * 宿主那边等到点就先放弃了（见 chatHost.ts 的 ASK_WAIT_MS，比这个短）：它一放弃，界面上那张
+ * 卡片就没了，这里再等也只是为了把话说明白 —— 所以下面那句提示不报具体分钟数，免得两边对不上。
+ */
 const WAIT_LIMIT_MS = 30 * 60 * 1000;
 
 /** 往 stderr 写一行暗号。 */
@@ -152,7 +157,7 @@ const ASK_DESCRIPTION =
     "一次只问一个问题：前一个答完了再问下一个。问题和你给的选项都要短（各占一行最好）。" +
     "问之前先把你自己的推荐和理由写在正文里（工具调用之前那段话）。" +
     "作答回来的可能是勾中的选项，也可能是用户自己写的一句话（那种按「用户自己的说法」理解）。" +
-    "用户不答了、或者一直没答（等半小时），就当作没作答：不要再重复问同一个问题，等用户开口。";
+    "用户不答了、或者一直没答（等很久也没回应），就当作没作答：不要再重复问同一个问题，等用户开口。";
 
 /** 注册一个工具；名字被别人占了就跳过（不要让整个 pi 起不来）。 */
 function safeRegister(pi: any, def: any): void {
@@ -209,7 +214,7 @@ export default function askBridge(pi: any): void {
                 emit({ kind: "ask-done", id });
                 const why = waited.why === "cancelled"
                     ? "这一轮被停掉了，用户没来得及作答。"
-                    : "等了半小时用户也没作答。";
+                    : "用户一直没作答。";
                 return {
                     content: [{ type: "text", text: why + "不要再重复问这个问题：等用户开口。" }],
                     details: { id, cancelled: true, reason: waited.why },

@@ -6,6 +6,7 @@ import * as os from "os";
 import * as path from "path";
 import { getBrowserChatHtml } from "./browserHtml";
 import { mediaStamp, mediaVersion } from "./mediaVersion";
+import { HEARTBEAT_MS, PAGE_STALE_MS, PING_MS, TICK_TIMEOUT_MS } from "./chatProtocol";
 import type { ChatBroadcaster } from "./chatBroadcaster";
 import type { ScreenRegistry } from "./screenRegistry";
 import {
@@ -40,14 +41,7 @@ import {
 
 /** 页面发来的单个请求允许的最大字节数（粘贴图片会是好几 MB）。 */
 const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
-/** 心跳间隔：每隔这么久给每条推送连接写一个页面收得到的 tick，同时巡检一遍死连接。
- *  一来防止中间设备掐掉空闲连接，二来页面靠"多久没收到 tick"自己判断连接是不是已经死了。 */
-const HEARTBEAT_MS = 25_000;
-/** 页面超过这么久没有任何动静（报活或发消息）就把它那条连接收掉。
- *  手机退到后台后定时器被冻住，报活自然停了：那条连接多半已经死了，占着只会白攒消息。
- *  页面回到前台会自己重连，报上自己处理到第几条消息，后端把漏掉的补发给它；
- *  补不上的才整屏重画。VS Code 窗口也一样。 */
-const PAGE_STALE_MS = 90_000;
+// 心跳间隔与"多久没动静算死"这两个数在 chatProtocol.ts：两个客户端也要按它们办事。
 /** 一条推送连接最多积压多少字节：页面不读了（屏黑了 / 网络卡住）就别再往里塞，
  *  掐掉让它重连重画。不掐的话这些字节全堆在插件进程里，回来时也不会被 GC 回收。 */
 const STREAM_BACKLOG_BYTES = 8 * 1024 * 1024;
@@ -542,7 +536,15 @@ export class PiChatWebServer {
         // retry 是给浏览器看的：万一由浏览器自己重连，隔 1 秒就来一次（页面那头也会自己管重连）
         res.write("retry: 1000\n\n");
         res.write(": connected\n\n");
-        this.writeChunk(channel, res, `event: msg\ndata: ${JSON.stringify({ type: "hello", seq: openSeq })}\n\n`);
+        // 握手把三个时间一起报给页面：网页那一份是纯 JS（browserBridge.js），读不了
+        // chatProtocol.ts，报给它在那边就不留规则 —— 免得两边各写死一套、改一边就白重连。
+        this.writeChunk(channel, res, `event: msg\ndata: ${JSON.stringify({
+            type: "hello",
+            seq: openSeq,
+            heartbeatMs: HEARTBEAT_MS,
+            tickTimeoutMs: TICK_TIMEOUT_MS,
+            pingMs: PING_MS,
+        })}\n\n`);
         res.socket?.setNoDelay(true);
         if (replaced) { replaced.close(""); }   // 同一个页面的旧连接：安静断掉，页面那头不会弹提示
         const onClose = () => { this.dropChannel(channel); };

@@ -1,5 +1,6 @@
 import * as http from "http";
 import { readServerAddress, probeServer } from "./serverState";
+import { PING_MS, TICK_TIMEOUT_MS } from "./chatProtocol";
 
 /**
  * BackendClient —— 插件连独立后端的那条线（不引用 vscode）。
@@ -16,12 +17,8 @@ import { readServerAddress, probeServer } from "./serverState";
  * 补不上就整屏重画。
  */
 
-/** 页面报活的间隔：比后端判"死了"的 90 秒短得多，正常情况绝不会被误判。 */
-const PING_MS = 25_000;
-/** 多久检查一次"推送连接是不是其实已经死了"（后端每 25 秒写一个 tick）。 */
+/** 多久检查一次"推送连接是不是其实已经死了"（PING_MS 与 TICK_TIMEOUT_MS 见 chatProtocol.ts）。 */
 const WATCHDOG_MS = 5_000;
-/** 这么久没收到 tick 就认为连接死了（手机 / 笔记本睡过去再醒来时常见）。 */
-const TICK_TIMEOUT_MS = 60_000;
 /** 重连等待阶梯（毫秒）：头几次快，之后固定在 8 秒。一直试下去，不认输。 */
 const RETRY_DELAYS_MS = [400, 800, 1500, 3000, 8000];
 
