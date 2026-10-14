@@ -285,9 +285,10 @@
   /**
    * 按当前符号集合，把已渲染正文里的行内代码就地变成可点击的符号链接（或还原回普通文字）。
    *
-   * 为什么整段重画（el.innerHTML = renderMarkdown(el.dataset.raw)）不行：工具标签、edit/write
-   * 小标签是运行时挂进 .md 里的 DOM，重画只认 markdown 原文，会把这些节点一起抹掉——
-   * 表现就是"工具调用时不时不见了"。只改行内 code 节点，别的东西一律不动。
+   * 为什么在这里整段重画（el.innerHTML = renderMarkdown(el.dataset.raw)）不行：符号链接就是
+   * 运行时挂进 .md 里的 DOM（下面这段干的），重画只认 markdown 原文，会把它们一起抹掉。
+   *（工具标签、edit/write 卡片早就不在 .md 里了：它们各自独立成一行，见 toolTagHost。）
+   * 只改行内 code 节点，别的东西一律不动。
    *
    * 判断规则与 marked 的 codespan 渲染器保持一致：文件路径优先（那类已经是文件链接，不动），
    * 再看整段文本、或去掉结尾 () 的裸名在不在符号集合里。
@@ -1045,8 +1046,14 @@
   function finalizeCurrentAssistant(st) {
     cancelFlush(st);
     if (st.currentAssistant) {
-      st.currentAssistant.el.innerHTML = renderMarkdown(st.currentAssistant.raw || "");
-      st.currentAssistant.el.dataset.raw = st.currentAssistant.raw || "";
+      // 收尾就走最后一次「按块」渲染（跟流式期间同一条路），不再整段重画：
+      // 整段重画要多解析一次全文、多高亮一次、把整块 DOM 换掉（长回复时看得出来），
+      // 还会把已经挂进 .md 的符号链接抹掉。切不了块的情况（引用式定义 / HTML 块）
+      // 由 renderStreamBody 内部退回整段渲染，跟流式期间一个规矩。
+      renderStreamBody(st, st.currentAssistant.raw || "");
+      // 流式期间不给活跃消息挂符号链接（见 symbolSet 那段），收尾这里补上：
+      // 不然要等下一次符号集合变化才可点。
+      applySymbolLinks(st.currentAssistant.el);
       smoothScrollToBottom(st);
       st.currentAssistant = null;
     }
@@ -4530,8 +4537,8 @@
     if (type === "symbolSet") {
       symbolNames = new Set(msg.names || []);
       // 符号集合变化后，已渲染消息里的反引号可能需要变成可点击链接：就地补/去掉链接。
-      // 注意不能整段重画 .md（会把运行时挂进去的工具标签抹掉，见 applySymbolLinks）；
-      // 流式中的活跃消息交给 flush 管线，它下次重画时自然带上新符号集。
+      // 不能整段重画 .md（那会把已经挂好的符号链接抹掉，见 applySymbolLinks）。
+      // 正在流式的那条消息跳过：它收尾时会自己挂一次（见 finalizeCurrentAssistant）。
       for (const st of sessions.values()) {
         if (st.currentAssistant) { st.textDirty = true; scheduleFlush(st); }
         st.paneEl.querySelectorAll(".md").forEach((el) => {
