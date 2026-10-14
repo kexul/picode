@@ -2945,19 +2945,24 @@
   // 只有浏览器页面里有它：插件里的对话面板里点链接照旧交给编辑器打开。判据就是上面那个
   // IN_WEBVIEW 标记（界面桥放在 window 上的，跟顶条上那颗桌面截图按钮同一路）。
   //
+  // 看过的文件在面板头上排成一排标签：再点别的文件就多一个标签、原来那个还留着；点一个
+  // 已经开着的文件就切回它那个标签、按这次链接说的行滚过去（同一个文件只留一个标签）；
+  // 标签上那颗叉把它关掉；全关光后面板不收起，留一句提示。标签只在这一趟页面上记着，
+  // 刷新就没了（开没收起是记在这台设备里的，那个留着）。
+  //
   // 窗口够宽（≥1200px）时这一列常驻在左边、对话让出这块宽度；窄了从左边滑入、点外面收起。
   // 手机上同一时刻只开一块侧边栏：开左边这块就把右边那块收起来，反过来也一样
   //（两块都常驻时不受这条约束）。开没收起记在这台设备里（跟右边那一列同一个做法）。
   const FILE_SIDEBAR_MIN_WIDTH = 1200;
   const FILE_SIDEBAR_STORE_KEY = "pichat.fileSidebarOpen";
   const FILE_SIDEBAR_HINT = "点消息里的文件链接，这里会显示那个文件。";
-  /** 这一列那一摊：容器、面板里的几块、现在看的是哪个文件。 */
+  /** 这一列那一摊：容器、面板里的几块、开着哪几个文件。 */
   const fileSidebar = {
-    root: null, header: null, title: null, body: null,
+    root: null, header: null, title: null, tabsEl: null, body: null,
     open: false,     // 这台设备上人要不要它开着（记在 localStorage；开着时宽窗常驻、窄窗滑入）
-    path: "",        // 现在看的是哪个文件（链接里那个写法，标题上就是它）
-    line: 0,         // 链接里说的那一行（没带行号就是 0）
-    token: 0,        // 取文件是异步的：换文件 / 收起之后回来的旧回应就不算数了
+    tabs: [],        // 开着的文件，从左到右：[{ path, line, scrollTop }]（不记进设备，刷新就没了）
+    active: -1,      // 现在看的是哪一个标签（下标）；一个都没开就是 -1
+    token: 0,        // 取文件是异步的：换标签 / 收起之后回来的旧回应就不算数了
   };
 
   /** 窗口够宽吗（够宽这一列常驻，不够就是滑入式）。 */
@@ -2980,6 +2985,104 @@
     try { return localStorage.getItem(FILE_SIDEBAR_STORE_KEY) === "1"; } catch (e) { return false; }
   }
 
+  /** 标签上那行字：文件名。全路径太长，标签上停一下有提示、面板头上也写着全路径。 */
+  function fileSidebarTabName(path) {
+    return String(path).replace(/\\/g, "/").split("/").pop() || String(path);
+  }
+
+  /** 这个文件已经开着了是哪一个标签（没开就是 -1）：同一个文件只留一个标签。 */
+  function fileSidebarTabIndex(path) {
+    for (let i = 0; i < fileSidebar.tabs.length; i++) {
+      if (fileSidebar.tabs[i].path === path) { return i; }
+    }
+    return -1;
+  }
+
+  /** 面板头上那行字：现在看的是哪个文件（一个标签都没开就写「文件」）。 */
+  function setFileSidebarTitle(path) {
+    if (!fileSidebar.title) { return; }
+    fileSidebar.title.textContent = path || "文件";
+    fileSidebar.title.title = path || "";
+  }
+
+  /** 把现在这一格读到哪儿记进它那个标签（切走、重画之前）。 */
+  function rememberFileTabScroll() {
+    const tab = fileSidebar.tabs[fileSidebar.active];
+    if (tab && fileSidebar.body) { tab.scrollTop = fileSidebar.body.scrollTop; }
+  }
+
+  /** 按现在开着的那几个文件重画标签条：点名字切过去、点那颗叉关掉。 */
+  function renderFileTabs() {
+    const bar = fileSidebar.tabsEl;
+    if (!bar) { return; }
+    bar.innerHTML = "";
+    fileSidebar.tabs.forEach((tab, i) => {
+      const el = document.createElement("div");
+      el.className = "file-tab" + (i === fileSidebar.active ? " active" : "");
+      el.setAttribute("data-path", tab.path);
+      el.title = tab.path;
+      const name = document.createElement("span");
+      name.className = "file-tab-name";
+      name.textContent = fileSidebarTabName(tab.path);
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "file-tab-close";
+      close.title = "关掉这个标签";
+      close.setAttribute("aria-label", "关掉 " + tab.path);
+      close.innerHTML = ICONS["close-bold"];
+      close.addEventListener("click", (e) => { e.stopPropagation(); closeFileTab(i); });
+      el.appendChild(name);
+      el.appendChild(close);
+      el.addEventListener("click", () => showFileTab(i, 0));
+      bar.appendChild(el);
+    });
+    // 开着的标签多了会往右跑出面板：把现在这个带进来看得见的地方
+    const active = bar.querySelector(".file-tab.active");
+    if (active) { active.scrollIntoView({ block: "nearest", inline: "nearest" }); }
+  }
+
+  /**
+   * 摆上某一个标签：面板头、标签条、正文都跟着换。
+   * @param index 哪一个标签
+   * @param hitLine 这次链接说的那一行（1 起）；0 = 没有要停的行，回这个标签上次读到的地方
+   */
+  function showFileTab(index, hitLine) {
+    const tab = fileSidebar.tabs[index];
+    if (!tab || !fileSidebar.body) { return; }
+    rememberFileTabScroll();
+    fileSidebar.active = index;
+    const linkLine = Number(hitLine) > 0 ? Number(hitLine) : 0;
+    if (linkLine > 0) { tab.line = linkLine; }
+    setFileSidebarTitle(tab.path);
+    renderFileTabs();
+    showFileNote("正在读取…");
+    loadFileIntoSidebar(linkLine);
+  }
+
+  /** 点标签上那颗叉：关掉这一个。全关光后面板不收起，留一句提示。 */
+  function closeFileTab(index) {
+    if (!fileSidebar.tabs[index]) { return; }
+    const wasActive = index === fileSidebar.active;
+    fileSidebar.tabs.splice(index, 1);
+    if (!wasActive) {
+      // 关的不是正看着的这个：画面不动，只把标签条重画一遍（后面的下标要跟着挪）
+      if (index < fileSidebar.active) { fileSidebar.active--; }
+      renderFileTabs();
+      return;
+    }
+    // 关掉的正是看着的这个：它已经不是哪一个标签了，手上还等着的那条回应也别再画进来
+    fileSidebar.active = -1;
+    fileSidebar.token++;
+    if (fileSidebar.tabs.length === 0) {
+      setFileSidebarTitle("");
+      renderFileTabs();
+      showFileNote(FILE_SIDEBAR_HINT);
+      return;
+    }
+    // 摆上右边那一个（关的是最后一个标签就摆上现在最后那一个）
+    showFileTab(Math.min(index, fileSidebar.tabs.length - 1), 0);
+  }
+
   /** 面板里那一段纯粹的文字（提示、看不了的原因、正在读取）。 */
   function showFileNote(text) {
     if (!fileSidebar.body) { return; }
@@ -2991,13 +3094,13 @@
   }
 
   /**
-   * 把一个文件显示出来：带行号，停在那一行并高亮。
+   * 把一个文件画出来：一行一格、带行号，hitLine 那一行点亮（0 = 不点亮）。
+   * 只画，不管滚到哪儿（那是 scrollFileBody 的事）：返回点亮的那一行，没点亮就是 null。
    * @param text 文件全文（后端按 UTF-8 给回来的）
-   * @param hitLine 链接里说的那一行（1 起；没带就是 0）
    */
   function renderFileText(text, hitLine) {
     const body = fileSidebar.body;
-    if (!body) { return; }
+    if (!body) { return null; }
     body.innerHTML = "";
     const lines = String(text).split("\n");
     // 文件末尾那个换行会多出一个空行：不画它（行号也就不会凭空多出一个）
@@ -3019,25 +3122,45 @@
       frag.appendChild(row);
     });
     body.appendChild(frag);
-    if (hitRow) {
+    return hitRow;
+  }
+
+  /**
+   * 把正文滚到该在的地方。
+   * @param hitRow 点亮的那一行（没有就是 null）
+   * @param centerOnLine 这次链接说的那一行（0 = 没有）：>0 就停在它那里、居中
+   * @param savedTop 没有要停的行时，回到这个标签上次读到的地方
+   */
+  function scrollFileBody(hitRow, centerOnLine, savedTop) {
+    const body = fileSidebar.body;
+    if (!body) { return; }
+    if (hitRow && centerOnLine > 0) {
       // 停在那一行：按两边的位置差算滚动量（scrollIntoView 会连外面那几层一起滚，不行）
       const bodyRect = body.getBoundingClientRect();
       const rowRect = hitRow.getBoundingClientRect();
       const delta = (rowRect.top - bodyRect.top) - (bodyRect.height - rowRect.height) / 2;
       body.scrollTop = Math.max(0, body.scrollTop + delta);
-    } else {
-      body.scrollTop = 0;
+      return;
     }
+    body.scrollTop = Number(savedTop) > 0 ? Number(savedTop) : 0;
   }
 
-  /** 去后端那条只读地址把这个文件取回来画上（看不了就画一句人话）。 */
-  function loadFileIntoSidebar() {
+  /**
+   * 去后端那条只读地址把现在这个标签的文件取回来画上（看不了就画一句人话）。
+   * @param linkLine 这次链接说的那一行（1 起）；0 = 没有要停的行，回这个标签上次读到的地方
+   */
+  function loadFileIntoSidebar(linkLine) {
+    const tab = fileSidebar.tabs[fileSidebar.active];
+    if (!tab) { return; }
     const token = ++fileSidebar.token;
     const sessionId = activeId || "";
-    const query = "session=" + encodeURIComponent(sessionId) + "&path=" + encodeURIComponent(fileSidebar.path);
+    const query = "session=" + encodeURIComponent(sessionId) + "&path=" + encodeURIComponent(tab.path);
     fetch("/file?" + query).then(async (resp) => {
-      if (token !== fileSidebar.token) { return; }   // 已经换成别的文件了，这条回应丢掉
-      if (resp.status === 200) { renderFileText(await resp.text(), fileSidebar.line); return; }
+      if (token !== fileSidebar.token) { return; }   // 已经换成别的标签了，这条回应丢掉
+      if (resp.status === 200) {
+        scrollFileBody(renderFileText(await resp.text(), tab.line), linkLine, tab.scrollTop);
+        return;
+      }
       const note = (await resp.text()).trim();
       showFileNote(note || "这个文件看不了（" + resp.status + "）。");
     }).catch(() => {
@@ -3067,7 +3190,7 @@
     rememberFileSidebar(fileSidebar.open);
     if (!fileSidebar.open) { fileSidebar.token++; }   // 还等着的那条回应别再画进来
     syncFileSidebarLayout();
-    if (fileSidebar.open && !fileSidebar.path) { showFileNote(FILE_SIDEBAR_HINT); }
+    if (fileSidebar.open && fileSidebar.active < 0) { showFileNote(FILE_SIDEBAR_HINT); }
   }
 
   /** 顶条左边那颗按钮：开着就收、收着就开。 */
@@ -3077,28 +3200,30 @@
     setFileSidebarOpen(true);
   }
 
-  /** 点消息流里的文件链接：开左边这一列，把那个文件取回来显示（停在链接说的那一行）。 */
+  /**
+   * 点消息流里的文件链接：开左边这一列，把那个文件取回来显示（停在链接说的那一行）。
+   * 已经开着这个文件就切回它那个标签、按这次链接说的行滚过去，不再开一个重复的标签。
+   */
   function openFileInSidebar(path, line) {
     if (!fileSidebar.root || !path) { return; }
     closeRightSidebarForFile();
-    fileSidebar.path = path;
-    fileSidebar.line = Number(line) > 0 ? Number(line) : 0;
-    if (fileSidebar.title) {
-      fileSidebar.title.textContent = path;
-      fileSidebar.title.title = path;
+    let at = fileSidebarTabIndex(path);
+    if (at < 0) {
+      fileSidebar.tabs.push({ path: path, line: 0, scrollTop: 0 });
+      at = fileSidebar.tabs.length - 1;
     }
     if (!fileSidebar.open) { setFileSidebarOpen(true); } else { syncFileSidebarLayout(); }
-    showFileNote("正在读取…");
-    loadFileIntoSidebar();
+    showFileTab(at, line);
   }
 
-  /** 切会话：面板里那个文件属于上一个会话的目录，收成一句提示（别把别人的东西留在界面上）。 */
+  /** 切会话：面板里那些文件属于上一个会话的目录，标签全清掉、留一句提示（别把别人的东西留在界面上）。 */
   function resetFileSidebarForSession() {
     if (!fileSidebar.root) { return; }
     fileSidebar.token++;
-    fileSidebar.path = "";
-    fileSidebar.line = 0;
-    if (fileSidebar.title) { fileSidebar.title.textContent = "文件"; fileSidebar.title.title = ""; }
+    fileSidebar.tabs = [];
+    fileSidebar.active = -1;
+    setFileSidebarTitle("");
+    renderFileTabs();
     showFileNote(FILE_SIDEBAR_HINT);
   }
 
@@ -3113,6 +3238,7 @@
           '<span id="fileTitle" class="pk-header-title">文件</span>' +
           '<button id="fileClose" class="pk-header-close" type="button" title="收起" aria-label="收起">' + ICONS["close-bold"] + '</button>' +
         '</div>' +
+        '<div id="fileTabs"></div>' +
         '<div id="fileBody" class="pk-body"></div>' +
       '</div>';
     const backdrop = document.createElement("div");
@@ -3122,6 +3248,7 @@
     fileSidebar.root = root;
     fileSidebar.header = root.querySelector("#fileHeader");
     fileSidebar.title = root.querySelector("#fileTitle");
+    fileSidebar.tabsEl = root.querySelector("#fileTabs");
     fileSidebar.body = root.querySelector("#fileBody");
     fileSidebar.open = readFileSidebarWanted();
     root.querySelector("#fileClose").addEventListener("click", () => setFileSidebarOpen(false));

@@ -6,8 +6,12 @@
  *
  * 真后端、真会话、真网页服务、真界面文件（只有模型是假的），验的是外面看得见的行为：
  *   1. 往页面里投带文件链接的假消息（照 dev/toolRow.js 的做法），点它，读左边那一列的 DOM：
- *      文件内容、行号、停在链接说的那一行并高亮；≥1200px 常驻在左边、窄了滑入、点外面收起；
- *      手机上两块侧边栏互斥；顶条左边那颗按钮点开点收、刷新后还是刚才的样子；
+ *      文件内容、行号、停在链接说的那一行并高亮；看过的文件在面板头上排成一排标签——
+ *      点另一个文件新开一个标签、原来那个还留着，点已经开着的文件切回那个标签并按这次
+ *      链接说的行滚过去（不新开重复标签），点标签上那颗叉关掉它，全关光后面板不收起、
+ *      里面留一句提示，切会话标签清空，刷新页面标签不恢复；
+ *      ≥1200px 常驻在左边、窄了滑入、点外面收起；手机上两块侧边栏互斥；
+ *      顶条左边那颗按钮点开点收、刷新后还是刚才的样子；
  *      目录外 / 不存在 / 超过 2 MB 时页面上给一句说明；
  *   2. 在页面里用 fetch 直接打那条只读文件地址，核对拒绝的几种情形（目录外含 .. 绕出去的写法、
  *      没有这个文件、超过 2 MB）。
@@ -22,6 +26,8 @@ const path = require("path");
 
 const LONG_LINES = 400;
 const HIT_LINE = 137;
+/** 第二次点 long.js 时链接说的那一行（换成另一行：切回原来那个标签、按这次的行滚）。 */
+const HIT_LINE_AGAIN = 260;
 const SAMPLE_HIT = 3;
 /** 比 2 MB 大一点点：只用来验“太大”，不读出来。 */
 const BIG_BYTES = 2 * 1024 * 1024 + 64 * 1024;
@@ -36,6 +42,7 @@ const FILE = {
 const LINK_TEXT =
     "看这几个文件：\n\n" +
     "`" + FILE.long + ":" + HIT_LINE + "` 这一行、`" + FILE.sample + ":" + SAMPLE_HIT + "` 这一行，\n" +
+    "`" + FILE.long + ":" + HIT_LINE_AGAIN + "` 这个文件再说一次，\n" +
     "再试试 `" + FILE.missing + ":1`、`" + FILE.outside + ":1`、`" + FILE.big + ":1`。\n";
 
 /** 往会话目录里造测试用的文件（每次跑都重写一遍，内容与行数固定）。 */
@@ -57,6 +64,9 @@ function prepareFiles(cwd) {
         return "建不了（" + (err && err.message ? err.message : String(err)) + "）";
     }
 }
+
+/** 页面上把假消息投进去（同一份内容刷新之后要再投一次）。 */
+const POST_LINKS = `for (const m of ${JSON.stringify([{ type: "assistantFull", text: LINK_TEXT }])}) { window.postMessage(m, "*"); } return true;`;
 
 module.exports = async (page) => {
     const checks = [];
@@ -100,6 +110,8 @@ module.exports = async (page) => {
             const btn = document.getElementById("fileSidebarBtn");
             const backdrop = document.getElementById("fileBackdrop");
             const note = body ? body.querySelector(".file-note") : null;
+            const bar = document.getElementById("fileTabs");
+            const tabs = bar ? Array.from(bar.querySelectorAll(".file-tab")) : [];
             return {
                 vw: window.innerWidth,
                 hasPanel: !!root,
@@ -120,6 +132,12 @@ module.exports = async (page) => {
                 hitNum: hit ? ((hit.querySelector(".file-num") || {}).textContent || "") : "",
                 hitVisible: !!(hitRect && bodyRect
                     && hitRect.top >= bodyRect.top - 1 && hitRect.bottom <= bodyRect.bottom + 1),
+                tabShown: !!bar && getComputedStyle(bar).display !== "none" && bar.getBoundingClientRect().height > 0,
+                tabCount: tabs.length,
+                tabNames: tabs.map(function (t) { return (t.querySelector(".file-tab-name") || {}).textContent || ""; }),
+                tabPaths: tabs.map(function (t) { return t.getAttribute("data-path") || ""; }),
+                tabActive: tabs.findIndex(function (t) { return t.classList.contains("active"); }),
+                tabCloseCount: tabs.filter(function (t) { return !!t.querySelector(".file-tab-close"); }).length,
                 backdropShown: !!backdrop && getComputedStyle(backdrop).display !== "none",
                 barBottom: Math.round(document.getElementById("sessionBar").getBoundingClientRect().bottom),
                 fileHeaderBottom: document.getElementById("fileHeader")
@@ -137,15 +155,29 @@ module.exports = async (page) => {
         console.log(label + "：" + JSON.stringify(r));
         return r;
     };
-    const clickLink = (file) => page.eval(`
-        const a = Array.from(document.querySelectorAll("a.file-link"))
-            .find(function (x) { return x.getAttribute("data-file") === ${JSON.stringify(file)}; });
+    /** 点消息流里某个文件的链接。给了 line 就挑说的那一行那一个（同一个文件可能有好几个链接）。 */
+    const clickLink = (file, line) => page.eval(`
+        const want = { file: ${JSON.stringify(file)}, line: ${line === undefined ? "null" : JSON.stringify(String(line))} };
+        const a = Array.from(document.querySelectorAll("a.file-link")).find(function (x) {
+            return x.getAttribute("data-file") === want.file
+                && (want.line === null || x.getAttribute("data-line") === want.line);
+        });
         if (!a) { return "没有这个链接"; }
         a.click();
         return "点了";
     `);
+    /** 点某一个标签（按标签说的文件找）、或者点它那颗叉。 */
+    const clickTab = (file, what) => page.eval(`
+        const tabs = Array.from(document.querySelectorAll("#fileTabs .file-tab"));
+        const t = tabs.find(function (x) { return x.getAttribute("data-path") === ${JSON.stringify(file)}; });
+        if (!t) { return "没有这个标签"; }
+        const el = ${JSON.stringify(what)} === "close" ? t.querySelector(".file-tab-close") : t;
+        if (!el) { return "标签上没有这个东西"; }
+        el.click();
+        return "点了";
+    `);
 
-    await page.eval(`for (const m of ${JSON.stringify([{ type: "assistantFull", text: LINK_TEXT }])}) { window.postMessage(m, "*"); } return true;`);
+    await page.eval(POST_LINKS);
     await page.sleep(400);
     const linkCount = await page.eval(`return document.querySelectorAll("a.file-link").length`);
     check("消息流里出现了文件链接", linkCount >= 5, "共 " + linkCount + " 个");
@@ -162,6 +194,7 @@ module.exports = async (page) => {
     check("面板头跟顶条的横线齐", wide1.fileHeaderBottom === wide1.barBottom && wide1.dockHeaderBottom === wide1.barBottom,
         JSON.stringify({ bar: wide1.barBottom, file: wide1.fileHeaderBottom, dock: wide1.dockHeaderBottom }));
     check("还没点文件时面板里有一句提示", wide1.rowCount === 0 && wide1.note.length > 0);
+    check("一个标签都没有时标签条不占地方", !wide1.tabShown && wide1.tabCount === 0);
     await page.shot("file-1-open-empty.png");
 
     // 刷新：开没收起记在这台设备里
@@ -169,7 +202,7 @@ module.exports = async (page) => {
     await page.sleep(1500);
     await page.waitReady();
     await page.sleep(500);
-    await page.eval(`for (const m of ${JSON.stringify([{ type: "assistantFull", text: LINK_TEXT }])}) { window.postMessage(m, "*"); } return true;`);
+    await page.eval(POST_LINKS);
     await page.sleep(300);
     const wide2 = await look("宽窗 · 刷新之后");
     check("刷新之后还是开着（记在这台设备里）", wide2.open && wide2.dock && wide2.panelShown);
@@ -182,7 +215,7 @@ module.exports = async (page) => {
     await page.sleep(1500);
     await page.waitReady();
     await page.sleep(500);
-    await page.eval(`for (const m of ${JSON.stringify([{ type: "assistantFull", text: LINK_TEXT }])}) { window.postMessage(m, "*"); } return true;`);
+    await page.eval(POST_LINKS);
     await page.sleep(300);
     const wide4 = await look("宽窗 · 收起之后刷新");
     check("收起之后刷新还是收起", !wide4.open && !wide4.dock);
@@ -195,14 +228,83 @@ module.exports = async (page) => {
     check("标题上是那个文件", wide5.title === FILE.long);
     check("内容带行号、行数对得上", wide5.rowCount === LONG_LINES && wide5.firstRow.indexOf("1") >= 0, wide5.firstRow);
     check("停在链接说的那一行并高亮", wide5.hitNum === String(HIT_LINE) && wide5.hitText.indexOf("第 " + HIT_LINE + " 行") >= 0 && wide5.hitVisible);
+    check("这个文件占上了第一个标签", wide5.tabShown && wide5.tabCount === 1 && wide5.tabActive === 0
+        && wide5.tabNames[0] === "long.js" && wide5.tabPaths[0] === FILE.long);
+    check("标签上有一颗叉", wide5.tabCloseCount === 1);
+    check("正文很长也不把面板头挤扁（跟顶条的横线还是齐的）", wide5.fileHeaderBottom === wide5.barBottom,
+        JSON.stringify({ bar: wide5.barBottom, file: wide5.fileHeaderBottom }));
     await page.shot("file-2-line.png");
 
-    // 再点另一个文件：内容跟着换
+    // 再点另一个文件：新开一个标签，原来那个还留着
     console.log("点文件链接：" + await clickLink(FILE.sample));
     await page.sleep(500);
     const wide6 = await look("宽窗 · 点 sample.js:" + SAMPLE_HIT);
-    check("换一个文件：标题与内容都换了", wide6.title === FILE.sample && wide6.rowCount === 5);
+    check("换一个文件：内容跟着换", wide6.rowCount === 5);
     check("也停在那个文件的第 " + SAMPLE_HIT + " 行", wide6.hitNum === String(SAMPLE_HIT) && wide6.hitText.indexOf("sample " + SAMPLE_HIT) >= 0);
+    check("新开一个标签（一共两个），原来那个还留着", wide6.tabCount === 2
+        && wide6.tabPaths[0] === FILE.long && wide6.tabPaths[1] === FILE.sample);
+    check("新开的那个是当前这个标签，面板头写着它", wide6.tabActive === 1 && wide6.title === FILE.sample);
+    await page.shot("file-2b-two-tabs.png");
+
+    // 再点已经开着的文件：切回它那个标签、按这次链接说的行滚过去，不新开标签
+    console.log("点文件链接：" + await clickLink(FILE.long, HIT_LINE_AGAIN));
+    await page.sleep(600);
+    const wide7 = await look("宽窗 · 再点一次 long.js:" + HIT_LINE_AGAIN);
+    check("同一个文件不再开一个标签（还是两个）", wide7.tabCount === 2
+        && wide7.tabPaths[0] === FILE.long && wide7.tabPaths[1] === FILE.sample);
+    check("切回 long.js 那个标签（第 1 个）", wide7.tabActive === 0 && wide7.title === FILE.long);
+    check("按这次链接说的第 " + HIT_LINE_AGAIN + " 行滚过去", wide7.hitNum === String(HIT_LINE_AGAIN) && wide7.hitVisible);
+    await page.shot("file-8-switch-back.png");
+
+    // 关掉一个没在看的标签：正看着的那个不许跟着换
+    console.log("点标签上的叉：" + await clickTab(FILE.sample, "close"));
+    await page.sleep(300);
+    const wide7b = await look("宽窗 · 关掉没在看的 sample.js 那个标签");
+    check("关掉没在看的标签：画面不换，还停在原来那一行", wide7b.tabCount === 1 && wide7b.tabActive === 0
+        && wide7b.title === FILE.long && wide7b.hitNum === String(HIT_LINE_AGAIN) && wide7b.hitVisible);
+    // 关过的文件再点开：又占一个新标签
+    console.log("点文件链接：" + await clickLink(FILE.sample));
+    await page.sleep(500);
+    const wide7c = await look("宽窗 · 再点一次刚关掉的 sample.js");
+    check("关过的文件再点开：又开一个标签、摆上来的还是它", wide7c.tabCount === 2
+        && wide7c.tabPaths[1] === FILE.sample && wide7c.tabActive === 1);
+
+    // 点标签切过去：回到那个标签上次读到的地方
+    console.log("点标签：" + await clickTab(FILE.long, "tab"));
+    await page.sleep(600);
+    const wide8 = await look("宽窗 · 点 long.js 那个标签");
+    check("点标签切到那个文件", wide8.tabActive === 0 && wide8.title === FILE.long && wide8.rowCount === LONG_LINES);
+    check("回到它上次读到的地方（还停在刚才那一行）", wide8.hitNum === String(HIT_LINE_AGAIN) && wide8.hitVisible);
+    check("两个标签都还在", wide8.tabCount === 2);
+
+    // 关掉正看着的那个：摆上剩下那一个
+    console.log("点标签上的叉：" + await clickTab(FILE.long, "close"));
+    await page.sleep(600);
+    const wide9 = await look("宽窗 · 关掉正看着的 long.js 那个标签");
+    check("关掉的那个标签没了、另一个还在", wide9.tabCount === 1 && wide9.tabPaths[0] === FILE.sample);
+    check("面板还开着、没跟着标签一起收起", wide9.open && wide9.dock && wide9.panelShown);
+    check("剩下那个标签摆上来（内容换成它的）", wide9.tabActive === 0 && wide9.title === FILE.sample && wide9.rowCount === 5);
+    await page.shot("file-8b-one-tab-closed.png");
+
+    // 标签全关掉：面板不收起，留一句提示
+    console.log("点标签上的叉：" + await clickTab(FILE.sample, "close"));
+    await page.sleep(500);
+    const wide10 = await look("宽窗 · 标签全关掉");
+    check("标签全关掉：面板不收起", wide10.open && wide10.dock && wide10.panelShown);
+    check("里面留一句提示（说点消息里的文件链接就能看）", wide10.tabCount === 0 && !wide10.tabShown
+        && wide10.rowCount === 0 && wide10.note.indexOf("文件链接") >= 0, wide10.note);
+    check("面板头上的字回到「文件」", wide10.title === "文件");
+    await page.shot("file-9-all-closed.png");
+
+    // 刷新：标签不恢复（面板本身还留着开或收的样子）
+    await page.eval("location.reload(); return true;");
+    await page.sleep(1500);
+    await page.waitReady();
+    await page.sleep(500);
+    const wide11 = await look("宽窗 · 开过标签之后刷新");
+    check("刷新之后标签不恢复（面板还开着、里面还是提示）", wide11.open && wide11.dock && wide11.tabCount === 0 && wide11.note.length > 0);
+    await page.eval(POST_LINKS);
+    await page.sleep(300);
 
     // ==================== 门槛：1200px ====================
     await page.cdp.send("Emulation.setDeviceMetricsOverride", { width: 1199, height: 800, deviceScaleFactor: 1, mobile: false });
@@ -277,6 +379,11 @@ module.exports = async (page) => {
     await page.sleep(700);
     const big = await look("点超过 2 MB 的文件");
     check("超过 2 MB：页面上给一句说明、不给内容", big.rowCount === 0 && big.note.indexOf("太大") >= 0, big.note);
+    // 手机那一段点过一次 long.js（占了第一个标签），这里又点了三个看不了的文件，各占一个
+    check("看不了的文件也各占一个标签",
+        big.tabPaths.indexOf(FILE.missing) >= 0 && big.tabPaths.indexOf(FILE.outside) >= 0
+        && big.tabPaths.indexOf(FILE.big) >= 0 && big.tabActive === big.tabCount - 1,
+        JSON.stringify(big.tabPaths));
     await page.shot("file-6-refused.png");
 
     // ==================== 直接打那条文件地址（拒绝的几种情形）====================
@@ -314,6 +421,29 @@ module.exports = async (page) => {
     check("超过 2 MB：413、响应里带着字节数",
         f.big.status === 413 && f.big.text.indexOf(String(BIG_BYTES)) >= 0, f.big.text);
     check("不认识的会话：不给内容", f.noSession.status !== 200);
+
+    // ==================== 切会话：面板里的标签清空 ====================
+    // 往页面里投一份假会话列表、把当前会话切到另一个上去（照 dev/childDot.js 的做法：消息形状
+    // 与后端推的那份一样）。这一趟之后页面看的是个假会话，所以放在最后、下面那条真会话的检查之前。
+    const otherId = "file-sidebar-other";
+    check("切会话之前面板里开着好几个标签", (await look("切会话之前")).tabCount >= 2);
+    await page.eval(`
+        const sessions = [
+            { id: ${JSON.stringify(sessionInfo.sessionId)}, name: "测试会话", cwd: ${JSON.stringify(cwd)},
+              streaming: false, loading: false, activity: "idle", piReady: true, modelId: "fake/model", provider: "fake" },
+            { id: ${JSON.stringify(otherId)}, name: "另一个会话", cwd: ${JSON.stringify(cwd)},
+              streaming: false, loading: false, activity: "idle", piReady: false, modelId: "fake/model", provider: "fake" },
+        ];
+        window.postMessage({ type: "sessionList", sessions: sessions }, "*");
+        window.postMessage({ type: "sessionActivated", sessionId: ${JSON.stringify(otherId)} }, "*");
+        return true;
+    `);
+    await page.sleep(700);
+    const switched = await look("切到另一个会话");
+    check("切会话：标签清空、面板还开着、里面留提示",
+        switched.tabCount === 0 && switched.open && switched.note.indexOf("文件链接") >= 0, switched.note);
+    check("切会话：上一个会话的文件内容也不留在面板里", switched.rowCount === 0 && switched.title === "文件");
+    await page.shot("file-10-session-switch.png");
 
     // ==================== 插件里的对话面板：这一列与这颗按钮都不该有 ====================
     // 在页面脚本里先塞一个网页视图接口（真 VSCode 里本来就有这个函数），界面就会按
