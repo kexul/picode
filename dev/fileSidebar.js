@@ -1333,6 +1333,9 @@ module.exports = async (page) => {
             title: (document.getElementById("fileTitle") || {}).textContent || "",
             tabPaths: tabs.map(function (t) { return t.getAttribute("data-path") || ""; }),
             tabActive: tabs.findIndex(function (t) { return t.classList.contains("active"); }),
+            // 「项目目录」那一格在第几位：它是哪一层取决于上一个检查段走到哪了，所以只盯“是不是第一个”，
+            // 不盯它的 data-path（票 14 之后它会停在子目录上）。
+            projIndex: tabs.findIndex(function (t) { return t.getAttribute("data-proj") === "1"; }),
         });
     `));
 
@@ -1361,8 +1364,8 @@ module.exports = async (page) => {
         mdDoc.hitCount === 0 && mdDoc.note === "" && mdDoc.text.indexOf(MD.code) >= 0
         && md1.note === "" && md1.hitNum === "", JSON.stringify({ note: mdDoc.note }));
     check("markdown 文件照旧占一个标签、面板头写着它",
-        mdDoc.tabPaths[mdDoc.tabActive] === MD.doc && mdDoc.title === MD.doc && mdDoc.tabPaths[0] === ".",
-        JSON.stringify({ active: mdDoc.tabActive, title: mdDoc.title }));
+        mdDoc.tabPaths[mdDoc.tabActive] === MD.doc && mdDoc.title === MD.doc && mdDoc.projIndex === 0,
+        JSON.stringify({ active: mdDoc.tabActive, title: mdDoc.title, proj: mdDoc.projIndex }));
     await page.shot("file-26-markdown.png");
 
     // 文档里写到的文件也是文件链接（消息流那一套渲染挂上去的）：点了开在这一列里，
