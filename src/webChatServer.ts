@@ -307,20 +307,6 @@ export class PiChatWebServer {
         if (wasRunning) { this.hooks.onUrlChanged?.(undefined); }
     }
 
-    /** 插件卸载 / 窗口关闭时调用：全同步，不等回调（卸载路径上不能阻塞）。 */
-    public dispose(): void {
-        const server = this.server;
-        this.server = undefined;
-        this.teardown();
-        this.settings = { ...this.settings, enabled: false };
-        if (server) {
-            closeSockets(server);
-            server.close();
-            // 只在真的开过的时候报：卸载时状态栏项可能已经被 VSCode 收掉了
-            this.hooks.onUrlChanged?.(undefined);
-        }
-    }
-
     // ========================================================================
     //  路由
     // ========================================================================

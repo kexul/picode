@@ -9,8 +9,6 @@ export const THINKING_LEVEL_ORDER = [
     "off", "minimal", "low", "medium", "high", "xhigh", "max",
 ] as const;
 
-export type ThinkingLevel = (typeof THINKING_LEVEL_ORDER)[number];
-
 /** 从 user/assistant content（string 或 parts 数组）提取纯文本。 */
 export function textOf(content: unknown): string {
     if (typeof content === "string") {

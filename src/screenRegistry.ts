@@ -85,10 +85,6 @@ export class ScreenRegistry {
         return Array.from(this.screens.values());
     }
 
-    public get count(): number {
-        return this.screens.size;
-    }
-
     /** 这个窗口有人在动（切到前台、或它的页面在发消息）。 */
     public markActive(id: string): void {
         const screen = this.screens.get(id);
@@ -133,12 +129,5 @@ export class ScreenRegistry {
             }
             return cur.id < best.id ? cur : best;
         });
-    }
-
-    /** 给所有打开着这个目录的窗口各发一条（推送类消息用：会话触及的文件清单）。 */
-    public sendTo(dir: string, msg: Record<string, unknown>): void {
-        for (const screen of this.matching(dir)) {
-            try { screen.send(msg); } catch { /* 写不动的连接由网页服务那头收掉 */ }
-        }
     }
 }

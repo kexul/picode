@@ -6,7 +6,6 @@
  */
 import type { PanelLaunch } from "./runtimeTypes";
 import type { TabaSpawnRequest } from "./tabaProtocol";
-import { buildTaskText } from "./tabaTask";
 
 /** 算这个子会话怎么起时要用的输入。 */
 export interface TabaSpawnResolutionInput {

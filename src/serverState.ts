@@ -27,18 +27,6 @@ export class ServerStateStore {
         this.file = file;
     }
 
-    /** 读一个键；文件不在 / 读坏 / 存值的类型跟默认值对不上，都回 fallback。 */
-    get<T>(key: string, fallback: T): T {
-        const value = this.readAll()[key];
-        if (value === undefined || value === null) { return fallback; }
-        // 类型对不上就回默认值：界面按类型来用它（比如真值判断），
-        // 存进去的要是别的类型，勉强用出去只会得到莫名其妙的行为。
-        if (typeof value !== typeof fallback) { return fallback; }
-        // 数组和对象都是 "object"，但界面用法完全不同；容器类型也要对得上。
-        if (Array.isArray(value) !== Array.isArray(fallback)) { return fallback; }
-        return value as T;
-    }
-
     /** 写一个键（立即写盘，同步）。写不进去也不能把调用方带崩：选项丢一份不致命。 */
     update(key: string, value: unknown): void {
         const data = this.readAll();

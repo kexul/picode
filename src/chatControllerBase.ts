@@ -282,13 +282,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return `未找到 pi 可执行文件（当前配置："${piPath}"）。请确认已安装 pi 并加入系统 PATH，`
             + `或改 ~/.pi/pichat/config.json 里的 piPath。`;
     }
-    /** 加载 / 切换会话后聚焦聊天视图（vscode 覆盖为聚焦侧栏）。 */
-    protected async onFocusChat(): Promise<void> { /* 默认无操作 */ }
-    /** 在弹出历史会话拾取器前做准备（vscode 需 ensureViewVisible）。 */
-    protected async beforeHistoryPicker(): Promise<void> { /* 默认无操作 */ }
-    /** 历史会话列表为空时的提示（vscode 覆盖为信息条）。 */
-    protected onNoSessions(): void { /* 默认无操作 */ }
-
     // ========================================================================
     //  路径工具（RuntimeHost）
     // ========================================================================
@@ -1114,11 +1107,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.panelUsedAt.delete(panelId);
     }
 
-    /** 保证至少有一个会话（全部关掉后自动补一个空的路径用）。 */
-    public ensureSomeSession(): void {
-        if (this.panels.size === 0) { this.newSession(); }
-    }
-
     /** 合并所有 panel 中 pi 工具调用触及过的文件绝对路径（供宿主收集符号等）。 */
     public getAllKnownFiles(): string[] {
         const set = new Set<string>();
@@ -1204,16 +1192,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 子类可将原始名映射到全局唯一名字。 */
     protected sessionDisplayName(rt: SessionRuntime): string {
         return this.baseSessionDisplayName(rt);
-    }
-
-    /** 供全局命名器计算冲突序号（只看随机名，跟 pi 标题无关）。 */
-    public getSessionNameBases(): Array<{ id: string; base: string }> {
-        return Array.from(this.panels.values()).map((rt) => ({ id: rt.id, base: this.randomSessionName(rt) }));
-    }
-
-    /** 指定的全局会话 id 是否属于当前工作区。 */
-    public hasChatReference(id: string): boolean {
-        return this.panels.has(id);
     }
 
     /** 当前工作区可供 # 引用的会话列表（子会话排在派它的会话后面，缩进在后端由 sub 说明）。 */
@@ -1331,13 +1309,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 中止指定会话正在跑的那一轮。 */
     protected broadcastAbortToTab(panelId: string): void {
         for (const pid of this.panelIdsOf(panelId)) { this.panels.get(pid)?.abortActiveRun(); }
-    }
-
-    /** 向当前显示的会话发送一条消息（命令入口用）。 */
-    public sendActiveTabText(text: string): void {
-        const rt = this.getActive();
-        if (!rt) { return; }
-        rt.handleSend(text);
     }
 
     /** webview / 命令菜单取数：问焦点 panel 的 pi 进程要命令列表
@@ -1490,11 +1461,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         });
     }
 
-    /** 让某块屏上开着的浮层收起来（当用户按了 Esc）：扩展不等那次提问时用。 */
-    protected cancelOverlay(clientId: string): void {
-        this.dropPicker(clientId, true);
-    }
-
     /** 收掉某块屏上开着的浮层：按需让它收起来，再把等的人按取消放行。 */
     private dropPicker(clientId: string, notify: boolean): void {
         const st = clientId ? this.pickers.get(clientId) : undefined;
@@ -1590,10 +1556,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     //  会话加载 / 历史
     // ========================================================================
 
-    public getCurrentSessionPath(): string | undefined {
-        return this.getActive()?.currentSessionPath;
-    }
-
     /** 哪个开着的会话正在用这份会话文件（没人在用就返回 undefined）。 */
     protected sessionRunningFile(file: string): SessionRuntime | undefined {
         for (const rt of this.panels.values()) {
@@ -1609,10 +1571,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * @param folder 会话所在的目录；不填 = 当前会话自己的目录。
      */
     public async loadHistorySession(file: string, folder?: string, clientId: string = this.currentPageId): Promise<void> {
-        // clientId 在这里就取好：这段活是异步的，跑到后面 currentPageId 已经不一定还是刚才那块屏了
-        // 先揭示并等待聊天界面就绪。否则首次从历史画布打开时，loadSession
-        // 在界面尚未建立监听器前发出的 clear/消息会丢失，最终只剩一个空会话。
-        await this.onFocusChat();
         const already = this.sessionRunningFile(file);
         if (already) { this.setActiveSession(already.id, clientId); return; }
         const cwd = folder ? path.resolve(folder) : (this.getActive(clientId)?.cwd ?? this.getCwd());
@@ -1652,24 +1610,21 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /**
      * 弹出历史会话列表并加载选中项。
-     * @param fromPage 来源是浏览器页面：不用把插件里的对话面板拽出来。
      * @param target 列表弹给哪个界面（界面标识）；不填就用正在说话的那一块。
      * @param opts.folder 列哪个目录的会话；不填 = 这块屏当前会话自己的目录（可能是别的项目）。
      */
     public async showHistoryPicker(
-        fromPage = false,
         target?: string,
         opts?: { folder?: string },
     ): Promise<void> {
         const clientId = target || this.currentPageId;
-        if (!fromPage) { await this.beforeHistoryPicker(); }
         const cwd = opts?.folder ? path.resolve(opts.folder) : (this.getActive(clientId)?.cwd ?? this.getCwd());
         const state = this.pickerStateOf(clientId);
         state.historyFiles = (await listSessionFiles(cwd)).map((e) => e.file);
         state.historyOffset = 0;
-        if (state.historyFiles.length === 0) { this.onNoSessions(); return; }
+        if (state.historyFiles.length === 0) { return; }
         const items = await this.scanHistoryBatch(clientId);
-        if (items.length === 0) { this.onNoSessions(); return; }
+        if (items.length === 0) { return; }
         const choice = await this.promptHistoryPicker(items, state.historyOffset < state.historyFiles.length, clientId);
         if (!choice || typeof choice.file !== "string") { return; }
         await this.loadHistorySession(choice.file, cwd, clientId);

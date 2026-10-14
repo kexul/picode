@@ -193,10 +193,8 @@ export class BackendClient {
         this.screenId = options.screenId ?? `s-${Math.random().toString(36).slice(2, 10)}`;
     }
 
-    public get state(): BackendState { return this.currentState; }
     /** 后端现在的地址（状态栏、"在浏览器里打开"用）。 */
     public get url(): string | undefined { return this.base?.toString(); }
-    public get currentPageId(): string { return this.pageId; }
 
     /** 开始连（连不上就自己一直重试，不用调用方管）。 */
     public start(): void {
@@ -436,8 +434,6 @@ export class BackendClient {
     public reportSymbols(names: string[]): void {
         void this.postScreen({ type: "symbolSet", names });
     }
-
-    public get hasScreenApiInFlight(): boolean { return this.screenApiInFlight > 0; }
 
     // ========================================================================
     //  页面流：网页视图那一屏的收发

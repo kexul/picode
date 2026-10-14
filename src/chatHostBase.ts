@@ -957,10 +957,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
             case "openHistory":
                 // 顶条最右边那颗“<<<”按钮（以及命令面板的历史入口）：列表从右侧滑入，
                 // 只弹在点它的那块屏上（另一个浏览器 / 本机界面不跟着弹）。
-                void this.showHistoryPicker(
-                    this.currentPageId !== ChatHostBase.LOCAL_CLIENT_ID,
-                    this.currentPageId,
-                );
+                void this.showHistoryPicker(this.currentPageId);
                 return true;
             case "openWorkspace":
                 // 顶条那颗 <<< / 命令入口的项目与会话面板：上半是所有工作区的会话，下半是工作区列表。

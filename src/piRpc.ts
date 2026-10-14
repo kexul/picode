@@ -92,9 +92,6 @@ export interface RpcSessionStats {
     contextUsage?: RpcContextUsage | null;
 }
 
-/** request() 失败原因（超时 / 进程挂了等）。成功时 reason 为 undefined。 */
-export type RpcFailReason = "not_running" | "timeout" | "send_failed" | "process_exit";
-
 export function isRpcOk<T>(resp: RpcResponse<T> | undefined | null): resp is RpcResponse<T> & { success?: true } {
     return !!resp && resp.success !== false;
 }

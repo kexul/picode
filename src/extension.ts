@@ -1,5 +1,4 @@
 import { bootMark } from "./bootMark"; // 放第一个：记下插件代码开始加载的时间点
-import * as path from "path";
 import * as vscode from "vscode";
 import { ChatViewProvider } from "./chatViewProvider";
 import { readServerAddress } from "./serverState";

@@ -277,7 +277,6 @@
   // 每回给一份新的：marked 会往传进去的选项对象上写东西（加 tokenizer 字段），
   // 共享或冻结的对象会直接被它撞坏（症状是静默地报错回退）。
   function mdOptions() { return { breaks: true, gfm: true }; }
-  function renderInline(text) { ensureMarkedHighlight(); ensureFileLink(); return marked.parseInline(text, { gfm: true }); }
   function renderMarkdown(source) { ensureMarkedHighlight(); ensureFileLink(); return marked.parse(source, mdOptions()); }
 
   /**
@@ -404,8 +403,6 @@
       default: return !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey;
     }
   }
-
-  function fmtNum(n) { if (n == null) return "0"; if (n >= 1e6) return (n / 1e6).toFixed(2) + "M"; if (n >= 1e3) return (n / 1e3).toFixed(1) + "K"; return String(n); }
 
   // ---- 全局快捷键匹配（新建会话 / 切换会话）----
   function matchCombo(e, combo) {
@@ -1398,17 +1395,6 @@
   const CUSTOM_CALL_TOOLS = new Set(["bash", "grep", "find", "ls", "read"]);
   const TOOL_PREVIEW_LINES = 6; // 结果预览行数（同 TUI BASH_PREVIEW_LINES +1，因底部截断标记更紧凑）
 
-  function prettyJson(argStr) {
-    try { return JSON.stringify(JSON.parse(argStr), null, 2); }
-    catch { return argStr; }
-  }
-  function formatDur(ms) {
-    const s = ms / 1000;
-    if (s < 60) { return s.toFixed(1) + "s"; }
-    const m = Math.floor(s / 60);
-    const rs = Math.round(s % 60);
-    return m + "m" + (rs ? rs + "s" : "");
-  }
   /** 生成工具 call 行（对齐 TUI renderCall：加粗工具名 + accent pattern + 灰参数）。 */
   function buildToolCallEl(toolName, argStr) {
     const call = document.createElement("div");

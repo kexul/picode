@@ -3,7 +3,7 @@ import { PiClient } from "./piClient";
 import { ASK_DECODER, AskDoneNotice, AskRequest } from "./askProtocol";
 import { StderrFrameSplitter } from "./piFrames";
 import { TABA_DECODER, TabaRequest } from "./tabaProtocol";
-import { NameParts, composeName } from "./names";
+import { NameParts } from "./names";
 import { EditTracker } from "./editTracker";
 import {
     countImages,
@@ -17,8 +17,6 @@ import {
     type ResultImageBlock,
 } from "./messageUtils";
 import {
-    isRpcOk,
-    rpcErrorMessage,
     type RpcCommandInfo,
     type RpcModelInfo,
     type RpcResponse,
@@ -125,12 +123,9 @@ export function expandSlashCommand(text: string, commands: RpcCommandInfo[]): st
  */
 export class SessionRuntime {
     public id: string = "";
-    /** 名字两部分（形容词/名词）：创建时分配后终身不变；
-     *  title 供会话列表 / 拾取器 / 导出用；随机名部分（nameParts）在宿主那边用。 */
+    /** 名字两部分（形容词/名词）：创建时分配后终身不变；随机名部分（nameParts）在宿主那边用。 */
     public readonly nameParts: NameParts = { adjective: "", noun: "" };
 
-    /** 完整显示名（“沉静的雪豹”）。 */
-    public get title(): string { return composeName(this.nameParts); }
     /** pi 自己给的会话标题（自动命名扩展 / /name 写的）；空串表示还没有。 */
     public get sessionTitle(): string { return this.piSessionTitle; }
     /**
@@ -166,8 +161,6 @@ export class SessionRuntime {
     private statusPercent?: number;
     private statusTokens?: number;
     private statusContextWindow?: number;
-    /** 本会话累计花费（美元），来自 get_session_stats；收尾提示里展示。 */
-    private statusCost?: number;
     /** 模型列表缓存：pi 启动时读一次 models.json，进程存活期间不变；
      *  点击状态栏弹选择器直接读缓存，避免每次都等 RPC 往返（多 panel 时尤其卡）。 */
     private cachedModels?: ModelInfo[];
@@ -475,25 +468,6 @@ export class SessionRuntime {
             this.client.send({ type: "abort_bash" });
             this.client.send({ type: "clear_queue" });
             this.client.send({ type: "abort" });
-        }
-    }
-
-    /** 在该会话内重置为新会话（保留进程，发 new_session）。 */
-    public resetSession(): void {
-        this.abortActiveRun();
-        this.edits.reset();
-        this.noteSessionReplaced();
-        this.currentSessionPath = undefined;
-        this.hasConversation = false;
-        // 子会话在这里点“新建会话”就不再是那个派来的会话了：
-        // 丢掉子会话专用的启动参数（--session 等），以后重起进程也按普通会话起。
-        this.launch = undefined;
-        this.post({ type: "clear" });
-        this.post({ type: "system", text: "已开始新会话。" });
-        if (this.client && this.client.isRunning()) {
-            this.client.send({ type: "new_session" });
-        } else {
-            this.startClient();
         }
     }
 
@@ -1433,20 +1407,6 @@ export class SessionRuntime {
         }
     }
 
-    /** 设置思考强度，返回是否成功。 */
-    public async setThinkingLevel(level: string): Promise<boolean> {
-        if (!this.client || !this.client.isRunning()) { return false; }
-        const resp = await this.request({ type: "set_thinking_level", level });
-        if (resp?.success === false) {
-            this.post({ type: "systemError", text: `设置思考强度失败: ${resp.error}` });
-            return false;
-        }
-        this.statusThinking = level;
-        this.post({ type: "thinkingChanged", level });
-        this.emitStatus();
-        return true;
-    }
-
     public async refreshStats(): Promise<void> {
         const resp = await this.request<RpcSessionStats>({ type: "get_session_stats" });
         const d = resp?.data;
@@ -1459,7 +1419,6 @@ export class SessionRuntime {
             this.statusTokens = typeof cu.tokens === "number" ? cu.tokens : undefined;
             this.statusContextWindow = typeof cu.contextWindow === "number" ? cu.contextWindow : undefined;
         }
-        this.statusCost = typeof d.cost === "number" ? d.cost : undefined;
         this.post({
             type: "stats",
             tokens: d.tokens || null,

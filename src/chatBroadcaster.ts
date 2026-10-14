@@ -87,10 +87,6 @@ export class ChatBroadcaster {
         this.pages.forEach(fn);
     }
 
-    public get channelCount(): number {
-        return this.pages.size;
-    }
-
     /** 注销全部连接（停服务时用）。返回被注销的那些，调用方去关连接。 */
     public removeAllChannels(): PageChannel[] {
         this.openSeqByPage.clear();
@@ -143,11 +139,6 @@ export class ChatBroadcaster {
             if (!best || at > best.at) { best = { id, at }; }
         }
         return best;
-    }
-
-    /** 有没有页面连着。 */
-    public anyPage(): boolean {
-        return this.pages.size > 0;
     }
 
     // ========================================================================
