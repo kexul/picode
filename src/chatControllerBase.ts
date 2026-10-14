@@ -30,7 +30,9 @@ import {
     scanSessionInfo,
     type HistoryPickerItem,
     type SessionListItem,
-} from "./sessionStore";import { randomNameParts, composeName } from "./names";
+} from "./sessionStore";
+import { randomNameParts, composeName } from "./names";
+import { relativeTo as pathRelativeTo, sameDir } from "./pathRules";
 import type { PanelLaunch, TurnEndStatus } from "./runtimeTypes";
 import type { TabaRequest, TabaSpawnRequest, TabaStopRequest } from "./tabaProtocol";
 import { TABA_DECODER } from "./tabaProtocol";
@@ -276,25 +278,14 @@ export abstract class ChatControllerBase implements RuntimeHost {
     // ========================================================================
     //  路径工具（RuntimeHost）
     // ========================================================================
+    /** RuntimeHost.relativeTo：这套规矩只有一份，实现在 pathRules.ts。 */
     public relativeTo(cwd: string, full: string): string {
-        const norm = (s: string) => s.replace(/\\/g, "/");
-        const c = norm(cwd).replace(/\/$/, "") + "/";
-        const f = norm(full);
-        if (f.toLowerCase().startsWith(c.toLowerCase())) { return f.slice(c.length); }
-        return full;
+        return pathRelativeTo(cwd, full);
     }
 
     public resolvePath(p: string, cwd?: string): string {
         if (path.isAbsolute(p)) { return p; }
         return path.resolve(cwd ?? this.getCwd(), p);
-    }
-
-    /** 两个目录是不是同一个（Windows 上不分大小写；只比字符串，不解析软链接）。 */
-    protected sameDir(a: string, b: string): boolean {
-        if (!a || !b) { return false; }
-        const na = path.resolve(a);
-        const nb = path.resolve(b);
-        return process.platform === "win32" ? na.toLowerCase() === nb.toLowerCase() : na === nb;
     }
 
     public resolveExecutable(cmd: string): string | undefined {
@@ -625,7 +616,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         // 目录也跟会话走；没有会话时回落宿主默认目录
         const dir = active?.cwd ?? this.getCwd();
         // 不是默认目录就别领备用进程：它是按默认目录起的，领过来就跑错地方了
-        const launch: PanelLaunch = this.sameDir(dir, this.getCwd()) ? {} : { cwd: dir, skipSpare: true };
+        const launch: PanelLaunch = sameDir(dir, this.getCwd()) ? {} : { cwd: dir, skipSpare: true };
         const rt = this.createPanelRuntime(inherited, launch);
         this.activateSession(rt, clientId);
         // 后台预热一个备用进程，供下一个新会话直接领取（启动路径延迟执行，避免双冷启动）
@@ -660,7 +651,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         opts?: { clientId?: string; spareDelayMs?: number },
     ): SessionRuntime | undefined {
         const target = path.resolve(dir);
-        const launch: PanelLaunch = this.sameDir(target, this.getCwd()) ? {} : { cwd: target, skipSpare: true };
+        const launch: PanelLaunch = sameDir(target, this.getCwd()) ? {} : { cwd: target, skipSpare: true };
         return this.newSessionWithLaunch(launch, opts?.spareDelayMs ?? 0, opts?.clientId ?? this.currentPageId);
     }
 
@@ -730,7 +721,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const target = path.resolve(dir);
         const cands: SessionRuntime[] = [];
         for (const rt of this.panels.values()) {
-            if (this.sameDir(rt.cwd, target)) { cands.push(rt); }
+            if (sameDir(rt.cwd, target)) { cands.push(rt); }
         }
         if (cands.length === 0) { return undefined; }
         const notChild = cands.filter((rt) => !this.taba.byChildPanel(rt.id));
@@ -1207,7 +1198,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         for (const rt of this.panels.values()) {
             // 子会话已在它父会话下面列过了，这里跳过
             if (this.taba.byChildPanel(rt.id)) { continue; }
-            push(rt, this.sameDir(rt.cwd, this.getCwd()) ? "" : (path.basename(rt.cwd) || rt.cwd));
+            push(rt, sameDir(rt.cwd, this.getCwd()) ? "" : (path.basename(rt.cwd) || rt.cwd));
         }
         return items;
     }
@@ -1558,9 +1549,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const cwd = folder ? path.resolve(folder) : (this.getActive(clientId)?.cwd ?? this.getCwd());
         const active = this.getActive(clientId);
         // 优先复用当前空会话（目录也得对）；已有对话时新建一个会话，避免历史选择覆盖正在进行的对话。
-        let rt = active && this.isActiveSessionEmpty(clientId) && this.sameDir(active.cwd, cwd) ? active : undefined;
+        let rt = active && this.isActiveSessionEmpty(clientId) && sameDir(active.cwd, cwd) ? active : undefined;
         if (!rt) {
-            rt = this.newSessionWithLaunch(this.sameDir(cwd, this.getCwd()) ? {} : { cwd, skipSpare: true }, 0, clientId);
+            rt = this.newSessionWithLaunch(sameDir(cwd, this.getCwd()) ? {} : { cwd, skipSpare: true }, 0, clientId);
         }
         if (!rt) { return; }
         this.setActiveSession(rt.id, clientId);

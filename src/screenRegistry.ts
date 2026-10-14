@@ -1,4 +1,4 @@
-import * as path from "path";
+import { dirInsideAny } from "./pathRules";
 
 /**
  * ScreenRegistry —— 连上后端的"屏"（VS Code 窗口）登记簿。
@@ -25,32 +25,6 @@ export interface Screen {
     lastSeenAt: number;
     /** 往后端回话（能力执行结果、符号集合）。 */
     send(msg: Record<string, unknown>): void;
-}
-
-/** 目录名比较用的小工具：Windows 上不分大小写，末尾多余的斜杠也抹掉。 */
-function normalizeDir(dir: string): string {
-    const s = dir.replace(/\\/g, "/").replace(/\/+$/, "");
-    return process.platform === "win32" ? s.toLowerCase() : s;
-}
-
-/**
- * 一个目录是否落在某个打开的文件夹里（相等也算）。
- *
- * 相等是必须的（窗口就打开在这个目录上）；落在里面也算，是为了兜住
- * "窗口打开的是上级目录"这种情况（比如工作区开在 D:\projects，会话在 D:\projects\picode）。
- */
-export function dirInsideFolders(dir: string, folders: readonly string[]): boolean {
-    const target = normalizeDir(dir);
-    if (!target) { return false; }
-    for (const folder of folders) {
-        const base = normalizeDir(folder);
-        if (!base) { continue; }
-        if (target === base) { return true; }
-        // 用 path 的关系判断，别用字符串前缀：D:\projects2 不能被 D:\projects 认领
-        const rel = path.posix.relative(base, target);
-        if (rel !== "" && !rel.startsWith("..") && !path.posix.isAbsolute(rel)) { return true; }
-    }
-    return false;
 }
 
 export class ScreenRegistry {
@@ -109,7 +83,7 @@ export class ScreenRegistry {
 
     /** 打开着这个目录的所有窗口。 */
     public matching(dir: string): Screen[] {
-        return this.list().filter((s) => dirInsideFolders(dir, s.folders));
+        return this.list().filter((s) => dirInsideAny(dir, s.folders));
     }
 
     /**

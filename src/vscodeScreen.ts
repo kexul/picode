@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
+import { dirInsideAny, relativeTo } from "./pathRules";
 
 /**
  * VscodeScreen —— 这个 VS Code 窗口替独立后端干的那几样活。
@@ -71,16 +72,7 @@ export class VscodeScreen {
      * 免得把文件开在别的工程里。后端挑人时已经按这条挑过，这里再挡一道。
      */
     public handles(dir: string): boolean {
-        const norm = (s: string) => s.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-        const target = norm(dir);
-        if (!target) { return false; }
-        for (const folder of this.folders()) {
-            const base = norm(folder);
-            if (!base) { continue; }
-            if (target === base) { return true; }
-            if (target.startsWith(base + "/")) { return true; }
-        }
-        return false;
+        return dirInsideAny(dir, this.folders());
     }
 
     /** 后端报来的文件清单变了：重算符号表（它按文件内容算，本地再判断有没有变）。 */
@@ -185,7 +177,7 @@ export class VscodeScreen {
     private matchKnownFile(known: string[], query: string, cwd: string): string | undefined {
         const norm = (s: string) => s.replace(/\\/g, "/").toLowerCase();
         const q = norm(query);
-        const relOf = (f: string) => norm(this.relativeTo(cwd, f));
+        const relOf = (f: string) => relativeTo(cwd, f);
         const exact = known.find((f) => relOf(f) === q || norm(f) === q);
         if (exact) { return exact; }
         const base = q.split("/").pop() || q;
@@ -197,15 +189,6 @@ export class VscodeScreen {
             return cands.find((f) => relOf(f).includes(q)) || cands[0];
         }
         return undefined;
-    }
-
-    /** 一个绝对路径相对某个目录的写法（不在里面就原样返回）。 */
-    private relativeTo(cwd: string, full: string): string {
-        const norm = (s: string) => s.replace(/\\/g, "/");
-        const c = norm(cwd).replace(/\/$/, "") + "/";
-        const f = norm(full);
-        if (f.toLowerCase().startsWith(c.toLowerCase())) { return f.slice(c.length); }
-        return full;
     }
 
     // ========================================================================
@@ -329,7 +312,7 @@ export class VscodeScreen {
         const add = (uri: vscode.Uri) => {
             if (uri.scheme !== "file" || seen.has(uri.fsPath)) { return; }
             seen.add(uri.fsPath);
-            files.push({ label: this.relativeTo(dir, uri.fsPath), path: uri.fsPath });
+            files.push({ label: relativeTo(dir, uri.fsPath), path: uri.fsPath });
         };
         if (vscode.window.activeTextEditor) { add(vscode.window.activeTextEditor.document.uri); }
         for (const group of vscode.window.tabGroups.all) {

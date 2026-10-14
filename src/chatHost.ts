@@ -16,7 +16,6 @@
  * 本类不引用 `vscode`。插件那一侧是纯客户端（跟浏览器页面一样，走 HTTP 连后端），不继承这份。
  */
 import * as crypto from "crypto";
-import * as path from "path";
 import type { AskRequest } from "./askProtocol";
 import { writeAskAnswer } from "./askProtocol";
 import type { MessageSink } from "./sessionRuntime";
@@ -34,7 +33,8 @@ import { listDirectories } from "./dirBrowse";
 import { ChatBroadcaster } from "./chatBroadcaster";
 import { MessageBuffer } from "./webTransport";
 import { pickOverlayClient } from "./overlayTarget";
-import { dirInsideFolders, ScreenRegistry } from "./screenRegistry";
+import { ScreenRegistry } from "./screenRegistry";
+import { dirInsideAny, dirKey } from "./pathRules";
 import type { WebServerHost } from "./webChatServer";
 import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
@@ -406,12 +406,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         });
     }
 
-    /** 拿一个目录当“同一个目录”用的键（跟 sameDir 一个规矩：Windows 上不区分大小写）。 */
-    private dirKey(p: string): string {
-        const s = path.resolve(p);
-        return process.platform === "win32" ? s.toLowerCase() : s;
-    }
-
     /**
      * 取下一批工作区行（一次 WORKSPACE_BATCH 个）。
      * 到这里才真进目录（readdir + 读一个会话文件的开头）—— 只对真要显示的那几行做。
@@ -423,7 +417,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             const entry = state.workspaceDirs[state.workspaceOffset++];
             const p = await readProjectEntry(entry);
             if (!p) { continue; }                                // 空目录 / 坏文件：跳过，不占一行
-            const key = this.dirKey(p.cwd);
+            const key = dirKey(p.cwd);
             if (state.workspaceSeen.has(key)) { continue; }       // 当前工作区另有上面那一行；同一个目录只占一行
             state.workspaceSeen.add(key);
             rows.push({
@@ -908,7 +902,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private sessionFilesForFolders(folders: readonly string[]): string[] {
         const set = new Set<string>();
         for (const rt of this.panels.values()) {
-            if (!dirInsideFolders(rt.cwd, folders)) { continue; }
+            if (!dirInsideAny(rt.cwd, folders)) { continue; }
             for (const f of rt.getKnownFiles()) { set.add(f); }
         }
         return Array.from(set);

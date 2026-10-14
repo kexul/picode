@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { fetchChatUiFiles, getChatHtml } from "./chatHtml";
+import { relativeTo } from "./pathRules";
 import { BackendClient, type BackendState } from "./backendClient";
 import { VscodeScreen } from "./vscodeScreen";
 
@@ -284,15 +285,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.postToWebview({ type: "sendFromHost", text: prompt });
         vscode.window.showInformationMessage("已发送到 Pi Chat 对话框。");
     }
-}
-
-/** 一个绝对路径相对某个目录的写法（不在里面就原样返回）。 */
-function relativeTo(cwd: string, full: string): string {
-    const norm = (s: string) => s.replace(/\\/g, "/");
-    const c = norm(cwd).replace(/\/$/, "") + "/";
-    const f = norm(full);
-    if (f.toLowerCase().startsWith(c.toLowerCase())) { return f.slice(c.length); }
-    return full;
 }
 
 /** 界面文件没抓到时隔多久再试一次（后端重启的间隙一般就几秒）。 */
