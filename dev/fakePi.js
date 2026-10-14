@@ -61,40 +61,64 @@ const sleep = (ms) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.
 
 const MODEL = { id: "fake-model", provider: "fake", name: "假模型（秒回）", contextWindow: 128000 };
 
-/** 回话文件放在哪（插件用 PICHAT_ASK_DIR 告诉本进程，见 src/askAssets.ts 与 askProtocol.ts）。 */
-const ASK_DIR = process.env.PICHAT_ASK_DIR || "";
-
-/** 这一轮被停掉了（收到 abort 命令）：问话那一段看到它就当"没作答"交回去（真扩展看的是 signal）。 */
+/** 这一轮被停掉了（收到 abort 命令）：桥靠 signal.aborted 判断，这里给它一个假的（见 fakeSignal）。 */
 let aborted = false;
 
-/**
- * 等插件把问话的答案写回来（真扩展也是这么轮询的，见 askBridgeSource.ts）。
- * 先写临时文件再改名，所以读到一半的 JSON 不会出现；读到了就把它删掉。
- */
-async function waitAskAnswer(id, waitMs) {
-    const file = ASK_DIR ? path.join(ASK_DIR, "ask-answers", id + ".json") : "";
-    const deadline = Date.now() + waitMs;
-    while (file && Date.now() < deadline && !aborted) {
+// ---------------------------------------------------------------------------
+// 真扩展（"桥"）：加载宿主写下的那两个 .ts，让剧本调的是真代码
+// ---------------------------------------------------------------------------
+// 真 pi 用 `-e <那个文件>` 加载宿主写好的桥（见 src/bridgeAssets.ts）。这里加载同一份文件：
+// 以前这一段是"自己拼暗号、自己读回话"，跟真代码长得像而已 —— 真代码（src/tabaBridgeSource.ts /
+// src/askBridgeSource.ts）在自动检查里一次都没跑过，改了字段名也不会有人发现。
+// 加载方式和真 pi 一样要的是那个文件本身；Node 24 能直接加载 .ts。
+const bridgeTools = new Map();
+const piShim = {
+    registerTool(def) {
+        if (def && typeof def.name === "string") { bridgeTools.set(def.name, def); }
+    },
+};
+
+/** 从资源目录里找宿主写下的桥文件并加载；找不到就明说（那几样工具这次验不了，别装作能验）。 */
+function loadBridges() {
+    for (const pair of [["PICHAT_TABA_DIR", "taba-bridge"], ["PICHAT_ASK_DIR", "ask-bridge"]]) {
+        const envName = pair[0], prefix = pair[1];
+        const dir = process.env[envName] || "";
+        if (!dir) { console.error("[假 pi] 环境里没有 " + envName + "：" + prefix + " 那套工具这次跑不了。"); continue; }
+        let file = "";
         try {
-            const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-            try { fs.rmSync(file, { force: true }); } catch { /* 删不掉不影响 */ }
-            if (parsed && parsed.id === id) { return parsed; }
-        } catch { /* 还没写 / 写了一半：接着等 */ }
-        await sleep(150);
+            file = fs.readdirSync(dir).find((n) => n.startsWith(prefix) && n.endsWith(".ts")) || "";
+        } catch (e) {
+            console.error("[假 pi] 读不了 " + dir + "：" + String(e && e.message));
+            continue;
+        }
+        if (!file) { console.error("[假 pi] " + dir + " 里找不到 " + prefix + "-*.ts：那套工具这次跑不了。"); continue; }
+        try {
+            const loaded = require(path.join(dir, file));
+            const factory = loaded && (loaded.default || loaded);
+            if (typeof factory !== "function") { throw new Error("导出的不是一个函数"); }
+            factory(piShim);
+        } catch (e) {
+            console.error("[假 pi] 加载 " + file + " 失败：" + String(e && e.message));
+        }
     }
-    return null;
+}
+loadBridges();
+
+/** 桥要的两样东西：这个会话在哪个目录、它的 .jsonl 在哪（见 tabaBridgeSource.ts 的 cwdOf / sessionFileOf）。 */
+function bridgeCtx() {
+    return {
+        cwd: process.cwd(),
+        sessionManager: { getSessionFile: () => path.join(process.cwd(), "fake-session.jsonl") },
+    };
 }
 
-/** 把回话文件里的答案念成扩展给模型的工具结果文本（跟 askBridgeSource.ts 里那几句一样）。 */
-function answerText(answer) {
-    if (!answer || answer.cancelled) { return "用户没作答。"; }
-    const picked = Array.isArray(answer.picked) ? answer.picked : [];
-    const written = typeof answer.text === "string" ? answer.text.trim() : "";
-    const lines = [];
-    if (picked.length === 1) { lines.push("用户选了：" + picked[0]); }
-    else if (picked.length > 1) { lines.push("用户选了这几项：" + picked.join("、")); }
-    if (written) { lines.push("用户还自己写了一句：" + written); }
-    return lines.length ? lines.join("\n") : "用户没作答。";
+/** 假的 abort 信号：桥只读 aborted（真 pi 给的是 AbortSignal）。 */
+function fakeSignal() {
+    return {
+        get aborted() { return aborted; },
+        addEventListener() { /* 桥不监听事件，只读上面的 aborted */ },
+        removeEventListener() { /* 同上 */ },
+    };
 }
 
 /** 还等着的“扩展问用户”（extension_ui_request）：编号 → 收尾函数。 */
@@ -134,20 +158,6 @@ async function runScript(userText) {
     const emit = (evt) => write(evt);
     const now = () => new Date().toISOString();
     aborted = false;
-
-    // 用户的话里带“派活”就假装模型调了 taba_spawn（子会话收到的任务正文里也有“派活”两个字，
-    // 那种要排除掉，不然子进程也会发一条）：往 stderr 写一行暗号（格式与真扩展一致，
-    // 见 src/tabaProtocol.ts）。这条路径能验到：新开后台会话、父子关系、列表里缩进。
-    if (/派活/.test(userText) && !/【任务】/.test(userText) && !scriptState.spawnSent) {
-        scriptState.spawnSent = true;
-        const frame = "##PICHAT_TABA##" + Buffer.from(JSON.stringify({
-            kind: "spawn",
-            id: "deadbeef",
-            name: "假子会话",
-            task: "看看子会话在列表里会不会缩进",
-        }), "utf8").toString("base64");
-        process.stderr.write(frame + "\n");
-    }
 
     emit({ type: "agent_start" });
 
@@ -211,10 +221,10 @@ async function runScript(userText) {
         assistantMsg.content.push(piece);
     };
 
-    /** 演一个工具调用：toolcall 事件 → 执行 → 结果进历史。 */
-    const act = async (toolName, args, result) => {
+    /** 发"模型正在调工具"那几个事件，返回这次调用的编号。 */
+    const beginTool = (toolName, args) => {
         const id = nextId("call");
-        // 参数是"正在生成"的部分：toolcall_start/delta/end 各发一条（界面在此期间只显示"工作中"）
+        // 参数是"正在生成"的部分：toolcall_start/end 各发一条（界面在此期间只显示"工作中"）
         emit({
             type: "message_update",
             usage: {},
@@ -229,94 +239,59 @@ async function runScript(userText) {
             },
         });
         assistantMsg.content.push({ type: "toolCall", id, name: toolName, arguments: args });
-
         emit({ type: "tool_execution_start", toolCallId: id, toolName, args });
-        await sleep(THINK_MS);
-        const toolResult = {
-            role: "toolResult",
-            toolCallId: id,
-            content: result.content,
-            isError: false,
-            timestamp: now(),
-        };
+        return id;
+    };
+
+    /** 结果收尾：tool_execution_end + 结果进历史。 */
+    const endTool = (id, toolName, args, content, raw, isError) => {
+        const toolResult = { role: "toolResult", toolCallId: id, content, isError: isError === true, timestamp: now() };
         emit({
-            type: "tool_execution_end",
-            toolCallId: id,
-            toolName,
-            args,
-            result: result.raw,
-            isError: false,
-            durationMs: THINK_MS,
+            type: "tool_execution_end", toolCallId: id, toolName, args,
+            result: raw, isError: isError === true, durationMs: THINK_MS,
         });
         messages.push(toolResult);
         emit({ type: "message_start", message: toolResult });
         emit({ type: "message_end", message: toolResult });
     };
 
+    /** 演一个工具调用：结果由剧本给（真扩展注册的那些走 actReal）。 */
+    const act = async (toolName, args, result) => {
+        const id = beginTool(toolName, args);
+        await sleep(THINK_MS);
+        endTool(id, toolName, args, result.content, result.raw, false);
+    };
+
     /**
-     * 演一次“模型问用户选择题”（ask_choice）：真扩展那套协议一模一样 ——
-     * 工具调用进历史 → 往 stderr 写一行暗号（见 src/askProtocol.ts）→ 等插件写回话文件 → 工具结果。
-     * 界面靠 toolCallId 把问话卡片挂到那条工具行下面，所以暗号里也带一份。
+     * 调一个"宿主写下的真扩展"注册的工具：事件跟 act 一样，但执行的是真代码 ——
+     * 暗号由它写、回话由它读、名录由它查，跟真跑一模一样。
+     */
+    const actReal = async (toolName, args) => {
+        const id = beginTool(toolName, args);
+        const def = bridgeTools.get(toolName);
+        if (!def) {
+            const content = [{ type: "text", text: "（假 pi）没加载到「" + toolName + "」这个工具：桥文件没写成？" }];
+            endTool(id, toolName, args, content, { content }, true);
+            return "";
+        }
+        const res = await def.execute(id, args, fakeSignal(), undefined, bridgeCtx());
+        const content = Array.isArray(res && res.content) ? res.content : [];
+        endTool(id, toolName, args, content, res, false);
+        return content.map((c) => (c && typeof c.text === "string" ? c.text : "")).join("");
+    };
+
+    /**
+     * 演一次“模型问用户选择题”（ask_choice）：调的是真扩展注册的那个工具 ——
+     * 暗号由它写、回话由它去读（界面靠 toolCallId 把卡片挂到这条工具行下面，也是它带的）。
      */
     const askChoice = async (ask) => {
-        const callId = nextId("call");
-        const askId = nextId("ask");
-        const args = {
+        return await actReal("ask_choice", {
             question: ask.question,
             options: ask.options,
             multi: ask.multi === true,
             recommended: ask.recommended || [],
             allowText: ask.allowText !== false,
-        };
-        emit({
-            type: "message_update",
-            usage: {},
-            assistantMessageEvent: { type: "toolcall_start", contentIndex: assistantMsg.content.length, id: callId, toolName: "ask_choice" },
         });
-        emit({
-            type: "message_update",
-            usage: {},
-            assistantMessageEvent: {
-                type: "toolcall_end", contentIndex: assistantMsg.content.length, id: callId, toolName: "ask_choice",
-                partial: { type: "toolCall", id: callId, name: "ask_choice", arguments: args },
-            },
-        });
-        assistantMsg.content.push({ type: "toolCall", id: callId, name: "ask_choice", arguments: args });
-        emit({ type: "tool_execution_start", toolCallId: callId, toolName: "ask_choice", args });
-
-        // 暗号：真扩展写在 stderr 上的一行（一行、base64，见 src/askProtocol.ts）
-        process.stderr.write("##PICHAT_ASK##" + Buffer.from(JSON.stringify({
-            kind: "ask",
-            id: askId,
-            ...args,
-            toolCallId: callId,
-        }), "utf8").toString("base64") + "\n");
-
-        const answer = await waitAskAnswer(askId, 120000);
-        if (!answer) {
-            // 不等了（这一轮被停 / 等超时）：跟插件说一声，把界面上那张卡片收掉
-            //（跟真扩展一样，见 askBridgeSource.ts 的 ask-done）
-            process.stderr.write("##PICHAT_ASK##" + Buffer.from(JSON.stringify(
-                { kind: "ask-done", id: askId },
-            ), "utf8").toString("base64") + "\n");
-        }
-        const text = answerText(answer);
-        const toolResult = {
-            role: "toolResult",
-            toolCallId: callId,
-            content: [{ type: "text", text }],
-            isError: false,
-            timestamp: now(),
-        };
-        emit({
-            type: "tool_execution_end", toolCallId: callId, toolName: "ask_choice", args,
-            result: { content: [{ type: "text", text }], details: { id: askId } },
-            isError: false, durationMs: 0,
-        });
-        messages.push(toolResult);
-        emit({ type: "message_start", message: toolResult });
-        emit({ type: "message_end", message: toolResult });
-        return text;
     };
 
     /** 这一轮演完了：收尾（下面两条路都走它）。 */
@@ -339,6 +314,26 @@ async function runScript(userText) {
         }
         emit({ type: "agent_settled" });
     };
+
+    // ---- 子会话那三个工具（调试用：一句话演一个；调的是真扩展的代码）----
+    // 派活 = taba（新开子会话）；看子会话 = taba_peek（读名录）；停掉子会话 = taba_stop。
+    // 子会话收到的任务正文里也有“派活”两个字：那种要排除掉，不然子进程也会演一遍。
+    // 子会话收到的任务正文（带【任务】那段）里也有"派活""子会话"这些字：那三种都别让子进程再演一遍
+    const isChildTask = /【任务】/.test(userText);
+    const tabaKind = (!isChildTask && /派活/.test(userText)) ? "spawn"
+        : (!isChildTask && /看子会话/.test(userText)) ? "peek"
+            : (!isChildTask && /停掉子会话/.test(userText)) ? "stop" : "";
+    if (tabaKind) {
+        await say("（假模型）我演一次子会话工具：" + tabaKind);
+        const reply = tabaKind === "spawn"
+            ? await actReal("taba", { name: "假子会话", task: "看看子会话在列表里会不会缩进" })
+            : tabaKind === "peek"
+                ? await actReal("taba_peek", { name: "假子会话" })
+                : await actReal("taba_stop", { name: "假子会话" });
+        await say("子会话工具回话 —— " + reply);
+        finish();
+        return;
+    }
 
     // ---- 问话那几种（调试用：一句话就演一类，不用真模型；见 dev/askCards.js）----
     // 前两种是模型调 ask_choice（走 stderr 暗号 + 回话文件），后三种是扩展在中间问用户

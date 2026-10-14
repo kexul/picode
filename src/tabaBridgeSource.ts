@@ -8,6 +8,8 @@
  *
  * 用 String.raw 包着：里面的反斜杠原样保留（比如 "\n" 不能被外层先转义成真换行）。
  */
+import { TABA_FRAME_PREFIX } from "./tabaProtocol";
+
 export const TABA_BRIDGE_SOURCE = String.raw`/**
  * 这是 VSCode 插件 Pi Chat 自动生成的文件，不要手改：插件版本一变就会重新生成，改动会丢。
  *
@@ -17,7 +19,7 @@ export const TABA_BRIDGE_SOURCE = String.raw`/**
  *   taba_peek   看某个子会话的情况
  *
  * 工具被调用时，这里只往本进程的 stderr 写一行暗号：
- *   ##PICHAT_TABA## 后面跟 base64 编码的 JSON
+ *   ${TABA_FRAME_PREFIX} 后面跟 base64 编码的 JSON
  * 插件在读这个进程的 stderr，读到暗号就去开 tab、发任务；
  * 子会话跑完后把结果交回来，也是插件直接对父会话发消息做的。
  * 所以这里不用等插件回话，也不用联网、不开端口。
@@ -26,7 +28,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
-const FRAME_PREFIX = "##PICHAT_TABA##";
+const FRAME_PREFIX = ${JSON.stringify(TABA_FRAME_PREFIX)};
 
 /** 往 stderr 写一行暗号。 */
 function emit(payload: Record<string, unknown>): void {

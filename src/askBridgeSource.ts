@@ -8,6 +8,8 @@
  *
  * 用 String.raw 包着：里面的反斜杠原样保留（比如 "\n" 不能被外层先转义成真换行）。
  */
+import { ASK_FRAME_PREFIX } from "./askProtocol";
+
 export const ASK_BRIDGE_SOURCE = String.raw`/**
  * 这是 VSCode 插件 Pi Chat 自动生成的文件，不要手改：插件版本一变就会重新生成，改动会丢。
  *
@@ -15,7 +17,7 @@ export const ASK_BRIDGE_SOURCE = String.raw`/**
  * 用户在这块界面上点几下作答（列表 + 勾选 + 自己写），答案回到模型手里。
  *
  * 工具被调用时：
- *   1. 往本进程的 stderr 写一行暗号：##PICHAT_ASK## 后面跟 base64 编码的 JSON（问题、选项都在里面）；
+ *   1. 往本进程的 stderr 写一行暗号：${ASK_FRAME_PREFIX} 后面跟 base64 编码的 JSON（问题、选项都在里面）；
  *   2. 等插件把答案写进 <PICHAT_ASK_DIR>/ask-answers/<提问编号>.json（每 150 毫秒看一次）；
  *   3. 读到就把那个文件删掉，然后把作答内容当作工具结果交回模型。
  *
@@ -27,7 +29,7 @@ import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 
-const FRAME_PREFIX = "##PICHAT_ASK##";
+const FRAME_PREFIX = ${JSON.stringify(ASK_FRAME_PREFIX)};
 /** 隔多久看一次回话文件。 */
 const POLL_MS = 150;
 /**
