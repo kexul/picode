@@ -92,17 +92,3 @@ export interface RpcSessionStats {
     contextUsage?: RpcContextUsage | null;
 }
 
-export function isRpcOk<T>(resp: RpcResponse<T> | undefined | null): resp is RpcResponse<T> & { success?: true } {
-    return !!resp && resp.success !== false;
-}
-
-export function rpcErrorMessage(resp: RpcResponse | undefined | null, fallback = "未知错误"): string {
-    if (!resp) {
-        return fallback;
-    }
-    if (typeof resp.error === "string" && resp.error.trim()) {
-        return resp.error;
-    }
-    return fallback;
-}
-

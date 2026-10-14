@@ -199,10 +199,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 把一条全局（不带 sessionId）消息送到 webview。 */
     protected abstract postToWebview(msg: Record<string, unknown>): void;
 
-    /**
-     * 只发一块屏。默认实现：这个宿主只有一块屏，就当成广播。
-     * 多屏宿主（独立后端）覆写成“只发给那一块”。
-     */
+    /** 只发一块屏（宿主自己实现：独立后端就发给那一块，屏只有一块的宿主可以当成广播）。 */
     protected postToOneClient(_clientId: string, msg: Record<string, unknown>): void {
         this.postToWebview(msg);
     }

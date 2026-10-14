@@ -185,8 +185,6 @@ export class BackendClient {
     private lastSeq = 0;
     /** 屏流连上了没有（HTTP 200 就算连上，后端一接受就读得到）。 */
     private screenUp = false;
-    /** 正在等回话的屏请求（要回话的那几种用得上，现在只有"领页面标识"）。 */
-    private screenApiInFlight = 0;
 
     constructor(options: BackendClientOptions) {
         this.options = options;
@@ -407,7 +405,6 @@ export class BackendClient {
     public async postScreen(msg: unknown, session?: Session): Promise<unknown> {
         const base = this.base;
         if (!base || (session && session.dead)) { return undefined; }
-        this.screenApiInFlight += 1;
         try {
             const res = await postJson(streamUrl(base, "/screenapi", { screenId: this.screenId }), msg);
             if (res.status === 409) {
@@ -420,8 +417,6 @@ export class BackendClient {
             try { return JSON.parse(res.text); } catch { return undefined; }
         } catch {
             return undefined;
-        } finally {
-            this.screenApiInFlight -= 1;
         }
     }
 

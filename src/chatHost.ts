@@ -110,15 +110,15 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private cardSeq = 0;
     // 正在处理哪一个来源发来的消息，以及“每块屏各自在看哪个会话”，都在基类里管
     // （见 ChatControllerBase.currentPageId / clientSessions）：本类只管“屏”这一层。
-    // ---- 显示选项的键（存储由子类给：VSCode 的 globalState / 独立后端的 state.json）----
-    protected static readonly KEY_AUTO_LOAD_LAST = "piChat.autoLoadLastSession";
-    protected static readonly KEY_SEND_KEY = "piChat.sendKey";
-    protected static readonly KEY_NEW_SESSION_KEY = "piChat.newSessionKey";
-    protected static readonly KEY_TAB_SWITCH_KEY = "piChat.tabSwitchKey";
-    protected static readonly KEY_FOCUS_INPUT_KEY = "piChat.focusInputKey";
-    protected static readonly KEY_FONT_SIZE = "piChat.fontSize";
-    protected static readonly KEY_NOTIFY_BEEP = "piChat.notifyBeep";
-    protected static readonly KEY_THEME = "piChat.themeMode";
+    // ---- 显示选项的键（值存在 state.json；配置文件里也能预设，见 configPreset）----
+    private static readonly KEY_AUTO_LOAD_LAST = "piChat.autoLoadLastSession";
+    private static readonly KEY_SEND_KEY = "piChat.sendKey";
+    private static readonly KEY_NEW_SESSION_KEY = "piChat.newSessionKey";
+    private static readonly KEY_TAB_SWITCH_KEY = "piChat.tabSwitchKey";
+    private static readonly KEY_FOCUS_INPUT_KEY = "piChat.focusInputKey";
+    private static readonly KEY_FONT_SIZE = "piChat.fontSize";
+    private static readonly KEY_NOTIFY_BEEP = "piChat.notifyBeep";
+    private static readonly KEY_THEME = "piChat.themeMode";
 
     /** 会话显示名用的名字池：panel 关闭后会释放对应名字。 */
     private readonly usedChatNames = new Set<string>();
@@ -218,20 +218,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
 
     protected onPiMissing(piPath: string): void {
         this.log(`[错误] ${this.piMissingMessage(piPath)}`);
-    }
-
-    /** 平台独有的消息：正文里的符号链接（只有编辑器有语言服务，派给窗口去它读写过的文件里找）。 */
-    protected handleHostMessage(msg: any): boolean {
-        if (msg?.type === "openSymbol") {
-            if (typeof msg.name === "string") {
-                this.routeToScreen("openSymbol", {
-                    name: msg.name,
-                    knownFiles: this.getAllKnownFiles(),
-                }, `找符号 ${msg.name}`);
-            }
-            return true;
-        }
-        return false;
     }
 
     // ========================================================================
@@ -546,6 +532,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 处理期间记下是哪块屏发来的，浮层才知道该回给谁。
      */
     public processPageMessage(msg: any, pageId: string): void {
+        // 不是对象、没有 type 的，一律不当消息处理（脏请求挡在这一层，别丢给分发逻辑去 switch）
+        if (!msg || typeof msg.type !== "string") { return; }
         const previous = this.currentPageId;
         this.currentPageId = pageId;
         try {
@@ -687,7 +675,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     protected override onChatStructureChanged(): void { this.broadcastChatReferences(); }
 
     // ========================================================================
-    //  显示选项（候选与默认值在 viewOptions.ts，存储交给子类）
+    //  显示选项（候选与默认值在 viewOptions.ts，值存在 state.json）
     // ========================================================================
 
     protected getAutoLoadLast(): boolean {
@@ -943,7 +931,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         this.postToWebview({ type: "symbolSet", names: Array.from(set) });
     }
 
-    // ---- 编辑器才有的那几样：都派给窗口（子类可以覆写成"就在本地干"）----
+    // ---- 编辑器才有的那几样：都派给连着的窗口 ----
     public openFileLocation(p: string, line: number, _anchor?: string): void {
         this.routeToScreen("openFileAt", { path: p, line }, `打开 ${p}`);
     }
@@ -978,7 +966,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     // ========================================================================
-    //  平台消息：两家都要的那部分（子类要接别的类型，覆写 handleHostMessage）
+    //  平台消息：一块屏发来的那些（会话级的消息在基类里）
     // ========================================================================
 
     protected handlePlatformMessage(msg: any): boolean {
@@ -1062,8 +1050,17 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 // 弹设置界面的请求：只回给请求它的那块屏。
                 this.sendToOneClient(this.currentPageId, { type: "openSettings" });
                 return true;
+            case "openSymbol":
+                // 正文里的符号链接：只有编辑器有语言服务，派给打开着这个目录的窗口去它读写过的文件里找。
+                if (typeof msg.name === "string") {
+                    this.routeToScreen("openSymbol", {
+                        name: msg.name,
+                        knownFiles: this.getAllKnownFiles(),
+                    }, `找符号 ${msg.name}`);
+                }
+                return true;
         }
-        return this.handleHostMessage(msg);
+        return false;
     }
 
     /**
@@ -1085,14 +1082,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     // ========================================================================
     //  弹窗 / 会话收尾
     // ========================================================================
-    /** 确认框：正在看这个会话的屏上出一张卡片（是 / 否）；没人看着它时交给子类兜底（VSCode 弹原生框）。 */
+    /** 确认框：正在看这个会话的屏上出一张卡片（是 / 否）；没人看着它时走兜底（当“否”）。 */
     public async confirmDialog(title: string, message: string, sessionId?: string): Promise<boolean> {
         if (!this.hasCardViewer(sessionId)) { return this.confirmDialogFallback(title, message); }
         const answer = await this.askOnScreens(sessionId, { kind: "confirm", title, message }, ChatHost.DIALOG_WAIT_MS);
         return answer?.yes === true;
     }
 
-    /** 输入框：同上（在看着这个会话的屏上出一张卡片）；没人看着它时交给子类兜底。 */
+    /** 输入框：同上（在看着这个会话的屏上出一张卡片）；没人看着它时走兜底（当没填）。 */
     public async inputDialog(title: string, placeholder: string, prefill: string, sessionId?: string): Promise<string | undefined> {
         if (!this.hasCardViewer(sessionId)) { return this.inputDialogFallback(title, placeholder, prefill); }
         const answer = await this.askOnScreens(sessionId, { kind: "prompt", title, placeholder, prefill }, ChatHost.DIALOG_WAIT_MS);
@@ -1100,7 +1097,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return String(answer.text ?? "");
     }
 
-    /** 选项列表：在看着这个会话的屏上出一张卡片（单选）；没人看着它时交给子类兜底。 */
+    /** 选项列表：在看着这个会话的屏上出一张卡片（单选）；没人看着它时走兜底（当没选）。 */
     public async selectDialog(title: string, options: string[], sessionId?: string): Promise<string | undefined> {
         if (!this.hasCardViewer(sessionId)) { return this.selectDialogFallback(title, options); }
         const answer = await this.askOnScreens(sessionId, {
@@ -1272,14 +1269,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         }
     }
 
-    /** 确认框问不着页面时的兜底（VSCode 弹原生框；独立后端没屏可问就按“否”）。 */
+    /** 确认框问不着页面时的兜底：没人可问就当“否”（宁可不动也不乱来）。 */
     protected async confirmDialogFallback(_title: string, _message: string): Promise<boolean> { return false; }
-    /** 输入框问不着页面时的兜底。 */
+    /** 输入框问不着页面时的兜底：没人可问就当没填。 */
     protected async inputDialogFallback(_title: string, _placeholder: string, _prefill: string): Promise<string | undefined> { return undefined; }
-    /** 选项列表问不着页面时的兜底。 */
+    /** 选项列表问不着页面时的兜底：没人可问就当没选。 */
     protected async selectDialogFallback(_title: string, _options: string[]): Promise<string | undefined> { return undefined; }
 
-    /** 回滚确认：危险动作，默认走确认框那条路（VSCode 那边覆写成原生警告框）。 */
+    /** 回滚确认：危险动作，走确认框那条路（没人可问就按“否”）。 */
     public async confirmRevert(label: string, sessionId?: string): Promise<boolean> {
         return this.confirmDialog(
             "回滚修改",

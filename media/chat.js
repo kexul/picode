@@ -49,7 +49,7 @@
     // 往右的箭头：消息流末尾那条「继续」上用（VSCode 官方 codicon 的 arrow-right）
     "arrow-right": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8.85355 3.14645C8.65829 2.95118 8.34171 2.95118 8.14645 3.14645C7.95118 3.34171 7.95118 3.65829 8.14645 3.85355L11.7929 7.5H2.5C2.22386 7.5 2 7.72386 2 8C2 8.27614 2.22386 8.5 2.5 8.5H11.7929L8.14645 12.1464C7.95118 12.3417 7.95118 12.6583 8.14645 12.8536C8.34171 13.0488 8.65829 13.0488 8.85355 12.8536L13.3536 8.35355C13.5488 8.15829 13.5488 7.84171 13.3536 7.64645L8.85355 3.14645Z"/></svg>',
   };
-  /** 文件夹选择器里行首那颗图标：名字由宿主给（见 chatHostBase.showFolderPicker 的 items）。 */
+  /** 文件夹选择器里行首那颗图标：名字由宿主给（见 chatHost.ts 里 showFolderPicker 的 items）。 */
   const FOLDER_ROW_ICONS = { check: ICONS.check, up: ICONS["arrow-up"], folder: ICONS.folder };
   /** 抽屉列表里“磁盘上存着的会话”那一段的标题：历史抽屉与「项目与会话」上半共用。 */
   const HISTORY_SECTION = "历史会话";
@@ -3120,7 +3120,7 @@
         lastSection = item.section;
         const sep = document.createElement("div"); sep.className = "pk-section";
         // 「工作区」那一行右边摆一颗加号（原来是列表里的一行「打开文件夹…」）：
-        // 挑一个别的文件夹当工作区，就在那里开新会话（见 chatHostBase.workspaceBrowse）。
+        // 挑一个别的文件夹当工作区，就在那里开新会话（见 chatHost.ts 的 workspaceBrowse 那条）。
         const spaceHead = st.kind === "workspace" && item.__section === "space";
         const label = document.createElement("span"); label.className = "pk-section-text";
         label.textContent = item.section;

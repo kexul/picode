@@ -130,7 +130,7 @@ export class ChatBroadcaster {
 
     /**
      * 人最后一次做动作的页面与时刻（报活不算动作）。
-     * 确认框弹到哪个页面、还是弹回 VSCode，靠它与插件里对话面板的最近动静比新旧。
+     * 确认框弹给哪块屏，靠它挑“最近有人动过”的那一块。
      */
     public recentActionPage(): { id: string; at: number } | undefined {
         let best: { id: string; at: number } | undefined;
