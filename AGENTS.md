@@ -1,13 +1,10 @@
 # Pi Chat 插件（pi-chat-vscode）
 
-## 叫法（说话、写注释、写文档都按这个）
+## 叫法
 
-- **插件**：这个 VS Code 插件本身（`src/` 里编进 `out/extension/` 的那部分 —— 命令、状态栏、
-  活动栏里那个叫「对话」的网页视图，都算插件的一部分）。插件就叫插件，不叫侧边栏。
-- **侧边栏**：只有点顶条最右边那颗 `<<<` 拉出来的那个面板才叫侧边栏（「项目与会话」面板；
-  窗口够宽时它常驻在右边占一列，窄窗里从右侧滑入）。
-- **浏览器页面**（也叫网页端）：浏览器里打开的对话页面（后端服务给的那份界面）。
-- 需要单指插件里那块对话界面时，说「插件里的对话面板」，别简称成侧边栏。
+说话、写注释、写文档用词以根目录 `GLOSSARY.md` 为准：插件、对话面板、浏览器页面、侧边栏
+（左边「文件侧边栏」、右边「项目与会话侧边栏」）、文件链接这些词都在那儿定。
+那儿标了「别这么叫」的词别用；缺词就往那儿加，别在别处另起一套。
 
 ## 改代码时的尺子
 
@@ -62,3 +59,17 @@ PICHAT_HOME=/tmp/pichat-test npm run server -- --cwd /tmp/pichat-test/work --por
 （`--port 0` = 自动挑空闲端口。）
 
 测试前端表现的时候不要真给ai发消息，用假数据即可。
+
+## Agent skills
+
+### Issue tracker
+
+issue 和 spec 都存在本地 markdown 文件里（`.scratch/<功能名>/`，不进版本库）。见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+分诊状态用五个中文词，写在每个 issue 文件顶部的 `Status:` 那一行。见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+单上下文：仓库根一个 `GLOSSARY.md` 加一个 `docs/adr/`。见 `docs/agents/domain.md`。

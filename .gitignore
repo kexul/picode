@@ -4,3 +4,4 @@ out/
 .vscode-test/
 dev/.scratch/
 dev/shots/
+.scratch/
