@@ -25,13 +25,12 @@ import { SessionRuntime, RuntimeHost, ModelInfo, ModelChoice, StatusInfo, TurnEn
 import { PiConfig } from "./sessionRuntime";
 import { PiClient } from "./piClient";
 import {
+    isChildSessionFile,
     listSessionFiles,
-    listSessionFilesNewestFirst,
     scanSessionInfo,
     type HistoryPickerItem,
     type SessionListItem,
-} from "./sessionStore";
-import { randomNameParts, composeName } from "./names";
+} from "./sessionStore";import { randomNameParts, composeName } from "./names";
 import type { PanelLaunch, TurnEndStatus } from "./runtimeTypes";
 import type { TabaRequest, TabaSpawnRequest, TabaStopRequest } from "./tabaProtocol";
 import { TABA_DECODER } from "./tabaProtocol";
@@ -76,12 +75,15 @@ export interface PickerState {
     /** 没人答就收掉，这个定时器在挂着。 */
     timer?: ReturnType<typeof setTimeout>;
     /** 这个浮层列的是哪些会话文件（历史列表 / 项目面板上半段）；开列表时重建。
-     *  顺序 = 最新的在前（按文件名倒序，见 sessionStore.listSessionFilesNewestFirst）。 */
+     *  顺序 = 最近聊过的在前（按文件改动时间倒序，见 sessionStore.listSessionFiles）。 */
     historyFiles: string[];
     /** 已经扫到第几个文件（「加载更多」接着往后扫）。 */
     historyOffset: number;
-    /** 项目面板现在显示的是哪个目录（点下面的工作区会变）。 */
-    workspaceFolder: string;
+    /** 这个面板是不是常驻在右边那一列（常驻的不等人选、收起是界面自己说了算）。 */
+    workspaceDock: boolean;
+    /** 「项目与会话」面板在这块屏上开着（常驻那一列或滑出来的抽屉都算）。
+     *  常驻那一列收起时宿主不知道（界面自己说了算），所以它可能留着 true：推过去会被丢掉。 */
+    workspaceOpen: boolean;
     /** 项目面板下半段还没拿出来的项目目录（按最近活动倒序）与游标。 */
     workspaceDirs: ProjectDirEntry[];
     workspaceOffset: number;
@@ -138,12 +140,24 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!st) {
             st = {
                 kind: "", resolve: null,
-                historyFiles: [], historyOffset: 0,
-                workspaceFolder: "", workspaceDirs: [], workspaceOffset: 0, workspaceSeen: new Set(),
+                historyFiles: [], historyOffset: 0, workspaceDock: false, workspaceOpen: false,
+                workspaceDirs: [], workspaceOffset: 0, workspaceSeen: new Set(),
             };
             this.pickers.set(clientId, st);
         }
         return st;
+    }
+
+    /**
+     * 现在「项目与会话」面板开着的屏（会话被新建、被关掉之后，宿主要给这些屏重推一份）。
+     * dock = 那一块屏上这一份是不是常驻在右边那一列（推回去时要照原样给）。
+     */
+    protected workspacePanelClients(): Array<{ clientId: string; dock: boolean }> {
+        const out: Array<{ clientId: string; dock: boolean }> = [];
+        this.pickers.forEach((st, id) => {
+            if (st.workspaceOpen) { out.push({ clientId: id, dock: st.workspaceDock }); }
+        });
+        return out;
     }
 
     // ---- 备用 pi 进程池（热备，免冷启动）----
@@ -1468,6 +1482,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
         }
         const st = this.pickerStateOf(to);
         st.kind = kind;
+        // 面板滑出来的那一套（窄窗）：它也归这份状态管（常驻那一列另算，见 workspaceDock。）
+        if (kind === "workspace") { st.workspaceOpen = true; st.workspaceDock = false; }
         return new Promise<any | undefined>((resolve) => {
             st.resolve = resolve;
             st.timer = setTimeout(() => { this.dropPicker(to, true); }, timeoutMs ?? ChatControllerBase.PICKER_TIMEOUT_MS);
@@ -1487,6 +1503,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const kind = st.kind;
         st.resolve = null;
         st.kind = "";
+        // 滑出来的那份「项目与会话」被顶掉 / 收掉了：以后不用再给它重推（常驻那一列不算，
+        // 它开着的时候上面还能再开别的浮层，收起也只有界面自己知道）。
+        if (kind === "workspace" && !st.workspaceDock) { st.workspaceOpen = false; }
         if (st.timer) { clearTimeout(st.timer); st.timer = undefined; }
         if (!resolve) { return; }
         if (notify && kind) { this.sendOverlayTo(clientId, { type: "pickerCancel", kind }); }
@@ -1507,10 +1526,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const st = this.pickers.get(this.currentPageId);
         if (!st || !st.resolve) { return; }
         const r = st.resolve;
+        const kind = st.kind;
         st.resolve = null;
         if (st.timer) { clearTimeout(st.timer); st.timer = undefined; }
         // 界面那头自己已经把浮层收了（取消 / 选中都会先关），这里只清状态、把结果交给等的人。
         st.kind = "";
+        // 滑出来的那份「项目与会话」选完就走（常驻那一列不算：它不等人选，也不关）
+        if (kind === "workspace" && !st.workspaceDock) { st.workspaceOpen = false; }
         r(payload);
     }
 
@@ -1622,6 +1644,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 每批展示/扫描的文件数。 */
     private static readonly HISTORY_BATCH_SIZE = 10;
 
+    /** 一批最多往下扫这么多倍的文件：子会话要跳过，凑不满一批就接着往后扫，但也别无上限地扫下去。 */
+    private static readonly HISTORY_SCAN_FACTOR = 6;
+
+    /** 「启动时自动打开最近会话」最多往后试几个文件（都是子会话就算了，留给用户自己挑）。 */
+    private static readonly AUTO_LOAD_SKIP_MAX = 10;
+
     /**
      * 弹出历史会话列表并加载选中项。
      * @param fromPage 来源是浏览器页面：不用把插件里的对话面板拽出来。
@@ -1637,7 +1665,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!fromPage) { await this.beforeHistoryPicker(); }
         const cwd = opts?.folder ? path.resolve(opts.folder) : (this.getActive(clientId)?.cwd ?? this.getCwd());
         const state = this.pickerStateOf(clientId);
-        state.historyFiles = await listSessionFilesNewestFirst(cwd);
+        state.historyFiles = (await listSessionFiles(cwd)).map((e) => e.file);
         state.historyOffset = 0;
         if (state.historyFiles.length === 0) { this.onNoSessions(); return; }
         const items = await this.scanHistoryBatch(clientId);
@@ -1651,25 +1679,55 @@ export abstract class ChatControllerBase implements RuntimeHost {
     public async loadMoreHistory(): Promise<void> {
         const clientId = this.currentPageId;
         const state = this.pickerStateOf(clientId);
-        const batch = state.historyFiles.slice(state.historyOffset, state.historyOffset + ChatControllerBase.HISTORY_BATCH_SIZE);
-        if (batch.length === 0) { this.sendOverlayTo(clientId, { type: "historyPageEnd" }); return; }
+        const before = state.historyOffset;
         const items = await this.scanHistoryBatch(clientId);
+        if (items.length === 0 && state.historyOffset === before) {
+            this.sendOverlayTo(clientId, { type: "historyPageEnd" });
+            return;
+        }
         this.sendOverlayTo(clientId, { type: "historyPageAppend", items, hasMore: state.historyOffset < state.historyFiles.length });
     }
 
-    /** 扫描下一批文件，返回展示条目（带“是不是当前焦点会话”）。 */
+    /**
+     * 从一份会话文件清单（按改动时间倒序）里往下扫，凑一批要显示的会话。
+     *
+     * 子会话（第一条用户消息是派活那套文字，见 sessionStore）不显示：碰上一个就跳过接着扫，
+     * 所以这一批可能要多扫几个文件才凑得满，最多扫一批条数的 HISTORY_SCAN_FACTOR 倍。
+     * 扫完在这一批里按“最后说话时间”再排一遍：屏幕上这一屏看上去是最近聊过的在前面。
+     *
+     * @param offset 从清单里第几个文件接着扫（不是“第几条会话”：跳过的子会话也占游标）。
+     * @returns 这一批条目、扫到第几个文件了、后面还有没有文件
+     */
+    protected async scanSessionPage(
+        files: string[],
+        offset: number,
+        size: number,
+    ): Promise<{ items: SessionListItem[]; nextOffset: number; hasMore: boolean }> {
+        const items: SessionListItem[] = [];
+        let at = offset;
+        let scanned = 0;
+        const scanMax = size * ChatControllerBase.HISTORY_SCAN_FACTOR;
+        while (items.length < size && scanned < scanMax) {
+            const batch = files.slice(at, at + (size - items.length));
+            if (batch.length === 0) { break; }
+            at += batch.length;
+            scanned += batch.length;
+            const scannedItems = await Promise.all(batch.map((f) => scanSessionInfo(f)));
+            for (const s of scannedItems) {
+                if (s && !s.child) { items.push(s); }
+            }
+        }
+        items.sort((a, b) => b.lastActivity - a.lastActivity);
+        return { items, nextOffset: at, hasMore: at < files.length };
+    }
+
+    /** 扫下一批（历史会话浮层那一份）：游标记在这块屏的浮层状态里。 */
     protected async scanHistoryBatch(clientId: string = this.currentPageId): Promise<HistoryPickerItem[]> {
         const state = this.pickerStateOf(clientId);
-        const batch = state.historyFiles.slice(state.historyOffset, state.historyOffset + ChatControllerBase.HISTORY_BATCH_SIZE);
-        state.historyOffset += batch.length;
+        const page = await this.scanSessionPage(state.historyFiles, state.historyOffset, ChatControllerBase.HISTORY_BATCH_SIZE);
+        state.historyOffset = page.nextOffset;
         const current = this.getActive(clientId)?.currentSessionPath;
-        const scanned = await Promise.all(batch.map((f) => scanSessionInfo(f)));
-        return scanned
-            .filter((s): s is SessionListItem => s !== null)
-            // 这一批是按“哪个文件新”取的（文件名里的创建时间），扫完知道各自最后说话是什么时候，
-            // 就按那个排一遍 —— 屏幕上这一屏看上去仍然是“刚聊过的在前面”。
-            .sort((a, b) => b.lastActivity - a.lastActivity)
-            .map((s) => ({ ...s, current: this.samePath(s.file, current) }));
+        return page.items.map((s) => ({ ...s, current: this.samePath(s.file, current) }));
     }
 
     /** 推送历史列表浮层并等待选择（取消返回 undefined）。@param target 指定弹给哪个界面。 */
@@ -1689,9 +1747,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!rt || !rt.isConversationEmpty()) { return; }
         const files = await listSessionFiles(rt.cwd);
         if (files.length === 0) { return; }
+        // 子会话不自动打开：它是别人派出去干活的一轮，不该占着界面。
+        // 文件开头几行就分得出来（见 isChildSessionFile），最多往后试这么多个。
+        let pick: string | undefined;
+        for (const f of files.slice(0, ChatControllerBase.AUTO_LOAD_SKIP_MAX)) {
+            if (!(await isChildSessionFile(f.file))) { pick = f.file; break; }
+        }
+        if (!pick) { return; }
         // 等文件的功夫里这块屏可能又切走了（或那个会话被关了）：别把历史塞进别的会话
         if (this.getActive(clientId)?.id !== rt.id) { return; }
-        await rt.loadSession(files[0].file);
+        await rt.loadSession(pick);
     }
 
     // ========================================================================

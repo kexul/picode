@@ -60,8 +60,8 @@ npm run web:shot -- --width 1000 --height 760 --script dev/toolMerge.js
 # 验会话那套（顶条名字跟着 pi 标题变 / 切会话 / 列表里关会话）：
 npm run web:shot -- --fake-pi --script dev/sessionFlow.js
 
-# 验顶条会话名下拉框里每行那颗关闭叉（点叉先出确认条，再点「关闭」才真关；
-# 点「取消」或者干等 4 秒，确认条自己收回）：
+# 验顶条会话名下拉框里每行那颗关闭叉（点叉先出确认条：整行变红、行尾多一颗勾，
+# 点勾才真关；点叉或者干等 4 秒，确认条自己收回；确认条出来时清单宽度不变）：
 npm run web:shot -- --fake-pi --script dev/sessionMenuClose.js
 
 # 验派子会话（说一句带“派活”的话就会派一个）：跑完自动关、没跑完不关、
@@ -97,16 +97,19 @@ npm run web:shot -- --script dev/askQuestion.js
 # 真扩展那条：先把 dev/askDialogTrigger.ts 复制到 ~/.pi/agent/extensions/，跑完删掉
 npm run web:shot -- --script dev/askDialog.js
 
-# 验输入框角上那颗「继续」（闲着时露面、点它直接发一条“继续”且输入框里打了一半的字留着、
-# 生成中那颗位置换成“停止生成”、跑完再换回来；假模型得每轮停一下才看得见生成中那一下）：
-FAKEPI_THINK_MS=1200 npm run web:shot -- --fake-pi --script dev/continueBtn.js
+# 验消息流末尾那条「继续」（空会话不露面；一轮跑完在末尾露面、点它直接发一条“继续”
+# 且输入框里打了一半的字留着、点完先收起来防连点、生成中不露面、再跑完又回到末尾；
+# 假模型得每轮停一下才看得见生成中那一下）：
+FAKEPI_THINK_MS=1200 npm run web:shot -- --fake-pi --script dev/continueHint.js
 
-# 验断线重连（锁屏 / 切后台 / 断网 / 反复锁屏 / 反复弄断连接）：
+# 验断线重连（锁屏 / 切后台 / 断网 / 反复锁屏 / 反复弄断连接 / 断线期间问的选择题）：
 #   场景一 冻住、场景二 断网、场景三 冻住+断网、场景四 反复冻住解冻、
 #   场景五 反复把连接弄断（验序号补发不重不漏）、
-#   场景六 锁屏期间连接悄悄断了（正文到了、尾巴丢了），回来页面自己重开连接补回丢失的消息
+#   场景六 锁屏期间连接悄悄断了（正文到了、尾巴丢了），回来页面自己重开连接补回丢失的消息、
+#   场景七 断线那段里模型问的选择题（连接悄悄死掉、卡片没送到），回来重连后卡片要补上、能答
 node dev/reconnect.js                    # 全部
 node dev/reconnect.js --scene taillost    # 只跑某一个（逗号可写多个）
+node dev/reconnect.js --scene askcard     # 只跑场景七（断线期间问的选择题）
 RECON_HOLD_MS=60000 node dev/reconnect.js --scene both   # 锁屏时长自己定（毫秒）
 
 # 看浏览器本来的滚动条（截图默认把滚动条藏起来；查“输入框冒出一根滚动条”这类毛病要打开）：
@@ -123,8 +126,15 @@ node dev/perfProbe.js --batch 30                           # 打开长会话时�
 # 逐个样例对一下“按块渲染出来的文字”跟“整段渲染的文字”是否一字不差：
 node dev/markdownBlocksCheck.js
 
-# 验「项目与会话」面板（顶条最右边那颗 <<<）：打开 → 两块各是几行 → 两块各点一次「加载更多」→ 截图：
-npm run web:shot -- --script dev/workspacePanel.js
+# 验「项目与会话」面板（顶条最右边那颗 <<<）：
+# 正在对话一段、工作区那块的展开 / 收起、组里的「加载更多」、行尾那颗加号新建会话、
+# 标题右边那颗加号（挑文件夹）、子会话不显示，一次过一遍：
+npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/workspacePanel.js
+
+# 验宽窗下常驻的侧边栏（窗口 ≥ 900px）：开页面右边就是一列（不当浮层、不盖对话）、
+# 点 <<< 收起、刷新后还是收起（记住了）、点面板里的行面板不关、开别的浮层时那一列的位置留着；
+# 同一趟里把视口改成手机宽再看一次：那一列整个不见，点 <<< 是原来的抽屉：
+npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js
 
 # 量那颗 <<< 打开一次要多少毫秒、滑入动画顺不顺（长任务 = 一眼能看出的停顿）：
 # 默认按手机的样子量（412x915@3x、CPU 降速 4 倍）：
@@ -179,16 +189,17 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `browserHost.js` | `npm run web:dev` 的入口：起服务后常驻 |
 | `visit.js` | `npm run web:shot` 的入口：按动作跑一遍并截图 |
 | `focusCheck.js` | 验“每块屏各看各的会话”（两块浏览页面 + 模拟的 VSCode 窗口）：`node dev/focusCheck.js` |
-| `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接）：`node dev/reconnect.js` |
+| `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接 / 断线期间问的选择题）：`node dev/reconnect.js` |
 | `childDot.js` | 验顶条那颗小点（子会话在跑时父会话那颗点也呼吸；它与箭头落在两行中间）：`npm run web:shot -- --script dev/childDot.js` |
 | `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |
 | `thinkTipPerf.js` | 验 `think` 提示框开着时思考边流边长的开销与表现（节流、跟着贴底、往回滚就不跟）：`npm run web:shot -- --fake-pi --script dev/thinkTipPerf.js` |
-| `continueBtn.js` | 验输入框角上的「继续」（点它发一条“继续”、打的字留着、生成中换成“停止生成”）：`FAKEPI_THINK_MS=1200 npm run web:shot -- --fake-pi --script dev/continueBtn.js` |
+| `continueHint.js` | 验消息流末尾那条「继续」（空会话不露面、跑完在末尾露面、点它发一条“继续”、打的字留着、生成中收起来）：`FAKEPI_THINK_MS=1200 npm run web:shot -- --fake-pi --script dev/continueHint.js` |
 | `askCards.js` | 验问话卡片（长在消息流里）：假 pi 演模型调 `ask_choice` 与扩展问用户，单选 / 多选 / 自己写 / 停止生成 / 确认 / 输入 / 选一个 / 刷新页面各走一遍：`npm run web:shot -- --fake-pi --script dev/askCards.js` |
 | `askQuestion.js` | 同上但那一条是真路的：真模型 → 真 pi（插件给它 `-e` 了桥扩展）→ 卡片 → 回话文件 → 工具结果（慢） |
 | `askDialog.js` + `askDialogTrigger.ts` | 验真扩展问的“要你打字 / 要你点是或否 / 选一个”：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |
-| `sessionMenuClose.js` | 验顶条会话名下拉框里每行的关闭叉（确认条 / 取消 / 超时 / 真关掉）：`npm run web:shot -- --fake-pi --script dev/sessionMenuClose.js` |
-| `workspacePanel.js` | 验「项目与会话」面板（那颗 `<<<`）：打开、两块各几行、两块各点一次「加载更多」、截图：`npm run web:shot -- --script dev/workspacePanel.js` |
+| `sessionMenuClose.js` | 验顶条会话名下拉框里每行的关闭叉（确认条那颗勾 / 那颗叉 / 超时 / 真关掉 / 宽度不变）：`npm run web:shot -- --fake-pi --script dev/sessionMenuClose.js` |
+| `workspacePanel.js` | 验「项目与会话」面板（那颗 `<<<`）：正在对话一段、工作区那块的展开 / 收起（含记住）、组里的「加载更多」、行尾加号新建会话、标题右边那颗加号、子会话不显示：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/workspacePanel.js` |
+| `sidebarDock.js` | 验宽窗下常驻的侧边栏（`<<<`，窗口 ≥ 900px 才常驻）：打开 / 收起 / 记住收起 / 两根横线对齐 / 点行不关面板 / 开别的浮层时那一列原样留着 / 工作区那两块「加载更多」/ 改窄再拉宽，一次过一遍：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js` |
 | `sidebarPerf.js` | 量那颗 `<<<` 打开一次多少毫秒、滑入动画有没有被顶住（长任务 / 逐帧间隔）：`npm run web:shot -- --script dev/sidebarPerf.js` |
 | `options.js` | 两条命令共用的命令行参数 |
 | `fakePi.js` | 假的 pi（`--fake-pi` 用）：协议跟真 pi 一样，模型换成按剧本演戏，界面调试秒回。说一句「问单选 / 问多选 / 问确认 / 问输入 / 问选项」就演一次问话 |

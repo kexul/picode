@@ -7,7 +7,7 @@
  *     （浏览器原生的推送流）收；重连、心跳、断线补发都归它管。
  *  2. 插件里的对话面板（与浏览器页面同源的那份界面，由 chatHtml.ts 加载）：
  *     通道保持网页视图的 postMessage 不变（chat.js 感觉不到），只取三样：
- *     网页端的界面件（桌面截图 / <<< / 输入框角上的「继续」和「停止生成」两颗按钮）、
+ *     网页端的界面件（桌面截图 / <<< / 输入框角上的「停止生成」）、
  *     一行起步的输入框、按配置上色（显示选项里的「界面颜色」，浅 / 深两套调色板见下面）。
  *
  * chat.js 认的是 VSCode 网页视图那套通道：往外发用 acquireVsCodeApi().postMessage，
@@ -709,28 +709,26 @@
     btn.id = "browserMenuBtn";
     btn.innerHTML = ICON_MENU_LEFT;
     btn.title = "项目与会话";
-    btn.addEventListener("click", function () { enqueue({ type: "openWorkspace" }); });
+    // 窗口够宽时它是常驻那一列的开 / 关（点一下收起、再点一下展开，记在这台设备里），
+    // 窄窗照旧是“弹一次抽屉”。两套都由 chat.js 管（那边知道该走哪套），
+    // 这里只在它还没装好时退回老行为（刚打开那一瞬）。
+    btn.addEventListener("click", function () {
+      var sidebar = window.pichatSidebar;
+      if (sidebar && typeof sidebar.toggle === "function") { sidebar.toggle(); return; }
+      enqueue({ type: "openWorkspace" });
+    });
     bar.appendChild(btn);
   })();
 
   // ==================== 输入框的小改动 ====================
-  // 输入框右下角那两颗小按钮（「继续」在「停止生成」左边一格），同一时刻只露面一颗（显示与隐藏由 chat.js
-  // 按当前会话的状态控制，那边会来找 #continueBtn / #stopBtn）：
-  //   - “继续”：会话闲着且已就绪时露面，点它直接发一条“继续”（不进输入框，打了一半的字留着）；
-  //   - “停止生成”：生成中露面，手机没有 Esc，否则中止不了（VSCode 里本来也有 Esc，不冲突）。
-  // 插件里的对话面板配上它们之后与浏览器页面完全一致。
+  // 输入框右下角那颗“停止生成”：生成中露面（显示与隐藏由 chat.js 按当前会话的状态控制，
+  // 那边会来找 #stopBtn）。手机没有 Esc，否则中止不了（VSCode 里本来也有 Esc，不冲突）。
+  // （会话闲着时那条「继续」不在这里 —— 它长在消息流末尾，由 chat.js 自己建，
+  //   见那边 syncContinueHint 的说明。）
+  // 插件里的对话面板配上它之后与浏览器页面完全一致。
   (function () {
     var row = document.getElementById("inputRow");
     if (!row) { return; }
-    var cont = document.createElement("button");
-    cont.type = "button";
-    cont.id = "continueBtn";
-    cont.className = "hidden";
-    cont.textContent = "继续";
-    cont.title = "发送一条“继续”";
-    cont.setAttribute("aria-label", "继续");
-    row.appendChild(cont);
-
     var stop = document.createElement("button");
     stop.type = "button";
     stop.id = "stopBtn";

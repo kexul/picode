@@ -71,6 +71,14 @@ export function renderHTML(opts: RenderHTMLOpts): string {
     const bodyTop = opts.extraBodyTop ? `  ${opts.extraBodyTop}\n` : "";
     const bodyBottom = opts.extraBodyBottom ? `  ${opts.extraBodyBottom}\n` : "";
 
+    // 对话那一列（顶条 + 消息 + 输入框）包在 #chatColumn 里：宽窗下「项目与会话」
+    // 常驻右侧时，body 变成横排，让出右边那一列（见 chat.css 末尾那段）。
+    // 窄窗（手机、VSCode 面板）里它只是 body 唯一的孩子，铺满整屏，跟以前一样。
+    // 常驻那一列是它自己的容器（#sidebarDock），跟浮层里的抽屉共用一套类名，
+    // 版式只写一份（见 chat.css 末尾那段）。
+    const chatColumnOpen = `  <div id="chatColumn">\n`;
+    const chatColumnClose = `  </div>\n`;
+
     return `<!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -82,7 +90,7 @@ ${opts.chatCss}
 </style>
 ${head}</head>
 <body>
-${bodyTop}${sessionBar}  <div id="messages">
+${bodyTop}${chatColumnOpen}${sessionBar}  <div id="messages">
     <button id="jumpBottom" class="hidden" title="跳到最新" aria-label="跳到最新">${ICON_ARROW_DOWN}</button>
   </div>
   <div id="inputArea">
@@ -95,13 +103,20 @@ ${bodyTop}${sessionBar}  <div id="messages">
       <textarea id="input" rows="1"></textarea>
     </div>
   </div>
-  <div id="pickerOverlay" class="hidden">
-    <div id="pickerPanel">
-      <div id="pickerHeader"><span id="pickerTitle">选择</span></div>
-      <div id="pickerSubtitle" class="hidden"></div>
-      <div id="pickerSearchWrap"><input id="pickerSearch" type="text" placeholder="筛选…" autocomplete="off" spellcheck="false" /></div>
-      <div id="pickerBody"></div>
-      <div id="pickerFooter" class="hidden"></div>
+${chatColumnClose}  <div id="sidebarDock" class="pk-host pk-drawer pk-workspace">
+    <div id="dockPanel" class="pk-panel">
+      <div id="dockHeader" class="pk-header"><span id="dockTitle" class="pk-header-title">项目与会话</span></div>
+      <div id="dockBody" class="pk-body"></div>
+      <div id="dockFooter" class="pk-footer hidden"></div>
+    </div>
+  </div>
+  <div id="pickerOverlay" class="pk-host hidden">
+    <div id="pickerPanel" class="pk-panel">
+      <div id="pickerHeader" class="pk-header"><span id="pickerTitle" class="pk-header-title">选择</span></div>
+      <div id="pickerSubtitle" class="pk-subtitle hidden"></div>
+      <div id="pickerSearchWrap" class="pk-search-wrap"><input id="pickerSearch" class="pk-search" type="text" placeholder="筛选…" autocomplete="off" spellcheck="false" /></div>
+      <div id="pickerBody" class="pk-body"></div>
+      <div id="pickerFooter" class="pk-footer hidden"></div>
     </div>
   </div>
   <div id="settingsOverlay" class="hidden">

@@ -23,8 +23,15 @@ export type DesktopScreenshotResult =
 /** PowerShell 的超时。正常一两秒就该完事，留足余量；到点进程会被杀掉。 */
 const POWERSHELL_TIMEOUT_MS = 20000;
 
-/** 长边超过这个像素就等比缩小（覆盖 2560×1440 及单块 4K 竖向拼接的常见情形）。 */
-const JPEG_MAX_EDGE = 2560;
+/**
+ * 长边超过这个像素就等比缩小。
+ *
+ * 拿到手机上「看一眼桌面」用不着全分辨率，1600 已经能看清窗口标题和菜单。
+ * 实测（2560×1179 的桌面）：2560 出来约 720KB，1600 约 340KB、1280 约 230KB；
+ * 而 base64 之后还要再涨三分之一（720KB → 960KB），手机网络下差别明显，
+ * 所以宁可截小一点，也不靠后面压（JPEG 已经压过了，压不动）。
+ */
+const JPEG_MAX_EDGE = 1600;
 
 /** 截一张桌面。永远不 reject：失败也以 ok: false 的结果返回。 */
 export async function captureDesktopScreenshot(): Promise<DesktopScreenshotResult> {

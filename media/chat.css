@@ -7,6 +7,7 @@
     color: var(--vscode-foreground);
     background: var(--vscode-editor-background);
   }
+  #chatColumn { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
   #messages { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
   /* 一个会话一层壳：消息窗格（.session-pane）滚，底下一行状态栏。 */
   .session-view { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
@@ -36,6 +37,7 @@
      左右三颗按钮竖着撑满整条（align-self: stretch），上下留白由顶条的内边距给。 */
   #sessionBar {
     display: flex; align-items: flex-start; gap: 6px; flex: 0 0 auto;
+    box-sizing: border-box;   /* 常驻侧边栏开着时它的高度会被写成一个整数（见 chat.js 的 syncDockHeaderHeight） */
     padding: 5px 8px 4px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
   }
   /* 中间那块（名字 + 目录两行）合起来是一块可点区域：点哪一行都开同一张清单，
@@ -144,15 +146,20 @@
   }
   #sessionMenu .sm-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
   @media (hover: none) { #sessionMenu .sm-close { opacity: 0.6; } }
-  /* 确认条：整行变成「关闭「名字」？ 关闭 / 取消」，跟普通行长得完全不一样，防误触。 */
+  /* 确认条：整行底色变红，行里的名字与目录照旧，只是行尾那颗叉旁边多一颗勾
+     （点勾才真关、点叉撤销）。行里的东西不变多，整张清单的宽窄就不会跟着抽
+     —— 那份宽度在点叉那一下已经钉住（见 chat.js 的 placeSessionMenu）。 */
   #sessionMenu .sm-item.sm-confirm { background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 12%, transparent); color: var(--vscode-foreground); cursor: default; }
-  #sessionMenu .sm-confirm .sm-ask { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9em; }
   #sessionMenu .sm-confirm button {
-    flex: none; padding: 2px 10px; border-radius: 4px; cursor: pointer;
-    font-family: inherit; font-size: 0.92em; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4));
-    background: transparent; color: var(--vscode-foreground);
+    flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; padding: 0; border: 0; border-radius: 3px;
+    background: transparent; color: var(--vscode-foreground); cursor: pointer;
   }
-  #sessionMenu .sm-confirm .sm-yes { background: var(--vscode-button-background, #0e639c); color: var(--vscode-button-foreground, #fff); border-color: transparent; }
+  #sessionMenu .sm-confirm button:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
+  /* 勾用绿色（确认）、叉淡一点（撤销）：一眼分得清哪颗是关、哪颗是算了 */
+  #sessionMenu .sm-confirm .sm-yes { color: var(--vscode-charts-green, #3fb950); }
+  #sessionMenu .sm-confirm .sm-no { opacity: 0.7; }
+  #sessionMenu .sm-confirm .sm-no:hover { opacity: 1; }
   /* 正文内的文件路径可点击链接：跳转打开对应文件 */
   .file-link { color: var(--vscode-textLink-foreground, #3794ff); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
   .file-link:hover { text-decoration: underline; opacity: 0.85; }
@@ -374,6 +381,30 @@
   .tag-tip .edit-diff { margin-top: 6px; }
   .tag-tip .tip-err { margin-top: 6px; color: var(--vscode-errorForeground, #f48771); }
   .tag-tip .tip-loading { margin-top: 6px; opacity: 0.7; }
+  /* 会话闲着、能接着往下走时，消息流末尾那条「继续」（按钮由 chat.js 建，见 syncContinueHint）：
+     点它直接发一条“继续”。跟顶上那颗「加载更早的消息」是一对 —— 一尾一头，同款细描边小胶囊。
+
+     为什么不做成输入框那一带的按钮：那颗摆在哪里都碍事 —— 占着打字的地方，又跟“停止生成”
+     挤同一个角（“继续”带字比停止图标宽，露面时还得给输入框右边补一截留白）。挂在消息流末尾，
+     位置跟着对话走，谁都不挡。
+
+     margin: auto 让它水平居中（宽窗下限宽那一列也一样，见本文件末尾那段：
+     那里给的 margin-left/right: auto 与这里同向）。 */
+  .msg-continue {
+    display: flex; align-items: center; gap: 5px;
+    width: fit-content; margin: 12px auto 6px; padding: 4px 14px;
+    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35));
+    border-radius: 999px; background: transparent;
+    color: var(--vscode-descriptionForeground, #999);
+    font-family: var(--vscode-font-family); font-size: 0.85em; line-height: 1.45;
+    cursor: pointer;
+  }
+  .msg-continue:hover {
+    color: var(--vscode-foreground, #ccc);
+    background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12));
+  }
+  .msg-continue svg { width: 13px; height: 13px; display: block; flex: none; }
+  .msg-continue.hidden { display: none; }
   /* 顶部「加载更早的消息」按钮（网页端只发最近一段历史，更早的从这里取） */
   .history-more {
     display: block; margin: 10px auto 6px; padding: 4px 14px;
@@ -450,7 +481,7 @@
   }
   #pickerOverlay.hidden, #settingsOverlay.hidden { display: none; }
   /* 统一浮层面板外观（拾取器 / 设置） */
-  #pickerPanel, #settingsPanel {
+  #pickerPanel, #settingsPanel, .pk-panel {
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
     color: var(--vscode-foreground);
     border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border, rgba(128,128,128,0.4)));
@@ -459,60 +490,61 @@
     overflow: hidden;
   }
   /* 通用拾取器浮层（模型 / 历史 / 选项） */
-  #pickerPanel {
-    width: min(720px, 94vw); max-height: 80vh; display: flex; flex-direction: column;
-  }
+  #pickerPanel, .pk-panel { display: flex; flex-direction: column; }
+  #pickerPanel { width: min(720px, 94vw); max-height: 80vh; }
   /* 历史会话：不居中，改成从右侧滑进来的面板。面板整屏高、贴右边，窄一些。 */
-  #pickerOverlay.pk-drawer { align-items: stretch; justify-content: flex-end; }
-  #pickerOverlay.pk-drawer #pickerPanel {
+  .pk-host.pk-drawer { align-items: stretch; justify-content: flex-end; }
+  .pk-host.pk-drawer #pickerPanel {
     width: min(420px, 94vw); max-height: none; height: 100%;
     border-top: 0; border-right: 0; border-bottom: 0; border-radius: 0;
     animation: pk-drawer-in 170ms ease-out;
   }
   @keyframes pk-drawer-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
-  @media (prefers-reduced-motion: reduce) { #pickerOverlay.pk-drawer #pickerPanel { animation: none; } }
-  #pickerHeader {
+  @media (prefers-reduced-motion: reduce) { .pk-host.pk-drawer #pickerPanel { animation: none; } }
+  .pk-header {
     display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
     padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
   }
   /* 面板头部的关闭按钮：跟会话行尾那颗同一颗叉、同一个尺寸。
      不像行尾那颗那样淡着——面板里就这一颗「关」，得一眼看见。 */
-  #pickerHeader #pickerClose {
+  .pk-header .pk-header-close {
     align-self: center; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
     width: 20px; height: 20px; padding: 0; border-radius: 3px;
     background: none; border: none;
     color: var(--vscode-descriptionForeground, inherit); cursor: pointer; line-height: 1;
   }
-  #pickerHeader #pickerClose svg { width: 12px; height: 12px; display: block; }
-  #pickerHeader #pickerClose:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); color: var(--vscode-foreground); }
-  #pickerSearchWrap { padding: 8px 12px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2)); }
-  #pickerSearchWrap.hidden { display: none; }
-  #pickerSearch {
+  .pk-header .pk-header-close svg { width: 12px; height: 12px; display: block; }
+  .pk-header .pk-header-close:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); color: var(--vscode-foreground); }
+  .pk-search-wrap { padding: 8px 12px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2)); }
+  .pk-search-wrap.hidden { display: none; }
+  .pk-search {
     width: 100%; box-sizing: border-box;
     background: var(--vscode-input-background, #fff); color: var(--vscode-input-foreground, inherit);
     border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.4)); border-radius: 4px;
     padding: 6px 8px; font-family: inherit; font-size: inherit;
   }
-  #pickerSearch:focus { outline: none; border-color: var(--vscode-focusBorder, #007acc); }
+  .pk-search:focus { outline: none; border-color: var(--vscode-focusBorder, #007acc); }
   /* 标题下面那行小字（目前只有文件夹选择器用：正在看的是哪个目录）。
      路径长了从前面截、留尾巴（末尾那层目录名是最要紧的那截）。 */
-  #pickerSubtitle {
+  .pk-subtitle {
     padding: 0 12px 8px; font-size: 11px;
     color: var(--vscode-descriptionForeground, inherit); opacity: 0.85;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     direction: rtl; text-align: left;
   }
-  #pickerSubtitle.hidden { display: none; }
-  #pickerBody { overflow-y: auto; padding: 6px 4px; font-size: 0.9em; }
-  #pickerBody::-webkit-scrollbar { width: 8px; }
-  #pickerBody::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 4px; }
+  .pk-subtitle.hidden { display: none; }
+  .pk-body { overflow-y: auto; padding: 6px 4px; font-size: 0.9em; }
+  .pk-body::-webkit-scrollbar { width: 8px; }
+  .pk-body::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 4px; }
   .pk-item {
     display: block; padding: 6px 10px; cursor: pointer; border-radius: 4px; transition: background 120ms;
   }
   .pk-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
+  /* 列表里没有「选中的那一行」这回事了：鼠标停在哪行哪行亮（上面那条 :hover，移开就灭），
+     点哪行算哪行。底下这条 .active 只剩「切换模型」那层里「待应用」的那一行用 */
   .pk-item.active { background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.3)); color: var(--vscode-list-activeSelectionForeground, inherit); }
   .pk-item.current { box-shadow: inset 3px 0 0 0 var(--vscode-focusBorder, #007acc); }
-  /* 模型项：左侧模型信息，右侧仅在当前聚焦项展开推理档位。 */
+  /* 模型项：左侧模型信息，右侧只给「待应用」那一行（.active）铺推理档位。 */
   .pk-model-item {
     display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, 220px);
     align-items: center; gap: 14px; min-height: 58px; padding: 8px 10px;
@@ -553,173 +585,207 @@
   .pk-loadmore:hover:not(:disabled) { opacity: 1; color: var(--vscode-foreground, #ccc); }
   .pk-loadmore:disabled { opacity: 0.45; cursor: default; }
   /* ==== 抽屉面板（历史 / 项目与会话）的排版：只在 pk-drawer 下生效，居中的模型/选项拾取器不受影响 ==== */
-  #pickerOverlay.pk-drawer #pickerHeader { align-items: center; padding: 10px 8px 10px 14px; }
-  #pickerOverlay.pk-drawer #pickerHeader #pickerTitle { font-size: 13px; }
-  #pickerOverlay.pk-drawer #pickerBody { padding: 2px 8px 12px; font-size: 13px; }
-  #pickerOverlay.pk-drawer .pk-item { padding: 7px 10px; border-radius: 5px; }
+  .pk-host.pk-drawer .pk-header { align-items: center; padding: 10px 8px 10px 14px; }
+  .pk-host.pk-drawer .pk-header .pk-header-title { font-size: 13px; }
+  .pk-host.pk-drawer .pk-body { padding: 2px 8px 12px; font-size: 13px; }
+  .pk-host.pk-drawer .pk-item { padding: 7px 10px; border-radius: 5px; }
   /* 当前会话 / 当前工作区：不用选中也能认出来（左侧细条由 .current 的 inset 阴影给，这里补一层淡底色） */
-  #pickerOverlay.pk-drawer .pk-item.current {
+  .pk-host.pk-drawer .pk-item.current {
     background: var(--vscode-list-inactiveSelectionBackground, rgba(128,128,128,0.12));
   }
-  /* 悬停 / 键盘选中得比「当前」那层底色更重，光标走到这一行上才看得出变化
+  /* 鼠标停在「当前」那一行上：比它那层淡底色更重，才看得出变化
      （项目与会话面板自己有另一套灰底规则，写在下面，会盖掉这条） */
-  #pickerOverlay.pk-drawer .pk-item.current.active,
-  #pickerOverlay.pk-drawer .pk-item.current:hover {
+  .pk-host.pk-drawer .pk-item.current:hover {
     background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.3));
     color: var(--vscode-list-activeSelectionForeground, inherit);
   }
   /* 分节标题（正在对话 / 历史会话 / 工作区）：左对齐，上面一条细线把它跟上一节断开；
      标题用正文字色（原来是一行居中、低对比度的灰字，三节看着一样）。 */
-  #pickerOverlay.pk-drawer .pk-section {
+  .pk-host.pk-drawer .pk-section {
     margin: 14px 8px 5px; padding: 10px 0 0; text-align: left;
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35));
     font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: none;
     color: var(--vscode-foreground); opacity: 0.9;
   }
   /* 第一节上面不画线：面板头自己就有一条，再画就是双线 */
-  #pickerOverlay.pk-drawer .pk-section:first-child { margin-top: 4px; padding-top: 4px; border-top: 0; }
+  .pk-host.pk-drawer .pk-section:first-child { margin-top: 4px; padding-top: 4px; border-top: 0; }
   /* 项目与会话单独按 VS Code 资源管理器的密度画；历史会话抽屉保持原样。 */
-  #pickerOverlay.pk-workspace .pk-item { min-height: 22px; padding: 3px 8px; border-radius: 0; }
-  /* 当前会话 / 当前工作区这两行：底色和左边那条 3px 蓝边跟上面 pk-drawer 那条同款，不在这里覆盖 */
-  /* 悬停 / 键盘上下键选中：所有行同一层灰底反馈；走到「当前」那一行上换更重的选中色 */
-  #pickerOverlay.pk-workspace .pk-item.active {
-    background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18));
-    color: inherit;
-  }
-  #pickerOverlay.pk-workspace .pk-item.current.active {
-    background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.3));
-    color: inherit;
-  }
-  #pickerOverlay.pk-workspace #pickerBody.pk-workspace-body {
+  .pk-host.pk-workspace .pk-item { min-height: 22px; padding: 3px 8px; border-radius: 0; }
+  /* 当前会话 / 当前工作区这两行：底色和左边那条 3px 蓝边跟上面 pk-drawer 那条同款，不在这里覆盖；
+     鼠标停在上面只走上面那条 .pk-item.current:hover */
+  .pk-host.pk-workspace .pk-body.pk-workspace-body {
     display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0;
     padding: 0; overflow: hidden;
   }
-  /* 会话和工作区各自滚动；滚动一个区域不会带走另一个区域。 */
-  #pickerOverlay.pk-workspace .pk-workspace-pane {
-    flex: 1 1 0; min-height: 0; overflow-y: auto; padding: 2px 8px 8px;
+  /* 会话和工作区各自滚动；滚动一个区域不会带走另一个区域。
+     「正在对话」按内容占高（开着的会话一般就几条），最多占一半；工作区那一块吃剩下的：
+     开着的会话多了，也不会把它挤成一个窄条。 */
+  .pk-host.pk-workspace .pk-workspace-pane {
+    min-height: 0; overflow-y: auto; padding: 2px 8px 8px;
   }
-  #pickerOverlay.pk-workspace .pk-space-pane {
+  .pk-host.pk-workspace .pk-session-pane { flex: 0 0 auto; max-height: 45%; }
+  .pk-host.pk-workspace .pk-space-pane {
+    flex: 1 1 auto;
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
   }
   /* ==== 文件夹选择器（一层一层追目录那个）：按 VS Code 资源管理器的列表画：
-     每行就一行（行首一格图标 + 名字）、行矮、选中是方角的整行底色；不给筛选框。==== */
-  #pickerOverlay.pk-folders #pickerPanel { width: min(560px, 94vw); max-height: 76vh; }
-  #pickerOverlay.pk-folders #pickerHeader { align-items: center; padding: 8px 12px 2px; border-bottom: 0; }
-  #pickerOverlay.pk-folders #pickerHeader #pickerTitle { font-size: 13px; }
+     每行就一行（行首一格图标 + 名字）、行矮、鼠标停在哪行哪行是方角的整行底色；不给筛选框。==== */
+  .pk-host.pk-folders #pickerPanel { width: min(560px, 94vw); max-height: 76vh; }
+  .pk-host.pk-folders .pk-header { align-items: center; padding: 8px 12px 2px; border-bottom: 0; }
+  .pk-host.pk-folders .pk-header .pk-header-title { font-size: 13px; }
   /* 这一格的分割线改挂在目录那条下面（标题与目录之间不再画线） */
-  #pickerOverlay.pk-folders #pickerSubtitle { padding-bottom: 8px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2)); }
-  #pickerOverlay.pk-folders #pickerBody { padding: 4px 0 8px; font-size: 13px; }
-  #pickerOverlay.pk-folders .pk-item { padding: 3px 12px; border-radius: 0; }
+  .pk-host.pk-folders .pk-subtitle { padding-bottom: 8px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2)); }
+  .pk-host.pk-folders .pk-body { padding: 4px 0 8px; font-size: 13px; }
+  .pk-host.pk-folders .pk-item { padding: 3px 12px; border-radius: 0; }
   /* 图标与名字挨得比抽屉里紧一点（抽屉的一行里还有颗状态点，这一行只有图标加名字） */
-  #pickerOverlay.pk-folders .pk-history-main { gap: 6px; }
-  /* 键盘上下键走到哪一行、鼠标停在哪一行：都是这层整行的选中色（方角，跟资源管理器一样） */
-  #pickerOverlay.pk-folders .pk-item.active {
-    background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.3));
-    color: var(--vscode-list-activeSelectionForeground, inherit);
-  }
+  .pk-host.pk-folders .pk-history-main { gap: 6px; }
   /* ---- 列表上半段「正在对话」：现在开着的会话 ---- */
   /* 一行里：小点 · 名字 · 标记 · 关闭叉（叉在最右边，不会跟名字挤在一起）。 */
-  #pickerOverlay.pk-drawer .pk-item.pk-open { display: flex; align-items: center; gap: 4px; }
-  #pickerOverlay.pk-drawer .pk-item.pk-open .pk-history-main { flex: 1 1 auto; min-width: 0; }
+  .pk-host.pk-drawer .pk-item.pk-open { display: flex; align-items: center; gap: 4px; }
+  .pk-host.pk-drawer .pk-item.pk-open .pk-history-main { flex: 1 1 auto; min-width: 0; }
   /* 行首一颗小点：在跑＝蓝点呼吸；有新消息＝蓝点不闪；出错＝红点；其余不显示。 */
-  #pickerOverlay.pk-drawer .pk-item.pk-open .pk-open-dot {
+  .pk-host.pk-drawer .pk-item.pk-open .pk-open-dot {
     flex: none; width: 7px; height: 7px; border-radius: 50%; margin-right: 2px;
     background: transparent; align-self: center;
   }
-  #pickerOverlay.pk-drawer .pk-item.pk-open .pk-open-dot.running {
+  .pk-host.pk-drawer .pk-item.pk-open .pk-open-dot.running {
     background: var(--vscode-charts-blue, #3794ff); animation: pi-pulse 1.2s ease-in-out infinite;
   }
-  #pickerOverlay.pk-drawer .pk-item.pk-open .pk-open-dot.error { background: var(--vscode-charts-red, #f14c4c); }
-  #pickerOverlay.pk-drawer .pk-item.pk-open .pk-open-dot.unread { background: var(--vscode-charts-blue, #3794ff); }
+  .pk-host.pk-drawer .pk-item.pk-open .pk-open-dot.error { background: var(--vscode-charts-red, #f14c4c); }
+  .pk-host.pk-drawer .pk-item.pk-open .pk-open-dot.unread { background: var(--vscode-charts-blue, #3794ff); }
   /* 子会话：名字前面一个拐角箭头（“↳”），再把缩进减到一点点 ——
      箭头的竖笔就落在父会话那一行的左边缘下头，看着像从上面分出来的。 */
-  #pickerOverlay.pk-drawer .pk-item.pk-open-child { padding-left: 4px; }
+  .pk-host.pk-drawer .pk-item.pk-open-child { padding-left: 4px; }
   /* 子会话这一行里箭头 · 状态点 · 名字 挨得紧一点（基础行距是 10px，看着太散） */
-  #pickerOverlay.pk-drawer .pk-item.pk-open-child .pk-history-main { gap: 4px; }
-  #pickerOverlay.pk-drawer .pk-item.pk-open-child .pk-open-arrow {
+  .pk-host.pk-drawer .pk-item.pk-open-child .pk-history-main { gap: 4px; }
+  .pk-host.pk-drawer .pk-item.pk-open-child .pk-open-arrow {
     flex: none; display: inline-flex; align-items: center; align-self: center;
     opacity: 0.7; color: var(--vscode-foreground);
   }
-  #pickerOverlay.pk-drawer .pk-item.pk-open-child .pk-open-arrow svg { display: block; }
-  #pickerOverlay.pk-drawer .pk-item.pk-open-child .pk-history-title { opacity: 0.9; }
+  .pk-host.pk-drawer .pk-item.pk-open-child .pk-open-arrow svg { display: block; }
+  .pk-host.pk-drawer .pk-item.pk-open-child .pk-history-title { opacity: 0.9; }
   /* 行尾不摆「当前」/「在跑」小标记：当前那条整行有底色，在跑 / 有新消息看行首那颗小点 */
   /* 历史行上的“已打开”：它对应的会话已经开着了，在「正在对话」里能找到。 */
-  #pickerOverlay.pk-drawer .pk-open-tag {
+  .pk-host.pk-drawer .pk-open-tag {
     font-size: 10.5px; line-height: 1; padding: 2px 6px; border-radius: 8px;
     border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.45)); opacity: 0.8;
   }
   /* 行尾那颗关闭叉：平时淡、悬停 / 触屏上变清楚（点击后还要再确认一下）。 */
-  #pickerOverlay.pk-drawer .pk-item.pk-open .pk-open-close {
+  .pk-host.pk-drawer .pk-item.pk-open .pk-open-close {
     flex: none; display: inline-flex; align-items: center; justify-content: center;
     width: 20px; height: 20px; margin-left: 2px; border-radius: 3px;
     opacity: 0.45; align-self: center;
   }
-  #pickerOverlay.pk-drawer .pk-item.pk-open .pk-open-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
-  @media (hover: none) { #pickerOverlay.pk-drawer .pk-item.pk-open .pk-open-close { opacity: 0.6; } }
-  /* 确认条：整行变成“关闭？关闭 / 取消”，跟普通行长得完全不一样，防误触。 */
-  #pickerOverlay.pk-drawer .pk-item.pk-open-confirm { background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 12%, transparent); }
-  #pickerOverlay.pk-drawer .pk-item.pk-open-confirm .pk-open-bar { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; }
-  #pickerOverlay.pk-drawer .pk-item.pk-open-confirm .pk-open-ask {
-    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  .pk-host.pk-drawer .pk-item.pk-open .pk-open-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
+  @media (hover: none) { .pk-host.pk-drawer .pk-item.pk-open .pk-open-close { opacity: 0.6; } }
+  /* 确认条：整行底色变红，行里的名字（子会话连拐角箭头）照旧，只是行尾那颗叉旁边多一颗勾
+     （点勾才真关、点叉撤销）。
+     底色这条要写得长一点（连 .pk-open 一起写）：面板自己那套「鼠标停在当前那一行上」的蓝底
+     比普通规则更重，不这么写光标一放到这一行上红色就被盖掉了。 */
+  .pk-host.pk-drawer .pk-item.pk-open.pk-open-confirm {
+    background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 12%, transparent);
+    color: var(--vscode-foreground);
   }
-  #pickerOverlay.pk-drawer .pk-item.pk-open-confirm button {
-    flex: none; padding: 2px 10px; border-radius: 4px; cursor: pointer;
-    font-family: inherit; font-size: 0.92em; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4));
-    background: transparent; color: var(--vscode-foreground);
+  /* 光标停在这一行上：还是红的，稍重一点（看得出光标在这儿） */
+  .pk-host.pk-drawer .pk-item.pk-open.pk-open-confirm:hover {
+    background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 22%, transparent);
+    color: var(--vscode-foreground);
   }
-  #pickerOverlay.pk-drawer .pk-item.pk-open-confirm .pk-open-yes {
-    background: var(--vscode-button-background, #0e639c); color: var(--vscode-button-foreground, #fff); border-color: transparent;
+  .pk-host.pk-drawer .pk-item.pk-open-confirm button {
+    flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; padding: 0; border: 0; border-radius: 3px;
+    background: transparent; color: var(--vscode-foreground); cursor: pointer;
   }
+  .pk-host.pk-drawer .pk-item.pk-open-confirm button:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
+  /* 勾用绿色（确认）、叉淡一点（撤销）：一眼分得清哪颗是关、哪颗是算了 */
+  .pk-host.pk-drawer .pk-item.pk-open-confirm .pk-open-yes { color: var(--vscode-charts-green, #3fb950); }
+  .pk-host.pk-drawer .pk-item.pk-open-confirm .pk-open-no { opacity: 0.7; }
+  .pk-host.pk-drawer .pk-item.pk-open-confirm .pk-open-no:hover { opacity: 1; }
   /* 行内图标（加号 / 文件夹）：固定宽度，名字对得齐 */
-  #pickerOverlay.pk-drawer .pk-row-icon,
-  #pickerOverlay.pk-folders .pk-row-icon {
+  .pk-host.pk-drawer .pk-row-icon,
+  .pk-host.pk-folders .pk-row-icon {
     flex: none; width: 14px; height: 14px; align-self: center;
     display: inline-flex; opacity: 0.8;
   }
-  #pickerOverlay.pk-drawer .pk-row-icon svg,
-  #pickerOverlay.pk-folders .pk-row-icon svg { width: 14px; height: 14px; display: block; }
-  /* 动作行（新建会话 / 浏览文件夹…）：强调色文字，一眼看出不是普通记录；
-    选中时也用这个颜色：选中背景是悬浮灰，改成“选中前景色”会是白字压浅灰，看不见 */
-  #pickerOverlay.pk-drawer .pk-item.pk-action { color: var(--vscode-textLink-foreground, #3794ff); }
-  #pickerOverlay.pk-drawer .pk-item.pk-action:hover { color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground, #3794ff)); }
-  #pickerOverlay.pk-drawer .pk-item.pk-action.active { color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground, #3794ff)); }
-  #pickerOverlay.pk-drawer .pk-browse-desc {
-    margin: 3px 0 0 24px; font-size: 11px;
-    color: var(--vscode-descriptionForeground, inherit); opacity: 0.85;
-  }
-  /* 工作区行的路径：另起一行整条列出来（同名目录靠它分辨）。一行放不下时从前面截、留尾巴：
-     父目录那一段优先保住（末尾的文件夹名上面那行就是，截掉不心疼）。
-     左边截用 direction: rtl（行尾在左边，省略号就落在开头）；文字还是左对齐。 */
-  #pickerOverlay.pk-drawer .pk-space-path {
-    margin: 3px 0 0 24px; font-size: 11px; opacity: 0.55;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    direction: rtl; text-align: left;
-  }
-  /* 「浏览文件夹…」那行的说明文字在项目与会话面板里不占地方（工作区行自己的路径照常显示）。 */
-  #pickerOverlay.pk-workspace .pk-browse-desc { display: none; }
+  .pk-host.pk-drawer .pk-row-icon svg,
+  .pk-host.pk-folders .pk-row-icon svg { width: 14px; height: 14px; display: block; }
   /* 工作区是资源树，不显示会话条数与相对时间；会话仍在右侧保留更新时间。 */
-  #pickerOverlay.pk-workspace .pk-space .pk-history-right { display: none; }
-  #pickerOverlay.pk-drawer .pk-history-count {
+  .pk-host.pk-workspace .pk-space .pk-history-right { display: none; }
+  .pk-host.pk-drawer .pk-history-count {
     font-size: 10.5px; line-height: 1; padding: 2px 6px; border-radius: 8px;
     background: rgba(128,128,128,0.16); opacity: 0.9;
   }
   /* 会话数只是内部统计，不是未读状态；项目与会话里不把它画成一排徽标。 */
-  #pickerOverlay.pk-workspace .pk-history-count { display: none; }
-  #pickerOverlay.pk-drawer .pk-history-right { gap: 8px; }
+  .pk-host.pk-workspace .pk-history-count { display: none; }
+  .pk-host.pk-drawer .pk-history-right { gap: 8px; }
+  /* ==== 「工作区」那一节：标题右边一颗加号（原来是列表里的一行「打开文件夹…」） ==== */
+  .pk-host.pk-workspace .pk-section.pk-section-with-add {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .pk-host.pk-workspace .pk-section .pk-section-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pk-host.pk-workspace .pk-section .pk-section-add-btn {
+    flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; padding: 0; border: 0; border-radius: 3px;
+    background: none; color: var(--vscode-foreground); opacity: 0.65; cursor: pointer;
+  }
+  .pk-host.pk-workspace .pk-section .pk-section-add-btn:hover {
+    opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2));
+  }
+  .pk-host.pk-workspace .pk-section .pk-section-add-btn svg { width: 14px; height: 14px; display: block; }
+  /* ==== 工作区行（组头）：点整行展开 / 收起，行尾那颗加号是在这个目录里开新会话 ==== */
+  /* 行首那个小三角：跟别的折叠地方一样画的是朝右，展开时转 90° 成朝下。 */
+  .pk-host.pk-workspace .pk-item.pk-space-head .pk-space-caret {
+    flex: none; width: 16px; height: 16px; display: inline-flex; align-items: center;
+    align-self: center; opacity: 0.75; transition: transform 120ms ease;
+  }
+  .pk-host.pk-workspace .pk-item.pk-space-head .pk-space-caret svg { display: block; width: 16px; height: 16px; }
+  .pk-host.pk-workspace .pk-item.pk-space-head.expanded .pk-space-caret { transform: rotate(90deg); }
+  /* 工作区行的路径：跟在文件夹名后面同一行（淡淡的），太长从尾巴上截。
+     名字前面那段父目录才是认目录的关键，所以截的是尾巴不是开头。 */
+  .pk-host.pk-workspace .pk-item.pk-space-head .pk-history-title { flex: 0 0 auto; max-width: 45%; }
+  .pk-host.pk-workspace .pk-item.pk-space-head .pk-space-path-inline {
+    flex: 1 1 auto; min-width: 0; font-size: 11px; opacity: 0.55;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* 名字与路径挨得紧一点（基础行距是 10px，看着太散） */
+  .pk-host.pk-workspace .pk-item.pk-space-head .pk-history-main { gap: 7px; }
+  /* 组里那些会话行：缩进到组名下面（看得出是挂在这个工作区里的） */
+  .pk-host.pk-workspace .pk-item.pk-group-session { padding-left: 50px; }
+  /* 那一组的「加载更多」：跟着缩进，不居中（居中会像是工作区那一块的操作） */
+  .pk-host.pk-workspace .pk-loadmore.pk-group-more { margin: 6px 0 6px 50px; }
+  /* 当前工作区那一行本来有一层淡底色：鼠标停在上面时按普通可点行的样子亮一下 */
+  .pk-host.pk-workspace .pk-item.pk-space.current:hover {
+    background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.3));
+  }
+  /* 那颗加号：鼠标停在这一行才露出来（触屏上常显、淡一点，见下面那一条）。 */
+  .pk-host.pk-workspace .pk-item.pk-space .pk-space-add {
+    flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; padding: 0; border: 0; border-radius: 3px; margin-left: 2px;
+    background: none; color: var(--vscode-foreground); cursor: pointer;
+    opacity: 0; align-self: center;
+  }
+  .pk-host.pk-workspace .pk-item.pk-space:hover .pk-space-add { opacity: 0.7; }
+  .pk-host.pk-workspace .pk-item.pk-space .pk-space-add:hover {
+    opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2));
+  }
+  .pk-host.pk-workspace .pk-item.pk-space .pk-space-add svg { width: 14px; height: 14px; display: block; }
+  @media (hover: none) {
+    .pk-host.pk-workspace .pk-item.pk-space .pk-space-add { opacity: 0.55; }
+  }
   /* 底部「设置」：左下角一颗安静的幽灵按钮，不再占满整行 */
-  #pickerOverlay.pk-drawer #pickerFooter.pk-history-footer { padding: 6px 10px; }
-  #pickerOverlay.pk-drawer #pickerFooter.pk-history-footer button {
+  .pk-host.pk-drawer .pk-footer.pk-history-footer { padding: 6px 10px; }
+  .pk-host.pk-drawer .pk-footer.pk-history-footer button {
     flex: 0 0 auto; min-width: 0; padding: 5px 10px;
     display: inline-flex; align-items: center; gap: 7px;
     background: transparent; border: none; border-radius: 4px;
     color: var(--vscode-descriptionForeground, inherit);
     font-size: 12px; text-align: left;
   }
-  #pickerOverlay.pk-drawer #pickerFooter.pk-history-footer button:hover {
+  .pk-host.pk-drawer .pk-footer.pk-history-footer button:hover {
     background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18));
     color: var(--vscode-foreground);
   }
-  #pickerOverlay.pk-drawer #pickerFooter.pk-history-footer button svg { width: 13px; height: 13px; display: block; }
+  .pk-host.pk-drawer .pk-footer.pk-history-footer button svg { width: 13px; height: 13px; display: block; }
 
   /* 设置浮层：模型（models.json）不再在这里配了，面板里只剩插件选项那一页 */
   #settingsPanel {
@@ -755,8 +821,6 @@
     font-size: 11px; line-height: 1; user-select: none; opacity: 1;
   }
   .vo-check svg { width: 11px; height: 11px; display: block; }
-    font-size: 11px; line-height: 1; user-select: none; opacity: 1;
-  }
   .vo-check.on {
     background: var(--vscode-checkbox-background, #0e639c);
     border-color: var(--vscode-focusBorder, #007acc);
@@ -802,21 +866,21 @@
   }
   /* 首个分组紧挨搜索框：压缩上边距 */
   .pk-section.pk-provider:first-child { margin-top: 4px; }
-  #pickerFooter { padding: 8px 12px; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); display: flex; justify-content: flex-end; gap: 8px; }
-  #pickerFooter.hidden { display: none; }
-  #pickerFooter button { min-width: 72px; padding: 4px 14px; border-radius: 4px; cursor: pointer; }
-  #pickerFooter button.secondary { background: var(--vscode-button-secondaryBackground, #f0f0f0); color: var(--vscode-button-secondaryForeground, inherit); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); }
-  #pickerFooter button.primary { background: var(--vscode-button-background, #007acc); color: var(--vscode-button-foreground, #fff); border: 1px solid var(--vscode-button-background, #007acc); }
-  #pickerFooter.pk-model-footer { align-items: center; justify-content: space-between; gap: 12px; }
+  .pk-footer { padding: 8px 12px; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); display: flex; justify-content: flex-end; gap: 8px; }
+  .pk-footer.hidden { display: none; }
+  .pk-footer button { min-width: 72px; padding: 4px 14px; border-radius: 4px; cursor: pointer; }
+  .pk-footer button.secondary { background: var(--vscode-button-secondaryBackground, #f0f0f0); color: var(--vscode-button-secondaryForeground, inherit); border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); }
+  .pk-footer button.primary { background: var(--vscode-button-background, #007acc); color: var(--vscode-button-foreground, #fff); border: 1px solid var(--vscode-button-background, #007acc); }
+  .pk-footer.pk-model-footer { align-items: center; justify-content: space-between; gap: 12px; }
   .pk-footer-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.78; font-size: 0.84em; }
   .pk-footer-actions { display: flex; flex: none; gap: 8px; }
   /* 历史会话面板底部的「设置」一行：左对齐、占满整行 */
-  #pickerFooter.pk-history-footer { justify-content: flex-start; }
-  #pickerFooter.pk-history-footer button { flex: 1 1 auto; min-width: 0; padding: 6px 12px; text-align: left; }
+  .pk-footer.pk-history-footer { justify-content: flex-start; }
+  .pk-footer.pk-history-footer button { flex: 1 1 auto; min-width: 0; padding: 6px 12px; text-align: left; }
   @media (max-width: 560px) {
     .pk-model-item { grid-template-columns: 1fr; gap: 7px; }
     .pk-model-thinking.has-content { padding-left: 0; padding-top: 7px; border-left: 0; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); }
-    #pickerFooter.pk-model-footer { align-items: stretch; flex-direction: column; }
+    .pk-footer.pk-model-footer { align-items: stretch; flex-direction: column; }
     .pk-footer-actions { justify-content: flex-end; }
   }
   .pk-check {
@@ -933,5 +997,72 @@
   /* 图块封顶：长图别把对话顶出好几屏（宽图缩到对话宽度、窄图不放大），点开还能看原图 */
   .tool-image-block .tc-img { max-height: 320px; width: auto; max-width: 100%; height: auto; }
   .lightbox { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.72); }
+
   .lightbox.hidden { display: none; }
   .lightbox img { max-width: 96vw; max-height: 96vh; border-radius: 8px; box-shadow: 0 8px 40px rgba(0,0,0,0.5); cursor: zoom-out; }
+
+  /* ==== 宽窗下的阅读宽度 ====
+     窗口比下面这一列还宽的时候（电脑浏览器、拉宽了的面板），消息、图片块、输入框收成同一列
+     居中，别让一行字横贯整屏。窗口本身没这么宽时（手机、VSCode 插件面板）这段整个不成立，
+     看着跟以前一模一样 —— 这是这套样式存在的理由，别把 900px 那道门槛去掉。
+
+     限的是窗格里的东西（.session-pane 的直接孩子）：正文、用户气泡、系统提示、工具标签行、
+     问话卡片、图片块、顶上那颗「加载更早的消息」、末尾那条「继续」。唯独 .session-loading
+     不能收 —— 它是铺满整个窗格的加载层，收窄了会把底下的消息露出来。
+     滚动条挂在窗格上、不跟内容一起居中，所以这一列比窗口正中偏左 3 像素左右，肉眼看不出来。 */
+  /* 这一列的宽度：想改宽改窄就动这一个数（大约 45 个汉字一行）。 */
+  :root { --pichat-content-max: 780px; }
+  @media (min-width: 900px) {
+    .session-pane > :not(.session-loading) {
+      max-width: var(--pichat-content-max);
+      margin-left: auto; margin-right: auto;
+    }
+    /* 底下那块（附件预览、排队消息、输入框）跟着收成同一列，打字的地方跟读的地方对齐 */
+    #inputArea > * {
+      width: 100%; max-width: var(--pichat-content-max);
+      margin-left: auto; margin-right: auto;
+    }
+    /* 状态栏那行小字（模型名 / 用量）贴着这一列的左边，不再贴着窗口最左边 */
+    .pane-status {
+      padding-left: max(8px, calc((100% - var(--pichat-content-max)) / 2));
+    }
+  }
+
+  /* ==== 宽窗下常驻的侧边栏（「项目与会话」那一列）====
+     窗口够宽时（宽度门槛由 chat.js 判定，跟上面限宽那一列同一道 900px）「项目与会话」
+     不再当浮层：它贴右边占一列，对话让出这块宽度。点顶条那颗 <<< 收起 / 展开，收没收起
+     记在这台设备里（见 chat.js 的“常驻侧边栏”那一段）。
+
+     那一列有自己的容器（#sidebarDock，见 renderHtml），面板不长在浮层里：中途开一次
+     选模型、逛文件夹那种浮层时它照样在原处（浮层盖在上面而已），内容不丢、宽度也不跳。
+     版式跟浮层里的抽屉共用同一套类（pk-host / pk-panel / pk-header / pk-body …，
+     那是这一列与浮层抽屉两家共用的样式，见上面“抽屉面板”那几段）。
+
+     两件事分开管：
+     - body.dock-sidebar：这一屏要不要留出右边那一列（横排 + 右边垫一块空的）。
+       看的是“常驻开着”，不是“面板此刻画着什么”。
+     - #sidebarDock：那一列里的面板（贴右边、满高、不居中、没遮罩）。
+     收起时整列不见、对话铺满。两边都不做动画：让正文宽度滑来滑去只会让人盯不住读到哪一行。 */
+  :root { --pichat-sidebar-w: 320px; }
+  body.dock-sidebar { flex-direction: row; }
+  /* 右边留那一列：垫一块空的（对话因此窄 320px），面板浮在它上面 */
+  body.dock-sidebar::after { content: ""; flex: 0 0 var(--pichat-sidebar-w); }
+  /* 没常驻时这一列整个不在（不占位、不挡东西） */
+  #sidebarDock { display: none; }
+  body.dock-sidebar #sidebarDock {
+    position: fixed; top: 0; right: 0; bottom: 0; left: auto;
+    width: var(--pichat-sidebar-w); height: 100%;
+    display: flex; align-items: stretch; justify-content: flex-end;
+    z-index: 900;   /* 比浮层（1000）低：选模型、逛文件夹那种浮层盖在它上面 */
+  }
+  /* 面板铺满这一列，只留左边那条分隔线（其余三边贴到窗口边上，不要圆角） */
+  #sidebarDock .pk-panel {
+    box-sizing: border-box; width: 100%; height: 100%; max-height: none;
+    border-top: 0; border-right: 0; border-bottom: 0; border-radius: 0; box-shadow: none;
+  }
+  /* 面板头与对话那边的顶条一样高：两根横线（顶条的底边、面板头的底边）落在同一条线上。
+     高度由 chat.js 按顶条量出来写在这一格上（见 syncDockHeaderHeight）；border-box 让它
+     把那条底边也算进去，量多少就是多少。 */
+  #sidebarDock .pk-header { box-sizing: border-box; }
+  /* 常驻开着时那颗 <<< 的意思反过来（收起）：图标转半圈，改朝外 */
+  body.dock-sidebar #browserMenuBtn svg { transform: rotate(180deg); }

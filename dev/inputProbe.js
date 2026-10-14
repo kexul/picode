@@ -30,7 +30,6 @@ const MEASURE = `
     fontSize: cs.fontSize,
     valueLen: el.value.length,
     stopVisible: !!document.getElementById("stopBtn") && !document.getElementById("stopBtn").classList.contains("hidden"),
-    continueVisible: !!document.getElementById("continueBtn") && !document.getElementById("continueBtn").classList.contains("hidden"),
     rowH: row ? row.offsetHeight : 0,
   };
 `;

@@ -4,7 +4,8 @@
 //   3. 新建 B 会话、说一句
 //   4. 打开「项目与会话」列表 → 截图（看上半「正在对话」段：两条 + 当前高亮）
 //   5. 切回 A → 截图（消息和草稿都该还在）
-//   6. 列表里点第 2 条的 × 再点「关闭」→ 截图（那条会话没了）
+//   6. 列表里点第 2 条的 × 再点那颗勾 → 截图（那条会话没了）
+// 点叉后那一行只该变红、行尾多一颗勾（名字照旧、整行大小不变），再点勾才真关。
 module.exports = async (page) => {
   await page.send("第一个会话：看看标题");
   await page.sleep(3000);
@@ -26,11 +27,26 @@ module.exports = async (page) => {
   await page.sleep(1200);
   await page.shot("session-back-a.png");
 
-  // 再开列表，点第 2 条的关闭叉（第一次点只变确认条），再点「关闭」
+  // 再开列表，点第 2 条的关闭叉（第一次点只变确认条：整行变红、行尾多一颗勾），再点勾
   await page.click("#browserMenuBtn");
   await page.sleep(700);
+  const before = await page.eval("const r = document.querySelectorAll('.pk-item.pk-open')[1].getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height) };");
   await page.eval("document.querySelectorAll('.pk-item.pk-open')[1].querySelector('.pk-open-close').click();");
   await page.sleep(400);
+  const after = await page.eval(`
+    const row = document.querySelectorAll(".pk-item.pk-open")[1];
+    const r = row.getBoundingClientRect();
+    return {
+      w: Math.round(r.width), h: Math.round(r.height),
+      title: (row.querySelector(".pk-history-title") || {}).textContent || "",
+      confirm: row.classList.contains("pk-open-confirm"),
+      yes: !!row.querySelector(".pk-open-yes"), no: !!row.querySelector(".pk-open-no"),
+    };
+  `);
+  console.log("确认条：", JSON.stringify(before), "→", JSON.stringify(after));
+  if (!after.confirm || !after.yes || !after.no) { throw new Error("点叉后这一行应该是确认条（行尾一颗勾一颗叉）"); }
+  if (!after.title) { throw new Error("确认条里还得看得见关的是哪一个"); }
+  if (after.w !== before.w || after.h !== before.h) { throw new Error(`确认条把这一行撑大了：${JSON.stringify(before)} → ${JSON.stringify(after)}`); }
   await page.shot("session-close-confirm.png");
   await page.eval("document.querySelectorAll('.pk-item.pk-open')[1].querySelector('.pk-open-yes').click();");
   await page.sleep(1200);

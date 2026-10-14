@@ -1,18 +1,19 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { TABA_CLOSING_MARK } from "./tabaTask";
 
 /**
  * 会话存储读取：历史列表的数据源。
  *
- * 列表（历史会话 / 「项目与会话」面板）每一屏只显示最前面那几个，所以这里也只看最前面那几个：
- *   - 会话清单：按文件名倒序 —— pi 起名时把创建时间写在最前面（2026-07-14T02-12-04-764Z_….jsonl），
- *     这样只读一次目录就拿到顺序，不用把目录里每个文件都 stat 一遍；每批取 N 个，
- *     只对取走的那几个文件做整文件扫描：标题（文件里最新一条 session_info 条目的 name，
- *     没有命名就用第一条用户消息）、消息条数、最后活动时间。
- *   - 项目清单：每个目录只看一眼（readdir 拿文件名清单 + stat 最新那一个），不进目录里逐个 stat，
+ * 列表（历史会话 / 「项目与会话」面板里展开的那一组）每一屏只显示最前面那几个，
+ * 所以这里也只看最前面那几个：
+ *   - 会话清单：按文件改动时间倒序 —— 最近聊过的在最前；每批取 N 个，只对取走的那几个
+ *     文件做整文件扫描：标题（文件里最新一条 session_info 条目的 name，没有命名就用
+ *     第一条用户消息）、消息条数、最后活动时间、工作目录；子会话（派活那套文字当第一条
+ *     消息）也在这里认出来，列表不显示它们。
+ *   - 项目清单：每个目录只读一次目录 + stat 最新那一个会话文件，不进目录里逐个 stat，
  *     更不读内容；真要显示哪一行了，才读那个目录最新那个会话文件的开头（拿真实路径）。
- *   - 只列当前项目（cwd 对应目录）的会话。
  */
 
 /** 一条历史会话的展示数据（扫描整个文件得到）。 */
@@ -27,6 +28,10 @@ export interface SessionListItem {
     count: number;
     /** 最后一条消息的活动时间（毫秒）；没有任何消息时退回文件修改时间 */
     lastActivity: number;
+    /** 这个会话跑在哪个目录（文件头里那个 cwd）：点开它得按这个目录起进程 */
+    cwd: string;
+    /** 是不是子会话（派活那套文字当第一条用户消息）：列表不显示它们 */
+    child: boolean;
 }
 
 /** 历史列表浮层的一行：扫描结果 + 是否当前焦点会话。 */
@@ -121,37 +126,16 @@ function entryActivityMs(entry: any): number {
 }
 
 /**
- * 列出 cwd 会话目录里的会话文件，最新的在前。
- *
- * 排序只看文件名：pi 给会话文件起名时把创建时间摆在最前面
- * （2026-07-14T02-12-04-764Z_019f5e65-….jsonl），名字倒序就是最新的在前。
- * 于是这里只读一次目录就能定顺序 —— 列表一屏只显示最前面那几个，没必要为了排序
- * 把目录里每个文件都 stat 一遍（会话攒多的目录里，那一遍就是几十毫秒）。
+ * 列出 cwd 会话目录里的会话文件，按文件改动时间倒序（最近聊过的在前）。
  * 目录不存在（该项目没跑过 pi）返回空。
- */
-export async function listSessionFilesNewestFirst(cwd: string): Promise<string[]> {
-    const dir = await resolveSessionDir(cwd);
-    if (!dir) { return []; }
-    let names: string[];
-    try {
-        names = (await fs.promises.readdir(dir)).filter((f) => f.endsWith(".jsonl"));
-    } catch {
-        return [];
-    }
-    // 名字倒序 = 创建时间倒序（同一毫秒里撞上就按 uuid 排，无所谓）
-    names.sort((a, b) => b.localeCompare(a));
-    return names.map((n) => path.join(dir, n));
-}
-
-/**
- * 列出 cwd 会话目录里的全部会话文件，按文件修改时间倒序（最新的在前）。
- * 要挨个 stat 才知道修改时间，所以它是“全碰一遍”的那一个：
- * 只有“启动时自动打开最近会话”用它（而且只看第一项）——判断“最近聊过哪个”绕不开这一遍；
- * 列表那种一屏只显示最前面几个的地方走 listSessionFilesNewestFirst。
  */
 export async function listSessionFiles(cwd: string): Promise<SessionFileEntry[]> {
     const dir = await resolveSessionDir(cwd);
-    if (!dir) { return []; }
+    return dir ? listDirSessionFiles(dir) : [];
+}
+
+/** 一个会话目录里的会话文件（逐个 stat，按改动时间倒序）。 */
+async function listDirSessionFiles(dir: string): Promise<SessionFileEntry[]> {
     let names: string[];
     try {
         names = (await fs.promises.readdir(dir)).filter((f) => f.endsWith(".jsonl"));
@@ -175,7 +159,8 @@ export async function listSessionFiles(cwd: string): Promise<SessionFileEntry[]>
 }
 
 /**
- * 扫描一个会话文件，取展示需要的三样：标题、消息条数、最后活动时间。
+ * 扫描一个会话文件，取展示需要的几样：标题、消息条数、最后活动时间、工作目录，
+ * 以及“这是不是子会话”。
  * 文件首行必须是 type:"session" 的 header（否则返回 null，与 pi 的判定一致）。
  */
 export function scanSessionInfo(file: string): Promise<SessionListItem | null> {
@@ -192,6 +177,9 @@ export function scanSessionInfo(file: string): Promise<SessionListItem | null> {
         let id = "";
         let name: string | undefined;
         let firstUserMessage = "";
+        let sawFirstUser = false;
+        let child = false;
+        let cwd = "";
         let count = 0;
         let lastActivity = 0;
         const finish = () => {
@@ -204,6 +192,8 @@ export function scanSessionInfo(file: string): Promise<SessionListItem | null> {
                 title,
                 count,
                 lastActivity: lastActivity || Date.now(),
+                cwd,
+                child,
             });
         };
         stream.on("data", (chunk) => {
@@ -220,6 +210,8 @@ export function scanSessionInfo(file: string): Promise<SessionListItem | null> {
                     if (e.type !== "session") { finish(); return; }
                     sawHeader = true;
                     id = typeof e.id === "string" ? e.id : "";
+                    // 工作目录：点开这个历史会话要按它起进程（文件所在目录名是拼出来的，反解不可靠）
+                    cwd = typeof e.cwd === "string" ? e.cwd : "";
                     continue;
                 }
                 if (e.type === "session_info") {
@@ -232,14 +224,71 @@ export function scanSessionInfo(file: string): Promise<SessionListItem | null> {
                 count += 1;
                 const at = entryActivityMs(e);
                 if (at > lastActivity) { lastActivity = at; }
-                if (!firstUserMessage && e.message?.role === "user") {
-                    const t = contentToText(e.message.content).replace(/\s+/g, " ").trim();
-                    if (t) { firstUserMessage = t; }
+                if (e.message?.role === "user") {
+                    const raw = contentToText(e.message.content);
+                    if (!sawFirstUser) {
+                        sawFirstUser = true;
+                        // 子会话的第一条用户消息就是派活那套文字（见 tabaTask.buildTaskText）
+                        if (raw.includes(TABA_CLOSING_MARK)) { child = true; }
+                    }
+                    if (!firstUserMessage) {
+                        const t = raw.replace(/\s+/g, " ").trim();
+                        if (t) { firstUserMessage = t; }
+                    }
                 }
             }
         });
         stream.on("end", finish);
         stream.on("error", () => resolve(null));
+    });
+}
+
+/**
+ * 这个会话文件是不是子会话（第一条用户消息就是派活那套文字）。
+ *
+ * 只读到第一条用户消息为止 —— 它在文件开头几行，不用把整个文件读一遍；
+ * “启动时自动打开最近会话”靠它跳过子会话（列表那边走整文件扫描，不会多花这一遍）。
+ */
+export function isChildSessionFile(file: string): Promise<boolean> {
+    return new Promise((resolve) => {
+        let stream: fs.ReadStream;
+        try {
+            stream = fs.createReadStream(file, { encoding: "utf8" });
+        } catch {
+            resolve(false);
+            return;
+        }
+        let buf = "";
+        let sawHeader = false;
+        let done = false;
+        const finish = (v: boolean) => {
+            if (done) { return; }
+            done = true;
+            stream.destroy();
+            resolve(v);
+        };
+        stream.on("data", (chunk) => {
+            if (done) { return; }
+            buf += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+            let i: number;
+            while ((i = buf.indexOf("\n")) >= 0) {
+                const line = buf.slice(0, i);
+                buf = buf.slice(i + 1);
+                let e: any;
+                try { e = JSON.parse(line); } catch { continue; }
+                if (!e || typeof e.type !== "string") { continue; }
+                if (!sawHeader) {
+                    if (e.type !== "session") { finish(false); return; }
+                    sawHeader = true;
+                    continue;
+                }
+                if (e.type !== "message" || e.message?.role !== "user") { continue; }
+                finish(contentToText(e.message.content).includes(TABA_CLOSING_MARK));
+                return;
+            }
+        });
+        stream.on("end", () => finish(false));
+        stream.on("error", () => finish(false));
     });
 }
 
@@ -387,10 +436,4 @@ export async function readProjectEntry(entry: ProjectDirEntry): Promise<ProjectE
         lastActivity: entry.lastActivity,
         sessionCount: entry.sessionCount,
     };
-}
-
-/** 某个工作目录自己的项目登记（面板上“当前工作区”那行用）；没跑过 pi 就是 null。 */
-export async function readProjectDirForCwd(cwd: string): Promise<ProjectDirEntry | null> {
-    const dir = await resolveSessionDir(cwd);
-    return dir ? scanProjectDir(dir) : null;
 }

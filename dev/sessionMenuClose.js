@@ -1,4 +1,6 @@
 // 顶条会话名下拉框里「每行一颗关闭叉」的验证（不真给模型发消息：只建两个空会话）。
+// 点叉先出确认条：那一行底色变红、行尾多一颗勾（名字与目录照旧看得见），点勾才真关、
+// 点叉或者干等 4 秒都撤销；确认条出来时整张清单的宽窄不许变（这是它换掉文字按钮的原因）。
 //   npm run web:shot -- --fake-pi --script dev/sessionMenuClose.js
 //   npm run web:shot -- --fake-pi --theme dark --script dev/sessionMenuClose.js
 // 图落在 dev/shots/：menu-close-1-open / 2-confirm / 2-confirm-zoom / 3-cancel / 4-done。
@@ -23,11 +25,14 @@ module.exports = async (page) => {
     const rows = [...menu.querySelectorAll(".sm-item")];
     return {
       open: !menu.classList.contains("hidden"),
+      width: Math.round(menu.getBoundingClientRect().width),
       rows: rows.length,
       names: rows.map((r) => (r.querySelector(".sm-name") || {}).textContent || ""),
+      dirs: rows.map((r) => (r.querySelector(".sm-path") || {}).textContent || ""),
       hasClose: rows.map((r) => !!r.querySelector(".sm-close")),
       confirm: rows.map((r) => r.classList.contains("sm-confirm")),
-      asks: [...menu.querySelectorAll(".sm-ask")].map((e) => e.textContent),
+      hasYes: rows.map((r) => !!r.querySelector(".sm-yes")),
+      hasNo: rows.map((r) => !!r.querySelector(".sm-no")),
       current: rows.map((r) => r.classList.contains("current")),
     };
   `);
@@ -49,20 +54,23 @@ module.exports = async (page) => {
     throw new Error("打开时不对：应该两行、每行都有叉、没有确认条");
   }
 
-  // 点第二行那颗叉：第一次只变确认条，不真关
+  // 点第二行那颗叉：第一次只变确认条（行尾多一颗勾），不真关
   await page.eval(`document.querySelectorAll("#sessionMenu .sm-item")[1].querySelector(".sm-close").click(); return true;`);
   await page.sleep(300);
   const st2 = await state();
   console.log("② 点叉之后：", JSON.stringify(st2));
   await page.shot("menu-close-2-confirm.png");
   await shotMenuZoom("menu-close-2-confirm-zoom.png");
-  if (!st2.confirm[1] || !st2.asks[0] || st2.rows !== 2) { throw new Error("点了叉应该第二行变确认条、行数不变"); }
-  // 确认条里的字不能被截掉（截了就是名字没处看、要点错）
+  if (!st2.confirm[1] || !st2.hasYes[1] || !st2.hasNo[1] || st2.rows !== 2) { throw new Error("点了叉应该第二行变确认条（行尾一颗勾一颗叉）、行数不变"); }
+  // 确认条里还得看得见关的是哪一个：名字与目录跟普通行一模一样
+  if (st2.names[1] !== st1.names[1] || st2.dirs[1] !== st1.dirs[1]) { throw new Error("确认条里名字 / 目录不该变样"); }
+  // 关键一条：确认条出来前后整张清单一样宽（从前换成文字按钮会把清单撑宽）
+  if (st2.width !== st1.width) { throw new Error(`确认条把清单撑宽了：${st1.width} → ${st2.width}`); }
   const cut = await page.eval(`
-    const ask = document.querySelector("#sessionMenu .sm-ask");
-    return { client: ask.clientWidth, scroll: ask.scrollWidth };
+    const el = document.querySelectorAll("#sessionMenu .sm-item")[1].querySelector(".sm-name");
+    return { client: el.clientWidth, scroll: el.scrollWidth };
   `);
-  if (cut.scroll > cut.client + 1) { throw new Error(`确认条里的字被截了：${cut.scroll} > ${cut.client}`); }
+  if (cut.scroll > cut.client + 1) { throw new Error(`确认条里的名字被截了：${cut.scroll} > ${cut.client}`); }
 
   // 点「取消」：确认条收回去
   await page.eval(`document.querySelector("#sessionMenu .sm-no").click(); return true;`);
@@ -70,7 +78,7 @@ module.exports = async (page) => {
   const st3 = await state();
   console.log("③ 点取消之后：", JSON.stringify(st3));
   await page.shot("menu-close-3-cancel.png");
-  if (st3.confirm.some(Boolean) || !st3.hasClose.every(Boolean)) { throw new Error("取消后应该回到普通行"); }
+  if (st3.confirm.some(Boolean) || !st3.hasClose.every(Boolean) || st3.width !== st1.width) { throw new Error("取消后应该回到普通行、清单宽度照旧"); }
 
   // 点了叉但不管它：4 秒后确认条自己收回
   await page.eval(`document.querySelectorAll("#sessionMenu .sm-item")[1].querySelector(".sm-close").click(); return true;`);

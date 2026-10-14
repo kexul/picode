@@ -24,9 +24,11 @@
  *   - 断网只管新请求：已经建好的推送连接照旧收得到东西（所以场景二、三能验到
  *     "连接还在、钩子断过"那一档）。
  *
- * 场景六验的是你报的那个毛病：锁屏期间连接悄悄断了、回来时页面该自己重开一次连接
- * 并补回丢掉的消息。还留了一个小口子（故意没堵）：离开不到 3 秒就回来的不重开，
- * 那点时间里丢的尾部消息要等"75 秒没收到心跳"的看门狗才能补上。
+ * 场景六验的是“锁屏期间连接悄悄断了、回来时页面该自己重开一次连接并补回丢掉的消息”。
+ * 场景七验的是同一件事的第二面：断线那段里后端发出的问话卡片（定向发、不带走序号的那套补发账）
+ * 回来之后不该丢，且页面手上已经有的那张不该被重发打扰。
+ * 还留了一个小口子（故意没堵）：离开不到 3 秒就回来的不重开，
+ * 那点时间里丢的尾部消息要等“75 秒没收到心跳”的看门狗才能补上。
  */
 const fs = require("fs");
 const path = require("path");
@@ -138,6 +140,47 @@ async function pageIdOf(page) {
     return page.eval("const m = document.querySelector('meta[name=pichat-page]'); return m ? m.getAttribute('content') : '';");
 }
 
+/** 后端还挂着的问话卡片（发出去等作答的那些）。 */
+async function backendCards(host) {
+    const out = [];
+    for (const [id, st] of host.openCards || []) {
+        out.push({ id, settled: st.settled, screens: Array.from(st.screens) });
+    }
+    return out;
+}
+
+/** 等后端挂出一张还没收尾的卡片（页面收不到也没关系，等着作答的那张就算）。 */
+async function waitBackendCard(host, ms) {
+    const deadline = Date.now() + ms;
+    for (;;) {
+        const cards = await backendCards(host);
+        const open = cards.filter((c) => !c.settled);
+        if (open.length > 0) { return open[open.length - 1]; }
+        if (Date.now() > deadline) { return null; }
+        await sleep(200);
+    }
+}
+
+/** 消息流里有没有一张还等着作答的问话卡片。 */
+async function cardOnPage(page) {
+    return page.eval("return document.querySelectorAll('.ask-card:not(.done)').length > 0;");
+}
+
+/** 消息流里有没有一张已经定住的问话卡片。 */
+async function cardDoneOnPage(page) {
+    return page.eval("return document.querySelectorAll('.ask-card.done').length > 0;");
+}
+
+/** 一直等到消息流里出现一张还等着作答的卡片（或超时返回 false）。 */
+async function waitCardOnPage(page, ms) {
+    const deadline = Date.now() + ms;
+    for (;;) {
+        if (await cardOnPage(page)) { return true; }
+        if (Date.now() > deadline) { return false; }
+        await sleep(300);
+    }
+}
+
 // ============================================================================
 //  场景
 // ============================================================================
@@ -228,6 +271,108 @@ async function sceneBoth(page) {
     check(!final.typing, "状态栏那三点动画停了");
     check(!final.nameStreaming, "会话名字那颗点不闪了");
     check(final.answer.includes("完事"), "会话的最后一句话在页面上");
+}
+
+/**
+ * 断线期间模型问的那道选择题：连接悄悄死了（后端不知道，卡片写进去看着成功、页面其实没收到），
+ * 回来重连对账之后卡片该补回消息流里，并且照常答得下去。
+ *
+ * 模拟“悄悄死掉”的办法：把后端那条连接的 send 换成黑洞 —— 写进去当成功，页面收不到
+ * （手机锁屏后网络那头把会话收了、浏览器不报错，就是这个样子）。之后的断网 + 收掉旧连接,
+ * 对应“人回到前台、页面自己重开一条连接回来”。
+ */
+async function sceneAskCard(page, harness) {
+    console.log("\n【场景七】断线期间问的选择题：回来重连之后卡片还在不在、还能不能答");
+    const pageId = await pageIdOf(page);
+    const host = harness.host();
+    const channel = host.getBroadcaster().getChannel(pageId);
+    if (!channel) { bad("拿不到页面的推送连接，没法验"); return; }
+    await page.send("随便说点什么");
+    await waitIdle(page, 20000);
+
+    // 这条连接变成黑洞：卡片写进去当成功，页面其实收不到
+    const original = channel.send;
+    channel.send = () => { /* 丢掉 */ };
+    await page.send("问单选");
+    const card = await waitBackendCard(host, 20000);
+    channel.send = original;
+    if (!card) { bad("后端没挂出卡片，后面没法验"); return; }
+    console.log(`  · 卡片 ${card.id} 已问出、后端以为发给了：${JSON.stringify(card.screens)}（页面其实没收到）`);
+    check(card.screens.length === 1, "卡片发出时后端以为页面收到了（正是那条死连接骗过它的地方）");
+
+    // 人回到前台：网络通一下、旧连接被收掉，页面自己重开一条连接回来
+    console.log("  · 模拟人回到前台（旧连接收掉、页面重连对账）");
+    await page.cdp.send("Network.enable");
+    await page.cdp.send("Network.emulateNetworkConditions", {
+        offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0,
+    });
+    channel.close("");
+    await sleep(1500);
+    await page.cdp.send("Network.emulateNetworkConditions", {
+        offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1,
+    });
+
+    const shown = await waitCardOnPage(page, 25000);
+    await page.sleep(500);
+    await page.shot("recon-7-askcard-back.png");
+    check(shown, "重连之后卡片补回到消息流里了");
+    if (!shown) { return; }
+
+    // 补回来的卡片得能答：点第一行选项
+    await page.eval(`(() => {
+        const cs = document.querySelectorAll('.ask-card:not(.done)');
+        const c = cs[cs.length - 1];
+        c.querySelectorAll('.ask-opt')[0].click();
+    })(); return true;`);
+    const deadline = Date.now() + 20000;
+    let done = false;
+    while (Date.now() < deadline) {
+        if (await cardDoneOnPage(page)) { done = true; break; }
+        await sleep(300);
+    }
+    await page.sleep(800);
+    await page.shot("recon-7-askcard-done.png");
+    check(done, "补回来的卡片答得下去（点完就定住）");
+    check(/用户选了|选的是/.test(await page.text()), "答案送到了模型那边（工具结果里写着你选的哪一项）");
+
+    // 顺带验一下：页面手上本来就有的卡片，重连对账重发时不该被动
+    // （动它就等于把人打了一半的字捎掉、把滚动位置抖一下）
+    console.log("  · 再验一次：页面手上已经有这张卡片时，重连不去动它");
+    await page.send("问单选");
+    const again = await waitCardOnPage(page, 25000);
+    check(again, "第二张卡片正常画出来了");
+    if (!again) { return; }
+    // 在卡片上做个记号、往“自己写”里打一半的字
+    await page.eval(`(() => {
+        const cs = document.querySelectorAll('.ask-card:not(.done)');
+        const c = cs[cs.length - 1];
+        c.dataset.probe = "kept";
+        c.querySelector('.ask-input').value = "写了一半";
+    })(); return true;`);
+    // 再来一次断线重连（这次卡片已经在页面上了）
+    const channel2 = host.getBroadcaster().getChannel(pageId);
+    await page.cdp.send("Network.emulateNetworkConditions", {
+        offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0,
+    });
+    if (channel2) { channel2.close(""); }
+    await sleep(1500);
+    await page.cdp.send("Network.emulateNetworkConditions", {
+        offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1,
+    });
+    await sleep(6000);
+    const kept = await page.eval(`
+        const c = document.querySelector('.ask-card[data-probe=kept]');
+        const i = c ? c.querySelector('.ask-input') : null;
+        return i ? i.value : "";
+    `);
+    await page.shot("recon-7-askcard-kept.png");
+    check(kept === "写了一半", "重连重发没动页面上那张卡片（记号与打了一半的字都留着）");
+    // 把这张答掉收尾，别让它挂着等 25 分钟
+    await page.eval(`(() => {
+        const cs = document.querySelectorAll('.ask-card:not(.done)');
+        if (cs.length) { cs[cs.length - 1].querySelectorAll('.ask-opt')[1].click(); }
+    })(); return true;`);
+    await sleep(800);
 }
 
 /** 一边输出一边反复冻住 / 解冻（手机上反复锁屏、亮屏）。 */
@@ -349,6 +494,7 @@ async function main() {
         fuzz: (page) => sceneFuzz(page),
         churn: (page, harness) => sceneChurn(page, harness),
         taillost: (page, harness) => sceneTailLost(page, harness),
+        askcard: (page, harness) => sceneAskCard(page, harness),
     };
     const chosen = sceneArg === "all" ? Object.keys(scenes) : sceneArg.split(",");
     for (const name of chosen) {

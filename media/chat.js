@@ -13,7 +13,6 @@
   const messagesEl = document.getElementById("messages"); // 容器，内含各 .session-pane
   const jumpBottomBtn = document.getElementById("jumpBottom");
   const stopBtn = document.getElementById("stopBtn"); // 停止生成图标：browserBridge.js 在两种页面里都会创建
-  const continueBtn = document.getElementById("continueBtn"); // “继续”快捷按钮：同上，摆在停止图标左边
   // VSCode 官方 codicon 的 chevron-right 折线图标（从 @vscode/codicons 包取出）。
   // 各处折叠小三角用同一份：画的是朝右，展开时靠 CSS transform 转成朝下。
   const CHEVRON_SVG =
@@ -24,6 +23,8 @@
     close: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8.70701 8.00001L12.353 4.35401C12.548 4.15901 12.548 3.84201 12.353 3.64701C12.158 3.45201 11.841 3.45201 11.646 3.64701L8.00001 7.29301L4.35401 3.64701C4.15901 3.45201 3.84201 3.45201 3.64701 3.64701C3.45201 3.84201 3.45201 4.15901 3.64701 4.35401L7.29301 8.00001L3.64701 11.646C3.45201 11.841 3.45201 12.158 3.64701 12.353C3.74501 12.451 3.87301 12.499 4.00101 12.499C4.12901 12.499 4.25701 12.45 4.35501 12.353L8.00101 8.70701L11.647 12.353C11.745 12.451 11.873 12.499 12.001 12.499C12.129 12.499 12.257 12.45 12.355 12.353C12.55 12.158 12.55 11.841 12.355 11.646L8.70901 8.00001H8.70701Z"/></svg>',
     // 粗一点的关闭叉：会话行尾、面板头部「关掉这一屏」的地方共用这一颗，大小一致。
     "close-bold": '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.5 2.5 L13.5 13.5 M13.5 2.5 L2.5 13.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>',
+    // 粗一点的勾：跟上面那颗叉同款同大小（会话行尾的确认用，一颗勾一颗叉并排）。
+    "check-bold": '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.6 8.6 L6.4 12.4 L13.4 3.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>',
     "link-external": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M15 9.5V12.5C15 13.879 13.879 15 12.5 15H3.5C2.121 15 1 13.879 1 12.5V3.5C1 2.121 2.121 1 3.5 1H6.5C6.776 1 7 1.224 7 1.5C7 1.776 6.776 2 6.5 2H3.5C2.673 2 2 2.673 2 3.5V12.5C2 13.327 2.673 14 3.5 14H12.5C13.327 14 14 13.327 14 12.5V9.5C14 9.224 14.224 9 14.5 9C14.776 9 15 9.224 15 9.5ZM14.5 1H9.5C9.224 1 9 1.224 9 1.5C9 1.776 9.224 2 9.5 2H13.293L9.147 6.146C8.952 6.341 8.952 6.658 9.147 6.853C9.245 6.951 9.373 6.999 9.501 6.999C9.629 6.999 9.757 6.95 9.855 6.853L14.001 2.707V6.5C14.001 6.776 14.225 7 14.501 7C14.777 7 15.001 6.776 15.001 6.5V1.5C15.001 1.224 14.777 1 14.501 1H14.5Z"/></svg>',
     discard: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M3.00098 2.5C3.00098 2.22386 3.22483 2 3.50098 2C3.77712 2 4.00098 2.22386 4.00098 2.5V6.34262L7.17202 3.17157C8.73412 1.60948 11.2668 1.60948 12.8289 3.17157C14.391 4.73367 14.391 7.26633 12.8289 8.82843L7.80375 13.8536C7.60849 14.0488 7.2919 14.0488 7.09664 13.8536C6.90138 13.6583 6.90138 13.3417 7.09664 13.1464L12.1218 8.12132C13.2933 6.94975 13.2933 5.05025 12.1218 3.87868C10.9502 2.70711 9.0507 2.70711 7.87913 3.87868L4.75781 7H8.50098C8.77712 7 9.00098 7.22386 9.00098 7.5C9.00098 7.77614 8.77712 8 8.50098 8H3.60098C3.26961 8 3.00098 7.73137 3.00098 7.4V2.5Z"/></svg>',
     check: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13.6572 3.13573C13.8583 2.9465 14.175 2.95614 14.3643 3.15722C14.5535 3.35831 14.5438 3.675 14.3428 3.86425L5.84277 11.8642C5.64597 12.0494 5.33756 12.0446 5.14648 11.8535L1.64648 8.35351C1.45121 8.15824 1.45121 7.84174 1.64648 7.64647C1.84174 7.45121 2.15825 7.45121 2.35351 7.64647L5.50976 10.8027L13.6572 3.13573Z"/></svg>',
@@ -45,6 +46,8 @@
     // 子会话的拐角箭头（“↳”）：先从上面下来、再向右拐，像个挂在父会话下面的分叉。
     // 用 SVG 而不是文字符号：箭头在 Segoe UI 等字体里居中不对，画出来天然齐。
     child: '<svg width="14" height="14" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.2 1.6V8.4H12.6"/><path d="M9.8 5.6L12.8 8.4L9.8 11.2"/></svg>',
+    // 往右的箭头：消息流末尾那条「继续」上用（VSCode 官方 codicon 的 arrow-right）
+    "arrow-right": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8.85355 3.14645C8.65829 2.95118 8.34171 2.95118 8.14645 3.14645C7.95118 3.34171 7.95118 3.65829 8.14645 3.85355L11.7929 7.5H2.5C2.22386 7.5 2 7.72386 2 8C2 8.27614 2.22386 8.5 2.5 8.5H11.7929L8.14645 12.1464C7.95118 12.3417 7.95118 12.6583 8.14645 12.8536C8.34171 13.0488 8.65829 13.0488 8.85355 12.8536L13.3536 8.35355C13.5488 8.15829 13.5488 7.84171 13.3536 7.64645L8.85355 3.14645Z"/></svg>',
   };
   /** 文件夹选择器里行首那颗图标：名字由宿主给（见 chatHostBase.showFolderPicker 的 items）。 */
   const FOLDER_ROW_ICONS = { check: ICONS.check, up: ICONS["arrow-up"], folder: ICONS.folder };
@@ -102,25 +105,49 @@
   let pendingCloseId = null;
   let pendingCloseTimer = null;
 
-  // ---- 通用拾取器浮层（模型 / 历史）----
-  const pickerOverlay = document.getElementById("pickerOverlay");
-  const pickerBody = document.getElementById("pickerBody");
-  const pickerTitle = document.getElementById("pickerTitle");
-  const pickerSubtitle = document.getElementById("pickerSubtitle");
+  // ---- 面板：浮层里的拾取器（模型 / 历史 / 项目与会话 / 文件夹）与常驻那一列 ----
+  // 这两处共用同一套画法（版式也共用一套类名，见 chat.css），只是画到不同的容器上：
+  // 一个 view 就是“画到哪儿”那一摊（那几个 DOM 元素 + 这份面板自己的状态）。
+  // 状态按 view 分开挂，所以两块面板可以同时各画各的一份、互不打扰：
+  //   { kind, items, filtered, sel, current, draftModel, draftThinking, toggle, … }
+  const modalView = {
+    root: document.getElementById("pickerOverlay"),
+    header: document.getElementById("pickerHeader"),
+    title: document.getElementById("pickerTitle"),
+    subtitle: document.getElementById("pickerSubtitle"),
+    search: document.getElementById("pickerSearch"),
+    searchWrap: document.getElementById("pickerSearchWrap"),
+    body: document.getElementById("pickerBody"),
+    footer: document.getElementById("pickerFooter"),
+    state: null,
+    openSessionsShown: "",
+    keepOpen: false,        // 点一行是“选完就走”（浮层）
+    staticChrome: false,    // 头几颗类（pk-drawer / pk-workspace）是渲染时加上去的，收起时摘掉
+  };
+  /** 宽窗下常驻那一列（「项目与会话」）：自己的容器，不跟浮层抢地方（见下面“常驻侧边栏”）。 */
+  const dockView = {
+    root: document.getElementById("sidebarDock"),
+    header: document.getElementById("dockHeader"),
+    title: document.getElementById("dockTitle"),
+    subtitle: null,
+    search: null,
+    searchWrap: null,
+    body: document.getElementById("dockBody"),
+    footer: document.getElementById("dockFooter"),
+    state: null,
+    openSessionsShown: "",
+    keepOpen: true,         // 点一行只是“用一下”，面板留着接着点
+    staticChrome: true,     // 那几颗类写在 HTML 里，收起也不摘
+  };
   /**
    * 标题下面那行小字（目前只有文件夹选择器用：正在看的是哪个目录）。
    * 骨架里没这个元素时（插件与后端的版本对不上：界面文件是现从后端取的）就当没有，不能让浮层打不开。
    */
-  function setPickerSubtitle(text) {
-    if (!pickerSubtitle) { return; }
-    pickerSubtitle.textContent = text || "";
-    pickerSubtitle.classList.toggle("hidden", !text);
+  function setPickerSubtitle(text, view = modalView) {
+    if (!view.subtitle) { return; }
+    view.subtitle.textContent = text || "";
+    view.subtitle.classList.toggle("hidden", !text);
   }
-  const pickerHeader = document.getElementById("pickerHeader");
-  const pickerSearch = document.getElementById("pickerSearch");
-  const pickerSearchWrap = document.getElementById("pickerSearchWrap");
-  const pickerFooter = document.getElementById("pickerFooter");
-  let pickerState = null; // { kind, items, filtered, sel, current, draftModel, draftThinking, toggle }
 
   // ==================== Markdown / 文件链接 / 符号链接（纯函数，与是哪个会话无关）====================
   let markedReady = false;
@@ -310,6 +337,8 @@
     // 字号一变，同一行字占的高度也跟着变：输入框的高度得按新字号重算，
     // 否则框还是旧字号时量出来的那么高，右边就冒出一根滚动条（见 autoResize）。
     autoResize();
+    // 顶条（会话名 + 目录两行）也会跟着长高变矮：常驻那一列的面板头得重新跟它对齐
+    syncDockHeaderHeight();
   }
   function applyViewOptions(opts) {
     if (typeof opts.fontSize === "string") { applyFontSize(opts.fontSize); }
@@ -608,6 +637,8 @@
     // 清单开着的时候它会跟着变（换会话、改标题、某个会话跑完了）：重画完还要重新摆——
     // 内容变宽变窄了，贴着屏幕边的位置就不对了。
     refreshSessionMenu();
+    // 顶条自己也会长高变矮（目录那行有 / 没有）：常驻那一列的面板头跟着它齐（见 syncDockHeaderHeight）
+    if (sidebarEnabled()) { syncDockHeaderHeight(); }
   }
 
   // ==================== 顶条那颗会话名的下拉框 ====================
@@ -620,9 +651,12 @@
   sessionMenuEl.className = "hidden";
   document.body.appendChild(sessionMenuEl);
   let sessionMenuOpen = false;
+  // 某一行转成确认条（行尾多一颗勾）以后要钉住的宽度：点叉的那一下量下来。
+  let sessionMenuPin = 0;
 
   /** 把清单贴在中间那一列底下（名字与目录两行都在它上面，清单别盖住目录行）：
-   *  先量准宽度，再把整块夹进屏幕里（左右各留 8px）。 */
+   *  先量准宽度，再把整块夹进屏幕里（左右各留 8px）。
+   *  有人正在确认关会话时宽度钉在点叉之前的那个值上：行尾多一颗勾也不许把整张清单撑宽。 */
   function placeSessionMenu() {
     const anchor = (sessionCenterEl || sessionNameBtn).getBoundingClientRect();
     const margin = 8;
@@ -632,9 +666,12 @@
     sessionMenuEl.style.width = "";
     const room = Math.max(140, window.innerWidth - margin * 2);
     const natural = sessionMenuEl.offsetWidth;
-    const width = Math.min(natural, room);
-    // 比一屏还宽就在这儿钉住（CSS 的 max-width 会管，但那是以内容盒算的，这里按整块算）
-    if (natural > room) { sessionMenuEl.style.width = width + "px"; }
+    // 确认条收回去（或关了会话）就放开：宽度又跟着内容自己走
+    if (!pendingCloseId) { sessionMenuPin = 0; }
+    const width = Math.min(sessionMenuPin || natural, room);
+    // 只有需要钉住的时候才写死宽度：确认条那阵、或者整块比一屏还宽
+    // （CSS 的 max-width 是以内容盒算的，这里按整块算）。其余时候让它自己跟着内容走。
+    if (sessionMenuPin || natural > room) { sessionMenuEl.style.width = width + "px"; }
     const wantLeft = anchor.left + anchor.width / 2 - width / 2;
     const left = Math.max(margin, Math.min(wantLeft, window.innerWidth - margin - width));
     sessionMenuEl.style.left = Math.round(left) + "px";
@@ -650,25 +687,46 @@
     return openSessionItems().filter((item) => !item.depth);
   }
 
-  /** 画一遍清单内容：开着的主会话一行一个（行尾一颗关闭叉，点了先变确认条，再点一下才真关）。 */
+  /** 画一遍清单内容：开着的主会话一行一个（行尾一颗关闭叉，点了先变确认条：行尾多一颗勾，再点勾才真关）。 */
   function renderSessionMenu() {
     sessionMenuEl.innerHTML = "";
     sessionMenuItems().forEach((item) => {
       const el = document.createElement("div");
       el.className = "sm-item" + (item.current ? " current" : "");
       el.title = (item.label || "") + (item.cwd ? "\n" + item.cwd : "");
+      // 行首那颗小点、下面「名字 + 目录」两段：普通行与确认条共用这一份
+      // （确认条只是行尾那颗叉旁边多一颗勾，行里的东西一点不动：关的是哪一个照样看得见，
+      //  整张清单的宽窄也不跟着变——宽度在点叉那一下已经钉住，见 placeSessionMenu）。
+      const dot = document.createElement("span");
+      dot.className = "sm-dot" + openDotClass(item);
+      el.appendChild(dot);
+      const body = document.createElement("div");
+      body.className = "sm-body";
+      const name = document.createElement("span");
+      name.className = "sm-name";
+      name.textContent = item.label || "";
+      body.appendChild(name);
+      if (item.cwd) {
+        const dir = document.createElement("span");
+        dir.className = "sm-path";
+        dir.textContent = item.cwd;
+        body.appendChild(dir);
+      }
+      el.appendChild(body);
       if (item.pendingClose) {
-        // 点过行尾那颗叉：整行换成「关闭「名字」？ 关闭 / 取消」，跟普通行长得完全不一样，防误触。
+        // 点过行尾那颗叉：整行底色变红，行尾多一颗勾——点勾才真关，点叉撤销。
         el.classList.add("sm-confirm");
-        const ask = document.createElement("span");
-        ask.className = "sm-ask";
-        ask.textContent = "关闭「" + (item.label || "") + "」？";
-        el.appendChild(ask);
         const yes = document.createElement("button");
-        yes.type = "button"; yes.className = "sm-yes"; yes.textContent = "关闭";
+        yes.type = "button"; yes.className = "sm-yes";
+        yes.title = "关闭这个会话";
+        yes.setAttribute("aria-label", "关闭这个会话");
+        yes.innerHTML = ICONS["check-bold"];
         yes.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(item.sessionId); });
         const no = document.createElement("button");
-        no.type = "button"; no.className = "sm-no"; no.textContent = "取消";
+        no.type = "button"; no.className = "sm-no";
+        no.title = "取消";
+        no.setAttribute("aria-label", "取消");
+        no.innerHTML = ICONS["close-bold"];
         no.addEventListener("click", (e) => {
           e.stopPropagation();
           pendingCloseId = null;
@@ -678,23 +736,6 @@
         });
         el.appendChild(yes); el.appendChild(no);
       } else {
-        const dot = document.createElement("span");
-        dot.className = "sm-dot" + openDotClass(item);
-        el.appendChild(dot);
-        // 一行两段：上面会话名，下面它跑在哪个目录（子会话不在这个清单里）
-        const body = document.createElement("div");
-        body.className = "sm-body";
-        const name = document.createElement("span");
-        name.className = "sm-name";
-        name.textContent = item.label || "";
-        body.appendChild(name);
-        if (item.cwd) {
-          const dir = document.createElement("span");
-          dir.className = "sm-path";
-          dir.textContent = item.cwd;
-          body.appendChild(dir);
-        }
-        el.appendChild(body);
         // 行尾不再挂「当前」/「在跑」：当前那条整行有底色，在跑 / 有新消息看名字前头那颗小点。
         // 行尾这颗叉：点行是切过去（大目标），点叉才关（还要再确认一下）。
         const close = document.createElement("span");
@@ -713,7 +754,7 @@
     });
   }
 
-  /** 清单开着就重画一遍（关会话的确认条变来变去）；重画完还得重新摆位（内容宽窄变了）。 */
+  /** 清单开着就重画一遍（关会话的确认条变来变去）；重画完还得重新摆位（宽窄变了：确认条那阵宽度是钉住的）。 */
   function refreshSessionMenu() {
     if (!sessionMenuOpen) { return; }
     // 行都关没了就先收起这张空壳（全关完时后端会补一个空会话，等新列表到了再说）
@@ -734,6 +775,7 @@
   function closeSessionMenu() {
     if (!sessionMenuOpen) { return; }
     sessionMenuOpen = false;
+    sessionMenuPin = 0;
     sessionMenuEl.classList.add("hidden");
   }
 
@@ -1936,23 +1978,70 @@
   }
 
   /**
-   * 输入框右下角那两颗小按钮：生成中是“停止生成”，空闲时是“继续”——「继续」摆在停止
-   * 那格的左边，同一时刻只露面一颗。两颗都是 browserBridge.js 建的（两种页面里都有）。
+   * 输入框角上那颗“停止生成”：生成中露面。那个位置现在只此一物（「继续」挪到消息流末尾了，
+   * 见 syncContinueHint），它是 browserBridge.js 建的（两种页面里都有）。
    */
   function syncComposerButtons() {
     const st = activeSession();
     const streaming = !!(st && st.streaming);
-    // 会话还没就绪（pi 进程刚起）或正在加载会话时，点了也发不出去：这时候不出“继续”。
-    const canContinue = !!(st && st.piReady && !st.loading && !streaming);
-    if (continueBtn) {
-      continueBtn.classList.toggle("hidden", !canContinue);
-      // “继续”带字、比停止图标宽：露面时输入框右边的留白要跟着加宽（见 browserTheme.css）
-      if (continueBtn.parentElement) { continueBtn.parentElement.classList.toggle("has-continue", canContinue); }
-    }
     if (stopBtn) {
       stopBtn.classList.toggle("hidden", !streaming);
       stopBtn.disabled = false;
     }
+    syncContinueHint(st);
+  }
+
+  /**
+   * 消息流末尾那条「继续」：会话闲着、能接着往下走的时候露面，点它直接发一条“继续”
+   * （不走输入框，打了一半的字、贴的图都留着）。
+   *
+   * 为什么长在消息流里：摆在输入框那一带时，它要么占着打字的地方（以前那颗带字的小胶囊），
+   * 要么跟“停止生成”挤同一格。挂在会话自己的消息流末尾就谁都不挡 —— 位置跟着对话走，
+   * 一轮跑完、会话闲下来，它就在最后一条消息下面等着。
+   *
+   * 每个会话一条（各在各的消息流里）。位置永远在末尾：元素已经在窗格里时再 append 一次
+   * 就是“挪到最后”，所以新消息上来（比如刚发出去的那条用户消息）时它自然被挤到后面。
+   * 空会话（一条消息都没有）、正在加载历史、正在生成时都不露面。
+   */
+  function syncContinueHint(st) {
+    if (!st || !st.paneEl) { return; }
+    // 会话还没就绪（pi 进程刚起）、正在加载会话时，点了也发不出去：这时候不出“继续”。
+    // “有没有可接着往下走的对话”只看用户与助手两种消息：会话刚建时窗格里那句
+    // “pi 已启动，可以开始对话。”是系统消息，不能算 —— 空会话里摆一条“继续”没意义。
+    const touched = st.paneEl.querySelector(".msg.user, .msg.assistant");
+    const show = !!(st.piReady && !st.loading && !st.streaming && touched);
+    let el = st.continueHintEl;
+    if (!el) {
+      el = makeContinueHint(st);
+      st.continueHintEl = el;
+    }
+    if (!show) { el.classList.add("hidden"); return; }
+    if (el.parentElement !== st.paneEl || st.paneEl.lastElementChild !== el) {
+      st.paneEl.appendChild(el);
+    }
+    el.classList.remove("hidden");
+  }
+
+  /** 建那条「继续」（内容与点击固定；露面时机与位置由 syncContinueHint 管）。 */
+  function makeContinueHint(st) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "msg-continue";
+    btn.title = "发送一条“继续”";
+    btn.innerHTML = ICONS["arrow-right"] + "<span>继续</span>";
+    btn.addEventListener("click", () => {
+      const cur = activeSession();
+      // 这条只在会话就绪且闲着时露面，这里是防手快点到的边界情况（刚开始生成的那一下）
+      if (!cur || cur.id !== st.id || !cur.piReady || cur.loading || cur.streaming) { return; }
+      // 先收起来：手快连点两下会发出两条“继续”（等后端的 userMessage / streamStart 回来再按真实状态算）
+      btn.classList.add("hidden");
+      vscode.postMessage({ type: "send", sessionId: cur.id, text: "继续", images: [] });
+      // 焦点还回输入框：留在按钮上接着按回车会又发一条
+      if (!IS_TOUCH_DEVICE) { inputEl.focus(); }
+      // 万一点击没送到（连接断了），过一会儿按真实状态重新算
+      setTimeout(() => syncContinueHint(cur), 1500);
+    });
+    return btn;
   }
 
   function updateSendState() {
@@ -2194,12 +2283,6 @@
     return false;
   }
 
-  /** 两个目录是不是同一个（斜杠、末尾斜杠、大小写都归一化再比）。 */
-  function sameDir(a, b) {
-    const norm = (p) => String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-    return norm(a) === norm(b);
-  }
-
   /**
    * 「正在对话」这些行列首那颗小点的样式名（顶条下拉框与面板共用同一套）：
    * 在跑＝蓝点呼吸，出错＝红点，有新消息（未读）＝蓝点不闪，其余不显示。
@@ -2214,10 +2297,9 @@
    * 会话列表里「正在对话」那一段的行：主会话在前，子会话缩进挂在它下面。
    * 数据取自本地这份状态（列表是浮层，内容由宿主给；这一段只有界面自己知道）。
    *
-   * @param folder 只列跑在这个目录里的会话（「项目与会话」面板跟着当前显示的
-   *               工作区走）；不传就是全部开着的会话（顶条那颗会话名的下拉用）。
+   * 不按目录过滤：开着的会话全都在（顶条那颗会话名的下拉、面板的上半共用这一份）。
    */
-  function openSessionItems(folder) {
+  function openSessionItems() {
     const ordered = sessionOrder.map((id) => sessions.get(id)).filter(Boolean);
     const items = [];
     const push = (st, depth) => {
@@ -2241,17 +2323,92 @@
       // 子会话不单独占一行：挂在父会话下面（缩进一格）
       if (st.parentId && sessions.has(st.parentId)) { return; }
       const kids = ordered.filter((kid) => kid.parentId === st.id);
-      // 一家子只要有一个跑在这个目录里就整家一起列：子会话可能被派到别的目录里去跑
-      if (folder && !sameDir(st.cwd, folder) && !kids.some((kid) => sameDir(kid.cwd, folder))) { return; }
       push(st, 0);
       kids.forEach((kid) => { push(kid, 1); });
     });
     return items;
   }
 
-  /** 请求关闭某个会话：第一次点击只是把那一行变成确认条，再点一下才真关（防误触）。 */
+  /**
+   * 会话行鼠标停上去的那行提示：标题 + 它的完整目录。
+   * 行上不写目录（一份“历史会话”里混着所有工作区的会话）：同名会话靠这个提示分辨。
+   */
+  function tooltipWithCwd(label, cwd) {
+    const name = label || "";
+    if (!cwd) { return name; }
+    return name ? name + "\n" + cwd : cwd;
+  }
+
+  /** 两个路径是不是同一个目录（斜杠、末尾斜杠、大小写都归一化再比）。 */
+  function samePath(a, b) {
+    const norm = (p) => String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    return norm(a) === norm(b);
+  }
+
+  /** 拿一个目录当“同一个目录”用的键（跟 samePath 一个规矩）。 */
+  function normPathKey(p) {
+    return String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  }
+
+  /** 当前会话跑在哪个目录（面板上“当前工作区”那一行、展开记忆的默认值都看它）。 */
+  function activeSessionCwd() {
+    const st = activeId ? sessions.get(activeId) : null;
+    return st && typeof st.cwd === "string" ? st.cwd : "";
+  }
+
+  /** 这个会话文件是不是正在看的那个会话（历史行上标“当前”用）。 */
+  function isActiveSessionFile(file) {
+    const st = activeId ? sessions.get(activeId) : null;
+    return !!(st && st.sessionFile && samePath(st.sessionFile, file));
+  }
+
+  /** 路径最后一段（面板上那一行写的就是它）；取不出来就用整个路径。 */
+  function baseNameOfPath(p) {
+    const parts = String(p || "").split(/[\\/]+/).filter((x) => x.length > 0);
+    return parts.length > 0 ? parts[parts.length - 1] : String(p || "");
+  }
+
+  /**
+   * 工作区那些行：把“当前会话所在目录”那一行挪到最上面、标成当前。
+   *
+   * 目录跟着正在看的那个会话走（面板自己不再有“选中的工作区”），所以要在画的时候现算：
+   * 切到别的目录的会话，那一行自己跟着换，不用等宿主重推一份。
+   * 列表里没有它（比如刚挑了个没跑过会话的新目录）就现造一行，那颗加号照样能点。
+   *
+   * @param items 宿主给的那些工作区行
+   */
+  function withCurrentWorkspaceFirst(items) {
+    const cwd = activeSessionCwd();
+    if (!cwd) { return items; }
+    const hoisted = [];
+    const rest = [];
+    let found = false;
+    for (const it of items) {
+      if (!found && samePath(it.file, cwd)) {
+        found = true;
+        hoisted.push(Object.assign({}, it, { current: true }));
+        continue;
+      }
+      if (!it.current) { rest.push(it); continue; }
+      const copy = Object.assign({}, it);
+      delete copy.current;
+      rest.push(copy);
+    }
+    if (!found) {
+      hoisted.push({
+        __section: "space", section: "工作区",
+        label: baseNameOfPath(cwd), file: cwd, folderPath: cwd, current: true,
+      });
+    }
+    return hoisted.concat(rest);
+  }
+
+  /** 请求关闭某个会话：第一次点击只是把那一行变成确认条（行尾多一颗勾），再点勾才真关（防误触）。 */
   function askCloseSession(id) {
     if (pendingCloseId !== id) {
+      // 点第一下（某一行转成确认条）：就手把清单现在的宽度记下来钉住，
+      // 行尾多出一颗勾也不许把整张清单撑宽（钉住的值在 placeSessionMenu 里用）。
+      if (sessionMenuOpen && !pendingCloseId) { sessionMenuPin = sessionMenuEl.offsetWidth; }
       pendingCloseId = id;
       if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
       pendingCloseTimer = setTimeout(() => {
@@ -2283,8 +2440,6 @@
       (it.taba && it.taba.state) || "", it.pendingClose ? 1 : 0,
     ].join("|")).join("\n");
   }
-  /** 界面上正画着的那份「正在对话」内容的指纹（见上面那个函数）。 */
-  let openSessionsShown = "";
 
   /**
    * 会话增减 / 状态变化 / 确认条状态变化：列表开着就重画一遍。
@@ -2295,17 +2450,26 @@
    *    白白重画一遍只会把滚动位置顶回顶部。
    */
   function refreshOpenSessionsInPicker() {
-    const st = pickerState;
+    refreshOpenSessionsIn(modalView);
+    refreshOpenSessionsIn(dockView);
+  }
+
+  /** 一块面板里换掉「正在对话」那一段（这块面板没画着这种内容就什么都不做）。 */
+  function refreshOpenSessionsIn(view) {
+    const st = view.state;
     if (!st || (st.kind !== "workspace" && st.kind !== "history")) { return; }
-    // 「项目与会话」面板只列当前显示的工作区里的会话；历史抽屉没有工作区这个概念，列全部。
-    const openItems = openSessionItems(st.kind === "workspace" ? st.folder : "");
+    // 两块面板都列全部开着的会话（面板里那一段不跟某个工作区走）
+    const openItems = openSessionItems();
     const signature = openSessionsSignature(openItems);
-    if (signature === openSessionsShown) { return; }
-    openSessionsShown = signature;
-    // 「新建会话」那一行固定在最前：它跟「正在对话」同一个分组，不能跟着会话一起被换到后面去。
-    const rest = st.items.filter((it) => it.__section !== "open" && it.__section !== "openNew");
-    st.items = (st.newSessionItem ? [st.newSessionItem] : []).concat(openItems, rest);
-    renderPickerItems();
+    if (signature === view.openSessionsShown) { return; }
+    view.openSessionsShown = signature;
+    if (st.kind === "workspace") {
+      // 面板：整串重拼（工作区那一块、展开了的组都跟着一起算）
+      rebuildWorkspaceItems(view);
+    } else {
+      st.items = openItems.concat(st.items.filter((it) => it.__section !== "open"));
+    }
+    renderPickerItems(view);
   }
 
 
@@ -2427,18 +2591,26 @@
     }
   }
 
-  /** 画一张问话卡片（宿主发来的 askCard）。同一张卡片重发（整屏重画后补发）就换掉旧的。 */
+  /** 画一张问话卡片（宿主发来的 askCard）。同一张卡片重发（整屏重画后补发 / 重连对账后补发）就换掉旧的。 */
   function renderAskCard(st, msg) {
     const id = String(msg && msg.id || "");
     if (!id) { return; }
     const card = msg.card && typeof msg.card === "object" ? msg.card : {};
     const kind = card.kind === "confirm" || card.kind === "prompt" ? card.kind : "choice";
+    const cardJson = JSON.stringify(card);
     const old = st.askCards.get(id);
-    if (old) { old.el.remove(); }
+    if (old) {
+      // 重连对账会把还等着的卡片重发一遍：这张已经在页面上、内容一个样，就别动它
+      // （重建会把卡片里打了一半的字抹掉、把滚动位置抖一下）；人已经答过的那张也不动，
+      // 免得答过的卡片又变回一张崭新的、要人重答的卡（答案还在送去宿主的路上）。
+      if (old.done || old.cardJson === cardJson) { return; }
+      old.el.remove();
+    }
     hideEmptyHint(st);
     const rec = {
       id,
       kind,
+      cardJson,
       multi: kind === "choice" && card.multi === true,
       toolCallId: typeof card.toolCallId === "string" ? card.toolCallId : "",
       picked: [],          // 多选勾中的那几项（按选项原文记）
@@ -2555,27 +2727,166 @@
 
   // ==================== 通用拾取器浮层（模型 / 历史）====================
 
-  function hidePicker() {
-    pickerOverlay.classList.add("hidden");
-    pickerOverlay.classList.remove("pk-drawer");
-    pickerOverlay.classList.remove("pk-workspace");
-    pickerOverlay.classList.remove("pk-folders");
-    pickerBody.innerHTML = "";
-    pickerSearch.value = "";
-    setPickerSubtitle("");
-    pickerFooter.innerHTML = "";
-    pickerFooter.classList.add("hidden");
-    pickerFooter.classList.remove("pk-model-footer");
-    pickerFooter.classList.remove("pk-history-footer");
-    const leftoverClose = document.getElementById("pickerClose");
+  /** 收掉一块面板、把它那份状态清干净（哪一块由 view 指定，默认是浮层那份）。 */
+  function hidePicker(view = modalView) {
+    // 常驻那一列的几颗类写在 HTML 里（staticChrome），收起时不摘：它下次展开还要用同一套版式
+    if (!view.staticChrome) {
+      view.root.classList.add("hidden");
+      view.root.classList.remove("pk-drawer");
+      view.root.classList.remove("pk-workspace");
+      view.root.classList.remove("pk-folders");
+    }
+    view.body.innerHTML = "";
+    if (view.search) { view.search.value = ""; }
+    setPickerSubtitle("", view);
+    view.footer.innerHTML = "";
+    view.footer.classList.add("hidden");
+    view.footer.classList.remove("pk-model-footer");
+    view.footer.classList.remove("pk-history-footer");
+    const leftoverClose = view.root.querySelector(".pk-header-close");
     if (leftoverClose) { leftoverClose.remove(); }
-    pickerSearchWrap.classList.remove("hidden");
+    if (view.searchWrap) { view.searchWrap.classList.remove("hidden"); }
     // “关闭会话”的确认条只在列表里有效：列表一关就撤销（下次打开不要停在确认态）
     if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
     pendingCloseTimer = null;
     pendingCloseId = null;
-    pickerState = null;
+    view.state = null;
+    view.openSessionsShown = "";
   }
+
+  // ==================== 常驻侧边栏（宽窗下的「项目与会话」）====================
+  //
+  // 窗口够宽时（跟限宽那一列同一道 900px 门槛）「项目与会话」不当浮层：它贴右边占一列，
+  // 对话让出这块宽度（版面见 chat.css 末尾那段）。收没收起记在这台设备里，默认展开；
+  // 窗口窄（手机、窄面板）一点都不变：还是从右边滑进来、点外面收起来。
+  //
+  // 这一列画在自己的容器（#sidebarDock）里，跟浮层那一摊各画各的：中途开一次选模型、
+  // 逛文件夹那种浮层时它照样在原处（浮层盖在上面而已），内容不丢、宽度也不跳。
+  // 画法与版式都共用（下面这些渲染函数都认 view，类名也是同一套），看着跟滑进来的那张抽屉一样。
+  //
+  // 顶条那颗 <<< 由 browserBridge.js 建，点它叫这里的 toggleSidebar（它加载在 chat.js 之前，
+  // 所以走这个全局接口；没装成也不报错：接口不在就退回老行为）。
+  const SIDEBAR_MIN_WIDTH = 900;
+  const SIDEBAR_STORE_KEY = "pichat.sidebarOpen";
+  /** 这一屏要不要把侧边栏常驻着（记在本机里；没记过 = 要）。 */
+  let sidebarWanted = readSidebarWanted();
+  /** 已经跟宿主开口要过了（内容没回来之前别连着再要一遍）。 */
+  let sidebarAsked = false;
+
+  function readSidebarWanted() {
+    try { return localStorage.getItem(SIDEBAR_STORE_KEY) !== "0"; } catch (e) { return true; }
+  }
+  function rememberSidebarWanted(want) {
+    try { localStorage.setItem(SIDEBAR_STORE_KEY, want ? "1" : "0"); } catch (e) { /* 存不了就只管这一次 */ }
+  }
+  /** 窗口够宽吗（不够就走浮层那一套）。 */
+  function sidebarWide() { return window.innerWidth >= SIDEBAR_MIN_WIDTH; }
+  /** 窗口够宽、而且用户没收起：右边那一列开着吗（留不留那一列、面板显不显示都看它）。 */
+  function sidebarEnabled() { return sidebarWanted && sidebarWide(); }
+  /** 右边那一列里正画着面板吗。 */
+  function sidebarDocked() { return !!dockView.state; }
+  /** 有没有浮层正占着屏幕（常驻那一列不算：它不遮对话，Esc / 方向键也不归它）。 */
+  function pickerModalOpen() {
+    return !!modalView.state && !modalView.root.classList.contains("hidden");
+  }
+
+  /** 按“要不要常驻”摆版面：宽窗且没收起时，右边留出那一列（CSS 看 body.dock-sidebar）。 */
+  function syncSidebarLayout() {
+    const on = sidebarEnabled();
+    document.body.classList.toggle("dock-sidebar", on);
+    const btn = document.getElementById("browserMenuBtn");
+    // 常驻开着时这颗按钮的意思是“收起”，提示语跟着换
+    if (btn) { btn.title = on ? "收起侧边栏" : "项目与会话"; }
+    syncDockHeaderHeight();
+  }
+
+  /** 常驻那一列的面板头跟对话那边的顶条对齐：两根横线（顶条的底边、面板头的底边）落在
+   *  同一条线上，而且要落在整像素上（不取整那条线会压在半个像素上，看着发虚）。
+   *  顶条的高度是跟内容走的（会话名 + 目录两行、字号设置、面板宽度），所以量出来向上取整，
+   *  两边写同一个数；量之前先把上一回写死的高度摘掉，量到的才是它本来的高度。
+   *  老白量一次不好（会多搭一次重排）：顶条的高度只跟字号 / 目录那行有没有 / 面板宽度有关，
+   *  这三样没变就直接回来。 */
+  let dockBarKey = "";
+  function syncDockHeaderHeight() {
+    const bar = document.getElementById("sessionBar");
+    if (!bar || !dockView.header) { return; }
+    if (!sidebarEnabled()) {
+      // 常驻没开（窄窗、插件面板）：顶条回到自己按内容定高，别留着上一回写死的值
+      if (bar.style.height || dockView.header.style.height) {
+        bar.style.height = "";
+        dockView.header.style.height = "";
+        dockBarKey = "";
+      }
+      return;
+    }
+    const pathShown = !!(sessionPathEl && !sessionPathEl.classList.contains("hidden"));
+    const key = (document.body.style.getPropertyValue("--vscode-font-size") || "") + "|" +
+      (pathShown ? "dir" : "") + "|" + window.innerWidth;
+    if (key === dockBarKey) { return; }
+    bar.style.height = "";
+    const h = Math.ceil(bar.getBoundingClientRect().height);
+    bar.style.height = h + "px";
+    dockView.header.style.height = h + "px";
+    dockBarKey = key;
+  }
+
+  /** 右边那一列该有内容、而现在没画着：跟宿主再要一份（列先空着，不闪不跳）。 */
+  function ensureSidebarPanel() {
+    if (!sidebarEnabled() || sidebarDocked() || sidebarAsked) { return; }
+    sidebarAsked = true;
+    vscode.postMessage({ type: "openWorkspace", dock: true });
+    // 万一这条消息丢了（刚重连上那一阵、宿主那头正开着别的浮层）：过几秒放行，下一回再要
+    setTimeout(() => { sidebarAsked = false; }, 5000);
+  }
+
+  /** 展开常驻那一列（点 <<< 或面板里那颗叉的对面那种情形），并把“展开”记住。 */
+  function expandSidebar() {
+    sidebarWanted = true;
+    rememberSidebarWanted(true);
+    sidebarAsked = false;
+    syncSidebarLayout();
+    ensureSidebarPanel();
+  }
+
+  /** 收起常驻那一列：面板收掉，并把“收起”记住（下次打开还是收起）。 */
+  function collapseSidebar() {
+    sidebarWanted = false;
+    sidebarAsked = false;
+    rememberSidebarWanted(false);
+    syncSidebarLayout();
+    if (sidebarDocked()) { hidePicker(dockView); }
+  }
+
+  /** 顶条那颗 <<< ：宽窗是常驻的收起 / 展开，窄窗照旧弹一次抽屉。 */
+  function toggleSidebar() {
+    if (!sidebarWide()) {
+      // 窄窗：开了就收、没开就滑进来。开这一次不改变“宽窗要不要常驻”那个记忆。
+      const st = modalView.state;
+      if (st && st.kind === "workspace" && !modalView.root.classList.contains("hidden")) { cancelPicker(modalView); return; }
+      vscode.postMessage({ type: "openWorkspace" });
+      return;
+    }
+    if (sidebarEnabled() && sidebarDocked()) { collapseSidebar(); } else { expandSidebar(); }
+  }
+
+  // 换窗口宽窄（拖边、转手机屏幕）：跨过那道门槛时把版面与面板跟着换过来
+  let sidebarResizeFrame = 0;
+  window.addEventListener("resize", () => {
+    if (sidebarResizeFrame) { return; }
+    sidebarResizeFrame = requestAnimationFrame(() => {
+      sidebarResizeFrame = 0;
+      const wasDocked = sidebarDocked();
+      syncSidebarLayout();
+      if (!sidebarWide()) {
+        // 变窄了：常驻那一列装不下，把面板收掉（记忆不动：拉宽回来还会自己起来）
+        sidebarAsked = false;
+        if (wasDocked) { hidePicker(dockView); }
+        return;
+      }
+      ensureSidebarPanel();
+    });
+  });
+
   /** pi /resume 列表的相对时间：now / 5m / 3h / 2d / 3w / 2mo / 1y。 */
   function pickerRelTime(ms) {
     if (!ms) { return ""; }
@@ -2656,27 +2967,16 @@
     const draftLevel = st.draftModel.reasoning ? (st.draftThinking || "medium") : "";
     return draftLevel !== currentThinkingLevel(st);
   }
-  function selectModelIndex(st, idx, scroll) {
+  function selectModelIndex(view, st, idx, scroll) {
     const item = st.filtered[idx];
     if (!item) { return; }
-    st.sel = idx;
     st.draftModel = item;
     st.draftThinking = defaultThinkingForModel(st, item);
-    renderPickerItems();
+    renderPickerItems(view);
     if (scroll) {
-      const active = pickerBody.querySelector(".pk-model-item.active");
+      const active = view.body.querySelector(".pk-model-item.active");
       if (active) { active.scrollIntoView({ block: "nearest" }); }
     }
-  }
-  function moveModelThinking(delta) {
-    const st = pickerState;
-    if (!st || st.kind !== "model" || !st.draftModel || !st.draftModel.reasoning) { return; }
-    const levels = modelThinkingLevels(st.draftModel);
-    if (levels.length === 0) { return; }
-    let index = levels.indexOf(st.draftThinking);
-    if (index < 0) { index = 0; }
-    st.draftThinking = levels[(index + delta + levels.length) % levels.length];
-    renderPickerItems();
   }
   function renderModelThinking(item, st, right) {
     if (st.draftModel !== item) { return; }
@@ -2711,10 +3011,10 @@
     });
     right.appendChild(options);
   }
-  function renderModelFooter(st) {
-    pickerFooter.innerHTML = "";
-    pickerFooter.classList.remove("hidden");
-    pickerFooter.classList.add("pk-model-footer");
+  function renderModelFooter(view, st) {
+    view.footer.innerHTML = "";
+    view.footer.classList.remove("hidden");
+    view.footer.classList.add("pk-model-footer");
     const summary = document.createElement("div"); summary.className = "pk-footer-summary";
     if (!st.draftModel) {
       summary.textContent = "选择模型以查看推理设置";
@@ -2727,76 +3027,64 @@
       const costInfo = modelCostInfo(st.draftModel);
       summary.textContent = "待应用：" + modelName + " · " + levelText + (costInfo ? " · " + costInfo.text : "");
     }
-    pickerFooter.appendChild(summary);
+    view.footer.appendChild(summary);
     const actions = document.createElement("div"); actions.className = "pk-footer-actions";
     const cancelBtn = document.createElement("button"); cancelBtn.type = "button"; cancelBtn.className = "secondary"; cancelBtn.textContent = "取消";
-    cancelBtn.addEventListener("click", () => cancelPicker());
+    cancelBtn.addEventListener("click", () => cancelPicker(view));
     actions.appendChild(cancelBtn);
     const confirmBtn = document.createElement("button"); confirmBtn.type = "button"; confirmBtn.className = "primary"; confirmBtn.textContent = "确认切换";
     const ready = !!st.draftModel && (!st.draftModel.reasoning || modelThinkingLevels(st.draftModel).length > 0);
     confirmBtn.disabled = !ready || !modelDraftChanged(st);
-    confirmBtn.addEventListener("click", () => submitModelPicker());
+    confirmBtn.addEventListener("click", () => submitModelPicker(view));
     actions.appendChild(confirmBtn);
-    pickerFooter.appendChild(actions);
+    view.footer.appendChild(actions);
   }
-  function renderPickerItems() {
-    const st = pickerState;
+  function renderPickerItems(view = modalView) {
+    const st = view.state;
     if (!st) { return; }
-    const q = (pickerSearch.value || "").toLowerCase().trim();
+    const q = ((view.search ? view.search.value : "") || "").toLowerCase().trim();
     st.filtered = st.items.filter((it) => pickerItemMatch(it, st.kind, q));
-    if (st.kind === "model") {
-      if (st.draftModel) {
-        const draftIndex = st.filtered.indexOf(st.draftModel);
-        if (draftIndex >= 0) {
-          st.sel = draftIndex;
-        } else {
-          st.sel = -1;
-          st.draftModel = null;
-          st.draftThinking = undefined;
-        }
-      } else if (st.sel >= st.filtered.length) {
-        st.sel = -1;
-      }
-    } else if (st.sel >= st.filtered.length) {
-      st.sel = Math.max(0, st.filtered.length - 1);
+    // 切换模型那层：草稿模型被筛选词筛掉了就作废（底下那颗「确认切换」跟着变灰）；
+    // 列表里不再有「选中的那一行」这回事：鼠标 / 触摸点哪行就是哪行，扫过不改动什么。
+    if (st.kind === "model" && st.draftModel && st.filtered.indexOf(st.draftModel) < 0) {
+      st.draftModel = null;
+      st.draftThinking = undefined;
     }
     // 重画前先把滚动位置记下来（渲染完再放回去）：会话状态推送一来就会重画一遍，
     // 不能把人正看着的那一段顶回顶部。会话 / 工作区两块各滚各的，分开记。
-    const prevSessionPane = pickerBody.querySelector(".pk-session-pane");
-    const prevSpacePane = pickerBody.querySelector(".pk-space-pane");
+    const prevSessionPane = view.body.querySelector(".pk-session-pane");
+    const prevSpacePane = view.body.querySelector(".pk-space-pane");
     const keepScroll = {
-      body: pickerBody.scrollTop,
+      body: view.body.scrollTop,
       session: prevSessionPane ? prevSessionPane.scrollTop : 0,
       space: prevSpacePane ? prevSpacePane.scrollTop : 0,
     };
-    pickerBody.innerHTML = "";
-    pickerBody.classList.toggle("pk-workspace-body", st.kind === "workspace");
+    view.body.innerHTML = "";
+    view.body.classList.toggle("pk-workspace-body", st.kind === "workspace");
     let sessionPane = null;
     let spacePane = null;
     /** 渲染完把滚动位置放回原处（内容变短时浏览器自己会夹到最底下）。 */
     const restoreScroll = () => {
-      pickerBody.scrollTop = keepScroll.body;
+      view.body.scrollTop = keepScroll.body;
       if (sessionPane) { sessionPane.scrollTop = keepScroll.session; }
       if (spacePane) { spacePane.scrollTop = keepScroll.space; }
     };
     if (st.kind === "workspace") {
       sessionPane = document.createElement("div"); sessionPane.className = "pk-workspace-pane pk-session-pane";
       spacePane = document.createElement("div"); spacePane.className = "pk-workspace-pane pk-space-pane";
-      pickerBody.appendChild(sessionPane); pickerBody.appendChild(spacePane);
+      view.body.appendChild(sessionPane); view.body.appendChild(spacePane);
     }
     if (st.filtered.length === 0) {
       const empty = document.createElement("div"); empty.className = "pk-empty";
       empty.textContent = q ? "没有匹配项。" : "列表为空。";
-      pickerBody.appendChild(empty);
-      if ((st.kind === "history" || st.kind === "workspace") && st.historyHasMore) { pickerBody.appendChild(buildLoadMoreBtn(st, "sessions")); }
-      if (st.kind === "model") { renderModelFooter(st); }
+      view.body.appendChild(empty);
+      if (st.kind === "history" && st.historyHasMore) { view.body.appendChild(buildLoadMoreBtn(view, st, "sessions")); }
+      if (st.kind === "model") { renderModelFooter(view, st); }
       restoreScroll();
       return;
     }
     let lastSection = null;
     let lastModelProv = null;
-    /** 项目与会话面板里「加载更多」已经插过了吗（它要卡在会话那块的末尾）。 */
-    let loadMorePlaced = false;
     st.filtered.forEach((item, idx) => {
       if (st.kind === "model") {
         // provider 分组分隔线：host 已按 provider 排序，同 provider 项连续；
@@ -2806,7 +3094,7 @@
           const runCount = st.filtered.filter((x) => (x.provider || "") === lastModelProv).length;
           const sep = document.createElement("div"); sep.className = "pk-section pk-provider";
           sep.textContent = (item.provider || "其他") + " (" + runCount + ")";
-          pickerBody.appendChild(sep);
+          view.body.appendChild(sep);
         }
         const el = document.createElement("div");
         const isSelected = st.draftModel === item;
@@ -2834,59 +3122,96 @@
         const right = document.createElement("div"); right.className = "pk-model-thinking";
         renderModelThinking(item, st, right);
         el.appendChild(main); el.appendChild(right);
-        el.addEventListener("click", () => selectModelIndex(st, idx, true));
-        pickerBody.appendChild(el);
+        el.addEventListener("click", () => selectModelIndex(view, st, idx, true));
+        view.body.appendChild(el);
         return;
       }
 
-      const sectionPane = st.kind === "workspace" && item.__section === "space" ? spacePane : sessionPane;
-      // “项目与会话”面板：会话的「加载更多」必须放在会话末尾、工作区标题之前，
-      // 否则看起来会像是工作区的操作。
-      if (st.kind === "workspace" && item.__section === "space" && !loadMorePlaced) {
-        loadMorePlaced = true;
-        if (st.historyHasMore) { sessionPane.appendChild(buildLoadMoreBtn(st, "sessions")); }
-      }
+      // 「项目与会话」面板：除了「正在对话」那一节，其余（工作区行、展开的那几组会话）都画在工作区那块里，
+      // 它们自己一个滚动区。
+      const sectionPane = (st.kind === "workspace" && item.__section !== "open") ? spacePane : sessionPane;
       if (item.section && item.section !== lastSection) {
         lastSection = item.section;
         const sep = document.createElement("div"); sep.className = "pk-section";
-        sep.textContent = item.section;
-        (sectionPane || pickerBody).appendChild(sep);
+        // 「工作区」那一行右边摆一颗加号（原来是列表里的一行「打开文件夹…」）：
+        // 挑一个别的文件夹当工作区，就在那里开新会话（见 chatHostBase.workspaceBrowse）。
+        const spaceHead = st.kind === "workspace" && item.__section === "space";
+        const label = document.createElement("span"); label.className = "pk-section-text";
+        label.textContent = item.section;
+        sep.appendChild(label);
+        if (spaceHead) {
+          sep.classList.add("pk-section-with-add");
+          const add = document.createElement("button");
+          add.type = "button"; add.className = "pk-section-add-btn";
+          add.title = "打开文件夹…"; add.setAttribute("aria-label", "打开文件夹");
+          add.innerHTML = ICONS.add;
+          add.addEventListener("click", (e) => {
+            e.stopPropagation();
+            vscode.postMessage({ type: "workspaceBrowse" });
+          });
+          sep.appendChild(add);
+        }
+        (sectionPane || view.body).appendChild(sep);
       }
       const el = document.createElement("div");
-      el.className = "pk-item" + (idx === st.sel ? " active" : "");
+      el.className = "pk-item";
       if (st.kind === "workspace" && item.__section === "space") {
         el.classList.add("pk-space");
-      } else if (st.kind === "workspace" && item.__section === "session") {
-        el.classList.add("pk-session");
+      } else if (st.kind === "workspace" && item.__section === "groupSession") {
+        el.classList.add("pk-session", "pk-group-session");
       }
-      if (item.__section === "openNew") {
-        // 「正在对话」那组里的「＋ 在 xxx 新建会话」：在这个面板当前显示的目录里开新会话。
-        el.classList.add("pk-history", "pk-action");
-        const main = document.createElement("div"); main.className = "pk-history-main";
-        const icon = document.createElement("span"); icon.className = "pk-row-icon"; icon.innerHTML = ICONS.add;
-        main.appendChild(icon);
-        const title = document.createElement("span"); title.className = "pk-history-title";
-        title.textContent = "在 " + (item.name || item.folder) + " 新建会话";
-        main.appendChild(title);
-        el.appendChild(main);
-        el.title = "在 " + item.folder + " 新建会话";
-      } else if (item.__section === "open") {
+      if (item.__section === "groupMore") {
+        // 那一组的「加载更多」：卡在组里末尾，点它接着加这一组的
+        const g = groupState(st, item.groupPath);
+        const btn = document.createElement("button");
+        btn.type = "button"; btn.className = "pk-loadmore pk-group-more";
+        btn.textContent = g.loading ? "加载中…" : "加载更多";
+        btn.disabled = !!g.loading;
+        btn.addEventListener("click", () => {
+          if (g.loading) { return; }
+          requestGroupPage(view, item.groupPath, g.nextOffset);
+          renderPickerItems(view);
+        });
+        (sectionPane || view.body).appendChild(btn);
+        return;
+      }
+      if (item.__section === "open") {
         // 「正在对话」：开着的会话（子会话缩进挂在主会话下面）。
         // 主会话只有在建会话、当前会话、在跑的才加粗 / 点蓝；历史列表里那套字号不动。
         el.classList.add("pk-history", "pk-open");
         if (item.current) { el.classList.add("current"); }
         if (item.depth > 0) { el.classList.add("pk-open-child"); }
+        // 行首那一块（子会话的拐角箭头、那颗小点、名字）：普通行与确认条共用这一份
+        // （确认条只是行尾那颗叉旁边多一颗勾，行里的东西一点不动：关的是哪一个照样看得见）。
+        const main = document.createElement("div"); main.className = "pk-history-main";
+        // 子会话：名字前面挂一个拐角箭头（“↳”），一眼看出它是挂在上面那个会话下面的
+        if (item.depth > 0) {
+          const arrow = document.createElement("span");
+          arrow.className = "pk-open-arrow";
+          arrow.innerHTML = ICONS.child;
+          main.appendChild(arrow);
+        }
+        const dot = document.createElement("span");
+        dot.className = "pk-open-dot" + openDotClass(item);
+        main.appendChild(dot);
+        const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.label || "";
+        main.appendChild(title);
+        // 行尾不再挂「当前」/「在跑」：当前那条靠整行的底色认，在跑 / 有新消息靠行首那颗小点。
+        el.appendChild(main);
         if (item.pendingClose) {
+          // 点过行尾那颗叉：整行底色变红，行尾多一颗勾——点勾才真关，点叉撤销。
           el.classList.add("pk-open-confirm");
-          const bar = document.createElement("div"); bar.className = "pk-open-bar";
-          const ask = document.createElement("span"); ask.className = "pk-open-ask";
-          ask.textContent = "关闭「" + (item.label || "") + "」？";
-          bar.appendChild(ask);
           const yes = document.createElement("button");
-          yes.type = "button"; yes.className = "pk-open-yes"; yes.textContent = "关闭";
+          yes.type = "button"; yes.className = "pk-open-yes";
+          yes.title = "关闭这个会话";
+          yes.setAttribute("aria-label", "关闭这个会话");
+          yes.innerHTML = ICONS["check-bold"];
           yes.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(item.sessionId); });
           const no = document.createElement("button");
-          no.type = "button"; no.className = "pk-open-no"; no.textContent = "取消";
+          no.type = "button"; no.className = "pk-open-no";
+          no.title = "取消";
+          no.setAttribute("aria-label", "取消");
+          no.innerHTML = ICONS["close-bold"];
           no.addEventListener("click", (e) => {
             e.stopPropagation();
             pendingCloseId = null;
@@ -2894,24 +3219,8 @@
             pendingCloseTimer = null;
             refreshOpenSessionsInPicker();
           });
-          bar.appendChild(yes); bar.appendChild(no);
-          el.appendChild(bar);
+          el.appendChild(yes); el.appendChild(no);
         } else {
-          const main = document.createElement("div"); main.className = "pk-history-main";
-          // 子会话：名字前面挂一个拐角箭头（“↳”），一眼看出它是挂在上面那个会话下面的
-          if (item.depth > 0) {
-            const arrow = document.createElement("span");
-            arrow.className = "pk-open-arrow";
-            arrow.innerHTML = ICONS.child;
-            main.appendChild(arrow);
-          }
-          const dot = document.createElement("span");
-          dot.className = "pk-open-dot" + openDotClass(item);
-          main.appendChild(dot);
-          const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.label || "";
-          main.appendChild(title);
-          // 行尾不再挂「当前」/「在跑」：当前那条靠整行的底色认，在跑 / 有新消息靠行首那颗小点。
-          el.appendChild(main);
           // 关闭按钮放行尾：点行是切过去（大目标），点这颗才关（还要再确认一下）。
           const close = document.createElement("span");
           close.className = "pk-open-close";
@@ -2921,8 +3230,8 @@
           close.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(item.sessionId); });
           el.appendChild(close);
         }
-        el.title = item.label || "";
-      } else if (st.kind === "history" || (st.kind === "workspace" && item.__section === "session")) {
+        el.title = tooltipWithCwd(item.label, item.cwd);
+      } else if (st.kind === "history" || (st.kind === "workspace" && item.__section === "groupSession")) {
         el.classList.add("pk-history");
         if (item.current) { el.classList.add("current"); }
         const main = document.createElement("div"); main.className = "pk-history-main";
@@ -2949,29 +3258,42 @@
         el.appendChild(t);
         if (item.desc) { const d = document.createElement("div"); d.className = "pk-desc"; d.style.paddingLeft = "20px"; d.textContent = item.desc; el.appendChild(d); }
       } else if (st.kind === "workspace" && item.__section === "space") {
-        // 工作区行：文件夹图标 + 名字一行，路径另起一行弱化（全路径长，但它就是辨认同名目录的关键）。
-        el.classList.add("pk-history");
+        // 工作区行：就是个组头——小三角、文件夹图标、名字 + 目录路径一行。
+        // 点整行展开 / 收起；行尾那颗加号是在这个目录里开新会话。
+        el.classList.add("pk-history", "pk-space-head");
         if (item.current) { el.classList.add("current"); }
+        const expanded = groupExpanded(item.file);
+        if (expanded) { el.classList.add("expanded"); }
         const main = document.createElement("div"); main.className = "pk-history-main";
+        // 行首那个小三角（画的是朝右，展开时 CSS 转 90° 成朝下）
+        const caret = document.createElement("span"); caret.className = "pk-space-caret"; caret.innerHTML = CHEVRON_SVG;
+        main.appendChild(caret);
         const icon = document.createElement("span"); icon.className = "pk-row-icon"; icon.innerHTML = ICONS.folder;
         main.appendChild(icon);
-        if (item.action === "browse") {
-          // 「浏览文件夹…」动作行：强调色，附注一行说明它干什么。
-          el.classList.add("pk-action");
-          const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.label || "";
-          main.appendChild(title);
-          el.appendChild(main);
-          if (item.folderPath) { const d = document.createElement("div"); d.className = "pk-browse-desc"; d.textContent = item.folderPath; el.appendChild(d); }
-        } else {
-          const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.label || "";
-          main.appendChild(title);
-          const right = document.createElement("span"); right.className = "pk-history-right";
-          if (item.count > 0) { const c = document.createElement("span"); c.className = "pk-history-count"; c.textContent = String(item.count); right.appendChild(c); }
-          if (item.lastActivity) { const a = document.createElement("span"); a.className = "pk-history-age"; a.textContent = pickerRelTime(item.lastActivity); right.appendChild(a); }
-          if (right.childNodes.length) { main.appendChild(right); }
-          el.appendChild(main);
-          if (item.folderPath) { const p = document.createElement("div"); p.className = "pk-space-path"; p.textContent = item.folderPath; el.appendChild(p); }
+        const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.label || "";
+        main.appendChild(title);
+        // 目录的完整路径就摆在名字后面（淡淡的；太长从尾巴上截，整条路径鼠标停上去还能看到）：
+        // 名字前面那一段父目录才是认目录的关键，所以截的是尾巴不是开头。
+        if (item.folderPath) {
+          const p = document.createElement("span"); p.className = "pk-space-path-inline"; p.textContent = item.folderPath;
+          main.appendChild(p);
         }
+        const right = document.createElement("span"); right.className = "pk-history-right";
+        if (item.count > 0) { const c = document.createElement("span"); c.className = "pk-history-count"; c.textContent = String(item.count); right.appendChild(c); }
+        if (item.lastActivity) { const a = document.createElement("span"); a.className = "pk-history-age"; a.textContent = pickerRelTime(item.lastActivity); right.appendChild(a); }
+        if (right.childNodes.length) { main.appendChild(right); }
+        // 行尾那颗加号（鼠标停在这一行才露出来，触屏上常显），目录明写在消息里
+        const add = document.createElement("button");
+        add.type = "button"; add.className = "pk-space-add";
+        add.title = "在 " + (item.folderPath || item.label || "") + " 新建会话";
+        add.setAttribute("aria-label", "在这个工作区新建会话");
+        add.innerHTML = ICONS.add;
+        add.addEventListener("click", (e) => {
+          e.stopPropagation();
+          vscode.postMessage({ type: "newSessionInWorkspace", path: item.file });
+        });
+        main.appendChild(add);
+        el.appendChild(main);
         el.title = item.folderPath || item.label || "";
       } else if (st.kind === "folders") {
         // 文件夹行按资源管理器的样子画：行首一格图标 + 名字一行。
@@ -2995,28 +3317,26 @@
         t.textContent = String(item.label);
         el.appendChild(t);
       }
-      el.addEventListener("mouseenter", () => { st.sel = idx; renderPickerActive(); });
-      el.addEventListener("click", () => { confirmPicker(idx); });
-      (sectionPane || pickerBody).appendChild(el);
+      // 鼠标扫过不改「选中的那一行」：这里已经没有这一回事了（列表只认点哪行是哪行，
+      // 鼠标底下那一行归 CSS 的 :hover，移开就灭）。
+      el.addEventListener("click", () => { confirmPicker(idx, view); });
+      (sectionPane || view.body).appendChild(el);
     });
     // 两个面板各有自己的滚动区和加载按钮。
     if (st.kind === "history" && st.historyHasMore) {
-      pickerBody.appendChild(buildLoadMoreBtn(st, "sessions"));
-    }
-    if (st.kind === "workspace" && st.historyHasMore && !loadMorePlaced) {
-      sessionPane.appendChild(buildLoadMoreBtn(st, "sessions"));
+      view.body.appendChild(buildLoadMoreBtn(view, st, "sessions"));
     }
     if (st.kind === "workspace" && st.spacesHasMore) {
-      spacePane.appendChild(buildLoadMoreBtn(st, "spaces"));
+      spacePane.appendChild(buildLoadMoreBtn(view, st, "spaces"));
     }
-    if (st.kind === "model") { renderModelFooter(st); }
+    if (st.kind === "model") { renderModelFooter(view, st); }
     restoreScroll();
   }
   /**
    * 「加载更多」那颗按钮。which = "sessions" 是上半会话那块的，"spaces" 是下半工作区那块的；
    * 两块各记各的加载中状态（同时点也不会互相把按钮弄乱）。
    */
-  function buildLoadMoreBtn(st, which) {
+  function buildLoadMoreBtn(view, st, which) {
     const isSpaces = which === "spaces";
     const loading = isSpaces ? st.spacesLoading : st.historyLoading;
     const btn = document.createElement("button");
@@ -3026,20 +3346,35 @@
     btn.addEventListener("click", () => {
       if (loading) { return; }
       if (isSpaces) { st.spacesLoading = true; } else { st.historyLoading = true; }
-      renderPickerItems();
+      renderPickerItems(view);
+      // 宿主回来的那批不带“哪一块面板点的”：这里先记一笔（浮层那份与常驻那一列两边都可能点）
+      loadMoreWaiters[which].push(view);
       vscode.postMessage({ type: isSpaces ? "workspaceLoadMore" : "historyLoadMore" });
     });
     return btn;
   }
-  function renderPickerActive() {
-    const st = pickerState; if (!st) { return; }
-    const items = pickerBody.querySelectorAll(".pk-item");
-    items.forEach((el, i) => el.classList.toggle("active", i === st.sel));
-    const cur = items[st.sel];
-    if (cur) { cur.scrollIntoView({ block: "nearest" }); }
+
+  /** 点过「加载更多」的面板（先来后到），宿主回来的那批按它对上主。 */
+  const loadMoreWaiters = { sessions: [], spaces: [] };
+
+  /**
+   * 「加载更多」回来的那批记到哪块面板上：先看是哪一块点的（按先来后到），
+   * 没记着（重连之后、旧版界面）就按正在画着的那种面板找一块。
+   */
+  function takeLoadMoreView(which, kinds) {
+    const queue = loadMoreWaiters[which];
+    while (queue.length) {
+      const v = queue.shift();
+      if (v.state && kinds.indexOf(v.state.kind) >= 0) { return v; }
+    }
+    for (let i = 0; i < kinds.length; i++) {
+      const v = viewShowing(kinds[i]);
+      if (v) { return v; }
+    }
+    return null;
   }
-  function submitModelPicker() {
-    const st = pickerState;
+  function submitModelPicker(view) {
+    const st = view.state;
     if (!st || st.kind !== "model" || !st.draftModel) { return; }
     const ready = !st.draftModel.reasoning || modelThinkingLevels(st.draftModel).length > 0;
     if (!ready || !modelDraftChanged(st)) { return; }
@@ -3048,50 +3383,52 @@
       modelId: st.draftModel.id,
       thinkingLevel: st.draftThinking,
     };
-    hidePicker();
+    hidePicker(view);
     vscode.postMessage({ type: "pickerChoice", kind: "model", payload });
   }
-  function confirmPicker(idx) {
-    const st = pickerState; if (!st) { return; }
-    if (st.kind === "model") { submitModelPicker(); return; }
+  function confirmPicker(idx, view = modalView) {
+    const st = view.state; if (!st) { return; }
+    if (st.kind === "model") { submitModelPicker(view); return; }
     const item = st.filtered[idx];
     if (!item) { return; }
     const kind = st.kind;
+    // 常驻那一列里点一行 = “用一下”，不是“选完就走”：面板留着接着点下一行
+    const closeFirst = () => { if (!view.keepOpen) { hidePicker(view); } };
     if (st.toggle || item.behavior === "toggle") {
       vscode.postMessage({ type: "pickerToggle", kind, action: item.action, value: item.value });
-      return;
-    }
-    // 「正在对话」那组里的「＋ 在 xxx 新建会话」：收起面板、就在这个目录里开一个
-    // （宿主按面板当前显示的工作区开，不是后端启动时那个默认目录）。
-    if (item.__section === "openNew") {
-      hidePicker();
-      // 目录明写在消息里：面板可能同时在两块屏上开着，后端记的“当前工作区”是最后一人换的那个，
-      // 不能拿它当这块屏上写着的那一个。
-      vscode.postMessage({ type: "newSessionInWorkspace", path: item.folder });
       return;
     }
     // 「正在对话」段：点行就是切过去（不新开、不重载），行尾那颗 × 是关闭（要再点一下确认）。
     if (item.__section === "open") {
       if (item.pendingClose) { askCloseSession(item.sessionId); return; }
-      hidePicker();
+      closeFirst();
       vscode.postMessage({ type: "switchSession", sessionId: item.sessionId });
       return;
     }
-    // “项目与会话”面板：点下半的工作区**不关面板**，只让宿主把上半那份会话列表换成它的；
-    // “浏览文件夹…”那一行例外（它不是工作区，是要跳去文件夹面板）。
-    if (kind === "workspace" && item.__section === "space" && item.action !== "browse") {
-      vscode.postMessage({ type: "workspacePick", path: item.file });
+    // 工作区那一行：展开 / 收起（面板留着重画，不关）
+    if (kind === "workspace" && item.__section === "space") {
+      toggleGroupIn(view, item.file);
+      return;
+    }
+    if (view.keepOpen) {
+      // 常驻那一列不关，所以不能走“选完就走”那条路（pickerChoice 是“挑好了、结束这次挑”）：
+      // 会话直接切过去，目录用那一行自己带过来的（组头的目录）。
+      vscode.postMessage({ type: "workspaceOpenSession", path: item.file, cwd: item.cwd || "" });
       return;
     }
     const payload = { file: item.file };
-    hidePicker();
+    // 组里那些会话行带着自己的目录（“历史会话”是按工作区分组的）；别的列表没有这一项。
+    if (item.cwd) { payload.cwd = item.cwd; }
+    hidePicker(view);
     vscode.postMessage({ type: "pickerChoice", kind, payload });
   }
 
-  function cancelPicker() {
-    const st = pickerState; if (!st) { return; }
+  function cancelPicker(view = modalView) {
+    const st = view.state; if (!st) { return; }
     const kind = st.kind;
-    hidePicker();
+    // 常驻那一列上那颗叉的意思是“收起”（跟顶条那颗 <<< 一样，并且记住）
+    if (view.keepOpen) { collapseSidebar(); return; }
+    hidePicker(view);
     vscode.postMessage({ type: "pickerCancel", kind });
   }
   /**
@@ -3099,24 +3436,194 @@
    * 会话在前、工作区在后；每行记着自己是哪一块（__section），下面渲染分行、
    * 点行为也不一样（点会话关面板切过去，点工作区只换上半）。
    */
-  function workspaceFlatItems(msg) {
-    const ss = (msg.sessions && Array.isArray(msg.sessions.items)) ? msg.sessions.items : [];
-    const sp = (msg.spaces && Array.isArray(msg.spaces.items)) ? msg.spaces.items : [];
-    const head = HISTORY_SECTION;
-    const withSection = (it, sec, headText) => {
-      const copy = {};
-      for (const k in it) { if (Object.prototype.hasOwnProperty.call(it, k)) { copy[k] = it[k]; } }
-      copy.__section = sec;
-      copy.section = headText;
-      return copy;
+  /**
+   * 「项目与会话」那份面板状态：宿主给的是工作区那一块，界面自己拼上「正在对话」那一节，
+   * 再把展开了的那几组会话挂到各自的工作区行下面。浮层里的抽屉与常驻那一列共用这一份拼法。
+   */
+  function workspacePanelState(msg) {
+    const st = {
+      kind: "workspace",
+      // 宿主给的工作区行（没动过的原样一份）：组头排序、挂会话都从它算起
+      spaceItems: workspaceFlatItems(msg),
+      // 展开了的那几组会话：目录键 → { items, nextOffset, hasMore, loading, loaded }
+      groups: new Map(),
+      items: [],
+      filtered: [],
+      current: msg.current || null,
+      draftModel: null,
+      draftThinking: undefined,
+      toggle: false,
+      // 面板里现在只有工作区那一块会「加载更多」（历史会话那一份在浮层里，另有一套）
+      historyHasMore: false,
+      historyLoading: false,
+      spacesHasMore: !!(msg.spaces && msg.spaces.hasMore),
+      spacesLoading: false,
     };
-    return ss.map((it) => withSection(it, "session", head))
-      .concat(sp.map((it) => withSection(it, "space", "工作区")));
+    rebuildWorkspaceItems({ state: st }, false);
+    return st;
   }
 
-  function renderPicker(msg) {
+  /**
+   * 把面板那串行重拼一遍：「正在对话」在前，然后是工作区那一块（展开了的组把会话挂在自己下面）。
+   * 会话增减、展开 / 收起、某一组取回了一批——凡是画面要跟着变的都调它。
+   * @param fetch 拼到展开的组时要不要去跟宿主要那一组（面板刚建出来、还没有真的那块屏时为 false）
+   */
+  function rebuildWorkspaceItems(view, fetch) {
+    const st = view.state;
+    if (!st || st.kind !== "workspace") { return; }
+    st.items = openSessionItems().concat(buildSpaceRows(view, fetch !== false));
+  }
+
+  /**
+   * 工作区那一块的行：当前会话所在那个组排最上面，展开了的组把它的会话行挂在组头下面，
+   * 「加载更多」卡在那一组的末尾。
+   */
+  function buildSpaceRows(view, fetch) {
+    const st = view.state;
+    const out = [];
+    for (const it of withCurrentWorkspaceFirst(st.spaceItems)) {
+      out.push(it);
+      if (!groupExpanded(it.file)) { continue; }
+      const g = groupState(st, it.file);
+      // 这一组还没取过（刚展开、或者面板刚重推一份）：现在去要第一条
+      if (fetch && !g.loaded && !g.loading) { requestGroupPage(view, it.file, 0); }
+      for (const row of g.items) {
+        out.push(Object.assign({}, row, {
+          __section: "groupSession",
+          section: it.section,
+          groupPath: it.file,
+          // 当前是哪一个会话：现算（取回时算过一遍，之后切了会话也得跟着换）
+          current: isActiveSessionFile(row.file),
+        }));
+      }
+      if (g.hasMore) { out.push({ __section: "groupMore", section: it.section, groupPath: it.file }); }
+    }
+    return out;
+  }
+
+  /** 某一组的那一摊（展开 / 收起之间留着已经取回的行，再展开就不用等）。 */
+  function groupState(st, path) {
+    const key = normPathKey(path);
+    let g = st.groups.get(key);
+    if (!g) {
+      g = { items: [], nextOffset: 0, hasMore: false, loading: false, loaded: false };
+      st.groups.set(key, g);
+    }
+    return g;
+  }
+
+  // ---- 展开记忆：这台设备上手动展过 / 收过哪些工作区（跟侧边栏“收没收起”一个规矩） ----
+  const EXPANDED_STORE_KEY = "pichat.workspaceExpanded";
+  /** 记住的那一份；null = 这台设备上还没记过（那就只展开当前会话所在的那个）。 */
+  let expandedDirs = readExpandedDirs();
+
+  function readExpandedDirs() {
+    try {
+      const raw = localStorage.getItem(EXPANDED_STORE_KEY);
+      if (!raw) { return null; }
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? new Set(arr.map((p) => normPathKey(p))) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function rememberExpandedDirs() {
+    try { localStorage.setItem(EXPANDED_STORE_KEY, JSON.stringify(Array.from(expandedDirs || []))); } catch { /* 存不了就算了 */ }
+  }
+
+  /** 这个工作区现在是展开的吗（没记过时：展开当前会话所在的那个）。 */
+  function groupExpanded(path) {
+    if (expandedDirs === null) { return samePath(path, activeSessionCwd()); }
+    return expandedDirs.has(normPathKey(path));
+  }
+
+  /** 点一下组头：展开 / 收起，并把结果记住。 */
+  function toggleGroup(path) {
+    const key = normPathKey(path);
+    if (expandedDirs === null) {
+      expandedDirs = new Set();
+      const cur = activeSessionCwd();
+      if (cur) { expandedDirs.add(normPathKey(cur)); }
+    }
+    if (expandedDirs.has(key)) { expandedDirs.delete(key); } else { expandedDirs.add(key); }
+    rememberExpandedDirs();
+  }
+
+  /** 面板里点了一个工作区：展开 / 收起（行尾那颗加号是新建会话，它自己吞掉点击）。 */
+  function toggleGroupIn(view, path) {
+    const st = view.state;
+    if (!st || st.kind !== "workspace") { return; }
+    toggleGroup(path);
+    rebuildWorkspaceItems(view);
+    renderPickerItems(view);
+  }
+
+  /**
+   * 跟宿主要某一组会话（offset = 从第几个文件接着扫；第一次是 0）。
+   * “想找哪个组”按先来后到记一笔，回来的那批从那里认领（跟两颗「加载更多」一个路子）。
+   */
+  function requestGroupPage(view, path, offset) {
+    const st = view.state;
+    if (!st || st.kind !== "workspace") { return; }
+    const g = groupState(st, path);
+    if (g.loading) { return; }
+    g.loading = true;
+    groupWaits.push({ path: normPathKey(path), view });
+    vscode.postMessage({ type: "workspaceSessions", path, offset });
+  }
+
+  /** 回来的那一批要交给谁：按先来后到找等它的那块面板。 */
+  function takeGroupView(path) {
+    const key = normPathKey(path);
+    for (let i = 0; i < groupWaits.length; i++) {
+      if (groupWaits[i].path === key) { return groupWaits.splice(i, 1)[0].view; }
+    }
+    return viewShowing("workspace");
+  }
+
+  /** 正在等某一组会话的那几笔账（哪块屏要的、要的是哪个目录）。 */
+  const groupWaits = [];
+
+  /**
+   * 哪一块面板正画着这种内容（浮层那份与常驻那一列各看各的）。
+   * 「加载更多」回来的那批靠它找主（另有按先来后到记的账，见 takeLoadMoreView）。
+   */
+  function viewShowing(kind) {
+    if (modalView.state && modalView.state.kind === kind && !modalView.root.classList.contains("hidden")) { return modalView; }
+    if (dockView.state && dockView.state.kind === kind) { return dockView; }
+    return null;
+  }
+
+  function workspaceFlatItems(msg) {
+    const sp = (msg.spaces && Array.isArray(msg.spaces.items)) ? msg.spaces.items : [];
+    return sp.map((it) => {
+      const copy = {};
+      for (const k in it) { if (Object.prototype.hasOwnProperty.call(it, k)) { copy[k] = it[k]; } }
+      copy.__section = "space";
+      copy.section = "工作区";
+      return copy;
+    });
+  }
+
+  function renderPicker(msg, view = null) {
     const kind = msg.kind;
     const toggle = !!msg.toggle;
+    // 「项目与会话」画到哪儿：宽窗 + 用户没收起 → 右边那一列（#sidebarDock，见上面“常驻侧边栏”）；
+    // 窄窗（手机、窄面板）→ 浮层里那张抽屉。别的拾取器一律画在浮层那份里。
+    // 这一下已经收起 / 变窄了就当没收到（不然收起了还弹一张抽屉出来），并告诉宿主别再等着。
+    if (view === null) {
+      if (kind !== "workspace") {
+        view = modalView;
+      } else {
+        if (msg.dock === true ? !sidebarEnabled() : sidebarWide()) {
+          vscode.postMessage({ type: "pickerCancel", kind: "workspace" });
+          return;
+        }
+        view = sidebarEnabled() ? dockView : modalView;
+      }
+    }
+    const toDock = view === dockView;
     // 面板与顶条那颗下拉是同一个位置上的两种界面：开面板就把下拉收掉。
     closeSessionMenu();
     // “项目与会话”面板不放搜索框：上半会话、下半工作区两块结构，这个框帮不上忙还占一截
@@ -3127,141 +3634,125 @@
     // 免得把「加载更多」追加进来的行弄丢。
     // 历史抽屉里磁盘上那批会话也归成一节（「历史会话」）：没有这一节，它们会并到
     // 「正在对话」底下，看着像是那些开着的会话的续行。
-    const rawHostItems = Array.isArray(msg.items) ? msg.items : [];
-    const hostItems = kind === "workspace" ? workspaceFlatItems(msg)
-      : (kind === "history" ? rawHostItems.map((it) => (it.section ? it : Object.assign({}, it, { section: HISTORY_SECTION }))) : rawHostItems);
-    // 「项目与会话」面板当前显示的是哪个工作区（切工作区时宿主会重发一份，这里跟着换）：
-    // 上半「正在对话」只列这个目录里开着的会话，那颗「在 xxx 新建会话」也在这个目录里开。
-    const folder = kind === "workspace"
-      ? String((msg.sessions && msg.sessions.folder) || (msg.spaces && msg.spaces.current) || "")
-      : "";
-    const newSessionItem = kind === "workspace" && folder
-      ? { __section: "openNew", section: "正在对话", folder, name: (msg.sessions && msg.sessions.name) || folder }
-      : null;
-    const openItems = (kind === "workspace" || kind === "history") ? openSessionItems(folder) : [];
-    // 刚画出来的「正在对话」长什么样：之后状态推送内容没变就不重画（见 refreshOpenSessionsInPicker）
-    openSessionsShown = openSessionsSignature(openItems);
-    pickerState = {
-      kind,
-      folder,
-      newSessionItem,
-      items: (newSessionItem ? [newSessionItem] : []).concat(openItems, hostItems),
-      filtered: [],
-      sel: kind === "model" ? -1 : 0,
-      current: msg.current || null,
-      draftModel: null,
-      draftThinking: undefined,
-      toggle,
-      // 「加载更多」：history 看 msg.hasMore，项目与会话分两块（会话 sessions.hasMore、工作区 spaces.hasMore）。
-      historyHasMore: kind === "workspace" ? !!(msg.sessions && msg.sessions.hasMore) : msg.hasMore === true,
-      historyLoading: false,
-      spacesHasMore: kind === "workspace" ? !!(msg.spaces && msg.spaces.hasMore) : false,
-      spacesLoading: false,
-    };
-    // 抽屉列表刚打开时不预选任何一行：哪条会话是“当前”由行尾那颗胶囊说，
-    // 预选只会给那一行铺一层灰底（.pk-item.active），看着像又选中了一条。
-    // 上下键按下去才出现选中行（sel 从 -1 开头，取首/末的那段见 ArrowDown / ArrowUp）。
-    if (kind === "workspace" || kind === "history") {
-      pickerState.sel = -1;
+    if (kind === "workspace") {
+      // 「项目与会话」那份：浮层里的抽屉与常驻那一列共用这一份拼法（见 workspacePanelState）
+      view.state = workspacePanelState(msg);
+      // 展开了的那几组现在去要会话（上面那份是没带“哪块屏”拼的，要不出来）
+      rebuildWorkspaceItems(view);
+    } else {
+      const rawHostItems = Array.isArray(msg.items) ? msg.items : [];
+      const hostItems = kind === "history"
+        ? rawHostItems.map((it) => (it.section ? it : Object.assign({}, it, { section: HISTORY_SECTION })))
+        : rawHostItems;
+      const openItems = kind === "history" ? openSessionItems() : [];
+      view.state = {
+        kind,
+        items: openItems.concat(hostItems),
+        filtered: [],
+        current: msg.current || null,
+        draftModel: null,
+        draftThinking: undefined,
+        toggle,
+        historyHasMore: msg.hasMore === true,
+        historyLoading: false,
+        spacesHasMore: false,
+        spacesLoading: false,
+      };
     }
+    // 刚画出来的「正在对话」长什么样：之后状态推送内容没变就不重画（见 refreshOpenSessionsInPicker）
+    view.openSessionsShown = openSessionsSignature(view.state.items.filter((it) => it.__section === "open"));
+    // 列表刚打开时不预选任何一行：哪条会话是“当前”由行尾那颗胶囊说，预选只会给那一行铺一层灰底，
+    // 看着像又选中了一条（这里已经没有键盘那套“选中行”了，开着就等鼠标 / 触摸去点）。
     const titleMap = { model: "切换模型", history: "会话历史", options: "显示选项" };
-    pickerTitle.textContent = titleMap[kind] || (typeof msg.title === "string" && msg.title ? msg.title : "选择");
+    view.title.textContent = titleMap[kind] || (typeof msg.title === "string" && msg.title ? msg.title : "选择");
     // 标题下面那行小字（现在只有文件夹选择器用：正在看的是哪个目录）；没有就收起来
-    setPickerSubtitle(typeof msg.subtitle === "string" ? msg.subtitle : "");
-    pickerSearch.value = "";
-    pickerSearchWrap.classList.toggle("hidden", !searchable);
-    pickerFooter.classList.remove("pk-model-footer");
-    pickerFooter.classList.remove("pk-history-footer");
-    pickerFooter.innerHTML = "";
+    setPickerSubtitle(typeof msg.subtitle === "string" ? msg.subtitle : "", view);
+    if (view.search) { view.search.value = ""; }
+    if (view.searchWrap) { view.searchWrap.classList.toggle("hidden", !searchable); }
+    view.footer.classList.remove("pk-model-footer");
+    view.footer.classList.remove("pk-history-footer");
+    view.footer.innerHTML = "";
     if (kind === "model") {
-      pickerFooter.classList.remove("hidden");
-      // 预选当前模型为 draft（host 已把它排到列表第一位）：打开即高亮 +
-      // 推理强度/footer 就绪；无改动时 Enter 提交被 no-op 保护拦掉。
-      const cur = pickerState.items.find((it) => it.current);
+      view.footer.classList.remove("hidden");
+      // 预选当前模型为 draft（host 已把它排到列表第一位）：打开即高亮（.active）+ 推理强度 / footer 就绪；
+      // 没改过（还是当前这个）时底下那颗「确认切换」是灰的，点不动。
+      const cur = view.state.items.find((it) => it.current);
       if (cur) {
-        pickerState.draftModel = cur;
-        pickerState.draftThinking = defaultThinkingForModel(pickerState, cur);
+        view.state.draftModel = cur;
+        view.state.draftThinking = defaultThinkingForModel(view.state, cur);
       }
     } else if (kind === "history" || kind === "workspace") {
-      // 历史会话 / 项目与会话面板：头部加一颗关闭按钮（面板占满整屏高，窄屏幕上遮罩只剩
-      // 一条缝，点不到），底部留一行「设置」——点它先收起面板，再打开设置浮层。
-      pickerFooter.classList.remove("hidden");
-      pickerFooter.classList.add("pk-history-footer");
+      // 历史会话 / 项目与会话面板：头部加一颗「收起 / 关闭」按钮（面板占满整屏高，
+      // 窄屏幕上遮罩只剩一条缝，点不到），底部留一行「设置」。
+      view.footer.classList.remove("hidden");
+      view.footer.classList.add("pk-history-footer");
       // 面板重画（切换工作区、追加数据走 renderPicker）不会先过 hidePicker，
       // 头部的关闭按钮是 append 进去的：先把旧的那颗摘掉，不然越摘越多。
-      const staleClose = document.getElementById("pickerClose");
+      const staleClose = view.root.querySelector(".pk-header-close");
       if (staleClose) { staleClose.remove(); }
       const headerClose = document.createElement("button");
-      headerClose.type = "button"; headerClose.id = "pickerClose";
-      headerClose.title = "关闭 (Esc)"; headerClose.setAttribute("aria-label", "关闭");
+      headerClose.type = "button"; headerClose.className = "pk-header-close";
+      // 常驻那一列上它管“收起”（跟顶条那颗 <<< 一回事）；浮层那一套才是“关闭”
+      headerClose.title = view.keepOpen ? "收起侧边栏" : "关闭 (Esc)";
+      headerClose.setAttribute("aria-label", view.keepOpen ? "收起侧边栏" : "关闭");
       headerClose.innerHTML = ICONS["close-bold"];
-      headerClose.addEventListener("click", () => cancelPicker());
-      pickerHeader.appendChild(headerClose);
+      headerClose.addEventListener("click", () => cancelPicker(view));
+      view.header.appendChild(headerClose);
       const settingsBtn = document.createElement("button"); settingsBtn.type = "button";
       settingsBtn.className = "secondary pk-footer-settings";
       settingsBtn.title = "打开设置";
       settingsBtn.innerHTML = ICONS.sliders + "<span>设置</span>";
-      settingsBtn.addEventListener("click", () => { cancelPicker(); openSettings(); });
-      pickerFooter.appendChild(settingsBtn);
+      settingsBtn.addEventListener("click", () => {
+        // 常驻那一列不用收（设置浮层盖在它上面，关掉设置它还在原处）；浮层那一套才先收起面板
+        if (!view.keepOpen) { cancelPicker(view); }
+        openSettings();
+      });
+      view.footer.appendChild(settingsBtn);
     } else if (toggle) {
-      pickerFooter.classList.remove("hidden");
+      view.footer.classList.remove("hidden");
       const closeBtn = document.createElement("button"); closeBtn.className = "secondary"; closeBtn.textContent = "关闭";
-      closeBtn.addEventListener("click", () => cancelPicker());
-      pickerFooter.appendChild(closeBtn);
+      closeBtn.addEventListener("click", () => cancelPicker(view));
+      view.footer.appendChild(closeBtn);
     } else {
-      pickerFooter.classList.add("hidden");
+      view.footer.classList.add("hidden");
     }
-    // 历史会话与项目与会话从右侧滑进来（整屏高的面板）；其余拾取器照旧居中弹出
-    pickerOverlay.classList.toggle("pk-drawer", kind === "history" || kind === "workspace");
-    pickerOverlay.classList.toggle("pk-workspace", kind === "workspace");
-    // 文件夹选择器：不给筛选框那一截地方，列表按资源管理器的密度与排版画
-    pickerOverlay.classList.toggle("pk-folders", kind === "folders");
-    renderPickerItems();
-    pickerOverlay.classList.remove("hidden");
+    // 这几颗类（pk-drawer / pk-workspace / pk-folders）是浮层那份渲染时加上去的；
+    // 常驻那一列的写在 HTML 里（staticChrome），收起展开都一直是那几颗。
+    if (!view.staticChrome) {
+      // 历史会话与项目与会话从右侧滑进来（整屏高的面板）；其余拾取器照旧居中弹出
+      view.root.classList.toggle("pk-drawer", kind === "history" || kind === "workspace");
+      view.root.classList.toggle("pk-workspace", kind === "workspace");
+      // 文件夹选择器：不给筛选框那一截地方，列表按资源管理器的密度与排版画
+      view.root.classList.toggle("pk-folders", kind === "folders");
+      view.root.classList.remove("hidden");
+    }
+    if (toDock) { sidebarAsked = false; }
+    syncSidebarLayout();
+    renderPickerItems(view);
     // 计时：若宿主回显了 t0，输出点击 → picker 可见的往返耗时（多 panel 卡顿排查用）
     if (typeof msg.t0 === "number") {
       console.log("[pi] picker(" + kind + ") 点击→弹出: " + Math.round(performance.now() - msg.t0) + "ms");
     }
-    if (searchable) { setTimeout(() => pickerSearch.focus(), 0); }
+    if (searchable && view.search) { setTimeout(() => view.search.focus(), 0); }
   }
-  pickerOverlay.addEventListener("click", (e) => { if (e.target === pickerOverlay) { cancelPicker(); } });
-  pickerSearch.addEventListener("input", () => {
-    if (!pickerState) { return; }
-    pickerState.sel = pickerState.kind === "model" ? -1 : 0;
-    renderPickerItems();
+  // 点遮罩收起来：只管浮层那份（常驻那一列不靠点外面收：它不是浮层，那颗 <<< 与面板里那颗叉才管收）
+  modalView.root.addEventListener("click", (e) => {
+    if (e.target === modalView.root) { cancelPicker(modalView); }
   });
+  modalView.search.addEventListener("input", () => {
+    if (!modalView.state) { return; }
+    renderPickerItems(modalView);
+  });
+  // 浮层的列表只用鼠标 / 触摸点：没有「方向键上下选行、回车打开那一行」那一套，
+  // 「切换模型」那层里的左右键换推理档位也一并去了。这里只剩 Esc：收回这一层。
+  // 收之前得先把这条按键就地处掉：后面那个 document 上的监听会用 Esc 中止正在生成的那一轮，
+  // 它开头那句“浮层开着就跳开”的判断这会儿已经被 cancelPicker 改掉了
+  // （两个监听都在 document 上，按注册顺序跑，靠 stopImmediatePropagation 拦下来才管用）。
   document.addEventListener("keydown", (e) => {
-    if (!pickerState || pickerOverlay.classList.contains("hidden")) { return; }
-    const st = pickerState;
-    if (st.kind === "model") {
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        if (st.filtered.length) {
-          const delta = e.key === "ArrowDown" ? 1 : -1;
-          let next = st.sel < 0 ? (delta > 0 ? 0 : st.filtered.length - 1) : st.sel + delta;
-          next = (next + st.filtered.length) % st.filtered.length;
-          selectModelIndex(st, next, true);
-        }
-      } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-        e.preventDefault();
-        moveModelThinking(e.key === "ArrowRight" ? 1 : -1);
-      } else if (e.key === "Enter") {
-        e.preventDefault();
-        submitModelPicker();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        // 收回这只浮层，同时把这条按键就地处掉：后面那个 document 上的监听会用 Esc 中止
-        // 正在生成的那一轮，它开头那句“浮层开着就跳开”的判断这会儿已经被 cancelPicker 改掉了
-        // （两个监听都在 document 上，按注册顺序跑，靠 stopImmediatePropagation 拦下来才管用）。
-        e.stopImmediatePropagation();
-        cancelPicker();
-      }
-      return;
-    }
-    if (e.key === "ArrowDown") { e.preventDefault(); if (st.filtered.length) { st.sel = st.sel < 0 ? 0 : (st.sel + 1) % st.filtered.length; renderPickerActive(); } }
-    else if (e.key === "ArrowUp") { e.preventDefault(); if (st.filtered.length) { st.sel = st.sel < 0 ? st.filtered.length - 1 : (st.sel - 1 + st.filtered.length) % st.filtered.length; renderPickerActive(); } }
-    else if (e.key === "Enter") { e.preventDefault(); confirmPicker(st.sel); }
-    else if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); cancelPicker(); }
+    if (e.key !== "Escape" || !pickerModalOpen()) { return; }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    cancelPicker(modalView);
   });
 
 
@@ -3637,19 +4128,6 @@
     return true;
   }
 
-  // 输入框角上那颗“继续”：点一下直接发一条“继续”。
-  // 不走 send()：那条路发的是输入框里的内容，还会把输入框清空——打了一半的字得留着。
-  if (continueBtn) {
-    continueBtn.addEventListener("click", () => {
-      const st = activeSession();
-      // 这颗按钮只在会话就绪且闲着时露面，这里是防手快点到的边界情况（刚开始生成的那一下）
-      if (!st || !st.piReady || st.loading || st.streaming) { return; }
-      vscode.postMessage({ type: "send", sessionId: st.id, text: "继续", images: [] });
-      // 焦点还回输入框：留在按钮上的话，接着按回车会又点一次这颗按钮
-      if (!IS_TOUCH_DEVICE) { inputEl.focus(); }
-    });
-  }
-
   // 网页端：点输入框里那颗“停止生成”图标 = 给当前会话按 Esc。
   if (stopBtn) {
     stopBtn.addEventListener("click", () => {
@@ -3664,7 +4142,7 @@
 
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") { return; }
-    if (pickerState && !pickerOverlay.classList.contains("hidden")) { return; }
+    if (pickerModalOpen()) { return; }
     // 输入框聚焦时由 inputEl 的 keydown 处理（含文件菜单关闭 / 中止）
     if (document.activeElement === inputEl) { return; }
     // 消息流或其他区域聚焦 → 中止流式生成
@@ -3694,7 +4172,7 @@
     if (e.key === "Escape") {
       // 浮层开着的时候这条键归浮层（收回它）：别顺手把正在生成的那一轮也中止了。
       // 这里只管“不中止”，收回浮层由 document 上那个监听做。
-      if (pickerState && !pickerOverlay.classList.contains("hidden")) { return; }
+      if (pickerModalOpen()) { return; }
       if (abortActiveTab()) { e.preventDefault(); }
       return;
     }
@@ -3745,6 +4223,7 @@
     if (activeId === st.id) { updateSendState(); syncStatus(); }
     renderSessionBar();
     syncPaneStatuses();
+    syncContinueHint(st);
     refreshOpenSessionsInPicker();
   }
   function setActivity(st, activity, detail) {
@@ -3758,6 +4237,7 @@
     st.piReady = on;
     if (activeId === st.id) { updateSendState(); syncStatus(); }
     syncPaneStatuses();
+    syncContinueHint(st);
     // 会话就绪：把"按了回车但没发出去"的那条补发出去（见 flushPendingSend）
     if (on) { flushPendingSend(); }
   }
@@ -3815,6 +4295,8 @@
         st.sessionFile = typeof s.file === "string" ? s.file : "";
         // 这个会话跑在哪个目录：面板里按它把会话归到当前显示的那个工作区下面
         st.cwd = typeof s.cwd === "string" ? s.cwd : "";
+        // 这一批状态是权威的（重连 / 刷新 / 别的窗口动过）：末尾那条「继续」跟着重算一次
+        syncContinueHint(st);
       });
       sessionOrder = order;
       // 已经不在列表里的会话（被关掉了）：壳和草稿一起丢掉。
@@ -3843,6 +4325,8 @@
       updateSendState();
       syncStatus();
       refreshOpenSessionsInPicker();
+      // 常驻侧边栏在这一批会话到了之后才要内容：不然上半那份「正在对话」是空的
+      ensureSidebarPanel();
       // 刚连上的这一批会话里可能已经有就绪的：把排队中的消息发出去
       flushPendingSend();
       return;
@@ -3859,7 +4343,8 @@
     // 插件那头把浮层收了（超时、被新的浮层顶掉、页面被换下）：这边跟着收起来，别留一个点不动的空壳。
     if (type === "pickerCancel") { hidePicker(); return; }
     if (type === "historyPageAppend") {
-      const st = pickerState;
+      const view = takeLoadMoreView("sessions", ["history", "workspace"]);
+      const st = view ? view.state : null;
       if (st && (st.kind === "history" || st.kind === "workspace")) {
         const more = (Array.isArray(msg.items) ? msg.items : []).map((it) => {
           if (st.kind !== "workspace") { return it; }
@@ -3881,21 +4366,23 @@
         }
         st.historyHasMore = msg.hasMore === true;
         st.historyLoading = false;
-        renderPickerItems();
+        renderPickerItems(view);
       }
       return;
     }
     if (type === "historyPageEnd") {
-      const st = pickerState;
+      const view = takeLoadMoreView("sessions", ["history", "workspace"]);
+      const st = view ? view.state : null;
       if (st && (st.kind === "history" || st.kind === "workspace")) {
         st.historyLoading = false;
-        renderPickerItems();
+        renderPickerItems(view);
       }
       return;
     }
     if (type === "workspacePageAppend") {
-      // 工作区那块的下一批（点「加载更多」或一搜索就全取回来时走这里）；接在已有的工作区行后面。
-      const st = pickerState;
+      // 工作区那一块的下一批（点「加载更多」时走这里）；接在已有的工作区行后面。
+      const view = takeLoadMoreView("spaces", ["workspace"]);
+      const st = view ? view.state : null;
       if (st && st.kind === "workspace") {
         const more = (Array.isArray(msg.items) ? msg.items : []).map((it) => {
           const copy = {};
@@ -3904,10 +4391,28 @@
           copy.section = "工作区";
           return copy;
         });
-        st.items = st.items.concat(more);
+        st.spaceItems = st.spaceItems.concat(more);
         st.spacesHasMore = msg.hasMore === true;
         st.spacesLoading = false;
-        renderPickerItems();
+        rebuildWorkspaceItems(view);
+        renderPickerItems(view);
+      }
+      return;
+    }
+    if (type === "workspaceSessionsPage") {
+      // 某一个工作区那一组会话回来了（展开时 / 点那一组的「加载更多」时）：挂到那一组下面。
+      const view = takeGroupView(msg.path);
+      const st = view ? view.state : null;
+      if (st && st.kind === "workspace") {
+        const g = groupState(st, msg.path);
+        const rows = Array.isArray(msg.items) ? msg.items : [];
+        g.items = msg.offset > 0 ? g.items.concat(rows) : rows.slice();
+        g.nextOffset = typeof msg.nextOffset === "number" ? msg.nextOffset : g.nextOffset;
+        g.hasMore = msg.hasMore === true;
+        g.loading = false;
+        g.loaded = true;
+        rebuildWorkspaceItems(view);
+        renderPickerItems(view);
       }
       return;
     }
@@ -4003,6 +4508,8 @@
         addPlain(t, "user", "你", label + (msg.text || ""));
         endThinking(t, "");
         scrollToBottom(t, true);
+        // 刚发出去的这条把「继续」挤到了后头：重算一次（它本来就闲着，会跟着挪到新末尾）
+        syncContinueHint(t);
         break;
       }
       case "streamStart":
@@ -4111,6 +4618,7 @@
         // 重画历史（切会话 / 重连）随之开始：这之后涌进来的工具调用都是老消息，别飘 +1
         t.noCountPop = true;
         t.paneEl.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
+        t.continueHintEl = null;   // 消息流末尾那条「继续」也随重画一起没了（引用跟着丢，见 syncContinueHint）
         t.emptyHintGone = false;   // 空提示又回来了（见 hideEmptyHint）
         // 历史窗口状态一并重置：按钮随 innerHTML 清掉了；暂存区里若有没插完的
         // 「加载更早」那批也作废（会话已换，再插进去就串了），置个丢弃标记等 End 来清
@@ -4143,6 +4651,9 @@
           renderAttachmentsFor();
           inputEl.focus();
         }
+        // 重画后窗格是空的（重放的消息随后一批批进来）：这条按当前状态先收着，
+        // 真有对话的话等重放完那一批（historyBatchEnd）或本轮结束（streamEnd）再露面。
+        syncContinueHint(t);
         break;
       case "toolResultUpdate": {
         // 缓存部分结果，悬浮提示随取随画
@@ -4291,6 +4802,8 @@
       }
       case "historyBatchEnd":
         flushHistoryBatch(t, msg.hasMore === true, typeof msg.hidden === "number" ? msg.hidden : 0);
+        // 历史补完：末尾那条「继续」重新算一次（补进来的老消息在顶上，不影响它）
+        syncContinueHint(t);
         break;
     }
   }
@@ -4474,6 +4987,11 @@
   settingsOverlay.addEventListener("click", (e) => { if (e.target === settingsOverlay) { closeSettings(); } });
   const settingsCloseBtn = document.getElementById("settingsClose");
   if (settingsCloseBtn) { settingsCloseBtn.addEventListener("click", closeSettings); }
+
+  // 常驻侧边栏：摆好版面（宽窗且没收起 → 右边留出那一列），把开关接口交给顶条那颗 <<<。
+  // 面板内容不在这一步要：等宿主把会话列表送来再要（见 sessionList 那段里的 ensureSidebarPanel）。
+  window.pichatSidebar = { toggle: toggleSidebar };
+  syncSidebarLayout();
 
   vscode.postMessage({ type: "ready" });
 })();

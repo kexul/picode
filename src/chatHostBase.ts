@@ -22,8 +22,7 @@ import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase } from "./chatControllerBase";
 import {
     listProjectDirs,
-    listSessionFilesNewestFirst,
-    readProjectDirForCwd,
+    listSessionFiles,
     readProjectEntry,
 } from "./sessionStore";
 import { listDirectories } from "./dirBrowse";
@@ -78,9 +77,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     /** 本机那块界面的固定标识：VSCode 那边就是插件里那块对话面板；独立后端没有这块屏，用不上。 */
     protected static readonly LOCAL_CLIENT_ID = ChatControllerBase.LOCAL_CLIENT_ID;
 
-    /** 项目列表里“浏览文件夹”那一行的标识（会话文件、目录都是绝对路径，撞不上这种带 \0 的）。 */
-    private static readonly BROWSE_ROW = "\u0000pichat:browse";
-    /** 文件夹列表里“就用这个目录”那一行的标识。 */
+    /** 文件夹列表里“就用这个目录”那一行的标识（会话文件、目录都是绝对路径，撞不上这种带 \0 的）。 */
     private static readonly USE_DIR_ROW = "\u0000pichat:use-dir";
     /** 文件夹列表里“换一个盘 / 回到最上层”那一行的标识。 */
     private static readonly ROOTS_ROW = "\u0000pichat:roots";
@@ -118,6 +115,9 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
 
     /** 会话显示名用的名字池：panel 关闭后会释放对应名字。 */
     private readonly usedChatNames = new Set<string>();
+
+    /** 「项目与会话」面板那份列表的指纹（开着的会话 + 各自的会话文件）：变了就重推一次，见 broadcastSessionList。 */
+    private workspacePanelKey = "";
 
     // ========================================================================
     //  子类要填的口子
@@ -220,99 +220,134 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     //  项目 / 文件夹拾取器（手机上“在另一个项目里开新会话”走这条路）
     // ========================================================================
 
-    /** 目录名（最后一段）；盘根这类取不出名字的就用整个路径。 */
-    private dirName(p: string): string {
-        const base = path.basename(p);
-        return base && base !== path.sep ? base : p;
-    }
-
     /** 工作区一次给几个（当前工作区固定占一行，其余再取四行，总数五个）。 */
     private static readonly WORKSPACE_BATCH = 4;
 
+    /** 「项目与会话」面板里一个工作区展开后一次给几条会话（末尾一颗「加载更多」接着加）。 */
+    private static readonly GROUP_PAGE_SIZE = 5;
+
     /**
-     * “项目与会话”面板：上半是当前工作区的会话列表，下半是工作区（用 pi 跑过会话的目录）。
-     * 点下面的工作区**只换上半那份列表**（面板不关，见 switchWorkspacePanel），
-     * 点会话才关掉面板切过去；下半最上面那行是“浏览文件夹…”，走原来的逛文件夹那条路。
+     * “项目与会话”面板：上半是所有工作区的会话（混一份，最近聊过的在最前面），
+     * 下半是工作区（用 pi 跑过会话的目录）。
+     * 点会话才关掉面板切过去；工作区那两行只是说明哪个目录里有多少会话，
+     * 行尾那颗加号在那个目录里开新会话，标题右边那颗加号走原来的逛文件夹那条路。
      * 面板那一摊数据按屏存（见 pickerStateOf）：两个窗口各自开着互不影响。
      */
     public async showWorkspacePicker(target?: string): Promise<void> {
         const clientId = target || this.currentPageId;
-        const folder = this.getActive(clientId)?.cwd ?? this.getCwd();
-        const choice = await this.openWorkspacePanel(folder, clientId);
+        const payload = await this.buildWorkspacePanel(clientId);
+        const choice = await this.openPicker("workspace", payload, clientId);
         if (!choice || typeof choice.file !== "string") { return; }
-        const folderNow = this.pickerStateOf(clientId).workspaceFolder || folder;
-        if (choice.file === ChatHostBase.BROWSE_ROW) {
-            await this.showFolderPicker(folderNow, clientId);
-            return;
-        }
-        await this.loadHistorySession(choice.file, folderNow, clientId);
-    }
-
-    /** 打开面板（画出来并等选择）。 */
-    private async openWorkspacePanel(folder: string, clientId: string): Promise<any | undefined> {
-        const payload = await this.buildWorkspacePanel(folder, clientId);
-        return this.openPicker("workspace", payload, clientId);
+        // 目录是那一行自己带过来的（列表里混着好几个目录的会话）
+        await this.openWorkspaceSession(choice.file, typeof choice.cwd === "string" ? choice.cwd : undefined, clientId);
     }
 
     /**
-     * 点了下面某个工作区：只把上半那份会话列表换成那个目录的，面板留着不关。
-     * 面板已经被关掉（人在别处点了）就什么都不做——免得画到一个已经没了的面板上。
+     * 常驻那一列（宽窗下的「项目与会话」，见 README）：面板一直开着、不当浮层，
+     * 所以推过去就完事、不等谁选（界面那边收到就画在自己那一列里，收起也是它自己说了算）。
+     * 行点击各走各的消息（workspaceOpenSession / workspaceBrowse / newSessionInWorkspace）。
+     *
+     * 别的浮层（选模型、逛文件夹）正开着也照样推：这一列与浮层各画各的，谁也不顶谁。
      */
-    public async switchWorkspacePanel(folder: string, target?: string): Promise<void> {
-        const clientId = target || this.currentPageId;
-        if (this.pickerStateOf(clientId).kind !== "workspace") { return; }
-        const payload = await this.buildWorkspacePanel(folder, clientId);
-        if (this.pickerStateOf(clientId).kind !== "workspace") { return; }   // 画之前又被关了
-        this.sendOverlayTo(clientId, { type: "picker", kind: "workspace", ...payload });
+    private async showDockedWorkspacePanel(clientId: string): Promise<void> {
+        const st = this.pickerStateOf(clientId);
+        const payload = await this.buildWorkspacePanel(clientId);
+        // 这一份是“推过去就不管了”的：它画在界面右边那一列里，不是浮层拾取器，
+        // 所以没有等谁选、也没有超时（行点击各走各的消息，见上面那几个消息）。
+        // 宿主这份状态照旧记着：“加载更多”、会话增减后重推都要用它。
+        // 这里不动 st.kind：常驻那一列开着的时候，上面还能再开别的浮层（各归各的）。
+        st.workspaceOpen = true;
+        st.workspaceDock = true;
+        this.sendOverlayTo(clientId, { type: "picker", kind: "workspace", dock: true, ...payload });
     }
 
     /**
-     * 面板的内容：上半会话（当前目录的历史会话）、下半工作区。
+     * 会话被新建 / 被关掉后，给还开着面板的屏重推一份（面板是“打开那一刻算一次”的快照：
+     * 点了加号新建出来的会话会立刻出现在上半「正在对话」里，下半「历史会话」得重算才对得上）。
+     * 收起过的常驻那一列也在名单里：推过去时界面自己知道没开，会丢掉（见 media/chat.js）。
+     */
+    private async refreshWorkspacePanels(): Promise<void> {
+        for (const { clientId, dock } of this.workspacePanelClients()) {
+            const payload = await this.buildWorkspacePanel(clientId);
+            const st = this.pickerStateOf(clientId);
+            if (!st.workspaceOpen) { continue; }   // 画的功夫里面板又被收了
+            this.sendOverlayTo(clientId, { type: "picker", kind: "workspace", dock, ...payload });
+        }
+    }
+
+    /**
+     * 会话列表推送（新建 / 关掉 / 改名 / 模型变化都会走这里）：顺手看看「项目与会话」
+     * 面板开着的话要不要重算。
+     *
+     * 只在“开着的会话 + 各自落在哪个会话文件上”这份指纹变了的时候才重算
+     * （新建出来的会话第一次落盘、会话被关掉）；改名、切会话、跑起来这些推送不动它。
+     */
+    public override broadcastSessionList(immediate = false): void {
+        super.broadcastSessionList(immediate);
+        const key = Array.from(this.panels.values())
+            .map((rt) => `${rt.id}:${rt.currentSessionPath || ""}`)
+            .sort()
+            .join("|");
+        const changed = this.workspacePanelKey !== "" && key !== this.workspacePanelKey;
+        this.workspacePanelKey = key;
+        if (changed) { void this.refreshWorkspacePanels(); }
+    }
+
+    /** 面板里点了一行会话：切过去（要不要关面板是界面的事：常驻那一列不关）。
+     *  目录用那一行自己带过来的（列表里混着好几个目录的会话）。 */
+    private async openWorkspaceSession(file: string, folder: string | undefined, clientId: string): Promise<void> {
+        const cwd = folder || this.getActive(clientId)?.cwd || this.getCwd();
+        await this.loadHistorySession(file, cwd, clientId);
+    }
+
+    /** 面板里点了“打开文件夹…”（工作区标题右边那颗加号）：走原来逛文件夹那条路（挑一个目录、就在那里新建会话）。 */
+    private async browseFromWorkspacePanel(clientId: string): Promise<void> {
+        await this.showFolderPicker(this.getActive(clientId)?.cwd ?? this.getCwd(), clientId);
+    }
+
+    /**
+     * 面板的内容：上半是所有目录混一份的会话（最近聊过的在前），下半是工作区。
      * 会话那份复用历史列表那套机器（pickerState 里的 historyFiles / historyOffset / scanHistoryBatch），
-     * 工作区那份自己分页：当前目录固定显示，另外一次取 4 个，总共显示 5 个工作区；下面留一颗“加载更多”。
+     * 工作区那份自己分页：当前工作区固定显示，另外一次取 4 个，总共显示 5 个工作区；下面留一颗“加载更多”。
      *
      * 两半都只碰最前面那几个（要显示的那些）：会话那份只扫要画的十个文件，
      * 工作区那份先只拿“目录清单”（每个目录 stat 一下），进目录里翻文件留到真要画它那一行（见 takeWorkspacePage）。
      */
-    private async buildWorkspacePanel(folder: string, clientId: string): Promise<Record<string, unknown>> {
-        const cwd = path.resolve(folder);
+    private async buildWorkspacePanel(clientId: string): Promise<Record<string, unknown>> {
         const state = this.pickerStateOf(clientId);
-        state.workspaceFolder = cwd;
-        state.historyFiles = await listSessionFilesNewestFirst(cwd);
-        state.historyOffset = 0;
-        const sessions = await this.scanHistoryBatch(clientId);
-        const currentDir = await readProjectDirForCwd(cwd);
-        const current = currentDir ? await readProjectEntry(currentDir) : null;
         // 每个目录 readdir 一下 + stat 最新那一个会话文件（见 sessionStore.listProjectDirs）
         state.workspaceDirs = await listProjectDirs();
         state.workspaceOffset = 0;
-        // 当前工作区固定占上面那一行（下面那份里遇上它、遇上同一个目录的另一个文件夹就跳过）
-        state.workspaceSeen = new Set([this.dirKey(cwd)]);
-        const head: any[] = [
-            { label: "打开文件夹…", file: ChatHostBase.BROWSE_ROW, action: "browse", folderPath: "挑一个文件夹当工作区" },
-            {
-                label: this.dirName(cwd),
-                file: cwd,
-                folderPath: cwd,
-                count: current?.sessionCount ?? 0,
-                lastActivity: current?.lastActivity ?? 0,
-                current: true,
-            },
-        ];
+        state.workspaceSeen = new Set();
         return {
             title: "项目与会话",
-            sessions: {
-                items: sessions,
-                hasMore: state.historyOffset < state.historyFiles.length,
-                folder: cwd,
-                name: this.dirName(cwd),
-            },
             spaces: {
-                items: head.concat(await this.takeWorkspacePage(clientId)),
-                current: cwd,
+                items: await this.takeWorkspacePage(clientId),
                 hasMore: state.workspaceOffset < state.workspaceDirs.length,
             },
         };
+    }
+
+    /**
+     * 面板里展开某个工作区（或那一组点「加载更多」）：读那个目录，从 offset 接着扫一批会话发回去。
+     *
+     * offset 是“第几个文件”，由界面带着来回（跳过子会话之后，屏幕上看到的条数不等于扫过的文件数）：
+     * 宿主这边不留状态，面板重推一份时自然就从每组的第一条重新开始。
+     */
+    private async sendWorkspaceSessions(dir: string, offset: number): Promise<void> {
+        const clientId = this.currentPageId;
+        if (!dir) { return; }
+        const files = (await listSessionFiles(dir)).map((e) => e.file);
+        const page = await this.scanSessionPage(files, offset, ChatHostBase.GROUP_PAGE_SIZE);
+        const current = this.getActive(clientId)?.currentSessionPath;
+        this.sendOverlayTo(clientId, {
+            type: "workspaceSessionsPage",
+            path: dir,
+            offset,
+            items: page.items.map((s) => ({ ...s, current: this.samePath(s.file, current) })),
+            nextOffset: page.nextOffset,
+            hasMore: page.hasMore,
+        });
     }
 
     /** 拿一个目录当“同一个目录”用的键（跟 sameDir 一个规矩：Windows 上不区分大小写）。 */
@@ -350,7 +385,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     public async loadMoreWorkspaces(): Promise<void> {
         const clientId = this.currentPageId;
         const state = this.pickerStateOf(clientId);
-        if (state.kind !== "workspace") { return; }
+        if (!state.workspaceOpen) { return; }
         const items = await this.takeWorkspacePage(clientId);
         this.sendOverlayTo(clientId, {
             type: "workspacePageAppend",
@@ -459,6 +494,12 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
 
     /** 一条推送连接建立（页面连上 / 重连）：把等着的重画补上，再把攒着的消息冲出去。 */
     public onPageConnected(pageId: string): void {
+        // 这条连接是新的，旧那条上"卡片已送到"的记录不再作数：手机锁屏之后旧连接常常是
+        // 悄悄死的（网络那头把会话收了，浏览器不报错），卡片写进去看着成功、对方其实没收到；
+        // 页面重开一条连接回来时，这边也没法知道它手里到底有哪几张卡片。
+        // 先把它从还等着的卡片上摘掉，对账时按"它还没有"重发一遍（见 browserResync 与 resyncPage）——
+        // 页面上真画着的那张收到同一张会原地不动（见 media/chat.js 的 renderAskCard）。
+        this.forgetCardDelivery(pageId);
         const note = this.pendingResyncPages.get(pageId);
         if (note !== undefined) {
             this.pendingResyncPages.delete(pageId);
@@ -500,6 +541,12 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         this.outbox.clear();
         this.pendingResyncPages.clear();
         this.resyncingPages.clear();
+    }
+
+    /** 这块屏换了新连接：它原来那条连接上"卡片已送到"的记录清掉（见 onPageConnected）。 */
+    private forgetCardDelivery(target: string): void {
+        if (!target) { return; }
+        for (const state of this.openCards.values()) { state.screens.delete(target); }
     }
 
     /** 这块屏没了：它上面等着的问话卡片都摘掉（问答题留着等它回来，扩展问的那些算没作答）。 */
@@ -547,7 +594,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         }
         return Promise.all(replays).then(() => {
             // 重画把还等着的问话卡片也抹掉了：重发给这块屏（见 resendCardsTo）
-            this.resendCardsTo(pageId);
+            this.resendCardsTo(pageId, true);
             // 重画的消息不带序号（它们只发给这一块屏）。页面重画完把对齐到当前序号：
             // 重画的内容已经包含到这里为止的一切，下次重连它报上来的数才是准的。
             if (!isLocal && pageId) { this.broadcaster.sendTo(pageId, { type: "syncPoint", seq: this.broadcaster.currentSeq() }); }
@@ -896,6 +943,10 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
                     // 补发的是断线前的老消息（里面可能有那个会话被关掉之前的内容）：
                     // 补完再给它一份最新的会话列表，“已经不存在的会话”就不会在它上面留在那儿。
                     this.sendSessionListTo(pageId);
+                    // 还等着的问话卡片不在补发的账里（它们是定向发、不带序号）：断线那段里
+                    // 可能正好漏掉了一张（连接悄悄死掉时写进去看着成功，见 onPageConnected），
+                    // 这里随对账一起补发，缺的补上、页面上本来就有的原地不动。
+                    this.resendCardsTo(pageId);
                     return true;
                 }
                 // 会话列表先给它（界面上那些会话壳先建起来），再整屏重画。
@@ -912,23 +963,42 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
                 );
                 return true;
             case "openWorkspace":
-                // “⋯”菜单里的项目与会话面板：上半是当前工作区的会话，下半是工作区列表。
+                // 顶条那颗 <<< / 命令入口的项目与会话面板：上半是所有工作区的会话，下半是工作区列表。
+                // 带 dock = 宽窗下那一列常驻（推过去就不管了，不等人选）：见 showDockedWorkspacePanel。
+                if (msg.dock === true) { void this.showDockedWorkspacePanel(this.currentPageId); return true; }
                 void this.showWorkspacePicker(this.currentPageId);
                 return true;
-            case "workspacePick": {
-                // 点了下面某个工作区：只换上半那份会话列表，面板不关。
-                if (typeof msg.path === "string") { void this.switchWorkspacePanel(msg.path, this.currentPageId); }
+            case "workspaceOpenSession":
+                // 常驻那一列里点了一行会话（那一列不关，所以不走 pickerChoice）；
+                // cwd = 那一行自己的目录（列表里混着好几个目录的会话）。
+                if (typeof msg.path === "string") {
+                    void this.openWorkspaceSession(
+                        msg.path,
+                        typeof msg.cwd === "string" && msg.cwd ? msg.cwd : undefined,
+                        this.currentPageId,
+                    );
+                }
                 return true;
-            }
+            case "workspaceBrowse":
+                // 工作区标题右边那颗加号（“打开文件夹…”，现在不占一行了）
+                void this.browseFromWorkspacePanel(this.currentPageId);
+                return true;
+            case "workspaceSessions":
+                // 界面展开某个工作区 / 点那一组的「加载更多」：读那个目录，接着往下扫几条会话。
+                void this.sendWorkspaceSessions(
+                    typeof msg.path === "string" ? msg.path : "",
+                    typeof msg.offset === "number" && msg.offset > 0 ? msg.offset : 0,
+                );
+                return true;
             case "workspaceLoadMore":
                 // 工作区那块的「加载更多」：再送一批（一次 10 个）。
                 void this.loadMoreWorkspaces();
                 return true;
             case "newSessionInWorkspace":
-                // 面板里「正在对话」那组的「＋ 在 xxx 新建会话」：目录用界面上写着的那一个
-                // （面板切过工作区就是那个），而不是顶条上当前会话那个目录（那个是加号用的规则）。
+                // 工作区那一行行尾的加号：就在那一行的目录里开新会话。
+                // 目录明写在消息里：面板可能同时在几块屏上开着，那一行写的是哪个目录就是哪个。
                 this.newSessionInDir(
-                    typeof msg.path === "string" && msg.path ? msg.path : (this.pickerStateOf(this.currentPageId).workspaceFolder || this.activeCwd()),
+                    typeof msg.path === "string" && msg.path ? msg.path : this.activeCwd(),
                 );
                 return true;
             case "requestDesktopScreenshot":
@@ -1041,9 +1111,14 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         });
     }
 
-    /** 把卡片发给某一块屏（这块屏已经有了就不重发）。发不出去就当它没收到。 */
-    private sendCardToScreen(id: string, state: OpenCard, target: string): void {
-        if (state.settled || !target || state.screens.has(target)) { return; }
+    /**
+     * 把卡片发给某一块屏（这块屏已经有了就不重发）。发不出去就当它没收到。
+     * @param force 不管“发过没发过”，硬发一遍。用在“这块屏刚整屏重画过”的场合：重画画的是
+     *              消息流那几条，卡片不在里头，这块屏上已经什么都没有了。
+     */
+    private sendCardToScreen(id: string, state: OpenCard, target: string, force = false): void {
+        if (state.settled || !target) { return; }
+        if (!force && state.screens.has(target)) { return; }
         if (!this.sendOverlayTo(target, { type: "askCard", id, sessionId: state.sessionId, card: state.card })) { return; }
         state.screens.add(target);
     }
@@ -1123,16 +1198,26 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     }
 
     /**
-     * 整屏重画之后：这块屏画过的卡片都随重画没了，还等着的重新发一遍（画回那个会话的消息流里）。
-     * 重画前记着“发过了”的名单在这里作废：不发的话，这张卡片在界面上就永远消失了。
+     * 这块屏上该有、而现在可能没有的卡片重发一遍：整屏重画之后（卡片随重画没了），
+     * 以及重连对账之后（连接悄悄死掉那段漏掉的卡片，见 onPageConnected）。
+     *
+     * 拿“这块屏正在看哪个会话”当依据，不看原来那张“发过了”的名单：刷新页面 / 重连换来的是
+     * 一个新的页面标识，名单里记的是老标识，拿名单当依据就一张也发不出去（页面重画完一片空白，
+     * 而这边还以为“早就发过了”）—— 正是那个“刷新之后问话卡片消失”的由来。
+     * 重发是安全的：页面上同一张卡片再收到一次，内容没变、或者人已经答过，它就原地不动
+     * （见 chat.js 的 renderAskCard）。
+     *
+     * @param force 不管"发过没发过"，硬发一遍。整屏重画后用：页面被清空了，而这边可能还记得
+     *              “发给过它”。重连对账那条路不用 force：连接刚换新，旧记录已经在
+     *              onPageConnected 里摘掉了。
      */
-    private resendCardsTo(pageId: string): void {
+    private resendCardsTo(pageId: string, force = false): void {
         if (!pageId) { return; }
         for (const [id, state] of Array.from(this.openCards.entries())) {
-            if (!state.screens.delete(pageId)) { continue; }
-            if (state.sessionId && this.clientsViewing(state.sessionId).indexOf(pageId) >= 0) {
-                this.sendCardToScreen(id, state, pageId);
-            }
+            if (state.settled || !state.sessionId) { continue; }
+            // 这块屏没在看这个会话：卡片不往它那儿送（问话卡片只长在人正在看的那个会话的消息流里）
+            if (this.clientsViewing(state.sessionId).indexOf(pageId) < 0) { continue; }
+            this.sendCardToScreen(id, state, pageId, force);
         }
     }
 
