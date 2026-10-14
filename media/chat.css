@@ -1114,6 +1114,14 @@
   /* 面板头的高度是跟顶条量出来的（见 chat.js 的 syncDockHeaderHeight）：它不许被压扁
      （正文几百行的时候，按比例缩的弹性会把面板头从量好的高度缩回一行字那么高，跟顶条对不齐）。 */
   #fileHeader { box-sizing: border-box; flex: 0 0 auto; }
+  /* 面板头上那颗「上一层」：正看着「项目目录」那一格、而且它在某一层子目录里时才出现
+     （见 chat.js 的 syncFileUpButton）：点它退回上一层，到会话目录本身那一层就不出现了。
+     margin-left: auto 把它和那颗「收起」的叉一起推到右边。 */
+  #fileUp { margin-left: auto; }
+  #fileUp.hidden { display: none; }
+  /* 面板头那行路径可能很长（子目录越深越长）：让它自己截断，
+     不许把右边那两颗按钮（上一层、收起）挤出面板外面。 */
+  #fileTitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 标签条：面板头下面、正文上面，看过的文件一个占一个标签（见 chat.js）。
      点名字切过去、点那颗叉关掉；开着的多了往右跑，这一条自己左右滚。
      一个标签都没有时整条不占地方（:empty 那条），面板里就只剩一句提示。 */
