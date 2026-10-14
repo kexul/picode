@@ -1908,8 +1908,9 @@
           // 按钮：write 给「跳转」，edit 成功且可回滚给「回滚」
           if (toolName === "write" && filePath) {
             const jumpBtn = document.createElement("span"); jumpBtn.className = "et-jump"; jumpBtn.innerHTML = '跳转 ' + ICONS["link-external"];
-            jumpBtn.title = "在编辑器中打开 " + (label || filePath);
-            jumpBtn.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "openFile", path: filePath, line: 1 }); });
+            // 在这儿打开的是哪儿：跟正文里的文件链接同一处分流（见 openFileForUser）
+            jumpBtn.title = (fileSidebar.root ? "在文件侧边栏里打开 " : "在编辑器中打开 ") + (label || filePath);
+            jumpBtn.addEventListener("click", (e) => { e.stopPropagation(); openFileForUser(filePath, 1); });
             content.appendChild(jumpBtn);
           } else if (pendingResult.canRevert && toolCallId && !reverted) {
             const revertBtn = document.createElement("span"); revertBtn.className = "et-revert"; revertBtn.innerHTML = ICONS.discard + ' 回滚';
@@ -3553,6 +3554,17 @@
     showFileTab(at, line);
   }
 
+  /**
+   * 点一个文件的时候去哪儿：浏览器页面里开左边这一列看（后端自己读），插件里的对话面板里
+   * 照旧交给编辑器打开。正文里的文件链接与工具卡片那颗「跳转」都走这里，别各写一遍。
+   * @param dir 这是个目录（只有正文里以斜杠结尾的写法会带；工具卡片那颗按钮没有这种）
+   */
+  function openFileForUser(path, line, col, dir) {
+    if (!path) { return; }
+    if (fileSidebar.root) { openFileInSidebar(path, line, dir); return; }
+    vscode.postMessage({ type: "openFile", path, line, col });
+  }
+
   /** 切会话：这一列里那些文件属于上一个会话的目录，标签全清掉（别把别人的东西留在界面上）；
    *  「项目目录」那一格换成新会话的目录重新给出来。 */
   function resetFileSidebarForSession() {
@@ -4844,12 +4856,11 @@
     const a = e.target.closest("a.file-link");
     if (a) {
       e.preventDefault();
-      const path = a.getAttribute("data-file"); if (!path) { return; }
-      const line = a.dataset.line ? parseInt(a.dataset.line, 10) : undefined;
-      const col = a.dataset.col ? parseInt(a.dataset.col, 10) : undefined;
-      // 浏览器页面：开左边那一列看文件（后端自己读）；插件里的对话面板：照旧交给编辑器打开
-      if (fileSidebar.root) { openFileInSidebar(path, line, a.getAttribute("data-dir") === "1"); return; }
-      vscode.postMessage({ type: "openFile", path, line, col });
+      // 浏览器页面里开左边那一列看文件（后端自己读）；插件里的对话面板里照旧交给编辑器打开
+      openFileForUser(a.getAttribute("data-file"),
+        a.dataset.line ? parseInt(a.dataset.line, 10) : undefined,
+        a.dataset.col ? parseInt(a.dataset.col, 10) : undefined,
+        a.getAttribute("data-dir") === "1");
       return;
     }
     const s = e.target.closest("a.symbol-link");
