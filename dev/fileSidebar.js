@@ -23,6 +23,9 @@
  *      点超过 2 MB 的文件给「太大，点这里下载」，正文一个字节都不塞进页面；点那个下载
  *      浏览器真把文件存了下来；点目录链接（以斜杠结尾的写法）先看到里面有什么，再一层层点进去：
  *      子目录接着列、文件点开看，列出来的东西一样受「只在会话目录内」的限制（指到目录外的条目点不了）；
+ *      认得的几种语言（TypeScript 含 JavaScript 与 JSON、C++、Python，别名一起算）按扩展名带颜色，
+ *      行号还在、跟内容对得上，跨多行的注释 / 模板串不会在行号那儿断开；别的语言仍是黑白；
+ *      超过上色那条线的大文件不上色（行号照旧），也不把页面卡住；
  *   2. 在页面里用 fetch 直接打那条只读文件地址与目录地址，核对拒绝的几种情形（目录外含 .. 绕出去的写法、
  *      没有这个文件 / 目录、超过 2 MB）、图片与二进制各自给什么、目录清单的形状、以及「没变就别再给
  *      一遍正文」那条条件请求；下载那条路不受 2 MB 这条线管（几 MB 的文件整份下来）。
@@ -71,6 +74,109 @@ const DIR_MAX_ENTRIES = 500;
 /** live.js：面板正看着它的时候脚本改它（验“跟着刷新”那个文件）。 */
 const LIVE_LINES = 300;
 const LIVE_HIT = 100;
+
+/**
+ * 上色那一摊：认得的几种（TypeScript 含 JavaScript 与 JSON、C++、Python）带颜色，其余黑白。
+ * 每个小文件都铺成固定几行，里面故意放上跨多行的注释 / 模板串——整段高亮再按行拆开时，
+ * 这种跨行的记号不许在行号那儿断掉。
+ */
+const COLOR = {
+    ts: "color.ts",
+    js: "color.js",
+    json: "color.json",
+    cpp: "color.cpp",
+    py: "color.py",
+    ruby: "color.rb",          // 不认得的一种（还是黑白）
+    mid: "color-mid.ts",       // 上色那条线以内的中等文件（照样上色）
+    big: "color-big.ts",       // 超过上色那条线的大文件（不上色、也不许把页面卡住）
+};
+const COLOR_TS_LINES = [
+    'import { readFile } from "node:fs";',
+    "",
+    "export function add(a: number, b: number): number {",
+    "  // 加法",
+    '  const s = `sum=${a + b}`;',
+    "  return a + b;",
+    "}",
+    "",
+    "/* 块注释第一行",
+    "   块注释第二行 */",
+    "const multi = `第一行",
+    "第二行`;",
+];
+const COLOR_JS_LINES = [
+    '"use strict";',
+    "",
+    "const count = 3;",
+    "function double(n) {",
+    "  // 乘二",
+    "  return n * 2;",
+    "}",
+];
+const COLOR_JSON_LINES = [
+    "{",
+    '  "name": "pi",',
+    '  "count": 42,',
+    '  "ok": true,',
+    '  "list": [1, 2, 3]',
+    "}",
+];
+const COLOR_CPP_LINES = [
+    "#include <string>",
+    "",
+    "int main() {",
+    "  // 注释",
+    '  std::string s = "hi";',
+    "  /* 块注释第一行",
+    "     块注释第二行 */",
+    "  return 0;",
+    "}",
+];
+const COLOR_PY_LINES = [
+    "def add(a, b):",
+    "    # 注释",
+    '    s = f"x={a}"',
+    "    return a + b",
+    "",
+    "print(add(1, 2))",
+];
+const COLOR_RUBY_LINES = [
+    "def add(a, b)",
+    "  # 注释",
+    '  "x=#{a}"',
+    "end",
+    "",
+    "puts add(1, 2)",
+];
+/** 中等 / 大文件铺成什么样：一个十行的单元重复写到够长（行数由 repeat 次数算出来，不另数）。 */
+const COLOR_UNIT_LINES = 10;
+const COLOR_UNIT = [
+    "export interface Foo { name: string; value: number }  // 一条接口",
+    "const x: number = 42 + Math.floor(Math.random() * 10);",
+    "function bar<T>(items: T[], cb: (t: T) => void): void {",
+    "  for (const it of items) { cb(it); }",
+    "  // 注释",
+    '  const s = `v=${x}`;',
+    "}",
+    "/* 块注释",
+    "   还在注释里 */",
+    "class Baz extends Foo<string> { run(): void {} }",
+].join("\n") + "\n";
+/** 铺到这么多字（“字”不是“字节”：上色那条线看的是字符个数，不是文件大小）。 */
+function makeColorText(minChars) {
+    let text = "";
+    let lines = 0;
+    while (text.length < minChars) { text += COLOR_UNIT; lines += COLOR_UNIT_LINES; }
+    return { text: text, lines: lines };
+}
+const COLOR_MID = makeColorText(200 * 1024);
+const COLOR_BIG = makeColorText(1500 * 1024);
+/** 往消息流里投的那句话：上面这几个文件各点一次。 */
+const COLOR_LINK_TEXT =
+    "带颜色的几个文件：\n\n" +
+    "`" + COLOR.ts + ":3`、`" + COLOR.js + ":3`、`" + COLOR.json + ":3`、\n" +
+    "`" + COLOR.cpp + ":3`、`" + COLOR.py + ":1`、`" + COLOR.ruby + ":1`、\n" +
+    "`" + COLOR.mid + ":3`、`" + COLOR.big + ":3`。\n";
 
 const FILE = {
     long: "long.js",
@@ -147,6 +253,7 @@ function prepareFiles(cwd) {
     binary[0] = 0;   // 开头就是 0 字节：文本那套肯定读不了
     fs.writeFileSync(path.join(cwd, FILE.binary), binary);
     prepareDirs(cwd);
+    prepareColorFiles(cwd);
     const outside = path.join(cwd, "outside");
     if (fs.existsSync(outside)) { return "已经有了"; }
     // 目录外那份用一个目录软链接（Windows 上 junction 不需要管理员权限）指到仓库根上：
@@ -157,6 +264,19 @@ function prepareFiles(cwd) {
     } catch (err) {
         return "建不了（" + (err && err.message ? err.message : String(err)) + "）";
     }
+}
+
+/** 上色那几个文件：认得的几种各一个小文件、一个不认得的、一个中等大小、一个超大。 */
+function prepareColorFiles(cwd) {
+    const write = (name, lines) => fs.writeFileSync(path.join(cwd, name), lines.join("\n") + "\n", "utf8");
+    write(COLOR.ts, COLOR_TS_LINES);
+    write(COLOR.js, COLOR_JS_LINES);
+    write(COLOR.json, COLOR_JSON_LINES);
+    write(COLOR.cpp, COLOR_CPP_LINES);
+    write(COLOR.py, COLOR_PY_LINES);
+    write(COLOR.ruby, COLOR_RUBY_LINES);
+    fs.writeFileSync(path.join(cwd, COLOR.mid), COLOR_MID.text, "utf8");
+    fs.writeFileSync(path.join(cwd, COLOR.big), COLOR_BIG.text, "utf8");
 }
 
 /** 页面上把假消息投进去（同一份内容刷新之后要再投一次）。 */
@@ -891,6 +1011,154 @@ module.exports = async (page) => {
     const proj3 = await waitLook("从项目目录点开文件", (x) => x.rowCount === DIR_ONE_LINES);
     check("从项目目录那一格点开文件：显示它（带行号、跟票 05 一样）", proj3.rowCount === DIR_ONE_LINES
         && proj3.firstRow.indexOf("one 第 1 行") >= 0 && proj3.title === DIR.topFile && proj3.entryCount === 0);
+
+    // ==================== 认得的几种语言带颜色 ====================
+    // 按扩展名认语言：TypeScript（含 JavaScript 与 JSON 那几个别名）、C++、Python——认语言与别名
+    // 跟消息流里那一套是同一处（chat.js 的 resolveHighlightLanguage），不另起一套。其余语言黑白；
+    // 行号还在、跟内容对得上；跨多行的注释 / 模板串不会在行号那儿断开。
+    // 正文太大的不上色：整段高亮几万行会把页面卡住，这一条用 1.5 MB 的文件盯着（见下）。
+    await page.eval(`for (const m of ${JSON.stringify([{ type: "assistantFull", text: COLOR_LINK_TEXT }])}) { window.postMessage(m, "*"); } return true;`);
+    await page.sleep(400);
+
+    /** 面板里现在这一段正文的逐行样子：行号、文字、每行里那几个上了色的记号、颜色。 */
+    const colorLook = async () => JSON.parse(await page.eval(`
+        const body = document.getElementById("fileBody");
+        const rows = Array.from(body.querySelectorAll(".file-line"));
+        const kinds = {};
+        let tokens = 0;
+        const lineClasses = rows.map(function (r) {
+            return Array.from(r.querySelectorAll(".file-text [class*='hljs-']")).map(function (s) {
+                tokens++;
+                s.classList.forEach(function (c) { if (c.indexOf("hljs-") === 0) { kinds[c] = (kinds[c] || 0) + 1; } });
+                return s.className;
+            });
+        });
+        const palette = {};
+        ["hljs-keyword", "hljs-string", "hljs-number", "hljs-comment", "hljs-type", "hljs-built_in", "hljs-meta"].forEach(function (k) {
+            const s = body.querySelector(".file-text ." + k);
+            palette[k] = s ? getComputedStyle(s).color : "";
+        });
+        return JSON.stringify({
+            rowCount: rows.length,
+            nums: rows.map(function (r) { return (r.querySelector(".file-num") || {}).textContent || ""; }),
+            texts: rows.map(function (r) { return (r.querySelector(".file-text") || {}).textContent || ""; }),
+            lineClasses: lineClasses,
+            base: rows.length ? getComputedStyle(rows[0].querySelector(".file-text")).color : "",
+            tokens: tokens, kinds: kinds, palette: palette,
+        });
+    `));
+    /** 行号还在、每一行的字跟原文一字不差（上色的行拆开以后不许串行、不许丢字）。 */
+    const sameLines = (r, want) => r.rowCount === want.length
+        && r.nums.every((n, i) => n === String(i + 1))
+        && r.texts.every((t, i) => t === want[i]);
+    /** 点开一个带颜色的文件（line 是投出去那句话里链接说的行）、等它画上来。 */
+    const openColor = async (file, line, wantRows) => {
+        console.log("点文件链接：" + await clickLink(file, line));
+        return await waitLook("带颜色的 " + file + " 上来", (x) => x.rowCount === wantRows, 15000);
+    };
+    /** 页面上最长一次「卡住没答理」有多久（对着一堆行画那一下）：先摆上秒表、点完再读。 */
+    const startFreezeWatch = () => page.eval(`
+        window.__gaps = [];
+        var last = performance.now();
+        (function tick() { const now = performance.now(); window.__gaps.push(now - last); last = now; requestAnimationFrame(tick); })();
+        return true;
+    `);
+    const readFreeze = async () => Number(await page.eval(`return window.__gaps && window.__gaps.length ? Math.round(Math.max.apply(null, window.__gaps)) : -1;`));
+
+    await openColor(COLOR.ts, 3, COLOR_TS_LINES.length);
+    const tsCol = await colorLook();
+    check("TypeScript 文件显示时带颜色（关键字、字符串、注释各自有着色）",
+        tsCol.tokens > 0 && tsCol.kinds["hljs-keyword"] > 0 && tsCol.kinds["hljs-string"] > 0
+        && tsCol.kinds["hljs-comment"] > 0, JSON.stringify(tsCol.kinds));
+    check("上色以后行号还在、每一行的字跟原文一字不差", sameLines(tsCol, COLOR_TS_LINES), JSON.stringify(tsCol.texts.slice(0, 3)));
+    check("颜色是几种不同的颜色（不是整段一个色）",
+        tsCol.palette["hljs-keyword"] !== "" && tsCol.palette["hljs-keyword"] !== tsCol.base
+        && tsCol.palette["hljs-keyword"] !== tsCol.palette["hljs-comment"]
+        && tsCol.palette["hljs-string"] !== tsCol.base, JSON.stringify(tsCol.palette));
+    check("跨行的块注释与模板串：两行都还带着原来的颜色（没在行号那儿断开）",
+        tsCol.lineClasses[8].some((c) => c.indexOf("hljs-comment") >= 0)
+        && tsCol.lineClasses[9].some((c) => c.indexOf("hljs-comment") >= 0)
+        && tsCol.lineClasses[10].some((c) => c.indexOf("hljs-string") >= 0)
+        && tsCol.lineClasses[11].some((c) => c.indexOf("hljs-string") >= 0),
+        JSON.stringify([tsCol.lineClasses[8], tsCol.lineClasses[9], tsCol.lineClasses[10], tsCol.lineClasses[11]]));
+    await page.shot("file-22-color-ts.png");
+
+    await openColor(COLOR.js, 3, COLOR_JS_LINES.length);
+    const jsCol = await colorLook();
+    check("JavaScript 文件也带颜色（js 是 TypeScript 的别名，跟消息流里认的是同一套）",
+        sameLines(jsCol, COLOR_JS_LINES) && jsCol.kinds["hljs-keyword"] > 0, JSON.stringify(jsCol.kinds));
+
+    await openColor(COLOR.json, 3, COLOR_JSON_LINES.length);
+    const jsonCol = await colorLook();
+    check("JSON 文件也带颜色（json 有别名指到 TypeScript）",
+        sameLines(jsonCol, COLOR_JSON_LINES) && jsonCol.kinds["hljs-string"] > 0 && jsonCol.kinds["hljs-number"] > 0,
+        JSON.stringify(jsonCol.kinds));
+
+    await openColor(COLOR.cpp, 3, COLOR_CPP_LINES.length);
+    const cppCol = await colorLook();
+    check("C++ 文件带颜色（关键字、预处理指令、注释、字符串各自有着色）",
+        sameLines(cppCol, COLOR_CPP_LINES) && cppCol.kinds["hljs-keyword"] > 0 && cppCol.kinds["hljs-meta"] > 0
+        && cppCol.kinds["hljs-string"] > 0 && cppCol.kinds["hljs-comment"] > 0, JSON.stringify(cppCol.kinds));
+    check("C++ 那个跨行的块注释：两行都还是注释的颜色",
+        cppCol.lineClasses[5].some((c) => c.indexOf("hljs-comment") >= 0)
+        && cppCol.lineClasses[6].some((c) => c.indexOf("hljs-comment") >= 0),
+        JSON.stringify([cppCol.lineClasses[5], cppCol.lineClasses[6]]));
+    await page.shot("file-23-color-cpp.png");
+
+    await openColor(COLOR.py, 1, COLOR_PY_LINES.length);
+    const pyCol = await colorLook();
+    check("Python 文件带颜色（关键字、内置函数、字符串、注释各自有着色）",
+        sameLines(pyCol, COLOR_PY_LINES) && pyCol.kinds["hljs-keyword"] > 0 && pyCol.kinds["hljs-built_in"] > 0
+        && pyCol.kinds["hljs-string"] > 0 && pyCol.kinds["hljs-comment"] > 0, JSON.stringify(pyCol.kinds));
+    await page.shot("file-24-color-py.png");
+
+    await openColor(COLOR.ruby, 1, COLOR_RUBY_LINES.length);
+    const rbCol = await colorLook();
+    check("不认得的语言（.rb）还是黑白：一个记号也没有、字跟原文一样",
+        sameLines(rbCol, COLOR_RUBY_LINES) && rbCol.tokens === 0, JSON.stringify(rbCol.kinds));
+
+    // 上色那条线以内的中等文件：照样上色（线是 384 KB 字符，这个 200 KB）
+    await openColor(COLOR.mid, 3, COLOR_MID.lines);
+    const midCol = JSON.parse(await page.eval(`
+        return JSON.stringify({
+            rows: document.querySelectorAll("#fileBody .file-line").length,
+            tokens: document.querySelectorAll("#fileBody .file-text [class*='hljs-']").length,
+        });
+    `));
+    check("上色那条线以内的中等文件（" + Math.round(COLOR_MID.text.length / 1024) + " KB）照样上色",
+        midCol.rows === COLOR_MID.lines && midCol.tokens > 0, JSON.stringify(midCol));
+
+    // 大文件：不上色（整段高亮 1.5 MB 要好几秒，会把页面卡在那儿），行号照旧、页面得答得上话。
+    // 秒表先摆上再点：下面这条“最长卡住多久”的量就是这一下里最长的那个停顿。
+    await startFreezeWatch();
+    console.log("点文件链接：" + await clickLink(COLOR.big, 3));
+    const bigCol = await waitLook("大到不上色的那个文件上来", (x) => x.rowCount === COLOR_BIG.lines, 30000);
+    const bigFreeze = await readFreeze();
+    const bigStats = JSON.parse(await page.eval(`
+        const rows = document.querySelectorAll("#fileBody .file-line");
+        const first = rows[0], last = rows[rows.length - 1];
+        return JSON.stringify({
+            rows: rows.length,
+            tokens: document.querySelectorAll("#fileBody .file-text [class*='hljs-']").length,
+            firstNum: first ? first.querySelector(".file-num").textContent : "",
+            lastNum: last ? last.querySelector(".file-num").textContent : "",
+            firstText: first ? first.querySelector(".file-text").textContent : "",
+            lastText: last ? last.querySelector(".file-text").textContent : "",
+            note: (document.querySelector("#fileBody .file-note") || {}).textContent || "",
+        });
+    `));
+    check("大文件不上色（黑白、" + COLOR_BIG.lines + " 行都在、行号从 1 到最后一行都对）",
+        bigStats.rows === COLOR_BIG.lines && bigStats.tokens === 0 && bigStats.note === ""
+        && bigStats.firstNum === "1" && bigStats.lastNum === String(COLOR_BIG.lines)
+        && bigStats.firstText === COLOR_UNIT.split("\n")[0],
+        JSON.stringify({ rows: bigStats.rows, tokens: bigStats.tokens, first: bigStats.firstNum, last: bigStats.lastNum }));
+    check("停在链接说的第 3 行", bigCol.hitNum === "3" && bigCol.hitVisible);
+    check("大文件没把页面卡住（画这一下最长的停顿有上界；上色硬塞进来就会翻好几倍）",
+        bigFreeze > 0 && bigFreeze < 2500, bigFreeze + "ms");
+    await page.shot("file-25-color-big.png");
+    // 这一大堆行别拖给后面的检查：关掉它那个标签
+    console.log("点标签上的叉：" + await clickTab(COLOR.big, "close"));
+    await page.sleep(300);
 
     // ==================== 直接打那条文件地址（拒绝的几种情形 + 条件请求）====================
     const raw = await page.eval(`

@@ -2983,6 +2983,12 @@
   const FILE_SIDEBAR_MIN_WIDTH = 1200;
   /** 跟着刷新：每隔这么久问一次现在看着的那个文件变了没（问法见 pollActiveFile）。 */
   const FILE_SIDEBAR_POLL_MS = 1500;
+  /**
+   * 上色那条线：正文不超过这么多字符才上色，超过就黑白、只带行号（见 highlightFileLines）。
+   * 整段高亮是一次同步调用，几十万字符就要几百毫秒，而这里一列正文可以到 2 MB——
+   * 不给它设个上限，点开一个大文件就把页面卡在那儿了。
+   */
+  const FILE_HIGHLIGHT_MAX_CHARS = 384 * 1024;
   const FILE_SIDEBAR_STORE_KEY = "pichat.fileSidebarOpen";
   const FILE_SIDEBAR_HINT = "点消息里的文件链接，这里会显示那个文件。";
   /** 「项目目录」那一格：标签上写这四个字，悬停提示与面板头给全路径。 */
@@ -3316,21 +3322,71 @@
       return null;
     }
     releaseTabImage(tab);   // 这个文件以前是张图（现在换成文本了），把那份地址放掉
-    return renderFileText(await resp.text(), tab.line);
+    return renderFileText(await resp.text(), tab.line, tab.path);
+  }
+
+  /**
+   * 把整段高亮好的 HTML 按行拆开：跨行的标签（块注释、模板串、Python 三引号串这些）在行尾
+   * 收住、下一行开头再接上，每一行都是自己闭合的一段 HTML。
+   * hljs 的输出只有 `<span …>` 与 `</span>` 两种标签、正文里的字符都转义过，所以这么拼出来
+   * 的行丢进 innerHTML 是安全的，行数也不会多也不会少。
+   * @returns 一行一段；行数跟原文对不上（理论上不该发生）就给 null，调用方退回黑白
+   */
+  function splitHighlightedLines(html, wantLines) {
+    const lines = [];
+    const open = [];          // 到这一行为止还开着的标签，下一行开头要原样接上
+    let cur = "";
+    let at = 0;
+    const re = /<span[^>]*>|<\/span>|\n/g;
+    let m;
+    while ((m = re.exec(html))) {
+      cur += html.slice(at, m.index);
+      at = m.index + m[0].length;
+      if (m[0] === "\n") {
+        lines.push(cur + "</span>".repeat(open.length));
+        cur = open.join("");
+        continue;
+      }
+      cur += m[0];
+      if (m[0] === "</span>") { open.pop(); } else { open.push(m[0]); }
+    }
+    lines.push(cur + html.slice(at) + "</span>".repeat(open.length));
+    return lines.length === wantLines ? lines : null;
+  }
+
+  /**
+   * 这个文件的每一行该上什么色：按扩展名认语言——跟消息流里认语言、认别名走同一处
+   *（resolveHighlightLanguage：`js` 是 TypeScript 的别名、`json` 也有别名指过去、`h` 是 C++ 的别名）。
+   * 认不出来、只有纯文本、太大、或者高亮中途出了岔子，都给 null：那几行老老实实黑白，
+   * 不能因为这个文件显示不出来。
+   * 整段高亮一次再拆行，不是一行一行单独高亮：跨多行的注释 / 模板串 / 文档串才有对的颜色。
+   */
+  function highlightFileLines(text, path) {
+    if (!text || text.length > FILE_HIGHLIGHT_MAX_CHARS) { return null; }
+    const { hljs } = globalThis.hljsBundle || {};
+    if (!hljs) { return null; }
+    const language = resolveHighlightLanguage(hljs, lastExt(path));
+    if (!language || language === "plaintext") { return null; }
+    try {
+      return splitHighlightedLines(hljs.highlight(text, { language }).value, text.split("\n").length);
+    } catch (e) { return null; }
   }
 
   /**
    * 把一个文件画出来：一行一格、带行号，hitLine 那一行点亮（0 = 不点亮）。
+   * 本仓库认得的那几种语言按扩展名上色（见 highlightFileLines），其余黑白。
    * 只画，不管滚到哪儿（那是 scrollFileBody 的事）：返回点亮的那一行，没点亮就是 null。
    * @param text 文件全文（后端按 UTF-8 给回来的）
+   * @param path 这个文件叫什么名字（按扩展名上色用）
    */
-  function renderFileText(text, hitLine) {
+  function renderFileText(text, hitLine, path) {
     const body = fileSidebar.body;
     if (!body) { return null; }
     body.innerHTML = "";
     const lines = String(text).split("\n");
     // 文件末尾那个换行会多出一个空行：不画它（行号也就不会凭空多出一个）
     if (lines.length > 1 && lines[lines.length - 1] === "") { lines.pop(); }
+    const colored = highlightFileLines(String(text), path);
     const frag = document.createDocumentFragment();
     let hitRow = null;
     lines.forEach((line, i) => {
@@ -3341,7 +3397,7 @@
       num.textContent = String(i + 1);
       const code = document.createElement("span");
       code.className = "file-text";
-      code.textContent = line;
+      if (colored) { code.innerHTML = colored[i]; } else { code.textContent = line; }
       row.appendChild(num);
       row.appendChild(code);
       if (hitLine > 0 && i + 1 === hitLine) { row.classList.add("hit"); hitRow = row; }
