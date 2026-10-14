@@ -42,6 +42,9 @@
 
   // VSCode 网页视图里本来就有 acquireVsCodeApi（而且只能取一次）；网页里没有，由本文件补一份。
   var IN_WEBVIEW = typeof window.acquireVsCodeApi === "function";
+  // 把“在不在网页视图里”摊到 window 上：chat.js 加载得比本文件晚，它也按这个标记分几处行为
+  //（编辑卡片默认收起、左边的文件侧边栏只长在浏览器页面里）。
+  window.pichatInWebview = IN_WEBVIEW;
 
   // 顶条最右边那两颗按钮的图标：相机那个是 VSCode 官方 codicon（@vscode/codicons 包），
   // fill=currentColor 跟随文字色，尺寸由 browserTheme.css 控制。
@@ -50,6 +53,9 @@
   // 为什么不直接用 codicon：官方那套里没有三层尖括号（只有单个的 chevron-left）。
   // 自己画三根，笔画风格跟 codicon 的箭头一致（细笔画 + 圆头）。
   var ICON_MENU_LEFT = '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.7 3.6 3.2 8l3.5 4.4"/><path d="M10.1 3.6 6.6 8l3.5 4.4"/><path d="M13.5 3.6 10 8l3.5 4.4"/></svg>';
+  // 文件侧边栏那颗按钮（顶条最左边）：一个方框，左边那一条（就是滑出来的那一列）。
+  // 也自己画：codicon 里没有现成的“左侧一列”。
+  var ICON_FILE_SIDEBAR = '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><rect x="1.6" y="2.6" width="12.8" height="10.8" rx="1.6"/><path d="M6.2 2.6V13.4"/><path d="M3.4 5.3h1.4M3.4 7.5h1.4" stroke-linecap="round"/></svg>';
 
   // ==================== 界面颜色（显示选项里的「界面颜色」） ====================
   // 网页里没有 VSCode 注入主题变量，这里自己补两套调色板：浅色照 VSCode 浅色主题
@@ -733,6 +739,27 @@
       enqueue({ type: "openWorkspace" });
     });
     bar.appendChild(btn);
+  })();
+
+  // ==================== 顶条最左边的“文件侧边栏”按钮（只在浏览器页面里）====================
+  // 点它开 / 收左边那一列（状态记在这台设备里，由 chat.js 管）。插件里的对话面板里没有
+  // 这一列，也没有这颗按钮：那边点文件链接照旧交给编辑器打开。
+  (function () {
+    if (IN_WEBVIEW) { return; }
+    var bar = document.getElementById("sessionBar");
+    if (!bar) { return; }
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "fileSidebarBtn";
+    btn.innerHTML = ICON_FILE_SIDEBAR;
+    btn.title = "文件侧边栏";
+    btn.setAttribute("aria-label", "文件侧边栏");
+    btn.addEventListener("click", function () {
+      var panel = window.pichatFileSidebar;
+      if (panel && typeof panel.toggle === "function") { panel.toggle(); }
+    });
+    // 摆成顶条的第一个（加号左边）：这就是“顶条左边那颗按钮”
+    bar.insertBefore(btn, bar.firstChild);
   })();
 
   // ==================== 输入框的小改动 ====================

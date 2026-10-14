@@ -19,13 +19,15 @@ import {
     localHostnames,
     type PageChannel,
 } from "./webTransport";
+import { insideFolder } from "./pathRules";
 
 /**
  * PiChatWebServer —— 独立后端的网页服务：一个地址，手机和电脑都看这一份会话。
  *
  * 两条线：
  *   - **页面线**（浏览器 / 手机，以及 VS Code 里的那块网页视图）：对话页面（`/`）、
- *     界面资源（`/media/…`）、后端推给页面的消息流（`/events`）、页面发给后端的消息（`/api`）。
+ *     界面资源（`/media/…`）、后端推给页面的消息流（`/events`）、页面发给后端的消息（`/api`）、
+ *     页面要看的文件（`/file`，只读、只看得到当前会话目录里的）。
  *     VS Code 里的网页视图走同样的 `/events` + `/api`（只是中间隔着插件进程转发），
  *     界面代码完全一样；
  *   - **屏线**（VS Code 窗口，`/screen` + `/screenapi`）：窗口在后端登记自己是打开着哪些
@@ -101,6 +103,11 @@ export interface WebServerHost {
     processScreenMessage(msg: any, screenId: string): unknown;
     /** 页面发来一条消息（/api POST）。 */
     processPageMessage(msg: any, pageId: string): void;
+    /**
+     * 一个会话跑在哪个目录（只读的文件地址按它解路径）。
+     * 跑着的会话、以及刚关掉还记着的会话都认；两条都对不上返回 undefined（页面拿不到内容）。
+     */
+    resolveSessionDir(sessionId: string): string | undefined;
     /** 一条推送连接建立（页面连上 / 重连）。 */
     onPageConnected(pageId: string): void;
     /** 一条推送连接断了（页面关掉 / 死连接被掐掉）。 */
@@ -333,6 +340,11 @@ export class PiChatWebServer {
                 this.sendMedia(req, res, pathname.slice("/media/".length), url.searchParams.get("v") ?? "");
                 return;
             }
+            if (pathname === "/file") {
+                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                this.sendFile(req, res, url.searchParams.get("session") ?? "", url.searchParams.get("path") ?? "");
+                return;
+            }
             if (pathname === "/events") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
                 this.openChannel(req, res, url.searchParams.get("pageId") ?? "");
@@ -421,6 +433,68 @@ export class PiChatWebServer {
      * 只报身份，不放路径、配置这些不该外露的东西。
      * 不带 Origin 头也放行：本机探活就是这么发的（见 originAllowed 对无 Origin 请求的处理）。
      */
+    /** 页面能直接看的文件大小上限：再大的不读出来（页面给一句「太大」；要下载那是另一条路）。 */
+    private static readonly MAX_FILE_BYTES = 2 * 1024 * 1024;
+
+    /**
+     * 发一个文件给页面（/file?session=…&path=…）。
+     *
+     * 只读，而且只看得到当前会话目录里的文件：相对路径按那个会话的目录解，解出来的真实路径
+     * （软链接一起解析掉）必须落在目录以内；`..` 绕出去的、软链接指到外面的都不给。这是有意的
+     * 边界：能打开这个页面的人本来就能让 pi 读写这台机器，但「按路径直接取文件」这条路不该跟着
+     * 变成整台机器的读接口（为什么见 docs/adr/0001-浏览器页面自己读文件.md）。
+     *
+     * 看不了时给准信：目录外 403、文件不在 404、看（用来显示）超过 2 MB 413（正文里带着字节数，
+     * 页面据此说「太大」）。这一版按 UTF-8 纯文本递出去；图片、二进制与下载那几条见后续的票。
+     */
+    private sendFile(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string, wantPath: string): void {
+        if (!sessionId || !wantPath || wantPath.includes("\0")) {
+            this.sendText(req, res, 400, "请求里要说明是哪个会话、哪个文件。");
+            return;
+        }
+        const cwd = this.host.resolveSessionDir(sessionId);
+        if (!cwd) {
+            this.sendText(req, res, 404, "这个会话不在了（页面可能开得太久），刷新页面再试。");
+            return;
+        }
+        // 相对路径按会话目录解；写成绝对路径也先解出来，再按下面那道边界判
+        const target = path.resolve(cwd, wantPath);
+        // 目录边界拿真实路径判：`..` 与软链接走的都是这一条
+        const realCwd = realPathOr(cwd);
+        const realTarget = realPathOr(target);
+        if (!realCwd || !realTarget) {
+            this.sendText(req, res, 404, "没有这个文件。");
+            return;
+        }
+        if (!insideFolder(realTarget, realCwd)) {
+            this.sendText(req, res, 403, "这个文件在会话目录外，看不了。");
+            return;
+        }
+        let stat: fs.Stats;
+        try {
+            stat = fs.statSync(realTarget);
+        } catch {
+            this.sendText(req, res, 404, "没有这个文件。");
+            return;
+        }
+        if (!stat.isFile()) {
+            this.sendText(req, res, 404, "没有这个文件（这是个目录）。");
+            return;
+        }
+        if (stat.size > PiChatWebServer.MAX_FILE_BYTES) {
+            this.sendText(req, res, 413,
+                `文件太大（${stat.size} 字节），这里只显示小于 2 MB 的文件。`);
+            return;
+        }
+        fs.readFile(realTarget, (err, data) => {
+            if (err) { this.sendText(req, res, 404, "没有这个文件。"); return; }
+            this.writeBody(req, res, 200, data, {
+                "Content-Type": "text/plain; charset=utf-8",
+                "Cache-Control": "no-store",
+            });
+        });
+    }
+
     private sendHealth(req: http.IncomingMessage, res: http.ServerResponse): void {
         if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
         // info 先铺、本服务的身份后压：即使 info 里凑巧带了同名键，
@@ -808,6 +882,11 @@ function lanIpv4Addresses(): string[] {
         }
     }
     return found;
+}
+
+/** 解析真实路径（软链接一起解开）；解不开（文件不在）返回 undefined。 */
+function realPathOr(p: string): string | undefined {
+    try { return fs.realpathSync(p); } catch { return undefined; }
 }
 
 /** 把服务上现有的连接全部断开（长连接不断，close 就不会结束）。 */

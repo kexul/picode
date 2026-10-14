@@ -1,8 +1,10 @@
 // @ts-nocheck
 (function () {
   const vscode = acquireVsCodeApi();
-  // 是否运行在网页服务的页面里（browserBridge.js 会先于本文件设这个标记）。
-  // 网页端与 VSCode 共用这份脚本，少数行为按此区分：edit/write 卡片默认收起等。
+  // 是否运行在网页服务的页面里（browserBridge.js 会先于本文件在 window 上放好这个标记）。
+  // 网页端与 VSCode 共用这份脚本，少数行为按此区分：edit/write 卡片默认收起、
+  // 左边的文件侧边栏只在浏览器页面里长出来（插件里的对话面板里点链接交给编辑器打开）。
+  const IN_WEBVIEW = window.pichatInWebview === true;
   // 供扩展宿主选择“最后活动的 Pi Chat”；pointerdown 覆盖大多数 webview
   // 内部交互，focus 覆盖 Ctrl+Tab / 编辑器组切换后的焦点恢复。
   const notifyHostFocus = () => vscode.postMessage({ type: "hostFocus" });
@@ -638,8 +640,8 @@
     // 清单开着的时候它会跟着变（换会话、改标题、某个会话跑完了）：重画完还要重新摆——
     // 内容变宽变窄了，贴着屏幕边的位置就不对了。
     refreshSessionMenu();
-    // 顶条自己也会长高变矮（目录那行有 / 没有）：常驻那一列的面板头跟着它齐（见 syncDockHeaderHeight）
-    if (sidebarEnabled()) { syncDockHeaderHeight(); }
+    // 顶条自己也会长高变矮（目录那行有 / 没有）：两边常驻那一列的面板头跟着它齐（见 syncDockHeaderHeight）
+    syncDockHeaderHeight();
   }
 
   // ==================== 顶条那颗会话名的下拉框 ====================
@@ -2255,6 +2257,8 @@
     hideTagTip();
     if (activeId !== null) { saveInputState(); } else { carryComposerToSession(id); }
     activeId = id;
+    // 左边那一列看的是会话目录里的文件：换了会话就收成一句提示
+    resetFileSidebarForSession();
     // 看过了：那颗“有新消息”的小蓝点收掉
     const shown = sessions.get(id);
     if (shown && shown.unread) { shown.unread = false; }
@@ -2833,33 +2837,41 @@
     syncDockHeaderHeight();
   }
 
-  /** 常驻那一列的面板头跟对话那边的顶条对齐：两根横线（顶条的底边、面板头的底边）落在
-   *  同一条线上，而且要落在整像素上（不取整那条线会压在半个像素上，看着发虚）。
-   *  顶条的高度是跟内容走的（会话名 + 目录两行、字号设置、面板宽度），所以量出来向上取整，
-   *  两边写同一个数；量之前先把上一回写死的高度摘掉，量到的才是它本来的高度。
-   *  老白量一次不好（会多搭一次重排）：顶条的高度只跟字号 / 目录那行有没有 / 面板宽度有关，
-   *  这三样没变就直接回来。 */
+  /**
+   * 常驻那一列的面板头跟对话那边的顶条对齐：两根横线（顶条的底边、面板头的底边）落在
+   * 同一条线上，而且要落在整像素上（不取整那条线会压在半个像素上，看着发虚）。
+   * 顶条的高度是跟内容走的（会话名 + 目录两行、字号设置、面板宽度），所以量出来向上取整，
+   * 两边写同一个数；量之前先把上一回写死的高度摘掉，量到的才是它本来的高度。
+   * 左边那一列（文件侧边栏）常驻时也拿同一个数：三根横线齐。
+   * 老白量一次不好（会多搭一次重排）：顶条的高度只跟字号 / 目录那行有没有 / 面板宽度有关，
+   * 这几样没变就直接回来。 */
   let dockBarKey = "";
   function syncDockHeaderHeight() {
     const bar = document.getElementById("sessionBar");
-    if (!bar || !dockView.header) { return; }
-    if (!sidebarEnabled()) {
-      // 常驻没开（窄窗、插件面板）：顶条回到自己按内容定高，别留着上一回写死的值
-      if (bar.style.height || dockView.header.style.height) {
+    if (!bar) { return; }
+    const rightDock = sidebarEnabled();
+    const fileDock = fileSidebarDocked();
+    const fileHeader = fileSidebar.header;
+    if (!rightDock && !fileDock) {
+      // 都没常驻（窄窗、插件面板）：顶条回到自己按内容定高，别留着上一回写死的值
+      if (bar.style.height || dockView.header.style.height || (fileHeader && fileHeader.style.height)) {
         bar.style.height = "";
         dockView.header.style.height = "";
+        if (fileHeader) { fileHeader.style.height = ""; }
         dockBarKey = "";
       }
       return;
     }
     const pathShown = !!(sessionPathEl && !sessionPathEl.classList.contains("hidden"));
     const key = (document.body.style.getPropertyValue("--vscode-font-size") || "") + "|" +
-      (pathShown ? "dir" : "") + "|" + window.innerWidth;
+      (pathShown ? "dir" : "") + "|" + window.innerWidth + "|" +
+      (rightDock ? "r" : "") + (fileDock ? "l" : "");
     if (key === dockBarKey) { return; }
     bar.style.height = "";
     const h = Math.ceil(bar.getBoundingClientRect().height);
     bar.style.height = h + "px";
-    dockView.header.style.height = h + "px";
+    if (rightDock) { dockView.header.style.height = h + "px"; }
+    if (fileDock && fileHeader) { fileHeader.style.height = h + "px"; }
     dockBarKey = key;
   }
 
@@ -2874,6 +2886,8 @@
 
   /** 展开常驻那一列（点 <<< 或面板里那颗叉的对面那种情形），并把“展开”记住。 */
   function expandSidebar() {
+    // 窄窗里这一列与左边那一列同一时刻只留一块：先把左边收起来
+    closeFileSidebarForRightSidebar();
     sidebarWanted = true;
     rememberSidebarWanted(true);
     sidebarAsked = false;
@@ -2896,6 +2910,8 @@
       // 窄窗：开了就收、没开就滑进来。开这一次不改变“宽窗要不要常驻”那个记忆。
       const st = modalView.state;
       if (st && st.kind === "workspace" && !modalView.root.classList.contains("hidden")) { cancelPicker(modalView); return; }
+      // 两边同一时刻只开一块：左边那块开着就先收起来
+      closeFileSidebarForRightSidebar();
       vscode.postMessage({ type: "openWorkspace" });
       return;
     }
@@ -2919,6 +2935,204 @@
       ensureSidebarPanel();
     });
   });
+
+  // ==================== 文件侧边栏（只在浏览器页面里）====================
+  //
+  // 点消息流里的文件链接，左边开出一列，只读地显示那个文件：带行号，停在链接说的那一行并高亮。
+  // 内容由后端那条只读的文件地址（/file）按当前会话的目录读出来，不经过编辑器——手机上、
+  // 或者只跑了后端没开编辑器的时候，点链接才有着落（见 docs/adr/0001-浏览器页面自己读文件.md）。
+  //
+  // 只有浏览器页面里有它：插件里的对话面板里点链接照旧交给编辑器打开。判据就是上面那个
+  // IN_WEBVIEW 标记（界面桥放在 window 上的，跟顶条上那颗桌面截图按钮同一路）。
+  //
+  // 窗口够宽（≥1200px）时这一列常驻在左边、对话让出这块宽度；窄了从左边滑入、点外面收起。
+  // 手机上同一时刻只开一块侧边栏：开左边这块就把右边那块收起来，反过来也一样
+  //（两块都常驻时不受这条约束）。开没收起记在这台设备里（跟右边那一列同一个做法）。
+  const FILE_SIDEBAR_MIN_WIDTH = 1200;
+  const FILE_SIDEBAR_STORE_KEY = "pichat.fileSidebarOpen";
+  const FILE_SIDEBAR_HINT = "点消息里的文件链接，这里会显示那个文件。";
+  /** 这一列那一摊：容器、面板里的几块、现在看的是哪个文件。 */
+  const fileSidebar = {
+    root: null, header: null, title: null, body: null,
+    open: false,     // 这台设备上人要不要它开着（记在 localStorage；开着时宽窗常驻、窄窗滑入）
+    path: "",        // 现在看的是哪个文件（链接里那个写法，标题上就是它）
+    line: 0,         // 链接里说的那一行（没带行号就是 0）
+    token: 0,        // 取文件是异步的：换文件 / 收起之后回来的旧回应就不算数了
+  };
+
+  /** 窗口够宽吗（够宽这一列常驻，不够就是滑入式）。 */
+  function fileSidebarWide() { return window.innerWidth >= FILE_SIDEBAR_MIN_WIDTH; }
+  /** 这一列此刻常驻在左边吗。 */
+  function fileSidebarDocked() { return fileSidebar.open && fileSidebarWide(); }
+
+  /** 按“开没收起、常驻还是滑入”摆版面（版式看 body 上的 file-open / file-dock，见 chat.css 末尾）。 */
+  function syncFileSidebarLayout() {
+    document.body.classList.toggle("file-open", fileSidebar.open);
+    document.body.classList.toggle("file-dock", fileSidebarDocked());
+    const btn = document.getElementById("fileSidebarBtn");
+    if (btn) { btn.title = fileSidebar.open ? "收起文件侧边栏" : "文件侧边栏"; }
+    syncDockHeaderHeight();
+  }
+  function rememberFileSidebar(open) {
+    try { localStorage.setItem(FILE_SIDEBAR_STORE_KEY, open ? "1" : "0"); } catch (e) { /* 存不了就只管这一次 */ }
+  }
+  function readFileSidebarWanted() {
+    try { return localStorage.getItem(FILE_SIDEBAR_STORE_KEY) === "1"; } catch (e) { return false; }
+  }
+
+  /** 面板里那一段纯粹的文字（提示、看不了的原因、正在读取）。 */
+  function showFileNote(text) {
+    if (!fileSidebar.body) { return; }
+    fileSidebar.body.innerHTML = "";
+    const note = document.createElement("div");
+    note.className = "file-note";
+    note.textContent = text;
+    fileSidebar.body.appendChild(note);
+  }
+
+  /**
+   * 把一个文件显示出来：带行号，停在那一行并高亮。
+   * @param text 文件全文（后端按 UTF-8 给回来的）
+   * @param hitLine 链接里说的那一行（1 起；没带就是 0）
+   */
+  function renderFileText(text, hitLine) {
+    const body = fileSidebar.body;
+    if (!body) { return; }
+    body.innerHTML = "";
+    const lines = String(text).split("\n");
+    // 文件末尾那个换行会多出一个空行：不画它（行号也就不会凭空多出一个）
+    if (lines.length > 1 && lines[lines.length - 1] === "") { lines.pop(); }
+    const frag = document.createDocumentFragment();
+    let hitRow = null;
+    lines.forEach((line, i) => {
+      const row = document.createElement("div");
+      row.className = "file-line";
+      const num = document.createElement("span");
+      num.className = "file-num";
+      num.textContent = String(i + 1);
+      const code = document.createElement("span");
+      code.className = "file-text";
+      code.textContent = line;
+      row.appendChild(num);
+      row.appendChild(code);
+      if (hitLine > 0 && i + 1 === hitLine) { row.classList.add("hit"); hitRow = row; }
+      frag.appendChild(row);
+    });
+    body.appendChild(frag);
+    if (hitRow) {
+      // 停在那一行：按两边的位置差算滚动量（scrollIntoView 会连外面那几层一起滚，不行）
+      const bodyRect = body.getBoundingClientRect();
+      const rowRect = hitRow.getBoundingClientRect();
+      const delta = (rowRect.top - bodyRect.top) - (bodyRect.height - rowRect.height) / 2;
+      body.scrollTop = Math.max(0, body.scrollTop + delta);
+    } else {
+      body.scrollTop = 0;
+    }
+  }
+
+  /** 去后端那条只读地址把这个文件取回来画上（看不了就画一句人话）。 */
+  function loadFileIntoSidebar() {
+    const token = ++fileSidebar.token;
+    const sessionId = activeId || "";
+    const query = "session=" + encodeURIComponent(sessionId) + "&path=" + encodeURIComponent(fileSidebar.path);
+    fetch("/file?" + query).then(async (resp) => {
+      if (token !== fileSidebar.token) { return; }   // 已经换成别的文件了，这条回应丢掉
+      if (resp.status === 200) { renderFileText(await resp.text(), fileSidebar.line); return; }
+      const note = (await resp.text()).trim();
+      showFileNote(note || "这个文件看不了（" + resp.status + "）。");
+    }).catch(() => {
+      if (token !== fileSidebar.token) { return; }
+      showFileNote("读不出来：连不上后端。");
+    });
+  }
+
+  /** 窄窗里只留一块侧边栏：右边那块此刻露着就收起来（两块都常驻时不动它）。 */
+  function closeRightSidebarForFile() {
+    if (fileSidebarWide()) { return; }
+    const st = modalView.state;
+    if (st && st.kind === "workspace" && !modalView.root.classList.contains("hidden")) { cancelPicker(modalView); return; }
+    if (sidebarEnabled() && sidebarDocked()) { collapseSidebar(); }
+  }
+
+  /** 右边那块要开出来了：窄窗里（左边这块是滑入式）先把左边收起来。 */
+  function closeFileSidebarForRightSidebar() {
+    if (!fileSidebar.open || fileSidebarWide()) { return; }
+    setFileSidebarOpen(false);
+  }
+
+  /** 开 / 收这一列（点顶条那颗按钮、点外面、点链接自动开），并把结果记在这台设备里。 */
+  function setFileSidebarOpen(open) {
+    if (!fileSidebar.root) { return; }
+    fileSidebar.open = !!open;
+    rememberFileSidebar(fileSidebar.open);
+    if (!fileSidebar.open) { fileSidebar.token++; }   // 还等着的那条回应别再画进来
+    syncFileSidebarLayout();
+    if (fileSidebar.open && !fileSidebar.path) { showFileNote(FILE_SIDEBAR_HINT); }
+  }
+
+  /** 顶条左边那颗按钮：开着就收、收着就开。 */
+  function toggleFileSidebar() {
+    if (fileSidebar.open) { setFileSidebarOpen(false); return; }
+    closeRightSidebarForFile();
+    setFileSidebarOpen(true);
+  }
+
+  /** 点消息流里的文件链接：开左边这一列，把那个文件取回来显示（停在链接说的那一行）。 */
+  function openFileInSidebar(path, line) {
+    if (!fileSidebar.root || !path) { return; }
+    closeRightSidebarForFile();
+    fileSidebar.path = path;
+    fileSidebar.line = Number(line) > 0 ? Number(line) : 0;
+    if (fileSidebar.title) {
+      fileSidebar.title.textContent = path;
+      fileSidebar.title.title = path;
+    }
+    if (!fileSidebar.open) { setFileSidebarOpen(true); } else { syncFileSidebarLayout(); }
+    showFileNote("正在读取…");
+    loadFileIntoSidebar();
+  }
+
+  /** 切会话：面板里那个文件属于上一个会话的目录，收成一句提示（别把别人的东西留在界面上）。 */
+  function resetFileSidebarForSession() {
+    if (!fileSidebar.root) { return; }
+    fileSidebar.token++;
+    fileSidebar.path = "";
+    fileSidebar.line = 0;
+    if (fileSidebar.title) { fileSidebar.title.textContent = "文件"; fileSidebar.title.title = ""; }
+    showFileNote(FILE_SIDEBAR_HINT);
+  }
+
+  // 这一列只在浏览器页面里搭出来：插件里的对话面板里连这一列的容器都没有。
+  (function buildFileSidebar() {
+    if (IN_WEBVIEW) { return; }
+    const root = document.createElement("div");
+    root.id = "fileSidebar";
+    root.innerHTML =
+      '<div id="filePanel" class="pk-panel">' +
+        '<div id="fileHeader" class="pk-header">' +
+          '<span id="fileTitle" class="pk-header-title">文件</span>' +
+          '<button id="fileClose" class="pk-header-close" type="button" title="收起" aria-label="收起">' + ICONS["close-bold"] + '</button>' +
+        '</div>' +
+        '<div id="fileBody" class="pk-body"></div>' +
+      '</div>';
+    const backdrop = document.createElement("div");
+    backdrop.id = "fileBackdrop";
+    document.body.appendChild(root);
+    document.body.appendChild(backdrop);
+    fileSidebar.root = root;
+    fileSidebar.header = root.querySelector("#fileHeader");
+    fileSidebar.title = root.querySelector("#fileTitle");
+    fileSidebar.body = root.querySelector("#fileBody");
+    fileSidebar.open = readFileSidebarWanted();
+    root.querySelector("#fileClose").addEventListener("click", () => setFileSidebarOpen(false));
+    backdrop.addEventListener("click", () => setFileSidebarOpen(false));
+    syncFileSidebarLayout();
+    if (fileSidebar.open) { showFileNote(FILE_SIDEBAR_HINT); }
+    // 拖窗口过那道门槛：常驻 / 滑入两种摆法跟着换
+    window.addEventListener("resize", () => { if (fileSidebar.open) { syncFileSidebarLayout(); } });
+    // 顶条左边那颗按钮（由 browserBridge.js 建）点它走这里
+    window.pichatFileSidebar = { toggle: toggleFileSidebar };
+  })();
 
   /** pi /resume 列表的相对时间：now / 5m / 3h / 2d / 3w / 2mo / 1y。 */
   function pickerRelTime(ms) {
@@ -4156,7 +4370,16 @@
   // 委托：文件/符号链接点击（在 #messages 容器上）
   messagesEl.addEventListener("click", (e) => {
     const a = e.target.closest("a.file-link");
-    if (a) { e.preventDefault(); const path = a.getAttribute("data-file"); if (!path) { return; } const line = a.dataset.line ? parseInt(a.dataset.line, 10) : undefined; const col = a.dataset.col ? parseInt(a.dataset.col, 10) : undefined; vscode.postMessage({ type: "openFile", path, line, col }); return; }
+    if (a) {
+      e.preventDefault();
+      const path = a.getAttribute("data-file"); if (!path) { return; }
+      const line = a.dataset.line ? parseInt(a.dataset.line, 10) : undefined;
+      const col = a.dataset.col ? parseInt(a.dataset.col, 10) : undefined;
+      // 浏览器页面：开左边那一列看文件（后端自己读）；插件里的对话面板：照旧交给编辑器打开
+      if (fileSidebar.root) { openFileInSidebar(path, line); return; }
+      vscode.postMessage({ type: "openFile", path, line, col });
+      return;
+    }
     const s = e.target.closest("a.symbol-link");
     if (s) { e.preventDefault(); const name = s.getAttribute("data-symbol"); if (name) { vscode.postMessage({ type: "openSymbol", name }); } return; }
   });

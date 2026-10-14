@@ -202,6 +202,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         };
     }
 
+    /**
+     * 一个会话跑在哪个目录（网页服务的只读文件地址按它解路径）。
+     * 跑着的会话、以及刚关掉还记着的会话都认：两处都翻不到就是 undefined，服务那边回 404。
+     */
+    public resolveSessionDir(sessionId: string): string | undefined {
+        return this.panels.get(sessionId)?.cwd ?? this.rememberedSessionDir(sessionId);
+    }
+
     public getCwd(): string {
         return this.options.cwd;
     }

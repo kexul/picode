@@ -25,8 +25,13 @@ export function sameDir(a: string, b: string): boolean {
     return !!key && key === dirKey(b);
 }
 
-/** 这个目录在不在那个目录里（相等也算）。 */
-function dirInside(dir: string, folder: string): boolean {
+/**
+ * 这个路径（文件或目录）在不在那个目录里（相等也算）。
+ *
+ * 只按路径字符串判：软链接要先自己解析成真实路径（fs.realpath）再传进来，
+ * 光看字符串是看不出“里面这个链接其实指到外面”的。
+ */
+export function insideFolder(dir: string, folder: string): boolean {
     const target = dirKey(dir);
     const base = dirKey(folder);
     if (!target || !base) { return false; }
@@ -41,7 +46,7 @@ function dirInside(dir: string, folder: string): boolean {
 
 /** 这个目录在不在那几个目录里（任何一个算）。 */
 export function dirInsideAny(dir: string, folders: readonly string[]): boolean {
-    return folders.some((folder) => dirInside(dir, folder));
+    return folders.some((folder) => insideFolder(dir, folder));
 }
 
 /**

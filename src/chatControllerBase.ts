@@ -1702,6 +1702,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
         }
     }
 
+    /** 刚被关掉的会话里，这个标识记着哪个目录。没记着就是 undefined（网页服务的文件地址按它解路径）。 */
+    protected rememberedSessionDir(panelId: string): string | undefined {
+        return this.closedSessions.get(panelId)?.cwd;
+    }
+
     /**
      * 往一个已经关掉的会话里发消息：按它原来的目录与会话文件重新打开一个
      * （跟从历史里打开一个会话是同一条路），再把这句话送过去。

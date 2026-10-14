@@ -49,14 +49,15 @@
     border-radius: 4px; cursor: pointer; user-select: none;
   }
   #sessionCenter:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
-  /* 加号：竖着撑满整个顶条（上下留白由顶条自己的内边距给），好点、不误触 */
-  #newSessionBtn {
+  /* 顶条上那两颗图标按钮（加号、文件侧边栏）同款：竖着撑满整个顶条（上下留白由顶条自己的
+     内边距给），好点、不误触。#fileSidebarBtn 只在浏览器页面里存在（见本文件末尾）。 */
+  #newSessionBtn, #fileSidebarBtn {
     flex: 0 0 auto; align-self: stretch; width: 32px; padding: 0; border: none; background: transparent;
     color: var(--vscode-foreground); opacity: 0.7; line-height: 1; border-radius: 5px; cursor: pointer;
     display: flex; align-items: center; justify-content: center;
   }
-  #newSessionBtn svg { width: 18px; height: 18px; display: block; }
-  #newSessionBtn:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
+  #newSessionBtn svg, #fileSidebarBtn svg { width: 18px; height: 18px; display: block; }
+  #newSessionBtn:hover, #fileSidebarBtn:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
   /* 当前会话名（带底下的目录行）：左边那颗小点、右边那颗箭头，加上中间两行字。
      横着排、上下居中都由这里管：点与箭头对齐的是**两行合起来**那条的中线，
      不是会话名那一行的中线（所以目录行收起来时，它们自然又回到名字上）。 */
@@ -1066,3 +1067,66 @@
   #sidebarDock .pk-header { box-sizing: border-box; }
   /* 常驻开着时那颗 <<< 的意思反过来（收起）：图标转半圈，改朝外 */
   body.dock-sidebar #browserMenuBtn svg { transform: rotate(180deg); }
+
+  /* ==== 顶条左边那颗按钮（文件侧边栏的开 / 关）====
+     只用在这里说它开着时的样子：尺寸、悬停那几条跟顶条那颗“+”同款同一条规则
+     （见上面 #newSessionBtn）。这颗按钮只在浏览器页面里出现（browserBridge.js 建的）。 */
+  body.file-open #fileSidebarBtn { opacity: 1; }
+
+  /* ==== 左边那一列：文件侧边栏（只在浏览器页面里，见 chat.js 的那一段）====
+     窗口够宽（≥1200px，判定在 chat.js）时它常驻在左边、对话让出这块宽度；窄了从左边滑入、
+     底下垫一层遮罩、点外面收起。手机上同一时刻只开一块侧边栏：开左边这块时右边那块由
+     chat.js 收起来（版式这边不管）。
+
+     两件事分开管（跟右边那一列同一个套路）：
+     - body.file-open：这一列开着（窄窗滑入式也看它）；
+     - body.file-dock：开着而且窗口够宽——常驻，body 横排、左边垫一块空的，对话因此窄 320px。 */
+  :root { --pichat-file-sidebar-w: 320px; }
+  #fileSidebar { display: none; }
+  body.file-dock { flex-direction: row; }
+  body.file-dock::before { content: ""; flex: 0 0 var(--pichat-file-sidebar-w); }
+  body.file-dock #fileSidebar {
+    position: fixed; top: 0; left: 0; right: auto; bottom: 0;
+    width: var(--pichat-file-sidebar-w); height: 100%;
+    display: flex; align-items: stretch; justify-content: flex-start;
+    z-index: 900;   /* 比浮层（1000）低：选模型、逛文件夹那种浮层盖在它上面 */
+  }
+  body.file-open:not(.file-dock) #fileSidebar {
+    position: fixed; top: 0; left: 0; right: auto; bottom: 0;
+    width: min(var(--pichat-file-sidebar-w), 86vw); height: 100%;
+    display: flex; align-items: stretch; justify-content: flex-start;
+    z-index: 1001;
+    animation: file-drawer-in 170ms ease-out;
+  }
+  @keyframes file-drawer-in { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+  @media (prefers-reduced-motion: reduce) { body.file-open:not(.file-dock) #fileSidebar { animation: none; } }
+  /* 滑入式底下那层遮罩：点它 = 收起这一列（常驻时不垫） */
+  #fileBackdrop { display: none; }
+  body.file-open:not(.file-dock) #fileBackdrop {
+    display: block; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.45);
+  }
+  /* 面板铺满这一列，只留右边那条分隔线（其余三边贴到窗口边上，不要圆角）；
+     面板头的高度跟对话那边的顶条对齐（chat.js 量出来写在这一格上）。 */
+  #filePanel {
+    box-sizing: border-box; width: 100%; height: 100%; max-height: none;
+    border-top: 0; border-left: 0; border-bottom: 0; border-radius: 0; box-shadow: none;
+  }
+  #fileHeader { box-sizing: border-box; }
+  #fileBody { flex: 1 1 auto; min-height: 0; padding: 6px 0 12px; font-size: 0.9em; }
+  /* 文件正文：一行一格（行号 + 那一行的原文），长行左右滚（折行开关见后续的票）。 */
+  .file-line { display: flex; align-items: flex-start; min-width: max-content; line-height: 1.55; }
+  .file-num {
+    flex: 0 0 auto; width: 3.2em; padding-right: 8px; text-align: right;
+    opacity: 0.45; user-select: none; font-variant-numeric: tabular-nums;
+    font-family: var(--vscode-editor-font-family, monospace);
+  }
+  .file-text {
+    flex: 1 1 auto; min-width: 0; white-space: pre;
+    font-family: var(--vscode-editor-font-family, monospace);
+  }
+  /* 链接说的那一行：底色 + 左边一道竖条，一眼看得见停在哪儿 */
+  .file-line.hit {
+    background: color-mix(in srgb, var(--vscode-focusBorder, #007acc) 18%, transparent);
+    box-shadow: inset 2px 0 0 0 var(--vscode-focusBorder, #007acc);
+  }
+  .file-note { padding: 12px 14px; line-height: 1.6; opacity: 0.75; }
