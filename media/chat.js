@@ -750,9 +750,7 @@
         no.innerHTML = ICONS["close-bold"];
         no.addEventListener("click", (e) => {
           e.stopPropagation();
-          pendingCloseId = null;
-          if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
-          pendingCloseTimer = null;
+          cancelPendingClose();
           refreshSessionMenu();
         });
         el.appendChild(yes); el.appendChild(no);
@@ -2422,6 +2420,13 @@
     return hoisted.concat(rest);
   }
 
+  /** 把“等确认”那一行撤回去（点取消、点行身切会话、干等超时都走它）：只抹状态，重画交给调用方。 */
+  function cancelPendingClose() {
+    pendingCloseId = null;
+    if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
+    pendingCloseTimer = null;
+  }
+
   /** 请求关闭某个会话：第一次点击只是把那一行变成确认条（行尾多一颗勾），再点勾才真关（防误触）。 */
   function askCloseSession(id) {
     if (pendingCloseId !== id) {
@@ -2431,8 +2436,7 @@
       pendingCloseId = id;
       if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
       pendingCloseTimer = setTimeout(() => {
-        pendingCloseId = null;
-        pendingCloseTimer = null;
+        cancelPendingClose();
         refreshOpenSessionsInPicker();
         refreshSessionMenu();
       }, 4000);
@@ -2440,9 +2444,7 @@
       refreshSessionMenu();
       return;
     }
-    if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
-    pendingCloseTimer = null;
-    pendingCloseId = null;
+    cancelPendingClose();
     // 列表不关：关掉一条后马上就能接着关下一条（那一行会跟着会话列表自己消失）
     vscode.postMessage({ type: "closeSession", sessionId: id });
   }
@@ -4148,9 +4150,7 @@
           no.innerHTML = ICONS["close-bold"];
           no.addEventListener("click", (e) => {
             e.stopPropagation();
-            pendingCloseId = null;
-            if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
-            pendingCloseTimer = null;
+            cancelPendingClose();
             refreshOpenSessionsInPicker();
           });
           el.appendChild(yes); el.appendChild(no);
@@ -4324,8 +4324,9 @@
       return;
     }
     // 「正在对话」段：点行就是切过去（不新开、不重载），行尾那颗 × 是关闭（要再点一下确认）。
+    // 确认条正开着的时候点行身也是切过去：先把确认条撤掉 —— 点勾才真关，行身不能替那颗勾点实了。
     if (item.__section === "open") {
-      if (item.pendingClose) { askCloseSession(item.sessionId); return; }
+      if (item.pendingClose) { cancelPendingClose(); refreshOpenSessionsInPicker(); }
       closeFirst();
       vscode.postMessage({ type: "switchSession", sessionId: item.sessionId });
       return;
