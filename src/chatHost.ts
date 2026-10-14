@@ -33,8 +33,8 @@ import { listDirectories } from "./dirBrowse";
 import { ChatBroadcaster } from "./chatBroadcaster";
 import { MessageBuffer } from "./webTransport";
 import { pickOverlayClient } from "./overlayTarget";
-import { ScreenRegistry } from "./screenRegistry";
-import { dirInsideAny, dirKey } from "./pathRules";
+import { ScreenRegistry, type Screen } from "./screenRegistry";
+import { dirInsideAny, dirKey, relativeTo } from "./pathRules";
 import type { WebServerHost } from "./webChatServer";
 import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
@@ -798,6 +798,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private readonly screenSession = new Map<string, string>();
     /** 最近一次问某个窗口“编辑器里开着哪些文件”的是哪块屏（回话要回给问的那块）。 */
     private readonly fileListAsker = new Map<string, string>();
+    /** 最近一次让某个窗口“找符号”的是哪块屏（算出来的文件与行要回给问的那块，见 findSymbol）。 */
+    private readonly symbolAsker = new Map<string, string>();
 
     /** 屏的登记簿（网页服务拿它做死连接巡检、写心跳）。 */
     public getScreens(): ScreenRegistry { return this.screens; }
@@ -846,6 +848,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     public detachScreen(screenId: string): void {
         this.screens.remove(screenId);
         this.symbolNamesByScreen.delete(screenId);
+        this.symbolAsker.delete(screenId);
         // 页面与窗口的对应表清掉（screenSession 留着：窗口重连的间隙里还得靠它接上原来那个会话）
         const pageId = this.screenPage.get(screenId);
         if (pageId) { this.pageScreen.delete(pageId); this.screenPage.delete(screenId); }
@@ -886,6 +889,22 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 if (remembered) { this.adoptClientSession(id, remembered); }
                 return { pageId: id };
             }
+            case "symbolLocation": {
+                // 窗口算出了符号在哪个文件的哪一行：回给问它的那块屏（浏览器页面把它开进文件侧边栏）。
+                // 窗口给的是绝对路径；能算成会话目录里的写法就算过来，跟正文里的文件链接一个样子
+                //（同一个文件不会因为写法不同开出两格标签）；算不出来就原样给，面板那边会照实说“目录外”。
+                const asker = this.symbolAsker.get(screenId);
+                const path = typeof msg.path === "string" ? msg.path : "";
+                if (asker && path) {
+                    const cwd = this.getActive(asker)?.cwd;
+                    this.postToOneClient(asker, {
+                        type: "symbolLocation",
+                        path: cwd ? relativeTo(cwd, path) : path,
+                        line: typeof msg.line === "number" && Number.isFinite(msg.line) ? msg.line : 0,
+                    });
+                }
+                return undefined;
+            }
             case "failed":
                 // 窗口没干成（文件找不到之类）：VS Code 那边自己弹过提示了，这里留一行日志。
                 this.onNotice(typeof msg.note === "string" ? msg.note : "VS Code 窗口没能完成这件事。");
@@ -902,16 +921,17 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 把一件"只有编辑器干得了"的活派给打开着这个目录的窗口。
      * 一个都没开着就什么都不做（用户定的规矩：不把文件开在别的工程里，也不到处弹窗），
      * 只记一行日志：不然"点了没反应"没人查得出来。
+     * @returns 派给了哪个窗口（要等它回话的那种活靠它记下问的是谁）；没人接就是 undefined
      */
-    protected routeToScreen(kind: string, payload: Record<string, unknown>, what: string): boolean {
+    protected routeToScreen(kind: string, payload: Record<string, unknown>, what: string): Screen | undefined {
         const cwd = this.activeCwd();
         const screen = this.screens.pick(cwd);
         if (!screen) {
             this.onNotice(`这台机器上没有打开 ${cwd} 的 VS Code 窗口，这件事（${what}）没人做。`);
-            return false;
+            return undefined;
         }
         screen.send({ kind, cwd, ...payload });
-        return true;
+        return screen;
     }
 
     /** 目录落在这些文件夹里的会话读写过哪些文件（一个窗口只该管它自己工作区那摊）。 */
@@ -1060,12 +1080,25 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 this.sendToOneClient(this.currentPageId, { type: "openSettings" });
                 return true;
             case "openSymbol":
-                // 正文里的符号链接：只有编辑器有语言服务，派给打开着这个目录的窗口去它读写过的文件里找。
+                // 正文里的符号链接（插件里的对话面板）：只有编辑器有语言服务，派给打开着这个目录的
+                // 窗口去它读写过的文件里找，找到就在编辑器里打开。
                 if (typeof msg.name === "string") {
                     this.routeToScreen("openSymbol", {
                         name: msg.name,
                         knownFiles: this.getAllKnownFiles(),
                     }, `找符号 ${msg.name}`);
+                }
+                return true;
+            case "findSymbol":
+                // 浏览器页面里的符号链接：那边没有编辑器，找到了也不该开在编辑器里。
+                // 让窗口算出文件与行（它才认得语言服务），只把位置报回来（见 processScreenMessage 的
+                // symbolLocation），由页面开进左边的文件侧边栏。没人开着这个目录时页面上本来就没有这种名字。
+                if (typeof msg.name === "string") {
+                    const screen = this.routeToScreen("findSymbol", {
+                        name: msg.name,
+                        knownFiles: this.getAllKnownFiles(),
+                    }, `找符号 ${msg.name}`);
+                    if (screen) { this.symbolAsker.set(screen.id, this.currentPageId); }
                 }
                 return true;
         }
