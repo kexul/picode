@@ -10,11 +10,12 @@
  *      点另一个文件新开一个标签、原来那个还留着，点已经开着的文件切回那个标签并按这次
  *      链接说的行滚过去（不新开重复标签），点标签上那颗叉关掉它，全关光后这一列不收起、
  *      里面留一句提示；
- *      第一个标签是「项目目录」（当前会话的目录，悬停提示与这一列的头给全路径，没有关闭那颗叉）：
+ *      第一个标签是「项目目录」（当前会话的目录，悬停提示给全路径、这一列的头分两行写着
+ *      「会话目录 + 现在走到的这一层」，没有关闭那颗叉）：
  *      点文件链接开的文件排在它后面的新标签里、不顶掉它；这一列空着（刚打开、刷新页面）
  *      先看到的就是它；从它那一格里点进子目录、点开文件跟票 05 是同一套清单；
- *      目录不占标签——点目录链接、点清单里的子目录都在这一格里发生，这一列头上一颗「上一层」
- *      往回退（到会话目录本身那一层就没有了），切会话 / 刷新页面时这一格回到会话目录本身；
+ *      目录不占标签——点目录链接、点清单里的子目录都在这一格里发生，清单最上面一行「上一层」
+ *      往回退（到会话目录本身那一层就没有这一行了），切会话 / 刷新页面时这一格回到会话目录本身；
  *      ≥1200px 常驻在左边、窄了滑入、点外面收起；手机上两块侧边栏互斥；
  *      顶条左边那颗按钮点开点收、刷新后还是刚才的样子；
  *      目录外 / 不存在 / 超过 2 MB 时页面上给一句说明；
@@ -481,7 +482,7 @@ module.exports = async (page) => {
             const dl = body ? body.querySelector("a.file-download") : null;
             const img = body ? body.querySelector(".file-image img") : null;
             const imgRect = img ? img.getBoundingClientRect() : null;
-            const up = document.getElementById("fileUp");
+            const up = body ? body.querySelector(".file-entry.up") : null;
             const panelEl = document.getElementById("filePanel");
             const panelRect = panelEl ? panelEl.getBoundingClientRect() : null;
             const upRect = up ? up.getBoundingClientRect() : null;
@@ -492,7 +493,7 @@ module.exports = async (page) => {
             };
             const bar = document.getElementById("fileTabs");
             const tabs = bar ? Array.from(bar.querySelectorAll(".file-tab")) : [];
-            const entries = body ? Array.from(body.querySelectorAll(".file-entry")) : [];
+            const entries = body ? Array.from(body.querySelectorAll(".file-entry:not(.up)")) : [];
             const wrapBtn = document.getElementById("fileWrap");
             const wrapRect = wrapBtn && getComputedStyle(wrapBtn).display !== "none" ? wrapBtn.getBoundingClientRect() : null;
             const textEl = body ? body.querySelector(".file-text") : null;
@@ -510,10 +511,17 @@ module.exports = async (page) => {
                 hidden: document.hidden,
                 chatLeft: Math.round(chat.left),
                 title: (document.getElementById("fileTitle") || {}).textContent || "",
-                upShown: !!up && getComputedStyle(up).display !== "none",
+                titleLines: Array.from(document.querySelectorAll("#fileTitle .file-title-line"))
+                    .map(function (l) { return l.textContent || ""; }),
+                titleAttr: (document.getElementById("fileTitle") || {}).title || "",
+                upShown: !!up,
                 upInHeader: !!up && !!up.closest("#fileHeader"),
+                upFirstRow: !!up && !!body && body.firstElementChild === up,
+                upText: up ? (up.innerText || "") : "",
                 upInside: insidePanel(upRect),
                 closeInside: insidePanel(closeRect),
+                // 面板头上那几颗方形的「面板按钮」（现在只该有一颗「收起」）
+                headerBtnCount: document.querySelectorAll("#fileHeader .pk-header-close").length,
                 note: note ? (note.textContent || "") : "",
                 downloadCount: body ? body.querySelectorAll("a.file-download").length : 0,
                 downloadText: dl ? (dl.textContent || "") : "",
@@ -657,11 +665,14 @@ module.exports = async (page) => {
     /** 两个路径是不是同一个地方（斜杠方向、末尾斜杠、大小写都归一化再比）。 */
     const samePathText = (a, b) => String(a).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()
         === String(b).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-    /** 点这一列头上那颗「上一层」。 */
+    /** 面板头写对没有：「项目目录」那一格是两行（上面会话目录、下面走法），还在最外面那一层就一行。 */
+    const headOk = (r, base, inside) => r.titleLines.length === (inside ? 2 : 1)
+        && samePathText(r.titleLines[0], base)
+        && (!inside || samePathText(r.titleLines[1], inside));
+    /** 点清单第一行那颗「上一层」。 */
     const clickUp = () => page.eval(`
-        const b = document.getElementById("fileUp");
-        if (!b) { return "没有「上一层」这颗按钮"; }
-        if (getComputedStyle(b).display === "none") { return "「上一层」不出现"; }
+        const b = document.querySelector("#fileBody .file-entry.up");
+        if (!b) { return "清单里没有「上一层」这一行"; }
         b.click();
         return "点了";
     `);
@@ -746,9 +757,12 @@ module.exports = async (page) => {
         wide1proj.entryCount > 0 && wide1proj.entryPaths.indexOf(FILE.long) >= 0
         && wide1proj.entryPaths.indexOf(DIR.top) >= 0 && wide1proj.rowCount === 0 && wide1proj.note === "",
         JSON.stringify(wide1proj.entryNames));
-    check("那一格悬停给全路径、面板头写的也是它", projTitle(wide1proj) === cwd && wide1proj.title === cwd,
-        JSON.stringify({ tab: projTitle(wide1proj), title: wide1proj.title }));
+    check("那一格悬停给全路径、面板头写的也是它（还在最外面那一层：就一行）",
+        projTitle(wide1proj) === cwd && headOk(wide1proj, cwd),
+        JSON.stringify({ tab: projTitle(wide1proj), lines: wide1proj.titleLines }));
     check("全路径很长时面板头上那颗「收起」的叉也不被挤出去", wide1proj.closeInside, String(wide1proj.closeInside));
+    check("面板头上只有一颗「收起」（「上一层」不在那儿）",
+        wide1proj.headerBtnCount === 1, "头上 " + wide1proj.headerBtnCount + " 颗");
     check("「项目目录」那一格没有那颗叉（不让人关掉）", wide1proj.projClose === false && wide1proj.tabCloseCount === 0);
     await page.shot("file-1-project-dir.png");
 
@@ -868,7 +882,7 @@ module.exports = async (page) => {
         (x) => x.entryCount === DIR_TOP_NAMES.length && x.tabActive === x.projIndex);
     check("刷新之前：「项目目录」那一格已经走到子目录里",
         dirBeforeReload.tabPaths[dirBeforeReload.projIndex] === DIR.top
-        && samePathText(dirBeforeReload.title, path.join(cwd, DIR.top)), dirBeforeReload.title);
+        && headOk(dirBeforeReload, cwd, DIR.top), JSON.stringify(dirBeforeReload.titleLines));
     console.log("点文件链接：" + await clickLink(FILE.long));
     const beforeReload = await waitLook("刷新之前点开 long.js", (x) => x.tabCount === 2 && x.rowCount === LONG_LINES);
     check("刷新之前：文件还是开在「项目目录」后面那一格",
@@ -1161,7 +1175,7 @@ module.exports = async (page) => {
     // 消息流里以斜杠结尾的写法算目录链接（不带斜杠、又不带扩展名的写法不认：`and/or` 里的 `and/`
     // 不该变成路径）。点它：切到「项目目录」那一格、列出里面的东西；子目录接着点、文件点开看；
     // 列出来的东西一样受「只在会话目录内」的限制（指到外面的软链接列得出来，点不了）。
-    // 目录不占标签：进目录、换目录都在第一格里发生，这一列头上一颗「上一层」往回退。
+    // 目录不占标签：进目录、换目录都在第一格里发生，清单最上面一行「上一层」往回退。
     const dirLinks = JSON.parse(await page.eval(`
         const all = Array.from(document.querySelectorAll("a.file-link"));
         const dirs = all.filter(function (a) { return a.getAttribute("data-dir") === "1"; });
@@ -1204,14 +1218,18 @@ module.exports = async (page) => {
         dir1.tabCount === beforeDir.tabCount && dir1.projIndex === 0 && dir1.tabActive === dir1.projIndex
         && dir1.tabNames[dir1.projIndex] === "项目目录" && dir1.tabPaths[dir1.projIndex] === DIR.top,
         JSON.stringify({ before: beforeDir.tabCount, after: dir1.tabCount, names: dir1.tabNames, paths: dir1.tabPaths }));
-    check("面板头写这一层的全路径（不是标签上那四个字、也不是相对写法）",
-        samePathText(dir1.title, path.join(cwd, DIR.top)) && dir1.title !== "项目目录",
-        JSON.stringify({ title: dir1.title, want: path.join(cwd, DIR.top) }));
-    check("进到子目录里：面板头上出现「上一层」", dir1.upShown && dir1.upInHeader,
-        JSON.stringify({ shown: dir1.upShown, inHeader: dir1.upInHeader }));
-    check("路径再长也不把面板头上那两颗按钮挤出面板（「上一层」与「收起」都还在里面）",
+    check("面板头分两行：上面会话目录、下面走到的这一层（不拼成一条长的绝对路径）",
+        headOk(dir1, cwd, DIR.top) && dir1.titleLines[0] !== "项目目录"
+        && samePathText(dir1.titleAttr, path.join(cwd, DIR.top)),
+        JSON.stringify({ lines: dir1.titleLines, hover: dir1.titleAttr }));
+    check("进到子目录里：清单最上面一行出现「上一层」（不在面板头上那两颗按钮里）",
+        dir1.upShown && dir1.upFirstRow && !dir1.upInHeader && dir1.upText.indexOf("上一层") >= 0
+        && dir1.headerBtnCount === 1,
+        JSON.stringify({ shown: dir1.upShown, first: dir1.upFirstRow, inHeader: dir1.upInHeader,
+            text: dir1.upText, header: dir1.headerBtnCount }));
+    check("「上一层」这一行在面板里面（没被挤出这一列）",
         dir1.upInside && dir1.closeInside,
-        JSON.stringify({ up: dir1.upInside, close: dir1.closeInside, title: dir1.title }));
+        JSON.stringify({ up: dir1.upInside, close: dir1.closeInside, lines: dir1.titleLines }));
     await page.shot("file-17-dir.png");
 
     // 点子目录：还在「项目目录」这一格里往里走，不新开标签
@@ -1222,8 +1240,9 @@ module.exports = async (page) => {
     check("还在「项目目录」那一格里（不新开标签）", dir2.tabCount === dir1.tabCount
         && dir2.tabActive === dir2.projIndex && dir2.tabPaths[dir2.projIndex] === DIR.sub,
         JSON.stringify({ count: dir2.tabCount, paths: dir2.tabPaths }));
-    check("面板头跟着换成这一层（子目录）的全路径",
-        samePathText(dir2.title, path.join(cwd, DIR.sub)), dir2.title);
+    check("面板头跟着换成这一层（子目录）：下面那行就是走进去的走法",
+        headOk(dir2, cwd, DIR.sub) && samePathText(dir2.titleAttr, path.join(cwd, DIR.sub)),
+        JSON.stringify({ lines: dir2.titleLines, hover: dir2.titleAttr }));
     await page.shot("file-18-dir-sub.png");
 
     // 点清单里的文件：在这一列里显示它（带行号）——文件还是开一个新标签
@@ -1235,26 +1254,26 @@ module.exports = async (page) => {
         && dir3.tabPaths[dir3.tabActive] === DIR.subFile && dir3.title === DIR.subFile);
     await page.shot("file-19-dir-file.png");
 
-    // 「上一层」：点它退到上一层，还是「项目目录」这一格那份清单
+    // 「上一层」：点清单第一行那一行退到上一层，还是「项目目录」这一格那份清单
     console.log("点「项目目录」那一格：" + await clickProjTab());
     const up0 = await waitLook("子目录那份清单又摆上来",
         (x) => x.entryCount === 1 && x.tabActive === x.projIndex);
     check("点「项目目录」那一格：还是刚才走到的这一层（面板头写着它）",
-        up0.tabPaths[up0.projIndex] === DIR.sub && samePathText(up0.title, path.join(cwd, DIR.sub)), up0.title);
-    console.log("点面板头上的「上一层」：" + await clickUp());
+        up0.tabPaths[up0.projIndex] === DIR.sub && headOk(up0, cwd, DIR.sub), JSON.stringify(up0.titleLines));
+    console.log("点清单第一行「上一层」：" + await clickUp());
     const up1 = await waitLook("退回上一层", (x) => x.entryCount === DIR_TOP_NAMES.length && x.tabActive === x.projIndex);
     check("点「上一层」：退到上一层（还是那一格清单、没多出标签）",
         up1.tabCount === up0.tabCount && up1.tabPaths[up1.projIndex] === DIR.top
-        && samePathText(up1.title, path.join(cwd, DIR.top))
+        && headOk(up1, cwd, DIR.top)
         && JSON.stringify(up1.entryNames.map(function (n) { return n.replace(/\/$/, ""); })) === JSON.stringify(DIR_TOP_NAMES),
-        JSON.stringify({ count: up1.tabCount, path: up1.tabPaths[up1.projIndex], title: up1.title }));
+        JSON.stringify({ count: up1.tabCount, path: up1.tabPaths[up1.projIndex], lines: up1.titleLines }));
     await page.shot("file-18b-dir-up.png");
     console.log("再点一次「上一层」：" + await clickUp());
     const up2 = await waitLook("退回会话目录本身",
         (x) => x.tabActive === x.projIndex && x.entryPaths.indexOf(DIR.top) >= 0 && x.entryPaths.indexOf(FILE.long) >= 0);
     check("退到会话目录本身：列的就是会话目录里的东西", up2.entryCount > 0 && up2.rowCount === 0 && up2.note === ""
-        && up2.tabPaths[up2.projIndex] === "." && samePathText(up2.title, cwd),
-        JSON.stringify({ path: up2.tabPaths[up2.projIndex], title: up2.title }));
+        && up2.tabPaths[up2.projIndex] === "." && headOk(up2, cwd),
+        JSON.stringify({ path: up2.tabPaths[up2.projIndex], lines: up2.titleLines }));
     check("已经在最外面那一层：「上一层」不出现（不许走到会话目录外面）", !up2.upShown);
 
     // 清单里那颗指到会话目录外面的软链接：列得出来，点不了
@@ -1266,12 +1285,14 @@ module.exports = async (page) => {
     check("清单里指到目录外的东西：点不了、给一句说明（还是这一格）", dir3b.entryPaths.indexOf(DIR.outLink) >= 0
         && dir4.entryCount === 0 && dir4.rowCount === 0 && dir4.note.indexOf("会话目录外") >= 0
         && dir4.tabActive === dir4.projIndex, dir4.note);
+    check("看不了的那一层也留着「上一层」（不然就退不回去了）", dir4.upShown && dir4.upFirstRow);
 
     // 空目录与目录外的目录（都从消息流里的链接点进去）
     console.log("点目录链接：" + await clickDir(DIR.empty));
     const dir5 = await waitLook("空目录那句提示上来", (x) => x.note.indexOf("目录是空的") >= 0);
     check("空目录：给一句「这个目录是空的」", dir5.entryCount === 0
         && dir5.note.indexOf("目录是空的") >= 0, dir5.note);
+    check("空目录里「上一层」那一行还在（空的是这一层，不是它的上面）", dir5.upShown && dir5.upFirstRow);
     console.log("点目录链接：" + await clickDir("outside"));
     const dir6 = await waitLook("目录外那句说明上来", (x) => x.note.indexOf("会话目录外") >= 0);
     check("会话目录外的目录：给一句说明、不给清单", dir6.entryCount === 0 && dir6.rowCount === 0
@@ -1303,22 +1324,22 @@ module.exports = async (page) => {
     await page.shot("file-21-dir-huge.png");
 
     // 从「项目目录」那一格往下点：跟点消息里那些目录链接是同一套清单（子目录接着列、文件点开看）
-    console.log("点面板头上的「上一层」：" + await clickUp());
+    console.log("点清单第一行「上一层」：" + await clickUp());
     const proj1 = await waitLook("退回会话目录那一层",
         (x) => x.tabActive === x.projIndex && x.upShown === false && x.entryPaths.indexOf(FILE.long) >= 0);
     check("点「上一层」退出大目录：回到会话目录本身那份清单",
         proj1.entryCount > 0 && proj1.rowCount === 0 && proj1.note === ""
         && proj1.tabPaths[proj1.projIndex] === "." && proj1.entryPaths.indexOf(DIR.top) >= 0
-        && samePathText(proj1.title, cwd),
-        JSON.stringify({ path: proj1.tabPaths[proj1.projIndex], title: proj1.title }));
+        && headOk(proj1, cwd),
+        JSON.stringify({ path: proj1.tabPaths[proj1.projIndex], lines: proj1.titleLines }));
     console.log("点清单里的子目录：" + await clickEntry(DIR.top));
     const proj2 = await waitLook("从项目目录点进子目录",
         (x) => x.entryCount === DIR_TOP_NAMES.length && x.tabActive === x.projIndex);
     check("从项目目录那一格点进子目录：接着列（同一格、不新开标签）",
         JSON.stringify(proj2.entryNames.map(function (n) { return n.replace(/\/$/, ""); })) === JSON.stringify(DIR_TOP_NAMES)
         && proj2.tabCount === proj1.tabCount && proj2.tabPaths[proj2.projIndex] === DIR.top
-        && samePathText(proj2.title, path.join(cwd, DIR.top)),
-        JSON.stringify({ count: proj2.tabCount, path: proj2.tabPaths[proj2.projIndex], title: proj2.title }));
+        && headOk(proj2, cwd, DIR.top),
+        JSON.stringify({ count: proj2.tabCount, path: proj2.tabPaths[proj2.projIndex], lines: proj2.titleLines }));
     console.log("点清单里的文件：" + await clickEntry(DIR.topFile));
     const proj3 = await waitLook("从项目目录点开文件", (x) => x.rowCount === DIR_ONE_LINES);
     check("从项目目录那一格点开文件：显示它（带行号、跟票 05 一样）", proj3.rowCount === DIR_ONE_LINES
@@ -1900,7 +1921,7 @@ module.exports = async (page) => {
         (x) => x.entryCount === 1 && x.tabActive === x.projIndex);
     check("切会话之前：「项目目录」那一格已经走到子目录里",
         dirBeforeSwitch.tabPaths[dirBeforeSwitch.projIndex] === DIR.sub
-        && samePathText(dirBeforeSwitch.title, path.join(cwd, DIR.sub)), dirBeforeSwitch.title);
+        && headOk(dirBeforeSwitch, cwd, DIR.sub), JSON.stringify(dirBeforeSwitch.titleLines));
     check("切会话之前面板里开着好几个标签", (await look("切会话之前")).tabCount >= 2);
     await page.eval(`
         acquireVsCodeApi().postMessage({ type: "newSessionInWorkspace", path: ${JSON.stringify(path.join(cwd, DIR.top))} });

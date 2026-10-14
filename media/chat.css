@@ -1121,14 +1121,13 @@
   /* 这一列的头的高度是跟顶条量出来的（见 chat.js 的 syncDockHeaderHeight）：它不许被压扁
      （正文几百行的时候，按比例缩的弹性会把这一列的头从量好的高度缩回一行字那么高，跟顶条对不齐）。 */
   #fileHeader { box-sizing: border-box; flex: 0 0 auto; }
-  /* 这一列头上那颗「上一层」：正看着「项目目录」那一格、而且它在某一层子目录里时才出现
-     （见 chat.js 的 syncFileUpButton）：点它退回上一层，到会话目录本身那一层就不出现了。
-     margin-left: auto 把它和那颗「收起」的叉一起推到右边。 */
-  #fileUp { margin-left: auto; }
-  #fileUp.hidden { display: none; }
-  /* 这一列头上那行路径可能很长（子目录越深越长）：让它自己截断，
-     不许把右边那两颗按钮（上一层、收起）挤出这一列外面。 */
-  #fileTitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 这一列头上那几行字（见 chat.js 的 setFileSidebarTitle）：「项目目录」那一格写着两行——
+     上面一行会话目录、下面一行现在走到的这一层；文件就一行。
+     一行一个块、各自截断：子目录越深越长，不许把右边那颗「收起」的叉挤出这一列外面。 */
+  #fileTitle { min-width: 0; }
+  .file-title-line { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 下面那行「现在走到的这一层」：小一号、淡一点，跟会话目录那行一眼分得开。 */
+  .file-title-line.file-title-in { font-size: 0.85em; line-height: 1.25; opacity: 0.75; }
   /* 标签条：这一列头下面、正文上面，看过的文件一个占一个标签（见 chat.js）。
      点名字切过去、点那颗叉关掉；开着的多了往右跑，这一条自己左右滚。
      一个标签都没有时整条不占地方（:empty 那条），这一列里就只剩一句提示。 */
@@ -1182,7 +1181,8 @@
   /* markdown 文件：排好版渲染成文档（样式就是消息流里那一套 .md），不留行号。 */
   .file-md { padding: 2px 14px 6px; }
   .file-note { padding: 12px 14px; line-height: 1.6; opacity: 0.75; }
-  /* 目录清单：一项一行（名字前一颗图标），点子目录往下走、点文件打开它（见 chat.js）。 */
+  /* 目录清单：一项一行（名字前一颗图标），点子目录往下走、点文件打开它（见 chat.js 的
+     renderDirListing）；待在子目录里时最上面多一行「上一层」（同一套样子，图标是那颗朝上的箭头）。 */
   .file-entry { display: flex; align-items: center; gap: 6px; padding: 3px 12px; cursor: pointer; line-height: 1.5; }
   .file-entry:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
   .file-entry-icon { flex: 0 0 auto; display: flex; opacity: 0.7; }

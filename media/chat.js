@@ -2892,7 +2892,13 @@
     const h = Math.ceil(bar.getBoundingClientRect().height);
     bar.style.height = h + "px";
     if (rightDock) { dockView.header.style.height = h + "px"; }
-    if (fileDock && fileHeader) { fileHeader.style.height = h + "px"; }
+    if (fileDock && fileHeader) {
+      // 这一列的头可能写着两行（会话目录 + 现在走到的这一层）：顶条那点高不够时以这一列自己的内容为准
+      //（不然第二行就被压掉了）。头上一行的时候两边照样齐（见 setFileSidebarTitle）。
+      fileHeader.style.height = "";
+      const own = Math.ceil(fileHeader.getBoundingClientRect().height);
+      fileHeader.style.height = Math.max(h, own) + "px";
+    }
     dockBarKey = key;
   }
 
@@ -2976,9 +2982,10 @@
   // `.` 表示会话目录自己）。
   //
   // 目录不占标签：点消息流里的目录链接、点清单里的子目录，都在「项目目录」这一格里换内容
-  //（切到那一格、把这一层列出来），这一列头上一颗「上一层」往回退——到会话目录本身那一层就没有
-  // 再往上的了（不许走到会话目录外面去）。标签上一直写「项目目录」，现在在哪一层看这一列的头
-  //（这一列的头写这一层的全路径）。切会话、刷新页面时这一格回到会话目录本身（不记住走到哪一层）。
+  //（切到那一格、把这一层列出来），往回的「上一层」是清单里的第一行——到会话目录本身那一层就没有
+  // 这一行了（不许走到会话目录外面去）。标签上一直写「项目目录」，现在在哪一层看这一列的头
+  //（上面一行会话目录、下面一行现在走到的这一层；悬停提示里给的是这一层的全路径）。
+  // 切会话、刷新页面时这一格回到会话目录本身（不记住走到哪一层）。
   //
   // 正看着的那个文件被改了（模型改的、脚本改的）以后，内容自己换成新的，而人读到哪儿还停在哪儿：
   // 隔一会儿问一次那个文件变了没，问的时候把上次拿到的修改时间带上——没变后端只回一个空响应，
@@ -3004,13 +3011,13 @@
   /** 长行怎么摆（折起来 / 一行就是一行）：也记在这台设备里（跟收没收起同一个做法）。 */
   const FILE_SIDEBAR_WRAP_STORE_KEY = "pichat.fileSidebarWrap";
   const FILE_SIDEBAR_HINT = "点消息里的文件链接，这里会显示那个文件。";
-  /** 「项目目录」那一格：标签上写这四个字，悬停提示与这一列的头给全路径。 */
+  /** 「项目目录」那一格：标签上写这四个字，悬停提示给这一层的全路径（见 fileSidebarProjectFullPath）。 */
   const FILE_SIDEBAR_PROJECT_NAME = "项目目录";
   /** 问后端「会话目录自己」用这个相对写法（列目录那条地址不认空路径，`.` 就是会话目录）。 */
   const FILE_SIDEBAR_PROJECT_PATH = ".";
   /** 这一列那一摊：容器、里面那几块、开着哪几个文件。 */
   const fileSidebar = {
-    root: null, header: null, title: null, up: null, tabsEl: null, body: null,
+    root: null, header: null, title: null, tabsEl: null, body: null,
     open: false,     // 这台设备上人要不要它开着（记在 localStorage；开着时宽窗常驻、窄窗滑入）
     // 开着的文件（从左到右）与「项目目录」那一格：[{ path, proj, line, scrollTop, mtime, loading, imageUrl }]
     wrap: false,     // 长行折起来还是横向滚（记在 localStorage；默认一行就是一行，见 chat.css 末尾）
@@ -3069,8 +3076,20 @@
   function pathLabel(path, dir) { return dir ? path + "/" : path; }
 
   /**
+   * 「项目目录」那一格头上那几行字：上面一行是会话目录本身（这一格的最外面那一层），
+   * 下面一行是现在走到的这一层（在会话目录里面的走法，`dirA/sub`）——不把两段拼成一长条。
+   * 还在最外面那一层就只有上面那一行；会话目录还没认识就写那四个字。
+   */
+  function fileSidebarProjectTitleLines(tab) {
+    const base = activeSessionCwd();
+    if (!base) { return [FILE_SIDEBAR_PROJECT_NAME]; }
+    const inside = tab.path === FILE_SIDEBAR_PROJECT_PATH ? "" : String(tab.path);
+    return inside ? [base, inside] : [base];
+  }
+
+  /**
    * 「项目目录」那一格现在这一层的全路径（`.` 那一层就是会话目录本身）：
-   * 标签的悬停提示与这一列的头写它。
+   * 标签的悬停提示与头上那几行字的悬停提示写它。
    */
   function fileSidebarProjectFullPath(tab) {
     const base = activeSessionCwd();
@@ -3080,12 +3099,12 @@
     return base.replace(/[\\/]+$/, "") + sep + String(tab.path).replace(/\//g, sep);
   }
 
-  /** 一格标签在这一列头与悬停提示上的全路径：项目目录那一格是它现在待的那一层。 */
+  /** 一格标签悬停提示上的全路径：项目目录那一格是它现在待的那一层（头上的字见 setFileSidebarTitle）。 */
   function fileSidebarTabFullPath(tab) {
     return tab.proj ? fileSidebarProjectFullPath(tab) : tab.path;
   }
 
-  /** 标签上那行字：文件名。全路径太长，标签上停一下有提示、这一列头上也写着全路径。 */
+  /** 标签上那行字：文件名。全路径太长，标签上停一下有提示、这一列头上写着会话目录与这一层。 */
   function fileSidebarTabName(path) {
     return String(path).replace(/\\/g, "/").split("/").pop() || String(path);
   }
@@ -3132,11 +3151,25 @@
     showFileNote(FILE_SIDEBAR_HINT);
   }
 
-  /** 这一列头上那行字：现在看的是哪个文件（一个标签都没开就写「文件」）。 */
-  function setFileSidebarTitle(path) {
-    if (!fileSidebar.title) { return; }
-    fileSidebar.title.textContent = path || "文件";
-    fileSidebar.title.title = path || "";
+  /**
+   * 这一列头上那几行字：文件就一行（那个文件的写法）；「项目目录」那一格上面一行是会话目录、
+   * 下面一行是现在走到的这一层（见 fileSidebarProjectTitleLines）；一个标签都没开就写「文件」。
+   * @param tab 现在看着的那一格；没有（一个都没开）就给 null
+   */
+  function setFileSidebarTitle(tab) {
+    const el = fileSidebar.title;
+    if (!el) { return; }
+    const lines = !tab ? ["文件"] : (tab.proj ? fileSidebarProjectTitleLines(tab) : [tab.path]);
+    el.innerHTML = "";
+    lines.forEach((text, i) => {
+      const line = document.createElement("span");
+      line.className = "file-title-line" + (i > 0 ? " file-title-in" : "");
+      line.textContent = text;
+      el.appendChild(line);
+    });
+    el.title = tab ? fileSidebarTabFullPath(tab) : "";   // 悬停给这一层的全路径（能整条选走）
+    dockBarKey = "";   // 头上几行变了：常驻时这一列的头多高要重算（见 syncDockHeaderHeight）
+    syncDockHeaderHeight();
   }
 
   /** 把现在这一格读到哪儿记进它那个标签（切走、重画之前）。 */
@@ -3177,17 +3210,6 @@
     // 开着的标签多了会往右跑出这一列：把现在这个带进来看得见的地方
     const active = bar.querySelector(".file-tab.active");
     if (active) { active.scrollIntoView({ block: "nearest", inline: "nearest" }); }
-    syncFileUpButton();
-  }
-
-  /**
-   * 这一列头上那颗「上一层」：「项目目录」那一格待在某层子目录里、而且正看着它的时候才出现。
-   * 会话目录本身（最外面那一层）没有再往上的了：那颗按钮在那儿不出现。
-   */
-  function syncFileUpButton() {
-    if (!fileSidebar.up) { return; }
-    const tab = fileSidebar.tabs[fileSidebar.active];
-    fileSidebar.up.classList.toggle("hidden", !(tab && tab.proj && tab.path !== FILE_SIDEBAR_PROJECT_PATH));
   }
 
   /**
@@ -3202,7 +3224,7 @@
     fileSidebar.active = index;
     const linkLine = Number(hitLine) > 0 ? Number(hitLine) : 0;
     if (linkLine > 0) { tab.line = linkLine; }
-    setFileSidebarTitle(fileSidebarTabFullPath(tab));
+    setFileSidebarTitle(tab);
     renderFileTabs();
     showFileNote("正在读取…");
     loadIntoSidebar(linkLine);
@@ -3224,7 +3246,7 @@
     fileSidebar.active = -1;
     fileSidebar.token++;
     if (fileSidebar.tabs.length === 0) {
-      setFileSidebarTitle("");
+      setFileSidebarTitle(null);
       renderFileTabs();
       showFileNote(FILE_SIDEBAR_HINT);
       return;
@@ -3265,6 +3287,37 @@
       note.appendChild(link);
     }
     fileSidebar.body.appendChild(note);
+    prependFileUpRow();
+  }
+
+  /**
+   * 清单第一行那颗「上一层」：「项目目录」那一格待在某一层子目录里、而且正看着它的时候才有这一行
+   *（`.` 就是会话目录本身，到那一层就没有再往上的了——不许走到会话目录外面去）。
+   * 它长在清单里（第一行），不在这一列头上那颗「收起」旁边。
+   * @returns 这一行；不该有的时候给 null
+   */
+  function buildFileUpRow(tab) {
+    if (!tab || !tab.proj || tab.path === FILE_SIDEBAR_PROJECT_PATH) { return null; }
+    const row = document.createElement("div");
+    row.className = "file-entry up";
+    row.title = "回到上一层";
+    const icon = document.createElement("span");
+    icon.className = "file-entry-icon";
+    icon.innerHTML = ICONS["arrow-up"];
+    const name = document.createElement("span");
+    name.className = "file-entry-name";
+    name.textContent = "上一层";
+    row.appendChild(icon);
+    row.appendChild(name);
+    row.addEventListener("click", goUpProjectDir);
+    return row;
+  }
+
+  /** 现在看着的「项目目录」那一格该有「上一层」这一行时，把它摆到正文最上面。 */
+  function prependFileUpRow() {
+    if (!fileSidebar.body) { return; }
+    const row = buildFileUpRow(fileSidebar.tabs[fileSidebar.active]);
+    if (row) { fileSidebar.body.insertBefore(row, fileSidebar.body.firstChild); }
   }
 
   /** 那个文件的下载地址：同一条 `/file` 地址带 download=1（不设大小上限、按附件给）；目录没有下载这回事。 */
@@ -3304,18 +3357,22 @@
    * 一份目录清单画进正文：一项一行（名字前一颗图标），点子目录就在这一格里往里走、点文件打开它。
    * 清单里那个相对写法就是下一次请求的路径，跟点消息流里的链接走同一条路
    *（开不开得了由后端那道边界管：指到目录外的条目点了给一句说明）。
+   * 待在子目录里时，清单第一行是「上一层」（见 buildFileUpRow）。
+   * @param tab 正看着的「项目目录」那一格（它现在待在哪一层决定要不要「上一层」那一行）
    */
-  function renderDirListing(listing) {
+  function renderDirListing(listing, tab) {
     const body = fileSidebar.body;
     if (!body) { return; }
     body.innerHTML = "";
     body.scrollTop = 0;   // 换到这一层：清单从头看（不是停在上一层读到的地方）
     const entries = (listing && listing.entries) || [];
     if (entries.length === 0) {
-      showFileNote("这个目录是空的。");
+      showFileNote("这个目录是空的。");   // 空目录里也照样有「上一层」那一行（showFileNote 会摆上）
       return;
     }
     const frag = document.createDocumentFragment();
+    const up = buildFileUpRow(tab);
+    if (up) { frag.appendChild(up); }
     entries.forEach((entry) => {
       const row = document.createElement("div");
       row.className = "file-entry" + (entry.dir ? " dir" : "");
@@ -3529,7 +3586,7 @@
       if (token !== fileSidebar.token) { return; }   // 已经换成别的标签了，这条回应丢掉
       tab.mtime = resp.headers.get("X-File-Mtime") || "";   // 看不了时也记：跟着刷新那轮靠它省重传
       if (resp.status !== 200) { await showFileRefusal(resp, tab); return; }
-      if (tab.proj) { renderDirListing(await resp.json()); return; }
+      if (tab.proj) { renderDirListing(await resp.json(), tab); return; }
       scrollFileBody(await drawFileResponse(resp, tab), linkLine, tab.scrollTop);
     }).catch(() => {
       tab.loading = false;
@@ -3676,8 +3733,8 @@
   }
 
   /**
-   * 这一列头上那颗「上一层」：「项目目录」那一格退到上一层，还是这一格那份清单
-   *（到会话目录本身那一层就退不动了，那颗按钮也不出现，见 syncFileUpButton）。
+   * 点清单第一行那颗「上一层」：「项目目录」那一格退到上一层，还是这一格那份清单
+   *（到会话目录本身那一层就退不动了，那一行也不出现，见 buildFileUpRow）。
    */
   function goUpProjectDir() {
     const at = fileSidebarProjectIndex();
@@ -3706,7 +3763,7 @@
     fileSidebar.tabs.forEach(releaseTabImage);   // 上一个会话里看过的图：那些显示地址放掉
     fileSidebar.tabs = [];
     fileSidebar.active = -1;
-    setFileSidebarTitle("");
+    setFileSidebarTitle(null);
     renderFileTabs();
     showFileNote(FILE_SIDEBAR_HINT);
     ensureProjectDirTab();   // 开着就换成新会话的目录；收着的那就等打开时再说
@@ -3721,7 +3778,6 @@
       '<div id="filePanel" class="pk-panel">' +
         '<div id="fileHeader" class="pk-header">' +
           '<span id="fileTitle" class="pk-header-title">文件</span>' +
-          '<button id="fileUp" class="pk-header-close hidden" type="button" title="上一层" aria-label="上一层">' + ICONS["arrow-up"] + '</button>' +
           '<button id="fileClose" class="pk-header-close" type="button" title="收起" aria-label="收起">' + ICONS["close-bold"] + '</button>' +
         '</div>' +
         '<div id="fileTabs"></div>' +
@@ -3735,11 +3791,9 @@
     fileSidebar.root = root;
     fileSidebar.header = root.querySelector("#fileHeader");
     fileSidebar.title = root.querySelector("#fileTitle");
-    fileSidebar.up = root.querySelector("#fileUp");
     fileSidebar.tabsEl = root.querySelector("#fileTabs");
     fileSidebar.body = root.querySelector("#fileBody");
     fileSidebar.open = readFileSidebarWanted();
-    fileSidebar.up.addEventListener("click", goUpProjectDir);
     fileSidebar.wrap = readFileSidebarWrapWanted();
     root.querySelector("#fileClose").addEventListener("click", () => setFileSidebarOpen(false));
     root.querySelector("#fileWrap").addEventListener("click", toggleFileSidebarWrap);
