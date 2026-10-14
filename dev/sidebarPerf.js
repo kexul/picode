@@ -114,8 +114,12 @@ module.exports = async (page) => {
         console.log("  长任务：" + JSON.stringify(r.longTasks));
         rows.push(worst);
         if (i < rounds) {
-            await page.eval("const b = document.getElementById('pickerClose'); if (b) b.click(); return true;");
+            // 收起面板：按 Esc（界面的关法）。别再找那个已经不存在的 #pickerClose 了 ——
+            // 点空了的话，下一轮量的「打开耗时」其实是在开关一次已经开着的面板，数是假的。
+            await page.press("Escape");
             await page.sleep(350);
+            const stillOpen = await page.eval("return !document.getElementById('pickerOverlay').classList.contains('hidden');");
+            if (stillOpen) { throw new Error("面板没收起来，后面量的时长不作数"); }
         }
     }
     console.log("\n各次最长一帧：" + rows.join(", ") + " 毫秒");

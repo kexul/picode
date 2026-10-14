@@ -27,19 +27,33 @@ module.exports = async (page) => {
     }
   };
 
-  /** 收起「项目与会话」面板（面板头右上那颗 ×）。 */
+  /** 面板（「项目与会话」浮层）现在开着吗。 */
+  const pickerOpen = () => page.eval(`return !document.getElementById("pickerOverlay").classList.contains("hidden");`);
+
+  /** 拉出面板：顶上那颗 <<<。这颗按钮是开／收切换，所以关着的时候点它才是“开”；
+   *  点完核对一下真开了（界面改过就改这里，别让后面几步对着一个没开的面板干等）。 */
+  const openPicker = async () => {
+    if (!(await pickerOpen())) { await page.click("#browserMenuBtn"); }
+    for (let i = 0; i < 25; i++) {
+      if (await pickerOpen()) { return; }
+      await page.sleep(200);
+    }
+    throw new Error("面板没打开（顶上那颗 <<< 的行为变了？）");
+  };
+
+  /** 收起面板：按 Esc 就是界面自己的关法（面板头上那颗叉的提示语里写着「关闭 (Esc)」）。
+   *  关不掉就报错 —— 以前这里点的是一个已经不存在的 id，空点一下、什么都不报，
+   *  后面几步就对着一个已经收起来的面板干等。 */
   const closePicker = async () => {
-    await page.eval(`
-      const el = document.getElementById("pickerClose");
-      if (el) { el.click(); }
-      return true;
-    `);
+    if (!(await pickerOpen())) { return; }
+    await page.press("Escape");
     await page.sleep(400);
+    if (await pickerOpen()) { throw new Error("面板没收起来（Esc 不管用了？）"); }
   };
 
   // ---- 1. 派活：子会话出现在「正在对话」里（缩进一行） ----
   await page.send("派活：看看认证模块");
-  await page.click("#browserMenuBtn");
+  await openPicker();
   const spawned = await until("子会话出现在「正在对话」里", async () => {
     const rows = await openRows();
     return rows.some((r) => r.child) ? rows : null;
@@ -61,7 +75,7 @@ module.exports = async (page) => {
   await page.click("#newSessionBtn");
   await page.sleep(2500);
   await page.send("派活：第二个子会话，这次进去看着它");
-  await page.click("#browserMenuBtn");
+  await openPicker();
   const spawned2 = await until("第二个子会话出现在列表里", async () => {
     const rows = await openRows();
     return rows.some((r) => r.child) ? rows : null;
@@ -86,8 +100,7 @@ module.exports = async (page) => {
   await page.waitText("你这个会话还留着", 40000);
   await page.shot("taba-5-kept.png");
 
-  await page.click("#browserMenuBtn");
-  await page.sleep(500);
+  await openPicker();
   const after = await openRows();
   console.log("跑完后：" + JSON.stringify(after));
   if (!after.some((r) => r.child)) { throw new Error("用户正看着的子会话不该被自动关掉"); }
