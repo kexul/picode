@@ -1171,6 +1171,8 @@
     background: color-mix(in srgb, var(--vscode-focusBorder, #007acc) 18%, transparent);
     box-shadow: inset 2px 0 0 0 var(--vscode-focusBorder, #007acc);
   }
+  /* markdown 文件：排好版渲染成文档（样式就是消息流里那一套 .md），不留行号。 */
+  .file-md { padding: 2px 14px 6px; }
   .file-note { padding: 12px 14px; line-height: 1.6; opacity: 0.75; }
   /* 目录清单：一项一行（名字前一颗图标），点子目录往下走、点文件打开它（见 chat.js）。 */
   .file-entry { display: flex; align-items: center; gap: 6px; padding: 3px 12px; cursor: pointer; line-height: 1.5; }

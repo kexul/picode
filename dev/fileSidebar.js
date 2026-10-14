@@ -180,6 +180,55 @@ const COLOR_LINK_TEXT =
     "`" + COLOR.cpp + ":3`、`" + COLOR.py + ":1`、`" + COLOR.ruby + ":1`、\n" +
     "`" + COLOR.mid + ":3`、`" + COLOR.big + ":3`。\n";
 
+/**
+ * markdown 那一摊：排好版渲染成文档（标题、列表、代码块都要对），不留行号；
+ * 链接里带的 `:12` 等于没带，也不报错。
+ * 同样的记号写在一个扩展名不是 markdown 的文件里（markdown-notes.txt）就不算文档，照旧一行一行带行号。
+ */
+const MD = {
+    doc: "readme-test.md",
+    plain: "markdown-notes.txt",
+    hit: 12,               // 链接里带的行号：markdown 不留行号，这个不生效
+    h1: "项目说明",
+    h2: "用法",
+    items: ["第一项", "第二项", "第三项"],
+    ordered: ["一号", "二号"],
+    code: "const a = 1;",
+    quote: "引用一句",
+    link: "sample.js",    // 文档里写到的一个文件：点了开在这一列里（不是把页面卷走）
+    linkLine: 2,
+};
+const MD_TEXT = [
+    "# " + MD.h1,
+    "",
+    "这是一段正文，里面有行内代码 `inline()` 与**加粗**，还提到 " + MD.link + ":" + MD.linkLine + " 这个文件。",
+    "",
+    "- " + MD.items[0],
+    "- " + MD.items[1],
+    "- " + MD.items[2],
+    "",
+    "1. " + MD.ordered[0],
+    "2. " + MD.ordered[1],
+    "",
+    "```js",
+    MD.code,
+    "console.log(a);",
+    "```",
+    "",
+    "> " + MD.quote,
+    "",
+    "## " + MD.h2,
+    "",
+].join("\n") + "\n";
+/** 同样的记号，扩展名不是 markdown：照旧一行一行显示、带行号（`#` 与围栏都只是普通文字）。 */
+const MD_PLAIN_LINES = [
+    "# 这行不是标题",
+    "```js",
+    MD.code,
+    "```",
+    "- 这行不是列表",
+];
+
 const FILE = {
     long: "long.js",
     sample: "sample.js",
@@ -200,7 +249,8 @@ const LINK_TEXT =
     "再试试 `" + FILE.missing + ":1`、`" + FILE.outside + ":1`、`" + FILE.big + ":1`、`" + FILE.bigBinary + ":1`。\n" +
     "\n还有目录：`" + DIR.top + "/` 这里面有什么、`" + DIR.sub + "/` 是它下面的子目录，\n" +
     "`" + DIR.empty + "/` 是个空目录、`outside/` 这个目录在会话目录外、`" + DIR.huge + "/` 这个目录里东西很多。\n" +
-    "普通文字里的 " + DIR.top + "/ 也该能点；英文里的 and/or 不该当成路径。\n";
+    "普通文字里的 " + DIR.top + "/ 也该能点；英文里的 and/or 不该当成路径。\n" +
+    "\n还有两个：`" + MD.doc + ":" + MD.hit + "` 这个是 markdown 文档、`" + MD.plain + ":2` 这个不是。\n";
 
 /** live.js 每次都整份重写：marker 为真就把第 LIVE_HIT 行换个说法（行数不变），extra 是末尾多加几行。 */
 function writeLive(cwd, marker, extra) {
@@ -256,6 +306,7 @@ function prepareFiles(cwd) {
     fs.writeFileSync(path.join(cwd, FILE.binary), binary);
     prepareDirs(cwd);
     prepareColorFiles(cwd);
+    prepareMarkdownFiles(cwd);
     const outside = path.join(cwd, "outside");
     if (fs.existsSync(outside)) { return "已经有了"; }
     // 目录外那份用一个目录软链接（Windows 上 junction 不需要管理员权限）指到仓库根上：
@@ -266,6 +317,12 @@ function prepareFiles(cwd) {
     } catch (err) {
         return "建不了（" + (err && err.message ? err.message : String(err)) + "）";
     }
+}
+
+/** markdown 那两个文件：一个是文档（该排好版渲染），一个扩展名不是 markdown（该照旧带行号）。 */
+function prepareMarkdownFiles(cwd) {
+    fs.writeFileSync(path.join(cwd, MD.doc), MD_TEXT, "utf8");
+    fs.writeFileSync(path.join(cwd, MD.plain), MD_PLAIN_LINES.join("\n") + "\n", "utf8");
 }
 
 /** 上色那几个文件：认得的几种各一个小文件、一个不认得的、一个中等大小、一个超大。 */
@@ -387,6 +444,9 @@ module.exports = async (page) => {
                 imgBroken: img ? (img.complete && img.naturalWidth === 0) : false,
                 bodyChars: body ? (body.textContent || "").length : -1,
                 rowCount: rows.length,
+                // markdown 渲染出来的那份文档有几块、行号格子有几个（markdown 该是 0 / 0）
+                mdCount: body ? body.querySelectorAll(".file-md").length : -1,
+                numCount: body ? body.querySelectorAll(".file-num").length : -1,
                 firstRow: rows.length ? rows[0].innerText : "",
                 hitText: hit ? hit.innerText : "",
                 hitNum: hit ? ((hit.querySelector(".file-num") || {}).textContent || "") : "",
@@ -1242,6 +1302,97 @@ module.exports = async (page) => {
     // 这一大堆行别拖给后面的检查：关掉它那个标签
     console.log("点标签上的叉：" + await clickTab(COLOR.big, "close"));
     await page.sleep(300);
+
+    // ==================== markdown：排好版渲染成文档 ====================
+    // 认得的扩展名（.md / .mdx / .markdown）排好版渲染出来：标题按级别出、列表按列表出、
+    // 代码块按代码块出，不留行号；链接里带的 `:12` 等于没带，也不报错。
+    // 用的是消息流渲染正文那一套（renderMarkdown），不另起一套：代码块照样带语法高亮。
+    // 扩展名不是 markdown 的（拿 .txt 盯着）照旧一行一行显示、带行号。
+    const mdLook = async () => JSON.parse(await page.eval(`
+        const body = document.getElementById("fileBody");
+        const doc = body.querySelector(".file-md");
+        const heads = doc ? Array.from(doc.querySelectorAll("h1, h2, h3, h4, h5, h6")) : [];
+        const pre = doc ? doc.querySelector("pre code") : null;
+        const tabs = Array.from(document.querySelectorAll("#fileTabs .file-tab"));
+        return JSON.stringify({
+            hasDoc: !!doc,
+            isMd: !!doc && doc.classList.contains("md"),
+            rows: body.querySelectorAll(".file-line").length,
+            nums: body.querySelectorAll(".file-num").length,
+            heads: heads.map(function (h) { return [h.tagName, h.textContent]; }),
+            ul: doc ? Array.from(doc.querySelectorAll("ul > li")).map(function (li) { return (li.textContent || "").trim(); }) : [],
+            ol: doc ? Array.from(doc.querySelectorAll("ol > li")).map(function (li) { return (li.textContent || "").trim(); }) : [],
+            preCount: doc ? doc.querySelectorAll("pre").length : 0,
+            code: pre ? pre.textContent : "",
+            codeTones: pre ? pre.querySelectorAll("span[class*='hljs-']").length : 0,
+            quote: doc ? ((doc.querySelector("blockquote") || {}).textContent || "").trim() : "",
+            text: doc ? (doc.textContent || "") : "",
+            note: (body.querySelector(".file-note") || {}).textContent || "",
+            links: doc ? Array.from(doc.querySelectorAll("a.file-link")).map(function (a) { return [a.getAttribute("data-file"), a.getAttribute("data-line") || ""]; }) : [],
+            hitCount: body.querySelectorAll(".file-line.hit").length,
+            title: (document.getElementById("fileTitle") || {}).textContent || "",
+            tabPaths: tabs.map(function (t) { return t.getAttribute("data-path") || ""; }),
+            tabActive: tabs.findIndex(function (t) { return t.classList.contains("active"); }),
+        });
+    `));
+
+    console.log("点文件链接：" + await clickLink(MD.doc, MD.hit));
+    const md1 = await waitLook("markdown 文档渲染上来", (x) => x.mdCount === 1, 15000);
+    const mdDoc = await mdLook();
+    check("点 markdown 链接：面板里排好版渲染成文档（标题按级别出）",
+        mdDoc.hasDoc && mdDoc.isMd && mdDoc.heads.length === 2
+        && mdDoc.heads[0][0] === "H1" && mdDoc.heads[0][1] === MD.h1
+        && mdDoc.heads[1][0] === "H2" && mdDoc.heads[1][1] === MD.h2,
+        JSON.stringify(mdDoc.heads));
+    check("markdown 文档里的列表按列表出（无序三个、有序两个）",
+        JSON.stringify(mdDoc.ul) === JSON.stringify(MD.items)
+        && JSON.stringify(mdDoc.ol) === JSON.stringify(MD.ordered),
+        JSON.stringify({ ul: mdDoc.ul, ol: mdDoc.ol }));
+    check("markdown 文档里的代码块按代码块出（围栏记号没露出来、代码在里面）",
+        mdDoc.preCount === 1 && mdDoc.code === MD.code + "\nconsole.log(a);\n"
+        && mdDoc.text.indexOf("```") < 0,
+        JSON.stringify({ pre: mdDoc.code }));
+    check("markdown 文档里的引用按引用出", mdDoc.quote === MD.quote, mdDoc.quote);
+    check("走的是消息流那一套渲染（代码块照样带语法高亮）", mdDoc.codeTones > 0, mdDoc.codeTones + " 个记号");
+    check("markdown 不留行号（一行行那种格子与行号一个都没有）",
+        mdDoc.rows === 0 && mdDoc.nums === 0 && md1.rowCount === 0 && md1.numCount === 0,
+        JSON.stringify({ rows: mdDoc.rows, nums: mdDoc.nums }));
+    check("链接里带的 :" + MD.hit + " 不生效、也不报错（没有点亮的那一行、也没有一句看不了的说明）",
+        mdDoc.hitCount === 0 && mdDoc.note === "" && mdDoc.text.indexOf(MD.code) >= 0
+        && md1.note === "" && md1.hitNum === "", JSON.stringify({ note: mdDoc.note }));
+    check("markdown 文件照旧占一个标签、面板头写着它",
+        mdDoc.tabPaths[mdDoc.tabActive] === MD.doc && mdDoc.title === MD.doc && mdDoc.tabPaths[0] === ".",
+        JSON.stringify({ active: mdDoc.tabActive, title: mdDoc.title }));
+    await page.shot("file-26-markdown.png");
+
+    // 文档里写到的文件也是文件链接（消息流那一套渲染挂上去的）：点了开在这一列里，
+    // 不是把页面卷走；顺带盯一眼别的文件照旧带行号。
+    check("文档里写到的文件也是文件链接",
+        JSON.stringify(mdDoc.links) === JSON.stringify([[MD.link, String(MD.linkLine)]]),
+        JSON.stringify(mdDoc.links));
+    console.log("点文档里的链接：" + await page.eval(`
+        const a = document.querySelector("#fileBody .file-md a.file-link");
+        if (!a) { return "没有这个链接"; }
+        a.click();
+        return "点了";
+    `));
+    const mdLink = await waitLook("文档里那条链接开出来的文件",
+        (x) => x.rowCount === 5 && x.hitNum === String(MD.linkLine));
+    check("点文档里的链接：那个文件开在这一列里（照旧带行号、停在链接说的那一行）",
+        mdLink.mdCount === 0 && mdLink.numCount === 5 && mdLink.hitNum === String(MD.linkLine)
+        && mdLink.hitText.indexOf("sample " + MD.linkLine) >= 0
+        && mdLink.tabPaths[mdLink.tabActive] === MD.link,
+        JSON.stringify({ rows: mdLink.rowCount, nums: mdLink.numCount, hit: mdLink.hitNum }));
+
+    console.log("点文件链接：" + await clickLink(MD.plain, 2));
+    const mdPlain = await waitLook("不是 markdown 的那个文件一行行上来",
+        (x) => x.rowCount === MD_PLAIN_LINES.length && x.numCount === MD_PLAIN_LINES.length);
+    check("扩展名不是 markdown 的：照旧一行一行、带行号（同样的记号不算标题也不算代码块）",
+        mdPlain.mdCount === 0 && mdPlain.rowCount === MD_PLAIN_LINES.length
+        && mdPlain.numCount === MD_PLAIN_LINES.length && mdPlain.firstRow.indexOf("# 这行不是标题") >= 0
+        && mdPlain.hitNum === "2" && mdPlain.hitVisible,
+        JSON.stringify({ rows: mdPlain.rowCount, nums: mdPlain.numCount, first: mdPlain.firstRow }));
+    await page.shot("file-27-markdown-plain.png");
 
     // ==================== 直接打那条文件地址（拒绝的几种情形 + 条件请求）====================
     const raw = await page.eval(`

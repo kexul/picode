@@ -3341,8 +3341,9 @@
   }
 
   /**
-   * 把一条 200 的回应画进正文：图片按图片显示，其余当文本、带行号。
-   * @returns 文本那一路点亮的那一行（图片没有行，给 null）
+   * 把一条 200 的回应画进正文：图片按图片显示；markdown 排好版渲染成文档（不留行号，
+   * 链接里带的行号在这条路上等于没带）；其余当文本、一行一格带行号。
+   * @returns 文本那一路点亮的那一行（图片与 markdown 文档没有行，给 null）
    */
   async function drawFileResponse(resp, tab) {
     const type = (resp.headers.get("Content-Type") || "").toLowerCase();
@@ -3351,7 +3352,9 @@
       return null;
     }
     releaseTabImage(tab);   // 这个文件以前是张图（现在换成文本了），把那份地址放掉
-    return renderFileText(await resp.text(), tab.line, tab.path);
+    const text = await resp.text();
+    if (isMarkdownPath(tab.path)) { renderFileMarkdown(text); return null; }
+    return renderFileText(text, tab.line, tab.path);
   }
 
   /**
@@ -3399,6 +3402,26 @@
     try {
       return splitHighlightedLines(hljs.highlight(text, { language }).value, text.split("\n").length);
     } catch (e) { return null; }
+  }
+
+  /** 排好版渲染成文档的扩展名（跟消息流里认 markdown 文件那一族一样）。 */
+  const MARKDOWN_EXT = new Set(["md", "mdx", "markdown"]);
+  /** 这个文件是不是 markdown：是就排好版渲染成文档，而不是一行一行带行号。 */
+  function isMarkdownPath(path) { return MARKDOWN_EXT.has(lastExt(path)); }
+
+  /**
+   * 把一个 markdown 文件渲染成文档：跟消息流里渲染正文走同一段（renderMarkdown），
+   * 不另起一套。文档不留行号，所以链接里带的行号（`:12`）等于没带，也不报错。
+   * 文档里的文件链接由文件侧边栏那段代点（见 buildFileSidebar），照旧开在这一列里。
+   */
+  function renderFileMarkdown(text) {
+    const body = fileSidebar.body;
+    if (!body) { return; }
+    body.innerHTML = "";
+    const doc = document.createElement("div");
+    doc.className = "md file-md";
+    doc.innerHTML = renderMarkdown(String(text));
+    body.appendChild(doc);
   }
 
   /**
@@ -3679,6 +3702,16 @@
     if (fileSidebar.open) { ensureProjectDirTab(); }
     // 拖窗口过那道门槛：常驻 / 滑入两种摆法跟着换
     window.addEventListener("resize", () => { if (fileSidebar.open) { syncFileSidebarLayout(); } });
+    // 文档里那些文件链接（renderMarkdown 挂上去的）点了也开在这一列里：跟消息流里的链接同一个去处。
+    //（没有这一下，`href="#"` 会按浏览器默认行为把页面卷回去。）
+    fileSidebar.body.addEventListener("click", (e) => {
+      const a = e.target.closest("a.file-link");
+      if (!a) { return; }
+      e.preventDefault();
+      const path = a.getAttribute("data-file");
+      if (!path) { return; }
+      openFileInSidebar(path, a.dataset.line ? parseInt(a.dataset.line, 10) : 0, a.getAttribute("data-dir") === "1");
+    });
     // 跟着刷新：开着而且有正看着的文件时，隔一会儿问一次（页面在后台时不问：手机上别白耗电）
     setInterval(() => {
       if (!fileSidebar.open || document.hidden) { return; }
