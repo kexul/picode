@@ -21,6 +21,8 @@
  *   4. 工具：bash
  *   5. 工具：edit（会真的改 dev/.scratch 下的一个文件，diff 卡片有东西可看）
  *   6. 再说一句收尾
+ * 用户这句话里带「碰文件」时演另一段（见 runScript 里那一段）：read 几个特意铺好的文件，
+ * 好让后端那份「这个会话碰过的文件」清单里有子目录里的文件、也有会话目录外面的。
  *
  * 用法（不用记参数，插件的 piPath 指过来就行）：
  *   node dev/fakePi.js --mode rpc          # 参数收下但不看，照常演戏
@@ -361,6 +363,25 @@ async function runScript(userText) {
             reply = back ? "扩展收到 " + JSON.stringify(back.cancelled ? null : back.value) : "扩展没等到回话。";
         }
         await say("问话结束 —— " + reply);
+        finish();
+        return;
+    }
+
+    // ---- 「这个会话碰过的文件」那几种（验「链接里只有光名字也能打开」那票）----
+    // 后端那份清单只从 read / edit / write 的工具调用里来，所以这里真去 read 几个文件
+    //（内容后端不看，要的是那几个路径）。素材由 dev/fileSidebar.js 铺：
+    //   - 子目录里藏一个（链接里只有光名字时，靠这份清单兜底找到它）；
+    //   - 会话目录里、子目录里各放一个同名的（先按会话目录拼那一档该赢）；
+    //   - outside/ 那颗指到会话目录外面的软链接里那一个（清单里匹配到了，边界也得挡住）。
+    if (/碰文件/.test(userText)) {
+        await say("（假模型）我读三个文件，把「这个会话碰过的文件」清单喂给后端。");
+        for (const readPath of ["names/only-name.js", "names/two-places.js", "outside/package.json"]) {
+            await act("read", { path: readPath }, {
+                content: [{ type: "text", text: "Read " + readPath }],
+                raw: { content: [{ type: "text", text: "Read " + readPath }] },
+            });
+        }
+        await say("读完了。");
         finish();
         return;
     }

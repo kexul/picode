@@ -237,6 +237,46 @@ const MD_PLAIN_LINES = [
     "```",
     "- 这行不是列表",
 ];
+/**
+ * 光名字那一摊：链接里只有 `only-name.js` 这种光名字、或者路径写岔了时，后端先按会话目录拼；
+ * 拼不到，就在「这个会话碰过的文件」（read / edit / write 过的，后端有这份清单）里按文件名找。
+ * 素材：子目录里藏一个（光名字链接靠第二档找到它）、会话目录里与子目录里各放一个同名的
+ *（先按会话目录拼那一档该赢）、会话目录外面那个 package.json（清单里匹配到了，边界也得挡住）。
+ * 这份清单来自 pi 的工具调用，所以下面先让假 pi 读这几个文件（见 fakePi.js 的「碰文件」那一段）。
+ * 文件名字写成 ASCII：消息流里那条链接规则只认 `[\w@-]`，中文名字根本不会变链接。
+ */
+const NAME = {
+    deepDir: "names",
+    bare: "only-name.js",             // 链接里那个光名字（会话目录里没有、子目录里有）
+    bareFile: "names/only-name.js",
+    both: "two-places.js",            // 会话目录这一份（清单里没有它）
+    bothDeep: "names/two-places.js",  // 子目录这一份（清单里有它）
+    wrong: "nowhere/only-name.js",    // 路径写岔了：那个目录根本不存在
+    outside: "package.json",         // 光名字匹配到清单里 outside/package.json（真身在外面）
+    absent: "nobody-touched.js",      // 两档都找不到
+};
+const NAME_LINES = [
+    "// only-name 第 1 行",
+    "// only-name 第 2 行",
+    "// only-name 第 3 行",
+    "// only-name 第 4 行（就停这一行）",
+    "// only-name 第 5 行",
+    "// only-name 第 6 行",
+];
+const NAME_HIT = 4;
+const NAME_BOTH_LINES = ["// 会话目录这一份 1", "// 会话目录这一份 2", "// 会话目录这一份 3"];
+const NAME_BOTH_DEEP_LINES = [
+    "// 子目录这一份 1",
+    "// 子目录这一份 2",
+    "// 子目录这一份 3",
+    "// 子目录这一份 4",
+    "// 子目录这一份 5",
+];
+/** 光名字那一段往消息流里投的链接。 */
+const NAME_LINK_TEXT =
+    "光名字那几个：\n\n" +
+    "`" + NAME.bare + ":" + NAME_HIT + "`、`" + NAME.wrong + ":" + NAME_HIT + "`、" +
+    "`" + NAME.both + ":1`、`" + NAME.outside + ":1`、`" + NAME.absent + ":1`。\n";
 
 const FILE = {
     long: "long.js",
@@ -310,6 +350,18 @@ function prepareDirs(cwd) {
     }
 }
 
+/**
+ * 光名字那一摊的素材（每次跑都重写一遍）：子目录里藏一个光名字、会话目录里与子目录里各放一个
+ * 同名的。会话目录外面那个文件就是 prepareFiles 里那颗 outside 软链接里头的 package.json，
+ * 不用另外铺。
+ */
+function prepareNameFixtures(cwd) {
+    fs.mkdirSync(path.join(cwd, NAME.deepDir), { recursive: true });
+    fs.writeFileSync(path.join(cwd, NAME.bareFile), NAME_LINES.join("\n") + "\n", "utf8");
+    fs.writeFileSync(path.join(cwd, NAME.both), NAME_BOTH_LINES.join("\n") + "\n", "utf8");
+    fs.writeFileSync(path.join(cwd, NAME.bothDeep), NAME_BOTH_DEEP_LINES.join("\n") + "\n", "utf8");
+}
+
 /** 往会话目录里造测试用的文件（每次跑都重写一遍，内容与行数固定）。 */
 function prepareFiles(cwd) {
     const long = [];
@@ -321,6 +373,7 @@ function prepareFiles(cwd) {
     // 折行开关那一摊：第 2 行是一整条 400 个字、一个断点都没有的长行
     fs.writeFileSync(path.join(cwd, FILE.wrap),
         ["// wrap 1", "// " + "x".repeat(WRAP_LONG_CHARS) + " 超长的一行", "// wrap 3"].join("\n") + "\n", "utf8");
+    prepareNameFixtures(cwd);
     fs.writeFileSync(path.join(cwd, FILE.big), Buffer.alloc(BIG_BYTES, 0x78));
     fs.copyFileSync(path.join(cwd, FILE.big), path.join(cwd, FILE.bigBinary));   // 同样大，但是个二进制扩展名
     // 一张真图（尺寸固定）与一个真二进制（有 0 字节、有高位字节，当文字读不出来）
@@ -1731,6 +1784,111 @@ module.exports = async (page) => {
     check("软链接指到目录外：403", rawDir.outside.status === 403 && rawDir.outLink.status === 403,
         JSON.stringify({ outside: rawDir.outside.status, outLink: rawDir.outLink.status }));
     check("不认识的会话：不给清单", rawDir.noSession.status !== 200, String(rawDir.noSession.status));
+
+    // ==================== 光名字 / 路径写岔了：在这个会话碰过的文件里按名字找 ====================
+    // 链接里只有一个光名字（`only-name.js` 这种）、或者路径写岔了时：后端先按会话目录拼；拼不到，
+    // 就在这个会话碰过的文件（read / edit / write 过的，后端有这份清单）里按文件名匹配；两档都
+    // 找不到才说「没有这个文件」；匹配到的东西仍然必须在会话目录以内。那份清单来自 pi 的工具调用，
+    // 所以先让假 pi 读几个特意铺好的文件（见 prepareNameFixtures 与 fakePi.js 的「碰文件」那段）。
+    console.log("让假 pi 读几个文件（喂「这个会话碰过的文件」清单）…");
+    await page.send("碰文件：读几个文件，把清单喂给后端。");
+    await page.waitText("读完了。");
+    await page.sleep(400);
+    await page.eval(`for (const m of ${JSON.stringify([{ type: "assistantFull", text: NAME_LINK_TEXT }])}) { window.postMessage(m, "*"); } return true;`);
+    await page.sleep(400);
+    check("光名字那几个链接出现在消息流里",
+        (await page.eval(`
+            const want = ${JSON.stringify([NAME.bare, NAME.wrong, NAME.both])};
+            return Array.from(document.querySelectorAll("a.file-link"))
+                .filter(function (a) { return want.indexOf(a.getAttribute("data-file")) >= 0; }).length;
+        `)) === 3);
+
+    // 光名字：会话目录里没有这个名字，靠那份清单找到子目录里那个
+    console.log("点文件链接：" + await clickLink(NAME.bare, NAME_HIT));
+    const named = await waitLook("光名字链接打开子目录里那个文件",
+        (x) => x.title === NAME.bare && x.rowCount === NAME_LINES.length);
+    check("链接里只有光名字：按会话目录拼接不到，在会话碰过的文件里按名字找到它、打开",
+        named.rowCount === NAME_LINES.length && named.note === "" && named.hitNum === String(NAME_HIT)
+        && named.hitText.indexOf("only-name 第 " + NAME_HIT + " 行") >= 0
+        && named.firstRow.indexOf("only-name 第 1 行") >= 0,
+        JSON.stringify({ title: named.title, rows: named.rowCount, hit: named.hitNum, note: named.note }));
+    await page.shot("file-26-bare-name.png");
+
+    // 路径写岔了：那个目录根本不存在，一样按文件名匹配到它
+    console.log("点文件链接：" + await clickLink(NAME.wrong, NAME_HIT));
+    const namedWrong = await waitLook("路径写岔了也打开那个文件",
+        (x) => x.title === NAME.wrong && x.rowCount === NAME_LINES.length);
+    check("路径写岔了（那个目录不存在）：一样按文件名匹配到它",
+        namedWrong.rowCount === NAME_LINES.length && namedWrong.note === ""
+        && namedWrong.hitText.indexOf("only-name 第 " + NAME_HIT + " 行") >= 0,
+        JSON.stringify({ title: namedWrong.title, rows: namedWrong.rowCount, note: namedWrong.note }));
+
+    // 会话目录里也有那个名字：先按会话目录拼（清单里那一份不该赢）
+    console.log("点文件链接：" + await clickLink(NAME.both, 1));
+    const namedBoth = await waitLook("两层都有那个名字：拿会话目录这一份",
+        (x) => x.title === NAME.both && x.rowCount === NAME_BOTH_LINES.length);
+    check("会话目录里与清单里都有那个名字：先按会话目录拼（会话目录这一份赢）",
+        namedBoth.rowCount === NAME_BOTH_LINES.length && namedBoth.firstRow.indexOf("会话目录这一份 1") >= 0
+        && namedBoth.note === "",
+        JSON.stringify({ rows: namedBoth.rowCount, first: namedBoth.firstRow }));
+
+    // 清单里那个文件真身在外面：匹配到了也不给看
+    console.log("点文件链接：" + await clickLink(NAME.outside, 1));
+    const namedOut = await waitLook("光名字匹配到会话目录外面的文件",
+        (x) => x.title === NAME.outside && x.note.indexOf("会话目录外") >= 0);
+    check("光名字匹配到会话目录外面的文件：不给看，一句「会话目录外」",
+        namedOut.rowCount === 0 && namedOut.note.indexOf("会话目录外") >= 0, namedOut.note);
+
+    // 两档都找不到：跟票 01 那句一样
+    console.log("点文件链接：" + await clickLink(NAME.absent, 1));
+    const namedAbsent = await waitLook("两档都找不到那个文件",
+        (x) => x.title === NAME.absent && x.note.indexOf("没有这个文件") >= 0);
+    check("目录里没有、会话也没碰过：给一句「没有这个文件」",
+        namedAbsent.rowCount === 0 && namedAbsent.note.indexOf("没有这个文件") >= 0, namedAbsent.note);
+
+    // 直接打那条地址，把三档的状态与正文核一遍（面板上看到的就是它）
+    const rawName = JSON.parse(await page.eval(`
+        const sid = (document.querySelector(".session-pane") || { dataset: {} }).dataset.sessionId || "";
+        const get = async function (p) {
+            const resp = await fetch("/file?session=" + encodeURIComponent(sid) + "&path=" + encodeURIComponent(p));
+            const text = await resp.text();
+            return { status: resp.status, text: text.trim() };
+        };
+        return (async function () {
+            const out = {};
+            out.bare = await get(${JSON.stringify(NAME.bare)});
+            out.bareFile = await get(${JSON.stringify(NAME.bareFile)});
+            out.wrong = await get(${JSON.stringify(NAME.wrong)});
+            out.both = await get(${JSON.stringify(NAME.both)});
+            out.bothDeep = await get(${JSON.stringify(NAME.bothDeep)});
+            out.outside = await get(${JSON.stringify(NAME.outside)});
+            out.absent = await get(${JSON.stringify(NAME.absent)});
+            return JSON.stringify(out);
+        })();
+    `));
+    console.log("直接打那条地址（光名字那几档）：" + JSON.stringify({
+        bare: rawName.bare.status, bareFile: rawName.bareFile.status, wrong: rawName.wrong.status,
+        both: rawName.both.status, bothDeep: rawName.bothDeep.status,
+        outside: rawName.outside.status, absent: rawName.absent.status,
+    }));
+    check("光名字：地址也直接给内容（就是子目录里那一份，六行一字不差）",
+        rawName.bare.status === 200 && rawName.bare.text.split("\n").length === NAME_LINES.length
+        && rawName.bare.text === NAME_LINES.join("\n"),
+        JSON.stringify({ status: rawName.bare.status }));
+    check("路径写岔了、以及按清单里那份相对写法打：都给同一个文件",
+        rawName.wrong.status === 200 && rawName.wrong.text === NAME_LINES.join("\n")
+        && rawName.bareFile.status === 200 && rawName.bareFile.text === NAME_LINES.join("\n"),
+        JSON.stringify({ wrong: rawName.wrong.status, list: rawName.bareFile.status }));
+    check("会话目录里也有那个名字：地址先按会话目录拼（会话目录这一份）",
+        rawName.both.status === 200 && rawName.both.text === NAME_BOTH_LINES.join("\n")
+        && rawName.bothDeep.status === 200 && rawName.bothDeep.text === NAME_BOTH_DEEP_LINES.join("\n"),
+        JSON.stringify({ both: rawName.both.status }));
+    check("匹配到的文件真身在外面：403、不把内容给出去",
+        rawName.outside.status === 403 && rawName.outside.text.indexOf("会话目录外") >= 0,
+        JSON.stringify({ status: rawName.outside.status, text: rawName.outside.text }));
+    check("两档都找不到：404、一句「没有这个文件」",
+        rawName.absent.status === 404 && rawName.absent.text.indexOf("没有这个文件") >= 0,
+        JSON.stringify({ status: rawName.absent.status, text: rawName.absent.text }));
 
     // ==================== 切会话：「项目目录」换成新会话的目录、文件标签清空 ====================
     // 真开一个新会话（会话目录就是 dirA，跟当前这个会话的目录不一样）：走的是后端真会话编排，
