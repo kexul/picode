@@ -30,6 +30,9 @@
  *      超过上色那条线的大文件不上色（行号照旧），也不把页面卡住；
  *      工具卡片（write）那颗「跳转」跟正文里的文件链接去同一个地方：浏览器页面里开左边这一列
  *      （自己滑出来、停在第一行），插件里的对话面板里还是交给编辑器打开（最后那段按网页视图验）；
+ *      面板角上那颗折行开关：默认一行就是一行（长行横向滚），点一下长行折起来（横向不滚），
+ *      再点一下又回去；开关管的是整块正文（换个文件也照样）；选的那个记在这台设备里，
+ *      刷新页面后还是刚才那样；
  *   2. 在页面里用 fetch 直接打那条只读文件地址与目录地址，核对拒绝的几种情形（目录外含 .. 绕出去的写法、
  *      没有这个文件 / 目录、超过 2 MB）、图片与二进制各自给什么、目录清单的形状、以及「没变就别再给
  *      一遍正文」那条条件请求；下载那条路不受 2 MB 这条线管（几 MB 的文件整份下来）。
@@ -47,6 +50,10 @@ const HIT_LINE = 137;
 /** 第二次点 long.js 时链接说的那一行（换成另一行：切回原来那个标签、按这次的行滚）。 */
 const HIT_LINE_AGAIN = 260;
 const SAMPLE_HIT = 3;
+/** 折行开关那一摊：wrap.js 第 2 行是一整条超长的行（一个断点都没有），专门看折还是横向滚。 */
+const WRAP_LINES = 3;
+const WRAP_HIT = 2;
+const WRAP_LONG_CHARS = 400;
 /** 比 2 MB 大出好几 MB：只用来验「太大」和「下载整份下来」，不当正文读。 */
 const BIG_BYTES = 4 * 1024 * 1024;
 /** 二进制那个文件多大（点下载存下来时按它核对字节数）。 */
@@ -235,6 +242,7 @@ const FILE = {
     long: "long.js",
     sample: "sample.js",
     live: "live.js",
+    wrap: "wrap.js",
     missing: "missing.txt",
     big: "big.txt",
     bigBinary: "big.bin",
@@ -256,6 +264,7 @@ const JUMP_ARGS = {
 const LINK_TEXT =
     "看这几个文件：\n\n" +
     "`" + FILE.long + ":" + HIT_LINE + "` 这一行、`" + FILE.sample + ":" + SAMPLE_HIT + "` 这一行，\n" +
+    "`" + FILE.wrap + ":" + WRAP_HIT + "` 这个里面有一条超长的行，\n" +
     "`" + FILE.long + ":" + HIT_LINE_AGAIN + "` 这个文件再说一次，\n" +
     "`" + FILE.live + ":" + LIVE_HIT + "` 这个是拿着看的，\n" +
     "`" + FILE.image + ":1` 这个是张图、`" + FILE.binary + ":1` 这个是二进制的，\n" +
@@ -309,6 +318,9 @@ function prepareFiles(cwd) {
     fs.writeFileSync(path.join(cwd, FILE.sample),
         "// sample 1\n// sample 2\n// sample 3 这一行\n// sample 4\n// sample 5\n", "utf8");
     writeLive(cwd, false, 0);
+    // 折行开关那一摊：第 2 行是一整条 400 个字、一个断点都没有的长行
+    fs.writeFileSync(path.join(cwd, FILE.wrap),
+        ["// wrap 1", "// " + "x".repeat(WRAP_LONG_CHARS) + " 超长的一行", "// wrap 3"].join("\n") + "\n", "utf8");
     fs.writeFileSync(path.join(cwd, FILE.big), Buffer.alloc(BIG_BYTES, 0x78));
     fs.copyFileSync(path.join(cwd, FILE.big), path.join(cwd, FILE.bigBinary));   // 同样大，但是个二进制扩展名
     // 一张真图（尺寸固定）与一个真二进制（有 0 字节、有高位字节，当文字读不出来）
@@ -428,6 +440,11 @@ module.exports = async (page) => {
             const bar = document.getElementById("fileTabs");
             const tabs = bar ? Array.from(bar.querySelectorAll(".file-tab")) : [];
             const entries = body ? Array.from(body.querySelectorAll(".file-entry")) : [];
+            const wrapBtn = document.getElementById("fileWrap");
+            const wrapRect = wrapBtn && getComputedStyle(wrapBtn).display !== "none" ? wrapBtn.getBoundingClientRect() : null;
+            const panelEl = document.getElementById("filePanel");
+            const panelRect = panelEl ? panelEl.getBoundingClientRect() : null;
+            const textEl = body ? body.querySelector(".file-text") : null;
             return {
                 vw: window.innerWidth,
                 hasPanel: !!root,
@@ -489,6 +506,24 @@ module.exports = async (page) => {
                     ? Math.round(document.getElementById("dockHeader").getBoundingClientRect().bottom) : -1,
                 topAtChat: (document.elementFromPoint(Math.round(window.innerWidth * 0.5), 400) || { id: "" }).id,
                 topAtRight: (document.elementFromPoint(Math.round(window.innerWidth - 40), 400) || { id: "" }).id,
+                wrapButton: !!wrapBtn,
+                wrapShown: !!wrapRect,
+                wrapInPanel: !!wrapBtn && !!panelEl && panelEl.contains(wrapBtn),
+                wrapInHeader: !!wrapBtn && !!document.getElementById("fileHeader")
+                    && document.getElementById("fileHeader").contains(wrapBtn),
+                wrapInTabs: !!wrapBtn && !!bar && bar.contains(wrapBtn),
+                wrapTop: wrapRect ? Math.round(wrapRect.top) : -1,
+                wrapAtCorner: !!(wrapRect && panelRect)
+                    && panelRect.right - wrapRect.right >= 0 && panelRect.right - wrapRect.right <= 24
+                    && panelRect.bottom - wrapRect.bottom >= 0 && panelRect.bottom - wrapRect.bottom <= 24,
+                wrapPressed: wrapBtn ? (wrapBtn.getAttribute("aria-pressed") || "") : "",
+                wrapOnClass: !!wrapBtn && wrapBtn.classList.contains("on"),
+                whiteSpace: textEl ? getComputedStyle(textEl).whiteSpace : "",
+                hScroll: body ? Math.round(body.scrollWidth - body.clientWidth) : -1,
+                headRowHeights: rows.slice(0, 4).map(function (r) { return Math.round(r.getBoundingClientRect().height); }),
+                headRowLens: rows.slice(0, 4).map(function (r) {
+                    return ((r.querySelector(".file-text") || {}).textContent || "").length;
+                }),
             };
         };
         return JSON.stringify(f());
@@ -623,6 +658,14 @@ module.exports = async (page) => {
     const clickJumpBtn = () => page.eval(`
         const b = document.querySelector(".tag-tip .et-jump");
         if (!b) { return "没有那颗跳转按钮"; }
+        b.click();
+        return "点了";
+    `);
+
+    /** 点面板角上那颗折行开关。 */
+    const clickWrap = () => page.eval(`
+        const b = document.getElementById("fileWrap");
+        if (!b) { return "没有折行开关"; }
         b.click();
         return "点了";
     `);
@@ -1474,6 +1517,81 @@ module.exports = async (page) => {
         && mdPlain.hitNum === "2" && mdPlain.hitVisible,
         JSON.stringify({ rows: mdPlain.rowCount, nums: mdPlain.numCount, first: mdPlain.firstRow }));
     await page.shot("file-27-markdown-plain.png");
+    // ==================== 折行开关：长行折起来，还是一行就是一行 ====================
+    // 面板角上那颗开关：「长行折起来」与「一行就是一行、横向滚」之间切，选的那个记在这台设备里
+    //（跟「收没收起」同一个做法），刷新页面后还是刚才那样。
+    console.log("点文件链接：" + await clickLink(FILE.wrap, WRAP_HIT));
+    const wrap0 = await waitLook("那条超长行的文件上来",
+        (x) => x.rowCount === WRAP_LINES && x.headRowLens[1] >= WRAP_LONG_CHARS);
+    check("折行开关在面板角上（不在标签条里、也不在面板头里）",
+        wrap0.wrapShown && wrap0.wrapInPanel && !wrap0.wrapInHeader && !wrap0.wrapInTabs
+        && wrap0.wrapAtCorner && wrap0.wrapTop > wrap0.barBottom,
+        JSON.stringify({ shown: wrap0.wrapShown, panel: wrap0.wrapInPanel, header: wrap0.wrapInHeader,
+            tabs: wrap0.wrapInTabs, corner: wrap0.wrapAtCorner, top: wrap0.wrapTop, bar: wrap0.barBottom }));
+    check("默认是「一行就是一行」：长行不折、正文横向滚得动",
+        wrap0.whiteSpace === "pre" && wrap0.headRowHeights[1] === wrap0.headRowHeights[0] && wrap0.hScroll > 0,
+        JSON.stringify({ ws: wrap0.whiteSpace, heights: wrap0.headRowHeights, hScroll: wrap0.hScroll }));
+    await page.shot("file-26-wrap-off.png");
+
+    console.log("点折行开关：" + await clickWrap());
+    const wrap1 = await waitLook("长行折起来", (x) => x.whiteSpace === "pre-wrap");
+    check("点一下开关：长行折起来（那一行占了好几行的高度）、横向不再滚",
+        wrap1.headRowHeights[1] > wrap1.headRowHeights[0] * 3 && wrap1.hScroll === 0
+        && wrap1.headRowLens[1] >= WRAP_LONG_CHARS,
+        JSON.stringify({ heights: wrap1.headRowHeights, hScroll: wrap1.hScroll, lens: wrap1.headRowLens }));
+    check("折起来以后字一个没少、行号也没乱（只是摆法换了）",
+        wrap1.rowCount === WRAP_LINES && wrap1.headRowLens[1] >= WRAP_LONG_CHARS
+        && wrap1.hitNum === String(WRAP_HIT) && wrap1.hitText.indexOf("超长的一行") >= 0,
+        JSON.stringify(wrap1.headRowLens));
+    check("开关看得出现在是折行的（按下去那个样子）", wrap1.wrapPressed === "true" && wrap1.wrapOnClass);
+    await page.shot("file-27-wrap-on.png");
+
+    // 开关管的是整块正文：换到另一个开着长行的文件，它也是折的
+    console.log("点标签：" + await clickTab(COLOR.mid, "tab"));
+    const wrapOther = await waitLook("换到 color-mid.ts 那个标签", (x) => x.rowCount === COLOR_MID.lines, 20000);
+    check("折行管的是整块正文（换一个文件也照样折、横向不滚）",
+        wrapOther.whiteSpace === "pre-wrap" && wrapOther.hScroll === 0,
+        JSON.stringify({ ws: wrapOther.whiteSpace, hScroll: wrapOther.hScroll }));
+    console.log("点标签：" + await clickTab(FILE.wrap, "tab"));
+    const wrapBack = await waitLook("切回那条超长行", (x) => x.rowCount === WRAP_LINES);
+    check("切回来还是折的（这个选择不跟着标签走）", wrapBack.whiteSpace === "pre-wrap" && wrapBack.hScroll === 0);
+
+    // 刷新页面：选的那个还在（跟收没收起一个做法）
+    await page.eval("location.reload(); return true;");
+    await page.sleep(1500);
+    await page.waitReady();
+    await page.sleep(500);
+    await page.eval(POST_LINKS);
+    await page.sleep(300);
+    console.log("点文件链接：" + await clickLink(FILE.wrap, WRAP_HIT));
+    const wrap2 = await waitLook("刷新之后长行还是折的",
+        (x) => x.rowCount === WRAP_LINES && x.whiteSpace === "pre-wrap");
+    check("刷新页面之后还是刚才那样（折行的选择记在这台设备里）",
+        wrap2.whiteSpace === "pre-wrap" && wrap2.hScroll === 0
+        && wrap2.headRowHeights[1] > wrap2.headRowHeights[0] * 3 && wrap2.wrapPressed === "true",
+        JSON.stringify({ ws: wrap2.whiteSpace, heights: wrap2.headRowHeights }));
+
+    console.log("点折行开关：" + await clickWrap());
+    const wrap3 = await waitLook("长行又不折了", (x) => x.whiteSpace === "pre");
+    check("再点一下开关：又变回「一行就是一行、横向滚」",
+        wrap3.whiteSpace === "pre" && wrap3.hScroll > 0 && wrap3.headRowHeights[1] === wrap3.headRowHeights[0]
+        && wrap3.wrapPressed === "false" && !wrap3.wrapOnClass,
+        JSON.stringify({ ws: wrap3.whiteSpace, hScroll: wrap3.hScroll }));
+
+    // 关掉的选择也记着：再刷新一遍还是「一行就是一行」
+    await page.eval("location.reload(); return true;");
+    await page.sleep(1500);
+    await page.waitReady();
+    await page.sleep(500);
+    await page.eval(POST_LINKS);
+    await page.sleep(300);
+    console.log("点文件链接：" + await clickLink(FILE.wrap, WRAP_HIT));
+    const wrap4 = await waitLook("刷新之后长行还是横着滚",
+        (x) => x.rowCount === WRAP_LINES && x.whiteSpace === "pre");
+    check("关掉的选择也记得（刷新之后还是「一行就是一行」）",
+        wrap4.whiteSpace === "pre" && wrap4.hScroll > 0 && wrap4.wrapPressed === "false"
+        && wrap4.headRowHeights[1] === wrap4.headRowHeights[0]);
+    await page.shot("file-28-wrap-remembered.png");
 
     // ==================== 直接打那条文件地址（拒绝的几种情形 + 条件请求）====================
     const raw = await page.eval(`
