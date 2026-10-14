@@ -442,8 +442,6 @@ module.exports = async (page) => {
             const entries = body ? Array.from(body.querySelectorAll(".file-entry")) : [];
             const wrapBtn = document.getElementById("fileWrap");
             const wrapRect = wrapBtn && getComputedStyle(wrapBtn).display !== "none" ? wrapBtn.getBoundingClientRect() : null;
-            const panelEl = document.getElementById("filePanel");
-            const panelRect = panelEl ? panelEl.getBoundingClientRect() : null;
             const textEl = body ? body.querySelector(".file-text") : null;
             return {
                 vw: window.innerWidth,
