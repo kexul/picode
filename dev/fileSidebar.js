@@ -28,6 +28,8 @@
  *      认得的几种语言（TypeScript 含 JavaScript 与 JSON、C++、Python，别名一起算）按扩展名带颜色，
  *      行号还在、跟内容对得上，跨多行的注释 / 模板串不会在行号那儿断开；别的语言仍是黑白；
  *      超过上色那条线的大文件不上色（行号照旧），也不把页面卡住；
+ *      工具卡片（write）那颗「跳转」跟正文里的文件链接去同一个地方：浏览器页面里开左边这一列
+ *      （自己滑出来、停在第一行），插件里的对话面板里还是交给编辑器打开（最后那段按网页视图验）；
  *   2. 在页面里用 fetch 直接打那条只读文件地址与目录地址，核对拒绝的几种情形（目录外含 .. 绕出去的写法、
  *      没有这个文件 / 目录、超过 2 MB）、图片与二进制各自给什么、目录清单的形状、以及「没变就别再给
  *      一遍正文」那条条件请求；下载那条路不受 2 MB 这条线管（几 MB 的文件整份下来）。
@@ -239,6 +241,17 @@ const FILE = {
     outside: "outside/package.json",
     image: "picture.png",
     binary: "data.bin",
+};
+/**
+ * 工具卡片那颗「跳转」验的：一张 write 卡片（收成工具行里那颗小标签），点提示框里那颗「跳转」。
+ * 条目写进消息流里、文件用的就是会话目录里现成的 sample.js（跟正文链接去同一个地方才算数）。
+ */
+const JUMP_FILE = "sample.js";
+const JUMP_LINES = 5;
+const JUMP_CARD_ID = "jump-card";
+const JUMP_ARGS = {
+    path: JUMP_FILE,
+    content: "// sample 1\n// sample 2\n// sample 3 这一行\n// sample 4\n// sample 5\n",
 };
 const LINK_TEXT =
     "看这几个文件：\n\n" +
@@ -583,6 +596,36 @@ module.exports = async (page) => {
         el.click();
         return "点了";
     `);
+    /** write 卡片那颗小标签：把它的提示框弄出来（电脑上悬浮、触屏上点一下，两种都发一下动作）。 */
+    const showJumpTip = () => page.eval(`
+        const pill = Array.from(document.querySelectorAll("#messages .et-pill"))
+            .find(function (p) { return (p.textContent || "").trim() === "write"; });
+        if (!pill) { return "没有 write 那个标签"; }
+        pill.dispatchEvent(new MouseEvent("mouseenter"));
+        pill.click();
+        return "把提示框弄出来了";
+    `);
+    /** 等提示框里那颗「跳转」画出来（电脑上悬浮 200ms 后才画），顺手把它那句悬停说明读回来。 */
+    const waitJumpBtn = async () => {
+        const started = Date.now();
+        let got = { found: false, title: "" };
+        while (Date.now() - started < 5000) {
+            got = JSON.parse(await page.eval(`
+                const b = document.querySelector(".tag-tip .et-jump");
+                return JSON.stringify({ found: !!b, title: b ? (b.getAttribute("title") || "") : "" });
+            `));
+            if (got.found) { return got; }
+            await page.sleep(150);
+        }
+        return got;
+    };
+    /** 点提示框里那颗「跳转」。 */
+    const clickJumpBtn = () => page.eval(`
+        const b = document.querySelector(".tag-tip .et-jump");
+        if (!b) { return "没有那颗跳转按钮"; }
+        b.click();
+        return "点了";
+    `);
 
     await page.eval(POST_LINKS);
     await page.sleep(400);
@@ -891,6 +934,41 @@ module.exports = async (page) => {
         && big.tabPaths.indexOf(FILE.big) >= 0 && big.tabActive === big.tabCount - 1,
         JSON.stringify(big.tabPaths));
     await page.shot("file-6-refused.png");
+
+    // ==================== 工具卡片那颗「跳转」：跟正文里的文件链接去同一个地方 ====================
+    // write 卡片收在工具行里那颗小标签上：鼠标停上去（触屏点一下）出提示框，里面那颗「跳转」
+    // 在浏览器页面里该跟正文里的文件链接一样——左边那一列自己开出来、停在文件第一行。
+    await page.cdp.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+    await page.sleep(400);
+    await page.click("#fileSidebarBtn");   // 先收起来：验点「跳转」自己把它开出来
+    await page.sleep(300);
+    const jumpClosed = await look("点「跳转」之前 · 面板收着");
+    check("点「跳转」之前：左边那一列收着", !jumpClosed.open && !jumpClosed.dock);
+
+    await page.eval(`for (const m of ${JSON.stringify([
+        { type: "editCardStart", toolCallId: JUMP_CARD_ID, toolName: "write", path: JUMP_FILE, label: JUMP_FILE, args: JUMP_ARGS },
+        { type: "editCardResult", toolCallId: JUMP_CARD_ID, canRevert: false, diff: "" },
+    ])}) { window.postMessage(m, "*"); } return true;`);
+    await page.sleep(300);
+    console.log("点 write 卡片那颗标签：" + await showJumpTip());
+    const jumpBtn = await waitJumpBtn();
+    check("write 卡片那颗标签的提示框里有一颗「跳转」", jumpBtn.found, jumpBtn.title);
+    check("浏览器页面里那颗「跳转」说的是开在文件侧边栏里（不是编辑器）",
+        jumpBtn.title.indexOf("文件侧边栏") >= 0 && jumpBtn.title.indexOf(JUMP_FILE) >= 0, jumpBtn.title);
+    console.log("点「跳转」：" + await clickJumpBtn());
+    const jump1 = await waitLook("跳转开的文件上来", (x) => x.rowCount === JUMP_LINES && x.title === JUMP_FILE);
+    check("点工具卡片那颗「跳转」：左边那一列自己开出来", jump1.open && jump1.dock && jump1.panelShown);
+    check("文件显示出来、带行号", jump1.rowCount === JUMP_LINES && jump1.firstRow.indexOf("1") >= 0, jump1.firstRow);
+    check("开在「项目目录」后面那一格新标签里", jump1.projIndex === 0 && jump1.tabActive > 0
+        && jump1.tabPaths[jump1.tabActive] === JUMP_FILE, JSON.stringify({ paths: jump1.tabPaths, active: jump1.tabActive }));
+    check("停在第一行（跟以前交给编辑器打开时一个口径）", jump1.hitNum === "1" && jump1.hitVisible);
+    await page.shot("file-26-tool-jump.png");
+
+    // 收掉提示框与刚开的这一格标签，别给后面的检查留下遮挡 / 多余的标签
+    await page.eval(`const h = document.getElementById("fileHeader"); if (h) { h.click(); } return true;`);
+    await page.sleep(300);
+    console.log("点标签上的叉：" + await clickTab(JUMP_FILE, "close"));
+    await page.sleep(300);
 
     // ==================== 图片：点链接直接在面板里看到那张图 ====================
     // 回到宽窗（前面那段在手机上跑）：面板常驻在左边，图该按这一列的宽度等比例缩。
@@ -1622,6 +1700,23 @@ module.exports = async (page) => {
     await page.sleep(500);
     const sent = JSON.parse(await page.eval(`return JSON.stringify((window.__sentToHost || []).filter(function (m) { return m && m.type === "openFile"; }));`));
     check("插件里的对话面板里点链接照旧交给编辑器打开", panelLink >= 5 && sent.length === 1 && sent[0].path === FILE.long && sent[0].line === HIT_LINE, JSON.stringify(sent));
+
+    // 工具卡片那颗「跳转」在这边（插件里的对话面板）还是交给编辑器打开：那边没有左边那一列
+    await page.eval(`for (const m of ${JSON.stringify([
+        { type: "editCardStart", toolCallId: JUMP_CARD_ID + "-view", toolName: "write", path: JUMP_FILE, label: JUMP_FILE, args: JUMP_ARGS, sessionId: sessionInfo.sessionId },
+        { type: "editCardResult", toolCallId: JUMP_CARD_ID + "-view", canRevert: false, diff: "", sessionId: sessionInfo.sessionId },
+    ])}) { window.postMessage(m, "*"); } return true;`);
+    await page.sleep(300);
+    console.log("点 write 卡片那颗标签：" + await showJumpTip());
+    const viewJump = await waitJumpBtn();
+    check("插件里的对话面板里那颗「跳转」说的是开在编辑器里",
+        viewJump.found && viewJump.title.indexOf("编辑器") >= 0 && viewJump.title.indexOf(JUMP_FILE) >= 0, viewJump.title);
+    console.log("点「跳转」：" + await clickJumpBtn());
+    await page.sleep(400);
+    const jumpSent = JSON.parse(await page.eval(`return JSON.stringify((window.__sentToHost || []).filter(function (m) {
+        return m && m.type === "openFile" && m.path === ${JSON.stringify(JUMP_FILE)};
+    }));`));
+    check("插件里的对话面板里点那颗「跳转」照旧交给编辑器打开", jumpSent.length === 1 && jumpSent[0].line === 1, JSON.stringify(jumpSent));
     await page.shot("file-7-webview.png");
 
     const failed = checks.filter((c) => !c[1]).map((c) => c[0]);
