@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * 验「鼠标扫过侧边栏行、移开之后留下什么」。
+ * 验「鼠标扫过项目与会话侧边栏的行、移开之后留下什么」。
  *
  *   npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/hoverRow.js
  *
@@ -51,7 +51,7 @@ module.exports = async (page) => {
         console.log("窄窗：打开的是滑出来的抽屉（浮层那份）");
     }
 
-    // 侧边栏里挑一行会话（有就挑会话行，没有就挑工作区行）
+    // 项目与会话侧边栏里挑一行会话（有就挑会话行，没有就挑工作区行）
     const row = JSON.parse(await page.eval(`
         const el = document.querySelector("#dockBody .pk-item") || document.querySelector("#pickerBody .pk-item");
         if (!el) { return "null"; }

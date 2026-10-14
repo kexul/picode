@@ -139,13 +139,13 @@ node dev/markdownBlocksCheck.js
 # 标题右边那颗加号（挑文件夹）、子会话不显示，一次过一遍：
 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/workspacePanel.js
 
-# 验宽窗下常驻的侧边栏（窗口 ≥ 900px）：开页面右边就是一列（不当浮层、不盖对话）、
+# 验宽窗下常驻的项目与会话侧边栏（窗口 ≥ 900px）：开页面右边就是一列（不当浮层、不盖对话）、
 # 点 <<< 收起、刷新后还是收起（记住了）、点面板里的行面板不关、开别的浮层时那一列的位置留着；
 # 同一趟里把视口改成手机宽再看一次：那一列整个不见，点 <<< 是原来的抽屉（有遮罩、
 # 整屏高、贴着右边，不是居中弹出的弹窗）：
 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js
 
-# 验「对话在更新（开始生成 / 跑完）时，常驻的侧边栏只动『正在对话』那一格」：
+# 验「对话在更新（开始生成 / 跑完）时，常驻的项目与会话侧边栏只动『正在对话』那一格」：
 # 整个面板连下半「工作区」一起重画会看着整列闪一下；这条查整块一次都没重画、
 # 下半那一格的元素与滚动原样，并且重画过后点行（展开 / 收起）还好使：
 FAKEPI_TICK_MS=60 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarRedraw.js
@@ -214,10 +214,10 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `askDialog.js` + `askDialogTrigger.ts` | 验真扩展问的“要你打字 / 要你点是或否 / 选一个”：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |
 | `sessionMenuClose.js` | 验顶条会话名下拉框里每行的关闭叉（确认条那颗勾 / 那颗叉 / 超时 / 真关掉 / 宽度不变）：`npm run web:shot -- --fake-pi --script dev/sessionMenuClose.js` |
 | `workspacePanel.js` | 验「项目与会话」面板（那颗 `<<<`）：正在对话一段、工作区那块的展开 / 收起（含记住）、组里的「加载更多」、行尾加号新建会话、标题右边那颗加号、子会话不显示：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/workspacePanel.js` |
-| `sidebarDock.js` | 验宽窗下常驻的侧边栏（`<<<`，窗口 ≥ 900px 才常驻）：打开 / 收起 / 记住收起 / 两根横线对齐 / 点行不关面板 / 开别的浮层时那一列原样留着 / 工作区那两块「加载更多」/ 改窄再拉宽（窄窗那一块得贴着右边、整屏高，不是居中的弹窗；居中那几块得还在正中），一次过一遍：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js` |
+| `sidebarDock.js` | 验宽窗下常驻的项目与会话侧边栏（`<<<`，窗口 ≥ 900px 才常驻）：打开 / 收起 / 记住收起 / 两根横线对齐 / 点行不关面板 / 开别的浮层时那一列原样留着 / 工作区那两块「加载更多」/ 改窄再拉宽（窄窗那一块得贴着右边、整屏高，不是居中的弹窗；居中那几块得还在正中），一次过一遍：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js` |
 | `sidebarRedraw.js` | 验对话更新时常驻那一列的重画范围（只该动「正在对话」那一格）：整块有没有重画、下半那一格的元素与滚动有没有动、重画过后点行还准不准：`FAKEPI_TICK_MS=60 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarRedraw.js` |
 | `sidebarPerf.js` | 量那颗 `<<<` 打开一次多少毫秒、滑入动画有没有被顶住（长任务 / 逐帧间隔）：`npm run web:shot -- --script dev/sidebarPerf.js` |
-| `fileSidebar.js` | 验浏览器页面左边那一列「文件侧边栏」（点消息里的文件链接之后：行号与停在那一行、标签页、跟着刷新、图片直接看、二进制与超大给下载、目录、光名字（会话碰过的文件里按名字找）、工具卡片那颗「跳转」也开在这里、看不了的几种情形、认得的几种语言带颜色（别的黑白、太大的不上色也不卡页面）、markdown 文件排好版渲染成文档（不留行号，别的文件照旧带行号）、面板角上那颗折行开关（选过记在这台设备里），以及那条只读文件地址本身的拒绝情形）：`npm run web:shot -- --fake-pi --script dev/fileSidebar.js` |
+| `fileSidebar.js` | 验浏览器页面左边那一列「文件侧边栏」（点消息里的文件链接之后：行号与停在那一行、标签页、跟着刷新、图片直接看、二进制与超大给下载、目录、光名字（会话碰过的文件里按名字找）、工具卡片那颗「跳转」也开在这里、看不了的几种情形、认得的几种语言带颜色（别的黑白、太大的不上色也不卡页面）、markdown 文件排好版渲染成文档（不留行号，别的文件照旧带行号）、这一列角上那颗折行开关（选过记在这台设备里），以及那条只读文件地址本身的拒绝情形）：`npm run web:shot -- --fake-pi --script dev/fileSidebar.js` |
 | `options.js` | 两条命令共用的命令行参数 |
 | `tabaTools.js` | 验子会话的「停掉」与「查看」两个工具（派活那条在 `tabaFlow.js`）：`FAKEPI_THINK_MS=4000 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaTools.js` |
 | `fakePi.js` | 假的 pi（`--fake-pi` 用）：协议跟真 pi 一样，模型换成按剧本演戏，界面调试秒回。说一句「问单选 / 问多选 / 问确认 / 问输入 / 问选项」就演一次问话；说一句「碰文件」就 read 几个铺好的文件（让后端那份「这个会话碰过的文件」清单里有东西）。**派子会话与问话那几个工具，它加载的是宿主写下的真扩展**（见 src/bridgeAssets.ts），所以那两段代码每跑一次 dev 脚本就真跑一遍 |

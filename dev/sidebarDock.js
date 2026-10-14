@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * 验「宽窗下常驻的侧边栏」（顶条最右边那颗 <<<）。
+ * 验「宽窗下常驻的项目与会话侧边栏」（顶条最右边那颗 <<<）。
  *
  *   npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js
  *

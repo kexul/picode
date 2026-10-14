@@ -6,21 +6,21 @@
  *
  * 真后端、真会话、真网页服务、真界面文件（只有模型是假的），验的是外面看得见的行为：
  *   1. 往页面里投带文件链接的假消息（照 dev/toolRow.js 的做法），点它，读左边那一列的 DOM：
- *      文件内容、行号、停在链接说的那一行并高亮；看过的文件在面板头上排成一排标签——
+ *      文件内容、行号、停在链接说的那一行并高亮；看过的文件在这一列头上排成一排标签——
  *      点另一个文件新开一个标签、原来那个还留着，点已经开着的文件切回那个标签并按这次
- *      链接说的行滚过去（不新开重复标签），点标签上那颗叉关掉它，全关光后面板不收起、
+ *      链接说的行滚过去（不新开重复标签），点标签上那颗叉关掉它，全关光后这一列不收起、
  *      里面留一句提示；
- *      第一个标签是「项目目录」（当前会话的目录，悬停提示与面板头给全路径，没有关闭那颗叉）：
+ *      第一个标签是「项目目录」（当前会话的目录，悬停提示与这一列的头给全路径，没有关闭那颗叉）：
  *      点文件链接开的文件排在它后面的新标签里、不顶掉它；这一列空着（刚打开、刷新页面）
  *      先看到的就是它；从它那一格里点进子目录、点开文件跟票 05 是同一套清单；
- *      目录不占标签——点目录链接、点清单里的子目录都在这一格里发生，面板头上一颗「上一层」
+ *      目录不占标签——点目录链接、点清单里的子目录都在这一格里发生，这一列头上一颗「上一层」
  *      往回退（到会话目录本身那一层就没有了），切会话 / 刷新页面时这一格回到会话目录本身；
  *      ≥1200px 常驻在左边、窄了滑入、点外面收起；手机上两块侧边栏互斥；
  *      顶条左边那颗按钮点开点收、刷新后还是刚才的样子；
  *      目录外 / 不存在 / 超过 2 MB 时页面上给一句说明；
- *      正看着的文件被改（脚本直接改会话目录里的文件，见下）以后，面板不用重新点链接就换成
+ *      正看着的文件被改（脚本直接改会话目录里的文件，见下）以后，这一列不用重新点链接就换成
  *      新内容，而读到哪儿还停在哪儿；文件没变的那几轮里，正文一个字节都不再传一遍；
- *      点图片链接直接在面板里看到那张图；点二进制文件给一句「这是个二进制文件」加一个下载；
+ *      点图片链接直接在这一列里看到那张图；点二进制文件给一句「这是个二进制文件」加一个下载；
  *      点超过 2 MB 的文件给「太大，点这里下载」，正文一个字节都不塞进页面；点那个下载
  *      浏览器真把文件存了下来；点目录链接（以斜杠结尾的写法）切到「项目目录」那一格看到里面有什么，
  *      再一层层点进去（子目录接着列、文件点开看），列出来的东西一样受「只在会话目录内」的限制
@@ -30,7 +30,7 @@
  *      超过上色那条线的大文件不上色（行号照旧），也不把页面卡住；
  *      工具卡片（write）那颗「跳转」跟正文里的文件链接去同一个地方：浏览器页面里开左边这一列
  *      （自己滑出来、停在第一行），插件里的对话面板里还是交给编辑器打开（最后那段按网页视图验）；
- *      面板角上那颗折行开关：默认一行就是一行（长行横向滚），点一下长行折起来（横向不滚），
+ *      这一列角上那颗折行开关：默认一行就是一行（长行横向滚），点一下长行折起来（横向不滚），
  *      再点一下又回去；开关管的是整块正文（换个文件也照样）；选的那个记在这台设备里，
  *      刷新页面后还是刚才那样；
  *   2. 在页面里用 fetch 直接打那条只读文件地址与目录地址，核对拒绝的几种情形（目录外含 .. 绕出去的写法、
@@ -58,7 +58,7 @@ const WRAP_LONG_CHARS = 400;
 const BIG_BYTES = 4 * 1024 * 1024;
 /** 二进制那个文件多大（点下载存下来时按它核对字节数）。 */
 const BINARY_BYTES = 4096;
-/** 示例图片的原始尺寸（makePng.js 写的）——面板里显示出来要按比例缩，但认得出是它那张。 */
+/** 示例图片的原始尺寸（makePng.js 写的）——这一列里显示出来要按比例缩，但认得出是它那张。 */
 const IMAGE_W = 1600;
 const IMAGE_H = 400;
 /**
@@ -82,7 +82,7 @@ const DIR_SUB_FILE_LINES = 7;
 /** dirB 里铺这么多文件：比后端一份清单的上限（500）多出几个，验「只列一部分」。 */
 const DIR_HUGE_FILES = 505;
 const DIR_MAX_ENTRIES = 500;
-/** live.js：面板正看着它的时候脚本改它（验“跟着刷新”那个文件）。 */
+/** live.js：这一列正看着它的时候脚本改它（验“跟着刷新”那个文件）。 */
 const LIVE_LINES = 300;
 const LIVE_HIT = 100;
 
@@ -341,7 +341,7 @@ function prepareDirs(cwd) {
     if (!fs.existsSync(link)) {
         try { fs.symlinkSync(path.resolve(__dirname, ".."), link, "junction"); } catch { /* 建不了就少验一条 */ }
     }
-    // 东西太多的目录：比一份清单的上限多几个（几百上千项全画进面板会把页面卡死）
+    // 东西太多的目录：比一份清单的上限多几个（几百上千项全画进这一列会把页面卡死）
     const huge = path.join(cwd, DIR.huge);
     fs.mkdirSync(huge, { recursive: true });
     for (let i = 0; i < DIR_HUGE_FILES; i++) {
@@ -586,7 +586,7 @@ module.exports = async (page) => {
         console.log(label + "：" + (s.length > 900 ? s.slice(0, 900) + "…（太长，后面截了）" : s));
         return r;
     };
-    /** 等面板变成想要的样子（换内容、换成一句提示都是异步来的）：cond 拿一次读数判断行不行。 */
+    /** 等这一列变成想要的样子（换内容、换成一句提示都是异步来的）：cond 拿一次读数判断行不行。 */
     const waitLook = async (what, cond, timeoutMs) => {
         const limit = timeoutMs || 8000;
         const started = Date.now();
@@ -643,7 +643,7 @@ module.exports = async (page) => {
         a.click();
         return "点了";
     `);
-    /** 点面板里那份清单里的一项（按它给的相对路径找）。 */
+    /** 点这一列里那份清单里的一项（按它给的相对路径找）。 */
     const clickEntry = (entryPath) => page.eval(`
         const r = Array.from(document.querySelectorAll("#fileBody .file-entry"))
             .find(function (x) { return x.getAttribute("data-path") === ${JSON.stringify(entryPath)}; });
@@ -657,7 +657,7 @@ module.exports = async (page) => {
     /** 两个路径是不是同一个地方（斜杠方向、末尾斜杠、大小写都归一化再比）。 */
     const samePathText = (a, b) => String(a).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()
         === String(b).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-    /** 点面板头上那颗「上一层」。 */
+    /** 点这一列头上那颗「上一层」。 */
     const clickUp = () => page.eval(`
         const b = document.getElementById("fileUp");
         if (!b) { return "没有「上一层」这颗按钮"; }
@@ -713,7 +713,7 @@ module.exports = async (page) => {
         return "点了";
     `);
 
-    /** 点面板角上那颗折行开关。 */
+    /** 点这一列角上那颗折行开关。 */
     const clickWrap = () => page.eval(`
         const b = document.getElementById("fileWrap");
         if (!b) { return "没有折行开关"; }
@@ -849,7 +849,7 @@ module.exports = async (page) => {
     check("剩下那个标签摆上来（内容换成它的）", wide9.tabActive === 1 && wide9.title === FILE.sample && wide9.rowCount === 5);
     await page.shot("file-8b-one-tab-closed.png");
 
-    // 文件标签全关掉：「项目目录」那一格还在，就摆上它（面板不收起）
+    // 文件标签全关掉：「项目目录」那一格还在，就摆上它（这一列不收起）
     console.log("点标签上的叉：" + await clickTab(FILE.sample, "close"));
     const wide10 = await waitLook("文件标签全关掉、项目目录摆上来", (x) => x.tabCount === 1 && x.entryCount > 0 && x.tabActive === 0);
     check("文件标签全关掉：面板不收起", wide10.open && wide10.dock && wide10.panelShown);
@@ -892,8 +892,8 @@ module.exports = async (page) => {
     await page.eval(POST_LINKS);
     await page.sleep(300);
 
-    // ==================== 跟着刷新：正看着的文件被改了，面板自己跟上 ====================
-    // 脚本直接改会话目录里的 live.js（谁改的都一样：模型改的、脚本改的）：面板该自己把新内容
+    // ==================== 跟着刷新：正看着的文件被改了，这一列自己跟上 ====================
+    // 脚本直接改会话目录里的 live.js（谁改的都一样：模型改的、脚本改的）：这一列该自己把新内容
     // 换上来，而读到哪儿还停在哪儿；文件没变的那几轮里，正文一个字节都不该再传一遍。
     console.log("点文件链接：" + await clickLink(FILE.live, LIVE_HIT));
     const live0 = await waitLook("live.js 上来", (x) => x.rowCount === LIVE_LINES && x.tabActive === 1);
@@ -1064,8 +1064,8 @@ module.exports = async (page) => {
     console.log("点标签上的叉：" + await clickTab(JUMP_FILE, "close"));
     await page.sleep(300);
 
-    // ==================== 图片：点链接直接在面板里看到那张图 ====================
-    // 回到宽窗（前面那段在手机上跑）：面板常驻在左边，图该按这一列的宽度等比例缩。
+    // ==================== 图片：点链接直接在这一列里看到那张图 ====================
+    // 回到宽窗（前面那段在手机上跑）：这一列常驻在左边，图该按这一列的宽度等比例缩。
     await page.cdp.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
     await page.sleep(500);
     console.log("点文件链接：" + await clickLink(FILE.image));
@@ -1143,7 +1143,7 @@ module.exports = async (page) => {
         return (async function () {
             const started = performance.now();
             const pending = fetch(url).then(function (r) { return r.arrayBuffer(); });
-            // 几 MB 还在流的时候：面板还在、界面这边照样答得上话
+            // 几 MB 还在流的时候：这一列还在、界面这边照样答得上话
             const t0 = performance.now();
             const panelThere = !!document.getElementById("fileBody");
             document.getElementById("fileTabs").getBoundingClientRect();
@@ -1161,7 +1161,7 @@ module.exports = async (page) => {
     // 消息流里以斜杠结尾的写法算目录链接（不带斜杠、又不带扩展名的写法不认：`and/or` 里的 `and/`
     // 不该变成路径）。点它：切到「项目目录」那一格、列出里面的东西；子目录接着点、文件点开看；
     // 列出来的东西一样受「只在会话目录内」的限制（指到外面的软链接列得出来，点不了）。
-    // 目录不占标签：进目录、换目录都在第一格里发生，面板头上一颗「上一层」往回退。
+    // 目录不占标签：进目录、换目录都在第一格里发生，这一列头上一颗「上一层」往回退。
     const dirLinks = JSON.parse(await page.eval(`
         const all = Array.from(document.querySelectorAll("a.file-link"));
         const dirs = all.filter(function (a) { return a.getAttribute("data-dir") === "1"; });
@@ -1181,7 +1181,7 @@ module.exports = async (page) => {
         JSON.stringify({ inCode: dirLinks.inCode, plain: dirLinks.plain }));
     check("英文里的 and/or 不认成路径", dirLinks.andPaths === 0 && dirLinks.text.indexOf("and/or") >= 0);
 
-    // 先收起面板再点目录链接：它自己该开出来（跟文件链接一样）
+    // 先收起这一列再点目录链接：它自己该开出来（跟文件链接一样）
     await page.click("#fileSidebarBtn");
     await page.sleep(300);
     const beforeDir = await look("点目录链接之前");
@@ -1226,7 +1226,7 @@ module.exports = async (page) => {
         samePathText(dir2.title, path.join(cwd, DIR.sub)), dir2.title);
     await page.shot("file-18-dir-sub.png");
 
-    // 点清单里的文件：在面板里显示它（带行号）——文件还是开一个新标签
+    // 点清单里的文件：在这一列里显示它（带行号）——文件还是开一个新标签
     console.log("点清单里的文件：" + await clickEntry(DIR.subFile));
     const dir3 = await waitLook("清单里那个文件的内容上来", (x) => x.rowCount === DIR_SUB_FILE_LINES);
     check("点清单里的文件：面板里显示它（带行号）", dir3.rowCount === DIR_SUB_FILE_LINES
@@ -1291,7 +1291,7 @@ module.exports = async (page) => {
         && dir8.tabActive === dir8.projIndex);
     await page.shot("file-20-dir-again.png");
 
-    // 东西太多的目录：只列一部分，面板里说一句（不把几百上千项全塞进页面）
+    // 东西太多的目录：只列一部分，这一列里说一句（不把几百上千项全塞进页面）
     console.log("点目录链接：" + await clickDir(DIR.huge));
     const dir9 = await waitLook("大目录的清单上来", (x) => x.entryCount > 0 && x.note.indexOf("太多") >= 0);
     check("目录里东西太多：只列前 " + DIR_MAX_ENTRIES + " 个、面板里说一句",
@@ -1335,7 +1335,7 @@ module.exports = async (page) => {
     await page.eval(`for (const m of ${JSON.stringify([{ type: "assistantFull", text: COLOR_LINK_TEXT }])}) { window.postMessage(m, "*"); } return true;`);
     await page.sleep(400);
 
-    /** 面板里现在这一段正文的逐行样子：行号、文字、每行里那几个上了色的记号、颜色。 */
+    /** 这一列里现在这一段正文的逐行样子：行号、文字、每行里那几个上了色的记号、颜色。 */
     const colorLook = async () => JSON.parse(await page.eval(`
         const body = document.getElementById("fileBody");
         const rows = Array.from(body.querySelectorAll(".file-line"));
@@ -1569,7 +1569,7 @@ module.exports = async (page) => {
         JSON.stringify({ rows: mdPlain.rowCount, nums: mdPlain.numCount, first: mdPlain.firstRow }));
     await page.shot("file-27-markdown-plain.png");
     // ==================== 折行开关：长行折起来，还是一行就是一行 ====================
-    // 面板角上那颗开关：「长行折起来」与「一行就是一行、横向滚」之间切，选的那个记在这台设备里
+    // 这一列角上那颗开关：「长行折起来」与「一行就是一行、横向滚」之间切，选的那个记在这台设备里
     //（跟「收没收起」同一个做法），刷新页面后还是刚才那样。
     console.log("点文件链接：" + await clickLink(FILE.wrap, WRAP_HIT));
     const wrap0 = await waitLook("那条超长行的文件上来",
@@ -1846,7 +1846,7 @@ module.exports = async (page) => {
     check("目录里没有、会话也没碰过：给一句「没有这个文件」",
         namedAbsent.rowCount === 0 && namedAbsent.note.indexOf("没有这个文件") >= 0, namedAbsent.note);
 
-    // 直接打那条地址，把三档的状态与正文核一遍（面板上看到的就是它）
+    // 直接打那条地址，把三档的状态与正文核一遍（这一列上看到的就是它）
     const rawName = JSON.parse(await page.eval(`
         const sid = (document.querySelector(".session-pane") || { dataset: {} }).dataset.sessionId || "";
         const get = async function (p) {

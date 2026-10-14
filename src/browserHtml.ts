@@ -16,7 +16,7 @@ import { chatUiFileOfRole, chatUiFilesOfRole } from "./chatUiFiles";
  *
  * 另外一份差别：VSCode 那份会把界面底部的按钮条藏掉（那些按钮由 VSCode 面板标题栏提供），
  * 浏览器里也没有标题栏，项目与会话收进了顶条最右边的"<<<"按钮（窗口够宽时它常驻在右边占一列，
- * 窄窗里从右侧滑入，见 browserBridge.js、chat.css 末尾那段与 chat.js 的常驻侧边栏），
+ * 窄窗里从右侧滑入，见 browserBridge.js、chat.css 末尾那段与 chat.js 的常驻的项目与会话侧边栏），
  * 底部那条在浏览器里同样整条藏掉。
  */
 

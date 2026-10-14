@@ -37,7 +37,7 @@
      左右三颗按钮竖着撑满整条（align-self: stretch），上下留白由顶条的内边距给。 */
   #sessionBar {
     display: flex; align-items: flex-start; gap: 6px; flex: 0 0 auto;
-    box-sizing: border-box;   /* 常驻侧边栏开着时它的高度会被写成一个整数（见 chat.js 的 syncDockHeaderHeight） */
+    box-sizing: border-box;   /* 常驻的项目与会话侧边栏开着时它的高度会被写成一个整数（见 chat.js 的 syncDockHeaderHeight） */
     padding: 5px 8px 4px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
   }
   /* 中间那块（名字 + 目录两行）合起来是一块可点区域：点哪一行都开同一张清单，
@@ -483,7 +483,7 @@
   #pickerOverlay.hidden, #settingsOverlay.hidden { display: none; }
   /* 面板默认摆在浮层正中：这两条挂在共用的那颗类（.pk-host）上，别挂在 #pickerOverlay 上。
      挂在 id 上比抽屉那两条（.pk-host.pk-drawer，见下面「历史会话」）硬一档，压不住——
-     窄屏点 <<< 会滑出来一块居中的弹窗，而不是贴右边那块侧边栏。
+     窄屏点 <<< 会滑出来一块居中的弹窗，而不是贴右边那一列（项目与会话侧边栏）。
      设置浮层没有 .pk-host 这颗类，它那两条照旧留在 id 上。 */
   .pk-host, #settingsOverlay { align-items: center; justify-content: center; }
   /* 统一浮层面板外观（拾取器 / 设置） */
@@ -1035,10 +1035,10 @@
     }
   }
 
-  /* ==== 宽窗下常驻的侧边栏（「项目与会话」那一列）====
+  /* ==== 宽窗下常驻的项目与会话侧边栏（那一列）====
      窗口够宽时（宽度门槛由 chat.js 判定，跟上面限宽那一列同一道 900px）「项目与会话」
      不再当浮层：它贴右边占一列，对话让出这块宽度。点顶条那颗 <<< 收起 / 展开，收没收起
-     记在这台设备里（见 chat.js 的“常驻侧边栏”那一段）。
+     记在这台设备里（见 chat.js 的“常驻的项目与会话侧边栏”那一段）。
 
      那一列有自己的容器（#sidebarDock，见 renderHtml），面板不长在浮层里：中途开一次
      选模型、逛文件夹那种浮层时它照样在原处（浮层盖在上面而已），内容不丢、宽度也不跳。
@@ -1111,27 +1111,27 @@
   body.file-open:not(.file-dock) #fileBackdrop {
     display: block; position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.45);
   }
-  /* 面板铺满这一列，只留右边那条分隔线（其余三边贴到窗口边上，不要圆角）；
-     面板头的高度跟对话那边的顶条对齐（chat.js 量出来写在这一格上）。 */
+  /* 这一列的框铺满它那块地方，只留右边那条分隔线（其余三边贴到窗口边上，不要圆角）；
+     这一列的头的高度跟对话那边的顶条对齐（chat.js 量出来写在这一格上）。 */
   #filePanel {
     box-sizing: border-box; width: 100%; height: 100%; max-height: none;
     position: relative;   /* 角上那颗折行开关（#fileWrap）按这一格摆 */
     border-top: 0; border-left: 0; border-bottom: 0; border-radius: 0; box-shadow: none;
   }
-  /* 面板头的高度是跟顶条量出来的（见 chat.js 的 syncDockHeaderHeight）：它不许被压扁
-     （正文几百行的时候，按比例缩的弹性会把面板头从量好的高度缩回一行字那么高，跟顶条对不齐）。 */
+  /* 这一列的头的高度是跟顶条量出来的（见 chat.js 的 syncDockHeaderHeight）：它不许被压扁
+     （正文几百行的时候，按比例缩的弹性会把这一列的头从量好的高度缩回一行字那么高，跟顶条对不齐）。 */
   #fileHeader { box-sizing: border-box; flex: 0 0 auto; }
-  /* 面板头上那颗「上一层」：正看着「项目目录」那一格、而且它在某一层子目录里时才出现
+  /* 这一列头上那颗「上一层」：正看着「项目目录」那一格、而且它在某一层子目录里时才出现
      （见 chat.js 的 syncFileUpButton）：点它退回上一层，到会话目录本身那一层就不出现了。
      margin-left: auto 把它和那颗「收起」的叉一起推到右边。 */
   #fileUp { margin-left: auto; }
   #fileUp.hidden { display: none; }
-  /* 面板头那行路径可能很长（子目录越深越长）：让它自己截断，
-     不许把右边那两颗按钮（上一层、收起）挤出面板外面。 */
+  /* 这一列头上那行路径可能很长（子目录越深越长）：让它自己截断，
+     不许把右边那两颗按钮（上一层、收起）挤出这一列外面。 */
   #fileTitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* 标签条：面板头下面、正文上面，看过的文件一个占一个标签（见 chat.js）。
+  /* 标签条：这一列头下面、正文上面，看过的文件一个占一个标签（见 chat.js）。
      点名字切过去、点那颗叉关掉；开着的多了往右跑，这一条自己左右滚。
-     一个标签都没有时整条不占地方（:empty 那条），面板里就只剩一句提示。 */
+     一个标签都没有时整条不占地方（:empty 那条），这一列里就只剩一句提示。 */
   #fileTabs {
     flex: 0 0 auto; min-width: 0; display: flex; align-items: stretch;
     overflow-x: auto; overflow-y: hidden;
@@ -1191,13 +1191,13 @@
   .file-entry-name {
     flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  /* 图片：按这一列的宽度等比例缩（不裁、不拉伸），图比面板高就上下滚。 */
+  /* 图片：按这一列的宽度等比例缩（不裁、不拉伸），图比这一列还高就上下滚。 */
   .file-image { display: flex; justify-content: center; padding: 8px 10px; }
   .file-image img { max-width: 100%; height: auto; display: block; }
   /* 看不了但能下载（二进制 / 太大）：那一句说明后面跟着的下载链接（整颗不拆行） */
   .file-download { color: var(--vscode-textLink-foreground, #3794ff); text-decoration: none; white-space: nowrap; }
   .file-download:hover { text-decoration: underline; }
-  /* 折行开关：摆在面板自己的角上（右下方贴角），不挤标签条也不挤面板头。
+  /* 折行开关：摆在 #filePanel 自己的角上（右下方贴角），不挤标签条也不挤这一列的头。
      默认（没记过）是一行就是一行，这时它是淡的；折行打开时加 .on，带一道强调色的边。 */
   #fileWrap {
     position: absolute; right: 8px; bottom: 8px; z-index: 1;
