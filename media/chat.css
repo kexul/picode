@@ -1164,6 +1164,15 @@
     box-shadow: inset 2px 0 0 0 var(--vscode-focusBorder, #007acc);
   }
   .file-note { padding: 12px 14px; line-height: 1.6; opacity: 0.75; }
+  /* 目录清单：一项一行（名字前一颗图标），点子目录往下走、点文件打开它（见 chat.js）。 */
+  .file-entry { display: flex; align-items: center; gap: 6px; padding: 3px 12px; cursor: pointer; line-height: 1.5; }
+  .file-entry:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
+  .file-entry-icon { flex: 0 0 auto; display: flex; opacity: 0.7; }
+  .file-entry-icon svg { width: 15px; height: 15px; display: block; }
+  .file-entry.dir .file-entry-icon { opacity: 0.9; }
+  .file-entry-name {
+    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   /* 图片：按这一列的宽度等比例缩（不裁、不拉伸），图比面板高就上下滚。 */
   .file-image { display: flex; justify-content: center; padding: 8px 10px; }
   .file-image img { max-width: 100%; height: auto; display: block; }

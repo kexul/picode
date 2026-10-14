@@ -17,10 +17,11 @@
  *      新内容，而读到哪儿还停在哪儿；文件没变的那几轮里，正文一个字节都不再传一遍；
  *      点图片链接直接在面板里看到那张图；点二进制文件给一句「这是个二进制文件」加一个下载；
  *      点超过 2 MB 的文件给「太大，点这里下载」，正文一个字节都不塞进页面；点那个下载
- *      浏览器真把文件存了下来；
- *   2. 在页面里用 fetch 直接打那条只读文件地址，核对拒绝的几种情形（目录外含 .. 绕出去的写法、
- *      没有这个文件、超过 2 MB）、图片与二进制各自给什么、以及「没变就别再给一遍正文」那条
- *      条件请求；下载那条路不受 2 MB 这条线管（几 MB 的文件整份下来）。
+ *      浏览器真把文件存了下来；点目录链接（以斜杠结尾的写法）先看到里面有什么，再一层层点进去：
+ *      子目录接着列、文件点开看，列出来的东西一样受「只在会话目录内」的限制（指到目录外的条目点不了）；
+ *   2. 在页面里用 fetch 直接打那条只读文件地址与目录地址，核对拒绝的几种情形（目录外含 .. 绕出去的写法、
+ *      没有这个文件 / 目录、超过 2 MB）、图片与二进制各自给什么、目录清单的形状、以及「没变就别再给
+ *      一遍正文」那条条件请求；下载那条路不受 2 MB 这条线管（几 MB 的文件整份下来）。
  * 最后一件事：把页面按“插件里的对话面板”跑一遍（在页面脚本里先塞一个网页视图接口），
  * 核对那边既没有这一列也没有这颗按钮、点链接照旧是交给编辑器打开那条消息。
  *
@@ -42,6 +43,27 @@ const BINARY_BYTES = 4096;
 /** 示例图片的原始尺寸（makePng.js 写的）——面板里显示出来要按比例缩，但认得出是它那张。 */
 const IMAGE_W = 1600;
 const IMAGE_H = 400;
+/**
+ * 目录那一摊要验的东西：dirA 下面有子目录（sub）、空目录（empty）、指到会话目录外面的软链接（out）、
+ * 两个文件；清单里子目录在前、文件在后，各自按名字排。
+ */
+const DIR = {
+    top: "dirA",
+    sub: "dirA/sub",
+    empty: "dirA/empty",
+    topFile: "dirA/one.js",
+    topText: "dirA/two.txt",
+    subFile: "dirA/sub/three.js",
+    outLink: "dirA/out",
+    huge: "dirB",
+};
+/** dirA 那层清单该有的顺序（子目录在前、文件在后）。 */
+const DIR_TOP_NAMES = ["empty", "out", "sub", "one.js", "two.txt"];
+const DIR_ONE_LINES = 5;
+const DIR_SUB_FILE_LINES = 7;
+/** dirB 里铺这么多文件：比后端一份清单的上限（500）多出几个，验「只列一部分」。 */
+const DIR_HUGE_FILES = 505;
+const DIR_MAX_ENTRIES = 500;
 /** live.js：面板正看着它的时候脚本改它（验“跟着刷新”那个文件）。 */
 const LIVE_LINES = 300;
 const LIVE_HIT = 100;
@@ -63,7 +85,10 @@ const LINK_TEXT =
     "`" + FILE.long + ":" + HIT_LINE_AGAIN + "` 这个文件再说一次，\n" +
     "`" + FILE.live + ":" + LIVE_HIT + "` 这个是拿着看的，\n" +
     "`" + FILE.image + ":1` 这个是张图、`" + FILE.binary + ":1` 这个是二进制的，\n" +
-    "再试试 `" + FILE.missing + ":1`、`" + FILE.outside + ":1`、`" + FILE.big + ":1`、`" + FILE.bigBinary + ":1`。\n";
+    "再试试 `" + FILE.missing + ":1`、`" + FILE.outside + ":1`、`" + FILE.big + ":1`、`" + FILE.bigBinary + ":1`。\n" +
+    "\n还有目录：`" + DIR.top + "/` 这里面有什么、`" + DIR.sub + "/` 是它下面的子目录，\n" +
+    "`" + DIR.empty + "/` 是个空目录、`outside/` 这个目录在会话目录外、`" + DIR.huge + "/` 这个目录里东西很多。\n" +
+    "普通文字里的 " + DIR.top + "/ 也该能点；英文里的 and/or 不该当成路径。\n";
 
 /** live.js 每次都整份重写：marker 为真就把第 LIVE_HIT 行换个说法（行数不变），extra 是末尾多加几行。 */
 function writeLive(cwd, marker, extra) {
@@ -72,6 +97,33 @@ function writeLive(cwd, marker, extra) {
         lines.push(i === LIVE_HIT && marker ? "// live 第 " + i + " 行（改过了）" : "// live 第 " + i + " 行");
     }
     fs.writeFileSync(path.join(cwd, FILE.live), lines.join("\n") + "\n", "utf8");
+}
+
+/**
+ * 往会话目录里铺目录那一摊（每次跑都重写一遍）：一个两层的小树、一个空目录、
+ * 以及一颗指到会话目录外面的软链接（它会被列进清单里，但点不了）。
+ */
+function prepareDirs(cwd) {
+    fs.mkdirSync(path.join(cwd, DIR.sub), { recursive: true });
+    fs.mkdirSync(path.join(cwd, DIR.empty), { recursive: true });
+    const one = [];
+    for (let i = 1; i <= DIR_ONE_LINES; i++) { one.push("// one 第 " + i + " 行"); }
+    fs.writeFileSync(path.join(cwd, DIR.topFile), one.join("\n") + "\n", "utf8");
+    fs.writeFileSync(path.join(cwd, DIR.topText), "// two 1\n// two 2\n// two 3 这一行\n", "utf8");
+    const three = [];
+    for (let i = 1; i <= DIR_SUB_FILE_LINES; i++) { three.push("// three 第 " + i + " 行"); }
+    fs.writeFileSync(path.join(cwd, DIR.subFile), three.join("\n") + "\n", "utf8");
+    const link = path.join(cwd, DIR.outLink);
+    if (!fs.existsSync(link)) {
+        try { fs.symlinkSync(path.resolve(__dirname, ".."), link, "junction"); } catch { /* 建不了就少验一条 */ }
+    }
+    // 东西太多的目录：比一份清单的上限多几个（几百上千项全画进面板会把页面卡死）
+    const huge = path.join(cwd, DIR.huge);
+    fs.mkdirSync(huge, { recursive: true });
+    for (let i = 0; i < DIR_HUGE_FILES; i++) {
+        const name = "f" + String(i).padStart(3, "0") + ".txt";
+        if (!fs.existsSync(path.join(huge, name))) { fs.writeFileSync(path.join(huge, name), "// " + name + "\n", "utf8"); }
+    }
 }
 
 /** 往会话目录里造测试用的文件（每次跑都重写一遍，内容与行数固定）。 */
@@ -90,6 +142,7 @@ function prepareFiles(cwd) {
     for (let i = 0; i < binary.length; i++) { binary[i] = (i * 37 + 200) % 256; }
     binary[0] = 0;   // 开头就是 0 字节：文本那套肯定读不了
     fs.writeFileSync(path.join(cwd, FILE.binary), binary);
+    prepareDirs(cwd);
     const outside = path.join(cwd, "outside");
     if (fs.existsSync(outside)) { return "已经有了"; }
     // 目录外那份用一个目录软链接（Windows 上 junction 不需要管理员权限）指到仓库根上：
@@ -169,6 +222,7 @@ module.exports = async (page) => {
             const imgRect = img ? img.getBoundingClientRect() : null;
             const bar = document.getElementById("fileTabs");
             const tabs = bar ? Array.from(bar.querySelectorAll(".file-tab")) : [];
+            const entries = body ? Array.from(body.querySelectorAll(".file-entry")) : [];
             return {
                 vw: window.innerWidth,
                 hasPanel: !!root,
@@ -205,6 +259,10 @@ module.exports = async (page) => {
                 tabPaths: tabs.map(function (t) { return t.getAttribute("data-path") || ""; }),
                 tabActive: tabs.findIndex(function (t) { return t.classList.contains("active"); }),
                 tabCloseCount: tabs.filter(function (t) { return !!t.querySelector(".file-tab-close"); }).length,
+                entryCount: entries.length,
+                entryNames: entries.map(function (e) { return (e.querySelector(".file-entry-name") || {}).textContent || ""; }),
+                entryDirs: entries.map(function (e) { return e.classList.contains("dir"); }),
+                entryPaths: entries.map(function (e) { return e.getAttribute("data-path") || ""; }),
                 backdropShown: !!backdrop && getComputedStyle(backdrop).display !== "none",
                 bodyTop: body ? Math.round(body.scrollTop) : -1,
                 bodyMax: body ? Math.round(body.scrollHeight - body.clientHeight) : -1,
@@ -267,6 +325,26 @@ module.exports = async (page) => {
         });
         if (!a) { return "没有这个链接"; }
         a.click();
+        return "点了";
+    `);
+    /** 点消息流里某个目录的链接（以斜杠结尾的那种）。传的路径不带末尾的斜杠。 */
+    const clickDir = (dir) => page.eval(`
+        const want = ${JSON.stringify(dir)};
+        const a = Array.from(document.querySelectorAll("a.file-link")).find(function (x) {
+            if (x.getAttribute("data-dir") !== "1") { return false; }
+            const p = x.getAttribute("data-file") || "";
+            return p === want || p === want + "/";
+        });
+        if (!a) { return "没有这个目录链接"; }
+        a.click();
+        return "点了";
+    `);
+    /** 点面板里那份清单里的一项（按它给的相对路径找）。 */
+    const clickEntry = (entryPath) => page.eval(`
+        const r = Array.from(document.querySelectorAll("#fileBody .file-entry"))
+            .find(function (x) { return x.getAttribute("data-path") === ${JSON.stringify(entryPath)}; });
+        if (!r) { return "清单里没有这一项"; }
+        r.click();
         return "点了";
     `);
     /** 点某一个标签（按标签说的文件找）、或者点它那颗叉。 */
@@ -639,6 +717,112 @@ module.exports = async (page) => {
     check("下载在跑的时候界面还答得上话（没被正文堵住）",
         bigFetch.panelThere && bigFetch.uiMs < 500, "界面回话用了 " + bigFetch.uiMs + "ms");
 
+    // ==================== 目录：先看里面有什么，再一层层点进去 ====================
+    // 消息流里以斜杠结尾的写法算目录链接（不带斜杠、又不带扩展名的写法不认：`and/or` 里的 `and/`
+    // 不该变成路径）。点它：面板里列出里面的东西；子目录接着点、文件点开看；列出来的东西一样受
+    // 「只在会话目录内」的限制（指到外面的软链接列得出来，点不了）。
+    const dirLinks = JSON.parse(await page.eval(`
+        const all = Array.from(document.querySelectorAll("a.file-link"));
+        const dirs = all.filter(function (a) { return a.getAttribute("data-dir") === "1"; });
+        return JSON.stringify({
+            dirPaths: dirs.map(function (a) { return a.getAttribute("data-file") || ""; }),
+            inCode: dirs.filter(function (a) { return !!a.closest("code"); }).length,
+            plain: dirs.filter(function (a) { return !a.closest("code"); }).length,
+            andPaths: all.filter(function (a) { return (a.getAttribute("data-file") || "").indexOf("and/") === 0; }).length,
+            text: (document.getElementById("messages") || {}).textContent || "",
+        });
+    `));
+    check("消息流里以斜杠结尾的写法算目录链接",
+        dirLinks.dirPaths.indexOf(DIR.top + "/") >= 0 && dirLinks.dirPaths.indexOf(DIR.sub + "/") >= 0
+        && dirLinks.dirPaths.indexOf(DIR.empty + "/") >= 0 && dirLinks.dirPaths.indexOf("outside/") >= 0,
+        JSON.stringify(dirLinks.dirPaths));
+    check("目录链接两种写法都认（行内代码里的与普通文字里的）", dirLinks.inCode >= 4 && dirLinks.plain >= 1,
+        JSON.stringify({ inCode: dirLinks.inCode, plain: dirLinks.plain }));
+    check("英文里的 and/or 不认成路径", dirLinks.andPaths === 0 && dirLinks.text.indexOf("and/or") >= 0);
+
+    // 先收起面板再点目录链接：它自己该开出来（跟文件链接一样）
+    await page.click("#fileSidebarBtn");
+    await page.sleep(300);
+    console.log("点目录链接：" + await clickDir(DIR.top));
+    const dir1 = await waitLook("目录清单上来", (x) => x.entryCount === DIR_TOP_NAMES.length);
+    check("点目录链接：面板自己开出来（不用先点按钮）", dir1.open && dir1.dock && dir1.panelLeft === 0);
+    check("面板里列的是里面的东西（不是文件正文）",
+        dir1.entryCount === DIR_TOP_NAMES.length && dir1.rowCount === 0 && dir1.note === "");
+    check("子目录在前、文件在后，各按名字排",
+        JSON.stringify(dir1.entryNames.map(function (n) { return n.replace(/\/$/, ""); })) === JSON.stringify(DIR_TOP_NAMES),
+        JSON.stringify(dir1.entryNames));
+    check("目录名带一个斜杠、文件名不带（一眼看出哪些是目录）",
+        dir1.entryNames.every(function (n, i) { return (n.slice(-1) === "/") === dir1.entryDirs[i]; }),
+        JSON.stringify(dir1.entryNames));
+    check("每一项说得出是不是目录", JSON.stringify(dir1.entryDirs) === JSON.stringify([true, true, true, false, false]),
+        JSON.stringify(dir1.entryDirs));
+    check("清单里的路径都是相对会话目录的写法",
+        dir1.entryPaths.every(function (p) { return p.indexOf(DIR.top + "/") === 0; }), JSON.stringify(dir1.entryPaths));
+    check("目录占一个标签、标签与面板头写着它", dir1.tabActive === dir1.tabCount - 1
+        && dir1.tabPaths[dir1.tabActive] === DIR.top && dir1.tabNames[dir1.tabActive] === DIR.top + "/"
+        && dir1.title === DIR.top + "/",
+        JSON.stringify({ paths: dir1.tabPaths, names: dir1.tabNames, title: dir1.title }));
+    await page.shot("file-17-dir.png");
+
+    // 点子目录：接着列下一层，上一层那个标签还留着
+    console.log("点清单里的子目录：" + await clickEntry(DIR.sub));
+    const dir2 = await waitLook("子目录的清单上来", (x) => x.entryCount === 1);
+    check("点子目录接着列（一层层往下走）", dir2.entryCount === 1 && dir2.entryNames[0] === "three.js"
+        && dir2.entryDirs[0] === false, JSON.stringify({ names: dir2.entryNames, dirs: dir2.entryDirs }));
+    check("子目录占一个新标签，上一层那个还留着", dir2.tabCount === dir1.tabCount + 1
+        && dir2.tabPaths[dir2.tabActive] === DIR.sub && dir2.tabNames[dir2.tabActive] === "sub/",
+        JSON.stringify(dir2.tabPaths));
+    await page.shot("file-18-dir-sub.png");
+
+    // 点清单里的文件：在面板里显示它（带行号）
+    console.log("点清单里的文件：" + await clickEntry(DIR.subFile));
+    const dir3 = await waitLook("清单里那个文件的内容上来", (x) => x.rowCount === DIR_SUB_FILE_LINES);
+    check("点清单里的文件：面板里显示它（带行号）", dir3.rowCount === DIR_SUB_FILE_LINES
+        && dir3.firstRow.indexOf("three 第 1 行") >= 0 && dir3.entryCount === 0);
+    check("清单里的文件也占一个新标签", dir3.tabCount === dir2.tabCount + 1
+        && dir3.tabPaths[dir3.tabActive] === DIR.subFile && dir3.title === DIR.subFile);
+    await page.shot("file-19-dir-file.png");
+
+    // 清单里那颗指到会话目录外面的软链接：列得出来，点不了
+    //（先点回 dirA 那个标签，把清单摆上来）
+    console.log("点标签：" + await clickTab(DIR.top, "tab"));
+    const dir3b = await waitLook("回目录清单", (x) => x.entryCount === DIR_TOP_NAMES.length);
+    console.log("点清单里的目录外链接：" + await clickEntry(DIR.outLink));
+    const dir4 = await waitLook("目录外那句说明上来", (x) => x.note.indexOf("会话目录外") >= 0);
+    check("清单里指到目录外的东西：点不了、给一句说明", dir3b.entryPaths.indexOf(DIR.outLink) >= 0
+        && dir4.entryCount === 0 && dir4.rowCount === 0 && dir4.note.indexOf("会话目录外") >= 0, dir4.note);
+
+    // 空目录与目录外的目录（都从消息流里的链接点进去）
+    console.log("点目录链接：" + await clickDir(DIR.empty));
+    const dir5 = await waitLook("空目录那句提示上来", (x) => x.note.indexOf("目录是空的") >= 0);
+    check("空目录：给一句「这个目录是空的」", dir5.entryCount === 0
+        && dir5.note.indexOf("目录是空的") >= 0, dir5.note);
+    console.log("点目录链接：" + await clickDir("outside"));
+    const dir6 = await waitLook("目录外那句说明上来", (x) => x.note.indexOf("会话目录外") >= 0);
+    check("会话目录外的目录：给一句说明、不给清单", dir6.entryCount === 0 && dir6.rowCount === 0
+        && dir6.note.indexOf("会话目录外") >= 0, dir6.note);
+
+    // 同一张清单盯着看两轮：目录不该被「跟着刷新」那一套当成文件去问
+    console.log("点目录链接：" + await clickDir(DIR.top));
+    const dir7 = await waitLook("目录清单再上来", (x) => x.entryCount === DIR_TOP_NAMES.length);
+    await page.sleep(3400);
+    const dir8 = await look("盯着目录清单等两轮");
+    check("目录那一格不会被「跟着刷新」那一套换掉（还是那张清单）", dir8.entryCount === DIR_TOP_NAMES.length
+        && dir8.note === ""
+        && JSON.stringify(dir8.entryNames.map(function (n) { return n.replace(/\/$/, ""); })) === JSON.stringify(DIR_TOP_NAMES),
+        JSON.stringify(dir8.entryNames));
+    check("再点同一个目录：切回原来那个标签（不重复开）",
+        dir8.tabPaths.filter(function (p) { return p === DIR.top; }).length === 1 && dir7.tabActive === dir8.tabActive);
+    await page.shot("file-20-dir-again.png");
+
+    // 东西太多的目录：只列一部分，面板里说一句（不把几百上千项全塞进页面）
+    console.log("点目录链接：" + await clickDir(DIR.huge));
+    const dir9 = await waitLook("大目录的清单上来", (x) => x.entryCount > 0 && x.note.indexOf("太多") >= 0);
+    check("目录里东西太多：只列前 " + DIR_MAX_ENTRIES + " 个、面板里说一句",
+        dir9.entryCount === DIR_MAX_ENTRIES && dir9.note.indexOf("太多") >= 0,
+        JSON.stringify({ count: dir9.entryCount, note: dir9.note }));
+    await page.shot("file-21-dir-huge.png");
+
     // ==================== 直接打那条文件地址（拒绝的几种情形 + 条件请求）====================
     const raw = await page.eval(`
         const sid = (document.querySelector(".session-pane") || { dataset: {} }).dataset.sessionId || "";
@@ -718,6 +902,68 @@ module.exports = async (page) => {
     check("修改时间对不上：给正文",
         f.stale.status === 200 && f.stale.text.split("\n").length === LONG_LINES);
 
+    // ==================== 直接打那条目录地址 ====================
+    const rawDir = JSON.parse(await page.eval(`
+        const sid = (document.querySelector(".session-pane") || { dataset: {} }).dataset.sessionId || "";
+        const get = async function (p, session) {
+            const s = session === undefined ? sid : session;
+            const resp = await fetch("/dir?session=" + encodeURIComponent(s) + "&path=" + encodeURIComponent(p));
+            const text = await resp.text();
+            let body = null;
+            try { body = JSON.parse(text); } catch (e) { body = null; }
+            return { status: resp.status, type: resp.headers.get("content-type") || "", text: text.trim(), body: body };
+        };
+        return (async function () {
+            const out = {};
+            out.top = await get(${JSON.stringify(DIR.top)});
+            out.sub = await get(${JSON.stringify(DIR.sub)});
+            out.empty = await get(${JSON.stringify(DIR.empty)});
+            out.huge = await get(${JSON.stringify(DIR.huge)});
+            out.file = await get(${JSON.stringify(FILE.sample)});
+            out.missing = await get("没有这个目录");
+            out.dotdot = await get("../../");
+            out.absolute = await get(${JSON.stringify(path.resolve(cwd, "..", ".."))});
+            out.outside = await get("outside");
+            out.outLink = await get(${JSON.stringify(DIR.outLink)});
+            out.noSession = await get(${JSON.stringify(DIR.top)}, "不存在的会话");
+            return JSON.stringify(out);
+        })();
+    `));
+    const entriesOf = (r) => (r.body && Array.isArray(r.body.entries) ? r.body.entries : []);
+    const names = (r) => entriesOf(r).map((e) => e.name);
+    console.log("直接打那条目录地址：" + JSON.stringify({
+        top: rawDir.top.status, sub: rawDir.sub.status, empty: rawDir.empty.status, file: rawDir.file.status,
+        missing: rawDir.missing.status, dotdot: rawDir.dotdot.status, absolute: rawDir.absolute.status,
+        outside: rawDir.outside.status, outLink: rawDir.outLink.status, noSession: rawDir.noSession.status,
+    }));
+    check("目录地址给的是一份清单（JSON，列出了里面的东西）",
+        rawDir.top.status === 200 && rawDir.top.type.indexOf("application/json") === 0
+        && JSON.stringify(names(rawDir.top)) === JSON.stringify(DIR_TOP_NAMES),
+        JSON.stringify({ status: rawDir.top.status, type: rawDir.top.type, names: names(rawDir.top) }));
+    check("清单里每项说得出名字、相对写法、是不是目录",
+        names(rawDir.top).length === DIR_TOP_NAMES.length && entriesOf(rawDir.top).every((e) =>
+            typeof e.name === "string" && typeof e.path === "string"
+            && e.path.indexOf(DIR.top + "/") === 0 && typeof e.dir === "boolean")
+        && entriesOf(rawDir.top)[0].dir === true && entriesOf(rawDir.top)[4].dir === false,
+        JSON.stringify(entriesOf(rawDir.top).map((e) => [e.path, e.dir])));
+    check("清单里那颗指到目录外的软链接照样列出来（点它才挡）",
+        entriesOf(rawDir.top).some((e) => e.name === "out" && e.dir === true));
+    check("子目录列得出下一层", rawDir.sub.status === 200 && entriesOf(rawDir.sub).length === 1
+        && entriesOf(rawDir.sub)[0].name === "three.js" && entriesOf(rawDir.sub)[0].path === DIR.subFile);
+    check("空目录：列出来是空的", rawDir.empty.status === 200 && entriesOf(rawDir.empty).length === 0);
+    check("目录里东西太多：只列前 " + DIR_MAX_ENTRIES + " 个、说一声截断了",
+        rawDir.huge.status === 200 && entriesOf(rawDir.huge).length === DIR_MAX_ENTRIES
+        && rawDir.huge.body.truncated === true && names(rawDir.huge)[0] === "f000.txt"
+        && names(rawDir.huge)[DIR_MAX_ENTRIES - 1] === "f499.txt",
+        JSON.stringify({ count: entriesOf(rawDir.huge).length, truncated: rawDir.huge.body && rawDir.huge.body.truncated }));
+    check("拿文件当目录列：404", rawDir.file.status === 404, String(rawDir.file.status));
+    check("目录不存在：404", rawDir.missing.status === 404);
+    check("用 .. 绕出去的写法：403", rawDir.dotdot.status === 403 && rawDir.dotdot.text.indexOf("会话目录外") >= 0);
+    check("写成绝对路径且在外面：403", rawDir.absolute.status === 403);
+    check("软链接指到目录外：403", rawDir.outside.status === 403 && rawDir.outLink.status === 403,
+        JSON.stringify({ outside: rawDir.outside.status, outLink: rawDir.outLink.status }));
+    check("不认识的会话：不给清单", rawDir.noSession.status !== 200, String(rawDir.noSession.status));
+
     // ==================== 切会话：面板里的标签清空 ====================
     // 往页面里投一份假会话列表、把当前会话切到另一个上去（照 dev/childDot.js 的做法：消息形状
     // 与后端推的那份一样）。这一趟之后页面看的是个假会话，所以放在最后、下面那条真会话的检查之前。
@@ -776,6 +1022,16 @@ module.exports = async (page) => {
     check("插件里的对话面板里没有这一列", !view0.hasPanel);
     check("插件里的对话面板里没有这颗按钮", !view0.hasButton);
     await page.eval(`window.postMessage({ type: "assistantFull", text: ${JSON.stringify(LINK_TEXT)}, sessionId: ${JSON.stringify(sessionInfo.sessionId)} }, "*"); return true;`);
+    await page.sleep(400);
+    const viewDir = JSON.parse(await page.eval(`
+        return JSON.stringify({
+            dirLinks: document.querySelectorAll("a.file-link[data-dir]").length,
+            text: (document.getElementById("messages") || {}).textContent || "",
+        });
+    `));
+    check("插件里的对话面板里目录写法还是普通文字（不变成链接、也就不会给编辑器发一条开目录的消息）",
+        viewDir.dirLinks === 0 && viewDir.text.indexOf(DIR.top + "/") >= 0 && viewDir.text.indexOf(DIR.sub + "/") >= 0,
+        "目录链接 " + viewDir.dirLinks + " 个");
     await page.sleep(400);
     const panelLink = await page.eval(`return document.querySelectorAll("a.file-link").length`);
     await clickLink(FILE.long);

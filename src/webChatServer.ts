@@ -19,7 +19,7 @@ import {
     localHostnames,
     type PageChannel,
 } from "./webTransport";
-import { insideFolder } from "./pathRules";
+import { insideFolder, relativeTo } from "./pathRules";
 
 /**
  * PiChatWebServer —— 独立后端的网页服务：一个地址，手机和电脑都看这一份会话。
@@ -27,7 +27,7 @@ import { insideFolder } from "./pathRules";
  * 两条线：
  *   - **页面线**（浏览器 / 手机，以及 VS Code 里的那块网页视图）：对话页面（`/`）、
  *     界面资源（`/media/…`）、后端推给页面的消息流（`/events`）、页面发给后端的消息（`/api`）、
- *     页面要看的文件（`/file`，只读、只看得到当前会话目录里的）。
+ *     页面要看的文件与目录（`/file`、`/dir`，只读、只看得到当前会话目录里的）。
  *     VS Code 里的网页视图走同样的 `/events` + `/api`（只是中间隔着插件进程转发），
  *     界面代码完全一样；
  *   - **屏线**（VS Code 窗口，`/screen` + `/screenapi`）：窗口在后端登记自己是打开着哪些
@@ -111,6 +111,23 @@ function fileFormatOf(filePath: string): "text" | "image" | "binary" {
     const ext = extensionOf(filePath);
     if (IMAGE_CONTENT_TYPES.has(ext)) { return "image"; }
     return TEXT_FILE_EXTENSIONS.has(ext) ? "text" : "binary";
+}
+
+/** 目录清单里的一项（`/dir` 的回应）。 */
+interface DirEntryInfo {
+    /** 条目名（最后一段） */
+    name: string;
+    /** 相对会话目录的写法（页面拿它当标签的键，也原样贴回下一次请求） */
+    path: string;
+    /** 是不是目录（软链接跟着指向判：指到目录的算目录） */
+    dir: boolean;
+}
+
+interface DirListing {
+    /** 子目录在前、文件在后，各自按名字排（大小写不敏感） */
+    entries: DirEntryInfo[];
+    /** 条目太多，只列了前 MAX_DIR_ENTRIES 个 */
+    truncated?: boolean;
 }
 
 /**
@@ -402,6 +419,11 @@ export class PiChatWebServer {
                     url.searchParams.get("mtime") ?? "", url.searchParams.get("download") === "1");
                 return;
             }
+            if (pathname === "/dir") {
+                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                this.sendDir(req, res, url.searchParams.get("session") ?? "", url.searchParams.get("path") ?? "");
+                return;
+            }
             if (pathname === "/events") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
                 this.openChannel(req, res, url.searchParams.get("pageId") ?? "");
@@ -493,13 +515,47 @@ export class PiChatWebServer {
     /** 页面能直接看的文件大小上限：再大的不读出来（页面给一句「太大」；要下载那是另一条路）。 */
     private static readonly MAX_FILE_BYTES = 2 * 1024 * 1024;
 
+    /** 一份目录清单最多列这么多项：目录里有几万个东西时全塞给页面会卡死，人也翻不到后面去。 */
+    private static readonly MAX_DIR_ENTRIES = 500;
+
+    /**
+     * 把「哪个会话 + 哪个路径」解成一个真实路径，并保证它落在会话目录以内。
+     *
+     * 相对路径按那个会话的目录解；`..` 绕出去的、软链接指到外面的都在这里挡掉：判的是真实路径
+     * （fs.realpath，软链接一起解析掉），不是字符串前缀。这是有意的边界：能打开这个页面的人本来
+     * 就能让 pi 读写这台机器，但「按路径直接取文件」这条路不该跟着变成整台机器的读接口
+     * （为什么见 docs/adr/0001-浏览器页面自己读文件.md）。文件与目录两条地址共用这一套。
+     *
+     * 看不了时返回状态码与一句人话，调用方直接照它回；kind 只把话里的「文件 / 目录」说对。
+     */
+    private resolveSessionPath(sessionId: string, wantPath: string, kind: "文件" | "目录"):
+        { ok: true; real: string; realCwd: string } | { ok: false; status: number; text: string } {
+        if (!sessionId || !wantPath || wantPath.includes("\0")) {
+            return { ok: false, status: 400, text: `请求里要说明是哪个会话、哪个${kind}。` };
+        }
+        const cwd = this.host.resolveSessionDir(sessionId);
+        if (!cwd) {
+            return { ok: false, status: 404, text: "这个会话不在了（页面可能开得太久），刷新页面再试。" };
+        }
+        // 相对路径按会话目录解；写成绝对路径也先解出来，再按下面那道边界判
+        const target = path.resolve(cwd, wantPath);
+        // 目录边界拿真实路径判：`..` 与软链接走的都是这一条
+        const realCwd = realPathOr(cwd);
+        const realTarget = realPathOr(target);
+        if (!realCwd || !realTarget) {
+            return { ok: false, status: 404, text: `没有这个${kind}。` };
+        }
+        if (!insideFolder(realTarget, realCwd)) {
+            return { ok: false, status: 403, text: `这个${kind}在会话目录外，看不了。` };
+        }
+        return { ok: true, real: realTarget, realCwd };
+    }
+
     /**
      * 发一个文件给页面（`/file?session=…&path=…&mtime=…&download=1`）。
      *
-     * 只读，而且只看得到当前会话目录里的文件：相对路径按那个会话的目录解，解出来的真实路径
-     * （软链接一起解析掉）必须落在目录以内；`..` 绕出去的、软链接指到外面的都不给。这是有意的
-     * 边界：能打开这个页面的人本来就能让 pi 读写这台机器，但「按路径直接取文件」这条路不该跟着
-     * 变成整台机器的读接口（为什么见 docs/adr/0001-浏览器页面自己读文件.md）。
+     * 只读，而且只看得到当前会话目录里的文件：目录边界与那条目录地址同一套
+     * （见 resolveSessionPath：`..` 绕出去的、软链接指到外面的都不给）。
      *
      * 怎么给，看文件是哪种（按扩展名，见 fileFormatOf）：
      *   - 看（用来显示）超过 2 MB 的一律 413，正文里带着字节数，页面据此说「太大」；
@@ -518,28 +574,9 @@ export class PiChatWebServer {
      */
     private sendFile(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string, wantPath: string,
         sinceMtime = "", download = false): void {
-        if (!sessionId || !wantPath || wantPath.includes("\0")) {
-            this.sendText(req, res, 400, "请求里要说明是哪个会话、哪个文件。");
-            return;
-        }
-        const cwd = this.host.resolveSessionDir(sessionId);
-        if (!cwd) {
-            this.sendText(req, res, 404, "这个会话不在了（页面可能开得太久），刷新页面再试。");
-            return;
-        }
-        // 相对路径按会话目录解；写成绝对路径也先解出来，再按下面那道边界判
-        const target = path.resolve(cwd, wantPath);
-        // 目录边界拿真实路径判：`..` 与软链接走的都是这一条
-        const realCwd = realPathOr(cwd);
-        const realTarget = realPathOr(target);
-        if (!realCwd || !realTarget) {
-            this.sendText(req, res, 404, "没有这个文件。");
-            return;
-        }
-        if (!insideFolder(realTarget, realCwd)) {
-            this.sendText(req, res, 403, "这个文件在会话目录外，看不了。");
-            return;
-        }
+        const found = this.resolveSessionPath(sessionId, wantPath, "文件");
+        if (!found.ok) { this.sendText(req, res, found.status, found.text); return; }
+        const realTarget = found.real;
         let stat: fs.Stats;
         try {
             stat = fs.statSync(realTarget);
@@ -597,6 +634,55 @@ export class PiChatWebServer {
                 "X-File-Mtime": mtime,
             });
         });
+    }
+
+    /**
+     * 列一个目录给页面（`/dir?session=…&path=…`）：点消息流里的目录链接、以及面板里再点进去的
+     * 子目录都走它。目录边界与 `/file` 同一套（见 resolveSessionPath）。
+     *
+     * 回一份 JSON：`{ entries: [{ name, path, dir }], truncated? }`。
+     *   - `path` 是相对会话目录的写法（页面拿它当标签的键，也原样贴回下一次请求），不写绝对路径；
+     *   - 顺序：子目录在前、文件在后，各自按名字排（大小写不敏感）；
+     *   - 软链接不跟着解析：指到会话目录外面的条目照样列出来（名字是里面这一层的事实），
+     *     点它的那一下由 resolveSessionPath 挡回去（403）——「列出来的东西一样受目录边界限制」。
+     *
+     * 为什么另开一条地址、而不是让 `/file` 认目录：清单是另一种东西（一份列表，不是文件内容），
+     * 它没有大小上限、没有修改时间、也没有下载与二进制那几档；两条地址各管一件事，各自的规矩
+     * 都短。`/file` 那边「这是个目录」的 404 留着兜底（手敲地址时会碰到）。
+     */
+    private sendDir(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string, wantPath: string): void {
+        const found = this.resolveSessionPath(sessionId, wantPath, "目录");
+        if (!found.ok) { this.sendText(req, res, found.status, found.text); return; }
+        void this.listDirAsync(found.real, found.realCwd).then((listing) => {
+            this.sendJson(req, res, 200, listing);
+        }, () => {
+            // 路径真在、但读不动（拿文件当目录列 / 没权限 / 中途没了）：都按「没这个目录」回
+            this.sendText(req, res, 404, "没有这个目录。");
+        });
+    }
+
+    /**
+     * 读一个目录：子目录在前、文件在后，各按名字排；坏链接、没权限的条目跳过
+     * （一条坏的别把整张清单搞挂）；条目太多只列前 MAX_DIR_ENTRIES 个。
+     */
+    private async listDirAsync(dir: string, realCwd: string): Promise<DirListing> {
+        const names = await fs.promises.readdir(dir);
+        names.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+        const dirs: DirEntryInfo[] = [];
+        const files: DirEntryInfo[] = [];
+        let truncated = false;
+        for (const name of names) {
+            if (dirs.length + files.length >= PiChatWebServer.MAX_DIR_ENTRIES) { truncated = true; break; }
+            const full = path.join(dir, name);
+            let stat: fs.Stats;
+            // 用 stat 不用 lstat：软链接指到目录的也算目录（点不点得进去由那道边界管）
+            try { stat = await fs.promises.stat(full); } catch { continue; }
+            const entry: DirEntryInfo = { name, path: relativeTo(realCwd, full), dir: stat.isDirectory() };
+            (entry.dir ? dirs : files).push(entry);
+        }
+        const listing: DirListing = { entries: [...dirs, ...files] };
+        if (truncated) { listing.truncated = true; }
+        return listing;
     }
 
     /**
