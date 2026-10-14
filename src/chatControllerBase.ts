@@ -1406,7 +1406,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
      */
     protected abstract sendOverlayTo(target: string, msg: Record<string, unknown>): boolean;
 
-    /** 界面上答了一张开在消息流里的问话卡片（见 ChatHostBase.askOnScreens）。 */
+    /** 界面上答了一张开在消息流里的问话卡片（见 ChatHost.askOnScreens）。 */
     protected handleAskCardAnswer(_msg: any): void { /* 默认不收这种消息：只有带问话卡片的宿主用得上 */ }
     /** 界面上把一张问话卡片“不答了”。 */
     protected handleAskCardCancel(_msg: any): void { /* 同上 */ }
@@ -1805,7 +1805,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 this.resolvePicker(undefined);
                 return;
             case "askCardAnswer":
-                // 界面上答了一张开在消息流里的问话卡片（见 ChatHostBase.askOnScreens）
+                // 界面上答了一张开在消息流里的问话卡片（见 ChatHost.askOnScreens）
                 this.handleAskCardAnswer(msg);
                 return;
             case "askCardCancel":

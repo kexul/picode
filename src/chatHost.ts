@@ -1,17 +1,19 @@
 /**
- * 聊天宿主的公共部分（跟 VSCode 无关的那一半）。
+ * 独立后端的宿主：一份会话工作区（{@link ChatControllerBase} 那套：标签、会话进程、消息分发）
+ * 挂在它上面，接住所有连上来的浏览器页面（手机 / 电脑浏览器，可以同时开着好几个）。
  *
- * 一份会话工作区（{@link ChatControllerBase} 那套：标签、会话进程、消息分发）可以挂在
- * 不同的宿主上，本类装的是两家都要做的事：
- *   - "好几块屏"的出口：网页服务接进来的浏览器页面（手机 / 电脑浏览器，可以同时开着好几个）；
+ * 这里装做的事：
+ *   - "好几块屏"的出口：网页服务接进来的浏览器页面；
  *   - 页面连接的登记、推送序号、断线补发、整屏重画；
  *   - 浮层（历史列表、模型选择、确认框）该弹在哪块屏上，以及对话框的收发；
- *   - 显示选项（界面颜色、字号、快捷键、提醒开关）的读写入口：候选值与默认值在
- *     viewOptions.ts，存储由子类给（VSCode 存 globalState，独立后端存 state.json）；
- *   - 名字池、# 引用目录、桌面截图这类跟平台无关的杂事。
+ *   - 显示选项（界面颜色、字号、快捷键、提醒开关）的读写：候选值与默认值在 viewOptions.ts，
+ *     值存 state.json（界面改的），配置文件里也能预设一份；
+ *   - 名字池、# 引用目录、桌面截图这类杂事；
+ *   - 跟这台机器有关的那几件：设置从 `~/.pi/pichat/config.json` 读、默认工作目录就是起后端时
+ *     指定的那个、弹窗只有页面可问（问不着就按“否 / 取消”，宁可不动也不乱来）、
+ *     编辑器才有的活（点开文件、符号跳转）派给连上来的 VS Code 窗口。
  *
- * 本类不引用 `vscode`；平台相关的东西（设置从哪读、弹窗用谁家的、文件怎么打开、
- * 会话跑完怎么提醒）留在子类里。
+ * 本类不引用 `vscode`。插件那一侧是纯客户端（跟浏览器页面一样，走 HTTP 连后端），不继承这份。
  */
 import * as crypto from "crypto";
 import * as path from "path";
@@ -19,6 +21,11 @@ import type { AskRequest } from "./askProtocol";
 import { writeAskAnswer } from "./askProtocol";
 import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase } from "./chatControllerBase";
+import { ServerStateStore } from "./serverState";
+import { readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
+import { getAskAssets } from "./askAssets";
+import { getTabaAssets } from "./tabaAssets";
+import { serverConfigFile, serverStateFile } from "./serverPaths";
 import {
     listProjectDirs,
     listSessionFiles,
@@ -72,7 +79,14 @@ interface OpenCard {
     settle: (answer: any | undefined) => void;
 }
 
-export abstract class ChatHostBase extends ChatControllerBase implements WebServerHost {
+export interface ChatHostOptions {
+    /** 默认工作目录（会话默认跑在这里）。 */
+    cwd: string;
+    /** 日志出口（默认打标准输出）。 */
+    log?: (text: string) => void;
+}
+
+export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 文件夹列表里“就用这个目录”那一行的标识（会话文件、目录都是绝对路径，撞不上这种带 \0 的）。 */
     private static readonly USE_DIR_ROW = "\u0000pichat:use-dir";
     /** 文件夹列表里“换一个盘 / 回到最上层”那一行的标识。 */
@@ -112,23 +126,113 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     /** 「项目与会话」面板那份列表的指纹（开着的会话 + 各自的会话文件）：变了就重推一次，见 broadcastSessionList。 */
     private workspacePanelKey = "";
 
+    // ---- 后端进程这一层：设置与显示选项存哪、日志出口、收没收摊 ----
+    private readonly state: ServerStateStore;
+    private readonly log: (text: string) => void;
+    private disposed = false;
+
+    constructor(private readonly options: ChatHostOptions) {
+        super("server");
+        this.log = options.log ?? ((text) => console.log(text));
+        this.state = new ServerStateStore(serverStateFile());
+    }
+
     // ========================================================================
-    //  子类要填的口子
+    //  这一个宿主自己的那几件：读写存哪、提示写哪、弹窗问谁、编辑器那点活派给谁
     // ========================================================================
 
-    /** 读一个显示选项。 */
-    protected abstract readOption<T>(key: string, fallback: T): T;
-    /** 写一个显示选项。 */
-    protected abstract writeOption(key: string, value: unknown): void;
+    /** 读一个显示选项：先看 state.json（界面改的），再看配置文件里预设的，最后才用内置默认值。 */
+    protected readOption<T>(key: string, fallback: T): T {
+        // 这里取原始值，不传 fallback 给底层做类型校验：类型不对要“回落到配置文件预设”，
+        // 而底层只会在类型不符时还给 fallback。取值合不合法由各自的读取器（inList / 正则）盯。
+        const stored = this.state.all()[key];
+        if (stored !== undefined) { return stored as T; }
+        const preset = this.configPreset(key);
+        return (preset === undefined ? fallback : preset) as T;
+    }
 
-    /** 给用户一条普通提示（独立后端写日志）。 */
-    protected onNotice(_text: string): void { /* 默认丢掉 */ }
+    /** 写一个显示选项（立即写盘）。 */
+    protected writeOption(key: string, value: unknown): void {
+        this.state.update(key, value);
+    }
+
+    /** 显示选项在配置文件里的对应项（人不进界面就能改默认值）。 */
+    private configPreset(key: string): unknown {
+        const cfg: ServerConfig = readServerConfig().config;
+        switch (key) {
+            case ChatHost.KEY_THEME: return cfg.themeMode;
+            case ChatHost.KEY_FONT_SIZE: return cfg.fontSize;
+            case ChatHost.KEY_SEND_KEY: return cfg.sendKey;
+            case ChatHost.KEY_NEW_SESSION_KEY: return cfg.newSessionKey;
+            case ChatHost.KEY_TAB_SWITCH_KEY: return cfg.tabSwitchKey;
+            case ChatHost.KEY_FOCUS_INPUT_KEY: return cfg.focusInputKey;
+            case ChatHost.KEY_NOTIFY_BEEP: return cfg.notifyBeep;
+            case ChatHost.KEY_AUTO_LOAD_LAST: return cfg.autoLoadLast;
+            default: return undefined;
+        }
+    }
+
+    /** 给用户一条普通提示：后端这边写日志。 */
+    protected onNotice(text: string): void {
+        this.log(`[提示] ${text}`);
+    }
 
     /**
-     * 人最近动过的那块屏挑不出来时的兜底（独立后端用：没有 VSCode 原生对话框可用，
-     * 就随便挑一块连着的屏来问，总比没人答好）。默认 undefined = 用宿主自己的对话框。
+     * 人最近动过的那块屏挑不出来时的兜底：随便挑一块连着的屏。
+     * 手机上刚打开页面、还没做过任何动作时，也需要有人来答“要不要执行这条命令”。
      */
-    protected pageForDialogFallback(): string | undefined { return undefined; }
+    protected pageForDialogFallback(): string | undefined {
+        return this.getBroadcaster().recentPage()?.id;
+    }
+
+    // ---- RuntimeHost：配置 / 默认目录 / 模型 ----
+    public getConfig() {
+        const cfg = readServerConfig().config;
+        const taba = cfg.tabaEnabled ? getTabaAssets() : undefined;
+        const ask = getAskAssets();
+        return {
+            piPath: cfg.piPath,
+            provider: cfg.provider,
+            model: cfg.model,
+            extraArgs: cfg.extraArgs,
+            trustProject: cfg.trustProject,
+            tabaExtension: taba?.ok ? taba.extensionPath : "",
+            tabaDir: taba?.ok ? taba.resourceDir : "",
+            askExtension: ask?.ok ? ask.extensionPath : "",
+            askDir: ask?.ok ? ask.resourceDir : "",
+        };
+    }
+
+    public getCwd(): string {
+        return this.options.cwd;
+    }
+
+    public persistModel(provider: string, modelId: string): void {
+        updateServerConfig({ provider, model: modelId });
+    }
+
+    protected piMissingMessage(piPath: string): string {
+        return `未找到 pi 可执行文件（当前配置："${piPath}"）。请确认已安装 pi 并加入系统 PATH，`
+            + `或改 ${serverConfigFile()} 里的 piPath。`;
+    }
+
+    protected onPiMissing(piPath: string): void {
+        this.log(`[错误] ${this.piMissingMessage(piPath)}`);
+    }
+
+    /** 平台独有的消息：正文里的符号链接（只有编辑器有语言服务，派给窗口去它读写过的文件里找）。 */
+    protected handleHostMessage(msg: any): boolean {
+        if (msg?.type === "openSymbol") {
+            if (typeof msg.name === "string") {
+                this.routeToScreen("openSymbol", {
+                    name: msg.name,
+                    knownFiles: this.getAllKnownFiles(),
+                }, `找符号 ${msg.name}`);
+            }
+            return true;
+        }
+        return false;
+    }
 
     // ========================================================================
     //  出口：一条消息送去哪几块屏
@@ -305,7 +409,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         const clientId = this.currentPageId;
         if (!dir) { return; }
         const files = (await listSessionFiles(dir)).map((e) => e.file);
-        const page = await this.scanSessionPage(files, offset, ChatHostBase.GROUP_PAGE_SIZE);
+        const page = await this.scanSessionPage(files, offset, ChatHost.GROUP_PAGE_SIZE);
         const current = this.getActive(clientId)?.currentSessionPath;
         this.sendOverlayTo(clientId, {
             type: "workspaceSessionsPage",
@@ -330,7 +434,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     private async takeWorkspacePage(clientId: string): Promise<any[]> {
         const state = this.pickerStateOf(clientId);
         const rows: any[] = [];
-        while (rows.length < ChatHostBase.WORKSPACE_BATCH && state.workspaceOffset < state.workspaceDirs.length) {
+        while (rows.length < ChatHost.WORKSPACE_BATCH && state.workspaceOffset < state.workspaceDirs.length) {
             const entry = state.workspaceDirs[state.workspaceOffset++];
             const p = await readProjectEntry(entry);
             if (!p) { continue; }                                // 空目录 / 坏文件：跳过，不占一行
@@ -382,7 +486,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         if (!driveList && !listing.error) {
             items.push({
                 label: "就用这个目录（在这里新建会话）",
-                file: ChatHostBase.USE_DIR_ROW,
+                file: ChatHost.USE_DIR_ROW,
                 folderPath: listing.path,
                 icon: "check",
             });
@@ -391,7 +495,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
             items.push({ label: "上一层", file: listing.parent, icon: "up" });
         } else if (!driveList) {
             // 到了盘根就没法再往上：给一条回到盘符列表的路，否则换不了盘。
-            items.push({ label: "回到最上层（换一个盘）", file: ChatHostBase.ROOTS_ROW, icon: "up" });
+            items.push({ label: "回到最上层（换一个盘）", file: ChatHost.ROOTS_ROW, icon: "up" });
         }
         for (const d of listing.dirs) { items.push({ label: d.name, file: d.path, icon: "folder" }); }
         if (items.length === 0) { items.push({ label: "（这里没有子文件夹）", file: "" }); }
@@ -406,11 +510,11 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         // 不给筛选框：一层目录就几行，用上下键挑名字比打字快，框还占一截地方。
         const choice = await this.openPicker("folders", { items, searchable: false, title, subtitle }, clientId);
         if (!choice || typeof choice.file !== "string" || !choice.file) { return; }
-        if (choice.file === ChatHostBase.USE_DIR_ROW) {
+        if (choice.file === ChatHost.USE_DIR_ROW) {
             this.newSessionInDir(listing.path, { clientId });
             return;
         }
-        if (choice.file === ChatHostBase.ROOTS_ROW) {
+        if (choice.file === ChatHost.ROOTS_ROW) {
             await this.showFolderPicker("", clientId);
             return;
         }
@@ -587,31 +691,31 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     // ========================================================================
 
     protected getAutoLoadLast(): boolean {
-        return this.readOption<boolean>(ChatHostBase.KEY_AUTO_LOAD_LAST, DEFAULT_AUTO_LOAD_LAST);
+        return this.readOption<boolean>(ChatHost.KEY_AUTO_LOAD_LAST, DEFAULT_AUTO_LOAD_LAST);
     }
     public getSendKey(): string {
-        const v = this.readOption<string>(ChatHostBase.KEY_SEND_KEY, DEFAULT_SEND_KEY);
+        const v = this.readOption<string>(ChatHost.KEY_SEND_KEY, DEFAULT_SEND_KEY);
         return inList(SEND_KEYS, v) ? v : DEFAULT_SEND_KEY;
     }
     public getNewSessionKey(): string {
-        const v = this.readOption<string>(ChatHostBase.KEY_NEW_SESSION_KEY, DEFAULT_NEW_SESSION_KEY);
+        const v = this.readOption<string>(ChatHost.KEY_NEW_SESSION_KEY, DEFAULT_NEW_SESSION_KEY);
         return inList(NEW_SESSION_KEYS, v) ? v : DEFAULT_NEW_SESSION_KEY;
     }
     public getTabSwitchKey(): string {
-        const v = this.readOption<string>(ChatHostBase.KEY_TAB_SWITCH_KEY, DEFAULT_TAB_SWITCH_KEY);
+        const v = this.readOption<string>(ChatHost.KEY_TAB_SWITCH_KEY, DEFAULT_TAB_SWITCH_KEY);
         return inList(TAB_SWITCH_KEYS, v) ? v : DEFAULT_TAB_SWITCH_KEY;
     }
     public getFocusInputKey(): string {
-        const v = this.readOption<string>(ChatHostBase.KEY_FOCUS_INPUT_KEY, DEFAULT_FOCUS_INPUT_KEY);
+        const v = this.readOption<string>(ChatHost.KEY_FOCUS_INPUT_KEY, DEFAULT_FOCUS_INPUT_KEY);
         return inList(FOCUS_INPUT_KEYS, v) ? v : DEFAULT_FOCUS_INPUT_KEY;
     }
     public getFontSize(): string {
-        const v = this.readOption<string>(ChatHostBase.KEY_FONT_SIZE, DEFAULT_FONT_SIZE);
+        const v = this.readOption<string>(ChatHost.KEY_FONT_SIZE, DEFAULT_FONT_SIZE);
         return typeof v === "string" && /^\d+$/.test(v) ? v : DEFAULT_FONT_SIZE;
     }
     /** 会话结束提示音（所有 session 都响）。 */
     public getNotifyBeep(): boolean {
-        return this.readOption<boolean>(ChatHostBase.KEY_NOTIFY_BEEP, DEFAULT_NOTIFY_BEEP) === true;
+        return this.readOption<boolean>(ChatHost.KEY_NOTIFY_BEEP, DEFAULT_NOTIFY_BEEP) === true;
     }
     protected notifyBeepEnabled(): boolean { return this.getNotifyBeep(); }
 
@@ -621,7 +725,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
      * 不随 VSCode 当前主题变——否则同一个配置在两边会长得不一样。
      */
     public getThemeMode(): "light" | "dark" {
-        return this.readOption<string>(ChatHostBase.KEY_THEME, DEFAULT_THEME_MODE) === "dark" ? "dark" : "light";
+        return this.readOption<string>(ChatHost.KEY_THEME, DEFAULT_THEME_MODE) === "dark" ? "dark" : "light";
     }
 
     /** 共享工作区整屏重画只发最近一段历史：更早的由界面顶部的「加载更早的消息」再取。 */
@@ -652,28 +756,28 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     public mutateViewOption(action: string, value?: string): void {
         if (action === "sendKey") {
             const next = inList(SEND_KEYS, value) ? value : nextInList(SEND_KEYS, this.getSendKey());
-            this.writeOption(ChatHostBase.KEY_SEND_KEY, next);
+            this.writeOption(ChatHost.KEY_SEND_KEY, next);
         } else if (action === "newSessionKey") {
             const next = inList(NEW_SESSION_KEYS, value) ? value : nextInList(NEW_SESSION_KEYS, this.getNewSessionKey());
-            this.writeOption(ChatHostBase.KEY_NEW_SESSION_KEY, next);
+            this.writeOption(ChatHost.KEY_NEW_SESSION_KEY, next);
         } else if (action === "tabSwitchKey") {
             const next = inList(TAB_SWITCH_KEYS, value) ? value : nextInList(TAB_SWITCH_KEYS, this.getTabSwitchKey());
-            this.writeOption(ChatHostBase.KEY_TAB_SWITCH_KEY, next);
+            this.writeOption(ChatHost.KEY_TAB_SWITCH_KEY, next);
         } else if (action === "focusInputKey") {
             const next = inList(FOCUS_INPUT_KEYS, value) ? value : this.getFocusInputKey();
-            this.writeOption(ChatHostBase.KEY_FOCUS_INPUT_KEY, next);
+            this.writeOption(ChatHost.KEY_FOCUS_INPUT_KEY, next);
         } else if (action === "fontSize") {
             const next = typeof value === "string" && /^\d+$/.test(value) ? value : "";
-            this.writeOption(ChatHostBase.KEY_FONT_SIZE, next);
+            this.writeOption(ChatHost.KEY_FONT_SIZE, next);
         } else if (action === "notifyBeep") {
-            this.writeOption(ChatHostBase.KEY_NOTIFY_BEEP, !this.getNotifyBeep());
+            this.writeOption(ChatHost.KEY_NOTIFY_BEEP, !this.getNotifyBeep());
         } else if (action === "theme") {
             const next = value === "dark" || value === "light"
                 ? value
                 : (this.getThemeMode() === "dark" ? "light" : "dark");
-            this.writeOption(ChatHostBase.KEY_THEME, next);
+            this.writeOption(ChatHost.KEY_THEME, next);
         } else {
-            this.writeOption(ChatHostBase.KEY_AUTO_LOAD_LAST, !this.getAutoLoadLast());
+            this.writeOption(ChatHost.KEY_AUTO_LOAD_LAST, !this.getAutoLoadLast());
         }
     }
 
@@ -962,9 +1066,6 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         return this.handleHostMessage(msg);
     }
 
-    /** 子类接自己的消息类型（VSCode 那边有符号跳转这类只有编辑器才有的）。 */
-    protected handleHostMessage(_msg: any): boolean { return false; }
-
     /**
      * 顶条上那颗“桌面截图”按钮：截一张这台电脑的桌面，只发回请求它的那块屏
      * （别的页面不跟着弹图）。截屏要一两秒，异步做；截完时请求方已经不在
@@ -987,14 +1088,14 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     /** 确认框：正在看这个会话的屏上出一张卡片（是 / 否）；没人看着它时交给子类兜底（VSCode 弹原生框）。 */
     public async confirmDialog(title: string, message: string, sessionId?: string): Promise<boolean> {
         if (!this.hasCardViewer(sessionId)) { return this.confirmDialogFallback(title, message); }
-        const answer = await this.askOnScreens(sessionId, { kind: "confirm", title, message }, ChatHostBase.DIALOG_WAIT_MS);
+        const answer = await this.askOnScreens(sessionId, { kind: "confirm", title, message }, ChatHost.DIALOG_WAIT_MS);
         return answer?.yes === true;
     }
 
     /** 输入框：同上（在看着这个会话的屏上出一张卡片）；没人看着它时交给子类兜底。 */
     public async inputDialog(title: string, placeholder: string, prefill: string, sessionId?: string): Promise<string | undefined> {
         if (!this.hasCardViewer(sessionId)) { return this.inputDialogFallback(title, placeholder, prefill); }
-        const answer = await this.askOnScreens(sessionId, { kind: "prompt", title, placeholder, prefill }, ChatHostBase.DIALOG_WAIT_MS);
+        const answer = await this.askOnScreens(sessionId, { kind: "prompt", title, placeholder, prefill }, ChatHost.DIALOG_WAIT_MS);
         if (!answer || answer.cancelled === true) { return undefined; }   // 按了取消 / 到点没人答
         return String(answer.text ?? "");
     }
@@ -1009,7 +1110,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
             multi: false,
             recommended: [],
             allowText: false,
-        }, ChatHostBase.DIALOG_WAIT_MS);
+        }, ChatHost.DIALOG_WAIT_MS);
         const picked: string[] = Array.isArray(answer?.picks) ? answer.picks : [];
         return options.find((option) => picked.indexOf(option) >= 0);
     }
@@ -1132,7 +1233,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
             allowText: req.allowText,
             // 界面靠它把这行卡片挂到那条工具行下面
             ...(req.toolCallId ? { toolCallId: req.toolCallId } : {}),
-        }, ChatHostBase.ASK_WAIT_MS, req.id, true);
+        }, ChatHost.ASK_WAIT_MS, req.id, true);
         const picked: string[] = Array.isArray(answer?.picks)
             ? answer.picks.filter((x: unknown) => typeof x === "string")
             : [];
@@ -1187,7 +1288,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         );
     }
 
-    /** 停掉本工作区的所有 pi 进程（宿主收摊时用；页面与界面的生死与此无关）。 */
+    /** 停掉本工作区的所有 pi 进程（页面与界面的生死与此无关）。 */
     protected disposeAllConversations(): void {
         for (const rt of this.panels.values()) {
             rt.stopClient();
@@ -1196,5 +1297,12 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         this.panels.clear();
         this.forgetAllClients();
         this.disposeSpare();
+    }
+
+    /** 收摊：停掉所有 pi 进程（网页服务的收摊由启动器负责）。 */
+    public dispose(): void {
+        if (this.disposed) { return; }
+        this.disposed = true;
+        this.disposeAllConversations();
     }
 }

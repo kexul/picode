@@ -14,7 +14,7 @@ import * as cp from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { PiChatWebServer, type WebServerSettings } from "./webChatServer";
-import { ServerChatHost } from "./serverChatHost";
+import { ChatHost } from "./chatHost";
 import { readServerConfig, updateServerConfig } from "./serverConfig";
 import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
 import { ensureAskAssets } from "./askAssets";
@@ -226,7 +226,7 @@ export interface StartedBackend {
     cwd: string;
     /** 实际监听的地址（打印提醒要用）。 */
     host0: string;
-    host: ServerChatHost;
+    host: ChatHost;
     server: PiChatWebServer;
     /** 收摊：停网页服务、清地址文件、杀掉所有 pi 进程。 */
     stop: () => Promise<void>;
@@ -241,7 +241,7 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
     const cwd = path.resolve(options.cwd);
     const bindHost = options.host ?? "0.0.0.0";
 
-    const host = new ServerChatHost({ cwd, log });
+    const host = new ChatHost({ cwd, log });
     const server = new PiChatWebServer(MEDIA_DIR, host, {
         log: (text) => log(`[网页服务] ${text}`),
         onUrlChanged: () => { /* 启动器自己会打印地址，这里不用管 */ },
