@@ -2965,6 +2965,10 @@
   // 标签上那颗叉把它关掉；全关光后面板不收起，留一句提示。标签只在这一趟页面上记着，
   // 刷新就没了（开没收起是记在这台设备里的，那个留着）。
   //
+  // 第一个标签是「项目目录」（当前会话的目录）：点链接看的文件排在它后面的新标签里，不顶掉它。
+  // 它没有那颗叉（关不掉），一直在最前面；切会话它换成新会话的目录；列那一格走的是票 05 那套
+  // （同一条 `/dir` 地址，`.` 表示会话目录自己）。
+  //
   // 正看着的那个文件被改了（模型改的、脚本改的）以后，内容自己换成新的，而人读到哪儿还停在哪儿：
   // 隔一会儿问一次那个文件变了没，问的时候把上次拿到的修改时间带上——没变后端只回一个空响应，
   // 变了才把正文取回来重画，重画时把现在的滚动位置照原样放回去。
@@ -2981,6 +2985,10 @@
   const FILE_SIDEBAR_POLL_MS = 1500;
   const FILE_SIDEBAR_STORE_KEY = "pichat.fileSidebarOpen";
   const FILE_SIDEBAR_HINT = "点消息里的文件链接，这里会显示那个文件。";
+  /** 「项目目录」那一格：标签上写这四个字，悬停提示与面板头给全路径。 */
+  const FILE_SIDEBAR_PROJECT_NAME = "项目目录";
+  /** 问后端「会话目录自己」用这个相对写法（列目录那条地址不认空路径，`.` 就是会话目录）。 */
+  const FILE_SIDEBAR_PROJECT_PATH = ".";
   /** 这一列那一摊：容器、面板里的几块、开着哪几个文件。 */
   const fileSidebar = {
     root: null, header: null, title: null, tabsEl: null, body: null,
@@ -2989,6 +2997,7 @@
     //（不记进设备，刷新就没了）
     //   path：文件是链接里那个写法；目录是去掉末尾斜杠的写法（同一张目录只占一格）
     //   dir：这是个目录（列出来的是一份清单，不是正文）
+    //   proj：这是「项目目录」那一格（当前会话的目录；排在最前）
     //   mtime：画在面板上的那份内容的修改时间（下次问「变了没」时带上去）
     //   loading：还在取（正文那块写着「正在读取…」）
     //   imageUrl：图片那个显示地址（blob:…）；换成别的图或关掉标签时要放掉它
@@ -3022,6 +3031,11 @@
   /** 路径在界面上的写法：目录带一个末尾斜杠，一眼看出它不是文件。 */
   function pathLabel(path, dir) { return dir ? path + "/" : path; }
 
+  /** 一格标签在面板头与悬停提示上的全路径：项目目录那一格就是当前会话的目录。 */
+  function fileSidebarTabFullPath(tab) {
+    return tab.proj ? (activeSessionCwd() || FILE_SIDEBAR_PROJECT_NAME) : pathLabel(tab.path, tab.dir);
+  }
+
   /** 标签上那行字：文件名（目录补一个斜杠）。全路径太长，标签上停一下有提示、面板头上也写着全路径。 */
   function fileSidebarTabName(path, dir) {
     const name = String(path).replace(/\\/g, "/").split("/").pop() || String(path);
@@ -3034,6 +3048,40 @@
       if (fileSidebar.tabs[i].path === path && !!fileSidebar.tabs[i].dir === !!dir) { return i; }
     }
     return -1;
+  }
+
+  /** 「项目目录」那一格在标签条上的下标（没有就是 -1）。 */
+  function fileSidebarProjectIndex() {
+    for (let i = 0; i < fileSidebar.tabs.length; i++) { if (fileSidebar.tabs[i].proj) { return i; } }
+    return -1;
+  }
+
+  /** 摆一格新标签要的那些字段（文件、目录、「项目目录」都长这一个样）。 */
+  function fileSidebarNewTab(path, dir, proj) {
+    return { path: path, dir: !!dir, proj: !!proj, line: 0, scrollTop: 0, mtime: "", loading: false, imageUrl: "" };
+  }
+
+  /**
+   * 把「项目目录」那一格摆到标签条最前面（只摆、不取内容）：这一列里没有它的时候摆。
+   * 会话目录还不认识（会话列表还没到）就先不摆，等它到了再来（见 setFileSidebarOpen 与 sessionList 那段）。
+   * @returns 摆了没有
+   */
+  function addProjectDirTab() {
+    if (!fileSidebar.root || fileSidebarProjectIndex() >= 0) { return false; }
+    if (!activeSessionCwd()) { return false; }
+    fileSidebar.tabs.unshift(fileSidebarNewTab(FILE_SIDEBAR_PROJECT_PATH, true, true));
+    if (fileSidebar.active >= 0) { fileSidebar.active++; }   // 挪下标：正看着的那一格不变
+    return true;
+  }
+
+  /**
+   * 这一列开着又空着（一个标签都没有）的时候，摆上「项目目录」那一格并显示它：
+   * 刚打开、切会话、刷新页面走的都是这里；会话目录还没认识就留一句提示。
+   */
+  function ensureProjectDirTab() {
+    if (!fileSidebar.root || !fileSidebar.open || fileSidebar.active >= 0) { return; }
+    if (addProjectDirTab()) { showFileTab(0, 0); return; }
+    showFileNote(FILE_SIDEBAR_HINT);
   }
 
   /** 面板头上那行字：现在看的是哪个文件（一个标签都没开就写「文件」）。 */
@@ -3058,19 +3106,23 @@
       const el = document.createElement("div");
       el.className = "file-tab" + (i === fileSidebar.active ? " active" : "");
       el.setAttribute("data-path", tab.path);
-      el.title = tab.path;
+      if (tab.proj) { el.setAttribute("data-proj", "1"); }
+      el.title = tab.proj ? fileSidebarTabFullPath(tab) : tab.path;   // 项目目录那一格悬停给全路径
       const name = document.createElement("span");
       name.className = "file-tab-name";
-      name.textContent = fileSidebarTabName(tab.path, tab.dir);
-      const close = document.createElement("button");
-      close.type = "button";
-      close.className = "file-tab-close";
-      close.title = "关掉这个标签";
-      close.setAttribute("aria-label", "关掉 " + tab.path);
-      close.innerHTML = ICONS["close-bold"];
-      close.addEventListener("click", (e) => { e.stopPropagation(); closeFileTab(i); });
+      name.textContent = tab.proj ? FILE_SIDEBAR_PROJECT_NAME : fileSidebarTabName(tab.path, tab.dir);
       el.appendChild(name);
-      el.appendChild(close);
+      // 「项目目录」那一格没有那颗叉：它是这一列的第一格，不让人关掉（切会话 / 刷新页面时换成当前会话的）
+      if (!tab.proj) {
+        const close = document.createElement("button");
+        close.type = "button";
+        close.className = "file-tab-close";
+        close.title = "关掉这个标签";
+        close.setAttribute("aria-label", "关掉 " + tab.path);
+        close.innerHTML = ICONS["close-bold"];
+        close.addEventListener("click", (e) => { e.stopPropagation(); closeFileTab(i); });
+        el.appendChild(close);
+      }
       el.addEventListener("click", () => showFileTab(i, 0));
       bar.appendChild(el);
     });
@@ -3091,7 +3143,7 @@
     fileSidebar.active = index;
     const linkLine = Number(hitLine) > 0 ? Number(hitLine) : 0;
     if (linkLine > 0) { tab.line = linkLine; }
-    setFileSidebarTitle(pathLabel(tab.path, tab.dir));
+    setFileSidebarTitle(fileSidebarTabFullPath(tab));
     renderFileTabs();
     showFileNote("正在读取…");
     loadIntoSidebar(linkLine);
@@ -3411,6 +3463,7 @@
     if (!fileSidebar.open) { fileSidebar.token++; }   // 还等着的那条回应别再画进来
     syncFileSidebarLayout();
     if (fileSidebar.open) {
+      ensureProjectDirTab();   // 空着的时候先把「项目目录」那一格摆上（会话目录还没认识就留那句提示）
       if (fileSidebar.active < 0) { showFileNote(FILE_SIDEBAR_HINT); }
       else { pollActiveFile(); }   // 收起那阵子文件可能改过了：马上问一次，别等下一个节拍
     }
@@ -3434,16 +3487,18 @@
     const key = dir ? String(path).replace(/\/+$/, "") : path;
     if (!key) { return; }
     closeRightSidebarForFile();
+    if (fileSidebar.tabs.length === 0) { addProjectDirTab(); }   // 第一格先留给「项目目录」（只摆不取，排在文件前面）
     let at = fileSidebarTabIndex(key, !!dir);
     if (at < 0) {
-      fileSidebar.tabs.push({ path: key, dir: !!dir, line: 0, scrollTop: 0, mtime: "", loading: false, imageUrl: "" });
+      fileSidebar.tabs.push(fileSidebarNewTab(key, dir, false));
       at = fileSidebar.tabs.length - 1;
     }
     if (!fileSidebar.open) { setFileSidebarOpen(true); } else { syncFileSidebarLayout(); }
     showFileTab(at, line);
   }
 
-  /** 切会话：面板里那些文件属于上一个会话的目录，标签全清掉、留一句提示（别把别人的东西留在界面上）。 */
+  /** 切会话：这一列里那些文件属于上一个会话的目录，标签全清掉（别把别人的东西留在界面上）；
+   *  「项目目录」那一格换成新会话的目录重新给出来。 */
   function resetFileSidebarForSession() {
     if (!fileSidebar.root) { return; }
     fileSidebar.token++;
@@ -3453,6 +3508,7 @@
     setFileSidebarTitle("");
     renderFileTabs();
     showFileNote(FILE_SIDEBAR_HINT);
+    ensureProjectDirTab();   // 开着就换成新会话的目录；收着的那就等打开时再说
   }
 
   // 这一列只在浏览器页面里搭出来：插件里的对话面板里连这一列的容器都没有。
@@ -3482,7 +3538,7 @@
     root.querySelector("#fileClose").addEventListener("click", () => setFileSidebarOpen(false));
     backdrop.addEventListener("click", () => setFileSidebarOpen(false));
     syncFileSidebarLayout();
-    if (fileSidebar.open) { showFileNote(FILE_SIDEBAR_HINT); }
+    if (fileSidebar.open) { ensureProjectDirTab(); }
     // 拖窗口过那道门槛：常驻 / 滑入两种摆法跟着换
     window.addEventListener("resize", () => { if (fileSidebar.open) { syncFileSidebarLayout(); } });
     // 跟着刷新：开着而且有正看着的文件时，隔一会儿问一次（页面在后台时不问：手机上别白耗电）
@@ -4985,6 +5041,8 @@
         syncPaneStatuses();
       }
       renderSessionBar();
+      // 会话目录这时候才认识：这一列开着又空着的话，把「项目目录」那一格摆上（见票 13）
+      ensureProjectDirTab();
       updateSendState();
       syncStatus();
       refreshOpenSessionsInPicker();
