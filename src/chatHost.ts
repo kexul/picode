@@ -210,6 +210,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return this.panels.get(sessionId)?.cwd ?? this.rememberedSessionDir(sessionId);
     }
 
+    /**
+     * 这个会话的工具碰过哪些文件（read / edit / write 那几个，只读的文件地址拿它兜底找光名字）。
+     * 已经关掉、只在登记簿里记着的会话没有这份清单（它跟着会话运行的那份内存走），给空数组。
+     */
+    public knownSessionFiles(sessionId: string): string[] {
+        return this.panels.get(sessionId)?.getKnownFiles() ?? [];
+    }
+
     public getCwd(): string {
         return this.options.cwd;
     }

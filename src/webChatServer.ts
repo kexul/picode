@@ -181,6 +181,12 @@ export interface WebServerHost {
      * 跑着的会话、以及刚关掉还记着的会话都认；两条都对不上返回 undefined（页面拿不到内容）。
      */
     resolveSessionDir(sessionId: string): string | undefined;
+    /**
+     * 这个会话的工具碰过哪些文件（read / edit / write 那几个，绝对路径）。
+     * 只读的文件地址拿它当第二档：链接里只有光名字、或者路径写岔了时按文件名匹配。
+     * 认不出这个会话就给空数组（只丢第二档，第一档照旧）。
+     */
+    knownSessionFiles(sessionId: string): string[];
     /** 一条推送连接建立（页面连上 / 重连）。 */
     onPageConnected(pageId: string): void;
     /** 一条推送连接断了（页面关掉 / 死连接被掐掉）。 */
@@ -526,6 +532,17 @@ export class PiChatWebServer {
      * 就能让 pi 读写这台机器，但「按路径直接取文件」这条路不该跟着变成整台机器的读接口
      * （为什么见 docs/adr/0001-浏览器页面自己读文件.md）。文件与目录两条地址共用这一套。
      *
+     * 找文件分两档（跟编辑器打开文件时一样多，但不去全工程扫）。
+     *
+     * 第一档按会话目录拼。拼得到（路径真在）就用它，哪怕它指向目录外面——边界该报 403 就报 403，
+     * 不拿第二档把话岔开（`outside/package.json` 这种写法该说「在会话目录外」）。
+     *
+     * 第二档只在第一档拼不到（路径不存在）时走，而且只有文件有（目录没有这份清单）：
+     * 在这个会话碰过的文件（read / edit / write 过的，见 knownSessionFiles）里按名字匹配——
+     * 链接里只有 `chat.js` 这种光名字、或者路径写岔了（`src/chat.js` 写成 `lib/chat.js`）时还能找到。
+     * 匹配到的路径同样要过那道边界：清单里那个文件真身在会话目录外（读的是外面的软链接）时
+     * 也不给看。
+     *
      * 看不了时返回状态码与一句人话，调用方直接照它回；kind 只把话里的「文件 / 目录」说对。
      */
     private resolveSessionPath(sessionId: string, wantPath: string, kind: "文件" | "目录"):
@@ -537,18 +554,34 @@ export class PiChatWebServer {
         if (!cwd) {
             return { ok: false, status: 404, text: "这个会话不在了（页面可能开得太久），刷新页面再试。" };
         }
-        // 相对路径按会话目录解；写成绝对路径也先解出来，再按下面那道边界判
-        const target = path.resolve(cwd, wantPath);
         // 目录边界拿真实路径判：`..` 与软链接走的都是这一条
         const realCwd = realPathOr(cwd);
-        const realTarget = realPathOr(target);
-        if (!realCwd || !realTarget) {
+        if (!realCwd) {
             return { ok: false, status: 404, text: `没有这个${kind}。` };
         }
-        if (!insideFolder(realTarget, realCwd)) {
+        // 第一档：按会话目录拼（写成绝对路径也先解出来，再按下面那道边界判）
+        const realTarget = realPathOr(path.resolve(cwd, wantPath));
+        if (realTarget) {
+            return this.checkInsideSession(realTarget, realCwd, kind);
+        }
+        // 第二档：光名字 / 路径写岔了——在这个会话碰过的文件里按名字找（只有文件有这一档）
+        if (kind === "文件") {
+            const hit = matchKnownFile(this.host.knownSessionFiles(sessionId), wantPath, cwd);
+            const realHit = hit ? realPathOr(hit) : undefined;
+            if (realHit) {
+                return this.checkInsideSession(realHit, realCwd, kind);
+            }
+        }
+        return { ok: false, status: 404, text: `没有这个${kind}。` };
+    }
+
+    /** 目录边界：真实路径必须落在会话目录里（相等也算；`..` 与软链接都已解析过）。 */
+    private checkInsideSession(real: string, realCwd: string, kind: "文件" | "目录"):
+        { ok: true; real: string; realCwd: string } | { ok: false; status: number; text: string } {
+        if (!insideFolder(real, realCwd)) {
             return { ok: false, status: 403, text: `这个${kind}在会话目录外，看不了。` };
         }
-        return { ok: true, real: realTarget, realCwd };
+        return { ok: true, real, realCwd };
     }
 
     /**
@@ -1110,6 +1143,31 @@ function lanIpv4Addresses(): string[] {
 /** 解析真实路径（软链接一起解开）；解不开（文件不在）返回 undefined。 */
 function realPathOr(p: string): string | undefined {
     try { return fs.realpathSync(p); } catch { return undefined; }
+}
+
+/**
+ * 在「这个会话碰过的文件」里按名字找那个链接说的文件（找不到返回 undefined）。
+ *
+ * 找法与编辑器打开文件时那一档一样：
+ *   1. 先看有没有一条相对写法正好就是它（链接里写了跟清单里一样的相对路径），或者清单里那个绝对路径就是它；
+ *   2. 再按最后一段（文件名）对：清单里相对写法等于这个文件名、或者以 `/文件名` 结尾的都算；
+ *    同名的有好几个时，先挑相对写法里带着整条问法的那个（`src/a.ts` 优先于 `lib/a.ts`）。
+ *
+ * 比大小写两边都转小写（跟编辑器那边一致）：Windows 上文件名本来就不分大小写。
+ */
+function matchKnownFile(known: readonly string[], query: string, cwd: string): string | undefined {
+    const norm = (s: string): string => s.replace(/\\/g, "/").toLowerCase();
+    const q = norm(query);
+    const relOf = (f: string): string => norm(relativeTo(cwd, f));
+    const exact = known.find((f) => relOf(f) === q || norm(f) === q);
+    if (exact) { return exact; }
+    const base = q.split("/").pop() || q;
+    if (!base) { return undefined; }
+    const cands = known.filter((f) => {
+        const rel = relOf(f);
+        return rel === base || rel.endsWith("/" + base);
+    });
+    return cands.find((f) => relOf(f).includes(q)) || cands[0];
 }
 
 /** 把服务上现有的连接全部断开（长连接不断，close 就不会结束）。 */
