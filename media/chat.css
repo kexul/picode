@@ -477,10 +477,15 @@
   #pickerOverlay, #settingsOverlay {
     position: fixed; inset: 0; z-index: 1000;
     background: rgba(0,0,0,0.45);
-    display: flex; align-items: center; justify-content: center;
+    display: flex;
     opacity: 1; transition: opacity 160ms ease;
   }
   #pickerOverlay.hidden, #settingsOverlay.hidden { display: none; }
+  /* 面板默认摆在浮层正中：这两条挂在共用的那颗类（.pk-host）上，别挂在 #pickerOverlay 上。
+     挂在 id 上比抽屉那两条（.pk-host.pk-drawer，见下面「历史会话」）硬一档，压不住——
+     窄屏点 <<< 会滑出来一块居中的弹窗，而不是贴右边那块侧边栏。
+     设置浮层没有 .pk-host 这颗类，它那两条照旧留在 id 上。 */
+  .pk-host, #settingsOverlay { align-items: center; justify-content: center; }
   /* 统一浮层面板外观（拾取器 / 设置） */
   #pickerPanel, #settingsPanel, .pk-panel {
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
@@ -493,7 +498,8 @@
   /* 通用拾取器浮层（模型 / 历史 / 选项） */
   #pickerPanel, .pk-panel { display: flex; flex-direction: column; }
   #pickerPanel { width: min(720px, 94vw); max-height: 80vh; }
-  /* 历史会话：不居中，改成从右侧滑进来的面板。面板整屏高、贴右边，窄一些。 */
+  /* 历史会话与「项目与会话」：不居中，改成从右侧滑进来的面板。面板整屏高、贴右边，窄一些
+     （上面那条默认居中是挂在 .pk-host 上的，这里同样是两颗类，压得住）。 */
   .pk-host.pk-drawer { align-items: stretch; justify-content: flex-end; }
   .pk-host.pk-drawer #pickerPanel {
     width: min(420px, 94vw); max-height: none; height: 100%;
