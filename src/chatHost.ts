@@ -23,8 +23,7 @@ import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
-import { getAskAssets } from "./askAssets";
-import { getTabaAssets } from "./tabaAssets";
+import { getAskAssets, getTabaAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
 import {
     listProjectDirs,

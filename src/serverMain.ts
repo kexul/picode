@@ -17,8 +17,7 @@ import { PiChatWebServer, type WebServerSettings } from "./webChatServer";
 import { ChatHost } from "./chatHost";
 import { readServerConfig, updateServerConfig } from "./serverConfig";
 import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
-import { ensureAskAssets } from "./askAssets";
-import { ensureTabaAssets } from "./tabaAssets";
+import { ensureAskAssets, ensureTabaAssets } from "./bridgeAssets";
 import { serverConfigFile } from "./serverPaths";
 
 /** 安装根目录（out/server → 根）。 */
