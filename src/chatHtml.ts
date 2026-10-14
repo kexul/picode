@@ -1,11 +1,11 @@
 import * as http from "http";
 import { renderHTML } from "./renderHtml";
+import { CHAT_UI_FILE_NAMES, chatUiFileOfRole, chatUiFilesOfRole, type ChatUiFile } from "./chatUiFiles";
 
 /**
  * chatHtml —— 插件里那块对话面板的界面从哪儿来。
  *
- * 界面文件（chat.js / chat.css / marked.js / highlight.js / browserBridge.js /
- * browserTheme.css）不从插件自己的 media/ 目录读，而是从正在跑的
+ * 界面文件（哪几份见 chatUiFiles.ts 那份清单）不从插件自己的 media/ 目录读，而是从正在跑的
  * 后端（pichat）的 /media/ 现取：面板看到的界面版本永远跟后端一致，后端升级后
  * 重连一次就换新版，插件自己那份 media/ 只是后端要用的一份拷贝。
  *
@@ -17,14 +17,16 @@ import { renderHTML } from "./renderHtml";
  * CSP 不用为后端地址开口子，也不需要 localResourceRoots。
  */
 
-/** 面板要用的界面文件内容（都是后端 /media/ 里的原文）。 */
-export interface ChatUiFiles {
-    chatCss: string;
-    browserCss: string;
-    markedJs: string;
-    highlightJs: string;
-    chatJs: string;
-    bridgeJs: string;
+/** 面板要用的界面文件内容：文件名 → 原文（都是后端 /media/ 里抓回来的）。 */
+export type ChatUiContents = ReadonlyMap<string, string>;
+
+/** 取某个文件的内容。抓的时候清单里有几份就抓几份，取不到说明清单与抓取对不上了。 */
+function contentOf(files: ChatUiContents, file: ChatUiFile): string {
+    const text = files.get(file.name);
+    if (text === undefined) {
+        throw new Error(`界面文件 ${file.name} 没抓到（清单与抓取对不上？见 chatUiFiles.ts）`);
+    }
+    return text;
 }
 
 function nonce(): string {
@@ -41,22 +43,16 @@ function nonce(): string {
  * @param baseUrl 后端地址（如 http://127.0.0.1:51883/）
  * @returns 抓到的全部内容；有一个文件没取到就返回 undefined
  */
-export async function fetchChatUiFiles(baseUrl: string, timeoutMs = 5000): Promise<ChatUiFiles | undefined> {
+export async function fetchChatUiFiles(baseUrl: string, timeoutMs = 5000): Promise<ChatUiContents | undefined> {
     const grab = (name: string): Promise<string> => {
         const url = new URL(baseUrl);
         url.pathname = (url.pathname.replace(/\/+$/, "")) + "/media/" + name;
         return fetchText(url, timeoutMs);
     };
     try {
-        const [chatCss, browserCss, markedJs, highlightJs, chatJs, bridgeJs] = await Promise.all([
-            grab("chat.css"),
-            grab("browserTheme.css"),
-            grab("marked.js"),
-            grab("highlight.js"),
-            grab("chat.js"),
-            grab("browserBridge.js"),
-        ]);
-        return { chatCss, browserCss, markedJs, highlightJs, chatJs, bridgeJs };
+        // 清单里有几份就抓几份，谁也别漏（漏一份就是“浏览器看得到、插件面板里没有”那类毛病）
+        const texts = await Promise.all(CHAT_UI_FILE_NAMES.map((name) => grab(name)));
+        return new Map(CHAT_UI_FILE_NAMES.map((name, i) => [name, texts[i]]));
     } catch {
         return undefined;
     }
@@ -111,28 +107,21 @@ function endsInDoubleEscape(code: string): boolean {
 }
 
 /**
- * 拼插件里那块对话面板的 HTML：CSS 与全部 JS 内联，脚本顺序与浏览器页面一致
- * （桥在最前 → marked → highlight → chat → settings）。
+ * 拼插件里那块对话面板的 HTML：CSS 与全部 JS 内联，脚本顺序与浏览器页面一致（照清单来）。
  *
  * @param imgCspSource webview 的 cspSource：消息里的图片仍按老规矩只放数据地址
  *                     与本机资源，面板不用本地资源了但这条留着不碍事
  * @throws 内容里有内联不安全的序列时抛错（不该悄悄装一屏坏页面）
  */
 export function getChatHtml(
-    files: ChatUiFiles,
+    files: ChatUiContents,
     opts?: { themeMode?: "light" | "dark"; imgCspSource?: string },
 ): string {
     const themeMode = opts?.themeMode ?? "light";
     const imgCspSource = opts?.imgCspSource ?? "";
-    const jsFiles: Array<[string, string]> = [
-        ["browserBridge.js", files.bridgeJs],
-        ["marked.js", files.markedJs],
-        ["highlight.js", files.highlightJs],
-        ["chat.js", files.chatJs],
-    ];
-    for (const [name, code] of jsFiles) {
-        if (endsInDoubleEscape(escapeInlineScript(code))) {
-            throw new Error(`界面文件 ${name} 里有 HTML 内联不安全的序列（<!-- 后面跟 <script），先改掉这个文件再内联。`);
+    for (const file of chatUiFilesOfRole("bridge", "vendor-script", "main-script")) {
+        if (endsInDoubleEscape(escapeInlineScript(contentOf(files, file)))) {
+            throw new Error(`界面文件 ${file.name} 里有 HTML 内联不安全的序列（<!-- 后面跟 <script），先改掉这个文件再内联。`);
         }
     }
 
@@ -141,11 +130,11 @@ export function getChatHtml(
         // 界面颜色由 browserBridge.js 按 themeMode 上色；VSCode 注入的主题变量里
         // 调色板没覆盖的那些照常生效。
         `<meta name="pichat-theme" content="${themeMode}" />`,
-        `<style id="browser-theme">${files.browserCss}</style>`,
+        `<style id="browser-theme">${contentOf(files, chatUiFileOfRole("theme-style"))}</style>`,
     ];
     // 桥必须比 chat.js 先加载（chat.js 一开头就调 acquireVsCodeApi）：
     // renderHTML 把 extraBodyBottom 放在所有 <script> 之前，正好。
-    const extraBodyBottom = `<script nonce="${n}">${escapeInlineScript(files.bridgeJs)}</script>`;
+    const extraBodyBottom = `<script nonce="${n}">${escapeInlineScript(contentOf(files, chatUiFileOfRole("bridge")))}</script>`;
     const csp =
         `default-src 'none'; ` +
         `img-src ${imgCspSource} data:; ` +
@@ -154,14 +143,12 @@ export function getChatHtml(
 
     return renderHTML({
         csp,
-        chatCss: files.chatCss,
+        chatCss: contentOf(files, chatUiFileOfRole("chat-style")),
         scriptNonce: n,
         extraHead: headParts.join("\n  "),
         extraBodyBottom,
-        scripts: [
-            { content: escapeInlineScript(files.markedJs) },
-            { content: escapeInlineScript(files.highlightJs) },
-            { content: escapeInlineScript(files.chatJs) },
-        ],
+        scripts: chatUiFilesOfRole("vendor-script", "main-script").map((file) => ({
+            content: escapeInlineScript(contentOf(files, file)),
+        })),
     });
 }

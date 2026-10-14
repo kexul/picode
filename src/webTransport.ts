@@ -1,4 +1,5 @@
 import * as os from "os";
+import { CHAT_UI_FILE_NAMES } from "./chatUiFiles";
 
 /**
  * webTransport —— 网页服务的传输层零件（不引用 vscode）。
@@ -9,16 +10,10 @@ import * as os from "os";
  */
 
 /** 浏览器页面允许加载的 media/ 文件名白名单（其余一律 404，防目录穿越）。
+ *  名单就是界面清单（chatUiFiles.ts）里的那些文件：加一个界面文件只改那份清单。
  *  注：browserTheme.css 在网页端页面里是直接写进 HTML 的（不走静态文件这条路），
  *  但插件里的对话面板要从这儿取它，所以也在名单里。 */
-export const ALLOWED_MEDIA_FILES: ReadonlySet<string> = new Set([
-    "chat.js",
-    "chat.css",
-    "marked.js",
-    "highlight.js",
-    "browserBridge.js",
-    "browserTheme.css",
-]);
+export const ALLOWED_MEDIA_FILES: ReadonlySet<string> = new Set(CHAT_UI_FILE_NAMES);
 
 /** 扩展名 → Content-Type（只列白名单里会出现的几种）。 */
 const MEDIA_CONTENT_TYPES: Record<string, string> = {
