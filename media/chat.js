@@ -2950,20 +2950,31 @@
   // 标签上那颗叉把它关掉；全关光后面板不收起，留一句提示。标签只在这一趟页面上记着，
   // 刷新就没了（开没收起是记在这台设备里的，那个留着）。
   //
+  // 正看着的那个文件被改了（模型改的、脚本改的）以后，内容自己换成新的，而人读到哪儿还停在哪儿：
+  // 隔一会儿问一次那个文件变了没，问的时候把上次拿到的修改时间带上——没变后端只回一个空响应，
+  // 变了才把正文取回来重画，重画时把现在的滚动位置照原样放回去。
+  //
   // 窗口够宽（≥1200px）时这一列常驻在左边、对话让出这块宽度；窄了从左边滑入、点外面收起。
   // 手机上同一时刻只开一块侧边栏：开左边这块就把右边那块收起来，反过来也一样
   //（两块都常驻时不受这条约束）。开没收起记在这台设备里（跟右边那一列同一个做法）。
   const FILE_SIDEBAR_MIN_WIDTH = 1200;
+  /** 跟着刷新：每隔这么久问一次现在看着的那个文件变了没（问法见 pollActiveFile）。 */
+  const FILE_SIDEBAR_POLL_MS = 1500;
   const FILE_SIDEBAR_STORE_KEY = "pichat.fileSidebarOpen";
   const FILE_SIDEBAR_HINT = "点消息里的文件链接，这里会显示那个文件。";
   /** 这一列那一摊：容器、面板里的几块、开着哪几个文件。 */
   const fileSidebar = {
     root: null, header: null, title: null, tabsEl: null, body: null,
     open: false,     // 这台设备上人要不要它开着（记在 localStorage；开着时宽窗常驻、窄窗滑入）
-    tabs: [],        // 开着的文件，从左到右：[{ path, line, scrollTop }]（不记进设备，刷新就没了）
+    // 开着的文件，从左到右：[{ path, line, scrollTop, mtime, loading }]（不记进设备，刷新就没了）
+    //   mtime：画在面板上的那份内容的修改时间（下次问「变了没」时带上去）
+    //   loading：还在取（正文那块写着「正在读取…」）
+    tabs: [],
     active: -1,      // 现在看的是哪一个标签（下标）；一个都没开就是 -1
     token: 0,        // 取文件是异步的：换标签 / 收起之后回来的旧回应就不算数了
   };
+  /** 上一条「变了没」的询问还在路上（手机网慢）：这一轮先不发，别越堆越多。 */
+  let filePolling = false;
 
   /** 窗口够宽吗（够宽这一列常驻，不够就是滑入式）。 */
   function fileSidebarWide() { return window.innerWidth >= FILE_SIDEBAR_MIN_WIDTH; }
@@ -3086,6 +3097,9 @@
   /** 面板里那一段纯粹的文字（提示、看不了的原因、正在读取）。 */
   function showFileNote(text) {
     if (!fileSidebar.body) { return; }
+    // 已经就是这一句：别再重画（跟着刷新每轮都会来报“还是看不了”，而人可能正选着里面的字）
+    const only = fileSidebar.body.children.length === 1 ? fileSidebar.body.firstElementChild : null;
+    if (only && only.className === "file-note" && only.textContent === text) { return; }
     fileSidebar.body.innerHTML = "";
     const note = document.createElement("div");
     note.className = "file-note";
@@ -3145,6 +3159,19 @@
     body.scrollTop = Number(savedTop) > 0 ? Number(savedTop) : 0;
   }
 
+  /** 那条只读地址的一个请求地址：哪个会话、哪个文件；带上修改时间就是「没变就别给正文」那问法。 */
+  function fileUrl(tab, mtime) {
+    let url = "/file?session=" + encodeURIComponent(activeId || "") + "&path=" + encodeURIComponent(tab.path);
+    if (mtime) { url += "&mtime=" + encodeURIComponent(mtime); }
+    return url;
+  }
+
+  /** 后端说不给看时给的那句话（空就兜一句，别把面板留成一片空白）。 */
+  async function fileNoteOf(resp) {
+    const note = (await resp.text()).trim();
+    return note || "这个文件看不了（" + resp.status + "）。";
+  }
+
   /**
    * 去后端那条只读地址把现在这个标签的文件取回来画上（看不了就画一句人话）。
    * @param linkLine 这次链接说的那一行（1 起）；0 = 没有要停的行，回这个标签上次读到的地方
@@ -3153,20 +3180,59 @@
     const tab = fileSidebar.tabs[fileSidebar.active];
     if (!tab) { return; }
     const token = ++fileSidebar.token;
-    const sessionId = activeId || "";
-    const query = "session=" + encodeURIComponent(sessionId) + "&path=" + encodeURIComponent(tab.path);
-    fetch("/file?" + query).then(async (resp) => {
+    tab.loading = true;
+    fetch(fileUrl(tab, "")).then(async (resp) => {
+      tab.loading = false;
       if (token !== fileSidebar.token) { return; }   // 已经换成别的标签了，这条回应丢掉
       if (resp.status === 200) {
+        tab.mtime = resp.headers.get("X-File-Mtime") || "";
         scrollFileBody(renderFileText(await resp.text(), tab.line), linkLine, tab.scrollTop);
         return;
       }
-      const note = (await resp.text()).trim();
-      showFileNote(note || "这个文件看不了（" + resp.status + "）。");
+      tab.mtime = "";   // 看不了就没有「上次那份」：下回整个问
+      showFileNote(await fileNoteOf(resp));
     }).catch(() => {
+      tab.loading = false;
       if (token !== fileSidebar.token) { return; }
       showFileNote("读不出来：连不上后端。");
     });
+  }
+
+  /**
+   * 跟着刷新：问一次现在看着的这个文件变了没。
+   *
+   * 带上上次拿到的那份内容的修改时间（条件请求）：没变后端回 204，这边一个字节都不动；
+   * 变了才把新正文取回来重画，并把「读到哪儿」照原样放回去——不许跳回顶部，也不许跳回
+   * 这个标签上次切走时的位置。看不了的文件（没有 / 太大 / 目录外）也一样问：文件后来
+   * 被建出来 / 改小 / 挪回来，面板就跟着换成内容。
+   */
+  function pollActiveFile() {
+    if (filePolling) { return; }               // 上一条还在路上，别越堆越多
+    const at = fileSidebar.active;
+    const tab = fileSidebar.tabs[at];
+    const body = fileSidebar.body;
+    if (!tab || !body || tab.loading) { return; }   // 还没开文件 / 还在取：这一轮先不问
+    const token = fileSidebar.token;
+    filePolling = true;
+    fetch(fileUrl(tab, tab.mtime)).then(async (resp) => {
+      if (token !== fileSidebar.token || fileSidebar.active !== at) { return; }   // 换了标签 / 切了会话 / 收起
+      if (resp.status === 204) { return; }   // 没变：正文一个字节都没过来
+      if (resp.status !== 200) {
+        tab.mtime = "";
+        showFileNote(await fileNoteOf(resp));
+        return;
+      }
+      tab.mtime = resp.headers.get("X-File-Mtime") || "";
+      const text = await resp.text();
+      const top = body.scrollTop;
+      const left = body.scrollLeft;
+      renderFileText(text, tab.line);
+      body.scrollTop = top;      // 换上新内容，读到哪儿还停在哪儿
+      body.scrollLeft = left;
+      tab.scrollTop = top;
+    }).catch(() => {
+      // 这一轮没连上就算了：正文留着，下一轮再问（别把人正读的东西换成一句报错）
+    }).then(() => { filePolling = false; });
   }
 
   /** 窄窗里只留一块侧边栏：右边那块此刻露着就收起来（两块都常驻时不动它）。 */
@@ -3190,7 +3256,10 @@
     rememberFileSidebar(fileSidebar.open);
     if (!fileSidebar.open) { fileSidebar.token++; }   // 还等着的那条回应别再画进来
     syncFileSidebarLayout();
-    if (fileSidebar.open && fileSidebar.active < 0) { showFileNote(FILE_SIDEBAR_HINT); }
+    if (fileSidebar.open) {
+      if (fileSidebar.active < 0) { showFileNote(FILE_SIDEBAR_HINT); }
+      else { pollActiveFile(); }   // 收起那阵子文件可能改过了：马上问一次，别等下一个节拍
+    }
   }
 
   /** 顶条左边那颗按钮：开着就收、收着就开。 */
@@ -3209,7 +3278,7 @@
     closeRightSidebarForFile();
     let at = fileSidebarTabIndex(path);
     if (at < 0) {
-      fileSidebar.tabs.push({ path: path, line: 0, scrollTop: 0 });
+      fileSidebar.tabs.push({ path: path, line: 0, scrollTop: 0, mtime: "", loading: false });
       at = fileSidebar.tabs.length - 1;
     }
     if (!fileSidebar.open) { setFileSidebarOpen(true); } else { syncFileSidebarLayout(); }
@@ -3257,6 +3326,11 @@
     if (fileSidebar.open) { showFileNote(FILE_SIDEBAR_HINT); }
     // 拖窗口过那道门槛：常驻 / 滑入两种摆法跟着换
     window.addEventListener("resize", () => { if (fileSidebar.open) { syncFileSidebarLayout(); } });
+    // 跟着刷新：开着而且有正看着的文件时，隔一会儿问一次（页面在后台时不问：手机上别白耗电）
+    setInterval(() => {
+      if (!fileSidebar.open || document.hidden) { return; }
+      pollActiveFile();
+    }, FILE_SIDEBAR_POLL_MS);
     // 顶条左边那颗按钮（由 browserBridge.js 建）点它走这里
     window.pichatFileSidebar = { toggle: toggleFileSidebar };
   })();

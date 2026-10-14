@@ -342,7 +342,8 @@ export class PiChatWebServer {
             }
             if (pathname === "/file") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                this.sendFile(req, res, url.searchParams.get("session") ?? "", url.searchParams.get("path") ?? "");
+                this.sendFile(req, res, url.searchParams.get("session") ?? "", url.searchParams.get("path") ?? "",
+                    url.searchParams.get("mtime") ?? "");
                 return;
             }
             if (pathname === "/events") {
@@ -437,7 +438,7 @@ export class PiChatWebServer {
     private static readonly MAX_FILE_BYTES = 2 * 1024 * 1024;
 
     /**
-     * 发一个文件给页面（/file?session=…&path=…）。
+     * 发一个文件给页面（/file?session=…&path=…&mtime=…）。
      *
      * 只读，而且只看得到当前会话目录里的文件：相对路径按那个会话的目录解，解出来的真实路径
      * （软链接一起解析掉）必须落在目录以内；`..` 绕出去的、软链接指到外面的都不给。这是有意的
@@ -446,8 +447,15 @@ export class PiChatWebServer {
      *
      * 看不了时给准信：目录外 403、文件不在 404、看（用来显示）超过 2 MB 413（正文里带着字节数，
      * 页面据此说「太大」）。这一版按 UTF-8 纯文本递出去；图片、二进制与下载那几条见后续的票。
+     *
+     * 条件请求：页面把上次拿到的那份内容的修改时间当 `mtime` 带上来，文件还是那一次改动就回
+     * 204 空响应——面板盯着一个文件看得久了，靠它省下每轮重传整份正文。给正文的 200 里用
+     * `X-File-Mtime` 给出这次的修改时间（毫秒），页面下次带它回来。
+     *
+     * @param sinceMtime 页面手上那份内容的修改时间（毫秒）；空 = 没得比，给正文
      */
-    private sendFile(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string, wantPath: string): void {
+    private sendFile(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string, wantPath: string,
+        sinceMtime = ""): void {
         if (!sessionId || !wantPath || wantPath.includes("\0")) {
             this.sendText(req, res, 400, "请求里要说明是哪个会话、哪个文件。");
             return;
@@ -486,11 +494,19 @@ export class PiChatWebServer {
                 `文件太大（${stat.size} 字节），这里只显示小于 2 MB 的文件。`);
             return;
         }
+        // 文件还是页面手上那一次改动：正文一个字节都不用给（跟着刷新那轮省下的就是它）
+        const mtime = String(Math.floor(stat.mtimeMs));
+        if (sinceMtime && sinceMtime === mtime) {
+            res.writeHead(204, { "Cache-Control": "no-store", "X-File-Mtime": mtime });
+            res.end();
+            return;
+        }
         fs.readFile(realTarget, (err, data) => {
             if (err) { this.sendText(req, res, 404, "没有这个文件。"); return; }
             this.writeBody(req, res, 200, data, {
                 "Content-Type": "text/plain; charset=utf-8",
                 "Cache-Control": "no-store",
+                "X-File-Mtime": mtime,
             });
         });
     }

@@ -13,8 +13,10 @@
  *      ≥1200px 常驻在左边、窄了滑入、点外面收起；手机上两块侧边栏互斥；
  *      顶条左边那颗按钮点开点收、刷新后还是刚才的样子；
  *      目录外 / 不存在 / 超过 2 MB 时页面上给一句说明；
+ *      正看着的文件被改（脚本直接改会话目录里的文件，见下）以后，面板不用重新点链接就换成
+ *      新内容，而读到哪儿还停在哪儿；文件没变的那几轮里，正文一个字节都不再传一遍；
  *   2. 在页面里用 fetch 直接打那条只读文件地址，核对拒绝的几种情形（目录外含 .. 绕出去的写法、
- *      没有这个文件、超过 2 MB）。
+ *      没有这个文件、超过 2 MB），以及「没变就别再给一遍正文」那条条件请求。
  * 最后一件事：把页面按“插件里的对话面板”跑一遍（在页面脚本里先塞一个网页视图接口），
  * 核对那边既没有这一列也没有这颗按钮、点链接照旧是交给编辑器打开那条消息。
  *
@@ -31,10 +33,14 @@ const HIT_LINE_AGAIN = 260;
 const SAMPLE_HIT = 3;
 /** 比 2 MB 大一点点：只用来验“太大”，不读出来。 */
 const BIG_BYTES = 2 * 1024 * 1024 + 64 * 1024;
+/** live.js：面板正看着它的时候脚本改它（验“跟着刷新”那个文件）。 */
+const LIVE_LINES = 300;
+const LIVE_HIT = 100;
 
 const FILE = {
     long: "long.js",
     sample: "sample.js",
+    live: "live.js",
     missing: "missing.txt",
     big: "big.txt",
     outside: "outside/package.json",
@@ -43,7 +49,17 @@ const LINK_TEXT =
     "看这几个文件：\n\n" +
     "`" + FILE.long + ":" + HIT_LINE + "` 这一行、`" + FILE.sample + ":" + SAMPLE_HIT + "` 这一行，\n" +
     "`" + FILE.long + ":" + HIT_LINE_AGAIN + "` 这个文件再说一次，\n" +
+    "`" + FILE.live + ":" + LIVE_HIT + "` 这个是拿着看的，\n" +
     "再试试 `" + FILE.missing + ":1`、`" + FILE.outside + ":1`、`" + FILE.big + ":1`。\n";
+
+/** live.js 每次都整份重写：marker 为真就把第 LIVE_HIT 行换个说法（行数不变），extra 是末尾多加几行。 */
+function writeLive(cwd, marker, extra) {
+    const lines = [];
+    for (let i = 1; i <= LIVE_LINES + (extra || 0); i++) {
+        lines.push(i === LIVE_HIT && marker ? "// live 第 " + i + " 行（改过了）" : "// live 第 " + i + " 行");
+    }
+    fs.writeFileSync(path.join(cwd, FILE.live), lines.join("\n") + "\n", "utf8");
+}
 
 /** 往会话目录里造测试用的文件（每次跑都重写一遍，内容与行数固定）。 */
 function prepareFiles(cwd) {
@@ -52,6 +68,7 @@ function prepareFiles(cwd) {
     fs.writeFileSync(path.join(cwd, FILE.long), long.join("\n") + "\n", "utf8");
     fs.writeFileSync(path.join(cwd, FILE.sample),
         "// sample 1\n// sample 2\n// sample 3 这一行\n// sample 4\n// sample 5\n", "utf8");
+    writeLive(cwd, false, 0);
     fs.writeFileSync(path.join(cwd, FILE.big), Buffer.alloc(BIG_BYTES, 0x78));
     const outside = path.join(cwd, "outside");
     if (fs.existsSync(outside)) { return "已经有了"; }
@@ -123,6 +140,7 @@ module.exports = async (page) => {
                 panelWidth: rootRect ? Math.round(rootRect.width) : -1,
                 dock: document.body.classList.contains("file-dock"),
                 open: document.body.classList.contains("file-open"),
+                hidden: document.hidden,
                 chatLeft: Math.round(chat.left),
                 title: (document.getElementById("fileTitle") || {}).textContent || "",
                 note: note ? (note.textContent || "") : "",
@@ -139,6 +157,8 @@ module.exports = async (page) => {
                 tabActive: tabs.findIndex(function (t) { return t.classList.contains("active"); }),
                 tabCloseCount: tabs.filter(function (t) { return !!t.querySelector(".file-tab-close"); }).length,
                 backdropShown: !!backdrop && getComputedStyle(backdrop).display !== "none",
+                bodyTop: body ? Math.round(body.scrollTop) : -1,
+                bodyMax: body ? Math.round(body.scrollHeight - body.clientHeight) : -1,
                 barBottom: Math.round(document.getElementById("sessionBar").getBoundingClientRect().bottom),
                 fileHeaderBottom: document.getElementById("fileHeader")
                     ? Math.round(document.getElementById("fileHeader").getBoundingClientRect().bottom) : -1,
@@ -155,6 +175,40 @@ module.exports = async (page) => {
         console.log(label + "：" + JSON.stringify(r));
         return r;
     };
+    /** 等面板变成想要的样子（换内容、换成一句提示都是异步来的）：cond 拿一次读数判断行不行。 */
+    const waitLook = async (what, cond, timeoutMs) => {
+        const limit = timeoutMs || 8000;
+        const started = Date.now();
+        let got = null;
+        while (Date.now() - started < limit) {
+            got = JSON.parse(await page.eval(LOOK));
+            if (cond(got)) { return got; }
+            await page.sleep(250);
+        }
+        console.log("（等超时：" + what + "，现在这样：" + JSON.stringify(got) + "）");
+        return got;
+    };
+    /** 装上探针：记下每一条打 /file 的请求（带没带修改时间、回什么状态、正文几字节）。 */
+    const PROBE = `
+        window.__fileProbe = window.__fileProbe || [];
+        if (!window.__fileProbeOn) {
+            window.__fileProbeOn = true;
+            const realFetch = window.fetch.bind(window);
+            window.fetch = function (input, init) {
+                const url = typeof input === "string" ? input : String((input && input.url) || "");
+                const p = realFetch(input, init);
+                if (url.indexOf("/file?") >= 0) {
+                    const rec = { mtime: url.indexOf("mtime=") >= 0, status: 0, bytes: 0 };
+                    window.__fileProbe.push(rec);
+                    p.then(function (resp) { rec.status = resp.status; return resp.clone().text(); })
+                        .then(function (text) { rec.bytes = text.length; })
+                        .catch(function () { /* 这条请求塌了，不影响页面 */ });
+                }
+                return p;
+            };
+        }
+        return true;
+    `;
     /** 点消息流里某个文件的链接。给了 line 就挑说的那一行那一个（同一个文件可能有好几个链接）。 */
     const clickLink = (file, line) => page.eval(`
         const want = { file: ${JSON.stringify(file)}, line: ${line === undefined ? "null" : JSON.stringify(String(line))} };
@@ -306,6 +360,63 @@ module.exports = async (page) => {
     await page.eval(POST_LINKS);
     await page.sleep(300);
 
+    // ==================== 跟着刷新：正看着的文件被改了，面板自己跟上 ====================
+    // 脚本直接改会话目录里的 live.js（谁改的都一样：模型改的、脚本改的）：面板该自己把新内容
+    // 换上来，而读到哪儿还停在哪儿；文件没变的那几轮里，正文一个字节都不该再传一遍。
+    console.log("点文件链接：" + await clickLink(FILE.live, LIVE_HIT));
+    const live0 = await waitLook("live.js 上来", (x) => x.rowCount === LIVE_LINES && x.tabActive === 0);
+    check("点链接打开 live.js、停在链接说的那一行", live0.rowCount === LIVE_LINES
+        && live0.hitNum === String(LIVE_HIT) && live0.hitVisible);
+    check("停在中间一段（后面验“位置不动”才不是白验）", live0.bodyTop > 0 && live0.bodyTop < live0.bodyMax,
+        JSON.stringify({ top: live0.bodyTop, max: live0.bodyMax }));
+    await page.shot("file-11-live.png");
+
+    await page.eval(PROBE);
+    await page.eval("window.__fileProbe.length = 0; return true;");
+    console.log("文件没变，等两轮（界面在后台？" + live0.hidden + "）…");
+    await page.sleep(3600);
+    const probe0 = JSON.parse(await page.eval("return JSON.stringify(window.__fileProbe)"));
+    const polled = probe0.filter((r) => r.mtime);
+    console.log("这 3.6 秒里打 /file 的请求：" + JSON.stringify(probe0));
+    check("面板按固定间隔自己问（文件没变也问）", polled.length >= 2, "问了 " + polled.length + " 次");
+    check("没变的那些轮：回的是空响应、正文一个字节都没再传一遍",
+        probe0.length > 0 && probe0.length === polled.length && polled.every((r) => r.status === 204 && r.bytes === 0),
+        JSON.stringify(probe0.map((r) => [r.status, r.bytes])));
+    const idle = await look("干等两轮 · 文件没变");
+    check("文件没变：画面也不动（还停在同一行）", idle.rowCount === LIVE_LINES && idle.bodyTop === live0.bodyTop
+        && idle.hitNum === String(LIVE_HIT), JSON.stringify({ top: idle.bodyTop }));
+
+    // 脚本改文件：改的是正看着的那一行，行数不变
+    writeLive(cwd, true, 0);
+    const changed = await waitLook("面板换成改过的内容", (x) => x.hitText.indexOf("改过了") >= 0);
+    check("文件被改以后，面板自己换成新内容（不用重新点链接）", changed.hitText.indexOf("改过了") >= 0, changed.hitText);
+    check("行数、停在的那一行都还在", changed.rowCount === LIVE_LINES && changed.hitNum === String(LIVE_HIT));
+    check("滚动位置一点没动（读到哪儿还停在哪儿）", changed.bodyTop === live0.bodyTop,
+        JSON.stringify({ before: live0.bodyTop, after: changed.bodyTop }));
+    check("标签没被这次刷新搅乱（还是那一个、还是当前这个）", changed.tabCount === 1 && changed.tabActive === 0);
+    const probe1 = JSON.parse(await page.eval("return JSON.stringify(window.__fileProbe)"));
+    check("变了才给正文：这回有一条 200 带着新正文回来",
+        probe1.some((r) => r.status === 200 && r.bytes > 0), JSON.stringify(probe1.slice(-3)));
+    await page.shot("file-12-follow-change.png");
+
+    // 文件变长（末尾多出几行）：内容跟着长，人读到的位置还是不动
+    writeLive(cwd, true, 40);
+    const grown = await waitLook("面板换成多出 40 行的内容", (x) => x.rowCount === LIVE_LINES + 40);
+    check("文件变长：面板也跟着长（末尾多了那 40 行）", grown.rowCount === LIVE_LINES + 40, String(grown.rowCount));
+    check("文件变长也不动滚动位置", grown.bodyTop === live0.bodyTop,
+        JSON.stringify({ before: live0.bodyTop, after: grown.bodyTop }));
+
+    // 删掉又被写回来：先给一句「没有这个文件」，写回来以后自己换回内容
+    fs.rmSync(path.join(cwd, FILE.live), { force: true });
+    const gone = await waitLook("面板说没有这个文件", (x) => x.note.indexOf("没有这个文件") >= 0);
+    check("文件被删掉：面板自己给一句「没有这个文件」", gone.rowCount === 0 && gone.note.indexOf("没有这个文件") >= 0, gone.note);
+    writeLive(cwd, false, 0);
+    const back = await waitLook("面板换回内容", (x) => x.rowCount === LIVE_LINES);
+    check("文件写回来：面板自己又显示出来（还停在原来那一行）", back.rowCount === LIVE_LINES
+        && back.hitNum === String(LIVE_HIT), String(back.rowCount));
+    check("一路都是 live.js 那一个标签", back.tabCount === 1 && back.tabPaths[0] === FILE.live && back.tabActive === 0);
+    await page.shot("file-13-live-back.png");
+
     // ==================== 门槛：1200px ====================
     await page.cdp.send("Emulation.setDeviceMetricsOverride", { width: 1199, height: 800, deviceScaleFactor: 1, mobile: false });
     await page.sleep(500);
@@ -386,14 +497,17 @@ module.exports = async (page) => {
         JSON.stringify(big.tabPaths));
     await page.shot("file-6-refused.png");
 
-    // ==================== 直接打那条文件地址（拒绝的几种情形）====================
+    // ==================== 直接打那条文件地址（拒绝的几种情形 + 条件请求）====================
     const raw = await page.eval(`
         const sid = (document.querySelector(".session-pane") || { dataset: {} }).dataset.sessionId || "";
-        const get = async function (p, session) {
-            const resp = await fetch("/file?session=" + encodeURIComponent(session === undefined ? sid : session)
-                + "&path=" + encodeURIComponent(p));
+        const get = async function (p, opts) {
+            const o = opts || {};
+            const session = o.session === undefined ? sid : o.session;
+            let url = "/file?session=" + encodeURIComponent(session) + "&path=" + encodeURIComponent(p);
+            if (o.mtime) { url += "&mtime=" + encodeURIComponent(o.mtime); }
+            const resp = await fetch(url);
             const text = await resp.text();
-            return { status: resp.status, text: text.trim() };
+            return { status: resp.status, mtime: resp.headers.get("x-file-mtime") || "", text: text.trim() };
         };
         return (async function () {
             const out = {};
@@ -403,7 +517,10 @@ module.exports = async (page) => {
             out.outside = await get(${JSON.stringify(FILE.outside)});
             out.missing = await get(${JSON.stringify(FILE.missing)});
             out.big = await get(${JSON.stringify(FILE.big)});
-            out.noSession = await get(${JSON.stringify(FILE.long)}, "不存在的会话");
+            out.noSession = await get(${JSON.stringify(FILE.long)}, { session: "不存在的会话" });
+            // 条件请求：拿上次那份的修改时间再问一次（该给空响应），换一个对不上的（该给正文）
+            out.same = await get(${JSON.stringify(FILE.long)}, { mtime: out.ok.mtime });
+            out.stale = await get(${JSON.stringify(FILE.long)}, { mtime: "1" });
             return JSON.stringify(out);
         })();
     `);
@@ -421,6 +538,12 @@ module.exports = async (page) => {
     check("超过 2 MB：413、响应里带着字节数",
         f.big.status === 413 && f.big.text.indexOf(String(BIG_BYTES)) >= 0, f.big.text);
     check("不认识的会话：不给内容", f.noSession.status !== 200);
+    check("回话里带着这份内容的修改时间（页面下次带它回来问）",
+        f.ok.status === 200 && f.ok.mtime !== "", f.ok.mtime);
+    check("带着同一个修改时间再问：空响应（正文不重复传）",
+        f.same.status === 204 && f.same.text === "", JSON.stringify({ status: f.same.status, len: f.same.text.length }));
+    check("修改时间对不上：给正文",
+        f.stale.status === 200 && f.stale.text.split("\n").length === LONG_LINES);
 
     // ==================== 切会话：面板里的标签清空 ====================
     // 往页面里投一份假会话列表、把当前会话切到另一个上去（照 dev/childDot.js 的做法：消息形状
