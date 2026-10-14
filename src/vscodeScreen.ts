@@ -13,8 +13,7 @@ import { dirInsideAny, relativeTo } from "./pathRules";
  * 这里只管干活和算东西，不管连不连得上（那是 backendClient 的事）：
  *   - 打开文件：会话目录 + 它读写过的文件清单，都是从后端那条消息里带来的；
  *   - 符号表：后端把"这个工作区改动过哪些文件"报过来，这里问语言服务要符号名再报回去，
- *     界面拿这份名字把正文里的符号画成可点的链接；点符号时——插件里的对话面板点在编辑器里开，
- *     浏览器页面那边只把算出来的文件与行报回去（页面自己开进文件侧边栏，那边没有编辑器可开）；
+ *     界面拿这份名字把正文里的符号画成可点的链接；
  *   - 列编辑器里打开着的文件：给界面上的 # 引用列表用。
  */
 export interface ScreenHooks {
@@ -27,7 +26,7 @@ export interface ScreenHooks {
 
 /** 只有编辑器干得了的活（后端派来的那几种 kind）。 */
 export interface ScreenRequest {
-    kind: "openFile" | "openFileAt" | "openSymbol" | "findSymbol" | "listFiles";
+    kind: "openFile" | "openFileAt" | "openSymbol" | "listFiles";
     cwd?: string;
     path?: string;
     line?: number;
@@ -93,10 +92,6 @@ export class VscodeScreen {
                 return;
             case "openSymbol":
                 void this.openSymbol(req.name ?? "", req.cwd, req.knownFiles ?? []);
-                return;
-            case "findSymbol":
-                // 浏览器页面点的符号链接：只把文件与行报回去（那边开进文件侧边栏），不在编辑器里开。
-                void this.findSymbol(req.name ?? "", req.knownFiles ?? [], reply);
                 return;
             case "listFiles":
                 reply({ type: "files", files: this.getOpenFiles(req.cwd) });
@@ -254,43 +249,26 @@ export class VscodeScreen {
         this.hooks.reportSymbols(list);
     }
 
-    /** 点正文里的符号（插件里的对话面板）：找到就在编辑器里打开那一行。 */
+    /** 点正文里的符号：先在会话读写过的文件里找，再在所有打开着的文档里找。 */
     public async openSymbol(name: string, _cwd?: string, knownFiles?: string[]): Promise<void> {
-        const hit = await this.locateSymbol(name, knownFiles);
-        if (hit) {
-            await this.openFileAtLine(hit.path, hit.line);
-            return;
-        }
-        vscode.window.showInformationMessage(`piChat: 未找到符号 ${name}`);
-    }
-
-    /**
-     * 浏览器页面点的符号（那边没有编辑器）：把算出来的文件与行报回去，由页面开进文件侧边栏；
-     * 这个窗口不开编辑器。找不到也回一声（后端记一行日志），不往编辑器里弹框（人可能不在那儿）。
-     */
-    public async findSymbol(name: string, knownFiles: string[], report: (msg: unknown) => void): Promise<void> {
-        const hit = await this.locateSymbol(name, knownFiles);
-        if (!hit) { report({ type: "failed", note: `没找到符号 ${name}。` }); return; }
-        report({ type: "symbolLocation", path: hit.path, line: hit.line });
-    }
-
-    /**
-     * 一个符号在哪个文件的哪一行（行号 1 起）：先在会话读写过的文件里找，再在所有打开着的文档里找。
-     * @returns 绝对路径 + 行号；哪儿都没有就是 undefined
-     */
-    private async locateSymbol(name: string, knownFiles?: string[]): Promise<{ path: string; line: number } | undefined> {
         const parts = name.split(".");
         const tail = parts.pop()!;
         for (const p of knownFiles && knownFiles.length > 0 ? knownFiles : this.sessionFiles) {
             const hit = await this.findSymbolIn(p, parts, tail);
-            if (hit) { return { path: p, line: hit.selectionRange.start.line + 1 }; }
+            if (hit) {
+                await this.openFileAtLine(p, hit.selectionRange.start.line + 1);
+                return;
+            }
         }
         for (const d of vscode.workspace.textDocuments) {
             if (d.uri.scheme !== "file") { continue; }
             const hit = await this.findSymbolIn(d.uri.fsPath, parts, tail);
-            if (hit) { return { path: d.uri.fsPath, line: hit.selectionRange.start.line + 1 }; }
+            if (hit) {
+                await this.openFileAtLine(d.uri.fsPath, hit.selectionRange.start.line + 1);
+                return;
+            }
         }
-        return undefined;
+        vscode.window.showInformationMessage(`piChat: 未找到符号 ${name}`);
     }
 
     /** 在某文件的符号树上按限定名逐级查找（Foo.method → 找 Foo，再在它的 children 里找 method）。 */

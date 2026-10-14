@@ -390,7 +390,6 @@ export class BackendClient {
             case "openFile":
             case "openFileAt":
             case "openSymbol":
-            case "findSymbol":
             case "listFiles":
                 this.options.onScreenRequest(msg);
                 return;
