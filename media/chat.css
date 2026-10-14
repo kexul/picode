@@ -1109,6 +1109,7 @@
      面板头的高度跟对话那边的顶条对齐（chat.js 量出来写在这一格上）。 */
   #filePanel {
     box-sizing: border-box; width: 100%; height: 100%; max-height: none;
+    position: relative;   /* 角上那颗折行开关（#fileWrap）按这一格摆 */
     border-top: 0; border-left: 0; border-bottom: 0; border-radius: 0; box-shadow: none;
   }
   /* 面板头的高度是跟顶条量出来的（见 chat.js 的 syncDockHeaderHeight）：它不许被压扁
@@ -1147,7 +1148,8 @@
   .file-tab-close svg { width: 10px; height: 10px; display: block; }
   .file-tab-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.25)); }
   #fileBody { flex: 1 1 auto; min-height: 0; padding: 6px 0 12px; font-size: 0.9em; }
-  /* 文件正文：一行一格（行号 + 那一行的原文），长行左右滚（折行开关见后续的票）。 */
+  /* 文件正文：一行一格（行号 + 那一行的原文）。默认长行左右滚；角上那颗开关
+     （#fileWrap，票 08）打开时 body 上多一个 file-wrap，长行折起来、横向就不滚了。 */
   .file-line { display: flex; align-items: flex-start; min-width: max-content; line-height: 1.55; }
   .file-num {
     flex: 0 0 auto; width: 3.2em; padding-right: 8px; text-align: right;
@@ -1179,3 +1181,22 @@
   /* 看不了但能下载（二进制 / 太大）：那一句说明后面跟着的下载链接（整颗不拆行） */
   .file-download { color: var(--vscode-textLink-foreground, #3794ff); text-decoration: none; white-space: nowrap; }
   .file-download:hover { text-decoration: underline; }
+  /* 折行开关：摆在面板自己的角上（右下方贴角），不挤标签条也不挤面板头。
+     默认（没记过）是一行就是一行，这时它是淡的；折行打开时加 .on，带一道强调色的边。 */
+  #fileWrap {
+    position: absolute; right: 8px; bottom: 8px; z-index: 1;
+    display: flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; padding: 0; cursor: pointer;
+    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); border-radius: 4px;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #fff));
+    color: var(--vscode-descriptionForeground, inherit); opacity: 0.7;
+  }
+  #fileWrap svg { width: 14px; height: 14px; display: block; }
+  #fileWrap:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
+  #fileWrap.on {
+    opacity: 1; color: var(--vscode-focusBorder, #007acc); border-color: var(--vscode-focusBorder, #007acc);
+    background: color-mix(in srgb, var(--vscode-focusBorder, #007acc) 15%, transparent);
+  }
+  /* 长行折起来：一行最多占这一列的宽（不再撑出横向滚动），断不了的长串也断在栏里 */
+  body.file-wrap .file-line { min-width: 0; }
+  body.file-wrap .file-text { white-space: pre-wrap; overflow-wrap: anywhere; }

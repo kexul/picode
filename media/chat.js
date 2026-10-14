@@ -48,6 +48,9 @@
     // 子会话的拐角箭头（“↳”）：先从上面下来、再向右拐，像个挂在父会话下面的分叉。
     // 用 SVG 而不是文字符号：箭头在 Segoe UI 等字体里居中不对，画出来天然齐。
     child: '<svg width="14" height="14" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.2 1.6V8.4H12.6"/><path d="M9.8 5.6L12.8 8.4L9.8 11.2"/></svg>',
+    // 折行开关（文件侧边栏角上）：上面一条整线、下面一条短线，中间那条走到头再拐回来
+    //（「长行折回来」那个意思）。
+    wrap: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h12M2 7h9.4a2.5 2.5 0 0 1 0 5H8"/><path d="M10.2 9.6 7.6 12l2.6 2.4"/><path d="M2 12h2.4"/></svg>',
     // 往右的箭头：消息流末尾那条「继续」上用（VSCode 官方 codicon 的 arrow-right）
     "arrow-right": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8.85355 3.14645C8.65829 2.95118 8.34171 2.95118 8.14645 3.14645C7.95118 3.34171 7.95118 3.65829 8.14645 3.85355L11.7929 7.5H2.5C2.22386 7.5 2 7.72386 2 8C2 8.27614 2.22386 8.5 2.5 8.5H11.7929L8.14645 12.1464C7.95118 12.3417 7.95118 12.6583 8.14645 12.8536C8.34171 13.0488 8.65829 13.0488 8.85355 12.8536L13.3536 8.35355C13.5488 8.15829 13.5488 7.84171 13.3536 7.64645L8.85355 3.14645Z"/></svg>',
   };
@@ -2990,6 +2993,8 @@
    */
   const FILE_HIGHLIGHT_MAX_CHARS = 384 * 1024;
   const FILE_SIDEBAR_STORE_KEY = "pichat.fileSidebarOpen";
+  /** 长行怎么摆（折起来 / 一行就是一行）：也记在这台设备里（跟收没收起同一个做法）。 */
+  const FILE_SIDEBAR_WRAP_STORE_KEY = "pichat.fileSidebarWrap";
   const FILE_SIDEBAR_HINT = "点消息里的文件链接，这里会显示那个文件。";
   /** 「项目目录」那一格：标签上写这四个字，悬停提示与面板头给全路径。 */
   const FILE_SIDEBAR_PROJECT_NAME = "项目目录";
@@ -2999,6 +3004,7 @@
   const fileSidebar = {
     root: null, header: null, title: null, tabsEl: null, body: null,
     open: false,     // 这台设备上人要不要它开着（记在 localStorage；开着时宽窗常驻、窄窗滑入）
+    wrap: false,     // 长行折起来还是横向滚（记在 localStorage；默认一行就是一行，见 chat.css 末尾）
     // 开着的文件与目录，从左到右：[{ path, dir, line, scrollTop, mtime, loading, imageUrl }]
     //（不记进设备，刷新就没了）
     //   path：文件是链接里那个写法；目录是去掉末尾斜杠的写法（同一张目录只占一格）
@@ -3019,12 +3025,20 @@
   /** 这一列此刻常驻在左边吗。 */
   function fileSidebarDocked() { return fileSidebar.open && fileSidebarWide(); }
 
-  /** 按“开没收起、常驻还是滑入”摆版面（版式看 body 上的 file-open / file-dock，见 chat.css 末尾）。 */
+  /** 按“开没收起、常驻还是滑入、长行折还是滚”摆版面（版式看 body 上的 file-open / file-dock / file-wrap，见 chat.css 末尾）。 */
   function syncFileSidebarLayout() {
     document.body.classList.toggle("file-open", fileSidebar.open);
     document.body.classList.toggle("file-dock", fileSidebarDocked());
+    document.body.classList.toggle("file-wrap", fileSidebar.wrap);
     const btn = document.getElementById("fileSidebarBtn");
     if (btn) { btn.title = fileSidebar.open ? "收起文件侧边栏" : "文件侧边栏"; }
+    const wrapBtn = document.getElementById("fileWrap");
+    if (wrapBtn) {
+      // 角上那颗开关点下去要做什么就在悬停提示里说清楚，按下去的样子（.on）表示现在是折行的。
+      wrapBtn.title = fileSidebar.wrap ? "长行折起来了，点一下改成一行就是一行" : "一行就是一行，点一下把长行折起来";
+      wrapBtn.setAttribute("aria-pressed", fileSidebar.wrap ? "true" : "false");
+      wrapBtn.classList.toggle("on", fileSidebar.wrap);
+    }
     syncDockHeaderHeight();
   }
   function rememberFileSidebar(open) {
@@ -3032,6 +3046,13 @@
   }
   function readFileSidebarWanted() {
     try { return localStorage.getItem(FILE_SIDEBAR_STORE_KEY) === "1"; } catch (e) { return false; }
+  }
+  function rememberFileSidebarWrap(wrap) {
+    try { localStorage.setItem(FILE_SIDEBAR_WRAP_STORE_KEY, wrap ? "1" : "0"); } catch (e) { /* 存不了就只管这一次 */ }
+  }
+  /** 没记过时是一行就是一行（跟这一列本来的摆法一致）。 */
+  function readFileSidebarWrapWanted() {
+    try { return localStorage.getItem(FILE_SIDEBAR_WRAP_STORE_KEY) === "1"; } catch (e) { return false; }
   }
 
   /** 路径在界面上的写法：目录带一个末尾斜杠，一眼看出它不是文件。 */
@@ -3532,6 +3553,13 @@
     setFileSidebarOpen(true);
   }
 
+  /** 面板角上那颗折行开关：「长行折起来」与「一行就是一行、横向滚」两个来回切，选的那个记在这台设备里。 */
+  function toggleFileSidebarWrap() {
+    fileSidebar.wrap = !fileSidebar.wrap;
+    rememberFileSidebarWrap(fileSidebar.wrap);
+    syncFileSidebarLayout();
+  }
+
   /**
    * 点消息流里的文件链接（或者面板里清单上的一项）：开左边这一列，把那个文件取回来显示
    * （停在链接说的那一行），是目录就列它里面有什么。已经开着这个东西就切回它那个标签、
@@ -3580,6 +3608,7 @@
         '</div>' +
         '<div id="fileTabs"></div>' +
         '<div id="fileBody" class="pk-body"></div>' +
+        '<button id="fileWrap" type="button" aria-label="折行开关" aria-pressed="false">' + ICONS.wrap + '</button>' +
       '</div>';
     const backdrop = document.createElement("div");
     backdrop.id = "fileBackdrop";
@@ -3591,7 +3620,9 @@
     fileSidebar.tabsEl = root.querySelector("#fileTabs");
     fileSidebar.body = root.querySelector("#fileBody");
     fileSidebar.open = readFileSidebarWanted();
+    fileSidebar.wrap = readFileSidebarWrapWanted();
     root.querySelector("#fileClose").addEventListener("click", () => setFileSidebarOpen(false));
+    root.querySelector("#fileWrap").addEventListener("click", toggleFileSidebarWrap);
     backdrop.addEventListener("click", () => setFileSidebarOpen(false));
     syncFileSidebarLayout();
     if (fileSidebar.open) { ensureProjectDirTab(); }
