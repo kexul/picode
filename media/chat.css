@@ -1164,3 +1164,9 @@
     box-shadow: inset 2px 0 0 0 var(--vscode-focusBorder, #007acc);
   }
   .file-note { padding: 12px 14px; line-height: 1.6; opacity: 0.75; }
+  /* 图片：按这一列的宽度等比例缩（不裁、不拉伸），图比面板高就上下滚。 */
+  .file-image { display: flex; justify-content: center; padding: 8px 10px; }
+  .file-image img { max-width: 100%; height: auto; display: block; }
+  /* 看不了但能下载（二进制 / 太大）：那一句说明后面跟着的下载链接（整颗不拆行） */
+  .file-download { color: var(--vscode-textLink-foreground, #3794ff); text-decoration: none; white-space: nowrap; }
+  .file-download:hover { text-decoration: underline; }

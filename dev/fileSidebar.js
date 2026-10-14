@@ -15,8 +15,12 @@
  *      目录外 / 不存在 / 超过 2 MB 时页面上给一句说明；
  *      正看着的文件被改（脚本直接改会话目录里的文件，见下）以后，面板不用重新点链接就换成
  *      新内容，而读到哪儿还停在哪儿；文件没变的那几轮里，正文一个字节都不再传一遍；
+ *      点图片链接直接在面板里看到那张图；点二进制文件给一句「这是个二进制文件」加一个下载；
+ *      点超过 2 MB 的文件给「太大，点这里下载」，正文一个字节都不塞进页面；点那个下载
+ *      浏览器真把文件存了下来；
  *   2. 在页面里用 fetch 直接打那条只读文件地址，核对拒绝的几种情形（目录外含 .. 绕出去的写法、
- *      没有这个文件、超过 2 MB），以及「没变就别再给一遍正文」那条条件请求。
+ *      没有这个文件、超过 2 MB）、图片与二进制各自给什么、以及「没变就别再给一遍正文」那条
+ *      条件请求；下载那条路不受 2 MB 这条线管（几 MB 的文件整份下来）。
  * 最后一件事：把页面按“插件里的对话面板”跑一遍（在页面脚本里先塞一个网页视图接口），
  * 核对那边既没有这一列也没有这颗按钮、点链接照旧是交给编辑器打开那条消息。
  *
@@ -31,8 +35,13 @@ const HIT_LINE = 137;
 /** 第二次点 long.js 时链接说的那一行（换成另一行：切回原来那个标签、按这次的行滚）。 */
 const HIT_LINE_AGAIN = 260;
 const SAMPLE_HIT = 3;
-/** 比 2 MB 大一点点：只用来验“太大”，不读出来。 */
-const BIG_BYTES = 2 * 1024 * 1024 + 64 * 1024;
+/** 比 2 MB 大出好几 MB：只用来验「太大」和「下载整份下来」，不当正文读。 */
+const BIG_BYTES = 4 * 1024 * 1024;
+/** 二进制那个文件多大（点下载存下来时按它核对字节数）。 */
+const BINARY_BYTES = 4096;
+/** 示例图片的原始尺寸（makePng.js 写的）——面板里显示出来要按比例缩，但认得出是它那张。 */
+const IMAGE_W = 1600;
+const IMAGE_H = 400;
 /** live.js：面板正看着它的时候脚本改它（验“跟着刷新”那个文件）。 */
 const LIVE_LINES = 300;
 const LIVE_HIT = 100;
@@ -43,14 +52,18 @@ const FILE = {
     live: "live.js",
     missing: "missing.txt",
     big: "big.txt",
+    bigBinary: "big.bin",
     outside: "outside/package.json",
+    image: "picture.png",
+    binary: "data.bin",
 };
 const LINK_TEXT =
     "看这几个文件：\n\n" +
     "`" + FILE.long + ":" + HIT_LINE + "` 这一行、`" + FILE.sample + ":" + SAMPLE_HIT + "` 这一行，\n" +
     "`" + FILE.long + ":" + HIT_LINE_AGAIN + "` 这个文件再说一次，\n" +
     "`" + FILE.live + ":" + LIVE_HIT + "` 这个是拿着看的，\n" +
-    "再试试 `" + FILE.missing + ":1`、`" + FILE.outside + ":1`、`" + FILE.big + ":1`。\n";
+    "`" + FILE.image + ":1` 这个是张图、`" + FILE.binary + ":1` 这个是二进制的，\n" +
+    "再试试 `" + FILE.missing + ":1`、`" + FILE.outside + ":1`、`" + FILE.big + ":1`、`" + FILE.bigBinary + ":1`。\n";
 
 /** live.js 每次都整份重写：marker 为真就把第 LIVE_HIT 行换个说法（行数不变），extra 是末尾多加几行。 */
 function writeLive(cwd, marker, extra) {
@@ -70,6 +83,13 @@ function prepareFiles(cwd) {
         "// sample 1\n// sample 2\n// sample 3 这一行\n// sample 4\n// sample 5\n", "utf8");
     writeLive(cwd, false, 0);
     fs.writeFileSync(path.join(cwd, FILE.big), Buffer.alloc(BIG_BYTES, 0x78));
+    fs.copyFileSync(path.join(cwd, FILE.big), path.join(cwd, FILE.bigBinary));   // 同样大，但是个二进制扩展名
+    // 一张真图（尺寸固定）与一个真二进制（有 0 字节、有高位字节，当文字读不出来）
+    try { require("./makePng.js").writeSamplePng(path.join(cwd, FILE.image), IMAGE_W, IMAGE_H); } catch { /* 生成不了就少验一条 */ }
+    const binary = Buffer.alloc(BINARY_BYTES);
+    for (let i = 0; i < binary.length; i++) { binary[i] = (i * 37 + 200) % 256; }
+    binary[0] = 0;   // 开头就是 0 字节：文本那套肯定读不了
+    fs.writeFileSync(path.join(cwd, FILE.binary), binary);
     const outside = path.join(cwd, "outside");
     if (fs.existsSync(outside)) { return "已经有了"; }
     // 目录外那份用一个目录软链接（Windows 上 junction 不需要管理员权限）指到仓库根上：
@@ -84,6 +104,23 @@ function prepareFiles(cwd) {
 
 /** 页面上把假消息投进去（同一份内容刷新之后要再投一次）。 */
 const POST_LINKS = `for (const m of ${JSON.stringify([{ type: "assistantFull", text: LINK_TEXT }])}) { window.postMessage(m, "*"); } return true;`;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** 等一个文件在下载目录里出现（浏览器存盘是异步的：先落 .crdownload，改好名才算完）。 */
+async function waitForFile(file, timeoutMs) {
+    const limit = timeoutMs || 8000;
+    const started = Date.now();
+    while (Date.now() - started < limit) {
+        if (fs.existsSync(file)) {
+            const size = fs.statSync(file).size;
+            await sleep(200);
+            if (fs.existsSync(file) && fs.statSync(file).size === size && size > 0) { return file; }
+        }
+        await sleep(200);
+    }
+    return "";
+}
 
 module.exports = async (page) => {
     const checks = [];
@@ -127,6 +164,9 @@ module.exports = async (page) => {
             const btn = document.getElementById("fileSidebarBtn");
             const backdrop = document.getElementById("fileBackdrop");
             const note = body ? body.querySelector(".file-note") : null;
+            const dl = body ? body.querySelector("a.file-download") : null;
+            const img = body ? body.querySelector(".file-image img") : null;
+            const imgRect = img ? img.getBoundingClientRect() : null;
             const bar = document.getElementById("fileTabs");
             const tabs = bar ? Array.from(bar.querySelectorAll(".file-tab")) : [];
             return {
@@ -144,6 +184,15 @@ module.exports = async (page) => {
                 chatLeft: Math.round(chat.left),
                 title: (document.getElementById("fileTitle") || {}).textContent || "",
                 note: note ? (note.textContent || "") : "",
+                downloadCount: body ? body.querySelectorAll("a.file-download").length : 0,
+                downloadText: dl ? (dl.textContent || "") : "",
+                downloadHref: dl ? (dl.getAttribute("href") || "") : "",
+                downloadName: dl ? (dl.getAttribute("download") || "") : "",
+                imgCount: body ? body.querySelectorAll(".file-image img").length : 0,
+                imgNatural: img ? [img.naturalWidth, img.naturalHeight] : [0, 0],
+                imgShown: imgRect ? { w: Math.round(imgRect.width), h: Math.round(imgRect.height) } : null,
+                imgBroken: img ? (img.complete && img.naturalWidth === 0) : false,
+                bodyChars: body ? (body.textContent || "").length : -1,
                 rowCount: rows.length,
                 firstRow: rows.length ? rows[0].innerText : "",
                 hitText: hit ? hit.innerText : "",
@@ -497,6 +546,99 @@ module.exports = async (page) => {
         JSON.stringify(big.tabPaths));
     await page.shot("file-6-refused.png");
 
+    // ==================== 图片：点链接直接在面板里看到那张图 ====================
+    // 回到宽窗（前面那段在手机上跑）：面板常驻在左边，图该按这一列的宽度等比例缩。
+    await page.cdp.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+    await page.sleep(500);
+    console.log("点文件链接：" + await clickLink(FILE.image));
+    const img1 = await waitLook("图片上来", (x) => x.imgNatural[0] > 0);
+    check("点图片链接：面板里直接显示出那张图（不是一行行看不懂的字符）",
+        img1.imgCount === 1 && img1.imgNatural[0] === IMAGE_W && img1.imgNatural[1] === IMAGE_H && !img1.imgBroken,
+        JSON.stringify({ img: img1.imgNatural, broken: img1.imgBroken }));
+    check("图按面板宽度等比例缩、没撑破这一列",
+        !!img1.imgShown && img1.imgShown.w > 100 && img1.imgShown.w <= 320
+        && Math.abs(img1.imgShown.h - img1.imgShown.w * IMAGE_H / IMAGE_W) <= 2,
+        JSON.stringify(img1.imgShown));
+    check("图片不画行号、也不给那句「看不了」的说明",
+        img1.rowCount === 0 && img1.note === "" && img1.downloadCount === 0 && img1.bodyChars < 200);
+    check("图片占一个标签，面板头写着它",
+        img1.tabActive === img1.tabPaths.length - 1 && img1.tabPaths[img1.tabActive] === FILE.image
+        && img1.title === FILE.image);
+    await page.shot("file-14-image.png");
+
+    // ==================== 二进制：一句说明 + 一个能存下来的下载 ====================
+    console.log("点文件链接：" + await clickLink(FILE.binary));
+    const bin1 = await waitLook("二进制那句说明上来", (x) => x.downloadCount > 0 || x.note.indexOf("二进制") >= 0);
+    check("点二进制文件：给一句「这是个二进制文件」", bin1.note.indexOf("二进制文件") >= 0, bin1.note);
+    check("二进制文件：给一个下载链接、正文一个字节都不给",
+        bin1.rowCount === 0 && bin1.downloadCount === 1 && bin1.bodyChars < 300
+        && bin1.downloadHref.indexOf("download=1") >= 0 && bin1.downloadHref.indexOf(encodeURIComponent(FILE.binary)) >= 0
+        && bin1.downloadName === FILE.binary,
+        JSON.stringify({ href: bin1.downloadHref, name: bin1.downloadName }));
+    await page.shot("file-15-binary.png");
+
+    // 点那个下载链接：让浏览器真的存一份下来（CDP 把下载指到一个临时目录），再核对字节数
+    const downloadDir = path.join(require("./harness.js").SCRATCH_DIR, "downloads");
+    fs.rmSync(downloadDir, { recursive: true, force: true });
+    fs.mkdirSync(downloadDir, { recursive: true });
+    const cdpSession = page.cdp.sessionId;
+    page.cdp.sessionId = undefined;   // Browser 域的命令发在浏览器上，不带页面会话
+    await page.cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: downloadDir, eventsEnabled: true });
+    page.cdp.sessionId = cdpSession;
+    console.log("点下载链接：" + await page.eval(`const a = document.querySelector("#fileBody a.file-download"); if (!a) { return "没有链接"; } a.click(); return "点了";`));
+    const saved = await waitForFile(path.join(downloadDir, FILE.binary), 10000);
+    check("点下载：文件真存了下来，字节一个不少",
+        !!saved && fs.statSync(saved).size === BINARY_BYTES,
+        saved ? path.basename(saved) + " " + fs.statSync(saved).size + " 字节" : "没等到文件");
+    check("点下载不把页面顶掉（界面还在这儿）",
+        await page.eval(`return !!document.getElementById("fileSidebar") && document.querySelectorAll(".session-pane").length > 0;`));
+
+    // ==================== 超大文件：给「太大，点这里下载」 ====================
+    console.log("点文件链接：" + await clickLink(FILE.big));
+    const big2 = await waitLook("太大那句说明带上下载链接", (x) => x.downloadCount > 0 && x.note.indexOf("太大") >= 0);
+    check("超过 2 MB：给「太大」加一个「点这里下载」",
+        big2.downloadCount === 1 && big2.downloadText.indexOf("点这里下载") >= 0,
+        JSON.stringify({ note: big2.note, text: big2.downloadText }));
+    check("超过 2 MB：几 MB 的正文一个字节都没塞进页面",
+        big2.rowCount === 0 && big2.bodyChars < 500, String(big2.bodyChars) + " 个字的正文");
+    await page.shot("file-16-too-big.png");
+
+    // 点这个超大文件的下载：几 MB 那一下也要真存得下来
+    fs.rmSync(path.join(downloadDir, FILE.big), { force: true });
+    console.log("点下载链接：" + await page.eval(`const a = document.querySelector("#fileBody a.file-download"); if (!a) { return "没有链接"; } a.click(); return "点了";`));
+    const savedBig = await waitForFile(path.join(downloadDir, FILE.big), 20000);
+    check("几 MB 的文件点下载也真存得下来（字节一个不少）",
+        !!savedBig && fs.statSync(savedBig).size === BIG_BYTES,
+        savedBig ? path.basename(savedBig) + " " + fs.statSync(savedBig).size + " 字节" : "没等到文件");
+
+    // 超大 + 二进制：先说「太大」（不先说「二进制」），一样给下载
+    console.log("点文件链接：" + await clickLink(FILE.bigBinary));
+    const bigBin = await waitLook("超大那个二进制文件给「太大」", (x) => x.downloadCount > 0 && x.note.indexOf("太大") >= 0);
+    check("超过 2 MB 的二进制文件：先说「太大」，并给下载",
+        bigBin.note.indexOf("太大") >= 0 && bigBin.note.indexOf("二进制") < 0 && bigBin.downloadCount === 1,
+        bigBin.note);
+
+    // 下载在跑的时候界面还答得上话（几 MB 走单独的请求，页面这边不经手正文）
+    const bigFetch = JSON.parse(await page.eval(`
+        const sid = (document.querySelector(".session-pane") || { dataset: {} }).dataset.sessionId || "";
+        const url = "/file?session=" + encodeURIComponent(sid) + "&path=" + encodeURIComponent(${JSON.stringify(FILE.big)}) + "&download=1";
+        return (async function () {
+            const started = performance.now();
+            const pending = fetch(url).then(function (r) { return r.arrayBuffer(); });
+            // 几 MB 还在流的时候：面板还在、界面这边照样答得上话
+            const t0 = performance.now();
+            const panelThere = !!document.getElementById("fileBody");
+            document.getElementById("fileTabs").getBoundingClientRect();
+            const uiMs = Math.round(performance.now() - t0);
+            const buf = await pending;
+            return JSON.stringify({ bytes: buf.byteLength, ms: Math.round(performance.now() - started), uiMs: uiMs, panelThere: panelThere });
+        })();
+    `));
+    check("几 MB 的文件整份下得下来（走下载那条请求）",
+        bigFetch.bytes === BIG_BYTES, bigFetch.bytes + " / " + BIG_BYTES + " 字节，用了 " + bigFetch.ms + "ms");
+    check("下载在跑的时候界面还答得上话（没被正文堵住）",
+        bigFetch.panelThere && bigFetch.uiMs < 500, "界面回话用了 " + bigFetch.uiMs + "ms");
+
     // ==================== 直接打那条文件地址（拒绝的几种情形 + 条件请求）====================
     const raw = await page.eval(`
         const sid = (document.querySelector(".session-pane") || { dataset: {} }).dataset.sessionId || "";
@@ -505,9 +647,15 @@ module.exports = async (page) => {
             const session = o.session === undefined ? sid : o.session;
             let url = "/file?session=" + encodeURIComponent(session) + "&path=" + encodeURIComponent(p);
             if (o.mtime) { url += "&mtime=" + encodeURIComponent(o.mtime); }
+            if (o.download) { url += "&download=1"; }
             const resp = await fetch(url);
-            const text = await resp.text();
-            return { status: resp.status, mtime: resp.headers.get("x-file-mtime") || "", text: text.trim() };
+            const buf = new Uint8Array(await resp.arrayBuffer());
+            const text = new TextDecoder().decode(buf);
+            return {
+                status: resp.status, bytes: buf.length, mtime: resp.headers.get("x-file-mtime") || "",
+                size: resp.headers.get("x-file-size") || "", type: resp.headers.get("content-type") || "",
+                disposition: resp.headers.get("content-disposition") || "", text: text.trim(),
+            };
         };
         return (async function () {
             const out = {};
@@ -515,8 +663,14 @@ module.exports = async (page) => {
             out.dotdot = await get("../../package.json");
             out.absolute = await get(${JSON.stringify(path.resolve(cwd, "..", "..", "package.json"))});
             out.outside = await get(${JSON.stringify(FILE.outside)});
+            out.outsideDownload = await get(${JSON.stringify(FILE.outside)}, { download: true });
             out.missing = await get(${JSON.stringify(FILE.missing)});
             out.big = await get(${JSON.stringify(FILE.big)});
+            out.bigBinary = await get(${JSON.stringify(FILE.bigBinary)});
+            out.image = await get(${JSON.stringify(FILE.image)});
+            out.binary = await get(${JSON.stringify(FILE.binary)});
+            out.bigDownload = await get(${JSON.stringify(FILE.big)}, { download: true });
+            out.binaryDownload = await get(${JSON.stringify(FILE.binary)}, { download: true });
             out.noSession = await get(${JSON.stringify(FILE.long)}, { session: "不存在的会话" });
             // 条件请求：拿上次那份的修改时间再问一次（该给空响应），换一个对不上的（该给正文）
             out.same = await get(${JSON.stringify(FILE.long)}, { mtime: out.ok.mtime });
@@ -528,15 +682,34 @@ module.exports = async (page) => {
     console.log("直接打那条地址：" + JSON.stringify({
         ok: f.ok.status, dotdot: f.dotdot.status, absolute: f.absolute.status, outside: f.outside.status,
         missing: f.missing.status, big: f.big.status, noSession: f.noSession.status,
+        image: f.image.status, binary: f.binary.status, bigDownload: f.bigDownload.status, bigDownloadBytes: f.bigDownload.bytes,
     }));
     check("地址能取到内容（200、按 UTF-8 的正文）",
         f.ok.status === 200 && f.ok.text.split("\n").length === LONG_LINES && f.ok.text.indexOf("第 " + HIT_LINE + " 行") >= 0);
     check("用 .. 绕出去的写法：403", f.dotdot.status === 403 && f.dotdot.text.indexOf("会话目录外") >= 0);
     check("写成绝对路径且在外面：403", f.absolute.status === 403);
     check("软链接指到目录外：403", f.outside.status === 403);
+    check("下载那条路也照样看边界（目录外不给）", f.outsideDownload.status === 403, String(f.outsideDownload.status));
     check("文件不存在：404", f.missing.status === 404);
     check("超过 2 MB：413、响应里带着字节数",
-        f.big.status === 413 && f.big.text.indexOf(String(BIG_BYTES)) >= 0, f.big.text);
+        f.big.status === 413 && f.big.text.indexOf(String(BIG_BYTES)) >= 0 && f.big.size === String(BIG_BYTES),
+        JSON.stringify({ text: f.big.text, size: f.big.size }));
+    check("图片按图片类型给出来（Content-Type 是 PNG，字节就是那张图）",
+        f.image.status === 200 && f.image.type.indexOf("image/png") === 0 && f.image.bytes > 1000 && f.image.mtime !== "",
+        JSON.stringify({ status: f.image.status, type: f.image.type, bytes: f.image.bytes }));
+    check("二进制文件要当正文看：415、一句说明，内容不给",
+        f.binary.status === 415 && f.binary.text.indexOf("二进制") >= 0 && f.binary.size === String(BINARY_BYTES),
+        JSON.stringify({ status: f.binary.status, size: f.binary.size, text: f.binary.text }));
+    check("超过 2 MB 的二进制文件：先说「太大」（413），不说「二进制」",
+        f.bigBinary.status === 413 && f.bigBinary.text.indexOf("太大") >= 0 && f.bigBinary.size === String(BIG_BYTES),
+        JSON.stringify({ status: f.bigBinary.status, size: f.bigBinary.size, text: f.bigBinary.text }));
+    check("下载那条路不受 2 MB 限制：几 MB 的文件整份下来、按附件给名字",
+        f.bigDownload.status === 200 && f.bigDownload.bytes === BIG_BYTES
+        && f.bigDownload.type.indexOf("application/octet-stream") === 0
+        && f.bigDownload.disposition.indexOf("attachment") === 0 && f.bigDownload.disposition.indexOf(FILE.big) >= 0,
+        JSON.stringify({ status: f.bigDownload.status, bytes: f.bigDownload.bytes, want: BIG_BYTES, type: f.bigDownload.type, cd: f.bigDownload.disposition }));
+    check("下载不受限那条也管小文件（二进制整份下来）",
+        f.binaryDownload.status === 200 && f.binaryDownload.bytes === BINARY_BYTES);
     check("不认识的会话：不给内容", f.noSession.status !== 200);
     check("回话里带着这份内容的修改时间（页面下次带它回来问）",
         f.ok.status === 200 && f.ok.mtime !== "", f.ok.mtime);

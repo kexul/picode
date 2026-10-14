@@ -217,6 +217,7 @@
     "txt","text","diff","patch","csv","tsv",
     "png","jpg","jpeg","gif","webp","ico","bmp","tiff","avif",
     "wasm","vsix","crx","jar","class","war","ear",
+    "bin",
     "tar","gz","zip","7z","rar","bz2","xz",
     "gradle","sbt","rake","gemspec",
     "csproj","vbproj","fsproj","vcxproj","sln","props","targets",
@@ -2954,6 +2955,10 @@
   // 隔一会儿问一次那个文件变了没，问的时候把上次拿到的修改时间带上——没变后端只回一个空响应，
   // 变了才把正文取回来重画，重画时把现在的滚动位置照原样放回去。
   //
+  // 显示成什么看后端那条地址怎么回：文本画成带行号的正文；图片直接显示那张图（拿这条地址的
+  // 回应当图片源）；二进制和超过 2 MB 的不把内容塞进页面，只给一句说明加一个下载。那条带
+  // download=1 的地址不设大小上限，几 MB 的文件也下得下来。
+  //
   // 窗口够宽（≥1200px）时这一列常驻在左边、对话让出这块宽度；窄了从左边滑入、点外面收起。
   // 手机上同一时刻只开一块侧边栏：开左边这块就把右边那块收起来，反过来也一样
   //（两块都常驻时不受这条约束）。开没收起记在这台设备里（跟右边那一列同一个做法）。
@@ -2966,9 +2971,10 @@
   const fileSidebar = {
     root: null, header: null, title: null, tabsEl: null, body: null,
     open: false,     // 这台设备上人要不要它开着（记在 localStorage；开着时宽窗常驻、窄窗滑入）
-    // 开着的文件，从左到右：[{ path, line, scrollTop, mtime, loading }]（不记进设备，刷新就没了）
+    // 开着的文件，从左到右：[{ path, line, scrollTop, mtime, loading, imageUrl }]（不记进设备，刷新就没了）
     //   mtime：画在面板上的那份内容的修改时间（下次问「变了没」时带上去）
     //   loading：还在取（正文那块写着「正在读取…」）
+    //   imageUrl：图片那个显示地址（blob:…）；换成别的图或关掉标签时要放掉它
     tabs: [],
     active: -1,      // 现在看的是哪一个标签（下标）；一个都没开就是 -1
     token: 0,        // 取文件是异步的：换标签 / 收起之后回来的旧回应就不算数了
@@ -3074,6 +3080,7 @@
   function closeFileTab(index) {
     if (!fileSidebar.tabs[index]) { return; }
     const wasActive = index === fileSidebar.active;
+    releaseTabImage(fileSidebar.tabs[index]);
     fileSidebar.tabs.splice(index, 1);
     if (!wasActive) {
       // 关的不是正看着的这个：画面不动，只把标签条重画一遍（后面的下标要跟着挪）
@@ -3094,17 +3101,108 @@
     showFileTab(Math.min(index, fileSidebar.tabs.length - 1), 0);
   }
 
-  /** 面板里那一段纯粹的文字（提示、看不了的原因、正在读取）。 */
-  function showFileNote(text) {
+  /**
+   * 面板里那一段纯粹的文字（提示、看不了的原因、正在读取）；看不了但能下载时一并放上链接。
+   * 已经就是这一句（连同同一个下载地址）就别再重画：跟着刷新每轮都会来报「还是看不了」，
+   * 而人可能正选着里面的字。
+   * @param download 给了就在句末跟一颗下载链接：{ url, name, label }
+   */
+  function showFileNote(text, download) {
     if (!fileSidebar.body) { return; }
-    // 已经就是这一句：别再重画（跟着刷新每轮都会来报“还是看不了”，而人可能正选着里面的字）
+    const href = download ? download.url : "";
     const only = fileSidebar.body.children.length === 1 ? fileSidebar.body.firstElementChild : null;
-    if (only && only.className === "file-note" && only.textContent === text) { return; }
+    const oldText = only && only.firstElementChild ? only.firstElementChild.textContent : null;
+    const oldLink = only && only.querySelector ? only.querySelector("a.file-download") : null;
+    if (only && only.className === "file-note" && oldText === text
+        && ((!oldLink && !href) || (oldLink && oldLink.getAttribute("href") === href))) {
+      return;
+    }
     fileSidebar.body.innerHTML = "";
     const note = document.createElement("div");
     note.className = "file-note";
-    note.textContent = text;
+    const line = document.createElement("span");
+    line.textContent = text;
+    note.appendChild(line);
+    if (href) {
+      const link = document.createElement("a");
+      link.className = "file-download";
+      link.href = href;
+      link.setAttribute("download", download.name || "");
+      link.textContent = download.label || "下载";
+      note.appendChild(document.createTextNode(" "));
+      note.appendChild(link);
+    }
     fileSidebar.body.appendChild(note);
+  }
+
+  /** 那个文件的下载地址：同一条只读地址带 download=1（不设大小上限、按附件给）。 */
+  function fileDownloadUrl(tab) {
+    return fileUrl(tab, "") + "&download=1";
+  }
+
+  /** 图片那个显示地址用完了就放掉（换成别的图、切成正文、关掉标签都得放）。 */
+  function releaseTabImage(tab) {
+    if (!tab || !tab.imageUrl) { return; }
+    try { URL.revokeObjectURL(tab.imageUrl); } catch (e) { /* 放不掉就算了 */ }
+    tab.imageUrl = "";
+  }
+
+  /**
+   * 把一张图显示出来：拿那条地址的回应当图片源，按这一列的宽度等比例缩。
+   * 图片没有「链接说的那一行」可停，也不该画成一行行文字。
+   */
+  function renderFileImage(blob, tab) {
+    const body = fileSidebar.body;
+    if (!body) { return; }
+    const url = URL.createObjectURL(blob);
+    releaseTabImage(tab);
+    tab.imageUrl = url;
+    body.innerHTML = "";
+    const wrap = document.createElement("div");
+    wrap.className = "file-image";
+    const img = document.createElement("img");
+    img.className = "file-image-img";
+    img.alt = fileSidebarTabName(tab.path);
+    img.src = url;
+    wrap.appendChild(img);
+    body.appendChild(wrap);
+  }
+
+  /**
+   * 后端说不给看时的处理：
+   *   - 太大（413）与二进制（415）：给一句人话再加一个能点去下载的链接（回应里带着字节数）；
+   *   - 其余（没有这个文件、目录外）：就一句人话，没有东西可下。
+   * 这两类回应也带着修改时间，存进标签，好让跟着刷新那轮能靠它省下重传。
+   */
+  async function showFileRefusal(resp, tab) {
+    const text = (await resp.text()).trim() || "这个文件看不了（" + resp.status + "）。";
+    const size = formatBytes(Number(resp.headers.get("X-File-Size") || ""));
+    const name = fileSidebarTabName(tab.path);
+    if (resp.status === 413) {
+      showFileNote("太大" + (size ? "（" + size + "）" : "") + "，这里显示不了。",
+        { url: fileDownloadUrl(tab), name: name, label: "点这里下载" });
+      return;
+    }
+    if (resp.status === 415) {
+      showFileNote("这是个二进制文件，没法当文字显示。",
+        { url: fileDownloadUrl(tab), name: name, label: "下载" + (size ? "（" + size + "）" : "") });
+      return;
+    }
+    showFileNote(text);
+  }
+
+  /**
+   * 把一条 200 的回应画进正文：图片按图片显示，其余当文本、带行号。
+   * @returns 文本那一路点亮的那一行（图片没有行，给 null）
+   */
+  async function drawFileResponse(resp, tab) {
+    const type = (resp.headers.get("Content-Type") || "").toLowerCase();
+    if (type.indexOf("image/") === 0) {
+      renderFileImage(await resp.blob(), tab);
+      return null;
+    }
+    releaseTabImage(tab);   // 这个文件以前是张图（现在换成文本了），把那份地址放掉
+    return renderFileText(await resp.text(), tab.line);
   }
 
   /**
@@ -3166,12 +3264,6 @@
     return url;
   }
 
-  /** 后端说不给看时给的那句话（空就兜一句，别把面板留成一片空白）。 */
-  async function fileNoteOf(resp) {
-    const note = (await resp.text()).trim();
-    return note || "这个文件看不了（" + resp.status + "）。";
-  }
-
   /**
    * 去后端那条只读地址把现在这个标签的文件取回来画上（看不了就画一句人话）。
    * @param linkLine 这次链接说的那一行（1 起）；0 = 没有要停的行，回这个标签上次读到的地方
@@ -3184,13 +3276,12 @@
     fetch(fileUrl(tab, "")).then(async (resp) => {
       tab.loading = false;
       if (token !== fileSidebar.token) { return; }   // 已经换成别的标签了，这条回应丢掉
+      tab.mtime = resp.headers.get("X-File-Mtime") || "";
       if (resp.status === 200) {
-        tab.mtime = resp.headers.get("X-File-Mtime") || "";
-        scrollFileBody(renderFileText(await resp.text(), tab.line), linkLine, tab.scrollTop);
+        scrollFileBody(await drawFileResponse(resp, tab), linkLine, tab.scrollTop);
         return;
       }
-      tab.mtime = "";   // 看不了就没有「上次那份」：下回整个问
-      showFileNote(await fileNoteOf(resp));
+      await showFileRefusal(resp, tab);
     }).catch(() => {
       tab.loading = false;
       if (token !== fileSidebar.token) { return; }
@@ -3202,9 +3293,9 @@
    * 跟着刷新：问一次现在看着的这个文件变了没。
    *
    * 带上上次拿到的那份内容的修改时间（条件请求）：没变后端回 204，这边一个字节都不动；
-   * 变了才把新正文取回来重画，并把「读到哪儿」照原样放回去——不许跳回顶部，也不许跳回
-   * 这个标签上次切走时的位置。看不了的文件（没有 / 太大 / 目录外）也一样问：文件后来
-   * 被建出来 / 改小 / 挪回来，面板就跟着换成内容。
+   * 变了才把新内容取回来重画（文本、图片、二进制、太大各按各的画法），并把「读到哪儿」
+   * 照原样放回去——不许跳回顶部，也不许跳回这个标签上次切走时的位置。看不了的文件
+   *（没有 / 太大 / 目录外）也一样问：文件后来被建出来 / 改小 / 挪回来，面板就跟着换成内容。
    */
   function pollActiveFile() {
     if (filePolling) { return; }               // 上一条还在路上，别越堆越多
@@ -3217,16 +3308,14 @@
     fetch(fileUrl(tab, tab.mtime)).then(async (resp) => {
       if (token !== fileSidebar.token || fileSidebar.active !== at) { return; }   // 换了标签 / 切了会话 / 收起
       if (resp.status === 204) { return; }   // 没变：正文一个字节都没过来
+      tab.mtime = resp.headers.get("X-File-Mtime") || "";
       if (resp.status !== 200) {
-        tab.mtime = "";
-        showFileNote(await fileNoteOf(resp));
+        await showFileRefusal(resp, tab);
         return;
       }
-      tab.mtime = resp.headers.get("X-File-Mtime") || "";
-      const text = await resp.text();
       const top = body.scrollTop;
       const left = body.scrollLeft;
-      renderFileText(text, tab.line);
+      await drawFileResponse(resp, tab);
       body.scrollTop = top;      // 换上新内容，读到哪儿还停在哪儿
       body.scrollLeft = left;
       tab.scrollTop = top;
@@ -3278,7 +3367,7 @@
     closeRightSidebarForFile();
     let at = fileSidebarTabIndex(path);
     if (at < 0) {
-      fileSidebar.tabs.push({ path: path, line: 0, scrollTop: 0, mtime: "", loading: false });
+      fileSidebar.tabs.push({ path: path, line: 0, scrollTop: 0, mtime: "", loading: false, imageUrl: "" });
       at = fileSidebar.tabs.length - 1;
     }
     if (!fileSidebar.open) { setFileSidebarOpen(true); } else { syncFileSidebarLayout(); }
@@ -3289,6 +3378,7 @@
   function resetFileSidebarForSession() {
     if (!fileSidebar.root) { return; }
     fileSidebar.token++;
+    fileSidebar.tabs.forEach(releaseTabImage);   // 上一个会话里看过的图：那些显示地址放掉
     fileSidebar.tabs = [];
     fileSidebar.active = -1;
     setFileSidebarTitle("");

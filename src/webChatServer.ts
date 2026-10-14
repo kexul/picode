@@ -68,6 +68,62 @@ function wantsGzip(accept: string | string[] | undefined): boolean {
     return false;
 }
 
+/** 取文件名的扩展名（带点、小写；没有就是空串）。 */
+function extensionOf(filePath: string): string {
+    const dot = filePath.lastIndexOf(".");
+    const slash = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+    return dot > slash ? filePath.slice(dot).toLowerCase() : "";
+}
+
+/** 能当图片显示的扩展名 → Content-Type（浏览器直接拿它渲染）。 */
+const IMAGE_CONTENT_TYPES: ReadonlyMap<string, string> = new Map([
+    [".png", "image/png"], [".apng", "image/apng"], [".jpg", "image/jpeg"], [".jpeg", "image/jpeg"],
+    [".jpe", "image/jpeg"], [".jfif", "image/jpeg"], [".gif", "image/gif"], [".webp", "image/webp"],
+    [".bmp", "image/bmp"], [".ico", "image/x-icon"], [".cur", "image/x-icon"], [".tif", "image/tiff"],
+    [".tiff", "image/tiff"], [".avif", "image/avif"], [".heic", "image/heic"], [".heif", "image/heif"],
+    [".svg", "image/svg+xml"],
+]);
+
+/** 当正文显示的文本扩展名。 */
+const TEXT_FILE_EXTENSIONS: ReadonlySet<string> = new Set([
+    ".txt", ".text", ".log", ".md", ".markdown", ".mdx", ".rst", ".adoc", ".tex",
+    ".csv", ".tsv", ".diff", ".patch",
+    ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx", ".vue", ".svelte", ".astro",
+    ".json", ".json5", ".jsonc", ".jsonl", ".ndjson",
+    ".css", ".scss", ".sass", ".less", ".styl", ".html", ".htm", ".xhtml", ".xml", ".xsl", ".xslt",
+    ".plist", ".resx",
+    ".py", ".pyi", ".pyw", ".rb", ".rake", ".gemspec", ".go", ".rs", ".java", ".kt", ".kts",
+    ".scala", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hxx", ".cs", ".php", ".swift", ".m", ".mm",
+    ".r", ".jl", ".lua", ".pl", ".pm", ".tcl", ".awk", ".sh", ".bash", ".zsh", ".fish", ".bat",
+    ".cmd", ".ps1", ".psm1", ".vim", ".el", ".lisp", ".clj", ".cljs", ".cljc", ".edn", ".hs", ".lhs",
+    ".ml", ".mli", ".fs", ".fsx", ".fsi", ".elm", ".ex", ".exs", ".erl", ".gleam", ".dart", ".asm", ".s",
+    ".sql", ".graphql", ".gql", ".proto", ".thrift", ".capnp",
+    ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf", ".config", ".properties", ".env", ".editorconfig",
+    ".gitignore", ".gitattributes", ".gitmodules", ".npmrc", ".nvmrc", ".dockerignore", ".eslintignore",
+    ".prettierignore", ".babelrc", ".browserslistrc", ".gradle", ".sbt", ".cmake", ".ninja", ".mk",
+]);
+
+/**
+ * 一个文件该当什么给页面：文本（当正文读）、图片（按图片给）、二进制（给一句说明加下载）。
+ * 不认识的扩展名一律算二进制：按路径取文件这条路上，宁可不展示也不硬读成乱码。
+ */
+function fileFormatOf(filePath: string): "text" | "image" | "binary" {
+    const ext = extensionOf(filePath);
+    if (IMAGE_CONTENT_TYPES.has(ext)) { return "image"; }
+    return TEXT_FILE_EXTENSIONS.has(ext) ? "text" : "binary";
+}
+
+/**
+ * 下载时告诉浏览器的文件名（`Content-Disposition`）。
+ * 文件名里可能有中文：`filename` 那一份只放 ASCII（老浏览器认得），同时按 RFC 5987 给一份
+ * `filename*=UTF-8''…`（现代浏览器用它，中文名字才不会变成下划线）。
+ */
+function contentDisposition(filePath: string): string {
+    const name = path.basename(filePath).replace(/["\\\r\n]/g, "_");
+    const ascii = name.replace(/[^\x20-\x7e]/g, "_");
+    return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
 /** 网页服务的设置（来自 ~/.pi/pichat/config.json 的 webServer 一节）。 */
 export interface WebServerSettings {
     /** 是否开启网页服务（关闭时不监听端口，界面上也不显示入口）。 */
@@ -343,7 +399,7 @@ export class PiChatWebServer {
             if (pathname === "/file") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
                 this.sendFile(req, res, url.searchParams.get("session") ?? "", url.searchParams.get("path") ?? "",
-                    url.searchParams.get("mtime") ?? "");
+                    url.searchParams.get("mtime") ?? "", url.searchParams.get("download") === "1");
                 return;
             }
             if (pathname === "/events") {
@@ -438,24 +494,30 @@ export class PiChatWebServer {
     private static readonly MAX_FILE_BYTES = 2 * 1024 * 1024;
 
     /**
-     * 发一个文件给页面（/file?session=…&path=…&mtime=…）。
+     * 发一个文件给页面（`/file?session=…&path=…&mtime=…&download=1`）。
      *
      * 只读，而且只看得到当前会话目录里的文件：相对路径按那个会话的目录解，解出来的真实路径
      * （软链接一起解析掉）必须落在目录以内；`..` 绕出去的、软链接指到外面的都不给。这是有意的
      * 边界：能打开这个页面的人本来就能让 pi 读写这台机器，但「按路径直接取文件」这条路不该跟着
      * 变成整台机器的读接口（为什么见 docs/adr/0001-浏览器页面自己读文件.md）。
      *
-     * 看不了时给准信：目录外 403、文件不在 404、看（用来显示）超过 2 MB 413（正文里带着字节数，
-     * 页面据此说「太大」）。这一版按 UTF-8 纯文本递出去；图片、二进制与下载那几条见后续的票。
+     * 怎么给，看文件是哪种（按扩展名，见 fileFormatOf）：
+     *   - 看（用来显示）超过 2 MB 的一律 413，正文里带着字节数，页面据此说「太大」；
+     *   - 文本（UTF-8）当正文递出去，页面画成带行号的一行一格；
+     *   - 图片按图片类型流出去，页面拿它当图片显示；
+     *   - 其余的（二进制）当正文看没有意义：415 加一句「这是个二进制文件」，页面拿它写说明与下载。
+     * 页面上的下载链接就是同一条地址带 `download=1`：这条不设大小上限，按附件流式给出去
+     * （几 MB 的文件也下得下来，内容不经过推送通道、也不进页面）。
      *
      * 条件请求：页面把上次拿到的那份内容的修改时间当 `mtime` 带上来，文件还是那一次改动就回
      * 204 空响应——面板盯着一个文件看得久了，靠它省下每轮重传整份正文。给正文的 200 里用
      * `X-File-Mtime` 给出这次的修改时间（毫秒），页面下次带它回来。
      *
      * @param sinceMtime 页面手上那份内容的修改时间（毫秒）；空 = 没得比，给正文
+     * @param download   true = 这个请求是要把文件存下来（不设大小上限、按附件给）
      */
     private sendFile(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string, wantPath: string,
-        sinceMtime = ""): void {
+        sinceMtime = "", download = false): void {
         if (!sessionId || !wantPath || wantPath.includes("\0")) {
             this.sendText(req, res, 400, "请求里要说明是哪个会话、哪个文件。");
             return;
@@ -489,16 +551,42 @@ export class PiChatWebServer {
             this.sendText(req, res, 404, "没有这个文件（这是个目录）。");
             return;
         }
-        if (stat.size > PiChatWebServer.MAX_FILE_BYTES) {
-            this.sendText(req, res, 413,
-                `文件太大（${stat.size} 字节），这里只显示小于 2 MB 的文件。`);
+        const mtime = String(Math.floor(stat.mtimeMs));
+        // 下载（页面那颗下载链接）：不设大小上限，按附件流式给出去
+        if (download) {
+            this.streamFile(res, realTarget, 200, stat.size, {
+                "Content-Type": "application/octet-stream",
+                "Content-Disposition": contentDisposition(realTarget),
+                "Cache-Control": "no-store",
+                "X-File-Mtime": mtime,
+            });
             return;
         }
         // 文件还是页面手上那一次改动：正文一个字节都不用给（跟着刷新那轮省下的就是它）
-        const mtime = String(Math.floor(stat.mtimeMs));
         if (sinceMtime && sinceMtime === mtime) {
             res.writeHead(204, { "Cache-Control": "no-store", "X-File-Mtime": mtime });
             res.end();
+            return;
+        }
+        const format = fileFormatOf(realTarget);
+        // 「太大」比「是二进制」先说：超 2 MB 的一律不往页面里塞，给句话加一个下载
+        if (stat.size > PiChatWebServer.MAX_FILE_BYTES) {
+            this.sendFileNote(req, res, 413,
+                `文件太大（${stat.size} 字节），这里只显示小于 2 MB 的文件。`, mtime, stat.size);
+            return;
+        }
+        if (format === "binary") {
+            // 当文字读出来是一堆乱码，不如直说：页面拿这句话加一个下载
+            this.sendFileNote(req, res, 415, "这是个二进制文件，没法当文字显示。", mtime, stat.size);
+            return;
+        }
+        if (format === "image") {
+            // 图片按图片类型流出去：页面拿它当图片地址显示
+            this.streamFile(res, realTarget, 200, stat.size, {
+                "Content-Type": IMAGE_CONTENT_TYPES.get(extensionOf(realTarget))!,
+                "Cache-Control": "no-store",
+                "X-File-Mtime": mtime,
+            });
             return;
         }
         fs.readFile(realTarget, (err, data) => {
@@ -509,6 +597,39 @@ export class PiChatWebServer {
                 "X-File-Mtime": mtime,
             });
         });
+    }
+
+    /**
+     * 看不了时的一句人话（二进制 / 太大）：正文给人看，另外把文件大小与修改时间报给页面。
+     * 页面靠它们写「太大（几 MB），点这里下载」那颗链接，也靠修改时间接着问「变了没」。
+     */
+    private sendFileNote(req: http.IncomingMessage, res: http.ServerResponse, status: number, text: string,
+        mtime: string, size: number): void {
+        const body = Buffer.from(text, "utf8");
+        this.writeBody(req, res, status, body, {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Cache-Control": "no-store",
+            "X-File-Mtime": mtime,
+            "X-File-Size": String(size),
+        });
+    }
+
+    /**
+     * 把一个文件整份流出去（图片显示、下载都走它）。
+     *
+     * 为什么不先读进内存：这是几 MB 到几十 MB 的二进制文件。流式给出去，后端不为一个请求
+     * 攒一大块内存，浏览器那边也能边收边写盘（页面一个字节都不经手）。
+     */
+    private streamFile(res: http.ServerResponse, filePath: string, status: number, size: number,
+        headers: Record<string, string>): void {
+        res.writeHead(status, { ...headers, "Content-Length": size });
+        const stream = fs.createReadStream(filePath);
+        // 读不动了 / 对方中途不要了（取消下载、关掉页面）：把这个响应收掉、把读的这份放掉，
+        // 别把异常抛给整个服务，也别让一个没人要的流继续占着文件。
+        stream.on("error", () => { try { res.end(); } catch { /* 已经断了 */ } });
+        res.on("error", () => stream.destroy());
+        res.on("close", () => stream.destroy());
+        stream.pipe(res);
     }
 
     private sendHealth(req: http.IncomingMessage, res: http.ServerResponse): void {
