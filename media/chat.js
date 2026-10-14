@@ -4853,7 +4853,17 @@
       return;
     }
     const s = e.target.closest("a.symbol-link");
-    if (s) { e.preventDefault(); const name = s.getAttribute("data-symbol"); if (name) { vscode.postMessage({ type: "openSymbol", name }); } return; }
+    if (s) {
+      e.preventDefault();
+      const name = s.getAttribute("data-symbol");
+      if (!name) { return; }
+      // 浏览器页面：名字是窗口算出来报给后端的，文件与行也只有语言服务算得出来——
+      // 请窗口算完回给这里，由这里开进左边的文件侧边栏（不开编辑器）。
+      // 插件里的对话面板：那边没有这一列，照旧交给编辑器打开（老消息、老路子）。
+      if (fileSidebar.root) { vscode.postMessage({ type: "findSymbol", name }); return; }
+      vscode.postMessage({ type: "openSymbol", name });
+      return;
+    }
   });
   messagesEl.addEventListener("dblclick", (e) => {
     const code = e.target && e.target.closest ? e.target.closest("code") : null;
@@ -5242,6 +5252,15 @@
           if (st.currentAssistant && el === st.currentAssistant.el) { return; }
           applySymbolLinks(el);
         });
+      }
+      return;
+    }
+
+    if (type === "symbolLocation") {
+      // 窗口算出了符号在哪个文件的哪一行（浏览器页面里点的符号链接）：开进左边那一列。
+      // 窗口报的是绝对路径；后端能算成会话目录里的写法就算过来（跟正文链接一个样子）。
+      if (fileSidebar.root && typeof msg.path === "string" && msg.path) {
+        openFileInSidebar(msg.path, typeof msg.line === "number" ? msg.line : 0, false);
       }
       return;
     }

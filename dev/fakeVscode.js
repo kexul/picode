@@ -13,7 +13,9 @@
  *      只打印一行"未实现"（同一个名字只打一次）。这样插件新加了功能也不会把调试拦住。
  *
  * 换掉真接口会失真，所以下面这些在调试里是**验不到**的，需要时用 VSCodium 开发宿主看：
- *   diff 编辑器、符号跳转、剪贴板、状态栏、命令面板入口、侧边栏网页视图本身。
+ *   diff 编辑器、剪贴板、状态栏、命令面板入口、侧边栏网页视图本身。
+ * 符号这一摊也差一层：**语言服务**是假的（__setSymbols 喂一份就算认得了那几种符号），
+ * 真语言服务（按文件内容算符号）只有 F5 开发宿主里才有。
  */
 
 const path = require("path");
@@ -79,8 +81,10 @@ const configuration = {
     update() { return Promise.resolve(); },
 };
 
-/** 打开的编辑器列表：调试里永远是空的（符号跳转、diff 这些验不到）。 */
+/** 打开的编辑器列表：默认是空的（要验符号跳转那类功能就用 __setOpenDocuments 摆一份）。 */
 let textDocuments = [];
+/** 假语言服务答的符号树（文件绝对路径 → 符号数组）：没注册过的文件答不出来。 */
+let symbolTrees = {};
 
 const window = {
     // ---- 事件订阅：收下，永不触发 ----
@@ -163,7 +167,13 @@ const commands = {
     registerCommand: () => disposable,
     registerTextEditorCommand: () => disposable,
     executeCommand: (name, ...args) => {
-        // 符号树、diff、打开文件这些在调试里没有落地的地方，打印一行就当做过
+        // 符号树：真语言服务只有真 VS Code 里有，调试时靠 __setSymbols 喂一份进来
+        //（没喂就还是空壳），验「点符号链接之后东西开在哪儿」那条路时用得上。
+        if (name === "vscode.executeDocumentSymbolProvider") {
+            const p = args[0] && args[0].fsPath;
+            return Promise.resolve(p ? symbolTrees[p] : undefined);
+        }
+        // 别的（diff、打开文件这些）在调试里没有落地的地方，打印一行就当做过
         once(`[假 VSCode] 命令（调试里是空操作）：${name}`);
         return Promise.resolve(undefined);
     },
@@ -271,3 +281,5 @@ module.exports.__store = store;
 module.exports.__configure = (patch) => { Object.assign(state, patch); };
 /** 假装编辑器里打开着一个文件（符号跳转那类功能要用到）。 */
 module.exports.__setOpenDocuments = (files) => { textDocuments = files; };
+/** 假装语言服务认得这些符号（文件绝对路径 → 符号树；形状照 vscode.DocumentSymbol）。 */
+module.exports.__setSymbols = (trees) => { symbolTrees = trees || {}; };

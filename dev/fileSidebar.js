@@ -26,11 +26,14 @@
  *      认得的几种语言（TypeScript 含 JavaScript 与 JSON、C++、Python，别名一起算）按扩展名带颜色，
  *      行号还在、跟内容对得上，跨多行的注释 / 模板串不会在行号那儿断开；别的语言仍是黑白；
  *      超过上色那条线的大文件不上色（行号照旧），也不把页面卡住；
+ *      点符号链接（函数名那种）：窗口按语言服务算出文件与行，内容开进这一列、停在那一行，
+ *      不开编辑器；窗口没报过名字时页面上本来就没有可点的名字（语言服务那份符号树
+ *      在调试里是喂给假 VSCode 的 __setSymbols 的，其余全是真的：真窗口代码、真后端、真回话那条路）；
  *   2. 在页面里用 fetch 直接打那条只读文件地址与目录地址，核对拒绝的几种情形（目录外含 .. 绕出去的写法、
  *      没有这个文件 / 目录、超过 2 MB）、图片与二进制各自给什么、目录清单的形状、以及「没变就别再给
  *      一遍正文」那条条件请求；下载那条路不受 2 MB 这条线管（几 MB 的文件整份下来）。
  * 最后一件事：把页面按“插件里的对话面板”跑一遍（在页面脚本里先塞一个网页视图接口），
- * 核对那边既没有这一列也没有这颗按钮、点链接照旧是交给编辑器打开那条消息。
+ * 核对那边既没有这一列也没有这颗按钮、点链接与点符号都照旧是交给编辑器打开那条消息。
  *
  * 测试用的文件（long.js / sample.js / big.txt）现写进会话目录（dev/.scratch），
  * 那个目录不进版本库，随便造。
@@ -74,6 +77,16 @@ const DIR_MAX_ENTRIES = 500;
 /** live.js：面板正看着它的时候脚本改它（验“跟着刷新”那个文件）。 */
 const LIVE_LINES = 300;
 const LIVE_HIT = 100;
+/**
+ * 符号链接那一摊：名字是窗口算出来报给后端的（一个窗口都没开就没有这种东西），
+ * 点它以后窗口按语言服务算出文件与行、内容由页面开进文件侧边栏。
+ * 调试里语言服务是假 VSCode 上喂的一份（真语言服务只认真 VS Code），其余全是真的。
+ */
+const SYMBOL_FILE = "symbol.js";
+const SYMBOL_NAME = "addOne";
+const SYMBOL_LINES = 40;
+/** 窗口（假语言服务）算出来的那一行（1 起）。 */
+const SYMBOL_LINE = 17;
 
 /**
  * 上色那一摊：认得的几种（TypeScript 含 JavaScript 与 JSON、C++、Python）带颜色，其余黑白。
@@ -277,6 +290,15 @@ function prepareColorFiles(cwd) {
     write(COLOR.ruby, COLOR_RUBY_LINES);
     fs.writeFileSync(path.join(cwd, COLOR.mid), COLOR_MID.text, "utf8");
     fs.writeFileSync(path.join(cwd, COLOR.big), COLOR_BIG.text, "utf8");
+}
+
+/** 符号那个文件：每行都写着自己第几行，验「停在窗口说的那一行」时一眼看得出来。 */
+function writeSymbolFile(cwd) {
+    const lines = [];
+    for (let i = 1; i <= SYMBOL_LINES; i++) {
+        lines.push(i === SYMBOL_LINE ? "// addOne 就在这一行（第 " + i + " 行）" : "// symbol 第 " + i + " 行");
+    }
+    fs.writeFileSync(path.join(cwd, SYMBOL_FILE), lines.join("\n") + "\n", "utf8");
 }
 
 /** 页面上把假消息投进去（同一份内容刷新之后要再投一次）。 */
@@ -1301,6 +1323,77 @@ module.exports = async (page) => {
         JSON.stringify({ outside: rawDir.outside.status, outLink: rawDir.outLink.status }));
     check("不认识的会话：不给清单", rawDir.noSession.status !== 200, String(rawDir.noSession.status));
 
+    // ==================== 符号链接：窗口算出文件与行，内容开进这一列 ====================
+    // 页面上那些可点的符号名字是窗口算出来报给后端的（一个窗口都没开时页面上本来就不会有
+    // 这种东西）；点它以后窗口按语言服务算出文件与行，算出来的位置回给页面、由页面开进左边
+    // 这一列——不在编辑器里开。这里把假 VSCode 的语言服务喂上一份（真语言服务只认真 VS Code），
+    // 其余全是真的：真界面文件、真后端、真“派活给窗口 / 窗口回话”那条路。
+    writeSymbolFile(cwd);
+    const symbolFile = path.join(cwd, SYMBOL_FILE);
+    const fakeVscode = require("./fakeVscode.js");
+    fakeVscode.__setSymbols({
+        [symbolFile]: [{ name: SYMBOL_NAME, children: [], selectionRange: { start: { line: SYMBOL_LINE - 1 } } }],
+    });
+    fakeVscode.__setOpenDocuments([{ uri: fakeVscode.Uri.file(symbolFile), fileName: symbolFile, version: 1 }]);
+    const vscodeLog = [];
+    const realVscodeLog = fakeVscode.__state.log;
+    fakeVscode.__state.log = (text) => { vscodeLog.push(String(text)); realVscodeLog(text); };
+
+    // 窗口没报过这个名字时：这段代码只是普通文字，没有可点的名字
+    await page.eval(`for (const m of ${JSON.stringify([{ type: "assistantFull", text: "这里的 " + "`" + SYMBOL_NAME + "`" + " 是个函数。\n" }])}) { window.postMessage(m, "*"); } return true;`);
+    await page.sleep(400);
+    const symBefore = JSON.parse(await page.eval(`
+        return JSON.stringify({
+            links: document.querySelectorAll("a.symbol-link").length,
+            text: (document.getElementById("messages") || {}).textContent || "",
+        });
+    `));
+    check("窗口没报过这个名字时：它只是普通文字（一个可点的名字都没有）",
+        symBefore.links === 0 && symBefore.text.indexOf(SYMBOL_NAME) >= 0, JSON.stringify(symBefore.links));
+
+    // 窗口把名字报上来（真窗口是它算完符号表推给后端的）：这段文字变成可点的名字
+    await page.eval(`window.postMessage({ type: "symbolSet", names: ${JSON.stringify([SYMBOL_NAME])} }, "*"); return true;`);
+    await page.sleep(400);
+    const symLink = JSON.parse(await page.eval(`
+        return JSON.stringify({
+            count: document.querySelectorAll("a.symbol-link").length,
+            there: !!Array.from(document.querySelectorAll("a.symbol-link")).find(function (x) {
+                return x.getAttribute("data-symbol") === ${JSON.stringify(SYMBOL_NAME)};
+            }),
+        });
+    `));
+    check("窗口报来名字以后：那段文字变成可点的名字", symLink.count === 1 && symLink.there, JSON.stringify(symLink));
+    await page.shot("file-26-symbol-link.png");
+
+    // 点它：窗口算出文件与行 → 内容开进这一列、停在那一行；编辑器不开
+    const beforeSymbol = await look("点符号链接之前");
+    console.log("点符号链接：" + await page.eval(`
+        const a = Array.from(document.querySelectorAll("a.symbol-link")).find(function (x) {
+            return x.getAttribute("data-symbol") === ${JSON.stringify(SYMBOL_NAME)};
+        });
+        if (!a) { return "没有这个符号链接"; }
+        a.click();
+        return "点了";
+    `));
+    const sym1 = await waitLook("符号那个文件开进这一列",
+        (x) => x.tabPaths.indexOf(SYMBOL_FILE) >= 0 && x.hitNum === String(SYMBOL_LINE), 10000);
+    check("点符号链接：内容开进左边的文件侧边栏",
+        sym1.open && sym1.dock && sym1.tabActive === sym1.tabPaths.indexOf(SYMBOL_FILE)
+        && sym1.rowCount === SYMBOL_LINES && sym1.title === SYMBOL_FILE,
+        JSON.stringify({ paths: sym1.tabPaths, rows: sym1.rowCount, title: sym1.title }));
+    check("停在窗口算出来的那一行", sym1.hitNum === String(SYMBOL_LINE)
+        && sym1.hitText.indexOf("第 " + SYMBOL_LINE + " 行") >= 0 && sym1.hitVisible,
+        JSON.stringify({ num: sym1.hitNum, text: sym1.hitText }));
+    check("符号那个文件占一个新标签，原来那些还留着",
+        sym1.tabCount === beforeSymbol.tabCount + 1
+        && sym1.tabPaths.filter(function (p) { return p === SYMBOL_FILE; }).length === 1,
+        JSON.stringify(sym1.tabPaths));
+    check("窗口没去开编辑器（位置是报回来的，不是开在编辑器里）",
+        vscodeLog.filter((t) => t.indexOf("打开文件（调试里不弹编辑器）") >= 0).length === 0,
+        JSON.stringify(vscodeLog.slice(-3)));
+    await page.shot("file-27-symbol-opened.png");
+    fakeVscode.__state.log = realVscodeLog;
+
     // ==================== 切会话：「项目目录」换成新会话的目录、文件标签清空 ====================
     // 真开一个新会话（会话目录就是 dirA，跟当前这个会话的目录不一样）：走的是后端真会话编排，
     // 消息形状与后端推的那份一样，所以下面几条真会话的检查放在它后面。
@@ -1376,6 +1469,23 @@ module.exports = async (page) => {
     await page.sleep(500);
     const sent = JSON.parse(await page.eval(`return JSON.stringify((window.__sentToHost || []).filter(function (m) { return m && m.type === "openFile"; }));`));
     check("插件里的对话面板里点链接照旧交给编辑器打开", panelLink >= 5 && sent.length === 1 && sent[0].path === FILE.long && sent[0].line === HIT_LINE, JSON.stringify(sent));
+
+    // 符号链接也一样：这一列不在（点击分流走的是另一条），名字还是交给编辑器去开
+    await page.eval(`window.postMessage({ type: "assistantFull", text: ${JSON.stringify("这里的 " + "`" + SYMBOL_NAME + "`" + " 是个函数。\n")}, sessionId: ${JSON.stringify(sessionInfo.sessionId)} }, "*"); return true;`);
+    await page.eval(`window.postMessage({ type: "symbolSet", names: ${JSON.stringify([SYMBOL_NAME])} }, "*"); return true;`);
+    await page.sleep(400);
+    const panelSymClick = await page.eval(`
+        const a = Array.from(document.querySelectorAll("a.symbol-link")).find(function (x) {
+            return x.getAttribute("data-symbol") === ${JSON.stringify(SYMBOL_NAME)};
+        });
+        if (!a) { return "没有这个符号链接"; }
+        a.click();
+        return "点了";
+    `);
+    await page.sleep(400);
+    const sentSym = JSON.parse(await page.eval(`return JSON.stringify((window.__sentToHost || []).filter(function (m) { return m && m.type === "openSymbol"; }));`));
+    check("插件里的对话面板里点符号链接照旧交给编辑器打开（走的是老那条消息）",
+        panelSymClick === "点了" && sentSym.length === 1 && sentSym[0].name === SYMBOL_NAME, JSON.stringify({ click: panelSymClick, sent: sentSym }));
     await page.shot("file-7-webview.png");
 
     const failed = checks.filter((c) => !c[1]).map((c) => c[0]);
