@@ -21,7 +21,7 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import { SessionRuntime, RuntimeHost, ModelInfo, ModelChoice, StatusInfo, TurnEndInfo } from "./sessionRuntime";
+import { SessionRuntime, RuntimeHost, ModelInfo, ModelChoice, TurnEndInfo } from "./sessionRuntime";
 import { PiConfig } from "./sessionRuntime";
 import { PiClient } from "./piClient";
 import {
@@ -92,12 +92,6 @@ export interface PickerState {
 }
 
 export abstract class ChatControllerBase implements RuntimeHost {
-    /**
-     * 本机那块界面的固定标识（VSCode 里就是插件里那块对话面板）；独立后端没有这块屏，用不上。
-     * 一块屏 = 本机界面或一个浏览器页面：每块屏各自记着“我在看哪个会话”（见 clientSessions）。
-     */
-    protected static readonly LOCAL_CLIENT_ID = "sidebar";
-
     protected constructor(public readonly workspaceId: string) {}
     // ---- 会话（一个 SessionRuntime = 一个 pi 进程）----
     protected panels = new Map<string, SessionRuntime>();
@@ -112,8 +106,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
     private lastFocusedPanelId: string | undefined;
     /** 每个会话最近一次“成了某块屏正在看的那个”的时刻（一个目录里开着好几个时挑最近用过的）。 */
     private readonly panelUsedAt = new Map<string, number>();
-    /** 正在说话的那块屏：处理谁发来的消息时就是谁（页面标识 / 本机界面标识）。 */
-    protected currentPageId: string = ChatControllerBase.LOCAL_CLIENT_ID;
+    /** 正在说话的那块屏（页面标识）：处理某块屏发来的消息期间才有值，平时是空串。 */
+    protected currentPageId: string = "";
     /** 已经试过“启动时自动打开最近会话”的屏（每块屏只管自己头一次）。 */
     private readonly autoLoadTried = new Set<string>();
     /**
@@ -206,7 +200,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract postToWebview(msg: Record<string, unknown>): void;
 
     /**
-     * 只发一块屏（本机界面 / 某个页面）。默认实现：这个宿主只有一块屏，就当成广播。
+     * 只发一块屏。默认实现：这个宿主只有一块屏，就当成广播。
      * 多屏宿主（独立后端）覆写成“只发给那一块”。
      */
     protected postToOneClient(_clientId: string, msg: Record<string, unknown>): void {
@@ -690,7 +684,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.broadcastSessionList(true);
         // 只告诉动手的这块屏：别的屏各看各的，不跟着切
         this.postToOneClient(clientId, { type: "sessionActivated", sessionId: panelId });
-        this.getActive(clientId)?.emitStatus();
     }
 
     /** 按方向切到上一个 / 下一个会话（按会话的建立顺序）。 */
@@ -1256,11 +1249,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
 
-    /** RuntimeHost.onStatusUpdate：仅当前焦点 panel 的状态才转发给宿主展示。 */
-    public onStatusUpdate(panelId: string, info: StatusInfo): void {
-        if (this.isFocusedPanel(panelId)) { this.onActiveStatusUpdate(info); }
-    }
-
     /** RuntimeHost.onKnownFilesChanged：某 panel 的工具触及文件集合变化，转发给宿主。 */
     public onKnownFilesChanged(_panelId: string): void {
         this.onKnownFilesChangedByHost();
@@ -1287,9 +1275,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     protected onKnownFilesChangedByHost(): void { /* 默认无操作 */ }
-
-    /** 焦点 panel 的状态发生变化时平台钩子（默认无操作；VSCode 重写为状态栏更新）。 */
-    protected onActiveStatusUpdate(_info: StatusInfo): void { /* 默认无操作 */ }
 
     // ========================================================================
     //  发送 / 中止（一个会话一个目标）

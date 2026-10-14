@@ -135,14 +135,14 @@ async function main() {
         check(host.getActive(pageId)?.id === winSession.id, "第一个窗口没被第二个牵动");
 
         // ---- 关掉一个正在被别的屏看着的会话：看它的屏留在原地 ----
-        host.processMessage({ type: "closeSession", sessionId: rt2.id }, p2);
+        host.processPageMessage({ type: "closeSession", sessionId: rt2.id }, p2);
         await sleep(500);
         check(!host.panels.has(rt2.id), "会话被关掉了（进程停了、列表里没了）");
         check(host.focusedIdFor(pageId) === winSession.id, "关的是别人的会话：第一个窗口没被换走");
 
         // ---- 关掉一个正在被别的屏看着的会话：看它的屏留在原地，接着发消息会自动重开 ----
         const closedId = await activeSessionOf(a);
-        host.processMessage({ type: "closeSession", sessionId: closedId }, p2);
+        host.processPageMessage({ type: "closeSession", sessionId: closedId }, p2);
         await sleep(2500);
         check(!host.panels.has(closedId), "会话被关掉了（进程停了、列表里没了）");
         check((await activeSessionOf(a)) === closedId, "甲还停在那个被关掉的会话上（画面留着）");

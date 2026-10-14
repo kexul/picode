@@ -64,19 +64,6 @@ export interface ModelChoice {
     thinkingLevel?: string;
 }
 
-/** 一个会话当前的模型/上下文用量状态快照，供宿主展示（如 VSCode 状态栏）。 */
-export interface StatusInfo {
-    modelId?: string;
-    provider?: string;
-    thinkingLevel?: string;
-    /** 上下文使用百分比 0-100。 */
-    percent?: number;
-    /** 已用 tokens。 */
-    tokens?: number;
-    /** 上下文窗口大小。 */
-    contextWindow?: number;
-}
-
 export type RuntimeActivity = "idle" | "working" | "thinking" | "tool";
 
 /** 一条消息的出口：往一个页面（或一批页面）写一条要显示的消息。 */
@@ -131,8 +118,6 @@ export interface RuntimeHost {
      * @param immediate 结构变更（新建/关闭/切换）传 true，跳过节流立刻推送。
      */
     broadcastSessionList(immediate?: boolean): void;
-    /** 当某会话的模型/上下文用量状态变化时通知宿主。可选。 */
-    onStatusUpdate?(sessionId: string, info: StatusInfo): void;
     /** 当某会话的工具触及文件集合（knownFiles）变化时通知宿主。可选。 */
     onKnownFilesChanged?(sessionId: string): void;
 

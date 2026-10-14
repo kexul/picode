@@ -167,8 +167,9 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 
 ## 跟独立后端（`pichat`）什么关系
 
-两层壳共用同一个中间层：`chatControllerBase.ts`（会话编排）→ `chatHostBase.ts`（页面通道、
-浮层路由、显示选项）→ 两个宿主：`chatViewProvider.ts`（VSCode 侧）与 `serverChatHost.ts`（独立后端）。
+会话编排与页面通道都在后端这一侧：`chatControllerBase.ts`（会话编排）→ `chatHostBase.ts`（页面通道、
+浮层路由、显示选项）→ 只有一个宿主 `serverChatHost.ts`（独立后端）。插件那一侧是 **纯客户端**：
+它跟浏览器页面一样，从后端领一份界面文件、走 HTTP 收发消息，不继承这套。
 
 - `npm run server`（等于全局装好后的 `pichat`）起的是**真独立后端**：`serverChatHost.ts`，
   不换任何接口，它就是特意不碰 vscode 的那一层。要验它不用假 VSCode：
@@ -176,8 +177,8 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 - `dev/` 这套工具验的是 **插件这一侧 + 真后端**（同一个进程里跑）：插件这侧的代码（`chatViewProvider.ts`、
   `backendClient.ts`、`vscodeScreen.ts`）全是真的，只有它们调 VS Code 的接口是假的；
   会话与网页服务是真后端（`startBackend()`）。改完界面 / 派活 / 会话行为用它最快。
-- 两边共用 `chatHostBase.ts`：改这里等于两边一起改，所以两边都要过一眼（web:shot 与
-  `npm run server` 各跑一次最稳）。
+- 改 `chatHostBase.ts` 只影响后端那一侧（插件那侧不含这份代码）；界面上的表现两边都要过一眼
+  （web:shot 与 `npm run server` 各跑一次最稳）。
 
 ## 文件
 

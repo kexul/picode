@@ -3,8 +3,7 @@
  *
  * 一份会话工作区（{@link ChatControllerBase} 那套：标签、会话进程、消息分发）可以挂在
  * 不同的宿主上，本类装的是两家都要做的事：
- *   - "好几块屏"的出口：网页服务接进来的浏览器页面（手机 / 电脑浏览器，可以同时开着好几个），
- *     以及宿主自己可能带的一块本机界面（VSCode 那边是插件里那块对话面板，独立后端没有）；
+ *   - "好几块屏"的出口：网页服务接进来的浏览器页面（手机 / 电脑浏览器，可以同时开着好几个）；
  *   - 页面连接的登记、推送序号、断线补发、整屏重画；
  *   - 浮层（历史列表、模型选择、确认框）该弹在哪块屏上，以及对话框的收发；
  *   - 显示选项（界面颜色、字号、快捷键、提醒开关）的读写入口：候选值与默认值在
@@ -74,16 +73,13 @@ interface OpenCard {
 }
 
 export abstract class ChatHostBase extends ChatControllerBase implements WebServerHost {
-    /** 本机那块界面的固定标识：VSCode 那边就是插件里那块对话面板；独立后端没有这块屏，用不上。 */
-    protected static readonly LOCAL_CLIENT_ID = ChatControllerBase.LOCAL_CLIENT_ID;
-
     /** 文件夹列表里“就用这个目录”那一行的标识（会话文件、目录都是绝对路径，撞不上这种带 \0 的）。 */
     private static readonly USE_DIR_ROW = "\u0000pichat:use-dir";
     /** 文件夹列表里“换一个盘 / 回到最上层”那一行的标识。 */
     private static readonly ROOTS_ROW = "\u0000pichat:roots";
 
     // ---- 浏览器页面（接在本工作区上的“额外的屏”，可以有多个）----
-    /** 页面连接登记簿 + 推送序号：本机界面与所有浏览器页面共用同一份会话的出口。 */
+    /** 页面连接登记簿 + 推送序号：所有浏览器页面共用同一份会话的出口。 */
     private readonly broadcaster = new ChatBroadcaster();
     /** 网页服务在跑时才往页面推（服务没跑时永远不会有页面，也不必攒）。 */
     private pageDeliveryOn = false;
@@ -100,9 +96,6 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     private cardSeq = 0;
     // 正在处理哪一个来源发来的消息，以及“每块屏各自在看哪个会话”，都在基类里管
     // （见 ChatControllerBase.currentPageId / clientSessions）：本类只管“屏”这一层。
-    /** 人最近在本机界面里动过的时刻：浮层弹到哪块屏上，靠它和页面的动作时刻比。 */
-    protected localActiveAt = 0;
-
     // ---- 显示选项的键（存储由子类给：VSCode 的 globalState / 独立后端的 state.json）----
     protected static readonly KEY_AUTO_LOAD_LAST = "piChat.autoLoadLastSession";
     protected static readonly KEY_SEND_KEY = "piChat.sendKey";
@@ -128,15 +121,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     /** 写一个显示选项。 */
     protected abstract writeOption(key: string, value: unknown): void;
 
-    /** 往本机界面（VSCode 里就是插件里那块对话面板）发一条消息；没有本机界面的宿主不用实现。 */
-    protected postToLocalClient(_msg: Record<string, unknown>): void { /* 默认没有本机界面 */ }
-    /** 本机界面现在能不能收消息（VSCode 那边是 webview 在不在）。 */
-    protected hasLocalClient(): boolean { return false; }
-    /** 等本机界面就绪（VSCode 的 webview JS 加载完才能收消息）。 */
-    protected waitLocalReady(): Promise<void> { return Promise.resolve(); }
-    /** 显示选项改动之后的平台动作（VSCode 要同步快捷键的 when 条件）。 */
-    protected onViewOptionChanged(_action: string): void { /* 默认不用做 */ }
-    /** 给用户一条普通提示（VSCode 用信息条，独立后端写日志）。 */
+    /** 给用户一条普通提示（独立后端写日志）。 */
     protected onNotice(_text: string): void { /* 默认丢掉 */ }
 
     /**
@@ -149,11 +134,8 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     //  出口：一条消息送去哪几块屏
     // ========================================================================
 
-    /** 把一条消息送到所有界面：本机界面 + 所有连着的浏览器页面。 */
+    /** 把一条消息送到所有界面：所有连着的浏览器页面。 */
     protected postToWebview(msg: Record<string, unknown>): void {
-        // 浅拷贝给本机界面：下面广播会给消息记上序号（改动同一个对象），
-        // postMessage 若是迟到才序列化，本机界面那份不该带上页面的序号。
-        this.postToLocalClient({ ...msg });
         this.postToPagesOnly(msg);
     }
 
@@ -166,16 +148,10 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
 
     /**
      * 浮层（历史会话列表、模型选择、确认框这类“当时的一次性界面”）该发给谁：
-     * 人最近在动的那一块屏（本机界面也算一块）。“最近”只看人做的动作，报活不算。
+     * 人最近在动的那一块屏。“最近”只看人做的动作，报活不算。
      */
     protected override pickOverlayTarget(): string {
-        return pickOverlayClient(
-            ChatHostBase.LOCAL_CLIENT_ID,
-            this.localActiveAt,
-            this.hasLocalClient(),
-            this.broadcaster.recentActionPage(),
-            this.broadcaster.recentPage()?.id,
-        );
+        return pickOverlayClient(this.broadcaster.recentActionPage(), this.broadcaster.recentPage()?.id);
     }
 
     /** 浮层消息的出口：只发给挑好的那一块屏，别的屏收不到。 */
@@ -183,21 +159,15 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         return this.sendToOneClient(target, msg);
     }
 
-    /** 只发给某一块屏（本机界面或某个页面）；那块屏不在就返回 false。 */
+    /** 只发给某一块屏；那块屏不在就返回 false。 */
     protected sendToOneClient(target: string, msg: Record<string, unknown>): boolean {
-        if (target === ChatHostBase.LOCAL_CLIENT_ID) {
-            if (!this.hasLocalClient()) { return false; }
-            this.postToLocalClient(msg);
-            return true;
-        }
         if (!target) { return false; }
         return this.broadcaster.sendTo(target, msg);
     }
 
     /**
      * 浮层（拾取器）只发给挑好的那一块屏：在哪个屏上点开就弹在哪个屏，别的屏不受影响。
-     * 挑中的是本机界面时，等它的 JS 就绪再推（否则消息会被静默丢弃，表现为点击无反应）；
-     * 挑不出屏（本机界面没开、也没有页面）直接按取消。
+     * 挑不出屏（一个页面都没有）直接按取消。
      */
     protected override async showPicker(
         kind: string,
@@ -210,9 +180,6 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         // 调用方指定了弹给哪块屏就用它（模型选择器这种“点它的人自己要看”）；不然现挑“人最近在动的那一块”
         const to = target ?? this.pickOverlayTarget();
         if (!to) { return Promise.resolve(undefined); }
-        if (to === ChatHostBase.LOCAL_CLIENT_ID) {
-            await this.waitLocalReady();
-        }
         return this.openPicker(kind, { items, current: current ?? null, ...(echo || {}) }, to, timeoutMs);
     }
 
@@ -454,30 +421,13 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     //  消息分发（页面发来的与 ready 统一走这里）
     // ========================================================================
 
-    /** 带来源的消息分发：处理期间记下是哪个来源发来的，浮层才知道该回给谁。 */
-    public override processMessage(msg: any, pageId?: string): void {
-        if (!msg || typeof msg.type !== "string") { return; }
-        const previous = this.currentPageId;
-        this.currentPageId = typeof pageId === "string" && pageId ? pageId : ChatHostBase.LOCAL_CLIENT_ID;
-        try {
-            super.processMessage(msg);
-        } finally {
-            this.currentPageId = previous;
-        }
-    }
-
     /**
-     * 界面就绪（本机界面或某个浏览器页面发来 ready）：两边都把已有的对话整屏重画一遍——
+     * 界面就绪（某个浏览器页面发来 ready）：把已有的对话整屏重画一遍——
      * 工作区里可能已经有别的屏聊出来的内容（比如手机上先开的对话）。
      */
     protected override onWebviewReady(): void {
         this.broadcastChatReferences();
-        void this.resyncPage(
-            this.currentPageId,
-            this.currentPageId === ChatHostBase.LOCAL_CLIENT_ID
-                ? ""
-                : "页面已重新连接（{count} 条消息，pi 进程与上下文原样保留）。",
-        );
+        void this.resyncPage(this.currentPageId, "页面已重新连接（{count} 条消息，pi 进程与上下文原样保留）。");
     }
 
     // ========================================================================
@@ -487,9 +437,18 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     /** 页面连接的登记簿 + 推送序号（网页服务开连接 / 收发消息时用）。 */
     public getBroadcaster(): ChatBroadcaster { return this.broadcaster; }
 
-    /** 页面发来一条消息（网页服务的 /api POST 转交）。 */
+    /**
+     * 页面发来一条消息（网页服务的 /api POST 转交）。
+     * 处理期间记下是哪块屏发来的，浮层才知道该回给谁。
+     */
     public processPageMessage(msg: any, pageId: string): void {
-        this.processMessage(msg, pageId);
+        const previous = this.currentPageId;
+        this.currentPageId = pageId;
+        try {
+            this.processMessage(msg);
+        } finally {
+            this.currentPageId = previous;
+        }
     }
 
     /** 一条推送连接建立（页面连上 / 重连）：把等着的重画补上，再把攒着的消息冲出去。 */
@@ -567,25 +526,22 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
      * 把已有的对话整屏重画一遍：界面刚就绪、或页面重连后补发补不上（缺得太多）时用它。
      *
      * 只画给发消息来的那一块屏——手机重连时，电脑那边的页面不该跟着白闪一下，
-     * 更不该把正在生成的半句话清掉；本机界面就绪时也只重画本机界面。
-     * @param pageId 要重画给哪一块屏；本机界面传它的固定标识，页面传它自己的标识。
+     * 更不该把正在生成的半句话清掉。
+     * @param pageId 要重画给哪一块屏（页面标识）。
      * @param note 重画后给的一行提示；空串表示不给。
      */
     private resyncPage(pageId: string, note: string): Promise<void> {
-        const isLocal = pageId === ChatHostBase.LOCAL_CLIENT_ID;
-        if (!isLocal && pageId && !this.broadcaster.hasPage(pageId)) {
+        if (pageId && !this.broadcaster.hasPage(pageId)) {
             // 页面的重画请求到得比它的推送连接还早（刚刷新的那一瞬间）：现在送也是白送，
             // 先记下来，它一连上就画（见 onPageConnected）。
             this.pendingResyncPages.set(pageId, note);
             return Promise.resolve();
         }
         // 只发给这一块屏；拿不到出口（理论上不会）就退回广播：宁可多画一次，也不能让界面缺内容
-        const sink: MessageSink | undefined = isLocal
-            ? (msg) => this.postToLocalClient(msg)
-            : pageId
-                ? ((msg) => { this.broadcaster.sendTo(pageId, msg); })
-                : undefined;
-        if (!isLocal && pageId) { this.resyncingPages.add(pageId); }
+        const sink: MessageSink | undefined = pageId
+            ? ((msg) => { this.broadcaster.sendTo(pageId, msg); })
+            : undefined;
+        if (pageId) { this.resyncingPages.add(pageId); }
         const replays: Array<Promise<void>> = [];
         for (const rt of this.panels.values()) {
             // 刚建的空会话不用重画：newSession 已经把它需要的东西发过去了
@@ -597,9 +553,9 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
             this.resendCardsTo(pageId, true);
             // 重画的消息不带序号（它们只发给这一块屏）。页面重画完把对齐到当前序号：
             // 重画的内容已经包含到这里为止的一切，下次重连它报上来的数才是准的。
-            if (!isLocal && pageId) { this.broadcaster.sendTo(pageId, { type: "syncPoint", seq: this.broadcaster.currentSeq() }); }
+            if (pageId) { this.broadcaster.sendTo(pageId, { type: "syncPoint", seq: this.broadcaster.currentSeq() }); }
         }).finally(() => {
-            if (!isLocal && pageId) { this.resyncingPages.delete(pageId); }
+            if (pageId) { this.resyncingPages.delete(pageId); }
         });
     }
 
@@ -660,7 +616,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     protected notifyBeepEnabled(): boolean { return this.getNotifyBeep(); }
 
     /**
-     * 对话界面的深浅配色（本机界面与网页页面都用这一份）。
+     * 对话界面的深浅配色。
      * 默认浅色（就是网页端现在的白底那套取值）；深色按 VSCode 深色主题的取值写死，
      * 不随 VSCode 当前主题变——否则同一个配置在两边会长得不一样。
      */
@@ -719,7 +675,6 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         } else {
             this.writeOption(ChatHostBase.KEY_AUTO_LOAD_LAST, !this.getAutoLoadLast());
         }
-        this.onViewOptionChanged(action);
     }
 
     // ========================================================================
@@ -753,7 +708,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
     }
 
     /**
-     * 只发一块屏（本机界面或某个页面）：控制器那边"只给动手的那块屏"的消息走这里。
+     * 只发一块屏：控制器那边"只给动手的那块屏"的消息走这里。
      * 那块屏现在没连着（断线间隙）就丢掉：它连回来时后端会单发一份状态给它。
      */
     protected override postToOneClient(clientId: string, msg: Record<string, unknown>): void {
@@ -761,11 +716,10 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
         this.sendToOneClient(clientId, msg);
     }
 
-    /** 现在连着的每一块屏（本机界面 + 所有页面）：会话列表要一块一块各发一份，走这里。 */
+    /** 现在连着的每一块屏：会话列表要一块一块各发一份，走这里。 */
     protected override forEachClient(
         fn: (clientId: string, send: (msg: Record<string, unknown>) => void) => void,
     ): void {
-        if (this.hasLocalClient()) { fn(ChatHostBase.LOCAL_CLIENT_ID, (msg) => this.postToLocalClient(msg)); }
         this.broadcaster.forEachChannel((channel) => {
             fn(channel.id, (msg) => { this.broadcaster.sendTo(channel.id, msg); });
         });
@@ -938,8 +892,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
                 const pageId = this.currentPageId;
                 const lastSeq = typeof msg.lastSeq === "number" && Number.isFinite(msg.lastSeq)
                     ? msg.lastSeq : -1;
-                if (pageId && pageId !== ChatHostBase.LOCAL_CLIENT_ID
-                    && lastSeq >= 0 && this.broadcaster.catchUp(pageId, lastSeq)) {
+                if (pageId && lastSeq >= 0 && this.broadcaster.catchUp(pageId, lastSeq)) {
                     // 补发的是断线前的老消息（里面可能有那个会话被关掉之前的内容）：
                     // 补完再给它一份最新的会话列表，“已经不存在的会话”就不会在它上面留在那儿。
                     this.sendSessionListTo(pageId);
@@ -956,7 +909,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
             }
             case "openHistory":
                 // 顶条最右边那颗“<<<”按钮（以及命令面板的历史入口）：列表从右侧滑入，
-                // 只弹在点它的那块屏上（另一个浏览器 / 本机界面不跟着弹）。
+                // 只弹在点它的那块屏上（别的浏览器页面不跟着弹）。
                 void this.showHistoryPicker(this.currentPageId);
                 return true;
             case "openWorkspace":
@@ -1014,7 +967,7 @@ export abstract class ChatHostBase extends ChatControllerBase implements WebServ
 
     /**
      * 顶条上那颗“桌面截图”按钮：截一张这台电脑的桌面，只发回请求它的那块屏
-     * （别的页面 / 本机界面不跟着弹图）。截屏要一两秒，异步做；截完时请求方已经不在
+     * （别的页面不跟着弹图）。截屏要一两秒，异步做；截完时请求方已经不在
      * 就白截（送不出去，直接丢）。成功发 desktopScreenshot（图片 base64），
      * 失败发 desktopScreenshotResult（错误文本，界面上弹一句）。
      */

@@ -41,7 +41,6 @@ export type {
     PiConfig,
     RuntimeActivity,
     RuntimeHost,
-    StatusInfo,
     TurnEndInfo,
     TurnEndStatus,
 } from "./runtimeTypes";
@@ -154,13 +153,11 @@ export class SessionRuntime {
         return !this.hasConversation && !this.loading;
     }
 
-    // ---- 当前状态快照（供 host.onStatusUpdate 上报，如 VSCode 状态栏）----
+    // ---- 当前状态快照（跟着 sessionList 发给界面，界面自己画底下那条状态栏）----
     private statusModelId?: string;
     private statusProvider?: string;
     private statusThinking?: string;
     private statusPercent?: number;
-    private statusTokens?: number;
-    private statusContextWindow?: number;
     /** 模型列表缓存：pi 启动时读一次 models.json，进程存活期间不变；
      *  点击状态栏弹选择器直接读缓存，避免每次都等 RPC 往返（多 panel 时尤其卡）。 */
     private cachedModels?: ModelInfo[];
@@ -220,18 +217,6 @@ export class SessionRuntime {
         this.host.postToSession(this.id, msg);
     }
 
-    /** 把当前会话的模型/上下文状态快照上报给宿主（如 VSCode 状态栏）。
-     *  宿主自行按焦点 panel 过滤；这里不多嘴。 */
-    public emitStatus(): void {
-        this.host.onStatusUpdate?.(this.id, {
-            modelId: this.statusModelId,
-            provider: this.statusProvider,
-            thinkingLevel: this.statusThinking,
-            percent: this.statusPercent,
-            tokens: this.statusTokens,
-            contextWindow: this.statusContextWindow,
-        });
-    }
 
     // ---- 状态快照只读视图（供 sessionList 携带，界面重建后恢复状态栏）----
     public get modelId(): string | undefined { return this.statusModelId; }
@@ -433,7 +418,6 @@ export class SessionRuntime {
         this.piReady = ready;
         this.post({ type: "piReady", ready });
         this.host.broadcastSessionList();
-        this.emitStatus();
     }
 
     /** 发送当前模型信息给 webview。 */
@@ -455,7 +439,6 @@ export class SessionRuntime {
             this.statusThinking = thinkingLevel;
             this.post({ type: "thinkingChanged", level: thinkingLevel });
         }
-        this.emitStatus();
     }
 
     /** 中止该会话正在进行的生成 + bash 工具。
@@ -918,7 +901,6 @@ export class SessionRuntime {
             // 网页端这一份只带最近的图（更早的界面上点开再取），否则首屏要传的字节数会很大
             inlineImages: win ? this.planInlineImages(win.list) : undefined,
         });
-        this.emitStatus();
         const count = messages.filter((m) => m && (m.role === "user" || m.role === "assistant")).length;
         const note = opts?.note === undefined
             ? "会话已迁入本工作区（{count} 条消息，pi 进程与上下文原样保留）。"
@@ -1391,7 +1373,6 @@ export class SessionRuntime {
             } else {
                 this.statusThinking = thinkingLevel;
                 this.post({ type: "thinkingChanged", level: thinkingLevel });
-                this.emitStatus();
             }
         }
 
@@ -1416,8 +1397,6 @@ export class SessionRuntime {
         const cu = d.contextUsage || null;
         if (cu) {
             this.statusPercent = typeof cu.percent === "number" ? cu.percent : undefined;
-            this.statusTokens = typeof cu.tokens === "number" ? cu.tokens : undefined;
-            this.statusContextWindow = typeof cu.contextWindow === "number" ? cu.contextWindow : undefined;
         }
         this.post({
             type: "stats",
@@ -1425,7 +1404,6 @@ export class SessionRuntime {
             cost: typeof d.cost === "number" ? d.cost : null,
             contextUsage: cu,
         });
-        this.emitStatus();
     }
 
     // ---- 文件跳转 / diff（均相对该会话的 EditTracker）----
