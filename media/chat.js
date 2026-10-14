@@ -110,6 +110,9 @@
   // 一个 view 就是“画到哪儿”那一摊（那几个 DOM 元素 + 这份面板自己的状态）。
   // 状态按 view 分开挂，所以两块面板可以同时各画各的一份、互不打扰：
   //   { kind, items, filtered, sel, current, draftModel, draftThinking, toggle, … }
+  // 画出来以后还留几样（都是「重画时只动变了的那一块」要用的，见 refreshOpenSessionsIn）：
+  //   sessionPane / spacePane 是「项目与会话」上下两格（其余面板没有，是 null，就画在面板身上）；
+  //   openSessionsShown / spaceRowsShown / openIdsShown 是这两格当前长什么样的指纹。
   const modalView = {
     root: document.getElementById("pickerOverlay"),
     header: document.getElementById("pickerHeader"),
@@ -2428,12 +2431,31 @@
   }
 
   /**
-   * 会话增减 / 状态变化 / 确认条状态变化：列表开着就重画一遍。
-   * 两处讲究：
+   * 「项目与会话」下半那一块（工作区 + 展开的组挂着的会话）的内容指纹。
+   * 跟 openSessionsSignature 一个用法：跟屏幕上那份一样就不重画那一格。
+   * 各组的「正在取 / 还有没有下一批」也要算上：那一组末尾那颗「加载更多」长什么样看它。
+   */
+  function spaceRowsSignature(view) {
+    const st = view.state;
+    if (!st) { return ""; }
+    const groups = [];
+    if (st.groups) { st.groups.forEach((g, key) => { groups.push([key, g.loading ? 1 : 0, g.hasMore ? 1 : 0]); }); }
+    return JSON.stringify([
+      st.spacesHasMore === true ? 1 : 0, st.spacesLoading === true ? 1 : 0,
+      groups, st.items.filter((it) => it.__section !== "open"),
+    ]);
+  }
+
+  /**
+   * 会话增减 / 状态变化 / 确认条状态变化：列表开着就把变了的那一块重画一遍。
+   * 三处讲究：
    *  - 只换「正在对话」那一段，后面原样接回去——「加载更多」追加进来的行只存在 st.items 里，
    *    不能拿宿主最初给的那份数据整份重拼，否则点出来的行会被下一次状态推送抹掉；
    *  - 内容跟屏幕上那份一模一样就不画：会话在跑的时候状态推送很密，
-   *    白白重画一遍只会把滚动位置顶回顶部。
+   *    白白重画一遍只会把滚动位置顶回顶部；
+   *  - 「项目与会话」上下两格（正在对话 / 工作区）各画各的：会话状态一变只重画上半那几行，
+   *    下半「工作区」那一块（可能很长）内容没变就一根手指都不碰 ——
+   *    常驻那一列整块重画，看着就是整列闪一下。
    */
   function refreshOpenSessionsInPicker() {
     refreshOpenSessionsIn(modalView);
@@ -2449,11 +2471,24 @@
     const signature = openSessionsSignature(openItems);
     if (signature === view.openSessionsShown) { return; }
     view.openSessionsShown = signature;
-    if (st.kind === "workspace") {
-      // 面板：整串重拼（工作区那一块、展开了的组都跟着一起算）
-      rebuildWorkspaceItems(view);
-    } else {
+    if (st.kind !== "workspace") {
       st.items = openItems.concat(st.items.filter((it) => it.__section !== "open"));
+      renderPickerItems(view);
+      return;
+    }
+    // 「项目与会话」：整串重拼一份（工作区那一块、展开了的组都跟着一起算），
+    // 但只画真的变了的那一格。会话状态一变（开始生成 / 跑完 / 未读 / 换了当前）只该动
+    // 上半「正在对话」那几行，下半「工作区」那一块（可能很长）原样留着 ——
+    // 常驻那一列整块重画，看着就是整列闪一下（见“常驻侧边栏”那段）。
+    rebuildWorkspaceItems(view);
+    const openIds = openItems.map((it) => it.sessionId).join("\u0000");
+    // 只换上半那一格得同时满足两件：下半内容没变（指纹一样）、上半的行数也没变。
+    // 行数变了下半那些行的「第几行」就跟着错位：那行上那颗点击认的是它在列表里的序号
+    // （见 confirmPicker），序号一错就会点到隔壁那一条去。
+    if (spaceRowsSignature(view) === view.spaceRowsShown && openIds === view.openIdsShown) {
+      st.filtered = st.items.filter((it) => pickerItemMatch(it, st.kind, pickerQuery(view)));
+      redrawOpenRowsIn(view);
+      return;
     }
     renderPickerItems(view);
   }
@@ -2738,6 +2773,11 @@
     pendingCloseId = null;
     view.state = null;
     view.openSessionsShown = "";
+    // 那两格跟着面板一起没了（重开时由 renderPickerItems 重建）：别留着指已经拆掉的格子
+    view.sessionPane = null;
+    view.spacePane = null;
+    view.spaceRowsShown = "";
+    view.openIdsShown = "";
   }
 
   // ==================== 常驻侧边栏（宽窗下的「项目与会话」）====================
@@ -3025,10 +3065,45 @@
     actions.appendChild(confirmBtn);
     view.footer.appendChild(actions);
   }
+
+  /** 面板筛选框里的词（这一格没有筛选框、或者还没打字，都是空串）。 */
+  function pickerQuery(view) {
+    return ((view.search ? view.search.value : "") || "").toLowerCase().trim();
+  }
+
+  /** 「正在对话」那几行各是谁（按画出来的顺序）：重画上半那一格前先比一比，行数或顺序变了就不走那条路。 */
+  function openRowIds(view) {
+    const st = view.state;
+    if (!st) { return ""; }
+    return (st.filtered || []).filter((it) => it.__section === "open")
+      .map((it) => it.sessionId).join("\u0000");
+  }
+
+  /**
+   * 只重画「项目与会话」上半那一格（「正在对话」那几行）：下半「工作区」原样留着，
+   * 连它滚到哪儿都不动。会话状态一变就走这里，见 refreshOpenSessionsIn。
+   */
+  function redrawOpenRowsIn(view) {
+    const st = view.state;
+    const pane = view.sessionPane;
+    if (!st || !pane) { return; }
+    const keepScroll = pane.scrollTop;
+    pane.innerHTML = "";
+    renderPickerRows(view, (it) => it.__section === "open");
+    pane.scrollTop = keepScroll;
+  }
+
+  /** 这一行该画进哪一格：常驻那一列（「项目与会话」）上半是「正在对话」、下半是「工作区」；
+   *  其余面板（选模型 / 历史抽屉 / 文件夹）不分格，就画在面板身上。 */
+  function pickerRowHost(view, item) {
+    if (!view.sessionPane) { return view.body; }
+    return item.__section === "open" ? view.sessionPane : view.spacePane;
+  }
+
   function renderPickerItems(view = modalView) {
     const st = view.state;
     if (!st) { return; }
-    const q = ((view.search ? view.search.value : "") || "").toLowerCase().trim();
+    const q = pickerQuery(view);
     st.filtered = st.items.filter((it) => pickerItemMatch(it, st.kind, q));
     // 切换模型那层：草稿模型被筛选词筛掉了就作废（底下那颗「确认切换」跟着变灰）；
     // 列表里不再有「选中的那一行」这回事：鼠标 / 触摸点哪行就是哪行，扫过不改动什么。
@@ -3036,29 +3111,30 @@
       st.draftModel = null;
       st.draftThinking = undefined;
     }
-    // 重画前先把滚动位置记下来（渲染完再放回去）：会话状态推送一来就会重画一遍，
+    // 重画前先把滚动位置记下来（渲染完再放回去）：面板整份换数据时会走这里，
     // 不能把人正看着的那一段顶回顶部。会话 / 工作区两块各滚各的，分开记。
-    const prevSessionPane = view.body.querySelector(".pk-session-pane");
-    const prevSpacePane = view.body.querySelector(".pk-space-pane");
     const keepScroll = {
       body: view.body.scrollTop,
-      session: prevSessionPane ? prevSessionPane.scrollTop : 0,
-      space: prevSpacePane ? prevSpacePane.scrollTop : 0,
+      session: view.sessionPane ? view.sessionPane.scrollTop : 0,
+      space: view.spacePane ? view.spacePane.scrollTop : 0,
     };
     view.body.innerHTML = "";
     view.body.classList.toggle("pk-workspace-body", st.kind === "workspace");
-    let sessionPane = null;
-    let spacePane = null;
+    view.sessionPane = null;
+    view.spacePane = null;
     /** 渲染完把滚动位置放回原处（内容变短时浏览器自己会夹到最底下）。 */
     const restoreScroll = () => {
       view.body.scrollTop = keepScroll.body;
-      if (sessionPane) { sessionPane.scrollTop = keepScroll.session; }
-      if (spacePane) { spacePane.scrollTop = keepScroll.space; }
+      if (view.sessionPane) { view.sessionPane.scrollTop = keepScroll.session; }
+      if (view.spacePane) { view.spacePane.scrollTop = keepScroll.space; }
     };
     if (st.kind === "workspace") {
-      sessionPane = document.createElement("div"); sessionPane.className = "pk-workspace-pane pk-session-pane";
-      spacePane = document.createElement("div"); spacePane.className = "pk-workspace-pane pk-space-pane";
-      view.body.appendChild(sessionPane); view.body.appendChild(spacePane);
+      view.sessionPane = document.createElement("div"); view.sessionPane.className = "pk-workspace-pane pk-session-pane";
+      view.spacePane = document.createElement("div"); view.spacePane.className = "pk-workspace-pane pk-space-pane";
+      view.body.appendChild(view.sessionPane); view.body.appendChild(view.spacePane);
+      // 刚画出来的上下两格长什么样：之后会话状态推送来时内容没变就不动它
+      view.spaceRowsShown = spaceRowsSignature(view);
+      view.openIdsShown = openRowIds(view);
     }
     if (st.filtered.length === 0) {
       const empty = document.createElement("div"); empty.className = "pk-empty";
@@ -3069,9 +3145,29 @@
       restoreScroll();
       return;
     }
+    renderPickerRows(view);
+    // 两个面板各有自己的滚动区和加载按钮。
+    if (st.kind === "history" && st.historyHasMore) {
+      view.body.appendChild(buildLoadMoreBtn(view, st, "sessions"));
+    }
+    if (st.kind === "workspace" && st.spacesHasMore) {
+      view.spacePane.appendChild(buildLoadMoreBtn(view, st, "spaces"));
+    }
+    if (st.kind === "model") { renderModelFooter(view, st); }
+    restoreScroll();
+  }
+
+  /**
+   * 把 st.filtered 里的行画出来（画进哪一格见 pickerRowHost）。
+   * 序号一律按 st.filtered 数（行上那颗点击认的是它在列表里的第几行，见 confirmPicker）。
+   * @param only 只画满足它的那些行（只重画一格时用）；不填 = 全都画
+   */
+  function renderPickerRows(view, only) {
+    const st = view.state;
     let lastSection = null;
     let lastModelProv = null;
     st.filtered.forEach((item, idx) => {
+      if (only && !only(item)) { return; }
       if (st.kind === "model") {
         // provider 分组分隔线：host 已按 provider 排序，同 provider 项连续；
         // 标题带组内数量（随搜索过滤实时重算），无 provider 归入“其他”。
@@ -3115,7 +3211,7 @@
 
       // 「项目与会话」面板：除了「正在对话」那一节，其余（工作区行、展开的那几组会话）都画在工作区那块里，
       // 它们自己一个滚动区。
-      const sectionPane = (st.kind === "workspace" && item.__section !== "open") ? spacePane : sessionPane;
+      const sectionPane = pickerRowHost(view, item);
       if (item.section && item.section !== lastSection) {
         lastSection = item.section;
         const sep = document.createElement("div"); sep.className = "pk-section";
@@ -3137,7 +3233,7 @@
           });
           sep.appendChild(add);
         }
-        (sectionPane || view.body).appendChild(sep);
+        sectionPane.appendChild(sep);
       }
       const el = document.createElement("div");
       el.className = "pk-item";
@@ -3158,7 +3254,7 @@
           requestGroupPage(view, item.groupPath, g.nextOffset);
           renderPickerItems(view);
         });
-        (sectionPane || view.body).appendChild(btn);
+        sectionPane.appendChild(btn);
         return;
       }
       if (item.__section === "open") {
@@ -3306,17 +3402,8 @@
       // 鼠标扫过不改「选中的那一行」：这里已经没有这一回事了（列表只认点哪行是哪行，
       // 鼠标底下那一行归 CSS 的 :hover，移开就灭）。
       el.addEventListener("click", () => { confirmPicker(idx, view); });
-      (sectionPane || view.body).appendChild(el);
+      sectionPane.appendChild(el);
     });
-    // 两个面板各有自己的滚动区和加载按钮。
-    if (st.kind === "history" && st.historyHasMore) {
-      view.body.appendChild(buildLoadMoreBtn(view, st, "sessions"));
-    }
-    if (st.kind === "workspace" && st.spacesHasMore) {
-      spacePane.appendChild(buildLoadMoreBtn(view, st, "spaces"));
-    }
-    if (st.kind === "model") { renderModelFooter(view, st); }
-    restoreScroll();
   }
   /**
    * 「加载更多」那颗按钮。which = "sessions" 是上半会话那块的，"spaces" 是下半工作区那块的；
