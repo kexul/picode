@@ -58,7 +58,8 @@ npm run web:shot -- --fake-pi --send "随便说点什么" --shot fake.png
 # 同一个名字只出一个标签（标签停在第一次调用的位置），不同名的各占一个，一条线上还是能排好几个
 npm run web:shot -- --width 1000 --height 620 --script dev/toolRow.js
 
-# 验合并本身（同名的收成一个、悬浮提示里一条条列出来、读图那条摘出去、不合并的那几个、重放后一样）：
+# 验合并本身（同名的收成一个、悬浮提示里一条条列出来、write / edit 也按名字收且每条的
+# 「跳转 / 回滚」排在各自的标题行上、读图那条摘出去、不合并的那几个、重放后一样）：
 npm run web:shot -- --width 1000 --height 760 --script dev/toolMerge.js
 
 # 验会话那套（顶条名字跟着 pi 标题变 / 切会话 / 列表里关会话）：

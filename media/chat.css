@@ -200,7 +200,7 @@
   .tool.running .tool-icon { animation: tool-spin 1.1s linear infinite; }
   @keyframes tool-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .tool.error { opacity: 1; color: var(--vscode-errorForeground, #f48771); }
-  .tool.et-pill { cursor: pointer; }
+  /* 改动被回滚了：这一组的标签划掉（一组里有没回滚的就不划，见 chat.js 的 syncGroupTag） */
   .tool.reverted { text-decoration: line-through; opacity: 0.6; }
   /* 合并标签（连着来的同名调用收成一个）：工具名 + 次数小方块（只调一次就不写数字）。
      次数不用乘号：标签字号是正文的 0.8 倍，乘号在这个尺寸只剩几个像素，两条斜线
@@ -361,11 +361,15 @@
   .file-item .cmd-badge.cmd-skill { color: var(--vscode-charts-green, #89d185); }
   .file-item .cmd-badge.cmd-prompt { color: var(--vscode-charts-blue, #75beff); }
   .file-item .cmd-badge.cmd-extension { color: var(--vscode-charts-purple, #b180d7); }
-  /* edit/write 收起态是工具行里的小标签，展开内容全在悬浮提示框里，不再有整张卡片。
-     提示框内：标题行复用 .tag-tip-call，下面是 diff / 写入预览 + 跳转 / 回滚按钮 */
+  /* edit/write 收起态是工具行里的小标签（跟别的工具一样按名字收，改了几处就带次数），
+     展开内容全在悬浮提示框里，不再有整张卡片。
+     提示框内：一条调用一块，标题行复用 .tag-tip-call，标题右边就是这一条的「跳转 / 回滚」，
+     下面接 diff / 写入预览 —— 按钮就待在它改的那个文件旁边，不用滚过 diff 才找得到 */
+  .tag-tip .tag-tip-head { display: flex; align-items: center; gap: 8px; }
+  .tag-tip .tag-tip-title { margin-right: auto; }
   .tag-tip .et-revert,
   .tag-tip .et-jump {
-    align-self: flex-start; margin-top: 6px; padding: 1px 8px; border-radius: 3px; cursor: pointer;
+    flex: none; padding: 1px 8px; border-radius: 3px; cursor: pointer;
     font-family: var(--vscode-font-family);
     background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.25));
     color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));

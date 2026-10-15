@@ -2,7 +2,7 @@
 (function () {
   const vscode = acquireVsCodeApi();
   // 是否运行在网页服务的页面里（browserBridge.js 会先于本文件在 window 上放好这个标记）。
-  // 网页端与 VSCode 共用这份脚本，少数行为按此区分：edit/write 卡片默认收起、
+  // 网页端与 VSCode 共用这份脚本，少数行为按此区分：write / edit 那颗粒上点「跳转」往哪儿开、
   // 左边的文件侧边栏只在浏览器页面里长出来（插件里的对话面板里点链接交给编辑器打开）。
   const IN_WEBVIEW = window.pichatInWebview === true;
   // 供扩展宿主选择“最后活动的 Pi Chat”；pointerdown 覆盖大多数 webview
@@ -307,7 +307,7 @@
    *
    * 为什么在这里整段重画（el.innerHTML = renderMarkdown(el.dataset.raw)）不行：符号链接就是
    * 运行时挂进 .md 里的 DOM（下面这段干的），重画只认 markdown 原文，会把它们一起抹掉。
-   *（工具标签、edit/write 卡片早就不在 .md 里了：它们各自独立成一行，见 toolTagHost。）
+   *（工具标签（write / edit 那几种也在内）早就不在 .md 里了：它们各自独立成一行，见 toolTagHost。）
    * 只改行内 code 节点，别的东西一律不动。
    *
    * 判断规则与 marked 的 codespan 渲染器保持一致：文件路径优先（那类已经是文件链接，不动），
@@ -1190,7 +1190,7 @@
 
   /** 标签的悬浮/点按触发：触屏点一下显示、再点一下（或点外面）关闭；电脑悬浮显示，
    *  从标签移进提示框不收，两边都离开才收（见 scheduleTagTipHide）。
-   *  单个标签、编辑卡片标签、合并标签共用这一套。 */
+   *  各种工具标签共用这一套。 */
   function attachTagTipHandlers(tag) {
     if (IS_TOUCH_DEVICE) {
       tag.addEventListener("click", () => {
@@ -1204,17 +1204,18 @@
 
   // ==================== 工具标签：合并 ====================
   // 一条工具调用行（= 两条正文之间的一批）里，同一个工具名只出一个标签：工具名 + 次数小方块（这批里一共调了几次，
-  // 只有一次时不写数字）。标签就停在**第一次**出现这个名字的位置；中间夹了别的工具调用（不同名的、
-  // 或者编辑卡片）不影响它攒数，数都记在同一个标签上。
+  // 只有一次时不写数字）。标签就停在**第一次**出现这个名字的位置；中间夹了别的工具调用（不同名的）
+  // 不影响它攒数，数都记在同一个标签上。
   // 鼠标停上去，提示框里把它们一条一条列出来（调用 + 结果），见 fillGroupTip。
   //
   // 不合并的（每次单独一个标签，连着来也各占一个）：
   //   · taba / taba_stop / taba_peek（派子会话）—— 每次派的活不一样，各自单独看一眼更清楚；
-  //   · write / edit —— 本来就不是小标签，是带 diff 的卡片（见 buildEditCard）；
   //   · 结果带图的 read —— 是不是图要等结果回来才知道，那条到了会从组里摘出去，
   //     在对话里铺成一整块图（见 removeEntryFromGroup）。
+  // write / edit 也跟别的工具一样按名字收（改了好几处就收成「edit ×3」）：标签上只有工具名和次数，
+  // 改了哪个文件、diff、跳转 / 回滚都在悬浮提示里一条条看（见 buildEditCard）。
   // 一条正文（或用户消息）到来就换行、另起一批，上批的标签不再攒数。
-  const NO_MERGE_TOOLS = new Set(["write", "edit", "taba", "taba_stop", "taba_peek"]);
+  const NO_MERGE_TOOLS = new Set(["taba", "taba_stop", "taba_peek"]);
   const GROUP_RUNNING_TEXT = "运行中…";
   /** 模型的思考也算这一批里的一种条目：名字固定叫这个（不并进 NO_MERGE_TOOLS：同名照常合并）。 */
   const THINKING_NAME = "think";
@@ -1247,8 +1248,9 @@
   }
 
   /** 往这一批里加一条调用：同名就并到已有那个标签上（标签停在第一次调用的位置），
-   *  没见过的名字新开一个标签。 */
-  function addToolToGroup(st, toolName, argStr, toolCallId) {
+   *  没见过的名字新开一个标签。tipFill（可选）：这一条在提示框里怎么画，不传就按默认的
+   *  「调用一行 + 结果一块」画（write / edit 自带一块，见 buildEditCard）。 */
+  function addToolToGroup(st, toolName, argStr, toolCallId, tipFill) {
     const row = toolTagHost(st);
     let batch = st.toolGroups;
     if (!batch || batch.row !== row) {
@@ -1281,6 +1283,7 @@
       name: toolName,
       argStr: argStr || "",
       tipCall: tagTipCallText(toolName, argStr),
+      tipFill: tipFill || null,
       resultText: "",
       meta: {},
       isError: false,
@@ -1328,6 +1331,8 @@
     g.countEl.textContent = total > 1 ? String(total) : "";
     g.tag.classList.toggle("running", g.entries.some((e) => !e.done));
     g.tag.classList.toggle("error", g.entries.some((e) => e.isError));
+    // 一组里的改动都回滚了，整颗标签才划掉（只有 write / edit 会被回滚，见 buildEditCard）
+    g.tag.classList.toggle("reverted", g.entries.length > 0 && g.entries.every((e) => e.reverted));
     refreshTagTipIfShowing(g.tag);
   }
 
@@ -1335,6 +1340,8 @@
   function fillGroupTip(g, content) {
     content.textContent = "";
     g.entries.forEach((e, i) => {
+      // write / edit 那一条自带一块画法（文件名 + diff + 按钮）：整块交给它自己画
+      if (e.tipFill) { e.tipFill(content, i > 0); return; }
       const call = document.createElement("div");
       call.className = "tag-tip-call" + (i > 0 ? " tag-tip-call-next" : "");
       call.textContent = e.tipCall || e.name;
@@ -1550,7 +1557,7 @@
   /** 把标签的调用与结果填进内容区：调用一行稍深底色（输入），结果原样（输出）。 */
   function fillTagTip(tag) {
     tagTipContent.textContent = "";
-    // 自定义内容钩子（edit/write 标签用：标题行 + diff / 写入预览 + 跳转 / 回滚按钮）
+    // 自定义内容钩子（write / edit 那一条用：标题行 + diff / 写入预览 + 跳转 / 回滚按钮）
     if (tag._tipFill) { tag._tipFill(tagTipContent); return; }
     tagTipContent.textContent = "";
     const call = document.createElement("div");
@@ -1871,26 +1878,27 @@
     return wrap;
   }
 
+  /**
+   * write / edit 的一次调用：跟别的工具一样按名字收进那条工具调用行（连着改几处就收成
+   * 「edit ×3」，标签上只有工具名和次数），改了哪个文件、diff、跳转 / 回滚都在悬浮提示里，
+   * 一条调用一块（见 fillEntry）。调用方拿到的是这一条自己的把手：结果回来、回滚了各调一下
+   * （见 editCardResult / editReverted）。
+   */
   function buildEditCard(st, toolName, label, filePath, toolCallId, argStr) {
     hideEmptyHint(st);
-    // 收起态：跟普通工具调用一样的「齿轮 + 工具名」小标签，收进那条工具调用行；文件路径在悬浮提示里看。
-    const pill = document.createElement("span");
-    pill.className = "tool et-pill" + (toolCallId ? " running" : "");
-    pill.insertAdjacentHTML("afterbegin", GEAR_SVG);
-    pill.appendChild(document.createTextNode(" " + toolName));
-    attachTagTipHandlers(pill);
-    mountToolTag(st, pill);
-    scrollToBottom(st);
-
     let pendingResult = null;   // 结果（含 diff）：提示框随取随画
     let resultDone = false;
     let reverted = false;
 
-    /** 悬浮提示内容：标题行（工具名 + 路径 + 状态）+ diff / 写入预览 + 跳转 / 回滚按钮。 */
-    function fillTip(content) {
+    /** 提示框里属于这一条的那一块：标题行（工具名 + 路径 + 状态，右边跟「跳转 / 回滚」排在同一行）
+     *  + 下面的 diff / 写入预览。isNext：这一条不是组里的第一条，往上拉开距离（跟别的工具那一条同一个类）。 */
+    function fillEntry(content, isNext) {
       const head = document.createElement("div");
-      head.className = "tag-tip-call";
-      head.textContent = toolName + " " + (label || filePath || "") + (reverted ? "（已回滚）" : "");
+      head.className = "tag-tip-call tag-tip-head" + (isNext ? " tag-tip-call-next" : "");
+      const title = document.createElement("span");
+      title.className = "tag-tip-title";
+      title.textContent = toolName + " " + (label || filePath || "") + (reverted ? "（已回滚）" : "");
+      head.appendChild(title);
       content.appendChild(head);
       if (resultDone && pendingResult) {
         if (pendingResult.isError) {
@@ -1899,25 +1907,25 @@
           err.textContent = pendingResult.errorText || "失败";
           content.appendChild(err);
         } else {
-          // edit 显示完整 diff；write 显示写入内容预览（前 10 行）
-          if (toolName !== "write" && pendingResult.diff) {
-            content.appendChild(renderDiffBlock(st, pendingResult.diff, filePath));
-          } else if (toolName === "write") {
-            const pv = buildWritePreviewEl(argStr);
-            if (pv) { content.appendChild(pv); }
-          }
-          // 按钮：write 给「跳转」，edit 成功且可回滚给「回滚」
+          // 按钮跟标题排在同一行（在标题右边）：write 给「跳转」，edit 成功且可回滚给「回滚」
           if (toolName === "write" && filePath) {
             const jumpBtn = document.createElement("span"); jumpBtn.className = "et-jump"; jumpBtn.innerHTML = '跳转 ' + ICONS["link-external"];
             // 在这儿打开的是哪儿：跟正文里的文件链接同一处分流（见 openFileForUser）
             jumpBtn.title = (fileSidebar.root ? "在文件侧边栏里打开 " : "在编辑器中打开 ") + (label || filePath);
             jumpBtn.addEventListener("click", (e) => { e.stopPropagation(); openFileForUser(filePath, 1); });
-            content.appendChild(jumpBtn);
+            head.appendChild(jumpBtn);
           } else if (pendingResult.canRevert && toolCallId && !reverted) {
             const revertBtn = document.createElement("span"); revertBtn.className = "et-revert"; revertBtn.innerHTML = ICONS.discard + ' 回滚';
             revertBtn.title = "将文件恢复到本次修改前的内容";
             revertBtn.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "revertEdit", sessionId: st.id, toolCallId }); });
-            content.appendChild(revertBtn);
+            head.appendChild(revertBtn);
+          }
+          // 改的什么接在标题行下面：edit 显示完整 diff；write 显示写入内容预览（前 10 行）
+          if (toolName !== "write" && pendingResult.diff) {
+            content.appendChild(renderDiffBlock(st, pendingResult.diff, filePath));
+          } else if (toolName === "write") {
+            const pv = buildWritePreviewEl(argStr);
+            if (pv) { content.appendChild(pv); }
           }
         }
       } else if (toolCallId) {
@@ -1927,26 +1935,26 @@
         content.appendChild(loading);
       }
     }
-    pill._tipFill = fillTip;
-
-    // 与普通工具标签同一套触发（见 attachTagTipHandlers）
+    // 挂进那一批（同名收成一个标签）：提示框里那一块交给上面 fillEntry 画
+    const entry = addToolToGroup(st, toolName, argStr, toolCallId, fillEntry);
 
     return {
       setResult(msg) {
         resultDone = true;
         pendingResult = msg;
-        pill.classList.remove("running");
-        if (msg.isError) { pill.classList.add("error"); }
-        refreshTagTipIfShowing(pill);
+        entry.done = true;
+        entry.isError = !!msg.isError;
+        if (entry.id) { st.toolGroupEntries.delete(entry.id); }   // 结果到了：跟别的工具一样从待填表里撤掉
+        syncGroupTag(entry.group);   // 条数 / 转圈 / 标红跟着重算，提示框开着就重画
       },
       markReverted() {
         reverted = true;
-        pill.classList.remove("running");
-        pill.classList.add("reverted");
-        refreshTagTipIfShowing(pill);
+        entry.reverted = true;
+        syncGroupTag(entry.group);   // 这一组里的改动都回滚了，整颗标签才划掉（见 syncGroupTag）
       },
     };
   }
+
   function renderQueueBar(st) {
     if (activeId !== st.id) { return; }
     const items = st.queuedSteering || [];

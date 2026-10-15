@@ -727,8 +727,8 @@ module.exports = async (page) => {
     `);
     /** write 卡片那颗小标签：把它的提示框弄出来（电脑上悬浮、触屏上点一下，两种都发一下动作）。 */
     const showJumpTip = () => page.eval(`
-        const pill = Array.from(document.querySelectorAll("#messages .et-pill"))
-            .find(function (p) { return (p.textContent || "").trim() === "write"; });
+        const pill = Array.from(document.querySelectorAll("#messages .tool-group"))
+            .find(function (p) { const n = p.querySelector(".tg-name"); return n && n.textContent.trim() === "write"; });
         if (!pill) { return "没有 write 那个标签"; }
         pill.dispatchEvent(new MouseEvent("mouseenter"));
         pill.click();
