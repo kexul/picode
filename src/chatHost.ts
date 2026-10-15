@@ -655,6 +655,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             // 重画的消息不带序号（它们只发给这一块屏）。页面重画完把对齐到当前序号：
             // 重画的内容已经包含到这里为止的一切，下次重连它报上来的数才是准的。
             if (pageId) { this.broadcaster.sendTo(pageId, { type: "syncPoint", seq: this.broadcaster.currentSeq() }); }
+            // 最后再给一份最新的会话列表（跟补发对账那条路一样，见 browserResync）。
+            // 重画是一条条重放的，界面不知道这一批到哪一条算完：那条「继续」会在重放到
+            // 第一条用户消息时就冒出来，后面重放的助手消息又落到它后面去（见 media/chat.js
+            // 的 syncContinueHint）。会话列表一到，界面按这份权威状态重算一遍，它才回到末尾。
+            if (pageId) { this.sendSessionListTo(pageId); }
         }).finally(() => {
             if (pageId) { this.resyncingPages.delete(pageId); }
         });

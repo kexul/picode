@@ -4,12 +4,14 @@
  *
  *   FAKEPI_THINK_MS=1200 npm run web:shot -- --fake-pi --script dev/continueHint.js
  *
- * 盯五件事：
+ * 盯六件事：
  *   1. 会话就绪、一条消息都没有时它不露面（空会话没什么可“继续”的）；
  *   2. 第一轮跑完、会话闲下来时它露面，而且就在窗格最末尾（不是输入框那一带）；
  *   3. 点它直接发一条“继续”：输入框里打了一半的字留在原地（不被顶掉、不被清空）；
  *   4. 点完它先收起来（防手快连点），生成中不露面，输入框角上是“停止生成”；
- *   5. 这一轮再跑完，它回到最末尾。
+ *   5. 这一轮再跑完，它回到最末尾；
+ *   6. 页面重开（刷新 / 断线重连后整屏重画）之后，它还在最末尾 —— 重画是一条条重放的，
+ *      没在重放收尾时重算，它会停在重放到的那条用户消息后面。
  *
  * 假模型每轮要停一下（FAKEPI_THINK_MS），不然生成中那一下来不及看。
  */
@@ -72,6 +74,14 @@ module.exports = async (page) => {
     const again = await waitFor((s) => s.hint);
     console.log("⑤ 又跑完（闲着）：", JSON.stringify(again));
     await page.shot("hint-4-idle-again.png");
+
+    // 页面重开：整屏重画一遍（clear + 一条条重放），它该还在末尾
+    await page.cdp.send("Page.reload", { ignoreCache: false });
+    await page.waitReady(60000);
+    const redrawn = await waitFor((s) => s.hint && s.atEnd);
+    console.log("⑥ 页面重开、整屏重画完：", JSON.stringify(redrawn));
+    await page.shot("hint-5-after-redraw.png");
+    if (!redrawn) { throw new Error("页面重开（整屏重画）之后「继续」没回到消息流末尾"); }
 
     if (empty.hint) { throw new Error("空会话里不该有「继续」"); }
     if (!idle) { throw new Error("第一轮跑完没看到「继续」"); }

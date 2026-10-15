@@ -113,6 +113,7 @@ npm run web:shot -- --script dev/askDialog.js
 
 # 验消息流末尾那条「继续」（空会话不露面；一轮跑完在末尾露面、点它直接发一条“继续”
 # 且输入框里打了一半的字留着、点完先收起来防连点、生成中不露面、再跑完又回到末尾；
+# 页面重开（整屏重画一条条重放）之后也还在末尾；
 # 假模型得每轮停一下才看得见生成中那一下）：
 FAKEPI_THINK_MS=1200 npm run web:shot -- --fake-pi --script dev/continueHint.js
 
@@ -215,7 +216,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `childDot.js` | 验顶条那颗小点（子会话在跑时父会话那颗点也呼吸；它与箭头落在两行中间）：`npm run web:shot -- --script dev/childDot.js` |
 | `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |
 | `thinkTipPerf.js` | 验 `think` 提示框开着时思考边流边长的开销与表现（节流、跟着贴底、往回滚就不跟）：`npm run web:shot -- --fake-pi --script dev/thinkTipPerf.js` |
-| `continueHint.js` | 验消息流末尾那条「继续」（空会话不露面、跑完在末尾露面、点它发一条“继续”、打的字留着、生成中收起来）：`FAKEPI_THINK_MS=1200 npm run web:shot -- --fake-pi --script dev/continueHint.js` |
+| `continueHint.js` | 验消息流末尾那条「继续」（空会话不露面、跑完在末尾露面、点它发一条“继续”、打的字留着、生成中收起来、页面重开后还在末尾）：`FAKEPI_THINK_MS=1200 npm run web:shot -- --fake-pi --script dev/continueHint.js` |
 | `askCards.js` | 验问话卡片（长在消息流里）：假 pi 演模型调 `ask_choice` 与扩展问用户，单选 / 多选 / 自己写 / 停止生成 / 确认 / 输入 / 选一个 / 刷新页面各走一遍：`npm run web:shot -- --fake-pi --script dev/askCards.js` |
 | `askQuestion.js` | 同上但那一条是真路的：真模型 → 真 pi（插件给它 `-e` 了桥扩展）→ 卡片 → 回话文件 → 工具结果（慢） |
 | `askDialog.js` + `askDialogTrigger.ts` | 验真扩展问的“要你打字 / 要你点是或否 / 选一个”：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |
