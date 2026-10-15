@@ -2884,9 +2884,11 @@
       return;
     }
     const pathShown = !!(sessionPathEl && !sessionPathEl.classList.contains("hidden"));
+    // 左边那一列的宽度也算进键里：对话那边一变宽窄，顶条里的名字 / 目录可能多折一行、高度就变了
+    //（拖宽度拖完定下来的那一下会调到这里，见 wireFileSidebarResize）。
     const key = (document.body.style.getPropertyValue("--vscode-font-size") || "") + "|" +
       (pathShown ? "dir" : "") + "|" + window.innerWidth + "|" +
-      (rightDock ? "r" : "") + (fileDock ? "l" : "");
+      (rightDock ? "r" : "") + (fileDock ? "l" + Math.round(fileSidebar.width) + "|" : "");
     if (key === dockBarKey) { return; }
     bar.style.height = "";
     const h = Math.ceil(bar.getBoundingClientRect().height);
@@ -2999,6 +3001,16 @@
   // 手机上同一时刻只开一块侧边栏：开左边这块就把右边那块收起来，反过来也一样
   //（两块都常驻时不受这条约束）。开没收起记在这台设备里（跟右边那一列同一个做法）。
   const FILE_SIDEBAR_MIN_WIDTH = 1200;
+  /**
+   * 这一列拖起来能有多窄多宽（两边都封死；为什么是这两个数、为什么不给拖到无限宽，
+   * 见 docs/adr/0002-文件侧边栏宽度能拖.md）。常驻时还要再跟「窗口宽度 − FILE_SIDEBAR_W_RESERVE」
+   * 取小，保证对话那边留得住（见 clampFileSidebarWidth）。
+   */
+  const FILE_SIDEBAR_W_MIN = 300;
+  const FILE_SIDEBAR_W_MAX = 1200;
+  /** 没拖过时这一列多宽（原来写死在 chat.css 里的那个 320px，默认值现在挪到这儿）。 */
+  const FILE_SIDEBAR_W_DEFAULT = 360;
+  const FILE_SIDEBAR_W_RESERVE = 360;
   /** 跟着刷新：每隔这么久问一次现在看着的那个文件变了没（问法见 pollActiveFile）。 */
   const FILE_SIDEBAR_POLL_MS = 1500;
   /**
@@ -3008,6 +3020,8 @@
    */
   const FILE_HIGHLIGHT_MAX_CHARS = 384 * 1024;
   const FILE_SIDEBAR_STORE_KEY = "pichat.fileSidebarOpen";
+  /** 拖出来的宽度（像素数）：跟收没收起一样记在这台设备里。 */
+  const FILE_SIDEBAR_WIDTH_STORE_KEY = "pichat.fileSidebarWidth";
   /** 长行怎么摆（折起来 / 一行就是一行）：也记在这台设备里（跟收没收起同一个做法）。 */
   const FILE_SIDEBAR_WRAP_STORE_KEY = "pichat.fileSidebarWrap";
   const FILE_SIDEBAR_HINT = "点消息里的文件链接，这里会显示那个文件。";
@@ -3017,8 +3031,11 @@
   const FILE_SIDEBAR_PROJECT_PATH = ".";
   /** 这一列那一摊：容器、里面那几块、开着哪几个文件。 */
   const fileSidebar = {
-    root: null, header: null, title: null, tabsEl: null, body: null,
+    root: null, header: null, title: null, tabsEl: null, body: null, resize: null,
     open: false,     // 这台设备上人要不要它开着（记在 localStorage；开着时宽窗常驻、窄窗滑入）
+    // 人拖出来的宽度（像素数，也记在本机里）：没拖过就是 FILE_SIDEBAR_W_DEFAULT。
+    // 写到版式上的那个值还可能被窗口收小，但这里留着的永远是原值（见 applyFileSidebarWidth）。
+    width: 0,
     // 开着的文件（从左到右）与「项目目录」那一格：[{ path, proj, line, scrollTop, mtime, loading, imageUrl }]
     wrap: false,     // 长行折起来还是横向滚（记在 localStorage；默认一行就是一行，见 chat.css 末尾）
     // 开着的文件与目录，从左到右：[{ path, dir, line, scrollTop, mtime, loading, imageUrl }]
@@ -3042,11 +3059,48 @@
   /** 这一列此刻常驻在左边吗。 */
   function fileSidebarDocked() { return fileSidebar.open && fileSidebarWide(); }
 
+  /**
+   * 把宽度夹回能用的范围：先夹在 300～1200 之间；常驻时再跟「窗口宽度 − 360」取小
+   *（滑入和铺满本来就盖在对话上，不受后面那条管，所以 reserveForChat 传 false 就跳过它）。
+   */
+  function clampFileSidebarWidth(px, reserveForChat) {
+    const room = reserveForChat ? window.innerWidth - FILE_SIDEBAR_W_RESERVE : FILE_SIDEBAR_W_MAX;
+    const cap = Math.max(FILE_SIDEBAR_W_MIN, Math.min(FILE_SIDEBAR_W_MAX, room));
+    return Math.max(FILE_SIDEBAR_W_MIN, Math.min(px, cap));
+  }
+  /**
+   * 人拖出来的那个宽度。只夹 300～1200，不按窗口收：窗口大小变了不该把人家存的值改掉
+   *（窗口一变，常驻时那个上限跟着变，那是写到版式上时才算的）。
+   */
+  function readFileSidebarWidthWanted() {
+    let n = NaN;
+    try { n = parseInt(localStorage.getItem(FILE_SIDEBAR_WIDTH_STORE_KEY), 10); } catch (e) { /* 读不了就用默认值 */ }
+    return clampFileSidebarWidth(Number.isFinite(n) ? n : FILE_SIDEBAR_W_DEFAULT, false);
+  }
+  function rememberFileSidebarWidth(px) {
+    try { localStorage.setItem(FILE_SIDEBAR_WIDTH_STORE_KEY, String(Math.round(px))); } catch (e) { /* 存不了就只管这一次 */ }
+  }
+  /**
+   * 把宽度写到版式上（CSS 变量 --pichat-file-sidebar-w，见 chat.css 那一大段）。
+   * 每次摆版面都重写一遍：常驻时那个「对话留 360」的上限是跟窗口宽度走的，窗口一变就得重算。
+   * 写进去的可能是被窗口收小的值，但 fileSidebar.width 里留的是人拖出来的原值：
+   * 窗口拉回来，这一列自己就回到他拖的那个数。
+   */
+  function applyFileSidebarWidth() {
+    const w = clampFileSidebarWidth(fileSidebar.width, fileSidebarDocked());
+    document.documentElement.style.setProperty("--pichat-file-sidebar-w", w + "px");
+  }
+
   /** 按“开没收起、常驻还是滑入、长行折还是滚”摆版面（版式看 body 上的 file-open / file-dock / file-wrap，见 chat.css 末尾）。 */
   function syncFileSidebarLayout() {
     document.body.classList.toggle("file-open", fileSidebar.open);
-    document.body.classList.toggle("file-dock", fileSidebarDocked());
+    const docked = fileSidebarDocked();
+    document.body.classList.toggle("file-dock", docked);
     document.body.classList.toggle("file-wrap", fileSidebar.wrap);
+    // 触屏（手机 / 平板）上滑入的那一层铺满整屏（见 chat.css 的 body.file-full）：
+    // 底下那层遮罩整个被盖住，「点外面收起」在那条路上就没了，收起看头上那颗叉。
+    document.body.classList.toggle("file-full", fileSidebar.open && !docked && IS_TOUCH_DEVICE);
+    applyFileSidebarWidth();
     const btn = document.getElementById("fileSidebarBtn");
     if (btn) { btn.title = fileSidebar.open ? "收起文件侧边栏" : "文件侧边栏"; }
     const wrapBtn = document.getElementById("fileWrap");
@@ -3769,6 +3823,52 @@
     ensureProjectDirTab();   // 开着就换成新会话的目录；收着的那就等打开时再说
   }
 
+  /**
+   * 拖右边那条缝改宽度（只有常驻时才给拖，见 chat.css 的 #fileResize）。
+   * 按住之后指针捕获在这一格上，拖到面板外面、拖到窗口边上都不断线。
+   * 拖动中只动这一列自己：它是浮在对话上面的（position: fixed），动它不碰版面；
+   * 对话那边空出多宽由 body.file-dock::before 那块占位决定，那块先冻着不动——
+   * 它一动，整屏消息就得重新排字（长会话一次几十毫秒，见 docs/adr/0002 里量出来的数）。
+   * 松手那一下才落到版式上（对话跟着排一次），也是到那一下才记进本机。
+   */
+  function wireFileSidebarResize(handle) {
+    if (!handle) { return; }
+    let dragging = false;
+    /** 按住的那一点离右边那条线有多远：拖起来那条线不往指针底下跳。 */
+    let grabOffset = 0;
+    const move = (e) => {
+      if (!dragging) { return; }
+      const w = clampFileSidebarWidth(e.clientX - grabOffset, true);
+      fileSidebar.width = w;
+      fileSidebar.root.style.width = w + "px";   // 只写在这一格上：CSS 变量别动，那块占位看的正是它
+    };
+    const finish = () => {
+      if (!dragging) { return; }
+      dragging = false;
+      document.body.classList.remove("file-resizing");
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      fileSidebar.root.style.width = "";   // 交回给 CSS 变量：这一下对话才跟着排（一次）
+      applyFileSidebarWidth();
+      rememberFileSidebarWidth(fileSidebar.width);
+      // 顶条那道横线的高度是量出来的，跟对话那边的宽度有关：宽度一定下来就得重量一次
+      syncDockHeaderHeight();
+    };
+    handle.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || !fileSidebarDocked()) { return; }   // 滑入 / 铺满那两种摆法不给拖
+      e.preventDefault();
+      dragging = true;
+      grabOffset = e.clientX - handle.parentNode.getBoundingClientRect().width;
+      try { handle.setPointerCapture(e.pointerId); } catch (err) { /* 抓不住也能拖：window 上挂着监听 */ }
+      document.body.classList.add("file-resizing");
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", finish);
+      window.addEventListener("pointercancel", finish);
+      move(e);
+    });
+  }
+
   // 这一列只在浏览器页面里搭出来：插件里的对话面板里连这一列的容器都没有。
   (function buildFileSidebar() {
     if (IN_WEBVIEW) { return; }
@@ -3783,7 +3883,9 @@
         '<div id="fileTabs"></div>' +
         '<div id="fileBody" class="pk-body"></div>' +
         '<button id="fileWrap" type="button" aria-label="折行开关" aria-pressed="false">' + ICONS.wrap + '</button>' +
-      '</div>';
+      '</div>' +
+      // 拖宽度的那条缝：摆在面板外面（面板自己 overflow: hidden，摆在里面就被它裁掉了）
+      '<div id="fileResize" title="拖这里改宽度"></div>';
     const backdrop = document.createElement("div");
     backdrop.id = "fileBackdrop";
     document.body.appendChild(root);
@@ -3795,6 +3897,9 @@
     fileSidebar.body = root.querySelector("#fileBody");
     fileSidebar.open = readFileSidebarWanted();
     fileSidebar.wrap = readFileSidebarWrapWanted();
+    fileSidebar.width = readFileSidebarWidthWanted();
+    fileSidebar.resize = root.querySelector("#fileResize");
+    wireFileSidebarResize(fileSidebar.resize);
     root.querySelector("#fileClose").addEventListener("click", () => setFileSidebarOpen(false));
     root.querySelector("#fileWrap").addEventListener("click", toggleFileSidebarWrap);
     backdrop.addEventListener("click", () => setFileSidebarOpen(false));

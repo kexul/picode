@@ -1081,13 +1081,19 @@
 
   /* ==== 左边那一列：文件侧边栏（只在浏览器页面里，见 chat.js 的那一段）====
      窗口够宽（≥1200px，判定在 chat.js）时它常驻在左边、对话让出这块宽度；窄了从左边滑入、
-     底下垫一层遮罩、点外面收起。手机上同一时刻只开一块侧边栏：开左边这块时右边那块由
-     chat.js 收起来（版式这边不管）。
+     底下垫一层遮罩、点外面收起；触屏（手机 / 平板）上滑入时铺满整屏，收起靠这一列头上那颗叉。
+     手机上同一时刻只开一块侧边栏：开左边这块时右边那块由 chat.js 收起来（版式这边不管）。
 
-     两件事分开管（跟右边那一列同一个套路）：
+     --pichat-file-sidebar-w 是这一列的宽度：没拖过就是下面这个默认值，拖过之后由 chat.js
+     从本机记着的值写进来（常驻时还会按「给对话留 360」再收一道，见 applyFileSidebarWidth）。
+     为什么它不再是一个写死的数，见 docs/adr/0002-文件侧边栏宽度能拖.md。
+
+     三件事分开管（跟右边那一列同一个套路）：
      - body.file-open：这一列开着（窄窗滑入式也看它）；
-     - body.file-dock：开着而且窗口够宽——常驻，body 横排、左边垫一块空的，对话因此窄 320px。 */
-  :root { --pichat-file-sidebar-w: 320px; }
+     - body.file-dock：开着而且窗口够宽——常驻，body 横排、左边垫一块空的，对话因此窄一列；
+     - body.file-full：开着、没常驻、而且是触屏——铺满整屏。
+       它带着 file-open 一起挑，比滑入那一条硬一档，压得住底下那条 min(…, 86vw)。 */
+  :root { --pichat-file-sidebar-w: 360px; }
   #fileSidebar { display: none; }
   body.file-dock { flex-direction: row; }
   body.file-dock::before { content: ""; flex: 0 0 var(--pichat-file-sidebar-w); }
@@ -1104,6 +1110,9 @@
     z-index: 1001;
     animation: file-drawer-in 170ms ease-out;
   }
+  /* 触屏上滑入的那一层铺满整屏：底下那层遮罩整个被它盖住，「点外面收起」也就没了
+     （收起看这一列头上那颗叉）。用 100% 不用 100vw：后者算上滚动条那条，会横着溢出一点。 */
+  body.file-full.file-open:not(.file-dock) #fileSidebar { width: 100%; }
   @keyframes file-drawer-in { from { transform: translateX(-100%); } to { transform: translateX(0); } }
   @media (prefers-reduced-motion: reduce) { body.file-open:not(.file-dock) #fileSidebar { animation: none; } }
   /* 滑入式底下那层遮罩：点它 = 收起这一列（常驻时不垫） */
@@ -1113,11 +1122,33 @@
   }
   /* 这一列的框铺满它那块地方，只留右边那条分隔线（其余三边贴到窗口边上，不要圆角）；
      这一列的头的高度跟对话那边的顶条对齐（chat.js 量出来写在这一格上）。 */
+  /* 这一列的字号：跟「字号」那个设置走，比正文小一档（正文 14 时这里就是 13）、这一列里的次要字
+     （面板头第二行、标签名）再小一档（12）。写的是减多少，不是死像素：手机上把字号调大时这一列
+     跟着长，不然它会缩成一小撮。减出来还是整数，不会落出半个像素的字。 */
   #filePanel {
     box-sizing: border-box; width: 100%; height: 100%; max-height: none;
+    font-size: calc(var(--vscode-font-size, 13px) - 1px);
     position: relative;   /* 角上那颗折行开关（#fileWrap）按这一格摆 */
     border-top: 0; border-left: 0; border-bottom: 0; border-radius: 0; box-shadow: none;
   }
+  /* 拖宽度的那条缝（#fileResize，chat.js 建）：热区就贴在右边那条分隔线上，不新增看得见的东西；
+     指针移上去、或者正拖着的时候，那条线亮成强调色（画的是一颗 2px 的伪元素，正压在那条线上）。
+     只在这一列常驻时给拖：滑入 / 铺满那两种摆法本来就盖在对话上，宽度归窗口管。 */
+  #fileResize { display: none; }
+  body.file-dock #fileResize {
+    display: block; position: absolute; top: 0; bottom: 0; right: 0;
+    width: 12px; margin-right: -6px;   /* 一半压在线上，一半搭在对话那边：手指也按得中 */
+    z-index: 2; cursor: ew-resize; touch-action: none;
+  }
+  #fileResize::before {
+    content: ""; position: absolute; top: 0; bottom: 0; left: 50%;
+    width: 2px; margin-left: -1px; background: transparent;
+  }
+  #fileResize:hover::before, body.file-resizing #fileResize::before {
+    background: var(--vscode-focusBorder, #007acc);
+  }
+  /* 正拖着的时候：整页的光标都是左右拖的样子，指针划过的地方也不许选中文字 */
+  body.file-resizing { cursor: ew-resize; user-select: none; }
   /* 这一列的头的高度是跟顶条量出来的（见 chat.js 的 syncDockHeaderHeight）：它不许被压扁
      （正文几百行的时候，按比例缩的弹性会把这一列的头从量好的高度缩回一行字那么高，跟顶条对不齐）。 */
   #fileHeader { box-sizing: border-box; flex: 0 0 auto; }
@@ -1127,7 +1158,7 @@
   #fileTitle { min-width: 0; }
   .file-title-line { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 下面那行「现在走到的这一层」：小一号、淡一点，跟会话目录那行一眼分得开。 */
-  .file-title-line.file-title-in { font-size: 0.85em; line-height: 1.25; opacity: 0.75; }
+  .file-title-line.file-title-in { font-size: calc(var(--vscode-font-size, 13px) - 2px); line-height: 1.25; opacity: 0.75; }
   /* 标签条：这一列头下面、正文上面，看过的文件一个占一个标签（见 chat.js）。
      点名字切过去、点那颗叉关掉；开着的多了往右跑，这一条自己左右滚。
      一个标签都没有时整条不占地方（:empty 那条），这一列里就只剩一句提示。 */
@@ -1141,7 +1172,8 @@
   #fileTabs::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 3px; }
   .file-tab {
     flex: 0 1 auto; min-width: 64px; max-width: 170px; display: flex; align-items: center; gap: 2px;
-    padding: 3px 4px 3px 10px; cursor: pointer; user-select: none; white-space: nowrap; font-size: 0.85em;
+    padding: 3px 4px 3px 10px; cursor: pointer; user-select: none; white-space: nowrap;
+    font-size: calc(var(--vscode-font-size, 13px) - 2px);
     border-right: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
     opacity: 0.65;
   }
@@ -1160,7 +1192,9 @@
   }
   .file-tab-close svg { width: 10px; height: 10px; display: block; }
   .file-tab-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.25)); }
-  #fileBody { flex: 1 1 auto; min-height: 0; padding: 6px 0 12px; font-size: 0.9em; }
+  /* 正文跟这一列的头一样大（写在 #filePanel 上）：这里得自己说一句「跟上面一样」，
+     不然 .pk-body 那条 0.9em 会盖上来（那条是给浮层里的清单用的）。 */
+  #fileBody { flex: 1 1 auto; min-height: 0; padding: 6px 0 12px; font-size: inherit; }
   /* 文件正文：一行一格（行号 + 那一行的原文）。默认长行左右滚；角上那颗开关
      （#fileWrap，票 08）打开时 body 上多一个 file-wrap，长行折起来、横向就不滚了。 */
   .file-line { display: flex; align-items: flex-start; min-width: max-content; line-height: 1.55; }

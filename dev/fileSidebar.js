@@ -420,6 +420,19 @@ function prepareColorFiles(cwd) {
 /** 页面上把假消息投进去（同一份内容刷新之后要再投一次）。 */
 const POST_LINKS = `for (const m of ${JSON.stringify([{ type: "assistantFull", text: LINK_TEXT }])}) { window.postMessage(m, "*"); } return true;`;
 
+/**
+ * 宽度那一摊：没拖过是 360；拖起来夹在 300～1200 之间，常驻时还要跟「窗口宽度 − 360」取小。
+ * 为什么是这几个数、手机上为什么铺满，见 docs/adr/0002-文件侧边栏宽度能拖.md。
+ */
+const FILE_W_DEFAULT = 360;
+const FILE_W_MIN = 300;
+const FILE_W_MAX = 1200;
+const FILE_W_RESERVE = 360;
+/** 拖出来的宽度记在本机里的哪个键（跟界面里写的是同一个）。 */
+const FILE_W_KEY = "pichat.fileSidebarWidth";
+/** 这个窗口宽度下最多能拖多宽（常驻时那个上限）。 */
+const fileWCap = (vw) => Math.max(FILE_W_MIN, Math.min(FILE_W_MAX, vw - FILE_W_RESERVE));
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** 等一个文件在下载目录里出现（浏览器存盘是异步的：先落 .crdownload，改好名才算完）。 */
@@ -506,6 +519,25 @@ module.exports = async (page) => {
                 panelShown: !!rootRect,
                 panelLeft: rootRect ? Math.round(rootRect.left) : -1,
                 panelWidth: rootRect ? Math.round(rootRect.width) : -1,
+                resizeShown: !!(document.getElementById("fileResize")
+                    && getComputedStyle(document.getElementById("fileResize")).display !== "none"),
+                resizeAtEdge: (function () {
+                    const z = document.getElementById("fileResize");
+                    const r = z && getComputedStyle(z).display !== "none" ? z.getBoundingClientRect() : null;
+                    return !!r && !!panelRect && Math.abs((r.left + r.right) / 2 - panelRect.right) <= 1;
+                })(),
+                // 拖拽热区那条竖带往右探进了对话那边多少（要跟输入框留出空当：那 6px 只该落在内边距上）
+                resizeRight: (function () {
+                    const z = document.getElementById("fileResize");
+                    const r = z && getComputedStyle(z).display !== "none" ? z.getBoundingClientRect() : null;
+                    const row = document.getElementById("inputRow");
+                    const rr = row ? row.getBoundingClientRect() : null;
+                    return (r && rr) ? Math.round(r.right - rr.left) : null;
+                })(),
+                full: document.body.classList.contains("file-full"),
+                touch: window.matchMedia("(hover: none) and (pointer: coarse)").matches,
+                fileVar: getComputedStyle(document.documentElement).getPropertyValue("--pichat-file-sidebar-w").trim(),
+                storedW: localStorage.getItem("pichat.fileSidebarWidth"),
                 dock: document.body.classList.contains("file-dock"),
                 open: document.body.classList.contains("file-open"),
                 hidden: document.hidden,
@@ -724,12 +756,49 @@ module.exports = async (page) => {
         return "点了";
     `);
 
+    /** 右边那条缝现在什么颜色：不在指针下时该是透明的（热区本身看不见），指针移上去该亮起来。 */
+    const edgeLine = () => page.eval(`
+        const z = document.getElementById("fileResize");
+        return z ? getComputedStyle(z, "::before").backgroundColor : "";
+    `);
+
     /** 点这一列角上那颗折行开关。 */
     const clickWrap = () => page.eval(`
         const b = document.getElementById("fileWrap");
         if (!b) { return "没有折行开关"; }
         b.click();
         return "点了";
+    `);
+
+    /**
+     * 拖右边那条缝（真按真拖：pointerdown → 六段 pointermove → pointerup）。
+     * 中途先读一次这一列的宽度：读到的跟要拖到的地方一样，就说明是拖着就在变、不是松手才变。
+     * 滑入式里那条缝是不显示的，这些事件发上去也该没反应（那时宽读出来就是原来的数）。
+     */
+    const dragEdge = (fromX, toX) => page.eval(`
+        const h = document.getElementById("fileResize");
+        if (!h) { return JSON.stringify({ gone: true }); }
+        const mk = function (type, x, buttons) {
+            return new PointerEvent(type, { bubbles: true, cancelable: true,
+                pointerId: 1, pointerType: "mouse", button: 0, buttons: buttons, clientX: x, clientY: 400 });
+        };
+        const root = document.getElementById("fileSidebar");
+        const chat = document.getElementById("chatColumn");
+        h.dispatchEvent(mk("pointerdown", ${fromX}, 1));
+        for (let i = 1; i <= 6; i++) {
+            window.dispatchEvent(mk("pointermove", ${fromX} + (${toX} - ${fromX}) * i / 6, 1));
+        }
+        const midWidth = Math.round(root.getBoundingClientRect().width);
+        const midChatLeft = Math.round(chat.getBoundingClientRect().left);
+        const midClass = document.body.classList.contains("file-resizing");
+        window.dispatchEvent(mk("pointerup", ${toX}, 0));
+        return JSON.stringify({
+            midWidth: midWidth, midChatLeft: midChatLeft, midClass: midClass,
+            afterWidth: Math.round(root.getBoundingClientRect().width),
+            afterClass: document.body.classList.contains("file-resizing"),
+            chatLeft: Math.round(chat.getBoundingClientRect().left),
+            stored: localStorage.getItem(${JSON.stringify(FILE_W_KEY)}),
+        });
     `);
 
     await page.eval(POST_LINKS);
@@ -744,8 +813,8 @@ module.exports = async (page) => {
     await page.click("#fileSidebarBtn");
     await page.sleep(300);
     const wide1 = await look("宽窗 · 点顶条那颗按钮");
-    check("点按钮开出来、并且在左边常驻", wide1.open && wide1.dock && wide1.panelLeft === 0 && wide1.panelWidth === 320);
-    check("对话让出左边这块宽度", wide1.chatLeft === 320);
+    check("点按钮开出来、并且在左边常驻", wide1.open && wide1.dock && wide1.panelLeft === 0 && wide1.panelWidth === FILE_W_DEFAULT);
+    check("对话让出左边这块宽度", wide1.chatLeft === FILE_W_DEFAULT);
     check("面板头跟顶条的横线齐", wide1.fileHeaderBottom === wide1.barBottom && wide1.dockHeaderBottom === wide1.barBottom,
         JSON.stringify({ bar: wide1.barBottom, file: wide1.fileHeaderBottom, dock: wide1.dockHeaderBottom }));
     // 一个标签都没有的时候，第一个标签就是「项目目录」（当前会话的目录），而不是一句提示
@@ -974,7 +1043,7 @@ module.exports = async (page) => {
     await page.cdp.send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 800, deviceScaleFactor: 1, mobile: false });
     await page.sleep(500);
     const edge2 = await look("1200px");
-    check("1200px 起常驻在左边、对话让出宽度", edge2.dock && edge2.chatLeft === 320 && !edge2.backdropShown);
+    check("1200px 起常驻在左边、对话让出宽度", edge2.dock && edge2.chatLeft === FILE_W_DEFAULT && !edge2.backdropShown);
 
     // 滑入式里点外面收起（不写进记忆：宽回来还是开着的那种要单独验，这里只验收起）
     await page.cdp.send("Emulation.setDeviceMetricsOverride", { width: 1000, height: 800, deviceScaleFactor: 1, mobile: false });
@@ -1088,7 +1157,7 @@ module.exports = async (page) => {
         img1.imgCount === 1 && img1.imgNatural[0] === IMAGE_W && img1.imgNatural[1] === IMAGE_H && !img1.imgBroken,
         JSON.stringify({ img: img1.imgNatural, broken: img1.imgBroken }));
     check("图按面板宽度等比例缩、没撑破这一列",
-        !!img1.imgShown && img1.imgShown.w > 100 && img1.imgShown.w <= 320
+        !!img1.imgShown && img1.imgShown.w > 100 && img1.imgShown.w <= FILE_W_DEFAULT
         && Math.abs(img1.imgShown.h - img1.imgShown.w * IMAGE_H / IMAGE_W) <= 2,
         JSON.stringify(img1.imgShown));
     check("图片不画行号、也不给那句「看不了」的说明",
@@ -1943,6 +2012,150 @@ module.exports = async (page) => {
         JSON.stringify(switched.entryNames));
     check("切会话：上一个会话的文件内容也不留在面板里", switched.rowCount === 0 && switched.note === "");
     await page.shot("file-10-session-switch.png");
+
+    // ==================== 宽度：能拖、记在这台设备里、上下限跟着窗口走；手机上铺满 ====================
+    // 这一段会把拖出来的宽度记进本机、还会开一下触摸模拟，所以摆在最后（网页视图那一趟不看宽度）。
+    // 上面那些检查都是在「没拖过 = 默认 360」这个状态下跑的。
+    await page.cdp.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+    await page.sleep(500);
+    const wz0 = await look("宽度 · 起点");
+    if (!wz0.open) { await page.click("#fileSidebarBtn"); await page.sleep(400); }
+    const wz1 = await look("宽度 · 没拖过");
+    check("没拖过时就是默认宽度 " + FILE_W_DEFAULT + "px（对话正好让出这么多）",
+        wz1.open && wz1.dock && wz1.panelWidth === FILE_W_DEFAULT && wz1.chatLeft === FILE_W_DEFAULT
+        && wz1.fileVar === FILE_W_DEFAULT + "px" && wz1.storedW === null,
+        JSON.stringify({ w: wz1.panelWidth, chat: wz1.chatLeft, v: wz1.fileVar, stored: wz1.storedW }));
+    check("常驻时那条缝在（就贴在这一列的右边，不在别处）", wz1.resizeShown && wz1.resizeAtEdge);
+    check("那条缝的右边没压到输入框上（探进对话那边那几像素落在内边距里）",
+        wz1.resizeRight !== null && wz1.resizeRight <= 0, String(wz1.resizeRight));
+    check("这会儿还不是手机上那种铺满", !wz1.full && !wz1.touch);
+
+    // 指针移到那条缝上：底下那条分隔线亮起来（不新增看得见的东西）
+    const edgeIdle = await edgeLine();
+    await page.cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: FILE_W_DEFAULT, y: 400, button: "none" });
+    await page.sleep(250);
+    const edgeHot = await edgeLine();
+    check("指针不在上面时那条线是淡的（热区本身看不见）", /rgba?\(0, 0, 0, 0\)|transparent/.test(edgeIdle), edgeIdle);
+    check("指针移到那条缝上：那条分隔线亮起来",
+        edgeHot !== edgeIdle && !/rgba?\(0, 0, 0, 0\)|transparent/.test(edgeHot),
+        JSON.stringify({ idle: edgeIdle, hot: edgeHot }));
+    await page.shot("file-15c-width-hover.png");
+    await page.cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 620, y: 200, button: "none" });
+    await page.sleep(200);
+    await page.shot("file-15-width-default.png");
+
+    // 拖到 700：拖着就在变、松手就落定、记进本机
+    const wzDrag1 = JSON.parse(await dragEdge(FILE_W_DEFAULT, 700));
+    await page.sleep(250);
+    const wz2 = await look("宽度 · 拖到 700");
+    check("拖着的时候就在变（不是松手才变）", wzDrag1.midWidth === 700 && wzDrag1.midClass, JSON.stringify(wzDrag1));
+    check("拖动中只有这一列在动，对话那边先冻着（它一动就是整屏消息重新排字，长会话很贵）",
+        wzDrag1.midChatLeft === FILE_W_DEFAULT,
+        JSON.stringify({ 拖动中对话左边缘: wzDrag1.midChatLeft, 拖动前: FILE_W_DEFAULT }));
+    check("松手之后这一列就是 700，对话才跟着排过去（就这一次）",
+        wz2.panelWidth === 700 && wz2.chatLeft === 700 && wzDrag1.chatLeft === 700,
+        JSON.stringify({ panel: wz2.panelWidth, chat: wz2.chatLeft }));
+    check("拖动中那两颗类（光标 / 不许选字）收干净了", wzDrag1.afterClass === false && wz2.full === false);
+    check("松手那一下记进了本机", wzDrag1.stored === "700" && wz2.storedW === "700",
+        JSON.stringify({ ev: wzDrag1.stored, dom: wz2.storedW }));
+
+    // 上限：不是死板的 1200，而是「窗口宽度 − 360」（1280 的窗口下就是 920）
+    const cap1280 = fileWCap(1280);
+    await dragEdge(700, 2000);
+    await page.sleep(250);
+    const wz3 = await look("宽度 · 往右拖到底");
+    check("往右拖到底：夹在「窗口宽度 − 360」＝" + cap1280 + "（对话那边留得住）",
+        wz3.panelWidth === cap1280 && wz3.chatLeft === cap1280, JSON.stringify({ w: wz3.panelWidth, want: cap1280 }));
+    check("拖到底记下的也是这个数", wz3.storedW === String(cap1280), String(wz3.storedW));
+
+    // 下限：往左拖到底夹在 300
+    await dragEdge(cap1280, 50);
+    await page.sleep(250);
+    const wz4 = await look("宽度 · 往左拖到底");
+    check("往左拖到底：夹在 " + FILE_W_MIN + "，再窄就没有了",
+        wz4.panelWidth === FILE_W_MIN && wz4.chatLeft === FILE_W_MIN, String(wz4.panelWidth));
+    check("拖到底记下的也是这个数", wz4.storedW === String(FILE_W_MIN), String(wz4.storedW));
+    check("拖到最窄：这一列里那颗「收起」的叉还没被挤出去、标签条也还在",
+        wz4.tabShown && wz4.closeInside, JSON.stringify({ tabs: wz4.tabShown, close: wz4.closeInside }));
+    await page.shot("file-15b-width-min.png");
+
+    // 再拖回 920：这就是后面要验的「记住的那个数」
+    await dragEdge(FILE_W_MIN, 2000);
+    await page.sleep(250);
+    check("再拖回上限那个数", (await look("宽度 · 拖回上限")).panelWidth === cap1280);
+
+    // 窗口变窄：上限跟着收，但存的那个值一个字都不动（拉回来自己就回到拖的那个数）
+    await page.cdp.send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 800, deviceScaleFactor: 1, mobile: false });
+    await page.sleep(500);
+    const wz5 = await look("宽度 · 窗口缩到 1200");
+    check("窗口缩到 1200：常驻还在，宽度跟着收到 " + fileWCap(1200),
+        wz5.dock && wz5.panelWidth === fileWCap(1200) && wz5.chatLeft === fileWCap(1200),
+        JSON.stringify({ w: wz5.panelWidth, want: fileWCap(1200) }));
+    check("窗口变窄没有把人存的那个值改掉", wz5.storedW === String(cap1280),
+        JSON.stringify({ stored: wz5.storedW, want: String(cap1280) }));
+    await page.cdp.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+    await page.sleep(500);
+    const wz6 = await look("宽度 · 窗口拉回 1280");
+    check("窗口拉回来：这一列自己就回到拖的那个数", wz6.panelWidth === cap1280, String(wz6.panelWidth));
+    await page.shot("file-16-width-dragged.png");
+
+    // 刷新：拖出来的宽度记在这台设备里
+    await page.eval("location.reload(); return true;");
+    await page.sleep(1500);
+    await page.waitReady();
+    await page.sleep(600);
+    const wz7 = await look("宽度 · 刷新之后");
+    check("刷新之后还是拖出来的那个宽度", wz7.open && wz7.dock && wz7.panelWidth === cap1280,
+        JSON.stringify({ w: wz7.panelWidth, want: cap1280 }));
+
+    // 滑入式（窗口 <1200）：那条缝不给拖，宽度就是这个数跟「窗口的 86%」里小的那个
+    await page.cdp.send("Emulation.setDeviceMetricsOverride", { width: 1000, height: 800, deviceScaleFactor: 1, mobile: false });
+    await page.sleep(500);
+    const drawerWant = Math.min(cap1280, Math.round(1000 * 0.86));
+    const wz8 = await look("宽度 · 滑入式（1000px 的窗口）");
+    check("窗口不够宽：又变回滑入式（底下垫着那层遮罩）", !wz8.dock && wz8.open && wz8.backdropShown);
+    check("滑入式里那条缝不给拖（它就不显示）", !wz8.resizeShown);
+    check("滑入式里宽度就是拖出来的那个数（最多到窗口的 86%）",
+        wz8.panelWidth === drawerWant, JSON.stringify({ w: wz8.panelWidth, want: drawerWant }));
+    await dragEdge(drawerWant, 300);
+    await page.sleep(250);
+    const wz9 = await look("宽度 · 滑入式里想拖一下");
+    check("滑入式里拖了也白拖（宽度跟存的那个数都没动）",
+        wz9.panelWidth === drawerWant && wz9.storedW === String(cap1280),
+        JSON.stringify({ w: wz9.panelWidth, stored: wz9.storedW }));
+
+    // 手机（触屏）：滑出来铺满整屏，收起靠头上那颗叉——那条「点外面」的路被盖住了
+    //（触屏是页面加载时认一次的，所以先把模拟打开再刷新）
+    await page.cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 });
+    await page.cdp.send("Emulation.setDeviceMetricsOverride", { width: 420, height: 900, deviceScaleFactor: 1, mobile: true });
+    await page.eval("location.reload(); return true;");
+    await page.sleep(1500);
+    await page.waitReady();
+    await page.sleep(600);
+    const wza = await look("手机 · 起点");
+    if (!wza.open) { await page.click("#fileSidebarBtn"); await page.sleep(400); }
+    const wzb = await look("手机 · 滑出来");
+    check("手机上认得出这是触屏", wzb.touch);
+    check("手机上这一层铺满整屏（右边不再漏一条能点外面收起的边）",
+        wzb.open && !wzb.dock && wzb.full && wzb.panelWidth === 420,
+        JSON.stringify({ w: wzb.panelWidth, vw: wzb.vw, full: wzb.full }));
+    check("铺满时最右边那一点也被这一列盖住了（不再是底下那层遮罩）",
+        wzb.topAtRight !== "fileBackdrop" && wzb.topAtRight !== "",
+        JSON.stringify({ right: wzb.topAtRight, chat: wzb.topAtChat }));
+    check("铺满时也不给拖（那条缝不显示）", !wzb.resizeShown);
+    check("手机上铺满不会把电脑上拖出来的宽度改掉", wzb.storedW === String(cap1280), String(wzb.storedW));
+    await page.shot("file-17-phone-full.png");
+
+    await page.click("#fileClose");
+    await page.sleep(300);
+    const wzc = await look("手机 · 点头上那颗叉");
+    check("手机上就靠头上那颗叉收起（点了就收、铺满那颗类也摘了）", !wzc.open && !wzc.full,
+        JSON.stringify({ open: wzc.open, full: wzc.full }));
+
+    // 把这台设备又摆回电脑（后面的检查当没这回事）
+    await page.cdp.send("Emulation.setTouchEmulationEnabled", { enabled: false, maxTouchPoints: 1 });
+    await page.cdp.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+    await page.sleep(400);
 
     // ==================== 插件里的对话面板：这一列与这颗按钮都不该有 ====================
     // 在页面脚本里先塞一个网页视图接口（真 VSCode 里本来就有这个函数），界面就会按
