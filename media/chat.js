@@ -118,7 +118,7 @@
   //   { kind, items, filtered, sel, current, draftModel, draftThinking, toggle, … }
   // 画出来以后还留几样（都是「重画时只动变了的那一块」要用的，见 refreshOpenSessionsIn）：
   //   sessionPane / spacePane 是「项目与会话」上下两格（其余面板没有，是 null，就画在面板身上）；
-  //   openSessionsShown / spaceRowsShown / openIdsShown 是这两格当前长什么样的指纹。
+  //   openSessionsShown / spaceRowsShown 是这两格当前长什么样的指纹（见 paintWorkspacePanel）。
   const modalView = {
     root: document.getElementById("pickerOverlay"),
     header: document.getElementById("pickerHeader"),
@@ -2514,28 +2514,17 @@
     if (!st || (st.kind !== "workspace" && st.kind !== "history")) { return; }
     // 两块面板都列全部开着的会话（面板里那一段不跟某个工作区走）
     const openItems = openSessionItems();
+    if (st.kind === "workspace") {
+      // 「项目与会话」：整串重拼一份（工作区那一块、展开了的组都跟着一起算），
+      // 按格比较后只画真的变了的那一格（见 paintWorkspacePanel）。
+      rebuildWorkspaceItems(view);
+      paintWorkspacePanel(view);
+      return;
+    }
     const signature = openSessionsSignature(openItems);
     if (signature === view.openSessionsShown) { return; }
     view.openSessionsShown = signature;
-    if (st.kind !== "workspace") {
-      st.items = openItems.concat(st.items.filter((it) => it.__section !== "open"));
-      renderPickerItems(view);
-      return;
-    }
-    // 「项目与会话」：整串重拼一份（工作区那一块、展开了的组都跟着一起算），
-    // 但只画真的变了的那一格。会话状态一变（开始生成 / 跑完 / 未读 / 换了当前）只该动
-    // 上半「正在对话」那几行，下半「工作区」那一块（可能很长）原样留着 ——
-    // 常驻那一列整块重画，看着就是整列闪一下（见“常驻的项目与会话侧边栏”那段）。
-    rebuildWorkspaceItems(view);
-    const openIds = openItems.map((it) => it.sessionId).join("\u0000");
-    // 只换上半那一格得同时满足两件：下半内容没变（指纹一样）、上半的行数也没变。
-    // 行数变了下半那些行的「第几行」就跟着错位：那行上那颗点击认的是它在列表里的序号
-    // （见 confirmPicker），序号一错就会点到隔壁那一条去。
-    if (spaceRowsSignature(view) === view.spaceRowsShown && openIds === view.openIdsShown) {
-      st.filtered = st.items.filter((it) => pickerItemMatch(it, st.kind, pickerQuery(view)));
-      redrawOpenRowsIn(view);
-      return;
-    }
+    st.items = openItems.concat(st.items.filter((it) => it.__section !== "open"));
     renderPickerItems(view);
   }
 
@@ -2823,7 +2812,6 @@
     view.sessionPane = null;
     view.spacePane = null;
     view.spaceRowsShown = "";
-    view.openIdsShown = "";
   }
 
   // ==================== 常驻的项目与会话侧边栏（宽窗下右边那一列）====================
@@ -4098,26 +4086,82 @@
     return ((view.search ? view.search.value : "") || "").toLowerCase().trim();
   }
 
-  /** 「正在对话」那几行各是谁（按画出来的顺序）：重画上半那一格前先比一比，行数或顺序变了就不走那条路。 */
-  function openRowIds(view) {
-    const st = view.state;
-    if (!st) { return ""; }
-    return (st.filtered || []).filter((it) => it.__section === "open")
-      .map((it) => it.sessionId).join("\u0000");
-  }
-
   /**
-   * 只重画「项目与会话」上半那一格（「正在对话」那几行）：下半「工作区」原样留着，
-   * 连它滚到哪儿都不动。会话状态一变就走这里，见 refreshOpenSessionsIn。
+   * 只重画「项目与会话」里的一格：「正在对话」（上半）或者「工作区」（下半）。
+   * 另一格原样留着，连它滚到哪儿都不动。哪一格该重画见 paintWorkspacePanel。
+   * @param only 留下来的那些行（跟 renderPickerRows 一个意思）
    */
-  function redrawOpenRowsIn(view) {
+  function redrawPickerPane(view, pane, only) {
     const st = view.state;
-    const pane = view.sessionPane;
     if (!st || !pane) { return; }
     const keepScroll = pane.scrollTop;
     pane.innerHTML = "";
-    renderPickerRows(view, (it) => it.__section === "open");
+    renderPickerRows(view, only);
+    // 下半那一格末尾那颗「加载更多」（两块面板各挂在自己那一格上，这一颗挂在下半）
+    if (pane === view.spacePane && st.kind === "workspace" && st.spacesHasMore) {
+      pane.appendChild(buildLoadMoreBtn(view, st, "spaces"));
+    }
     pane.scrollTop = keepScroll;
+  }
+
+  /**
+   * 「项目与会话」面板：比一比上下两格现在该长什么样，只重画真的变了的那一格，
+   * 没变的那一格一根手指都不碰。
+   *
+   * 上半是「正在对话」、下半是「工作区 + 展开的那些组」：会话多一条、状态变一下
+   * （开始跑 / 跑完 / 换了当前 / 点过关闭）只动上半；组展开收起、某一组取回一批只动下半。
+   *
+   * 为什么不整块重画：整块重画把下半那一大块连展开的组一起重来一遍 —— 新建一个会话、
+   * 宿主重推一份面板，都会让展开的组先塌下去再长回来，看着就是整列闪一下。
+   */
+  function paintWorkspacePanel(view) {
+    const st = view.state;
+    if (!st || st.kind !== "workspace") { return; }
+    // 头一回（这一块还没画出来）：整份画一遍
+    if (!view.sessionPane || !view.spacePane) { renderPickerItems(view); return; }
+    st.filtered = st.items.filter((it) => pickerItemMatch(it, st.kind, pickerQuery(view)));
+    // 一行都没有（一个工作区都列不出来）：整份走，那句「列表为空」才画得出来
+    if (st.filtered.length === 0) { renderPickerItems(view); return; }
+    const openSig = openSessionsSignature(st.items.filter((it) => it.__section === "open"));
+    const spaceSig = spaceRowsSignature(view);
+    const openChanged = openSig !== view.openSessionsShown;
+    const spaceChanged = spaceSig !== view.spaceRowsShown;
+    if (!openChanged && !spaceChanged) { return; }
+    if (openChanged) {
+      view.openSessionsShown = openSig;
+      redrawPickerPane(view, view.sessionPane, (it) => it.__section === "open");
+      // 下面那些行上的「已打开」跟着会话开开关关变，就地加减，不重画那一格
+      syncOpenTagsIn(view.spacePane);
+    }
+    if (spaceChanged) {
+      view.spaceRowsShown = spaceSig;
+      redrawPickerPane(view, view.spacePane, (it) => it.__section !== "open");
+    }
+  }
+
+  /**
+   * 工作区那一格里，各组会话行上的「已打开」那颗小标：会话开开关关时就地加减。
+   * 那一格的结构没变，只是某几行要不要那颗标变了，不值得整格重画。
+   */
+  function syncOpenTagsIn(pane) {
+    if (!pane) { return; }
+    pane.querySelectorAll(".pk-item.pk-group-session").forEach((el) => {
+      const main = el.querySelector(".pk-history-main");
+      if (!main) { return; }
+      let right = el.querySelector(".pk-history-right");
+      const has = !!el.querySelector(".pk-open-tag");
+      const want = sessionOpenForFile(el.dataset.file || "");
+      if (want === has) { return; }
+      if (want) {
+        if (!right) { right = document.createElement("span"); right.className = "pk-history-right"; main.appendChild(right); }
+        const tag = document.createElement("span"); tag.className = "pk-open-tag"; tag.textContent = "已打开";
+        right.insertBefore(tag, right.firstChild);
+      } else if (right) {
+        const tag = right.querySelector(".pk-open-tag");
+        if (tag) { tag.remove(); }
+        if (!right.childNodes.length) { right.remove(); }
+      }
+    });
   }
 
   /** 这一行该画进哪一格：常驻那一列（「项目与会话」）上半是「正在对话」、下半是「工作区」；
@@ -4132,6 +4176,8 @@
     if (!st) { return; }
     const q = pickerQuery(view);
     st.filtered = st.items.filter((it) => pickerItemMatch(it, st.kind, q));
+    // 刚画出来的「正在对话」那一段长什么样：之后推送内容一样就不重画（见 paintWorkspacePanel）
+    view.openSessionsShown = openSessionsSignature(st.items.filter((it) => it.__section === "open"));
     // 切换模型那层：草稿模型被筛选词筛掉了就作废（底下那颗「确认切换」跟着变灰）；
     // 列表里不再有「选中的那一行」这回事：鼠标 / 触摸点哪行就是哪行，扫过不改动什么。
     if (st.kind === "model" && st.draftModel && st.filtered.indexOf(st.draftModel) < 0) {
@@ -4159,9 +4205,8 @@
       view.sessionPane = document.createElement("div"); view.sessionPane.className = "pk-workspace-pane pk-session-pane";
       view.spacePane = document.createElement("div"); view.spacePane.className = "pk-workspace-pane pk-space-pane";
       view.body.appendChild(view.sessionPane); view.body.appendChild(view.spacePane);
-      // 刚画出来的上下两格长什么样：之后会话状态推送来时内容没变就不动它
+      // 刚画出来的上下两格长什么样：之后推送来时内容没变就不动它（见 paintWorkspacePanel）
       view.spaceRowsShown = spaceRowsSignature(view);
-      view.openIdsShown = openRowIds(view);
     }
     if (st.filtered.length === 0) {
       const empty = document.createElement("div"); empty.className = "pk-empty";
@@ -4279,7 +4324,7 @@
         btn.addEventListener("click", () => {
           if (g.loading) { return; }
           requestGroupPage(view, item.groupPath, g.nextOffset);
-          renderPickerItems(view);
+          repaintPickerPanel(view);
         });
         sectionPane.appendChild(btn);
         return;
@@ -4341,6 +4386,8 @@
       } else if (st.kind === "history" || (st.kind === "workspace" && item.__section === "groupSession")) {
         el.classList.add("pk-history");
         if (item.current) { el.classList.add("current"); }
+        // 这一行是哪个会话文件（「已打开」那颗小标要靠它就地加减，见 syncOpenTagsIn）
+        el.dataset.file = item.file || "";
         const main = document.createElement("div"); main.className = "pk-history-main";
         const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.title || "(无消息)";
         main.appendChild(title);
@@ -4426,7 +4473,9 @@
       }
       // 鼠标扫过不改「选中的那一行」：这里已经没有这一回事了（列表只认点哪行是哪行，
       // 鼠标底下那一行归 CSS 的 :hover，移开就灭）。
-      el.addEventListener("click", () => { confirmPicker(idx, view); });
+      // 认的是这一行自己（不是它在列表里的第几行）：某一格单独重画时行序会变，
+      // 按序号认就会点到隔壁那一条去（见 paintWorkspacePanel）。
+      el.addEventListener("click", () => { confirmPicker(item, view); });
       sectionPane.appendChild(el);
     });
   }
@@ -4444,7 +4493,7 @@
     btn.addEventListener("click", () => {
       if (loading) { return; }
       if (isSpaces) { st.spacesLoading = true; } else { st.historyLoading = true; }
-      renderPickerItems(view);
+      repaintPickerPanel(view);
       // 宿主回来的那批不带“哪一块面板点的”：这里先记一笔（浮层那份与常驻那一列两边都可能点）
       loadMoreWaiters[which].push(view);
       vscode.postMessage({ type: isSpaces ? "workspaceLoadMore" : "historyLoadMore" });
@@ -4484,10 +4533,9 @@
     hidePicker(view);
     vscode.postMessage({ type: "pickerChoice", kind: "model", payload });
   }
-  function confirmPicker(idx, view = modalView) {
+  function confirmPicker(item, view = modalView) {
     const st = view.state; if (!st) { return; }
     if (st.kind === "model") { submitModelPicker(view); return; }
-    const item = st.filtered[idx];
     if (!item) { return; }
     const kind = st.kind;
     // 常驻那一列里点一行 = “用一下”，不是“选完就走”：面板留着接着点下一行
@@ -4536,30 +4584,41 @@
    * 点行为也不一样（点会话关面板切过去，点工作区只换上半）。
    */
   /**
-   * 「项目与会话」那份面板状态：宿主给的是工作区那一块，界面自己拼上「正在对话」那一节，
-   * 再把展开了的那几组会话挂到各自的工作区行下面。浮层里的抽屉与常驻那一列共用这一份拼法。
+   * 这一块面板现在画的是哪份「项目与会话」状态：头一回收到就现建一份，之后重推一份
+   * 只需把宿主给的那两块换上去（工作区行、还有没有下一批）—— 展开了的那几组、
+   * 已经取回的会话行都留在手里这份里，换一份新的就等于把下半那一格推倒重来。
+   * 浮层里的抽屉与常驻那一列共用这一份拼法（见 paintWorkspacePanel）。
    */
-  function workspacePanelState(msg) {
-    const st = {
-      kind: "workspace",
-      // 宿主给的工作区行（没动过的原样一份）：组头排序、挂会话都从它算起
-      spaceItems: workspaceFlatItems(msg),
-      // 展开了的那几组会话：目录键 → { items, nextOffset, hasMore, loading, loaded }
-      groups: new Map(),
-      items: [],
-      filtered: [],
-      current: msg.current || null,
-      draftModel: null,
-      draftThinking: undefined,
-      toggle: false,
-      // 面板里现在只有工作区那一块会「加载更多」（历史会话那一份在浮层里，另有一套）
-      historyHasMore: false,
-      historyLoading: false,
-      spacesHasMore: !!(msg.spaces && msg.spaces.hasMore),
-      spacesLoading: false,
-    };
-    rebuildWorkspaceItems({ state: st }, false);
+  function updateWorkspacePanelState(view, msg) {
+    let st = view.state;
+    if (!st || st.kind !== "workspace") {
+      st = {
+        kind: "workspace",
+        // 展开了的那几组会话：目录键 → { items, nextOffset, hasMore, loading, loaded }
+        groups: new Map(),
+        items: [],
+        filtered: [],
+        draftModel: null,
+        draftThinking: undefined,
+        toggle: false,
+        // 面板里现在只有工作区那一块会「加载更多」（历史会话那一份在浮层里，另有一套）
+        historyHasMore: false,
+        historyLoading: false,
+        spacesLoading: false,
+      };
+      view.state = st;
+    }
+    // 宿主给的工作区行（没动过的原样一份）：组头排序、挂会话都从它算起
+    st.spaceItems = workspaceFlatItems(msg);
+    st.spacesHasMore = !!(msg.spaces && msg.spaces.hasMore);
+    st.current = msg.current || null;
     return st;
+  }
+
+  /** 这一块面板收到新数据了：画法跟着它的种类走（「项目与会话」按格画，见 paintWorkspacePanel）。 */
+  function repaintPickerPanel(view) {
+    if (view.state && view.state.kind === "workspace") { paintWorkspacePanel(view); return; }
+    renderPickerItems(view);
   }
 
   /**
@@ -4655,7 +4714,7 @@
     if (!st || st.kind !== "workspace") { return; }
     toggleGroup(path);
     rebuildWorkspaceItems(view);
-    renderPickerItems(view);
+    paintWorkspacePanel(view);
   }
 
   /**
@@ -4734,8 +4793,8 @@
     // 历史抽屉里磁盘上那批会话也归成一节（「历史会话」）：没有这一节，它们会并到
     // 「正在对话」底下，看着像是那些开着的会话的续行。
     if (kind === "workspace") {
-      // 「项目与会话」那份：浮层里的抽屉与常驻那一列共用这一份拼法（见 workspacePanelState）
-      view.state = workspacePanelState(msg);
+      // 「项目与会话」那份：浮层里的抽屉与常驻那一列共用这一份拼法（见 updateWorkspacePanelState）
+      updateWorkspacePanelState(view, msg);
       // 展开了的那几组现在去要会话（上面那份是没带“哪块屏”拼的，要不出来）
       rebuildWorkspaceItems(view);
     } else {
@@ -4758,8 +4817,8 @@
         spacesLoading: false,
       };
     }
-    // 刚画出来的「正在对话」长什么样：之后状态推送内容没变就不重画（见 refreshOpenSessionsInPicker）
-    view.openSessionsShown = openSessionsSignature(view.state.items.filter((it) => it.__section === "open"));
+    // 「正在对话」那一段的指纹不在这里记：renderPickerItems 画完那一格时才记（见 paintWorkspacePanel）。
+    // 这里先记一笔的话，重推一份面板时它已经把指纹换成新的了，按格比较就看不出上半变了。
     // 列表刚打开时不预选任何一行：哪条会话是“当前”由行尾那颗胶囊说，预选只会给那一行铺一层灰底，
     // 看着像又选中了一条（这里已经没有键盘那套“选中行”了，开着就等鼠标 / 触摸去点）。
     const titleMap = { model: "切换模型", history: "会话历史", options: "显示选项" };
@@ -4827,7 +4886,8 @@
     }
     if (toDock) { sidebarAsked = false; }
     syncSidebarLayout();
-    renderPickerItems(view);
+    // 「项目与会话」按格画：两格都在时只动真的变了的那一格（见 paintWorkspacePanel）；其余面板整份画
+    if (kind === "workspace") { paintWorkspacePanel(view); } else { renderPickerItems(view); }
     // 计时：若宿主回显了 t0，输出点击 → picker 可见的往返耗时（多 panel 卡顿排查用）
     if (typeof msg.t0 === "number") {
       console.log("[pi] picker(" + kind + ") 点击→弹出: " + Math.round(performance.now() - msg.t0) + "ms");
@@ -5475,7 +5535,7 @@
         }
         st.historyHasMore = msg.hasMore === true;
         st.historyLoading = false;
-        renderPickerItems(view);
+        repaintPickerPanel(view);
       }
       return;
     }
@@ -5484,7 +5544,7 @@
       const st = view ? view.state : null;
       if (st && (st.kind === "history" || st.kind === "workspace")) {
         st.historyLoading = false;
-        renderPickerItems(view);
+        repaintPickerPanel(view);
       }
       return;
     }
@@ -5504,7 +5564,7 @@
         st.spacesHasMore = msg.hasMore === true;
         st.spacesLoading = false;
         rebuildWorkspaceItems(view);
-        renderPickerItems(view);
+        repaintPickerPanel(view);
       }
       return;
     }
@@ -5521,7 +5581,7 @@
         g.loading = false;
         g.loaded = true;
         rebuildWorkspaceItems(view);
-        renderPickerItems(view);
+        repaintPickerPanel(view);
       }
       return;
     }

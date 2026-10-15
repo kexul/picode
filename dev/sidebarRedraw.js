@@ -7,12 +7,12 @@
  *
  *   FAKEPI_TICK_MS=60 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarRedraw.js
  *
- * 做法：先发一条把「新建会话」那一阵（宿主重推整份面板，整块重画是应该的）走完，
+ * 做法：先发一条把「新建会话」那一阵（宿主重推整份面板）走完，
  * 再把探针清零、把上下两格记成基线，第二条消息（同一个会话，不再新建）期间查：
  *   - 整块重画（#dockBody 被清空）：一次都不该有；
  *   - 下半那一格：没被清空、元素没换、滚动位置不动；
  *   - 上半那一格：该重画（行首那颗小点要跟着变成“在跑”）；
- *   - 重画过后点行还好使（行上那颗点击认的是它在列表里的第几行，见 confirmPicker）。
+ *   - 重画过后点行还好使（行上那颗点击认的是它自己那一行，见 confirmPicker）。
  */
 module.exports = async (page) => {
     await page.waitReady();
@@ -72,11 +72,11 @@ module.exports = async (page) => {
         })();
     `);
 
-    // 第一条：新建会话那一阵（宿主会重推整份面板，那一次整块重画是应该的）
+    // 第一条：新建会话那一阵（宿主会重推整份面板，开新会话不整块重画由 newSessionRedraw.js 专盯着）
     await page.send("你好");
     await page.sleep(5000);
     const warmup = JSON.parse(await page.eval("return JSON.stringify(window.__log);"));
-    console.log("第一条消息期间（含新建会话那一阵，整块重画是应该的），右边那一列被动过的地方：");
+    console.log("第一条消息期间（含新建会话那一阵），右边那一列被动过的地方：");
     for (const w of warmup) { console.log(`  ${w.tag.padEnd(3)}  ${w.stack}`); }
 
     // 清零、把现在这两格记成基线；把下半那一格滚一点，好看出它有没有被动过
@@ -108,7 +108,7 @@ module.exports = async (page) => {
     if (whole.length) { throw new Error("整块重画了（对话更新不该重画整个面板）：" + JSON.stringify(whole)); }
     const space = wipes.filter((w) => w.tag === "下半");
     if (space.length) { throw new Error("下半「工作区」那一格被清空重画了：" + JSON.stringify(space)); }
-    const half = wipes.filter((w) => w.tag === "上半" && /redrawOpenRowsIn/.test(w.stack));
+    const half = wipes.filter((w) => w.tag === "上半" && /redrawPickerPane/.test(w.stack));
     if (half.length === 0) { throw new Error("上半那一格一次都没重画：会话状态推送没接上？"); }
     if (!frames.some((f) => f.sig.includes("pk-open-dot running"))) {
         throw new Error("没看到行首那颗小点变成『在跑』（假模型太快？用 FAKEPI_TICK_MS=60 跑）");
