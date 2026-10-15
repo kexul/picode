@@ -556,6 +556,12 @@
       currentAssistant: null,
       // 正在想的那一段（见 startThinking）：这一段还没想完时挂在它身上，增量往它上面加
       thinkingEntry: null,
+      // 本段消息（上一条用户气泡之后的这一段回复）里那颗 think 标签：末尾补来的思考并到它身上，
+      // 见 noteThinkingEntry / foldTailThinking。来了用户消息 / 整屏重画就归零。
+      segmentThinking: null,
+      // 末尾候选：本段已有 think 之后又冒出来的一颗（可能是「末尾补来的一段思考」，也可能后面
+      // 还有正文 / 工具）；跑完一轮它还留在末尾就并回上面那颗，见 foldTailThinking。
+      tailThinking: null,
       // 生成速度统计：本轮累计估算 token 数 / 起点时间；tps 为上一轮最终均值
       tps: undefined,
       tpsStart: 0,
@@ -1411,9 +1417,31 @@
   }
 
   // ==================== 思考 ====================
-  // 模型的思考（reasoning）也算这一批条目里的一种：名字固定「think」，跟同名工具一样合并成一个标签，
+  // 模型的思考（reasoning）名字固定「think」，跟同名工具一样收成一颗标签（次数记着几段），
   // 内容只在提示框里看（标签上不露文字）。正在想的那一段挂在 st.thinkingEntry 上，
   // 增量来一条往它上面加一条；收尾见 endThinking。
+  //
+  // 末尾专治：有些 provider 是先把正文流完、最后才把整段思考一起送过来，那段思考落在消息流末尾
+  // 就成了孤零零一颗，看着跟上面那段回复没关系。这种「本段消息末尾补来的一段思考」在这一轮跑完时
+  // 并回本段那颗 think（见 foldTailThinking）：
+  //   · 归拢的范围是本段消息（上一条用户气泡之后的这一段回复），本段第一颗 think 就是并的目标
+  //     （st.segmentThinking）；
+  //   · 只在它后面真的什么都没有（末尾）时才并：后面还有正文或工具的，它就在原位待着 ——
+  //     那是「这一段之后又想了一下」，位置本身就是信息（st.tailThinking 记着这颗候选）。
+
+  /** 本段新开了一条思考（不是并进已有那颗、也不是接着在长的那条）：记下本段那颗 think 与末尾候选。 */
+  function noteThinkingEntry(st, entry) {
+    const g = entry.group;
+    const seg = st.segmentThinking;
+    const segAlive = seg && seg !== g && seg.tag.parentElement === seg.row && seg.row.parentElement === st.paneEl;
+    if (!segAlive) {
+      // 这一段还没有过思考：它就是本段那颗；末尾这一颗本来就是它，没什么可并的
+      st.segmentThinking = g;
+      st.tailThinking = null;
+      return;
+    }
+    st.tailThinking = g;
+  }
 
   /** 模型开始想了：在工具行里开出「think」这个条目（已经在想就直接用现成的那条）。 */
   function startThinking(st) {
@@ -1423,6 +1451,7 @@
     // 没有 callId 的条目默认按完成（见 addToolToGroup）：这一段落还在跑，得改回来
     entry.done = false;
     entry.tipCall = THINKING_NAME;
+    noteThinkingEntry(st, entry);
     st.thinkingEntry = entry;
     syncGroupTag(entry.group);
     return entry;
@@ -1436,11 +1465,57 @@
       if (!text) { return; }   // 没在想的、又没有文本（重复收尾）：不用管
       entry = addToolToGroup(st, THINKING_NAME, "", "");
       entry.tipCall = THINKING_NAME;
+      noteThinkingEntry(st, entry);
     }
     if (st.thinkingEntry === entry) { st.thinkingEntry = null; }
     entry.done = true;
     if (text) { entry.resultText = text; }
     syncGroupTag(entry.group);
+    scrollToBottom(st);
+  }
+
+  /** 末尾那颗 think 还在不在消息流的最末尾（后面没有正文、没有工具；「继续」按钮之类的不算）。 */
+  function isLastInStream(st, el) {
+    for (let n = el; n && n !== st.paneEl; n = n.parentElement) {
+      for (let sib = n.nextElementSibling; sib; sib = sib.nextElementSibling) {
+        if (sib.classList.contains("msg-continue") || sib.classList.contains("empty-hint") || sib.classList.contains("history-more")) { continue; }
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** 一轮跑完（或整屏重画收尾）时看一眼消息流末尾：末尾那颗候选真的是末尾（它后面什么都没有），
+   *  就把它并回本段那颗 think —— 不在末尾留一颗孤零零的。后面来了正文 / 工具的，它就在原位。 */
+  function foldTailThinking(st) {
+    const tail = st.tailThinking;
+    st.tailThinking = null;
+    if (!tail || st.streaming) { return; }   // 还在生成（或者开了新的一段）：以后可能还有东西
+    if (tail.tag.parentElement !== tail.row || tail.row.parentElement !== st.paneEl) { return; }
+    if (!isLastInStream(st, tail.tag)) { return; }
+    const target = st.segmentThinking;
+    const targetAlive = target && target !== tail && target.tag.parentElement === target.row && target.row.parentElement === st.paneEl;
+    if (!targetAlive) {
+      // 本段那颗不在了（例如刚整屏重画过）：这一颗自己就是本段那颗
+      st.segmentThinking = tail;
+      return;
+    }
+    if (st.thinkingEntry && st.thinkingEntry.group === tail) { st.thinkingEntry = null; }
+    if (tagTipTag === tail.tag) { hideTagTip(); }   // 正开着这颗的提示框：标签要收掉了，一块收
+    // 本段那颗的最后一条还是空的（provider 只发了「开始想了」，字到收尾才给）：这一段的文本就
+    // 补进那一条 —— 同一段思考别因为来得晚就占两条（不然收回来还得带个空行）。
+    const last = target.entries[target.entries.length - 1];
+    const only = tail.entries.length === 1 ? tail.entries[0] : null;
+    if (last && !(last.resultText || "").trim() && only && (only.resultText || "").trim()) {
+      last.resultText = only.resultText;
+      last.done = true;
+      tail.entries.length = 0;
+    } else {
+      for (const e of tail.entries) { target.entries.push(e); }
+      tail.entries.length = 0;
+    }
+    dropToolTag(st, tail.tag);   // 末尾那颗收掉；它那条行空了连行一起收
+    syncGroupTag(target);
     scrollToBottom(st);
   }
 
@@ -5480,6 +5555,8 @@
         st.cwd = typeof s.cwd === "string" ? s.cwd : "";
         // 这一批状态是权威的（重连 / 刷新 / 别的窗口动过）：末尾那条「继续」跟着重算一次
         syncContinueHint(st);
+        // 整屏重画收尾也走这儿：重放出来末尾那颗「补来的思考」跟当场生成时一样并回去
+        foldTailThinking(st);
       });
       sessionOrder = order;
       // 已经不在列表里的会话（被关掉了）：壳和草稿一起丢掉。
@@ -5691,6 +5768,9 @@
       case "userMessage": {
         t.noCountPop = false;   // 自己这边开始的一轮：后面涨的次数是真新长出来的，+1 该飘
         finalizeCurrentAssistant(t);
+        // 新的一段对话开始：先把上一段末尾那颗（如果有）并回去，本段的 think 再从头算
+        foldTailThinking(t);
+        t.segmentThinking = null;
         const label = msg.imageCount ? "[" + msg.imageCount + " 张图片] " : "";
         addPlain(t, "user", "你", label + (msg.text || ""));
         endThinking(t, "");
@@ -5725,6 +5805,8 @@
         t.activity = msg.activity || "idle";
         t.activityDetail = msg.detail || "";
         setStreaming(t, false);
+        // 这一轮跑到这儿就停了：末尾要是还挂着一颗「补来的思考」，并回本段那颗
+        foldTailThinking(t);
         // 跑完的提醒改由宿主在“一轮真正结束”时下发 turnEnd 消息（见 notifyTurnEndFor），
         // 这里不再对当前会话单独出声。
         break;
@@ -5817,6 +5899,8 @@
         syncSessionLoading(t);
         t.currentAssistant = null;
         t.thinkingEntry = null;
+        t.segmentThinking = null;
+        t.tailThinking = null;
         t.currentToolRow = null;
         t.toolGroups = null;
         t.toolGroupEntries.clear();
@@ -5978,10 +6062,14 @@
         const savedStick = t.stickToBottom;
         const savedProgrammatic = t.programmaticScroll;
         const savedProgrammaticTop = t.programmaticTop;
+        const savedSegmentThink = t.segmentThinking;   // 暂存区自己算自己的，别动本段那颗与末尾候选
+        const savedTailThink = t.tailThinking;
         t.paneEl = t._stage;
         try { applyPanelMessage(inner); }
         finally {
           t.paneEl = realPane;
+          t.segmentThinking = savedSegmentThink;
+          t.tailThinking = savedTailThink;
           // 渲染进暂存区时的滚动状态调整（scrollToBottom 等）不该影响真实窗格
           t.stickToBottom = savedStick;
           t.programmaticScroll = savedProgrammatic;

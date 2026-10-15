@@ -10,7 +10,12 @@
  *   · 刷新页面（历史重放）→ 历史里的思考块一样出标签、跟当时一样；
  *   · 同一批里想两段 → 收成一个标签、带次数「2」，提示框里两段各列出来；
  *   · 思考跟工具排在同一条工具行里；来了正文就另起一条行；
- *   · 重放那种只来一条全文（没有开始事件）也出一个停住的标签。
+ *   · 正文之后补来一段思考（provider 只给收尾那种）→ 先在末尾出一颗；这一轮跑完它还留在末尾，
+ *     就并回本段那颗（次数接上、三段都在提示框里），末尾不留孤零零一颗；
+ *   · 它后面还跟着工具的，留在原位（位置本身就是信息），跑完一轮也不动它；
+ *   · 换了用户消息（新的一段）→ 下一段思考另开一颗；
+ *   · 整屏重画收尾（重连 / 刷新后补一份会话列表）时，末尾那颗也并回去；
+ *   · 「开头先宣布要开始想了 + 正文 + 收尾才把整段思考送来」→ 并回上面那颗（同一段思考不拆成两颗）。
  *
  *   FAKEPI_TICK_MS=20 npm run web:shot -- --fake-pi --script dev/thinkRow.js
  * 图落在 dev/shots/（think-*.png）。
@@ -151,16 +156,108 @@ module.exports = async (page) => {
     if (!merged.includes("工具行：[think2][bash][read]")) { problems.push("同批两段思考没收成一个带次数 2 的标签，或没跟工具排在同一条行里"); }
     if (!mergedTip.includes("先看要改哪几处") || !mergedTip.includes("编译过了")) { problems.push("合并标签的提示框里没把两段思考都列出来"); }
 
-    // ---- 第四幕：来正文 → 另起一条工具行；只来收尾（重放那种，没有开始事件）也出一个停住的标签 ----
+    // ---- 第四幕：正文之后又来一段思考（只来一条全文，没有开始事件）→ 先在末尾出一颗；
+    //      这一轮还没完，不急着并（后面可能还有东西） ----
     await post(page, [
         { type: "assistantFull", text: "接着往下：" },
-        { type: "thinkingFull", text: "这一段是重放来的，没有开始事件。" },
+        { type: "thinkingFull", text: "这一段是正文完了才补来的思考。" },
     ]);
     await page.sleep(400);
     const second = await dump(page);
-    console.log("\n第四幕（正文之后另起一条行；只来一条收尾也出标签）：\n  " + second);
+    console.log("\n第四幕（正文之后补来一段思考：先在末尾出一颗）：\n  " + second);
     await page.shot("think-after-text.png");
-    if (!second.includes("工具行：[think]")) { problems.push("正文之后的思考没另起一条行"); }
+    if (!second.includes("工具行：[think2][bash][read]")) { problems.push("第四幕本段那颗 think 不见了（该还是 think2，末尾那颗还没并）"); }
+    if (!/\| 工具行：\[think\]$/.test(second)) { problems.push("第四幕正文之后补来的那段思考没在末尾出一颗"); }
+
+    // ---- 第五幕：这一轮跑完（streamEnd）→ 末尾那颗并回本段那颗（末尾不留东西），
+    //      次数接上、提示框里三段思考都列着 ----
+    await post(page, [{ type: "streamEnd", activity: "idle" }]);
+    await page.sleep(400);
+    const folded = await dump(page);
+    console.log("\n第五幕（跑完一轮：末尾那颗并回本段那颗）：\n  " + folded);
+    await page.shot("think-tail-folded.png");
+    if (!folded.includes("工具行：[think3][bash][read]")) { problems.push("末尾那颗没并回本段那颗（该收成 think3）"); }
+    if (/工具行：\[think\]/.test(folded)) { problems.push("跑完一轮了，末尾还孤零零挂着一颗 think"); }
+    await hoverTag(page, "think");
+    await page.sleep(500);
+    const foldedTip = await tipText(page);
+    console.log("  提示框：" + foldedTip);
+    await page.shot("think-tail-folded-tip.png");
+    await leaveTag(page, "think");
+    await page.sleep(250);
+    if (!foldedTip.includes("先看要改哪几处") || !foldedTip.includes("编译过了") || !foldedTip.includes("补来的思考")) {
+        problems.push("并回去之后，提示框里没把三段思考都列出来");
+    }
+
+    // ---- 第六幕：正文之后来一段思考、后面还跟着工具 → 这一颗留在原位（位置本身就是信息）；
+    //      这时的 streamEnd 也不该动它 ----
+    await post(page, [
+        { type: "assistantFull", text: "再看一处：" },
+        { type: "thinkingFull", text: "想一下要不要动这里。" },
+        { type: "tool", toolName: "bash", args: { command: "ls" } },
+    ]);
+    await page.sleep(400);
+    await post(page, [{ type: "streamEnd", activity: "idle" }]);
+    await page.sleep(400);
+    const kept = await dump(page);
+    console.log("\n第六幕（后面还有工具：这一颗留在原位）：\n  " + kept);
+    await page.shot("think-before-tool.png");
+    if (!/\| 工具行：\[think\]\[bash\]$/.test(kept)) { problems.push("后面还有工具的那颗思考没留在原位（该是 [think][bash] 这一行）"); }
+
+    // ---- 第七幕：来了用户消息（新的一段）→ 下一段思考重新开一颗，不并到上一段 ----
+    await post(page, [
+        { type: "userMessage", text: "接着改下一处" },
+        { type: "thinkingFull", text: "新的一段：先看现在是哪一版。" },
+    ]);
+    await page.sleep(400);
+    const third = await dump(page);
+    console.log("\n第七幕（新的一段另开一颗）：\n  " + third);
+    await page.shot("think-next-segment.png");
+    if (!/\| 工具行：\[think\]$/.test(third)) { problems.push("换段之后没另开一颗 think"); }
+    if (!third.includes("工具行：[think][bash]")) { problems.push("换段把上一段那颗（后面跟着工具的那颗）也动了"); }
+
+    // ---- 第八幕：整屏重画收尾（重连 / 刷新）会补一份会话列表；末尾那颗也靠这一步并回去 ----
+    const sid = await page.eval(`return document.querySelector(".session-pane").dataset.sessionId;`);
+    await post(page, [
+        { type: "assistantFull", text: "重画前那段：" },
+        { type: "thinkingFull", text: "重画收尾时该并回上一段那颗。" },
+    ]);
+    await page.sleep(300);
+    await post(page, [{ type: "sessionList", sessions: [{ id: sid, name: "假标题：随便说点什么", streaming: false, activity: "idle", piReady: true, loading: false }] }]);
+    await page.sleep(400);
+    const afterList = await dump(page);
+    console.log("\n第八幕（会话列表到、收尾一算：末尾那颗并回上一段那颗）：\n  " + afterList);
+    await page.shot("think-after-resync.png");
+    if (/工具行：\[think\](?: \| |$)/.test(afterList)) { problems.push("重画收尾之后末尾还留着一颗孤零零的 think"); }
+    if (!afterList.includes("工具行：[think2]")) { problems.push("重画收尾没把末尾那颗并回上一段那颗（该收成 think2）"); }
+
+    // ---- 第九幕：开头先宣布「要开始想了」（一个字都还没有）+ 正文 + 收尾时才把整段思考送来：
+    //      同一段思考不能拆成两颗（上面一颗空的 + 末尾一颗有字的） ----
+    await post(page, [{ type: "clear", keepDraft: true }]);
+    await post(page, [
+        { type: "userMessage", text: "再试一次" },
+        { type: "streamStart", activity: "working" },
+        { type: "activityChanged", activity: "thinking" },
+        { type: "thinkingStart" },
+        { type: "activityChanged", activity: "working" },   // 正文一开始，那颗空标签就停住了
+        { type: "assistantDelta", delta: "先把这局的观察说清楚。" },
+        { type: "thinkingFull", text: "整段思考是收尾那一刻才送来的。" },
+        { type: "streamEnd", activity: "idle" },
+    ]);
+    await page.sleep(400);
+    const late = await dump(page);
+    console.log("\n第九幕（收尾才送来整段思考：并回上面那颗空的）：\n  " + late);
+    await page.shot("think-late-whole.png");
+    if (/工具行：\[think\]$/.test(late)) { problems.push("第九幕末尾还留着一颗孤零零的 think"); }
+    if (!/工具行：\[think\] \| 正文：先把这局的观察说清楚/.test(late)) { problems.push("第九幕那段思考没并回上面那颗、排到正文前面去"); }
+    await hoverTag(page, "think");
+    await page.sleep(500);
+    const lateTip = await tipText(page);
+    console.log("  提示框：" + lateTip);
+    await page.shot("think-late-whole-tip.png");
+    await leaveTag(page, "think");
+    await page.sleep(250);
+    if (!lateTip.includes("整段思考是收尾那一刻才送来的")) { problems.push("第九幕并回去之后，提示框里没看到那段思考的全文"); }
 
     if (problems.length) {
         throw new Error("有对不上的地方：\n  - " + problems.join("\n  - "));
