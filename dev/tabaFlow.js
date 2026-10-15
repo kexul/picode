@@ -5,12 +5,29 @@
 //   1. 子会话跑完第一轮 → 结果交回派活的会话，子会话那个 tab 自动关掉（列表里那行没了）
 //   2. 用户进去看着它跑 → 跑完不关（那行还在，子会话里能看到“你这个会话还留着”）
 //
+// 那份「项目与会话」画在哪儿都认：宽窗（≥ 900px）是右边常驻那一列，窄窗才是顶上那颗 <<< 拉出来的浮层。
+//
 // 慢一点跑（假 pi 的节奏，免得子会话在点进去之前就跑完了）：
 //   FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaFlow.js
 module.exports = async (page) => {
-  /** 「正在对话」那段的行：叫什么、是不是子会话。 */
+  /** 「项目与会话」画在哪一块：宽窗（≥ 900px）是右边常驻那一列，窄窗才是浮层。
+   *  取行、算“看得见”两处都要用（常驻那一列收起时给它 display:none，不是加 hidden 类）。 */
+  const ROOT_EXPR = `(function () {
+    const dock = document.getElementById("sidebarDock");
+    return (dock && getComputedStyle(dock).display !== "none") ? "#dockBody" : "#pickerBody";
+  })()`;
+
+  /** 面板看得见吗：常驻那一列（display 不是 none）或者浮层（没盖着 hidden）。 */
+  const panel = () => page.eval(`
+    const dock = document.getElementById("sidebarDock");
+    const dockShown = !!dock && getComputedStyle(dock).display !== "none";
+    return { shown: dockShown || !document.getElementById("pickerOverlay").classList.contains("hidden"), dock: dockShown };
+  `);
+
+  /** 「正在对话」那段的行：叫什么、是不是子会话（从正在画的那一块上取）。 */
   const openRows = () => page.eval(`
-    return Array.from(document.querySelectorAll("#pickerBody .pk-item.pk-open")).map((el) => {
+    const root = ${ROOT_EXPR};
+    return Array.from(document.querySelectorAll(root + " .pk-item.pk-open")).map((el) => {
       const t = el.querySelector(".pk-history-title");
       return { label: t ? t.textContent.trim().slice(0, 24) : "", child: el.classList.contains("pk-open-child") };
     });
@@ -27,28 +44,27 @@ module.exports = async (page) => {
     }
   };
 
-  /** 面板（「项目与会话」浮层）现在开着吗。 */
-  const pickerOpen = () => page.eval(`return !document.getElementById("pickerOverlay").classList.contains("hidden");`);
-
-  /** 拉出面板：顶上那颗 <<<。这颗按钮是开／收切换，所以关着的时候点它才是“开”；
-   *  点完核对一下真开了（界面改过就改这里，别让后面几步对着一个没开的面板干等）。 */
+  /** 面板看得见就行：宽窗本来就常驻在右边；窄窗才要点顶上那颗 <<< 把它拉出来。
+   *  点完核对一下真看到了（界面改过就改这里，别让后面几步对着一个没开的面板干等）。 */
   const openPicker = async () => {
-    if (!(await pickerOpen())) { await page.click("#browserMenuBtn"); }
+    if (!(await panel()).shown) { await page.click("#browserMenuBtn"); }
     for (let i = 0; i < 25; i++) {
-      if (await pickerOpen()) { return; }
+      if ((await panel()).shown) { return; }
       await page.sleep(200);
     }
     throw new Error("面板没打开（顶上那颗 <<< 的行为变了？）");
   };
 
-  /** 收起面板：按 Esc 就是界面自己的关法（面板头上那颗叉的提示语里写着「关闭 (Esc)」）。
+  /** 把面板收起来：浮层那份按 Esc（面板头上那颗叉的提示语里写着「关闭 (Esc)」），
+   *  常驻那一列不吃 Esc，点一下 <<< 收起来（回头 openPicker 再拉回来）。
    *  关不掉就报错 —— 以前这里点的是一个已经不存在的 id，空点一下、什么都不报，
    *  后面几步就对着一个已经收起来的面板干等。 */
   const closePicker = async () => {
-    if (!(await pickerOpen())) { return; }
-    await page.press("Escape");
+    const p = await panel();
+    if (!p.shown) { return; }
+    if (p.dock) { await page.click("#browserMenuBtn"); } else { await page.press("Escape"); }
     await page.sleep(400);
-    if (await pickerOpen()) { throw new Error("面板没收起来（Esc 不管用了？）"); }
+    if ((await panel()).shown) { throw new Error("面板没收起来"); }
   };
 
   // ---- 1. 派活：子会话出现在「正在对话」里（缩进一行） ----
@@ -84,16 +100,16 @@ module.exports = async (page) => {
 
   // 点子会话那一行（等于用户切过去看着它）
   const clicked = await page.eval(`
-    const el = document.querySelector("#pickerBody .pk-item.pk-open.pk-open-child");
+    const root = ${ROOT_EXPR};
+    const el = document.querySelector(root + " .pk-item.pk-open.pk-open-child");
     if (!el) { return false; }
     el.click();
     return true;
   `);
   if (!clicked) { throw new Error("列表里找不到子会话那一行"); }
   await page.sleep(600);
-  // 点那一行会顺手收起面板；没收起就自己收（拍出来的图要能看见子会话那一屏）
-  const stillOpen = await page.eval(`return !document.getElementById("pickerOverlay").classList.contains("hidden")`);
-  if (stillOpen) { await closePicker(); }
+  // 浮层那份点一行会顺手收起来；常驻那一列点行不关（拍出来的图要能看见子会话那一屏）
+  if (!(await panel()).dock) { await closePicker(); }
   await page.shot("taba-4-watching.png");
 
   // 跑完：因为用户正看着，不关；子会话里该出现“结果已交回…你这个会话还留着”

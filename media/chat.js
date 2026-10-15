@@ -522,7 +522,16 @@
     pane.addEventListener("scroll", () => {
       if (!pane.isConnected) { return; }
       st.lastScrollTop = pane.scrollTop; // 滚动位置缓存：布局重建后恢复用
-      if (st.programmaticScroll) { st.programmaticScroll = false; return; }
+      if (st.programmaticScroll) {
+        st.programmaticScroll = false;
+        // 只吞「位置确实是自己刚设的那个」那一次。不能看见标记就吞：追底动画中间
+        // 用户往回滚一下（或者调试脚本把视野挪到别处），那一下就被当成“程序滚动”丢掉，
+        // 界面继续把人拉回底部（见 dev/historyScroll.js）。
+        const mine = st.programmaticTop === Infinity
+          ? pane.scrollHeight - pane.scrollTop - pane.clientHeight <= 1
+          : Math.abs(pane.scrollTop - st.programmaticTop) <= 1;
+        if (mine) { return; }
+      }
       const wasBottom = st.stickToBottom;
       st.stickToBottom = isNearBottomPane(st);
       if (wasBottom && !st.stickToBottom && st.lerpRafId) {
@@ -579,6 +588,7 @@
       stickToBottom: true,
       lerpRafId: 0,
       programmaticScroll: false,
+      programmaticTop: 0,        // 上一次程序自己设的滚动位置（判断那一帧的 scroll 事件是不是自己弄的，见上面那段）
       hasNewContent: false,
       modelId: "",
       provider: "",
@@ -605,6 +615,7 @@
     const p = st.paneEl;
     if (st.stickToBottom) {
       st.programmaticScroll = true;
+      st.programmaticTop = p.scrollHeight;
       p.scrollTop = p.scrollHeight;
       st.lastScrollTop = p.scrollTop;
     } else if (typeof st.lastScrollTop === "number") {
@@ -870,9 +881,10 @@
     const target = st.paneEl.scrollHeight - st.paneEl.clientHeight;
     const cur = st.paneEl.scrollTop;
     const diff = target - cur;
-    if (Math.abs(diff) < 1) { st.programmaticScroll = true; st.paneEl.scrollTop = target; st.lerpRafId = 0; return; }
+    if (Math.abs(diff) < 1) { st.programmaticScroll = true; st.programmaticTop = target; st.paneEl.scrollTop = target; st.lerpRafId = 0; return; }
     st.programmaticScroll = true;
-    st.paneEl.scrollTop = cur + diff * 0.3;
+    st.programmaticTop = cur + diff * 0.3;
+    st.paneEl.scrollTop = st.programmaticTop;
     st.lerpRafId = requestAnimationFrame(() => lerpScrollStep(st));
   }
   function smoothScrollToBottom(st) {
@@ -909,6 +921,7 @@
       st.scrollRafId = 0;
       if (st.paneEl !== pane || !pane.isConnected) { return; }
       st.programmaticScroll = true;
+      st.programmaticTop = Infinity;   // 滚到底：具体落到哪个数由浏览器夹住，这里不去读 scrollHeight
       pane.scrollTop = 1e9;   // 夹到最大：没有读，就不会逼出一次同步重排
     });
   }
@@ -4782,8 +4795,11 @@
       }
     }
     const toDock = view === dockView;
-    // 面板与顶条那颗下拉是同一个位置上的两种界面：开面板就把下拉收掉。
-    closeSessionMenu();
+    // 顶条那颗下拉与面板是同一块地方上的两种界面，浮层那份弹出来就把它收掉；
+    // 常驻那一列不算「弹面板」：它平时就一直在右边，而新建 / 关掉一个会话之后宿主都会
+    // 推一份过来，顺手把下拉收掉的话，在那清单里关掉一条就没法接着关下一条了
+    // （清单自己用的是另一套行，见 refreshSessionMenu）。
+    if (!toDock) { closeSessionMenu(); }
     // “项目与会话”面板不放搜索框：上半会话、下半工作区两块结构，这个框帮不上忙还占一截
     // （要找项目看路径就行）；历史面板的搜索留着。
     const searchable = msg.searchable !== false && !toggle && kind !== "workspace";
@@ -5961,6 +5977,7 @@
         const realPane = t.paneEl;
         const savedStick = t.stickToBottom;
         const savedProgrammatic = t.programmaticScroll;
+        const savedProgrammaticTop = t.programmaticTop;
         t.paneEl = t._stage;
         try { applyPanelMessage(inner); }
         finally {
@@ -5968,6 +5985,7 @@
           // 渲染进暂存区时的滚动状态调整（scrollToBottom 等）不该影响真实窗格
           t.stickToBottom = savedStick;
           t.programmaticScroll = savedProgrammatic;
+          t.programmaticTop = savedProgrammaticTop;
         }
         break;
       }
@@ -6015,7 +6033,7 @@
 
   /**
    * 「加载更早」那批消息渲染完了：把暂存区的内容整体插到按钮下方，
-   * 并把滚动位置同步下移，让视野还停在原来那几条消息上。
+   * 并把滚动位置补回去，让视野还停在原来那几条消息上。
    * 会话在加载途中被切换过（clear 已把暂存区作废）就不插了。
    */
   function flushHistoryBatch(t, hasMore, hidden) {
@@ -6031,26 +6049,45 @@
     setHistoryWindow(t, hasMore, hidden);
     if (!stage || !stage.childNodes.length) { return; }
     const pane = t.paneEl;
-    const btn = t._historyBtn;
-    let anchor;
-    if (btn && btn.parentNode === pane) {
-      anchor = btn.nextSibling;
-    } else {
-      anchor = pane.firstChild;
-    }
+    // 插到哪儿：顶部那个「加载更早」按钮还在就插在它后面；已经收掉了（这是最后一批）就插在最前面
+    const btn = t._historyBtn && t._historyBtn.parentNode === pane ? t._historyBtn : null;
+    const at = btn ? btn.nextSibling : pane.firstChild;
+    // 尺子：插入点后面那条老消息 —— 插进去的东西全长在它前面，它往下挪了多少就补多少，
+    // 不按“插入那一刻长高了多少”算：那批里的图片、代码高亮会晚一步才把高度撑起来，
+    // 按高度差算就少补那么一点（几十像素），视野看着就往下跑（见 dev/historyScroll.js）。
+    const mark = btn ? btn.nextElementSibling : pane.firstElementChild;
+    let markTop = mark ? mark.offsetTop : 0;
     const beforeHeight = pane.scrollHeight;
     // 这一下由我们自己补滚动位置：先把浏览器的滚动锚定临时关掉，
     // 它也会因为“上方变高”补一次，两边叠起来视野就被推下去一整批的高度。
-    // 关掉再插、读完高度就还回去，别的地方（图片后到、高亮重排）还是交给它锚。
     const prevAnchorStyle = pane.style.overflowAnchor;
     pane.style.overflowAnchor = "none";
-    while (stage.firstChild) { pane.insertBefore(stage.firstChild, anchor); }
+    while (stage.firstChild) { pane.insertBefore(stage.firstChild, at); }
     const grew = pane.scrollHeight - beforeHeight;
-    pane.style.overflowAnchor = prevAnchorStyle;
-    if (pane.isConnected) {
-      // 上方变高了：滚动位置同步下移，让视野还停在原来那几条消息上
-      pane.scrollTop += grew;
-    }
+    let grewLeft = grew;
+    const putBack = () => {
+      if (!pane.isConnected) { return; }
+      if (mark && mark.parentNode === pane) {
+        // 只补「上一次看它到现在」那一段：这函数要跑好几帧，每次都用累计差会补成好几倍
+        const top = mark.offsetTop;
+        pane.scrollTop += top - markTop;
+        markTop = top;
+      } else if (grewLeft) {
+        // 尺子没了（窗格没挂在页面上、那一行被换掉）：退回按高度差补，也只补这一回
+        pane.scrollTop += grewLeft;
+        grewLeft = 0;
+      }
+    };
+    putBack();
+    // 后到的高度（图片解码、高亮重排）会让它再跑一点：再对两帧位置，然后把滚动锚定还给浏览器
+    let frames = mark && pane.isConnected ? 2 : 0;
+    const settle = () => {
+      putBack();
+      frames--;
+      if (frames > 0) { requestAnimationFrame(settle); return; }
+      pane.style.overflowAnchor = prevAnchorStyle;
+    };
+    if (frames > 0) { requestAnimationFrame(settle); } else { pane.style.overflowAnchor = prevAnchorStyle; }
   }
 
   function removeSession(id) {
