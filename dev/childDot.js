@@ -124,7 +124,7 @@ module.exports = async (page) => {
       want: { visible: true, animation: "pi-pulse" },
       sessions: [session(), child("running"), other()],
       // 别的会话跑完一轮：页面把「有新消息」标上（这时顶条那颗点本该“亮着不闪”）
-      extra: [{ type: "turnEnd", sessionId: "p2", beep: false }],
+      extra: [{ type: "turnEnd", sessionId: "p2", status: "done", text: "跑完了一轮" }],
     },
     {
       id: "5-self-streaming", what: "本会话自己在跑",

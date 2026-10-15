@@ -122,11 +122,11 @@ function createHarness(options = {}) {
     const version = packageVersion();
 
     // 调试用的设置写进后端那份 config.json：模型 / pi 路径这些跟真后端一样从文件读，
-    // 界面颜色与"跑完响不响"也在这里定（后端没有人给它 VSCode 的设置）。
+    // 界面颜色与"跑完发不发通知"也在这里定（后端没有人给它 VSCode 的设置）。
     const patch = {
         themeMode: options.theme === "dark" ? "dark" : "light",
-        // 调试时默认关掉会话结束提示音（自动化跑一遍会一直响，太吵）
-        notifyBeep: false,
+        // 调试时默认关掉跑完的系统通知（自动化跑一遍会一直弹，太吵）；要验它的那条检查传 notifyTurnEnd: true
+        notifyTurnEnd: options.notifyTurnEnd === true,
     };
     if (options.model !== undefined) { patch.model = options.model; }
     if (options.provider !== undefined) { patch.provider = options.provider; }

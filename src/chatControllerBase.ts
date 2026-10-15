@@ -119,6 +119,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
      */
     private readonly closedSessions = new Map<string, { cwd: string; file?: string }>();
     private static readonly CLOSED_REMEMBER_MAX = 20;
+    /** 系统通知里那一行正文最多多长（字符）；超了截断加省略号。 */
+    private static readonly TURN_NOTICE_MAX = 120;
 
     /** sessionList 节流：流式 activity 变更很频繁，合并到下一帧附近推送。 */
     private sessionListTimer: ReturnType<typeof setTimeout> | null = null;
@@ -165,8 +167,21 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected spareMeta?: { provider?: string; modelId?: string };
     /** 备用进程延迟预热定时器（disposeSpare 清理）。 */
     protected spareTimer?: ReturnType<typeof setTimeout>;
+    /** 备用进程连续失败次数（成功就归零）。 */
+    protected spareFailures = 0;
+    /** 上一次放弃补货的时刻（0 = 没放弃）。冷却结束后才重新给机会。 */
+    protected spareGaveUpAt = 0;
     /** 启动路径预热备用进程的延迟：错开首个会话的 pi 冷启动，避免两个 pi 同时加载抢占 VSCode 窗口恢复期的资源。 */
     protected static readonly SPARE_PREWARM_DELAY_MS = 5000;
+    /** 备用进程连着失败这么多次就不再自动补：机器资源不够时硬补只会把它压得更死。 */
+    protected static readonly SPARE_MAX_FAILURES = 5;
+    /** 补货失败后第一次的等待时间；之后每次翻倍（1 秒 → 2 秒 → 4 秒……）。 */
+    protected static readonly SPARE_RETRY_BASE_MS = 1000;
+    /** 补货等待时间的上限。 */
+    protected static readonly SPARE_RETRY_MAX_MS = 30000;
+    /** 放弃补货后的冷却时间：过了这段时间再把失败次数清零、重新给一次机会。
+     *  有这个冷却，最坏情况也只是每 5 分钟拉 5 次进程，不会像以前那样一秒拉好几个。 */
+    protected static readonly SPARE_GIVEUP_COOLDOWN_MS = 5 * 60 * 1000;
 
     // ---- 快捷键标签 ----
     protected static readonly SEND_KEY_LABELS: Record<string, string> = {
@@ -254,8 +269,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract getFontSize(): string;
     /** 变更显示选项的存储（仅改存储，UI 推送由基类统一完成）。value 为按钮组点选的明确值。 */
     protected abstract mutateViewOption(action: string, value?: string): void;
-    /** 会话结束提示音是否开启。 */
-    protected abstract notifyBeepEnabled(): boolean;
+    /** 会话跑完一轮发不发系统通知（各平台的子类去读自己的存储）。 */
+    protected abstract notifyTurnEndEnabled(): boolean;
 
     // ---- 文件列表 / 文件打开（来自 webview 的 listFiles / openFile）----
     protected abstract sendFileList(): void;
@@ -339,7 +354,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             tabSwitchKey: this.getTabSwitchKey(),
             focusInputKey: this.getFocusInputKey(),
             fontSize: this.getFontSize(),
-            notifyBeep: this.notifyBeepEnabled(),
+            notifyTurnEnd: this.notifyTurnEndEnabled(),
             ...this.viewOptionsExtra(),
         });
     }
@@ -400,10 +415,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 min: 11, max: 22, step: 1, unit: "px",
             },
             {
-                action: "notifyBeep",
-                label: "会话结束提示音",
-                desc: "任何 session 跑完都响一声（不再只对焦点 session）；界面被隐藏时不出声",
-                check: this.notifyBeepEnabled(),
+                action: "notifyTurnEnd",
+                label: "跑完发系统通知",
+                desc: "任何会话（别的屏在聊的、后台的也算）跑完一轮都发一条系统通知，点一下切到那个会话；"
+                    + "别人派的子会话不算（它的结果交回派它的那个会话，那边跑完再发）。"
+                    + "每台设备能不能收到看它自己的浏览器：没给通知权限、手机上用局域网地址打开时都收不到",
+                check: this.notifyTurnEndEnabled(),
             },
         ];
     }
@@ -434,6 +451,19 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected ensureSpare(delayMs = 0): void {
         if (this.spare || this.preparingSpare) {
             return;
+        }
+        if (this.spareFailures >= ChatControllerBase.SPARE_MAX_FAILURES) {
+            // 连着失败太多次：多半是机器资源不够或 pi 起不来。硬补会把机器压得更死
+            // （2026-10-15 那次整机卡死就是“起进程 → 起不来 → 立刻再起”转出来的）。
+            if (!this.spareGaveUpAt) {
+                this.spareGaveUpAt = Date.now();
+            }
+            if (Date.now() - this.spareGaveUpAt < ChatControllerBase.SPARE_GIVEUP_COOLDOWN_MS) {
+                return;
+            }
+            // 冷却结束：把账清零，重新给一次机会
+            this.spareFailures = 0;
+            this.spareGaveUpAt = 0;
         }
         if (this.spareTimer) {
             if (delayMs > 0) { return; } // 已有延迟任务在排队；立即启动的请求则取消排队直接走下面流程
@@ -486,7 +516,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             // 备用进程意外退出（尚未被领取时）：清掉并补一个新的
             if (this.spare === client) {
                 this.spare = null;
-                this.ensureSpare();
+                this.failSpare("它自己退出了");
             }
         });
         client.start();
@@ -498,11 +528,35 @@ export abstract class ChatControllerBase implements RuntimeHost {
             this.preparingSpare = null;
             if (ok && client.isRunning()) {
                 this.spare = client;
+                this.spareFailures = 0;
+                this.spareGaveUpAt = 0;
             } else {
                 client.stop();
-                this.ensureSpare();
+                this.failSpare("等不到它就绪");
             }
         });
+    }
+
+    /** 备用进程没起来：记一笔，等一会儿再补；连着失败到上限就停手，并把原因说清楚。
+     *  停手不影响用：没有热备的会话照常能开，只是要等 pi 冷启动。 */
+    protected failSpare(reason: string): void {
+        this.spareFailures += 1;
+        if (this.spareFailures >= ChatControllerBase.SPARE_MAX_FAILURES) {
+            this.spareGaveUpAt = Date.now();
+            console.error(
+                `[pi spare] 备用进程连续 ${this.spareFailures} 次没起来（最近一次：${reason}），暂停自动补货。`
+                + `新会话仍然可用，只是要冷启动 pi。`
+                + `${Math.round(ChatControllerBase.SPARE_GIVEUP_COOLDOWN_MS / 1000)} 秒后自动重试一次；`
+                + `想立刻恢复就重新加载窗口。`
+            );
+            return;
+        }
+        const wait = Math.min(
+            ChatControllerBase.SPARE_RETRY_BASE_MS * Math.pow(2, this.spareFailures - 1),
+            ChatControllerBase.SPARE_RETRY_MAX_MS
+        );
+        console.error(`[pi spare] 备用进程没起来（${reason}），第 ${this.spareFailures} 次失败，${wait} 毫秒后再试。`);
+        this.ensureSpare(wait);
     }
 
     /** RuntimeHost.claimSpareClient：领取就绪的备用进程（附带其启动模型）；领取后立即后台补新。 */
@@ -1247,19 +1301,42 @@ export abstract class ChatControllerBase implements RuntimeHost {
      *
      * 基类只做两件事：
      *   1. 子会话跑完第一轮时，把结果交回派活的那个会话（不等会话标题）；
-     *   2. 告诉界面「这个会话跑完了一轮」—— 界面据此做两件事：你没在看这个会话就把它的名字
-     *      标成“有新消息”（顶条、清单三处画小蓝点），以及按显示选项响一声提示音。
-     *      这条消息不管提示音开关都发：关了声音，新消息还得看得见（响不响由界面自己判断）。
+     *   2. 告诉每块屏「这个会话跑完了一轮」—— 界面据此做两件事：你没在看这个会话就把
+     *      它的名字标成“有新消息”（顶条、清单三处画小蓝点），以及发一条系统通知。
+     *      这条消息不管通知开关都发：关了通知，“有新消息”还得看得见（发不发由界面自己判断）。
+     *      带上 status 与一行正文：界面按它们决定发不发（被中止的一轮不发）、通知里写什么；
+     *      带上 child：别人派的子会话跑完不提醒，结果交回派它的那个会话，那边跑完再提醒。
      */
     public onTurnEnd(info: TurnEndInfo): void {
+        // 先记下这个会话是不是「别人派的、结果还要交回去」的子会话：tabaOnTurnEnd 可能紧接着
+        // 就把它关掉、名录也摘了，要赶在它前面看。
+        const child = this.taba.byChildPanel(info.panelId);
+        const handedBack = !!child && !!child.parentPanelId && this.panels.has(child.parentPanelId);
         // 子会话跑完第一轮：结果先交回派活的那个会话（不等会话标题）
         this.tabaOnTurnEnd(info);
-        // 每条屏都收到（没在看它也要把“有新消息”标上），但响不响按“这条屏是不是正看着它”算：
-        // 会话跑完的声音只该在看着它的那块屏上响（两个窗口开着时不跟着互相响）。
-        // 具体响不响是界面按显示选项定的：关了声音，新消息还得看得见。
-        this.forEachClient((clientId, send) => {
-            send({ type: "turnEnd", sessionId: info.panelId, beep: this.focusedIdFor(clientId) === info.panelId });
-        });
+        // 每条屏都收到：各自按“我这台设备能不能发通知”“我看没在看这个会话”自己决定
+        const msg = {
+            type: "turnEnd",
+            sessionId: info.panelId,
+            status: info.status,
+            child: handedBack,
+            text: this.turnEndNoticeText(info),
+        };
+        this.forEachClient((_clientId, send) => { send({ ...msg }); });
+    }
+
+    /** 通知里那一行正文：这一轮最后一段回复的头一行（截短）；出错就直说。 */
+    private turnEndNoticeText(info: TurnEndInfo): string {
+        if (info.status === "error") { return "本轮出错结束"; }
+        const line = (info.lastReplyText ?? "")
+            .split(/\r?\n/)
+            .map((s) => s.trim())
+            .find((s) => s.length > 0) ?? "";
+        const oneLine = line.replace(/\s+/g, " ");
+        if (!oneLine) { return "跑完了一轮"; }
+        return oneLine.length > ChatControllerBase.TURN_NOTICE_MAX
+            ? oneLine.slice(0, ChatControllerBase.TURN_NOTICE_MAX) + "…"
+            : oneLine;
     }
 
     protected onKnownFilesChangedByHost(): void { /* 默认无操作 */ }

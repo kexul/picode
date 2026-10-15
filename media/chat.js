@@ -10,8 +10,9 @@
   const notifyHostFocus = () => vscode.postMessage({ type: "hostFocus" });
   window.addEventListener("focus", notifyHostFocus);
   document.addEventListener("pointerdown", notifyHostFocus, { capture: true });
-  // 第一次用户交互时把音频上下文提前建好并恢复，避免后面“跑完了却不响”。
-  document.addEventListener("pointerdown", function warmOnce() { warmUpAudio(); }, { capture: true, once: true });
+  // 用户第一次碰界面（有手势）时顺便问一次通知权限：浏览器喜欢在用户有动作的时候问；
+  // 没问过才问，问过就不扰人（见 askNotifyPermission）。
+  document.addEventListener("pointerdown", function askNotifyOnce() { askNotifyPermission(); }, { capture: true, once: true });
   const messagesEl = document.getElementById("messages"); // 容器，内含各 .session-pane
   const jumpBottomBtn = document.getElementById("jumpBottom");
   const stopBtn = document.getElementById("stopBtn"); // 停止生成图标：browserBridge.js 在两种页面里都会创建
@@ -352,7 +353,7 @@
   var sendKeyCombo = "enter";
   var newSessionKey = "ctrl+alt+n";
   var tabSwitchKey = "ctrl+alt+pgupdown";
-  var notifyOnTurnEnd = true;
+  var notifyTurnEnd = true;
   let openFiles = [];
   function applyFontSize(px) {
     var val = (typeof px === "string" && /^\d+$/.test(px)) ? px + "px" : "";
@@ -368,54 +369,59 @@
     if (typeof opts.sendKey === "string") { sendKeyCombo = opts.sendKey; }
     if (typeof opts.newSessionKey === "string") { newSessionKey = opts.newSessionKey; }
     if (typeof opts.tabSwitchKey === "string") { tabSwitchKey = opts.tabSwitchKey; }
-    notifyOnTurnEnd = opts.notifyOnTurnEnd !== false && opts.notifyBeep !== false;
+    notifyTurnEnd = opts.notifyTurnEnd !== false;
   }
 
-  // ── 会话结束提示音（Web Audio 合成，无外部资源） ──
-  // 由扩展宿主发 "turnEnd" 消息触发，不再只看当前会话（别的会话跑完也响）。
-  // 页面被隐藏时（窗口切到后台、插件里的对话面板被切走、页面在后台标签里）不出声：
-  // 那时 Chrome 会把音频上下文挂起，响了也听不见。
-  var audioCtx = null;
-  var lastBeepAt = 0;
-  var BEEP_THROTTLE_MS = 600; // 多个 session 同时收尾时，只响一声
-  function playTurnEndBeep() {
-    try {
-      if (document.hidden) { return; }
-      var now = Date.now();
-      if (now - lastBeepAt < BEEP_THROTTLE_MS) { return; }
-      lastBeepAt = now;
-      if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
-      if (audioCtx.state === "suspended") {
-        // resume() 是异步的：第一次可能被吞掉（这正是切回来后“没声音”的常见原因），
-        // 所以恢复后重试一次；重试仍被挂起才放弃。
-        audioCtx.resume().then(function () {
-          if (audioCtx && audioCtx.state === "running" && !document.hidden) { playBeepTone(audioCtx); }
-        }).catch(function () { /* 音频不可用就忽略 */ });
-        return;
-      }
-      playBeepTone(audioCtx);
-    } catch (e) { /* 忽略音频不可用 */ }
+  // ── 跑完一轮的系统通知（浏览器通知，不再出提示音） ──
+  // 任何会话（包括别的屏在聊的、后台的）跑完一轮都发一条；被中止的那一轮不算跑完，不发。
+  // 别人派的子会话不发：它的结果会交回派它的那个会话，那边跑完再发（后端在消息里标了 child）。
+  // 每台设备能不能发，看它自己的浏览器给不给通知权限：手机用局域网地址打开（不是 https、
+  // 也不是本机地址）时浏览器根本不给。发不出来就当没有通知，「有新消息」蓝点照旧。
+  function canNotify() {
+    // 插件里的对话面板（VSCode 的网页视图）不发：那边是沙箱里的一块网页，浏览器不给通知权限，
+    // 也不该在插件界面里弹那个“允许通知”的框。
+    try { return !IN_WEBVIEW && typeof Notification !== "undefined" && !!Notification; } catch (e) { return false; }
   }
-  /** 880Hz 正弦短音，约 0.25 秒渐弱。 */
-  function playBeepTone(ctx) {
-    var osc = ctx.createOscillator();
-    var gain = ctx.createGain();
-    osc.connect(gain); gain.connect(ctx.destination);
-    osc.type = "sine";
-    osc.frequency.value = 880;
-    var t0 = ctx.currentTime;
-    gain.gain.setValueAtTime(0.0001, t0);
-    gain.gain.exponentialRampToValueAtTime(0.15, t0 + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.25);
-    osc.start(t0);
-    osc.stop(t0 + 0.26);
-  }
-  /** 预先建好音频上下文（网页刚加载、还“可见且可交互”时），降低被挂起的概率。 */
-  function warmUpAudio() {
+
+  /** 问一次通知权限（没问过才问；浏览器不给的就没办法了）。用户点界面时调，有手势更容易给。 */
+  function askNotifyPermission() {
     try {
-      if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
-      if (audioCtx.state === "suspended") { audioCtx.resume().catch(function () { /* ignore */ }); }
-    } catch (e) { /* ignore */ }
+      if (!canNotify() || Notification.permission !== "default") { return; }
+      var asked = Notification.requestPermission();
+      if (asked && typeof asked.catch === "function") { asked.catch(function () { /* 不问就算了 */ }); }
+    } catch (e) { /* 不支持通知的环境就算了 */ }
+  }
+
+  /** 这台设备现在能不能发通知，不能的话人话说明为什么（写给设置里那一项看）。 */
+  function notifyUnavailableNote() {
+    try {
+      if (IN_WEBVIEW) { return "插件里的对话面板里发不了系统通知（那边看「有新消息」那颗点），浏览器页面里才有" };
+      if (!canNotify()) { return "这台设备上用不了：浏览器只在 https 或本机地址下给通知权限（手机用局域网地址打开就是这样）"; }
+      if (Notification.permission === "denied") { return "这台设备的浏览器把它拦了（在地址栏那个图标里可以放开）"; }
+      if (Notification.permission !== "granted") { return "这台设备还没允许通知：点这一项会问一次"; }
+      return "";
+    } catch (e) { return ""; }
+  }
+
+  /** 一个会话跑完一轮：弹一条系统通知。标题是会话名，正文是这一轮回复的头一行；
+   *  点一下把页面拉到前台并切到那个会话。同名的旧通知原地换成新的（不堆一屏）。 */
+  function notifyTurnEndFor(sessionId, status, text) {
+    try {
+      if (!notifyTurnEnd || status === "cancelled") { return; }
+      if (!canNotify() || Notification.permission !== "granted") { return; }
+      const st = sessions.get(sessionId);
+      const title = st ? sessionLabel(st) : "Pi Chat";
+      const note = new Notification(title, {
+        body: (text || "").trim() || "跑完了一轮",
+        tag: "pichat-turn-end-" + sessionId,
+      });
+      note.onclick = function () {
+        window.focus();
+        if (sessions.has(sessionId)) { activateSessionView(sessionId); }
+        // 切会话是每块屏各管各的：本屏得自己跟后端说一声
+        vscode.postMessage({ type: "switchSession", sessionId: sessionId });
+      };
+    } catch (e) { /* 通知发不出去就算了，蓝点还在 */ }
   }
   function isSendKey(e) {
     if (e.key !== "Enter") { return false; }
@@ -5525,14 +5531,16 @@
     // 宿主（VSCode 的命令入口，比如"发送选中文本"）替用户发一条：当作他打进输入框的，
     // 走同一条路（会话还没就绪就先留着、就绪了自动补发）
     if (type === "sendFromHost") { sendFromHost(msg.text); return; }
-    // 宿主在某个会话跑完一轮时下发的消息（所有会话都会收到，带 sessionId）：按显示选项响一声，
-    // 你没在看那个会话就把它标成“有新消息”。子会话不标：它跑完的结果会交回派它的会话，
-    // 那边收到后会再跑一轮，到时候标那边就够了（子会话会挂在父会话下面，标了反而多一颗点）。
+    // 宿主在某个会话跑完一轮时下发的消息（所有会话都会收到，带 sessionId）：发一条系统通知，
+    // 你没在看那个会话就把它标成“有新消息”。子会话（别人派出去干活的）不提醒：它的结果会交回
+    // 派它的那个会话，那边跑完自会提醒；子会话缩进挂在父会话下面，标了反而多一颗点。
+    // 是不是子会话由后端算（child）：子会话跑完常常紧接着就被关掉，这边按会话列表里的
+    // parentId 判会赶不上——那时它的壳已经不在了。
     if (type === "turnEnd") {
-      // beep：后端说“这块屏正看着这个会话，该响”（别的屏跑完的不在这儿响，见后端那边）
-      if (notifyOnTurnEnd && msg.beep !== false) { playTurnEndBeep(); }
+      if (msg.child === true) { return; }
+      notifyTurnEndFor(msg.sessionId, msg.status, msg.text);
       const done = msg.sessionId ? sessions.get(msg.sessionId) : null;
-      if (done && done.id !== activeId && !(done.parentId && sessions.has(done.parentId))) {
+      if (done && done.id !== activeId) {
         markSessionUnread(done);
       }
       return;
@@ -5641,8 +5649,8 @@
         t.activity = msg.activity || "idle";
         t.activityDetail = msg.detail || "";
         setStreaming(t, false);
-        // 提示音与新消息标记改由扩展宿主在“一轮真正结束”时下发 turnEnd 消息
-        // （见 notifyOnTurnEnd），这里不再对当前会话单独出声：后台的会话跑完也能听见。
+        // 跑完的提醒改由宿主在“一轮真正结束”时下发 turnEnd 消息（见 notifyTurnEndFor），
+        // 这里不再对当前会话单独出声。
         break;
       case "activityChanged":
         setActivity(t, msg.activity, msg.detail);
@@ -6037,14 +6045,25 @@
         const txt = document.createElement("div"); txt.className = "vo-text";
         const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "";
         txt.appendChild(label);
-        if (it.desc) { const d = document.createElement("div"); d.className = "vo-desc"; d.textContent = it.desc; txt.appendChild(d); }
+        const desc = viewOptionDesc(it);
+        if (desc) { const d = document.createElement("div"); d.className = "vo-desc"; d.textContent = desc; txt.appendChild(d); }
         row.appendChild(check); row.appendChild(txt);
         row.addEventListener("click", () => {
+          // 通知这一项：点它多半是想开通知，顺便问一次浏览器权限（用户点了一下，正好是有手势的时候）
+          if (it.action === "notifyTurnEnd") { askNotifyPermission(); }
           vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: it.value });
         });
       }
       viewOptsRoot.appendChild(row);
     });
+  }
+
+  /** 一行设置的说明。与设备相关的（发通知）跟一句本机的真实情况：能不能发、要不要先问权限。 */
+  function viewOptionDesc(it) {
+    const desc = it.desc || "";
+    if (it.action !== "notifyTurnEnd") { return desc; }
+    const note = notifyUnavailableNote();
+    return note ? desc + "（" + note + "）" : desc;
   }
   function renderSliderRow(row, it) {
     row.classList.add("vo-item-slider");

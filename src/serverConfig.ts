@@ -16,7 +16,7 @@ import {
     DEFAULT_FOCUS_INPUT_KEY,
     DEFAULT_FONT_SIZE,
     DEFAULT_NEW_SESSION_KEY,
-    DEFAULT_NOTIFY_BEEP,
+    DEFAULT_NOTIFY_TURN_END,
     DEFAULT_SEND_KEY,
     DEFAULT_TAB_SWITCH_KEY,
     DEFAULT_THEME_MODE,
@@ -46,7 +46,7 @@ export interface ServerConfig {
     tabSwitchKey: string;
     focusInputKey: string;
     fontSize: string;
-    notifyBeep: boolean;
+    notifyTurnEnd: boolean;
     themeMode: "light" | "dark";
     webServer: ServerWebSettings;
 }
@@ -67,7 +67,7 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = deepFreeze({
     tabSwitchKey: DEFAULT_TAB_SWITCH_KEY,
     focusInputKey: DEFAULT_FOCUS_INPUT_KEY,
     fontSize: DEFAULT_FONT_SIZE,
-    notifyBeep: DEFAULT_NOTIFY_BEEP,
+    notifyTurnEnd: DEFAULT_NOTIFY_TURN_END,
     themeMode: DEFAULT_THEME_MODE,
     // 默认对所有网卡开放（手机等设备打开地址就能用）；只给自己用就改 127.0.0.1，或启动时加 --host 127.0.0.1
     webServer: { enabled: true, port: 51883, host: "0.0.0.0" },
@@ -93,8 +93,8 @@ function defaults(): ServerConfig {
     };
 }
 
-/** 已经去掉的功能留下的键：老设置文件里可能还写着，读到时安静丢掉，不刷“不认识的项”。 */
-const RETIRED_KEYS = new Set(["turnTitleWaitSeconds"]);
+/** 已经去掉或改名的功能留下的键：老设置文件里可能还写着，读到时安静丢掉，不刷“不认识的项”。 */
+const RETIRED_KEYS = new Set(["turnTitleWaitSeconds", "notifyBeep"]);
 
 /** JSON 里的对象（数组和 null 都不算）。 */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -218,7 +218,7 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
             warnings.push(`fontSize 得是数字字符串（比如 "14"），已用默认值${showDefault(DEFAULT_FONT_SIZE)}`);
         }
     }
-    config.notifyBeep = pickBoolean(raw.notifyBeep, DEFAULT_SERVER_CONFIG.notifyBeep, "notifyBeep", warnings);
+    config.notifyTurnEnd = pickBoolean(raw.notifyTurnEnd, DEFAULT_SERVER_CONFIG.notifyTurnEnd, "notifyTurnEnd", warnings);
     if (raw.themeMode !== undefined) {
         if (raw.themeMode === "light" || raw.themeMode === "dark") {
             config.themeMode = raw.themeMode;

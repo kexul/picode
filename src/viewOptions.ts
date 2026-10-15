@@ -17,7 +17,7 @@ export const DEFAULT_TAB_SWITCH_KEY = "ctrl+alt+arrows";
 export const DEFAULT_FOCUS_INPUT_KEY = "ctrlAltI";
 export const DEFAULT_FONT_SIZE = "14";
 export const DEFAULT_THEME_MODE: "light" | "dark" = "light";
-export const DEFAULT_NOTIFY_BEEP = true;
+export const DEFAULT_NOTIFY_TURN_END = true;
 export const DEFAULT_AUTO_LOAD_LAST = false;
 
 /** 取候选列表里的下一个值（用在“点一下换下一个”的按钮上）；当前值不在列表里就从第一个开始。 */

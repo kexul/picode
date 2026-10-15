@@ -43,7 +43,7 @@ import {
     DEFAULT_FOCUS_INPUT_KEY,
     DEFAULT_FONT_SIZE,
     DEFAULT_NEW_SESSION_KEY,
-    DEFAULT_NOTIFY_BEEP,
+    DEFAULT_NOTIFY_TURN_END,
     DEFAULT_SEND_KEY,
     DEFAULT_TAB_SWITCH_KEY,
     DEFAULT_THEME_MODE,
@@ -116,7 +116,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private static readonly KEY_TAB_SWITCH_KEY = "piChat.tabSwitchKey";
     private static readonly KEY_FOCUS_INPUT_KEY = "piChat.focusInputKey";
     private static readonly KEY_FONT_SIZE = "piChat.fontSize";
-    private static readonly KEY_NOTIFY_BEEP = "piChat.notifyBeep";
+    private static readonly KEY_NOTIFY_TURN_END = "piChat.notifyTurnEnd";
     private static readonly KEY_THEME = "piChat.themeMode";
 
     /** 会话显示名用的名字池：panel 关闭后会释放对应名字。 */
@@ -165,7 +165,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             case ChatHost.KEY_NEW_SESSION_KEY: return cfg.newSessionKey;
             case ChatHost.KEY_TAB_SWITCH_KEY: return cfg.tabSwitchKey;
             case ChatHost.KEY_FOCUS_INPUT_KEY: return cfg.focusInputKey;
-            case ChatHost.KEY_NOTIFY_BEEP: return cfg.notifyBeep;
+            case ChatHost.KEY_NOTIFY_TURN_END: return cfg.notifyTurnEnd;
             case ChatHost.KEY_AUTO_LOAD_LAST: return cfg.autoLoadLast;
             default: return undefined;
         }
@@ -710,11 +710,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const v = this.readOption<string>(ChatHost.KEY_FONT_SIZE, DEFAULT_FONT_SIZE);
         return typeof v === "string" && /^\d+$/.test(v) ? v : DEFAULT_FONT_SIZE;
     }
-    /** 会话结束提示音（所有 session 都响）。 */
-    public getNotifyBeep(): boolean {
-        return this.readOption<boolean>(ChatHost.KEY_NOTIFY_BEEP, DEFAULT_NOTIFY_BEEP) === true;
+    /** 会话跑完一轮发不发系统通知（网页端的总开关；每台设备能不能发，还看它的浏览器给不给通知权限）。 */
+    public getNotifyTurnEnd(): boolean {
+        return this.readOption<boolean>(ChatHost.KEY_NOTIFY_TURN_END, DEFAULT_NOTIFY_TURN_END) === true;
     }
-    protected notifyBeepEnabled(): boolean { return this.getNotifyBeep(); }
+    protected notifyTurnEndEnabled(): boolean { return this.getNotifyTurnEnd(); }
 
     /**
      * 对话界面的深浅配色。
@@ -766,8 +766,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         } else if (action === "fontSize") {
             const next = typeof value === "string" && /^\d+$/.test(value) ? value : "";
             this.writeOption(ChatHost.KEY_FONT_SIZE, next);
-        } else if (action === "notifyBeep") {
-            this.writeOption(ChatHost.KEY_NOTIFY_BEEP, !this.getNotifyBeep());
+        } else if (action === "notifyTurnEnd") {
+            this.writeOption(ChatHost.KEY_NOTIFY_TURN_END, !this.getNotifyTurnEnd());
         } else if (action === "theme") {
             const next = value === "dark" || value === "light"
                 ? value
