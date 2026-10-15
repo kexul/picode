@@ -386,16 +386,17 @@
   .tag-tip .edit-diff { margin-top: 6px; }
   .tag-tip .tip-err { margin-top: 6px; color: var(--vscode-errorForeground, #f48771); }
   .tag-tip .tip-loading { margin-top: 6px; opacity: 0.7; }
-  /* 会话闲着、能接着往下走时，消息流末尾那条「继续」（按钮由 chat.js 建，见 syncContinueHint）：
-     点它直接发一条“继续”。跟顶上那颗「加载更早的消息」是一对 —— 一尾一头，同款细描边小胶囊。
+  /* 消息流末尾那颗胶囊（按钮由 chat.js 建，见 syncEndHint）：会话闲着时是「继续」（点它直接
+     发一条“继续”），模型正在回复时换成「卡住了」（点它先终止这一轮，停稳后由后端补发一条
+     “卡住了”）。跟顶上那颗「加载更早的消息」是一对 —— 一尾一头，同款细描边小胶囊。
 
      为什么不做成输入框那一带的按钮：那颗摆在哪里都碍事 —— 占着打字的地方，又跟“停止生成”
-     挤同一个角（“继续”带字比停止图标宽，露面时还得给输入框右边补一截留白）。挂在消息流末尾，
+     挤同一个角（带字比停止图标宽，露面时还得给输入框右边补一截留白）。挂在消息流末尾，
      位置跟着对话走，谁都不挡。
 
      margin: auto 让它水平居中（宽窗下限宽那一列也一样，见本文件末尾那段：
      那里给的 margin-left/right: auto 与这里同向）。 */
-  .msg-continue {
+  .msg-endhint {
     display: flex; align-items: center; gap: 5px;
     width: fit-content; margin: 12px auto 6px; padding: 4px 14px;
     border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35));
@@ -404,12 +405,12 @@
     font-family: var(--vscode-font-family); font-size: 0.85em; line-height: 1.45;
     cursor: pointer;
   }
-  .msg-continue:hover {
+  .msg-endhint:hover {
     color: var(--vscode-foreground, #ccc);
     background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12));
   }
-  .msg-continue svg { width: 13px; height: 13px; display: block; flex: none; }
-  .msg-continue.hidden { display: none; }
+  .msg-endhint svg { width: 13px; height: 13px; display: block; flex: none; }
+  .msg-endhint.hidden { display: none; }
   /* 顶部「加载更早的消息」按钮（网页端只发最近一段历史，更早的从这里取） */
   .history-more {
     display: block; margin: 10px auto 6px; padding: 4px 14px;

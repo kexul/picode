@@ -65,6 +65,8 @@ const MODEL = { id: "fake-model", provider: "fake", name: "假模型（秒回）
 
 /** 这一轮被停掉了（收到 abort 命令）：桥靠 signal.aborted 判断，这里给它一个假的（见 fakeSignal）。 */
 let aborted = false;
+/** 剧本被 abort 打断时抛它：一路抛到 runScript 外面（那一轮已经收尾了，外面接着收干净就行）。 */
+const ABORTED = new Error("aborted");
 
 // ---------------------------------------------------------------------------
 // 真扩展（"桥"）：加载宿主写下的那两个 .ts，让剧本调的是真代码
@@ -173,6 +175,20 @@ async function runScript(userText) {
     const assistantMsg = { role: "assistant", content: [], timestamp: now(), usage: {}, model: `${MODEL.provider}/${MODEL.id}` };
     emit({ type: "message_start", message: assistantMsg });
 
+    /** 等一会儿；醒来发现这一轮已经被停掉了（收到过 abort）就当场收手 ——
+     *  真 pi 收到 abort 也是立刻停，界面上按 Esc / 点「卡住了」才验得出效果。
+     *  收尾事件先发完（这一轮结束），再抛 ABORTED 把剩下的剧本打断。 */
+    const pause = async (ms) => {
+        await sleep(ms);
+        if (!aborted) { return; }
+        assistantMsg.stopReason = "aborted";
+        messages.push(assistantMsg);
+        emit({ type: "message_end", message: assistantMsg });
+        emit({ type: "agent_end", messages });
+        emit({ type: "agent_settled" });
+        throw ABORTED;
+    };
+
     /** 把已积累的内容条推进历史（message_update 的 partial 懒得发，界面靠增量事件就够了）。 */
     const say = async (text) => {
         const piece = { type: "text", text };
@@ -189,7 +205,7 @@ async function runScript(userText) {
                 usage: {},
                 assistantMessageEvent: { type: "text_delta", contentIndex: assistantMsg.content.length, delta },
             });
-            await sleep(TEXT_TICK_MS);
+            await pause(TEXT_TICK_MS);
         }
         emit({
             type: "message_update",
@@ -213,7 +229,7 @@ async function runScript(userText) {
                 usage: {},
                 assistantMessageEvent: { type: "thinking_delta", contentIndex: assistantMsg.content.length, delta: text.slice(i, i + 6) },
             });
-            await sleep(TEXT_TICK_MS);
+            await pause(TEXT_TICK_MS);
         }
         emit({
             type: "message_update",
@@ -260,7 +276,7 @@ async function runScript(userText) {
     /** 演一个工具调用：结果由剧本给（真扩展注册的那些走 actReal）。 */
     const act = async (toolName, args, result) => {
         const id = beginTool(toolName, args);
-        await sleep(THINK_MS);
+        await pause(THINK_MS);
         endTool(id, toolName, args, result.content, result.raw, false);
     };
 
@@ -442,7 +458,11 @@ async function handle(cmd) {
         case "prompt": {
             // 真 pi：preflight 成功先回一次 response，然后事件流，最后 agent_settled
             respond(id, "prompt", { disposition: "handled" });
-            void runScript(String(cmd.message || ""));
+            void runScript(String(cmd.message || "")).catch((e) => {
+                // 这一轮被 abort 打断：收尾事件剧本里已经发过了（见 pause），这里只是把这条链收干净
+                if (e === ABORTED) { return; }
+                console.error("[假 pi] 剧本跑岔了：" + String((e && e.stack) || e));
+            });
             return;
         }
         case "get_state":

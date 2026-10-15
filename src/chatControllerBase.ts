@@ -1361,6 +1361,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
         for (const pid of this.panelIdsOf(panelId)) { this.panels.get(pid)?.abortActiveRun(); }
     }
 
+    /** 「卡住了」那条路：终止这一轮，等它停稳再由运行时把这句发出去
+     *  （为什么不当下就发，见 SessionRuntime.abortThenSend）。 */
+    protected broadcastAbortThenSendToTab(panelId: string, text: string): void {
+        for (const pid of this.panelIdsOf(panelId)) { this.panels.get(pid)?.abortThenSend(text); }
+    }
+
     /** webview / 命令菜单取数：问焦点 panel 的 pi 进程要命令列表
      *  （技能 / 提示模板 / 扩展命令），返回可直接渲染的菜单条目。 */
     protected async handleListCommands(): Promise<void> {
@@ -1917,6 +1923,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
             }
             case "abort": {
                 this.broadcastAbortToTab(target.id);
+                break;
+            }
+            case "abortThenSend": {
+                // 消息流末尾那颗「卡住了」：先终止这一轮，停稳之后把这句发出去
+                if (typeof msg.text === "string" && msg.text.trim()) {
+                    this.broadcastAbortThenSendToTab(target.id, msg.text);
+                }
                 break;
             }
             case "pickModel":

@@ -198,6 +198,8 @@ export class SessionRuntime {
     private runStarted = false;
     /** 用户是否主动中止了本轮：中止不算“任务完成”。agent_start 时重置。 */
     private abortRequested = false;
+    /** 「卡住了」点了之后等着补发的那句话：这一轮停稳（agent_settled）时发出去，见 abortThenSend。 */
+    private pendingAfterAbort = "";
 
     constructor(id: string, name: NameParts, private host: RuntimeHost) {
         this.id = id;
@@ -344,6 +346,9 @@ export class SessionRuntime {
         });
         this.client.on("exit", (code: number | null) => {
             this.streaming = false;
+            // 进程没了，等着的那一下“停稳”就不会再来了：那句“卡住了”作废
+            //（留着的话，用户下一轮跑完时它会莫名其妙冒出来）。
+            this.pendingAfterAbort = "";
             // 在途 request 由 PiClient 在 exit 时统一释放
             this.post({ type: "streamEnd", activity: "idle" });
             this.setActivity("idle");
@@ -452,6 +457,23 @@ export class SessionRuntime {
             this.client.send({ type: "clear_queue" });
             this.client.send({ type: "abort" });
         }
+    }
+
+    /** 界面上点了「卡住了」：终止这一轮，等它真正停稳了再把 text 发出去。
+     *
+     *  不能当下就发：会话正忙时这条会走进 steering 队列，在轮次边界先被投递一次才中止
+     *  （abortActiveRun 先 clear_queue 就是为这个）。这句由运行时记着，不靠界面等着 ——
+     *  点完刷新页面、关掉页面，那句话照样发得出去。
+     *  会话其实已经闲了（点的那一下正好卡在收尾）就直接发。 */
+    public abortThenSend(text: string): void {
+        const message = text.trim();
+        if (!message) { return; }
+        if (this.client && this.client.isRunning() && this.streaming) {
+            this.pendingAfterAbort = message;
+            this.abortActiveRun();
+            return;
+        }
+        this.handleSend(message);
     }
 
     public handleSend(
@@ -749,6 +771,12 @@ export class SessionRuntime {
                 }
                 this.runStarted = false;
                 this.abortRequested = false;
+                // 点过「卡住了」：这一轮停稳了，把那句补上（点的那一下只负责终止这一轮）
+                if (this.pendingAfterAbort) {
+                    const afterAbort = this.pendingAfterAbort;
+                    this.pendingAfterAbort = "";
+                    this.handleSend(afterAbort);
+                }
                 break;
         }
     }

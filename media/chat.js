@@ -54,6 +54,8 @@
     wrap: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h12M2 7h9.4a2.5 2.5 0 0 1 0 5H8"/><path d="M10.2 9.6 7.6 12l2.6 2.4"/><path d="M2 12h2.4"/></svg>',
     // 往右的箭头：消息流末尾那条「继续」上用（VSCode 官方 codicon 的 arrow-right）
     "arrow-right": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8.85355 3.14645C8.65829 2.95118 8.34171 2.95118 8.14645 3.14645C7.95118 3.34171 7.95118 3.65829 8.14645 3.85355L11.7929 7.5H2.5C2.22386 7.5 2 7.72386 2 8C2 8.27614 2.22386 8.5 2.5 8.5H11.7929L8.14645 12.1464C7.95118 12.3417 7.95118 12.6583 8.14645 12.8536C8.34171 13.0488 8.65829 13.0488 8.85355 12.8536L13.3536 8.35355C13.5488 8.15829 13.5488 7.84171 13.3536 7.64645L8.85355 3.14645Z"/></svg>',
+    // 实心方块：消息流末尾那颗「卡住了」上用（跟输入框角上那颗“停止生成”同一个意思，同一颗图）
+    "stop-square": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="1.5"/></svg>',
   };
   /** 文件夹选择器里行首那颗图标：名字由宿主给（见 chatHost.ts 里 showFolderPicker 的 items）。 */
   const FOLDER_ROW_ICONS = { check: ICONS.check, up: ICONS["arrow-up"], folder: ICONS.folder };
@@ -912,6 +914,9 @@
    *   · 一帧里只滚一次：整屏重画是一个同步循环，中间那些滚动本来就没人看得见。
    */
   function scrollToBottom(st, force) {
+    // 末尾那颗胶囊（「继续」/「卡住了」）永远跟在最新内容后面：新内容上来先把它挪回末尾
+    // （它自己不算“新内容”，也不改滚动位置，见 placeEndHint）
+    placeEndHint(st);
     if (!force && !st.stickToBottom) { return; }
     if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); st.lerpRafId = 0; }
     st.stickToBottom = true;
@@ -1474,11 +1479,11 @@
     scrollToBottom(st);
   }
 
-  /** 末尾那颗 think 还在不在消息流的最末尾（后面没有正文、没有工具；「继续」按钮之类的不算）。 */
+  /** 末尾那颗 think 还在不在消息流的最末尾（后面没有正文、没有工具；末尾那颗胶囊之类的不算）。 */
   function isLastInStream(st, el) {
     for (let n = el; n && n !== st.paneEl; n = n.parentElement) {
       for (let sib = n.nextElementSibling; sib; sib = sib.nextElementSibling) {
-        if (sib.classList.contains("msg-continue") || sib.classList.contains("empty-hint") || sib.classList.contains("history-more")) { continue; }
+        if (sib.classList.contains("msg-endhint") || sib.classList.contains("empty-hint") || sib.classList.contains("history-more")) { continue; }
         return false;
       }
     }
@@ -2095,8 +2100,8 @@
   }
 
   /**
-   * 输入框角上那颗“停止生成”：生成中露面。那个位置现在只此一物（「继续」挪到消息流末尾了，
-   * 见 syncContinueHint），它是 browserBridge.js 建的（两种页面里都有）。
+   * 输入框角上那颗“停止生成”：生成中露面。那个位置现在只此一物（消息流末尾那颗「继续」/
+   * 「卡住了」不在这儿，见 syncEndHint），它是 browserBridge.js 建的（两种页面里都有）。
    */
   function syncComposerButtons() {
     const st = activeSession();
@@ -2105,66 +2110,107 @@
       stopBtn.classList.toggle("hidden", !streaming);
       stopBtn.disabled = false;
     }
-    syncContinueHint(st);
+    syncEndHint(st);
   }
 
+  /** 消息流末尾那颗胶囊上写的是什么。 */
+  const END_HINT_CONTINUE = "继续";
+  const END_HINT_STUCK = "卡住了";
+
   /**
-   * 消息流末尾那条「继续」：会话闲着、能接着往下走的时候露面，点它直接发一条“继续”
-   * （不走输入框，打了一半的字、贴的图都留着）。
+   * 消息流末尾那颗胶囊 —— 按当前会话的状态换脸：
    *
-   * 为什么长在消息流里：摆在输入框那一带时，它要么占着打字的地方（以前那颗带字的小胶囊），
+   *   - 会话闲着、能接着往下走时是「继续」：点它直接发一条“继续”（不走输入框，打了一半的字、
+   *     贴的图都留着）；
+   *   - 模型正在回复时是「卡住了」：点它把这一轮终止掉（跟按 Esc 一样），停稳之后补发一条
+   *     “卡住了”—— 一句话：停下来，然后告诉它卡住了。这件事由后端记着（见 chatControllerBase /
+   *     sessionRuntime 的 abortThenSend）：点完刷新页面、关掉页面，那句话照样发得出去。
+   *
+   * 为什么长在消息流里：摆在输入框那一带时，它要么占着打字的地方（以前那颗带字的胶囊），
    * 要么跟“停止生成”挤同一格。挂在会话自己的消息流末尾就谁都不挡 —— 位置跟着对话走，
-   * 一轮跑完、会话闲下来，它就在最后一条消息下面等着。
+   * 生成中也是：新内容一上来由 placeEndHint 把它挪回末尾。
    *
-   * 每个会话一条（各在各的消息流里）。位置永远在末尾：元素已经在窗格里时再 append 一次
-   * 就是“挪到最后”，所以新消息上来（比如刚发出去的那条用户消息）时它自然被挤到后面。
-   * 空会话（一条消息都没有）、正在加载历史、正在生成时都不露面。
+   * 每个会话一颗（各在各的消息流里）。空会话（一条消息都没有）、会话还没就绪、正在加载历史
+   * 时都不露面。
    */
-  function syncContinueHint(st) {
+  function syncEndHint(st) {
     if (!st || !st.paneEl) { return; }
-    // 会话还没就绪（pi 进程刚起）、正在加载会话时，点了也发不出去：这时候不出“继续”。
+    // 会话还没就绪（pi 进程刚起）时点了也发不出去：这时候不露面。
     // “有没有可接着往下走的对话”只看用户与助手两种消息：会话刚建时窗格里那句
-    // “pi 已启动，可以开始对话。”是系统消息，不能算 —— 空会话里摆一条“继续”没意义。
+    // “pi 已启动，可以开始对话。”是系统消息，不能算 —— 空会话里摆一颗“继续”没意义。
     const touched = st.paneEl.querySelector(".msg.user, .msg.assistant");
-    const show = !!(st.piReady && !st.loading && !st.streaming && touched);
-    let el = st.continueHintEl;
-    if (!el) {
-      el = makeContinueHint(st);
-      st.continueHintEl = el;
+    const mode = (!st.piReady || !touched) ? ""
+        : st.streaming ? "stuck"
+            : st.loading ? "" : "continue";
+    const el = st.endHintEl || (st.endHintEl = makeEndHint(st));
+    if (el.dataset.mode !== mode) { setEndHintMode(el, mode); }
+    el.classList.toggle("hidden", !mode);
+    if (mode) { placeEndHint(st); }
+  }
+
+  /** 给末尾那颗胶囊换脸（继续 / 卡住了）：点了哪一面之后走哪条路，就看这里记下的状态。 */
+  function setEndHintMode(el, mode) {
+    el.dataset.mode = mode;
+    if (mode === "stuck") {
+      el.title = "停掉这一轮，然后发一条“卡住了”";
+      el.innerHTML = ICONS["stop-square"] + "<span>" + END_HINT_STUCK + "</span>";
+    } else {
+      el.title = "发送一条“继续”";
+      el.innerHTML = ICONS["arrow-right"] + "<span>" + END_HINT_CONTINUE + "</span>";
     }
-    if (!show) { el.classList.add("hidden"); return; }
+  }
+
+  /** 末尾那颗胶囊永远跟在最新一条内容后面：新消息一上来它就落到前头去了，顺手挪回末尾。
+   *  往暂存区补更早的历史时（「加载更早」那一批）不动：那块不在页面上，挪进去会跟着那批
+   *  老消息一起插到顶上去。 */
+  function placeEndHint(st) {
+    const el = st.endHintEl;
+    if (!el || !st.paneEl) { return; }
+    if (st._stage && st.paneEl === st._stage) { return; }
     if (el.parentElement !== st.paneEl || st.paneEl.lastElementChild !== el) {
       st.paneEl.appendChild(el);
     }
-    el.classList.remove("hidden");
   }
 
-  /** 建那条「继续」（内容与点击固定；露面时机与位置由 syncContinueHint 管）。 */
-  function makeContinueHint(st) {
+  /** 建末尾那颗胶囊（写什么由当前状态定，见 setEndHintMode；露面时机与位置由 syncEndHint /
+   *  placeEndHint 管）。 */
+  function makeEndHint(st) {
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.className = "msg-continue";
-    btn.title = "发送一条“继续”";
-    btn.innerHTML = ICONS["arrow-right"] + "<span>继续</span>";
+    btn.className = "msg-endhint";
+    setEndHintMode(btn, "continue");
     btn.addEventListener("click", () => {
       const cur = activeSession();
-      // 这条只在会话就绪且闲着时露面，这里是防手快点到的边界情况（刚开始生成的那一下）
-      if (!cur || cur.id !== st.id || !cur.piReady || cur.loading || cur.streaming) { return; }
+      if (!cur || cur.id !== st.id || !cur.piReady) { return; }
+      if (btn.dataset.mode === "stuck") {
+        // 这条只在生成中露面，这里是防手快点到的边界情况（这一轮刚跑完的那一下）
+        if (!cur.streaming) { return; }
+        // 先收起来：手快连点两下会按两遍（等后端的 streamEnd / 别的消息回来再按真实状态算）
+        btn.classList.add("hidden");
+        // 终止这一轮、停稳之后补发那句“卡住了”，都由后端做（见 abortThenSend）：
+        // 点完刷新页面、关掉页面，那句话照样发得出去。
+        vscode.postMessage({ type: "abortThenSend", sessionId: cur.id, text: END_HINT_STUCK });
+        // 万一点击没送到（连接断了），过一会儿按真实状态重新算
+        setTimeout(() => syncEndHint(cur), 1500);
+        return;
+      }
+      // 只在会话就绪且闲着时露面，这里是防手快点到的边界情况（刚开始生成的那一下）
+      if (cur.loading || cur.streaming) { return; }
       // 先收起来：手快连点两下会发出两条“继续”（等后端的 userMessage / streamStart 回来再按真实状态算）
       btn.classList.add("hidden");
-      vscode.postMessage({ type: "send", sessionId: cur.id, text: "继续", images: [] });
+      vscode.postMessage({ type: "send", sessionId: cur.id, text: END_HINT_CONTINUE, images: [] });
       // 焦点还回输入框：留在按钮上接着按回车会又发一条
       if (!IS_TOUCH_DEVICE) { inputEl.focus(); }
       // 万一点击没送到（连接断了），过一会儿按真实状态重新算
-      setTimeout(() => syncContinueHint(cur), 1500);
+      setTimeout(() => syncEndHint(cur), 1500);
     });
     return btn;
   }
 
   function updateSendState() {
     // VSCode 里发送/中止只看键盘（Enter 发送、Esc 中止），没有按钮；状态文案由 syncStatus 负责。
-    // 网页端（尤其手机）没有 Esc：输入框角上那颗按钮随当前会话换脸——生成中是“停止生成”，
-    // 闲着且会话能收消息时是“继续”。
+    // 网页端（尤其手机）没有 Esc：输入框角上那颗按钮在生成中是“停止生成”；消息流末尾那颗
+    // 胶囊闲着是“继续”、生成中是“卡住了”（见 syncEndHint）。
     syncComposerButtons();
   }
   // 状态栏常显模型：这些纯函数拼出模型名前缀与用量百分比标签。
@@ -5481,7 +5527,7 @@
     if (activeId === st.id) { updateSendState(); syncStatus(); }
     renderSessionBar();
     syncPaneStatuses();
-    syncContinueHint(st);
+    syncEndHint(st);
     refreshOpenSessionsInPicker();
   }
   function setActivity(st, activity, detail) {
@@ -5495,7 +5541,7 @@
     st.piReady = on;
     if (activeId === st.id) { updateSendState(); syncStatus(); }
     syncPaneStatuses();
-    syncContinueHint(st);
+    syncEndHint(st);
     // 会话就绪：把"按了回车但没发出去"的那条补发出去（见 flushPendingSend）
     if (on) { flushPendingSend(); }
   }
@@ -5553,8 +5599,8 @@
         st.sessionFile = typeof s.file === "string" ? s.file : "";
         // 这个会话跑在哪个目录：面板里按它把会话归到当前显示的那个工作区下面
         st.cwd = typeof s.cwd === "string" ? s.cwd : "";
-        // 这一批状态是权威的（重连 / 刷新 / 别的窗口动过）：末尾那条「继续」跟着重算一次
-        syncContinueHint(st);
+        // 这一批状态是权威的（重连 / 刷新 / 别的窗口动过）：末尾那颗胶囊跟着重算一次
+        syncEndHint(st);
         // 整屏重画收尾也走这儿：重放出来末尾那颗「补来的思考」跟当场生成时一样并回去
         foldTailThinking(st);
       });
@@ -5775,8 +5821,8 @@
         addPlain(t, "user", "你", label + (msg.text || ""));
         endThinking(t, "");
         scrollToBottom(t, true);
-        // 刚发出去的这条把「继续」挤到了后头：重算一次（它本来就闲着，会跟着挪到新末尾）
-        syncContinueHint(t);
+        // 刚发出去的这条把末尾那颗胶囊挤到了前头：重算一次（生成中会换成「卡住了」）
+        syncEndHint(t);
         break;
       }
       case "streamStart":
@@ -5887,7 +5933,7 @@
         // 重画历史（切会话 / 重连）随之开始：这之后涌进来的工具调用都是老消息，别飘 +1
         t.noCountPop = true;
         t.paneEl.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
-        t.continueHintEl = null;   // 消息流末尾那条「继续」也随重画一起没了（引用跟着丢，见 syncContinueHint）
+        t.endHintEl = null;   // 消息流末尾那颗「继续」/「卡住了」也随重画一起没了（引用跟着丢，见 syncEndHint）
         t.emptyHintGone = false;   // 空提示又回来了（见 hideEmptyHint）
         // 历史窗口状态一并重置：按钮随 innerHTML 清掉了；暂存区里若有没插完的
         // 「加载更早」那批也作废（会话已换，再插进去就串了），置个丢弃标记等 End 来清
@@ -5922,9 +5968,9 @@
           renderAttachmentsFor();
           inputEl.focus();
         }
-        // 重画后窗格是空的（重放的消息随后一批批进来）：这条按当前状态先收着，
+        // 重画后窗格是空的（重放的消息随后一批批进来）：这颗胶囊按当前状态先收着，
         // 真有对话的话等重放完那一批（historyBatchEnd）或本轮结束（streamEnd）再露面。
-        syncContinueHint(t);
+        syncEndHint(t);
         break;
       case "toolResultUpdate": {
         // 缓存部分结果，悬浮提示随取随画
@@ -6079,8 +6125,8 @@
       }
       case "historyBatchEnd":
         flushHistoryBatch(t, msg.hasMore === true, typeof msg.hidden === "number" ? msg.hidden : 0);
-        // 历史补完：末尾那条「继续」重新算一次（补进来的老消息在顶上，不影响它）
-        syncContinueHint(t);
+        // 历史补完：末尾那颗胶囊重新算一次（补进来的老消息在顶上，不影响它）
+        syncEndHint(t);
         break;
     }
   }
