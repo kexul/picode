@@ -1413,6 +1413,7 @@
   function addPlain(st, cls, role, text) {
     hideEmptyHint(st);
     st.currentToolRow = null; // 新消息块：工具标签另起一行，不往上一段后面续
+    endRunningLine(st);       // 这一批工具过去了：还在留的那条位置到此为止（见 endRunningLine）
     const div = document.createElement("div");
     div.className = "msg " + cls + " msg-enter";
     if (cls === "user") { div.dataset.raw = text || ""; }
@@ -1445,6 +1446,7 @@
   function addMarkdown(st, raw) {
     hideEmptyHint(st);
     st.currentToolRow = null; // 新正文块：工具标签另起一行，不往上一段后面续
+    endRunningLine(st);       // 这一批工具过去了：还在留的那条位置到此为止（见 endRunningLine）
     const div = document.createElement("div");
     div.className = "msg assistant msg-enter";
     const body = document.createElement("div");
@@ -1678,10 +1680,19 @@
   // ==================== 正在跑的那一条 ====================
   // 工具标签只说得出工具名：命令行、读哪个文件、grep 找什么都在提示框里，不悬浮就看不见。
   // 正在跑的那一条不一样：它在当前这批标签下面单占一行，把这一行的摘要直接写出来
-  // （bash 就是「$ 命令」），跑完这一条就从这行消失（胶囊照旧）。同时跑几条就排几行。
+  // （bash 就是「$ 命令」）。同时跑几条就排几行。
   // 不出这行的两种：think（思考，内容在提示框里看）与 ask_choice（问话卡片本来就铺在消息流里，
   // 而且它要等人答完才算跑完，摆一行「正在跑」只会碍事）。
+  //
+  // 退场分两步走 —— 一串很快跑完的调用（读文件、grep，一条几十毫秒）不该让这行一闪一闪：
+  // 出现、消失、又出现，下面的内容跟着上下跳。
+  //   · 先留字：一条都不在跑之后，写着的那条再留 RUNNING_LINE_LINGER_MS；这几十毫秒里下一批
+  //     工具多半就接上了，接上就一直写着、只是换个名字，看着是一条连着变的（见 expireRunningLine）；
+  //   · 位置留到这一批真过去：到点之后字淡出去（见 chat.css 的 .tool-running-item.gone），
+  //     淡完这块地方还占着（高度不变，下面不动），等下面出了正文 / 问话卡片（这一批工具过去了），
+  //     或者这一轮跑完，才整条连位置一起收掉（见 endRunningLine）。
   const RUNNING_LINE_SKIP = new Set([THINKING_NAME, "ask_choice"]);
+  const RUNNING_LINE_LINGER_MS = 300;
 
   /** 现在还有哪些调用在跑、各自那一行摘要（一条一行，按页面上标签的顺序）。
    *  直接看页面上那些转圈的标签：批次换了行、重放历史都不影响 —— 写出来的跟看到的是同一份。 */
@@ -1702,16 +1713,21 @@
     return out;
   }
 
-  /** 画/更新「正在跑」的那一行：贴在当前这批工具标签下面（新一轮工具行上来就跟着挪过去），
-   *  没有在跑的就把整行收掉、节点也不留。 */
+  /** 画/更新「正在跑」的那一行：贴在当前这批工具标签下面（新一轮工具行上来就跟着挪过去）。
+   *  没有在跑的怎么退场见上面那段说明（先留字、位置留到这一批过去）。 */
   function syncRunningLine(st) {
     // 往暂存区补更早的历史时（「加载更早」那批）不碰：那块还没在页面上（同 placeEndHint）
     if (!st || !st.paneEl || st._stage === st.paneEl) { return; }
     const texts = runningCallTexts(st);
     if (!texts.length) {
-      if (st.runningLine) { st.runningLine.remove(); }
+      // 一条都不在跑了：先让写着的那条再留一会儿（下一批多半这会儿就接上），到点见下面那个函数。
+      // 本来就没这条（这一批没调过工具）什么都不用做。
+      if (st.runningLine && !st.runningLineTimer) {
+        st.runningLineTimer = setTimeout(() => { st.runningLineTimer = 0; expireRunningLine(st); }, RUNNING_LINE_LINGER_MS);
+      }
       return;
     }
+    if (st.runningLineTimer) { clearTimeout(st.runningLineTimer); st.runningLineTimer = 0; }
     if (!st.runningLine) {
       st.runningLine = document.createElement("div");
       st.runningLine.className = "msg tool-running";
@@ -1728,6 +1744,43 @@
       item.appendChild(t);
       line.appendChild(item);
     }
+    placeRunningLine(st, line);
+  }
+
+  /** 留的那一会儿到点了、还是一条都没在跑：这一批过去了就把整条收掉，没过去就把字清掉、位置留着。
+   *  「过去了」看它跟的那排标签还是不是当前这排：下面是正文 / 问话卡片了（currentToolRow 被清掉），
+   *  或者已经换到新的一排上，都算这一批过去了。 */
+  function expireRunningLine(st) {
+    const line = st.runningLine;
+    if (!line || !st.paneEl || runningCallTexts(st).length) { return; }
+    // 它跟的那排标签没了（那排标签空了被收掉）、或者已经不是当前这排（下面是正文 / 问话卡片了）：
+    // 这一批过去了，整条连位置一起收。
+    const rowGone = line._row && line._row.parentElement !== st.paneEl;
+    if (rowGone || st.currentToolRow !== line._row) { dropRunningLine(st); return; }
+    // 这一批还没过去（下一条工具随时可能来）：字淡掉，位置留着 —— 那个盒子还在页面上、还占着
+    // 那条的高度（淡的是里面写着的东西，不是把盒子拿走），下面不会跟着上下跳。
+    for (const item of line.children) { item.classList.add("gone"); }
+  }
+
+  /** 把这条整条收掉（连位置一起）：那点还没到 / 还没清的字也一并作废（定时器一并清）。 */
+  function dropRunningLine(st) {
+    if (!st) { return; }
+    if (st.runningLineTimer) { clearTimeout(st.runningLineTimer); st.runningLineTimer = 0; }
+    if (st.runningLine) { st.runningLine.remove(); st.runningLine = null; }
+  }
+
+  /** 这一批工具过去了（下面出了正文 / 问话卡片，或者这一轮跑完）：把还在留的那条连位置一起收掉。
+   *  还有工具在跑就不收 —— 那说明这一批还没过去，收掉马上又得开一条，正是要避免的那种一闪。 */
+  function endRunningLine(st) {
+    if (!st || !st.paneEl || st._stage === st.paneEl) { return; }
+    if (runningCallTexts(st).length) { return; }
+    dropRunningLine(st);
+  }
+
+  /** 把这条摆到它该在的地方：当前这批标签的下面。_row 记着它跟的是哪排标签（判断这一批过没过去
+   *  用它，见 expireRunningLine）—— 来了一段正文之后它就待在原地、_row 不动，那排标签不再是
+   *  当前那排，这一批就算过去了。 */
+  function placeRunningLine(st, line) {
     const row = st.currentToolRow;
     if (row && row.parentElement === st.paneEl) {
       // 当前这批标签的下面；新一轮工具行上来（上一条正文之后又调了工具）就跟着挪过去。
@@ -1735,12 +1788,14 @@
       let after = row;
       while (after.nextElementSibling && after.nextElementSibling.classList.contains("ask-card")) { after = after.nextElementSibling; }
       if (line.previousElementSibling !== after) { after.after(line); }
+      line._row = row;
       return;
     }
     // 手头没有当前工具行（刚来了一段正文，或者问话卡片把行收掉了）：就待在原地
     // —— 它跟的是它那批标签，不往新内容下面钻（后一条工具调用开了新行时才挪过去）。
     if (line.parentElement === st.paneEl) { return; }
     // 还没挂上页面（整屏重画之后头一条就是还在跑的调用）：挂在消息流末尾
+    line._row = row || null;
     const tail = st.endHintEl;
     if (tail && tail.parentElement === st.paneEl) { st.paneEl.insertBefore(line, tail); return; }
     st.paneEl.appendChild(line);
@@ -3264,6 +3319,7 @@
     if (anchor) { anchor.after(el); } else { st.paneEl.appendChild(el); }
     // 卡片算一道坎：后面的工具标签另起一行（画在卡片下面，不往上面那条工具行里钻）
     st.currentToolRow = null;
+    endRunningLine(st);   // 同上：这批工具过去了，还在留的那条位置也收掉
     st.askCards.set(id, rec);
     scrollToBottom(st);
   }
@@ -5877,6 +5933,8 @@
 
   function setStreaming(st, on) {
     st.streaming = on;
+    // 这一轮跑完：还在留的那条位置到此为止（一轮里最后调的是工具、后面没再出正文时，就靠这一下收）
+    if (!on) { endRunningLine(st); }
     if (activeId === st.id) { updateSendState(); syncStatus(); }
     renderSessionBar();
     syncPaneStatuses();
@@ -6306,7 +6364,7 @@
         t.segmentThinking = null;
         t.tailThinking = null;
         t.currentToolRow = null;
-        t.runningLine = null;   // 这条连着窗格一起没了（上面的 innerHTML 已经清掉它）
+        dropRunningLine(t);   // 这条连着窗格一起没了（上面的 innerHTML 已经清掉它）；定时器也一并清
         t.toolGroups = null;
         t.toolGroupEntries.clear();
         t.pendingToolCards.clear();

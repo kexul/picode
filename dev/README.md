@@ -63,7 +63,8 @@ npm run web:shot -- --width 1000 --height 620 --script dev/toolRow.js
 npm run web:shot -- --width 1000 --height 760 --script dev/toolMerge.js
 
 # 验「正在跑的那一条」（工具标签下面那行摘要：在跑的那条把命令 / 读哪个文件直接写出来，
-# 跑完少一条、全跑完整行收掉，同时跑几条就排几行，think 与 ask_choice 不出这条）：
+# 跑完一条少一条，一条都不在跑之后先留一会儿字、再淡出（不是一下没了），位置留到下面出正文 / 这一轮跑完，
+# 一串 60 毫秒跑完的调用连着来也不该一闪一闪，同时跑几条就排几行，think 与 ask_choice 不出这条）：
 npm run web:shot -- --width 900 --height 620 --script dev/runningLine.js
 
 # 验消息流右边那条「用户消息导航」（一句一根短横线：条数与位置、停上去出一行字（从那行字跟着鼠标换）、
