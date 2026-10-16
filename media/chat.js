@@ -585,6 +585,8 @@
       tpsStart: 0,
       tpsTokens: 0,
       currentToolRow: null,
+      // 消息流末尾那条「正在跑」的：贴在当前这批工具标签下面，一行一条（见 syncRunningLine）
+      runningLine: null,
       // 这一批（一条工具调用行）里按工具名归拢的合并标签（见 addToolToGroup）：
       // { row, byName }，byName 记 工具名 → 组里那一条；行一换（来了正文）就是新的一批。
       // toolGroupEntries 记 callId → 组里那一条，结果回来时按它找到该更新哪一条。
@@ -1290,6 +1292,7 @@
     // 问话卡片有时候比这条工具行先到（两条通道各有快慢）：把它挪到这一行下面
     dockAskCardToRow(st, toolCallId, tag.parentElement);
     if (toolCallId) { st.pendingToolTags.set(toolCallId, tag); }
+    syncRunningLine(st);   // 这条在跑：末尾那行跟着写上它
     scrollToBottom(st);
   }
 
@@ -1337,7 +1340,7 @@
     };
     g.entries.push(entry);
     if (toolCallId) { st.toolGroupEntries.set(toolCallId, entry); }
-    syncGroupTag(g);
+    syncGroupTag(st, g);
     // 问话卡片有时候比这条工具行先到（两条通道各有快慢）：把它挪到这一行下面
     dockAskCardToRow(st, toolCallId, g.row);
     // 方块上飘个 +1：只有“本来就是它、又攒了一条”才飘，重放历史时（noCountPop）不飘
@@ -1371,7 +1374,7 @@
 
   /** 合并标签长什么样：工具名 + 次数（一个写着数字的小方块；只调一次就不写数字）；
    *  有一条还在跑就转圈，有失败就标红。 */
-  function syncGroupTag(g) {
+  function syncGroupTag(st, g) {
     g.nameEl.textContent = " " + (g.name || "");
     const total = g.entries.length;
     g.countEl.textContent = total > 1 ? String(total) : "";
@@ -1380,6 +1383,7 @@
     // 一组里的改动都回滚了，整颗标签才划掉（只有 write / edit 会被回滚，见 buildEditCard）
     g.tag.classList.toggle("reverted", g.entries.length > 0 && g.entries.every((e) => e.reverted));
     refreshTagTipIfShowing(g.tag);
+    syncRunningLine(st);   // 这组里有在跑的：末尾那行跟着变
   }
 
   /** 合并标签的提示内容：一条调用一行（输入），下面紧跟它的结果（输出），一条条排下来。 */
@@ -1421,10 +1425,82 @@
       const batch = st.toolGroups;
       if (batch && batch.byName.get(g.name) === g) { batch.byName.delete(g.name); }
       dropToolRow(st, row);
+      syncRunningLine(st);
     } else {
-      syncGroupTag(g);
+      syncGroupTag(st, g);
     }
     mountToolImageBlock(st, { toolName: entry.name, argStr: entry.argStr, tipCall: entry.tipCall, toolCallId: entry.id }, images);
+  }
+
+  // ==================== 正在跑的那一条 ====================
+  // 工具标签只说得出工具名：命令行、读哪个文件、grep 找什么都在提示框里，不悬浮就看不见。
+  // 正在跑的那一条不一样：它在当前这批标签下面单占一行，把这一行的摘要直接写出来
+  // （bash 就是「$ 命令」），跑完这一条就从这行消失（胶囊照旧）。同时跑几条就排几行。
+  // 不出这行的两种：think（思考，内容在提示框里看）与 ask_choice（问话卡片本来就铺在消息流里，
+  // 而且它要等人答完才算跑完，摆一行「正在跑」只会碍事）。
+  const RUNNING_LINE_SKIP = new Set([THINKING_NAME, "ask_choice"]);
+
+  /** 现在还有哪些调用在跑、各自那一行摘要（一条一行，按页面上标签的顺序）。
+   *  直接看页面上那些转圈的标签：批次换了行、重放历史都不影响 —— 写出来的跟看到的是同一份。 */
+  function runningCallTexts(st) {
+    const out = [];
+    for (const tag of st.paneEl.querySelectorAll(".tool.running")) {
+      const g = tag._tipGroup;
+      if (g) {
+        for (const e of g.entries) {
+          if (!e.done && !RUNNING_LINE_SKIP.has(e.name)) { out.push(e.tipCall || e.name); }
+        }
+        continue;
+      }
+      if (tag._done === false && !RUNNING_LINE_SKIP.has(tag._toolName)) {
+        out.push(tag._tipCall || tag._toolName || "");
+      }
+    }
+    return out;
+  }
+
+  /** 画/更新「正在跑」的那一行：贴在当前这批工具标签下面（新一轮工具行上来就跟着挪过去），
+   *  没有在跑的就把整行收掉、节点也不留。 */
+  function syncRunningLine(st) {
+    // 往暂存区补更早的历史时（「加载更早」那批）不碰：那块还没在页面上（同 placeEndHint）
+    if (!st || !st.paneEl || st._stage === st.paneEl) { return; }
+    const texts = runningCallTexts(st);
+    if (!texts.length) {
+      if (st.runningLine) { st.runningLine.remove(); }
+      return;
+    }
+    if (!st.runningLine) {
+      st.runningLine = document.createElement("div");
+      st.runningLine.className = "msg tool-running";
+    }
+    const line = st.runningLine;
+    line.textContent = "";
+    for (const text of texts) {
+      const item = document.createElement("div");
+      item.className = "tool-running-item";
+      item.insertAdjacentHTML("afterbegin", GEAR_SVG);
+      const t = document.createElement("span");
+      t.className = "tr-text";
+      t.textContent = text;
+      item.appendChild(t);
+      line.appendChild(item);
+    }
+    const row = st.currentToolRow;
+    if (row && row.parentElement === st.paneEl) {
+      // 当前这批标签的下面；新一轮工具行上来（上一条正文之后又调了工具）就跟着挪过去。
+      // 问话卡片也挂在这一行下面（见 dockAskCardToRow）：这条排在卡片后面，两边不抢位置。
+      let after = row;
+      while (after.nextElementSibling && after.nextElementSibling.classList.contains("ask-card")) { after = after.nextElementSibling; }
+      if (line.previousElementSibling !== after) { after.after(line); }
+      return;
+    }
+    // 手头没有当前工具行（刚来了一段正文，或者问话卡片把行收掉了）：就待在原地
+    // —— 它跟的是它那批标签，不往新内容下面钻（后一条工具调用开了新行时才挪过去）。
+    if (line.parentElement === st.paneEl) { return; }
+    // 还没挂上页面（整屏重画之后头一条就是还在跑的调用）：挂在消息流末尾
+    const tail = st.endHintEl;
+    if (tail && tail.parentElement === st.paneEl) { st.paneEl.insertBefore(line, tail); return; }
+    st.paneEl.appendChild(line);
   }
 
   /** 收掉一个工具标签；它所在那条工具行空了就连行一起收掉（不留空行）。 */
@@ -1474,7 +1550,7 @@
     entry.tipCall = THINKING_NAME;
     noteThinkingEntry(st, entry);
     st.thinkingEntry = entry;
-    syncGroupTag(entry.group);
+    syncGroupTag(st, entry.group);
     return entry;
   }
 
@@ -1491,7 +1567,7 @@
     if (st.thinkingEntry === entry) { st.thinkingEntry = null; }
     entry.done = true;
     if (text) { entry.resultText = text; }
-    syncGroupTag(entry.group);
+    syncGroupTag(st, entry.group);
     scrollToBottom(st);
   }
 
@@ -1536,7 +1612,7 @@
       tail.entries.length = 0;
     }
     dropToolTag(st, tail.tag);   // 末尾那颗收掉；它那条行空了连行一起收
-    syncGroupTag(target);
+    syncGroupTag(st, target);
     scrollToBottom(st);
   }
 
@@ -2060,12 +2136,12 @@
         entry.done = true;
         entry.isError = !!msg.isError;
         if (entry.id) { st.toolGroupEntries.delete(entry.id); }   // 结果到了：跟别的工具一样从待填表里撤掉
-        syncGroupTag(entry.group);   // 条数 / 转圈 / 标红跟着重算，提示框开着就重画
+        syncGroupTag(st, entry.group);   // 条数 / 转圈 / 标红跟着重算，提示框开着就重画
       },
       markReverted() {
         reverted = true;
         entry.reverted = true;
-        syncGroupTag(entry.group);   // 这一组里的改动都回滚了，整颗标签才划掉（见 syncGroupTag）
+        syncGroupTag(st, entry.group);   // 这一组里的改动都回滚了，整颗标签才划掉（见 syncGroupTag）
       },
     };
   }
@@ -5984,6 +6060,7 @@
         t.segmentThinking = null;
         t.tailThinking = null;
         t.currentToolRow = null;
+        t.runningLine = null;   // 这条连着窗格一起没了（上面的 innerHTML 已经清掉它）
         t.toolGroups = null;
         t.toolGroupEntries.clear();
         t.pendingToolCards.clear();
@@ -6037,7 +6114,7 @@
             groupEntry.resultText = msg.resultText || "";
             groupEntry.meta = { isError: !!msg.isError, durationMs: msg.durationMs, truncation: msg.truncation || null };
             t.toolGroupEntries.delete(msg.toolCallId);
-            syncGroupTag(groupEntry.group);
+            syncGroupTag(t, groupEntry.group);
             scrollToBottom(t);
           }
           break;
@@ -6045,6 +6122,7 @@
         const tagEl = t.pendingToolTags.get(msg.toolCallId);
         if (tagEl) {
           tagEl.classList.remove("running");
+          syncRunningLine(t);   // 这条不跑了：末尾那行跟着少一条
           if (msg.isError) { tagEl.classList.add("error"); }
           // 记录结果：文字结果供悬浮提示用（见 setTagTip），带图的走另一条路
           tagEl._done = true;

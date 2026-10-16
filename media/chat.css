@@ -212,6 +212,14 @@
   .tool.error { opacity: 1; color: var(--vscode-errorForeground, #f48771); }
   /* 改动被回滚了：这一组的标签划掉（一组里有没回滚的就不划，见 chat.js 的 syncGroupTag） */
   .tool.reverted { text-decoration: line-through; opacity: 0.6; }
+  /* 正在跑的那一条：贴在当前这批工具标签下面，一行一条（同时跑几条就排几行），跑完自己收掉
+     （见 chat.js 的 syncRunningLine）。摘要本来只在提示框里，这里直接写出来：一颗「bash」
+     看不出它在跑什么。太长只显示开头，全文悬浮上面那颗胶囊看。
+     左内边距 6px 跟工具标签自己的内外边距一样（见 .tool 的 padding）：两处的齿轮要在同一条竖线上。 */
+  .tool-running { display: flex; flex-direction: column; gap: 2px; margin: 2px 0; padding: 0 14px; }
+  .tool-running-item { display: flex; align-items: center; gap: 4px; min-width: 0; padding-left: 6px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.75; }
+  .tool-running-item .tool-icon { flex: 0 0 auto; animation: tool-spin 1.1s linear infinite; }
+  .tool-running-item .tr-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 合并标签（连着来的同名调用收成一个）：工具名 + 次数小方块（只调一次就不写数字）。
      次数不用乘号：标签字号是正文的 0.8 倍，乘号在这个尺寸只剩几个像素，两条斜线
      怎么画都发虚；改成一个小色块把数字框住，一眼看得出这是"几次"。

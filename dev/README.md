@@ -62,6 +62,10 @@ npm run web:shot -- --width 1000 --height 620 --script dev/toolRow.js
 # 「跳转 / 回滚」排在各自的标题行上、读图那条摘出去、不合并的那几个、重放后一样）：
 npm run web:shot -- --width 1000 --height 760 --script dev/toolMerge.js
 
+# 验「正在跑的那一条」（工具标签下面那行摘要：在跑的那条把命令 / 读哪个文件直接写出来，
+# 跑完少一条、全跑完整行收掉，同时跑几条就排几行，think 与 ask_choice 不出这条）：
+npm run web:shot -- --width 900 --height 620 --script dev/runningLine.js
+
 # 验会话那套（顶条名字跟着 pi 标题变 / 切会话 / 列表里关会话）：
 npm run web:shot -- --fake-pi --script dev/sessionFlow.js
 
