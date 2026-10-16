@@ -528,6 +528,11 @@
     pane.dataset.sessionId = id;
     pane.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
     view.appendChild(pane);
+    // 用户消息导航：消息流右边一条细导航（见「用户消息导航」那一段）。挂在会话壳上、不挂进窗格：
+    // 整屏重画要重写窗格的内容（pane.innerHTML），挂在窗格里会被一起抹掉。
+    const rail = document.createElement("div");
+    rail.className = "user-rail empty";
+    view.appendChild(rail);
     const stBar = document.createElement("div");
     stBar.className = "pane-status";
     // 拦掉 mousedown 冒泡：状态栏自己处理点击（弹模型选择器）
@@ -561,6 +566,7 @@
         st.hasNewContent = false;
         syncJumpBottom(st);
       }
+      scheduleRailCurrent(st);   // 用户消息导航上那根「正读着的」跟着换
     });
     st = {
       id,
@@ -603,6 +609,17 @@
       _historyBtn: null,
       _stage: null,
       _stageDropped: false,
+      // 用户消息导航（消息流右边那一条）：节点、短横线、量出来的高度与每一根的位置
+      railEl: rail,
+      railMsgs: null,
+      railTicks: null,
+      railHeight: 0,
+      railGap: 0,
+      railTop: 0,
+      railOffsets: null,
+      railScrollH: -1,
+      railCurrent: -1,
+      railHover: -1,
       streaming: false,
       unread: false,
       activity: "idle",
@@ -624,6 +641,7 @@
       autoLoadHinted: false,
     };
     sessions.set(id, st);
+    attachUserRail(st);
     return st;
   }
 
@@ -637,6 +655,8 @@
     const st = target;
     if (!st) { return; }
     messagesEl.appendChild(st.viewEl);
+    // 用户消息导航按这块地方现在的大小重画（别的会话的壳挂在页面外，量出来是 0 高）
+    syncUserRail(st);
     // 重挂载后把滚动位置恢复回去（贴底的直接贴底）
     const p = st.paneEl;
     if (st.stickToBottom) {
@@ -967,6 +987,214 @@
     if (!jumpBottomBtn) { return; }
     const show = st.hasNewContent && !st.stickToBottom && activeId === st.id;
     jumpBottomBtn.classList.toggle("hidden", !show);
+  }
+
+  // ==================== 用户消息导航 ====================
+  // 消息流右边一条细导航：一根短横线代表用户自己发的一条消息（按先后等分排下来，整列上下居中；
+  // 条数多了就挤紧、铺满这一条）。鼠标停上去出一行字（那条消息的开头），点一下跳到那一条；
+  // 正读着的那一条亮着。空会话、只有一条用户消息时不出现（一根线孤零零的没意义）。
+  //
+  // 为什么挂在会话壳（.session-view）上、不挂进消息窗格：整屏重画要重写窗格的内容
+  // （pane.innerHTML），「加载更早」那批消息也是先渲染进暂存区 —— 挂进窗格就会被一起抹掉。
+  // 每一根的位置只按窗格的高矮算（不读每条消息的量）：所以条数变了重画也不贵。
+  const RAIL_SPREAD_MAX = 26;      // 相邻两根之间最松留几个像素：再宽就整列居中，不把一列散满整屏
+  const RAIL_TIP_CHARS = 60;       // 停上去那行字取开头多少个字
+  let railObserver = null;
+
+  /** 一个会话现在的用户消息节点（按消息流里的先后顺序）。 */
+  function railMessages(st) { return Array.prototype.slice.call(st.paneEl.querySelectorAll(".msg.user")); }
+
+  /**
+   * 重画（或者清空）某个会话的用户消息导航：条数变了（发了一条 / 「加载更早」补进来一批 /
+   * 整屏重画）、那块地方大小变了、刚挂上页面，都走这里。挂在页面外的会话不画（量出来是 0 高）。
+   */
+  function syncUserRail(st) {
+    const rail = st && st.railEl;
+    if (!rail || !st.paneEl.isConnected) { return; }
+    const msgs = railMessages(st);
+    if (msgs.length < 2) {   // 一根短横线不成一条路：不露面，也不许它挡住右边那一条的鼠标
+      rail.classList.add("empty");
+      rail.textContent = "";
+      st.railMsgs = null; st.railTicks = null; st.railCurrent = -1;
+      return;
+    }
+    let height = st.railHeight;
+    if (height <= 0) { height = rail.clientHeight; st.railHeight = height; }   // 大小平时由 ResizeObserver 报
+    if (height <= 0) { return; }   // 还没排上版：等它报一次大小再来
+    const n = msgs.length;
+    const gap = Math.min(height / (n - 1), RAIL_SPREAD_MAX);
+    const top = (height - gap * (n - 1)) / 2;   // 没铺满时整列居中（条数少才有富余）
+    const frag = document.createDocumentFragment();
+    const ticks = [];
+    for (let i = 0; i < n; i++) {
+      const tick = document.createElement("span");
+      tick.className = "rail-tick";
+      tick.style.top = Math.round(top + gap * i) + "px";
+      frag.appendChild(tick);
+      ticks.push(tick);
+    }
+    rail.classList.remove("empty");
+    rail.textContent = "";
+    rail.appendChild(frag);
+    st.railMsgs = msgs; st.railTicks = ticks; st.railGap = gap; st.railTop = top;
+    st.railCurrent = -1; st.railHover = -1;
+    cacheRailOffsets(st);
+    syncRailCurrent(st);
+  }
+
+  /** 条数一口气变好几回（整屏重画是几百条消息一条条进来的）：一帧只重画一次。 */
+  function scheduleUserRail(st) {
+    if (!st || st.railBuildRaf) { return; }
+    st.railBuildRaf = requestAnimationFrame(() => { st.railBuildRaf = 0; syncUserRail(st); });
+  }
+
+  /** 每条用户消息在窗格里的纵向位置：「正读着哪一条」用（只在内容高矮变了时才重量）。 */
+  function cacheRailOffsets(st) {
+    const msgs = st.railMsgs || [];
+    const offs = new Array(msgs.length);
+    for (let i = 0; i < msgs.length; i++) { offs[i] = msgs[i].offsetTop; }
+    st.railOffsets = offs;
+    st.railScrollH = st.paneEl.scrollHeight;
+  }
+
+  /** 正读着的那一条：窗格最上头露出来的那条用户消息；贴着底时永远算最后一条。 */
+  function railCurrentIndex(st) {
+    const ticks = st.railTicks;
+    if (!ticks || !ticks.length) { return -1; }
+    if (st.stickToBottom) { return ticks.length - 1; }
+    const offs = st.railOffsets;
+    if (!offs || !offs.length) { return -1; }
+    const top = st.paneEl.scrollTop + 12;   // 一点余量：刚露出个边也算它
+    let lo = 0, hi = offs.length - 1, best = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (offs[mid] <= top) { best = mid; lo = mid + 1; } else { hi = mid - 1; }
+    }
+    return best;
+  }
+
+  /** 把「正读着的那一条」那根点亮（条数没变就不重量位置，只比一比缓存里的数）。 */
+  function syncRailCurrent(st) {
+    const ticks = st.railTicks;
+    if (!ticks || !ticks.length) { return; }
+    // 内容长高 / 矮了（图片来了、正文还在往外吐、高亮重排）：缓存的位置对不上了，重量一次
+    if (!st.stickToBottom && st.railScrollH !== st.paneEl.scrollHeight) { cacheRailOffsets(st); }
+    const idx = railCurrentIndex(st);
+    if (idx === st.railCurrent) { return; }
+    st.railCurrent = idx;
+    ticks.forEach((tick, i) => tick.classList.toggle("current", i === idx));
+  }
+
+  /** 滚动事件里调：一帧最多算一次。 */
+  function scheduleRailCurrent(st) {
+    if (!st || st.railCurRaf || !st.railTicks) { return; }
+    st.railCurRaf = requestAnimationFrame(() => { st.railCurRaf = 0; syncRailCurrent(st); });
+  }
+
+  /** 鼠标落在哪一根上：按上一次画出来的格子算，离哪根近就算哪根（挤得再密也点得中）。 */
+  function railIndexAt(st, clientY) {
+    const ticks = st.railTicks;
+    if (!ticks || !ticks.length) { return -1; }
+    const gap = st.railGap || 0;
+    if (ticks.length === 1 || gap <= 0) { return 0; }
+    const y = clientY - st.railEl.getBoundingClientRect().top;
+    const i = Math.round((y - st.railTop) / gap);
+    return Math.max(0, Math.min(ticks.length - 1, i));
+  }
+
+  /** 点了一根短横线：那一条用户消息滚到窗格顶上，闪一下底色（好认跳到了哪儿）。 */
+  function railJumpTo(st, i) {
+    const el = (st.railMsgs || [])[i];
+    if (!el || !el.isConnected) { return; }
+    userTookOverScroll(st);   // 跟用户自己往回滚一样：停掉追底；正在生成时把「跳到最新」亮起来
+    if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); st.lerpRafId = 0; }
+    if (st.scrollRafId) { cancelAnimationFrame(st.scrollRafId); st.scrollRafId = 0; }
+    st.paneEl.scrollTop = Math.max(0, el.offsetTop - 6);
+    flashMessage(el);
+    syncRailCurrent(st);
+  }
+
+  /** 跳过去的那一条闪一下底色（连着点同一根也再闪一次）。 */
+  function flashMessage(el) {
+    el.classList.remove("msg-flash");
+    void el.offsetWidth;   // 逼一次重排：去掉再加同一个类，动画不会重放
+    el.classList.add("msg-flash");
+    clearTimeout(el._flashTimer);
+    el._flashTimer = setTimeout(() => el.classList.remove("msg-flash"), 1400);
+  }
+
+  let railTipEl = null;
+  /** 那条消息的开头一行（停上去出的字）。 */
+  function railTipText(el) {
+    const raw = el.dataset.raw || el.textContent || "";
+    const one = raw.replace(/\s+/g, " ").trim();
+    if (!one) { return "（空消息）"; }
+    return one.length > RAIL_TIP_CHARS ? one.slice(0, RAIL_TIP_CHARS) + "…" : one;
+  }
+  /** 停上去出的那行字：贴着导航条左边、跟着那一根上下居中，出不了屏幕。 */
+  function showRailTip(st, i) {
+    const el = (st.railMsgs || [])[i];
+    if (!el) { return; }
+    if (!railTipEl) {
+      railTipEl = document.createElement("div");
+      railTipEl.className = "rail-tip hidden";
+      document.body.appendChild(railTipEl);
+    }
+    railTipEl.textContent = railTipText(el);
+    railTipEl.classList.remove("hidden");
+    const railBox = st.railEl.getBoundingClientRect();
+    const box = railTipEl.getBoundingClientRect();
+    const tickY = railBox.top + (st.railTop || 0) + (st.railGap || 0) * i;
+    let left = railBox.left - box.width - 8;
+    if (left < 4) { left = 4; }   // 窗口很窄时盖在消息上，也总比出屏幕强
+    const top = Math.max(6, Math.min(tickY - box.height / 2, window.innerHeight - box.height - 6));
+    railTipEl.style.left = Math.round(left) + "px";
+    railTipEl.style.top = Math.round(top) + "px";
+  }
+  function hideRailTip() {
+    if (railTipEl) { railTipEl.classList.add("hidden"); }
+  }
+
+  /** 用户消息导航的鼠标与大小：建会话时挂一次（每个会话一条）。 */
+  function attachUserRail(st) {
+    const rail = st.railEl;
+    // 那块地方的高矮变了（拖窗口的边、输入框长高、切到手机宽）：ResizeObserver 报一次就重画
+    if (typeof ResizeObserver !== "undefined") {
+      if (!railObserver) {
+        railObserver = new ResizeObserver((entries) => {
+          for (const entry of entries) {
+            const owner = entry.target._railSt;
+            if (!owner) { continue; }
+            owner.railHeight = entry.contentRect.height;
+            syncUserRail(owner);
+          }
+        });
+      }
+      rail._railSt = st;
+      railObserver.observe(rail);
+    }
+    // 停上去出一行字、点一下跳过去（触屏没有「停上去」：点一下直接跳）
+    rail.addEventListener("mousemove", (e) => {
+      if (IS_TOUCH_DEVICE) { return; }
+      const i = railIndexAt(st, e.clientY);
+      if (i < 0) { return; }
+      if (i !== st.railHover) {
+        st.railHover = i;
+        if (st.railTicks) { st.railTicks.forEach((tick, k) => tick.classList.toggle("hover", k === i)); }
+      }
+      // 滚动 / 点过一下会把那行字收起来：鼠标还在这一根上（或者又移回来了）就把它拿出来
+      if (!railTipEl || railTipEl.classList.contains("hidden")) { showRailTip(st, i); }
+    });
+    rail.addEventListener("mouseleave", () => {
+      st.railHover = -1;
+      if (st.railTicks) { st.railTicks.forEach((tick) => tick.classList.remove("hover")); }
+      hideRailTip();
+    });
+    rail.addEventListener("click", (e) => {
+      const i = railIndexAt(st, e.clientY);
+      hideRailTip();
+      if (i >= 0) { railJumpTo(st, i); }
+    });
   }
 
   // ==================== 流式渲染节流 ====================
@@ -1858,6 +2086,7 @@
   document.addEventListener("scroll", (e) => {
     if (tagTipEl && tagTipEl.contains(e.target)) { return; }
     hideTagTip();
+    hideRailTip();
   }, true);
   window.addEventListener("resize", hideTagTip);
   // 点提示框和当前标签以外任何地方关闭提示框（触屏主要靠这个和右上角 × 收）。
@@ -5931,6 +6160,7 @@
         t.segmentThinking = null;
         const label = msg.imageCount ? "[" + msg.imageCount + " 张图片] " : "";
         addPlain(t, "user", "你", label + (msg.text || ""));
+        scheduleUserRail(t);   // 导航条上多一根短横线（整屏重画时几百条消息一条条来，一帧只重画一次）
         endThinking(t, "");
         scrollToBottom(t, true);
         // 刚发出去的这条把末尾那颗胶囊挤到了前头：重算一次（生成中会换成「卡住了」）
@@ -6045,6 +6275,7 @@
         // 重画历史（切会话 / 重连）随之开始：这之后涌进来的工具调用都是老消息，别飘 +1
         t.noCountPop = true;
         t.paneEl.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
+        syncUserRail(t);   // 用户消息导航跟着清空（后面重放的用户消息会一条条补回来）
         t.endHintEl = null;   // 消息流末尾那颗「继续」/「卡住了」也随重画一起没了（引用跟着丢，见 syncEndHint）
         t.emptyHintGone = false;   // 空提示又回来了（见 hideEmptyHint）
         // 历史窗口状态一并重置：按钮随 innerHTML 清掉了；暂存区里若有没插完的
@@ -6336,6 +6567,7 @@
       pane.style.overflowAnchor = prevAnchorStyle;
     };
     if (frames > 0) { requestAnimationFrame(settle); } else { pane.style.overflowAnchor = prevAnchorStyle; }
+    syncUserRail(t);   // 补进来一批更早的：导航条上跟着多几根（都在最前头，整列重画）
   }
 
   function removeSession(id) {
