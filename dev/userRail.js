@@ -200,6 +200,37 @@ module.exports = async (page) => {
     if (!cleared.empty || cleared.n) { problems.push("清空之后导航条该收着"); }
     if (s.n !== 9) { problems.push("重放完该还是九根，实际 " + s.n + " 根"); }
 
+    // ---- 第八幕：从那行字跟着鼠标换（停在别的一根上，写的就是那一条的开头） ----
+    const first2 = await tickAt(0);
+    await move(first2.x, first2.y);
+    await page.sleep(250);
+    const tipA = await page.eval(`const el = document.querySelector(".rail-tip"); return el && !el.classList.contains("hidden") ? el.textContent : "（收着）";`);
+    const last2 = await tickAt(8);
+    await move(last2.x, last2.y);
+    await page.sleep(250);
+    const tipB = await page.eval(`const el = document.querySelector(".rail-tip"); return el && !el.classList.contains("hidden") ? el.textContent : "（收着）";`);
+    console.log("\n第八幕（从那行字跟着鼠标换）：\n  停第一根：" + JSON.stringify(tipA) + "\n  再停第九根：" + JSON.stringify(tipB));
+    if (!tipA.startsWith("消息流右边") || !tipB.startsWith("最后一句")) {
+        problems.push("从那行字没跟着换：第一根 " + JSON.stringify(tipA) + "、第九根 " + JSON.stringify(tipB));
+    }
+    await page.shot("rail-8-tip-moved.png");
+
+    // ---- 第九幕：画的那一下还没排上版（量出来 0 高）：它该自己补画，不用等人再发一条 ----
+    //   把 ResizeObserver 那条路断掉（把 _railSt 抹了），看的就是「补画」这一条。
+    await feed(9);
+    await page.eval(`document.querySelectorAll(".user-rail").forEach((el) => { el._railSt = null; }); return true;`);
+    await page.eval(`document.getElementById("messages").style.display = "none"; return true;`);   // 窗格被藏起来 = 量出来 0 高
+    await page.eval(`window.postMessage({ type: "userMessage", text: "藏起来的时候来的这一条" }, "*"); return true;`);
+    await page.sleep(400);   // 这会儿它自己在反复补画
+    await page.eval(`document.getElementById("messages").style.display = ""; return true;`);
+    await page.sleep(800);   // 不再发消息、不点任何东西，只等它自己补画
+    await move(20, 20);
+    s = await look();
+    console.log("\n第九幕（画的时候窗格还没排上版）：\n  " + show(s) + " 整条高=" + s.height + "（没发新消息，它自己补画的）");
+    if (s.n !== 10) { problems.push("补画之后该有十根（九句 + 藏起来时来的那一句），实际 " + s.n + " 根"); }
+    if (s.first <= 0 || s.last >= s.height) { problems.push("补画出来的位置不对：第一根 " + s.first + "、最后一根 " + s.last + "、条高 " + s.height); }
+    await page.shot("rail-9-after-layout.png");
+
     if (problems.length) {
         throw new Error("有对不上的地方：\n  - " + problems.join("\n  - "));
     }

@@ -66,9 +66,9 @@ npm run web:shot -- --width 1000 --height 760 --script dev/toolMerge.js
 # 跑完少一条、全跑完整行收掉，同时跑几条就排几行，think 与 ask_choice 不出这条）：
 npm run web:shot -- --width 900 --height 620 --script dev/runningLine.js
 
-# 验消息流右边那条「用户消息导航」（一句一根短横线：条数与位置、停上去出一行字、
-# 点一根跳过去并闪一下、正读着的那条亮着、空会话与只有一句时不出现也不挡鼠标、
-# 整屏重画后跟着重画）：
+# 验消息流右边那条「用户消息导航」（一句一根短横线：条数与位置、停上去出一行字（从那行字跟着鼠标换）、
+# 点一根跳过去并闪一下、正读着的那条亮着、空会话与只有一句时不出现也不挡鼠标、整屏重画后跟着重画、
+# 画的那一下还没排上版时自己补画）：
 npm run web:shot -- --width 900 --height 700 --script dev/userRail.js
 
 # 验会话那套（顶条名字跟着 pi 标题变 / 切会话 / 列表里关会话）：
@@ -242,7 +242,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并 + 正文之后补来的那段跑完并回本段那颗）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |
 | `thinkTipPerf.js` | 验 `think` 提示框开着时思考边流边长的开销与表现（节流、跟着贴底、往回滚就不跟）：`npm run web:shot -- --fake-pi --script dev/thinkTipPerf.js` |
 | `endHint.js` | 验消息流末尾那颗胶囊（空会话不露面、跑完在末尾露面且脸是「继续」、点它发一条“继续”、打的字留着、生成中换成「卡住了」且跟得住末尾、点「卡住了」这一轮当场停住并补发一条“卡住了”、再跑完回到末尾、页面重开（含生成中重开）后还在末尾）：`FAKEPI_THINK_MS=2500 npm run web:shot -- --fake-pi --script dev/endHint.js` |
-| `userRail.js` | 验消息流右边那条「用户消息导航」（一句一根短横线：条数与位置、停上去出一行字、点一根跳过去并闪一下、正读着的那条亮着、空会话与只有一句时不出现也不挡鼠标、整屏重画后跟着重画；假数据，不叫模型）：`npm run web:shot -- --width 900 --height 700 --script dev/userRail.js` |
+| `userRail.js` | 验消息流右边那条「用户消息导航」（一句一根短横线：条数与位置、停上去出一行字且从那行字跟着鼠标换、点一根跳过去并闪一下、正读着的那条亮着、空会话与只有一句时不出现也不挡鼠标、整屏重画后跟着重画、画的那一下还没排上版时自己补画；假数据，不叫模型）：`npm run web:shot -- --width 900 --height 700 --script dev/userRail.js` |
 | `askCards.js` | 验问话卡片（长在消息流里）：假 pi 演模型调 `ask_choice` 与扩展问用户，单选 / 多选 / 自己写 / 停止生成 / 确认 / 输入 / 选一个 / 刷新页面各走一遍；那两个输入框写着 `enterkeyhint`、“自己写”那行里回车交完光标落回下面那个输入框也在这里盯着：`npm run web:shot -- --fake-pi --script dev/askCards.js` |
 | `askQuestion.js` | 同上但那一条是真路的：真模型 → 真 pi（插件给它 `-e` 了桥扩展）→ 卡片 → 回话文件 → 工具结果（慢） |
 | `askDialog.js` + `askDialogTrigger.ts` | 验真扩展问的“要你打字 / 要你点是或否 / 选一个”：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |

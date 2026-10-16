@@ -613,9 +613,10 @@
       railEl: rail,
       railMsgs: null,
       railTicks: null,
-      railHeight: 0,
       railGap: 0,
       railTop: 0,
+      railTries: 0,        // 「画的时候还没排上版」补画了几回（见 railDrawLater）
+      railTimer: 0,
       railOffsets: null,
       railScrollH: -1,
       railCurrent: -1,
@@ -1006,7 +1007,7 @@
 
   /**
    * 重画（或者清空）某个会话的用户消息导航：条数变了（发了一条 / 「加载更早」补进来一批 /
-   * 整屏重画）、那块地方大小变了、刚挂上页面，都走这里。挂在页面外的会话不画（量出来是 0 高）。
+   * 整屏重画）、那块地方大小变了、刚挂上页面，都走这里。挂在页面外的会话不画（等它挂上去时再画）。
    */
   function syncUserRail(st) {
     const rail = st && st.railEl;
@@ -1018,9 +1019,11 @@
       st.railMsgs = null; st.railTicks = null; st.railCurrent = -1;
       return;
     }
-    let height = st.railHeight;
-    if (height <= 0) { height = rail.clientHeight; st.railHeight = height; }   // 大小平时由 ResizeObserver 报
-    if (height <= 0) { return; }   // 还没排上版：等它报一次大小再来
+    // 这一条现在有多高就现量：刚挂上页面那一会儿量出来是 0（还没排上版），
+    // 把那 0 记下来一直用，就一直画不出来了（见下面的 railDrawLater）。
+    const height = rail.clientHeight;
+    if (height <= 0) { railDrawLater(st); return; }
+    st.railTries = 0;
     const n = msgs.length;
     const gap = Math.min(height / (n - 1), RAIL_SPREAD_MAX);
     const top = (height - gap * (n - 1)) / 2;   // 没铺满时整列居中（条数少才有富余）
@@ -1046,6 +1049,18 @@
   function scheduleUserRail(st) {
     if (!st || st.railBuildRaf) { return; }
     st.railBuildRaf = requestAnimationFrame(() => { st.railBuildRaf = 0; syncUserRail(st); });
+  }
+
+  /**
+   * 画的那一下还没排上版（量出来是 0 高）：过一会儿自己再来一次。
+   * 不然这一下白画、又没人重画，就卡在那儿直到人再发一条消息（见上面那段注释）。
+   * 最多连着补几回（窗格真收起来时别配上定时器一直空跑）。
+   */
+  function railDrawLater(st) {
+    if ((st.railTries || 0) > 8) { return; }
+    st.railTries = (st.railTries || 0) + 1;
+    if (st.railTimer) { return; }
+    st.railTimer = setTimeout(() => { st.railTimer = 0; syncUserRail(st); }, 150);
   }
 
   /** 每条用户消息在窗格里的纵向位置：「正读着哪一条」用（只在内容高矮变了时才重量）。 */
@@ -1158,15 +1173,13 @@
   /** 用户消息导航的鼠标与大小：建会话时挂一次（每个会话一条）。 */
   function attachUserRail(st) {
     const rail = st.railEl;
-    // 那块地方的高矮变了（拖窗口的边、输入框长高、切到手机宽）：ResizeObserver 报一次就重画
+    // 那块地方的高矮变了（拖窗口的边、输入框长高、切到手机宽）：重画一次（高矮在画那一下现量）
     if (typeof ResizeObserver !== "undefined") {
       if (!railObserver) {
         railObserver = new ResizeObserver((entries) => {
           for (const entry of entries) {
             const owner = entry.target._railSt;
-            if (!owner) { continue; }
-            owner.railHeight = entry.contentRect.height;
-            syncUserRail(owner);
+            if (owner) { syncUserRail(owner); }
           }
         });
       }
@@ -1181,6 +1194,8 @@
       if (i !== st.railHover) {
         st.railHover = i;
         if (st.railTicks) { st.railTicks.forEach((tick, k) => tick.classList.toggle("hover", k === i)); }
+        showRailTip(st, i);   // 从一根挪到另一根：那行字得换成这一条的开头
+        return;
       }
       // 滚动 / 点过一下会把那行字收起来：鼠标还在这一根上（或者又移回来了）就把它拿出来
       if (!railTipEl || railTipEl.classList.contains("hidden")) { showRailTip(st, i); }
