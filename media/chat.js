@@ -2677,6 +2677,9 @@
   //   confirm  标题 + 说明 + 「是」「否」
   //   prompt   标题 + 一行输入 + 「确定」「取消」
   // 同一个会话可能几块屏同时开着：谁先答算谁的，别的屏上那张由宿主发 askCardDone 定住。
+  //
+  // 在这块屏上打字答的（在那行输入框里按的回车），答完把光标放回下面那个输入框：接着就能
+  // 打字，手机上软键盘也跟着留住（见 submitAskCard）。点选项 / 点按钮答的不动光标。
 
   /**
    * 这张卡片底下要写的那行结果；空串 = 不用写（选中那几行留着高亮就够了）。
@@ -2722,6 +2725,9 @@
   /** 交答案：卡片先自己定住（等宿主那声 askCardDone 也行，但先定住免得让人点两下）。 */
   function submitAskCard(st, rec, answer) {
     if (rec.done) { return; }
+    // 这一答是不是"人正拿着卡片那行输入框在打字"（决定下面要不要把光标放回输入框）：
+    // 得在 settleAskCard 之前问——那一下就把卡片里那行输入框摘掉了。
+    const typed = !!rec.input && document.activeElement === rec.input;
     settleAskCard(st, rec.id, answer);
     const msg = { type: "askCardAnswer", id: rec.id };
     if (Array.isArray(answer.picks)) { msg.picks = answer.picks; }
@@ -2729,6 +2735,11 @@
     if (answer.yes !== undefined) { msg.yes = answer.yes; }
     if (answer.cancelled === true) { msg.cancelled = true; }
     vscode.postMessage(msg);
+    // 打字答的那一种：光标放回下面那个输入框，答完接着就能打字。手机上也靠这一下把软键盘
+    // 留住——那行输入框刚好被摘掉（settleAskCard），不主动放的话，手机浏览器会自己把光标
+    // 挪到"下一个能输入的地方"（就是它，但是它自己挑的），电脑上则哪儿都不落。
+    // 点选项 / 点按钮答的那一种不放：那种时候手机上键盘本来关着，放回去会把键盘惹出来。
+    if (typed) { inputEl.focus(); }
   }
 
   /** 卡片底下的一颗小按钮（确定 / 取消 / 是 / 否）。 */
@@ -2837,6 +2848,9 @@
       input.type = "text";
       input.value = typeof card.prefill === "string" ? card.prefill : "";
       if (typeof card.placeholder === "string") { input.placeholder = card.placeholder; }
+      // 手机键盘上那颗键写明是"回车"：不写，安卓上会把它当成"下一项" ——
+      // 按下去只是把光标挪到下一个能输入的地方，这句话交不出去（"自己写"那行同一个道理）。
+      input.setAttribute("enterkeyhint", "enter");
       // 回车 = 交答案（不是"发送"）：拦住别往上冒到输入框那层
       input.addEventListener("keydown", (e) => {
         if (e.key !== "Enter") { return; }
@@ -2888,6 +2902,9 @@
         input.className = "ask-input";
         input.type = "text";
         input.placeholder = "或者自己写…";
+        // 手机键盘上那颗键写明是"回车"：不写，安卓上会把它当成"下一项" ——
+        // 按下去只是把光标挪到下一个能输入的地方（就是下面那个大输入框），答案交不出去。
+        input.setAttribute("enterkeyhint", "enter");
         input.addEventListener("keydown", (e) => {
           if (e.key !== "Enter") { return; }
           e.preventDefault();
