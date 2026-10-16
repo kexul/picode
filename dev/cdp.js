@@ -119,7 +119,8 @@ async function openPage(options) {
     // 注意这是有代价的：藏起来时滚动条不占宽度，页面里能塞下的字比真实浏览器多一行半行。
     if (!options.scrollbars) { args.push("--hide-scrollbars"); }
     if (!options.headed) { args.push("--headless=new"); }
-    args.push("about:blank");
+    // 调用方额外的启动参数（比如可信来源那条路要 --ignore-certificate-errors 与 --host-resolver-rules）
+    args.push(...(options.extraArgs || []), "about:blank");
 
     const child = spawn(browser, args, { stdio: "ignore" });
     let exitNote;

@@ -374,15 +374,18 @@
     notifyTurnEnd = opts.notifyTurnEnd !== false;
   }
 
-  // ── 跑完一轮的系统通知（浏览器通知，不再出提示音） ──
-  // 任何会话（包括别的屏在聊的、后台的）跑完一轮都发一条；被中止的那一轮不算跑完，不发。
-  // 别人派的子会话不发：它的结果会交回派它的那个会话，那边跑完再发（后端在消息里标了 child）。
-  // 每台设备能不能发，看它自己的浏览器给不给通知权限：手机用局域网地址打开（不是 https、
-  // 也不是本机地址）时浏览器根本不给。发不出来就当没有通知，「有新消息」蓝点照旧。
+  // ── 跑完一轮 / 模型提问时的系统通知（浏览器通知，不再出提示音） ──
+  // 要人回来看一眼的事都发一条：任何会话（包括别的屏在聊的、后台的）跑完一轮，
+  // 以及模型在某个会话里问了一道选择题（ask_choice，正等着人答）。
+  // 被中止的那一轮不算跑完，不发。别人派的子会话跑完不发：它的结果会交回派它的那个会话，
+  // 那边跑完再发（后端在消息里标了 child）。每台设备能不能发，看它自己的浏览器给不给通知权限：
+  // 手机用局域网地址打开（不是 https、也不是本机地址）时浏览器根本不给。发不出来就当没有通知。
   function canNotify() {
     // 插件里的对话面板（VSCode 的网页视图）不发：那边是沙箱里的一块网页，浏览器不给通知权限，
     // 也不该在插件界面里弹那个“允许通知”的框。
-    try { return !IN_WEBVIEW && typeof Notification !== "undefined" && !!Notification; } catch (e) { return false; }
+    // 地址不是安全来源时也不发：浏览器认 https 与本机地址，http://192.168.x.x 这种直接不给权限，
+    // 而且它连“拒绝”都不说（干脆不问）。判断放在这里，下面解释原因的那段才说得对路。
+    try { return !IN_WEBVIEW && window.isSecureContext !== false && typeof Notification !== "undefined" && !!Notification; } catch (e) { return false; }
   }
 
   /** 问一次通知权限（没问过才问；浏览器不给的就没办法了）。用户点界面时调，有手势更容易给。 */
@@ -398,24 +401,23 @@
   function notifyUnavailableNote() {
     try {
       if (IN_WEBVIEW) { return "插件里的对话面板里发不了系统通知（那边看「有新消息」那颗点），浏览器页面里才有" };
-      if (!canNotify()) { return "这台设备上用不了：浏览器只在 https 或本机地址下给通知权限（手机用局域网地址打开就是这样）"; }
+      if (!canNotify()) { return "这台设备上用不了：浏览器只在 https 或本机地址下给通知权限（http 地址就是这样）"; }
       if (Notification.permission === "denied") { return "这台设备的浏览器把它拦了（在地址栏那个图标里可以放开）"; }
       if (Notification.permission !== "granted") { return "这台设备还没允许通知：点这一项会问一次"; }
       return "";
     } catch (e) { return ""; }
   }
 
-  /** 一个会话跑完一轮：弹一条系统通知。标题是会话名，正文是这一轮回复的头一行；
-   *  点一下把页面拉到前台并切到那个会话。同名的旧通知原地换成新的（不堆一屏）。 */
-  function notifyTurnEndFor(sessionId, status, text) {
+  /** 弹一条“某个会话那边有事”的系统通知：标题是会话名，点一下把页面拉到前台并切到那个会话。
+   *  tag 按事由分开（跑完一轮 / 模型提问各一套）：同一个会话的同类旧通知原地换成新的，不堆一屏。 */
+  function showSessionNotice(sessionId, body, fallback, tag) {
     try {
-      if (!notifyTurnEnd || status === "cancelled") { return; }
       if (!canNotify() || Notification.permission !== "granted") { return; }
       const st = sessions.get(sessionId);
       const title = st ? sessionLabel(st) : "Pi Chat";
       const note = new Notification(title, {
-        body: (text || "").trim() || "跑完了一轮",
-        tag: "pichat-turn-end-" + sessionId,
+        body: (body || "").trim() || fallback,
+        tag: tag,
       });
       note.onclick = function () {
         window.focus();
@@ -424,6 +426,20 @@
         vscode.postMessage({ type: "switchSession", sessionId: sessionId });
       };
     } catch (e) { /* 通知发不出去就算了，蓝点还在 */ }
+  }
+
+  /** 一个会话跑完一轮。 */
+  function notifyTurnEndFor(sessionId, status, text) {
+    if (!notifyTurnEnd || status === "cancelled") { return; }
+    showSessionNotice(sessionId, text, "跑完了一轮", "pichat-turn-end-" + sessionId);
+  }
+
+  /** 模型在某个会话里问了一道选择题（ask_choice），正等着人答：跟“跑完一轮”一样提醒一声。
+   *  卡片只发给正看着那个会话的屏（见后端 askOnScreens），这条谁都收得到 —— 人在别的会话 /
+   *  别的窗口里时也能知道该去答一句。用的是同一个开关（设置里的“跑完发系统通知”）。 */
+  function notifyAskFor(sessionId, text) {
+    if (!notifyTurnEnd) { return; }
+    showSessionNotice(sessionId, text, "问你一道选择题", "pichat-ask-" + sessionId);
   }
   function isSendKey(e) {
     if (e.key !== "Enter") { return false; }
@@ -5761,6 +5777,9 @@
       }
       return;
     }
+    // 模型在某个会话里问了一道选择题（ask_choice）、正等着人答：同一条路由（每块屏都收到）。
+    // 卡片只长给“正看着那个会话”的屏（切过去时会补上），这条提醒发出去，人在别处也看得见。
+    if (type === "askWaiting") { notifyAskFor(msg.sessionId, msg.text); return; }
     if (type === "openFiles") {
       openFiles = msg.files || [];
       if (atStart >= 0) {

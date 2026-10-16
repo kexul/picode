@@ -101,6 +101,16 @@ node dev/focusCheck.js
 # 无头浏览器里把 Notification 换成记账的假的）：
 node dev/turnNotice.js
 
+# 验“模型问选择题（ask_choice）也发一条系统通知”（跟“跑完一轮”同一个开关、同一个规矩：
+# 正看着它也发、别的屏在聊的会话在问也发、点一下切过去答；扩展问的确认 / 输入 / 选一个不发；
+# 开关关掉就不发）：
+node dev/askNotice.js
+
+# 验“页面是从 https 反代的地址打开的”（手机上想收到通知就得走 https，见 README 那条）：
+# 设置里写下的来源放行、别人的照旧 403、反代后面页面能收能发、那个地址算“安全来源”，
+# 顺带看 http 地址下设置里给出的理由对不对（现签一张证书、本机起一个 https 反代来跑）：
+node dev/trustedOrigin.js
+
 # 验问话卡片（模型问的选择题、扩展问的确认 / 输入 / 选一个：都长在会话的消息流里）；
 # 假数据、秒回：单选 / 多选 / 自己写 / 停止生成 / 确认 / 输入 / 选一个 / 刷新页面 各走一遍；
 # 还盯着两行小字：那两个输入框写着 enterkeyhint（手机键盘那颗键是回车，不是“下一项”），
@@ -216,6 +226,8 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `visit.js` | `npm run web:shot` 的入口：按动作跑一遍并截图 |
 | `focusCheck.js` | 验“每块屏各看各的会话”（两块浏览页面 + 模拟的 VSCode 窗口）：`node dev/focusCheck.js` |
 | `turnNotice.js` | 验“跑完发系统通知”（任何会话都发、点一下切过去、被停的那一轮不发、子会话不发、开关一关就不发；页面的 `Notification` 换成记账的假的）：`node dev/turnNotice.js` |
+| `askNotice.js` | 验“模型问选择题（ask_choice）也发一条系统通知”（同一个开关、同一个规矩：正看着它也发、别的屏在聊的会话在问也发、点一下切过去答；扩展问的确认 / 输入 / 选一个不发；开关一关就不发）：`node dev/askNotice.js` |
+| `trustedOrigin.js` | 验“页面是从 https 反代的地址打开的”（设置里 `webServer.trustedOrigins` 写下的来源放行、别人的照旧 403、反代后面页面照常收发、那个地址算“安全来源”所以通知发得出去；顺带看 http 地址下设置里给的理由对不对；现签证书 + 本机起一个 https 反代来跑）：`node dev/trustedOrigin.js` |
 | `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接 / 断线期间问的选择题）：`node dev/reconnect.js` |
 | `childDot.js` | 验顶条那颗小点（子会话在跑时父会话那颗点也呼吸；它与箭头落在两行中间）：`npm run web:shot -- --script dev/childDot.js` |
 | `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并 + 正文之后补来的那段跑完并回本段那颗）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |

@@ -1235,7 +1235,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      */
     public async askQuestion(req: AskRequest, sessionId?: string): Promise<void> {
         const answerDir = this.getConfig().askDir ?? "";
-        const answer = await this.askOnScreens(sessionId, {
+        const waiting = this.askOnScreens(sessionId, {
             kind: "choice",
             question: req.question,
             options: req.options,
@@ -1245,11 +1245,29 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             // 界面靠它把这行卡片挂到那条工具行下面
             ...(req.toolCallId ? { toolCallId: req.toolCallId } : {}),
         }, ChatHost.ASK_WAIT_MS, req.id, true);
+        // 卡片只发给“正看着这个会话”的屏；别的屏上也提醒一声（人在别的会话 / 别的窗口里时，
+        // 除了这一条没别的法子知道他该去答一句）。跟“跑完一轮”那条通知同一条路。
+        this.broadcastAskWaiting(sessionId, req);
+        const answer = await waiting;
         const picked: string[] = Array.isArray(answer?.picks)
             ? answer.picks.filter((x: unknown) => typeof x === "string")
             : [];
         const text = typeof answer?.text === "string" ? answer.text.trim() : "";
         writeAskAnswer(answerDir, { id: req.id, cancelled: !answer || (picked.length === 0 && !text), picked, text });
+    }
+
+    /**
+     * 模型在某个会话里问了一道选择题：每块屏都收到一条提醒（界面据此发一条系统通知，
+     * 见 media/chat.js 的 notifyAskFor）。这条不管通知开关都发：发不发由界面自己判断
+     * （本机给不给通知权限、开关开没开）。
+     */
+    private broadcastAskWaiting(sessionId: string | undefined, req: AskRequest): void {
+        const msg = {
+            type: "askWaiting",
+            sessionId: sessionId ?? "",
+            text: this.noticeLine(req.question, "问你一道选择题"),
+        };
+        this.forEachClient((_clientId, send) => { send({ ...msg }); });
     }
 
     /** 扩展不等这次提问了（超时 / 这一轮被停）：把还开着的那张卡片收掉（按没作答交回去）。 */

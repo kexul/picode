@@ -50,6 +50,31 @@ export function isLoopbackName(name: string): boolean {
 }
 
 /**
+ * 拆开 Host 头：主机名（一律小写；IPv6 写作 `[::1]`）与端口（没写就是 undefined）。
+ * 看不懂的头（空、括号不成对、端口不是数）返回 undefined。
+ */
+export function splitHostHeader(hostHeader: string | undefined): { name: string; port?: number } | undefined {
+    if (!hostHeader) { return undefined; }
+    const text = hostHeader.trim();
+    if (text === "") { return undefined; }
+    // IPv6 写法带方括号：[::1]:51833
+    if (text.startsWith("[")) {
+        const close = text.indexOf("]");
+        if (close < 0) { return undefined; }
+        const rest = text.slice(close + 1);
+        if (rest === "") { return { name: text.slice(0, close + 1).toLowerCase() }; }
+        const port = parsePort(rest);
+        return port === -1 ? undefined : { name: text.slice(0, close + 1).toLowerCase(), port };
+    }
+    const sep = text.indexOf(":");
+    const name = (sep < 0 ? text : text.slice(0, sep)).toLowerCase();
+    if (name === "") { return undefined; }
+    if (sep < 0) { return { name }; }
+    const port = parsePort(text.slice(sep + 1));
+    return port === -1 ? undefined : { name, port };
+}
+
+/**
  * Host 头是否指向本机且端口正确。
  *
  * 服务只监听本机时用它挡掉"域名重绑定"：别的网站让浏览器把请求发到
@@ -58,20 +83,27 @@ export function isLoopbackName(name: string): boolean {
  * @param port 服务实际监听的端口
  */
 export function isLoopbackHostHeader(hostHeader: string | undefined, port: number): boolean {
-    if (!hostHeader) { return false; }
-    let name = hostHeader.trim();
-    // IPv6 写法带方括号：[::1]:51833
-    if (name.startsWith("[")) {
-        const close = name.indexOf("]");
-        if (close < 0) { return false; }
-        const rest = name.slice(close + 1);
-        if (rest !== "" && parsePort(rest) !== port) { return false; }
-        return isLoopbackName(name.slice(0, close + 1));
+    const split = splitHostHeader(hostHeader);
+    if (!split) { return false; }
+    if (split.port !== undefined && split.port !== port) { return false; }
+    return isLoopbackName(split.name);
+}
+
+/**
+ * 人指定的那几个来源里的主机名（对照 Host 头用）。
+ *
+ * 服务前面挂了一层反代时，反代转给本服务的请求可能带的是原来那个 https 地址的 Host
+ * （tailscale serve 就是这样），本机那几个写法都对不上；那些域名得由人写下来才认。
+ */
+export function originHostnames(origins: readonly string[]): string[] {
+    const names: string[] = [];
+    for (const item of origins) {
+        const origin = normalizeOrigin(item);
+        if (!origin) { continue; }
+        const host = new URL(origin).hostname.toLowerCase();
+        if (host !== "" && !names.includes(host)) { names.push(host); }
     }
-    const sep = name.indexOf(":");
-    if (sep < 0) { return isLoopbackName(name); }
-    if (parsePort(name.slice(sep + 1)) !== port) { return false; }
-    return isLoopbackName(name.slice(0, sep));
+    return names;
 }
 
 /** 解析 ":51833" 或 "51833"；不是数字返回 -1。 */
@@ -107,17 +139,37 @@ export function isWildcardHost(host: string): boolean {
 }
 
 /**
+ * 一个地址规范化成“来源”的写法（协议 + 主机 + 端口，比如 `https://metalbone.tail766f2b.ts.net`）。
+ *
+ * 设置文件里是人手写的，写法五花八门：末尾带斜杠、带路径、大小写不一。统一成浏览器在
+ * Origin 头里发的那种写法，好直接比对。不是 http / https 的地址返回 undefined。
+ */
+export function normalizeOrigin(text: string): string | undefined {
+    let url: URL;
+    try {
+        url = new URL(String(text).trim());
+    } catch {
+        return undefined;
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") { return undefined; }
+    return url.origin;
+}
+
+/**
  * Origin 头里的地址是否就是服务自己。
  *
  * 浏览器发请求时会带上发请求那个页面的地址。别的网站里的脚本想用 JS 偷偷发请求
  * 给本服务（哪怕本服务只听本机地址），它带的 Origin 是自己网站的域名，
- * 不在下面这份名单里，直接拒绝。不带 Origin 的请求（本服务自己的页面之外的命令行工具、
+ * 不在下面这两份名单里，直接拒绝。不带 Origin 的请求（本服务自己的页面之外的命令行工具、
  * curl 等）放行，那些请求没有浏览器参与，也不存在被别人偿偿发来的问题。
  * @param originHeader 请求的 Origin 头（可能缺省）
  * @param port 服务实际监听的端口
  * @param ownHostnames 这台机器上合法的地址写法（由 localHostnames 算）
+ * @param trustedOrigins 人另外指定的来源（设置文件里的 webServer.trustedOrigins）。
+ *        服务前面挂了一层反向代理（比如 Tailscale 的 https）时，页面是从那个地址打开的，
+ *        Origin 也就是它；那些地址看不出来是本机，只能由人明确写下来才认。
  */
-export function isSameOrigin(originHeader: string | undefined, port: number, ownHostnames: readonly string[]): boolean {
+export function isSameOrigin(originHeader: string | undefined, port: number, ownHostnames: readonly string[], trustedOrigins: readonly string[] = []): boolean {
     if (!originHeader) { return true; }
     let url: URL;
     try {
@@ -125,9 +177,11 @@ export function isSameOrigin(originHeader: string | undefined, port: number, own
     } catch {
         return false;
     }
+    // 人另外指定的来源先放行：它一般不是本机地址，也不是本服务的端口
+    if (trustedOrigins.some((item) => normalizeOrigin(item) === url.origin)) { return true; }
     const originPort = url.port !== "" ? Number(url.port) : (url.protocol === "https:" ? 443 : 80);
     if (originPort !== port) { return false; }
-    // 本服务只有 http：https 那个地址不可能是本服务的页面
+    // 本服务自己不认 https：走反代的 https 地址得先在 trustedOrigins 里写上
     if (url.protocol !== "http:") { return false; }
     return ownHostnames.some((name) => name.toLowerCase() === url.hostname.toLowerCase());
 }
@@ -308,6 +362,7 @@ export const PAGE_TRANSIENT_MESSAGE_TYPES: ReadonlySet<string> = new Set([
     "pickerCancel",              // 浮层超时取消
     "openSettings",              // 打开设置面板
     "turnEnd",                   // 某个会话跑完了一轮（系统通知 + “有新消息”那颗点）
+    "askWaiting",                // 某个会话里模型问了一道选择题（系统通知）：这条只是提醒，错过了还有卡片可补
     // 下面两条走 sendTo 定向发给请求它的那个页面，本来就不进补发暂存；列在这里是
     // 防以后改走广播时，把好几百 KB 的截图塞进补发暂存，把真正的历史消息挤掉。
     "desktopScreenshot",         // 桌面截图（网页端“桌面截图”按钮）

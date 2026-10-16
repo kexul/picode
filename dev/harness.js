@@ -94,6 +94,7 @@ function packageVersion() {
  * @param {boolean} [options.fakePi]  用假模型（dev/fakePi.js）：不调真模型，按剧本秒回（界面调试用）
  * @param {string} [options.piPath]   覆盖设置里的 piPath（默认 "pi"，走 PATH）
  * @param {string} [options.theme]    界面颜色："light" 或 "dark"（默认 light）
+ * @param {string[]} [options.trustedOrigins] 设置文件里的 webServer.trustedOrigins（服务前面挂 https 反代时用）
  * @param {(text: string) => void} [options.log] 日志出口（默认打到标准输出）
  * @returns {{ provider: any, start: () => Promise<string>, stop: () => Promise<void>, url: () => string|undefined, cwd: string }}
  */
@@ -136,6 +137,10 @@ function createHarness(options = {}) {
         patch.piPath = path.join(__dirname, process.platform === "win32" ? "fake-pi.cmd" : "fake-pi.sh");
     }
     if (options.piPath !== undefined) { patch.piPath = options.piPath; }
+    // 上一跑留下的显示选项（state.json）会盖掉下面刚写的设置：界面点过的优先于设置文件
+    // （见 ChatHost.readOption）。比如上一个检查验完把“跑完发系统通知”关了，这一跑就悄悄不生效。
+    // 调试目录本来就是一次性的，直接丢掉这份存档，让每次调试都从下面这份设置开始。
+    try { fs.rmSync(path.join(SCRATCH_PICHAT_DIR, "state.json"), { force: true }); } catch { /* 删不掉就按旧值跑 */ }
     updateServerConfig(patch, SCRATCH_PICHAT_DIR);
 
     // 派子会话要用的文件：真后端启动器会写，这里也得写一份（不然调试时派子会话是坏的）
@@ -168,6 +173,7 @@ function createHarness(options = {}) {
                 cwd,
                 port: Number.isInteger(options.port) ? options.port : 51999,
                 host: options.host || "127.0.0.1",
+                trustedOrigins: options.trustedOrigins,
                 log,
             });
             return started.url;

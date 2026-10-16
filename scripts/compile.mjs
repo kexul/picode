@@ -1,5 +1,5 @@
 /*
- * 把三份编译配置一次跑完。
+ * 把三份编译配置一次跑完，外加桌面截图那支小程序。
  *
  * 为什么要分三份：插件那侧（一屏界面 + 一双打开文件的手）与后端那侧（会话、网页服务）
  * 编到不同目录，打进插件包里的只有插件那侧；第三份不产出文件，只把 src 下全部源码
@@ -7,9 +7,11 @@
  * 一个 tsc 一次只有一个输出目录，所以这里挨个跑、或者各起一个。
  *
  *   node scripts/compile.mjs           挨个跑一遍，哪份错了就停在那里（npm run compile）
- *   node scripts/compile.mjs --watch   三份各起一个 tsc -w，改一下就编一下（npm run watch）
+ *   node scripts/compile.mjs --watch   三份各起一个 tsc -w，改一下就编一下（npm run watch；
+ *                                      截屏小程序不在里面，改过 bin/shot.cs 就跑一次 npm run compile）
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 
@@ -29,6 +31,11 @@ const projects = [
     // 这份就是 tsconfig.json：src 下全量过一遍类型检查（不产出文件），编辑器也认它。
     { label: "全量检查", config: "tsconfig.json" },
 ];
+
+// 桌面截图那支小程序的源码与产物（见 bin/shot.cs、src/desktopScreenshot.ts）：
+// 用系统自带的 csc.exe 编成 bin/shot.exe，随 npm 包一起装到后端那边。
+const SHOT_SOURCE = path.join(repoRoot, "bin", "shot.cs");
+const SHOT_EXE = path.join(repoRoot, "bin", "shot.exe");
 
 const watch = process.argv.includes("--watch");
 
@@ -59,7 +66,63 @@ async function compileOnce() {
             process.exit(code);
         }
     }
-    process.stdout.write("三份都编完了。\n");
+    compileShotExe();
+    process.stdout.write("都编完了。\n");
+}
+
+/**
+ * 编桌面截图那支小程序（bin/shot.cs → bin/shot.exe）。
+ *
+ * 编不出来不算构建失败：运行时会退回 PowerShell 那套（见 src/desktopScreenshot.ts），
+ * 慢一些但一样能用。所以这里只提醒一句，不拦路。
+ */
+function compileShotExe() {
+    process.stdout.write(`· 截屏小程序（bin/shot.cs → bin/shot.exe）\n`);
+    if (process.platform !== "win32") {
+        process.stdout.write("  （不是 Windows，跳过：桌面截图只在 Windows 上能用，没必要编）\n");
+        return;
+    }
+    const csc = findCsc();
+    if (!csc) {
+        process.stdout.write("  （没找到 csc.exe，跳过：运行时会退回 PowerShell 那套，慢一些）\n");
+        return;
+    }
+    try {
+        // 源码没动过就别编：npm run web:shot 每条命令都会走到这里来
+        if (fs.statSync(SHOT_EXE).mtimeMs >= fs.statSync(SHOT_SOURCE).mtimeMs) {
+            process.stdout.write("  （没改动，跳过）\n");
+            return;
+        }
+    } catch { /* 产物还没有，往下走就是 */ }
+    const result = spawnSync(csc, [
+        "-nologo", "-optimize+", "-target:exe", "-platform:anycpu",
+        // 源码是 UTF-8，不指明的话 csc 按系统代码页读，中文注释会乱
+        "-codepage:65001",
+        // 路径里有空格时由 Node 自己加引号，别在这儿手写引号（csc 会把引号当成文件名的一部分）
+        `-out:${SHOT_EXE}`,
+        "-r:System.Drawing.dll",
+        SHOT_SOURCE,
+    ], { cwd: repoRoot, encoding: "utf8" });
+    if (result.status !== 0) {
+        process.stdout.write(`  × 没编成（csc 退出码 ${result.status}），运行时会退回 PowerShell 那套\n`);
+        if (result.stdout) { process.stdout.write(result.stdout); }
+        if (result.stderr) { process.stderr.write(result.stderr); }
+        return;
+    }
+    process.stdout.write("  编好了。\n");
+}
+
+/** 找系统自带的 csc.exe（64 位那份优先，退回 32 位那份）。找不到返回 undefined。 */
+function findCsc() {
+    const windows = process.env.WINDIR || "C:\\Windows";
+    const candidates = [
+        path.join(windows, "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe"),
+        path.join(windows, "Microsoft.NET", "Framework", "v4.0.30319", "csc.exe"),
+    ];
+    for (const item of candidates) {
+        try { if (fs.existsSync(item)) { return item; } } catch { /* 换下一个 */ }
+    }
+    return undefined;
 }
 
 /** 三份各起一个 tsc -w：一个进度慢不影响别的。输出混在一个终端里，每行标上是谁说的。 */

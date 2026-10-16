@@ -418,7 +418,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 action: "notifyTurnEnd",
                 label: "跑完发系统通知",
                 desc: "任何会话（别的屏在聊的、后台的也算）跑完一轮都发一条系统通知，点一下切到那个会话；"
-                    + "别人派的子会话不算（它的结果交回派它的那个会话，那边跑完再发）。"
+                    + "模型在那儿问你一道选择题时也发一条，免得你不知道它在等你答。"
+                    + "别人派的子会话跑完不算（它的结果交回派它的那个会话，那边跑完再发）。"
                     + "每台设备能不能收到看它自己的浏览器：没给通知权限、手机上用局域网地址打开时都收不到",
                 check: this.notifyTurnEndEnabled(),
             },
@@ -1328,12 +1329,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 通知里那一行正文：这一轮最后一段回复的头一行（截短）；出错就直说。 */
     private turnEndNoticeText(info: TurnEndInfo): string {
         if (info.status === "error") { return "本轮出错结束"; }
-        const line = (info.lastReplyText ?? "")
+        return this.noticeLine(info.lastReplyText, "跑完了一轮");
+    }
+
+    /** 系统通知里那一行正文：一段文字压成一行（取第一个非空行），太长截短；没有内容就用 fallback。 */
+    protected noticeLine(text: string | undefined, fallback: string): string {
+        const line = (text ?? "")
             .split(/\r?\n/)
             .map((s) => s.trim())
             .find((s) => s.length > 0) ?? "";
         const oneLine = line.replace(/\s+/g, " ");
-        if (!oneLine) { return "跑完了一轮"; }
+        if (!oneLine) { return fallback; }
         return oneLine.length > ChatControllerBase.TURN_NOTICE_MAX
             ? oneLine.slice(0, ChatControllerBase.TURN_NOTICE_MAX) + "…"
             : oneLine;

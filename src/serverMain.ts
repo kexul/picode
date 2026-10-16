@@ -172,6 +172,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
             cwd: path.resolve(args.cwd ?? process.cwd()),
             port: args.port ?? cfg.webServer.port,
             host: args.host ?? cfg.webServer.host,
+            trustedOrigins: cfg.webServer.trustedOrigins,
             log,
         });
     } catch (err: any) {
@@ -216,6 +217,11 @@ export interface StartBackendOptions {
     host?: string;
     /** 日志出口。 */
     log?: (text: string) => void;
+    /**
+     * 另外信得过的来源（设置文件里的 webServer.trustedOrigins）：服务前面挂了一层 https 反代时，
+     * 页面就从那个地址打开，页里发的请求带的 Origin 也是它。
+     */
+    trustedOrigins?: string[];
 }
 
 /** 起好的后端。 */
@@ -247,7 +253,12 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
         info: () => ({ version: VERSION }),
     });
 
-    const settings: WebServerSettings = { enabled: true, port: options.port ?? 0, host: bindHost };
+    const settings: WebServerSettings = {
+        enabled: true,
+        port: options.port ?? 0,
+        host: bindHost,
+        trustedOrigins: options.trustedOrigins ?? [],
+    };
     await server.applySettings(settings);
 
     const url = server.url;

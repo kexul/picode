@@ -17,6 +17,8 @@ import {
     isSameOrigin,
     isWildcardHost,
     localHostnames,
+    originHostnames,
+    splitHostHeader,
     type PageChannel,
 } from "./webTransport";
 import { insideFolder, relativeTo } from "./pathRules";
@@ -149,6 +151,11 @@ export interface WebServerSettings {
     port: number;
     /** 监听地址；默认 0.0.0.0（同一网络里的设备都能访问）。 */
     host: string;
+    /**
+     * 人另外指定的来源（服务前面挂了一层 https 反代时，页面就是从那个地址打开的）。
+     * 不在里面的一律当成别人网站偷偷发来的请求顶回去，所以只有人亲手写下的才进来。
+     */
+    trustedOrigins: string[];
 }
 
 /**
@@ -217,6 +224,10 @@ export class PiChatWebServer {
     private boundPort = 0;
     /** 这台机器合法的地址写法（对照请求里的 Origin，挡别的网站偷偷发来的请求）。 */
     private ownHostnames: string[] = [];
+    /** 人另外指定的来源（设置里的 webServer.trustedOrigins）：反代那一层的地址，照旧放行。 */
+    private trustedOrigins: string[] = [];
+    /** 上面那些来源里的主机名（对照 Host 头用：反代转来的 Host 可能还是原来那个域名）。 */
+    private trustedHostnames: string[] = [];
     /** 页面标识 → 它那条连接的响应对象（心跳要往里写 tick）。 */
     private readonly streams = new Map<string, http.ServerResponse>();
     /** 屏标识 → 它那条连接的响应对象。 */
@@ -229,7 +240,7 @@ export class PiChatWebServer {
     private readonly gzipCache = new Map<string, Buffer>();
     /** 本次监听开始服务的时刻（`/health` 报出去；重启会更新）。 */
     private startedAt = 0;
-    private settings: WebServerSettings = { enabled: false, port: 0, host: "0.0.0.0" };
+    private settings: WebServerSettings = { enabled: false, port: 0, host: "0.0.0.0", trustedOrigins: [] };
 
     constructor(
         private readonly mediaDir: string,
@@ -263,7 +274,7 @@ export class PiChatWebServer {
     /** 按设置启动或停止；地址变了会通知外部刷新提示。 */
     public async applySettings(settings: WebServerSettings): Promise<void> {
         const changed = (a: WebServerSettings, b: WebServerSettings) =>
-            a.port !== b.port || a.host !== b.host;
+            a.port !== b.port || a.host !== b.host || a.trustedOrigins.join(" ") !== b.trustedOrigins.join(" ");
         const running = this.server !== undefined;
         if (settings.enabled) {
             if (running && !changed(this.settings, settings)) { return; }
@@ -309,6 +320,8 @@ export class PiChatWebServer {
             this.boundPort = address.port;
         }
         this.ownHostnames = localHostnames(this.boundHost);
+        this.trustedOrigins = settings.trustedOrigins ?? [];
+        this.trustedHostnames = originHostnames(this.trustedOrigins);
         if (this.boundPort === 0) {
             // 理论上不会走到这里：监听成了却读不到端口
             this.hooks.log("监听已就绪，但读不到端口（地址未知），网页服务不开了。");
@@ -463,12 +476,21 @@ export class PiChatWebServer {
      *   Host：只监听本机地址时严查，挡“域名重绑定”（别的域名解析到 127.0.0.1 来试探）；
      *   Origin：不管监听在哪里都查，挡“你浏览的某个网站里的脚本偷偷发请求给本服务”
      *           （这种请求即使服务只听本机地址也能发到）。
+     * 设置里写了 trustedOrigins（页面是从 https 反代那个地址打开的）的，那两个检查都把它当自己人：
+     * 它本来就不是本机地址、也不是本服务的端口，不带这一份名单就会被顶回去。
      */
     private originAllowed(req: http.IncomingMessage): boolean {
-        if (isLoopbackName(this.boundHost) && !isLoopbackHostHeader(req.headers.host, this.boundPort)) {
+        if (isLoopbackName(this.boundHost) && !this.hostHeaderAllowed(req)) {
             return false;
         }
-        return isSameOrigin(req.headers.origin as string | undefined, this.boundPort, this.ownHostnames);
+        return isSameOrigin(req.headers.origin as string | undefined, this.boundPort, this.ownHostnames, this.trustedOrigins);
+    }
+
+    /** Host 头可不可接受：监听在本机地址上时，要么是本机写法，要么是人写下的来源里的域名。 */
+    private hostHeaderAllowed(req: http.IncomingMessage): boolean {
+        if (isLoopbackHostHeader(req.headers.host, this.boundPort)) { return true; }
+        const split = splitHostHeader(req.headers.host);
+        return !!split && this.trustedHostnames.includes(split.name);
     }
 
     private sendPage(req: http.IncomingMessage, res: http.ServerResponse, pageId: string): void {

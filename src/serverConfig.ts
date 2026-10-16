@@ -11,6 +11,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { serverConfigFile } from "./serverPaths";
+import { normalizeOrigin } from "./webTransport";
 import {
     DEFAULT_AUTO_LOAD_LAST,
     DEFAULT_FOCUS_INPUT_KEY,
@@ -31,6 +32,12 @@ export interface ServerWebSettings {
     enabled: boolean;
     port: number;
     host: string;
+    /**
+     * 人另外指定的来源（服务前面挂了一层 https 反代时用）：写成
+     * `"https://metalbone.tail766f2b.ts.net"` 这样，页面就是这个地址打开的。
+     * 不写就只能用本机地址、或同一网络里的 http 地址打开。
+     */
+    trustedOrigins: string[];
 }
 
 export interface ServerConfig {
@@ -70,7 +77,7 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = deepFreeze({
     notifyTurnEnd: DEFAULT_NOTIFY_TURN_END,
     themeMode: DEFAULT_THEME_MODE,
     // 默认对所有网卡开放（手机等设备打开地址就能用）；只给自己用就改 127.0.0.1，或启动时加 --host 127.0.0.1
-    webServer: { enabled: true, port: 51883, host: "0.0.0.0" },
+    webServer: { enabled: true, port: 51883, host: "0.0.0.0", trustedOrigins: [] },
 });
 
 /** 让默认值对象（连着里面的数组、子对象）只读；不改调用方传进来的东西。 */
@@ -89,7 +96,7 @@ function defaults(): ServerConfig {
     return {
         ...DEFAULT_SERVER_CONFIG,
         extraArgs: [],
-        webServer: { ...DEFAULT_SERVER_CONFIG.webServer },
+        webServer: { ...DEFAULT_SERVER_CONFIG.webServer, trustedOrigins: [] },
     };
 }
 
@@ -167,6 +174,29 @@ function pickInt(value: unknown, min: number, max: number, fallback: number, lab
     return value;
 }
 
+/**
+ * 另外信得过的来源（反代那一层的地址）：一串字符串，每一项都规范化成“来源”的写法。
+ * 写错的那几项只丢它自己（告一声），不把整份设置回落成默认值：别的项还好好的。
+ */
+function pickOrigins(value: unknown, warnings: string[]): string[] {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) {
+        warnings.push("webServer.trustedOrigins 不是数组，已当成空列表");
+        return [];
+    }
+    const kept: string[] = [];
+    let bad = 0;
+    for (const item of value) {
+        const origin = typeof item === "string" ? normalizeOrigin(item) : undefined;
+        if (!origin) { bad += 1; continue; }
+        if (!kept.includes(origin)) { kept.push(origin); }
+    }
+    if (bad > 0) {
+        warnings.push(`webServer.trustedOrigins 里有 ${bad} 项不是 http / https 地址，已丢掉`);
+    }
+    return kept;
+}
+
 /** 把任意来源的对象规范化成 ServerConfig。这层全是纯函数。 */
 export function normalizeServerConfig(raw: unknown): { config: ServerConfig; warnings: string[] } {
     const warnings: string[] = [];
@@ -239,6 +269,7 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
                 web.port, 0, 65535, DEFAULT_SERVER_CONFIG.webServer.port, "webServer.port", warnings, "（0 表示自动挑端口）",
             );
             config.webServer.host = pickNonEmptyString(web.host, DEFAULT_SERVER_CONFIG.webServer.host, "webServer.host", warnings);
+            config.webServer.trustedOrigins = pickOrigins(web.trustedOrigins, warnings);
             const knownWebKeys = new Set(Object.keys(DEFAULT_SERVER_CONFIG.webServer));
             const unknownWebKeys = Object.keys(web).filter((key) => !knownWebKeys.has(key));
             if (unknownWebKeys.length > 0) {

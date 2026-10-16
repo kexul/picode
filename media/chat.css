@@ -1,4 +1,11 @@
-  :root { color-scheme: light dark; }
+  /* 「选中 / 当前」那一行铺的底色：把主题的选中色兑淡一层，不铺实心选中色。
+     实心色上（浅色主题的选中色是 #0060c0），行里那些本来靠 opacity 压暗的小字（路径、上下文、
+     provider）只剩 3 左右，看着糊；兑淡之后行里的字色照旧走普通前景。
+     选中那一行另配左边一条色条，见 .pk-item.active / .sm-item.current / .file-item.active。 */
+  :root {
+    color-scheme: light dark;
+    --pk-select-tint: color-mix(in srgb, var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.5)) 42%, transparent);
+  }
   html, body { height: 100%; margin: 0; padding: 0; }
   body {
     display: flex; flex-direction: column;
@@ -125,7 +132,10 @@
   #sessionMenu.hidden { display: block; opacity: 0; pointer-events: none; visibility: hidden; }
   .sm-item { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 4px; cursor: pointer; user-select: none; }
   .sm-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
-  .sm-item.current { background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.28)); color: var(--vscode-list-activeSelectionForeground, inherit); }
+  .sm-item.current {
+    background: var(--pk-select-tint); color: var(--vscode-foreground);
+    box-shadow: inset 2px 0 0 0 var(--vscode-focusBorder, #007acc);
+  }
   .sm-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9em; }
   /* 一行两段：名在上、路径在下 */
   .sm-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
@@ -349,7 +359,9 @@
   }
   #fileMenu.hidden { display: block; opacity: 0; transform: translateY(4px); pointer-events: none; visibility: hidden; }
   .file-item { padding: 4px 10px; cursor: pointer; font-size: 0.85em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background 150ms; }
-  .file-item.active, .file-item:hover { background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.3)); color: var(--vscode-list-activeSelectionForeground, inherit); }
+  .file-item.active, .file-item:hover { background: var(--pk-select-tint); color: var(--vscode-foreground); }
+  /* 光标停在那一行（方向键挑的 / 鼠标点中的）：单独补一条色条，跟只是鼠标扫过分开 */
+  .file-item.active { box-shadow: inset 2px 0 0 0 var(--vscode-focusBorder, #007acc); }
   .file-item .dir { opacity: 0.55; font-size: 0.9em; }
   .file-item .hash-kind { display: inline-block; }
   .file-item .hash-kind svg { width: 1em; height: 1em; vertical-align: -0.15em; margin-right: 4px; }
@@ -554,8 +566,20 @@
   .pk-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
   /* 列表里没有「选中的那一行」这回事了：鼠标停在哪行哪行亮（上面那条 :hover，移开就灭），
      点哪行算哪行。底下这条 .active 只剩「切换模型」那层里「待应用」的那一行用 */
-  .pk-item.active { background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.3)); color: var(--vscode-list-activeSelectionForeground, inherit); }
+  .pk-item.active {
+    background: var(--pk-select-tint); color: var(--vscode-foreground);
+    box-shadow: inset 3px 0 0 0 var(--vscode-focusBorder, #007acc);
+  }
   .pk-item.current { box-shadow: inset 3px 0 0 0 var(--vscode-focusBorder, #007acc); }
+  /* 选中 / 悬停那一行铺上兑淡的选中色之后，行里那些压暗的小字还是比普通行糊（浅色主题里：
+     压到 0.55 的深色小字在淡蓝底上只剩 3 上下，普通行是 3.7）：选中那一行里统一压到 0.8。
+     这几行就是全部铺实心 / 淡选中色的地方：切换模型那层、会话名下拉、三个下拉（选中或鼠标停着）、
+     项目与会话侧边栏里当前工作区 / 当前会话那两行的悬停。 */
+  .pk-item.active .pk-desc, .pk-item.active .pk-detail, .pk-item.active .pk-thinking-label, .pk-item.active .pk-thinking-unsupported,
+  .sm-item.current .sm-path,
+  .file-item.active .dir, .file-item:hover .dir,
+  .pk-host.pk-drawer .pk-item.current:hover .pk-history-right,
+  .pk-host.pk-workspace .pk-item.pk-space.current:hover .pk-space-path-inline { opacity: 0.8; }
   /* 模型项：左侧模型信息，右侧只给「待应用」那一行（.active）铺推理档位。 */
   .pk-model-item {
     display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, 220px);
@@ -608,8 +632,8 @@
   /* 鼠标停在「当前」那一行上：比它那层淡底色更重，才看得出变化
      （项目与会话面板自己有另一套灰底规则，写在下面，会盖掉这条） */
   .pk-host.pk-drawer .pk-item.current:hover {
-    background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.3));
-    color: var(--vscode-list-activeSelectionForeground, inherit);
+    background: var(--pk-select-tint);
+    color: var(--vscode-foreground);
   }
   /* 分节标题（正在对话 / 历史会话 / 工作区）：左对齐，上面一条细线把它跟上一节断开；
      标题用正文字色（原来是一行居中、低对比度的灰字，三节看着一样）。 */
@@ -767,7 +791,7 @@
   .pk-host.pk-workspace .pk-loadmore.pk-group-more { margin: 6px 0 6px 50px; }
   /* 当前工作区那一行本来有一层淡底色：鼠标停在上面时按普通可点行的样子亮一下 */
   .pk-host.pk-workspace .pk-item.pk-space.current:hover {
-    background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.3));
+    background: var(--pk-select-tint);
   }
   /* 那颗加号：鼠标停在这一行才露出来（触屏上常显、淡一点，见下面那一条）。 */
   .pk-host.pk-workspace .pk-item.pk-space .pk-space-add {
