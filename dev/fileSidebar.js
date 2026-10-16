@@ -12,6 +12,7 @@
  *      里面留一句提示；
  *      第一个标签是「项目目录」（当前会话的目录，悬停提示给全路径、这一列的头分两行写着
  *      「会话目录 + 现在走到的这一层」，没有关闭那颗叉）：
+ *      标签一律一样高（有文件的标签里那颗叉撑着高度，只剩「项目目录」自己开着时也不许缩成一薄条）：
  *      点文件链接开的文件排在它后面的新标签里、不顶掉它；这一列空着（刚打开、刷新页面）
  *      先看到的就是它；从它那一格里点进子目录、点开文件跟票 05 是同一套清单；
  *      目录不占标签——点目录链接、点清单里的子目录都在这一格里发生，清单最上面一行「上一层」
@@ -574,6 +575,7 @@ module.exports = async (page) => {
                 hitVisible: !!(hitRect && bodyRect
                     && hitRect.top >= bodyRect.top - 1 && hitRect.bottom <= bodyRect.bottom + 1),
                 tabShown: !!bar && getComputedStyle(bar).display !== "none" && bar.getBoundingClientRect().height > 0,
+                tabHeights: tabs.map(function (t) { return Math.round(t.getBoundingClientRect().height); }),
                 tabCount: tabs.length,
                 tabNames: tabs.map(function (t) { return (t.querySelector(".file-tab-name") || {}).textContent || ""; }),
                 tabPaths: tabs.map(function (t) { return t.getAttribute("data-path") || ""; }),
@@ -875,6 +877,10 @@ module.exports = async (page) => {
         wide5.tabShown && wide5.tabCount === 2 && wide5.projCount === 1 && wide5.projIndex === 0
         && projName(wide5) === "项目目录" && wide5.tabPaths[1] === FILE.long && wide5.tabActive === 1,
         JSON.stringify({ names: wide5.tabNames, active: wide5.tabActive }));
+    check("那格标签跟文件的标签一样高（只有它自己开着的时候也不缩成一薄条）",
+        wide5.tabHeights.length === 2 && wide5.tabHeights[0] === wide5.tabHeights[1]
+        && wide1proj.tabHeights.length === 1 && wide1proj.tabHeights[0] === wide5.tabHeights[0],
+        JSON.stringify({ 只有项目目录: wide1proj.tabHeights, 跟文件一起: wide5.tabHeights }));
     check("两格标签里只有文件那格有叉（项目目录那格关不掉）",
         wide5.tabCloseCount === 1 && wide5.projClose === false);
     check("正文很长也不把面板头挤扁（跟顶条的横线还是齐的）", wide5.fileHeaderBottom === wide5.barBottom,

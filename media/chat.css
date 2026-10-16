@@ -1165,7 +1165,8 @@
   .file-title-line.file-title-in { font-size: calc(var(--vscode-font-size, 13px) - 2px); line-height: 1.25; opacity: 0.75; }
   /* 标签条：这一列头下面、正文上面，看过的文件一个占一个标签（见 chat.js）。
      点名字切过去、点那颗叉关掉；开着的多了往右跑，这一条自己左右滚。
-     一个标签都没有时整条不占地方（:empty 那条），这一列里就只剩一句提示。 */
+     一个标签都没有时整条不占地方（:empty 那条），这一列里就只剩一句提示。
+     高度一律按 .file-tab 的 min-height 来（见下）：这一条不许被里面装的东西撑矮撑高。 */
   #fileTabs {
     flex: 0 0 auto; min-width: 0; display: flex; align-items: stretch;
     overflow-x: auto; overflow-y: hidden;
@@ -1174,8 +1175,12 @@
   #fileTabs:empty { display: none; }
   #fileTabs::-webkit-scrollbar { height: 6px; }
   #fileTabs::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 3px; }
+  /* 一格标签：每格一样高、一样宽窄（min-height 这一句是给「项目目录」那一格兜底的——
+     它没有右边那颗叉，只剩它自己开着的时候，这一条会缩成一行字那么矮，
+     跟有文件的标签（叉是固定 18px，撑着高度）一比就矮一截）。 */
   .file-tab {
-    flex: 0 1 auto; min-width: 64px; max-width: 170px; display: flex; align-items: center; gap: 2px;
+    flex: 0 1 auto; box-sizing: border-box; min-width: 64px; max-width: 170px; min-height: 28px;
+    display: flex; align-items: center; gap: 2px;
     padding: 3px 4px 3px 10px; cursor: pointer; user-select: none; white-space: nowrap;
     font-size: calc(var(--vscode-font-size, 13px) - 2px);
     border-right: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
