@@ -13,7 +13,7 @@
  * 停完再看名录，看到的就是被停之后的收尾状态。
  *
  * 三处讲究：
- *   - 每发一句都等这一轮真跑完（看输入框角上那颗「停止生成」）再发下一句：不等的话上一轮还在
+ *   - 每发一句都等这一轮真跑完（看消息流末尾那颗「停止生成」）再发下一句：不等的话上一轮还在
  *     流式时下一句就进去了，两轮会叠在一起跑（假 pi 不排队，真 pi 会）。
  *   - 每条断言只看"最后一个助手气泡"：上一轮的回话还留在页面上，拿整段助手文字去比会误判。
  *   - 别拿整页文字去 includes：工具回话在页面上只出现在悬浮提示框里，而那一层挂在 body 上，
@@ -35,8 +35,8 @@ module.exports = async (page) => {
   const lastAssistant = () => page.eval("var a = document.querySelectorAll('.msg.assistant'); var e = a[a.length - 1]; return e ? e.textContent : '';");
   /** 交回的结果落在用户那侧气泡里。 */
   const userText = () => page.eval("return Array.from(document.querySelectorAll('.msg.user')).map(function (e) { return e.textContent; }).join('\\n');");
-  /** 生成中时输入框角上那颗「停止生成」露着。 */
-  const generating = () => page.eval("var b = document.getElementById('stopBtn'); return !!(b && !b.classList.contains('hidden'));");
+  /** 生成中时消息流末尾那颗「停止生成」露着。 */
+  const generating = () => page.eval("var b = document.getElementById('stopHintBtn'); return !!(b && !b.classList.contains('hidden'));");
 
   /** 说一句、等最后一个气泡里出现要等的字、再等这一轮收尾，最后把这一轮的文字取回来。 */
   const say = async (text, want) => {

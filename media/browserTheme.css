@@ -99,26 +99,4 @@ html, body {
 #input {
   box-sizing: border-box;
   min-height: var(--pichat-input-min-height, 30px);
-  padding-right: 36px; /* 右边给生成中的“停止生成”图标留位置，文字不会钻到图标底下 */
 }
-
-/*
-  输入框内的“停止生成”按钮（图是 browserBridge.js 建的，显示与隐藏由 chat.js 管）：
-  只有生成中才露面（默认带 .hidden），手机上点它等于给当前会话按 Esc。
-*/
-#stopBtn {
-  position: absolute; right: 8px; top: 50%; transform: translateY(-50%); z-index: 5;
-  width: 22px; height: 22px; padding: 0;
-  display: flex; align-items: center; justify-content: center;
-  border: none;
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--vscode-button-background, #0e639c) 14%, transparent);
-  color: var(--vscode-button-background, #0e639c);
-  cursor: pointer;
-}
-
-/* 图标是 browserBridge.js 内联的实心停止方块。 */
-#stopBtn svg { width: 12px; height: 12px; display: block; }
-
-#stopBtn:hover { background: color-mix(in srgb, var(--vscode-button-background, #0e639c) 26%, transparent); }
-#stopBtn.hidden { display: none; }

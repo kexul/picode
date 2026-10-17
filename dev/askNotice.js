@@ -101,7 +101,7 @@ async function pickOption(page, index) {
 /** 等这一轮跑完（停止生成那颗按钮收起来）。 */
 async function waitIdle(page) {
     await waitFor(
-        () => page.eval("const b = document.getElementById('stopBtn'); return !!(b && b.classList.contains('hidden'));"),
+        () => page.eval("const b = document.getElementById('stopHintBtn'); return !!(b && b.classList.contains('hidden'));"),
         30000,
         "这一轮跑完",
     );

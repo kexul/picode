@@ -145,8 +145,8 @@ async function main() {
         // ---- 3. 自己按 Esc 停掉的那一轮：不算跑完，不发 ----
         const before = (await popsOf(a)).length;
         await a.send("这一句会被停掉");
-        await waitFor(() => a.eval("const b = document.getElementById('stopBtn'); return !!(b && !b.classList.contains('hidden'));"), 20000, "停止按钮出现");
-        await a.click("#stopBtn");
+        await waitFor(() => a.eval("const b = document.getElementById('stopHintBtn'); return !!(b && !b.classList.contains('hidden'));"), 20000, "停止按钮出现");
+        await a.click("#stopHintBtn");
         await sleep(6000);   // 等这一轮收尾（假模型会把剩下的剧本演完；真 pi 是收到 abort 就收）
         check((await popsOf(a)).length === before, "按 Esc 停掉的那一轮不发通知");
 

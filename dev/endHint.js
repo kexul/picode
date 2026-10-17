@@ -23,8 +23,9 @@ module.exports = async (page) => {
     /** 这颗胶囊的现状：在不在、哪一副脸、是不是末尾那一条、输入框里有什么、停止图标露没露。 */
     const state = () => page.eval(`
         const pane = document.querySelector(".session-pane");
-        const h = pane ? pane.querySelector(".msg-endhint") : null;
-        const s = document.getElementById("stopBtn");
+        const row = pane ? pane.querySelector(".end-hint-row") : null;
+        const h = row ? row.querySelector(".msg-endhint:not(.msg-endhint-stop)") : null;
+        const s = document.getElementById("stopHintBtn");
         const inp = document.getElementById("input");
         const users = pane ? Array.from(pane.querySelectorAll(".msg.user")) : [];
         const text = pane ? pane.innerText.replace(/\\s+/g, " ") : "";
@@ -32,7 +33,7 @@ module.exports = async (page) => {
             hint: Boolean(h) && !h.classList.contains("hidden"),
             face: h ? (h.dataset.mode || "") : "",
             faceText: h ? h.innerText.replace(/\\s+/g, " ").trim() : "",
-            atEnd: Boolean(h) && pane.lastElementChild === h,
+            atEnd: Boolean(row) && pane.lastElementChild === row,
             stop: Boolean(s) && !s.classList.contains("hidden"),
             input: inp.value,
             lastUser: users.length ? users[users.length - 1].innerText.replace(/\\s+/g, " ").slice(0, 40) : "",
@@ -71,13 +72,14 @@ module.exports = async (page) => {
         el.dispatchEvent(new Event("input", { bubbles: true }));
         return el.value;
     `);
-    await page.click(".session-pane .msg-endhint");
+    await page.click(".session-pane .msg-endhint:not(.msg-endhint-stop)");
     await page.sleep(300);
     console.log("③ 点完那一下：", JSON.stringify(await state()));
 
     // 生成中：它换成「卡住了」
     const busy = await waitFor((s) => s.hint && s.face === "stuck");
-    console.log("④ 生成中（脸是「卡住了」）：", JSON.stringify(busy));
+    console.log("④ 生成中（脸是「卡住了」，旁边那颗停止生成露着）：", JSON.stringify(busy));
+    if (busy && !busy.stop) { console.log("  ！生成中止那颗方块该露面"); }
     await page.shot("endhint-3-stuck.png");
 
     // 生成中它一直跟在最新内容后面（正文、工具一批批长出来，它不该被落在前头）
@@ -89,7 +91,7 @@ module.exports = async (page) => {
     }
 
     // 点「卡住了」：这一轮当场停住，停稳之后补发一条“卡住了”
-    await page.click(".session-pane .msg-endhint");
+    await page.click(".session-pane .msg-endhint:not(.msg-endhint-stop)");
     const stuckSent = await waitFor((s) => s.lastUser === "卡住了");
     console.log("⑤ 点完「卡住了」（这一轮停住、补发了“卡住了”）：", JSON.stringify(stuckSent));
     await page.shot("endhint-4-stuck-clicked.png");

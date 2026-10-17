@@ -7,7 +7,7 @@
  *     （浏览器原生的推送流）收；重连、心跳、断线补发都归它管。
  *  2. 插件里的对话面板（与浏览器页面同源的那份界面，由 chatHtml.ts 加载）：
  *     通道保持网页视图的 postMessage 不变（chat.js 感觉不到），只取三样：
- *     网页端的界面件（桌面截图 / <<< / 输入框角上的「停止生成」）、
+ *     网页端的界面件（桌面截图 / <<<）、
  *     一行起步的输入框、按配置上色（显示选项里的「界面颜色」，浅 / 深两套调色板见下面）。
  *
  * chat.js 认的是 VSCode 网页视图那套通道：往外发用 acquireVsCodeApi().postMessage，
@@ -760,29 +760,6 @@
     });
     // 摆成顶条的第一个（加号左边）：这就是“顶条左边那颗按钮”
     bar.insertBefore(btn, bar.firstChild);
-  })();
-
-  // ==================== 输入框的小改动 ====================
-  // 输入框右下角那颗“停止生成”：生成中露面（显示与隐藏由 chat.js 按当前会话的状态控制，
-  // 那边会来找 #stopBtn）。手机没有 Esc，否则中止不了（VSCode 里本来也有 Esc，不冲突）。
-  // （消息流末尾那颗胶囊不在这里 —— 「继续」/「卡住了」由 chat.js 自己建，
-  //   见那边 syncEndHint 的说明。）
-  // 插件里的对话面板配上它之后与浏览器页面完全一致。
-  (function () {
-    var row = document.getElementById("inputRow");
-    if (!row) { return; }
-    var stop = document.createElement("button");
-    stop.type = "button";
-    stop.id = "stopBtn";
-    stop.className = "hidden";
-    // 实心方块直接表达“停止”，不再套一层描边方框。
-    stop.innerHTML =
-      '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true">' +
-      '<rect x="2" y="2" width="12" height="12" rx="1.5" />' +
-      '</svg>';
-    stop.title = "停止生成";
-    stop.setAttribute("aria-label", "停止生成");
-    row.appendChild(stop);
   })();
 
   if (!IN_WEBVIEW) {

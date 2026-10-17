@@ -15,7 +15,6 @@
   document.addEventListener("pointerdown", function askNotifyOnce() { askNotifyPermission(); }, { capture: true, once: true });
   const messagesEl = document.getElementById("messages"); // 容器，内含各 .session-pane
   const jumpBottomBtn = document.getElementById("jumpBottom");
-  const stopBtn = document.getElementById("stopBtn"); // 停止生成图标：browserBridge.js 在两种页面里都会创建
   // VSCode 官方 codicon 的 chevron-right 折线图标（从 @vscode/codicons 包取出）。
   // 各处折叠小三角用同一份：画的是朝右，展开时靠 CSS transform 转成朝下。
   const CHEVRON_SVG =
@@ -54,8 +53,10 @@
     wrap: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h12M2 7h9.4a2.5 2.5 0 0 1 0 5H8"/><path d="M10.2 9.6 7.6 12l2.6 2.4"/><path d="M2 12h2.4"/></svg>',
     // 往右的箭头：消息流末尾那条「继续」上用（VSCode 官方 codicon 的 arrow-right）
     "arrow-right": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8.85355 3.14645C8.65829 2.95118 8.34171 2.95118 8.14645 3.14645C7.95118 3.34171 7.95118 3.65829 8.14645 3.85355L11.7929 7.5H2.5C2.22386 7.5 2 7.72386 2 8C2 8.27614 2.22386 8.5 2.5 8.5H11.7929L8.14645 12.1464C7.95118 12.3417 7.95118 12.6583 8.14645 12.8536C8.34171 13.0488 8.65829 13.0488 8.85355 12.8536L13.3536 8.35355C13.5488 8.15829 13.5488 7.84171 13.3536 7.64645L8.85355 3.14645Z"/></svg>',
-    // 实心方块：消息流末尾那颗「卡住了」上用（跟输入框角上那颗“停止生成”同一个意思，同一颗图）
+    // 实心方块：消息流末尾那两颗「卡住了」「停止生成」上都用它
     "stop-square": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="1.5"/></svg>',
+    // 三条横线：输入框左边那颗「你说过的话」（一句话一行，所以是清单）。
+    said: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>',
   };
   /** 文件夹选择器里行首那颗图标：名字由宿主给（见 chatHost.ts 里 showFolderPicker 的 items）。 */
   const FOLDER_ROW_ICONS = { check: ICONS.check, up: ICONS["arrow-up"], folder: ICONS.folder };
@@ -528,11 +529,6 @@
     pane.dataset.sessionId = id;
     pane.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
     view.appendChild(pane);
-    // 用户消息导航：消息流右边一条细导航（见「用户消息导航」那一段）。挂在会话壳上、不挂进窗格：
-    // 整屏重画要重写窗格的内容（pane.innerHTML），挂在窗格里会被一起抹掉。
-    const rail = document.createElement("div");
-    rail.className = "user-rail empty";
-    view.appendChild(rail);
     const stBar = document.createElement("div");
     stBar.className = "pane-status";
     // 拦掉 mousedown 冒泡：状态栏自己处理点击（弹模型选择器）
@@ -566,7 +562,6 @@
         st.hasNewContent = false;
         syncJumpBottom(st);
       }
-      scheduleRailCurrent(st);   // 用户消息导航上那根「正读着的」跟着换
     });
     st = {
       id,
@@ -609,18 +604,6 @@
       _historyBtn: null,
       _stage: null,
       _stageDropped: false,
-      // 用户消息导航（消息流右边那一条）：节点、短横线、量出来的高度与每一根的位置
-      railEl: rail,
-      railMsgs: null,
-      railTicks: null,
-      railGap: 0,
-      railTop: 0,
-      railTries: 0,        // 「画的时候还没排上版」补画了几回（见 railDrawLater）
-      railTimer: 0,
-      railOffsets: null,
-      railScrollH: -1,
-      railCurrent: -1,
-      railHover: -1,
       streaming: false,
       unread: false,
       activity: "idle",
@@ -642,7 +625,6 @@
       autoLoadHinted: false,
     };
     sessions.set(id, st);
-    attachUserRail(st);
     return st;
   }
 
@@ -656,8 +638,6 @@
     const st = target;
     if (!st) { return; }
     messagesEl.appendChild(st.viewEl);
-    // 用户消息导航按这块地方现在的大小重画（别的会话的壳挂在页面外，量出来是 0 高）
-    syncUserRail(st);
     // 重挂载后把滚动位置恢复回去（贴底的直接贴底）
     const p = st.paneEl;
     if (st.stickToBottom) {
@@ -682,17 +662,20 @@
   }
 
   /**
-   * 这个会话派出去的子会话里，还有没有在跑的：子会话自己在跑（正在答、或者刚开始
+   * 这个会话派出去的子会话里，有几个还在跑：子会话自己在跑（正在答、或者刚开始
    * 那一轮），或者刚派出去、任务还没发完（taba 那边是 starting）。
-   * 顶条中间那颗名字上的小点用它：本会话自己闲着、子会话还在干活时照样亮着呼吸。
+   * 顶条中间那颗名字上的小点（以及它下面那个数字）用它：本会话自己闲着、
+   * 子会话还在干活时照样亮着呼吸，数字写清有几个。
    */
-  function hasRunningChild(id) {
-    return Array.from(sessions.values()).some((s) => {
-      if (s.parentId !== id) { return false; }
-      if (s.streaming || s.loading) { return true; }
+  function runningChildCount(id) {
+    let n = 0;
+    for (const s of sessions.values()) {
+      if (s.parentId !== id) { continue; }
+      if (s.streaming || s.loading) { n++; continue; }
       const state = s.taba ? s.taba.state : "";
-      return state === "starting" || state === "running";
-    });
+      if (state === "starting" || state === "running") { n++; }
+    }
+    return n;
   }
 
   /** 顶条中间那行字：当前会话名（带在跑的小点；主会话多过一个就再挂一颗朝下的小箭头）。 */
@@ -701,7 +684,11 @@
     const text = sessionLabel(st);
     const textEl = sessionNameBtn.querySelector(".sn-text");
     if (textEl) { textEl.textContent = text; }
-    sessionNameBtn.title = "当前会话：" + text + "（点这里换会话）";
+    // 派出去的子会话还有几个在跑：写在小点下面（零个就空着，那一格自己收起来）。
+    const kids = st ? runningChildCount(st.id) : 0;
+    const countEl = sessionNameBtn.querySelector(".sn-count");
+    if (countEl) { countEl.textContent = kids > 0 ? String(kids) : ""; }
+    sessionNameBtn.title = "当前会话：" + text + (kids > 0 ? "，" + kids + " 个子会话在跑" : "") + "（点这里换会话）";
     // 名字底下那行小字：当前会话跑在哪个目录（会话在别的项目里开的时候就看得出差别）。
     // 拿不到目录（列表还没到、会话已关）就不占行，顶条高度不跳。
     const dir = st && typeof st.cwd === "string" ? st.cwd : "";
@@ -713,7 +700,7 @@
     sessionNameBtn.classList.toggle("streaming", !!(st && (st.streaming || st.loading)));
     // 派出去的子会话还在跑：本会话自己闲着也把那颗点亮出来（一样呼吸），
     // 一眼看得出这一家子还在干活（等的是子会话，不是本会话在答）。
-    sessionNameBtn.classList.toggle("child-running", !!(st && hasRunningChild(st.id)));
+    sessionNameBtn.classList.toggle("child-running", kids > 0);
     // 别的会话跑完了你没看（“有新消息”）：名字左边那颗小点亮着，不闪；切过去看就灭。
     // 当前这个会话正在跑时那颗点拿去闪了（streaming 优先），未读还得点开清单看。
     sessionNameBtn.classList.toggle("unread", Array.from(sessions.values()).some((s) => s.unread));
@@ -990,146 +977,20 @@
     jumpBottomBtn.classList.toggle("hidden", !show);
   }
 
-  // ==================== 用户消息导航 ====================
-  // 消息流右边一条细导航：一根短横线代表用户自己发的一条消息（按先后等分排下来，整列上下居中；
-  // 条数多了就挤紧、铺满这一条）。鼠标停上去出一行字（那条消息的开头），点一下跳到那一条；
-  // 正读着的那一条亮着。空会话、只有一条用户消息时不出现（一根线孤零零的没意义）。
-  //
-  // 为什么挂在会话壳（.session-view）上、不挂进消息窗格：整屏重画要重写窗格的内容
-  // （pane.innerHTML），「加载更早」那批消息也是先渲染进暂存区 —— 挂进窗格就会被一起抹掉。
-  // 每一根的位置只按窗格的高矮算（不读每条消息的量）：所以条数变了重画也不贵。
-  const RAIL_SPREAD_MAX = 26;      // 相邻两根之间最松留几个像素：再宽就整列居中，不把一列散满整屏
-  const RAIL_TIP_CHARS = 60;       // 停上去那行字取开头多少个字
-  let railObserver = null;
-
-  /** 一个会话现在的用户消息节点（按消息流里的先后顺序）。 */
-  function railMessages(st) { return Array.prototype.slice.call(st.paneEl.querySelectorAll(".msg.user")); }
-
   /**
-   * 重画（或者清空）某个会话的用户消息导航：条数变了（发了一条 / 「加载更早」补进来一批 /
-   * 整屏重画）、那块地方大小变了、刚挂上页面，都走这里。挂在页面外的会话不画（等它挂上去时再画）。
+   * 跳到某一条用户消息（「你说过的话」清单里的一行）：滚到窗格顶上、闪一下底色，
+   * 并且接管滚动（别让追底把人拽回去）。
    */
-  function syncUserRail(st) {
-    const rail = st && st.railEl;
-    if (!rail || !st.paneEl.isConnected) { return; }
-    const msgs = railMessages(st);
-    if (msgs.length < 2) {   // 一根短横线不成一条路：不露面，也不许它挡住右边那一条的鼠标
-      rail.classList.add("empty");
-      rail.textContent = "";
-      st.railMsgs = null; st.railTicks = null; st.railCurrent = -1;
-      return;
-    }
-    // 这一条现在有多高就现量：刚挂上页面那一会儿量出来是 0（还没排上版），
-    // 把那 0 记下来一直用，就一直画不出来了（见下面的 railDrawLater）。
-    const height = rail.clientHeight;
-    if (height <= 0) { railDrawLater(st); return; }
-    st.railTries = 0;
-    const n = msgs.length;
-    const gap = Math.min(height / (n - 1), RAIL_SPREAD_MAX);
-    const top = (height - gap * (n - 1)) / 2;   // 没铺满时整列居中（条数少才有富余）
-    const frag = document.createDocumentFragment();
-    const ticks = [];
-    for (let i = 0; i < n; i++) {
-      const tick = document.createElement("span");
-      tick.className = "rail-tick";
-      tick.style.top = Math.round(top + gap * i) + "px";
-      frag.appendChild(tick);
-      ticks.push(tick);
-    }
-    rail.classList.remove("empty");
-    rail.textContent = "";
-    rail.appendChild(frag);
-    st.railMsgs = msgs; st.railTicks = ticks; st.railGap = gap; st.railTop = top;
-    st.railCurrent = -1; st.railHover = -1;
-    cacheRailOffsets(st);
-    syncRailCurrent(st);
-  }
-
-  /** 条数一口气变好几回（整屏重画是几百条消息一条条进来的）：一帧只重画一次。 */
-  function scheduleUserRail(st) {
-    if (!st || st.railBuildRaf) { return; }
-    st.railBuildRaf = requestAnimationFrame(() => { st.railBuildRaf = 0; syncUserRail(st); });
-  }
-
-  /**
-   * 画的那一下还没排上版（量出来是 0 高）：过一会儿自己再来一次。
-   * 不然这一下白画、又没人重画，就卡在那儿直到人再发一条消息（见上面那段注释）。
-   * 最多连着补几回（窗格真收起来时别配上定时器一直空跑）。
-   */
-  function railDrawLater(st) {
-    if ((st.railTries || 0) > 8) { return; }
-    st.railTries = (st.railTries || 0) + 1;
-    if (st.railTimer) { return; }
-    st.railTimer = setTimeout(() => { st.railTimer = 0; syncUserRail(st); }, 150);
-  }
-
-  /** 每条用户消息在窗格里的纵向位置：「正读着哪一条」用（只在内容高矮变了时才重量）。 */
-  function cacheRailOffsets(st) {
-    const msgs = st.railMsgs || [];
-    const offs = new Array(msgs.length);
-    for (let i = 0; i < msgs.length; i++) { offs[i] = msgs[i].offsetTop; }
-    st.railOffsets = offs;
-    st.railScrollH = st.paneEl.scrollHeight;
-  }
-
-  /** 正读着的那一条：窗格最上头露出来的那条用户消息；贴着底时永远算最后一条。 */
-  function railCurrentIndex(st) {
-    const ticks = st.railTicks;
-    if (!ticks || !ticks.length) { return -1; }
-    if (st.stickToBottom) { return ticks.length - 1; }
-    const offs = st.railOffsets;
-    if (!offs || !offs.length) { return -1; }
-    const top = st.paneEl.scrollTop + 12;   // 一点余量：刚露出个边也算它
-    let lo = 0, hi = offs.length - 1, best = 0;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (offs[mid] <= top) { best = mid; lo = mid + 1; } else { hi = mid - 1; }
-    }
-    return best;
-  }
-
-  /** 把「正读着的那一条」那根点亮（条数没变就不重量位置，只比一比缓存里的数）。 */
-  function syncRailCurrent(st) {
-    const ticks = st.railTicks;
-    if (!ticks || !ticks.length) { return; }
-    // 内容长高 / 矮了（图片来了、正文还在往外吐、高亮重排）：缓存的位置对不上了，重量一次
-    if (!st.stickToBottom && st.railScrollH !== st.paneEl.scrollHeight) { cacheRailOffsets(st); }
-    const idx = railCurrentIndex(st);
-    if (idx === st.railCurrent) { return; }
-    st.railCurrent = idx;
-    ticks.forEach((tick, i) => tick.classList.toggle("current", i === idx));
-  }
-
-  /** 滚动事件里调：一帧最多算一次。 */
-  function scheduleRailCurrent(st) {
-    if (!st || st.railCurRaf || !st.railTicks) { return; }
-    st.railCurRaf = requestAnimationFrame(() => { st.railCurRaf = 0; syncRailCurrent(st); });
-  }
-
-  /** 鼠标落在哪一根上：按上一次画出来的格子算，离哪根近就算哪根（挤得再密也点得中）。 */
-  function railIndexAt(st, clientY) {
-    const ticks = st.railTicks;
-    if (!ticks || !ticks.length) { return -1; }
-    const gap = st.railGap || 0;
-    if (ticks.length === 1 || gap <= 0) { return 0; }
-    const y = clientY - st.railEl.getBoundingClientRect().top;
-    const i = Math.round((y - st.railTop) / gap);
-    return Math.max(0, Math.min(ticks.length - 1, i));
-  }
-
-  /** 点了一根短横线：那一条用户消息滚到窗格顶上，闪一下底色（好认跳到了哪儿）。 */
-  function railJumpTo(st, i) {
-    const el = (st.railMsgs || [])[i];
+  function jumpToUserMessage(st, el) {
     if (!el || !el.isConnected) { return; }
     userTookOverScroll(st);   // 跟用户自己往回滚一样：停掉追底；正在生成时把「跳到最新」亮起来
     if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); st.lerpRafId = 0; }
     if (st.scrollRafId) { cancelAnimationFrame(st.scrollRafId); st.scrollRafId = 0; }
     st.paneEl.scrollTop = Math.max(0, el.offsetTop - 6);
     flashMessage(el);
-    syncRailCurrent(st);
   }
 
-  /** 跳过去的那一条闪一下底色（连着点同一根也再闪一次）。 */
+  /** 跳过去的那一条闪一下底色（连着点同一行也再闪一次）。 */
   function flashMessage(el) {
     el.classList.remove("msg-flash");
     void el.offsetWidth;   // 逼一次重排：去掉再加同一个类，动画不会重放
@@ -1138,78 +999,124 @@
     el._flashTimer = setTimeout(() => el.classList.remove("msg-flash"), 1400);
   }
 
-  let railTipEl = null;
-  /** 那条消息的开头一行（停上去出的字）。 */
-  function railTipText(el) {
+  /** 那条消息的开头一行（清单里那一行写的字）。 */
+  const SAID_PREVIEW_CHARS = 60;
+  function messagePreviewText(el) {
     const raw = el.dataset.raw || el.textContent || "";
     const one = raw.replace(/\s+/g, " ").trim();
     if (!one) { return "（空消息）"; }
-    return one.length > RAIL_TIP_CHARS ? one.slice(0, RAIL_TIP_CHARS) + "…" : one;
-  }
-  /** 停上去出的那行字：贴着导航条左边、跟着那一根上下居中，出不了屏幕。 */
-  function showRailTip(st, i) {
-    const el = (st.railMsgs || [])[i];
-    if (!el) { return; }
-    if (!railTipEl) {
-      railTipEl = document.createElement("div");
-      railTipEl.className = "rail-tip hidden";
-      document.body.appendChild(railTipEl);
-    }
-    railTipEl.textContent = railTipText(el);
-    railTipEl.classList.remove("hidden");
-    const railBox = st.railEl.getBoundingClientRect();
-    const box = railTipEl.getBoundingClientRect();
-    const tickY = railBox.top + (st.railTop || 0) + (st.railGap || 0) * i;
-    let left = railBox.left - box.width - 8;
-    if (left < 4) { left = 4; }   // 窗口很窄时盖在消息上，也总比出屏幕强
-    const top = Math.max(6, Math.min(tickY - box.height / 2, window.innerHeight - box.height - 6));
-    railTipEl.style.left = Math.round(left) + "px";
-    railTipEl.style.top = Math.round(top) + "px";
-  }
-  function hideRailTip() {
-    if (railTipEl) { railTipEl.classList.add("hidden"); }
+    return one.length > SAID_PREVIEW_CHARS ? one.slice(0, SAID_PREVIEW_CHARS) + "…" : one;
   }
 
-  /** 用户消息导航的鼠标与大小：建会话时挂一次（每个会话一条）。 */
-  function attachUserRail(st) {
-    const rail = st.railEl;
-    // 那块地方的高矮变了（拖窗口的边、输入框长高、切到手机宽）：重画一次（高矮在画那一下现量）
-    if (typeof ResizeObserver !== "undefined") {
-      if (!railObserver) {
-        railObserver = new ResizeObserver((entries) => {
-          for (const entry of entries) {
-            const owner = entry.target._railSt;
-            if (owner) { syncUserRail(owner); }
-          }
-        });
-      }
-      rail._railSt = st;
-      railObserver.observe(rail);
+  // ==================== 你说过的话（输入框左边那颗按钮）====================
+  // 那颗按钮一直露着（空会话里也点得开，点开说一句“你还没说过话”）。
+  // 清单从输入行上头往上弹一张小的（输入框就在屏幕底，往下弹会顶到键盘、出屏幕），
+  // 一行一句，点一行就跳到那条（去的地方跟导航条一样，见 jumpToUserMessage）。
+  // 手机上尤其要它：手指点一行比点一个几点准得多。
+  let saidBtn = null;
+  let saidMenu = null;
+  (function buildSaidButton() {
+    const row = document.getElementById("inputRow");
+    const input = document.getElementById("input");
+    if (!row || !input) { return; }
+    saidBtn = document.createElement("button");
+    saidBtn.type = "button";
+    saidBtn.id = "saidBtn";
+    saidBtn.innerHTML = ICONS.said;
+    saidBtn.title = "你说过的话";
+    saidBtn.setAttribute("aria-label", "你说过的话");
+    row.insertBefore(saidBtn, input);
+    // 清单挂在输入行里：靠这一行定位（bottom: 100% 就是“输入行的上头”）
+    saidMenu = document.createElement("div");
+    saidMenu.id = "saidMenu";
+    saidMenu.className = "hidden";
+    row.appendChild(saidMenu);
+    saidBtn.addEventListener("click", (e) => {
+      e.stopPropagation();   // 别让下面那个“点外头收起”的监听当场又把它关掉
+      toggleSaidMenu();
+    });
+    document.addEventListener("click", (e) => {
+      if (!saidOpen()) { return; }
+      if (saidMenu.contains(e.target) || saidBtn.contains(e.target)) { return; }
+      closeSaidMenu();
+    });
+    // Esc 收起。这条监听得比输入框那条先跑（stopImmediatePropagation）：
+    // 不然输入框那边会把 Esc 当成“中止这一轮”。
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || !saidOpen()) { return; }
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      closeSaidMenu();
+    });
+  })();
+
+  function saidOpen() { return !!saidMenu && !saidMenu.classList.contains("hidden"); }
+
+  /** 把清单铺满：一行一句，序号 + 开头；正读着的那一句标亮。 */
+  function renderSaidList(st) {
+    saidMenu.innerHTML = "";
+    const msgs = st && st.paneEl ? Array.prototype.slice.call(st.paneEl.querySelectorAll(".msg.user")) : [];
+    if (!msgs.length) {
+      const empty = document.createElement("div");
+      empty.className = "said-empty";
+      empty.textContent = "这个会话里你还没说过话。";
+      saidMenu.appendChild(empty);
+      return;
     }
-    // 停上去出一行字、点一下跳过去（触屏没有「停上去」：点一下直接跳）
-    rail.addEventListener("mousemove", (e) => {
-      if (IS_TOUCH_DEVICE) { return; }
-      const i = railIndexAt(st, e.clientY);
-      if (i < 0) { return; }
-      if (i !== st.railHover) {
-        st.railHover = i;
-        if (st.railTicks) { st.railTicks.forEach((tick, k) => tick.classList.toggle("hover", k === i)); }
-        showRailTip(st, i);   // 从一根挪到另一根：那行字得换成这一条的开头
-        return;
-      }
-      // 滚动 / 点过一下会把那行字收起来：鼠标还在这一根上（或者又移回来了）就把它拿出来
-      if (!railTipEl || railTipEl.classList.contains("hidden")) { showRailTip(st, i); }
+    // 正读着的那一条：窗格最上头露出来的那句；贴着底时算最后一句。
+    let cur = 0;
+    if (st.stickToBottom) {
+      cur = msgs.length - 1;
+    } else {
+      const top = st.paneEl.scrollTop + 12;
+      for (let i = 0; i < msgs.length; i++) { if (msgs[i].offsetTop <= top) { cur = i; } }
+    }
+    const frag = document.createDocumentFragment();
+    msgs.forEach((el, i) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "pk-item said-item" + (i === cur ? " current" : "");
+      const no = document.createElement("span");
+      no.className = "said-no";
+      no.textContent = String(i + 1);
+      const text = document.createElement("span");
+      text.className = "said-text";
+      text.textContent = messagePreviewText(el);
+      row.append(no, text);
+      row.addEventListener("click", () => {
+        closeSaidMenu();
+        jumpToUserMessage(st, el);
+      });
+      frag.appendChild(row);
     });
-    rail.addEventListener("mouseleave", () => {
-      st.railHover = -1;
-      if (st.railTicks) { st.railTicks.forEach((tick) => tick.classList.remove("hover")); }
-      hideRailTip();
-    });
-    rail.addEventListener("click", (e) => {
-      const i = railIndexAt(st, e.clientY);
-      hideRailTip();
-      if (i >= 0) { railJumpTo(st, i); }
-    });
+    saidMenu.appendChild(frag);
+  }
+
+  function toggleSaidMenu() {
+    if (saidOpen()) { closeSaidMenu(); return; }
+    openSaidMenu();
+  }
+
+  function openSaidMenu() {
+    const st = activeSession();
+    if (!st || !saidMenu) { return; }
+    // 输入框上头那几个下拉（@ 文件、# 会话、/ 命令）同一时刻只开一个
+    hideFileMenu();
+    hideHashMenu();
+    closeSlashMenu();
+    renderSaidList(st);
+    saidMenu.classList.remove("hidden");
+    if (saidBtn) { saidBtn.classList.add("on"); }
+    // 清单长了先把正读着的那一条摆到眼前（不用自己往下翻）
+    const cur = saidMenu.querySelector(".pk-item.current");
+    if (cur) { saidMenu.scrollTop = Math.max(0, cur.offsetTop - saidMenu.clientHeight / 2); }
+  }
+
+  function closeSaidMenu() {
+    if (!saidMenu || !saidOpen()) { return; }
+    saidMenu.classList.add("hidden");
+    saidMenu.innerHTML = "";
+    if (saidBtn) { saidBtn.classList.remove("on"); }
   }
 
   // ==================== 流式渲染节流 ====================
@@ -1691,8 +1598,14 @@
   //   · 位置留到这一批真过去：到点之后字淡出去（见 chat.css 的 .tool-running-item.gone），
   //     淡完这块地方还占着（高度不变，下面不动），等下面出了正文 / 问话卡片（这一批工具过去了），
   //     或者这一轮跑完，才整条连位置一起收掉（见 endRunningLine）。
+  //
+  // 一行写不完的（长命令行）：字自己慢慢横向滚，只往一个方向（从头滚到末尾，到头停一下再从开头来，
+  // 见 rollRunningText 与 chat.css 的 tr-roll），不然一颗「bash」加小半条命令就完了，看不出来在跑什么。
   const RUNNING_LINE_SKIP = new Set([THINKING_NAME, "ask_choice"]);
   const RUNNING_LINE_LINGER_MS = 300;
+  const RUNNING_ROLL_MIN_PX = 4;    // 溢出这几个像素以内不算「放不下」（末尾省略号那点宽度，不值当滚）
+  const RUNNING_ROLL_SPEED = 30;    // 放不下的那行字自己滚动的快慢：每秒 30 像素（慢慢地滚）
+  const RUNNING_ROLL_SWEEP = 0.91;  // 一趟里走的时间占多少（另 9% 是两头停的那一下，见 chat.css 的 tr-roll）
 
   /** 现在还有哪些调用在跑、各自那一行摘要（一条一行，按页面上标签的顺序）。
    *  直接看页面上那些转圈的标签：批次换了行、重放历史都不影响 —— 写出来的跟看到的是同一份。 */
@@ -1734,6 +1647,7 @@
     }
     const line = st.runningLine;
     line.textContent = "";
+    const toMeasure = [];
     for (const text of texts) {
       const item = document.createElement("div");
       item.className = "tool-running-item";
@@ -1743,8 +1657,32 @@
       t.textContent = text;
       item.appendChild(t);
       line.appendChild(item);
+      toMeasure.push([t, text]);
     }
     placeRunningLine(st, line);
+    // 量「这一行放不放得下」得等它排到页面上（新起一条时上面那一步才把它插进去），
+    // 所以挪完位置再逐条看一眼：放不下的改成自己滚（见 rollRunningText）。
+    for (const [t, text] of toMeasure) { rollRunningText(t, text); }
+  }
+
+  /** 这一条的字一行放得下就不动（末尾不够就省略号）；放不下就让它自己慢慢横向滚：
+   *  滚的距离就是溢出的那些像素（--tr-shift），快慢按固定速度算（--tr-dur），动画见 chat.css 的 tr-roll。
+   *  一趟的时长按「走的部分每秒 30 像素」倒推：两头停的那一下也算在里面（RUNNING_ROLL_SWEEP）。 */
+  function rollRunningText(t, text) {
+    t.textContent = text;
+    t.classList.remove("roll");
+    t.style.removeProperty("--tr-shift");
+    t.style.removeProperty("--tr-dur");
+    const over = t.scrollWidth - t.clientWidth;
+    if (over < RUNNING_ROLL_MIN_PX) { return; }
+    const run = document.createElement("span");
+    run.className = "tr-run";
+    run.textContent = text;
+    t.textContent = "";
+    t.appendChild(run);
+    t.classList.add("roll");
+    t.style.setProperty("--tr-shift", -over + "px");
+    t.style.setProperty("--tr-dur", Math.max(1, over / RUNNING_ROLL_SPEED / RUNNING_ROLL_SWEEP) + "s");
   }
 
   /** 留的那一会儿到点了、还是一条都没在跑：这一批过去了就把整条收掉，没过去就把字清掉、位置留着。
@@ -1796,7 +1734,7 @@
     if (line.parentElement === st.paneEl) { return; }
     // 还没挂上页面（整屏重画之后头一条就是还在跑的调用）：挂在消息流末尾
     line._row = row || null;
-    const tail = st.endHintEl;
+    const tail = st.endHintRow;
     if (tail && tail.parentElement === st.paneEl) { st.paneEl.insertBefore(line, tail); return; }
     st.paneEl.appendChild(line);
   }
@@ -1873,7 +1811,7 @@
   function isLastInStream(st, el) {
     for (let n = el; n && n !== st.paneEl; n = n.parentElement) {
       for (let sib = n.nextElementSibling; sib; sib = sib.nextElementSibling) {
-        if (sib.classList.contains("msg-endhint") || sib.classList.contains("empty-hint") || sib.classList.contains("history-more")) { continue; }
+        if (sib.classList.contains("end-hint-row") || sib.classList.contains("msg-endhint") || sib.classList.contains("empty-hint") || sib.classList.contains("history-more")) { continue; }
         return false;
       }
     }
@@ -2156,7 +2094,6 @@
   document.addEventListener("scroll", (e) => {
     if (tagTipEl && tagTipEl.contains(e.target)) { return; }
     hideTagTip();
-    hideRailTip();
   }, true);
   window.addEventListener("resize", hideTagTip);
   // 点提示框和当前标签以外任何地方关闭提示框（触屏主要靠这个和右上角 × 收）。
@@ -2484,24 +2421,15 @@
   }
 
   // ==================== UI 同步（当前会话驱动全局控件）====================
-  /** 当前会话在不在生成：Esc 中止与输入框角上那颗“停止生成”按钮共用这一处判断。 */
+  /** 当前会话在不在生成：Esc 与末尾那颗「停止生成」共用这一处判断。 */
   function activeSessionStreaming() {
     const st = activeSession();
     return !!(st && st.streaming);
   }
 
-  /**
-   * 输入框角上那颗“停止生成”：生成中露面。那个位置现在只此一物（消息流末尾那颗「继续」/
-   * 「卡住了」不在这儿，见 syncEndHint），它是 browserBridge.js 建的（两种页面里都有）。
-   */
+  /** 输入框那一带的按钮随会话状态刷新（现在只剩消息流末尾那两颗，见 syncEndHint）。 */
   function syncComposerButtons() {
-    const st = activeSession();
-    const streaming = !!(st && st.streaming);
-    if (stopBtn) {
-      stopBtn.classList.toggle("hidden", !streaming);
-      stopBtn.disabled = false;
-    }
-    syncEndHint(st);
+    syncEndHint(activeSession());
   }
 
   /** 消息流末尾那颗胶囊上写的是什么。 */
@@ -2533,10 +2461,16 @@
     const mode = (!st.piReady || !touched) ? ""
         : st.streaming ? "stuck"
             : st.loading ? "" : "continue";
-    const el = st.endHintEl || (st.endHintEl = makeEndHint(st));
+    const row = st.endHintRow || (st.endHintRow = makeEndHintRow(st));
+    const el = st.endHintEl;
     if (el.dataset.mode !== mode) { setEndHintMode(el, mode); }
     el.classList.toggle("hidden", !mode);
-    if (mode) { placeEndHint(st); }
+    // 「卡住了」旁边那颗停止生成：生成中才露面（只有方块图标，不写字）
+    const stop = st.endHintStopEl;
+    const showStop = !!(st.piReady && st.streaming);
+    if (stop) { stop.classList.toggle("hidden", !showStop); }
+    row.classList.toggle("hidden", !mode && !showStop);
+    if (mode || showStop) { placeEndHint(st); }
   }
 
   /** 给末尾那颗胶囊换脸（继续 / 卡住了）：点了哪一面之后走哪条路，就看这里记下的状态。 */
@@ -2544,7 +2478,8 @@
     el.dataset.mode = mode;
     if (mode === "stuck") {
       el.title = "停掉这一轮，然后发一条“卡住了”";
-      el.innerHTML = ICONS["stop-square"] + "<span>" + END_HINT_STUCK + "</span>";
+      // 不挂方块图标：旁边那颗「停止生成」就是方块，两颗方块挨着看不清谁是谁
+      el.innerHTML = "<span>" + END_HINT_STUCK + "</span>";
     } else {
       el.title = "发送一条“继续”";
       el.innerHTML = ICONS["arrow-right"] + "<span>" + END_HINT_CONTINUE + "</span>";
@@ -2555,17 +2490,23 @@
    *  往暂存区补更早的历史时（「加载更早」那一批）不动：那块不在页面上，挪进去会跟着那批
    *  老消息一起插到顶上去。 */
   function placeEndHint(st) {
-    const el = st.endHintEl;
-    if (!el || !st.paneEl) { return; }
+    const row = st.endHintRow;
+    if (!row || !st.paneEl) { return; }
     if (st._stage && st.paneEl === st._stage) { return; }
-    if (el.parentElement !== st.paneEl || st.paneEl.lastElementChild !== el) {
-      st.paneEl.appendChild(el);
+    if (row.parentElement !== st.paneEl || st.paneEl.lastElementChild !== row) {
+      st.paneEl.appendChild(row);
     }
   }
 
-  /** 建末尾那颗胶囊（写什么由当前状态定，见 setEndHintMode；露面时机与位置由 syncEndHint /
-   *  placeEndHint 管）。 */
-  function makeEndHint(st) {
+  /**
+   * 建末尾那一行：主胶囊（继续 / 卡住了）与它旁边那颗「停止生成」并排。
+   * 停止生成就是主胶囊复制一份、去掉“卡住了”三个字，只留方块图标：点它只是把这一轮停掉
+   * （跟按 Esc 一样，不补发“卡住了”），要“停下来再告诉它卡住了”就点旁边那颗。
+   * 写什么由当前状态定（见 setEndHintMode）；露面时机与位置由 syncEndHint / placeEndHint 管。
+   */
+  function makeEndHintRow(st) {
+    const row = document.createElement("div");
+    row.className = "end-hint-row";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "msg-endhint";
@@ -2595,13 +2536,33 @@
       // 万一点击没送到（连接断了），过一会儿按真实状态重新算
       setTimeout(() => syncEndHint(cur), 1500);
     });
-    return btn;
+    // 停止生成：跟主胶囊同一个样子，只是不写字（只有方块图标）
+    const stop = document.createElement("button");
+    stop.type = "button";
+    stop.className = "msg-endhint msg-endhint-stop";
+    stop.id = "stopHintBtn";
+    stop.title = "停止生成";
+    stop.setAttribute("aria-label", "停止生成");
+    stop.innerHTML = ICONS["stop-square"];
+    stop.addEventListener("click", () => {
+      const cur = activeSession();
+      if (!cur || cur.id !== st.id) { return; }
+      if (!abortActiveTab()) { return; }
+      // 先藏起来：等宿主的 streamEnd 回来再按真实状态刷新；万一点击没送到，过一会儿重新算
+      stop.classList.add("hidden");
+      setTimeout(() => syncEndHint(cur), 1500);
+    });
+    // 顺序：停止生成（方块）在前，「卡住了」在后
+    row.append(stop, btn);
+    st.endHintEl = btn;
+    st.endHintStopEl = stop;
+    return row;
   }
 
   function updateSendState() {
     // VSCode 里发送/中止只看键盘（Enter 发送、Esc 中止），没有按钮；状态文案由 syncStatus 负责。
-    // 网页端（尤其手机）没有 Esc：输入框角上那颗按钮在生成中是“停止生成”；消息流末尾那颗
-    // 胶囊闲着是“继续”、生成中是“卡住了”（见 syncEndHint）。
+    // 网页端（尤其手机）没有 Esc：消息流末尾那一行闲着是「继续」、生成中是「卡住了」加一颗
+    // 只有方块的「停止生成」（见 syncEndHint）。
     syncComposerButtons();
   }
   // 状态栏常显模型：这些纯函数拼出模型名前缀与用量百分比标签。
@@ -2819,6 +2780,7 @@
     const shown = sessions.get(id);
     if (shown && shown.unread) { shown.unread = false; }
     mountActiveSession();
+    closeSaidMenu();   // 清单里排的是上一个会话说过的话：换了会话就收起来
     restoreInputState();
     reflectSessionUI();
     renderSessionBar();
@@ -2912,12 +2874,6 @@
     return st && typeof st.cwd === "string" ? st.cwd : "";
   }
 
-  /** 这个会话文件是不是正在看的那个会话（历史行上标“当前”用）。 */
-  function isActiveSessionFile(file) {
-    const st = activeId ? sessions.get(activeId) : null;
-    return !!(st && st.sessionFile && samePath(st.sessionFile, file));
-  }
-
   /** 路径最后一段（面板上那一行写的就是它）；取不出来就用整个路径。 */
   function baseNameOfPath(p) {
     const parts = String(p || "").split(/[\\/]+/).filter((x) => x.length > 0);
@@ -2925,7 +2881,7 @@
   }
 
   /**
-   * 工作区那些行：把“当前会话所在目录”那一行挪到最上面、标成当前。
+   * 工作区那些行：把“当前会话所在目录”那一行挪到最上面（不标“当前”，只是排第一）。
    *
    * 目录跟着正在看的那个会话走（面板自己不再有“选中的工作区”），所以要在画的时候现算：
    * 切到别的目录的会话，那一行自己跟着换，不用等宿主重推一份。
@@ -2936,27 +2892,17 @@
   function withCurrentWorkspaceFirst(items) {
     const cwd = activeSessionCwd();
     if (!cwd) { return items; }
-    const hoisted = [];
+    let hit = null;
     const rest = [];
-    let found = false;
     for (const it of items) {
-      if (!found && samePath(it.file, cwd)) {
-        found = true;
-        hoisted.push(Object.assign({}, it, { current: true }));
-        continue;
-      }
-      if (!it.current) { rest.push(it); continue; }
-      const copy = Object.assign({}, it);
-      delete copy.current;
-      rest.push(copy);
+      if (!hit && samePath(it.file, cwd)) { hit = it; continue; }
+      rest.push(it);
     }
-    if (!found) {
-      hoisted.push({
-        __section: "space", section: "工作区",
-        label: baseNameOfPath(cwd), file: cwd, folderPath: cwd, current: true,
-      });
-    }
-    return hoisted.concat(rest);
+    const first = hit || {
+      __section: "space", section: "工作区",
+      label: baseNameOfPath(cwd), file: cwd, folderPath: cwd,
+    };
+    return [first].concat(rest);
   }
 
   /** 把“等确认”那一行撤回去（点取消、点行身切会话、干等超时都走它）：只抹状态，重画交给调用方。 */
@@ -4958,7 +4904,8 @@
         // 工作区行：就是个组头——小三角、文件夹图标、名字 + 目录路径一行。
         // 点整行展开 / 收起；行尾那颗加号是在这个目录里开新会话。
         el.classList.add("pk-history", "pk-space-head");
-        if (item.current) { el.classList.add("current"); }
+        // 不标「当前工作区」的选中态：几个工作区里的会话可以同时开着，标一个“当前”反倒误导
+        // （哪个目录是当前会话所在的，看它排在最上面、看「正在对话」那一段就行）
         const expanded = groupExpanded(item.file);
         if (expanded) { el.classList.add("expanded"); }
         const main = document.createElement("div"); main.className = "pk-history-main";
@@ -5189,13 +5136,16 @@
       // 这一组还没取过（刚展开、或者面板刚重推一份）：现在去要第一条
       if (fetch && !g.loaded && !g.loading) { requestGroupPage(view, it.file, 0); }
       for (const row of g.items) {
-        out.push(Object.assign({}, row, {
+        // 不标「当前会话」：这些会话可以同时开着好几个，行尾的「已打开」胶囊已经说明它开着；
+        // 画一个“当前”出来，看着像是只能有一个。宿主给的那批里带着 current（它按“这块屏在看哪个”
+        // 算的），这里得抹掉，不然画的时候又照它加上了。
+        const copy = Object.assign({}, row, {
           __section: "groupSession",
           section: it.section,
           groupPath: it.file,
-          // 当前是哪一个会话：现算（取回时算过一遍，之后切了会话也得跟着换）
-          current: isActiveSessionFile(row.file),
-        }));
+        });
+        delete copy.current;
+        out.push(copy);
       }
       if (g.hasMore) { out.push({ __section: "groupMore", section: it.section, groupPath: it.file }); }
     }
@@ -5841,18 +5791,6 @@
     return true;
   }
 
-  // 网页端：点输入框里那颗“停止生成”图标 = 给当前会话按 Esc。
-  if (stopBtn) {
-    stopBtn.addEventListener("click", () => {
-      if (!abortActiveTab()) { syncComposerButtons(); return; }
-      // 先藏起来并禁用，等宿主的 streamEnd 回来再由 updateSendState 按真实状态刷新；
-      // 万一点击没送到（连接断了），过一会儿按真实状态重新算：还在生成就把图标放回来。
-      stopBtn.disabled = true;
-      stopBtn.classList.add("hidden");
-      setTimeout(syncComposerButtons, 1500);
-    });
-  }
-
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") { return; }
     if (pickerModalOpen()) { return; }
@@ -5886,6 +5824,8 @@
       // 浮层开着的时候这条键归浮层（收回它）：别顺手把正在生成的那一轮也中止了。
       // 这里只管“不中止”，收回浮层由 document 上那个监听做。
       if (pickerModalOpen()) { return; }
+      // 清单开着也一样：这条键归那张清单（收回它），别顺手把正在生成的那一轮中止了
+      if (saidOpen()) { return; }
       if (abortActiveTab()) { e.preventDefault(); }
       return;
     }
@@ -6233,7 +6173,6 @@
         t.segmentThinking = null;
         const label = msg.imageCount ? "[" + msg.imageCount + " 张图片] " : "";
         addPlain(t, "user", "你", label + (msg.text || ""));
-        scheduleUserRail(t);   // 导航条上多一根短横线（整屏重画时几百条消息一条条来，一帧只重画一次）
         endThinking(t, "");
         scrollToBottom(t, true);
         // 刚发出去的这条把末尾那颗胶囊挤到了前头：重算一次（生成中会换成「卡住了」）
@@ -6348,8 +6287,9 @@
         // 重画历史（切会话 / 重连）随之开始：这之后涌进来的工具调用都是老消息，别飘 +1
         t.noCountPop = true;
         t.paneEl.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
-        syncUserRail(t);   // 用户消息导航跟着清空（后面重放的用户消息会一条条补回来）
         t.endHintEl = null;   // 消息流末尾那颗「继续」/「卡住了」也随重画一起没了（引用跟着丢，见 syncEndHint）
+        t.endHintRow = null;
+        t.endHintStopEl = null;
         t.emptyHintGone = false;   // 空提示又回来了（见 hideEmptyHint）
         // 历史窗口状态一并重置：按钮随 innerHTML 清掉了；暂存区里若有没插完的
         // 「加载更早」那批也作废（会话已换，再插进去就串了），置个丢弃标记等 End 来清
@@ -6640,7 +6580,6 @@
       pane.style.overflowAnchor = prevAnchorStyle;
     };
     if (frames > 0) { requestAnimationFrame(settle); } else { pane.style.overflowAnchor = prevAnchorStyle; }
-    syncUserRail(t);   // 补进来一批更早的：导航条上跟着多几根（都在最前头，整列重画）
   }
 
   function removeSession(id) {

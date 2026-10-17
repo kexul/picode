@@ -119,11 +119,11 @@ module.exports = async (page) => {
     await page.sleep(1200);
     await page.shot("ask-card-typed-done.png");
 
-    // 四、没答就按“停止生成”（输入框角上那颗）：这一轮被停 → 模型收到「用户没作答」
+    // 四、没答就按“停止生成”（消息流末尾那颗方块）：这一轮被停 → 模型收到「用户没作答」
     await page.send("问单选");
     await waitCards(page, 1, 30000);
     await page.sleep(300);
-    await page.click("#stopBtn");
+    await page.click("#stopHintBtn");
     await waitDone(page, 4, 30000);
     await page.sleep(1200);
     await page.shot("ask-card-stopped.png");

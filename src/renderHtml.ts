@@ -61,7 +61,7 @@ export function renderHTML(opts: RenderHTMLOpts): string {
     `    <button id="newSessionBtn" title="新建会话 (Ctrl+Alt+N)" aria-label="新建会话">${ICON_ADD}</button>\n` +
     `    <div id="sessionCenter">\n` +
     `      <button id="sessionName" title="当前会话 · 点这里换会话" aria-label="当前会话">\n` +
-    `        <span class="sn-dot"></span>\n` +
+    `        <span class="sn-mark"><span class="sn-dot"></span><span class="sn-count"></span></span>\n` +
     `        <span class="sn-lines"><span class="sn-title"><span class="sn-text"></span></span><span id="sessionPath" class="hidden"><span class="sp-text"></span></span></span>\n` +
     `      </button>\n` +
     `    </div>\n` +

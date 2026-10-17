@@ -64,13 +64,14 @@ npm run web:shot -- --width 1000 --height 760 --script dev/toolMerge.js
 
 # 验「正在跑的那一条」（工具标签下面那行摘要：在跑的那条把命令 / 读哪个文件直接写出来，
 # 跑完一条少一条，一条都不在跑之后先留一会儿字、再淡出（不是一下没了），位置留到下面出正文 / 这一轮跑完，
-# 一串 60 毫秒跑完的调用连着来也不该一闪一闪，同时跑几条就排几行，think 与 ask_choice 不出这条）：
+# 一串 60 毫秒跑完的调用连着来也不该一闪一闪，同时跑几条就排几行，think 与 ask_choice 不出这条，
+# 一行放不下的长命令字自己慢慢横向滚、只往一个方向（到头停一下从头来，不看末尾就白滚了），
+# 放得下的那条一动不动）：
 npm run web:shot -- --width 900 --height 620 --script dev/runningLine.js
 
-# 验消息流右边那条「用户消息导航」（一句一根短横线：条数与位置、停上去出一行字（从那行字跟着鼠标换）、
-# 点一根跳过去并闪一下、正读着的那条亮着、空会话与只有一句时不出现也不挡鼠标、整屏重画后跟着重画、
-# 画的那一下还没排上版时自己补画）：
-npm run web:shot -- --width 900 --height 700 --script dev/userRail.js
+# 验输入框左边那颗「你说过的话」与它弹出来的清单（按钮常显、点开一行一句、当前那句标亮、
+# 点一行跳过去、Esc 与点别处收起、空会话只说一句“还没说过话”、手机上往上弹不出屏）：
+npm run web:shot -- --width 900 --height 700 --script dev/saidList.js
 
 # 验会话那套（顶条名字跟着 pi 标题变 / 切会话 / 列表里关会话）：
 npm run web:shot -- --fake-pi --script dev/sessionFlow.js
@@ -87,7 +88,7 @@ FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev
 # 所以要慢一点儿的假 pi，才来得及在它还在跑的时候停掉：
 FAKEPI_THINK_MS=4000 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaTools.js
 
-# 验顶条中间那颗小点（本会话闲着、派出去的子会话还在跑时也亮着呼吸；
+# 验顶条中间那颗小点（本会话闲着、派出去的子会话还在跑时也亮着呼吸，点下面写着还有几个在跑；
 # 小点与箭头是落在“会话名 + 目录两行”中间，不是只对着会话名那一行；投假会话列表，不真派活）：
 npm run web:shot -- --width 900 --height 620 --script dev/childDot.js
 
@@ -239,11 +240,11 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `askNotice.js` | 验“模型问选择题（ask_choice）也发一条系统通知”（同一个开关、同一个规矩：正看着它也发、别的屏在聊的会话在问也发、点一下切过去答；扩展问的确认 / 输入 / 选一个不发；开关一关就不发）：`node dev/askNotice.js` |
 | `trustedOrigin.js` | 验“页面是从 https 反代的地址打开的”（设置里 `webServer.trustedOrigins` 写下的来源放行、别人的照旧 403、反代后面页面照常收发、那个地址算“安全来源”所以通知发得出去；顺带看 http 地址下设置里给的理由对不对；现签证书 + 本机起一个 https 反代来跑）：`node dev/trustedOrigin.js` |
 | `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接 / 断线期间问的选择题）：`node dev/reconnect.js` |
-| `childDot.js` | 验顶条那颗小点（子会话在跑时父会话那颗点也呼吸；它与箭头落在两行中间）：`npm run web:shot -- --script dev/childDot.js` |
+| `childDot.js` | 验顶条那颗小点与它下面的数字（子会话在跑时父会话那颗点也呼吸、点下面写着还有几个在跑，零个时数字收起来；点与箭头落在两行中间）：`npm run web:shot -- --script dev/childDot.js` |
 | `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并 + 正文之后补来的那段跑完并回本段那颗）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |
 | `thinkTipPerf.js` | 验 `think` 提示框开着时思考边流边长的开销与表现（节流、跟着贴底、往回滚就不跟）：`npm run web:shot -- --fake-pi --script dev/thinkTipPerf.js` |
 | `endHint.js` | 验消息流末尾那颗胶囊（空会话不露面、跑完在末尾露面且脸是「继续」、点它发一条“继续”、打的字留着、生成中换成「卡住了」且跟得住末尾、点「卡住了」这一轮当场停住并补发一条“卡住了”、再跑完回到末尾、页面重开（含生成中重开）后还在末尾）：`FAKEPI_THINK_MS=2500 npm run web:shot -- --fake-pi --script dev/endHint.js` |
-| `userRail.js` | 验消息流右边那条「用户消息导航」（一句一根短横线：条数与位置、停上去出一行字且从那行字跟着鼠标换、点一根跳过去并闪一下、正读着的那条亮着、空会话与只有一句时不出现也不挡鼠标、整屏重画后跟着重画、画的那一下还没排上版时自己补画；假数据，不叫模型）：`npm run web:shot -- --width 900 --height 700 --script dev/userRail.js` |
+| `saidList.js` | 验输入框左边那颗「你说过的话」与它弹出来的清单（按钮常显、点开一行一句、当前那句标亮、点一行跳过去、Esc 与点别处收起、空会话只说一句“还没说过话”、手机上往上弹不出屏；假数据，不叫模型）：`npm run web:shot -- --width 900 --height 700 --script dev/saidList.js` |
 | `askCards.js` | 验问话卡片（长在消息流里）：假 pi 演模型调 `ask_choice` 与扩展问用户，单选 / 多选 / 自己写 / 停止生成 / 确认 / 输入 / 选一个 / 刷新页面各走一遍；那两个输入框写着 `enterkeyhint`、“自己写”那行里回车交完光标落回下面那个输入框也在这里盯着：`npm run web:shot -- --fake-pi --script dev/askCards.js` |
 | `askQuestion.js` | 同上但那一条是真路的：真模型 → 真 pi（插件给它 `-e` 了桥扩展）→ 卡片 → 回话文件 → 工具结果（慢） |
 | `askDialog.js` + `askDialogTrigger.ts` | 验真扩展问的“要你打字 / 要你点是或否 / 选一个”：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |

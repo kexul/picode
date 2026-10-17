@@ -147,18 +147,26 @@ module.exports = async (page) => {
         return JSON.stringify({ title, file });
     `));
     if (!picked || !picked.file) { throw new Error("下半那一格展开的组里不足两行，点不动（换个目录再跑）"); }
-    // 开完以后那一行会变成“当前”（行上那颗标记按会话文件算）：等它落下来
-    let opened = "";
+    // 开完以后那一行行尾会多一颗「已打开」（工作区里的行不再标“当前”了，认这一颗）：等它落下来
+    let opened = false;
     for (let i = 0; i < 16; i++) {
         await page.sleep(500);
         opened = await page.eval(`
-            const row = document.querySelector("#dockBody .pk-space-pane .pk-item.pk-group-session.current");
-            return row ? (row.dataset.file || "") : "";
+            const row = Array.prototype.find.call(document.querySelectorAll("#dockBody .pk-space-pane .pk-item.pk-group-session"), (r) => r.dataset.file === ${JSON.stringify(picked.file)});
+            return !!(row && row.querySelector(".pk-open-tag"));
         `);
-        if (opened === picked.file) { break; }
+        if (opened) { break; }
     }
-    console.log(`点下半组里那一行（${picked.title}）以后，当前是不是它：${opened === picked.file ? "是" : "不是（" + opened + "）"}`);
-    if (opened !== picked.file) { throw new Error(`点下半那一行开的不是它：想开 ${picked.title}（${picked.file}），当前 ${opened || "没有那行"}`); }
+    console.log(`点下半组里那一行（${picked.title}）以后，它行尾那颗「已打开」露面了吗：${opened ? "露面了" : "没露面"}`);
+    if (!opened) { throw new Error(`点下半那一行开的不是它（行尾没出「已打开」）：想开 ${picked.title}（${picked.file}）`); }
+    // 工作区里这些行不标「当前」：它现在就是正在看的会话，照样不该有选中底色与左边那道竖条
+    const marked = await page.eval(`
+        const row = Array.prototype.find.call(document.querySelectorAll("#dockBody .pk-space-pane .pk-item.pk-group-session"), (r) => r.dataset.file === ${JSON.stringify(picked.file)});
+        if (!row) { return { found: false }; }
+        return { found: true, current: row.classList.contains("current"), before: getComputedStyle(row, "::before").content };
+    `);
+    console.log(`    它有没有被标成「当前」：${marked.current}（竖条 ${marked.before}）`);
+    if (!marked.found || marked.current) { throw new Error("工作区里正在看的那一行不该标「当前」：" + JSON.stringify(marked)); }
 
     console.log("\n结论：点「新会话」整块一次没重画，下半展开的组一根手指都没动（" + base.groupRows + " 行原样），"
         + "只有上半那一格重画（多出那一行）；重画过后点上下的行都还准。");

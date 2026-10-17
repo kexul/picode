@@ -64,11 +64,11 @@ module.exports = async (page) => {
     await page.sleep(3000);
     await page.shot("ask-written-after.png");
 
-    // 四、不答就按“停止生成”（输入框角上那颗）：这一轮被停 → 模型收到的应该是“用户没作答”
+    // 四、不答就按“停止生成”（消息流末尾那颗方块）：这一轮被停 → 模型收到的应该是“用户没作答”
     await page.send("再问我一次同样的问题（options 写 [\"A\",\"B\"]），这回我要把它停掉。");
     await waitCards(page, 1, 180000);
     await page.sleep(300);
-    await page.click("#stopBtn");
+    await page.click("#stopHintBtn");
     await page.sleep(3000);
     await page.shot("ask-stopped.png");
 

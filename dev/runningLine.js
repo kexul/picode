@@ -13,6 +13,9 @@
  *   · think（思考）与 ask_choice（问话卡片）不出这条；
  *   · 跑着的时候又来了正文 → 这条仍在它那批标签下面；之后又开了一批标签 → 跟着挪到新那批下面。
  *   · 整屏重画（刷新页面 / 重连后重放历史）：历史里那条还没结果的调用重放出来后，这条也在（只一条）。
+ *   · 一行放不下的字自己横向滚、只往一个方向（跑马灯，不回程）：滚的距离够看到末尾、
+ *     快慢按每秒 30 像素算，
+ *     放得下的那条一动不动；系统里开了「减少动态效果」就不滚（字按老样子截断）。
  *
  *   npm run web:shot -- --width 900 --height 620 --script dev/runningLine.js
  * 图落在 dev/shots/。
@@ -39,7 +42,8 @@ module.exports = async (page) => {
             spin: shown.filter((el) => el.querySelector(".tool-icon")).length,
             afterRow: Boolean(prev) && prev.classList.contains("tool-row"),
             afterText: Boolean(prev) && prev.classList.contains("assistant"),
-            beforeEndHint: Boolean(next) && next.classList.contains("msg-endhint"),
+            // 末尾那一行是一个盒子（装「继续 / 卡住了」和停止生成），不是单个胶囊了
+            beforeEndHint: Boolean(next) && (next.classList.contains("end-hint-row") || next.classList.contains("msg-endhint")),
             lastName: Boolean(line) && pane.lastElementChild === line,
         };
     `);
@@ -59,6 +63,13 @@ module.exports = async (page) => {
     if (JSON.stringify(s.items) !== JSON.stringify(["$ npm run compile"])) { problems.push("在跑的那条 bash 没把命令行写出来：" + JSON.stringify(s.items)); }
     if (!s.afterRow) { problems.push("这条没贴在工具标签下面"); }
     if (s.spin !== 1) { problems.push("这条里的齿轮没转圈"); }
+    // 工具标签（上面那排）的齿轮不转：这一排是“跑过哪些调用”的记账，转的只有下面这条
+    const pillSpin = await page.eval(`
+        const el = document.querySelector(".session-pane .tool-row .tool.running .tool-icon");
+        return el ? getComputedStyle(el).animationName : "（没有那颗齿轮）";
+    `);
+    console.log("   工具标签里那颗齿轮的动画：" + pillSpin);
+    if (pillSpin !== "none") { problems.push("工具标签里的齿轮不该转：" + pillSpin); }
 
     // ---- 第二幕：同时跑两条（read + bash）→ 一条一行，顺序跟着标签走 ----
     await post([
@@ -235,6 +246,82 @@ module.exports = async (page) => {
     s = await state();
     console.log("   这一轮跑完（streamEnd）：" + show(s));
     if (s.hasNode) { problems.push("这一轮跑完了，这条的位置还留着：" + JSON.stringify(s)); }
+
+    // ---- 第十二幕：一行放不下的字自己横向滚，只往一个方向（放得下的那条一动不动）----
+    // 同一批里一条长命令、一条短命令：长的滚、短的不动，两行一样高（滚动不影响这条的高矮）。
+    await post([
+        { type: "assistantFull", text: "这一条命令很长。" },
+        { type: "tool", toolName: "bash", args: { command: "git log --oneline --all --graph --decorate --date=short --pretty=format:'%h %ad %an %s' -- media src | head -200 && npm run compile && npm run web:shot -- --width 900 --height 700" }, toolCallId: "r1" },
+        { type: "tool", toolName: "bash", args: { command: "npm test" }, toolCallId: "r2" },
+    ]);
+    await page.sleep(300);
+    const rolls = () => page.eval(`
+        const items = Array.from(document.querySelectorAll(".session-pane .tool-running .tool-running-item"));
+        return items.map((el) => {
+            const t = el.querySelector(".tr-text");
+            const run = el.querySelector(".tr-run");
+            const box = t.getBoundingClientRect();
+            const cs = run ? getComputedStyle(run) : null;
+            return {
+                text: (run || t).textContent,
+                roll: t.classList.contains("roll"),
+                anim: cs ? cs.animationName : "none",
+                dir: cs ? cs.animationDirection : "-",
+                left: run ? Math.round(run.getBoundingClientRect().left - box.left) : 0,
+                shift: parseFloat(t.style.getPropertyValue("--tr-shift")) || 0,
+                dur: parseFloat(t.style.getPropertyValue("--tr-dur")) || 0,
+                over: t.scrollWidth - t.clientWidth,
+                h: el.offsetHeight,
+            };
+        });
+    `);
+    let r = await rolls();
+    console.log("\n第十二幕（一条长命令 + 一条短命令同时在跑）：");
+    console.log("   长的那条：滚=" + r[0].roll + " 动画=" + r[0].anim + " 位移=" + r[0].shift + "px 溢出=" + r[0].over + "px 一趟=" + r[0].dur + "s");
+    console.log("   短的那条：滚=" + r[1].roll + " 动画=" + r[1].anim + " 位移=" + r[1].left);
+    if (!r[0].roll || r[0].anim !== "tr-roll") { problems.push("长命令没自己滚起来：" + JSON.stringify(r[0])); }
+    if (r[0].dir !== "normal") { problems.push("滚是来回滚的（该只往一个方向）：" + r[0].dir); }
+    if (r[1].roll || r[1].anim !== "none" || r[1].left !== 0) { problems.push("放得下的那条在动（该一动不动）：" + JSON.stringify(r[1])); }
+    if (r[0].h !== r[1].h) { problems.push("滚动的那条跟不滚的那条不一样高：" + r[0].h + " vs " + r[1].h); }
+    if (Math.abs(r[0].dur - Math.max(1, Math.abs(r[0].shift) / 30 / 0.91)) > 0.05) { problems.push("滚的快慢不是按每秒 30 像素算的：一趟 " + r[0].dur + " 秒、位移 " + r[0].shift + "px"); }
+    // 滚到底能看到末尾：把位移直接当作静态位置量一次（不然得等它慢慢滚到头）。
+    const tail = await page.eval(`
+        const t = document.querySelector(".session-pane .tool-running .tool-running-item .tr-text");
+        const run = t.querySelector(".tr-run");
+        if (!run) { return { ok: false, why: "没滚起来" }; }
+        const box = t.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(run);
+        const textW = range.getBoundingClientRect().width;
+        const shift = parseFloat(t.style.getPropertyValue("--tr-shift")) || 0;
+        run.style.animation = "none";
+        run.style.transform = "translateX(" + shift + "px)";
+        const end = run.getBoundingClientRect();
+        const ok = end.right <= box.right + 1;
+        run.style.animation = ""; run.style.transform = "";
+        return { textW: Math.round(textW), boxW: Math.round(box.width), shift, ok };
+    `);
+    console.log("   滚到底：字宽 " + tail.textW + "、框 " + tail.boxW + "、位移 " + tail.shift + " → 末尾" + (tail.ok ? "整条都在框里" : "还露在框外"));
+    if (!tail.ok) { problems.push("滚到底也看不到命令的末尾：" + JSON.stringify(tail)); }
+    await page.sleep(2000);
+    const moved = await rolls();
+    console.log("   2 秒后：长的位移 " + moved[0].left + "（刚才是 " + r[0].left + "）、短的还在 " + moved[1].left);
+    if (!(moved[0].left < r[0].left - 20)) { problems.push("字没在动（位移该一直往左走）：" + r[0].left + " → " + moved[0].left); }
+    if (moved[1].left !== 0) { problems.push("短的那条跟着动了：" + moved[1].left); }
+    // 只往一个方向：接着量一会儿，位移只能一直变小（有一点误差），不能倒回去（倒回去就是往右滚了）
+    const steps = [];
+    for (let i = 0; i < 8; i++) { await page.sleep(300); steps.push((await rolls())[0].left); }
+    const back = steps.filter((x, i) => i > 0 && x > steps[i - 1] + 1);
+    console.log("   接着的 2.4 秒：位移 " + JSON.stringify(steps) + (back.length ? "（有往回走的）" : "（一直往一个方向走）"));
+    if (back.length) { problems.push("字滚到头又倒回来了（该只往一个方向）：" + JSON.stringify(steps)); }
+    await page.shot("running-line-roll.png");
+    // 系统里开了「减少动态效果」：字不滚（按老样子截断），别人不受影响。
+    await page.cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+    await page.sleep(100);
+    const slowed = await rolls();
+    await page.cdp.send("Emulation.setEmulatedMedia", { features: [] });
+    console.log("   开了「减少动态效果」：长的动画=" + slowed[0].anim);
+    if (slowed[0].anim !== "none") { problems.push("开了「减少动态效果」字还在滚：" + JSON.stringify(slowed[0])); }
 
     if (problems.length) {
         throw new Error("有对不上的地方：\n  - " + problems.join("\n  - "));

@@ -53,7 +53,7 @@ function check(cond, text) { (cond ? ok : bad)(text); }
 /** 界面上"正在输出"相关的几处状态。 */
 async function uiState(page) {
     return page.eval(`
-        const stop = document.getElementById('stopBtn');
+        const stop = document.getElementById('stopHintBtn');
         const status = document.querySelector('.pane-status');
         const nameBtn = document.getElementById('sessionName');
         const bubbles = document.querySelectorAll('.msg.assistant');
