@@ -4,7 +4,7 @@ import * as zlib from "zlib";
 import * as http from "http";
 import * as os from "os";
 import * as path from "path";
-import { getBrowserChatHtml } from "./browserHtml";
+import { getBrowserChatHtml, getPanelChatHtml } from "./pageHtml";
 import { mediaStamp, mediaVersion } from "./mediaVersion";
 import { HEARTBEAT_MS, PAGE_STALE_MS, PING_MS, TICK_TIMEOUT_MS } from "./chatProtocol";
 import type { ChatBroadcaster } from "./chatBroadcaster";
@@ -28,10 +28,11 @@ import { insideFolder, relativeTo } from "./pathRules";
  *
  * 两条线：
  *   - **页面线**（浏览器 / 手机，以及 VS Code 里的那块网页视图）：对话页面（`/`）、
- *     界面资源（`/media/…`）、后端推给页面的消息流（`/events`）、页面发给后端的消息（`/api`）、
+ *     插件里那块对话面板的整页（`/panel`）、界面资源（`/media/…`）、
+ *     后端推给页面的消息流（`/events`）、页面发给后端的消息（`/api`）、
  *     页面要看的文件与目录（`/file`、`/dir`，只读、只看得到当前会话目录里的）。
- *     VS Code 里的网页视图走同样的 `/events` + `/api`（只是中间隔着插件进程转发），
- *     界面代码完全一样；
+ *     VS Code 里的网页视图走同样的 `/events` + `/api`（只是中间隔着插件进程转发）、
+ *     跑同一样一份界面代码，只有整页交给它时是内联版（`/panel`，见 pageHtml.ts）；
  *   - **屏线**（VS Code 窗口，`/screen` + `/screenapi`）：窗口在后端登记自己是打开着哪些
  *     文件夹的，好让"用编辑器打开这个文件"这类活得有人干。
  *   另外有一个 `/health`，给单实例判断探活用。
@@ -428,6 +429,11 @@ export class PiChatWebServer {
                 this.sendPage(req, res, url.searchParams.get("pageId") ?? "");
                 return;
             }
+            if (pathname === "/panel") {
+                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                this.sendPanel(req, res, url.searchParams.get("theme") ?? "", url.searchParams.get("csp") ?? "");
+                return;
+            }
             if (pathname.startsWith("/media/")) {
                 this.sendMedia(req, res, pathname.slice("/media/".length), url.searchParams.get("v") ?? "");
                 return;
@@ -512,9 +518,35 @@ export class PiChatWebServer {
     }
 
     /**
+     * 发插件里那块对话面板的整页 HTML（骨架 + 内联样式与脚本）。
+     *
+     * 为什么由后端拼：面板的骨架以前编在插件包里、脚本从 /media/ 现取，两边版本一错开
+     * 就是“页面起得来、行为不对”而且毫无提示。整页都由后端给，骨架与脚本必然同源。
+     * 面板那边抓回来后整份塞进网页视图，所以这里也带 no-store：永远拿当前这一份。
+     *
+     * @param theme 初始界面颜色（面板传编辑器当前主题，之后显示选项会覆盖）
+     * @param cspSource 网页视图的 cspSource（安全策略里图片那一条用）
+     */
+    private sendPanel(req: http.IncomingMessage, res: http.ServerResponse, theme: string, cspSource: string): void {
+        const themeMode = theme === "dark" ? "dark" : "light";
+        let html: string;
+        try {
+            html = getPanelChatHtml(this.mediaDir, { themeMode, imgCspSource: cspSource });
+        } catch (err: any) {
+            // 内联不安全的序列这类问题重试也没用：把这句原样交给面板去显示
+            this.sendText(req, res, 500, `生成面板页面失败：${err?.message ?? String(err)}`);
+            return;
+        }
+        this.writeBody(req, res, 200, Buffer.from(html, "utf8"), {
+            "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": "no-store",
+        });
+    }
+
+    /**
      * 发一个界面文件（/media/…）。
      *
-     * 地址上带着内容指纹时才允许浏览器长期缓存（页面 HTML 里就是这么引的，见 browserHtml.ts）：
+     * 地址上带着内容指纹时才允许浏览器长期缓存（页面 HTML 里就是这么引的，见 pageHtml.ts）：
      * 文件改了指纹就变、地址跟着变，所以“长期缓存”不会让谁看到旧界面。
      * 指纹对不上（老页面、手敲的地址）或没带 → 照旧 no-store，保证看到的是当前这一份。
      */

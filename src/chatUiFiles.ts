@@ -1,10 +1,9 @@
 /**
- * 界面由哪几个文件组成：一份清单，四处都从它派生。
+ * 界面由哪几个文件组成：一份清单，两处从它派生（都在后端）。
  *
  *   - 网页服务放行哪些静态文件（webTransport 的文件名白名单）；
- *   - 插件那块对话面板要从后端抓哪几份（chatHtml.fetchChatUiFiles）；
- *   - 浏览器页面怎么排这几份（browserHtml）；
- *   - 面板页面怎么排（chatHtml.getChatHtml）。
+ *   - 整页怎么拼：浏览器页面怎么排（pageHtml.getBrowserChatHtml）、
+ *     面板页面怎么内联（pageHtml.getPanelChatHtml）。
  *
  * 加一个界面文件时只改这里（数组顺序就是加载顺序）。角色说明它在界面里干什么，
  * 决定谁在什么时候用它：样式进 <style>，桥必须比主脚本先加载，第三方脚本排在主脚本之前。
@@ -38,7 +37,7 @@ export const CHAT_UI_FILES: readonly ChatUiFile[] = [
     { name: "chat.js", role: "main-script" },
 ];
 
-/** 清单里的文件名：网页服务的白名单、面板的抓取都用它。 */
+/** 清单里的文件名：网页服务的白名单用它。 */
 export const CHAT_UI_FILE_NAMES: readonly string[] = CHAT_UI_FILES.map((file) => file.name);
 
 /** 一种角色只有一个文件的那几份（主样式 / 主题样式 / 桥 / 主脚本）。 */

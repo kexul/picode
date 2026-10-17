@@ -1,3 +1,4 @@
+import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { renderHTML } from "./renderHtml";
@@ -5,40 +6,38 @@ import { mediaVersion } from "./mediaVersion";
 import { chatUiFileOfRole, chatUiFilesOfRole } from "./chatUiFiles";
 
 /**
- * browserHtml —— 生成"在浏览器里打开"的对话页面 HTML。
+ * pageHtml —— 生成对话界面的整页 HTML：同一份骨架、同一份清单，两种装法。
  *
- * 与 chatHtml.ts（VSCode 网页视图用）走同一个 renderHTML()，界面结构、chat.js、
- * chat.css 完全一致，只有三处不同：
- *   1. 资源地址用普通路径 /media/xxx（浏览器直接由网页服务提供），不用 vscode-webview: 那种地址；
- *   2. 内容安全策略按浏览器的规则写（脚本只能来自本站，不允许内联脚本与外部站点）；
- *   3. 页面标识写进 meta（服务靠它认出"当前是哪一个页面"），初始界面颜色也写进 meta
- *      （browserBridge.js 一加载就按它上色）。
+ *   - {@link getBrowserChatHtml}：浏览器页面。样式与脚本走 `/media/xxx?v=指纹`
+ *     （浏览器能长期缓存），安全策略只放本站，页面标识与初始颜色写进 meta；
+ *   - {@link getPanelChatHtml}：插件里那块对话面板。样式与脚本全部内联
+ *     （网页视图里没有可引的资源地址，安全策略用 nonce）。
  *
- * 另外一份差别：VSCode 那份会把界面底部的按钮条藏掉（那些按钮由 VSCode 面板标题栏提供），
- * 浏览器里也没有标题栏，项目与会话收进了顶条最右边的"<<<"按钮（窗口够宽时它常驻在右边占一列，
- * 窄窗里从右侧滑入，见 browserBridge.js、chat.css 末尾那段与 chat.js 的常驻的项目与会话侧边栏），
- * 底部那条在浏览器里同样整条藏掉。
+ * 两种都由后端生成。面板那边以前是自己拼骨架（骨架编在插件包里）、脚本从后端 `/media/`
+ * 现抓 —— 插件的骨架与后端给的脚本一错开，就是“页面起得来、行为不对”，而且没有任何提示。
+ * 现在面板整页也由后端给，骨架和脚本必然出自同一次构建。
  */
+
+/** 读 media/ 下某个文件的文本；读不到就当空（只少一块样式/脚本，界面仍旧起得来）。 */
+function readMedia(mediaDir: string, name: string): string {
+    try {
+        return fs.readFileSync(path.join(mediaDir, name), "utf8");
+    } catch { /* 见上 */ }
+    return "";
+}
 
 /**
  * 生成浏览器页面的 HTML 全文。
- * @param mediaDir 插件安装目录下的 media 目录（读 chat.css 文本用）
+ * @param mediaDir 插件安装目录下的 media 目录（读样式与脚本用）
  * @param pageId 本页面的标识：服务靠它认出"当前是哪一个页面"，
  *               页面发的每条消息都要带上它
  * @param themeMode 初始界面颜色（显示选项里的"界面颜色"）
  */
 export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: "light" | "dark"): string {
-    const readMedia = (name: string): string => {
-        try {
-            return fs.readFileSync(path.join(mediaDir, name), "utf8");
-        } catch { /* 读不到就只少样式，界面仍能跑 */ }
-        return "";
-    };
-
     // 浏览器专用的那份样式也用内联：导出会话时 chat.js 只抓 <style> 里的内容，
     // 用 <link> 引的话导出的 HTML 里就没有样式了。
-    const chatCss = readMedia(chatUiFileOfRole("chat-style").name);
-    const browserCss = readMedia(chatUiFileOfRole("theme-style").name);
+    const chatCss = readMedia(mediaDir, chatUiFileOfRole("chat-style").name);
+    const browserCss = readMedia(mediaDir, chatUiFileOfRole("theme-style").name);
 
     // 地址里带上这份文件的内容指纹：文件没变时浏览器直接用自己存的那份（手机上刷新就不用
     // 每次重下 233KB 的 chat.js），文件改了地址跟着变，不会看到旧界面（见 mediaVersion.ts）。
@@ -77,6 +76,99 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
         // 第三方脚本 + 主脚本，排的先后照清单来（见 chatUiFiles.ts）
         scripts: chatUiFilesOfRole("vendor-script", "main-script").map((file) => ({ src: mediaUrl(file.name) })),
     });
+}
+
+/**
+ * 生成插件里那块对话面板的 HTML 全文：样式与全部脚本内联，脚本顺序照清单来。
+ *
+ * @param imgCspSource 网页视图的 cspSource：消息里的图片按老规矩只放数据地址，
+ *                     这条留着不碍事（面板不用本地资源，改它属于另一件事）
+ * @throws 内容里有 HTML 内联不安全的序列、或 cspSource 里有不安全字符时抛错
+ *         （不该悄悄装一屏坏页面）
+ */
+export function getPanelChatHtml(
+    mediaDir: string,
+    opts: { themeMode: "light" | "dark"; imgCspSource: string },
+): string {
+    const inline = new Map<string, string>();
+    for (const file of chatUiFilesOfRole("bridge", "vendor-script", "main-script")) {
+        const code = escapeInlineScript(readMedia(mediaDir, file.name));
+        if (endsInDoubleEscape(code)) {
+            throw new Error(`界面文件 ${file.name} 里有 HTML 内联不安全的序列（<!-- 后面跟 <script），先改掉这个文件再内联。`);
+        }
+        inline.set(file.name, code);
+    }
+    const inlineOf = (role: Parameters<typeof chatUiFileOfRole>[0]): string =>
+        inline.get(chatUiFileOfRole(role).name) ?? "";
+
+    const n = nonce();
+    const csp =
+        `default-src 'none'; ` +
+        `img-src ${cspSourceOf(opts.imgCspSource)} data:; ` +
+        `style-src 'unsafe-inline'; ` +
+        `script-src 'nonce-${n}';`;
+
+    // 界面颜色由 browserBridge.js 按 themeMode 上色；VSCode 注入的主题变量里
+    // 调色板没覆盖的那些照常生效。
+    const extraHead =
+        `<meta name="pichat-theme" content="${opts.themeMode}" />\n` +
+        `  <style id="browser-theme">${readMedia(mediaDir, chatUiFileOfRole("theme-style").name)}</style>`;
+    // 桥必须比 chat.js 先加载（chat.js 一开头就调 acquireVsCodeApi）：
+    // renderHTML 把 extraBodyBottom 放在所有 <script> 之前，正好。
+    const extraBodyBottom = `<script nonce="${n}">${inlineOf("bridge")}</script>`;
+
+    return renderHTML({
+        csp,
+        chatCss: readMedia(mediaDir, chatUiFileOfRole("chat-style").name),
+        scriptNonce: n,
+        extraHead,
+        extraBodyBottom,
+        scripts: chatUiFilesOfRole("vendor-script", "main-script").map((file) => ({
+            content: inline.get(file.name) ?? "",
+        })),
+    });
+}
+
+/** 面板那份安全策略的 nonce（随机串，写进哪几个脚本标签就是哪几段能跑）。 */
+function nonce(): string {
+    return crypto.randomBytes(16).toString("hex");
+}
+
+/**
+ * cspSource 要原样拼进 `<meta http-equiv="Content-Security-Policy">` 这个属性里，
+ * 所以先卡住字符集，别让别处的输入从这儿钻进 HTML。
+ */
+function cspSourceOf(value: string): string {
+    if (!/^[A-Za-z0-9._:/+-]*$/.test(value)) {
+        throw new Error("网页视图的 cspSource 里有不安全字符，不写进安全策略。");
+    }
+    return value;
+}
+
+/**
+ * 内联进 `<script>` 的转义：内容里出现字面的 `</script>` 会把标签提前收掉，
+ * 后半段就被当成 HTML 了。替换成 `<\/script`：在字符串、模板串、正则里 `\/` 都等于 `/`，
+ * 内容含义不变。
+ */
+function escapeInlineScript(code: string): string {
+    return code.replace(/<\/(script)/gi, "<\\/$1");
+}
+
+/**
+ * 内联脚本的安全检查（HTML 解析的"双转义"坑）。
+ *
+ * 脚本内容里先出现 `<!--`、后又出现 `<script`（中间没有 `-->`）时，HTML 解析器会进入
+ * "双重转义"状态：在那之后真正的 `</script>` 收不掉标签，整个页面就装不起来了。
+ * 注意这跟 JS 语义无关，解析器扫的是原文 —— 字符串里的 `<!--` 也算。
+ * 有这个序列的文件不能内联，得先把文件改掉。
+ */
+function endsInDoubleEscape(code: string): boolean {
+    // 从最后一个 --> 往后看：那段里只要有 <!-- 后面跟 <script，收尾就收不住
+    const close = code.lastIndexOf("-->");
+    const tail = close >= 0 ? code.slice(close + 3) : code;
+    const open = tail.indexOf("<!--");
+    if (open < 0) { return false; }
+    return /<script/i.test(tail.slice(open + 4));
 }
 
 /** 写进 HTML 属性前转义引号等字符（页面标识是随机串，这里只是防万一）。 */

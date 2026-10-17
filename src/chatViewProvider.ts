@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { fetchChatUiFiles, getChatHtml } from "./chatHtml";
+import { fetchPanelHtml } from "./chatHtml";
 import { relativeTo } from "./pathRules";
 import { BackendClient, type BackendState } from "./backendClient";
 import { VscodeScreen } from "./vscodeScreen";
@@ -27,9 +27,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     private showingChat = false;
     private state: BackendState = "offline";
     private note = "";
-    /** 装界面的代数：异步抓界面文件期间面板被换掉 / 后端状态又变了时，旧结果直接丢掉。 */
+    /** 装界面的代数：异步取页面期间面板被换掉 / 后端状态又变了时，旧结果直接丢掉。 */
     private renderSeq = 0;
-    /** 界面文件没抓到时的重试定时器（后端在跑但文件一时取不到，隔一会儿再试）。 */
+    /** 面板整页没取到时的重试定时器（后端在跑但页面一时取不到，隔一会儿再试）。 */
     private chatRetryTimer?: ReturnType<typeof setTimeout>;
     /** 面板此刻装着的那块失败提示（同一句就不重装，免得提示屏隔几秒闪一下）。 */
     private lastFailNote = "";
@@ -76,8 +76,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     resolveWebviewView(webviewView: vscode.WebviewView): void {
         this.view = webviewView;
-        // 界面文件不再从本地装（从后端现取，见 chatHtml.ts），
-        // 所以不用 localResourceRoots，只开脚本。
+        // 整页由后端给（见 chatHtml.ts），所以不用 localResourceRoots，只开脚本。
         webviewView.webview.options = { enableScripts: true };
         this.webviewReady = false;
         this.showingChat = false;
@@ -99,7 +98,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    /** 网页视图该装哪一屏：后端连着装对话界面（界面文件从后端现取），没连着装提示屏。 */
+    /** 网页视图该装哪一屏：后端连着装对话界面（整页从后端取），没连着装提示屏。 */
     private renderScreen(): void {
         const view = this.view;
         if (!view) { return; }
@@ -120,16 +119,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.webviewReady = false;
     }
 
-    /** 从后端抓界面文件、拼成 HTML 装进网页视图。抓取是异步的：过期结果直接丢掉。 */
+    /** 从后端取面板整页、装进网页视图。抓取是异步的：过期结果直接丢掉。 */
     private async renderChatScreen(view: vscode.WebviewView): Promise<void> {
         this.clearChatRetry();
         const seq = ++this.renderSeq;
         const baseUrl = this.client.url;
-        const files = baseUrl ? await fetchChatUiFiles(baseUrl) : undefined;
+        const got = baseUrl
+            ? await fetchPanelHtml(baseUrl, {
+                themeMode: this.vsCodeTheme(),
+                imgCspSource: view.webview.cspSource,
+            })
+            : undefined;
         if (seq !== this.renderSeq || this.view !== view) { return; }
-        if (!files) {
-            // 后端在跑但文件没取到（多半正在重启）：退回提示屏，隔几秒自动再试
-            const note = "后端连上了，但界面文件没取到（可能正在重启）。会自动再试。";
+        if (!got) {
+            // 后端在跑但页没取到（多半正在重启）：退回提示屏，隔几秒自动再试
+            const note = "后端连上了，但界面没取到（可能正在重启）。会自动再试。";
             this.log(note);
             if (this.lastFailNote !== note) {
                 this.lastFailNote = note;
@@ -145,22 +149,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             }, CHAT_RETRY_MS);
             return;
         }
-        try {
-            view.webview.html = getChatHtml(files, {
-                themeMode: this.vsCodeTheme(),
-                imgCspSource: view.webview.cspSource,
-            });
-        } catch (err: any) {
-            // 界面文件里有内联不安全的序列（chatHtml.ts 的检查报出来的）：
-            // 重试也没用，把话撂在提示屏上，等后端换个版本（状态变化会再触发）。
-            const note = err?.message ?? String(err);
+        if (got.kind === "http") {
+            // 后端回了错页（版本对不上、或者界面文件本身不能内联）：重试没用，
+            // 把话撂在提示屏上，等后端换个版本（状态变化会再触发）。
+            const note = got.note;
             this.log(`装界面失败：${note}`);
-            this.lastFailNote = note;
-            view.webview.html = offlineHtml(note);
+            if (this.lastFailNote !== note) {
+                this.lastFailNote = note;
+                view.webview.html = offlineHtml(note);
+                this.webviewReady = false;
+            }
             this.showingChat = false;
-            this.webviewReady = false;
             return;
         }
+        view.webview.html = got.html;
         this.lastFailNote = "";
         this.showingChat = true;
         this.webviewReady = false;
@@ -287,7 +289,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 }
 
-/** 界面文件没抓到时隔多久再试一次（后端重启的间隙一般就几秒）。 */
+/** 面板整页没取到时隔多久再试一次（后端重启的间隙一般就几秒）。 */
 const CHAT_RETRY_MS = 3000;
 
 /** "后端没在跑"那块屏：一句话 + 该敲的命令；后端一连上自己会换成对话界面，所以不用按钮。 */
