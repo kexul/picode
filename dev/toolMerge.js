@@ -11,7 +11,8 @@
  *   · taba（点名不合并）单独一个；codemode 跟别的工具一样收成一个（带次数）；
  *   · write / edit 也照这一套收（标签上只有工具名和次数）：改了哪个文件、diff / 写入预览、
  *     跳转 / 回滚都在提示框里，一条调用一块；
- *   · 结果带图的 read → 从组里摘出去，在对话里铺成一整块图（组里剩几条，小方块里的数字跟着重算）。
+ *   · 结果带图的 read → 从组里摘出去，在对话里铺成一整块图（组里剩几条，小方块里的数字跟着重算）；
+ *     图排在它那条调用所在那一批的位置上（后面接着调的、后面才到的正文都在图下面），不往消息流末尾扔。
  *
  *   npm run web:shot -- --width 1000 --height 760 --script dev/toolMerge.js
  * 图落在 dev/shots/。
@@ -257,6 +258,52 @@ module.exports = async (page) => {
         problems.push("write 的提示框没按「一条调用一块」画（该一条带写入预览与跳转、一条是错误）：" + JSON.stringify(writeCounts));
     }
     if (writeCounts.inHead !== 1) { problems.push("「跳转」没排在写入那一条的标题行上：" + JSON.stringify(writeCounts)); }
+
+    // ---- 第七幕：图排在它那条调用的位置上（不往消息流末尾扔）----
+    // 一条路：图的结果回来了，这一批里接着又调了一个工具 —— 新的那排标签得排在图下面；
+    // 另一条路：图的结果回来得晚（后面的正文都已经到了）—— 图还待在自己那一批的位置上。
+    const IMAGE = { data: PNG_BASE64, mimeType: "image/png" };
+    const imageResult = (id) => ({
+        type: "toolResult", toolCallId: id, isError: false, durationMs: 60,
+        resultText: "Read image file [image/png]", images: [IMAGE],
+    });
+    await post(page, [
+        { type: "assistantFull", text: "看一眼图，接着再查一遍：" },
+        // 先读一个文本文件（这一组里还留着它，那排标签不会因为摘掉读图那条而整个收掉）
+        call("f0", "read", { path: "media/chat.js" }),
+        call("f1", "read", { path: "示例图片.png" }),
+        done("f0", "…（40 行）"),
+        imageResult("f1"),
+        call("f2", "bash", { command: "git status --short" }),
+        done("f2", " M media/chat.js"),
+    ]);
+    await page.sleep(400);
+    const orderA = await dump(page);
+    console.log("\n第七幕·图回来之后同一批里又调了一个工具（新的那排标签该在图下面）：\n  " + orderA);
+    const aImage = orderA.lastIndexOf("图片块：read 示例图片.png");
+    const aBash = orderA.lastIndexOf("工具行：[bash");
+    if (aImage < 0) { problems.push("第一张图没铺出来：" + orderA); }
+    else if (aBash < aImage) { problems.push("图回来之后又调的那一条排到了图上面（该在图下面）：" + orderA); }
+
+    await post(page, [
+        { type: "assistantFull", text: "再瞄一眼这张图：" },
+        call("h1", "read", { path: "示例图片.png" }),
+        call("h2", "bash", { command: "git diff --stat" }),
+        done("h2", " media/chat.js | 40 +++---"),
+        { type: "assistantFull", text: "图就排在这儿：" },
+        imageResult("h1"),   // 结果回来得晚：正文已经在它后面了
+    ]);
+    await page.sleep(400);
+    const orderB = await dump(page);
+    console.log("\n第七幕·图的结果回来得晚（该待在「再瞄一眼这张图：」下面，不跑到后一条正文后面）：\n  " + orderB);
+    await page.shot("merge-image-order.png");
+    const bSay = orderB.lastIndexOf("正文：再瞄一眼这张图");
+    const bImage = orderB.indexOf("图片块：read 示例图片.png", bSay);
+    const bLate = orderB.lastIndexOf("正文：图就排在这儿");
+    if (bImage < 0) { problems.push("回来得晚的那张图没铺出来：" + orderB); }
+    else if (!(bSay >= 0 && bSay < bImage && bImage < bLate)) {
+        problems.push("回来得晚的那张图没排在自己那一批的位置上（该在「再瞄一眼这张图：」与「图就排在这儿：」之间）：" + orderB);
+    }
 
     // ---- 收场：整屏重放一遍，看合并标签在刷新/重连后是不是一样 ----
     await post(page, [{ type: "clear", keepDraft: true }]);

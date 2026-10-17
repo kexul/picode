@@ -16,6 +16,8 @@
  *   · 一行放不下的字自己横向滚、只往一个方向（跑马灯，不回程）：滚的距离够看到末尾、
  *     快慢按每秒 30 像素算，
  *     放得下的那条一动不动；系统里开了「减少动态效果」就不滚（字按老样子截断）。
+ *   · 每条末尾钉一个耗时（跑了多久）：数字自己往上走、钉在这一条的右端，字滚它不滚；
+ *     重放出来的老调用不知道什么时候开始的，不写耗时（不然会从屏幕刚打开那一刻开始数）。
  *
  *   npm run web:shot -- --width 900 --height 620 --script dev/runningLine.js
  * 图落在 dev/shots/。
@@ -38,7 +40,8 @@ module.exports = async (page) => {
         const next = line ? line.nextElementSibling : null;
         return {
             hasNode: Boolean(line),
-            items: shown.map((el) => el.textContent.trim()),
+            items: shown.map((el) => { const t = el.querySelector(".tr-text"); return (t || el).textContent.trim(); }),
+            times: shown.map((el) => { const t = el.querySelector(".tr-time"); return t ? t.textContent.trim() : ""; }),
             spin: shown.filter((el) => el.querySelector(".tool-icon")).length,
             afterRow: Boolean(prev) && prev.classList.contains("tool-row"),
             afterText: Boolean(prev) && prev.classList.contains("assistant"),
@@ -48,7 +51,8 @@ module.exports = async (page) => {
         };
     `);
     const post = (messages) => page.eval(`for (const m of ${JSON.stringify(messages)}) { window.postMessage(m, "*"); } return true;`);
-    const show = (s) => "盒子还在=" + s.hasNode + " items=" + JSON.stringify(s.items) + " 转圈=" + s.spin
+    const show = (s) => "盒子还在=" + s.hasNode + " items=" + JSON.stringify(s.items)
+        + (s.times && s.times.some(Boolean) ? " 耗时=" + JSON.stringify(s.times) : "") + " 转圈=" + s.spin
         + " 贴工具行下面=" + s.afterRow + " 贴正文下面=" + s.afterText + " 在末尾胶囊前面=" + s.beforeEndHint;
 
     // ---- 第一幕：一条还在跑（带部分结果）→ 标签下面写出它的命令 ----
@@ -63,6 +67,8 @@ module.exports = async (page) => {
     if (JSON.stringify(s.items) !== JSON.stringify(["$ npm run compile"])) { problems.push("在跑的那条 bash 没把命令行写出来：" + JSON.stringify(s.items)); }
     if (!s.afterRow) { problems.push("这条没贴在工具标签下面"); }
     if (s.spin !== 1) { problems.push("这条里的齿轮没转圈"); }
+    // 这一批是“投进页面的老消息”（跟重放历史一个待遇）：开始时刻不知道，不该写耗时
+    if (s.times && s.times.some(Boolean)) { problems.push("来历不明的调用也写上了耗时（该不写）：" + JSON.stringify(s.times)); }
     // 工具标签（上面那排）的齿轮不转：这一排是“跑过哪些调用”的记账，转的只有下面这条
     const pillSpin = await page.eval(`
         const el = document.querySelector(".session-pane .tool-row .tool.running .tool-icon");
@@ -322,6 +328,80 @@ module.exports = async (page) => {
     await page.cdp.send("Emulation.setEmulatedMedia", { features: [] });
     console.log("   开了「减少动态效果」：长的动画=" + slowed[0].anim);
     if (slowed[0].anim !== "none") { problems.push("开了「减少动态效果」字还在滚：" + JSON.stringify(slowed[0])); }
+
+    // ---- 第十三幕：每条末尾钉一个耗时（自己往上走；字滚它不滚）----
+    // 这一批里一条长命令（会滚）+ 一条短命令：两条都要有耗时，数字得往上走，
+    // 两条的耗时都钉在这一条的右端；长命令的字滚起来的时候，耗时的位置一动不动。
+    // 上一幕那两条（r1 / r2）先收尾：它们是在 noCountPop 的时候投进去的（没有开始时刻），
+    // 留在这一幕里会把“没写耗时”的账算到这一幕头上
+    await post([
+        { type: "toolResult", toolCallId: "r1", isError: false, resultText: "…", durationMs: 900 },
+        { type: "toolResult", toolCallId: "r2", isError: false, resultText: "53 个测试都过了", durationMs: 900 },
+    ]);
+    await page.sleep(400);
+    await post([
+        // 这一轮开始了（真跑的时候是 streamStart 把“新消息”这个状态翻过来的，见 chat.js 的 noCountPop）：
+        // 这之后的调用才记开始时刻、才有耗时
+        { type: "streamStart" },
+        { type: "assistantFull", text: "再跑两个慢一点的：" },
+        { type: "tool", toolName: "bash", args: { command: "node scripts/长一点的命令 --flag-one --flag-two --flag-three --flag-four --flag-five --flag-six --flag-seven --flag-eight" }, toolCallId: "k1" },
+        { type: "tool", toolName: "bash", args: { command: "npm test" }, toolCallId: "k2" },
+    ]);
+    await page.sleep(300);
+    const clock = () => page.eval(`
+        const line = document.querySelector(".session-pane .tool-running");
+        const items = Array.from(document.querySelectorAll(".session-pane .tool-running .tool-running-item"));
+        const box = (el) => { const r = el.getBoundingClientRect(); return { left: Math.round(r.left), right: Math.round(r.right) }; };
+        return {
+            lineRight: line ? Math.round(line.getBoundingClientRect().right) : null,
+            times: items.map((el) => { const t = el.querySelector(".tr-time"); return t ? t.textContent.trim() : null; }),
+            timeBox: items.map((el) => { const t = el.querySelector(".tr-time"); return t ? box(t) : null; }),
+            roll: items.map((el) => { const t = el.querySelector(".tr-text"); return !!t && t.classList.contains("roll"); }),
+            shift: items.map((el) => {
+                const t = el.querySelector(".tr-text");
+                const run = el.querySelector(".tr-run");
+                if (!t) { return 0; }
+                return run ? Math.round(run.getBoundingClientRect().left - t.getBoundingClientRect().left) : 0;
+            }),
+        };
+    `);
+    /** "3.2s" / "12s" / "1分05秒" / "1时02分" → 毫秒（量它是不是在往上走）。 */
+    const ms = (text) => {
+        if (!text) { return -1; }
+        let m = text.match(/^([0-9.]+)s$/);
+        if (m) { return Math.round(parseFloat(m[1]) * 1000); }
+        m = text.match(/^([0-9]+)分([0-9]+)秒$/);
+        if (m) { return (Number(m[1]) * 60 + Number(m[2])) * 1000; }
+        m = text.match(/^([0-9]+)时([0-9]+)分$/);
+        if (m) { return (Number(m[1]) * 3600 + Number(m[2]) * 60) * 1000; }
+        return -2;
+    };
+    const c1 = await clock();
+    console.log("\n第十三幕（每条末尾的耗时）：");
+    console.log("   刚出来：" + JSON.stringify(c1.times) + " 右端=" + JSON.stringify(c1.timeBox.map((b) => b && b.right)) + "（这一条右端 " + c1.lineRight + "）");
+    await page.sleep(900);
+    const c2 = await clock();
+    console.log("   0.9 秒后：" + JSON.stringify(c2.times) + " 字在滚=" + JSON.stringify(c2.roll));
+    if (c1.times.some((t) => !t)) { problems.push("有调用没写耗时：" + JSON.stringify(c1.times)); }
+    if (c1.times.some((t) => ms(t) < 0)) { problems.push("耗时的写法不认识（该是 3.2s / 12s / 1分05秒 这样）：" + JSON.stringify(c1.times)); }
+    if (!(ms(c2.times[0]) > ms(c1.times[0]) && ms(c2.times[1]) > ms(c1.times[1]))) {
+        problems.push("耗时没往上走：" + JSON.stringify(c1.times) + " → " + JSON.stringify(c2.times));
+    }
+    // 钉在这一条的右端：两条的右边缘对齐，也贴着这一条的右端（内边距 14px，同 .tool-running）
+    if (Math.abs(c1.timeBox[0].right - c1.timeBox[1].right) > 1) { problems.push("两条的耗时没对齐到同一条竖线上：" + JSON.stringify(c1.timeBox)); }
+    if (Math.abs(c1.lineRight - 14 - c1.timeBox[0].right) > 2) { problems.push("耗时没钉在这一条的右端：" + JSON.stringify(c1.timeBox[0]) + " 这一条右端 " + c1.lineRight); }
+    if (!c1.roll[0]) { problems.push("这条长命令没滚起来（要验的「字滚它不滚」就无从验起）"); }
+    // 字在滚（位移在变），耗时的位置一动不动
+    const c3 = await clock();
+    console.log("   再隔 0.9 秒（字的位置 " + c1.shift[0] + " → " + c3.shift[0] + "）：耗时左边 " + c1.timeBox[0].left + " → " + c3.timeBox[0].left);
+    if (c3.shift[0] === c1.shift[0]) { problems.push("字没在滚（量不到「滚的时候耗时不跟着动」）"); }
+    if (c3.timeBox[0].left !== c1.timeBox[0].left) { problems.push("字滚的时候耗时跟着动了（该钉住）：" + c1.timeBox[0].left + " → " + c3.timeBox[0].left); }
+    await page.shot("running-line-clock.png");
+    await post([
+        { type: "toolResult", toolCallId: "k1", isError: false, resultText: "好了", durationMs: 1200 },
+        { type: "toolResult", toolCallId: "k2", isError: false, resultText: "53 个测试都过了", durationMs: 900 },
+    ]);
+    await page.sleep(500);
 
     if (problems.length) {
         throw new Error("有对不上的地方：\n  - " + problems.join("\n  - "));

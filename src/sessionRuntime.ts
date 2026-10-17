@@ -1192,6 +1192,12 @@ export class SessionRuntime {
                     break;
                 case "assistant": {
                     const parts = Array.isArray(m.content) ? m.content : [];
+                    // 这条消息的时刻（pi 记下的毫秒时间戳）：界面上鼠标停在正文上时写出来
+                    // （见 media/chat.js 的 attachMsgTime）。pi 记的是毫秒数，个别调试用的 pi
+                    // （dev/fakePi.js）给的是 ISO 字符串：两种都认；认不出来就不带，界面自己按现在算。
+                    const rawAt = m.timestamp;
+                    const stamp = typeof rawAt === "number" ? rawAt : (typeof rawAt === "string" ? Date.parse(rawAt) : NaN);
+                    const at = Number.isFinite(stamp) ? stamp : undefined;
                     let text = "";
                     for (const c of parts) {
                         if (c.type === "text") {
@@ -1201,14 +1207,14 @@ export class SessionRuntime {
                             // 先把手头攒的正文发出去：免得思考排到了它前面（同 toolCall 那条）。
                             if (typeof c.thinking === "string" && c.thinking.trim()) {
                                 if (text.trim()) {
-                                    emit({ type: "assistantFull", text });
+                                    emit({ type: "assistantFull", text, at });
                                     text = "";
                                 }
                                 emit({ type: "thinkingFull", text: c.thinking });
                             }
                         } else if (c.type === "toolCall") {
                             if (text.trim()) {
-                                emit({ type: "assistantFull", text });
+                                emit({ type: "assistantFull", text, at });
                                 text = "";
                             }
                             this.edits.collectKnownFile(c.name, c.arguments);
@@ -1255,6 +1261,7 @@ export class SessionRuntime {
                         emit({
                             type: "assistantFull",
                             text,
+                            at,
                         });
                     }
                     // 历史中的失败消息（stopReason=error）：展示错误文本；

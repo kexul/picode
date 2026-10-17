@@ -59,15 +59,20 @@ npm run web:shot -- --fake-pi --send "随便说点什么" --shot fake.png
 npm run web:shot -- --width 1000 --height 620 --script dev/toolRow.js
 
 # 验合并本身（同名的收成一个、悬浮提示里一条条列出来、write / edit 也按名字收且每条的
-# 「跳转 / 回滚」排在各自的标题行上、读图那条摘出去、不合并的那几个、重放后一样）：
+# 「跳转 / 回滚」排在各自的标题行上、读图那条摘出去、不合并的那几个、重放后一样，
+# 读图铺出来的那块图排在这条调用当时的位置上：后面接着调的、后面才到的正文都在它下面）：
 npm run web:shot -- --width 1000 --height 760 --script dev/toolMerge.js
 
 # 验「正在跑的那一条」（工具标签下面那行摘要：在跑的那条把命令 / 读哪个文件直接写出来，
 # 跑完一条少一条，一条都不在跑之后先留一会儿字、再淡出（不是一下没了），位置留到下面出正文 / 这一轮跑完，
 # 一串 60 毫秒跑完的调用连着来也不该一闪一闪，同时跑几条就排几行，think 与 ask_choice 不出这条，
 # 一行放不下的长命令字自己慢慢横向滚、只往一个方向（到头停一下从头来，不看末尾就白滚了），
-# 放得下的那条一动不动）：
+# 放得下的那条一动不动，每条末尾钉一个往上走的耗时（字滚它不滚、重放的老调用不写））：
 npm run web:shot -- --width 900 --height 620 --script dev/runningLine.js
+
+# 验正文右下角那个「消息的时刻」（鼠标停上去才露、原来的复制按钮已经撤了：今天只写时分，
+# 别的日子补日期、跨年写全年，title 是完整时刻，没带时刻的按现在算，那颗小字不挡鼠标）：
+npm run web:shot -- --fake-pi --script dev/msgTime.js
 
 # 验输入框左边那颗「你说过的话」与它弹出来的清单（按钮常显、点开一行一句、当前那句标亮、
 # 点一行跳过去、Esc 与点别处收起、空会话只说一句“还没说过话”、手机上往上弹不出屏）：
@@ -246,6 +251,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `thinkTipPerf.js` | 验 `think` 提示框开着时思考边流边长的开销与表现（节流、跟着贴底、往回滚就不跟）：`npm run web:shot -- --fake-pi --script dev/thinkTipPerf.js` |
 | `endHint.js` | 验消息流末尾那颗胶囊（空会话不露面、跑完在末尾露面且脸是「继续」、点它发一条“继续”、打的字留着、生成中换成「卡住了」且跟得住末尾、点「卡住了」这一轮当场停住并补发一条“卡住了”、再跑完回到末尾、页面重开（含生成中重开）后还在末尾）：`FAKEPI_THINK_MS=2500 npm run web:shot -- --fake-pi --script dev/endHint.js` |
 | `saidList.js` | 验输入框左边那颗「你说过的话」与它弹出来的清单（按钮常显、点开一行一句、当前那句标亮、点一行跳过去、Esc 与点别处收起、空会话只说一句“还没说过话”、手机上往上弹不出屏；假数据，不叫模型）：`npm run web:shot -- --width 900 --height 700 --script dev/saidList.js` |
+| `msgTime.js` | 验正文右下角那个「消息的时刻」（不悬停不露面、原来那颗复制按钮确实没了、今天只写时分 / 别的日子补日期 / 跨年写全年、title 是完整年月日时分秒、没带时刻的按现在算、那颗小字不挡鼠标）：`npm run web:shot -- --fake-pi --script dev/msgTime.js` |
 | `askCards.js` | 验问话卡片（长在消息流里）：假 pi 演模型调 `ask_choice` 与扩展问用户，单选 / 多选 / 自己写 / 停止生成 / 确认 / 输入 / 选一个 / 刷新页面各走一遍；那两个输入框写着 `enterkeyhint`、“自己写”那行里回车交完光标落回下面那个输入框也在这里盯着：`npm run web:shot -- --fake-pi --script dev/askCards.js` |
 | `askQuestion.js` | 同上但那一条是真路的：真模型 → 真 pi（插件给它 `-e` 了桥扩展）→ 卡片 → 回话文件 → 工具结果（慢） |
 | `askDialog.js` + `askDialogTrigger.ts` | 验真扩展问的“要你打字 / 要你点是或否 / 选一个”：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |

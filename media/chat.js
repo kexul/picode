@@ -350,8 +350,6 @@
   }
 
   const GEAR_SVG = '<span class="tool-icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M22.83,10.09 A11 11 0 0 1 22.83,13.91 L20.37,13.48 A8.5 8.5 0 0 1 18.96,16.88 A8.5 8.5 0 0 1 21.01,18.31 A11 11 0 0 1 18.31,21.01 L16.88,18.96 A8.5 8.5 0 0 1 13.48,20.37 A8.5 8.5 0 0 1 13.91,22.83 A11 11 0 0 1 10.09,22.83 L10.52,20.37 A8.5 8.5 0 0 1 7.12,18.96 A8.5 8.5 0 0 1 5.69,21.01 A11 11 0 0 1 2.99,18.31 L5.04,16.88 A8.5 8.5 0 0 1 3.63,13.48 A8.5 8.5 0 0 1 1.17,13.91 A11 11 0 0 1 1.17,10.09 L3.63,10.52 A8.5 8.5 0 0 1 5.04,7.12 A8.5 8.5 0 0 1 2.99,5.69 A11 11 0 0 1 5.69,2.99 L7.12,5.04 A8.5 8.5 0 0 1 10.52,3.63 A8.5 8.5 0 0 1 10.09,1.17 A11 11 0 0 1 13.91,1.17 L13.48,3.63 A8.5 8.5 0 0 1 16.88,5.04 A8.5 8.5 0 0 1 18.31,2.99 A11 11 0 0 1 21.01,5.69 L18.96,7.12 A8.5 8.5 0 0 1 20.37,10.52 Z"/><circle cx="12" cy="12" r="3.2"/></svg></span>';
-  // 复制按钮图标：VS Code 官方 codicon copy 原始 path（fill 系图标，与 VS Code 界面同款）
-  const COPY_SVG = '<svg viewBox="0 0 16 16" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M3 5V12.73C2.4 12.38 2 11.74 2 11V5C2 2.79 3.79 1 6 1H9C9.74 1 10.38 1.4 10.73 2H6C4.35 2 3 3.35 3 5ZM11 15H6C4.897 15 4 14.103 4 13V5C4 3.897 4.897 3 6 3H11C12.103 3 13 3.897 13 5V13C13 14.103 12.103 15 11 15ZM12 5C12 4.448 11.552 4 11 4H6C5.448 4 5 4.448 5 5V13C5 13.552 5.448 14 6 14H11C11.552 14 12 13.552 12 13V5Z"/></svg>';
   // ==================== 全局视图选项 ====================
   var sendKeyCombo = "enter";
   var newSessionKey = "ctrl+alt+n";
@@ -585,7 +583,9 @@
       tps: undefined,
       tpsStart: 0,
       tpsTokens: 0,
-      currentToolRow: null,
+      // 这一批（两条正文之间的那一串调用）的落脚点：那条 .tool-row，或者这一批里刚铺下的图块
+      // （见 mountToolImageBlock）。来了正文 / 用户消息就归零（新的一批）。
+      currentToolTail: null,
       // 消息流末尾那条「正在跑」的：贴在当前这批工具标签下面，一行一条（见 syncRunningLine）
       runningLine: null,
       // 这一批（一条工具调用行）里按工具名归拢的合并标签（见 addToolToGroup）：
@@ -1308,18 +1308,42 @@
     return body;
   }
 
-  async function copyToClipboard(text) {
-    try { await navigator.clipboard.writeText(text); return; } catch {}
-    const ta = document.createElement("textarea");
-    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
-    document.body.appendChild(ta); ta.select();
-    try { document.execCommand("copy"); } catch {}
-    ta.remove();
+  /** 这条消息的时刻：鼠标停在正文上才露（跟原来的复制按钮一个位置，见 chat.css 的 .msg-time）。
+   *  at 是那条消息的开始时刻（毫秒）；拿不到（老后端 / 历史里没带）就用现在。
+   *  字写进 data-time、由 CSS 的 ::after 画：它不算正文的文字（选中复制、Ctrl+A、读屏都不带上它）。 */
+  function attachMsgTime(div, at) {
+    const ms = typeof at === "number" && at > 0 ? at : Date.now();
+    const el = document.createElement("span");
+    el.className = "msg-time";
+    el.dataset.time = formatMsgTime(ms);   // 画出来靠 CSS 的 ::after（见 chat.css）
+    el.title = formatFullTime(ms);
+    div.appendChild(el);
+  }
+
+  /** 时刻写成短的：今天只写时分（15:04），别的日子前面补日期（10-17 15:04），跨年的写全年。 */
+  function formatMsgTime(ms) {
+    const d = new Date(ms);
+    const hm = pad2(d.getHours()) + ":" + pad2(d.getMinutes());
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) { return hm; }
+    if (d.getFullYear() === now.getFullYear()) { return pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) + " " + hm; }
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) + " " + hm;
+  }
+
+  /** 鼠标停上去看的完整时刻（写进 title）：年-月-日 时:分:秒。 */
+  function formatFullTime(ms) {
+    const d = new Date(ms);
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) + " "
+      + pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+  }
+
+  function pad2(n) {
+    return (n < 10 ? "0" : "") + n;
   }
 
   function addPlain(st, cls, role, text) {
     hideEmptyHint(st);
-    st.currentToolRow = null; // 新消息块：工具标签另起一行，不往上一段后面续
+    st.currentToolTail = null; // 新消息块：工具标签另起一行，不往上一段后面续
     endRunningLine(st);       // 这一批工具过去了：还在留的那条位置到此为止（见 endRunningLine）
     const div = document.createElement("div");
     div.className = "msg " + cls + " msg-enter";
@@ -1332,27 +1356,15 @@
       body.textContent = content;
       div.appendChild(body);
     }
-    if (cls === "assistant") { attachCopyBtn(div, () => content); }
+    if (cls === "assistant") { attachMsgTime(div, null); }
     st.paneEl.appendChild(div);
     scrollToBottom(st);
     return div.firstElementChild;
   }
-  /** 给消息气泡右下角挂一个复制按钮（hover 时显示），getText 返回要复制的原文。 */
-  function attachCopyBtn(div, getText) {
-    const btn = document.createElement("button");
-    btn.className = "msg-copy"; btn.type = "button"; btn.title = "复制回复";
-    btn.innerHTML = COPY_SVG;
-    btn.addEventListener("click", async () => {
-      await copyToClipboard(getText() || "");
-      btn.classList.add("copied"); btn.title = "已复制";
-      setTimeout(() => { btn.classList.remove("copied"); btn.title = "复制回复"; }, 1500);
-    });
-    div.appendChild(btn);
-  }
 
-  function addMarkdown(st, raw) {
+  function addMarkdown(st, raw, at) {
     hideEmptyHint(st);
-    st.currentToolRow = null; // 新正文块：工具标签另起一行，不往上一段后面续
+    st.currentToolTail = null; // 新正文块：工具标签另起一行，不往上一段后面续
     endRunningLine(st);       // 这一批工具过去了：还在留的那条位置到此为止（见 endRunningLine）
     const div = document.createElement("div");
     div.className = "msg assistant msg-enter";
@@ -1360,7 +1372,7 @@
     body.className = "md";
     body.dataset.raw = raw || "";
     body.innerHTML = renderMarkdown(raw || "");
-    attachCopyBtn(div, () => body.dataset.raw || "");
+    attachMsgTime(div, at);
     div.appendChild(body);
     st.paneEl.appendChild(div);
     scrollToBottom(st);
@@ -1375,12 +1387,19 @@
     // （刷新后 sessionList / 重画先到、窗格后挂），那会儿 pane 里所有节点 isConnected 都是 false，
     // 每个标签都会被误判"行没了"而各自新建一行，重放出来的工具调用就竖着排了。
     // 看爹更可靠：行被收掉（图块收编后删空行）或 pane 被清空（innerHTML 重写）时爹就没了。
-    if (!st.currentToolRow || st.currentToolRow.parentElement !== st.paneEl) {
-      st.currentToolRow = document.createElement("div");
-      st.currentToolRow.className = "msg tool-row msg-enter";
-        st.paneEl.appendChild(st.currentToolRow);
+    // 还得真是那条 .tool-row：这一批的落脚点可能是刚铺在它下面的一块图（见 mountToolImageBlock），
+    // 新标签不能往那上面挂，得另起一行排在图下面。
+    if (!isToolRow(st.currentToolTail) || st.currentToolTail.parentElement !== st.paneEl) {
+      st.currentToolTail = document.createElement("div");
+      st.currentToolTail.className = "msg tool-row msg-enter";
+        st.paneEl.appendChild(st.currentToolTail);
     }
-    return st.currentToolRow;
+    return st.currentToolTail;
+  }
+
+  /** 这个节点是不是一条工具调用行（这一批的落脚点也可能是图块，见 toolTagHost）。 */
+  function isToolRow(el) {
+    return !!el && el.classList.contains("tool-row");
   }
 
   /** 把标签挂进这条工具调用行。 */
@@ -1434,6 +1453,8 @@
     tag._resultMeta = {};
     tag._isError = false;
     tag._done = !toolCallId; // 无 id 的静态调用无结果事件，按已完成处理
+    // 开始时刻（重放历史里的老调用记 0，不写耗时，见 runningCalls）
+    tag._startedAt = st.noCountPop ? 0 : Date.now();
     // 提示内容：运行中显示调用参数（输入）；结果到达后由 setTagTip 填入全部原文（输出）。
     // 带图片的结果（read 读图这类）不走提示框：结果到了会把这个标签整个换成对话里的一块图，
     // 见 mountToolImageBlock。
@@ -1489,6 +1510,9 @@
       meta: {},
       isError: false,
       done: !toolCallId, // 无 id 的静态调用无结果事件，按已完成处理
+      // 这条从什么时候开始跑的（毫秒）：「正在跑的那一条」后面那个耗时拿它算（见 runningCalls）。
+      // 重放历史里的老调用（noCountPop）不知道它当时什么时候开始的：记 0，那种就不写耗时。
+      startedAt: st.noCountPop ? 0 : Date.now(),
     };
     g.entries.push(entry);
     if (toolCallId) { st.toolGroupEntries.set(toolCallId, entry); }
@@ -1565,23 +1589,25 @@
   }
 
   /** 结果带图（read 读图这类）：把这一条从合并组里摘出去，在对话里铺成一整块图。
-   *  组被摘空了就连标签带那条工具行一起收掉，后面的调用会另起一行、另起一组。 */
+   *  图插在这条调用所在那一排工具行的位置上（见 mountToolImageBlock）；组被摘空了就连标签带那条工具行
+   *  一起收掉，后面的调用会另起一行、另起一组，排在图下面。 */
   function removeEntryFromGroup(st, entry, images) {
     const g = entry.group;
+    const row = g.row;   // 摘之前先记下这一排：图要插在它的位置上
     const i = g.entries.indexOf(entry);
     if (i >= 0) { g.entries.splice(i, 1); }
     st.toolGroupEntries.delete(entry.id);
     if (g.entries.length === 0) {
-      const row = g.tag.parentElement;
       g.tag.remove();
       const batch = st.toolGroups;
       if (batch && batch.byName.get(g.name) === g) { batch.byName.delete(g.name); }
-      dropToolRow(st, row);
       syncRunningLine(st);
     } else {
       syncGroupTag(st, g);
     }
-    mountToolImageBlock(st, { toolName: entry.name, argStr: entry.argStr, tipCall: entry.tipCall, toolCallId: entry.id }, images);
+    // 先插图、再收掉空了的那条行：顺序反过来（先把行收掉）就找不着图该待的地方了
+    mountToolImageBlock(st, { toolName: entry.name, argStr: entry.argStr, tipCall: entry.tipCall, toolCallId: entry.id, row: row }, images);
+    dropToolRow(st, row);
   }
 
   // ==================== 正在跑的那一条 ====================
@@ -1606,21 +1632,26 @@
   const RUNNING_ROLL_MIN_PX = 4;    // 溢出这几个像素以内不算「放不下」（末尾省略号那点宽度，不值当滚）
   const RUNNING_ROLL_SPEED = 30;    // 放不下的那行字自己滚动的快慢：每秒 30 像素（慢慢地滚）
   const RUNNING_ROLL_SWEEP = 0.91;  // 一趟里走的时间占多少（另 9% 是两头停的那一下，见 chat.css 的 tr-roll）
+  const RUNNING_CLOCK_MS = 200;     // 后面那个耗时的刷新快慢（一秒里刷五回就够看着在走）
 
-  /** 现在还有哪些调用在跑、各自那一行摘要（一条一行，按页面上标签的顺序）。
-   *  直接看页面上那些转圈的标签：批次换了行、重放历史都不影响 —— 写出来的跟看到的是同一份。 */
-  function runningCallTexts(st) {
+  /** 现在还有哪些调用在跑、各自那一行摘要与开始时刻（一条一行，按页面上标签的顺序）。
+   *  直接看页面上那些转圈的标签：批次换了行、重放历史都不影响 —— 写出来的跟看到的是同一份。
+   *  startedAt 是这条开始的时刻（毫秒）；0 表示不知道（重放历史里的老调用，见 addToolToGroup）——
+   *  那种就不写耗时，不然会从屏幕刚打开那一刻开始数。 */
+  function runningCalls(st) {
     const out = [];
     for (const tag of st.paneEl.querySelectorAll(".tool.running")) {
       const g = tag._tipGroup;
       if (g) {
         for (const e of g.entries) {
-          if (!e.done && !RUNNING_LINE_SKIP.has(e.name)) { out.push(e.tipCall || e.name); }
+          if (!e.done && !RUNNING_LINE_SKIP.has(e.name)) {
+            out.push({ text: e.tipCall || e.name, startedAt: e.startedAt || 0 });
+          }
         }
         continue;
       }
       if (tag._done === false && !RUNNING_LINE_SKIP.has(tag._toolName)) {
-        out.push(tag._tipCall || tag._toolName || "");
+        out.push({ text: tag._tipCall || tag._toolName || "", startedAt: tag._startedAt || 0 });
       }
     }
     return out;
@@ -1631,8 +1662,8 @@
   function syncRunningLine(st) {
     // 往暂存区补更早的历史时（「加载更早」那批）不碰：那块还没在页面上（同 placeEndHint）
     if (!st || !st.paneEl || st._stage === st.paneEl) { return; }
-    const texts = runningCallTexts(st);
-    if (!texts.length) {
+    const calls = runningCalls(st);
+    if (!calls.length) {
       // 一条都不在跑了：先让写着的那条再留一会儿（下一批多半这会儿就接上），到点见下面那个函数。
       // 本来就没这条（这一批没调过工具）什么都不用做。
       if (st.runningLine && !st.runningLineTimer) {
@@ -1648,21 +1679,61 @@
     const line = st.runningLine;
     line.textContent = "";
     const toMeasure = [];
-    for (const text of texts) {
+    for (const call of calls) {
       const item = document.createElement("div");
       item.className = "tool-running-item";
       item.insertAdjacentHTML("afterbegin", GEAR_SVG);
       const t = document.createElement("span");
       t.className = "tr-text";
-      t.textContent = text;
+      t.textContent = call.text;
       item.appendChild(t);
+      // 这条跑了多久：钉在这一条末尾（字自己滚的时候它不动，见 chat.css 的 tr-time）。
+      // 重放出来的老调用没有开始时刻：干脆不添那个位置（see runningCalls）
+      if (call.startedAt) {
+        const time = document.createElement("span");
+        time.className = "tr-time";
+        time._startedAt = call.startedAt;
+        time.textContent = formatElapsed(Date.now() - call.startedAt);
+        item.appendChild(time);
+      }
       line.appendChild(item);
-      toMeasure.push([t, text]);
+      toMeasure.push([t, call.text]);
     }
     placeRunningLine(st, line);
+    startRunClock(st);
     // 量「这一行放不放得下」得等它排到页面上（新起一条时上面那一步才把它插进去），
     // 所以挪完位置再逐条看一眼：放不下的改成自己滚（见 rollRunningText）。
     for (const [t, text] of toMeasure) { rollRunningText(t, text); }
+  }
+
+  /** 那条「正在跑」上后面那个耗时：每 RUNNING_CLOCK_MS 重写一次（只动那几个数字，不动字、
+   *  不重排这一条），所以字自己横向滚的时候耗时不动。 */
+  function startRunClock(st) {
+    if (st.runClock) { return; }
+    st.runClock = setInterval(() => {
+      const line = st.runningLine;
+      if (!line) { stopRunClock(st); return; }
+      for (const el of line.querySelectorAll(".tr-time")) {
+        if (el._startedAt) { el.textContent = formatElapsed(Date.now() - el._startedAt); }
+      }
+    }, RUNNING_CLOCK_MS);
+  }
+  function stopRunClock(st) {
+    if (!st || !st.runClock) { return; }
+    clearInterval(st.runClock);
+    st.runClock = 0;
+  }
+
+  /** 跑了多久写成短的：十秒以内留一位小数（1.2s，看着它在走），一分钟以内写整秒（37s），
+   *  再长写「1分05秒」、一小时往上写「1时02分」。 */
+  function formatElapsed(ms) {
+    const ms0 = ms > 0 ? ms : 0;
+    if (ms0 < 10000) { return (ms0 / 1000).toFixed(1) + "s"; }
+    const sec = Math.floor(ms0 / 1000);
+    if (sec < 60) { return sec + "s"; }
+    const min = Math.floor(sec / 60);
+    if (min < 60) { return min + "分" + (sec % 60 < 10 ? "0" : "") + (sec % 60) + "秒"; }
+    return Math.floor(min / 60) + "时" + (min % 60 < 10 ? "0" : "") + (min % 60) + "分";
   }
 
   /** 这一条的字一行放得下就不动（末尾不够就省略号）；放不下就让它自己慢慢横向滚：
@@ -1686,17 +1757,19 @@
   }
 
   /** 留的那一会儿到点了、还是一条都没在跑：这一批过去了就把整条收掉，没过去就把字清掉、位置留着。
-   *  「过去了」看它跟的那排标签还是不是当前这排：下面是正文 / 问话卡片了（currentToolRow 被清掉），
-   *  或者已经换到新的一排上，都算这一批过去了。 */
+   *  「过去了」看它跟的还是不是这一批：下面是正文 / 问话卡片了（currentToolTail 被清掉），
+   *  或者已经换到新的一排 / 新的一块图上了，都算这一批过去了。 */
   function expireRunningLine(st) {
     const line = st.runningLine;
-    if (!line || !st.paneEl || runningCallTexts(st).length) { return; }
-    // 它跟的那排标签没了（那排标签空了被收掉）、或者已经不是当前这排（下面是正文 / 问话卡片了）：
+    if (!line || !st.paneEl || runningCalls(st).length) { return; }
+    // 它跟的那个落脚点没了（那排标签空了被收掉）、或者已经不是这一批了（下面是正文 / 问话卡片了）：
     // 这一批过去了，整条连位置一起收。
-    const rowGone = line._row && line._row.parentElement !== st.paneEl;
-    if (rowGone || st.currentToolRow !== line._row) { dropRunningLine(st); return; }
+    const tailGone = line._tail && line._tail.parentElement !== st.paneEl;
+    if (tailGone || st.currentToolTail !== line._tail) { dropRunningLine(st); return; }
     // 这一批还没过去（下一条工具随时可能来）：字淡掉，位置留着 —— 那个盒子还在页面上、还占着
     // 那条的高度（淡的是里面写着的东西，不是把盒子拿走），下面不会跟着上下跳。
+    // 字都看不见了，后面那个耗时也不用再数了（下一批接上时 syncRunningLine 会重新开）。
+    stopRunClock(st);
     for (const item of line.children) { item.classList.add("gone"); }
   }
 
@@ -1704,6 +1777,7 @@
   function dropRunningLine(st) {
     if (!st) { return; }
     if (st.runningLineTimer) { clearTimeout(st.runningLineTimer); st.runningLineTimer = 0; }
+    stopRunClock(st);
     if (st.runningLine) { st.runningLine.remove(); st.runningLine = null; }
   }
 
@@ -1711,31 +1785,31 @@
    *  还有工具在跑就不收 —— 那说明这一批还没过去，收掉马上又得开一条，正是要避免的那种一闪。 */
   function endRunningLine(st) {
     if (!st || !st.paneEl || st._stage === st.paneEl) { return; }
-    if (runningCallTexts(st).length) { return; }
+    if (runningCalls(st).length) { return; }
     dropRunningLine(st);
   }
 
-  /** 把这条摆到它该在的地方：当前这批标签的下面。_row 记着它跟的是哪排标签（判断这一批过没过去
-   *  用它，见 expireRunningLine）—— 来了一段正文之后它就待在原地、_row 不动，那排标签不再是
-   *  当前那排，这一批就算过去了。 */
+  /** 把这条摆到它该在的地方：这一批的落脚点（那条工具行 / 那块图）下面。_tail 记着它跟的是
+   *  哪个节点（判断这一批过没过去用它，见 expireRunningLine）—— 来了一段正文之后它就待在原地、
+   *  _tail 不动，那个节点不再是当前这批的落脚点，这一批就算过去了。 */
   function placeRunningLine(st, line) {
-    const row = st.currentToolRow;
-    if (row && row.parentElement === st.paneEl) {
-      // 当前这批标签的下面；新一轮工具行上来（上一条正文之后又调了工具）就跟着挪过去。
-      // 问话卡片也挂在这一行下面（见 dockAskCardToRow）：这条排在卡片后面，两边不抢位置。
-      let after = row;
+    const tail = st.currentToolTail;
+    if (tail && tail.parentElement === st.paneEl) {
+      // 当前这批的下面；新一轮工具行上来（上一条正文之后又调了工具）就跟着挪过去。
+      // 问话卡片也挂在这一批下面（见 dockAskCardToRow）：这条排在卡片后面，两边不抢位置。
+      let after = tail;
       while (after.nextElementSibling && after.nextElementSibling.classList.contains("ask-card")) { after = after.nextElementSibling; }
       if (line.previousElementSibling !== after) { after.after(line); }
-      line._row = row;
+      line._tail = tail;
       return;
     }
-    // 手头没有当前工具行（刚来了一段正文，或者问话卡片把行收掉了）：就待在原地
-    // —— 它跟的是它那批标签，不往新内容下面钻（后一条工具调用开了新行时才挪过去）。
+    // 手头没有这一批的落脚点（刚来了一段正文，或者问话卡片把行收掉了）：就待在原地
+    // —— 它跟的是它那批，不往新内容下面钻（后一条工具调用开了新行时才挪过去）。
     if (line.parentElement === st.paneEl) { return; }
     // 还没挂上页面（整屏重画之后头一条就是还在跑的调用）：挂在消息流末尾
-    line._row = row || null;
-    const tail = st.endHintRow;
-    if (tail && tail.parentElement === st.paneEl) { st.paneEl.insertBefore(line, tail); return; }
+    line._tail = tail || null;
+    const hintRow = st.endHintRow;
+    if (hintRow && hintRow.parentElement === st.paneEl) { st.paneEl.insertBefore(line, hintRow); return; }
     st.paneEl.appendChild(line);
   }
 
@@ -2244,10 +2318,13 @@
    * 上面一行说明（齿轮 + 工具名 / 文件名，图片尺寸到了再补上），下面把图完整铺出来。
    *
    * 为什么不用悬浮提示：图藏在提示框里要鼠标悬上去才看得到，而"读了哪张图"本身就是对话内容。
-   * 块自己占一行（不跟正文挤在同一行里）；原来那个小标签由调用方先收掉（见 dropToolTag /
-   * removeEntryFromGroup），那条工具行空了也一并收掉，后面的工具调用会另起一行重新排
-   * （见 toolTagHost）。调用方传 at：{ toolName, argStr, tipCall, toolCallId }（toolCallId 用来
-   * 认“首屏没带过来的那张图”，见 resultImageChip）。
+   * 块自己占一行（不跟正文挤在同一行里）。位置就摆在**这条调用所在那一排工具行**上：消息流是
+   * 一条条往下接的，图是这条调用的结果，就该排在它当时那个地方 —— 扔到消息流末尾的话，后面
+   * 已经接上的正文 / 调用都会被它挤到上面去（顺序就乱了）。插完这一批就算断了：后面的调用另起
+   * 一行排在图下面（见 toolTagHost），不然它们会回到上面那排里、排到图上面去。
+   * 那条工具行空了要收掉（见 dropToolRow）：调用方先把这一排记下来（at.row），插好图再收，
+   * 顺序反了就找不着地方。调用方传 at：{ toolName, argStr, tipCall, toolCallId, row }
+   * （toolCallId 用来认“首屏没带过来的那张图”，见 resultImageChip）。
    */
   function mountToolImageBlock(st, at, images) {
     if (!Array.isArray(images) || images.length === 0) { return; }
@@ -2268,7 +2345,21 @@
     block.appendChild(head);
     // 图直接接在说明行下面；图加载完成后尺寸会写回说明行（见 applyImageDims）
     renderResultImages(block, images, block, { st: st, toolCallId: call.toolCallId });
-    st.paneEl.appendChild(block);
+    const row = call.row && call.row.parentElement === st.paneEl ? call.row : null;
+    if (row) {
+      st.paneEl.insertBefore(block, row.nextSibling);
+      // 这一批的落脚点换成这块图：后面的调用另起一行、排在图下面（见 toolTagHost）。“是这一批吗”
+      // 看它插的这排还是不是当前这一批：图回来得晚（后面又出了正文 / 又调了工具）就只插图、
+      // 不动当前这一批。
+      if (row === st.currentToolTail) {
+        st.currentToolTail = block;
+        // 「正在跑的那一条」认这块图（这一批还没过去，它还得留着慢慢淡，见 expireRunningLine）
+        if (st.runningLine) { placeRunningLine(st, st.runningLine); }
+      }
+    } else {
+      // 那一排已经不在了（整屏重画过 / 从来没给过 row）：只能挂在消息流末尾
+      st.paneEl.appendChild(block);
+    }
     scrollToBottom(st);
   }
 
@@ -3264,7 +3355,7 @@
     const anchor = askCardAnchor(st, card.toolCallId);
     if (anchor) { anchor.after(el); } else { st.paneEl.appendChild(el); }
     // 卡片算一道坎：后面的工具标签另起一行（画在卡片下面，不往上面那条工具行里钻）
-    st.currentToolRow = null;
+    st.currentToolTail = null;
     endRunningLine(st);   // 同上：这批工具过去了，还在留的那条位置也收掉
     st.askCards.set(id, rec);
     scrollToBottom(st);
@@ -6261,7 +6352,7 @@
         break;
       case "assistantFull":
         finalizeCurrentAssistant(t);
-        addMarkdown(t, msg.text);
+        addMarkdown(t, msg.text, msg.at);
         t.currentAssistant = null;
         break;
       case "thinkingStart":
@@ -6339,7 +6430,7 @@
         t.thinkingEntry = null;
         t.segmentThinking = null;
         t.tailThinking = null;
-        t.currentToolRow = null;
+        t.currentToolTail = null;
         dropRunningLine(t);   // 这条连着窗格一起没了（上面的 innerHTML 已经清掉它）；定时器也一并清
         t.toolGroups = null;
         t.toolGroupEntries.clear();
@@ -6412,8 +6503,9 @@
           t.pendingToolTags.delete(msg.toolCallId);
           // read 读图：小标签收掉，换成对话里的一整块图（不再走悬浮提示）
           if (Array.isArray(msg.images) && msg.images.length > 0) {
+            // 先插图、再收标签（行空了连行一起收）：顺序反过来就找不着图该待的地方了
+            mountToolImageBlock(t, { toolName: tagEl._toolName, argStr: tagEl._argStr, tipCall: tagEl._tipCall, toolCallId: msg.toolCallId, row: tagEl.parentElement }, msg.images);
             dropToolTag(t, tagEl);
-            mountToolImageBlock(t, { toolName: tagEl._toolName, argStr: tagEl._argStr, tipCall: tagEl._tipCall, toolCallId: msg.toolCallId }, msg.images);
           } else {
             setTagTip(tagEl, tagEl._resultText, "");
           }
@@ -6623,6 +6715,7 @@
     if (!st) { return; }
     cancelFlush(st);
     if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); }
+    dropRunningLine(st);   // 那条「正在跑」的定时器与耗时那只钟（见 startRunClock）一并停掉
     for (const tg of st.pendingToolTags.values()) { clearInterval(tg._timer); }
     st.viewEl.remove();
     sessions.delete(id);
