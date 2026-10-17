@@ -921,6 +921,11 @@
     color: var(--vscode-foreground);
   }
   .pk-host.pk-drawer .pk-footer.pk-history-footer button svg { width: 13px; height: 13px; display: block; }
+  /* 常驻那一列的「设置」：这一块的高度由 chat.js 写成跟对话那边输入区一样高（两条上边线落在同一条线上，
+     见 syncDockFooterHeight）；高起来的时候按钮贴着底边，自己不长高、也不跟着往上跑。
+     border-box 让它把上下 padding 与那条上边线也算进高度里，量多少就是多少（跟上面面板头同一条理由）。
+     浮层里的抽屉不写高度，照旧由里头那颗按钮定高。 */
+  #dockFooter { box-sizing: border-box; align-items: flex-end; }
 
   /* 设置浮层：模型（models.json）不再在这里配了，面板里只剩插件选项那一页 */
   #settingsPanel {

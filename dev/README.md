@@ -173,6 +173,7 @@ npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/workspacePa
 
 # 验宽窗下常驻的项目与会话侧边栏（窗口 ≥ 900px）：开页面右边就是一列（不当浮层、不盖对话）、
 # 点 <<< 收起、刷新后还是收起（记住了）、点面板里的行面板不关、开别的浮层时那一列的位置留着；
+# 底部「设置」那条线与对话那边输入区上边线齐（输入框长高时线跟着往上走、按钮不动）；
 # 同一趟里把视口改成手机宽再看一次：那一列整个不见，点 <<< 是原来的抽屉（有遮罩、
 # 整屏高、贴着右边，不是居中弹出的弹窗）：
 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js
@@ -250,7 +251,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `askDialog.js` + `askDialogTrigger.ts` | 验真扩展问的“要你打字 / 要你点是或否 / 选一个”：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |
 | `sessionMenuClose.js` | 验顶条会话名下拉框里每行的关闭叉（确认条那颗勾 / 那颗叉 / 超时 / 真关掉 / 宽度不变）：`npm run web:shot -- --fake-pi --script dev/sessionMenuClose.js` |
 | `workspacePanel.js` | 验「项目与会话」面板（那颗 `<<<`）：正在对话一段、工作区那块的展开 / 收起（含记住）、组里的「加载更多」、行尾加号新建会话、标题右边那颗加号、子会话不显示：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/workspacePanel.js` |
-| `sidebarDock.js` | 验宽窗下常驻的项目与会话侧边栏（`<<<`，窗口 ≥ 900px 才常驻）：打开 / 收起 / 记住收起 / 两根横线对齐 / 点行不关面板 / 开别的浮层时那一列原样留着 / 工作区那两块「加载更多」/ 改窄再拉宽（窄窗那一块得贴着右边、整屏高，不是居中的弹窗；居中那几块得还在正中），一次过一遍：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js` |
+| `sidebarDock.js` | 验宽窗下常驻的项目与会话侧边栏（`<<<`，窗口 ≥ 900px 才常驻）：打开 / 收起 / 记住收起 / 两根顶线对齐 / 底部那条线与输入区上边线齐（输入框长高时线往上走、设置那颗按钮不动）/ 点行不关面板 / 开别的浮层时那一列原样留着 / 工作区那两块「加载更多」/ 改窄再拉宽（窄窗那一块得贴着右边、整屏高，不是居中的弹窗；居中那几块得还在正中），一次过一遍：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js` |
 | `sidebarRedraw.js` | 验对话更新时常驻那一列的重画范围（只该动「正在对话」那一格）：整块有没有重画、下半那一格的元素与滚动有没有动、重画过后点行还准不准：`FAKEPI_TICK_MS=60 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarRedraw.js` |
 | `newSessionRedraw.js` | 验开新会话时常驻那一列的重画范围（整块一次都不该重画、下半展开的组不许坍、新会话那一行加进上半、重画过后点上下的行都还准）：`FAKEPI_TICK_MS=60 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/newSessionRedraw.js` |
 | `sidebarPerf.js` | 量那颗 `<<<` 打开一次多少毫秒、滑入动画有没有被顶住（长任务 / 逐帧间隔）：`npm run web:shot -- --script dev/sidebarPerf.js` |

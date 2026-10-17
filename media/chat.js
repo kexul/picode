@@ -3347,6 +3347,7 @@
     // 常驻开着时这颗按钮的意思是“收起”，提示语跟着换
     if (btn) { btn.title = on ? "收起侧边栏" : "项目与会话"; }
     syncDockHeaderHeight();
+    syncDockFooterHeight();
   }
 
   /**
@@ -3393,6 +3394,41 @@
       fileHeader.style.height = Math.max(h, own) + "px";
     }
     dockBarKey = key;
+  }
+
+  /**
+   * 常驻那一列底部的「设置」那块跟对话那边的输入区同高：这一块的上边线、输入区的上边线
+   * 落在同一条线上（跟上面面板头那两根顶线一个道理）。
+   * 输入区的高度是跟内容走的（输入框长高一行、贴了附件、排队的消息多一条都会变），所以不写死，
+   * 每回现量：“从输入区上边线量到这一列的底边”，量出来多高就把它多高。
+   * 直接量两个边、不要各自取整再相减：那样两条线会错开半个像素，看着发虚。
+   * 那块高起来的时候，里头的按钮贴着底边（见 chat.css 的 #dockFooter）：线往上走，按钮不动。 */
+  let dockFooterH = 0;
+  function syncDockFooterHeight() {
+    const foot = dockView.footer;
+    const area = document.getElementById("inputArea");
+    const panel = document.getElementById("dockPanel");
+    if (!foot || !area || !panel) { return; }
+    if (!sidebarEnabled()) {
+      // 没常驻（窄窗、插件面板，或者收起来了）：这一列不在屏上，别留着上一回写死的高度
+      if (foot.style.height) { foot.style.height = ""; }
+      dockFooterH = 0;
+      return;
+    }
+    const pane = panel.getBoundingClientRect();
+    // 这一列还没显出来（刚展开、内容还在路上）：这会儿量出来的是 0，等画出来那一次再量
+    if (!pane.height) { return; }
+    const h = Math.round(pane.bottom - area.getBoundingClientRect().top);
+    if (h === dockFooterH) { return; }
+    dockFooterH = h;
+    foot.style.height = Math.max(0, h) + "px";
+  }
+
+  // 输入区的高度自己会变（打字打长、贴附件、排队的消息）：变一次就对一次，不等窗口 resize。
+  // 上面那个函数里量的是输入区的上边线，所以只盯它就够。
+  if (typeof ResizeObserver === "function") {
+    const inputArea = document.getElementById("inputArea");
+    if (inputArea) { new ResizeObserver(() => syncDockFooterHeight()).observe(inputArea); }
   }
 
   /** 右边那一列该有内容、而现在没画着：跟宿主再要一份（列先空着，不闪不跳）。 */

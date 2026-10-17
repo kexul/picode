@@ -6,7 +6,8 @@
  *
  * 宽窗该看到的：开页面右边就是一列（自己的容器 #sidebarDock，不当浮层、不盖对话、没有遮罩），
  * 点 <<< 收起、刷新之后还是收起（记住了），再点又展开；点面板里的行（工作区行尾那颗加号 /
- * 「工作区」标题右边那颗加号）面板不关；点标题那颗加号弹出浮层时，右边那一列照样在（内容不丢、宽度不跳）。
+ * 「工作区」标题右边那颗加号）面板不关；点标题那颗加号弹出浮层时，右边那一列照样在（内容不丢、宽度不跳）；
+ * 底部「设置」上面那条线跟对话那边输入区上边线齐，输入框长高时线跟着往上走、按钮不动。
  * 同一趟里把视口改成手机宽再看一次：那一列整个不见，点 <<< 是原来的抽屉（有遮罩、整屏高、
  * 贴着右边、点外面收）；居中那一套（逛文件夹、设置）照旧在正中。
  */
@@ -147,6 +148,37 @@ module.exports = async (page) => {
     await page.click("#browserMenuBtn");
     await page.sleep(800);
 
+    // 底部「设置」上面那条线与对话那边输入区上边线齐：输入框长高了这条线跟着往上走，按钮自己不动
+    const footerLine = async () => JSON.parse(await page.eval(`
+        const f = function () {
+            const foot = document.getElementById("dockFooter").getBoundingClientRect();
+            const area = document.getElementById("inputArea").getBoundingClientRect();
+            const btn = document.querySelector("#dockFooter .pk-footer-settings").getBoundingClientRect();
+            return JSON.stringify({
+                footTop: Math.round(foot.top), areaTop: Math.round(area.top),
+                footH: Math.round(foot.height), btnBottom: Math.round(btn.bottom),
+            });
+        };
+        return f();
+    `));
+    const setInput = (text) => page.eval(`
+        const ta = document.getElementById("input");
+        ta.value = ${JSON.stringify(text)};
+        ta.dispatchEvent(new Event("input", { bubbles: true }));
+        return true;
+    `);
+    await setInput("");
+    await page.sleep(400);
+    const line1 = await footerLine();
+    await setInput(["一", "二", "三", "四", "五", "六"].join(String.fromCharCode(10)));
+    await page.sleep(400);
+    const line6 = await footerLine();
+    await page.shot("dock-12-footer-line.png");
+    await setInput("");
+    await page.sleep(400);
+    console.log("底部那条线（一行）：" + JSON.stringify(line1));
+    console.log("底部那条线（六行）：" + JSON.stringify(line6));
+
     // 面板底部的「设置」：设置浮层盖在上面，右边那一列不该跟着收
     await page.click("#dockFooter .pk-footer-settings");
     await page.sleep(600);
@@ -247,6 +279,9 @@ module.exports = async (page) => {
         ["拉回宽窗自己回到常驻", wide8.dockShown && !wide8.overlayOpen && wide8.dockRows > 0],
         ["点那一列头上那颗叉 = 收起", !cross1.dockShown && !cross1.bodyDocked],
         ["点过叉之后刷新还是收起", !cross2.dockShown && !cross2.bodyDocked],
+        ["「设置」上面那条线与输入区上边线齐（输入框一行）", line1.footTop === line1.areaTop],
+        ["输入框长高之后那两条线还是齐（线往上走、按钮不动）",
+            line6.footTop === line6.areaTop && line6.footH > line1.footH && line6.btnBottom === line1.btnBottom],
         ["开着设置时那一列不收", settingsOpen.indexOf('"settings":true') >= 0 && settingsOpen.indexOf('"bodyDocked":true') >= 0],
         ["设置那块浮层还在正中", settingsOpen.indexOf('"settingsCentered":true') >= 0],
         ["关掉设置后那一列还在", afterSettings.dockShown && afterSettings.dockRows > 0],
