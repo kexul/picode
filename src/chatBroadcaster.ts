@@ -21,6 +21,53 @@ const CATCHUP_LOG_ENTRIES = 2000;
 /** 补发暂存的默认字节数（消息里可能带大图，光按条数不可靠）。 */
 const CATCHUP_LOG_BYTES = 8 * 1024 * 1024;
 
+/**
+ * 逐字增量的那两类消息：模型正文与思考，都是一小段一小段推的。
+ * 一段回答动辄几千条，按条记进补发暂存的话，2000 条的额度一眨眼就满了，
+ * 页面只要断上十几秒回来就补不上（只能整屏重画，人正看着的地方跟着没了）。
+ * 所以连着来的同一种增量在暂存里合成一段（见 rememberForCatchup），补发时再按页面
+ * 报的序号从中间截开（见 resume）——合成一段和逐条记，补出去的内容一模一样。
+ */
+const DELTA_RUN_TYPES: ReadonlySet<string> = new Set(["assistantDelta", "thinkingDelta"]);
+
+/** 补发暂存里“一段增量”：模板之外每一条的文字都留着，好在页面报到中间时截开。 */
+interface DeltaRun {
+    /** 消息类型（assistantDelta / thinkingDelta）。 */
+    type: string;
+    /** 一段里除了 delta 与 seq 之外的字段（sessionId 等）：补发时原样带上。 */
+    template: Record<string, unknown>;
+    /** 除 delta / seq 之外那些字段拼出来的钥匙：一样才合成同一段。 */
+    key: string;
+    /** 这一段里的每条增量（序号 + 文字），按序。 */
+    pieces: Array<{ seq: number; text: string }>;
+}
+
+/** 补发暂存里的一条：一条普通消息，或一段合并起来的逐字增量。 */
+interface CatchupEntry {
+    /** 这条（合并段就是它最后那条）的序号。 */
+    seq: number;
+    /** 这条（这一段）最早那个序号：「补不补得上」按它判。 */
+    fromSeq: number;
+    /** 占多少字节（合并段按文字累加）。 */
+    bytes: number;
+    /** 原始消息；一次性消息与合并段这里是 null。 */
+    msg: Record<string, unknown> | null;
+    /** 合并起来的一段逐字增量。 */
+    run?: DeltaRun;
+}
+
+/** 除 delta / seq 之外的字段拼成一把钥匙：一样的增量才合成同一段。 */
+function deltaTemplateKey(msg: Record<string, unknown>): string {
+    return Object.keys(msg)
+        .filter((k) => k !== "delta" && k !== "seq")
+        .sort()
+        .map((k) => k + "=" + String(msg[k]))
+        .join("\u0000");
+}
+
+/** 续传的结果：补上了 / 一条不缺 / 对不上（要整屏重画）。 */
+export type ResumeResult = "resumed" | "caught-up" | "reset";
+
 /** 登记一条连接的结果：新连接、被顶下来的旧连接（页面自己重连时才有）、hello 带的序号。 */
 export interface ChannelAddResult {
     channel: PageChannel;
@@ -35,7 +82,7 @@ export class ChatBroadcaster {
     /** 推给页面的消息序号：每广播一条加一。页面靠它报「我处理到第几条」。 */
     private seqCounter = 0;
     /** 最近广播的消息（重连补发用）。序号连续；一次性消息只占位不补发（msg 为 null）。 */
-    private readonly catchupLog: Array<{ seq: number; bytes: number; msg: Record<string, unknown> | null }> = [];
+    private readonly catchupLog: CatchupEntry[] = [];
     private catchupLogBytes = 0;
     private readonly catchupLogEntries = CATCHUP_LOG_ENTRIES;
     private readonly catchupLogBytesLimit = CATCHUP_LOG_BYTES;
@@ -173,45 +220,98 @@ export class ChatBroadcaster {
     }
 
     /**
-     * 页面重连后补发它错过的消息。
+     * 页面重连后接着往下发它漏掉的消息。
      *
-     * @param lastSeq 页面报上来的「我处理到的最后一个序号」。
-                断线期间广播出去的消息序号都记在暂存里，把 (lastSeq, 这条连接建立时的序号]
-                这一段补给它，再发一条 syncPoint 告诉它「补齐到第几条了」。
-     * @returns true 表示已经办好（补了该补的，或本来就一条不缺）；
-     *          false 表示补不了（页面不在了，或缺得太多暂存里已经没有）——调用方退回整屏重画。
+     * 页面把「我处理到第几条」写在连接地址上（`/events?...&since=N`）交过来，
+     * 这里把 (since, 这条连接建立时的序号] 这一段发给它，再发一条 syncPoint 说「齐了」。
+     *
+     * 为什么是地址里带游标：浏览器自带的续传（Last-Event-ID）只在「浏览器自己重连同一条
+     * EventSource」时才带得上，而这边是故意每次都自己新建一条（手机上浏览器那次重连又慢
+     * 又容易卡在“正在连接”，见 media/browserBridge.js）。新建的连接没有那个头，所以游标
+     * 走地址，效果一样，还省了「先连上、再发消息问缺哪些」那一个来回。
+     *
+     * @returns
+     *   `caught-up`：一条不缺（since 正好是这条连接建立时的序号），什么都没发；
+     *   `resumed`：漏的都补上了；
+     *   `reset`：对不上、没法接着讲——缺得太多暂存里已经没有了，或者它的序号比我这边还新
+     *            （后端重启过，序号从头数了）。这两种调用方都得整屏重画。
      */
-    public catchUp(pageId: string, lastSeq: number): boolean {
-        if (!Number.isFinite(lastSeq) || lastSeq < 0) { return false; }
+    public resume(pageId: string, since: number): ResumeResult {
+        if (!Number.isFinite(since) || since < 0) { return "reset"; }
         const channel = this.pages.get(pageId);
         const openSeq = this.openSeqByPage.get(pageId);
-        if (!channel || openSeq === undefined) { return false; }
-        if (lastSeq >= openSeq) { return true; }   // 一条不缺，什么都不用补
-        const oldest = this.catchupLog.length > 0 ? this.catchupLog[0].seq : undefined;
+        if (!channel || openSeq === undefined) { return "reset"; }
+        if (since > openSeq) { return "reset"; }          // 序号比我这边还新：两边对不上
+        if (since === openSeq) { return "caught-up"; }    // 一条不缺，什么都不用补
+        const oldest = this.catchupLog.length > 0 ? this.catchupLog[0].fromSeq : undefined;
         // 暂存里的序号是连续的；最老的那条比页面报的还新，说明中间缺的已经丢了，补不全
-        if (oldest === undefined || oldest > lastSeq + 1) { return false; }
+        if (oldest === undefined || oldest > since + 1) { return "reset"; }
         for (const entry of this.catchupLog) {
-            if (entry.seq <= lastSeq) { continue; }
+            if (entry.run) {
+                // 一段合并起来的增量：只把页面还没收到的那些字补给它（报到这段中间时就是截开）
+                const pieces = entry.run.pieces.filter((p) => p.seq > since && p.seq <= openSeq);
+                if (pieces.length > 0) {
+                    channel.send({
+                        ...entry.run.template,
+                        delta: pieces.map((p) => p.text).join(""),
+                        seq: pieces[pieces.length - 1].seq,
+                    });
+                }
+                if (entry.seq > openSeq) { break; }
+                continue;
+            }
+            if (entry.seq <= since) { continue; }
             if (entry.seq > openSeq) { break; }
             if (entry.msg) { channel.send(entry.msg); }
         }
         channel.send({ type: "syncPoint", seq: openSeq });
-        return true;
+        return "resumed";
     }
 
     /**
      * 把刚广播的一条消息记进补发暂存。
      * 「一次性消息」（确认框、浮层这类）只占个序号位不存内容：它们不补发（见 webTransport 的名单）。
+     * 连着来的逐字增量合成一段（见 DeltaRun）：一小段一小段推的正文不该把额度吃光。
      * 超过条数或字节上限就从最老的开始丢；丢了的那段补不上，页面只能整屏重画。
      */
     private rememberForCatchup(seq: number, msg: Record<string, unknown>): void {
-        const transient = typeof msg.type === "string" && PAGE_TRANSIENT_MESSAGE_TYPES.has(msg.type);
+        const type = typeof msg.type === "string" ? msg.type : "";
+        const transient = PAGE_TRANSIENT_MESSAGE_TYPES.has(type);
+        if (!transient && DELTA_RUN_TYPES.has(type) && typeof msg.delta === "string") {
+            const text = msg.delta;
+            const bytes = Buffer.byteLength(text, "utf8");
+            const last = this.catchupLog[this.catchupLog.length - 1];
+            const key = deltaTemplateKey(msg);
+            if (last && last.run && last.run.type === type && last.run.key === key) {
+                last.run.pieces.push({ seq, text });
+                last.seq = seq;
+                last.bytes += bytes;
+                this.catchupLogBytes += bytes;
+                this.trimCatchupLog();
+                return;
+            }
+            const template: Record<string, unknown> = { ...msg };
+            delete template.delta;
+            delete template.seq;
+            this.catchupLog.push({
+                seq, fromSeq: seq, bytes, msg: null,
+                run: { type, template, key, pieces: [{ seq, text }] },
+            });
+            this.catchupLogBytes += bytes;
+            this.trimCatchupLog();
+            return;
+        }
         let bytes = 0;
         if (!transient) {
             try { bytes = Buffer.byteLength(JSON.stringify(msg), "utf8"); } catch { bytes = 0; }
         }
-        this.catchupLog.push({ seq, bytes, msg: transient ? null : msg });
+        this.catchupLog.push({ seq, fromSeq: seq, bytes, msg: transient ? null : msg });
         this.catchupLogBytes += bytes;
+        this.trimCatchupLog();
+    }
+
+    /** 暂存超过条数或字节上限就从最老的开始丢。 */
+    private trimCatchupLog(): void {
         while (
             this.catchupLog.length > this.catchupLogEntries
             || (this.catchupLogBytes > this.catchupLogBytesLimit && this.catchupLog.length > 1)

@@ -896,8 +896,11 @@ export class SessionRuntime {
      * @param opts.sink 只把这批重画消息交给这个出口（浏览器那边一个页面一份重画时用）。
      *                  传了 sink 就不再广播会话列表（那份数据每个页面都一样，
      *                  重连的页面本来就有；刚加载的页面由 ready 那条路统一发）。
+     * @param opts.full 网页端也发全部历史，不裁成「最近一段」。只有“页面手上本来
+     *                  就有这些内容、只是中间缺了一段”的重连才传它：裁掉的那些正是
+     *                  人当时看着的地方，一裁视野就没了。刚打开的页面不传（首屏要快）。
      */
-    public async replayHistory(opts?: { note?: string; sink?: MessageSink }): Promise<void> {
+    public async replayHistory(opts?: { note?: string; sink?: MessageSink; full?: boolean }): Promise<void> {
         // 缺省出口是这个会话的常规广播；传了 sink 就是"只给某一个页面重画"。
         // 两条路都要带上 sessionId：界面靠它认出消息属于哪一个会话。
         const sink = opts?.sink;
@@ -906,7 +909,10 @@ export class SessionRuntime {
             : ((msg) => this.host.postToSession(this.id, msg));
         // keepDraft：重画不清输入框里没发出去的文字和附件。重画只是把对话内容重新递一遪，
         // 人打了一半的字不该被抹掉（换会话那种 clear 不带这个标记，草稿仍会重置）。
-        emit({ type: "clear", keepDraft: true });
+        // reconcile：后面重放的每条都带编号（id），界面可以按编号认出“这条我已经画过”，
+        // 原地留着、只补缺的（见 media/chat.js 的 case "clear" 与 placeNode）。老界面不认
+        // 这个标记，照旧清空重画——两边怎么走都对得上。
+        emit({ type: "clear", keepDraft: true, reconcile: true });
         emit({ type: "piReady", ready: this.piReady });
         // 排队里的那几条也补一份现在的真相：重画只重放消息，排队不是消息，界面上那一块
         // 只能靠这一条对齐（空的也要发，不然它还照着断线前收到的旧样子显示“在排队”）。
@@ -926,7 +932,9 @@ export class SessionRuntime {
         const messages: any[] = msgResp.data?.messages ?? [];
         // 快照随运行时一起迁过来了：迁移前的 edit/write 仍可回滚
         // 网页端只发最近一段历史：先裁窗口、告诉页面还有没有更早的，再渲染窗口里那几条
-        const win = this.host.wantsTrimmedHistory?.() ? this.sliceHistoryWindow(messages) : null;
+        const win = this.host.wantsTrimmedHistory?.() && opts?.full !== true
+            ? this.sliceHistoryWindow(messages)
+            : null;
         if (win) {
             this.noteHistoryWindow(win, messages);
             emit({ type: "historyWindow", hasMore: win.hasMore, hidden: win.hidden });
@@ -936,8 +944,10 @@ export class SessionRuntime {
         this.renderMessages(win ? win.list : messages, {
             revertable: true,
             sink: emit,
+            // 编号基数：窗口模式下窗口不是从第一条开始的，用绝对下标，重放两次的编号才一样
+            indexBase: win ? win.start : 0,
             // 网页端这一份只带最近的图（更早的界面上点开再取），否则首屏要传的字节数会很大
-            inlineImages: win ? this.planInlineImages(win.list) : undefined,
+            inlineImages: win ? this.planInlineImages(win.list) : (opts?.full ? this.planInlineImages(messages) : undefined),
         });
         const count = messages.filter((m) => m && (m.role === "user" || m.role === "assistant")).length;
         const note = opts?.note === undefined
@@ -961,8 +971,10 @@ export class SessionRuntime {
     //  网页端「只发最近一段历史」（历史窗口）
     // ========================================================================
 
-    /** 网页端一次最多发多少条 user/assistant 消息（更早的由页面点「加载更早的消息」再取）。 */
-    private static readonly WEB_HISTORY_WINDOW = 30;
+    /** 首屏窗口的条数上限（默认值；理由与字节预算一起见 historyWindowSize）。 */
+    private static readonly WEB_HISTORY_WINDOW = 200;
+    /** 首屏窗口的字节预算（UTF-8，默认 700 KB）：长工具输出（一条 bash 几十 KB）靠它挡住。 */
+    private static readonly WEB_HISTORY_BUDGET = 700 * 1024;
 
     /**
      * 定下这一屏里哪些图真带数据（其余的只发占位，界面上点开再取）。
@@ -1069,10 +1081,30 @@ export class SessionRuntime {
     }
 
     /**
+     * 首屏窗口：默认最多 200 条 user/assistant 消息、或者 700 KB（UTF-8），哪个先到算哪个。
+     *
+     * 为什么敢给这么大（量过：`dev/perfProbe.js --batch N --cpu 4`，4 倍降速 ≈ 手机）：
+     * 30 条铺进窗格 223 毫秒、120 条 400 毫秒、240 条 814 毫秒；200 条在一秒以内。
+     * 换来的是长会话打开就能翻、跟“重连那档本来就发全量”也一致了。
+     * 图片另有 400 KB 的内联预算（更早的只发占位、点开再取），不随这两个数一起涨。
+     *
+     * 调试时可以用 PICHAT_HISTORY_WINDOW / PICHAT_HISTORY_BUDGET 改小
+     * （dev/historyScroll.js 要一个很小的窗口才出现「加载更早的消息」那颗按钮）。
+     */
+    private historyWindowSize(): number {
+        return overriddenNumber("PICHAT_HISTORY_WINDOW", SessionRuntime.WEB_HISTORY_WINDOW);
+    }
+
+    /** 首屏窗口的字节预算（UTF-8）。调试可用 PICHAT_HISTORY_BUDGET 覆盖。 */
+    private historyWindowBudget(): number {
+        return overriddenNumber("PICHAT_HISTORY_BUDGET", SessionRuntime.WEB_HISTORY_BUDGET);
+    }
+
+    /**
      * 从完整消息数组里裁出「最近一段」窗口。
      *
-     * 计数单位是 user/assistant 消息（工具调用与结果跟在所属的 assistant 消息后面，
-     * 窗口起点只落在 user/assistant 消息上，不会把它们拆散）。
+     * 起点落在哪条消息上不讲究（可能是一条工具结果）：渲染时工具结果只跟着它自己那条
+     * 调用走，落单的会被忽略，界面上不会出现半截。
      * @param endBefore 只考虑这条下标之前的消息（往前补更早一段时用）；缺省到末尾。
      * @returns 裁好的片段与窗口信息；调用方保证宿主已开「只发一段」。
      */
@@ -1082,15 +1114,23 @@ export class SessionRuntime {
         hasMore: boolean;
         hidden: number;
     } {
-        const roles: number[] = [];
-        for (let i = 0; i < endBefore; i++) {
+        // 从最新一条往前装，装到“条数上限”或“字节预算”哪个先到为止。
+        // 两个都要：条数管住 DOM 的规模（一堆「哦」能塞几千条），字节管住真实体量
+        // （一条 bash 输出几十 KB，十条就顶几百条普通消息）。
+        const cap = this.historyWindowSize();
+        const budget = this.historyWindowBudget();
+        let start = endBefore;
+        let count = 0;
+        let bytes = 0;
+        for (let i = endBefore - 1; i >= 0; i -= 1) {
             const m = messages[i];
-            if (m && (m.role === "user" || m.role === "assistant")) { roles.push(i); }
+            const size = messageBytes(m);
+            // 最新那一条无论多大都带上：不然打开来一条都没有，反而像坏了
+            if (count > 0 && (count >= cap || bytes + size > budget)) { break; }
+            start = i;
+            bytes += size;
+            if (m && (m.role === "user" || m.role === "assistant")) { count += 1; }
         }
-        const total = roles.length;
-        const start = total > SessionRuntime.WEB_HISTORY_WINDOW
-            ? roles[total - SessionRuntime.WEB_HISTORY_WINDOW]
-            : 0;
         let hidden = 0;
         for (let i = 0; i < start; i++) {
             const m = messages[i];
@@ -1132,7 +1172,13 @@ export class SessionRuntime {
         const win = this.sliceHistoryWindow(messages);
         this.noteHistoryWindow(win, messages);
         emit({ type: "historyWindow", hasMore: win.hasMore, hidden: win.hidden });
-        this.renderMessages(win.list, { ...opts, sink: emit, inlineImages: this.planInlineImages(win.list) });
+        this.renderMessages(win.list, {
+            ...opts,
+            sink: emit,
+            inlineImages: this.planInlineImages(win.list),
+            // 窗口不是从第一条开始的：编号用绝对下标（见 renderMessages 里的 base）
+            indexBase: win.start,
+        });
     }
 
     /**
@@ -1166,7 +1212,7 @@ export class SessionRuntime {
         const emit: MessageSink = (msg) => {
             this.host.postToSession(this.id, { type: "historyBatchEvent", event: msg });
         };
-        this.renderMessages(win.list, { sink: emit, inlineImages: this.planInlineImages(win.list) });
+        this.renderMessages(win.list, { sink: emit, inlineImages: this.planInlineImages(win.list), indexBase: win.start });
         this.post({ type: "historyBatchEnd", hasMore: win.hasMore, hidden: win.hidden });
     }
 
@@ -1178,13 +1224,19 @@ export class SessionRuntime {
      * @param inlineImages 只有这些 toolCallId 的图真带数据，其余只发占位（见 planInlineImages）；
      *                     不给就是全部带（本机面板、导出等场景）。
      */
-    private renderMessages(messages: any[], opts?: { revertable?: boolean; sink?: MessageSink; inlineImages?: Set<string> }): void {
+    private renderMessages(
+        messages: any[],
+        opts?: { revertable?: boolean; sink?: MessageSink; inlineImages?: Set<string>; indexBase?: number },
+    ): void {
         // 缺省还是走这个会话的常规广播；给了 sink 就只发给那一个页面（消息已经带了 sessionId）
         const emit: MessageSink = opts?.sink ?? ((msg) => this.post(msg));
         const revertable = opts?.revertable === true;
         this.hasConversation = messages.some((m) =>
             m && (m.role === "user" || m.role === "assistant")
         );
+        // 消息在历史里的绝对下标（窗口模式下加上基数）：重放出来的编号跨次数稳定，
+        // 界面靠它认“这条画过了、原地留着”（见 media/chat.js 的 placeNode）。
+        const base = opts?.indexBase ?? 0;
         const toolResults = new Map<string, any>();
         let lastHistoryError = "";
         for (const m of messages) {
@@ -1192,16 +1244,23 @@ export class SessionRuntime {
                 toolResults.set(m.toolCallId, m);
             }
         }
-        for (const m of messages) {
+        for (let mi = 0; mi < messages.length; mi++) {
+            const m = messages[mi];
+            const mid = `h${base + mi}`;
             switch (m.role) {
                 case "user":
                     emit({
                         type: "userMessage",
+                        id: mid,
                         text: textOf(m.content),
                     });
                     break;
                 case "assistant": {
                     const parts = Array.isArray(m.content) ? m.content : [];
+                    // 一条助手消息里的各块（正文 / 思考 / 工具调用）各得一个编号，
+                    // 界面按块认，同一块重放时不会再多画一份
+                    let blockNo = 0;
+                    const blockId = () => `${mid}:b${blockNo++}`;
                     // 这条消息的时刻（pi 记下的毫秒时间戳）：界面上鼠标停在正文上时写出来
                     // （见 media/chat.js 的 attachMsgTime）。pi 记的是毫秒数，个别调试用的 pi
                     // （dev/fakePi.js）给的是 ISO 字符串：两种都认；认不出来就不带，界面自己按现在算。
@@ -1217,20 +1276,21 @@ export class SessionRuntime {
                             // 先把手头攒的正文发出去：免得思考排到了它前面（同 toolCall 那条）。
                             if (typeof c.thinking === "string" && c.thinking.trim()) {
                                 if (text.trim()) {
-                                    emit({ type: "assistantFull", text, at });
+                                    emit({ type: "assistantFull", id: blockId(), text, at });
                                     text = "";
                                 }
-                                emit({ type: "thinkingFull", text: c.thinking });
+                                emit({ type: "thinkingFull", id: blockId(), text: c.thinking });
                             }
                         } else if (c.type === "toolCall") {
                             if (text.trim()) {
-                                emit({ type: "assistantFull", text, at });
+                                emit({ type: "assistantFull", id: blockId(), text, at });
                                 text = "";
                             }
+                            blockId();   // 这一块占一个号（工具调用按 toolCallId 认，但次序要跟重放一致）
                             this.edits.collectKnownFile(c.name, c.arguments);
                             if (c.name === "edit" || c.name === "write") {
                                 const p = this.edits.editToolPath(c.name, c.arguments);
-                                const id = c.id || `hist-${Math.random()}`;
+                                const id = c.id || `${mid}:c${blockNo++}`;
                                 emit({
                                     type: "editCardStart",
                                     toolCallId: id,
@@ -1246,7 +1306,7 @@ export class SessionRuntime {
                                     canRevert: revertable && this.edits.hasSnapshot(id),
                                 });
                             } else {
-                                const id = c.id || `hist-${Math.random()}`;
+                                const id = c.id || `${mid}:c${blockNo++}`;
                                 const res = toolResults.get(id);
                                 emit({
                                     type: "tool",
@@ -1270,6 +1330,7 @@ export class SessionRuntime {
                     if (text.trim()) {
                         emit({
                             type: "assistantFull",
+                            id: blockId(),
                             text,
                             at,
                         });
@@ -1285,6 +1346,7 @@ export class SessionRuntime {
                         lastHistoryError = m.errorMessage;
                         emit({
                             type: "systemError",
+                            id: `${mid}:e`,
                             text: "pi 错误: " + formatPiError(m.errorMessage),
                         });
                     }
@@ -1466,4 +1528,16 @@ export class SessionRuntime {
     public openEditLocation(p: string, line: number): void {
         this.host.openFileLocation(p, line);
     }
+}
+
+/** 一条消息按 UTF-8 有多少字节（算不准就当 0：宁可多给一条，也别把窗口算崩）。 */
+function messageBytes(m: unknown): number {
+    if (!m) { return 0; }
+    try { return Buffer.byteLength(JSON.stringify(m), "utf8"); } catch { return 0; }
+}
+
+/** 调试用的数值覆盖（环境变量只写在 dev/ 的脚本里，正式跑不会设）。 */
+function overriddenNumber(name: string, fallback: number): number {
+    const raw = Number(process.env[name]);
+    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
 }

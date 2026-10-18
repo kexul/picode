@@ -552,18 +552,24 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         }
     }
 
-    /** 一条推送连接建立（页面连上 / 重连）：把等着的重画补上，再把攒着的消息冲出去。 */
-    public onPageConnected(pageId: string): void {
+    /**
+     * 一条推送连接建立（页面连上 / 重连）：把等着的重画补上、把断线期间漏掉的消息接着发，
+     * 再把攒着的消息冲出去。
+     * @param since 页面在连接地址上报的「我处理到第几条」；刚打开的页面不报。
+     */
+    public onPageConnected(pageId: string, since?: number): void {
         // 这条连接是新的，旧那条上"卡片已送到"的记录不再作数：手机锁屏之后旧连接常常是
         // 悄悄死的（网络那头把会话收了，浏览器不报错），卡片写进去看着成功、对方其实没收到；
         // 页面重开一条连接回来时，这边也没法知道它手里到底有哪几张卡片。
-        // 先把它从还等着的卡片上摘掉，对账时按"它还没有"重发一遍（见 browserResync 与 resyncPage）——
+        // 先把它从还等着的卡片上摘掉，对账时按"它还没有"重发一遍（见 resumePageTo 与 resyncPage）——
         // 页面上真画着的那张收到同一张会原地不动（见 media/chat.js 的 renderAskCard）。
         this.forgetCardDelivery(pageId);
         const note = this.pendingResyncPages.get(pageId);
         if (note !== undefined) {
             this.pendingResyncPages.delete(pageId);
             void this.resyncPage(pageId, note);
+        } else if (typeof since === "number") {
+            this.resumePageTo(pageId, since);
         }
         if (this.pageDeliveryOn && this.outbox.size > 0) {
             for (const msg of this.outbox.drain()) {
@@ -624,14 +630,41 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
+     * 页面重连了：把它报的序号之后漏掉的消息接着发过去（见 ChatBroadcaster.resume）。
+     *
+     * 一条不缺就什么都不用动（界面、草稿、滚动位置全保持原样）；缺的都在补发暂存里就只补
+     * 那几条，消息接着往下长；补不上（断得太久）或者它的序号比我这边还新（后端重启过，
+     * 序号从头数了）才整屏重画——重画发全部历史，人正看着的那些消息不会跟着没。
+     */
+    private resumePageTo(pageId: string, since: number): void {
+        const result = this.broadcaster.resume(pageId, since);
+        if (result !== "reset") {
+            // 补发的可能是断线前的老消息（里面可能有那个会话被关掉之前的内容）：
+            // 补完再给它一份最新的会话列表，“已经不存在的会话”就不会在它上面留在那儿。
+            this.sendSessionListTo(pageId);
+            // 还等着的问话卡片不在补发的账里（它们是定向发、不带序号）：断线那段里
+            // 可能正好漏掉了一张（连接悄悄死掉时写进去看着成功，见 onPageConnected），
+            // 这里随对账一起补发，缺的补上、页面上本来就有的原地不动。
+            this.resendCardsTo(pageId);
+            return;
+        }
+        // 会话列表先给它（界面上那些会话壳先建起来），再整屏重画。
+        this.sendSessionListTo(pageId);
+        void this.resyncPage(pageId, "", { fullHistory: true });
+    }
+
+    /**
      * 把已有的对话整屏重画一遍：界面刚就绪、或页面重连后补发补不上（缺得太多）时用它。
      *
      * 只画给发消息来的那一块屏——手机重连时，电脑那边的页面不该跟着白闪一下，
      * 更不该把正在生成的半句话清掉。
      * @param pageId 要重画给哪一块屏（页面标识）。
      * @param note 重画后给的一行提示；空串表示不给。
+     * @param opts.fullHistory 重画时发全部历史，不裁成「最近一段」（见 replayHistory）。
+     *        只有“页面本来就有这些内容、只是中间缺了一段”的重连才传：裁掉的正是人当时
+     *        看着的那些消息，一裁视野就丢了。刚打开 / 刚刷新的页面不传（首屏要快）。
      */
-    private resyncPage(pageId: string, note: string): Promise<void> {
+    private resyncPage(pageId: string, note: string, opts?: { fullHistory?: boolean }): Promise<void> {
         if (pageId && !this.broadcaster.hasPage(pageId)) {
             // 页面的重画请求到得比它的推送连接还早（刚刷新的那一瞬间）：现在送也是白送，
             // 先记下来，它一连上就画（见 onPageConnected）。
@@ -647,7 +680,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         for (const rt of this.panels.values()) {
             // 刚建的空会话不用重画：newSession 已经把它需要的东西发过去了
             if (rt.isConversationEmpty()) { continue; }
-            replays.push(rt.replayHistory({ note, sink }));
+            replays.push(rt.replayHistory({ note, sink, full: opts?.fullHistory }));
         }
         return Promise.all(replays).then(() => {
             // 重画把还等着的问话卡片也抹掉了：重发给这块屏（见 resendCardsTo）
@@ -655,7 +688,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             // 重画的消息不带序号（它们只发给这一块屏）。页面重画完把对齐到当前序号：
             // 重画的内容已经包含到这里为止的一切，下次重连它报上来的数才是准的。
             if (pageId) { this.broadcaster.sendTo(pageId, { type: "syncPoint", seq: this.broadcaster.currentSeq() }); }
-            // 最后再给一份最新的会话列表（跟补发对账那条路一样，见 browserResync）。
+            // 最后再给一份最新的会话列表（跟续传对账那条路一样，见 resumePageTo）。
             // 重画是一条条重放的，界面不知道这一批到哪一条算完：那条「继续」会在重放到
             // 第一条用户消息时就冒出来，后面重放的助手消息又落到它后面去（见 media/chat.js
             // 的 syncContinueHint）。会话列表一到，界面按这份权威状态重算一遍，它才回到末尾。
@@ -990,27 +1023,17 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 // 这里不用做任何事，收下即可。
                 return true;
             case "browserResync": {
-                // 页面的推送连接重连上了（手机回到前台、网络断开又通）：它报上自己处理到第几条，
-                // 把断线期间漏掉的消息补发过去——一条不缺就什么都不用动，页面保持原样；
-                // 缺的都在补发暂存里就只补缺的那几条，页面上消息接着往下长。
-                // 补不上（没报序号——旧版页面脚本，或缺得太多）才整屏重画兜底。
-                // 序号是 0 也照报：那说明从没广播过东西，对账本身就是“一条不缺”。
+                // 老页面脚本发的那条对账消息（新页面改成把序号写在连接地址上，见 resumePageTo）。
+                // 留着不收是为了页面别在升级后卡在旧状态上：旧脚本连上新后端时只会发这一条。
                 const pageId = this.currentPageId;
                 const lastSeq = typeof msg.lastSeq === "number" && Number.isFinite(msg.lastSeq)
                     ? msg.lastSeq : -1;
-                if (pageId && lastSeq >= 0 && this.broadcaster.catchUp(pageId, lastSeq)) {
-                    // 补发的是断线前的老消息（里面可能有那个会话被关掉之前的内容）：
-                    // 补完再给它一份最新的会话列表，“已经不存在的会话”就不会在它上面留在那儿。
+                if (pageId && lastSeq >= 0) {
+                    this.resumePageTo(pageId, lastSeq);
+                } else {
                     this.sendSessionListTo(pageId);
-                    // 还等着的问话卡片不在补发的账里（它们是定向发、不带序号）：断线那段里
-                    // 可能正好漏掉了一张（连接悄悄死掉时写进去看着成功，见 onPageConnected），
-                    // 这里随对账一起补发，缺的补上、页面上本来就有的原地不动。
-                    this.resendCardsTo(pageId);
-                    return true;
+                    void this.resyncPage(pageId, "", { fullHistory: true });
                 }
-                // 会话列表先给它（界面上那些会话壳先建起来），再整屏重画。
-                this.sendSessionListTo(pageId);
-                void this.resyncPage(pageId, "");
                 return true;
             }
             case "openHistory":

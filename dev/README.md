@@ -158,11 +158,12 @@ npm run web:shot -- --script dev/askDialog.js
 # 停顿给长一点，生成中重开页面那一幕才来得及看）：
 FAKEPI_THINK_MS=2500 npm run web:shot -- --fake-pi --script dev/endHint.js
 
-# 验断线重连（锁屏 / 切后台 / 断网 / 反复锁屏 / 反复弄断连接 / 断线期间问的选择题）：
+# 验断线重连（锁屏 / 切后台 / 断网 / 反复锁屏 / 反复弄断连接 / 断线期间问的选择题 / 整屏重画）：
 #   场景一 冻住、场景二 断网、场景三 冻住+断网、场景四 反复冻住解冻、
-#   场景五 反复把连接弄断（验序号补发不重不漏）、
+#   场景五 反复把连接弄断（验序号补发不重不漏，重连地址上带着 since）、
 #   场景六 锁屏期间连接悄悄断了（正文到了、尾巴丢了），回来页面自己重开连接补回丢失的消息、
-#   场景七 断线那段里模型问的选择题（连接悄悄死掉、卡片没送到），回来重连后卡片要补上、能答
+#   场景七 断线那段里模型问的选择题（连接悄悄死掉、卡片没送到），回来重连后卡片要补上、能答、
+#   场景八 补不上、只能整屏重画时（序号对不上）：视野留在原处、看过的消息不被裁掉
 node dev/reconnect.js                    # 全部
 node dev/reconnect.js --scene taillost    # 只跑某一个（逗号可写多个）
 node dev/reconnect.js --scene askcard     # 只跑场景七（断线期间问的选择题）
@@ -256,7 +257,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `turnNotice.js` | 验“跑完发系统通知”（任何会话都发、点一下切过去、被停的那一轮不发、子会话不发、开关一关就不发；页面的 `Notification` 换成记账的假的）：`node dev/turnNotice.js` |
 | `askNotice.js` | 验“模型问选择题（ask_choice）也发一条系统通知”（同一个开关、同一个规矩：正看着它也发、别的屏在聊的会话在问也发、点一下切过去答；扩展问的确认 / 输入 / 选一个不发；开关一关就不发）：`node dev/askNotice.js` |
 | `trustedOrigin.js` | 验“页面是从 https 反代的地址打开的”（设置里 `webServer.trustedOrigins` 写下的来源放行、别人的照旧 403、反代后面页面照常收发、那个地址算“安全来源”所以通知发得出去；顺带看 http 地址下设置里给的理由对不对；现签证书 + 本机起一个 https 反代来跑）：`node dev/trustedOrigin.js` |
-| `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接 / 断线期间问的选择题）：`node dev/reconnect.js` |
+| `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接 / 断线期间问的选择题 / 补不上时整屏重画的视野）：`node dev/reconnect.js` |
 | `childDot.js` | 验顶条那颗小点与它下面的数字（子会话在跑时父会话那颗点也呼吸、点下面写着还有几个在跑，零个时数字收起来；点与箭头落在两行中间）：`npm run web:shot -- --script dev/childDot.js` |
 | `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并 + 正文之后补来的那段跑完并回本段那颗）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |
 | `thinkTipPerf.js` | 验 `think` 提示框开着时思考边流边长的开销与表现（节流、跟着贴底、往回滚就不跟）：`npm run web:shot -- --fake-pi --script dev/thinkTipPerf.js` |

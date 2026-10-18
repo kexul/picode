@@ -27,10 +27,11 @@
  *   - 靠插件每 25 秒发来的心跳判断连接是不是“看着还在、其实已经死了”（手机换过网络之后
  *     常见）。浏览器对这种连接是不报错的，只能自己数着心跳。心跳断到 75 秒就重开兜底。
  *   - 插件推来的每条实时消息都带一个递增的序号（seq），页面记着自己处理到第几条。
- *     每次重新连上都把这个数报给插件（消息类型 browserResync），插件把断线这段时间
- *     漏掉的消息按序号补发过来：一条不缺就什么都不动（界面、输入框草稿都保持原样），
- *     缺几条就补几条，页面上消息接着往下长；缺得太多补不上时插件才整屏重画一遍。
- *     刚加载的那一次不用报：chat.js 跑完自己会报一声 ready，插件那边照样整屏画一遍。
+ *     每次重新连上，这个数就写在连接地址上（`/events?…&since=N`），插件从那一条往后
+ *     接着补：一条不缺就什么都不动（界面、输入框草稿都保持原样），缺几条就补几条，
+ *     页面上消息接着往下长；缺得太多补不上、或者序号对不上（后端重启过）时，
+ *     插件才整屏重画一遍。刚加载的那一次不带这个数：chat.js 跑完自己会报一声 ready，
+ *     插件那边照样整屏画一遍。
  *   - 每 25 秒报一次活（channelPing），回到前台立刻再报一次。插件那头超过 90 秒收不到
  *     报活就把这条连接收掉，免得往一个没人读的连接里白攒消息。
  *
@@ -388,17 +389,16 @@
   }
 
   // ==================== 入站：推送流 ====================
-  // 消息序号：插件推来的每条实时消息都带一个递增的 seq（一次性消息如确认框也带，但不补发）。
-  // 页面记着三本账：
-  //   lastSeq        处理过的最大序号；重连时报给插件的就是它（插件从这里往后补）。
-  //   liveFromSeq    本条连接的“实时消息从这个序号起”，来自连接建立时插件发来的 hello。
-  //                  比它大的是这条连接的实时消息，不大于它的是补回来的漏掉的消息。
-  //   catchUpThrough 补发补到第几条了。hello 时从 lastSeq 起步，补一条进一条；
-  //                  插件在补完后（或整屏重画后）发 syncPoint 把它和 lastSeq 一起对齐。
-  //                  补发和重连重试可能重叠，靠它把补过的丢掉，消息才不会重复两遍。
+  // 消息序号：插件推来的每条消息都带一个递增的 seq（一次性消息如确认框也带，但不补发）。
+  // 页面只记一本账：lastSeq = 处理过的最大序号。重连时把它写在地址上（`&since=`），
+  // 插件从那一条往后补——所以没有“补发和实时交错、同一条来两遍”这回事了，
+  // 也就不需要再自己去重：同一方向上后端只会发一次。
   var lastSeq = 0;
-  var liveFromSeq = 0;
-  var catchUpThrough = 0;
+
+  /** 记下“处理到第几条”。不往回调（迟到的旧消息不该把进度拉回去）。 */
+  function advanceSeq(seq) {
+    if (typeof seq === "number" && seq > lastSeq) { lastSeq = seq; }
+  }
 
   var source = null;
   /** 服务明确说了再见（服务停了）：不再重连，只给用户一条带刷新按钮的提示。 */
@@ -416,8 +416,8 @@
     if (inspectIncoming(data)) { return; }
     if (type === "hello") {
       // 连接建立：先于一切带序号的消息到达（插件那头保证顺序）。
-      liveFromSeq = typeof data.seq === "number" ? data.seq : 0;
-      catchUpThrough = lastSeq;
+      // 它的 seq 是“这条连接从第几条起算实时”，不能记成页面的进度：
+      // 比它小的那些正是要补给我的消息，还没收到呢。
       // 三个时间以后端说的为准（后端一处写死，这里不再抄、也不再自己定规则）
       if (typeof data.heartbeatMs === "number" && data.heartbeatMs > 0) {
         HEARTBEAT_MS = data.heartbeatMs;
@@ -433,27 +433,14 @@
       return;
     }
     if (type === "syncPoint") {
-      // 插件说“到这里为止你都有全的”（补发完 / 整屏重画完）：账本对齐到这个位置。
-      if (typeof data.seq === "number") {
-        if (data.seq > lastSeq) { lastSeq = data.seq; }
-        if (data.seq > catchUpThrough) { catchUpThrough = data.seq; }
-      }
+      // 插件说“到这里为止你都有全的”（补发完 / 整屏重画完）：进度对齐到这个位置。
+      advanceSeq(data.seq);
+      // 这条也交给界面（chat.js）：整屏重画是它把窗格清空重建的，画到哪儿算完只有这条
+      // 说得准，它靠这一条把视野放回原处（见 media/chat.js 的 finishRedraw）。
+      window.dispatchEvent(new MessageEvent("message", { data: data }));
       return;
     }
-    if (data && typeof data.seq === "number") {
-      if (data.seq > liveFromSeq) {
-        // 这条连接的实时消息：按序号来，只来一次，记下进度。
-        if (data.seq > lastSeq) { lastSeq = data.seq; }
-      } else if (data.seq <= catchUpThrough) {
-        return;   // 补发里跟已收到过的重叠（重连重试会这样）：丢掉
-      } else {
-        // 断线期间漏掉、这会儿补回来的：照常往下接。进度记进补发那本账（重连重试的
-        // 补发可能重叠，靠它去重）；lastSeq 也跟着走，它是“处理过的最大序号”，
-        // 下次重连报的就是它。
-        catchUpThrough = data.seq;
-        if (data.seq > lastSeq) { lastSeq = data.seq; }
-      }
-    }
+    advanceSeq(data && data.seq);
     // 其余消息一律按 VSCode 网页视图的样子投给 window，chat.js 那边照原样处理
     window.dispatchEvent(new MessageEvent("message", { data: data }));
   }
@@ -465,7 +452,8 @@
     lastTickAt = Date.now();
     var mine;
     try {
-      mine = new EventSource("/events?" + query);
+      // 重连的那一次把“我处理到第几条”带上：插件从那一条往后接着补（见上面的 advanceSeq）
+      mine = new EventSource("/events?" + query + (openedOnce ? "&since=" + lastSeq : ""));
     } catch (e) {
       console.warn("[pi-chat] 推送连接建不起来：", e);
       scheduleReconnect("与插件的连接中断，正在重连…");
@@ -499,11 +487,9 @@
       lastTickAt = Date.now();
       hideBanner();
       ping();
-      // 刚打开的那一次不用报账：chat.js 加载完自己会报一声 ready，插件那边照样整屏画一遍。
-      // 之后每次重新连上都报一次“我处理到第几条”，插件把断线期间漏掉的消息补发过来。
-      // 这个数在报的瞬间定格：断线期间漏掉的序号比这条连接上后来的实时消息小，
-      // 不能被它们推高，否则补发范围就算错了。
-      if (openedOnce) { enqueue({ type: "browserResync", lastSeq: lastSeq }); }
+      // 刚打开的那一次不带 since、也不报账：chat.js 加载完自己会报一声 ready，
+      // 插件那边照样整屏画一遍。之后每次重连，地址上的 since 就是“我处理到第几条”，
+      // 那个数在发请求的瞬间定格，插件的补发范围按它算。
       openedOnce = true;
     };
   }

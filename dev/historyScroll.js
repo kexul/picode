@@ -5,8 +5,8 @@
  *   npm run web:shot -- --fake-pi --script dev/historyScroll.js
  *   ROUNDS=25 AT_BOTTOM=1 npm run web:shot -- --fake-pi --script dev/historyScroll.js   # 多批 + 贴底时点
  *
- * 做法：先用假模型攒够 30 条以上的 user/assistant 消息（网页端只发最近一段，
- * 顶上就会出现「加载更早的消息」按钮），刷新页面让窗口生效，把视野滚到中间，
+ * 做法：先用假模型攒够十几轮对话，刷新页面让窗口生效（顶上会出现「加载更早的消息」按钮：
+ * 这里把首屏窗口压到 20 条才挤得出它——正式跑时窗口是 200 条或 700 KB），把视野滚到中间，
  * 记下点之前 / 点之后（等新内容插进来）的滚动位置与“视野顶上那条消息”的位置，
  * 打印结论并截两张图。
  *
@@ -15,6 +15,9 @@
  *   2. 回看时点（默认）：点完看着的还是原来那条消息（位置差不超过几像素），
  *      且不能跑到最下方——bug 版本会整整甩到底部。
  */
+// 首屏窗口压小：正式跑是 200 条 / 700 KB，那点对话挤不出「加载更早」按钮
+process.env.PICHAT_HISTORY_WINDOW = process.env.PICHAT_HISTORY_WINDOW || "20";
+
 const ROUNDS = Number(process.env.ROUNDS || 18);
 const AT_BOTTOM = process.env.AT_BOTTOM === "1";
 
@@ -71,7 +74,7 @@ async function anchorNow(page) {
     `);
 }
 
-/** 攒够消息：每轮假模型都会回一大段（user + assistant 两条，凑够窗口要的 30 条）。 */
+/** 攒够消息：每轮假模型都会回一大段（user + assistant 两条，凑够窗口要的条数）。 */
 async function fillMessages(page, rounds) {
     console.log(`  攒消息：${rounds} 轮`);
     for (let i = 1; i <= rounds; i++) {

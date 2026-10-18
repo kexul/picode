@@ -176,10 +176,10 @@ export class BackendClient {
     private pingTimer?: ReturnType<typeof setInterval>;
     private watchdogTimer?: ReturnType<typeof setInterval>;
     private lastTickAt = 0;
-    /** 页面的推送进度（跟浏览器那套一样：实时消息与补发各记一本账）。 */
-    private liveFromSeq = 0;
-    private catchUpThrough = 0;
+    /** 页面的推送进度：处理到第几条。重连时写在连接地址上（`&since=`），后端接着往后补。 */
     private lastSeq = 0;
+    /** 页面流连上过没有：第一次连不带 since（网页视图自己会要一次整屏重画）。 */
+    private pageOpenedOnce = false;
     /** 屏流连上了没有（HTTP 200 就算连上，后端一接受就读得到）。 */
     private screenUp = false;
 
@@ -287,7 +287,11 @@ export class BackendClient {
         // 3) 页面流：网页视图那一屏的推送
         this.lastTickAt = Date.now();
         this.pageReq = openSse(
-            streamUrl(base, "/events", { pageId: this.pageId }),
+            // 重连时带上“我处理到第几条”：后端从这里往后补（见 ChatBroadcaster.resume）。
+            // 第一次连不带：网页视图发 ready 时本来就会要一次整屏重画，先补一遍旧的纯属白忙。
+            streamUrl(base, "/events", this.pageOpenedOnce
+                ? { pageId: this.pageId, since: String(this.lastSeq) }
+                : { pageId: this.pageId }),
             () => { this.lastTickAt = Date.now(); },
             (event, data) => { this.onPageEvent(event, data, session); },
             (note) => die(note),
@@ -295,10 +299,6 @@ export class BackendClient {
 
         this.setStatus("online");
         this.startTimers(session);
-        // 替网页视图报一次账，让后端把该给它的东西给全：刚领的页面标识是一条新连接，
-        // 后端按 lastSeq=0 把能补的补上，补不上（页面刚开、一次性消息缺了）就整屏重画。
-        // 网页视图自己发的 ready 同样会走这条路，两边都对得上。
-        this.sendPage({ type: "browserResync", lastSeq: this.lastSeq }, true);
 
         await endPromise;
         if (this.current === session) { this.current = undefined; }
@@ -452,6 +452,7 @@ export class BackendClient {
 
     private onPageEvent(event: string, data: string, session: Session): void {
         if (session.dead) { return; }
+        this.pageOpenedOnce = true;
         if (event === "tick") { this.lastTickAt = Date.now(); return; }
         if (event === "end") {
             this.forceReconnect("后端停了");
@@ -463,29 +464,21 @@ export class BackendClient {
         try { msg = JSON.parse(data); } catch { return; }
         const type = msg?.type;
         if (type === "hello") {
-            // 连接建立：先于一切带序号的消息到达（后端保证顺序）
-            this.liveFromSeq = typeof msg.seq === "number" ? msg.seq : 0;
-            this.catchUpThrough = this.lastSeq;
+            // 连接建立：先于一切带序号的消息到达（后端保证顺序）。
+            // 它的 seq 不能记成进度：比它小的那些正是要补过来的消息。
             return;
         }
         if (type === "syncPoint") {
-            // 后端说"到这里为止你都有全的"（补发完 / 整屏重画完）：账本对齐到这个位置
-            if (typeof msg.seq === "number") {
-                if (msg.seq > this.lastSeq) { this.lastSeq = msg.seq; }
-                if (msg.seq > this.catchUpThrough) { this.catchUpThrough = msg.seq; }
-            }
+            // 后端说"到这里为止你都有全的"（补发完 / 整屏重画完）：进度对齐到这个位置
+            this.advanceSeq(msg.seq);
             return;
         }
-        if (typeof msg?.seq === "number") {
-            if (msg.seq > this.liveFromSeq) {
-                if (msg.seq > this.lastSeq) { this.lastSeq = msg.seq; }
-            } else if (msg.seq <= this.catchUpThrough) {
-                return;   // 补发里跟已经收到过的重叠：丢掉
-            } else {
-                this.catchUpThrough = msg.seq;
-                if (msg.seq > this.lastSeq) { this.lastSeq = msg.seq; }
-            }
-        }
+        this.advanceSeq(msg?.seq);
         this.options.onPageEvent(msg);
+    }
+
+    /** 记下“处理到第几条”（迟到的旧消息不往回拉）。 */
+    private advanceSeq(seq: unknown): void {
+        if (typeof seq === "number" && seq > this.lastSeq) { this.lastSeq = seq; }
     }
 }

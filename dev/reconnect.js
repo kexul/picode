@@ -27,6 +27,8 @@
  * 场景六验的是“锁屏期间连接悄悄断了、回来时页面该自己重开一次连接并补回丢掉的消息”。
  * 场景七验的是同一件事的第二面：断线那段里后端发出的问话卡片（定向发、不带走序号的那套补发账）
  * 回来之后不该丢，且页面手上已经有的那张不该被重发打扰。
+ * 场景八验的是“补不上、只能整屏重画”那一档（断得太久）：只补最近一段会把人正看着的
+ * 那些消息连同视野一起弄没；重画期间重放的几百条也不该一路把人拖到底。
  * 还留了一个小口子（故意没堵）：离开不到 3 秒就回来的不重开，
  * 那点时间里丢的尾部消息要等“75 秒没收到心跳”的看门狗才能补上。
  */
@@ -411,6 +413,15 @@ async function sceneChurn(page, harness) {
     console.log("\n【场景五】一边输出一边反复把连接弄断（验序号补发：不重不漏）");
     const pageId = await pageIdOf(page);
     const broadcaster = harness.host().getBroadcaster();
+    // 记下每次重连用的地址：续传靠地址上的 since，不靠再发一条对账消息
+    await page.eval(`
+        window.__esUrls = [];
+        const Orig = window.EventSource;
+        window.EventSource = function (url, opts) { window.__esUrls.push(String(url)); return new Orig(url, opts); };
+        window.EventSource.prototype = Orig.prototype;
+        ['CONNECTING', 'OPEN', 'CLOSED'].forEach(function (k) { window.EventSource[k] = Orig[k]; });
+        return true;
+    `);
     await page.send("随便说点什么");
     const before = await waitStreaming(page, 15000);
     if (!before) { bad("没等到“正在输出”出现，后面没法验"); return; }
@@ -432,6 +443,9 @@ async function sceneChurn(page, harness) {
     // 假模型的收尾那句话在一条回复里只能出现一次：两次就是补发重复了，一次都没有就是漏补
     const hits = (final.lastAnswer.match(/完事。三个工具都跑过了/g) || []).length;
     check(hits === 1, `这一轮的收尾那句话出现了 ${hits} 次（应为 1 次）`);
+    const urls = await page.eval("return window.__esUrls || []");
+    check(urls.some((u) => /[?&]since=\d+/.test(String(u))),
+        "重连时把“我处理到第几条”写在连接地址上（不用再发一条对账消息）");
 }
 
 /**
@@ -479,10 +493,165 @@ async function sceneTailLost(page, harness) {
         (settled.stopShown || settled.typing ? "  ← 卡住了：正文到了、状态没跟上" : ""));
 }
 
+/** 页面上和“视野 + 消息条数”有关的读数（场景八用）。 */
+async function scrollState(page) {
+    return page.eval(`
+        const pane = document.querySelector('#messages .session-pane');
+        const kids = pane ? Array.from(pane.children) : [];
+        const top = pane ? pane.scrollTop : 0;
+        const sig = function (el) {
+            const raw = el.dataset && typeof el.dataset.raw === 'string' ? el.dataset.raw : (el.textContent || '');
+            return el.className + '|' + raw.slice(0, 60);
+        };
+        // 跟 chat.js 那边一个口径：工具行、正在跑的那一条不当记号（重画后它们会变样）
+        const steady = function (el) {
+            if (!el.classList || !el.classList.contains('msg')) { return false; }
+            return !el.classList.contains('tool-row') && !el.classList.contains('tool-running');
+        };
+        // 同样的文字会重复很多次（每轮的收尾话都一样）：按“第几次出现”认，不按文字认
+        const counts = new Map();
+        const order = new Map();
+        for (const el of kids) { const k = sig(el); const n = (counts.get(k) || 0) + 1; counts.set(k, n); order.set(el, n); }
+        let anchor = '';
+        let anchorOrdinal = 0;
+        let anchorOffset = 0;
+        const visible = [];
+        for (const el of kids) {
+            if (!steady(el)) { continue; }
+            if (el.offsetTop + el.offsetHeight <= top + 1) { continue; }
+            if (!anchor) { anchor = sig(el); anchorOrdinal = order.get(el); anchorOffset = top - el.offsetTop; }
+            if (visible.length < 30) { visible.push({ sig: sig(el), ordinal: order.get(el), offset: top - el.offsetTop }); }
+        }
+        return {
+            paneSession: pane && pane.closest('.session-view') ? pane.closest('.session-view').dataset.sessionId : '',
+            viewCount: document.querySelectorAll('#messages .session-view').length,
+            visible: visible,
+            anchorOrdinal: anchorOrdinal,
+            count: document.querySelectorAll('#messages .msg').length,
+            scrollTop: top,
+            anchor: anchor,
+            anchorOffset: anchorOffset,
+            moreBtn: !!document.querySelector('.history-more'),
+            atBottom: pane ? (pane.scrollHeight - pane.scrollTop - pane.clientHeight <= 2) : true,
+            firstUser: (document.querySelector('#messages .msg.user') || {}).innerText || '',
+            userCount: document.querySelectorAll('#messages .msg.user').length,
+            assistantCount: document.querySelectorAll('#messages .msg.assistant').length,
+        };
+    `);
+}
+
+/**
+ * 断线回来补不上、只能“整屏重画”那一档。
+ *
+ * 人正看着中间的旧内容，重画（清空窗格 + 从历史一条条重放）之后应该：
+ *   - 视野还在原来那条消息上（不一路滑到底，也不卡在顶上）；
+ *   - 看过的消息没被裁掉（网页端首屏只发最近一段，重连这一档得发全部）；
+ *   - 重放的那一大串不把人拖到底部闪一下。
+ *
+ * “对不上”怎么造：让后端以为页面重连时报了一个它压根没到过的序号
+ *（onPageConnected + since=很大一个数，等于“后端重启过、两边的号对不上”），
+ * 后端就退回整屏重画——跟断得太久、暂存里早就没有它要的那些消息时走的是同一条路。
+ */
+async function sceneRedrawScroll(page, harness) {
+    console.log("\n【场景八】断线回来整屏重画：视野留在原处、看过的消息不被裁掉");
+    const pageId = await pageIdOf(page);
+    // 开一个干净的会话：前面几个场景留下的那些（排过队的话、重连补回来的半句）不掺进来，
+    // “重画出来的东西和页面上原来的一不一样”才说得清。
+    await page.click("#newSessionBtn");
+    await page.sleep(1500);
+    await waitIdle(page, 20000);
+    // 先聊够几轮：网页端首屏只发最近一段（默认 200 条 / 700 KB），聊过它才看得出裁没裁。
+    // 一轮真的跑完再发下一句：轮子还在转就发，会被当成排队插话，会话历史里就多出一份
+    // 一模一样的“第 N 轮”（假模型那边也照收），这一场就验不清了。
+    const turnDone = () => page.eval(`
+        const list = document.querySelectorAll('#messages .msg.assistant');
+        const last = list.length ? list[list.length - 1].innerText : '';
+        const stop = document.getElementById('stopHintBtn');
+        return {
+            n: list.length,
+            said: last.includes('完事'),
+            busy: !!(stop && !stop.classList.contains('hidden')) || !!document.querySelector('.typing'),
+        };
+    `);
+    for (let i = 0; i < 20; i++) {
+        const before = (await turnDone()).n;
+        await page.send("第 " + (i + 1) + " 轮");
+        const deadline = Date.now() + 30000;
+        let done = false;
+        while (Date.now() < deadline) {
+            const st = await turnDone();
+            if (st.n >= before + 2 && st.said && !st.busy) { done = true; break; }
+            await sleep(250);
+        }
+        if (!done) { console.log(`  · 第 ${i + 1} 轮没等到收尾，接着往下走`); }
+        await page.sleep(400);
+    }
+    await waitIdle(page, 20000);
+    await page.sleep(500);
+
+    // 往上翻到中间（别贴底）：从这一刻起算“人正看着的地方”
+    await page.eval(`
+        const pane = document.querySelector('#messages .session-pane');
+        // 翻到第 3 轮那句（用户消息，重画前后一模一样：拿它当视野的记号最靠得住）
+        const users = pane.querySelectorAll('.msg.user');
+        const at = users.length > 2 ? users[2] : users[0];
+        pane.scrollTop = Math.max(0, at.offsetTop - 6);
+        return true;
+    `);
+    await page.sleep(400);
+    const before = await scrollState(page);
+    console.log(`  · 翻开前：${before.count} 条消息、滚动 ${Math.round(before.scrollTop)}px、“加载更早”=${before.moreBtn ? "有" : "没有"}`);
+    console.log(`  · 视野最上面那条：${before.anchor.slice(0, 60)}`);
+    console.log(`  · 用户消息 ${before.userCount} 条、助手消息 ${before.assistantCount} 条；窗格=${before.paneSession}，页面上挂着 ${before.viewCount} 块`);
+    await page.shot("recon-8-redraw-before.png");
+    if (before.atBottom) { bad("没翻上去（还在底部），后面验不了视野"); return; }
+
+    // 让后端以为页面重连时报了一个对不上的序号：它退回整屏重画
+    const logBefore = await page.eval("return window.__msgLog.length");
+    harness.host().onPageConnected(pageId, 9999999);
+    const deadline = Date.now() + 30000;
+    let redrew = false;
+    while (Date.now() < deadline) {
+        const hit = await page.eval(`
+            const log = window.__msgLog;
+            for (let i = ${logBefore}; i < log.length; i++) {
+                if (log[i].type === 'syncPoint') { return true; }
+            }
+            return false;
+        `);
+        if (hit) { redrew = true; break; }
+        await sleep(200);
+    }
+    // 等它把视野放回去、并且后到的高度（图解码、高亮重排）也补完；
+    // 那几百毫秒里位置还在被对，读三次取最后一次
+    await page.sleep(800);
+    await scrollState(page);
+    await page.sleep(600);
+    await scrollState(page);
+    await page.sleep(600);
+    const after = await scrollState(page);
+    await page.shot("recon-8-redraw-after.png");
+    console.log(`  · 重画后：${after.count} 条消息、滚动 ${Math.round(after.scrollTop)}px、“加载更早”=${after.moreBtn ? "有" : "没有"}；窗格=${after.paneSession}，挂着 ${after.viewCount} 块`);
+
+    if (!redrew) { bad("没等到整屏重画画完（syncPoint），后面验不了"); return; }
+    // “没裁掉”看用户消息条数与最开头那句：被裁成“最近一段”的话，前面十几轮就没了。
+    // 不比 .msg 总数：重画时工具标签会并成一行（当场生成 vs 重放本来就长得不完全一样，
+    // 那是另一件事，跟裁不裁无关）。
+    check(after.userCount === before.userCount,
+        `看过的消息一条没少（用户消息 ${before.userCount} → ${after.userCount} 条）`);
+    check(after.firstUser === before.firstUser, "最开头那句还是原来那句");
+    check(!after.moreBtn, "重画后顶上没冒出「加载更早」（说明发的就是全部）");
+    // 当初视野最上面那条消息，重画后还在视野里、而且离顶上还是那么远。
+    // 容差 20px：重画后图块解码、代码高亮重排还会再长一点（几百上千 px 地被冲走才是毛病）。
+    const kept = (after.visible || []).find((v) => v.sig === before.anchor && v.ordinal === before.anchorOrdinal);
+    check(!!kept, `当初看着的那条还在视野里（${before.anchor.slice(0, 40)}）`);
+    check(!!kept && Math.abs(kept.offset - before.anchorOffset) <= 20,
+        `它离视野顶上还是那么远（${Math.round(before.anchorOffset)} → ${kept ? Math.round(kept.offset) : "没了"}px）`);
+}
+
 // ============================================================================
 //  入口
 // ============================================================================
-
 async function main() {
     const at = process.argv.indexOf("--scene");
     // 可以写一个场景名，也可以用逗号连线写几个：--scene freeze,offline
@@ -495,6 +664,7 @@ async function main() {
         churn: (page, harness) => sceneChurn(page, harness),
         taillost: (page, harness) => sceneTailLost(page, harness),
         askcard: (page, harness) => sceneAskCard(page, harness),
+        scroll: (page, harness) => sceneRedrawScroll(page, harness),
     };
     const chosen = sceneArg === "all" ? Object.keys(scenes) : sceneArg.split(",");
     for (const name of chosen) {

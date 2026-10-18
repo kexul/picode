@@ -195,8 +195,11 @@ export interface WebServerHost {
      * 认不出这个会话就给空数组（只丢第二档，第一档照旧）。
      */
     knownSessionFiles(sessionId: string): string[];
-    /** 一条推送连接建立（页面连上 / 重连）。 */
-    onPageConnected(pageId: string): void;
+    /**
+     * 一条推送连接建立（页面连上 / 重连）。
+     * @param since 页面报上来的「我处理到第几条」（连接地址上的 since），没报就是 undefined。
+     */
+    onPageConnected(pageId: string, since?: number): void;
     /** 一条推送连接断了（页面关掉 / 死连接被掐掉）。 */
     onPageDisconnected(pageId: string): void;
     /** 服务起来了（缓冲可以开始攒：页面可能马上要来）。 */
@@ -451,7 +454,7 @@ export class PiChatWebServer {
             }
             if (pathname === "/events") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                this.openChannel(req, res, url.searchParams.get("pageId") ?? "");
+                this.openChannel(req, res, url.searchParams.get("pageId") ?? "", url.searchParams.get("since") ?? "");
                 return;
             }
             if (pathname === "/api") {
@@ -900,8 +903,11 @@ export class PiChatWebServer {
      * 几个页面可以同时连着（手机一个、电脑一个），谁都不是"唯一的"：插件推的消息发给每一个。
      * 同一个页面又连了一次（手机退到后台再回来、网络断了又通），把它那条旧连接安静收掉就行，
      * 不发"你被别的页面顶掉了"那种话——那只是它自己重连。
+     *
+     * 重连时页面会在地址上多带一个 `since`（它处理到第几条）。断线期间漏掉的那几条由
+     * 宿主按这个数接着往下发（见 ChatBroadcaster.resume），页面不用再发一条消息来对账。
      */
-    private openChannel(req: http.IncomingMessage, res: http.ServerResponse, pageId: string): void {
+    private openChannel(req: http.IncomingMessage, res: http.ServerResponse, pageId: string, sinceText: string): void {
         // 页面标识正常都是服务发出页面时写进去的那个；万一没有就自己编一个，别把好几个页面混成一条
         const id = pageId || `p-anon-${crypto.randomUUID()}`;
         const broadcaster = this.host.getBroadcaster();
@@ -935,8 +941,9 @@ export class PiChatWebServer {
         req.on("close", onClose);
         req.on("error", onClose);
         res.on("error", onClose);
-        // 断线这段时间插件攒下的消息补给这个页面（页面自己还会再要求整屏重画，两边都对得上）
-        this.host.onPageConnected(id);
+        // 断线这段时间广播出去的消息按页面报的序号补给这个页面（补不上、或者序号对不上时，
+        // 宿主那头会整屏重画一次）。
+        this.host.onPageConnected(id, parseSince(sinceText));
     }
 
     /**
@@ -1165,6 +1172,13 @@ export class PiChatWebServer {
  * 拼出来就不是一个合法地址，抛出去就成了 500。这里把开头的多余斜杠归一，再用一个固定的假主机名作基准。
  * 解析不了返回 undefined（调用方回 400）。
  */
+/** 地址上的 `since`（页面报的「我处理到第几条」）：不是非负整数就当没报。 */
+function parseSince(text: string): number | undefined {
+    if (!/^\d+$/.test(text)) { return undefined; }
+    const n = Number(text);
+    return Number.isSafeInteger(n) ? n : undefined;
+}
+
 function parseRequestUrl(raw: string | undefined): URL | undefined {
     const normalized = (raw ?? "/").replace(/^[\/\\]+/, "/");
     try {
