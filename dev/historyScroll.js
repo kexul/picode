@@ -122,7 +122,15 @@ async function clickLoadMore(page, tag) {
     }
     await page.sleep(1200);
     const after = await paneState(page);
-    const nowAnchor = await anchorNow(page);
+    let nowAnchor = await anchorNow(page);
+    // 再等一会儿：这一批里的图解码、代码高亮重排会晚一步把上面撑高（几十像素）。
+    // 只靠插完那两帧对不完，靠的是“插完再盯一小会儿”（盯的那条要是坏了，这里就会漂）
+    await page.sleep(1500);
+    const late = await anchorNow(page);
+    if (late && nowAnchor && Math.abs(late.viewTop - nowAnchor.viewTop) > 4) {
+        console.log(`  ⚠️ 晚到的排版把视野挤走了：${nowAnchor.viewTop} → ${late.viewTop}`);
+        nowAnchor = late;
+    }
     await page.shot(`history-${tag}-after.png`);
 
     console.log(`  点之前：${JSON.stringify(before)}`);
@@ -169,6 +177,11 @@ module.exports = async (page) => {
     if (plain.moreBtn) { throw new Error("默认窗口下不该出现「加载更早」（窗口默认值是不是被改小了）"); }
     if (plain.users < ROUNDS) { throw new Error(`默认窗口下 ${ROUNDS} 轮对话该全在（只有 ${plain.users} 条用户消息）`); }
 
+    const errors = (page.pageErrors || []).filter((text) => text && !/acquireVsCodeApi 被调用了多次/.test(text));
+    if (errors.length) {
+        console.log("  页面报错：" + errors.slice(0, 3).join(" / "));
+        throw new Error("页面上有报错（就算视野看着对，也得先修）");
+    }
     if (results.some((ok) => !ok)) { throw new Error("有一步的视野跑掉了"); }
     console.log("  全部通过。");
 };

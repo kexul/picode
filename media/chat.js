@@ -7206,7 +7206,7 @@
       pane.style.overflowAnchor = prevAnchorStyle;
       // 几帧对不完：这一批里的图解码还要再撑高一点（几十像素），插在上面就会把视野往下挤。
       // 再盯一小会儿（人一碰就停），跟整屏重画那边同一套
-      if (ruler && ruler.parentNode === pane) { holdScrollOn(st, ruler); }
+      if (ruler && ruler.parentNode === pane) { holdScrollOn(t, ruler); }
     };
     if (frames > 0) { requestAnimationFrame(settle); } else { pane.style.overflowAnchor = prevAnchorStyle; }
   }
