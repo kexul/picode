@@ -384,7 +384,13 @@
     // 也不该在插件界面里弹那个“允许通知”的框。
     // 地址不是安全来源时也不发：浏览器认 https 与本机地址，http://192.168.x.x 这种直接不给权限，
     // 而且它连“拒绝”都不说（干脆不问）。判断放在这里，下面解释原因的那段才说得对路。
-    try { return !IN_WEBVIEW && window.isSecureContext !== false && typeof Notification !== "undefined" && !!Notification; } catch (e) { return false; }
+    // 手机 App（壳）里也不发：那边由 App 自己在后台弹通知，这边再发就重复了。
+    try { return !IN_WEBVIEW && !inAppShell() && window.isSecureContext !== false && typeof Notification !== "undefined" && !!Notification; } catch (e) { return false; }
+  }
+
+  /** 是不是在手机 App（壳）里打开的：壳加载页面时放上这个标记，通知全归壳发。 */
+  function inAppShell() {
+    try { return window.pichatInAppShell === true; } catch (e) { return false; }
   }
 
   /** 问一次通知权限（没问过才问；浏览器不给的就没办法了）。用户点界面时调，有手势更容易给。 */
@@ -400,6 +406,7 @@
   function notifyUnavailableNote() {
     try {
       if (IN_WEBVIEW) { return "插件里的对话面板里发不了系统通知（那边看「有新消息」那颗点），浏览器页面里才有" };
+      if (inAppShell()) { return "手机 App 里由 App 自己发通知（这台设备上页面这边不发，不然会弹两条）" };
       if (!canNotify()) { return "这台设备上用不了：浏览器只在 https 或本机地址下给通知权限（http 地址就是这样）"; }
       if (Notification.permission === "denied") { return "这台设备的浏览器把它拦了（在地址栏那个图标里可以放开）"; }
       if (Notification.permission !== "granted") { return "这台设备还没允许通知：点这一项会问一次"; }
@@ -409,11 +416,11 @@
 
   /** 弹一条“某个会话那边有事”的系统通知：标题是会话名，点一下把页面拉到前台并切到那个会话。
    *  tag 按事由分开（跑完一轮 / 模型提问各一套）：同一个会话的同类旧通知原地换成新的，不堆一屏。 */
-  function showSessionNotice(sessionId, body, fallback, tag) {
+  function showSessionNotice(sessionId, body, fallback, tag, name) {
     try {
       if (!canNotify() || Notification.permission !== "granted") { return; }
       const st = sessions.get(sessionId);
-      const title = st ? sessionLabel(st) : "Pi Chat";
+      const title = st ? sessionLabel(st) : (name || "Pi Chat");
       const note = new Notification(title, {
         body: (body || "").trim() || fallback,
         tag: tag,
@@ -428,17 +435,17 @@
   }
 
   /** 一个会话跑完一轮。 */
-  function notifyTurnEndFor(sessionId, status, text) {
+  function notifyTurnEndFor(sessionId, status, text, name) {
     if (!notifyTurnEnd || status === "cancelled") { return; }
-    showSessionNotice(sessionId, text, "跑完了一轮", "pichat-turn-end-" + sessionId);
+    showSessionNotice(sessionId, text, "跑完了一轮", "pichat-turn-end-" + sessionId, name);
   }
 
   /** 模型在某个会话里问了一道选择题（ask_choice），正等着人答：跟“跑完一轮”一样提醒一声。
    *  卡片只发给正看着那个会话的屏（见后端 askOnScreens），这条谁都收得到 —— 人在别的会话 /
    *  别的窗口里时也能知道该去答一句。用的是同一个开关（设置里的“跑完发系统通知”）。 */
-  function notifyAskFor(sessionId, text) {
+  function notifyAskFor(sessionId, text, name) {
     if (!notifyTurnEnd) { return; }
-    showSessionNotice(sessionId, text, "问你一道选择题", "pichat-ask-" + sessionId);
+    showSessionNotice(sessionId, text, "问你一道选择题", "pichat-ask-" + sessionId, name);
   }
   function isSendKey(e) {
     if (e.key !== "Enter") { return false; }
@@ -1617,18 +1624,17 @@
   // 不出这行的两种：think（思考，内容在提示框里看）与 ask_choice（问话卡片本来就铺在消息流里，
   // 而且它要等人答完才算跑完，摆一行「正在跑」只会碍事）。
   //
-  // 退场分两步走 —— 一串很快跑完的调用（读文件、grep，一条几十毫秒）不该让这行一闪一闪：
-  // 出现、消失、又出现，下面的内容跟着上下跳。
-  //   · 先留字：一条都不在跑之后，写着的那条再留 RUNNING_LINE_LINGER_MS；这几十毫秒里下一批
-  //     工具多半就接上了，接上就一直写着、只是换个名字，看着是一条连着变的（见 expireRunningLine）；
-  //   · 位置留到这一批真过去：到点之后字淡出去（见 chat.css 的 .tool-running-item.gone），
-  //     淡完这块地方还占着（高度不变，下面不动），等下面出了正文 / 问话卡片（这一批工具过去了），
-  //     或者这一轮跑完，才整条连位置一起收掉（见 endRunningLine）。
+  // 跑完了字不走 —— 一串很快跑完的调用（读文件、grep，一条几十毫秒）不该让这行一闪一闪
+  // （出现、消失、又出现，下面的内容跟着上下跳）；而且这条命令本身（工具标签上只有名字）就在这儿
+  // 看得到，一下子没了就看不成了。所以一条都不在跑之后这条留着、只是冻住：齿轮停转、
+  // 耗时定在跑完那一刻（见 freezeRunningLine），一直到新的命令原地把它顶掉。
+  // 同时跑几条的：先跑完的各自立刻少一条，只留最后跑完的那条冻着。
+  // 整条（字与位置）在这一批过去时一并收掉：下面出了正文 / 问话卡片，或者这一轮跑完
+  // （见 endRunningLine）。
   //
   // 一行写不完的（长命令行）：字自己慢慢横向滚，只往一个方向（从头滚到末尾，到头停一下再从开头来，
   // 见 rollRunningText 与 chat.css 的 tr-roll），不然一颗「bash」加小半条命令就完了，看不出来在跑什么。
   const RUNNING_LINE_SKIP = new Set([THINKING_NAME, "ask_choice"]);
-  const RUNNING_LINE_LINGER_MS = 300;
   const RUNNING_ROLL_MIN_PX = 4;    // 溢出这几个像素以内不算「放不下」（末尾省略号那点宽度，不值当滚）
   const RUNNING_ROLL_SPEED = 30;    // 放不下的那行字自己滚动的快慢：每秒 30 像素（慢慢地滚）
   const RUNNING_ROLL_SWEEP = 0.91;  // 一趟里走的时间占多少（另 9% 是两头停的那一下，见 chat.css 的 tr-roll）
@@ -1658,20 +1664,16 @@
   }
 
   /** 画/更新「正在跑」的那一行：贴在当前这批工具标签下面（新一轮工具行上来就跟着挪过去）。
-   *  没有在跑的怎么退场见上面那段说明（先留字、位置留到这一批过去）。 */
+   *  一条都不在跑了就把它冻住（字留着，见 freezeRunningLine）。 */
   function syncRunningLine(st) {
     // 往暂存区补更早的历史时（「加载更早」那批）不碰：那块还没在页面上（同 placeEndHint）
     if (!st || !st.paneEl || st._stage === st.paneEl) { return; }
     const calls = runningCalls(st);
     if (!calls.length) {
-      // 一条都不在跑了：先让写着的那条再留一会儿（下一批多半这会儿就接上），到点见下面那个函数。
-      // 本来就没这条（这一批没调过工具）什么都不用做。
-      if (st.runningLine && !st.runningLineTimer) {
-        st.runningLineTimer = setTimeout(() => { st.runningLineTimer = 0; expireRunningLine(st); }, RUNNING_LINE_LINGER_MS);
-      }
+      // 一条都不在跑了：留在页面上的那条冻住（本来就没这条的什么都不用做）
+      freezeRunningLine(st);
       return;
     }
-    if (st.runningLineTimer) { clearTimeout(st.runningLineTimer); st.runningLineTimer = 0; }
     if (!st.runningLine) {
       st.runningLine = document.createElement("div");
       st.runningLine.className = "msg tool-running";
@@ -1756,42 +1758,41 @@
     t.style.setProperty("--tr-dur", Math.max(1, over / RUNNING_ROLL_SPEED / RUNNING_ROLL_SWEEP) + "s");
   }
 
-  /** 留的那一会儿到点了、还是一条都没在跑：这一批过去了就把整条收掉，没过去就把字清掉、位置留着。
-   *  「过去了」看它跟的还是不是这一批：下面是正文 / 问话卡片了（currentToolTail 被清掉），
-   *  或者已经换到新的一排 / 新的一块图上了，都算这一批过去了。 */
-  function expireRunningLine(st) {
+  /** 一条都不在跑了：把留在页面上的这条冻住 —— 齿轮停转、耗时定在跑完那一刻，字留着
+   *  （长命令照旧自己滚：滚是为了看全命令，跟还在不在跑是两回事）。
+   *  同时跑几条的，先跑完的那几条在重画时已经各自少了一条，所以到这一步页面上最多剩一条；
+   *  万一一次就跳到一条都不在跑（两条几乎同时回来），只留最后那条。
+   *  已经冻住的再来一遍什么都不动：耗时记的是这条跑了多久，不能跟着后面发生的事继续往上涨。 */
+  function freezeRunningLine(st) {
     const line = st.runningLine;
-    if (!line || !st.paneEl || runningCalls(st).length) { return; }
-    // 它跟的那个落脚点没了（那排标签空了被收掉）、或者已经不是这一批了（下面是正文 / 问话卡片了）：
-    // 这一批过去了，整条连位置一起收。
-    const tailGone = line._tail && line._tail.parentElement !== st.paneEl;
-    if (tailGone || st.currentToolTail !== line._tail) { dropRunningLine(st); return; }
-    // 这一批还没过去（下一条工具随时可能来）：字淡掉，位置留着 —— 那个盒子还在页面上、还占着
-    // 那条的高度（淡的是里面写着的东西，不是把盒子拿走），下面不会跟着上下跳。
-    // 字都看不见了，后面那个耗时也不用再数了（下一批接上时 syncRunningLine 会重新开）。
+    if (!line) { return; }
+    while (line.childElementCount > 1) { line.firstElementChild.remove(); }
+    const item = line.lastElementChild;
+    if (!item || item.classList.contains("done")) { return; }
+    item.classList.add("done");
     stopRunClock(st);
-    for (const item of line.children) { item.classList.add("gone"); }
+    for (const el of item.querySelectorAll(".tr-time")) {
+      if (el._startedAt) { el.textContent = formatElapsed(Date.now() - el._startedAt); }
+    }
   }
 
-  /** 把这条整条收掉（连位置一起）：那点还没到 / 还没清的字也一并作废（定时器一并清）。 */
+  /** 把这条整条收掉（连位置一起）。 */
   function dropRunningLine(st) {
     if (!st) { return; }
-    if (st.runningLineTimer) { clearTimeout(st.runningLineTimer); st.runningLineTimer = 0; }
     stopRunClock(st);
     if (st.runningLine) { st.runningLine.remove(); st.runningLine = null; }
   }
 
-  /** 这一批工具过去了（下面出了正文 / 问话卡片，或者这一轮跑完）：把还在留的那条连位置一起收掉。
-   *  还有工具在跑就不收 —— 那说明这一批还没过去，收掉马上又得开一条，正是要避免的那种一闪。 */
+  /** 这一批工具过去了（下面出了正文 / 问话卡片，或者这一轮跑完）：把还在留的那条（冻着的那个）
+   *  连位置一起收掉。还有工具在跑就不收 —— 那说明这一批还没过去，收掉马上又得开一条，
+   *  正是要避免的那种一闪。 */
   function endRunningLine(st) {
     if (!st || !st.paneEl || st._stage === st.paneEl) { return; }
     if (runningCalls(st).length) { return; }
     dropRunningLine(st);
   }
 
-  /** 把这条摆到它该在的地方：这一批的落脚点（那条工具行 / 那块图）下面。_tail 记着它跟的是
-   *  哪个节点（判断这一批过没过去用它，见 expireRunningLine）—— 来了一段正文之后它就待在原地、
-   *  _tail 不动，那个节点不再是当前这批的落脚点，这一批就算过去了。 */
+  /** 把这条摆到它该在的地方：这一批的落脚点（那条工具行 / 那块图）下面。 */
   function placeRunningLine(st, line) {
     const tail = st.currentToolTail;
     if (tail && tail.parentElement === st.paneEl) {
@@ -1800,14 +1801,12 @@
       let after = tail;
       while (after.nextElementSibling && after.nextElementSibling.classList.contains("ask-card")) { after = after.nextElementSibling; }
       if (line.previousElementSibling !== after) { after.after(line); }
-      line._tail = tail;
       return;
     }
     // 手头没有这一批的落脚点（刚来了一段正文，或者问话卡片把行收掉了）：就待在原地
     // —— 它跟的是它那批，不往新内容下面钻（后一条工具调用开了新行时才挪过去）。
     if (line.parentElement === st.paneEl) { return; }
     // 还没挂上页面（整屏重画之后头一条就是还在跑的调用）：挂在消息流末尾
-    line._tail = tail || null;
     const hintRow = st.endHintRow;
     if (hintRow && hintRow.parentElement === st.paneEl) { st.paneEl.insertBefore(line, hintRow); return; }
     st.paneEl.appendChild(line);
@@ -2353,7 +2352,7 @@
       // 不动当前这一批。
       if (row === st.currentToolTail) {
         st.currentToolTail = block;
-        // 「正在跑的那一条」认这块图（这一批还没过去，它还得留着慢慢淡，见 expireRunningLine）
+        // 「正在跑的那一条」认这块图（这一批还没过去，它还得留在这块图下面）
         if (st.runningLine) { placeRunningLine(st, st.runningLine); }
       }
     } else {
@@ -2656,11 +2655,18 @@
     // 只有方块的「停止生成」（见 syncEndHint）。
     syncComposerButtons();
   }
-  // 状态栏常显模型：这些纯函数拼出模型名前缀与用量百分比标签。
+  // 状态栏常显模型：这些纯函数拼出模型名与用量百分比标签。
+  // 状态栏只写模型 ID：手机上那行就那么宽，带上 provider 前缀和思考档会把后面的
+  // 用量、速度整块挤出屏幕（那两样在悬浮提示里还看得到）。
   function modelPartFor(st) {
+    return (st && st.modelId) || "";
+  }
+  // 完整名字（provider/模型/思考档）：只给悬浮提示用。
+  function modelFullFor(st) {
     const id = (st && st.modelId) || "";
+    if (!id) { return ""; }
     const prov = (st && st.provider) || "";
-    return id ? ((prov ? prov + "/" : "") + id) : "";
+    return (prov ? prov + "/" : "") + id + (st.thinkingLevel ? "/" + st.thinkingLevel : "");
   }
   let tpsSyncAt = 0;
   // delta 高频到达，速度刷新做 250ms 节流（当前会话的状态栏要刷）
@@ -2696,7 +2702,7 @@
   function statusTags(st) {
     const parts = [];
     const mp = modelPartFor(st);
-    if (mp) { parts.push('<span class="st-model">' + mp + (st.thinkingLevel ? "/" + st.thinkingLevel : "") + '</span>'); }
+    if (mp) { parts.push('<span class="st-model">' + mp + '</span>'); }
     const pct = pctTag(st);
     if (pct) { parts.push(pct); }
     const tps = currentTps(st);
@@ -2819,7 +2825,7 @@
   /** 签名相同时只替换数字文本，不动 .typing 等动画节点。 */
   function updateStatusInPlace(el, t) {
     const m = el.querySelector(".st-model");
-    if (m) { m.textContent = modelPartFor(t) + (t.thinkingLevel ? "/" + t.thinkingLevel : ""); }
+    if (m) { m.textContent = modelPartFor(t); }
     if (typeof t.percent === "number") {
       const p = el.querySelector(".st-pct");
       if (p) {
@@ -2847,8 +2853,7 @@
         el.innerHTML = paneStatusHtml(t);
       }
       el.classList.toggle("ps-focus", activeId === t.id);
-      const mp = modelPartFor(t);
-      el.title = "当前: " + (mp || "未配置") + (t.thinkingLevel ? (" · 思考 " + t.thinkingLevel) : "") + "（点击切换模型）";
+      el.title = "当前: " + (modelFullFor(t) || "未配置") + "（点击切换模型）";
     });
   }
 
@@ -2860,6 +2865,20 @@
     catch { return false; }
   })();
   /** 切到某个会话：把它的壳挂回 #messages，草稿跟着换（打了一半的字留在各自会话里）。 */
+  /**
+   * 手机 App（壳）点通知回到某个会话时调这个（壳往页面里执行一句）。
+   * 刚打开 App 时会话列表还没到，等一等再试；十几秒还没有就算了（那个会话可能已经被关掉）。
+   */
+  window.pichatOpenSession = function (id) {
+    if (!id) { return; }
+    var tries = 0;
+    (function attempt() {
+      if (sessions.has(id)) { activateSessionView(id); return; }
+      if (++tries > 40) { return; }
+      setTimeout(attempt, 300);
+    })();
+  };
+
   function activateSessionView(id) {
     if (!sessions.has(id) || activeId === id) { return; }
     hideTagTip();
@@ -3587,7 +3606,7 @@
   //
   // 点消息流里的文件链接，左边开出一列，只读地显示那个文件：带行号，停在链接说的那一行并高亮。
   // 内容由后端那条只读的文件地址（/file）按当前会话的目录读出来，不经过编辑器——手机上、
-  // 或者只跑了后端没开编辑器的时候，点链接才有着落（见 docs/adr/0001-浏览器页面自己读文件.md）。
+  // 或者只跑了后端没开编辑器的时候，点链接才有着落。
   //
   // 只有浏览器页面里有它：插件里的对话面板里点链接照旧交给编辑器打开。判据就是上面那个
   // IN_WEBVIEW 标记（界面桥放在 window 上的，跟顶条上那颗桌面截图按钮同一路）。
@@ -3620,8 +3639,8 @@
   //（两块都常驻时不受这条约束）。开没收起记在这台设备里（跟右边那一列同一个做法）。
   const FILE_SIDEBAR_MIN_WIDTH = 1200;
   /**
-   * 这一列拖起来能有多窄多宽（两边都封死；为什么是这两个数、为什么不给拖到无限宽，
-   * 见 docs/adr/0002-文件侧边栏宽度能拖.md）。常驻时还要再跟「窗口宽度 − FILE_SIDEBAR_W_RESERVE」
+   * 这一列拖起来能有多窄多宽（两边都封死：比 300 还窄就放不下一行代码，比 1200 还宽对话那边
+   * 就没地方了）。常驻时还要再跟「窗口宽度 − FILE_SIDEBAR_W_RESERVE」
    * 取小，保证对话那边留得住（见 clampFileSidebarWidth）。
    */
   const FILE_SIDEBAR_W_MIN = 300;
@@ -4446,7 +4465,7 @@
    * 按住之后指针捕获在这一格上，拖到面板外面、拖到窗口边上都不断线。
    * 拖动中只动这一列自己：它是浮在对话上面的（position: fixed），动它不碰版面；
    * 对话那边空出多宽由 body.file-dock::before 那块占位决定，那块先冻着不动——
-   * 它一动，整屏消息就得重新排字（长会话一次几十毫秒，见 docs/adr/0002 里量出来的数）。
+   * 它一动，整屏消息就得重新排字（长会话一次几十毫秒）。
    * 松手那一下才落到版式上（对话跟着排一次），也是到那一下才记进本机。
    */
   function wireFileSidebarResize(handle) {
@@ -6215,7 +6234,7 @@
     // parentId 判会赶不上——那时它的壳已经不在了。
     if (type === "turnEnd") {
       if (msg.child === true) { return; }
-      notifyTurnEndFor(msg.sessionId, msg.status, msg.text);
+      notifyTurnEndFor(msg.sessionId, msg.status, msg.text, msg.name);
       const done = msg.sessionId ? sessions.get(msg.sessionId) : null;
       if (done && done.id !== activeId) {
         markSessionUnread(done);
@@ -6224,7 +6243,7 @@
     }
     // 模型在某个会话里问了一道选择题（ask_choice）、正等着人答：同一条路由（每块屏都收到）。
     // 卡片只长给“正看着那个会话”的屏（切过去时会补上），这条提醒发出去，人在别处也看得见。
-    if (type === "askWaiting") { notifyAskFor(msg.sessionId, msg.text); return; }
+    if (type === "askWaiting") { notifyAskFor(msg.sessionId, msg.text, msg.name); return; }
     if (type === "openFiles") {
       openFiles = msg.files || [];
       if (atStart >= 0) {

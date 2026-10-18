@@ -1262,9 +1262,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * （本机给不给通知权限、开关开没开）。
      */
     private broadcastAskWaiting(sessionId: string | undefined, req: AskRequest): void {
+        const rt = sessionId ? this.panels.get(sessionId) : undefined;
         const msg = {
             type: "askWaiting",
             sessionId: sessionId ?? "",
+            // 会话名：通知标题用它（手机 App 手里没有会话列表，只能靠这一行）
+            name: rt ? this.sessionDisplayName(rt) : "",
             text: this.noticeLine(req.question, "问你一道选择题"),
         };
         this.forEachClient((_clientId, send) => { send({ ...msg }); });

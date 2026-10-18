@@ -272,17 +272,18 @@
   /* 改动被回滚了：这一组的标签划掉（一组里有没回滚的就不划，见 chat.js 的 syncGroupTag） */
   .tool.reverted { text-decoration: line-through; opacity: 0.6; }
   /* 正在跑的那一条：贴在当前这批工具标签下面，一行一条（同时跑几条就排几行）。
-     退场分两步（一串很快跑完的调用不该让它一闪一闪）：先留一会儿字，字清掉之后这块位置还占着，
-     直到这一批过去才整条收掉 —— 具体见 chat.js 的 syncRunningLine / endRunningLine。
+     跑完的也不走，只是冻住：齿轮停转、耗时定住（见 chat.js 的 freezeRunningLine），
+     字照旧留着，到新的命令来把它顶掉；整条在这一批过去（下面出正文 / 问话卡片、
+     或者这一轮跑完）时收掉。
      摘要本来只在提示框里，这里直接写出来：一颗「bash」看不出它在跑什么。
-     一行放不下的（长命令行）字自己横向滚，只往一个方向（见下面），放得下的就静静摆着。
+     一行放不下的（长命令行）字自己横向滚，只往一个方向（见下面），放得下的就静静摆着；
+     冻住的照旧滚（滚是为了看全命令，不是在说还在跑）。
      左内边距 6px 跟工具标签自己的内外边距一样（见 .tool 的 padding）：两处的齿轮要在同一条竖线上。 */
   .tool-running { display: flex; flex-direction: column; gap: 2px; margin: 2px 0; padding: 0 14px; }
-  .tool-running-item { display: flex; align-items: center; gap: 4px; min-width: 0; padding-left: 6px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.75; transition: opacity 150ms ease, visibility 0s linear 150ms; }
-  /* 跑到时间了、下一批还没来：这一条淡出去（不是一下就没了），淡完才把 visibility 翻成 hidden
-     （0s 的 transition + 150ms 延迟，见上）；盒子还占着位置，高度不变，下面不跟着跳。 */
-  .tool-running-item.gone { opacity: 0; visibility: hidden; }
+  .tool-running-item { display: flex; align-items: center; gap: 4px; min-width: 0; padding-left: 6px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.75; }
   .tool-running-item .tool-icon { flex: 0 0 auto; animation: tool-spin 1.1s linear infinite; }
+  /* 跑完的那一条：齿轮停住（这一条上那颗是「在不在跑」的指示），字与耗时都留着不动 */
+  .tool-running-item.done .tool-icon { animation: none; }
   /* 字自己滚的时候，后面那个耗时不跟着动：它钉在这一条的末尾（margin-left: auto 推到右边），
      不缩水（flex: 0 0 auto），所以字滚它的、数字坐它的。 */
   .tool-running-item .tr-time { flex: 0 0 auto; margin-left: auto; padding-left: 8px; opacity: 0.8; font-variant-numeric: tabular-nums; }
@@ -1117,6 +1118,10 @@
   .pane-status .st-model, .pane-status .st-pct, .pane-status .st-tps {
     font-family: var(--vscode-editor-font-family, monospace);
   }
+  /* 模型 ID 太长时自己收省略号：后面那几项（用量、速度）是重点，不能被挤出屏幕。
+     手机窄屏上尤其常见（长模型名 + 百分比 + 速度），标题里还有全名可看。 */
+  .pane-status .st-model { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .pane-status .st-pct, .pane-status .st-tps, .pane-status .typing { flex: 0 0 auto; }
   .pane-status:not(.ps-focus) { opacity: 0.6; }
   .pane-status.ps-focus { opacity: 1; }
   .pane-status:hover .st-model { text-decoration: underline; }

@@ -49,13 +49,15 @@ export class ChatBroadcaster {
     /**
      * 登记一条推送连接。
      * 同一个页面标识连了第二次（页面重连）：旧连接从 returned.replaced 交给调用方安静收掉。
+     * @param watch 只听通知的连接（手机 App 在后台挂着的那条）：消息照收，但不算"人在里面动过的页面"。
      */
     public addChannel(
         id: string,
         send: (msg: Record<string, unknown>) => void,
         close: (note: string) => void,
+        watch = false,
     ): ChannelAddResult {
-        const { channel, replaced } = this.pages.add(id, send, close);
+        const { channel, replaced } = this.pages.add(id, send, close, watch);
         // 这条连接建立时的序号。比它大的消息都会写给这条连接（实时消息）；
         // 页面手里更老的序号对应的是断线期间漏掉的，重连后由它报数、这里补发。
         // hello 必须走在一切带序号的消息前面：页面靠它分清实时和补发。

@@ -203,6 +203,8 @@ export interface PageChannel {
     close(note: string): void;
     /** 这个页面最后一次有动静的时刻（毫秒时间戳）。用于掐掉"半天没声音"的死连接。 */
     lastSeenAt: number;
+    /** 只听通知的连接（手机 App 在后台挂着的那条）：不参与"人最近在里面动过"这类挑选。 */
+    readonly watch?: boolean;
 }
 
 /** 登记簿 add 的结果：新登记的连接，以及同标识被顶下来的那条（如果有）。 */
@@ -263,12 +265,14 @@ export class PageChannels {
         id: string,
         send: (msg: Record<string, unknown>) => void,
         close: (note: string) => void,
+        watch = false,
     ): PageChannelAddResult {
         const replaced = this.channels.get(id);
-        const channel: PageChannel = { id, send, close, lastSeenAt: Date.now() };
+        const channel: PageChannel = { id, send, close, lastSeenAt: Date.now(), ...(watch ? { watch: true } : {}) };
         this.channels.set(id, channel);
         this.markIssued(id);
-        this.recentId = id;
+        // 只听通知的那条不算"人在里面动过"：不然确认框、浮层会挑到一块没人看的屏上
+        if (!watch) { this.recentId = id; }
         return { channel, replaced };
     }
 
@@ -289,9 +293,9 @@ export class PageChannels {
         return all;
     }
 
-    /** 最后登记的那条连接（一个都没有时是 undefined）。 */
+    /** 最后登记的那条连接（只看真正的页面，跳过只听通知的那些；一个都没有时是 undefined）。 */
     private lastConnected(): PageChannel | undefined {
-        const all = Array.from(this.channels.values());
+        const all = Array.from(this.channels.values()).filter((channel) => !channel.watch);
         return all.length > 0 ? all[all.length - 1] : undefined;
     }
 

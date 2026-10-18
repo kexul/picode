@@ -59,17 +59,3 @@ PICHAT_HOME=/tmp/pichat-test npm run server -- --cwd /tmp/pichat-test/work --por
 （`--port 0` = 自动挑空闲端口。）
 
 测试前端表现的时候不要真给ai发消息，用假数据即可。
-
-## Agent skills
-
-### Issue tracker
-
-issue 和 spec 都存在本地 markdown 文件里（`.scratch/<功能名>/`，不进版本库）。见 `docs/agents/issue-tracker.md`。
-
-### Triage labels
-
-分诊状态用五个中文词，写在每个 issue 文件顶部的 `Status:` 那一行。见 `docs/agents/triage-labels.md`。
-
-### Domain docs
-
-单上下文：仓库根一个 `GLOSSARY.md` 加一个 `docs/adr/`。见 `docs/agents/domain.md`。

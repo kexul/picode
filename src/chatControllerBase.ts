@@ -1316,9 +1316,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
         // 子会话跑完第一轮：结果先交回派活的那个会话（不等会话标题）
         this.tabaOnTurnEnd(info);
         // 每条屏都收到：各自按“我这台设备能不能发通知”“我看没在看这个会话”自己决定
+        const rt = this.panels.get(info.panelId);
         const msg = {
             type: "turnEnd",
             sessionId: info.panelId,
+            // 这个会话在人眼前叫什么：通知标题用它（手机 App 手里没有会话列表，只能靠这一行）
+            name: rt ? this.sessionDisplayName(rt) : "",
             status: info.status,
             child: handedBack,
             text: this.turnEndNoticeText(info),

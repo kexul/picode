@@ -1,0 +1,32 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'dev.pichat.app'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'dev.pichat.app'
+        // 只给这条后台连接用，用不上新系统的花活：安卓 8 起跳，够宽了
+        minSdk 26
+        // 特意停在 34：安卓 15 起对 dataSync 这类常驻服务有"一天只能跑几小时"的上限，
+        // 升到 35 这条后台连接就会被系统掐掉（见 android/README.md）
+        targetSdk 34
+        versionCode 1
+        versionName '0.1.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// 一个依赖都不加：界面本体是后端给的网页，这边只有一层壳

@@ -451,7 +451,7 @@ export class PiChatWebServer {
             }
             if (pathname === "/events") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                this.openChannel(req, res, url.searchParams.get("pageId") ?? "");
+                this.openChannel(req, res, url.searchParams.get("pageId") ?? "", url.searchParams.get("role") === "watch");
                 return;
             }
             if (pathname === "/api") {
@@ -583,8 +583,8 @@ export class PiChatWebServer {
      *
      * 相对路径按那个会话的目录解；`..` 绕出去的、软链接指到外面的都在这里挡掉：判的是真实路径
      * （fs.realpath，软链接一起解析掉），不是字符串前缀。这是有意的边界：能打开这个页面的人本来
-     * 就能让 pi 读写这台机器，但「按路径直接取文件」这条路不该跟着变成整台机器的读接口
-     * （为什么见 docs/adr/0001-浏览器页面自己读文件.md）。文件与目录两条地址共用这一套。
+     * 就能让 pi 读写这台机器，但「按路径直接取文件」这条路不该跟着变成整台机器的读接口。
+     * 文件与目录两条地址共用这一套。
      *
      * 找文件分两档（跟编辑器打开文件时一样多，但不去全工程扫）。
      *
@@ -900,8 +900,11 @@ export class PiChatWebServer {
      * 几个页面可以同时连着（手机一个、电脑一个），谁都不是"唯一的"：插件推的消息发给每一个。
      * 同一个页面又连了一次（手机退到后台再回来、网络断了又通），把它那条旧连接安静收掉就行，
      * 不发"你被别的页面顶掉了"那种话——那只是它自己重连。
+     *
+     * `role=watch` 是手机 App 那条：它只要知道"哪个会话跑完了 / 在等你答"，好弹通知，
+     * 不画界面。所以不补发旧消息（see 末尾），也不被当成"人最近在里面动过的页面"（见 PageChannels.add）。
      */
-    private openChannel(req: http.IncomingMessage, res: http.ServerResponse, pageId: string): void {
+    private openChannel(req: http.IncomingMessage, res: http.ServerResponse, pageId: string, watch = false): void {
         // 页面标识正常都是服务发出页面时写进去的那个；万一没有就自己编一个，别把好几个页面混成一条
         const id = pageId || `p-anon-${crypto.randomUUID()}`;
         const broadcaster = this.host.getBroadcaster();
@@ -909,6 +912,7 @@ export class PiChatWebServer {
             id,
             (msg) => { this.writeChunk(channel, res, `event: msg\ndata: ${JSON.stringify(msg)}\n\n`); },
             (note) => { this.endStream(res, note); },
+            watch,
         );
         this.streams.set(id, res);
         res.writeHead(200, {
@@ -936,7 +940,8 @@ export class PiChatWebServer {
         req.on("error", onClose);
         res.on("error", onClose);
         // 断线这段时间插件攒下的消息补给这个页面（页面自己还会再要求整屏重画，两边都对得上）
-        this.host.onPageConnected(id);
+        // 只听通知的那条（手机 App 在后台挂的）不要补：它不画界面，补的全是些大块内容
+        if (!watch) { this.host.onPageConnected(id); }
     }
 
     /**

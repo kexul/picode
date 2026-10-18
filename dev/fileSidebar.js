@@ -423,7 +423,8 @@ const POST_LINKS = `for (const m of ${JSON.stringify([{ type: "assistantFull", t
 
 /**
  * 宽度那一摊：没拖过是 360；拖起来夹在 300～1200 之间，常驻时还要跟「窗口宽度 − 360」取小。
- * 为什么是这几个数、手机上为什么铺满，见 docs/adr/0002-文件侧边栏宽度能拖.md。
+ * 为什么是这几个数：再窄放不下一行代码，再宽对话那边就没地方了；手机上铺满是因为那一列
+ * 在窄屏上本来就是整屏滑入的抽屉。
  */
 const FILE_W_DEFAULT = 360;
 const FILE_W_MIN = 300;
