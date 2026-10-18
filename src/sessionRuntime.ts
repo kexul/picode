@@ -904,9 +904,12 @@ export class SessionRuntime {
         // 缺省出口是这个会话的常规广播；传了 sink 就是"只给某一个页面重画"。
         // 两条路都要带上 sessionId：界面靠它认出消息属于哪一个会话。
         const sink = opts?.sink;
+        // replay: 这一批是“把历史再画一遍”，不是刚发生的事。界面靠它区分：重放的要插在
+        // “重放到哪儿”的游标处，实时的（断线中间还在长的正文、用户刚发的消息）一律接到末尾
+        //（见 media/chat.js 的 placeUnit）。
         const emit: MessageSink = sink
-            ? ((msg) => sink({ ...msg, sessionId: this.id }))
-            : ((msg) => this.host.postToSession(this.id, msg));
+            ? ((msg) => sink({ ...msg, sessionId: this.id, replay: true }))
+            : ((msg) => this.host.postToSession(this.id, { ...msg, replay: true }));
         // keepDraft：重画不清输入框里没发出去的文字和附件。重画只是把对话内容重新递一遪，
         // 人打了一半的字不该被抹掉（换会话那种 clear 不带这个标记，草稿仍会重置）。
         // reconcile：后面重放的每条都带编号（id），界面可以按编号认出“这条我已经画过”，
@@ -1126,10 +1129,17 @@ export class SessionRuntime {
             const m = messages[i];
             const size = messageBytes(m);
             // 最新那一条无论多大都带上：不然打开来一条都没有，反而像坏了
-            if (count > 0 && (count >= cap || bytes + size > budget)) { break; }
+            if (start !== endBefore && (count >= cap || bytes + size > budget)) { break; }
             start = i;
             bytes += size;
             if (m && (m.role === "user" || m.role === "assistant")) { count += 1; }
+        }
+        // 起点只能落在 user / assistant 上（跟以前一样）：落在一条工具结果上时，它那条调用
+        // 被切到了上一段里——这一屏里落单的结果没人认，往前补的那一批里又只有调用没有结果，
+        // 界面上那颗工具标签就永远转圈、输出也看不见了。
+        while (start < endBefore && messages[start]
+            && messages[start].role !== "user" && messages[start].role !== "assistant") {
+            start += 1;
         }
         let hidden = 0;
         for (let i = 0; i < start; i++) {
@@ -1192,7 +1202,7 @@ export class SessionRuntime {
      * 不往前补了，直接整屏重画一遍重置窗口。
      */
     public async loadOlderHistory(): Promise<void> {
-        if (this.historyWindowStart < 0) { return; }  // 没开过窗口（非网页端 / 全量发过）：按钮不该出现
+        if (this.historyWindowStart <= 0) { return; }  // 没开过窗口 / 窗口正好从头开始（非网页端、全量发过）：按钮不该出现
         const msgResp = await this.request<{ messages: any[] }>({ type: "get_messages" });
         if (!msgResp) {
             this.post({ type: "historyBatchEnd", hasMore: this.historyWindowStart > 0, hidden: this.historyWindowHidden });
@@ -1203,8 +1213,9 @@ export class SessionRuntime {
             messages.length < this.historyWindowLength
             || this.messageFingerprint(messages[this.historyWindowStart]) !== this.historyWindowFingerprint
         ) {
-            // 窗口记的那份会话已经不在了：不往前补，整屏重画一遍把窗口重置到最近一段
-            await this.replayHistory({ note: "" });
+            // 窗口记的那份会话已经不在了（压缩过 / 换过分支）：不往前补，整屏重画一遍。
+            // 发全量：页面手上本来就有更早的那些，裁成“最近一段”会当场把它们收掉。
+            await this.replayHistory({ note: "", full: true });
             return;
         }
         const win = this.sliceHistoryWindow(messages, this.historyWindowStart);
@@ -1246,7 +1257,9 @@ export class SessionRuntime {
         }
         for (let mi = 0; mi < messages.length; mi++) {
             const m = messages[mi];
-            const mid = `h${base + mi}`;
+            // 编号优先用 pi 自己给的消息 id：历史被压缩 / 回滚 / 换分支之后数组下标会指到
+            // 别的消息上，而界面是按编号原地复用节点的——那就把助手正文塞进用户气泡里了。
+            const mid = typeof m.id === "string" && m.id ? `m${m.id}` : `h${base + mi}`;
             switch (m.role) {
                 case "user":
                     emit({
@@ -1530,10 +1543,32 @@ export class SessionRuntime {
     }
 }
 
-/** 一条消息按 UTF-8 有多少字节（算不准就当 0：宁可多给一条，也别把窗口算崩）。 */
-function messageBytes(m: unknown): number {
+/**
+ * 一条消息大概占多少字节（UTF-8），给首屏窗口的预算用。
+ *
+ * 两个讲究：
+ *   · 图不算在内——历史里的图是完整 base64（几 MB 很常见），可真发出去时超过
+ *     `WEB_INLINE_IMAGE_CHARS` 的会换成占位（几百字节）。按原始 base64 算，读了两张截图的
+ *     会话会被算成好几 MB，窗口缩到一两条，首屏反而什么都没了。图交给那个 400 KB 预算管。
+ *   · 不用 `JSON.stringify(整条)`：一条 20 MB 的消息那么干就是造一个 20 MB 字符串。
+ *     只把文字部分按 UTF-8 累加，再给消息本身加一个小常数。
+ */
+function messageBytes(m: any): number {
     if (!m) { return 0; }
-    try { return Buffer.byteLength(JSON.stringify(m), "utf8"); } catch { return 0; }
+    const content = m.content;
+    let bytes = 64;
+    if (typeof content === "string") { return bytes + Buffer.byteLength(content, "utf8"); }
+    if (!Array.isArray(content)) { return bytes; }
+    for (const block of content) {
+        if (!block) { continue; }
+        if (typeof block.text === "string") { bytes += Buffer.byteLength(block.text, "utf8"); }
+        else if (typeof block.thinking === "string") { bytes += Buffer.byteLength(block.thinking, "utf8"); }
+        else if (block.type === "toolCall") {
+            try { bytes += Buffer.byteLength(JSON.stringify(block.arguments ?? {}), "utf8"); } catch { bytes += 32; }
+        } else if (block.type === "image") { bytes += 128; }   // 占位的大小，不是 base64 的
+        else { bytes += 32; }
+    }
+    return bytes;
 }
 
 /** 调试用的数值覆盖（环境变量只写在 dev/ 的脚本里，正式跑不会设）。 */

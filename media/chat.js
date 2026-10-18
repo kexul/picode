@@ -998,7 +998,7 @@
   // 消息在界面上没有编号，所以按“类型 + 开头一段文字 + 这段文字是第几次出现”认：
   // 重画是从会话历史重新画的，同一条消息画出来的开头几个字不变，重复的句子靠“第几次”分开。
 
-  /** 一条消息的“身份”：类型 + 开头一段文字。 */
+  /** 一条消息的“身份”（内容）：类型 + 开头一段文字，不看编号。 */
   function messageSignature(el) {
     const raw = el.dataset && typeof el.dataset.raw === "string" ? el.dataset.raw : (el.textContent || "");
     return el.className + "\u0000" + raw.slice(0, 120);
@@ -1043,18 +1043,26 @@
     const list = steady.length > 0 ? steady : seen;
     const candidates = [];
     for (const el of list.slice(0, 6)) {
-      const sig = messageSignature(el);
-      candidates.push({ sig, ordinal: order.get(el) || 0, offset: top - el.offsetTop });
+      candidates.push({
+        sig: messageSignature(el),
+        ordinal: order.get(el) || 0,
+        mid: (el.dataset && el.dataset.mid) || "",
+        offset: top - el.offsetTop,
+      });
     }
     return candidates.length > 0 ? { candidates } : null;
   }
 
-  /** 在重画后的窗格里找当初那几条里的哪一条还在（从最上面那条往下找）。 */
+  /**
+   * 在重画后的窗格里找当初那几条里的哪一条还在（从最上面那条往下找）。
+   * 先按“内容 + 第几次出现”认（实时画的和重放画的都对得上）；认不出再拿编号认。
+   */
   function findScrollAnchor(pane, candidates) {
     const kids = Array.from(pane.children);
     const order = messageOrdinals(kids);
     for (const c of candidates) {
-      const el = kids.find((k) => messageSignature(k) === c.sig && order.get(k) === c.ordinal);
+      const el = kids.find((k) => messageSignature(k) === c.sig && order.get(k) === c.ordinal)
+        || (c.mid ? kids.find((k) => (k.dataset && k.dataset.mid) === c.mid) : undefined);
       if (el) { return { el, offset: c.offset }; }
     }
     return null;
@@ -1097,13 +1105,14 @@
     st.stickToBottom = false;
     st.hasNewContent = true;
     pane.scrollTop = Math.max(0, el.offsetTop - found.offset);
+    st.lastScrollTop = pane.scrollTop;   // 记上：后面重挂会话时会按这个恢复
     syncJumpBottom(st);
     // 后到的高度（图解码、代码高亮重排）会把视野挤走：盯一小会儿，它挪多少补多少
     holdScrollOn(st, el);
   }
 
   /** 放手之前最多盯多久（从画完算）。 */
-  var ANCHOR_HOLD_MS = 5000;
+  var ANCHOR_HOLD_MS = 3000;
 
   /**
    * 把视野钉在某一条消息上，盯一小会儿。
@@ -1114,7 +1123,11 @@
    */
   function holdScrollOn(st, el) {
     const pane = st.paneEl;
-    const hold = { el: el, top: el.offsetTop, until: Date.now() + ANCHOR_HOLD_MS };
+    // 盯的是“它这会儿在视野里的位置”，不是它自己的 offsetTop：上面长高会把它挤下去，
+    // 别的东西（晚到的排版、另一次放位置）也可能把 scrollTop 挪走——两种都算“视野跑了”，
+    // 一并对回来才稳
+    const view = el.offsetTop - pane.scrollTop;
+    const hold = { el: el, view: view, until: Date.now() + ANCHOR_HOLD_MS };
     st.anchorHold = hold;
     const stop = () => { if (st.anchorHold === hold) { releaseAnchorHold(st); } };
     pane.addEventListener("wheel", stop, { passive: true, once: true });
@@ -1122,13 +1135,13 @@
     const step = () => {
       if (st.anchorHold !== hold) { return; }        // 人接手了 / 又开了一次重画
       if (st.paneEl !== pane || !pane.isConnected || el.parentNode !== pane) { releaseAnchorHold(st); return; }
-      const top = el.offsetTop;
-      if (top !== hold.top) {
+      const now = el.offsetTop - pane.scrollTop;
+      if (Math.abs(now - hold.view) > 1) {
         // 这一次跳动是我们自己补的：让 scroll 监听不要当成“人来滚了”（同 scrollToBottom 的记法）
         st.programmaticScroll = true;
-        pane.scrollTop = Math.max(0, pane.scrollTop + (top - hold.top));
+        pane.scrollTop = Math.max(0, el.offsetTop - hold.view);
         st.programmaticTop = pane.scrollTop;
-        hold.top = top;
+        st.lastScrollTop = pane.scrollTop;
       }
       if (Date.now() < hold.until) { setTimeout(step, 100); } else { releaseAnchorHold(st); }
     };
@@ -1150,13 +1163,34 @@
   // 用户输入、也不含图片，重建一下看不出来。
 
   /** 把一个顶层节点放到“重放游标”那儿（不在重放时就是追加到末尾）。 */
-  function placeUnit(st, el) {
+  /**
+   * 把一个顶层节点放到“重放游标”那儿。
+   * @param force 实时的消息默认一律接到末尾（它们不是历史的一部分：断线中间还在长的正文、
+   *              刚发出去的消息，插到游标处会在历史中间多出一截）；卡片这种“重发一遍、
+   *              本来就该在流程里”的例外传 true，也走游标。
+   */
+  function placeUnit(st, el, force) {
     const pane = st.paneEl;
     const rec = st.reconcile;
     // 不在对账中，或者正在往「加载更早」的暂存区（paneEl 被临时换成 _stage）里画：
     // 都只是追加，别去动对账那只游标（它属真正的那块窗格）
     if (!rec || rec.pane !== pane) { pane.appendChild(el); return el; }
+    if (!force && !st.replayNow) { rec.touched.add(el); pane.appendChild(el); return el; }
     rec.touched.add(el);
+    if (rec.alignNext) {
+      // 这一遍的第一条决定游标从哪儿起。
+      //   · 它本来就在窗格里（编号认得出来）：就从它这儿起；
+      //   · 认不出编号（实时画出来的节点没有编号，而窗口模式重放的正好是这一段）：
+      //     找一条“看起来一样”的旧节点，从它这儿起——重放的这批是接在它后面的，
+      //     上面那些更早的消息（窗口外面、用户自己翻出来的）得留着。
+      rec.alignNext = false;
+      if (el.parentNode === pane) {
+        rec.cursor = el;
+      } else {
+        const twin = Array.from(pane.children).find((k) => sameContent(k, el));
+        if (twin) { rec.cursor = twin; }
+      }
+    }
     const cur = rec.cursor;
     if (cur === el) {
       // 正好就是下一个该处理的旧节点：原地不动
@@ -1166,20 +1200,70 @@
       pane.appendChild(el);
     }
     rec.cursor = el.nextSibling;
+    rec.last = el;
     return el;
+  }
+
+  /**
+   * 这会儿是不是在往「加载更早」的暂存区里画（`historyBatchEvent` 会把 `paneEl` 临时换成
+   * 那块 detached 的 `_stage`）。暂存区是另一份渲染，不许去认领真窗格里的节点、也不许改编号表：
+   * 认领会把真窗格里的节点（比如 read 的图块）搬进暂存区，插回来的时候就跑到顶上去了。
+   */
+  function isStageRender(st) {
+    return !!st._stage && st.paneEl === st._stage;
+  }
+
+  /** 收掉一个顶层节点，顺手把编号表里那笔也删了（不然悬空引用越攒越多、下标复用还会“复活”死节点）。 */
+  function forgetUnit(st, el) {
+    const mid = el.dataset ? el.dataset.mid : "";
+    if (mid) { st.byId.delete(mid); }
+    el.remove();
+  }
+
+  /** 两条节点看起来是不是同一条消息（不认编号，只认类型与开头文字）。 */
+  function sameContent(a, b) {
+    if (!a || !b || a === b) { return false; }
+    const sig = (el) => Array.from(el.classList || []).filter((c) => c !== "msg-enter").sort().join(" ")
+      + "\u0000" + ((el.dataset && typeof el.dataset.raw === "string" ? el.dataset.raw : (el.textContent || "")).slice(0, 120));
+    return sig(a) === sig(b);
+  }
+
+  /** 窗格顶上那些不是消息的东西（重放不产它们，收尾也不能收）。 */
+  function isPaneFixture(el) {
+    return !!el && (el.classList.contains("history-more")
+      || el.classList.contains("empty-hint")
+      || el.classList.contains("session-loading"));
   }
 
   /** 重放开始（带编号）：不清空窗格，重置“正在长的那几样”，从这里开始按编号对账。 */
   function beginReconcile(st) {
     if (st.redrawTimer) { clearTimeout(st.redrawTimer); }
+    // 上一轮对账还没收尾（两次重画叠在一起）：先把那一轮收掉，别让两个游标打架
+    if (st.reconcile) { endReconcile(st); }
     releaseAnchorHold(st);
     st.redrawRestore = null;
+    // 窗格顶上那几样不是消息（「加载更早」按钮 / 空提示 / 加载遮罩）：游标从第一条消息起，
+    // 不然重放的每一条都插在按钮前面，按钮被一路挤到最底下
+    let first = st.paneEl.firstChild;
+    while (first && isPaneFixture(first)) { first = first.nextSibling; }
     st.reconcile = {
-      cursor: st.paneEl.firstChild,
+      cursor: first,
+      // 第一条重放消息的位置以它自己为准（窗口模式下，重放是从“最近 20 条”开始的，
+      // 前面那些更早的消息还该留在上面；游标要是从头起步，就会把重放的整批插到它们前面）
+      alignNext: true,
+      last: null,            // 这一遍最后一个放到位上的节点：它后面全是没重放到的旧节点
       pane: st.paneEl,       // 认准是哪一块窗格：往「加载更早」的暂存区渲染时不能动游标
       touched: new Set(),
       historyWindow: false,
+      // 这一遍只是“最近一段”（更早的没发）：页面上比它更早的那些要收掉。
+      // 为什么不留着：留着的话顶上那颗「加载更早」说的“还有 N 条”就跟页面对不上了，
+      // 点一下会把同一批消息再插一遍。窗口模式只可能出现在“页面自己又要了一次重画”
+      // 这种少见的路上（重连补不上 / 重画被打断那两种都发全量），收掉再点一下也不费事。
+      windowStart: false,
     };
+    // 位置由我们自己放（endReconcile）：先关掉浏览器那套滚动锚定，不然两边都补、视野往下漂
+    st.paneEl.style.overflowAnchor = "none";
+    st.anchorOverflowDisabled = true;
     // 重放期间先别跟着往下滚：几百条老消息一条一条往下拽，人就没法看了。
     // 位置还是要记一份：留着的那部分节点没动，但被换掉的那些（工具行）在视野上面时
     // 会把内容顶来顶去，浏览器自己那套滚动锚定在这种批量替换里也不靠谱。
@@ -1217,18 +1301,21 @@
     st.reconcile = null;
     if (st.redrawTimer) { clearTimeout(st.redrawTimer); st.redrawTimer = null; }
     const pane = st.paneEl;
-    // 这一遍没重放到、也没被认领的旧节点：历史里已经没有它们了，收掉
-    for (const el of Array.from(pane.children)) {
-      if (rec.touched.has(el)) { continue; }
-      if (el.classList.contains("history-more")) { continue; }   // 顶上那颗按钮自己管自己
-      if (el.classList.contains("empty-hint")) { continue; }     // 空提示留着（真有内容时它自己会消失）
-      el.remove();
+    // 全量重放：只从“这一遍最后一个放到位的节点”往后收（前面那些都是这一遍放好的）。
+    // 只发了最近一段：整块窗格里没被认领的旧节点都收掉（见 beginReconcile 里的 windowStart）。
+    let node = rec.windowStart ? pane.firstChild : (rec.last ? rec.last.nextSibling : pane.firstChild);
+    while (node) {
+      const next = node.nextSibling;
+      if (!rec.touched.has(node) && !isPaneFixture(node)) { forgetUnit(st, node); }
+      node = next;
     }
     // 这一遍没再来「加载更早」那条：说明这次发的是全部，按钮收掉（跟清空重画时一个结果）
     if (!rec.historyWindow) { setHistoryWindow(st, false, 0); }
     st.suppressScroll = false;
     st.noCountPop = false;
     syncEndHint(st);
+    // 正在跑的那一条在对账开始时被收掉了：按真实状态重算一次（长命令跑着的时候它该在）
+    syncRunningLine(st);
     // 贴底的人照旧跟到底；在中间看的人放回原来那条消息那儿
     const anchor = st.redrawRestore;
     st.redrawRestore = null;
@@ -1237,6 +1324,7 @@
     if (!found) { return; }
     st.hasNewContent = true;
     pane.scrollTop = Math.max(0, found.el.offsetTop - found.offset);
+    st.lastScrollTop = pane.scrollTop;   // 记上：后面重挂会话时会按这个恢复
     syncJumpBottom(st);
     holdScrollOn(st, found.el);
   }
@@ -1611,6 +1699,15 @@
     div.appendChild(el);
   }
 
+  /** 重放时同一条正文又画了一遍：时刻改成这次的值（没有这个 span 就补一个）。 */
+  function updateMsgTime(div, at) {
+    const el = div.querySelector(":scope > .msg-time");
+    if (!el) { attachMsgTime(div, at); return; }
+    const ms = typeof at === "number" && at > 0 ? at : Date.now();
+    el.dataset.time = formatMsgTime(ms);
+    el.title = formatFullTime(ms);
+  }
+
   /** 时刻写成短的：今天只写时分（15:04），别的日子前面补日期（10-17 15:04），跨年的写全年。 */
   function formatMsgTime(ms) {
     const d = new Date(ms);
@@ -1637,8 +1734,11 @@
     st.currentToolTail = null; // 新消息块：工具标签另起一行，不往上一段后面续
     endRunningLine(st);       // 这一批工具过去了：还在留的那条位置到此为止（见 endRunningLine）
     const content = text || "";
-    const key = typeof id === "string" ? id : "";
-    const known = key ? st.byId.get(key) : null;
+    const key = typeof id === "string" && !isStageRender(st) ? id : "";
+    let known = key ? st.byId.get(key) : null;
+    // 编号对上了还得是同一类东西：历史被改写（压缩 / 回滚 / 换分支）之后，同一个编号可能
+    // 落到另一条消息上，不核对就会把助手正文灌进用户气泡里
+    if (known && known.dataset.midKind !== cls) { st.byId.delete(key); known = null; }
     if (known) {
       // 重放时同一条消息又来了：节点原地留着，只有文字变了才重画里面的内容
       if (known.dataset.raw !== content) {
@@ -1667,7 +1767,7 @@
       div.appendChild(body);
     }
     if (cls === "assistant") { attachMsgTime(div, null); }
-    if (key) { div.dataset.mid = key; st.byId.set(key, div); }
+    if (key) { div.dataset.mid = key; div.dataset.midKind = cls; st.byId.set(key, div); }
     placeUnit(st, div);
     scrollToBottom(st);
     return div.firstElementChild;
@@ -1678,14 +1778,17 @@
     st.currentToolTail = null; // 新正文块：工具标签另起一行，不往上一段后面续
     endRunningLine(st);       // 这一批工具过去了：还在留的那条位置到此为止（见 endRunningLine）
     const text = raw || "";
-    const key = typeof id === "string" ? id : "";
-    const known = key ? st.byId.get(key) : null;
+    const key = typeof id === "string" && !isStageRender(st) ? id : "";
+    let known = key ? st.byId.get(key) : null;
+    if (known && known.dataset.midKind !== "assistant") { st.byId.delete(key); known = null; }
     if (known) {
       const body2 = known.querySelector(".md") || known.firstElementChild;
       if (body2 && body2.dataset.raw !== text) {
         body2.dataset.raw = text;
         body2.innerHTML = renderMarkdown(text);
       }
+      // 时刻跟着这次重放的来（以前停在上一遍的旧值上）
+      updateMsgTime(known, at);
       placeUnit(st, known);
       scrollToBottom(st);
       return body2;
@@ -1698,7 +1801,7 @@
     body.innerHTML = renderMarkdown(text);
     attachMsgTime(div, at);
     div.appendChild(body);
-    if (key) { div.dataset.mid = key; st.byId.set(key, div); }
+    if (key) { div.dataset.mid = key; div.dataset.midKind = "assistant"; st.byId.set(key, div); }
     placeUnit(st, div);
     scrollToBottom(st);
     return body;
@@ -2663,8 +2766,9 @@
   function mountToolImageBlock(st, at, images) {
     if (!Array.isArray(images) || images.length === 0) { return; }
     const call = at || {};
-    const key = call.toolCallId ? "img:" + call.toolCallId : "";
-    const known = key ? st.byId.get(key) : null;
+    const key = call.toolCallId && !isStageRender(st) ? "img:" + call.toolCallId : "";
+    let known = key ? st.byId.get(key) : null;
+    if (known && known.dataset.midKind !== "image") { st.byId.delete(key); known = null; }
     if (known) {
       // 重放时同一张图又来了：那块图原样留着（图不用重新解码），挪到该在的位置就行
       placeUnit(st, known);
@@ -2688,7 +2792,7 @@
     block.appendChild(head);
     // 图直接接在说明行下面；图加载完成后尺寸会写回说明行（见 applyImageDims）
     renderResultImages(block, images, block, { st: st, toolCallId: call.toolCallId });
-    if (key) { block.dataset.mid = key; st.byId.set(key, block); }
+    if (key) { block.dataset.mid = key; block.dataset.midKind = "image"; st.byId.set(key, block); }
     if (st.reconcile) {
       // 重放中：旧的那条工具行这会儿正要被收掉，插到游标处就行
       placeUnit(st, block);
@@ -3591,7 +3695,7 @@
       // 免得答过的卡片又变回一张崭新的、要人重答的卡（答案还在送去宿主的路上）。
       if (old.done || old.cardJson === cardJson) {
         // 重放对账中：这张卡片得“报到”，否则会被当成历史里已经没有的东西收掉
-        if (st.reconcile) { placeUnit(st, old.el); }
+        if (st.reconcile) { placeUnit(st, old.el, true); }
         return;
       }
       old.el.remove();
@@ -3714,7 +3818,7 @@
     if (kind === "choice") { syncAskFoot(rec); }
 
     const anchor = askCardAnchor(st, card.toolCallId);
-    if (st.reconcile) { placeUnit(st, el); }
+    if (st.reconcile) { placeUnit(st, el, true); }
     else if (anchor) { anchor.after(el); }
     else { st.paneEl.appendChild(el); }
     // 卡片算一道坎：后面的工具标签另起一行（画在卡片下面，不往上面那条工具行里钻）
@@ -6643,6 +6747,9 @@
       t = activeSession();
     }
     if (!t) { return; }
+    // 这一条是“把历史再画一遍”（重放）还是刚发生的事（实时）：重放的插在重放游标处，
+    // 实时的一律接到末尾——断线中间还在长的正文不该插进历史中间（见 placeUnit）
+    t.replayNow = msg.replay === true;
     // 安全网：界面刚起来、sessionList 还没到时，先把当前会话定下来。
     // 但后端已经说了“你看的是哪一个”（还在等它的会话壳）：不许拿“第一条冒出来的消息”顶上去，
     // 否则会暂时锚到别的会话，草稿也跟着认错主。
@@ -6964,7 +7071,10 @@
         break;
       case "historyWindow":
         // 网页端「只发最近一段历史」：hasMore 为真时在顶部画「加载更早的消息」按钮
-        if (t.reconcile) { t.reconcile.historyWindow = true; }
+        if (t.reconcile) {
+          t.reconcile.historyWindow = true;
+          t.reconcile.windowStart = msg.hasMore === true;
+        }
         setHistoryWindow(t, msg.hasMore === true, typeof msg.hidden === "number" ? msg.hidden : 0);
         break;
       case "historyBatchEvent": {
@@ -7052,17 +7162,19 @@
       setHistoryWindow(t, false, 0);
       return;
     }
+    const pane = t.paneEl;
+    // 尺子：插入点后面那条老消息（以及它此刻在视野里的位置）。
+    // 为什么先量：后面 `setHistoryWindow` 可能把顶上那颗按钮收掉（最后一批时），
+    // 上面一下子矮了三四十像素，而浏览器的滚动锚定这会儿被我们关着、不会自己补——
+    // 量晚了就等于把这几像素白送出去（见 dev/historyScroll.js 差 35 像素那次）。
+    const oldBtn = t._historyBtn && t._historyBtn.parentNode === pane ? t._historyBtn : null;
+    const ruler = oldBtn ? oldBtn.nextElementSibling : pane.firstElementChild;
+    const rulerViewTop = ruler ? ruler.offsetTop - pane.scrollTop : 0;
     setHistoryWindow(t, hasMore, hidden);
     if (!stage || !stage.childNodes.length) { return; }
-    const pane = t.paneEl;
     // 插到哪儿：顶部那个「加载更早」按钮还在就插在它后面；已经收掉了（这是最后一批）就插在最前面
     const btn = t._historyBtn && t._historyBtn.parentNode === pane ? t._historyBtn : null;
     const at = btn ? btn.nextSibling : pane.firstChild;
-    // 尺子：插入点后面那条老消息 —— 插进去的东西全长在它前面，它往下挪了多少就补多少，
-    // 不按“插入那一刻长高了多少”算：那批里的图片、代码高亮会晚一步才把高度撑起来，
-    // 按高度差算就少补那么一点（几十像素），视野看着就往下跑（见 dev/historyScroll.js）。
-    const mark = btn ? btn.nextElementSibling : pane.firstElementChild;
-    let markTop = mark ? mark.offsetTop : 0;
     const beforeHeight = pane.scrollHeight;
     // 这一下由我们自己补滚动位置：先把浏览器的滚动锚定临时关掉，
     // 它也会因为“上方变高”补一次，两边叠起来视野就被推下去一整批的高度。
@@ -7073,11 +7185,11 @@
     let grewLeft = grew;
     const putBack = () => {
       if (!pane.isConnected) { return; }
-      if (mark && mark.parentNode === pane) {
-        // 只补「上一次看它到现在」那一段：这函数要跑好几帧，每次都用累计差会补成好几倍
-        const top = mark.offsetTop;
-        pane.scrollTop += top - markTop;
-        markTop = top;
+      if (ruler && ruler.parentNode === pane) {
+        // 按“尺子还该在视野里那个位置”直接对（不是累加差）：这函数要跑好几帧，
+        // 累加会补成好几倍；按钮被收掉那种“上面矮了一截”也能一次对回来
+        const want = Math.max(0, ruler.offsetTop - rulerViewTop);
+        if (Math.abs(want - pane.scrollTop) > 0.5) { pane.scrollTop = want; }
       } else if (grewLeft) {
         // 尺子没了（窗格没挂在页面上、那一行被换掉）：退回按高度差补，也只补这一回
         pane.scrollTop += grewLeft;
@@ -7086,12 +7198,15 @@
     };
     putBack();
     // 后到的高度（图片解码、高亮重排）会让它再跑一点：再对两帧位置，然后把滚动锚定还给浏览器
-    let frames = mark && pane.isConnected ? 2 : 0;
+    let frames = ruler && pane.isConnected ? 2 : 0;
     const settle = () => {
       putBack();
       frames--;
       if (frames > 0) { requestAnimationFrame(settle); return; }
       pane.style.overflowAnchor = prevAnchorStyle;
+      // 几帧对不完：这一批里的图解码还要再撑高一点（几十像素），插在上面就会把视野往下挤。
+      // 再盯一小会儿（人一碰就停），跟整屏重画那边同一套
+      if (ruler && ruler.parentNode === pane) { holdScrollOn(st, ruler); }
     };
     if (frames > 0) { requestAnimationFrame(settle); } else { pane.style.overflowAnchor = prevAnchorStyle; }
   }

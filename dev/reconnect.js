@@ -422,6 +422,9 @@ async function sceneChurn(page, harness) {
         ['CONNECTING', 'OPEN', 'CLOSED'].forEach(function (k) { window.EventSource[k] = Orig[k]; });
         return true;
     `);
+    const openingsBefore = await page.eval(
+        "return (document.querySelectorAll('#messages .msg.assistant').length ? Array.from(document.querySelectorAll('#messages .msg.assistant')).map(function (e) { return e.innerText; }).join(String.fromCharCode(10)).match(/好，我用三个工具给你演示一遍/g) : [] || []).length",
+    ) || 0;
     await page.send("随便说点什么");
     const before = await waitStreaming(page, 15000);
     if (!before) { bad("没等到“正在输出”出现，后面没法验"); return; }
@@ -446,6 +449,12 @@ async function sceneChurn(page, harness) {
     const urls = await page.eval("return window.__esUrls || []");
     check(urls.some((u) => /[?&]since=\d+/.test(String(u))),
         "重连时把“我处理到第几条”写在连接地址上（不用再发一条对账消息）");
+    // 反复弄断的过程里补发也要“逐字完整”：开头那句的份数不能因为补发变多（多一份就是重复补了）
+    const all = await page.eval(`return Array.from(document.querySelectorAll('#messages .msg.assistant')).map(function (e) { return e.innerText; }).join(String.fromCharCode(10))`);
+    const openings = (all.match(/好，我用三个工具给你演示一遍/g) || []).length;
+    check(openings === openingsBefore + 1, `开头那句只多了这一轮那一份（${openingsBefore} → ${openings}）`);
+    check(await page.eval("return document.querySelectorAll('#messages .tool-row .tool').length") >= 3,
+        "工具标签还在");
 }
 
 /**
@@ -649,6 +658,141 @@ async function sceneRedrawScroll(page, harness) {
         `它离视野顶上还是那么远（${Math.round(before.anchorOffset)} → ${kept ? Math.round(kept.offset) : "没了"}px）`);
 }
 
+/** 页面上从第 from 条起收到的消息类型（诊断与断言都用它）。 */
+async function logTypes(page, from) {
+    return page.eval(`return (window.__msgLog || []).slice(${from}).map(function (m) { return m.type; })`);
+}
+
+/** 等某类消息出现（从第 from 条起找）；返回 true / false。 */
+async function waitForType(page, from, type, ms) {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+        if ((await logTypes(page, from)).includes(type)) { return true; }
+        await sleep(200);
+    }
+    return false;
+}
+
+/**
+ * 场景九：后端重启过（序号从头数）之后，整屏重画只该发生一次。
+ *
+ * 走过这条路才看得出那个毛病：页面手里留着旧的大序号，重画完的 syncPoint 比它小、
+ * 只抬不降就永远停在旧数上——以后每次重连都判“对不上”、每次都重画一遍。
+ *
+ * 造“重启”：把广播序号退回 1、补发暂存清空（真进程重启也是这两样从头来）。
+ */
+async function sceneRestart(page, harness) {
+    console.log("\n【场景九】后端重启（序号从头数）：第一次回来整屏重画，第二次不该再画");
+    const pageId = await pageIdOf(page);
+    const host = harness.host();
+    const broadcaster = host.getBroadcaster();
+    await page.send("随便说点什么");
+    await waitIdle(page, 20000);
+    await page.sleep(500);
+
+    // 造“后端重启过”：序号退回 1、补发暂存清空
+    broadcaster.catchupLog.length = 0;
+    broadcaster.seqCounter = 1;
+
+    // 第一次回来：它报的旧序号比后端还新 → 整屏重画
+    const firstAt = await page.eval("return window.__msgLog.length");
+    const ch1 = broadcaster.getChannel(pageId);
+    if (ch1) { ch1.close(""); }
+    const redrew = await waitForType(page, firstAt, "syncPoint", 30000);
+    const firstTypes = await logTypes(page, firstAt);
+    check(redrew, "第一次重连回来了（等到 syncPoint）");
+    check(firstTypes.includes("clear"), "第一次回来是整屏重画（收到了 clear）");
+
+    await page.sleep(1200);
+    const kept = await page.eval("return document.querySelectorAll('#messages .msg.user').length");
+    check(kept >= 1, `重画之后内容还在（${kept} 条用户消息）`);
+
+    // 第二次回来：进度已经对齐到新序号 → 一条不缺，不该再重画
+    const secondAt = await page.eval("return window.__msgLog.length");
+    const ch2 = broadcaster.getChannel(pageId);
+    if (ch2) { ch2.close(""); }
+    // 连上时后端会单独给这块屏一份会话列表（hello 不转给界面，看不出来连接建立）
+    const reconnected = await waitForType(page, secondAt, "sessionList", 30000);
+    await page.sleep(1500);   // 给“万一又重画”留出时间
+    const secondTypes = await logTypes(page, secondAt);
+    check(reconnected, "第二次也连回来了（等到会话列表）");
+    check(!secondTypes.includes("clear"),
+        `第二次回来没再整屏重画（收到的：${secondTypes.filter((t) => t === "clear").length} 条 clear）`);
+    check(secondTypes.includes("sessionList"), "第二次回来照常拿到会话列表");
+}
+
+/**
+ * 场景十：窗口模式（首屏只发最近一段）下再来一次重画。
+ * 顶上那颗「加载更早」只该有一颗、并且留在最顶上（以前游标从第一个孩子起步，
+ * 重放的每一条都插在它前面，按钮被一路挤到最底下）；说的“还有 N 条”也得跟页面对得上，
+ * 点一下补回来的不能重复。
+ *
+ * 把窗口压到 20 条才挤得出那颗按钮（正式默认是 200 条 / 700 KB）。
+ */
+async function sceneWindowed(page, harness) {
+    console.log("\n【场景十】窗口模式重画：顶上只该有一颗「加载更早」，翻出来的更早的消息不能被收掉");
+    process.env.PICHAT_HISTORY_WINDOW = "20";
+    try {
+        await page.click("#newSessionBtn");
+        await page.sleep(1500);
+        await waitIdle(page, 20000);
+        // 攒够 12 轮（24 条 user/assistant）→ 窗口留 20 条，剩下 4 条就是那颗按钮
+        const bubbles = () => page.eval("return document.querySelectorAll('#messages .msg.assistant').length");
+        for (let i = 0; i < 12; i += 1) {
+            const before = await bubbles();
+            await page.send("第 " + (i + 1) + " 轮");
+            const deadline = Date.now() + 30000;
+            while (Date.now() < deadline) {
+                if (await bubbles() >= before + 2) { break; }
+                await sleep(250);
+            }
+            await page.sleep(300);
+        }
+        await waitIdle(page, 20000);
+
+        // 让这块屏重发一次 ready：后端按窗口（最近 20 条）重画一遍
+        const at = await page.eval("return window.__msgLog.length");
+        await page.eval("window.acquireVsCodeApi().postMessage({ type: 'ready' }); return true;");
+        const done = await waitForType(page, at, "syncPoint", 30000);
+        await page.sleep(1200);
+        check(done, "按窗口重画完了（等到 syncPoint）");
+
+        const state = await page.eval(`
+            const pane = document.querySelector('#messages .session-pane');
+            const btns = pane ? pane.querySelectorAll('.history-more') : [];
+            const users = document.querySelectorAll('#messages .msg.user').length;
+            return {
+                buttons: btns.length,
+                firstIsButton: !!(pane && pane.firstElementChild && pane.firstElementChild.classList.contains('history-more')),
+                btnText: btns.length ? btns[0].textContent : '',
+                users: users,
+            };
+        `);
+        console.log(`  · 重画后：${state.buttons} 颗「加载更早」，按钮在顶上=${state.firstIsButton}，用户消息 ${state.users} 条`);
+        check(state.buttons === 1, `「加载更早」只有一颗（实际 ${state.buttons} 颗）`);
+        check(state.firstIsButton, "它留在窗格最顶上（没被重放的每一条挤到下面）");
+        // 只发了最近 20 条：更早的那两条（2 轮）这一遍没发，会被收掉——顶上那颗按钮
+        // 说的“还有 N 条”才对得上；点一下就能拿回来（下面验）
+        check(state.users === 10, `重画后只留窗口里那些（${state.users} 条用户消息，应为 10）`);
+
+        // 点一下：那一批补回来之后还是只有一颗按钮、内容不多不少
+        await page.eval(`
+            const btn = document.querySelector('#messages .history-more');
+            if (btn) { btn.click(); }
+            return true;
+        `);
+        await page.sleep(2500);
+        const after = await page.eval(`return {
+            buttons: document.querySelectorAll('#messages .history-more').length,
+            users: document.querySelectorAll('#messages .msg.user').length,
+        }`);
+        check(after.buttons === 0, `翻完之后按钮收掉了（实际 ${after.buttons} 颗）`);
+        check(after.users === 12, `翻回来的那两条补上了、也没有重复（${after.users} 条用户消息，应为 12）`);
+    } finally {
+        delete process.env.PICHAT_HISTORY_WINDOW;   // 后面的场景回到默认窗口
+    }
+}
+
 // ============================================================================
 //  入口
 // ============================================================================
@@ -665,6 +809,8 @@ async function main() {
         taillost: (page, harness) => sceneTailLost(page, harness),
         askcard: (page, harness) => sceneAskCard(page, harness),
         scroll: (page, harness) => sceneRedrawScroll(page, harness),
+        restart: (page, harness) => sceneRestart(page, harness),
+        windowed: (page, harness) => sceneWindowed(page, harness),
     };
     const chosen = sceneArg === "all" ? Object.keys(scenes) : sceneArg.split(",");
     for (const name of chosen) {

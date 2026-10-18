@@ -308,6 +308,8 @@
   var PING_MS = 25000;
   /** 多久检查一次"连接是不是其实已经死了"。 */
   var WATCHDOG_MS = 5000;
+  /** 一条新连接多久还没通就认定卡住了（自己重开一条，不等浏览器）。 */
+  var CONNECT_STALL_MS = 15000;
   /** 重连等待阶梯（毫秒）：头几次快，之后固定在 8 秒。一直试下去，不认输。 */
   var RETRY_DELAYS_MS = [400, 800, 1500, 3000, 8000];
   /** 连续失败到第几次就把提示换成"连不上插件"（后台仍在照着重试）。 */
@@ -328,6 +330,9 @@
    * 或"来源不被接受"（403）才认输。
    */
   function post(msg, attempt) {
+    // 已经认输了（服务停了 / 插件不认识这个页面）：这条消息发不出去了，别再重试，
+    // 更别把“服务已停止”那条提示条改成“正在重试…”
+    if (stopped) { return Promise.resolve(); }
     return fetch("/api?" + query, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -341,10 +346,17 @@
         giveUp("插件不接受这个页面的请求（请求来源被拦），请重新打开页面。", true);
         return;
       }
-      if (!resp.ok) { console.warn("[pi-chat] 发给插件失败：HTTP " + resp.status); }
+      if (!resp.ok) {
+        console.warn("[pi-chat] 发给插件失败：HTTP " + resp.status);
+        // 别一声不响地把消息丢了：403 / 409 已经另作处理，其余状态码给一句人话
+        bannerText("这条消息没能发出去（HTTP " + resp.status + "），可以重发一次。", false);
+        sendFailures = 0;
+        return;
+      }
       sendFailures = 0;
-      hideBanner();
+      if (!stopped) { hideBanner(); }
     }).catch(function () {
+      if (stopped) { return; }
       sendFailures += 1;
       if (sendFailures >= GIVE_UP_BANNER_AT) {
         bannerText("连不上插件（服务可能已停止）。还在自动重试，也可以刷新页面。", true);
@@ -403,11 +415,13 @@
   var source = null;
   /** 服务明确说了再见（服务停了）：不再重连，只给用户一条带刷新按钮的提示。 */
   var stopped = false;
-  /** 连上过至少一次：之后每次重新连上都要报一次账，请插件把漏掉的消息补发过来。 */
+  /** 连上过至少一次：之后每次重连都把“处理到第几条”写在连接地址上（`&since=`）。 */
   var openedOnce = false;
   var retryIndex = 0;
   var retryTimer = null;
   var lastTickAt = Date.now();
+  /** 这一条连接是什么时候开始建的（看门狗判“卡在正在连接”用）。 */
+  var connectAt = Date.now();
   var pingTimer = null;
   var watchdogTimer = null;
 
@@ -418,6 +432,10 @@
       // 连接建立：先于一切带序号的消息到达（插件那头保证顺序）。
       // 它的 seq 是“这条连接从第几条起算实时”，不能记成页面的进度：
       // 比它小的那些正是要补给我的消息，还没收到呢。
+      // 反过来，它比我手里的还小只有一个原因：后端重启过、序号从头数了。这时手里的旧数
+      // 已经没有意义（再拿它去报，后端每次都判“对不上”、每次都整屏重画），归 0 重来：
+      // 紧接着的补发/重画会发 syncPoint，把进度对齐到新序号。
+      if (typeof data.seq === "number" && data.seq >= 0 && data.seq < lastSeq) { lastSeq = 0; }
       // 三个时间以后端说的为准（后端一处写死，这里不再抄、也不再自己定规则）
       if (typeof data.heartbeatMs === "number" && data.heartbeatMs > 0) {
         HEARTBEAT_MS = data.heartbeatMs;
@@ -450,6 +468,7 @@
     clearRetryTimer();
     closeSource();
     lastTickAt = Date.now();
+    connectAt = Date.now();
     var mine;
     try {
       // 重连的那一次把“我处理到第几条”带上：插件从那一条往后接着补（见上面的 advanceSeq）
@@ -471,6 +490,7 @@
       lastTickAt = Date.now();   // 心跳到了：这条连接是活的
     });
     mine.addEventListener("end", function (ev) {
+      if (source !== mine) { return; }   // 早先被顶掉的旧连接迟到的告别话：不作数
       var note = "";
       try { note = (JSON.parse(ev.data) || {}).note || ""; } catch (e) { note = ev.data || ""; }
       giveUp(note || "与插件的连接已结束。", true);
@@ -483,9 +503,10 @@
     mine.onopen = function () {
       if (source !== mine) { return; }
       retryIndex = 0;
-      sendFailures = 0;
       lastTickAt = Date.now();
-      hideBanner();
+      // 入站通了不代表出站（/api）通了：发消息那本账与提示条只由 post() 自己清，
+      // 不然这里一擦，用户以为好了，实际消息还在丢
+      if (sendFailures === 0) { hideBanner(); }
       ping();
       // 刚打开的那一次不带 since、也不报账：chat.js 加载完自己会报一声 ready，
       // 插件那边照样整屏画一遍。之后每次重连，地址上的 since 就是“我处理到第几条”，
@@ -546,7 +567,15 @@
       scheduleReconnect("与插件的连接已关闭，正在重连…");
       return;
     }
-    if (source.readyState !== EventSource.OPEN) { return; }  // 正在连的路上：交给重连那条路管
+    if (source.readyState !== EventSource.OPEN) {
+      // 一直在“正在连接”：浏览器自己那趟重连常常就这么卡着（手机回到前台时尤其常见），
+      // 不能一直等它——连接开了这么久还没通，自己重开一条
+      if (Date.now() - connectAt > CONNECT_STALL_MS) {
+        console.warn("[pi-chat] 连接半天连不上，重开一条。");
+        scheduleReconnect("与插件的连接中断，正在重连…");
+      }
+      return;
+    }
     if (Date.now() - lastTickAt > TICK_TIMEOUT_MS) {
       console.warn("[pi-chat] 有一阵子没收到插件的心跳，重连一次。");
       scheduleReconnect("与插件的连接中断，正在重连…");

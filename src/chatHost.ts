@@ -31,7 +31,7 @@ import {
 } from "./sessionStore";
 import { listDirectories } from "./dirBrowse";
 import { ChatBroadcaster } from "./chatBroadcaster";
-import { MessageBuffer } from "./webTransport";
+import { MessageBuffer, PAGE_TRANSIENT_MESSAGE_TYPES } from "./webTransport";
 import { pickOverlayClient } from "./overlayTarget";
 import { ScreenRegistry } from "./screenRegistry";
 import { dirInsideAny, dirKey } from "./pathRules";
@@ -85,6 +85,11 @@ export interface ChatHostOptions {
     log?: (text: string) => void;
 }
 
+/** 这条消息是不是“一次性界面”（确认框、浮层、跑完提醒）：补发里只有序号位、没有内容。 */
+function isTransientPageMessage(msg: Record<string, unknown>): boolean {
+    return typeof msg.type === "string" && PAGE_TRANSIENT_MESSAGE_TYPES.has(msg.type);
+}
+
 export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 文件夹列表里“就用这个目录”那一行的标识（会话文件、目录都是绝对路径，撞不上这种带 \0 的）。 */
     private static readonly USE_DIR_ROW = "\u0000pichat:use-dir";
@@ -100,7 +105,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private readonly outbox = new MessageBuffer();
     /** 等着整屏重画的页面（页面标识 → 重画后给的那行提示）。
      *  页面的 ready / 重连请求可能比它的推送连接先到，那时重画送不出去，先记下，等它一连上就画。 */
-    private readonly pendingResyncPages = new Map<string, string>();
+    /**
+     * 页面要重画、可它那条推送连接还没连上：先记下“给哪块屏、带什么提示、要不要全量”。
+     * 两种来源：刚刷新时重画请求先到（页面本来就没内容，不必全量）；上一轮整屏重画被
+     * 打断（页面手上是有内容的，再画就发全量，不然它正看着的更早那些会被裁掉）。
+     */
+    private readonly pendingResyncPages = new Map<string, { note: string; full: boolean }>();
     /** 正在整屏重画的页面：重画没画完页面就断了的话，得等它回来重新整画一遍。 */
     private readonly resyncingPages = new Set<string>();
     /** 还等着的问话卡片：卡片编号（宿主自己发）→ 这一摊。 */
@@ -564,15 +574,20 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         // 先把它从还等着的卡片上摘掉，对账时按"它还没有"重发一遍（见 resumePageTo 与 resyncPage）——
         // 页面上真画着的那张收到同一张会原地不动（见 media/chat.js 的 renderAskCard）。
         this.forgetCardDelivery(pageId);
-        const note = this.pendingResyncPages.get(pageId);
-        if (note !== undefined) {
+        const pending = this.pendingResyncPages.get(pageId);
+        if (pending !== undefined) {
             this.pendingResyncPages.delete(pageId);
-            void this.resyncPage(pageId, note);
+            void this.resyncPage(pageId, pending.note, { fullHistory: pending.full });
         } else if (typeof since === "number") {
             this.resumePageTo(pageId, since);
         }
         if (this.pageDeliveryOn && this.outbox.size > 0) {
+            // 攒着的这些是“当时一个页面都没连着”时广播的，补发暂存里也有一份（带序号）。
+            // 这块屏刚按序号补过 / 马上就要整屏重画：普通消息再发一遍就重复了，只发一次性消息
+            // （确认框、浮层、跑完提醒这类：它们在补发里只有序号位、没有内容）。
+            const covered = pending !== undefined || typeof since === "number";
             for (const msg of this.outbox.drain()) {
+                if (covered && !isTransientPageMessage(msg)) { continue; }
                 if (!this.broadcaster.sendTo(pageId, msg)) { break; }
             }
         }
@@ -592,7 +607,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         // 整屏重画画到一半页面走了：重画的内容不进补发暂存，它回来对账时会“看似不缺”，
         // 内容却缺一截。记下来，它一连上就重新整画一遍。
         if (this.resyncingPages.delete(pageId)) {
-            this.pendingResyncPages.set(pageId, "");
+            this.pendingResyncPages.set(pageId, { note: "", full: true });
         }
     }
 
@@ -668,7 +683,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         if (pageId && !this.broadcaster.hasPage(pageId)) {
             // 页面的重画请求到得比它的推送连接还早（刚刷新的那一瞬间）：现在送也是白送，
             // 先记下来，它一连上就画（见 onPageConnected）。
-            this.pendingResyncPages.set(pageId, note);
+            this.pendingResyncPages.set(pageId, { note, full: opts?.fullHistory === true });
             return Promise.resolve();
         }
         // 只发给这一块屏；拿不到出口（理论上不会）就退回广播：宁可多画一次，也不能让界面缺内容
@@ -1031,8 +1046,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 if (pageId && lastSeq >= 0) {
                     this.resumePageTo(pageId, lastSeq);
                 } else {
+                    // 没报序号（旧脚本 / 页面标识为空）：按“刚打开的页面”处理，只画最近一段
                     this.sendSessionListTo(pageId);
-                    void this.resyncPage(pageId, "", { fullHistory: true });
+                    void this.resyncPage(pageId, "");
                 }
                 return true;
             }

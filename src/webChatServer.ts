@@ -970,8 +970,14 @@ export class PiChatWebServer {
 
     /** 断开一条推送连接（页面走了 / 死连接被巡检掐掉 / 积压太多）。 */
     private dropChannel(channel: PageChannel): void {
-        this.host.getBroadcaster().removeChannel(channel);
-        if (this.streams.get(channel.id) !== undefined) { this.streams.delete(channel.id); }
+        const broadcaster = this.host.getBroadcaster();
+        const current = broadcaster.getChannel(channel.id);
+        broadcaster.removeChannel(channel);
+        // 这条是早先被同标识的新连接顶掉的旧连接（它迟到才报关闭）：新连接的东西一点别动——
+        // 删了它那条流，新连接就收不到心跳（页面 75 秒后又自己重连）；按标识通知“页面断了”
+        // 还会把新连接刚重发回去的卡片名单摘掉、把它正在跑的整屏重画记成“待重画”。
+        if (current !== channel) { return; }
+        this.streams.delete(channel.id);
         this.host.onPageDisconnected(channel.id);
     }
 

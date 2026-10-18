@@ -20,6 +20,8 @@ import {
 const CATCHUP_LOG_ENTRIES = 2000;
 /** 补发暂存的默认字节数（消息里可能带大图，光按条数不可靠）。 */
 const CATCHUP_LOG_BYTES = 8 * 1024 * 1024;
+/** 合并段里每条增量除文字以外的开销（序号、对象本身）：按一个常数估，别漏账。 */
+const PIECE_OVERHEAD_BYTES = 48;
 
 /**
  * 逐字增量的那两类消息：模型正文与思考，都是一小段一小段推的。
@@ -279,7 +281,9 @@ export class ChatBroadcaster {
         const transient = PAGE_TRANSIENT_MESSAGE_TYPES.has(type);
         if (!transient && DELTA_RUN_TYPES.has(type) && typeof msg.delta === "string") {
             const text = msg.delta;
-            const bytes = Buffer.byteLength(text, "utf8");
+            // 文字之外每条还有个对象的开销（序号 + 包着它的那层），按一个小常数算：
+            // 不然合并段和普通消息那本字节账不是一个尺子，8 MB 的上限会比标称松很多
+            const bytes = Buffer.byteLength(text, "utf8") + PIECE_OVERHEAD_BYTES;
             const last = this.catchupLog[this.catchupLog.length - 1];
             const key = deltaTemplateKey(msg);
             if (last && last.run && last.run.type === type && last.run.key === key) {
@@ -312,6 +316,20 @@ export class ChatBroadcaster {
 
     /** 暂存超过条数或字节上限就从最老的开始丢。 */
     private trimCatchupLog(): void {
+        // 正在长的那一段永远在队尾，下面那道 length > 1 的闸对它是失效的：
+        // 一轮超长回答能把这一段撑到几 MB 还留着。单段自己超了就从这段的头上丢 piece
+        //（丢掉的只能整屏重画兜，跟别的丢法一样）。
+        const last = this.catchupLog[this.catchupLog.length - 1];
+        if (last && last.run) {
+            while (last.bytes > this.catchupLogBytesLimit && last.run.pieces.length > 1) {
+                const dropped = last.run.pieces.shift();
+                if (!dropped) { break; }
+                const freed = Buffer.byteLength(dropped.text, "utf8") + PIECE_OVERHEAD_BYTES;
+                last.bytes -= freed;
+                this.catchupLogBytes -= freed;
+                last.fromSeq = last.run.pieces[0].seq;
+            }
+        }
         while (
             this.catchupLog.length > this.catchupLogEntries
             || (this.catchupLogBytes > this.catchupLogBytesLimit && this.catchupLog.length > 1)

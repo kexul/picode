@@ -155,6 +155,20 @@ module.exports = async (page) => {
         results.push(await clickLoadMore(page, "2"));
     }
 
+    // 默认窗口（200 条 / 700 KB）下这些对话应该一次全发下来：把刚才压小的窗口撤掉，
+    // 重新开一次页面。这条抓的是“默认值被改小”（改回 30 条的话，按钮会冒出来、消息也只剩一半）
+    delete process.env.PICHAT_HISTORY_WINDOW;
+    await page.eval("location.reload(); return true;");
+    await page.waitReady();
+    await page.sleep(2500);
+    const plain = await page.eval(`return {
+        users: document.querySelectorAll('#messages .msg.user').length,
+        moreBtn: !!document.querySelector('.history-more'),
+    }`);
+    console.log(`  默认窗口下：用户消息 ${plain.users} 条、「加载更早」${plain.moreBtn ? "有" : "没有"}`);
+    if (plain.moreBtn) { throw new Error("默认窗口下不该出现「加载更早」（窗口默认值是不是被改小了）"); }
+    if (plain.users < ROUNDS) { throw new Error(`默认窗口下 ${ROUNDS} 轮对话该全在（只有 ${plain.users} 条用户消息）`); }
+
     if (results.some((ok) => !ok)) { throw new Error("有一步的视野跑掉了"); }
     console.log("  全部通过。");
 };
