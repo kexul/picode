@@ -1153,7 +1153,9 @@
   function placeUnit(st, el) {
     const pane = st.paneEl;
     const rec = st.reconcile;
-    if (!rec) { pane.appendChild(el); return el; }
+    // 不在对账中，或者正在往「加载更早」的暂存区（paneEl 被临时换成 _stage）里画：
+    // 都只是追加，别去动对账那只游标（它属真正的那块窗格）
+    if (!rec || rec.pane !== pane) { pane.appendChild(el); return el; }
     rec.touched.add(el);
     const cur = rec.cursor;
     if (cur === el) {
@@ -1172,13 +1174,21 @@
     if (st.redrawTimer) { clearTimeout(st.redrawTimer); }
     releaseAnchorHold(st);
     st.redrawRestore = null;
-    st.reconcile = { cursor: st.paneEl.firstChild, touched: new Set(), historyWindow: false, atStart: st.paneEl.children.length };
+    st.reconcile = {
+      cursor: st.paneEl.firstChild,
+      pane: st.paneEl,       // 认准是哪一块窗格：往「加载更早」的暂存区渲染时不能动游标
+      touched: new Set(),
+      historyWindow: false,
+    };
     // 重放期间先别跟着往下滚：几百条老消息一条一条往下拽，人就没法看了。
     // 位置还是要记一份：留着的那部分节点没动，但被换掉的那些（工具行）在视野上面时
     // 会把内容顶来顶去，浏览器自己那套滚动锚定在这种批量替换里也不靠谱。
     st.redrawRestore = takeScrollAnchor(st);
     st.suppressScroll = true;
     st.noCountPop = true;
+    // 正插到一半的「加载更早」那批作废：它插进来的是旧节点，会跟这一遍对账打架
+    if (st._stage) { st._stage = null; st._stageDropped = true; }
+    st._historyBtn = null;
     // 这些东西重放里没有，是“现在这个状态”算出来的：先收掉，重放完按真实状态重算
     dropRunningLine(st);
     if (st.endHintRow) { st.endHintRow.remove(); }
@@ -1211,6 +1221,7 @@
     for (const el of Array.from(pane.children)) {
       if (rec.touched.has(el)) { continue; }
       if (el.classList.contains("history-more")) { continue; }   // 顶上那颗按钮自己管自己
+      if (el.classList.contains("empty-hint")) { continue; }     // 空提示留着（真有内容时它自己会消失）
       el.remove();
     }
     // 这一遍没再来「加载更早」那条：说明这次发的是全部，按钮收掉（跟清空重画时一个结果）
