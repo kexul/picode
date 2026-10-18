@@ -147,6 +147,11 @@ export class SessionRuntime {
     private hasConversation = false;
     /** pi 上报的会话标题；来源是 session_info_changed 事件与 get_state 响应里的 sessionName。 */
     private piSessionTitle = "";
+    /** pi 报的排队状态（steering / followUp）：整屏重画时把它再递一份权威的给界面。
+     *  断线那段里 pi 可能已经把排队的那几条投递出去了，那条“队列空了”的推送界面没收到，
+     *  回来就还照着旧的样子写着“在排队”，实际上早就发出去了。 */
+    private queuedSteering: string[] = [];
+    private queuedFollowUp: string[] = [];
 
     /** 当前 panel 是否尚未承载会话内容，且不在加载过程中。 */
     public isConversationEmpty(): boolean {
@@ -586,10 +591,12 @@ export class SessionRuntime {
         switch (evt.type) {
             case "queue_update":
                 // steering/followUp 队列变化（steer 排队/投递/abort 后清空）
+                this.queuedSteering = Array.isArray(evt.steering) ? evt.steering.slice() : [];
+                this.queuedFollowUp = Array.isArray(evt.followUp) ? evt.followUp.slice() : [];
                 this.post({
                     type: "queueUpdate",
-                    steering: Array.isArray(evt.steering) ? evt.steering : [],
-                    followUp: Array.isArray(evt.followUp) ? evt.followUp : [],
+                    steering: this.queuedSteering.slice(),
+                    followUp: this.queuedFollowUp.slice(),
                 });
                 break;
             case "message_start": {
@@ -901,6 +908,9 @@ export class SessionRuntime {
         // 人打了一半的字不该被抹掉（换会话那种 clear 不带这个标记，草稿仍会重置）。
         emit({ type: "clear", keepDraft: true });
         emit({ type: "piReady", ready: this.piReady });
+        // 排队里的那几条也补一份现在的真相：重画只重放消息，排队不是消息，界面上那一块
+        // 只能靠这一条对齐（空的也要发，不然它还照着断线前收到的旧样子显示“在排队”）。
+        emit({ type: "queueUpdate", steering: this.queuedSteering.slice(), followUp: this.queuedFollowUp.slice() });
         if (!this.client || !this.client.isRunning()) {
             emit({
                 type: "system",

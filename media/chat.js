@@ -550,10 +550,8 @@
         st.programmaticScroll = false;
         // 只吞「位置确实是自己刚设的那个」那一次。不能看见标记就吞：追底动画中间
         // 用户往回滚一下（或者调试脚本把视野挪到别处），那一下就被当成“程序滚动”丢掉，
-        // 界面继续把人拉回底部（见 dev/historyScroll.js）。
-        const mine = st.programmaticTop === Infinity
-          ? pane.scrollHeight - pane.scrollTop - pane.clientHeight <= 1
-          : Math.abs(pane.scrollTop - st.programmaticTop) <= 1;
+        // 界面继续把人拉回底部（见 dev/historyScroll.js 与 dev/followBottom.js）。
+        const mine = Math.abs(pane.scrollTop - st.programmaticTop) <= 1;
         if (mine) { return; }
       }
       const wasBottom = st.stickToBottom;
@@ -649,8 +647,8 @@
     const p = st.paneEl;
     if (st.stickToBottom) {
       st.programmaticScroll = true;
-      st.programmaticTop = p.scrollHeight;
       p.scrollTop = p.scrollHeight;
+      st.programmaticTop = p.scrollTop;   // 记夹完之后的那个数（见 scrollToBottom 里那段）
       st.lastScrollTop = p.scrollTop;
     } else if (typeof st.lastScrollTop === "number") {
       p.scrollTop = st.lastScrollTop;
@@ -964,9 +962,13 @@
     st.scrollRafId = requestAnimationFrame(() => {
       st.scrollRafId = 0;
       if (st.paneEl !== pane || !pane.isConnected) { return; }
+      pane.scrollTop = 1e9;   // 夹到最大：没有读 scrollHeight，就不会逼出一次同步重排
+      // 把夹完之后的那个数记下来当“我们自己设的位置”。不能拿 Infinity 当记号：scroll 事件是
+      // 下一帧才派发的，中间只要内容又长了几像素（流式输出就是这样），那一下就会被当成
+      // “用户自己往回滚了”，从此不再跟随底部（表现：有时跟着有时不跟）。
+      // 读回来这一次是赋值时已经算好的（写 scrollTop 就得先排一次版），不额外加开销。
+      st.programmaticTop = pane.scrollTop;
       st.programmaticScroll = true;
-      st.programmaticTop = Infinity;   // 滚到底：具体落到哪个数由浏览器夹住，这里不去读 scrollHeight
-      pane.scrollTop = 1e9;   // 夹到最大：没有读，就不会逼出一次同步重排
     });
   }
   // 用户主动接管滚动（滚轮/触屏/键盘向上）：立刻停掉 lerp 追底，交还控制权。
@@ -1620,7 +1622,9 @@
   // ==================== 正在跑的那一条 ====================
   // 工具标签只说得出工具名：命令行、读哪个文件、grep 找什么都在提示框里，不悬浮就看不见。
   // 正在跑的那一条不一样：它在当前这批标签下面单占一行，把这一行的摘要直接写出来
-  // （bash 就是「$ 命令」）。同时跑几条就排几行。
+  // （bash 就是「$ 命令」）。同时跑几条也只露一条 —— 只露最近开始的那条。
+  // 为什么不排成几行：几条一起跑时，先跑完的那条一收，这一块就矮一行，下面的东西跟着
+  // 上下跳一下（贴着底看的时候特别明显）。行数永远是 0 或 1，就没有这一下。
   // 不出这行的两种：think（思考，内容在提示框里看）与 ask_choice（问话卡片本来就铺在消息流里，
   // 而且它要等人答完才算跑完，摆一行「正在跑」只会碍事）。
   //
@@ -1628,7 +1632,6 @@
   // （出现、消失、又出现，下面的内容跟着上下跳）；而且这条命令本身（工具标签上只有名字）就在这儿
   // 看得到，一下子没了就看不成了。所以一条都不在跑之后这条留着、只是冻住：齿轮停转、
   // 耗时定在跑完那一刻（见 freezeRunningLine），一直到新的命令原地把它顶掉。
-  // 同时跑几条的：先跑完的各自立刻少一条，只留最后跑完的那条冻着。
   // 整条（字与位置）在这一批过去时一并收掉：下面出了正文 / 问话卡片，或者这一轮跑完
   // （见 endRunningLine）。
   //
@@ -1663,6 +1666,14 @@
     return out;
   }
 
+  /** 几条同时在跑时露哪一条：最近开始的那条（按开始时刻；重放出来的老调用没有开始时刻，
+   *  都算 0，那就取页面上排最后那条）。 */
+  function shownRunningCall(calls) {
+    let best = calls[0];
+    for (const c of calls) { if ((c.startedAt || 0) >= (best.startedAt || 0)) { best = c; } }
+    return best;
+  }
+
   /** 画/更新「正在跑」的那一行：贴在当前这批工具标签下面（新一轮工具行上来就跟着挪过去）。
    *  一条都不在跑了就把它冻住（字留着，见 freezeRunningLine）。 */
   function syncRunningLine(st) {
@@ -1674,38 +1685,46 @@
       freezeRunningLine(st);
       return;
     }
-    if (!st.runningLine) {
+    const call = shownRunningCall(calls);
+    const line = st.runningLine;
+    // 露的还是同一条（同行里别的跑完了、或者又起了一条都不管）：一个字都不动。
+    // 重画一遍会把字横向滚的动画从头开始，这一块的高度也会抖一下 —— 正是要躲的。
+    const key = (call.startedAt || 0) + "\u0000" + call.text;
+    const shownItem = line ? line.firstElementChild : null;
+    if (shownItem && st.runningKey === key && !shownItem.classList.contains("done")) {
+      placeRunningLine(st, line);   // 位置仍要跟住这一批（正文之后又开了一批标签就挪过去）
+      startRunClock(st);
+      return;
+    }
+    st.runningKey = key;
+    if (!line) {
       st.runningLine = document.createElement("div");
       st.runningLine.className = "msg tool-running";
     }
-    const line = st.runningLine;
-    line.textContent = "";
-    const toMeasure = [];
-    for (const call of calls) {
-      const item = document.createElement("div");
-      item.className = "tool-running-item";
-      item.insertAdjacentHTML("afterbegin", GEAR_SVG);
-      const t = document.createElement("span");
-      t.className = "tr-text";
-      t.textContent = call.text;
-      item.appendChild(t);
-      // 这条跑了多久：钉在这一条末尾（字自己滚的时候它不动，见 chat.css 的 tr-time）。
-      // 重放出来的老调用没有开始时刻：干脆不添那个位置（see runningCalls）
-      if (call.startedAt) {
-        const time = document.createElement("span");
-        time.className = "tr-time";
-        time._startedAt = call.startedAt;
-        time.textContent = formatElapsed(Date.now() - call.startedAt);
-        item.appendChild(time);
-      }
-      line.appendChild(item);
-      toMeasure.push([t, call.text]);
+    const el = st.runningLine;
+    el.textContent = "";
+    const item = document.createElement("div");
+    item.className = "tool-running-item";
+    item.insertAdjacentHTML("afterbegin", GEAR_SVG);
+    const t = document.createElement("span");
+    t.className = "tr-text";
+    t.textContent = call.text;
+    item.appendChild(t);
+    // 这条跑了多久：钉在这一条末尾（字自己滚的时候它不动，见 chat.css 的 tr-time）。
+    // 重放出来的老调用没有开始时刻：干脆不添那个位置（see runningCalls）
+    if (call.startedAt) {
+      const time = document.createElement("span");
+      time.className = "tr-time";
+      time._startedAt = call.startedAt;
+      time.textContent = formatElapsed(Date.now() - call.startedAt);
+      item.appendChild(time);
     }
-    placeRunningLine(st, line);
+    el.appendChild(item);
+    placeRunningLine(st, el);
     startRunClock(st);
     // 量「这一行放不放得下」得等它排到页面上（新起一条时上面那一步才把它插进去），
-    // 所以挪完位置再逐条看一眼：放不下的改成自己滚（见 rollRunningText）。
-    for (const [t, text] of toMeasure) { rollRunningText(t, text); }
+    // 所以挪完位置再看一眼：放不下的改成自己滚（见 rollRunningText）。
+    rollRunningText(t, call.text);
   }
 
   /** 那条「正在跑」上后面那个耗时：每 RUNNING_CLOCK_MS 重写一次（只动那几个数字，不动字、
@@ -1760,8 +1779,7 @@
 
   /** 一条都不在跑了：把留在页面上的这条冻住 —— 齿轮停转、耗时定在跑完那一刻，字留着
    *  （长命令照旧自己滚：滚是为了看全命令，跟还在不在跑是两回事）。
-   *  同时跑几条的，先跑完的那几条在重画时已经各自少了一条，所以到这一步页面上最多剩一条；
-   *  万一一次就跳到一条都不在跑（两条几乎同时回来），只留最后那条。
+   *  这一行只有一条，不用挑：几条几乎同时跑完时，页面上的就是最后露着的那条。
    *  已经冻住的再来一遍什么都不动：耗时记的是这条跑了多久，不能跟着后面发生的事继续往上涨。 */
   function freezeRunningLine(st) {
     const line = st.runningLine;
@@ -1780,6 +1798,7 @@
   function dropRunningLine(st) {
     if (!st) { return; }
     stopRunClock(st);
+    st.runningKey = "";
     if (st.runningLine) { st.runningLine.remove(); st.runningLine = null; }
   }
 
