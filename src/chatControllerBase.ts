@@ -1320,7 +1320,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const msg = {
             type: "turnEnd",
             sessionId: info.panelId,
-            // 这个会话在人眼前叫什么：通知标题用它（手机 App 手里没有会话列表，只能靠这一行）
+            // 这个会话在人眼前叫什么：通知标题用它（弹通知的那块屏手里不一定有这个会话的名字）
             name: rt ? this.sessionDisplayName(rt) : "",
             status: info.status,
             child: handedBack,

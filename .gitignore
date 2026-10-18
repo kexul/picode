@@ -7,9 +7,3 @@ dev/shots/
 .scratch/
 # 构建产物：桌面截图那支小程序，源码是 bin/shot.cs（npm run compile 时现编）
 bin/shot.exe
-
-# 手机 App（android/）的构建产物与这台机器上的 SDK 路径
-android/.gradle/
-android/build/
-android/app/build/
-android/local.properties

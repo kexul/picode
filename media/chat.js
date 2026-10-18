@@ -384,13 +384,7 @@
     // 也不该在插件界面里弹那个“允许通知”的框。
     // 地址不是安全来源时也不发：浏览器认 https 与本机地址，http://192.168.x.x 这种直接不给权限，
     // 而且它连“拒绝”都不说（干脆不问）。判断放在这里，下面解释原因的那段才说得对路。
-    // 手机 App（壳）里也不发：那边由 App 自己在后台弹通知，这边再发就重复了。
-    try { return !IN_WEBVIEW && !inAppShell() && window.isSecureContext !== false && typeof Notification !== "undefined" && !!Notification; } catch (e) { return false; }
-  }
-
-  /** 是不是在手机 App（壳）里打开的：壳加载页面时放上这个标记，通知全归壳发。 */
-  function inAppShell() {
-    try { return window.pichatInAppShell === true; } catch (e) { return false; }
+    try { return !IN_WEBVIEW && window.isSecureContext !== false && typeof Notification !== "undefined" && !!Notification; } catch (e) { return false; }
   }
 
   /** 问一次通知权限（没问过才问；浏览器不给的就没办法了）。用户点界面时调，有手势更容易给。 */
@@ -406,7 +400,6 @@
   function notifyUnavailableNote() {
     try {
       if (IN_WEBVIEW) { return "插件里的对话面板里发不了系统通知（那边看「有新消息」那颗点），浏览器页面里才有" };
-      if (inAppShell()) { return "手机 App 里由 App 自己发通知（这台设备上页面这边不发，不然会弹两条）" };
       if (!canNotify()) { return "这台设备上用不了：浏览器只在 https 或本机地址下给通知权限（http 地址就是这样）"; }
       if (Notification.permission === "denied") { return "这台设备的浏览器把它拦了（在地址栏那个图标里可以放开）"; }
       if (Notification.permission !== "granted") { return "这台设备还没允许通知：点这一项会问一次"; }
@@ -2884,20 +2877,6 @@
     catch { return false; }
   })();
   /** 切到某个会话：把它的壳挂回 #messages，草稿跟着换（打了一半的字留在各自会话里）。 */
-  /**
-   * 手机 App（壳）点通知回到某个会话时调这个（壳往页面里执行一句）。
-   * 刚打开 App 时会话列表还没到，等一等再试；十几秒还没有就算了（那个会话可能已经被关掉）。
-   */
-  window.pichatOpenSession = function (id) {
-    if (!id) { return; }
-    var tries = 0;
-    (function attempt() {
-      if (sessions.has(id)) { activateSessionView(id); return; }
-      if (++tries > 40) { return; }
-      setTimeout(attempt, 300);
-    })();
-  };
-
   function activateSessionView(id) {
     if (!sessions.has(id) || activeId === id) { return; }
     hideTagTip();

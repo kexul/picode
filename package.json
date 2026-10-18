@@ -57,8 +57,7 @@
     "package": "npm run build && vsce package --allow-missing-repository",
     "web:dev": "npm run compile && node dev/browserHost.js",
     "web:shot": "npm run compile && node dev/visit.js",
-    "server": "npm run compile && node out/server/serverMain.js",
-    "android:apk": "node scripts/buildAndroid.mjs"
+    "server": "npm run compile && node out/server/serverMain.js"
   },
   "dependencies": {},
   "devDependencies": {

@@ -1266,7 +1266,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const msg = {
             type: "askWaiting",
             sessionId: sessionId ?? "",
-            // 会话名：通知标题用它（手机 App 手里没有会话列表，只能靠这一行）
+            // 会话名：通知标题用它（弹通知的那块屏手里不一定有这个会话的名字）
             name: rt ? this.sessionDisplayName(rt) : "",
             text: this.noticeLine(req.question, "问你一道选择题"),
         };
