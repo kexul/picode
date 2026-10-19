@@ -7124,6 +7124,11 @@
     t.hasMoreHistory = hasMore;
     const pane = t.paneEl;
     let btn = t._historyBtn;
+    // 窗格里可能还撂着上一颗（按编号对账开始时 `_historyBtn` 被置空、那颗节点没收掉）：
+    // 不收的话每重画一遍就多一颗，按钮会叠起来。这里统一收拾，不管是谁留下的。
+    for (const el of Array.from(pane.children)) {
+      if (el !== btn && el.classList && el.classList.contains("history-more")) { el.remove(); }
+    }
     if (!hasMore) {
       if (btn) { btn.remove(); t._historyBtn = null; }
       return;

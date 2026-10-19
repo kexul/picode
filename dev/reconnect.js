@@ -788,6 +788,21 @@ async function sceneWindowed(page, harness) {
         }`);
         check(after.buttons === 0, `翻完之后按钮收掉了（实际 ${after.buttons} 颗）`);
         check(after.users === 12, `翻回来的那两条补上了、也没有重复（${after.users} 条用户消息，应为 12）`);
+
+        // 再走一次「页面自己要一次重画」（旧脚本兜底那条 browserResync，还是窗口模式）：
+        // 这会儿窗格顶上本来就有一颗按钮。按编号对账开始时只把引用置空、节点留在那儿的话，
+        // 重画一遍就多一颗（真机上撞到过两颗）。
+        const at2 = await page.eval("return window.__msgLog.length");
+        await page.eval("window.acquireVsCodeApi().postMessage({ type: 'browserResync' }); return true;");
+        const done2 = await waitForType(page, at2, "syncPoint", 30000);
+        await page.sleep(800);
+        const again = await page.eval(`return {
+            buttons: document.querySelectorAll('#messages .history-more').length,
+            users: document.querySelectorAll('#messages .msg.user').length,
+        }`);
+        check(done2, "再按窗口重画一次也画完了（等到 syncPoint）");
+        check(again.buttons === 1, `重画一遍之后「加载更早」还是一颗（实际 ${again.buttons} 颗）`);
+        check(again.users === 10, `重画之后只留窗口里那些（${again.users} 条用户消息，应为 10）`);
     } finally {
         delete process.env.PICHAT_HISTORY_WINDOW;   // 后面的场景回到默认窗口
     }
