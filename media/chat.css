@@ -528,9 +528,13 @@
   .msg-endhint svg { width: 13px; height: 13px; display: block; flex: none; }
   .msg-endhint.hidden { display: none; }
   /* 消息流末尾那一行：主胶囊（继续 / 卡住了）与旁边那颗「停止生成」并排（生成中两颗一起出现）。
-     停止生成那颗就是主胶囊复制一份、去掉字，只留方块图标，所以左右内边距收窄一点。 */
+     停止生成那颗就是主胶囊复制一份、去掉字，只留方块图标，所以左右内边距收窄一点。
+
+     align-items 用 stretch 而不是 center：两颗要一样高。主胶囊带字，高矮由那一行字撑出来
+     （字号 0.85em × 行高 1.45 ≈ 17px），停止生成那颗里只有 13px 的方块图标，各按自己的内容
+     定高就差 4px 多。stretch 让矮的那颗跟高的一样高，图标由按钮自己的 align-items: center 居中。 */
   .end-hint-row {
-    display: flex; align-items: center; justify-content: center; gap: 6px;
+    display: flex; align-items: stretch; justify-content: center; gap: 6px;
     margin: 12px auto 6px; max-width: 100%;
   }
   .end-hint-row.hidden { display: none; }
