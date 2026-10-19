@@ -425,6 +425,35 @@
   var pingTimer = null;
   var watchdogTimer = null;
 
+  /**
+   * 把一条消息交给界面（chat.js），顺手把两件事记到后端日志里：
+   * 界面处理这条消息时抛了错（手机上没法开控制台，这种静默异常只能这么看）。
+   * 别的什么都不改：序号照旧往前记（账本先走，页面出错也不能让补发重复画）。
+   */
+  function deliver(data) {
+    try {
+      window.dispatchEvent(new MessageEvent("message", { data: data }));
+    } catch (e) {
+      console.error("[pi-chat] 处理消息时出错：", e);
+      reportPageLog("处理消息出错（" + (data && data.type) + "）：" + (e && (e.stack || e.message) || e));
+    }
+  }
+
+  /**
+   * 给后端日志捎一句话（页面上的 console 手机上没人看得到）。
+   * 不排队、不重试：这种捎话丢了也不要紧，别把用户自己的消息赌在后面。
+   */
+  function reportPageLog(text) {
+    if (IN_WEBVIEW || stopped) { return; }
+    try {
+      fetch("/api?" + query, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "pageLog", text: String(text).slice(0, 1000) }),
+      }).catch(function () { /* 捎不到就算了 */ });
+    } catch (e) { /* 同上 */ }
+  }
+
   function dispatch(data) {
     var type = data && data.type;
     if (inspectIncoming(data)) { return; }
@@ -455,12 +484,12 @@
       advanceSeq(data.seq);
       // 这条也交给界面（chat.js）：整屏重画是它把窗格清空重建的，画到哪儿算完只有这条
       // 说得准，它靠这一条把视野放回原处（见 media/chat.js 的 finishRedraw）。
-      window.dispatchEvent(new MessageEvent("message", { data: data }));
+      deliver(data);
       return;
     }
     advanceSeq(data && data.seq);
     // 其余消息一律按 VSCode 网页视图的样子投给 window，chat.js 那边照原样处理
-    window.dispatchEvent(new MessageEvent("message", { data: data }));
+    deliver(data);
   }
 
   function connect() {
@@ -526,6 +555,8 @@
   function scheduleReconnect(text) {
     if (stopped || retryTimer) { return; }   // 已经排着了，别排两次
     closeSource();
+    reportPageLog("重连：" + (text || "") + "（处理到第 " + lastSeq + " 条，"
+      + Math.round((Date.now() - lastTickAt) / 1000) + " 秒没收到心跳）");
     if (retryIndex >= GIVE_UP_BANNER_AT) {
       bannerText("连不上插件（服务可能已停止）。还在自动重试，也可以刷新页面。", true);
     } else if (text) {
@@ -791,6 +822,16 @@
     // 从"往返缓存"里整页取回来：连接其实全是死的，直接重连
     window.addEventListener("pageshow", function (ev) {
       if (ev.persisted) { hiddenAt = 0; reconnectNow(); }
+    });
+
+    // 页面上的异常（手机上没人开控制台）：捎一句到后端日志，出错时不用再猜
+    window.addEventListener("error", function (ev) {
+      reportPageLog("页面异常：" + (ev && ev.message || "") + "\n"
+        + ((ev && ev.error && ev.error.stack) || "") + "\n@" + (ev && ev.filename || "") + ":" + (ev && ev.lineno || 0));
+    });
+    window.addEventListener("unhandledrejection", function (ev) {
+      var r = ev && ev.reason;
+      reportPageLog("未处理的 Promise 拒绝：" + ((r && (r.stack || r.message)) || r));
     });
 
     startTimers();

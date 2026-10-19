@@ -1061,7 +1061,11 @@ export class PiChatWebServer {
             this.sendText(req, res, 400, "请求内容不是合法的 JSON。");
             return;
         }
-        if (msg && msg.type === "channelPing") {
+        if (msg && msg.type === "pageLog") {
+            // 页面自己捎来的一句话（未捕获异常 / 重连那几次）：写在日志里，手机上那头的
+            // console 看不到，出问题时这里是唯一线索。不算“人在里面动过”。
+            this.hooks.log(`[页面 ${pageId}] ${String(msg.text ?? "").slice(0, 2000)}`);
+        } else if (msg && msg.type === "channelPing") {
             // 页面报活：只说明它还活着，不算"人在里面动过"
             broadcaster.beat(pageId);
         } else {
