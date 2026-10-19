@@ -30,13 +30,12 @@ export type PanelHtml =
  */
 export async function fetchPanelHtml(
     baseUrl: string,
-    opts: { themeMode: "light" | "dark"; imgCspSource: string },
+    opts: { themeMode: "light" | "dark" },
     timeoutMs = 5000,
 ): Promise<PanelHtml | undefined> {
     const url = new URL(baseUrl);
     url.pathname = url.pathname.replace(/\/+$/, "") + "/panel";
     url.searchParams.set("theme", opts.themeMode);
-    url.searchParams.set("csp", opts.imgCspSource);
     let status: number;
     let body: string;
     try {

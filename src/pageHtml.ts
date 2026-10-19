@@ -81,14 +81,14 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
 /**
  * 生成插件里那块对话面板的 HTML 全文：样式与全部脚本内联，脚本顺序照清单来。
  *
- * @param imgCspSource 网页视图的 cspSource：消息里的图片按老规矩只放数据地址，
- *                     这条留着不碍事（面板不用本地资源，改它属于另一件事）
- * @throws 内容里有 HTML 内联不安全的序列、或 cspSource 里有不安全字符时抛错
- *         （不该悄悄装一屏坏页面）
+ * 安全策略里的图片来源只写 data: 和 blob:：消息里的图片按老规矩是数据地址，
+ * 面板本身也不用本地资源，用不着宿主的 cspSource（那是给网页视图里加载本地文件用的）。
+ *
+ * @throws 内容里有 HTML 内联不安全的序列时抛错（不该悄悄装一屏坏页面）
  */
 export function getPanelChatHtml(
     mediaDir: string,
-    opts: { themeMode: "light" | "dark"; imgCspSource: string },
+    opts: { themeMode: "light" | "dark" },
 ): string {
     const inline = new Map<string, string>();
     for (const file of chatUiFilesOfRole("bridge", "vendor-script", "main-script")) {
@@ -104,7 +104,7 @@ export function getPanelChatHtml(
     const n = nonce();
     const csp =
         `default-src 'none'; ` +
-        `img-src ${cspSourceOf(opts.imgCspSource)} data:; ` +
+        `img-src data: blob:; ` +
         `style-src 'unsafe-inline'; ` +
         `script-src 'nonce-${n}';`;
 
@@ -132,17 +132,6 @@ export function getPanelChatHtml(
 /** 面板那份安全策略的 nonce（随机串，写进哪几个脚本标签就是哪几段能跑）。 */
 function nonce(): string {
     return crypto.randomBytes(16).toString("hex");
-}
-
-/**
- * cspSource 要原样拼进 `<meta http-equiv="Content-Security-Policy">` 这个属性里，
- * 所以先卡住字符集，别让别处的输入从这儿钻进 HTML。
- */
-function cspSourceOf(value: string): string {
-    if (!/^[A-Za-z0-9._:/+-]*$/.test(value)) {
-        throw new Error("网页视图的 cspSource 里有不安全字符，不写进安全策略。");
-    }
-    return value;
 }
 
 /**

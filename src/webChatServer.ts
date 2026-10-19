@@ -434,7 +434,7 @@ export class PiChatWebServer {
             }
             if (pathname === "/panel") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                this.sendPanel(req, res, url.searchParams.get("theme") ?? "", url.searchParams.get("csp") ?? "");
+                this.sendPanel(req, res, url.searchParams.get("theme") ?? "");
                 return;
             }
             if (pathname.startsWith("/media/")) {
@@ -528,13 +528,12 @@ export class PiChatWebServer {
      * 面板那边抓回来后整份塞进网页视图，所以这里也带 no-store：永远拿当前这一份。
      *
      * @param theme 初始界面颜色（面板传编辑器当前主题，之后显示选项会覆盖）
-     * @param cspSource 网页视图的 cspSource（安全策略里图片那一条用）
      */
-    private sendPanel(req: http.IncomingMessage, res: http.ServerResponse, theme: string, cspSource: string): void {
+    private sendPanel(req: http.IncomingMessage, res: http.ServerResponse, theme: string): void {
         const themeMode = theme === "dark" ? "dark" : "light";
         let html: string;
         try {
-            html = getPanelChatHtml(this.mediaDir, { themeMode, imgCspSource: cspSource });
+            html = getPanelChatHtml(this.mediaDir, { themeMode });
         } catch (err: any) {
             // 内联不安全的序列这类问题重试也没用：把这句原样交给面板去显示
             this.sendText(req, res, 500, `生成面板页面失败：${err?.message ?? String(err)}`);

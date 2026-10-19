@@ -17,7 +17,7 @@ export interface RenderScript {
 }
 
 export interface RenderHTMLOpts {
-    /** CSP 字符串（各宿主自行构造，含各自 nonce/cspSource）。 */
+    /** CSP 字符串（各宿主自行构造，含各自 nonce）。 */
     csp: string;
     /** chat.css 的文本内容（由调用方读取后传入）。 */
     chatCss: string;

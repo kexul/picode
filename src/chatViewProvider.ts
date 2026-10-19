@@ -125,10 +125,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const seq = ++this.renderSeq;
         const baseUrl = this.client.url;
         const got = baseUrl
-            ? await fetchPanelHtml(baseUrl, {
-                themeMode: this.vsCodeTheme(),
-                imgCspSource: view.webview.cspSource,
-            })
+            ? await fetchPanelHtml(baseUrl, { themeMode: this.vsCodeTheme() })
             : undefined;
         if (seq !== this.renderSeq || this.view !== view) { return; }
         if (!got) {
