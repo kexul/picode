@@ -14,8 +14,10 @@
  *   · 跑着的时候又来了正文 → 这条仍在它那批标签下面；之后又开了一批标签 → 跟着挪到新那批下面。
  *   · 整屏重画（刷新页面 / 重连后重放历史）：历史里那条还没结果的调用重放出来后，这条也在（只一条）。
  *   · 一行放不下的字自己横向滚、只往一个方向（跑马灯，不回程）：滚的距离够看到末尾、
- *     快慢按每秒 30 像素算，
- *     放得下的那条一动不动；系统里开了「减少动态效果」就不滚（字按老样子截断）。
+ *     快慢按每秒 30 像素算，两端各停半秒（固定时间，不随命令长短变；按一趟的百分比算的话
+ *     一千字的命令开头要死六秒多，看着就是没动），
+ *     放得下的那条一动不动；系统里开了「减少动态效果」也照旧慢慢滚（停下来就只剩截断，
+ *     后面那半条命令看不全）。
  *   · 每条末尾钉一个耗时（跑了多久）：数字自己往上走、钉在这一条的右端，字滚它不滚；
  *     冻住之后这个数字不再变；重放出来的老调用不知道什么时候开始的，不写耗时。
  *
@@ -300,9 +302,31 @@ module.exports = async (page) => {
     console.log("\n第十二幕（一行放不下的命令）：");
     console.log("   行数=" + rl.length + " 滚=" + long.roll + " 动画=" + long.anim + " 位移=" + long.shift + "px 溢出=" + long.over + "px 一趟=" + long.dur + "s");
     if (rl.length !== 1) { problems.push("这一块该只有一条：" + JSON.stringify(rl.map((x) => x.text))); }
-    if (!long.roll || long.anim !== "tr-roll") { problems.push("长命令没自己滚起来：" + JSON.stringify(long)); }
+    if (!long.roll || !/^tr-roll/.test(long.anim)) { problems.push("长命令没自己滚起来：" + JSON.stringify(long)); }
     if (long.dir !== "normal") { problems.push("滚是来回滚的（该只往一个方向）：" + long.dir); }
-    if (Math.abs(long.dur - Math.max(1, Math.abs(long.shift) / 30 / 0.91)) > 0.05) { problems.push("滚的快慢不是按每秒 30 像素算的：一趟 " + long.dur + " 秒、位移 " + long.shift + "px"); }
+    // 一趟 = 走的那段（每秒 30 像素）+ 两头各停 0.5 秒
+    if (Math.abs(long.dur - (Math.abs(long.shift) / 30 + 1)) > 0.05) { problems.push("一趟的时长不对（该是「走完每秒 30 像素 + 两头各停半秒」）：一趟 " + long.dur + " 秒、位移 " + long.shift + "px"); }
+    // 两头的停顿是固定的半秒，不能像以前那样按一趟的百分之几算（那会让长命令开头死很久）
+    const hold = await page.eval(`
+        const t = document.querySelector(".session-pane .tool-running .tool-running-item .tr-text");
+        const run = t.querySelector(".tr-run");
+        const name = run ? getComputedStyle(run).animationName : "";
+        let pct = null;
+        for (const sheet of document.styleSheets) {
+            let rules = [];
+            try { rules = Array.from(sheet.cssRules); } catch { continue; }
+            for (const rule of rules) {
+                if (rule.type === CSSRule.KEYFRAMES_RULE && rule.name === name) {
+                    // 0%、X%、(100-X)% 三格：第二格的百分比就是「两头各停多久」占一趟的多少
+                    pct = parseFloat(rule.cssRules[1].keyText);
+                }
+            }
+        }
+        const dur = parseFloat(t.style.getPropertyValue("--tr-dur")) || 0;
+        return { name: name, pct: pct, dur: dur, holdMs: pct === null ? null : Math.round(pct / 100 * dur * 1000) };
+    `);
+    console.log("   两头停：" + hold.holdMs + " 毫秒（keyframes 「" + hold.name + "」第一格 " + hold.pct + "%，一趟 " + hold.dur + " 秒）");
+    if (hold.holdMs === null || Math.abs(hold.holdMs - 500) > 15) { problems.push("两头的停顿不是固定的半秒：" + JSON.stringify(hold)); }
     // 滚到底能看到末尾：把位移直接当作静态位置量一次（不然得等它慢慢滚到头）。
     const tail = await page.eval(`
         const t = document.querySelector(".session-pane .tool-running .tool-running-item .tr-text");
@@ -348,13 +372,16 @@ module.exports = async (page) => {
     const backLong = (await rolls())[0] || {};
     console.log("   短的那条跑完，露回来的是：" + backLong.text + "（滚=" + backLong.roll + "）");
     if (!backLong.text || backLong.text.indexOf("$ git log") !== 0 || !backLong.roll) { problems.push("短的那条跑完之后该换回还在跑的长命令（它该照旧滚）：" + JSON.stringify(backLong)); }
-    // 系统里开了「减少动态效果」：字不滚（按老样子截断）
+    // 系统里开了「减少动态效果」：照旧慢慢滚（停下来就只剩截断，后半条命令在界面上看不全）
     await page.cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
     await page.sleep(100);
-    const slowed = (await rolls())[0] || {};
+    const reduced = (await rolls())[0] || {};
+    await page.sleep(600);
+    const reducedLater = (await rolls())[0] || {};
     await page.cdp.send("Emulation.setEmulatedMedia", { features: [] });
-    console.log("   开了「减少动态效果」：动画=" + slowed.anim);
-    if (slowed.anim !== "none") { problems.push("开了「减少动态效果」字还在滚：" + JSON.stringify(slowed)); }
+    console.log("   开了「减少动态效果」：动画=" + reduced.anim + " 位移 " + reduced.left + " → " + reducedLater.left);
+    if (!/^tr-roll/.test(reduced.anim)) { problems.push("开了「减少动态效果」字就不滚了（该照旧慢慢滚）：" + JSON.stringify(reduced)); }
+    if (!(reducedLater.left < reduced.left - 5)) { problems.push("开了「减少动态效果」字没在动：" + reduced.left + " → " + reducedLater.left); }
 
     // ---- 第十三幕：末尾钉一个耗时（自己往上走；字滚它不滚）----
     // 两条一起跑时露的是最近开始的那条：把长命令放后投，露着的这条既在滚、又带着耗时。

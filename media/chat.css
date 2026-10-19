@@ -289,10 +289,14 @@
   .tool-running-item .tr-time { flex: 0 0 auto; margin-left: auto; padding-left: 8px; opacity: 0.8; font-variant-numeric: tabular-nums; }
   .tool-running-item .tr-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 一行放不下的（长命令行）：字自己横向滚，只往一个方向 —— 从头滚到末尾，到末尾停一下、
-     再从开头来（不回程）。滚多远（--tr-shift）、滚多慢（--tr-dur）由 chat.js 量出来现算
-     （见 rollRunningText）：一趟里有 91% 的时间在走（第 3% 到第 94%），两头停一下。
+     再从开头来（不回程）。滚多远（--tr-shift）、一趟多久（--tr-dur）由 chat.js 量出来现算
+     （见 rollRunningText）。两头的停顿是固定半秒，写在一条一份的 keyframes 里（叫 tr-roll-<编号>，
+     由 chat.js 插进来）—— 下面这份只当兜底：停顿在 keyframes 里只能写成百分比，按百分比算的话
+     命令越长开头死得越久（一千字的命令头六秒不动）。
      滚起来就不要末尾省略号了（那个「…」会钉在右边不动，字从底下过）。
-     不想看动的东西的人（系统里开了「减少动态效果」）：字不动，按老样子截断。 */
+     系统里开了「减少动态效果」也照旧滚：这一条滚的就是一行字、又是慢慢走的，不碍事；
+     停下来就只剩截断（下面那条 clip 把省略号也去掉了），后面那半条命令在界面上就再也看不全
+     ——真机上撞到过：人看到的是半截命令一动不动，以为界面卡住了。 */
   .tool-running-item .tr-text.roll { text-overflow: clip; }
   .tool-running-item .tr-run { display: block; }
   .tool-running-item .tr-text.roll .tr-run { animation: tr-roll var(--tr-dur, 6s) linear infinite; }
@@ -300,7 +304,6 @@
     0%, 3% { transform: translateX(0); }
     94%, 100% { transform: translateX(var(--tr-shift, 0px)); }
   }
-  @media (prefers-reduced-motion: reduce) { .tool-running-item .tr-text.roll .tr-run { animation: none; } }
   /* 合并标签（连着来的同名调用收成一个）：工具名 + 次数小方块（只调一次就不写数字）。
      次数不用乘号：标签字号是正文的 0.8 倍，乘号在这个尺寸只剩几个像素，两条斜线
      怎么画都发虚；改成一个小色块把数字框住，一眼看得出这是"几次"。

@@ -2054,12 +2054,15 @@
   // 整条（字与位置）在这一批过去时一并收掉：下面出了正文 / 问话卡片，或者这一轮跑完
   // （见 endRunningLine）。
   //
-  // 一行写不完的（长命令行）：字自己慢慢横向滚，只往一个方向（从头滚到末尾，到头停一下再从开头来，
+  // 一行写不完的（长命令行）：字自己慢慢横向滚，只往一个方向（从头滚到末尾，两端各停半秒再从开头来，
   // 见 rollRunningText 与 chat.css 的 tr-roll），不然一颗「bash」加小半条命令就完了，看不出来在跑什么。
   const RUNNING_LINE_SKIP = new Set([THINKING_NAME, "ask_choice"]);
   const RUNNING_ROLL_MIN_PX = 4;    // 溢出这几个像素以内不算「放不下」（末尾省略号那点宽度，不值当滚）
   const RUNNING_ROLL_SPEED = 30;    // 放不下的那行字自己滚动的快慢：每秒 30 像素（慢慢地滚）
-  const RUNNING_ROLL_SWEEP = 0.91;  // 一趟里走的时间占多少（另 9% 是两头停的那一下，见 chat.css 的 tr-roll）
+  // 两头各停多久（毫秒）：固定时间，不随命令长短变。以前是按「一趟的百分之几」算的，
+  // 一趟多长又按长度算（每秒 30 像素），于是命令越长开头死得越久：一千字的命令一趟三分钟，
+  // 前六秒多一个像素都不走（真机上就是这个「一动不动」）。量法与数据见 dev/runningLine.js。
+  const RUNNING_ROLL_HOLD_MS = 500;
   const RUNNING_CLOCK_MS = 200;     // 后面那个耗时的刷新快慢（一秒里刷五回就够看着在走）
 
   /** 现在还有哪些调用在跑、各自那一行摘要与开始时刻（一条一行，按页面上标签的顺序）。
@@ -2143,7 +2146,7 @@
     startRunClock(st);
     // 量「这一行放不放得下」得等它排到页面上（新起一条时上面那一步才把它插进去），
     // 所以挪完位置再看一眼：放不下的改成自己滚（见 rollRunningText）。
-    rollRunningText(t, call.text);
+    rollRunningText(t, call.text, el);
   }
 
   /** 那条「正在跑」上后面那个耗时：每 RUNNING_CLOCK_MS 重写一次（只动那几个数字，不动字、
@@ -2177,13 +2180,14 @@
   }
 
   /** 这一条的字一行放得下就不动（末尾不够就省略号）；放不下就让它自己慢慢横向滚：
-   *  滚的距离就是溢出的那些像素（--tr-shift），快慢按固定速度算（--tr-dur），动画见 chat.css 的 tr-roll。
-   *  一趟的时长按「走的部分每秒 30 像素」倒推：两头停的那一下也算在里面（RUNNING_ROLL_SWEEP）。 */
-  function rollRunningText(t, text) {
+   *  滚的距离就是溢出的那些像素（--tr-shift），一趟多长由「走的那段每秒 30 像素 + 两头各停
+   *  RUNNING_ROLL_HOLD_MS」算出来（--tr-dur），停顿的写法见下一条。 */
+  function rollRunningText(t, text, line) {
     t.textContent = text;
     t.classList.remove("roll");
     t.style.removeProperty("--tr-shift");
     t.style.removeProperty("--tr-dur");
+    dropRollKeyframes(line);   // 上一条命令那份 keyframes（换一条就不用了）
     const over = t.scrollWidth - t.clientWidth;
     if (over < RUNNING_ROLL_MIN_PX) { return; }
     const run = document.createElement("span");
@@ -2192,8 +2196,37 @@
     t.textContent = "";
     t.appendChild(run);
     t.classList.add("roll");
+    const dur = over / RUNNING_ROLL_SPEED * 1000 + RUNNING_ROLL_HOLD_MS * 2;
     t.style.setProperty("--tr-shift", -over + "px");
-    t.style.setProperty("--tr-dur", Math.max(1, over / RUNNING_ROLL_SPEED / RUNNING_ROLL_SWEEP) + "s");
+    t.style.setProperty("--tr-dur", dur / 1000 + "s");
+    run.style.animationName = writeRollKeyframes(line, RUNNING_ROLL_HOLD_MS, dur);
+  }
+
+  // 页面上一时只露着一条「正在跑」（每会话一条），但几个会话各自都可能有：所以 keyframes
+  // 一条一份、名字带编号，换命令 / 收掉这条时把自己那份删了，页面上不会攒一堆。
+  let runningRollKeySeq = 0;
+
+  /** 给这一条写一份 keyframes：两头的停顿在 keyframes 里只能写成「一趟的百分之几」，
+   *  要停固定的毫秒数就得按这一条的一趟时长换算（所以要一条一份）。
+   *  三格：0% 与 X% 都停在开头（= 停顿），到 (100-X)% 走到末尾，之后一直停在那里直到 100%。
+   *  返回这份 keyframes 的名字（调用方把它挂到滚字的那层上）。 */
+  function writeRollKeyframes(line, holdMs, durMs) {
+    const pct = Math.min(45, Math.max(0.001, holdMs / durMs * 100));
+    const name = "tr-roll-" + (++runningRollKeySeq);
+    const style = document.createElement("style");
+    style.textContent = "@keyframes " + name + "{0%{transform:translateX(0)}"
+        + pct.toFixed(3) + "%{transform:translateX(0)}"
+        + (100 - pct).toFixed(3) + "%{transform:translateX(var(--tr-shift,0px))}}";
+    document.head.appendChild(style);
+    if (line) { line._rollKeys = style; }
+    return name;
+  }
+
+  /** 把这一条那份 keyframes 收掉（这条不再需要滚了 / 换了一条命令 / 整条收掉了）。 */
+  function dropRollKeyframes(line) {
+    if (!line || !line._rollKeys) { return; }
+    line._rollKeys.remove();
+    line._rollKeys = null;
   }
 
   /** 一条都不在跑了：把留在页面上的这条冻住 —— 齿轮停转、耗时定在跑完那一刻，字留着
@@ -2218,7 +2251,11 @@
     if (!st) { return; }
     stopRunClock(st);
     st.runningKey = "";
-    if (st.runningLine) { st.runningLine.remove(); st.runningLine = null; }
+    if (st.runningLine) {
+      dropRollKeyframes(st.runningLine);
+      st.runningLine.remove();
+      st.runningLine = null;
+    }
   }
 
   /** 这一批工具过去了（下面出了正文 / 问话卡片，或者这一轮跑完）：把还在留的那条（冻着的那个）
