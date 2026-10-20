@@ -1,5 +1,6 @@
 import * as crypto from "crypto";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import { renderHTML } from "./renderHtml";
 import { mediaVersion } from "./mediaVersion";
@@ -58,8 +59,11 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
         `base-uri 'none'; ` +
         `form-action 'none';`;
 
+    // 浏览器 tab 的标题用这台机器的名字（形如 `我的电脑-pi`）：同时开着几台机器的页面时，
+    // 光看标题分不出谁是谁。机器名取不到就只剩 `pi`。
+    const host = machineName();
     const extraHead =
-        `<title>Pi Chat（浏览器）</title>\n` +
+        `<title>${host ? `${escapeAttr(host)}-pi` : "pi"}</title>\n` +
         `  <meta name="pichat-page" content="${escapeAttr(pageId)}" />\n` +
         `  <meta name="pichat-theme" content="${themeMode}" />\n` +
         `  <style id="browser-theme">${browserCss}</style>`;
@@ -127,6 +131,17 @@ export function getPanelChatHtml(
             content: inline.get(file.name) ?? "",
         })),
     });
+}
+
+/**
+ * 这台机器的名字（系统里的主机名）。取不到就空串。
+ * 主机名可能带引号、尖括号这类字符，写进 HTML 前照样 {@link escapeAttr} 转义。
+ */
+function machineName(): string {
+    try {
+        return os.hostname();
+    } catch { /* 见上 */ }
+    return "";
 }
 
 /** 面板那份安全策略的 nonce（随机串，写进哪几个脚本标签就是哪几段能跑）。 */
