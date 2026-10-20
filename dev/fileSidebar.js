@@ -1752,7 +1752,9 @@ module.exports = async (page) => {
             if (o.download) { url += "&download=1"; }
             const resp = await fetch(url);
             const buf = new Uint8Array(await resp.arrayBuffer());
-            const text = new TextDecoder().decode(buf);
+            // 几 MB 的下载只核字节数与响应头，不转成文本：那种大小的字符串经调试接口回传，
+            // 页面那边这条脚本就再也回不来了（整段卡住）。
+            const text = buf.length > 64 * 1024 ? "" : new TextDecoder().decode(buf);
             return {
                 status: resp.status, bytes: buf.length, mtime: resp.headers.get("x-file-mtime") || "",
                 size: resp.headers.get("x-file-size") || "", type: resp.headers.get("content-type") || "",

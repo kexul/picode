@@ -87,6 +87,32 @@ const IMAGE_CONTENT_TYPES: ReadonlyMap<string, string> = new Map([
     [".svg", "image/svg+xml"],
 ]);
 
+/**
+ * 站内页面（`/site/…`）按扩展名给的 Content-Type：会话目录里的一张网页连同它的样式、脚本、
+ * 图片、字体，浏览器拿这些类型直接当网页用。不认识的按二进制给。
+ */
+const SITE_CONTENT_TYPES: ReadonlyMap<string, string> = new Map([
+    [".html", "text/html; charset=utf-8"], [".htm", "text/html; charset=utf-8"],
+    [".xhtml", "text/html; charset=utf-8"],
+    [".css", "text/css; charset=utf-8"],
+    [".js", "text/javascript; charset=utf-8"], [".mjs", "text/javascript; charset=utf-8"],
+    [".cjs", "text/javascript; charset=utf-8"],
+    [".json", "application/json; charset=utf-8"], [".map", "application/json; charset=utf-8"],
+    [".xml", "application/xml; charset=utf-8"], [".txt", "text/plain; charset=utf-8"],
+    [".md", "text/plain; charset=utf-8"], [".csv", "text/csv; charset=utf-8"],
+    [".svg", "image/svg+xml"],
+    [".woff", "font/woff"], [".woff2", "font/woff2"], [".ttf", "font/ttf"], [".otf", "font/otf"],
+    [".wasm", "application/wasm"],
+    [".mp4", "video/mp4"], [".webm", "video/webm"], [".mp3", "audio/mpeg"], [".wav", "audio/wav"],
+    [".pdf", "application/pdf"],
+]);
+
+/** 一张网页（`/site/…`）里那个文件该按什么类型给（不认识的按二进制给，别让浏览器猜）。 */
+function siteContentType(filePath: string): string {
+    const ext = extensionOf(filePath);
+    return SITE_CONTENT_TYPES.get(ext) ?? IMAGE_CONTENT_TYPES.get(ext) ?? "application/octet-stream";
+}
+
 /** 当正文显示的文本扩展名。 */
 const TEXT_FILE_EXTENSIONS: ReadonlySet<string> = new Set([
     ".txt", ".text", ".log", ".md", ".markdown", ".mdx", ".rst", ".adoc", ".tex",
@@ -441,6 +467,16 @@ export class PiChatWebServer {
                 this.sendMedia(req, res, pathname.slice("/media/".length), url.searchParams.get("v") ?? "");
                 return;
             }
+            // 站内页面（文件侧边栏里当网页打开的那个 html）：地址里带着路径本身，见 sendSite。
+            // 这条按**没解码**的地址切段（路径里的 `%2F` 不能把会话号切坏），所以拿 url.pathname。
+            if (url.pathname.startsWith("/site/")) {
+                if (req.method !== "GET" && req.method !== "HEAD") {
+                    this.sendText(req, res, 405, "只接受 GET。");
+                    return;
+                }
+                this.sendSite(req, res, url.pathname.slice("/site/".length));
+                return;
+            }
             if (pathname === "/file") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
                 this.sendFile(req, res, url.searchParams.get("session") ?? "", url.searchParams.get("path") ?? "",
@@ -723,6 +759,59 @@ export class PiChatWebServer {
                 "X-File-Mtime": mtime,
             });
         });
+    }
+
+    /**
+     * 把会话目录里的一个文件按它自己的类型发给页面（`/site/<会话>/<相对路径>`）。
+     *
+     * 跟 `/file` 那条只差一处：**路径就在地址里**。为的是在左边文件侧边栏里把 html 当网页打开——
+     * 页面里的相对引用（`./a.css`、`img/x.png`、`<script src="app.js">`）由浏览器按这条地址
+     * 自己解析，落在 `/site/<会话>/…` 下面，那些子请求也走这条地址。
+     *（`/file?session=…&path=…` 那条做不到：相对引用会解析成 `/a.css`，全是 404。）
+     *
+     * 只读、只看会话目录里的东西（边界与 `/file` 同一套，见 resolveSessionPath）；不设大小上限
+     * （页面、图片、字体都可能不小，流式给出去）。HEAD 只给头：页面拿它比修改时间，
+     * 看要不要把那个 iframe 重载一遍。
+     *
+     * @param rest 地址里 `/site/` 后面那一段（**没解码**：会话号那一段自己解，见下）
+     */
+    private sendSite(req: http.IncomingMessage, res: http.ServerResponse, rest: string): void {
+        const cut = rest.indexOf("/");
+        const sessionId = cut > 0 ? decodeSegment(rest.slice(0, cut)) : undefined;
+        const segments = cut > 0 ? rest.slice(cut + 1).split("/").map(decodeSegment) : [];
+        if (sessionId === undefined || segments.length === 0 || segments.some((s) => s === undefined)) {
+            this.sendText(req, res, 400, "请求地址不合法。");
+            return;
+        }
+        const wantPath = segments.join("/");
+        if (!wantPath || wantPath.endsWith("/")) {
+            this.sendText(req, res, 404, "没有这个文件（这是个目录）。");
+            return;
+        }
+        const found = this.resolveSessionPath(sessionId, wantPath, "文件");
+        if (!found.ok) { this.sendText(req, res, found.status, found.text); return; }
+        let stat: fs.Stats;
+        try {
+            stat = fs.statSync(found.real);
+        } catch {
+            this.sendText(req, res, 404, "没有这个文件。");
+            return;
+        }
+        if (!stat.isFile()) {
+            this.sendText(req, res, 404, "没有这个文件（这是个目录）。");
+            return;
+        }
+        const headers = {
+            "Content-Type": siteContentType(found.real),
+            "Cache-Control": "no-store",
+            "X-File-Mtime": String(Math.floor(stat.mtimeMs)),
+        };
+        if (req.method === "HEAD") {
+            res.writeHead(200, { ...headers, "Content-Length": stat.size });
+            res.end();
+            return;
+        }
+        this.streamFile(res, found.real, 200, stat.size, headers);
     }
 
     /**
@@ -1198,6 +1287,15 @@ function parseRequestUrl(raw: string | undefined): URL | undefined {
 }
 
 /** 把地址里的百分号转义解开；解不开（例如 %zz）返回 undefined。 */
+/** 解一段地址（不合法给 undefined，别让一个坏百分号把整个请求搞崩）。 */
+function decodeSegment(text: string): string | undefined {
+    try {
+        return decodeURIComponent(text);
+    } catch {
+        return undefined;
+    }
+}
+
 function safeDecode(pathname: string): string | undefined {
     try {
         return decodeURIComponent(pathname);

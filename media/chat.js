@@ -4119,6 +4119,10 @@
   // 回应当图片源）；二进制和超过 2 MB 的不把内容塞进页面，只给一句说明加一个下载。那条带
   // download=1 的地址不设大小上限，几 MB 的文件也下得下来。
   //
+  // html 那一族例外：不画成正文，摆一个 iframe 把那张网页真渲染出来（见 renderFileHtml）。它吃的是
+  // 另一条地址 `/site/<会话>/<相对路径>`（路径就在地址里，页面里的相对引用才解析得对），
+  // 文件改没改由 HEAD 问一下修改时间（见 pollHtmlFile）。
+  //
   // 窗口够宽（≥1200px）时这一列常驻在左边、对话让出这块宽度；窄了从左边滑入、点外面收起。
   // 手机上同一时刻只开一块侧边栏：开左边这块就把右边那块收起来，反过来也一样
   //（两块都常驻时不受这条约束）。开没收起记在这台设备里（跟右边那一列同一个做法）。
@@ -4667,6 +4671,11 @@
   /** 这个文件是不是 markdown：是就排好版渲染成文档，而不是一行一行带行号。 */
   function isMarkdownPath(path) { return MARKDOWN_EXT.has(lastExt(path)); }
 
+  /** 当网页渲染的扩展名（html 那一族）。 */
+  const HTML_PAGE_EXT = new Set(["html", "htm", "xhtml"]);
+  /** 这个文件是不是一张网页：是就摆一个 iframe 把它当网页渲染出来（见 renderFileHtml）。 */
+  function isHtmlPath(path) { return HTML_PAGE_EXT.has(lastExt(path)); }
+
   /**
    * 把一个 markdown 文件渲染成文档：跟消息流里渲染正文走同一段（renderMarkdown），
    * 不另起一套。文档不留行号，所以链接里带的行号（`:12`）等于没带，也不报错。
@@ -4748,6 +4757,52 @@
   }
 
   /**
+   * 一个文件当网页渲染时的那条地址：`/site/<会话>/<相对路径>`。
+   * 路径摆进地址里是为了页面里的相对引用（`./a.css`、`img/x.png`）由浏览器自己接着解析，
+   * 那些子请求也落在同一条地址下面；跟 `/file` 那条一样只读、只认会话目录里的东西。
+   */
+  function siteUrl(tab) {
+    const segs = String(tab.path || "").split("/").map(encodeURIComponent).join("/");
+    return "/site/" + encodeURIComponent(activeId || "") + "/" + segs;
+  }
+
+  /**
+   * 把一张网页渲染出来：这一列里摆一个 iframe，直接吃后端那条 `/site/` 地址。
+   *
+   * 脚本是**真跑**的（sandbox 里给了 allow-scripts + allow-same-origin）：会话目录里的页面
+   * 多半靠脚本画图表、读数据，不跑就只剩个空壳。代价是它跟这个页面同源——里头的脚本能读
+   * 会话、能替你发消息（这里不把它当隔离；那道 sandbox 只顺手挡掉“把整页跳走 / 弹窗糊住界面”）。
+   *
+   * @param force 这个文件改过了、要重载一遍：同一个地址浏览器不会自己重新取
+   */
+  function renderFileHtml(tab, force) {
+    const body = fileSidebar.body;
+    if (!body) { return; }
+    const src = siteUrl(tab);
+    const old = force ? null : body.querySelector("iframe.file-site");
+    if (old && old.getAttribute("src") === src) { return; }
+    body.innerHTML = "";
+    const frame = document.createElement("iframe");
+    frame.className = "file-site";
+    frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-downloads");
+    frame.setAttribute("title", fileSidebarTabName(tab.path));
+    frame.src = src;
+    body.appendChild(frame);
+  }
+
+  /**
+   * 问一下这张网页的修改时间（只要头、不要正文），记进标签里：跟着刷新那轮拿它比，
+   * 改过了才重载那个 iframe。问不到就算了（iframe 自己会把后端那句人话显示出来）。
+   */
+  function probeFileMtime(tab) {
+    const token = fileSidebar.token;
+    fetch(siteUrl(tab), { method: "HEAD", cache: "no-store" }).then((resp) => {
+      if (token !== fileSidebar.token) { return; }
+      tab.mtime = resp.headers.get("X-File-Mtime") || "";
+    }).catch(() => { /* 没连上：留空，下一轮再问 */ });
+  }
+
+  /**
    * 去后端把现在这个标签的内容取回来画上：文件画成正文 / 图片 / 一句说明（看不了时），
    * 目录画成一张清单；看不了就画一句人话。两条地址取的与画的就这一点不同。
    * @param linkLine 这次链接说的那一行（1 起）；0 = 没有要停的行，回这个标签上次读到的地方
@@ -4756,6 +4811,15 @@
     const tab = fileSidebar.tabs[fileSidebar.active];
     if (!tab) { return; }
     const token = ++fileSidebar.token;
+    if (!tab.proj && isHtmlPath(tab.path)) {
+      // 网页：内容由浏览器自己按 `/site/` 那条地址去取，不走下面这个 fetch
+      //（链接里带的行号在这条路上等于没带：网页里没有“第 42 行”可停）
+      tab.loading = false;
+      releaseTabImage(tab);
+      probeFileMtime(tab);
+      renderFileHtml(tab, true);
+      return;
+    }
     tab.loading = true;
     fetch(sidebarUrl(tab, "")).then(async (resp) => {
       tab.loading = false;
@@ -4786,6 +4850,7 @@
     const body = fileSidebar.body;
     if (!tab || !body || tab.loading) { return; }   // 还没开文件 / 还在取：这一轮先不问
     if (tab.proj) { return; }   // 目录不跟着刷新：清单不是「正看着的那个文件」，点一下才重新列
+    if (isHtmlPath(tab.path)) { pollHtmlFile(tab, at); return; }   // 网页：只问修改时间，改过才重载
     const token = fileSidebar.token;
     filePolling = true;
     fetch(sidebarUrl(tab, tab.mtime)).then(async (resp) => {
@@ -4804,6 +4869,26 @@
       tab.scrollTop = top;
     }).catch(() => {
       // 这一轮没连上就算了：正文留着，下一轮再问（别把人正读的东西换成一句报错）
+    }).then(() => { filePolling = false; });
+  }
+
+  /**
+   * 跟着刷新那一轮里的网页：只问修改时间（HEAD），改过了才把那个 iframe 重载一遍。
+   * 重载会把页面里的状态（滚动、输入、跑着的脚本）清掉，所以只有真改过才做。
+   */
+  function pollHtmlFile(tab, at) {
+    if (filePolling) { return; }
+    const token = fileSidebar.token;
+    filePolling = true;
+    fetch(siteUrl(tab), { method: "HEAD", cache: "no-store" }).then(async (resp) => {
+      if (token !== fileSidebar.token || fileSidebar.active !== at) { return; }   // 换了标签 / 切了会话 / 收起
+      if (resp.status !== 200) { await showFileRefusal(resp, tab); return; }
+      const mtime = resp.headers.get("X-File-Mtime") || "";
+      if (mtime && mtime === tab.mtime) { return; }   // 没变：一个字都不动
+      tab.mtime = mtime;
+      renderFileHtml(tab, true);
+    }).catch(() => {
+      // 这一轮没连上就算了：页面留着，下一轮再问
     }).then(() => { filePolling = false; });
   }
 

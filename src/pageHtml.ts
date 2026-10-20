@@ -50,6 +50,9 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
     // 浏览器页面的安全策略（无内联脚本、不加载外部站点的东西）
     const csp =
         `default-src 'none'; ` +
+        // 文件侧边栏里把会话目录里的 html 当网页打开：那个 iframe 吃的是自己的 `/site/…` 地址
+        //（它里面的样式、脚本、图片归它自己那份文档管，不受这里管）。
+        `frame-src 'self'; ` +
         `img-src 'self' data: blob:; ` +
         `media-src blob:; ` +
         `style-src 'self' 'unsafe-inline'; ` +
