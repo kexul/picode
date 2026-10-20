@@ -477,6 +477,7 @@
   .file-item .cmd-badge.cmd-skill { color: var(--vscode-charts-green, #89d185); }
   .file-item .cmd-badge.cmd-prompt { color: var(--vscode-charts-blue, #75beff); }
   .file-item .cmd-badge.cmd-extension { color: var(--vscode-charts-purple, #b180d7); }
+  .file-item .cmd-badge.cmd-builtin { color: var(--vscode-charts-orange, #d18616); }
   /* edit/write 收起态是工具行里的小标签（跟别的工具一样按名字收，改了几处就带次数），
      展开内容全在悬浮提示框里，不再有整张卡片。
      提示框内：一条调用一块，标题行复用 .tag-tip-call，标题右边就是这一条的「跳转 / 回滚」，

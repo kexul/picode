@@ -18,6 +18,7 @@ import {
 } from "./messageUtils";
 import {
     type RpcCommandInfo,
+    type RpcCompactionResult,
     type RpcModelInfo,
     type RpcResponse,
     type RpcSessionStats,
@@ -60,6 +61,26 @@ export interface SlashCommandItem {
     source: string;
 }
 
+/** 插件自己认下的一条内置命令：pi 的斜杠命令只在终端界面里处理，
+ *  走 RPC 发过去只是普通文字，所以由插件接下来、改发 pi 对应的 RPC 命令。 */
+export const BUILTIN_COMPACT_ITEM: SlashCommandItem = {
+    insert: "/compact",
+    name: "compact",
+    description: "压缩上下文（省 token；可跟一句要求，如 /compact 保留改过的文件）",
+    source: "builtin",
+};
+
+/**
+ * 这条消息是不是要插件接手的 /compact。
+ * @returns 要压缩就返回 pi 的 customInstructions（没写就是空串）；不是 /compact 返回 null。
+ */
+export function parseCompactCommand(text: string): string | null {
+    if (typeof text !== "string") { return null; }
+    const m = text.match(/^\/compact(?:[ \t]+([\s\S]*))?$/i);
+    if (!m) { return null; }
+    return (m[1] ?? "").trim();
+}
+
 /** 命令来源优先级（同名冲突时保留高优者）：与 pi 内部处理顺序一致。 */
 function commandSourcePriority(source: string | undefined): number {
     if (source === "extension") { return 0; }
@@ -92,7 +113,11 @@ export function commandMenuItems(commands: RpcCommandInfo[]): SlashCommandItem[]
             source: c.source === "skill" || c.source === "prompt" || c.source === "extension"
                 ? c.source
                 : "other",
-        }));
+        }))
+        // 同名时别盖掉插件自己认下的那条（比如 /compact）
+        .filter((it) => it.name !== BUILTIN_COMPACT_ITEM.name)
+        .concat([BUILTIN_COMPACT_ITEM])
+        .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** / 简写改写："/grill-me args" → "/skill:grill-me args"。
@@ -135,6 +160,8 @@ export class SessionRuntime {
     public get cwd(): string { return this.launch?.cwd || this.host.getCwd(); }
     /** Agent 是否仍在运行；这是 steer / Esc 等整体生命周期判断使用的状态。 */
     public streaming = false;
+    /** 正在压缩上下文（/compact）：界面上照旧显示「工作中」，这里只是防重入。 */
+    public compacting = false;
     /** Agent 当前更细的活动阶段，供 webview 区分处理中 / 思考 / 工具调用。 */
     public activity: RuntimeActivity = "idle";
     /** 当前阶段的附加信息，例如正在执行的工具名。 */
@@ -489,6 +516,20 @@ export class SessionRuntime {
         const hasImages = Array.isArray(images) && images.length > 0;
         if ((!text || !text.trim()) && !hasImages) {
             return;
+        }
+        // pi 的内置斜杠命令只在终端界面里处理，走 RPC 发过去只会当成普通文字交给模型。
+        // 其中 /compact 插件自己接手：改发 pi 的 compact 命令（pi 的 prompt 里做不了这个）。
+        // 带图片、或者是插件代发的（子会话结果交回这类）不当命令看。
+        if (!hasImages && !opts?.followUp) {
+            const instructions = parseCompactCommand(text || "");
+            if (instructions !== null) {
+                this.hasConversation = true;
+                if (!this.client || !this.client.isRunning()) {
+                    this.startClient();
+                }
+                void this.compactContext(instructions);
+                return;
+            }
         }
         // 发送即占用当前会话：等待 pi 回传 message_start 的间隙也不能被历史会话覆盖。
         this.hasConversation = true;
@@ -1505,6 +1546,60 @@ export class SessionRuntime {
         }
         if (notices.length > 0) {
             this.post({ type: "system", text: notices.join(" · ") });
+        }
+    }
+
+    /**
+     * 用户在输入框里敲了 /compact：直接调 pi 的 compact 命令压缩上下文。
+     *
+     * 为什么不拼成 prompt 发过去：pi 的 prompt 只展开技能与提示模板，内置斜杠命令（/compact、
+     * /new 这些）只在终端界面里处理，发过去只会当成普通文字交给模型。
+     * 过程走 pi 的 compaction_start / compaction_end 事件（界面上就是「工作中」，失败会报出来）。
+     * pi 会先停掉正在跑的那一轮再压，所以跑着的时候点也不怕。
+     * @param instructions 用户跟在命令后面的话（压缩时希望保留什么），可以为空。
+     */
+    public async compactContext(instructions = ""): Promise<void> {
+        if (!this.client || !this.client.isRunning()) {
+            this.post({ type: "systemError", text: "压缩失败: pi 进程没在跑" });
+            return;
+        }
+        const why = instructions ? `（要求：${instructions}）` : "";
+        if (this.compacting) {
+            this.post({ type: "system", text: "正在压缩，等这一遍完。" });
+            return;
+        }
+        this.compacting = true;
+        this.setActivity("working");
+        this.post({ type: "system", text: `正在压缩上下文${why}…` });
+        try {
+            // 压缩要真的调一次模型写摘要，一句话可以等很久：给足时间，别被 15s 的默认值截断
+            const cmd: Record<string, unknown> = { type: "compact" };
+            if (instructions) { cmd.customInstructions = instructions; }
+            const resp = await this.request<RpcCompactionResult>(cmd, 10 * 60 * 1000);
+            if (resp?.success === false) {
+                const text = formatPiError(resp.error || "未知错误");
+                this.post({ type: "systemError", text: `压缩失败: ${text}` });
+            } else if (!resp) {
+                // 超时 / 进程没了：不能当成功（pi 那边的 compaction_end 会把失败报出来）
+                this.post({ type: "systemError", text: "压缩失败: pi 没有回应" });
+            } else {
+                // 压缩前后都是估算值（不是精确计数），带上让用户心里有数
+                const before = resp.data?.tokensBefore;
+                const after = resp.data?.estimatedTokensAfter;
+                const size = typeof before === "number" && typeof after === "number"
+                    ? `：约 ${before} → ${after} tokens（估算）`
+                    : "";
+                this.post({ type: "system", text: `已压缩上下文${size}` });
+            }
+        } catch (e: any) {
+            this.post({ type: "systemError", text: `压缩失败: ${e.message}` });
+        } finally {
+            this.compacting = false;
+            if (!this.streaming) {
+                this.setActivity("idle");
+            }
+            // 上下文用量变了：状态栏那颗百分比跟上
+            void this.refreshStats();
         }
     }
 

@@ -6225,7 +6225,7 @@
       if (it.source) {
         const badge = document.createElement("span");
         badge.className = "cmd-badge cmd-" + it.source;
-        badge.textContent = it.source === "skill" ? "技能" : it.source === "prompt" ? "模板" : it.source === "extension" ? "命令" : "";
+        badge.textContent = it.source === "skill" ? "技能" : it.source === "prompt" ? "模板" : it.source === "extension" ? "命令" : it.source === "builtin" ? "插件" : "";
         item.appendChild(badge);
       }
       if (it.description) {

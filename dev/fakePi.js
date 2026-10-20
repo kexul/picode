@@ -493,6 +493,19 @@ async function handle(cmd) {
         case "get_commands":
             respond(id, "get_commands", { commands: [{ name: "fake-hello", description: "假命令", source: "extension" }] });
             return;
+        // 压缩：真 pi 会在压缩前后各发一条事件，然后直接回一个 response（不等模型，秒回）
+        case "compact": {
+            write({ type: "compaction_start", reason: "manual" });
+            const result = {
+                summary: "（假 pi 的压缩摘要" + (cmd.customInstructions ? "：" + cmd.customInstructions : "") + "）",
+                firstKeptEntryId: "fake-kept-1",
+                tokensBefore: 1000,
+                estimatedTokensAfter: 320,
+            };
+            write({ type: "compaction_end", reason: "manual", result, aborted: false, willRetry: false });
+            respond(id, "compact", result);
+            return;
+        }
         case "get_messages":
             respond(id, "get_messages", { messages });
             return;

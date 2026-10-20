@@ -19,6 +19,7 @@ export type RpcCommand =
     | { type: "get_available_models" }
     | { type: "set_thinking_level"; level: string }
     | { type: "get_session_stats" }
+    | { type: "compact"; customInstructions?: string }
     | { type: "switch_session"; sessionPath: string }
     | { type: "get_messages" }
     | { type: "get_commands" }
@@ -90,5 +91,15 @@ export interface RpcSessionStats {
     tokens?: unknown;
     cost?: number;
     contextUsage?: RpcContextUsage | null;
+}
+
+/** compact 命令的结果（改完上下文之后 pi 回报的压缩账）。 */
+export interface RpcCompactionResult {
+    summary?: string;
+    /** 压缩后保留的那一段从哪条开始。 */
+    firstKeptEntryId?: string;
+    tokensBefore?: number;
+    /** 压缩后上下文的估算大小（不是精确计数）。 */
+    estimatedTokensAfter?: number;
 }
 
