@@ -160,6 +160,23 @@ interface DirListing {
 }
 
 /**
+ * 在会话目录里按文件名找一圈（见 findFileByName）的两道定额：扫到这么多条目、或者花到这么多
+ * 毫秒就收手。链接里只有光名字（`chat.js`）时才走那一条，是点一下换来的“最多等这么久”。
+ *（在插件仓库上量过：整棵源码树跳过 node_modules 后约 800 个条目、4 毫秒。）
+ */
+const NAME_SEARCH_MAX_ENTRIES = 4000;
+const NAME_SEARCH_BUDGET_MS = 80;
+/**
+ * 按名字找时不进去的目录：大工程里这些才是大头（依赖、版本库、构建产物、虚拟环境）。
+ * 跟编辑器那条「在工作区里按文件名搜」的排除名单一个意思。
+ */
+const NAME_SEARCH_SKIP_DIRS: ReadonlySet<string> = new Set([
+    "node_modules", ".git", ".hg", ".svn", "out", "dist", "build", ".next", ".nuxt",
+    ".venv", "venv", "env", "__pycache__", ".pytest_cache", ".mypy_cache", "target",
+    ".cache", ".gradle", ".idea", ".vs", "coverage", ".tox",
+]);
+
+/**
  * 下载时告诉浏览器的文件名（`Content-Disposition`）。
  * 文件名里可能有中文：`filename` 那一份只放 ASCII（老浏览器认得），同时按 RFC 5987 给一份
  * `filename*=UTF-8''…`（现代浏览器用它，中文名字才不会变成下划线）。
@@ -624,16 +641,21 @@ export class PiChatWebServer {
      * 就能让 pi 读写这台机器，但「按路径直接取文件」这条路不该跟着变成整台机器的读接口。
      * 文件与目录两条地址共用这一套。
      *
-     * 找文件分两档（跟编辑器打开文件时一样多，但不去全工程扫）。
+     * 找文件分三档。
      *
      * 第一档按会话目录拼。拼得到（路径真在）就用它，哪怕它指向目录外面——边界该报 403 就报 403，
-     * 不拿第二档把话岔开（`outside/package.json` 这种写法该说「在会话目录外」）。
+     * 不拿后两档把话岔开（`outside/package.json` 这种写法该说「在会话目录外」）。
      *
      * 第二档只在第一档拼不到（路径不存在）时走，而且只有文件有（目录没有这份清单）：
      * 在这个会话碰过的文件（read / edit / write 过的，见 knownSessionFiles）里按名字匹配——
      * 链接里只有 `chat.js` 这种光名字、或者路径写岔了（`src/chat.js` 写成 `lib/chat.js`）时还能找到。
      * 匹配到的路径同样要过那道边界：清单里那个文件真身在会话目录外（读的是外面的软链接）时
      * 也不给看。
+     *
+     * 第三档（同样只有文件有）在前两档都没中时走：在会话目录里按文件名找一圈，见 findFileByName。
+     * 它管的是「这个文件会话里没人碰过，但光名字本来就是想点它」——正文里写 `chat.js` 而不写
+     * `media/chat.js` 时（模型自己写的链接、人贴的路径）不至于点不动。代价是这一档要读几个目录，
+     * 所以只在前面都没中时才走，而且有定额（大工程里扫不完就当没有）。
      *
      * 看不了时返回状态码与一句人话，调用方直接照它回；kind 只把话里的「文件 / 目录」说对。
      */
@@ -664,7 +686,57 @@ export class PiChatWebServer {
                 return this.checkInsideSession(realHit, realCwd, kind);
             }
         }
+        // 第三档：会话里没人碰过这个名字——在会话目录里按文件名找一圈（有定额，扫不完就当没有）
+        if (kind === "文件") {
+            const hit = this.findFileByName(cwd, wantPath);
+            const realHit = hit ? realPathOr(hit) : undefined;
+            if (realHit) {
+                return this.checkInsideSession(realHit, realCwd, kind);
+            }
+            return { ok: false, status: 404, text: "没有这个文件（会话目录里按文件名也只找了有限的一圈）。" };
+        }
         return { ok: false, status: 404, text: `没有这个${kind}。` };
+    }
+
+    /**
+     * 第三档：在会话目录里按文件名找一遍（链接里只有光名字、或者路径写岔了的时候）。
+     *
+     * 三条规矩：
+     *   - **广度优先**：浅的先中（`a/chat.js` 赢过 `a/b/c/chat.js`）；路径尾巴对上那个写法（`media/chat.js`）
+     *     赢过只对上名字的，所以一边找一边记着第一个只对上名字的，找到尾巴对上的立刻返回；
+     *   - **不进的目录**：见 NAME_SEARCH_SKIP_DIRS（大工程里 node_modules、.git、构建产物才是大头）；
+     *   - **有定额**：扫够 NAME_SEARCH_MAX_ENTRIES 个条目或花掉 NAME_SEARCH_BUDGET_MS 就收手，
+     *     拿手头那个只对上名字的（没有就当没找到）。这一档只在前面两档都没中时才走，是点一下链接
+     *     换来的，所以这个定额就是“最多让它等多久”。
+     *
+     * 只读目录名字，不读文件内容；找到的路径照样要过会话目录那道边界（调用方判）。
+     */
+    private findFileByName(cwd: string, wantPath: string): string | undefined {
+        const want = wantPath.replace(/\\/g, "/");
+        const base = want.split("/").pop() || "";
+        if (!base) { return undefined; }
+        const endedAt = Date.now() + NAME_SEARCH_BUDGET_MS;
+        let seen = 0;
+        let fallback: string | undefined;
+        const pending = [cwd];
+        while (pending.length > 0) {
+            const dir = pending.shift()!;
+            let entries: fs.Dirent[];
+            try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+            for (const entry of entries) {
+                if (++seen > NAME_SEARCH_MAX_ENTRIES || Date.now() > endedAt) { return fallback; }
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    if (!NAME_SEARCH_SKIP_DIRS.has(entry.name)) { pending.push(full); }
+                    continue;
+                }
+                if (!entry.isFile() || entry.name !== base) { continue; }
+                const rel = relativeTo(cwd, full).replace(/\\/g, "/");
+                if (rel === want || rel.endsWith("/" + want)) { return full; }
+                if (!fallback) { fallback = full; }
+            }
+        }
+        return fallback;
     }
 
     /** 目录边界：真实路径必须落在会话目录里（相等也算；`..` 与软链接都已解析过）。 */

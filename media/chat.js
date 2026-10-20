@@ -303,7 +303,11 @@
   // marked 的解析选项：整段渲染与按块渲染必须用同一套，否则两种路径出来的东西会不一样。
   // 每回给一份新的：marked 会往传进去的选项对象上写东西（加 tokenizer 字段），
   // 共享或冻结的对象会直接被它撞坏（症状是静默地报错回退）。
-  function mdOptions() { return { breaks: true, gfm: true }; }
+  // 必须把 marked.defaults 一起带上：`marked.parse` 自己会合一遍默认值（所以整段渲染那条路
+  // 认得文件链接、符号链接、高亮），而 `marked.lexer` / `marked.parser` 不会——按块渲染那条路
+  // 只递这份选项，不带 extensions 与 renderer 的话：切块时压根不把路径切成链接，画的时候也没有
+  // 那几条 renderer，流式出来的正文里就一个文件链接都没有（刷新页面走重放才有）。
+  function mdOptions() { return Object.assign({}, marked.defaults, { breaks: true, gfm: true }); }
   function renderMarkdown(source) { ensureMarkedHighlight(); ensureFileLink(); return marked.parse(source, mdOptions()); }
 
   /**
@@ -1553,7 +1557,12 @@
     if (token.type === "space") { return null; }
     ensureMarkedHighlight();
     ensureFileLink();
-    try { return marked.parser([token], mdOptions()); } catch (e) { return escapedText(token.raw); }
+    try {
+      // 高亮那条插件把着色挂在 walkTokens 上（不是 renderer 里），而 `marked.parser` 不跑它：
+      // 自己先跑一遍，流式里的代码块才有着色（整段渲染那条路由 marked.parse 自己跑）。
+      if (marked.defaults.walkTokens) { marked.walkTokens([token], marked.defaults.walkTokens); }
+      return marked.parser([token], mdOptions());
+    } catch (e) { return escapedText(token.raw); }
   }
   function escapedText(text) {
     const d = document.createElement("div");
