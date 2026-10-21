@@ -14,6 +14,7 @@ import { serverConfigFile } from "./serverPaths";
 import { normalizeOrigin } from "./webTransport";
 import {
     DEFAULT_AUTO_LOAD_LAST,
+    DEFAULT_CLOSE_SESSION_KEY,
     DEFAULT_FOCUS_INPUT_KEY,
     DEFAULT_FONT_SIZE,
     DEFAULT_NEW_SESSION_KEY,
@@ -21,6 +22,7 @@ import {
     DEFAULT_SEND_KEY,
     DEFAULT_TAB_SWITCH_KEY,
     DEFAULT_THEME_MODE,
+    CLOSE_SESSION_KEYS,
     FOCUS_INPUT_KEYS,
     NEW_SESSION_KEYS,
     SEND_KEYS,
@@ -50,6 +52,7 @@ export interface ServerConfig {
     autoLoadLast: boolean;
     sendKey: string;
     newSessionKey: string;
+    closeSessionKey: string;
     tabSwitchKey: string;
     focusInputKey: string;
     fontSize: string;
@@ -71,6 +74,7 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = deepFreeze({
     autoLoadLast: DEFAULT_AUTO_LOAD_LAST,
     sendKey: DEFAULT_SEND_KEY,
     newSessionKey: DEFAULT_NEW_SESSION_KEY,
+    closeSessionKey: DEFAULT_CLOSE_SESSION_KEY,
     tabSwitchKey: DEFAULT_TAB_SWITCH_KEY,
     focusInputKey: DEFAULT_FOCUS_INPUT_KEY,
     fontSize: DEFAULT_FONT_SIZE,
@@ -238,6 +242,7 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
     config.autoLoadLast = pickBoolean(raw.autoLoadLast, DEFAULT_SERVER_CONFIG.autoLoadLast, "autoLoadLast", warnings);
     config.sendKey = pickFromList(raw.sendKey, SEND_KEYS, DEFAULT_SEND_KEY, "sendKey", warnings);
     config.newSessionKey = pickFromList(raw.newSessionKey, NEW_SESSION_KEYS, DEFAULT_NEW_SESSION_KEY, "newSessionKey", warnings);
+    config.closeSessionKey = pickFromList(raw.closeSessionKey, CLOSE_SESSION_KEYS, DEFAULT_CLOSE_SESSION_KEY, "closeSessionKey", warnings);
     config.tabSwitchKey = pickFromList(raw.tabSwitchKey, TAB_SWITCH_KEYS, DEFAULT_TAB_SWITCH_KEY, "tabSwitchKey", warnings);
     config.focusInputKey = pickFromList(raw.focusInputKey, FOCUS_INPUT_KEYS, DEFAULT_FOCUS_INPUT_KEY, "focusInputKey", warnings);
     if (raw.fontSize !== undefined) {

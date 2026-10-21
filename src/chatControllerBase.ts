@@ -21,7 +21,7 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import { SessionRuntime, RuntimeHost, ModelInfo, ModelChoice, TurnEndInfo } from "./sessionRuntime";
+import { SessionRuntime, RuntimeHost, ModelInfo, ModelChoice, TurnEndInfo, parseCompactCommand } from "./sessionRuntime";
 import { PiConfig } from "./sessionRuntime";
 import { PiClient } from "./piClient";
 import {
@@ -37,6 +37,7 @@ import type { PanelLaunch, TurnEndStatus } from "./runtimeTypes";
 import type { TabaRequest, TabaSpawnRequest, TabaStopRequest } from "./tabaProtocol";
 import { TABA_DECODER } from "./tabaProtocol";
 import { ASK_DECODER } from "./askProtocol";
+import { GOAL_DECODER, type GoalVerdictRequest } from "./goalProtocol";
 import { StderrFrameSplitter } from "./piFrames";
 import {
     TabaRegistry,
@@ -45,6 +46,7 @@ import {
     buildDeliveryText,
     buildSpawnFailure,
     buildSpawnNotice,
+    describeTurnStatus,
     shouldCloseAfterFirstTurn,
     type TabaChild,
 } from "./tabaRegistry";
@@ -55,6 +57,18 @@ import {
     resolveTabaSpawn,
 } from "./tabaLaunch";
 import { buildRunRecord, closedRunState, tabaRunsDir, writeRunRecord, type TabaRunState } from "./tabaRunFiles";
+import {
+    buildGoalNegotiationPrompt,
+    buildGoalResumePrompt,
+    buildGoalStartPrompt,
+    goalBarSummary,
+    parseGoalCommand,
+    parseGoalCriteria,
+    type GoalCommand,
+    type GoalState,
+} from "./goal";
+import { buildGoalFeedbackPrompt, buildGoalJudgePrompt } from "./goalJudge";
+import { dropGoal, readGoal, writeGoal } from "./goalFiles";
 import type { RpcSessionState } from "./piRpc";
 import type { ProjectDirEntry } from "./sessionStore";
 
@@ -193,6 +207,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected static readonly NEW_SESSION_KEY_LABELS: Record<string, string> = {
         "ctrl+alt+n": "Ctrl+Alt+N", "ctrl+shift+n": "Ctrl+Shift+N", "ctrl+t": "Ctrl+T", "alt+n": "Alt+N",
     };
+    protected static readonly CLOSE_SESSION_KEY_LABELS: Record<string, string> = {
+        "ctrl+alt+w": "Ctrl+Alt+W", "ctrl+shift+w": "Ctrl+Shift+W", "ctrl+alt+x": "Ctrl+Alt+X", "alt+w": "Alt+W",
+    };
     protected static readonly TAB_SWITCH_KEY_LABELS: Record<string, string> = {
         "ctrl+alt+arrows": "Ctrl+Alt+← / Ctrl+Alt+→",
         "ctrl+alt+pgupdown": "Ctrl+Alt+PageUp / PageDown",
@@ -263,6 +280,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract getAutoLoadLast(): boolean;
     protected abstract getSendKey(): string;
     protected abstract getNewSessionKey(): string;
+    protected abstract getCloseSessionKey(): string;
     protected abstract getTabSwitchKey(): string;
     protected abstract getFocusInputKey(): string;
     /** 字号（px 字符串，如 "13"；空串表示跟随 VSCode 设置）。 */
@@ -351,6 +369,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             autoLoadLastSession: this.getAutoLoadLast(),
             sendKey: this.getSendKey(),
             newSessionKey: this.getNewSessionKey(),
+            closeSessionKey: this.getCloseSessionKey(),
             tabSwitchKey: this.getTabSwitchKey(),
             focusInputKey: this.getFocusInputKey(),
             fontSize: this.getFontSize(),
@@ -392,6 +411,14 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 check: null,
                 value: this.getNewSessionKey(),
                 options: ChatControllerBase.keyOptions(ChatControllerBase.NEW_SESSION_KEY_LABELS),
+            },
+            {
+                action: "closeSessionKey",
+                label: "关闭会话",
+                desc: "关掉当前正在看的这个会话（会话文件留着，历史会话里还能重新打开）",
+                check: null,
+                value: this.getCloseSessionKey(),
+                options: ChatControllerBase.keyOptions(ChatControllerBase.CLOSE_SESSION_KEY_LABELS),
             },
             {
                 action: "tabSwitchKey",
@@ -507,7 +534,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.preparingSpare = client;
         // 备用进程的 stderr 只记“不是暗号行”的那些（暗号是一大串 base64，整行打出来把日志刷没）。
         // 请求由领走它的那个会话解析（这里只切割、不处理，不然同一行会被处理两次）。
-        const spareStderr = new StderrFrameSplitter([TABA_DECODER, ASK_DECODER]);
+        const spareStderr = new StderrFrameSplitter([TABA_DECODER, ASK_DECODER, GOAL_DECODER]);
         client.on("stderr", (text: string) => {
             spareStderr.feed(text);
             for (const line of spareStderr.takeOtherLines()) { console.error("[pi spare stderr]", line); }
@@ -776,6 +803,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const target = path.resolve(dir);
         const cands: SessionRuntime[] = [];
         for (const rt of this.panels.values()) {
+            // 判官会话不是给人看的（不进会话列表）：不能把一块屏派到它那儿去
+            if (this.goalJudgeOf.has(rt.id)) { continue; }
             if (sameDir(rt.cwd, target)) { cands.push(rt); }
         }
         if (cands.length === 0) { return undefined; }
@@ -810,6 +839,471 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     // ---- Fork（原生克隆会话到新 panel）----
+    // ========================================================================
+    //  目标（/goal）：定一个一直干到验收通过的目标
+    // ========================================================================
+    //
+    //  第一段（现在这一版）：/goal 定目标 → 先跟模型谈好验收清单 → /goal 开始 才真开跑 →
+    //  目标按会话文件存盘（见 goalFiles.ts），输入框上头那一条「目标条」常驻显示。
+    //  第二段（还没做）：每轮跑完派一个判官子会话验一次，没过就把批评发回来接着干。
+
+    /** 每个会话的目标（panel id → 目标）。内存里这份是热的，盘上那份按会话文件存。 */
+    protected readonly goals = new Map<string, GoalState>();
+    /** 已经问过存档的会话：问过一次没有就是没有，不必每推一次会话列表就去读盘。 */
+    private readonly goalChecked = new Set<string>();
+
+    /** RuntimeHost.onGoalCommand：用户在某个会话里打了 /goal 系列命令。 */
+    public onGoalCommand(panelId: string, cmd: GoalCommand): void {
+        const rt = this.panels.get(panelId);
+        if (!rt) { return; }
+        switch (cmd.kind) {
+            case "set": this.goalSet(rt, cmd.objective); return;
+            case "start": this.goalStart(rt); return;
+            case "pause": this.goalHold(rt, true); return;
+            case "resume": this.goalHold(rt, false); return;
+            case "clear": this.goalClear(rt); return;
+            case "show": this.goalBroadcast(rt.id, true); return;
+        }
+    }
+
+    /**
+     * /goal <目标>：记下目标，把原文连同谈判提示发进对话（合成一条，见 buildGoalNegotiationPrompt），
+     * 等模型回验收清单。清单由 onTurnEnd 里那段取下来（见 goalCaptureCriteria）。
+     */
+    protected goalSet(rt: SessionRuntime, objective: string): void {
+        const replaced = this.goalGet(rt);
+        this.goals.set(rt.id, {
+            objective,
+            criteria: [],
+            phase: "negotiating",
+            startedAt: 0,
+            rounds: 0,
+            updatedAt: Date.now(),
+        });
+        this.goalChecked.add(rt.id);
+        this.goalSave(rt);
+        this.goalBroadcast(rt.id);
+        if (replaced) {
+            this.postToSession(rt.id, { type: "system", text: "目标换了，先重新谈验收清单。" });
+        }
+        rt.handleSend(buildGoalNegotiationPrompt({ objective }));
+    }
+
+    /** /goal 开始：清单有了就正式开跑；清单还没拿到就再要一次。 */
+    protected goalStart(rt: SessionRuntime): void {
+        const goal = this.goalGet(rt);
+        if (!goal) {
+            this.postToSession(rt.id, { type: "system", text: "还没有目标：先打 /goal <目标> 说清要干什么。" });
+            return;
+        }
+        if (!goal.criteria.length) {
+            this.postToSession(rt.id, {
+                type: "system",
+                text: "还没拿到验收清单，再跟模型要一次（清单出来以后目标条会变）。",
+            });
+            rt.handleSend(buildGoalNegotiationPrompt({ objective: goal.objective }));
+            return;
+        }
+        goal.phase = "active";
+        if (!goal.startedAt) { goal.startedAt = Date.now(); }
+        goal.updatedAt = Date.now();
+        this.goalRestartBook(rt.id);
+        this.goalSave(rt);
+        this.goalBroadcast(rt.id);
+        this.postToSession(rt.id, {
+            type: "system",
+            text: `目标定了（验收 ${goal.criteria.length} 条），开跑。`,
+        });
+        rt.handleSend(buildGoalStartPrompt(goal));
+    }
+
+    /** /goal 暂停 与 /goal 继续（只是不再自动往前推，对话、文件都不动）。 */
+    protected goalHold(rt: SessionRuntime, pause: boolean): void {
+        const goal = this.goalGet(rt);
+        if (!goal) {
+            this.postToSession(rt.id, { type: "system", text: "还没有目标：先打 /goal <目标> 说清要干什么。" });
+            return;
+        }
+        if (pause) {
+            if (goal.phase !== "active") {
+                this.postToSession(rt.id, { type: "system", text: "这个目标现在没在跑，不用暂停。" });
+                return;
+            }
+            this.goalCancelJudge(rt.id);
+            goal.phase = "paused";
+            delete goal.note;
+            goal.updatedAt = Date.now();
+            this.goalSave(rt);
+            this.goalBroadcast(rt.id);
+            this.postToSession(rt.id, { type: "system", text: "目标暂停了。打 /goal 继续 接着跑。" });
+            return;
+        }
+        if (goal.phase === "active") {
+            this.postToSession(rt.id, { type: "system", text: "目标本来就在跑。" });
+            return;
+        }
+        if (!goal.criteria.length) {
+            this.postToSession(rt.id, {
+                type: "system",
+                text: "还没拿到验收清单，再跟模型要一次（清单出来以后目标条会变）。",
+            });
+            rt.handleSend(buildGoalNegotiationPrompt({ objective: goal.objective }));
+            return;
+        }
+        goal.phase = "active";
+        if (!goal.startedAt) { goal.startedAt = Date.now(); }
+        goal.updatedAt = Date.now();
+        this.goalRestartBook(rt.id);
+        this.goalSave(rt);
+        this.goalBroadcast(rt.id);
+        rt.handleSend(buildGoalResumePrompt(goal));
+    }
+
+    /** /goal 清除：不再追踪这个目标（对话和文件都不动）；盘上那一份也一并抹掉。 */
+    protected goalClear(rt: SessionRuntime): void {
+        const had = !!this.goalGet(rt);
+        this.goalCancelJudge(rt.id);
+        this.goals.delete(rt.id);
+        this.goalChecked.add(rt.id);   // 刚删掉的那份别再读回来
+        const file = rt.currentSessionPath;
+        if (file) { dropGoal(file); }
+        this.goalBroadcast(rt.id);
+        this.postToSession(rt.id, {
+            type: "system",
+            text: had ? "目标清除了（只是不再追踪它，对话和文件都不动）。" : "本来就没有目标。",
+        });
+    }
+
+    /** 这个会话的目标：内存里没有就问存档要（会话重开、插件重启后接回来）。 */
+    protected goalGet(rt: SessionRuntime): GoalState | undefined {
+        const cached = this.goals.get(rt.id);
+        if (cached) { return cached; }
+        if (this.goalChecked.has(rt.id)) { return undefined; }
+        // 全新会话还没落盘：先不记“问过了”，等有文件了那次再问（会话文件才是存档的键）
+        const file = rt.currentSessionPath;
+        if (!file) { return undefined; }
+        this.goalChecked.add(rt.id);
+        const found = readGoal(file);
+        if (found) { this.goals.set(rt.id, found); }
+        return found;
+    }
+
+    /** 写盘：键是会话文件（全新会话还没落盘就先只放在内存里，落盘后第一次改动会补存）。 */
+    protected goalSave(rt: SessionRuntime): void {
+        const goal = this.goals.get(rt.id);
+        if (!goal) { return; }
+        goal.updatedAt = Date.now();
+        const file = rt.currentSessionPath;
+        if (file) { writeGoal(goal, file); }
+    }
+
+    /** 把这个会话的目标推给所有屏（null = 这个会话没有目标了）。内存里没有的先从存档接回来。 */
+    protected goalBroadcast(panelId: string, open = false): void {
+        const rt = this.panels.get(panelId);
+        const goal = (rt ? this.goalGet(rt) : this.goals.get(panelId)) ?? null;
+        this.postToSession(panelId, {
+            type: "goal",
+            goal,
+            summary: goal ? goalBarSummary(goal) ?? null : null,
+            open,
+        });
+    }
+
+    /** 目标还在谈的时候，把模型这一轮回复里的验收清单取下来，等用户 /goal 开始。 */
+    protected goalCaptureCriteria(info: TurnEndInfo): void {
+        const goal = this.goals.get(info.panelId);
+        if (!goal || goal.phase !== "negotiating") { return; }
+        const items = parseGoalCriteria(info.lastReplyText ?? "");
+        if (!items.length || items.join("\n") === goal.criteria.join("\n")) { return; }
+        goal.criteria = items;
+        goal.updatedAt = Date.now();
+        const rt = this.panels.get(info.panelId);
+        if (rt) { this.goalSave(rt); }
+        this.goalBroadcast(info.panelId);
+    }
+
+    // ========================================================================
+    //  目标（/goal）第二段：每轮盯一次验收的判官循环
+    // ========================================================================
+    //
+    //  工人这一轮跑完 → 派一个判官子会话（只有它能调 update_goal）→ 判官自己动手验
+    //  → 报「过了」就收工；报「没过」就把批评发回给工人开下一轮。
+    //  停的条件：验收通过、轮数/长时用完、连着几轮没过的是同一批条目（没进展）、
+    //  判官连着两次没给结论、用户自己插话（目标暂停，打 /goal 继续 接着跑）。
+    //
+    //  判官会话不进会话列表（一轮一个，都列出来会把列表刷满），跑完就关。
+
+    /** 一次目标最多跑多少轮。 */
+    private static readonly GOAL_MAX_ROUNDS = 30;
+    /** 一次目标最长跑多久（毫秒）。 */
+    private static readonly GOAL_MAX_MS = 3 * 60 * 60 * 1000;
+    /** 判官连着这么多轮报同一批没过条目：算没进展，停。 */
+    private static readonly GOAL_MAX_STALE = 3;
+    /** 判官连着这么多次没报结论：停（别让工人被空催）。 */
+    private static readonly GOAL_MAX_NO_VERDICT = 2;
+    /** 判官的 pi 起来最多等多久。 */
+    private static readonly GOAL_JUDGE_READY_TIMEOUT_MS = 40000;
+    /** 判官能用哪些工具：只读 + 跑命令；不给 edit / write（只验不改）。 */
+    private static readonly GOAL_JUDGE_TOOLS = "read,bash,grep,find,ls";
+
+    /** 目标循环的内存账（会话关掉就没了；轮数记在目标上，重开还认）。 */
+    private readonly goalLoop = new Map<string, {
+        /** 这一趟从什么时候开始算（预算按它算）。 */
+        startedAt: number;
+        /** 上一轮判官报的那批没过条目（拼成一串，判“没进展”用）。 */
+        lastMissing: string;
+        /** 连着几轮没过的是同一批条目。 */
+        staleRounds: number;
+        /** 判官连着几次没报结论。 */
+        noVerdicts: number;
+        /** 正在跑的那个判官会话（没有就是 undefined）。 */
+        judgePanelId?: string;
+    }>();
+    /** 判官会话 → 它在给哪个会话判。判官会话不进会话列表，就靠这张表认出来。 */
+    private readonly goalJudgeOf = new Map<string, string>();
+
+    /** 这个会话的目标现在是不是正有判官在验（目标条上写出来，不然看着像卡住了）。 */
+    protected goalIsJudging(panelId: string): boolean {
+        return !!this.goalLoop.get(panelId)?.judgePanelId;
+    }
+
+    /** 用户明确让目标开跑 / 接着跑：这一趟的时长预算与“没进展”的账都从这一刻重算。 */
+    private goalRestartBook(panelId: string): void {
+        this.goalLoop.set(panelId, { startedAt: Date.now(), lastMissing: "", staleRounds: 0, noVerdicts: 0 });
+    }
+
+    private goalBook(panelId: string) {
+        let book = this.goalLoop.get(panelId);
+        if (!book) {
+            book = { startedAt: Date.now(), lastMissing: "", staleRounds: 0, noVerdicts: 0 };
+            this.goalLoop.set(panelId, book);
+        }
+        return book;
+    }
+
+    /** 工人这轮跑完了：该派判官就派（判官的收尾走 goalJudgeOnTurnEnd）。 */
+    protected goalLoopOnTurnEnd(info: TurnEndInfo): void {
+        const goal = this.goals.get(info.panelId);
+        if (!goal || goal.phase !== "active") { return; }
+        const book = this.goalBook(info.panelId);
+        if (book.judgePanelId) { return; }   // 上一个判官还在跑（正常不会）：不叠着开
+        // 这一轮没正常跑完：先停，别叫判官（叫了也验不到新东西，白花钱）
+        if (info.status !== "done") {
+            this.goalStop(info.panelId, info.status === "cancelled" ? "那一轮被中止了" : "那一轮报错了");
+            return;
+        }
+        const stop = this.goalBudgetStop(goal, book);
+        if (stop) { this.goalStop(info.panelId, stop); return; }
+        void this.goalSpawnJudge(info.panelId, goal, info.lastReplyText ?? "");
+    }
+
+    /** 派一个判官去验这一轮：新开一个后台会话（不进列表），验完它调 update_goal 报结论。 */
+    protected async goalSpawnJudge(workerPanelId: string, goal: GoalState, report: string): Promise<void> {
+        const workerRt = this.panels.get(workerPanelId);
+        if (!workerRt) { return; }
+        const cfg = this.getConfig();
+        if (!cfg.goalExtension) {
+            this.goalStop(workerPanelId, "判官那个扩展没写出来（update_goal 用不了）");
+            return;
+        }
+        const launch: PanelLaunch = {
+            extraArgs: ["--tools", ChatControllerBase.GOAL_JUDGE_TOOLS, "-e", cfg.goalExtension],
+            skipSpare: true,      // 参数不一样，领不了备用进程
+            noTaba: true,         // 判官不能再往下派
+            cwd: workerRt.cwd,     // 在工人的目录里跑验证命令
+        };
+        const created = this.createBackgroundSession(launch, {
+            provider: workerRt.provider || undefined,
+            modelId: workerRt.modelId || undefined,
+        });
+        if (!created) {
+            this.goalStop(workerPanelId, "判官会话开不出来（pi 可执行文件没找到？）");
+            return;
+        }
+        const book = this.goalBook(workerPanelId);
+        book.judgePanelId = created.id;
+        this.goalJudgeOf.set(created.id, workerPanelId);
+        goal.rounds++;
+        delete goal.note;   // 这一轮的结论还没出来
+        this.goalSave(workerRt);
+        this.goalBroadcast(workerPanelId);
+        this.postToSession(workerPanelId, {
+            type: "system",
+            text: `第 ${goal.rounds} 轮跑完了，派判官去验。`,
+        });
+
+        const ready = await created.waitReady(ChatControllerBase.GOAL_JUDGE_READY_TIMEOUT_MS);
+        // 等的时候目标被暂停/清除、或者工人会话被关掉：判官用不着了
+        if (!this.panels.has(created.id) || book.judgePanelId !== created.id) { return; }
+        if (!ready) {
+            book.judgePanelId = undefined;
+            this.closeGoalJudge(created.id);
+            this.goalStop(workerPanelId, "判官这次没起来（pi 冷启动超时）");
+            return;
+        }
+        created.handleSend(buildGoalJudgePrompt({
+            goal,
+            round: goal.rounds,
+            workerReport: report,
+            workerSessionFile: workerRt.currentSessionPath ?? "",
+            cwd: workerRt.cwd,
+        }), undefined, { followUp: true });
+    }
+
+    /**
+     * 判官会话跑完了一轮。
+     * @returns 这是判官会话（这一轮的 onTurnEnd 就到此为止，不弹提醒、不当普通会话处理）
+     */
+    protected goalJudgeOnTurnEnd(info: TurnEndInfo): boolean {
+        const workerPanelId = this.goalJudgeOf.get(info.panelId);
+        if (!workerPanelId) { return false; }
+        const book = this.goalLoop.get(workerPanelId);
+        const goal = this.goals.get(workerPanelId);
+        const workerRt = this.panels.get(workerPanelId);
+        // 报过结论的（onGoalVerdict 已经把 judgePanelId 清了）：这里只收尾
+        const stillOurs = !!book && book.judgePanelId === info.panelId;
+        if (book) { book.judgePanelId = undefined; }
+        if (stillOurs && book && goal && workerRt) {
+            book.noVerdicts++;
+            if (info.status !== "done") {
+                this.postToSession(workerPanelId, {
+                    type: "system",
+                    text: `判官那一轮出错了（${describeTurnStatus(info.status)}）。`,
+                });
+                this.goalStop(workerPanelId, `判官那一轮出错了（${describeTurnStatus(info.status)}）`);
+            } else {
+                // 判官没调 update_goal 就结束了：把它最后说的话当意见发回去，记一笔
+                const said = (info.lastReplyText ?? "").trim();
+                this.postToSession(workerPanelId, {
+                    type: "system",
+                    text: "判官这一轮没调 update_goal（没给结论）。",
+                });
+                if (book.noVerdicts >= ChatControllerBase.GOAL_MAX_NO_VERDICT) {
+                    this.goalStop(workerPanelId, `判官连着 ${book.noVerdicts} 次没给出结论`);
+                } else if (said) {
+                    const stop = this.goalBudgetStop(goal, book);
+                    if (stop) {
+                        this.goalStop(workerPanelId, stop);
+                    } else {
+                        workerRt.handleSend(buildGoalFeedbackPrompt({
+                            round: goal.rounds,
+                            judge: {
+                                kind: "verdict",
+                                pass: false,
+                                summary: "判官没按格式报结论，下面是它说的话",
+                                missing: [],
+                                next: said.slice(0, 4000),
+                            },
+                        }), undefined, { followUp: true });
+                    }
+                } else {
+                    this.goalStop(workerPanelId, "判官既没报结论也没说话");
+                }
+            }
+        }
+        this.closeGoalJudge(info.panelId);
+        return true;
+    }
+
+    /** RuntimeHost.onGoalVerdict：判官报上来一份结论（见 goalProtocol.ts）。 */
+    public onGoalVerdict(judgePanelId: string, verdict: GoalVerdictRequest): void {
+        const workerPanelId = this.goalJudgeOf.get(judgePanelId);
+        if (!workerPanelId) { return; }
+        const book = this.goalLoop.get(workerPanelId);
+        const goal = this.goals.get(workerPanelId);
+        const workerRt = this.panels.get(workerPanelId);
+        // 只认这一轮那个判官的结论（判官重复调、或者上一轮的迟到，一律不算）
+        if (!book || book.judgePanelId !== judgePanelId || !goal || !workerRt) { return; }
+        book.judgePanelId = undefined;
+        book.noVerdicts = 0;
+        goal.note = verdict.summary;
+        if (verdict.pass === true) {
+            goal.phase = "complete";
+            this.goalSave(workerRt);
+            this.goalBroadcast(workerPanelId);
+            this.postToSession(workerPanelId, {
+                type: "system",
+                text: `验收通过（第 ${goal.rounds} 轮）：${verdict.summary}`,
+            });
+            return;
+        }
+        // 没过：记账（同一批条目连着出现 = 没进展）
+        const missing = verdict.missing.join("\n");
+        book.staleRounds = missing && missing === book.lastMissing ? book.staleRounds + 1 : 0;
+        book.lastMissing = missing;
+        this.goalSave(workerRt);
+        this.goalBroadcast(workerPanelId);
+        this.postToSession(workerPanelId, {
+            type: "system",
+            text: `第 ${goal.rounds} 轮没过：${verdict.summary}`,
+        });
+        const stop = this.goalBudgetStop(goal, book);
+        if (stop) { this.goalStop(workerPanelId, stop); return; }
+        workerRt.handleSend(buildGoalFeedbackPrompt({ round: goal.rounds, judge: verdict }), undefined, { followUp: true });
+    }
+
+    /** 预算 / 停滞那几条停下的理由（没到就返回 undefined）。 */
+    private goalBudgetStop(goal: GoalState, book: { startedAt: number; staleRounds: number; noVerdicts: number }): string | undefined {
+        if (goal.rounds >= ChatControllerBase.GOAL_MAX_ROUNDS) {
+            return `跑够 ${ChatControllerBase.GOAL_MAX_ROUNDS} 轮了`;
+        }
+        if (Date.now() - book.startedAt >= ChatControllerBase.GOAL_MAX_MS) {
+            return `跑够 ${Math.round(ChatControllerBase.GOAL_MAX_MS / 3600000)} 小时了`;
+        }
+        if (book.staleRounds >= ChatControllerBase.GOAL_MAX_STALE) {
+            return `连着 ${book.staleRounds} 轮没过的是同一批条目（没进展）`;
+        }
+        if (book.noVerdicts >= ChatControllerBase.GOAL_MAX_NO_VERDICT) {
+            return "判官连着几次没给出结论";
+        }
+        return undefined;
+    }
+
+    /** 停下循环：目标变暂停（除非已经完成），写清为什么，并告诉界面。 */
+    protected goalStop(panelId: string, reason: string): void {
+        const rt = this.panels.get(panelId);
+        const goal: GoalState | undefined = (rt ? this.goalGet(rt) : this.goals.get(panelId)) ?? undefined;
+        if (!goal) { return; }
+        if (goal.phase !== "complete") { goal.phase = "paused"; }
+        goal.note = reason;
+        this.goalCancelJudge(panelId);
+        if (rt) { this.goalSave(rt); }
+        this.goalBroadcast(panelId);
+        this.postToSession(panelId, { type: "system", text: `目标停了：${reason}。接着跑就打 /goal 继续。` });
+    }
+
+    /** 关掉某个工人正在跑的那个判官（暂停 / 清除 / 工人被关掉时用）。 */
+    protected goalCancelJudge(workerPanelId: string): void {
+        const book = this.goalLoop.get(workerPanelId);
+        const judgePanelId = book?.judgePanelId;
+        if (!book || !judgePanelId) { return; }
+        book.judgePanelId = undefined;
+        this.closeGoalJudge(judgePanelId);
+    }
+
+    /** 关掉一个判官会话（它已经报完结论 / 用不着了）。 */
+    private closeGoalJudge(judgePanelId: string): void {
+        this.goalJudgeOf.delete(judgePanelId);
+        if (this.panels.has(judgePanelId)) { this.closeSession(judgePanelId); }
+    }
+
+    /** 用户自己开口了：目标循环先暂停（他的要求跟判官的催办会互相打架）。 */
+    protected goalOnUserMessage(panelId: string, text: string): void {
+        const goal = this.goals.get(panelId);
+        if (!goal || goal.phase !== "active") { return; }
+        // 命令本身不算插话（/goal 暂停 自己会关判官，/compact 也不该把目标停掉）
+        if (parseGoalCommand(text || "")) { return; }
+        if (parseCompactCommand(text || "") !== null) { return; }
+        const rt = this.panels.get(panelId);
+        if (!rt) { return; }
+        this.goalCancelJudge(panelId);
+        goal.phase = "paused";
+        goal.note = "你插话了，目标先停在这儿";
+        this.goalSave(rt);
+        this.goalBroadcast(panelId);
+        this.postToSession(panelId, { type: "system", text: "目标先暂停了（你插话了）。接着跑就打 /goal 继续。" });
+    }
+
     // ========================================================================
     //  派子会话（taba）：一个会话把活派给另一个会话，子会话开在新 tab 里
     // ========================================================================
@@ -1139,6 +1633,21 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.notePanelGoneForTaba(panelId);
         rt.stopClient();
         this.releasePanelName(rt.nameParts);
+        this.goals.delete(panelId);   // 盘上那份留着：重新打开这份会话，目标还在
+        this.goalChecked.delete(panelId);
+        // 关掉的是判官会话：把它记的那笔账清掉（工人那边不算有判官在跑了）
+        const judgingFor = this.goalJudgeOf.get(panelId);
+        if (judgingFor) {
+            this.goalJudgeOf.delete(panelId);
+            const book = this.goalLoop.get(judgingFor);
+            if (book && book.judgePanelId === panelId) { book.judgePanelId = undefined; }
+        }
+        // 关掉的是工人：它的目标循环也停，正在跑的判官一并关掉
+        const workerBook = this.goalLoop.get(panelId);
+        if (workerBook) {
+            this.goalLoop.delete(panelId);
+            if (workerBook.judgePanelId) { this.closeGoalJudge(workerBook.judgePanelId); }
+        }
         this.panels.delete(panelId);
         this.panelUsedAt.delete(panelId);
     }
@@ -1180,6 +1689,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const child = this.taba.byChildPanel(rt.id);
         const cwd = rt.cwd;
         const name = this.sessionDisplayName(rt);
+        const goal = this.goalGet(rt);
         return {
             id: rt.id,
             // 这个会话跑在哪个目录：界面拿它把会话归到「项目与会话」面板的对应工作区里
@@ -1208,6 +1718,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
             percent: rt.contextPercent,
             // 派子会话：这个会话是子会话、或者它派过子会话（前端据此画标记）
             taba: this.tabaPanelInfo(rt.id) ?? null,
+            // 目标（/goal）：跟 modelChanged 一样是一次性推送，所以每次列表都带一份 ——
+            // 页面刷新 / 重连后界面重建，目标条就靠它补回来。
+            goal: goal ?? null,
+            goalSummary: goal ? goalBarSummary(goal, this.goalIsJudging(rt.id)) ?? null : null,
         };
     }
 
@@ -1251,8 +1765,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
             }
         };
         for (const rt of this.panels.values()) {
-            // 子会话已在它父会话下面列过了，这里跳过
-            if (this.taba.byChildPanel(rt.id)) { continue; }
+            // 子会话已在它父会话下面列过了，这里跳过；判官会话不是给人看的
+            if (this.taba.byChildPanel(rt.id) || this.goalJudgeOf.has(rt.id)) { continue; }
             push(rt, sameDir(rt.cwd, this.getCwd()) ? "" : (path.basename(rt.cwd) || rt.cwd));
         }
         return items;
@@ -1273,7 +1787,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
     private sessionListMessage(clientId: string): Record<string, unknown> {
         return {
             type: "sessionList",
-            sessions: Array.from(this.panels.values()).map((rt) => this.serializeSession(rt)),
+            // 判官会话不进列表：一轮一个，几十轮下来会把列表刷满
+            sessions: Array.from(this.panels.values())
+                .filter((rt) => !this.goalJudgeOf.has(rt.id))
+                .map((rt) => this.serializeSession(rt)),
             // 这块屏自己看的是哪一个（它还没挑过就是 null）。界面以本地那一份为准，
             // 别的屏切会话不会牵动它（后端也不再广播“大家切到哪一个”这件事）。
             activeId: this.focusedIdFor(clientId) ?? null,
@@ -1309,6 +1826,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
      *      带上 child：别人派的子会话跑完不提醒，结果交回派它的那个会话，那边跑完再提醒。
      */
     public onTurnEnd(info: TurnEndInfo): void {
+        // 判官会话跑完了一轮：这一轮的账归它（不弹提醒、不当普通会话处理）
+        if (this.goalJudgeOnTurnEnd(info)) { return; }
+        // 目标还在谈验收条件：把这一轮回复里的清单取下来（界面上的目标条靠它变脸）
+        this.goalCaptureCriteria(info);
+        // 目标跑着：这一轮跑完就派判官去验（验完的结果决定要不要让工人接着干）
+        this.goalLoopOnTurnEnd(info);
         // 先记下这个会话是不是「别人派的、结果还要交回去」的子会话：tabaOnTurnEnd 可能紧接着
         // 就把它关掉、名录也摘了，要赶在它前面看。
         const child = this.taba.byChildPanel(info.panelId);
@@ -1360,6 +1883,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 向指定会话发送（对照实验/旧入口都走这里）。 */
     protected broadcastSendToTab(panelId: string, text: string, images?: Array<{ data: string; mimeType: string }>): void {
+        // 用户自己开口了：目标循环先暂停（在真正发出去之前，免得和下一轮判官的催办抢）
+        this.goalOnUserMessage(panelId, text);
         for (const pid of this.panelIdsOf(panelId)) {
             this.panels.get(pid)?.handleSend(text, images);
         }
@@ -1373,6 +1898,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 「卡住了」那条路：终止这一轮，等它停稳再由运行时把这句发出去
      *  （为什么不当下就发，见 SessionRuntime.abortThenSend）。 */
     protected broadcastAbortThenSendToTab(panelId: string, text: string): void {
+        // 跟正常发送一样：用户开口了，目标先暂停
+        this.goalOnUserMessage(panelId, text);
         for (const pid of this.panelIdsOf(panelId)) { this.panels.get(pid)?.abortThenSend(text); }
     }
 

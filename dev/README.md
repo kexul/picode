@@ -96,6 +96,10 @@ npm run web:shot -- --fake-pi --script dev/sessionFlow.js
 # 点勾才真关；点叉或者干等 4 秒，确认条自己收回；确认条出来时清单宽度不变）：
 npm run web:shot -- --fake-pi --script dev/sessionMenuClose.js
 
+# 验「关闭会话」快捷键（设置里那一行默认 Ctrl+Alt+W；真按一下就关掉正在看的那个会话、
+# 自动切到剩下的；焦点在输入框里按也照样关）：
+npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/closeShortcut.js
+
 # 验派子会话（说一句带“派活”的话就会派一个）：跑完自动关、没跑完不关、
 # 正看着就不关；子会话跑得比人手快，配慢一点儿的假 pi 才来得及点进去
 FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaFlow.js
@@ -103,6 +107,25 @@ FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev
 # 验子会话那三个工具里平时没人喊的两个（停掉 / 查看）：这两句也由真扩展接（暗号、名录都是它的代码在动），
 # 所以要慢一点儿的假 pi，才来得及在它还在跑的时候停掉：
 FAKEPI_THINK_MS=4000 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaTools.js
+
+# 验目标（/goal）那几条命令：谈验收清单 → 开始 / 暂停 / 继续 / 刷新后还在 / 清除。
+# 判官循环会接着转，所以这个脚本自己把假判官拖慢、并且让它一直报不过，
+# 好让目标停在“进行中”上验命令本身：
+npm run web:shot -- --fake-pi --script dev/goalCommand.js
+
+# 验目标条那几种脸（待确认 / 进行中 / 已暂停 / 已完成 / 点开看全文）：
+# 目标状态直接投给页面，不真叫模型：
+npm run web:shot -- --fake-pi --script dev/goalFlow.js
+
+# 验判官循环整条路：工人跑完一轮 → 派判官去验 → 没过就把批评发回工人 → 过了就收工；
+# 顺便验判官会话不进「项目与会话」列表：
+npm run web:shot -- --fake-pi --script dev/goalLoop.js
+
+# 验“目标跑着时你自己开口说话 → 目标先暂停、正在跑的判官当场收掉”：
+npm run web:shot -- --fake-pi --script dev/goalPause.js
+
+# 验“判官连着几轮报的是同一批没过条目 → 算没进展，自己停下”（别让工人原地打转烧钱）：
+npm run web:shot -- --fake-pi --script dev/goalStale.js
 
 # 验顶条中间那颗小点（本会话闲着、派出去的子会话还在跑时也亮着呼吸，点下面写着还有几个在跑；
 # 小点与箭头是落在“会话名 + 目录两行”中间，不是只对着会话名那一行；投假会话列表，不真派活）：
@@ -183,6 +206,13 @@ node dev/perfProbe.js --batch 30                           # 打开长会话时�
 # 逐个样例对一下“按块渲染出来的文字”跟“整段渲染的文字”是否一字不差：
 node dev/markdownBlocksCheck.js
 
+# 验 ```mermaid 代码块画成图（消息流里：受支持的画出来、不支持的留代码块加一行说明、
+# 中文节点名也画得出、换成深色不重画就跟着变）：
+node dev/mermaidCheck.js
+
+# 验文件侧边栏里那份 markdown 文档里的 mermaid（同一个播放器，换个地方）：
+node dev/mermaidFileCheck.js
+
 # 验「项目与会话」面板（顶条最右边那颗 <<<）：
 # 正在对话一段、工作区那块的展开 / 收起、组里的「加载更多」、行尾那颗加号新建会话、
 # 标题右边那颗加号（挑文件夹）、子会话不显示，一次过一遍：
@@ -258,6 +288,8 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `askNotice.js` | 验“模型问选择题（ask_choice）也发一条系统通知”（同一个开关、同一个规矩：正看着它也发、别的屏在聊的会话在问也发、点一下切过去答；扩展问的确认 / 输入 / 选一个不发；开关一关就不发）：`node dev/askNotice.js` |
 | `trustedOrigin.js` | 验“页面是从 https 反代的地址打开的”（设置里 `webServer.trustedOrigins` 写下的来源放行、别人的照旧 403、反代后面页面照常收发、那个地址算“安全来源”所以通知发得出去；顺带看 http 地址下设置里给的理由对不对；现签证书 + 本机起一个 https 反代来跑）：`node dev/trustedOrigin.js` |
 | `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接 / 断线期间问的选择题 / 补不上时整屏重画的视野）：`node dev/reconnect.js` |
+| `mermaidCheck.js` | 验消息流里的 ```mermaid 画成图（受支持的出图、不支持的留代码块加一行说明、中文节点名不被吞、换深色不重画就跟着变、页面不报错）：`node dev/mermaidCheck.js` |
+| `mermaidFileCheck.js` | 验文件侧边栏里那份 markdown 文档里的 mermaid（同一个播放器，换个地方）：`node dev/mermaidFileCheck.js` |
 | `childDot.js` | 验顶条那颗小点与它下面的数字（子会话在跑时父会话那颗点也呼吸、点下面写着还有几个在跑，零个时数字收起来；点与箭头落在两行中间）：`npm run web:shot -- --script dev/childDot.js` |
 | `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并 + 正文之后补来的那段跑完并回本段那颗）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |
 | `thinkTipPerf.js` | 验 `think` 提示框开着时思考边流边长的开销与表现（节流、跟着贴底、往回滚就不跟）：`npm run web:shot -- --fake-pi --script dev/thinkTipPerf.js` |
@@ -268,6 +300,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `askQuestion.js` | 同上但那一条是真路的：真模型 → 真 pi（插件给它 `-e` 了桥扩展）→ 卡片 → 回话文件 → 工具结果（慢） |
 | `askDialog.js` + `askDialogTrigger.ts` | 验真扩展问的“要你打字 / 要你点是或否 / 选一个”：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |
 | `sessionMenuClose.js` | 验顶条会话名下拉框里每行的关闭叉（确认条那颗勾 / 那颗叉 / 超时 / 真关掉 / 宽度不变）：`npm run web:shot -- --fake-pi --script dev/sessionMenuClose.js` |
+| `closeShortcut.js` | 验「关闭会话」快捷键（设置里那一行默认 `Ctrl+Alt+W`；真按一下就关掉正在看的那个会话并切到剩下的；焦点在输入框里按也照样关）：`npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/closeShortcut.js` |
 | `workspacePanel.js` | 验「项目与会话」面板（那颗 `<<<`）：正在对话一段、工作区那块的展开 / 收起（含记住）、组里的「加载更多」、行尾加号新建会话、标题右边那颗加号、子会话不显示：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/workspacePanel.js` |
 | `sidebarDock.js` | 验宽窗下常驻的项目与会话侧边栏（`<<<`，窗口 ≥ 900px 才常驻）：打开 / 收起 / 记住收起 / 两根顶线对齐 / 底部那条线与输入区上边线齐（输入框长高时线往上走、设置那颗按钮不动）/ 点行不关面板 / 开别的浮层时那一列原样留着 / 工作区那两块「加载更多」/ 改窄再拉宽（窄窗那一块得贴着右边、整屏高，不是居中的弹窗；居中那几块得还在正中），一次过一遍：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js` |
 | `sidebarRedraw.js` | 验对话更新时常驻那一列的重画范围（只该动「正在对话」那一格）：整块有没有重画、下半那一格的元素与滚动有没有动、重画过后点行还准不准：`FAKEPI_TICK_MS=60 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarRedraw.js` |

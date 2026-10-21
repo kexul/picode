@@ -94,6 +94,7 @@ ${bodyTop}${chatColumnOpen}${sessionBar}  <div id="messages">
     <button id="jumpBottom" class="hidden" title="跳到最新" aria-label="跳到最新">${ICON_ARROW_DOWN}</button>
   </div>
   <div id="inputArea">
+    <div id="goalBar" class="hidden"></div>
     <div id="queueBar" class="hidden"></div>
     <div id="imgPreview"></div>
     <div id="inputRow">

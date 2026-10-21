@@ -1,0 +1,208 @@
+/**
+ * 目标（/goal）：定一个「一直干到验收通过」的目标。
+ *
+ * 分两段做：
+ *   第一段（这个文件已经在用的部分）—— /goal 定目标、先跟模型谈好验收清单、目标条显示、
+ *   暂停 / 恢复 / 清除；
+ *   第二段（还没做）—— 每轮跑完派一个判官子会话去验，没过就把批评发回来接着干。
+ *
+ * 全是纯函数：认命令、拼谈判提示、从模型回复里抽验收清单、算目标条上那一行字。
+ * 存盘在 goalFiles.ts。
+ */
+
+/** 目标处于哪一步。 */
+export type GoalPhase =
+    /** 正在谈验收条件：清单还没定下来（模型可能已经给了一版，用户在看着） */
+    | "negotiating"
+    /** 跑着：第二段那个循环靠它决定要不要继续催 */
+    | "active"
+    /** 用户让暂停：不自动往前推 */
+    | "paused"
+    /** 验收通过了 */
+    | "complete";
+
+export interface GoalState {
+    /** 用户要干的那件事（User typed 的那一段，原样留着）。 */
+    objective: string;
+    /** 验收清单：一条一条能验证的。谈定之前是空数组。 */
+    criteria: string[];
+    phase: GoalPhase;
+    /** 目标定下来的时刻（ms）；还在谈的时候是 0。 */
+    startedAt: number;
+    /** 这是第几轮（第二段用；第一段一直是 0）。 */
+    rounds: number;
+    /** 最近一次的一句话交代：判官说了什么、或者为什么停了（目标条展开时给人看）。 */
+    note?: string;
+    /** 最近一次改动的时刻（写盘、比对用）。 */
+    updatedAt: number;
+}
+
+/** 用户打的 /goal 系列命令。 */
+export type GoalCommand =
+    | { kind: "set"; objective: string }
+    | { kind: "start" }
+    | { kind: "show" }
+    | { kind: "pause" }
+    | { kind: "resume" }
+    | { kind: "clear" };
+
+/** 验收清单在模型回复里的记号（谈判提示里要求它用这个开头，这里照着取）。 */
+export const GOAL_CRITERIA_MARK = "[验收清单]";
+
+/** 清单最多认多少条（模型列了一百条也不算数，取前面这些）。 */
+const MAX_CRITERIA = 12;
+
+/**
+ * 这一句是不是 /goal 系列命令。
+ * `/goal` 后面跟的那段：空的 = 看当前目标；开始 / 暂停 / 恢复 / 清除 = 管目标；
+ * 别的都当目标原文（可以多行）。
+ */
+export function parseGoalCommand(text: string): GoalCommand | null {
+    if (typeof text !== "string") { return null; }
+    const m = text.match(/^\/goal(?:[ \t]+([\s\S]*))?$/i);
+    if (!m) { return null; }
+    const rest = (m[1] ?? "").trim();
+    if (!rest) { return { kind: "show" }; }
+    const lower = rest.toLowerCase();
+    if (rest === "开始" || rest === "开跑" || lower === "start") { return { kind: "start" }; }
+    if (rest === "暂停" || lower === "pause") { return { kind: "pause" }; }
+    if (rest === "继续" || rest === "恢复" || lower === "resume") { return { kind: "resume" }; }
+    if (rest === "清除" || rest === "取消" || lower === "clear" || lower === "stop") { return { kind: "clear" }; }
+    return { kind: "set", objective: rest };
+}
+
+/**
+ * 谈判提示：把目标发下去，要模型先只列验收清单、别动手。
+ *
+ * 用户打的那一行原文放在开头：记录里、还有「你说过的话」里都能看见是他自己说的那句话，
+ * 但整条只有这一条消息 —— 分开成两条的话，模型会先把原文当任务干起来，再看到「先别动手」。
+ */
+export function buildGoalNegotiationPrompt(p: { objective: string }): string {
+    return [
+        "你打的是：/goal " + p.objective.split("\n")[0].slice(0, 200),
+        "",
+        "先别动手。这一轮只把「怎样算完成」谈定。",
+        "",
+        "【目标】",
+        p.objective.trim(),
+        "",
+        "【要求】",
+        "1. 把目标拆成一条条能验证的验收条目：每条都要能被一条命令、一次测试、或者一个文件里看得见的事实证明。"
+        + "「做得好」「体验不错」这种没法验的不要写。",
+        "2. 三到八条，一条一行，用下面这个记号开头，方便机器取出来：",
+        GOAL_CRITERIA_MARK,
+        "- 第一条",
+        "- 第二条",
+        "3. 清单下面可以补一两句「有歧义、要用户拍板的地方」，没有就别硬凑。",
+        "4. 这一轮不要改文件、不要开始实现：用户看完清单会打 /goal 开始，在那之前目标还不算开始。",
+    ].join("\n");
+}
+
+/**
+ * 从模型回复里取验收清单。
+ * 有 [验收清单] 记号就只认它后面那一段；没有就认全文里的短横线 / 编号条目（模型没照格式写时的兜底）。
+ */
+export function parseGoalCriteria(reply: string): string[] {
+    const lines = (reply || "").split(/\r?\n/);
+    const markAt = lines.findIndex((l) => l.includes(GOAL_CRITERIA_MARK));
+    const out: string[] = [];
+    if (markAt >= 0) {
+        for (const raw of lines.slice(markAt + 1)) {
+            const line = raw.trim();
+            const item = bulletText(line);
+            if (item) { out.push(item); continue; }
+            // 清单到这儿结束了：遇到空行之后又有正文，就收工
+            if (out.length > 0) { break; }
+        }
+    } else {
+        for (const raw of lines) {
+            const item = bulletText(raw.trim());
+            if (item) { out.push(item); }
+        }
+    }
+    return out.slice(0, MAX_CRITERIA);
+}
+
+/** 一行是不是清单条目（`- xxx` / `* xxx` / `1. xxx` / `1、xxx`）；是就返回条目正文。 */
+function bulletText(line: string): string | undefined {
+    if (!line) { return undefined; }
+    const m = line.match(/^(?:[-*•·]|\d+[.)、])\s*(.+)$/);
+    if (!m) { return undefined; }
+    const t = m[1].trim();
+    return t || undefined;
+}
+
+/** 开跑提示：清单定了，让模型现在动手，一直干到清单全过。 */
+export function buildGoalStartPrompt(goal: GoalState): string {
+    return [
+        "【目标定了，开始干】",
+        "",
+        "【目标】",
+        goal.objective.trim(),
+        "",
+        "【验收清单】",
+        ...goal.criteria.map((c) => "- " + c),
+        "",
+        "【要求】",
+        "- 现在就动手，接着往下做；已经做过的部分不用重来。",
+        "- 中途别停下来问，按最合理的做法处理；真卡住了就直说卡在哪。",
+        "- 一直干到清单上每一条都过为止（不是干一轮就算完）。",
+        "- 最后一条回复里逐条对照清单写清证据：跑了什么命令、输出是什么、改了哪些文件；"
+        + "没做到的条目老实说没做到。",
+    ].join("\n");
+}
+
+/** 恢复时补的一句：目标接着算，别从头再来。 */
+export function buildGoalResumePrompt(goal: GoalState): string {
+    return [
+        "【目标接着算】",
+        "",
+        "【目标】",
+        goal.objective.trim(),
+        "",
+        "【验收清单】",
+        ...goal.criteria.map((c) => "- " + c),
+        "",
+        "【要求】",
+        "- 接着上次的进度往下做，别从头再来。",
+        "- 干到清单上每一条都过为止；最后一条回复里逐条写明证据。",
+    ].join("\n");
+}
+
+/** 目标条上那一行字（纯函数；界面直接显示它）。 */
+export interface GoalBarSummary {
+    /** 一行摘要。 */
+    text: string;
+    /** 颜色 / 呼吸那套：谈条件 / 跑着 / 停了 / 完成。 */
+    tone: "talk" | "run" | "stop" | "done";
+}
+
+/**
+ * @param judging 这一轮正有判官在验（工人自己已经跑完了）：要写出来，
+ *   不然界面看着像卡住了 —— 判官那边一般要几分钟。
+ */
+export function goalBarSummary(goal?: GoalState | null, judging = false): GoalBarSummary | undefined {
+    if (!goal) { return undefined; }
+    switch (goal.phase) {
+        case "negotiating":
+            return {
+                text: goal.criteria.length > 0
+                    ? `目标待确认 · 验收 ${goal.criteria.length} 条 · 打 /goal 开始`
+                    : "目标待确认 · 还在谈验收条件",
+                tone: "talk",
+            };
+        case "active":
+            return {
+                text: "目标进行中"
+                    + (goal.rounds > 0 ? ` · 第 ${goal.rounds} 轮` : "")
+                    + (judging ? " · 判官正在验" : ""),
+                tone: "run",
+            };
+        case "paused":
+            return { text: "目标已暂停 · 打 /goal 继续 接着跑", tone: "stop" };
+        case "complete":
+            return { text: "目标已完成", tone: "done" };
+        default:
+            return undefined;
+    }
+}

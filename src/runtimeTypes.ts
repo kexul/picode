@@ -1,5 +1,7 @@
 import type { PiClient } from "./piClient";
 import type { AskRequest } from "./askProtocol";
+import type { GoalCommand } from "./goal";
+import type { GoalVerdictRequest } from "./goalProtocol";
 import type { TabaRequest } from "./tabaProtocol";
 
 /** 平台无关的 pi 运行时配置。 */
@@ -24,6 +26,12 @@ export interface PiConfig {
     askExtension?: string;
     /** 上面那个扩展的资源目录：回话文件写在它的 ask-answers/ 下面。 */
     askDir?: string;
+    /**
+     * 目标（/goal）判官那个 pi 扩展文件的路径（插件写在 pichat 目录里）。
+     * **只有判官会话**加载它：加载了才有 update_goal 这个工具。
+     * 空串或缺省表示判官起不来（目标循环会停下并告诉用户原因）。
+     */
+    goalExtension?: string;
 }
 
 /**
@@ -124,6 +132,19 @@ export interface RuntimeHost {
     /** 某 panel 的一轮对话真正结束（pi 发出 agent_settled）时调用：
      *  宿主据此决定这个会话该不该发系统通知、并把子会话的结果交回去。 */
     onTurnEnd(info: TurnEndInfo): void;
+
+    /**
+     * 某个会话里的 pi 扩展报上来一份验收结论（判官会话里的 update_goal；见 goalProtocol.ts）。
+     * 由 ChatControllerBase 接着：改目标状态、决定还要不要催工人。可选。
+     */
+    onGoalVerdict?(panelId: string, verdict: GoalVerdictRequest): void;
+
+    /**
+     * 某个会话里用户打了 /goal 系列命令（定目标 / 开始 / 暂停 / 恢复 / 清除 / 查看）。
+     * 目标状态、那几条提示词、目标条都归宿主管（见 chatControllerBase 里的 goal 那段）。
+     * 不实现就当没这个功能：/goal 会当成普通消息发给模型。可选。
+     */
+    onGoalCommand?(panelId: string, cmd: GoalCommand): void;
 
     /**
      * 某个会话里的 pi 扩展要求“派子会话”（从那个进程的 stderr 里读到暗号）。

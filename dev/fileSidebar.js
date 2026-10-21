@@ -9,14 +9,17 @@
  *      文件内容、行号、停在链接说的那一行并高亮；看过的文件在这一列头上排成一排标签——
  *      点另一个文件新开一个标签、原来那个还留着，点已经开着的文件切回那个标签并按这次
  *      链接说的行滚过去（不新开重复标签），点标签上那颗叉关掉它，全关光后这一列不收起、
- *      里面留一句提示；
+ *      里面留一句提示；切标签不重读文件、也不重画（每个标签各自留着自己那一块正文，
+ *      切回来原样摆上，见 chat.js 的 fileTabPage）；
  *      第一个标签是「项目目录」（当前会话的目录，悬停提示给全路径、这一列的头分两行写着
  *      「会话目录 + 现在走到的这一层」，没有关闭那颗叉）：
  *      标签一律一样高（有文件的标签里那颗叉撑着高度，只剩「项目目录」自己开着时也不许缩成一薄条）：
  *      点文件链接开的文件排在它后面的新标签里、不顶掉它；这一列空着（刚打开、刷新页面）
  *      先看到的就是它；从它那一格里点进子目录、点开文件跟票 05 是同一套清单；
  *      目录不占标签——点目录链接、点清单里的子目录都在这一格里发生，清单最上面一行「上一层」
- *      往回退（到会话目录本身那一层就没有这一行了），切会话 / 刷新页面时这一格回到会话目录本身；
+ *      往回退（到会话目录本身那一层就没有这一行了），刷新页面时这一格回到会话目录本身，
+ *      切会话时摆出那个会话自己那一份（每个会话各记一份开过的标签，切回去原样回来）；
+ *      换个会话不把上一个会话看过的文件内容留在面板里；
  *      ≥1200px 常驻在左边、窄了滑入、点外面收起；手机上两块侧边栏互斥；
  *      顶条左边那颗按钮点开点收、刷新后还是刚才的样子；
  *      目录外 / 不存在 / 超过 2 MB 时页面上给一句说明；
@@ -480,8 +483,29 @@ module.exports = async (page) => {
         console.log((pass ? "✓ " : "✗ ") + name + (detail === undefined ? "" : "   " + detail));
     };
 
+    // 每个标签各留自己那一块正文（切走只是藏起来，见 chat.js 的 fileTabPage）：
+    // 正文里的东西一律从「露着的那一块」查，别从整个 #fileBody 查——
+    // 那儿同时躺着别的标签的内容（藏起来的），全局查会读到人家的。
+    const FILE_VIEW_SOURCE = `
+        window.__fileView = function () {
+            return document.querySelector("#fileBody .file-page:not([hidden])")
+                || document.getElementById("fileBody");
+        };
+    `;
+    let fileViewEverywhere = false;
+    const installFileView = async () => {
+        if (!fileViewEverywhere) {
+            // 挂成「每份新文档都先跑一遍」：刷新之后页面是新的，一次性 eval 装进去的东西全没了
+            //（这套脚本中途要刷新好几次，不这么挂就得每刷一次手动补一次，漏一处就是一句 TypeError）
+            fileViewEverywhere = true;
+            await page.cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: FILE_VIEW_SOURCE });
+        }
+        await page.eval(FILE_VIEW_SOURCE + " return true;");
+    };
+
     await page.waitReady();
     await page.sleep(500);
+    await installFileView();
 
     // 会话目录（顶条上那行小字）与会话标识（轮到自己看的那个会话）
     const sessionInfo = JSON.parse(await page.eval(`
@@ -505,7 +529,8 @@ module.exports = async (page) => {
     const LOOK = `
         const f = function () {
             const root = document.getElementById("fileSidebar");
-            const body = document.getElementById("fileBody");
+            const box = document.getElementById("fileBody");   // 滚动那一格（量滚动位置、可见范围）
+            const body = window.__fileView();                  // 正看着的那一块正文（内容从这儿查）
             const rows = body ? Array.from(body.querySelectorAll(".file-line")) : [];
             const hit = rows.find(function (r) { return r.classList.contains("hit"); });
             const bodyRect = body ? body.getBoundingClientRect() : null;
@@ -524,6 +549,11 @@ module.exports = async (page) => {
             const upRect = up ? up.getBoundingClientRect() : null;
             const closeEl = document.getElementById("fileClose");
             const closeRect = closeEl ? closeEl.getBoundingClientRect() : null;
+            const pointAtId = function (x) {
+                const el = document.elementFromPoint(x, 400);
+                const named = el && el.closest ? el.closest("[id]") : null;
+                return named ? named.id : "";
+            };
             const insidePanel = function (r) {
                 return !!r && !!panelRect && r.left >= panelRect.left - 1 && r.right <= panelRect.right + 1;
             };
@@ -612,15 +642,17 @@ module.exports = async (page) => {
                 entryDirs: entries.map(function (e) { return e.classList.contains("dir"); }),
                 entryPaths: entries.map(function (e) { return e.getAttribute("data-path") || ""; }),
                 backdropShown: !!backdrop && getComputedStyle(backdrop).display !== "none",
-                bodyTop: body ? Math.round(body.scrollTop) : -1,
-                bodyMax: body ? Math.round(body.scrollHeight - body.clientHeight) : -1,
+                bodyTop: box ? Math.round(box.scrollTop) : -1,
+                bodyMax: box ? Math.round(box.scrollHeight - box.clientHeight) : -1,
                 barBottom: Math.round(document.getElementById("sessionBar").getBoundingClientRect().bottom),
                 fileHeaderBottom: document.getElementById("fileHeader")
                     ? Math.round(document.getElementById("fileHeader").getBoundingClientRect().bottom) : -1,
                 dockHeaderBottom: document.getElementById("dockHeader")
                     ? Math.round(document.getElementById("dockHeader").getBoundingClientRect().bottom) : -1,
-                topAtChat: (document.elementFromPoint(Math.round(window.innerWidth * 0.5), 400) || { id: "" }).id,
-                topAtRight: (document.elementFromPoint(Math.round(window.innerWidth - 40), 400) || { id: "" }).id,
+                // 这一点上最上面的是谁：正文那几块自己没 id（见 chat.js 的 fileTabPage），
+                // 所以往上找最近那个带 id 的（通常是 #fileBody、遮罩、或者这一列本身）
+                topAtChat: pointAtId(Math.round(window.innerWidth * 0.5)),
+                topAtRight: pointAtId(Math.round(window.innerWidth - 40)),
                 wrapButton: !!wrapBtn,
                 wrapShown: !!wrapRect,
                 wrapInPanel: !!wrapBtn && !!panelEl && panelEl.contains(wrapBtn),
@@ -634,7 +666,7 @@ module.exports = async (page) => {
                 wrapPressed: wrapBtn ? (wrapBtn.getAttribute("aria-pressed") || "") : "",
                 wrapOnClass: !!wrapBtn && wrapBtn.classList.contains("on"),
                 whiteSpace: textEl ? getComputedStyle(textEl).whiteSpace : "",
-                hScroll: body ? Math.round(body.scrollWidth - body.clientWidth) : -1,
+                hScroll: box ? Math.round(box.scrollWidth - box.clientWidth) : -1,
                 headRowHeights: rows.slice(0, 4).map(function (r) { return Math.round(r.getBoundingClientRect().height); }),
                 headRowLens: rows.slice(0, 4).map(function (r) {
                     return ((r.querySelector(".file-text") || {}).textContent || "").length;
@@ -709,7 +741,7 @@ module.exports = async (page) => {
     `);
     /** 点这一列里那份清单里的一项（按它给的相对路径找）。 */
     const clickEntry = (entryPath) => page.eval(`
-        const r = Array.from(document.querySelectorAll("#fileBody .file-entry"))
+        const r = Array.from(window.__fileView().querySelectorAll(".file-entry"))
             .find(function (x) { return x.getAttribute("data-path") === ${JSON.stringify(entryPath)}; });
         if (!r) { return "清单里没有这一项"; }
         r.click();
@@ -727,7 +759,7 @@ module.exports = async (page) => {
         && (!inside || samePathText(r.titleLines[1], inside));
     /** 点清单第一行那颗「上一层」。 */
     const clickUp = () => page.eval(`
-        const b = document.querySelector("#fileBody .file-entry.up");
+        const b = window.__fileView().querySelector(".file-entry.up");
         if (!b) { return "清单里没有「上一层」这一行"; }
         b.click();
         return "点了";
@@ -864,6 +896,7 @@ module.exports = async (page) => {
     await page.sleep(1500);
     await page.waitReady();
     await page.sleep(500);
+    await installFileView();
     await page.eval(POST_LINKS);
     await page.sleep(300);
     const wide2 = await look("宽窗 · 刷新之后");
@@ -882,6 +915,7 @@ module.exports = async (page) => {
     await page.sleep(1500);
     await page.waitReady();
     await page.sleep(500);
+    await installFileView();
     await page.eval(POST_LINKS);
     await page.sleep(300);
     const wide4 = await look("宽窗 · 收起之后刷新");
@@ -951,6 +985,41 @@ module.exports = async (page) => {
     check("回到它上次读到的地方（还停在刚才那一行）", wide8.hitNum === String(HIT_LINE_AGAIN) && wide8.hitVisible);
     check("三格标签都还在", wide8.tabCount === 3);
 
+    // 切走再切回来：那一块原样摆回来（不重读文件、也不重画——重画一次就等于把读到哪儿、
+    // 选中的字、图片解码、网页里的输入全丢掉）。给这一块做个记号，切回来记号还在就说明没重画。
+    console.log("给 long.js 那一块做个记号：" + await page.eval(`
+        const view = window.__fileView();
+        const rows = Array.from(view.querySelectorAll(".file-line"));
+        if (!rows[${HIT_LINE_AGAIN - 1}]) { return "没有那一行"; }
+        rows[${HIT_LINE_AGAIN - 1}].setAttribute("data-mark", "keep");
+        view.setAttribute("data-mark", "keep");
+        return "记上了";
+    `));
+    console.log("点标签：" + await clickTab(FILE.sample, "tab"));
+    await page.sleep(400);
+    const awayTab = await look("宽窗 · 切到 sample.js 那一格");
+    check("切到另一格：摆上来的是它自己那一块（行数、面板头都对）",
+        awayTab.tabActive === 2 && awayTab.title === FILE.sample && awayTab.rowCount === 5,
+        JSON.stringify({ active: awayTab.tabActive, rows: awayTab.rowCount }));
+    console.log("点标签：" + await clickTab(FILE.long, "tab"));
+    const backTab = JSON.parse(await page.eval(`
+        const view = window.__fileView();
+        const rows = Array.from(view.querySelectorAll(".file-line"));
+        const row = rows[${HIT_LINE_AGAIN - 1}] || null;
+        return JSON.stringify({
+            mark: view.getAttribute("data-mark") || "",
+            rowMark: row ? (row.getAttribute("data-mark") || "") : "没有这一行",
+            rows: rows.length,
+            note: (view.querySelector(".file-note") || {}).textContent || "",
+            pages: document.querySelectorAll("#fileBody .file-page").length,
+            shown: document.querySelectorAll("#fileBody .file-page:not([hidden])").length,
+        });
+    `));
+    check("切回来：还是刚才那一块（没重画、记号还在，中间也没闪过「正在读取…」）",
+        backTab.mark === "keep" && backTab.rowMark === "keep" && backTab.rows === LONG_LINES
+        && backTab.note === "" && backTab.shown === 1,
+        JSON.stringify(backTab));
+
     // 关掉正看着的那个：摆上剩下那一个
     console.log("点标签上的叉：" + await clickTab(FILE.long, "close"));
     await page.sleep(600);
@@ -989,6 +1058,7 @@ module.exports = async (page) => {
     await page.sleep(1500);
     await page.waitReady();
     await page.sleep(500);
+    await installFileView();
     const wide11 = await waitLook("刷新之后项目目录那一格回来", (x) => x.projCount === 1 && x.entryCount > 0);
     check("刷新之后：第一个标签还是当前会话的目录",
         wide11.open && wide11.dock && wide11.projIndex === 0 && wide11.tabActive === 0
@@ -1214,7 +1284,7 @@ module.exports = async (page) => {
     page.cdp.sessionId = undefined;   // Browser 域的命令发在浏览器上，不带页面会话
     await page.cdp.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: downloadDir, eventsEnabled: true });
     page.cdp.sessionId = cdpSession;
-    console.log("点下载链接：" + await page.eval(`const a = document.querySelector("#fileBody a.file-download"); if (!a) { return "没有链接"; } a.click(); return "点了";`));
+    console.log("点下载链接：" + await page.eval(`const a = window.__fileView().querySelector("a.file-download"); if (!a) { return "没有链接"; } a.click(); return "点了";`));
     const saved = await waitForFile(path.join(downloadDir, FILE.binary), 10000);
     check("点下载：文件真存了下来，字节一个不少",
         !!saved && fs.statSync(saved).size === BINARY_BYTES,
@@ -1234,7 +1304,7 @@ module.exports = async (page) => {
 
     // 点这个超大文件的下载：几 MB 那一下也要真存得下来
     fs.rmSync(path.join(downloadDir, FILE.big), { force: true });
-    console.log("点下载链接：" + await page.eval(`const a = document.querySelector("#fileBody a.file-download"); if (!a) { return "没有链接"; } a.click(); return "点了";`));
+    console.log("点下载链接：" + await page.eval(`const a = window.__fileView().querySelector("a.file-download"); if (!a) { return "没有链接"; } a.click(); return "点了";`));
     const savedBig = await waitForFile(path.join(downloadDir, FILE.big), 20000);
     check("几 MB 的文件点下载也真存得下来（字节一个不少）",
         !!savedBig && fs.statSync(savedBig).size === BIG_BYTES,
@@ -1455,7 +1525,7 @@ module.exports = async (page) => {
 
     /** 这一列里现在这一段正文的逐行样子：行号、文字、每行里那几个上了色的记号、颜色。 */
     const colorLook = async () => JSON.parse(await page.eval(`
-        const body = document.getElementById("fileBody");
+        const body = window.__fileView();
         const rows = Array.from(body.querySelectorAll(".file-line"));
         const kinds = {};
         let tokens = 0;
@@ -1554,8 +1624,8 @@ module.exports = async (page) => {
     await openColor(COLOR.mid, 3, COLOR_MID.lines);
     const midCol = JSON.parse(await page.eval(`
         return JSON.stringify({
-            rows: document.querySelectorAll("#fileBody .file-line").length,
-            tokens: document.querySelectorAll("#fileBody .file-text [class*='hljs-']").length,
+            rows: window.__fileView().querySelectorAll(".file-line").length,
+            tokens: window.__fileView().querySelectorAll(".file-text [class*='hljs-']").length,
         });
     `));
     check("上色那条线以内的中等文件（" + Math.round(COLOR_MID.text.length / 1024) + " KB）照样上色",
@@ -1568,16 +1638,16 @@ module.exports = async (page) => {
     const bigCol = await waitLook("大到不上色的那个文件上来", (x) => x.rowCount === COLOR_BIG.lines, 30000);
     const bigFreeze = await readFreeze();
     const bigStats = JSON.parse(await page.eval(`
-        const rows = document.querySelectorAll("#fileBody .file-line");
+        const rows = window.__fileView().querySelectorAll(".file-line");
         const first = rows[0], last = rows[rows.length - 1];
         return JSON.stringify({
             rows: rows.length,
-            tokens: document.querySelectorAll("#fileBody .file-text [class*='hljs-']").length,
+            tokens: window.__fileView().querySelectorAll(".file-text [class*='hljs-']").length,
             firstNum: first ? first.querySelector(".file-num").textContent : "",
             lastNum: last ? last.querySelector(".file-num").textContent : "",
             firstText: first ? first.querySelector(".file-text").textContent : "",
             lastText: last ? last.querySelector(".file-text").textContent : "",
-            note: (document.querySelector("#fileBody .file-note") || {}).textContent || "",
+            note: (window.__fileView().querySelector(".file-note") || {}).textContent || "",
         });
     `));
     check("大文件不上色（黑白、" + COLOR_BIG.lines + " 行都在、行号从 1 到最后一行都对）",
@@ -1599,7 +1669,7 @@ module.exports = async (page) => {
     // 用的是消息流渲染正文那一套（renderMarkdown），不另起一套：代码块照样带语法高亮。
     // 扩展名不是 markdown 的（拿 .txt 盯着）照旧一行一行显示、带行号。
     const mdLook = async () => JSON.parse(await page.eval(`
-        const body = document.getElementById("fileBody");
+        const body = window.__fileView();
         const doc = body.querySelector(".file-md");
         const heads = doc ? Array.from(doc.querySelectorAll("h1, h2, h3, h4, h5, h6")) : [];
         const pre = doc ? doc.querySelector("pre code") : null;
@@ -1664,7 +1734,7 @@ module.exports = async (page) => {
         JSON.stringify(mdDoc.links) === JSON.stringify([[MD.link, String(MD.linkLine)]]),
         JSON.stringify(mdDoc.links));
     console.log("点文档里的链接：" + await page.eval(`
-        const a = document.querySelector("#fileBody .file-md a.file-link");
+        const a = window.__fileView().querySelector(".file-md a.file-link");
         if (!a) { return "没有这个链接"; }
         a.click();
         return "点了";
@@ -1730,6 +1800,7 @@ module.exports = async (page) => {
     await page.sleep(1500);
     await page.waitReady();
     await page.sleep(500);
+    await installFileView();
     await page.eval(POST_LINKS);
     await page.sleep(300);
     console.log("点文件链接：" + await clickLink(FILE.wrap, WRAP_HIT));
@@ -1752,6 +1823,7 @@ module.exports = async (page) => {
     await page.sleep(1500);
     await page.waitReady();
     await page.sleep(500);
+    await installFileView();
     await page.eval(POST_LINKS);
     await page.sleep(300);
     console.log("点文件链接：" + await clickLink(FILE.wrap, WRAP_HIT));
@@ -2069,6 +2141,22 @@ module.exports = async (page) => {
     check("切会话：上一个会话的文件内容也不留在面板里", switched.rowCount === 0 && switched.note === "");
     await page.shot("file-10-session-switch.png");
 
+    // 再切回原来那个会话：它自己那一份标签原样回来（每个会话各记一份，见 chat.js 的 resetFileSidebarForSession）
+    // 这趟跑的是网页端，切会话走它自己那条消息（跟顶条下拉框、面板里点一行是同一件事）
+    console.log("切回原来那个会话：" + await page.eval(`
+        acquireVsCodeApi().postMessage({ type: "switchSession", sessionId: ${JSON.stringify(sessionInfo.sessionId)} });
+        return "说了";
+    `));
+    const backSession = await waitLook("切回原来那个会话、它那一份标签摆回来",
+        (x) => x.tabCount >= 2 && x.projIndex === 0 && x.tabPaths[x.projIndex] === DIR.sub, 15000);
+    check("切回原来那个会话：它开过的标签原样回来了（「项目目录」那一格走到哪一层也记着）",
+        backSession.tabCount >= 2 && backSession.tabPaths[backSession.projIndex] === DIR.sub,
+        JSON.stringify({ count: backSession.tabCount, paths: backSession.tabPaths }));
+    check("切回来摆上的是它当时看着的那一格（头上写着那个文件或那一层）",
+        backSession.tabActive >= 0 && backSession.tabActive < backSession.tabCount && backSession.title !== "",
+        JSON.stringify({ active: backSession.tabActive, title: backSession.title }));
+    await page.shot("file-10b-session-back.png");
+
     // ==================== 宽度：能拖、记在这台设备里、上下限跟着窗口走；手机上铺满 ====================
     // 这一段会把拖出来的宽度记进本机、还会开一下触摸模拟，所以摆在最后（网页视图那一趟不看宽度）。
     // 上面那些检查都是在「没拖过 = 默认 360」这个状态下跑的。
@@ -2235,6 +2323,7 @@ module.exports = async (page) => {
     });
     await page.eval("location.reload(); return true;");
     await page.sleep(1500);
+    await installFileView();
     // 没有推送通道，界面得自己喂一份会话列表；下面这条消息的内容按后端真正推的那份写。
     await page.eval(`
         window.postMessage({ type: "sessionList", sessions: [{

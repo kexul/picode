@@ -8,11 +8,13 @@
 
 export const SEND_KEYS = ["enter", "shift+enter", "alt+enter", "ctrl+enter"] as const;
 export const NEW_SESSION_KEYS = ["ctrl+alt+n", "ctrl+shift+n", "ctrl+t", "alt+n"] as const;
+export const CLOSE_SESSION_KEYS = ["ctrl+alt+w", "ctrl+shift+w", "ctrl+alt+x", "alt+w"] as const;
 export const TAB_SWITCH_KEYS = ["ctrl+alt+arrows", "ctrl+alt+pgupdown", "alt+brackets", "ctrl+alt+brackets"] as const;
 export const FOCUS_INPUT_KEYS = ["ctrlAltI", "ctrlShiftI", "altI", "ctrlAltSpace"] as const;
 
 export const DEFAULT_SEND_KEY = "enter";
 export const DEFAULT_NEW_SESSION_KEY = "ctrl+alt+n";
+export const DEFAULT_CLOSE_SESSION_KEY = "ctrl+alt+w";
 export const DEFAULT_TAB_SWITCH_KEY = "ctrl+alt+arrows";
 export const DEFAULT_FOCUS_INPUT_KEY = "ctrlAltI";
 export const DEFAULT_FONT_SIZE = "14";

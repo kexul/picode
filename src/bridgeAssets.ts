@@ -3,6 +3,7 @@
  *
  *   taba-bridge-<插件版本>.ts   派子会话（taba）那个扩展（源码见 tabaBridgeSource.ts）
  *   ask-bridge-<插件版本>.ts    问话（ask_choice）那个扩展（源码见 askBridgeSource.ts）
+ *   goal-bridge-<插件版本>.ts   目标（/goal）那个扩展：判官会话里的 update_goal（源码见 goalBridgeSource.ts）
  *
  * 两套是同一个套路：文件名、源码、落盘后顺带干的活不一样，其余（内容变了才重写、
  * 清掉旧版本留下的文件、记一份结果）都一样，所以合成一处，差别放在下面的 BRIDGES 里。
@@ -22,6 +23,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { TABA_BRIDGE_SOURCE } from "./tabaBridgeSource";
 import { ASK_BRIDGE_SOURCE } from "./askBridgeSource";
+import { GOAL_BRIDGE_SOURCE } from "./goalBridgeSource";
 import { cleanStaleRunFiles, tabaRunsDir } from "./tabaRunFiles";
 import { askAnswersDir, cleanStaleAskAnswers } from "./askProtocol";
 import { pichatDir } from "./serverPaths";
@@ -48,7 +50,7 @@ interface BridgeKind {
     afterWrite(rootDir: string): void;
 }
 
-const BRIDGES: Record<"taba" | "ask", BridgeKind> = {
+const BRIDGES: Record<"taba" | "ask" | "goal", BridgeKind> = {
     taba: {
         prefix: "taba-bridge",
         source: TABA_BRIDGE_SOURCE,
@@ -69,6 +71,12 @@ const BRIDGES: Record<"taba" | "ask", BridgeKind> = {
             fs.mkdirSync(askAnswersDir(rootDir), { recursive: true });
             cleanStaleAskAnswers(rootDir);
         },
+    },
+    goal: {
+        prefix: "goal-bridge",
+        source: GOAL_BRIDGE_SOURCE,
+        // 判官只报个结论，外面不留文件：不用建目录、不用清残留
+        afterWrite(): void { /* 没别的活 */ },
     },
 };
 
@@ -125,6 +133,11 @@ export function ensureAskAssets(version: string): BridgeAssets {
     return ensureBridge(BRIDGES.ask, version);
 }
 
+/** 同上，目标（/goal）那套：只有判官会话加载它（update_goal）。 */
+export function ensureGoalAssets(version: string): BridgeAssets {
+    return ensureBridge(BRIDGES.goal, version);
+}
+
 /** 拿记住的结果（还没写过就是 undefined）。 */
 export function getTabaAssets(): BridgeAssets | undefined {
     return cached.get(BRIDGES.taba);
@@ -132,4 +145,8 @@ export function getTabaAssets(): BridgeAssets | undefined {
 
 export function getAskAssets(): BridgeAssets | undefined {
     return cached.get(BRIDGES.ask);
+}
+
+export function getGoalAssets(): BridgeAssets | undefined {
+    return cached.get(BRIDGES.goal);
 }

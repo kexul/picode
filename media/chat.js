@@ -66,6 +66,7 @@
   const imgPreviewEl = document.getElementById("imgPreview");
   const fileMenuEl = document.getElementById("fileMenu");
   const queueBarEl = document.getElementById("queueBar");
+  const goalBarEl = document.getElementById("goalBar");
   const newSessionBtn = document.getElementById("newSessionBtn");
   const sessionNameBtn = document.getElementById("sessionName");
   // 顶条名字底下那行小字：当前会话跑在哪个目录（内容由 renderSessionBar 填）
@@ -310,6 +311,186 @@
   function mdOptions() { return Object.assign({}, marked.defaults, { breaks: true, gfm: true }); }
   function renderMarkdown(source) { ensureMarkedHighlight(); ensureFileLink(); return marked.parse(source, mdOptions()); }
 
+  // ==================== mermaid 图 ====================
+  // ```mermaid 代码块画成图（media/mermaid.js 里的 beautiful-mermaid：同步出 SVG，不碰 DOM）。
+  // 它只认 6 种图；别的类型会抛错，这里就把代码块原样留着、底下加一行说明——
+  // 不把“画不出来”装成“没有图”。
+  // 流式里只在块定型之后才画（见 syncStreamBlocks / finalizeCurrentAssistant）：
+  // 半截源码画出来是残图，下一帧又变，闪得厉害。
+  const MERMAID_CACHE = new Map();
+  const MERMAID_CACHE_MAX = 60;
+  const MERMAID_SUPPORTED = "流程图、状态图、时序图、类图、ER 图、XY 图";
+
+  /** 这个代码块是不是 ```mermaid。marked 给的类名是 language-mermaid（走高亮那条路会再加个 hljs）。 */
+  function isMermaidBlock(code) {
+    return !!code.parentElement && code.parentElement.tagName === "PRE" &&
+      /(^|\s)language-mermaid(\s|$)/i.test(code.className || "");
+  }
+
+  /**
+   * 画图的着色参数：全走界面变量。切主题时已经画好的图跟着变——SVG 里存的是 var(...)，
+   * 不是当场算死的色值（跟 browserTheme.js 在 body 上设的那套是同一份变量）。
+   */
+  function mermaidColors() {
+    return {
+      bg: "var(--vscode-editor-background, #ffffff)",
+      fg: "var(--vscode-foreground, #1f1f1f)",
+      transparent: true,
+    };
+  }
+
+  /** 一段 mermaid 源码 → SVG 字符串；画不出来给 { error }。同一段源码只算一次。 */
+  function mermaidSvg(source) {
+    const hit = MERMAID_CACHE.get(source);
+    if (hit !== undefined) { return hit; }
+    let out;
+    try {
+      const lib = globalThis.piMermaid;
+      if (!lib) { throw new Error("mermaid 脚本没加载"); }
+      // 生成的 SVG 里带一行 @import 去拉 Inter 字体：界面离线可用、安全策略也不放行外站，
+      // 那一行只会白白在控制台留一条拦截报错，去掉（字体由 chat.css 统一给）。
+      out = String(lib.renderMermaidSVG(aliasFlowchartIds(source), mermaidColors()))
+        .replace(/@import url\([^)]*\);?/g, "");
+      // 算不出大小的图不能要：之前画成 0×0，正文里就是一块空白，连代码都看不到了。
+      if (!svgHasSize(out)) { out = { error: "没画出来（这张图算不出大小）" }; }
+    } catch (err) {
+      const msg = String((err && err.message) || err || "");
+      out = { error: /Invalid mermaid header/i.test(msg)
+        ? "这种图这里画不了（只支持" + MERMAID_SUPPORTED + "）"
+        : "没画出来：" + msg.slice(0, 200) };
+    }
+    if (MERMAID_CACHE.size >= MERMAID_CACHE_MAX) { MERMAID_CACHE.clear(); }
+    MERMAID_CACHE.set(source, out);
+    return out;
+  }
+
+  /** 画出来的图有没有大小（viewBox 的宽高都不是 0）。 */
+  function svgHasSize(svg) {
+    const m = /viewBox="\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*"/.exec(svg);
+    if (!m) { return false; }
+    return Number(m[3]) > 0 && Number(m[4]) > 0;
+  }
+
+  /** 流程图里能当节点 ID 用的字符（库只认 ASCII 的 \w，其余一律丢，所以得先认出来换名）。 */
+  const FLOW_ID_CHAR = /[0-9A-Za-z_\u3400-\u4dbf\u4e00-\u9fff]/;
+  const FLOW_CJK = /[\u3400-\u4dbf\u4e00-\u9fff]/;
+  // 完整箭头才算箭头：`--` `-.` `==` 这种是“连线中间写字”（`A -- 说明 --> B`）的开头，
+  // 当成箭头会把中间那几个字错当节点名换掉。
+  const FLOW_ARROWS = ["<-->", "-.->", "-->", "---", "==>", "--x", "--o", "~~~", "===", "-.-"];
+
+  function matchFlowArrow(text, i) {
+    for (const a of FLOW_ARROWS) { if (text.startsWith(a, i)) { return a; } }
+    return "";
+  }
+
+  /**
+   * 流程图里的中文节点 ID 换成 ASCII 别名，原文变成方括号里的标签（`用户 --> 服务` → `n1[用户] --> n2[服务]`）。
+   *
+   * 为什么非换不可：media/mermaid.js 那个库解析节点 ID 只认 [A-Za-z0-9_]，中文 ID 会被整段丢掉——
+   * 轻则少几条连线，重则整张图空白（而 AI 写流程图十有八九就是这么写的）。换名之后图上的字不变。
+   * 只动 flowchart / graph；状态、时序、类、ER 图的中文都正常，不动。
+   * 认不出的行原样留着（不改顶多画不出来，不会把好图改坏）。
+   */
+  function aliasFlowchartIds(source) {
+    if (!/^\s*(graph|flowchart)\b/i.test(source)) { return source; }
+    const aliases = new Map();
+    let seq = 0;
+    const aliasOf = (name) => {
+      let found = aliases.get(name);
+      if (!found) { found = "n" + (++seq); aliases.set(name, found); }
+      return found;
+    };
+
+    /** 一行里的节点位置：换名（后面本来就有形状括号的，只换 ID，标签不动）。 */
+    const rewriteNodeLine = (line) => {
+      let out = "";
+      let i = 0;
+      let expectNode = true;
+      while (i < line.length) {
+        const ch = line[i];
+        if (ch === " " || ch === "\t") { out += ch; i += 1; continue; }
+        if (expectNode && FLOW_ID_CHAR.test(ch)) {
+          let j = i;
+          while (j < line.length && FLOW_ID_CHAR.test(line[j])) { j += 1; }
+          const id = line.slice(i, j);
+          const next = line[j] || "";
+          if (!FLOW_CJK.test(id)) { out += id; i = j; expectNode = false; continue; }
+          const alias = aliasOf(id);
+          // 后面跟着 [ ( { > ：形状括号里的原文就是标签，只换 ID；否则把原文补成标签
+          out += (next === "[" || next === "(" || next === "{" || next === ">") ? alias : alias + "[" + id + "]";
+          i = j; expectNode = false; continue;
+        }
+        if (expectNode) {
+          const arrow = matchFlowArrow(line, i);
+          if (arrow) { out += arrow; i += arrow.length; continue; }
+          if (ch === "&") { out += ch; i += 1; continue; }
+          out += ch; i += 1; expectNode = false; continue;   // 形状括号、|标签| 等：下面照抄
+        }
+        // 不在节点位置：形状括号整块抄过去（里面可能是中文标签，不能碰）
+        if (ch === "[" || ch === "(" || ch === "{") {
+          const close = ch === "[" ? "]" : ch === "(" ? ")" : "}";
+          let depth = 0;
+          let j = i;
+          for (; j < line.length; j++) {
+            if (line[j] === ch) { depth += 1; }
+            else if (line[j] === close) { depth -= 1; if (depth === 0) { j += 1; break; } }
+          }
+          out += line.slice(i, j); i = j; continue;
+        }
+        if (ch === "|") {
+          const end = line.indexOf("|", i + 1);
+          if (end > i) { out += line.slice(i, end + 1); i = end + 1; continue; }
+        }
+        const arrow = matchFlowArrow(line, i);
+        if (arrow) { out += arrow; i += arrow.length; expectNode = true; continue; }
+        if (ch === "&") { out += ch; i += 1; expectNode = true; continue; }
+        out += ch; i += 1;
+      }
+      return out;
+    };
+
+    /** `class 甲,乙 名字` / `style 甲 fill:#f00` / `click 甲 地址`：行里那一串也是节点 ID。 */
+    const rewriteIdListLine = (line) => {
+      const m = /^(\s*(?:class|style|click)\s+)([^\s]+)(.*)$/.exec(line);
+      if (!m) { return line; }
+      const ids = m[2].split(",").map((s) => (FLOW_CJK.test(s) ? aliasOf(s) : s));
+      return m[1] + ids.join(",") + m[3];
+    };
+
+    return source.split("\n").map((line, index) => {
+      if (index === 0) { return line; }   // `graph TD` 那一行不动
+      if (/^\s*(%%|subgraph\b|end\s*$|direction\b|classDef\b|linkStyle\b|accTitle|accDescr)/i.test(line)) { return line; }
+      if (/^\s*(class|style|click)\s+/i.test(line)) { return rewriteIdListLine(line); }
+      return rewriteNodeLine(line);
+    }).join("\n");
+  }
+
+  /**
+   * 把 root 里还没画的 ```mermaid 代码块换成图。重放、重画会再走一遍这里，画过的跳过
+   * （画过的 pre 已经不在了）；画不出来的留着代码块，后面补一行说明。
+   */
+  function decorateMermaid(root) {
+    if (!root || !root.querySelectorAll) { return; }
+    for (const code of root.querySelectorAll("pre > code")) {
+      if (!isMermaidBlock(code)) { continue; }
+      const pre = code.parentElement;
+      const source = code.textContent || "";
+      if (!source.trim()) { continue; }
+      const out = mermaidSvg(source);
+      if (typeof out === "string") {
+        const box = document.createElement("div");
+        box.className = "md-mermaid";
+        box.innerHTML = out;
+        pre.replaceWith(box);
+      } else if (!pre.nextElementSibling || !pre.nextElementSibling.classList.contains("md-mermaid-note")) {
+        const note = document.createElement("div");
+        note.className = "md-mermaid-note";
+        note.textContent = out.error;
+        pre.after(note);
+      }
+    }
+  }
+
   /**
    * 按当前符号集合，把已渲染正文里的行内代码就地变成可点击的符号链接（或还原回普通文字）。
    *
@@ -357,6 +538,7 @@
   // ==================== 全局视图选项 ====================
   var sendKeyCombo = "enter";
   var newSessionKey = "ctrl+alt+n";
+  var closeSessionKey = "ctrl+alt+w";
   var tabSwitchKey = "ctrl+alt+pgupdown";
   var notifyTurnEnd = true;
   let openFiles = [];
@@ -373,6 +555,7 @@
     if (typeof opts.fontSize === "string") { applyFontSize(opts.fontSize); }
     if (typeof opts.sendKey === "string") { sendKeyCombo = opts.sendKey; }
     if (typeof opts.newSessionKey === "string") { newSessionKey = opts.newSessionKey; }
+    if (typeof opts.closeSessionKey === "string") { closeSessionKey = opts.closeSessionKey; }
     if (typeof opts.tabSwitchKey === "string") { tabSwitchKey = opts.tabSwitchKey; }
     notifyTurnEnd = opts.notifyTurnEnd !== false;
   }
@@ -455,7 +638,7 @@
     }
   }
 
-  // ---- 全局快捷键匹配（新建会话 / 切换会话）----
+  // ---- 全局快捷键匹配（新建会话 / 关闭会话 / 切换会话）----
   function matchCombo(e, combo) {
     // combo 形如 "ctrl+alt+n"
     const mods = combo.split("+");
@@ -497,6 +680,13 @@
     if (matchCombo(e, newSessionKey)) {
       e.preventDefault();
       vscode.postMessage({ type: "newSession" });
+      return;
+    }
+    // 关闭当前正在看的会话（含输入框聚焦时）：跟下拉框里那颗叉同一个消息，
+    // 只是不再问一遍；会话文件留着，历史会话里能重新打开，关完自动切到别的会话。
+    if (matchCombo(e, closeSessionKey)) {
+      e.preventDefault();
+      if (activeId) { vscode.postMessage({ type: "closeSession", sessionId: activeId }); }
       return;
     }
     if (tag === "INPUT" || tag === "TEXTAREA") {
@@ -641,6 +831,11 @@
       modelId: "",
       provider: "",
       thinkingLevel: "",
+      // 目标（/goal）：goal 是这个会话的目标状态（后端推来，见 case "goal"），
+      // goalOpen 是目标条展不展开（点一下换一面）。
+      goal: null,
+      goalSummary: null,
+      goalOpen: false,
       queuedSteering: [],
       pendingSteerRestore: null,
       autoLoadHinted: false,
@@ -1582,6 +1777,7 @@
       cur.el.textContent = "";
       state = cur.blocks = { tokens: [], frozenCount: 0, frozenOffset: 0, els: [], rawLen: 0 };
     }
+    const wasFrozen = state.frozenCount;
 
     // 只重新切尾巴：冻结部分不再进解析器
     const tailTokens = lexTopBlocks(raw.slice(state.frozenOffset));
@@ -1615,6 +1811,9 @@
     state.tokens = tokens;
     state.frozenCount = freeze;
     state.rawLen = raw.length;
+    // 刚定型的块里如果有 mermaid，现在画：定型之后内容不会再变，画出来不会变成残图。
+    // 尾巴那两块先不动（内容随时会变），等它们定型、或者这一轮收尾（见 finalizeCurrentAssistant）。
+    for (let i = 0; i < freeze - wasFrozen; i++) { decorateMermaid(tailEls[i]); }
     return true;
   }
 
@@ -1625,6 +1824,7 @@
     if (syncStreamBlocks(cur, raw)) { return; }
     cur.blocks = null;
     cur.el.innerHTML = renderMarkdown(raw);
+    decorateMermaid(cur.el);
   }
 
   function scheduleFlush(st) { if (!st.rafId) { st.rafId = requestAnimationFrame(() => flushDeltas(st)); } }
@@ -1655,6 +1855,8 @@
       // 还会把已经挂进 .md 的符号链接抹掉。切不了块的情况（引用式定义 / HTML 块）
       // 由 renderStreamBody 内部退回整段渲染，跟流式期间一个规矩。
       renderStreamBody(st, st.currentAssistant.raw || "");
+      // 最后那两块流式期间没画（还没定型）：这一轮结束了，收尾补上。
+      decorateMermaid(st.currentAssistant.el);
       // 流式期间不给活跃消息挂符号链接（见 symbolSet 那段），收尾这里补上：
       // 不然要等下一次符号集合变化才可点。
       applySymbolLinks(st.currentAssistant.el);
@@ -1795,6 +1997,7 @@
       if (body2 && body2.dataset.raw !== text) {
         body2.dataset.raw = text;
         body2.innerHTML = renderMarkdown(text);
+        decorateMermaid(body2);
       }
       // 时刻跟着这次重放的来（以前停在上一遍的旧值上）
       updateMsgTime(known, at);
@@ -1808,6 +2011,7 @@
     body.className = "md";
     body.dataset.raw = text;
     body.innerHTML = renderMarkdown(text);
+    decorateMermaid(body);
     attachMsgTime(div, at);
     div.appendChild(body);
     if (key) { div.dataset.mid = key; div.dataset.midKind = "assistant"; st.byId.set(key, div); }
@@ -2974,6 +3178,69 @@
     };
   }
 
+  // ==================== 目标条（/goal，输入框上头那一条）====================
+  /**
+   * 把当前会话的目标条画出来：`summary` 那行字由后端拼好（目标状态的文案只写一处，
+   * 见 goal.ts 的 goalBarSummary），这里只管三副脸、展开收起、点开看全文。
+   */
+  function renderGoalBar() {
+    if (!goalBarEl) { return; }
+    const st = activeSession();
+    const goal = st ? st.goal : null;
+    const summary = st ? st.goalSummary : null;
+    if (!goal || !summary) {
+      goalBarEl.className = "hidden";
+      goalBarEl.innerHTML = "";
+      return;
+    }
+    goalBarEl.className = summary.tone + (st.goalOpen ? " open" : "");
+    goalBarEl.innerHTML = "";
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "gb-head";
+    head.title = "目标 · 点开看目标原文与验收清单";
+    head.setAttribute("aria-expanded", String(!!st.goalOpen));
+    const dot = document.createElement("span"); dot.className = "gb-dot";
+    const text = document.createElement("span"); text.className = "gb-text";
+    text.textContent = summary.text;
+    const caret = document.createElement("span"); caret.className = "gb-caret";
+    caret.innerHTML = CHEVRON_SVG;
+    head.append(dot, text, caret);
+    goalBarEl.appendChild(head);
+
+    const body = document.createElement("div"); body.className = "gb-body";
+    const objLabel = document.createElement("div"); objLabel.className = "gb-label";
+    objLabel.textContent = "目标";
+    const objective = document.createElement("pre"); objective.className = "gb-objective";
+    objective.textContent = goal.objective || "";
+    body.append(objLabel, objective);
+    if (typeof goal.note === "string" && goal.note.trim()) {
+      const noteLabel = document.createElement("div"); noteLabel.className = "gb-label";
+      noteLabel.textContent = "最近一次结论";
+      const noteText = document.createElement("pre"); noteText.className = "gb-objective";
+      noteText.textContent = goal.note.trim();
+      body.append(noteLabel, noteText);
+    }
+    if (Array.isArray(goal.criteria) && goal.criteria.length) {
+      const crLabel = document.createElement("div"); crLabel.className = "gb-label";
+      crLabel.textContent = "验收清单（" + goal.criteria.length + " 条）";
+      const list = document.createElement("ul"); list.className = "gb-criteria";
+      for (const c of goal.criteria) {
+        const li = document.createElement("li");
+        li.textContent = c;
+        list.appendChild(li);
+      }
+      body.append(crLabel, list);
+    }
+    goalBarEl.appendChild(body);
+
+    const toggle = () => {
+      st.goalOpen = !st.goalOpen;
+      renderGoalBar();
+    };
+    head.addEventListener("click", toggle);
+  }
+
   function renderQueueBar(st) {
     if (activeId !== st.id) { return; }
     const items = st.queuedSteering || [];
@@ -3295,6 +3562,7 @@
     updateSendState();
     syncStatus();
     renderQueueBar(st);
+    renderGoalBar();
     syncJumpBottom(st);
   }
 
@@ -4171,9 +4439,8 @@
     // 人拖出来的宽度（像素数，也记在本机里）：没拖过就是 FILE_SIDEBAR_W_DEFAULT。
     // 写到版式上的那个值还可能被窗口收小，但这里留着的永远是原值（见 applyFileSidebarWidth）。
     width: 0,
-    // 开着的文件（从左到右）与「项目目录」那一格：[{ path, proj, line, scrollTop, mtime, loading, imageUrl }]
     wrap: false,     // 长行折起来还是横向滚（记在 localStorage；默认一行就是一行，见 chat.css 末尾）
-    // 开着的文件与目录，从左到右：[{ path, dir, line, scrollTop, mtime, loading, imageUrl }]
+    // 开着的文件与目录，从左到右：[{ path, proj, line, scrollTop, mtime, loading, imageUrl, page, drawn }]
     //（不记进设备，刷新就没了）
     //   path：文件是链接里那个写法；「项目目录」那一格是它现在待的那一层
     //（相对会话目录的写法：`.` 就是会话目录自己）
@@ -4182,9 +4449,17 @@
     //   mtime：画在这一列上的那份内容的修改时间（下次问「变了没」时带上去）
     //   loading：还在取（正文那块写着「正在读取…」）
     //   imageUrl：图片那个显示地址（blob:…）；换成别的图或关掉标签时要放掉它
+    //   page：这一格自己那一块正文（挂在 #fileBody 下面，切走时只是藏起来，不重画）；
+    //   切回来直接摆上——网页那个 iframe 挪一次位置就会重新加载，所以谁也不挪，只换露哪一块
+    //   drawn：那一块里已经有画好的内容了（切回来不必再去后端取）
     tabs: [],
     active: -1,      // 现在看的是哪一个标签（下标）；一个都没开就是 -1
     token: 0,        // 取文件是异步的：换标签 / 收起之后回来的旧回应就不算数了
+    hintPage: null,  // 一个标签都没开时那句提示画在哪儿（跟标签那几块同一层，只露一块）
+    sessionId: null,  // 现在手头这一份标签是哪个会话的（见 resetFileSidebarForSession）
+    // 每个会话各记一份它开过的标签：会话 id → { tabs, active }。
+    // 切走时记进来、切回来原样摆出去（正文那块不跟着走：切回来重读一次）
+    savedTabs: new Map(),
   };
   /** 上一条「变了没」的询问还在路上（手机网慢）：这一轮先不发，别越堆越多。 */
   let filePolling = false;
@@ -4314,7 +4589,11 @@
 
   /** 摆一格新标签要的那些字段：一个文件，或者「项目目录」那一格（它列出来的是一份清单）。 */
   function fileSidebarNewTab(path, proj) {
-    return { path: path, proj: !!proj, line: 0, scrollTop: 0, mtime: "", loading: false, imageUrl: "" };
+    return {
+      path: path, proj: !!proj, line: 0, scrollTop: 0, mtime: "", loading: false, imageUrl: "",
+      page: null,    // 这一格自己那一块正文（见 fileTabPage）
+      drawn: false,  // 那一块里已经有画好的内容了
+    };
   }
 
   /**
@@ -4367,6 +4646,64 @@
     if (tab && fileSidebar.body) { tab.scrollTop = fileSidebar.body.scrollTop; }
   }
 
+  /**
+   * 一个标签自己那一块正文：每个标签一块，都挂在 #fileBody 下面，同一时刻只露正看着的那一块。
+   * 切标签时不动里面画好的东西（网页那个 iframe 从文档里挪一次就会重新加载），只换露不露。
+   * 一块都还没建就先建一个。
+   */
+  function fileTabPage(tab) {
+    if (!tab || !fileSidebar.body) { return null; }
+    if (!tab.page) {
+      tab.page = document.createElement("div");
+      tab.page.className = "file-page";
+      fileSidebar.body.appendChild(tab.page);
+    }
+    return tab.page;
+  }
+
+  /** 一个标签都没开时那句提示画在哪儿（跟标签那几块同一层，只露一块）。 */
+  function fileHintPage() {
+    if (!fileSidebar.body) { return null; }
+    if (!fileSidebar.hintPage) {
+      fileSidebar.hintPage = document.createElement("div");
+      fileSidebar.hintPage.className = "file-page";
+      fileSidebar.body.appendChild(fileSidebar.hintPage);
+    }
+    return fileSidebar.hintPage;
+  }
+
+  /** 正文里现在该画在哪儿：正看着的那个标签那一块；一个标签都没开就是这一列自己那一块。 */
+  function filePage() {
+    const tab = fileSidebar.tabs[fileSidebar.active];
+    return tab ? fileTabPage(tab) : fileHintPage();
+  }
+
+  /** 正文里只露正看着的那一块（别的那几块留着，切回来直接摆上）。 */
+  function syncFilePages() {
+    if (!fileSidebar.body) { return; }
+    const tab = fileSidebar.tabs[fileSidebar.active];
+    const keep = tab ? fileTabPage(tab) : fileHintPage();
+    Array.prototype.forEach.call(fileSidebar.body.children, (page) => {
+      const hide = page !== keep;
+      if (page.hidden !== hide) { page.hidden = hide; }
+    });
+  }
+
+  /**
+   * 在这一格已经画好的正文里跳到某一行：切回一个开着、内容还在的标签时用，不必重新读文件。
+   * @returns 跳到了没有：这一块里没有那一行（图、目录，或者缓存旧了行数变少）给 false，调用方去重读
+   */
+  function jumpInFilePage(tab, line) {
+    const page = fileTabPage(tab);
+    const rows = page ? page.querySelectorAll(".file-line") : [];
+    const row = rows[line - 1] || null;
+    if (!row) { return false; }
+    page.querySelectorAll(".file-line.hit").forEach((r) => r.classList.remove("hit"));
+    row.classList.add("hit");
+    scrollFileBody(row, line, tab.scrollTop);
+    return true;
+  }
+
   /** 按现在开着的那几个文件重画标签条：点名字切过去、点那颗叉关掉。 */
   function renderFileTabs() {
     const bar = fileSidebar.tabsEl;
@@ -4415,16 +4752,42 @@
     if (linkLine > 0) { tab.line = linkLine; }
     setFileSidebarTitle(tab);
     renderFileTabs();
+    syncFilePages();
+    // 这一格以前画过：那一块还在，直接摆上（不必再去后端取；最多旧一个刷新节拍，
+    // 下面顺手问一次「变了没」，变了就换成新的）
+    if (tab.drawn) {
+      if (linkLine > 0) {
+        if (jumpInFilePage(tab, linkLine)) { pollActiveFile(); return; }
+        // 没有那一行（图、目录，或者缓存旧了行数变少）：重新读一遍
+      } else {
+        scrollFileBody(null, 0, tab.scrollTop);
+        pollActiveFile();
+        return;
+      }
+    }
     showFileNote("正在读取…");
     loadIntoSidebar(linkLine);
+  }
+
+  /**
+   * 把一格标签自己那块正文撤掉（关掉标签、切会话时）：这一块连着里面的东西一起不要了，
+   * 图那个显示地址也放掉。标签本身还留着的话（切会话）下次摆上时重读一遍。
+   */
+  function dropFileTabPage(tab) {
+    if (!tab) { return; }
+    releaseTabImage(tab);
+    if (tab.page && tab.page.parentNode) { tab.page.parentNode.removeChild(tab.page); }
+    tab.page = null;
+    tab.drawn = false;
   }
 
   /** 点标签上那颗叉：关掉这一个。全关光后这一列不收起，留一句提示。 */
   function closeFileTab(index) {
     if (!fileSidebar.tabs[index]) { return; }
     const wasActive = index === fileSidebar.active;
-    releaseTabImage(fileSidebar.tabs[index]);
+    const gone = fileSidebar.tabs[index];
     fileSidebar.tabs.splice(index, 1);
+    dropFileTabPage(gone);
     if (!wasActive) {
       // 关的不是正看着的这个：画面不动，只把标签条重画一遍（后面的下标要跟着挪）
       if (index < fileSidebar.active) { fileSidebar.active--; }
@@ -4437,6 +4800,7 @@
     if (fileSidebar.tabs.length === 0) {
       setFileSidebarTitle(null);
       renderFileTabs();
+      syncFilePages();
       showFileNote(FILE_SIDEBAR_HINT);
       return;
     }
@@ -4452,15 +4816,17 @@
    */
   function showFileNote(text, download) {
     if (!fileSidebar.body) { return; }
+    const page = filePage();
+    if (!page) { return; }
     const href = download ? download.url : "";
-    const only = fileSidebar.body.children.length === 1 ? fileSidebar.body.firstElementChild : null;
+    const only = page.children.length === 1 ? page.firstElementChild : null;
     const oldText = only && only.firstElementChild ? only.firstElementChild.textContent : null;
     const oldLink = only && only.querySelector ? only.querySelector("a.file-download") : null;
     if (only && only.className === "file-note" && oldText === text
         && ((!oldLink && !href) || (oldLink && oldLink.getAttribute("href") === href))) {
       return;
     }
-    fileSidebar.body.innerHTML = "";
+    page.innerHTML = "";
     const note = document.createElement("div");
     note.className = "file-note";
     const line = document.createElement("span");
@@ -4475,7 +4841,7 @@
       note.appendChild(document.createTextNode(" "));
       note.appendChild(link);
     }
-    fileSidebar.body.appendChild(note);
+    page.appendChild(note);
     prependFileUpRow();
   }
 
@@ -4504,9 +4870,10 @@
 
   /** 现在看着的「项目目录」那一格该有「上一层」这一行时，把它摆到正文最上面。 */
   function prependFileUpRow() {
-    if (!fileSidebar.body) { return; }
+    const page = filePage();
+    if (!page) { return; }
     const row = buildFileUpRow(fileSidebar.tabs[fileSidebar.active]);
-    if (row) { fileSidebar.body.insertBefore(row, fileSidebar.body.firstChild); }
+    if (row) { page.insertBefore(row, page.firstChild); }
   }
 
   /** 那个文件的下载地址：同一条 `/file` 地址带 download=1（不设大小上限、按附件给）；目录没有下载这回事。 */
@@ -4526,12 +4893,12 @@
    * 图片没有「链接说的那一行」可停，也不该画成一行行文字。
    */
   function renderFileImage(blob, tab) {
-    const body = fileSidebar.body;
-    if (!body) { return; }
+    const page = filePage();
+    if (!page) { return; }
     const url = URL.createObjectURL(blob);
     releaseTabImage(tab);
     tab.imageUrl = url;
-    body.innerHTML = "";
+    page.innerHTML = "";
     const wrap = document.createElement("div");
     wrap.className = "file-image";
     const img = document.createElement("img");
@@ -4539,7 +4906,7 @@
     img.alt = fileSidebarTabName(tab.path);
     img.src = url;
     wrap.appendChild(img);
-    body.appendChild(wrap);
+    page.appendChild(wrap);
   }
 
   /**
@@ -4550,9 +4917,10 @@
    * @param tab 正看着的「项目目录」那一格（它现在待在哪一层决定要不要「上一层」那一行）
    */
   function renderDirListing(listing, tab) {
+    const page = filePage();
     const body = fileSidebar.body;
-    if (!body) { return; }
-    body.innerHTML = "";
+    if (!page || !body) { return; }
+    page.innerHTML = "";
     body.scrollTop = 0;   // 换到这一层：清单从头看（不是停在上一层读到的地方）
     const entries = (listing && listing.entries) || [];
     if (entries.length === 0) {
@@ -4579,12 +4947,12 @@
       row.addEventListener("click", () => openSidebarLink(entry.path, 0, !!entry.dir));
       frag.appendChild(row);
     });
-    body.appendChild(frag);
+    page.appendChild(frag);
     if (listing.truncated) {
       const more = document.createElement("div");
       more.className = "file-note";
       more.textContent = "这个目录里的东西太多，只列出了一部分。";
-      body.appendChild(more);
+      page.appendChild(more);
     }
   }
 
@@ -4691,13 +5059,14 @@
    * 文档里的文件链接由文件侧边栏那段代点（见 buildFileSidebar），照旧开在这一列里。
    */
   function renderFileMarkdown(text) {
-    const body = fileSidebar.body;
-    if (!body) { return; }
-    body.innerHTML = "";
+    const page = filePage();
+    if (!page) { return; }
+    page.innerHTML = "";
     const doc = document.createElement("div");
     doc.className = "md file-md";
     doc.innerHTML = renderMarkdown(String(text));
-    body.appendChild(doc);
+    decorateMermaid(doc);
+    page.appendChild(doc);
   }
 
   /**
@@ -4708,9 +5077,9 @@
    * @param path 这个文件叫什么名字（按扩展名上色用）
    */
   function renderFileText(text, hitLine, path) {
-    const body = fileSidebar.body;
-    if (!body) { return null; }
-    body.innerHTML = "";
+    const page = filePage();
+    if (!page) { return null; }
+    page.innerHTML = "";
     const lines = String(text).split("\n");
     // 文件末尾那个换行会多出一个空行：不画它（行号也就不会凭空多出一个）
     if (lines.length > 1 && lines[lines.length - 1] === "") { lines.pop(); }
@@ -4731,7 +5100,7 @@
       if (hitLine > 0 && i + 1 === hitLine) { row.classList.add("hit"); hitRow = row; }
       frag.appendChild(row);
     });
-    body.appendChild(frag);
+    page.appendChild(frag);
     return hitRow;
   }
 
@@ -4785,18 +5154,18 @@
    * @param force 这个文件改过了、要重载一遍：同一个地址浏览器不会自己重新取
    */
   function renderFileHtml(tab, force) {
-    const body = fileSidebar.body;
-    if (!body) { return; }
+    const page = filePage();
+    if (!page) { return; }
     const src = siteUrl(tab);
-    const old = force ? null : body.querySelector("iframe.file-site");
+    const old = force ? null : page.querySelector("iframe.file-site");
     if (old && old.getAttribute("src") === src) { return; }
-    body.innerHTML = "";
+    page.innerHTML = "";
     const frame = document.createElement("iframe");
     frame.className = "file-site";
     frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-downloads");
     frame.setAttribute("title", fileSidebarTabName(tab.path));
     frame.src = src;
-    body.appendChild(frame);
+    page.appendChild(frame);
   }
 
   /**
@@ -4827,6 +5196,7 @@
       releaseTabImage(tab);
       probeFileMtime(tab);
       renderFileHtml(tab, true);
+      tab.drawn = true;
       return;
     }
     tab.loading = true;
@@ -4834,12 +5204,22 @@
       tab.loading = false;
       if (token !== fileSidebar.token) { return; }   // 已经换成别的标签了，这条回应丢掉
       tab.mtime = resp.headers.get("X-File-Mtime") || "";   // 看不了时也记：跟着刷新那轮靠它省重传
-      if (resp.status !== 200) { await showFileRefusal(resp, tab); return; }
-      if (tab.proj) { renderDirListing(await resp.json(), tab); return; }
+      if (resp.status !== 200) {
+        await showFileRefusal(resp, tab);
+        tab.drawn = true;   // 看不了也是一句“看不了”（切回来不必再问一次）
+        return;
+      }
+      if (tab.proj) {
+        renderDirListing(await resp.json(), tab);
+        tab.drawn = true;
+        return;
+      }
       scrollFileBody(await drawFileResponse(resp, tab), linkLine, tab.scrollTop);
+      tab.drawn = true;
     }).catch(() => {
       tab.loading = false;
       if (token !== fileSidebar.token) { return; }
+      // 没连上：不算画过，切回来再试一次
       showFileNote("读不出来：连不上后端。");
     });
   }
@@ -4991,7 +5371,9 @@
     prepareFileSidebar();
     const at = fileSidebarProjectIndex();
     if (at < 0) { return; }
-    fileSidebar.tabs[at].path = key;
+    const tab = fileSidebar.tabs[at];
+    tab.path = key;
+    tab.drawn = false;   // 换了一层：这一块里画的是上一层那份清单，作废（下面重新取）
     showFileTab(at, 0);
   }
 
@@ -5011,6 +5393,7 @@
     const tab = at >= 0 ? fileSidebar.tabs[at] : null;
     if (!tab || tab.path === FILE_SIDEBAR_PROJECT_PATH) { return; }
     tab.path = parentDirPath(tab.path);
+    tab.drawn = false;   // 换了一层：那一块里是原来那一层的清单，作废（下面重新取）
     showFileTab(at, 0);
   }
 
@@ -5025,16 +5408,37 @@
     vscode.postMessage({ type: "openFile", path, line, col });
   }
 
-  /** 切会话：这一列里那些文件属于上一个会话的目录，标签全清掉（别把别人的东西留在界面上）；
-   *  「项目目录」那一格换成新会话的目录重新给出来。 */
+  /**
+   * 切会话：手上这一份标签（开着的文件、看的是哪一个）记在它会话名下，
+   * 然后把新会话自己那一份摆出来（切回一个会话时，它的标签原样回来、内容重读一次）。
+   *
+   * 正文那几块不跟着串会话：标签里的路径是相对那个会话目录写的，
+   * 所以切走时把它们撤掉（连着网页那个 iframe、图片那个显示地址）。
+   */
   function resetFileSidebarForSession() {
     if (!fileSidebar.root) { return; }
     fileSidebar.token++;
-    fileSidebar.tabs.forEach(releaseTabImage);   // 上一个会话里看过的图：那些显示地址放掉
-    fileSidebar.tabs = [];
-    fileSidebar.active = -1;
+    rememberFileTabScroll();
+    // 上一个会话的那一份：记在它名下，正文那几块撤掉
+    if (fileSidebar.sessionId && fileSidebar.sessionId !== activeId) {
+      fileSidebar.savedTabs.set(fileSidebar.sessionId, { tabs: fileSidebar.tabs, active: fileSidebar.active });
+      fileSidebar.tabs.forEach(dropFileTabPage);
+      fileSidebar.tabs = [];
+      fileSidebar.active = -1;
+    }
+    fileSidebar.sessionId = activeId || null;
+    // 这个会话以前开过文件：把它那一份摆回来（内容重读）
+    const back = activeId ? fileSidebar.savedTabs.get(activeId) : null;
+    fileSidebar.tabs = back ? back.tabs : [];
+    fileSidebar.active = -1;   // 下面 showFileTab 摆上它；不动这一步，标签条会以为已经看着某一格
+    if (back) { fileSidebar.savedTabs.delete(activeId); }
+    if (fileSidebar.tabs.length > 0) {
+      showFileTab(Math.min(Math.max(back.active, 0), fileSidebar.tabs.length - 1), 0);
+      return;
+    }
     setFileSidebarTitle(null);
     renderFileTabs();
+    syncFilePages();
     showFileNote(FILE_SIDEBAR_HINT);
     ensureProjectDirTab();   // 开着就换成新会话的目录；收着的那就等打开时再说
   }
@@ -6661,6 +7065,11 @@
         st.activityDetail = typeof s.activityDetail === "string" ? s.activityDetail : "";
         st.piReady = s.piReady !== false;
         st.loading = !!s.loading;
+        // 目标（/goal）：每次列表都带一份（跟模型名一样，是一次性推送的补位）——
+        // 刷新页面 / 重连后目标条就靠它回来。
+        st.goal = s.goal || null;
+        st.goalSummary = s.goalSummary || null;
+        if (!st.goal) { st.goalOpen = false; }
         syncSessionLoading(st);
         // 界面重建（网页重连、视图隐藏重开、窗口重载）后 sessionList 是唯一信源：
         // modelChanged 是一次性推送，不在此恢复会导致状态栏模型名丢失。
@@ -6698,10 +7107,11 @@
         const pending = pendingActivateId;
         pendingActivateId = null;
         if (sessions.has(pending)) { activateSessionView(pending); }
-        else if (activeId && sessions.has(activeId)) { mountActiveSession(); syncPaneStatuses(); }
+        else if (activeId && sessions.has(activeId)) { mountActiveSession(); syncPaneStatuses(); renderGoalBar(); }
       } else if (activeId && sessions.has(activeId)) {
         mountActiveSession();
         syncPaneStatuses();
+        renderGoalBar();
       }
       renderSessionBar();
       // 会话目录这时候才认识：这一列开着又空着的话，把「项目目录」那一格摆上（见票 13）
@@ -7158,6 +7568,14 @@
         if (activeId === t.id) { syncStatus(); }
         syncPaneStatuses();
         break;
+      case "goal":
+        // 目标状态（/goal）：目标条常驻在输入框上头，不再往消息流里写一条
+        t.goal = msg.goal || null;
+        t.goalSummary = msg.summary || null;
+        if (msg.open === true) { t.goalOpen = true; }
+        if (!t.goal) { t.goalOpen = false; }
+        if (activeId === t.id) { renderGoalBar(); }
+        break;
       case "thinkingChanged":
         t.thinkingLevel = msg.level || "";
         if (activeId === t.id) { syncStatus(); }
@@ -7357,6 +7775,7 @@
     st.viewEl.remove();
     sessions.delete(id);
     sessionDrafts.delete(id);
+    fileSidebar.savedTabs.delete(id);   // 这个会话关掉了：它那一份标签也不必留着（反正它的目录里不再有人看）
     if (activeId === id) { activeId = null; syncJumpBottom(st); syncComposerButtons(); }
   }
 

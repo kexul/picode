@@ -1,8 +1,10 @@
 import * as fs from "fs";
 import { PiClient } from "./piClient";
 import { ASK_DECODER, AskDoneNotice, AskRequest } from "./askProtocol";
+import { parseGoalCommand } from "./goal";
 import { StderrFrameSplitter } from "./piFrames";
 import { TABA_DECODER, TabaRequest } from "./tabaProtocol";
+import { GOAL_DECODER, GoalVerdictRequest } from "./goalProtocol";
 import { NameParts } from "./names";
 import { EditTracker } from "./editTracker";
 import {
@@ -70,6 +72,14 @@ export const BUILTIN_COMPACT_ITEM: SlashCommandItem = {
     source: "builtin",
 };
 
+/** 目标（/goal）：插件自己接手的命令，见 goal.ts。 */
+export const BUILTIN_GOAL_ITEM: SlashCommandItem = {
+    insert: "/goal ",
+    name: "goal",
+    description: "定一个目标，一直干到验收通过（先谈验收清单）",
+    source: "builtin",
+};
+
 /**
  * 这条消息是不是要插件接手的 /compact。
  * @returns 要压缩就返回 pi 的 customInstructions（没写就是空串）；不是 /compact 返回 null。
@@ -114,9 +124,9 @@ export function commandMenuItems(commands: RpcCommandInfo[]): SlashCommandItem[]
                 ? c.source
                 : "other",
         }))
-        // 同名时别盖掉插件自己认下的那条（比如 /compact）
-        .filter((it) => it.name !== BUILTIN_COMPACT_ITEM.name)
-        .concat([BUILTIN_COMPACT_ITEM])
+        // 同名时别盖掉插件自己认下的那几条（/compact、/goal）
+        .filter((it) => it.name !== BUILTIN_COMPACT_ITEM.name && it.name !== BUILTIN_GOAL_ITEM.name)
+        .concat([BUILTIN_COMPACT_ITEM, BUILTIN_GOAL_ITEM])
         .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -200,8 +210,8 @@ export class SessionRuntime {
     private client?: PiClient;
     /** 本 panel 启动 pi 时的额外要求（子会话才有）；进程重启时照原样再用一次。 */
     private launch?: PanelLaunch;
-    /** 从本进程 stderr 里挑暗号行的切割器（派子会话、问话两种暗号都走它）。 */
-    private readonly piFrames = new StderrFrameSplitter([TABA_DECODER, ASK_DECODER]);
+    /** 从本进程 stderr 里挑暗号行的切割器（派子会话、问话、目标验收三种暗号都走它）。 */
+    private readonly piFrames = new StderrFrameSplitter([TABA_DECODER, ASK_DECODER, GOAL_DECODER]);
     private readonly edits: EditTracker;
     // ---- 网页端「只发最近一段历史」的窗口（宿主 wantsTrimmedHistory 为 true 时启用）----
     /** 当前窗口在完整消息数组里的起点下标；-1 表示没开窗口（全量发过 / 非网页端）。 */
@@ -359,6 +369,13 @@ export class SessionRuntime {
                         ? `[派子会话] 收到派活请求：「${req.name}」（${req.id}，任务 ${req.task.length} 字）`
                         : `[派子会话] 收到停止请求：「${req.name || req.id || ""}」`);
                     this.host.onTabaRequest?.(this.id, req);
+                    continue;
+                }
+                if (frame.kind === "goal") {
+                    // 判官会话里 update_goal 的结论：交回宿主去改目标状态
+                    const verdict = frame.value as GoalVerdictRequest;
+                    console.error(`[目标验收] 判官报了结论：${verdict.pass ? "通过" : "没过"}（${verdict.summary}）`);
+                    this.host.onGoalVerdict?.(this.id, verdict);
                     continue;
                 }
                 if (frame.kind === "ask") {
@@ -519,6 +536,7 @@ export class SessionRuntime {
         }
         // pi 的内置斜杠命令只在终端界面里处理，走 RPC 发过去只会当成普通文字交给模型。
         // 其中 /compact 插件自己接手：改发 pi 的 compact 命令（pi 的 prompt 里做不了这个）。
+        // /goal 系列同样由插件接手（目标状态、提示词都在宿主那边）。
         // 带图片、或者是插件代发的（子会话结果交回这类）不当命令看。
         if (!hasImages && !opts?.followUp) {
             const instructions = parseCompactCommand(text || "");
@@ -528,6 +546,15 @@ export class SessionRuntime {
                     this.startClient();
                 }
                 void this.compactContext(instructions);
+                return;
+            }
+            const goalCmd = parseGoalCommand(text || "");
+            if (goalCmd && this.host.onGoalCommand) {
+                this.hasConversation = true;
+                if (!this.client || !this.client.isRunning()) {
+                    this.startClient();
+                }
+                this.host.onGoalCommand(this.id, goalCmd);
                 return;
             }
         }

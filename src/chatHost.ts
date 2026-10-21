@@ -22,7 +22,7 @@ import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
-import { getAskAssets, getTabaAssets } from "./bridgeAssets";
+import { getAskAssets, getGoalAssets, getTabaAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
 import {
     listProjectDirs,
@@ -40,6 +40,7 @@ import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
 import {
     DEFAULT_AUTO_LOAD_LAST,
+    DEFAULT_CLOSE_SESSION_KEY,
     DEFAULT_FOCUS_INPUT_KEY,
     DEFAULT_FONT_SIZE,
     DEFAULT_NEW_SESSION_KEY,
@@ -47,6 +48,7 @@ import {
     DEFAULT_SEND_KEY,
     DEFAULT_TAB_SWITCH_KEY,
     DEFAULT_THEME_MODE,
+    CLOSE_SESSION_KEYS,
     FOCUS_INPUT_KEYS,
     NEW_SESSION_KEYS,
     SEND_KEYS,
@@ -123,6 +125,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private static readonly KEY_AUTO_LOAD_LAST = "piChat.autoLoadLastSession";
     private static readonly KEY_SEND_KEY = "piChat.sendKey";
     private static readonly KEY_NEW_SESSION_KEY = "piChat.newSessionKey";
+    private static readonly KEY_CLOSE_SESSION_KEY = "piChat.closeSessionKey";
     private static readonly KEY_TAB_SWITCH_KEY = "piChat.tabSwitchKey";
     private static readonly KEY_FOCUS_INPUT_KEY = "piChat.focusInputKey";
     private static readonly KEY_FONT_SIZE = "piChat.fontSize";
@@ -173,6 +176,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             case ChatHost.KEY_FONT_SIZE: return cfg.fontSize;
             case ChatHost.KEY_SEND_KEY: return cfg.sendKey;
             case ChatHost.KEY_NEW_SESSION_KEY: return cfg.newSessionKey;
+            case ChatHost.KEY_CLOSE_SESSION_KEY: return cfg.closeSessionKey;
             case ChatHost.KEY_TAB_SWITCH_KEY: return cfg.tabSwitchKey;
             case ChatHost.KEY_FOCUS_INPUT_KEY: return cfg.focusInputKey;
             case ChatHost.KEY_NOTIFY_TURN_END: return cfg.notifyTurnEnd;
@@ -199,6 +203,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const cfg = readServerConfig().config;
         const taba = cfg.tabaEnabled ? getTabaAssets() : undefined;
         const ask = getAskAssets();
+        const goal = getGoalAssets();
         return {
             piPath: cfg.piPath,
             provider: cfg.provider,
@@ -209,6 +214,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             tabaDir: taba?.ok ? taba.resourceDir : "",
             askExtension: ask?.ok ? ask.extensionPath : "",
             askDir: ask?.ok ? ask.resourceDir : "",
+            // 目标（/goal）的判官工具：只给判官会话加载（普通会话没有 update_goal）
+            goalExtension: goal?.ok ? goal.extensionPath : "",
         };
     }
 
@@ -751,6 +758,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const v = this.readOption<string>(ChatHost.KEY_NEW_SESSION_KEY, DEFAULT_NEW_SESSION_KEY);
         return inList(NEW_SESSION_KEYS, v) ? v : DEFAULT_NEW_SESSION_KEY;
     }
+    public getCloseSessionKey(): string {
+        const v = this.readOption<string>(ChatHost.KEY_CLOSE_SESSION_KEY, DEFAULT_CLOSE_SESSION_KEY);
+        return inList(CLOSE_SESSION_KEYS, v) ? v : DEFAULT_CLOSE_SESSION_KEY;
+    }
     public getTabSwitchKey(): string {
         const v = this.readOption<string>(ChatHost.KEY_TAB_SWITCH_KEY, DEFAULT_TAB_SWITCH_KEY);
         return inList(TAB_SWITCH_KEYS, v) ? v : DEFAULT_TAB_SWITCH_KEY;
@@ -810,6 +821,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         } else if (action === "newSessionKey") {
             const next = inList(NEW_SESSION_KEYS, value) ? value : nextInList(NEW_SESSION_KEYS, this.getNewSessionKey());
             this.writeOption(ChatHost.KEY_NEW_SESSION_KEY, next);
+        } else if (action === "closeSessionKey") {
+            const next = inList(CLOSE_SESSION_KEYS, value) ? value : nextInList(CLOSE_SESSION_KEYS, this.getCloseSessionKey());
+            this.writeOption(ChatHost.KEY_CLOSE_SESSION_KEY, next);
         } else if (action === "tabSwitchKey") {
             const next = inList(TAB_SWITCH_KEYS, value) ? value : nextInList(TAB_SWITCH_KEYS, this.getTabSwitchKey());
             this.writeOption(ChatHost.KEY_TAB_SWITCH_KEY, next);

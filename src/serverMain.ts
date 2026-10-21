@@ -17,7 +17,7 @@ import { PiChatWebServer, type WebServerSettings } from "./webChatServer";
 import { ChatHost } from "./chatHost";
 import { readServerConfig, updateServerConfig } from "./serverConfig";
 import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
-import { ensureAskAssets, ensureTabaAssets } from "./bridgeAssets";
+import { ensureAskAssets, ensureGoalAssets, ensureTabaAssets } from "./bridgeAssets";
 import { serverConfigFile } from "./serverPaths";
 
 /** 安装根目录（out/server → 根）。 */
@@ -164,6 +164,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     const askAssets = ensureAskAssets(VERSION);
     if (!askAssets.ok) {
         log(`问话（ask_choice）这个工具没开（文件没写成：${askAssets.error}）`);
+    }
+
+    // 目标（/goal）判官会话里那个 update_goal：同样先写好（它只在判官会话里加载）
+    const goalAssets = ensureGoalAssets(VERSION);
+    if (!goalAssets.ok) {
+        log(`目标的验收（/goal 的判官）没开（文件没写成：${goalAssets.error}）`);
     }
 
     let started: StartedBackend;

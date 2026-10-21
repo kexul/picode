@@ -27,3 +27,8 @@ export function serverStateFile(dir: string = pichatDir()): string {
 export function serverAddressFile(dir: string = pichatDir()): string {
     return path.join(dir, "server.json");
 }
+
+/** 各会话的「/goal 目标」存这里（键是会话文件路径，见 goalFiles.ts）。 */
+export function goalsFile(dir: string = pichatDir()): string {
+    return path.join(dir, "goals.json");
+}

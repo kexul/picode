@@ -119,7 +119,7 @@ function createHarness(options = {}) {
     const { ChatViewProvider } = require(OUT_ENTRY);
     const { startBackend } = require(OUT_SERVER);
     const { updateServerConfig } = require(OUT_CONFIG);
-    const { ensureTabaAssets, ensureAskAssets } = require(OUT_BRIDGES);
+    const { ensureTabaAssets, ensureAskAssets, ensureGoalAssets } = require(OUT_BRIDGES);
     const version = packageVersion();
 
     // 调试用的设置写进后端那份 config.json：模型 / pi 路径这些跟真后端一样从文件读，
@@ -147,6 +147,8 @@ function createHarness(options = {}) {
     ensureTabaAssets(version);
     // 问话（ask_choice）那个工具要用的扩展：同理
     ensureAskAssets(version);
+    // 目标判官那个 update_goal 扩展：同理（只有判官会话会加载它）
+    ensureGoalAssets(version);
 
     const context = {
         subscriptions: [],

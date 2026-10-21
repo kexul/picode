@@ -34,6 +34,7 @@ export const CHAT_UI_FILES: readonly ChatUiFile[] = [
     { name: "browserBridge.js", role: "bridge" },
     { name: "marked.js", role: "vendor-script" },
     { name: "highlight.js", role: "vendor-script" },
+    { name: "mermaid.js", role: "vendor-script" },
     { name: "chat.js", role: "main-script" },
 ];
 

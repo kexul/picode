@@ -10,6 +10,7 @@
  *      `./html-site.js` 那段脚本真跑了（这两个子请求走的也是 `/site/` 那条地址）；
  *   3. 链接里带的行号（`:2`）在网页这条路上等于没带，不报错；
  *   4. 文件被改过以后，这一列不用重新点链接就把那个 iframe 重载一遍（问的是 HEAD，改过才重载）；
+ *      切到别的标签再切回来时那个 iframe 不重新加载（页面里的滚动、输入、跑着的脚本都得还在）；
  *   5. 那条 `/site/` 地址的规矩：HEAD 给修改时间、不存在的文件 404、会话目录外面的 403。
  *
  * 测试用的文件（html-site.html / .css / .js）现写进会话目录（dev/.scratch），那个目录不进版本库。
@@ -82,11 +83,22 @@ module.exports = async (page) => {
     `);
     check("消息流里那张网页的链接点得着", clicked === true);
 
+    // 每个标签各留自己那一块正文（切走只是藏起来，见 chat.js 的 fileTabPage）：
+    // 一律从「露着的那一块」查，别从整个 #fileBody 查（那儿同时躺着别的标签的内容）。
+    await page.eval(`
+        window.__fileView = function () {
+            return document.querySelector("#fileBody .file-page:not([hidden])")
+                || document.getElementById("fileBody");
+        };
+        return true;
+    `);
+
     /** 读现在这一列里那个 iframe 的状态（同源，页里的 document 直接读得到）。 */
     const readFrame = async () => JSON.parse(await page.eval(`
-        const frame = document.querySelector("#fileBody iframe.file-site");
+        const view = window.__fileView();
+        const frame = view.querySelector("iframe.file-site");
         if (!frame) {
-            return JSON.stringify({ found: false, lines: document.querySelectorAll("#fileBody .file-line").length });
+            return JSON.stringify({ found: false, lines: view.querySelectorAll(".file-line").length });
         }
         const d = frame.contentDocument;
         if (!d || !d.getElementById("site-title")) {
@@ -101,7 +113,7 @@ module.exports = async (page) => {
             title: (d.getElementById("site-title") || {}).textContent || "",
             script: (d.getElementById("site-script") || {}).textContent || "",
             color: css ? getComputedStyle(css).color : "",
-            lines: document.querySelectorAll("#fileBody .file-line").length,
+            lines: view.querySelectorAll(".file-line").length,
         });
     `));
 
@@ -137,6 +149,46 @@ module.exports = async (page) => {
         after.color === "rgb(0, 128, 0)" && after.script === "脚本跑了",
         JSON.stringify({ color: after.color, script: after.script }));
     await page.shot("html-2-reload.png");
+
+    // 4b. 切到别的标签再切回来：那个 iframe 不许重新加载
+    //     （一挪位置、一重造，页面里的滚动、输入、跑着的脚本全丢，靠脚本画出来的图表等于白画一遍）
+    console.log("在网页里做个记号：" + await page.eval(`
+        const view = window.__fileView();
+        const frame = view.querySelector("iframe.file-site");
+        if (!frame) { return "没有 iframe"; }
+        frame.setAttribute("data-mark", "keep");
+        try { frame.contentWindow.__mark = "alive"; } catch (e) { return "碰不到那个页面：" + e.message; }
+        return "记上了";
+    `));
+    console.log("点「项目目录」那一格：" + await page.eval(`
+        const t = document.querySelector("#fileTabs .file-tab[data-proj='1']");
+        if (!t) { return "没有那一格"; }
+        t.click();
+        return "点了";
+    `));
+    await page.sleep(600);
+    console.log("点回网页那一格：" + await page.eval(`
+        const t = Array.from(document.querySelectorAll("#fileTabs .file-tab"))
+            .find(function (x) { return x.getAttribute("data-path") === ${JSON.stringify(PAGE.html)}; });
+        if (!t) { return "没有那一格"; }
+        t.click();
+        return "点了";
+    `));
+    await page.sleep(300);
+    const backFrame = JSON.parse(await page.eval(`
+        const view = window.__fileView();
+        const frame = view.querySelector("iframe.file-site");
+        return JSON.stringify({
+            same: !!frame && frame.getAttribute("data-mark") === "keep",
+            mark: frame && frame.contentWindow ? (frame.contentWindow.__mark || "") : "",
+            title: frame && frame.contentDocument
+                ? ((frame.contentDocument.getElementById("site-title") || {}).textContent || "") : "",
+            frames: view.querySelectorAll("iframe.file-site").length,
+        });
+    `));
+    check("切到别的标签再切回来：还是原来那个 iframe（没重新加载，页面里的状态还在）",
+        backFrame.same && backFrame.mark === "alive" && backFrame.title === TITLE_AFTER && backFrame.frames === 1,
+        JSON.stringify(backFrame));
 
     // 5. 那条地址自己的规矩：HEAD 给修改时间、没有的文件 404、目录外的 403
     const probe = JSON.parse(await page.eval(`
