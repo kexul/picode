@@ -16,6 +16,10 @@ export const GOAL_BRIDGE_SOURCE = String.raw`/**
  *
  * 作用：给「判官」会话一个工具 update_goal —— 它验完工人这一轮的活，用这个工具报结论。
  * 插件读本进程的 stderr，读到暗号就去改目标状态、决定还要不要催工人接着干。
+ *
+ * 注意：判官会话是用 --tools 白名单起的，pi 会把扩展注册的工具也过一遍名单 ——
+ * 所以 update_goal 这个名字必须列进那个白名单（见 chatControllerBase 的 GOAL_JUDGE_TOOLS），
+ * 漏了的话判官照样能把活验完，就是报不上来，插件那边看到的是"判官没给出结论"。
  */
 const FRAME_PREFIX = ${JSON.stringify(GOAL_FRAME_PREFIX)};
 

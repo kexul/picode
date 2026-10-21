@@ -121,6 +121,23 @@ function loadBridges() {
 }
 loadBridges();
 
+// `--tools` 是白名单：真 pi 用它过滤工具（连扩展注册的那些也一起过一遍，不在名单里就不给模型）。
+// 这里照着挡一道 —— 不挡的话，“传了白名单、结果把扩展工具也挡掉了”这种错在调试里永远看不见
+//（2026-10-21 判官就是这么连着两轮报不上结论的：白名单里漏了 update_goal）。
+const allowedTools = (() => {
+    const argv = process.argv.slice(2);
+    const at = argv.indexOf("--tools");
+    if (at < 0 || at + 1 >= argv.length) { return null; }
+    return argv[at + 1].split(",").map((s) => s.trim()).filter(Boolean);
+})();
+if (allowedTools) {
+    for (const name of Array.from(bridgeTools.keys())) {
+        if (allowedTools.indexOf(name) >= 0) { continue; }
+        bridgeTools.delete(name);
+        console.error("[假 pi] --tools 白名单里没有 " + name + "：这个扩展工具这次不给模型。");
+    }
+}
+
 /** 桥要的两样东西：这个会话在哪个目录、它的 .jsonl 在哪（见 tabaBridgeSource.ts 的 cwdOf / sessionFileOf）。 */
 function bridgeCtx() {
     return {

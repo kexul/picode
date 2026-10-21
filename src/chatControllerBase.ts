@@ -1043,8 +1043,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
     private static readonly GOAL_MAX_NO_VERDICT = 2;
     /** 判官的 pi 起来最多等多久。 */
     private static readonly GOAL_JUDGE_READY_TIMEOUT_MS = 40000;
-    /** 判官能用哪些工具：只读 + 跑命令；不给 edit / write（只验不改）。 */
-    private static readonly GOAL_JUDGE_TOOLS = "read,bash,grep,find,ls";
+    /**
+     * 判官能用哪些工具：只读 + 跑命令；不给 edit / write（只验不改）。
+     * 注意 `--tools` 是个白名单，**扩展注册的工具也要列进来**（pi 把它一起过名单）：
+     * 漏了 update_goal 的话，判官照样能把活验完、写完一段结论，就是报不上来 ——
+     * 插件这边看到的是“判官连着两次没给出结论”。
+     */
+    private static readonly GOAL_JUDGE_TOOLS = "read,bash,grep,find,ls,update_goal";
 
     /** 目标循环的内存账（会话关掉就没了；轮数记在目标上，重开还认）。 */
     private readonly goalLoop = new Map<string, {
