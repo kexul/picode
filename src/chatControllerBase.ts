@@ -55,6 +55,7 @@ import {
     buildTabaExtraArgs,
     buildTabaLaunch,
     resolveTabaSpawn,
+    type TabaSpawnOptions,
 } from "./tabaLaunch";
 import { buildRunRecord, closedRunState, tabaRunsDir, writeRunRecord, type TabaRunState } from "./tabaRunFiles";
 import {
@@ -803,8 +804,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const target = path.resolve(dir);
         const cands: SessionRuntime[] = [];
         for (const rt of this.panels.values()) {
-            // 判官会话不是给人看的（不进会话列表）：不能把一块屏派到它那儿去
-            if (this.goalJudgeOf.has(rt.id)) { continue; }
+            // 判官不是给人看的（hidden 子会话）：不能把一块屏派到它那儿去
+            if (this.taba.byChildPanel(rt.id)?.hidden) { continue; }
             if (sameDir(rt.cwd, target)) { cands.push(rt); }
         }
         if (cands.length === 0) { return undefined; }
@@ -1026,8 +1027,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
     //  目标（/goal）第二段：每轮盯一次验收的判官循环
     // ========================================================================
     //
-    //  工人这一轮跑完 → 派一个判官子会话（只有它能调 update_goal）→ 判官自己动手验
-    //  → 报「过了」就收工；报「没过」就把批评发回给工人开下一轮。
+    //  工人这一轮跑完 → 派一个判官子会话（走 tabaSpawn，带 hidden：不进列表、不交回结果，
+    //  只有它能调 update_goal）→ 判官自己动手验 → 报「过了」就收工；报「没过」就把批评
+    //  发回给工人开下一轮。
     //  停的条件：验收通过、轮数/长时用完、连着几轮没过的是同一批条目（没进展）、
     //  判官连着两次没给结论、用户自己插话（目标暂停，打 /goal 继续 接着跑）。
     //
@@ -1041,8 +1043,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     private static readonly GOAL_MAX_STALE = 3;
     /** 判官连着这么多次没报结论：停（别让工人被空催）。 */
     private static readonly GOAL_MAX_NO_VERDICT = 2;
-    /** 判官的 pi 起来最多等多久。 */
-    private static readonly GOAL_JUDGE_READY_TIMEOUT_MS = 40000;
     /**
      * 判官能用哪些工具：只读 + 跑命令；不给 edit / write（只验不改）。
      * 注意 `--tools` 是个白名单，**扩展注册的工具也要列进来**（pi 把它一起过名单）：
@@ -1061,15 +1061,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
         staleRounds: number;
         /** 判官连着几次没报结论。 */
         noVerdicts: number;
-        /** 正在跑的那个判官会话（没有就是 undefined）。 */
-        judgePanelId?: string;
+        /** 正在跑的那个判官的编号（判官是 hidden 子会话，编号见 TabaChild.id）；没有就是 undefined。 */
+        judgeRunId?: string;
     }>();
-    /** 判官会话 → 它在给哪个会话判。判官会话不进会话列表，就靠这张表认出来。 */
-    private readonly goalJudgeOf = new Map<string, string>();
 
     /** 这个会话的目标现在是不是正有判官在验（目标条上写出来，不然看着像卡住了）。 */
     protected goalIsJudging(panelId: string): boolean {
-        return !!this.goalLoop.get(panelId)?.judgePanelId;
+        return !!this.goalLoop.get(panelId)?.judgeRunId;
     }
 
     /** 用户明确让目标开跑 / 接着跑：这一趟的时长预算与“没进展”的账都从这一刻重算。 */
@@ -1091,7 +1089,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const goal = this.goals.get(info.panelId);
         if (!goal || goal.phase !== "active") { return; }
         const book = this.goalBook(info.panelId);
-        if (book.judgePanelId) { return; }   // 上一个判官还在跑（正常不会）：不叠着开
+        if (book.judgeRunId) { return; }   // 上一个判官还在跑（正常不会）：不叠着开
         // 这一轮没正常跑完：先停，别叫判官（叫了也验不到新东西，白花钱）
         if (info.status !== "done") {
             this.goalStop(info.panelId, info.status === "cancelled" ? "那一轮被中止了" : "那一轮报错了");
@@ -1102,8 +1100,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
         void this.goalSpawnJudge(info.panelId, goal, info.lastReplyText ?? "");
     }
 
-    /** 派一个判官去验这一轮：新开一个后台会话（不进列表），验完它调 update_goal 报结论。 */
-    protected async goalSpawnJudge(workerPanelId: string, goal: GoalState, report: string): Promise<void> {
+    /**
+     * 派一个判官去验这一轮。
+     *
+     * 走的是派子会话同一条路（`tabaSpawn` + `hidden`）：同样的起会话、登记、收尾；
+     * 只是不进列表、不写名录、不给模型看见，跑完也不交回父会话 —— 它调 update_goal 报结论。
+     */
+    protected goalSpawnJudge(workerPanelId: string, goal: GoalState, report: string): void {
         const workerRt = this.panels.get(workerPanelId);
         if (!workerRt) { return; }
         const cfg = this.getConfig();
@@ -1111,48 +1114,36 @@ export abstract class ChatControllerBase implements RuntimeHost {
             this.goalStop(workerPanelId, "判官那个扩展没写出来（update_goal 用不了）");
             return;
         }
-        const launch: PanelLaunch = {
-            extraArgs: ["--tools", ChatControllerBase.GOAL_JUDGE_TOOLS, "-e", cfg.goalExtension],
-            skipSpare: true,      // 参数不一样，领不了备用进程
-            noTaba: true,         // 判官不能再往下派
-            cwd: workerRt.cwd,     // 在工人的目录里跑验证命令
+        const round = goal.rounds + 1;
+        const req: TabaSpawnRequest = {
+            kind: "spawn",
+            // 判官编号自己起（普通子会话的编号是模型那边给的）；要能当文件名用，所以只留字母数字
+            id: "judge" + Date.now().toString(36),
+            name: `判官 · 第 ${round} 轮`,
+            task: buildGoalJudgePrompt({
+                goal,
+                round,
+                workerReport: report,
+                workerSessionFile: workerRt.currentSessionPath ?? "",
+                cwd: workerRt.cwd,
+            }),
+            tools: ChatControllerBase.GOAL_JUDGE_TOOLS,
+            cwd: workerRt.cwd,
         };
-        const created = this.createBackgroundSession(launch, {
-            provider: workerRt.provider || undefined,
-            modelId: workerRt.modelId || undefined,
-        });
-        if (!created) {
-            this.goalStop(workerPanelId, "判官会话开不出来（pi 可执行文件没找到？）");
-            return;
-        }
-        const book = this.goalBook(workerPanelId);
-        book.judgePanelId = created.id;
-        this.goalJudgeOf.set(created.id, workerPanelId);
-        goal.rounds++;
+        this.goalBook(workerPanelId).judgeRunId = req.id;
+        goal.rounds = round;
         delete goal.note;   // 这一轮的结论还没出来
         this.goalSave(workerRt);
         this.goalBroadcast(workerPanelId);
         this.postToSession(workerPanelId, {
             type: "system",
-            text: `第 ${goal.rounds} 轮跑完了，派判官去验。`,
+            text: `第 ${round} 轮跑完了，派判官去验。`,
         });
-
-        const ready = await created.waitReady(ChatControllerBase.GOAL_JUDGE_READY_TIMEOUT_MS);
-        // 等的时候目标被暂停/清除、或者工人会话被关掉：判官用不着了
-        if (!this.panels.has(created.id) || book.judgePanelId !== created.id) { return; }
-        if (!ready) {
-            book.judgePanelId = undefined;
-            this.closeGoalJudge(created.id);
-            this.goalStop(workerPanelId, "判官这次没起来（pi 冷启动超时）");
-            return;
-        }
-        created.handleSend(buildGoalJudgePrompt({
-            goal,
-            round: goal.rounds,
-            workerReport: report,
-            workerSessionFile: workerRt.currentSessionPath ?? "",
-            cwd: workerRt.cwd,
-        }), undefined, { followUp: true });
+        void this.tabaSpawn(workerPanelId, req, {
+            hidden: true,
+            extraArgs: ["-e", cfg.goalExtension],
+            rawTask: true,
+        });
     }
 
     /**
@@ -1160,14 +1151,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * @returns 这是判官会话（这一轮的 onTurnEnd 就到此为止，不弹提醒、不当普通会话处理）
      */
     protected goalJudgeOnTurnEnd(info: TurnEndInfo): boolean {
-        const workerPanelId = this.goalJudgeOf.get(info.panelId);
+        const judge = this.taba.byChildPanel(info.panelId);
+        if (!judge || !judge.hidden) { return false; }
+        const workerPanelId = judge.parentPanelId;
         if (!workerPanelId) { return false; }
         const book = this.goalLoop.get(workerPanelId);
         const goal = this.goals.get(workerPanelId);
         const workerRt = this.panels.get(workerPanelId);
-        // 报过结论的（onGoalVerdict 已经把 judgePanelId 清了）：这里只收尾
-        const stillOurs = !!book && book.judgePanelId === info.panelId;
-        if (book) { book.judgePanelId = undefined; }
+        // 报过结论的（onGoalVerdict 已经把 judgeRunId 清了）：这里只收尾
+        const stillOurs = !!book && book.judgeRunId === judge.id;
+        if (book) { book.judgeRunId = undefined; }
+        this.taba.noteTurnEnd(judge.id, info.status, Date.now());
         if (stillOurs && book && goal && workerRt) {
             book.noVerdicts++;
             if (info.status !== "done") {
@@ -1212,14 +1206,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** RuntimeHost.onGoalVerdict：判官报上来一份结论（见 goalProtocol.ts）。 */
     public onGoalVerdict(judgePanelId: string, verdict: GoalVerdictRequest): void {
-        const workerPanelId = this.goalJudgeOf.get(judgePanelId);
-        if (!workerPanelId) { return; }
+        const judge = this.taba.byChildPanel(judgePanelId);
+        if (!judge || !judge.hidden || !judge.parentPanelId) { return; }
+        const workerPanelId = judge.parentPanelId;
         const book = this.goalLoop.get(workerPanelId);
         const goal = this.goals.get(workerPanelId);
         const workerRt = this.panels.get(workerPanelId);
         // 只认这一轮那个判官的结论（判官重复调、或者上一轮的迟到，一律不算）
-        if (!book || book.judgePanelId !== judgePanelId || !goal || !workerRt) { return; }
-        book.judgePanelId = undefined;
+        if (!book || book.judgeRunId !== judge.id || !goal || !workerRt) { return; }
+        book.judgeRunId = undefined;
+        this.taba.noteTurnEnd(judge.id, "done", Date.now());
         book.noVerdicts = 0;
         goal.note = verdict.summary;
         if (verdict.pass === true) {
@@ -1280,15 +1276,15 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 关掉某个工人正在跑的那个判官（暂停 / 清除 / 工人被关掉时用）。 */
     protected goalCancelJudge(workerPanelId: string): void {
         const book = this.goalLoop.get(workerPanelId);
-        const judgePanelId = book?.judgePanelId;
-        if (!book || !judgePanelId) { return; }
-        book.judgePanelId = undefined;
-        this.closeGoalJudge(judgePanelId);
+        const judgeRunId = book?.judgeRunId;
+        if (!book || !judgeRunId) { return; }
+        book.judgeRunId = undefined;
+        const judge = this.taba.get(judgeRunId);
+        if (judge?.childPanelId) { this.closeGoalJudge(judge.childPanelId); }
     }
 
-    /** 关掉一个判官会话（它已经报完结论 / 用不着了）。 */
+    /** 关掉一个判官会话（它已经报完结论 / 用不着了）。登记表那边由关会话时的 forgetChildPanel 收拾。 */
     private closeGoalJudge(judgePanelId: string): void {
-        this.goalJudgeOf.delete(judgePanelId);
         if (this.panels.has(judgePanelId)) { this.closeSession(judgePanelId); }
     }
 
@@ -1322,6 +1318,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 会话名里子会话名字最多占多长。 */
     private static readonly TABA_TAB_NAME_MAX = 28;
 
+
     /** RuntimeHost.onTabaRequest：某个会话里的 pi 扩展要派子会话 / 停子会话。 */
     public onTabaRequest(panelId: string, request: TabaRequest): void {
         if (request.kind === "spawn") {
@@ -1340,13 +1337,23 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /**
      * 派一个子会话：新开一个会话（不抢当前显示的那一个），把任务发过去。
      * 它跑完第一轮后，最后一条回复会自动交回这个会话（见 tabaOnTurnEnd）。
+     *
+     * 目标循环的判官也走这一条路（`hidden: true`）：同样的起会话、同样的登记表、同样的收尾，
+     * 只是不进列表、不给模型看见、跑完不交回（它用 update_goal 报结论）。两边的差别全部收在
+     * opts 里，别再另写一份"开后台会话"的路子。
      */
-    protected async tabaSpawn(parentPanelId: string, req: TabaSpawnRequest): Promise<void> {
+    protected async tabaSpawn(
+        parentPanelId: string,
+        req: TabaSpawnRequest,
+        opts: TabaSpawnOptions = {}
+    ): Promise<void> {
         const parentRt = this.panels.get(parentPanelId);
         if (!parentRt) { return; }
-        // 子会话不能再往下派：它那个会话本来就不加载这个扩展，这里再挡一道
+        // 子会话不能再往下派：它那个会话本来就不加载这个扩展，这里再挡一道（判官也不许）
         if (this.taba.byChildPanel(parentPanelId)) {
-            this.postToSession(parentPanelId, { type: "system", text: "子会话不能再派子会话。" });
+            if (!opts.hidden) {
+                this.postToSession(parentPanelId, { type: "system", text: "子会话不能再派子会话。" });
+            }
             return;
         }
         if (this.taba.has(req.id) || this.tabaInFlight.has(req.id)) { return; }
@@ -1364,11 +1371,15 @@ export abstract class ChatControllerBase implements RuntimeHost {
             });
             const { cwd } = plan;
 
-            const extraArgs = buildTabaExtraArgs({ tools: plan.tools });
+            const extraArgs = [...buildTabaExtraArgs({ tools: plan.tools }), ...(opts.extraArgs ?? [])];
 
             const created = this.createBackgroundSession(buildTabaLaunch(extraArgs, cwd), plan.modelOverride);
             if (!created) {
-                this.tabaFailSpawn(parentRt, req.name, "子会话开不出来（pi 可执行文件没找到？）");
+                if (opts.hidden) {
+                    this.goalStop(parentPanelId, "判官会话开不出来（pi 可执行文件没找到？）");
+                } else {
+                    this.tabaFailSpawn(parentRt, req.name, "子会话开不出来（pi 可执行文件没找到？）");
+                }
                 return;
             }
             const rt = created;
@@ -1382,43 +1393,54 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 state: "starting",
                 startedAt: Date.now(),
                 deliveries: 0,
+                ...(opts.hidden ? { hidden: true } : {}),
             };
             if (!this.taba.add(child)) {
                 // 同一个编号又来了一次（理论上不会）：把刚开的会话收回去
                 this.closeSession(rt.id);
                 return;
             }
-            this.tabaWriteRun(child);
-
-            this.postToSession(parentPanelId, {
-                type: "system",
-                text: buildSpawnNotice({ child }),
-            });
-            this.postToSession(rt.id, {
-                type: "system",
-                text: buildChildIntro({
-                    child,
-                    parentName: this.sessionDisplayName(parentRt),
-                }),
-            });
+            // 判官不写名录、也不往两边的消息流里插话（没人看着它那个会话）
+            if (!opts.hidden) {
+                this.tabaWriteRun(child);
+                this.postToSession(parentPanelId, {
+                    type: "system",
+                    text: buildSpawnNotice({ child }),
+                });
+                this.postToSession(rt.id, {
+                    type: "system",
+                    text: buildChildIntro({
+                        child,
+                        parentName: this.sessionDisplayName(parentRt),
+                    }),
+                });
+            }
             this.broadcastSessionList(true);
 
-            const taskText = buildTaskText({ task: req.task });
+            // 判官那一轮就是它这一轮的全部：不用拼「任务 + 收尾要求」（那是给 taba 子会话的）
+            const taskText = opts.rawTask === true ? req.task : buildTaskText({ task: req.task });
             const ready = await rt.waitReady(ChatControllerBase.TABA_CHILD_READY_TIMEOUT_MS);
             // 等待期间会话被关掉了：登记在关会话时已经清掉了，这里什么都不用做
             if (!this.panels.has(rt.id)) { return; }
             if (!ready) {
                 this.taba.noteTurnEnd(req.id, "error", Date.now());
+                if (opts.hidden) {
+                    this.goalStop(parentPanelId, "判官没起来（pi 冷启动超时）");
+                    this.closeGoalJudge(rt.id);
+                    return;
+                }
                 this.postToSession(rt.id, { type: "systemError", text: "子会话的 pi 没起来（等超时了）。" });
                 this.tabaDeliver(child, { resultText: "", status: "error" });
                 return;
             }
             rt.handleSend(taskText, undefined, { followUp: true });
             this.taba.noteTaskSent(req.id);
-            this.tabaWriteRun(this.taba.get(req.id));
             this.broadcastSessionList();
-            // 问出子会话与父会话的 .jsonl 路径写到名录里（全新会话要等 pi 落盘才有）
-            void this.tabaResolveSessionFiles(req.id, rt, parentRt);
+            if (!opts.hidden) {
+                this.tabaWriteRun(this.taba.get(req.id));
+                // 问出子会话与父会话的 .jsonl 路径写到名录里（全新会话要等 pi 落盘才有）
+                void this.tabaResolveSessionFiles(req.id, rt, parentRt);
+            }
         } finally {
             this.tabaInFlight.delete(req.id);
         }
@@ -1426,7 +1448,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 把某个子会话的情况写到名录文件里（模型那边 taba_peek 读的就是它）。 */
     protected tabaWriteRun(child: TabaChild | undefined, state?: TabaRunState): void {
-        if (!child) { return; }
+        if (!child || child.hidden) { return; }   // 判官不给模型看见（taba_peek 读的就是这份名录）
         const cfg = this.getConfig();
         if (!cfg.tabaDir) { return; }
         writeRunRecord(tabaRunsDir(cfg.tabaDir), buildRunRecord({ child, state }));
@@ -1511,7 +1533,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
      */
     protected tabaOnTurnEnd(info: TurnEndInfo): void {
         const child = this.taba.byChildPanel(info.panelId);
-        if (!child) { return; }
+        // 判官的收尾归目标循环（见 goalJudgeOnTurnEnd），不走"交回父会话"这一套
+        if (!child || child.hidden) { return; }
         // 第一轮：记下结束时间，把结果交回去（tabaDeliver 里会重写名录）
         if (child.endedAt === undefined && child.deliveries === 0) {
             this.taba.noteTurnEnd(child.id, info.status, Date.now());
@@ -1592,6 +1615,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
      *  @param quiet 搬到另一个工作区时传 true：会话并没有被关掉，不发那些“关掉了”的提示
      *  （两边的会话编号会变，登记本来就对不上了，清掉就行）。 */
     protected notePanelGoneForTaba(panelId: string, opts?: { quiet?: boolean }): void {
+        // 判官（hidden 子会话）没有"变成独立会话"这一说：工人关了，它也没用了，直接收掉
+        for (const c of this.taba.childrenOf(panelId)) {
+            if (!c.hidden || c.state === "detached") { continue; }
+            if (c.childPanelId) { this.closeGoalJudge(c.childPanelId); }
+        }
         const detached = this.taba.detachChildrenOf(panelId);
         for (const c of detached) {
             if (!opts?.quiet && c.childPanelId && this.panels.has(c.childPanelId)) {
@@ -1603,7 +1631,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
             this.tabaWriteRun(c);
         }
         const child = this.taba.byChildPanel(panelId);
-        if (child) {
+        if (child && child.hidden) {
+            // 判官被关掉（报完结论、或者整轮被取消）：不在两边说话，也不写名录
+            this.taba.forgetChildPanel(panelId);
+        } else if (child) {
             const parentRt = child.parentPanelId ? this.panels.get(child.parentPanelId) : undefined;
             const undelivered = child.deliveries === 0 && child.endedAt === undefined;
             // 名录里留下最后一条（写成已关闭）：事后模型还能读到那个 .jsonl。
@@ -1640,18 +1671,18 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.releasePanelName(rt.nameParts);
         this.goals.delete(panelId);   // 盘上那份留着：重新打开这份会话，目标还在
         this.goalChecked.delete(panelId);
-        // 关掉的是判官会话：把它记的那笔账清掉（工人那边不算有判官在跑了）
-        const judgingFor = this.goalJudgeOf.get(panelId);
-        if (judgingFor) {
-            this.goalJudgeOf.delete(panelId);
-            const book = this.goalLoop.get(judgingFor);
-            if (book && book.judgePanelId === panelId) { book.judgePanelId = undefined; }
+        // 关掉的是判官（hidden 子会话）：把工人那边"有判官在跑"的账清掉
+        const judge = this.taba.byChildPanel(panelId);
+        if (judge && judge.hidden && judge.parentPanelId) {
+            const book = this.goalLoop.get(judge.parentPanelId);
+            if (book && book.judgeRunId === judge.id) { book.judgeRunId = undefined; }
         }
         // 关掉的是工人：它的目标循环也停，正在跑的判官一并关掉
         const workerBook = this.goalLoop.get(panelId);
         if (workerBook) {
             this.goalLoop.delete(panelId);
-            if (workerBook.judgePanelId) { this.closeGoalJudge(workerBook.judgePanelId); }
+            const judge = workerBook.judgeRunId ? this.taba.get(workerBook.judgeRunId) : undefined;
+            if (judge?.childPanelId) { this.closeGoalJudge(judge.childPanelId); }
         }
         this.panels.delete(panelId);
         this.panelUsedAt.delete(panelId);
@@ -1770,8 +1801,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
             }
         };
         for (const rt of this.panels.values()) {
-            // 子会话已在它父会话下面列过了，这里跳过；判官会话不是给人看的
-            if (this.taba.byChildPanel(rt.id) || this.goalJudgeOf.has(rt.id)) { continue; }
+            // 子会话已在它父会话下面列过了，这里跳过（判官是 hidden 子会话，同样跳过）
+            if (this.taba.byChildPanel(rt.id)) { continue; }
             push(rt, sameDir(rt.cwd, this.getCwd()) ? "" : (path.basename(rt.cwd) || rt.cwd));
         }
         return items;
@@ -1792,9 +1823,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
     private sessionListMessage(clientId: string): Record<string, unknown> {
         return {
             type: "sessionList",
-            // 判官会话不进列表：一轮一个，几十轮下来会把列表刷满
+            // 判官（hidden 子会话）不进列表：一轮一个，几十轮下来会把列表刷满
             sessions: Array.from(this.panels.values())
-                .filter((rt) => !this.goalJudgeOf.has(rt.id))
+                .filter((rt) => !this.taba.byChildPanel(rt.id)?.hidden)
                 .map((rt) => this.serializeSession(rt)),
             // 这块屏自己看的是哪一个（它还没挑过就是 null）。界面以本地那一份为准，
             // 别的屏切会话不会牵动它（后端也不再广播“大家切到哪一个”这件事）。

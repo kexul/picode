@@ -80,3 +80,19 @@ export function buildTabaExtraArgs(p: { tools?: string }): string[] {
 export function buildTabaLaunch(extraArgs: string[], cwd: string): PanelLaunch {
     return { extraArgs, skipSpare: true, noTaba: true, cwd };
 }
+
+/**
+ * 派子会话那一步的几种变化。
+ *
+ * 判官（目标验收）跟普通子会话走的是同一条路，差别都在这里：
+ *   普通子会话：进列表、写名录、跑完把结果交回父会话；
+ *   判官：全都不做，只用 update_goal 报结论。
+ */
+export interface TabaSpawnOptions {
+    /** 不进列表、不写名录、不给模型看见、跑完不交回（见 TabaChild.hidden）。 */
+    hidden?: boolean;
+    /** 额外命令行参数（判官要 `-e <goal 扩展>` 才有 update_goal）。 */
+    extraArgs?: string[];
+    /** 任务原文直接发，不拼「任务 + 收尾要求」（判官的提示词自己就是完整的一轮）。 */
+    rawTask?: boolean;
+}

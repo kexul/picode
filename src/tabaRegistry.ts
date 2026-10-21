@@ -41,6 +41,15 @@ export interface TabaChild {
     sessionFile?: string;
     /** 派活那个会话的会话文件路径（名录文件里用：按名字找子会话时靠它确认是不是本会话派的）。 */
     parentSessionFile?: string;
+    /**
+     * 不进列表、不给模型看的子会话（现在只有目标验收的判官）。
+     * 这类会话照样登记在这里（关它、找它、算它是不是还在跑都走同一张表），只是：
+     *   - 会话列表 / `#` 引用菜单里不出现（一轮一个，列出来会把列表刷满）；
+     *   - 模型按名字找不到（`findByRef` 跳过），不能自己把正在验它的判官停掉；
+     *   - 跑完不把结果交回父会话（判官走 update_goal 报结论，见 goalProtocol.ts）；
+     *   - 不写名录文件（taba_peek 读的那些）。
+     */
+    hidden?: boolean;
 }
 export class TabaRegistry {
     private byId = new Map<string, TabaChild>();
@@ -109,9 +118,9 @@ export class TabaRegistry {
         return child;
     }
 
-    /** 按编号或名字在本会话派出去的子会话里找（模型指名停止时用）。 */
+    /** 按编号或名字在本会话派出去的子会话里找（模型指名停止时用）。判官不给模型看见。 */
     public findByRef(parentPanelId: string, ref: { id?: string; name?: string }): TabaChild | undefined {
-        const kids = this.childrenOf(parentPanelId);
+        const kids = this.childrenOf(parentPanelId).filter((c) => !c.hidden);
         if (ref.id) {
             const exact = kids.find((c) => c.id === ref.id);
             if (exact) { return exact; }
