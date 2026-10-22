@@ -891,14 +891,8 @@
   }
   .pk-host.pk-drawer .pk-row-icon svg,
   .pk-host.pk-folders .pk-row-icon svg { width: 14px; height: 14px; display: block; }
-  /* 工作区是资源树，不显示会话条数与相对时间；会话仍在右侧保留更新时间。 */
+  /* 工作区是资源树，不显示相对时间；会话仍在右侧保留更新时间。 */
   .pk-host.pk-workspace .pk-space .pk-history-right { display: none; }
-  .pk-host.pk-drawer .pk-history-count {
-    font-size: 10.5px; line-height: 1; padding: 2px 6px; border-radius: 8px;
-    background: rgba(128,128,128,0.16); opacity: 0.9;
-  }
-  /* 会话数只是内部统计，不是未读状态；项目与会话里不把它画成一排徽标。 */
-  .pk-host.pk-workspace .pk-history-count { display: none; }
   .pk-host.pk-drawer .pk-history-right { gap: 8px; }
   /* ==== 「工作区」那一节：标题右边一颗加号（原来是列表里的一行「打开文件夹…」） ==== */
   .pk-host.pk-workspace .pk-section.pk-section-with-add {

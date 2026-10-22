@@ -6015,8 +6015,6 @@
           const open = document.createElement("span"); open.className = "pk-open-tag"; open.textContent = "已打开";
           right.appendChild(open);
         }
-        // 条数为 0 不显示（空目录工作区挂着个“0”只有噪声）。
-        if (item.count > 0) { const count = document.createElement("span"); count.className = "pk-history-count"; count.textContent = String(item.count); right.appendChild(count); }
         if (item.lastActivity) { const age = document.createElement("span"); age.className = "pk-history-age"; age.textContent = pickerRelTime(item.lastActivity); right.appendChild(age); }
         if (right.childNodes.length) { main.appendChild(right); }
         el.appendChild(main);
@@ -6052,7 +6050,6 @@
           main.appendChild(p);
         }
         const right = document.createElement("span"); right.className = "pk-history-right";
-        if (item.count > 0) { const c = document.createElement("span"); c.className = "pk-history-count"; c.textContent = String(item.count); right.appendChild(c); }
         if (item.lastActivity) { const a = document.createElement("span"); a.className = "pk-history-age"; a.textContent = pickerRelTime(item.lastActivity); right.appendChild(a); }
         if (right.childNodes.length) { main.appendChild(right); }
         // 行尾那颗加号（鼠标停在这一行才露出来，触屏上常显），目录明写在消息里
