@@ -58,6 +58,7 @@ import {
     type TabaSpawnOptions,
 } from "./tabaLaunch";
 import { buildRunRecord, closedRunState, tabaRunsDir, writeRunRecord, type TabaRunState } from "./tabaRunFiles";
+import { noteChildSession } from "./childSessions";
 import {
     buildGoalNegotiationPrompt,
     buildGoalResumePrompt,
@@ -1690,6 +1691,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 结构变更（新建/关闭/切换）传 immediate=true 立刻推送。
      */
     public broadcastSessionList(immediate = false): void {
+        this.noteChildSessionFiles();
         if (immediate) {
             if (this.sessionListTimer) {
                 clearTimeout(this.sessionListTimer);
@@ -1705,6 +1707,21 @@ export abstract class ChatControllerBase implements RuntimeHost {
             this.sessionListTimer = null;
             this.emitSessionList();
         }, ChatControllerBase.SESSION_LIST_THROTTLE_MS);
+    }
+
+    /**
+     * 把派出去的子会话（含判官）的 .jsonl 路径记进子会话清单（见 childSessions）。
+     *
+     * 挂在这里是因为它是“会话状态一变就走一遍”的唯一出口：子会话文件是 pi 落盘以后才知道的，
+     * 而那时这边一定广播过列表。已经在清单里的会直接返回，所以反复调不要紧。
+     * 判官（hidden 子会话）也要记：它同样不该出现在历史列表里。
+     */
+    private noteChildSessionFiles(): void {
+        for (const rt of this.panels.values()) {
+            if (!this.taba.byChildPanel(rt.id)) { continue; }
+            const file = rt.currentSessionPath;
+            if (file) { noteChildSession(file); }
+        }
     }
 
     /** 一个会话 → webview 可渲染结构（附带显示状态与父子关系）。 */
@@ -2211,7 +2228,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     // ========================================================================
-    //  历史会话列表（pi /resume 风格：标题 + 条数 + 相对时间，每批 10 条）
+    //  历史会话列表（pi /resume 风格：标题 + 相对时间，每批 10 条）
     // ========================================================================
     /** 每批展示/扫描的文件数。 */
     private static readonly HISTORY_BATCH_SIZE = 10;
