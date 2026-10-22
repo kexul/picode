@@ -44,9 +44,14 @@ const SHOT_STDOUT_LIMIT = 64 * 1024 * 1024;
  */
 const JPEG_MAX_EDGE = 1600;
 
+/** 这台机器能不能截桌面：现在只有 Windows 那两条路（截屏小程序 / PowerShell）。 */
+export function desktopScreenshotSupported(): boolean {
+    return process.platform === "win32";
+}
+
 /** 截一张桌面。永远不 reject：失败也以 ok: false 的结果返回。 */
 export async function captureDesktopScreenshot(): Promise<DesktopScreenshotResult> {
-    if (process.platform !== "win32") {
+    if (!desktopScreenshotSupported()) {
         return { ok: false, error: "桌面截图目前只在 Windows 上可用。" };
     }
     const viaHelper = await captureWithHelperExe();

@@ -72,11 +72,12 @@ function sessionsRoot(): string {
 
 /**
  * 将 cwd 转换为 pi 使用的目录名。
- * pi 的规则：把路径中的分隔符（/ 、 \ 、 :）都替换为 `-`，两端加 `--`。
- * 例如 `D:\BackUp\pi_plugin` -> `--D--BackUp-pi_plugin--`（冒号和反斜杠都变 `-`，因此 `D:` 后成为 `--`）。
+ * pi 的规则：先去掉开头那一个 `/` 或 `\`，再把剩下的分隔符（/ 、 \ 、 :）都替换为 `-`，两端加 `--`。
+ * 例如 `D:\BackUp\pi_plugin` -> `--D--BackUp-pi_plugin--`（冒号和反斜杠都变 `-`，因此 `D:` 后成为 `--`）；
+ * `/home/me/work` -> `--home-me-work--`（开头那个斜杠先去掉，不然会多出一个短杠，跟 pi 对不上）。
  */
 function encodeCwd(cwd: string): string {
-    const dashed = cwd.replace(/[\\/:]/g, "-");
+    const dashed = cwd.replace(/^[/\\]/, "").replace(/[\\/:]/g, "-");
     return "--" + dashed + "--";
 }
 

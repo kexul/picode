@@ -20,7 +20,7 @@ const path = require("path");
 /** 调试会话所在的目录编成 pi 的名字（跟 sessionStore.encodeCwd 一个规矩）。 */
 function scratchSessionsDir() {
     const cwd = path.join(process.cwd(), "dev", ".scratch");
-    return path.join(os.homedir(), ".pi", "agent", "sessions", "--" + cwd.replace(/[\\/:]/g, "-") + "--");
+    return path.join(os.homedir(), ".pi", "agent", "sessions", "--" + cwd.replace(/^[/\\]/, "").replace(/[\\/:]/g, "-") + "--");
 }
 
 /** 两个假会话文件：正常那个、子会话那个（第一条用户消息是派活那套文字）。 */

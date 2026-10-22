@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
-import { dirInsideAny, relativeTo } from "./pathRules";
+import { dirInsideAny, pathCaseKey, relativeTo } from "./pathRules";
 
 /**
  * VscodeScreen —— 这个 VS Code 窗口替独立后端干的那几样活。
@@ -175,7 +175,7 @@ export class VscodeScreen {
 
     /** 在会话读写过的文件里匹配路径（相对 / 绝对 / 只写文件名 / 路径后缀）。 */
     private matchKnownFile(known: string[], query: string, cwd: string): string | undefined {
-        const norm = (s: string) => s.replace(/\\/g, "/").toLowerCase();
+        const norm = pathCaseKey;
         const q = norm(query);
         const relOf = (f: string) => relativeTo(cwd, f);
         const exact = known.find((f) => relOf(f) === q || norm(f) === q);

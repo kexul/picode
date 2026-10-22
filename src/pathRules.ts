@@ -26,6 +26,17 @@ export function sameDir(a: string, b: string): boolean {
 }
 
 /**
+ * 两个路径字符串相比时用的写法：斜杠统一成正斜杠；Windows 上再转小写，
+ * 别的系统照原样（Linux / macOS 上 /a/B 与 /a/b 是两个文件）。
+ *
+ * 只管拼写法，不解析路径：会话里记下的路径与界面里点出来的路径，拿它当键用就够了。
+ */
+export function pathCaseKey(p: string): string {
+    const s = p.replace(/\\/g, "/");
+    return process.platform === "win32" ? s.toLowerCase() : s;
+}
+
+/**
  * 这个路径（文件或目录）在不在那个目录里（相等也算）。
  *
  * 只按路径字符串判：软链接要先自己解析成真实路径（fs.realpath）再传进来，

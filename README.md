@@ -24,6 +24,39 @@ code --install-extension pi-chat-vscode-0.1.0.vsix     :: VSCode
 
 重载窗口会把所有正在跑的 pi 进程一起结束，有活在跑的时候别急着重载。
 
+### 在 Linux 上跑后端（只用 pichat，不装编辑器插件）
+
+一台 Linux 机器只跑后端、用浏览器或手机连过去的话，不需要打 vsix，也不需要在那边装编辑器。
+
+```bash
+cd picode
+./build.sh              # 装依赖 + 编译 + 把 pichat 装成全局命令
+pichat --cwd ~/work     # 起后端；终端里会打出地址，Ctrl+C 停
+```
+
+代码用 `git clone` 拉到 Linux 上（或者用 `git archive` 打的包）。
+别直接从 Windows 的工作目录拷过去：那样拷过去的文件是 CRLF 换行，脚本会报
+`/bin/bash^M: bad interpreter`，`pichat` 命令会报 `env: 'node'`。
+
+打出来的地址形如 `http://192.168.x.x:51883/`，同一网络里的手机、电脑浏览器打开就能对话。
+服务器没有桌面环境也能跑（就是终端里那一个进程）。
+
+`./build.sh` 对应 Windows 那边的 `build.bat`：一样是装依赖、编译、装全局 `pichat`，只是不打包 vsix。
+依赖已经装过、只想重新编译时就 `./build.sh --skip-install`。
+
+几个在 Linux 上容易踩的：
+
+- **手机连不上**：多半是防火墙没放行。`ufw` 用 `sudo ufw allow 51883/tcp`；`firewalld` 用
+  `sudo firewall-cmd --add-port=51883/tcp --permanent && sudo firewall-cmd --reload`。
+  只想自己用就别开端口，起的时候加 `--host 127.0.0.1`，再用 ssh 转过去：`ssh -L 51883:127.0.0.1:51883 主机`。
+- **提示找不到 pi**：pi 是用 nvm 之类装的，从别的 shell、开机自启里起来的后端，PATH 里往往没有它。
+  先 `which pi` 拿到路径，写进 `~/.pi/pichat/config.json` 的 `piPath`（例如 `"piPath": "/home/me/.nvm/versions/node/v22.11.0/bin/pi"`），重起后端。
+- **想让它一直在后台**：`pichat` 是在前台跑的，关掉终端就停。要常驻就用
+  `nohup pichat --cwd ~/work > ~/.pi/pichat/pichat.log 2>&1 &`。
+  一个后端只能起一个（再起会告诉你已经有一个在跑、地址是多少），所以别重复起。
+- **桌面截图没有**：那功能只在 Windows 上能用（截的是跑后端的这台机器的桌面），
+  后端在 Linux 上时顶条那颗按钮不出现，其它功能都在。
+
 ## 使用
 
 - **插件里的对话面板**：装好插件后，活动栏里的 Pi Chat 面板直接对话。

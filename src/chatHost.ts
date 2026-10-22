@@ -505,8 +505,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         if (listing.parent) {
             items.push({ label: "上一层", file: listing.parent, icon: "up" });
         } else if (!driveList) {
-            // 到了盘根就没法再往上：给一条回到盘符列表的路，否则换不了盘。
-            items.push({ label: "回到最上层（换一个盘）", file: ChatHost.ROOTS_ROW, icon: "up" });
+            // 到了最上层就没法再往上：Windows 上给一条回到盘符列表的路，否则换不了盘。
+            // 别的系统（Linux / macOS）最上层就是 /，上面没了，不给这一行：点了也只是原地打转。
+            if (process.platform === "win32") {
+                items.push({ label: "回到最上层（换一个盘）", file: ChatHost.ROOTS_ROW, icon: "up" });
+            }
         }
         for (const d of listing.dirs) { items.push({ label: d.name, file: d.path, icon: "folder" }); }
         if (items.length === 0) { items.push({ label: "（这里没有子文件夹）", file: "" }); }

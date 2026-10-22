@@ -246,6 +246,7 @@
     if (type === "viewOptions" && data.themeMode) {
       applyTheme(data.themeMode === "dark" ? "dark" : "light");
     }
+    if (type === "viewOptions") { setDesktopShotEnabled(data.desktopScreenshot !== false); }
     return false;
   }
 
@@ -714,6 +715,18 @@
   // dispatch 上：那条路只有网页端走。
   var shotBtn = null;
   var shotBusyTimer = null;
+  // 这台机器能不能截桌面（后端在 viewOptions 里报）：截不了（比如后端跑在 Linux 上）就不露那颗按钮，
+  // 省得点下去只弹一句“只在 Windows 上可用”。
+  var desktopShotEnabled = true;
+
+  /** 后端说这台机器截不了桌面：按钮收起来（已经画出来的也拿掉）。 */
+  function setDesktopShotEnabled(enabled) {
+    desktopShotEnabled = enabled !== false;
+    if (!desktopShotEnabled && shotBtn && shotBtn.parentNode) {
+      shotBtn.parentNode.removeChild(shotBtn);
+      shotBtn = null;
+    }
+  }
 
   /** 截屏从点击到图推回来要一两秒：期间按钮压暗并暂时点不动。 */
   function setShotBusy(busy) {
@@ -769,7 +782,7 @@
     shotBtn.innerHTML = ICON_CAMERA;
     shotBtn.title = "查看桌面截图（截的是运行 VSCode 的这台电脑）";
     shotBtn.addEventListener("click", requestDesktopScreenshot);
-    bar.appendChild(shotBtn);
+    if (desktopShotEnabled) { bar.appendChild(shotBtn); } else { shotBtn = null; }
 
     var btn = document.createElement("button");
     btn.type = "button";

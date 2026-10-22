@@ -21,7 +21,7 @@ import {
     splitHostHeader,
     type PageChannel,
 } from "./webTransport";
-import { insideFolder, relativeTo } from "./pathRules";
+import { insideFolder, pathCaseKey, relativeTo } from "./pathRules";
 
 /**
  * PiChatWebServer —— 独立后端的网页服务：一个地址，手机和电脑都看这一份会话。
@@ -1400,10 +1400,10 @@ function realPathOr(p: string): string | undefined {
  *   2. 再按最后一段（文件名）对：清单里相对写法等于这个文件名、或者以 `/文件名` 结尾的都算；
  *    同名的有好几个时，先挑相对写法里带着整条问法的那个（`src/a.ts` 优先于 `lib/a.ts`）。
  *
- * 比大小写两边都转小写（跟编辑器那边一致）：Windows 上文件名本来就不分大小写。
+ * 大小写照平台来（跟编辑器那边一致）：Windows 上文件名不分大小写，别的系统上 /a/B.ts 与 /a/b.ts 是两个文件。
  */
 function matchKnownFile(known: readonly string[], query: string, cwd: string): string | undefined {
-    const norm = (s: string): string => s.replace(/\\/g, "/").toLowerCase();
+    const norm = pathCaseKey;
     const q = norm(query);
     const relOf = (f: string): string => norm(relativeTo(cwd, f));
     const exact = known.find((f) => relOf(f) === q || norm(f) === q);

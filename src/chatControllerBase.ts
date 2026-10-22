@@ -32,7 +32,8 @@ import {
     type SessionListItem,
 } from "./sessionStore";
 import { randomNameParts, composeName } from "./names";
-import { relativeTo as pathRelativeTo, sameDir } from "./pathRules";
+import { pathCaseKey, relativeTo as pathRelativeTo, sameDir } from "./pathRules";
+import { desktopScreenshotSupported } from "./desktopScreenshot";
 import type { PanelLaunch, TurnEndStatus } from "./runtimeTypes";
 import type { TabaRequest, TabaSpawnRequest, TabaStopRequest } from "./tabaProtocol";
 import { TABA_DECODER } from "./tabaProtocol";
@@ -375,6 +376,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
             focusInputKey: this.getFocusInputKey(),
             fontSize: this.getFontSize(),
             notifyTurnEnd: this.notifyTurnEndEnabled(),
+            // 这台机器的路径分不分大小写（Linux / macOS 上 /a/B 与 /a/b 是两个目录）：
+            // 界面拿它当键比较目录与会话文件（见 media/chat.js 的 pathCaseKey）
+            caseSensitivePaths: process.platform !== "win32",
+            // 截不了桌面的机器（Linux）上界面把那颗按钮藏起来，省得点下去只弹一句“只在 Windows 上可用”
+            desktopScreenshot: desktopScreenshotSupported(),
             ...this.viewOptionsExtra(),
         });
     }
@@ -2216,13 +2222,14 @@ export abstract class ChatControllerBase implements RuntimeHost {
         await rt.loadSession(file);
     }
 
-    /** 路径归一化比较（盘符 / 分隔符）。 */
+    /** 路径归一化比较（盘符 / 分隔符；Windows 上还不分大小写，别的系统照原样比）。 */
     protected samePath(a: string | undefined, b: string | undefined): boolean {
         if (!a || !b) { return false; }
+        // 别的系统上 /a/B 和 /a/b 是两个不同的文件：只有 Windows 才转小写、去盘符
+        const isWindows = process.platform === "win32";
         const norm = (p: string) => {
-            let s = p.replace(/\\/g, "/").toLowerCase();
-            s = s.replace(/^[a-z]:/, "");
-            return s;
+            const s = pathCaseKey(p);
+            return isWindows ? s.replace(/^[a-z]:/, "") : s;
         };
         return norm(a) === norm(b);
     }

@@ -541,6 +541,15 @@
   var closeSessionKey = "ctrl+alt+w";
   var tabSwitchKey = "ctrl+alt+pgupdown";
   var notifyTurnEnd = true;
+  // 这台机器的路径分不分大小写（顶条、面板、历史列表里拿路径当键比）：
+  // 后端在 viewOptions 里报（process.platform !== "win32"）。没收到之前按不分大小写算，
+  // 跟以前一样；收到后就按真值。
+  var caseSensitivePaths = false;
+  /** 两个路径字符串相比时用的写法（斜杠统一；Windows 上再转小写，见 pathRules.ts 的 pathCaseKey）。 */
+  function pathCaseKey(p) {
+    var s = String(p || "").replace(/\\/g, "/");
+    return caseSensitivePaths ? s : s.toLowerCase();
+  }
   let openFiles = [];
   function applyFontSize(px) {
     var val = (typeof px === "string" && /^\d+$/.test(px)) ? px + "px" : "";
@@ -558,6 +567,7 @@
     if (typeof opts.closeSessionKey === "string") { closeSessionKey = opts.closeSessionKey; }
     if (typeof opts.tabSwitchKey === "string") { tabSwitchKey = opts.tabSwitchKey; }
     notifyTurnEnd = opts.notifyTurnEnd !== false;
+    caseSensitivePaths = opts.caseSensitivePaths === true;
   }
 
   // ── 跑完一轮 / 模型提问时的系统通知（浏览器通知，不再出提示音） ──
@@ -3649,7 +3659,7 @@
   /** 这份会话文件是不是有会话正开着（列表里把这种历史行标成“已打开”）。 */
   function sessionOpenForFile(file) {
     if (!file) { return false; }
-    const norm = (p) => String(p).replace(/\\/g, "/").toLowerCase();
+    const norm = pathCaseKey;
     const want = norm(file);
     for (const st of sessions.values()) {
       if (st.sessionFile && norm(st.sessionFile) === want) { return true; }
@@ -3715,13 +3725,13 @@
 
   /** 两个路径是不是同一个目录（斜杠、末尾斜杠、大小写都归一化再比）。 */
   function samePath(a, b) {
-    const norm = (p) => String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    const norm = (p) => pathCaseKey(p).replace(/\/+$/, "");
     return norm(a) === norm(b);
   }
 
   /** 拿一个目录当“同一个目录”用的键（跟 samePath 一个规矩）。 */
   function normPathKey(p) {
-    return String(p || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    return pathCaseKey(p).replace(/\/+$/, "");
   }
 
   /** 当前会话跑在哪个目录（面板上“当前工作区”那一行、展开记忆的默认值都看它）。 */
