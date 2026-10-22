@@ -21,6 +21,8 @@
  *   4. 工具：bash
  *   5. 工具：edit（会真的改 dev/.scratch 下的一个文件，diff 卡片有东西可看）
  *   6. 再说一句收尾
+ * 用户这句话里带「假装被杀」时，起一条工具然后进程直接退出（不报结束）：验「结果永远回不来」的
+ * 调用在界面上不再一直转圈（那一颗标签会被收掉）。
  * 用户这句话里带「碰文件」时演另一段（见 runScript 里那一段）：read 几个特意铺好的文件，
  * 好让后端那份「这个会话碰过的文件」清单里有子目录里的文件、也有会话目录外面的。
  *
@@ -465,6 +467,21 @@ async function runScript(userText) {
         await say("问话结束 —— " + reply);
         finish();
         return;
+    }
+
+    // ---- 「假装被杀」：那条调用真开跑了，然后这个进程直接没了（不报结束）----
+    // 验的是「结果永远回不来」那种调用在界面上长什么样：先转圈，等后端发现进程没了，
+    // 转圈收掉、提示框里写「这一轮被中断，没有结果」（见 media/chat.js 的 settleInterruptedTools）。
+    if (/假装被杀/.test(userText)) {
+        await say("（假模型）我起一条 bash，然后这个进程就没了 —— 结果不会回来。");
+        emit({
+            type: "tool_execution_start",
+            toolCallId: "call_killed",
+            toolName: "bash",
+            args: { command: "sleep 600" },
+        });
+        await sleep(2000);   // 留够时间看一眼那颗转圈的标签
+        process.exit(1);
     }
 
     // ---- 「这个会话碰过的文件」那几种（验「链接里只有光名字也能打开」那票）----

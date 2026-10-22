@@ -534,7 +534,10 @@
     });
   }
 
-  const GEAR_SVG = '<span class="tool-icon"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><path d="M22.83,10.09 A11 11 0 0 1 22.83,13.91 L20.37,13.48 A8.5 8.5 0 0 1 18.96,16.88 A8.5 8.5 0 0 1 21.01,18.31 A11 11 0 0 1 18.31,21.01 L16.88,18.96 A8.5 8.5 0 0 1 13.48,20.37 A8.5 8.5 0 0 1 13.91,22.83 A11 11 0 0 1 10.09,22.83 L10.52,20.37 A8.5 8.5 0 0 1 7.12,18.96 A8.5 8.5 0 0 1 5.69,21.01 A11 11 0 0 1 2.99,18.31 L5.04,16.88 A8.5 8.5 0 0 1 3.63,13.48 A8.5 8.5 0 0 1 1.17,13.91 A11 11 0 0 1 1.17,10.09 L3.63,10.52 A8.5 8.5 0 0 1 5.04,7.12 A8.5 8.5 0 0 1 2.99,5.69 A11 11 0 0 1 5.69,2.99 L7.12,5.04 A8.5 8.5 0 0 1 10.52,3.63 A8.5 8.5 0 0 1 10.09,1.17 A11 11 0 0 1 13.91,1.17 L13.48,3.63 A8.5 8.5 0 0 1 16.88,5.04 A8.5 8.5 0 0 1 18.31,2.99 A11 11 0 0 1 21.01,5.69 L18.96,7.12 A8.5 8.5 0 0 1 20.37,10.52 Z"/><circle cx="12" cy="12" r="3.2"/></svg></span>';
+  // 工具那颗齿轮：VS Code 官方图标集（@vscode/codicons）里的 gear，实心的。
+  // 小尺寸下比原来那颗描边齿轮干净得多：这个图标在界面上只有 1em（十来像素），
+  // 描边版每根线不到一个像素，八颗小牙糊成一个毛边小圈。
+  const GEAR_SVG = '<span class="tool-icon"><svg viewBox="0 0 16 16" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M7.99997 6C6.89497 6 5.99997 6.895 5.99997 8C5.99997 9.105 6.89497 10 7.99997 10C9.10497 10 9.99997 9.105 9.99997 8C9.99997 6.895 9.10497 6 7.99997 6ZM7.99997 9C7.44797 9 6.99997 8.552 6.99997 8C6.99997 7.448 7.44797 7 7.99997 7C8.55197 7 8.99997 7.448 8.99997 8C8.99997 8.552 8.55197 9 7.99997 9ZM14.565 9.715L13.279 8.628C13.245 8.599 13.213 8.567 13.184 8.533C12.888 8.186 12.931 7.667 13.279 7.372L14.565 6.285C14.693 6.177 14.742 6.003 14.691 5.844C14.386 4.903 13.882 4.04 13.219 3.308C13.139 3.22 13.027 3.172 12.912 3.172C12.865 3.172 12.818 3.18 12.773 3.196L11.186 3.761C11.144 3.776 11.1 3.788 11.056 3.796C11.006 3.805 10.956 3.81 10.907 3.81C10.515 3.81 10.167 3.532 10.094 3.134L9.79097 1.482C9.76097 1.318 9.63397 1.188 9.46997 1.153C8.98997 1.051 8.49897 1 8.00097 1C7.50297 1 7.01097 1.052 6.53097 1.153C6.36697 1.188 6.23997 1.318 6.20997 1.482L5.90797 3.134C5.89997 3.178 5.88797 3.221 5.87297 3.263C5.75197 3.6 5.43397 3.81 5.09397 3.81C5.00197 3.81 4.90797 3.794 4.81597 3.762L3.22897 3.197C3.18397 3.181 3.13597 3.173 3.08997 3.173C2.97497 3.173 2.86297 3.221 2.78297 3.309C2.11897 4.041 1.61597 4.904 1.30997 5.845C1.25797 6.004 1.30797 6.178 1.43597 6.286L2.72197 7.373C2.75597 7.402 2.78797 7.434 2.81697 7.468C3.11297 7.815 3.06997 8.334 2.72197 8.629L1.43597 9.716C1.30797 9.824 1.25897 9.998 1.30997 10.157C1.61497 11.098 2.11897 11.961 2.78297 12.693C2.86297 12.781 2.97497 12.829 3.08997 12.829C3.13697 12.829 3.18397 12.821 3.22897 12.805L4.81597 12.24C4.85797 12.225 4.90197 12.213 4.94597 12.205C4.99597 12.196 5.04597 12.192 5.09497 12.192C5.48697 12.192 5.83497 12.47 5.90797 12.868L6.20997 14.52C6.23997 14.684 6.36697 14.814 6.53097 14.849C7.01097 14.951 7.50297 15.002 8.00097 15.002C8.49897 15.002 8.99097 14.95 9.46997 14.849C9.63397 14.814 9.76097 14.684 9.79097 14.52L10.094 12.868C10.102 12.824 10.114 12.781 10.129 12.739C10.25 12.402 10.568 12.192 10.908 12.192C11 12.192 11.094 12.208 11.186 12.24L12.772 12.805C12.818 12.821 12.865 12.829 12.911 12.829C13.026 12.829 13.138 12.781 13.218 12.693C13.882 11.961 14.385 11.098 14.69 10.157C14.742 9.998 14.692 9.824 14.564 9.716L14.565 9.715ZM12.728 11.726L11.521 11.296C11.323 11.226 11.117 11.19 10.908 11.19C10.139 11.19 9.44697 11.676 9.18797 12.399C9.15397 12.492 9.12897 12.588 9.11097 12.686L8.88097 13.937C8.59097 13.979 8.29597 14 8.00097 14C7.70597 14 7.41097 13.979 7.11997 13.936L6.89097 12.685C6.73197 11.818 5.97697 11.189 5.09497 11.189C4.98697 11.189 4.87697 11.199 4.76597 11.219C4.66897 11.237 4.57397 11.262 4.47997 11.295L3.27297 11.725C2.90497 11.264 2.61097 10.759 2.39397 10.214L3.36797 9.391C3.74097 9.076 3.96797 8.634 4.00797 8.148C4.04797 7.662 3.89497 7.19 3.57797 6.818C3.51397 6.743 3.44297 6.672 3.36797 6.608L2.39397 5.785C2.61097 5.24 2.90497 4.734 3.27297 4.274L4.47997 4.704C4.67797 4.774 4.88397 4.81 5.09397 4.81C5.86297 4.81 6.55497 4.324 6.81397 3.601C6.84797 3.507 6.87297 3.411 6.89097 3.314L7.11997 2.063C7.41097 2.021 7.70597 1.999 8.00097 1.999C8.29597 1.999 8.59097 2.02 8.88097 2.062L9.10997 3.313C9.26897 4.18 10.024 4.809 10.906 4.809C11.014 4.809 11.124 4.799 11.234 4.779C11.331 4.761 11.427 4.736 11.521 4.703L12.728 4.273C13.096 4.733 13.39 5.239 13.607 5.784L12.634 6.607C12.261 6.922 12.033 7.364 11.994 7.85C11.954 8.336 12.107 8.809 12.424 9.18C12.489 9.256 12.559 9.326 12.635 9.39L13.609 10.213C13.392 10.758 13.098 11.264 12.73 11.724L12.728 11.726Z"/></svg></span>';
   // ==================== 全局视图选项 ====================
   var sendKeyCombo = "enter";
   var newSessionKey = "ctrl+alt+n";
@@ -2077,43 +2080,48 @@
   // 一条正文（或用户消息）到来就换行、另起一批，上批的标签不再攒数。
   const NO_MERGE_TOOLS = new Set(["taba", "taba_stop", "taba_peek"]);
   const GROUP_RUNNING_TEXT = "运行中…";
+  /** 没有结果、而且也不会再有了（那一轮被中断 / pi 进程没了）：提示框里写这一句。 */
+  const INTERRUPTED_NOTE = "（这一轮被中断，没有结果）";
   /** 模型的思考也算这一批里的一种条目：名字固定叫这个（不并进 NO_MERGE_TOOLS：同名照常合并）。 */
   const THINKING_NAME = "think";
 
-  function addTool(st, toolName, argStr, toolCallId) {
+  function addTool(st, toolName, argStr, toolCallId, interrupted) {
     hideEmptyHint(st);
-    if (!NO_MERGE_TOOLS.has(toolName)) { addToolToGroup(st, toolName, argStr, toolCallId); return; }
+    if (!NO_MERGE_TOOLS.has(toolName)) { addToolToGroup(st, toolName, argStr, toolCallId, null, interrupted); return; }
     const tag = document.createElement("span");
-    tag.className = "tool" + (toolCallId ? " running" : "");
+    // 还在跑的才转圈：没有 id 的静态调用没有结果事件；被中断的那条结果永远不会来（见 settleInterruptedTools）
+    const running = !!toolCallId && !interrupted;
+    tag.className = "tool" + (running ? " running" : "");
     tag.insertAdjacentHTML("afterbegin", GEAR_SVG);
     tag.appendChild(document.createTextNode(" " + toolName));
     // 悬浮提示显示调用与结果（见 showTagTip）；read 读图的结果也在提示框里出图。
     tag._toolName = toolName;
     tag._argStr = argStr;
-    tag._resultText = "";
+    tag._resultText = interrupted ? INTERRUPTED_NOTE : "";
     tag._resultMeta = {};
     tag._isError = false;
-    tag._done = !toolCallId; // 无 id 的静态调用无结果事件，按已完成处理
+    tag._done = !running;
     // 开始时刻（重放历史里的老调用记 0，不写耗时，见 runningCalls）
     tag._startedAt = st.noCountPop ? 0 : Date.now();
     // 提示内容：运行中显示调用参数（输入）；结果到达后由 setTagTip 填入全部原文（输出）。
     // 带图片的结果（read 读图这类）不走提示框：结果到了会把这个标签整个换成对话里的一块图，
     // 见 mountToolImageBlock。
     tag._tipCall = tagTipCallText(toolName, argStr);
-    tag._tipBody = "";
+    tag._tipBody = interrupted ? INTERRUPTED_NOTE : "";
     attachTagTipHandlers(tag);
     mountToolTag(st, tag);
     // 问话卡片有时候比这条工具行先到（两条通道各有快慢）：把它挪到这一行下面
     dockAskCardToRow(st, toolCallId, tag.parentElement);
-    if (toolCallId) { st.pendingToolTags.set(toolCallId, tag); }
+    if (running) { st.pendingToolTags.set(toolCallId, tag); }
     syncRunningLine(st);   // 这条在跑：末尾那行跟着写上它
     scrollToBottom(st);
   }
 
   /** 往这一批里加一条调用：同名就并到已有那个标签上（标签停在第一次调用的位置），
    *  没见过的名字新开一个标签。tipFill（可选）：这一条在提示框里怎么画，不传就按默认的
-   *  「调用一行 + 结果一块」画（write / edit 自带一块，见 buildEditCard）。 */
-  function addToolToGroup(st, toolName, argStr, toolCallId, tipFill) {
+   *  「调用一行 + 结果一块」画（write / edit 自带一块，见 buildEditCard）。
+   *  interrupted：这条已经中断了、结果永远不会来（重放历史时由后端标出来）。 */
+  function addToolToGroup(st, toolName, argStr, toolCallId, tipFill, interrupted) {
     const row = toolTagHost(st);
     let batch = st.toolGroups;
     if (!batch || batch.row !== row) {
@@ -2147,16 +2155,17 @@
       argStr: argStr || "",
       tipCall: tagTipCallText(toolName, argStr),
       tipFill: tipFill || null,
-      resultText: "",
+      resultText: interrupted ? INTERRUPTED_NOTE : "",
       meta: {},
       isError: false,
-      done: !toolCallId, // 无 id 的静态调用无结果事件，按已完成处理
+      // 无 id 的静态调用无结果事件；被中断的那条也是——结果永远不会来（见 settleInterruptedTools）
+      done: !toolCallId || !!interrupted,
       // 这条从什么时候开始跑的（毫秒）：「正在跑的那一条」后面那个耗时拿它算（见 runningCalls）。
       // 重放历史里的老调用（noCountPop）不知道它当时什么时候开始的：记 0，那种就不写耗时。
       startedAt: st.noCountPop ? 0 : Date.now(),
     };
     g.entries.push(entry);
-    if (toolCallId) { st.toolGroupEntries.set(toolCallId, entry); }
+    if (toolCallId && !interrupted) { st.toolGroupEntries.set(toolCallId, entry); }
     syncGroupTag(st, g);
     // 问话卡片有时候比这条工具行先到（两条通道各有快慢）：把它挪到这一行下面
     dockAskCardToRow(st, toolCallId, g.row);
@@ -2249,6 +2258,32 @@
     // 先插图、再收掉空了的那条行：顺序反过来（先把行收掉）就找不着图该待的地方了
     mountToolImageBlock(st, { toolName: entry.name, argStr: entry.argStr, tipCall: entry.tipCall, toolCallId: entry.id, row: row }, images);
     dropToolRow(st, row);
+  }
+
+  /** 还在转圈的调用到此为止：结果不会来了（那一轮被中断、或者 pi 进程没了）。
+   *  ids 给了就只收这几条，不给就把这个会话里所有还挂着的都收掉（见后端发来的 toolsInterrupted）。
+   *  收掉的样子跟“正常拿到结果”一样：不再转圈，提示框里写一句「这一轮被中断，没有结果」。 */
+  function settleInterruptedTools(st, ids) {
+    const want = Array.isArray(ids) && ids.length > 0 ? new Set(ids) : null;
+    const groups = new Set();
+    for (const [id, entry] of Array.from(st.toolGroupEntries.entries())) {
+      if (want && !want.has(id)) { continue; }
+      entry.done = true;
+      entry.resultText = INTERRUPTED_NOTE;
+      st.toolGroupEntries.delete(id);
+      if (entry.group) { groups.add(entry.group); }
+    }
+    for (const g of groups) { syncGroupTag(st, g); }   // 转圈跟着重算（里面会再叫一次 syncRunningLine）
+    for (const [id, tag] of Array.from(st.pendingToolTags.entries())) {
+      if (want && !want.has(id)) { continue; }
+      tag.classList.remove("running");
+      tag._done = true;
+      tag._resultText = INTERRUPTED_NOTE;
+      tag._resultMeta = {};
+      st.pendingToolTags.delete(id);
+      setTagTip(tag, INTERRUPTED_NOTE, "");
+    }
+    syncRunningLine(st);
   }
 
   // ==================== 正在跑的那一条 ====================
@@ -7385,7 +7420,7 @@
       case "tool": {
             finalizeCurrentAssistant(t);
         const argStr = msg.args ? JSON.stringify(msg.args) : "";
-        addTool(t, msg.toolName, argStr, msg.toolCallId);
+        addTool(t, msg.toolName, argStr, msg.toolCallId, !!msg.interrupted);
         t.currentAssistant = null;
         break;
       }
@@ -7496,6 +7531,10 @@
         }
         break;
       }
+      case "toolsInterrupted":
+        // 这些调用等不到结果了（那一轮被中断 / pi 进程没了）：把还转圈的标签收掉
+        settleInterruptedTools(t, msg.toolCallIds);
+        break;
       case "toolResult": {
         const groupEntry = t.toolGroupEntries.get(msg.toolCallId);
         if (groupEntry) {

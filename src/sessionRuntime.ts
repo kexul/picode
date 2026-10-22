@@ -399,6 +399,10 @@ export class SessionRuntime {
             //（留着的话，用户下一轮跑完时它会莫名其妙冒出来）。
             this.pendingAfterAbort = "";
             // 在途 request 由 PiClient 在 exit 时统一释放
+            // 进程没了，正在跑的工具结果永远不会回来：先把还挂着「在跑」的标签收掉，
+            // 不然它们会一直转圈、耗时一直往上数（见 media/chat.js 的 settleInterruptedTools）。
+            this.edits.forgetRunningTools();
+            this.post({ type: "toolsInterrupted" });
             this.post({ type: "streamEnd", activity: "idle" });
             this.setActivity("idle");
             this.setPiReady(true);
@@ -823,6 +827,10 @@ export class SessionRuntime {
                 break;
             case "agent_settled":
                 this.streaming = false;
+                // 这一轮停下来了：还在转圈的工具标签一律收掉。正常收尾时没有这种标签，
+                // 有就是这一轮被中途打断（点了「卡住了」、或 pi 把在跑的工具掐了），结果不会再来。
+                this.edits.forgetRunningTools();
+                this.post({ type: "toolsInterrupted" });
                 this.post({ type: "streamEnd", activity: "idle" });
                 this.setActivity("idle");
                 // 收尾：这一轮真正开始过才报；中止过的一轮只算取消，不打扰用户。
@@ -1389,11 +1397,17 @@ export class SessionRuntime {
                             } else {
                                 const id = c.id || `${mid}:c${blockNo++}`;
                                 const res = toolResults.get(id);
+                                // 没有结果的调用分两种：这一轮真还在跑（pi 还没报结束），或者那一轮
+                                // 被中断 / pi 进程没了，结果永远不会来。后者按「已结束」发给界面（带上
+                                // interrupted），否则那条标签会一直转圈、耗时一直往上数（见 media/chat.js
+                                // 的 settleInterruptedTools）。
+                                const interrupted = !res && !this.edits.isToolRunning(id);
                                 emit({
                                     type: "tool",
                                     toolName: c.name,
                                     args: c.arguments,
                                     toolCallId: id,
+                                    ...(interrupted ? { interrupted: true } : {}),
                                 });
                                 if (res) {
                                     emit({

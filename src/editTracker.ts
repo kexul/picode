@@ -35,6 +35,12 @@ export class EditTracker {
         return Array.from(this.knownFiles);
     }
 
+    /** 这条工具的调用这会儿还在跑吗。重放历史时用：历史里没有结果的调用，到底是
+     *  「还在跑」还是「那一轮被中断、结果永远不会来」，只能靠这张表分开。 */
+    public isToolRunning(toolCallId: string): boolean {
+        return this.toolStartedAt.has(toolCallId);
+    }
+
     public reset(): void {
         this.pendingEdits.clear();
         this.editSnapshots.clear();
@@ -44,6 +50,12 @@ export class EditTracker {
         if (hadKnown) {
             this.host.onKnownFilesChanged();
         }
+    }
+
+    /** 忘掉“哪些工具还在跑”。这一轮停稳了 / pi 进程没了的时候叫它：这时候不可能还有在跑的，
+     *  留下的都是等不到结果的（它们要是还在表里，重放历史时会被当成还在跑，又转不完的圈）。 */
+    public forgetRunningTools(): void {
+        this.toolStartedAt.clear();
     }
 
     public onToolStart(evt: any): void {
