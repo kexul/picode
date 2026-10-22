@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { isKnownChildSession } from "./childSessions";
 import { TABA_CLOSING_MARK } from "./tabaTask";
 
 /**
@@ -9,9 +10,9 @@ import { TABA_CLOSING_MARK } from "./tabaTask";
  * 列表（历史会话 / 「项目与会话」面板里展开的那一组）每一屏只显示最前面那几个，
  * 所以这里也只看最前面那几个：
  *   - 会话清单：按文件改动时间倒序 —— 最近聊过的在最前；每批取 N 个，只对取走的那几个
- *     文件做整文件扫描：标题（文件里最新一条 session_info 条目的 name，没有命名就用
- *     第一条用户消息）、消息条数、最后活动时间、工作目录；子会话（派活那套文字当第一条
- *     消息）也在这里认出来，列表不显示它们。
+ *     文件读两样：标题（最新一条 session_info 的 name，没命名就用第一条用户消息）、
+ *     工作目录；子会话（清单里记过的，或者派活那套文字当第一条消息）也在那里认出来，
+ *     列表不显示它们。消息条数不数了，最后活动时间就用文件改动时间（见 scanSessionInfo）。
  *   - 项目清单：每个目录只读一次目录 + stat 最新那一个会话文件，不进目录里逐个 stat，
  *     更不读内容；真要显示哪一行了，才读那个目录最新那个会话文件的开头（拿真实路径）。
  */
@@ -24,9 +25,7 @@ export interface SessionListItem {
     id: string;
     /** 标题：最新的 session_info 名字；没命名就用第一条用户消息 */
     title: string;
-    /** message 条目数 */
-    count: number;
-    /** 最后一条消息的活动时间（毫秒）；没有任何消息时退回文件修改时间 */
+    /** 最后活动时间（毫秒）：就是那个会话文件的改动时间（pi 每记一条就追写，见 scanSessionInfo） */
     lastActivity: number;
     /** 这个会话跑在哪个目录（文件头里那个 cwd）：点开它得按这个目录起进程 */
     cwd: string;
@@ -54,8 +53,6 @@ export interface ProjectEntry {
     name: string;
     /** 这个目录里最新一个会话文件的修改时间（毫秒） */
     lastActivity: number;
-    /** 这个目录里的会话文件个数 */
-    sessionCount: number;
 }
 
 /** 标题上限：超长由前端按宽度截断，这里只防极端长文本。 */
@@ -117,14 +114,6 @@ function contentToText(content: unknown): string {
     return "";
 }
 
-/** 单条消息条目的活动时间（毫秒）：message.timestamp 优先，退回条目 timestamp。 */
-function entryActivityMs(entry: any): number {
-    const t = entry?.message?.timestamp;
-    if (typeof t === "number") { return t; }
-    const s = typeof entry?.timestamp === "string" ? Date.parse(entry.timestamp) : NaN;
-    return Number.isNaN(s) ? 0 : s;
-}
-
 /**
  * 列出 cwd 会话目录里的会话文件，按文件改动时间倒序（最近聊过的在前）。
  * 目录不存在（该项目没跑过 pi）返回空。
@@ -158,98 +147,170 @@ async function listDirSessionFiles(dir: string): Promise<SessionFileEntry[]> {
         .sort((a, b) => b.mtime - a.mtime);
 }
 
+/** 扫出来的结果按“文件改动时间 + 大小”记一份（见下面那个缓存）：同一个文件在没动过时
+ * 不再整份读一遍 —— 开列表、点「加载更多」、启动自动打开最近会话都会反复扫同一批文件，
+ * 而它们每个都可能有好几 MB。 */
+const SCAN_CACHE_MAX = 300;
+
+/** 扫过的文件 → 那个文件的改动时间 / 大小 / 当时的扫描结果。 */
+const scanCache = new Map<string, { mtimeMs: number; size: number; item: SessionListItem | null }>();
+
 /**
- * 扫描一个会话文件，取展示需要的几样：标题、消息条数、最后活动时间、工作目录，
- * 以及“这是不是子会话”。
+ * 扫描一个会话文件，取展示需要的几样：标题（最新一次改名，没有就用第一条用户消息）、
+ * 工作目录、最后活动时间、以及“这是不是子会话”。
  * 文件首行必须是 type:"session" 的 header（否则返回 null，与 pi 的判定一致）。
+ *
+ * 不数消息条数：那个数字界面不再显示了（历史上那颗小徽标已经删了，见 media/chat.js），
+ * 为了它把整份文件逐行 JSON.parse 不值得 —— 一条消息就可能几 MB（内联图片）。
+ * 最后活动时间就取文件的改动时间（下面已经 stat 过了）：pi 每记一条就往文件里追加，
+ * 两者基本上是同一个时刻，而历史列表本来就是按它排序的（见 listSessionFiles）。
  */
-export function scanSessionInfo(file: string): Promise<SessionListItem | null> {
-    return new Promise((resolve) => {
-        let stream: fs.ReadStream;
-        try {
-            stream = fs.createReadStream(file, { encoding: "utf8" });
-        } catch {
-            resolve(null);
-            return;
-        }
-        let buf = "";
-        let sawHeader = false;
-        let id = "";
-        let name: string | undefined;
-        let firstUserMessage = "";
-        let sawFirstUser = false;
-        let child = false;
-        let cwd = "";
-        let count = 0;
-        let lastActivity = 0;
-        const finish = () => {
-            stream.destroy();
-            if (!sawHeader) { resolve(null); return; }
-            const title = (name || firstUserMessage || "(无消息)").slice(0, TITLE_MAX_CHARS);
-            resolve({
-                file,
-                id,
-                title,
-                count,
-                lastActivity: lastActivity || Date.now(),
-                cwd,
-                child,
-            });
-        };
-        stream.on("data", (chunk) => {
-            const d = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-            buf += d;
-            let i: number;
-            while ((i = buf.indexOf("\n")) >= 0) {
-                const line = buf.slice(0, i);
-                buf = buf.slice(i + 1);
-                let e: any;
-                try { e = JSON.parse(line); } catch { continue; }
-                if (!e || typeof e.type !== "string") { continue; }
-                if (!sawHeader) {
-                    if (e.type !== "session") { finish(); return; }
-                    sawHeader = true;
-                    id = typeof e.id === "string" ? e.id : "";
-                    // 工作目录：点开这个历史会话要按它起进程（文件所在目录名是拼出来的，反解不可靠）
-                    cwd = typeof e.cwd === "string" ? e.cwd : "";
-                    continue;
-                }
-                if (e.type === "session_info") {
-                    const n = typeof e.name === "string" ? e.name.trim() : "";
-                    // 取最新的一条（包括显式清空成空串的情况），与 pi 一致
-                    name = n || undefined;
-                    continue;
-                }
-                if (e.type !== "message") { continue; }
-                count += 1;
-                const at = entryActivityMs(e);
-                if (at > lastActivity) { lastActivity = at; }
-                if (e.message?.role === "user") {
-                    const raw = contentToText(e.message.content);
-                    if (!sawFirstUser) {
-                        sawFirstUser = true;
-                        // 子会话的第一条用户消息就是派活那套文字（见 tabaTask.buildTaskText）
-                        if (raw.includes(TABA_CLOSING_MARK)) { child = true; }
-                    }
-                    if (!firstUserMessage) {
-                        const t = raw.replace(/\s+/g, " ").trim();
-                        if (t) { firstUserMessage = t; }
-                    }
-                }
-            }
-        });
-        stream.on("end", finish);
-        stream.on("error", () => resolve(null));
-    });
+export async function scanSessionInfo(file: string): Promise<SessionListItem | null> {
+    let st: fs.Stats;
+    try {
+        st = await fs.promises.stat(file);
+    } catch {
+        return null;
+    }
+    const hit = scanCache.get(file);
+    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) {
+        return hit.item ? recheckChild(hit.item, file) : null;
+    }
+    const item = await scanSessionFile(file, st.mtimeMs);
+    if (scanCache.size >= SCAN_CACHE_MAX) {
+        const oldest = scanCache.keys().next();
+        if (!oldest.done) { scanCache.delete(oldest.value); }
+    }
+    scanCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, item });
+    return item ? recheckChild(item, file) : null;
 }
 
 /**
- * 这个会话文件是不是子会话（第一条用户消息就是派活那套文字）。
+ * 给出扫描结果时重算一次“是不是子会话”：子会话清单（childSessions）可能是在这次扫描之后
+ * 才记下这个文件的（派活的那一头拿到 .jsonl 路径得等 pi 落盘），内存里这份缓存不能把它盖掉。
+ */
+function recheckChild(item: SessionListItem, file: string): SessionListItem {
+    const child = item.child || isKnownChildSession(file);
+    return child === item.child ? item : { ...item, child };
+}
+
+/** 两种行开头的字节（认行类型用，不靠解析整行）。 */
+const LINE_SESSION_INFO = Buffer.from('{"type":"session_info"');
+const LINE_MESSAGE = Buffer.from('{"type":"message"');
+
+/** “这是条用户消息”只需看行首这么多字节：role 就写在 message 对象的开头。 */
+const ROLE_PREFIX_BYTES = 400;
+
+/** 一行开头处的 role 记号。 */
+const ROLE_USER = Buffer.from('"role":"user"');
+
+/** 读文件时一次拿这么多字节（找换行是原生实现的，比逐字解码快得多）。 */
+const SCAN_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * 真去读那个文件（外面都走 {@link scanSessionInfo}，好蹭上缓存）。
+ *
+ * 只做三件事：从头找 header（工作目录）、找每条 session_info（最新那次改名）、
+ * 找第一条用户消息（标题的备选与子会话的文案兜底）。其余行（大多数是巨大的工具结果）
+ * 只按字节找换行跳过去，不解析。
+ */
+async function scanSessionFile(file: string, mtimeMs: number): Promise<SessionListItem | null> {
+    let sawHeader = false;
+    let id = "";
+    let cwd = "";
+    let name: string | undefined;
+    let firstUserMessage = "";
+    let sawFirstUser = false;
+    let child = false;
+
+    /** 处理一整行（不含行尾换行）；是 header 就返回 false（这个文件不认）。 */
+    const handleLine = (buf: Buffer, start: number, end: number): boolean => {
+        if (!sawHeader) {
+            let e: any;
+            try { e = JSON.parse(buf.toString("utf8", start, end)); } catch { return false; }
+            if (!e || e.type !== "session") { return false; }
+            sawHeader = true;
+            id = typeof e.id === "string" ? e.id : "";
+            // 工作目录：点开这个历史会话要按它起进程（文件所在目录名是拼出来的，反解不可靠）
+            cwd = typeof e.cwd === "string" ? e.cwd : "";
+            return true;
+        }
+        if (startsWith(buf, start, LINE_SESSION_INFO)) {
+            let e: any;
+            try { e = JSON.parse(buf.toString("utf8", start, end)); } catch { return true; }
+            if (e && e.type === "session_info") {
+                // 取最新的一条（包括显式清空成空串的情况），与 pi 一致
+                const n = typeof e.name === "string" ? e.name.trim() : "";
+                name = n || undefined;
+            }
+            return true;
+        }
+        if (sawFirstUser || !startsWith(buf, start, LINE_MESSAGE)) { return true; }
+        // 先看行首的 role：不是用户消息就不必解析这一整行（它可能几 MB）
+        const headEnd = Math.min(end, start + ROLE_PREFIX_BYTES);
+        if (buf.indexOf(ROLE_USER, start) >= headEnd) { return true; }
+        let e: any;
+        try { e = JSON.parse(buf.toString("utf8", start, end)); } catch { return true; }
+        if (e?.message?.role !== "user") { return true; }
+        const raw = contentToText(e.message.content);
+        sawFirstUser = true;
+        // 子会话：清单里记过就是（见 childSessions）；老会话清单里没有，
+        // 只能看第一条用户消息是不是派活那套文字（见 tabaTask.buildTaskText）
+        if (raw.includes(TABA_CLOSING_MARK) || isKnownChildSession(file)) { child = true; }
+        const t = raw.replace(/\s+/g, " ").trim();
+        if (t) { firstUserMessage = t; }
+        return true;
+    };
+
+    try {
+        // 上一块尾巴上没写完的那半行：留到下一块凑齐再处理
+        let carry: Buffer = Buffer.alloc(0);
+        for await (const chunk of fs.createReadStream(file, { highWaterMark: SCAN_CHUNK_BYTES })) {
+            const piece = chunk as Buffer;
+            const buf = carry.length === 0 ? piece : Buffer.concat([carry, piece]);
+            let start = 0;
+            let nl = buf.indexOf(0x0a, start);
+            while (nl >= 0) {
+                if (!handleLine(buf, start, nl)) { return null; }
+                start = nl + 1;
+                nl = buf.indexOf(0x0a, start);
+            }
+            carry = buf.subarray(start);
+        }
+        // 最后一行没带换行（pi 正常会带，手工改过的文件不一定）
+        if (carry.length > 0 && !handleLine(carry, 0, carry.length)) { return null; }
+    } catch {
+        return null;
+    }
+    if (!sawHeader) { return null; }
+    return {
+        file,
+        id,
+        title: (name || firstUserMessage || "(无消息)").slice(0, TITLE_MAX_CHARS),
+        lastActivity: mtimeMs || Date.now(),
+        cwd,
+        child,
+    };
+}
+
+/** buf 从 start 开始的那一段是不是以 prefix 开头。 */
+function startsWith(buf: Buffer, start: number, prefix: Buffer): boolean {
+    const end = start + prefix.length;
+    return end <= buf.length && buf.compare(prefix, 0, prefix.length, start, end) === 0;
+}
+
+/**
+ * 这个会话文件是不是子会话。
+ *
+ * 先查子会话清单（派活时记下的，见 childSessions）：命中就返回，不用读文件；
+ * 清单里没有（老会话、或者这个文件根本不是派活建的）才读文件开头，
+ * 看第一条用户消息是不是派活那套文字。
  *
  * 只读到第一条用户消息为止 —— 它在文件开头几行，不用把整个文件读一遍；
  * “启动时自动打开最近会话”靠它跳过子会话（列表那边走整文件扫描，不会多花这一遍）。
  */
 export function isChildSessionFile(file: string): Promise<boolean> {
+    if (isKnownChildSession(file)) { return Promise.resolve(true); }
     return new Promise((resolve) => {
         let stream: fs.ReadStream;
         try {
@@ -363,14 +424,12 @@ export interface ProjectDirEntry {
     newest: string;
     /** 上面那个文件的修改时间（毫秒）—— 排“最近待过的项目”看的就是它 */
     lastActivity: number;
-    /** 目录里的会话文件个数 */
-    sessionCount: number;
 }
 
 /**
  * 列出项目目录本身，按最近活动倒序。
  *
- * 一个目录只碰两下：readdir 看一眼里面有哪些会话文件（顺便得个数），再 stat 最新的那一个。
+ * 一个目录只碰两下：readdir 看一眼里面有哪些会话文件，再 stat 最新的那一个。
  * 不再把每个项目里每个会话文件都 stat 一遍（上百个项目加起来往往上千个，那一遍就是几十毫秒），
  * 更不读文件内容 —— 那一行到底是谁、要画几行，留到真要显示时再看（见 readProjectEntry）。
  * 没跑过 pi（目录不存在 / 不是目录）就是空清单，不抛。
@@ -403,7 +462,7 @@ async function scanProjectDir(dir: string): Promise<ProjectDirEntry | null> {
     const newest = path.join(dir, names[0]);
     try {
         const st = await fs.promises.stat(newest);
-        return { dir, newest, lastActivity: st.mtimeMs, sessionCount: names.length };
+        return { dir, newest, lastActivity: st.mtimeMs };
     } catch {
         return null;
     }
@@ -434,6 +493,5 @@ export async function readProjectEntry(entry: ProjectDirEntry): Promise<ProjectE
         cwd,
         name: projectName(cwd),
         lastActivity: entry.lastActivity,
-        sessionCount: entry.sessionCount,
     };
 }

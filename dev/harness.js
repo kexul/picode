@@ -141,6 +141,9 @@ function createHarness(options = {}) {
     // （见 ChatHost.readOption）。比如上一个检查验完把“跑完发系统通知”关了，这一跑就悄悄不生效。
     // 调试目录本来就是一次性的，直接丢掉这份存档，让每次调试都从下面这份设置开始。
     try { fs.rmSync(path.join(SCRATCH_PICHAT_DIR, "state.json"), { force: true }); } catch { /* 删不掉就按旧值跑 */ }
+    // 子会话清单也一样：假 pi 给每个会话报的 .jsonl 是同一个文件（见 fakePi.js），
+    // 留着上一跑记下的那份，下一跑里那个文件就整个被当成子会话藏起来（历史列表、自动开最近会话都受影响）。
+    try { fs.rmSync(path.join(SCRATCH_PICHAT_DIR, "child-sessions.json"), { force: true }); } catch { /* 同上 */ }
     updateServerConfig(patch, SCRATCH_PICHAT_DIR);
 
     // 派子会话要用的文件：真后端启动器会写，这里也得写一份（不然调试时派子会话是坏的）

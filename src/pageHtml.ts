@@ -65,10 +65,16 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
     // 浏览器 tab 的标题用这台机器的名字（形如 `我的电脑-pi`）：同时开着几台机器的页面时，
     // 光看标题分不出谁是谁。机器名取不到就只剩 `pi`。
     const host = machineName();
+    // 按需加载的脚本（现在只有 mermaid）不排进首屏，地址写进 meta，主脚本真要用时自己去拉。
+    // 地址放这儿而不是写死在 chat.js 里，是为了让它带着内容指纹（见 mediaVersion.ts）。
+    const lazyScripts = chatUiFilesOfRole("lazy-script");
+    const lazyMeta = lazyScripts.length === 0 ? "" :
+        `\n  <meta name="pichat-lazy-scripts" content="${escapeAttr(JSON.stringify(
+            Object.fromEntries(lazyScripts.map((file) => [file.name, mediaUrl(file.name)]))))}" />`;
     const extraHead =
         `<title>${host ? `${escapeAttr(host)}-pi` : "pi"}</title>\n` +
         `  <meta name="pichat-page" content="${escapeAttr(pageId)}" />\n` +
-        `  <meta name="pichat-theme" content="${themeMode}" />\n` +
+        `  <meta name="pichat-theme" content="${themeMode}" />${lazyMeta}\n` +
         `  <style id="browser-theme">${browserCss}</style>`;
 
     // extraBodyBottom 被 renderHTML 放在所有 <script> 之前：浏览器桥必须比 chat.js 先加载，
@@ -80,7 +86,8 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
         chatCss,
         extraHead,
         extraBodyBottom,
-        // 第三方脚本 + 主脚本，排的先后照清单来（见 chatUiFiles.ts）
+        // 第三方脚本 + 主脚本，排的先后照清单来（见 chatUiFiles.ts）。按需脚本不在这里：
+        // 它的地址在 head 的 meta 里，主脚本要用时自己去拉（当前只有 mermaid）。
         scripts: chatUiFilesOfRole("vendor-script", "main-script").map((file) => ({ src: mediaUrl(file.name) })),
     });
 }
@@ -98,7 +105,9 @@ export function getPanelChatHtml(
     opts: { themeMode: "light" | "dark" },
 ): string {
     const inline = new Map<string, string>();
-    for (const file of chatUiFilesOfRole("bridge", "vendor-script", "main-script")) {
+    // 面板里没有可引的资源地址（见文件头），按需脚本也只能内联进来：主脚本一加载就发现
+    // globalThis.piMermaid 已经在，等于“永远不用去拉”。
+    for (const file of chatUiFilesOfRole("bridge", "vendor-script", "lazy-script", "main-script")) {
         const code = escapeInlineScript(readMedia(mediaDir, file.name));
         if (endsInDoubleEscape(code)) {
             throw new Error(`界面文件 ${file.name} 里有 HTML 内联不安全的序列（<!-- 后面跟 <script），先改掉这个文件再内联。`);
@@ -130,7 +139,7 @@ export function getPanelChatHtml(
         scriptNonce: n,
         extraHead,
         extraBodyBottom,
-        scripts: chatUiFilesOfRole("vendor-script", "main-script").map((file) => ({
+        scripts: chatUiFilesOfRole("vendor-script", "lazy-script", "main-script").map((file) => ({
             content: inline.get(file.name) ?? "",
         })),
     });

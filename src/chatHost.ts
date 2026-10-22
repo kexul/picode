@@ -457,7 +457,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 label: p.name,
                 file: p.cwd,
                 folderPath: p.cwd,
-                count: p.sessionCount,
                 lastActivity: p.lastActivity,
             });
         }

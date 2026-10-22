@@ -732,29 +732,20 @@
     view.appendChild(stBar);
     pane.addEventListener("scroll", () => {
       if (!pane.isConnected) { return; }
+      const prevTop = st.lastScrollTop;
       st.lastScrollTop = pane.scrollTop; // 滚动位置缓存：布局重建后恢复用
       // 整屏重画中：窗格正在被清空重建，这时的滚动动静都是重画弄的，不作数
       //（不然清空后“已经在底部”会把贴底重新打开，重放的几百条一路把人拖到底，见 finishRedraw）
       if (st.suppressScroll) { return; }
-      if (st.programmaticScroll) {
-        st.programmaticScroll = false;
-        // 只吞「位置确实是自己刚设的那个」那一次。不能看见标记就吞：追底动画中间
-        // 用户往回滚一下（或者调试脚本把视野挪到别处），那一下就被当成“程序滚动”丢掉，
-        // 界面继续把人拉回底部（见 dev/historyScroll.js 与 dev/followBottom.js）。
-        const mine = Math.abs(pane.scrollTop - st.programmaticTop) <= 1;
-        if (mine) { return; }
-      }
-      // 人自己动了窗格：把还排着的那一下“追底”作废（不然过一帧又把人拽回底部）
-      if (st.scrollRafId) { cancelAnimationFrame(st.scrollRafId); st.scrollRafId = 0; }
-      const wasBottom = st.stickToBottom;
-      st.stickToBottom = isNearBottomPane(st);
-      if (wasBottom && !st.stickToBottom && st.lerpRafId) {
-        cancelAnimationFrame(st.lerpRafId);
-        st.lerpRafId = 0;
-      }
-      // 用户手动滚到底部：清掉新内容提示
-      if (st.stickToBottom && st.hasNewContent) {
-        st.hasNewContent = false;
+      // 位置往上走了 = 人自己往回滚（程序追底只会往下写）：当场交还控制权。
+      // 这是原来那套“上次程序自己设的位置 ±1 像素”记账的替代：不看是谁弄的，只看方向——
+      // 也因此不怕 scroll 事件晚一帧（那套记账怕的正是这个，见 dev/followBottom.js）。
+      if (pane.scrollTop < prevTop - 1) { userTookOverScroll(st); return; }
+      // 反过来：本来没在跟底，人自己滚回底部了，就恢复跟随。
+      // 只在“没在跟底”时才量（追底期间不量：那会让每次滚动都多逼一次排版）。
+      if (!st.stickToBottom && isNearBottomPane(st)) {
+        st.stickToBottom = true;
+        if (st.hasNewContent) { st.hasNewContent = false; }
         syncJumpBottom(st);
       }
     });
@@ -825,8 +816,6 @@
       // 正在“按编号对账”地重放（null = 没在重放）。见 beginReconcile / endReconcile。
       reconcile: null,
       lerpRafId: 0,
-      programmaticScroll: false,
-      programmaticTop: 0,        // 上一次程序自己设的滚动位置（判断那一帧的 scroll 事件是不是自己弄的，见上面那段）
       hasNewContent: false,
       modelId: "",
       provider: "",
@@ -857,9 +846,7 @@
     // 重挂载后把滚动位置恢复回去（贴底的直接贴底）
     const p = st.paneEl;
     if (st.stickToBottom) {
-      st.programmaticScroll = true;
       p.scrollTop = p.scrollHeight;
-      st.programmaticTop = p.scrollTop;   // 记夹完之后的那个数（见 scrollToBottom 里那段）
       st.lastScrollTop = p.scrollTop;
     } else if (typeof st.lastScrollTop === "number") {
       p.scrollTop = st.lastScrollTop;
@@ -1123,6 +1110,15 @@
 
   // ==================== 滚动 ====================
   const BOTTOM_THRESHOLD = 40;
+  /**
+   * 离底部这么近就直接过去，不再一帧一帧地缓（见 lerpScrollStep）。
+   *
+   * 流式输出时内容每来一小段就把底部往下推十几像素。原来的尺子是“差 1 像素以内算到底”，
+   * 那点距离永远达不到：每来一小段就要连排两三帧、连写两三次 scrollTop 才收尾。
+   * 实测（贴底流式 6 秒、240 批内容）：写入从 316 次降到 241 次、排帧从 556 降到 481。
+   * 排版次数不变（264 → 263）：那是“量一次底部有多远”的固有开销，这个阀值动不了它。
+   */
+  const STICK_JUMP_PX = 120;
   function isNearBottomPane(st) {
     return st.paneEl.scrollHeight - st.paneEl.scrollTop - st.paneEl.clientHeight <= BOTTOM_THRESHOLD;
   }
@@ -1131,10 +1127,10 @@
     const target = st.paneEl.scrollHeight - st.paneEl.clientHeight;
     const cur = st.paneEl.scrollTop;
     const diff = target - cur;
-    if (Math.abs(diff) < 1) { st.programmaticScroll = true; st.programmaticTop = target; st.paneEl.scrollTop = target; st.lerpRafId = 0; return; }
-    st.programmaticScroll = true;
-    st.programmaticTop = cur + diff * 0.3;
-    st.paneEl.scrollTop = st.programmaticTop;
+    if (Math.abs(diff) <= STICK_JUMP_PX) { st.paneEl.scrollTop = target; st.lastScrollTop = target; st.lerpRafId = 0; return; }
+    const next = cur + diff * 0.3;
+    st.paneEl.scrollTop = next;
+    st.lastScrollTop = next;
     st.lerpRafId = requestAnimationFrame(() => lerpScrollStep(st));
   }
   function smoothScrollToBottom(st) {
@@ -1178,12 +1174,9 @@
       // 这一帧排上之后人自己往回滚了、或者正好开始整屏重画：这一下不许落下去
       if (st.suppressScroll || !st.stickToBottom) { return; }
       pane.scrollTop = 1e9;   // 夹到最大：没有读 scrollHeight，就不会逼出一次同步重排
-      // 把夹完之后的那个数记下来当“我们自己设的位置”。不能拿 Infinity 当记号：scroll 事件是
-      // 下一帧才派发的，中间只要内容又长了几像素（流式输出就是这样），那一下就会被当成
-      // “用户自己往回滚了”，从此不再跟随底部（表现：有时跟着有时不跟）。
-      // 读回来这一次是赋值时已经算好的（写 scrollTop 就得先排一次版），不额外加开销。
-      st.programmaticTop = pane.scrollTop;
-      st.programmaticScroll = true;
+      // 读回来记一份（赋值时已经排过版，不额外加开销）：“重挂会话时按这个恢复”。
+      // 以前这里还要记“这次是自己滚的”（给 scroll 监听认人用）；现在认人靠方向（见上面那个监听）。
+      st.lastScrollTop = pane.scrollTop;
     });
   }
   // ==================== 整屏重画时的视野（重连后补不上、页面刷新） ====================
@@ -1336,10 +1329,7 @@
       if (st.paneEl !== pane || !pane.isConnected || el.parentNode !== pane) { releaseAnchorHold(st); return; }
       const now = el.offsetTop - pane.scrollTop;
       if (Math.abs(now - hold.view) > 1) {
-        // 这一次跳动是我们自己补的：让 scroll 监听不要当成“人来滚了”（同 scrollToBottom 的记法）
-        st.programmaticScroll = true;
         pane.scrollTop = Math.max(0, el.offsetTop - hold.view);
-        st.programmaticTop = pane.scrollTop;
         st.lastScrollTop = pane.scrollTop;
       }
       if (Date.now() < hold.until) { setTimeout(step, 100); } else { releaseAnchorHold(st); }
@@ -6015,6 +6005,7 @@
           const open = document.createElement("span"); open.className = "pk-open-tag"; open.textContent = "已打开";
           right.appendChild(open);
         }
+        // 会话数不显示（那个数字对看列表没用，还容易被当成未读数）
         if (item.lastActivity) { const age = document.createElement("span"); age.className = "pk-history-age"; age.textContent = pickerRelTime(item.lastActivity); right.appendChild(age); }
         if (right.childNodes.length) { main.appendChild(right); }
         el.appendChild(main);
@@ -7634,8 +7625,6 @@
         inner.sessionId = msg.sessionId;
         const realPane = t.paneEl;
         const savedStick = t.stickToBottom;
-        const savedProgrammatic = t.programmaticScroll;
-        const savedProgrammaticTop = t.programmaticTop;
         const savedSegmentThink = t.segmentThinking;   // 暂存区自己算自己的，别动本段那颗与末尾候选
         const savedTailThink = t.tailThinking;
         t.paneEl = t._stage;
@@ -7646,8 +7635,6 @@
           t.tailThinking = savedTailThink;
           // 渲染进暂存区时的滚动状态调整（scrollToBottom 等）不该影响真实窗格
           t.stickToBottom = savedStick;
-          t.programmaticScroll = savedProgrammatic;
-          t.programmaticTop = savedProgrammaticTop;
         }
         break;
       }

@@ -6,7 +6,8 @@
  *     面板页面怎么内联（pageHtml.getPanelChatHtml）。
  *
  * 加一个界面文件时只改这里（数组顺序就是加载顺序）。角色说明它在界面里干什么，
- * 决定谁在什么时候用它：样式进 <style>，桥必须比主脚本先加载，第三方脚本排在主脚本之前。
+ * 决定谁在什么时候用它：样式进 <style>，桥必须比主脚本先加载，第三方脚本排在主脚本之前，
+ * 按需脚本两头都不排（浏览器页面等主脚本要用时自己去拉，面板里仍然内联）。
  */
 export type ChatUiRole =
     /** 主样式：进首屏的 <style>（renderHTML 的 chatCss）。 */
@@ -17,6 +18,9 @@ export type ChatUiRole =
     | "bridge"
     /** 第三方脚本：排在主脚本之前。 */
     | "vendor-script"
+    /** 按需加载的第三方脚本：浏览器页面不在首屏加载它，主脚本第一次真要用时才去拉
+     *  （地址写在页面 head 的 meta 里）；面板那边没有可引的地址，照旧内联。 */
+    | "lazy-script"
     /** 主脚本：最后加载的那一个。 */
     | "main-script";
 
@@ -34,7 +38,8 @@ export const CHAT_UI_FILES: readonly ChatUiFile[] = [
     { name: "browserBridge.js", role: "bridge" },
     { name: "marked.js", role: "vendor-script" },
     { name: "highlight.js", role: "vendor-script" },
-    { name: "mermaid.js", role: "vendor-script" },
+    // mermaid 有 1.5MB：只有真出现 ```mermaid 代码块时才值得付这笔下载与解析
+    { name: "mermaid.js", role: "lazy-script" },
     { name: "chat.js", role: "main-script" },
 ];
 
