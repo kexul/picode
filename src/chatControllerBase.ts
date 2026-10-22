@@ -21,7 +21,7 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import { SessionRuntime, RuntimeHost, ModelInfo, ModelChoice, TurnEndInfo, parseCompactCommand } from "./sessionRuntime";
+import { SessionRuntime, RuntimeHost, ModelInfo, ModelChoice, TurnEndInfo } from "./sessionRuntime";
 import { PiConfig } from "./sessionRuntime";
 import { PiClient } from "./piClient";
 import {
@@ -63,7 +63,6 @@ import {
     buildGoalResumePrompt,
     buildGoalStartPrompt,
     goalBarSummary,
-    parseGoalCommand,
     parseGoalCriteria,
     type GoalCommand,
     type GoalState,
@@ -804,7 +803,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const target = path.resolve(dir);
         const cands: SessionRuntime[] = [];
         for (const rt of this.panels.values()) {
-            // 判官不是给人看的（hidden 子会话）：不能把一块屏派到它那儿去
+            // 判官（hidden 子会话）不能把一块屏派到它那儿去：它不是给人干活用的会话
             if (this.taba.byChildPanel(rt.id)?.hidden) { continue; }
             if (sameDir(rt.cwd, target)) { cands.push(rt); }
         }
@@ -1027,13 +1026,15 @@ export abstract class ChatControllerBase implements RuntimeHost {
     //  目标（/goal）第二段：每轮盯一次验收的判官循环
     // ========================================================================
     //
-    //  工人这一轮跑完 → 派一个判官子会话（走 tabaSpawn，带 hidden：不进列表、不交回结果，
-    //  只有它能调 update_goal）→ 判官自己动手验 → 报「过了」就收工；报「没过」就把批评
-    //  发回给工人开下一轮。
+    //  工人这一轮跑完 → 派一个判官子会话（走 tabaSpawn，带 hidden：不写名录、不给模型看见，
+    //  跑完不交回结果、只有它能调 update_goal）→ 判官自己动手验 → 报「过了」就收工；
+    //  报「没过」就把批评发回给工人开下一轮。
     //  停的条件：验收通过、轮数/长时用完、连着几轮没过的是同一批条目（没进展）、
-    //  判官连着两次没给结论、用户自己插话（目标暂停，打 /goal 继续 接着跑）。
+    //  判官连着两次没给结论。你自己插一句话不算停：目标照跑，判官那一轮照验，
+    //  它的结论也照常发回工人（话发了、活干了，两条路并行往下走）。
     //
-    //  判官会话不进会话列表（一轮一个，都列出来会把列表刷满），跑完就关。
+    //  判官会话在会话列表里看得见（点进去就能看它验到哪一步）—— 不然等它验的那几分钟
+    //  心里没底。报完结论就关掉；用户正看着它时留着，让他自己关。
 
     /** 一次目标最多跑多少轮。 */
     private static readonly GOAL_MAX_ROUNDS = 30;
@@ -1104,7 +1105,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 派一个判官去验这一轮。
      *
      * 走的是派子会话同一条路（`tabaSpawn` + `hidden`）：同样的起会话、登记、收尾；
-     * 只是不进列表、不写名录、不给模型看见，跑完也不交回父会话 —— 它调 update_goal 报结论。
+     * 只是不写名录、不给模型看见、跑完不交回父会话 —— 它调 update_goal 报结论。
+     * 会话列表里照样看得到（判官在跑的那几分钟，人得看得到它在干什么）。
      */
     protected goalSpawnJudge(workerPanelId: string, goal: GoalState, report: string): void {
         const workerRt = this.panels.get(workerPanelId);
@@ -1200,7 +1202,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 }
             }
         }
-        this.closeGoalJudge(info.panelId);
+        // 判官这一轮收尾了：没人看着就关掉；用户正看着它（在里面翻它验了什么）就留着，
+        // 别把人家正在看的画面抽走，什么时候关由他自己点。
+        if (!this.isFocusedPanel(info.panelId)) { this.closeGoalJudge(info.panelId); }
         return true;
     }
 
@@ -1288,23 +1292,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (this.panels.has(judgePanelId)) { this.closeSession(judgePanelId); }
     }
 
-    /** 用户自己开口了：目标循环先暂停（他的要求跟判官的催办会互相打架）。 */
-    protected goalOnUserMessage(panelId: string, text: string): void {
-        const goal = this.goals.get(panelId);
-        if (!goal || goal.phase !== "active") { return; }
-        // 命令本身不算插话（/goal 暂停 自己会关判官，/compact 也不该把目标停掉）
-        if (parseGoalCommand(text || "")) { return; }
-        if (parseCompactCommand(text || "") !== null) { return; }
-        const rt = this.panels.get(panelId);
-        if (!rt) { return; }
-        this.goalCancelJudge(panelId);
-        goal.phase = "paused";
-        goal.note = "你插话了，目标先停在这儿";
-        this.goalSave(rt);
-        this.goalBroadcast(panelId);
-        this.postToSession(panelId, { type: "system", text: "目标先暂停了（你插话了）。接着跑就打 /goal 继续。" });
-    }
-
     // ========================================================================
     //  派子会话（taba）：一个会话把活派给另一个会话，子会话开在新 tab 里
     // ========================================================================
@@ -1339,7 +1326,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 它跑完第一轮后，最后一条回复会自动交回这个会话（见 tabaOnTurnEnd）。
      *
      * 目标循环的判官也走这一条路（`hidden: true`）：同样的起会话、同样的登记表、同样的收尾，
-     * 只是不进列表、不给模型看见、跑完不交回（它用 update_goal 报结论）。两边的差别全部收在
+     * 只是不写名录、不给模型看见、跑完不交回（它用 update_goal 报结论）。两边的差别全部收在
      * opts 里，别再另写一份"开后台会话"的路子。
      */
     protected async tabaSpawn(
@@ -1724,7 +1711,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
     private serializeSession(rt: SessionRuntime): Record<string, unknown> {
         const child = this.taba.byChildPanel(rt.id);
         const cwd = rt.cwd;
-        const name = this.sessionDisplayName(rt);
+        // 判官（hidden 子会话）就用我们自己起的名字「判官 · 第 N 轮」：pi 给它起的标题
+        // 看不出来它是在验收，列表里会认不出来（跑完就关的那一行，认不出等于白列）。
+        const judgeName = child?.hidden ? this.tabaTabNameOf(child.name) : undefined;
+        const name = judgeName ?? this.sessionDisplayName(rt);
         const goal = this.goalGet(rt);
         return {
             id: rt.id,
@@ -1736,7 +1726,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             name,
             // pi 那边给会话起的标题（自动命名扩展 / /name 写的）；还没起就是空串，
             // 界面拿它当会话名，空的时候回落 name。
-            title: rt.sessionTitle || "",
+            title: judgeName ? "" : (rt.sessionTitle || ""),
             // 当前用的会话文件（列表里用它把“已打开”那些历史行标出来；新会话可能还没落盘）
             file: rt.currentSessionPath || "",
             // 子会话挂在哪个会话下面（前端据此缩进）；不是子会话就是 null
@@ -1823,9 +1813,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
     private sessionListMessage(clientId: string): Record<string, unknown> {
         return {
             type: "sessionList",
-            // 判官（hidden 子会话）不进列表：一轮一个，几十轮下来会把列表刷满
+            // 判官（hidden 子会话）也要列出来：一轮一个，但它跑的时候人得看得到在干什么；
+            // 报完结论就关，所以不会越攒越多（用户正看着它时会留着，那是他自己关）。
             sessions: Array.from(this.panels.values())
-                .filter((rt) => !this.taba.byChildPanel(rt.id)?.hidden)
                 .map((rt) => this.serializeSession(rt)),
             // 这块屏自己看的是哪一个（它还没挑过就是 null）。界面以本地那一份为准，
             // 别的屏切会话不会牵动它（后端也不再广播“大家切到哪一个”这件事）。
@@ -1919,8 +1909,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 向指定会话发送（对照实验/旧入口都走这里）。 */
     protected broadcastSendToTab(panelId: string, text: string, images?: Array<{ data: string; mimeType: string }>): void {
-        // 用户自己开口了：目标循环先暂停（在真正发出去之前，免得和下一轮判官的催办抢）
-        this.goalOnUserMessage(panelId, text);
         for (const pid of this.panelIdsOf(panelId)) {
             this.panels.get(pid)?.handleSend(text, images);
         }
@@ -1934,8 +1922,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 「卡住了」那条路：终止这一轮，等它停稳再由运行时把这句发出去
      *  （为什么不当下就发，见 SessionRuntime.abortThenSend）。 */
     protected broadcastAbortThenSendToTab(panelId: string, text: string): void {
-        // 跟正常发送一样：用户开口了，目标先暂停
-        this.goalOnUserMessage(panelId, text);
         for (const pid of this.panelIdsOf(panelId)) { this.panels.get(pid)?.abortThenSend(text); }
     }
 

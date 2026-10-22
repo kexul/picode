@@ -3,7 +3,8 @@
  * goalLoop —— 验目标（/goal）的判官循环整条路（后端 + 界面一起，模型一头是假的）。
  *
  * 要验的几件事：
- *   1. 工人这一轮跑完，插件自动派一个判官会话去验（判官会话不进会话列表）；
+ *   1. 工人这一轮跑完，插件自动派一个判官会话去验（判官会话在跑的时候进「正在对话」列表，
+ *      点进去能看它验到哪一步；报完结论就关掉，但正看着它时留着、你自己关）；
  *   2. 判官没过 → 批评发回工人、工人接着干、再派下一轮判官；
  *   3. 判官报了“通过” → 目标变已完成、不再往下催、判官会话关掉；
  *   4. 轮数和结论都记在目标上（目标条 + 存盘）。
@@ -52,13 +53,17 @@ module.exports = async (page) => {
       text: text ? text.textContent.trim() : "",
     };
   `);
-  /** 「项目与会话」里「正在对话」那几行（判官会话不该出现在里面）。 */
+  /** 面板现在看得见吗：常驻那一列（宽窗，display 不是 none）或者浮层（窄窗，没盖着 hidden）。 */
+  const panelShown = () => page.eval(`
+    const dock = document.getElementById("sidebarDock");
+    const dockShown = !!dock && getComputedStyle(dock).display !== "none";
+    const overlay = document.getElementById("pickerOverlay");
+    return dockShown || (!!overlay && !overlay.classList.contains("hidden"));
+  `);
+  /** 「项目与会话」里「正在对话」那几行（判官在跑的时候也在里面）。 */
   const openRows = async () => {
-    const shown = await page.eval(`
-      const dock = document.getElementById("sidebarDock");
-      return !!dock && getComputedStyle(dock).display !== "none";
-    `);
-    if (!shown) { await page.click("#browserMenuBtn"); await page.sleep(400); }
+    const opened = !(await panelShown());
+    if (opened) { await page.click("#browserMenuBtn"); await page.sleep(400); }
     const rows = await page.eval(`
       const root = (function () {
         const dock = document.getElementById("sidebarDock");
@@ -67,9 +72,36 @@ module.exports = async (page) => {
       return Array.from(document.querySelectorAll(root + " .pk-item.pk-open"))
         .map((el) => { const t = el.querySelector(".pk-history-title"); return t ? t.textContent.trim() : ""; });
     `);
-    if (!shown) { await page.press("Escape"); await page.sleep(250); }
+    if (opened) { await page.press("Escape"); await page.sleep(250); }
     return rows;
   };
+  /** 点「正在对话」里名字含 needle 的那一行（宽窗常驻那一列、窄窗浮层都认）。 */
+  const clickRow = async (needle) => {
+    const opened = !(await panelShown());
+    if (opened) { await page.click("#browserMenuBtn"); await page.sleep(400); }
+    const hit = await page.eval(`
+      const root = (function () {
+        const dock = document.getElementById("sidebarDock");
+        return (dock && getComputedStyle(dock).display !== "none") ? "#dockBody" : "#pickerBody";
+      })();
+      const rows = Array.from(document.querySelectorAll(root + " .pk-item.pk-open"));
+      const hit = rows.find((el) => {
+        const t = el.querySelector(".pk-history-title");
+        return !!t && t.textContent.includes(${JSON.stringify(needle)});
+      });
+      if (!hit) { return false; }
+      hit.click();
+      return true;
+    `);
+    await page.sleep(500);
+    if (opened && (await panelShown())) { await page.press("Escape"); await page.sleep(250); }
+    if (!hit) { throw new Error("列表里没有「" + needle + "」那一行"); }
+  };
+  /** 现在是哪个会话（顶条中间那行字）。 */
+  const topName = () => page.eval(`
+    const el = document.querySelector("#sessionName .sn-text");
+    return el ? el.textContent.trim() : "";
+  `);
   const until = async (what, fn, ms = 120000) => {
     const started = Date.now();
     for (;;) {
@@ -94,17 +126,52 @@ module.exports = async (page) => {
   });
   check("判官在验的时候目标条写出第几轮", judging.text.includes("第 1 轮") && judging.tone === "run", judging);
 
-  // ---- 3. 第一轮判官：没过 → 批评发回工人 → 工人再干一轮 ----
+  // 判官跑着的时候在列表里看得见（缩进挂在工人下面），点进去能看它验到哪一步
+  const judgingRows = await until("判官在跑的时候出现在列表里", async () => {
+    const rows = await openRows();
+    return rows.some((r) => r.includes("判官")) ? rows : null;
+  }, 20000);
+  check("判官在跑的时候进了「项目与会话」列表（工人 + 判官两行）", judgingRows.length === 2, judgingRows);
+  await page.shot("goal-judge-running.png");
+
+  // ---- 3. 点进去看判官：它报完结论不会抽走你正在看的那一页 ----
+  await clickRow("判官");
+  const name1 = await topName();
+  check("点判官那一行就切到它（看得到它验到哪一步）", name1.includes("判官"), name1);
+  await page.shot("goal-judge-open.png");
+
+  // 第二轮判官一开，说明第一轮那个已经报了结论（目标那边处理完了）
+  await until("第一轮判官报上结论", async () => {
+    const rows = await openRows();
+    return rows.some((r) => r.includes("判官 · 第 2 轮"));
+  });
+  const kept = await openRows();
+  check("你正看着它的时候，判官报完结论不硬关掉", kept.some((r) => r.includes("判官 · 第 1 轮")), kept);
+
+  // 看完了自己关：Ctrl+Alt+W（当前看的就是它），关掉以后列表里就没了
+  const key = (type) => page.cdp.send("Input.dispatchKeyEvent", {
+    type, key: "w", code: "KeyW", windowsVirtualKeyCode: 87, nativeVirtualKeyCode: 87, modifiers: 3,
+  });
+  await key("keyDown");
+  await key("keyUp");
+  const gone = await until("自己关掉的判官从列表里消失", async () => {
+    const rows = await openRows();
+    return !rows.some((r) => r.includes("判官 · 第 1 轮"));
+  });
+  check("自己关掉以后列表里就没它了", gone === true, gone);
+
+  // 回到工人那边，接着看后面的几轮（后面的断言读的是工人那份消息流）
+  await clickRow("假标题");
+
+  // ---- 4. 第一轮判官：没过 → 批评发回工人 → 工人再干一轮 ----
   await until("第一轮判官报不过", async () => {
     const sys = await page.eval(`
       return Array.from(document.querySelectorAll(".msg.system")).map((el) => el.textContent.trim()).join(" | ");
     `);
     return sys.includes("第 1 轮没过") ? sys : "";
   });
-  const rows = await openRows();
-  check("判官会话没进「项目与会话」列表（只有工人那一个）", rows.length === 1, rows);
 
-  // ---- 4. 第二轮判官：通过 → 目标完成 ----
+  // ---- 5. 第二轮判官：通过 → 目标完成 ----
   await until("目标变已完成", async () => {
     const b = await bar();
     return b.text === "目标已完成" ? b : null;
@@ -123,7 +190,7 @@ module.exports = async (page) => {
 
   // 判官会话都关掉了：列表里仍然只有工人那一个
   const rows2 = await openRows();
-  check("判官会话都关了（列表还是只有一个）", rows2.length === 1, rows2);
+  check("两轮判官都关掉了（列表还是只有一个）", rows2.length === 1, rows2);
 
   // 记录里应该有两轮判官的意见（「第 N 轮没过」+「验收通过」）
   const sys = await page.eval(`

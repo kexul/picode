@@ -118,11 +118,12 @@ npm run web:shot -- --fake-pi --script dev/goalCommand.js
 npm run web:shot -- --fake-pi --script dev/goalFlow.js
 
 # 验判官循环整条路：工人跑完一轮 → 派判官去验 → 没过就把批评发回工人 → 过了就收工；
-# 顺便验判官会话不进「项目与会话」列表：
+# 顺便验判官在跑的时候进「项目与会话」列表、报完结论就关掉（列表回到只剩工人一个）：
 npm run web:shot -- --fake-pi --script dev/goalLoop.js
 
-# 验“目标跑着时你自己开口说话 → 目标先暂停、正在跑的判官当场收掉”：
-npm run web:shot -- --fake-pi --script dev/goalPause.js
+# 验“插话不停目标”（目标跑着时你插一句：目标条还是进行中、正在验的判官不被动、
+# 它验完的结论照样发回工人、循环接着转；想停还是自己打 /goal 暂停）：
+npm run web:shot -- --fake-pi --script dev/goalInterject.js
 
 # 验“判官连着几轮报的是同一批没过条目 → 算没进展，自己停下”（别让工人原地打转烧钱）：
 npm run web:shot -- --fake-pi --script dev/goalStale.js
@@ -213,6 +214,14 @@ node dev/mermaidCheck.js
 # 验文件侧边栏里那份 markdown 文档里的 mermaid（同一个播放器，换个地方）：
 node dev/mermaidFileCheck.js
 
+# 验 mermaid 那个 1.5MB 的库没排进首屏（浏览器页面按需加载、地址写在 meta 里带着指纹，
+# 面板那边仍然内联）：只拼页面、不开浏览器，几秒跑完。改过 chatUiFiles / pageHtml 后跑一下：
+node dev/lazyScripts.js
+
+# 验历史列表那两件事（纯 Node，不开浏览器）：扫描结果的缓存（同一个文件不重扫、
+# 文件改了就重扫）、子会话靠清单认（含不走那套文案的判官，老会话的文案兜底还在）：
+node dev/childSessions.js
+
 # 验「项目与会话」面板（顶条最右边那颗 <<<）：
 # 正在对话一段、工作区那块的展开 / 收起、组里的「加载更多」、行尾那颗加号新建会话、
 # 标题右边那颗加号（挑文件夹）、子会话不显示，一次过一遍：
@@ -290,6 +299,8 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接 / 断线期间问的选择题 / 补不上时整屏重画的视野）：`node dev/reconnect.js` |
 | `mermaidCheck.js` | 验消息流里的 ```mermaid 画成图（受支持的出图、不支持的留代码块加一行说明、中文节点名不被吞、换深色不重画就跟着变、页面不报错）：`node dev/mermaidCheck.js` |
 | `mermaidFileCheck.js` | 验文件侧边栏里那份 markdown 文档里的 mermaid（同一个播放器，换个地方）：`node dev/mermaidFileCheck.js` |
+| `lazyScripts.js` | 验 1.5MB 的 mermaid 没排进首屏（浏览器页面按需加载、地址写在 meta 里带着指纹；面板仍然内联）：`node dev/lazyScripts.js` |
+| `childSessions.js` | 验历史列表那两件事（扫描结果按改动时间 / 大小缓存、子会话靠清单认而不是看第一条用户说了什么）：`node dev/childSessions.js` |
 | `childDot.js` | 验顶条那颗小点与它下面的数字（子会话在跑时父会话那颗点也呼吸、点下面写着还有几个在跑，零个时数字收起来；点与箭头落在两行中间）：`npm run web:shot -- --script dev/childDot.js` |
 | `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并 + 正文之后补来的那段跑完并回本段那颗）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |
 | `thinkTipPerf.js` | 验 `think` 提示框开着时思考边流边长的开销与表现（节流、跟着贴底、往回滚就不跟）：`npm run web:shot -- --fake-pi --script dev/thinkTipPerf.js` |

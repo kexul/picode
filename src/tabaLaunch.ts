@@ -89,7 +89,7 @@ export function buildTabaLaunch(extraArgs: string[], cwd: string): PanelLaunch {
  *   判官：全都不做，只用 update_goal 报结论。
  */
 export interface TabaSpawnOptions {
-    /** 不进列表、不写名录、不给模型看见、跑完不交回（见 TabaChild.hidden）。 */
+    /** 不写名录、不给模型看见、跑完不交回（见 TabaChild.hidden）。 */
     hidden?: boolean;
     /** 额外命令行参数（判官要 `-e <goal 扩展>` 才有 update_goal）。 */
     extraArgs?: string[];
