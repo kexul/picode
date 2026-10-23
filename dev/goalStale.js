@@ -1,8 +1,9 @@
 // @ts-nocheck
 /**
- * goalStale —— 验「判官连着几轮报的是同一批没过条目 → 算没进展，自己停下」。
+ * goalStale —— 验「判官连着几轮报的是同一批没过条目，也不会自己停」。
  *
- * 为什么会走到这儿：工人一直在原地打转（判官每轮说的都是同一条），再催下去只是烧钱。
+ * 以前这里有「连着 3 轮没进展就停」「跑够 30 轮 / 3 小时就停」那几条自动停，现在都去掉了：
+ * 只有验收通过、判官那一轮坏了（出错 / 既没报结论也没说话）、你打 /goal 暂停才停。
  * 判官这边用一个环境变量让它永远报不过、且每次都报同一条：
  *
  *   npm run web:shot -- --fake-pi --script dev/goalStale.js
@@ -48,21 +49,31 @@ module.exports = async (page) => {
   await page.waitAnswer("验收清单");
   await page.send("/goal 开始");
 
-  const b = await until("目标因为没进展停下来", async () => {
+  // 判官每轮都报同一条「没过」；没有自动停，就该一直跑下去
+  const ran = await until("连着好几轮报同一批条目还在往下跑", async () => {
+    const g = goal();
+    return g && g.rounds >= 4 ? g : null;
+  });
+  const b = await bar();
+  check("跑过 4 轮以后目标条还是「进行中」", b.tone === "run" && b.text.includes("进行中"), b);
+  check("目标没被自动停掉", ran.phase === "active", { phase: ran.phase, note: ran.note });
+
+  // 手动停：只有这个能停
+  await page.send("/goal 暂停");
+  const stopped = await until("打 /goal 暂停 以后停下来", async () => {
     const x = await bar();
     return x.tone === "stop" ? x : null;
   });
   const g = goal();
-  check("停了以后目标条是「已暂停」", b.text.includes("已暂停"), b);
-  check("停的理由写着“没进展”", !!g && String(g.note || "").includes("没进展"), g && g.note);
-  check("停之前真跑了好几轮", !!g && g.rounds >= 3, g && g.rounds);
+  check("停了以后目标条是「已暂停」", stopped.text.includes("已暂停"), stopped);
+  check("停的理由是手动暂停，不是“没进展”", !!g && !String(g.note || "").includes("没进展"), g && g.note);
   const rounds = g.rounds;
   await page.sleep(4000);
   check("停下以后不再派人（轮数不涨）", (goal() || {}).rounds === rounds, { before: rounds, now: (goal() || {}).rounds });
   await page.shot("goal-stale.png");
 
   if (problems.length) {
-    throw new Error("没进展那条路有问题：\n- " + problems.join("\n- "));
+    throw new Error("没进展不停这条路有问题：\n- " + problems.join("\n- "));
   }
-  console.log("没进展停下这条路全过。");
+  console.log("同一批条目连报几轮也不自动停、只有手动暂停能停 —— 全过。");
 };

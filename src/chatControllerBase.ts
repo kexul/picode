@@ -914,7 +914,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         goal.phase = "active";
         if (!goal.startedAt) { goal.startedAt = Date.now(); }
         goal.updatedAt = Date.now();
-        this.goalRestartBook(rt.id);
         this.goalSave(rt);
         this.goalBroadcast(rt.id);
         this.postToSession(rt.id, {
@@ -960,7 +959,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         goal.phase = "active";
         if (!goal.startedAt) { goal.startedAt = Date.now(); }
         goal.updatedAt = Date.now();
-        this.goalRestartBook(rt.id);
         this.goalSave(rt);
         this.goalBroadcast(rt.id);
         rt.handleSend(buildGoalResumePrompt(goal));
@@ -1036,75 +1034,40 @@ export abstract class ChatControllerBase implements RuntimeHost {
     //  工人这一轮跑完 → 派一个判官子会话（走 tabaSpawn，带 hidden：不写名录、不给模型看见，
     //  跑完不交回结果、只有它能调 update_goal）→ 判官自己动手验 → 报「过了」就收工；
     //  报「没过」就把批评发回给工人开下一轮。
-    //  停的条件：验收通过、轮数/长时用完、连着几轮没过的是同一批条目（没进展）、
-    //  判官连着两次没给结论。你自己插一句话不算停：目标照跑，判官那一轮照验，
+    //  停的条件只有两条：验收通过、判官那一路坏了（那一轮出错，或者既没报结论也没说话）。
+    //  没有轮数 / 时长 / 没进展这类自动停 —— 要停就打 /goal 暂停。
+    //  你自己插一句话不算停：目标照跑，判官那一轮照验，
     //  它的结论也照常发回工人（话发了、活干了，两条路并行往下走）。
     //
     //  判官会话在会话列表里看得见（点进去就能看它验到哪一步）—— 不然等它验的那几分钟
     //  心里没底。报完结论就关掉；用户正看着它时留着，让他自己关。
 
-    /** 一次目标最多跑多少轮。 */
-    private static readonly GOAL_MAX_ROUNDS = 30;
-    /** 一次目标最长跑多久（毫秒）。 */
-    private static readonly GOAL_MAX_MS = 3 * 60 * 60 * 1000;
-    /** 判官连着这么多轮报同一批没过条目：算没进展，停。 */
-    private static readonly GOAL_MAX_STALE = 3;
-    /** 判官连着这么多次没报结论：停（别让工人被空催）。 */
-    private static readonly GOAL_MAX_NO_VERDICT = 2;
     /**
      * 判官能用哪些工具：只读 + 跑命令；不给 edit / write（只验不改）。
      * 注意 `--tools` 是个白名单，**扩展注册的工具也要列进来**（pi 把它一起过名单）：
      * 漏了 update_goal 的话，判官照样能把活验完、写完一段结论，就是报不上来 ——
-     * 插件这边看到的是“判官连着两次没给出结论”。
+     * 插件这边看到的是「判官既没报结论也没说话」，会把目标停下来。
      */
     private static readonly GOAL_JUDGE_TOOLS = "read,bash,grep,find,ls,update_goal";
 
-    /** 目标循环的内存账（会话关掉就没了；轮数记在目标上，重开还认）。 */
-    private readonly goalLoop = new Map<string, {
-        /** 这一趟从什么时候开始算（预算按它算）。 */
-        startedAt: number;
-        /** 上一轮判官报的那批没过条目（拼成一串，判“没进展”用）。 */
-        lastMissing: string;
-        /** 连着几轮没过的是同一批条目。 */
-        staleRounds: number;
-        /** 判官连着几次没报结论。 */
-        noVerdicts: number;
-        /** 正在跑的那个判官的编号（判官是 hidden 子会话，编号见 TabaChild.id）；没有就是 undefined。 */
-        judgeRunId?: string;
-    }>();
+    /** 工人 → 正在跑的那个判官的编号（判官是 hidden 子会话，编号见 TabaChild.id；会话关掉就没了）。 */
+    private readonly goalJudgeRun = new Map<string, string>();
 
     /** 这个会话的目标现在是不是正有判官在验（目标条上写出来，不然看着像卡住了）。 */
     protected goalIsJudging(panelId: string): boolean {
-        return !!this.goalLoop.get(panelId)?.judgeRunId;
-    }
-
-    /** 用户明确让目标开跑 / 接着跑：这一趟的时长预算与“没进展”的账都从这一刻重算。 */
-    private goalRestartBook(panelId: string): void {
-        this.goalLoop.set(panelId, { startedAt: Date.now(), lastMissing: "", staleRounds: 0, noVerdicts: 0 });
-    }
-
-    private goalBook(panelId: string) {
-        let book = this.goalLoop.get(panelId);
-        if (!book) {
-            book = { startedAt: Date.now(), lastMissing: "", staleRounds: 0, noVerdicts: 0 };
-            this.goalLoop.set(panelId, book);
-        }
-        return book;
+        return this.goalJudgeRun.has(panelId);
     }
 
     /** 工人这轮跑完了：该派判官就派（判官的收尾走 goalJudgeOnTurnEnd）。 */
     protected goalLoopOnTurnEnd(info: TurnEndInfo): void {
         const goal = this.goals.get(info.panelId);
         if (!goal || goal.phase !== "active") { return; }
-        const book = this.goalBook(info.panelId);
-        if (book.judgeRunId) { return; }   // 上一个判官还在跑（正常不会）：不叠着开
+        if (this.goalJudgeRun.has(info.panelId)) { return; }   // 上一个判官还在跑（正常不会）：不叠着开
         // 这一轮没正常跑完：先停，别叫判官（叫了也验不到新东西，白花钱）
         if (info.status !== "done") {
             this.goalStop(info.panelId, info.status === "cancelled" ? "那一轮被中止了" : "那一轮报错了");
             return;
         }
-        const stop = this.goalBudgetStop(goal, book);
-        if (stop) { this.goalStop(info.panelId, stop); return; }
         void this.goalSpawnJudge(info.panelId, goal, info.lastReplyText ?? "");
     }
 
@@ -1139,7 +1102,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             tools: ChatControllerBase.GOAL_JUDGE_TOOLS,
             cwd: workerRt.cwd,
         };
-        this.goalBook(workerPanelId).judgeRunId = req.id;
+        this.goalJudgeRun.set(workerPanelId, req.id);
         goal.rounds = round;
         delete goal.note;   // 这一轮的结论还没出来
         this.goalSave(workerRt);
@@ -1164,15 +1127,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!judge || !judge.hidden) { return false; }
         const workerPanelId = judge.parentPanelId;
         if (!workerPanelId) { return false; }
-        const book = this.goalLoop.get(workerPanelId);
         const goal = this.goals.get(workerPanelId);
         const workerRt = this.panels.get(workerPanelId);
-        // 报过结论的（onGoalVerdict 已经把 judgeRunId 清了）：这里只收尾
-        const stillOurs = !!book && book.judgeRunId === judge.id;
-        if (book) { book.judgeRunId = undefined; }
+        // 报过结论的（onGoalVerdict 已经把这一笔记销了）：这里只收尾
+        const stillOurs = this.goalJudgeRun.get(workerPanelId) === judge.id;
+        this.goalJudgeRun.delete(workerPanelId);
         this.taba.noteTurnEnd(judge.id, info.status, Date.now());
-        if (stillOurs && book && goal && workerRt) {
-            book.noVerdicts++;
+        if (stillOurs && goal && workerRt) {
             if (info.status !== "done") {
                 this.postToSession(workerPanelId, {
                     type: "system",
@@ -1180,30 +1141,23 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 });
                 this.goalStop(workerPanelId, `判官那一轮出错了（${describeTurnStatus(info.status)}）`);
             } else {
-                // 判官没调 update_goal 就结束了：把它最后说的话当意见发回去，记一笔
+                // 判官没调 update_goal 就结束了：把它最后说的话当意见发回去
                 const said = (info.lastReplyText ?? "").trim();
                 this.postToSession(workerPanelId, {
                     type: "system",
                     text: "判官这一轮没调 update_goal（没给结论）。",
                 });
-                if (book.noVerdicts >= ChatControllerBase.GOAL_MAX_NO_VERDICT) {
-                    this.goalStop(workerPanelId, `判官连着 ${book.noVerdicts} 次没给出结论`);
-                } else if (said) {
-                    const stop = this.goalBudgetStop(goal, book);
-                    if (stop) {
-                        this.goalStop(workerPanelId, stop);
-                    } else {
-                        workerRt.handleSend(buildGoalFeedbackPrompt({
-                            round: goal.rounds,
-                            judge: {
-                                kind: "verdict",
-                                pass: false,
-                                summary: "判官没按格式报结论，下面是它说的话",
-                                missing: [],
-                                next: said.slice(0, 4000),
-                            },
-                        }), undefined, { followUp: true });
-                    }
+                if (said) {
+                    workerRt.handleSend(buildGoalFeedbackPrompt({
+                        round: goal.rounds,
+                        judge: {
+                            kind: "verdict",
+                            pass: false,
+                            summary: "判官没按格式报结论，下面是它说的话",
+                            missing: [],
+                            next: said.slice(0, 4000),
+                        },
+                    }), undefined, { followUp: true });
                 } else {
                     this.goalStop(workerPanelId, "判官既没报结论也没说话");
                 }
@@ -1220,14 +1174,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const judge = this.taba.byChildPanel(judgePanelId);
         if (!judge || !judge.hidden || !judge.parentPanelId) { return; }
         const workerPanelId = judge.parentPanelId;
-        const book = this.goalLoop.get(workerPanelId);
         const goal = this.goals.get(workerPanelId);
         const workerRt = this.panels.get(workerPanelId);
         // 只认这一轮那个判官的结论（判官重复调、或者上一轮的迟到，一律不算）
-        if (!book || book.judgeRunId !== judge.id || !goal || !workerRt) { return; }
-        book.judgeRunId = undefined;
+        if (this.goalJudgeRun.get(workerPanelId) !== judge.id || !goal || !workerRt) { return; }
+        this.goalJudgeRun.delete(workerPanelId);
         this.taba.noteTurnEnd(judge.id, "done", Date.now());
-        book.noVerdicts = 0;
         goal.note = verdict.summary;
         if (verdict.pass === true) {
             goal.phase = "complete";
@@ -1239,36 +1191,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
             });
             return;
         }
-        // 没过：记账（同一批条目连着出现 = 没进展）
-        const missing = verdict.missing.join("\n");
-        book.staleRounds = missing && missing === book.lastMissing ? book.staleRounds + 1 : 0;
-        book.lastMissing = missing;
         this.goalSave(workerRt);
         this.goalBroadcast(workerPanelId);
         this.postToSession(workerPanelId, {
             type: "system",
             text: `第 ${goal.rounds} 轮没过：${verdict.summary}`,
         });
-        const stop = this.goalBudgetStop(goal, book);
-        if (stop) { this.goalStop(workerPanelId, stop); return; }
         workerRt.handleSend(buildGoalFeedbackPrompt({ round: goal.rounds, judge: verdict }), undefined, { followUp: true });
-    }
-
-    /** 预算 / 停滞那几条停下的理由（没到就返回 undefined）。 */
-    private goalBudgetStop(goal: GoalState, book: { startedAt: number; staleRounds: number; noVerdicts: number }): string | undefined {
-        if (goal.rounds >= ChatControllerBase.GOAL_MAX_ROUNDS) {
-            return `跑够 ${ChatControllerBase.GOAL_MAX_ROUNDS} 轮了`;
-        }
-        if (Date.now() - book.startedAt >= ChatControllerBase.GOAL_MAX_MS) {
-            return `跑够 ${Math.round(ChatControllerBase.GOAL_MAX_MS / 3600000)} 小时了`;
-        }
-        if (book.staleRounds >= ChatControllerBase.GOAL_MAX_STALE) {
-            return `连着 ${book.staleRounds} 轮没过的是同一批条目（没进展）`;
-        }
-        if (book.noVerdicts >= ChatControllerBase.GOAL_MAX_NO_VERDICT) {
-            return "判官连着几次没给出结论";
-        }
-        return undefined;
     }
 
     /** 停下循环：目标变暂停（除非已经完成），写清为什么，并告诉界面。 */
@@ -1286,10 +1215,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 关掉某个工人正在跑的那个判官（暂停 / 清除 / 工人被关掉时用）。 */
     protected goalCancelJudge(workerPanelId: string): void {
-        const book = this.goalLoop.get(workerPanelId);
-        const judgeRunId = book?.judgeRunId;
-        if (!book || !judgeRunId) { return; }
-        book.judgeRunId = undefined;
+        const judgeRunId = this.goalJudgeRun.get(workerPanelId);
+        if (!judgeRunId) { return; }
+        this.goalJudgeRun.delete(workerPanelId);
         const judge = this.taba.get(judgeRunId);
         if (judge?.childPanelId) { this.closeGoalJudge(judge.childPanelId); }
     }
@@ -1667,16 +1595,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.goalChecked.delete(panelId);
         // 关掉的是判官（hidden 子会话）：把工人那边"有判官在跑"的账清掉
         const judge = this.taba.byChildPanel(panelId);
-        if (judge && judge.hidden && judge.parentPanelId) {
-            const book = this.goalLoop.get(judge.parentPanelId);
-            if (book && book.judgeRunId === judge.id) { book.judgeRunId = undefined; }
+        if (judge && judge.hidden && judge.parentPanelId
+            && this.goalJudgeRun.get(judge.parentPanelId) === judge.id) {
+            this.goalJudgeRun.delete(judge.parentPanelId);
         }
-        // 关掉的是工人：它的目标循环也停，正在跑的判官一并关掉
-        const workerBook = this.goalLoop.get(panelId);
-        if (workerBook) {
-            this.goalLoop.delete(panelId);
-            const judge = workerBook.judgeRunId ? this.taba.get(workerBook.judgeRunId) : undefined;
-            if (judge?.childPanelId) { this.closeGoalJudge(judge.childPanelId); }
+        // 关掉的是工人：正在跑的判官一并关掉
+        const judgeRunId = this.goalJudgeRun.get(panelId);
+        this.goalJudgeRun.delete(panelId);
+        if (judgeRunId) {
+            const running = this.taba.get(judgeRunId);
+            if (running?.childPanelId) { this.closeGoalJudge(running.childPanelId); }
         }
         this.panels.delete(panelId);
         this.panelUsedAt.delete(panelId);
