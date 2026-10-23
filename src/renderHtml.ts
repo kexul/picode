@@ -130,6 +130,16 @@ ${chatColumnClose}  <div id="sidebarDock" class="pk-host pk-drawer pk-workspace"
       <div id="viewOptsRoot"></div>
     </div>
   </div>
+  <div id="toolStatsOverlay" class="hidden">
+    <div id="toolStatsPanel">
+      <div id="toolStatsHead">
+        <span id="toolStatsTitle">工具调用耗时</span>
+        <span class="ts-spacer"></span>
+        <button id="toolStatsClose" type="button" title="关闭" aria-label="关闭">${ICON_CLOSE}</button>
+      </div>
+      <div id="toolStatsBody"></div>
+    </div>
+  </div>
 ${bodyBottom}${scriptTags}
 </body>
 </html>`;

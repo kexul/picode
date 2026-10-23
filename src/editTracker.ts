@@ -24,7 +24,8 @@ export interface EditTrackerHost {
 export class EditTracker {
     private pendingEdits = new Map<string, { path: string; before: string }>();
     private editSnapshots = new Map<string, { path: string; before: string; after: string }>();
-    /** 非 edit 工具的开始时间戳（toolCallId → ms），用于卡片耗时显示。 */
+    /** 工具调用的开始时间戳（toolCallId → ms）：结果回来时算这次跑了多久，
+     *  随结果一起发给界面，汇总进统计弹窗（见 media/chat.js 的 noteToolDuration）。 */
     private toolStartedAt = new Map<string, number>();
     /** pi 本会话工具调用触及过的文件绝对路径。 */
     private knownFiles = new Set<string>();
@@ -62,7 +63,7 @@ export class EditTracker {
         const toolName: string = evt.toolName;
         const isEditLike = toolName === "edit" || toolName === "write";
         const p = isEditLike ? this.editToolPath(toolName, evt.args) : null;
-        if (evt.toolCallId && !isEditLike) {
+        if (evt.toolCallId) {
             this.toolStartedAt.set(evt.toolCallId, Date.now());
         }
         this.collectKnownFile(toolName, evt.args);
@@ -125,6 +126,8 @@ export class EditTracker {
         if (!evt.toolCallId) {
             return;
         }
+        const started = this.toolStartedAt.get(evt.toolCallId);
+        this.toolStartedAt.delete(evt.toolCallId);
         const details = !evt.isError ? evt.result?.details : undefined;
         const errorText = evt.isError ? extractErrorText(evt.result) : undefined;
         this.host.post({
@@ -134,6 +137,7 @@ export class EditTracker {
             isError: !!evt.isError,
             errorText,
             canRevert: !evt.isError && this.editSnapshots.has(evt.toolCallId),
+            durationMs: typeof started === "number" ? Date.now() - started : undefined,
         });
     }
 

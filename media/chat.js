@@ -45,6 +45,8 @@
     // 加号：面板里「在新工作区新建会话」那一行用（跟顶条那颗新建会话同一颗图标）。
     add: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8 1.5C8 1.22386 7.77614 1 7.5 1C7.22386 1 7 1.22386 7 1.5V7H1.5C1.22386 7 1 7.22386 1 7.5C1 7.77614 1.22386 8 1.5 8H7V13.5C7 13.7761 7.22386 14 7.5 14C7.77614 14 8 13.7761 8 13.5V8H13.5C13.7761 8 14 7.77614 14 7.5C14 7.22386 13.7761 7 13.5 7H8V1.5Z"/></svg>',
     sliders: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4.5h6.2M11.8 4.5H14M2 11.5h1.7M7.3 11.5H14"/><circle cx="10" cy="4.5" r="1.8"/><circle cx="5.5" cy="11.5" r="1.8"/></svg>',
+    // 三根高低不一的柱子：侧边栏底部那颗「统计」（工具调用耗时）用它。
+    chart: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="2" y="9" width="3" height="5" rx="0.6"/><rect x="6.5" y="5" width="3" height="9" rx="0.6"/><rect x="11" y="2" width="3" height="12" rx="0.6"/></svg>',
     // 子会话的拐角箭头（“↳”）：先从上面下来、再向右拐，像个挂在父会话下面的分叉。
     // 用 SVG 而不是文字符号：箭头在 Segoe UI 等字体里居中不对，画出来天然齐。
     child: '<svg width="14" height="14" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.2 1.6V8.4H12.6"/><path d="M9.8 5.6L12.8 8.4L9.8 11.2"/></svg>',
@@ -838,6 +840,9 @@
       goal: null,
       goalSummary: null,
       goalOpen: false,
+      // 工具调用耗时（见 noteToolDuration / renderToolStats）：只算这次打开页面之后跑过的调用。
+      // byTool：工具名 → { count, totalMs, maxMs }；slowest：跑得最久的那几次（最多 TOOL_STATS_SLOWEST 条）。
+      toolStats: { calls: 0, totalMs: 0, byTool: new Map(), slowest: [] },
       queuedSteering: [],
       pendingSteerRestore: null,
       autoLoadHinted: false,
@@ -3197,6 +3202,9 @@
     const entry = addToolToGroup(st, toolName, argStr, toolCallId, fillEntry);
 
     return {
+      // 统计那边要用：这一条是哪个工具、在提示框里那一行写的是什么（见 noteToolDuration）
+      toolName,
+      callText: toolName + " " + (label || filePath || ""),
       setResult(msg) {
         resultDone = true;
         pendingResult = msg;
@@ -6524,6 +6532,16 @@
         openSettings();
       });
       view.footer.appendChild(settingsBtn);
+      // 「统计」：这个会话里各个工具花了多久（同一个浮层壳子，见 renderToolStats）
+      const statsBtn = document.createElement("button"); statsBtn.type = "button";
+      statsBtn.className = "secondary pk-footer-stats";
+      statsBtn.title = "看这个会话里各个工具调了多少次、花了多久";
+      statsBtn.innerHTML = ICONS.chart + "<span>统计</span>";
+      statsBtn.addEventListener("click", () => {
+        if (!view.keepOpen) { cancelPicker(view); }
+        openToolStats();
+      });
+      view.footer.appendChild(statsBtn);
     } else if (toggle) {
       view.footer.classList.remove("hidden");
       const closeBtn = document.createElement("button"); closeBtn.className = "secondary"; closeBtn.textContent = "关闭";
@@ -7434,6 +7452,7 @@
       case "editCardResult": {
         const card = t.pendingToolCards.get(msg.toolCallId);
         if (card) {
+          noteToolDuration(t, card.toolName, card.callText, msg.durationMs);
           card.setResult(msg);
           scrollToBottom(t);
           if (!msg.canRevert) { t.pendingToolCards.delete(msg.toolCallId); }
@@ -7538,6 +7557,7 @@
       case "toolResult": {
         const groupEntry = t.toolGroupEntries.get(msg.toolCallId);
         if (groupEntry) {
+          noteToolDuration(t, groupEntry.name, groupEntry.tipCall, msg.durationMs);
           // 合并组里的那一条：结果填回组里（提示框里那条的结果），标签上的条数/转圈/标红跟着重算
           if (Array.isArray(msg.images) && msg.images.length > 0) {
             removeEntryFromGroup(t, groupEntry, msg.images);
@@ -7554,6 +7574,7 @@
         }
         const tagEl = t.pendingToolTags.get(msg.toolCallId);
         if (tagEl) {
+          noteToolDuration(t, tagEl._toolName, tagEl._tipCall, msg.durationMs);
           tagEl.classList.remove("running");
           syncRunningLine(t);   // 这条不跑了：末尾那行跟着少一条
           if (msg.isError) { tagEl.classList.add("error"); }
@@ -7810,6 +7831,132 @@
     sessionDrafts.delete(id);
     fileSidebar.savedTabs.delete(id);   // 这个会话关掉了：它那一份标签也不必留着（反正它的目录里不再有人看）
     if (activeId === id) { activeId = null; syncJumpBottom(st); syncComposerButtons(); }
+  }
+
+  // ==================== 工具调用耗时（侧边栏底部那颗「统计」）====================
+  // 这个会话里每个工具调了几次、总共花了多久，以及花得最久的那几次调用。
+  // 数从哪来：后端在每次工具结束时就算好了这一条跑了多久（src/editTracker.ts），随结果一起发过来
+  // （toolResult / editCardResult 的 durationMs）——工具标签上不写它，都汇总到这张弹窗里看。
+  // 所以只算这次打开页面之后真跑过的调用：刷新 / 重连后重放的历史不带这个数，统计从零重来。
+  const TOOL_STATS_SLOWEST = 6;   // 「最慢的几次」最多列几条
+  const toolStatsOverlay = document.getElementById("toolStatsOverlay");
+  const toolStatsBody = document.getElementById("toolStatsBody");
+  const toolStatsCloseBtn = document.getElementById("toolStatsClose");
+
+  function toolStatsOpen() {
+    return !!toolStatsOverlay && !toolStatsOverlay.classList.contains("hidden");
+  }
+
+  /** 记一笔：这个会话里某条工具调用跑完了，用了多久（durationMs 不在就不记：历史重放、被中断的都没这个数）。
+   *  text 是这条调用在提示框里写的那一行（bash 就是「$ 命令」），「最慢的几次」直接拿它给人看。 */
+  function noteToolDuration(st, toolName, text, durationMs) {
+    if (!st || typeof durationMs !== "number" || !isFinite(durationMs) || durationMs < 0) { return; }
+    const stats = st.toolStats;
+    const name = toolName || "?";
+    const row = stats.byTool.get(name) || { count: 0, totalMs: 0, maxMs: 0 };
+    row.count += 1;
+    row.totalMs += durationMs;
+    row.maxMs = Math.max(row.maxMs, durationMs);
+    stats.byTool.set(name, row);
+    stats.calls += 1;
+    stats.totalMs += durationMs;
+    stats.slowest.push({ name, text: text || name, durationMs });
+    stats.slowest.sort((a, b) => b.durationMs - a.durationMs);
+    if (stats.slowest.length > TOOL_STATS_SLOWEST) { stats.slowest.length = TOOL_STATS_SLOWEST; }
+    if (toolStatsOpen()) { renderToolStats(); }   // 弹窗开着就跟着长（每次调用完重画一次，几条几行的量）
+  }
+
+  function tsBlock(className, text) {
+    const el = document.createElement("div");
+    el.className = className;
+    el.textContent = text;
+    return el;
+  }
+
+  /** 统计表里的一行：cells 是 [{ text, cls }]，排成一排（表头与数据行同一套宽度）。 */
+  function tsRowEl(cells, head) {
+    const row = document.createElement("div");
+    row.className = "ts-row" + (head ? " ts-row-head" : "");
+    for (const it of cells) {
+      const el = document.createElement("span");
+      el.className = it.cls;
+      el.textContent = it.text;
+      row.appendChild(el);
+    }
+    return row;
+  }
+
+  /** 画一遍统计弹窗的内容：上面一句汇总（当前会话 / 一共几次 / 合计多久），下面按工具名一张表，
+   *  再下面是花得最久的那几次调用（工具名 + 那次在干什么 + 耗时）。 */
+  function renderToolStats() {
+    if (!toolStatsBody) { return; }
+    toolStatsBody.innerHTML = "";
+    toolStatsBody.scrollTop = 0;
+    const st = activeSession();
+    if (!st) {
+      toolStatsBody.appendChild(tsBlock("ts-empty", "还没有会话。"));
+      return;
+    }
+    const stats = st.toolStats;
+    toolStatsBody.appendChild(tsBlock("ts-summary",
+      "当前会话「" + sessionLabel(st) + "」 · 共 " + stats.calls + " 次调用 · 合计 " + formatElapsed(stats.totalMs)));
+    if (!stats.calls) {
+      toolStatsBody.appendChild(tsBlock("ts-empty", "这次打开页面之后，这个会话还没跑过工具调用。"));
+      return;
+    }
+    // 按工具名：合计时间长的排前面（看着就知道时间花在哪了）
+    const rows = Array.from(stats.byTool.entries())
+      .map(([name, v]) => ({ name, count: v.count, totalMs: v.totalMs, maxMs: v.maxMs }))
+      .sort((a, b) => b.totalMs - a.totalMs);
+    toolStatsBody.appendChild(tsBlock("ts-section", "按工具"));
+    toolStatsBody.appendChild(tsRowEl([
+      { text: "工具", cls: "ts-name" },
+      { text: "次数", cls: "ts-num ts-count" },
+      { text: "合计", cls: "ts-num" },
+      { text: "平均", cls: "ts-num" },
+      { text: "最长", cls: "ts-num" },
+    ], true));
+    for (const r of rows) {
+      toolStatsBody.appendChild(tsRowEl([
+        { text: r.name, cls: "ts-name" },
+        { text: r.count + " 次", cls: "ts-num ts-count" },
+        { text: formatElapsed(r.totalMs), cls: "ts-num" },
+        { text: formatElapsed(r.totalMs / r.count), cls: "ts-num" },
+        { text: formatElapsed(r.maxMs), cls: "ts-num" },
+      ]));
+    }
+    toolStatsBody.appendChild(tsBlock("ts-section", "花得最久的 " + stats.slowest.length + " 次调用"));
+    for (const c of stats.slowest) {
+      toolStatsBody.appendChild(tsRowEl([
+        { text: c.name, cls: "ts-name" },
+        { text: c.text || c.name, cls: "ts-text" },
+        { text: formatElapsed(c.durationMs), cls: "ts-num" },
+      ]));
+    }
+    toolStatsBody.appendChild(tsBlock("ts-note",
+      "同一时刻并行跑的几条各算各的，合计会比实际过去的时间多。\n" +
+      "只算这次打开页面之后跑过的调用，刷新页面就从头再算。"));
+  }
+
+  function openToolStats() {
+    if (!toolStatsOverlay) { return; }
+    renderToolStats();
+    toolStatsOverlay.classList.remove("hidden");
+  }
+  function closeToolStats() {
+    if (toolStatsOverlay) { toolStatsOverlay.classList.add("hidden"); }
+  }
+  if (toolStatsOverlay) {
+    // 点外面收起来；右上角那颗叉同理
+    toolStatsOverlay.addEventListener("click", (e) => { if (e.target === toolStatsOverlay) { closeToolStats(); } });
+    if (toolStatsCloseBtn) { toolStatsCloseBtn.addEventListener("click", closeToolStats); }
+    // Esc 收起来：捕获阶段就地处掉，别让它顺手中止正在生成的那一轮（跟别的浮层一个道理）
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || !toolStatsOpen()) { return; }
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      closeToolStats();
+    });
   }
 
   // ==================== 设置浮层（插件选项）====================
