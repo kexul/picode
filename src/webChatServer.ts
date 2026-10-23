@@ -150,6 +150,10 @@ interface DirEntryInfo {
     path: string;
     /** 是不是目录（软链接跟着指向判：指到目录的算目录） */
     dir: boolean;
+    /** 文件有多大（字节；目录没有） */
+    size?: number;
+    /** 是不是一张图（是的话页面可以拿它的小图当缩略图；目录没有） */
+    image?: boolean;
 }
 
 interface DirListing {
@@ -627,8 +631,14 @@ export class PiChatWebServer {
      * 只报身份，不放路径、配置这些不该外露的东西。
      * 不带 Origin 头也放行：本机探活就是这么发的（见 originAllowed 对无 Origin 请求的处理）。
      */
-    /** 页面能直接看的文件大小上限：再大的不读出来（页面给一句「太大」；要下载那是另一条路）。 */
+    /** 文本文件能直接看的字节上限：再大的不读出来（页面给一句「太大」；要下载那是另一条路）。 */
     private static readonly MAX_FILE_BYTES = 2 * 1024 * 1024;
+
+    /**
+     * 图片能直接看的字节上限。比文本宽得多：手机照片、截图常见几 MB，而图片是流式发出去的
+     * （后端不整份读进内存），挡在这里只会让人看不到图。再大的仍然只给下载。
+     */
+    private static readonly MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
     /** 一份目录清单最多列这么多项：目录里有几万个东西时全塞给页面会卡死，人也翻不到后面去。 */
     private static readonly MAX_DIR_ENTRIES = 500;
@@ -755,9 +765,10 @@ export class PiChatWebServer {
      * （见 resolveSessionPath：`..` 绕出去的、软链接指到外面的都不给）。
      *
      * 怎么给，看文件是哪种（按扩展名，见 fileFormatOf）：
-     *   - 看（用来显示）超过 2 MB 的一律 413，正文里带着字节数，页面据此说「太大」；
-     *   - 文本（UTF-8）当正文递出去，页面画成带行号的一行一格；
-     *   - 图片按图片类型流出去，页面拿它当图片显示；
+     *   - 文本（UTF-8）当正文递出去，页面画成带行号的一行一格；超过 2 MB 的 413，
+     *     正文里带着字节数，页面据此说「太大」；
+     *   - 图片按图片类型流出去，页面拿它当图片显示；上限比文本宽（见 MAX_IMAGE_BYTES），
+     *     超过的同样 413；
      *   - 其余的（二进制）当正文看没有意义：415 加一句「这是个二进制文件」，页面拿它写说明与下载。
      * 页面上的下载链接就是同一条地址带 `download=1`：这条不设大小上限，按附件流式给出去
      * （几 MB 的文件也下得下来，内容不经过推送通道、也不进页面）。
@@ -803,7 +814,21 @@ export class PiChatWebServer {
             return;
         }
         const format = fileFormatOf(realTarget);
-        // 「太大」比「是二进制」先说：超 2 MB 的一律不往页面里塞，给句话加一个下载
+        if (format === "image") {
+            // 图片按图片类型流出去：页面拿它当图片地址显示（图片自己的上限比文本宽）
+            if (stat.size > PiChatWebServer.MAX_IMAGE_BYTES) {
+                this.sendFileNote(req, res, 413,
+                    `图片太大（${stat.size} 字节），这里只显示小于 20 MB 的图片。`, mtime, stat.size);
+                return;
+            }
+            this.streamFile(res, realTarget, 200, stat.size, {
+                "Content-Type": IMAGE_CONTENT_TYPES.get(extensionOf(realTarget))!,
+                "Cache-Control": "no-store",
+                "X-File-Mtime": mtime,
+            });
+            return;
+        }
+        // 「太大」比「是二进制」先说：超 2 MB 的文本一律不往页面里塞，给句话加一个下载
         if (stat.size > PiChatWebServer.MAX_FILE_BYTES) {
             this.sendFileNote(req, res, 413,
                 `文件太大（${stat.size} 字节），这里只显示小于 2 MB 的文件。`, mtime, stat.size);
@@ -812,15 +837,6 @@ export class PiChatWebServer {
         if (format === "binary") {
             // 当文字读出来是一堆乱码，不如直说：页面拿这句话加一个下载
             this.sendFileNote(req, res, 415, "这是个二进制文件，没法当文字显示。", mtime, stat.size);
-            return;
-        }
-        if (format === "image") {
-            // 图片按图片类型流出去：页面拿它当图片地址显示
-            this.streamFile(res, realTarget, 200, stat.size, {
-                "Content-Type": IMAGE_CONTENT_TYPES.get(extensionOf(realTarget))!,
-                "Cache-Control": "no-store",
-                "X-File-Mtime": mtime,
-            });
             return;
         }
         fs.readFile(realTarget, (err, data) => {
@@ -890,8 +906,9 @@ export class PiChatWebServer {
      * 列一个目录给页面（`/dir?session=…&path=…`）：点消息流里的目录链接、以及面板里再点进去的
      * 子目录都走它。目录边界与 `/file` 同一套（见 resolveSessionPath）。
      *
-     * 回一份 JSON：`{ entries: [{ name, path, dir }], truncated? }`。
+     * 回一份 JSON：`{ entries: [{ name, path, dir, size?, image? }], truncated? }`。
      *   - `path` 是相对会话目录的写法（页面拿它当标签的键，也原样贴回下一次请求），不写绝对路径；
+     *   - 文件带着 `size`（字节），图片还带 `image: true`——清单里那一行据此决定挂不挂缩略图；
      *   - 顺序：子目录在前、文件在后，各自按名字排（大小写不敏感）；
      *   - 软链接不跟着解析：指到会话目录外面的条目照样列出来（名字是里面这一层的事实），
      *     点它的那一下由 resolveSessionPath 挡回去（403）——「列出来的东西一样受目录边界限制」。
@@ -927,7 +944,13 @@ export class PiChatWebServer {
             let stat: fs.Stats;
             // 用 stat 不用 lstat：软链接指到目录的也算目录（点不点得进去由那道边界管）
             try { stat = await fs.promises.stat(full); } catch { continue; }
-            const entry: DirEntryInfo = { name, path: relativeTo(realCwd, full), dir: stat.isDirectory() };
+            const isDir = stat.isDirectory();
+            const entry: DirEntryInfo = { name, path: relativeTo(realCwd, full), dir: isDir };
+            if (!isDir) {
+                entry.size = stat.size;
+                // 清单里图片那一行要挂缩略图：认哪种扩展名是图这件事只在后端这一处（见 fileFormatOf）
+                if (fileFormatOf(full) === "image") { entry.image = true; }
+            }
             (entry.dir ? dirs : files).push(entry);
         }
         const listing: DirListing = { entries: [...dirs, ...files] };

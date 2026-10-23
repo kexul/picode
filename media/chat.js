@@ -4891,6 +4891,35 @@
   }
 
   /**
+   * 清单里一行左边那颗图标：目录是文件夹，图片是它自己的小图（小了才挂，见 DIR_THUMB_MAX_BYTES；
+   * 取不到也退回通用图标）——大图不该为了列一遍目录就整张拉下来。
+   */
+  function fileEntryIcon(entry) {
+    const icon = document.createElement("span");
+    icon.className = "file-entry-icon";
+    if (entry.dir) {
+      icon.innerHTML = ICONS.folder;
+      return icon;
+    }
+    if (entry.image && Number(entry.size) <= DIR_THUMB_MAX_BYTES) {
+      const img = document.createElement("img");
+      img.className = "file-entry-thumb";
+      img.alt = "";
+      img.loading = "lazy";     // 滚到才取：一眼看不到的那些图不先拉下来
+      img.decoding = "async";
+      img.src = siteUrlOf(entry.path);
+      img.addEventListener("error", () => { icon.innerHTML = ICONS.files; });
+      icon.appendChild(img);
+      return icon;
+    }
+    icon.innerHTML = ICONS.files;
+    return icon;
+  }
+
+  /** 清单里给图片挂缩略图的字节上限：更大的照样能点开看，只是清单里仍挂通用图标。 */
+  const DIR_THUMB_MAX_BYTES = 2 * 1024 * 1024;
+
+  /**
    * 一份目录清单画进正文：一项一行（名字前一颗图标），点子目录就在这一格里往里走、点文件打开它。
    * 清单里那个相对写法就是下一次请求的路径，跟点消息流里的链接走同一条路
    *（开不开得了由后端那道边界管：指到目录外的条目点了给一句说明）。
@@ -4916,9 +4945,7 @@
       row.className = "file-entry" + (entry.dir ? " dir" : "");
       row.setAttribute("data-path", entry.path);
       row.title = entry.path;
-      const icon = document.createElement("span");
-      icon.className = "file-entry-icon";
-      icon.innerHTML = entry.dir ? ICONS.folder : ICONS.files;
+      const icon = fileEntryIcon(entry);
       const name = document.createElement("span");
       name.className = "file-entry-name";
       name.textContent = pathLabel(entry.name, entry.dir);
@@ -5120,8 +5147,9 @@
    * 路径摆进地址里是为了页面里的相对引用（`./a.css`、`img/x.png`）由浏览器自己接着解析，
    * 那些子请求也落在同一条地址下面；跟 `/file` 那条一样只读、只认会话目录里的东西。
    */
-  function siteUrl(tab) {
-    const segs = String(tab.path || "").split("/").map(encodeURIComponent).join("/");
+  function siteUrl(tab) { return siteUrlOf(tab.path); }
+  function siteUrlOf(path) {
+    const segs = String(path || "").split("/").map(encodeURIComponent).join("/");
     return "/site/" + encodeURIComponent(activeId || "") + "/" + segs;
   }
 

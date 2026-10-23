@@ -40,14 +40,24 @@ function chunk(type, data) {
  * @param {string} file 写到哪儿
  * @param {number} [width] 宽，默认 1600（比对话区宽，用来看"拉到页面宽度"）
  * @param {number} [height] 高，默认 400
+ * @param {boolean} [noisy] 每像素都换成伪随机色：压不小，用来造一张真的大图（占体积、还看得成图）
  */
-function writeSamplePng(file, width = 1600, height = 400) {
+function writeSamplePng(file, width = 1600, height = 400, noisy = false) {
     const stride = width * 3 + 1;          // 每行：1 字节过滤标记 + RGB
     const raw = Buffer.alloc(stride * height);
     let at = 0;
     for (let y = 0; y < height; y++) {
         raw[at++] = 0;
         for (let x = 0; x < width; x++) {
+            if (noisy) {
+                // 伪随机（同一张图每次跑都一样，但几乎没有重复片段，deflate 压不动）
+                let h = (x * 374761393 + y * 668265263) >>> 0;
+                h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+                raw[at++] = h & 0xff;
+                raw[at++] = (h >>> 8) & 0xff;
+                raw[at++] = (h >>> 16) & 0xff;
+                continue;
+            }
             const band = Math.floor((x / width) * 8);
             const down = y / height;
             raw[at++] = Math.round(40 + band * 25);

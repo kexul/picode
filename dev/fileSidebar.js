@@ -22,10 +22,11 @@
  *      换个会话不把上一个会话看过的文件内容留在面板里；
  *      ≥1200px 常驻在左边、窄了滑入、点外面收起；手机上两块侧边栏互斥；
  *      顶条左边那颗按钮点开点收、刷新后还是刚才的样子；
- *      目录外 / 不存在 / 超过 2 MB 时页面上给一句说明；
+ *      目录外 / 不存在 / 超过 2 MB 的文本、超过 20 MB 的图片时页面上给一句说明；
  *      正看着的文件被改（脚本直接改会话目录里的文件，见下）以后，这一列不用重新点链接就换成
  *      新内容，而读到哪儿还停在哪儿；文件没变的那几轮里，正文一个字节都不再传一遍；
- *      点图片链接直接在这一列里看到那张图；点二进制文件给一句「这是个二进制文件」加一个下载；
+ *      点图片链接直接在这一列里看到那张图（2 MB 以上、20 MB 以内的也直接看，再大的给下载）；
+ *      目录清单里图片那一行挂它自己的小图（只给 2 MB 以内的，免得一个目录里几十张大图一口气拉下来）；点二进制文件给一句「这是个二进制文件」加一个下载；
  *      点超过 2 MB 的文件给「太大，点这里下载」，正文一个字节都不塞进页面；点那个下载
  *      浏览器真把文件存了下来；点目录链接（以斜杠结尾的写法）切到「项目目录」那一格看到里面有什么，
  *      再一层层点进去（子目录接着列、文件点开看），列出来的东西一样受「只在会话目录内」的限制
@@ -39,7 +40,8 @@
  *      再点一下又回去；开关管的是整块正文（换个文件也照样）；选的那个记在这台设备里，
  *      刷新页面后还是刚才那样；
  *   2. 在页面里用 fetch 直接打那条只读文件地址与目录地址，核对拒绝的几种情形（目录外含 .. 绕出去的写法、
- *      没有这个文件 / 目录、超过 2 MB）、图片与二进制各自给什么、目录清单的形状、以及「没变就别再给
+ *      没有这个文件 / 目录、超过文本那道 2 MB 线、超过图片那道 20 MB 线）、图片与二进制各自给什么、
+ *      目录清单的形状（文件带着字节数、图片带着 image 标记）、以及「没变就别再给
  *      一遍正文」那条条件请求；下载那条路不受 2 MB 这条线管（几 MB 的文件整份下来）。
  * 最后一件事：把页面按“插件里的对话面板”跑一遍（在页面脚本里先塞一个网页视图接口），
  * 核对那边既没有这一列也没有这颗按钮、点链接照旧是交给编辑器打开那条消息。
@@ -66,6 +68,11 @@ const BINARY_BYTES = 4096;
 /** 示例图片的原始尺寸（makePng.js 写的）——这一列里显示出来要按比例缩，但认得出是它那张。 */
 const IMAGE_W = 1600;
 const IMAGE_H = 400;
+/** 一张噪点 PNG 的尺寸：压缩不了，所以体积超过文本那道 2 MB 的线（验证图片自己那条上限）。 */
+const BIG_IMAGE_W = 1100;
+const BIG_IMAGE_H = 800;
+/** 超过图片那道线（20 MB）的一团字节：只验「太大 + 下载」，不必是张真图。 */
+const HUGE_IMAGE_BYTES = 21 * 1024 * 1024;
 /**
  * 目录那一摊要验的东西：dirA 下面有子目录（sub）、空目录（empty）、指到会话目录外面的软链接（out）、
  * 两个文件；清单里子目录在前、文件在后，各自按名字排。
@@ -79,9 +86,13 @@ const DIR = {
     subFile: "dirA/sub/three.js",
     outLink: "dirA/out",
     huge: "dirB",
+    /** 清单里挂缩略图的那张小图（跟会话目录里那张一样大）。 */
+    thumbImage: "dirA/pic.png",
+    /** 清单里那张超过 2 MB 的图：太大，不挂缩略图（点开照样能看）。 */
+    bigImage: "dirA/big.png",
 };
 /** dirA 那层清单该有的顺序（子目录在前、文件在后）。 */
-const DIR_TOP_NAMES = ["empty", "out", "sub", "one.js", "two.txt"];
+const DIR_TOP_NAMES = ["empty", "out", "sub", "big.png", "one.js", "pic.png", "two.txt"];
 const DIR_ONE_LINES = 5;
 const DIR_SUB_FILE_LINES = 7;
 /** dirB 里铺这么多文件：比后端一份清单的上限（500）多出几个，验「只列一部分」。 */
@@ -308,6 +319,10 @@ const FILE = {
     bigBinary: "big.bin",
     outside: "outside/package.json",
     image: "picture.png",
+    /** 超过 2 MB 的一张真图：该直接显示（图片自己的上限是 20 MB）。 */
+    bigImage: "big-picture.png",
+    /** 超过 20 MB 的一张图：只验「太大 + 下载」。 */
+    hugeImage: "huge-picture.png",
     binary: "data.bin",
 };
 /**
@@ -327,7 +342,8 @@ const LINK_TEXT =
     "`" + FILE.wrap + ":" + WRAP_HIT + "` 这个里面有一条超长的行，\n" +
     "`" + FILE.long + ":" + HIT_LINE_AGAIN + "` 这个文件再说一次，\n" +
     "`" + FILE.live + ":" + LIVE_HIT + "` 这个是拿着看的，\n" +
-    "`" + FILE.image + ":1` 这个是张图、`" + FILE.binary + ":1` 这个是二进制的，\n" +
+    "`" + FILE.image + ":1` 这个是张图、`" + FILE.bigImage + ":1` 这张超过 2 MB、`" + FILE.hugeImage + ":1` 这张超过 20 MB、\n" +
+    "`" + FILE.binary + ":1` 这个是二进制的。\n" +
     "再试试 `" + FILE.missing + ":1`、`" + FILE.outside + ":1`、`" + FILE.big + ":1`、`" + FILE.bigBinary + ":1`。\n" +
     "\n还有目录：`" + DIR.top + "/` 这里面有什么、`" + DIR.sub + "/` 是它下面的子目录，\n" +
     "`" + DIR.empty + "/` 是个空目录、`outside/` 这个目录在会话目录外、`" + DIR.huge + "/` 这个目录里东西很多。\n" +
@@ -357,6 +373,11 @@ function prepareDirs(cwd) {
     const three = [];
     for (let i = 1; i <= DIR_SUB_FILE_LINES; i++) { three.push("// three 第 " + i + " 行"); }
     fs.writeFileSync(path.join(cwd, DIR.subFile), three.join("\n") + "\n", "utf8");
+    // 清单里的缩略图：一张小的（该挂）与一张超过 2 MB 的（不挂，免得一个目录里几十张大图全拉下来）
+    try {
+        require("./makePng.js").writeSamplePng(path.join(cwd, DIR.thumbImage), 320, 200);
+        require("./makePng.js").writeSamplePng(path.join(cwd, DIR.bigImage), BIG_IMAGE_W, BIG_IMAGE_H, true);
+    } catch { /* 生成不了就少验一条 */ }
     const link = path.join(cwd, DIR.outLink);
     if (!fs.existsSync(link)) {
         try { fs.symlinkSync(path.resolve(__dirname, ".."), link, "junction"); } catch { /* 建不了就少验一条 */ }
@@ -404,6 +425,11 @@ function prepareFiles(cwd) {
     fs.copyFileSync(path.join(cwd, FILE.big), path.join(cwd, FILE.bigBinary));   // 同样大，但是个二进制扩展名
     // 一张真图（尺寸固定）与一个真二进制（有 0 字节、有高位字节，当文字读不出来）
     try { require("./makePng.js").writeSamplePng(path.join(cwd, FILE.image), IMAGE_W, IMAGE_H); } catch { /* 生成不了就少验一条 */ }
+    // 一张真的大图（噪点压不动，2 MB 以上）与一团超过图片上限的字节（后者不当真图解码）
+    try {
+        require("./makePng.js").writeSamplePng(path.join(cwd, FILE.bigImage), BIG_IMAGE_W, BIG_IMAGE_H, true);
+    } catch { /* 生成不了就少验一条 */ }
+    fs.writeFileSync(path.join(cwd, FILE.hugeImage), Buffer.alloc(HUGE_IMAGE_BYTES, 0x89));
     const binary = Buffer.alloc(BINARY_BYTES);
     for (let i = 0; i < binary.length; i++) { binary[i] = (i * 37 + 200) % 256; }
     binary[0] = 0;   // 开头就是 0 字节：文本那套肯定读不了
@@ -543,6 +569,8 @@ module.exports = async (page) => {
             const dl = body ? body.querySelector("a.file-download") : null;
             const img = body ? body.querySelector(".file-image img") : null;
             const imgRect = img ? img.getBoundingClientRect() : null;
+            // 目录清单里图片那一行的缩略图（别把整页里消息流的图算进来：只看清单里那几行）
+            const thumbs = body ? Array.from(body.querySelectorAll(".file-entry .file-entry-icon img")) : [];
             const up = body ? body.querySelector(".file-entry.up") : null;
             const panelEl = document.getElementById("filePanel");
             const panelRect = panelEl ? panelEl.getBoundingClientRect() : null;
@@ -641,6 +669,12 @@ module.exports = async (page) => {
                 entryNames: entries.map(function (e) { return (e.querySelector(".file-entry-name") || {}).textContent || ""; }),
                 entryDirs: entries.map(function (e) { return e.classList.contains("dir"); }),
                 entryPaths: entries.map(function (e) { return e.getAttribute("data-path") || ""; }),
+                thumbCount: thumbs.length,
+                thumbLoaded: thumbs.filter(function (i) { return i.complete && i.naturalWidth > 0; }).length,
+                thumbPaths: thumbs.map(function (i) {
+                    const row = i.closest ? i.closest(".file-entry") : null;
+                    return row ? (row.getAttribute("data-path") || "") : "";
+                }),
                 backdropShown: !!backdrop && getComputedStyle(backdrop).display !== "none",
                 bodyTop: box ? Math.round(box.scrollTop) : -1,
                 bodyMax: box ? Math.round(box.scrollHeight - box.clientHeight) : -1,
@@ -1265,6 +1299,26 @@ module.exports = async (page) => {
         && img1.title === FILE.image);
     await page.shot("file-14-image.png");
 
+    // 超过 2 MB 的真图：图片自己那条线比文本宽，照样直接看（不用点下载）
+    console.log("点文件链接：" + await clickLink(FILE.bigImage));
+    const imgBig = await waitLook("大图直接显示出来", (x) => x.imgNatural[0] === BIG_IMAGE_W);
+    check("超过 2 MB 的图片：照样直接显示（图片上限是 20 MB，不是文本那道 2 MB）",
+        imgBig.imgCount === 1 && imgBig.imgNatural[0] === BIG_IMAGE_W && imgBig.imgNatural[1] === BIG_IMAGE_H
+        && !imgBig.imgBroken && imgBig.downloadCount === 0 && imgBig.note === "",
+        JSON.stringify({ img: imgBig.imgNatural, broken: imgBig.imgBroken, download: imgBig.downloadCount, note: imgBig.note }));
+    check("大图也是等比例缩到这一列的宽（不横着撑出去）",
+        !!imgBig.imgShown && imgBig.imgShown.w <= FILE_W_DEFAULT
+        && Math.abs(imgBig.imgShown.h - imgBig.imgShown.w * BIG_IMAGE_H / BIG_IMAGE_W) <= 2,
+        JSON.stringify(imgBig.imgShown));
+    await page.shot("file-14b-big-image.png");
+
+    // 超过图片那道线（20 MB）：还是只给一句「太大」加下载，不整张塞进页面
+    console.log("点文件链接：" + await clickLink(FILE.hugeImage));
+    const imgHuge = await waitLook("超大图片那句说明上来", (x) => x.note.indexOf("太大") >= 0);
+    check("超过 20 MB 的图片：给一句「太大」加下载",
+        imgHuge.downloadCount === 1 && imgHuge.downloadText.indexOf("点这里下载") >= 0 && imgHuge.imgCount === 0,
+        JSON.stringify({ note: imgHuge.note, text: imgHuge.downloadText }));
+
     // ==================== 二进制：一句说明 + 一个能存下来的下载 ====================
     console.log("点文件链接：" + await clickLink(FILE.binary));
     const bin1 = await waitLook("二进制那句说明上来", (x) => x.downloadCount > 0 || x.note.indexOf("二进制") >= 0);
@@ -1377,7 +1431,7 @@ module.exports = async (page) => {
     check("目录名带一个斜杠、文件名不带（一眼看出哪些是目录）",
         dir1.entryNames.every(function (n, i) { return (n.slice(-1) === "/") === dir1.entryDirs[i]; }),
         JSON.stringify(dir1.entryNames));
-    check("每一项说得出是不是目录", JSON.stringify(dir1.entryDirs) === JSON.stringify([true, true, true, false, false]),
+    check("每一项说得出是不是目录", JSON.stringify(dir1.entryDirs) === JSON.stringify([true, true, true, false, false, false, false]),
         JSON.stringify(dir1.entryDirs));
     check("清单里的路径都是相对会话目录的写法",
         dir1.entryPaths.every(function (p) { return p.indexOf(DIR.top + "/") === 0; }), JSON.stringify(dir1.entryPaths));
@@ -1397,6 +1451,13 @@ module.exports = async (page) => {
     check("「上一层」这一行在面板里面（没被挤出这一列）",
         dir1.upInside && dir1.closeInside,
         JSON.stringify({ up: dir1.upInside, close: dir1.closeInside, lines: dir1.titleLines }));
+    // 图片那一行挂的是它自己的小图：20×20 大小的小图，缩略图只挂给 2 MB 以内的（免得一目录大图全拉下来）
+    const thumb1 = await waitLook("清单里那张小图的缩略图上来", (x) => x.thumbLoaded > 0);
+    check("目录清单里图片那一行挂的是它自己的小图（别的行还是通用图标）",
+        thumb1.thumbCount === 1 && thumb1.thumbPaths[0] === DIR.thumbImage,
+        JSON.stringify({ count: thumb1.thumbCount, paths: thumb1.thumbPaths, loaded: thumb1.thumbLoaded }));
+    check("清单里超过 2 MB 的图片不挂缩略图（点开照样能看）",
+        thumb1.thumbPaths.indexOf(DIR.bigImage) < 0, JSON.stringify(thumb1.thumbPaths));
     await page.shot("file-17-dir.png");
 
     // 点子目录：还在「项目目录」这一格里往里走，不新开标签
@@ -1865,6 +1926,8 @@ module.exports = async (page) => {
             out.big = await get(${JSON.stringify(FILE.big)});
             out.bigBinary = await get(${JSON.stringify(FILE.bigBinary)});
             out.image = await get(${JSON.stringify(FILE.image)});
+            out.bigImage = await get(${JSON.stringify(FILE.bigImage)});
+            out.hugeImage = await get(${JSON.stringify(FILE.hugeImage)});
             out.binary = await get(${JSON.stringify(FILE.binary)});
             out.bigDownload = await get(${JSON.stringify(FILE.big)}, { download: true });
             out.binaryDownload = await get(${JSON.stringify(FILE.binary)}, { download: true });
@@ -1894,6 +1957,13 @@ module.exports = async (page) => {
     check("图片按图片类型给出来（Content-Type 是 PNG，字节就是那张图）",
         f.image.status === 200 && f.image.type.indexOf("image/png") === 0 && f.image.bytes > 1000 && f.image.mtime !== "",
         JSON.stringify({ status: f.image.status, type: f.image.type, bytes: f.image.bytes }));
+    check("超过 2 MB 的图片：照样直接给（图片自己的上限是 20 MB）",
+        f.bigImage.status === 200 && f.bigImage.type.indexOf("image/png") === 0
+        && f.bigImage.bytes > 2 * 1024 * 1024,
+        JSON.stringify({ status: f.bigImage.status, type: f.bigImage.type, bytes: f.bigImage.bytes }));
+    check("超过 20 MB 的图片：413、响应里带着字节数",
+        f.hugeImage.status === 413 && f.hugeImage.size === String(HUGE_IMAGE_BYTES),
+        JSON.stringify({ status: f.hugeImage.status, size: f.hugeImage.size }));
     check("二进制文件要当正文看：415、一句说明，内容不给",
         f.binary.status === 415 && f.binary.text.indexOf("二进制") >= 0 && f.binary.size === String(BINARY_BYTES),
         JSON.stringify({ status: f.binary.status, size: f.binary.size, text: f.binary.text }));
@@ -1959,6 +2029,15 @@ module.exports = async (page) => {
             && e.path.indexOf(DIR.top + "/") === 0 && typeof e.dir === "boolean")
         && entriesOf(rawDir.top)[0].dir === true && entriesOf(rawDir.top)[4].dir === false,
         JSON.stringify(entriesOf(rawDir.top).map((e) => [e.path, e.dir])));
+    const topEntries = entriesOf(rawDir.top);
+    const thumbEntry = topEntries.find((e) => e.name === "pic.png");
+    const bigEntry = topEntries.find((e) => e.name === "big.png");
+    check("清单里的文件带着字节数，图片还带着 image 标记（页面据此挂缩略图）",
+        !!thumbEntry && thumbEntry.size > 0 && thumbEntry.image === true
+        && !!bigEntry && bigEntry.size > 2 * 1024 * 1024 && bigEntry.image === true
+        && topEntries.filter((e) => !e.dir).every((e) => typeof e.size === "number")
+        && topEntries.filter((e) => e.dir).every((e) => e.size === undefined && e.image === undefined),
+        JSON.stringify(topEntries.map((e) => [e.path, e.size, e.image])));
     check("清单里那颗指到目录外的软链接照样列出来（点它才挡）",
         entriesOf(rawDir.top).some((e) => e.name === "out" && e.dir === true));
     check("子目录列得出下一层", rawDir.sub.status === 200 && entriesOf(rawDir.sub).length === 1

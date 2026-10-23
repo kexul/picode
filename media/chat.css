@@ -1404,6 +1404,11 @@
   .file-entry:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
   .file-entry-icon { flex: 0 0 auto; display: flex; opacity: 0.7; }
   .file-entry-icon svg { width: 15px; height: 15px; display: block; }
+  /* 目录清单里图片那一行：图标换成它自己的小图（按比例裁满，不拉伸），行高跟着稍微高一点 */
+  .file-entry-icon img {
+    width: 18px; height: 18px; display: block; object-fit: cover; border-radius: 3px;
+    background: var(--vscode-editor-background, #fff);
+  }
   .file-entry.dir .file-entry-icon { opacity: 0.9; }
   .file-entry-name {
     flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
