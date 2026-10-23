@@ -96,12 +96,8 @@ npm run web:shot -- --fake-pi --script dev/msgTime.js
 # 点一行跳过去、Esc 与点别处收起、空会话只说一句“还没说过话”、手机上往上弹不出屏）：
 npm run web:shot -- --width 900 --height 700 --script dev/saidList.js
 
-# 验会话那套（顶条名字跟着 pi 标题变 / 切会话 / 列表里关会话）：
+# 验会话那套（顶条名字跟着 pi 标题变 / 切会话 / 关会话：面板与下拉框里那颗 × 点一下就关、点行身只切不关）：
 npm run web:shot -- --fake-pi --script dev/sessionFlow.js
-
-# 验顶条会话名下拉框里每行那颗关闭叉（点叉先出确认条：整行变红、行尾多一颗勾，
-# 点勾才真关；点叉或者干等 4 秒，确认条自己收回；确认条出来时清单宽度不变）：
-npm run web:shot -- --fake-pi --script dev/sessionMenuClose.js
 
 # 验「关闭会话」快捷键（设置里那一行默认 Ctrl+Alt+W；真按一下就关掉正在看的那个会话、
 # 自动切到剩下的；焦点在输入框里按也照样关）：
@@ -318,7 +314,6 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `askCards.js` | 验问话卡片（长在消息流里）：假 pi 演模型调 `ask_choice` 与扩展问用户，单选 / 多选 / 自己写 / 停止生成 / 确认 / 输入 / 选一个 / 刷新页面各走一遍；那两个输入框写着 `enterkeyhint`、“自己写”那行里回车交完光标落回下面那个输入框也在这里盯着：`npm run web:shot -- --fake-pi --script dev/askCards.js` |
 | `askQuestion.js` | 同上但那一条是真路的：真模型 → 真 pi（插件给它 `-e` 了桥扩展）→ 卡片 → 回话文件 → 工具结果（慢） |
 | `askDialog.js` + `askDialogTrigger.ts` | 验真扩展问的“要你打字 / 要你点是或否 / 选一个”：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |
-| `sessionMenuClose.js` | 验顶条会话名下拉框里每行的关闭叉（确认条那颗勾 / 那颗叉 / 超时 / 真关掉 / 宽度不变）：`npm run web:shot -- --fake-pi --script dev/sessionMenuClose.js` |
 | `closeShortcut.js` | 验「关闭会话」快捷键（设置里那一行默认 `Ctrl+Alt+W`；真按一下就关掉正在看的那个会话并切到剩下的；焦点在输入框里按也照样关）：`npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/closeShortcut.js` |
 | `workspacePanel.js` | 验「项目与会话」面板（那颗 `<<<`）：正在对话一段、工作区那块的展开 / 收起（含记住）、组里的「加载更多」、行尾加号新建会话、标题右边那颗加号、子会话不显示：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/workspacePanel.js` |
 | `sidebarDock.js` | 验宽窗下常驻的项目与会话侧边栏（`<<<`，窗口 ≥ 900px 才常驻）：打开 / 收起 / 记住收起 / 两根顶线对齐 / 底部那条线与输入区上边线齐（输入框长高时线往上走、设置那颗按钮不动）/ 点行不关面板 / 开别的浮层时那一列原样留着 / 工作区那两块「加载更多」/ 改窄再拉宽（窄窗那一块得贴着右边、整屏高，不是居中的弹窗；居中那几块得还在正中），一次过一遍：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js` |

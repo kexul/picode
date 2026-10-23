@@ -25,8 +25,6 @@
     close: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8.70701 8.00001L12.353 4.35401C12.548 4.15901 12.548 3.84201 12.353 3.64701C12.158 3.45201 11.841 3.45201 11.646 3.64701L8.00001 7.29301L4.35401 3.64701C4.15901 3.45201 3.84201 3.45201 3.64701 3.64701C3.45201 3.84201 3.45201 4.15901 3.64701 4.35401L7.29301 8.00001L3.64701 11.646C3.45201 11.841 3.45201 12.158 3.64701 12.353C3.74501 12.451 3.87301 12.499 4.00101 12.499C4.12901 12.499 4.25701 12.45 4.35501 12.353L8.00101 8.70701L11.647 12.353C11.745 12.451 11.873 12.499 12.001 12.499C12.129 12.499 12.257 12.45 12.355 12.353C12.55 12.158 12.55 11.841 12.355 11.646L8.70901 8.00001H8.70701Z"/></svg>',
     // 粗一点的关闭叉：会话行尾、面板头部「关掉这一屏」的地方共用这一颗，大小一致。
     "close-bold": '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.5 2.5 L13.5 13.5 M13.5 2.5 L2.5 13.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>',
-    // 粗一点的勾：跟上面那颗叉同款同大小（会话行尾的确认用，一颗勾一颗叉并排）。
-    "check-bold": '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.6 8.6 L6.4 12.4 L13.4 3.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>',
     "link-external": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M15 9.5V12.5C15 13.879 13.879 15 12.5 15H3.5C2.121 15 1 13.879 1 12.5V3.5C1 2.121 2.121 1 3.5 1H6.5C6.776 1 7 1.224 7 1.5C7 1.776 6.776 2 6.5 2H3.5C2.673 2 2 2.673 2 3.5V12.5C2 13.327 2.673 14 3.5 14H12.5C13.327 14 14 13.327 14 12.5V9.5C14 9.224 14.224 9 14.5 9C14.776 9 15 9.224 15 9.5ZM14.5 1H9.5C9.224 1 9 1.224 9 1.5C9 1.776 9.224 2 9.5 2H13.293L9.147 6.146C8.952 6.341 8.952 6.658 9.147 6.853C9.245 6.951 9.373 6.999 9.501 6.999C9.629 6.999 9.757 6.95 9.855 6.853L14.001 2.707V6.5C14.001 6.776 14.225 7 14.501 7C14.777 7 15.001 6.776 15.001 6.5V1.5C15.001 1.224 14.777 1 14.501 1H14.5Z"/></svg>',
     discard: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M3.00098 2.5C3.00098 2.22386 3.22483 2 3.50098 2C3.77712 2 4.00098 2.22386 4.00098 2.5V6.34262L7.17202 3.17157C8.73412 1.60948 11.2668 1.60948 12.8289 3.17157C14.391 4.73367 14.391 7.26633 12.8289 8.82843L7.80375 13.8536C7.60849 14.0488 7.2919 14.0488 7.09664 13.8536C6.90138 13.6583 6.90138 13.3417 7.09664 13.1464L12.1218 8.12132C13.2933 6.94975 13.2933 5.05025 12.1218 3.87868C10.9502 2.70711 9.0507 2.70711 7.87913 3.87868L4.75781 7H8.50098C8.77712 7 9.00098 7.22386 9.00098 7.5C9.00098 7.77614 8.77712 8 8.50098 8H3.60098C3.26961 8 3.00098 7.73137 3.00098 7.4V2.5Z"/></svg>',
     check: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13.6572 3.13573C13.8583 2.9465 14.175 2.95614 14.3643 3.15722C14.5535 3.35831 14.5438 3.675 14.3428 3.86425L5.84277 11.8642C5.64597 12.0494 5.33756 12.0446 5.14648 11.8535L1.64648 8.35351C1.45121 8.15824 1.45121 7.84174 1.64648 7.64647C1.84174 7.45121 2.15825 7.45121 2.35351 7.64647L5.50976 10.8027L13.6572 3.13573Z"/></svg>',
@@ -113,9 +111,6 @@
   let activeId = null;               // 当前显示的会话 id
   // 后端说“你这块屏切到这个会话”但那个会话的壳还没建出来（列表在路上）：记下来等它到了一起用
   let pendingActivateId = null;
-  // 会话列表里点过“关闭”的那一行：等第二次点击确认（几秒后自动撤销，防误触）。
-  let pendingCloseId = null;
-  let pendingCloseTimer = null;
 
   // ---- 面板：浮层里的拾取器（模型 / 历史 / 项目与会话 / 文件夹）与常驻那一列 ----
   // 这两处共用同一套画法（版式也共用一套类名，见 chat.css），只是画到不同的容器上：
@@ -944,27 +939,22 @@
   sessionMenuEl.className = "hidden";
   document.body.appendChild(sessionMenuEl);
   let sessionMenuOpen = false;
-  // 某一行转成确认条（行尾多一颗勾）以后要钉住的宽度：点叉的那一下量下来。
-  let sessionMenuPin = 0;
 
   /** 把清单贴在中间那一列底下（名字与目录两行都在它上面，清单别盖住目录行）：
-   *  先量准宽度，再把整块夹进屏幕里（左右各留 8px）。
-   *  有人正在确认关会话时宽度钉在点叉之前的那个值上：行尾多一颗勾也不许把整张清单撑宽。 */
+   *  先量准宽度，再把整块夹进屏幕里（左右各留 8px）。 */
   function placeSessionMenu() {
     const anchor = (sessionCenterEl || sessionNameBtn).getBoundingClientRect();
     const margin = 8;
     // 量之前先把上一次留下的 left / width 清掉：left 留着会挤小可用宽度、
-    // 上一次钉死的 width 会掩盖内容的自然宽度，两种都会把宽度量成错的。
+    // 上一次写死的 width 会掩盖内容的自然宽度，两种都会把宽度量成错的。
     sessionMenuEl.style.left = "0px";
     sessionMenuEl.style.width = "";
     const room = Math.max(140, window.innerWidth - margin * 2);
     const natural = sessionMenuEl.offsetWidth;
-    // 确认条收回去（或关了会话）就放开：宽度又跟着内容自己走
-    if (!pendingCloseId) { sessionMenuPin = 0; }
-    const width = Math.min(sessionMenuPin || natural, room);
-    // 只有需要钉住的时候才写死宽度：确认条那阵、或者整块比一屏还宽
-    // （CSS 的 max-width 是以内容盒算的，这里按整块算）。其余时候让它自己跟着内容走。
-    if (sessionMenuPin || natural > room) { sessionMenuEl.style.width = width + "px"; }
+    const width = Math.min(natural, room);
+    // 只有整块比一屏还宽的时候才写死宽度（CSS 的 max-width 是以内容盒算的，这里按整块算）。
+    // 其余时候让它自己跟着内容走。
+    if (width < natural) { sessionMenuEl.style.width = width + "px"; }
     const wantLeft = anchor.left + anchor.width / 2 - width / 2;
     const left = Math.max(margin, Math.min(wantLeft, window.innerWidth - margin - width));
     sessionMenuEl.style.left = Math.round(left) + "px";
@@ -980,16 +970,14 @@
     return openSessionItems().filter((item) => !item.depth);
   }
 
-  /** 画一遍清单内容：开着的主会话一行一个（行尾一颗关闭叉，点了先变确认条：行尾多一颗勾，再点勾才真关）。 */
+  /** 画一遍清单内容：开着的主会话一行一个（行尾一颗关闭叉，点一下就关）。 */
   function renderSessionMenu() {
     sessionMenuEl.innerHTML = "";
     sessionMenuItems().forEach((item) => {
       const el = document.createElement("div");
       el.className = "sm-item" + (item.current ? " current" : "");
       el.title = (item.label || "") + (item.cwd ? "\n" + item.cwd : "");
-      // 行首那颗小点、下面「名字 + 目录」两段：普通行与确认条共用这一份
-      // （确认条只是行尾那颗叉旁边多一颗勾，行里的东西一点不动：关的是哪一个照样看得见，
-      //  整张清单的宽窄也不跟着变——宽度在点叉那一下已经钉住，见 placeSessionMenu）。
+      // 行首那颗小点、下面「名字 + 目录」两段。
       const dot = document.createElement("span");
       dot.className = "sm-dot" + openDotClass(item);
       el.appendChild(dot);
@@ -1006,46 +994,24 @@
         body.appendChild(dir);
       }
       el.appendChild(body);
-      if (item.pendingClose) {
-        // 点过行尾那颗叉：整行底色变红，行尾多一颗勾——点勾才真关，点叉撤销。
-        el.classList.add("sm-confirm");
-        const yes = document.createElement("button");
-        yes.type = "button"; yes.className = "sm-yes";
-        yes.title = "关闭这个会话";
-        yes.setAttribute("aria-label", "关闭这个会话");
-        yes.innerHTML = ICONS["check-bold"];
-        yes.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(item.sessionId); });
-        const no = document.createElement("button");
-        no.type = "button"; no.className = "sm-no";
-        no.title = "取消";
-        no.setAttribute("aria-label", "取消");
-        no.innerHTML = ICONS["close-bold"];
-        no.addEventListener("click", (e) => {
-          e.stopPropagation();
-          cancelPendingClose();
-          refreshSessionMenu();
-        });
-        el.appendChild(yes); el.appendChild(no);
-      } else {
-        // 行尾不再挂「当前」/「在跑」：当前那条整行有底色，在跑 / 有新消息看名字前头那颗小点。
-        // 行尾这颗叉：点行是切过去（大目标），点叉才关（还要再确认一下）。
-        const close = document.createElement("span");
-        close.className = "sm-close";
-        close.title = "关闭这个会话";
-        close.setAttribute("aria-label", "关闭这个会话");
-        close.innerHTML = ICONS["close-bold"];
-        close.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(item.sessionId); });
-        el.appendChild(close);
-        el.addEventListener("click", () => {
-          closeSessionMenu();
-          if (!item.current) { vscode.postMessage({ type: "switchSession", sessionId: item.sessionId }); }
-        });
-      }
+      // 行尾不再挂「当前」/「在跑」：当前那条整行有底色，在跑 / 有新消息看名字前头那颗小点。
+      // 行尾这颗叉：点行是切过去（大目标），点叉就关（不再问第二遍）。
+      const close = document.createElement("span");
+      close.className = "sm-close";
+      close.title = "关闭这个会话";
+      close.setAttribute("aria-label", "关闭这个会话");
+      close.innerHTML = ICONS["close-bold"];
+      close.addEventListener("click", (e) => { e.stopPropagation(); closeSession(item.sessionId); });
+      el.appendChild(close);
+      el.addEventListener("click", () => {
+        closeSessionMenu();
+        if (!item.current) { vscode.postMessage({ type: "switchSession", sessionId: item.sessionId }); }
+      });
       sessionMenuEl.appendChild(el);
     });
   }
 
-  /** 清单开着就重画一遍（关会话的确认条变来变去）；重画完还得重新摆位（宽窄变了：确认条那阵宽度是钉住的）。 */
+  /** 清单开着就重画一遍（会话增减、状态变了）；重画完还得重新摆位（宽窄可能变了）。 */
   function refreshSessionMenu() {
     if (!sessionMenuOpen) { return; }
     // 行都关没了就先收起这张空壳（全关完时后端会补一个空会话，等新列表到了再说）
@@ -1066,7 +1032,6 @@
   function closeSessionMenu() {
     if (!sessionMenuOpen) { return; }
     sessionMenuOpen = false;
-    sessionMenuPin = 0;
     sessionMenuEl.classList.add("hidden");
   }
 
@@ -3741,7 +3706,6 @@
         unread: !!st.unread,
         taba: st.taba || null,
         depth,
-        pendingClose: pendingCloseId === st.id,
         // 下拉框里第二行显示它跑在哪个目录（同名会话靠它分辨）
         cwd: st.cwd || "",
       });
@@ -3814,31 +3778,9 @@
     return [first].concat(rest);
   }
 
-  /** 把“等确认”那一行撤回去（点取消、点行身切会话、干等超时都走它）：只抹状态，重画交给调用方。 */
-  function cancelPendingClose() {
-    pendingCloseId = null;
-    if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
-    pendingCloseTimer = null;
-  }
-
-  /** 请求关闭某个会话：第一次点击只是把那一行变成确认条（行尾多一颗勾），再点勾才真关（防误触）。 */
-  function askCloseSession(id) {
-    if (pendingCloseId !== id) {
-      // 点第一下（某一行转成确认条）：就手把清单现在的宽度记下来钉住，
-      // 行尾多出一颗勾也不许把整张清单撑宽（钉住的值在 placeSessionMenu 里用）。
-      if (sessionMenuOpen && !pendingCloseId) { sessionMenuPin = sessionMenuEl.offsetWidth; }
-      pendingCloseId = id;
-      if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
-      pendingCloseTimer = setTimeout(() => {
-        cancelPendingClose();
-        refreshOpenSessionsInPicker();
-        refreshSessionMenu();
-      }, 4000);
-      refreshOpenSessionsInPicker();
-      refreshSessionMenu();
-      return;
-    }
-    cancelPendingClose();
+  /** 关一个会话：点一下就走，不再问第二遍（会话文件留着，历史列表里能重新打开；
+   *  关掉的正是正在看的那个，后端会把这块屏切到别的会话去）。 */
+  function closeSession(id) {
     // 列表不关：关掉一条后马上就能接着关下一条（那一行会跟着会话列表自己消失）
     vscode.postMessage({ type: "closeSession", sessionId: id });
   }
@@ -3852,7 +3794,7 @@
     return files + "\u0000" + items.map((it) => [
       it.sessionId, it.label || "", it.depth || 0, it.current ? 1 : 0,
       it.streaming ? 1 : 0, it.loading ? 1 : 0, it.unread ? 1 : 0,
-      (it.taba && it.taba.state) || "", it.pendingClose ? 1 : 0,
+      (it.taba && it.taba.state) || "",
     ].join("|")).join("\n");
   }
 
@@ -3873,7 +3815,7 @@
   }
 
   /**
-   * 会话增减 / 状态变化 / 确认条状态变化：列表开着就把变了的那一块重画一遍。
+   * 会话增减 / 状态变化：列表开着就把变了的那一块重画一遍。
    * 三处讲究：
    *  - 只换「正在对话」那一段，后面原样接回去——「加载更多」追加进来的行只存在 st.items 里，
    *    不能拿宿主最初给的那份数据整份重拼，否则点出来的行会被下一次状态推送抹掉；
@@ -4206,10 +4148,6 @@
     const leftoverClose = view.root.querySelector(".pk-header-close");
     if (leftoverClose) { leftoverClose.remove(); }
     if (view.searchWrap) { view.searchWrap.classList.remove("hidden"); }
-    // “关闭会话”的确认条只在列表里有效：列表一关就撤销（下次打开不要停在确认态）
-    if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
-    pendingCloseTimer = null;
-    pendingCloseId = null;
     view.state = null;
     view.openSessionsShown = "";
     // 那两格跟着面板一起没了（重开时由 renderPickerItems 重建）：别留着指已经拆掉的格子
@@ -5996,8 +5934,7 @@
         el.classList.add("pk-history", "pk-open");
         if (item.current) { el.classList.add("current"); }
         if (item.depth > 0) { el.classList.add("pk-open-child"); }
-        // 行首那一块（子会话的拐角箭头、那颗小点、名字）：普通行与确认条共用这一份
-        // （确认条只是行尾那颗叉旁边多一颗勾，行里的东西一点不动：关的是哪一个照样看得见）。
+        // 行首那一块（子会话的拐角箭头、那颗小点、名字）
         const main = document.createElement("div"); main.className = "pk-history-main";
         // 子会话：名字前面挂一个拐角箭头（“↳”），一眼看出它是挂在上面那个会话下面的
         if (item.depth > 0) {
@@ -6013,36 +5950,14 @@
         main.appendChild(title);
         // 行尾不再挂「当前」/「在跑」：当前那条靠整行的底色认，在跑 / 有新消息靠行首那颗小点。
         el.appendChild(main);
-        if (item.pendingClose) {
-          // 点过行尾那颗叉：整行底色变红，行尾多一颗勾——点勾才真关，点叉撤销。
-          el.classList.add("pk-open-confirm");
-          const yes = document.createElement("button");
-          yes.type = "button"; yes.className = "pk-open-yes";
-          yes.title = "关闭这个会话";
-          yes.setAttribute("aria-label", "关闭这个会话");
-          yes.innerHTML = ICONS["check-bold"];
-          yes.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(item.sessionId); });
-          const no = document.createElement("button");
-          no.type = "button"; no.className = "pk-open-no";
-          no.title = "取消";
-          no.setAttribute("aria-label", "取消");
-          no.innerHTML = ICONS["close-bold"];
-          no.addEventListener("click", (e) => {
-            e.stopPropagation();
-            cancelPendingClose();
-            refreshOpenSessionsInPicker();
-          });
-          el.appendChild(yes); el.appendChild(no);
-        } else {
-          // 关闭按钮放行尾：点行是切过去（大目标），点这颗才关（还要再确认一下）。
-          const close = document.createElement("span");
-          close.className = "pk-open-close";
-          close.title = "关闭这个会话";
-          close.setAttribute("aria-label", "关闭这个会话");
-          close.innerHTML = ICONS["close-bold"];
-          close.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(item.sessionId); });
-          el.appendChild(close);
-        }
+        // 关闭按钮放行尾：点行是切过去（大目标），点这颗就关（不再问第二遍）。
+        const close = document.createElement("span");
+        close.className = "pk-open-close";
+        close.title = "关闭这个会话";
+        close.setAttribute("aria-label", "关闭这个会话");
+        close.innerHTML = ICONS["close-bold"];
+        close.addEventListener("click", (e) => { e.stopPropagation(); closeSession(item.sessionId); });
+        el.appendChild(close);
         el.title = tooltipWithCwd(item.label, item.cwd);
       } else if (st.kind === "history" || (st.kind === "workspace" && item.__section === "groupSession")) {
         el.classList.add("pk-history");
@@ -6204,10 +6119,8 @@
       vscode.postMessage({ type: "pickerToggle", kind, action: item.action, value: item.value });
       return;
     }
-    // 「正在对话」段：点行就是切过去（不新开、不重载），行尾那颗 × 是关闭（要再点一下确认）。
-    // 确认条正开着的时候点行身也是切过去：先把确认条撤掉 —— 点勾才真关，行身不能替那颗勾点实了。
+    // 「正在对话」段：点行就是切过去（不新开、不重载），行尾那颗 × 就是关闭（点一下就关）。
     if (item.__section === "open") {
-      if (item.pendingClose) { cancelPendingClose(); refreshOpenSessionsInPicker(); }
       closeFirst();
       vscode.postMessage({ type: "switchSession", sessionId: item.sessionId });
       return;
@@ -7143,11 +7056,11 @@
       sessionOrder = order;
       // 已经不在列表里的会话（被关掉了）：壳和草稿一起丢掉。
       // 本屏正在看的那个例外：画面留在原地（后端那头还认着它，接着往里发消息会自动把它重开），
-      // 不硬生生把这边拽到别的会话去——别的窗口关掉它时会这样（自己点的那颗 × 不在此列）。
+      // 不硬生生把这边拽到别的会话去——别的窗口关掉它时会这样。
+      // 自己点的那颗 × 不靠这里：后端会把这块屏切到别的会话（见 chatControllerBase 的 closeSession）。
       Array.from(sessions.keys()).forEach((id) => {
         if (seen.has(id)) { return; }
-        if (id === activeId && pendingCloseId !== id) { return; }
-        if (pendingCloseId === id) { pendingCloseId = null; }
+        if (id === activeId) { return; }
         removeSession(id);
       });
       // 当前会话是这块屏自己的事：别的屏切了会话（sessionList 里那个 activeId）不管，

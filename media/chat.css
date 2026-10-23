@@ -204,7 +204,7 @@
   .sm-dot.running { background: var(--vscode-charts-blue, #3794ff); animation: pi-pulse 1.2s ease-in-out infinite; }
   .sm-dot.error { background: var(--vscode-charts-red, #f14c4c); }
   .sm-dot.unread { background: var(--vscode-charts-blue, #3794ff); }
-  /* 行尾那颗关闭叉：平时淡、悬停 / 触屏上变清楚（点了先变确认条，再点一下才真关）。 */
+  /* 行尾那颗关闭叉：平时淡、悬停 / 触屏上变清楚（点一下就关）。 */
   #sessionMenu .sm-close {
     flex: none; display: inline-flex; align-items: center; justify-content: center;
     width: 20px; height: 20px; margin-left: 2px; border-radius: 3px;
@@ -212,20 +212,6 @@
   }
   #sessionMenu .sm-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
   @media (hover: none) { #sessionMenu .sm-close { opacity: 0.6; } }
-  /* 确认条：整行底色变红，行里的名字与目录照旧，只是行尾那颗叉旁边多一颗勾
-     （点勾才真关、点叉撤销）。行里的东西不变多，整张清单的宽窄就不会跟着抽
-     —— 那份宽度在点叉那一下已经钉住（见 chat.js 的 placeSessionMenu）。 */
-  #sessionMenu .sm-item.sm-confirm { background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 12%, transparent); color: var(--vscode-foreground); cursor: default; }
-  #sessionMenu .sm-confirm button {
-    flex: none; display: inline-flex; align-items: center; justify-content: center;
-    width: 20px; height: 20px; padding: 0; border: 0; border-radius: 3px;
-    background: transparent; color: var(--vscode-foreground); cursor: pointer;
-  }
-  #sessionMenu .sm-confirm button:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
-  /* 勾用绿色（确认）、叉淡一点（撤销）：一眼分得清哪颗是关、哪颗是算了 */
-  #sessionMenu .sm-confirm .sm-yes { color: var(--vscode-charts-green, #3fb950); }
-  #sessionMenu .sm-confirm .sm-no { opacity: 0.7; }
-  #sessionMenu .sm-confirm .sm-no:hover { opacity: 1; }
   /* 正文内的文件路径可点击链接：跳转打开对应文件 */
   .file-link { color: var(--vscode-textLink-foreground, #3794ff); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
   .file-link:hover { text-decoration: underline; opacity: 0.85; }
@@ -852,7 +838,7 @@
     font-size: 10.5px; line-height: 1; padding: 2px 6px; border-radius: 8px;
     border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.45)); opacity: 0.8;
   }
-  /* 行尾那颗关闭叉：平时淡、悬停 / 触屏上变清楚（点击后还要再确认一下）。 */
+  /* 行尾那颗关闭叉：平时淡、悬停 / 触屏上变清楚（点一下就关）。 */
   .pk-host.pk-drawer .pk-item.pk-open .pk-open-close {
     flex: none; display: inline-flex; align-items: center; justify-content: center;
     width: 20px; height: 20px; margin-left: 2px; border-radius: 3px;
@@ -860,29 +846,6 @@
   }
   .pk-host.pk-drawer .pk-item.pk-open .pk-open-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
   @media (hover: none) { .pk-host.pk-drawer .pk-item.pk-open .pk-open-close { opacity: 0.6; } }
-  /* 确认条：整行底色变红，行里的名字（子会话连拐角箭头）照旧，只是行尾那颗叉旁边多一颗勾
-     （点勾才真关、点叉撤销）。
-     底色这条要写得长一点（连 .pk-open 一起写）：面板自己那套「鼠标停在当前那一行上」的蓝底
-     比普通规则更重，不这么写光标一放到这一行上红色就被盖掉了。 */
-  .pk-host.pk-drawer .pk-item.pk-open.pk-open-confirm {
-    background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 12%, transparent);
-    color: var(--vscode-foreground);
-  }
-  /* 光标停在这一行上：还是红的，稍重一点（看得出光标在这儿） */
-  .pk-host.pk-drawer .pk-item.pk-open.pk-open-confirm:hover {
-    background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 22%, transparent);
-    color: var(--vscode-foreground);
-  }
-  .pk-host.pk-drawer .pk-item.pk-open-confirm button {
-    flex: none; display: inline-flex; align-items: center; justify-content: center;
-    width: 20px; height: 20px; padding: 0; border: 0; border-radius: 3px;
-    background: transparent; color: var(--vscode-foreground); cursor: pointer;
-  }
-  .pk-host.pk-drawer .pk-item.pk-open-confirm button:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
-  /* 勾用绿色（确认）、叉淡一点（撤销）：一眼分得清哪颗是关、哪颗是算了 */
-  .pk-host.pk-drawer .pk-item.pk-open-confirm .pk-open-yes { color: var(--vscode-charts-green, #3fb950); }
-  .pk-host.pk-drawer .pk-item.pk-open-confirm .pk-open-no { opacity: 0.7; }
-  .pk-host.pk-drawer .pk-item.pk-open-confirm .pk-open-no:hover { opacity: 1; }
   /* 行内图标（加号 / 文件夹）：固定宽度，名字对得齐 */
   .pk-host.pk-drawer .pk-row-icon,
   .pk-host.pk-folders .pk-row-icon {
