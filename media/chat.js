@@ -40,7 +40,7 @@
     // 下面两个给“项目与会话”抽屉面板用：文件夹（工作区/浏览行）、两根滑杆（底部“设置”，
     // 比 ⚙ 字符在各主题下都稳定）。
     folder: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M1.5 1A1.5 1.5 0 0 0 0 2.5v10.997A1.5 1.5 0 0 0 1.5 15h12.987a1.5 1.5 0 0 0 1.5-1.5V4.5a1.5 1.5 0 0 0-1.5-1.5H8.707L7.361 1.654A1.5 1.5 0 0 0 6.207 1H1.5Z"/></svg>',
-    // 加号：面板里「在新工作区新建会话」那一行用（跟顶条那颗新建会话同一颗图标）。
+    // 加号：面板里「在新工作区新建会话」那一行用（跟输入框左边那颗新建会话同一颗图标）。
     add: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8 1.5C8 1.22386 7.77614 1 7.5 1C7.22386 1 7 1.22386 7 1.5V7H1.5C1.22386 7 1 7.22386 1 7.5C1 7.77614 1.22386 8 1.5 8H7V13.5C7 13.7761 7.22386 14 7.5 14C7.77614 14 8 13.7761 8 13.5V8H13.5C13.7761 8 14 7.77614 14 7.5C14 7.22386 13.7761 7 13.5 7H8V1.5Z"/></svg>',
     sliders: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4.5h6.2M11.8 4.5H14M2 11.5h1.7M7.3 11.5H14"/><circle cx="10" cy="4.5" r="1.8"/><circle cx="5.5" cy="11.5" r="1.8"/></svg>',
     // 三根高低不一的柱子：侧边栏底部那颗「统计」（工具调用耗时）用它。
@@ -55,7 +55,7 @@
     "arrow-right": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8.85355 3.14645C8.65829 2.95118 8.34171 2.95118 8.14645 3.14645C7.95118 3.34171 7.95118 3.65829 8.14645 3.85355L11.7929 7.5H2.5C2.22386 7.5 2 7.72386 2 8C2 8.27614 2.22386 8.5 2.5 8.5H11.7929L8.14645 12.1464C7.95118 12.3417 7.95118 12.6583 8.14645 12.8536C8.34171 13.0488 8.65829 13.0488 8.85355 12.8536L13.3536 8.35355C13.5488 8.15829 13.5488 7.84171 13.3536 7.64645L8.85355 3.14645Z"/></svg>',
     // 实心方块：消息流末尾那两颗「卡住了」「停止生成」上都用它
     "stop-square": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="1.5"/></svg>',
-    // 三条横线：输入框左边那颗「你说过的话」（一句话一行，所以是清单）。
+    // 三条横线：输入框右边那颗「你说过的话」（一句话一行，所以是清单）。
     said: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>',
   };
   /** 文件夹选择器里行首那颗图标：名字由宿主给（见 chatHost.ts 里 showFolderPicker 的 items）。 */
@@ -1558,10 +1558,10 @@
     return one.length > SAID_PREVIEW_CHARS ? one.slice(0, SAID_PREVIEW_CHARS) + "…" : one;
   }
 
-  // ==================== 你说过的话（输入框左边那颗按钮）====================
+  // ==================== 你说过的话（输入框右边那颗按钮）====================
   // 那颗按钮一直露着（空会话里也点得开，点开说一句“你还没说过话”）。
   // 清单从输入行上头往上弹一张小的（输入框就在屏幕底，往下弹会顶到键盘、出屏幕），
-  // 一行一句，点一行就跳到那条（去的地方跟导航条一样，见 jumpToUserMessage）。
+  // 贴着按钮那一头（右边），一行一句，点一行就跳到那条（去的地方跟导航条一样，见 jumpToUserMessage）。
   // 手机上尤其要它：手指点一行比点一个几点准得多。
   let saidBtn = null;
   let saidMenu = null;
@@ -1575,7 +1575,8 @@
     saidBtn.innerHTML = ICONS.said;
     saidBtn.title = "你说过的话";
     saidBtn.setAttribute("aria-label", "你说过的话");
-    row.insertBefore(saidBtn, input);
+    // 摆在输入框右边（左边那颗是「新建会话」，见 renderHtml 的 #inputRow）
+    row.appendChild(saidBtn);
     // 清单挂在输入行里：靠这一行定位（bottom: 100% 就是“输入行的上头”）
     saidMenu = document.createElement("div");
     saidMenu.id = "saidMenu";

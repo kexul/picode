@@ -203,10 +203,10 @@ module.exports = async (page) => {
         for (const f of made) { try { fs.rmSync(f); } catch { /* 清不掉就算了，是调试目录 */ } }
     }
 
-    // 顶条那颗加号还是在当前会话的目录里开新会话（面板里那一行没了，行为不变）
-    const beforeTop = await look("顶条加号之前");
+    // 输入框左边那颗加号还是在当前会话的目录里开新会话（面板里那一行没了，行为不变）
+    const beforeTop = await look("底条加号之前");
     await page.click("#newSessionBtn");
     await page.sleep(2500);
-    const afterTop = await look("顶条加号之后（目录该不变）");
+    const afterTop = await look("底条加号之后（目录该不变）");
     console.log(`    目录没变吗：${beforeTop.currentDir === afterTop.currentDir}（都是 ${afterTop.currentDir}）｜正在对话 ${beforeTop.openRows} → ${afterTop.openRows} 行`);
 };

@@ -52,13 +52,13 @@ export function renderHTML(opts: RenderHTMLOpts): string {
         .join("");
 
     const head = opts.extraHead ? `  ${opts.extraHead}\n` : "";
-    // 顶条：左边加号，中间一列（上头会话名、底下当前目录），右边两颗网页端按钮。
+    // 顶条：中间一列（上头会话名、底下当前目录），右边几颗网页端按钮（左边那颗是网页端
+    // 自己插的文件侧边栏开关）。「新建会话」那颗加号在输入框左边，见下面的 #inputRow。
     // 中间那一列包成 #sessionCenter（一块可点区域）：里头那颗按钮装着两行——会话名在上、
     // 路径在下。那颗小点与箭头也是这颗按钮里的两头，跟两行整体居中（不是只对着会话名那一行）。
     // 路径行用 span 不用 div：按钮里只允许放行内内容。
     const sessionBar =
     `  <div id="sessionBar">\n` +
-    `    <button id="newSessionBtn" title="新建会话 (Ctrl+Alt+N)" aria-label="新建会话">${ICON_ADD}</button>\n` +
     `    <div id="sessionCenter">\n` +
     `      <button id="sessionName" title="当前会话 · 点这里换会话" aria-label="当前会话">\n` +
     `        <span class="sn-mark"><span class="sn-dot"></span><span class="sn-count"></span></span>\n` +
@@ -99,6 +99,7 @@ ${bodyTop}${chatColumnOpen}${sessionBar}  <div id="messages">
     <div id="imgPreview"></div>
     <div id="inputRow">
       <div id="fileMenu" class="hidden"></div>
+      <button id="newSessionBtn" title="新建会话 (Ctrl+Alt+N)" aria-label="新建会话">${ICON_ADD}</button>
       <!-- rows=1：autoResize 把 height 设回 auto 时，textarea 的高度由 rows 决定
            （不写默认两行），网页端输入框起步只有一行，会被它顶高、清空后也回不去 -->
       <textarea id="input" rows="1"></textarea>

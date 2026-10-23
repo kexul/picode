@@ -817,7 +817,7 @@
       var panel = window.pichatFileSidebar;
       if (panel && typeof panel.toggle === "function") { panel.toggle(); }
     });
-    // 摆成顶条的第一个（加号左边）：这就是“顶条左边那颗按钮”
+    // 摆成顶条的第一个（最左边）：这就是“顶条左边那颗按钮”
     bar.insertBefore(btn, bar.firstChild);
   })();
 
