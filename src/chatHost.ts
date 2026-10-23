@@ -36,6 +36,7 @@ import { pickOverlayClient } from "./overlayTarget";
 import { ScreenRegistry } from "./screenRegistry";
 import { dirInsideAny, dirKey } from "./pathRules";
 import type { WebServerHost } from "./webChatServer";
+import type { SessionChangeInfo } from "./editTracker";
 import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
 import {
@@ -233,6 +234,19 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      */
     public knownSessionFiles(sessionId: string): string[] {
         return this.panels.get(sessionId)?.getKnownFiles() ?? [];
+    }
+
+    /**
+     * 这个会话改过哪些文件（文件侧边栏那一格「改动」用）。
+     * 和 knownFiles 一样跟着会话运行的那份内存走：会话关了就没了。
+     */
+    public sessionChanges(sessionId: string): SessionChangeInfo[] {
+        return this.panels.get(sessionId)?.getChanges() ?? [];
+    }
+
+    /** 一个文件的合计 diff（相对写法 = 清单里那一行）；没改出差别就不给。 */
+    public sessionChangeDiff(sessionId: string, relPath: string): string | undefined {
+        return this.panels.get(sessionId)?.changeDiff(relPath);
     }
 
     public getCwd(): string {
@@ -1366,13 +1380,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 选项列表问不着页面时的兜底：没人可问就当没选。 */
     protected async selectDialogFallback(_title: string, _options: string[]): Promise<string | undefined> { return undefined; }
 
-    /** 回滚确认：危险动作，走确认框那条路（没人可问就按“否”）。 */
-    public async confirmRevert(label: string, sessionId?: string): Promise<boolean> {
-        return this.confirmDialog(
-            "回滚修改",
-            `${label} 在此次修改后又被变更过，回滚将丢弃那些后续变更。确定继续？`,
-            sessionId,
-        );
+    /** 回滚确认：危险动作，走确认框那条路（没人可问就按“否”）。
+     *  @param message 整句话（调用方自己写清楚回滚会丢什么） */
+    public async confirmRevert(message: string, sessionId?: string): Promise<boolean> {
+        return this.confirmDialog("回滚修改", message, sessionId);
     }
 
     /** 停掉本工作区的所有 pi 进程（页面与界面的生死与此无关）。 */

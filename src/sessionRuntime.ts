@@ -6,7 +6,7 @@ import { StderrFrameSplitter } from "./piFrames";
 import { TABA_DECODER, TabaRequest } from "./tabaProtocol";
 import { GOAL_DECODER, GoalVerdictRequest } from "./goalProtocol";
 import { NameParts } from "./names";
-import { EditTracker } from "./editTracker";
+import { EditTracker, type SessionChangeInfo } from "./editTracker";
 import {
     countImages,
     extractResultImages,
@@ -912,6 +912,21 @@ export class SessionRuntime {
 
     public async revertEdit(toolCallId: string): Promise<void> {
         return this.edits.revertEdit(toolCallId);
+    }
+
+    /** 这个会话改过哪些文件（文件侧边栏那一格「改动」用）。 */
+    public getChanges(): SessionChangeInfo[] {
+        return this.edits.changes();
+    }
+
+    /** 一个文件的合计 diff（相对写法 = 清单里那一行）。 */
+    public changeDiff(relPath: string): string | undefined {
+        return this.edits.changeDiff(relPath);
+    }
+
+    /** 把一个文件整份回到这个会话第一次改它之前的样子。 */
+    public async revertFileChanges(relPath: string): Promise<void> {
+        return this.edits.revertFileChanges(relPath);
     }
 
     // ---- 会话加载 ----

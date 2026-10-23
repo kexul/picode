@@ -1,10 +1,12 @@
 import * as fs from "fs";
 import {
+    diffCounts,
     extractErrorText,
     extractResultImages,
     extractResultText,
     extractTruncation,
     historyEditInfo,
+    makeUnifiedDiff,
     toolFilePath,
 } from "./messageUtils";
 /** EditTracker 对外依赖（由 SessionRuntime 注入，避免环依赖）。 */
@@ -14,8 +16,24 @@ export interface EditTrackerHost {
     resolvePath(p: string): string;
     post(msg: Record<string, unknown>): void;
     onKnownFilesChanged(): void;
-    confirmRevert(label: string): Promise<boolean>;
+    /** 回滚前的二次确认：message 是整句话（不同回滚的说法不一样），返回是否继续。 */
+    confirmRevert(message: string): Promise<boolean>;
 }
+
+/** 「改动」那一格里的一行：这个会话把一个文件改成了什么样。 */
+export interface SessionChangeInfo {
+    /** 相对会话目录的写法（跟文件链接里的写法一样）。 */
+    path: string;
+    added: number;
+    removed: number;
+    /** 文件已经不在了（删掉了）。 */
+    deleted: boolean;
+    /** 太大，没法在这一格里比（不给增删行数，也看不到 diff）。 */
+    tooBig: boolean;
+}
+
+/** 这一格愿意比的文本上限（跟文件侧边栏看文本那道线一样）：再大的不比，也不给整份拖去页面。 */
+const MAX_CHANGE_BYTES = 2 * 1024 * 1024;
 
 /**
  * 单个会话内的工具卡片推送 + edit/write 快照 / 回滚 / knownFiles。
@@ -24,6 +42,12 @@ export interface EditTrackerHost {
 export class EditTracker {
     private pendingEdits = new Map<string, { path: string; before: string }>();
     private editSnapshots = new Map<string, { path: string; before: string; after: string }>();
+    /** 每个文件「这个会话第一次改它之前」的内容（绝对路径 → 内容）：文件侧边栏那一格
+     *  「改动」按它算合计 diff，也按它回滚。会话重开就没了（这一格本来也只在会话活着时看）。 */
+    private fileBaselines = new Map<string, string>();
+    /** 算过的 diff 攒着（绝对路径 → 它当时对应的磁盘状态与结果）：跟着改一次不用把
+     *  整个文件重比一遍，「改动」那一格每来一条改动都会重问一次清单。 */
+    private changeCache = new Map<string, { key: string; diff: string; added: number; removed: number; deleted: boolean }>();
     /** 工具调用的开始时间戳（toolCallId → ms）：结果回来时算这次跑了多久，
      *  随结果一起发给界面，汇总进统计弹窗（见 media/chat.js 的 noteToolDuration）。 */
     private toolStartedAt = new Map<string, number>();
@@ -45,6 +69,8 @@ export class EditTracker {
     public reset(): void {
         this.pendingEdits.clear();
         this.editSnapshots.clear();
+        this.fileBaselines.clear();
+        this.changeCache.clear();
         this.toolStartedAt.clear();
         const hadKnown = this.knownFiles.size > 0;
         this.knownFiles.clear();
@@ -153,6 +179,10 @@ export class EditTracker {
             before = "";
         }
         this.pendingEdits.set(evt.toolCallId, { path: p, before });
+        // 这个会话第一次改它：把「改之前」留一份（后面再改几次都还按这一份算合计）
+        if (!this.fileBaselines.has(p)) {
+            this.fileBaselines.set(p, before);
+        }
     }
 
     public trackEditEnd(evt: any): void {
@@ -175,6 +205,8 @@ export class EditTracker {
             return;
         }
         this.editSnapshots.set(id, { path: pend.path, before: pend.before, after });
+        // 清单变了：让界面把「改动」那一格重问一遍（没开着这一格的话它自己不画）
+        this.host.post({ type: "changesChanged" });
     }
 
     public async revertEdit(toolCallId: string): Promise<void> {
@@ -215,6 +247,113 @@ export class EditTracker {
         this.editSnapshots.delete(toolCallId);
         this.host.post({ type: "editReverted", toolCallId });
         this.host.post({ type: "system", text: `已回滚: ${label}` });
+    }
+
+    /**
+     * 这个会话改过的文件清单（按路径排），给文件侧边栏那一格「改动」用。
+     * 只算真出了差别的：改了又改回去的、失败的编辑都不列。
+     */
+    public changes(): SessionChangeInfo[] {
+        const out: SessionChangeInfo[] = [];
+        for (const abs of this.fileBaselines.keys()) {
+            const info = this.changeOf(abs);
+            if (!info) { continue; }
+            if (!info.diff && !info.tooBig) { continue; }
+            out.push({
+                path: info.path,
+                added: info.added,
+                removed: info.removed,
+                deleted: info.deleted,
+                tooBig: info.tooBig,
+            });
+        }
+        out.sort((a, b) => a.path.localeCompare(b.path));
+        return out;
+    }
+
+    /** 一个文件的合计 diff（本会话第一次改它之前 → 现在磁盘上的）；没改出差别就不给。 */
+    public changeDiff(relPath: string): string | undefined {
+        const abs = this.changeAbsOf(relPath);
+        const info = abs ? this.changeOf(abs) : undefined;
+        return info && info.diff ? info.diff : undefined;
+    }
+
+    /** 把一个文件整份写回这个会话第一次改它之前的样子（先问一句再动手）。 */
+    public async revertFileChanges(relPath: string): Promise<void> {
+        const abs = this.changeAbsOf(relPath);
+        const before = abs === undefined ? undefined : this.fileBaselines.get(abs);
+        if (abs === undefined || before === undefined) {
+            this.host.post({ type: "systemError", text: "无法回滚：缺失修改前的快照。" });
+            return;
+        }
+        const label = this.host.relativeTo(this.host.getCwd(), abs);
+        let current: string | undefined;
+        try {
+            current = fs.readFileSync(abs, "utf8");
+        } catch {
+            current = undefined;   // 文件被删了：写回去就是恢复它
+        }
+        if (current === before) {
+            this.host.post({ type: "system", text: `无需回滚：${label} 已是修改前的内容。` });
+            this.host.post({ type: "changesChanged" });
+            return;
+        }
+        const ok = await this.host.confirmRevert(
+            `${label} 会回到这个会话第一次改它之前的样子：这个会话对它做过的改动都会没有。确定继续？`
+        );
+        if (!ok) {
+            return;
+        }
+        try {
+            fs.writeFileSync(abs, before, "utf8");
+        } catch (e: any) {
+            this.host.post({ type: "systemError", text: `回滚失败: ${e.message}` });
+            return;
+        }
+        this.changeCache.delete(abs);
+        this.host.post({ type: "system", text: `已回滚: ${label}` });
+        this.host.post({ type: "changesChanged" });
+    }
+
+    /** 界面报的是相对写法（跟清单里那一行一样）：按它找回这个文件的绝对路径。 */
+    private changeAbsOf(relPath: string): string | undefined {
+        for (const abs of this.fileBaselines.keys()) {
+            if (this.host.relativeTo(this.host.getCwd(), abs) === relPath) { return abs; }
+        }
+        return undefined;
+    }
+
+    /**
+     * 一个文件现在的合计 diff 与增删行数（本会话第一次改之前 → 现在磁盘上的）。
+     * 磁盘状态（修改时间 + 大小）没变就用上次算的，改一下不必把整个文件重新比一遍。
+     */
+    private changeOf(abs: string): { path: string; added: number; removed: number;
+        deleted: boolean; tooBig: boolean; diff: string } | undefined {
+        const before = this.fileBaselines.get(abs);
+        if (before === undefined) { return undefined; }
+        const relPath = this.host.relativeTo(this.host.getCwd(), abs);
+        let current = "";
+        let deleted = false;
+        let key = "deleted";
+        let tooBig = before.length > MAX_CHANGE_BYTES;
+        try {
+            const st = fs.statSync(abs);
+            key = `${st.mtimeMs}:${st.size}`;
+            if (st.size > MAX_CHANGE_BYTES) { tooBig = true; } else { current = fs.readFileSync(abs, "utf8"); }
+        } catch {
+            deleted = true;   // 文件没了：整份都算删掉
+        }
+        if (tooBig) {
+            return { path: relPath, added: 0, removed: 0, deleted, tooBig: true, diff: "" };
+        }
+        const cached = this.changeCache.get(abs);
+        if (cached && cached.key === key) {
+            return { path: relPath, ...cached, tooBig: false };
+        }
+        const diff = makeUnifiedDiff(before, current);
+        const counts = diffCounts(diff);
+        this.changeCache.set(abs, { key, diff, ...counts, deleted });
+        return { path: relPath, diff, ...counts, deleted, tooBig: false };
     }
 
     /** 收集 pi 工具调用涉及的具体文件路径（read/edit/write）。 */

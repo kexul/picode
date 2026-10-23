@@ -309,6 +309,10 @@ async function runScript(userText) {
     const act = async (toolName, args, result) => {
         const id = beginTool(toolName, args);
         await pause(THINK_MS);
+        // edit 真去改那个文件：界面上「改动」那一格是后端拿「改之前 / 改之后」比出来的，
+        // 假模型光报一段 diff 而不真改文件，那一格就永远空着。
+        // 改之前先等一小会：后端收到「工具开始」才去读「改之前」那一份，两个进程之间就靠这段时间差。
+        if (toolName === "edit" || toolName === "write") { await pause(150); applyToolChange(toolName, args); }
         endTool(id, toolName, args, result.content, result.raw, false);
     };
 
@@ -503,6 +507,23 @@ async function runScript(userText) {
         return;
     }
 
+    // ---- 「写新文件」：write 工具真建一个文件（验「改动」那一格里整份都是新加的那种）----
+    if (/写新文件/.test(userText)) {
+        await say("（假模型）我新建一个文件。");
+        await act("write", { path: "新文件.txt", content: NEW_FILE_TEXT }, {
+            content: [{ type: "text", text: "已写入" }],
+            raw: {
+                content: [{ type: "text", text: "已写入" }],
+                details: {
+                    diff: NEW_FILE_TEXT.trimEnd().split("\n").map((l) => "+" + l).join("\n"),
+                },
+            },
+        });
+        await say("写完了。");
+        finish();
+        return;
+    }
+
     await think("用户要的是演示，那就按老剧本走一遍：先读图，再 bash，再改一下文件。");
     await say("好，我用三个工具给你演示一遍（假模型秒回）：");    await act("read", { path: "示例图片.png" }, {
         content: [
@@ -532,7 +553,19 @@ async function runScript(userText) {
 
 const SCRIPT_FILE = "说明.txt";
 
-/** edit 工具真的改文件：编辑卡片（diff）才有东西可看，回滚也有的滚。 */
+/** 剧本里新建那个文件的内容（「写新文件」那一段用）。 */
+const NEW_FILE_TEXT = "第一行\n第二行\n第三行\n";
+
+/** edit / write 真去动那个文件：编辑卡片（diff）与「改动」那一格才有东西可看，回滚也有的滚。 */
+function applyToolChange(toolName, args) {
+    if (toolName !== "write") { applyFakeEdit(args); return; }
+    try {
+        const p = path.resolve(process.cwd(), args.path || "新文件.txt");
+        fs.writeFileSync(p, typeof args.content === "string" ? args.content : "", "utf8");
+    } catch { /* 写不进去就算了，剧本照演 */ }
+}
+
+/** edit 工具真的改文件（在原文里换掉一处）。 */
 function applyFakeEdit(args) {
     try {
         const p = path.resolve(process.cwd(), args.path || SCRIPT_FILE);

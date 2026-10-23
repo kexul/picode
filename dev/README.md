@@ -321,6 +321,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `newSessionRedraw.js` | 验开新会话时常驻那一列的重画范围（整块一次都不该重画、下半展开的组不许坍、新会话那一行加进上半、重画过后点上下的行都还准）：`FAKEPI_TICK_MS=60 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/newSessionRedraw.js` |
 | `sidebarPerf.js` | 量那颗 `<<<` 打开一次多少毫秒、滑入动画有没有被顶住（长任务 / 逐帧间隔）：`npm run web:shot -- --script dev/sidebarPerf.js` |
 | `fileSidebar.js` | 验浏览器页面左边那一列「文件侧边栏」（点消息里的文件链接之后：行号与停在那一行、标签页、跟着刷新、图片直接看、二进制与超大给下载、目录、光名字（会话碰过的文件里按名字找）、工具卡片那颗「跳转」也开在这里、看不了的几种情形、认得的几种语言带颜色（别的黑白、太大的不上色也不卡页面）、markdown 文件排好版渲染成文档（不留行号，别的文件照旧带行号）、这一列角上那颗折行开关（选过记在这台设备里），以及那条只读文件地址本身的拒绝情形）：`npm run web:shot -- --fake-pi --script dev/fileSidebar.js` |
+| `changesTab.js` | 验文件侧边栏那一格「改动」（这个会话改过哪些文件，一个地方全看）：常驻在「项目目录」后面且没有那颗叉、没改过文件时一句提示、假模型真改完一个文件之后那一行长出来（相对写法 + `+1` `−1`、没展开时看不到 diff）、点开这一行看到那条删除与新增、刷新页面清单还在（数据在后端会话的内存里，不跟着页面走）、磁盘上把文件删掉后那一行标「已删除」且展开整份都是删掉的、点「回滚」先问一句再把这个文件整份写回去、清单空了回到那句提示：`npm run web:shot -- --fake-pi --script dev/changesTab.js` |
 | `htmlPreview.js` | 验文件侧边栏里把 html 当网页打开（点 `.html` 链接摆出的是渲染好的页面，不是源码：页面里的相对样式与脚本真生效、链接里带的行号等于没带、文件改过这一列自己重载那张网页；以及 `/site/` 那条地址的规矩：HEAD 只给头与修改时间、没这个文件 404、会话目录外的 403）：`npm run web:shot -- --fake-pi --script dev/htmlPreview.js` |
 | `options.js` | 两条命令共用的命令行参数 |
 | `tabaTools.js` | 验子会话的「停掉」与「查看」两个工具（派活那条在 `tabaFlow.js`）：`FAKEPI_THINK_MS=4000 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaTools.js` |

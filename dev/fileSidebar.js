@@ -586,7 +586,11 @@ module.exports = async (page) => {
                 return !!r && !!panelRect && r.left >= panelRect.left - 1 && r.right <= panelRect.right + 1;
             };
             const bar = document.getElementById("fileTabs");
-            const tabs = bar ? Array.from(bar.querySelectorAll(".file-tab")) : [];
+            const allTabs = bar ? Array.from(bar.querySelectorAll(".file-tab")) : [];
+            // 下面那些 tabCount / tabPaths / tabActive 说的是「目录与文件」那些标签：
+            // 常驻的「改动」那一格不算在里面（它有自己的改动贴一篇验，见 dev/changesTab.js）
+            const tabs = allTabs.filter(function (t) { return t.getAttribute("data-changes") !== "1"; });
+            const changesTab = allTabs.filter(function (t) { return t.getAttribute("data-changes") === "1"; })[0] || null;
             const entries = body ? Array.from(body.querySelectorAll(".file-entry:not(.up)")) : [];
             const wrapBtn = document.getElementById("fileWrap");
             const wrapRect = wrapBtn && getComputedStyle(wrapBtn).display !== "none" ? wrapBtn.getBoundingClientRect() : null;
@@ -665,6 +669,11 @@ module.exports = async (page) => {
                 projClose: tabs.some(function (t) { return t.getAttribute("data-proj") === "1" && !!t.querySelector(".file-tab-close"); }),
                 tabActive: tabs.findIndex(function (t) { return t.classList.contains("active"); }),
                 tabCloseCount: tabs.filter(function (t) { return !!t.querySelector(".file-tab-close"); }).length,
+                // 常驻的「改动」那一格：在不在这里、排第几个（整条标签条上的位置）、有没有那颗叉
+                allNames: allTabs.map(function (t) { return (t.querySelector(".file-tab-name") || {}).textContent || ""; }),
+                changesIndex: allTabs.findIndex(function (t) { return t.getAttribute("data-changes") === "1"; }),
+                changesCount: changesTab ? 1 : 0,
+                changesClose: !!changesTab && !!changesTab.querySelector(".file-tab-close"),
                 entryCount: entries.length,
                 entryNames: entries.map(function (e) { return (e.querySelector(".file-entry-name") || {}).textContent || ""; }),
                 entryDirs: entries.map(function (e) { return e.classList.contains("dir"); }),
@@ -923,6 +932,12 @@ module.exports = async (page) => {
     check("面板头上只有一颗「收起」（「上一层」不在那儿）",
         wide1proj.headerBtnCount === 1, "头上 " + wide1proj.headerBtnCount + " 颗");
     check("「项目目录」那一格没有那颗叉（不让人关掉）", wide1proj.projClose === false && wide1proj.tabCloseCount === 0);
+    // 「改动」那一格是常驻的（见 dev/changesTab.js 那个贴）：它固定在「项目目录」后面、同样没有那颗叉，
+    // 下面的 tabCount / tabPaths / tabActive 只说「目录与文件」那几格，不算它
+    check("标签条上常驻「改动」那一格（紧跟在「项目目录」后面、没有叉）",
+        wide1proj.changesCount === 1 && wide1proj.changesIndex === 1 && wide1proj.changesClose === false
+        && wide1proj.allNames[1] === "改动",
+        JSON.stringify({ names: wide1proj.allNames, at: wide1proj.changesIndex }));
     await page.shot("file-1-project-dir.png");
 
     // 刷新：开没收起记在这台设备里

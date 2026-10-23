@@ -182,7 +182,7 @@ export interface RuntimeHost {
     // ---- 文件跳转 / diff ----
     /** 打开文件到指定行（1-based）。anchor 为高亮定位行文本，可选。 */
     openFileLocation(path: string, line: number, anchor?: string): void;
-    /** 回滚前的二次确认（文件在修改后又被改动时）。返回是否继续。
+    /** 回滚前的二次确认。message 是整句话（不同回滚的说法不一样）。返回是否继续。
      *  @param sessionId 哪个会话要回滚：优先弹给正在看它的那块屏。 */
-    confirmRevert(label: string, sessionId?: string): Promise<boolean>;
+    confirmRevert(message: string, sessionId?: string): Promise<boolean>;
 }
