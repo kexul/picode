@@ -94,6 +94,32 @@ module.exports = async (page) => {
     await look(page, "跑过一批之后");
     await page.shot("tool-stats-2-rows.png");
 
+    // 长命令那一行：默认一行截成 …，点一下展开看全文，再点收起
+    const expand = await page.eval(`
+        const rows = Array.from(document.querySelectorAll("#toolStatsBody .ts-call"));
+        const row = rows.find((r) => r.querySelector(".ts-text").textContent.length > 40);
+        if (!row) { return JSON.stringify({ error: "没有长的那一条" }); }
+        const text = row.querySelector(".ts-text");
+        const clippedBefore = text.scrollWidth > text.clientWidth + 1;
+        row.click();
+        const clippedAfter = text.scrollWidth > text.clientWidth + 1;
+        return JSON.stringify({
+            open: row.classList.contains("open"), clippedBefore, clippedAfter,
+            height: Math.round(row.getBoundingClientRect().height),
+            title: row.title.slice(0, 40),
+        });
+    `);
+    console.log("点开长的那一条：" + expand);
+    await page.shot("tool-stats-2b-expanded.png");
+    const collapse = await page.eval(`
+        const rows = Array.from(document.querySelectorAll("#toolStatsBody .ts-call"));
+        const row = rows.find((r) => r.classList.contains("open"));
+        if (!row) { return "没有展开着的"; }
+        row.click();
+        return JSON.stringify({ open: row.classList.contains("open") });
+    `);
+    console.log("再点一下：" + collapse);
+
     // 弹窗开着又来一条结果：数应该跟着长
     await post(page, buildMessages([["find", { pattern: "**/*.md", path: "dev" }, 1500]], 100));
     await page.sleep(400);

@@ -7752,6 +7752,9 @@
   // （toolResult / editCardResult 的 durationMs）——工具标签上不写它，都汇总到这张弹窗里看。
   // 所以只算这次打开页面之后真跑过的调用：刷新 / 重连后重放的历史不带这个数，统计从零重来。
   const TOOL_STATS_SLOWEST = 6;   // 「最慢的几次」最多列几条
+  // 「最慢的几次」里点开看全文的那几条（键 = 工具名 + 那一行的文字）：弹窗开着时又来结果会重画一遍，
+  // 重画后要保持原样开着。存着不清，下回再打开还是展开——反正点一下就能收起。
+  const toolStatsExpanded = new Set();
   const toolStatsOverlay = document.getElementById("toolStatsOverlay");
   const toolStatsBody = document.getElementById("toolStatsBody");
   const toolStatsCloseBtn = document.getElementById("toolStatsClose");
@@ -7838,13 +7841,23 @@
         { text: formatElapsed(r.maxMs), cls: "ts-num" },
       ]));
     }
-    toolStatsBody.appendChild(tsBlock("ts-section", "花得最久的 " + stats.slowest.length + " 次调用"));
+    toolStatsBody.appendChild(tsBlock("ts-section", "花得最久的 " + stats.slowest.length + " 次调用 · 点一条看全文"));
     for (const c of stats.slowest) {
-      toolStatsBody.appendChild(tsRowEl([
+      const row = tsRowEl([
         { text: c.name, cls: "ts-name" },
         { text: c.text || c.name, cls: "ts-text" },
         { text: formatElapsed(c.durationMs), cls: "ts-num" },
-      ]));
+      ]);
+      // 长命令 / 长参数一行放不下就截成 …（.ts-text 的省略号）；点这一条展开成多行看全，再点收起。
+      // 电脑上鼠标停上去也能直接看（title 里是全文）。
+      const key = c.name + "\u0000" + (c.text || c.name);
+      row.classList.add("ts-call");
+      row.title = c.text || c.name;
+      if (toolStatsExpanded.has(key)) { row.classList.add("open"); }
+      row.addEventListener("click", () => {
+        if (row.classList.toggle("open")) { toolStatsExpanded.add(key); } else { toolStatsExpanded.delete(key); }
+      });
+      toolStatsBody.appendChild(row);
     }
     toolStatsBody.appendChild(tsBlock("ts-note",
       "同一时刻并行跑的几条各算各的，合计会比实际过去的时间多。\n" +
