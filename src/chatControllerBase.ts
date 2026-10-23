@@ -6,7 +6,7 @@
  * 从会话列表里切过去；不落盘，宿主一退全部关闭。
  *
  * 本类收敛“与平台无关”的逻辑：
- *   - 会话管理（newSession / setActiveSession / switchSessionByDirection / closeSession）
+ *   - 会话管理（newSession / setActiveSession / closeSession）
  *   - 拾取器浮层（showPicker / resolvePicker）
  *   - 模型选择器（pickModelInteractive）+ 模型内思考强度
  *   - 路径工具（relativeTo / resolvePath / resolveExecutable / checkPiAvailable）
@@ -430,7 +430,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             {
                 action: "tabSwitchKey",
                 label: "切换会话",
-                desc: "在多个会话间切换上一个 / 下一个（选项存储键名仍是 tabSwitchKey，改名会让已有设置丢失）",
+                desc: "按「项目与会话」里「正在对话」那一段的行序切上一个 / 下一个（选项存储键名仍是 tabSwitchKey，改名会让已有设置丢失）",
                 check: null,
                 value: this.getTabSwitchKey(),
                 options: ChatControllerBase.keyOptions(ChatControllerBase.TAB_SWITCH_KEY_LABELS),
@@ -761,17 +761,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.broadcastSessionList(true);
         // 只告诉动手的这块屏：别的屏各看各的，不跟着切
         this.postToOneClient(clientId, { type: "sessionActivated", sessionId: panelId });
-    }
-
-    /** 按方向切到上一个 / 下一个会话（按会话的建立顺序）。 */
-    public switchSessionByDirection(direction: "prev" | "next"): void {
-        const ids = Array.from(this.panels.keys());
-        if (ids.length < 2) { return; }
-        const cur = this.focusedIdFor(this.currentPageId) ?? this.lastFocusedPanelId;
-        const curIdx = cur ? ids.indexOf(cur) : 0;
-        const delta = direction === "next" ? 1 : -1;
-        const nextIdx = (curIdx + delta + ids.length) % ids.length;
-        this.setActiveSession(ids[nextIdx]);
     }
 
     // ---- 某块屏该看哪个会话（它刚连上时挑 / 开一个）----
@@ -2359,9 +2348,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 return;
             case "switchSession":
                 if (typeof msg.sessionId === "string") { this.setActiveSession(msg.sessionId); }
-                return;
-            case "switchSessionByDirection":
-                if (msg.direction === "prev" || msg.direction === "next") { this.switchSessionByDirection(msg.direction); }
                 return;
             case "closeSession":
                 if (typeof msg.sessionId === "string") { this.closeSession(msg.sessionId); }

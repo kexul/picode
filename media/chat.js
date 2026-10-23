@@ -704,15 +704,14 @@
       const combos = tabSwitchCombos(tabSwitchKey);
       if (matchCombo(e, combos.prev) || matchCombo(e, combos.next)) {
         e.preventDefault();
-        const dir = matchCombo(e, combos.next) ? "next" : "prev";
-        vscode.postMessage({ type: "switchSessionByDirection", direction: dir });
+        switchSessionByDirection(matchCombo(e, combos.next) ? "next" : "prev");
       }
       return;
     }
     // 切换会话
     const combos = tabSwitchCombos(tabSwitchKey);
-    if (matchCombo(e, combos.prev)) { e.preventDefault(); vscode.postMessage({ type: "switchSessionByDirection", direction: "prev" }); return; }
-    if (matchCombo(e, combos.next)) { e.preventDefault(); vscode.postMessage({ type: "switchSessionByDirection", direction: "next" }); return; }
+    if (matchCombo(e, combos.prev)) { e.preventDefault(); switchSessionByDirection("prev"); return; }
+    if (matchCombo(e, combos.next)) { e.preventDefault(); switchSessionByDirection("next"); return; }
   });
 
   // ==================== 会话状态 ====================
@@ -3718,6 +3717,22 @@
       kids.forEach((kid) => { push(kid, 1); });
     });
     return items;
+  }
+
+  /**
+   * 按快捷键切上一个 / 下一个会话：走的就是「项目与会话」面板里「正在对话」那一段的行序
+   * （主会话在前，它派出去的子会话缩进跟在它下面，一行算一个）。
+   * 当前看的会话不在那几行里（它已经被别的窗口关掉、画面还留在这屏）时：
+   * 下一个从第一行起，上一个从末行起。
+   */
+  function switchSessionByDirection(direction) {
+    const ids = openSessionItems().map((item) => item.sessionId);
+    if (ids.length < 2) { return; }
+    const curIdx = ids.indexOf(activeId);
+    const from = curIdx < 0 ? (direction === "next" ? -1 : 0) : curIdx;
+    const delta = direction === "next" ? 1 : -1;
+    const target = ids[(from + delta + ids.length) % ids.length];
+    vscode.postMessage({ type: "switchSession", sessionId: target });
   }
 
   /**
