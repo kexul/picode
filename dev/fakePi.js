@@ -140,11 +140,19 @@ if (allowedTools) {
     }
 }
 
+/** 这个假会话的 .jsonl。真 pi 每记一条就往会话文件里追加，插件有些路会去读它
+ *  （# 引用、派子会话时把父会话的文件交给子会话）；这里照写一份，那些路才验得到。
+ *  每个进程一个名字（真 pi 里也是一个会话一个文件），会话一多也不会互相盖掉。 */
+const sessionFile = path.join(process.cwd(), "fake-session-" + process.pid + ".jsonl");
+function appendSession(record) {
+    try { fs.appendFileSync(sessionFile, JSON.stringify(record) + "\n", "utf8"); } catch { /* 写不进去就算了 */ }
+}
+
 /** 桥要的两样东西：这个会话在哪个目录、它的 .jsonl 在哪（见 tabaBridgeSource.ts 的 cwdOf / sessionFileOf）。 */
 function bridgeCtx() {
     return {
         cwd: process.cwd(),
-        sessionManager: { getSessionFile: () => path.join(process.cwd(), "fake-session.jsonl") },
+        sessionManager: { getSessionFile: () => sessionFile },
     };
 }
 
@@ -200,6 +208,7 @@ async function runScript(userText) {
     // ---- 用户消息（pi 会把 prompt 作为 user 消息推一遍） ----
     const userMsg = { role: "user", content: [{ type: "text", text: userText }], timestamp: now() };
     messages.push(userMsg);
+    appendSession({ type: "message", message: userMsg });
     emit({ type: "message_start", message: userMsg });
     emit({ type: "message_end", message: userMsg });
 
@@ -352,6 +361,7 @@ async function runScript(userText) {
     const finish = () => {
         assistantMsg.stopReason = "stop";
         messages.push(assistantMsg);
+        appendSession({ type: "message", message: assistantMsg });
         emit({ type: "message_end", message: assistantMsg });
         emit({ type: "agent_end", messages });
         // 假装装了一个自动命名扩展：第一轮跑完后把会话标题报上来（真 pi 里是扩展发的）。
@@ -604,7 +614,7 @@ async function handle(cmd) {
                 model: MODEL,
                 thinkingLevel: "off",
                 isStreaming: false,
-                sessionFile: path.join(process.cwd(), "fake-session.jsonl"),
+                sessionFile,
                 sessionId: "fake-session",
                 sessionName: "假会话（fakePi）",
                 messageCount: messages.length,

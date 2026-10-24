@@ -37,7 +37,7 @@ export interface GoalState {
     updatedAt: number;
 }
 
-/** 用户打的 /goal 系列命令。 */
+/** 用户打的目标命令，也是目标条上那几颗按钮按下时用的（见 chatControllerBase.onGoalCommand）。 */
 export type GoalCommand =
     | { kind: "set"; objective: string }
     | { kind: "start" }
@@ -53,9 +53,10 @@ export const GOAL_CRITERIA_MARK = "[验收清单]";
 const MAX_CRITERIA = 12;
 
 /**
- * 这一句是不是 /goal 系列命令。
- * `/goal` 后面跟的那段：空的 = 看当前目标；开始 / 暂停 / 恢复 / 清除 = 管目标；
- * 别的都当目标原文（可以多行）。
+ * 这一句是不是 /goal 命令：只有定目标（`/goal <要干成什么>`）与看状态（`/goal`）两种。
+ *
+ * 开始 / 暂停 / 继续 / 停止 不在命令行里：它们是目标条点开以后那几颗按钮（见 GoalCommand）。
+ * 打的要是那些词，由 isGoalControlWord 拦住，别稀里糊涂定成一个叫「停止」的目标。
  */
 export function parseGoalCommand(text: string): GoalCommand | null {
     if (typeof text !== "string") { return null; }
@@ -63,12 +64,22 @@ export function parseGoalCommand(text: string): GoalCommand | null {
     if (!m) { return null; }
     const rest = (m[1] ?? "").trim();
     if (!rest) { return { kind: "show" }; }
-    const lower = rest.toLowerCase();
-    if (rest === "开始" || rest === "开跑" || lower === "start") { return { kind: "start" }; }
-    if (rest === "暂停" || lower === "pause") { return { kind: "pause" }; }
-    if (rest === "继续" || rest === "恢复" || lower === "resume") { return { kind: "resume" }; }
-    if (rest === "清除" || rest === "取消" || lower === "clear" || lower === "stop") { return { kind: "clear" }; }
     return { kind: "set", objective: rest };
+}
+
+/** 以前用命令管的那些词（现在都是目标条上的按钮）；打这些词是误操作，不当成新目标。 */
+const CONTROL_WORDS = [
+    "开始", "开跑", "continue", "start",
+    "暂停", "停下", "pause",
+    "继续", "恢复", "resume",
+    "清除", "取消", "关闭", "关掉", "停止", "结束", "退出",
+    "clear", "stop", "close", "end",
+];
+
+/** 打进来的是不是「以前那个控制词」（是就别拿它当目标原文）。 */
+export function isGoalControlWord(text: string): boolean {
+    const t = text.trim().toLowerCase();
+    return !!t && CONTROL_WORDS.indexOf(t) >= 0;
 }
 
 /**
@@ -94,7 +105,7 @@ export function buildGoalNegotiationPrompt(p: { objective: string }): string {
         "- 第一条",
         "- 第二条",
         "3. 清单下面可以补一两句「有歧义、要用户拍板的地方」，没有就别硬凑。",
-        "4. 这一轮不要改文件、不要开始实现：用户看完清单会打 /goal 开始，在那之前目标还不算开始。",
+        "4. 这一轮不要改文件、不要开始实现：用户看完清单会在目标条上按「开始」，在那之前目标还不算开始。",
     ].join("\n");
 }
 
@@ -187,7 +198,7 @@ export function goalBarSummary(goal?: GoalState | null, judging = false): GoalBa
         case "negotiating":
             return {
                 text: goal.criteria.length > 0
-                    ? `目标待确认 · 验收 ${goal.criteria.length} 条 · 打 /goal 开始`
+                    ? `目标待确认 · 验收 ${goal.criteria.length} 条`
                     : "目标待确认 · 还在谈验收条件",
                 tone: "talk",
             };
@@ -199,7 +210,7 @@ export function goalBarSummary(goal?: GoalState | null, judging = false): GoalBa
                 tone: "run",
             };
         case "paused":
-            return { text: "目标已暂停 · 打 /goal 继续 接着跑", tone: "stop" };
+            return { text: "目标已暂停", tone: "stop" };
         case "complete":
             return { text: "目标已完成", tone: "done" };
         default:

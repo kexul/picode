@@ -28,7 +28,7 @@ module.exports = async (page) => {
             texts: Array.from(el.querySelectorAll(".qb-preview")).map((x) => x.textContent.trim()),
         };
     `);
-    const sid = await page.eval(`const p = document.querySelector(".session-pane"); return p ? p.dataset.sessionId : "";`);
+    const sid = await page.eval(`const p = document.querySelector(".session-view:not(.off) .session-pane"); return p ? p.dataset.sessionId : "";`);
 
     // ---- 第一幕：pi 说有两句在排队 → 界面上写着这两句 ----
     await post([{ type: "queueUpdate", sessionId: sid, steering: ["先别看文件，直接改", "改完再跑一遍测试"], followUp: [] }]);

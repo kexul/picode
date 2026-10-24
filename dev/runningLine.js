@@ -33,7 +33,7 @@ module.exports = async (page) => {
      *  跑完的那条不走、只是冻住（齿轮停转，见 chat.js 的 freezeRunningLine）：所以「写着几条」
      *  跟「几条在转圈」是两回事 —— 在跑的 spin=1，冻住的 frozen=1 且 spin=0。 */
     const state = () => page.eval(`
-        const pane = document.querySelector(".session-pane");
+        const pane = document.querySelector(".session-view:not(.off) .session-pane");
         const line = pane ? pane.querySelector(".tool-running") : null;
         const items = line ? Array.from(line.querySelectorAll(".tool-running-item")) : [];
         const spinning = (el) => {
@@ -77,7 +77,7 @@ module.exports = async (page) => {
     if (s.times && s.times.some(Boolean)) { problems.push("来历不明的调用也写上了耗时（该不写）：" + JSON.stringify(s.times)); }
     // 工具标签（上面那排）的齿轮不转：这一排是“跑过哪些调用”的记账，转的只有下面这条
     const pillSpin = await page.eval(`
-        const el = document.querySelector(".session-pane .tool-row .tool.running .tool-icon");
+        const el = document.querySelector(".session-view:not(.off) .session-pane .tool-row .tool.running .tool-icon");
         return el ? getComputedStyle(el).animationName : "（没有那颗齿轮）";
     `);
     console.log("   工具标签里那颗齿轮的动画：" + pillSpin);
@@ -85,7 +85,7 @@ module.exports = async (page) => {
 
     // ---- 第二幕：同时跑两条（bash + read）→ 也只露一条：最近开始的那条（后来的 read）----
     const lineH = () => page.eval(`
-        const el = document.querySelector(".session-pane .tool-running");
+        const el = document.querySelector(".session-view:not(.off) .session-pane .tool-running");
         return el ? el.offsetHeight : 0;
     `);
     await post([
@@ -100,8 +100,8 @@ module.exports = async (page) => {
     // 齿轮要对齐：这条里的齿轮跟上面那排标签里的齿轮得在同一条竖线上。
     // 量的是中心（齿轮在转，转着的盒子四周会变，只有中心不动）。
     const gears = await page.eval(`
-        const pill = document.querySelector(".session-pane .tool-row .tool .tool-icon");
-        const item = document.querySelector(".session-pane .tool-running .tool-running-item .tool-icon");
+        const pill = document.querySelector(".session-view:not(.off) .session-pane .tool-row .tool .tool-icon");
+        const item = document.querySelector(".session-view:not(.off) .session-pane .tool-running .tool-running-item .tool-icon");
         if (!pill || !item) { return null; }
         const mid = (el) => { const r = el.getBoundingClientRect(); return r.left + r.width / 2; };
         return { dx: Math.round((mid(item) - mid(pill)) * 100) / 100 };
@@ -127,7 +127,7 @@ module.exports = async (page) => {
     console.log("\n第四幕（bash 还在跑，中间来了一段正文）：\n  " + show(s));
     if (!s.afterRow) { problems.push("来了正文之后，这条没留在它那批标签下面：" + JSON.stringify(s)); }
     const textAfter = await page.eval(`
-        const line = document.querySelector(".session-pane .tool-running");
+        const line = document.querySelector(".session-view:not(.off) .session-pane .tool-running");
         const next = line ? line.nextElementSibling : null;
         return Boolean(next) && next.classList.contains("assistant");
     `);
@@ -184,7 +184,7 @@ module.exports = async (page) => {
     if (JSON.stringify(s.items) !== JSON.stringify(["read 示例图片.png"])) { problems.push("一条都不在跑了之后，这条上的字不见了（该留着）：" + JSON.stringify(s.items)); }
     if (s.frozen !== 1 || s.spin !== 0) { problems.push("跑完了齿轮还在转（该停住）：" + show(s)); }
     const look = await page.eval(`
-        const el = document.querySelector(".session-pane .tool-running .tool-running-item");
+        const el = document.querySelector(".session-view:not(.off) .session-pane .tool-running .tool-running-item");
         if (!el) { return null; }
         const cs = getComputedStyle(el);
         return { opacity: Math.round(Number(cs.opacity) * 100) / 100, h: el.offsetHeight, visibility: cs.visibility };
@@ -209,7 +209,7 @@ module.exports = async (page) => {
     ]);
     await page.sleep(400);
     s = await state();
-    const lines = await page.eval(`return document.querySelectorAll(".session-pane .tool-running").length;`);
+    const lines = await page.eval(`return document.querySelectorAll(".session-view:not(.off) .session-pane .tool-running").length;`);
     console.log("\n第九幕（整屏重画，历史里还留着一条没结果的 bash）：\n  " + show(s) + " 这行的个数=" + lines);
     if (JSON.stringify(s.items) !== JSON.stringify(["$ git status"])) { problems.push("重放之后这条没跟上（该只剩那条没结果的）：" + JSON.stringify(s.items)); }
     if (lines !== 1) { problems.push("重放之后这条出现了不止一个（该只有一个）：" + lines); }
@@ -224,7 +224,7 @@ module.exports = async (page) => {
     await post([{ type: "assistantFull", text: Array.from({ length: 80 }, (_, i) => "第 " + i + " 行，用来把消息流撑长一点。").join("\n\n") }]);
     await page.sleep(300);
     await page.eval(`
-        const pane = document.querySelector(".session-pane");
+        const pane = document.querySelector(".session-view:not(.off) .session-pane");
         window.__flick = { add: 0, remove: 0, h: [] };
         const note = () => window.__flick.h.push(pane.scrollHeight);
         new MutationObserver((records) => {
@@ -273,7 +273,7 @@ module.exports = async (page) => {
     // 这一块还是那么高）→ 短的那条跑完（换回长的那条，照旧滚）。
     const LONG_CMD = "git log --oneline --all --graph --decorate --date=short --pretty=format:'%h %ad %an %s' -- media src | head -200 && npm run compile && npm run web:shot -- --width 900 --height 700";
     const rolls = () => page.eval(`
-        const items = Array.from(document.querySelectorAll(".session-pane .tool-running .tool-running-item"));
+        const items = Array.from(document.querySelectorAll(".session-view:not(.off) .session-pane .tool-running .tool-running-item"));
         return items.map((el) => {
             const t = el.querySelector(".tr-text");
             const run = el.querySelector(".tr-run");
@@ -308,7 +308,7 @@ module.exports = async (page) => {
     if (Math.abs(long.dur - (Math.abs(long.shift) / 30 + 1)) > 0.05) { problems.push("一趟的时长不对（该是「走完每秒 30 像素 + 两头各停半秒」）：一趟 " + long.dur + " 秒、位移 " + long.shift + "px"); }
     // 两头的停顿是固定的半秒，不能像以前那样按一趟的百分之几算（那会让长命令开头死很久）
     const hold = await page.eval(`
-        const t = document.querySelector(".session-pane .tool-running .tool-running-item .tr-text");
+        const t = document.querySelector(".session-view:not(.off) .session-pane .tool-running .tool-running-item .tr-text");
         const run = t.querySelector(".tr-run");
         const name = run ? getComputedStyle(run).animationName : "";
         let pct = null;
@@ -329,7 +329,7 @@ module.exports = async (page) => {
     if (hold.holdMs === null || Math.abs(hold.holdMs - 500) > 15) { problems.push("两头的停顿不是固定的半秒：" + JSON.stringify(hold)); }
     // 滚到底能看到末尾：把位移直接当作静态位置量一次（不然得等它慢慢滚到头）。
     const tail = await page.eval(`
-        const t = document.querySelector(".session-pane .tool-running .tool-running-item .tr-text");
+        const t = document.querySelector(".session-view:not(.off) .session-pane .tool-running .tool-running-item .tr-text");
         const run = t.querySelector(".tr-run");
         if (!run) { return { ok: false, why: "没滚起来" }; }
         const box = t.getBoundingClientRect();
@@ -397,8 +397,8 @@ module.exports = async (page) => {
     ]);
     await page.sleep(300);
     const clock = () => page.eval(`
-        const line = document.querySelector(".session-pane .tool-running");
-        const items = Array.from(document.querySelectorAll(".session-pane .tool-running .tool-running-item"));
+        const line = document.querySelector(".session-view:not(.off) .session-pane .tool-running");
+        const items = Array.from(document.querySelectorAll(".session-view:not(.off) .session-pane .tool-running .tool-running-item"));
         const box = (el) => { const r = el.getBoundingClientRect(); return { left: Math.round(r.left), right: Math.round(r.right) }; };
         return {
             lineRight: line ? Math.round(line.getBoundingClientRect().right) : null,

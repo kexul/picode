@@ -3,7 +3,7 @@
  * goalStale —— 验「判官连着几轮报的是同一批没过条目，也不会自己停」。
  *
  * 以前这里有「连着 3 轮没进展就停」「跑够 30 轮 / 3 小时就停」那几条自动停，现在都去掉了：
- * 只有验收通过、判官那一轮坏了（出错 / 既没报结论也没说话）、你打 /goal 暂停才停。
+ * 只有验收通过、判官那一轮坏了（出错 / 既没报结论也没说话）、你点目标条上的「暂停」才停。
  * 判官这边用一个环境变量让它永远报不过、且每次都报同一条：
  *
  *   npm run web:shot -- --fake-pi --script dev/goalStale.js
@@ -22,6 +22,9 @@ module.exports = async (page) => {
     console.log((ok ? "✓ " : "✗ ") + what + (detail ? "  " + JSON.stringify(detail) : ""));
   };
   const goalsFile = path.join(process.env.PICHAT_HOME || path.join(scratch, "pichat"), "goals.json");
+  // 调试目录里那份是上一跑留下的（会话文件一个个不同，每条都留在里面）：先清空，
+  // 不然「取第一条」取到的是上一次那个会话的目标，检查就瞎了。
+  try { fs.rmSync(goalsFile, { force: true }); } catch { /* 没有就算了 */ }
   const goal = () => {
     try {
       const all = JSON.parse(fs.readFileSync(goalsFile, "utf8")).goals || {};
@@ -47,7 +50,7 @@ module.exports = async (page) => {
 
   await page.send("/goal 把 dev/README.md 里那段命令全部跑通");
   await page.waitAnswer("验收清单");
-  await page.send("/goal 开始");
+  await page.goalPress("play");
 
   // 判官每轮都报同一条「没过」；没有自动停，就该一直跑下去
   const ran = await until("连着好几轮报同一批条目还在往下跑", async () => {
@@ -59,8 +62,8 @@ module.exports = async (page) => {
   check("目标没被自动停掉", ran.phase === "active", { phase: ran.phase, note: ran.note });
 
   // 手动停：只有这个能停
-  await page.send("/goal 暂停");
-  const stopped = await until("打 /goal 暂停 以后停下来", async () => {
+  await page.goalPress("play");
+  const stopped = await until("点「暂停」以后停下来", async () => {
     const x = await bar();
     return x.tone === "stop" ? x : null;
   });

@@ -123,7 +123,7 @@ module.exports = async (page) => {
     await page.send("问单选");
     await waitCards(page, 1, 30000);
     await page.sleep(300);
-    await page.click("#stopHintBtn");
+    await page.click("#messages .session-view:not(.off) .msg-endhint-stop");
     await waitDone(page, 4, 30000);
     await page.sleep(1200);
     await page.shot("ask-card-stopped.png");

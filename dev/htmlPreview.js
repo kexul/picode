@@ -55,7 +55,7 @@ module.exports = async (page) => {
     await page.sleep(500);
 
     const sessionInfo = JSON.parse(await page.eval(`
-        const pane = document.querySelector(".session-pane");
+        const pane = document.querySelector(".session-view:not(.off) .session-pane");
         return JSON.stringify({
             cwd: (document.querySelector("#sessionPath .sp-text") || {}).textContent || "",
             sessionId: pane ? (pane.dataset.sessionId || "") : "",

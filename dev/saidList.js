@@ -56,7 +56,7 @@ module.exports = async (page) => {
 
     /** 窗格顶上第一条露出来的用户消息是第几条（0 起）与它离窗格顶多远。 */
     const topUser = () => page.eval(`
-        const pane = document.querySelector(".session-view .session-pane");
+        const pane = document.querySelector(".session-view:not(.off) .session-pane");
         const pt = pane.getBoundingClientRect().top;
         const all = Array.from(pane.querySelectorAll(".msg.user"));
         let idx = -1, at = 0;
@@ -70,13 +70,13 @@ module.exports = async (page) => {
     /** 像用户那样滚回底部：分两步（先把可能残留的「程序滚动」标记用掉，再滚到底）。 */
     const scrollToBottom = async () => {
         await page.eval(`
-            const pane = document.querySelector(".session-view .session-pane");
+            const pane = document.querySelector(".session-view:not(.off) .session-pane");
             pane.scrollTop = Math.max(0, pane.scrollTop - 240);
             return true;
         `);
         await page.sleep(180);
         await page.eval(`
-            const pane = document.querySelector(".session-view .session-pane");
+            const pane = document.querySelector(".session-view:not(.off) .session-pane");
             pane.scrollTop = pane.scrollHeight;
             return true;
         `);
@@ -152,7 +152,7 @@ module.exports = async (page) => {
 
     await page.click("#saidBtn");
     await page.sleep(200);
-    await page.eval(`document.querySelector(".session-view .session-pane").click(); return true;`);
+    await page.eval(`document.querySelector(".session-view:not(.off) .session-pane").click(); return true;`);
     await page.sleep(200);
     const outClosed = await page.eval(`const menu = document.getElementById("saidMenu"); return !menu || menu.classList.contains("hidden");`);
     console.log("  点别处收起=" + outClosed);

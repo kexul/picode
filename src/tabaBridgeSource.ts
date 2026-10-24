@@ -143,7 +143,7 @@ const TABA_PARAMS = {
     type: "object",
     properties: {
         name: { type: "string", description: "显示名，一眼能看出这个子会话去干什么，例如“侦察: 认证模块”。" },
-        task: { type: "string", description: "任务说明。要自包含：子会话开的是全新会话，看不到你这边的对话，需要的背景都得写进去；要它看什么文件就把路径写进任务，它自己会去读。" },
+        task: { type: "string", description: "任务说明。要自包含：子会话开的是全新会话，看不到你这边的对话（只拿到本会话记录文件的路径，需要时它自己去读），所以需要它知道的背景还是得写进任务；要它看什么文件就把路径写进任务，它自己会去读。" },
         model: { type: "string", description: "指定模型，例如 local/glm-5.3-flash。不填跟随你这边的模型。" },
         thinking: { type: "string", description: "指定思考强度：minimal / low / medium / high / xhigh / max。" },
         tools: { type: "string", description: "工具白名单，逗号分隔。真要改文件的活不传（默认 read,bash,edit,write；bash 能改文件，带它就不算只读）；只读摸底传 read,grep,find,ls；要跑命令或测试的调查传 read,bash,grep,find,ls。" },

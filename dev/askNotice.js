@@ -42,7 +42,7 @@ const STUB_NOTIFY = `
 /** 这块屏现在显示的是哪个会话（页面上挂着的那块窗格）。 */
 async function activeSessionOf(page) {
     return page.eval(`
-        const pane = document.querySelector('#messages .session-pane');
+        const pane = document.querySelector('#messages .session-view:not(.off) .session-pane');
         return pane ? pane.dataset.sessionId : null;
     `);
 }
@@ -101,7 +101,7 @@ async function pickOption(page, index) {
 /** 等这一轮跑完（停止生成那颗按钮收起来）。 */
 async function waitIdle(page) {
     await waitFor(
-        () => page.eval("const b = document.getElementById('stopHintBtn'); return !!(b && b.classList.contains('hidden'));"),
+        () => page.eval("const b = document.querySelector('.session-view:not(.off) .msg-endhint-stop'); return !!(b && b.classList.contains('hidden'));"),
         30000,
         "这一轮跑完",
     );

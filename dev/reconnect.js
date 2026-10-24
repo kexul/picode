@@ -55,13 +55,13 @@ function check(cond, text) { (cond ? ok : bad)(text); }
 /** 界面上"正在输出"相关的几处状态。 */
 async function uiState(page) {
     return page.eval(`
-        const stop = document.getElementById('stopHintBtn');
-        const status = document.querySelector('.pane-status');
+        const stop = document.querySelector('.session-view:not(.off) .msg-endhint-stop');
+        const status = document.querySelector('#messages .session-view:not(.off) .pane-status');
         const nameBtn = document.getElementById('sessionName');
-        const bubbles = document.querySelectorAll('.msg.assistant');
+        const bubbles = document.querySelectorAll('#messages .session-view:not(.off) .msg.assistant');
         return {
             stopShown: !!(stop && !stop.classList.contains('hidden')),
-            typing: !!document.querySelector('.typing'),
+            typing: !!document.querySelector('#messages .session-view:not(.off) .typing'),
             nameStreaming: !!(nameBtn && nameBtn.classList.contains('streaming')),
             status: status ? status.innerText.replace(/\\s+/g, ' ').trim() : '',
             answer: Array.from(bubbles).map(function (e) { return e.innerText; }).join('\\n'),
@@ -77,7 +77,7 @@ function printState(tag, st) {
 
 /** 页面上的正文（助手气泡）。 */
 async function answerText(page) {
-    return page.eval("return Array.from(document.querySelectorAll('.msg.assistant')).map(function (e) { return e.innerText; }).join('\\n')");
+    return page.eval("return Array.from(document.querySelectorAll('#messages .session-view:not(.off) .msg.assistant')).map(function (e) { return e.innerText; }).join('\\n')");
 }
 
 /** 三条"还在输出"的界面证据都齐了吗（停止键 + 三点动画 + 名字在闪）。 */
@@ -165,12 +165,12 @@ async function waitBackendCard(host, ms) {
 
 /** 消息流里有没有一张还等着作答的问话卡片。 */
 async function cardOnPage(page) {
-    return page.eval("return document.querySelectorAll('.ask-card:not(.done)').length > 0;");
+    return page.eval("return document.querySelectorAll('#messages .session-view:not(.off) .ask-card:not(.done)').length > 0;");
 }
 
 /** 消息流里有没有一张已经定住的问话卡片。 */
 async function cardDoneOnPage(page) {
-    return page.eval("return document.querySelectorAll('.ask-card.done').length > 0;");
+    return page.eval("return document.querySelectorAll('#messages .session-view:not(.off) .ask-card.done').length > 0;");
 }
 
 /** 一直等到消息流里出现一张还等着作答的卡片（或超时返回 false）。 */
@@ -322,7 +322,7 @@ async function sceneAskCard(page, harness) {
 
     // 补回来的卡片得能答：点第一行选项
     await page.eval(`(() => {
-        const cs = document.querySelectorAll('.ask-card:not(.done)');
+        const cs = document.querySelectorAll('#messages .session-view:not(.off) .ask-card:not(.done)');
         const c = cs[cs.length - 1];
         c.querySelectorAll('.ask-opt')[0].click();
     })(); return true;`);
@@ -346,7 +346,7 @@ async function sceneAskCard(page, harness) {
     if (!again) { return; }
     // 在卡片上做个记号、往“自己写”里打一半的字
     await page.eval(`(() => {
-        const cs = document.querySelectorAll('.ask-card:not(.done)');
+        const cs = document.querySelectorAll('#messages .session-view:not(.off) .ask-card:not(.done)');
         const c = cs[cs.length - 1];
         c.dataset.probe = "kept";
         c.querySelector('.ask-input').value = "写了一半";
@@ -371,7 +371,7 @@ async function sceneAskCard(page, harness) {
     check(kept === "写了一半", "重连重发没动页面上那张卡片（记号与打了一半的字都留着）");
     // 把这张答掉收尾，别让它挂着等 25 分钟
     await page.eval(`(() => {
-        const cs = document.querySelectorAll('.ask-card:not(.done)');
+        const cs = document.querySelectorAll('#messages .session-view:not(.off) .ask-card:not(.done)');
         if (cs.length) { cs[cs.length - 1].querySelectorAll('.ask-opt')[1].click(); }
     })(); return true;`);
     await sleep(800);
@@ -423,7 +423,7 @@ async function sceneChurn(page, harness) {
         return true;
     `);
     const openingsBefore = await page.eval(
-        "return (document.querySelectorAll('#messages .msg.assistant').length ? Array.from(document.querySelectorAll('#messages .msg.assistant')).map(function (e) { return e.innerText; }).join(String.fromCharCode(10)).match(/好，我用三个工具给你演示一遍/g) : [] || []).length",
+        "return (document.querySelectorAll('#messages .session-view:not(.off) .msg.assistant').length ? Array.from(document.querySelectorAll('#messages .session-view:not(.off) .msg.assistant')).map(function (e) { return e.innerText; }).join(String.fromCharCode(10)).match(/好，我用三个工具给你演示一遍/g) : [] || []).length",
     ) || 0;
     await page.send("随便说点什么");
     const before = await waitStreaming(page, 15000);
@@ -450,10 +450,10 @@ async function sceneChurn(page, harness) {
     check(urls.some((u) => /[?&]since=\d+/.test(String(u))),
         "重连时把“我处理到第几条”写在连接地址上（不用再发一条对账消息）");
     // 反复弄断的过程里补发也要“逐字完整”：开头那句的份数不能因为补发变多（多一份就是重复补了）
-    const all = await page.eval(`return Array.from(document.querySelectorAll('#messages .msg.assistant')).map(function (e) { return e.innerText; }).join(String.fromCharCode(10))`);
+    const all = await page.eval(`return Array.from(document.querySelectorAll('#messages .session-view:not(.off) .msg.assistant')).map(function (e) { return e.innerText; }).join(String.fromCharCode(10))`);
     const openings = (all.match(/好，我用三个工具给你演示一遍/g) || []).length;
     check(openings === openingsBefore + 1, `开头那句只多了这一轮那一份（${openingsBefore} → ${openings}）`);
-    check(await page.eval("return document.querySelectorAll('#messages .tool-row .tool').length") >= 3,
+    check(await page.eval("return document.querySelectorAll('#messages .session-view:not(.off) .tool-row .tool').length") >= 3,
         "工具标签还在");
 }
 
@@ -505,7 +505,7 @@ async function sceneTailLost(page, harness) {
 /** 页面上和“视野 + 消息条数”有关的读数（场景八用）。 */
 async function scrollState(page) {
     return page.eval(`
-        const pane = document.querySelector('#messages .session-pane');
+        const pane = document.querySelector('#messages .session-view:not(.off) .session-pane');
         const kids = pane ? Array.from(pane.children) : [];
         const top = pane ? pane.scrollTop : 0;
         const sig = function (el) {
@@ -536,15 +536,15 @@ async function scrollState(page) {
             viewCount: document.querySelectorAll('#messages .session-view').length,
             visible: visible,
             anchorOrdinal: anchorOrdinal,
-            count: document.querySelectorAll('#messages .msg').length,
+            count: document.querySelectorAll('#messages .session-view:not(.off) .msg').length,
             scrollTop: top,
             anchor: anchor,
             anchorOffset: anchorOffset,
-            moreBtn: !!document.querySelector('.history-more'),
+            moreBtn: !!document.querySelector('#messages .session-view:not(.off) .history-more'),
             atBottom: pane ? (pane.scrollHeight - pane.scrollTop - pane.clientHeight <= 2) : true,
-            firstUser: (document.querySelector('#messages .msg.user') || {}).innerText || '',
-            userCount: document.querySelectorAll('#messages .msg.user').length,
-            assistantCount: document.querySelectorAll('#messages .msg.assistant').length,
+            firstUser: (document.querySelector('#messages .session-view:not(.off) .msg.user') || {}).innerText || '',
+            userCount: document.querySelectorAll('#messages .session-view:not(.off) .msg.user').length,
+            assistantCount: document.querySelectorAll('#messages .session-view:not(.off) .msg.assistant').length,
         };
     `);
 }
@@ -573,13 +573,13 @@ async function sceneRedrawScroll(page, harness) {
     // 一轮真的跑完再发下一句：轮子还在转就发，会被当成排队插话，会话历史里就多出一份
     // 一模一样的“第 N 轮”（假模型那边也照收），这一场就验不清了。
     const turnDone = () => page.eval(`
-        const list = document.querySelectorAll('#messages .msg.assistant');
+        const list = document.querySelectorAll('#messages .session-view:not(.off) .msg.assistant');
         const last = list.length ? list[list.length - 1].innerText : '';
-        const stop = document.getElementById('stopHintBtn');
+        const stop = document.querySelector('.session-view:not(.off) .msg-endhint-stop');
         return {
             n: list.length,
             said: last.includes('完事'),
-            busy: !!(stop && !stop.classList.contains('hidden')) || !!document.querySelector('.typing'),
+            busy: !!(stop && !stop.classList.contains('hidden')) || !!document.querySelector('#messages .session-view:not(.off) .typing'),
         };
     `);
     for (let i = 0; i < 20; i++) {
@@ -600,7 +600,7 @@ async function sceneRedrawScroll(page, harness) {
 
     // 往上翻到中间（别贴底）：从这一刻起算“人正看着的地方”
     await page.eval(`
-        const pane = document.querySelector('#messages .session-pane');
+        const pane = document.querySelector('#messages .session-view:not(.off) .session-pane');
         // 翻到第 3 轮那句（用户消息，重画前后一模一样：拿它当视野的记号最靠得住）
         const users = pane.querySelectorAll('.msg.user');
         const at = users.length > 2 ? users[2] : users[0];
@@ -704,7 +704,7 @@ async function sceneRestart(page, harness) {
     check(firstTypes.includes("clear"), "第一次回来是整屏重画（收到了 clear）");
 
     await page.sleep(1200);
-    const kept = await page.eval("return document.querySelectorAll('#messages .msg.user').length");
+    const kept = await page.eval("return document.querySelectorAll('#messages .session-view:not(.off) .msg.user').length");
     check(kept >= 1, `重画之后内容还在（${kept} 条用户消息）`);
 
     // 第二次回来：进度已经对齐到新序号 → 一条不缺，不该再重画
@@ -737,7 +737,7 @@ async function sceneWindowed(page, harness) {
         await page.sleep(1500);
         await waitIdle(page, 20000);
         // 攒够 12 轮（24 条 user/assistant）→ 窗口留 20 条，剩下 4 条就是那颗按钮
-        const bubbles = () => page.eval("return document.querySelectorAll('#messages .msg.assistant').length");
+        const bubbles = () => page.eval("return document.querySelectorAll('#messages .session-view:not(.off) .msg.assistant').length");
         for (let i = 0; i < 12; i += 1) {
             const before = await bubbles();
             await page.send("第 " + (i + 1) + " 轮");
@@ -758,9 +758,9 @@ async function sceneWindowed(page, harness) {
         check(done, "按窗口重画完了（等到 syncPoint）");
 
         const state = await page.eval(`
-            const pane = document.querySelector('#messages .session-pane');
+            const pane = document.querySelector('#messages .session-view:not(.off) .session-pane');
             const btns = pane ? pane.querySelectorAll('.history-more') : [];
-            const users = document.querySelectorAll('#messages .msg.user').length;
+            const users = document.querySelectorAll('#messages .session-view:not(.off) .msg.user').length;
             return {
                 buttons: btns.length,
                 firstIsButton: !!(pane && pane.firstElementChild && pane.firstElementChild.classList.contains('history-more')),
@@ -777,14 +777,14 @@ async function sceneWindowed(page, harness) {
 
         // 点一下：那一批补回来之后还是只有一颗按钮、内容不多不少
         await page.eval(`
-            const btn = document.querySelector('#messages .history-more');
+            const btn = document.querySelector('#messages .session-view:not(.off) .history-more');
             if (btn) { btn.click(); }
             return true;
         `);
         await page.sleep(2500);
         const after = await page.eval(`return {
-            buttons: document.querySelectorAll('#messages .history-more').length,
-            users: document.querySelectorAll('#messages .msg.user').length,
+            buttons: document.querySelectorAll('#messages .session-view:not(.off) .history-more').length,
+            users: document.querySelectorAll('#messages .session-view:not(.off) .msg.user').length,
         }`);
         check(after.buttons === 0, `翻完之后按钮收掉了（实际 ${after.buttons} 颗）`);
         check(after.users === 12, `翻回来的那两条补上了、也没有重复（${after.users} 条用户消息，应为 12）`);
@@ -797,8 +797,8 @@ async function sceneWindowed(page, harness) {
         const done2 = await waitForType(page, at2, "syncPoint", 30000);
         await page.sleep(800);
         const again = await page.eval(`return {
-            buttons: document.querySelectorAll('#messages .history-more').length,
-            users: document.querySelectorAll('#messages .msg.user').length,
+            buttons: document.querySelectorAll('#messages .session-view:not(.off) .history-more').length,
+            users: document.querySelectorAll('#messages .session-view:not(.off) .msg.user').length,
         }`);
         check(done2, "再按窗口重画一次也画完了（等到 syncPoint）");
         check(again.buttons === 1, `重画一遍之后「加载更早」还是一颗（实际 ${again.buttons} 颗）`);

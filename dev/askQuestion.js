@@ -68,7 +68,7 @@ module.exports = async (page) => {
     await page.send("再问我一次同样的问题（options 写 [\"A\",\"B\"]），这回我要把它停掉。");
     await waitCards(page, 1, 180000);
     await page.sleep(300);
-    await page.click("#stopHintBtn");
+    await page.click("#messages .session-view:not(.off) .msg-endhint-stop");
     await page.sleep(3000);
     await page.shot("ask-stopped.png");
 

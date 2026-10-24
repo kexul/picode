@@ -6,7 +6,7 @@
  *   1. 判官正在验的时候你插一句话：目标条还是「进行中」，存盘还是 active；
  *   2. 正在验的那个判官不动（不因为你插话被收掉），照样验完、结论照样发回工人；
  *   3. 循环接着转：工人下一轮跑起来，轮数照涨；
- *   4. 想停还是自己打 /goal 暂停（命令那条路没被影响）。
+ *   4. 想停就点目标条上的「暂停」（那颗按钮没被插话影响）。
  *
  *   npm run web:shot -- --fake-pi --script dev/goalInterject.js
  */
@@ -26,6 +26,9 @@ module.exports = async (page) => {
     console.log((ok ? "✓ " : "✗ ") + what + (detail ? "  " + JSON.stringify(detail) : ""));
   };
   const goalsFile = path.join(process.env.PICHAT_HOME || path.join(scratch, "pichat"), "goals.json");
+  // 调试目录里那份是上一跑留下的（会话文件一个个不同，每条都留在里面）：先清空，
+  // 不然「取第一条」取到的是上一次那个会话的目标，检查就瞎了。
+  try { fs.rmSync(goalsFile, { force: true }); } catch { /* 没有就算了 */ }
   const goal = () => {
     try {
       const all = JSON.parse(fs.readFileSync(goalsFile, "utf8")).goals || {};
@@ -82,7 +85,7 @@ module.exports = async (page) => {
 
   await page.send("/goal 把 dev/README.md 里那段命令全部跑通");
   await page.waitAnswer("验收清单");
-  await page.send("/goal 开始");
+  await page.goalPress("play");
   await until("判官开始验", async () => (await bar()).text.includes("判官正在验"));
   const rowsBefore = await openRows();
   check("判官在列表里", rowsBefore.some((r) => r.includes("判官 · 第 1 轮")), rowsBefore);
@@ -120,13 +123,13 @@ module.exports = async (page) => {
   check("插话以后循环照转（轮数涨了、目标还是进行中）", g1.phase === "active" && g1.rounds >= 2, { phase: g1.phase, rounds: g1.rounds });
   await page.shot("goal-interject.png");
 
-  // 想停还是自己打命令（这条没变）
-  await page.send("/goal 暂停");
-  const stopped = await until("打 /goal 暂停 就停", async () => {
+  // 想停就点目标条上那颗按钮（它变成「暂停」了）
+  await page.goalPress("play");
+  const stopped = await until("点「暂停」就停", async () => {
     const x = await bar();
     return x.tone === "stop" ? x : null;
   }, 30000);
-  check("打 /goal 暂停 照样能停", stopped.text.includes("已暂停"), stopped);
+  check("点「暂停」照样能停", stopped.text.includes("已暂停"), stopped);
 
   if (problems.length) {
     throw new Error("插话不该停目标：\n- " + problems.join("\n- "));

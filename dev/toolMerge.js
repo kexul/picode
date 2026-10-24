@@ -40,7 +40,7 @@ function dump(page) {
             for (const n of c.querySelectorAll(".tg-plus")) { n.remove(); }
             return c.textContent.trim().replace(/\\s+/g, " ");
         };
-        for (const pane of document.querySelectorAll(".session-pane")) {
+        for (const pane of document.querySelectorAll(".session-view:not(.off) .session-pane")) {
             for (const el of pane.children) {
                 const cls = el.className || "";
                 if (cls.indexOf("tool-row") >= 0) {

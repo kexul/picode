@@ -109,7 +109,7 @@ async function main() {
             console.log(`投流式内容：${answer.length} 个字符，每 25 毫秒一批 ${chunk} 个字符（约 ${charsPerSec} 字符/秒）`);
             await page.eval(`
                 const answer = ${JSON.stringify(answer)};
-                const pane = document.querySelector(".session-pane");
+                const pane = document.querySelector(".session-view:not(.off) .session-pane");
                 const sessionId = pane.dataset.sessionId;
                 const send = function (msg) {
                     window.dispatchEvent(new MessageEvent("message", { data: Object.assign({ sessionId: sessionId }, msg) }));
@@ -154,7 +154,7 @@ async function main() {
             await cdp.send("Profiler.setSamplingInterval", { interval: 200 });
             await cdp.send("Profiler.start");
             const took = await page.eval(`
-                const pane = document.querySelector(".session-pane");
+                const pane = document.querySelector(".session-view:not(.off) .session-pane");
                 const sessionId = pane.dataset.sessionId;
                 const send = function (msg) {
                     window.dispatchEvent(new MessageEvent("message", { data: Object.assign({ sessionId: sessionId }, msg) }));
@@ -182,7 +182,7 @@ async function main() {
             // 先把一段长内容一次性投进去（像刚打开一个长会话），再像看消息那样往上滑着看
             const answer = buildAnswer(6, 2).slice(0, Math.max(4000, prefill));
             await page.eval(`
-                const pane = document.querySelector(".session-pane");
+                const pane = document.querySelector(".session-view:not(.off) .session-pane");
                 const sessionId = pane.dataset.sessionId;
                 const send = function (msg) {
                     window.dispatchEvent(new MessageEvent("message", { data: Object.assign({ sessionId: sessionId }, msg) }));
@@ -242,7 +242,7 @@ async function main() {
             });
         `);
         const domInfo = await page.eval(`
-            const pane = document.querySelector(".session-pane");
+            const pane = document.querySelector(".session-view:not(.off) .session-pane");
             return {
                 nodes: document.getElementsByTagName("*").length,
                 messages: document.querySelectorAll(".msg").length,

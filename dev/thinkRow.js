@@ -36,7 +36,7 @@ function dump(page) {
             for (const n of c.querySelectorAll(".tg-plus")) { n.remove(); }
             return c.textContent.trim().replace(/\\s+/g, " ");
         };
-        for (const pane of document.querySelectorAll(".session-pane")) {
+        for (const pane of document.querySelectorAll(".session-view:not(.off) .session-pane")) {
             for (const el of pane.children) {
                 const cls = el.className || "";
                 if (cls.indexOf("tool-row") >= 0) {
@@ -217,7 +217,7 @@ module.exports = async (page) => {
     if (!third.includes("工具行：[think][bash]")) { problems.push("换段把上一段那颗（后面跟着工具的那颗）也动了"); }
 
     // ---- 第八幕：整屏重画收尾（重连 / 刷新）会补一份会话列表；末尾那颗也靠这一步并回去 ----
-    const sid = await page.eval(`return document.querySelector(".session-pane").dataset.sessionId;`);
+    const sid = await page.eval(`return document.querySelector(".session-view:not(.off) .session-pane").dataset.sessionId;`);
     await post(page, [
         { type: "assistantFull", text: "重画前那段：" },
         { type: "thinkingFull", text: "重画收尾时该并回上一段那颗。" },

@@ -535,7 +535,7 @@ module.exports = async (page) => {
 
     // 会话目录（顶条上那行小字）与会话标识（轮到自己看的那个会话）
     const sessionInfo = JSON.parse(await page.eval(`
-        const pane = document.querySelector(".session-pane");
+        const pane = document.querySelector(".session-view:not(.off) .session-pane");
         return JSON.stringify({
             cwd: (document.querySelector("#sessionPath .sp-text") || {}).textContent || "",
             sessionId: pane ? (pane.dataset.sessionId || "") : "",
@@ -1359,7 +1359,7 @@ module.exports = async (page) => {
         !!saved && fs.statSync(saved).size === BINARY_BYTES,
         saved ? path.basename(saved) + " " + fs.statSync(saved).size + " 字节" : "没等到文件");
     check("点下载不把页面顶掉（界面还在这儿）",
-        await page.eval(`return !!document.getElementById("fileSidebar") && document.querySelectorAll(".session-pane").length > 0;`));
+        await page.eval(`return !!document.getElementById("fileSidebar") && document.querySelectorAll(".session-view:not(.off) .session-pane").length > 0;`));
 
     // ==================== 超大文件：给「太大，点这里下载」 ====================
     console.log("点文件链接：" + await clickLink(FILE.big));
@@ -1388,7 +1388,7 @@ module.exports = async (page) => {
 
     // 下载在跑的时候界面还答得上话（几 MB 走单独的请求，页面这边不经手正文）
     const bigFetch = JSON.parse(await page.eval(`
-        const sid = (document.querySelector(".session-pane") || { dataset: {} }).dataset.sessionId || "";
+        const sid = (document.querySelector(".session-view:not(.off) .session-pane") || { dataset: {} }).dataset.sessionId || "";
         const url = "/file?session=" + encodeURIComponent(sid) + "&path=" + encodeURIComponent(${JSON.stringify(FILE.big)}) + "&download=1";
         return (async function () {
             const started = performance.now();
@@ -1912,7 +1912,7 @@ module.exports = async (page) => {
 
     // ==================== 直接打那条文件地址（拒绝的几种情形 + 条件请求）====================
     const raw = await page.eval(`
-        const sid = (document.querySelector(".session-pane") || { dataset: {} }).dataset.sessionId || "";
+        const sid = (document.querySelector(".session-view:not(.off) .session-pane") || { dataset: {} }).dataset.sessionId || "";
         const get = async function (p, opts) {
             const o = opts || {};
             const session = o.session === undefined ? sid : o.session;
@@ -2002,7 +2002,7 @@ module.exports = async (page) => {
 
     // ==================== 直接打那条目录地址 ====================
     const rawDir = JSON.parse(await page.eval(`
-        const sid = (document.querySelector(".session-pane") || { dataset: {} }).dataset.sessionId || "";
+        const sid = (document.querySelector(".session-view:not(.off) .session-pane") || { dataset: {} }).dataset.sessionId || "";
         const get = async function (p, session) {
             const s = session === undefined ? sid : session;
             const resp = await fetch("/dir?session=" + encodeURIComponent(s) + "&path=" + encodeURIComponent(p));
@@ -2151,7 +2151,7 @@ module.exports = async (page) => {
 
     // 直接打那条地址，把三档的状态与正文核一遍（这一列上看到的就是它）
     const rawName = JSON.parse(await page.eval(`
-        const sid = (document.querySelector(".session-pane") || { dataset: {} }).dataset.sessionId || "";
+        const sid = (document.querySelector(".session-view:not(.off) .session-pane") || { dataset: {} }).dataset.sessionId || "";
         const get = async function (p) {
             const resp = await fetch("/file?session=" + encodeURIComponent(sid) + "&path=" + encodeURIComponent(p));
             const text = await resp.text();

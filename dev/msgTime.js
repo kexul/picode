@@ -61,7 +61,7 @@ module.exports = async (page) => {
     /** 第 index 条正文现在写着什么、露没露；先把鼠标挪到它身上再读。 */
     const lookAt = async (index) => {
         const box = await page.eval(`
-            const el = document.querySelectorAll(".session-pane .msg.assistant")[${index}];
+            const el = document.querySelectorAll(".session-view:not(.off) .session-pane .msg.assistant")[${index}];
             if (!el) { return null; }
             el.scrollIntoView({ block: "center" });
             const r = el.getBoundingClientRect();
@@ -71,7 +71,7 @@ module.exports = async (page) => {
         await move(box.x, box.y);
         await page.sleep(200);
         return page.eval(`
-            const el = document.querySelectorAll(".session-pane .msg.assistant")[${index}];
+            const el = document.querySelectorAll(".session-view:not(.off) .session-pane .msg.assistant")[${index}];
             const t = el ? el.querySelector(".msg-time") : null;
             if (!t) { return null; }
             return {
@@ -90,9 +90,9 @@ module.exports = async (page) => {
     await move(2, 2);
     await page.sleep(200);
     const idle = await page.eval(`
-        const shown = Array.from(document.querySelectorAll(".session-pane .msg.assistant .msg-time"))
+        const shown = Array.from(document.querySelectorAll(".session-view:not(.off) .session-pane .msg.assistant .msg-time"))
             .map((t) => Math.round(Number(getComputedStyle(t).opacity) * 100) / 100);
-        const el = document.querySelectorAll(".session-pane .msg.assistant")[0];
+        const el = document.querySelectorAll(".session-view:not(.off) .session-pane .msg.assistant")[0];
         const t = el ? el.querySelector(".msg-time") : null;
         return {
             opacities: shown,
@@ -133,7 +133,7 @@ module.exports = async (page) => {
     }
     // 没带时刻的那一条按“现在”算：给一分钟的宽限（别把跑得慢当成写错）
     const live = await page.eval(`
-        const el = document.querySelectorAll(".session-pane .msg.assistant")[3];
+        const el = document.querySelectorAll(".session-view:not(.off) .session-pane .msg.assistant")[3];
         const t = el ? el.querySelector(".msg-time") : null;
         return t ? t.title : "";
     `);
@@ -144,7 +144,7 @@ module.exports = async (page) => {
     // 这一条走真路（真 pi 进程 → 后端 → 界面）：要是后端回放时忘了带时刻，重放出来就会写成“现在”，
     // 跟原来那一刻对不上。中间特意停 10 秒再刷新：差得开，蒙不过去。
     const lastTime = () => page.eval(`
-        const els = Array.from(document.querySelectorAll(".session-pane .msg.assistant"));
+        const els = Array.from(document.querySelectorAll(".session-view:not(.off) .session-pane .msg.assistant"));
         const el = els[els.length - 1];
         const t = el ? el.querySelector(".msg-time") : null;
         return t ? { text: t.dataset.time, title: t.title } : null;

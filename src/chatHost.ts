@@ -819,7 +819,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             {
                 action: "theme",
                 label: "界面颜色",
-                desc: "对话界面的深浅配色，插件里的对话面板与浏览器页面共用这一份（浅色即网页端的白底那套，深色按 VSCode 深色主题的取值）",
+                desc: "",
                 check: null,
                 value: this.getThemeMode(),
                 options: [

@@ -26,7 +26,7 @@ function check(cond, text) { (cond ? ok : bad)(text); }
 /** 这块屏现在显示的是哪个会话（页面上挂着的那块窗格）。 */
 async function activeSessionOf(page) {
     return page.eval(`
-        const pane = document.querySelector('#messages .session-pane');
+        const pane = document.querySelector('#messages .session-view:not(.off) .session-pane');
         return pane ? pane.dataset.sessionId : null;
     `);
 }

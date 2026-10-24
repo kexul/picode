@@ -54,7 +54,7 @@ async function main() {
     try {
         await page.waitReady();
         await page.eval(`
-            const pane = document.querySelector(".session-pane");
+            const pane = document.querySelector(".session-view:not(.off) .session-pane");
             const id = pane.dataset.sessionId;
             window.__send = (m) => window.dispatchEvent(new MessageEvent("message", { data: Object.assign({ sessionId: id }, m) }));
             return true;

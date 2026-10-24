@@ -35,6 +35,9 @@ module.exports = async (page) => {
   };
 
   const goalsFile = path.join(process.env.PICHAT_HOME || path.join(scratch, "pichat"), "goals.json");
+  // 调试目录里那份是上一跑留下的（会话文件一个个不同，每条都留在里面）：先清空，
+  // 不然「取第一条」取到的是上一次那个会话的目标，检查就瞎了。
+  try { fs.rmSync(goalsFile, { force: true }); } catch { /* 没有就算了 */ }
   const goal = () => {
     try {
       const all = JSON.parse(fs.readFileSync(goalsFile, "utf8")).goals || {};
@@ -116,7 +119,7 @@ module.exports = async (page) => {
   await page.send("/goal 把 dev/README.md 里那段命令全部跑通");
   await page.waitAnswer("验收清单");
   await page.sleep(400);
-  await page.send("/goal 开始");
+  await page.goalPress("play");
   await page.waitAnswer("三个工具都跑过");
 
   // ---- 2. 判官正在验：目标条上要看得到（不然看着像卡住了） ----

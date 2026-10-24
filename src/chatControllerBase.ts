@@ -65,6 +65,7 @@ import {
     buildGoalResumePrompt,
     buildGoalStartPrompt,
     goalBarSummary,
+    isGoalControlWord,
     parseGoalCriteria,
     type GoalCommand,
     type GoalState,
@@ -400,13 +401,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
             {
                 action: "autoLoadLastSession",
                 label: "启动时自动打开最近会话",
-                desc: "进入界面时自动加载当前项目最近一次会话",
+                desc: "",
                 check: this.getAutoLoadLast(),
             },
             {
                 action: "sendKey",
                 label: "发送键",
-                desc: "发送消息的快捷键",
+                desc: "",
                 check: null,
                 value: this.getSendKey(),
                 options: ChatControllerBase.keyOptions(ChatControllerBase.SEND_KEY_LABELS),
@@ -414,7 +415,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             {
                 action: "newSessionKey",
                 label: "新建会话",
-                desc: "新建会话的快捷键",
+                desc: "",
                 check: null,
                 value: this.getNewSessionKey(),
                 options: ChatControllerBase.keyOptions(ChatControllerBase.NEW_SESSION_KEY_LABELS),
@@ -422,7 +423,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             {
                 action: "closeSessionKey",
                 label: "关闭会话",
-                desc: "关掉当前正在看的这个会话（会话文件留着，历史会话里还能重新打开）",
+                desc: "会话文件留着，历史会话里还能重新打开",
                 check: null,
                 value: this.getCloseSessionKey(),
                 options: ChatControllerBase.keyOptions(ChatControllerBase.CLOSE_SESSION_KEY_LABELS),
@@ -430,19 +431,19 @@ export abstract class ChatControllerBase implements RuntimeHost {
             {
                 action: "tabSwitchKey",
                 label: "切换会话",
-                desc: "按「项目与会话」里「正在对话」那一段的行序切上一个 / 下一个（选项存储键名仍是 tabSwitchKey，改名会让已有设置丢失）",
+                desc: "按「项目与会话」里「正在对话」那一段的行序切上一个 / 下一个",
                 check: null,
                 value: this.getTabSwitchKey(),
                 options: ChatControllerBase.keyOptions(ChatControllerBase.TAB_SWITCH_KEY_LABELS),
             },
             {
-                action: "focusInputKey", label: "聚焦输入框", desc: "在任意 VS Code 焦点位置打开 Pi Chat 并聚焦输入框", check: null,
+                action: "focusInputKey", label: "聚焦输入框", desc: "在 VS Code 里任何位置都能按", check: null,
                 value: this.getFocusInputKey(), options: ChatControllerBase.keyOptions(ChatControllerBase.FOCUS_INPUT_KEY_LABELS),
             },
             {
                 action: "fontSize",
                 label: "字号",
-                desc: "拖动调整对话内容字号（默认跟随 VSCode 设置）",
+                desc: "",
                 check: null,
                 kind: "slider",
                 value: this.getFontSize(),
@@ -451,10 +452,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
             {
                 action: "notifyTurnEnd",
                 label: "跑完发系统通知",
-                desc: "任何会话（别的屏在聊的、后台的也算）跑完一轮都发一条系统通知，点一下切到那个会话；"
-                    + "模型在那儿问你一道选择题时也发一条，免得你不知道它在等你答。"
-                    + "别人派的子会话跑完不算（它的结果交回派它的那个会话，那边跑完再发）。"
-                    + "每台设备能不能收到看它自己的浏览器：没给通知权限、手机上用局域网地址打开时都收不到",
+                desc: "别的屏在聊的、后台的会话跑完也发一条，点一下切到那个会话；"
+                    + "模型在那儿问你选择题时也发一条。别人派的子会话跑完不算",
                 check: this.notifyTurnEndEnabled(),
             },
         ];
@@ -839,16 +838,19 @@ export abstract class ChatControllerBase implements RuntimeHost {
     //  目标（/goal）：定一个一直干到验收通过的目标
     // ========================================================================
     //
-    //  第一段（现在这一版）：/goal 定目标 → 先跟模型谈好验收清单 → /goal 开始 才真开跑 →
+    //  第一段（现在这一版）：/goal 定目标 → 先跟模型谈好验收清单 → 目标条上按「开始」才真开跑 →
     //  目标按会话文件存盘（见 goalFiles.ts），输入框上头那一条「目标条」常驻显示。
     //  第二段（还没做）：每轮跑完派一个判官子会话验一次，没过就把批评发回来接着干。
+    //
+    //  命令只有 `/goal <要干成什么>`（定目标）和 `/goal`（看状态）两个：开始 / 暂停 / 继续 / 停止
+    //  都是目标条点开以后那几颗按钮（它们也走 onGoalCommand，只是不从输入的文字里认）。
 
     /** 每个会话的目标（panel id → 目标）。内存里这份是热的，盘上那份按会话文件存。 */
     protected readonly goals = new Map<string, GoalState>();
     /** 已经问过存档的会话：问过一次没有就是没有，不必每推一次会话列表就去读盘。 */
     private readonly goalChecked = new Set<string>();
 
-    /** RuntimeHost.onGoalCommand：用户在某个会话里打了 /goal 系列命令。 */
+    /** RuntimeHost.onGoalCommand：定目标 / 看状态（命令），以及目标条上那几颗按钮。 */
     public onGoalCommand(panelId: string, cmd: GoalCommand): void {
         const rt = this.panels.get(panelId);
         if (!rt) { return; }
@@ -863,10 +865,30 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /**
+     * 目标条上那颗「开始 / 继续」：还没开跑的就开始，暂停过的就接着跑。
+     * （正在跑、已经完成：按了不动 —— 那颗按钮这时候本来就不显示。）
+     */
+    protected goalPlay(rt: SessionRuntime): void {
+        const goal = this.goalGet(rt);
+        if (!goal) { return; }
+        if (goal.phase === "paused") { this.goalHold(rt, false); return; }
+        if (goal.phase === "negotiating") { this.goalStart(rt); return; }
+    }
+
+    /**
      * /goal <目标>：记下目标，把原文连同谈判提示发进对话（合成一条，见 buildGoalNegotiationPrompt），
      * 等模型回验收清单。清单由 onTurnEnd 里那段取下来（见 goalCaptureCriteria）。
      */
     protected goalSet(rt: SessionRuntime, objective: string): void {
+        // 「开始」「停止」这些词以前是命令：现在都是从目标条上点按钮，别把它们定成目标
+        if (isGoalControlWord(objective)) {
+            this.postToSession(rt.id, {
+                type: "system",
+                text: "开始 / 暂停 / 停止 都改成目标条上的按钮了（右边那两颗，收着也能点）。"
+                    + "要定目标就打 /goal <要干成什么>。",
+            });
+            return;
+        }
         const replaced = this.goalGet(rt);
         this.goals.set(rt.id, {
             objective,
@@ -885,7 +907,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         rt.handleSend(buildGoalNegotiationPrompt({ objective }));
     }
 
-    /** /goal 开始：清单有了就正式开跑；清单还没拿到就再要一次。 */
+    /** 目标条上的「开始」：清单有了就正式开跑；清单还没拿到就再要一次。 */
     protected goalStart(rt: SessionRuntime): void {
         const goal = this.goalGet(rt);
         if (!goal) {
@@ -912,7 +934,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         rt.handleSend(buildGoalStartPrompt(goal));
     }
 
-    /** /goal 暂停 与 /goal 继续（只是不再自动往前推，对话、文件都不动）。 */
+    /** 「暂停」与「继续」（只是不再自动往前推，对话、文件都不动）。 */
     protected goalHold(rt: SessionRuntime, pause: boolean): void {
         const goal = this.goalGet(rt);
         if (!goal) {
@@ -930,7 +952,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             goal.updatedAt = Date.now();
             this.goalSave(rt);
             this.goalBroadcast(rt.id);
-            this.postToSession(rt.id, { type: "system", text: "目标暂停了。打 /goal 继续 接着跑。" });
+            this.postToSession(rt.id, { type: "system", text: "目标暂停了。点开目标条按「继续」接着跑。" });
             return;
         }
         if (goal.phase === "active") {
@@ -953,7 +975,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         rt.handleSend(buildGoalResumePrompt(goal));
     }
 
-    /** /goal 清除：不再追踪这个目标（对话和文件都不动）；盘上那一份也一并抹掉。 */
+    /** 目标条上的「停止」：不再追踪这个目标（对话和文件都不动）；盘上那一份也一并抹掉。 */
     protected goalClear(rt: SessionRuntime): void {
         const had = !!this.goalGet(rt);
         this.goalCancelJudge(rt.id);
@@ -964,7 +986,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.goalBroadcast(rt.id);
         this.postToSession(rt.id, {
             type: "system",
-            text: had ? "目标清除了（只是不再追踪它，对话和文件都不动）。" : "本来就没有目标。",
+            text: had ? "目标停止了（不再追踪它，对话和文件都不动）。" : "本来就没有目标。",
         });
     }
 
@@ -1003,7 +1025,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         });
     }
 
-    /** 目标还在谈的时候，把模型这一轮回复里的验收清单取下来，等用户 /goal 开始。 */
+    /** 目标还在谈的时候，把模型这一轮回复里的验收清单取下来，等用户在目标条上按「开始」。 */
     protected goalCaptureCriteria(info: TurnEndInfo): void {
         const goal = this.goals.get(info.panelId);
         if (!goal || goal.phase !== "negotiating") { return; }
@@ -1024,7 +1046,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     //  跑完不交回结果、只有它能调 update_goal）→ 判官自己动手验 → 报「过了」就收工；
     //  报「没过」就把批评发回给工人开下一轮。
     //  停的条件只有两条：验收通过、判官那一路坏了（那一轮出错，或者既没报结论也没说话）。
-    //  没有轮数 / 时长 / 没进展这类自动停 —— 要停就打 /goal 暂停。
+    //  没有轮数 / 时长 / 没进展这类自动停 —— 要停就点目标条上的「暂停」。
     //  你自己插一句话不算停：目标照跑，判官那一轮照验，
     //  它的结论也照常发回工人（话发了、活干了，两条路并行往下走）。
     //
@@ -1199,7 +1221,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.goalCancelJudge(panelId);
         if (rt) { this.goalSave(rt); }
         this.goalBroadcast(panelId);
-        this.postToSession(panelId, { type: "system", text: `目标停了：${reason}。接着跑就打 /goal 继续。` });
+        this.postToSession(panelId, { type: "system", text: `目标停了：${reason}。点开目标条按「开始」接着跑。` });
     }
 
     /** 关掉某个工人正在跑的那个判官（暂停 / 清除 / 工人被关掉时用）。 */
@@ -1328,8 +1350,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
             }
             this.broadcastSessionList(true);
 
-            // 判官那一轮就是它这一轮的全部：不用拼「任务 + 收尾要求」（那是给 taba 子会话的）
-            const taskText = opts.rawTask === true ? req.task : buildTaskText({ task: req.task });
+            // 判官那一轮就是它这一轮的全部：不用拼「任务 + 收尾要求」（那是给 taba 子会话的），
+            // 也不带派活那个会话的记录文件（判官要的是工人的文件，见 goalJudge）
+            const taskText = opts.rawTask === true ? req.task : buildTaskText({
+                task: req.task,
+                parentSessionFile: this.tabaParentSessionFile(parentRt, req),
+                parentSessionName: this.sessionDisplayName(parentRt),
+            });
             const ready = await rt.waitReady(ChatControllerBase.TABA_CHILD_READY_TIMEOUT_MS);
             // 等待期间会话被关掉了：登记在关会话时已经清掉了，这里什么都不用做
             if (!this.panels.has(rt.id)) { return; }
@@ -1363,6 +1390,22 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const cfg = this.getConfig();
         if (!cfg.tabaDir) { return; }
         writeRunRecord(tabaRunsDir(cfg.tabaDir), buildRunRecord({ child, state }));
+    }
+
+    /**
+     * 派活那个会话的记录文件（绝对路径、正斜杠），交给子会话当背景用（见 tabaTask.buildParentContextText）。
+     * 扩展报上来的准（它就在那个 pi 进程里）> 会话自己记着的；文件还没落盘就当没有，那一段就不写了。
+     */
+    protected tabaParentSessionFile(parentRt: SessionRuntime, req: TabaSpawnRequest): string {
+        const raw = req.parentSessionFile || parentRt.currentSessionPath || "";
+        if (!raw) { return ""; }
+        const abs = this.resolvePath(raw, parentRt.cwd);
+        try {
+            if (fs.statSync(abs).size <= 0) { return ""; }
+        } catch {
+            return "";
+        }
+        return abs.replace(/\\/g, "/");
     }
 
     /**
@@ -2415,6 +2458,14 @@ export abstract class ChatControllerBase implements RuntimeHost {
         switch (msg.type) {
             case "send": {
                 this.broadcastSendToTab(target.id, msg.text, msg.images);
+                break;
+            }
+            case "goalAct": {
+                // 目标条点开以后那两颗按钮：开始 / 暂停（同一颗，按下换一面）、停止（= 关掉）
+                const act = msg.act;
+                if (act === "start") { this.goalPlay(target); }
+                else if (act === "pause") { this.onGoalCommand(target.id, { kind: "pause" }); }
+                else if (act === "stop") { this.onGoalCommand(target.id, { kind: "clear" }); }
                 break;
             }
             case "abort": {

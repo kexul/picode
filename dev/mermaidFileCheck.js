@@ -94,7 +94,7 @@ async function main() {
         await page.waitReady();
         await sleep(500);
         const info = JSON.parse(await page.eval(`
-            const pane = document.querySelector(".session-pane");
+            const pane = document.querySelector(".session-view:not(.off) .session-pane");
             return JSON.stringify({
                 cwd: (document.querySelector("#sessionPath .sp-text") || {}).textContent || "",
                 sessionId: pane ? (pane.dataset.sessionId || "") : "",
@@ -106,7 +106,7 @@ async function main() {
 
         // 投一句话、顺手把它点开（链接是消息流那条渲染路挂上去的文件链接）
         await page.eval(`
-            const pane = document.querySelector(".session-pane");
+            const pane = document.querySelector(".session-view:not(.off) .session-pane");
             const id = pane.dataset.sessionId;
             const send = (m) => window.dispatchEvent(new MessageEvent("message", { data: Object.assign({ sessionId: id }, m) }));
             send({ type: "clear" });

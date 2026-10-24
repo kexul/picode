@@ -36,7 +36,7 @@ module.exports = async (page) => {
   /** 交回的结果落在用户那侧气泡里。 */
   const userText = () => page.eval("return Array.from(document.querySelectorAll('.msg.user')).map(function (e) { return e.textContent; }).join('\\n');");
   /** 生成中时消息流末尾那颗「停止生成」露着。 */
-  const generating = () => page.eval("var b = document.getElementById('stopHintBtn'); return !!(b && !b.classList.contains('hidden'));");
+  const generating = () => page.eval("var b = document.querySelector('.session-view:not(.off) .msg-endhint-stop'); return !!(b && !b.classList.contains('hidden'));");
 
   /** 说一句、等最后一个气泡里出现要等的字、再等这一轮收尾，最后把这一轮的文字取回来。 */
   const say = async (text, want) => {

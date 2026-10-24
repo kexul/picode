@@ -64,7 +64,7 @@ export function writeGoal(goal: GoalState, sessionFile: string, file: string = g
     return writeAll(file, data);
 }
 
-/** 清掉一个会话的目标（/goal 清除 走这里）。 */
+/** 清掉一个会话的目标（目标条上的「停止」走这里）。 */
 export function dropGoal(sessionFile: string, file: string = goalsFile()): void {
     if (!sessionFile) { return; }
     const data = readAll(file);

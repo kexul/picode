@@ -21,10 +21,10 @@ process.env.PICHAT_HISTORY_WINDOW = process.env.PICHAT_HISTORY_WINDOW || "20";
 const ROUNDS = Number(process.env.ROUNDS || 18);
 const AT_BOTTOM = process.env.AT_BOTTOM === "1";
 
-const PANE = "#messages .session-view .session-pane";
+const PANE = "#messages .session-view:not(.off) .session-pane";
 
 async function userBubbles(page) {
-    return await page.eval("return document.querySelectorAll('.session-pane .msg.user').length");
+    return await page.eval("return document.querySelectorAll('.session-view:not(.off) .session-pane .msg.user').length");
 }
 
 /**

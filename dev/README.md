@@ -99,6 +99,11 @@ npm run web:shot -- --width 900 --height 700 --script dev/saidList.js
 # 验会话那套（顶条名字跟着 pi 标题变 / 切会话 / 关会话：面板与下拉框里那颗 × 点一下就关、点行身只切不关）：
 npm run web:shot -- --fake-pi --script dev/sessionFlow.js
 
+# 验左右划切会话（手机上手指横着划；电脑上在没有文字的地方按住鼠标拖。两种都是跟手、松手过小半屏就切；
+# 从文字上按下（选字）、划得不够远、竖着划都不切）：
+npm run web:shot -- --width 420 --height 900 --fake-pi --script dev/swipeSession.js
+npm run web:shot -- --width 1000 --height 760 --fake-pi --script dev/dragSession.js
+
 # 验「关闭会话」快捷键（设置里那一行默认 Ctrl+Alt+W；真按一下就关掉正在看的那个会话、
 # 自动切到剩下的；焦点在输入框里按也照样关）：
 npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/closeShortcut.js
@@ -111,7 +116,7 @@ FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev
 # 所以要慢一点儿的假 pi，才来得及在它还在跑的时候停掉：
 FAKEPI_THINK_MS=4000 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaTools.js
 
-# 验目标（/goal）那几条命令：谈验收清单 → 开始 / 暂停 / 继续 / 刷新后还在 / 清除。
+# 验目标（/goal）：谈验收清单 → 目标条上按播放 / 暂停（同一颗）、按停止、刷新后还在。
 # 判官循环会接着转，所以这个脚本自己把假判官拖慢、并且让它一直报不过，
 # 好让目标停在“进行中”上验命令本身：
 npm run web:shot -- --fake-pi --script dev/goalCommand.js
@@ -125,10 +130,10 @@ npm run web:shot -- --fake-pi --script dev/goalFlow.js
 npm run web:shot -- --fake-pi --script dev/goalLoop.js
 
 # 验“插话不停目标”（目标跑着时你插一句：目标条还是进行中、正在验的判官不被动、
-# 它验完的结论照样发回工人、循环接着转；想停还是自己打 /goal 暂停）：
+# 它验完的结论照样发回工人、循环接着转；想停就点目标条上那颗「暂停」）：
 npm run web:shot -- --fake-pi --script dev/goalInterject.js
 
-# 验“判官连着几轮报的是同一批没过条目也不自动停”（只有验收通过、判官坏了、你打 /goal 暂停才停）：
+# 验“判官连着几轮报的是同一批没过条目也不自动停”（只有验收通过、判官坏了、你点「暂停」才停）：
 npm run web:shot -- --fake-pi --script dev/goalStale.js
 
 # 验顶条中间那颗小点（本会话闲着、派出去的子会话还在跑时也亮着呼吸，点下面写着还有几个在跑；
@@ -319,13 +324,14 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `sidebarDock.js` | 验宽窗下常驻的项目与会话侧边栏（`<<<`，窗口 ≥ 900px 才常驻）：打开 / 收起 / 记住收起 / 两根顶线对齐 / 底部那条线与输入区上边线齐（输入框长高时线往上走、设置那颗按钮不动）/ 点行不关面板 / 开别的浮层时那一列原样留着 / 工作区那两块「加载更多」/ 改窄再拉宽（窄窗那一块得贴着右边、整屏高，不是居中的弹窗；居中那几块得还在正中），一次过一遍：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js` |
 | `sidebarRedraw.js` | 验对话更新时常驻那一列的重画范围（只该动「正在对话」那一格）：整块有没有重画、下半那一格的元素与滚动有没有动、重画过后点行还准不准：`FAKEPI_TICK_MS=60 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarRedraw.js` |
 | `newSessionRedraw.js` | 验开新会话时常驻那一列的重画范围（整块一次都不该重画、下半展开的组不许坍、新会话那一行加进上半、重画过后点上下的行都还准）：`FAKEPI_TICK_MS=60 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/newSessionRedraw.js` |
+| `switchPerf.js` | 量「在会话之间切换」多少毫秒（造一个装满消息的会话，跟空会话来回切）：真按快捷键走完后端一圈的耗时 / 只塞一条 `sessionActivated` 只剩挂壳的耗时，细分到排版、算样式、长任务：`node dev/switchPerf.js --pairs 1000 --rounds 3` |
 | `sidebarPerf.js` | 量那颗 `<<<` 打开一次多少毫秒、滑入动画有没有被顶住（长任务 / 逐帧间隔）：`npm run web:shot -- --script dev/sidebarPerf.js` |
 | `fileSidebar.js` | 验浏览器页面左边那一列「文件侧边栏」（点消息里的文件链接之后：行号与停在那一行、标签页、跟着刷新、图片直接看、二进制与超大给下载、目录、光名字（会话碰过的文件里按名字找）、工具卡片那颗「跳转」也开在这里、看不了的几种情形、认得的几种语言带颜色（别的黑白、太大的不上色也不卡页面）、markdown 文件排好版渲染成文档（不留行号，别的文件照旧带行号）、这一列角上那颗折行开关（选过记在这台设备里），以及那条只读文件地址本身的拒绝情形）：`npm run web:shot -- --fake-pi --script dev/fileSidebar.js` |
 | `changesTab.js` | 验文件侧边栏那一格「改动」（这个会话改过哪些文件，一个地方全看）：常驻在「项目目录」后面且没有那颗叉、没改过文件时一句提示、假模型真改完一个文件之后那一行长出来（相对写法 + `+1` `−1`、没展开时看不到 diff）、点开这一行看到那条删除与新增、刷新页面清单还在（数据在后端会话的内存里，不跟着页面走）、磁盘上把文件删掉后那一行标「已删除」且展开整份都是删掉的、点「回滚」先问一句再把这个文件整份写回去、清单空了回到那句提示：`npm run web:shot -- --fake-pi --script dev/changesTab.js` |
 | `htmlPreview.js` | 验文件侧边栏里把 html 当网页打开（点 `.html` 链接摆出的是渲染好的页面，不是源码：页面里的相对样式与脚本真生效、链接里带的行号等于没带、文件改过这一列自己重载那张网页；以及 `/site/` 那条地址的规矩：HEAD 只给头与修改时间、没这个文件 404、会话目录外的 403）：`npm run web:shot -- --fake-pi --script dev/htmlPreview.js` |
 | `options.js` | 两条命令共用的命令行参数 |
 | `tabaTools.js` | 验子会话的「停掉」与「查看」两个工具（派活那条在 `tabaFlow.js`）：`FAKEPI_THINK_MS=4000 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaTools.js` |
-| `fakePi.js` | 假的 pi（`--fake-pi` 用）：协议跟真 pi 一样，模型换成按剧本演戏，界面调试秒回。说一句「问单选 / 问多选 / 问确认 / 问输入 / 问选项」就演一次问话；说一句「碰文件」就 read 几个铺好的文件（让后端那份「这个会话碰过的文件」清单里有东西）。**派子会话与问话那几个工具，它加载的是宿主写下的真扩展**（见 src/bridgeAssets.ts），所以那两段代码每跑一次 dev 脚本就真跑一遍 |
+| `fakePi.js` | 假的 pi（`--fake-pi` 用）：协议跟真 pi 一样，模型换成按剧本演戏，界面调试秒回。说一句「问单选 / 问多选 / 问确认 / 问输入 / 问选项」就演一次问话；说一句「碰文件」就 read 几个铺好的文件（让后端那份「这个会话碰过的文件」清单里有东西）。**派子会话与问话那几个工具，它加载的是宿主写下的真扩展**（见 src/bridgeAssets.ts），所以那两段代码每跑一次 dev 脚本就真跑一遍。它还会照真 pi 的样子往会话目录里记一份 `fake-session-<进程号>.jsonl`（一行一条消息）——要读会话文件的那几条路（`#` 引用、派子会话带上父会话的路径）才验得到 |
 | `fake-pi.cmd` / `.sh` | 上面那个的包装：Windows 上 piPath 得是 .cmd 才能被 shell 起来 |
 | `makePng.js` | 生成示例图片（不依赖任何第三方库）：调试工作目录里那张 1600x400 的图就是它写的 |
 | `shots/` | 截图（不进版本库） |

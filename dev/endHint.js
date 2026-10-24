@@ -22,10 +22,10 @@
 module.exports = async (page) => {
     /** 这颗胶囊的现状：在不在、哪一副脸、是不是末尾那一条、输入框里有什么、停止图标露没露。 */
     const state = () => page.eval(`
-        const pane = document.querySelector(".session-pane");
+        const pane = document.querySelector(".session-view:not(.off) .session-pane");
         const row = pane ? pane.querySelector(".end-hint-row") : null;
         const h = row ? row.querySelector(".msg-endhint:not(.msg-endhint-stop)") : null;
-        const s = document.getElementById("stopHintBtn");
+        const s = document.querySelector(".session-view:not(.off) .msg-endhint-stop");
         const inp = document.getElementById("input");
         const users = pane ? Array.from(pane.querySelectorAll(".msg.user")) : [];
         const text = pane ? pane.innerText.replace(/\\s+/g, " ") : "";
@@ -72,7 +72,7 @@ module.exports = async (page) => {
         el.dispatchEvent(new Event("input", { bubbles: true }));
         return el.value;
     `);
-    await page.click(".session-pane .msg-endhint:not(.msg-endhint-stop)");
+    await page.click(".session-view:not(.off) .session-pane .msg-endhint:not(.msg-endhint-stop)");
     await page.sleep(300);
     console.log("③ 点完那一下：", JSON.stringify(await state()));
 
@@ -91,7 +91,7 @@ module.exports = async (page) => {
     }
 
     // 点「卡住了」：这一轮当场停住，停稳之后补发一条“卡住了”
-    await page.click(".session-pane .msg-endhint:not(.msg-endhint-stop)");
+    await page.click(".session-view:not(.off) .session-pane .msg-endhint:not(.msg-endhint-stop)");
     const stuckSent = await waitFor((s) => s.lastUser === "卡住了");
     console.log("⑤ 点完「卡住了」（这一轮停住、补发了“卡住了”）：", JSON.stringify(stuckSent));
     await page.shot("endhint-4-stuck-clicked.png");

@@ -19,7 +19,7 @@ module.exports = async (page) => {
     const problems = [];
     const post = (m) => page.eval(`for (const x of ${JSON.stringify(m)}) { window.postMessage(x, "*"); } return true;`);
     const view = () => page.eval(`
-        const pane = document.querySelector(".session-pane");
+        const pane = document.querySelector(".session-view:not(.off) .session-pane");
         const jump = document.getElementById("jumpBottom");
         return {
             dist: pane ? Math.round(pane.scrollHeight - pane.scrollTop - pane.clientHeight) : -1,
@@ -27,7 +27,7 @@ module.exports = async (page) => {
             jump: jump ? !jump.classList.contains("hidden") : null,
         };
     `);
-    const sid = await page.eval(`const p = document.querySelector(".session-pane"); return p ? p.dataset.sessionId : "";`);
+    const sid = await page.eval(`const p = document.querySelector(".session-view:not(.off) .session-pane"); return p ? p.dataset.sessionId : "";`);
     const para = "这一句是为了把高度撑起来，一句一句地往下写。";
 
     // ---- 第一幕：把消息流撑到能滚，并且贴着底 ----
@@ -48,7 +48,7 @@ module.exports = async (page) => {
     // 在这一帧里排在“自己滚到底”之后跑：它滚完，内容紧接着又长一截（这就是“两条消息落在两帧之间”）
     await page.eval(`
         requestAnimationFrame(() => {
-            const pane = document.querySelector(".session-pane");
+            const pane = document.querySelector(".session-view:not(.off) .session-pane");
             const filler = document.createElement("div");
             filler.className = "msg assistant";
             filler.style.height = "300px";
@@ -67,7 +67,7 @@ module.exports = async (page) => {
 
     // ---- 第三幕：用户自己往回滚 → 接着流，视野不该被拽回去 ----
     const before = await page.eval(`
-        const pane = document.querySelector(".session-pane");
+        const pane = document.querySelector(".session-view:not(.off) .session-pane");
         pane.scrollTop = Math.max(0, pane.scrollTop - 200);
         return Math.round(pane.scrollTop);
     `);

@@ -26,6 +26,9 @@ module.exports = async (page) => {
 
   /** 目标存档（跟后端同一个目录：调试时 PICHAT_HOME 指到 dev/.scratch/pichat）。 */
   const goalsFile = path.join(process.env.PICHAT_HOME || path.join(__dirname, ".scratch", "pichat"), "goals.json");
+  // 调试目录里那份是上一跑留下的（会话文件一个个不同，每条都留在里面）：先清空，
+  // 不然“存档里是不是只剩这一条”这类检查没个准。
+  try { fs.rmSync(goalsFile, { force: true }); } catch { /* 没有就算了 */ }
   const goals = () => {
     try { return JSON.parse(fs.readFileSync(goalsFile, "utf8")).goals || {}; } catch { return {}; }
   };
@@ -68,8 +71,8 @@ module.exports = async (page) => {
     asked.some((t) => t.includes("/goal 把 dev/README.md")), asked);
   await page.shot("goal-command-negotiating.png");
 
-  // ---- 2. /goal 开始：目标条变「进行中」，相位变 active ----
-  await page.send("/goal 开始");
+  // ---- 2. 目标条上的「开始」：目标条变「进行中」，相位变 active ----
+  await page.goalPress("play");
   // 开跑那条提示词带着清单：“开始干”的三个字在清单没被藏住的【任务】里，
   // 假 pi 收到后会演一遍默认剧本（三个工具那些），等它跑完再看目标条
   await page.waitAnswer("三个工具都跑过");
@@ -81,17 +84,20 @@ module.exports = async (page) => {
   check("存盘：相位 active、起始时刻有了", !!g2 && g2.phase === "active" && g2.startedAt > 0, g2 && { phase: g2.phase, startedAt: g2.startedAt });
   await page.shot("goal-command-active.png");
 
-  // ---- 3. 暂停 / 继续 ----
-  await page.send("/goal 暂停");
+  // ---- 3. 开始那颗按了变成暂停，再按又变回开始 ----
+  const playLabel = () => page.eval(`const el = document.querySelector("#goalBar .gb-act.gb-play"); return el ? (el.getAttribute("aria-label") || "") + "/" + (el.dataset.act || "") : "";`);
+  check("跑着的时候那颗按钮是暂停图标", (await playLabel()) === "暂停/pause", await playLabel());
+  await page.goalPress("play");
   await page.sleep(400);
   b = await bar();
-  check("暂停：目标条写着已暂停", b.text.includes("已暂停") && b.tone === "stop", b);
+  check("点了暂停：目标条写着已暂停", b.text.includes("已暂停") && b.tone === "stop", b);
   check("存盘：相位 paused", (onlyGoal() || {}).phase === "paused", onlyGoal() && onlyGoal().phase);
+  check("停下来以后那颗按钮又变回播放图标", (await playLabel()) === "开始/start", await playLabel());
 
-  await page.send("/goal 继续");
+  await page.goalPress("play");
   await page.sleep(600);
   b = await bar();
-  check("继续：目标条回到进行中", b.text.startsWith("目标进行中") && b.tone === "run", b);
+  check("再点开始：目标条回到进行中", b.text.startsWith("目标进行中") && b.tone === "run", b);
 
   // ---- 3.5 刷新页面（重连）：目标条要能从后端补回来 ----
   await page.eval("location.reload(); return true;");
@@ -114,22 +120,42 @@ module.exports = async (page) => {
   const after = await page.eval(`return document.querySelectorAll(".msg").length;`);
   check("/goal 只展开目标条、不多出一条消息", open && after === before, { open, before, after });
 
-  // ---- 5. /goal 清除：目标条收掉，存档里也没了 ----
-  await page.send("/goal 清除");
+  // ---- 5. 目标条上的「停止」：目标条收掉，存档里也没了 ----
+  await page.goalPress("stop");
   await page.sleep(400);
   b = await bar();
-  check("清除：目标条收掉", b.hidden, b);
-  check("清除：存档里那条也删了", Object.keys(goals()).length === 0, goals());
+  check("停止：目标条收掉", b.hidden, b);
+  check("停止：存档里那条也删了", Object.keys(goals()).length === 0, goals());
 
-  // ---- 6. 没有目标时打 /goal 开始：给一句话，不炸 ----
-  await page.send("/goal 开始");
+  // ---- 6. 再定一个目标，用「停止」关掉 ----
+  await page.send("/goal 再定一个目标，专门验那颗停止按钮");
+  await page.waitAnswer("验收清单");
+  await page.sleep(600);
+  b = await bar();
+  const hasButtons = await page.eval(`return { play: !!document.querySelector("#goalBar .gb-act.gb-play"), stop: !!document.querySelector("#goalBar .gb-act.gb-stop") };`);
+  check("又出现目标条，展开里两颗按钮都在", !b.hidden && hasButtons.play && hasButtons.stop, { b, hasButtons });
+  // 撑开拍一张：两颗按钮在展开的上面（“开始”現在是这模样）
+  await page.eval(`document.querySelector("#goalBar .gb-head").click(); return true;`);
+  await page.sleep(300);
+  await page.shot("goal-command-buttons.png");
+  await page.goalPress("stop");
+  await page.sleep(800);
+  b = await bar();
+  check("点停止以后目标条收掉", b.hidden, b);
+  check("点停止以后存档里也没了", Object.keys(goals()).length === 0, goals());
+
+  // ---- 7. 打以前的那些控制词：别稀里糊涂定成一个叫「停止」的目标 ----
+  const beforeWarn = await page.eval(`return Object.keys(${JSON.stringify(goals())}).length;`);
+  await page.send("/goal 停止");
   await page.sleep(600);
   const said = await page.eval(`
     return Array.from(document.querySelectorAll(".msg.system")).map((el) => el.textContent.trim()).join(" | ");
   `);
-  check("没目标时 /goal 开始 会提示先定目标", said.includes("还没有目标"), said.slice(0, 120));
+  check("打 /goal 停止 不会变成新目标，而是告诉你按钮在目标条上",
+    said.includes("目标条上的按钮") && Object.keys(goals()).length === beforeWarn && (await bar()).hidden,
+    { said: said.slice(0, 160), goals: goals() });
 
-  // ---- 7. 命令菜单里要有 /goal 那一条（打 / 开头就弹） ----
+  // ---- 8. 命令菜单里要有 /goal 那一条（打 / 开头就弹） ----
   await page.type("/goal");
   await page.sleep(600);
   const menu = await page.eval(`

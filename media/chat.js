@@ -55,6 +55,11 @@
     "arrow-right": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8.85355 3.14645C8.65829 2.95118 8.34171 2.95118 8.14645 3.14645C7.95118 3.34171 7.95118 3.65829 8.14645 3.85355L11.7929 7.5H2.5C2.22386 7.5 2 7.72386 2 8C2 8.27614 2.22386 8.5 2.5 8.5H11.7929L8.14645 12.1464C7.95118 12.3417 7.95118 12.6583 8.14645 12.8536C8.34171 13.0488 8.65829 13.0488 8.85355 12.8536L13.3536 8.35355C13.5488 8.15829 13.5488 7.84171 13.3536 7.64645L8.85355 3.14645Z"/></svg>',
     // 实心方块：消息流末尾那两颗「卡住了」「停止生成」上都用它
     "stop-square": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="1.5"/></svg>',
+    // 播放三角 / 暂停两根竖条：目标条展开里那颗「开始 ⇄ 暂停」的按钮用
+    play: '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M5 3.1v9.8c0 .5.55.81.98.53l7.3-4.9a.63.63 0 0 0 0-1.06l-7.3-4.9A.63.63 0 0 0 5 3.1Z"/></svg>',
+    pause: '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="3.6" y="2.6" width="3.2" height="10.8" rx="0.8"/><rect x="9.2" y="2.6" width="3.2" height="10.8" rx="0.8"/></svg>',
+    // 停止小方块：跟上面两颗一样大（12px），不然它看着比暂停粗一圈
+    "stop-small": '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="3.4" y="3.4" width="9.2" height="9.2" rx="1.2"/></svg>',
     // 三条横线：输入框右边那颗「你说过的话」（一句话一行，所以是清单）。
     said: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>',
   };
@@ -111,6 +116,9 @@
   let activeId = null;               // 当前显示的会话 id
   // 后端说“你这块屏切到这个会话”但那个会话的壳还没建出来（列表在路上）：记下来等它到了一起用
   let pendingActivateId = null;
+  // 手机上左右划切会话（见下文“左右划”那段）：这一段拖动的状态、松手后等后端回话的那一趟
+  let swipe = null;
+  let pendingSlide = null;
 
   // ---- 面板：浮层里的拾取器（模型 / 历史 / 项目与会话 / 文件夹）与常驻那一列 ----
   // 这两处共用同一套画法（版式也共用一套类名，见 chat.css），只是画到不同的容器上：
@@ -721,7 +729,7 @@
     let st = sessions.get(id);
     if (st) { return st; }
     // 一个会话 = 一层壳（.session-view）：消息窗格 + 底部状态栏。
-    // 壳一直留着（切走只是从 #messages 里摘下来），切回去时消息、滚动位置、草稿都还在。
+    // 壳一直留着（切走只是盖上 .off 藏起来，见 chat.css 那段），切回去时消息、滚动位置、草稿都还在。
     const view = document.createElement("div");
     view.className = "session-view";
     view.dataset.sessionId = id;
@@ -740,7 +748,7 @@
     });
     view.appendChild(stBar);
     pane.addEventListener("scroll", () => {
-      if (!pane.isConnected) { return; }
+      if (!paneShown(pane)) { return; }
       const prevTop = st.lastScrollTop;
       st.lastScrollTop = pane.scrollTop; // 滚动位置缓存：布局重建后恢复用
       // 整屏重画中：窗格正在被清空重建，这时的滚动动静都是重画弄的，不作数
@@ -845,16 +853,37 @@
     return st;
   }
 
-  /** 把一个会话的壳挂进 #messages（同时把别的摘下来）；已经挂着的就不动。 */
+  /**
+   * 把一个会话的壳摆到前台，其余会话的壳盖上“藏起来”（.off，见 chat.css 那段注释）。
+   * 壳一直留在 #messages 里：藏起来的东西不排版，但排版结果浏览器留着，切回去不用重排。
+   */
   function mountActiveSession() {
     const target = activeId ? sessions.get(activeId) : null;
-    if (target && target.viewEl.parentElement === messagesEl) { return; }
-    document.querySelectorAll("#messages .session-view").forEach((el) => {
-      if (el.dataset.sessionId !== activeId) { el.remove(); }
+    // 手机上左右划切会话的收尾：松手时已经跟后端要了这个会话，它回话（切到了）就到这儿来。
+    // 要从手指离开的那个位置接着滑，别一下跳过去——所以这一段排在下面“摆前台 / 盖起来”前面。
+    if (pendingSlide) {
+      const slide = pendingSlide;
+      if (target && target.id === slide.toId) {
+        pendingSlide = null;
+        clearTimeout(slide.timer);
+        finishSlideMount(slide, target);
+        return;
+      }
+      // 还没轮到它（后端先推了会话列表，“切到哪个”还在路上）：这一趟先摆着，
+      // 下面照常办，但那个已经摆出来的壳别盖回去（见 held）
+    }
+    if (target) { unkeep(target); }
+    if (target && target.viewEl.parentElement === messagesEl && !target.viewEl.classList.contains("off")) { return; }
+    // 左右划摆出来的那个还没轮到：它这会儿是露着的，别当成“不在看的”盖回去
+    const held = pendingSlide ? pendingSlide.toView : (swipe ? swipe.toView : null);
+    sessions.forEach((st) => {
+      if (st.viewEl === held) { return; }
+      st.viewEl.classList.toggle("off", st !== target);
     });
     const st = target;
     if (!st) { return; }
-    messagesEl.appendChild(st.viewEl);
+    // 只在没挂过的时候真挂一次：已经挂着的再 appendChild 等于挪一下，浏览器会把里头的排版丢掉重排
+    if (st.viewEl.parentElement !== messagesEl) { messagesEl.appendChild(st.viewEl); }
     // 重挂载后把滚动位置恢复回去（贴底的直接贴底）
     const p = st.paneEl;
     if (st.stickToBottom) {
@@ -865,6 +894,115 @@
     }
     // 重挂载会让 CSS 动画重播：剥掉历史气泡的入场动画，避免整窗“抖一下”
     st.viewEl.querySelectorAll(".msg-enter").forEach((el) => { el.classList.remove("msg-enter"); });
+  }
+
+  /**
+   * 左右划切过去的最后一下：进来的那个滑到正中，原来那个滑出屏外，然后盖上藏起来。
+   * 其余收尾跟普通切换一样（滚动位置恢复、切成“在看的那个”）。
+   */
+  function finishSlideMount(slide, target) {
+    const from = slide.fromView;
+    const to = target.viewEl;
+    unkeep(target);
+    to.classList.remove("off");
+    if (to.parentElement !== messagesEl) { messagesEl.appendChild(to); }
+    const p = target.paneEl;
+    if (target.stickToBottom) {
+      p.scrollTop = p.scrollHeight;
+      target.lastScrollTop = p.scrollTop;
+    } else if (typeof target.lastScrollTop === "number") {
+      p.scrollTop = target.lastScrollTop;
+    }
+    // 重挂载会让 CSS 动画重播：剥掉历史气泡的入场动画，避免整窗“抖一下”
+    to.querySelectorAll(".msg-enter").forEach((el) => { el.classList.remove("msg-enter"); });
+    slideTo(to, 0, SWIPE_FINISH_MS);
+    slideTo(from, slide.endX, SWIPE_FINISH_MS);
+    afterSlide(to, () => {
+      sessions.forEach((st) => { st.viewEl.classList.toggle("off", st !== target); });
+      clearSlideStyles(from);
+      clearSlideStyles(to);
+      messagesEl.classList.remove("swiping");
+    });
+  }
+
+  /**
+   * 这个窗格这会儿真在屏幕上吗（不是在看的那个会话 / 加载更早那批消息的暂存区）。
+   * 以前这里只看 isConnected：壳切成“留在页面里、盖上 .off”之后，藏着的那些也算连着，
+   * 得把 .off 一并算进来，不然藏着的会话里的滚动、追底会跟着动。
+   */
+  function paneShown(pane) {
+    if (!pane || !pane.isConnected) { return false; }
+    return !(pane.closest && pane.closest(".session-view.off"));
+  }
+
+  // ==================== 闲下来的时候把别的会话先排好版（“停着”）====================
+  //
+  // 藏起来的壳（.off）浏览器不排版，这个页面第一次切过去得现排一遍（1000 轮对话量过
+  // 100—160 毫秒，见 dev/switchPerf.js）；停着的那种把版排好了留着（.off.kept），
+  // 切过去只把它画出来（同一份内容 12—20 毫秒）。
+  //
+  // 只停“这会儿没事”的会话：它一来消息就立刻收回去（.kept 摘掉，回到不排版的 .off），
+  // 免得流式输出每长一段都排一次版。同时停着的也就 KEPT_MAX 个，多出来的先放掉最旧的
+  // （排好版的那些占着内存）。窗口一变宽窄它们全要重排：先全放掉，闲下来再停一遍。
+  const KEPT_MAX = 3;
+  const KEEP_DELAY_MS = 1500;
+  const keptIds = [];   // 停着的那些，按停下来的先后排（超过上限先放掉最前面的）
+  let keepTimer = 0;
+
+  function scheduleKeep() {
+    if (keepTimer) { return; }
+    keepTimer = setTimeout(() => { keepTimer = 0; keepStep(); }, KEEP_DELAY_MS);
+  }
+
+  /** 收回去：不再留着它排好的版。 */
+  function unkeep(st) {
+    const at = keptIds.indexOf(st.id);
+    if (at >= 0) { keptIds.splice(at, 1); }
+    if (st.viewEl.classList.contains("kept")) { st.viewEl.classList.remove("kept"); }
+  }
+
+  /** 放掉所有停着的（窗口一变宽窄，它们的版全要重排：不如先放掉，等闲下来再停一遍）。 */
+  function unkeepAll() {
+    for (const id of keptIds.slice()) {
+      const st = sessions.get(id);
+      if (st) { unkeep(st); } else { keptIds.shift(); }
+    }
+  }
+
+  /** 闲下来了：挑一个该停的会话停一下；还有下一个就接着停。 */
+  function keepStep() {
+    const st = nextKeepTarget();
+    if (!st) { return; }
+    const view = st.viewEl;
+    // 入场动画那些类先摘了再排：不然停着时排好的版一露出来就要给几百条消息重算样式
+    //（这活儿放闲着的时候做，也正是这儿的意义）。
+    view.querySelectorAll(".msg-enter").forEach((el) => { el.classList.remove("msg-enter"); });
+    // 先盖上“不在看”（不然挂进 #messages 的那一下会当成正在看的那个摆出来）
+    view.classList.add("off");
+    if (view.parentElement !== messagesEl) { messagesEl.appendChild(view); }
+    view.classList.add("kept");
+    keptIds.push(st.id);
+    while (keptIds.length > KEPT_MAX) {
+      const oldest = sessions.get(keptIds[0]);
+      if (oldest) { unkeep(oldest); } else { keptIds.shift(); }
+    }
+    scheduleKeep();
+  }
+
+  /** 下一个该停的会话：藏着、没事、有内容。（停着的那个已经有版了，不用再停；
+   *  它一来消息就会被 unkeep 收回，过一会儿再停一遍。）
+   *  露在外面的（虽然不是在看的那个）也不停：那就是左右划到一半、被手指拉进来的那个壳。 */
+  function nextKeepTarget() {
+    for (const id of sessionOrder) {
+      if (id === activeId) { continue; }
+      const st = sessions.get(id);
+      if (!st || st.streaming || st.loading || st.reconcile) { continue; }
+      if (!st.viewEl.classList.contains("off")) { continue; }
+      if (st.viewEl.classList.contains("kept")) { continue; }
+      if (!st.paneEl.childElementCount) { continue; }
+      return st;
+    }
+    return null;
   }
 
   /**
@@ -1050,6 +1188,8 @@
     if (e.key === "Escape" && sessionMenuOpen) { e.stopPropagation(); closeSessionMenu(); }
   }, true);
   window.addEventListener("resize", () => { if (sessionMenuOpen) { placeSessionMenu(); } });
+  // 宽窄一变，“停着”的那些会话的版全要重排：先全放掉，闲下来会自动再停一遍（见 unkeep）
+  window.addEventListener("resize", unkeepAll);
 
   // 空提示每个窗格只可能有一份：查过一次就记住，别再对着几百条消息的子树反复
   // querySelector（整屏重画时每条消息都查一次，那是 n²；实测占掉打开长会话 11% 的时间）。
@@ -1117,7 +1257,7 @@
   }
   function smoothScrollToBottom(st) {
     // 只对挂在页面上的窗格（当前会话那个）追底
-    if (!st.paneEl.isConnected) { return; }
+    if (!paneShown(st.paneEl)) { return; }
     if (!st.stickToBottom) {
       // 用户不在底部，有新内容到来：标记并显示跳转提示
       st.hasNewContent = true;
@@ -1148,11 +1288,11 @@
     // 排了的话，等这一帧真跑起来时 paneEl 可能已经换人（暂存区用完就还回真窗格了），
     // 结果滚的是真窗格——点「加载更早」视野就无缘无故甩到底部。
     const pane = st.paneEl;
-    if (!pane.isConnected) { return; }
+    if (!paneShown(pane)) { return; }
     if (st.scrollRafId) { return; }
     st.scrollRafId = requestAnimationFrame(() => {
       st.scrollRafId = 0;
-      if (st.paneEl !== pane || !pane.isConnected) { return; }
+      if (st.paneEl !== pane || !paneShown(pane)) { return; }
       // 这一帧排上之后人自己往回滚了、或者正好开始整屏重画：这一下不许落下去
       if (st.suppressScroll || !st.stickToBottom) { return; }
       pane.scrollTop = 1e9;   // 夹到最大：没有读 scrollHeight，就不会逼出一次同步重排
@@ -1208,7 +1348,7 @@
    */
   function takeScrollAnchor(st) {
     const pane = st.paneEl;
-    if (st.stickToBottom || !pane.isConnected) { return null; }
+    if (st.stickToBottom || !paneShown(pane)) { return null; }
     const top = pane.scrollTop;
     const kids = Array.from(pane.children);
     const order = messageOrdinals(kids);
@@ -1271,7 +1411,7 @@
     if (!st.suppressScroll) { return; }
     st.suppressScroll = false;
     const pane = st.paneEl;
-    if (!pane.isConnected) { releaseAnchorHold(st); return; }
+    if (!paneShown(pane)) { releaseAnchorHold(st); return; }
     const found = anchor ? findScrollAnchor(pane, anchor.candidates) : null;
     if (!found) { releaseAnchorHold(st); scrollToBottom(st, true); return; }
     const el = found.el;
@@ -1308,7 +1448,7 @@
     pane.addEventListener("touchstart", stop, { passive: true, once: true });
     const step = () => {
       if (st.anchorHold !== hold) { return; }        // 人接手了 / 又开了一次重画
-      if (st.paneEl !== pane || !pane.isConnected || el.parentNode !== pane) { releaseAnchorHold(st); return; }
+      if (st.paneEl !== pane || !paneShown(pane) || el.parentNode !== pane) { releaseAnchorHold(st); return; }
       const now = el.offsetTop - pane.scrollTop;
       if (Math.abs(now - hold.view) > 1) {
         pane.scrollTop = Math.max(0, el.offsetTop - hold.view);
@@ -3203,6 +3343,8 @@
     }
     goalBarEl.className = summary.tone + (st.goalOpen ? " open" : "");
     goalBarEl.innerHTML = "";
+    // 一行排开：左边是那一行字（点了展开），右边两颗按钮 —— 收着的时候也能点，不用先展开。
+    const row = document.createElement("div"); row.className = "gb-row";
     const head = document.createElement("button");
     head.type = "button";
     head.className = "gb-head";
@@ -3211,10 +3353,44 @@
     const dot = document.createElement("span"); dot.className = "gb-dot";
     const text = document.createElement("span"); text.className = "gb-text";
     text.textContent = summary.text;
+    head.append(dot, text);
+    row.appendChild(head);
+
+    // 两颗按钮就管这个目标：左边那颗是播放 / 暂停（是在跑就画暂停，点一下换一面），
+    // 右边那颗是停止（不再追踪这个目标，等于以前那个 /goal 清除）。
+    // 面上只画图标，文字放 title / aria-label（鼠标指上去才看得到）。
+    const acts = document.createElement("div"); acts.className = "gb-acts";
+    if (goal.phase !== "complete") {
+      const running = goal.phase === "active";
+      const label = running ? "暂停" : "开始";
+      const play = document.createElement("button");
+      play.type = "button";
+      play.className = "gb-act gb-play";
+      play.dataset.act = running ? "pause" : "start";
+      play.setAttribute("aria-label", label);
+      play.title = running ? "暂停这个目标（随时能接着跑）" : "开始干（清单已经有了就开跑）";
+      play.innerHTML = running ? ICONS.pause : ICONS.play;
+      play.addEventListener("click", () => {
+        vscode.postMessage({ type: "goalAct", sessionId: st.id, act: running ? "pause" : "start" });
+      });
+      acts.appendChild(play);
+    }
+    const stop = document.createElement("button");
+    stop.type = "button";
+    stop.className = "gb-act gb-stop";
+    stop.dataset.act = "stop";
+    stop.setAttribute("aria-label", "停止");
+    stop.title = "停止这个目标（不再追踪它，对话和文件都不动）";
+    stop.innerHTML = ICONS["stop-small"];
+    stop.addEventListener("click", () => {
+      vscode.postMessage({ type: "goalAct", sessionId: st.id, act: "stop" });
+    });
+    acts.appendChild(stop);
+    row.appendChild(acts);
     const caret = document.createElement("span"); caret.className = "gb-caret";
     caret.innerHTML = CHEVRON_SVG;
-    head.append(dot, text, caret);
-    goalBarEl.appendChild(head);
+    row.appendChild(caret);
+    goalBarEl.appendChild(row);
 
     const body = document.createElement("div"); body.className = "gb-body";
     const objLabel = document.createElement("div"); objLabel.className = "gb-label";
@@ -3247,6 +3423,7 @@
       renderGoalBar();
     };
     head.addEventListener("click", toggle);
+    caret.addEventListener("click", toggle);
   }
 
   function renderQueueBar(st) {
@@ -3407,7 +3584,7 @@
     const stop = document.createElement("button");
     stop.type = "button";
     stop.className = "msg-endhint msg-endhint-stop";
-    stop.id = "stopHintBtn";
+    // 不给 id：每个会话都有一颗，同一个 id 会在页面上重复（getElementById 会摸到别的会话那颗）
     stop.title = "停止生成";
     stop.setAttribute("aria-label", "停止生成");
     stop.innerHTML = ICONS["stop-square"];
@@ -3448,7 +3625,7 @@
   let tpsSyncAt = 0;
   // delta 高频到达，速度刷新做 250ms 节流（当前会话的状态栏要刷）
   function noteTpsProgress(t) {
-    if (!t.paneEl.isConnected) { return; }
+    if (!paneShown(t.paneEl)) { return; }
     const now = Date.now();
     if (now - tpsSyncAt >= 250) { tpsSyncAt = now; if (activeId === t.id) { syncStatus(); } syncPaneStatuses(); }
   }
@@ -3662,6 +3839,8 @@
     if (!IS_TOUCH_DEVICE) { inputEl.focus(); }
     // 切到这个会话：排在"还没有会话"名下的消息现在有主了，能发就发
     flushPendingSend();
+    // 刚切走那个（以及别的）闲下来后先排好版，下次切过去不用现排
+    scheduleKeep();
   }
 
   /** 这份会话文件是不是有会话正开着（列表里把这种历史行标成“已打开”）。 */
@@ -3721,20 +3900,323 @@
   }
 
   /**
-   * 按快捷键切上一个 / 下一个会话：走的就是「项目与会话」面板里「正在对话」那一段的行序
-   * （主会话在前，它派出去的子会话缩进跟在它下面，一行算一个）。
+   * 按快捷键 / 手机上左右划切会话时，下一个（或上一个）是哪一个：走的就是「项目与会话」面板里
+   * 「正在对话」那一段的行序（主会话在前，它派出去的子会话缩进跟在它下面，一行算一个）。
    * 当前看的会话不在那几行里（它已经被别的窗口关掉、画面还留在这屏）时：
-   * 下一个从第一行起，上一个从末行起。
+   * 下一个从第一行起，上一个从末行起。只有一个会话就没有下一个（返回 null）。
    */
-  function switchSessionByDirection(direction) {
+  function sessionIdByDirection(direction) {
     const ids = openSessionItems().map((item) => item.sessionId);
-    if (ids.length < 2) { return; }
+    if (ids.length < 2) { return null; }
     const curIdx = ids.indexOf(activeId);
     const from = curIdx < 0 ? (direction === "next" ? -1 : 0) : curIdx;
     const delta = direction === "next" ? 1 : -1;
-    const target = ids[(from + delta + ids.length) % ids.length];
-    vscode.postMessage({ type: "switchSession", sessionId: target });
+    return ids[(from + delta + ids.length) % ids.length] || null;
   }
+
+  /** 按快捷键切上一个 / 下一个会话（顺序见 sessionIdByDirection）。 */
+  function switchSessionByDirection(direction) {
+    const target = sessionIdByDirection(direction);
+    if (target) { vscode.postMessage({ type: "switchSession", sessionId: target }); }
+  }
+
+  // ==================== 手机上左右划：切上一个 / 下一个会话 ====================
+  // 只认手指 / 触控笔的横划（鼠标拖拽不算：电脑上有快捷键）。横着划过一小段就跟手走：
+  // 正在看的那个壳跟着手指挪，下一个从另一边进来；松手过了线就滑到底、真的切过去，
+  // 没过线就弹回去。竖着划不管（那是滚动），横着能滚的东西（代码块、表格）上也不管。
+  // 切过去那一刻位置由后端说了算：松手先跟后端要，它回话说“切到这个了”时再从手指离开的
+  // 位置滑完那一小段（见 mountActiveSession 开头那段）。
+  const SWIPE_LOCK_PX = 12;      // 横向动这么多才认成“左右划”
+  const SWIPE_FINISH_MS = 180;   // 松手后滑完的那一小段
+  const SWIPE_WAIT_MS = 1500;    // 松手后等后端回话的耐心（回话迟了就先弹回去）
+
+  function swipeWidth() { return messagesEl.clientWidth || window.innerWidth || 320; }
+
+  /** 横着能滚的东西上不切会话：让人家自己滚（代码块、表格、长清单）。 */
+  function swipeStartsInScrollable(el) {
+    for (let n = el; n && n !== messagesEl; n = n.parentElement) {
+      if (n.scrollWidth - n.clientWidth > 4) { return true; }
+    }
+    return false;
+  }
+
+  /** 跟着手指走的那点位移：过了半屏就加阻力（再划也不跟得那么死，手底有点手感）。 */
+  function swipeOffset(dx, width) {
+    const cap = width * 0.5;
+    const a = Math.abs(dx);
+    if (a <= cap) { return dx; }
+    return (dx < 0 ? -1 : 1) * (cap + (a - cap) * 0.25);
+  }
+
+  /** 一节样式里的位移一改就要滑一小段：给它挂上过渡。 */
+  function slideTo(el, x, ms) {
+    el.style.transition = ms ? "transform " + ms + "ms ease-out" : "none";
+    el.style.transform = "translateX(" + x + "px)";
+  }
+
+  /** 摆出来的样子收回原样（位移、过渡都清掉）。 */
+  function clearSlideStyles(el) {
+    el.style.transform = "";
+    el.style.transition = "";
+  }
+
+  /** 等这一下过渡走完（或等超时兜底）再办收尾的事，只办一次。 */
+  function afterSlide(el, fn) {
+    let done = false;
+    const once = () => {
+      if (done) { return; }
+      done = true;
+      el.removeEventListener("transitionend", onEnd);
+      fn();
+    };
+    const onEnd = (e) => { if (e.target === el && e.propertyName === "transform") { once(); } };
+    el.addEventListener("transitionend", onEnd);
+    setTimeout(once, SWIPE_FINISH_MS + 120);
+  }
+
+  /** 认成横划以后：把要进来的那个壳从另一边摆出来（它本来藏着，这会儿得画出来）。 */
+  function swipeBegin(s) {
+    const to = s.toView;
+    unkeep(s.to);
+    to.classList.remove("off");
+    if (to.parentElement !== messagesEl) { messagesEl.appendChild(to); }
+    s.fromView.style.transition = "none";
+    to.style.transition = "none";
+    // 两个壳这会儿是一左一右摆着的：越出去的那点别把整页撑出横向滚动条
+    messagesEl.classList.add("swiping");
+    // 鼠标从空白处拖进文字里，浏览器会顺势选上一段：抹掉（真在选字的那种根本走不到这儿）
+    dropSelection();
+  }
+
+  /** 把浏览器顺手弄出来的选择抹掉（没有选择就什么也不做）。 */
+  function dropSelection() {
+    try {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0 && !sel.isCollapsed) { sel.removeAllRanges(); }
+    } catch (e) { /* 拿不到就算了 */ }
+  }
+
+  /** 跟着手指摆：正在看的那个挪 eff，进来的那个紧贴在它旁边（隔一个整屏）。 */
+  function swipePlace(s) {
+    const w = s.width;
+    slideTo(s.fromView, s.eff, 0);
+    slideTo(s.toView, s.dir === "next" ? s.eff + w : s.eff - w, 0);
+  }
+
+  /** 松手：够远了（或者甩得快）就真切过去，不够就弹回原位。 */
+  function swipePast(s) {
+    const dist = Math.abs(s.dx);
+    const ms = Math.max(1, Date.now() - s.t0);
+    return dist >= Math.max(72, s.width * 0.3) || (dist >= 36 && dist / ms >= 0.5);
+  }
+
+  /** 不切了：这一趟摆出去的样子滑回原位，进来的那个重新藏起来。 */
+  function swipeSpringBack(p) {
+    if (!p || !p.fromView || !p.toView) { messagesEl.classList.remove("swiping"); return; }
+    const from = p.fromView;
+    const to = p.toView;
+    slideTo(from, 0, SWIPE_FINISH_MS);
+    slideTo(to, p.dir === "next" ? p.width : -p.width, SWIPE_FINISH_MS);
+    afterSlide(to, () => {
+      clearSlideStyles(from);
+      clearSlideStyles(to);
+      to.classList.add("off");
+      messagesEl.classList.remove("swiping");
+    });
+  }
+
+  /** 能不能从这一下起一趟：落在对话区里、没落在横着能滚的东西上。（按住不放还没走的） */
+  function swipeStart(e, x, y, finger) {
+    // 上一趟还在等后端回话（或者正在滑完）：这一下不接，不然两个壳的摆法会打起来
+    if (pendingSlide || swipe) { return false; }
+    const view = e.target && e.target.closest ? e.target.closest(".session-view") : null;
+    const cur = activeSession();
+    if (!view || !cur || view !== cur.viewEl) { return false; }
+    if (swipeStartsInScrollable(e.target)) { return false; }
+    swipe = {
+      finger: finger, x0: x, y0: y, t0: Date.now(), lock: "", dir: "", dx: 0, eff: 0,
+      width: swipeWidth(), fromView: view, toView: null, to: null, toId: "", pointerId: 0,
+    };
+    return true;
+  }
+
+  /**
+   * 动到 (x,y)：认成横划就摆两下壳、返回 true（调用方把浏览器自己的动作拦掉）。
+   * 竖着先动起来就当场作废，这一趟不管了（那是滚动 / 选字）。
+   */
+  function swipeMove(x, y) {
+    const s = swipe;
+    if (!s) { return false; }
+    const dx = x - s.x0;
+    const dy = y - s.y0;
+    if (!s.lock) {
+      // 竖着先动起来：这是滚动（或者鼠标在选字），这一趟不管了
+      if (Math.abs(dy) > SWIPE_LOCK_PX && Math.abs(dy) > Math.abs(dx)) { swipe = null; return false; }
+      // 横着得明显压过竖着才认（斜着划多半是想滚）
+      if (Math.abs(dx) < SWIPE_LOCK_PX || Math.abs(dx) < Math.abs(dy) * 1.5) { return false; }
+      s.lock = "x";
+      s.dir = dx < 0 ? "next" : "prev";
+      const toId = sessionIdByDirection(s.dir);
+      const to = toId ? sessions.get(toId) : null;
+      // 只有一个会话：没得换，也就不摆样子（不拦，让人家照旧）
+      if (!to || !to.viewEl) { swipe = null; return false; }
+      s.toId = toId;
+      s.to = to;
+      s.toView = to.viewEl;
+      swipeBegin(s);
+    }
+    s.dx = dx;
+    s.eff = swipeOffset(dx, s.width);
+    swipePlace(s);
+    return true;
+  }
+
+  /**
+   * 鼠标这一下是不是正好压在字上（压在字上是要选字，不切会话）。
+   * 判法：取这一点最近的插入光标，再量它旁边那几个字占的那一小块地：
+   * 这一点落在里面就算有文字；字与字之间、气泡右侧的空地、两条消息之间的缝都算没有文字。
+   * 只量光标旁边三个字（不是整个文字节点）：一大段代码里一按就量上千行的事儿不发生。
+   */
+  function swipeHitsText(x, y) {
+    let node = null;
+    let at = 0;
+    try {
+      if (document.caretRangeFromPoint) {
+        const r = document.caretRangeFromPoint(x, y);
+        node = r && r.startContainer;
+        at = r ? r.startOffset : 0;
+      } else if (document.caretPositionFromPoint) {
+        const p = document.caretPositionFromPoint(x, y);
+        node = p && p.offsetNode;
+        at = p ? p.offset : 0;
+      }
+    } catch (e) { return false; }
+    if (!node || node.nodeType !== 3 || !(node.nodeValue || "").trim()) { return false; }
+    const text = node.nodeValue || "";
+    // 左右各带一点：光标可能停在这一点的左边那一侧
+    const from = Math.max(0, at - 2);
+    const to = Math.min(text.length, at + 1);
+    try {
+      const range = document.createRange();
+      range.setStart(node, from);
+      range.setEnd(node, to > from ? to : Math.min(text.length, from + 1));
+      const rects = range.getClientRects();
+      for (let i = 0; i < rects.length; i++) {
+        const b = rects[i];
+        if (y >= b.top - 1 && y <= b.bottom + 1 && x >= b.left - 2 && x <= b.right + 2) { return true; }
+      }
+    } catch (e) { /* 量不出来就当没文字 */ }
+    return false;
+  }
+
+  /** 鼠标这一下落在按钮 / 链接 / 图这类“按下去有作用”的东西上：别拿它切会话。 */
+  function swipeOnControl(el) {
+    return !!(el && el.closest && el.closest("button, a, input, textarea, select, img, video, summary, label, [contenteditable='true']"));
+  }
+
+  // 两种按法走同一套：
+  // · 手机（手指、笔）：横着一动就跟手走，认成横划就 preventDefault，把这一下从浏览器手里拿过来；
+  //   竖着不拦，照旧滚动。这里用 touch 事件而不是 pointer：横向一放下，浏览器会拿指针事件去做它自己的手势
+  //   （滚动 / 前进后退），pointercancel 一来追踪就断了，而 touchmove 一直在。
+  // · 电脑（鼠标）：只从**没有文字**的地方按住拖（从文字上按下还是老老实实选字，见 swipeHitsText），
+  //   按钮 / 链接上也不接。
+  messagesEl.addEventListener("touchstart", (e) => {
+    // 已经在划了又来一根手指（缩放之类）：这一趟作废，摆出去的样子弹回去
+    if (swipe) { swipeAbort(); return; }
+    if (e.touches.length !== 1) { return; }
+    const t = e.touches[0];
+    swipeStart(e, t.clientX, t.clientY, t.identifier);
+  }, { passive: true });
+
+  messagesEl.addEventListener("touchmove", (e) => {
+    const s = swipe;
+    if (!s) { return; }
+    if (e.touches.length !== 1) { swipeAbort(); return; }
+    const t = e.touches[0];
+    if (t.identifier !== s.finger) { swipeAbort(); return; }
+    // 认成横划了：这一下不给浏览器（不然它会去滚 / 去翻页）
+    if (swipeMove(t.clientX, t.clientY) && e.cancelable) { e.preventDefault(); }
+  }, { passive: false });
+
+  messagesEl.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "mouse" || e.button !== 0) { return; }
+    if (swipeOnControl(e.target)) { return; }
+    if (swipeStartsInScrollable(e.target)) { return; }
+    if (swipeHitsText(e.clientX, e.clientY)) { return; }
+    if (!swipeStart(e, e.clientX, e.clientY, "mouse")) { return; }
+    swipe.pointerId = e.pointerId;
+    // 按住了就一直跟着走：拖到对话区外面也不断（不然手一快就丢）
+    try { messagesEl.setPointerCapture(e.pointerId); } catch (err) { /* 捕获不到就靠冒泡 */ }
+  });
+
+  messagesEl.addEventListener("pointermove", (e) => {
+    const s = swipe;
+    if (!s || s.finger !== "mouse" || e.pointerId !== s.pointerId) { return; }
+    swipeMove(e.clientX, e.clientY);
+  });
+
+  messagesEl.addEventListener("pointerup", (e) => {
+    const s = swipe;
+    if (!s || s.finger !== "mouse" || e.pointerId !== s.pointerId) { return; }
+    swipeEnd(false);
+  });
+
+  messagesEl.addEventListener("pointercancel", (e) => {
+    const s = swipe;
+    if (!s || s.finger !== "mouse" || e.pointerId !== s.pointerId) { return; }
+    swipeAbort();
+  });
+
+  // 兜底：拖到窗口外再松手、被别的东西抢走了指针这类：捕获一丢就把这一趟收回去
+  messagesEl.addEventListener("lostpointercapture", (e) => {
+    const s = swipe;
+    if (!s || s.finger !== "mouse" || e.pointerId !== s.pointerId) { return; }
+    swipeAbort();
+  });
+
+  /** 这一趟作废（第二根手指按上来、手指换了之类）：摆出去的样子弹回去。 */
+  function swipeAbort() {
+    const s = swipe;
+    swipe = null;
+    if (s && s.lock === "x") { swipeSpringBack(s); }
+  }
+
+  /** 手抬起来了（或者被打断）：按位置决定切不切（取消的那种直接弹回去）。 */
+  function swipeEnd(cancelled) {
+    const s = swipe;
+    swipe = null;
+    if (!s || s.lock !== "x") { return; }
+    if (cancelled || !swipePast(s)) { swipeSpringBack(s); return; }
+    // 松手：跟后端要那个会话。视觉上先停在手指离开的地方，等它回话说切到了再滑完剩下那一小段
+    const slide = {
+      dir: s.dir, toId: s.toId, width: s.width,
+      fromView: s.fromView, toView: s.toView,
+      endX: s.dir === "next" ? -s.width : s.width,
+      timer: 0,
+    };
+    slide.timer = setTimeout(() => {
+      if (pendingSlide !== slide) { return; }
+      pendingSlide = null;
+      swipeSpringBack(slide);
+    }, SWIPE_WAIT_MS);
+    pendingSlide = slide;
+    vscode.postMessage({ type: "switchSession", sessionId: s.toId });
+  }
+
+  messagesEl.addEventListener("touchend", (e) => {
+    const s = swipe;
+    if (!s) { return; }
+    const t = e.changedTouches && e.changedTouches[0];
+    if (!t || t.identifier !== s.finger) { return; }
+    swipeEnd(false);
+  });
+  messagesEl.addEventListener("touchcancel", (e) => {
+    const s = swipe;
+    if (!s) { return; }
+    const t = e.changedTouches && e.changedTouches[0];
+    if (!t || t.identifier !== s.finger) { return; }
+    swipeEnd(true);
+  });
 
   /**
    * 会话行鼠标停上去的那行提示：标题 + 它的完整目录。
@@ -5952,13 +6434,13 @@
   function renderModelThinking(item, st, right) {
     if (st.draftModel !== item) { return; }
     right.classList.add("has-content");
-    const label = document.createElement("div"); label.className = "pk-thinking-label"; label.textContent = "推理强度";
-    right.appendChild(label);
     if (!item.reasoning) {
       const unsupported = document.createElement("div"); unsupported.className = "pk-thinking-unsupported"; unsupported.textContent = "不支持推理";
       right.appendChild(unsupported);
       return;
     }
+    const label = document.createElement("div"); label.className = "pk-thinking-label"; label.textContent = "推理强度";
+    right.appendChild(label);
     const levels = modelThinkingLevels(item);
     if (levels.length === 0) {
       const failed = document.createElement("div"); failed.className = "pk-thinking-unsupported"; failed.textContent = "无法获取设置";
@@ -5986,19 +6468,15 @@
     view.footer.innerHTML = "";
     view.footer.classList.remove("hidden");
     view.footer.classList.add("pk-model-footer");
-    const summary = document.createElement("div"); summary.className = "pk-footer-summary";
-    if (!st.draftModel) {
-      summary.textContent = "选择模型以查看推理设置";
-    } else {
-      const modelName = st.draftModel.name && st.draftModel.name !== st.draftModel.id
-        ? st.draftModel.name + " · " + st.draftModel.id : st.draftModel.id;
-      const levelText = st.draftModel.reasoning
-        ? (st.draftThinking ? "推理 " + thinkingLabel(st.draftThinking) : "推理未选择")
-        : "不支持推理";
-      const costInfo = modelCostInfo(st.draftModel);
-      summary.textContent = "待应用：" + modelName + " · " + levelText + (costInfo ? " · " + costInfo.text : "");
+    // 底部只说一件从别处看不出来的事：该选推理强度却还没选（那时的「确认切换」是灰的）。
+    // 选了哪个模型、什么推理强度，选中那一行自己写着，不再抄一遍。
+    const needsThinking = !!st.draftModel && st.draftModel.reasoning
+      && !st.draftThinking && modelThinkingLevels(st.draftModel).length > 0;
+    if (needsThinking) {
+      const summary = document.createElement("div"); summary.className = "pk-footer-summary";
+      summary.textContent = "先选一个推理强度";
+      view.footer.appendChild(summary);
     }
-    view.footer.appendChild(summary);
     const actions = document.createElement("div"); actions.className = "pk-footer-actions";
     const cancelBtn = document.createElement("button"); cancelBtn.type = "button"; cancelBtn.className = "secondary"; cancelBtn.textContent = "取消";
     cancelBtn.addEventListener("click", () => cancelPicker(view));
@@ -6191,7 +6669,8 @@
         if (item.current) { const badge = document.createElement("span"); badge.className = "pk-badge"; badge.textContent = "当前"; title.appendChild(badge); }
         if (isSelected && !isCurrentModel(st, item)) { const badge = document.createElement("span"); badge.className = "pk-badge pending-badge"; badge.textContent = "待应用"; title.appendChild(badge); }
         main.appendChild(title);
-        const desc = (item.provider ? item.provider : "") + (item.name && item.name !== item.id ? (item.provider ? " · " : "") + item.name : "");
+        // 行下那行只写跟上面那个 id 不一样的名字：provider 上面分组标题已经写了，不再重复。
+        const desc = item.name && item.name !== item.id ? item.name : "";
         if (desc) { const d = document.createElement("div"); d.className = "pk-desc"; d.textContent = desc; main.appendChild(d); }
         const details = [];
         if (item.contextWindow) { details.push("上下文 " + Math.round(item.contextWindow / 1000) + "K"); }
@@ -7418,6 +7897,8 @@
       ensureSidebarPanel();
       // 刚连上的这一批会话里可能已经有就绪的：把排队中的消息发出去
       flushPendingSend();
+      // 会话列表来了（连上 / 新建 / 一轮跑完 / 切换）：闲下来后把别的会话的版先排好
+      scheduleKeep();
       return;
     }
     if (type === "sessionActivated") {
@@ -7583,6 +8064,8 @@
       t = activeSession();
     }
     if (!t) { return; }
+    // 不是正在看的那个：它马上要变，“停着”的那种不再留着排好的旧版了（见 keepStep 上面那段）
+    if (t.id !== activeId) { unkeep(t); }
     // 这一条是“把历史再画一遍”（重放）还是刚发生的事（实时）：重放的插在重放游标处，
     // 实时的一律接到末尾——断线中间还在长的正文不该插进历史中间（见 placeUnit）
     t.replayNow = msg.replay === true;
@@ -7894,6 +8377,8 @@
           if (st.reconcile) { endReconcile(st); }
           else if (st.suppressScroll) { finishRedraw(st); }
         }
+        // 一大批重放刚结束：闲下来后把别的会话的版先排好（见 scheduleKeep）
+        scheduleKeep();
         break;
       case "stats": {
         // 上下文用量：供 panel 状态栏的百分比显示与颜色预警
@@ -8041,7 +8526,7 @@
     const grew = pane.scrollHeight - beforeHeight;
     let grewLeft = grew;
     const putBack = () => {
-      if (!pane.isConnected) { return; }
+      if (!paneShown(pane)) { return; }
       if (ruler && ruler.parentNode === pane) {
         // 按“尺子还该在视野里那个位置”直接对（不是累加差）：这函数要跑好几帧，
         // 累加会补成好几倍；按钮被收掉那种“上面矮了一截”也能一次对回来
@@ -8055,7 +8540,7 @@
     };
     putBack();
     // 后到的高度（图片解码、高亮重排）会让它再跑一点：再对两帧位置，然后把滚动锚定还给浏览器
-    let frames = ruler && pane.isConnected ? 2 : 0;
+    let frames = ruler && paneShown(pane) ? 2 : 0;
     const settle = () => {
       putBack();
       frames--;
@@ -8071,6 +8556,7 @@
   function removeSession(id) {
     const st = sessions.get(id);
     if (!st) { return; }
+    unkeep(st);
     cancelFlush(st);
     if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); }
     dropRunningLine(st);   // 那条「正在跑」的定时器与耗时那只钟（见 startRunClock）一并停掉
@@ -8303,13 +8789,15 @@
       vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: range.value });
     });
     ctrl.appendChild(range); ctrl.appendChild(out);
-    row.appendChild(ctrl);
+    // 「跟随 VSCode」紧跟在数值后面（跟它管的那根滑块同一行）：
+    // 原来是行里的另一个孩子，column 布局会把它拉成整行宽的一条。
     const reset = document.createElement("button"); reset.type = "button"; reset.className = "vo-slider-reset";
     reset.textContent = "跟随 VSCode";
     reset.addEventListener("click", () => {
       vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: "" });
     });
-    row.appendChild(reset);
+    ctrl.appendChild(reset);
+    row.appendChild(ctrl);
   }
 
   function openSettings() {

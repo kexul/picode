@@ -28,7 +28,7 @@ module.exports = async (page) => {
 
     if (batches > 0) {
         await page.eval(`
-            const pane = document.querySelector(".session-pane");
+            const pane = document.querySelector(".session-view:not(.off) .session-pane");
             const sessionId = pane.dataset.sessionId;
             const send = function (msg) {
                 window.dispatchEvent(new MessageEvent("message", { data: Object.assign({ sessionId: sessionId }, msg) }));

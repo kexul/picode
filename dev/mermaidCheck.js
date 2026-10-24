@@ -97,7 +97,7 @@ async function main() {
     try {
         await page.waitReady();
         await page.eval(`
-            const pane = document.querySelector(".session-pane");
+            const pane = document.querySelector(".session-view:not(.off) .session-pane");
             const id = pane.dataset.sessionId;
             window.__send = (m) => window.dispatchEvent(new MessageEvent("message", { data: Object.assign({ sessionId: id }, m) }));
             return true;
@@ -122,7 +122,7 @@ async function main() {
         bad += check("中文节点名没把图吞掉（三张图的尺寸都正常）", end.svgs.every((s) => s && s.w > 40 && s.h > 40), JSON.stringify(end.svgs));
 
         // 滚到顶看前两张（中文节点名的那两张在上面）
-        await page.eval(`document.querySelector(".session-pane").scrollTop = 0; return true;`);
+        await page.eval(`document.querySelector(".session-view:not(.off) .session-pane").scrollTop = 0; return true;`);
         await sleep(300);
         await page.shot("mermaid-1-light.png");
         // 深色：只换界面那套颜色变量（图里的颜色是 var(...)，应该不用重画就跟着变）

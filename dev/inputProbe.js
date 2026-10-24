@@ -29,7 +29,7 @@ const MEASURE = `
     barW: el.offsetWidth - el.clientWidth - (parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth)),
     fontSize: cs.fontSize,
     valueLen: el.value.length,
-    stopVisible: !!document.getElementById("stopHintBtn") && !document.getElementById("stopHintBtn").classList.contains("hidden"),
+    stopVisible: !!document.querySelector(".session-view:not(.off) .msg-endhint-stop") && !document.querySelector(".session-view:not(.off) .msg-endhint-stop").classList.contains("hidden"),
     rowH: row ? row.offsetHeight : 0,
   };
 `;
