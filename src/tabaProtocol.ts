@@ -30,7 +30,6 @@ const LIMITS = {
     task: 20000,
     model: 120,
     thinking: 40,
-    tools: 400,
     cwd: 4096,
     parentSessionFile: 4096,
 };
@@ -48,8 +47,6 @@ export interface TabaSpawnRequest {
     model?: string;
     /** 指定思考强度，可空。 */
     thinking?: string;
-    /** 工具白名单（逗号分隔），可空。 */
-    tools?: string;
     /** 子会话的工作目录，可空（空则跟父会话一样）。 */
     cwd?: string;
     /** 父会话文件路径（扩展从它自己的进程里拿到的），可空。 */
@@ -91,12 +88,10 @@ export function normalizeTabaRequest(raw: unknown): TabaRequest | undefined {
         const req: TabaSpawnRequest = { kind: "spawn", id, name, task };
         const model = str(o.model, LIMITS.model);
         const thinking = str(o.thinking, LIMITS.thinking);
-        const tools = str(o.tools, LIMITS.tools);
         const cwd = str(o.cwd, LIMITS.cwd);
         const parentSessionFile = str(o.parentSessionFile, LIMITS.parentSessionFile);
         if (model) { req.model = model; }
         if (thinking) { req.thinking = thinking; }
-        if (tools) { req.tools = tools; }
         if (cwd) { req.cwd = cwd; }
         if (parentSessionFile) { req.parentSessionFile = parentSessionFile; }
         return req;

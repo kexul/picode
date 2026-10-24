@@ -37,11 +37,12 @@ export interface PiConfig {
 /**
  * 一个 panel（会话）启动 pi 时的额外要求。
  *
- * 普通会话不用传；派出来的子会话要传（它有自己的会话文件、提示词、工具白名单，
- * 而且不能再派下级）。
+ * 普通会话不用传；派出来的子会话要传（它有自己的会话文件、提示词，
+ * 而且不能再派下级）。工具一般不动：子会话跟配置里的 defaultTools 走。
  */
 export interface PanelLaunch {
-    /** 额外命令行参数（--session / --append-system-prompt / --tools 之类）。 */
+    /** 额外命令行参数（--session / --append-system-prompt / --tools 之类）。
+     *  --tools 只在要限制工具时用（目标验收的判官），普通子会话不传。 */
     extraArgs?: string[];
     /** 不领取预热好的备用进程（参数不一样，必须新起一个）。 */
     skipSpare?: boolean;

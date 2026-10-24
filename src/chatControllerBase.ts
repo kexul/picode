@@ -53,7 +53,6 @@ import {
 } from "./tabaRegistry";
 import { buildTaskText } from "./tabaTask";
 import {
-    buildTabaExtraArgs,
     buildTabaLaunch,
     resolveTabaSpawn,
     type TabaSpawnOptions,
@@ -1110,7 +1109,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 workerSessionFile: workerRt.currentSessionPath ?? "",
                 cwd: workerRt.cwd,
             }),
-            tools: ChatControllerBase.GOAL_JUDGE_TOOLS,
             cwd: workerRt.cwd,
         };
         this.goalJudgeRun.set(workerPanelId, req.id);
@@ -1124,7 +1122,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         });
         void this.tabaSpawn(workerPanelId, req, {
             hidden: true,
-            extraArgs: ["-e", cfg.goalExtension],
+            // 判官的工具另外限：只读 + 跑命令，不给 edit / write（只验不改）。
+            // 普通子会话不传 --tools，跟配置走；判官是插件自己派的，才另写一份。
+            extraArgs: ["-e", cfg.goalExtension, "--tools", ChatControllerBase.GOAL_JUDGE_TOOLS],
             rawTask: true,
         });
     }
@@ -1292,7 +1292,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (this.taba.has(req.id) || this.tabaInFlight.has(req.id)) { return; }
         this.tabaInFlight.add(req.id);
         try {
-            // 子会话怎么起：工作目录 / 模型 / 工具白名单 都在这里面算（子会话一律全新会话，pi 自己建会话文件）
+            // 子会话怎么起：工作目录 / 模型 都在这里面算（子会话一律全新会话，pi 自己建会话文件）
             const plan = resolveTabaSpawn({
                 req,
                 // 子会话默认跑在"派活那个会话自己的目录"里：那个会话可能是在别的项目里开的
@@ -1304,7 +1304,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
             });
             const { cwd } = plan;
 
-            const extraArgs = [...buildTabaExtraArgs({ tools: plan.tools }), ...(opts.extraArgs ?? [])];
+            // 工具不另传：不带 --tools 起，子会话就跟配置里的 defaultTools 一样（codemode / powershell / MCP 都在）
+            const extraArgs = [...(opts.extraArgs ?? [])];
 
             const created = this.createBackgroundSession(buildTabaLaunch(extraArgs, cwd), plan.modelOverride);
             if (!created) {

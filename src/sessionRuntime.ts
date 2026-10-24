@@ -280,7 +280,7 @@ export class SessionRuntime {
      *  领不到（首个会话 / 备用尚未就绪）时自行 spawn。
      *  @param modelOverride 指定启动模型（新会话继承当前会话传入）；
      *  缺省时用本会话最后已知模型，再缺省才回落宿主全局配置。
-     *  @param launch 额外启动要求（子会话用：自己的会话文件、提示词、工具白名单，且不能再派）。
+     *  @param launch 额外启动要求（子会话用：自己的会话文件、提示词，且不能再派）。
      *  传过的 launch 会记住：pi 进程退出后重发消息会自动重启，那时要照原样再起一次。 */
     public startClient(modelOverride?: { provider?: string; modelId?: string }, launch?: PanelLaunch): void {
         if (this.client && this.client.isRunning()) {
