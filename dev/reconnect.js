@@ -569,7 +569,8 @@ async function sceneRedrawScroll(page, harness) {
     await page.click("#newSessionBtn");
     await page.sleep(1500);
     await waitIdle(page, 20000);
-    // 先聊够几轮：网页端首屏只发最近一段（默认 200 条 / 700 KB），聊过它才看得出裁没裁。
+    // 先聊够几轮：网页端首屏只发最近一段（默认 60 条 / 250 KB），聊过它才看得出裁没裁
+    //（所以这里要 40 轮 = 80 条消息，超过默认窗口才真的裁）。
     // 一轮真的跑完再发下一句：轮子还在转就发，会被当成排队插话，会话历史里就多出一份
     // 一模一样的“第 N 轮”（假模型那边也照收），这一场就验不清了。
     const turnDone = () => page.eval(`
@@ -582,7 +583,7 @@ async function sceneRedrawScroll(page, harness) {
             busy: !!(stop && !stop.classList.contains('hidden')) || ((document.getElementById('ctxIcon') || {}).dataset || {}).st === 'streaming',
         };
     `);
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 40; i++) {
         const before = (await turnDone()).n;
         await page.send("第 " + (i + 1) + " 轮");
         const deadline = Date.now() + 30000;
@@ -727,7 +728,7 @@ async function sceneRestart(page, harness) {
  * 重放的每一条都插在它前面，按钮被一路挤到最底下）；说的“还有 N 条”也得跟页面对得上，
  * 点一下补回来的不能重复。
  *
- * 把窗口压到 20 条才挤得出那颗按钮（正式默认是 200 条 / 700 KB）。
+ * 把窗口压到 20 条才挤得出那颗按钮（正式默认是 60 条 / 250 KB）。
  */
 async function sceneWindowed(page, harness) {
     console.log("\n【场景十】窗口模式重画：顶上只该有一颗「加载更早」，翻出来的更早的消息不能被收掉");

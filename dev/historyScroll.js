@@ -6,7 +6,7 @@
  *   ROUNDS=25 AT_BOTTOM=1 npm run web:shot -- --fake-pi --script dev/historyScroll.js   # 多批 + 贴底时点
  *
  * 做法：先用假模型攒够十几轮对话，刷新页面让窗口生效（顶上会出现「加载更早的消息」按钮：
- * 这里把首屏窗口压到 20 条才挤得出它——正式跑时窗口是 200 条或 700 KB），把视野滚到中间，
+ * 这里把首屏窗口压到 20 条才挤得出它——正式跑时窗口是 60 条或 250 KB），把视野滚到中间，
  * 记下点之前 / 点之后（等新内容插进来）的滚动位置与“视野顶上那条消息”的位置，
  * 打印结论并截两张图。
  *
@@ -15,7 +15,7 @@
  *   2. 回看时点（默认）：点完看着的还是原来那条消息（位置差不超过几像素），
  *      且不能跑到最下方——bug 版本会整整甩到底部。
  */
-// 首屏窗口压小：正式跑是 200 条 / 700 KB，那点对话挤不出「加载更早」按钮
+// 首屏窗口压小：正式跑是 60 条 / 250 KB，那点对话挤不出「加载更早」按钮
 process.env.PICHAT_HISTORY_WINDOW = process.env.PICHAT_HISTORY_WINDOW || "20";
 
 const ROUNDS = Number(process.env.ROUNDS || 18);
@@ -189,8 +189,8 @@ module.exports = async (page) => {
         results.push(await clickLoadMore(page, "2"));
     }
 
-    // 默认窗口（200 条 / 700 KB）下这些对话应该一次全发下来：把刚才压小的窗口撤掉，
-    // 重新开一次页面。这条抓的是“默认值被改小”（改回 30 条的话，按钮会冒出来、消息也只剩一半）
+    // 默认窗口（60 条 / 250 KB）下这些对话应该一次全发下来：把刚才压小的窗口撤掉，
+    // 重新开一次页面。这条抓的是“默认值被改小”（改回 20 条的话，按钮会冒出来、消息也只剩一半）
     delete process.env.PICHAT_HISTORY_WINDOW;
     await page.eval("location.reload(); return true;");
     await page.waitReady();

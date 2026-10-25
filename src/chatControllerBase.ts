@@ -2513,6 +2513,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
                     void target.loadResultImage(msg.toolCallId, typeof msg.index === "number" ? msg.index : 0);
                 }
                 break;
+            case "loadDetails":
+                // 界面上点开提示框了：把这一批没带过来的内容（思考全文 / 工具输出 / 调用参数）
+                // 一次发回去（见 sessionRuntime 的 clipDetail / loadDetails）。
+                if (Array.isArray(msg.keys)) { target.loadDetails(msg.keys); }
+                break;
         }
     }
 }

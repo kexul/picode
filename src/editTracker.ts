@@ -18,6 +18,10 @@ export interface EditTrackerHost {
     onKnownFilesChanged(): void;
     /** 回滚前的二次确认：message 是整句话（不同回滚的说法不一样），返回是否继续。 */
     confirmRevert(message: string): Promise<boolean>;
+    /** 工具输出一个字都不发（全文留在内存里，界面上点开再取），见 SessionRuntime.clipDetail。 */
+    clipToolText(detailKey: string, text: string): { text: string; omitted?: number; detailKey?: string };
+    /** 工具参数一个字段都不发（点开提示框时再取），见 SessionRuntime.hideArgs。 */
+    hideToolArgs(detailKey: string, args: unknown): { argsOmitted?: number; detailKey?: string };
 }
 
 /** 「改动」那一格里的一行：这个会话把一个文件改成了什么样。 */
@@ -100,16 +104,31 @@ export class EditTracker {
                 toolName,
                 path: p,
                 label: this.host.relativeTo(this.host.getCwd(), p),
-                args: evt.args,
+                ...this.hiddenArgs(evt.toolCallId, evt.args),
             });
         } else {
             this.host.post({
                 type: "tool",
                 toolCallId: evt.toolCallId,
                 toolName,
-                args: evt.args,
+                ...this.hiddenArgs(evt.toolCallId, evt.args),
             });
         }
+    }
+
+    /** 工具参数一个字都不发：只带个“一共多少字 + 编号”的记号，界面点开提示框再取。 */
+    private hiddenArgs(toolCallId: string, args: unknown): { argsOmitted?: number; detailKey?: string } {
+        if (!toolCallId) { return {}; }
+        return this.host.hideToolArgs(`args:${toolCallId}`, args);
+    }
+
+    /** 工具输出一个字都不发；消息里只留“一共多少字 + 编号”（全文在会话那边留着，界面点开再取）。 */
+    private clippedResult(toolCallId: string, text: string):
+        { resultText: string; resultOmitted?: number; detailKey?: string } {
+        const key = `result:${toolCallId}`;
+        const clipped = this.host.clipToolText(key, text);
+        if (clipped.omitted === undefined) { return { resultText: clipped.text }; }
+        return { resultText: clipped.text, resultOmitted: clipped.omitted, detailKey: key };
     }
 
     public onToolUpdate(evt: any): void {
@@ -125,7 +144,7 @@ export class EditTracker {
         this.host.post({
             type: "toolResultUpdate",
             toolCallId: id,
-            resultText: extractResultText(evt.partialResult),
+            ...this.clippedResult(id, extractResultText(evt.partialResult) ?? ""),
             durationMs: typeof started === "number" ? Date.now() - started : undefined,
         });
     }
@@ -141,7 +160,7 @@ export class EditTracker {
                     type: "toolResult",
                     toolCallId: evt.toolCallId,
                     isError: !!evt.isError,
-                    resultText: extractResultText(evt.result),
+                    ...this.clippedResult(evt.toolCallId, extractResultText(evt.result) ?? ""),
                     durationMs: typeof started === "number" ? Date.now() - started : undefined,
                     truncation,
                     images: extractResultImages(evt.result),

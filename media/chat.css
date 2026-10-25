@@ -331,6 +331,8 @@
   /* 合并标签的提示框：一组里不止一条调用，第二块起往上拉开距离，好一条条分开看 */
   .tag-tip-call-next { margin-top: 10px; }
   .tag-tip-result { margin-top: 6px; }
+  /* 「还有 N 字没带过来」那一行小字（思考全文 / 工具输出只带了开头，点开再去取） */
+  .tag-tip-clip { margin-top: 6px; opacity: 0.65; font-size: 0.92em; }
   .tag-tip.hidden { display: none; }
   .role { font-weight: bold; font-size: 0.8em; opacity: 0.7; margin-bottom: 2px; }
   /* markdown */

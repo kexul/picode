@@ -46,6 +46,18 @@ const path = require("path");
 const THINK_MS = Number(process.env.FAKEPI_THINK_MS || 0);
 /** 文字流式输出的间隔（毫秒）。 */
 const TEXT_TICK_MS = Number(process.env.FAKEPI_TICK_MS || 0);
+/** 让这轮里的思考与 bash 输出变多长（字符数；0 = 剧本原样）：
+ *  验“思考 / 工具输出一个字都不发、点开再取”那条路时用，见 dev/liveDetail.js。 */
+const LONG_TEXT_CHARS = Number(process.env.FAKEPI_LONG || 0);
+
+/** 把一段文字撑到 n 个字符（不够就顺着编号往下写）。 */
+function padTo(text, n) {
+    if (n <= text.length) { return text; }
+    const parts = [text];
+    let i = 1;
+    while (parts.join("").length < n) { parts.push("\n第 " + i + " 段：" + text); i += 1; }
+    return parts.join("").slice(0, n);
+}
 /** 单张图片的结果（base64 的小 png）：走 read 读图那条渲染路。 */
 const SAMPLE_PNG_BASE64 =
     "iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEUlEQVR4nGP8z0AswAKTQNYA" +
@@ -534,7 +546,7 @@ async function runScript(userText) {
         return;
     }
 
-    await think("用户要的是演示，那就按老剧本走一遍：先读图，再 bash，再改一下文件。");
+    await think(padTo("用户要的是演示，那就按老剧本走一遍：先读图，再 bash，再改一下文件。", LONG_TEXT_CHARS));
     await say("好，我用三个工具给你演示一遍（假模型秒回）：");    await act("read", { path: "示例图片.png" }, {
         content: [
             { type: "text", text: "Read image file [image/png]" },
@@ -542,9 +554,10 @@ async function runScript(userText) {
         ],
         raw: { content: [{ type: "text", text: "Read image file [image/png]" }], details: { dims: "10x10" } },
     });
+    const bashText = padTo("示例.js\n示例图片.png\n说明.txt", LONG_TEXT_CHARS);
     await act("bash", { command: "ls" }, {
-        content: [{ type: "text", text: "示例.js\n示例图片.png\n说明.txt" }],
-        raw: { content: [{ type: "text", text: "示例.js\n示例图片.png\n说明.txt" }], exitCode: 0 },
+        content: [{ type: "text", text: bashText }],
+        raw: { content: [{ type: "text", text: bashText }], exitCode: 0 },
     });
     await act("edit", { path: "说明.txt", oldText: "调试", newText: "调试（假模型改的）" }, {
         content: [{ type: "text", text: "已编辑" }],

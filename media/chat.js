@@ -787,10 +787,6 @@
       // 末尾候选：本段已有 think 之后又冒出来的一颗（可能是「末尾补来的一段思考」，也可能后面
       // 还有正文 / 工具）；跑完一轮它还留在末尾就并回上面那颗，见 foldTailThinking。
       tailThinking: null,
-      // 生成速度统计：本轮累计估算 token 数 / 起点时间；tps 为上一轮最终均值
-      tps: undefined,
-      tpsStart: 0,
-      tpsTokens: 0,
       // 这一批（两条正文之间的那一串调用）的落脚点：那条 .tool-row，或者这一批里刚铺下的图块
       // （见 mountToolImageBlock）。来了正文 / 用户消息就归零（新的一批）。
       currentToolTail: null,
@@ -2231,7 +2227,9 @@
 
   function addTool(st, toolName, argStr, toolCallId, interrupted) {
     hideEmptyHint(st);
-    if (!NO_MERGE_TOOLS.has(toolName)) { addToolToGroup(st, toolName, argStr, toolCallId, null, interrupted); return; }
+    if (!NO_MERGE_TOOLS.has(toolName)) {
+      return addToolToGroup(st, toolName, argStr, toolCallId, null, interrupted);
+    }
     const tag = document.createElement("span");
     // 还在跑的才转圈：没有 id 的静态调用没有结果事件；被中断的那条结果永远不会来（见 settleInterruptedTools）
     const running = !!toolCallId && !interrupted;
@@ -2252,6 +2250,7 @@
     // 见 mountToolImageBlock。
     tag._tipCall = tagTipCallText(toolName, argStr);
     tag._tipBody = interrupted ? INTERRUPTED_NOTE : "";
+    tag._st = st;
     attachTagTipHandlers(tag);
     mountToolTag(st, tag);
     // 问话卡片有时候比这条工具行先到（两条通道各有快慢）：把它挪到这一行下面
@@ -2259,6 +2258,7 @@
     if (running) { st.pendingToolTags.set(toolCallId, tag); }
     syncRunningLine(st);   // 这条在跑：末尾那行跟着写上它
     scrollToBottom(st);
+    return tag;
   }
 
   /** 往这一批里加一条调用：同名就并到已有那个标签上（标签停在第一次调用的位置），
@@ -2285,7 +2285,7 @@
       tag.appendChild(countEl);
       // 合并标签上不挂单条结果（_toolName / _resultText 那一套）：每条的数据都在 g.entries 里
       // plusAt / plusEl：这条标签上「+1」小动画的上一次时间与正在飘的那个（见 popPlusOne）
-      g = { row, tag, nameEl, countEl, name: toolName, entries: [], plusAt: 0, plusEl: null };
+      g = { row, tag, nameEl, countEl, name: toolName, entries: [], plusAt: 0, plusEl: null, st };
       tag._tipFill = (content) => fillGroupTip(g, content);
       tag._tipGroup = g;   // 提示框那边靠它看这组还在不在长（见 tipContentIsGrowing）
       attachTagTipHandlers(tag);
@@ -2367,9 +2367,13 @@
       call.textContent = e.tipCall || e.name;
       content.appendChild(call);
       const res = document.createElement("div");
+      let showResult = true;
       if (e.done) {
         res.className = "tag-tip-result";
-        res.textContent = e.resultText || "（没有输出）";
+        // 内容整个没带过来的（后端只留了“一共多少字”）：不写“（没有输出）”，也不出这块，
+        // 下面那行小字会说清楚（见 appendClipNote）
+        res.textContent = e.resultText || (e.clip ? "" : "（没有输出）");
+        showResult = !!res.textContent;
       } else if (e.resultText) {
         // 还在跑、但已经拿到部分结果（toolResultUpdate）：先把拿到的部分显示出来
         res.className = "tag-tip-result tip-loading";
@@ -2378,7 +2382,8 @@
         res.className = "tag-tip-result tip-loading";
         res.textContent = GROUP_RUNNING_TEXT;
       }
-      content.appendChild(res);
+      if (showResult) { content.appendChild(res); }
+      appendClipNote(content, e.clip);
     });
   }
 
@@ -2732,10 +2737,13 @@
 
   /** 想完一段：整段文本补上、标签停住。历史重放只来一条全文（没有开始事件），这里现开一个再收尾。
    *  forceNew：往暂存区补更早的历史时用（正在想的那一条在真的窗格里，别动它）。 */
-  function endThinking(st, text, forceNew) {
+  function endThinking(st, text, forceNew, msg) {
+    // 后端现在一字不传（正文只在点开提示框时取），所以“没有文本”不等于“没有这一段”：
+    // 只要消息里带着“还有多少字没带过来”，这一段照样要出一颗标签（重放历史全靠这一条）。
+    const clip = msg ? clipOf(msg) : null;
     let entry = forceNew ? null : st.thinkingEntry;
     if (!entry) {
-      if (!text) { return; }   // 没在想的、又没有文本（重复收尾）：不用管
+      if (!text && !clip) { return; }   // 没在想的、又没有文本（重复收尾）：不用管
       entry = addToolToGroup(st, THINKING_NAME, "", "");
       entry.tipCall = THINKING_NAME;
       noteThinkingEntry(st, entry);
@@ -2743,6 +2751,7 @@
     if (st.thinkingEntry === entry) { st.thinkingEntry = null; }
     entry.done = true;
     if (text) { entry.resultText = text; }
+    entry.clip = clip;
     syncGroupTag(st, entry.group);
     scrollToBottom(st);
   }
@@ -2883,6 +2892,83 @@
     refreshTagTipIfShowing(tag);
   }
 
+  // ==================== 「只带过来开头」的内容：点开再取 ====================
+  // 思考全文、工具输出、调用参数这类东西在界面上默认都收着，后端一个字都不发（见
+  // src/sessionRuntime.ts 的 clipDetail），全文留在后端。提示框打开时把这一批“没带过来的”
+  // 一次问回来；这一条还在长（正在想的思考、正在跑的工具）就每秒再问一次，看得见它往下写。
+  const DETAIL_REFRESH_MS = 1000;
+  let detailTimer = 0;
+
+  /** 一条消息里“没带全”的记号：{ key: 后端认的编号, omitted: 一共多少字, loaded: 取到全文了 }。
+   *  合并组里的每一条挂在 entry.clip 上；不合并的那种单条标签挂在 tag._resultClip 上。 */
+  function clipOf(msg) {
+    const key = typeof msg.detailKey === "string" ? msg.detailKey : "";
+    // 工具输出用 resultOmitted、思考用 omitted（两处发的字段名不一样，这里都认）
+    const omitted = typeof msg.resultOmitted === "number" ? msg.resultOmitted
+      : (typeof msg.omitted === "number" ? msg.omitted : 0);
+    if (!key || !omitted) { return null; }
+    return { key: key, omitted: omitted, loaded: false, failed: false };
+  }
+
+  /** 提示框里那条小字：还有多少字没带过来 / 取不到了。 */
+  function appendClipNote(content, clip) {
+    if (!clip || clip.loaded) { return; }
+    const note = document.createElement("div");
+    note.className = "tag-tip-clip";
+    note.textContent = clip.failed
+      ? "（这段内容已经取不到了，重新打开这个会话会重新带过来）"
+      : "（还有 " + clip.omitted + " 字没带过来，正在取…）";
+    content.appendChild(note);
+  }
+
+  /** 这一条还有要不要接着问的（没取到全文，或者这一条还在长）。 */
+  function clipNeedsMore(tag) {
+    const g = tag._tipGroup;
+    if (g) {
+      return g.entries.some((e) => (e.clip && (!e.clip.loaded || !e.done)) || (e.argsClip && !e.argsClip.loaded));
+    }
+    return (tag._resultClip && (!tag._resultClip.loaded || tag._done !== true))
+      || (!!tag._argsClip && !tag._argsClip.loaded);
+  }
+
+  /** 把打开着的这个提示框里没带全的那些一次问回来（一条消息问一把，别一条一个来回）。 */
+  function pumpClipDetails(tag) {
+    const st = tag._tipGroup ? tag._tipGroup.st : tag._st;
+    const sessionId = st ? st.id : "";
+    const keys = [];
+    const want = (clip, done) => {
+      if (!clip || clip.failed) { return; }
+      if (clip.loaded && done) { return; }   // 全文到手、这一条也跑完了：不用再问
+      keys.push(clip.key);
+    };
+    const g = tag._tipGroup;
+    if (g) {
+      for (const e of g.entries) {
+        want(e.clip, e.done);
+        want(e.argsClip, true);      // 调用参数：要一次就够（它不会再变）
+      }
+    } else {
+      want(tag._resultClip, tag._done === true);
+      want(tag._argsClip, true);
+    }
+    if (keys.length > 0) { vscode.postMessage({ type: "loadDetails", sessionId: sessionId, keys: keys }); }
+  }
+
+  function stopClipPump() {
+    if (detailTimer) { clearInterval(detailTimer); detailTimer = 0; }
+  }
+
+  function startClipPump(tag) {
+    stopClipPump();
+    pumpClipDetails(tag);
+    if (!clipNeedsMore(tag)) { return; }
+    detailTimer = setInterval(() => {
+      if (tagTipTag !== tag) { stopClipPump(); return; }
+      pumpClipDetails(tag);
+      if (!clipNeedsMore(tag)) { stopClipPump(); }
+    }, DETAIL_REFRESH_MS);
+  }
+
   // 自绘提示框：全局复用同一个元素。外框（含右上角关闭按钮）+ 内容区（可滚动）。
   // 内容区分两块：调用一行（输入）、结果一块稍深底色（输出）。
   const TAG_TIP_DELAY_MS = 200; // 电脑上悬浮多久后出现
@@ -2907,6 +2993,7 @@
     if (tagTipPaintTimer) { cancelAnimationFrame(tagTipPaintTimer); tagTipPaintTimer = 0; }
   }
   function hideTagTip() {
+    stopClipPump();
     cancelTagTipPaint();
     if (tagTipHideTimer) { clearTimeout(tagTipHideTimer); tagTipHideTimer = 0; }
     if (tagTipTimer) { clearTimeout(tagTipTimer); tagTipTimer = 0; }
@@ -2937,6 +3024,7 @@
       result.textContent = tag._tipBody;
       tagTipContent.appendChild(result);
     }
+    appendClipNote(tagTipContent, tag._resultClip);
   }
   function showTagTip(tag) {
     // 已在显示同一个标签（如鼠标从提示框移回标签）：只刷新位置，不闪没再闪出
@@ -2971,6 +3059,7 @@
       tagTipEl.classList.remove("hidden");
       tagTipFollow = true;   // 这次打开从“跟着最新一段走”开始
       paintTagTip(tag, tipContentIsGrowing(tag));
+      startClipPump(tag);    // 没带全的那些（思考全文 / 工具输出）这就去要
     };
     // 触屏设备没有悬浮：点一下是明确动作，立即显示；电脑上悬浮短暂停留后再显示
     if (IS_TOUCH_DEVICE) { render(); } else { tagTipTimer = setTimeout(render, TAG_TIP_DELAY_MS); }
@@ -3045,8 +3134,10 @@
   });
 
   /** write 参数区：内容预览（前 10 行，同 TUI formatWriteCall）。
-   *  截断部分不支持点击展开（卡片内展开体验差且容易误触），改用右上角“跳转”按钮打开完整文件。 */
-  function buildWritePreviewEl(argStr) {
+   *  截断部分不支持点击展开（卡片内展开体验差且容易误触），改用右上角“跳转”按钮打开完整文件。
+   *  clipped：后端只带了参数开头（见 sessionRuntime 的 clipArgs）——这时候“共 N 行”是按
+   *  带过来的那段算的，不准，所以改说一句“只带了开头”。 */
+  function buildWritePreviewEl(argStr, clipped) {
     let a = null;
     try { a = argStr ? JSON.parse(argStr) : {}; } catch { a = null; }
     const content = a && typeof a.content === "string" ? a.content : "";
@@ -3058,7 +3149,13 @@
     const wrap = document.createElement("div");
     wrap.className = "tc-args";
     wrap.appendChild(document.createTextNode(preview));
-    if (total > MAX_LINES) {
+    if (clipped) {
+      const hint = document.createElement("div");
+      hint.className = "tc-trunc-hint";
+      hint.textContent = "... (内容只带了开头)";
+      hint.title = "点击右上角“跳转”按钮查看完整文件";
+      wrap.appendChild(hint);
+    } else if (total > MAX_LINES) {
       const hint = document.createElement("div");
       hint.className = "tc-trunc-hint";
       hint.textContent = "... (" + (total - MAX_LINES) + " 行未显示,共 " + total + " 行)";
@@ -3286,11 +3383,15 @@
    * 一条调用一块（见 fillEntry）。调用方拿到的是这一条自己的把手：结果回来、回滚了各调一下
    * （见 editCardResult / editReverted）。
    */
-  function buildEditCard(st, toolName, label, filePath, toolCallId, argStr) {
+  function buildEditCard(st, toolName, label, filePath, toolCallId, argStr, argsClipped) {
     hideEmptyHint(st);
     let pendingResult = null;   // 结果（含 diff）：提示框随取随画
     let resultDone = false;
     let reverted = false;
+    // 参数一开始可能一点没带过来（后端只留了“一共多少字”），点开提示框时再取：
+    // 取回来换到这里，写入预览才画得出来（见 detail 那条消息）
+    let argsJson = argStr;
+    let argsTruncated = !!argsClipped;
 
     /** 提示框里属于这一条的那一块：标题行（工具名 + 路径 + 状态，右边跟「跳转 / 回滚」排在同一行）
      *  + 下面的 diff / 写入预览。isNext：这一条不是组里的第一条，往上拉开距离（跟别的工具那一条同一个类）。 */
@@ -3326,7 +3427,7 @@
           if (toolName !== "write" && pendingResult.diff) {
             content.appendChild(renderDiffBlock(st, pendingResult.diff, filePath));
           } else if (toolName === "write") {
-            const pv = buildWritePreviewEl(argStr);
+            const pv = buildWritePreviewEl(argsJson, argsTruncated);
             if (pv) { content.appendChild(pv); }
           }
         }
@@ -3340,9 +3441,16 @@
     // 挂进那一批（同名收成一个标签）：提示框里那一块交给上面 fillEntry 画
     const entry = addToolToGroup(st, toolName, argStr, toolCallId, fillEntry);
 
+    // 参数取回来了：换掉那一份，并把“只带了开头”改成实话
+    entry.applyArgs = (json) => {
+      argsJson = json;
+      argsTruncated = false;
+    };
+
     return {
       // 统计那边要用：这一条是哪个工具、在提示框里那一行写的是什么（见 noteToolDuration）
       toolName,
+      entry,
       callText: toolName + " " + (label || filePath || ""),
       setResult(msg) {
         resultDone = true;
@@ -3650,32 +3758,6 @@
     const prov = (st && st.provider) || "";
     return (prov ? prov + "/" : "") + id + (st.thinkingLevel ? "/" + st.thinkingLevel : "");
   }
-  let tpsSyncAt = 0;
-  // delta 高频到达，速度刷新做 250ms 节流（顶条那颗圆环的悬浮提示里有速度）
-  function noteTpsProgress(t) {
-    if (!paneShown(t.paneEl)) { return; }
-    const now = Date.now();
-    if (now - tpsSyncAt >= 250) { tpsSyncAt = now; syncStatus(); }
-  }
-  // 用流式 delta 估算生成速度：CJK 字符按 1 token/字，其余约 4 字符/token
-  function estTokens(text) {
-    if (!text) { return 0; }
-    let cjk = 0;
-    for (let i = 0; i < text.length; i++) {
-      const c = text.charCodeAt(i);
-      if (c >= 0x3000 && c <= 0x9fff) { cjk++; }
-    }
-    return cjk + (text.length - cjk) / 4;
-  }
-  // 流式中返回实时均值，空闲时返回上一轮的最终均值
-  function currentTps(st) {
-    if (!st) { return undefined; }
-    if (st.streaming && st.tpsStart > 0 && st.tpsTokens > 0) {
-      const secs = (Date.now() - st.tpsStart) / 1000;
-      return secs > 0.3 ? (st.tpsTokens / secs) : undefined;
-    }
-    return st.tps;
-  }
   // ==================== 顶条那颗圆环：上下文用量 ====================
   // 原来每个会话底部占一整行状态栏，现在收成顶条左边一颗圆环（见 renderHtml 的 #ctxIcon）：
   // 环填多满 = 上下文用了多少（≥70% 黄、≥90% 红），中间写整数百分比，
@@ -3701,8 +3783,6 @@
     if (state === "nomodel") { return "未配置模型（点击选择）"; }
     const parts = [modelFullFor(st)];
     if (typeof st.percent === "number") { parts.push("上下文 " + st.percent.toFixed(1) + "%"); }
-    const tps = currentTps(st);
-    if (typeof tps === "number") { parts.push(tps.toFixed(1) + " t/s"); }
     return parts.join(" · ") + "\n点击切换模型";
   }
   /** 顶条那颗圆环跟上当前会话。 */
@@ -8116,22 +8196,11 @@
         setStreaming(t, true);
         finalizeCurrentAssistant(t);
         endThinking(t, "");
-        // 新一轮生成：速度计时重新开始，上一轮均值先清零（有数据后由实时值接管）
-        t.tps = undefined;
-        t.tpsStart = Date.now();
-        t.tpsTokens = 0;
         break;
       case "streamEnd":
         if (t.rafId) { flushDeltas(t); }
         finalizeCurrentAssistant(t);
         endThinking(t, "");   // 想一半被中止（或后端没发收尾）：标签也得停住
-        // 结算本轮速度均值（必须在 setStreaming(false) 前算，之后 currentTps 改用 t.tps）
-        {
-          const secs = t.tpsStart > 0 ? (Date.now() - t.tpsStart) / 1000 : 0;
-          if (t.tpsTokens > 0 && secs > 0.3) { t.tps = t.tpsTokens / secs; }
-          t.tpsStart = 0;
-          t.tpsTokens = 0;
-        }
         t.activity = msg.activity || "idle";
         t.activityDetail = msg.detail || "";
         setStreaming(t, false);
@@ -8150,42 +8219,55 @@
         t.currentAssistant.raw += msg.delta;
         t.textDirty = true;
         scheduleFlush(t);
-        t.tpsTokens += estTokens(msg.delta);
-        noteTpsProgress(t);
         break;
       case "assistantFull":
         finalizeCurrentAssistant(t);
         addMarkdown(t, msg.text, msg.at, msg.id);
         t.currentAssistant = null;
         break;
-      case "thinkingStart":
-        startThinking(t);
+      case "thinkingStart": {
+        const entry = startThinking(t);
+        // 这段思考的编号：后端一个字都不发，点开时要按它取全文（见 clipOf / pumpClipDetails）
+        if (typeof msg.detailKey === "string" && msg.detailKey) { entry.clipKey = msg.detailKey; }
         break;
+      }
       case "thinkingDelta": {
         // 兼容较旧后端：即使没有先收到 thinkingStart，也按正在思考渲染。
         if (t.activity !== "thinking") { t.activity = "thinking"; }
         const thinking = startThinking(t);
         thinking.resultText += msg.delta;
+        if (typeof msg.detailKey === "string" && msg.detailKey) { thinking.clipKey = msg.detailKey; }
+        if (typeof msg.omitted === "number" && msg.omitted > 0) {
+          thinking.clip = { key: thinking.clipKey, omitted: msg.omitted, loaded: false, failed: false };
+        }
         refreshTagTipIfShowing(thinking.group.tag);   // 提示框开着时跟着长大
-        t.tpsTokens += estTokens(msg.delta);
-        if (activeId === t.id) { syncStatus(); }
         break;
       }
       case "thinkingFull":
         // 想完一段：整段文本随 pi 的 thinking_end 过来（历史重放也只来这一条），见 endThinking。
         // 正在往暂存区补更早的历史（t._stage）时另开一条，别动手头正在想的那一条。
-        endThinking(t, msg.text, !!t._stage);
+        endThinking(t, msg.text, !!t._stage, msg);
         break;
       case "tool": {
             finalizeCurrentAssistant(t);
         const argStr = msg.args ? JSON.stringify(msg.args) : "";
-        addTool(t, msg.toolName, argStr, msg.toolCallId, !!msg.interrupted);
+        const item = addTool(t, msg.toolName, argStr, msg.toolCallId, !!msg.interrupted);
+        // 参数一点没带过来（后端只留了“一共多少字 + 编号”）：点开提示框时再取（见 pumpClipDetails）
+        if (item && typeof msg.argsOmitted === "number" && msg.detailKey) {
+          const clip = { key: msg.detailKey, omitted: msg.argsOmitted, loaded: false, failed: false };
+          if (item.nodeType) { item._argsClip = clip; } else { item.argsClip = clip; }
+        }
         t.currentAssistant = null;
         break;
       }
       case "editCardStart": {
             finalizeCurrentAssistant(t);
-        const card = buildEditCard(t, msg.toolName, msg.label, msg.path, msg.toolCallId, msg.args ? JSON.stringify(msg.args) : "");
+        const card = buildEditCard(t, msg.toolName, msg.label, msg.path, msg.toolCallId,
+          msg.args ? JSON.stringify(msg.args) : "", typeof msg.argsOmitted === "number");
+        // 参数没带过来：记在卡片那条 entry 上，点开提示框时取回来（写入预览要它）
+        if (typeof msg.argsOmitted === "number" && msg.detailKey) {
+          card.entry.argsClip = { key: msg.detailKey, omitted: msg.argsOmitted, loaded: false, failed: false };
+        }
         t.pendingToolCards.set(msg.toolCallId, card);
         t.currentAssistant = null;
         break;
@@ -8296,6 +8378,7 @@
         const groupEntry = t.toolGroupEntries.get(msg.toolCallId);
         if (groupEntry) {
           groupEntry.resultText = msg.resultText || "";
+          groupEntry.clip = clipOf(msg);
           groupEntry.meta = { isPartial: true, durationMs: msg.durationMs };
           refreshTagTipIfShowing(groupEntry.group.tag);
           break;
@@ -8303,6 +8386,7 @@
         const tagEl = t.pendingToolTags.get(msg.toolCallId);
         if (tagEl) {
           tagEl._resultText = msg.resultText || "";
+          tagEl._resultClip = clipOf(msg);
           tagEl._resultMeta = { isPartial: true, durationMs: msg.durationMs };
           setTagTip(tagEl, tagEl._resultText, "");
         }
@@ -8323,6 +8407,7 @@
             groupEntry.done = true;
             groupEntry.isError = !!msg.isError;
             groupEntry.resultText = msg.resultText || "";
+            groupEntry.clip = clipOf(msg);
             groupEntry.meta = { isError: !!msg.isError, durationMs: msg.durationMs, truncation: msg.truncation || null };
             t.toolGroupEntries.delete(msg.toolCallId);
             syncGroupTag(t, groupEntry.group);
@@ -8340,6 +8425,7 @@
           tagEl._done = true;
           tagEl._isError = !!msg.isError;
           tagEl._resultText = msg.resultText || "";
+          tagEl._resultClip = clipOf(msg);
           tagEl._resultMeta = { isError: !!msg.isError, durationMs: msg.durationMs, truncation: msg.truncation || null, images: msg.images || null };
           t.pendingToolTags.delete(msg.toolCallId);
           // read 读图：小标签收掉，换成对话里的一整块图（不再走悬浮提示）
@@ -8351,6 +8437,52 @@
             setTagTip(tagEl, tagEl._resultText, "");
           }
         }
+        break;
+      }
+      case "details": {
+        // 点开时要的那一批内容回来了（见 startClipPump）：换到打开着的那个提示框里。
+        // 提示框已经关了就不管了——下次点开再要一次（后端那边留着，要点很快）。
+        const open = tagTipTag;
+        if (!open) { break; }
+        const items = msg.items && typeof msg.items === "object" ? msg.items : {};
+        const missing = Array.isArray(msg.missing) ? msg.missing : [];
+        const textOf = (key) => (typeof items[key] === "string" ? items[key] : (missing.indexOf(key) >= 0 ? null : undefined));
+        const apply = (clip, setText) => {
+          if (!clip) { return; }
+          const text = textOf(clip.key);
+          if (text === undefined) { return; }
+          if (text === null) { clip.failed = true; return; }
+          clip.loaded = true;
+          setText(text);
+        };
+        // 参数也走同一条回话：换掉那一行调用摘要（write 卡片换掉整份参数，写入预览才画得出来）
+        const applyArgs = (argsClip, put) => {
+          if (!argsClip) { return; }
+          const text = textOf(argsClip.key);
+          if (text === undefined) { return; }
+          if (text === null) { argsClip.failed = true; return; }
+          argsClip.loaded = true;
+          put(text);
+        };
+        const g = open._tipGroup;
+        if (g) {
+          for (const e of g.entries) {
+            apply(e.clip, (text) => { e.resultText = text; });
+            applyArgs(e.argsClip, (text) => {
+              e.argStr = text;
+              e.tipCall = tagTipCallText(e.name, text);
+              if (e.applyArgs) { e.applyArgs(text); }
+            });
+          }
+        } else {
+          apply(open._resultClip, (text) => { open._resultText = text; setTagTip(open, text, ""); });
+          applyArgs(open._argsClip, (text) => {
+            open._argStr = text;
+            open._tipCall = tagTipCallText(open._toolName, text);
+          });
+        }
+        refreshTagTipIfShowing(open);
+        if (!clipNeedsMore(open)) { stopClipPump(); }
         break;
       }
       case "resultImage": {
