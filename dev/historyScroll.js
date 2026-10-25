@@ -81,12 +81,19 @@ async function fillMessages(page, rounds) {
         await page.send(`第 ${i} 轮：随便回两句就行`);
         let ok = false;
         for (let t = 0; t < 200; t++) {
-            if ((await userBubbles(page)) >= i) { ok = true; break; }
+            // 看最后一条用户气泡写的是不是这一轮，不数总条数：滚远了的那些会被收起来
+            // （见 chat.js 的 parkTopNodes），窗格里数出来的比实际少
+            const last = await page.eval(`
+                const pane = document.querySelector("#messages .session-view:not(.off) .session-pane");
+                const users = pane ? pane.querySelectorAll(".msg.user") : [];
+                return users.length ? users[users.length - 1].innerText : "";
+            `);
+            if (String(last).includes(`第 ${i} 轮`)) { ok = true; break; }
             await page.sleep(200);
         }
         if (!ok) { throw new Error(`第 ${i} 轮没发出去`); }
     }
-    console.log(`  消息攒好了：${await userBubbles(page)} 条用户消息`);
+    console.log(`  消息攒好了：${rounds} 轮（窗格里这会儿看得见 ${await userBubbles(page)} 条用户消息）`);
 }
 
 /** 刷新页面：走「只发最近一段历史」那条路（顶上才有「加载更早的消息」）。 */
@@ -150,6 +157,25 @@ async function clickLoadMore(page, tag) {
     return ok;
 }
 
+/** 把「只画最后一截」那些没画的补完（一直滚到顶，直到顶上那条占位消失）。
+ *
+ * 为什么要这一步：从零重画（刷新页面）只画最后几轮，上面那几轮缩成一条占位（见 media/chat.js
+ * 的 flushReplayBuf）——所以“页面上有多少条”不再等于“窗格里有多少条”。要数条数，
+ * 先得把它们都滚出来。 */
+async function fillAll(page) {
+    for (let i = 0; i < 40; i += 1) {
+        const more = await page.eval(`
+            const pane = document.querySelector("#messages .session-view:not(.off) .session-pane");
+            const hint = pane && pane.querySelector(".older-hint");
+            if (!hint) { return false; }
+            pane.scrollTop = 0;
+            return true;
+        `);
+        if (!more) { return; }
+        await page.sleep(300);
+    }
+}
+
 module.exports = async (page) => {
     await page.waitReady();
     await fillMessages(page, ROUNDS);
@@ -169,6 +195,8 @@ module.exports = async (page) => {
     await page.eval("location.reload(); return true;");
     await page.waitReady();
     await page.sleep(2500);
+    // 只画最后一截：上面没画的先滚出来再数
+    await fillAll(page);
     const plain = await page.eval(`return {
         users: document.querySelectorAll('#messages .msg.user').length,
         moreBtn: !!document.querySelector('.history-more'),

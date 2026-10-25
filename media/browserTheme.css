@@ -81,9 +81,11 @@ html, body {
   justify-content: center;
 }
 
-/* 图标是 browserBridge.js 内联的 codicon SVG，尺寸在这里控制。 */
-#browserScreenshotBtn svg,
-#browserMenuBtn svg { width: 18px; height: 18px; display: block; }
+/* 图标是 browserBridge.js 内联的 codicon SVG，尺寸在这里控制。
+   三尖角比相机那颗大一挡：它三根尖角本身在 viewBox 里留白多，同样 18px 时
+   画出来只有 11.6px 宽（相机 13.5），所以给它 20px 补上。 */
+#browserScreenshotBtn svg { width: 18px; height: 18px; display: block; }
+#browserMenuBtn svg { width: 20px; height: 20px; display: block; }
 
 #browserMenuBtn:hover {
   opacity: 1;

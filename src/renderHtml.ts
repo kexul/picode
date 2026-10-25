@@ -43,6 +43,25 @@ const ICON_ADD = '<svg width="14" height="14" viewBox="0 0 16 16" xmlns="http://
 const ICON_ARROW_DOWN = '<svg width="14" height="14" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13.854 8.146C13.659 7.951 13.342 7.951 13.147 8.146L9.00096 12.292V2.5C9.00096 2.224 8.77696 2 8.50096 2C8.22496 2 8.00096 2.224 8.00096 2.5V12.293L3.85496 8.147C3.65996 7.952 3.34296 7.952 3.14796 8.147C2.95296 8.342 2.95296 8.659 3.14796 8.854L8.14796 13.854C8.24596 13.952 8.37396 14 8.50196 14C8.62996 14 8.75796 13.951 8.85596 13.854L13.856 8.854C14.051 8.659 14.051 8.342 13.856 8.147L13.854 8.146Z"/></svg>';
 const ICON_CLOSE = '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.5 2.5 L13.5 13.5 M13.5 2.5 L2.5 13.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>';
 
+/**
+ * 顶条最左边那颗圆环：上下文用量（见 chat.js 的 syncStatus）。
+ * 直接挂在 #sessionBar 里、排在 #sessionCenter 前面；浏览器页面里那颗文件侧边栏按钮
+ * 由 browserBridge.js 插在它前面，于是左边两颗、右边两颗（相机 / 项目与会话），两边对称。
+ * 一个圆分两段：底下那圈淡的当底，上面那截弧有多长就表示用了多少
+ * （pathLength="100"，所以 chat.js 直接拿百分比当 dashoffset 算，不用求周长）；
+ * 中间那行小字就是整数百分比（不带 %，带了就顶出圈外；见 chat.js 的 syncStatus），
+ * 没数的时候留空（三位数也不写：环太小、写不下，见 syncStatus 里那段注释）。
+ * 颜色（正常 / 黄 / 红）、提示文字、点击切模型都在 chat.js 里管。
+ */
+function ctxIconMarkup(): string {
+    return `      <button id="ctxIcon" type="button" data-st="loading" title="加载中…" aria-label="上下文用量（点击切换模型）">` +
+        `<svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">` +
+        `<circle class="ci-track" cx="8" cy="8" r="6.4" pathLength="100"/>` +
+        `<circle class="ci-arc" cx="8" cy="8" r="6.4" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100" transform="rotate(-90 8 8)"/>` +
+        `<text class="ci-text" x="8" y="8" text-anchor="middle" dominant-baseline="central" font-size="6.2" fill="currentColor" stroke="none"></text>` +
+        `</svg></button>\n`;
+}
+
 export function renderHTML(opts: RenderHTMLOpts): string {
     const nonceAttr = opts.scriptNonce ? ` nonce="${opts.scriptNonce}"` : "";
     const scriptTags = opts.scripts
@@ -52,20 +71,23 @@ export function renderHTML(opts: RenderHTMLOpts): string {
         .join("");
 
     const head = opts.extraHead ? `  ${opts.extraHead}\n` : "";
-    // 顶条：中间一列（上头会话名、底下当前目录），右边几颗网页端按钮（左边那颗是网页端
-    // 自己插的文件侧边栏开关）。「新建会话」那颗加号在输入框左边，见下面的 #inputRow。
+    // 顶条：中间一列（上头会话名、底下当前目录），右边几颗网页端按钮，左边那颗圆环是上下文用量
+    // （网页端还会把文件侧边栏开关插在它更左边）。「新建会话」那颗加号在输入框左边，
+    // 见下面的 #inputRow。
     // 中间那一列包成 #sessionCenter（一块可点区域）：里头那颗按钮装着两行——会话名在上、
     // 路径在下。那颗小点与箭头也是这颗按钮里的两头，跟两行整体居中（不是只对着会话名那一行）。
     // 路径行用 span 不用 div：按钮里只允许放行内内容。
     const sessionBar =
     `  <div id="sessionBar">\n` +
+    ctxIconMarkup() +
     `    <div id="sessionCenter">\n` +
     `      <button id="sessionName" title="当前会话 · 点这里换会话" aria-label="当前会话">\n` +
     `        <span class="sn-mark"><span class="sn-dot"></span><span class="sn-count"></span></span>\n` +
     `        <span class="sn-lines"><span class="sn-title"><span class="sn-text"></span></span><span id="sessionPath" class="hidden"><span class="sp-text"></span></span></span>\n` +
     `      </button>\n` +
     `    </div>\n` +
-    `    <div id="sessionBarTail"></div>\n` +
+    `    <div id="sessionBarTail">\n` +
+    `    </div>\n` +
     `  </div>\n`;
 
     const bodyTop = opts.extraBodyTop ? `  ${opts.extraBodyTop}\n` : "";

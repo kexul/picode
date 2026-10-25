@@ -34,7 +34,7 @@
      得在这儿裁掉，不然整页多出一条横向滚动条；顺便不让鼠标拖的时候糊上一片选中。
      划完就摘掉（平时别裁：提示框这些会伸到外面）。 */
   #messages.swiping { overflow: hidden; user-select: none; -webkit-user-select: none; }
-  /* 一个会话一层壳：消息窗格（.session-pane）滚，底下一行状态栏。
+  /* 一个会话一层壳：里面就一块消息窗格（.session-pane），它自己滚。
      绝对定位铺满 #messages：同时有好几个壳挂着（只一个露在外面，见下面 .off 那段）。
      为什么不用“摆进列的流里”（flex 子项）：那样子壳“停着”（见下）与“露出来”两种状态的
      盒模型不一样，浏览器会把里头那几百条消息重新排一遍；一直绝对定位就可以直接用停着时
@@ -126,7 +126,8 @@
   }
   #sessionCenter:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
   /* 顶条上那颗文件侧边栏按钮：竖着撑满整个顶条（上下留白由顶条自己的
-     内边距给），好点、不误触。它只在浏览器页面里存在（见本文件末尾）。 */
+     内边距给），好点、不误触。它只在浏览器页面里存在（见本文件末尾），
+     由 browserBridge.js 插在圆环前面，也就是顶条的第一个。 */
   #fileSidebarBtn {
     flex: 0 0 auto; align-self: stretch; width: 32px; padding: 0; border: none; background: transparent;
     color: var(--vscode-foreground); opacity: 0.7; line-height: 1; border-radius: 5px; cursor: pointer;
@@ -180,7 +181,7 @@
   #sessionName .sn-caret svg { width: 12px; height: 12px; display: block; transform: rotate(90deg); }
   #sessionName .sn-caret.hidden { display: none; }
   /* 顶条最右边：网页端的两颗按钮（截图 / 项目与会话）由 browserBridge.js 挂在这里；
-     跟左边加号一样竖着撑满（见 browserTheme.css 里那两颗的尺寸）。 */
+     跟左边那几颗一样竖着撑满（见 browserTheme.css 里那两颗的尺寸）。 */
   #sessionBarTail { flex: 0 0 auto; align-self: stretch; display: flex; align-items: stretch; gap: 4px; margin-left: auto; }
   /* 名字正下方那行小字：当前会话跑在哪个目录。跟名字同一列、一样居中；
      灰一点、小一号。路径太长时末尾省略，完整路径在 title 提示里（悬停或长按能看）。 */
@@ -254,16 +255,6 @@
   .msg-time::after { content: attr(data-time); }
   .system { font-style: italic; opacity: 0.6; font-size: 0.85em; white-space: pre-wrap; text-align: center; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-radius: 0; margin: 12px 0; }
   .error { color: var(--vscode-errorForeground); }
-  /* 思考中的动画指示器 */
-  .typing { display: inline-flex; align-items: center; gap: 3px; vertical-align: middle; }
-  .typing span {
-    width: 4px; height: 4px; border-radius: 50%;
-    background: var(--vscode-foreground); opacity: 0.5;
-    animation: typing-blink 1.2s infinite ease-in-out;
-  }
-  .typing span:nth-child(2) { animation-delay: 0.2s; }
-  .typing span:nth-child(3) { animation-delay: 0.4s; }
-  @keyframes typing-blink { 0%, 60%, 100% { opacity: 0.2; } 30% { opacity: 0.9; } }
   /* 一批工具调用收在同一条单独的行里（跟正文分开）：一条放不下就折行，不横向滑 */
   .tool-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0; padding: 0 14px; }
   .tool { display: inline-block; position: relative; min-width: 0; max-width: 100%; margin: 2px 4px 0 0; vertical-align: middle; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.7; white-space: normal; overflow-wrap: anywhere; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); border-radius: 4px; padding: 2px 6px; cursor: default; transition: background 150ms, opacity 150ms; }
@@ -497,9 +488,6 @@
   button:active { transform: scale(0.97); }
   button:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: 1px; }
   button:disabled { opacity: 0.5; cursor: default; }
-  /* 状态栏模型名与上下文用量百分比（≥70% 黄、≥90% 红，只对百分比变色） */
-  .st-pct.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
-  .st-pct.err { color: var(--vscode-errorForeground, #f14c4c); }
   /* @ 文件引用下拉 */
   #fileMenu {
     position: absolute; bottom: 100%; left: 0; margin-bottom: 4px; z-index: 10;
@@ -601,6 +589,17 @@
   }
   .history-more:hover { opacity: 1; color: var(--vscode-foreground, #ccc); }
   .history-more:disabled { opacity: 0.45; cursor: default; }
+  /* 从零重画时上面没画的那几截占的位置（见 chat.js 的 mountOlderHint）：高度是估的，
+     人往上滑到跟前就一段段换成真内容。它平常看不见（-滚到离顶还剩一屏时就自动补了，
+     补完视野停在补出来的那一截上，占位整个在上面），所以只留一行字贴在它头顶，
+     不描边：这么大一块虚线框子看着像界面坏了。 */
+  .older-hint { margin: 6px 0; pointer-events: none; }
+  /* 那行字粘在视野顶上：这块占位可能好几十屏高，滚到它中间的时候也得看得见那句话 */
+  .older-hint .oh-text {
+    position: sticky; top: 6px; display: block; padding-top: 8px;
+    text-align: center; font-size: 0.85em; font-family: var(--vscode-font-family);
+    color: var(--vscode-descriptionForeground, #999); opacity: 0.6;
+  }
   .edit-diff {
     max-height: 480px; overflow: auto; padding: 2px 0 4px;
     font-family: var(--vscode-editor-font-family, monospace);
@@ -1169,27 +1168,32 @@
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
   }
 
-  /* 当前会话底部状态栏：始终显示，点击切换这个会话的模型。
-     基础字体用 UI 字体：等宽字体里中文会掉到宋体那类，观感差；
-     模型名 / 百分比 / t/s 这些数字记号单独保持等宽，对齐不丢。 */
-  .pane-status {
-    display: flex; align-items: center; gap: 6px; flex: 0 0 auto;
-    min-height: 1.4em; padding: 2px 8px; overflow: hidden; white-space: nowrap;
-    border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
+  /* 顶条最左边那颗圆环：上下文用量（原来底部占一整行的那条状态栏，见 chat.js 的 syncStatus）。
+     网页端那颗文件侧边栏按钮还排在它左边（左边两颗，对着右边相机 / 项目与会话那两颗）。
+     环填多满 = 上下文用了多少（≥70% 黄、≥90% 红），提示里写模型全名 / 百分比 / 速度，
+     点它切模型；还没就绪（加载中 / 等 pi 起来 / 没配模型）时环空着、淡下去，同样能点。 */
+  #ctxIcon {
+    flex: 0 0 auto; align-self: stretch; width: 32px; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: none; border-radius: 5px; cursor: pointer;
+    color: var(--vscode-descriptionForeground, #999);
+  }
+  #ctxIcon:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); color: var(--vscode-foreground); }
+  /* 圆环比旁边那几颗纯图标大一号（外径 ~16px，别的墨迹 ~13px）：环里还装着一行百分比，
+     真缩到跟它们一样大，三位数就挤到压线了。 */
+  #ctxIcon svg { width: 20px; height: 20px; display: block; }
+  /* 环中间那行百分比：用界面字体（等宽字体里的中文 / 数字在小字号下不匀），数字对齐 */
+  #ctxIcon .ci-text {
     font-family: var(--vscode-font-family, system-ui, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif);
-    font-size: var(--vscode-font-size); cursor: pointer;
-    color: color-mix(in srgb, var(--vscode-foreground) 88%, transparent);
+    font-variant-numeric: tabular-nums; letter-spacing: -0.15px;
   }
-  .pane-status .st-model, .pane-status .st-pct, .pane-status .st-tps {
-    font-family: var(--vscode-editor-font-family, monospace);
-  }
-  /* 模型 ID 太长时自己收省略号：后面那几项（用量、速度）是重点，不能被挤出屏幕。
-     手机窄屏上尤其常见（长模型名 + 百分比 + 速度），标题里还有全名可看。 */
-  .pane-status .st-model { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .pane-status .st-pct, .pane-status .st-tps, .pane-status .typing { flex: 0 0 auto; }
-  .pane-status:not(.ps-focus) { opacity: 0.6; }
-  .pane-status.ps-focus { opacity: 1; }
-  .pane-status:hover .st-model { text-decoration: underline; }
+  /* 底下那圈淡底 + 上面那截弧，两段都用这颗按钮的 currentColor 画 */
+  #ctxIcon .ci-track { stroke: currentColor; opacity: 0.25; }
+  #ctxIcon .ci-arc { stroke: currentColor; transition: stroke-dashoffset 200ms ease; }
+  #ctxIcon.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
+  #ctxIcon.err { color: var(--vscode-errorForeground, #f14c4c); }
+  #ctxIcon[data-st="loading"], #ctxIcon[data-st="wait"], #ctxIcon[data-st="nomodel"] { opacity: 0.55; }
+  @media (prefers-reduced-motion: reduce) { #ctxIcon .ci-arc { transition: none; } }
   /* 工具结果内联图片（read 读图等）：缩略图 + 点击放大 */
   .tc-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }
   .tc-img { max-width: 100%; max-height: 320px; border-radius: 6px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); background: rgba(128,128,128,0.08); cursor: zoom-in; }
@@ -1236,10 +1240,6 @@
     #inputArea > * {
       width: 100%; max-width: var(--pichat-content-max);
       margin-left: auto; margin-right: auto;
-    }
-    /* 状态栏那行小字（模型名 / 用量）贴着这一列的左边，不再贴着窗口最左边 */
-    .pane-status {
-      padding-left: max(8px, calc((100% - var(--pichat-content-max)) / 2));
     }
   }
 

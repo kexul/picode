@@ -9,7 +9,7 @@
  * 要复现的是手机上的那一路：会话正在输出，页面被切到后台 / 锁屏（系统把页面冻住、
  * 连接被掐掉或看着还活着其实已经死了），回来之后会话已经输出完了。这时界面上：
  *   - 停止生成那颗方块该收起来；
- *   - 状态栏那三点动画该停；
+ *   - 顶条那颗圆环不在生成态；
  *   - 会话名字那颗点该不闪；
  *   - 正文该跟着输出继续长（不是等跑完一次性冒出来）。
  *
@@ -56,14 +56,14 @@ function check(cond, text) { (cond ? ok : bad)(text); }
 async function uiState(page) {
     return page.eval(`
         const stop = document.querySelector('.session-view:not(.off) .msg-endhint-stop');
-        const status = document.querySelector('#messages .session-view:not(.off) .pane-status');
+        const ctxIcon = document.getElementById('ctxIcon');
         const nameBtn = document.getElementById('sessionName');
         const bubbles = document.querySelectorAll('#messages .session-view:not(.off) .msg.assistant');
         return {
             stopShown: !!(stop && !stop.classList.contains('hidden')),
-            typing: !!document.querySelector('#messages .session-view:not(.off) .typing'),
+            ctxBusy: !!(ctxIcon && ctxIcon.dataset.st === 'streaming'),
             nameStreaming: !!(nameBtn && nameBtn.classList.contains('streaming')),
-            status: status ? status.innerText.replace(/\\s+/g, ' ').trim() : '',
+            status: ctxIcon ? (ctxIcon.getAttribute('title') || '').split('\\n')[0] : '',
             answer: Array.from(bubbles).map(function (e) { return e.innerText; }).join('\\n'),
             lastAnswer: bubbles.length ? bubbles[bubbles.length - 1].innerText : '',
         };
@@ -71,8 +71,8 @@ async function uiState(page) {
 }
 
 function printState(tag, st) {
-    console.log(`  · ${tag}：停止键=${st.stopShown ? "显示" : "收起"} 三点动画=${st.typing ? "在动" : "停了"} ` +
-        `名字闪=${st.nameStreaming ? "是" : "否"} 状态栏="${st.status}"`);
+    console.log(`  · ${tag}：停止键=${st.stopShown ? "显示" : "收起"} 圆环=${st.ctxBusy ? "生成中" : "闲着"} ` +
+        `名字闪=${st.nameStreaming ? "是" : "否"} 圆环提示="${st.status}"`);
 }
 
 /** 页面上的正文（助手气泡）。 */
@@ -80,8 +80,8 @@ async function answerText(page) {
     return page.eval("return Array.from(document.querySelectorAll('#messages .session-view:not(.off) .msg.assistant')).map(function (e) { return e.innerText; }).join('\\n')");
 }
 
-/** 三条"还在输出"的界面证据都齐了吗（停止键 + 三点动画 + 名字在闪）。 */
-function looksStreaming(st) { return st.stopShown && st.typing; }
+/** "还在输出"的界面证据都齐了吗（停止键 + 名字在闪）。 */
+function looksStreaming(st) { return st.stopShown && st.nameStreaming; }
 
 /** 等界面上出现"正在输出"的样子。 */
 async function waitStreaming(page, ms) {
@@ -100,7 +100,7 @@ async function waitIdle(page, ms) {
     let st = await uiState(page);
     while (Date.now() < deadline) {
         st = await uiState(page);
-        if (!st.stopShown && !st.typing && !st.nameStreaming) { return st; }
+        if (!st.stopShown && !st.nameStreaming) { return st; }
         await sleep(300);
     }
     return st;
@@ -208,7 +208,7 @@ async function sceneFreeze(page) {
     await dumpMessages(page, "场景一");
     await page.shot("recon-1-freeze-after.png");
     check(!final.stopShown, "停止生成那颗方块收起来了");
-    check(!final.typing, "状态栏那三点动画停了");
+    check(!final.ctxBusy, "顶条那颗圆环不在生成态了");
     check(!final.nameStreaming, "会话名字那颗点不闪了");
     check(final.answer.includes("完事"), "会话的最后一句话在页面上");
 }
@@ -238,7 +238,7 @@ async function sceneOffline(page) {
     printState("网络恢复后", final);
     await page.shot("recon-2-offline-after.png");
     check(!final.stopShown, "停止生成那颗方块收起来了");
-    check(!final.typing, "状态栏那三点动画停了");
+    check(!final.ctxBusy, "顶条那颗圆环不在生成态了");
     check(!final.nameStreaming, "会话名字那颗点不闪了");
 }
 
@@ -270,7 +270,7 @@ async function sceneBoth(page) {
     await dumpMessages(page, "场景三");
     await page.shot("recon-3-both-after.png");
     check(!final.stopShown, "停止生成那颗方块收起来了");
-    check(!final.typing, "状态栏那三点动画停了");
+    check(!final.ctxBusy, "顶条那颗圆环不在生成态了");
     check(!final.nameStreaming, "会话名字那颗点不闪了");
     check(final.answer.includes("完事"), "会话的最后一句话在页面上");
 }
@@ -401,7 +401,7 @@ async function sceneFuzz(page) {
     await dumpMessages(page, "场景四");
     await page.shot("recon-4-fuzz-after.png");
     check(!final.stopShown, "停止生成那颗方块收起来了");
-    check(!final.typing, "状态栏那三点动画停了");
+    check(!final.ctxBusy, "顶条那颗圆环不在生成态了");
     check(final.answer.includes("完事"), "会话的最后一句话在页面上");
 }
 
@@ -442,7 +442,7 @@ async function sceneChurn(page, harness) {
     printState("收尾后", final);
     await page.shot("recon-5-churn-after.png");
     check(!final.stopShown, "停止生成那颗方块收起来了");
-    check(!final.typing, "状态栏那三点动画停了");
+    check(!final.ctxBusy, "顶条那颗圆环不在生成态了");
     // 假模型的收尾那句话在一条回复里只能出现一次：两次就是补发重复了，一次都没有就是漏补
     const hits = (final.lastAnswer.match(/完事。三个工具都跑过了/g) || []).length;
     check(hits === 1, `这一轮的收尾那句话出现了 ${hits} 次（应为 1 次）`);
@@ -497,9 +497,9 @@ async function sceneTailLost(page, harness) {
     await dumpMessages(page, "场景六");
     await page.shot("recon-6-taillost-after.png");
     check(final.answer.includes("完事"), "正文是完整的");
-    check(!final.stopShown && !final.typing && !final.nameStreaming,
-        "界面不卡在“正在输出”（停止键收起来、三点动画停、名字不闪）" +
-        (settled.stopShown || settled.typing ? "  ← 卡住了：正文到了、状态没跟上" : ""));
+    check(!final.stopShown && !final.nameStreaming,
+        "界面不卡在“正在输出”（停止键收起来、名字不闪）" +
+        (settled.stopShown ? "  ← 卡住了：正文到了、状态没跟上" : ""));
 }
 
 /** 页面上和“视野 + 消息条数”有关的读数（场景八用）。 */
@@ -579,7 +579,7 @@ async function sceneRedrawScroll(page, harness) {
         return {
             n: list.length,
             said: last.includes('完事'),
-            busy: !!(stop && !stop.classList.contains('hidden')) || !!document.querySelector('#messages .session-view:not(.off) .typing'),
+            busy: !!(stop && !stop.classList.contains('hidden')) || ((document.getElementById('ctxIcon') || {}).dataset || {}).st === 'streaming',
         };
     `);
     for (let i = 0; i < 20; i++) {

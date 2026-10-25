@@ -195,13 +195,13 @@ export class SessionRuntime {
         return !this.hasConversation && !this.loading;
     }
 
-    // ---- 当前状态快照（跟着 sessionList 发给界面，界面自己画底下那条状态栏）----
+    // ---- 当前状态快照（跟着 sessionList 发给界面，界面自己画顶条那颗圆环）----
     private statusModelId?: string;
     private statusProvider?: string;
     private statusThinking?: string;
     private statusPercent?: number;
     /** 模型列表缓存：pi 启动时读一次 models.json，进程存活期间不变；
-     *  点击状态栏弹选择器直接读缓存，避免每次都等 RPC 往返（多 panel 时尤其卡）。 */
+     *  点击圆环弹选择器直接读缓存，避免每次都等 RPC 往返（多 panel 时尤其卡）。 */
     private cachedModels?: ModelInfo[];
     /** 命令列表缓存（get_commands）：供 / 命令菜单展示与简写改写；
      *  进程存活期间有效，attachClient 时失效并预取。 */
@@ -262,7 +262,7 @@ export class SessionRuntime {
     }
 
 
-    // ---- 状态快照只读视图（供 sessionList 携带，界面重建后恢复状态栏）----
+    // ---- 状态快照只读视图（供 sessionList 携带，界面重建后恢复圆环）----
     public get modelId(): string | undefined { return this.statusModelId; }
     public get provider(): string | undefined { return this.statusProvider; }
     public get thinkingLevel(): string | undefined { return this.statusThinking; }
@@ -419,7 +419,7 @@ export class SessionRuntime {
             this.host.broadcastSessionList();
             void this.sendCurrentModel();
             void this.refreshStats();
-            // 预取模型列表：点状态栏选模型时直接读缓存，不等 RPC
+            // 预取模型列表：点圆环选模型时直接读缓存，不等 RPC
             void this.refreshModels();
             // 预取命令列表（技能/模板/扩展命令）：/ 菜单与简写改写直接用缓存
             void this.refreshCommands();
@@ -967,7 +967,13 @@ export class SessionRuntime {
         const msgResp = await this.request<{ messages: any[] }>({ type: "get_messages" });
         const messages: any[] = msgResp?.data?.messages ?? [];
         this.noteSessionReplaced();
-        this.renderWindowed(messages);
+        // replay：这一批是“把历史再画一遍”，跟 replayHistory 同一种东西：界面不给它们挂进场动画
+        //（重播几百条各跑一遍 250 毫秒的进场，手机上是看得出来的卡）
+        this.renderWindowed(messages, { sink: (msg) => this.post({ ...msg, replay: true }) });
+        // 这一屏画完了（跟 replayHistory 那条路的收尾同一个意思）：界面靠它把攒着的重放
+        // 画出来（只画最后一截，见 media/chat.js 的 flushReplayBuf）。没有这条，界面会
+        // 一直攒到下一次消息才画。
+        this.post({ type: "syncPoint" });
         this.currentSessionPath = file;
         // 已有会话的标题不会走 session_info_changed，得主动问一次
         void this.refreshSessionTitle();
@@ -1312,7 +1318,8 @@ export class SessionRuntime {
         const win = this.sliceHistoryWindow(messages, this.historyWindowStart);
         this.noteHistoryWindow(win, messages);
         const emit: MessageSink = (msg) => {
-            this.host.postToSession(this.id, { type: "historyBatchEvent", event: msg });
+            // replay：这批是“往上补更早的历史”，界面不给它们挂进场动画（见 media/chat.js 的 enterCls）
+            this.host.postToSession(this.id, { type: "historyBatchEvent", event: { ...msg, replay: true } });
         };
         this.renderMessages(win.list, { sink: emit, inlineImages: this.planInlineImages(win.list), indexBase: win.start });
         this.post({ type: "historyBatchEnd", hasMore: win.hasMore, hidden: win.hidden });
@@ -1654,7 +1661,7 @@ export class SessionRuntime {
             if (!this.streaming) {
                 this.setActivity("idle");
             }
-            // 上下文用量变了：状态栏那颗百分比跟上
+            // 上下文用量变了：顶条那颗圆环的填充跟上
             void this.refreshStats();
         }
     }

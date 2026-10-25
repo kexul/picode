@@ -282,7 +282,7 @@ async function main() {
         console.log("音频上下文：" + (audio.length ? JSON.stringify(audio) : "（没有创建过）"));
         printHotspots(profile);
         if (stream) {
-            const state = await page.eval("return { streaming: !!document.querySelector('.typing'), chars: (document.querySelector('.msg.assistant .md') || {}).textContent ? document.querySelector('.msg.assistant .md').textContent.length : 0 }");
+            const state = await page.eval("return { streaming: (document.getElementById('ctxIcon') || {}).dataset && document.getElementById('ctxIcon').dataset.st === 'streaming', chars: (document.querySelector('.msg.assistant .md') || {}).textContent ? document.querySelector('.msg.assistant .md').textContent.length : 0 }");
             console.log("流式状态：" + JSON.stringify(state));
             await page.eval("window.__streamDone && window.__streamDone(); return true;");
         }

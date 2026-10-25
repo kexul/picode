@@ -77,6 +77,8 @@
   // 顶条名字底下那行小字：当前会话跑在哪个目录（内容由 renderSessionBar 填）
   const sessionPathEl = document.getElementById("sessionPath");
   const sessionPathTextEl = sessionPathEl ? sessionPathEl.querySelector(".sp-text") : null;
+  // 顶条最左边那颗圆环：上下文用量（见 renderHtml 的 #ctxIcon、下文 syncStatus）
+  const ctxIconEl = document.getElementById("ctxIcon");
   // 顶条中间那一列（会话名 + 目录两行）：两行合起来就是一块可点区域，见下面的点击监听
   const sessionCenterEl = document.getElementById("sessionCenter");
   // 输入框的起步高度：固定占 144px（约七行）；浏览器那份页面在 CSS 里把
@@ -108,7 +110,7 @@
   sessionNameBtn.appendChild(sessionCaret);
 
   // ---- 会话本地状态（后端 sessionList 消息驱动）----
-  // sessions：一个会话一份状态（消息窗格 + 底部状态栏 + 名字 / 状态 / 父子关系）。
+  // sessions：一个会话一份状态（消息窗格 + 名字 / 状态 / 父子关系）。
   // 一次只看一个会话：activeId 就是当前这个，其余会话的 DOM 留在内存里，切回去接着看。
   const sessions = new Map();        // sessionId -> state
   const sessionDrafts = new Map();   // sessionId -> { text, selStart, selEnd, height }（输入草稿按会话存）
@@ -728,7 +730,7 @@
   function createSession(id, title) {
     let st = sessions.get(id);
     if (st) { return st; }
-    // 一个会话 = 一层壳（.session-view）：消息窗格 + 底部状态栏。
+    // 一个会话 = 一层壳（.session-view）：里面就一块消息窗格（.session-pane）。
     // 壳一直留着（切走只是盖上 .off 藏起来，见 chat.css 那段），切回去时消息、滚动位置、草稿都还在。
     const view = document.createElement("div");
     view.className = "session-view";
@@ -738,22 +740,24 @@
     pane.dataset.sessionId = id;
     pane.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
     view.appendChild(pane);
-    const stBar = document.createElement("div");
-    stBar.className = "pane-status";
-    // 拦掉 mousedown 冒泡：状态栏自己处理点击（弹模型选择器）
-    stBar.addEventListener("mousedown", (e) => { e.stopPropagation(); });
-    stBar.addEventListener("click", (e) => {
-      e.stopPropagation();
-      vscode.postMessage({ type: "pickModel", sessionId: id, t0: performance.now() });
-    });
-    view.appendChild(stBar);
     pane.addEventListener("scroll", () => {
       if (!paneShown(pane)) { return; }
       const prevTop = st.lastScrollTop;
       st.lastScrollTop = pane.scrollTop; // 滚动位置缓存：布局重建后恢复用
+      // 滚得多快（见 syncViewport）：一帧里走了多少像素 / 这帧多长
+      {
+        const now = Date.now();
+        const dt = Math.max(1, now - (st.scrollAt || now - 16));
+        const dy = Math.abs(pane.scrollTop - st.scrollPrev);
+        st.scrollAt = now;
+        st.scrollPrev = pane.scrollTop;
+        if (dy / dt > FAST_SCROLL_PX_PER_MS) { st.scrollFastUntil = now + FAST_SCROLL_GRACE_MS; }
+      }
       // 整屏重画中：窗格正在被清空重建，这时的滚动动静都是重画弄的，不作数
       //（不然清空后“已经在底部”会把贴底重新打开，重放的几百条一路把人拖到底，见 finishRedraw）
       if (st.suppressScroll) { return; }
+      // 滚动带着窗格动：该补的（没画的老消息）、该放的（收起来的）、该收的，下一帧统一看一眼
+      if (st.older && st.older.length || st.parked.length || pane.scrollTop > 0) { scheduleParkCheck(st); }
       // 位置往上走了 = 人自己往回滚（程序追底只会往下写）：当场交还控制权。
       // 这是原来那套“上次程序自己设的位置 ±1 像素”记账的替代：不看是谁弄的，只看方向——
       // 也因此不怕 scroll 事件晚一帧（那套记账怕的正是这个，见 dev/followBottom.js）。
@@ -771,7 +775,6 @@
       title: title || "新会话",
       paneEl: pane,
       viewEl: view,
-      statusEl: stBar,
       // 后端给的会话元信息（sessionList 每推一次覆盖一次）
       parentId: null,
       taba: null,
@@ -832,6 +835,26 @@
       byId: new Map(),
       // 正在“按编号对账”地重放（null = 没在重放）。见 beginReconcile / endReconcile。
       reconcile: null,
+      // 从零重画时把这一串重放攒着（{ events: [] }，null = 没在攒）：见 startReplayBuf /
+      // flushReplayBuf。older 是攒着但还没画的那几截（老消息，往上滑时补），
+      // olderHint 是顶上那条占位（把它们的长度先顶着）。
+      replayBuf: null,
+      older: null,
+      olderHint: null,
+      olderBusy: false,
+      // 画过、但人已经滚远了的那几条（见 parkTopNodes）：parked 是收起来的节点
+      //（从窗格里摘下来，节点本身留着），parkHeight 是它们原来占的高度，
+      // parkHint 是顶上把这块高度顶着的占位。
+      parked: [],
+      parkHeight: 0,
+      parkHint: null,
+      parkRaf: 0,
+      parkTimer: 0,
+      // 滚动速度的账（判断“划得快不快”，见 syncViewport）：上一次滚动事件在什么时候、
+      // 那会儿滚到哪儿、以及“划得快”这个状态到什么时候为止。
+      scrollAt: 0,
+      scrollPrev: 0,
+      scrollFastUntil: 0,
       lerpRafId: 0,
       hasNewContent: false,
       modelId: "",
@@ -1385,6 +1408,9 @@
   /** 重画开始：记下视野，并且这批重放先别跟着往下滚。 */
   function beginRedraw(st) {
     if (st.redrawTimer) { clearTimeout(st.redrawTimer); }
+    // 收起来的那些先全放回来：视野记号要按它们认（见 takeScrollAnchor），
+    // 只在窗格里的节点才数得到
+    unparkAll(st);
     releaseAnchorHold(st);
     st.redrawRestore = takeScrollAnchor(st);
     st.suppressScroll = true;
@@ -1406,6 +1432,8 @@
    */
   function finishRedraw(st) {
     if (st.redrawTimer) { clearTimeout(st.redrawTimer); st.redrawTimer = null; }
+    // 攒着的重放还没画（syncPoint 没到、定时器兜底到这儿）：先画出来再放视野
+    flushReplayBuf(st);
     const anchor = st.redrawRestore;
     st.redrawRestore = null;
     if (!st.suppressScroll) { return; }
@@ -1542,12 +1570,15 @@
   /** 窗格顶上那些不是消息的东西（重放不产它们，收尾也不能收）。 */
   function isPaneFixture(el) {
     return !!el && (el.classList.contains("history-more")
+      || el.classList.contains("older-hint")
       || el.classList.contains("empty-hint")
       || el.classList.contains("session-loading"));
   }
 
   /** 重放开始（带编号）：不清空窗格，重置“正在长的那几样”，从这里开始按编号对账。 */
   function beginReconcile(st) {
+    // 收起来的那些先放回来：对账要按编号在窗格里认节点，不在里头就会重复造一份
+    unparkAll(st);
     if (st.redrawTimer) { clearTimeout(st.redrawTimer); }
     // 上一轮对账还没收尾（两次重画叠在一起）：先把那一轮收掉，别让两个游标打架
     if (st.reconcile) { endReconcile(st); }
@@ -1745,6 +1776,11 @@
 
   /** 把清单铺满：一行一句，序号 + 开头；正读着的那一句标亮。 */
   function renderSaidList(st) {
+    // 上面还有没画的老消息：先把它们都画出来。清单是从窗格里扒 `.msg.user` 的，
+    // 少画一截就少几行（而且点进去也跳不到）。这是个明确的点击，卡一下可接受。
+    while (st && st.older && st.older.length) { fillOlder(st, st.older.length); }
+    // 收起来的那些也一样：不在窗格里就数不到（见 parkTopNodes）
+    if (st) { unparkAll(st); }
     saidMenu.innerHTML = "";
     const msgs = st && st.paneEl ? Array.prototype.slice.call(st.paneEl.querySelectorAll(".msg.user")) : [];
     if (!msgs.length) {
@@ -2053,6 +2089,16 @@
     return (n < 10 ? "0" : "") + n;
   }
 
+  /**
+   * 进场动画那颗类：重放老消息时不挂（后端给重放的那几条带 replay 标记，见 st.replayNow）。
+   *
+   * 为什么挂不得：重画一次几百条一起进来，每条都挂 250 毫秒的进场动画，浏览器要同时算几百条。
+   * 量过（手机视口、4 倍降速，同一页面交替跑、每组 5 轮取中位数，这一轮含之后 1.6 秒的主线程）：
+   *   200 条：944 → 1466 毫秒；400 条：2144 → 2672 毫秒。
+   * 老消息本来就在上面，进场给谁看。
+   */
+  function enterCls(st) { return st.replayNow ? "" : " msg-enter"; }
+
   function addPlain(st, cls, role, text, id) {
     hideEmptyHint(st);
     st.currentToolTail = null; // 新消息块：工具标签另起一行，不往上一段后面续
@@ -2081,7 +2127,7 @@
       return known.firstElementChild;
     }
     const div = document.createElement("div");
-    div.className = "msg " + cls + " msg-enter";
+    div.className = "msg " + cls + enterCls(st);
     div.dataset.raw = content;
     if (cls === "user" && shouldFoldText(content)) {
       div.appendChild(makeLongTextBody(content));
@@ -2119,7 +2165,7 @@
       return body2;
     }
     const div = document.createElement("div");
-    div.className = "msg assistant msg-enter";
+    div.className = "msg assistant" + enterCls(st);
     const body = document.createElement("div");
     body.className = "md";
     body.dataset.raw = text;
@@ -2145,7 +2191,7 @@
     // 新标签不能往那上面挂，得另起一行排在图下面。
     if (!isToolRow(st.currentToolTail) || st.currentToolTail.parentElement !== st.paneEl) {
       st.currentToolTail = document.createElement("div");
-      st.currentToolTail.className = "msg tool-row msg-enter";
+      st.currentToolTail.className = "msg tool-row" + enterCls(st);
       placeUnit(st, st.currentToolTail);
     }
     return st.currentToolTail;
@@ -3172,7 +3218,7 @@
       return;
     }
     const block = document.createElement("div");
-    block.className = "tool-image-block msg-enter";
+    block.className = "tool-image-block" + enterCls(st);
     const head = document.createElement("div");
     head.className = "tib-head";
     head.insertAdjacentHTML("afterbegin", GEAR_SVG);
@@ -3609,12 +3655,6 @@
     // 只有方块的「停止生成」（见 syncEndHint）。
     syncComposerButtons();
   }
-  // 状态栏常显模型：这些纯函数拼出模型名与用量百分比标签。
-  // 状态栏只写模型 ID：手机上那行就那么宽，带上 provider 前缀和思考档会把后面的
-  // 用量、速度整块挤出屏幕（那两样在悬浮提示里还看得到）。
-  function modelPartFor(st) {
-    return (st && st.modelId) || "";
-  }
   // 完整名字（provider/模型/思考档）：只给悬浮提示用。
   function modelFullFor(st) {
     const id = (st && st.modelId) || "";
@@ -3623,16 +3663,11 @@
     return (prov ? prov + "/" : "") + id + (st.thinkingLevel ? "/" + st.thinkingLevel : "");
   }
   let tpsSyncAt = 0;
-  // delta 高频到达，速度刷新做 250ms 节流（当前会话的状态栏要刷）
+  // delta 高频到达，速度刷新做 250ms 节流（顶条那颗圆环的悬浮提示里有速度）
   function noteTpsProgress(t) {
     if (!paneShown(t.paneEl)) { return; }
     const now = Date.now();
-    if (now - tpsSyncAt >= 250) { tpsSyncAt = now; if (activeId === t.id) { syncStatus(); } syncPaneStatuses(); }
-  }
-  function pctTag(st) {
-    if (!st || typeof st.percent !== "number") { return ""; }
-    const cls = st.percent >= 90 ? " err" : (st.percent >= 70 ? " warn" : "");
-    return '<span class="st-pct' + cls + '">' + st.percent.toFixed(1) + '%</span>';
+    if (now - tpsSyncAt >= 250) { tpsSyncAt = now; syncStatus(); }
   }
   // 用流式 delta 估算生成速度：CJK 字符按 1 token/字，其余约 4 字符/token
   function estTokens(text) {
@@ -3653,18 +3688,58 @@
     }
     return st.tps;
   }
-  function statusTags(st) {
-    const parts = [];
-    const mp = modelPartFor(st);
-    if (mp) { parts.push('<span class="st-model">' + mp + '</span>'); }
-    const pct = pctTag(st);
-    if (pct) { parts.push(pct); }
-    const tps = currentTps(st);
-    if (typeof tps === "number") { parts.push('<span class="st-tps">' + tps.toFixed(1) + ' t/s</span>'); }
-    return parts;
+  // ==================== 顶条那颗圆环：上下文用量 ====================
+  // 原来每个会话底部占一整行状态栏，现在收成顶条左边一颗圆环（见 renderHtml 的 #ctxIcon）：
+  // 环填多满 = 上下文用了多少（≥70% 黄、≥90% 红），中间写整数百分比，
+  // 模型全名、精确百分比、生成速度都放悬浮提示里；点它切当前会话的模型。
+  // 它说的是当前会话（一次只看一个）：切会话、模型变了、用量变了都调 syncStatus 重刷。
+  // 还没就绪的几种状态另挂在 data-st 上（loading / wait / nomodel / idle / streaming），
+  // dev/ 那套调试工具靠它判断“可以发消息了”与“这轮跑完没”。
+  function ctxPercent(st) {
+    if (!st || typeof st.percent !== "number") { return 0; }
+    return Math.max(0, Math.min(100, st.percent));
   }
-  // 状态栏已全部下沉到每个 panel 底部（.pane-status）；此别名保留既有调用点。
-  function syncStatus() { syncPaneStatuses(); }
+  function ctxState(st) {
+    if (!st || st.loading) { return "loading"; }
+    if (!st.piReady) { return "wait"; }
+    if (!st.modelId) { return "nomodel"; }
+    return st.streaming ? "streaming" : "idle";
+  }
+  function ctxTitle(st) {
+    if (!st) { return "还没有会话"; }
+    const state = ctxState(st);
+    if (state === "loading") { return "加载中…"; }
+    if (state === "wait") { return "等待 pi 启动…"; }
+    if (state === "nomodel") { return "未配置模型（点击选择）"; }
+    const parts = [modelFullFor(st)];
+    if (typeof st.percent === "number") { parts.push("上下文 " + st.percent.toFixed(1) + "%"); }
+    const tps = currentTps(st);
+    if (typeof tps === "number") { parts.push(tps.toFixed(1) + " t/s"); }
+    return parts.join(" · ") + "\n点击切换模型";
+  }
+  /** 顶条那颗圆环跟上当前会话。 */
+  function syncStatus() {
+    if (!ctxIconEl) { return; }
+    const st = activeSession();
+    const pct = ctxPercent(st);
+    const state = ctxState(st);
+    ctxIconEl.dataset.st = state;
+    ctxIconEl.classList.toggle("warn", pct >= 70 && pct < 90);
+    ctxIconEl.classList.toggle("err", pct >= 90);
+    ctxIconEl.title = ctxTitle(st);
+    const arc = ctxIconEl.querySelector(".ci-arc");
+    if (arc) { arc.setAttribute("stroke-dashoffset", (100 - pct).toFixed(2)); }
+    // 环中间那个数：整数百分比（只写数字，百分比靠形状表达；带 % 就顶出圈外了），
+    // 没数（还没配模型 / 还没报过用量）就空着。三位数（100 那种）不写：环外径
+    // 只有 16px，可读字号写三个数字就压到弧线上（糊成一团），而满环本身已经说明了。
+    const num = ctxIconEl.querySelector(".ci-text");
+    if (num) {
+      const known = (state === "idle" || state === "streaming") && typeof st.percent === "number";
+      const text = known ? String(Math.round(pct)) : "";
+      num.textContent = text.length > 2 ? "" : text;
+      num.setAttribute("font-size", "7.8");
+    }
+  }
 
   /** 附件预览：随会话级草稿（图片 / 折叠文本块与输入文字同层）。 */
   function renderAttachmentsFor() {
@@ -3749,67 +3824,6 @@
     renderQueueBar(st);
     renderGoalBar();
     syncJumpBottom(st);
-  }
-
-  /** 一个会话底部状态栏的 HTML。 */
-  function paneStatusHtml(t) {
-    if (!t) { return ""; }
-    if (t.loading) { return '<span class="st-text">加载中…</span>'; }
-    if (!t.piReady) { return '<span class="st-text">等待 pi 启动…</span>'; }
-    const tags = statusTags(t);
-    if (t.streaming) {
-      // 生成中只留打点动画和模型 / 进度 / 速度标签；状态词（处理中 / 思考中 / 执行工具）
-      // 与 “Esc 中止” 提示已按需求去掉，中止入口是 Esc 键与停止生成图标。
-      return '<span class="typing"><span></span><span></span><span></span></span> ' +
-        (tags.length ? tags.join(" · ") : "");
-    }
-    if (!tags.length) { return '<span class="st-text">未配置模型（点击选择）</span>'; }
-    return tags.join(" · ");
-  }
-
-  /** 状态栏结构签名：签名不变时原位更新文字，避免重建 innerHTML 导致 .typing 动画重启。 */
-  function statusSig(t) {
-    if (t.loading) { return "loading"; }
-    if (!t.piReady) { return "wait"; }
-    const pctCls = (typeof t.percent === "number")
-      ? (t.percent >= 90 ? "err" : (t.percent >= 70 ? "warn" : "ok"))
-      : "";
-    const hasTps = typeof currentTps(t) === "number" ? "t" : "";
-    return [(t.streaming ? "s" : "i"), modelPartFor(t) ? "m" : "", pctCls, hasTps].join("|");
-  }
-  /** 签名相同时只替换数字文本，不动 .typing 等动画节点。 */
-  function updateStatusInPlace(el, t) {
-    const m = el.querySelector(".st-model");
-    if (m) { m.textContent = modelPartFor(t); }
-    if (typeof t.percent === "number") {
-      const p = el.querySelector(".st-pct");
-      if (p) {
-        p.textContent = t.percent.toFixed(1) + "%";
-        p.className = "st-pct" + (t.percent >= 90 ? " err" : (t.percent >= 70 ? " warn" : ""));
-      }
-    }
-    const tps = currentTps(t);
-    if (typeof tps === "number") {
-      const s = el.querySelector(".st-tps");
-      if (s) { s.textContent = tps.toFixed(1) + " t/s"; }
-    }
-  }
-
-  /** 刷新所有会话的底部状态栏内容与当前高亮。 */
-  function syncPaneStatuses() {
-    sessions.forEach((t) => {
-      const el = t.statusEl;
-      if (!el) { return; }
-      const sig = statusSig(t);
-      if (el._sig === sig) {
-        updateStatusInPlace(el, t);   // 保留 .typing 动画节点，只换变化文字
-      } else {
-        el._sig = sig;
-        el.innerHTML = paneStatusHtml(t);
-      }
-      el.classList.toggle("ps-focus", activeId === t.id);
-      el.title = "当前: " + (modelFullFor(t) || "未配置") + "（点击切换模型）";
-    });
   }
 
   // ==================== 切换会话 ====================
@@ -4511,7 +4525,7 @@
       done: false,
     };
     const el = document.createElement("div");
-    el.className = "msg ask-card msg-enter";
+    el.className = "msg ask-card" + enterCls(st);
     el.dataset.askId = id;
     rec.el = el;
 
@@ -7629,7 +7643,14 @@
       if (st) { scrollToBottom(st, true); }
     });
   }
-  // 每个 panel 底部都有自己的状态栏（.pane-status）：点击 = 切该 panel 模型
+  // 顶条最右边那颗圆环（.pane-status 那行状态栏改成了它）：点它切当前会话的模型。
+  if (ctxIconEl) {
+    ctxIconEl.addEventListener("click", () => {
+      const st = activeSession();
+      if (!st) { return; }
+      vscode.postMessage({ type: "pickModel", sessionId: st.id, t0: performance.now() });
+    });
+  }
 
   // 委托：文件/符号链接点击（在 #messages 容器上）
   messagesEl.addEventListener("click", (e) => {
@@ -7780,7 +7801,6 @@
     if (!on) { endRunningLine(st); }
     if (activeId === st.id) { updateSendState(); syncStatus(); }
     renderSessionBar();
-    syncPaneStatuses();
     syncEndHint(st);
     refreshOpenSessionsInPicker();
   }
@@ -7788,13 +7808,11 @@
     st.activity = activity || (st.streaming ? "working" : "idle");
     st.activityDetail = detail || "";
     if (activeId === st.id) { syncStatus(); }
-    syncPaneStatuses();
     refreshOpenSessionsInPicker();
   }
   function setPiReady(st, on, force) {
     st.piReady = on;
     if (activeId === st.id) { updateSendState(); syncStatus(); }
-    syncPaneStatuses();
     syncEndHint(st);
     // 会话就绪：把"按了回车但没发出去"的那条补发出去（见 flushPendingSend）
     if (on) { flushPendingSend(); }
@@ -7846,7 +7864,7 @@
         if (!st.goal) { st.goalOpen = false; }
         syncSessionLoading(st);
         // 界面重建（网页重连、视图隐藏重开、窗口重载）后 sessionList 是唯一信源：
-        // modelChanged 是一次性推送，不在此恢复会导致状态栏模型名丢失。
+        // modelChanged 是一次性推送，不在此恢复会导致顶条那颗圆环的模型名丢失。
         // 字段缺失（后端尚未拿到）时保留本地已有值。
         if (typeof s.modelId === "string") { st.modelId = s.modelId; }
         if (typeof s.provider === "string") { st.provider = s.provider; }
@@ -7881,10 +7899,9 @@
         const pending = pendingActivateId;
         pendingActivateId = null;
         if (sessions.has(pending)) { activateSessionView(pending); }
-        else if (activeId && sessions.has(activeId)) { mountActiveSession(); syncPaneStatuses(); renderGoalBar(); }
+        else if (activeId && sessions.has(activeId)) { mountActiveSession(); syncStatus(); renderGoalBar(); }
       } else if (activeId && sessions.has(activeId)) {
         mountActiveSession();
-        syncPaneStatuses();
         renderGoalBar();
       }
       renderSessionBar();
@@ -8069,6 +8086,15 @@
     // 这一条是“把历史再画一遍”（重放）还是刚发生的事（实时）：重放的插在重放游标处，
     // 实时的一律接到末尾——断线中间还在长的正文不该插进历史中间（见 placeUnit）
     t.replayNow = msg.replay === true;
+    // 从零重画的那一串（见 startReplayBuf）：先攒着，收尾时只画最后一截。
+    // 实时来的渲染类消息一到，说明这一串已经过去了（syncPoint 丢了也走到这儿）：先把攒的画出来。
+    if (t.replayBuf) {
+      if (REPLAY_BUF_TYPES.has(type) && (msg.replay === true || type === "askCard" || type === "askCardDone")) {
+        t.replayBuf.events.push(msg);
+        return;
+      }
+      if (msg.replay !== true && REPLAY_BUF_TYPES.has(type)) { flushReplayBuf(t); }
+    }
     // 安全网：界面刚起来、sessionList 还没到时，先把当前会话定下来。
     // 但后端已经说了“你看的是哪一个”（还在等它的会话壳）：不许拿“第一条冒出来的消息”顶上去，
     // 否则会暂时锚到别的会话，草稿也跟着认错主。
@@ -8203,19 +8229,31 @@
       case "systemError":
         addPlain(t, "system error", null, msg.text, msg.id);
         break;
-      case "clear":
+      case "clear": {
+        // 窗格这会儿是不是空的：空的就是“整屏从零画”（页面刷新 / 切会话 / 打开历史会话），
+        // 这种可以把这一串重放攒着、只画最后一截（见 startReplayBuf）；重连那种
+        // “窗格里本来就有东西”的走按编号对账（见 beginReconcile）。
+        // 系统消息（“pi 已启动”那一类）不算：它们随重画一起没，重放里本来也不带它们。
+        const fresh = !t.paneEl.querySelector(".msg:not(.system)");
+        // 上一遍没画完的老消息作废（占位一起收掉）：这一遍要重新攒了
+        dropOlderHint(t);
+        dropParkHint(t);
+        if (t.parkRaf) { cancelAnimationFrame(t.parkRaf); t.parkRaf = 0; }
+        if (t.parkTimer) { clearTimeout(t.parkTimer); t.parkTimer = 0; }
         // 后端说“接下来重放一遍历史”，而且这次每条都带编号：不清空窗格，按编号对账
         //（见 beginReconcile / placeUnit）——人正看着的那一段、图片、卡片里打的字都留着
-        if (msg.reconcile) { beginReconcile(t); break; }
+        if (msg.reconcile && !fresh) { beginReconcile(t); break; }
         // 整屏重画（页面刷新 / 重连后补内容）也走 clear：这种 clear 带 keepDraft。
         // 窗格马上要清空重建，先把视野记下来，重画期间先不跟着滚（见 beginRedraw）
-        if (msg.keepDraft) { beginRedraw(t); } else {
+        if (msg.reconcile || msg.keepDraft) { beginRedraw(t); } else {
           // 换会话那种 clear：重画那一套（视野记号、先不跟着滚）一并收掉
           if (t.redrawTimer) { clearTimeout(t.redrawTimer); t.redrawTimer = null; }
           t.redrawRestore = null;
           t.suppressScroll = false;
           releaseAnchorHold(t);
         }
+        // 接下来这一串是重放：先攒着，等收尾那条（syncPoint）到了再画最后一截
+        startReplayBuf(t);
         cancelFlush(t);
         hideTagTip();
         // 重画历史（切会话 / 重连）随之开始：这之后涌进来的工具调用都是老消息，别飘 +1
@@ -8265,6 +8303,7 @@
         // 真有对话的话等重放完那一批（historyBatchEnd）或本轮结束（streamEnd）再露面。
         syncEndHint(t);
         break;
+      }
       case "toolResultUpdate": {
         // 缓存部分结果，悬浮提示随取随画
         const groupEntry = t.toolGroupEntries.get(msg.toolCallId);
@@ -8356,7 +8395,6 @@
         t.modelId = msg.modelId || "";
         t.provider = msg.provider || "";
         if (activeId === t.id) { syncStatus(); }
-        syncPaneStatuses();
         break;
       case "goal":
         // 目标状态（/goal）：目标条常驻在输入框上头，不再往消息流里写一条
@@ -8374,6 +8412,7 @@
         // 插件说“这一屏补发 / 重画完了”：对账的重放就此收尾；
         // 清空重画那种则把视野放回原处（不在重画的都是空转）
         for (const st of sessions.values()) {
+          flushReplayBuf(st);
           if (st.reconcile) { endReconcile(st); }
           else if (st.suppressScroll) { finishRedraw(st); }
         }
@@ -8381,7 +8420,7 @@
         scheduleKeep();
         break;
       case "stats": {
-        // 上下文用量：供 panel 状态栏的百分比显示与颜色预警
+        // 上下文用量：顶条那颗圆环（用量百分比与颜色预警）
         const cu = msg.contextUsage;
         if (cu) {
           if (typeof cu.percent === "number") { t.percent = cu.percent; }
@@ -8389,7 +8428,6 @@
           if (typeof cu.contextWindow === "number") { t.contextWindow = cu.contextWindow; }
         }
         if (activeId === t.id) { syncStatus(); }
-        syncPaneStatuses();
         break;
       }
       case "queueUpdate":
@@ -8553,11 +8591,403 @@
     if (frames > 0) { requestAnimationFrame(settle); } else { pane.style.overflowAnchor = prevAnchorStyle; }
   }
 
+  // ==================== 从零重画时只画最后一截（“虚拟列表”的简化版）====================
+  //
+  // 打开一个长会话是“清空 + 一条条重放”：两百条消息全做成节点，屏幕只看得到十几条。
+  // 量过（手机视口、4 倍降速）：两百条解析约 100 毫秒、排版 300—400 毫秒。所以从零重画时
+  // 先把这一串重放攒着（replayBuf），收尾时只画最后 TAIL_TURNS 轮，上面没画的那几轮缩成
+  // 一条占位（.older-hint），高度按已经画出来的平均高度估；人往上滚到跟前再补，一次
+  // CHUNK_TURNS 轮，补完把视野钉回原来那条上（跟「加载更早」同一套，见 flushHistoryBatch）。
+  //
+  // 只对“窗格是空的、整屏从零画”生效（页面刷新、切会话、打开历史会话）。重连那种
+  // “按编号对账”的重画（reconcile）页面上本来就有节点，走老路。
+  const TAIL_TURNS = 8;      // 收尾时先画最后这么多轮（一轮 = 一条用户消息起头）
+  const CHUNK_TURNS = 5;     // 往上一帧补这么多轮（一帧补多了人会感到卡，见 syncViewport）
+  const OLDER_NEAR_PX = 700; // 离顶这么近就开始补（比一屏多一点，滚到头之前就该出来）
+  /** 重放里会往窗格里落东西的那几种；其余（clear / syncPoint / stats 这些）当场办。 */
+  const REPLAY_BUF_TYPES = new Set([
+    "userMessage", "assistantDelta", "assistantFull",
+    "thinkingStart", "thinkingDelta", "thinkingFull",
+    "tool", "toolResult", "toolResultUpdate", "toolsInterrupted",
+    "editCardStart", "editCardResult", "resultImage",
+    "system", "systemError", "askCard", "askCardDone",
+  ]);
+
+  /** 开始攒重放：接下来这一串先不画，等收尾那一条（syncPoint）来了再说。 */
+  function startReplayBuf(st) {
+    st.replayBuf = { events: [] };
+  }
+
+  /** 这一串里从后往前数第 turns 条用户消息的下标（不够就 0 = 全画）。
+   *  切在用户消息上而不是随便一条消息上：一轮问答摊成好几块节点（正文 / think / 工具行），
+   *  从中间切开会让第一块单独落在上面，看着像半轮从天上掉下来。 */
+  function cutIndexForTurns(events, turns) {
+    let n = 0;
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      if (events[i].type !== "userMessage") { continue; }
+      n += 1;
+      if (n >= turns) { return i; }
+    }
+    return 0;
+  }
+
+  /**
+   * 已经画出来的消息平均多高（占位按它估；画出来的太少就按 120 像素）。
+   * 先摸一个把排版逼出来，后面那些读的就是现成的版面了——不这么做，每读一个孩子都
+   * 会触发一次“看看排版脏没脏”，首屏收尾那一下量出来 112 毫秒几乎全耗在这儿。
+   */
+  function avgMessageHeight(pane) {
+    let sum = 0;
+    let n = 0;
+    let forced = false;
+    for (const el of pane.children) {
+      if (!el.classList || !el.classList.contains("msg")) { continue; }
+      if (!forced) { pane.offsetHeight; forced = true; }
+      const h = el.offsetHeight;
+      if (h > 0) { sum += h; n += 1; }
+    }
+    return n >= 3 ? sum / n : 120;
+  }
+
+  /** 这一截里还有几轮（一轮 = 一条用户消息起头）：占位上那个数字用它。 */
+  function countTurns(events) {
+    let n = 0;
+    for (const ev of events) { if (ev.type === "userMessage") { n += 1; } }
+    return n;
+  }
+
+  /** 顶上那条占位：写还剩几轮，高度按平均高度估。估不准不影响内容，只影响滚动条长短。 */
+  function mountOlderHint(st, count) {
+    const pane = st.paneEl;
+    let el = st.olderHint;
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "older-hint";
+      const label = document.createElement("span");
+      label.className = "oh-text";
+      el.appendChild(label);
+      st.olderHint = el;
+    }
+    // 那行字粘在视野顶上（见 chat.css）：这块占位可能几十屏高，滚到中间也得看得见那句话
+    el.firstChild.textContent = "往上还有 " + countTurns(st.older || []) + " 轮（往上滑就画）";
+    el.style.height = Math.max(90, Math.round(avgMessageHeight(pane) * count)) + "px";
+    // 摆在窗格最上面，但让着「加载更早」那颗：那颗管的是窗口外面更早的，比这儿还早
+    const btn = st._historyBtn && st._historyBtn.parentNode === pane ? st._historyBtn : null;
+    const at = btn ? btn.nextSibling : pane.firstChild;
+    if (el.parentNode !== pane) { pane.insertBefore(el, at); }
+  }
+
+  /** 把占位收掉：上面那些老消息已经全画完了。 */
+  function dropOlderHint(st) {
+    st.older = null;
+    if (st.olderHint) { st.olderHint.remove(); st.olderHint = null; }
+  }
+
+  /**
+   * 收尾：把攒着的那一串画出来（只画最后一截，其余留在占位后面等着）。
+   * 由 syncPoint（后端说“这一屏画完了”）触发，兜底还有那两个超时定时器与“实时消息来了”。
+   */
+  function flushReplayBuf(st) {
+    const buf = st.replayBuf;
+    st.replayBuf = null;
+    if (!buf || !buf.events.length) { return; }
+    const events = buf.events;
+    const cut = cutIndexForTurns(events, TAIL_TURNS);
+    const older = events.slice(0, cut);
+    for (let i = cut; i < events.length; i += 1) { applyPanelMessage(events[i]); }
+    if (older.length) {
+      st.older = older;
+      mountOlderHint(st, older.length);
+    }
+    // 窗格是空的、刚才什么也没滚：贴底的人直接到底（非重画那条路没有人帮忙滚，见 case "clear"）
+    if (st.stickToBottom) { scrollToBottom(st, true); }
+  }
+
+  /**
+   * 往上补一截：把 st.older 末尾的几轮画出来，插在占位下面，视野不动。
+   * 画进暂存区再整块插（跟「加载更早」同一招）：这些东西该插到占位后面，不是接到末尾。
+   */
+  function fillOlder(st, turns) {
+    const older = st.older;
+    if (!older || !older.length || st.olderBusy) { return; }
+    const pane = st.paneEl;
+    if (!paneShown(pane)) { return; }
+    st.olderBusy = true;
+    try {
+      const cut = cutIndexForTurns(older, turns);
+      const take = older.slice(cut);
+      st.older = older.slice(0, cut);
+      // 这几个说的是“窗格末尾那一批”的落脚点（工具行 / 图块 / 那段思考），画老消息时
+      // 不能让它们被改掉：另存一份，画完还回去。currentToolTail 置空让老消息自己另起一行。
+      const stage = document.createElement("div");
+      const saved = {
+        pane: st.paneEl, stage: st._stage, stick: st.stickToBottom,
+        tail: st.currentToolTail, asst: st.currentAssistant, think: st.thinkingEntry,
+        seg: st.segmentThinking, tailThink: st.tailThinking, groups: st.toolGroups,
+      };
+      st._stage = stage;
+      st.paneEl = stage;
+      st.currentToolTail = null;
+      st.toolGroups = null;
+      try {
+        for (const ev of take) { applyPanelMessage(ev); }
+      } finally {
+        st.paneEl = saved.pane;
+        st._stage = saved.stage;
+        st.stickToBottom = saved.stick;
+        st.currentToolTail = saved.tail;
+        st.currentAssistant = saved.asst;
+        st.thinkingEntry = saved.think;
+        st.segmentThinking = saved.seg;
+        st.tailThinking = saved.tailThink;
+        st.toolGroups = saved.groups;
+      }
+      if (!stage.childNodes.length) { dropOlderHintIfEmpty(st); return; }
+      // 尺子：原来最上面那条消息现在在视野里的位置。补完按它放回去（同 flushHistoryBatch）。
+      // 占位自己不算“最上面那条”：补出来的内容要插在它下面（不然占位会被压到补出来的
+      // 那截下面去，整块顺序就乱了）。
+      const hint = st.olderHint && st.olderHint.parentNode === pane ? st.olderHint : null;
+      const ruler = hint ? hint.nextElementSibling : pane.firstElementChild;
+      const viewTop = ruler ? ruler.offsetTop - pane.scrollTop : 0;
+      const beforeHeight = pane.scrollHeight;
+      const prevAnchor = pane.style.overflowAnchor;
+      pane.style.overflowAnchor = "none";
+      let node = stage.firstChild;
+      while (node) {
+        const next = node.nextSibling;
+        pane.insertBefore(node, ruler);
+        node = next;
+      }
+      // 占位跟着缩（高度按这会儿量出来的平均高度重估：一开始估得不准，补一轮就准一轮）
+      if (st.older.length) { mountOlderHint(st, st.older.length); } else { dropOlderHint(st); }
+      if (ruler && ruler.parentNode === pane) {
+        pane.scrollTop = Math.max(0, ruler.offsetTop - viewTop);
+      } else {
+        pane.scrollTop += Math.max(0, pane.scrollHeight - beforeHeight);
+      }
+      st.lastScrollTop = pane.scrollTop;
+      pane.style.overflowAnchor = prevAnchor;
+    } finally {
+      st.olderBusy = false;
+    }
+  }
+
+  /** 补完这一截没了可补的、内容又是空的（重放里这几条什么节点都没落）：别留个空占位。 */
+  function dropOlderHintIfEmpty(st) {
+    if (!st.older || !st.older.length) { dropOlderHint(st); }
+  }
+
+  /** 顶上那条占位的底边 = 已经画出来的内容从哪儿开始（没占位就是 0）。 */
+  function headBottom(el) {
+    if (!el || !el.parentNode) { return 0; }
+    return el.offsetTop + el.offsetHeight;
+  }
+
+  /** 老消息那一截补到底了没有（补完才轮到“画过的收起来”）。 */
+  function olderLeft(st) {
+    return !!(st.older && st.older.length);
+  }
+
+  // ==================== 画过的也收起来（滚出视野的那几截）====================
+  //
+  // 上面那套管“还没画过的”；这一套管“画过、但人已经滚走了的”：它们离视野一两屏远，
+  // 排版和绘制的钱却一直付着。收起来 = 从窗格里摘下来，**节点留着不销毁**（图不用重新解码、
+  // 卡片里打的字、折叠状态、内部滚动都在），位置由顶上一条占位（跟 .older-hint 同一套样子）
+  // 按它们原来的高度顶着；人滚回去时原样插回去，一条不多一条不少。
+  //
+  // 只在“没画完的那一截已经补完”之后才收：两者都挤在窗格顶上，混着摆容易搞乱顺序。
+  // 正在流式输出时也不收（那会儿人正看着末尾，而且每帧版面都是脏的，一量就多一次排版）。
+  const PARK_ABOVE_PX = 1000;  // 一整条下沿离视野顶这么远就收起来（比一屏多一点）
+  const UNPARK_NEAR_PX = 500;  // 往回滚到离顶这么近就放回来
+  const PARK_MIN_KEEP = 8;     // 底下这几条永远不收（正在看的、末尾那颗胶囊这些）
+  const PARK_CHUNK = 8;        // 一次放回几条
+  // 划得快（每毫秒一个像素以上）和慢悠悠地滚，补画的时机不一样：
+  //   · 慢滚：离视野还有一屏多（OLDER_NEAR_PX）就开始补，人看不见补的过程；
+  //   · 快划：补一截要一百多毫秒（四倍降速），提前补就是凭空多卡一下，所以只在
+  //     “再划两下就真看见空白了”（FAST_NEAR_PX）才补。补一截能顶几屏，所以一路划过去
+  //     也就补那么两三次；停下来 160 毫秒后由 scheduleParkCheckLater 把剩下的补齐。
+  //     完全不补这一版也量过：一路划过去一帧没卡，但人会一路看空白——不能那么干。
+  const FAST_SCROLL_PX_PER_MS = 1.2;
+  const FAST_SCROLL_GRACE_MS = 160;
+  const FAST_NEAR_PX = 260;
+
+  /** 顶上的占位（收起来的那些原来占的高度）：跟老消息那截占位用同一套样式与那行粘住的字。 */
+  function mountParkHint(st) {
+    const pane = st.paneEl;
+    let el = st.parkHint;
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "older-hint";
+      const label = document.createElement("span");
+      label.className = "oh-text";
+      el.appendChild(label);
+      st.parkHint = el;
+    }
+    el.firstChild.textContent = "往上还有 " + (st.parked ? st.parked.length : 0) + " 条（滚上去就回来）";
+    el.style.height = Math.max(0, Math.round(st.parkHeight)) + "px";
+  }
+
+  function dropParkHint(st) {
+    st.parked = [];
+    st.parkHeight = 0;
+    if (st.parkHint) { st.parkHint.remove(); st.parkHint = null; }
+  }
+
+  /** 滚下去走远了的那几条收起来（顶上的、已经离视野一两屏远的）。 */
+  function parkTopNodes(st) {
+    const pane = st.paneEl;
+    const top = pane.scrollTop;
+    if (top <= 0) { return; }
+    if (st.older && st.older.length) { return; }   // 没画完的那截在上头：先别混着来
+    const kids = Array.from(pane.children).filter((el) => el !== st.olderHint && el !== st.parkHint && el !== st._historyBtn);
+    const msgs = kids.filter((el) => el.classList && el.classList.contains("msg"));
+    if (msgs.length <= PARK_MIN_KEEP) { return; }
+    const room = msgs.length - PARK_MIN_KEEP;
+    const take = [];
+    for (const el of kids) {
+      if (take.length >= room) { break; }
+      if (!el.classList.contains("msg")) { break; }     // 只收消息这一层
+      if (el.offsetTop + el.offsetHeight > top - PARK_ABOVE_PX) { break; }   // 还看得见的留着
+      take.push(el);
+    }
+    if (!take.length) { return; }
+    // 高度先一次量完再摘：摘一条量一条的话，下次量又是一次完整重排
+    for (const el of take) { el._parkH = el.offsetHeight; }
+    const anchor = take[take.length - 1].nextSibling;
+    const anchorTop = anchor ? anchor.offsetTop : 0;
+    for (const el of take) {
+      st.parkHeight += el._parkH;
+      st.parked.push(el);
+      el.remove();
+    }
+    mountParkHint(st);
+    // 占位摆到它们原来占的那块地方（摘空了就摆到顶上）
+    const hint = st.parkHint;
+    if (hint.parentNode !== pane) { pane.insertBefore(hint, anchor); }
+    // 高度再按“下面那条原来在哪儿”修一次：消息自己带上下外边距、相邻外边距还会折叠，
+    // 光把 offsetHeight 加起来比它们真占的地方少一圈（30 条差出 279 像素）。
+    if (anchor && anchor.parentNode === pane && anchorTop) {
+      const diff = anchorTop - anchor.offsetTop;
+      if (diff) { st.parkHeight = Math.max(0, st.parkHeight + diff); hint.style.height = Math.round(st.parkHeight) + "px"; }
+    }
+  }
+
+  /** 往回滚到顶了：把收起来的按“离视野最近的先回来”放回去，视野不动。 */
+  function unparkNearTop(st) {
+    const parked = st.parked;
+    if (!parked || !parked.length) { return; }
+    const pane = st.paneEl;
+    if (pane.scrollTop >= headBottom(st.parkHint) + UNPARK_NEAR_PX) { return; }
+    // 尺子：原来最上面那条现在在视野里的位置。放完按它放回去（同 fillOlder）
+    const hint = st.parkHint && st.parkHint.parentNode === pane ? st.parkHint : null;
+    const ruler = hint ? hint.nextElementSibling : pane.firstElementChild;
+    const viewTop = ruler ? ruler.offsetTop - pane.scrollTop : 0;
+    const rulerTop = ruler ? ruler.offsetTop : 0;
+    const prevAnchor = pane.style.overflowAnchor;
+    pane.style.overflowAnchor = "none";
+    let cursor = ruler;
+    for (let n = 0; n < PARK_CHUNK && parked.length; n += 1) {
+      const el = parked.pop();            // 离视野最近的那些先回来
+      st.parkHeight -= el._parkH;
+      el._parkH = 0;
+      pane.insertBefore(el, cursor);      // 每个插在上一个前面，倒着放回来正好对
+      cursor = el;
+    }
+    if (parked.length) { mountParkHint(st); } else { dropParkHint(st); }
+    // 占位高度按“尺子原来在哪儿”修一次（跟收紧时同一套：外边距折叠那圈算不清）
+    if (parked.length && ruler && ruler.parentNode === pane) {
+      const diff = rulerTop - ruler.offsetTop;
+      if (diff) { st.parkHeight = Math.max(0, st.parkHeight + diff); st.parkHint.style.height = Math.round(st.parkHeight) + "px"; }
+    }
+    if (ruler && ruler.parentNode === pane) {
+      pane.scrollTop = Math.max(0, ruler.offsetTop - viewTop);
+    }
+    st.lastScrollTop = pane.scrollTop;
+    pane.style.overflowAnchor = prevAnchor;
+  }
+
+  /** 全部放回来（要整屏重画了：按编号对账 / 记视野都得看得见它们）。 */
+  function unparkAll(st) {
+    const parked = st.parked;
+    const pane = st.paneEl;
+    if (!parked || !parked.length) { dropParkHint(st); return; }
+    const hint = st.parkHint && st.parkHint.parentNode === pane ? st.parkHint : null;
+    let cursor = hint ? hint.nextElementSibling : pane.firstElementChild;
+    while (parked.length) {
+      const el = parked.pop();
+      el._parkH = 0;
+      pane.insertBefore(el, cursor);
+      cursor = el;
+    }
+    dropParkHint(st);
+  }
+
+  /**
+   * 一帧看一眼窗格里该干什么：补没画的、放收回来的、收走远了的。
+   *
+   * 判断都拿“分界”当尺子（headBottom = 顶上占位的底边，也就是已画内容从哪儿开始），
+   * 不是拿窗格顶上那 0 当尺子：占位可能有几十屏高，人滚到分界跟前时窗格离顶还远着呢，
+   * 按 0 算就永远轮不到它，人会一头扎进一块空地里滚不出来。
+   */
+  function syncViewport(st) {
+    st.parkRaf = 0;
+    const pane = st.paneEl;
+    if (!paneShown(pane) || st.suppressScroll || st.streaming || st.olderBusy) { return; }
+    // 0) 正划得快：收还是照收（不贵，收掉之后后面几帧更轻）；补只补到“不至于看见空白”为止，
+    //    不催下一帧（催了就是一路卡）。停下来之后再把剩下的补齐（见 scheduleParkCheckLater）。
+    if (Date.now() < st.scrollFastUntil) {
+      parkTopNodes(st);
+      if (olderLeft(st) && pane.scrollTop < headBottom(st.olderHint) + FAST_NEAR_PX) {
+        fillOlder(st, CHUNK_TURNS);
+      } else if (st.parked.length && pane.scrollTop < headBottom(st.parkHint) + FAST_NEAR_PX) {
+        unparkNearTop(st);
+      }
+      scheduleParkCheckLater(st);
+      return;
+    }
+    // 1) 上面还有没画的老消息：滚到分界跟前就补几截（一帧补三截，剩下的下一帧接着来）
+    if (olderLeft(st)) {
+      if (pane.scrollTop < headBottom(st.olderHint) + OLDER_NEAR_PX) {
+        // 一帧只补一截：一截是几轮（十几条消息），四倍降速下已经一百毫秒上下了，
+        // 一帧补两三截就是几百毫秒的卡（量过：一帧补三截最长一帧 482 毫秒，补一截 214，补五轮 109）。
+        // 还没补够就下一帧接着来——那一下不卡，只是多几帧。
+        fillOlder(st, CHUNK_TURNS);
+        if (olderLeft(st) && pane.scrollTop < headBottom(st.olderHint) + OLDER_NEAR_PX) { scheduleParkCheck(st); }
+      }
+      return;   // 老消息还没画完：收放先不动（两边都挤在顶上，混着来容易把顺序搞乱）
+    }
+    // 2) 收起来的那些：滚到分界跟前就放回来（一帧一截）
+    if (st.parked.length && pane.scrollTop < headBottom(st.parkHint) + UNPARK_NEAR_PX) {
+      unparkNearTop(st);
+      if (st.parked.length && pane.scrollTop < headBottom(st.parkHint) + UNPARK_NEAR_PX) { scheduleParkCheck(st); }
+      return;
+    }
+    // 3) 已经滚出去一两屏的那几条：收起来（位置由顶上的占位顶着）
+    parkTopNodes(st);
+  }
+
+  /** 等一下再看（划得快的时候用：停下来之后由它把没补的补上）。 */
+  function scheduleParkCheckLater(st) {
+    if (st.parkTimer) { return; }
+    st.parkTimer = setTimeout(() => {
+      st.parkTimer = 0;
+      scheduleParkCheck(st);
+    }, FAST_SCROLL_GRACE_MS);
+  }
+
+  /** 攒到下一帧再量（滚动事件一帧能来好几个，每次都量版面就白花了）。 */
+  function scheduleParkCheck(st) {
+    if (st.parkRaf) { return; }
+    st.parkRaf = requestAnimationFrame(() => syncViewport(st));
+  }
+
   function removeSession(id) {
     const st = sessions.get(id);
     if (!st) { return; }
     unkeep(st);
     cancelFlush(st);
+    if (st.parkRaf) { cancelAnimationFrame(st.parkRaf); st.parkRaf = 0; }
+    if (st.parkTimer) { clearTimeout(st.parkTimer); st.parkTimer = 0; }
     if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); }
     dropRunningLine(st);   // 那条「正在跑」的定时器与耗时那只钟（见 startRunClock）一并停掉
     for (const tg of st.pendingToolTags.values()) { clearInterval(tg._timer); }
