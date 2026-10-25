@@ -757,7 +757,7 @@
       //（不然清空后“已经在底部”会把贴底重新打开，重放的几百条一路把人拖到底，见 finishRedraw）
       if (st.suppressScroll) { return; }
       // 滚动带着窗格动：该补的（没画的老消息）、该放的（收起来的）、该收的，下一帧统一看一眼
-      if (st.older && st.older.length || st.parked.length || pane.scrollTop > 0) { scheduleParkCheck(st); }
+      if (st.older && st.older.length) { scheduleViewportCheck(st); }
       // 位置往上走了 = 人自己往回滚（程序追底只会往下写）：当场交还控制权。
       // 这是原来那套“上次程序自己设的位置 ±1 像素”记账的替代：不看是谁弄的，只看方向——
       // 也因此不怕 scroll 事件晚一帧（那套记账怕的正是这个，见 dev/followBottom.js）。
@@ -842,14 +842,9 @@
       older: null,
       olderHint: null,
       olderBusy: false,
-      // 画过、但人已经滚远了的那几条（见 parkTopNodes）：parked 是收起来的节点
-      //（从窗格里摘下来，节点本身留着），parkHeight 是它们原来占的高度，
-      // parkHint 是顶上把这块高度顶着的占位。
-      parked: [],
-      parkHeight: 0,
-      parkHint: null,
-      parkRaf: 0,
-      parkTimer: 0,
+      // 补画那一套的调度：viewRaf 挂着下一帧的检查，viewTimer 挂着“停下来再看”那一下
+      viewRaf: 0,
+      viewTimer: 0,
       // 滚动速度的账（判断“划得快不快”，见 syncViewport）：上一次滚动事件在什么时候、
       // 那会儿滚到哪儿、以及“划得快”这个状态到什么时候为止。
       scrollAt: 0,
@@ -1408,9 +1403,6 @@
   /** 重画开始：记下视野，并且这批重放先别跟着往下滚。 */
   function beginRedraw(st) {
     if (st.redrawTimer) { clearTimeout(st.redrawTimer); }
-    // 收起来的那些先全放回来：视野记号要按它们认（见 takeScrollAnchor），
-    // 只在窗格里的节点才数得到
-    unparkAll(st);
     releaseAnchorHold(st);
     st.redrawRestore = takeScrollAnchor(st);
     st.suppressScroll = true;
@@ -1577,8 +1569,6 @@
 
   /** 重放开始（带编号）：不清空窗格，重置“正在长的那几样”，从这里开始按编号对账。 */
   function beginReconcile(st) {
-    // 收起来的那些先放回来：对账要按编号在窗格里认节点，不在里头就会重复造一份
-    unparkAll(st);
     if (st.redrawTimer) { clearTimeout(st.redrawTimer); }
     // 上一轮对账还没收尾（两次重画叠在一起）：先把那一轮收掉，别让两个游标打架
     if (st.reconcile) { endReconcile(st); }
@@ -1779,8 +1769,6 @@
     // 上面还有没画的老消息：先把它们都画出来。清单是从窗格里扒 `.msg.user` 的，
     // 少画一截就少几行（而且点进去也跳不到）。这是个明确的点击，卡一下可接受。
     while (st && st.older && st.older.length) { fillOlder(st, st.older.length); }
-    // 收起来的那些也一样：不在窗格里就数不到（见 parkTopNodes）
-    if (st) { unparkAll(st); }
     saidMenu.innerHTML = "";
     const msgs = st && st.paneEl ? Array.prototype.slice.call(st.paneEl.querySelectorAll(".msg.user")) : [];
     if (!msgs.length) {
@@ -8237,9 +8225,8 @@
         const fresh = !t.paneEl.querySelector(".msg:not(.system)");
         // 上一遍没画完的老消息作废（占位一起收掉）：这一遍要重新攒了
         dropOlderHint(t);
-        dropParkHint(t);
-        if (t.parkRaf) { cancelAnimationFrame(t.parkRaf); t.parkRaf = 0; }
-        if (t.parkTimer) { clearTimeout(t.parkTimer); t.parkTimer = 0; }
+        if (t.viewRaf) { cancelAnimationFrame(t.viewRaf); t.viewRaf = 0; }
+        if (t.viewTimer) { clearTimeout(t.viewTimer); t.viewTimer = 0; }
         // 后端说“接下来重放一遍历史”，而且这次每条都带编号：不清空窗格，按编号对账
         //（见 beginReconcile / placeUnit）——人正看着的那一段、图片、卡片里打的字都留着
         if (msg.reconcile && !fresh) { beginReconcile(t); break; }
@@ -8748,8 +8735,10 @@
       // 那截下面去，整块顺序就乱了）。
       const hint = st.olderHint && st.olderHint.parentNode === pane ? st.olderHint : null;
       const ruler = hint ? hint.nextElementSibling : pane.firstElementChild;
+      // 人已经划进那块空白里了（视野顶在占位中间）：这就不对位置了。补出来的东西让它自己
+      // 长上来盖住视野——一按尺子对位置，等于把这片空白按在原地，人越补越看不见东西。
+      const inside = !!hint && pane.scrollTop < headBottom(hint);
       const viewTop = ruler ? ruler.offsetTop - pane.scrollTop : 0;
-      const beforeHeight = pane.scrollHeight;
       const prevAnchor = pane.style.overflowAnchor;
       pane.style.overflowAnchor = "none";
       let node = stage.firstChild;
@@ -8760,12 +8749,12 @@
       }
       // 占位跟着缩（高度按这会儿量出来的平均高度重估：一开始估得不准，补一轮就准一轮）
       if (st.older.length) { mountOlderHint(st, st.older.length); } else { dropOlderHint(st); }
-      if (ruler && ruler.parentNode === pane) {
-        pane.scrollTop = Math.max(0, ruler.offsetTop - viewTop);
+      if (inside || !ruler || ruler.parentNode !== pane) {
+        st.lastScrollTop = pane.scrollTop;
       } else {
-        pane.scrollTop += Math.max(0, pane.scrollHeight - beforeHeight);
+        pane.scrollTop = Math.max(0, ruler.offsetTop - viewTop);
+        st.lastScrollTop = pane.scrollTop;
       }
-      st.lastScrollTop = pane.scrollTop;
       pane.style.overflowAnchor = prevAnchor;
     } finally {
       st.olderBusy = false;
@@ -8788,197 +8777,52 @@
     return !!(st.older && st.older.length);
   }
 
-  // ==================== 画过的也收起来（滚出视野的那几截）====================
-  //
-  // 上面那套管“还没画过的”；这一套管“画过、但人已经滚走了的”：它们离视野一两屏远，
-  // 排版和绘制的钱却一直付着。收起来 = 从窗格里摘下来，**节点留着不销毁**（图不用重新解码、
-  // 卡片里打的字、折叠状态、内部滚动都在），位置由顶上一条占位（跟 .older-hint 同一套样子）
-  // 按它们原来的高度顶着；人滚回去时原样插回去，一条不多一条不少。
-  //
-  // 只在“没画完的那一截已经补完”之后才收：两者都挤在窗格顶上，混着摆容易搞乱顺序。
-  // 正在流式输出时也不收（那会儿人正看着末尾，而且每帧版面都是脏的，一量就多一次排版）。
-  const PARK_ABOVE_PX = 1000;  // 一整条下沿离视野顶这么远就收起来（比一屏多一点）
-  const UNPARK_NEAR_PX = 500;  // 往回滚到离顶这么近就放回来
-  const PARK_MIN_KEEP = 8;     // 底下这几条永远不收（正在看的、末尾那颗胶囊这些）
-  const PARK_CHUNK = 8;        // 一次放回几条
   // 划得快（每毫秒一个像素以上）和慢悠悠地滚，补画的时机不一样：
   //   · 慢滚：离视野还有一屏多（OLDER_NEAR_PX）就开始补，人看不见补的过程；
   //   · 快划：补一截要一百多毫秒（四倍降速），提前补就是凭空多卡一下，所以只在
   //     “再划两下就真看见空白了”（FAST_NEAR_PX）才补。补一截能顶几屏，所以一路划过去
-  //     也就补那么两三次；停下来 160 毫秒后由 scheduleParkCheckLater 把剩下的补齐。
+  //     也就补那么两三次；停下来 160 毫秒后由 scheduleViewportCheckLater 把剩下的补齐。
   //     完全不补这一版也量过：一路划过去一帧没卡，但人会一路看空白——不能那么干。
   const FAST_SCROLL_PX_PER_MS = 1.2;
   const FAST_SCROLL_GRACE_MS = 160;
   const FAST_NEAR_PX = 260;
 
-  /** 顶上的占位（收起来的那些原来占的高度）：跟老消息那截占位用同一套样式与那行粘住的字。 */
-  function mountParkHint(st) {
-    const pane = st.paneEl;
-    let el = st.parkHint;
-    if (!el) {
-      el = document.createElement("div");
-      el.className = "older-hint";
-      const label = document.createElement("span");
-      label.className = "oh-text";
-      el.appendChild(label);
-      st.parkHint = el;
-    }
-    el.firstChild.textContent = "往上还有 " + (st.parked ? st.parked.length : 0) + " 条（滚上去就回来）";
-    el.style.height = Math.max(0, Math.round(st.parkHeight)) + "px";
-  }
-
-  function dropParkHint(st) {
-    st.parked = [];
-    st.parkHeight = 0;
-    if (st.parkHint) { st.parkHint.remove(); st.parkHint = null; }
-  }
-
-  /** 滚下去走远了的那几条收起来（顶上的、已经离视野一两屏远的）。 */
-  function parkTopNodes(st) {
-    const pane = st.paneEl;
-    const top = pane.scrollTop;
-    if (top <= 0) { return; }
-    if (st.older && st.older.length) { return; }   // 没画完的那截在上头：先别混着来
-    const kids = Array.from(pane.children).filter((el) => el !== st.olderHint && el !== st.parkHint && el !== st._historyBtn);
-    const msgs = kids.filter((el) => el.classList && el.classList.contains("msg"));
-    if (msgs.length <= PARK_MIN_KEEP) { return; }
-    const room = msgs.length - PARK_MIN_KEEP;
-    const take = [];
-    for (const el of kids) {
-      if (take.length >= room) { break; }
-      if (!el.classList.contains("msg")) { break; }     // 只收消息这一层
-      if (el.offsetTop + el.offsetHeight > top - PARK_ABOVE_PX) { break; }   // 还看得见的留着
-      take.push(el);
-    }
-    if (!take.length) { return; }
-    // 高度先一次量完再摘：摘一条量一条的话，下次量又是一次完整重排
-    for (const el of take) { el._parkH = el.offsetHeight; }
-    const anchor = take[take.length - 1].nextSibling;
-    const anchorTop = anchor ? anchor.offsetTop : 0;
-    for (const el of take) {
-      st.parkHeight += el._parkH;
-      st.parked.push(el);
-      el.remove();
-    }
-    mountParkHint(st);
-    // 占位摆到它们原来占的那块地方（摘空了就摆到顶上）
-    const hint = st.parkHint;
-    if (hint.parentNode !== pane) { pane.insertBefore(hint, anchor); }
-    // 高度再按“下面那条原来在哪儿”修一次：消息自己带上下外边距、相邻外边距还会折叠，
-    // 光把 offsetHeight 加起来比它们真占的地方少一圈（30 条差出 279 像素）。
-    if (anchor && anchor.parentNode === pane && anchorTop) {
-      const diff = anchorTop - anchor.offsetTop;
-      if (diff) { st.parkHeight = Math.max(0, st.parkHeight + diff); hint.style.height = Math.round(st.parkHeight) + "px"; }
-    }
-  }
-
-  /** 往回滚到顶了：把收起来的按“离视野最近的先回来”放回去，视野不动。 */
-  function unparkNearTop(st) {
-    const parked = st.parked;
-    if (!parked || !parked.length) { return; }
-    const pane = st.paneEl;
-    if (pane.scrollTop >= headBottom(st.parkHint) + UNPARK_NEAR_PX) { return; }
-    // 尺子：原来最上面那条现在在视野里的位置。放完按它放回去（同 fillOlder）
-    const hint = st.parkHint && st.parkHint.parentNode === pane ? st.parkHint : null;
-    const ruler = hint ? hint.nextElementSibling : pane.firstElementChild;
-    const viewTop = ruler ? ruler.offsetTop - pane.scrollTop : 0;
-    const rulerTop = ruler ? ruler.offsetTop : 0;
-    const prevAnchor = pane.style.overflowAnchor;
-    pane.style.overflowAnchor = "none";
-    let cursor = ruler;
-    for (let n = 0; n < PARK_CHUNK && parked.length; n += 1) {
-      const el = parked.pop();            // 离视野最近的那些先回来
-      st.parkHeight -= el._parkH;
-      el._parkH = 0;
-      pane.insertBefore(el, cursor);      // 每个插在上一个前面，倒着放回来正好对
-      cursor = el;
-    }
-    if (parked.length) { mountParkHint(st); } else { dropParkHint(st); }
-    // 占位高度按“尺子原来在哪儿”修一次（跟收紧时同一套：外边距折叠那圈算不清）
-    if (parked.length && ruler && ruler.parentNode === pane) {
-      const diff = rulerTop - ruler.offsetTop;
-      if (diff) { st.parkHeight = Math.max(0, st.parkHeight + diff); st.parkHint.style.height = Math.round(st.parkHeight) + "px"; }
-    }
-    if (ruler && ruler.parentNode === pane) {
-      pane.scrollTop = Math.max(0, ruler.offsetTop - viewTop);
-    }
-    st.lastScrollTop = pane.scrollTop;
-    pane.style.overflowAnchor = prevAnchor;
-  }
-
-  /** 全部放回来（要整屏重画了：按编号对账 / 记视野都得看得见它们）。 */
-  function unparkAll(st) {
-    const parked = st.parked;
-    const pane = st.paneEl;
-    if (!parked || !parked.length) { dropParkHint(st); return; }
-    const hint = st.parkHint && st.parkHint.parentNode === pane ? st.parkHint : null;
-    let cursor = hint ? hint.nextElementSibling : pane.firstElementChild;
-    while (parked.length) {
-      const el = parked.pop();
-      el._parkH = 0;
-      pane.insertBefore(el, cursor);
-      cursor = el;
-    }
-    dropParkHint(st);
-  }
-
   /**
-   * 一帧看一眼窗格里该干什么：补没画的、放收回来的、收走远了的。
+   * 一帧看一眼：上面没画的那一截该不该补。
    *
-   * 判断都拿“分界”当尺子（headBottom = 顶上占位的底边，也就是已画内容从哪儿开始），
-   * 不是拿窗格顶上那 0 当尺子：占位可能有几十屏高，人滚到分界跟前时窗格离顶还远着呢，
-   * 按 0 算就永远轮不到它，人会一头扎进一块空地里滚不出来。
+   * “该补了”拿占位的底边当尺子（headBottom = 已画内容从哪儿开始），不是拿窗格顶上那 0：
+   * 占位可能有几十屏高，人滚到分界跟前时窗格离顶还远着呢，按 0 算就永远轮不到它，
+   * 人会一头扎进一块空地里滚不出来。
    */
   function syncViewport(st) {
-    st.parkRaf = 0;
+    st.viewRaf = 0;
     const pane = st.paneEl;
     if (!paneShown(pane) || st.suppressScroll || st.streaming || st.olderBusy) { return; }
-    // 0) 正划得快：收还是照收（不贵，收掉之后后面几帧更轻）；补只补到“不至于看见空白”为止，
-    //    不催下一帧（催了就是一路卡）。停下来之后再把剩下的补齐（见 scheduleParkCheckLater）。
-    if (Date.now() < st.scrollFastUntil) {
-      parkTopNodes(st);
-      if (olderLeft(st) && pane.scrollTop < headBottom(st.olderHint) + FAST_NEAR_PX) {
-        fillOlder(st, CHUNK_TURNS);
-      } else if (st.parked.length && pane.scrollTop < headBottom(st.parkHint) + FAST_NEAR_PX) {
-        unparkNearTop(st);
-      }
-      scheduleParkCheckLater(st);
-      return;
-    }
-    // 1) 上面还有没画的老消息：滚到分界跟前就补几截（一帧补三截，剩下的下一帧接着来）
-    if (olderLeft(st)) {
-      if (pane.scrollTop < headBottom(st.olderHint) + OLDER_NEAR_PX) {
-        // 一帧只补一截：一截是几轮（十几条消息），四倍降速下已经一百毫秒上下了，
-        // 一帧补两三截就是几百毫秒的卡（量过：一帧补三截最长一帧 482 毫秒，补一截 214，补五轮 109）。
-        // 还没补够就下一帧接着来——那一下不卡，只是多几帧。
-        fillOlder(st, CHUNK_TURNS);
-        if (olderLeft(st) && pane.scrollTop < headBottom(st.olderHint) + OLDER_NEAR_PX) { scheduleParkCheck(st); }
-      }
-      return;   // 老消息还没画完：收放先不动（两边都挤在顶上，混着来容易把顺序搞乱）
-    }
-    // 2) 收起来的那些：滚到分界跟前就放回来（一帧一截）
-    if (st.parked.length && pane.scrollTop < headBottom(st.parkHint) + UNPARK_NEAR_PX) {
-      unparkNearTop(st);
-      if (st.parked.length && pane.scrollTop < headBottom(st.parkHint) + UNPARK_NEAR_PX) { scheduleParkCheck(st); }
-      return;
-    }
-    // 3) 已经滚出去一两屏的那几条：收起来（位置由顶上的占位顶着）
-    parkTopNodes(st);
+    if (!olderLeft(st)) { return; }
+    const fast = Date.now() < st.scrollFastUntil;
+    const near = fast ? FAST_NEAR_PX : OLDER_NEAR_PX;
+    if (pane.scrollTop >= headBottom(st.olderHint) + near) { return; }
+    // 一帧只补一截：一截是几轮（十几条消息），四倍降速下已经一百毫秒上下了，
+    // 一帧补两三截就是几百毫秒的卡（量过：一帧补三截最长一帧 482 毫秒，补一截 214，补五轮 109）。
+    fillOlder(st, CHUNK_TURNS);
+    if (!olderLeft(st) || pane.scrollTop >= headBottom(st.olderHint) + near) { return; }
+    // 还没补够：慢滚下一帧接着来；快划等停下来再说（一路催就是一路卡）
+    if (fast) { scheduleViewportCheckLater(st); } else { scheduleViewportCheck(st); }
   }
 
   /** 等一下再看（划得快的时候用：停下来之后由它把没补的补上）。 */
-  function scheduleParkCheckLater(st) {
-    if (st.parkTimer) { return; }
-    st.parkTimer = setTimeout(() => {
-      st.parkTimer = 0;
-      scheduleParkCheck(st);
+  function scheduleViewportCheckLater(st) {
+    if (st.viewTimer) { return; }
+    st.viewTimer = setTimeout(() => {
+      st.viewTimer = 0;
+      scheduleViewportCheck(st);
     }, FAST_SCROLL_GRACE_MS);
   }
 
   /** 攒到下一帧再量（滚动事件一帧能来好几个，每次都量版面就白花了）。 */
-  function scheduleParkCheck(st) {
-    if (st.parkRaf) { return; }
-    st.parkRaf = requestAnimationFrame(() => syncViewport(st));
+  function scheduleViewportCheck(st) {
+    if (st.viewRaf) { return; }
+    st.viewRaf = requestAnimationFrame(() => syncViewport(st));
   }
 
   function removeSession(id) {
@@ -8986,8 +8830,8 @@
     if (!st) { return; }
     unkeep(st);
     cancelFlush(st);
-    if (st.parkRaf) { cancelAnimationFrame(st.parkRaf); st.parkRaf = 0; }
-    if (st.parkTimer) { clearTimeout(st.parkTimer); st.parkTimer = 0; }
+    if (st.viewRaf) { cancelAnimationFrame(st.viewRaf); st.viewRaf = 0; }
+    if (st.viewTimer) { clearTimeout(st.viewTimer); st.viewTimer = 0; }
     if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); }
     dropRunningLine(st);   // 那条「正在跑」的定时器与耗时那只钟（见 startRunClock）一并停掉
     for (const tg of st.pendingToolTags.values()) { clearInterval(tg._timer); }
