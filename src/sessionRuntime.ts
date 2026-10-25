@@ -148,6 +148,9 @@ export function expandSlashCommand(text: string, commands: RpcCommandInfo[]): st
     return text;
 }
 
+/** 工具参数里这几项整个不带（write / edit 的正文：几十上百 KB，界面上那两处都用不到）。 */
+const SummaryOmittedArgKeys: ReadonlySet<string> = new Set(["content", "oldText", "newText"]);
+
 /**
  * 一个会话的全部运行时状态：独立的 pi 进程 + 独立的会话/编辑追踪。
  * 多个 SessionRuntime 各自持有自己的 PiClient，因此可以真正并行流式生成。
@@ -243,6 +246,8 @@ export class SessionRuntime {
      *
      *  想改回“带开头一小段”（点开就不用等那一下）把这个数调大就行，界面那一套两边都认。 */
     private static readonly DETAIL_PREVIEW_CHARS = 0;
+    /** 工具参数摘要里单个字段最多带多少字（够那行字用；整行还会再省略一次）。 */
+    private static readonly ARGS_SUMMARY_CHARS = 160;
     /** 裁下来的全文最多在内存里留多少（字符数）：超过就从最早留的开始丢（丢了的那段点开时取不到）。
      *  留得住长会话里最近几十轮就够：点开的是刚看到的那些，很久以前的点开时会说“取不到了”。 */
     private static readonly DETAIL_KEEP_CHARS = 4 * 1024 * 1024;
@@ -276,7 +281,7 @@ export class SessionRuntime {
             onKnownFilesChanged: () => this.host.onKnownFilesChanged?.(this.id),
             confirmRevert: (label) => this.host.confirmRevert(label, this.id),
             clipToolText: (key, text) => this.clipDetail(key, text),
-            hideToolArgs: (key, args) => this.hideArgs(key, args),
+            summaryToolArgs: (id, args) => this.summaryArgs(id, args),
         });
     }
 
@@ -1229,8 +1234,9 @@ export class SessionRuntime {
     //   - 思考全文、工具输出：一个字都不发（只留“一共多少字 + 编号”），全文留在这边，
     //     界面上点开提示框时一次问回来
     //     （键是 `think:<名字>` 与 `result:<toolCallId>`，见 media/chat.js 的 clipOf / pumpClipDetails）；
-    //   - 工具参数：一个字段都不发（键是 `args:<toolCallId>`），点开提示框再取——
-    //     界面上用到它的只有那行调用摘要和 write 的写入预览，都在提示框里。
+    //   - 工具参数：只带“一行字那么多”的摘要字段（命令、路径这些，每个字段最多 160 字，
+    //     write / edit 的正文整个不带），整份留在内存里、点开提示框再取（键是
+    //     `args:<toolCallId>`）——那行一直看得见的调用摘要（`$ 命令`）要用它。
     // 实时流与历史重放走的是同一套（实时在 onPiEvent / EditTracker，重放在 renderMessages）。
 
     /**
@@ -1245,19 +1251,37 @@ export class SessionRuntime {
     }
 
     /**
-     * 工具参数一个字段都不发：消息里只留“参数一共多少字 + 编号”，点开提示框时再取
-     * （全文留在内存里，见 rememberDetail）。
+     * 工具参数：只带“一行字那么多”的摘要字段，整份不发（全文留在内存里，点开提示框再取，
+     * 见 rememberDetail / loadDetails）。
      *
-     * 参数在界面上只用来画两处：标签上那一行摘要（`$ 命令`、文件名）与 write 的写入预览。
-     * 两处都要人点开提示框才看得到，所以跟思考、工具输出一样走“点开再取”。
-     * 卡片本身不受影响：文件名、路径、diff 都在消息的其他字段里（path / label / diff）。
+     * 为什么不能一个字段都不带：界面上那行**一直看得见**的调用摘要（正在跑的那一行
+     * `$ 命令`、标签提示里那一行、文件名）就是从参数里取出来的，不带就只剩一个工具名了。
+     * 所以按“一行字能放下的量”带：短字段原样，长字段裁到一行，嵌套结构不带；
+     * write / edit 的正文（content / oldText / newText）整个不带 —— 那些是几十上百 KB 的大头，
+     * 卡片上本来也有自己的 diff / 预览（预览要等点开提示框取回参数才画）。
      */
-    public hideArgs(detailKey: string, args: unknown): { argsOmitted?: number; detailKey?: string } {
-        let text = "";
-        try { text = JSON.stringify(args ?? {}); } catch { return {}; }
-        if (!text || text === "{}") { return {}; }   // 没有参数：没什么可取的
-        this.rememberDetail(detailKey, text);
-        return { argsOmitted: text.length, detailKey };
+    public summaryArgs(toolCallId: string, args: unknown): {
+        args?: Record<string, unknown>; argsOmitted?: number; detailKey?: string;
+    } {
+        let full = "";
+        try { full = JSON.stringify(args ?? {}); } catch { return {}; }
+        if (!full || full === "{}") { return {}; }   // 没有参数：什么都不用带
+        const detailKey = `args:${toolCallId}`;
+        this.rememberDetail(detailKey, full);
+        const summary: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries((args ?? {}) as Record<string, unknown>)) {
+            // write / edit 的正文：几十上百 KB，界面上这两处都用不到（卡片有 diff / 预览）
+            if (SummaryOmittedArgKeys.has(key)) { continue; }
+            if (typeof value === "string") {
+                summary[key] = value.length > SessionRuntime.ARGS_SUMMARY_CHARS
+                    ? value.slice(0, SessionRuntime.ARGS_SUMMARY_CHARS)
+                    : value;
+            } else if (typeof value === "number" || typeof value === "boolean") {
+                summary[key] = value;
+            }
+            // 嵌套结构（数组 / 对象）不带：摘要那一行用不上
+        }
+        return { args: summary, argsOmitted: full.length, detailKey };
     }
 
     /** 把一段全文记在内存里（点开再取时从这儿给）；超过上限就从最早留的开始丢。 */
@@ -1579,14 +1603,14 @@ export class SessionRuntime {
                             if (c.name === "edit" || c.name === "write") {
                                 const p = this.edits.editToolPath(c.name, c.arguments);
                                 const id = c.id || `${mid}:c${blockNo++}`;
-                                const hidden = this.hideArgs(`args:${id}`, c.arguments);
+                                const summary = this.summaryArgs(id, c.arguments);
                                 emit({
                                     type: "editCardStart",
                                     toolCallId: id,
                                     toolName: c.name,
                                     path: p || "",
                                     label: p ? this.host.relativeTo(this.cwd, p) : "",
-                                    ...hidden,
+                                    ...summary,
                                 });
                                 emit({
                                     type: "editCardResult",
@@ -1602,11 +1626,11 @@ export class SessionRuntime {
                                 // interrupted），否则那条标签会一直转圈、耗时一直往上数（见 media/chat.js
                                 // 的 settleInterruptedTools）。
                                 const interrupted = !res && !this.edits.isToolRunning(id);
-                                const hidden = this.hideArgs(`args:${id}`, c.arguments);
+                                const summary = this.summaryArgs(id, c.arguments);
                                 emit({
                                     type: "tool",
                                     toolName: c.name,
-                                    ...hidden,
+                                    ...summary,
                                     toolCallId: id,
                                     ...(interrupted ? { interrupted: true } : {}),
                                 });

@@ -20,8 +20,9 @@ export interface EditTrackerHost {
     confirmRevert(message: string): Promise<boolean>;
     /** 工具输出一个字都不发（全文留在内存里，界面上点开再取），见 SessionRuntime.clipDetail。 */
     clipToolText(detailKey: string, text: string): { text: string; omitted?: number; detailKey?: string };
-    /** 工具参数一个字段都不发（点开提示框时再取），见 SessionRuntime.hideArgs。 */
-    hideToolArgs(detailKey: string, args: unknown): { argsOmitted?: number; detailKey?: string };
+    /** 工具参数只带“一行字那么多”的摘要（整份点开提示框再取），见 SessionRuntime.summaryArgs。 */
+    summaryToolArgs(toolCallId: string, args: unknown):
+        { args?: Record<string, unknown>; argsOmitted?: number; detailKey?: string };
 }
 
 /** 「改动」那一格里的一行：这个会话把一个文件改成了什么样。 */
@@ -104,22 +105,23 @@ export class EditTracker {
                 toolName,
                 path: p,
                 label: this.host.relativeTo(this.host.getCwd(), p),
-                ...this.hiddenArgs(evt.toolCallId, evt.args),
+                ...this.summaryArgs(evt.toolCallId, evt.args),
             });
         } else {
             this.host.post({
                 type: "tool",
                 toolCallId: evt.toolCallId,
                 toolName,
-                ...this.hiddenArgs(evt.toolCallId, evt.args),
+                ...this.summaryArgs(evt.toolCallId, evt.args),
             });
         }
     }
 
-    /** 工具参数一个字都不发：只带个“一共多少字 + 编号”的记号，界面点开提示框再取。 */
-    private hiddenArgs(toolCallId: string, args: unknown): { argsOmitted?: number; detailKey?: string } {
-        if (!toolCallId) { return {}; }
-        return this.host.hideToolArgs(`args:${toolCallId}`, args);
+    /** 工具参数只带“一行字那么多”的摘要（命令、路径这些），整份点开提示框再取。 */
+    private summaryArgs(toolCallId: string, args: unknown):
+        { args?: Record<string, unknown>; argsOmitted?: number; detailKey?: string } {
+        if (!toolCallId || args === undefined) { return {}; }
+        return this.host.summaryToolArgs(toolCallId, args);
     }
 
     /** 工具输出一个字都不发；消息里只留“一共多少字 + 编号”（全文在会话那边留着，界面点开再取）。 */
