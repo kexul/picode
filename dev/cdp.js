@@ -228,20 +228,25 @@ class Page {
      * 为什么不能只看输入框：刚打开的那一两秒里界面已经能打字，但 pi 进程还没有把模型列表
      * 送过来（胶囊的提示里写着"未配置模型"）。这时候发出去的消息会碰到还没起来的会话进程，
      * 消息就丢了（连你自己的那条话都不会出现）。等胶囊报出模型再发就稳了。
-     * 胶囊的状态挂在 data-st 上（见 chat.js 的 ctxState）：loading / wait / nomodel / idle / streaming。 */
+     * 胶囊的状态挂在 data-st 上（见 chat.js 的 ctxState）：none / loading / wait / nomodel / idle / streaming。
+     *
+     * 一个会话都没有（none）时：后端不替人开空会话了（等人挑工作区），工具这边自己开一个
+     * （等于点了「+」：开在后端的默认目录，也就是调试用的那个会话目录），接着等它起来。
+     */
     async waitReady(timeoutMs) {
         const limit = timeoutMs || 60000;
         const started = Date.now();
+        let asked = false;
         while (Date.now() - started < limit) {
-            const ready = await this.eval(`
-                const el = document.getElementById('ctxIcon');
-                if (!el) { return false; }
-                return el.dataset.st === 'idle' || el.dataset.st === 'streaming';
-            `);
-            if (ready) { await sleep(500); return true; }
+            const state = await this.eval("const el = document.getElementById('ctxIcon'); return el ? el.dataset.st : '';");
+            if (state === 'idle' || state === 'streaming') { await sleep(500); return true; }
+            if (state === 'none' && !asked) {
+                asked = true;
+                await this.eval("window.acquireVsCodeApi().postMessage({ type: 'newSession' }); return true;");
+            }
             await sleep(300);
         }
-        throw new Error('等了 ' + Math.round((Date.now() - started) / 1000) + ' 秒，会话一直没就绪（输入框底下那颗胶囊还停在"选模型"）。');
+        throw new Error('等了 ' + Math.round((Date.now() - started) / 1000) + ' 秒，会话一直没就绪（输入框底下那颗胶囊还停在"选模型"或"没有会话"）。');
     }
 
     /** 等模型那边的回复（只看助手的气泡，不会把"自己发出去的那句话"当成回复）。

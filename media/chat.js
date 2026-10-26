@@ -100,7 +100,11 @@
   });
   // 顶条中间那一列（会话名 + 底下那行目录）：点哪一行都掉出同一张清单。
   // 挂在整列上而不是名字那颗按钮上：两行都得是可点区域；按钮上按回车出来的点击也会冒到这里。
-  sessionCenterEl.addEventListener("click", () => { toggleSessionMenu(); });
+  // 一个会话都没有时不掉清单（里头什么都没有）：去把「项目与会话」摊开，那里才有东西可挑。
+  sessionCenterEl.addEventListener("click", () => {
+    if (!activeSession()) { openWorkspaceForEmpty(); return; }
+    toggleSessionMenu();
+  });
   // 两行右边那颗朝下的小箭头：只在开着两个以上会话时露面（提示这里点得开、能换）。
   // 挂在装着两行的这颗按钮上（它是按钮里最后一个孩子，所以落在右边）：
   // 竖直方向跟着两行一起居中，不单对着会话名那一行（见 chat.css 的 #sessionName）。
@@ -1058,7 +1062,7 @@
    * 它还没出来时用我们自己的随机名（“沉静的雪豹”）。
    */
   function sessionLabel(st) {
-    if (!st) { return "新会话"; }
+    if (!st) { return "还没有会话"; }
     return st.piTitle || st.title || "新会话";
   }
 
@@ -3732,7 +3736,10 @@
 
   /** 输入框那一带的按钮随会话状态刷新（现在只剩消息流末尾那两颗，见 syncEndHint）。 */
   function syncComposerButtons() {
-    syncEndHint(activeSession());
+    const st = activeSession();
+    // 一个会话都没有时那颗「+」不给点：新会话总得开在某个工作区里，先在「项目与会话」里挑一个
+    if (newSessionBtn) { newSessionBtn.disabled = !st; }
+    syncEndHint(st);
   }
 
   /** 消息流末尾那颗胶囊上写的是什么。 */
@@ -3893,13 +3900,15 @@
     return Math.max(0, Math.min(100, st.percent));
   }
   function ctxState(st) {
-    if (!st || st.loading) { return "loading"; }
+    // 一个会话都没有（刚打开页面，还等着在「项目与会话」里挑一个）：胶囊里只写“没有会话”
+    if (!st) { return "none"; }
+    if (st.loading) { return "loading"; }
     if (!st.piReady) { return "wait"; }
     if (!st.modelId) { return "nomodel"; }
     return st.streaming ? "streaming" : "idle";
   }
   function ctxTitle(st) {
-    if (!st) { return "还没有会话"; }
+    if (!st) { return "还没有会话（在右边的「项目与会话」里挑一个工作区开始）"; }
     const state = ctxState(st);
     if (state === "loading") { return "加载中…"; }
     if (state === "wait") { return "等待 pi 启动…"; }
@@ -3914,6 +3923,7 @@
    * 还没就绪的几种状态写一句短的：不然胶囊里只剩一条空横条，点了也不知道会发生什么。
    */
   function ctxName(st, state) {
+    if (state === "none") { return "没有会话"; }
     if (state === "loading") { return "加载中"; }
     if (state === "wait") { return "启动中"; }
     if (state === "nomodel") { return "选模型"; }
@@ -4917,6 +4927,7 @@
     pendingCloseTimer = null;
     pendingCloseId = null;
     view.state = null;
+    if (view === modalView) { emptyWorkspace = ""; }   // 那张抽屉没了：“替没有会话摊开”的账也结掉
     view.openSessionsShown = "";
     // 那两格跟着面板一起没了（重开时由 renderPickerItems 重建）：别留着指已经拆掉的格子
     view.sessionPane = null;
@@ -4942,6 +4953,12 @@
   let sidebarWanted = readSidebarWanted();
   /** 已经跟宿主开口要过了（内容没回来之前别连着再要一遍）。 */
   let sidebarAsked = false;
+  /**
+   * 窄窗里那张抽屉是替“一个会话都没有”自己摊开的（不是人点的 <<<）：空串 = 不是，
+   * "asked" = 跟宿主要了、还在路上，"shown" = 已经画出来了。有会话了就把这种抽屉收起来；
+   * 面板还在路上（要扫一眼磁盘才拼得出来）的时候会话已经开好了，那就不弹了。
+   */
+  let emptyWorkspace = "";
 
   function readSidebarWanted() {
     try { return localStorage.getItem(SIDEBAR_STORE_KEY) !== "0"; } catch (e) { return true; }
@@ -5061,6 +5078,26 @@
     setTimeout(() => { sidebarAsked = false; }, 5000);
   }
 
+  /**
+   * 一个会话都没有的那块空档（后端刚起、或者刚把最后几个关完）：把「项目与会话」摊开等人挑。
+   * 宽窗摊成右边那一列，窄窗（手机、窄面板）是从右边滑进来的那张抽屉。
+   * 这一次不看“收没收起”那个记忆——收起了也照摊（不摊开这块屏就没地方可点），但也不去改它。
+   */
+  function openWorkspaceForEmpty() {
+    if (viewShowing("workspace")) { return; }   // 已经画着了（常驻那一列，或浮层里那张）
+    if (sidebarWide()) {
+      sidebarWanted = true;
+      syncSidebarLayout();
+      ensureSidebarPanel();
+      return;
+    }
+    if (emptyWorkspace) { return; }   // 已经摊开了、或者正在路上（会话列表可能连着来两次）
+    // 两边同一时刻只开一块（跟点 <<< 那一套一样）
+    closeFileSidebarForRightSidebar();
+    emptyWorkspace = "asked";
+    vscode.postMessage({ type: "openWorkspace" });
+  }
+
   /** 展开常驻那一列（点 <<< 或面板里那颗叉的对面那种情形），并把“展开”记住。 */
   function expandSidebar() {
     // 窄窗里这一列与左边那一列同一时刻只留一块：先把左边收起来
@@ -5089,6 +5126,7 @@
       if (st && st.kind === "workspace" && !modalView.root.classList.contains("hidden")) { cancelPicker(modalView); return; }
       // 两边同一时刻只开一块：左边那块开着就先收起来
       closeFileSidebarForRightSidebar();
+      emptyWorkspace = "";   // 这一下是人自己点的
       vscode.postMessage({ type: "openWorkspace" });
       return;
     }
@@ -7416,6 +7454,15 @@
 
   function renderPicker(msg, view = null) {
     const kind = msg.kind;
+    // 这张抽屉是替“一个会话都没有”摊开的：拼出来的时候会话已经开好了就别弹了
+    if (kind === "workspace" && msg.dock !== true && emptyWorkspace === "asked") {
+      if (sessions.size > 0) {
+        emptyWorkspace = "";
+        vscode.postMessage({ type: "pickerCancel", kind: "workspace" });
+        return;
+      }
+      emptyWorkspace = "shown";
+    }
     const toggle = !!msg.toggle;
     // 「项目与会话」画到哪儿：宽窗 + 用户没收起 → 右边那一列（#sidebarDock，见上面“常驻的项目与会话侧边栏”）；
     // 窄窗（手机、窄面板）→ 浮层里那张抽屉。别的拾取器一律画在浮层那份里。
@@ -8137,9 +8184,10 @@
       // 已经不在列表里的会话（被关掉了）：壳和草稿一起丢掉。
       // 本屏正在看的那个例外：画面留在原地（后端那头还认着它，接着往里发消息会自动把它重开），
       // 不硬生生把这边拽到别的会话去——别的窗口关掉它时会这样（自己点的那颗 × 不在此列）。
+      // 一个会话都不剩时不留：没有别的可切，就回到“还没有会话”那一屏，等人挑一个工作区。
       Array.from(sessions.keys()).forEach((id) => {
         if (seen.has(id)) { return; }
-        if (id === activeId && pendingCloseId !== id) { return; }
+        if (incoming.length > 0 && id === activeId && pendingCloseId !== id) { return; }
         if (pendingCloseId === id) { pendingCloseId = null; }
         removeSession(id);
       });
@@ -8164,6 +8212,11 @@
       refreshOpenSessionsInPicker();
       // 常驻的项目与会话侧边栏在这一批会话到了之后才要内容：不然上半那份「正在对话」是空的
       ensureSidebarPanel();
+      // 一个会话都没有（刚打开页面、或者刚把最后几个关掉）：不空着等，把「项目与会话」摊开，
+      // 等人在某个工作区里开新会话、或挑一条历史会话
+      if (sessions.size === 0) { openWorkspaceForEmpty(); }
+      // 有会话了就把替“没有会话”自己摊开的那张抽屉收起来（常驻那一列照旧开着）
+      else if (emptyWorkspace === "shown" && modalView.state && modalView.state.kind === "workspace") { cancelPicker(modalView); }
       // 刚连上的这一批会话里可能已经有就绪的：把排队中的消息发出去
       flushPendingSend();
       // 会话列表来了（连上 / 新建 / 一轮跑完 / 切换）：闲下来后把别的会话的版先排好

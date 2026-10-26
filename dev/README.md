@@ -281,6 +281,9 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
   （以前是悄声丢掉，得像没事一样再按一次）。要故意在"还没就绪"时动手，加 `--skip-ready`。
   注意无头浏览器在页面刚加载的那几百毫秒里有时会把按键事件丢掉（探针的坑）：脚本里可以先
   `page.sleep(1000)` 再按回车。
+- **`waitReady` 会自己开一个会话**：浏览器页面进来时后端不替人开空会话了（等人挑工作区），
+  所以 `page.waitReady()` 看到“没有会话”就顺手发一条新建会话（等于点了 `+`：开在后端的默认目录），
+  接着等它就绪。想看“还没有会话”那一屏本身，加 `--skip-ready`。
 - **截图默认把滚动条藏掉**（`--hide-scrollbars`）：图干净，但滚动条也就占不了宽度，
   跟浏览器里看到的会差一行半行。要照真样子看就加 `--scrollbars`，或者用 `node dev/inputProbe.js`
   （它默认就用真滚动条，还会把输入框的高度与滚动状态打印出来）。

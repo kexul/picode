@@ -523,6 +523,9 @@
   #saidBtn svg { width: 15px; height: 15px; display: block; }
   #newSessionBtn:hover,
   #saidBtn:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); color: var(--vscode-foreground); }
+  /* 一个会话都没有时那颗加号灰掉（新会话总得开在某个工作区里，先去面板里挑一个） */
+  #newSessionBtn:disabled { opacity: 0.4; cursor: default; }
+  #newSessionBtn:disabled:hover { background: transparent; color: var(--vscode-descriptionForeground, inherit); }
   /* 清单开着的时候这颗按钮一直亮着（一眼看出是哪颗按钮弹的） */
   #saidBtn.on { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); color: var(--vscode-foreground); }
   /* 「你说过的话」靠着右头：中间空出来的地方就是留白 */
@@ -1307,7 +1310,7 @@
   #ctxIcon .ci-tps:empty { display: none; }
   #ctxIcon.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
   #ctxIcon.err { color: var(--vscode-errorForeground, #f14c4c); }
-  #ctxIcon[data-st="loading"], #ctxIcon[data-st="wait"], #ctxIcon[data-st="nomodel"] { opacity: 0.55; }
+  #ctxIcon[data-st="loading"], #ctxIcon[data-st="wait"], #ctxIcon[data-st="nomodel"], #ctxIcon[data-st="none"] { opacity: 0.55; }
   @media (prefers-reduced-motion: reduce) { #ctxIcon .ci-fill { transition: none; } }
   /* 工具结果内联图片（read 读图等）：缩略图 + 点击放大 */
   .tc-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }

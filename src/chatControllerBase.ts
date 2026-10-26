@@ -788,7 +788,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
      *
      * 挑法：知道它该用哪个目录（VSCode 窗口的工作区，见 preferredDirForClient）就先在那个目录里
      * 找已经开着的会话（同一个目录开着好几个就挑最近用过的那个），没有才在那个目录新开一个；
-     * 不知道该用哪个目录（浏览器页面）就看“最近有人切过去的那个”，一个会话都没有才新开一个。
+     * 不知道该用哪个目录（浏览器页面）就看“最近有人切过去的那个”。
+     *
+     * 浏览器页面进来时一个会话都没有（后端刚起、或者刚把最后几个关完）：不替人开空会话，
+     * 让它空着 —— 界面那边会把「项目与会话」摊开，等人在某个工作区里开新会话、或挑一条历史会话。
      *
      * @returns 是不是刚刚为它新建了一个会话（新建的才要走“启动时自动打开最近会话”那条路）
      */
@@ -808,9 +811,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
         }
         const last = this.lastFocusedPanelId ? this.panels.get(this.lastFocusedPanelId) : undefined;
         const pick = last ?? this.panels.values().next().value;
-        if (pick) { this.setActiveSession(pick.id, clientId); return false; }
-        this.newSession(ChatControllerBase.SPARE_PREWARM_DELAY_MS, clientId);
-        return true;
+        if (pick) { this.setActiveSession(pick.id, clientId); }
+        return false;
     }
 
     /** 某个目录里已经开着的会话：同一个目录开着好几个时，挑最近用过的那个（子会话排在后面）。 */
@@ -835,7 +837,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
      *
      * 动手关它的那块屏自己换到别的会话去；别的还在看它的屏留在原地不动
      * （画面还留着，界面那边会显示“这个会话已被关闭”和一颗重新打开的按钮）。
-     * 一个都不剩就补一个空的，保持界面可用。
+     * 一个都不剩就空着（不再自动补一个空的）：界面那边会把「项目与会话」摊开，等人挑一个工作区。
      */
     public closeSession(panelId: string): void {
         if (!this.panels.has(panelId)) { return; }
@@ -849,8 +851,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         }
         if (this.lastFocusedPanelId === panelId) { this.lastFocusedPanelId = this.panels.keys().next().value; }
         this.broadcastSessionList(true);
-        // 全部关完自动新建一个空会话，保持界面可用
-        if (this.panels.size === 0) { this.newSession(0, requester); }
     }
 
     // ---- Fork（原生克隆会话到新 panel）----
