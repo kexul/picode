@@ -8,9 +8,10 @@
  *
  *   1. 等老后端退干净（它收到重启请求后会停网页服务、杀掉所有 pi 进程）；
  *      15 秒还没退就直接杀掉（那种情况下它自己那几个 pi 进程可能留在那儿）。
- *   2. 在仓库里编译、再把 pichat 装成全局命令：`npm run build` + `npm i -g .`。
+ *   2. 拉最新代码（git pull --ff-only）；拉不到就拿现在的代码接着编，日志里记一笔。
+ *   3. 在仓库里编译、再把 pichat 装成全局命令：`npm run build` + `npm i -g .`。
  *      两步都成功才起后端；哪一步失败就停在这儿（后端不再起来，修好后再手工敲 pichat）。
- *   3. 照老后端当初的命令行把后端起回来：同一个端口、同一个会话目录 —— 页面在原来的
+ *   4. 照老后端当初的命令行把后端起回来：同一个端口、同一个会话目录 —— 页面在原来的
  *      地址上一连就回来了。新后端放后台跑，自己退出。
  *
  * 编译输出与新后端的日志都追加到计划里的 logFile（默认 ~/.pi/pichat/restart.log）：
@@ -30,6 +31,9 @@ const EXIT_WAIT_MS = 15000;
 const KILL_WAIT_MS = 5000;
 /** 新后端起来后看它还活着没有之前，等这么久（起来了就不会马上退）。 */
 const START_VERIFY_MS = 2000;
+
+/** 拉代码最多等多久：网络不通时 git 会磨很久，不能让它把重启卡在这儿。 */
+const PULL_TIMEOUT_MS = 120000;
 
 function stamp() {
     const d = new Date();
@@ -89,30 +93,59 @@ function forceKill(pid) {
 /**
  * 跑一条命令（整条给出来，不分参数：Windows 上 npm 是 npm.cmd，只有经 shell 才找得到，
  * shell 也不会替我们给参数加引号），输出直接进日志。
- * @returns 退出码（起不来、信号结束这些都算失败，返回 -1）
+ * @param timeoutMs 到点还没跑完就当失败（拉代码跟网络有关，可能一直挂着）
+ * @returns 退出码（起不来、超时、信号结束这些都算失败，返回 -1）
  */
-function run(commandLine, cwd, logFd) {
+function run(commandLine, cwd, logFd, timeoutMs) {
     return new Promise((resolve) => {
         write(logFd, `$ ${commandLine}`);
         let child;
+        const finish = (code) => { resolve(code); };
         try {
             child = cp.spawn(commandLine, {
                 cwd,
                 shell: true,
+                env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },   // 不让人在后台悄悄等着输密码
                 stdio: ["ignore", logFd === undefined ? "ignore" : logFd, logFd === undefined ? "ignore" : logFd],
                 windowsHide: true,
             });
         } catch (err) {
             write(logFd, `起不来：${err && err.message ? err.message : err}`);
-            resolve(-1);
+            finish(-1);
             return;
+        }
+        let timer;
+        if (timeoutMs) {
+            timer = setTimeout(() => {
+                write(logFd, `跑了 ${Math.round(timeoutMs / 1000)} 秒还没完，掐掉（当失败）。`);
+                try { child.kill(); } catch { /* 已经没了 */ }
+                finish(-1);
+            }, timeoutMs);
         }
         child.on("error", (err) => {
             write(logFd, `起不来：${err && err.message ? err.message : err}`);
-            resolve(-1);
+            if (timer) { clearTimeout(timer); }
+            finish(-1);
         });
-        child.on("close", (code) => { resolve(code === 0 ? 0 : (code ?? -1)); });
+        child.on("close", (code) => {
+            if (timer) { clearTimeout(timer); }
+            finish(code === 0 ? 0 : (code ?? -1));
+        });
     });
+}
+
+/**
+ * 拉最新代码。拉不到（没网、本地有改动、有分叉、没装 git）不算失败：拿现在的代码接着编就是了，
+ * 只是日志里记一笔。--ff-only 是有意的：后台跑的命令不能自作主张替人生成一次合并提交。
+ * 代码在后台跑，所以也不许它停下来等人输密码（见 run 里的 GIT_TERMINAL_PROMPT）。
+ */
+async function pullLatest(repoDir, logFd) {
+    const code = await run("git pull --ff-only --no-edit", repoDir, logFd, PULL_TIMEOUT_MS);
+    if (code !== 0) {
+        write(logFd, "拉取失败（没网 / 本地有改动 / 分叉 / 没装 git 都算），照现在的代码接着编。");
+        return;
+    }
+    write(logFd, "已拉最新代码。");
 }
 
 /** 照老命令行把后端起回来（后台跑，输出进日志）。 */
@@ -157,7 +190,10 @@ async function main() {
     }
     write(logFd, "老后端已停。");
 
-    // 2. 编译 + 装全局命令
+    // 2. 拉最新代码（拉不到就拿现在的代码接着走，只记一笔）
+    await pullLatest(plan.repoDir, logFd);
+
+    // 3. 编译 + 装全局命令
     if (await run("npm run build", plan.repoDir, logFd) !== 0) {
         write(logFd, "编译失败，后端没有重新起来。修好以后再在终端里敲一次 pichat。");
         process.exitCode = 1;
@@ -169,7 +205,7 @@ async function main() {
         return;
     }
 
-    // 3. 照老命令行起回来
+    // 4. 照老命令行起回来
     const child = startBackend(plan, logFd);
     await sleep(START_VERIFY_MS);
     if (alive(child.pid)) {

@@ -871,8 +871,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 action: "restartBackend",
                 label: "重启后端",
                 desc: can
-                    ? `先 npm run build，再 npm i -g .，好了重启后端（正在跑的回复会断）。`
-                        + `重启后在后台跑，编译输出与新后端的日志写进 ${able.logFile}`
+                    ? `先拉最新代码（git pull），再 npm run build、npm i -g .，好了重启后端（正在跑的回复会断）。`
+                        + `拉不到就照现在的代码编；重启后在后台跑，编译输出与新后端的日志写进 ${able.logFile}`
                     : (able.reason ?? "这个后端不能从这里重启。"),
                 check: null,
                 kind: "button",
