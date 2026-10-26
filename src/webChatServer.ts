@@ -425,18 +425,22 @@ export class PiChatWebServer {
         }
     }
 
-    /** 同步收摊：断掉每条推送连接、清心跳。会话不动（后端进程自己退不退是启动器的事）。 */
-    private teardown(): void {
+    /**
+     * 同步收摊：断掉每条推送连接、清心跳。会话不动（后端进程自己退不退是启动器的事）。
+     * @param quiet 不跟页面道别（直接断掉连接）：页面上收到道别会把“服务真的停了”当真、不再自己重连；
+     *              「编译并重启」那颗按钮走这条——这个服务过几十秒还会在同一个地址上回来。
+     */
+    private teardown(quiet = false): void {
         if (this.heartbeat) { clearInterval(this.heartbeat); this.heartbeat = undefined; }
         const broadcaster = this.host.getBroadcaster();
         for (const channel of broadcaster.removeAllChannels()) {
             // 告别话要给：页面收到 end 就不再重连（服务真的停了，重连也没用）
-            channel.close("网页服务已停止。");
+            channel.close(quiet ? "" : "网页服务已停止。");
         }
         this.streams.clear();
         for (const [id, res] of this.screenStreams) {
             this.host.detachScreen(id);
-            this.endStream(res, "服务已停止。");
+            this.endStream(res, quiet ? "" : "服务已停止。");
         }
         this.screenStreams.clear();
         this.host.onServerStopped();
@@ -445,12 +449,15 @@ export class PiChatWebServer {
         this.ownHostnames = [];
     }
 
-    /** 停服务并等监听真的关掉（改配置重启时用）。 */
-    public async stop(): Promise<void> {
+    /**
+     * 停服务并等监听真的关掉（改配置重启时用）。
+     * @param quiet 不跟页面道别（见 {@link teardown}）：重启后端时用。
+     */
+    public async stop(quiet = false): Promise<void> {
         const server = this.server;
         const wasRunning = server !== undefined;
         this.server = undefined;
-        this.teardown();
+        this.teardown(quiet);
         if (server) {
             closeSockets(server);
             await Promise.race([

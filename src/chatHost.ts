@@ -19,7 +19,7 @@ import * as crypto from "crypto";
 import type { AskRequest } from "./askProtocol";
 import { writeAskAnswer } from "./askProtocol";
 import type { MessageSink } from "./sessionRuntime";
-import { ChatControllerBase } from "./chatControllerBase";
+import { ChatControllerBase, type ViewOptionItem } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
 import { getAskAssets, getGoalAssets, getTabaAssets } from "./bridgeAssets";
@@ -39,6 +39,7 @@ import type { WebServerHost } from "./webChatServer";
 import type { SessionChangeInfo } from "./editTracker";
 import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
+import { describeRestart } from "./serverRestart";
 import {
     DEFAULT_AUTO_LOAD_LAST,
     DEFAULT_CLOSE_SESSION_KEY,
@@ -86,6 +87,11 @@ export interface ChatHostOptions {
     cwd: string;
     /** 日志出口（默认打标准输出）。 */
     log?: (text: string) => void;
+    /**
+     * 设置浮层里「编译并重启」那颗按钮点下去时调它（由 serverMain 那边实现：起一个独立的小进程
+     * 去编译、收摊以后再照原样把后端起回来）。不给就是不能从这里重启。
+     */
+    restartBackend?: () => { ok: boolean; reason?: string };
 }
 
 /** 这条消息是不是“一次性界面”（确认框、浮层、跑完提醒）：补发里只有序号位、没有内容。 */
@@ -576,6 +582,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     public processPageMessage(msg: any, pageId: string): void {
         // 不是对象、没有 type 的，一律不当消息处理（脏请求挡在这一层，别丢给分发逻辑去 switch）
         if (!msg || typeof msg.type !== "string") { return; }
+        // 「编译并重启」不是会话上的事，不进消息分发：直接交给这一层，再回一句话给点它的那块屏
+        if (msg.type === "restartBackend") { this.requestRestart(pageId); return; }
         const previous = this.currentPageId;
         this.currentPageId = pageId;
         try {
@@ -583,6 +591,25 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         } finally {
             this.currentPageId = previous;
         }
+    }
+
+    /**
+     * 设置浮层里那颗「编译并重启」点下去了：交给外面（serverMain 起的那个小进程去编译 + 重启）。
+     * 成不成都要回一句话给点它的那块屏——成了就是最后一句（后端 0.5 秒后就退），
+     * 不成的话设置浮层还开着，人能看到为什么。
+     */
+    private requestRestart(pageId: string): void {
+        const ask = this.options.restartBackend;
+        const result = ask
+            ? ask()
+            : { ok: false, reason: "这个后端不能从这里重启（它不是 pichat 起的？）。" };
+        this.broadcaster.sendTo(pageId, {
+            type: "restartStatus",
+            ok: result.ok,
+            text: result.ok
+                ? "正在编译并重启：这个页面过一会儿会自己连回来。"
+                : (result.reason ?? "重启失败。"),
+        });
     }
 
     /**
@@ -620,6 +647,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const mine = this.focusedIdFor(pageId);
         if (mine) { this.postToOneClient(pageId, { type: "sessionActivated", sessionId: mine }); }
         this.sendSessionListTo(pageId);
+        // 显示选项条目也是一次性要来的数据：浮层开着的时候那块屏刚连上，就重给它一份最新的
+        //（「编译并重启」那颗按下去以后一直是灰的、说明停在“正在重启”，靠这条回正）。
+        this.broadcaster.sendTo(pageId, {
+            type: "viewOptionItems",
+            items: [...this.buildViewOptionItems(), ...this.viewOptionItemsExtra()],
+        });
     }
 
     /** 一条推送连接断了（页面关掉 / 死连接被掐掉）：它上面等着的问话卡片摘掉，
@@ -813,8 +846,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return { themeMode: this.getThemeMode() };
     }
 
-    /** 显示选项浮层里追加的「界面颜色」按钮组。 */
-    protected override viewOptionItemsExtra(): Array<{ label: string; desc: string; check: boolean | null; action: string; value?: string; options?: Array<{ value: string; label: string }> }> {
+    /** 显示选项浮层里追加的两行：界面颜色（按钮组）、重启后端（按钮）。 */
+    protected override viewOptionItemsExtra(): ViewOptionItem[] {
+        // 能不能从这里编译并重启：代码旁边得有仓库里的 build.bat / build.sh（见 serverRestart.ts）；
+        // 后端没给重启接口（例如调试工具自己拼一个宿主）也不给点。
+        const able = describeRestart();
+        const can = able.ok && !!this.options.restartBackend;
         return [
             {
                 action: "theme",
@@ -826,6 +863,18 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                     { value: "light", label: "浅色" },
                     { value: "dark", label: "深色" },
                 ],
+            },
+            {
+                action: "restartBackend",
+                label: "重启后端",
+                desc: can
+                    ? `先 npm run build，再 npm i -g .，好了重启后端（正在跑的回复会断）。`
+                        + `重启后在后台跑，编译输出与新后端的日志写进 ${able.logFile}`
+                    : (able.reason ?? "这个后端不能从这里重启。"),
+                check: null,
+                kind: "button",
+                button: "编译并重启",
+                disabled: !can,
             },
         ];
     }

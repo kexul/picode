@@ -11,9 +11,9 @@
  *      链接说的行滚过去（不新开重复标签），点标签上那颗叉关掉它，全关光后这一列不收起、
  *      里面留一句提示；切标签不重读文件、也不重画（每个标签各自留着自己那一块正文，
  *      切回来原样摆上，见 chat.js 的 fileTabPage）；
- *      第一个标签是「项目目录」（当前会话的目录，悬停提示给全路径、这一列的头分两行写着
- *      「会话目录 + 现在走到的这一层」，没有关闭那颗叉）：
- *      标签一律一样高（有文件的标签里那颗叉撑着高度，只剩「项目目录」自己开着时也不许缩成一薄条）：
+ *      第一个标签是「目录」（当前会话的目录，悬停提示给这一层的全路径；没有关闭那颗叉）；
+ *      这一列头上不写路径——最上面那一行就是标签条，「收起」那颗叉钉在它右端；
+ *      标签一律一样高（有文件的标签里那颗叉撑着高度，只剩「目录」自己开着时也不许缩成一薄条）：
  *      点文件链接开的文件排在它后面的新标签里、不顶掉它；这一列空着（刚打开、刷新页面）
  *      先看到的就是它；从它那一格里点进子目录、点开文件跟票 05 是同一套清单；
  *      目录不占标签——点目录链接、点清单里的子目录都在这一格里发生，清单最上面一行「上一层」
@@ -28,7 +28,7 @@
  *      点图片链接直接在这一列里看到那张图（2 MB 以上、20 MB 以内的也直接看，再大的给下载）；
  *      目录清单里图片那一行挂它自己的小图（只给 2 MB 以内的，免得一个目录里几十张大图一口气拉下来）；点二进制文件给一句「这是个二进制文件」加一个下载；
  *      点超过 2 MB 的文件给「太大，点这里下载」，正文一个字节都不塞进页面；点那个下载
- *      浏览器真把文件存了下来；点目录链接（以斜杠结尾的写法）切到「项目目录」那一格看到里面有什么，
+ *      浏览器真把文件存了下来；点目录链接（以斜杠结尾的写法）切到「目录」那一格看到里面有什么，
  *      再一层层点进去（子目录接着列、文件点开看），列出来的东西一样受「只在会话目录内」的限制
  *      （指到目录外的条目点不了）；
  *      认得的几种语言（TypeScript 含 JavaScript 与 JSON、C++、Python，别名一起算）按扩展名带颜色，
@@ -627,10 +627,16 @@ module.exports = async (page) => {
                 open: document.body.classList.contains("file-open"),
                 hidden: document.hidden,
                 chatLeft: Math.round(chat.left),
-                title: (document.getElementById("fileTitle") || {}).textContent || "",
-                titleLines: Array.from(document.querySelectorAll("#fileTitle .file-title-line"))
-                    .map(function (l) { return l.textContent || ""; }),
-                titleAttr: (document.getElementById("fileTitle") || {}).title || "",
+                // 这一列头上不写路径了：最上面那一行就是标签条（叉钉在它右端），
+                // 「目录」那一格现在在哪一层只看它的悬停提示（见下面的 tabTitles / projIndex）
+                headPathShown: !!document.getElementById("fileTitle"),
+                headerHasTabs: !!bar && bar.parentElement === document.getElementById("fileHeader"),
+                tabsAtTop: !!bar && !!panelRect && bar.getBoundingClientRect().top <= panelRect.top + 2,
+                tabsAboveBody: !!bar && !!box && bar.getBoundingClientRect().bottom <= box.getBoundingClientRect().top + 1,
+                activePath: (function () {
+                    const t = tabs.filter(function (x) { return x.classList.contains("active"); })[0];
+                    return t ? (t.getAttribute("data-path") || "") : "";
+                })(),
                 upShown: !!up,
                 upInHeader: !!up && !!up.closest("#fileHeader"),
                 upFirstRow: !!up && !!body && body.firstElementChild === up,
@@ -790,16 +796,19 @@ module.exports = async (page) => {
         r.click();
         return "点了";
     `);
-    /** 「项目目录」那一格在界面上该叫什么、悬停提示该给什么（没有那一格就空串）。 */
+    /** 「目录」那一格在界面上该叫什么、悬停提示该给什么（没有那一格就空串）。 */
     const projName = (r) => (r.projIndex >= 0 ? r.tabNames[r.projIndex] : "");
     const projTitle = (r) => (r.projIndex >= 0 ? r.tabTitles[r.projIndex] : "");
     /** 两个路径是不是同一个地方（斜杠方向、末尾斜杠、大小写都归一化再比）。 */
     const samePathText = (a, b) => String(a).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()
         === String(b).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-    /** 面板头写对没有：「项目目录」那一格是两行（上面会话目录、下面走法），还在最外面那一层就一行。 */
-    const headOk = (r, base, inside) => r.titleLines.length === (inside ? 2 : 1)
-        && samePathText(r.titleLines[0], base)
-        && (!inside || samePathText(r.titleLines[1], inside));
+    /** 正看着的那一格是哪个文件（「目录」「改动」这两格没有文件：给空串）。 */
+    const activeFilePath = (r) => r.activePath;
+    /** 这一列头上不写路径了：最上面那一行就是标签条（叉钉在它右端）。
+        「目录」那一格现在在哪一层，只看它的悬停提示（给这一层的全路径）。 */
+    const headOk = (r, base, inside) => r.headPathShown === false && r.headerHasTabs
+        && r.tabsAtTop && r.tabsAboveBody
+        && samePathText(projTitle(r), path.join(base, inside || ""));
     /** 点清单第一行那颗「上一层」。 */
     const clickUp = () => page.eval(`
         const b = window.__fileView().querySelector(".file-entry.up");
@@ -807,10 +816,10 @@ module.exports = async (page) => {
         b.click();
         return "点了";
     `);
-    /** 点「项目目录」那一格（切换过去看它那份清单）。 */
+    /** 点「目录」那一格（切换过去看它那份清单）。 */
     const clickProjTab = () => page.eval(`
         const t = document.querySelector("#fileTabs .file-tab[data-proj='1']");
-        if (!t) { return "没有项目目录那个标签"; }
+        if (!t) { return "没有目录那个标签"; }
         t.click();
         return "点了";
     `);
@@ -916,25 +925,25 @@ module.exports = async (page) => {
     check("对话让出左边这块宽度", wide1.chatLeft === FILE_W_DEFAULT);
     check("面板头跟顶条的横线齐", wide1.fileHeaderBottom === wide1.barBottom && wide1.dockHeaderBottom === wide1.barBottom,
         JSON.stringify({ bar: wide1.barBottom, file: wide1.fileHeaderBottom, dock: wide1.dockHeaderBottom }));
-    // 一个标签都没有的时候，第一个标签就是「项目目录」（当前会话的目录），而不是一句提示
-    const wide1proj = await waitLook("项目目录那一格列出来", (x) => x.projCount === 1 && x.entryCount > 0);
-    check("点按钮开出来：第一个标签就是「项目目录」", wide1proj.tabShown && wide1proj.projCount === 1 && wide1proj.projIndex === 0
-        && projName(wide1proj) === "项目目录" && wide1proj.tabActive === 0,
+    // 一个标签都没有的时候，第一个标签就是「目录」（当前会话的目录），而不是一句提示
+    const wide1proj = await waitLook("目录那一格列出来", (x) => x.projCount === 1 && x.entryCount > 0);
+    check("点按钮开出来：第一个标签就是「目录」", wide1proj.tabShown && wide1proj.projCount === 1 && wide1proj.projIndex === 0
+        && projName(wide1proj) === "目录" && wide1proj.tabActive === 0,
         JSON.stringify({ names: wide1proj.tabNames, active: wide1proj.tabActive }));
-    check("项目目录那一格列的是当前会话目录里的内容",
+    check("目录那一格列的是当前会话目录里的内容",
         wide1proj.entryCount > 0 && wide1proj.entryPaths.indexOf(FILE.long) >= 0
         && wide1proj.entryPaths.indexOf(DIR.top) >= 0 && wide1proj.rowCount === 0 && wide1proj.note === "",
         JSON.stringify(wide1proj.entryNames));
-    check("那一格悬停给全路径、面板头写的也是它（还在最外面那一层：就一行）",
+    check("那一格悬停给全路径（还在最外面那一层：会话目录本身），头上那一行就是标签条",
         projTitle(wide1proj) === cwd && headOk(wide1proj, cwd),
-        JSON.stringify({ tab: projTitle(wide1proj), lines: wide1proj.titleLines }));
-    check("全路径很长时面板头上那颗「收起」的叉也不被挤出去", wide1proj.closeInside, String(wide1proj.closeInside));
-    check("面板头上只有一颗「收起」（「上一层」不在那儿）",
+        JSON.stringify({ tab: projTitle(wide1proj), path: wide1proj.headPathShown }));
+    check("全路径很长时那一行右端的「收起」也不被挤出这一列", wide1proj.closeInside, String(wide1proj.closeInside));
+    check("那一行上只有一颗「收起」（「上一层」不在那儿）",
         wide1proj.headerBtnCount === 1, "头上 " + wide1proj.headerBtnCount + " 颗");
-    check("「项目目录」那一格没有那颗叉（不让人关掉）", wide1proj.projClose === false && wide1proj.tabCloseCount === 0);
-    // 「改动」那一格是常驻的（见 dev/changesTab.js 那个贴）：它固定在「项目目录」后面、同样没有那颗叉，
+    check("「目录」那一格没有那颗叉（不让人关掉）", wide1proj.projClose === false && wide1proj.tabCloseCount === 0);
+    // 「改动」那一格是常驻的（见 dev/changesTab.js 那个贴）：它固定在「目录」后面、同样没有那颗叉，
     // 下面的 tabCount / tabPaths / tabActive 只说「目录与文件」那几格，不算它
-    check("标签条上常驻「改动」那一格（紧跟在「项目目录」后面、没有叉）",
+    check("标签条上常驻「改动」那一格（紧跟在「目录」后面、没有叉）",
         wide1proj.changesCount === 1 && wide1proj.changesIndex === 1 && wide1proj.changesClose === false
         && wide1proj.allNames[1] === "改动",
         JSON.stringify({ names: wide1proj.allNames, at: wide1proj.changesIndex }));
@@ -950,9 +959,9 @@ module.exports = async (page) => {
     await page.sleep(300);
     const wide2 = await look("宽窗 · 刷新之后");
     check("刷新之后还是开着（记在这台设备里）", wide2.open && wide2.dock && wide2.panelShown);
-    const wide2b = await waitLook("刷新之后项目目录那一格又给出来", (x) => x.projCount === 1 && x.entryCount > 0);
+    const wide2b = await waitLook("刷新之后目录那一格又给出来", (x) => x.projCount === 1 && x.entryCount > 0);
     check("刷新之后第一个标签还是当前会话的目录（文件标签不恢复）",
-        wide2b.tabCount === 1 && wide2b.projIndex === 0 && projName(wide2b) === "项目目录"
+        wide2b.tabCount === 1 && wide2b.projIndex === 0 && projName(wide2b) === "目录"
         && projTitle(wide2b) === cwd && wide2b.entryPaths.indexOf(FILE.long) >= 0,
         JSON.stringify({ count: wide2b.tabCount, title: projTitle(wide2b) }));
 
@@ -974,19 +983,21 @@ module.exports = async (page) => {
     console.log("点文件链接：" + await clickLink(FILE.long));
     await page.sleep(600);
     const wide5 = await look("宽窗 · 点 long.js:" + HIT_LINE);
-    check("点链接左边开出来（不用先点按钮）", wide5.open && wide5.dock && wide5.panelLeft === 0);
-    check("标题上是那个文件", wide5.title === FILE.long);
+    check("点上链接左边开出来（不用先点按钮）", wide5.open && wide5.dock && wide5.panelLeft === 0);
+    check("正看着的那一格是那个文件", activeFilePath(wide5) === FILE.long);
     check("内容带行号、行数对得上", wide5.rowCount === LONG_LINES && wide5.firstRow.indexOf("1") >= 0, wide5.firstRow);
     check("停在链接说的那一行并高亮", wide5.hitNum === String(HIT_LINE) && wide5.hitText.indexOf("第 " + HIT_LINE + " 行") >= 0 && wide5.hitVisible);
-    check("文件开在「项目目录」后面那一格新标签里（原来那格没被顶掉）",
+    check("文件开在「目录」后面那一格新标签里（原来那格没被顶掉）",
         wide5.tabShown && wide5.tabCount === 2 && wide5.projCount === 1 && wide5.projIndex === 0
-        && projName(wide5) === "项目目录" && wide5.tabPaths[1] === FILE.long && wide5.tabActive === 1,
+        && projName(wide5) === "目录" && wide5.tabPaths[1] === FILE.long && wide5.tabActive === 1,
         JSON.stringify({ names: wide5.tabNames, active: wide5.tabActive }));
-    check("那格标签跟文件的标签一样高（只有它自己开着的时候也不缩成一薄条）",
+    // 标签铺满最上面那一行（见 chat.css 的 #fileHeader / #fileTabs）：一格不比另一格矮，
+    // 只剩「目录」自己开着的时候也不缩成一薄条
+    check("那一行的标签都一样高（格子少了也不缩成一薄条）",
         wide5.tabHeights.length === 2 && wide5.tabHeights[0] === wide5.tabHeights[1]
-        && wide1proj.tabHeights.length === 1 && wide1proj.tabHeights[0] === wide5.tabHeights[0],
-        JSON.stringify({ 只有项目目录: wide1proj.tabHeights, 跟文件一起: wide5.tabHeights }));
-    check("两格标签里只有文件那格有叉（项目目录那格关不掉）",
+        && wide1proj.tabHeights.length === 1 && wide1proj.tabHeights[0] >= 28,
+        JSON.stringify({ 只有目录: wide1proj.tabHeights, 跟文件一起: wide5.tabHeights }));
+    check("两格标签里只有文件那格有叉（目录那格关不掉）",
         wide5.tabCloseCount === 1 && wide5.projClose === false);
     check("正文很长也不把面板头挤扁（跟顶条的横线还是齐的）", wide5.fileHeaderBottom === wide5.barBottom,
         JSON.stringify({ bar: wide5.barBottom, file: wide5.fileHeaderBottom }));
@@ -1000,7 +1011,7 @@ module.exports = async (page) => {
     check("也停在那个文件的第 " + SAMPLE_HIT + " 行", wide6.hitNum === String(SAMPLE_HIT) && wide6.hitText.indexOf("sample " + SAMPLE_HIT) >= 0);
     check("新开一个标签（一共三个），前两格都还留着", wide6.tabCount === 3
         && wide6.projIndex === 0 && wide6.tabPaths[1] === FILE.long && wide6.tabPaths[2] === FILE.sample);
-    check("新开的那个是当前这个标签，面板头写着它", wide6.tabActive === 2 && wide6.title === FILE.sample);
+    check("新开的那个是当前这个标签", wide6.tabActive === 2 && activeFilePath(wide6) === FILE.sample);
     await page.shot("file-2b-two-tabs.png");
 
     // 再点已经开着的文件：切回它那个标签、按这次链接说的行滚过去，不新开标签
@@ -1009,7 +1020,7 @@ module.exports = async (page) => {
     const wide7 = await look("宽窗 · 再点一次 long.js:" + HIT_LINE_AGAIN);
     check("同一个文件不再开一个标签（还是三个）", wide7.tabCount === 3
         && wide7.tabPaths[1] === FILE.long && wide7.tabPaths[2] === FILE.sample);
-    check("切回 long.js 那个标签", wide7.tabActive === 1 && wide7.title === FILE.long);
+    check("切回 long.js 那个标签", wide7.tabActive === 1 && activeFilePath(wide7) === FILE.long);
     check("按这次链接说的第 " + HIT_LINE_AGAIN + " 行滚过去", wide7.hitNum === String(HIT_LINE_AGAIN) && wide7.hitVisible);
     await page.shot("file-8-switch-back.png");
 
@@ -1018,7 +1029,7 @@ module.exports = async (page) => {
     await page.sleep(300);
     const wide7b = await look("宽窗 · 关掉没在看的 sample.js 那个标签");
     check("关掉没在看的标签：画面不换，还停在原来那一行", wide7b.tabCount === 2 && wide7b.tabActive === 1
-        && wide7b.title === FILE.long && wide7b.hitNum === String(HIT_LINE_AGAIN) && wide7b.hitVisible);
+        && activeFilePath(wide7b) === FILE.long && wide7b.hitNum === String(HIT_LINE_AGAIN) && wide7b.hitVisible);
     // 关过的文件再点开：又占一个新标签
     console.log("点文件链接：" + await clickLink(FILE.sample));
     await page.sleep(500);
@@ -1030,7 +1041,7 @@ module.exports = async (page) => {
     console.log("点标签：" + await clickTab(FILE.long, "tab"));
     await page.sleep(600);
     const wide8 = await look("宽窗 · 点 long.js 那个标签");
-    check("点标签切到那个文件", wide8.tabActive === 1 && wide8.title === FILE.long && wide8.rowCount === LONG_LINES);
+    check("点标签切到那个文件", wide8.tabActive === 1 && activeFilePath(wide8) === FILE.long && wide8.rowCount === LONG_LINES);
     check("回到它上次读到的地方（还停在刚才那一行）", wide8.hitNum === String(HIT_LINE_AGAIN) && wide8.hitVisible);
     check("三格标签都还在", wide8.tabCount === 3);
 
@@ -1047,8 +1058,8 @@ module.exports = async (page) => {
     console.log("点标签：" + await clickTab(FILE.sample, "tab"));
     await page.sleep(400);
     const awayTab = await look("宽窗 · 切到 sample.js 那一格");
-    check("切到另一格：摆上来的是它自己那一块（行数、面板头都对）",
-        awayTab.tabActive === 2 && awayTab.title === FILE.sample && awayTab.rowCount === 5,
+    check("切到另一格：摆上来的是它自己那一块（行数都对）",
+        awayTab.tabActive === 2 && activeFilePath(awayTab) === FILE.sample && awayTab.rowCount === 5,
         JSON.stringify({ active: awayTab.tabActive, rows: awayTab.rowCount }));
     console.log("点标签：" + await clickTab(FILE.long, "tab"));
     const backTab = JSON.parse(await page.eval(`
@@ -1075,48 +1086,48 @@ module.exports = async (page) => {
     const wide9 = await look("宽窗 · 关掉正看着的 long.js 那个标签");
     check("关掉的那个标签没了、另一个还在", wide9.tabCount === 2 && wide9.tabPaths[1] === FILE.sample);
     check("面板还开着、没跟着标签一起收起", wide9.open && wide9.dock && wide9.panelShown);
-    check("剩下那个标签摆上来（内容换成它的）", wide9.tabActive === 1 && wide9.title === FILE.sample && wide9.rowCount === 5);
+    check("剩下那个标签摆上来（内容换成它的）", wide9.tabActive === 1 && activeFilePath(wide9) === FILE.sample && wide9.rowCount === 5);
     await page.shot("file-8b-one-tab-closed.png");
 
-    // 文件标签全关掉：「项目目录」那一格还在，就摆上它（这一列不收起）
+    // 文件标签全关掉：「目录」那一格还在，就摆上它（这一列不收起）
     console.log("点标签上的叉：" + await clickTab(FILE.sample, "close"));
-    const wide10 = await waitLook("文件标签全关掉、项目目录摆上来", (x) => x.tabCount === 1 && x.entryCount > 0 && x.tabActive === 0);
+    const wide10 = await waitLook("文件标签全关掉、目录摆上来", (x) => x.tabCount === 1 && x.entryCount > 0 && x.tabActive === 0);
     check("文件标签全关掉：面板不收起", wide10.open && wide10.dock && wide10.panelShown);
-    check("剩下「项目目录」那一格摆上来（还是会话目录那份清单）", wide10.projCount === 1 && wide10.projIndex === 0
-        && wide10.tabActive === 0 && wide10.title === cwd && wide10.entryPaths.indexOf(FILE.long) >= 0
+    check("剩下「目录」那一格摆上来（还是会话目录那份清单）", wide10.projCount === 1 && wide10.projIndex === 0
+        && wide10.tabActive === 0 && samePathText(projTitle(wide10), cwd) && wide10.entryPaths.indexOf(FILE.long) >= 0
         && wide10.rowCount === 0 && wide10.note === "",
-        JSON.stringify({ count: wide10.tabCount, title: wide10.title }));
-    check("「项目目录」那一格上没有那颗叉（关不掉，一直占着第一格）",
+        JSON.stringify({ count: wide10.tabCount, path: projTitle(wide10) }));
+    check("「目录」那一格上没有那颗叉（关不掉，一直占着第一格）",
         wide10.projClose === false && wide10.tabCloseCount === 0);
     await page.shot("file-9-all-file-tabs-closed.png");
 
-    // 刷新：文件标签不恢复，「项目目录」那一格回到会话目录本身
+    // 刷新：文件标签不恢复，「目录」那一格回到会话目录本身
     //（先把那一格走到子目录里、再点开一个文件：两件事都不是空话）
     console.log("点目录链接：" + await clickDir(DIR.top));
     const dirBeforeReload = await waitLook("刷新之前先走进一个子目录",
         (x) => x.entryCount === DIR_TOP_NAMES.length && x.tabActive === x.projIndex);
-    check("刷新之前：「项目目录」那一格已经走到子目录里",
+    check("刷新之前：「目录」那一格已经走到子目录里",
         dirBeforeReload.tabPaths[dirBeforeReload.projIndex] === DIR.top
-        && headOk(dirBeforeReload, cwd, DIR.top), JSON.stringify(dirBeforeReload.titleLines));
+        && headOk(dirBeforeReload, cwd, DIR.top), JSON.stringify({ hover: projTitle(dirBeforeReload) }));
     console.log("点文件链接：" + await clickLink(FILE.long));
     const beforeReload = await waitLook("刷新之前点开 long.js", (x) => x.tabCount === 2 && x.rowCount === LONG_LINES);
-    check("刷新之前：文件还是开在「项目目录」后面那一格",
+    check("刷新之前：文件还是开在「目录」后面那一格",
         beforeReload.projIndex === 0 && beforeReload.tabActive === 1 && beforeReload.tabPaths[1] === FILE.long
-        && beforeReload.title === FILE.long && beforeReload.projClose === false, JSON.stringify(beforeReload.tabPaths));
+        && activeFilePath(beforeReload) === FILE.long && beforeReload.projClose === false, JSON.stringify(beforeReload.tabPaths));
     await page.eval("location.reload(); return true;");
     await page.sleep(1500);
     await page.waitReady();
     await page.sleep(500);
     await installFileView();
-    const wide11 = await waitLook("刷新之后项目目录那一格回来", (x) => x.projCount === 1 && x.entryCount > 0);
+    const wide11 = await waitLook("刷新之后目录那一格回来", (x) => x.projCount === 1 && x.entryCount > 0);
     check("刷新之后：第一个标签还是当前会话的目录",
         wide11.open && wide11.dock && wide11.projIndex === 0 && wide11.tabActive === 0
         && projTitle(wide11) === cwd && wide11.entryPaths.indexOf(FILE.long) >= 0,
         JSON.stringify({ count: wide11.tabCount, title: projTitle(wide11) }));
-    check("刷新之后：「项目目录」那一格回到会话目录本身（不记住刚才走到哪一层）",
+    check("刷新之后：「目录」那一格回到会话目录本身（不记住刚才走到哪一层）",
         wide11.tabPaths[wide11.projIndex] === "." && !wide11.upShown,
         JSON.stringify({ path: wide11.tabPaths[wide11.projIndex], up: wide11.upShown }));
-    check("刷新之前开着的 long.js 那格没回来（面板里只有「项目目录」这一格）",
+    check("刷新之前开着的 long.js 那格没回来（面板里只有「目录」这一格）",
         wide11.tabCount === 1 && wide11.tabPaths.indexOf(FILE.long) < 0,
         JSON.stringify({ count: wide11.tabCount, paths: wide11.tabPaths }));
     await page.eval(POST_LINKS);
@@ -1280,10 +1291,10 @@ module.exports = async (page) => {
     check("浏览器页面里那颗「跳转」说的是开在文件侧边栏里（不是编辑器）",
         jumpBtn.title.indexOf("文件侧边栏") >= 0 && jumpBtn.title.indexOf(JUMP_FILE) >= 0, jumpBtn.title);
     console.log("点「跳转」：" + await clickJumpBtn());
-    const jump1 = await waitLook("跳转开的文件上来", (x) => x.rowCount === JUMP_LINES && x.title === JUMP_FILE);
+    const jump1 = await waitLook("跳转开的文件上来", (x) => x.rowCount === JUMP_LINES && activeFilePath(x) === JUMP_FILE);
     check("点工具卡片那颗「跳转」：左边那一列自己开出来", jump1.open && jump1.dock && jump1.panelShown);
     check("文件显示出来、带行号", jump1.rowCount === JUMP_LINES && jump1.firstRow.indexOf("1") >= 0, jump1.firstRow);
-    check("开在「项目目录」后面那一格新标签里", jump1.projIndex === 0 && jump1.tabActive > 0
+    check("开在「目录」后面那一格新标签里", jump1.projIndex === 0 && jump1.tabActive > 0
         && jump1.tabPaths[jump1.tabActive] === JUMP_FILE, JSON.stringify({ paths: jump1.tabPaths, active: jump1.tabActive }));
     check("停在第一行（跟以前交给编辑器打开时一个口径）", jump1.hitNum === "1" && jump1.hitVisible);
     await page.shot("file-26-tool-jump.png");
@@ -1311,7 +1322,7 @@ module.exports = async (page) => {
         img1.rowCount === 0 && img1.note === "" && img1.downloadCount === 0 && img1.bodyChars < 200);
     check("图片占一个标签，面板头写着它",
         img1.tabActive === img1.tabPaths.length - 1 && img1.tabPaths[img1.tabActive] === FILE.image
-        && img1.title === FILE.image);
+        && activeFilePath(img1) === FILE.image);
     await page.shot("file-14-image.png");
 
     // 超过 2 MB 的真图：图片自己那条线比文本宽，照样直接看（不用点下载）
@@ -1407,9 +1418,9 @@ module.exports = async (page) => {
     check("下载在跑的时候界面还答得上话（没被正文堵住）",
         bigFetch.panelThere && bigFetch.uiMs < 500, "界面回话用了 " + bigFetch.uiMs + "ms");
 
-    // ==================== 目录：都在「项目目录」那一格里走，不开新标签 ====================
+    // ==================== 目录：都在「目录」那一格里走，不开新标签 ====================
     // 消息流里以斜杠结尾的写法算目录链接（不带斜杠、又不带扩展名的写法不认：`and/or` 里的 `and/`
-    // 不该变成路径）。点它：切到「项目目录」那一格、列出里面的东西；子目录接着点、文件点开看；
+    // 不该变成路径）。点它：切到「目录」那一格、列出里面的东西；子目录接着点、文件点开看；
     // 列出来的东西一样受「只在会话目录内」的限制（指到外面的软链接列得出来，点不了）。
     // 目录不占标签：进目录、换目录都在第一格里发生，清单最上面一行「上一层」往回退。
     const dirLinks = JSON.parse(await page.eval(`
@@ -1450,22 +1461,21 @@ module.exports = async (page) => {
         JSON.stringify(dir1.entryDirs));
     check("清单里的路径都是相对会话目录的写法",
         dir1.entryPaths.every(function (p) { return p.indexOf(DIR.top + "/") === 0; }), JSON.stringify(dir1.entryPaths));
-    check("目录不新开标签：切到「项目目录」那一格显示它（标签上还是那四个字）",
+    check("目录不新开标签：切到「目录」那一格显示它（标签上还是那四个字）",
         dir1.tabCount === beforeDir.tabCount && dir1.projIndex === 0 && dir1.tabActive === dir1.projIndex
-        && dir1.tabNames[dir1.projIndex] === "项目目录" && dir1.tabPaths[dir1.projIndex] === DIR.top,
+        && dir1.tabNames[dir1.projIndex] === "目录" && dir1.tabPaths[dir1.projIndex] === DIR.top,
         JSON.stringify({ before: beforeDir.tabCount, after: dir1.tabCount, names: dir1.tabNames, paths: dir1.tabPaths }));
-    check("面板头分两行：上面会话目录、下面走到的这一层（不拼成一条长的绝对路径）",
-        headOk(dir1, cwd, DIR.top) && dir1.titleLines[0] !== "项目目录"
-        && samePathText(dir1.titleAttr, path.join(cwd, DIR.top)),
-        JSON.stringify({ lines: dir1.titleLines, hover: dir1.titleAttr }));
-    check("进到子目录里：清单最上面一行出现「上一层」（不在面板头上那两颗按钮里）",
+    check("这一列头上不写路径：最上面那一行就是标签条（「目录」那一格悬停给这一层的全路径）",
+        headOk(dir1, cwd, DIR.top) && projName(dir1) === "目录",
+        JSON.stringify({ hover: projTitle(dir1) }));
+    check("进到子目录里：清单最上面一行出现「上一层」（不在上面那一行标签里）",
         dir1.upShown && dir1.upFirstRow && !dir1.upInHeader && dir1.upText.indexOf("上一层") >= 0
         && dir1.headerBtnCount === 1,
         JSON.stringify({ shown: dir1.upShown, first: dir1.upFirstRow, inHeader: dir1.upInHeader,
             text: dir1.upText, header: dir1.headerBtnCount }));
     check("「上一层」这一行在面板里面（没被挤出这一列）",
         dir1.upInside && dir1.closeInside,
-        JSON.stringify({ up: dir1.upInside, close: dir1.closeInside, lines: dir1.titleLines }));
+        JSON.stringify({ up: dir1.upInside, close: dir1.closeInside }));
     // 图片那一行挂的是它自己的小图：20×20 大小的小图，缩略图只挂给 2 MB 以内的（免得一目录大图全拉下来）
     const thumb1 = await waitLook("清单里那张小图的缩略图上来", (x) => x.thumbLoaded > 0);
     check("目录清单里图片那一行挂的是它自己的小图（别的行还是通用图标）",
@@ -1475,17 +1485,17 @@ module.exports = async (page) => {
         thumb1.thumbPaths.indexOf(DIR.bigImage) < 0, JSON.stringify(thumb1.thumbPaths));
     await page.shot("file-17-dir.png");
 
-    // 点子目录：还在「项目目录」这一格里往里走，不新开标签
+    // 点子目录：还在「目录」这一格里往里走，不新开标签
     console.log("点清单里的子目录：" + await clickEntry(DIR.sub));
     const dir2 = await waitLook("子目录的清单上来", (x) => x.entryCount === 1);
     check("点子目录接着列（一层层往下走）", dir2.entryCount === 1 && dir2.entryNames[0] === "three.js"
         && dir2.entryDirs[0] === false, JSON.stringify({ names: dir2.entryNames, dirs: dir2.entryDirs }));
-    check("还在「项目目录」那一格里（不新开标签）", dir2.tabCount === dir1.tabCount
+    check("还在「目录」那一格里（不新开标签）", dir2.tabCount === dir1.tabCount
         && dir2.tabActive === dir2.projIndex && dir2.tabPaths[dir2.projIndex] === DIR.sub,
         JSON.stringify({ count: dir2.tabCount, paths: dir2.tabPaths }));
-    check("面板头跟着换成这一层（子目录）：下面那行就是走进去的走法",
-        headOk(dir2, cwd, DIR.sub) && samePathText(dir2.titleAttr, path.join(cwd, DIR.sub)),
-        JSON.stringify({ lines: dir2.titleLines, hover: dir2.titleAttr }));
+    check("进了子目录也一样：头上不写路径，悬停提示跟着换成这一层",
+        headOk(dir2, cwd, DIR.sub),
+        JSON.stringify({ hover: projTitle(dir2) }));
     await page.shot("file-18-dir-sub.png");
 
     // 点清单里的文件：在这一列里显示它（带行号）——文件还是开一个新标签
@@ -1494,29 +1504,29 @@ module.exports = async (page) => {
     check("点清单里的文件：面板里显示它（带行号）", dir3.rowCount === DIR_SUB_FILE_LINES
         && dir3.firstRow.indexOf("three 第 1 行") >= 0 && dir3.entryCount === 0);
     check("清单里的文件照旧开一个新标签（标签是给文件的）", dir3.tabCount === dir2.tabCount + 1
-        && dir3.tabPaths[dir3.tabActive] === DIR.subFile && dir3.title === DIR.subFile);
+        && dir3.tabPaths[dir3.tabActive] === DIR.subFile && activeFilePath(dir3) === DIR.subFile);
     await page.shot("file-19-dir-file.png");
 
-    // 「上一层」：点清单第一行那一行退到上一层，还是「项目目录」这一格那份清单
-    console.log("点「项目目录」那一格：" + await clickProjTab());
+    // 「上一层」：点清单第一行那一行退到上一层，还是「目录」这一格那份清单
+    console.log("点「目录」那一格：" + await clickProjTab());
     const up0 = await waitLook("子目录那份清单又摆上来",
         (x) => x.entryCount === 1 && x.tabActive === x.projIndex);
-    check("点「项目目录」那一格：还是刚才走到的这一层（面板头写着它）",
-        up0.tabPaths[up0.projIndex] === DIR.sub && headOk(up0, cwd, DIR.sub), JSON.stringify(up0.titleLines));
+    check("点「目录」那一格：还是刚才走到的这一层（悬停提示写着它）",
+        up0.tabPaths[up0.projIndex] === DIR.sub && headOk(up0, cwd, DIR.sub), JSON.stringify({ hover: projTitle(up0) }));
     console.log("点清单第一行「上一层」：" + await clickUp());
     const up1 = await waitLook("退回上一层", (x) => x.entryCount === DIR_TOP_NAMES.length && x.tabActive === x.projIndex);
     check("点「上一层」：退到上一层（还是那一格清单、没多出标签）",
         up1.tabCount === up0.tabCount && up1.tabPaths[up1.projIndex] === DIR.top
         && headOk(up1, cwd, DIR.top)
         && JSON.stringify(up1.entryNames.map(function (n) { return n.replace(/\/$/, ""); })) === JSON.stringify(DIR_TOP_NAMES),
-        JSON.stringify({ count: up1.tabCount, path: up1.tabPaths[up1.projIndex], lines: up1.titleLines }));
+        JSON.stringify({ count: up1.tabCount, path: up1.tabPaths[up1.projIndex], hover: projTitle(up1) }));
     await page.shot("file-18b-dir-up.png");
     console.log("再点一次「上一层」：" + await clickUp());
     const up2 = await waitLook("退回会话目录本身",
         (x) => x.tabActive === x.projIndex && x.entryPaths.indexOf(DIR.top) >= 0 && x.entryPaths.indexOf(FILE.long) >= 0);
     check("退到会话目录本身：列的就是会话目录里的东西", up2.entryCount > 0 && up2.rowCount === 0 && up2.note === ""
         && up2.tabPaths[up2.projIndex] === "." && headOk(up2, cwd),
-        JSON.stringify({ path: up2.tabPaths[up2.projIndex], lines: up2.titleLines }));
+        JSON.stringify({ path: up2.tabPaths[up2.projIndex], hover: projTitle(up2) }));
     check("已经在最外面那一层：「上一层」不出现（不许走到会话目录外面）", !up2.upShown);
 
     // 清单里那颗指到会话目录外面的软链接：列得出来，点不了
@@ -1561,12 +1571,12 @@ module.exports = async (page) => {
     check("目录里东西太多：只列前 " + DIR_MAX_ENTRIES + " 个、面板里说一句",
         dir9.entryCount === DIR_MAX_ENTRIES && dir9.note.indexOf("太多") >= 0,
         JSON.stringify({ count: dir9.entryCount, note: dir9.note }));
-    check("进大目录也还是「项目目录」那一格（不新开标签）",
+    check("进大目录也还是「目录」那一格（不新开标签）",
         dir9.tabCount === dir8.tabCount && dir9.tabActive === dir9.projIndex && dir9.tabPaths[dir9.projIndex] === DIR.huge,
         JSON.stringify({ count: dir9.tabCount, path: dir9.tabPaths[dir9.projIndex] }));
     await page.shot("file-21-dir-huge.png");
 
-    // 从「项目目录」那一格往下点：跟点消息里那些目录链接是同一套清单（子目录接着列、文件点开看）
+    // 从「目录」那一格往下点：跟点消息里那些目录链接是同一套清单（子目录接着列、文件点开看）
     console.log("点清单第一行「上一层」：" + await clickUp());
     const proj1 = await waitLook("退回会话目录那一层",
         (x) => x.tabActive === x.projIndex && x.upShown === false && x.entryPaths.indexOf(FILE.long) >= 0);
@@ -1574,22 +1584,22 @@ module.exports = async (page) => {
         proj1.entryCount > 0 && proj1.rowCount === 0 && proj1.note === ""
         && proj1.tabPaths[proj1.projIndex] === "." && proj1.entryPaths.indexOf(DIR.top) >= 0
         && headOk(proj1, cwd),
-        JSON.stringify({ path: proj1.tabPaths[proj1.projIndex], lines: proj1.titleLines }));
+        JSON.stringify({ path: proj1.tabPaths[proj1.projIndex], hover: projTitle(proj1) }));
     console.log("点清单里的子目录：" + await clickEntry(DIR.top));
-    const proj2 = await waitLook("从项目目录点进子目录",
+    const proj2 = await waitLook("从目录点进子目录",
         (x) => x.entryCount === DIR_TOP_NAMES.length && x.tabActive === x.projIndex);
-    check("从项目目录那一格点进子目录：接着列（同一格、不新开标签）",
+    check("从目录那一格点进子目录：接着列（同一格、不新开标签）",
         JSON.stringify(proj2.entryNames.map(function (n) { return n.replace(/\/$/, ""); })) === JSON.stringify(DIR_TOP_NAMES)
         && proj2.tabCount === proj1.tabCount && proj2.tabPaths[proj2.projIndex] === DIR.top
         && headOk(proj2, cwd, DIR.top),
-        JSON.stringify({ count: proj2.tabCount, path: proj2.tabPaths[proj2.projIndex], lines: proj2.titleLines }));
+        JSON.stringify({ count: proj2.tabCount, path: proj2.tabPaths[proj2.projIndex], hover: projTitle(proj2) }));
     console.log("点清单里的文件：" + await clickEntry(DIR.topFile));
-    const proj3 = await waitLook("从项目目录点开文件", (x) => x.rowCount === DIR_ONE_LINES);
-    check("从项目目录那一格点开文件：显示它（带行号、跟票 05 一样）", proj3.rowCount === DIR_ONE_LINES
-        && proj3.firstRow.indexOf("one 第 1 行") >= 0 && proj3.title === DIR.topFile && proj3.entryCount === 0);
-    check("点开的文件排在「项目目录」后面那一格（目录那一格没被顶掉）",
+    const proj3 = await waitLook("从目录点开文件", (x) => x.rowCount === DIR_ONE_LINES);
+    check("从目录那一格点开文件：显示它（带行号、跟票 05 一样）", proj3.rowCount === DIR_ONE_LINES
+        && proj3.firstRow.indexOf("one 第 1 行") >= 0 && activeFilePath(proj3) === DIR.topFile && proj3.entryCount === 0);
+    check("点开的文件排在「目录」后面那一格（目录那一格没被顶掉）",
         proj3.tabCount === proj2.tabCount + 1 && proj3.projIndex === 0 && proj3.tabActive === proj3.tabCount - 1
-        && proj3.tabNames[proj3.projIndex] === "项目目录", JSON.stringify(proj3.tabNames));
+        && proj3.tabNames[proj3.projIndex] === "目录", JSON.stringify(proj3.tabNames));
 
     // ==================== 认得的几种语言带颜色 ====================
     // 按扩展名认语言：TypeScript（含 JavaScript 与 JSON 那几个别名）、C++、Python——认语言与别名
@@ -1766,10 +1776,13 @@ module.exports = async (page) => {
             note: (body.querySelector(".file-note") || {}).textContent || "",
             links: doc ? Array.from(doc.querySelectorAll("a.file-link")).map(function (a) { return [a.getAttribute("data-file"), a.getAttribute("data-line") || ""]; }) : [],
             hitCount: body.querySelectorAll(".file-line.hit").length,
-            title: (document.getElementById("fileTitle") || {}).textContent || "",
             tabPaths: tabs.map(function (t) { return t.getAttribute("data-path") || ""; }),
+            activePath: (function () {
+                const t = tabs.filter(function (x) { return x.classList.contains("active"); })[0];
+                return t ? (t.getAttribute("data-path") || "") : "";
+            })(),
             tabActive: tabs.findIndex(function (t) { return t.classList.contains("active"); }),
-            // 「项目目录」那一格在第几位：它是哪一层取决于上一个检查段走到哪了，所以只盯“是不是第一个”，
+            // 「目录」那一格在第几位：它是哪一层取决于上一个检查段走到哪了，所以只盯“是不是第一个”，
             // 不盯它的 data-path（票 14 之后它会停在子目录上）。
             projIndex: tabs.findIndex(function (t) { return t.getAttribute("data-proj") === "1"; }),
         });
@@ -1799,9 +1812,9 @@ module.exports = async (page) => {
     check("链接里带的 :" + MD.hit + " 不生效、也不报错（没有点亮的那一行、也没有一句看不了的说明）",
         mdDoc.hitCount === 0 && mdDoc.note === "" && mdDoc.text.indexOf(MD.code) >= 0
         && md1.note === "" && md1.hitNum === "", JSON.stringify({ note: mdDoc.note }));
-    check("markdown 文件照旧占一个标签、面板头写着它",
-        mdDoc.tabPaths[mdDoc.tabActive] === MD.doc && mdDoc.title === MD.doc && mdDoc.projIndex === 0,
-        JSON.stringify({ active: mdDoc.tabActive, title: mdDoc.title, proj: mdDoc.projIndex }));
+    check("markdown 文件照旧占一个标签",
+        mdDoc.tabPaths[mdDoc.tabActive] === MD.doc && activeFilePath(mdDoc) === MD.doc && mdDoc.projIndex === 0,
+        JSON.stringify({ active: mdDoc.tabActive, path: mdDoc.tabPaths[mdDoc.tabActive], proj: mdDoc.projIndex }));
     await page.shot("file-26-markdown.png");
 
     // 文档里写到的文件也是文件链接（消息流那一套渲染挂上去的）：点了开在这一列里，
@@ -2093,7 +2106,7 @@ module.exports = async (page) => {
     // 光名字：会话目录里没有这个名字，靠那份清单找到子目录里那个
     console.log("点文件链接：" + await clickLink(NAME.bare, NAME_HIT));
     const named = await waitLook("光名字链接打开子目录里那个文件",
-        (x) => x.title === NAME.bare && x.rowCount === NAME_LINES.length);
+        (x) => activeFilePath(x) === NAME.bare && x.rowCount === NAME_LINES.length);
     check("链接里只有光名字：按会话目录拼接不到，在会话碰过的文件里按名字找到它、打开",
         named.rowCount === NAME_LINES.length && named.note === "" && named.hitNum === String(NAME_HIT)
         && named.hitText.indexOf("only-name 第 " + NAME_HIT + " 行") >= 0
@@ -2104,7 +2117,7 @@ module.exports = async (page) => {
     // 路径写岔了：那个目录根本不存在，一样按文件名匹配到它
     console.log("点文件链接：" + await clickLink(NAME.wrong, NAME_HIT));
     const namedWrong = await waitLook("路径写岔了也打开那个文件",
-        (x) => x.title === NAME.wrong && x.rowCount === NAME_LINES.length);
+        (x) => activeFilePath(x) === NAME.wrong && x.rowCount === NAME_LINES.length);
     check("路径写岔了（那个目录不存在）：一样按文件名匹配到它",
         namedWrong.rowCount === NAME_LINES.length && namedWrong.note === ""
         && namedWrong.hitText.indexOf("only-name 第 " + NAME_HIT + " 行") >= 0,
@@ -2113,7 +2126,7 @@ module.exports = async (page) => {
     // 会话目录里也有那个名字：先按会话目录拼（清单里那一份不该赢）
     console.log("点文件链接：" + await clickLink(NAME.both, 1));
     const namedBoth = await waitLook("两层都有那个名字：拿会话目录这一份",
-        (x) => x.title === NAME.both && x.rowCount === NAME_BOTH_LINES.length);
+        (x) => activeFilePath(x) === NAME.both && x.rowCount === NAME_BOTH_LINES.length);
     check("会话目录里与清单里都有那个名字：先按会话目录拼（会话目录这一份赢）",
         namedBoth.rowCount === NAME_BOTH_LINES.length && namedBoth.firstRow.indexOf("会话目录这一份 1") >= 0
         && namedBoth.note === "",
@@ -2122,14 +2135,14 @@ module.exports = async (page) => {
     // 清单里那个文件真身在外面：匹配到了也不给看
     console.log("点文件链接：" + await clickLink(NAME.outside, 1));
     const namedOut = await waitLook("光名字匹配到会话目录外面的文件",
-        (x) => x.title === NAME.outside && x.note.indexOf("会话目录外") >= 0);
+        (x) => activeFilePath(x) === NAME.outside && x.note.indexOf("会话目录外") >= 0);
     check("光名字匹配到会话目录外面的文件：不给看，一句「会话目录外」",
         namedOut.rowCount === 0 && namedOut.note.indexOf("会话目录外") >= 0, namedOut.note);
 
     // 第三档（会话里没人碰过这个名字）：在会话目录里按名字找一圈
     console.log("点文件链接：" + await clickLink(NAME.byName, 1));
     const namedByName = await waitLook("会话没碰过的光名字也在子目录里找到",
-        (x) => x.title === NAME.byName && x.rowCount === NAME_BY_NAME_LINES.length);
+        (x) => activeFilePath(x) === NAME.byName && x.rowCount === NAME_BY_NAME_LINES.length);
     check("会话里没人碰过这个名字：在会话目录里按名字找到它（深浅两层同名，浅的那一层赢）",
         namedByName.rowCount === NAME_BY_NAME_LINES.length && namedByName.note === ""
         && namedByName.firstRow.indexOf("deep 里这一份 1") >= 0,
@@ -2138,14 +2151,14 @@ module.exports = async (page) => {
     // 但那一档不进去 node_modules 这类目录：那里面的名字跟没找到一样
     console.log("点文件链接：" + await clickLink(NAME.skipped, 1));
     const namedSkipped = await waitLook("藏在 node_modules 里的那个名字找不到",
-        (x) => x.title === NAME.skipped && x.note.indexOf("没有这个文件") >= 0);
+        (x) => activeFilePath(x) === NAME.skipped && x.note.indexOf("没有这个文件") >= 0);
     check("只在 node_modules 里有的名字：按名字找那一档不进去那些目录，按找不到算",
         namedSkipped.rowCount === 0 && namedSkipped.note.indexOf("没有这个文件") >= 0, namedSkipped.note);
 
     // 三档都找不到：跟票 01 那句一样
     console.log("点文件链接：" + await clickLink(NAME.absent, 1));
     const namedAbsent = await waitLook("三档都找不到那个文件",
-        (x) => x.title === NAME.absent && x.note.indexOf("没有这个文件") >= 0);
+        (x) => activeFilePath(x) === NAME.absent && x.note.indexOf("没有这个文件") >= 0);
     check("目录里没有、会话也没碰过、按名字也找不到：给一句「没有这个文件」",
         namedAbsent.rowCount === 0 && namedAbsent.note.indexOf("没有这个文件") >= 0, namedAbsent.note);
 
@@ -2202,30 +2215,30 @@ module.exports = async (page) => {
         rawName.absent.status === 404 && rawName.absent.text.indexOf("没有这个文件") >= 0,
         JSON.stringify({ status: rawName.absent.status, text: rawName.absent.text }));
 
-    // ==================== 切会话：「项目目录」换成新会话的目录、文件标签清空 ====================
+    // ==================== 切会话：「目录」换成新会话的目录、文件标签清空 ====================
     // 真开一个新会话（会话目录就是 dirA，跟当前这个会话的目录不一样）：走的是后端真会话编排，
     // 消息形状与后端推的那份一样，所以下面几条真会话的检查放在它后面。
     const otherDir = path.join(cwd, DIR.top);
-    // 切之前先把「项目目录」那一格走到某一层子目录里：切过去以后该回到新会话的目录本身
+    // 切之前先把「目录」那一格走到某一层子目录里：切过去以后该回到新会话的目录本身
     console.log("点目录链接：" + await clickDir(DIR.sub));
     const dirBeforeSwitch = await waitLook("切会话之前先走进子目录",
         (x) => x.entryCount === 1 && x.tabActive === x.projIndex);
-    check("切会话之前：「项目目录」那一格已经走到子目录里",
+    check("切会话之前：「目录」那一格已经走到子目录里",
         dirBeforeSwitch.tabPaths[dirBeforeSwitch.projIndex] === DIR.sub
-        && headOk(dirBeforeSwitch, cwd, DIR.sub), JSON.stringify(dirBeforeSwitch.titleLines));
+        && headOk(dirBeforeSwitch, cwd, DIR.sub), JSON.stringify({ hover: projTitle(dirBeforeSwitch) }));
     check("切会话之前面板里开着好几个标签", (await look("切会话之前")).tabCount >= 2);
     await page.eval(`
         acquireVsCodeApi().postMessage({ type: "newSessionInWorkspace", path: ${JSON.stringify(path.join(cwd, DIR.top))} });
         return true;
     `);
-    const switched = await waitLook("切到新会话、项目目录换成新目录", (x) => x.tabCount === 1 && x.projIndex === 0
-        && x.tabActive === 0 && x.entryCount === DIR_TOP_NAMES.length && samePathText(x.title, otherDir), 15000);
-    check("切会话：面板还开着、里面只剩「项目目录」那一格（上一个会话的文件标签清掉了）",
+    const switched = await waitLook("切到新会话、目录换成新目录", (x) => x.tabCount === 1 && x.projIndex === 0
+        && x.tabActive === 0 && x.entryCount === DIR_TOP_NAMES.length && samePathText(x.tabTitles[x.projIndex], otherDir), 15000);
+    check("切会话：面板还开着、里面只剩「目录」那一格（上一个会话的文件标签清掉了）",
         switched.open && switched.tabCount === 1 && switched.projCount === 1 && switched.projIndex === 0,
         JSON.stringify({ count: switched.tabCount, names: switched.tabNames }));
-    check("切会话：那一格换成新会话的目录（悬停提示与面板头都是新路径）",
-        samePathText(projTitle(switched), otherDir) && samePathText(switched.title, otherDir),
-        JSON.stringify({ tab: projTitle(switched), title: switched.title, want: otherDir }));
+    check("切会话：那一格换成新会话的目录（悬停提示是新路径）",
+        samePathText(projTitle(switched), otherDir),
+        JSON.stringify({ hover: projTitle(switched), want: otherDir }));
     check("切会话：那一格回到新会话的目录本身（不记住上一个会话走到哪一层）",
         switched.tabPaths[switched.projIndex] === "." && !switched.upShown,
         JSON.stringify({ path: switched.tabPaths[switched.projIndex], up: switched.upShown }));
@@ -2243,12 +2256,13 @@ module.exports = async (page) => {
     `));
     const backSession = await waitLook("切回原来那个会话、它那一份标签摆回来",
         (x) => x.tabCount >= 2 && x.projIndex === 0 && x.tabPaths[x.projIndex] === DIR.sub, 15000);
-    check("切回原来那个会话：它开过的标签原样回来了（「项目目录」那一格走到哪一层也记着）",
+    check("切回原来那个会话：它开过的标签原样回来了（「目录」那一格走到哪一层也记着）",
         backSession.tabCount >= 2 && backSession.tabPaths[backSession.projIndex] === DIR.sub,
         JSON.stringify({ count: backSession.tabCount, paths: backSession.tabPaths }));
-    check("切回来摆上的是它当时看着的那一格（头上写着那个文件或那一层）",
-        backSession.tabActive >= 0 && backSession.tabActive < backSession.tabCount && backSession.title !== "",
-        JSON.stringify({ active: backSession.tabActive, title: backSession.title }));
+    check("切回来摆上的是它当时看着的那一格",
+        backSession.tabActive >= 0 && backSession.tabActive < backSession.tabCount
+        && backSession.activePath !== "",
+        JSON.stringify({ active: backSession.tabActive, path: backSession.activePath }));
     await page.shot("file-10b-session-back.png");
 
     // ==================== 宽度：能拖、记在这台设备里、上下限跟着窗口走；手机上铺满 ====================

@@ -2,8 +2,8 @@
 /**
  * mermaidFileCheck —— 文件侧边栏里那份 markdown 文档里的 ```mermaid 是不是也画成了图。
  *
- * 铺一个 mermaid-readme.md（一张流程图 + 一段支持的时序图 + 一段不支持的饼图），
- * 在消息流里点它的链接，检查文档里：图都出来了、不支持的留着代码块加一行说明。
+ * 铺一个 mermaid-readme.md（流程图 + 时序图 + 甘特图 + 一段写坏的），在消息流里点它的链接，
+ * 检查文档里：能画的都出来了（饼图、甘特图这些以前那个库画不了）、写坏的留着代码块加一行说明。
  *
  *   node dev/mermaidFileCheck.js
  */
@@ -36,6 +36,11 @@ const DOC_TEXT = [
     "  任务 :a1, 2024-01-01, 3d",
     "```",
     "",
+    "```mermaid",
+    "graph TD",
+    "  A --> ",
+    "```",
+    "",
     "普通代码块：",
     "",
     "```js",
@@ -64,7 +69,12 @@ const LOOK = () => {
         notes: notes.length,
         noteText: notes[0] ? notes[0].textContent.trim() : "",
         pre: doc.querySelectorAll("pre").length,
-        title: (document.getElementById("fileTitle") || {}).textContent || "",
+        // 正看着的那一格是哪个文件（头上不写路径了，看标签的 data-path）
+        activePath: (function () {
+            const t = Array.from(document.querySelectorAll("#fileTabs .file-tab"))
+                .filter(function (x) { return x.classList.contains("active"); })[0];
+            return t ? (t.getAttribute("data-path") || "") : "";
+        })(),
     };
 };
 
@@ -127,12 +137,12 @@ async function main() {
         console.log("点链接：" + clicked);
 
         const look = await waitLook(page, "文档渲染上来", (x) => x.doc === true, 15000);
-        check("文档里两张受支持的图画出来了", look.figs === 2, "图 " + look.figs + " 个");
+        check("文档里三张能画的都画出来了（含甘特图）", look.figs === 3, "图 " + look.figs + " 个");
         check("图有实际尺寸（不是 0×0）", look.svgs.every((s) => s && s.w > 40 && s.h > 40), JSON.stringify(look.svgs));
-        check("不支持的图：代码块留着，底下有一行说明", look.notes === 1 && look.pre >= 2, "说明 " + look.notes + " 行、代码块 " + look.pre + " 个");
-        check("说明写清了只支持哪几种", /只支持/.test(look.noteText), JSON.stringify(look.noteText.slice(0, 80)));
+        check("写坏的图：代码块留着，底下有一行说明", look.notes === 1 && look.pre >= 2, "说明 " + look.notes + " 行、代码块 " + look.pre + " 个");
+        check("说明里有库说的“错在第几行”", /Parse error on line \d+/.test(look.noteText), JSON.stringify(look.noteText.slice(0, 90)));
         check("普通代码块还在（没被当成图）", look.pre >= 2, "代码块 " + look.pre + " 个");
-        check("点的是这个文件、标题写着它的名字", look.title === DOC, JSON.stringify(look.title));
+        check("点的是这个文件（正看着的那一格是它）", look.activePath === DOC, JSON.stringify(look.activePath));
         await page.shot("mermaid-file.png");
 
         const errs = page.pageErrors || [];

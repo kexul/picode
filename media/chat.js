@@ -324,15 +324,57 @@
   function mdOptions() { return Object.assign({}, marked.defaults, { breaks: true, gfm: true }); }
   function renderMarkdown(source) { ensureMarkedHighlight(); ensureFileLink(); return marked.parse(source, mdOptions()); }
 
+  /**
+   * 正文里的图片：相对路径接到会话目录那条只读地址上（`/site/<会话>/<路径>`）。
+   *
+   * 不接的话浏览器按页面地址去解析相对路径（`/示例图片.png`），后端没有那条地址；
+   * 本地绝对路径与外站地址又都被安全策略挡着（见 pageHtml.ts 的 img-src）。所以只认
+   * 「相对路径」这一种，别的原样留着（以前不显示，现在还是不显示，也不乱改地址）。
+   * 地址是 marked 编码过的（cleanUrl 走 encodeURI），这一层不再编码，只往前接一段前缀。
+   * 插件里的对话面板没有这条地址（那边页面是 vscode-webview 源、安全策略只放行 data:/blob:），照旧不显示。
+   * @param baseDir 这些路径从哪个子目录算起（文件侧边栏那份 markdown 文档按它自己所在的那一层算，
+   *                消息正文就是会话目录自己，给空串）
+   */
+  function fixMdImages(root, sessionId, baseDir) {
+    if (!root || IN_WEBVIEW || !sessionId) { return; }
+    const base = baseDir ? String(baseDir).replace(/\/$/, "") + "/" : "";
+    for (const el of root.querySelectorAll("img")) {
+      const rel = mdImagePath(el.getAttribute("src") || "");
+      if (rel === null) { continue; }
+      el.setAttribute("src", "/site/" + encodeURIComponent(sessionId) + "/" + base + rel);
+    }
+  }
+
+  /**
+   * 图片地址算不算「会话目录里的相对路径」：算就给去掉 `./` 的写法，不算给 null。
+   * 带协议的一律不算（`data:`、`blob:`、`http:`、外站，以及 `D:` 这种盘符开头）；
+   * `/` 开头的是绝对路径（站内地址写在正文里也当绝对路径），也不算。
+   */
+  function mdImagePath(src) {
+    if (!src || src.startsWith("/") || src.startsWith("\\")) { return null; }
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(src)) { return null; }
+    let p = src;
+    while (p.startsWith("./")) { p = p.slice(2); }
+    return p || null;
+  }
+
   // ==================== mermaid 图 ====================
-  // ```mermaid 代码块画成图（media/mermaid.js 里的 beautiful-mermaid：同步出 SVG，不碰 DOM）。
-  // 它只认 6 种图；别的类型会抛错，这里就把代码块原样留着、底下加一行说明——
+  // ```mermaid 代码块画成图（media/pele.js：按 Mermaid 12.1 的语法画，同步出 SVG 字符串，不碰 DOM）。
+  // 它有 700 多 KB，所以不排进首屏：头一次真出现 ```mermaid 时才照页面 head 里那张纸条去拉
+  //（地址见 pageHtml.ts 的 pichat-lazy-scripts；面板里那个脚本本来是内联的，一加载就在，不用拉）。
+  // 画不出来的（语法错、认不出是哪种图）把代码块原样留着、底下加一行说明——
   // 不把“画不出来”装成“没有图”。
   // 流式里只在块定型之后才画（见 syncStreamBlocks / finalizeCurrentAssistant）：
   // 半截源码画出来是残图，下一帧又变，闪得厉害。
+
+  /** 画图那个脚本叫什么：清单里它是 lazy-script 那一条（见 src/chatUiFiles.ts）。 */
+  const MERMAID_SCRIPT = "pele.js";
+  /** 画图那个脚本现在到哪一步了：idle（还没人要用）/ loading（正在拉）/ ready（能用）/ failed（拉不到）。 */
+  let mermaidLibState = "idle";
+  /** 脚本还在路上、图已经等着的那些正文节点（拉回来之后回头再画一遍）。 */
+  const mermaidWaiting = new Set();
   const MERMAID_CACHE = new Map();
   const MERMAID_CACHE_MAX = 60;
-  const MERMAID_SUPPORTED = "流程图、状态图、时序图、类图、ER 图、XY 图";
 
   /** 这个代码块是不是 ```mermaid。marked 给的类名是 language-mermaid（走高亮那条路会再加个 hljs）。 */
   function isMermaidBlock(code) {
@@ -341,141 +383,89 @@
   }
 
   /**
-   * 画图的着色参数：全走界面变量。切主题时已经画好的图跟着变——SVG 里存的是 var(...)，
-   * 不是当场算死的色值（跟 browserTheme.js 在 body 上设的那套是同一份变量）。
+   * 画图的脚本到了没：到了给 true，没到给 false（顺便开始拉）。
+   * 面板里那个脚本是内联的，第一次问就是 true；浏览器页面里第一次问会去拉，拉回来再画等着的那几张。
    */
-  function mermaidColors() {
-    return {
-      bg: "var(--vscode-editor-background, #ffffff)",
-      fg: "var(--vscode-foreground, #1f1f1f)",
-      transparent: true,
-    };
+  function ensureMermaidLib() {
+    if (globalThis.pele) { mermaidLibState = "ready"; return true; }
+    if (mermaidLibState === "idle") { loadMermaidLib(); }
+    return false;
   }
 
-  /** 一段 mermaid 源码 → SVG 字符串；画不出来给 { error }。同一段源码只算一次。 */
-  function mermaidSvg(source) {
-    const hit = MERMAID_CACHE.get(source);
-    if (hit !== undefined) { return hit; }
-    let out;
+  /** 照 head 里那张纸条（pichat-lazy-scripts）插一个 <script>；同一时间只拉一次。 */
+  function loadMermaidLib() {
+    mermaidLibState = "loading";
+    let url = "";
     try {
-      const lib = globalThis.piMermaid;
-      if (!lib) { throw new Error("mermaid 脚本没加载"); }
-      // 生成的 SVG 里带一行 @import 去拉 Inter 字体：界面离线可用、安全策略也不放行外站，
-      // 那一行只会白白在控制台留一条拦截报错，去掉（字体由 chat.css 统一给）。
-      out = String(lib.renderMermaidSVG(aliasFlowchartIds(source), mermaidColors()))
-        .replace(/@import url\([^)]*\);?/g, "");
-      // 算不出大小的图不能要：之前画成 0×0，正文里就是一块空白，连代码都看不到了。
-      if (!svgHasSize(out)) { out = { error: "没画出来（这张图算不出大小）" }; }
-    } catch (err) {
-      const msg = String((err && err.message) || err || "");
-      out = { error: /Invalid mermaid header/i.test(msg)
-        ? "这种图这里画不了（只支持" + MERMAID_SUPPORTED + "）"
-        : "没画出来：" + msg.slice(0, 200) };
-    }
-    if (MERMAID_CACHE.size >= MERMAID_CACHE_MAX) { MERMAID_CACHE.clear(); }
-    MERMAID_CACHE.set(source, out);
-    return out;
+      const meta = document.querySelector('meta[name="pichat-lazy-scripts"]');
+      const map = JSON.parse((meta && meta.getAttribute("content")) || "{}") || {};
+      url = typeof map[MERMAID_SCRIPT] === "string" ? map[MERMAID_SCRIPT] : "";
+    } catch (e) { url = ""; }
+    // 纸条上没有这条（老后端给的页面）：当拉不到
+    if (!url) { mermaidLibFailed(); return; }
+    const script = document.createElement("script");
+    script.src = url;
+    script.onload = () => {
+      if (!globalThis.pele) { mermaidLibFailed(); return; }
+      mermaidLibState = "ready";
+      // 等着的那几张：现在画（这些节点可能已经被换掉了，画了也不显示，但也就这一下）
+      for (const root of mermaidWaiting) { decorateMermaid(root); }
+      mermaidWaiting.clear();
+    };
+    script.onerror = () => { mermaidLibFailed(); };
+    document.head.appendChild(script);
   }
 
-  /** 画出来的图有没有大小（viewBox 的宽高都不是 0）。 */
-  function svgHasSize(svg) {
-    const m = /viewBox="\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*"/.exec(svg);
-    if (!m) { return false; }
-    return Number(m[3]) > 0 && Number(m[4]) > 0;
-  }
-
-  /** 流程图里能当节点 ID 用的字符（库只认 ASCII 的 \w，其余一律丢，所以得先认出来换名）。 */
-  const FLOW_ID_CHAR = /[0-9A-Za-z_\u3400-\u4dbf\u4e00-\u9fff]/;
-  const FLOW_CJK = /[\u3400-\u4dbf\u4e00-\u9fff]/;
-  // 完整箭头才算箭头：`--` `-.` `==` 这种是“连线中间写字”（`A -- 说明 --> B`）的开头，
-  // 当成箭头会把中间那几个字错当节点名换掉。
-  const FLOW_ARROWS = ["<-->", "-.->", "-->", "---", "==>", "--x", "--o", "~~~", "===", "-.-"];
-
-  function matchFlowArrow(text, i) {
-    for (const a of FLOW_ARROWS) { if (text.startsWith(a, i)) { return a; } }
-    return "";
+  /** 拉不到：等着的那些各补一行说明，别一直空着。 */
+  function mermaidLibFailed() {
+    mermaidLibState = "failed";
+    for (const root of mermaidWaiting) { decorateMermaid(root); }
+    mermaidWaiting.clear();
   }
 
   /**
-   * 流程图里的中文节点 ID 换成 ASCII 别名，原文变成方括号里的标签（`用户 --> 服务` → `n1[用户] --> n2[服务]`）。
-   *
-   * 为什么非换不可：media/mermaid.js 那个库解析节点 ID 只认 [A-Za-z0-9_]，中文 ID 会被整段丢掉——
-   * 轻则少几条连线，重则整张图空白（而 AI 写流程图十有八九就是这么写的）。换名之后图上的字不变。
-   * 只动 flowchart / graph；状态、时序、类、ER 图的中文都正常，不动。
-   * 认不出的行原样留着（不改顶多画不出来，不会把好图改坏）。
+   * 一段 mermaid 源码 → SVG 字符串；画不出来给 { error }。同一段源码只算一次。
+   * @param font 上面说的字体（字号跟着界面设置走：框的宽高是按这个字号量出来的）
+   * @param maxWidth 正文这一块能用的宽度（0 = 量不到，让库自己按内容排）
    */
-  function aliasFlowchartIds(source) {
-    if (!/^\s*(graph|flowchart)\b/i.test(source)) { return source; }
-    const aliases = new Map();
-    let seq = 0;
-    const aliasOf = (name) => {
-      let found = aliases.get(name);
-      if (!found) { found = "n" + (++seq); aliases.set(name, found); }
-      return found;
-    };
+  function mermaidSvg(source, font, maxWidth) {
+    const key = font.key + "|" + maxWidth + "\n" + source;
+    const hit = MERMAID_CACHE.get(key);
+    if (hit !== undefined) { return hit; }
+    let out;
+    try {
+      const options = { fontFamily: font.family, fontSize: font.size };
+      if (maxWidth > 0) { options.maxWidth = maxWidth; }   // 宽了先按这一块的宽度重排，别把字缩成一点点
+      const got = globalThis.pele.render(source, options) || {};
+      out = got.svg && Number(got.width) > 0 && Number(got.height) > 0
+        ? String(got.svg)
+        : { error: "没画出来（这张图算不出大小）" };
+    } catch (err) {
+      out = { error: mermaidErrorText(err) };
+    }
+    if (MERMAID_CACHE.size >= MERMAID_CACHE_MAX) { MERMAID_CACHE.clear(); }
+    MERMAID_CACHE.set(key, out);
+    return out;
+  }
 
-    /** 一行里的节点位置：换名（后面本来就有形状括号的，只换 ID，标签不动）。 */
-    const rewriteNodeLine = (line) => {
-      let out = "";
-      let i = 0;
-      let expectNode = true;
-      while (i < line.length) {
-        const ch = line[i];
-        if (ch === " " || ch === "\t") { out += ch; i += 1; continue; }
-        if (expectNode && FLOW_ID_CHAR.test(ch)) {
-          let j = i;
-          while (j < line.length && FLOW_ID_CHAR.test(line[j])) { j += 1; }
-          const id = line.slice(i, j);
-          const next = line[j] || "";
-          if (!FLOW_CJK.test(id)) { out += id; i = j; expectNode = false; continue; }
-          const alias = aliasOf(id);
-          // 后面跟着 [ ( { > ：形状括号里的原文就是标签，只换 ID；否则把原文补成标签
-          out += (next === "[" || next === "(" || next === "{" || next === ">") ? alias : alias + "[" + id + "]";
-          i = j; expectNode = false; continue;
-        }
-        if (expectNode) {
-          const arrow = matchFlowArrow(line, i);
-          if (arrow) { out += arrow; i += arrow.length; continue; }
-          if (ch === "&") { out += ch; i += 1; continue; }
-          out += ch; i += 1; expectNode = false; continue;   // 形状括号、|标签| 等：下面照抄
-        }
-        // 不在节点位置：形状括号整块抄过去（里面可能是中文标签，不能碰）
-        if (ch === "[" || ch === "(" || ch === "{") {
-          const close = ch === "[" ? "]" : ch === "(" ? ")" : "}";
-          let depth = 0;
-          let j = i;
-          for (; j < line.length; j++) {
-            if (line[j] === ch) { depth += 1; }
-            else if (line[j] === close) { depth -= 1; if (depth === 0) { j += 1; break; } }
-          }
-          out += line.slice(i, j); i = j; continue;
-        }
-        if (ch === "|") {
-          const end = line.indexOf("|", i + 1);
-          if (end > i) { out += line.slice(i, end + 1); i = end + 1; continue; }
-        }
-        const arrow = matchFlowArrow(line, i);
-        if (arrow) { out += arrow; i += arrow.length; expectNode = true; continue; }
-        if (ch === "&") { out += ch; i += 1; expectNode = true; continue; }
-        out += ch; i += 1;
-      }
-      return out;
-    };
+  /**
+   * 画不出来时底下那行话：认不出哪种图单独说一句，其余照库自己那句（它自己带着“第几行”）——
+   * 流程图的那些行号库算得不一定准（会偏一两行），我们不去改它，免得更错。
+   */
+  function mermaidErrorText(err) {
+    if (err && err.code === "unsupported-diagram") {
+      return "没画出来：认不出这是哪种图（Mermaid 12 里没有它）";
+    }
+    const msg = String((err && err.message) || err || "").replace(/\s+/g, " ").trim().slice(0, 200);
+    return "没画出来：" + (msg || "这张图的写法有毛病");
+  }
 
-    /** `class 甲,乙 名字` / `style 甲 fill:#f00` / `click 甲 地址`：行里那一串也是节点 ID。 */
-    const rewriteIdListLine = (line) => {
-      const m = /^(\s*(?:class|style|click)\s+)([^\s]+)(.*)$/.exec(line);
-      if (!m) { return line; }
-      const ids = m[2].split(",").map((s) => (FLOW_CJK.test(s) ? aliasOf(s) : s));
-      return m[1] + ids.join(",") + m[3];
-    };
-
-    return source.split("\n").map((line, index) => {
-      if (index === 0) { return line; }   // `graph TD` 那一行不动
-      if (/^\s*(%%|subgraph\b|end\s*$|direction\b|classDef\b|linkStyle\b|accTitle|accDescr)/i.test(line)) { return line; }
-      if (/^\s*(class|style|click)\s+/i.test(line)) { return rewriteIdListLine(line); }
-      return rewriteNodeLine(line);
-    }).join("\n");
+  /** 画图用的字体：字号跟着界面的字号设置走（见 applyFontSize），量出来的框宽才对得上画出来的字。 */
+  function mermaidFont(root) {
+    const cs = getComputedStyle(root);
+    const family = cs.fontFamily || "sans-serif";
+    const size = parseFloat(cs.fontSize) || 13;
+    return { family: family, size: size, key: family + "|" + size };
   }
 
   /**
@@ -484,24 +474,51 @@
    */
   function decorateMermaid(root) {
     if (!root || !root.querySelectorAll) { return; }
+    const blocks = [];
     for (const code of root.querySelectorAll("pre > code")) {
-      if (!isMermaidBlock(code)) { continue; }
+      if (isMermaidBlock(code)) { blocks.push(code); }
+    }
+    if (blocks.length === 0) { return; }   // 这一块里没有 mermaid：不用去拉那个脚本
+    if (!ensureMermaidLib()) {
+      // 还在路上就先等着（脚本到了会回头再画一遍）；拉不到就各补一行说明
+      if (mermaidLibState === "failed") {
+        for (const code of blocks) { showMermaidNote(code, "没画出来：画图那个脚本没拉下来（刷新页面试试）"); }
+      } else {
+        mermaidWaiting.add(root);
+      }
+      return;
+    }
+    const font = mermaidFont(root);
+    const width = Math.round(root.getBoundingClientRect ? root.getBoundingClientRect().width : 0) || 0;
+    for (const code of blocks) {
       const pre = code.parentElement;
       const source = code.textContent || "";
       if (!source.trim()) { continue; }
-      const out = mermaidSvg(source);
+      const out = mermaidSvg(source, font, width);
       if (typeof out === "string") {
         const box = document.createElement("div");
         box.className = "md-mermaid";
         box.innerHTML = out;
         pre.replaceWith(box);
-      } else if (!pre.nextElementSibling || !pre.nextElementSibling.classList.contains("md-mermaid-note")) {
-        const note = document.createElement("div");
-        note.className = "md-mermaid-note";
-        note.textContent = out.error;
-        pre.after(note);
+      } else {
+        showMermaidNote(code, out.error);
       }
     }
+  }
+
+  /** 画不出来时在代码块底下补一行说明（已经有了就改那行字，不叠第二行）。 */
+  function showMermaidNote(code, text) {
+    const pre = code.parentElement;
+    if (!pre) { return; }
+    const next = pre.nextElementSibling;
+    if (next && next.classList && next.classList.contains("md-mermaid-note")) {
+      next.textContent = text;
+      return;
+    }
+    const note = document.createElement("div");
+    note.className = "md-mermaid-note";
+    note.textContent = text;
+    pre.after(note);
   }
 
   /**
@@ -1919,12 +1936,13 @@
   }
 
   /** 渲染一个块：空格块不产节点（块级元素自带外边距，空行没有视觉）。 */
-  function buildStreamBlock(token) {
+  function buildStreamBlock(token, sessionId) {
     const box = document.createElement("div");
     box.className = "md-block";
     const html = streamBlockHtml(token);
     if (html === null) { return null; }
     box.innerHTML = html;
+    fixMdImages(box, sessionId);
     return box;
   }
 
@@ -1951,7 +1969,7 @@
    * 状态记在 cur.blocks 上：tokens（本轮全部块）、frozenCount / frozenOffset（已定型到哪儿）、
    * els（每个块对应的容器，与 tokens 下标一一对应，空格块是 null）。
    */
-  function syncStreamBlocks(cur, raw) {
+  function syncStreamBlocks(st, cur, raw) {
     let state = cur.blocks;
     if (state && raw.length < state.rawLen) { state = null; }   // 正文变短（不是追加）：从头来
     if (!state) {
@@ -1976,7 +1994,7 @@
       if (old && oldEl && oldEl.parentElement === cur.el && old.type === tokens[i].type && old.raw === tokens[i].raw) {
         tailEls.push(oldEl);
       } else {
-        tailEls.push(buildStreamBlock(tokens[i]));
+        tailEls.push(buildStreamBlock(tokens[i], st.id));
       }
     }
     // 旧的尾巴容器：没被复用的删掉
@@ -2002,9 +2020,10 @@
   function renderStreamBody(st, raw) {
     const cur = st.currentAssistant;
     cur.el.dataset.raw = raw;
-    if (syncStreamBlocks(cur, raw)) { return; }
+    if (syncStreamBlocks(st, cur, raw)) { return; }
     cur.blocks = null;
     cur.el.innerHTML = renderMarkdown(raw);
+    fixMdImages(cur.el, st.id);
     decorateMermaid(cur.el);
   }
 
@@ -2188,6 +2207,7 @@
       if (body2 && body2.dataset.raw !== text) {
         body2.dataset.raw = text;
         body2.innerHTML = renderMarkdown(text);
+        fixMdImages(body2, st.id);
         decorateMermaid(body2);
       }
       // 时刻跟着这次重放的来（以前停在上一遍的旧值上）
@@ -2202,6 +2222,7 @@
     body.className = "md";
     body.dataset.raw = text;
     body.innerHTML = renderMarkdown(text);
+    fixMdImages(body, st.id);
     decorateMermaid(body);
     attachMsgTime(div, at);
     div.appendChild(body);
@@ -4954,8 +4975,8 @@
     bar.style.height = h + "px";
     if (rightDock) { dockView.header.style.height = h + "px"; }
     if (fileDock && fileHeader) {
-      // 这一列的头可能写着两行（会话目录 + 现在走到的这一层）：顶条那点高不够时以这一列自己的内容为准
-      //（不然第二行就被压掉了）。头上一行的时候两边照样齐（见 setFileSidebarTitle）。
+      // 这一列的头就是一排标签：顶条那点高不够时装不下标签时以这一列自己的内容为准，
+      // 够的时候两边照样齐（那根横线才落在同一条线上）。
       fileHeader.style.height = "";
       const own = Math.ceil(fileHeader.getBoundingClientRect().height);
       fileHeader.style.height = Math.max(h, own) + "px";
@@ -5073,14 +5094,14 @@
   // 标签上那颗叉把它关掉；全关光后这一列不收起，留一句提示。标签只在这一趟页面上记着，
   // 刷新就没了（开没收起是记在这台设备里的，那个留着）。
   //
-  // 第一个标签是「项目目录」（当前会话的目录）：点链接看的文件排在它后面的新标签里，不顶掉它。
+  // 第一个标签是「目录」（当前会话的目录）：点链接看的文件排在它后面的新标签里，不顶掉它。
   // 它没有那颗叉（关不掉），一直在最前面；列那一格走的是票 05 那套（同一条 `/dir` 地址，
   // `.` 表示会话目录自己）。
   //
-  // 目录不占标签：点消息流里的目录链接、点清单里的子目录，都在「项目目录」这一格里换内容
+  // 目录不占标签：点消息流里的目录链接、点清单里的子目录，都在「目录」这一格里换内容
   //（切到那一格、把这一层列出来），往回的「上一层」是清单里的第一行——到会话目录本身那一层就没有
-  // 这一行了（不许走到会话目录外面去）。标签上一直写「项目目录」，现在在哪一层看这一列的头
-  //（上面一行会话目录、下面一行现在走到的这一层；悬停提示里给的是这一层的全路径）。
+  // 这一行了（不许走到会话目录外面去）。标签上一直写「目录」，现在在哪一层只看它的悬停提示
+  //（给的是这一层的全路径）——这一列头上不另写路径。
   // 切会话、刷新页面时这一格回到会话目录本身（不记住走到哪一层）。
   //
   // 正看着的那个文件被改了（模型改的、脚本改的）以后，内容自己换成新的，而人读到哪儿还停在哪儿：
@@ -5123,8 +5144,8 @@
   /** 长行怎么摆（折起来 / 一行就是一行）：也记在这台设备里（跟收没收起同一个做法）。 */
   const FILE_SIDEBAR_WRAP_STORE_KEY = "pichat.fileSidebarWrap";
   const FILE_SIDEBAR_HINT = "点消息里的文件链接，这里会显示那个文件。";
-  /** 「项目目录」那一格：标签上写这四个字，悬停提示给这一层的全路径（见 fileSidebarProjectFullPath）。 */
-  const FILE_SIDEBAR_PROJECT_NAME = "项目目录";
+  /** 「目录」那一格：标签上就写这两个字，悬停提示给这一层的全路径（见 fileSidebarProjectFullPath）。 */
+  const FILE_SIDEBAR_PROJECT_NAME = "目录";
   /** 「改动」那一格：这个会话改了哪些文件、每个改成什么样（标签上就写这两个字）。 */
   const FILE_SIDEBAR_CHANGES_NAME = "改动";
   /** 这一格里一个文件都没改过时那句提示。 */
@@ -5141,9 +5162,9 @@
     wrap: false,     // 长行折起来还是横向滚（记在 localStorage；默认一行就是一行，见 chat.css 末尾）
     // 开着的文件与目录，从左到右：[{ path, proj, line, scrollTop, mtime, loading, imageUrl, page, drawn }]
     //（不记进设备，刷新就没了）
-    //   path：文件是链接里那个写法；「项目目录」那一格是它现在待的那一层
+    //   path：文件是链接里那个写法；「目录」那一格是它现在待的那一层
     //（相对会话目录的写法：`.` 就是会话目录自己）
-    //   proj：这是「项目目录」那一格（排在最前、没有关闭那颗叉）：它列出来的是一份清单，
+    //   proj：这是「目录」那一格（排在最前、没有关闭那颗叉）：它列出来的是一份清单，
     //   所有进目录 / 换目录的事都在它里面发生；不是它就是某个文件
     //   mtime：画在这一列上的那份内容的修改时间（下次问「变了没」时带上去）
     //   loading：还在取（正文那块写着「正在读取…」）
@@ -5239,20 +5260,8 @@
   function pathLabel(path, dir) { return dir ? path + "/" : path; }
 
   /**
-   * 「项目目录」那一格头上那几行字：上面一行是会话目录本身（这一格的最外面那一层），
-   * 下面一行是现在走到的这一层（在会话目录里面的走法，`dirA/sub`）——不把两段拼成一长条。
-   * 还在最外面那一层就只有上面那一行；会话目录还没认识就写那四个字。
-   */
-  function fileSidebarProjectTitleLines(tab) {
-    const base = activeSessionCwd();
-    if (!base) { return [FILE_SIDEBAR_PROJECT_NAME]; }
-    const inside = tab.path === FILE_SIDEBAR_PROJECT_PATH ? "" : String(tab.path);
-    return inside ? [base, inside] : [base];
-  }
-
-  /**
-   * 「项目目录」那一格现在这一层的全路径（`.` 那一层就是会话目录本身）：
-   * 标签的悬停提示与头上那几行字的悬停提示写它。
+   * 「目录」那一格现在这一层的全路径（`.` 那一层就是会话目录本身）：标签的悬停提示写它
+   *（这一列头上不再写路径，进到哪一层只看这个提示，见 renderFileTabs）。
    */
   function fileSidebarProjectFullPath(tab) {
     const base = activeSessionCwd();
@@ -5262,13 +5271,13 @@
     return base.replace(/[\\/]+$/, "") + sep + String(tab.path).replace(/\//g, sep);
   }
 
-  /** 一格标签悬停提示上的全路径：项目目录那一格是它现在待的那一层（头上的字见 setFileSidebarTitle）。 */
+  /** 一格标签悬停提示上的全路径：目录那一格是它现在待的那一层。 */
   function fileSidebarTabFullPath(tab) {
     if (tab.change) { return FILE_SIDEBAR_CHANGES_NAME; }
     return tab.proj ? fileSidebarProjectFullPath(tab) : tab.path;
   }
 
-  /** 标签上那行字：文件名。全路径太长，标签上停一下有提示、这一列头上写着会话目录与这一层。 */
+  /** 标签上那行字：文件名。全路径太长，标签上停一下有提示。 */
   function fileSidebarTabName(path) {
     return String(path).replace(/\\/g, "/").split("/").pop() || String(path);
   }
@@ -5281,13 +5290,13 @@
     return -1;
   }
 
-  /** 「项目目录」那一格在标签条上的下标（没有就是 -1）。 */
+  /** 「目录」那一格在标签条上的下标（没有就是 -1）。 */
   function fileSidebarProjectIndex() {
     for (let i = 0; i < fileSidebar.tabs.length; i++) { if (fileSidebar.tabs[i].proj) { return i; } }
     return -1;
   }
 
-  /** 摆一格新标签要的那些字段：一个文件，或者「项目目录」那一格（它列出来的是一份清单）。 */
+  /** 摆一格新标签要的那些字段：一个文件，或者「目录」那一格（它列出来的是一份清单）。 */
   function fileSidebarNewTab(path, proj) {
     return {
       path: path, proj: !!proj, line: 0, scrollTop: 0, mtime: "", loading: false, imageUrl: "",
@@ -5312,7 +5321,7 @@
   }
 
   /**
-   * 把「项目目录」那一格摆到标签条最前面（只摆、不取内容）：这一列里没有它的时候摆。
+   * 把「目录」那一格摆到标签条最前面（只摆、不取内容）：这一列里没有它的时候摆。
    * 会话目录还不认识（会话列表还没到）就先不摆，等它到了再来（见 setFileSidebarOpen 与 sessionList 那段）。
    * @returns 摆了没有
    */
@@ -5331,8 +5340,8 @@
   }
 
   /**
-   * 把「改动」那一格摆上（只摆、不取内容）：它是常驻的一格，固定在「项目目录」后面、
-   * 排在所有文件标签前面。会话目录还不认识就不摆（跟「项目目录」同一个条件）。
+   * 把「改动」那一格摆上（只摆、不取内容）：它是常驻的一格，固定在「目录」后面、
+   * 排在所有文件标签前面。会话目录还不认识就不摆（跟「目录」同一个条件）。
    * @returns 摆了没有
    */
   function addChangesTab() {
@@ -5345,39 +5354,17 @@
   }
 
   /**
-   * 这一列开着又空着（一个标签都没有）的时候，摆上「项目目录」那一格并显示它：
+   * 这一列开着又空着（一个标签都没有）的时候，摆上「目录」那一格并显示它：
    * 刚打开、切会话、刷新页面走的都是这里；会话目录还没认识就留一句提示。
    */
   function ensureProjectDirTab() {
     if (!fileSidebar.root || !fileSidebar.open || fileSidebar.active >= 0) { return; }
     if (addProjectDirTab()) {
-      addChangesTab();   // 「改动」那一格跟着一起来（固定排在「项目目录」后面）
+      addChangesTab();   // 「改动」那一格跟着一起来（固定排在「目录」后面）
       showFileTab(0, 0);
       return;
     }
     showFileNote(FILE_SIDEBAR_HINT);
-  }
-
-  /**
-   * 这一列头上那几行字：文件就一行（那个文件的写法）；「项目目录」那一格上面一行是会话目录、
-   * 下面一行是现在走到的这一层（见 fileSidebarProjectTitleLines）；一个标签都没开就写「文件」。
-   * @param tab 现在看着的那一格；没有（一个都没开）就给 null
-   */
-  function setFileSidebarTitle(tab) {
-    const el = fileSidebar.title;
-    if (!el) { return; }
-    const lines = !tab ? ["文件"] : (tab.proj ? fileSidebarProjectTitleLines(tab)
-      : tab.change ? [FILE_SIDEBAR_CHANGES_NAME] : [tab.path]);
-    el.innerHTML = "";
-    lines.forEach((text, i) => {
-      const line = document.createElement("span");
-      line.className = "file-title-line" + (i > 0 ? " file-title-in" : "");
-      line.textContent = text;
-      el.appendChild(line);
-    });
-    el.title = tab ? fileSidebarTabFullPath(tab) : "";   // 悬停给这一层的全路径（能整条选走）
-    dockBarKey = "";   // 头上几行变了：常驻时这一列的头多高要重算（见 syncDockHeaderHeight）
-    syncDockHeaderHeight();
   }
 
   /** 把现在这一格读到哪儿记进它那个标签（切走、重画之前）。 */
@@ -5455,13 +5442,13 @@
       el.setAttribute("data-path", tab.path);
       if (tab.proj) { el.setAttribute("data-proj", "1"); }
       if (tab.change) { el.setAttribute("data-changes", "1"); }
-      el.title = fileSidebarTabFullPath(tab);   // 项目目录那一格悬停给现在这一层的全路径
+      el.title = fileSidebarTabFullPath(tab);   // 目录那一格悬停给现在这一层的全路径
       const name = document.createElement("span");
       name.className = "file-tab-name";
       name.textContent = tab.proj ? FILE_SIDEBAR_PROJECT_NAME
         : tab.change ? FILE_SIDEBAR_CHANGES_NAME : fileSidebarTabName(tab.path);
       el.appendChild(name);
-      // 「项目目录」与「改动」这两格没有那颗叉：它们是常驻的两格，不让人关掉
+      // 「目录」与「改动」这两格没有那颗叉：它们是常驻的两格，不让人关掉
       //（切会话 / 刷新页面时换成当前会话的）
       if (!tab.proj && !tab.change) {
         const close = document.createElement("button");
@@ -5482,7 +5469,7 @@
   }
 
   /**
-   * 摆上某一个标签：这一列的头、标签条、正文都跟着换。
+   * 摆上某一个标签：标签条、正文都跟着换。
    * @param index 哪一个标签
    * @param hitLine 这次链接说的那一行（1 起）；0 = 没有要停的行，回这个标签上次读到的地方
    */
@@ -5493,7 +5480,6 @@
     fileSidebar.active = index;
     const linkLine = Number(hitLine) > 0 ? Number(hitLine) : 0;
     if (linkLine > 0) { tab.line = linkLine; }
-    setFileSidebarTitle(tab);
     renderFileTabs();
     syncFilePages();
     // 「改动」那一格不取文件内容：先摆上手上这一份，再问一遍清单（没画过就等取回来再画）
@@ -5546,7 +5532,6 @@
     fileSidebar.active = -1;
     fileSidebar.token++;
     if (fileSidebar.tabs.length === 0) {
-      setFileSidebarTitle(null);
       renderFileTabs();
       syncFilePages();
       showFileNote(FILE_SIDEBAR_HINT);
@@ -5594,7 +5579,7 @@
   }
 
   /**
-   * 清单第一行那颗「上一层」：「项目目录」那一格待在某一层子目录里、而且正看着它的时候才有这一行
+   * 清单第一行那颗「上一层」：「目录」那一格待在某一层子目录里、而且正看着它的时候才有这一行
    *（`.` 就是会话目录本身，到那一层就没有再往上的了——不许走到会话目录外面去）。
    * 它长在清单里（第一行），不在这一列头上那颗「收起」旁边。
    * @returns 这一行；不该有的时候给 null
@@ -5616,7 +5601,7 @@
     return row;
   }
 
-  /** 现在看着的「项目目录」那一格该有「上一层」这一行时，把它摆到正文最上面。 */
+  /** 现在看着的「目录」那一格该有「上一层」这一行时，把它摆到正文最上面。 */
   function prependFileUpRow() {
     const page = filePage();
     if (!page) { return; }
@@ -5691,7 +5676,7 @@
    * 清单里那个相对写法就是下一次请求的路径，跟点消息流里的链接走同一条路
    *（开不开得了由后端那道边界管：指到目录外的条目点了给一句说明）。
    * 待在子目录里时，清单第一行是「上一层」（见 buildFileUpRow）。
-   * @param tab 正看着的「项目目录」那一格（它现在待在哪一层决定要不要「上一层」那一行）
+   * @param tab 正看着的「目录」那一格（它现在待在哪一层决定要不要「上一层」那一行）
    */
   function renderDirListing(listing, tab) {
     const page = filePage();
@@ -5718,7 +5703,7 @@
       name.textContent = pathLabel(entry.name, entry.dir);
       row.appendChild(icon);
       row.appendChild(name);
-      // 子目录就在「项目目录」这一格里往里走（不新开标签）、文件开一个新标签看
+      // 子目录就在「目录」这一格里往里走（不新开标签）、文件开一个新标签看
       row.addEventListener("click", () => openSidebarLink(entry.path, 0, !!entry.dir));
       frag.appendChild(row);
     });
@@ -5767,7 +5752,7 @@
     }
     releaseTabImage(tab);   // 这个文件以前是张图（现在换成文本了），把那份地址放掉
     const text = await resp.text();
-    if (isMarkdownPath(tab.path)) { renderFileMarkdown(text); return null; }
+    if (isMarkdownPath(tab.path)) { renderFileMarkdown(text, tab.path); return null; }
     return renderFileText(text, tab.line, tab.path);
   }
 
@@ -5829,19 +5814,27 @@
   function isHtmlPath(path) { return HTML_PAGE_EXT.has(lastExt(path)); }
 
   /**
-   * 把一个 markdown 文件渲染成文档：跟消息流里渲染正文走同一段（renderMarkdown），
-   * 不另起一套。文档不留行号，所以链接里带的行号（`:12`）等于没带，也不报错。
+   * 把文件画出来的那一路（见 drawFileResponse）：markdown 排好版渲染成文档，正文里的图片
+   * 按这个文件所在的那一层算路径（`docs/a.md` 里的 `img/x.png` 指 `docs/img/x.png`）。
+   * 文档不留行号，所以链接里带的行号（`:12`）等于没带，也不报错。
    * 文档里的文件链接由文件侧边栏那段代点（见 buildFileSidebar），照旧开在这一列里。
    */
-  function renderFileMarkdown(text) {
+  function renderFileMarkdown(text, path) {
     const page = filePage();
     if (!page) { return; }
     page.innerHTML = "";
     const doc = document.createElement("div");
     doc.className = "md file-md";
     doc.innerHTML = renderMarkdown(String(text));
+    fixMdImages(doc, activeId, dirOfPath(path));
     decorateMermaid(doc);
     page.appendChild(doc);
+  }
+
+  /** 一个相对写法里上一层目录怎么写（`docs/a.md` → `docs`，`a.md` → 空串）。 */
+  function dirOfPath(path) {
+    const i = String(path).lastIndexOf("/");
+    return i < 0 ? "" : String(path).slice(0, i);
   }
 
   /**
@@ -5901,7 +5894,7 @@
 
   /**
    * 现在这个标签该取哪条地址：文件走 `/file`（带 mtime 就是「没变就别给正文」那问法），
-   * 「项目目录」那一格走 `/dir`；两条都是只读的、边界也同一套（见后端）。
+   * 「目录」那一格走 `/dir`；两条都是只读的、边界也同一套（见后端）。
    */
   function sidebarUrl(tab, mtime) {
     const base = (tab.proj ? "/dir?" : "/file?") + "session=" + encodeURIComponent(activeId || "")
@@ -6310,7 +6303,7 @@
     if (!fileSidebar.open) { fileSidebar.token++; }   // 还等着的那条回应别再画进来
     syncFileSidebarLayout();
     if (fileSidebar.open) {
-      ensureProjectDirTab();   // 空着的时候先把「项目目录」那一格摆上（会话目录还没认识就留那句提示）
+      ensureProjectDirTab();   // 空着的时候先把「目录」那一格摆上（会话目录还没认识就留那句提示）
       if (fileSidebar.active < 0) { showFileNote(FILE_SIDEBAR_HINT); }
       else { pollActiveFile(); }   // 收起那阵子文件可能改过了：马上问一次，别等下一个节拍
     }
@@ -6331,7 +6324,7 @@
   }
 
   /**
-   * 点一条链接（消息流里的文件 / 目录链接，或者清单上的一项）：目录去「项目目录」那一格里走
+   * 点一条链接（消息流里的文件 / 目录链接，或者清单上的一项）：目录去「目录」那一格里走
    *（不占标签），文件开一个自己的标签看。
    * @param dir 这是个目录（消息流那边看 `data-dir`，清单那边看 `entry.dir`）
    */
@@ -6341,12 +6334,12 @@
   }
 
   /**
-   * 点链接、进目录之前的张罗：窄窗里把右边那块让开，把「项目目录」那一格摆到第一格
+   * 点链接、进目录之前的张罗：窄窗里把右边那块让开，把「目录」那一格摆到第一格
    *（还没有就摆上；会话目录还不认识时它会留一句提示），再把这一列开出来。
    */
   function prepareFileSidebar() {
     closeRightSidebarForFile();
-    addProjectDirTab();   // 第一格留给「项目目录」（只摆不取，排在文件前面）
+    addProjectDirTab();   // 第一格留给「目录」（只摆不取，排在文件前面）
     if (!fileSidebar.open) { setFileSidebarOpen(true); } else { syncFileSidebarLayout(); }
   }
 
@@ -6367,7 +6360,7 @@
   }
 
   /**
-   * 点一个目录：在「项目目录」那一格里走（目录不占标签）——切到那一格、换成这一层重新列出来；
+   * 点一个目录：在「目录」那一格里走（目录不占标签）——切到那一格、换成这一层重新列出来；
    * 本来就在那一格的话也一样（相当于重新列一次）。会话目录还没认识就先不换层：
    * 这一列照开，上面留着那句提示，等会话列表到了再长出来。
    * @param path 相对会话目录的写法（`dirA/sub`；空 / `.` 就是会话目录本身那一层）
@@ -6392,7 +6385,7 @@
   }
 
   /**
-   * 点清单第一行那颗「上一层」：「项目目录」那一格退到上一层，还是这一格那份清单
+   * 点清单第一行那颗「上一层」：「目录」那一格退到上一层，还是这一格那份清单
    *（到会话目录本身那一层就退不动了，那一行也不出现，见 buildFileUpRow）。
    */
   function goUpProjectDir() {
@@ -6440,13 +6433,12 @@
     fileSidebar.active = -1;   // 下面 showFileTab 摆上它；不动这一步，标签条会以为已经看着某一格
     if (back) { fileSidebar.savedTabs.delete(activeId); }
     if (fileSidebar.tabs.length > 0) {
-      // 「项目目录」与「改动」这两格是常驻的：摆回来的一份里没有就补上
+      // 「目录」与「改动」这两格是常驻的：摆回来的一份里没有就补上
       addProjectDirTab();
       addChangesTab();
       showFileTab(Math.min(Math.max(back.active, 0), fileSidebar.tabs.length - 1), 0);
       return;
     }
-    setFileSidebarTitle(null);
     renderFileTabs();
     syncFilePages();
     showFileNote(FILE_SIDEBAR_HINT);
@@ -6504,13 +6496,13 @@
     if (IN_WEBVIEW) { return; }
     const root = document.createElement("div");
     root.id = "fileSidebar";
+    // 这一列没有单独的头：标签条就在最上面那一行，「收起」那颗叉摆在它右端
     root.innerHTML =
       '<div id="filePanel" class="pk-panel">' +
         '<div id="fileHeader" class="pk-header">' +
-          '<span id="fileTitle" class="pk-header-title">文件</span>' +
+          '<div id="fileTabs"></div>' +
           '<button id="fileClose" class="pk-header-close" type="button" title="收起" aria-label="收起">' + ICONS["close-bold"] + '</button>' +
         '</div>' +
-        '<div id="fileTabs"></div>' +
         '<div id="fileBody" class="pk-body"></div>' +
         '<button id="fileWrap" type="button" aria-label="折行开关" aria-pressed="false">' + ICONS.wrap + '</button>' +
       '</div>' +
@@ -6522,7 +6514,6 @@
     document.body.appendChild(backdrop);
     fileSidebar.root = root;
     fileSidebar.header = root.querySelector("#fileHeader");
-    fileSidebar.title = root.querySelector("#fileTitle");
     fileSidebar.tabsEl = root.querySelector("#fileTabs");
     fileSidebar.body = root.querySelector("#fileBody");
     fileSidebar.open = readFileSidebarWanted();
@@ -8131,7 +8122,7 @@
         renderGoalBar();
       }
       renderSessionBar();
-      // 会话目录这时候才认识：这一列开着又空着的话，把「项目目录」那一格摆上（见票 13）
+      // 会话目录这时候才认识：这一列开着又空着的话，把「目录」那一格摆上（见票 13）
       ensureProjectDirTab();
       updateSendState();
       syncStatus();
@@ -8231,6 +8222,11 @@
     }
     if (type === "openSettings") { openSettings(); return; }
     if (type === "viewOptionItems") { viewOptionItems = Array.isArray(msg.items) ? msg.items : []; renderViewOpts(); return; }
+    // 「编译并重启」那颗按钮的回话：后端马上要退了，成败就改那行说明（成不成它都会断，自己会连回来）
+    if (type === "restartStatus") {
+      if (restartNoteEl) { restartNoteEl.textContent = msg.text || ""; }
+      return;
+    }
     if (type === "focusInput") { setTimeout(function () { inputEl.focus(); }, 0); return; }
     // 宿主（VSCode 的命令入口，比如"发送选中文本"）替用户发一条：当作他打进输入框的，
     // 走同一条路（会话还没就绪就先留着、就绪了自动补发）
@@ -9275,10 +9271,13 @@
   // 模型（models.json）从这里撤了：那是 pi 自己的配置，插件不再读写它，界面上也不再出现。
   const settingsOverlay = document.getElementById("settingsOverlay");
   let viewOptionItems = [];
+  /** 「重启后端」那行说明的那个元素（后端回话时改它）；没画出这一行时是 null。 */
+  let restartNoteEl = null;
   const viewOptsRoot = document.getElementById("viewOptsRoot");
 
   function renderViewOpts() {
     viewOptsRoot.innerHTML = "";
+    restartNoteEl = null;
     if (!viewOptionItems.length) {
       const empty = document.createElement("div"); empty.className = "vo-empty"; empty.textContent = "没有可配置项";
       viewOptsRoot.appendChild(empty); return;
@@ -9286,6 +9285,7 @@
     viewOptionItems.forEach((it) => {
       const row = document.createElement("div"); row.className = "vo-item";
       if (it.kind === "slider") { renderSliderRow(row, it); viewOptsRoot.appendChild(row); return; }
+      if (it.kind === "button") { renderButtonRow(row, it); viewOptsRoot.appendChild(row); return; }
       if (Array.isArray(it.options) && it.options.length) {
         // 按钮组：直接点选某个选项
         row.classList.add("vo-item-group");
@@ -9331,6 +9331,30 @@
     const note = notifyUnavailableNote();
     return note ? desc + "（" + note + "）" : desc;
   }
+  /**
+   * 「重启后端」那一行：说明 + 右边一颗按钮。
+   * 点下去先在本地说一句「正在编译并重启」——后端 0.5 秒后就退，它顶多再回一句话（restartStatus）。
+   */
+  function renderButtonRow(row, it) {
+    row.classList.add("vo-item-button");
+    const txt = document.createElement("div"); txt.className = "vo-text";
+    const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "";
+    txt.appendChild(label);
+    const note = document.createElement("div"); note.className = "vo-desc"; note.textContent = it.desc || "";
+    txt.appendChild(note);
+    row.appendChild(txt);
+    if (it.action === "restartBackend") { restartNoteEl = note; }
+    const btn = document.createElement("button"); btn.type = "button"; btn.className = "vo-btn";
+    btn.textContent = it.button || "执行";
+    btn.disabled = it.disabled === true;
+    btn.addEventListener("click", () => {
+      btn.disabled = true;
+      note.textContent = "正在编译并重启…这个页面过一会儿会自己连回来。";
+      vscode.postMessage({ type: "restartBackend" });
+    });
+    row.appendChild(btn);
+  }
+
   function renderSliderRow(row, it) {
     row.classList.add("vo-item-slider");
     const txt = document.createElement("div"); txt.className = "vo-text";

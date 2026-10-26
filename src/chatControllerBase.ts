@@ -82,6 +82,29 @@ export interface ChatReferenceItem {
 }
 
 /**
+ * 显示选项浮层里的一行（界面按 kind 画）：
+ *   不写 kind  = 勾选框 / 开关（check 有值就是勾上了）
+ *   按钮组（options 有值） = 直接点选某个选项
+ *   "slider"   = 滑块（min / max / step / unit）
+ *   "button"   = 一颗按钮（button 是按钮上的字，disabled 时点不动）
+ */
+export interface ViewOptionItem {
+    label: string;
+    desc: string;
+    check: boolean | null;
+    action: string;
+    value?: string;
+    options?: Array<{ value: string; label: string }>;
+    kind?: string;
+    min?: number;
+    max?: number;
+    step?: number;
+    unit?: string;
+    button?: string;
+    disabled?: boolean;
+}
+
+/**
  * 一块屏开着的浮层那一摊（历史列表 / 项目与会话 / 文件夹 / 模型）。
  * 按屏分开存：两个窗口各自开着自己的列表，“加载更多”、选完以后用哪份数据，各算各的。
  */
@@ -388,14 +411,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 子类往 viewOptions 消息里附带的额外字段（缺省无）。 */
     protected viewOptionsExtra(): Record<string, unknown> | undefined { return undefined; }
     /** 子类往显示选项浮层里追加的条目（缺省无）。 */
-    protected viewOptionItemsExtra(): Array<{ label: string; desc: string; check: boolean | null; action: string; value?: string; options?: Array<{ value: string; label: string }> }> { return []; }
+    protected viewOptionItemsExtra(): ViewOptionItem[] { return []; }
 
     /** 构建显示选项浮层条目（toggle / 按钮组模式）。 */
-    protected buildViewOptionItems(): Array<{
-        label: string; desc: string; check: boolean | null; action: string;
-        value?: string; options?: Array<{ value: string; label: string }>;
-        kind?: string; min?: number; max?: number; step?: number; unit?: string;
-    }> {
+    protected buildViewOptionItems(): ViewOptionItem[] {
         return [
             {
                 action: "autoLoadLastSession",

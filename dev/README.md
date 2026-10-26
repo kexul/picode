@@ -221,14 +221,15 @@ node dev/perfProbe.js --batch 30                           # 打开长会话时�
 # 逐个样例对一下“按块渲染出来的文字”跟“整段渲染的文字”是否一字不差：
 node dev/markdownBlocksCheck.js
 
-# 验 ```mermaid 代码块画成图（消息流里：受支持的画出来、不支持的留代码块加一行说明、
-# 中文节点名也画得出、换成深色不重画就跟着变）：
+# 验 ```mermaid 代码块画成图（消息流里：流程图/时序图/饼图/甘特图都画得出、中文节点名也行、
+# 写坏的留代码块加一行说明、画图那个脚本是出现图才去拉的、换成深色不重画就跟着变，
+# 顺带把插件里的对话面板那一份也加载一遍看它画不画得出）：
 node dev/mermaidCheck.js
 
 # 验文件侧边栏里那份 markdown 文档里的 mermaid（同一个播放器，换个地方）：
 node dev/mermaidFileCheck.js
 
-# 验 mermaid 那个 1.5MB 的库没排进首屏（浏览器页面按需加载、地址写在 meta 里带着指纹，
+# 验画图那个脚本（pele，700 多 KB）没排进首屏（浏览器页面按需加载、地址写在 meta 里带着指纹，
 # 面板那边仍然内联）：只拼页面、不开浏览器，几秒跑完。改过 chatUiFiles / pageHtml 后跑一下：
 node dev/lazyScripts.js
 
@@ -311,9 +312,9 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `askNotice.js` | 验“模型问选择题（ask_choice）也发一条系统通知”（同一个开关、同一个规矩：正看着它也发、别的屏在聊的会话在问也发、点一下切过去答；扩展问的确认 / 输入 / 选一个不发；开关一关就不发）：`node dev/askNotice.js` |
 | `trustedOrigin.js` | 验“页面是从 https 反代的地址打开的”（设置里 `webServer.trustedOrigins` 写下的来源放行、别人的照旧 403、反代后面页面照常收发、那个地址算“安全来源”所以通知发得出去；顺带看 http 地址下设置里给的理由对不对；现签证书 + 本机起一个 https 反代来跑）：`node dev/trustedOrigin.js` |
 | `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接 / 断线期间问的选择题 / 补不上时整屏重画的视野）：`node dev/reconnect.js` |
-| `mermaidCheck.js` | 验消息流里的 ```mermaid 画成图（受支持的出图、不支持的留代码块加一行说明、中文节点名不被吞、换深色不重画就跟着变、页面不报错）：`node dev/mermaidCheck.js` |
-| `mermaidFileCheck.js` | 验文件侧边栏里那份 markdown 文档里的 mermaid（同一个播放器，换个地方）：`node dev/mermaidFileCheck.js` |
-| `lazyScripts.js` | 验 1.5MB 的 mermaid 没排进首屏（浏览器页面按需加载、地址写在 meta 里带着指纹；面板仍然内联）：`node dev/lazyScripts.js` |
+| `mermaidCheck.js` | 验消息流里的 ```mermaid 画成图（各种图都出图、写坏的留代码块加一行说明、画图那个脚本出现图才去拉、中文节点名不被吞、换深色不重画就跟着变、面板那一份也画得出、页面不报错）：`node dev/mermaidCheck.js` |
+| `mermaidFileCheck.js` | 验文件侧边栏里那份 markdown 文档里的 mermaid（同一个播放器，换个地方；甘特图也画得出、写坏的留说明）：`node dev/mermaidFileCheck.js` |
+| `lazyScripts.js` | 验画图的 pele（700 多 KB）没排进首屏（浏览器页面按需加载、地址写在 meta 里带着指纹；面板仍然内联）：`node dev/lazyScripts.js` |
 | `childSessions.js` | 验历史列表那两件事（扫描结果按改动时间 / 大小缓存、子会话靠清单认而不是看第一条用户说了什么）：`node dev/childSessions.js` |
 | `childDot.js` | 验顶条那颗小点与它下面的数字（子会话在跑时父会话那颗点也呼吸、点下面写着还有几个在跑，零个时数字收起来；点与箭头落在两行中间）：`npm run web:shot -- --script dev/childDot.js` |
 | `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并 + 正文之后补来的那段跑完并回本段那颗）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |

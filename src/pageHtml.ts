@@ -65,7 +65,7 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
     // 浏览器 tab 的标题用这台机器的名字（形如 `我的电脑-pi`）：同时开着几台机器的页面时，
     // 光看标题分不出谁是谁。机器名取不到就只剩 `pi`。
     const host = machineName();
-    // 按需加载的脚本（现在只有 mermaid）不排进首屏，地址写进 meta，主脚本真要用时自己去拉。
+    // 按需加载的脚本（现在只有 pele，画 mermaid 图用的）不排进首屏，地址写进 meta，主脚本真要用时自己去拉。
     // 地址放这儿而不是写死在 chat.js 里，是为了让它带着内容指纹（见 mediaVersion.ts）。
     const lazyScripts = chatUiFilesOfRole("lazy-script");
     const lazyMeta = lazyScripts.length === 0 ? "" :
@@ -87,7 +87,7 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
         extraHead,
         extraBodyBottom,
         // 第三方脚本 + 主脚本，排的先后照清单来（见 chatUiFiles.ts）。按需脚本不在这里：
-        // 它的地址在 head 的 meta 里，主脚本要用时自己去拉（当前只有 mermaid）。
+        // 它的地址在 head 的 meta 里，主脚本要用时自己去拉（当前只有 pele）。
         scripts: chatUiFilesOfRole("vendor-script", "main-script").map((file) => ({ src: mediaUrl(file.name) })),
     });
 }
@@ -106,7 +106,7 @@ export function getPanelChatHtml(
 ): string {
     const inline = new Map<string, string>();
     // 面板里没有可引的资源地址（见文件头），按需脚本也只能内联进来：主脚本一加载就发现
-    // globalThis.piMermaid 已经在，等于“永远不用去拉”。
+    // globalThis.pele 已经在，等于“永远不用去拉”。
     for (const file of chatUiFilesOfRole("bridge", "vendor-script", "lazy-script", "main-script")) {
         const code = escapeInlineScript(readMedia(mediaDir, file.name));
         if (endsInDoubleEscape(code)) {

@@ -17,6 +17,7 @@ import { PiChatWebServer, type WebServerSettings } from "./webChatServer";
 import { ChatHost } from "./chatHost";
 import { readServerConfig, updateServerConfig } from "./serverConfig";
 import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
+import { startRestart } from "./serverRestart";
 import { ensureAskAssets, ensureGoalAssets, ensureTabaAssets } from "./bridgeAssets";
 import { serverConfigFile } from "./serverPaths";
 
@@ -239,8 +240,8 @@ export interface StartedBackend {
     host0: string;
     host: ChatHost;
     server: PiChatWebServer;
-    /** 收摊：停网页服务、清地址文件、杀掉所有 pi 进程。 */
-    stop: () => Promise<void>;
+    /** 收摊：停网页服务、清地址文件、杀掉所有 pi 进程。quiet = 不跟页面道别（重启后端时用）。 */
+    stop: (quiet?: boolean) => Promise<void>;
 }
 
 /**
@@ -252,7 +253,10 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
     const cwd = path.resolve(options.cwd);
     const bindHost = options.host ?? "0.0.0.0";
 
-    const host = new ChatHost({ cwd, log });
+    // 设置浮层里那颗「编译并重启」：按钮点下去要的是「怎么起的、起在哪儿」，所以由这一层接；
+    // 收摊（停网页服务、杀掉 pi 进程）也在这一层，见下面给 restartBackend 赋值那块。
+    let restartBackend = (): { ok: boolean; reason?: string } => ({ ok: false, reason: "后端还没起来，不能重启。" });
+    const host = new ChatHost({ cwd, log, restartBackend: () => restartBackend() });
     const server = new PiChatWebServer(MEDIA_DIR, host, {
         log: (text) => log(`[网页服务] ${text}`),
         onUrlChanged: () => { /* 启动器自己会打印地址，这里不用管 */ },
@@ -287,13 +291,34 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
     });
 
     let stopped = false;
-    const stop = async (): Promise<void> => {
+    const stop = async (quiet = false): Promise<void> => {
         if (stopped) { return; }
         stopped = true;
-        try { await server.stop(); } catch { /* 已经停了 */ }
+        try { await server.stop(quiet); } catch { /* 已经停了 */ }
         try { host.dispose(); } catch { /* 收摊出错不拦路 */ }
         try { clearServerAddress(); } catch { /* 清不掉也只是留个过期文件，下次启动会接管 */ }
     };
+
+    restartBackend = () => {
+        const result = startRestart({
+            pid: process.pid,
+            url,
+            execPath: process.execPath,
+            argv: process.argv.slice(1),
+            cwd: process.cwd(),
+            dir: cwd,
+            port: Number(parsed.port),
+            host: bindHost,
+        });
+        if (result.ok) {
+            // 先把回话送出去（界面上那句「正在编译并重启」），再按 Ctrl+C 那套收摊退出。
+            // 小进程正等着这个进程号消失，看到它没了才动手编译。
+            // 收摊时不跟页面道别：页面收到道别就不自己重连了，可这个服务几十秒后还会在同一个地址上回来。
+            setTimeout(() => { void stop(true).finally(() => process.exit(0)); }, 500);
+        }
+        return result;
+    };
+
     return { url, cwd, host0: bindHost, host, server, stop };
 }
 

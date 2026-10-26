@@ -38,8 +38,8 @@ export const CHAT_UI_FILES: readonly ChatUiFile[] = [
     { name: "browserBridge.js", role: "bridge" },
     { name: "marked.js", role: "vendor-script" },
     { name: "highlight.js", role: "vendor-script" },
-    // mermaid 有 1.5MB：只有真出现 ```mermaid 代码块时才值得付这笔下载与解析
-    { name: "mermaid.js", role: "lazy-script" },
+    // pele（画 mermaid 图的那个库）有 700 多 KB：只有真出现 ```mermaid 代码块时才值得付这笔下载与解析
+    { name: "pele.js", role: "lazy-script" },
     { name: "chat.js", role: "main-script" },
 ];
 
