@@ -142,6 +142,7 @@
   //   openSessionsShown / spaceRowsShown 是这两格当前长什么样的指纹（见 paintWorkspacePanel）。
   const modalView = {
     root: document.getElementById("pickerOverlay"),
+    panel: document.getElementById("pickerPanel"),
     header: document.getElementById("pickerHeader"),
     title: document.getElementById("pickerTitle"),
     subtitle: document.getElementById("pickerSubtitle"),
@@ -157,6 +158,7 @@
   /** 宽窗下常驻那一列（「项目与会话」）：自己的容器，不跟浮层抢地方（见下面“常驻的项目与会话侧边栏”）。 */
   const dockView = {
     root: document.getElementById("sidebarDock"),
+    panel: document.getElementById("dockPanel"),
     header: document.getElementById("dockHeader"),
     title: document.getElementById("dockTitle"),
     subtitle: null,
@@ -7603,7 +7605,11 @@
     if (typeof msg.t0 === "number") {
       console.log("[pi] picker(" + kind + ") 点击→弹出: " + Math.round(performance.now() - msg.t0) + "ms");
     }
-    if (searchable && view.search) { setTimeout(() => view.search.focus(), 0); }
+    // 焦点落在面板本身，不进那个筛选框（以前打开就把光标放进筛选框）：手机上一弹键盘，
+    // 可视高度被压掉一截，这层（高度跟着内容、最高 80vh）就跟着缩成很小一块。
+    // 给面板一个落脚处是必要的：焦点留在底下那个输入框里的话，敲字 / 回车就喂给对话了。
+    // 要筛就在弹窗里点一下那个框。
+    if (!toDock && view.panel) { setTimeout(() => view.panel.focus({ preventScroll: true }), 0); }
   }
   // 点遮罩收起来：只管浮层那份（常驻那一列不靠点外面收：它不是浮层，那颗 <<< 与面板里那颗叉才管收）
   modalView.root.addEventListener("click", (e) => {

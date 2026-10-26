@@ -140,7 +140,7 @@ ${chatColumnClose}  <div id="sidebarDock" class="pk-host pk-drawer pk-workspace"
     </div>
   </div>
   <div id="pickerOverlay" class="pk-host hidden">
-    <div id="pickerPanel" class="pk-panel">
+    <div id="pickerPanel" class="pk-panel" tabindex="-1">
       <div id="pickerHeader" class="pk-header"><span id="pickerTitle" class="pk-header-title">选择</span></div>
       <div id="pickerSubtitle" class="pk-subtitle hidden"></div>
       <div id="pickerSearchWrap" class="pk-search-wrap"><input id="pickerSearch" class="pk-search" type="text" placeholder="筛选…" autocomplete="off" spellcheck="false" /></div>

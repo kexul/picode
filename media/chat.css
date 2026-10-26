@@ -742,6 +742,9 @@
   /* 通用拾取器浮层（模型 / 历史 / 选项） */
   #pickerPanel, .pk-panel { display: flex; flex-direction: column; }
   #pickerPanel { width: min(720px, 94vw); max-height: 80vh; }
+  /* 面板本身能接焦点（tabindex="-1"）：不弹键盘的几层（如「切换模型」）把光标停在这里，
+     免得打字落到底下那个输入框里。它自己不要那圈黑边。 */
+  #pickerPanel:focus { outline: none; }
   /* 历史会话与「项目与会话」：不居中，改成从右侧滑进来的面板。面板整屏高、贴右边，窄一些
      （上面那条默认居中是挂在 .pk-host 上的，这里同样是两颗类，压得住）。 */
   .pk-host.pk-drawer { align-items: stretch; justify-content: flex-end; }
