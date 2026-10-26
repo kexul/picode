@@ -1080,6 +1080,20 @@
     return n;
   }
 
+  /**
+   * 这个会话派出去的子会话里，有几个已经跑完了（第一轮结束、结果交回去了，会话还留着）。
+   * 顶条那颗小点用它：没有子会话在跑的时候点亮一颗绿点（不闪），一眼知道活干完了。
+   */
+  function doneChildCount(id) {
+    let n = 0;
+    for (const s of sessions.values()) {
+      if (s.parentId !== id) { continue; }
+      if (s.streaming || s.loading) { continue; }
+      if (s.taba && s.taba.state === "waiting") { n++; }
+    }
+    return n;
+  }
+
   /** 顶条中间那行字：当前会话名（带在跑的小点；主会话多过一个就再挂一颗朝下的小箭头）。 */
   function renderSessionBar() {
     const st = activeId ? sessions.get(activeId) : null;
@@ -1088,9 +1102,14 @@
     if (textEl) { textEl.textContent = text; }
     // 派出去的子会话还有几个在跑：写在小点下面（零个就空着，那一格自己收起来）。
     const kids = st ? runningChildCount(st.id) : 0;
+    // 跑完了的（结果已交回）：没有在跑的时候那颗点变绿，写完的数量也让人知道有几个
+    const doneKids = st ? doneChildCount(st.id) : 0;
     const countEl = sessionNameBtn.querySelector(".sn-count");
     if (countEl) { countEl.textContent = kids > 0 ? String(kids) : ""; }
-    sessionNameBtn.title = "当前会话：" + text + (kids > 0 ? "，" + kids + " 个子会话在跑" : "") + "（点这里换会话）";
+    sessionNameBtn.title = "当前会话：" + text
+      + (kids > 0 ? "，" + kids + " 个子会话在跑" : "")
+      + (doneKids > 0 && kids === 0 ? "，" + doneKids + " 个子会话跑完了" : "")
+      + "（点这里换会话）";
     // 名字底下那行小字：当前会话跑在哪个目录（会话在别的项目里开的时候就看得出差别）。
     // 拿不到目录（列表还没到、会话已关）就不占行，顶条高度不跳。
     const dir = st && typeof st.cwd === "string" ? st.cwd : "";
@@ -1103,6 +1122,8 @@
     // 派出去的子会话还在跑：本会话自己闲着也把那颗点亮出来（一样呼吸），
     // 一眼看得出这一家子还在干活（等的是子会话，不是本会话在答）。
     sessionNameBtn.classList.toggle("child-running", kids > 0);
+    // 子会话跑完了、又没有谁在跑：那颗点变绿（不闪），活干完了看得出来
+    sessionNameBtn.classList.toggle("child-done", doneKids > 0);
     // 别的会话跑完了你没看（“有新消息”）：名字左边那颗小点亮着，不闪；切过去看就灭。
     // 当前这个会话正在跑时那颗点拿去闪了（streaming 优先），未读还得点开清单看。
     sessionNameBtn.classList.toggle("unread", Array.from(sessions.values()).some((s) => s.unread));
@@ -4081,11 +4102,12 @@
 
   /**
    * 「正在对话」这些行列首那颗小点的样式名（顶条下拉框与面板共用同一套）：
-   * 在跑＝蓝点呼吸，出错＝红点，有新消息（未读）＝蓝点不闪，其余不显示。
+   * 在跑＝蓝点呼吸，出错＝红点，跑完了＝绿点不闪，有新消息（未读）＝蓝点不闪，其余不显示。
    */
   function openDotClass(item) {
     if (item.streaming || item.loading) { return " running"; }
     if (item.taba && item.taba.state === "error") { return " error"; }
+    if (item.taba && item.taba.state === "waiting") { return " done"; }
     return item.unread ? " unread" : "";
   }
 

@@ -2,13 +2,14 @@
 /**
  * childDot —— 验顶条中间那颗会话名上的小点：本会话自己闲着、派出去的子会话还在跑时，
  * 那颗蓝点也亮着、也呼吸（以前只在本会话自己答的时候才亮），点下面那个小数字写着
- * 还有几个子会话在跑（零个时数字收起来、点也不亮）。
+ * 还有几个子会话在跑（零个时数字收起来、点也不亮）；子会话跑完了（结果已交回）、又没有
+ * 谁在跑时，同一颗点换成绿的、不闪。
  *
  * 只要验前端画得对不对，所以不真派子会话：直接往页面里投假的 sessionList
  * （跟后端推的是同一种消息）。六种情形各看一眼，类名 / 显示 / 动画 / 那个数字都打成文字，各裁一张小图：
  *   1 子会话在跑（running）        → 亮、呼吸、写 1
  *   2 刚派出去、任务还没发（starting）→ 亮、呼吸、写 1
- *   3 子会话跑完等着（waiting）    → 不亮、没数字
+ *   3 子会话跑完等着（waiting）    → 绿点、不闪、没数字
  *   4 子会话在跑 + 别的会话有新消息 → 亮、呼吸、写 1（呼吸优先，不变成不闪的那种）
  *   5 本会话自己在跑                → 亮、呼吸、没数字（数字只算子会话）
  *   6 两个子会话在跑 + 一个在等    → 亮、呼吸、写 2
@@ -77,6 +78,7 @@ module.exports = async (page) => {
     return {
       visible: cs.display !== "none",
       animation: cs.animationName,
+      bg: cs.backgroundColor,
       cls: btn.className,
       center: btn.querySelector(".sn-text").textContent,
       count: countEl ? countEl.textContent : null,
@@ -123,7 +125,7 @@ module.exports = async (page) => {
     },
     {
       id: "3-child-waiting", what: "子会话跑完等着",
-      want: { visible: false, animation: "none", count: "" },
+      want: { visible: true, animation: "none", count: "", bg: "green" },
       sessions: [session(), child("waiting", { streaming: false, activity: "idle" })],
     },
     {
@@ -154,13 +156,18 @@ module.exports = async (page) => {
   for (const c of CASES) {
     await inject(c.sessions, c.extra);
     const got = await dotState();
+    const rgb = (got.bg.match(/\d+/g) || []).map(Number);
+    // 主题变量各套不一样（VS Code 的深/浅色、假主题各是一份），所以只认“绿”这个方向：G 通道最大
+    const isGreen = rgb.length >= 3 && rgb[1] > rgb[0] && rgb[1] > rgb[2];
     const ok = got.visible === c.want.visible && got.animation === c.want.animation
       && got.count === c.want.count && got.countVisible === (c.want.count !== "")
+      && (c.want.bg === undefined || (c.want.bg === "green" ? isGreen : got.bg === c.want.bg))
       && (c.want.count === "" || got.title.includes(c.want.count + " 个子会话在跑"));
     if (!ok) { bad++; }
     const file = await shotBar(`child-dot-${c.id}.png`);
     console.log(
       `${ok ? "√" : "×"} ${c.what}：小点 ${got.visible ? "亮" : "不亮"}、动画 ${got.animation === "pi-pulse" ? "呼吸" : got.animation === "none" ? "无" : got.animation}` +
+      `、颜色 ${got.bg}` +
       `、点下面写「${got.countVisible ? got.count : "（没有数字）"}」（按钮类名 "${got.cls}"，顶条中间写着「${got.center}」）→ ${path.basename(file)}`
     );
   }
@@ -233,5 +240,44 @@ module.exports = async (page) => {
       `中线差 ${offX.toFixed(1)}px）、不冒出目录那行（数字底 ${pos2.countBottom.toFixed(1)}、目录底 ${pos2.pathBottom.toFixed(1)}）`
     );
   }
+  // ---- 「项目与会话」面板里子会话那一行行首的点：跑完了也该是绿的 ----
+  await inject([session(), child("waiting", { streaming: false, activity: "idle" })]);
+  // 右边那一列可能已经常驻开着（宽窗默认开着、这是这台设备记下的）：只有收着才去展开它
+  await page.eval(`
+    if (!document.body.classList.contains("dock-sidebar") && window.pichatSidebar && window.pichatSidebar.toggle) {
+      window.pichatSidebar.toggle();
+    }
+    return true;
+  `);
+  await page.sleep(300);
+  // 常驻那一列要先跟宿主再要一份面板内容（openWorkspace 跑一圈）：等到行出来为止
+  for (let i = 0; i < 20; i++) {
+    const n = await page.eval(`return document.querySelectorAll(".pk-item").length;`);
+    if (n > 0) { break; }
+    await page.sleep(250);
+  }
+  const panelRow = await page.eval(`
+    const row = document.querySelector(".pk-open-child");
+    if (!row) { return { found: false, items: document.querySelectorAll(".pk-item").length }; }
+    const el = row.querySelector(".pk-open-dot");
+    const cs = getComputedStyle(el);
+    return {
+      found: true, cls: el.className, bg: cs.backgroundColor,
+      shown: el.getBoundingClientRect().width > 0,
+      name: (row.querySelector(".pk-history-title") || {}).textContent || "",
+    };
+  `);
+  {
+    const rgb2 = ((panelRow.bg || "").match(/\d+/g) || []).map(Number);
+    const green = rgb2.length >= 3 && rgb2[1] > rgb2[0] && rgb2[1] > rgb2[2];
+    const ok = panelRow.found && panelRow.shown && green && /\bdone\b/.test(panelRow.cls);
+    if (!ok) { bad++; }
+    console.log(
+      `${ok ? "√" : "×"} 面板里子会话那一行行首的点：跑完了${panelRow.found ? `亮${green ? "绿" : "的却是 " + panelRow.bg}` : "没找到那一行（只有 " + panelRow.items + " 行）"}` +
+      (panelRow.found ? `（类名 "${panelRow.cls}"，行里写着「${panelRow.name}」）` : "")
+    );
+  }
+  await page.shot("child-dot-7-panel.png");
+
   if (bad > 0) { throw new Error(`有 ${bad} 处画得不对（见上面 × 那几行）`); }
 };
