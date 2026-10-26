@@ -32,6 +32,12 @@ export interface PiConfig {
      * 空串或缺省表示判官起不来（目标循环会停下并告诉用户原因）。
      */
     goalExtension?: string;
+    /**
+     * 自动起标题那个 pi 扩展文件的路径（插件写在 pichat 目录里）。
+     * 只有主会话加载它：第一轮跑完让模型起个短标题写进会话名。
+     * 子会话、判官不带（它们的名字由派活那边给）。空串或缺省表示不起标题。
+     */
+    titleExtension?: string;
 }
 
 /**

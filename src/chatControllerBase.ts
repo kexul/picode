@@ -536,9 +536,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const extraArgs = cfg.trustProject
             ? [...cfg.extraArgs, "--approve"]
             : [...cfg.extraArgs];
-        // 备用进程也要带上那两个扩展：它会被下一个新 panel 领走，那个 panel 一样得能派活、能问用户
+        // 备用进程也要带上那几个扩展：它会被下一个新 panel 领走，那个 panel 一样得能派活、能问用户、
+        // 跑完第一轮能起标题（扩展只在进程启动时加载，领走以后没法补）
         if (cfg.tabaExtension) { extraArgs.push("-e", cfg.tabaExtension); }
         if (cfg.askExtension) { extraArgs.push("-e", cfg.askExtension); }
+        if (cfg.titleExtension) { extraArgs.push("-e", cfg.titleExtension); }
         const client = new PiClient({
             piPath: cfg.piPath,
             cwd: this.getCwd(),

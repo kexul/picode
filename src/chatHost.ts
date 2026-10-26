@@ -22,7 +22,7 @@ import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase, type ViewOptionItem } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
-import { getAskAssets, getGoalAssets, getTabaAssets } from "./bridgeAssets";
+import { getAskAssets, getGoalAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
 import {
     listProjectDirs,
@@ -211,6 +211,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const taba = cfg.tabaEnabled ? getTabaAssets() : undefined;
         const ask = getAskAssets();
         const goal = getGoalAssets();
+        const title = getTitleAssets();
         return {
             piPath: cfg.piPath,
             provider: cfg.provider,
@@ -223,6 +224,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             askDir: ask?.ok ? ask.resourceDir : "",
             // 目标（/goal）的判官工具：只给判官会话加载（普通会话没有 update_goal）
             goalExtension: goal?.ok ? goal.extensionPath : "",
+            // 自动起标题：只给主会话加载（子会话、判官不带）
+            titleExtension: title?.ok ? title.extensionPath : "",
         };
     }
 
