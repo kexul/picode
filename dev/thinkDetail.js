@@ -65,7 +65,7 @@ function hideTip(page) {
     `);
 }
 
-/** 等到模型这一轮停下来（圆环回到 idle）。 */
+/** 等到模型这一轮停下来（胶囊回到 idle）。 */
 async function waitIdle(page, timeoutMs) {
     const limit = Date.now() + (timeoutMs || 90000);
     while (Date.now() < limit) {
@@ -76,7 +76,7 @@ async function waitIdle(page, timeoutMs) {
     return false;
 }
 
-/** 发一句、等这一轮真跑完（先等它动起来：刚发出去那一下圆环还是闲着的，直接等 idle 会当场返回）。 */
+/** 发一句、等这一轮真跑完（先等它动起来：刚发出去那一下胶囊还是闲着的，直接等 idle 会当场返回）。 */
 async function sendAndWait(page, text) {
     await page.send(text);
     const limit = Date.now() + 15000;

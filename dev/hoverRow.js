@@ -143,7 +143,7 @@ module.exports = async (page) => {
         console.log(closed ? "Esc 还能把浮层关掉" : "Esc 关不掉了");
     }
 
-    // 「切换模型」那层（点输入框底下那颗圆环）：点开、当前模型那一行得是「待应用」那个样子，点一行不报错，Esc 能关
+    // 「切换模型」那层（点输入框底下那颗胶囊）：点开、当前模型那一行得是「待应用」那个样子，点一行不报错，Esc 能关
     await page.click("#ctxIcon");
     await page.sleep(1000);
     const model = JSON.parse(await page.eval(`

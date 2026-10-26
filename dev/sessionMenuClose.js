@@ -18,7 +18,7 @@ module.exports = async (page) => {
   await page.waitReady();
   await page.sleep(800);
 
-  // 输入框底下那颗圆环的 data-st：当前会话在跑的时候是 streaming（见 media/chat.js 的 ctxState）
+  // 输入框底下那颗胶囊的 data-st：当前会话在跑的时候是 streaming（见 media/chat.js 的 ctxState）
   const dataSt = () => page.eval(`
     const el = document.getElementById("ctxIcon");
     return el ? (el.getAttribute("data-st") || "") : "";

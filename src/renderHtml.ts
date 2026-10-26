@@ -44,23 +44,22 @@ const ICON_ARROW_DOWN = '<svg width="14" height="14" viewBox="0 0 16 16" xmlns="
 const ICON_CLOSE = '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.5 2.5 L13.5 13.5 M13.5 2.5 L2.5 13.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>';
 
 /**
- * 输入框底下那颗胶囊：当前模型 + 上下文用量（见 chat.js 的 syncStatus）。
+ * 输入框底下那颗胶囊：当前模型 + 上下文用量 + 生成速度（见 chat.js 的 syncStatus）。
  * 挂在 #inputRow（框底那条小横排）里，前头是新建会话那颗加号、后头是「你说过的话」。
- * 胶囊自己先是模型名（太长从尾巴省略），后面跟那颗圆环；
- * 圆环分两段：底下那圈淡的当底，上面那截弧有多长就表示用了多少
- * （pathLength="100"，所以 chat.js 直接拿百分比当 dashoffset 算，不用求周长）；
- * 中间那行小字就是整数百分比（不带 %，带了就顶出圈外；见 chat.js 的 syncStatus），
- * 没数的时候留空（三位数也不写：环太小、写不下，见 syncStatus 里那段注释）。
+ * 胶囊从左到右：模型名（太长从尾巴省略）、一条小横条（上下两层：上头写整数百分比、
+ * 下头是那条杠，填到哪儿就是用了多少）、这一轮的生成速度（多少 t/s）。
+ * 横条那格跟模型名那一行字差不多高——原来那颗圆环比模型名还大一圈。
  * 颜色（正常 / 黄 / 红）、提示文字、点击切模型都在 chat.js 里管。
  */
 function modelChipMarkup(): string {
-    return `      <button id="ctxIcon" type="button" data-st="loading" title="加载中…" aria-label="当前模型与上下文用量（点击切换模型）">` +
+    return `      <button id="ctxIcon" type="button" data-st="loading" title="加载中…" aria-label="当前模型、上下文用量与生成速度（点击切换模型）">` +
         `<span class="ci-name"></span>` +
-        `<svg viewBox="0 0 16 16" width="18" height="18" fill="none" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">` +
-        `<circle class="ci-track" cx="8" cy="8" r="6.4" pathLength="100"/>` +
-        `<circle class="ci-arc" cx="8" cy="8" r="6.4" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100" transform="rotate(-90 8 8)"/>` +
-        `<text class="ci-text" x="8" y="8" text-anchor="middle" dominant-baseline="central" font-size="6.2" fill="currentColor" stroke="none"></text>` +
-        `</svg></button>\n`;
+        `<span class="ci-meter">` +
+        `<span class="ci-text"></span>` +
+        `<span class="ci-bar"><span class="ci-fill"></span></span>` +
+        `</span>` +
+        `<span class="ci-tps"></span>` +
+        `</button>\n`;
 }
 
 export function renderHTML(opts: RenderHTMLOpts): string {
@@ -120,7 +119,7 @@ ${bodyTop}${chatColumnOpen}${sessionBar}  <div id="messages">
     <div id="queueBar" class="hidden"></div>
     <div id="imgPreview"></div>
     <!-- 输入那个圆角大盒子（#composer）：上半是打字的地方，下半一条小横排（#inputRow）。
-         横排里从左到右：新建会话那颗加号、当前模型那颗胶囊（模型名 + 圆环，点它切模型）、
+         横排里从左到右：新建会话那颗加号、当前模型那颗胶囊（模型名 + 用量横条 + 速度，点它切模型）、
          「你说过的话」（最后那颗由 chat.js 挂进来）。 -->
     <div id="composer">
       <div id="fileMenu" class="hidden"></div>

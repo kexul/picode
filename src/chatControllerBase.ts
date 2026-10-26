@@ -1739,7 +1739,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             activityDetail: rt.activityDetail || "",
             piReady: rt.piReady,
             loading: !!rt.loading,
-            // 输入框底下那颗圆环恢复：webview 重建（视图隐藏重开/窗口重载）后 sessionList 是唯一信源，
+            // 输入框底下那颗胶囊恢复：webview 重建（视图隐藏重开/窗口重载）后 sessionList 是唯一信源，
             // 仅靠一次性 modelChanged 推送会导致模型名丢失
             modelId: rt.modelId,
             provider: rt.provider,

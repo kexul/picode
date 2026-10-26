@@ -198,13 +198,13 @@ export class SessionRuntime {
         return !this.hasConversation && !this.loading;
     }
 
-    // ---- 当前状态快照（跟着 sessionList 发给界面，界面自己画输入框底下那颗圆环）----
+    // ---- 当前状态快照（跟着 sessionList 发给界面，界面自己画输入框底下那颗胶囊）----
     private statusModelId?: string;
     private statusProvider?: string;
     private statusThinking?: string;
     private statusPercent?: number;
     /** 模型列表缓存：pi 启动时读一次 models.json，进程存活期间不变；
-     *  点击圆环弹选择器直接读缓存，避免每次都等 RPC 往返（多 panel 时尤其卡）。 */
+     *  点击胶囊弹选择器直接读缓存，避免每次都等 RPC 往返（多 panel 时尤其卡）。 */
     private cachedModels?: ModelInfo[];
     /** 命令列表缓存（get_commands）：供 / 命令菜单展示与简写改写；
      *  进程存活期间有效，attachClient 时失效并预取。 */
@@ -291,7 +291,7 @@ export class SessionRuntime {
     }
 
 
-    // ---- 状态快照只读视图（供 sessionList 携带，界面重建后恢复圆环）----
+    // ---- 状态快照只读视图（供 sessionList 携带，界面重建后恢复胶囊）----
     public get modelId(): string | undefined { return this.statusModelId; }
     public get provider(): string | undefined { return this.statusProvider; }
     public get thinkingLevel(): string | undefined { return this.statusThinking; }
@@ -448,7 +448,7 @@ export class SessionRuntime {
             this.host.broadcastSessionList();
             void this.sendCurrentModel();
             void this.refreshStats();
-            // 预取模型列表：点圆环选模型时直接读缓存，不等 RPC
+            // 预取模型列表：点胶囊选模型时直接读缓存，不等 RPC
             void this.refreshModels();
             // 预取命令列表（技能/模板/扩展命令）：/ 菜单与简写改写直接用缓存
             void this.refreshCommands();
@@ -1886,7 +1886,7 @@ export class SessionRuntime {
             if (!this.streaming) {
                 this.setActivity("idle");
             }
-            // 上下文用量变了：输入框底下那颗圆环的填充跟上
+            // 上下文用量变了：输入框底下那颗胶囊的横条跟上
             void this.refreshStats();
         }
     }

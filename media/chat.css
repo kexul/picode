@@ -1254,38 +1254,51 @@
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
   }
 
-  /* 输入框底下那颗胶囊：当前模型 + 上下文用量（原来它是顶条最左边那颗光秃的圆环，
+  /* 输入框底下那颗胶囊：当前模型 + 上下文用量 + 生成速度（原来它是顶条最左边那颗光秃的圆环，
      现在搬到框底那条横排里、跟模型名合成一颗胶囊 —— 见 renderHtml 的 #composer）。
-     胶囊里先是模型名，后面跟那颗小圆环（名前环后：模型名是主，环只是顺便一眼）。
-     环填多满 = 上下文用了多少（≥70% 黄、≥90% 红），环里写整数百分比；
-     模型全名 / 精确百分比 / 速度全在悬浮提示里；还没就绪（加载中 / 等 pi 起来 / 没配模型）
-     时环空着、淡下去，同样能点。点它切当前会话的模型。 */
+     胶囊从左到右：模型名、一条小横条（上头写百分比、下头那条杠填到哪儿就是用了多少）、
+     这一轮的 t/s。横条那格跟模型名那一行字差不多高：原来是颗比模型名还大一圈的圆环。
+     用量 ≥70% 黄、≥90% 红；精确百分比 / 速度 / 模型全名在悬浮提示里；
+     还没就绪（加载中 / 等 pi 起来 / 没配模型）时横条空着、淡下去，同样能点。
+     点它切当前会话的模型。 */
   #ctxIcon {
     flex: 0 1 auto; min-width: 0; max-width: 70%;
-    display: inline-flex; align-items: center; gap: 5px;
+    display: inline-flex; align-items: center; gap: 6px;
     height: 26px; padding: 0 4px 0 6px;
     background: transparent; border: none; border-radius: 13px; cursor: pointer;
     font-family: inherit; font-size: 0.86em;
     color: var(--vscode-descriptionForeground, #999);
   }
   #ctxIcon:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); color: var(--vscode-foreground); }
-  /* 圆环跟旁边那两颗按钮的图标一样大（外径 ~16px）：环里还装着一行百分比，
-     真缩到跟它们一样小，三位数就挤到压线了。 */
-  #ctxIcon svg { width: 18px; height: 18px; flex: 0 0 auto; display: block; }
-  /* 环前面那个模型名：这一堆里唯一会缩的东西（胶囊封顶 70% 宽，长了从尾巴省略） */
+  /* 模型名：这一堆里唯一会缩的东西（胶囊封顶 70% 宽，长了从尾巴省略） */
   #ctxIcon .ci-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* 环中间那行百分比：用界面字体（等宽字体里的中文 / 数字在小字号下不匀），数字对齐 */
+  /* 用量那一格：上下两层（上头数字、下头横杠），加起来跟旁边那行字差不多高 */
+  #ctxIcon .ci-meter { flex: 0 0 auto; display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: 30px; }
+  /* 上头那行百分比：用界面字体（等宽字体里的中文 / 数字在小字号下不匀），数字对齐 */
   #ctxIcon .ci-text {
     font-family: var(--vscode-font-family, system-ui, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif);
     font-variant-numeric: tabular-nums; letter-spacing: -0.15px;
+    font-size: 0.76em; line-height: 1; text-align: center;
   }
-  /* 底下那圈淡底 + 上面那截弧，两段都用这颗按钮的 currentColor 画 */
-  #ctxIcon .ci-track { stroke: currentColor; opacity: 0.25; }
-  #ctxIcon .ci-arc { stroke: currentColor; transition: stroke-dashoffset 200ms ease; }
+  /* 下头那条杠：淡底（::before）+ 上面那截填满的（.ci-fill），两段都用这颗按钮的 currentColor 画。
+     淡底不能挂在 .ci-bar 自己身上：父级的 opacity 会把里头那截实心的也一起淡下去。 */
+  #ctxIcon .ci-bar { position: relative; height: 3px; border-radius: 2px; }
+  #ctxIcon .ci-bar::before { content: ""; position: absolute; inset: 0; border-radius: 2px; background: currentColor; opacity: 0.25; }
+  #ctxIcon .ci-fill {
+    position: absolute; inset: 0 auto 0 0; width: 0; border-radius: 2px;
+    background: currentColor; transition: width 200ms ease;
+  }
+  /* 这一轮的生成速度：跟上头那个百分比一样大（不然它比旁边那行字还高一头）；没数的时候空着（空着就不占地方） */
+  #ctxIcon .ci-tps {
+    flex: 0 0 auto; white-space: nowrap;
+    font-family: var(--vscode-font-family, system-ui, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif);
+    font-variant-numeric: tabular-nums; font-size: 0.76em;
+  }
+  #ctxIcon .ci-tps:empty { display: none; }
   #ctxIcon.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
   #ctxIcon.err { color: var(--vscode-errorForeground, #f14c4c); }
   #ctxIcon[data-st="loading"], #ctxIcon[data-st="wait"], #ctxIcon[data-st="nomodel"] { opacity: 0.55; }
-  @media (prefers-reduced-motion: reduce) { #ctxIcon .ci-arc { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { #ctxIcon .ci-fill { transition: none; } }
   /* 工具结果内联图片（read 读图等）：缩略图 + 点击放大 */
   .tc-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }
   .tc-img { max-width: 100%; max-height: 320px; border-radius: 6px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); background: rgba(128,128,128,0.08); cursor: zoom-in; }

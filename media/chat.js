@@ -882,6 +882,10 @@
       modelId: "",
       provider: "",
       thinkingLevel: "",
+      // 生成速度（t/s）：tps 是上一轮的最终均值，tpsStart / tpsTokens 是这一轮（正在跑时）的起点与累计估算 token 数
+      tps: undefined,
+      tpsStart: 0,
+      tpsTokens: 0,
       // 目标（/goal）：goal 是这个会话的目标状态（后端推来，见 case "goal"），
       // goalOpen 是目标条展不展开（点一下换一面）。
       goal: null,
@@ -3850,12 +3854,43 @@
     const prov = (st && st.provider) || "";
     return (prov ? prov + "/" : "") + id + (st.thinkingLevel ? "/" + st.thinkingLevel : "");
   }
-  // ==================== 输入框底下那颗胶囊：模型名 + 上下文用量 ====================
+  // ==================== 生成速度（t/s） ====================
+  // 按流式增量估算：CJK 一个字算一个 token，其余四个字符算一个（真 token 数只有模型自己知道）。
+  // 每轮开始清零（streamStart），跑的过程中算这一轮的实时均值、每 250ms 刷一下那行读数；
+  // 跑完（streamEnd）结算成这一轮的最终均值留在 st.tps，下一轮开始前一直挂着给人看。
+  // 数写在哪里见 syncStatus（胶囊最右边）。
+  let tpsSyncAt = 0;
+  function estTokens(text) {
+    if (!text) { return 0; }
+    let cjk = 0;
+    for (let i = 0; i < text.length; i++) {
+      const c = text.charCodeAt(i);
+      if (c >= 0x3000 && c <= 0x9fff) { cjk++; }
+    }
+    return cjk + (text.length - cjk) / 4;
+  }
+  // 生成中算实时均值（开头那 0.3 秒数太少、会跳出离谱的大数，先不报），停下来用上一轮的最终均值
+  function currentTps(st) {
+    if (!st) { return undefined; }
+    if (st.streaming && st.tpsStart > 0 && st.tpsTokens > 0) {
+      const secs = (Date.now() - st.tpsStart) / 1000;
+      return secs > 0.3 ? (st.tpsTokens / secs) : undefined;
+    }
+    return st.tps;
+  }
+  // 增量来得很密，读数的重算做 250ms 节流（只有正在看的那个会话要算）
+  function noteTpsProgress(t) {
+    if (!t || t.id !== activeId) { return; }
+    const now = Date.now();
+    if (now - tpsSyncAt >= 250) { tpsSyncAt = now; syncStatus(); }
+  }
+  // ==================== 输入框底下那颗胶囊：模型名 + 上下文用量 + 生成速度 ====================
   // 原来每个会话底部占一整行状态栏，后来收成顶条左边一颗圆环，现在搬进输入框底下那条
   // 小横排里、跟模型名合成一颗胶囊（见 renderHtml 的 #composer / #ctxIcon）：
-  // 环填多满 = 上下文用了多少（≥70% 黄、≥90% 红），环里写整数百分比，环右边是模型名；
-  // 模型全名、精确百分比、生成速度都放悬浮提示里；点它切当前会话的模型。
-  // 它说的是当前会话（一次只看一个）：切会话、模型变了、用量变了都调 syncStatus 重刷。
+  // 左边是模型名，中间一条小横条（上头写百分比、下头那条杠填到哪儿就是用了多少，
+  // ≥70% 黄、≥90% 红），右边是这一轮的生成速度（t/s）；
+  // 模型全名、精确百分比也放悬浮提示里；点它切当前会话的模型。
+  // 它说的是当前会话（一次只看一个）：切会话、模型变了、用量变了、速度涨了都调 syncStatus 重刷。
   // 还没就绪的几种状态另挂在 data-st 上（loading / wait / nomodel / idle / streaming），
   // dev/ 那套调试工具靠它判断“可以发消息了”与“这轮跑完没”。
   function ctxPercent(st) {
@@ -3876,11 +3911,13 @@
     if (state === "nomodel") { return "未配置模型（点击选择）"; }
     const parts = [modelFullFor(st)];
     if (typeof st.percent === "number") { parts.push("上下文 " + st.percent.toFixed(1) + "%"); }
+    const tps = currentTps(st);
+    if (typeof tps === "number") { parts.push(tps.toFixed(1) + " t/s"); }
     return parts.join(" · ") + "\n点击切换模型";
   }
   /**
-   * 胶囊里那个模型名（环右边）。只写模型 id，全名 / 思考档在悬浮提示里（见 modelFullFor）。
-   * 还没就绪的几种状态写一句短的：不然胶囊里只剩一颗空环，点了也不知道会发生什么。
+   * 胶囊里那个模型名（横条左边）。只写模型 id，全名 / 思考档在悬浮提示里（见 modelFullFor）。
+   * 还没就绪的几种状态写一句短的：不然胶囊里只剩一条空横条，点了也不知道会发生什么。
    */
   function ctxName(st, state) {
     if (state === "loading") { return "加载中"; }
@@ -3900,17 +3937,18 @@
     ctxIconEl.title = ctxTitle(st);
     const name = ctxIconEl.querySelector(".ci-name");
     if (name) { name.textContent = ctxName(st, state); }
-    const arc = ctxIconEl.querySelector(".ci-arc");
-    if (arc) { arc.setAttribute("stroke-dashoffset", (100 - pct).toFixed(2)); }
-    // 环中间那个数：整数百分比（只写数字，百分比靠形状表达；带 % 就顶出圈外了），
-    // 没数（还没配模型 / 还没报过用量）就空着。三位数（100 那种）不写：环外径
-    // 只有 16px，可读字号写三个数字就压到弧线上（糊成一团），而满环本身已经说明了。
+    // 横条：填多满就是用了多少；条上头那行字写整数百分比（横条这儿放得下，就带个 %，
+    // 不看形状也认得出来）。还没量出来（没配模型 / 还没报过用量）就空着。
+    const known = (state === "idle" || state === "streaming") && typeof st.percent === "number";
+    const fill = ctxIconEl.querySelector(".ci-fill");
+    if (fill) { fill.style.width = known ? pct.toFixed(1) + "%" : "0%"; }
     const num = ctxIconEl.querySelector(".ci-text");
-    if (num) {
-      const known = (state === "idle" || state === "streaming") && typeof st.percent === "number";
-      const text = known ? String(Math.round(pct)) : "";
-      num.textContent = text.length > 2 ? "" : text;
-      num.setAttribute("font-size", "7.8");
+    if (num) { num.textContent = known ? Math.round(pct) + "%" : ""; }
+    // 跑多快：生成中是这一轮的实时均值，停下来就留着这一轮最后的均值，没跑过就空着（见 currentTps）。
+    const speed = ctxIconEl.querySelector(".ci-tps");
+    if (speed) {
+      const tps = currentTps(st);
+      speed.textContent = typeof tps === "number" ? tps.toFixed(1) + " t/s" : "";
     }
   }
 
@@ -7860,7 +7898,7 @@
       if (st) { scrollToBottom(st, true); }
     });
   }
-  // 输入框底下那颗圆环的点击：切当前会话的模型。
+  // 输入框底下那颗胶囊的点击：切当前会话的模型。
   if (ctxIconEl) {
     ctxIconEl.addEventListener("click", () => {
       const st = activeSession();
@@ -8081,7 +8119,7 @@
         if (!st.goal) { st.goalOpen = false; }
         syncSessionLoading(st);
         // 界面重建（网页重连、视图隐藏重开、窗口重载）后 sessionList 是唯一信源：
-        // modelChanged 是一次性推送，不在此恢复会导致输入框底下那颗圆环的模型名丢失。
+        // modelChanged 是一次性推送，不在此恢复会导致输入框底下那颗胶囊的模型名丢失。
         // 字段缺失（后端尚未拿到）时保留本地已有值。
         if (typeof s.modelId === "string") { st.modelId = s.modelId; }
         if (typeof s.provider === "string") { st.provider = s.provider; }
@@ -8347,6 +8385,12 @@
         t.noCountPop = false;   // 模型开始回了：这一轮里后面长出来的次数都是新的
         t.activity = msg.activity || "working";
         t.activityDetail = msg.detail || "";
+        // 新一轮生成：速度计时从头开始（重放的旧轮次不算：那批增量是“一口气倒过来”的，算出来是天文数字）
+        if (!t.replayNow) {
+          t.tps = undefined;
+          t.tpsStart = Date.now();
+          t.tpsTokens = 0;
+        }
         setStreaming(t, true);
         finalizeCurrentAssistant(t);
         endThinking(t, "");
@@ -8355,6 +8399,13 @@
         if (t.rafId) { flushDeltas(t); }
         finalizeCurrentAssistant(t);
         endThinking(t, "");   // 想一半被中止（或后端没发收尾）：标签也得停住
+        // 结算这一轮的速度均值（得在 setStreaming(false) 前算：之后 currentTps 改用 t.tps）
+        if (!t.replayNow) {
+          const secs = t.tpsStart > 0 ? (Date.now() - t.tpsStart) / 1000 : 0;
+          if (t.tpsTokens > 0 && secs > 0.3) { t.tps = t.tpsTokens / secs; }
+          t.tpsStart = 0;
+          t.tpsTokens = 0;
+        }
         t.activity = msg.activity || "idle";
         t.activityDetail = msg.detail || "";
         setStreaming(t, false);
@@ -8373,6 +8424,7 @@
         t.currentAssistant.raw += msg.delta;
         t.textDirty = true;
         scheduleFlush(t);
+        if (!t.replayNow) { t.tpsTokens += estTokens(msg.delta); noteTpsProgress(t); }
         break;
       case "assistantFull":
         finalizeCurrentAssistant(t);
@@ -8395,6 +8447,8 @@
           thinking.clip = { key: thinking.clipKey, omitted: msg.omitted, loaded: false, failed: false };
         }
         refreshTagTipIfShowing(thinking.group.tag);   // 提示框开着时跟着长大
+        // 思考也是模型在吐字，一样算进这轮速度；尾巴上的全文（thinkingFull）不再重算
+        if (!t.replayNow) { t.tpsTokens += estTokens(msg.delta); noteTpsProgress(t); }
         break;
       }
       case "thinkingFull":
@@ -8693,7 +8747,7 @@
         scheduleKeep();
         break;
       case "stats": {
-        // 上下文用量：输入框底下那颗圆环（用量百分比与颜色预警）
+        // 上下文用量：输入框底下那颗胶囊（用量百分比与颜色预警）
         const cu = msg.contextUsage;
         if (cu) {
           if (typeof cu.percent === "number") { t.percent = cu.percent; }
