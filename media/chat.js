@@ -2368,7 +2368,8 @@
     let g = batch.byName.get(toolName);
     if (!g || g.tag.parentElement !== row) {
       const tag = document.createElement("span");
-      tag.className = "tool tool-group";
+      // 思考那颗标签自己带个名字：它是唯一会转圈的标签（见 chat.css 的 .tool-think.running）
+      tag.className = "tool tool-group" + (toolName === THINKING_NAME ? " tool-think" : "");
       tag.insertAdjacentHTML("afterbegin", GEAR_SVG);
       const nameEl = document.createElement("span");
       nameEl.className = "tg-name";

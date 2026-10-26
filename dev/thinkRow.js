@@ -50,6 +50,16 @@ function dump(page) {
     `);
 }
 
+/** 页面上那个标签的齿轮现在动不动：CSS 动画的名字（停着就是 "none"）。
+ *  「转圈」那两个字只看标签有没有 running 这个 class，看不出齿轮真在不在转。 */
+function gearSpin(page, name) {
+    return page.eval(`
+        const el = Array.from(document.querySelectorAll(".tool-group")).find((t) => t.textContent.trim().startsWith(${JSON.stringify(name)}));
+        if (!el) { throw new Error("页面上没有这个标签：" + ${JSON.stringify(name)}); }
+        return getComputedStyle(el.querySelector(".tool-icon")).animationName;
+    `);
+}
+
 /** 提示框里现在写着什么（没出来就说明没挂上）。 */
 function tipText(page) {
     return page.eval(`
@@ -133,6 +143,8 @@ module.exports = async (page) => {
     await leaveTag(page, "think");
     await page.sleep(250);
     if (!(await dump(page)).includes("[think 转圈]")) { problems.push("正在想的时候 think 标签没转圈"); }
+    const liveSpin = await gearSpin(page, "think");
+    if (liveSpin !== "tool-spin") { problems.push("正在想的时候 think 那颗齿轮没在转（animationName=" + liveSpin + "）"); }
     if (!runningTip.includes("先看要改哪几处")) { problems.push("正在想的时候提示框里没跟着长出来"); }
 
     await post(page, [
@@ -154,6 +166,8 @@ module.exports = async (page) => {
     await leaveTag(page, "think");
     await page.sleep(250);
     if (!merged.includes("工具行：[think2][bash][read]")) { problems.push("同批两段思考没收成一个带次数 2 的标签，或没跟工具排在同一条行里"); }
+    const doneSpin = await gearSpin(page, "think");
+    if (doneSpin !== "none") { problems.push("想完了 think 那颗齿轮还转（animationName=" + doneSpin + "）"); }
     if (!mergedTip.includes("先看要改哪几处") || !mergedTip.includes("编译过了")) { problems.push("合并标签的提示框里没把两段思考都列出来"); }
 
     // ---- 第四幕：正文之后又来一段思考（只来一条全文，没有开始事件）→ 先在末尾出一颗；

@@ -286,6 +286,9 @@
      正在做什么由下面那条「正在跑的那一条」说（那颗齿轮才转，见 .tool-running-item）。
      两处一起转会让人盯不过来。 */
   .tool.running { opacity: 1; }
+  /* think 那一颗是例外，它转：思考的时候不另出「正在跑的那一条」（见 chat.js 的 RUNNING_LINE_SKIP，
+     那种时候没东西可在那条上说），界面上就一处都不转了。想完（running 摘掉）齿轮停住。 */
+  .tool-think.running .tool-icon { animation: tool-spin 1.1s linear infinite; }
   @keyframes tool-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .tool.error { opacity: 1; color: var(--vscode-errorForeground, #f48771); }
   /* 改动被回滚了：这一组的标签划掉（一组里有没回滚的就不划，见 chat.js 的 syncGroupTag） */
