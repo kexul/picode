@@ -10,7 +10,7 @@
  *   1 子会话在跑（running）        → 亮、呼吸、写 1
  *   2 刚派出去、任务还没发（starting）→ 亮、呼吸、写 1
  *   3 子会话跑完等着（waiting）    → 绿点、不闪、没数字
- *   4 子会话在跑 + 别的会话有新消息 → 亮、呼吸、写 1（呼吸优先，不变成不闪的那种）
+ *   4 子会话在跑 + 别的会话跑完了 → 亮、呼吸、写 1（呼吸优先，不被别的会话那颗绿点顶掉）
  *   5 本会话自己在跑                → 亮、呼吸、没数字（数字只算子会话）
  *   6 两个子会话在跑 + 一个在等    → 亮、呼吸、写 2
  *   7 本会话这一轮跑完了（turnEnd done）→ 绿点、不闪、没数字
@@ -60,7 +60,7 @@ function child(state, over) {
   }, over));
 }
 
-/** 另一个主会话（case 4 用它造“别的会话有新消息”）。 */
+/** 另一个主会话（case 4 用它造“别的会话跑完了”）。 */
 function other(over) {
   return session(Object.assign({ id: "p2", name: "另一个会话" }, over));
 }
@@ -130,10 +130,10 @@ module.exports = async (page) => {
       sessions: [session(), child("waiting", { streaming: false, activity: "idle" })],
     },
     {
-      id: "4-child-running-unread", what: "子会话在跑 + 别的会话有新消息",
+      id: "4-child-running-other-done", what: "子会话在跑 + 别的会话跑完了",
       want: { visible: true, animation: "pi-pulse", count: "1" },
       sessions: [session(), child("running"), other()],
-      // 别的会话跑完一轮：页面把「有新消息」标上（这时顶条那颗点本该“亮着不闪”）
+      // 别的会话跑完一轮：它那一行变绿，但顶条这颗只看当前会话（p1），照旧蓝点呼吸
       extra: [{ type: "turnEnd", sessionId: "p2", status: "done", text: "跑完了一轮" }],
     },
     {
@@ -155,7 +155,7 @@ module.exports = async (page) => {
       id: "7-self-done", what: "本会话这一轮跑完了",
       want: { visible: true, animation: "none", count: "", bg: "green" },
       sessions: [session()],
-      // 跑完一轮的通知：当前正看着的就是 p1，所以不标“有新消息”，那颗点变绿
+      // 跑完一轮的通知：现在不管当时看着哪个会话都是绿点
       extra: [{ type: "turnEnd", sessionId: "p1", status: "done", text: "跑完了一轮" }],
     },
   ];
@@ -272,8 +272,9 @@ module.exports = async (page) => {
       `中线差 ${offX.toFixed(1)}px）、不冒出目录那行（数字底 ${pos2.countBottom.toFixed(1)}、目录底 ${pos2.pathBottom.toFixed(1)}）`
     );
   }
-  // ---- 「项目与会话」面板里子会话那一行行首的点：跑完了也该是绿的 ----
-  await inject([session(), child("waiting", { streaming: false, activity: "idle" })]);
+  // ---- 「项目与会话」面板里的行首点：跑完了（子会话、别的会话）都该是绿的，当前在跑的那个不绿 ----
+  await inject([session(), child("waiting", { streaming: false, activity: "idle" }), other()],
+    [{ type: "turnEnd", sessionId: "p2", status: "done", text: "跑完了一轮" }]);
   // 右边那一列可能已经常驻开着（宽窗默认开着、这是这台设备记下的）：只有收着才去展开它
   await page.eval(`
     if (!document.body.classList.contains("dock-sidebar") && window.pichatSidebar && window.pichatSidebar.toggle) {
@@ -288,26 +289,31 @@ module.exports = async (page) => {
     if (n > 0) { break; }
     await page.sleep(250);
   }
-  const panelRow = await page.eval(`
-    const row = document.querySelector(".pk-open-child");
-    if (!row) { return { found: false, items: document.querySelectorAll(".pk-item").length }; }
-    const el = row.querySelector(".pk-open-dot");
-    const cs = getComputedStyle(el);
-    return {
-      found: true, cls: el.className, bg: cs.backgroundColor,
-      shown: el.getBoundingClientRect().width > 0,
-      name: (row.querySelector(".pk-history-title") || {}).textContent || "",
-    };
-  `);
+  const panelDots = JSON.parse(await page.eval(`
+    return JSON.stringify(Array.from(document.querySelectorAll(".pk-item.pk-open")).map((row) => {
+      const el = row.querySelector(".pk-open-dot");
+      const cs = getComputedStyle(el);
+      return {
+        name: (row.querySelector(".pk-history-title") || {}).textContent || "",
+        cls: el.className, bg: cs.backgroundColor, shown: el.getBoundingClientRect().width > 0,
+      };
+    }));
+  `));
   {
-    const rgb2 = ((panelRow.bg || "").match(/\d+/g) || []).map(Number);
-    const green = rgb2.length >= 3 && rgb2[1] > rgb2[0] && rgb2[1] > rgb2[2];
-    const ok = panelRow.found && panelRow.shown && green && /\bdone\b/.test(panelRow.cls);
-    if (!ok) { bad++; }
-    console.log(
-      `${ok ? "√" : "×"} 面板里子会话那一行行首的点：跑完了${panelRow.found ? `亮${green ? "绿" : "的却是 " + panelRow.bg}` : "没找到那一行（只有 " + panelRow.items + " 行）"}` +
-      (panelRow.found ? `（类名 "${panelRow.cls}"，行里写着「${panelRow.name}」）` : "")
-    );
+    // 跑完的那两行（子会话、别的会话）该是绿点；当前这个（p1，正看着、没在跑）不该亮
+    const want = { "侦察: 认证模块": true, "另一个会话": true, "主会话": false };
+    for (const [name, green] of Object.entries(want)) {
+      const row = panelDots.find((r) => r.name === name);
+      const rgb2 = ((row && row.bg || "").match(/\d+/g) || []).map(Number);
+      const isGreen = rgb2.length >= 3 && rgb2[1] > rgb2[0] && rgb2[1] > rgb2[2];
+      const ok = !!row && (green ? isGreen && /\bdone\b/.test(row.cls) : !/\b(done|running|error)\b/.test(row.cls));
+      if (!ok) { bad++; }
+      console.log(
+        `${ok ? "√" : "×"} 面板里「${name}」那一行行首的点：` +
+        (row ? `${/\b(done|running|error)\b/.test(row.cls) ? `亮${isGreen ? "绿" : "的却是 " + row.bg}` : "不亮"}（类名 "${row.cls}"）` : "没有这一行") +
+        `，期望${green ? "绿点" : "不亮"}`
+      );
+    }
   }
   await page.shot("child-dot-7-panel.png");
 

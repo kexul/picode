@@ -635,7 +635,7 @@
   /** 这台设备现在能不能发通知，不能的话人话说明为什么（写给设置里那一项看）。 */
   function notifyUnavailableNote() {
     try {
-      if (IN_WEBVIEW) { return "插件里的对话面板里发不了系统通知（那边看「有新消息」那颗点），浏览器页面里才有" };
+      if (IN_WEBVIEW) { return "插件里的对话面板里发不了系统通知（那边看名字旁边变绿的那颗点），浏览器页面里才有" };
       if (!canNotify()) { return "这台设备上用不了：浏览器只在 https 或本机地址下给通知权限（http 地址就是这样）"; }
       if (Notification.permission === "denied") { return "这台设备的浏览器把它拦了（在地址栏那个图标里可以放开）"; }
       if (Notification.permission !== "granted") { return "这台设备还没允许通知：点这一项会问一次"; }
@@ -660,7 +660,7 @@
         // 切会话是每块屏各管各的：本屏得自己跟后端说一声
         vscode.postMessage({ type: "switchSession", sessionId: sessionId });
       };
-    } catch (e) { /* 通知发不出去就算了，蓝点还在 */ }
+    } catch (e) { /* 通知发不出去就算了，那颗绿点还在 */ }
   }
 
   /** 一个会话跑完一轮。 */
@@ -846,9 +846,8 @@
       _stage: null,
       _stageDropped: false,
       streaming: false,
-      unread: false,
-      // 这一轮跑完了（你没在看它的时候那个会话不标，改标 unread）：名字旁边那颗点变绿。
-      // 切走 / 又开始跑下一轮就收掉。见 markTurnDone。
+      // 这一轮跑完了（不管是你在看着它跑完的，还是在别处时它跑完的）：名字旁边那颗点变绿。
+      // 看一眼（切到那个会话）或者又开始跑下一轮就收掉。见 markTurnDone。
       turnDone: false,
       activity: "idle",
       activityDetail: "",
@@ -1130,11 +1129,8 @@
     // 派出去的子会话还在跑：本会话自己闲着也把那颗点亮出来（一样呼吸），
     // 一眼看得出这一家子还在干活（等的是子会话，不是本会话在答）。
     sessionNameBtn.classList.toggle("child-running", kids > 0);
-    // 绿点：这一轮跑完了（你正看着它跑完的），或者派出去的子会话跑完了、又没有谁在跑
+    // 绿点：这一轮跑完了（不管当时有没有看着它），或者派出去的子会话跑完了、又没有谁在跑
     sessionNameBtn.classList.toggle("done", !!(st && st.turnDone) || doneKids > 0);
-    // 别的会话跑完了你没看（“有新消息”）：名字左边那颗小点亮着，不闪；切过去看就灭。
-    // 当前这个会话正在跑时那颗点拿去闪了（streaming 优先），未读还得点开清单看。
-    sessionNameBtn.classList.toggle("unread", Array.from(sessions.values()).some((s) => s.unread));
     // 就一个主会话时不必提示“这里能换”（点开还是同一张清单：里面就它自己）
     sessionCaret.classList.toggle("hidden", sessionMenuItems().length < 2);
     // 清单开着的时候它会跟着变（换会话、改标题、某个会话跑完了）：重画完还要重新摆——
@@ -1239,7 +1235,7 @@
         });
         el.appendChild(yes); el.appendChild(no);
       } else {
-        // 行尾不再挂「当前」/「在跑」：当前那条整行有底色，在跑 / 有新消息看名字前头那颗小点。
+        // 行尾不再挂「当前」/「在跑」：当前那条整行有底色，在跑 / 跑完了看名字前头那颗小点。
         // 行尾这颗叉：点行是切过去（大目标），点叉才关（会话正在跑时要再点一下勾）。
         const close = document.createElement("span");
         close.className = "sm-close";
@@ -4064,9 +4060,8 @@
     activeId = id;
     // 左边那一列看的是会话目录里的文件：换了会话就收成一句提示
     resetFileSidebarForSession();
-    // 看过了：那颗“有新消息”的小蓝点、那颗“这一轮跑完了”的小绿点都收掉
+    // 看过了：那颗“这一轮跑完了”的小绿点收掉
     const shown = sessions.get(id);
-    if (shown && shown.unread) { shown.unread = false; }
     if (shown && shown.turnDone) { shown.turnDone = false; }
     mountActiveSession();
     closeSaidMenu();   // 清单里排的是上一个会话说过的话：换了会话就收起来
@@ -4094,15 +4089,12 @@
 
   /**
    * 「正在对话」这些行列首那颗小点的样式名（顶条下拉框与面板共用同一套）：
-   * 在跑＝蓝点呼吸，出错＝红点，有新消息（未读）＝蓝点不闪，跑完了＝绿点不闪（主会话、子会话都是），
-   * 其余不显示。
+   * 在跑＝蓝点呼吸，出错＝红点，跑完了＝绿点不闪（主会话、子会话都是），其余不显示。
    */
   function openDotClass(item) {
     if (item.streaming || item.loading) { return " running"; }
     if (item.taba && item.taba.state === "error") { return " error"; }
-    if (item.unread) { return " unread"; }
-    if (item.turnDone) { return " done"; }
-    if (item.taba && item.taba.state === "waiting") { return " done"; }
+    if (item.turnDone || (item.taba && item.taba.state === "waiting")) { return " done"; }
     return "";
   }
 
@@ -4124,7 +4116,6 @@
         current: st.id === activeId,
         streaming: !!st.streaming,
         loading: !!st.loading,
-        unread: !!st.unread,
         turnDone: !!st.turnDone,
         taba: st.taba || null,
         depth,
@@ -4580,7 +4571,7 @@
     const files = Array.from(sessions.values()).map((t) => t.sessionFile || "").sort().join(",");
     return files + "\u0000" + items.map((it) => [
       it.sessionId, it.label || "", it.depth || 0, it.current ? 1 : 0,
-      it.streaming ? 1 : 0, it.loading ? 1 : 0, it.unread ? 1 : 0, it.turnDone ? 1 : 0,
+      it.streaming ? 1 : 0, it.loading ? 1 : 0, it.turnDone ? 1 : 0,
       (it.taba && it.taba.state) || "", it.pendingClose ? 1 : 0,
     ].join("|")).join("\n");
   }
@@ -7049,7 +7040,7 @@
         main.appendChild(dot);
         const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.label || "";
         main.appendChild(title);
-        // 行尾不再挂「当前」/「在跑」：当前那条靠整行的底色认，在跑 / 有新消息靠行首那颗小点。
+        // 行尾不再挂「当前」/「在跑」：当前那条靠整行的底色认，在跑 / 跑完了靠行首那颗小点。
         el.appendChild(main);
         if (item.pendingClose) {
           // 点过行尾那颗叉（这个会话正在跑，还得再点一下）：整行底色变红，行尾多一颗勾——点勾才真关，点叉撤销。
@@ -8100,20 +8091,8 @@
   // 初始：等待后端推送 sessionList / sessionActivated
 
   /**
-   * 某个会话有新消息了（它跑完一轮时你没有在看它）：名字那颗小蓝点亮着，不闪。
-   * 切过去看就灭（见 activateSessionView）。三处都跟着变：顶条、标题下拉框、面板。
-   */
-  function markSessionUnread(st) {
-    if (st.unread) { return; }
-    st.unread = true;
-    st.turnDone = false;
-    renderSessionBar();
-    refreshOpenSessionsInPicker();
-  }
-
-  /**
-   * 这个会话这一轮跑完了，而且你当时正看着它：名字旁边那颗点变绿（不闪），不标“有新消息”。
-   * 切走（算看过了）或者又开始跑下一轮就收掉。
+   * 这个会话这一轮跑完了：名字旁边那颗点变绿（不闪），不管当时你有没有看着它。
+   * 看一眼（切到那个会话）或者又开始跑下一轮就收掉。
    */
   function markTurnDone(st) {
     if (st.turnDone) { return; }
@@ -8352,22 +8331,17 @@
     // 走同一条路（会话还没就绪就先留着、就绪了自动补发）
     if (type === "sendFromHost") { sendFromHost(msg.text); return; }
     // 宿主在某个会话跑完一轮时下发的消息（所有会话都会收到，带 sessionId）：发一条系统通知，
-    // 你没在看那个会话就把它标成“有新消息”。子会话（别人派出去干活的）不提醒：它的结果会交回
-    // 派它的那个会话，那边跑完自会提醒；子会话缩进挂在父会话下面，标了反而多一颗点。
+    // 并把那个会话的名字旁边那颗点变绿（不管这块屏当时看着的是哪一个）。
+    // 子会话（别人派出去干活的）不提醒：它的结果会交回派它的那个会话，那边跑完自会提醒；
+    // 子会话缩进挂在父会话下面，标了反而多一颗点。
     // 是不是子会话由后端算（child）：子会话跑完常常紧接着就被关掉，这边按会话列表里的
     // parentId 判会赶不上——那时它的壳已经不在了。
     if (type === "turnEnd") {
       if (msg.child === true) { return; }
       notifyTurnEndFor(msg.sessionId, msg.status, msg.text, msg.name);
-      const done = msg.sessionId ? sessions.get(msg.sessionId) : null;
-      if (done) {
-        if (done.id !== activeId) {
-          markSessionUnread(done);
-        } else if (msg.status === "done") {
-          // 你正看着它跑完：那颗点变绿（自己按 Esc 停掉的那一轮不算跑完，不绿）
-          markTurnDone(done);
-        }
-      }
+      // 绿点只说“这一轮跑完了”：自己按 Esc 停掉的那一轮不算，不绿
+      const done = msg.sessionId && msg.status === "done" ? sessions.get(msg.sessionId) : null;
+      if (done) { markTurnDone(done); }
       return;
     }
     // 模型在某个会话里问了一道选择题（ask_choice）、正等着人答：同一条路由（每块屏都收到）。

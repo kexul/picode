@@ -361,7 +361,7 @@ export const PAGE_TRANSIENT_MESSAGE_TYPES: ReadonlySet<string> = new Set([
     "picker",                    // 浮层选择器
     "pickerCancel",              // 浮层超时取消
     "openSettings",              // 打开设置面板
-    "turnEnd",                   // 某个会话跑完了一轮（系统通知 + “有新消息”那颗点）
+    "turnEnd",                   // 某个会话跑完了一轮（系统通知 + 名字旁边那颗点变绿）
     "askWaiting",                // 某个会话里模型问了一道选择题（系统通知）：这条只是提醒，错过了还有卡片可补
     "changesChanged",            // 「改动」那一格该重问一遍清单了（纯提醒，重连后会自己去取）
     "restartStatus",             // 「编译并重启」那颗按钮的回话：走 sendTo 定向发给点它的那块屏，后端马上要退了

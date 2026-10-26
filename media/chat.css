@@ -173,10 +173,8 @@
      （子会话那种是本会话自己闲着、活在外面干，点亮着才知道没停）。 */
   #sessionName.streaming .sn-dot,
   #sessionName.child-running .sn-dot { display: inline-block; animation: pi-pulse 1.2s ease-in-out infinite; }
-  /* 别的会话有新消息：同一颗点，亮着但不闪（这颗点拿去闪的时候它不抢）。 */
-  #sessionName.unread:not(.streaming):not(.child-running) .sn-dot { display: inline-block; }
-  /* 跑完了：同一颗点换成绿的，也不闪 —— 绿 = 跑完了（这一轮结束，或者派出去的子会话回来了），
-     蓝闪 = 还在干，蓝不闪 = 别处有新消息。 */
+  /* 跑完了：同一颗点换成绿的，也不闪 —— 绿 = 这一轮跑完了（不管当时你有没有看着它），
+     蓝闪 = 还在干。 */
   #sessionName.done:not(.streaming):not(.child-running) .sn-dot {
     display: inline-block; background: var(--vscode-charts-green, #89d185);
   }
@@ -227,12 +225,11 @@
     font-size: 0.76em; opacity: 0.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     direction: rtl; text-align: left;
   }
-  /* 小点：在跑＝蓝点呼吸，跑完了＝绿点，有新消息＝蓝点不闪，出错＝红点，其余不显示（但位置留着，名字才对得齐）。 */
+  /* 小点：在跑＝蓝点呼吸，跑完了＝绿点，出错＝红点，其余不显示（但位置留着，名字才对得齐）。 */
   .sm-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; }
   .sm-dot.running { background: var(--vscode-charts-blue, #3794ff); animation: pi-pulse 1.2s ease-in-out infinite; }
   .sm-dot.error { background: var(--vscode-charts-red, #f14c4c); }
   .sm-dot.done { background: var(--vscode-charts-green, #89d185); }
-  .sm-dot.unread { background: var(--vscode-charts-blue, #3794ff); }
   /* 行尾那颗关闭叉：平时淡、悬停 / 触屏上变清楚（会话正在跑时点了先变确认条，再点一下才真关）。 */
   #sessionMenu .sm-close {
     flex: none; display: inline-flex; align-items: center; justify-content: center;
@@ -907,7 +904,7 @@
   /* 一行里：小点 · 名字 · 标记 · 关闭叉（叉在最右边，不会跟名字挤在一起）。 */
   .pk-host.pk-drawer .pk-item.pk-open { display: flex; align-items: center; gap: 4px; }
   .pk-host.pk-drawer .pk-item.pk-open .pk-history-main { flex: 1 1 auto; min-width: 0; }
-  /* 行首一颗小点：在跑＝蓝点呼吸；跑完了＝绿点；有新消息＝蓝点不闪；出错＝红点；其余不显示。 */
+  /* 行首一颗小点：在跑＝蓝点呼吸；跑完了＝绿点；出错＝红点；其余不显示。 */
   .pk-host.pk-drawer .pk-item.pk-open .pk-open-dot {
     flex: none; width: 7px; height: 7px; border-radius: 50%; margin-right: 2px;
     background: transparent; align-self: center;
@@ -917,7 +914,6 @@
   }
   .pk-host.pk-drawer .pk-item.pk-open .pk-open-dot.error { background: var(--vscode-charts-red, #f14c4c); }
   .pk-host.pk-drawer .pk-item.pk-open .pk-open-dot.done { background: var(--vscode-charts-green, #89d185); }
-  .pk-host.pk-drawer .pk-item.pk-open .pk-open-dot.unread { background: var(--vscode-charts-blue, #3794ff); }
   /* 子会话：名字前面一个拐角箭头（“↳”），再把缩进减到一点点 ——
      箭头的竖笔就落在父会话那一行的左边缘下头，看着像从上面分出来的。 */
   .pk-host.pk-drawer .pk-item.pk-open-child { padding-left: 4px; }
@@ -929,7 +925,7 @@
   }
   .pk-host.pk-drawer .pk-item.pk-open-child .pk-open-arrow svg { display: block; }
   .pk-host.pk-drawer .pk-item.pk-open-child .pk-history-title { opacity: 0.9; }
-  /* 行尾不摆「当前」/「在跑」小标记：当前那条整行有底色，在跑 / 有新消息看行首那颗小点 */
+  /* 行尾不摆「当前」/「在跑」小标记：当前那条整行有底色，在跑 / 跑完了看行首那颗小点 */
   /* 历史行上的“已打开”：它对应的会话已经开着了，在「正在对话」里能找到。 */
   .pk-host.pk-drawer .pk-open-tag {
     font-size: 10.5px; line-height: 1; padding: 2px 6px; border-radius: 8px;
