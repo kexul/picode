@@ -175,9 +175,9 @@
   #sessionName.child-running .sn-dot { display: inline-block; animation: pi-pulse 1.2s ease-in-out infinite; }
   /* 别的会话有新消息：同一颗点，亮着但不闪（这颗点拿去闪的时候它不抢）。 */
   #sessionName.unread:not(.streaming):not(.child-running) .sn-dot { display: inline-block; }
-  /* 派出去的子会话跑完了（结果已交回）、又没有谁在跑：同一颗点换成绿的，也不闪 ——
-     绿 = 活干完了，蓝闪 = 还在干，蓝不闪 = 别处有新消息。 */
-  #sessionName.child-done:not(.streaming):not(.child-running) .sn-dot {
+  /* 跑完了：同一颗点换成绿的，也不闪 —— 绿 = 跑完了（这一轮结束，或者派出去的子会话回来了），
+     蓝闪 = 还在干，蓝不闪 = 别处有新消息。 */
+  #sessionName.done:not(.streaming):not(.child-running) .sn-dot {
     display: inline-block; background: var(--vscode-charts-green, #89d185);
   }
   #sessionName.streaming .sn-text { opacity: 1; }

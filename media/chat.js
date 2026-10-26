@@ -847,6 +847,9 @@
       _stageDropped: false,
       streaming: false,
       unread: false,
+      // 这一轮跑完了（你没在看它的时候那个会话不标，改标 unread）：名字旁边那颗点变绿。
+      // 切走 / 又开始跑下一轮就收掉。见 markTurnDone。
+      turnDone: false,
       activity: "idle",
       activityDetail: "",
       piReady: false,
@@ -1113,7 +1116,7 @@
     if (countEl) { countEl.textContent = kids > 0 ? String(kids) : ""; }
     sessionNameBtn.title = "当前会话：" + text
       + (kids > 0 ? "，" + kids + " 个子会话在跑" : "")
-      + (doneKids > 0 && kids === 0 ? "，" + doneKids + " 个子会话跑完了" : "")
+      + (doneKids > 0 && kids === 0 ? "，" + doneKids + " 个子会话跑完了" : (st && st.turnDone ? "，这一轮跑完了" : ""))
       + "（点这里换会话）";
     // 名字底下那行小字：当前会话跑在哪个目录（会话在别的项目里开的时候就看得出差别）。
     // 拿不到目录（列表还没到、会话已关）就不占行，顶条高度不跳。
@@ -1127,8 +1130,8 @@
     // 派出去的子会话还在跑：本会话自己闲着也把那颗点亮出来（一样呼吸），
     // 一眼看得出这一家子还在干活（等的是子会话，不是本会话在答）。
     sessionNameBtn.classList.toggle("child-running", kids > 0);
-    // 子会话跑完了、又没有谁在跑：那颗点变绿（不闪），活干完了看得出来
-    sessionNameBtn.classList.toggle("child-done", doneKids > 0);
+    // 绿点：这一轮跑完了（你正看着它跑完的），或者派出去的子会话跑完了、又没有谁在跑
+    sessionNameBtn.classList.toggle("done", !!(st && st.turnDone) || doneKids > 0);
     // 别的会话跑完了你没看（“有新消息”）：名字左边那颗小点亮着，不闪；切过去看就灭。
     // 当前这个会话正在跑时那颗点拿去闪了（streaming 优先），未读还得点开清单看。
     sessionNameBtn.classList.toggle("unread", Array.from(sessions.values()).some((s) => s.unread));
@@ -4055,12 +4058,16 @@
     if (!sessions.has(id) || activeId === id) { return; }
     hideTagTip();
     if (activeId !== null) { saveInputState(); } else { carryComposerToSession(id); }
+    // 切走也算看过了：刚看完的那个会话的绿点收掉（绿点只说“这一轮刚跑完，等你回来”）
+    const leaving = activeId !== null ? sessions.get(activeId) : null;
+    if (leaving && leaving.turnDone) { leaving.turnDone = false; }
     activeId = id;
     // 左边那一列看的是会话目录里的文件：换了会话就收成一句提示
     resetFileSidebarForSession();
-    // 看过了：那颗“有新消息”的小蓝点收掉
+    // 看过了：那颗“有新消息”的小蓝点、那颗“这一轮跑完了”的小绿点都收掉
     const shown = sessions.get(id);
     if (shown && shown.unread) { shown.unread = false; }
+    if (shown && shown.turnDone) { shown.turnDone = false; }
     mountActiveSession();
     closeSaidMenu();   // 清单里排的是上一个会话说过的话：换了会话就收起来
     restoreInputState();
@@ -4087,13 +4094,16 @@
 
   /**
    * 「正在对话」这些行列首那颗小点的样式名（顶条下拉框与面板共用同一套）：
-   * 在跑＝蓝点呼吸，出错＝红点，跑完了＝绿点不闪，有新消息（未读）＝蓝点不闪，其余不显示。
+   * 在跑＝蓝点呼吸，出错＝红点，有新消息（未读）＝蓝点不闪，跑完了＝绿点不闪（主会话、子会话都是），
+   * 其余不显示。
    */
   function openDotClass(item) {
     if (item.streaming || item.loading) { return " running"; }
     if (item.taba && item.taba.state === "error") { return " error"; }
+    if (item.unread) { return " unread"; }
+    if (item.turnDone) { return " done"; }
     if (item.taba && item.taba.state === "waiting") { return " done"; }
-    return item.unread ? " unread" : "";
+    return "";
   }
 
   /**
@@ -4115,6 +4125,7 @@
         streaming: !!st.streaming,
         loading: !!st.loading,
         unread: !!st.unread,
+        turnDone: !!st.turnDone,
         taba: st.taba || null,
         depth,
         pendingClose: pendingCloseId === st.id,
@@ -4569,7 +4580,7 @@
     const files = Array.from(sessions.values()).map((t) => t.sessionFile || "").sort().join(",");
     return files + "\u0000" + items.map((it) => [
       it.sessionId, it.label || "", it.depth || 0, it.current ? 1 : 0,
-      it.streaming ? 1 : 0, it.loading ? 1 : 0, it.unread ? 1 : 0,
+      it.streaming ? 1 : 0, it.loading ? 1 : 0, it.unread ? 1 : 0, it.turnDone ? 1 : 0,
       (it.taba && it.taba.state) || "", it.pendingClose ? 1 : 0,
     ].join("|")).join("\n");
   }
@@ -8095,12 +8106,26 @@
   function markSessionUnread(st) {
     if (st.unread) { return; }
     st.unread = true;
+    st.turnDone = false;
+    renderSessionBar();
+    refreshOpenSessionsInPicker();
+  }
+
+  /**
+   * 这个会话这一轮跑完了，而且你当时正看着它：名字旁边那颗点变绿（不闪），不标“有新消息”。
+   * 切走（算看过了）或者又开始跑下一轮就收掉。
+   */
+  function markTurnDone(st) {
+    if (st.turnDone) { return; }
+    st.turnDone = true;
     renderSessionBar();
     refreshOpenSessionsInPicker();
   }
 
   function setStreaming(st, on) {
     st.streaming = on;
+    // 又开始跑下一轮：上一轮那颗绿点收掉（绿点只说“这一轮跑完了”）
+    if (on) { st.turnDone = false; }
     // 这一轮跑完：还在留的那条位置到此为止（一轮里最后调的是工具、后面没再出正文时，就靠这一下收）
     if (!on) { endRunningLine(st); }
     if (activeId === st.id) { updateSendState(); syncStatus(); }
@@ -8335,8 +8360,13 @@
       if (msg.child === true) { return; }
       notifyTurnEndFor(msg.sessionId, msg.status, msg.text, msg.name);
       const done = msg.sessionId ? sessions.get(msg.sessionId) : null;
-      if (done && done.id !== activeId) {
-        markSessionUnread(done);
+      if (done) {
+        if (done.id !== activeId) {
+          markSessionUnread(done);
+        } else if (msg.status === "done") {
+          // 你正看着它跑完：那颗点变绿（自己按 Esc 停掉的那一轮不算跑完，不绿）
+          markTurnDone(done);
+        }
       }
       return;
     }

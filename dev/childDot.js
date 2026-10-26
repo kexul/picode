@@ -3,7 +3,7 @@
  * childDot —— 验顶条中间那颗会话名上的小点：本会话自己闲着、派出去的子会话还在跑时，
  * 那颗蓝点也亮着、也呼吸（以前只在本会话自己答的时候才亮），点下面那个小数字写着
  * 还有几个子会话在跑（零个时数字收起来、点也不亮）；子会话跑完了（结果已交回）、又没有
- * 谁在跑时，同一颗点换成绿的、不闪。
+ * 谁在跑时，同一颗点换成绿的、不闪；本会话自己这一轮跑完了（你正看着它跑完）也是绿点。
  *
  * 只要验前端画得对不对，所以不真派子会话：直接往页面里投假的 sessionList
  * （跟后端推的是同一种消息）。六种情形各看一眼，类名 / 显示 / 动画 / 那个数字都打成文字，各裁一张小图：
@@ -13,6 +13,7 @@
  *   4 子会话在跑 + 别的会话有新消息 → 亮、呼吸、写 1（呼吸优先，不变成不闪的那种）
  *   5 本会话自己在跑                → 亮、呼吸、没数字（数字只算子会话）
  *   6 两个子会话在跑 + 一个在等    → 亮、呼吸、写 2
+ *   7 本会话这一轮跑完了（turnEnd done）→ 绿点、不闪、没数字
  * 最后再量一下位置：那颗点与箭头是贴着“会话名 + 目录两行”整体居中的，
  * 不是只贴着会话名那一行（目录行收起来时它们才回到名字上）；有数字的时候
  * 是“点 + 数字”这一小竖条一起居中，数字落在点的正下面。
@@ -150,6 +151,13 @@ module.exports = async (page) => {
         child("waiting", { id: "c3", streaming: false, activity: "idle", taba: { role: "child", id: "t3", name: "跑完了", state: "waiting" } }),
       ],
     },
+    {
+      id: "7-self-done", what: "本会话这一轮跑完了",
+      want: { visible: true, animation: "none", count: "", bg: "green" },
+      sessions: [session()],
+      // 跑完一轮的通知：当前正看着的就是 p1，所以不标“有新消息”，那颗点变绿
+      extra: [{ type: "turnEnd", sessionId: "p1", status: "done", text: "跑完了一轮" }],
+    },
   ];
 
   let bad = 0;
@@ -169,6 +177,30 @@ module.exports = async (page) => {
       `${ok ? "√" : "×"} ${c.what}：小点 ${got.visible ? "亮" : "不亮"}、动画 ${got.animation === "pi-pulse" ? "呼吸" : got.animation === "none" ? "无" : got.animation}` +
       `、颜色 ${got.bg}` +
       `、点下面写「${got.countVisible ? got.count : "（没有数字）"}」（按钮类名 "${got.cls}"，顶条中间写着「${got.center}」）→ ${path.basename(file)}`
+    );
+  }
+
+  // ---- 绿点看一眼就收：切到别的会话再切回来，那颗点该灭了 ----
+  const post = async (messages) => {
+    await page.eval(`for (const m of ${JSON.stringify(messages)}) { window.postMessage(m, "*"); } return true;`);
+    await page.sleep(250);
+  };
+  await post([
+    { type: "sessionList", sessions: [session(), other()] },
+    { type: "sessionActivated", sessionId: "p1" },
+    { type: "turnEnd", sessionId: "p1", status: "done", text: "跑完了一轮" },
+  ]);
+  const beforeSwitch = await dotState();
+  await post([{ type: "sessionActivated", sessionId: "p2" }]);
+  await post([{ type: "sessionActivated", sessionId: "p1" }]);
+  const afterSwitch = await dotState();
+  {
+    const greenBefore = /\bdone\b/.test(beforeSwitch.cls) && beforeSwitch.visible;
+    const ok = greenBefore && !afterSwitch.visible;
+    if (!ok) { bad++; }
+    console.log(
+      `${ok ? "√" : "×"} 看完就收：跑完时${greenBefore ? "亮绿点" : `却是「${beforeSwitch.cls || "不亮"}」`}，` +
+      `切到别的会话再切回来${afterSwitch.visible ? `还亮着（「${afterSwitch.cls}」）` : "就不亮了"}`
     );
   }
 
