@@ -88,6 +88,10 @@ npm run web:shot -- --width 420 --height 800 --script dev/followBottom.js
 # 断线那段 pi 已经把排队的投出去了，回来还写着“在排队”；重画时后端要补一份排队状态的真相）：
 npm run web:shot -- --fake-pi --script dev/queueResync.js
 
+# 验生成速度那颗数（胶囊最右边）：后端算了推过来、界面写出来、刷新页面还在，
+# 以及真跑一轮的时候有数、跑完冻住（假模型调慢一点，才有时间看跑着的时候）：
+FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tps.js
+
 # 验正文右下角那个「消息的时刻」（鼠标停上去才露、原来的复制按钮已经撤了：今天只写时分，
 # 别的日子补日期、跨年写全年，title 是完整时刻，没带时刻的按现在算，那颗小字不挡鼠标）：
 npm run web:shot -- --fake-pi --script dev/msgTime.js

@@ -152,6 +152,20 @@ export function expandSlashCommand(text: string, commands: RpcCommandInfo[]): st
 const SummaryOmittedArgKeys: ReadonlySet<string> = new Set(["content", "oldText", "newText"]);
 
 /**
+ * 一段模型输出大概是多少 token（真 token 数只有模型自己知道）：
+ * 中日韩文字一个字算一个，其余四个字符算一个。生成速度（t/s）用它合计出来的数。
+ */
+function estTokens(text: string): number {
+    if (!text) { return 0; }
+    let cjk = 0;
+    for (let i = 0; i < text.length; i++) {
+        const c = text.charCodeAt(i);
+        if (c >= 0x3000 && c <= 0x9fff) { cjk++; }
+    }
+    return cjk + (text.length - cjk) / 4;
+}
+
+/**
  * 一个会话的全部运行时状态：独立的 pi 进程 + 独立的会话/编辑追踪。
  * 多个 SessionRuntime 各自持有自己的 PiClient，因此可以真正并行流式生成。
  *
@@ -261,6 +275,15 @@ export class SessionRuntime {
     private thinkDetailCounter = 0;
     /** 刚越过预览字数时已经告诉过界面了（只告诉一次，见 appendThinkingDetail）。 */
     private thinkDetailNotified = false;
+    /** 这一段思考收到过逐字增量没有（没收到的那种 provider 只给收尾那条全文，见 onPiEvent 的 thinking_end）。 */
+    private thinkSawDelta = false;
+    /** 生成速度（t/s）的账：这一轮估出来的 token 数、模型真正在吐字的时间（各次调用累加）、
+     *  这一次调用从什么时候开始算，以及上一次算出来的速度（见 noteGenTokens / beginGenCall）。 */
+    private genTokens = 0;
+    private genMs = 0;
+    private genCallStart = 0;
+    private genTpsSyncedAt = 0;
+    private tps?: number;
     /** 本轮已展示过的错误文本；防止重试期间同一错误刷屏。agent_start 时重置。 */
     private lastShownRunError = "";
     /** 本轮是否真的跑起来过：防止没发消息就收到 agent_settled 时误报“完成”。 */
@@ -296,6 +319,8 @@ export class SessionRuntime {
     public get provider(): string | undefined { return this.statusProvider; }
     public get thinkingLevel(): string | undefined { return this.statusThinking; }
     public get contextPercent(): number | undefined { return this.statusPercent; }
+    /** 上一次算出来的生成速度（t/s）：会话列表带一份，页面刷新后胶囊里那颗数还在。 */
+    public get tokensPerSecond(): number | undefined { return this.tps; }
 
     /** 本会话最后一次已知的模型（模型跟会话关联：新会话默认继承它）。未知返回 undefined。 */
     public currentModel(): { provider?: string; modelId?: string } | undefined {
@@ -687,6 +712,51 @@ export class SessionRuntime {
         this.host.broadcastSessionList();
     }
 
+    // ---- 生成速度（t/s）----
+    // 只算“模型真在吐字”的那段时间：每次模型调用从 message_start 到 message_end 算一段，
+    // 调用之间跑工具的时间不算（不然跑个一分钟的 bash，速度就被摊成个位数）。
+    // token 数是估的（见 estTokens），正文、思考、工具参数都算 —— 这三样现在都不整体
+    // 往界面传（见 DETAIL_PREVIEW_CHARS），所以在后端这头数：原文只有它全看得见。
+    // 一轮（agent_start → agent_settled）里的多次模型调用合起来算一个数；跑的过程中
+    // 250ms 发一次，停下来结算成这一轮的最终值，界面一直挂着它到下轮开始。
+
+    /** 一次模型调用开始吐字。 */
+    private beginGenCall(): void {
+        if (this.genCallStart === 0) { this.genCallStart = Date.now(); }
+    }
+
+    /** 一次模型调用结束：这段吐字时间记进总账（之后跑工具时读数就停在那儿不动了）。 */
+    private endGenCall(): void {
+        if (this.genCallStart === 0) { return; }
+        this.genMs += Date.now() - this.genCallStart;
+        this.genCallStart = 0;
+        this.postTps(true);
+    }
+
+    /** 模型吐出来的一段原文（正文 / 思考 / 工具参数）记进这一轮的速度账。 */
+    private noteGenTokens(text: string): void {
+        const tk = estTokens(text);
+        if (tk <= 0) { return; }
+        this.genTokens += tk;
+        this.postTps();
+    }
+
+    /** 到现在为止这一轮的平均速度（token / 秒）；还没吐够 0.3 秒先不报（数太少会蹦出离谱的大数）。 */
+    private currentTps(): number | undefined {
+        const ms = this.genMs + (this.genCallStart > 0 ? Date.now() - this.genCallStart : 0);
+        if (this.genTokens <= 0 || ms < 300) { return undefined; }
+        return this.genTokens / (ms / 1000);
+    }
+
+    /** 把速度发给界面：增量来得密，跑的当中 250ms 一次；调用结束 / 这一轮结束当场发。 */
+    private postTps(force = false): void {
+        const now = Date.now();
+        if (!force && now - this.genTpsSyncedAt < 250) { return; }
+        this.genTpsSyncedAt = now;
+        this.tps = this.currentTps();
+        this.post({ type: "tps", value: this.tps ?? null });
+    }
+
     // ---- pi 事件 ----
     private onPiEvent(evt: any): void {
         switch (evt.type) {
@@ -706,6 +776,10 @@ export class SessionRuntime {
                 const m = evt.message;
                 if (m && (m.role === "user" || m.role === "assistant")) {
                     this.hasConversation = true;
+                }
+                // 模型开始吐字：这段时间的账从这刻起算（工具跑完接着调就另开一段）
+                if (m && m.role === "assistant") {
+                    this.beginGenCall();
                 }
                 if (m && m.role === "user") {
                     const imgs = countImages(m.content);
@@ -732,6 +806,12 @@ export class SessionRuntime {
                 this.runStarted = true;
                 this.abortRequested = false;
                 this.lastShownRunError = "";
+                // 新一轮：速度从零开始算（上一个数从这一刻作废，界面 streamStart 也会清空）
+                this.genTokens = 0;
+                this.genMs = 0;
+                this.genCallStart = 0;
+                this.genTpsSyncedAt = 0;
+                this.tps = undefined;
                 // agent_start 只说明 agent 开始工作，不代表已经进入 thinking block。
                 this.post({ type: "streamStart", activity: "working", detail: "" });
                 this.setActivity("working");
@@ -753,6 +833,9 @@ export class SessionRuntime {
                     case "thinking_delta": {
                         // 某些 provider 可能省略 thinking_start，收到 delta 也应进入 thinking。
                         this.setActivity("thinking");
+                        // 速度账算原文，跟“发不发出去”无关（超过预览字数的不发，但 token 照样算）
+                        this.thinkSawDelta = true;
+                        this.noteGenTokens(a.delta);
                         // 预览字数以内照旧逐字推，超过的不再发（全文留在内存里，点开再取）
                         const clipped = this.appendThinkingDetail(a.delta);
                         if (clipped.delta || clipped.omitted !== undefined) {
@@ -766,6 +849,10 @@ export class SessionRuntime {
                         break;
                     }
                     case "thinking_end": {
+                        // 个别 provider 只给收尾、不给逐字增量：这时才拿全文补算速度账（给了 delta 的不能重算）
+                        if (!this.thinkSawDelta && typeof a.content === "string") {
+                            this.noteGenTokens(a.content);
+                        }
                         // pi 在收尾事件里带整段思考文本（个别 provider 只给收尾、不给逐字增量）：
                         // 发给界面把这一段补全（见 media/chat.js 的 endThinking）。
                         const clipped = this.finishThinkingDetail(
@@ -786,6 +873,7 @@ export class SessionRuntime {
                     case "text_delta":
                         this.setActivity("working");
                         if (a.type === "text_delta") {
+                            this.noteGenTokens(a.delta);
                             this.post({ type: "assistantDelta", delta: a.delta });
                         }
                         break;
@@ -794,6 +882,11 @@ export class SessionRuntime {
                     case "toolcall_end":
                         // 这里仍在生成工具调用参数，真正执行工具时再切到 tool。
                         this.setActivity("working");
+                        // 参数的 JSON 也是模型一个字一个字吐出来的（写文件那种几千 token），算进速度账；
+                        // 不发出去（界面上那一行摘要另有来路，见 summaryArgs）
+                        if (a.type === "toolcall_delta") {
+                            this.noteGenTokens(a.delta);
+                        }
                         break;
                 }
                 break;
@@ -871,6 +964,14 @@ export class SessionRuntime {
                 // pi 的会话标题变了（自动命名扩展生成、或用户自己 /name 改的）：界面上的会话名跟着换。
                 this.setSessionTitle(evt.name);
                 break;
+            case "message_end": {
+                // 一条 assistant 消息吐完了：这次调用的吐字时间到此为止（之后是工具在跑）
+                const m = evt.message;
+                if (m && m.role === "assistant") {
+                    this.endGenCall();
+                }
+                break;
+            }
             case "agent_end":
                 // agent_end 只是一次底层 run 结束；后面可能还有重试、压缩或排队续跑。
                 // 不能在这里发送 streamEnd，等 agent_settled 才算真正空闲。
@@ -878,6 +979,10 @@ export class SessionRuntime {
                 break;
             case "agent_settled":
                 this.streaming = false;
+                // 这一轮结算速度：没等到 message_end 就停下的（被掐掉、出错的）也在这里封口，
+                // 数发给界面留着，下一轮开始才换掉
+                this.endGenCall();
+                this.postTps(true);
                 // 想一半就停了（点了「停止生成」、这一轮被掐掉），或者个别 provider 根本不发收尾：
                 // 把已经想到的那段结算给界面，那颗 think 点开才不是空的。
                 this.settleThinkingDetail();
@@ -1312,6 +1417,7 @@ export class SessionRuntime {
         this.thinkDetailText = "";
         this.thinkDetailSent = 0;
         this.thinkDetailNotified = false;
+        this.thinkSawDelta = false;
     }
 
     /**

@@ -882,10 +882,9 @@
       modelId: "",
       provider: "",
       thinkingLevel: "",
-      // 生成速度（t/s）：tps 是上一轮的最终均值，tpsStart / tpsTokens 是这一轮（正在跑时）的起点与累计估算 token 数
+      // 生成速度（t/s）：后端算好了推过来（只算模型真在吐字的那段时间，见 sessionRuntime 的
+      // noteGenTokens）；停了就挂着这一轮最后的数，下一轮开始清空
       tps: undefined,
-      tpsStart: 0,
-      tpsTokens: 0,
       // 目标（/goal）：goal 是这个会话的目标状态（后端推来，见 case "goal"），
       // goalOpen 是目标条展不展开（点一下换一面）。
       goal: null,
@@ -3876,35 +3875,9 @@
     return (prov ? prov + "/" : "") + id + (st.thinkingLevel ? "/" + st.thinkingLevel : "");
   }
   // ==================== 生成速度（t/s） ====================
-  // 按流式增量估算：CJK 一个字算一个 token，其余四个字符算一个（真 token 数只有模型自己知道）。
-  // 每轮开始清零（streamStart），跑的过程中算这一轮的实时均值、每 250ms 刷一下那行读数；
-  // 跑完（streamEnd）结算成这一轮的最终均值留在 st.tps，下一轮开始前一直挂着给人看。
-  // 数写在哪里见 syncStatus（胶囊最右边）。
-  let tpsSyncAt = 0;
-  function estTokens(text) {
-    if (!text) { return 0; }
-    let cjk = 0;
-    for (let i = 0; i < text.length; i++) {
-      const c = text.charCodeAt(i);
-      if (c >= 0x3000 && c <= 0x9fff) { cjk++; }
-    }
-    return cjk + (text.length - cjk) / 4;
-  }
-  // 生成中算实时均值（开头那 0.3 秒数太少、会跳出离谱的大数，先不报），停下来用上一轮的最终均值
-  function currentTps(st) {
-    if (!st) { return undefined; }
-    if (st.streaming && st.tpsStart > 0 && st.tpsTokens > 0) {
-      const secs = (Date.now() - st.tpsStart) / 1000;
-      return secs > 0.3 ? (st.tpsTokens / secs) : undefined;
-    }
-    return st.tps;
-  }
-  // 增量来得很密，读数的重算做 250ms 节流（只有正在看的那个会话要算）
-  function noteTpsProgress(t) {
-    if (!t || t.id !== activeId) { return; }
-    const now = Date.now();
-    if (now - tpsSyncAt >= 250) { tpsSyncAt = now; syncStatus(); }
-  }
+  // 算在后端（见 src/sessionRuntime.ts 的 noteGenTokens）：思考、正文、工具参数都算 token，
+  // 时间只算模型真在吐字的那段；250ms 推一次，停下了推最后那个数（见 case "tps"）。
+  // 界面这边只管把数写出来（见 syncStatus），数存在 st.tps 上。
   // ==================== 输入框底下那颗胶囊：模型名 + 上下文用量 + 生成速度 ====================
   // 原来每个会话底部占一整行状态栏，后来收成顶条左边一颗圆环，现在搬进输入框底下那条
   // 小横排里、跟模型名合成一颗胶囊（见 renderHtml 的 #composer / #ctxIcon）：
@@ -3932,8 +3905,7 @@
     if (state === "nomodel") { return "未配置模型（点击选择）"; }
     const parts = [modelFullFor(st)];
     if (typeof st.percent === "number") { parts.push("上下文 " + st.percent.toFixed(1) + "%"); }
-    const tps = currentTps(st);
-    if (typeof tps === "number") { parts.push(tps.toFixed(1) + " t/s"); }
+    if (typeof st.tps === "number") { parts.push(st.tps.toFixed(1) + " t/s"); }
     return parts.join(" · ") + "\n点击切换模型";
   }
   /**
@@ -3965,10 +3937,10 @@
     if (fill) { fill.style.width = known ? pct.toFixed(1) + "%" : "0%"; }
     const num = ctxIconEl.querySelector(".ci-text");
     if (num) { num.textContent = known ? Math.round(pct) + "%" : ""; }
-    // 跑多快：生成中是这一轮的实时均值，停下来就留着这一轮最后的均值，没跑过就空着（见 currentTps）。
+    // 跑多快：后端推来的那个数（生成中是这一轮的实时均值，停下来就留着最后那个，没跑过就空着）
     const speed = ctxIconEl.querySelector(".ci-tps");
     if (speed) {
-      const tps = currentTps(st);
+      const tps = st ? st.tps : undefined;
       speed.textContent = typeof tps === "number" ? tps.toFixed(1) + " t/s" : "";
     }
   }
@@ -8147,6 +8119,8 @@
         if (typeof s.provider === "string") { st.provider = s.provider; }
         if (typeof s.thinkingLevel === "string") { st.thinkingLevel = s.thinkingLevel; }
         if (typeof s.percent === "number") { st.percent = s.percent; }
+        // 生成速度：后端一直记着上一轮的数（见 runtime 的 postTps），刷新页面也还在
+        if (typeof s.tps === "number") { st.tps = s.tps; }
         // 派子会话：这个会话是子会话、或者它派过子会话（列表里据此画标记与缩进）
         st.taba = s.taba || null;
         // 当前用的会话文件（用来把列表里的历史行标成“已打开”）；路径比法两边同归一化
@@ -8407,12 +8381,8 @@
         t.noCountPop = false;   // 模型开始回了：这一轮里后面长出来的次数都是新的
         t.activity = msg.activity || "working";
         t.activityDetail = msg.detail || "";
-        // 新一轮生成：速度计时从头开始（重放的旧轮次不算：那批增量是“一口气倒过来”的，算出来是天文数字）
-        if (!t.replayNow) {
-          t.tps = undefined;
-          t.tpsStart = Date.now();
-          t.tpsTokens = 0;
-        }
+        // 新一轮生成：速度清零（后端 agent_start 也从零开始算，数跟消息一起过来）
+        if (!t.replayNow) { t.tps = undefined; }
         setStreaming(t, true);
         finalizeCurrentAssistant(t);
         endThinking(t, "");
@@ -8421,13 +8391,6 @@
         if (t.rafId) { flushDeltas(t); }
         finalizeCurrentAssistant(t);
         endThinking(t, "");   // 想一半被中止（或后端没发收尾）：标签也得停住
-        // 结算这一轮的速度均值（得在 setStreaming(false) 前算：之后 currentTps 改用 t.tps）
-        if (!t.replayNow) {
-          const secs = t.tpsStart > 0 ? (Date.now() - t.tpsStart) / 1000 : 0;
-          if (t.tpsTokens > 0 && secs > 0.3) { t.tps = t.tpsTokens / secs; }
-          t.tpsStart = 0;
-          t.tpsTokens = 0;
-        }
         t.activity = msg.activity || "idle";
         t.activityDetail = msg.detail || "";
         setStreaming(t, false);
@@ -8446,7 +8409,6 @@
         t.currentAssistant.raw += msg.delta;
         t.textDirty = true;
         scheduleFlush(t);
-        if (!t.replayNow) { t.tpsTokens += estTokens(msg.delta); noteTpsProgress(t); }
         break;
       case "assistantFull":
         finalizeCurrentAssistant(t);
@@ -8469,8 +8431,6 @@
           thinking.clip = { key: thinking.clipKey, omitted: msg.omitted, loaded: false, failed: false };
         }
         refreshTagTipIfShowing(thinking.group.tag);   // 提示框开着时跟着长大
-        // 思考也是模型在吐字，一样算进这轮速度；尾巴上的全文（thinkingFull）不再重算
-        if (!t.replayNow) { t.tpsTokens += estTokens(msg.delta); noteTpsProgress(t); }
         break;
       }
       case "thinkingFull":
@@ -8768,6 +8728,12 @@
         // 一大批重放刚结束：闲下来后把别的会话的版先排好（见 scheduleKeep）
         scheduleKeep();
         break;
+      case "tps": {
+        // 生成速度（t/s）：后端算好了推来（250ms 一次，跑完推最后那个数），只写数字不重算
+        t.tps = typeof msg.value === "number" ? msg.value : undefined;
+        if (activeId === t.id) { syncStatus(); }
+        break;
+      }
       case "stats": {
         // 上下文用量：输入框底下那颗胶囊（用量百分比与颜色预警）
         const cu = msg.contextUsage;

@@ -1745,6 +1745,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
             provider: rt.provider,
             thinkingLevel: rt.thinkingLevel,
             percent: rt.contextPercent,
+            // 生成速度（t/s）：也是只在跑的时候推、跑完就定住，列表每次带一份，页面刷新后还在
+            tps: rt.tokensPerSecond ?? null,
             // 派子会话：这个会话是子会话、或者它派过子会话（前端据此画标记）
             taba: this.tabaPanelInfo(rt.id) ?? null,
             // 目标（/goal）：跟 modelChanged 一样是一次性推送，所以每次列表都带一份 ——
