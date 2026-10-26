@@ -7173,7 +7173,8 @@
     const loading = isSpaces ? st.spacesLoading : st.historyLoading;
     const btn = document.createElement("button");
     btn.className = "pk-loadmore";
-    btn.textContent = loading ? "加载中…" : "加载更多";
+    // 最底下那颗接的是工作区（目录），组里那颗接的是会话：写明“工作区”，不然两颗看着一样
+    btn.textContent = loading ? "加载中…" : (isSpaces ? "加载更多工作区" : "加载更多");
     btn.disabled = !!loading;
     btn.addEventListener("click", () => {
       if (loading) { return; }
