@@ -224,7 +224,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.client.sendPage({ type: "openHistory" });
     }
 
-    /** 点击顶条那颗圆环触发：弹出模型选择器（弹在当前这块屏上）。 */
+    /** 点击输入框底下那颗圆环触发：弹出模型选择器（弹在当前这块屏上）。 */
     public async pickModel(): Promise<void> {
         await this.reveal();
         this.client.sendPage({ type: "pickModel" });

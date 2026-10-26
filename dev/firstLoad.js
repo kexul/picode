@@ -211,7 +211,7 @@ async function main() {
     const total = rows.reduce((n, r) => n + r.bytes, 0);
     console.log("");
     console.log(`—— 第一次打开（全新浏览器、不走缓存${cpu > 1 ? "、CPU 降速 " + cpu + " 倍" : ""}）——`);
-    console.log(`  从点开到能打字（顶条圆环 idle）：${(readyMs / 1000).toFixed(2)} 秒`);
+    console.log(`  从点开到能打字（输入框底下的圆环 idle）：${(readyMs / 1000).toFixed(2)} 秒`);
     console.log(`  从点开到历史画完（${perf.msgs} 条气泡）：${(paintedMs / 1000).toFixed(2)} 秒`);
     console.log(`  HTML 解析完 ${perf.dcl} ms，load 事件 ${perf.load} ms，首屏绘制 ${perf.paints.join(" / ") || "无"}`);
     console.log(`  DOM ${perf.nodes} 个节点；长任务（>50ms）：${perf.longTasks && perf.longTasks.length ? perf.longTasks.join(", ") + " ms" : "没有"}`);

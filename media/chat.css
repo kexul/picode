@@ -73,9 +73,9 @@
   #jumpBottom.hidden { display: none; }
   #jumpBottom svg { width: 14px; height: 14px; display: block; }
 
-  /* 「你说过的话」（输入框右边那颗按钮点开，见 chat.js 的 openSaidMenu）：从输入行上头往上弹的
-     一小张清单（输入框本来就在屏幕底，往上弹才不会被键盘顶到），贴着按钮那一头（右边），
-     高度封顶，多了自己滚。 */
+  /* 「你说过的话」（框底那条横排右头那颗按钮点开，见 chat.js 的 openSaidMenu）：从输入那个盒子
+     上头往上弹的一小张清单（输入框本来就在屏幕底，往上弹才不会被键盘顶到），贴着按钮
+     那一头（右边），高度封顶，多了自己滚。 */
   #saidMenu {
     position: absolute; bottom: 100%; right: 0; margin-bottom: 6px; z-index: 20;
     box-sizing: border-box;
@@ -127,7 +127,7 @@
   #sessionCenter:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
   /* 顶条上那颗文件侧边栏按钮：竖着撑满整个顶条（上下留白由顶条自己的
      内边距给），好点、不误触。它只在浏览器页面里存在（见本文件末尾），
-     由 browserBridge.js 插在圆环前面，也就是顶条的第一个。 */
+     由 browserBridge.js 插在最前头，也就是顶条的第一个。 */
   #fileSidebarBtn {
     flex: 0 0 auto; align-self: stretch; width: 32px; padding: 0; border: none; background: transparent;
     color: var(--vscode-foreground); opacity: 0.7; line-height: 1; border-radius: 5px; cursor: pointer;
@@ -227,7 +227,7 @@
   .sm-dot.running { background: var(--vscode-charts-blue, #3794ff); animation: pi-pulse 1.2s ease-in-out infinite; }
   .sm-dot.error { background: var(--vscode-charts-red, #f14c4c); }
   .sm-dot.unread { background: var(--vscode-charts-blue, #3794ff); }
-  /* 行尾那颗关闭叉：平时淡、悬停 / 触屏上变清楚（点一下就关）。 */
+  /* 行尾那颗关闭叉：平时淡、悬停 / 触屏上变清楚（会话正在跑时点了先变确认条，再点一下才真关）。 */
   #sessionMenu .sm-close {
     flex: none; display: inline-flex; align-items: center; justify-content: center;
     width: 20px; height: 20px; margin-left: 2px; border-radius: 3px;
@@ -235,6 +235,20 @@
   }
   #sessionMenu .sm-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
   @media (hover: none) { #sessionMenu .sm-close { opacity: 0.6; } }
+  /* 确认条：整行底色变红，行里的名字与目录照旧，只是行尾那颗叉旁边多一颗勾
+     （点勾才真关、点叉撤销）。行里的东西不变多，整张清单的宽窄就不会跟着抽
+     —— 那份宽度在点叉那一下已经钉住（见 chat.js 的 placeSessionMenu）。 */
+  #sessionMenu .sm-item.sm-confirm { background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 12%, transparent); color: var(--vscode-foreground); cursor: default; }
+  #sessionMenu .sm-confirm button {
+    flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; padding: 0; border: 0; border-radius: 3px;
+    background: transparent; color: var(--vscode-foreground); cursor: pointer;
+  }
+  #sessionMenu .sm-confirm button:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
+  /* 勾用绿色（确认）、叉淡一点（撤销）：一眼分得清哪颗是关、哪颗是算了 */
+  #sessionMenu .sm-confirm .sm-yes { color: var(--vscode-charts-green, #3fb950); }
+  #sessionMenu .sm-confirm .sm-no { opacity: 0.7; }
+  #sessionMenu .sm-confirm .sm-no:hover { opacity: 1; }
   /* 正文内的文件路径可点击链接：跳转打开对应文件 */
   .file-link { color: var(--vscode-textLink-foreground, #3794ff); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
   .file-link:hover { text-decoration: underline; opacity: 0.85; }
@@ -393,7 +407,9 @@
   .md tr:last-child td { border-bottom: 2px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); }
   .md tbody tr { transition: background 150ms; }
   .md tbody tr:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
-  #inputArea { display: flex; flex-direction: column; padding: 8px; gap: 6px; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3)); flex: 0 0 auto; }
+  /* 输入区跟上面那片消息之间不画分隔线（原来这里有一条横线）：盒子自己有一圈边框，
+     再加一条压在头上就显得两道；而且那一列底部也想看着轻一点。 */
+  #inputArea { display: flex; flex-direction: column; padding: 8px; gap: 6px; flex: 0 0 auto; }
   #imgPreview { display: flex; flex-wrap: wrap; gap: 6px; }
   #imgPreview:empty { display: none; }
   #queueBar { display: flex; flex-direction: column; gap: 2px; padding: 0; border: none; background: transparent; font-size: var(--vscode-font-size); color: var(--vscode-descriptionForeground, inherit); }
@@ -456,29 +472,46 @@
   .long-msg pre.full { max-height: 420px; overflow: auto; }
   .long-msg .lm-toggle { margin-top: 6px; font-size: 0.8em; opacity: 0.7; cursor: pointer; user-select: none; display: inline-block; }
   .long-msg .lm-toggle:hover { opacity: 1; text-decoration: underline; }
-  #inputRow { display: flex; gap: 6px; position: relative; }
-  /* 输入框左右那两颗按钮（左边「新建会话」、右边「你说过的话」）同款：一颗小图标按钮，
-     跟输入框起步同高，并且贴在行底（输入框长高了也不跟着变成一大块）。
-     右边那颗点开一张清单（当前会话里自己发过的每一句话，一行一条）。 */
+  /* 输入那块的外壳：一个圆角大盒子（像手机 App 里的输入框）。上半是打字的地方（#input），
+     下半一条小横排（#inputRow，里头是加号、模型胶囊、右头的「你说过的话」）。边框和底色挂在这个盒子上，
+     里头的 textarea 自己不要框、也不要底；焦点也在这里亮（:focus-within），
+     看起来是整块盒子活了，而不是里头那一小块。
+     盒子上 relative：@ 文件清单和「你说过的话」清单都是从盒子上头往上弹（bottom: 100%）。 */
+  #composer {
+    position: relative; display: flex; flex-direction: column; gap: 1px;
+    background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.35));
+    border-radius: 14px; padding: 6px 6px 3px;
+    transition: border-color 200ms;
+  }
+  #composer:focus-within { border-color: var(--vscode-focusBorder); }
+  #inputRow { display: flex; align-items: center; gap: 2px; }
+  /* 框底那条横排左头那颗加号（新建会话）、右头那颗「你说过的话」：一样的矮方块，
+     鼠标扫过亮一下。中间是模型胶囊（见下面的 #ctxIcon）；「你说过的话」那颗
+     由 chat.js 挂进来。 */
   #newSessionBtn,
   #saidBtn {
-    flex: 0 0 auto; align-self: flex-end; width: 30px; height: 30px; padding: 0;
+    flex: 0 0 auto; width: 26px; height: 26px; padding: 0;
     display: flex; align-items: center; justify-content: center;
-    background: transparent; border: none; border-radius: 6px;
+    background: transparent; border: none; border-radius: 8px;
     color: var(--vscode-descriptionForeground, inherit); cursor: pointer;
   }
   #newSessionBtn svg,
-  #saidBtn svg { width: 16px; height: 16px; display: block; }
+  #saidBtn svg { width: 15px; height: 15px; display: block; }
   #newSessionBtn:hover,
   #saidBtn:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); color: var(--vscode-foreground); }
   /* 清单开着的时候这颗按钮一直亮着（一眼看出是哪颗按钮弹的） */
   #saidBtn.on { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); color: var(--vscode-foreground); }
+  /* 「你说过的话」靠着右头：中间空出来的地方就是留白 */
+  #saidBtn { margin-left: auto; }
+  /* 打字的地方：框里剩下多少地方全是它的（宽度沾满，高度自己按内容长，见 autoResize）。
+     这里不能写 flex: 1 —— 盒子是竖排，flex-basis: 0 会把 height 顶掉，
+     打字一多就长不高了（框里自己滚）。 */
   #input {
-    flex: 1; resize: none; min-height: 144px; max-height: 640px;
-    background: var(--vscode-input-background); color: var(--vscode-input-foreground);
-    border: 1px solid var(--vscode-input-border, transparent); border-radius: 8px; padding: 6px 8px;
+    flex: 0 0 auto; width: 100%; resize: none; min-height: 144px; max-height: 640px; box-sizing: border-box;
+    background: transparent; color: inherit;
+    border: none; outline: none; border-radius: 8px; padding: 4px 6px;
     font-family: inherit; font-size: inherit;
-    transition: border-color 200ms;
   }
   #input:focus { border-color: var(--vscode-focusBorder); outline: none; }
   button {
@@ -872,7 +905,7 @@
     font-size: 10.5px; line-height: 1; padding: 2px 6px; border-radius: 8px;
     border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.45)); opacity: 0.8;
   }
-  /* 行尾那颗关闭叉：平时淡、悬停 / 触屏上变清楚（点一下就关）。 */
+  /* 行尾那颗关闭叉：平时淡、悬停 / 触屏上变清楚（会话正在跑时点击后还要再确认一下）。 */
   .pk-host.pk-drawer .pk-item.pk-open .pk-open-close {
     flex: none; display: inline-flex; align-items: center; justify-content: center;
     width: 20px; height: 20px; margin-left: 2px; border-radius: 3px;
@@ -880,6 +913,29 @@
   }
   .pk-host.pk-drawer .pk-item.pk-open .pk-open-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
   @media (hover: none) { .pk-host.pk-drawer .pk-item.pk-open .pk-open-close { opacity: 0.6; } }
+  /* 确认条：整行底色变红，行里的名字（子会话连拐角箭头）照旧，只是行尾那颗叉旁边多一颗勾
+     （点勾才真关、点叉撤销）。
+     底色这条要写得长一点（连 .pk-open 一起写）：面板自己那套「鼠标停在当前那一行上」的蓝底
+     比普通规则更重，不这么写光标一放到这一行上红色就被盖掉了。 */
+  .pk-host.pk-drawer .pk-item.pk-open.pk-open-confirm {
+    background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 12%, transparent);
+    color: var(--vscode-foreground);
+  }
+  /* 光标停在这一行上：还是红的，稍重一点（看得出光标在这儿） */
+  .pk-host.pk-drawer .pk-item.pk-open.pk-open-confirm:hover {
+    background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 22%, transparent);
+    color: var(--vscode-foreground);
+  }
+  .pk-host.pk-drawer .pk-item.pk-open-confirm button {
+    flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; padding: 0; border: 0; border-radius: 3px;
+    background: transparent; color: var(--vscode-foreground); cursor: pointer;
+  }
+  .pk-host.pk-drawer .pk-item.pk-open-confirm button:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
+  /* 勾用绿色（确认）、叉淡一点（撤销）：一眼分得清哪颗是关、哪颗是算了 */
+  .pk-host.pk-drawer .pk-item.pk-open-confirm .pk-open-yes { color: var(--vscode-charts-green, #3fb950); }
+  .pk-host.pk-drawer .pk-item.pk-open-confirm .pk-open-no { opacity: 0.7; }
+  .pk-host.pk-drawer .pk-item.pk-open-confirm .pk-open-no:hover { opacity: 1; }
   /* 行内图标（加号 / 文件夹）：固定宽度，名字对得齐 */
   .pk-host.pk-drawer .pk-row-icon,
   .pk-host.pk-folders .pk-row-icon {
@@ -955,9 +1011,10 @@
     color: var(--vscode-foreground);
   }
   .pk-host.pk-drawer .pk-footer.pk-history-footer button svg { width: 13px; height: 13px; display: block; }
-  /* 常驻那一列的「设置」：这一块的高度由 chat.js 写成跟对话那边输入区一样高（两条上边线落在同一条线上，
+  /* 常驻那一列的「设置」：这一块的高度由 chat.js 写成跟对话那边输入区一样高（两块的顶边落在同一条横线上，
      见 syncDockFooterHeight）；高起来的时候按钮贴着底边，自己不长高、也不跟着往上跑。
-     border-box 让它把上下 padding 与那条上边线也算进高度里，量多少就是多少（跟上面面板头同一条理由）。
+     border-box 让它把上下 padding 也算进高度里，量多少就是多少（跟上面面板头同一条理由）。
+     那两块的顶边都不画线（见下面 #dockFooter 的 border-top: none），对齐的只是位置。
      浮层里的抽屉不写高度，照旧由里头那颗按钮定高。 */
   #dockFooter { box-sizing: border-box; align-items: flex-end; }
 
@@ -1170,20 +1227,26 @@
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
   }
 
-  /* 顶条最左边那颗圆环：上下文用量（原来底部占一整行的那条状态栏，见 chat.js 的 syncStatus）。
-     网页端那颗文件侧边栏按钮还排在它左边（左边两颗，对着右边相机 / 项目与会话那两颗）。
-     环填多满 = 上下文用了多少（≥70% 黄、≥90% 红），提示里写模型全名 / 百分比 / 速度，
-     点它切模型；还没就绪（加载中 / 等 pi 起来 / 没配模型）时环空着、淡下去，同样能点。 */
+  /* 输入框底下那颗胶囊：当前模型 + 上下文用量（原来它是顶条最左边那颗光秃的圆环，
+     现在搬到框底那条横排里、跟模型名合成一颗胶囊 —— 见 renderHtml 的 #composer）。
+     胶囊里先是模型名，后面跟那颗小圆环（名前环后：模型名是主，环只是顺便一眼）。
+     环填多满 = 上下文用了多少（≥70% 黄、≥90% 红），环里写整数百分比；
+     模型全名 / 精确百分比 / 速度全在悬浮提示里；还没就绪（加载中 / 等 pi 起来 / 没配模型）
+     时环空着、淡下去，同样能点。点它切当前会话的模型。 */
   #ctxIcon {
-    flex: 0 0 auto; align-self: stretch; width: 32px; padding: 0;
-    display: flex; align-items: center; justify-content: center;
-    background: transparent; border: none; border-radius: 5px; cursor: pointer;
+    flex: 0 1 auto; min-width: 0; max-width: 70%;
+    display: inline-flex; align-items: center; gap: 5px;
+    height: 26px; padding: 0 4px 0 6px;
+    background: transparent; border: none; border-radius: 13px; cursor: pointer;
+    font-family: inherit; font-size: 0.86em;
     color: var(--vscode-descriptionForeground, #999);
   }
   #ctxIcon:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); color: var(--vscode-foreground); }
-  /* 圆环比旁边那几颗纯图标大一号（外径 ~16px，别的墨迹 ~13px）：环里还装着一行百分比，
-     真缩到跟它们一样大，三位数就挤到压线了。 */
-  #ctxIcon svg { width: 20px; height: 20px; display: block; }
+  /* 圆环跟旁边那两颗按钮的图标一样大（外径 ~16px）：环里还装着一行百分比，
+     真缩到跟它们一样小，三位数就挤到压线了。 */
+  #ctxIcon svg { width: 18px; height: 18px; flex: 0 0 auto; display: block; }
+  /* 环前面那个模型名：这一堆里唯一会缩的东西（胶囊封顶 70% 宽，长了从尾巴省略） */
+  #ctxIcon .ci-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 环中间那行百分比：用界面字体（等宽字体里的中文 / 数字在小字号下不匀），数字对齐 */
   #ctxIcon .ci-text {
     font-family: var(--vscode-font-family, system-ui, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif);
@@ -1231,8 +1294,8 @@
      问话卡片、图片块、顶上那颗「加载更早的消息」、末尾那条「继续」。唯独 .session-loading
      不能收 —— 它是铺满整个窗格的加载层，收窄了会把底下的消息露出来。
      滚动条挂在窗格上、不跟内容一起居中，所以这一列比窗口正中偏左 3 像素左右，肉眼看不出来。 */
-  /* 这一列的宽度：想改宽改窄就动这一个数（大约 45 个汉字一行）。 */
-  :root { --pichat-content-max: 780px; }
+  /* 这一列的宽度：想改宽改窄就动这一个数（大约 53 个汉字一行）。 */
+  :root { --pichat-content-max: 920px; }
   @media (min-width: 900px) {
     .session-pane > :not(.session-loading) {
       max-width: var(--pichat-content-max);
@@ -1283,6 +1346,10 @@
   #sidebarDock .pk-header { box-sizing: border-box; }
   /* 常驻开着时那颗 <<< 的意思反过来（收起）：图标转半圈，改朝外 */
   body.dock-sidebar #browserMenuBtn svg { transform: rotate(180deg); }
+  /* 常驻那一列的底部（「设置」/「统计」那一格）：不画上边线 —— 跟对话那边输入区上头一样
+     （两边都不画，同一个高度上就看不到横贯的两道线）。浮层抽屉里的页脚（#pickerFooter 那几块）
+     照旧留着那条线：那是弹起来的一块，得跟里头的内容分开。 */
+  #dockFooter { border-top: none; }
 
   /* ==== 顶条左边那颗按钮（文件侧边栏的开 / 关）====
      只用在这里说它开着时的样子：尺寸、悬停那几条跟顶条上那颗一样的规则

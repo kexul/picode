@@ -96,8 +96,14 @@ npm run web:shot -- --fake-pi --script dev/msgTime.js
 # 点一行跳过去、Esc 与点别处收起、空会话只说一句“还没说过话”、手机上往上弹不出屏）：
 npm run web:shot -- --width 900 --height 700 --script dev/saidList.js
 
-# 验会话那套（顶条名字跟着 pi 标题变 / 切会话 / 关会话：面板与下拉框里那颗 × 点一下就关、点行身只切不关）：
+# 验会话那套（顶条名字跟着 pi 标题变 / 切会话 / 关会话：已经跑完的会话，面板与下拉框里那颗 × 点一下就关、点行身只切不关）：
 npm run web:shot -- --fake-pi --script dev/sessionFlow.js
+
+# 验关会话的二次确认（会话正在跑的时候点叉才要再点一下：那一行变红、行尾多一颗勾，
+# 点勾才真关、点叉或干等 4 秒撤销、确认条出来时清单宽窄不变；跑完的直接关；
+# 在跑时按 Ctrl+Alt+W 会自己把清单打开等你点勾；「项目与会话」里那几行同一套）：
+# 假 pi 每个工具卡 5 秒，才有时间在“正在跑”的时候去点关闭
+FAKEPI_THINK_MS=5000 npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/sessionMenuClose.js
 
 # 验左右划切会话（手机上手指横着划；电脑上在没有文字的地方按住鼠标拖。两种都是跟手、松手过小半屏就切；
 # 从文字上按下（选字）、划得不够远、竖着划都不切）：
@@ -318,11 +324,13 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `firstLoad.js` | 量“手机上第一次打开”到底下了多少字节、花了多久：把一个真会话文件装进调试后端，用全新浏览器打开页面，按 URL 与消息类型列字节账，报“从点开到能打字 / 到历史画完”：`node dev/firstLoad.js --session <某个 .jsonl> --cpu 4`（4 ≈ 手机的 CPU 档位） |
 | `liveDetail.js` | 验“实时流里思考 / 工具内容一个字都不发”：假模型把思考与 bash 输出撑长（`FAKEPI_LONG=3000`），这一轮推过去的思考增量是 0 字，点开 `think` / 工具标签时提示框先写一行「还有 N 字没带过来，正在取…」，一会儿换成全文；调用参数只带那行摘要（`$ ls` 一直看得见），write 的写入预览要点开才来：`FAKEPI_LONG=3000 npm run web:shot -- --fake-pi --script dev/liveDetail.js` |
 | `detailOnDemand.js` | 同上那条路的另一半（历史重放）：用真会话打开页面，标签上只有工具名、点开提示框才把全文取回来：`node dev/detailOnDemand.js --session <某个 .jsonl>` |
+| `thinkDetail.js` | 验 `think` 点开不是空的（三种会变成「（没有输出）」的情形）：想一半点「停止生成」后已经想到的那段还在；思考的收尾比正文晚到（真 pi 的 openai-completions 适配器就这样，假模型用 `FAKEPI_LATE_THINK_END=1` 演）时只出一颗标签、点开是全文；模型只给加密内容（一个字都没有）时写「（这段思考没有文字）」：`FAKEPI_LATE_THINK_END=1 FAKEPI_LONG=1500 FAKEPI_TICK_MS=25 npm run web:shot -- --fake-pi --script dev/thinkDetail.js` |
 | `toolStats.js` | 验「工具调用耗时」那张弹窗（项目与会话侧边栏底部「设置」旁边那颗「统计」）：空的时候先说一句还没跑过、跑过之后按工具名一张表（次数 / 合计 / 平均 / 最长）+ 花得最久的几次调用（长命令默认截成 …，点一下展开成完整多行、再点收起）、弹窗开着又来一条结果也跟着长、点叉与 Esc 收起；手机上铺满整屏（窄窗要先点 `<<<` 把抽屉拉出来）：`npm run web:shot -- --width 1200 --height 760 --script dev/toolStats.js` |
 | `askCards.js` | 验问话卡片（长在消息流里）：假 pi 演模型调 `ask_choice` 与扩展问用户，单选 / 多选 / 自己写 / 停止生成 / 确认 / 输入 / 选一个 / 刷新页面各走一遍；那两个输入框写着 `enterkeyhint`、“自己写”那行里回车交完光标落回下面那个输入框也在这里盯着：`npm run web:shot -- --fake-pi --script dev/askCards.js` |
 | `askQuestion.js` | 同上但那一条是真路的：真模型 → 真 pi（插件给它 `-e` 了桥扩展）→ 卡片 → 回话文件 → 工具结果（慢） |
 | `askDialog.js` + `askDialogTrigger.ts` | 验真扩展问的“要你打字 / 要你点是或否 / 选一个”：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |
-| `closeShortcut.js` | 验「关闭会话」快捷键（设置里那一行默认 `Ctrl+Alt+W`；真按一下就关掉正在看的那个会话并切到剩下的；焦点在输入框里按也照样关）：`npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/closeShortcut.js` |
+| `closeShortcut.js` | 验「关闭会话」快捷键（设置里那一行默认 `Ctrl+Alt+W`；对已经跑完的会话真按一下就关掉正在看的那个并切到剩下的；焦点在输入框里按也照样关）：`npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/closeShortcut.js` |
+| `sessionMenuClose.js` | 验关会话的二次确认（只对正在跑的会话）：下拉框里点叉先出确认条（整行变红、行尾一颗勾一颗叉、名字与目录不变、清单宽窄不变），点叉撤销、干等 4 秒撤销、点勾真关；跑完的会话点叉直接关；在跑时按 `Ctrl+Alt+W` 会自己打开清单等你点勾；「项目与会话」里「正在对话」那几行同一套（点行身撤掉确认条）：`FAKEPI_THINK_MS=5000 npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/sessionMenuClose.js` |
 | `workspacePanel.js` | 验「项目与会话」面板（那颗 `<<<`）：正在对话一段、工作区那块的展开 / 收起（含记住）、组里的「加载更多」、行尾加号新建会话、标题右边那颗加号、子会话不显示：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/workspacePanel.js` |
 | `sidebarDock.js` | 验宽窗下常驻的项目与会话侧边栏（`<<<`，窗口 ≥ 900px 才常驻）：打开 / 收起 / 记住收起 / 两根顶线对齐 / 底部那条线与输入区上边线齐（输入框长高时线往上走、设置那颗按钮不动）/ 点行不关面板 / 开别的浮层时那一列原样留着 / 工作区那两块「加载更多」/ 改窄再拉宽（窄窗那一块得贴着右边、整屏高，不是居中的弹窗；居中那几块得还在正中），一次过一遍：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js` |
 | `sidebarRedraw.js` | 验对话更新时常驻那一列的重画范围（只该动「正在对话」那一格）：整块有没有重画、下半那一格的元素与滚动有没有动、重画过后点行还准不准：`FAKEPI_TICK_MS=60 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarRedraw.js` |

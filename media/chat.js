@@ -25,6 +25,8 @@
     close: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8.70701 8.00001L12.353 4.35401C12.548 4.15901 12.548 3.84201 12.353 3.64701C12.158 3.45201 11.841 3.45201 11.646 3.64701L8.00001 7.29301L4.35401 3.64701C4.15901 3.45201 3.84201 3.45201 3.64701 3.64701C3.45201 3.84201 3.45201 4.15901 3.64701 4.35401L7.29301 8.00001L3.64701 11.646C3.45201 11.841 3.45201 12.158 3.64701 12.353C3.74501 12.451 3.87301 12.499 4.00101 12.499C4.12901 12.499 4.25701 12.45 4.35501 12.353L8.00101 8.70701L11.647 12.353C11.745 12.451 11.873 12.499 12.001 12.499C12.129 12.499 12.257 12.45 12.355 12.353C12.55 12.158 12.55 11.841 12.355 11.646L8.70901 8.00001H8.70701Z"/></svg>',
     // 粗一点的关闭叉：会话行尾、面板头部「关掉这一屏」的地方共用这一颗，大小一致。
     "close-bold": '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.5 2.5 L13.5 13.5 M13.5 2.5 L2.5 13.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>',
+    // 粗一点的勾：跟上面那颗叉同款同大小（会话行尾的确认用，一颗勾一颗叉并排）。
+    "check-bold": '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.6 8.6 L6.4 12.4 L13.4 3.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>',
     "link-external": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M15 9.5V12.5C15 13.879 13.879 15 12.5 15H3.5C2.121 15 1 13.879 1 12.5V3.5C1 2.121 2.121 1 3.5 1H6.5C6.776 1 7 1.224 7 1.5C7 1.776 6.776 2 6.5 2H3.5C2.673 2 2 2.673 2 3.5V12.5C2 13.327 2.673 14 3.5 14H12.5C13.327 14 14 13.327 14 12.5V9.5C14 9.224 14.224 9 14.5 9C14.776 9 15 9.224 15 9.5ZM14.5 1H9.5C9.224 1 9 1.224 9 1.5C9 1.776 9.224 2 9.5 2H13.293L9.147 6.146C8.952 6.341 8.952 6.658 9.147 6.853C9.245 6.951 9.373 6.999 9.501 6.999C9.629 6.999 9.757 6.95 9.855 6.853L14.001 2.707V6.5C14.001 6.776 14.225 7 14.501 7C14.777 7 15.001 6.776 15.001 6.5V1.5C15.001 1.224 14.777 1 14.501 1H14.5Z"/></svg>',
     discard: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M3.00098 2.5C3.00098 2.22386 3.22483 2 3.50098 2C3.77712 2 4.00098 2.22386 4.00098 2.5V6.34262L7.17202 3.17157C8.73412 1.60948 11.2668 1.60948 12.8289 3.17157C14.391 4.73367 14.391 7.26633 12.8289 8.82843L7.80375 13.8536C7.60849 14.0488 7.2919 14.0488 7.09664 13.8536C6.90138 13.6583 6.90138 13.3417 7.09664 13.1464L12.1218 8.12132C13.2933 6.94975 13.2933 5.05025 12.1218 3.87868C10.9502 2.70711 9.0507 2.70711 7.87913 3.87868L4.75781 7H8.50098C8.77712 7 9.00098 7.22386 9.00098 7.5C9.00098 7.77614 8.77712 8 8.50098 8H3.60098C3.26961 8 3.00098 7.73137 3.00098 7.4V2.5Z"/></svg>',
     check: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13.6572 3.13573C13.8583 2.9465 14.175 2.95614 14.3643 3.15722C14.5535 3.35831 14.5438 3.675 14.3428 3.86425L5.84277 11.8642C5.64597 12.0494 5.33756 12.0446 5.14648 11.8535L1.64648 8.35351C1.45121 8.15824 1.45121 7.84174 1.64648 7.64647C1.84174 7.45121 2.15825 7.45121 2.35351 7.64647L5.50976 10.8027L13.6572 3.13573Z"/></svg>',
@@ -40,7 +42,7 @@
     // 下面两个给“项目与会话”抽屉面板用：文件夹（工作区/浏览行）、两根滑杆（底部“设置”，
     // 比 ⚙ 字符在各主题下都稳定）。
     folder: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M1.5 1A1.5 1.5 0 0 0 0 2.5v10.997A1.5 1.5 0 0 0 1.5 15h12.987a1.5 1.5 0 0 0 1.5-1.5V4.5a1.5 1.5 0 0 0-1.5-1.5H8.707L7.361 1.654A1.5 1.5 0 0 0 6.207 1H1.5Z"/></svg>',
-    // 加号：面板里「在新工作区新建会话」那一行用（跟输入框左边那颗新建会话同一颗图标）。
+    // 加号：面板里「在新工作区新建会话」那一行用（跟输入框底下那颗新建会话同一颗图标）。
     add: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8 1.5C8 1.22386 7.77614 1 7.5 1C7.22386 1 7 1.22386 7 1.5V7H1.5C1.22386 7 1 7.22386 1 7.5C1 7.77614 1.22386 8 1.5 8H7V13.5C7 13.7761 7.22386 14 7.5 14C7.77614 14 8 13.7761 8 13.5V8H13.5C13.7761 8 14 7.77614 14 7.5C14 7.22386 13.7761 7 13.5 7H8V1.5Z"/></svg>',
     sliders: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4.5h6.2M11.8 4.5H14M2 11.5h1.7M7.3 11.5H14"/><circle cx="10" cy="4.5" r="1.8"/><circle cx="5.5" cy="11.5" r="1.8"/></svg>',
     // 三根高低不一的柱子：侧边栏底部那颗「统计」（工具调用耗时）用它。
@@ -77,7 +79,7 @@
   // 顶条名字底下那行小字：当前会话跑在哪个目录（内容由 renderSessionBar 填）
   const sessionPathEl = document.getElementById("sessionPath");
   const sessionPathTextEl = sessionPathEl ? sessionPathEl.querySelector(".sp-text") : null;
-  // 顶条最左边那颗圆环：上下文用量（见 renderHtml 的 #ctxIcon、下文 syncStatus）
+  // 输入框底下那条小横排：左边是模型胶囊（model chip），右边是「你说过的话」那颗按钮。
   const ctxIconEl = document.getElementById("ctxIcon");
   // 顶条中间那一列（会话名 + 目录两行）：两行合起来就是一块可点区域，见下面的点击监听
   const sessionCenterEl = document.getElementById("sessionCenter");
@@ -118,6 +120,10 @@
   let activeId = null;               // 当前显示的会话 id
   // 后端说“你这块屏切到这个会话”但那个会话的壳还没建出来（列表在路上）：记下来等它到了一起用
   let pendingActivateId = null;
+  // 会话列表里点过“关闭”的那一行：等第二次点击确认（几秒后自动撤销，防误触）。
+  // 只有会话正在跑的时候才会走到这儿（跑完了点一下就关，不用问，见 askCloseSession）。
+  let pendingCloseId = null;
+  let pendingCloseTimer = null;
   // 手机上左右划切会话（见下文“左右划”那段）：这一段拖动的状态、松手后等后端回话的那一趟
   let swipe = null;
   let pendingSlide = null;
@@ -702,11 +708,16 @@
       vscode.postMessage({ type: "newSession" });
       return;
     }
-    // 关闭当前正在看的会话（含输入框聚焦时）：跟下拉框里那颗叉同一个消息，
-    // 只是不再问一遍；会话文件留着，历史会话里能重新打开，关完自动切到别的会话。
+    // 关闭当前正在看的会话（含输入框聚焦时）：跟下拉框里那颗叉同一个路数。
+    // 会话正在跑：先把清单打开，那一行变确认条，点勾才真关（不然一个手滑就把跑着的一轮掐了）；
+    // 已经跑完：直接关。会话文件留着，历史会话里能重新打开，关完自动切到别的会话。
     if (matchCombo(e, closeSessionKey)) {
       e.preventDefault();
-      if (activeId) { vscode.postMessage({ type: "closeSession", sessionId: activeId }); }
+      if (activeId) {
+        // 确认条得有地方露出来：清单没开就打开它（正在看的这个子会话也列在里面，见 sessionMenuItems）
+        if (sessionRunning(activeId)) { openSessionMenu(); }
+        askCloseSession(activeId);
+      }
       return;
     }
     if (tag === "INPUT" || tag === "TEXTAREA") {
@@ -781,6 +792,9 @@
       currentAssistant: null,
       // 正在想的那一段（见 startThinking）：这一段还没想完时挂在它身上，增量往它上面加
       thinkingEntry: null,
+      // 被“正文开始了”提前收起来、还没拿到全文的那一颗（见 endThinking）：个别 provider 的收尾
+      // （thinking_end）比正文晚到，全文来了就补进这一条，别另开一颗。
+      pendingThink: null,
       // 本段消息（上一条用户气泡之后的这一段回复）里那颗 think 标签：末尾补来的思考并到它身上，
       // 见 noteThinkingEntry / foldTailThinking。来了用户消息 / 整屏重画就归零。
       segmentThinking: null,
@@ -1090,22 +1104,27 @@
   sessionMenuEl.className = "hidden";
   document.body.appendChild(sessionMenuEl);
   let sessionMenuOpen = false;
+  // 某一行转成确认条（行尾多一颗勾）以后要钉住的宽度：点叉的那一下量下来。
+  let sessionMenuPin = 0;
 
   /** 把清单贴在中间那一列底下（名字与目录两行都在它上面，清单别盖住目录行）：
-   *  先量准宽度，再把整块夹进屏幕里（左右各留 8px）。 */
+   *  先量准宽度，再把整块夹进屏幕里（左右各留 8px）。
+   *  有人正在确认关会话时宽度钉在点叉之前的那个值上：行尾多一颗勾也不许把整张清单撑宽。 */
   function placeSessionMenu() {
     const anchor = (sessionCenterEl || sessionNameBtn).getBoundingClientRect();
     const margin = 8;
     // 量之前先把上一次留下的 left / width 清掉：left 留着会挤小可用宽度、
-    // 上一次写死的 width 会掩盖内容的自然宽度，两种都会把宽度量成错的。
+    // 上一次钉死的 width 会掩盖内容的自然宽度，两种都会把宽度量成错的。
     sessionMenuEl.style.left = "0px";
     sessionMenuEl.style.width = "";
     const room = Math.max(140, window.innerWidth - margin * 2);
     const natural = sessionMenuEl.offsetWidth;
-    const width = Math.min(natural, room);
-    // 只有整块比一屏还宽的时候才写死宽度（CSS 的 max-width 是以内容盒算的，这里按整块算）。
-    // 其余时候让它自己跟着内容走。
-    if (width < natural) { sessionMenuEl.style.width = width + "px"; }
+    // 确认条收回去（或关了会话）就放开：宽度又跟着内容自己走
+    if (!pendingCloseId) { sessionMenuPin = 0; }
+    const width = Math.min(sessionMenuPin || natural, room);
+    // 只有需要钉住的时候才写死宽度：确认条那阵、或者整块比一屏还宽
+    // （CSS 的 max-width 是以内容盒算的，这里按整块算）。其余时候让它自己跟着内容走。
+    if (sessionMenuPin || natural > room) { sessionMenuEl.style.width = width + "px"; }
     const wantLeft = anchor.left + anchor.width / 2 - width / 2;
     const left = Math.max(margin, Math.min(wantLeft, window.innerWidth - margin - width));
     sessionMenuEl.style.left = Math.round(left) + "px";
@@ -1113,22 +1132,26 @@
   }
 
   /**
-   * 这张清单要列的行：只列主会话（子会话不在标题下拉框里露面）。
+   * 这张清单要列的行：主会话，加上本屏正在看的那个（子会话平时不在下拉框里露面）。
+   * 正在看的那个得列：会话正在跑时按 Ctrl+Alt+W 要先把菜单打开、那一行变确认条，
+   * 要是它正好是个子会话、这里却没有它，那一下就没处落。
    * 父会话已经关掉的子会话会以主会话的身份出现在 openSessionItems() 里（depth 为 0），
    * 那种照列——它已经是一个独立会话了。
    */
   function sessionMenuItems() {
-    return openSessionItems().filter((item) => !item.depth);
+    return openSessionItems().filter((item) => !item.depth || item.current);
   }
 
-  /** 画一遍清单内容：开着的主会话一行一个（行尾一颗关闭叉，点一下就关）。 */
+  /** 画一遍清单内容：一行一个（行尾一颗关闭叉；会话正在跑时点了先变确认条，再点勾才真关）。 */
   function renderSessionMenu() {
     sessionMenuEl.innerHTML = "";
     sessionMenuItems().forEach((item) => {
       const el = document.createElement("div");
       el.className = "sm-item" + (item.current ? " current" : "");
       el.title = (item.label || "") + (item.cwd ? "\n" + item.cwd : "");
-      // 行首那颗小点、下面「名字 + 目录」两段。
+      // 行首那颗小点、下面「名字 + 目录」两段：普通行与确认条共用这一份
+      // （确认条只是行尾那颗叉旁边多一颗勾，行里的东西一点不动：关的是哪一个照样看得见，
+      //  整张清单的宽窄也不跟着变——宽度在点叉那一下已经钉住，见 placeSessionMenu）。
       const dot = document.createElement("span");
       dot.className = "sm-dot" + openDotClass(item);
       el.appendChild(dot);
@@ -1145,24 +1168,46 @@
         body.appendChild(dir);
       }
       el.appendChild(body);
-      // 行尾不再挂「当前」/「在跑」：当前那条整行有底色，在跑 / 有新消息看名字前头那颗小点。
-      // 行尾这颗叉：点行是切过去（大目标），点叉就关（不再问第二遍）。
-      const close = document.createElement("span");
-      close.className = "sm-close";
-      close.title = "关闭这个会话";
-      close.setAttribute("aria-label", "关闭这个会话");
-      close.innerHTML = ICONS["close-bold"];
-      close.addEventListener("click", (e) => { e.stopPropagation(); closeSession(item.sessionId); });
-      el.appendChild(close);
-      el.addEventListener("click", () => {
-        closeSessionMenu();
-        if (!item.current) { vscode.postMessage({ type: "switchSession", sessionId: item.sessionId }); }
-      });
+      if (item.pendingClose) {
+        // 点过行尾那颗叉（这个会话正在跑，还得再点一下）：整行底色变红，行尾多一颗勾——点勾才真关，点叉撤销。
+        el.classList.add("sm-confirm");
+        const yes = document.createElement("button");
+        yes.type = "button"; yes.className = "sm-yes";
+        yes.title = "关闭这个会话";
+        yes.setAttribute("aria-label", "关闭这个会话");
+        yes.innerHTML = ICONS["check-bold"];
+        yes.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(item.sessionId); });
+        const no = document.createElement("button");
+        no.type = "button"; no.className = "sm-no";
+        no.title = "取消";
+        no.setAttribute("aria-label", "取消");
+        no.innerHTML = ICONS["close-bold"];
+        no.addEventListener("click", (e) => {
+          e.stopPropagation();
+          cancelPendingClose();
+          refreshSessionMenu();
+        });
+        el.appendChild(yes); el.appendChild(no);
+      } else {
+        // 行尾不再挂「当前」/「在跑」：当前那条整行有底色，在跑 / 有新消息看名字前头那颗小点。
+        // 行尾这颗叉：点行是切过去（大目标），点叉才关（会话正在跑时要再点一下勾）。
+        const close = document.createElement("span");
+        close.className = "sm-close";
+        close.title = "关闭这个会话";
+        close.setAttribute("aria-label", "关闭这个会话");
+        close.innerHTML = ICONS["close-bold"];
+        close.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(item.sessionId); });
+        el.appendChild(close);
+        el.addEventListener("click", () => {
+          closeSessionMenu();
+          if (!item.current) { vscode.postMessage({ type: "switchSession", sessionId: item.sessionId }); }
+        });
+      }
       sessionMenuEl.appendChild(el);
     });
   }
 
-  /** 清单开着就重画一遍（会话增减、状态变了）；重画完还得重新摆位（宽窄可能变了）。 */
+  /** 清单开着就重画一遍（关会话的确认条变来变去）；重画完还得重新摆位（宽窄变了：确认条那阵宽度是钉住的）。 */
   function refreshSessionMenu() {
     if (!sessionMenuOpen) { return; }
     // 行都关没了就先收起这张空壳（全关完时后端会补一个空会话，等新列表到了再说）
@@ -1183,6 +1228,7 @@
   function closeSessionMenu() {
     if (!sessionMenuOpen) { return; }
     sessionMenuOpen = false;
+    sessionMenuPin = 0;
     sessionMenuEl.classList.add("hidden");
   }
 
@@ -1610,6 +1656,7 @@
     // 重放会一路重新攒这些游标：从现在起从零开始
     st.currentAssistant = null;
     st.thinkingEntry = null;
+    st.pendingThink = null;
     st.segmentThinking = null;
     st.tailThinking = null;
     st.currentToolTail = null;
@@ -1732,9 +1779,10 @@
     saidBtn.innerHTML = ICONS.said;
     saidBtn.title = "你说过的话";
     saidBtn.setAttribute("aria-label", "你说过的话");
-    // 摆在输入框右边（左边那颗是「新建会话」，见 renderHtml 的 #inputRow）
+    // 摆在框底那条横排的右头（前头依次是新建会话那颗加号、模型那颗胶囊，见 renderHtml 的 #composer）
     row.appendChild(saidBtn);
-    // 清单挂在输入行里：靠这一行定位（bottom: 100% 就是“输入行的上头”）
+    // 清单挂在框底那条横排里，但定位靠的是外头那个圆角盒子（#composer 是 relative，
+    // 这条横排自己不定位）：bottom: 100% 就从盒子上头往上弹，不会盖住打字的地方。
     saidMenu = document.createElement("div");
     saidMenu.id = "saidMenu";
     saidMenu.className = "hidden";
@@ -2372,7 +2420,9 @@
         res.className = "tag-tip-result";
         // 内容整个没带过来的（后端只留了“一共多少字”）：不写“（没有输出）”，也不出这块，
         // 下面那行小字会说清楚（见 appendClipNote）
-        res.textContent = e.resultText || (e.clip ? "" : "（没有输出）");
+        // 思考没有字（模型只给了加密内容：pesai 那些会话里这样的一大堆）：说清是没字，不是没输出
+        res.textContent = e.resultText
+          || (e.clip ? "" : (e.name === THINKING_NAME ? "（这段思考没有文字）" : "（没有输出）"));
         showResult = !!res.textContent;
       } else if (e.resultText) {
         // 还在跑、但已经拿到部分结果（toolResultUpdate）：先把拿到的部分显示出来
@@ -2742,6 +2792,10 @@
     // 只要消息里带着“还有多少字没带过来”，这一段照样要出一颗标签（重放历史全靠这一条）。
     const clip = msg ? clipOf(msg) : null;
     let entry = forceNew ? null : st.thinkingEntry;
+    // 收尾（thinking_end）比正文晚到的 provider（openai-completions 那一路：正文边流边给，
+    // 收尾整条流跑完才发）会先被“正文开始了”那颗兜底收掉，全文这时才到：补进那一条，
+    // 别再新开一颗 —— 不然同一段思考在界面上成了两颗，前一颗还写着空的。
+    if (!entry && clip && !forceNew) { entry = pendingThinkOf(st, clip.key); }
     if (!entry) {
       if (!text && !clip) { return; }   // 没在想的、又没有文本（重复收尾）：不用管
       entry = addToolToGroup(st, THINKING_NAME, "", "");
@@ -2749,11 +2803,27 @@
       noteThinkingEntry(st, entry);
     }
     if (st.thinkingEntry === entry) { st.thinkingEntry = null; }
+    if (st.pendingThink === entry) { st.pendingThink = null; }
     entry.done = true;
     if (text) { entry.resultText = text; }
-    entry.clip = clip;
+    // 没带全文的收尾（“正文开始了”、这一轮被停掉）不动已经拿到的编号：
+    // 后端那边还留着全文，抹掉编号就等于告诉界面“这段没内容可看”。
+    if (clip) { entry.clip = clip; }
+    // 这一段其实还没收（编号在、全文还没到）：留着等它迟到的收尾，见上面
+    if (!clip && entry.clipKey) { st.pendingThink = entry; }
     syncGroupTag(st, entry.group);
     scrollToBottom(st);
+  }
+
+  /** 提前收起来、还等着全文的那一颗（见 endThinking）：编号对得上、还长在页面上才认。
+   *  编号对不上的是另一段思考，不能拿它的全文往里填。 */
+  function pendingThinkOf(st, key) {
+    const entry = st.pendingThink;
+    st.pendingThink = null;
+    if (!entry || !key || entry.clipKey !== key) { return null; }
+    const g = entry.group;
+    if (!g || g.tag.parentElement !== g.row || g.row.parentElement !== st.paneEl) { return null; }
+    return entry;
   }
 
   /** 末尾那颗 think 还在不在消息流的最末尾（后面没有正文、没有工具；末尾那颗胶囊之类的不算）。 */
@@ -3759,9 +3829,10 @@
     const prov = (st && st.provider) || "";
     return (prov ? prov + "/" : "") + id + (st.thinkingLevel ? "/" + st.thinkingLevel : "");
   }
-  // ==================== 顶条那颗圆环：上下文用量 ====================
-  // 原来每个会话底部占一整行状态栏，现在收成顶条左边一颗圆环（见 renderHtml 的 #ctxIcon）：
-  // 环填多满 = 上下文用了多少（≥70% 黄、≥90% 红），中间写整数百分比，
+  // ==================== 输入框底下那颗胶囊：模型名 + 上下文用量 ====================
+  // 原来每个会话底部占一整行状态栏，后来收成顶条左边一颗圆环，现在搬进输入框底下那条
+  // 小横排里、跟模型名合成一颗胶囊（见 renderHtml 的 #composer / #ctxIcon）：
+  // 环填多满 = 上下文用了多少（≥70% 黄、≥90% 红），环里写整数百分比，环右边是模型名；
   // 模型全名、精确百分比、生成速度都放悬浮提示里；点它切当前会话的模型。
   // 它说的是当前会话（一次只看一个）：切会话、模型变了、用量变了都调 syncStatus 重刷。
   // 还没就绪的几种状态另挂在 data-st 上（loading / wait / nomodel / idle / streaming），
@@ -3786,7 +3857,17 @@
     if (typeof st.percent === "number") { parts.push("上下文 " + st.percent.toFixed(1) + "%"); }
     return parts.join(" · ") + "\n点击切换模型";
   }
-  /** 顶条那颗圆环跟上当前会话。 */
+  /**
+   * 胶囊里那个模型名（环右边）。只写模型 id，全名 / 思考档在悬浮提示里（见 modelFullFor）。
+   * 还没就绪的几种状态写一句短的：不然胶囊里只剩一颗空环，点了也不知道会发生什么。
+   */
+  function ctxName(st, state) {
+    if (state === "loading") { return "加载中"; }
+    if (state === "wait") { return "启动中"; }
+    if (state === "nomodel") { return "选模型"; }
+    return (st && st.modelId) || "";
+  }
+  /** 输入框底下那颗胶囊跟上当前会话。 */
   function syncStatus() {
     if (!ctxIconEl) { return; }
     const st = activeSession();
@@ -3796,6 +3877,8 @@
     ctxIconEl.classList.toggle("warn", pct >= 70 && pct < 90);
     ctxIconEl.classList.toggle("err", pct >= 90);
     ctxIconEl.title = ctxTitle(st);
+    const name = ctxIconEl.querySelector(".ci-name");
+    if (name) { name.textContent = ctxName(st, state); }
     const arc = ctxIconEl.querySelector(".ci-arc");
     if (arc) { arc.setAttribute("stroke-dashoffset", (100 - pct).toFixed(2)); }
     // 环中间那个数：整数百分比（只写数字，百分比靠形状表达；带 % 就顶出圈外了），
@@ -3968,6 +4051,7 @@
         unread: !!st.unread,
         taba: st.taba || null,
         depth,
+        pendingClose: pendingCloseId === st.id,
         // 下拉框里第二行显示它跑在哪个目录（同名会话靠它分辨）
         cwd: st.cwd || "",
       });
@@ -4359,11 +4443,56 @@
     return [first].concat(rest);
   }
 
-  /** 关一个会话：点一下就走，不再问第二遍（会话文件留着，历史列表里能重新打开；
+  /** 这个会话现在是不是在跑（会话列表上那颗“在跑”的小点看的就是它）。
+   *  关它之前要不要再问一句，就看这一个：跑着的会话关下去会打断这一轮，闲着的没什么可丢。 */
+  function sessionRunning(id) {
+    const st = id ? sessions.get(id) : null;
+    return !!(st && st.streaming);
+  }
+
+  /** 关一个会话：这一下就走（会话文件留着，历史列表里能重新打开；
    *  关掉的正是正在看的那个，后端会把这块屏切到别的会话去）。 */
   function closeSession(id) {
     // 列表不关：关掉一条后马上就能接着关下一条（那一行会跟着会话列表自己消失）
     vscode.postMessage({ type: "closeSession", sessionId: id });
+  }
+
+  /** 把“等确认”那一行撤回去（点取消、点行身切会话、干等超时都走它）：只抹状态，重画交给调用方。 */
+  function cancelPendingClose() {
+    pendingCloseId = null;
+    if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
+    pendingCloseTimer = null;
+  }
+
+  /**
+   * 请求关闭某个会话（行尾那颗叉、快捷键都走这儿）。
+   * 已经跑完：不必问，一下就关。正在跑：这一下只把那一行变成确认条（整行变红、行尾多一颗勾），
+   * 再点勾才真关（防误触，也免得不小心把跑着一半的一轮打断）。
+   */
+  function askCloseSession(id) {
+    // 已经问过了（确认条上那颗勾）：真关
+    if (pendingCloseId === id) {
+      cancelPendingClose();
+      closeSession(id);
+      return;
+    }
+    // 没在跑：不用问第二遍（可能已经跑完了，状态还没来得及推过来）
+    if (!sessionRunning(id)) {
+      closeSession(id);
+      return;
+    }
+    // 点第一下（某一行转成确认条）：就手把清单现在的宽度记下来钉住，
+    // 行尾多出一颗勾也不许把整张清单撑宽（钉住的值在 placeSessionMenu 里用）。
+    if (sessionMenuOpen && !pendingCloseId) { sessionMenuPin = sessionMenuEl.offsetWidth; }
+    pendingCloseId = id;
+    if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
+    pendingCloseTimer = setTimeout(() => {
+      cancelPendingClose();
+      refreshOpenSessionsInPicker();
+      refreshSessionMenu();
+    }, 4000);
+    refreshOpenSessionsInPicker();
+    refreshSessionMenu();
   }
 
   /**
@@ -4375,7 +4504,7 @@
     return files + "\u0000" + items.map((it) => [
       it.sessionId, it.label || "", it.depth || 0, it.current ? 1 : 0,
       it.streaming ? 1 : 0, it.loading ? 1 : 0, it.unread ? 1 : 0,
-      (it.taba && it.taba.state) || "",
+      (it.taba && it.taba.state) || "", it.pendingClose ? 1 : 0,
     ].join("|")).join("\n");
   }
 
@@ -4729,6 +4858,10 @@
     const leftoverClose = view.root.querySelector(".pk-header-close");
     if (leftoverClose) { leftoverClose.remove(); }
     if (view.searchWrap) { view.searchWrap.classList.remove("hidden"); }
+    // “关闭会话”的确认条只在列表里有效：列表一关就撤销（下次打开不要停在确认态）
+    if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
+    pendingCloseTimer = null;
+    pendingCloseId = null;
     view.state = null;
     view.openSessionsShown = "";
     // 那两格跟着面板一起没了（重开时由 renderPickerItems 重建）：别留着指已经拆掉的格子
@@ -4831,12 +4964,12 @@
   }
 
   /**
-   * 常驻那一列底部的「设置」那块跟对话那边的输入区同高：这一块的上边线、输入区的上边线
-   * 落在同一条线上（跟上面面板头那两根顶线一个道理）。
+   * 常驻那一列底部的「设置」那块跟对话那边的输入区同高：这一块的顶边与输入区的顶边
+   * 落在同一条横线上（跟上面面板头那两根顶线一个道理；那两根线如今只对齐位置，不再画线）。
    * 输入区的高度是跟内容走的（输入框长高一行、贴了附件、排队的消息多一条都会变），所以不写死，
-   * 每回现量：“从输入区上边线量到这一列的底边”，量出来多高就把它多高。
-   * 直接量两个边、不要各自取整再相减：那样两条线会错开半个像素，看着发虚。
-   * 那块高起来的时候，里头的按钮贴着底边（见 chat.css 的 #dockFooter）：线往上走，按钮不动。 */
+   * 每回现量：“从输入区顶边量到这一列的底边”，量出来多高就把它多高。
+   * 直接量两个边、不要各自取整再相减：那样两点会错开半个像素，看着发虚。
+   * 那块高起来的时候，里头的按钮贴着底边（见 chat.css 的 #dockFooter）：顶边往上走，按钮不动。 */
   let dockFooterH = 0;
   function syncDockFooterHeight() {
     const foot = dockView.footer;
@@ -6843,14 +6976,36 @@
         main.appendChild(title);
         // 行尾不再挂「当前」/「在跑」：当前那条靠整行的底色认，在跑 / 有新消息靠行首那颗小点。
         el.appendChild(main);
-        // 关闭按钮放行尾：点行是切过去（大目标），点这颗就关（不再问第二遍）。
-        const close = document.createElement("span");
-        close.className = "pk-open-close";
-        close.title = "关闭这个会话";
-        close.setAttribute("aria-label", "关闭这个会话");
-        close.innerHTML = ICONS["close-bold"];
-        close.addEventListener("click", (e) => { e.stopPropagation(); closeSession(item.sessionId); });
-        el.appendChild(close);
+        if (item.pendingClose) {
+          // 点过行尾那颗叉（这个会话正在跑，还得再点一下）：整行底色变红，行尾多一颗勾——点勾才真关，点叉撤销。
+          el.classList.add("pk-open-confirm");
+          const yes = document.createElement("button");
+          yes.type = "button"; yes.className = "pk-open-yes";
+          yes.title = "关闭这个会话";
+          yes.setAttribute("aria-label", "关闭这个会话");
+          yes.innerHTML = ICONS["check-bold"];
+          yes.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(item.sessionId); });
+          const no = document.createElement("button");
+          no.type = "button"; no.className = "pk-open-no";
+          no.title = "取消";
+          no.setAttribute("aria-label", "取消");
+          no.innerHTML = ICONS["close-bold"];
+          no.addEventListener("click", (e) => {
+            e.stopPropagation();
+            cancelPendingClose();
+            refreshOpenSessionsInPicker();
+          });
+          el.appendChild(yes); el.appendChild(no);
+        } else {
+          // 关闭按钮放行尾：点行是切过去（大目标），点这颗才关（会话正在跑时要再点一下勾）。
+          const close = document.createElement("span");
+          close.className = "pk-open-close";
+          close.title = "关闭这个会话";
+          close.setAttribute("aria-label", "关闭这个会话");
+          close.innerHTML = ICONS["close-bold"];
+          close.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(item.sessionId); });
+          el.appendChild(close);
+        }
         el.title = tooltipWithCwd(item.label, item.cwd);
       } else if (st.kind === "history" || (st.kind === "workspace" && item.__section === "groupSession")) {
         el.classList.add("pk-history");
@@ -7012,8 +7167,10 @@
       vscode.postMessage({ type: "pickerToggle", kind, action: item.action, value: item.value });
       return;
     }
-    // 「正在对话」段：点行就是切过去（不新开、不重载），行尾那颗 × 就是关闭（点一下就关）。
+    // 「正在对话」段：点行就是切过去（不新开、不重载），行尾那颗 × 是关闭（正在跑的会话要再点一下勾）。
+    // 确认条正开着的时候点行身也是切过去：先把确认条撤掉 —— 点勾才真关，行身不能替那颗勾点实了。
     if (item.__section === "open") {
+      if (item.pendingClose) { cancelPendingClose(); refreshOpenSessionsInPicker(); }
       closeFirst();
       vscode.postMessage({ type: "switchSession", sessionId: item.sessionId });
       return;
@@ -7712,7 +7869,7 @@
       if (st) { scrollToBottom(st, true); }
     });
   }
-  // 顶条最右边那颗圆环（.pane-status 那行状态栏改成了它）：点它切当前会话的模型。
+  // 输入框底下那颗圆环的点击：切当前会话的模型。
   if (ctxIconEl) {
     ctxIconEl.addEventListener("click", () => {
       const st = activeSession();
@@ -7933,7 +8090,7 @@
         if (!st.goal) { st.goalOpen = false; }
         syncSessionLoading(st);
         // 界面重建（网页重连、视图隐藏重开、窗口重载）后 sessionList 是唯一信源：
-        // modelChanged 是一次性推送，不在此恢复会导致顶条那颗圆环的模型名丢失。
+        // modelChanged 是一次性推送，不在此恢复会导致输入框底下那颗圆环的模型名丢失。
         // 字段缺失（后端尚未拿到）时保留本地已有值。
         if (typeof s.modelId === "string") { st.modelId = s.modelId; }
         if (typeof s.provider === "string") { st.provider = s.provider; }
@@ -7953,11 +8110,11 @@
       sessionOrder = order;
       // 已经不在列表里的会话（被关掉了）：壳和草稿一起丢掉。
       // 本屏正在看的那个例外：画面留在原地（后端那头还认着它，接着往里发消息会自动把它重开），
-      // 不硬生生把这边拽到别的会话去——别的窗口关掉它时会这样。
-      // 自己点的那颗 × 不靠这里：后端会把这块屏切到别的会话（见 chatControllerBase 的 closeSession）。
+      // 不硬生生把这边拽到别的会话去——别的窗口关掉它时会这样（自己点的那颗 × 不在此列）。
       Array.from(sessions.keys()).forEach((id) => {
         if (seen.has(id)) { return; }
-        if (id === activeId) { return; }
+        if (id === activeId && pendingCloseId !== id) { return; }
+        if (pendingCloseId === id) { pendingCloseId = null; }
         removeSession(id);
       });
       // 当前会话是这块屏自己的事：别的屏切了会话（sessionList 里那个 activeId）不管，
@@ -8540,7 +8697,7 @@
         scheduleKeep();
         break;
       case "stats": {
-        // 上下文用量：顶条那颗圆环（用量百分比与颜色预警）
+        // 上下文用量：输入框底下那颗圆环（用量百分比与颜色预警）
         const cu = msg.contextUsage;
         if (cu) {
           if (typeof cu.percent === "number") { t.percent = cu.percent; }

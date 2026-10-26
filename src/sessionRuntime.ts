@@ -198,7 +198,7 @@ export class SessionRuntime {
         return !this.hasConversation && !this.loading;
     }
 
-    // ---- 当前状态快照（跟着 sessionList 发给界面，界面自己画顶条那颗圆环）----
+    // ---- 当前状态快照（跟着 sessionList 发给界面，界面自己画输入框底下那颗圆环）----
     private statusModelId?: string;
     private statusProvider?: string;
     private statusThinking?: string;
@@ -878,6 +878,9 @@ export class SessionRuntime {
                 break;
             case "agent_settled":
                 this.streaming = false;
+                // 想一半就停了（点了「停止生成」、这一轮被掐掉），或者个别 provider 根本不发收尾：
+                // 把已经想到的那段结算给界面，那颗 think 点开才不是空的。
+                this.settleThinkingDetail();
                 // 这一轮停下来了：还在转圈的工具标签一律收掉。正常收尾时没有这种标签，
                 // 有就是这一轮被中途打断（点了「卡住了」、或 pi 把在跑的工具掐了），结果不会再来。
                 this.edits.forgetRunningTools();
@@ -1346,10 +1349,26 @@ export class SessionRuntime {
         this.thinkDetailText = "";
         this.thinkDetailSent = 0;
         this.thinkDetailNotified = false;
-        if (!text) { return undefined; }
+        if (!text) { this.thinkDetailKey = ""; return undefined; }
         const key = this.thinkDetailKey;
         this.thinkDetailKey = "";
         return this.clipDetail(key, text);
+    }
+
+    /**
+     * 一段思考没等到收尾就停了（这一轮被停掉 / provider 不发 thinking_end）：把已经想到的
+     * 那段当成收尾发出去（同正常收尾那条消息），界面上那颗「think」点开才有内容。
+     * 正常收尾过的（thinkDetailKey 已经清掉）什么都不做。
+     */
+    private settleThinkingDetail(): void {
+        const clipped = this.finishThinkingDetail(undefined);
+        if (!clipped) { return; }
+        this.post({
+            type: "thinkingFull",
+            text: clipped.text,
+            omitted: clipped.omitted,
+            detailKey: clipped.detailKey,
+        });
     }
 
     /**
@@ -1867,7 +1886,7 @@ export class SessionRuntime {
             if (!this.streaming) {
                 this.setActivity("idle");
             }
-            // 上下文用量变了：顶条那颗圆环的填充跟上
+            // 上下文用量变了：输入框底下那颗圆环的填充跟上
             void this.refreshStats();
         }
     }

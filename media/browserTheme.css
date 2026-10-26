@@ -5,9 +5,9 @@
   颜色不在这里：两套调色板（浅 / 深）在 browserBridge.js 里，按显示选项的
   「界面颜色」切换。这里只管结构：
 
-  1. 输入框起步高度。VSCode 老界面固定占 144px（约七行）；网页端只要一行，
-     这里把 --pichat-input-min-height 设小，chat.js 会读这个值当最小高度，
-     打字打多了照样往上涨（最高 640px 不变）。
+  1. 输入框起步高度。VSCode 老界面固定占 144px（约七行）；网页端只要两行（打字打多了
+     照样往上涨，最高 640px 不变）。这个值只管打字那一块（#input），框底那条小横排
+     （模型胶囊 + 两颗按钮）的高度不算在里面。
   2. 顶条最右边的“📷 桌面截图”与“<<< 项目与会话”两颗按钮（见 chat.css 的 #sessionBarTail），底部按钮条整条藏掉。
   3. 输入框右下角的“停止生成”：生成中露面（会话闲着时那条「继续」不在这里 ——
      它长在消息流末尾，见 chat.css 的 .msg-continue）。
@@ -17,8 +17,10 @@
 */
 
 :root {
-  /* 输入框起步高度：一行（打字后自动长高，上限仍是 chat.css 里的 640px） */
-  --pichat-input-min-height: 30px;
+  /* 输入框起步高度：两行（打字后自动长高，上限仍是 chat.css 里的 640px）。
+     不写死在这里的 #input 上，是因为 chat.js 会把同一个数读出来当最小高度用
+     （见那边的 INPUT_MIN_HEIGHT）。 */
+  --pichat-input-min-height: 48px;
 }
 
 html, body {
@@ -93,12 +95,12 @@ html, body {
 }
 
 /*
-  输入框：chat.css 里写死了 min-height: 144px（约七行），网页端只要一行。
+  输入框那一块：chat.css 里写死了 min-height: 144px（约七行），网页端只要两行。
   这条要压过 chat.css，所以放在它后面加载的文件里写同一条选择器。
-  用 border-box 让 30px 包含边框和上下内边距。否则它们会额外撑高输入框，
-  第一行文字和光标会靠上，而不是在一行输入框中居中。
+  用 border-box 让 48px 包含上下内边距，否则它们会额外撑高输入框，
+  字和光标会靠上，而不是在那一块里匀开。
 */
 #input {
   box-sizing: border-box;
-  min-height: var(--pichat-input-min-height, 30px);
+  min-height: var(--pichat-input-min-height, 48px);
 }

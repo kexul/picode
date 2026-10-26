@@ -49,6 +49,9 @@ const TEXT_TICK_MS = Number(process.env.FAKEPI_TICK_MS || 0);
 /** 让这轮里的思考与 bash 输出变多长（字符数；0 = 剧本原样）：
  *  验“思考 / 工具输出一个字都不发、点开再取”那条路时用，见 dev/liveDetail.js。 */
 const LONG_TEXT_CHARS = Number(process.env.FAKEPI_LONG || 0);
+/** 思考的收尾（thinking_end）拖到正文开始之后才发（1 = 像真 pi 的 openai-completions 适配器：
+ *  正文边流边给，整条流跑完才把每个块收尾），见 dev/thinkDetail.js。 */
+const LATE_THINK_END = !!process.env.FAKEPI_LATE_THINK_END;
 
 /** 把一段文字撑到 n 个字符（不够就顺着编号往下写）。 */
 function padTo(text, n) {
@@ -227,6 +230,8 @@ async function runScript(userText) {
     // ---- 助手消息：文字 → 工具 ×3 → 文字，最后整条进历史 ----
     const assistantMsg = { role: "assistant", content: [], timestamp: now(), usage: {}, model: `${MODEL.provider}/${MODEL.id}` };
     emit({ type: "message_start", message: assistantMsg });
+    /** 拖到正文开头的收尾（FAKEPI_LATE_THINK_END）：{ 内容, 块号 }，由 say 发出去。 */
+    let lateThinkEnd = null;
 
     /** 等一会儿；醒来发现这一轮已经被停掉了（收到过 abort）就当场收手 ——
      *  真 pi 收到 abort 也是立刻停，界面上按 Esc / 点「卡住了」才验得出效果。
@@ -250,6 +255,15 @@ async function runScript(userText) {
             usage: {},
             assistantMessageEvent: { type: "text_start", contentIndex: assistantMsg.content.length },
         });
+        if (lateThinkEnd) {
+            const late = lateThinkEnd;
+            lateThinkEnd = null;
+            emit({
+                type: "message_update",
+                usage: {},
+                assistantMessageEvent: { type: "thinking_end", contentIndex: late.index, content: late.text },
+            });
+        }
         // 逐字推：模拟流式（FAKEPI_TICK_MS=0 时一次性给完）
         for (let i = 0; i < text.length; i += 6) {
             const delta = text.slice(i, i + 6);
@@ -284,11 +298,15 @@ async function runScript(userText) {
             });
             await pause(TEXT_TICK_MS);
         }
-        emit({
-            type: "message_update",
-            usage: {},
-            assistantMessageEvent: { type: "thinking_end", contentIndex: assistantMsg.content.length, content: text },
-        });
+        if (LATE_THINK_END) {
+            lateThinkEnd = { text, index: assistantMsg.content.length };
+        } else {
+            emit({
+                type: "message_update",
+                usage: {},
+                assistantMessageEvent: { type: "thinking_end", contentIndex: assistantMsg.content.length, content: text },
+            });
+        }
         assistantMsg.content.push(piece);
     };
 
