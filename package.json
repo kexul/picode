@@ -54,7 +54,7 @@
     "compile": "node scripts/compile.mjs",
     "build": "npm run clean && npm run compile",
     "watch": "node scripts/compile.mjs --watch",
-    "package": "npm run build && vsce package --allow-missing-repository",
+    "package": "npm run build && vsce package --allow-missing-repository --no-rewrite-relative-links",
     "web:dev": "npm run compile && node dev/browserHost.js",
     "web:shot": "npm run compile && node dev/visit.js",
     "server": "npm run compile && node out/server/serverMain.js"
