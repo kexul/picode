@@ -137,11 +137,14 @@
     cursor: pointer; user-select: none;
   }
   .sn-tab:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
-  /* 正在看的这一格：一圈细描边，不填底色。
-     一格是“点着它切过去”的按钮，描一圈就够认出是哪一格了；不铺底色也跟悬停那一下（浅灰底）分得开。 */
-  .sn-tab.current {
-    background: transparent;
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-foreground, #ccc) 28%, transparent);
+  /* 正在看的这一格：底下一条蓝线，不填底色（一格是“点着它切过去”的按钮，认得住就够了；
+     不铺底色也跟悬停那一下（浅灰底）分得开）。
+     不用 inset box-shadow 画：那一格是圆角的，阴影会顺着圆角拐个弯（两头各歪一下、像月牙）；
+     伪元素画的是一条直上直下的矩形，两头是方的。 */
+  .sn-tab.current { background: transparent; position: relative; }
+  .sn-tab.current::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
+    background: var(--vscode-focusBorder, #007acc);
   }
   /* 摆不下的那几格：藏起来（都在 ▾ 那张完整清单里） */
   .sn-tab.tab-hidden { display: none; }
@@ -177,6 +180,8 @@
   @media (hover: none) { .sn-tab .sn-close { opacity: 0.6; } }
   .sn-tab.closing { background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 14%, transparent); }
   .sn-tab.closing .sn-close { opacity: 1; color: var(--vscode-charts-green, #3fb950); }
+  /* 等确认那一阵：正看着的这一格底下那条线也换成红的（跟变红的那一格一个意思） */
+  .sn-tab.closing::after { background: var(--vscode-charts-red, #f14c4c); }
   /* 本会话在跑、或者它派出去的子会话还在跑：同一颗点，一样呼吸
      （子会话那种是本会话自己闲着、活在外面干，点亮着才知道没停）。 */
   .sn-tab.streaming .sn-dot,
@@ -1426,9 +1431,12 @@
       max-width: var(--pichat-content-max);
       margin-left: auto; margin-right: auto;
     }
-    /* 底下那块（附件预览、排队消息、输入框）跟着收成同一列，打字的地方跟读的地方对齐 */
+    /* 底下那块（附件预览、排队消息、输入框）跟着收成同一列，打字的地方跟读的地方对齐。
+       box-sizing 必须写：这几块里自己带边框 / 内边距的（输入框那圈圆角盒子）默认是 content-box，
+        width: 100% 只算内容那一块，再加上自己的边框和内边距就比这一列宽出一截——
+        （宽出的那一截正好钻到右边那列底下，看着像被面板盖住了一角。 */
     #inputArea > * {
-      width: 100%; max-width: var(--pichat-content-max);
+      width: 100%; max-width: var(--pichat-content-max); box-sizing: border-box;
       margin-left: auto; margin-right: auto;
     }
   }
