@@ -1315,6 +1315,8 @@
      图形都是 data URI 里的 SVG，当 mask 用：看着的颜色由 background-color 给（颜色各状态自己定），
      mask 只决定形状。--ci-icon 一处写、下面 webkit 与标准两行共用。
      三条路径原样取自 Material Icons（Apache-2.0）里的 edit / lightbulb / build。
+     这颗动画有意不理会系统的「减少动态效果」（下面那个 media query 只管气泡里那条用量横杠）：
+     它就是用来表明“还在跑”的，停了就跟没了一样。
      数据从后端来（working / thinking / tool，见 chat.js 的 syncStatus 与 setActivity）。 */
   #ctxIcon[data-st="streaming"]::before {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 0 0 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z'/%3E%3C/svg%3E");
@@ -1343,16 +1345,10 @@
   @keyframes ci-pen { 0%, 100% { transform: rotate(-14deg) translate(-0.5px, 0.5px); } 50% { transform: rotate(14deg) translate(0.5px, -1px); } }
   @keyframes ci-bulb { 0%, 100% { opacity: 0.6; transform: scale(0.94); } 50% { opacity: 1; transform: scale(1.05); } }
   @keyframes ci-wrench { 0%, 100% { transform: rotate(-30deg); } 50% { transform: rotate(30deg); } }
-  @keyframes ci-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
   #ctxIcon.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
   #ctxIcon.err { color: var(--vscode-errorForeground, #f14c4c); }
   #ctxIcon[data-st="loading"], #ctxIcon[data-st="wait"], #ctxIcon[data-st="nomodel"], #ctxIcon[data-st="none"] { opacity: 0.55; }
-  @media (prefers-reduced-motion: reduce) {
-    #ctxIcon .ci-fill { transition: none; }
-    /* 不摆不转了（那类位移最容易让人难受），但也别像画上去的一动不动：留一档很慢的明暗，
-       说明“还在跑”。形象与颜色照旧，还是分得清在干嘛。 */
-    #ctxIcon[data-st="streaming"]::before { animation: ci-breathe 3s ease-in-out infinite; }
-  }
+  @media (prefers-reduced-motion: reduce) { #ctxIcon .ci-fill { transition: none; } }
   /* 工具结果内联图片（read 读图等）：缩略图 + 点击放大 */
   .tc-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }
   .tc-img { max-width: 100%; max-height: 320px; border-radius: 6px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); background: rgba(128,128,128,0.08); cursor: zoom-in; }
