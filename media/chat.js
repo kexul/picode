@@ -5119,7 +5119,7 @@
   function ensureSidebarPanel() {
     if (!sidebarEnabled() || sidebarDocked() || sidebarAsked) { return; }
     sidebarAsked = true;
-    vscode.postMessage({ type: "openWorkspace", dock: true });
+    vscode.postMessage({ type: "openWorkspace", dock: true, expanded: expandedDirsForHost() });
     // 万一这条消息丢了（刚重连上那一阵、宿主那头正开着别的浮层）：过几秒放行，下一回再要
     setTimeout(() => { sidebarAsked = false; }, 5000);
   }
@@ -5141,7 +5141,7 @@
     // 两边同一时刻只开一块（跟点 <<< 那一套一样）
     closeFileSidebarForRightSidebar();
     emptyWorkspace = "asked";
-    vscode.postMessage({ type: "openWorkspace" });
+    vscode.postMessage({ type: "openWorkspace", expanded: expandedDirsForHost() });
   }
 
   /** 展开常驻那一列（点 <<< 或面板里那颗叉的对面那种情形），并把“展开”记住。 */
@@ -5173,7 +5173,7 @@
       // 两边同一时刻只开一块：左边那块开着就先收起来
       closeFileSidebarForRightSidebar();
       emptyWorkspace = "";   // 这一下是人自己点的
-      vscode.postMessage({ type: "openWorkspace" });
+      vscode.postMessage({ type: "openWorkspace", expanded: expandedDirsForHost() });
       return;
     }
     if (sidebarEnabled() && sidebarDocked()) { collapseSidebar(); } else { expandSidebar(); }
@@ -7339,6 +7339,24 @@
         spacesLoading: false,
       };
       view.state = st;
+      // 宿主跟着工作区一块送回来的“展开着的那几组”的第一批会话（见 expandedDirsForHost）：
+      // 先铺进去，这一画就是整的。
+      if (Array.isArray(msg.groups)) {
+        for (const g of msg.groups) {
+          if (!g || typeof g.path !== "string" || !g.path) { continue; }
+          const items = Array.isArray(g.items) ? g.items : [];
+          // 一条都没扫到（目录没了、路径写法跟宿主对不上）就不当它“已经取回”：
+          // 照旧走下面那条一趟，拿组头自己带的真路径重新要一遍。
+          if (items.length === 0) { continue; }
+          st.groups.set(normPathKey(g.path), {
+            items,
+            nextOffset: typeof g.nextOffset === "number" ? g.nextOffset : 0,
+            hasMore: !!g.hasMore,
+            loading: false,
+            loaded: true,
+          });
+        }
+      }
     }
     // 宿主给的工作区行（没动过的原样一份）：组头排序、挂会话都从它算起
     st.spaceItems = workspaceFlatItems(msg);
@@ -7407,7 +7425,8 @@
 
   // ---- 展开记忆：这台设备上手动展过 / 收过哪些工作区（跟项目与会话侧边栏“收没收起”一个规矩） ----
   const EXPANDED_STORE_KEY = "pichat.workspaceExpanded";
-  /** 记住的那一份；null = 这台设备上还没记过（那就只展开当前会话所在的那个）。 */
+  /** 记住的那一份（目录的真路径，发给宿主去扫会话就靠它）；null = 这台设备上还没记过
+   *  （那就只展开当前会话所在的那个）。比来比去一律走 samePath，不按字面比。 */
   let expandedDirs = readExpandedDirs();
 
   function readExpandedDirs() {
@@ -7415,7 +7434,9 @@
       const raw = localStorage.getItem(EXPANDED_STORE_KEY);
       if (!raw) { return null; }
       const arr = JSON.parse(raw);
-      return Array.isArray(arr) ? new Set(arr.map((p) => normPathKey(p))) : null;
+      if (!Array.isArray(arr)) { return null; }
+      // 存过但存的是空数组 = “全都收起了”：跟“没存过”不一样，别当成没记过又自己展开当前那个
+      return new Set(arr.filter((p) => typeof p === "string" && p.length > 0));
     } catch {
       return null;
     }
@@ -7428,18 +7449,32 @@
   /** 这个工作区现在是展开的吗（没记过时：展开当前会话所在的那个）。 */
   function groupExpanded(path) {
     if (expandedDirs === null) { return samePath(path, activeSessionCwd()); }
-    return expandedDirs.has(normPathKey(path));
+    for (const p of expandedDirs) { if (samePath(p, path)) { return true; } }
+    return false;
+  }
+
+  /**
+   * 这台设备上展开着的那几个目录（真路径）。
+   * 打开面板时跟着一起发给宿主：让它把这几组的第一批会话跟工作区一起带回来，
+   * 面板一画就是整的 —— 不至于先只出现文件夹，过一会儿才冒出里面的会话。
+   */
+  function expandedDirsForHost() {
+    if (expandedDirs === null) {
+      const cur = activeSessionCwd();
+      return cur ? [cur] : [];
+    }
+    return Array.from(expandedDirs);
   }
 
   /** 点一下组头：展开 / 收起，并把结果记住。 */
   function toggleGroup(path) {
-    const key = normPathKey(path);
     if (expandedDirs === null) {
       expandedDirs = new Set();
       const cur = activeSessionCwd();
-      if (cur) { expandedDirs.add(normPathKey(cur)); }
+      if (cur) { expandedDirs.add(cur); }
     }
-    if (expandedDirs.has(key)) { expandedDirs.delete(key); } else { expandedDirs.add(key); }
+    const found = Array.from(expandedDirs).find((p) => samePath(p, path));
+    if (found) { expandedDirs.delete(found); } else { expandedDirs.add(path); }
     rememberExpandedDirs();
   }
 

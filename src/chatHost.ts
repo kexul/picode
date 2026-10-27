@@ -99,6 +99,13 @@ function isTransientPageMessage(msg: Record<string, unknown>): boolean {
     return typeof msg.type === "string" && PAGE_TRANSIENT_MESSAGE_TYPES.has(msg.type);
 }
 
+/** 界面打开「项目与会话」时带过来的“展开着的那几个目录”（真路径，见 media/chat.js 的 expandedDirsForHost）。 */
+function openWorkspaceDirs(msg: Record<string, unknown>): string[] | undefined {
+    if (!Array.isArray(msg.expanded)) { return undefined; }
+    const dirs = msg.expanded.filter((d): d is string => typeof d === "string" && d.length > 0);
+    return dirs.length > 0 ? dirs : undefined;
+}
+
 export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 文件夹列表里“就用这个目录”那一行的标识（会话文件、目录都是绝对路径，撞不上这种带 \0 的）。 */
     private static readonly USE_DIR_ROW = "\u0000pichat:use-dir";
@@ -341,6 +348,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 「项目与会话」面板里一个工作区展开后一次给几条会话（末尾一颗「加载更多」接着加）。 */
     private static readonly GROUP_PAGE_SIZE = 5;
 
+    /** 面板打开时最多顺便带回来几组会话（界面展开着的那些；再多就不值当在这一下里扫了）。 */
+    private static readonly EXPANDED_DIRS_MAX = 20;
+
     /**
      * “项目与会话”面板：上半是所有工作区的会话（混一份，最近聊过的在最前面），
      * 下半是工作区（用 pi 跑过会话的目录）。
@@ -348,9 +358,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 行尾那颗加号在那个目录里开新会话，标题右边那颗加号走原来的逛文件夹那条路。
      * 面板那一摊数据按屏存（见 pickerStateOf）：两个窗口各自开着互不影响。
      */
-    public async showWorkspacePicker(target?: string): Promise<void> {
+    public async showWorkspacePicker(target?: string, expandedDirs?: string[]): Promise<void> {
         const clientId = target || this.currentPageId;
-        const payload = await this.buildWorkspacePanel(clientId);
+        const payload = await this.buildWorkspacePanel(clientId, expandedDirs);
         const choice = await this.openPicker("workspace", payload, clientId);
         if (!choice || typeof choice.file !== "string") { return; }
         // 目录是那一行自己带过来的（列表里混着好几个目录的会话）
@@ -364,9 +374,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      *
      * 别的浮层（选模型、逛文件夹）正开着也照样推：这一列与浮层各画各的，谁也不顶谁。
      */
-    private async showDockedWorkspacePanel(clientId: string): Promise<void> {
+    private async showDockedWorkspacePanel(clientId: string, expandedDirs?: string[]): Promise<void> {
         const st = this.pickerStateOf(clientId);
-        const payload = await this.buildWorkspacePanel(clientId);
+        const payload = await this.buildWorkspacePanel(clientId, expandedDirs);
         // 这一份是“推过去就不管了”的：它画在界面右边那一列里，不是浮层拾取器，
         // 所以没有等谁选、也没有超时（行点击各走各的消息，见上面那几个消息）。
         // 宿主这份状态照旧记着：“加载更多”、会话增减后重推都要用它。
@@ -428,41 +438,56 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 两半都只碰最前面那几个（要显示的那些）：会话那份只扫要画的十个文件，
      * 工作区那份先只拿“目录清单”（每个目录 stat 一下），进目录里翻文件留到真要画它那一行（见 takeWorkspacePage）。
      */
-    private async buildWorkspacePanel(clientId: string): Promise<Record<string, unknown>> {
+    private async buildWorkspacePanel(clientId: string, expandedDirs?: string[]): Promise<Record<string, unknown>> {
         const state = this.pickerStateOf(clientId);
         // 每个目录 readdir 一下 + stat 最新那一个会话文件（见 sessionStore.listProjectDirs）
         state.workspaceDirs = await listProjectDirs();
         state.workspaceOffset = 0;
         state.workspaceSeen = new Set();
-        return {
+        const payload: Record<string, unknown> = {
             title: "项目与会话",
             spaces: {
                 items: await this.takeWorkspacePage(clientId),
                 hasMore: state.workspaceOffset < state.workspaceDirs.length,
             },
         };
+        // 界面展开着的那几组：第一批会话跟着工作区一块送过去（见 media/chat.js 的 expandedDirsForHost）。
+        // 不然面板先只画得出文件夹，等界面再回头要一趟才冒出里面的会话 —— 看着就是闪一下。
+        const wanted = (expandedDirs || [])
+            .filter((d) => typeof d === "string" && d.length > 0)
+            .slice(0, ChatHost.EXPANDED_DIRS_MAX);
+        if (wanted.length > 0) {
+            payload.groups = await Promise.all(wanted.map((dir) => this.scanGroupPage(dir, 0, clientId)));
+        }
+        return payload;
     }
 
     /**
-     * 面板里展开某个工作区（或那一组点「加载更多」）：读那个目录，从 offset 接着扫一批会话发回去。
-     *
-     * offset 是“第几个文件”，由界面带着来回（跳过子会话之后，屏幕上看到的条数不等于扫过的文件数）：
-     * 宿主这边不留状态，面板重推一份时自然就从每组的第一条重新开始。
+     * 扫一个工作区那一组的一页会话（面板打开时顺手带回来的、展开时回头要的，都是这一份）。
+     * offset 是“第几个文件”，由界面带着来回（跳过子会话之后，屏幕上看到的条数不等于扫过的文件数）。
      */
-    private async sendWorkspaceSessions(dir: string, offset: number): Promise<void> {
-        const clientId = this.currentPageId;
-        if (!dir) { return; }
+    private async scanGroupPage(dir: string, offset: number, clientId: string): Promise<Record<string, unknown>> {
         const files = (await listSessionFiles(dir)).map((e) => e.file);
         const page = await this.scanSessionPage(files, offset, ChatHost.GROUP_PAGE_SIZE);
         const current = this.getActive(clientId)?.currentSessionPath;
-        this.sendOverlayTo(clientId, {
-            type: "workspaceSessionsPage",
+        return {
             path: dir,
             offset,
             items: page.items.map((s) => ({ ...s, current: this.samePath(s.file, current) })),
             nextOffset: page.nextOffset,
             hasMore: page.hasMore,
-        });
+        };
+    }
+
+    /**
+     * 面板里展开某个工作区（或那一组点「加载更多」）：读那个目录，从 offset 接着扫一批会话发回去。
+     *
+     * 宿主这边不留状态，面板重推一份时自然就从每组的第一条重新开始。
+     */
+    private async sendWorkspaceSessions(dir: string, offset: number): Promise<void> {
+        const clientId = this.currentPageId;
+        if (!dir) { return; }
+        this.sendOverlayTo(clientId, { type: "workspaceSessionsPage", ...(await this.scanGroupPage(dir, offset, clientId)) });
     }
 
     /**
@@ -1145,8 +1170,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             case "openWorkspace":
                 // 顶条那颗 <<< / 命令入口的项目与会话面板：上半是所有工作区的会话，下半是工作区列表。
                 // 带 dock = 宽窗下那一列常驻（推过去就不管了，不等人选）：见 showDockedWorkspacePanel。
-                if (msg.dock === true) { void this.showDockedWorkspacePanel(this.currentPageId); return true; }
-                void this.showWorkspacePicker(this.currentPageId);
+                // 带 expanded = 界面展开着的那几个目录：它们的头一批会话一块带回来，面板一画就是整的。
+                if (msg.dock === true) { void this.showDockedWorkspacePanel(this.currentPageId, openWorkspaceDirs(msg)); return true; }
+                void this.showWorkspacePicker(this.currentPageId, openWorkspaceDirs(msg));
                 return true;
             case "workspaceOpenSession":
                 // 常驻那一列里点了一行会话（那一列不关，所以不走 pickerChoice）；
