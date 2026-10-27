@@ -1307,14 +1307,19 @@
     font-variant-numeric: tabular-nums; font-size: 0.76em;
   }
   #ctxIcon .ci-tps:empty { display: none; }
-  /* 这一轮在跑：模型名那一格换成一道从左往右湍的彩色，停下（streamEnd）后 data-st 变回 idle，
+  /* 这一轮在跑：模型名那一格换成流动的彩色，停下（streamEnd）后 data-st 变回 idle，
      字自己交回原来那个灰。刚发出去、模型还没吐第一个字那几秒，屏幕上别处没有动静，
      就看这一格 —— 它在动就说明接上了。
 
+     再细一层：后端一直在报 activity（working / thinking / tool，见 chat.js 的 setActivity），
+     这里按它挂上来的 data-act 换颜色与节奏，一眼分得出它在等字、在想、还是工具在跑：
+       working  整道彩虹、淌得快、扇得快 —— 正在干活
+       thinking 紫→蓝、淌得慢、不扇   —— 正在想
+       tool     绿→青、就不动         —— 工具在跑（界面上那行齿轮本来就在转）
+
      做法：把渐变画在字的背景上、再用 background-clip: text 只留字里那一截。
-     淡色列到两遍（0% 与 50% 一样、50% 与 100% 一样）、宽度给 200%，背景从 0% 湍到 100%
+     淡色列到两遍（0% 与 50% 一样、50% 与 100% 一样）、宽度给 200%，背景从 0% 淌到 100%
      正好走过一个重复周期（元素宽），因此一圈接一圈看不见接缝。
-     上面又叠了一层明暗闪动（filter: brightness）：彩色在湍，同时整体一亮一暗，看着才“闪耀”。
      颜色选的是白底和黑底上都认得出的那几档，不用会发光的霓虹色。 */
   #ctxIcon[data-st="streaming"] .ci-name {
     background-image: linear-gradient(90deg,
@@ -1325,7 +1330,21 @@
     background-clip: text;
     -webkit-text-fill-color: transparent;
     color: transparent;
-    animation: ci-shimmer 2.6s linear infinite, ci-glint 1.3s ease-in-out infinite;
+    animation: ci-shimmer 1.2s linear infinite, ci-glint 0.9s ease-in-out infinite;
+  }
+  /* 在想：紫 → 蓝 → 青，淌得慢，不扇（闪的是在干活，不是在想） */
+  #ctxIcon[data-act="thinking"] .ci-name {
+    background-image: linear-gradient(90deg,
+      #8b5cf6, #6366f1, #0ea5e9,
+      #8b5cf6, #6366f1, #0ea5e9, #8b5cf6);
+    animation: ci-shimmer 3.2s linear infinite;
+  }
+  /* 工具在跑：绿 → 青，放着不动（“手上在动”由消息流里那行转圈的齿轮说，这里只是个底色） */
+  #ctxIcon[data-act="tool"] .ci-name {
+    background-image: linear-gradient(90deg,
+      #22c55e, #14b8a6, #0ea5e9,
+      #22c55e, #14b8a6, #0ea5e9, #22c55e);
+    animation: none;
   }
   @keyframes ci-shimmer { from { background-position: 0% 50%; } to { background-position: 100% 50%; } }
   @keyframes ci-glint { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.2); } }
@@ -1334,7 +1353,7 @@
   #ctxIcon[data-st="loading"], #ctxIcon[data-st="wait"], #ctxIcon[data-st="nomodel"], #ctxIcon[data-st="none"] { opacity: 0.55; }
   @media (prefers-reduced-motion: reduce) {
     #ctxIcon .ci-fill { transition: none; }
-    /* 不湍了也还是彩色的：颜色本身就把“在跑 / 没跑”分开了 */
+    /* 不流不扇了也是彩色的：颜色本身就把“在跑 / 没跑、在干什么”分开了 */
     #ctxIcon[data-st="streaming"] .ci-name { animation: none; }
   }
   /* 工具结果内联图片（read 读图等）：缩略图 + 点击放大 */

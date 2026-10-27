@@ -3937,6 +3937,12 @@
     const pct = ctxPercent(st);
     const state = ctxState(st);
     ctxIconEl.dataset.st = state;
+    // 跑着的时候再细一层：后端报的 activity（working / thinking / tool）挂到 data-act 上，
+    // 界面按它换颜色与节奏（在等字 / 在想 / 在跑工具，见 chat.css 那几条）。
+    // 这里不做翻译：不是这三种就一律当 working（那是“这一轮里总有活在干”的兜底）。
+    const act = st ? st.activity : "";
+    ctxIconEl.dataset.act = state !== "streaming" ? ""
+        : act === "thinking" || act === "tool" ? act : "working";
     ctxIconEl.classList.toggle("warn", pct >= 70 && pct < 90);
     ctxIconEl.classList.toggle("err", pct >= 90);
     ctxIconEl.title = ctxTitle(st);
