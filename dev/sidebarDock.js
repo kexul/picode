@@ -5,7 +5,8 @@
  *   npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js
  *
  * 宽窗该看到的：开页面右边就是一列（自己的容器 #sidebarDock，不当浮层、不盖对话、没有遮罩），
- * 点 <<< 收起、刷新之后还是收起（记住了），再点又展开；点面板里的行（工作区行尾那颗加号 /
+ * 点 <<< 收起、刷新之后还是收起（记住了），再点又展开（里头那份留着，再展开第一帧就有内容，
+ * 不用瞪着空列等宿主扫磁盘）；点面板里的行（工作区行尾那颗加号 /
  * 「工作区」标题右边那颗加号）面板不关；点标题那颗加号弹出浮层时，右边那一列照样在（内容不丢、宽度不跳）；
  * 底部「设置」那一格的顶边跟对话那边输入区顶边齐（那两条横线都已经不画了，这里量的是位置），
  * 输入框长高时那一格跟着往上走、按钮不动。
@@ -71,6 +72,24 @@ module.exports = async (page) => {
     await page.sleep(400);
     const wide2 = await look("宽窗 · 点 <<< 之后（应该收起）");
     await page.shot("dock-2-collapsed.png");
+
+    // 收起之后那一列里头那份留着（不拆）：再展开先摆它，不用瞪着空列等宿主扫磁盘
+    const keptRows = await page.eval(`return document.querySelectorAll("#dockBody .pk-item").length;`);
+    const instant = JSON.parse(await page.eval(`
+        return new Promise(function (resolve) {
+            document.getElementById("browserMenuBtn").click();
+            requestAnimationFrame(function () {
+                resolve(JSON.stringify({
+                    shown: getComputedStyle(document.getElementById("sidebarDock")).display !== "none",
+                    rows: document.querySelectorAll("#dockBody .pk-item").length,
+                }));
+            });
+        });
+    `));
+    console.log(`收起之后留着 ${keptRows} 行；再展开第一帧：那一列 ${instant.shown ? "在" : "不在"}、${instant.rows} 行`);
+    // 再收起来：后面那一步验的是“刷新之后还是收起”
+    await page.click("#browserMenuBtn");
+    await page.sleep(400);
 
     // 刷新：收起的状态该记住
     await page.eval("location.reload(); return true;");
@@ -264,6 +283,8 @@ module.exports = async (page) => {
         ["那一列宽 320、贴满高、贴着右边", wide1.dockW === 320 && wide1.dockRight === wide1.vw && wide1.chatRight === wide1.vw - 320],
         ["面板头与顶条那两根横线齐", JSON.parse(barFit).gap < 0.6 && JSON.parse(barFit).barRight === JSON.parse(barFit).colRight],
         ["点 <<< 收起（那一列不见、对话铺满）", !wide2.dockShown && !wide2.bodyDocked && wide2.chatRight === wide2.vw],
+        ["收起之后那一列里头那份留着（没拆）", keptRows > 0 && wide2.dockRows === keptRows],
+        ["再展开第一帧就有内容（不用等宿主扫磁盘）", instant.shown && instant.rows === keptRows],
         ["刷新之后还是收起", !wide3.dockShown && !wide3.bodyDocked],
         ["再点 <<< 展开", wide4.dockShown && wide4.bodyDocked && wide4.dockRows > 0],
         ["点工作区行尾的加号（新建会话）后面板不关", wide5.dockShown && wide5.dockRows > 0],

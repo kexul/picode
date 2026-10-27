@@ -4812,6 +4812,8 @@
   function refreshOpenSessionsIn(view) {
     const st = view.state;
     if (!st || (st.kind !== "workspace" && st.kind !== "history")) { return; }
+    // 常驻那一列收起了：那份内容留着不再跟着重画（展开时会整份要一份新的，见 expandSidebar）
+    if (view === dockView && !sidebarDocked()) { return; }
     // 两块面板都列全部开着的会话（面板里那一段不跟某个工作区走）
     const openItems = openSessionItems();
     if (st.kind === "workspace") {
@@ -5172,8 +5174,10 @@
   function sidebarWide() { return window.innerWidth >= SIDEBAR_MIN_WIDTH; }
   /** 窗口够宽、而且用户没收起：右边那一列开着吗（留不留那一列、面板显不显示都看它）。 */
   function sidebarEnabled() { return sidebarWanted && sidebarWide(); }
-  /** 右边那一列里正画着面板吗。 */
-  function sidebarDocked() { return !!dockView.state; }
+  /** 这一列此刻在屏上画着面板吗（那一列留没留、那份内容画没画出来）。 */
+  function sidebarDocked() { return sidebarEnabled() && !!dockView.state; }
+  /** 手里还留着上一回画出来的那份吗：收起之后也留着（再展开先摆它，见 expandSidebar）。 */
+  function sidebarHasContent() { return !!dockView.state; }
   /** 有没有浮层正占着屏幕（常驻那一列不算：它不遮对话，Esc / 方向键也不归它）。 */
   function pickerModalOpen() {
     return !!modalView.state && !modalView.root.classList.contains("hidden");
@@ -5271,9 +5275,13 @@
     if (inputArea) { new ResizeObserver(() => syncDockFooterHeight()).observe(inputArea); }
   }
 
-  /** 右边那一列该有内容、而现在没画着：跟宿主再要一份（列先空着，不闪不跳）。 */
-  function ensureSidebarPanel() {
-    if (!sidebarEnabled() || sidebarDocked() || sidebarAsked) { return; }
+  /**
+   * 右边那一列该有内容、而现在没画着：跟宿主再要一份。
+   * @param refresh 手里留着上一回那份也照要（展开时用：先把旧的那份摆出来，新的回来只补真变了的那几格）
+   */
+  function ensureSidebarPanel(refresh) {
+    if (!sidebarEnabled() || sidebarAsked) { return; }
+    if (!refresh && sidebarHasContent()) { return; }
     sidebarAsked = true;
     vscode.postMessage({ type: "openWorkspace", dock: true, expanded: expandedDirsForHost() });
     // 万一这条消息丢了（刚重连上那一阵、宿主那头正开着别的浮层）：过几秒放行，下一回再要
@@ -5290,7 +5298,8 @@
     if (sidebarWide()) {
       sidebarWanted = true;
       syncSidebarLayout();
-      ensureSidebarPanel();
+      // 留着的那份这会儿可能是旧的（会话都关完了，它还在列“正在对话”那几行）：摆出来的同时再要一份新的
+      ensureSidebarPanel(true);
       return;
     }
     if (emptyWorkspace) { return; }   // 已经摊开了、或者正在路上（会话列表可能连着来两次）
@@ -5308,16 +5317,22 @@
     rememberSidebarWanted(true);
     sidebarAsked = false;
     syncSidebarLayout();
-    ensureSidebarPanel();
+    // 收起时那一列里画着的那份留着没拆：这会儿它就跟着那一列一起回到屏上，点开立刻有东西。
+    // 里头「正在对话」那几行是收起当时的，先用手里这份会话状态就地补一下（不扫磁盘，几毫秒）；
+    // 工作区那一块接着再跟宿主要一份新的（扫一眼磁盘，看看这期间有没有新建 / 关掉会话），
+    // 回来的那份由 paintWorkspacePanel 按格比，只有真变了的那几格重画 —— 看着不闪。
+    refreshOpenSessionsIn(dockView);
+    ensureSidebarPanel(true);
   }
 
-  /** 收起常驻那一列：面板收掉，并把“收起”记住（下次打开还是收起）。 */
+  /** 收起常驻那一列：那一列从屏上拿掉，里头画着的那份留着（再展开先摆它，见 expandSidebar）。 */
   function collapseSidebar() {
     sidebarWanted = false;
     sidebarAsked = false;
     rememberSidebarWanted(false);
     syncSidebarLayout();
-    if (sidebarDocked()) { hidePicker(dockView); }
+    // 正等着人点“勾”的那行确认条跟着收掉：收起之后那条确认没意义了（再展开时重推一份会重画那几格）
+    cancelPendingClose();
   }
 
   /** 顶条那颗 <<< ：宽窗是常驻的收起 / 展开，窄窗照旧弹一次抽屉。 */
@@ -5332,24 +5347,29 @@
       vscode.postMessage({ type: "openWorkspace", expanded: expandedDirsForHost() });
       return;
     }
-    if (sidebarEnabled() && sidebarDocked()) { collapseSidebar(); } else { expandSidebar(); }
+    if (sidebarEnabled()) { collapseSidebar(); } else { expandSidebar(); }
   }
 
   // 换窗口宽窄（拖边、转手机屏幕）：跨过那道门槛时把版面与面板跟着换过来
   let sidebarResizeFrame = 0;
+  /** 上一回那一列在不在宽窗这一边：从窄变宽时跟宿主要一份新的（一直宽着的拖动就不用）。 */
+  let sidebarWasWide = sidebarWide();
   window.addEventListener("resize", () => {
     if (sidebarResizeFrame) { return; }
     sidebarResizeFrame = requestAnimationFrame(() => {
       sidebarResizeFrame = 0;
-      const wasDocked = sidebarDocked();
+      const wide = sidebarWide();
+      const crossed = wide !== sidebarWasWide;
+      sidebarWasWide = wide;
       syncSidebarLayout();
-      if (!sidebarWide()) {
-        // 变窄了：常驻那一列装不下，把面板收掉（记忆不动：拉宽回来还会自己起来）
+      if (!wide) {
+        // 变窄了：常驻那一列装不下，CSS 把它整个藏起来（记忆不动：拉宽回来还会自己起来）；
+        // 里头那份也留着，拉宽回来先摆它
         sidebarAsked = false;
-        if (wasDocked) { hidePicker(dockView); }
         return;
       }
-      ensureSidebarPanel();
+      // 从窄变宽（那一列刚回来）：摆着的那份可能旧了，要一份新的；一直宽着的拖动就别再要了
+      ensureSidebarPanel(crossed);
     });
   });
 
@@ -6559,7 +6579,7 @@
     if (fileSidebarWide()) { return; }
     const st = modalView.state;
     if (st && st.kind === "workspace" && !modalView.root.classList.contains("hidden")) { cancelPicker(modalView); return; }
-    if (sidebarEnabled() && sidebarDocked()) { collapseSidebar(); }
+    if (sidebarEnabled()) { collapseSidebar(); }
   }
 
   /** 右边那块要开出来了：窄窗里（左边这块是滑入式）先把左边收起来。 */
@@ -7675,7 +7695,8 @@
    */
   function viewShowing(kind) {
     if (modalView.state && modalView.state.kind === kind && !modalView.root.classList.contains("hidden")) { return modalView; }
-    if (dockView.state && dockView.state.kind === kind) { return dockView; }
+    // 收起了、或者窗口窄了：那一列不在屏上，里头留着的那份不算“正画着”（别让别处以为它还开着）
+    if (sidebarDocked() && dockView.state.kind === kind) { return dockView; }
     return null;
   }
 
@@ -7705,15 +7726,24 @@
     // 「项目与会话」画到哪儿：宽窗 + 用户没收起 → 右边那一列（#sidebarDock，见上面“常驻的项目与会话侧边栏”）；
     // 窄窗（手机、窄面板）→ 浮层里那张抽屉。别的拾取器一律画在浮层那份里。
     // 这一下已经收起 / 变窄了就当没收到（不然收起了还弹一张抽屉出来），并告诉宿主别再等着。
+    // 唯一的例外是“常驻那一列”那一份（msg.dock）：只要窗口还是宽的，收起着也照画 -
+    // 那一列这会儿 display:none，看不见，但它是留着下次展开用的：这样展开时那份就是现的，
+    // 不用再瞪着空列等一趟宿主扫磁盘。
     if (view === null) {
       if (kind !== "workspace") {
         view = modalView;
-      } else {
-        if (msg.dock === true ? !sidebarEnabled() : sidebarWide()) {
+      } else if (msg.dock === true) {
+        if (!sidebarWide()) {
           vscode.postMessage({ type: "pickerCancel", kind: "workspace" });
           return;
         }
-        view = sidebarEnabled() ? dockView : modalView;
+        view = dockView;
+      } else {
+        if (sidebarWide()) {
+          vscode.postMessage({ type: "pickerCancel", kind: "workspace" });
+          return;
+        }
+        view = modalView;
       }
     }
     const toDock = view === dockView;

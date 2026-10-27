@@ -248,7 +248,8 @@ node dev/childSessions.js
 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/workspacePanel.js
 
 # 验宽窗下常驻的项目与会话侧边栏（窗口 ≥ 900px）：开页面右边就是一列（不当浮层、不盖对话）、
-# 点 <<< 收起、刷新后还是收起（记住了）、点面板里的行面板不关、开别的浮层时那一列的位置留着；
+# 点 <<< 收起、刷新后还是收起（记住了）、再展开第一帧就有内容（收起时里头那份留着）、
+# 点面板里的行面板不关、开别的浮层时那一列的位置留着；
 # 底部「设置」那条线与对话那边输入区上边线齐（输入框长高时线跟着往上走、按钮不动）；
 # 同一趟里把视口改成手机宽再看一次：那一列整个不见，点 <<< 是原来的抽屉（有遮罩、
 # 整屏高、贴着右边，不是居中弹出的弹窗）：
@@ -343,7 +344,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `closeShortcut.js` | 验「关闭会话」快捷键（设置里那一行默认 `Ctrl+Alt+W`；对已经跑完的会话真按一下就关掉正在看的那个并切到剩下的；焦点在输入框里按也照样关）：`npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/closeShortcut.js` |
 | `sessionMenuClose.js` | 验关会话的二次确认（只对正在跑的会话）：顶条上那一格点 × → 那一格变红、叉换成勾（不真关），再点一下才关；在跑时按 `Ctrl+Alt+W` 同样落在那一格上、不弹清单；「项目与会话」里「正在对话」那几行点叉先出确认条（整行变红、行尾一颗勾一颗叉），点叉撤销、干等 4 秒撤销、点勾真关、点行身也算撤销：`FAKEPI_THINK_MS=5000 npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/sessionMenuClose.js` |
 | `workspacePanel.js` | 验「项目与会话」面板（那颗 `<<<`）：正在对话一段、工作区那块的展开 / 收起（含记住）、组里的「加载更多」、行尾加号新建会话、标题右边那颗加号、子会话不显示：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/workspacePanel.js` |
-| `sidebarDock.js` | 验宽窗下常驻的项目与会话侧边栏（`<<<`，窗口 ≥ 900px 才常驻）：打开 / 收起 / 记住收起 / 两根顶线对齐 / 底部那条线与输入区上边线齐（输入框长高时线往上走、设置那颗按钮不动）/ 点行不关面板 / 开别的浮层时那一列原样留着 / 工作区那两块「加载更多」/ 改窄再拉宽（窄窗那一块得贴着右边、整屏高，不是居中的弹窗；居中那几块得还在正中），一次过一遍：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js` |
+| `sidebarDock.js` | 验宽窗下常驻的项目与会话侧边栏（`<<<`，窗口 ≥ 900px 才常驻）：打开 / 收起 / 记住收起 / 收起时里头那份留着（再展开第一帧就有内容，不用等宿主扫磁盘）/ 两根顶线对齐 / 底部那条线与输入区上边线齐（输入框长高时线往上走、设置那颗按钮不动）/ 点行不关面板 / 开别的浮层时那一列原样留着 / 工作区那两块「加载更多」/ 改窄再拉宽（窄窗那一块得贴着右边、整屏高，不是居中的弹窗；居中那几块得还在正中），一次过一遍：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js` |
 | `sidebarRedraw.js` | 验对话更新时常驻那一列的重画范围（只该动「正在对话」那一格）：整块有没有重画、下半那一格的元素与滚动有没有动、重画过后点行还准不准：`FAKEPI_TICK_MS=60 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarRedraw.js` |
 | `newSessionRedraw.js` | 验开新会话时常驻那一列的重画范围（整块一次都不该重画、下半展开的组不许坍、新会话那一行加进上半、重画过后点上下的行都还准）：`FAKEPI_TICK_MS=60 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/newSessionRedraw.js` |
 | `switchPerf.js` | 量「在会话之间切换」多少毫秒（造一个装满消息的会话，跟空会话来回切）：真按快捷键走完后端一圈的耗时 / 只塞一条 `sessionActivated` 只剩挂壳的耗时，细分到排版、算样式、长任务：`node dev/switchPerf.js --pairs 1000 --rounds 3` |
