@@ -97,14 +97,14 @@
   });
   // 顶条中间那一排会话格（见下面 renderSessionTabs）：一格一个主会话，点一下切过去。
   const sessionTabRow = document.getElementById("sessionTabs");
-  // 右边那颗 ▾：掉出完整清单（每行还带那颗 × 关会话）。两个以上会话时露面。
+  // 右边那颗 ▾：掉出清单，列的只是摆不下、被藏起来的那几格（全摆得下时它不露面）。
   // 画的还是那份 chevron（画的是朝右），转 90° 成朝下（见 chat.css 的 #sessionMore）。
   const sessionCaret = document.createElement("button");
   sessionCaret.type = "button";
   sessionCaret.id = "sessionMore";
   sessionCaret.className = "hidden";
-  sessionCaret.title = "全部会话";
-  sessionCaret.setAttribute("aria-label", "全部会话");
+  sessionCaret.title = "摆不下的会话";
+  sessionCaret.setAttribute("aria-label", "摆不下的会话");
   sessionCaret.innerHTML = CHEVRON_SVG;
   sessionCaret.addEventListener("click", (e) => { e.stopPropagation(); toggleSessionMenu(); });
   sessionTabRow.appendChild(sessionCaret);
@@ -117,8 +117,9 @@
   const TAB_GAP = 4;
   // 那一排的宽度一变（窗口、左边那一列、右边那一列）就重摆一次：放得下几个就放几个。
   // 摆出来的东西不改那一排自己的宽度，所以不会来回打转。
+  // ▾ 那张清单列的就是“被藏起来的那几格”：宽度一变那个集合就变了，开着的那张跟着重画。
   if (typeof ResizeObserver === "function") {
-    new ResizeObserver(() => layoutSessionTabs()).observe(sessionTabRow);
+    new ResizeObserver(() => { layoutSessionTabs(); refreshSessionMenu(); }).observe(sessionTabRow);
   }
 
   // ---- 会话本地状态（后端 sessionList 消息驱动）----
@@ -757,16 +758,12 @@
       vscode.postMessage({ type: "newSession" });
       return;
     }
-    // 关闭当前正在看的会话（含输入框聚焦时）：跟下拉框里那颗叉同一个路数。
-    // 会话正在跑：先把清单打开，那一行变确认条，点勾才真关（不然一个手滑就把跑着的一轮掐了）；
+    // 关闭当前正在看的会话（含输入框聚焦时）：跟顶条那颗 × 同一个路数。
+    // 会话正在跑：这一下只把那一格变成勾（要再点一下才真关，不然一个手滑就把跑着的一轮掐了）；
     // 已经跑完：直接关。会话文件留着，历史会话里能重新打开，关完自动切到别的会话。
     if (matchCombo(e, closeSessionKey)) {
       e.preventDefault();
-      if (activeId) {
-        // 确认条得有地方露出来：清单没开就打开它（正在看的这个子会话也列在里面，见 sessionMenuItems）
-        if (sessionRunning(activeId)) { openSessionMenu(); }
-        askCloseSession(activeId);
-      }
+      if (activeId) { askCloseSession(activeId); }
       return;
     }
     if (tag === "INPUT" || tag === "TEXTAREA") {
@@ -1133,8 +1130,8 @@
   }
 
   // ==================== 顶条那一排会话格 ====================
-  // 一格一个主会话（跟下拉清单同一份行：主会话，加上本屏正在看的那个子会话）。
-  // 点别的格直接切过去；点当前这一格跟以前一样掉出完整清单（关会话、看目录都在那张里）。
+  // 一格一个主会话（跟 ▾ 那张清单同一份行：主会话，加上本屏正在看的那个子会话）。
+  // 点别的格直接切过去；点当前这一格什么也不做（关会话点每格自己那颗 ×）。
   // 骨架里那一格（#sessionName）头一回要画时拿去做某一格。
   let spareTabEl = sessionNameBtn;
   const sessionTabEls = new Map();     // sessionId -> 它那一格的元素
@@ -1151,7 +1148,7 @@
         + '<span class="sn-text"></span>';
     }
     el.classList.add("sn-tab");
-    // 名字后面那颗 ×（每格都露着）：点它关的就是这一格，点名字身上还是切过去 / 掉出清单。
+    // 名字后面那颗 ×（每格都露着）：点它关的就是这一格，点名字身上还是切过去。
     // 会话正在跑时这一下只把它变成勾（要再点一下才真关，见 askCloseSession）。
     if (!el.querySelector(".sn-close")) {
       const close = document.createElement("span");
@@ -1162,14 +1159,12 @@
       close.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(sessionId); });
       el.appendChild(close);
     }
-    // 点这一格：不是当前这个就切过去（一下就换了）；是当前这个就掉出完整清单
+    // 点这一格：不是当前这个就切过去（一下就换了）；就是当前这个什么也不做
+    // （以前点它会掉出清单，现在清单只列摆不下、被藏起来的那几格，摆得下的用不着从里头挑）
     el.addEventListener("click", () => {
-      if (activeId !== sessionId) {
-        closeSessionMenu();
-        vscode.postMessage({ type: "switchSession", sessionId });
-        return;
-      }
-      toggleSessionMenu();
+      if (activeId === sessionId) { return; }
+      closeSessionMenu();
+      vscode.postMessage({ type: "switchSession", sessionId });
     });
     sessionTabEls.set(sessionId, el);
     return el;
@@ -1206,7 +1201,7 @@
         + (kids > 0 ? "，" + kids + " 个子会话在跑" : "")
         + (doneKids > 0 && kids === 0 ? "，" + doneKids + " 个子会话跑完了" : "")
         + (item.cwd ? "\n" + item.cwd : "")
-        + "\n" + (item.current ? "当前会话（点这里换会话）" : "点这里切过去");
+        + "\n" + (item.current ? "当前会话" : "点这里切过去");
       // 当前这一格就叫 #sessionName（“当前会话叫什么”照旧拿这个名字找）
       if (item.current) { el.id = "sessionName"; }
       else if (el.id) { el.removeAttribute("id"); }
@@ -1280,9 +1275,20 @@
     return start + (tabs.length - end);
   }
 
+  /**
+   * 那一排格列哪些会话：主会话，加上本屏正在看的那个（子会话平时不占格）。
+   * 正在看的那个得列：它一定摆得出来（见 layoutSessionTabs），会话在跑时按 Ctrl+Alt+W
+   * 那一下变成的勾就落在它身上；要是它正好是个子会话、这里却没有它，那一下就没处落。
+   * 父会话已经关掉的子会话会以主会话的身份出现在 openSessionItems() 里（depth 为 0），
+   * 那种照列——它已经是一个独立会话了。
+   */
+  function sessionTabItems() {
+    return openSessionItems().filter((item) => !item.depth || item.current);
+  }
+
   /** 顶条那一排格：一格一个主会话（带在跑的小点、派出去的子会话个数、关它的那颗 ×）。 */
   function renderSessionBar() {
-    const items = sessionMenuItems();
+    const items = sessionTabItems();
     renderSessionTabs(items);
     // ▾ 露不露面在这一步里定（有格子被藏起来才露）
     layoutSessionTabs();
@@ -1293,11 +1299,11 @@
     syncDockHeaderHeight();
   }
 
-  // ==================== 顶条那颗会话名的下拉框 ====================
-  // 点顶条中间那颗名字 → 从它下面掉出一张清单，里面是**开着的主会话**，点一行就切过去（不新开、不重载）。
-  // 子会话不占这里的行（清单只当主会话的快速切换用）：要看 / 要点进子会话去
-  // 「项目与会话」面板的「正在对话」那一段，那里子会话照旧缩进挂在派它的会话下面。
-  // 看历史 / 换工作区 / 在别的目录里开会话也走那个面板。
+  // ==================== 顶条排尾那颗 ▾ 的下拉框 ====================
+  // 点排尾那颗 ▾ → 从它下面掉出一张清单，列的只是「顶条上摆不下、被藏起来的那几格」
+  // （摆得下的直接点格子就行）：点一行就切过去。
+  // 这一格永远摆得出来（见 layoutSessionTabs），所以清单里不会有当前这个。
+  // 看历史 / 换工作区 / 在别的目录里开会话也走「项目与会话」面板。
   const sessionMenuEl = document.createElement("div");
   sessionMenuEl.id = "sessionMenu";
   sessionMenuEl.className = "hidden";
@@ -1333,20 +1339,20 @@
   }
 
   /**
-   * 这张清单要列的行：主会话，加上本屏正在看的那个（子会话平时不在下拉框里露面）。
-   * 正在看的那个得列：会话正在跑时按 Ctrl+Alt+W 要先把菜单打开、那一行变确认条，
-   * 要是它正好是个子会话、这里却没有它，那一下就没处落。
-   * 父会话已经关掉的子会话会以主会话的身份出现在 openSessionItems() 里（depth 为 0），
-   * 那种照列——它已经是一个独立会话了。
+   * 那张清单要列的行：顶条上被藏起来的那几格（摆得下的直接点格子，不靠这张清单）。
+   * 一格被藏没藏，看它身上那个类（layoutSessionTabs 摆出来的）。
    */
-  function sessionMenuItems() {
-    return openSessionItems().filter((item) => !item.depth || item.current);
+  function overflowSessionItems() {
+    return sessionTabItems().filter((item) => {
+      const el = sessionTabEls.get(item.sessionId);
+      return !!el && el.classList.contains("tab-hidden");
+    });
   }
 
   /** 画一遍清单内容：一行一个（行尾一颗关闭叉；会话正在跑时点了先变确认条，再点勾才真关）。 */
   function renderSessionMenu() {
     sessionMenuEl.innerHTML = "";
-    sessionMenuItems().forEach((item) => {
+    overflowSessionItems().forEach((item) => {
       const el = document.createElement("div");
       el.className = "sm-item" + (item.current ? " current" : "");
       el.title = (item.label || "") + (item.cwd ? "\n" + item.cwd : "");
@@ -1411,15 +1417,15 @@
   /** 清单开着就重画一遍（关会话的确认条变来变去）；重画完还得重新摆位（宽窄变了：确认条那阵宽度是钉住的）。 */
   function refreshSessionMenu() {
     if (!sessionMenuOpen) { return; }
-    // 行都关没了就先收起这张空壳（全关完时后端会补一个空会话，等新列表到了再说）
-    if (!sessionMenuItems().length) { closeSessionMenu(); return; }
+    // 行都关没了就先收起这张空壳（全摆得下了、或者被藏起来的都关掉了）
+    if (!overflowSessionItems().length) { closeSessionMenu(); return; }
     renderSessionMenu();
     placeSessionMenu();
   }
 
   function openSessionMenu() {
-    // 一个主会话都没有（刚打开、后端还没说话）：没东西可切，不开这张空壳
-    if (!sessionMenuItems().length) { return; }
+    // 顶条全摆得下（没有格子被藏起来）：没东西可翻，不开这张空壳
+    if (!overflowSessionItems().length) { return; }
     renderSessionMenu();
     sessionMenuEl.classList.remove("hidden");
     sessionMenuOpen = true;

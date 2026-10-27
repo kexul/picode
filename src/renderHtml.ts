@@ -80,7 +80,7 @@ export function renderHTML(opts: RenderHTMLOpts): string {
     `  <div id="sessionBar">\n` +
     `    <div id="sessionCenter">\n` +
     `      <div id="sessionTabs">\n` +
-    `        <button id="sessionName" class="sn-tab current" title="当前会话 · 点这里换会话" aria-label="当前会话">\n` +
+    `        <button id="sessionName" class="sn-tab current" title="当前会话" aria-label="当前会话">\n` +
     `          <span class="sn-mark"><span class="sn-dot"></span><span class="sn-count"></span></span>\n` +
     `          <span class="sn-text"></span>\n` +
     `        </button>\n` +

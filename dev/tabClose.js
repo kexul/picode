@@ -1,12 +1,14 @@
-// 顶条那一排格的名字后面那颗 × ，以及排尾那颗 ▾ 什么时候露面。
+// 顶条那一排格的名字后面那颗 × ，以及排尾那颗 ▾ 什么时候露面、里面列什么。
 //
 //   FAKEPI_THINK_MS=6000 npm run web:shot -- --fake-pi --width 900 --height 500 --script dev/tabClose.js
 //
-// 验四件事：
+// 验六件事：
 //   ① 两个会话、放得下：每格名字后面都有一颗 ×，排尾那颗 ▾ 不露面（点开也没别的可挑）
 //   ② 点闲着的那个会话的 ×：一下就关掉那一个（不用确认）
-//   ③ 会话正在跑时点 ×：那一格变红、叉换成勾，这一下不关；再点一下才关
+//   ③ 会话正在跑时点 ×：那一格变红、叉换成勾，这一下不关；再点两下（叉 + 勾）才关
 //   ④ 顶条放不下（窗口窄、会话多）：▾ 露面，藏起来的那几格在它的清单里；窗口放宽、全放得下时 ▾ 又收起来
+//   ⑤ 点当前这一格：不掉清单（清单只列摆不下的那几格）；点 ▾ 只列摆不下的，点一行切过去
+//   ⑥ 宽到全摆得下时点 ▾（那儿已经没那颗按钮了）：同样不出清单
 // 图落在 dev/shots/（名字带 tabclose-）。
 module.exports = async (page) => {
   await page.waitReady();
@@ -97,8 +99,44 @@ module.exports = async (page) => {
   await inject(fake, "fake0");
   await say("④ 五个会话（420 宽）");
   await page.shot("tabclose-4-narrow.png");
+
+  // ⑤ 清单只列被藏起来的那几格（点一下切过去）；点当前这一格不掉清单
+  const menu = () => page.eval(`
+    const el = document.getElementById("sessionMenu");
+    return {
+      open: !el.classList.contains("hidden"),
+      rows: [...el.querySelectorAll(".sm-item .sm-name")].map((e) => e.textContent),
+    };
+  `);
+  // 点当前那一格：不该掉清单
+  await page.eval(`document.querySelector("#sessionTabs .sn-tab.current span.sn-text").click(); return true;`);
+  await page.sleep(300);
+  console.log("  ⑤ 点当前那一格之后：" + JSON.stringify(await menu()));
+  // 点 ▾：列的就是藏起来的那几个（名字与顶上那排对得上）
+  await page.eval(`document.getElementById("sessionMore").click(); return true;`);
+  await page.sleep(300);
+  const shown = await menu();
+  const hiddenNames = await page.eval(`
+    const row = document.getElementById("sessionTabs");
+    return [...row.querySelectorAll(".sn-tab.tab-hidden .sn-text")].map((e) => e.textContent);
+  `);
+  console.log("  ⑤ 点 ▾ 之后：" + JSON.stringify(shown) + "，顶上藏着的是：" + JSON.stringify(hiddenNames));
+  await page.shot("tabclose-6-menu.png");
+  // 点第一行：切过去，清单收起
+  await page.eval(`document.querySelector("#sessionMenu .sm-item").click(); return true;`);
+  await page.sleep(800);
+  console.log("  ⑤ 点了第一行之后：" + JSON.stringify(await menu()) + "，当前是："
+    + await page.eval(`
+      const name = document.querySelector("#sessionTabs .sn-tab.current .sn-text");
+      return name ? name.textContent : "";
+    `));
+
   await setWidth(1000);
   await inject(fake, "fake0");
   await say("④ 同样的五个会话（1000 宽）");
+  // ⑥ 全摆得下（那颗按钮已经收了）以后再点一下它：也不出清单
+  await page.eval(`document.getElementById("sessionMore").click(); return true;`);
+  await page.sleep(300);
+  console.log("  ⑥ 全摆得下时点 ▾：" + JSON.stringify(await menu()));
   await page.shot("tabclose-5-wide.png");
 };
