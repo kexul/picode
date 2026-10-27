@@ -851,6 +851,11 @@
       turnDone: false,
       activity: "idle",
       activityDetail: "",
+      // 胶囊那颗状态动画当前挂着哪一档（等 / 写 / 想 / 工具 / 空）、什么时候换上的、
+      // 以及“还没到能换的时候”那个定时器（见 syncStatus 与 ACT_MIN_MS）。
+      actShown: "",
+      actShownAt: 0,
+      actTimer: 0,
       piReady: false,
       textDirty: false,
       rafId: 0,
@@ -3932,6 +3937,8 @@
     if (state === "nomodel") { return "选模型"; }
     return (st && st.modelId) || "";
   }
+  /** 模型名左边那颗状态动画至少显示这么久才准换（见 syncStatus）。 */
+  const ACT_MIN_MS = 300;
   /** 输入框底下那颗胶囊跟上当前会话。 */
   function syncStatus() {
     if (!ctxIconEl) { return; }
@@ -3946,10 +3953,32 @@
     //   finalizeCurrentAssistant），所以正好就是“笔在写”的那段时间。
     const act = st ? st.activity : "";
     const writing = !!(st && st.currentAssistant);
-    ctxIconEl.dataset.act = state !== "streaming" ? ""
+    const wantAct = state !== "streaming" ? ""
         : act === "thinking" ? "thinking"
             : act === "tool" ? "tool"
                 : writing ? "writing" : "waiting";
+    // 状态至少显示这么久才准换：正文吐完那一下会冒出“等”，几十毫秒后又变成工具；
+    // 不挡一下就看着抖。等不到那一下的（本来就是空、或者这一轮停了）立即生效。
+    let shown = st ? st.actShown || "" : "";
+    if (!st) { shown = ""; } else if (wantAct !== shown) {
+        const left = ACT_MIN_MS - (Date.now() - (st.actShownAt || 0));
+        // 这一轮停了（wantAct 空了）就立即收：那时候 data-st 已经是 idle，图标本来就不显，
+        // 但别把旧状态留在 data-act 上（调试工具、下一次进来都会看到它）
+        if (left > 0 && shown && wantAct) {
+            // 还没到能换的时候：先照旧的挂着，到点了再按当时的最新状态重算一次
+            if (!st.actTimer) {
+                st.actTimer = setTimeout(() => {
+                    st.actTimer = 0;
+                    if (activeId === st.id) { syncStatus(); }
+                }, left);
+            }
+        } else {
+            shown = wantAct;
+            st.actShown = wantAct;
+            st.actShownAt = Date.now();
+        }
+    }
+    ctxIconEl.dataset.act = shown;
     ctxIconEl.classList.toggle("warn", pct >= 70 && pct < 90);
     ctxIconEl.classList.toggle("err", pct >= 90);
     ctxIconEl.title = ctxTitle(st);

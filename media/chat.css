@@ -1324,38 +1324,48 @@
   #ctxIcon[data-st="streaming"]::before {
     content: ""; flex: 0 0 auto; align-self: center;
     width: 12px; height: 12px;
-    background-color: currentColor;
     -webkit-mask-image: var(--ci-icon); mask-image: var(--ci-icon);
     -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
     -webkit-mask-position: center; mask-position: center;
     -webkit-mask-size: contain; mask-size: contain;
-    color: var(--vscode-charts-blue, #3b82f6);
+    /* 颜色用 background-color 给（形状交给 mask）。换状态时颜色渐变过去，不是“啪”地换；
+       那个 transition 只在这颗小东西上，开销可以忽略。 */
+    transition: background-color 0.25s ease;
   }
   /* 等：沙漏，翻过来再翻过去（翻到 180° 跟 0° 长得一样，所以那一下跳回来看不出来） */
   #ctxIcon[data-act="waiting"]::before {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M6 2h12v2h-1L12 12 7 4H6zM6 22h12v-2h-1L12 12 7 20H6z'/%3E%3C/svg%3E");
-    animation: ci-hourglass 2.6s ease-in-out infinite;
+    background-color: var(--vscode-charts-blue, #3b82f6);
+    animation: ci-appear-waiting 0.18s ease-out, ci-hourglass 2.6s ease-in-out infinite;
   }
   /* 写：笔，一笔一笔地摆 */
   #ctxIcon[data-act="writing"]::before {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 0 0 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z'/%3E%3C/svg%3E");
-    animation: ci-pen 0.7s ease-in-out infinite;
+    background-color: var(--vscode-charts-blue, #3b82f6);
+    animation: ci-appear-writing 0.18s ease-out, ci-pen 0.7s ease-in-out infinite;
   }
-  /* 在想：灯泡，一明一暗 */
+  /* 在想：灯泡，一明一暗（明暗用亮度做，把 opacity 留给上面那 180ms 的淡入） */
   #ctxIcon[data-act="thinking"]::before {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7z'/%3E%3C/svg%3E");
-    color: var(--vscode-charts-yellow, #d97706);
-    animation: ci-bulb 1.6s ease-in-out infinite;
+    background-color: var(--vscode-charts-yellow, #d97706);
+    animation: ci-appear-thinking 0.18s ease-out, ci-bulb 1.6s ease-in-out infinite;
   }
   /* 工具在跑：扳手，来回扳 */
   #ctxIcon[data-act="tool"]::before {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z'/%3E%3C/svg%3E");
-    color: var(--vscode-charts-green, #16a34a);
-    animation: ci-wrench 1s ease-in-out infinite;
+    background-color: var(--vscode-charts-green, #16a34a);
+    animation: ci-appear-tool 0.18s ease-out, ci-wrench 1s ease-in-out infinite;
   }
+  /* 换形象时那一下淡入：形状是硬切的（mask 不能过渡），靠这 180ms 把切口藏在淡入里。
+     四条内容一样、名字故意不同 —— 同一个 animation-name 在切换时不会重放，
+     只有名字变了浏览器才当成一条新动画从头放。 */
+  @keyframes ci-appear-waiting { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes ci-appear-writing { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes ci-appear-thinking { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes ci-appear-tool { from { opacity: 0; } to { opacity: 1; } }
   @keyframes ci-hourglass { 0%, 40% { transform: rotate(0deg); } 60%, 100% { transform: rotate(180deg); } }
   @keyframes ci-pen { 0%, 100% { transform: rotate(-14deg) translate(-0.5px, 0.5px); } 50% { transform: rotate(14deg) translate(0.5px, -1px); } }
-  @keyframes ci-bulb { 0%, 100% { opacity: 0.6; transform: scale(0.94); } 50% { opacity: 1; transform: scale(1.05); } }
+  @keyframes ci-bulb { 0%, 100% { filter: brightness(0.6); transform: scale(0.94); } 50% { filter: brightness(1.25); transform: scale(1.05); } }
   @keyframes ci-wrench { 0%, 100% { transform: rotate(-30deg); } 50% { transform: rotate(30deg); } }
   #ctxIcon.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
   #ctxIcon.err { color: var(--vscode-errorForeground, #f14c4c); }
