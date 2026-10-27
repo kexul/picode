@@ -385,6 +385,8 @@ export class SessionRuntime {
         // “自动起标题”：只给主会话带（子会话、判官的名字由派活那边给，不用再花一次请求）
         const titleExtension = this.launch?.noTaba ? "" : cfg.titleExtension || "";
         if (titleExtension) { extraArgs.push("-e", titleExtension); }
+        // “会话里的截图挪出会话文件”：每个会话都带（子会话读图一样要挪）
+        if (cfg.imageExtension) { extraArgs.push("-e", cfg.imageExtension); }
         if (this.launch?.extraArgs && this.launch.extraArgs.length > 0) {
             extraArgs.push(...this.launch.extraArgs);
         }

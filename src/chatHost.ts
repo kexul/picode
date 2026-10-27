@@ -22,7 +22,7 @@ import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase, type ViewOptionItem } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
-import { getAskAssets, getGoalAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
+import { getAskAssets, getGoalAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
 import {
     listProjectDirs,
@@ -212,6 +212,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const ask = getAskAssets();
         const goal = getGoalAssets();
         const title = getTitleAssets();
+        const image = getImageAssets();
         return {
             piPath: cfg.piPath,
             provider: cfg.provider,
@@ -226,6 +227,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             goalExtension: goal?.ok ? goal.extensionPath : "",
             // 自动起标题：只给主会话加载（子会话、判官不带）
             titleExtension: title?.ok ? title.extensionPath : "",
+            // 会话里的截图挪出会话文件：每个会话都带
+            imageExtension: image?.ok ? image.extensionPath : "",
         };
     }
 

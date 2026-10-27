@@ -38,6 +38,11 @@ export interface PiConfig {
      * 子会话、判官不带（它们的名字由派活那边给）。空串或缺省表示不起标题。
      */
     titleExtension?: string;
+    /**
+     * 「会话里的截图挪出会话文件」那个扩展的路径（插件写在 pichat 目录里）。
+     * 每个会话都带（子会话读图一样要挪）。空串或缺省表示图照旧整张存在会话文件里。
+     */
+    imageExtension?: string;
 }
 
 /**

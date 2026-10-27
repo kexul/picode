@@ -541,6 +541,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (cfg.tabaExtension) { extraArgs.push("-e", cfg.tabaExtension); }
         if (cfg.askExtension) { extraArgs.push("-e", cfg.askExtension); }
         if (cfg.titleExtension) { extraArgs.push("-e", cfg.titleExtension); }
+        if (cfg.imageExtension) { extraArgs.push("-e", cfg.imageExtension); }
         const client = new PiClient({
             piPath: cfg.piPath,
             cwd: this.getCwd(),

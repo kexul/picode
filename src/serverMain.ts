@@ -18,7 +18,7 @@ import { ChatHost } from "./chatHost";
 import { readServerConfig, updateServerConfig } from "./serverConfig";
 import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
 import { startRestart } from "./serverRestart";
-import { ensureAskAssets, ensureGoalAssets, ensureTabaAssets, ensureTitleAssets } from "./bridgeAssets";
+import { ensureAskAssets, ensureGoalAssets, ensureImageAssets, ensureTabaAssets, ensureTitleAssets } from "./bridgeAssets";
 import { serverConfigFile } from "./serverPaths";
 
 /** 安装根目录（out/server → 根）。 */
@@ -177,6 +177,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     const titleAssets = ensureTitleAssets(VERSION);
     if (!titleAssets.ok) {
         log(`自动起标题没开（文件没写成：${titleAssets.error}）`);
+    }
+
+    // 会话里的截图挪出会话文件：同样先写好（每个会话都加载）
+    const imageAssets = ensureImageAssets(VERSION);
+    if (!imageAssets.ok) {
+        log(`截图挪出会话文件没开（文件没写成：${imageAssets.error}）`);
     }
 
     let started: StartedBackend;
