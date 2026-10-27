@@ -337,13 +337,15 @@
   function renderMarkdown(source) { ensureMarkedHighlight(); ensureFileLink(); return marked.parse(source, mdOptions()); }
 
   /**
-   * 正文里的图片：相对路径接到会话目录那条只读地址上（`/site/<会话>/<路径>`）。
+   * 正文里的图片：接上后端那条只读地址，让 `<img>` 真取得到。
    *
-   * 不接的话浏览器按页面地址去解析相对路径（`/示例图片.png`），后端没有那条地址；
-   * 本地绝对路径与外站地址又都被安全策略挡着（见 pageHtml.ts 的 img-src）。所以只认
-   * 「相对路径」这一种，别的原样留着（以前不显示，现在还是不显示，也不乱改地址）。
-   * 地址是 marked 编码过的（cleanUrl 走 encodeURI），这一层不再编码，只往前接一段前缀。
-   * 插件里的对话面板没有这条地址（那边页面是 vscode-webview 源、安全策略只放行 data:/blob:），照旧不显示。
+   * 不接的话浏览器按页面地址去解析相对路径（`/示例图片.png`），后端没有那条地址。两种接法：
+   *   - 会话目录里的相对路径（`img/a.png`、`./a.png`）→ `/site/<会话>/<路径>`（路径就在地址里）；
+   *   - 整机上的任何路径（`C:\…\x.png`、`/home/…/x.png`、`file:///…`、跳出会话目录的 `..`）
+   *     → `/file?anywhere=1`：后端那条放宽了目录边界、但只认图片。
+   * 外站地址（`https://…`）与 `data:` / `blob:` 原样留着不动：页面不往外站发请求（见 pageHtml.ts 的 img-src）。
+   * 地址是 marked 编码过的（cleanUrl 走 encodeURI），所以先解回路径再重新编码一次。
+   * 插件里的对话面板没有这两条地址（那边页面是 vscode-webview 源、安全策略只放行 data:/blob:），照旧不显示。
    * @param baseDir 这些路径从哪个子目录算起（文件侧边栏那份 markdown 文档按它自己所在的那一层算，
    *                消息正文就是会话目录自己，给空串）
    */
@@ -351,23 +353,41 @@
     if (!root || IN_WEBVIEW || !sessionId) { return; }
     const base = baseDir ? String(baseDir).replace(/\/$/, "") + "/" : "";
     for (const el of root.querySelectorAll("img")) {
-      const rel = mdImagePath(el.getAttribute("src") || "");
-      if (rel === null) { continue; }
-      el.setAttribute("src", "/site/" + encodeURIComponent(sessionId) + "/" + base + rel);
+      const target = mdImageTarget(el.getAttribute("src") || "", base);
+      if (!target) { continue; }
+      el.setAttribute("src", target.site !== undefined
+        ? "/site/" + encodeURIComponent(sessionId) + "/" + base + target.site
+        : "/file?session=" + encodeURIComponent(sessionId) + "&anywhere=1&path=" + encodeURIComponent(target.anywhere));
     }
   }
 
   /**
-   * 图片地址算不算「会话目录里的相对路径」：算就给去掉 `./` 的写法，不算给 null。
-   * 带协议的一律不算（`data:`、`blob:`、`http:`、外站，以及 `D:` 这种盘符开头）；
-   * `/` 开头的是绝对路径（站内地址写在正文里也当绝对路径），也不算。
+   * 图片地址该从哪儿取：`{ site }` 是会话目录里的相对路径（去 `./` 的写法），
+   * `{ anywhere }` 是整机上的路径（绝对路径、`file://`、跳出会话目录的 `..`），
+   * 取不了（外站、`data:`、`blob:` 这些）给 null，原样留着不动。
+   * @param base markdown 文档自己所在的那一层（带尾斜杠）；`..` 这种相对写法要接在它后面
    */
-  function mdImagePath(src) {
-    if (!src || src.startsWith("/") || src.startsWith("\\")) { return null; }
-    if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(src)) { return null; }
-    let p = src;
-    while (p.startsWith("./")) { p = p.slice(2); }
-    return p || null;
+  function mdImageTarget(src, base) {
+    let p = String(src || "").trim();
+    if (!p) { return null; }
+    try { p = decodeURIComponent(p); } catch (e) { /* 解不开就按原样用 */ }
+    p = p.replace(/\\/g, "/");
+    // 本机文件地址（`file:///C:/…`、`file:///home/…`）：剥掉协议头当路径用
+    if (/^file:\/\//i.test(p)) {
+      p = p.slice("file://".length);
+      if (/^\/[A-Za-z]:\//.test(p)) { p = p.slice(1); }     // file:///C:/… 的那个斜杠
+    } else if (/^[A-Za-z][A-Za-z0-9+.-]+:/.test(p)) {
+      return null;                                          // data: / blob: / http: 与外站（盘符"C:"不算：只有一个字符）
+    }
+    if (!p) { return null; }
+    // 绝对路径：`/home/…`、`C:/…`（Windows 上也有光写 `\\server\share` 的，归一化后是 `//server`）
+    const absolute = p.startsWith("/") || /^[A-Za-z]:\//.test(p);
+    let rel = p;
+    while (rel.startsWith("./")) { rel = rel.slice(2); }
+    if (!absolute && rel !== ".." && !rel.startsWith("../")) {
+      return rel ? { site: rel } : null;
+    }
+    return { anywhere: absolute || !base ? p : base + p };
   }
 
   // ==================== mermaid 图 ====================

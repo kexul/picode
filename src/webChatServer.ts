@@ -519,7 +519,8 @@ export class PiChatWebServer {
             if (pathname === "/file") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
                 this.sendFile(req, res, url.searchParams.get("session") ?? "", url.searchParams.get("path") ?? "",
-                    url.searchParams.get("mtime") ?? "", url.searchParams.get("download") === "1");
+                    url.searchParams.get("mtime") ?? "", url.searchParams.get("download") === "1",
+                    url.searchParams.get("anywhere") === "1");
                 return;
             }
             if (pathname === "/dir") {
@@ -789,10 +790,42 @@ export class PiChatWebServer {
     }
 
     /**
+     * 放宽版取文件：`/file` 带上 `anywhere=1` 时走这条，只认图片。
+     *
+     * 会话目录那道边界不判了：正文里写的 `C:\…\x.png`、`/home/…/x.png`、`file:///…`、
+     * `../x.png` 都能显示（整机上的图片按路径取）。仍然守住的两条：
+     *   - **只认图片**：扩展名不是图片的一律 403——这不是「整台机器的读接口」，只多放开了图片那一种；
+     *   - **大小照旧**：图片上限还是 MAX_IMAGE_BYTES（见 sendFile 的图片那一支）。
+     * 相对路径照样按会话目录解（页面只能拼出相对写法，绝对路径原样用）；`..`、软链接不再拦。
+     */
+    private resolveAnywhereImage(sessionId: string, wantPath: string):
+        { ok: true; real: string } | { ok: false; status: number; text: string } {
+        if (!wantPath || wantPath.includes("\0")) {
+            return { ok: false, status: 400, text: "请求里要说明是哪个图片。" };
+        }
+        const cwd = this.host.resolveSessionDir(sessionId);
+        if (!cwd) {
+            return { ok: false, status: 404, text: "这个会话不在了（页面可能开得太久），刷新页面再试。" };
+        }
+        const real = realPathOr(path.resolve(cwd, wantPath));
+        if (!real) {
+            return { ok: false, status: 404, text: "没有这个图片。" };
+        }
+        if (fileFormatOf(real) !== "image") {
+            return { ok: false, status: 403, text: "这样只能取图片，别的文件只认会话目录里的。" };
+        }
+        return { ok: true, real };
+    }
+
+    /**
      * 发一个文件给页面（`/file?session=…&path=…&mtime=…&download=1`）。
      *
      * 只读，而且只看得到当前会话目录里的文件：目录边界与那条目录地址同一套
      * （见 resolveSessionPath：`..` 绕出去的、软链接指到外面的都不给）。
+     *
+     * 唯一的例外是图片：带上 `anywhere=1` 时那道边界不判了，整机上的图片按路径都能看
+     * （正文里写 `C:\…\x.png`、`/home/…/x.png`、`../x.png` 这类——见 resolveAnywhereImage）。
+     * 别的文件、以及下载，都不认这个开关。
      *
      * 怎么给，看文件是哪种（按扩展名，见 fileFormatOf）：
      *   - 文本（UTF-8）当正文递出去，页面画成带行号的一行一格；超过 2 MB 的 413，
@@ -809,12 +842,25 @@ export class PiChatWebServer {
      *
      * @param sinceMtime 页面手上那份内容的修改时间（毫秒）；空 = 没得比，给正文
      * @param download   true = 这个请求是要把文件存下来（不设大小上限、按附件给）
+     * @param anywhere   true = 整机上的图片也认（只有图片这条路放得开，见 resolveAnywhereImage）
      */
     private sendFile(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string, wantPath: string,
-        sinceMtime = "", download = false): void {
-        const found = this.resolveSessionPath(sessionId, wantPath, "文件");
-        if (!found.ok) { this.sendText(req, res, found.status, found.text); return; }
-        const realTarget = found.real;
+        sinceMtime = "", download = false, anywhere = false): void {
+        let realTarget: string;
+        if (anywhere) {
+            // 放宽只放给图片这一种取法：下载（能存到磁盘上）与别的文件都不走这条
+            if (download) {
+                this.sendText(req, res, 403, "这条只有图片能看，不给下载。");
+                return;
+            }
+            const loose = this.resolveAnywhereImage(sessionId, wantPath);
+            if (!loose.ok) { this.sendText(req, res, loose.status, loose.text); return; }
+            realTarget = loose.real;
+        } else {
+            const found = this.resolveSessionPath(sessionId, wantPath, "文件");
+            if (!found.ok) { this.sendText(req, res, found.status, found.text); return; }
+            realTarget = found.real;
+        }
         let stat: fs.Stats;
         try {
             stat = fs.statSync(realTarget);
