@@ -14,6 +14,7 @@ import {
     extractTruncation,
     formatPiError,
     getModelThinkingLevels,
+    readStoredImage,
     resolveAnchorLine,
     textOf,
     type ResultImageBlock,
@@ -1253,7 +1254,8 @@ export class SessionRuntime {
             if (!m || m.role !== "toolResult" || typeof m.toolCallId !== "string") { continue; }
             const images = extractResultImages(m.content ?? m);
             let chars = 0;
-            for (const img of images) { chars += img.data.length; }
+            // 图在会话里的按 base64 长度算，挪出去（只有路径）的按磁盘上的字节折算
+            for (const img of images) { chars += img.data ? img.data.length : Math.round(((img.bytes ?? 0) * 4) / 3); }
             if (chars === 0) { continue; }
             if (inline.size > 0 && used + chars > budget) { continue; }
             inline.add(m.toolCallId);
@@ -1271,12 +1273,22 @@ export class SessionRuntime {
         images: ResultImageBlock[],
         inline?: Set<string>,
     ): ResultImageBlock[] {
-        if (!inline || inline.has(toolCallId) || !images.some((img) => !!img.data)) {
+        const wanted = !inline || inline.has(toolCallId);
+        if (wanted) {
+            // 挪出会话文件的图（只有路径）：这一屏要真带过去的，现在读进内存
+            return images.map((img) => {
+                if (!img.path || img.data) { return img; }
+                const data = readStoredImage(img.path);
+                return data ? { data, mimeType: img.mimeType } : { data: "", mimeType: img.mimeType, onDemand: true, bytes: img.bytes, path: img.path };
+            });
+        }
+        if (!images.some((img) => !!img.data || !!img.path)) {
             return images;
         }
         this.rememberOmittedImages(toolCallId, images);
-        return images.map((img) => img.data
-            ? { data: "", mimeType: img.mimeType, onDemand: true, bytes: Math.round((img.data.length * 3) / 4) }
+        // 记住的那份带 path（点开现读要用），发给页面的不带：页面上只要尺寸。
+        return images.map((img) => img.data || img.path
+            ? { data: "", mimeType: img.mimeType, onDemand: true, bytes: img.bytes ?? Math.round((img.data.length * 3) / 4) }
             : img);
     }
 
@@ -1328,11 +1340,13 @@ export class SessionRuntime {
             if (images) { this.rememberOmittedImages(toolCallId, images); }
         }
         const img = images ? images[index] : undefined;
-        if (!img || !img.data) {
+        // 这图可能不在会话里、只在磁盘上（pi 的扩展挪出去了），现读一份
+        const data = img && !img.data && img.path ? readStoredImage(img.path) : (img?.data ?? "");
+        if (!img || !data) {
             this.post({ type: "resultImage", toolCallId, index, error: "这张图取不到了。" });
             return;
         }
-        this.post({ type: "resultImage", toolCallId, index, data: img.data, mimeType: img.mimeType });
+        this.post({ type: "resultImage", toolCallId, index, data, mimeType: img.mimeType });
     }
 
     // ========================================================================

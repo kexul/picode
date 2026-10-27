@@ -3,6 +3,7 @@
  * 不依赖 vscode / 进程，是从 SessionRuntime 里分出来的。
  */
 
+import { readFileSync, statSync } from "node:fs";
 import type { RpcModelInfo } from "./piRpc";
 
 export const THINKING_LEVEL_ORDER = [
@@ -48,6 +49,11 @@ export function cleanToolOutput(text: string, maxLen = 200_000): string {
 export interface ResultImageBlock {
     data: string;
     mimeType: string;
+    /**
+     * 图不在会话里、在磁盘上这个路径（见 parseImageMarker）：data 为空，要用的时候现读。
+     * 为什么会有这种东西：pi 的扩展 image-offload 把截图挪出会话文件，那儿只留一行标记。
+     */
+    path?: string;
     /** base64 超过上限时为 true，data 置空，仅传占位信息。 */
     tooLarge?: boolean;
     /** 解码后的近似字节数（占位提示用）。 */
@@ -64,8 +70,57 @@ export interface ResultImageBlock {
 export const MAX_RESULT_IMAGE_B64 = 8 * 1024 * 1024;
 
 /**
- * 提取工具结果 content 里的 image 块（ pi read 读图返回 {type:"image",data,mimeType} ）。
- * 超大图不内联：返回 tooLarge 占位块，避免 base64 灌爆 webview postMessage。
+ * 会话里那行「图已经挪出会话文件」的标记。写这一行的是 pi 的扩展
+ * （~/.pi/agent/extensions/image-offload.ts），清理脚本也写同一种；这里按它把图找回来。
+ * 标记长这样：[图片已挪出会话] {"path":"C:\\…\\x.png","mimeType":"image/png"}（要看就 read 这个文件）
+ */
+const IMAGE_MARKER = "[图片已挪出会话] ";
+
+/** 从一行文字里认出「图挪到哪儿了」；不是这种标记就返回 undefined。 */
+export function parseImageMarker(text: string): { path: string; mimeType: string } | undefined {
+    if (!text.startsWith(IMAGE_MARKER)) {
+        return undefined;
+    }
+    const rest = text.slice(IMAGE_MARKER.length);
+    const end = rest.lastIndexOf("}");
+    if (end < 0) {
+        return undefined;
+    }
+    try {
+        const parsed = JSON.parse(rest.slice(0, end + 1));
+        if (typeof parsed?.path !== "string" || !parsed.path) {
+            return undefined;
+        }
+        return {
+            path: parsed.path,
+            mimeType: typeof parsed.mimeType === "string" && parsed.mimeType ? parsed.mimeType : "image/png",
+        };
+    } catch {
+        return undefined;
+    }
+}
+
+/** 挪出去的那张图解出来的字节数（拿不到就当 0）。 */
+function storedImageBytes(path: string): number {
+    try {
+        return statSync(path).size;
+    } catch {
+        return 0;
+    }
+}
+
+/** 现读一张挪出去的图（base64）；读不到就给空串。 */
+export function readStoredImage(path: string): string {
+    try {
+        return readFileSync(path).toString("base64");
+    } catch {
+        return "";
+    }
+}
+
+/**
+ * 提取工具结果 content 里的 image 块（ pi read 读图返回 {type:"image",data,mimeType} ），
+ * 以及被扩展挪出会话文件、只剩一行标记的那种（返回带 path 的块，data 为空）。
  */
 export function extractResultImages(result: unknown, maxB64Chars: number = MAX_RESULT_IMAGE_B64): ResultImageBlock[] {
     if (!result) {
@@ -78,6 +133,20 @@ export function extractResultImages(result: unknown, maxB64Chars: number = MAX_R
     }
     const out: ResultImageBlock[] = [];
     for (const c of content) {
+        if (c && c.type === "text" && typeof c.text === "string") {
+            const marker = parseImageMarker(c.text);
+            if (marker) {
+                const bytes = storedImageBytes(marker.path);
+                out.push({
+                    data: "",
+                    mimeType: marker.mimeType,
+                    path: marker.path,
+                    bytes,
+                    ...(bytes > 0 && Math.round((bytes * 4) / 3) > maxB64Chars ? { tooLarge: true } : {}),
+                });
+            }
+            continue;
+        }
         if (!c || c.type !== "image" || typeof c.data !== "string" || c.data.length === 0) {
             continue;
         }
@@ -99,7 +168,8 @@ export function extractResultText(result: unknown): string | undefined {
     const content = Array.isArray(result) ? result : r.content;
     if (Array.isArray(content)) {
         const parts = content
-            .map((c: any) => (c && c.type === "text" && typeof c.text === "string" ? c.text : ""))
+            // 「图挪出去了」那行不显示成工具输出：图本身照样画出来（见 extractResultImages）
+            .map((c: any) => (c && c.type === "text" && typeof c.text === "string" && !parseImageMarker(c.text) ? c.text : ""))
             .filter((s: string) => s.length > 0);
         if (parts.length > 0) {
             return cleanToolOutput(parts.join("\n"));
