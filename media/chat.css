@@ -1308,18 +1308,20 @@
   }
   #ctxIcon .ci-tps:empty { display: none; }
   /* 模型名左边那颗状态动画：跑着时才出现，停下就收掉（名字一直是原来那个灰）。
-     三个状态各是一个形象、各有各的动法 —— 不是同一颗圆圈换颜色：
-       干活（等第一个字 / 正在吐字）一支笔，一笔一笔地写（左右轻摆），蓝
-       在想（thinking）一颗灯泡，一明一暗，黄
-       工具在跑（tool）一把扳手，来回扳，绿
+     四个状态各是一个形象、各有各的动法 —— 不是同一颗圆圈换颜色：
+       等（waiting）还没吐字（等第一个字、想完等正文、等工具参数）：一个沙漏，慢慢翻过来，蓝
+       写（writing）正文正在流：一支笔，一笔一笔地写（左右轻摆），蓝
+       想（thinking）在后端报 thinking 时：一颗灯泡，一明一暗，黄
+       工具在跑（tool）在后端报 tool 时：一把扳手，来回扳，绿
      图形都是 data URI 里的 SVG，当 mask 用：看着的颜色由 background-color 给（颜色各状态自己定），
      mask 只决定形状。--ci-icon 一处写、下面 webkit 与标准两行共用。
-     三条路径原样取自 Material Icons（Apache-2.0）里的 edit / lightbulb / build。
+     笔 / 灯泡 / 扳手三条路径原样取自 Material Icons（Apache-2.0）的 edit / lightbulb / build；
+     沙漏那个是自己画的（两个漏斗上下对扣），不依赖谁的图标集。
      这颗动画有意不理会系统的「减少动态效果」（下面那个 media query 只管气泡里那条用量横杠）：
      它就是用来表明“还在跑”的，停了就跟没了一样。
-     数据从后端来（working / thinking / tool，见 chat.js 的 syncStatus 与 setActivity）。 */
+     数据从后端来（working / thinking / tool，见 chat.js 的 syncStatus 与 setActivity）；
+     “等”和“写”是界面自己分的：后端只说 working，界面看正文有没有在流（st.currentAssistant）。 */
   #ctxIcon[data-st="streaming"]::before {
-    --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 0 0 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z'/%3E%3C/svg%3E");
     content: ""; flex: 0 0 auto; align-self: center;
     width: 12px; height: 12px;
     background-color: currentColor;
@@ -1328,6 +1330,15 @@
     -webkit-mask-position: center; mask-position: center;
     -webkit-mask-size: contain; mask-size: contain;
     color: var(--vscode-charts-blue, #3b82f6);
+  }
+  /* 等：沙漏，翻过来再翻过去（翻到 180° 跟 0° 长得一样，所以那一下跳回来看不出来） */
+  #ctxIcon[data-act="waiting"]::before {
+    --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M6 2h12v2h-1L12 12 7 4H6zM6 22h12v-2h-1L12 12 7 20H6z'/%3E%3C/svg%3E");
+    animation: ci-hourglass 2.6s ease-in-out infinite;
+  }
+  /* 写：笔，一笔一笔地摆 */
+  #ctxIcon[data-act="writing"]::before {
+    --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 0 0 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z'/%3E%3C/svg%3E");
     animation: ci-pen 0.7s ease-in-out infinite;
   }
   /* 在想：灯泡，一明一暗 */
@@ -1342,6 +1353,7 @@
     color: var(--vscode-charts-green, #16a34a);
     animation: ci-wrench 1s ease-in-out infinite;
   }
+  @keyframes ci-hourglass { 0%, 40% { transform: rotate(0deg); } 60%, 100% { transform: rotate(180deg); } }
   @keyframes ci-pen { 0%, 100% { transform: rotate(-14deg) translate(-0.5px, 0.5px); } 50% { transform: rotate(14deg) translate(0.5px, -1px); } }
   @keyframes ci-bulb { 0%, 100% { opacity: 0.6; transform: scale(0.94); } 50% { opacity: 1; transform: scale(1.05); } }
   @keyframes ci-wrench { 0%, 100% { transform: rotate(-30deg); } 50% { transform: rotate(30deg); } }

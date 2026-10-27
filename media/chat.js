@@ -2091,6 +2091,8 @@
       applySymbolLinks(st.currentAssistant.el);
       smoothScrollToBottom(st);
       st.currentAssistant = null;
+      // 正文这一段吐完了、还没接上下一段（工具 / 想 / 再等）：动画换回「等」
+      if (activeId === st.id) { syncStatus(); }
     }
   }
 
@@ -3937,12 +3939,17 @@
     const pct = ctxPercent(st);
     const state = ctxState(st);
     ctxIconEl.dataset.st = state;
-    // 跑着的时候再细一层：后端报的 activity（working / thinking / tool）挂到 data-act 上，
-    // 界面按它换颜色与节奏（在等字 / 在想 / 在跑工具，见 chat.css 那几条）。
-    // 这里不做翻译：不是这三种就一律当 working（那是“这一轮里总有活在干”的兜底）。
+    // 跑着的时候再细一层，挂到 data-act 上（界面按它换形象与动法，见 chat.css 那几条）：
+    //   thinking 后端说在想；tool 后端说工具在跑；
+    //   剩下那种后端只说 working 的，界面再分两面：正文正在流（写）与还没吐字（等）。
+    //   “正文在流”看 st.currentAssistant：它在第一条正文增量时建、这段吐完就清（见 assistantDelta /
+    //   finalizeCurrentAssistant），所以正好就是“笔在写”的那段时间。
     const act = st ? st.activity : "";
+    const writing = !!(st && st.currentAssistant);
     ctxIconEl.dataset.act = state !== "streaming" ? ""
-        : act === "thinking" || act === "tool" ? act : "working";
+        : act === "thinking" ? "thinking"
+            : act === "tool" ? "tool"
+                : writing ? "writing" : "waiting";
     ctxIconEl.classList.toggle("warn", pct >= 70 && pct < 90);
     ctxIconEl.classList.toggle("err", pct >= 90);
     ctxIconEl.title = ctxTitle(st);
@@ -8476,7 +8483,11 @@
         if (msg.activity !== "thinking") { endThinking(t, ""); }
         break;
       case "assistantDelta":
-        if (!t.currentAssistant) { t.currentAssistant = { el: addMarkdown(t, ""), raw: "" }; }
+        if (!t.currentAssistant) {
+          t.currentAssistant = { el: addMarkdown(t, ""), raw: "" };
+          // 正文开吐了：胶囊那颗动画从「等」换成「写」（见 syncStatus 里的 data-act）
+          if (activeId === t.id) { syncStatus(); }
+        }
         t.currentAssistant.raw += msg.delta;
         t.textDirty = true;
         scheduleFlush(t);
