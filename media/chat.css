@@ -1307,10 +1307,36 @@
     font-variant-numeric: tabular-nums; font-size: 0.76em;
   }
   #ctxIcon .ci-tps:empty { display: none; }
+  /* 这一轮在跑：模型名那一格换成一道从左往右湍的彩色，停下（streamEnd）后 data-st 变回 idle，
+     字自己交回原来那个灰。刚发出去、模型还没吐第一个字那几秒，屏幕上别处没有动静，
+     就看这一格 —— 它在动就说明接上了。
+
+     做法：把渐变画在字的背景上、再用 background-clip: text 只留字里那一截。
+     淡色列到两遍（0% 与 50% 一样、50% 与 100% 一样）、宽度给 200%，背景从 0% 湍到 100%
+     正好走过一个重复周期（元素宽），因此一圈接一圈看不见接缝。
+     上面又叠了一层明暗闪动（filter: brightness）：彩色在湍，同时整体一亮一暗，看着才“闪耀”。
+     颜色选的是白底和黑底上都认得出的那几档，不用会发光的霓虹色。 */
+  #ctxIcon[data-st="streaming"] .ci-name {
+    background-image: linear-gradient(90deg,
+      #f97316, #eab308, #22c55e, #0ea5e9, #8b5cf6,
+      #f97316, #eab308, #22c55e, #0ea5e9, #8b5cf6, #f97316);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+    animation: ci-shimmer 2.6s linear infinite, ci-glint 1.3s ease-in-out infinite;
+  }
+  @keyframes ci-shimmer { from { background-position: 0% 50%; } to { background-position: 100% 50%; } }
+  @keyframes ci-glint { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.2); } }
   #ctxIcon.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
   #ctxIcon.err { color: var(--vscode-errorForeground, #f14c4c); }
   #ctxIcon[data-st="loading"], #ctxIcon[data-st="wait"], #ctxIcon[data-st="nomodel"], #ctxIcon[data-st="none"] { opacity: 0.55; }
-  @media (prefers-reduced-motion: reduce) { #ctxIcon .ci-fill { transition: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    #ctxIcon .ci-fill { transition: none; }
+    /* 不湍了也还是彩色的：颜色本身就把“在跑 / 没跑”分开了 */
+    #ctxIcon[data-st="streaming"] .ci-name { animation: none; }
+  }
   /* 工具结果内联图片（read 读图等）：缩略图 + 点击放大 */
   .tc-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }
   .tc-img { max-width: 100%; max-height: 320px; border-radius: 6px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); background: rgba(128,128,128,0.08); cursor: zoom-in; }
