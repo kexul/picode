@@ -1326,7 +1326,7 @@
     -webkit-mask-position: center; mask-position: center;
     -webkit-mask-size: contain; mask-size: contain;
     color: var(--vscode-charts-blue, #3b82f6);
-    animation: ci-pen 0.9s ease-in-out infinite;
+    animation: ci-pen 0.7s ease-in-out infinite;
   }
   /* 在想：灯泡，一明一暗 */
   #ctxIcon[data-act="thinking"]::before {
@@ -1340,16 +1340,18 @@
     color: var(--vscode-charts-green, #16a34a);
     animation: ci-wrench 1s ease-in-out infinite;
   }
-  @keyframes ci-pen { 0%, 100% { transform: rotate(-9deg) translateY(0); } 50% { transform: rotate(9deg) translateY(-1px); } }
+  @keyframes ci-pen { 0%, 100% { transform: rotate(-14deg) translate(-0.5px, 0.5px); } 50% { transform: rotate(14deg) translate(0.5px, -1px); } }
   @keyframes ci-bulb { 0%, 100% { opacity: 0.6; transform: scale(0.94); } 50% { opacity: 1; transform: scale(1.05); } }
   @keyframes ci-wrench { 0%, 100% { transform: rotate(-30deg); } 50% { transform: rotate(30deg); } }
+  @keyframes ci-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
   #ctxIcon.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
   #ctxIcon.err { color: var(--vscode-errorForeground, #f14c4c); }
   #ctxIcon[data-st="loading"], #ctxIcon[data-st="wait"], #ctxIcon[data-st="nomodel"], #ctxIcon[data-st="none"] { opacity: 0.55; }
   @media (prefers-reduced-motion: reduce) {
     #ctxIcon .ci-fill { transition: none; }
-    /* 不动了：三个形象都在、颜色也在，还是分得清在干嘛 */
-    #ctxIcon[data-st="streaming"]::before { animation: none; }
+    /* 不摆不转了（那类位移最容易让人难受），但也别像画上去的一动不动：留一档很慢的明暗，
+       说明“还在跑”。形象与颜色照旧，还是分得清在干嘛。 */
+    #ctxIcon[data-st="streaming"]::before { animation: ci-breathe 3s ease-in-out infinite; }
   }
   /* 工具结果内联图片（read 读图等）：缩略图 + 点击放大 */
   .tc-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }
