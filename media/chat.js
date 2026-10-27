@@ -76,12 +76,9 @@
   const goalBarEl = document.getElementById("goalBar");
   const newSessionBtn = document.getElementById("newSessionBtn");
   const sessionNameBtn = document.getElementById("sessionName");
-  // 顶条名字底下那行小字：当前会话跑在哪个目录（内容由 renderSessionBar 填）
-  const sessionPathEl = document.getElementById("sessionPath");
-  const sessionPathTextEl = sessionPathEl ? sessionPathEl.querySelector(".sp-text") : null;
   // 输入框底下那条小横排：左边是模型胶囊（model chip），右边是「你说过的话」那颗按钮。
   const ctxIconEl = document.getElementById("ctxIcon");
-  // 顶条中间那一列（会话名 + 目录两行）：两行合起来就是一块可点区域，见下面的点击监听
+  // 顶条中间那一块（装着那一排会话格）：清单贴着当前那一格掉出来，点别处收起
   const sessionCenterEl = document.getElementById("sessionCenter");
   // 输入框的起步高度：固定占 144px（约七行）；浏览器那份页面在 CSS 里把
   // --pichat-input-min-height 设成了一行，这里读出来当最小高度（读不到就用默认值，
@@ -98,22 +95,31 @@
   newSessionBtn.addEventListener("click", () => {
     vscode.postMessage({ type: "newSession" });
   });
-  // 顶条中间那一列（会话名 + 底下那行目录）：点哪一行都掉出同一张清单。
-  // 挂在整列上而不是名字那颗按钮上：两行都得是可点区域；按钮上按回车出来的点击也会冒到这里。
-  // 一个会话都没有时不掉清单（里头什么都没有）：去把「项目与会话」摊开，那里才有东西可挑。
-  sessionCenterEl.addEventListener("click", () => {
-    if (!activeSession()) { openWorkspaceForEmpty(); return; }
-    toggleSessionMenu();
-  });
-  // 两行右边那颗朝下的小箭头：只在开着两个以上会话时露面（提示这里点得开、能换）。
-  // 挂在装着两行的这颗按钮上（它是按钮里最后一个孩子，所以落在右边）：
-  // 竖直方向跟着两行一起居中，不单对着会话名那一行（见 chat.css 的 #sessionName）。
-  // 画的还是那份 chevron（画的是朝右），转 90° 成朝下。
-  const sessionCaret = document.createElement("span");
-  sessionCaret.className = "sn-caret hidden";
-  sessionCaret.setAttribute("aria-hidden", "true");
+  // 顶条中间那一排会话格（见下面 renderSessionTabs）：一格一个主会话，点一下切过去。
+  const sessionTabRow = document.getElementById("sessionTabs");
+  // 右边那颗 ▾：掉出完整清单（每行还带那颗 × 关会话）。两个以上会话时露面。
+  // 画的还是那份 chevron（画的是朝右），转 90° 成朝下（见 chat.css 的 #sessionMore）。
+  const sessionCaret = document.createElement("button");
+  sessionCaret.type = "button";
+  sessionCaret.id = "sessionMore";
+  sessionCaret.className = "hidden";
+  sessionCaret.title = "全部会话";
+  sessionCaret.setAttribute("aria-label", "全部会话");
   sessionCaret.innerHTML = CHEVRON_SVG;
-  sessionNameBtn.appendChild(sessionCaret);
+  sessionCaret.addEventListener("click", (e) => { e.stopPropagation(); toggleSessionMenu(); });
+  sessionTabRow.appendChild(sessionCaret);
+  // 一个会话都没有时不掉清单（里头什么都没有）：去把「项目与会话」摊开，那里才有东西可挑。
+  sessionTabRow.addEventListener("click", () => {
+    if (!activeSession()) { openWorkspaceForEmpty(); }
+  });
+  // （会话跑在哪个目录不上顶条：一排格子已经够挤，完整路径放在每格的悬停提示里。）
+  // 格与格之间那个间距（量摆设时用，跟 chat.css 里 #sessionTabs 的 gap 一个数）
+  const TAB_GAP = 4;
+  // 那一排的宽度一变（窗口、左边那一列、右边那一列）就重摆一次：放得下几个就放几个。
+  // 摆出来的东西不改那一排自己的宽度，所以不会来回打转。
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(() => layoutSessionTabs()).observe(sessionTabRow);
+  }
 
   // ---- 会话本地状态（后端 sessionList 消息驱动）----
   // sessions：一个会话一份状态（消息窗格 + 名字 / 状态 / 父子关系）。
@@ -1106,38 +1112,119 @@
     return n;
   }
 
-  /** 顶条中间那行字：当前会话名（带在跑的小点；主会话多过一个就再挂一颗朝下的小箭头）。 */
-  function renderSessionBar() {
-    const st = activeId ? sessions.get(activeId) : null;
-    const text = sessionLabel(st);
-    const textEl = sessionNameBtn.querySelector(".sn-text");
-    if (textEl) { textEl.textContent = text; }
-    // 派出去的子会话还有几个在跑：写在小点下面（零个就空着，那一格自己收起来）。
-    const kids = st ? runningChildCount(st.id) : 0;
-    // 跑完了的（结果已交回）：没有在跑的时候那颗点变绿，写完的数量也让人知道有几个
-    const doneKids = st ? doneChildCount(st.id) : 0;
-    const countEl = sessionNameBtn.querySelector(".sn-count");
-    if (countEl) { countEl.textContent = kids > 0 ? String(kids) : ""; }
-    sessionNameBtn.title = "当前会话：" + text
-      + (kids > 0 ? "，" + kids + " 个子会话在跑" : "")
-      + (doneKids > 0 && kids === 0 ? "，" + doneKids + " 个子会话跑完了" : (st && st.turnDone ? "，这一轮跑完了" : ""))
-      + "（点这里换会话）";
-    // 名字底下那行小字：当前会话跑在哪个目录（会话在别的项目里开的时候就看得出差别）。
-    // 拿不到目录（列表还没到、会话已关）就不占行，顶条高度不跳。
-    const dir = st && typeof st.cwd === "string" ? st.cwd : "";
-    if (sessionPathTextEl) { sessionPathTextEl.textContent = dir; }
-    if (sessionPathEl) {
-      sessionPathEl.title = dir;
-      sessionPathEl.classList.toggle("hidden", !dir);
+  // ==================== 顶条那一排会话格 ====================
+  // 一格一个主会话（跟下拉清单同一份行：主会话，加上本屏正在看的那个子会话）。
+  // 点别的格直接切过去；点当前这一格跟以前一样掉出完整清单（关会话、看目录都在那张里）。
+  // 骨架里那一格（#sessionName）头一回要画时拿去做某一格。
+  let spareTabEl = sessionNameBtn;
+  const sessionTabEls = new Map();     // sessionId -> 它那一格的元素
+
+  /** 取某一格（没有就造一个）：一格 = 小点（底下挂子会话个数）+ 名字。 */
+  function sessionTabEl(sessionId) {
+    let el = sessionTabEls.get(sessionId);
+    if (el) { return el; }
+    if (spareTabEl) { el = spareTabEl; spareTabEl = null; }
+    else {
+      el = document.createElement("button");
+      el.type = "button";
+      el.innerHTML = '<span class="sn-mark"><span class="sn-dot"></span><span class="sn-count"></span></span>'
+        + '<span class="sn-text"></span>';
     }
-    sessionNameBtn.classList.toggle("streaming", !!(st && (st.streaming || st.loading)));
-    // 派出去的子会话还在跑：本会话自己闲着也把那颗点亮出来（一样呼吸），
-    // 一眼看得出这一家子还在干活（等的是子会话，不是本会话在答）。
-    sessionNameBtn.classList.toggle("child-running", kids > 0);
-    // 绿点：这一轮跑完了（不管当时有没有看着它），或者派出去的子会话跑完了、又没有谁在跑
-    sessionNameBtn.classList.toggle("done", !!(st && st.turnDone) || doneKids > 0);
-    // 就一个主会话时不必提示“这里能换”（点开还是同一张清单：里面就它自己）
-    sessionCaret.classList.toggle("hidden", sessionMenuItems().length < 2);
+    el.classList.add("sn-tab");
+    // 点这一格：不是当前这个就切过去（一下就换了）；是当前这个就掉出完整清单
+    el.addEventListener("click", () => {
+      if (activeId !== sessionId) {
+        closeSessionMenu();
+        vscode.postMessage({ type: "switchSession", sessionId });
+        return;
+      }
+      toggleSessionMenu();
+    });
+    sessionTabEls.set(sessionId, el);
+    return el;
+  }
+
+  /** 画一遍这一排格（顺序就是清单的顺序）。 */
+  function renderSessionTabs(items) {
+    // 关掉的会话：它那一格从 DOM 里摘掉
+    for (const [id, el] of sessionTabEls) {
+      if (items.some((item) => item.sessionId === id)) { continue; }
+      if (el.parentElement) { el.parentElement.removeChild(el); }
+      sessionTabEls.delete(id);
+    }
+    items.forEach((item) => {
+      const el = sessionTabEl(item.sessionId);
+      const st = sessions.get(item.sessionId);
+      // 派出去的子会话还有几个在跑 / 几个跑完了：小点底下那个数、那颗绿点用它
+      const kids = st ? runningChildCount(st.id) : 0;
+      const doneKids = st ? doneChildCount(st.id) : 0;
+      const nameEl = el.querySelector(".sn-text");
+      if (nameEl) { nameEl.textContent = item.label || ""; }
+      const countEl = el.querySelector(".sn-count");
+      if (countEl) { countEl.textContent = kids > 0 ? String(kids) : ""; }
+      el.classList.toggle("current", !!item.current);
+      el.classList.toggle("streaming", !!(item.streaming || item.loading));
+      // 派出去的子会话还在跑：本会话自己闲着也把那颗点亮出来（一样呼吸），
+      // 一眼看得出这一家子还在干活（等的是子会话，不是本会话在答）。
+      el.classList.toggle("child-running", kids > 0);
+      // 绿点：这一轮跑完了（不管当时有没有看着它），或者派出去的子会话跑完了、又没有谁在跑
+      el.classList.toggle("done", !!item.turnDone || (doneKids > 0 && kids === 0));
+      // 目录放在这一格身上（顶条上不写目录了；调试脚本要知道“当前会话跑在哪儿”就取这个）
+      el.dataset.cwd = item.cwd || "";
+      el.title = (item.label || "")
+        + (kids > 0 ? "，" + kids + " 个子会话在跑" : "")
+        + (doneKids > 0 && kids === 0 ? "，" + doneKids + " 个子会话跑完了" : "")
+        + (item.cwd ? "\n" + item.cwd : "")
+        + "\n" + (item.current ? "当前会话（点这里换会话）" : "点这里切过去");
+      // 当前这一格就叫 #sessionName（“当前会话叫什么”照旧拿这个名字找）
+      if (item.current) { el.id = "sessionName"; }
+      else if (el.id) { el.removeAttribute("id"); }
+      // 按清单顺序摆，▾ 永远在最后
+      sessionTabRow.insertBefore(el, sessionCaret);
+    });
+  }
+
+  /**
+   * 摆得下几格：先按原样量一遍，放不下就只留摆得下的（从当前这一格起往后塞、再往前补），
+   * 其余的藏起来 —— 藏起来的都在 ▾ 那张完整清单里。
+   * 顶条一变宽窄（窗口、左边文件侧边栏、右边那一列）就重新摆一次。
+   */
+  function layoutSessionTabs() {
+    const tabs = Array.prototype.filter.call(sessionTabRow.children, (el) => el.classList.contains("sn-tab"));
+    if (!tabs.length) { return; }
+    // 量之前先把上一回藏起来的放出来：藏着的量不到宽（量到的会是 0）
+    tabs.forEach((el) => { el.classList.remove("tab-hidden"); });
+    const widths = tabs.map((el) => el.offsetWidth);
+    const caretW = sessionCaret.offsetWidth ? sessionCaret.offsetWidth + TAB_GAP : 0;
+    const room = Math.max(0, sessionTabRow.clientWidth - caretW);
+    const need = (from, to) => {
+      let w = 0;
+      for (let i = from; i < to; i++) { w += widths[i] + (i > from ? TAB_GAP : 0); }
+      return w;
+    };
+    let start = 0;
+    let end = tabs.length;
+    if (need(0, tabs.length) > room) {
+      // 当前这一格一定留着（就算它自己都放不下也留着：名字自己省略）
+      const curIdx = tabs.findIndex((el) => el.classList.contains("current"));
+      start = curIdx < 0 ? 0 : curIdx;
+      end = start + 1;
+      while (end < tabs.length && need(start, end + 1) <= room) { end++; }
+      while (start > 0 && need(start - 1, end) <= room) { start--; }
+    }
+    for (let i = 0; i < tabs.length; i++) {
+      if (i < start || i >= end) { tabs[i].classList.add("tab-hidden"); }
+    }
+  }
+
+  /** 顶条那一排格：一格一个主会话（带在跑的小点、派出去的子会话个数）。 */
+  function renderSessionBar() {
+    const items = sessionMenuItems();
+    renderSessionTabs(items);
+    // 就一个主会话时不必留那颗 ▾（点开还是同一张清单：里面就它自己）
+    sessionCaret.classList.toggle("hidden", items.length < 2);
+    // ▾ 露不露面会改那一排的可用宽度：按新的宽度再摆一次（藏 / 放都要对）
+    layoutSessionTabs();
     // 清单开着的时候它会跟着变（换会话、改标题、某个会话跑完了）：重画完还要重新摆——
     // 内容变宽变窄了，贴着屏幕边的位置就不对了。
     refreshSessionMenu();
@@ -1162,7 +1249,9 @@
    *  先量准宽度，再把整块夹进屏幕里（左右各留 8px）。
    *  有人正在确认关会话时宽度钉在点叉之前的那个值上：行尾多一颗勾也不许把整张清单撑宽。 */
   function placeSessionMenu() {
-    const anchor = (sessionCenterEl || sessionNameBtn).getBoundingClientRect();
+    // 贴在当前那一格底下（点 ▾ 掉出来的也一样：那一格就在 ▾ 边上，不会跑太远）
+    const cur = activeId ? sessionTabEls.get(activeId) : null;
+    const anchor = (cur || sessionCenterEl || sessionNameBtn).getBoundingClientRect();
     const margin = 8;
     // 量之前先把上一次留下的 left / width 清掉：left 留着会挤小可用宽度、
     // 上一次钉死的 width 会掩盖内容的自然宽度，两种都会把宽度量成错的。
@@ -5059,11 +5148,11 @@
       }
       return;
     }
-    const pathShown = !!(sessionPathEl && !sessionPathEl.classList.contains("hidden"));
-    // 左边那一列的宽度也算进键里：对话那边一变宽窄，顶条里的名字 / 目录可能多折一行、高度就变了
+    // 左边那一列的宽度也算进键里：对话那边一变宽窄，顶条里那排会话格的高度可能就变了
     //（拖宽度拖完定下来的那一下会调到这里，见 wireFileSidebarResize）。
+    // 那一排格自己的高度也算进来：派出去的子会话在跑时小点底下多一个数，整条会高两个像素。
     const key = (document.body.style.getPropertyValue("--vscode-font-size") || "") + "|" +
-      (pathShown ? "dir" : "") + "|" + window.innerWidth + "|" +
+      Math.ceil(sessionTabRow.getBoundingClientRect().height) + "|" + window.innerWidth + "|" +
       (rightDock ? "r" : "") + (fileDock ? "l" + Math.round(fileSidebar.width) + "|" : "");
     if (key === dockBarKey) { return; }
     bar.style.height = "";
@@ -7658,6 +7747,10 @@
         openToolStats();
       });
       view.footer.appendChild(statsBtn);
+      // 「截图」：请插件截一张跑后端的这台电脑的桌面（手机上常用）。这颗按钮归 browserBridge.js 建，
+      // 这里只管把它排在「统计」后头；后端说截不了桌面时它压根不存在。
+      const shotBtn = typeof window.pichatScreenshotButton === "function" ? window.pichatScreenshotButton() : null;
+      if (shotBtn) { view.footer.appendChild(shotBtn); }
     } else if (toggle) {
       view.footer.classList.remove("hidden");
       const closeBtn = document.createElement("button"); closeBtn.className = "secondary"; closeBtn.textContent = "关闭";

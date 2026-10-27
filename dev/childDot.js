@@ -204,10 +204,7 @@ module.exports = async (page) => {
     );
   }
 
-  // ---- 那颗点与箭头落在哪一行：都该贴着“两行合起来”那条的中线 ----
-  // 以前它们是贴着会话名那一行居中的（看着偏上）；现在两行都在同一颗按钮里，
-  // 点与箭头跟着这颗按钮上下居中。量之前先把两样都弄出来：本会话在跑（点亮），
-  // 清单里两个主会话（箭头才露面）。
+  // ---- 那一格里的小点落在哪一行：跟它那一格的名字同一行（目录行已经从顶条下去了） ----
   await inject([
     session({ streaming: true, title: "长尾 drop 门审计与 +19072 全 0 结案" }),
     other(),
@@ -215,63 +212,52 @@ module.exports = async (page) => {
   const pos = await page.eval(`
     const btn = document.getElementById("sessionName");
     const mid = (el) => { const r = el.getBoundingClientRect(); return (r.top + r.bottom) / 2; };
-    const dotMid = ["#sessionName .sn-dot", "#sessionName .sn-caret"].map((sel) => mid(btn.querySelector(sel)));
+    const dot = btn.querySelector(".sn-dot").getBoundingClientRect();
+    const tab = btn.getBoundingClientRect();
     return {
-      dotMid,
-      linesMid: mid(btn.querySelector(".sn-lines")),
+      dotMid: (dot.top + dot.bottom) / 2,
       nameMid: mid(btn.querySelector(".sn-text")),
-      pathMid: mid(document.getElementById("sessionPath")),
-      pathVisible: getComputedStyle(document.getElementById("sessionPath")).display !== "none",
+      inside: dot.top >= tab.top - 0.5 && dot.bottom <= tab.bottom + 0.5,
     };
   `);
-  for (const [i, what] of ["小点", "箭头"].entries()) {
-    const off = pos.dotMid[i] - pos.linesMid;
-    // 三件事：目录行得在（不然只剩一行，“两行中间”无从谈起）；
-    // 点 / 箭头的中心跟两行那块的中心齐（差 1px 以内）；它得在会话名那行之下、目录那行往上。
-    const ok = pos.pathVisible && Math.abs(off) <= 1
-      && pos.dotMid[i] > pos.nameMid && pos.dotMid[i] < pos.pathMid;
+  {
+    const off = pos.dotMid - pos.nameMid;
+    const ok = Math.abs(off) <= 1 && pos.inside;
     if (!ok) { bad++; }
     console.log(
-      `${ok ? "√" : "×"} ${what}竖直位置：落在两行中间（两行中线 ${pos.linesMid.toFixed(1)}，它在 ${pos.dotMid[i].toFixed(1)}，` +
-      `会话名那行中线 ${pos.nameMid.toFixed(1)}、目录那行 ${pos.pathMid.toFixed(1)}，差 ${off.toFixed(1)}px` +
-      (pos.pathVisible ? "）" : "；目录行没显示）")
+      `${ok ? "√" : "×"} 小点竖直位置：落在会话名那一行上（名字中线 ${pos.nameMid.toFixed(1)}，它在 ${pos.dotMid.toFixed(1)}，差 ${off.toFixed(1)}px）` +
+      (pos.inside ? "" : "；点冒出这一格了")
     );
   }
 
-  // ---- 有数字的时候：点与数字这一小竖条一起落在两行中间，数字在点的正下面 ----
+  // ---- 有数字的时候：数字在点的正下面，这一小竖条不出那一格 ----
   await inject([session(), child("running")]);
   const pos2 = await page.eval(`
     const btn = document.getElementById("sessionName");
     const box = (el) => el.getBoundingClientRect();
-    const mid = (el) => { const r = box(el); return (r.top + r.bottom) / 2; };
     const dot = box(btn.querySelector(".sn-dot"));
     const count = box(btn.querySelector(".sn-count"));
-    const lines = box(btn.querySelector(".sn-lines"));
-    const path = box(document.getElementById("sessionPath"));
+    const tab = box(btn);
     return {
-      markMid: mid(btn.querySelector(".sn-mark")),
-      linesMid: (lines.top + lines.bottom) / 2,
       dotBottom: dot.bottom, countTop: count.top,
       dotCenterX: (dot.left + dot.right) / 2, countCenterX: (count.left + count.right) / 2,
-      countBottom: count.bottom, pathBottom: path.bottom,
-      countVisible: getComputedStyle(document.getElementById("sessionName").querySelector(".sn-count")).display !== "none",
+      countBottom: count.bottom, tabBottom: tab.bottom,
+      countVisible: getComputedStyle(btn.querySelector(".sn-count")).display !== "none",
     };
   `);
   {
-    const offMark = pos2.markMid - pos2.linesMid;
     const offX = pos2.countCenterX - pos2.dotCenterX;
     const ok = pos2.countVisible
-      && Math.abs(offMark) <= 1
       && pos2.countTop >= pos2.dotBottom - 0.5
       && Math.abs(offX) <= 1
-      && pos2.countBottom <= pos2.pathBottom + 0.5;
+      && pos2.countBottom <= pos2.tabBottom + 0.5;
     if (!ok) { bad++; }
     console.log(
-      `${ok ? "√" : "×"} 点 + 数字这一竖条：整体落在两行中间（差 ${offMark.toFixed(1)}px）、` +
-      `数字在点的正下面（点底 ${pos2.dotBottom.toFixed(1)} ≤ 数字顶 ${pos2.countTop.toFixed(1)}；` +
-      `中线差 ${offX.toFixed(1)}px）、不冒出目录那行（数字底 ${pos2.countBottom.toFixed(1)}、目录底 ${pos2.pathBottom.toFixed(1)}）`
+      `${ok ? "√" : "×"} 点 + 数字这一小竖条：数字在点的正下面（点底 ${pos2.dotBottom.toFixed(1)} ≤ 数字顶 ${pos2.countTop.toFixed(1)}；` +
+      `中线差 ${offX.toFixed(1)}px）、不出那一格（数字底 ${pos2.countBottom.toFixed(1)}、格底 ${pos2.tabBottom.toFixed(1)}）`
     );
   }
+
   // ---- 「项目与会话」面板里的行首点：跑完了（子会话、别的会话）都该是绿的，当前在跑的那个不绿 ----
   await inject([session(), child("waiting", { streaming: false, activity: "idle" }), other()],
     [{ type: "turnEnd", sessionId: "p2", status: "done", text: "跑完了一轮" }]);

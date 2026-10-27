@@ -767,22 +767,26 @@
     enqueue({ type: "requestDesktopScreenshot" });
   }
 
-  // ==================== 顶栏最右边的“📷”与“<<<”两颗按钮 ====================
-  // 都挂在 #sessionBarTail 里（顶层会话条的最右边）：
-  //  - 📷：把开发机的桌面截一张发回页面看（手机上常用）；
-  //  - <<<：点它让“项目与会话”列表从右侧滑进来（消息由后端的 ChatHost 接）：
-  //    最上面是“浏览文件夹…”与当前目录，下面是用 pi 跑过会话的其它项目；
-  //    点一个项目进去就是那个项目的会话列表。
+  // ==================== “📷”与顶栏最右边的“<<<”两颗按钮 ====================
+  //  - 📷（截图）：把开发机的桌面截一张发回页面看（手机上常用）。它不占顶条，
+  //    排在「项目与会话」面板底部那一行（「设置」「统计」后头，见 chat.js 画 footer 那段）：
+  //    顶条中间要摆一排会话格，右边只留那颗 <<<。
+  //  - <<<：挂在 #sessionBarTail 里（顶条最右边），点它让“项目与会话”列表从右侧滑进来
+  //    （消息由后端的 ChatHost 接）：最上面是“浏览文件夹…”与当前目录，下面是用 pi
+  //    跑过会话的其它项目；点一个项目进去就是那个项目的会话列表。
   (function () {
     var bar = document.getElementById("sessionBarTail");
     if (!bar) { return; }
     shotBtn = document.createElement("button");
     shotBtn.type = "button";
     shotBtn.id = "browserScreenshotBtn";
-    shotBtn.innerHTML = ICON_CAMERA;
+    shotBtn.innerHTML = ICON_CAMERA + "<span>截图</span>";
     shotBtn.title = "查看桌面截图（截的是运行 VSCode 的这台电脑）";
     shotBtn.addEventListener("click", requestDesktopScreenshot);
-    if (desktopShotEnabled) { bar.appendChild(shotBtn); } else { shotBtn = null; }
+    // 自己不摆进页面：那一行由 chat.js 画（每次重画都把它接到「统计」后头），
+    // 这里只把元素交出去。后端说这台机器截不了桌面时它就是 null（那颗按钮压根不出现）。
+    window.pichatScreenshotButton = function () { return desktopShotEnabled ? shotBtn : null; };
+    if (!desktopShotEnabled) { shotBtn = null; }
 
     var btn = document.createElement("button");
     btn.type = "button";

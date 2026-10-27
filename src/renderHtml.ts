@@ -71,19 +71,20 @@ export function renderHTML(opts: RenderHTMLOpts): string {
         .join("");
 
     const head = opts.extraHead ? `  ${opts.extraHead}\n` : "";
-    // 顶条：中间一列（上头会话名、底下当前目录），右边几颗网页端按钮
-    // （左边那颗文件侧边栏开关只有浏览器页面里有，由 browserBridge.js 插在最前头）。
+    // 顶条：中间一排会话格（一格一个主会话，点一下就切过去；放不下的收进末尾那颗 ▾），
+    // 右边几颗网页端按钮（左边那颗文件侧边栏开关只有浏览器页面里有，由 browserBridge.js 插在最前头）。
     // 「新建会话」那颗加号在输入框底下那条小横排里，见下面的 #composer。
-    // 中间那一列包成 #sessionCenter（一块可点区域）：里头那颗按钮装着两行——会话名在上、
-    // 路径在下。那颗小点与箭头也是这颗按钮里的两头，跟两行整体居中（不是只对着会话名那一行）。
-    // 路径行用 span 不用 div：按钮里只允许放行内内容。
+    // 骨架里先摆当前这一格，其余由 chat.js 按会话列表补上（见 renderSessionTabs）。
+    // 会话跑在哪个目录不放顶条上（太挤）：在每格的悬停提示里。
     const sessionBar =
     `  <div id="sessionBar">\n` +
     `    <div id="sessionCenter">\n` +
-    `      <button id="sessionName" title="当前会话 · 点这里换会话" aria-label="当前会话">\n` +
-    `        <span class="sn-mark"><span class="sn-dot"></span><span class="sn-count"></span></span>\n` +
-    `        <span class="sn-lines"><span class="sn-title"><span class="sn-text"></span></span><span id="sessionPath" class="hidden"><span class="sp-text"></span></span></span>\n` +
-    `      </button>\n` +
+    `      <div id="sessionTabs">\n` +
+    `        <button id="sessionName" class="sn-tab current" title="当前会话 · 点这里换会话" aria-label="当前会话">\n` +
+    `          <span class="sn-mark"><span class="sn-dot"></span><span class="sn-count"></span></span>\n` +
+    `          <span class="sn-text"></span>\n` +
+    `        </button>\n` +
+    `      </div>\n` +
     `    </div>\n` +
     `    <div id="sessionBarTail">\n` +
     `    </div>\n` +

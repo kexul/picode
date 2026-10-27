@@ -73,7 +73,7 @@ const LOOK = `
         spaceMore: space ? Array.from(space.querySelectorAll(".pk-loadmore")).map(function (b) { return b.textContent; }).length : 0,
         folderPicker: !document.getElementById("pickerOverlay").classList.contains("hidden")
             && document.getElementById("pickerOverlay").classList.contains("pk-folders"),
-        currentDir: ((document.getElementById("sessionPath") || {}).textContent || "").trim(),
+        currentDir: ((((document.getElementById("sessionName") || {}).dataset || {}).cwd) || "").trim(),
     };
 `;
 

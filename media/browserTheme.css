@@ -31,35 +31,13 @@ html, body {
 }
 
 /*
-  顶条最右边的两颗按钮：“📷 桌面截图”和“<< 项目与会话”（点它从右侧滑入会话列表，
-  列表底部还有一行「设置」）。两颗由 browserBridge.js 挂进 #sessionBarTail
-  （顶条的尾巴），尺寸与左边那颗“+”一致（见 chat.css 的 #newSessionBtn）：
+  顶栏最右边那一颗：“<< 项目与会话”（点它从右侧滑入会话列表），由 browserBridge.js
+  挂进 #sessionBarTail（顶条的尾巴），尺寸与左边那颗“+”一致（见 chat.css 的 #newSessionBtn）：
   竖着撑满整个顶条（align-self: stretch），上下留白由顶条的内边距给。
   外层 #sessionBarTail 自己带了 margin-left: auto，这里不用再顶。
+  （“📷 截图”那颗不在顶条上了：它排在「项目与会话」面板底部那一行，见 chat.js 画 footer 那段
+  与 chat.css 里 .pk-footer.pk-history-footer 的按钮样式。）
 */
-#browserScreenshotBtn {
-  flex: 0 0 auto;
-  align-self: stretch;
-  width: 32px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--vscode-foreground);
-  opacity: 0.7;
-  font-size: 13px;
-  line-height: 1;
-  border-radius: 5px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-#browserScreenshotBtn:hover {
-  opacity: 1;
-  background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.15));
-}
-
 /* 截屏从点击到图推回来要一两秒：期间压暗并暂时点不动（见 browserBridge.js 的 busy 状态） */
 #browserScreenshotBtn.busy {
   opacity: 0.35;
@@ -85,8 +63,8 @@ html, body {
 
 /* 图标是 browserBridge.js 内联的 codicon SVG，尺寸在这里控制。
    三尖角比相机那颗大一挡：它三根尖角本身在 viewBox 里留白多，同样 18px 时
-   画出来只有 11.6px 宽（相机 13.5），所以给它 20px 补上。 */
-#browserScreenshotBtn svg { width: 18px; height: 18px; display: block; }
+   画出来只有 11.6px 宽（相机 13.5），所以给它 20px 补上。
+   （底部那行的截图按钮由 chat.css 的 footer 按钮样式管，图标 13px。） */
 #browserMenuBtn svg { width: 20px; height: 20px; display: block; }
 
 #browserMenuBtn:hover {

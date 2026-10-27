@@ -537,7 +537,7 @@ module.exports = async (page) => {
     const sessionInfo = JSON.parse(await page.eval(`
         const pane = document.querySelector(".session-view:not(.off) .session-pane");
         return JSON.stringify({
-            cwd: (document.querySelector("#sessionPath .sp-text") || {}).textContent || "",
+            cwd: (((document.getElementById("sessionName") || {}).dataset || {}).cwd) || "",
             sessionId: pane ? (pane.dataset.sessionId || "") : "",
         });
     `));

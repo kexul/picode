@@ -107,24 +107,77 @@
     100% { background-color: color-mix(in srgb, var(--vscode-button-background) 18%, transparent); }
   }
 
-  /* ---- 顶条：中间会话名与当前目录，左右几颗按钮（网页端自己接的那几颗） ---- */
-  /* 一次只看一个会话；换会话走中间那颗名字（点开清单）或最右边的 <<。
-     中间那块（#sessionCenter）里头是一颗按钮，按钮里横着排三样：小点、两行字、箭头；
+  /* ---- 顶条：中间一排会话格与当前目录，左右几颗按钮（网页端自己接的那几颗） ---- */
+  /* 一格一个主会话，点一下切过去（不用先点开清单再挑）；宽度不够就只摆放得下的，
+     其余收进右边那颗 ▾ 的清单里（排几个由 chat.js 量出来，见 layoutSessionTabs）。
      两边那几颗按钮竖着撑满整条（align-self: stretch），上下留白由顶条的内边距给。 */
   #sessionBar {
     display: flex; align-items: flex-start; gap: 6px; flex: 0 0 auto;
     box-sizing: border-box;   /* 常驻的项目与会话侧边栏开着时它的高度会被写成一个整数（见 chat.js 的 syncDockHeaderHeight） */
     padding: 5px 8px 4px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
   }
-  /* 中间那块（名字 + 目录两行）合起来是一块可点区域：点哪一行都开同一张清单，
-     悬停时整块一起亮。用了不可选中：拖选文字也会把手势变成一次点击。
-     两行现在都在里头那颗按钮里，这里就只剩它一个孩子；仍然写成竖列，是为了
-     万一页面骨架还是旧版（两行分成两个孩子）时不至于横过来。 */
+  /* 中间那一块：就一排会话格（会话跑在哪个目录不看顶条，在每格的悬停提示里）。 */
   #sessionCenter {
-    flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column;
-    border-radius: 4px; cursor: pointer; user-select: none;
+    flex: 1 1 auto; min-width: 0; display: flex;
   }
-  #sessionCenter:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
+  /* 那一排格：短的时候整排居中；一格自己就比整条还宽时（窗口窄、名字长）也不撑破顶条。 */
+  #sessionTabs {
+    flex: 1 1 auto; min-width: 0; display: flex; align-items: stretch; justify-content: center; gap: 4px;
+    overflow: hidden;
+  }
+  /* 一格：左边那颗小点（底下还挂一个子会话个数）、右边名字。名字长了从尾巴省略；
+     宽度按内容来，不缩也不伸 —— 摆不下由 chat.js 把后面几格藏起来。 */
+  .sn-tab {
+    flex: 0 0 auto; min-width: 0; max-width: min(200px, 50vw);
+    display: flex; align-items: center; justify-content: center; gap: 5px;
+    padding: 3px 8px; border: none; background: transparent; border-radius: 4px;
+    color: var(--vscode-foreground); font-family: inherit;
+    /* 按钮自带 13.33px 的字号（浏览器给的），这里要跟外头一档；名字再按 em 缩。 */
+    font-size: inherit;
+    cursor: pointer; user-select: none;
+  }
+  .sn-tab:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
+  /* 正在看的这一格：底色（跟清单里当前那一行、侧边栏里选中那一行同一个色）。 */
+  .sn-tab.current { background: var(--pk-select-tint); }
+  /* 摆不下的那几格：藏起来（都在 ▾ 那张完整清单里） */
+  .sn-tab.tab-hidden { display: none; }
+  .sn-tab .sn-text {
+    flex: 0 1 auto;
+    font-size: 0.95em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.85;
+  }
+  .sn-tab.current .sn-text,
+  .sn-tab.streaming .sn-text { opacity: 1; }
+  .sn-tab .sn-mark { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 1px; align-self: center; }
+  .sn-tab .sn-dot {
+    flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--vscode-charts-blue, #3794ff); display: none;
+  }
+  /* 小点下面那个数字：派出去的子会话还有几个在跑。零个时是空的（那一格整个收掉），
+     所以没派活的时候还是原来那一颗点、位置也不变。字很小（9px），行高顶死，
+     不把顶条撑高。颜色用同一个蓝、只调淡一点：比上面那颗点浅，不抢它。 */
+  .sn-tab .sn-count {
+    font-size: 9px; line-height: 1; font-variant-numeric: tabular-nums;
+    color: color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 85%, transparent);
+  }
+  .sn-tab .sn-count:empty { display: none; }
+  /* 本会话在跑、或者它派出去的子会话还在跑：同一颗点，一样呼吸
+     （子会话那种是本会话自己闲着、活在外面干，点亮着才知道没停）。 */
+  .sn-tab.streaming .sn-dot,
+  .sn-tab.child-running .sn-dot { display: inline-block; animation: pi-pulse 1.2s ease-in-out infinite; }
+  /* 跑完了：同一颗点换成绿的，也不闪 —— 绿 = 这一轮跑完了（不管当时你有没有看着它），
+     蓝闪 = 还在干。 */
+  .sn-tab.done:not(.streaming):not(.child-running) .sn-dot {
+    display: inline-block; background: var(--vscode-charts-green, #89d185);
+  }
+  /* 那一排的最右头那颗 ▾：掉出完整清单（两个以上会话时露面）。 */
+  #sessionMore {
+    flex: 0 0 auto; align-self: center; width: 22px; padding: 0; border: none; background: transparent;
+    color: var(--vscode-foreground); opacity: 0.6; line-height: 1; border-radius: 4px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #sessionMore svg { width: 12px; height: 12px; display: block; transform: rotate(90deg); }
+  #sessionMore:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
+  #sessionMore.hidden { display: none; }
   /* 顶条上那颗文件侧边栏按钮：竖着撑满整个顶条（上下留白由顶条自己的
      内边距给），好点、不误触。它只在浏览器页面里存在（见本文件末尾），
      由 browserBridge.js 插在最前头，也就是顶条的第一个。 */
@@ -135,67 +188,10 @@
   }
   #fileSidebarBtn svg { width: 18px; height: 18px; display: block; }
   #fileSidebarBtn:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
-  /* 当前会话名（带底下的目录行）：左边那颗小点、右边那颗箭头，加上中间两行字。
-     横着排、上下居中都由这里管：点与箭头对齐的是**两行合起来**那条的中线，
-     不是会话名那一行的中线（所以目录行收起来时，它们自然又回到名字上）。 */
-  #sessionName {
-    flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 6px;
-    padding: 4px 8px; border: none; background: transparent; border-radius: 4px;
-    color: var(--vscode-foreground); font-family: inherit;
-    /* 按钮自带 13.33px 的字号（浏览器给的），这里要跟外头一档；两行再各自按 em 缩。 */
-    font-size: inherit;
-    cursor: pointer; user-select: none;
-  }
-  /* 两行字那一小列（会话名在上、目录在下）：宽度按内容来、不撑满整条，
-     长了就往里缩（两行各自省略）。点与箭头就贴着它左右两头。 */
-  #sessionName .sn-lines { flex: 0 1 auto; min-width: 0; display: flex; flex-direction: column; align-items: stretch; }
-  /* 会话名那一行：名字短的时候居中，长了从尾巴省略。
-     这一层是横向的 flex 盒子，就为了让里头那行字缩得动（直接放在竖列里缩不动）。 */
-  #sessionName .sn-title { display: flex; justify-content: center; min-width: 0; }
-  #sessionName .sn-text {
-    flex: 0 1 auto;
-    font-size: 0.95em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.85;
-  }
-  #sessionName .sn-mark { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 1px; align-self: center; }
-  #sessionName .sn-dot {
-    flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%;
-    background: var(--vscode-charts-blue, #3794ff); display: none;
-  }
-  /* 小点下面那个数字：派出去的子会话还有几个在跑。零个时是空的（那一格整个收掉），
-     所以没派活的时候还是原来那一颗点、位置也不变。字很小（9px），行高顶死，
-     不把顶条撑高。颜色用同一个蓝、只调淡一点：比上面那颗点浅，不抢它。 */
-  #sessionName .sn-count {
-    font-size: 9px; line-height: 1; font-variant-numeric: tabular-nums;
-    color: color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 85%, transparent);
-  }
-  #sessionName .sn-count:empty { display: none; }
-  /* 本会话在跑、或者它派出去的子会话还在跑：同一颗点，一样呼吸
-     （子会话那种是本会话自己闲着、活在外面干，点亮着才知道没停）。 */
-  #sessionName.streaming .sn-dot,
-  #sessionName.child-running .sn-dot { display: inline-block; animation: pi-pulse 1.2s ease-in-out infinite; }
-  /* 跑完了：同一颗点换成绿的，也不闪 —— 绿 = 这一轮跑完了（不管当时你有没有看着它），
-     蓝闪 = 还在干。 */
-  #sessionName.done:not(.streaming):not(.child-running) .sn-dot {
-    display: inline-block; background: var(--vscode-charts-green, #89d185);
-  }
-  #sessionName.streaming .sn-text { opacity: 1; }
-  /* 两行右边那颗朝下的小箭头：主会话多过一个才露面（暗示点得开、能换）。 */
-  #sessionName .sn-caret { flex: 0 0 auto; display: inline-flex; opacity: 0.6; }
-  #sessionName .sn-caret svg { width: 12px; height: 12px; display: block; transform: rotate(90deg); }
-  #sessionName .sn-caret.hidden { display: none; }
-  /* 顶条最右边：网页端的两颗按钮（截图 / 项目与会话）由 browserBridge.js 挂在这里；
-     跟左边那几颗一样竖着撑满（见 browserTheme.css 里那两颗的尺寸）。 */
+  /* 顶条最右边：网页端的那几颗按钮（截图 / 项目与会话）由 browserBridge.js 挂在这里；
+     跟左边那几颗一样竖着撑满（见 browserTheme.css 里那几颗的尺寸）。 */
   #sessionBarTail { flex: 0 0 auto; align-self: stretch; display: flex; align-items: stretch; gap: 4px; margin-left: auto; }
-  /* 名字正下方那行小字：当前会话跑在哪个目录。跟名字同一列、一样居中；
-     灰一点、小一号。路径太长时末尾省略，完整路径在 title 提示里（悬停或长按能看）。 */
-  #sessionPath {
-    display: flex; justify-content: center; margin-top: 1px; min-width: 0;
-    font-size: 0.78em; line-height: 1.45; color: var(--vscode-descriptionForeground, #999);
-  }
-  /* 内层这个 span 才是会省略的那一段：它最宽只能到整列那么宽，居中由外层给 */
-  #sessionPath .sp-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #sessionPath.hidden { display: none; }
-  /* 会话在跑：小点呼吸一下（顶条那颗名字上的、下拉清单里的共用）。 */
+  /* 会话在跑：小点呼吸一下（顶条那几格上的、下拉清单里的共用）。 */
   @keyframes pi-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
   /* ---- 顶条那颗会话名的下拉 ---- */
   /* 贴在名字底下的一张清单：开着的主会话一行一个（子会话不在里面，去「项目与会话」面板看）。 */
