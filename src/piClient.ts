@@ -73,6 +73,9 @@ export class PiClient extends EventEmitter {
             cwd: this.opts.cwd,
             env: { ...process.env, ...this.opts.env },
             shell: isWindows,
+            // 「编译并重启」之后的后端是没有窗口的后台进程（见 serverRestart.ts）：它再经 shell 起 pi 时，
+            // Windows 会给这个 shell 新开一个黑窗口（标题就是 pi）。这里一律不让它开窗口。
+            windowsHide: isWindows,
         }) as ChildProcessWithoutNullStreams;
 
         this.attachJsonlReader(this.proc.stdout, (line) => this.handleLine(line));
