@@ -2101,6 +2101,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /**
+     * 收摊：所有屏上还开着的浮层都按取消收掉。
+     * 主要是把等它的那根定时器（2 分钟）放掉：宿主已经没了，谁也不会再来答，
+     * 留着它进程就还要空转两分钟才退（调试脚手架里特别明显：脚本跑完，node 不退出）。
+     */
+    protected disposeAllPickers(): void {
+        for (const clientId of Array.from(this.pickers.keys())) { this.dropPicker(clientId, false); }
+        this.pickers.clear();
+    }
+
+    /**
      * 浮层挂着的那个界面没了（页面关掉 / 手机退到后台被收掉）：按取消收掉。
      * 那边已经不在了，不用发消息；等的人也不用干等 120 秒。
      */

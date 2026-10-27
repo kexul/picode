@@ -1478,10 +1478,22 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         this.disposeSpare();
     }
 
-    /** 收摊：停掉所有 pi 进程（网页服务的收摊由启动器负责）。 */
+    /**
+     * 收摊：停掉所有 pi 进程、把还挂着等回话的东西（浮层、问话卡片）都放掉
+     * （网页服务的收摊由启动器负责）。
+     * 那两样各自都挂着一根很长的定时器（浮层 2 分钟、问话卡片 25 分钟）：不收掉的话
+     * 宿主没了它们还活着，进程非要等到那时候才退（调试用的脚手架里就是这么“卡住”的）。
+     */
     public dispose(): void {
         if (this.disposed) { return; }
         this.disposed = true;
+        this.disposeAllPickers();
+        this.disposeAllCards();
         this.disposeAllConversations();
+    }
+
+    /** 还挂着的问话卡片一律按“没作答”收掉（连它们那根定时器一起放掉）。 */
+    private disposeAllCards(): void {
+        for (const id of Array.from(this.openCards.keys())) { this.settleCard(id, undefined); }
     }
 }
