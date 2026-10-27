@@ -1139,7 +1139,7 @@
   let spareTabEl = sessionNameBtn;
   const sessionTabEls = new Map();     // sessionId -> 它那一格的元素
 
-  /** 取某一格（没有就造一个）：一格 = 小点（底下挂子会话个数）+ 名字。 */
+  /** 取某一格（没有就造一个）：一格 = 小点（底下挂子会话个数）+ 名字 + 一颗 ×。 */
   function sessionTabEl(sessionId) {
     let el = sessionTabEls.get(sessionId);
     if (el) { return el; }
@@ -1151,6 +1151,17 @@
         + '<span class="sn-text"></span>';
     }
     el.classList.add("sn-tab");
+    // 名字后面那颗 ×（每格都露着）：点它关的就是这一格，点名字身上还是切过去 / 掉出清单。
+    // 会话正在跑时这一下只把它变成勾（要再点一下才真关，见 askCloseSession）。
+    if (!el.querySelector(".sn-close")) {
+      const close = document.createElement("span");
+      close.className = "sn-close";
+      close.title = "关闭这个会话";
+      close.setAttribute("aria-label", "关闭这个会话");
+      close.innerHTML = ICONS["close-bold"];
+      close.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(sessionId); });
+      el.appendChild(close);
+    }
     // 点这一格：不是当前这个就切过去（一下就换了）；是当前这个就掉出完整清单
     el.addEventListener("click", () => {
       if (activeId !== sessionId) {
@@ -1202,19 +1213,50 @@
       // 按清单顺序摆，▾ 永远在最后
       sessionTabRow.insertBefore(el, sessionCaret);
     });
+    // 上面那一趟会把每一格重写一遍（名字、小点）：哪一格在等第二下确认跟一遍
+    refreshSessionTabClose();
+  }
+
+  /**
+   * 那一格上的 × 换成勾没有：正在等第二下确认的那一格（会话在跑，见 askCloseSession）变红、
+   * 那颗叉换成勾。没变就不动它（重画一次等于把 svg 换掉，会闪）。
+   */
+  function refreshSessionTabClose() {
+    for (const [id, el] of sessionTabEls) {
+      const close = el.querySelector(".sn-close");
+      if (!close) { continue; }
+      const waiting = pendingCloseId === id;
+      if (el.classList.contains("closing") === waiting) { continue; }
+      el.classList.toggle("closing", waiting);
+      close.innerHTML = waiting ? ICONS["check-bold"] : ICONS["close-bold"];
+      close.title = waiting ? "再点一下就关掉（这个会话正在跑）" : "关闭这个会话";
+      close.setAttribute("aria-label", waiting ? "再点一下就关掉" : "关闭这个会话");
+    }
   }
 
   /**
    * 摆得下几格：先按原样量一遍，放不下就只留摆得下的（从当前这一格起往后塞、再往前补），
    * 其余的藏起来 —— 藏起来的都在 ▾ 那张完整清单里。
    * 顶条一变宽窄（窗口、左边文件侧边栏、右边那一列）就重新摆一次。
+   * 排尾那颗 ▾ 只在真有格子被藏起来时才露面（全放得下时点开也没别的可挑）：
+   * 它自己也占一块地方，露不露面会改这一排能用的宽度，所以两头对上为止（两趟就稳）。
    */
   function layoutSessionTabs() {
     const tabs = Array.prototype.filter.call(sessionTabRow.children, (el) => el.classList.contains("sn-tab"));
-    if (!tabs.length) { return; }
+    if (!tabs.length) { sessionCaret.classList.add("hidden"); return; }
+    for (let pass = 0; pass < 3; pass++) {
+      const hidden = layoutTabsOnce(tabs);
+      if ((hidden > 0) === !sessionCaret.classList.contains("hidden")) { return; }
+      sessionCaret.classList.toggle("hidden", hidden === 0);
+    }
+  }
+
+  /** 量一遍、把放不下的那几格藏起来；返回一共藏起来几格（▾ 露不露面看它，见 layoutSessionTabs）。 */
+  function layoutTabsOnce(tabs) {
     // 量之前先把上一回藏起来的放出来：藏着的量不到宽（量到的会是 0）
     tabs.forEach((el) => { el.classList.remove("tab-hidden"); });
     const widths = tabs.map((el) => el.offsetWidth);
+    // ▾ 收起来时它量到 0（display: none）：那一块地方就还给这排格了
     const caretW = sessionCaret.offsetWidth ? sessionCaret.offsetWidth + TAB_GAP : 0;
     const room = Math.max(0, sessionTabRow.clientWidth - caretW);
     const need = (from, to) => {
@@ -1235,15 +1277,14 @@
     for (let i = 0; i < tabs.length; i++) {
       if (i < start || i >= end) { tabs[i].classList.add("tab-hidden"); }
     }
+    return start + (tabs.length - end);
   }
 
-  /** 顶条那一排格：一格一个主会话（带在跑的小点、派出去的子会话个数）。 */
+  /** 顶条那一排格：一格一个主会话（带在跑的小点、派出去的子会话个数、关它的那颗 ×）。 */
   function renderSessionBar() {
     const items = sessionMenuItems();
     renderSessionTabs(items);
-    // 就一个主会话时不必留那颗 ▾（点开还是同一张清单：里面就它自己）
-    sessionCaret.classList.toggle("hidden", items.length < 2);
-    // ▾ 露不露面会改那一排的可用宽度：按新的宽度再摆一次（藏 / 放都要对）
+    // ▾ 露不露面在这一步里定（有格子被藏起来才露）
     layoutSessionTabs();
     // 清单开着的时候它会跟着变（换会话、改标题、某个会话跑完了）：重画完还要重新摆——
     // 内容变宽变窄了，贴着屏幕边的位置就不对了。
@@ -4681,6 +4722,7 @@
     pendingCloseId = null;
     if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
     pendingCloseTimer = null;
+    refreshSessionTabClose();
   }
 
   /**
@@ -4704,6 +4746,7 @@
     // 行尾多出一颗勾也不许把整张清单撑宽（钉住的值在 placeSessionMenu 里用）。
     if (sessionMenuOpen && !pendingCloseId) { sessionMenuPin = sessionMenuEl.offsetWidth; }
     pendingCloseId = id;
+    refreshSessionTabClose();
     if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
     pendingCloseTimer = setTimeout(() => {
       cancelPendingClose();
@@ -5078,9 +5121,7 @@
     if (leftoverClose) { leftoverClose.remove(); }
     if (view.searchWrap) { view.searchWrap.classList.remove("hidden"); }
     // “关闭会话”的确认条只在列表里有效：列表一关就撤销（下次打开不要停在确认态）
-    if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
-    pendingCloseTimer = null;
-    pendingCloseId = null;
+    cancelPendingClose();
     view.state = null;
     if (view === modalView) { emptyWorkspace = ""; }   // 那张抽屉没了：“替没有会话摊开”的账也结掉
     view.openSessionsShown = "";

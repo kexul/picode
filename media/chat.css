@@ -160,6 +160,19 @@
     color: color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 85%, transparent);
   }
   .sn-tab .sn-count:empty { display: none; }
+  /* 名字后面那颗 ×（每格都露着）：点它关的就是这一格（点名字身上还是切过去 / 掉出清单）。
+     会话正在跑时它先换成勾：这一格跟清单里的确认条一样变红，再点一下才真关
+     （见 chat.js 的 askCloseSession）。 */
+  .sn-tab .sn-close {
+    flex: 0 0 auto; align-self: center; display: flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px; margin-left: 1px; border-radius: 3px; opacity: 0.45;
+  }
+  .sn-tab .sn-close svg { width: 10px; height: 10px; display: block; }
+  .sn-tab .sn-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
+  .sn-tab.current .sn-close { opacity: 0.6; }
+  @media (hover: none) { .sn-tab .sn-close { opacity: 0.6; } }
+  .sn-tab.closing { background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 14%, transparent); }
+  .sn-tab.closing .sn-close { opacity: 1; color: var(--vscode-charts-green, #3fb950); }
   /* 本会话在跑、或者它派出去的子会话还在跑：同一颗点，一样呼吸
      （子会话那种是本会话自己闲着、活在外面干，点亮着才知道没停）。 */
   .sn-tab.streaming .sn-dot,
@@ -169,7 +182,7 @@
   .sn-tab.done:not(.streaming):not(.child-running) .sn-dot {
     display: inline-block; background: var(--vscode-charts-green, #89d185);
   }
-  /* 那一排的最右头那颗 ▾：掉出完整清单（两个以上会话时露面）。 */
+  /* 那一排的最右头那颗 ▾：掉出完整清单（有格子被藏起来时才露面）。 */
   #sessionMore {
     flex: 0 0 auto; align-self: center; width: 22px; padding: 0; border: none; background: transparent;
     color: var(--vscode-foreground); opacity: 0.6; line-height: 1; border-radius: 4px; cursor: pointer;
