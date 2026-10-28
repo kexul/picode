@@ -3469,6 +3469,7 @@
    * Lightbox：点击缩略图全屏查看原图。
    *
    *   - 滚轮缩放（1 到 6 倍），以鼠标所指那一点为定点 —— 边滚边看某一处细节时，那处不会跑掉；
+   *   - 手机上两指捏合缩放，定点是两指中点；两指一起挪就是平移；
    *   - 放大后按住拖动看别处（鼠标、手指都走 pointer 这一套）；
    *   - 双击回到刚打开的样子；
    *   - Esc 或点图外的黑底关掉；没放大时点图本身也关（老习惯），放大后点图不关，那是留给拖动的。
@@ -3477,7 +3478,10 @@
    */
   const LIGHTBOX_MAX_SCALE = 6;
   let lightboxEl = null;
-  const lightboxView = { scale: 1, x: 0, y: 0, drag: false, px: 0, py: 0, ox: 0, oy: 0 };
+  const lightboxView = { scale: 1, x: 0, y: 0, drag: false, px: 0, py: 0, ox: 0, oy: 0, guardUntil: 0 };
+  /** 现在按在图上的是哪些指针：双指缩放要两根的距离，单指拖动只要一根。 */
+  const lightboxPointers = new Map();
+  const lightboxPinch = { on: false, dist: 1, scale: 1, mx: 0, my: 0 };
 
   function lightboxPaint() {
     if (!lightboxEl) { return; }
@@ -3498,16 +3502,21 @@
     if (!lightboxEl) { return; }
     lightboxEl.classList.add("hidden");
     lightboxEl.firstChild.removeAttribute("src");   // 别再抱着那张图（可能是几 MB 的 data:）
+    lightboxPointers.clear();
+    lightboxPinch.on = false;
+    lightboxView.drag = false;
+    lightboxEl.classList.remove("dragging");
     lightboxReset();
   }
 
-  /** 在 (clientX, clientY) 这一处把图放大 factor 倍（factor < 1 就是缩）。 */
-  function lightboxZoomAt(clientX, clientY, factor) {
+  /** 把图缩放到 next 倍，屏幕上 (clientX, clientY) 那一点底下的图不动。 */
+  function lightboxZoomTo(clientX, clientY, next) {
     const v = lightboxView;
-    const next = Math.min(LIGHTBOX_MAX_SCALE, Math.max(1, v.scale * factor));
+    next = Math.min(LIGHTBOX_MAX_SCALE, Math.max(1, next));
     if (next === v.scale) { return; }
+    if (v.scale === 1) { v.x = 0; v.y = 0; }
     const r = lightboxEl.getBoundingClientRect();
-    const cx = clientX - (r.left + r.width / 2);   // 鼠标相对图中心偏出去多少
+    const cx = clientX - (r.left + r.width / 2);   // 这一点相对图中心偏出去多少
     const cy = clientY - (r.top + r.height / 2);
     const k = next / v.scale;
     v.x = cx - k * (cx - v.x);
@@ -3517,6 +3526,18 @@
     lightboxPaint();
   }
 
+  /** 按着的那两根指：间距与中点（双指缩放全靠这两个数）。 */
+  function lightboxPinchState() {
+    const pts = Array.from(lightboxPointers.values());
+    const a = pts[0] || { x: 0, y: 0 };
+    const b = pts[1] || a;
+    return {
+      dist: Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)),
+      mx: (a.x + b.x) / 2,
+      my: (a.y + b.y) / 2,
+    };
+  }
+
   function openLightbox(src) {
     if (!lightboxEl) {
       lightboxEl = document.createElement("div");
@@ -3524,37 +3545,84 @@
       lightboxEl.appendChild(document.createElement("img"));
       const img = lightboxEl.firstChild;
       lightboxEl.addEventListener("click", (e) => {
+        // 刚捏完 / 刚拖完松手那一下不算点击（不然一松手图就没了）
+        if (performance.now() < lightboxView.guardUntil) { return; }
         if (e.target === lightboxEl || lightboxView.scale === 1) { closeLightbox(); }
       });
       img.addEventListener("dblclick", (e) => { e.preventDefault(); lightboxReset(); });
       img.addEventListener("wheel", (e) => {
         e.preventDefault();
-        lightboxZoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0015));
+        lightboxZoomTo(e.clientX, e.clientY, lightboxView.scale * Math.exp(-e.deltaY * 0.0015));
       }, { passive: false });
       img.addEventListener("pointerdown", (e) => {
-        if (lightboxView.scale === 1 || e.button !== 0) { return; }
+        if (e.button !== 0) { return; }
+        lightboxPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        try { img.setPointerCapture(e.pointerId); } catch (err) { /* 捕获失败也还能拖 */ }
+        if (lightboxPointers.size === 2) {
+          // 第二根手指落下：改双指缩放，正在拖的那一根就此停住
+          lightboxView.drag = false;
+          lightboxEl.classList.remove("dragging");
+          const p = lightboxPinchState();
+          lightboxPinch.on = true;
+          lightboxPinch.dist = p.dist;
+          lightboxPinch.scale = lightboxView.scale;
+          lightboxPinch.mx = p.mx; lightboxPinch.my = p.my;
+          return;
+        }
+        if (lightboxPointers.size > 2) { return; }
+        if (lightboxView.scale === 1) { return; }
         lightboxView.drag = true;
         lightboxView.px = e.clientX; lightboxView.py = e.clientY;
         lightboxView.ox = lightboxView.x; lightboxView.oy = lightboxView.y;
-        try { img.setPointerCapture(e.pointerId); } catch (err) { /* 捕获失败也还能拖 */ }
         lightboxEl.classList.add("dragging");
       });
       img.addEventListener("pointermove", (e) => {
+        const held = lightboxPointers.get(e.pointerId);
+        if (held) { held.x = e.clientX; held.y = e.clientY; }
         const v = lightboxView;
+        if (lightboxPinch.on && lightboxPointers.size >= 2) {
+          // 两指间距变大就放大；两指一起挪（中点动了）就跟着平移
+          const p = lightboxPinchState();
+          lightboxZoomTo(p.mx, p.my, lightboxPinch.scale * (p.dist / lightboxPinch.dist));
+          if (v.scale > 1) {
+            v.x += p.mx - lightboxPinch.mx;
+            v.y += p.my - lightboxPinch.my;
+            lightboxPaint();
+          }
+          lightboxPinch.mx = p.mx; lightboxPinch.my = p.my;
+          return;
+        }
         if (!v.drag) { return; }
-        const dx = e.clientX - v.px, dy = e.clientY - v.py;
-        v.x = v.ox + dx; v.y = v.oy + dy;
+        v.x = v.ox + (e.clientX - v.px);
+        v.y = v.oy + (e.clientY - v.py);
         lightboxPaint();
       });
-      const endDrag = () => {
-        if (!lightboxView.drag) { return; }
-        lightboxView.drag = false;
+      const endPointer = (e) => {
+        const wasPinch = lightboxPinch.on;
+        lightboxPointers.delete(e.pointerId);
+        if (lightboxPointers.size < 2) { lightboxPinch.on = false; }
+        // 捏合 / 拖着松手之后紧跟的那一下 click 不算点击
+        if (wasPinch || lightboxView.drag) { lightboxView.guardUntil = performance.now() + 400; }
+        const v = lightboxView;
+        v.drag = false;
         lightboxEl.classList.remove("dragging");
+        if (lightboxPointers.size === 1 && v.scale > 1) {
+          // 还剩一根手指：接着拖，从它现在的位置算起（不然图会跳一下）
+          const p = Array.from(lightboxPointers.values())[0];
+          v.drag = true;
+          v.px = p.x; v.py = p.y;
+          v.ox = v.x; v.oy = v.y;
+          lightboxEl.classList.add("dragging");
+        }
       };
-      img.addEventListener("pointerup", endDrag);
-      img.addEventListener("pointercancel", endDrag);
+      img.addEventListener("pointerup", endPointer);
+      img.addEventListener("pointercancel", endPointer);
       document.body.appendChild(lightboxEl);
     }
+    lightboxPointers.clear();
+    lightboxPinch.on = false;
+    lightboxView.drag = false;
+    lightboxEl.classList.remove("dragging");
     lightboxReset();
     lightboxEl.firstChild.src = src;
     lightboxEl.classList.remove("hidden");
