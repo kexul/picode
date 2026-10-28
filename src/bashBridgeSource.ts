@@ -225,7 +225,7 @@ function startTask(
     env: NodeJS.ProcessEnv | undefined,
     toolCallId: string,
     background: boolean,
-    feed: (chunk: string) => void
+    feed: (chunk: Buffer) => void
 ): Started {
     const dir = tasksDir();
     if (!dir) { throw new Error("这个会话没拿到后台脚本用的资源目录。"); }
@@ -268,18 +268,27 @@ function startTask(
     }
     let muted = false;
     const exitCbs: Array<(code: number | null) => void> = [];
-    const writeLog = (chunk: string) => {
+    const writeLog = (chunk: string | Buffer) => {
         if (fd < 0) { return; }
         try { writeSync(fd, chunk); } catch { /* 写不进去不影响命令 */ }
     };
-    const onData = (chunk: string) => {
+    /**
+     * stdout / stderr 的原始字节。日志照原样写（写 Buffer，别先转字符串：多字节字
+     * 可能被切在两段之间）；喂给 pi 的也必须是字节 —— 它的 accumulate 按字节数截
+     * 断、自己用 TextDecoder 解码，给字符串会当场抛 ERR_INVALID_ARG_TYPE，把整个
+     * pi 进程带死（2026-10-28 踩过：会话里一跑命令，pi 就没了）。
+     */
+    const onData = (chunk: Buffer) => {
         writeLog(chunk);
-        if (!muted) { feed(chunk); }
+        if (muted) { return; }
+        try { feed(chunk); } catch { /* 交回 pi 那边出错不该把会话带死 */ }
     };
-    child.stdout?.on("data", (d: Buffer) => onData(d.toString("utf8")));
-    child.stderr?.on("data", (d: Buffer) => onData(d.toString("utf8")));
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", onData);
     child.on("error", (err: Error) => {
-        onData("\n[起不来：" + String((err && err.message) || err) + "]\n");
+        const text = "\n[起不来：" + String((err && err.message) || err) + "]\n";
+        writeLog(text);
+        if (!muted) { try { feed(Buffer.from(text, "utf8")); } catch { /* 同上 */ } }
     });
     child.on("exit", (code: number | null) => {
         task.exitCode = code;
@@ -358,7 +367,7 @@ export default function bashBridge(pi: any): void {
                     options.env,
                     id,
                     background,
-                    (chunk: string) => { options.onData(chunk); }
+                    (chunk: Buffer) => { options.onData(chunk); }
                 );
                 const task = started.task;
                 // 一开始就放到后台：立刻返回，输出只进日志，跑完报一声
