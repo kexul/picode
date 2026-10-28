@@ -981,11 +981,11 @@
   }
 
   /**
-   * 左右划切过去的最后一下：进来的那个滑到正中，原来那个滑出屏外，然后盖上藏起来。
-   * 其余收尾跟普通切换一样（滚动位置恢复、切成“在看的那个”）。
+   * 松手那一刻就把两个壳摆到位：进来的那个滑到正中，原来那个滑出屏外。
+   * 不等后端回话（它的回话只决定“这次算不算切过去”；等人的话，快划时松手后就会冻住一瞬）。
+   * 滚动位置也在这里恢复：进来那一屏得先摆好在它该在的地方、好让人看到它滑进来。
    */
-  function finishSlideMount(slide, target) {
-    const from = slide.fromView;
+  function slideToPlace(slide, target) {
     const to = target.viewEl;
     unkeep(target);
     to.classList.remove("off");
@@ -1000,13 +1000,27 @@
     // 重挂载会让 CSS 动画重播：剥掉历史气泡的入场动画，避免整窗“抖一下”
     to.querySelectorAll(".msg-enter").forEach((el) => { el.classList.remove("msg-enter"); });
     slideTo(to, 0, SWIPE_FINISH_MS);
-    slideTo(from, slide.endX, SWIPE_FINISH_MS);
-    afterSlide(to, () => {
+    slideTo(slide.fromView, slide.endX, SWIPE_FINISH_MS);
+    afterSlide(to, () => { slide.landed = true; });
+  }
+
+  /**
+   * 后端回话说“切到这个了”（可能是滑到位之后才到，也可能还没到）：
+   * 已经摆好了就只收尾，没摆完就接着把它滑完。
+   * 其余收尾跟普通切换一样（滚动位置恢复、切成“在看的那个”）。
+   */
+  function finishSlideMount(slide, target) {
+    const from = slide.fromView;
+    const to = target.viewEl;
+    const cleanup = () => {
       sessions.forEach((st) => { st.viewEl.classList.toggle("off", st !== target); });
       clearSlideStyles(from);
       clearSlideStyles(to);
       messagesEl.classList.remove("swiping");
-    });
+    };
+    if (slide.landed) { cleanup(); return; }
+    slideToPlace(slide, target);
+    afterSlide(to, cleanup);
   }
 
   /**
@@ -4359,11 +4373,95 @@
   // 没过线就弹回去。竖着划不管（那是滚动），横着能滚的东西（代码块、表格）上也不管。
   // 切过去那一刻位置由后端说了算：松手先跟后端要，它回话说“切到这个了”时再从手指离开的
   // 位置滑完那一小段（见 mountActiveSession 开头那段）。
-  const SWIPE_LOCK_PX = 12;      // 横向动这么多才认成“左右划”
+  const SWIPE_LOCK_PX = 6;       // 横向动这么多就认成“左右划”（快划时那段“没反应”就是它，越小越跟手）
+  const SWIPE_CANCEL_PX = 10;    // 竖着动这么多、而且比横向多：这是滚动，这一趟不管了
   const SWIPE_FINISH_MS = 180;   // 松手后滑完的那一小段
   const SWIPE_WAIT_MS = 1500;    // 松手后等后端回话的耐心（回话迟了就先弹回去）
 
   function swipeWidth() { return messagesEl.clientWidth || window.innerWidth || 320; }
+
+  // ==================== 临时：手机上自己报数（地址后面加 ?perf=1 才开）====================
+  // 划一趟就把“起手多久才跟手、拖动时每帧隔多远、有没有长任务”写在左下角。
+  // 只用来在真手机上查卡在哪一步（电脑上那些量具看不见手机的重画与合成）。
+  const SWIPE_PROBE = /[?&]perf=1\b/.test(location.search);
+  const probe = { on: SWIPE_PROBE, downAt: 0, lockAt: 0, frames: [], longTasks: [], box: null, seen: [] };
+  if (probe.on) {
+    try {
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (probe.lockAt) { probe.longTasks.push(Math.round(entry.duration)); }
+        }
+      }).observe({ entryTypes: ["longtask"] });
+    } catch (err) { /* 没有 longtask 就算了 */ }
+    const box = document.createElement("div");
+    box.style.cssText = "position:fixed;left:4px;bottom:4px;z-index:9999;max-width:92vw;padding:4px 6px;"
+      + "font:11px/1.45 monospace;color:#fff;background:rgba(0,0,0,.75);border-radius:4px;"
+      + "white-space:pre-wrap;pointer-events:none";
+    box.textContent = "（?perf=1）划一下会话，数就写在这儿";
+    document.body.appendChild(box);
+    probe.box = box;
+  }
+
+  /** 手指按下：重新记一趟。 */
+  function probeDown() {
+    if (!probe.on) { return; }
+    probe.downAt = performance.now();
+    probe.lockAt = 0;
+    probe.frames = [];
+    probe.longTasks = [];
+  }
+
+  /** 认成横划（画面要开始动了）：从这里开始记每帧。 */
+  function probeLock() {
+    if (!probe.on) { return; }
+    probe.lockAt = performance.now();
+    const step = (t) => {
+      if (!probe.lockAt) { return; }
+      probe.frames.push(t);
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  /** 把角标重画一遍（最近三次）。 */
+  function probeDraw() {
+    if (!probe.box) { return; }
+    probe.box.textContent = probe.seen.map((item) => item.text).join("\n----------------\n");
+  }
+
+  /** 松手：把这一趟的数摆出来（真切过去了就再补一条“松手→切完”）。 */
+  function probeEnd(switched) {
+    if (!probe.on || !probe.lockAt) { return; }
+    const lockAt = probe.lockAt;
+    probe.lockAt = 0;
+    const frames = probe.frames;
+    const gaps = [];
+    for (let i = 1; i < frames.length; i++) { gaps.push(frames[i] - frames[i - 1]); }
+    const sorted = gaps.slice().sort((a, b) => a - b);
+    const median = sorted.length ? Math.round(sorted[Math.floor(sorted.length / 2)]) : 0;
+    const worst = sorted.length ? Math.round(sorted[sorted.length - 1]) : 0;
+    const at = sorted.length ? Math.round(frames[gaps.indexOf(sorted[sorted.length - 1]) + 1] - frames[0]) : 0;
+    const entry = { text: "起手 " + Math.round(lockAt - probe.downAt) + "ms（按下→跟手）　拖动 "
+      + Math.round(performance.now() - lockAt) + "ms / " + frames.length + " 帧"
+      + "\n帧间隔 中位 " + median + "　最长 " + worst + "（在 " + at + "ms）　超 33 的 "
+      + gaps.filter((gap) => gap > 33).length + " 帧"
+      + "\n长任务 " + (probe.longTasks.length ? probe.longTasks.join(",") : "无") };
+    probe.seen.unshift(entry);
+    probe.seen = probe.seen.slice(0, 3);
+    probeDraw();
+    if (!switched) { return; }
+    // 松手以后画面还在滑：等它滑完（#messages 摘掉 .swiping）再把这笔补上
+    const begunAt = performance.now();
+    const step = () => {
+      if (!messagesEl.classList.contains("swiping")) {
+        entry.text += "\n松手→切完 " + Math.round(performance.now() - begunAt) + "ms";
+        probeDraw();
+        return;
+      }
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
 
   /** 横着能滚的东西上不切会话：让人家自己滚（代码块、表格、长清单）。 */
   function swipeStartsInScrollable(el) {
@@ -4486,11 +4584,12 @@
     const dy = y - s.y0;
     if (!s.lock) {
       // 竖着先动起来：这是滚动（或者鼠标在选字），这一趟不管了
-      if (Math.abs(dy) > SWIPE_LOCK_PX && Math.abs(dy) > Math.abs(dx)) { swipe = null; return false; }
-      // 横着得明显压过竖着才认（斜着划多半是想滚）
-      if (Math.abs(dx) < SWIPE_LOCK_PX || Math.abs(dx) < Math.abs(dy) * 1.5) { return false; }
+      if (Math.abs(dy) > SWIPE_CANCEL_PX && Math.abs(dy) > Math.abs(dx)) { swipe = null; return false; }
+      // 横着得压过竖着才认（斜着划多半是想滚），但别再额外要“压过一半”：那样快划时要多等好几帧
+      if (Math.abs(dx) < SWIPE_LOCK_PX || Math.abs(dx) < Math.abs(dy)) { return false; }
       s.lock = "x";
       s.dir = dx < 0 ? "next" : "prev";
+      probeLock();
       const toId = sessionIdByDirection(s.dir);
       const to = toId ? sessions.get(toId) : null;
       // 只有一个会话：没得换，也就不摆样子（不拦，让人家照旧）
@@ -4560,6 +4659,7 @@
     if (swipe) { swipeAbort(); return; }
     if (e.touches.length !== 1) { return; }
     const t = e.touches[0];
+    probeDown();
     swipeStart(e, t.clientX, t.clientY, t.identifier);
   }, { passive: true });
 
@@ -4578,6 +4678,7 @@
     if (swipeOnControl(e.target)) { return; }
     if (swipeStartsInScrollable(e.target)) { return; }
     if (swipeHitsText(e.clientX, e.clientY)) { return; }
+    probeDown();
     if (!swipeStart(e, e.clientX, e.clientY, "mouse")) { return; }
     swipe.pointerId = e.pointerId;
     // 按住了就一直跟着走：拖到对话区外面也不断（不然手一快就丢）
@@ -4623,14 +4724,15 @@
   function swipeEnd(cancelled) {
     const s = swipe;
     swipe = null;
-    if (!s || s.lock !== "x") { return; }
-    if (cancelled || !swipePast(s)) { swipeSpringBack(s); return; }
-    // 松手：跟后端要那个会话。视觉上先停在手指离开的地方，等它回话说切到了再滑完剩下那一小段
+    if (!s || s.lock !== "x") { probeEnd(false); return; }
+    if (cancelled || !swipePast(s)) { probeEnd(false); swipeSpringBack(s); return; }
+    // 松手：一边跟后端要那个会话，一边当场把画面滑到位。
+    // 不等它回话再滑：快划时松手得很快，等那几十毫秒就冻住一瞬（回话只决定“算不算切过去”）。
     const slide = {
       dir: s.dir, toId: s.toId, width: s.width,
-      fromView: s.fromView, toView: s.toView,
+      fromView: s.fromView, toView: s.toView, to: s.to,
       endX: s.dir === "next" ? -s.width : s.width,
-      timer: 0,
+      timer: 0, landed: false,
     };
     slide.timer = setTimeout(() => {
       if (pendingSlide !== slide) { return; }
@@ -4638,6 +4740,8 @@
       swipeSpringBack(slide);
     }, SWIPE_WAIT_MS);
     pendingSlide = slide;
+    if (s.to) { slideToPlace(slide, s.to); }
+    probeEnd(true);
     vscode.postMessage({ type: "switchSession", sessionId: s.toId });
   }
 

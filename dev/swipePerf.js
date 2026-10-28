@@ -198,7 +198,9 @@ async function main() {
 
         /** 划一趟：left = 往前划（下一个），right = 往回划（上一个）。返回这一段里的数。 */
         const swipe = async (dir) => {
-            // 冷的那一趟：把要进来的那个壳的“停着”摘掉（它刚来过消息，没排好版）
+            // 冷的那一趟：把要进来的那个壳的“停着”摘掉（它刚来过消息，没排好版）。
+            // 摘完要等一会儿再划：浏览器是在下一次排版 / 画的时候才真把那份版丢掉，
+            // 摘完就立刻划的话量出来永远是“不用排版”（这一条踩过坑）。
             if (cold) {
                 await page.eval(`
                     const views = Array.from(document.querySelectorAll(".session-view"));
@@ -206,6 +208,7 @@ async function main() {
                     views.forEach(function (v) { if (v !== shown) { v.classList.remove("kept"); } });
                     return true;
                 `);
+                await sleep(600);
             }
             const before = await metrics();
             const t0 = Date.now();

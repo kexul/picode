@@ -95,5 +95,32 @@ module.exports = async (page) => {
     await page.sleep(400);
     const vertical = await look("竖着划");
     console.log(vertical.active === before.active ? "    ✓ 没切（交还给滚动）" : "    ✗ 竖着划不该切");
+
+    // 5. 后端回话故意迟到 400 毫秒（比最后那 180 毫秒的滑完还慢）：画面不该冻在手指离开的地方，
+    //    该当场滑到位；等它回话只是收尾（不该再滑一下、也不该多留一份位移）。
+    await page.eval(`
+        const api = window.acquireVsCodeApi();
+        const orig = api.postMessage.bind(api);
+        api.postMessage = function (msg) {
+            if (msg && msg.type === "switchSession") { setTimeout(function () { orig(msg); }, 400); return; }
+            orig(msg);
+        };
+        return true;
+    `);
+    await drag(cx - 60, cy, cx + 120, cy);
+    await page.sleep(200);
+    const half = await look("后端还没回话（松手 200 毫秒后）");
+    await page.sleep(900);
+    const late = await look("后端回话之后");
+    // 松手 200 毫秒时：进来的那个已经在正中（0px），出去的那个已经推出屏外 —— 就是“没冻住、当场滑到位”
+    const settledNow = half.moved.some((one) => one.endsWith(":0px"));
+    const ok = settledNow && half.swiping && late.shown === 1 && late.moved.length === 0 &&
+        late.active !== before.active && !late.swiping;
+    console.log(ok ? "    ✓ 画面当场滑到位，回话迟到也不冻住、不重滑" : "    ✗ 回话迟到时的收尾不对");
+    await page.eval(`
+        const api = window.acquireVsCodeApi();
+        delete api.postMessage;
+        return true;
+    `).catch(() => {});
     console.log(`\n页面报错：${page.pageErrors.length ? JSON.stringify(page.pageErrors.slice(0, 5)) : "无"}`);
 };
