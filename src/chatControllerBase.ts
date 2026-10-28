@@ -162,7 +162,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     private static readonly CLOSED_REMEMBER_MAX = 20;
     /**
      * 通知区域里那颗图标（Windows）：有事就闪，点它弹清单（见 trayIcon.ts）。
-     * 头一次有事时才起那个小程序；一块屏都没有时也照闪 —— 它提醒的就是“人不在跟前”。
+     * 后端起来时就起那个小程序（见 startTray）；一块屏都没有时也照闪 —— 它提醒的就是“人不在跟前”。
      */
     private tray: TrayIcon | undefined;
     /** 托盘清单：哪几个会话有事（按有事的先后），也是那份菜单的内容。 */
@@ -1903,10 +1903,19 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.traySync();
     }
 
-    /** 把整份清单原样发一份给托盘（头一次有事时才起那个小程序）。 */
+    /**
+     * 后端起来时调一次：设置里开着、这台机器也支持，就把那颗图标先放上去。
+     * 没消息时它是静止的（标记照原色），有事才闪 —— 一眼看得出“它在、没坏”。
+     */
+    public startTray(): void {
+        if (!this.notifyTurnEndEnabled()) { return; }
+        this.traySync();
+    }
+
+    /** 把整份清单原样发一份给托盘（第一次要发的时候才起那个小程序）。 */
     private traySync(): void {
         if (!this.tray) {
-            if (this.trayPending.length === 0) { return; }
+            if (this.trayClosedByUser || !TrayIcon.available()) { return; }
             this.tray = new TrayIcon({
                 onPick: (id) => this.trayPick(id),
                 onOpen: () => this.openFrontendPage(),

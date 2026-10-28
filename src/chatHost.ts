@@ -168,6 +168,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         super("server");
         this.log = options.log ?? ((text) => console.log(text));
         this.state = new ServerStateStore(serverStateFile());
+        // 通知区域那颗图标：一起来就放上去（开着那一项、又是 Windows 的话）
+        this.startTray();
     }
 
     // ========================================================================
@@ -953,6 +955,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             this.writeOption(ChatHost.KEY_FONT_SIZE, next);
         } else if (action === "notifyTurnEnd") {
             this.writeOption(ChatHost.KEY_NOTIFY_TURN_END, !this.getNotifyTurnEnd());
+            // 当场照着新设置来：刚打开就把图标放上去，刚关掉就收掉（别留一颗不干活的）
+            if (this.getNotifyTurnEnd()) { this.startTray(); } else { this.disposeTray(); }
         } else if (action === "theme") {
             const next = value === "dark" || value === "light"
                 ? value
