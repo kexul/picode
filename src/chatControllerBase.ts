@@ -492,7 +492,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             },
             {
                 action: "notifyPushTo",
-                label: "有事也推到别的机器",
+                label: "消息推送",
                 desc: "",
                 check: null,
                 kind: "text",
@@ -501,7 +501,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             },
             {
                 action: "notifyPushLabel",
-                label: "推到那边时叫它什么",
+                label: "推送标签",
                 desc: "",
                 check: null,
                 kind: "text",
