@@ -4384,7 +4384,7 @@
   // 划一趟就把“起手多久才跟手、拖动时每帧隔多远、有没有长任务”写在左下角。
   // 只用来在真手机上查卡在哪一步（电脑上那些量具看不见手机的重画与合成）。
   const SWIPE_PROBE = /[?&]perf=1\b/.test(location.search);
-  const probe = { on: SWIPE_PROBE, downAt: 0, lockAt: 0, frames: [], longTasks: [], box: null, seen: [] };
+  const probe = { on: SWIPE_PROBE, downAt: 0, lockAt: 0, frames: [], longTasks: [], box: null, seen: [], moves: [], lockDx: 0, lastDx: 0 };
   if (probe.on) {
     try {
       new PerformanceObserver((list) => {
@@ -4409,6 +4409,15 @@
     probe.lockAt = 0;
     probe.frames = [];
     probe.longTasks = [];
+    probe.moves = [];
+    probe.lockDx = 0;
+    probe.lastDx = 0;
+  }
+
+  /** 还没认成横划时每收到一下手势事件记一笔（判“手指挪得慢”还是“事件被浏览器压后”要看它）。 */
+  function probeMove(dx, dy) {
+    if (!probe.on || probe.lockAt) { return; }
+    probe.moves.push([Math.round(performance.now() - probe.downAt), Math.round(dx), Math.round(dy)]);
   }
 
   /** 认成横划（画面要开始动了）：从这里开始记每帧。 */
@@ -4445,7 +4454,13 @@
       + Math.round(performance.now() - lockAt) + "ms / " + frames.length + " 帧"
       + "\n帧间隔 中位 " + median + "　最长 " + worst + "（在 " + at + "ms）　超 33 的 "
       + gaps.filter((gap) => gap > 33).length + " 帧"
-      + "\n长任务 " + (probe.longTasks.length ? probe.longTasks.join(",") : "无") };
+      + "\n长任务 " + (probe.longTasks.length ? probe.longTasks.join(",") : "无")
+      + "\n手势事件 认成横划前 ".concat(probe.moves.length, " 下")
+      + (probe.moves.length
+        ? "（第一下 " + probe.moves[0][0] + "ms 到了，挪了 " + probe.moves[0][1] + "," + probe.moves[0][2] + "px）"
+        : "")
+      + "　认成横划时挪了 " + Math.round(Math.abs(probe.lockDx)) + "px"
+      + "\n拖动到头挪了 " + Math.round(Math.abs(probe.lastDx)) + "px（屏宽 " + Math.round(swipeWidth()) + "px）" };
     probe.seen.unshift(entry);
     probe.seen = probe.seen.slice(0, 3);
     probeDraw();
@@ -4582,13 +4597,16 @@
     if (!s) { return false; }
     const dx = x - s.x0;
     const dy = y - s.y0;
+    probe.lastDx = dx;
     if (!s.lock) {
+      probeMove(dx, dy);
       // 竖着先动起来：这是滚动（或者鼠标在选字），这一趟不管了
       if (Math.abs(dy) > SWIPE_CANCEL_PX && Math.abs(dy) > Math.abs(dx)) { swipe = null; return false; }
       // 横着得压过竖着才认（斜着划多半是想滚），但别再额外要“压过一半”：那样快划时要多等好几帧
       if (Math.abs(dx) < SWIPE_LOCK_PX || Math.abs(dx) < Math.abs(dy)) { return false; }
       s.lock = "x";
       s.dir = dx < 0 ? "next" : "prev";
+      probe.lockDx = dx;
       probeLock();
       const toId = sessionIdByDirection(s.dir);
       const to = toId ? sessions.get(toId) : null;
