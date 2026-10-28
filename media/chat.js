@@ -3465,19 +3465,109 @@
   }
 
   // ==================== 工具结果内联图片（read 读图等） ====================
-  /** Lightbox：点击缩略图全屏查看原图，点任意处关闭。 */
+  /**
+   * Lightbox：点击缩略图全屏查看原图。
+   *
+   *   - 滚轮缩放（1 到 6 倍），以鼠标所指那一点为定点 —— 边滚边看某一处细节时，那处不会跑掉；
+   *   - 放大后按住拖动看别处（鼠标、手指都走 pointer 这一套）；
+   *   - 双击回到刚打开的样子；
+   *   - Esc 或点图外的黑底关掉；没放大时点图本身也关（老习惯），放大后点图不关，那是留给拖动的。
+   *
+   * 缩放与平移只记三个数（scale、x、y，原点在图中心），实际落到图片上是 translate + scale。
+   */
+  const LIGHTBOX_MAX_SCALE = 6;
   let lightboxEl = null;
+  const lightboxView = { scale: 1, x: 0, y: 0, drag: false, px: 0, py: 0, ox: 0, oy: 0 };
+
+  function lightboxPaint() {
+    if (!lightboxEl) { return; }
+    const v = lightboxView;
+    lightboxEl.firstChild.style.transform = v.scale === 1
+      ? ""
+      : "translate(" + v.x + "px, " + v.y + "px) scale(" + v.scale + ")";
+    lightboxEl.classList.toggle("zoomed", v.scale > 1);
+  }
+
+  function lightboxReset() {
+    const v = lightboxView;
+    v.scale = 1; v.x = 0; v.y = 0;
+    lightboxPaint();
+  }
+
+  function closeLightbox() {
+    if (!lightboxEl) { return; }
+    lightboxEl.classList.add("hidden");
+    lightboxEl.firstChild.removeAttribute("src");   // 别再抱着那张图（可能是几 MB 的 data:）
+    lightboxReset();
+  }
+
+  /** 在 (clientX, clientY) 这一处把图放大 factor 倍（factor < 1 就是缩）。 */
+  function lightboxZoomAt(clientX, clientY, factor) {
+    const v = lightboxView;
+    const next = Math.min(LIGHTBOX_MAX_SCALE, Math.max(1, v.scale * factor));
+    if (next === v.scale) { return; }
+    const r = lightboxEl.getBoundingClientRect();
+    const cx = clientX - (r.left + r.width / 2);   // 鼠标相对图中心偏出去多少
+    const cy = clientY - (r.top + r.height / 2);
+    const k = next / v.scale;
+    v.x = cx - k * (cx - v.x);
+    v.y = cy - k * (cy - v.y);
+    v.scale = next;
+    if (v.scale === 1) { v.x = 0; v.y = 0; }         // 缩回原样：平移一并清掉，图重新居中
+    lightboxPaint();
+  }
+
   function openLightbox(src) {
     if (!lightboxEl) {
       lightboxEl = document.createElement("div");
       lightboxEl.className = "lightbox hidden";
       lightboxEl.appendChild(document.createElement("img"));
-      lightboxEl.addEventListener("click", () => { lightboxEl.classList.add("hidden"); });
+      const img = lightboxEl.firstChild;
+      lightboxEl.addEventListener("click", (e) => {
+        if (e.target === lightboxEl || lightboxView.scale === 1) { closeLightbox(); }
+      });
+      img.addEventListener("dblclick", (e) => { e.preventDefault(); lightboxReset(); });
+      img.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        lightboxZoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * 0.0015));
+      }, { passive: false });
+      img.addEventListener("pointerdown", (e) => {
+        if (lightboxView.scale === 1 || e.button !== 0) { return; }
+        lightboxView.drag = true;
+        lightboxView.px = e.clientX; lightboxView.py = e.clientY;
+        lightboxView.ox = lightboxView.x; lightboxView.oy = lightboxView.y;
+        try { img.setPointerCapture(e.pointerId); } catch (err) { /* 捕获失败也还能拖 */ }
+        lightboxEl.classList.add("dragging");
+      });
+      img.addEventListener("pointermove", (e) => {
+        const v = lightboxView;
+        if (!v.drag) { return; }
+        const dx = e.clientX - v.px, dy = e.clientY - v.py;
+        v.x = v.ox + dx; v.y = v.oy + dy;
+        lightboxPaint();
+      });
+      const endDrag = () => {
+        if (!lightboxView.drag) { return; }
+        lightboxView.drag = false;
+        lightboxEl.classList.remove("dragging");
+      };
+      img.addEventListener("pointerup", endDrag);
+      img.addEventListener("pointercancel", endDrag);
       document.body.appendChild(lightboxEl);
     }
+    lightboxReset();
     lightboxEl.firstChild.src = src;
     lightboxEl.classList.remove("hidden");
   }
+
+  // Esc 关这一层。放在捕获阶段、并且就地吃掉这条按键：document 上后面那个「Esc 中止这一轮」
+  // 也是听同一个键，不拦下来就会顺手把正在生成的这轮也停了（跟「项目与会话」那层一个道理）。
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !lightboxEl || lightboxEl.classList.contains("hidden")) { return; }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    closeLightbox();
+  }, true);
 
   /** 图片原始尺寸写进调用行（read xxx 后面）；medium 模式无调用行则写进标签标题。 */
   function applyImageDims(card, w, h) {
@@ -3519,7 +3609,7 @@
     const el = document.createElement("img");
     el.className = "tc-img";
     el.src = "data:" + (img.mimeType || "image/png") + ";base64," + img.data;
-    el.title = "点击放大";
+    el.title = "点开放大看（滚轮缩放、双击还原）";
     el.addEventListener("click", (e) => { e.stopPropagation(); openLightbox(el.src); });
     el.addEventListener("load", () => { applyImageDims(card, el.naturalWidth, el.naturalHeight); }, { once: true });
     return el;

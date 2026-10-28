@@ -63,6 +63,10 @@ npm run web:shot -- --width 1000 --height 620 --script dev/toolRow.js
 # 读图铺出来的那块图排在这条调用当时的位置上：后面接着调的、后面才到的正文都在它下面）：
 npm run web:shot -- --width 1000 --height 760 --script dev/toolMerge.js
 
+# 验看图那一层（点开带图的工具结果后还能放大缩小）：滚轮定点缩放、放大后按住拖动、
+# 双击还原、Esc 关掉（且不顺手停掉正在生成的那一轮）、没放大时点图本身照旧关：
+npm run web:shot -- --width 1000 --height 760 --script dev/lightboxZoom.js
+
 # 验「正在跑的那一条」（工具标签下面那行摘要：在跑的那条把命令 / 读哪个文件直接写出来，
 # 同时跑几条也只露最近开始的那一条（一条跑完这一块高矮不变、下文不跟着跳），
 # 一条都不在跑就冻住（齿轮停转、耗时定住），字一直留着；

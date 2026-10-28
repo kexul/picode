@@ -1418,10 +1418,15 @@
   .tool-image-block .tc-images { margin: 0; }
   /* 图块封顶：长图别把对话顶出好几屏（宽图缩到对话宽度、窄图不放大），点开还能看原图 */
   .tool-image-block .tc-img { max-height: 320px; width: auto; max-width: 100%; height: auto; }
-  .lightbox { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.72); }
+  .lightbox { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.72); touch-action: none; }
 
   .lightbox.hidden { display: none; }
-  .lightbox img { max-width: 96vw; max-height: 96vh; border-radius: 8px; box-shadow: 0 8px 40px rgba(0,0,0,0.5); cursor: zoom-out; }
+  /* 看图这层：滚轮缩放、放大后按住拖动、双击还原（逻辑在 chat.js 的 openLightbox）。
+     图不动的时候光标是一只手，拖着的时候是一只抓住的手，一眼能看出能拖。 */
+  .lightbox img { max-width: 96vw; max-height: 96vh; border-radius: 8px; box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+    cursor: zoom-out; user-select: none; -webkit-user-drag: none; touch-action: none; }
+  .lightbox.zoomed img { cursor: grab; }
+  .lightbox.dragging img { cursor: grabbing; }
 
   /* ==== 宽窗下的阅读宽度 ====
      窗口比下面这一列还宽的时候（电脑浏览器、拉宽了的面板），消息、图片块、输入框收成同一列
