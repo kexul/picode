@@ -5657,8 +5657,8 @@
   const FILE_SIDEBAR_CHANGES_NAME = "改动";
   /** 这一格里一个文件都没改过时那句提示。 */
   const FILE_SIDEBAR_CHANGES_HINT = "这个会话还没改过文件。";
-  /** 「脚本」那一格：这个会话放到后台跑的命令、跑到哪一步了（标签上就写这两个字）。 */
-  const FILE_SIDEBAR_SCRIPTS_NAME = "脚本";
+  /** 「后台」那一格：这个会话放到后台跑的命令、跑到哪一步了（标签上就写这两个字）。 */
+  const FILE_SIDEBAR_SCRIPTS_NAME = "后台";
   /** 这一格里一条后台命令都没有时那句提示。 */
   const FILE_SIDEBAR_SCRIPTS_HINT = "这个会话还没有放到后台跑的命令。";
   /** 问后端「会话目录自己」用这个相对写法（列目录那条地址不认空路径，`.` 就是会话目录）。 */
@@ -5833,7 +5833,7 @@
   }
 
   /**
-   * 「脚本」那一格：这个会话放到后台跑的命令（后端给的清单）、哪几行展开着、取回来的输出。
+   * 「后台」那一格：这个会话放到后台跑的命令（后端给的清单）、哪几行展开着、取回来的输出。
    * 跟「改动」一样不按 path 取内容，所以 path 留空；每回摆上这一格都重问一遍清单（见 showFileTab）。
    */
   function fileSidebarNewScriptsTab() {
@@ -5866,7 +5866,7 @@
     return -1;
   }
 
-  /** 「脚本」那一格在标签条上的位置（没有就是 -1）。 */
+  /** 「后台」那一格在标签条上的位置（没有就是 -1）。 */
   function fileSidebarScriptsIndex() {
     for (let i = 0; i < fileSidebar.tabs.length; i++) { if (fileSidebar.tabs[i].scripts) { return i; } }
     return -1;
@@ -5887,7 +5887,7 @@
   }
 
   /**
-   * 把「脚本」那一格摆上（只摆、不取内容）：它也是常驻的一格，排在「改动」后面。
+   * 把「后台」那一格摆上（只摆、不取内容）：它也是常驻的一格，排在「改动」后面。
    * 会话目录还不认识就不摆（跟「目录」「改动」同一个条件）。
    * @returns 摆了没有
    */
@@ -5909,7 +5909,7 @@
     if (!fileSidebar.root || !fileSidebar.open || fileSidebar.active >= 0) { return; }
     if (addProjectDirTab()) {
       addChangesTab();   // 「改动」那一格跟着一起来（固定排在「目录」后面）
-      addScriptsTab();   // 「脚本」那一格跟在「改动」后面
+      addScriptsTab();   // 「后台」那一格跟在「改动」后面
       showFileTab(0, 0);
       return;
     }
@@ -5999,7 +5999,7 @@
         : tab.change ? FILE_SIDEBAR_CHANGES_NAME
           : tab.scripts ? FILE_SIDEBAR_SCRIPTS_NAME : fileSidebarTabName(tab.path);
       el.appendChild(name);
-      // 「目录」「改动」「脚本」这三格没有那颗叉：它们是常驻的，不让人关掉
+      // 「目录」「改动」「后台」这三格没有那颗叉：它们是常驻的，不让人关掉
       //（切会话 / 刷新页面时换成当前会话的）
       if (!tab.proj && !tab.change && !tab.scripts) {
         const close = document.createElement("button");
@@ -6778,7 +6778,7 @@
     fetchChanges(tab);
   }
 
-  // ==================== 「脚本」那一格：放到后台跑的命令 ====================
+  // ==================== 「后台」那一格：放到后台跑的命令 ====================
   // 这个会话里被放到后台的命令都在这一格：一行一条（编号、跑到哪一步、用时、命令），
   // 点一行看它最后一段输出；还在跑的那条右边有一颗「停」。
   // 数据在后端会话的内存里（见 src/sessionRuntime.ts 的 bashTasks）：刷新页面重问一次就有，
@@ -6846,7 +6846,7 @@
     syncScriptsClock(tab);
   }
 
-  /** 「脚本」那一格那个计时：有还在跑的命令时，每半秒把那一行的用时改一下（不重画清单）。 */
+  /** 「后台」那一格那个计时：有还在跑的命令时，每半秒把那一行的用时改一下（不重画清单）。 */
   let scriptsClock = 0;
   function syncScriptsClock(tab) {
     const hasRunning = !!tab && tab.scripts.some((t) => t && t.status === "running");
@@ -7007,7 +7007,7 @@
 
   /**
    * 后端说某条后台命令有动静了（转到后台 / 跑完 / 被停）：更新清单里那一条。
-   * 正看着「脚本」那一格才重画；没看着的话摆上时会自己重问一遍。
+   * 正看着「后台」那一格才重画；没看着的话摆上时会自己重问一遍。
    */
   function applyBashTask(task) {
     if (!task) { return; }
@@ -7040,7 +7040,7 @@
     if (!tab || !body || tab.loading) { return; }   // 还没开文件 / 还在取：这一轮先不问
     if (tab.proj) { return; }   // 目录不跟着刷新：清单不是「正看着的那个文件」，点一下才重新列
     if (tab.change) { return; }   // 「改动」那一格也不跟着刷新：模板变了由 changesChanged 叫它（见那条消息）
-    if (tab.scripts) { return; }   // 「脚本」那一格同样不跟着刷新：后台命令有动静由 bashTask 叫它
+    if (tab.scripts) { return; }   // 「后台」那一格同样不跟着刷新：后台命令有动静由 bashTask 叫它
     if (isHtmlPath(tab.path)) { pollHtmlFile(tab, at); return; }   // 网页：只问修改时间，改过才重载
     const token = fileSidebar.token;
     filePolling = true;
@@ -9330,7 +9330,7 @@
         break;
       }
       case "bashTask": {
-        // 某条后台命令有动静（转到后台 / 跑完 / 被停）：文件侧边栏那一格「脚本」跟着更新
+        // 某条后台命令有动静（转到后台 / 跑完 / 被停）：文件侧边栏那一格「后台」跟着更新
         if (t.id === activeId) { applyBashTask(msg.task); }
         break;
       }

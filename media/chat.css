@@ -1617,6 +1617,12 @@
     background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.08));
     box-shadow: inset 0 2px 0 0 var(--vscode-focusBorder, #007acc);
   }
+  /* 常驻那几格（目录 / 改动 / 后台）里只有名字、没有右边那颗叉：字放中间，左右内边距对等
+     （别的标签右边要留那颗叉的位置，所以它们还是左边对齐）。 */
+  .file-tab[data-proj], .file-tab[data-changes], .file-tab[data-scripts] {
+    justify-content: center;
+    padding: 3px 10px;
+  }
   .file-tab-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   /* 标签上那颗叉：一直看得见（手机上没有悬浮这回事），点它关掉这个标签 */
   .file-tab-close {
@@ -1660,8 +1666,16 @@
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
     padding: 4px 10px 4px 8px; cursor: pointer; user-select: none;
     font-size: calc(var(--vscode-font-size, 13px) - 1px);
+    /* 这一块 diff 展开得长、往下滚的时候，这一行粘在顶上（滚出这一块才算完）。
+       底色得是不透明的：透明的会让底下的 diff 从字缝里透上来。 */
+    position: sticky; top: 0; z-index: 1;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #fff));
   }
-  .change-head:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
+  /* 悬停那层色用 background-image 叠上去：换成 background 会把上面那层不透明底色顶掉 */
+  .change-head:hover {
+    background-image: linear-gradient(var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)),
+      var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)));
+  }
   .change-arrow {
     flex: 0 0 auto; width: 0; height: 0;
     border-left: 5px solid currentColor; border-top: 4px solid transparent; border-bottom: 4px solid transparent;
@@ -1704,8 +1718,14 @@
     display: flex; align-items: center; gap: 6px;
     padding: 4px 10px 4px 8px; cursor: pointer; user-select: none;
     font-size: calc(var(--vscode-font-size, 13px) - 1px);
+    /* 跟「改动」那一行一个做法：输出拖得再长，这一行粘在顶上 */
+    position: sticky; top: 0; z-index: 1;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #fff));
   }
-  .script-head:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
+  .script-head:hover {
+    background-image: linear-gradient(var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)),
+      var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)));
+  }
   .script-item.open .change-arrow { transform: rotate(90deg); }
   .script-no {
     flex: 0 0 auto; opacity: 0.7;
@@ -1734,10 +1754,10 @@
     font-family: var(--vscode-editor-font-family, monospace); font-size: 0.86em;
   }
   .script-body[hidden] { display: none; }
-  /* 展开的那一段输出：等宽、长行折起来（这一列本来就在滚，不自己再滚一道），
-     但给它一个高度上限：一条后台命令的输出可能是几百行，全铺开会把清单顶走。 */
+  /* 展开的那一段输出：等宽、长行折起来；跟 diff 一样不自己再滚一道（这一列本来就在滚），
+     往下拖的时候上面那一行粘在顶上（见 .script-head 的 sticky）。 */
   .script-log {
-    margin: 0; padding: 4px 10px 8px 27px; max-height: 320px; overflow: auto;
+    margin: 0; padding: 4px 10px 8px 27px;
     white-space: pre-wrap; overflow-wrap: anywhere;
     font-family: var(--vscode-editor-font-family, monospace); font-size: 0.86em;
   }
