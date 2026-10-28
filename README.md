@@ -24,6 +24,27 @@ code --install-extension pi-chat-vscode-0.1.0.vsix     :: VSCode
 
 重载窗口会把所有正在跑的 pi 进程一起结束，有活在跑的时候别急着重载。
 
+### Windows：一个 exe 直接跑（不装全局包）
+
+```bash
+npm run exe             # 编译 + 打包，产出 dist\pichat.exe（约 90MB，不进版本库）
+```
+
+双击 `pichat.exe` 就是传统 app 那个样子：**没有黑框**，起后端，通知区域出一颗图标，
+并把浏览器打开到 `http://<本机>:51883/`。再双击一次不会起第二个，只把那个界面打开。
+
+- 里面装了什么：一份 Node 运行时 + 编译好的后端 + 界面文件 + 托盘与截屏那两支小程序。
+  第一次运行时它们被解到 `%LOCALAPPDATA%\PiChatpp-<版本>\`（换一版会重新解一份），
+  之后直接跑，不用装 npm 包。
+- **日志**：没有控制台，所以写在 `%LOCALAPPDATA%\PiChat\pichat.log`（超过 4MB 会先清一次）。
+- **会话默认目录**：双击时用你的用户目录（家）。想换就带参数跑：
+  `pichat.exe --cwd D:\work`；端口、监听地址跟命令行版一样（`--port`、`--host`、`--open`）。
+- 设置文件还是 `~/.pi/pichat/config.json`，跟插件版、命令行版共用一份。
+- 面板里**没有**「重启后端」那一行：exe 里没有仓库也没有源码，没什么可编的。
+- **pi 打不进去**：那是 pi coding agent 本体，得自己装（`npm i -g @earendil-works/pi-coding-agent`），
+  exe 按 PATH 找它，或者在设置文件里写 `piPath`。
+- 这个 exe 只包含**后端 + 网页界面**；VSCode 里的那块对话面板还是得装插件（vsix）。
+
 ### 在 Linux 上跑后端（只用 pichat，不装编辑器插件）
 
 一台 Linux 机器只跑后端、用浏览器或手机连过去的话，不需要打 vsix，也不需要在那边装编辑器。

@@ -13,7 +13,7 @@
  */
 import { ChildProcess, spawn } from "child_process";
 import * as fs from "fs";
-import * as path from "path";
+import { appBin } from "./appAssets";
 
 /** 托盘清单里的一行：哪个会话有事、它叫什么。 */
 export interface TrayPendingItem {
@@ -34,14 +34,14 @@ export interface TrayHooks {
     onQuit?(): void;
 }
 
-/** 托盘小程序（构建时编好，见 bin/tray.cs 与 scripts/compile.mjs）。 */
-const TRAY_EXE = path.join(__dirname, "..", "..", "bin", "tray.exe");
+/** 托盘小程序（构建时编好，见 bin/tray.cs 与 scripts/compile.mjs）；打成单个 exe 时它内嵌在 exe 里。 */
+const TRAY_EXE = (): string => appBin("tray.exe");
 
 export class TrayIcon {
     /** 这台机器上能用托盘吗：Windows、而且小程序在。 */
     public static available(): boolean {
         if (process.platform !== "win32") { return false; }
-        try { return fs.existsSync(TRAY_EXE); } catch { return false; }
+        try { return fs.existsSync(TRAY_EXE()); } catch { return false; }
     }
 
     private child: ChildProcess | undefined;
@@ -88,7 +88,7 @@ export class TrayIcon {
         if (this.broken || !TrayIcon.available()) { return false; }
         let child: ChildProcess;
         try {
-            child = spawn(TRAY_EXE, [], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+            child = spawn(TRAY_EXE(), [], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
         } catch {
             this.broken = true;
             return false;

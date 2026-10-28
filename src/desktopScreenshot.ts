@@ -2,6 +2,7 @@ import { execFile } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { appBin } from "./appAssets";
 
 /**
  * desktopScreenshot —— 截一张当前桌面（Windows）。
@@ -25,8 +26,8 @@ export type DesktopScreenshotResult =
     | { ok: true; data: string; mimeType: string }
     | { ok: false; error: string };
 
-/** 截屏小程序（构建时编好，见 bin/shot.cs 与 scripts/compile.mjs）。 */
-const SHOT_EXE = path.join(__dirname, "..", "..", "bin", "shot.exe");
+/** 截屏小程序（构建时编好，见 bin/shot.cs 与 scripts/compile.mjs）；打成单个 exe 时它内嵌在 exe 里。 */
+const SHOT_EXE = (): string => appBin("shot.exe");
 
 /** 起进程到出图的超时。正常一两秒内就该完事，留足余量；到点进程会被杀掉。 */
 const SHOT_TIMEOUT_MS = 20000;
@@ -70,7 +71,7 @@ type HelperRun =
  * 它自己说失败（截图本身没成）就不再折腾，把它的原话报上去。
  */
 async function captureWithHelperExe(): Promise<DesktopScreenshotResult | undefined> {
-    if (!fs.existsSync(SHOT_EXE)) { return undefined; }
+    if (!fs.existsSync(SHOT_EXE())) { return undefined; }
     const run = await runHelperExe();
     if (run.kind === "missing") { return undefined; }
     if (run.kind === "failed") { return { ok: false, error: run.error }; }
@@ -80,7 +81,7 @@ async function captureWithHelperExe(): Promise<DesktopScreenshotResult | undefin
 /** 起一次截屏小程序，把它的 base64 收回来。 */
 function runHelperExe(): Promise<HelperRun> {
     return new Promise((resolve) => {
-        execFile(SHOT_EXE, [String(JPEG_MAX_EDGE)], {
+        execFile(SHOT_EXE(), [String(JPEG_MAX_EDGE)], {
             timeout: SHOT_TIMEOUT_MS,
             windowsHide: true,
             encoding: "utf8",

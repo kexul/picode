@@ -23,6 +23,7 @@ import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase, type ViewOptionItem } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
+import { isSingleExe } from "./appAssets";
 import { hostOfUrl, isOwnPage, pushRemoteNotice, withSession, type RemoteNotice } from "./remoteNotice";
 import { getAskAssets, getBashAssets, getGoalAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
@@ -941,9 +942,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     protected override viewOptionItemsExtra(): ViewOptionItem[] {
         // 能不能从这里编译并重启：代码旁边得有仓库里的 build.bat / build.sh（见 serverRestart.ts）；
         // 后端没给重启接口（例如调试工具自己拼一个宿主）也不给点。
+        // 单文件 exe 没有仓库也没有源码，这一行整个不露面（那儿没什么可编的）。
         const able = describeRestart();
-        const can = able.ok && !!this.options.restartBackend;
-        return [
+        const can = able.ok && !!this.options.restartBackend && !isSingleExe();
+        const items: ViewOptionItem[] = [
             {
                 action: "theme",
                 label: "界面颜色",
@@ -955,7 +957,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                     { value: "dark", label: "深色" },
                 ],
             },
-            {
+        ];
+        if (!isSingleExe()) {
+            items.push({
                 action: "restartBackend",
                 label: "重启后端",
                 desc: can ? "先拉最新代码再编，然后重启（正在跑的回复会断）" : (able.reason ?? "这个后端不能从这里重启。"),
@@ -963,8 +967,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 kind: "button",
                 button: "编译并重启",
                 disabled: !can,
-            },
-        ];
+            });
+        }
+        return items;
     }
 
     public mutateViewOption(action: string, value?: string): void {

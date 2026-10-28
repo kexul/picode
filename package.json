@@ -5,65 +5,155 @@
   "version": "0.1.0",
   "publisher": "local",
   "license": "MIT",
-  "files": ["out/extension/**/*.js", "out/extension/**/*.js.map", "out/server/**/*.js", "out/server/**/*.js.map", "media", "bin"],
+  "files": [
+    "out/extension/**/*.js",
+    "out/extension/**/*.js.map",
+    "out/server/**/*.js",
+    "out/server/**/*.js.map",
+    "media",
+    "bin"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other", "Chat"],
+  "categories": [
+    "Other",
+    "Chat"
+  ],
   "main": "./out/extension/extension.js",
-  "bin": { "pichat": "./bin/pichat.js" },
-  "activationEvents": ["onStartupFinished"],
+  "bin": {
+    "pichat": "./bin/pichat.js"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "commands": [
-      { "command": "piChat.openChat", "title": "Pi Chat: 打开对话窗口", "icon": "$(comment-discussion)" },
-      { "command": "piChat.newSession", "title": "Pi Chat: 新建会话", "icon": "$(add)" },
-      { "command": "piChat.history", "title": "Pi Chat: 历史会话", "icon": "$(history)" },
-      { "command": "piChat.openSettings", "title": "Pi Chat: 设置", "icon": "$(gear)" },
-      { "command": "piChat.openViewOptions", "title": "Pi Chat: 显示选项", "icon": "$(gear)" },
-      { "command": "piChat.pickModel", "title": "Pi Chat: 切换模型", "icon": "$(hubot)" },
-      { "command": "piChat.focusInput", "title": "Pi Chat: 聚焦输入框", "icon": "$(keyboard)" },
-      { "command": "piChat.askSelectionAndSend", "title": "Pi Chat: 发送选中文本到对话框", "icon": "$(comment)" },
-      { "command": "piChat.openInBrowser", "title": "Pi Chat: 在浏览器里打开对话", "icon": "$(globe)" },
-      { "command": "piChat.copyWebAddress", "title": "Pi Chat: 复制浏览器版访问地址", "icon": "$(copy)" }
+      {
+        "command": "piChat.openChat",
+        "title": "Pi Chat: 打开对话窗口",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "piChat.newSession",
+        "title": "Pi Chat: 新建会话",
+        "icon": "$(add)"
+      },
+      {
+        "command": "piChat.history",
+        "title": "Pi Chat: 历史会话",
+        "icon": "$(history)"
+      },
+      {
+        "command": "piChat.openSettings",
+        "title": "Pi Chat: 设置",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "piChat.openViewOptions",
+        "title": "Pi Chat: 显示选项",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "piChat.pickModel",
+        "title": "Pi Chat: 切换模型",
+        "icon": "$(hubot)"
+      },
+      {
+        "command": "piChat.focusInput",
+        "title": "Pi Chat: 聚焦输入框",
+        "icon": "$(keyboard)"
+      },
+      {
+        "command": "piChat.askSelectionAndSend",
+        "title": "Pi Chat: 发送选中文本到对话框",
+        "icon": "$(comment)"
+      },
+      {
+        "command": "piChat.openInBrowser",
+        "title": "Pi Chat: 在浏览器里打开对话",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "piChat.copyWebAddress",
+        "title": "Pi Chat: 复制浏览器版访问地址",
+        "icon": "$(copy)"
+      }
     ],
     "viewsContainers": {
       "activitybar": [
-        { "id": "piChatContainer", "title": "Pi Chat", "icon": "$(comment-discussion)" }
+        {
+          "id": "piChatContainer",
+          "title": "Pi Chat",
+          "icon": "$(comment-discussion)"
+        }
       ]
     },
     "views": {
       "piChatContainer": [
-        { "type": "webview", "id": "piChat.chatView", "name": "对话" }
+        {
+          "type": "webview",
+          "id": "piChat.chatView",
+          "name": "对话"
+        }
       ]
     },
     "keybindings": [
-      { "command": "piChat.askSelectionAndSend", "key": "ctrl+alt+p", "mac": "cmd+alt+p", "when": "editorTextFocus" },
-      { "command": "piChat.focusInput", "key": "ctrl+alt+i", "mac": "cmd+alt+i", "when": "piChat.focusInputKey == ctrlAltI" },
-      { "command": "piChat.focusInput", "key": "ctrl+shift+i", "mac": "cmd+shift+i", "when": "piChat.focusInputKey == ctrlShiftI" },
-      { "command": "piChat.focusInput", "key": "alt+i", "when": "piChat.focusInputKey == altI" },
-      { "command": "piChat.focusInput", "key": "ctrl+alt+space", "mac": "cmd+alt+space", "when": "piChat.focusInputKey == ctrlAltSpace" }
+      {
+        "command": "piChat.askSelectionAndSend",
+        "key": "ctrl+alt+p",
+        "mac": "cmd+alt+p",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "piChat.focusInput",
+        "key": "ctrl+alt+i",
+        "mac": "cmd+alt+i",
+        "when": "piChat.focusInputKey == ctrlAltI"
+      },
+      {
+        "command": "piChat.focusInput",
+        "key": "ctrl+shift+i",
+        "mac": "cmd+shift+i",
+        "when": "piChat.focusInputKey == ctrlShiftI"
+      },
+      {
+        "command": "piChat.focusInput",
+        "key": "alt+i",
+        "when": "piChat.focusInputKey == altI"
+      },
+      {
+        "command": "piChat.focusInput",
+        "key": "ctrl+alt+space",
+        "mac": "cmd+alt+space",
+        "when": "piChat.focusInputKey == ctrlAltSpace"
+      }
     ],
     "menus": {
       "editor/context": [
-        { "command": "piChat.askSelectionAndSend", "group": "navigation@89" }
+        {
+          "command": "piChat.askSelectionAndSend",
+          "group": "navigation@89"
+        }
       ]
     }
   },
   "scripts": {
-    "clean": "node -e \"const fs=require('fs');fs.rmSync('out',{recursive:true,force:true});fs.rmSync('bin/shot.exe',{force:true});fs.rmSync('bin/tray.exe',{force:true});for(const f of fs.readdirSync('.').filter(f=>/^pi-chat.*\\.vsix$/.test(f)))fs.rmSync(f)\"",
+    "clean": "node -e \"const fs=require('fs');fs.rmSync('out',{recursive:true,force:true});fs.rmSync('dist',{recursive:true,force:true});fs.rmSync('bin/shot.exe',{force:true});fs.rmSync('bin/tray.exe',{force:true});for(const f of fs.readdirSync('.').filter(f=>/^pi-chat.*\\.vsix$/.test(f)))fs.rmSync(f)\"",
     "compile": "node scripts/compile.mjs",
     "build": "npm run clean && npm run compile",
     "watch": "node scripts/compile.mjs --watch",
     "package": "npm run build && vsce package --allow-missing-repository --no-rewrite-relative-links",
+    "exe": "npm run build && node scripts/build-exe.mjs",
     "web:dev": "npm run compile && node dev/browserHost.js",
     "web:shot": "npm run compile && node dev/visit.js",
     "server": "npm run compile && node out/server/serverMain.js"
   },
-  "dependencies": {},
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "2.15.0",
+    "postject": "^1.0.0-alpha.6",
     "typescript": "^5.3.0"
   }
 }

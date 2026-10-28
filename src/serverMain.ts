@@ -13,6 +13,8 @@
 import * as cp from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import * as os from "os";
+import { appVersion, isSingleExe, mediaDir, startSingleExe } from "./appAssets";
 import { PiChatWebServer, type WebServerSettings } from "./webChatServer";
 import { ChatHost } from "./chatHost";
 import { readServerConfig, updateServerConfig } from "./serverConfig";
@@ -21,22 +23,10 @@ import { startRestart } from "./serverRestart";
 import { ensureAskAssets, ensureGoalAssets, ensureImageAssets, ensureTabaAssets, ensureTitleAssets, ensureBashAssets } from "./bridgeAssets";
 import { serverConfigFile } from "./serverPaths";
 
-/** 安装根目录（out/server → 根）。 */
-const ROOT_DIR = path.join(__dirname, "..", "..");
-/** 界面资源目录（chat.js / chat.css 这些）。 */
-const MEDIA_DIR = path.join(ROOT_DIR, "media");
+/** 界面资源目录（chat.js / chat.css 这些）：正常跑在仓库根下，单文件 exe 时是解出来的缓存目录。 */
+const MEDIA_DIR = mediaDir();
 /** 本后端（也是本插件）的版本号。 */
-const VERSION = readVersion();
-
-function readVersion(): string {
-    try {
-        const raw = fs.readFileSync(path.join(ROOT_DIR, "package.json"), "utf8");
-        const parsed = JSON.parse(raw);
-        return typeof parsed.version === "string" ? parsed.version : "0";
-    } catch {
-        return "0";
-    }
-}
+const VERSION = appVersion();
 
 export interface ServerArgs {
     cwd?: string;
@@ -137,6 +127,16 @@ function stamp(): string {
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+    // 单文件 exe：先把开场白做了（解出内嵌的界面文件与小程序、日志改成写文件）。
+    // 双击打开时没有参数，也不能像命令行那样“没写 --cwd 就用当前目录”：那儿的当前目录是
+    // exe 待的地方，拿来当会话目录不合适。所以 exe 模式、又没给任何参数时按“传统 app”那套来：
+    // 会话开在家目录，起来就把界面打开。
+    const exeMode = isSingleExe();
+    startSingleExe();
+    if (exeMode && argv.length === 0) {
+        argv = ["--cwd", os.homedir(), "--open"];
+    }
+
     const args = parseServerArgs(argv);
     if (args.help) { console.log(usageText()); return; }
     if (args.version) { console.log(VERSION); return; }
@@ -145,8 +145,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     const log = (text: string) => console.log(`[${stamp()}] ${text}`);
 
     // 单实例：已经在跑就报出它的地址，不再起第二个（两个后端会让手机分不清连哪个）。
+    // 双击 exe 撞上这种情况是常态（人以为没开）：那就只把那个界面打开，不再报错退出。
     const running = await findRunningServer();
     if (running) {
+        if (exeMode) {
+            log(`已经有一个 Pi Chat 在跑了：${running.url}（这次只把界面打开）`);
+            openInDefaultBrowser(running.url);
+            return;
+        }
         console.error(`已经有一个 Pi Chat 后端在跑了：${running.url}`);
         console.error("（想再起一个就先停掉它；一个后端就能同时接手机、电脑浏览器。）");
         process.exitCode = 1;
