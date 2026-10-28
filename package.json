@@ -50,7 +50,7 @@
     }
   },
   "scripts": {
-    "clean": "node -e \"const fs=require('fs');fs.rmSync('out',{recursive:true,force:true});fs.rmSync('bin/shot.exe',{force:true});for(const f of fs.readdirSync('.').filter(f=>/^pi-chat.*\\.vsix$/.test(f)))fs.rmSync(f)\"",
+    "clean": "node -e \"const fs=require('fs');fs.rmSync('out',{recursive:true,force:true});fs.rmSync('bin/shot.exe',{force:true});fs.rmSync('bin/tray.exe',{force:true});for(const f of fs.readdirSync('.').filter(f=>/^pi-chat.*\\.vsix$/.test(f)))fs.rmSync(f)\"",
     "compile": "node scripts/compile.mjs",
     "build": "npm run clean && npm run compile",
     "watch": "node scripts/compile.mjs --watch",

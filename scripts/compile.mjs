@@ -1,5 +1,5 @@
 /*
- * 把三份编译配置一次跑完，外加桌面截图那支小程序。
+ * 把三份编译配置一次跑完，外加两支小程序（桌面截图、通知区域那颗图标）。
  *
  * 为什么要分三份：插件那侧（一屏界面 + 一双打开文件的手）与后端那侧（会话、网页服务）
  * 编到不同目录，打进插件包里的只有插件那侧；第三份不产出文件，只把 src 下全部源码
@@ -8,7 +8,8 @@
  *
  *   node scripts/compile.mjs           挨个跑一遍，哪份错了就停在那里（npm run compile）
  *   node scripts/compile.mjs --watch   三份各起一个 tsc -w，改一下就编一下（npm run watch；
- *                                      截屏小程序不在里面，改过 bin/shot.cs 就跑一次 npm run compile）
+ *                                      两支小程序不在里面，改过 bin/shot.cs 或 bin/tray.cs
+ *                                      就跑一次 npm run compile）
  */
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -32,10 +33,12 @@ const projects = [
     { label: "全量检查", config: "tsconfig.json" },
 ];
 
-// 桌面截图那支小程序的源码与产物（见 bin/shot.cs、src/desktopScreenshot.ts）：
-// 用系统自带的 csc.exe 编成 bin/shot.exe，随 npm 包一起装到后端那边。
+// 两支小程序的源码与产物（见 bin/shot.cs、bin/tray.cs）：
+// 都用系统自带的 csc.exe 编，随 npm 包一起装到后端那边。
 const SHOT_SOURCE = path.join(repoRoot, "bin", "shot.cs");
 const SHOT_EXE = path.join(repoRoot, "bin", "shot.exe");
+const TRAY_SOURCE = path.join(repoRoot, "bin", "tray.cs");
+const TRAY_EXE = path.join(repoRoot, "bin", "tray.exe");
 
 const watch = process.argv.includes("--watch");
 
@@ -67,6 +70,7 @@ async function compileOnce() {
         }
     }
     compileShotExe();
+    compileTrayExe();
     process.stdout.write("都编完了。\n");
 }
 
@@ -77,34 +81,72 @@ async function compileOnce() {
  * 慢一些但一样能用。所以这里只提醒一句，不拦路。
  */
 function compileShotExe() {
-    process.stdout.write(`· 截屏小程序（bin/shot.cs → bin/shot.exe）\n`);
+    runCsc({
+        label: "截屏小程序",
+        source: SHOT_SOURCE,
+        output: SHOT_EXE,
+        target: "exe",
+        references: ["System.Drawing.dll"],
+        whySkip: "桌面截图只在 Windows 上能用，没必要编",
+        whyFail: "运行时会退回 PowerShell 那套",
+    });
+}
+
+/**
+ * 编通知区域那颗图标（bin/tray.cs → bin/tray.exe）。
+ *
+ * 跟截屏那支一样：编不出来不算构建失败，只是没有托盘图标可闪（见 src/trayIcon.ts），
+ * 界面照常能用。
+ */
+function compileTrayExe() {
+    runCsc({
+        label: "托盘图标",
+        source: TRAY_SOURCE,
+        output: TRAY_EXE,
+        // winexe：托盘是个纯图标的小程序，跑起来不该带黑框
+        target: "winexe",
+        references: ["System.Drawing.dll", "System.Windows.Forms.dll"],
+        whySkip: "托盘图标只有 Windows 有，没必要编",
+        whyFail: "这个包在 Windows 上就没有托盘图标可闪",
+    });
+}
+
+/**
+ * 用系统自带的 csc.exe 编一支小程序。
+ *
+ * 编不出来只提醒一句、不拦路：两支都是“没有也能用”的东西，构建不该为它们停下。
+ * @param {{ label: string, source: string, output: string, target: string,
+ *           references: string[], whySkip: string, whyFail: string }} job
+ */
+function runCsc(job) {
+    process.stdout.write(`· ${job.label}（${path.relative(repoRoot, job.source)} → ${path.relative(repoRoot, job.output)}）\n`);
     if (process.platform !== "win32") {
-        process.stdout.write("  （不是 Windows，跳过：桌面截图只在 Windows 上能用，没必要编）\n");
+        process.stdout.write(`  （不是 Windows，跳过：${job.whySkip}）\n`);
         return;
     }
     const csc = findCsc();
     if (!csc) {
-        process.stdout.write("  （没找到 csc.exe，跳过：运行时会退回 PowerShell 那套，慢一些）\n");
+        process.stdout.write(`  （没找到 csc.exe，跳过：${job.whyFail}）\n`);
         return;
     }
     try {
         // 源码没动过就别编：npm run web:shot 每条命令都会走到这里来
-        if (fs.statSync(SHOT_EXE).mtimeMs >= fs.statSync(SHOT_SOURCE).mtimeMs) {
+        if (fs.statSync(job.output).mtimeMs >= fs.statSync(job.source).mtimeMs) {
             process.stdout.write("  （没改动，跳过）\n");
             return;
         }
     } catch { /* 产物还没有，往下走就是 */ }
     const result = spawnSync(csc, [
-        "-nologo", "-optimize+", "-target:exe", "-platform:anycpu",
+        "-nologo", "-optimize+", `-target:${job.target}`, "-platform:anycpu",
         // 源码是 UTF-8，不指明的话 csc 按系统代码页读，中文注释会乱
         "-codepage:65001",
         // 路径里有空格时由 Node 自己加引号，别在这儿手写引号（csc 会把引号当成文件名的一部分）
-        `-out:${SHOT_EXE}`,
-        "-r:System.Drawing.dll",
-        SHOT_SOURCE,
+        `-out:${job.output}`,
+        ...job.references.map((dll) => `-r:${dll}`),
+        job.source,
     ], { cwd: repoRoot, encoding: "utf8" });
     if (result.status !== 0) {
-        process.stdout.write(`  × 没编成（csc 退出码 ${result.status}），运行时会退回 PowerShell 那套\n`);
+        process.stdout.write(`  × 没编成（csc 退出码 ${result.status}），${job.whyFail}\n`);
         if (result.stdout) { process.stdout.write(result.stdout); }
         if (result.stderr) { process.stderr.write(result.stderr); }
         return;

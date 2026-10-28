@@ -4,24 +4,19 @@
  *
  *   node dev/trustedOrigin.js
  *
- * 为什么要验：浏览器的通知只认 https 或本机地址，手机用 http://192.168.x.x 打开收不到通知
- * （见 README 那条）。解法是在前面挂一层 https，比如 `tailscale serve --bg --https=443 http://127.0.0.1:51883`。
+ * 为什么要验：手机想用 https 打开页面（比如 `tailscale serve --bg --https=443 http://127.0.0.1:51883`）。
  * 可那样页面就是从另一个地址打开的，后端原来只认「http + 本机那几个名字/端口」，会把页面发来的
  * 请求当成别人网站偷偷发来的顶回去（403）。人在设置里写下 trustedOrigins 之后，那些地址才算自己人。
  *
- * 这一跑分三段：
+ * 这一跑分两段：
  *  一、来源这道关（直接打 /api，看是 403 还是放行）：
  *       1. 名单里的 https 来源       → 放行
  *       2. 别人网站的 https 来源     → 403
  *       3. 本机 http 地址            → 照旧放行
  *       4. 不带 Origin（命令行那种） → 照旧放行
  *  二、真走一遍 https（本机现起一个 https 反代，证书现签，浏览器开它）：
- *       5. 页面是从反代那个地址打开的，而且算“安全来源”（浏览器才肯给通知权限）
+ *       5. 页面是从反代那个地址打开的
  *       6. 消息发得出去、回复收得回来（相对地址、SSE、POST 在反代后面都对得上）
- *       7. 跑完的通知真的发了
- *  三、同一个后端用 http 地址打开时（不是安全来源）：
- *       8. 设置里「跑完发系统通知」给出的理由是“浏览器只在 https 或本机地址下给通知权限”，
- *          不是“被地址栏拦了”（后者会让人去点地址栏那个图标，白费劲）
  *
  * 反代是自己现起的：tailscale serve 在这儿跑不起来（要 tailnet 里先开 HTTPS 证书）。
  * 但两件事跟真的一样：https 终止后转给本机 http；转过去时 Host 头照真那样原样带（不改成 127.0.0.1）。
@@ -45,20 +40,6 @@ let failed = 0;
 function ok(text) { console.log("  ✔ " + text); }
 function bad(text) { console.log("  ✘ " + text); failed += 1; }
 function check(cond, text) { (cond ? ok : bad)(text); }
-
-/** 页面上的 Notification 换成记账的假的（跟 turnNotice.js 同一套做法）。 */
-const STUB_NOTIFY = `
-    window.__pops = [];
-    window.Notification = function (title, opts) {
-        this.title = title;
-        this.body = (opts || {}).body || "";
-        this.tag = (opts || {}).tag || "";
-        window.__pops.push(this);
-    };
-    window.Notification.permission = "granted";
-    window.Notification.requestPermission = function () { return Promise.resolve("granted"); };
-    return true;
-`;
 
 /** 现签一张自签证书（只有这一跑用，落在 dev/.scratch 里）。签名器不在了就返回 undefined。 */
 function makeCert() {
@@ -104,22 +85,6 @@ function postApi(port, origin) {
     });
 }
 
-/** 打开设置面板里「跑完发系统通知」那一行的文字（理由就写在描述里）。 */
-async function notifyRowText(page) {
-    await page.click("#browserMenuBtn");
-    await sleep(1200);
-    await page.click(".pk-footer-settings");
-    await sleep(1200);
-    return (await page.eval(`
-        const rows = Array.from(document.querySelectorAll('#viewOptsRoot .vo-item'));
-        const row = rows.find((r) => {
-            const label = r.querySelector('.vo-label');
-            return label && label.textContent.indexOf('跑完发系统通知') >= 0;
-        });
-        return row ? row.innerText : '';
-    `)) || "";
-}
-
 async function main() {
     process.env.FAKEPI_THINK_MS = "0";
     const quiet = (text) => { if (/错误|失败/.test(text)) { console.log("  [日志] " + text); } };
@@ -154,7 +119,6 @@ async function main() {
         fakePi: true,
         host: "127.0.0.1",
         port: backendPort,
-        notifyTurnEnd: true,
         trustedOrigins: trustOrigin ? [trustOrigin, insecureOrigin] : [insecureOrigin],
         log: quiet,
     });
@@ -200,28 +164,12 @@ async function main() {
             });
             const originNow = await secure.page.eval("return location.origin");
             check(originNow === trustOrigin, `页面是从反代那个地址打开的（${originNow}）`);
-            check((await secure.page.eval("return window.isSecureContext === true")) === true,
-                "这个地址是“安全来源”（浏览器才肯给通知权限）");
 
-            await secure.page.eval(STUB_NOTIFY);
             await secure.page.send("你好");
             await secure.page.waitAnswer("完事");
             ok("消息发得出去、回复收得回来（反代后面相对地址 / SSE / POST 都对得上）");
-            await sleep(1000);
-            const pops = (await secure.page.eval("return (window.__pops || []).length")) || 0;
-            check(pops >= 1, `跑完的通知发了（收到 ${pops} 条）`);
             await secure.page.shot("trusted-origin.png");
         }
-
-        // ---- 三、同一个后端，用 http 地址打开 ----
-        const insecure = await openAt(`${insecureOrigin}/`);
-        await insecure.page.waitReady();
-        check((await insecure.page.eval("return window.isSecureContext === false")) === true,
-            "http 地址不算“安全来源”（浏览器不给通知权限）");
-        const row = await notifyRowText(insecure.page);
-        check(row.includes("https") && !row.includes("地址栏"),
-            "设置里给的理由是“浏览器只在 https 或本机地址下给通知权限”，不是“被地址栏拦了”");
-        await insecure.page.shot("trusted-origin-insecure.png");
     } finally {
         for (const one of opened) { try { one.close(); } catch { /* 已经关了 */ } }
         await harness.stop();

@@ -106,7 +106,7 @@ export type TurnEndStatus =
     /** 用户主动中止 */
     | "cancelled";
 
-/** 一轮对话收尾信息，交给宿主决定怎么提醒（系统通知；子会话把结果交回派活的会话也走这条）。 */
+/** 一轮对话收尾信息，交给宿主决定怎么提醒（托盘图标闪；子会话把结果交回派活的会话也走这条）。 */
 export interface TurnEndInfo {
     /** 收尾的会话 id */
     panelId: string;
@@ -150,7 +150,7 @@ export interface RuntimeHost {
     onKnownFilesChanged?(sessionId: string): void;
 
     /** 某 panel 的一轮对话真正结束（pi 发出 agent_settled）时调用：
-     *  宿主据此决定这个会话该不该发系统通知、并把子会话的结果交回去。 */
+     *  宿主据此决定这个会话该不该让托盘图标闪、并把子会话的结果交回去。 */
     onTurnEnd(info: TurnEndInfo): void;
 
     /**

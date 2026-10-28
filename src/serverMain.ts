@@ -274,7 +274,13 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
     // 设置浮层里那颗「编译并重启」：按钮点下去要的是「怎么起的、起在哪儿」，所以由这一层接；
     // 收摊（停网页服务、杀掉 pi 进程）也在这一层，见下面给 restartBackend 赋值那块。
     let restartBackend = (): { ok: boolean; reason?: string } => ({ ok: false, reason: "后端还没起来，不能重启。" });
-    const host = new ChatHost({ cwd, log, restartBackend: () => restartBackend() });
+    // 托盘菜单里的「打开页面」要用地址，可地址要等服务起来才知道：先留个口子，起来后插进去
+    let pageUrl: string | undefined;
+    const host = new ChatHost({
+        cwd, log,
+        restartBackend: () => restartBackend(),
+        openPage: () => { if (pageUrl) { openInDefaultBrowser(pageUrl); } },
+    });
     const server = new PiChatWebServer(MEDIA_DIR, host, {
         log: (text) => log(`[网页服务] ${text}`),
         onUrlChanged: () => { /* 启动器自己会打印地址，这里不用管 */ },
@@ -295,6 +301,7 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
         try { host.dispose(); } catch { /* 收摊出错不拦路 */ }
         throw new Error("网页服务没起来（端口 / 监听地址可能不对）");
     }
+    pageUrl = url;
 
     // 地址文件：单实例判断与"插件找后端"（第二步）都靠它。
     const parsed = new URL(url);

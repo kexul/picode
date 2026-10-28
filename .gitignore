@@ -7,5 +7,6 @@ dev/shots/
 # 调试脚本跑的假会话文件（dev/fakePi.js 落盘的，名子带进程号）
 dev/fake-session-*.jsonl
 .scratch/
-# 构建产物：桌面截图那支小程序，源码是 bin/shot.cs（npm run compile 时现编）
+# 构建产物：两支小程序，源码是 bin/shot.cs 与 bin/tray.cs（npm run compile 时现编）
 bin/shot.exe
+bin/tray.exe

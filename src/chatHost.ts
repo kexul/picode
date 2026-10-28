@@ -94,6 +94,11 @@ export interface ChatHostOptions {
      * 去编译、收摊以后再照原样把后端起回来）。不给就是不能从这里重启。
      */
     restartBackend?: () => { ok: boolean; reason?: string };
+    /**
+     * 托盘菜单里点了「打开页面」时调它：把界面打开（后端这侧就是用它自己的地址开浏览器）。
+     * 不给就当没有这一项。
+     */
+    openPage?: () => void;
 }
 
 /** 这条消息是不是“一次性界面”（确认框、浮层、跑完提醒）：补发里只有序号位、没有内容。 */
@@ -871,7 +876,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const v = this.readOption<string>(ChatHost.KEY_FONT_SIZE, DEFAULT_FONT_SIZE);
         return typeof v === "string" && /^\d+$/.test(v) ? v : DEFAULT_FONT_SIZE;
     }
-    /** 会话跑完一轮发不发系统通知（网页端的总开关；每台设备能不能发，还看它的浏览器给不给通知权限）。 */
+    /** 有事时让不让 Windows 通知区域那颗图标闪（设置里那一项，界面上叫「跑完让通知区域的图标闪」）。 */
     public getNotifyTurnEnd(): boolean {
         return this.readOption<boolean>(ChatHost.KEY_NOTIFY_TURN_END, DEFAULT_NOTIFY_TURN_END) === true;
     }
@@ -1414,7 +1419,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         }, ChatHost.ASK_WAIT_MS, req.id, true);
         // 卡片只发给“正看着这个会话”的屏；别的屏上也提醒一声（人在别的会话 / 别的窗口里时，
         // 除了这一条没别的法子知道他该去答一句）。跟“跑完一轮”那条通知同一条路。
-        this.broadcastAskWaiting(sessionId, req);
+        this.broadcastAskWaiting(sessionId);
         const answer = await waiting;
         const picked: string[] = Array.isArray(answer?.picks)
             ? answer.picks.filter((x: unknown) => typeof x === "string")
@@ -1424,20 +1429,17 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
-     * 模型在某个会话里问了一道选择题：每块屏都收到一条提醒（界面据此发一条系统通知，
-     * 见 media/chat.js 的 notifyAskFor）。这条不管通知开关都发：发不发由界面自己判断
-     * （本机给不给通知权限、开关开没开）。
+     * 模型在某个会话里问了一道选择题：那块屏上的卡片只管那一个正在看的屏，
+     * 提醒走托盘（人在别的会话 / 别的窗口 / 根本就在别的屋里时，靠那颗图标知道要回来答一句）。
      */
-    private broadcastAskWaiting(sessionId: string | undefined, req: AskRequest): void {
+    private broadcastAskWaiting(sessionId: string | undefined): void {
         const rt = sessionId ? this.panels.get(sessionId) : undefined;
-        const msg = {
-            type: "askWaiting",
-            sessionId: sessionId ?? "",
-            // 会话名：通知标题用它（弹通知的那块屏手里不一定有这个会话的名字）
-            name: rt ? this.sessionDisplayName(rt) : "",
-            text: this.noticeLine(req.question, "问你一道选择题"),
-        };
-        this.forEachClient((_clientId, send) => { send({ ...msg }); });
+        this.trayNote(sessionId ?? "", rt ? this.sessionDisplayName(rt) : "");
+    }
+
+    /** 托盘里点了「打开页面」：用后端自己的地址开系统默认浏览器。 */
+    protected override openFrontendPage(): void {
+        this.options.openPage?.();
     }
 
     /** 扩展不等这次提问了（超时 / 这一轮被停）：把还开着的那张卡片收掉（按没作答交回去）。 */
@@ -1504,6 +1506,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     public dispose(): void {
         if (this.disposed) { return; }
         this.disposed = true;
+        this.disposeTray();
         this.disposeAllPickers();
         this.disposeAllCards();
         this.disposeAllConversations();

@@ -10,9 +10,6 @@
   const notifyHostFocus = () => vscode.postMessage({ type: "hostFocus" });
   window.addEventListener("focus", notifyHostFocus);
   document.addEventListener("pointerdown", notifyHostFocus, { capture: true });
-  // 用户第一次碰界面（有手势）时顺便问一次通知权限：浏览器喜欢在用户有动作的时候问；
-  // 没问过才问，问过就不扰人（见 askNotifyPermission）。
-  document.addEventListener("pointerdown", function askNotifyOnce() { askNotifyPermission(); }, { capture: true, once: true });
   const messagesEl = document.getElementById("messages"); // 容器，内含各 .session-pane
   const jumpBottomBtn = document.getElementById("jumpBottom");
   // VSCode 官方 codicon 的 chevron-right 折线图标（从 @vscode/codicons 包取出）。
@@ -606,7 +603,6 @@
   var newSessionKey = "ctrl+alt+n";
   var closeSessionKey = "ctrl+alt+w";
   var tabSwitchKey = "ctrl+alt+pgupdown";
-  var notifyTurnEnd = true;
   // 这台机器的路径分不分大小写（顶条、面板、历史列表里拿路径当键比）：
   // 后端在 viewOptions 里报（process.platform !== "win32"）。没收到之前按不分大小写算，
   // 跟以前一样；收到后就按真值。
@@ -632,77 +628,9 @@
     if (typeof opts.newSessionKey === "string") { newSessionKey = opts.newSessionKey; }
     if (typeof opts.closeSessionKey === "string") { closeSessionKey = opts.closeSessionKey; }
     if (typeof opts.tabSwitchKey === "string") { tabSwitchKey = opts.tabSwitchKey; }
-    notifyTurnEnd = opts.notifyTurnEnd !== false;
     caseSensitivePaths = opts.caseSensitivePaths === true;
   }
 
-  // ── 跑完一轮 / 模型提问时的系统通知（浏览器通知，不再出提示音） ──
-  // 要人回来看一眼的事都发一条：任何会话（包括别的屏在聊的、后台的）跑完一轮，
-  // 以及模型在某个会话里问了一道选择题（ask_choice，正等着人答）。
-  // 被中止的那一轮不算跑完，不发。别人派的子会话跑完不发：它的结果会交回派它的那个会话，
-  // 那边跑完再发（后端在消息里标了 child）。每台设备能不能发，看它自己的浏览器给不给通知权限：
-  // 手机用局域网地址打开（不是 https、也不是本机地址）时浏览器根本不给。发不出来就当没有通知。
-  function canNotify() {
-    // 插件里的对话面板（VSCode 的网页视图）不发：那边是沙箱里的一块网页，浏览器不给通知权限，
-    // 也不该在插件界面里弹那个“允许通知”的框。
-    // 地址不是安全来源时也不发：浏览器认 https 与本机地址，http://192.168.x.x 这种直接不给权限，
-    // 而且它连“拒绝”都不说（干脆不问）。判断放在这里，下面解释原因的那段才说得对路。
-    try { return !IN_WEBVIEW && window.isSecureContext !== false && typeof Notification !== "undefined" && !!Notification; } catch (e) { return false; }
-  }
-
-  /** 问一次通知权限（没问过才问；浏览器不给的就没办法了）。用户点界面时调，有手势更容易给。 */
-  function askNotifyPermission() {
-    try {
-      if (!canNotify() || Notification.permission !== "default") { return; }
-      var asked = Notification.requestPermission();
-      if (asked && typeof asked.catch === "function") { asked.catch(function () { /* 不问就算了 */ }); }
-    } catch (e) { /* 不支持通知的环境就算了 */ }
-  }
-
-  /** 这台设备现在能不能发通知，不能的话人话说明为什么（写给设置里那一项看）。 */
-  function notifyUnavailableNote() {
-    try {
-      if (IN_WEBVIEW) { return "插件里的对话面板里发不了系统通知（那边看名字旁边变绿的那颗点），浏览器页面里才有" };
-      if (!canNotify()) { return "这台设备上用不了：浏览器只在 https 或本机地址下给通知权限（http 地址就是这样）"; }
-      if (Notification.permission === "denied") { return "这台设备的浏览器把它拦了（在地址栏那个图标里可以放开）"; }
-      if (Notification.permission !== "granted") { return "这台设备还没允许通知：点这一项会问一次"; }
-      return "";
-    } catch (e) { return ""; }
-  }
-
-  /** 弹一条“某个会话那边有事”的系统通知：标题是会话名，点一下把页面拉到前台并切到那个会话。
-   *  tag 按事由分开（跑完一轮 / 模型提问各一套）：同一个会话的同类旧通知原地换成新的，不堆一屏。 */
-  function showSessionNotice(sessionId, body, fallback, tag, name) {
-    try {
-      if (!canNotify() || Notification.permission !== "granted") { return; }
-      const st = sessions.get(sessionId);
-      const title = st ? sessionLabel(st) : (name || "Pi Chat");
-      const note = new Notification(title, {
-        body: (body || "").trim() || fallback,
-        tag: tag,
-      });
-      note.onclick = function () {
-        window.focus();
-        if (sessions.has(sessionId)) { activateSessionView(sessionId); }
-        // 切会话是每块屏各管各的：本屏得自己跟后端说一声
-        vscode.postMessage({ type: "switchSession", sessionId: sessionId });
-      };
-    } catch (e) { /* 通知发不出去就算了，那颗绿点还在 */ }
-  }
-
-  /** 一个会话跑完一轮。 */
-  function notifyTurnEndFor(sessionId, status, text, name) {
-    if (!notifyTurnEnd || status === "cancelled") { return; }
-    showSessionNotice(sessionId, text, "跑完了一轮", "pichat-turn-end-" + sessionId, name);
-  }
-
-  /** 模型在某个会话里问了一道选择题（ask_choice），正等着人答：跟“跑完一轮”一样提醒一声。
-   *  卡片只发给正看着那个会话的屏（见后端 askOnScreens），这条谁都收得到 —— 人在别的会话 /
-   *  别的窗口里时也能知道该去答一句。用的是同一个开关（设置里的“跑完发系统通知”）。 */
-  function notifyAskFor(sessionId, text, name) {
-    if (!notifyTurnEnd) { return; }
-    showSessionNotice(sessionId, text, "问你一道选择题", "pichat-ask-" + sessionId, name);
-  }
   function isSendKey(e) {
     if (e.key !== "Enter") { return false; }
     switch (sendKeyCombo) {
@@ -9119,23 +9047,20 @@
     // 宿主（VSCode 的命令入口，比如"发送选中文本"）替用户发一条：当作他打进输入框的，
     // 走同一条路（会话还没就绪就先留着、就绪了自动补发）
     if (type === "sendFromHost") { sendFromHost(msg.text); return; }
-    // 宿主在某个会话跑完一轮时下发的消息（所有会话都会收到，带 sessionId）：发一条系统通知，
-    // 并把那个会话的名字旁边那颗点变绿（不管这块屏当时看着的是哪一个）。
-    // 子会话（别人派出去干活的）不提醒：它的结果会交回派它的那个会话，那边跑完自会提醒；
+    // 后端在某个会话跑完一轮时下发的消息（所有会话都会收到，带 sessionId）：把那个会话的名字
+    // 旁边那颗点变绿（不管这块屏当时看着的是哪一个）。弹提醒不走这儿，走 Windows 通知区域那颗
+    // 图标（见 src/trayIcon.ts）。
+    // 子会话（别人派出去干活的）不标：它的结果会交回派它的那个会话，那边跑完自会标；
     // 子会话缩进挂在父会话下面，标了反而多一颗点。
     // 是不是子会话由后端算（child）：子会话跑完常常紧接着就被关掉，这边按会话列表里的
     // parentId 判会赶不上——那时它的壳已经不在了。
     if (type === "turnEnd") {
       if (msg.child === true) { return; }
-      notifyTurnEndFor(msg.sessionId, msg.status, msg.text, msg.name);
       // 绿点只说“这一轮跑完了”：自己按 Esc 停掉的那一轮不算，不绿
       const done = msg.sessionId && msg.status === "done" ? sessions.get(msg.sessionId) : null;
       if (done) { markTurnDone(done); }
       return;
     }
-    // 模型在某个会话里问了一道选择题（ask_choice）、正等着人答：同一条路由（每块屏都收到）。
-    // 卡片只长给“正看着那个会话”的屏（切过去时会补上），这条提醒发出去，人在别处也看得见。
-    if (type === "askWaiting") { notifyAskFor(msg.sessionId, msg.text, msg.name); return; }
     if (type === "openFiles") {
       openFiles = msg.files || [];
       if (atStart >= 0) {
@@ -9250,8 +9175,7 @@
         setStreaming(t, false);
         // 这一轮跑到这儿就停了：末尾要是还挂着一颗「补来的思考」，并回本段那颗
         foldTailThinking(t);
-        // 跑完的提醒改由宿主在“一轮真正结束”时下发 turnEnd 消息（见 notifyTurnEndFor），
-        // 这里不再对当前会话单独出声。
+        // 跑完的提醒由后端走 Windows 通知区域那颗图标（见 src/trayIcon.ts），这儿不出声。
         break;
       case "activityChanged":
         setActivity(t, msg.activity, msg.detail);
@@ -10215,12 +10139,10 @@
         const txt = document.createElement("div"); txt.className = "vo-text";
         const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "";
         txt.appendChild(label);
-        const desc = viewOptionDesc(it);
+        const desc = it.desc || "";
         if (desc) { const d = document.createElement("div"); d.className = "vo-desc"; d.textContent = desc; txt.appendChild(d); }
         row.appendChild(check); row.appendChild(txt);
         row.addEventListener("click", () => {
-          // 通知这一项：点它多半是想开通知，顺便问一次浏览器权限（用户点了一下，正好是有手势的时候）
-          if (it.action === "notifyTurnEnd") { askNotifyPermission(); }
           vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: it.value });
         });
       }
@@ -10228,13 +10150,6 @@
     });
   }
 
-  /** 一行设置的说明。与设备相关的（发通知）跟一句本机的真实情况：能不能发、要不要先问权限。 */
-  function viewOptionDesc(it) {
-    const desc = it.desc || "";
-    if (it.action !== "notifyTurnEnd") { return desc; }
-    const note = notifyUnavailableNote();
-    return note ? desc + "（" + note + "）" : desc;
-  }
   /**
    * 「重启后端」那一行：说明 + 右边一颗按钮。
    * 点下去先在本地说一句「正在编译并重启」——后端 0.5 秒后就退，它顶多再回一句话（restartStatus）。

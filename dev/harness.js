@@ -126,7 +126,8 @@ function createHarness(options = {}) {
     // 界面颜色与"跑完发不发通知"也在这里定（后端没有人给它 VSCode 的设置）。
     const patch = {
         themeMode: options.theme === "dark" ? "dark" : "light",
-        // 调试时默认关掉跑完的系统通知（自动化跑一遍会一直弹，太吵）；要验它的那条检查传 notifyTurnEnd: true
+        // 调试时默认不让 Windows 通知区域那颗图标闪（自动化跑一遍会一直闪，太吵）；
+        // 想看着它闪就传 notifyTurnEnd: true，或者直接 `npm run server` 起一个真的后端
         notifyTurnEnd: options.notifyTurnEnd === true,
     };
     if (options.model !== undefined) { patch.model = options.model; }
@@ -138,7 +139,7 @@ function createHarness(options = {}) {
     }
     if (options.piPath !== undefined) { patch.piPath = options.piPath; }
     // 上一跑留下的显示选项（state.json）会盖掉下面刚写的设置：界面点过的优先于设置文件
-    // （见 ChatHost.readOption）。比如上一个检查验完把“跑完发系统通知”关了，这一跑就悄悄不生效。
+    // （见 ChatHost.readOption）。比如上一个检查验完把“跑完让通知区域的图标闪”关了，这一跑就悄悄不生效。
     // 调试目录本来就是一次性的，直接丢掉这份存档，让每次调试都从下面这份设置开始。
     try { fs.rmSync(path.join(SCRATCH_PICHAT_DIR, "state.json"), { force: true }); } catch { /* 删不掉就按旧值跑 */ }
     // 子会话清单也一样：假 pi 给每个会话报的 .jsonl 是同一个文件（见 fakePi.js），

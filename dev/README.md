@@ -170,17 +170,7 @@ npm run web:shot -- --fake-pi --script dev/historyScroll.js
 # 会不会认自己工作区里的会话；别的屏把会话关了，这块屏留在原地、发消息就自动重开）：
 node dev/focusCheck.js
 
-# 验“跑完发系统通知”（正看着的那个会话也发、别的屏在聊的会话也发、点一下切过去、
-# 自己按 Esc 停掉的那一轮不发、派出去的子会话不发、设置里那一项关掉就不发；
-# 无头浏览器里把 Notification 换成记账的假的）：
-node dev/turnNotice.js
-
-# 验“模型问选择题（ask_choice）也发一条系统通知”（跟“跑完一轮”同一个开关、同一个规矩：
-# 正看着它也发、别的屏在聊的会话在问也发、点一下切过去答；扩展问的确认 / 输入 / 选一个不发；
-# 开关关掉就不发）：
-node dev/askNotice.js
-
-# 验“页面是从 https 反代的地址打开的”（手机上想收到通知就得走 https，见 README 那条）：
+# 验“页面是从 https 反代的地址打开的”（手机上想用 https 打开就得走它，见 README 那条）：
 # 设置里写下的来源放行、别人的照旧 403、反代后面页面能收能发、那个地址算“安全来源”，
 # 顺带看 http 地址下设置里给出的理由对不对（现签一张证书、本机起一个 https 反代来跑）：
 node dev/trustedOrigin.js
@@ -323,9 +313,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `browserHost.js` | `npm run web:dev` 的入口：起服务后常驻 |
 | `visit.js` | `npm run web:shot` 的入口：按动作跑一遍并截图 |
 | `focusCheck.js` | 验“每块屏各看各的会话”（两块浏览页面 + 模拟的 VSCode 窗口）：`node dev/focusCheck.js` |
-| `turnNotice.js` | 验“跑完发系统通知”（任何会话都发、点一下切过去、被停的那一轮不发、子会话不发、开关一关就不发；页面的 `Notification` 换成记账的假的）：`node dev/turnNotice.js` |
-| `askNotice.js` | 验“模型问选择题（ask_choice）也发一条系统通知”（同一个开关、同一个规矩：正看着它也发、别的屏在聊的会话在问也发、点一下切过去答；扩展问的确认 / 输入 / 选一个不发；开关一关就不发）：`node dev/askNotice.js` |
-| `trustedOrigin.js` | 验“页面是从 https 反代的地址打开的”（设置里 `webServer.trustedOrigins` 写下的来源放行、别人的照旧 403、反代后面页面照常收发、那个地址算“安全来源”所以通知发得出去；顺带看 http 地址下设置里给的理由对不对；现签证书 + 本机起一个 https 反代来跑）：`node dev/trustedOrigin.js` |
+| `trustedOrigin.js` | 验“页面是从 https 反代的地址打开的”（设置里 `webServer.trustedOrigins` 写下的来源放行、别人的照旧 403、反代后面页面照常收发、现签证书 + 本机起一个 https 反代来跑）：`node dev/trustedOrigin.js` |
 | `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接 / 断线期间问的选择题 / 补不上时整屏重画的视野）：`node dev/reconnect.js` |
 | `mermaidCheck.js` | 验消息流里的 ```mermaid 画成图（各种图都出图、写坏的留代码块加一行说明、画图那个脚本出现图才去拉、中文节点名不被吞、换深色不重画就跟着变、面板那一份也画得出、页面不报错）：`node dev/mermaidCheck.js` |
 | `mermaidFileCheck.js` | 验文件侧边栏里那份 markdown 文档里的 mermaid（同一个播放器，换个地方；甘特图也画得出、写坏的留说明）：`node dev/mermaidFileCheck.js` |

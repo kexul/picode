@@ -73,6 +73,7 @@ import {
 import { buildGoalFeedbackPrompt, buildGoalJudgePrompt } from "./goalJudge";
 import { dropGoal, readGoal, writeGoal } from "./goalFiles";
 import type { RpcSessionState } from "./piRpc";
+import { TrayIcon, type TrayPendingItem } from "./trayIcon";
 import type { ProjectDirEntry } from "./sessionStore";
 
 /** # 引用菜单里的一行：一个会话（或其某个子会话）。 */
@@ -159,8 +160,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
      */
     private readonly closedSessions = new Map<string, { cwd: string; file?: string }>();
     private static readonly CLOSED_REMEMBER_MAX = 20;
-    /** 系统通知里那一行正文最多多长（字符）；超了截断加省略号。 */
-    private static readonly TURN_NOTICE_MAX = 120;
+    /**
+     * 通知区域里那颗图标（Windows）：有事就闪，点它弹清单（见 trayIcon.ts）。
+     * 头一次有事时才起那个小程序；一块屏都没有时也照闪 —— 它提醒的就是“人不在跟前”。
+     */
+    private tray: TrayIcon | undefined;
+    /** 托盘清单：哪几个会话有事（按有事的先后），也是那份菜单的内容。 */
+    private trayPending: TrayPendingItem[] = [];
+    /** 人在托盘里点了某一行、可那会儿一块屏都没连着：等下一块屏连上来再切过去。 */
+    private trayPickTarget: string | undefined;
+    /** 人点了托盘菜单里的「退出这颗图标」：这次后端活着期间不再冒出来。 */
+    private trayClosedByUser = false;
 
     /** sessionList 节流：流式 activity 变更很频繁，合并到下一帧附近推送。 */
     private sessionListTimer: ReturnType<typeof setTimeout> | null = null;
@@ -313,7 +323,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract getFontSize(): string;
     /** 变更显示选项的存储（仅改存储，UI 推送由基类统一完成）。value 为按钮组点选的明确值。 */
     protected abstract mutateViewOption(action: string, value?: string): void;
-    /** 会话跑完一轮发不发系统通知（各平台的子类去读自己的存储）。 */
+    /** 有事（跑完一轮 / 模型在等你答题）时让不让托盘图标闪（各平台的子类去读自己的存储）。 */
     protected abstract notifyTurnEndEnabled(): boolean;
 
     // ---- 文件列表 / 文件打开（来自 webview 的 listFiles / openFile）----
@@ -399,7 +409,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
             tabSwitchKey: this.getTabSwitchKey(),
             focusInputKey: this.getFocusInputKey(),
             fontSize: this.getFontSize(),
-            notifyTurnEnd: this.notifyTurnEndEnabled(),
             // 这台机器的路径分不分大小写（Linux / macOS 上 /a/B 与 /a/b 是两个目录）：
             // 界面拿它当键比较目录与会话文件（见 media/chat.js 的 pathCaseKey）
             caseSensitivePaths: process.platform !== "win32",
@@ -470,9 +479,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
             },
             {
                 action: "notifyTurnEnd",
-                label: "跑完发系统通知",
-                desc: "别的屏在聊的、后台的会话跑完也发一条，点一下切到那个会话；"
-                    + "模型在那儿问你选择题时也发一条。别人派的子会话跑完不算",
+                label: "跑完让通知区域的图标闪",
+                desc: "哪个会话跑完一轮、或者模型在那儿问你一道选择题，Windows 通知区域里那颗图标就闪；"
+                    + "点它弹一份清单，点其中一行切到那个会话。别人派的子会话跑完不算",
                 check: this.notifyTurnEndEnabled(),
             },
         ];
@@ -1877,16 +1886,86 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.onKnownFilesChangedByHost();
     }
 
+    // ========================================================================
+    //  通知区域里那颗图标：有事就闪，点它弹清单，点清单切过去（见 trayIcon.ts）
+    // ========================================================================
+
+    /**
+     * 某个会话有事了（跑完一轮、模型在等你答一道选择题）：记进托盘清单，让图标闪。
+     * 设置里那一项关掉、或者这台机器上没有托盘（不是 Windows / 小程序没编出来）就什么都不做。
+     */
+    protected trayNote(sessionId: string, name: string): void {
+        if (!sessionId || this.trayClosedByUser) { return; }
+        if (!this.notifyTurnEndEnabled() || !TrayIcon.available()) { return; }
+        // 同一个会话又出事了：挪到清单最后（菜单按有事的先后排）
+        this.trayPending = this.trayPending.filter((item) => item.id !== sessionId);
+        this.trayPending.push({ id: sessionId, name: (name || "").trim() || "会话" });
+        this.traySync();
+    }
+
+    /** 把整份清单原样发一份给托盘（头一次有事时才起那个小程序）。 */
+    private traySync(): void {
+        if (!this.tray) {
+            if (this.trayPending.length === 0) { return; }
+            this.tray = new TrayIcon({
+                onPick: (id) => this.trayPick(id),
+                onOpen: () => this.openFrontendPage(),
+                onQuit: () => { this.trayClosedByUser = true; this.trayPending = []; },
+            });
+        }
+        this.tray.setPending(this.trayPending);
+    }
+
+    /** 托盘清单里点了一行：把它从清单里划掉，把界面切到那个会话。 */
+    private trayPick(id: string): void {
+        this.trayPending = this.trayPending.filter((item) => item.id !== id);
+        this.traySync();
+        if (!this.panels.has(id)) { return; }   // 会话已经关掉了：只把它从清单里划掉
+        // 先记下来：那会儿要是一块屏都没连着，等下一块屏连上来时按它切（见 ready 那条）
+        this.trayPickTarget = id;
+        const target = this.trayTargetClient();
+        if (target === undefined) { this.openFrontendPage(); return; }
+        this.setActiveSession(id, target);
+    }
+
+    /** 该把界面切到哪块屏：最近动过的那块；一块屏都没连过就是空。 */
+    private trayTargetClient(): string | undefined {
+        if (this.currentPageId && this.clientSessions.has(this.currentPageId)) { return this.currentPageId; }
+        for (const clientId of this.clientSessions.keys()) { return clientId; }
+        return undefined;
+    }
+
+    /** 某块屏连上来时，托盘里点过的那一行还没切过去：先切过去（盖过“自动打开最近会话”）。 */
+    private applyTrayPickTarget(clientId: string): void {
+        const target = this.trayPickTarget;
+        if (!target) { return; }
+        this.trayPickTarget = undefined;
+        if (this.panels.has(target)) { this.setActiveSession(target, clientId); }
+    }
+
+    /**
+     * 托盘里点了「打开页面」：把界面打开 / 拉到前面。
+     * 默认什么都做不了：能不能开、怎么开是宿主的活（见 ChatHost）。
+     */
+    protected openFrontendPage(): void { /* 子类接 */ }
+
+    /** 收摊：让托盘小程序也退出（后端退出时不一定来得及，但尽量不落孤儿进程）。 */
+    protected disposeTray(): void {
+        try { this.tray?.dispose(); } catch { /* 收摊出错不拦路 */ }
+        this.tray = undefined;
+        this.trayPending = [];
+    }
+
     /**
      * RuntimeHost.onTurnEnd：一个会话跑完了一轮。
      *
-     * 基类只做两件事：
+     * 基类做三件事：
      *   1. 子会话跑完第一轮时，把结果交回派活的那个会话（不等会话标题）；
-     *   2. 告诉每块屏「这个会话跑完了一轮」—— 界面据此做两件事：把那颗名字旁边的点
-     *      标成绿的（跑完了，不管当时有没有在看它），以及发一条系统通知。
-     *      这条消息不管通知开关都发：关了通知，那颗绿点还得看得见（发不发由界面自己判断）。
-     *      带上 status 与一行正文：界面按它们决定发不发（被中止的一轮不发、也不绿）、通知里写什么；
-     *      带上 child：别人派的子会话跑完不提醒，结果交回派它的那个会话，那边跑完再提醒。
+     *   2. 告诉每块屏「这个会话跑完了一轮」—— 界面据此把那个名字旁边的点标成绿的
+     *      （跑完了，不管当时有没有在看它）；这条不管开关都发，关了提醒那颗绿点还得看得见；
+     *      带上 status：被中止的一轮不算跑完、也不会绿；
+     *   3. 让 Windows 通知区域那颗图标闪一下（见 trayNote）：被中止的一轮不闪，
+     *      别人派的子会话也不闪 —— 它的结果会交回派它的会话，那边跑完再闪。
      */
     public onTurnEnd(info: TurnEndInfo): void {
         // 判官会话跑完了一轮：这一轮的账归它（不弹提醒、不当普通会话处理）
@@ -1901,37 +1980,19 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const handedBack = !!child && !!child.parentPanelId && this.panels.has(child.parentPanelId);
         // 子会话跑完第一轮：结果先交回派活的那个会话（不等会话标题）
         this.tabaOnTurnEnd(info);
-        // 每条屏都收到：各自按“我这台设备能不能发通知”“我看没在看这个会话”自己决定
+        // 每条屏都收到：界面据此把那个会话名字旁边那颗点变绿（不看这块屏当时看着的是哪一个）。
+        // 弹提醒不走这条路了，走托盘（见 trayNote）。
         const rt = this.panels.get(info.panelId);
+        const name = rt ? this.sessionDisplayName(rt) : "";
         const msg = {
             type: "turnEnd",
             sessionId: info.panelId,
-            // 这个会话在人眼前叫什么：通知标题用它（弹通知的那块屏手里不一定有这个会话的名字）
-            name: rt ? this.sessionDisplayName(rt) : "",
             status: info.status,
             child: handedBack,
-            text: this.turnEndNoticeText(info),
         };
         this.forEachClient((_clientId, send) => { send({ ...msg }); });
-    }
-
-    /** 通知里那一行正文：这一轮最后一段回复的头一行（截短）；出错就直说。 */
-    private turnEndNoticeText(info: TurnEndInfo): string {
-        if (info.status === "error") { return "本轮出错结束"; }
-        return this.noticeLine(info.lastReplyText, "跑完了一轮");
-    }
-
-    /** 系统通知里那一行正文：一段文字压成一行（取第一个非空行），太长截短；没有内容就用 fallback。 */
-    protected noticeLine(text: string | undefined, fallback: string): string {
-        const line = (text ?? "")
-            .split(/\r?\n/)
-            .map((s) => s.trim())
-            .find((s) => s.length > 0) ?? "";
-        const oneLine = line.replace(/\s+/g, " ");
-        if (!oneLine) { return fallback; }
-        return oneLine.length > ChatControllerBase.TURN_NOTICE_MAX
-            ? oneLine.slice(0, ChatControllerBase.TURN_NOTICE_MAX) + "…"
-            : oneLine;
+        // 托盘里闪一下：被中止的那一轮不算跑完；子会话的结果会交回派它的会话，那边跑完再提醒
+        if (info.status !== "cancelled" && !handedBack) { this.trayNote(info.panelId, name); }
     }
 
     protected onKnownFilesChangedByHost(): void { /* 默认无操作 */ }
@@ -2443,7 +2504,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 // （网页视图重建后它本地什么都没有，得靠这一条把画面接回去）
                 if (had) { this.postToOneClient(clientId, { type: "sessionActivated", sessionId: had }); }
                 this.onWebviewReady();
-                if (fresh) { void this.maybeAutoLoadLastSession(clientId); }
+                // 托盘里点过某一行、可那会儿一块屏都没连着：先切到那个会话，比“自动打开最近会话”要紧
+                if (this.trayPickTarget) { this.applyTrayPickTarget(clientId); }
+                else if (fresh) { void this.maybeAutoLoadLastSession(clientId); }
                 // webview 就绪后后台预热备用进程，后续新会话免冷启动。
                 // 启动路径延迟执行：首个会话的 pi 正在冷启动，同时再拉起备用进程会在
                 // VSCode 窗口恢复期叠加出明显的 CPU/IO 峰值（两个 pi 各需 ~3s 加载）。
