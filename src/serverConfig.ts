@@ -42,6 +42,25 @@ export interface ServerWebSettings {
     trustedOrigins: string[];
 }
 
+/**
+ * 跨机器的“有事”提醒（另一台机器上的后端跑完一轮，往这台推一条）。
+ *
+ * 两台都改同一份设置文件，各写各的半边：
+ *   推送方：notify.pushTo（推到哪儿去）+ notify.pushToken（对方要的口令）+ notify.pushLabel（自己是哪台）
+ *   接收方：notify.acceptToken（认哪个口令）
+ * 都不写就互不相干：不推、也不收。详见 src/remoteNotice.ts。
+ */
+export interface ServerNotifySettings {
+    /** 推到这些地址（对方网页服务的地址，比如 `http://10.0.0.2:51883`）；一个都没有 = 不推。 */
+    pushTo: string[];
+    /** 推过去时带的口令（要跟对方的 acceptToken 一样）。 */
+    pushToken: string;
+    /** 推到对方那边时显示的名字（空 = 用这台机器地址里的主机名）。 */
+    pushLabel: string;
+    /** 接收别处推来的“有事”时认的口令（空 = 一概不收）。 */
+    acceptToken: string;
+}
+
 export interface ServerConfig {
     piPath: string;
     provider: string;
@@ -58,6 +77,7 @@ export interface ServerConfig {
     fontSize: string;
     notifyTurnEnd: boolean;
     themeMode: "light" | "dark";
+    notify: ServerNotifySettings;
     webServer: ServerWebSettings;
 }
 
@@ -80,6 +100,8 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = deepFreeze({
     fontSize: DEFAULT_FONT_SIZE,
     notifyTurnEnd: DEFAULT_NOTIFY_TURN_END,
     themeMode: DEFAULT_THEME_MODE,
+    // 跨机器的“有事”提醒默认全关：不推、也不收
+    notify: { pushTo: [], pushToken: "", pushLabel: "", acceptToken: "" },
     // 默认对所有网卡开放（手机等设备打开地址就能用）；只给自己用就改 127.0.0.1，或启动时加 --host 127.0.0.1
     webServer: { enabled: true, port: 51883, host: "0.0.0.0", trustedOrigins: [] },
 });
@@ -100,6 +122,7 @@ function defaults(): ServerConfig {
     return {
         ...DEFAULT_SERVER_CONFIG,
         extraArgs: [],
+        notify: { ...DEFAULT_SERVER_CONFIG.notify, pushTo: [] },
         webServer: { ...DEFAULT_SERVER_CONFIG.webServer, trustedOrigins: [] },
     };
 }
@@ -201,6 +224,39 @@ function pickOrigins(value: unknown, warnings: string[]): string[] {
     return kept;
 }
 
+/**
+ * 一组地址（比如 notify.pushTo）：只收 http / https 的，规范化成 `http://主机:端口`
+ * （去掉末尾斜杠与路径），重复的并掉。
+ */
+function pickUrlList(value: unknown, label: string, warnings: string[]): string[] {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) {
+        warnings.push(`${label} 不是数组，已当成空列表`);
+        return [];
+    }
+    const kept: string[] = [];
+    let bad = 0;
+    for (const item of value) {
+        const base = typeof item === "string" ? normalizeOrigin(item) : undefined;
+        if (!base) { bad += 1; continue; }
+        if (!kept.includes(base)) { kept.push(base); }
+    }
+    if (bad > 0) {
+        warnings.push(`${label} 里有 ${bad} 项不是 http / https 地址，已丢掉`);
+    }
+    return kept;
+}
+
+/** 一段文字（口令、名字这类）：不是字符串就当没写，空串照旧是空串（空 = 不启用）。 */
+function pickText(value: unknown, label: string, warnings: string[]): string {
+    if (value === undefined) return "";
+    if (typeof value !== "string") {
+        warnings.push(`${label} 不是字符串，已当成空的`);
+        return "";
+    }
+    return value.trim();
+}
+
 /** 把任意来源的对象规范化成 ServerConfig。这层全是纯函数。 */
 export function normalizeServerConfig(raw: unknown): { config: ServerConfig; warnings: string[] } {
     const warnings: string[] = [];
@@ -259,6 +315,24 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
             config.themeMode = raw.themeMode;
         } else {
             warnings.push(`themeMode 只能是 light 或 dark，已用默认值${showDefault(DEFAULT_THEME_MODE)}`);
+        }
+    }
+
+    // ---- 跨机器的“有事”提醒（config.json 的 notify 一节）----
+    const notify = raw.notify;
+    if (notify !== undefined) {
+        if (!isPlainObject(notify)) {
+            warnings.push("notify 不是一个对象，已全部用默认值");
+        } else {
+            config.notify.pushTo = pickUrlList(notify.pushTo, "notify.pushTo", warnings);
+            config.notify.pushToken = pickText(notify.pushToken, "notify.pushToken", warnings);
+            config.notify.pushLabel = pickText(notify.pushLabel, "notify.pushLabel", warnings);
+            config.notify.acceptToken = pickText(notify.acceptToken, "notify.acceptToken", warnings);
+            const knownNotifyKeys = new Set(Object.keys(DEFAULT_SERVER_CONFIG.notify));
+            const unknownNotifyKeys = Object.keys(notify).filter((key) => !knownNotifyKeys.has(key));
+            if (unknownNotifyKeys.length > 0) {
+                warnings.push(`配置里有不认识的项：notify.${unknownNotifyKeys.join("、notify.")}`);
+            }
         }
     }
 

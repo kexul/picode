@@ -23,6 +23,7 @@ import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase, type ViewOptionItem } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
+import { hostOfUrl, pushRemoteNotice, withSession, type RemoteNotice } from "./remoteNotice";
 import { getAskAssets, getBashAssets, getGoalAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
 import {
@@ -97,8 +98,14 @@ export interface ChatHostOptions {
     /**
      * 托盘菜单里点了「打开页面」时调它：把界面打开（后端这侧就是用它自己的地址开浏览器）。
      * 不给就当没有这一项。
+     * @param page 要打开哪个地址：不给就是本机这个；别的机器推来的那一行给的是它那边的地址
      */
-    openPage?: () => void;
+    openPage?: (page?: string) => void;
+    /**
+     * 这台机器网页服务现在的地址（`http://10.0.0.2:51883/` 这样）。
+     * 推给别的后端时要用它拼“点了打开哪个页面”。不知道就不推（推过去点了也没处去）。
+     */
+    selfPageUrl?: () => string | undefined;
 }
 
 /** 这条消息是不是“一次性界面”（确认框、浮层、跑完提醒）：补发里只有序号位、没有内容。 */
@@ -1441,9 +1448,42 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         this.trayNote(sessionId ?? "", rt ? this.sessionDisplayName(rt) : "");
     }
 
-    /** 托盘里点了「打开页面」：用后端自己的地址开系统默认浏览器。 */
-    protected override openFrontendPage(): void {
-        this.options.openPage?.();
+    /** 托盘里点了「打开页面」：用系统默认浏览器开（默认开本机的，别的机器推来的那条开它那边的）。 */
+    protected override openFrontendPage(page?: string): void {
+        this.options.openPage?.(page);
+    }
+
+    /**
+     * 把这条“有事”推给别的后端（设置文件里 notify.pushTo 写了地址才有这回事）。
+     * 推的是一条最小的通知：哪台、哪个会话、叫什么、点了打开哪个地址。
+     * 推不过去就算了（对方没起、网断了、口令不对都一样：不重试、不攒着）。
+     */
+    protected override pushRemoteNote(sessionId: string, name: string): void {
+        const notify = readServerConfig().config.notify;
+        if (notify.pushTo.length === 0) { return; }
+        const base = this.options.selfPageUrl?.();
+        if (!base) { return; }
+        const label = notify.pushLabel || hostOfUrl(base) || "Pi Chat";
+        const notice = {
+            label,
+            sessionId,
+            name,
+            // 地址里带上会话：那边点开就切到这个会话（见 media/chat.js 里读 ?session= 的那段）
+            page: withSession(base, sessionId),
+        };
+        for (const target of notify.pushTo) {
+            void pushRemoteNotice(target, notify.pushToken, notice);
+        }
+    }
+
+    /** 别的机器上的后端推来一条“有事”（网页服务那条 /notify 收到、口令核对过了）。 */
+    public acceptRemoteNotice(notice: RemoteNotice): void {
+        this.trayNoteRemote(notice);
+    }
+
+    /** 接收别处推来的“有事”要认的口令（没写就一概不收，见 /notify 那条）。 */
+    public remoteNotifyToken(): string {
+        return readServerConfig().config.notify.acceptToken;
     }
 
     /** 扩展不等这次提问了（超时 / 这一轮被停）：把还开着的那张卡片收掉（按没作答交回去）。 */

@@ -279,7 +279,10 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
     const host = new ChatHost({
         cwd, log,
         restartBackend: () => restartBackend(),
-        openPage: () => { if (pageUrl) { openInDefaultBrowser(pageUrl); } },
+        // 托盘里点「打开页面」：默认开本机这个地址；别的机器推来的那一行给的是它那边的地址
+        openPage: (page) => { const target = page || pageUrl; if (target) { openInDefaultBrowser(target); } },
+        // 推给别的后端时要拼“点了打开哪个页面”，用自己的地址
+        selfPageUrl: () => pageUrl,
     });
     const server = new PiChatWebServer(MEDIA_DIR, host, {
         log: (text) => log(`[网页服务] ${text}`),

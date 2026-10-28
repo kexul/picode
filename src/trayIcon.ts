@@ -17,8 +17,11 @@ import * as path from "path";
 
 /** 托盘清单里的一行：哪个会话有事、它叫什么。 */
 export interface TrayPendingItem {
+    /** 会话标识；别的机器推来的那条是 `remote:<来源>:<会话标识>`。 */
     id: string;
     name: string;
+    /** 别的机器推来的那条才有：点了要打开它那边的页面（本机的会话没有这个）。 */
+    page?: string;
 }
 
 /** 人在托盘菜单里点的东西（都直接来自那颗小程序，见 bin/tray.cs 里的协议）。 */
@@ -70,6 +73,8 @@ export class TrayIcon {
         this.write("quit");
         const child = this.child;
         this.child = undefined;
+        // 管道也关掉：小程序读到结尾一样会退（两路信号，哪条先到都行）
+        try { child.stdin?.end(); } catch { /* 已经断了 */ }
         // 给它一点时间自己走；赖着就杀掉，别留孤儿进程
         const timer = setTimeout(() => { try { child.kill(); } catch { /* 已经没了 */ } }, 1500);
         timer.unref?.();

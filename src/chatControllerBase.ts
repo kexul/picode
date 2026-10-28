@@ -74,6 +74,7 @@ import { buildGoalFeedbackPrompt, buildGoalJudgePrompt } from "./goalJudge";
 import { dropGoal, readGoal, writeGoal } from "./goalFiles";
 import type { RpcSessionState } from "./piRpc";
 import { TrayIcon, type TrayPendingItem } from "./trayIcon";
+import type { RemoteNotice } from "./remoteNotice";
 import type { ProjectDirEntry } from "./sessionStore";
 
 /** # 引用菜单里的一行：一个会话（或其某个子会话）。 */
@@ -1892,14 +1893,37 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /**
      * 某个会话有事了（跑完一轮、模型在等你答一道选择题）：记进托盘清单，让图标闪。
-     * 设置里那一项关掉、或者这台机器上没有托盘（不是 Windows / 小程序没编出来）就什么都不做。
+     * 设置里那一项关掉就什么都不做；这台机器上没有托盘（不是 Windows / 小程序没编出来）
+     * 只是不闪，推给别的后端那一路照走（见 pushRemoteNote）。
      */
     protected trayNote(sessionId: string, name: string): void {
-        if (!sessionId || this.trayClosedByUser) { return; }
-        if (!this.notifyTurnEndEnabled() || !TrayIcon.available()) { return; }
-        // 同一个会话又出事了：挪到清单最后（菜单按有事的先后排）
-        this.trayPending = this.trayPending.filter((item) => item.id !== sessionId);
-        this.trayPending.push({ id: sessionId, name: (name || "").trim() || "会话" });
+        if (!sessionId || !this.notifyTurnEndEnabled()) { return; }
+        const label = (name || "").trim() || "会话";
+        if (!this.trayClosedByUser && TrayIcon.available()) {
+            this.addTrayItem({ id: sessionId, name: label });
+        }
+        this.pushRemoteNote(sessionId, label);
+    }
+
+    /**
+     * 别的机器上的后端推来一条“有事”：当成自己的事塞进清单（不同来源、不同会话各占一行）。
+     * 点了那一行是打开它那边的页面，不是切本机的会话（见 trayPick）。
+     */
+    protected trayNoteRemote(notice: RemoteNotice): void {
+        if (!this.notifyTurnEndEnabled() || this.trayClosedByUser) { return; }
+        if (!TrayIcon.available()) { return; }
+        this.addTrayItem({
+            // 同一个来源的同一个会话反复推过来只换不堆（id 一样就把旧的顶掉）
+            id: "remote:" + notice.label + ":" + notice.sessionId,
+            name: notice.label + " · " + notice.name,
+            page: notice.page,
+        });
+    }
+
+    /** 往托盘清单里加一行（同一个 id 的挪到最后，菜单按有事的先后排）。 */
+    private addTrayItem(item: TrayPendingItem): void {
+        this.trayPending = this.trayPending.filter((old) => old.id !== item.id);
+        this.trayPending.push(item);
         this.traySync();
     }
 
@@ -1925,10 +1949,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.tray.setPending(this.trayPending);
     }
 
-    /** 托盘清单里点了一行：把它从清单里划掉，把界面切到那个会话。 */
+    /** 托盘清单里点了一行：把它从清单里划掉，把界面切到那个会话（别处的就开它那个页面）。 */
     private trayPick(id: string): void {
+        const picked = this.trayPending.find((item) => item.id === id);
         this.trayPending = this.trayPending.filter((item) => item.id !== id);
         this.traySync();
+        if (picked?.page) { this.openFrontendPage(picked.page); return; }
         if (!this.panels.has(id)) { return; }   // 会话已经关掉了：只把它从清单里划掉
         // 先记下来：那会儿要是一块屏都没连着，等下一块屏连上来时按它切（见 ready 那条）
         this.trayPickTarget = id;
@@ -1953,10 +1979,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /**
-     * 托盘里点了「打开页面」：把界面打开 / 拉到前面。
+     * 托盘里点了「打开页面」（或点了别的机器推来的那一行，page 就是它那边的地址）：
+     * 把界面打开 / 拉到前面。不给 page 就是本机的页面。
      * 默认什么都做不了：能不能开、怎么开是宿主的活（见 ChatHost）。
      */
-    protected openFrontendPage(): void { /* 子类接 */ }
+    protected openFrontendPage(_page?: string): void { /* 子类接 */ }
+
+    /**
+     * 把这条“有事”推给别的后端（设置里 notify.pushTo 写了地址才有这回事）。
+     * 默认不推：只有知道自己地址的宿主才推得出去（见 ChatHost）。
+     */
+    protected pushRemoteNote(_sessionId: string, _name: string): void { /* 子类接 */ }
 
     /** 收摊：让托盘小程序也退出（后端退出时不一定来得及，但尽量不落孤儿进程）。 */
     protected disposeTray(): void {

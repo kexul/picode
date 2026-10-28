@@ -607,6 +607,20 @@
   // 后端在 viewOptions 里报（process.platform !== "win32"）。没收到之前按不分大小写算，
   // 跟以前一样；收到后就按真值。
   var caseSensitivePaths = false;
+  /**
+   * 地址里带了 ?session=<标识> 就切到那个会话。
+   * 哪儿来的这种地址：别的机器上的后端“有事”推过来，这边点托盘清单里那一行，
+   * 浏览器打开的就是它那边的页面 + 那一个会话（见 src/remoteNotice.ts）。
+   * 会话壳可能还没到：先记着，等会话列表来了再切（见 sessionList 那段）。
+   */
+  function activateSessionFromUrl() {
+    var wanted = "";
+    try { wanted = new URLSearchParams(location.search).get("session") || ""; } catch (e) { wanted = ""; }
+    if (!wanted) { return; }
+    pendingActivateId = wanted;
+    vscode.postMessage({ type: "switchSession", sessionId: wanted });
+  }
+
   /** 两个路径字符串相比时用的写法（斜杠统一；Windows 上再转小写，见 pathRules.ts 的 pathCaseKey）。 */
   function pathCaseKey(p) {
     var s = String(p || "").replace(/\\/g, "/");
@@ -10227,4 +10241,5 @@
   syncSidebarLayout();
 
   vscode.postMessage({ type: "ready" });
+  activateSessionFromUrl();
 })();
