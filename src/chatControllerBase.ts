@@ -328,10 +328,15 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract mutateViewOption(action: string, value?: string): void;
     /** 有事（跑完一轮 / 模型在等你答题）时让不让托盘图标闪（各平台的子类去读自己的存储）。 */
     protected abstract notifyTurnEndEnabled(): boolean;
-    /** 设置面板里「有事也推到别的机器」那一行现在填着什么（没有就是空表）。 */
+    /** 设置面板里「消息推送」那一行现在填着什么（没有就是空表）。 */
     protected notifyPushTargets(): string[] { return []; }
-    /** 设置面板里「推到那边时叫它什么」那一行现在填着什么（空 = 用主机名）。 */
+    /** 设置面板里「推送标签」那一行现在填着什么（空 = 用主机名）。 */
     protected notifyPushLabel(): string { return ""; }
+    /**
+     * 设置面板里「消息推送」那一行空着时显示的例子：一般就是这台机器自己的地址，
+     * 人照着它改成别的机器的地址即可（填成本机等于自己推自己，清单里会多一行重复的）。
+     */
+    protected notifyPushExample(): string { return "http://10.0.0.2:51883"; }
 
     // ---- 文件列表 / 文件打开（来自 webview 的 listFiles / openFile）----
     protected abstract sendFileList(): void;
@@ -490,8 +495,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 desc: "",
                 check: null,
                 kind: "text",
-                placeholder: "http://10.0.0.2:51883",
-                value: this.notifyPushTargets().join(", "),
+                placeholder: this.notifyPushExample(),
+                // 没填过就显示这台机器自己的地址：留着它 = 提醒还在这台，改成别的机器 = 挪过去
+                value: (this.notifyPushTargets().length > 0 ? this.notifyPushTargets() : [this.notifyPushExample()]).join(", "),
             },
             {
                 action: "notifyPushLabel",
@@ -1909,17 +1915,18 @@ export abstract class ChatControllerBase implements RuntimeHost {
     // ========================================================================
 
     /**
-     * 某个会话有事了（跑完一轮、模型在等你答一道选择题）：记进托盘清单，让图标闪。
-     * 设置里那一项关掉就什么都不做；这台机器上没有托盘（不是 Windows / 小程序没编出来）
-     * 只是不闪，推给别的后端那一路照走（见 pushRemoteNote）。
+     * 某个会话有事了（跑完一轮、模型在等你答一道选择题）。
+     *
+     * 提醒送到哪台是二选一（一个人只盯得了一台机器）：设置里「消息推送」填了别处的地址，
+     * 就只推到那边，这台不闪；没填（或者填的就是这台自己的地址）就在这台闪。
      */
     protected trayNote(sessionId: string, name: string): void {
         if (!sessionId || !this.notifyTurnEndEnabled()) { return; }
         const label = (name || "").trim() || "会话";
+        if (this.pushRemoteNote(sessionId, label)) { return; }   // 已经推给别处：这台不闪
         if (!this.trayClosedByUser && TrayIcon.available()) {
             this.addTrayItem({ id: sessionId, name: label });
         }
-        this.pushRemoteNote(sessionId, label);
     }
 
     /**
@@ -2003,10 +2010,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected openFrontendPage(_page?: string): void { /* 子类接 */ }
 
     /**
-     * 把这条“有事”推给别的后端（设置里 notify.pushTo 写了地址才有这回事）。
+     * 把这条“有事”推给别的后端（设置里「消息推送」填了别处的地址才有这回事）。
      * 默认不推：只有知道自己地址的宿主才推得出去（见 ChatHost）。
+     * @returns 是不是推给“别处”了（推了的话，这台就不再自己闪）
      */
-    protected pushRemoteNote(_sessionId: string, _name: string): void { /* 子类接 */ }
+    protected pushRemoteNote(_sessionId: string, _name: string): boolean { return false; }
 
     /** 收摊：让托盘小程序也退出（后端退出时不一定来得及，但尽量不落孤儿进程）。 */
     protected disposeTray(): void {

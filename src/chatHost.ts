@@ -22,8 +22,8 @@ import { writeAskAnswer } from "./askProtocol";
 import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase, type ViewOptionItem } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
-import { readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
-import { hostOfUrl, pushRemoteNotice, withSession, type RemoteNotice } from "./remoteNotice";
+import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
+import { hostOfUrl, isOwnPage, pushRemoteNotice, withSession, type RemoteNotice } from "./remoteNotice";
 import { getAskAssets, getBashAssets, getGoalAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
 import {
@@ -106,6 +106,20 @@ export interface ChatHostOptions {
      * 推给别的后端时要用它拼“点了打开哪个页面”。不知道就不推（推过去点了也没处去）。
      */
     selfPageUrl?: () => string | undefined;
+}
+
+/**
+ * 人填的推送地址里没写端口时，补上 Pi Chat 出厂那个（51883）。
+ * 不补的话按 http 的规矩算 80，推到别人家的网页服务上，打不通还看不出为什么。
+ */
+function withDefaultPort(url: string): string {
+    try {
+        const parsed = new URL(url);
+        if (!parsed.port) { parsed.port = String(DEFAULT_SERVER_CONFIG.webServer.port); }
+        return parsed.origin;
+    } catch {
+        return url;   // 不像话的地址原样交上去，那层会把它当无效项丢掉
+    }
 }
 
 /** 这条消息是不是“一次性界面”（确认框、浮层、跑完提醒）：补发里只有序号位、没有内容。 */
@@ -899,6 +913,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     protected override notifyPushLabel(): string {
         return readServerConfig().config.notify.pushLabel;
     }
+
+    /** 「消息推送」空着时那句灰字例子：这台机器自己的地址。 */
+    protected override notifyPushExample(): string {
+        return this.options.selfPageUrl?.()?.replace(/\/+$/, "") ?? super.notifyPushExample();
+    }
     protected notifyTurnEndEnabled(): boolean { return this.getNotifyTurnEnd(); }
 
     /**
@@ -972,13 +991,16 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             // 当场照着新设置来：刚打开就把图标放上去，刚关掉就收掉（别留一颗不干活的）
             if (this.getNotifyTurnEnd()) { this.startTray(); } else { this.disposeTray(); }
         } else if (action === "notifyPushTo") {
-            // 填的是给人看的写法：逗号 / 空格 / 换行都算分隔，没写 http:// 的自己补上。
+            // 填的是给人看的写法：逗号 / 空格 / 换行都算分隔；没写 http:// 的补上，
+            // 没写端口的补上 Pi Chat 出厂那个（51883）——否则按 http 的默认端口 80 算，打不通。
             // 地址合不合法由设置文件那层把关（不合适的会被丢掉，面板上就看不见它们了）。
             const urls = String(value ?? "")
                 .split(/[\s,;]+/)
                 .map((item) => item.trim())
                 .filter((item) => item.length > 0)
-                .map((item) => (/^https?:\/\//i.test(item) ? item : "http://" + item));
+                .map((item) => withDefaultPort(/^https?:\/\//i.test(item) ? item : "http://" + item))
+                // 填本机自己的地址等于没填（面板上照样显示它，但设置文件里不留这行废话）
+                .filter((item) => !isOwnPage(item, this.options.selfPageUrl?.()));
             updateServerConfig({ notify: { pushTo: urls } });
         } else if (action === "notifyPushLabel") {
             updateServerConfig({ notify: { pushLabel: String(value ?? "").trim() } });
@@ -1472,26 +1494,29 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
-     * 把这条“有事”推给别的后端（设置文件里 notify.pushTo 写了地址才有这回事）。
+     * 把这条“有事”推给别的后端（设置里「消息推送」填了别处的地址才有这回事）。
      * 推的是一条最小的通知：哪台、哪个会话、叫什么、点了打开哪个地址。
-     * 推不过去就算了（对方没起、网断了、口令不对都一样：不重试、不攒着）。
+     * 推不过去就算了（对方没起、网断了都一样：不重试、不攒着）。
+     * @returns 推给了别处没有（推了这台就不自己闪：一个人只盯得了一台机器）
      */
-    protected override pushRemoteNote(sessionId: string, name: string): void {
+    protected override pushRemoteNote(sessionId: string, name: string): boolean {
         const notify = readServerConfig().config.notify;
-        if (notify.pushTo.length === 0) { return; }
         const base = this.options.selfPageUrl?.();
-        if (!base) { return; }
-        const label = notify.pushLabel || hostOfUrl(base) || "Pi Chat";
+        if (!base) { return false; }
+        // 填的是这台自己的地址（默认就显示它）等于“提醒还在这台”：不推给自己，本机自己闪
+        const targets = notify.pushTo.filter((target) => !isOwnPage(target, base));
+        if (targets.length === 0) { return false; }
         const notice = {
-            label,
+            label: notify.pushLabel || hostOfUrl(base) || "Pi Chat",
             sessionId,
             name,
             // 地址里带上会话：那边点开就切到这个会话（见 media/chat.js 里读 ?session= 的那段）
             page: withSession(base, sessionId),
         };
-        for (const target of notify.pushTo) {
+        for (const target of targets) {
             void pushRemoteNotice(target, notice);
         }
+        return true;
     }
 
     /** 别的机器上的后端推来一条“有事”（网页服务那条 /notify 收到、口令核对过了）。 */

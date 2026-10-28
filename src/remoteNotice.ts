@@ -65,6 +65,17 @@ export async function pushRemoteNotice(target: string, notice: RemoteNotice): Pr
     }
 }
 
+/** 把地址规范化成 `http://主机:端口`（跟设置文件那边同一个写法）；不像话就是 undefined。 */
+function normalizeOrigin(url: string): string | undefined {
+    try {
+        const parsed = new URL(url.trim());
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") { return undefined; }
+        return parsed.origin;
+    } catch {
+        return undefined;
+    }
+}
+
 /** 一个地址里的主机名（拼“这是哪台机器”用）；地址不像话就给空串。 */
 export function hostOfUrl(url: string): string {
     try { return new URL(url).hostname || ""; } catch { return ""; }
@@ -82,4 +93,31 @@ export function withSession(page: string, sessionId: string): string {
     } catch {
         return page;
     }
+}
+
+/**
+ * 这条推送目标是不是就是本机自己（照本机网页服务的地址比）。
+ *
+ * 为什么要认这个：设置里「消息推送」默认就显示这台机器自己的地址，人把它留着等于
+ * “提醒还在这台”；只有填了别处的地址才算把提醒挪走（见 ChatControllerBase.trayNote）。
+ * 比的时候主机名与端口都要对得上；本机那几个回环写法（127.0.0.1 / localhost）只要端口一样就认。
+ */
+export function isOwnPage(target: string, ownUrl: string | undefined): boolean {
+    const mine = ownUrl ? normalizeOrigin(ownUrl) : undefined;
+    const theirs = normalizeOrigin(target);
+    if (!mine || !theirs) { return false; }
+    if (mine === theirs) { return true; }
+    try {
+        const a = new URL(theirs);
+        const b = new URL(mine);
+        if (a.port !== b.port) { return false; }
+        return isLoopbackHost(a.hostname) && isLoopbackHost(b.hostname);
+    } catch {
+        return false;
+    }
+}
+
+function isLoopbackHost(name: string): boolean {
+    const host = name.replace(/^\[|\]$/g, "").toLowerCase();
+    return host === "127.0.0.1" || host === "localhost" || host === "::1";
 }
