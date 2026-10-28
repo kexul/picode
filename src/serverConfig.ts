@@ -421,10 +421,14 @@ export function updateServerConfig(patch: DeepPartial<ServerConfig>, dir?: strin
 function mergeServerConfig(base: ServerConfig, patch: DeepPartial<ServerConfig>): Record<string, unknown> {
     const merged: Record<string, unknown> = { ...base };
     if (!isPlainObject(patch)) return merged;
+    const baseRecord = base as unknown as Record<string, unknown>;
     for (const [key, value] of Object.entries(patch)) {
         if (value === undefined) continue;
-        if (key === "webServer" && isPlainObject(value)) {
-            merged.webServer = { ...base.webServer, ...value };
+        // 一节一节的（webServer、notify）是“改这一项”，不是“整节换掉”：只覆盖给到的键。
+        // 不这样的话，改 notify.pushLabel 会把 notify.pushTo 一起打回默认值。
+        const old = baseRecord[key];
+        if (isPlainObject(value) && isPlainObject(old)) {
+            merged[key] = { ...(old as Record<string, unknown>), ...(value as Record<string, unknown>) };
         } else {
             merged[key] = value;
         }

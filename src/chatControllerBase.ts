@@ -99,6 +99,8 @@ export interface ViewOptionItem {
     value?: string;
     options?: Array<{ value: string; label: string }>;
     kind?: string;
+    /** 填字那一行（kind: "text"）里那句灰字提示。 */
+    placeholder?: string;
     min?: number;
     max?: number;
     step?: number;
@@ -326,6 +328,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract mutateViewOption(action: string, value?: string): void;
     /** 有事（跑完一轮 / 模型在等你答题）时让不让托盘图标闪（各平台的子类去读自己的存储）。 */
     protected abstract notifyTurnEndEnabled(): boolean;
+    /** 设置面板里「有事也推到别的机器」那一行现在填着什么（没有就是空表）。 */
+    protected notifyPushTargets(): string[] { return []; }
+    /** 设置面板里「推到那边时叫它什么」那一行现在填着什么（空 = 用主机名）。 */
+    protected notifyPushLabel(): string { return ""; }
 
     // ---- 文件列表 / 文件打开（来自 webview 的 listFiles / openFile）----
     protected abstract sendFileList(): void;
@@ -452,7 +458,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             {
                 action: "closeSessionKey",
                 label: "关闭会话",
-                desc: "会话文件留着，历史会话里还能重新打开",
+                desc: "",
                 check: null,
                 value: this.getCloseSessionKey(),
                 options: ChatControllerBase.keyOptions(ChatControllerBase.CLOSE_SESSION_KEY_LABELS),
@@ -460,13 +466,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
             {
                 action: "tabSwitchKey",
                 label: "切换会话",
-                desc: "按「项目与会话」里「正在对话」那一段的行序切上一个 / 下一个",
+                desc: "",
                 check: null,
                 value: this.getTabSwitchKey(),
                 options: ChatControllerBase.keyOptions(ChatControllerBase.TAB_SWITCH_KEY_LABELS),
             },
             {
-                action: "focusInputKey", label: "聚焦输入框", desc: "在 VS Code 里任何位置都能按", check: null,
+                action: "focusInputKey", label: "聚焦输入框", desc: "", check: null,
                 value: this.getFocusInputKey(), options: ChatControllerBase.keyOptions(ChatControllerBase.FOCUS_INPUT_KEY_LABELS),
             },
             {
@@ -481,9 +487,26 @@ export abstract class ChatControllerBase implements RuntimeHost {
             {
                 action: "notifyTurnEnd",
                 label: "跑完让通知区域的图标闪",
-                desc: "哪个会话跑完一轮、或者模型在那儿问你一道选择题，Windows 通知区域里那颗图标就闪；"
-                    + "点它弹一份清单，点其中一行切到那个会话。别人派的子会话跑完不算",
+                desc: "",
                 check: this.notifyTurnEndEnabled(),
+            },
+            {
+                action: "notifyPushTo",
+                label: "有事也推到别的机器",
+                desc: "",
+                check: null,
+                kind: "text",
+                placeholder: "http://10.0.0.2:51883",
+                value: this.notifyPushTargets().join(", "),
+            },
+            {
+                action: "notifyPushLabel",
+                label: "推到那边时叫它什么",
+                desc: "",
+                check: null,
+                kind: "text",
+                placeholder: "家里那台",
+                value: this.notifyPushLabel(),
             },
         ];
     }

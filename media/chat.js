@@ -10128,6 +10128,7 @@
       const row = document.createElement("div"); row.className = "vo-item";
       if (it.kind === "slider") { renderSliderRow(row, it); viewOptsRoot.appendChild(row); return; }
       if (it.kind === "button") { renderButtonRow(row, it); viewOptsRoot.appendChild(row); return; }
+      if (it.kind === "text") { renderTextRow(row, it); viewOptsRoot.appendChild(row); return; }
       if (Array.isArray(it.options) && it.options.length) {
         // 按钮组：直接点选某个选项
         row.classList.add("vo-item-group");
@@ -10186,6 +10187,35 @@
       vscode.postMessage({ type: "restartBackend" });
     });
     row.appendChild(btn);
+  }
+
+  /**
+   * 填字那一行（地址、名字这种）：说明在上面，框占满下面一行。
+   * 填完（回车 / 点别处）才发出去；Esc 是反悔，恢复成原来的值。
+   */
+  function renderTextRow(row, it) {
+    row.classList.add("vo-item-text");
+    const txt = document.createElement("div"); txt.className = "vo-text";
+    const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "";
+    txt.appendChild(label);
+    if (it.desc) { const d = document.createElement("div"); d.className = "vo-desc"; d.textContent = it.desc; txt.appendChild(d); }
+    row.appendChild(txt);
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "vo-input";
+    input.spellcheck = false;
+    input.value = it.value || "";
+    if (it.placeholder) { input.placeholder = it.placeholder; }
+    // 在设置里打字就是打字：别让这些键冒出去触发“发送”“切会话”“收起浮层”那些
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+      else if (e.key === "Escape") { e.preventDefault(); input.value = it.value || ""; input.blur(); }
+    });
+    input.addEventListener("change", () => {
+      vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: input.value });
+    });
+    row.appendChild(input);
   }
 
   function renderSliderRow(row, it) {

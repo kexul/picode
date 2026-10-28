@@ -889,6 +889,16 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     public getNotifyTurnEnd(): boolean {
         return this.readOption<boolean>(ChatHost.KEY_NOTIFY_TURN_END, DEFAULT_NOTIFY_TURN_END) === true;
     }
+
+    /** 设置面板里「有事也推到别的机器」那一行现在填着什么（设置文件里的 notify.pushTo）。 */
+    protected override notifyPushTargets(): string[] {
+        return [...readServerConfig().config.notify.pushTo];
+    }
+
+    /** 设置面板里「推到那边时叫它什么」那一行现在填着什么（设置文件里的 notify.pushLabel）。 */
+    protected override notifyPushLabel(): string {
+        return readServerConfig().config.notify.pushLabel;
+    }
     protected notifyTurnEndEnabled(): boolean { return this.getNotifyTurnEnd(); }
 
     /**
@@ -929,10 +939,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             {
                 action: "restartBackend",
                 label: "重启后端",
-                desc: can
-                    ? `先拉最新代码（git pull），再 npm run build、npm i -g .，好了重启后端（正在跑的回复会断）。`
-                        + `拉不到就照现在的代码编；重启后在后台跑，编译输出与新后端的日志写进 ${able.logFile}`
-                    : (able.reason ?? "这个后端不能从这里重启。"),
+                desc: can ? "先拉最新代码再编，然后重启（正在跑的回复会断）" : (able.reason ?? "这个后端不能从这里重启。"),
                 check: null,
                 kind: "button",
                 button: "编译并重启",
@@ -964,6 +971,17 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             this.writeOption(ChatHost.KEY_NOTIFY_TURN_END, !this.getNotifyTurnEnd());
             // 当场照着新设置来：刚打开就把图标放上去，刚关掉就收掉（别留一颗不干活的）
             if (this.getNotifyTurnEnd()) { this.startTray(); } else { this.disposeTray(); }
+        } else if (action === "notifyPushTo") {
+            // 填的是给人看的写法：逗号 / 空格 / 换行都算分隔，没写 http:// 的自己补上。
+            // 地址合不合法由设置文件那层把关（不合适的会被丢掉，面板上就看不见它们了）。
+            const urls = String(value ?? "")
+                .split(/[\s,;]+/)
+                .map((item) => item.trim())
+                .filter((item) => item.length > 0)
+                .map((item) => (/^https?:\/\//i.test(item) ? item : "http://" + item));
+            updateServerConfig({ notify: { pushTo: urls } });
+        } else if (action === "notifyPushLabel") {
+            updateServerConfig({ notify: { pushLabel: String(value ?? "").trim() } });
         } else if (action === "theme") {
             const next = value === "dark" || value === "light"
                 ? value
