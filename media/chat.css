@@ -1801,6 +1801,31 @@
     color: var(--vscode-descriptionForeground, inherit); opacity: 0.7;
   }
   #fileWrap svg { width: 14px; height: 14px; display: block; }
+  /* 「文件」那一格看文件时，正文上面多一条横条（见 chat.js 的 syncFileBar）：
+     左边是这个文件叫什么（相对会话目录的写法，一行放不下就省略，悬停看全），右边一颗关闭。
+     它摆在正文外面（#fileBody 才是滚动的那一块），所以往下拖的时候一直看得见。 */
+  #fileBar {
+    flex: 0 0 auto; box-sizing: border-box;
+    display: flex; align-items: center; gap: 6px;
+    min-height: 26px; padding: 2px 6px 2px 12px;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
+    font-size: calc(var(--vscode-font-size, 13px) - 2px);
+    color: var(--vscode-descriptionForeground, inherit);
+  }
+  #fileBar[hidden] { display: none; }
+  #fileBar .file-bar-name {
+    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: var(--vscode-editor-font-family, monospace);
+  }
+  /* 横条右边那颗关闭：把手上这个文件收起不看，回到刚才那一层清单 */
+  #fileCloseFile {
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; padding: 0; cursor: pointer;
+    border: 0; border-radius: 4px; background: none;
+    color: var(--vscode-foreground); opacity: 0.7;
+  }
+  #fileCloseFile svg { width: 14px; height: 14px; display: block; }
+  #fileCloseFile:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
   #fileWrap:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
   #fileWrap.on {
     opacity: 1; color: var(--vscode-focusBorder, #007acc); border-color: var(--vscode-focusBorder, #007acc);

@@ -5652,7 +5652,7 @@
   const FILE_SIDEBAR_WRAP_STORE_KEY = "pichat.fileSidebarWrap";
   const FILE_SIDEBAR_HINT = "点消息里的文件链接，这里会显示那个文件。";
   /** 「目录」那一格：标签上就写这两个字，悬停提示给这一层的全路径（见 fileSidebarProjectFullPath）。 */
-  const FILE_SIDEBAR_PROJECT_NAME = "目录";
+  const FILE_SIDEBAR_PROJECT_NAME = "文件";
   /** 「改动」那一格：这个会话改了哪些文件、每个改成什么样（标签上就写这两个字）。 */
   const FILE_SIDEBAR_CHANGES_NAME = "改动";
   /** 这一格里一个文件都没改过时那句提示。 */
@@ -5666,17 +5666,19 @@
   /** 这一列那一摊：容器、里面那几块、开着哪几个文件。 */
   const fileSidebar = {
     root: null, header: null, title: null, tabsEl: null, body: null, resize: null,
+    bar: null, barName: null, closeFile: null,
     open: false,     // 这台设备上人要不要它开着（记在 localStorage；开着时宽窗常驻、窄窗滑入）
     // 人拖出来的宽度（像素数，也记在本机里）：没拖过就是 FILE_SIDEBAR_W_DEFAULT。
     // 写到版式上的那个值还可能被窗口收小，但这里留着的永远是原值（见 applyFileSidebarWidth）。
     width: 0,
     wrap: false,     // 长行折起来还是横向滚（记在 localStorage；默认一行就是一行，见 chat.css 末尾）
-    // 开着的文件与目录，从左到右：[{ path, proj, line, scrollTop, mtime, loading, imageUrl, page, drawn }]
+    // 常驻的三格（文件 / 改动 / 后台），从左到右：[{ path, home, proj, dir, line, scrollTop, mtime, loading, imageUrl, page, drawn }]
     //（不记进设备，刷新就没了）
-    //   path：文件是链接里那个写法；「目录」那一格是它现在待的那一层
-    //（相对会话目录的写法：`.` 就是会话目录自己）
-    //   proj：这是「目录」那一格（排在最前、没有关闭那颗叉）：它列出来的是一份清单，
-    //   所有进目录 / 换目录的事都在它里面发生；不是它就是某个文件
+    //   home：这是「文件」那一格（排在最前、没有关闭那颗叉）
+    //   proj：这一格现在在列清单（true）还是在显示一个文件（false）
+    //   path：清单模式是它现在待的那一层（相对会话目录：`.` 就是会话目录自己）；
+    //   文件模式是那个文件的写法
+    //   dir：进文件之前待的那一层：点右上角那颗关闭回这里（见 backToFileList）
     //   mtime：画在这一列上的那份内容的修改时间（下次问「变了没」时带上去）
     //   loading：还在取（正文那块写着「正在读取…」）
     //   imageUrl：图片那个显示地址（blob:…）；换成别的图或关掉标签时要放掉它
@@ -5688,9 +5690,6 @@
     token: 0,        // 取文件是异步的：换标签 / 收起之后回来的旧回应就不算数了
     hintPage: null,  // 一个标签都没开时那句提示画在哪儿（跟标签那几块同一层，只露一块）
     sessionId: null,  // 现在手头这一份标签是哪个会话的（见 resetFileSidebarForSession）
-    // 每个会话各记一份它开过的标签：会话 id → { tabs, active }。
-    // 切走时记进来、切回来原样摆出去（正文那块不跟着走：切回来重读一次）
-    savedTabs: new Map(),
   };
   /** 上一条「变了没」的询问还在路上（手机网慢）：这一轮先不发，别越堆越多。 */
   let filePolling = false;
@@ -5752,6 +5751,7 @@
       wrapBtn.classList.toggle("on", fileSidebar.wrap);
     }
     syncDockHeaderHeight();
+    syncFileBar();   // 开着 / 收起变了：那条横条跟着换
   }
   function rememberFileSidebar(open) {
     try { localStorage.setItem(FILE_SIDEBAR_STORE_KEY, open ? "1" : "0"); } catch (e) { /* 存不了就只管这一次 */ }
@@ -5794,24 +5794,18 @@
     return String(path).replace(/\\/g, "/").split("/").pop() || String(path);
   }
 
-  /** 这个文件已经开着了是哪一个标签（没开就是 -1）：同一个文件只留一个标签（目录不占标签）。 */
-  function fileSidebarTabIndex(path) {
-    for (let i = 0; i < fileSidebar.tabs.length; i++) {
-      if (!fileSidebar.tabs[i].proj && fileSidebar.tabs[i].path === path) { return i; }
-    }
-    return -1;
-  }
 
   /** 「目录」那一格在标签条上的下标（没有就是 -1）。 */
   function fileSidebarProjectIndex() {
-    for (let i = 0; i < fileSidebar.tabs.length; i++) { if (fileSidebar.tabs[i].proj) { return i; } }
+    for (let i = 0; i < fileSidebar.tabs.length; i++) { if (fileSidebar.tabs[i].home) { return i; } }
     return -1;
   }
 
-  /** 摆一格新标签要的那些字段：一个文件，或者「目录」那一格（它列出来的是一份清单）。 */
+  /** 「文件」那一格的字段（它一开始在列清单；点开文件就变成显示文件）。 */
   function fileSidebarNewTab(path, proj) {
     return {
-      path: path, proj: !!proj, line: 0, scrollTop: 0, mtime: "", loading: false, imageUrl: "",
+      path: path, home: true, proj: !!proj, dir: path, line: 0, scrollTop: 0,
+      mtime: "", loading: false, imageUrl: "",
       page: null,    // 这一格自己那一块正文（见 fileTabPage）
       drawn: false,  // 那一块里已经有画好的内容了
     };
@@ -5948,6 +5942,24 @@
     return fileSidebar.hintPage;
   }
 
+  /**
+   * 正文上面那条横条：只有「文件」那一格在看一个文件时露出来，左边是这个文件的写法
+   * （相对会话目录，一行放不下就省略、悬停看全），右边一颗关闭（点了回清单，见 backToFileList）。
+   * 它摆在正文外面（#fileBody 是滚动的那一块），所以往下拖的时候它一直看得见。
+   */
+  function syncFileBar() {
+    const bar = fileSidebar.bar;
+    if (!bar) { return; }
+    const tab = fileSidebar.tabs[fileSidebar.active];
+    const show = !!tab && !!tab.home && !tab.proj;
+    bar.hidden = !show;
+    if (!show) { return; }
+    if (fileSidebar.barName) {
+      fileSidebar.barName.textContent = tab.path;
+      fileSidebar.barName.title = fileSidebarTabFullPath(tab);
+    }
+  }
+
   /** 正文里现在该画在哪儿：正看着的那个标签那一块；一个标签都没开就是这一列自己那一块。 */
   function filePage() {
     const tab = fileSidebar.tabs[fileSidebar.active];
@@ -5980,7 +5992,10 @@
     return true;
   }
 
-  /** 按现在开着的那几个文件重画标签条：点名字切过去、点那颗叉关掉。 */
+  /**
+   * 重画标签条：常驻三格（文件 / 改动 / 后台），点名字切过去。三格都不带那颗叉。
+   * 「文件」那一格的名字一直写「文件」：看的是哪个文件，正文上面那条横条里写着（见 syncFileBar）。
+   */
   function renderFileTabs() {
     const bar = fileSidebar.tabsEl;
     if (!bar) { return; }
@@ -5989,28 +6004,16 @@
       const el = document.createElement("div");
       el.className = "file-tab" + (i === fileSidebar.active ? " active" : "");
       el.setAttribute("data-path", tab.path);
-      if (tab.proj) { el.setAttribute("data-proj", "1"); }
+      if (tab.home) { el.setAttribute("data-proj", "1"); }
       if (tab.change) { el.setAttribute("data-changes", "1"); }
       if (tab.scripts) { el.setAttribute("data-scripts", "1"); }
-      el.title = fileSidebarTabFullPath(tab);   // 目录那一格悬停给现在这一层的全路径
+      el.title = fileSidebarTabFullPath(tab);   // 文件那一格悬停给现在这一层 / 这个文件的全路径
       const name = document.createElement("span");
       name.className = "file-tab-name";
-      name.textContent = tab.proj ? FILE_SIDEBAR_PROJECT_NAME
-        : tab.change ? FILE_SIDEBAR_CHANGES_NAME
-          : tab.scripts ? FILE_SIDEBAR_SCRIPTS_NAME : fileSidebarTabName(tab.path);
+      name.textContent = tab.home
+        ? FILE_SIDEBAR_PROJECT_NAME
+        : tab.change ? FILE_SIDEBAR_CHANGES_NAME : FILE_SIDEBAR_SCRIPTS_NAME;
       el.appendChild(name);
-      // 「目录」「改动」「后台」这三格没有那颗叉：它们是常驻的，不让人关掉
-      //（切会话 / 刷新页面时换成当前会话的）
-      if (!tab.proj && !tab.change && !tab.scripts) {
-        const close = document.createElement("button");
-        close.type = "button";
-        close.className = "file-tab-close";
-        close.title = "关掉这个标签";
-        close.setAttribute("aria-label", "关掉 " + tab.path);
-        close.innerHTML = ICONS["close-bold"];
-        close.addEventListener("click", (e) => { e.stopPropagation(); closeFileTab(i); });
-        el.appendChild(close);
-      }
       el.addEventListener("click", () => showFileTab(i, 0));
       bar.appendChild(el);
     });
@@ -6033,6 +6036,7 @@
     if (linkLine > 0) { tab.line = linkLine; }
     renderFileTabs();
     syncFilePages();
+    syncFileBar();
     // 「改动」那一格不取文件内容：先摆上手上这一份，再问一遍清单（没画过就等取回来再画）
     if (tab.change) {
       if (tab.drawn) { fetchChanges(tab); } else { showFileNote("正在读取…"); fetchChanges(tab); }
@@ -6071,30 +6075,6 @@
   }
 
   /** 点标签上那颗叉：关掉这一个。全关光后这一列不收起，留一句提示。 */
-  function closeFileTab(index) {
-    if (!fileSidebar.tabs[index]) { return; }
-    const wasActive = index === fileSidebar.active;
-    const gone = fileSidebar.tabs[index];
-    fileSidebar.tabs.splice(index, 1);
-    dropFileTabPage(gone);
-    if (!wasActive) {
-      // 关的不是正看着的这个：画面不动，只把标签条重画一遍（后面的下标要跟着挪）
-      if (index < fileSidebar.active) { fileSidebar.active--; }
-      renderFileTabs();
-      return;
-    }
-    // 关掉的正是看着的这个：它已经不是哪一个标签了，手上还等着的那条回应也别再画进来
-    fileSidebar.active = -1;
-    fileSidebar.token++;
-    if (fileSidebar.tabs.length === 0) {
-      renderFileTabs();
-      syncFilePages();
-      showFileNote(FILE_SIDEBAR_HINT);
-      return;
-    }
-    // 摆上右边那一个（关的是最后一个标签就摆上现在最后那一个）
-    showFileTab(Math.min(index, fileSidebar.tabs.length - 1), 0);
-  }
 
   /**
    * 这一列里那一段纯粹的文字（提示、看不了的原因、正在读取）；看不了但能下载时一并放上链接。
@@ -7141,7 +7121,7 @@
    */
   function prepareFileSidebar() {
     closeRightSidebarForFile();
-    addProjectDirTab();   // 第一格留给「目录」（只摆不取，排在文件前面）
+    addProjectDirTab();   // 第一格留给「文件」（只摆不取，排在前面）
     if (!fileSidebar.open) { setFileSidebarOpen(true); } else { syncFileSidebarLayout(); }
   }
 
@@ -7153,12 +7133,41 @@
   function openFileInSidebar(path, line) {
     if (!fileSidebar.root || !path) { return; }
     prepareFileSidebar();
-    let at = fileSidebarTabIndex(path);
-    if (at < 0) {
-      fileSidebar.tabs.push(fileSidebarNewTab(path, false));
-      at = fileSidebar.tabs.length - 1;
+    const at = fileSidebarProjectIndex();
+    const tab = at >= 0 ? fileSidebar.tabs[at] : null;
+    if (!tab) { return; }
+    if (tab.proj) {
+      tab.dir = tab.path;   // 从清单点进去：记住这一层，关掉文件时回到这儿
+    } else {
+      // 已经在看另一个文件：那一块正文扔掉（里面画的是上一个文件）
+      dropFileTabPage(tab);
     }
+    tab.proj = false;
+    tab.path = path;
+    tab.line = Number(line) > 0 ? Number(line) : 0;
+    tab.mtime = "";
+    tab.loading = false;
+    tab.scrollTop = 0;
+    tab.drawn = false;
+    releaseTabImage(tab);
     showFileTab(at, line);
+  }
+
+  /** 「文件」那一格顶上那颗关闭：手头这个文件收起不看，回到刚才那一层目录。 */
+  function backToFileList() {
+    const at = fileSidebarProjectIndex();
+    const tab = at >= 0 ? fileSidebar.tabs[at] : null;
+    if (!tab || tab.proj) { return; }
+    dropFileTabPage(tab);
+    tab.proj = true;
+    tab.path = tab.dir || FILE_SIDEBAR_PROJECT_PATH;
+    tab.line = 0;
+    tab.mtime = "";
+    tab.loading = false;
+    tab.scrollTop = 0;
+    tab.drawn = false;
+    releaseTabImage(tab);
+    showFileTab(at, 0);
   }
 
   /**
@@ -7174,7 +7183,15 @@
     const at = fileSidebarProjectIndex();
     if (at < 0) { return; }
     const tab = fileSidebar.tabs[at];
+    if (!tab.proj) {
+      // 正在看文件：那块正文扔掉，回到清单模式（下面按新的一层重新列）
+      dropFileTabPage(tab);
+      releaseTabImage(tab);
+      tab.proj = true;
+    }
     tab.path = key;
+    tab.dir = key;
+    tab.line = 0;
     tab.drawn = false;   // 换了一层：这一块里画的是上一层那份清单，作废（下面重新取）
     showFileTab(at, 0);
   }
@@ -7193,8 +7210,9 @@
   function goUpProjectDir() {
     const at = fileSidebarProjectIndex();
     const tab = at >= 0 ? fileSidebar.tabs[at] : null;
-    if (!tab || tab.path === FILE_SIDEBAR_PROJECT_PATH) { return; }
+    if (!tab || tab.proj !== true || tab.path === FILE_SIDEBAR_PROJECT_PATH) { return; }
     tab.path = parentDirPath(tab.path);
+    tab.dir = tab.path;
     tab.drawn = false;   // 换了一层：那一块里是原来那一层的清单，作废（下面重新取）
     showFileTab(at, 0);
   }
@@ -7221,27 +7239,11 @@
     if (!fileSidebar.root) { return; }
     fileSidebar.token++;
     rememberFileTabScroll();
-    // 上一个会话的那一份：记在它名下，正文那几块撤掉
-    if (fileSidebar.sessionId && fileSidebar.sessionId !== activeId) {
-      fileSidebar.savedTabs.set(fileSidebar.sessionId, { tabs: fileSidebar.tabs, active: fileSidebar.active });
-      fileSidebar.tabs.forEach(dropFileTabPage);
-      fileSidebar.tabs = [];
-      fileSidebar.active = -1;
-    }
+    // 常驻那三格跟着会话走：一次全撤掉重建（文件那一格回到清单——上一个会话的文件不该跟过来）
+    fileSidebar.tabs.forEach(dropFileTabPage);
+    fileSidebar.tabs = [];
+    fileSidebar.active = -1;
     fileSidebar.sessionId = activeId || null;
-    // 这个会话以前开过文件：把它那一份摆回来（内容重读）
-    const back = activeId ? fileSidebar.savedTabs.get(activeId) : null;
-    fileSidebar.tabs = back ? back.tabs : [];
-    fileSidebar.active = -1;   // 下面 showFileTab 摆上它；不动这一步，标签条会以为已经看着某一格
-    if (back) { fileSidebar.savedTabs.delete(activeId); }
-    if (fileSidebar.tabs.length > 0) {
-      // 「目录」与「改动」这两格是常驻的：摆回来的一份里没有就补上
-      addProjectDirTab();
-      addChangesTab();
-      addScriptsTab();
-      showFileTab(Math.min(Math.max(back.active, 0), fileSidebar.tabs.length - 1), 0);
-      return;
-    }
     renderFileTabs();
     syncFilePages();
     showFileNote(FILE_SIDEBAR_HINT);
@@ -7306,6 +7308,12 @@
           '<div id="fileTabs"></div>' +
           '<button id="fileClose" class="pk-header-close" type="button" title="收起" aria-label="收起">' + ICONS["close-bold"] + '</button>' +
         '</div>' +
+        // 看文件时正文上面那条横条：左边写这个文件叫什么，右边一颗关闭（回文件列表）
+        '<div id="fileBar" hidden>' +
+          '<span class="file-bar-name"></span>' +
+          '<button id="fileCloseFile" type="button" title="关掉这个文件，回到文件列表" aria-label="回到文件列表">'
+            + ICONS["close-bold"] + '</button>' +
+        '</div>' +
         '<div id="fileBody" class="pk-body"></div>' +
         '<button id="fileWrap" type="button" aria-label="折行开关" aria-pressed="false">' + ICONS.wrap + '</button>' +
       '</div>' +
@@ -7323,6 +7331,10 @@
     fileSidebar.wrap = readFileSidebarWrapWanted();
     fileSidebar.width = readFileSidebarWidthWanted();
     fileSidebar.resize = root.querySelector("#fileResize");
+    fileSidebar.bar = root.querySelector("#fileBar");
+    fileSidebar.barName = root.querySelector("#fileBar .file-bar-name");
+    fileSidebar.closeFile = root.querySelector("#fileCloseFile");
+    fileSidebar.closeFile.addEventListener("click", () => backToFileList());
     wireFileSidebarResize(fileSidebar.resize);
     root.querySelector("#fileClose").addEventListener("click", () => setFileSidebarOpen(false));
     root.querySelector("#fileWrap").addEventListener("click", toggleFileSidebarWrap);
@@ -10017,7 +10029,6 @@
     st.viewEl.remove();
     sessions.delete(id);
     sessionDrafts.delete(id);
-    fileSidebar.savedTabs.delete(id);   // 这个会话关掉了：它那一份标签也不必留着（反正它的目录里不再有人看）
     if (activeId === id) { activeId = null; syncJumpBottom(st); syncComposerButtons(); }
   }
 
