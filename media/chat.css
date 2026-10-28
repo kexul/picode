@@ -38,6 +38,10 @@
      要 20—40 毫秒（见 dev/swipePerf.js），会话越大越久 —— 表现出来就是“起手顿一下、之后才跟手”。
      鼠标拖的时候怕糊上选中，那是 chat.js 在拖的过程中自己抹掉的（dropSelection）。 */
   #messages.swiping { overflow: hidden; }
+  /* 划的这会儿，两个壳各自升成一层：挪的时候交给合成器搬这张图，不用每帧把两屏文字重画一遍。
+     （手机 3 倍像素下那一帧的画字活儿不便宜；主线程上是看不到它花的时间的，见 dev/swipePerf.js。）
+     只划的时候加：平时多两层要多点内存，而且流式输出时多一层反而不划算。 */
+  #messages.swiping .session-view { will-change: transform; }
   /* 一个会话一层壳：里面就一块消息窗格（.session-pane），它自己滚。
      绝对定位铺满 #messages：同时有好几个壳挂着（只一个露在外面，见下面 .off 那段）。
      为什么不用“摆进列的流里”（flex 子项）：那样子壳“停着”（见下）与“露出来”两种状态的

@@ -38,6 +38,7 @@ async function main() {
     const height = Number(arg("height", 900));
     const css = arg("css", "");
     const dsf = Number(arg("dsf", 1));          // 设备像素比（手机上一般是 2—3）
+    const cpu = Number(arg("cpu", 0));           // 主线程拖慢几倍（手机上近似效果，0 = 不拖慢）
     const cold = argv.includes("--cold");        // 划之前把进来的那个壳的“停着”摘掉（模拟它刚来过消息）
     const extra = Number(arg("extra", 0));       // 再开几个会话（让会话清单重一点）
     const profile = argv.includes("--profile");  // 松手那一段剖一下
@@ -49,6 +50,10 @@ async function main() {
     try {
         await page.waitReady();
         await cdp.send("Performance.enable");
+        if (cpu > 1) {
+            await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpu });
+            console.log(`主线程拖慢 ${cpu} 倍（近似手机）`);
+        }
         const firstId = await page.eval(`return document.querySelector("#messages .session-view:not(.off) .session-pane").dataset.sessionId`);
 
         /** 走后端那条真路切一个会话（等画面上真换过来）。 */
@@ -207,6 +212,11 @@ async function main() {
             const from = dir === "left" ? box.x + box.w * 0.85 : box.x + box.w * 0.15;
             const to = dir === "left" ? box.x + box.w * 0.15 : box.x + box.w * 0.85;
             const steps = 18;
+            if (profile) {
+                await cdp.send("Profiler.enable");
+                await cdp.send("Profiler.setSamplingInterval", { interval: 200 });
+                await cdp.send("Profiler.start");
+            }
             // 先按下（这一段里做的活——比如给要进来的那个壳排版——人看不见，单独算一笔）
             const pressStart = Date.now();
             await touch("touchStart", from, cy);
@@ -232,11 +242,6 @@ async function main() {
             `);
             const afterDrag = await metrics();
             const releaseStart = await page.eval(`return performance.now();`);
-            if (profile) {
-                await cdp.send("Profiler.enable");
-                await cdp.send("Profiler.setSamplingInterval", { interval: 200 });
-                await cdp.send("Profiler.start");
-            }
             await touch("touchEnd", to, cy);
             const finished = await page.eval(`
                 const started = ${releaseStart};
@@ -256,7 +261,7 @@ async function main() {
             const longTasks = await page.eval(`return window.__longTasks || []`);
             if (profile && dir === "left") {
                 const prof = (await cdp.send("Profiler.stop")).profile;
-                printHotspots(prof, "松手到切完这一段");
+                printHotspots(prof, "整趟（按下 → 跟手 → 松手 → 切完）");
             }
 
             // 帧间隔：拖动这一段
@@ -265,8 +270,10 @@ async function main() {
             const sorted = gaps.slice().sort((a, b) => a - b);
             const median = sorted.length ? Math.round(sorted[Math.floor(sorted.length / 2)]) : 0;
             const worst = sorted.length ? Math.round(sorted[sorted.length - 1]) : 0;
+            // 最长那一帧落在哪儿（从开始跟手算起，毫秒）：起手还是半路
+            const worstAt = sorted.length ? Math.round(frames[gaps.indexOf(sorted[sorted.length - 1]) + 1] - frames[0]) : 0;
             return {
-                dir, dragMs, frames: frames.length, median, worst,
+                dir, dragMs, frames: frames.length, median, worst, worstAt,
                 over33: gaps.filter((g) => g > 33).length,
                 switched: finished.id === (dir === "left" ? secondId : firstId),
                 releaseMs: finished.ms,
@@ -289,6 +296,7 @@ async function main() {
                     `${r.switched ? "切过去了" : "（没切成）"}　` +
                     `拖了 ${r.dragMs} 毫秒 / ${r.frames} 帧：帧间隔中位 ${r.median} 毫秒、最长 ${r.worst} 毫秒、` +
                     `超过 33 毫秒的 ${r.over33} 帧` +
+                    (r.worst > 33 ? `（最长那一帧在挪动后 ${r.worstAt} 毫秒）` : "") +
                     (r.longTasks.length ? `，长任务 ${JSON.stringify(r.longTasks)}` : "，没长任务") +
                     `\n      按下那一下（画面还没动）：${r.pressMs} 毫秒，里头排版 ${r.pressCost.layout} 毫秒，算样式 ${r.pressCost.style} 毫秒` +
                     `\n      拿着跟手这一段：排版 ${r.dragCost.layout} 毫秒/${r.dragCost.layouts} 次，算样式 ${r.dragCost.style} 毫秒，跑脚本 ${r.dragCost.script} 毫秒` +
