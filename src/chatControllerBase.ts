@@ -40,6 +40,7 @@ import { TABA_DECODER } from "./tabaProtocol";
 import { ASK_DECODER } from "./askProtocol";
 import { GOAL_DECODER, type GoalVerdictRequest } from "./goalProtocol";
 import { StderrFrameSplitter } from "./piFrames";
+import { BASH_DECODER, BashTaskInfo, buildBashTaskDelivery, readBashLogTail } from "./bashProtocol";
 import {
     TabaRegistry,
     buildChildClosedNotice,
@@ -542,6 +543,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (cfg.askExtension) { extraArgs.push("-e", cfg.askExtension); }
         if (cfg.titleExtension) { extraArgs.push("-e", cfg.titleExtension); }
         if (cfg.imageExtension) { extraArgs.push("-e", cfg.imageExtension); }
+        // 接管 bash（后台命令）：每个会话都带，领走备用进程的那个 panel 也一样
+        if (cfg.bashExtension) { extraArgs.push("-e", cfg.bashExtension); }
         const client = new PiClient({
             piPath: cfg.piPath,
             cwd: this.getCwd(),
@@ -551,6 +554,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             env: {
                 ...(cfg.tabaDir ? { PICHAT_TABA_DIR: cfg.tabaDir } : {}),
                 ...(cfg.askDir ? { PICHAT_ASK_DIR: cfg.askDir } : {}),
+                ...(cfg.bashDir ? { PICHAT_BASH_DIR: cfg.bashDir } : {}),
             },
         });
         // 记住备用进程的启动模型：新 panel 领取时按继承目标比对，不符则补发 set_model
@@ -561,7 +565,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.preparingSpare = client;
         // 备用进程的 stderr 只记“不是暗号行”的那些（暗号是一大串 base64，整行打出来把日志刷没）。
         // 请求由领走它的那个会话解析（这里只切割、不处理，不然同一行会被处理两次）。
-        const spareStderr = new StderrFrameSplitter([TABA_DECODER, ASK_DECODER, GOAL_DECODER]);
+        const spareStderr = new StderrFrameSplitter([TABA_DECODER, ASK_DECODER, GOAL_DECODER, BASH_DECODER]);
         client.on("stderr", (text: string) => {
             spareStderr.feed(text);
             for (const line of spareStderr.takeOtherLines()) { console.error("[pi spare stderr]", line); }
@@ -1080,7 +1084,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 漏了 update_goal 的话，判官照样能把活验完、写完一段结论，就是报不上来 ——
      * 插件这边看到的是「判官既没报结论也没说话」，会把目标停下来。
      */
-    private static readonly GOAL_JUDGE_TOOLS = "read,bash,grep,find,ls,update_goal";
+    private static readonly GOAL_JUDGE_TOOLS = "read,bash,bash_tasks,grep,find,ls,update_goal";
 
     /** 工人 → 正在跑的那个判官的编号（判官是 hidden 子会话，编号见 TabaChild.id；会话关掉就没了）。 */
     private readonly goalJudgeRun = new Map<string, string>();
@@ -1273,6 +1277,31 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 会话名里子会话名字最多占多长。 */
     private static readonly TABA_TAB_NAME_MAX = 28;
 
+
+    /**
+     * RuntimeHost.onBashTask：某个会话里的后台命令跑到头了（跑完 / 失败 / 被停）。
+     * 把结果当成一条新消息交回这个会话（跟子会话交回结果一个路子：按 followUp 排队，
+     * 它正在跑就不从半路插进去，跑完再作为新的一轮处理）。
+     */
+    public onBashTask(panelId: string, task: BashTaskInfo): void {
+        const rt = this.panels.get(panelId);
+        if (!rt) { return; }
+        const text = buildBashTaskDelivery({
+            no: task.no,
+            cmd: task.cmd,
+            status: task.status,
+            exitCode: task.exitCode,
+            elapsedMs: task.elapsedMs,
+            log: task.log,
+            tail: readBashLogTail(task.log, ChatControllerBase.BASH_DELIVERY_TAIL_BYTES),
+        });
+        rt.handleSend(text, undefined, { followUp: true });
+        const how = task.status === "done" ? "跑完了" : task.status === "stopped" ? "被停掉了" : "没跑成";
+        this.postToSession(panelId, { type: "system", text: `后台命令 #${task.no} ${how}，已把结果交回本会话。` });
+    }
+
+    /** 交回会话时最多带多长一段输出（字节）：再长的让模型自己去 bash_tasks 取。 */
+    protected static readonly BASH_DELIVERY_TAIL_BYTES = 4000;
 
     /** RuntimeHost.onTabaRequest：某个会话里的 pi 扩展要派子会话 / 停子会话。 */
     public onTabaRequest(panelId: string, request: TabaRequest): void {
@@ -2528,6 +2557,14 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 } else if (typeof msg.path === "string") {
                     void target.openEditLocation(msg.path, typeof msg.line === "number" ? msg.line : 1);
                 }
+                break;
+            case "bashDetach":
+                // 「正在跑的那一条」上那颗「放后台」：留一个指令文件给 pi 里的扩展，它跑命令时看着
+                if (typeof msg.toolCallId === "string") { target.detachBashTool(msg.toolCallId); }
+                break;
+            case "bashStop":
+                // 后台命令那一格里的「停」：把进程连它派出来的子树一起收掉
+                if (typeof msg.no === "number") { target.stopBashTask(msg.no); }
                 break;
             case "revertEdit":
                 if (typeof msg.toolCallId === "string") { void target.revertEdit(msg.toolCallId); }

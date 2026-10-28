@@ -1,5 +1,6 @@
 import type { PiClient } from "./piClient";
 import type { AskRequest } from "./askProtocol";
+import type { BashTaskInfo } from "./bashProtocol";
 import type { GoalCommand } from "./goal";
 import type { GoalVerdictRequest } from "./goalProtocol";
 import type { TabaRequest } from "./tabaProtocol";
@@ -43,6 +44,13 @@ export interface PiConfig {
      * 每个会话都带（子会话读图一样要挪）。空串或缺省表示图照旧整张存在会话文件里。
      */
     imageExtension?: string;
+    /**
+     * 「把 bash 换成能脱手到后台的版本」那个扩展的路径（插件写在 pichat 目录里）。
+     * 每个会话都带（子会话、判官也跑命令）。空串或缺省表示用 pi 自己的 bash（没有后台命令）。
+     */
+    bashExtension?: string;
+    /** 上面那个扩展的资源目录：后台命令的日志在它的 tasks/ 下，“放后台”的指令写在 detach/ 下。 */
+    bashDir?: string;
 }
 
 /**
@@ -163,7 +171,6 @@ export interface RuntimeHost {
      * 不开这个能力的工作区（浏览器那份）不会收到。可选。
      */
     onTabaRequest?(panelId: string, request: TabaRequest): void;
-
     /**
      * 某个会话里的 pi 扩展要问用户一个选择题（ask_choice）：弹给正在看这个会话的那块屏，
      * 用户答完把答案写成回话文件（扩展那边在轮询那个文件）。不必等它结束。可选。
@@ -171,6 +178,12 @@ export interface RuntimeHost {
     askQuestion?(request: AskRequest, sessionId?: string): void;
     /** 扩展不等这次提问了（超时/这一轮被停）：把还开着的那个浮层收掉。可选。 */
     cancelAsk?(id: string): void;
+
+    /**
+     * 某个会话里的后台命令跑到头了（跑完 / 失败 / 被停；见 bashProtocol.ts）。
+     * 宿主接着：把结果当成一条新消息交回这个会话。可选。
+     */
+    onBashTask?(panelId: string, task: BashTaskInfo): void;
 
     // ---- UI 弹窗（对应当 pi 的 extension_ui_request）----
     /** @param sessionId 这是哪个会话问的：优先弹给正在看这个会话的那块屏（没人看才找“人最近动的”）。 */

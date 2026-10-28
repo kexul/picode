@@ -364,6 +364,7 @@ export const PAGE_TRANSIENT_MESSAGE_TYPES: ReadonlySet<string> = new Set([
     "turnEnd",                   // 某个会话跑完了一轮（系统通知 + 名字旁边那颗点变绿）
     "askWaiting",                // 某个会话里模型问了一道选择题（系统通知）：这条只是提醒，错过了还有卡片可补
     "changesChanged",            // 「改动」那一格该重问一遍清单了（纯提醒，重连后会自己去取）
+    "bashTask",                  // 某条后台命令有动静（纯提醒，重连后由 /bash 重新取一份清单）
     "restartStatus",             // 「编译并重启」那颗按钮的回话：走 sendTo 定向发给点它的那块屏，后端马上要退了
     "details",                   // 点开提示框时要回来的那一批内容（思考全文 / 工具输出 / 调用参数）：
                                  // 只有正在点的那块屏用得上，一条就几十 KB，不能占补发暂存的额度

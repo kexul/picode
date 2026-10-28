@@ -23,6 +23,7 @@ import {
 } from "./webTransport";
 import { insideFolder, pathCaseKey, relativeTo } from "./pathRules";
 import type { SessionChangeInfo } from "./editTracker";
+import type { BashTaskInfo } from "./bashProtocol";
 
 /**
  * PiChatWebServer —— 独立后端的网页服务：一个地址，手机和电脑都看这一份会话。
@@ -248,6 +249,12 @@ export interface WebServerHost {
      * 认不出这个会话就给空数组。
      */
     sessionChanges(sessionId: string): SessionChangeInfo[];
+    /**
+     * 这个会话的后台命令（文件侧边栏那一格「脚本」的清单），认不出这个会话就给空数组。
+     */
+    sessionBashTasks(sessionId: string): BashTaskInfo[];
+    /** 一条后台命令的输出（界面点开那一行要看的那段）；不属于这个会话就是 undefined。 */
+    sessionBashLog(sessionId: string, no: number): string | undefined;
     /**
      * 一个文件的合计 diff（本会话第一次改之前 → 现在磁盘上的）；没改出差别返回 undefined。
      * @param relPath 相对会话目录的写法（跟 sessionChanges 里那一行一模一样）
@@ -538,6 +545,19 @@ export class PiChatWebServer {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
                 this.sendChangeDiff(req, res, url.searchParams.get("session") ?? "",
                     url.searchParams.get("path") ?? "");
+                return;
+            }
+            // 「脚本」那一格：这个会话的后台命令清单
+            if (pathname === "/bash") {
+                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                this.sendBashTasks(req, res, url.searchParams.get("session") ?? "");
+                return;
+            }
+            // 「脚本」那一格里点开一行：这条后台命令的输出（尾部一段，纯文本）
+            if (pathname === "/bash/log") {
+                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                this.sendBashLog(req, res, url.searchParams.get("session") ?? "",
+                    Number(url.searchParams.get("no") ?? "0"));
                 return;
             }
             if (pathname === "/events") {
@@ -1021,6 +1041,38 @@ export class PiChatWebServer {
             return;
         }
         this.sendJson(req, res, 200, { changes: this.host.sessionChanges(sessionId) });
+    }
+
+    /**
+     * 这个会话的「脚本」清单（`/bash?session=…`）：放到后台跑的命令、跑到哪一步了。
+     *
+     * 回一份 JSON：`{ tasks: [{ no, toolCallId, cmd, log, pid, startedAt, background, status, exitCode, elapsedMs }] }`。
+     * 数据在会话的内存里（见 SessionRuntime 的 bashTasks）：页面刷新重拿一次就是这个结果，
+     * 插件重启 / 会话关掉就没了（日志文件还在磁盘上）。
+     */
+    private sendBashTasks(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string): void {
+        if (!sessionId) { this.sendText(req, res, 400, "请求里要说明是哪个会话。"); return; }
+        if (!this.host.resolveSessionDir(sessionId)) {
+            this.sendText(req, res, 404, "这个会话不在了（页面可能开得太久），刷新页面再试。");
+            return;
+        }
+        this.sendJson(req, res, 200, { tasks: this.host.sessionBashTasks(sessionId) });
+    }
+
+    /**
+     * 一条后台命令的输出（`/bash/log?session=…&no=…`），纯文本。
+     * 只有这个会话里真有的那几条给看（对不上就是 404），不按路径去拼文件系统。
+     */
+    private sendBashLog(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string, no: number): void {
+        if (!sessionId || !no) { this.sendText(req, res, 400, "请求里要说明是哪个会话、哪条命令。"); return; }
+        const text = this.host.sessionBashLog(sessionId, no);
+        if (text === undefined) {
+            this.sendText(req, res, 404, "没有这条后台命令（可能已经跟着会话没了）。");
+            return;
+        }
+        this.writeBody(req, res, 200, Buffer.from(text, "utf8"), {
+            "Content-Type": "text/plain; charset=utf-8",
+        });
     }
 
     /**

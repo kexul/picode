@@ -6,6 +6,7 @@
  *   goal-bridge-<插件版本>.ts   目标（/goal）那个扩展：判官会话里的 update_goal（源码见 goalBridgeSource.ts）
  *   title-bridge-<插件版本>.ts  自动起标题那个扩展（源码见 titleBridgeSource.ts）
  *   image-bridge-<插件版本>.ts  会话里的截图挪出会话文件（源码见 imageOffloadBridgeSource.ts）
+ *   bash-bridge-<插件版本>.ts  把 bash 换成能「脱手到后台」的版本（源码见 bashBridgeSource.ts）
  *
  * 几套是同一个套路：文件名、源码、落盘后顺带干的活不一样，其余（内容变了才重写、
  * 清掉旧版本留下的文件、记一份结果）都一样，所以合成一处，差别放在下面的 BRIDGES 里。
@@ -20,6 +21,8 @@
  * 其中两套桥各自还要一个自己的目录（都在同一个资源目录下面）：
  *   taba-runs/<子会话编号>.json   子会话名录（启动 pi 时用 PICHAT_TABA_DIR 告诉扩展）
  *   ask-answers/<问话编号>.json   回话文件（启动 pi 时用 PICHAT_ASK_DIR 告诉扩展）
+ *   bash/tasks/<任务编号>.log     后台命令的输出（启动 pi 时用 PICHAT_BASH_DIR 告诉扩展）
+ *   bash/detach/<调用编号>        “把这条正在跑的命令切到后台”的指令（扩展跑命令时看着它）
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -28,6 +31,7 @@ import { ASK_BRIDGE_SOURCE } from "./askBridgeSource";
 import { GOAL_BRIDGE_SOURCE } from "./goalBridgeSource";
 import { TITLE_BRIDGE_SOURCE } from "./titleBridgeSource";
 import { IMAGE_BRIDGE_SOURCE } from "./imageOffloadBridgeSource";
+import { BASH_BRIDGE_SOURCE } from "./bashBridgeSource";
 import { cleanStaleRunFiles, tabaRunsDir } from "./tabaRunFiles";
 import { askAnswersDir, cleanStaleAskAnswers } from "./askProtocol";
 import { pichatDir } from "./serverPaths";
@@ -54,7 +58,7 @@ interface BridgeKind {
     afterWrite(rootDir: string): void;
 }
 
-const BRIDGES: Record<"taba" | "ask" | "goal" | "title" | "image", BridgeKind> = {
+const BRIDGES: Record<"taba" | "ask" | "goal" | "title" | "image" | "bash", BridgeKind> = {
     taba: {
         prefix: "taba-bridge",
         source: TABA_BRIDGE_SOURCE,
@@ -94,7 +98,37 @@ const BRIDGES: Record<"taba" | "ask" | "goal" | "title" | "image", BridgeKind> =
         // 图落在 ~/.pi/agent/images/<会话 id>/（扩展自己建目录），不归这儿管：别去清它，那是用户的图
         afterWrite(): void { /* 没别的活 */ },
     },
+    bash: {
+        prefix: "bash-bridge",
+        source: BASH_BRIDGE_SOURCE,
+        afterWrite(rootDir: string): void {
+            // 两个目录先建出来：后台命令的输出、以及“放后台”的指令文件都在里面
+            const base = path.join(rootDir, "bash");
+            fs.mkdirSync(path.join(base, "tasks"), { recursive: true });
+            fs.mkdirSync(path.join(base, "detach"), { recursive: true });
+            // 上次插件留下的指令：会话早就没了，留着只会让下次那条同名调用莫名转后台
+            for (const name of safeList(path.join(base, "detach"))) {
+                try { fs.rmSync(path.join(base, "detach", name), { force: true }); } catch { /* 删不掉不影响用 */ }
+            }
+            // 后台命令的日志：太老的清掉（清单只活在本会话期间，老日志没人再看了）
+            const cutoff = Date.now() - BASH_LOG_KEEP_MS;
+            for (const name of safeList(path.join(base, "tasks"))) {
+                const full = path.join(base, "tasks", name);
+                try {
+                    if (fs.statSync(full).mtimeMs < cutoff) { fs.rmSync(full, { force: true }); }
+                } catch { /* 删不掉不影响用 */ }
+            }
+        },
+    },
 };
+
+/** 后台命令的日志留多久（毫秒）：清单本来只活在本会话期间，更老的没人再看了。 */
+const BASH_LOG_KEEP_MS = 3 * 24 * 60 * 60 * 1000;
+
+/** 列目录；列不出来就当空。 */
+function safeList(dir: string): string[] {
+    try { return fs.readdirSync(dir); } catch { return []; }
+}
 
 /** 版本号里能进文件名的那些字符。 */
 function safeVersionForFile(version: string): string {
@@ -164,6 +198,11 @@ export function ensureImageAssets(version: string): BridgeAssets {
     return ensureBridge(BRIDGES.image, version);
 }
 
+/** 同上，接管 bash 那一套：每个会话都带（子会话、判官也跑命令）。 */
+export function ensureBashAssets(version: string): BridgeAssets {
+    return ensureBridge(BRIDGES.bash, version);
+}
+
 /** 拿记住的结果（还没写过就是 undefined）。 */
 export function getTabaAssets(): BridgeAssets | undefined {
     return cached.get(BRIDGES.taba);
@@ -183,4 +222,8 @@ export function getTitleAssets(): BridgeAssets | undefined {
 
 export function getImageAssets(): BridgeAssets | undefined {
     return cached.get(BRIDGES.image);
+}
+
+export function getBashAssets(): BridgeAssets | undefined {
+    return cached.get(BRIDGES.bash);
 }

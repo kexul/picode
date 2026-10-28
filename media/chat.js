@@ -2513,6 +2513,7 @@
     tag.appendChild(document.createTextNode(" " + toolName));
     // 悬浮提示显示调用与结果（见 showTagTip）；read 读图的结果也在提示框里出图。
     tag._toolName = toolName;
+    tag._toolCallId = toolCallId || "";
     tag._argStr = argStr;
     tag._resultText = interrupted ? INTERRUPTED_NOTE : "";
     tag._resultMeta = {};
@@ -2751,13 +2752,18 @@
       if (g) {
         for (const e of g.entries) {
           if (!e.done && !RUNNING_LINE_SKIP.has(e.name)) {
-            out.push({ text: e.tipCall || e.name, startedAt: e.startedAt || 0 });
+            out.push({ text: e.tipCall || e.name, startedAt: e.startedAt || 0, id: e.id || "", name: e.name || "" });
           }
         }
         continue;
       }
       if (tag._done === false && !RUNNING_LINE_SKIP.has(tag._toolName)) {
-        out.push({ text: tag._tipCall || tag._toolName || "", startedAt: tag._startedAt || 0 });
+        out.push({
+          text: tag._tipCall || tag._toolName || "",
+          startedAt: tag._startedAt || 0,
+          id: tag._toolCallId || "",
+          name: tag._toolName || "",
+        });
       }
     }
     return out;
@@ -2807,6 +2813,23 @@
     t.className = "tr-text";
     t.textContent = call.text;
     item.appendChild(t);
+    // 这条是 bash 命令：给一颗「放后台」（点了就不在这儿等它跑完，命令转到后台接着跑）。
+    // 只有 browser 页面里能点：插件里的对话面板没有文件侧边栏，看不到后台清单；
+    // 而且那边一关会话，命令的后台状态就没处看了。
+    if (call.name === "bash" && call.id && fileSidebar.root) {
+      const detach = document.createElement("button");
+      detach.type = "button";
+      detach.className = "tr-act";
+      detach.textContent = "放后台";
+      detach.title = "不在这里等它跑完：转到后台接着跑，跑完自动把结果交回本会话";
+      detach.addEventListener("click", (e) => {
+        e.stopPropagation();
+        detach.disabled = true;
+        detach.textContent = "转后台中…";
+        vscode.postMessage({ type: "bashDetach", sessionId: st.id, toolCallId: call.id });
+      });
+      item.appendChild(detach);
+    }
     // 这条跑了多久：钉在这一条末尾（字自己滚的时候它不动，见 chat.css 的 tr-time）。
     // 重放出来的老调用没有开始时刻：干脆不添那个位置（see runningCalls）
     if (call.startedAt) {
@@ -5634,6 +5657,10 @@
   const FILE_SIDEBAR_CHANGES_NAME = "改动";
   /** 这一格里一个文件都没改过时那句提示。 */
   const FILE_SIDEBAR_CHANGES_HINT = "这个会话还没改过文件。";
+  /** 「脚本」那一格：这个会话放到后台跑的命令、跑到哪一步了（标签上就写这两个字）。 */
+  const FILE_SIDEBAR_SCRIPTS_NAME = "脚本";
+  /** 这一格里一条后台命令都没有时那句提示。 */
+  const FILE_SIDEBAR_SCRIPTS_HINT = "这个会话还没有放到后台跑的命令。";
   /** 问后端「会话目录自己」用这个相对写法（列目录那条地址不认空路径，`.` 就是会话目录）。 */
   const FILE_SIDEBAR_PROJECT_PATH = ".";
   /** 这一列那一摊：容器、里面那几块、开着哪几个文件。 */
@@ -5758,6 +5785,7 @@
   /** 一格标签悬停提示上的全路径：目录那一格是它现在待的那一层。 */
   function fileSidebarTabFullPath(tab) {
     if (tab.change) { return FILE_SIDEBAR_CHANGES_NAME; }
+    if (tab.scripts) { return FILE_SIDEBAR_SCRIPTS_NAME; }
     return tab.proj ? fileSidebarProjectFullPath(tab) : tab.path;
   }
 
@@ -5805,6 +5833,21 @@
   }
 
   /**
+   * 「脚本」那一格：这个会话放到后台跑的命令（后端给的清单）、哪几行展开着、取回来的输出。
+   * 跟「改动」一样不按 path 取内容，所以 path 留空；每回摆上这一格都重问一遍清单（见 showFileTab）。
+   */
+  function fileSidebarNewScriptsTab() {
+    return {
+      path: "", proj: false, scripts: true, line: 0, scrollTop: 0, mtime: "", loading: false, imageUrl: "",
+      page: null,
+      drawn: false,
+      scripts: [],      // 后端给的清单：{ no, cmd, log, pid, startedAt, status, exitCode, elapsedMs, ... }
+      open: new Set(),  // 展开了哪几条（任务编号）
+      logs: new Map(),  // 取回来的输出（任务编号 → 文字）
+    };
+  }
+
+  /**
    * 把「目录」那一格摆到标签条最前面（只摆、不取内容）：这一列里没有它的时候摆。
    * 会话目录还不认识（会话列表还没到）就先不摆，等它到了再来（见 setFileSidebarOpen 与 sessionList 那段）。
    * @returns 摆了没有
@@ -5823,6 +5866,12 @@
     return -1;
   }
 
+  /** 「脚本」那一格在标签条上的位置（没有就是 -1）。 */
+  function fileSidebarScriptsIndex() {
+    for (let i = 0; i < fileSidebar.tabs.length; i++) { if (fileSidebar.tabs[i].scripts) { return i; } }
+    return -1;
+  }
+
   /**
    * 把「改动」那一格摆上（只摆、不取内容）：它是常驻的一格，固定在「目录」后面、
    * 排在所有文件标签前面。会话目录还不认识就不摆（跟「目录」同一个条件）。
@@ -5838,6 +5887,21 @@
   }
 
   /**
+   * 把「脚本」那一格摆上（只摆、不取内容）：它也是常驻的一格，排在「改动」后面。
+   * 会话目录还不认识就不摆（跟「目录」「改动」同一个条件）。
+   * @returns 摆了没有
+   */
+  function addScriptsTab() {
+    if (!fileSidebar.root || fileSidebarScriptsIndex() >= 0) { return false; }
+    if (!activeSessionCwd()) { return false; }
+    const changesAt = fileSidebarChangesIndex();
+    const at = changesAt >= 0 ? changesAt + 1 : (fileSidebarProjectIndex() >= 0 ? fileSidebarProjectIndex() + 1 : 0);
+    fileSidebar.tabs.splice(at, 0, fileSidebarNewScriptsTab());
+    if (fileSidebar.active >= at) { fileSidebar.active++; }   // 挪下标：正看着的那一格不变
+    return true;
+  }
+
+  /**
    * 这一列开着又空着（一个标签都没有）的时候，摆上「目录」那一格并显示它：
    * 刚打开、切会话、刷新页面走的都是这里；会话目录还没认识就留一句提示。
    */
@@ -5845,6 +5909,7 @@
     if (!fileSidebar.root || !fileSidebar.open || fileSidebar.active >= 0) { return; }
     if (addProjectDirTab()) {
       addChangesTab();   // 「改动」那一格跟着一起来（固定排在「目录」后面）
+      addScriptsTab();   // 「脚本」那一格跟在「改动」后面
       showFileTab(0, 0);
       return;
     }
@@ -5926,15 +5991,17 @@
       el.setAttribute("data-path", tab.path);
       if (tab.proj) { el.setAttribute("data-proj", "1"); }
       if (tab.change) { el.setAttribute("data-changes", "1"); }
+      if (tab.scripts) { el.setAttribute("data-scripts", "1"); }
       el.title = fileSidebarTabFullPath(tab);   // 目录那一格悬停给现在这一层的全路径
       const name = document.createElement("span");
       name.className = "file-tab-name";
       name.textContent = tab.proj ? FILE_SIDEBAR_PROJECT_NAME
-        : tab.change ? FILE_SIDEBAR_CHANGES_NAME : fileSidebarTabName(tab.path);
+        : tab.change ? FILE_SIDEBAR_CHANGES_NAME
+          : tab.scripts ? FILE_SIDEBAR_SCRIPTS_NAME : fileSidebarTabName(tab.path);
       el.appendChild(name);
-      // 「目录」与「改动」这两格没有那颗叉：它们是常驻的两格，不让人关掉
+      // 「目录」「改动」「脚本」这三格没有那颗叉：它们是常驻的，不让人关掉
       //（切会话 / 刷新页面时换成当前会话的）
-      if (!tab.proj && !tab.change) {
+      if (!tab.proj && !tab.change && !tab.scripts) {
         const close = document.createElement("button");
         close.type = "button";
         close.className = "file-tab-close";
@@ -5969,6 +6036,10 @@
     // 「改动」那一格不取文件内容：先摆上手上这一份，再问一遍清单（没画过就等取回来再画）
     if (tab.change) {
       if (tab.drawn) { fetchChanges(tab); } else { showFileNote("正在读取…"); fetchChanges(tab); }
+      return;
+    }
+    if (tab.scripts) {
+      if (tab.drawn) { fetchScripts(tab); } else { showFileNote("正在读取…"); fetchScripts(tab); }
       return;
     }
     // 这一格以前画过：那一块还在，直接摆上（不必再去后端取；最多旧一个刷新节拍，
@@ -6707,6 +6778,252 @@
     fetchChanges(tab);
   }
 
+  // ==================== 「脚本」那一格：放到后台跑的命令 ====================
+  // 这个会话里被放到后台的命令都在这一格：一行一条（编号、跑到哪一步、用时、命令），
+  // 点一行看它最后一段输出；还在跑的那条右边有一颗「停」。
+  // 数据在后端会话的内存里（见 src/sessionRuntime.ts 的 bashTasks）：刷新页面重问一次就有，
+  // 插件重启 / 会话关掉就没了（日志文件还在磁盘上）。
+  // 怎么让一条正在跑的命令转到后台：消息流里「正在跑的那一条」上那颗「放后台」。
+
+  /** 问清单的地址：这个会话有哪些放到后台跑的命令。 */
+  function scriptsUrl() {
+    return "/bash?session=" + encodeURIComponent(activeId || "");
+  }
+
+  /** 问一条后台命令输出的地址（展开那一行时才取）。 */
+  function scriptLogUrl(no) {
+    return "/bash/log?session=" + encodeURIComponent(activeId || "") + "&no=" + encodeURIComponent(String(no));
+  }
+
+  /** 去后端要一份清单画上（跟「改动」一个做法：手上那份先留着，回来的顶掉它）。 */
+  function fetchScripts(tab) {
+    const token = ++fileSidebar.token;
+    tab.loading = true;
+    fetch(scriptsUrl()).then(async (resp) => {
+      if (token !== fileSidebar.token) { return; }   // 换了标签 / 切了会话 / 收起：这条回应丢掉
+      tab.loading = false;
+      if (resp.status !== 200) {
+        if (!tab.drawn) { showFileNote(await readDeadResponse(resp)); }
+        return;
+      }
+      const data = await resp.json().catch(() => null);
+      if (token !== fileSidebar.token) { return; }
+      const list = data && Array.isArray(data.tasks) ? data.tasks : [];
+      // 已经不在这份清单里的：攒着的输出与「展开着」都清掉
+      const alive = new Set(list.map((it) => String((it && it.no) || "")));
+      Array.from(tab.logs.keys()).forEach((k) => { if (!alive.has(String(k))) { tab.logs.delete(k); } });
+      Array.from(tab.open).forEach((k) => { if (!alive.has(String(k))) { tab.open.delete(k); } });
+      tab.scripts = list;
+      drawScripts(tab);
+    }).catch(() => {
+      tab.loading = false;
+      if (token !== fileSidebar.token) { return; }
+      if (!tab.drawn) { showFileNote("读不出来：连不上后端。"); }
+    });
+  }
+
+  /** 把清单画到这一格里：一行一条命令。展开着的那几行、读到哪儿都照原样留着。 */
+  function drawScripts(tab) {
+    const page = fileTabPage(tab);
+    if (!page || !fileSidebar.body) { return; }
+    const showing = fileSidebar.tabs[fileSidebar.active] === tab;
+    const top = showing ? fileSidebar.body.scrollTop : tab.scrollTop;
+    page.innerHTML = "";
+    if (tab.scripts.length === 0) {
+      const note = document.createElement("div");
+      note.className = "file-note";
+      note.textContent = FILE_SIDEBAR_SCRIPTS_HINT;
+      page.appendChild(note);
+      tab.drawn = true;
+      tab.scrollTop = 0;
+      if (showing) { fileSidebar.body.scrollTop = 0; }
+      return;
+    }
+    tab.scripts.forEach((task) => { if (task) { page.appendChild(scriptRow(tab, task)); } });
+    tab.drawn = true;
+    tab.scrollTop = top;
+    if (showing) { fileSidebar.body.scrollTop = top; }
+    syncScriptsClock(tab);
+  }
+
+  /** 「脚本」那一格那个计时：有还在跑的命令时，每半秒把那一行的用时改一下（不重画清单）。 */
+  let scriptsClock = 0;
+  function syncScriptsClock(tab) {
+    const hasRunning = !!tab && tab.scripts.some((t) => t && t.status === "running");
+    if (!hasRunning) { stopScriptsClock(); return; }
+    if (scriptsClock) { return; }
+    scriptsClock = setInterval(() => {
+      const at = fileSidebarScriptsIndex();
+      const cur = at >= 0 ? fileSidebar.tabs[at] : null;
+      const page = cur ? fileTabPage(cur) : null;
+      // 切走了 / 这一格没了：表停掉（切回来时 drawScripts 会重开）
+      if (!page || fileSidebar.tabs[fileSidebar.active] !== cur) { stopScriptsClock(); return; }
+      for (const el of page.querySelectorAll(".script-item")) {
+        const no = el.getAttribute("data-no");
+        const task = cur.scripts.find((x) => x && String(x.no) === no);
+        if (!task || task.status !== "running") { continue; }
+        const time = el.querySelector(".script-time");
+        const since = Number(task.startedAt) || 0;
+        if (time && since) { time.textContent = formatElapsed(Date.now() - since); }
+      }
+    }, 500);
+  }
+  function stopScriptsClock() {
+    if (!scriptsClock) { return; }
+    clearInterval(scriptsClock);
+    scriptsClock = 0;
+  }
+
+  /** 一条后台命令跑到哪一步了（界面上的说法）。 */
+  function scriptStatusText(task) {
+    if (task.status === "running") { return "在跑"; }
+    if (task.status === "stopped") { return "已停掉"; }
+    if (task.status === "failed") {
+      return task.exitCode === null || task.exitCode === undefined ? "没跑成" : "没跑成（退出码 " + task.exitCode + "）";
+    }
+    return "跑完了";
+  }
+
+  /**
+   * 清单里的一行：#编号 + 跑到哪一步 + 用时（还在跑的写「已经跑了多少」），
+   * 下面一行是命令（一行放不下时悬停看全），点一下展开这条命令的最后一段输出。
+   */
+  function scriptRow(tab, task) {
+    const key = String(task.no);
+    const open = tab.open.has(key);
+    const running = task.status === "running";
+    const block = document.createElement("div");
+    block.className = "script-item" + (open ? " open" : "");
+    block.setAttribute("data-no", key);
+    const head = document.createElement("div");
+    head.className = "script-head";
+    const arrow = document.createElement("span");
+    arrow.className = "change-arrow";
+    head.appendChild(arrow);
+    const no = document.createElement("span");
+    no.className = "script-no";
+    no.textContent = "#" + task.no;
+    head.appendChild(no);
+    const state = document.createElement("span");
+    state.className = "script-state" + (running ? " running" : task.status === "failed" ? " failed" : "");
+    state.textContent = scriptStatusText(task);
+    head.appendChild(state);
+    const time = document.createElement("span");
+    time.className = "script-time";
+    const since = Number(task.startedAt) || 0;
+    const used = running ? Date.now() - since : (Number(task.elapsedMs) || (since ? Date.now() - since : 0));
+    time.textContent = used > 0 ? formatElapsed(used) : "";
+    head.appendChild(time);
+    if (running) {
+      const stop = document.createElement("button");
+      stop.type = "button";
+      stop.className = "script-stop";
+      stop.textContent = "停";
+      stop.title = "把这条命令连它派出来的进程一起停掉";
+      stop.addEventListener("click", (e) => {
+        e.stopPropagation();   // 别顺带把这一行展开 / 收起
+        stop.disabled = true;  // 等后端推送回来再按真实状态画
+        vscode.postMessage({ type: "bashStop", sessionId: activeId, no: task.no });
+      });
+      head.appendChild(stop);
+    }
+    head.addEventListener("click", () => toggleScriptRow(tab, key));
+    block.appendChild(head);
+    const cmd = document.createElement("div");
+    cmd.className = "script-cmd";
+    cmd.textContent = task.cmd || "";
+    cmd.title = task.cmd || "";
+    block.appendChild(cmd);
+    const body = document.createElement("div");
+    body.className = "script-body";
+    body.hidden = !open;
+    block.appendChild(body);
+    if (open) { fillScriptLog(tab, key, body); }
+    return block;
+  }
+
+  /** 点一行：展开 / 收起这条命令的输出（展开的那一下才去后端取，取过就攒着）。 */
+  function toggleScriptRow(tab, key) {
+    const open = !tab.open.has(key);
+    if (open) { tab.open.add(key); } else { tab.open.delete(key); }
+    const page = fileTabPage(tab);
+    if (!page) { return; }
+    for (const el of page.children) {
+      if (el.getAttribute("data-no") !== key) { continue; }
+      el.classList.toggle("open", open);
+      const body = el.querySelector(".script-body");
+      if (body) { body.hidden = !open; }
+      if (open) { fillScriptLog(tab, key, body); }
+      return;
+    }
+  }
+
+  /** 把这条命令的输出填进去：取过就用攒着的，没取过就问后端（一条只问一次）。 */
+  function fillScriptLog(tab, key, body) {
+    if (!body) { return; }
+    if (body.getAttribute("data-filled") === "1" || body.getAttribute("data-filled") === "loading") { return; }
+    const cached = tab.logs.get(key);
+    if (cached !== undefined) {
+      body.innerHTML = "";
+      const pre = document.createElement("pre");
+      pre.className = "script-log";
+      pre.textContent = cached || "（还没有输出）";
+      body.appendChild(pre);
+      body.setAttribute("data-filled", "1");
+      return;
+    }
+    body.setAttribute("data-filled", "loading");
+    body.innerHTML = "";
+    const note = document.createElement("div");
+    note.className = "file-note";
+    note.textContent = "正在读取…";
+    body.appendChild(note);
+    fetch(scriptLogUrl(key)).then(async (resp) => {
+      if (fileSidebar.tabs.indexOf(tab) < 0) { return; }   // 切了会话、这一格没了：丢掉
+      const text = await readDeadResponse(resp);
+      body.innerHTML = "";
+      body.setAttribute("data-filled", "1");
+      if (resp.status !== 200) {
+        const bad = document.createElement("div");
+        bad.className = "file-note";
+        bad.textContent = text;
+        body.appendChild(bad);
+        return;
+      }
+      tab.logs.set(key, text);
+      const pre = document.createElement("pre");
+      pre.className = "script-log";
+      pre.textContent = text || "（还没有输出）";
+      body.appendChild(pre);
+    }).catch(() => {
+      body.innerHTML = "";
+      body.removeAttribute("data-filled");   // 没连上：下次展开再试
+      const bad = document.createElement("div");
+      bad.className = "file-note";
+      bad.textContent = "读不出来：连不上后端。";
+      body.appendChild(bad);
+    });
+  }
+
+  /**
+   * 后端说某条后台命令有动静了（转到后台 / 跑完 / 被停）：更新清单里那一条。
+   * 正看着「脚本」那一格才重画；没看着的话摆上时会自己重问一遍。
+   */
+  function applyBashTask(task) {
+    if (!task) { return; }
+    const at = fileSidebarScriptsIndex();
+    const tab = at >= 0 ? fileSidebar.tabs[at] : null;
+    if (!tab) { return; }
+    const list = tab.scripts.slice();
+    const i = list.findIndex((it) => it && Number(it.no) === Number(task.no));
+    if (i >= 0) { list[i] = task; } else { list.unshift(task); }
+    list.sort((a, b) => (Number(b && b.no) || 0) - (Number(a && a.no) || 0));
+    tab.scripts = list;
+    // 跑完的那一条：攒着的输出作废（下次展开重新取，看得到结尾那几行）
+    if (task.status !== "running") { tab.logs.delete(String(task.no)); }
+    if (fileSidebar.tabs[fileSidebar.active] === tab) { drawScripts(tab); }
+  }
+
   /**
    * 跟着刷新：问一次现在看着的这个文件变了没。
    *
@@ -6723,6 +7040,7 @@
     if (!tab || !body || tab.loading) { return; }   // 还没开文件 / 还在取：这一轮先不问
     if (tab.proj) { return; }   // 目录不跟着刷新：清单不是「正看着的那个文件」，点一下才重新列
     if (tab.change) { return; }   // 「改动」那一格也不跟着刷新：模板变了由 changesChanged 叫它（见那条消息）
+    if (tab.scripts) { return; }   // 「脚本」那一格同样不跟着刷新：后台命令有动静由 bashTask 叫它
     if (isHtmlPath(tab.path)) { pollHtmlFile(tab, at); return; }   // 网页：只问修改时间，改过才重载
     const token = fileSidebar.token;
     filePolling = true;
@@ -6920,6 +7238,7 @@
       // 「目录」与「改动」这两格是常驻的：摆回来的一份里没有就补上
       addProjectDirTab();
       addChangesTab();
+      addScriptsTab();
       showFileTab(Math.min(Math.max(back.active, 0), fileSidebar.tabs.length - 1), 0);
       return;
     }
@@ -9008,6 +9327,11 @@
       case "changesChanged": {
         // 本会话的改动清单变了（改完一个文件 / 刚回滚）：文件侧边栏那一格「改动」重问一遍
         if (t.id === activeId) { refreshChangesTab(); }
+        break;
+      }
+      case "bashTask": {
+        // 某条后台命令有动静（转到后台 / 跑完 / 被停）：文件侧边栏那一格「脚本」跟着更新
+        if (t.id === activeId) { applyBashTask(msg.task); }
         break;
       }
       case "system":

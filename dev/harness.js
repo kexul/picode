@@ -119,7 +119,7 @@ function createHarness(options = {}) {
     const { ChatViewProvider } = require(OUT_ENTRY);
     const { startBackend } = require(OUT_SERVER);
     const { updateServerConfig } = require(OUT_CONFIG);
-    const { ensureTabaAssets, ensureAskAssets, ensureGoalAssets, ensureImageAssets } = require(OUT_BRIDGES);
+    const { ensureTabaAssets, ensureAskAssets, ensureGoalAssets, ensureImageAssets, ensureBashAssets } = require(OUT_BRIDGES);
     const version = packageVersion();
 
     // 调试用的设置写进后端那份 config.json：模型 / pi 路径这些跟真后端一样从文件读，
@@ -154,6 +154,8 @@ function createHarness(options = {}) {
     ensureGoalAssets(version);
     // 会话里的截图挪出会话文件那个扩展：同理（每个会话都加载它）
     ensureImageAssets(version);
+    // 接管 bash（后台命令、放后台）：同理（每个会话都加载它）
+    ensureBashAssets(version);
 
     const context = {
         subscriptions: [],

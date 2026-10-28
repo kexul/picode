@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import { PiClient } from "./piClient";
 import { ASK_DECODER, AskDoneNotice, AskRequest } from "./askProtocol";
+import { BASH_DECODER, BashTaskEvent, BashTaskInfo, readBashLogTail } from "./bashProtocol";
 import { parseGoalCommand } from "./goal";
 import { StderrFrameSplitter } from "./piFrames";
 import { TABA_DECODER, TabaRequest } from "./tabaProtocol";
@@ -166,6 +167,22 @@ function estTokens(text: string): number {
     return cjk + (text.length - cjk) / 4;
 }
 
+/** 杀掉整棵进程树（界面上点「停」时用）。后台命令的进程是脱离出去的，按 pid 树收。 */
+function killTaskTree(pid: number): void {
+    if (!pid) { return; }
+    if (process.platform === "win32") {
+        try {
+            require("node:child_process").spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true });
+        } catch { /* 进程可能已经没了 */ }
+        return;
+    }
+    try {
+        process.kill(-pid, "SIGKILL");
+    } catch {
+        try { process.kill(pid, "SIGKILL"); } catch { /* 同上 */ }
+    }
+}
+
 /**
  * 一个会话的全部运行时状态：独立的 pi 进程 + 独立的会话/编辑追踪。
  * 多个 SessionRuntime 各自持有自己的 PiClient，因此可以真正并行流式生成。
@@ -228,9 +245,12 @@ export class SessionRuntime {
     private client?: PiClient;
     /** 本 panel 启动 pi 时的额外要求（子会话才有）；进程重启时照原样再用一次。 */
     private launch?: PanelLaunch;
-    /** 从本进程 stderr 里挑暗号行的切割器（派子会话、问话、目标验收三种暗号都走它）。 */
-    private readonly piFrames = new StderrFrameSplitter([TABA_DECODER, ASK_DECODER, GOAL_DECODER]);
+    /** 从本进程 stderr 里挑暗号行的切割器（派子会话、问话、目标验收、后台命令四种暗号都走它）。 */
+    private readonly piFrames = new StderrFrameSplitter([TABA_DECODER, ASK_DECODER, GOAL_DECODER, BASH_DECODER]);
     private readonly edits: EditTracker;
+    /** 这个会话的后台命令（任务编号 → 情况）：界面那一格清单、以及「停」要用它。
+     *  跟着会话活：会话关掉就没了（日志文件还在磁盘上，但没人再看了）。 */
+    private readonly bashTasks = new Map<number, BashTaskInfo>();
     // ---- 网页端「只发最近一段历史」的窗口（宿主 wantsTrimmedHistory 为 true 时启用）----
     /** 当前窗口在完整消息数组里的起点下标；-1 表示没开窗口（全量发过 / 非网页端）。 */
     private historyWindowStart = -1;
@@ -387,6 +407,8 @@ export class SessionRuntime {
         if (titleExtension) { extraArgs.push("-e", titleExtension); }
         // “会话里的截图挪出会话文件”：每个会话都带（子会话读图一样要挪）
         if (cfg.imageExtension) { extraArgs.push("-e", cfg.imageExtension); }
+        // “后台命令”：接管 bash，每个会话都带（子会话、判官也要能跑命令）
+        if (cfg.bashExtension) { extraArgs.push("-e", cfg.bashExtension); }
         if (this.launch?.extraArgs && this.launch.extraArgs.length > 0) {
             extraArgs.push(...this.launch.extraArgs);
         }
@@ -398,10 +420,11 @@ export class SessionRuntime {
                 provider: want?.provider || cfg.provider || undefined,
                 model: want?.modelId || cfg.model || undefined,
                 extraArgs,
-                // 两个扩展各靠一个环境变量找自己的资源目录（taba：子会话名录；ask：回话文件）
+                // 几个扩展各靠一个环境变量找自己的资源目录（taba：子会话名录；ask：回话文件；bash：后台命令的日志与指令）
                 env: {
                     ...(cfg.tabaDir ? { PICHAT_TABA_DIR: cfg.tabaDir } : {}),
                     ...(cfg.askDir ? { PICHAT_ASK_DIR: cfg.askDir } : {}),
+                    ...(cfg.bashDir ? { PICHAT_BASH_DIR: cfg.bashDir } : {}),
                 },
             })
         );
@@ -436,6 +459,11 @@ export class SessionRuntime {
                     const verdict = frame.value as GoalVerdictRequest;
                     console.error(`[目标验收] 判官报了结论：${verdict.pass ? "通过" : "没过"}（${verdict.summary}）`);
                     this.host.onGoalVerdict?.(this.id, verdict);
+                    continue;
+                }
+                if (frame.kind === "bash") {
+                    // 后台命令的开始 / 结束：记进这一会话的清单、推给界面；跑完的交给宿主去补一条消息
+                    this.noteBashTask(frame.value as BashTaskEvent);
                     continue;
                 }
                 if (frame.kind === "ask") {
@@ -507,6 +535,82 @@ export class SessionRuntime {
     /** 会话被换掉：旧标题作废。 */
     private noteSessionReplaced(): void {
         this.piSessionTitle = "";
+        // 后台命令清单也跟着会话走：换会话 / 换进程以后旧的那些都不认了
+        this.bashTasks.clear();
+    }
+
+    // ---- 后台命令（那个接管了 bash 的扩展报上来的）----
+
+    /** 这个会话的后台命令清单（新的排前面）：界面那一格「脚本」用它、刷新后重画也用它。 */
+    public listBashTasks(): BashTaskInfo[] {
+        return Array.from(this.bashTasks.values()).sort((a, b) => b.no - a.no);
+    }
+
+    /** 扩展报来一条后台命令的开始 / 结束（见 bashProtocol.ts）。 */
+    private noteBashTask(ev: BashTaskEvent): void {
+        const prev = this.bashTasks.get(ev.no);
+        // 界面上点过「停」的那条：扩展那边也会看到进程退出，别把它改写成「失败」
+        const stopped = prev?.status === "stopped";
+        const status: BashTaskInfo["status"] = ev.kind === "start"
+            ? "running"
+            : (stopped ? "stopped" : (ev.exitCode === 0 ? "done" : "failed"));
+        const info: BashTaskInfo = {
+            no: ev.no,
+            toolCallId: ev.toolCallId,
+            cmd: ev.cmd,
+            log: ev.log,
+            pid: ev.pid ?? prev?.pid ?? 0,
+            startedAt: ev.startedAt ?? prev?.startedAt ?? Date.now(),
+            background: ev.background,
+            status,
+            exitCode: ev.exitCode,
+            elapsedMs: ev.elapsedMs,
+        };
+        this.bashTasks.set(ev.no, info);
+        console.error(`[后台命令] #${ev.no} ${ev.kind === "start" ? "转到后台" : status === "done" ? "跑完" : "结束（" + status + "）"}：${ev.cmd.slice(0, 80)}`);
+        this.post({ type: "bashTask", task: info });
+        if (ev.kind === "end") { this.host.onBashTask?.(this.id, info); }
+    }
+
+    /**
+     * 界面点「放后台」：给 pi 里那个扩展留一个指令文件，它跑这条命令的时候看着这个目录
+     * （见 bashBridgeSource.ts）。会话没了 / 没开这个能力就返回 false。
+     */
+    public detachBashTool(toolCallId: string): boolean {
+        if (!toolCallId) { return false; }
+        const base = this.host.getConfig().bashDir ?? "";
+        if (!base) { return false; }
+        // 文件名跟扩展那边一致：编号里可能带斜杠（嵌套调用是 <父>/<序号>）
+        const name = toolCallId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 120);
+        const dir = `${base}/detach`;
+        try {
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(`${dir}/${name}`, "");
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /** 界面点开一条后台命令时要看的那段输出（日志尾部）；不属于这个会话就是 undefined。 */
+    public bashTaskLog(no: number): string | undefined {
+        const task = this.bashTasks.get(no);
+        if (!task) { return undefined; }
+        return readBashLogTail(task.log, SessionRuntime.BASH_LOG_VIEW_BYTES);
+    }
+
+    /** 界面上一次最多给多少输出（字节）：再多让模型/人自己去读文件。 */
+    private static readonly BASH_LOG_VIEW_BYTES = 64 * 1024;
+
+    /** 界面点「停」：把这条后台命令连它派出来的进程一起杀掉。停的了返回 true。 */
+    public stopBashTask(no: number): boolean {
+        const task = this.bashTasks.get(no);
+        if (!task || task.status !== "running" || !task.pid) { return false; }
+        killTaskTree(task.pid);
+        const next: BashTaskInfo = { ...task, status: "stopped" };
+        this.bashTasks.set(no, next);
+        this.post({ type: "bashTask", task: next });
+        return true;
     }
 
     /**

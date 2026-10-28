@@ -18,7 +18,7 @@ import { ChatHost } from "./chatHost";
 import { readServerConfig, updateServerConfig } from "./serverConfig";
 import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
 import { startRestart } from "./serverRestart";
-import { ensureAskAssets, ensureGoalAssets, ensureImageAssets, ensureTabaAssets, ensureTitleAssets } from "./bridgeAssets";
+import { ensureAskAssets, ensureGoalAssets, ensureImageAssets, ensureTabaAssets, ensureTitleAssets, ensureBashAssets } from "./bridgeAssets";
 import { serverConfigFile } from "./serverPaths";
 
 /** 安装根目录（out/server → 根）。 */
@@ -183,6 +183,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     const imageAssets = ensureImageAssets(VERSION);
     if (!imageAssets.ok) {
         log(`截图挪出会话文件没开（文件没写成：${imageAssets.error}）`);
+    }
+
+    // 接管 bash（后台命令、把正在跑的命令切后台）：同样先写好（每个会话都加载）
+    const bashAssets = ensureBashAssets(VERSION);
+    if (!bashAssets.ok) {
+        log(`后台命令没开（文件没写成：${bashAssets.error}）`);
     }
 
     let started: StartedBackend;
