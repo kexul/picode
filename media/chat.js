@@ -4585,7 +4585,10 @@
   messagesEl.addEventListener("pointermove", (e) => {
     const s = swipe;
     if (!s || s.finger !== "mouse" || e.pointerId !== s.pointerId) { return; }
-    swipeMove(e.clientX, e.clientY);
+    // 鼠标拖着越过文字时，浏览器会顺手把这一段选中。以前是划的时候给 #messages 盖上
+    // user-select: none 挡住的，可那一下要重算整棵消息树的样式，正好卡在手指刚动的那一帧
+    // （见 chat.css 那段）：改成每帧自己抹掉，看得见的只剩“在切会话”这件事。
+    if (swipeMove(e.clientX, e.clientY)) { dropSelection(); }
   });
 
   messagesEl.addEventListener("pointerup", (e) => {

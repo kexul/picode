@@ -166,7 +166,7 @@ async function openPage(options) {
     await cdp.send("Emulation.setDeviceMetricsOverride", {
         width: options.width || 420,
         height: options.height || 900,
-        deviceScaleFactor: 1,
+        deviceScaleFactor: options.dsf || 1,
         mobile: false,
     });
     await cdp.send("Page.navigate", { url: options.url });

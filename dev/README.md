@@ -288,6 +288,8 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 - **截图默认把滚动条藏掉**（`--hide-scrollbars`）：图干净，但滚动条也就占不了宽度，
   跟浏览器里看到的会差一行半行。要照真样子看就加 `--scrollbars`，或者用 `node dev/inputProbe.js`
   （它默认就用真滚动条，还会把输入框的高度与滚动状态打印出来）。
+- **设备像素比默认是 1**（`openPage({ dsf })`）：手机一般是 2～3，影响重画文字与挪图层要多少力，
+  量卡不卡的时候别在 1 上量。
 - **需要 Node 22 以上**（用到内置的 WebSocket 跟浏览器说话），浏览器用本机的 Chrome 或 Edge。
 - **验不到的东西**：diff 编辑器、符号跳转、剪贴板、命令面板入口、状态栏、
   插件里那块对话面板的网页视图本身 —— 这些还是得用 VSCodium / VS Code 的 F5 开发宿主看。
@@ -349,6 +351,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `newSessionRedraw.js` | 验开新会话时常驻那一列的重画范围（整块一次都不该重画、下半展开的组不许坍、新会话那一行加进上半、重画过后点上下的行都还准）：`FAKEPI_TICK_MS=60 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/newSessionRedraw.js` |
 | `switchPerf.js` | 量「在会话之间切换」多少毫秒（造一个装满消息的会话，跟空会话来回切）：真按快捷键走完后端一圈的耗时 / 只塞一条 `sessionActivated` 只剩挂壳的耗时，细分到排版、算样式、长任务：`node dev/switchPerf.js --pairs 1000 --rounds 3` |
 | `sidebarPerf.js` | 量那颗 `<<<` 打开一次多少毫秒、滑入动画有没有被顶住（长任务 / 逐帧间隔）：`npm run web:shot -- --script dev/sidebarPerf.js` |
+| `swipePerf.js` | 量「手机上左右划切会话」卡不卡：两个会话各塞一屋子消息，按下 / 跟手 / 松手三段分开报（帧间隔中位与最长、长任务、排版与算样式各花多少），还能看设备像素比、`--cold`（要进来的那个壳没预排版）、`--extra`（多开几个会话）、`--profile`（剖松手那一段）：`node dev/swipePerf.js --pairs 1200 --rounds 2 --cold --dsf 3 --profile` |
 | `fileSidebar.js` | 验浏览器页面左边那一列「文件侧边栏」（点消息里的文件链接之后：行号与停在那一行、标签页、跟着刷新、图片直接看、二进制与超大给下载、目录、光名字（会话碰过的文件里按名字找）、工具卡片那颗「跳转」也开在这里、看不了的几种情形、认得的几种语言带颜色（别的黑白、太大的不上色也不卡页面）、markdown 文件排好版渲染成文档（不留行号，别的文件照旧带行号）、这一列角上那颗折行开关（选过记在这台设备里），以及那条只读文件地址本身的拒绝情形）：`npm run web:shot -- --fake-pi --script dev/fileSidebar.js` |
 | `changesTab.js` | 验文件侧边栏那一格「改动」（这个会话改过哪些文件，一个地方全看）：常驻在「项目目录」后面且没有那颗叉、没改过文件时一句提示、假模型真改完一个文件之后那一行长出来（相对写法 + `+1` `−1`、没展开时看不到 diff）、点开这一行看到那条删除与新增、刷新页面清单还在（数据在后端会话的内存里，不跟着页面走）、磁盘上把文件删掉后那一行标「已删除」且展开整份都是删掉的、点「回滚」先问一句再把这个文件整份写回去、清单空了回到那句提示：`npm run web:shot -- --fake-pi --script dev/changesTab.js` |
 | `htmlPreview.js` | 验文件侧边栏里把 html 当网页打开（点 `.html` 链接摆出的是渲染好的页面，不是源码：页面里的相对样式与脚本真生效、链接里带的行号等于没带、文件改过这一列自己重载那张网页；以及 `/site/` 那条地址的规矩：HEAD 只给头与修改时间、没这个文件 404、会话目录外的 403）：`npm run web:shot -- --fake-pi --script dev/htmlPreview.js` |

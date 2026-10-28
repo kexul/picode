@@ -31,9 +31,13 @@
   #chatColumn { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
   #messages { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
   /* 左右划切会话时（见 chat.js 的“左右划”那段）：两个壳一左一右摆着，越出去那半屏
-     得在这儿裁掉，不然整页多出一条横向滚动条；顺便不让鼠标拖的时候糊上一片选中。
-     划完就摘掉（平时别裁：提示框这些会伸到外面）。 */
-  #messages.swiping { overflow: hidden; user-select: none; -webkit-user-select: none; }
+     得在这儿裁掉，不然整页多出一条横向滚动条。划完就摘掉（平时别裁：提示框这些会伸到外面）。
+
+     只改 overflow，别在这儿加 user-select: none。那个是会往下继承的属性，一加上浏览器就得
+     给整棵消息树重算一遍样式，而这一帧正是手指刚开始动的那一帧：量过 1.4 万个元素的会话
+     要 20—40 毫秒（见 dev/swipePerf.js），会话越大越久 —— 表现出来就是“起手顿一下、之后才跟手”。
+     鼠标拖的时候怕糊上选中，那是 chat.js 在拖的过程中自己抹掉的（dropSelection）。 */
+  #messages.swiping { overflow: hidden; }
   /* 一个会话一层壳：里面就一块消息窗格（.session-pane），它自己滚。
      绝对定位铺满 #messages：同时有好几个壳挂着（只一个露在外面，见下面 .off 那段）。
      为什么不用“摆进列的流里”（flex 子项）：那样子壳“停着”（见下）与“露出来”两种状态的
