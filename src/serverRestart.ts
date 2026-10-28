@@ -14,6 +14,7 @@ import * as cp from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { pichatDir } from "./serverPaths";
+import { isPackaged, launcherPath } from "./appAssets";
 
 /** 仓库根目录（这个文件编译后在 out/server 里）。 */
 const ROOT_DIR = path.join(__dirname, "..", "..");
@@ -46,6 +47,19 @@ export function restartLogFile(): string {
  */
 export function describeRestart(): RestartAvailability {
     const logFile = restartLogFile();
+    if (isPackaged()) {
+        // 单文件 exe：没有 __dirname 那套源码树，只能指望 exe 就放在仓库的 dist 里
+        const repoDir = repoNextToExe();
+        if (!repoDir) {
+            return {
+                ok: false,
+                logFile,
+                reason: "这个 exe 不在仓库的 dist 文件夹里，旁边没有源码可编。"
+                    + "要这颗按钮能点，就把它放回 <仓库>\dist\ 再运行。",
+            };
+        }
+        return { ok: true, repoDir, logFile };
+    }
     const found = BUILD_SCRIPTS.find((name) => fs.existsSync(path.join(ROOT_DIR, name)));
     if (!found) {
         return {
@@ -56,6 +70,21 @@ export function describeRestart(): RestartAvailability {
         };
     }
     return { ok: true, repoDir: ROOT_DIR, logFile };
+}
+
+/**
+ * 单文件 exe 时：exe 旁边（往上一级）有没有仓库。
+ * 我们打的 exe 落在 <仓库>\dist\pichat.exe，所以仓库就是 exe 所在目录的上一级。
+ */
+function repoNextToExe(): string | undefined {
+    try {
+        const exe = launcherPath();
+        if (!exe) { return undefined; }
+        const candidate = path.dirname(path.dirname(exe));
+        const hasScript = BUILD_SCRIPTS.some((name) => fs.existsSync(path.join(candidate, name)));
+        if (hasScript && fs.existsSync(path.join(candidate, "package.json"))) { return candidate; }
+    } catch { /* 取不到就当没有 */ }
+    return undefined;
 }
 
 /** 重启时要照原样接着用的东西：怎么起的、起在哪儿。 */
@@ -121,14 +150,23 @@ export function startRestart(launch: RestartLaunch): { ok: boolean; reason?: str
         "--port", String(launch.port),
         "--host", launch.host,
     ];
+    // 单文件 exe 时：重新打包出来的还是那个 exe（壳），照原来的会话目录 / 端口 / 地址起它
+    const packaged = isPackaged();
+    const launcher = launcherPath();
     const plan = {
+        mode: packaged ? "exe" : "repo",
         pid: launch.pid,
         url: launch.url,
         repoDir: able.repoDir,
         logFile: able.logFile,
-        execPath: launch.execPath,
-        argv,
+        execPath: packaged ? (launcher ?? launch.execPath) : launch.execPath,
+        // argv 里放的是“脚本之后的那些参数”（repo 那套是 node + [脚本, …]，这里就是壳的参数）
+        argv: packaged
+            ? ["--cwd", launch.dir, "--port", String(launch.port), "--host", launch.host]
+            : argv,
         startCwd: launch.cwd,
+        // 单文件 exe 时：壳也在跑（它就占着 dist\pichat.exe），重打之前得等它也退掉
+        launcherPid: packaged ? process.ppid : undefined,
     };
     const file = planFile();
     try {
@@ -139,7 +177,10 @@ export function startRestart(launch: RestartLaunch): { ok: boolean; reason?: str
     }
     try {
         // detached：这个后端一会儿就退了，小进程得自己活着把活干完
-        cp.spawn(launch.execPath, [helper, file], {
+        // （单文件 exe 用的是它自己：`pichat.exe --restart-helper <计划>`）
+        const runner = helper ? launch.execPath : process.execPath;
+        const runnerArgs = helper ? [helper, file] : ["--restart-helper", file];
+        cp.spawn(runner, runnerArgs, {
             detached: true,
             stdio: "ignore",
             windowsHide: true,

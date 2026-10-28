@@ -9,8 +9,9 @@
  *   1. 等老后端退干净（它收到重启请求后会停网页服务、杀掉所有 pi 进程）；
  *      15 秒还没退就直接杀掉（那种情况下它自己那几个 pi 进程可能留在那儿）。
  *   2. 拉最新代码（git pull --ff-only）；拉不到就拿现在的代码接着编，日志里记一笔。
- *   3. 在仓库里编译、再把 pichat 装成全局命令：`npm run build` + `npm i -g .`。
- *      两步都成功才起后端；哪一步失败就停在这儿（后端不再起来，修好后再手工敲 pichat）。
+ *   3. 在仓库里编译：普通跑的是 `npm run build` + `npm i -g .`（装全局 pichat 命令）；
+ *      单文件 exe（计划里 mode = "exe"）是 `npm run exe`（重新打包那个 exe）。
+ *      成功才起后端；失败就停在这儿（后端不再起来，修好后再手工起一次）。
  *   4. 照老后端当初的命令行把后端起回来：同一个端口、同一个会话目录 —— 页面在原来的
  *      地址上一连就回来了。新后端放后台跑，自己退出。
  *
@@ -34,6 +35,8 @@ const START_VERIFY_MS = 2000;
 
 /** 拉代码最多等多久：网络不通时 git 会磨很久，不能让它把重启卡在这儿。 */
 const PULL_TIMEOUT_MS = 120000;
+/** 重新打包 exe 最多等多久（编译 + 打包）。 */
+const BUILD_TIMEOUT_MS = 15 * 60 * 1000;
 
 function stamp() {
     const d = new Date();
@@ -188,21 +191,39 @@ async function main() {
         forceKill(plan.pid);
         await waitForExit(plan.pid, KILL_WAIT_MS);
     }
+    // 单文件 exe 时还有一个壳（它就占着 dist\pichat.exe 这个文件）：它得也退掉才打得开文件
+    if (plan.launcherPid) {
+        if (await waitForExit(plan.launcherPid, KILL_WAIT_MS)) {
+            write(logFd, "壳也退了。");
+        } else {
+            write(logFd, "壳还没退，硬关它（不然 exe 文件被占着，重打不了）。");
+            forceKill(plan.launcherPid);
+            await waitForExit(plan.launcherPid, KILL_WAIT_MS);
+        }
+    }
     write(logFd, "老后端已停。");
 
     // 2. 拉最新代码（拉不到就拿现在的代码接着走，只记一笔）
     await pullLatest(plan.repoDir, logFd);
 
-    // 3. 编译 + 装全局命令
-    if (await run("npm run build", plan.repoDir, logFd) !== 0) {
-        write(logFd, "编译失败，后端没有重新起来。修好以后再在终端里敲一次 pichat。");
-        process.exitCode = 1;
-        return;
-    }
-    if (await run("npm i -g .", plan.repoDir, logFd) !== 0) {
-        write(logFd, "装全局 pichat 命令失败，后端没有重新起来。修好以后再在终端里敲一次 pichat。");
-        process.exitCode = 1;
-        return;
+    // 3. 编译（单文件 exe 那份是“重新打包 exe”，普通跑的还要装一次全局命令）
+    if (plan.mode === "exe") {
+        if (await run("npm run exe", plan.repoDir, logFd, BUILD_TIMEOUT_MS) !== 0) {
+            write(logFd, "重新打包 exe 失败，后端没有重新起来。修好以后再双击一次 exe。");
+            process.exitCode = 1;
+            return;
+        }
+    } else {
+        if (await run("npm run build", plan.repoDir, logFd) !== 0) {
+            write(logFd, "编译失败，后端没有重新起来。修好以后再在终端里敲一次 pichat。");
+            process.exitCode = 1;
+            return;
+        }
+        if (await run("npm i -g .", plan.repoDir, logFd) !== 0) {
+            write(logFd, "装全局 pichat 命令失败，后端没有重新起来。修好以后再在终端里敲一次 pichat。");
+            process.exitCode = 1;
+            return;
+        }
     }
 
     // 4. 照老命令行起回来

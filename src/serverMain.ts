@@ -13,8 +13,7 @@
 import * as cp from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import * as os from "os";
-import { appVersion, isSingleExe, mediaDir, startSingleExe } from "./appAssets";
+import { appVersion, isPackaged, mediaDir } from "./appAssets";
 import { PiChatWebServer, type WebServerSettings } from "./webChatServer";
 import { ChatHost } from "./chatHost";
 import { readServerConfig, updateServerConfig } from "./serverConfig";
@@ -127,15 +126,9 @@ function stamp(): string {
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
-    // 单文件 exe：先把开场白做了（解出内嵌的界面文件与小程序、日志改成写文件）。
-    // 双击打开时没有参数，也不能像命令行那样“没写 --cwd 就用当前目录”：那儿的当前目录是
-    // exe 待的地方，拿来当会话目录不合适。所以 exe 模式、又没给任何参数时按“传统 app”那套来：
-    // 会话开在家目录，起来就把界面打开。
-    const exeMode = isSingleExe();
-    startSingleExe();
-    if (exeMode && argv.length === 0) {
-        argv = ["--cwd", os.homedir(), "--open"];
-    }
+    // 被单文件 exe（壳）起来的：日志由壳写进文件，双击时的默认参数（家目录 + 开浏览器）
+    // 也由壳给，这里只管一件事 —— 撞上“已经有一个在跑”时把界面打开，别报错了事。
+    const packaged = isPackaged();
 
     const args = parseServerArgs(argv);
     if (args.help) { console.log(usageText()); return; }
@@ -148,7 +141,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     // 双击 exe 撞上这种情况是常态（人以为没开）：那就只把那个界面打开，不再报错退出。
     const running = await findRunningServer();
     if (running) {
-        if (exeMode) {
+        if (packaged) {
             log(`已经有一个 Pi Chat 在跑了：${running.url}（这次只把界面打开）`);
             openInDefaultBrowser(running.url);
             return;
