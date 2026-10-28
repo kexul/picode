@@ -114,6 +114,17 @@ export function usageText(): string {
     ].join("\n");
 }
 
+/**
+ * 收摊完了才退，而且隔一拍再退。
+ *
+ * 为什么不在 stop 完了当场 process.exit：通知区域那颗图标是个子进程，收摊时刚把它关掉，
+ * 它那两根管道的收尾还没走完；这时候硬退，Windows 上会撞进一个 libuv 断言
+ * （`!(handle->flags & UV_HANDLE_CLOSING)`，Node 的老毛病）。隔一拍就没事，也不耽误什么。
+ */
+function exitSoon(): void {
+    setTimeout(() => process.exit(0), 150);
+}
+
 /** 用系统默认浏览器打开地址（打不开也不影响：地址已经打在屏幕上了）。 */
 function openInDefaultBrowser(url: string): void {
     const command = process.platform === "win32" ? "cmd" : process.platform === "darwin" ? "open" : "xdg-open";
@@ -226,7 +237,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         if (stopping) { return; }
         stopping = true;
         console.log(`\n[${stamp()}] 收到 ${signal}，正在收摊（停网页服务、杀掉所有 pi 进程）…`);
-        void started.stop().then(() => process.exit(0));
+        void started.stop().then(() => exitSoon());
     };
     process.on("SIGINT", () => onSignal("SIGINT"));
     process.on("SIGTERM", () => onSignal("SIGTERM"));
@@ -342,7 +353,7 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
             // 先把回话送出去（界面上那句「正在编译并重启」），再按 Ctrl+C 那套收摊退出。
             // 小进程正等着这个进程号消失，看到它没了才动手编译。
             // 收摊时不跟页面道别：页面收到道别就不自己重连了，可这个服务几十秒后还会在同一个地址上回来。
-            setTimeout(() => { void stop(true).finally(() => process.exit(0)); }, 500);
+            setTimeout(() => { void stop(true).finally(() => exitSoon()); }, 500);
         }
         return result;
     };

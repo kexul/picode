@@ -1472,7 +1472,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             page: withSession(base, sessionId),
         };
         for (const target of notify.pushTo) {
-            void pushRemoteNotice(target, notify.pushToken, notice);
+            void pushRemoteNotice(target, notice);
         }
     }
 
@@ -1481,10 +1481,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         this.trayNoteRemote(notice);
     }
 
-    /** 接收别处推来的“有事”要认的口令（没写就一概不收，见 /notify 那条）。 */
-    public remoteNotifyToken(): string {
-        return readServerConfig().config.notify.acceptToken;
-    }
 
     /** 扩展不等这次提问了（超时 / 这一轮被停）：把还开着的那张卡片收掉（按没作答交回去）。 */
     public cancelAsk(id: string): void {

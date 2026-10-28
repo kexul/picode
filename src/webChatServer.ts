@@ -24,7 +24,7 @@ import {
 import { insideFolder, pathCaseKey, relativeTo } from "./pathRules";
 import type { SessionChangeInfo } from "./editTracker";
 import type { BashTaskInfo } from "./bashProtocol";
-import { NOTIFY_TOKEN_HEADER, readRemoteNotice, type RemoteNotice } from "./remoteNotice";
+import { readRemoteNotice, type RemoteNotice } from "./remoteNotice";
 
 /**
  * PiChatWebServer —— 独立后端的网页服务：一个地址，手机和电脑都看这一份会话。
@@ -274,8 +274,6 @@ export interface WebServerHost {
     onServerStopped(): void;
     /** 当前界面颜色（写进页面的初始主题）。 */
     getThemeMode(): "light" | "dark";
-    /** 接收别处推来的“有事”要认的口令（设置文件里 notify.acceptToken；空 = 一概不收）。 */
-    remoteNotifyToken(): string;
     /** 别处推来一条“有事”（`POST /notify`，口令已经核对过）：塞进托盘清单。 */
     acceptRemoteNotice(notice: RemoteNotice): void;
 }
@@ -1410,21 +1408,12 @@ export class PiChatWebServer {
     /**
      * 别的 pichat 后端推来一条“有事”。
      *
-     * 这条跟页面来的请求不是一回事：不看 Origin（机器发的压根没有这个头），只认口令。
-     * 没设口令就一概不收——这台机器默认不接收，得人自己在设置文件里写一个。
+     * 这条是机器对机器发的：没有 Origin 头（浏览器的脚本发的有，过不了 originAllowed 那道关，
+     * 到不了这里），也没有口令——这个后端本来就没有登录，只在信得过的网络里用。
      */
     private async handleRemoteNotice(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (req.method !== "POST") {
             this.sendText(req, res, 405, "只接受 POST。");
-            return;
-        }
-        const expected = this.host.remoteNotifyToken();
-        if (!expected) {
-            this.sendText(req, res, 403, "这台没设置接收口令（设置文件里 notify.acceptToken），不收通知。");
-            return;
-        }
-        if (String(req.headers[NOTIFY_TOKEN_HEADER] ?? "") !== expected) {
-            this.sendText(req, res, 403, "口令不对。");
             return;
         }
         const text = await readBody(req, MAX_REQUEST_BYTES);

@@ -45,20 +45,18 @@ export interface ServerWebSettings {
 /**
  * 跨机器的“有事”提醒（另一台机器上的后端跑完一轮，往这台推一条）。
  *
- * 两台都改同一份设置文件，各写各的半边：
- *   推送方：notify.pushTo（推到哪儿去）+ notify.pushToken（对方要的口令）+ notify.pushLabel（自己是哪台）
- *   接收方：notify.acceptToken（认哪个口令）
- * 都不写就互不相干：不推、也不收。详见 src/remoteNotice.ts。
+ * 只改推送方那一台：notify.pushTo（推到哪儿去）+ notify.pushLabel（自己是哪台）。
+ * 接收方什么都不用写（收到了就收）。不写 pushTo 就谁也不推。详见 src/remoteNotice.ts。
+ *
+ * 没有口令：这个后端本来就没有登录（README 里写着“只在信得过的网络里用”），
+ * 再加一道通知口令只是多一处要人对着抄的东西。浏览器那边仍然过 Origin 那道关
+ * （网页脚本没法替你往 /notify 里塞东西），机器对机器发的请求没有 Origin，照收。
  */
 export interface ServerNotifySettings {
     /** 推到这些地址（对方网页服务的地址，比如 `http://10.0.0.2:51883`）；一个都没有 = 不推。 */
     pushTo: string[];
-    /** 推过去时带的口令（要跟对方的 acceptToken 一样）。 */
-    pushToken: string;
     /** 推到对方那边时显示的名字（空 = 用这台机器地址里的主机名）。 */
     pushLabel: string;
-    /** 接收别处推来的“有事”时认的口令（空 = 一概不收）。 */
-    acceptToken: string;
 }
 
 export interface ServerConfig {
@@ -100,8 +98,8 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = deepFreeze({
     fontSize: DEFAULT_FONT_SIZE,
     notifyTurnEnd: DEFAULT_NOTIFY_TURN_END,
     themeMode: DEFAULT_THEME_MODE,
-    // 跨机器的“有事”提醒默认全关：不推、也不收
-    notify: { pushTo: [], pushToken: "", pushLabel: "", acceptToken: "" },
+    // 跨机器的“有事”提醒默认不推（收到就收，不用写什么）
+    notify: { pushTo: [], pushLabel: "" },
     // 默认对所有网卡开放（手机等设备打开地址就能用）；只给自己用就改 127.0.0.1，或启动时加 --host 127.0.0.1
     webServer: { enabled: true, port: 51883, host: "0.0.0.0", trustedOrigins: [] },
 });
@@ -325,9 +323,7 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
             warnings.push("notify 不是一个对象，已全部用默认值");
         } else {
             config.notify.pushTo = pickUrlList(notify.pushTo, "notify.pushTo", warnings);
-            config.notify.pushToken = pickText(notify.pushToken, "notify.pushToken", warnings);
             config.notify.pushLabel = pickText(notify.pushLabel, "notify.pushLabel", warnings);
-            config.notify.acceptToken = pickText(notify.acceptToken, "notify.acceptToken", warnings);
             const knownNotifyKeys = new Set(Object.keys(DEFAULT_SERVER_CONFIG.notify));
             const unknownNotifyKeys = Object.keys(notify).filter((key) => !knownNotifyKeys.has(key));
             if (unknownNotifyKeys.length > 0) {

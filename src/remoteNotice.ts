@@ -9,9 +9,8 @@
  * 为什么不反过来（收到的那台去连推送方）：那样要常年维持连接、断了要重连、还得处理断线
  * 期间漏掉的事件。一次 POST 失败就当没发生，简单得多。
  *
- * 安全：这条口子只认口令（推送方的 notify.pushToken 与接收方的 notify.acceptToken 要一致；
- * 接收方没写 acceptToken 就一概不收）。网页服务没有 https，口令就是唯一一道门，
- * 所以只在信得过的网络（同一个局域网、自己的 tailnet）里开。
+ * 不管口令：这个后端本来就没有登录，只在信得过的网络里用（见 README）。浏览器的网页脚本
+ * 塞不进东西来（带 Origin 的请求过不了那道关），机器对机器发的请求没有 Origin，照收。
  */
 export interface RemoteNotice {
     /** 哪台机器推来的：它设置里写的 notify.pushLabel；没写就用它地址里的主机名。 */
@@ -23,9 +22,6 @@ export interface RemoteNotice {
     /** 点了之后用浏览器打开哪个地址：推送方的页面 + 那个会话。 */
     page: string;
 }
-
-/** 口令放在这个头里：不放请求体，免得被人顺手写进日志。 */
-export const NOTIFY_TOKEN_HEADER = "x-pichat-token";
 
 /** 推一次最多等这么久：对方没回应就当这条丢了（不攒着、不重试）。 */
 const PUSH_TIMEOUT_MS = 5000;
@@ -52,15 +48,14 @@ export function readRemoteNotice(raw: unknown, fallbackLabel: string): RemoteNot
 /**
  * 把一条“有事”推给一台机器。
  * @param target 它网页服务的地址（比如 `http://10.0.0.2:51883`，后面带不带斜杠都行）
- * @param token 对方 notify.acceptToken 那个口令
  * @returns 对方收下了没有（收下 = 2xx）；推不过去只返回 false，不抛
  */
-export async function pushRemoteNotice(target: string, token: string, notice: RemoteNotice): Promise<boolean> {
+export async function pushRemoteNotice(target: string, notice: RemoteNotice): Promise<boolean> {
     const url = target.replace(/\/+$/, "") + "/notify";
     try {
         const res = await fetch(url, {
             method: "POST",
-            headers: { "content-type": "application/json", [NOTIFY_TOKEN_HEADER]: token },
+            headers: { "content-type": "application/json" },
             body: JSON.stringify(notice),
             signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
         });

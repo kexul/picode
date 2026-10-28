@@ -67,18 +67,19 @@ export class TrayIcon {
         this.write(fields.join("\t"));
     }
 
-    /** 收摊：跟小程序说一声，也把管道关掉（它读到结尾也会自己退）。 */
+    /**
+     * 收摊：把 stdin 关掉（小程序读到结尾就自己退，图标跟着没），再把进程从“要等的活”里摘出去。
+     * 不直接杀：它自己收图标更干净，退出路径上杀子进程也容易在关句柄时撞车。
+     */
     public dispose(): void {
-        if (!this.child) { return; }
-        this.write("quit");
         const child = this.child;
         this.child = undefined;
-        // 管道也关掉：小程序读到结尾一样会退（两路信号，哪条先到都行）
+        if (!child) { return; }
         try { child.stdin?.end(); } catch { /* 已经断了 */ }
-        // 给它一点时间自己走；赖着就杀掉，别留孤儿进程
-        const timer = setTimeout(() => { try { child.kill(); } catch { /* 已经没了 */ } }, 1500);
+        try { child.unref(); } catch { /* 已经没了 */ }
+        // 它要是赖着不走（读不到结尾那种），过一会儿再杀掉
+        const timer = setTimeout(() => { try { child.kill(); } catch { /* 已经没了 */ } }, 2000);
         timer.unref?.();
-        child.once("exit", () => clearTimeout(timer));
     }
 
     /** 还没起就起一个；起不来（或已经退出了）返回 false。 */

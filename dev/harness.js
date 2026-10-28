@@ -197,6 +197,9 @@ function createHarness(options = {}) {
                 try { item.dispose(); } catch { /* 收摊出错不拦路 */ }
             }
             try { output.dispose(); } catch { /* 已经收了 */ }
+            // 给托盘那个子进程一拍：它连着两根管道，收摊时刚关掉，紧跟着 process.exit 的调试脚本
+            // 会撞进一个 libuv 断言（Node 在 Windows 上的老毛病，真后端那边见 serverMain 的 exitSoon）
+            await new Promise((resolve) => setTimeout(resolve, 150));
         },
     };
 }
