@@ -485,12 +485,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 min: 11, max: 22, step: 1, unit: "px",
             },
             {
-                action: "notifyTurnEnd",
-                label: "跑完让通知区域的图标闪",
-                desc: "",
-                check: this.notifyTurnEndEnabled(),
-            },
-            {
                 action: "notifyPushTo",
                 label: "消息推送",
                 desc: "",
