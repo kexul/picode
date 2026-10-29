@@ -4302,9 +4302,9 @@
   /** 用量涨了：百分比数字上方飘一个「+N」。
    *  动效用的是工具标签次数方块上那个（chat.css 的 .ci-plus 与 tg-plus-float）。
    *  锚在 .ci-top（position: relative）里，不占位置、不挡鼠标。
-   *  飘的是这次比上次多出来的点数（四舍五入，最少 1）—— 涨得多的时候飘「+1」就是骗人；
-   *  但量出来的百分比常常是 0.4 → 0.57 这种小碎步，按整数位比就永远停在 1%，所以比的是原始值。
-   *  用量掉了（压缩上下文）不飘。同一颗胶囊有间隔限制，碎步刷得再密也半秒最多一回。 */
+   *  传进来的是条上头那个数字（整数百分比，见 syncStatus）：只有它真变了才飘，
+   *  飘的量就是它变了几点（涨 1 点飘 +1，一下涨 4 点飘 +4）。
+   *  用量掉了（压缩上下文）不飘。同一颗胶囊有间隔限制，刷得再密也半秒最多一回。 */
   function popCtxPlus(st, pct) {
     const from = st ? st.pctPopFrom : undefined;
     if (st) { st.pctPopFrom = pct; }
@@ -4375,10 +4375,9 @@
     ctxIconEl.style.setProperty("--ci-pct", known ? pct.toFixed(1) + "%" : "0%");
     ctxIconEl.classList.toggle("hasfill", known && pct > 0);
     // 用量涨了：数字上方飘一个「+N」（跟工具标签次数方块上那个「+1」同一套动效）。
-    // 涨多少飘多少（四舍五入，最少 1）：涨得多的时候飘「+1」就是骗人；
-    // 但百分比本身只有 0.4 → 0.57 这种小碎步，掉到整数位就常常一直是 1%，
-    // 所以比较的是没取整的原始值，涨一点也算一次。
-    if (known) { popCtxPlus(st, pct); } else if (st) { st.pctPopFrom = undefined; }
+    // 比的是条上头那个数字（整数百分比），不是原始值：不然会出现“飘了但数字没动”
+    // —— 原始值涨 0.3% 数字还是 1%，看着就像坏了。数字变了才飘，飘的就是它变了多少。
+    if (known) { popCtxPlus(st, Math.round(pct)); } else if (st) { st.pctPopFrom = undefined; }
     const num = ctxIconEl.querySelector(".ci-text");
     if (num) { num.textContent = known ? Math.round(pct) + "%" : ""; }
     // 跑多快：后端推来的那个数（生成中是这一轮的实时均值，停下来就留着最后那个，没跑过就空着）
