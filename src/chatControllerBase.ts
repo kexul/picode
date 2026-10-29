@@ -809,7 +809,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
     // ---- 切换 ----
     /** 把某块屏（默认正在说话的那块）切到某个会话：不新开、不重载，那个会话的进程一直跑着。 */
     public setActiveSession(panelId: string, clientId: string = this.currentPageId): void {
-        if (!this.panels.has(panelId) || this.clientSessions.get(clientId) === panelId) { return; }
+        if (!this.panels.has(panelId)) { return; }
+        // 人把界面切到这个会话了（点侧边栏、点清单、发消息带过来的标识都走这里）：
+        // 托盘里它那一行就算看过了，别再闪。已经就是这个会话也算（点了当前这一个同样是不想再被提醒）
+        this.traySeen(panelId);
+        if (this.clientSessions.get(clientId) === panelId) { return; }
         this.clientSessions.set(clientId, panelId);
         this.lastFocusedPanelId = panelId;
         this.panelUsedAt.set(panelId, Date.now());
@@ -1948,6 +1952,20 @@ export abstract class ChatControllerBase implements RuntimeHost {
     private addTrayItem(item: TrayPendingItem): void {
         this.trayPending = this.trayPending.filter((old) => old.id !== item.id);
         this.trayPending.push(item);
+        this.traySync();
+    }
+
+    /**
+     * 人在界面上切到某个会话了：它那一行就算看过了，从清单里划掉（清单空了托盘就不闪）。
+     *
+     * 光弹开菜单不算、点「打开页面」也不算 —— 那些都没证明人真的看到了那一条回复。
+     * 别的机器推来的那些行（标识是 `remote:` 开头）不在这儿划：点了才开它那边的页面。
+     */
+    private traySeen(sessionId: string): void {
+        if (!this.tray || this.trayPending.length === 0) { return; }
+        const rest = this.trayPending.filter((item) => item.id !== sessionId);
+        if (rest.length === this.trayPending.length) { return; }
+        this.trayPending = rest;
         this.traySync();
     }
 
