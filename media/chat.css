@@ -687,14 +687,10 @@
   .msg-endhint-stop { padding: 4px 10px; }
   .msg-endhint-stop.hidden { display: none; }
   /* 跑完时多出来的两颗快捷按钮（「压缩」「?」，见 chat.js 的 makeEndHintQuick）：
-     跟「继续」一身衣服，只是淡一点 —— 它们是顺手点一下的小动作，「继续」才是这一行的主事。
-     边框留着不画（透明而不是 none）：悬停时底色那块框跟别的胶囊一样大。 */
+     跟「继续」一样是细描边的小胶囊，只是窄一点（它们是顺手点一下的小动作）。 */
   .msg-endhint-quick {
     padding: 4px 11px;
-    border-color: transparent;
-    opacity: 0.72;
   }
-  .msg-endhint-quick:hover { opacity: 1; }
   /* 顶部「加载更早的消息」按钮（网页端只发最近一段历史，更早的从这里取） */
   .history-more {
     display: block; margin: 10px auto 6px; padding: 4px 14px;
