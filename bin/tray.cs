@@ -35,6 +35,7 @@ using System.Runtime.InteropServices;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -90,6 +91,80 @@ static class Theme
     }
 }
 
+/**
+ * 分层窗口（UpdateLayeredWindow）：一张带透明度的位图直接贴到屏幕上，
+ * 圆角、淡入淡出都是画出来的 —— 用 Region 裁剪只能切成硬边，弧线上会有一格格台阶。
+ */
+static class Layered
+{
+    public const int WS_EX_LAYERED = 0x00080000;
+    private const int ULW_ALPHA = 0x00000002;
+    private const byte AC_SRC_OVER = 0x00;
+    private const byte AC_SRC_ALPHA = 0x01;
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    private struct BLENDFUNCTION
+    {
+        public byte BlendOp;
+        public byte BlendFlags;
+        public byte SourceConstantAlpha;
+        public byte AlphaFormat;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X; public int Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SIZE { public int Width; public int Height; }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr hdcDst, ref POINT pptDst, ref SIZE psize,
+        IntPtr hdcSrc, ref POINT pptSrc, int crKey, ref BLENDFUNCTION pblend, int dwFlags);
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetDC(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateCompatibleDC(IntPtr hDC);
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteDC(IntPtr hdc);
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr SelectObject(IntPtr hDC, IntPtr hObject);
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(IntPtr hObject);
+
+    /** 把一张画好的位图贴到屏幕上的 (x, y)，opacity 是整块的透明度（0~255）。 */
+    public static void Present(IntPtr hwnd, Bitmap bitmap, int x, int y, byte opacity)
+    {
+        IntPtr screen = GetDC(IntPtr.Zero);
+        IntPtr mem = CreateCompatibleDC(screen);
+        IntPtr hbmp = bitmap.GetHbitmap(Color.FromArgb(0));
+        IntPtr old = SelectObject(mem, hbmp);
+        try
+        {
+            POINT dst = new POINT();
+            dst.X = x;
+            dst.Y = y;
+            SIZE size = new SIZE();
+            size.Width = bitmap.Width;
+            size.Height = bitmap.Height;
+            POINT src = new POINT();
+            BLENDFUNCTION blend = new BLENDFUNCTION();
+            blend.BlendOp = AC_SRC_OVER;
+            blend.AlphaFormat = AC_SRC_ALPHA;
+            blend.SourceConstantAlpha = opacity;
+            UpdateLayeredWindow(hwnd, screen, ref dst, ref size, mem, ref src, 0, ref blend, ULW_ALPHA);
+        }
+        finally
+        {
+            SelectObject(mem, old);
+            DeleteObject(hbmp);
+            DeleteDC(mem);
+            ReleaseDC(IntPtr.Zero, screen);
+        }
+    }
+}
+
 /** 右下角面板里的一条：哪个会话有事、它说了什么。 */
 class NoteItem
 {
@@ -103,7 +178,7 @@ class NoteItem
 /**
  * 屏幕右下角那块提醒面板：有事就弹一条，最多同时三条，再来就挤掉最老的那条。
  *
- * 停几秒自己淡出；鼠标移上去就停住（底部那条进度线也不走）；点一条就切到那个会话并收起。
+ * 停几秒自己淡出；鼠标移上去就停住；点一条就切到那个会话并收起。
  * 不抢焦点、不占任务栏：人正在别处打字时，它只该被看见，不该打断。
  */
 class NoteWindow : Form
@@ -114,7 +189,8 @@ class NoteWindow : Form
     private const int TICK_MS = 30;
     /** 最多同时摆几条。 */
     private const int MAX_ITEMS = 3;
-    private const int CS_DROPSHADOW = 0x00020000;
+    /** 面板外面留多宽一圈给阴影（逻辑像素）。 */
+    private const int SHADOW_PX = 6;
 
     private static readonly Color Accent = Color.FromArgb(0xE5, 0x39, 0x35);
     private static readonly Color AskColor = Color.FromArgb(0xF2, 0xA0, 0x3D);
@@ -131,6 +207,8 @@ class NoteWindow : Form
     private readonly int itemHeight;
     private readonly int gap;
     private readonly int pad;
+    /** 窗口比面板本身往外多出来的一圈（给阴影）。 */
+    private readonly int shadow;
     /** 面板底边的位置（工作区底边往上留一点）：条数变了只往上长，底边不动。 */
     private int bottom;
     /** 完全滑进来之后该在的左边缘。 */
@@ -140,6 +218,10 @@ class NoteWindow : Form
     private int hoverIndex = -1;
     private bool fading;
     private bool placed;
+    /** 整块的透明度（0~1）：滑入淡入、到点淡出都改它。 */
+    private float alpha = 1f;
+    /** 画好之后再贴上屏幕的那张位图（尺寸不变就复用）。 */
+    private Bitmap canvas;
 
     public NoteWindow(Action<string> onPick)
     {
@@ -159,6 +241,7 @@ class NoteWindow : Form
         itemHeight = (int)Math.Round(80 * scale);
         gap = (int)Math.Round(8 * scale);
         pad = (int)Math.Round(10 * scale);
+        shadow = (int)Math.Round(SHADOW_PX * scale);
         titleFont = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Bold, GraphicsUnit.Point);
         bodyFont = new Font("Microsoft YaHei UI", 8.5f, FontStyle.Regular, GraphicsUnit.Point);
         tagFont = new Font("Microsoft YaHei UI", 7.5f, FontStyle.Regular, GraphicsUnit.Point);
@@ -173,13 +256,13 @@ class NoteWindow : Form
         get { return true; }
     }
 
-    /** 无边框窗口要自己声明“带阴影”，不然贴上去像一张纸。 */
+    /** 分层窗口：内容是带透明度的位图，圆角、淡入淡出都是画出来的，边缘才平滑。 */
     protected override CreateParams CreateParams
     {
         get
         {
             CreateParams cp = base.CreateParams;
-            cp.ClassStyle |= CS_DROPSHADOW;
+            cp.ExStyle |= Layered.WS_EX_LAYERED;
             return cp;
         }
     }
@@ -203,19 +286,20 @@ class NoteWindow : Form
         {
             // 上一波正在播淡出：新的一条来了就别收了，直接接着显示
             fading = false;
-            Opacity = 1.0;
+            alpha = 1f;
         }
         if (!placed)
         {
             placed = true;
             Rectangle work = Screen.PrimaryScreen.WorkingArea;
             int margin = (int)Math.Round(12 * scale);
-            bottom = work.Bottom - margin;
-            targetLeft = work.Right - margin - width;
+            // 窗口比面板多一圈阴影：把多出来的那圈让出去，面板本身还是离屏幕边 margin
+            bottom = work.Bottom - margin + shadow;
+            targetLeft = work.Right - margin - width - shadow;
             slide = (int)Math.Round(24 * scale);
-            Opacity = 0.05;
+            alpha = 0.05f;
             int h = HeightFor(notes.Count);
-            Bounds = new Rectangle(targetLeft + slide, bottom - h, width, h);
+            Bounds = new Rectangle(targetLeft + slide, bottom - h, width + shadow * 2, h);
             Show();
             tick.Start();
         }
@@ -223,7 +307,7 @@ class NoteWindow : Form
         {
             Relayout();
         }
-        Invalidate();
+        Render();
     }
 
     /** 一拍：滑入 / 计时 / 淡出，三件事都在这里推进。 */
@@ -231,8 +315,9 @@ class NoteWindow : Form
     {
         if (fading)
         {
-            Opacity -= 0.12;
-            if (Opacity <= 0.02) { Close(); }
+            alpha -= 0.12f;
+            if (alpha <= 0.02f) { Close(); return; }
+            Render();
             return;
         }
         if (slide > 0)
@@ -242,19 +327,20 @@ class NoteWindow : Form
             {
                 slide = 0;
                 Left = targetLeft;
-                Opacity = 1.0;   // 滑进来就得不透了，别停在半透明上
-                Invalidate();
+                alpha = 1f;   // 滑进来就得不透了，别停在半透明上
+                Render();
                 return;
             }
             Left = targetLeft + slide;
-            Opacity = Math.Min(1.0, Opacity + 0.18);
-            Invalidate();
+            alpha = Math.Min(1f, alpha + 0.18f);
+            Render();
             return;   // 滑进来这几拍先不开始计时
         }
         Point at = PointToClient(Cursor.Position);
-        bool hovering = ClientRectangle.Contains(at);
-        hoverIndex = hovering ? IndexAt(at.Y) : -1;
-        if (hovering)
+        bool inside = ClientRectangle.Contains(at);
+        int hover = inside ? IndexAt(at.Y) : -1;
+        if (hover != hoverIndex) { hoverIndex = hover; Render(); }
+        if (inside)
         {
             // 鼠标在上面：把每条的开始时间往后顺延一拍，计时就停住了
             for (int i = 0; i < notes.Count; i++) { notes[i].ShownAt = notes[i].ShownAt.AddMilliseconds(TICK_MS); }
@@ -273,26 +359,26 @@ class NoteWindow : Form
                 Relayout();
             }
         }
-        Invalidate();
     }
 
-    /** 这块面板该多高：两条之间留一道缝。 */
+    /** 这块面板该多高（算上外面那圈阴影）：两条之间留一道缝。 */
     private int HeightFor(int count)
     {
-        return pad * 2 + count * itemHeight + Math.Max(0, count - 1) * gap;
+        return shadow * 2 + pad * 2 + count * itemHeight + Math.Max(0, count - 1) * gap;
     }
 
     /** 条数变了：底边不动，往上长 / 往下缩。 */
     private void Relayout()
     {
         int h = HeightFor(notes.Count);
-        Bounds = new Rectangle(Left, bottom - h, width, h);
-        Invalidate();
+        Bounds = new Rectangle(Left, bottom - h, width + shadow * 2, h);
+        Render();
     }
 
     /** 这个纵坐标落在第几条上（不在任何一条上就给 -1）。 */
     private int IndexAt(int y)
     {
+        y -= shadow;
         int index = (y - pad) / (itemHeight + gap);
         if (index < 0 || index >= notes.Count) { return -1; }
         if ((y - pad) - index * (itemHeight + gap) > itemHeight) { return -1; }
@@ -313,34 +399,64 @@ class NoteWindow : Form
         else { Relayout(); }
     }
 
-    /** 窗口圆角：方角贴到屏幕边上太硬。 */
-    protected override void OnResize(EventArgs e)
+    /** 窗口靠画出来的透明像素收圆角，系统不需要再给窗口套一个方框背景。 */
+    protected override void OnPaintBackground(PaintEventArgs e) { /* 内容全靠 Render 贴上去 */ }
+
+    protected override void OnPaint(PaintEventArgs e) { /* 同上：分层窗口不靠这块画 */ }
+
+    /** 画一遍整块面板，再整张贴到屏幕上（圆角是画出来的，所以边缘是平滑的）。 */
+    private void Render()
     {
-        base.OnResize(e);
-        if (Width <= 0 || Height <= 0) { return; }
-        Region old = Region;
-        using (GraphicsPath path = Rounded(new Rectangle(0, 0, Width, Height), (int)Math.Round(10 * scale)))
+        if (!IsHandleCreated || Width <= 0 || Height <= 0) { return; }
+        if (canvas == null || canvas.Width != Width || canvas.Height != Height)
         {
-            Region = new Region(path);
+            if (canvas != null) { canvas.Dispose(); }
+            canvas = new Bitmap(Width, Height, PixelFormat.Format32bppArgb);
         }
-        if (old != null) { old.Dispose(); }
+        using (Graphics g = Graphics.FromImage(canvas))
+        {
+            g.Clear(Color.Transparent);
+            DrawContent(g);
+        }
+        int level = (int)Math.Round(Math.Max(0f, Math.Min(1f, alpha)) * 255);
+        Layered.Present(Handle, canvas, Left, Top, (byte)level);
     }
 
-    protected override void OnPaint(PaintEventArgs e)
+    /** 把面板画到一张位图上：先是整块圆角底，再一条一条卡片。 */
+    private void DrawContent(Graphics g)
     {
-        Graphics g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
+        // 位图背景是透明的：不能用 ClearType（子像素渲染要算背景色，在透明底上会出彩边、发虚），
+        // 用灰度抗锯齿
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
 
+        Color shellBack = light ? Color.FromArgb(0xF7, 0xF7, 0xF7) : Color.FromArgb(0x2A, 0x2A, 0x2A);
         Color cardBack = light ? Color.FromArgb(0xFF, 0xFF, 0xFF) : Color.FromArgb(0x35, 0x35, 0x35);
         Color cardBackHover = light ? Color.FromArgb(0xF1, 0xF1, 0xF1) : Color.FromArgb(0x40, 0x40, 0x40);
         Color border = light ? Color.FromArgb(0xE4, 0xE4, 0xE4) : Color.FromArgb(0x3E, 0x3E, 0x3E);
         Color nameColor = light ? Color.FromArgb(0x1A, 0x1A, 0x1A) : Color.FromArgb(0xF2, 0xF2, 0xF2);
         Color bodyColor = light ? Color.FromArgb(0x60, 0x60, 0x60) : Color.FromArgb(0xAD, 0xAD, 0xAD);
 
+        // 外面那圈阴影：由外到内一层层叠上去，越靠外越淡
+        int layers = Math.Max(3, shadow);
+        for (int i = layers; i >= 1; i--)
+        {
+            int alpha = Math.Max(2, 10 - i);
+            Rectangle ring = new Rectangle(shadow - i, shadow - i, width + i * 2, Height - shadow * 2 + i * 2);
+            using (GraphicsPath path = Rounded(ring, (int)Math.Round(10 * scale) + i))
+            using (SolidBrush b = new SolidBrush(Color.FromArgb(alpha, 0, 0, 0))) { g.FillPath(b, path); }
+        }
+
+        using (GraphicsPath shell = Rounded(new Rectangle(shadow, shadow, width, Height - shadow * 2),
+            (int)Math.Round(10 * scale)))
+        {
+            using (SolidBrush b = new SolidBrush(shellBack)) { g.FillPath(b, shell); }
+        }
+
         for (int i = 0; i < notes.Count; i++)
         {
             NoteItem item = notes[i];
-            Rectangle card = new Rectangle(pad, pad + i * (itemHeight + gap), width - pad * 2, itemHeight);
+            Rectangle card = new Rectangle(shadow + pad, shadow + pad + i * (itemHeight + gap), width - pad * 2, itemHeight);
             using (GraphicsPath path = Rounded(card, (int)Math.Round(6 * scale)))
             {
                 using (SolidBrush b = new SolidBrush(i == hoverIndex ? cardBackHover : cardBack)) { g.FillPath(b, path); }
@@ -353,21 +469,31 @@ class NoteWindow : Form
             int left = card.Left + (int)Math.Round(14 * scale);
             int right = card.Right - (int)Math.Round(12 * scale);
             string tag = item.Ask ? "等你答" : "跑完了";
-            Size tagSize = TextRenderer.MeasureText(g, tag, tagFont);
-            Rectangle titleRect = new Rectangle(left, card.Top + (int)Math.Round(10 * scale),
+            SizeF tagSize = g.MeasureString(tag, tagFont);
+            RectangleF titleRect = new RectangleF(left, card.Top + (int)Math.Round(8 * scale),
                 right - left - tagSize.Width - (int)Math.Round(8 * scale), (int)Math.Round(20 * scale));
-            TextRenderer.DrawText(g, item.Name, titleFont, titleRect, nameColor,
-                TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-            Rectangle tagRect = new Rectangle(right - tagSize.Width, card.Top + (int)Math.Round(12 * scale),
-                tagSize.Width, tagSize.Height);
-            TextRenderer.DrawText(g, tag, tagFont, tagRect, mark, TextFormatFlags.NoPrefix);
+            RectangleF tagRect = new RectangleF(right - tagSize.Width, card.Top + (int)Math.Round(11 * scale),
+                tagSize.Width + 2, tagSize.Height);
+            using (StringFormat oneLine = new StringFormat())
+            {
+                oneLine.Trimming = StringTrimming.EllipsisCharacter;
+                oneLine.FormatFlags = StringFormatFlags.NoWrap;
+                oneLine.LineAlignment = StringAlignment.Near;
+                using (SolidBrush b = new SolidBrush(nameColor)) { g.DrawString(item.Name, titleFont, b, titleRect, oneLine); }
+                using (SolidBrush b = new SolidBrush(mark)) { g.DrawString(tag, tagFont, b, tagRect, oneLine); }
+            }
 
             if (item.Text.Length > 0)
             {
-                Rectangle bodyRect = new Rectangle(left, card.Top + (int)Math.Round(32 * scale),
-                    right - left, (int)Math.Round(42 * scale));
-                TextRenderer.DrawText(g, item.Text, bodyFont, bodyRect, bodyColor,
-                    TextFormatFlags.WordBreak | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                RectangleF bodyRect = new RectangleF(left, card.Top + (int)Math.Round(30 * scale),
+                    right - left, (int)Math.Round(44 * scale));
+                using (StringFormat bodyFmt = new StringFormat())
+                {
+                    // 高度用满就停，最后一行超出的加省略号
+                    bodyFmt.Trimming = StringTrimming.EllipsisWord;
+                    bodyFmt.FormatFlags = StringFormatFlags.LineLimit;
+                    using (SolidBrush b = new SolidBrush(bodyColor)) { g.DrawString(item.Text, bodyFont, b, bodyRect, bodyFmt); }
+                }
             }
         }
     }
@@ -376,6 +502,7 @@ class NoteWindow : Form
     {
         tick.Stop();
         tick.Dispose();
+        if (canvas != null) { canvas.Dispose(); canvas = null; }
         titleFont.Dispose();
         bodyFont.Dispose();
         tagFont.Dispose();
