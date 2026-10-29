@@ -48,6 +48,28 @@ odejs`）。
   按 PATH 找它，或者在设置文件里写 `piPath`。
 - 这个 exe 只包含**后端 + 网页界面**；VSCode 里那块对话面板还是得装插件（vsix）。
 
+### Linux / macOS：一个可执行文件
+
+```bash
+npm run exe             # 产出 dist/pichat（约 750KB，不进版本库）
+```
+
+它是个自解压的 shell 脚本**兼**一个可执行文件：第一次跑时把自己后半段（tar.gz）解到
+`~/.cache/pichat/app-<版本>/`，之后直接用；跑的时候借本机的 Node（要求 20 或以上，
+`PICHAT_NODE` → PATH → 常见位置）。没有参数时按“传统 app”那套来：会话开在家目录、并把浏览器打开。
+
+```bash
+./dist/pichat                       # 直接跑
+./dist/pichat --cwd ~/work --port 8080
+```
+
+- 日志在 `~/.cache/pichat/pichat.log`。
+- 设置文件还是 `~/.pi/pichat/config.json`，跟插件版、命令行版共用一份。
+- **没有托盘图标**（那是 Windows 那份才有的）：这条提醒在这台看不到，但
+  **「消息推送」照常能用**——设置里填上另一台（Windows）的地址，这台跑完就推过去。
+- 桌面截图也没有（只在 Windows 上）。
+- `./build.sh` 会把这份 `dist/pichat` 一起打出来。
+
 ### 在 Linux 上跑后端（只用 pichat，不装编辑器插件）
 
 一台 Linux 机器只跑后端、用浏览器或手机连过去的话，不需要打 vsix，也不需要在那边装编辑器。

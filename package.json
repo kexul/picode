@@ -145,6 +145,7 @@
     "watch": "node scripts/compile.mjs --watch",
     "package": "npm run build && vsce package --allow-missing-repository --no-rewrite-relative-links",
     "exe": "npm run build && node scripts/build-exe.mjs",
+    "exe:linux": "npm run build && node scripts/build-exe.mjs --posix",
     "web:dev": "npm run compile && node dev/browserHost.js",
     "web:shot": "npm run compile && node dev/visit.js",
     "server": "npm run compile && node out/server/serverMain.js"

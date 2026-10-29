@@ -1,0 +1,60 @@
+#!/bin/sh
+# Pi Chat —— 自带后端的单文件程序（__VERSION__）。
+#
+# 直接跑：./pichat                 起后端、把地址打在终端上，并把浏览器打开
+# 带参数：./pichat --cwd ~/work --port 8080
+#
+# 这个文件后面贴着一份 tar.gz（从第 __OFFSET__ 个字节开始）。第一次跑时解开到
+# __CACHE__/pichat/app-__VERSION__，之后直接用。跑的时候用这台机器上的 Node（要求 20 或以上）：
+# 先看环境变量 PICHAT_NODE，再在 PATH 里找，最后试几个常见位置。
+set -eu
+
+APP_VERSION='__VERSION__'
+DATA_DIR="__DATA__"
+APP_DIR="$DATA_DIR/app-$APP_VERSION"
+PAYLOAD_OFFSET=__OFFSET__  # 头里那行是定长十位，别动它的形式
+SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+
+mkdir -p "$DATA_DIR"
+LOG="$DATA_DIR/pichat.log"
+: > "$LOG" 2>/dev/null || true
+
+if [ ! -f "$APP_DIR/.ready" ]; then
+    echo '[pichat] 第一次运行，正在解包…'
+    mkdir -p "$APP_DIR"
+    tail -c +$((10#$PAYLOAD_OFFSET + 1)) "$SELF" | tar -xzf - -C "$APP_DIR"
+    date > "$APP_DIR/.ready"
+fi
+
+find_node() {
+    if [ -n "${PICHAT_NODE:-}" ] && [ -x "${PICHAT_NODE:-}" ]; then echo "$PICHAT_NODE"; return 0; fi
+    if command -v node >/dev/null 2>&1; then command -v node; return 0; fi
+    for candidate in /usr/local/bin/node /usr/bin/node /opt/homebrew/bin/node; do
+        if [ -x "$candidate" ]; then echo "$candidate"; return 0; fi
+    done
+    return 1
+}
+
+NODE=$(find_node || true)
+if [ -z "$NODE" ]; then
+    echo '[pichat] 找不到 Node.js（要求 20 或以上）。' >&2
+    echo '         装一个（https://nodejs.org 或系统包管理器），或者设 PICHAT_NODE 指向 node 再跑一次。' >&2
+    exit 1
+fi
+
+MAJOR=$("$NODE" -e 'process.stdout.write(String(process.versions.node.split(".")[0]))' 2>/dev/null || echo 0)
+if [ "$MAJOR" -lt 20 ] 2>/dev/null; then
+    echo "[pichat] 这台机器的 Node 是 $MAJOR 版，要求 20 或以上（$NODE）。" >&2
+    exit 1
+fi
+
+export PICHAT_LAUNCHER="$SELF"
+
+if [ $# -eq 0 ]; then
+    set -- --cwd "$HOME" --open
+fi
+"$NODE" "$APP_DIR/out/server/bundle.cjs" "$@" 2>&1 | tee -a "$LOG"
+STATUS=$?
+
+# 必须在这儿退：这个文件后面就是那段 tar.gz，sh 会接着往下读，把二进制当命令执行
+exit $STATUS

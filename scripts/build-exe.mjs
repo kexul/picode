@@ -1,7 +1,12 @@
 /*
- * 把后端打成一个单文件 exe（Windows）：双击就开，没有控制台，托盘里出一颗图标。
+ * 把后端打成一个单文件可执行（按当前这台机器的系统来）。
  *
- *   npm run exe        → dist/pichat.exe（约 4MB）
+ *   npm run exe        → Windows：dist/pichat.exe（约 2.3MB）
+ *                        Linux / macOS：dist/pichat（一个可执行文件，约 2.4MB）
+ *
+ * 两边装的东西一样：后端打成一个 CommonJS 文件 + 界面文件 + 启动用的那点东西
+ * （Windows 还带上托盘与截屏两支小程序，Linux 上没有托盘，不带）。
+ * 也都不带 Node 运行时：跑的时候用这台机器上装好的 Node（`PICHAT_NODE` → PATH → 常见位置）。
  *
  * 里面装的是什么（跟 Node 单文件应用那种 90MB 的做法不一样）：
  *   - 一份壳（bin/launcher.cs，编出来是个窗口程序，天生没有黑框）；
@@ -122,6 +127,66 @@ Promise.resolve(__load("serverMain.js").main()).catch((err) => {
     fs.writeFileSync(BUNDLE, parts.join("\n"), "utf8");
 }
 
+/**
+ * Linux / macOS：打一个“自解压脚本”（一个可执行文件）。
+ *
+ * 为什么这么做：这边没有系统自带的 C# 编译器可以照 Windows 那条路编壳，也不想为打包拉依赖。
+ * 干脆让产物本身是一个 `sh` 脚本：脚本头里算好自己后面那段 tar.gz 从第几个字节开始，
+ * 第一次跑时 tail 出来解开（`tar` 哪儿都有），之后直接跑。
+ *
+ * 用法跟 exe 一样：双击 / `./pichat`；带参数就照原样交给后端。
+ */
+function packagePosix(version) {
+    const payload = collectPayload(version);
+    step(`  一共 ${payload.length} 个（界面文件 + 后端）`);
+
+    // 打包内容：解出来就是“有 media/ 与 out/ 的那一层”。只收 Linux 用得上的（不带 .exe）。
+    const stage = path.join(DIST, "stage");
+    fs.rmSync(stage, { recursive: true, force: true });
+    for (const item of payload) {
+        if (item.relative.startsWith("bin/")) { continue; }
+        const target = path.join(stage, item.relative);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(item.full, target);
+    }
+    const tarball = path.join(DIST, "payload.tar.gz");
+    // cwd 指到 stage、只给相对路径：Windows 上的 tar（bsdtar）会把 "D:\…" 当成主机名去连
+    const tar = spawnSync("tar", ["-czf", "payload.tar.gz", "-C", "stage", "."], { encoding: "utf8", cwd: DIST });
+    if (tar.status !== 0) { fail(`打 tar 失败：${tar.stderr || tar.error?.message || ""}`); }
+
+    // 脚本头：OFFSET 那行定长十位，等头拼好以后回填（长度不变，偏移不会漂）
+    // 壳的脚本头放在 scripts/pichat-launcher.sh.in：几百行 shell，塞进 JS 字面量里
+    // 光那些 $ 与引号就要命（还容易改错），单独一个文件干净。
+    const template = fs.readFileSync(path.join(repoRoot, "scripts", "pichat-launcher.sh.in"), "utf8");
+    const header = template
+        .replaceAll("__VERSION__", version)
+        // 缓存目录：跟别的平台的约定一样，~/.cache/pichat（尊重 XDG_CACHE_HOME）
+        .replaceAll("__DATA__", "${XDG_CACHE_HOME:-$HOME/.cache}/pichat");
+
+    // 先算“头和正文之间的那段固定长度”：OFFSET / BYTES 都是定长十位，回填时长度不变
+    const probe = header.replaceAll("__OFFSET__", "0000000000");
+    const offset = Buffer.byteLength(probe, "utf8");
+    // replaceAll：注释里也提到了这个占位符（两处，都得换，不然留下的那处会把脚本弄坏）
+    const script = header.replaceAll("__OFFSET__", String(offset).padStart(10, "0"));
+
+    const target = path.join(DIST, "pichat");
+    fs.rmSync(target, { force: true });
+    fs.writeFileSync(target, script, "utf8");
+    fs.appendFileSync(target, fs.readFileSync(tarball));
+    fs.chmodSync(target, 0o755);
+
+    fs.rmSync(stage, { recursive: true, force: true });
+    fs.rmSync(tarball, { force: true });
+    fs.rmSync(BUNDLE, { force: true });
+    fs.rmSync(VERSION_TXT, { force: true });
+    fs.rmSync(PACKAGE_TXT, { force: true });
+
+    const kb = fs.statSync(target).size / 1024;
+    process.stdout.write("\n" + "好了：" + path.relative(repoRoot, target) + "（" + kb.toFixed(0) + " KB）" + "\n");
+    process.stdout.write("直接跑它就是：./" + path.basename(target) + "（会解包到 ~/.cache/pichat，再起后端）。" + "\n");
+    process.stdout.write("要求这台机器上有 Node 20 或以上；日志在 ~/.cache/pichat/pichat.log" + "\n");
+}
+
 /** 要装进 exe 的东西（相对解出来的那个目录：media/…、bin/…、out/server/bundle.cjs）。 */
 function collectPayload(version) {
     const entries = [];
@@ -143,15 +208,24 @@ function collectPayload(version) {
     return entries;
 }
 
+/** 按当前平台打包：Windows 编 exe 壳，其它系统贴一个自解压脚本。 */
 async function main() {
     const version = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version;
-    const csc = findCsc();
-    if (!csc) { fail("找不到系统自带的 csc.exe（.NET Framework 4 那套），编不了壳。"); }
-    fs.mkdirSync(DIST, { recursive: true });
 
     step("把 out/server 打成一个 CommonJS 文件");
     writeBundle();
     step(`  ${path.relative(repoRoot, BUNDLE)}（${(fs.statSync(BUNDLE).size / 1024).toFixed(0)} KB）`);
+
+    // `--posix` 是给在 Windows 上验 Linux 那份产物用的（Git Bash 里有 sh 与 tar）；
+    // 平时只按当前系统来。
+    const posix = process.argv.includes("--posix") || process.platform !== "win32";
+    if (posix) {
+        packagePosix(version);
+        return;
+    }
+    const csc = findCsc();
+    if (!csc) { fail("找不到系统自带的 csc.exe（.NET Framework 4 那套），编不了壳。"); }
+    fs.mkdirSync(DIST, { recursive: true });
 
     step("列出要装进 exe 的东西");
     const payload = collectPayload(version);
