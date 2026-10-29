@@ -22,7 +22,12 @@ LOG="$DATA_DIR/pichat.log"
 if [ ! -f "$APP_DIR/.ready" ]; then
     echo '[pichat] 第一次运行，正在解包…'
     mkdir -p "$APP_DIR"
-    tail -c +$((10#$PAYLOAD_OFFSET + 1)) "$SELF" | tar -xzf - -C "$APP_DIR"
+    # 去掉前导零再算：dash（Ubuntu 的 sh）会把 0000002275 当成八进制，而 `10#` 那种写法是
+    # bash 专有的，POSIX sh 不认。这里用参数展开去掉，纯 sh 就够。
+    OFFSET=$PAYLOAD_OFFSET
+    while [ "${OFFSET#0}" != "$OFFSET" ]; do OFFSET=${OFFSET#0}; done
+    [ -n "$OFFSET" ] || OFFSET=0
+    tail -c +$((OFFSET + 1)) "$SELF" | tar -xzf - -C "$APP_DIR"
     date > "$APP_DIR/.ready"
 fi
 

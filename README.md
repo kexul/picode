@@ -54,7 +54,7 @@ odejs`）。
 npm run exe             # 产出 dist/pichat（约 750KB，不进版本库）
 ```
 
-它是个自解压的 shell 脚本**兼**一个可执行文件：第一次跑时把自己后半段（tar.gz）解到
+它是个自解压的 shell 脚本**兼**一个可执行文件（纯 POSIX sh 写的，dash / bash 都能跑）：第一次跑时把自己后半段（tar.gz）解到
 `~/.cache/pichat/app-<版本>/`，之后直接用；跑的时候借本机的 Node（要求 20 或以上，
 `PICHAT_NODE` → PATH → 常见位置）。没有参数时按“传统 app”那套来：会话开在家目录、并把浏览器打开。
 
