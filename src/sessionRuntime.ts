@@ -220,6 +220,9 @@ export class SessionRuntime {
     private hasConversation = false;
     /** pi 上报的会话标题；来源是 session_info_changed 事件与 get_state 响应里的 sessionName。 */
     private piSessionTitle = "";
+    /** 上下文用量正在重算 / 重算期间又有新的：同一刻只要一个，挤着来的合成一次（见 refreshStatsSoon）。 */
+    private statsBusy = false;
+    private statsDirty = false;
     /** pi 报的排队状态（steering / followUp）：整屏重画时把它再递一份权威的给界面。
      *  断线那段里 pi 可能已经把排队的那几条投递出去了，那条“队列空了”的推送界面没收到，
      *  回来就还照着旧的样子写着“在排队”，实际上早就发出去了。 */
@@ -917,9 +920,12 @@ export class SessionRuntime {
             case "message_start": {
                 // pi 推送 user 消息开始（含 steer 投递的排队消息）：统一在此渲染 user 气泡，
                 // 替代 handleSend 里的主动 post，使普通/steer 两种路径行为一致。
+                // 话题里多了一条（用户这句 / 上次调用的结果），上下文用量这会儿就变了：
+                // 问一下，别等到这一轮跑完才亮（见 refreshStatsSoon）。
                 const m = evt.message;
                 if (m && (m.role === "user" || m.role === "assistant")) {
                     this.hasConversation = true;
+                    this.refreshStatsSoon();
                 }
                 // 模型开始吐字：这段时间的账从这刻起算（工具跑完接着调就另开一段）
                 if (m && m.role === "assistant") {
@@ -1046,6 +1052,8 @@ export class SessionRuntime {
             case "tool_execution_end":
                 this.edits.trackEditEnd(evt);
                 this.edits.onToolEnd(evt);
+                // 工具结果要装进上下文了（读一个文件就可能涨一大截）：顺手把用量重算一下
+                this.refreshStatsSoon();
                 this.setActivity("working");
                 break;
             case "compaction_start":
@@ -1113,6 +1121,8 @@ export class SessionRuntime {
                 const m = evt.message;
                 if (m && m.role === "assistant") {
                     this.endGenCall();
+                    // 这条的 usage 出来了：上下文用量该涨一截了，就在这儿刷新
+                    this.refreshStatsSoon();
                 }
                 break;
             }
@@ -2144,6 +2154,27 @@ export class SessionRuntime {
             // 上下文用量变了：输入框底下那颗胶囊的横条跟上
             void this.refreshStats();
         }
+    }
+
+    /** 上下文用量重算（"问一下 pi"的那个，见 refreshStats）。
+     *
+     * 为什么不直接调 refreshStats：一轮里每条消息开始 / 结束、每个工具结果都会让它变，
+     * 挤着来的时候一次回合能堆几十个 RPC（get_session_stats 每次要把整份会话过一遍）。
+     * 这里同一刻只跑一个，跑的过程中再来多少都只排一次 —— 反正要的都是最新那个值。
+     * 叫名字带 Soon 而不是直接叫 refresh：它可能就是“下一趟才真的问”（如果正好在问）。 */
+    private refreshStatsSoon(): void {
+        if (this.statsBusy) {
+            this.statsDirty = true;
+            return;
+        }
+        this.statsBusy = true;
+        void this.refreshStats().finally(() => {
+            this.statsBusy = false;
+            if (this.statsDirty) {
+                this.statsDirty = false;
+                this.refreshStatsSoon();
+            }
+        });
     }
 
     public async refreshStats(): Promise<void> {
