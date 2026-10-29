@@ -40,6 +40,8 @@ export class TrayIcon {
     private child: ChildProcess | undefined;
     /** 起不来了（被杀软拦下之类）：别再反复试。 */
     private broken = false;
+    /** 人在托盘菜单里点了「退出」时调它（后端该跟着收摊）。 */
+    public onExitRequest: (() => void) | undefined;
 
     /** 把图标放上去（后端起来时调一次；叫人弹之前也会自己起）。 */
     public show(): void {
@@ -80,12 +82,27 @@ export class TrayIcon {
         if (this.broken || !TrayIcon.available()) { return false; }
         let child: ChildProcess;
         try {
-            child = spawn(TRAY_EXE(), [], { stdio: ["pipe", "ignore", "ignore"], windowsHide: true });
+            // stdout 要读：菜单里点「退出」时它往这儿写一句 exit（见下面那段读）
+            child = spawn(TRAY_EXE(), [], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
         } catch {
             this.broken = true;
             return false;
         }
         this.child = child;
+        child.stdout?.setEncoding("utf8");
+        let rest = "";
+        child.stdout?.on("data", (chunk: string) => {
+            rest += chunk;
+            let at = rest.indexOf("\n");
+            while (at >= 0) {
+                const line = rest.slice(0, at).trim();
+                rest = rest.slice(at + 1);
+                if (line === "exit") {
+                    try { this.onExitRequest?.(); } catch { /* 收摊出错不拦路 */ }
+                }
+                at = rest.indexOf("\n");
+            }
+        });
         // 小程序自己没了（被结束、出错）：下一次要弹提醒时再起一个
         child.once("exit", () => {
             if (this.child === child) { this.child = undefined; }

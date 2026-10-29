@@ -101,6 +101,11 @@ export interface ChatHostOptions {
      * 推给别的后端时要用它认出“这条别推给自己”。不知道就不推。
      */
     selfPageUrl?: () => string | undefined;
+    /**
+     * 通知区域那颗图标的菜单里点了「退出」时调它（由 serverMain 那边实现：停网页服务、
+     * 收掉会话，然后这个进程自己退）。不给就是点了没反应。
+     */
+    quitBackend?: () => void;
 }
 
 /**
@@ -186,6 +191,18 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         this.state = new ServerStateStore(serverStateFile());
         // 通知区域那颗图标：一起来就放上去（开着那一项、又是 Windows 的话）
         this.startTray();
+    }
+
+    /**
+     * 人在托盘菜单里点了「退出」：把整个后端关掉（见 ChatHostOptions.quitBackend）。
+     */
+    protected trayExitRequested(): void {
+        const quit = this.options.quitBackend;
+        if (!quit) {
+            this.log("托盘菜单里点了「退出」，但这边不知道该怎么退（不是 pichat 起的？）。");
+            return;
+        }
+        quit();
     }
 
     // ========================================================================

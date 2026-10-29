@@ -99,7 +99,7 @@ export function usageText(): string {
         "  --version     看版本号",
         "",
         `设置文件：${serverConfigFile()}（第一次启动会写一份默认的出来，改完重启生效）`,
-        "停止：回到这个终端按 Ctrl+C",
+        "停止：回到这个终端按 Ctrl+C，或在通知区域那颗 Pi Chat 图标上右键点「退出」",
     ].join("\n");
 }
 
@@ -290,11 +290,14 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
     // 设置浮层里那颗「编译并重启」：按钮点下去要的是「怎么起的、起在哪儿」，所以由这一层接；
     // 收摊（停网页服务、杀掉 pi 进程）也在这一层，见下面给 restartBackend 赋值那块。
     let restartBackend = (): { ok: boolean; reason?: string } => ({ ok: false, reason: "后端还没起来，不能重启。" });
+    // 托盘菜单里那颗「退出」：也是这一层接（要先停网页服务、再收会话，最后自己退）
+    let quitBackend = (): void => { /* 还没起来：没什么可退的 */ };
     // 推给别的后端时要认出“这条别推给自己”，可地址要等服务起来才知道：先留个口子，起来后插进去
     let pageUrl: string | undefined;
     const host = new ChatHost({
         cwd, log,
         restartBackend: () => restartBackend(),
+        quitBackend: () => quitBackend(),
         selfPageUrl: () => pageUrl,
     });
     const server = new PiChatWebServer(MEDIA_DIR, host, {
@@ -358,6 +361,14 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
             setTimeout(() => { void stop(true).finally(() => exitSoon()); }, 500);
         }
         return result;
+    };
+
+    // 托盘菜单里的「退出」：跟终端里按 Ctrl+C 一样 —— 停网页服务、收掉会话、清地址文件，然后退。
+    // 不静悄悄退：页面该知道是后端关了（不是网络断开），省得它一直重连。
+    quitBackend = () => {
+        if (stopped) { return; }
+        log("托盘菜单里点了「退出」：收摊退出。");
+        void stop().finally(() => exitSoon());
     };
 
     return { url, cwd, host0: bindHost, host, server, stop };

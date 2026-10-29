@@ -3,8 +3,8 @@
  *
  * 干什么：后端有事（某个会话跑完一轮、模型在等你答一道选择题）时，在屏幕右下角弹一张小卡片，
  * 写着哪个会话、说了什么。它只是给人看一眼，鼠标点它什么也不发生。
- * 通知区域里那颗图标只是“它在跑”的招牌：标记右下角那根竖线一直是红的，不闪、也不表示有没有事
- * （消息看没看过，后端判断不了）；点它什么也不弹。
+ * 通知区域里那颗图标是“它在跑”的招牌：标记右下角那根竖线一直是红的，不闪、也不表示有没有事
+ * （消息看没看过，后端判断不了）；右键弹一个小菜单，里头只有一项「退出」。
  *
  * 为什么单独一个常驻小程序：托盘图标得住在一个有窗口消息循环的进程里（.NET 的 NotifyIcon），
  * 后端（Node）那边没有这个东西，只能起这么一个把图标端着。后端退出 → 这个进程的 stdin
@@ -19,7 +19,8 @@
  *   后端 → 这里：
  *     pop \t 标识 \t 名字 \t 摘要 \t 类型   右下角弹一条（类型：done 跑完一轮 / ask 等你答）
  *     stdin 关了就是收摊（后端退出时不一定来得及说一声）
- *   这里什么都不往回写：面板只是给人看的，点了也没反应。
+ *   这里 → 后端：
+ *     exit                                  人在菜单里点了“退出”：后端收到就把自己也关掉
  */
 using System;
 using System.Collections.Concurrent;
@@ -586,6 +587,10 @@ class TrayContext : ApplicationContext
     private NoteWindow noteWindow;
     private readonly ConcurrentQueue<string> inbox = new ConcurrentQueue<string>();
     private bool closing;
+    /** 菜单里已经点过「退出」了：别再发一遍。 */
+    private bool askedExit;
+    /** 往后端写字的管子（只有点了「退出」才会用到）。 */
+    private StreamWriter toBackend;
 
     public TrayContext()
     {
@@ -597,6 +602,12 @@ class TrayContext : ApplicationContext
 
         icon.Icon = mark;
         icon.Text = "Pi Chat";
+        // 右键弹菜单（左键还是什么都不做）：里头就一项「退出」
+        ContextMenuStrip menu = new ContextMenuStrip();
+        ToolStripMenuItem quit = new ToolStripMenuItem("退出");
+        quit.Click += delegate { AskExit(); };
+        menu.Items.Add(quit);
+        icon.ContextMenuStrip = menu;
         icon.Visible = true;
 
         pump.Interval = PUMP_MS;
@@ -703,6 +714,30 @@ class TrayContext : ApplicationContext
             noteWindow.FormClosed += delegate { noteWindow = null; };
         }
         noteWindow.Add(id, name, text, ask);
+    }
+
+    /**
+     * 菜单里点了「退出」：跟后端说一声（它收到就去收摊，收维时把我们的 stdin 关掉，
+     * 这边读到结尾就自己退，见 Quit）。这一步只发话、不自己退：后端没来得及收维
+     * 就先把图标收了的话，人看不出到底退没退。
+     */
+    private void AskExit()
+    {
+        if (askedExit) { return; }
+        askedExit = true;
+        try
+        {
+            if (toBackend == null)
+            {
+                toBackend = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false));
+            }
+            toBackend.WriteLine("exit");
+            toBackend.Flush();
+        }
+        catch
+        {
+            // 管子断了：后端多半已经没了，那这边下一次读也会读到结尾
+        }
     }
 
     private void Quit()

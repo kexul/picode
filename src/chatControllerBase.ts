@@ -1945,10 +1945,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!TrayIcon.available()) { return undefined; }
         if (!this.tray) {
             this.tray = new TrayIcon();
+            this.tray.onExitRequest = () => this.trayExitRequested();
             this.tray.show();
         }
         return this.tray;
     }
+
+    /**
+     * 人在托盘菜单里点了「退出」。默认什么也不做：插件那边没有“整个退出”这回事，
+     * 后端自己起的那个（见 ChatHost）会接手去收摊。
+     */
+    protected trayExitRequested(): void { /* 默认不管 */ }
 
     /**
      * 把这条“有事”推给别的后端（设置里「消息推送」填了别处的地址才有这回事）。
