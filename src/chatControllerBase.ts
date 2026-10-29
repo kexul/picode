@@ -71,7 +71,7 @@ import {
 import { buildGoalFeedbackPrompt, buildGoalJudgePrompt } from "./goalJudge";
 import { dropGoal, readGoal, writeGoal } from "./goalFiles";
 import type { RpcSessionState } from "./piRpc";
-import { TrayIcon, type TrayPendingItem } from "./trayIcon";
+import { TrayIcon } from "./trayIcon";
 import { plainPreview } from "./messageUtils";
 import type { RemoteNotice } from "./remoteNotice";
 import type { ProjectDirEntry } from "./sessionStore";
@@ -163,17 +163,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
     private readonly closedSessions = new Map<string, { cwd: string; file?: string }>();
     private static readonly CLOSED_REMEMBER_MAX = 20;
     /**
-     * 通知区域里那颗图标（Windows）：有事就闪，点它弹清单（见 trayIcon.ts）。
-     * 后端起来时就起那个小程序（见 startTray）；一块屏都没有时也照闪 —— 它提醒的就是“人不在跟前”。
+     * 通知区域里那颗图标和右下角那块提醒面板（Windows，见 trayIcon.ts）。
+     * 后端起来时就起那个小程序（见 startTray）：图标一直在，有事才弹一条。
      */
     private tray: TrayIcon | undefined;
-    /** 托盘清单：哪几个会话有事（按有事的先后），也是那份菜单的内容。 */
-    private trayPending: TrayPendingItem[] = [];
-    /** 人在托盘里点了某一行、可那会儿一块屏都没连着：等下一块屏连上来再切过去。 */
-    private trayPickTarget: string | undefined;
-    /** 人点了托盘菜单里的「退出这颗图标」：这次后端活着期间不再冒出来。 */
-    private trayClosedByUser = false;
-    /** 输入框正有焦点的那些屏：人在敲字就是人正看着这个会话，不用再拿图标闪（见 noteInputFocus）。 */
+    /** 输入框正有焦点的那些屏：人在敲字就是人正看着这个会话，不用再弹（见 noteInputFocus）。 */
     private readonly inputFocusedClients = new Set<string>();
 
     /** sessionList 节流：流式 activity 变更很频繁，合并到下一帧附近推送。 */
@@ -327,7 +321,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract getFontSize(): string;
     /** 变更显示选项的存储（仅改存储，UI 推送由基类统一完成）。value 为按钮组点选的明确值。 */
     protected abstract mutateViewOption(action: string, value?: string): void;
-    /** 有事（跑完一轮 / 模型在等你答题）时让不让托盘图标闪（各平台的子类去读自己的存储）。 */
+    /** 有事（跑完一轮 / 模型在等你答题）时要不要弹提醒（各平台的子类去读自己的存储）。 */
     protected abstract notifyTurnEndEnabled(): boolean;
     /** 设置面板里「消息推送」那一行现在填着什么（没有就是空表）。 */
     protected notifyPushTargets(): string[] { return []; }
@@ -811,9 +805,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 把某块屏（默认正在说话的那块）切到某个会话：不新开、不重载，那个会话的进程一直跑着。 */
     public setActiveSession(panelId: string, clientId: string = this.currentPageId): void {
         if (!this.panels.has(panelId)) { return; }
-        // 人把界面切到这个会话了（点侧边栏、点清单、发消息带过来的标识都走这里）：
-        // 托盘里它那一行就算看过了，别再闪。已经就是这个会话也算（点了当前这一个同样是不想再被提醒）
-        this.traySeen(panelId);
         if (this.clientSessions.get(clientId) === panelId) { return; }
         this.clientSessions.set(clientId, panelId);
         this.lastFocusedPanelId = panelId;
@@ -1876,7 +1867,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     // ========================================================================
-    //  通知区域里那颗图标：有事就闪，点它弹清单，点清单切过去（见 trayIcon.ts）
+    //  通知区域里那颗图标 + 右下角那块提醒面板：有事弹一条，点它切过去（见 trayIcon.ts）
     // ========================================================================
 
     /**
@@ -1895,24 +1886,19 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (this.pushRemoteNote(sessionId, label, preview, kind)) { return; }   // 已经推给别处：这台不弹
         // 人正坐在这个会话的输入框前（界面报过焦点）：他就在看着，再弹一下是多余的
         if (this.inputFocusedOn(sessionId)) { return; }
-        if (!this.trayClosedByUser && TrayIcon.available()) {
-            this.addTrayItem({ id: sessionId, name: label, summary: preview, kind });
-        }
+        this.ensureTray()?.pop({ id: sessionId, name: label, summary: preview, kind });
     }
 
     /**
      * 某块屏报来“输入框有焦点 / 没了”（见 media/chat.js 里那段）。
      *
-     * 有焦点 = 人正坐在这块屏前、看着它现在这个会话：这一刻把那个会话在清单里的一行划掉
-     * （刚才可能已经闪过了），而且它再跑完一轮也不再闪（见 trayNote）。
-     * 反过来，窗口失焦、换到别的窗口之后就不算了：那时候人可能真不在跟前，该闪还得闪。
+     * 有焦点 = 人正坐在这块屏前、看着它现在这个会话：这个会话再跑完一轮不弹提醒（见 trayNote）。
+     * 反过来，窗口失焦、换到别的窗口之后就不算了：那时候人可能真不在跟前，该弹还得弹。
      */
     public noteInputFocus(clientId: string, focused: boolean): void {
         if (!clientId) { return; }
         if (!focused) { this.inputFocusedClients.delete(clientId); return; }
         this.inputFocusedClients.add(clientId);
-        const viewing = this.focusedIdFor(clientId);
-        if (viewing) { this.traySeen(viewing); }
     }
 
     /** 这块屏的连接断了 / 刚接上：它的输入框焦点状态作废（人再来敲字时它会重新报）。 */
@@ -1929,14 +1915,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /**
-     * 别的机器上的后端推来一条“有事”：当成自己的事塞进清单（不同来源、不同会话各占一行）。
-     * 点了那一行是打开它那边的页面，不是切本机的会话（见 trayPick）。
+     * 别的机器上的后端推来一条“有事”：在本机右下角弹一条。
+     * 点它是打开它那边的页面并切到那个会话，不是切本机的会话（见 trayPick）。
      */
     protected trayNoteRemote(notice: RemoteNotice): void {
-        if (!this.notifyTurnEndEnabled() || this.trayClosedByUser) { return; }
-        if (!TrayIcon.available()) { return; }
-        this.addTrayItem({
-            // 同一个来源的同一个会话反复推过来只换不堆（id 一样就把旧的顶掉）
+        if (!this.notifyTurnEndEnabled()) { return; }
+        this.ensureTray()?.pop({
+            // 同一个来源的同一个会话反复推过来只换不堆（面板上 id 一样就把旧的顶掉）
             id: "remote:" + notice.label + ":" + notice.sessionId,
             name: notice.label + " · " + notice.name,
             page: notice.page,
@@ -1946,60 +1931,29 @@ export abstract class ChatControllerBase implements RuntimeHost {
         });
     }
 
-    /** 往托盘清单里加一行（同一个 id 的挪到最后，菜单按有事的先后排）。 */
-    private addTrayItem(item: TrayPendingItem): void {
-        this.trayPending = this.trayPending.filter((old) => old.id !== item.id);
-        this.trayPending.push(item);
-        this.traySync();
-        // 清单是事后还能翻的那份；右下角那块是当场弹出来能看见内容的 —— 两个都要
-        this.tray?.pop(item);
-    }
-
-    /**
-     * 人在界面上切到某个会话了：它那一行就算看过了，从清单里划掉（清单空了托盘就不闪）。
-     *
-     * 光弹开菜单不算、点「打开页面」也不算 —— 那些都没证明人真的看到了那一条回复。
-     * 别的机器推来的那些行（标识是 `remote:` 开头）不在这儿划：点了才开它那边的页面。
-     */
-    private traySeen(sessionId: string): void {
-        if (!this.tray || this.trayPending.length === 0) { return; }
-        const rest = this.trayPending.filter((item) => item.id !== sessionId);
-        if (rest.length === this.trayPending.length) { return; }
-        this.trayPending = rest;
-        this.traySync();
-    }
-
     /**
      * 后端起来时调一次：设置里开着、这台机器也支持，就把那颗图标先放上去。
-     * 没消息时它是静止的（标记照原色），有事才闪 —— 一眼看得出“它在、没坏”。
+     * 它不表示有没有事（竖线一直红着），只是让人看得出“它在跑”。
      */
     public startTray(): void {
         if (!this.notifyTurnEndEnabled()) { return; }
-        this.traySync();
+        this.ensureTray();
     }
 
-    /** 把整份清单原样发一份给托盘（第一次要发的时候才起那个小程序）。 */
-    private traySync(): void {
+    /** 要放图标 / 弹提醒时才起那个小程序（起不来就没有托盘，照常干活）。 */
+    private ensureTray(): TrayIcon | undefined {
+        if (!TrayIcon.available()) { return undefined; }
         if (!this.tray) {
-            if (this.trayClosedByUser || !TrayIcon.available()) { return; }
-            this.tray = new TrayIcon({
-                onPick: (id) => this.trayPick(id),
-                onOpen: () => this.openFrontendPage(),
-                onQuit: () => { this.trayClosedByUser = true; this.trayPending = []; },
-            });
+            this.tray = new TrayIcon({ onPick: (id, page) => this.trayPick(id, page) });
+            this.tray.show();
         }
-        this.tray.setPending(this.trayPending);
+        return this.tray;
     }
 
-    /** 托盘清单里点了一行：把它从清单里划掉，把界面切到那个会话（别处的就开它那个页面）。 */
-    private trayPick(id: string): void {
-        const picked = this.trayPending.find((item) => item.id === id);
-        this.trayPending = this.trayPending.filter((item) => item.id !== id);
-        this.traySync();
-        if (picked?.page) { this.openFrontendPage(picked.page); return; }
-        if (!this.panels.has(id)) { return; }   // 会话已经关掉了：只把它从清单里划掉
-        // 先记下来：那会儿要是一块屏都没连着，等下一块屏连上来时按它切（见 ready 那条）
-        this.trayPickTarget = id;
+    /** 面板上点了一条：别的机器推来的那条开它那边的页面；本机的把界面切到那个会话。 */
+    private trayPick(id: string, page?: string): void {
+        if (page) { this.openFrontendPage(page); return; }
+        if (!this.panels.has(id)) { return; }   // 会话已经关掉了：没什么可切的
         const target = this.trayTargetClient();
         if (target === undefined) { this.openFrontendPage(); return; }
         this.setActiveSession(id, target);
@@ -2012,16 +1966,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return undefined;
     }
 
-    /** 某块屏连上来时，托盘里点过的那一行还没切过去：先切过去（盖过“自动打开最近会话”）。 */
-    private applyTrayPickTarget(clientId: string): void {
-        const target = this.trayPickTarget;
-        if (!target) { return; }
-        this.trayPickTarget = undefined;
-        if (this.panels.has(target)) { this.setActiveSession(target, clientId); }
-    }
-
     /**
-     * 托盘里点了「打开页面」（或点了别的机器推来的那一行，page 就是它那边的地址）：
+     * 点了提醒面板上那一条、要开它那边的页面时用（page 就是它那边的地址）：
      * 把界面打开 / 拉到前面。不给 page 就是本机的页面。
      * 默认什么都做不了：能不能开、怎么开是宿主的活（见 ChatHost）。
      */
@@ -2038,7 +1984,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected disposeTray(): void {
         try { this.tray?.dispose(); } catch { /* 收摊出错不拦路 */ }
         this.tray = undefined;
-        this.trayPending = [];
     }
 
     /**
@@ -2049,8 +1994,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
      *   2. 告诉每块屏「这个会话跑完了一轮」—— 界面据此把那个名字旁边的点标成绿的
      *      （跑完了，不管当时有没有在看它）；这条不管开关都发，关了提醒那颗绿点还得看得见；
      *      带上 status：被中止的一轮不算跑完、也不会绿；
-     *   3. 让 Windows 通知区域那颗图标闪一下（见 trayNote）：被中止的一轮不闪，
-     *      别人派的子会话也不闪 —— 它的结果会交回派它的会话，那边跑完再闪。
+     *   3. 让 Windows 那边弹一条提醒（见 trayNote）：被中止的一轮，
+     *      别人派的子会话也不弹 —— 它的结果会交回派它的会话，那边跑完再提醒。
      */
     public onTurnEnd(info: TurnEndInfo): void {
         // 判官会话跑完了一轮：这一轮的账归它（不弹提醒、不当普通会话处理）
@@ -2076,7 +2021,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             child: handedBack,
         };
         this.forEachClient((_clientId, send) => { send({ ...msg }); });
-        // 托盘里闪一下：被中止的那一轮不算跑完；子会话的结果会交回派它的会话，那边跑完再提醒
+        // 弹一条提醒：被中止的那一轮不算跑完；子会话的结果会交回派它的会话，那边跑完再提醒
         if (info.status !== "cancelled" && !handedBack) { this.trayNote(info.panelId, name, info.lastReplyText ?? ""); }
     }
 
@@ -2589,9 +2534,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 // （网页视图重建后它本地什么都没有，得靠这一条把画面接回去）
                 if (had) { this.postToOneClient(clientId, { type: "sessionActivated", sessionId: had }); }
                 this.onWebviewReady();
-                // 托盘里点过某一行、可那会儿一块屏都没连着：先切到那个会话，比“自动打开最近会话”要紧
-                if (this.trayPickTarget) { this.applyTrayPickTarget(clientId); }
-                else if (fresh) { void this.maybeAutoLoadLastSession(clientId); }
+                if (fresh) { void this.maybeAutoLoadLastSession(clientId); }
                 // webview 就绪后后台预热备用进程，后续新会话免冷启动。
                 // 启动路径延迟执行：首个会话的 pi 正在冷启动，同时再拉起备用进程会在
                 // VSCode 窗口恢复期叠加出明显的 CPU/IO 峰值（两个 pi 各需 ~3s 加载）。

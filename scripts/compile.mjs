@@ -95,7 +95,7 @@ function compileShotExe() {
 /**
  * 编通知区域那颗图标（bin/tray.cs → bin/tray.exe）。
  *
- * 跟截屏那支一样：编不出来不算构建失败，只是没有托盘图标可闪（见 src/trayIcon.ts），
+ * 跟截屏那支一样：编不出来不算构建失败，只是没有托盘图标和右下角那块提醒面板（见 src/trayIcon.ts），
  * 界面照常能用。
  */
 function compileTrayExe() {
@@ -107,7 +107,7 @@ function compileTrayExe() {
         target: "winexe",
         references: ["System.Drawing.dll", "System.Windows.Forms.dll"],
         whySkip: "托盘图标只有 Windows 有，没必要编",
-        whyFail: "这个包在 Windows 上就没有托盘图标可闪",
+        whyFail: "这个包在 Windows 上就没有托盘图标和提醒面板",
     });
 }
 

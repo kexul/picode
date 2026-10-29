@@ -609,7 +609,7 @@
   var caseSensitivePaths = false;
   /**
    * 地址里带了 ?session=<标识> 就切到那个会话。
-   * 哪儿来的这种地址：别的机器上的后端“有事”推过来，这边点托盘清单里那一行，
+   * 哪儿来的这种地址：别的机器上的后端“有事”推过来，这边点右下角提醒面板上那一条，
    * 浏览器打开的就是它那边的页面 + 那一个会话（见 src/remoteNotice.ts）。
    * 会话壳可能还没到：先记着，等会话列表来了再切（见 sessionList 那段）。
    */
@@ -8795,7 +8795,7 @@
   inputEl.addEventListener("input", () => { autoResize(); maybeShowFileMenu(); maybeShowHashMenu(); maybeShowSlashMenu(); });
   inputEl.addEventListener("blur", () => { setTimeout(() => { hideFileMenu(); hideHashMenu(); closeSlashMenu(); fileMenuEl.classList.add("hidden"); }, 150); });
   // 输入框有没有焦点，报给后端：有焦点就是“人正坐在这块屏前看着这个会话”，
-  // 这种时候某会话跑完一轮不用拿通知区域那颗图标闪（见 chatControllerBase 的 noteInputFocus）。
+  // 这种时候某会话跑完一轮不用再弹提醒（见 chatControllerBase 的 noteInputFocus）。
   // 窗口失焦、页面退到后台也会让输入框失焦，但浏览器不一定补那条 blur，所以两处都听。
   const postInputFocus = (focused) => vscode.postMessage({ type: "inputFocus", focused });
   inputEl.addEventListener("focus", () => postInputFocus(true));

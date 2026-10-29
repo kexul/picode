@@ -97,9 +97,9 @@ export interface ChatHostOptions {
      */
     restartBackend?: () => { ok: boolean; reason?: string };
     /**
-     * 托盘菜单里点了「打开页面」时调它：把界面打开（后端这侧就是用它自己的地址开浏览器）。
+     * 点了提醒面板上那一条、要开它那边的页面时调它（后端这侧就是用自己的地址开浏览器）。
      * 不给就当没有这一项。
-     * @param page 要打开哪个地址：不给就是本机这个；别的机器推来的那一行给的是它那边的地址
+     * @param page 要打开哪个地址：不给就是本机这个；别的机器推来的那条给的是它那边的地址
      */
     openPage?: (page?: string) => void;
     /**
@@ -904,7 +904,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const v = this.readOption<string>(ChatHost.KEY_FONT_SIZE, DEFAULT_FONT_SIZE);
         return typeof v === "string" && /^\d+$/.test(v) ? v : DEFAULT_FONT_SIZE;
     }
-    /** 有事时让不让 Windows 通知区域那颗图标闪（设置里那一项，界面上叫「跑完让通知区域的图标闪」）。 */
+    /** 有事时要不要弹提醒（设置文件里的 notifyTurnEnd：关掉就连那颗图标也不放上去）。 */
     public getNotifyTurnEnd(): boolean {
         return this.readOption<boolean>(ChatHost.KEY_NOTIFY_TURN_END, DEFAULT_NOTIFY_TURN_END) === true;
     }
@@ -1232,7 +1232,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 // 这里不用做任何事，收下即可。
                 return true;
             case "inputFocus":
-                // 输入框有焦点 = 人正看着这块屏现在的会话：托盘那边不用再闪（见 noteInputFocus）
+                // 输入框有焦点 = 人正看着这块屏现在的会话：这个会话跑完不用再弹提醒（见 noteInputFocus）
                 this.noteInputFocus(this.currentPageId, msg.focused === true);
                 return true;
             case "browserResync": {
@@ -1496,7 +1496,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
 
     /**
      * 模型在某个会话里问了一道选择题：那块屏上的卡片只管那一个正在看的屏，
-     * 提醒走托盘（人在别的会话 / 别的窗口 / 根本就在别的屋里时，靠那颗图标知道要回来答一句）。
+     * 提醒走右下角那块面板（人在别的会话 / 别的窗口 / 根本就在别的屋里时，靠它知道要回来答一句）。
      */
     private broadcastAskWaiting(sessionId: string | undefined, question: string): void {
         const rt = sessionId ? this.panels.get(sessionId) : undefined;
@@ -1504,7 +1504,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         this.trayNote(sessionId ?? "", rt ? this.sessionDisplayName(rt) : "", question, "ask");
     }
 
-    /** 托盘里点了「打开页面」：用系统默认浏览器开（默认开本机的，别的机器推来的那条开它那边的）。 */
+    /** 要开别的机器那边的页面时用系统默认浏览器开（默认开本机的）。 */
     protected override openFrontendPage(page?: string): void {
         this.options.openPage?.(page);
     }
@@ -1513,7 +1513,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 把这条“有事”推给别的后端（设置里「消息推送」填了别处的地址才有这回事）。
      * 推的是一条最小的通知：哪台、哪个会话、叫什么、点了打开哪个地址。
      * 推不过去就算了（对方没起、网断了都一样：不重试、不攒着）。
-     * @returns 推给了别处没有（推了这台就不自己闪：一个人只盯得了一台机器）
+     * @returns 推给了别处没有（推了这台就不自己弹：一个人只盯得了一台机器）
      */
     protected override pushRemoteNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): boolean {
         const notify = readServerConfig().config.notify;

@@ -274,7 +274,7 @@ export interface WebServerHost {
     onServerStopped(): void;
     /** 当前界面颜色（写进页面的初始主题）。 */
     getThemeMode(): "light" | "dark";
-    /** 别处推来一条“有事”（`POST /notify`，口令已经核对过）：塞进托盘清单。 */
+    /** 别处推来一条“有事”（`POST /notify`，口令已经核对过）：在本机右下角弹一条。 */
     acceptRemoteNotice(notice: RemoteNotice): void;
 }
 

@@ -2,41 +2,37 @@
  * trayIcon —— 通知区域里那颗图标和右下角那块提醒面板（Windows）。
  *
  * 后端起一个常驻的小程序（bin/tray.exe，源码与来历见 bin/tray.cs），由它把这两样端着：
- * 托盘图标有事就闪，点它弹一份清单，点其中的一行切到那个会话；右下角那块面板当场弹一条，
- * 写着哪个会话、说了什么，点一下也是切过去。
+ * 图标只是“它在跑”的招牌（那根竖线一直红着，点它什么也不弹）；有事就在右下角弹一张卡片，
+ * 写着哪个会话、说了什么，点一下切过去。
  *
  * 为什么不在页面上发：以前靠浏览器通知，浏览器和 Windows 都会因为“发太多”把横幅收掉，
  * 而且只认 https 或本机地址（手机用局域网地址打开就发不出来），插件里的对话面板更是发不了。
- * 托盘图标是后端自己进程里的东西，不经过浏览器，也不受影响。
+ * 托盘和面板是后端自己进程里的东西，不经过浏览器，也不受影响。
  *
- * 这不是 Windows 就什么都不做：`available()` 为假，调用方照常干活（只是没有托盘）。
+ * 这不是 Windows 就什么都不做：`available()` 为假，调用方照常干活（只是没有提醒）。
  * 小程序没编出来（非 Windows 上构建的包、机器上没有 .NET Framework）也一样。
  */
 import { ChildProcess, spawn } from "child_process";
 import * as fs from "fs";
 import { appBin } from "./appAssets";
 
-/** 托盘清单里的一行：哪个会话有事、它叫什么。 */
-export interface TrayPendingItem {
+/** 面板上弹的一条：哪个会话有事、它叫什么、说了什么。 */
+export interface TrayNote {
     /** 会话标识；别的机器推来的那条是 `remote:<来源>:<会话标识>`。 */
     id: string;
     name: string;
     /** 别的机器推来的那条才有：点了要打开它那边的页面（本机的会话没有这个）。 */
     page?: string;
-    /** 右下角那块面板上显示的摘要（一两行，后端已经截好）；没有就只显示名字。 */
+    /** 面板上显示的摘要（一两行，后端已经截好）；没有就只显示名字。 */
     summary?: string;
-    /** 面板上这一行算哪种事：跑完一轮 / 等你答一句。 */
+    /** 面板上这一条算哪种事：跑完一轮 / 等你答一句。 */
     kind?: "done" | "ask";
 }
 
-/** 人在托盘菜单里点的东西（都直接来自那颗小程序，见 bin/tray.cs 里的协议）。 */
+/** 人在面板上点了一条（都直接来自那颗小程序，见 bin/tray.cs 里的协议）。 */
 export interface TrayHooks {
-    /** 清单里点了一项：把界面切到那个会话。 */
-    onPick?(id: string): void;
-    /** 点了「打开页面」。 */
-    onOpen?(): void;
-    /** 点了「退出这颗图标」：这次后端活着期间不再冒出来。 */
-    onQuit?(): void;
+    /** 点了一条：本机的会话就切过去，`page` 有值就是打开那台机器的页面。 */
+    onPick?(id: string, page?: string): void;
 }
 
 /** 托盘小程序（构建时编好，见 bin/tray.cs 与 scripts/compile.mjs）；打成单个 exe 时它内嵌在 exe 里。 */
@@ -57,26 +53,13 @@ export class TrayIcon {
 
     constructor(private readonly hooks: TrayHooks = {}) {}
 
-    /**
-     * 把整份清单重发一遍：小程序照这份清单画菜单，非空就闪、空就停。
-     * 清单变了就调它，后端不用管小程序现在是什么状态。
-     */
-    public setPending(items: TrayPendingItem[]): void {
-        if (this.broken) { return; }
-        if (!this.start()) { return; }
-        // 协议是一行、字段用制表符分开：名字里带换行 / 制表符会把这一行切坏，先压平
-        const fields = ["list"];
-        for (const item of items) {
-            fields.push(flat(item.id), flat(item.name || "会话"));
-        }
-        this.write(fields.join("\t"));
+    /** 把图标放上去（后端起来时调一次；叫人弹之前也会自己起）。 */
+    public show(): void {
+        this.start();
     }
 
-    /**
-     * 右下角那块面板上弹一条。
-     * 跟清单不是一回事：清单是事后还能翻的那份，这条是当场摆到眼前的。
-     */
-    public pop(item: TrayPendingItem): void {
+    /** 右下角那块面板上弹一条。 */
+    public pop(item: TrayNote): void {
         if (!this.start()) { return; }
         const fields = [
             "pop",
@@ -84,6 +67,7 @@ export class TrayIcon {
             flat(item.name || "会话"),
             flat(item.summary ?? ""),
             item.kind === "ask" ? "ask" : "done",
+            flat(item.page ?? ""),
         ];
         this.write(fields.join("\t"));
     }
@@ -118,7 +102,7 @@ export class TrayIcon {
         this.buffer = "";
         child.stdout?.setEncoding("utf8");
         child.stdout?.on("data", (chunk: string) => { this.onData(chunk); });
-        // 小程序自己没了（被结束、出错）：下一次要发清单时再起一个
+        // 小程序自己没了（被结束、出错）：下一次要弹提醒时再起一个
         child.once("exit", () => {
             if (this.child === child) { this.child = undefined; }
         });
@@ -130,7 +114,7 @@ export class TrayIcon {
         try { this.child?.stdin?.write(line + "\n"); } catch { /* 小程序没了就算了 */ }
     }
 
-    /** 小程序写回来的行：`pick\t会话标识` / `open` / `quit`。 */
+    /** 小程序写回来的行：`pick\t会话标识\t页面`。 */
     private onData(chunk: string): void {
         this.buffer += chunk;
         let at = this.buffer.indexOf("\n");
@@ -144,17 +128,8 @@ export class TrayIcon {
 
     private onLine(line: string): void {
         const parts = line.split("\t");
-        switch (parts[0]) {
-            case "pick":
-                if (parts[1]) { this.hooks.onPick?.(parts[1]); }
-                return;
-            case "open":
-                this.hooks.onOpen?.();
-                return;
-            case "quit":
-                this.hooks.onQuit?.();
-                return;
-        }
+        if (parts[0] !== "pick" || !parts[1]) { return; }
+        this.hooks.onPick?.(parts[1], parts[2] || undefined);
     }
 }
 

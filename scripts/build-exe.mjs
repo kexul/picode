@@ -256,7 +256,7 @@ async function main() {
     try {
         fs.rmSync(EXE, { force: true });
     } catch {
-        fail("dist\pichat.exe 正被占着（它还在跑）。先把它关掉（托盘菜单里那颗「退出这颗图标」或者任务管理器）再打包。");
+        fail("dist\pichat.exe 正被占着（它还在跑）。先把它关掉（任务管理器里结束它，或者那个 pichat 后端先退出）再打包。");
     }
     problem = compileCsc(csc, EXE, LAUNCHER_SRC, [
         "-r:System.Windows.Forms.dll",
