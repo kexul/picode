@@ -10311,8 +10311,10 @@
     return row;
   }
 
-  /** 画一遍统计弹窗的内容：上面一句汇总（当前会话 / 一共几次 / 合计多久），下面按工具名一张表，
-   *  再下面是花得最久的那几次调用（工具名 + 那次在干什么 + 耗时）。 */
+  /** 画一遍统计弹窗的内容：上面一句汇总（一共几次 / 合计多久），下面按工具名一张表，
+   *  再下面是花得最久的那几次调用（工具名 + 那次在干什么 + 耗时）。
+   *  那些“刷新页面就从头再算”“并行跑的几条各算各的”写在弹窗标题的悬停提示里（见 renderHtml 的 toolStatsTitle），
+   *  不在正文里另占几行小字。 */
   function renderToolStats() {
     if (!toolStatsBody) { return; }
     toolStatsBody.innerHTML = "";
@@ -10323,17 +10325,16 @@
       return;
     }
     const stats = st.toolStats;
-    toolStatsBody.appendChild(tsBlock("ts-summary",
-      "当前会话「" + sessionLabel(st) + "」 · 共 " + stats.calls + " 次调用 · 合计 " + formatElapsed(stats.totalMs)));
     if (!stats.calls) {
-      toolStatsBody.appendChild(tsBlock("ts-empty", "这次打开页面之后，这个会话还没跑过工具调用。"));
+      toolStatsBody.appendChild(tsBlock("ts-empty", "还没跑过工具调用。"));
       return;
     }
+    toolStatsBody.appendChild(tsBlock("ts-summary",
+      "共 " + stats.calls + " 次调用 · 合计 " + formatElapsed(stats.totalMs)));
     // 按工具名：合计时间长的排前面（看着就知道时间花在哪了）
     const rows = Array.from(stats.byTool.entries())
       .map(([name, v]) => ({ name, count: v.count, totalMs: v.totalMs, maxMs: v.maxMs }))
       .sort((a, b) => b.totalMs - a.totalMs);
-    toolStatsBody.appendChild(tsBlock("ts-section", "按工具"));
     toolStatsBody.appendChild(tsRowEl([
       { text: "工具", cls: "ts-name" },
       { text: "次数", cls: "ts-num ts-count" },
@@ -10350,7 +10351,7 @@
         { text: formatElapsed(r.maxMs), cls: "ts-num" },
       ]));
     }
-    toolStatsBody.appendChild(tsBlock("ts-section", "花得最久的 " + stats.slowest.length + " 次调用 · 点一条看全文"));
+    toolStatsBody.appendChild(tsBlock("ts-section", "最慢的 " + stats.slowest.length + " 次"));
     for (const c of stats.slowest) {
       const row = tsRowEl([
         { text: c.name, cls: "ts-name" },
@@ -10368,9 +10369,6 @@
       });
       toolStatsBody.appendChild(row);
     }
-    toolStatsBody.appendChild(tsBlock("ts-note",
-      "同一时刻并行跑的几条各算各的，合计会比实际过去的时间多。\n" +
-      "只算这次打开页面之后跑过的调用，刷新页面就从头再算。"));
   }
 
   function openToolStats() {
@@ -10461,7 +10459,8 @@
     return row;
   }
 
-  /** 画一遍「加载了什么」：上面一句汇总，下面工具 / 技能 / MCP 三节。 */
+  /** 画一遍「加载了什么」：工具 / 技能 / MCP 三节，每节标题后面写着这一节有几个。
+   *  清单是怎么来的、MCP 只认得出什么，写在弹窗标题的悬停提示里（见 renderHtml 的 envTitle）。 */
   function renderEnv() {
     if (!envBody) { return; }
     envBody.innerHTML = "";
@@ -10473,9 +10472,7 @@
     }
     const env = (envSnapshot && envSnapshotFor === st.id) ? envSnapshot : null;
     if (!env) {
-      envBody.appendChild(tsBlock("ts-empty", envWaiting
-        ? "正在取…"
-        : "还没取到。等这个会话跑起来（输入框底下那颗圆环不再转）再点一次这颗按钮。"));
+      envBody.appendChild(tsBlock("ts-empty", envWaiting ? "正在取…" : "还没取到，过一会儿再点一次。"));
       return;
     }
     const tools = Array.isArray(env.tools) ? env.tools : [];
@@ -10487,16 +10484,10 @@
     const plainTools = tools.filter((it) => !isMcpTool(it));
     const mcpToolCount = tools.length - plainTools.length;
     const onCount = plainTools.filter((it) => it && it.on).length;
-    envBody.appendChild(tsBlock("ts-summary",
-      "工具 " + plainTools.length + " 个（" + onCount + " 个现在生效） · 技能 " + skills.length + " 个 · MCP "
-      + servers.length + " 个" + (mcpToolCount > 0 ? "（挂着 " + mcpToolCount + " 个工具）" : "")));
-    if (env.cwd) { envBody.appendChild(tsBlock("ts-note", env.cwd)); }
 
     // 工具（按名字排）
-    envBody.appendChild(tsBlock("ts-section", "工具"));
-    if (!plainTools.length) {
-      envBody.appendChild(tsBlock("ts-empty", "一个工具都没有。"));
-    }
+    envBody.appendChild(tsBlock("ts-section",
+      "工具 " + plainTools.length + " 个" + (onCount ? " · " + onCount + " 个生效" : "")));
     plainTools.slice()
       .sort((a, b) => String(a && a.name || "").localeCompare(String(b && b.name || "")))
       .forEach((tool) => {
@@ -10507,15 +10498,9 @@
           !!tool.on,
           [(tool.path || ""), tool.exposure ? "怎么用：" + tool.exposure : ""].filter(Boolean).join("\n")));
       });
-    if (mcpToolCount > 0) {
-      envBody.appendChild(tsBlock("ts-note", "另有 " + mcpToolCount + " 个 MCP 工具，见下面 MCP 那一节。"));
-    }
 
     // 技能
-    envBody.appendChild(tsBlock("ts-section", "技能"));
-    if (!skills.length) {
-      envBody.appendChild(tsBlock("ts-empty", "没有技能。"));
-    }
+    envBody.appendChild(tsBlock("ts-section", "技能 " + skills.length + " 个"));
     skills.slice()
       .sort((a, b) => String(a && a.name || "").localeCompare(String(b && b.name || "")))
       .forEach((skill) => {
@@ -10523,10 +10508,8 @@
       });
 
     // MCP
-    envBody.appendChild(tsBlock("ts-section", "MCP"));
-    if (!servers.length) {
-      envBody.appendChild(tsBlock("ts-empty", "没有配 MCP 服务器。"));
-    }
+    envBody.appendChild(tsBlock("ts-section",
+      "MCP " + servers.length + " 个" + (mcpToolCount > 0 ? " · " + mcpToolCount + " 个工具" : "")));
     servers.slice()
       .sort((a, b) => String(a && a.name || "").localeCompare(String(b && b.name || "")))
       .forEach((server) => {
@@ -10538,11 +10521,6 @@
         const source = server.error ? String(server.error) : envSourceText(server);
         envBody.appendChild(envRowEl(server.name || "?", state, source, server.tools > 0, server.error || server.path || ""));
       });
-
-    envBody.appendChild(tsBlock("ts-note",
-      "清单由会话里的 pi 报上来，有变化就跟着更新（几秒一次）。\n"
-      + "MCP 只看得出「连上了几个工具」：连不上、连上了但一个工具都没有，这里都写「没有工具」"
-      + "（连不上的原因只有 pi 自己的日志里有）。"));
   }
 
   /** 现要一份清单（后端存着最近一次报上来的，可能比手上这份新）。 */

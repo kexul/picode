@@ -174,7 +174,7 @@ ${chatColumnClose}  <div id="sidebarDock" class="pk-host pk-drawer pk-workspace"
   <div id="toolStatsOverlay" class="hidden">
     <div id="toolStatsPanel">
       <div id="toolStatsHead">
-        <span id="toolStatsTitle">工具调用耗时</span>
+        <span id="toolStatsTitle" title="只算这次打开页面之后跑过的调用（刷新页面从头再算）；同一时刻并行跑的几条各算各的，合计会比实际过去的时间多。">工具调用耗时</span>
         <span class="ts-spacer"></span>
         <button id="toolStatsClose" type="button" title="关闭" aria-label="关闭">${ICON_CLOSE}</button>
       </div>
@@ -184,7 +184,7 @@ ${chatColumnClose}  <div id="sidebarDock" class="pk-host pk-drawer pk-workspace"
   <div id="envOverlay" class="hidden">
     <div id="envPanel">
       <div id="envHead">
-        <span id="envTitle">工具</span>
+        <span id="envTitle" title="清单由会话里的 pi 报上来，几秒更新一次；MCP 只认得出连上了几个工具。">工具</span>
         <span class="ts-spacer"></span>
         <button id="envClose" type="button" title="关闭" aria-label="关闭">${ICON_CLOSE}</button>
       </div>

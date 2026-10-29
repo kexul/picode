@@ -1156,7 +1156,6 @@
   .ts-call.open { align-items: flex-start; }
   .ts-call.open .ts-text { white-space: pre-wrap; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
   .ts-empty { padding: 18px 0; font-size: 12.5px; opacity: .55; text-align: center; }
-  .ts-note { font-size: 11px; opacity: .5; margin-top: 12px; line-height: 1.5; white-space: pre-line; }
   /* 「工具」那张清单（工具 / 技能 / MCP）：三列——名字、状态、来源。
      名字要放得下 mcp__服务器__工具 这种长名，所以给得宽一些，字用等宽的。 */
   #envBody .ts-row { gap: 10px; }
