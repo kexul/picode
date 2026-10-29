@@ -348,8 +348,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected onPiMissing(_piPath: string): void { /* 默认无操作 */ }
     /** pi 缺失提示文案（基类默认；独立后端覆盖为按实际目录算的路径）。 */
     protected piMissingMessage(piPath: string): string {
-        return `未找到 pi 可执行文件（当前配置："${piPath}"）。请确认已安装 pi 并加入系统 PATH，`
-            + `或改 ~/.pi/pichat/config.json 里的 piPath。`;
+        return `未找到 pi 可执行文件（当前配置："${piPath}"）。请确认已安装 pi 并加入系统 PATH。`;
     }
     // ========================================================================
     //  路径工具（RuntimeHost）

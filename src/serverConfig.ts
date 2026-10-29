@@ -18,7 +18,6 @@ import {
     DEFAULT_FOCUS_INPUT_KEY,
     DEFAULT_FONT_SIZE,
     DEFAULT_NEW_SESSION_KEY,
-    DEFAULT_NOTIFY_TURN_END,
     DEFAULT_SEND_KEY,
     DEFAULT_TAB_SWITCH_KEY,
     DEFAULT_THEME_MODE,
@@ -31,7 +30,6 @@ import {
 } from "./viewOptions";
 
 export interface ServerWebSettings {
-    enabled: boolean;
     port: number;
     host: string;
     /**
@@ -60,12 +58,8 @@ export interface ServerNotifySettings {
 }
 
 export interface ServerConfig {
-    piPath: string;
     provider: string;
     model: string;
-    extraArgs: string[];
-    trustProject: boolean;
-    tabaEnabled: boolean;
     autoLoadLast: boolean;
     sendKey: string;
     newSessionKey: string;
@@ -73,7 +67,6 @@ export interface ServerConfig {
     tabSwitchKey: string;
     focusInputKey: string;
     fontSize: string;
-    notifyTurnEnd: boolean;
     themeMode: "light" | "dark";
     notify: ServerNotifySettings;
     webServer: ServerWebSettings;
@@ -83,12 +76,8 @@ export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartia
 
 /** 默认值只此一份。深冻是为了防止调用方顺手改它，把后面所有读取也带偏。 */
 export const DEFAULT_SERVER_CONFIG: ServerConfig = deepFreeze({
-    piPath: "pi",
     provider: "",
     model: "",
-    extraArgs: [],
-    trustProject: true,
-    tabaEnabled: true,
     autoLoadLast: DEFAULT_AUTO_LOAD_LAST,
     sendKey: DEFAULT_SEND_KEY,
     newSessionKey: DEFAULT_NEW_SESSION_KEY,
@@ -96,12 +85,11 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = deepFreeze({
     tabSwitchKey: DEFAULT_TAB_SWITCH_KEY,
     focusInputKey: DEFAULT_FOCUS_INPUT_KEY,
     fontSize: DEFAULT_FONT_SIZE,
-    notifyTurnEnd: DEFAULT_NOTIFY_TURN_END,
     themeMode: DEFAULT_THEME_MODE,
     // 跨机器的“有事”提醒默认不推（收到就收，不用写什么）
     notify: { pushTo: [], pushLabel: "" },
     // 默认对所有网卡开放（手机等设备打开地址就能用）；只给自己用就改 127.0.0.1，或启动时加 --host 127.0.0.1
-    webServer: { enabled: true, port: 51883, host: "0.0.0.0", trustedOrigins: [] },
+    webServer: { port: 51883, host: "0.0.0.0", trustedOrigins: [] },
 });
 
 /** 让默认值对象（连着里面的数组、子对象）只读；不改调用方传进来的东西。 */
@@ -119,14 +107,21 @@ function deepFreeze<T>(value: T): T {
 function defaults(): ServerConfig {
     return {
         ...DEFAULT_SERVER_CONFIG,
-        extraArgs: [],
         notify: { ...DEFAULT_SERVER_CONFIG.notify, pushTo: [] },
         webServer: { ...DEFAULT_SERVER_CONFIG.webServer, trustedOrigins: [] },
     };
 }
 
 /** 已经去掉或改名的功能留下的键：老设置文件里可能还写着，读到时安静丢掉，不刷“不认识的项”。 */
-const RETIRED_KEYS = new Set(["turnTitleWaitSeconds", "notifyBeep"]);
+const RETIRED_KEYS = new Set([
+    "turnTitleWaitSeconds", "notifyBeep",
+    // 不再让人配的几项：pi 走 PATH、永远信任项目、没有额外启动参数、子会话总是开
+    "piPath", "extraArgs", "trustProject", "tabaEnabled",
+    // 现在在设置面板里（存 state.json），不再从这儿读
+    "notifyTurnEnd",
+]);
+/** 同上，webServer 那层里去掉的键。 */
+const RETIRED_WEB_KEYS = new Set(["enabled"]);
 
 /** JSON 里的对象（数组和 null 都不算）。 */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -256,6 +251,22 @@ function pickText(value: unknown, label: string, warnings: string[]): string {
 }
 
 /** 把任意来源的对象规范化成 ServerConfig。这层全是纯函数。 */
+/**
+ * 文件里还摆着、但现在已经不用的键（改名的、删掉的、搬到设置面板去的）：
+ * 调用方拿它可以顺手把文件重写一遍，别让人对着一堆没用的项猜。
+ */
+function retiredKeysIn(raw: unknown): string[] {
+    if (!isPlainObject(raw)) { return []; }
+    const found = Object.keys(raw).filter((key) => RETIRED_KEYS.has(key));
+    const web = raw.webServer;
+    if (isPlainObject(web)) {
+        for (const key of Object.keys(web)) {
+            if (RETIRED_WEB_KEYS.has(key)) { found.push(`webServer.${key}`); }
+        }
+    }
+    return found;
+}
+
 export function normalizeServerConfig(raw: unknown): { config: ServerConfig; warnings: string[] } {
     const warnings: string[] = [];
     const config = defaults();
@@ -272,25 +283,9 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
         warnings.push(`配置里有不认识的项：${unknownKeys.join("、")}`);
     }
 
-    // ---- 启动 pi 用的参数（config.json 顶层：piPath / provider / model / extraArgs / trustProject）----
-    config.piPath = pickNonEmptyString(raw.piPath, DEFAULT_SERVER_CONFIG.piPath, "piPath", warnings);
+    // ---- 启动 pi 用的参数（config.json 顶层：provider / model）----
     config.provider = pickString(raw.provider, DEFAULT_SERVER_CONFIG.provider, "provider", warnings);
     config.model = pickString(raw.model, DEFAULT_SERVER_CONFIG.model, "model", warnings);
-    if (raw.extraArgs !== undefined) {
-        if (!Array.isArray(raw.extraArgs)) {
-            warnings.push(`extraArgs 不是数组，已用默认值${showDefault([])}`);
-        } else {
-            // 混进来的非字符串没法当命令行参数用，挑出去丢掉，剩下的照原顺序留着
-            const kept = raw.extraArgs.filter((item): item is string => typeof item === "string");
-            const dropped = raw.extraArgs.length - kept.length;
-            if (dropped > 0) {
-                warnings.push(`extraArgs 里有 ${dropped} 项不是字符串，已丢掉`);
-            }
-            config.extraArgs = kept;
-        }
-    }
-    config.trustProject = pickBoolean(raw.trustProject, DEFAULT_SERVER_CONFIG.trustProject, "trustProject", warnings);
-    config.tabaEnabled = pickBoolean(raw.tabaEnabled, DEFAULT_SERVER_CONFIG.tabaEnabled, "tabaEnabled", warnings);
 
     // ---- 显示选项（默认值都从 viewOptions 取，那边改这里跟着改）----
     config.autoLoadLast = pickBoolean(raw.autoLoadLast, DEFAULT_SERVER_CONFIG.autoLoadLast, "autoLoadLast", warnings);
@@ -307,7 +302,6 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
             warnings.push(`fontSize 得是数字字符串（比如 "14"），已用默认值${showDefault(DEFAULT_FONT_SIZE)}`);
         }
     }
-    config.notifyTurnEnd = pickBoolean(raw.notifyTurnEnd, DEFAULT_SERVER_CONFIG.notifyTurnEnd, "notifyTurnEnd", warnings);
     if (raw.themeMode !== undefined) {
         if (raw.themeMode === "light" || raw.themeMode === "dark") {
             config.themeMode = raw.themeMode;
@@ -338,7 +332,6 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
         if (!isPlainObject(web)) {
             warnings.push("webServer 不是一个对象，已全部用默认值");
         } else {
-            config.webServer.enabled = pickBoolean(web.enabled, DEFAULT_SERVER_CONFIG.webServer.enabled, "webServer.enabled", warnings);
             // 0 是合法值（让系统自动挑一个空闲端口），别当成没填
             config.webServer.port = pickInt(
                 web.port, 0, 65535, DEFAULT_SERVER_CONFIG.webServer.port, "webServer.port", warnings, "（0 表示自动挑端口）",
@@ -346,7 +339,7 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
             config.webServer.host = pickNonEmptyString(web.host, DEFAULT_SERVER_CONFIG.webServer.host, "webServer.host", warnings);
             config.webServer.trustedOrigins = pickOrigins(web.trustedOrigins, warnings);
             const knownWebKeys = new Set(Object.keys(DEFAULT_SERVER_CONFIG.webServer));
-            const unknownWebKeys = Object.keys(web).filter((key) => !knownWebKeys.has(key));
+            const unknownWebKeys = Object.keys(web).filter((key) => !knownWebKeys.has(key) && !RETIRED_WEB_KEYS.has(key));
             if (unknownWebKeys.length > 0) {
                 warnings.push(`配置里有不认识的项：webServer.${unknownWebKeys.join("、webServer.")}`);
             }
@@ -364,7 +357,7 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
  * 而人手工改坏的那份文件不能被默认值默默盖掉——那是他的设置，提示一行让他自己去修就好。
  * 内容能不能用看 warnings：有 warning 就是有项回落到默认值了（坏 JSON 也是全回默认值）。
  */
-export function readServerConfig(dir?: string): { config: ServerConfig; file: string; existed: boolean; warnings: string[] } {
+export function readServerConfig(dir?: string): { config: ServerConfig; file: string; existed: boolean; warnings: string[]; retired: string[] } {
     const file = serverConfigFile(dir);
     let text: string;
     try {
@@ -372,9 +365,9 @@ export function readServerConfig(dir?: string): { config: ServerConfig; file: st
     } catch (err) {
         // 第一次跑时文件还没建，这是正常情况，不该报警
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-            return { config: defaults(), file, existed: false, warnings: [] };
+            return { config: defaults(), file, existed: false, warnings: [], retired: [] };
         }
-        return { config: defaults(), file, existed: false, warnings: [`读设置文件失败：${file}（${describeError(err)}）`] };
+        return { config: defaults(), file, existed: false, retired: [], warnings: [`读设置文件失败：${file}（${describeError(err)}）`] };
     }
 
     let raw: unknown;
@@ -386,12 +379,13 @@ export function readServerConfig(dir?: string): { config: ServerConfig; file: st
             config: defaults(),
             file,
             existed: true,
+            retired: [],
             warnings: [`设置文件不是合法的 JSON：${file}（${describeError(err)}）`],
         };
     }
 
     const { config, warnings } = normalizeServerConfig(raw);
-    return { config, file, existed: true, warnings };
+    return { config, file, existed: true, warnings, retired: retiredKeysIn(raw) };
 }
 
 /** 把 patch 合并进现有设置，写回文件，返回写完的结果。 */

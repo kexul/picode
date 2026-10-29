@@ -92,7 +92,7 @@ function packageVersion() {
  * @param {string} [options.model]    覆盖设置里的 model（默认用你 pi 自己的配置）
  * @param {string} [options.provider] 覆盖设置里的 provider
  * @param {boolean} [options.fakePi]  用假模型（dev/fakePi.js）：不调真模型，按剧本秒回（界面调试用）
- * @param {string} [options.piPath]   覆盖设置里的 piPath（默认 "pi"，走 PATH）
+ * @param {string} [options.piPath]   覆盖用哪个 pi（默认走 PATH；调试时由 PICHAT_PI 传下去）
  * @param {string} [options.theme]    界面颜色："light" 或 "dark"（默认 light）
  * @param {string[]} [options.trustedOrigins] 设置文件里的 webServer.trustedOrigins（服务前面挂 https 反代时用）
  * @param {(text: string) => void} [options.log] 日志出口（默认打到标准输出）
@@ -122,26 +122,26 @@ function createHarness(options = {}) {
     const { ensureTabaAssets, ensureAskAssets, ensureGoalAssets, ensureImageAssets, ensureBashAssets, ensureEnvAssets } = require(OUT_BRIDGES);
     const version = packageVersion();
 
-    // 调试用的设置写进后端那份 config.json：模型 / pi 路径这些跟真后端一样从文件读，
-    // 界面颜色与"跑完发不发通知"也在这里定（后端没有人给它 VSCode 的设置）。
+    // 调试用的设置写进后端那份 config.json：模型跟真后端一样从文件读，界面颜色也在那里定。
     const patch = {
         themeMode: options.theme === "dark" ? "dark" : "light",
-        // 调试时默认不弹 Windows 那边右下角的提醒（自动化跑一遍会一直弹，太吵）；
-        // 想看着它弹就传 notifyTurnEnd: true，或者直接 `npm run server` 起一个真的后端
-        notifyTurnEnd: options.notifyTurnEnd === true,
     };
     if (options.model !== undefined) { patch.model = options.model; }
     if (options.provider !== undefined) { patch.provider = options.provider; }
+    // 假模型 / 指定的 pi：pi 路径不再进设置文件了（永远走 PATH），调试时用这个环境变量盖过
+    // （Windows 上 cmd 那个 .cmd 才能被 shell 起来，所以包了一层）
     if (options.fakePi) {
-        // 假模型就是 piPath 指到本仓库的 dev/fake-pi.cmd（协议与真 pi 一致，只是按剧本演戏）；
-        // piPath 在 Windows 上得是 .cmd 才能被 shell 起来，所以包了一层。
-        patch.piPath = path.join(__dirname, process.platform === "win32" ? "fake-pi.cmd" : "fake-pi.sh");
+        process.env.PICHAT_PI = path.join(__dirname, process.platform === "win32" ? "fake-pi.cmd" : "fake-pi.sh");
     }
-    if (options.piPath !== undefined) { patch.piPath = options.piPath; }
-    // 上一跑留下的显示选项（state.json）会盖掉下面刚写的设置：界面点过的优先于设置文件
-    // （见 ChatHost.readOption）。比如上一个检查验完把“有事弹不弹提醒”关了，这一跑就悄悄不生效。
-    // 调试目录本来就是一次性的，直接丢掉这份存档，让每次调试都从下面这份设置开始。
-    try { fs.rmSync(path.join(SCRATCH_PICHAT_DIR, "state.json"), { force: true }); } catch { /* 删不掉就按旧值跑 */ }
+    if (options.piPath !== undefined) { process.env.PICHAT_PI = options.piPath; }
+    // 上一跑留下的显示选项（state.json）会盖掉设置文件里的预设：界面点过的优先（见 ChatHost.readOption）。
+    // 调试目录本来就是一次性的，直接重写这份存档，让每次调试都从这下面这几项开始。
+    // “有事弹不弹提醒”现在只在存档里（面板里那一行），调试时默认关掉：自动化跑一遍会一直弹，太吵。
+    try {
+        fs.writeFileSync(path.join(SCRATCH_PICHAT_DIR, "state.json"), JSON.stringify({
+            "piChat.notifyTurnEnd": options.notifyTurnEnd === true,
+        }, null, 2));
+    } catch { /* 写不进去就按默认跑 */ }
     // 子会话清单也一样：假 pi 给每个会话报的 .jsonl 是同一个文件（见 fakePi.js），
     // 留着上一跑记下的那份，下一跑里那个文件就整个被当成子会话藏起来（历史列表、自动开最近会话都受影响）。
     try { fs.rmSync(path.join(SCRATCH_PICHAT_DIR, "child-sessions.json"), { force: true }); } catch { /* 同上 */ }

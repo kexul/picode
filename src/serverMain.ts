@@ -157,13 +157,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     if (!cfgRead.existed) {
         updateServerConfig({});
         console.log(`[${stamp()}] 已写出默认设置：${cfgRead.file}`);
+    } else if (cfgRead.retired.length > 0) {
+        // 早先的版本里能配、现在不用了的项：顺手重写一遍，别让文件里留着一堆没用的东西
+        updateServerConfig({});
+        console.log(`[${stamp()}] 设置文件里这些项已经不用了，已经删掉：${cfgRead.retired.join("、")}`);
     }
     for (const warning of cfgRead.warnings) { log(`设置文件有问题：${warning}`); }
     const cfg = cfgRead.config;
-
-    if (!cfg.webServer.enabled) {
-        log("设置文件里 webServer.enabled 是 false；独立后端就是那个网页服务，这里照常开。");
-    }
 
     // 派子会话要用的文件（那个 pi 扩展 + 自带角色文件）：跟插件启动时一样，先写好。
     const tabaAssets = ensureTabaAssets(VERSION);

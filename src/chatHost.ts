@@ -235,7 +235,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             case ChatHost.KEY_CLOSE_SESSION_KEY: return cfg.closeSessionKey;
             case ChatHost.KEY_TAB_SWITCH_KEY: return cfg.tabSwitchKey;
             case ChatHost.KEY_FOCUS_INPUT_KEY: return cfg.focusInputKey;
-            case ChatHost.KEY_NOTIFY_TURN_END: return cfg.notifyTurnEnd;
             case ChatHost.KEY_AUTO_LOAD_LAST: return cfg.autoLoadLast;
             default: return undefined;
         }
@@ -257,7 +256,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     // ---- RuntimeHost：配置 / 默认目录 / 模型 ----
     public getConfig() {
         const cfg = readServerConfig().config;
-        const taba = cfg.tabaEnabled ? getTabaAssets() : undefined;
+        const taba = getTabaAssets();
         const ask = getAskAssets();
         const goal = getGoalAssets();
         const title = getTitleAssets();
@@ -265,11 +264,13 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const bash = getBashAssets();
         const env = getEnvAssets();
         return {
-            piPath: cfg.piPath,
+            // 这三样不让人配了：pi 走 PATH、永远信任项目（启动时带 --approve）、没有额外参数。
+            // PICHAT_PI 只给调试用（dev/harness.js 指到假 pi），不给就是 PATH 里的 pi。
+            piPath: (process.env.PICHAT_PI ?? "").trim() || "pi",
             provider: cfg.provider,
             model: cfg.model,
-            extraArgs: cfg.extraArgs,
-            trustProject: cfg.trustProject,
+            extraArgs: [],
+            trustProject: true,
             tabaExtension: taba?.ok ? taba.extensionPath : "",
             tabaDir: taba?.ok ? taba.resourceDir : "",
             askExtension: ask?.ok ? ask.extensionPath : "",
@@ -337,8 +338,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     protected piMissingMessage(piPath: string): string {
-        return `未找到 pi 可执行文件（当前配置："${piPath}"）。请确认已安装 pi 并加入系统 PATH，`
-            + `或改 ${serverConfigFile()} 里的 piPath。`;
+        return `未找到 pi 可执行文件（当前配置："${piPath}"）。请确认已安装 pi 并加入系统 PATH。`;
     }
 
     protected onPiMissing(piPath: string): void {
@@ -964,6 +964,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const able = describeRestart();
         const can = able.ok && !!this.options.restartBackend;
         const items: ViewOptionItem[] = [
+            {
+                action: "notifyTurnEnd",
+                label: "跑完弹提醒",
+                desc: "在通知区域那颗图标旁边弹一张小卡片；关掉连那颗图标也不放。",
+                check: this.getNotifyTurnEnd(),
+            },
             {
                 action: "theme",
                 label: "界面颜色",
