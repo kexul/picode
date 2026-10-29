@@ -18,7 +18,9 @@
  *                扩展在前台跑命令的时候每半秒看一眼。
  *
  * 跟 pi 对齐的地方（别随手动）：
- *   - shell 怎么挑、命令怎么喂（-c 还是 stdin），照 pi 的 utils/shell.ts；
+ *   - shell 怎么挑、命令怎么喂（-c 还是 stdin）直接问 pi 自己（getShellConfig），
+ *     settings 里的 shellPath / shellCommandPrefix 也照它的来 —— 别再抄一份它的挑法：
+ *     抄的那份漏了 shellPath，另一台机器上 bash 只注册在 settings 里，一跑命令就找不到；
  *   - 超时和中止时抛的错文案（"timeout:N" / "aborted"），pi 的 bash 工具认这两个；
  *   - 输出截断、格式化、结构化内容那一层没动：仍然走 createBashTool() 给的那份定义。
  *
@@ -34,7 +36,7 @@ export const BASH_BRIDGE_SOURCE = String.raw`/**
  *
  * 把 bash 换成可以「脱手到后台」的版本，另加一个 bash_tasks 工具。
  */
-import { createBashTool } from "@earendil-works/pi-coding-agent";
+import { createBashTool, getShellConfig } from "@earendil-works/pi-coding-agent";
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
@@ -64,7 +66,10 @@ function detachDir(): string {
     return base ? join(base, "detach") : "";
 }
 
-// ---- shell（照 pi 的规则挑：settings 里的 shellPath 拿不到，从它之后那几档开始）----
+// ---- shell（整个问 pi：它认 settings 里的 shellPath，我们在它后面接着挑）----
+
+/** pi 的设置（加载本扩展时取一次；改完设置 pi 会重载扩展，这儿也跟着重新取）。 */
+let settings: any = {};
 
 interface ShellConfig {
     shell: string;
@@ -73,54 +78,35 @@ interface ShellConfig {
     viaStdin: boolean;
 }
 
-function legacyWslBash(shell: string): boolean {
-    const normalized = shell.replace(/\//g, "\\").toLowerCase();
-    return /^[a-z]:\\windows\\(?:system32|sysnative)\\bash\.exe$/.test(normalized);
-}
-
-function bashConfig(shell: string): ShellConfig {
-    return legacyWslBash(shell)
-        ? { shell, args: ["-s"], viaStdin: true }
-        : { shell, args: ["-c"], viaStdin: false };
-}
-
-/** 在 PATH 上找一个可执行文件（跟 pi 一样：Windows 用 where，别处用 which）。 */
-function onPath(executable: string): string {
-    try {
-        const r = spawnSync(process.platform === "win32" ? "where" : "which", [executable], {
-            encoding: "utf8",
-            timeout: 5000,
-            windowsHide: true,
-        });
-        if (r.status !== 0 || !r.stdout) { return ""; }
-        const first = r.stdout.trim().split(/\r?\n/)[0];
-        return first && existsSync(first) ? first : "";
-    } catch {
-        return "";
-    }
+/** 设置里写家目录用的 ~ 要自己换开（pi 自己读 settings 时也这么换）。 */
+function expandHome(p: string): string {
+    if (!p.startsWith("~")) { return p; }
+    const home = process.env.USERPROFILE || process.env.HOME || "";
+    if (!home) { return p; }
+    const rest = p.slice(1).replace(/^[\\/]+/, "");
+    return rest ? join(home, rest) : home;
 }
 
 let cachedShell: ShellConfig | undefined;
 function shellConfig(): ShellConfig {
     if (cachedShell) { return cachedShell; }
-    if (process.platform === "win32") {
-        const candidates: string[] = [];
-        const programFiles = process.env.ProgramFiles;
-        if (programFiles) { candidates.push(programFiles + "\\Git\\bin\\bash.exe"); }
-        const programFilesX86 = process.env["ProgramFiles(x86)"];
-        if (programFilesX86) { candidates.push(programFilesX86 + "\\Git\\bin\\bash.exe"); }
-        for (const p of candidates) {
-            if (existsSync(p)) { cachedShell = bashConfig(p); return cachedShell; }
-        }
-        const fromPath = onPath("bash.exe");
-        if (fromPath) { cachedShell = bashConfig(fromPath); return cachedShell; }
-        throw new Error("找不到 bash：装个 Git Bash，或者把 bash 放进 PATH。");
+    const shellPath = typeof settings.shellPath === "string" && settings.shellPath ? expandHome(settings.shellPath) : undefined;
+    let picked: any;
+    try {
+        picked = getShellConfig(shellPath);
+    } catch (err) {
+        throw new Error("找不到 bash：装个 Git Bash、把 bash 放进 PATH，"
+            + "或者在 pi 的设置文件（~/.pi/agent/settings.json）里用 shellPath 指到你的 bash。\n\n"
+            + String((err && (err as Error).message) || err));
     }
-    if (existsSync("/bin/bash")) { cachedShell = bashConfig("/bin/bash"); return cachedShell; }
-    const fromPath = onPath("bash");
-    if (fromPath) { cachedShell = bashConfig(fromPath); return cachedShell; }
-    cachedShell = bashConfig("/bin/sh");
+    cachedShell = { shell: picked.shell, args: picked.args, viaStdin: picked.commandTransport === "stdin" };
     return cachedShell;
+}
+
+/** 设置里的 shellCommandPrefix：每条命令前面先跑的那几行（pi 自己的 bash 也这么加）。 */
+function withPrefix(cmd: string): string {
+    const prefix = typeof settings.shellCommandPrefix === "string" ? settings.shellCommandPrefix : "";
+    return prefix ? prefix + "\n" + cmd : cmd;
 }
 
 // ---- 任务表 ----
@@ -241,7 +227,8 @@ function startTask(
         fd = -1;
     }
     const shell = shellConfig();
-    const args = shell.viaStdin ? shell.args : [...shell.args, cmd];
+    const full = withPrefix(cmd);
+    const args = shell.viaStdin ? shell.args : [...shell.args, full];
     const child = spawn(shell.shell, args, {
         cwd,
         env: env || process.env,
@@ -264,7 +251,7 @@ function startTask(
     tasks.set(no, task);
     if (shell.viaStdin && child.stdin) {
         child.stdin.on("error", () => { /* 命令不等 stdin，写不进去就算了 */ });
-        child.stdin.end(cmd);
+        child.stdin.end(full);
     }
     let muted = false;
     const exitCbs: Array<(code: number | null) => void> = [];
@@ -354,6 +341,11 @@ const detached = new Map<string, Task>();
 const launched = new Map<string, Task>();
 
 export default function bashBridge(pi: any): void {
+    try {
+        settings = (typeof pi.getSettings === "function" ? pi.getSettings() : undefined) || {};
+    } catch {
+        settings = {}; // 取不到就按 pi 的默认挑法来
+    }
     const cwd = process.cwd();
     const base = createBashTool(cwd, {
         operations: {
