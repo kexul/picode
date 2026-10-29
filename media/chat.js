@@ -4067,6 +4067,13 @@
   /** 消息流末尾那颗胶囊上写的是什么。 */
   const END_HINT_CONTINUE = "继续";
   const END_HINT_STUCK = "卡住了";
+  /** 末尾那两颗快捷按钮点下去发出去的文本（见 makeEndHintQuick）：
+   *  - 「压缩」发 /compact，插件自己接手去调 pi 的压缩命令；
+   *  - 「?」发 bro 技能的正文：让 ai 用大白话把上一条重说一遍。正文照技能文件抄在代码里，
+   *    不去读磁盘上的 SKILL.md（网页端读不到，也不该为这一句多开一条读文件的路）。 */
+  const QUICK_COMPACT_TEXT = "/compact";
+  const QUICK_BRO_TEXT = "Restate your last message. Stop using jargon and speak coherently." +
+    " State it more simply and concisely, like one human talking to another.";
 
   /**
    * 消息流末尾那颗胶囊 —— 按当前会话的状态换脸：
@@ -4101,6 +4108,10 @@
     const stop = st.endHintStopEl;
     const showStop = !!(st.piReady && st.streaming);
     if (stop) { stop.classList.toggle("hidden", !showStop); }
+    // 跑完时多出来的两颗快捷按钮（「压缩」「?」）：跟「继续」一起露面、一起收
+    for (const q of row.querySelectorAll(".msg-endhint-quick")) {
+      q.classList.toggle("hidden", mode !== "continue");
+    }
     row.classList.toggle("hidden", !mode && !showStop);
     if (mode || showStop) { placeEndHint(st); }
   }
@@ -4131,7 +4142,8 @@
   }
 
   /**
-   * 建末尾那一行：主胶囊（继续 / 卡住了）与它旁边那颗「停止生成」并排。
+   * 建末尾那一行：主胶囊（继续 / 卡住了）、旁边那颗「停止生成」，以及闲着时才会露出来的
+   * 两颗快捷按钮「压缩」「?」。
    * 停止生成就是主胶囊复制一份、去掉“卡住了”三个字，只留方块图标：点它只是把这一轮停掉
    * （跟按 Esc 一样，不补发“卡住了”），要“停下来再告诉它卡住了”就点旁边那颗。
    * 写什么由当前状态定（见 setEndHintMode）；露面时机与位置由 syncEndHint / placeEndHint 管。
@@ -4184,11 +4196,41 @@
       stop.classList.add("hidden");
       setTimeout(() => syncEndHint(cur), 1500);
     });
-    // 顺序：停止生成（方块）在前，「卡住了」在后
-    row.append(stop, btn);
+    // 跑完之后顺手点一下的两颗（见 makeEndHintQuick）：摆在主胶囊左边，淡一点
+    const compactBtn = makeEndHintQuick(st,
+      "压缩", "压缩上下文（发一条 /compact）", QUICK_COMPACT_TEXT);
+    const broBtn = makeEndHintQuick(st,
+      "?", "让 ai 用大白话把上一条重说一遍（bro 技能）", QUICK_BRO_TEXT);
+    // 顺序：压缩、?、停止生成（方块）、主胶囊（继续 / 卡住了）
+    row.append(compactBtn, broBtn, stop, btn);
     st.endHintEl = btn;
     st.endHintStopEl = stop;
     return row;
+  }
+
+  /**
+   * 末尾那一行上的快捷按钮：点一下直接发一条固定的话，不碰输入框里打了一半的字。
+   * 只在会话闲着（「继续」露面）时出现，见 syncEndHint。
+   */
+  function makeEndHintQuick(st, label, title, text) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "msg-endhint msg-endhint-quick";
+    b.title = title;
+    b.setAttribute("aria-label", title);
+    b.textContent = label;
+    b.addEventListener("click", () => {
+      const cur = activeSession();
+      if (!cur || cur.id !== st.id || !cur.piReady) { return; }
+      if (cur.loading || cur.streaming) { return; }
+      // 先收起来：手快连点两下会发两条出去（等后端的消息回显再按真实状态算）
+      b.classList.add("hidden");
+      vscode.postMessage({ type: "send", sessionId: cur.id, text, images: [] });
+      if (!IS_TOUCH_DEVICE) { inputEl.focus(); }
+      // 万一点击没送到（连接断了），过一会儿按真实状态重新算
+      setTimeout(() => syncEndHint(cur), 1500);
+    });
+    return b;
   }
 
   function updateSendState() {
