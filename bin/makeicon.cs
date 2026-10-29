@@ -42,9 +42,9 @@ static class MakeIcon
         }
     }
 
-    // ---- 画：一个圆角方块（浅色）+ 那个标记（深色） ----
+    // ---- 画：一个圆角方块（浅色）+ 那个标记（深色），只有右下那根竖线是红的 ----
     // 为什么这么配：文件图标要同时出现在浅色与深色背景上，纯标记（深色）在深色背景上会看不见；
-    // 一块浅色的底再挖出深色标记，两种背景都认得出。
+    // 一块浅色的底再挖出深色标记，两种背景都认得出。竖线的红跟托盘图标那一枚用同一个色。
 
     /** 那个标记的三块（原图是 560×560 的方框），坐标照抄 bin/tray.cs。 */
     private static readonly int[][] MarkParts =
@@ -70,13 +70,16 @@ static class MakeIcon
                 g.FillPath(fill, path);
                 g.DrawPath(edge, path);
             }
-            // 标记：在方块里留一圈边距再画
+            // 标记：在方块里留一圈边距再画。第三块（右下那根竖线）用红色，跟托盘图标一致
             float inset = size * 0.16f;
             float scale = (size - inset * 2f) / 560f;
             g.TranslateTransform(inset, inset);
             using (SolidBrush ink = new SolidBrush(Color.FromArgb(0x11, 0x11, 0x11)))
+            using (SolidBrush red = new SolidBrush(Color.FromArgb(0xE5, 0x39, 0x35)))
             {
-                foreach (int[] part in MarkParts) { g.FillPolygon(ink, Scalepoints(part, scale)); }
+                g.FillPolygon(ink, Scalepoints(MarkParts[0], scale));
+                g.FillPolygon(red, Scalepoints(MarkParts[1], scale));
+                g.FillPolygon(ink, Scalepoints(MarkParts[2], scale));
             }
             g.ResetTransform();
         }
