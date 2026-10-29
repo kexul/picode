@@ -621,7 +621,7 @@
     try { wanted = new URLSearchParams(location.search).get("session") || ""; } catch (e) { wanted = ""; }
     if (!wanted) { return; }
     pendingActivateId = wanted;
-    vscode.postMessage({ type: "switchSession", sessionId: wanted });
+    requestSwitch(wanted);
   }
 
   /** 两个路径字符串相比时用的写法（斜杠统一；Windows 上再转小写，见 pathRules.ts 的 pathCaseKey）。 */
@@ -770,6 +770,8 @@
         st.stickToBottom = true;
         if (st.hasNewContent) { st.hasNewContent = false; }
         syncJumpBottom(st);
+        // 回到贴底：往上翻的那阵子攒着没搬的几轮，现在可以搬了（见 trimLiveTurns）
+        scheduleTrimLive(st);
       }
     });
     st = {
@@ -850,6 +852,8 @@
       older: null,
       olderHint: null,
       olderBusy: false,
+      // 攒够了就搬一轮出去（见 scheduleTrimLive）：搬的调度挂在这儿
+      trimTimer: 0,
       // 补画那一套的调度：viewRaf 挂着下一帧的检查，viewTimer 挂着“停下来再看”那一下
       viewRaf: 0,
       viewTimer: 0,
@@ -1126,7 +1130,7 @@
     el.addEventListener("click", () => {
       if (activeId === sessionId) { return; }
       closeSessionMenu();
-      vscode.postMessage({ type: "switchSession", sessionId });
+      requestSwitch(sessionId);
     });
     sessionTabEls.set(sessionId, el);
     return el;
@@ -1370,7 +1374,7 @@
         el.appendChild(close);
         el.addEventListener("click", () => {
           closeSessionMenu();
-          if (!item.current) { vscode.postMessage({ type: "switchSession", sessionId: item.sessionId }); }
+          if (!item.current) { requestSwitch(item.sessionId); }
         });
       }
       sessionMenuEl.appendChild(el);
@@ -4528,6 +4532,21 @@
     scheduleKeep();
   }
 
+  /**
+   * 切到某个会话：本机先切，不等后端回话。
+   *
+   * 后端那一圈（发请求 → 它记下“这块屏看的是哪个” → 回一句 sessionActivated）在手机上是一个
+   * 来回，几百毫秒到一两秒；以前界面就干等着，按下去之后一直是旧画面。现在按下就把那屏挂出来、
+   * 顶条挪过去，请求照发：它回来时 activateSessionView 一看“已经是我了”，直接跳过。
+   */
+  function requestSwitch(sessionId) {
+    if (!sessionId) { return; }
+    const st = sessions.get(sessionId);
+    // 壳已经在、也没在加载：先切过去。没壳（没到 / 以前关掉的）就先发请求，等后端把列表推回来
+    if (st && !st.loading && sessionId !== activeId) { activateSessionView(sessionId); }
+    vscode.postMessage({ type: "switchSession", sessionId: sessionId });
+  }
+
   /** 这份会话文件是不是有会话正开着（列表里把这种历史行标成“已打开”）。 */
   function sessionOpenForFile(file) {
     if (!file) { return false; }
@@ -4604,7 +4623,7 @@
   /** 按快捷键切上一个 / 下一个会话（顺序见 sessionIdByDirection）。 */
   function switchSessionByDirection(direction) {
     const target = sessionIdByDirection(direction);
-    if (target) { vscode.postMessage({ type: "switchSession", sessionId: target }); }
+    if (target) { requestSwitch(target); }
   }
 
   // ==================== 手机上左右划：切上一个 / 下一个会话 ====================
@@ -8038,7 +8057,7 @@
     if (item.__section === "open") {
       if (item.pendingClose) { cancelPendingClose(); refreshOpenSessionsInPicker(); }
       closeFirst();
-      vscode.postMessage({ type: "switchSession", sessionId: item.sessionId });
+      requestSwitch(item.sessionId);
       return;
     }
     // 工作区那一行：展开 / 收起（面板留着重画，不关）
@@ -9303,6 +9322,8 @@
         addPlain(t, "user", "你", label + (msg.text || ""), msg.id);
         endThinking(t, "");
         scrollToBottom(t, true);
+        // 新一轮开始了：窗格里的轮数超了就把最老的几轮搬去顶上那条占位（见 trimLiveTurns）
+        scheduleTrimLive(t);
         // 刚发出去的这条把末尾那颗胶囊挤到了前头：重算一次（生成中会换成「卡住了」）
         syncEndHint(t);
         break;
@@ -9865,6 +9886,12 @@
   const TAIL_TURNS = 8;      // 收尾时先画最后这么多轮（一轮 = 一条用户消息起头）
   const CHUNK_TURNS = 5;     // 往上一帧补这么多轮（一帧补多了人会感到卡，见 syncViewport）
   const OLDER_NEAR_PX = 700; // 离顶这么近就开始补（比一屏多一点，滚到头之前就该出来）
+  // 窗格里最多留多少轮、一次搬走之后留多少轮（见 trimLiveTurns）：页面一直开着、会话一直
+  // 在跑，新消息就一路往 DOM 里加，跑久了就是几千条——手机上切一次要几百毫秒（量法见
+  // dev/switchPerf.js --cpu 4 --width 412 --height 915：58 条时 25~80 毫秒，2855 条时
+  // 130~340 毫秒）。留几十轮就够看。
+  const LIVE_MAX_TURNS = 40;
+  const LIVE_KEEP_TURNS = 24;
   /** 重放里会往窗格里落东西的那几种；其余（clear / syncPoint / stats 这些）当场办。 */
   const REPLAY_BUF_TYPES = new Set([
     "userMessage", "assistantDelta", "assistantFull",
@@ -9910,11 +9937,117 @@
     return n >= 3 ? sum / n : 120;
   }
 
-  /** 这一截里还有几轮（一轮 = 一条用户消息起头）：占位上那个数字用它。 */
+  /** 这一截里还有几轮（一轮 = 一条用户消息起头）：占位上那个数字用它。
+   *  项有两种：一条还没画的消息事件（从零重画时攒下的），或者一截已经画好、被搬出来的节点
+   *  （见 trimLiveTurns）。 */
   function countTurns(events) {
     let n = 0;
-    for (const ev of events) { if (ev.type === "userMessage") { n += 1; } }
+    for (const item of events) { n += olderTurnCount(item); }
     return n;
+  }
+
+  /**
+   * st.older 一共顶着多长：占位的高度按它估。
+   * 一截搬出来的节点按里面的节点个数算，一条待画的消息按一块算（跟以前只有事件时一个意思）。
+   */
+  function olderBlockCount(older) {
+    let n = 0;
+    for (const item of older || []) { n += item && item.nodes ? item.nodes.length : 1; }
+    return n;
+  }
+
+  /** 一项里有几轮。 */
+  function olderTurnCount(item) {
+    if (!item) { return 0; }
+    if (item.nodes) {
+      let n = 0;
+      for (const node of item.nodes) { if (isTurnStart(node)) { n += 1; } }
+      return n;
+    }
+    return item.type === "userMessage" ? 1 : 0;
+  }
+
+  /** 这一条是不是“一轮的开头”（气泡是用户自己说的那条）。 */
+  function isTurnStart(node) {
+    return !!node && node.nodeType === 1 && node.classList
+      && node.classList.contains("msg") && node.classList.contains("user");
+  }
+
+  /**
+   * 从 st.older 末尾取几轮出来（离已经画好的那段最近的先取）。
+   * 项里有好几轮时要按轮拆开：前面留着，后面取走（不然一帧就补进去十几轮，见 syncViewport）。
+   * @returns {{ take: any[], rest: any[] }}
+   */
+  function takeOlderTail(older, turns) {
+    const list = older.map(function (it) { return it && it.nodes ? { nodes: it.nodes.slice() } : it; });
+    let want = turns;
+    let start = list.length;   // 从这一项开始都归“取走”
+    while (start > 0 && want > 0) {
+      const item = list[start - 1];
+      const n = olderTurnCount(item);
+      if (n === 0) { start -= 1; continue; }          // 不属任何一轮的那些：跟着后面一起走
+      if (n <= want) { want -= n; start -= 1; continue; }
+      // 这一项里有比要的还多的轮：在轮的界上拆成两截
+      const nodes = item.nodes || [];
+      let seen = 0;
+      let at = 0;
+      for (let k = nodes.length - 1; k >= 0; k -= 1) {
+        if (!isTurnStart(nodes[k])) { continue; }
+        seen += 1;
+        if (seen === want) { at = k; break; }
+      }
+      if (at <= 0) { start -= 1; want = 0; break; }
+      list[start - 1] = { nodes: nodes.slice(0, at) };
+      list.splice(start, 0, { nodes: nodes.slice(at) });
+      want = 0;
+      break;
+    }
+    return { take: list.slice(start), rest: list.slice(0, start) };
+  }
+
+  /**
+   * 窗格里的轮数超了：把最老的几轮搬出窗格，交给顶上那条占位（往上滑再画回来）。
+   *
+   * 搬的是已经画好的节点，原样收着（见 st.older 的两种项），补回来时直接挂回去，不重画、
+   * 不重新排版。只动最老的那几轮：末尾正在长的那一段（正文、工具行、末尾胶囊）一律不碰。
+   * 人正在往上翻历史（不贴底）时不动手——搬走的正是他眼看着的那一段。
+   */
+  function trimLiveTurns(st) {
+    if (!st || st.olderBusy || st.reconcile || st.redrawRestore || st.loading) { return; }
+    const pane = st.paneEl;
+    if (!pane || !pane.parentNode) { return; }
+    if (st.id === activeId && !st.stickToBottom) { return; }
+    const starts = [];
+    for (const el of pane.children) { if (isTurnStart(el)) { starts.push(el); } }
+    if (starts.length <= LIVE_MAX_TURNS) { return; }
+    // 从第一轮搬到“留下 LIVE_KEEP_TURNS 轮”那个位置之前；占位、「加载更早」排在第一轮前面，不动
+    const endEl = starts[starts.length - LIVE_KEEP_TURNS];
+    const nodes = [];
+    let el = starts[0];
+    while (el && el !== endEl) {
+      const next = el.nextSibling;
+      nodes.push(el);
+      el = next;
+    }
+    if (!nodes.length) { return; }
+    for (const node of nodes) {
+      const mid = node.dataset ? node.dataset.mid : "";
+      if (mid && st.byId.get(mid) === node) { st.byId.delete(mid); }
+      node.remove();
+    }
+    // 刚搬出去的这几轮比 st.older 里现有的都新：接在末尾（往上补时也是从末尾往回画）
+    st.older = (st.older || []).concat([{ nodes: nodes }]);
+    mountOlderHint(st, olderBlockCount(st.older));
+    if (st.stickToBottom) { scrollToBottom(st, true); }
+  }
+
+  /** 攒够了就搬（用户消息来了才查：一轮一回，节流一下，别跟流式输出抢那一帧）。 */
+  function scheduleTrimLive(st) {
+    if (st.trimTimer) { return; }
+    st.trimTimer = setTimeout(function () {
+      st.trimTimer = 0;
+      trimLiveTurns(st);
+    }, 400);
   }
 
   /** 顶上那条占位：写还剩几轮，高度按平均高度估。估不准不影响内容，只影响滚动条长短。 */
@@ -9958,7 +10091,7 @@
     for (let i = cut; i < events.length; i += 1) { applyPanelMessage(events[i]); }
     if (older.length) {
       st.older = older;
-      mountOlderHint(st, older.length);
+      mountOlderHint(st, olderBlockCount(older));
     }
     // 窗格是空的、刚才什么也没滚：贴底的人直接到底（非重画那条路没有人帮忙滚，见 case "clear"）
     if (st.stickToBottom) { scrollToBottom(st, true); }
@@ -9975,9 +10108,9 @@
     if (!paneShown(pane)) { return; }
     st.olderBusy = true;
     try {
-      const cut = cutIndexForTurns(older, turns);
-      const take = older.slice(cut);
-      st.older = older.slice(0, cut);
+      const split = takeOlderTail(older, turns);
+      const take = split.take;
+      st.older = split.rest;
       // 这几个说的是“窗格末尾那一批”的落脚点（工具行 / 图块 / 那段思考），画老消息时
       // 不能让它们被改掉：另存一份，画完还回去。currentToolTail 置空让老消息自己另起一行。
       const stage = document.createElement("div");
@@ -9991,7 +10124,14 @@
       st.currentToolTail = null;
       st.toolGroups = null;
       try {
-        for (const ev of take) { applyPanelMessage(ev); }
+        for (const item of take) {
+          // 搬出来收着的那一截：原样挂回去（不重画）
+          if (item && item.nodes) {
+            for (const node of item.nodes) { stage.appendChild(node); }
+          } else {
+            applyPanelMessage(item);
+          }
+        }
       } finally {
         st.paneEl = saved.pane;
         st._stage = saved.stage;
@@ -10022,7 +10162,7 @@
         node = next;
       }
       // 占位跟着缩（高度按这会儿量出来的平均高度重估：一开始估得不准，补一轮就准一轮）
-      if (st.older.length) { mountOlderHint(st, st.older.length); } else { dropOlderHint(st); }
+      if (st.older.length) { mountOlderHint(st, olderBlockCount(st.older)); } else { dropOlderHint(st); }
       if (inside || !ruler || ruler.parentNode !== pane) {
         st.lastScrollTop = pane.scrollTop;
       } else {

@@ -4,6 +4,12 @@
  *
  *   node dev/switchPerf.js --pairs 400                # 造一个 400 轮的会话再量
  *   node dev/switchPerf.js --pairs 800 --rounds 5     # 多量几轮
+ *   node dev/switchPerf.js --cpu 4 --width 412 --height 915   # 按手机量（CPU 慢 4 倍、窄屏）
+ *
+ * 注意：注入的那些轮也会被“往上还有”限住（窗格里只留最近 LIVE_MAX_TURNS 轮，见 chat.js），
+ * 所以注入再多，两个会话也都是那个上限以下的体量——这量的就是正常用着的样子。
+ * 想看“不禁的话能多慢”（历史上 2855 条时手机尺寸 4 倍降速下 130~340 毫秒），
+ * 把 chat.js 里的 LIVE_MAX_TURNS 临时调大再跑。
  *
  * 两条路分开量：
  *   1. 真按快捷键（Ctrl+Alt+←/→）：走完后端一圈（界面发 switchSession → 后端推 sessionList
@@ -39,12 +45,15 @@ async function main() {
     const pairs = Number(arg("pairs", 400));
     const rounds = Number(arg("rounds", 3));
     const bytes = Number(arg("bytes", 600));
+    const cpu = Number(arg("cpu", 1));       // 降速倍数（4 ≈ 手机）
+    const width = Number(arg("width", 1280));
+    const height = Number(arg("height", 860));
     const css = arg("css", "");   // 试验用：临时往页面里塞一段样式（看它能不能把这件事变快）
 
     const flag = (name) => argv.includes("--" + name);
     const harness = createHarness({ fakePi: true, log: () => {} });
     const url = await harness.start();
-    const open = await openPage({ url, width: 1280, height: 860, timeoutMs: 60000 });
+    const open = await openPage({ url, width, height, timeoutMs: 60000 });
     const { page, cdp } = open;
     try {
         await page.waitReady();
@@ -135,6 +144,7 @@ async function main() {
         }));
 
         await cdp.send("Performance.enable");
+        if (cpu > 1) { await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpu }); }
 
         /** 真按快捷键切一次（amount: 量到的东西）。 */
         const byKey = async (dir) => {
