@@ -174,6 +174,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
     private trayPickTarget: string | undefined;
     /** 人点了托盘菜单里的「退出这颗图标」：这次后端活着期间不再冒出来。 */
     private trayClosedByUser = false;
+    /** 输入框正有焦点的那些屏：人在敲字就是人正看着这个会话，不用再拿图标闪（见 noteInputFocus）。 */
+    private readonly inputFocusedClients = new Set<string>();
 
     /** sessionList 节流：流式 activity 变更很频繁，合并到下一帧附近推送。 */
     private sessionListTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1928,9 +1930,39 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!sessionId || !this.notifyTurnEndEnabled()) { return; }
         const label = (name || "").trim() || "会话";
         if (this.pushRemoteNote(sessionId, label)) { return; }   // 已经推给别处：这台不闪
+        // 人正坐在这个会话的输入框前（界面报过焦点）：他就在看着，再闪一下是多余的
+        if (this.inputFocusedOn(sessionId)) { return; }
         if (!this.trayClosedByUser && TrayIcon.available()) {
             this.addTrayItem({ id: sessionId, name: label });
         }
+    }
+
+    /**
+     * 某块屏报来“输入框有焦点 / 没了”（见 media/chat.js 里那段）。
+     *
+     * 有焦点 = 人正坐在这块屏前、看着它现在这个会话：这一刻把那个会话在清单里的一行划掉
+     * （刚才可能已经闪过了），而且它再跑完一轮也不再闪（见 trayNote）。
+     * 反过来，窗口失焦、换到别的窗口之后就不算了：那时候人可能真不在跟前，该闪还得闪。
+     */
+    public noteInputFocus(clientId: string, focused: boolean): void {
+        if (!clientId) { return; }
+        if (!focused) { this.inputFocusedClients.delete(clientId); return; }
+        this.inputFocusedClients.add(clientId);
+        const viewing = this.focusedIdFor(clientId);
+        if (viewing) { this.traySeen(viewing); }
+    }
+
+    /** 这块屏的连接断了 / 刚接上：它的输入框焦点状态作废（人再来敲字时它会重新报）。 */
+    protected forgetInputFocus(clientId: string): void {
+        if (clientId) { this.inputFocusedClients.delete(clientId); }
+    }
+
+    /** 有没有一块“输入框正有焦点”的屏在看这个会话。 */
+    private inputFocusedOn(sessionId: string): boolean {
+        for (const clientId of this.inputFocusedClients) {
+            if (this.focusedIdFor(clientId) === sessionId) { return true; }
+        }
+        return false;
     }
 
     /**

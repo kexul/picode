@@ -8794,6 +8794,15 @@
   });
   inputEl.addEventListener("input", () => { autoResize(); maybeShowFileMenu(); maybeShowHashMenu(); maybeShowSlashMenu(); });
   inputEl.addEventListener("blur", () => { setTimeout(() => { hideFileMenu(); hideHashMenu(); closeSlashMenu(); fileMenuEl.classList.add("hidden"); }, 150); });
+  // 输入框有没有焦点，报给后端：有焦点就是“人正坐在这块屏前看着这个会话”，
+  // 这种时候某会话跑完一轮不用拿通知区域那颗图标闪（见 chatControllerBase 的 noteInputFocus）。
+  // 窗口失焦、页面退到后台也会让输入框失焦，但浏览器不一定补那条 blur，所以两处都听。
+  const postInputFocus = (focused) => vscode.postMessage({ type: "inputFocus", focused });
+  inputEl.addEventListener("focus", () => postInputFocus(true));
+  inputEl.addEventListener("blur", () => postInputFocus(false));
+  window.addEventListener("blur", () => postInputFocus(false));
+  window.addEventListener("focus", () => postInputFocus(document.activeElement === inputEl));
+  document.addEventListener("visibilitychange", () => { if (document.hidden) { postInputFocus(false); } });
   inputEl.addEventListener("paste", (e) => {
     if (!activeSession()) { return; }
     const d = draftOfSession();

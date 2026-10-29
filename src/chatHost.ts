@@ -701,6 +701,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         // 先把它从还等着的卡片上摘掉，对账时按"它还没有"重发一遍（见 resumePageTo 与 resyncPage）——
         // 页面上真画着的那张收到同一张会原地不动（见 media/chat.js 的 renderAskCard）。
         this.forgetCardDelivery(pageId);
+        // 新连接：它输入框是不是有焦点还不知道（旧连接报的那份不算数，它自己会重新报）
+        this.forgetInputFocus(pageId);
         const pending = this.pendingResyncPages.get(pageId);
         if (pending !== undefined) {
             this.pendingResyncPages.delete(pageId);
@@ -735,6 +737,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 一条推送连接断了（页面关掉 / 死连接被掐掉）：它上面等着的问话卡片摘掉，
      *  它上面开着的浮层也按取消收掉（等的人不用干等）。 */
     public onPageDisconnected(pageId: string): void {
+        this.forgetInputFocus(pageId);
         this.dropCardsForClient(pageId);
         this.dropPickerForClient(pageId);
         // 整屏重画画到一半页面走了：重画的内容不进补发暂存，它回来对账时会“看似不缺”，
@@ -1226,6 +1229,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             case "hostFocus":
                 // hostFocus 只用于确认框弹到哪边的时间比较（登记簿那边记动作时刻），
                 // 这里不用做任何事，收下即可。
+                return true;
+            case "inputFocus":
+                // 输入框有焦点 = 人正看着这块屏现在的会话：托盘那边不用再闪（见 noteInputFocus）
+                this.noteInputFocus(this.currentPageId, msg.focused === true);
                 return true;
             case "browserResync": {
                 // 老页面脚本发的那条对账消息（新页面改成把序号写在连接地址上，见 resumePageTo）。
