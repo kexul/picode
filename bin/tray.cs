@@ -183,30 +183,36 @@ class NoteWindow : Form
     private static readonly Color DoneDark = Color.FromArgb(0x3F, 0xB9, 0x50);
 
     /**
-     * 「跑完了」和「等你答」的图形：VSCode 那套图标（@vscode/codicons，MIT）里现成的
-     * pass 与 question，原样搬过来（16x16 的 viewBox，填充靠 evenodd 挖出内圈和笔画）。
-     * 颜色不跟它们走：两个图形填的是这里定的绿和黄。
+     * 行尾那两颗标记的图形：VSCode 那套图标（@vscode/codicons，MIT）里的 pass 和 question，
+     * 预先摊成了点贴在这儿（不再在程序里解析 SVG）。坐标是那套图标的 16x16，
+     * “*”隔开几段闭合多边形 —— 圈里的空心和笔画就靠这些多边形叠出来的 evenodd 填充。
+     * 那几个数是按路径摊出来的（精度 0.05，放成 19px 看不出差别）；要改形状，
+     * 就按 codicon 的原路径重新摊一遍：c7cb96d 那个提交里带着当时用的解析器，跑一次就成。
      */
-    private const string DonePathData =
-        "M6.27 10.87h.71l4.56-4.56-.71-.71-4.2 4.21-1.92-1.92L4 8.6l2.27 2.27z" +
-        "M8.6 1c1.6.1 3.1.9 4.2 2 1.3 1.4 2 3.1 2 5.1 0 1.6-.6 3.1-1.6 4.4-1 1.2-2.4 2.1-4 2.4" +
-        "-1.6.3-3.2.1-4.6-.7-1.4-.8-2.5-2-3.1-3.5C.9 9.2.8 7.5 1.3 6c.5-1.6 1.4-2.9 2.8-3.8C5.4 1.3 7 .9 8.6 1z" +
-        "m.5 12.9c1.3-.3 2.5-1 3.4-2.1.8-1.1 1.3-2.4 1.2-3.8 0-1.6-.6-3.2-1.7-4.3-1-1-2.2-1.6-3.6-1.7" +
-        "-1.3-.1-2.7.2-3.8 1-1.1.8-1.9 1.9-2.3 3.3-.4 1.3-.4 2.7.2 4 .6 1.3 1.5 2.3 2.7 3 1.2.7 2.6.9 3.9.6z";
-    private const string AskPathData =
-        "M7.5 1a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm0 12a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11z" +
-        "m1.55-8.42a1.84 1.84 0 0 0-.61-.42A2.25 2.25 0 0 0 7.53 4a2.16 2.16 0 0 0-.88.17c-.239.1-.45.254-.62.45" +
-        "a1.89 1.89 0 0 0-.38.62 3 3 0 0 0-.15.72h1.23a.84.84 0 0 1 .506-.741.72.72 0 0 1 .304-.049.86.86 0 0 1 .27 0" +
-        " .64.64 0 0 1 .22.14.6.6 0 0 1 .16.22.73.73 0 0 1 .06.3c0 .173-.037.343-.11.5a2.4 2.4 0 0 1-.27.46l-.35.42" +
-        "c-.12.13-.24.27-.35.41a2.33 2.33 0 0 0-.27.45 1.18 1.18 0 0 0-.1.5v.66H8v-.49a.94.94 0 0 1 .11-.42 " +
-        "3.09 3.09 0 0 1 .28-.41l.36-.44a4.29 4.29 0 0 0 .36-.48 2.59 2.59 0 0 0 .28-.55 1.91 1.91 0 0 0 .11-.64 " +
-        "2.18 2.18 0 0 0-.1-.67 1.52 1.52 0 0 0-.35-.55zM6.8 9.83h1.17V11H6.8V9.83z";
+    private const string DoneShape =
+        "6.27 10.87 6.98 10.87 11.54 6.31 10.83 5.6 6.63 9.81 4.71 7.89 4 8.6 * 8.6 1 9.39 1.11 10.16 1.32 11.58 2.01"
+        + " 12.8 3 13.4 3.72 13.9 4.5 14.29 5.32 14.57 6.2 14.74 7.12 14.8 8.1 14.75 8.89 14.38 10.41 13.67 11.83 13.2"
+        + " 12.5 12.07 13.59 10.73 14.41 9.98 14.7 9.2 14.9 7.61 15.03 6.06 14.8 5.32 14.55 3.93 13.77 2.75 12.71 1.84"
+        + " 11.42 1.5 10.7 1.07 9.15 1 7.55 1.1 6.76 1.58 5.23 2.36 3.84 2.86 3.23 3.44 2.68 4.1 2.2 5.49 1.47 6.24 1.22"
+        + " 7.8 0.99 * 9.1 13.9 10.36 13.47 10.95 13.15 12.03 12.32 12.5 11.8 13.19 10.64 13.61 9.36 13.7 8.69 13.65 7.2"
+        + " 13.26 5.66 12.93 4.95 12.51 4.29 11.48 3.23 10.35 2.51 9.73 2.26 8.4 2 7.08 2.04 5.79 2.36 5.17 2.64 4.08"
+        + " 3.42 3.19 4.42 2.53 5.62 2.13 6.96 2.02 8.3 2.09 8.97 2.25 9.64 2.82 10.92 3.62 12.02 4.62 12.92 5.82 13.61"
+        + " 6.46 13.83 7.11 13.97 8.44 14.01";
+    private const string AskShape =
+        "7.5 1 6.75 1.04 5.28 1.39 4.58 1.69 3.32 2.52 2.77 3.04 1.87 4.25 1.27 5.64 1.01 7.12 1.01 7.88 1.27 9.36 1.87"
+        + " 10.75 2.77 11.96 3.32 12.48 4.58 13.31 5.28 13.61 6.75 13.96 7.5 14 9 13.82 9.72 13.61 11.07 12.93 12.23"
+        + " 11.96 13.13 10.75 13.47 10.07 13.9 8.63 13.99 7.88 13.9 6.37 13.47 4.93 12.71 3.62 12.23 3.04 11.07 2.07 9.72"
+        + " 1.39 8.25 1.04 * 7.5 13 6.86 12.96 5.62 12.67 4.48 12.1 3.5 11.27 3.09 10.78 2.45 9.68 2.08 8.46 2.01 7.82"
+        + " 2.08 6.54 2.23 5.92 2.74 4.75 3.5 3.73 3.96 3.29 5.03 2.59 6.23 2.15 6.86 2.04 8.14 2.04 8.77 2.15 9.38 2.33"
+        + " 10.52 2.9 11.5 3.73 12.26 4.75 12.55 5.32 12.92 6.54 12.99 7.18 12.92 8.46 12.55 9.68 11.91 10.78 11.5 11.27"
+        + " 10.52 12.1 9.38 12.67 8.14 12.96 * 9.05 4.58 8.61 4.24 8.22 4.08 7.76 4 7.08 4.04 6.31 4.36 5.91 4.76 5.72"
+        + " 5.07 5.5 5.96 6.73 5.96 6.93 5.44 7.39 5.18 7.87 5.2 8.08 5.36 8.22 5.6 8.22 6.09 8.02 6.57 7.17 7.62 6.9"
+        + " 8.07 6.8 8.44 6.8 9.23 8 9.23 8.01 8.63 8.11 8.32 9.27 6.72 9.45 6.23 9.49 5.57 9.34 4.98 * 6.8 9.83 7.97"
+        + " 9.83 7.97 11 6.8 11";
+    private static readonly PointF[][] DonePoints = ParseShape(DoneShape);
+    private static readonly PointF[][] AskPoints = ParseShape(AskShape);
 
     private readonly List<NoteItem> notes = new List<NoteItem>();
-    /** 行尾那两颗标记的图形（按当前尺寸摊好的一份，尺寸变了重建）。 */
-    private GraphicsPath donePath;
-    private GraphicsPath askPath;
-    private RectangleF markBox = RectangleF.Empty;
     private readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer();
     private readonly Font titleFont;
     private readonly Font bodyFont;
@@ -461,8 +467,8 @@ class NoteWindow : Form
                 oneLine.LineAlignment = StringAlignment.Near;
                 using (SolidBrush b = new SolidBrush(nameColor)) { g.DrawString(item.Name, titleFont, b, titleRect, oneLine); }
             }
-            if (item.Ask) { DrawMark(g, tagRect, light ? AskLight : AskColor, true); }
-            else { DrawMark(g, tagRect, light ? DoneLight : DoneDark, false); }
+            if (item.Ask) { DrawMark(g, tagRect, light ? AskLight : AskColor, AskPoints); }
+            else { DrawMark(g, tagRect, light ? DoneLight : DoneDark, DonePoints); }
 
             if (item.Text.Length > 0)
             {
@@ -500,27 +506,46 @@ class NoteWindow : Form
         titleFont.Dispose();
         bodyFont.Dispose();
         tagFont.Dispose();
-        DisposeMarks();
         base.OnFormClosed(e);
     }
 
-    /** 行尾那颗标记：一个圈，里头是勾（跑完了一轮）或问号（等你答）。 */
-    private void DrawMark(Graphics g, RectangleF box, Color color, bool ask)
+    /** 把上面那串点拆成几段多边形（“*”分段）。 */
+    private static PointF[][] ParseShape(string text)
     {
-        if (markBox != box)
+        string[] chunks = text.Split('*');
+        PointF[][] parts = new PointF[chunks.Length][];
+        for (int i = 0; i < chunks.Length; i++)
         {
-            DisposeMarks();
-            donePath = SvgPath.Parse(DonePathData, box);
-            askPath = SvgPath.Parse(AskPathData, box);
-            markBox = box;
+            string[] nums = chunks[i].Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            PointF[] points = new PointF[nums.Length / 2];
+            for (int j = 0; j < points.Length; j++)
+            {
+                points[j] = new PointF(
+                    float.Parse(nums[j * 2], CultureInfo.InvariantCulture),
+                    float.Parse(nums[j * 2 + 1], CultureInfo.InvariantCulture));
+            }
+            parts[i] = points;
         }
-        using (SolidBrush b = new SolidBrush(color)) { g.FillPath(b, ask ? askPath : donePath); }
+        return parts;
     }
 
-    private void DisposeMarks()
+    /** 行尾那颗标记：一个圈，里头是勾（跑完了一轮）或问号（等你答）。 */
+    private static void DrawMark(Graphics g, RectangleF box, Color color, PointF[][] shape)
     {
-        if (donePath != null) { donePath.Dispose(); donePath = null; }
-        if (askPath != null) { askPath.Dispose(); askPath = null; }
+        using (GraphicsPath path = new GraphicsPath(FillMode.Alternate))
+        {
+            foreach (PointF[] part in shape)
+            {
+                PointF[] scaled = new PointF[part.Length];
+                for (int i = 0; i < part.Length; i++)
+                {
+                    scaled[i] = new PointF(box.Left + part[i].X * box.Width / 16f,
+                        box.Top + part[i].Y * box.Height / 16f);
+                }
+                path.AddPolygon(scaled);
+            }
+            using (SolidBrush b = new SolidBrush(color)) { g.FillPath(b, path); }
+        }
     }
 
     /** 一个圆角矩形的路径（面板本身和每条卡片都用它）。 */
@@ -544,221 +569,6 @@ class NoteWindow : Form
         text = text.Replace("\r", " ").Replace("\n", " ").Replace("\t", " ").Trim();
         while (text.IndexOf("  ") >= 0) { text = text.Replace("  ", " "); }
         return text.Length <= 160 ? text : text.Substring(0, 159) + "…";
-    }
-}
-
-/**
- * 一小段 SVG 路径解析：把 codicon 那两段图形（16x16 的 viewBox）摊成折线装进 GraphicsPath。
- *
- * 为什么要它：那两个图形是 SVG 路径，GDI+ 只认 GraphicsPath，没有现成的解析。
- * 只认这两段里出现过的命令：M/m 起笔、L/l 直线、H/h 横线、V/v 竖线、C/c 三次曲线、
- * A/a 椭圆弧、Z/z 闭合；曲线和弧线都按小段直线摊开（这么小的图上分不出来）。
- * 填充按 evenodd：图形的内圈和笔画就是靠这个挖出来的。
- */
-static class SvgPath
-{
-    /** 把一段路径画到 box 里（路径坐标按 16x16 换算）。 */
-    public static GraphicsPath Parse(string d, RectangleF box)
-    {
-        GraphicsPath path = new GraphicsPath(FillMode.Alternate);
-        List<PointF> sub = new List<PointF>();
-        PointF cur = new PointF();
-        PointF from = new PointF();
-        int i = 0;
-        char cmd = '\0';
-        while (true)
-        {
-            while (i < d.Length && (char.IsWhiteSpace(d[i]) || d[i] == ',')) { i++; }
-            if (i >= d.Length) { break; }
-            if (char.IsLetter(d[i])) { cmd = d[i]; i++; }
-            else if (cmd == 'M') { cmd = 'L'; }      // M 后面再跟数字：隐式直线
-            else if (cmd == 'm') { cmd = 'l'; }
-            else if (cmd == '\0') { break; }
-
-            char kind = char.ToUpperInvariant(cmd);
-            bool rel = cmd != kind;                   // 小写：坐标相对上一点
-            switch (kind)
-            {
-                case 'M':
-                    {
-                        float x = Num(d, ref i), y = Num(d, ref i);
-                        if (rel) { x += cur.X; y += cur.Y; }
-                        Flush(path, sub);
-                        cur = from = new PointF(x, y);
-                        sub.Add(Map(box, x, y));
-                        break;
-                    }
-                case 'L':
-                    {
-                        float x = Num(d, ref i), y = Num(d, ref i);
-                        if (rel) { x += cur.X; y += cur.Y; }
-                        cur = new PointF(x, y);
-                        sub.Add(Map(box, x, y));
-                        break;
-                    }
-                case 'H':
-                    {
-                        float x = Num(d, ref i);
-                        if (rel) { x += cur.X; }
-                        cur = new PointF(x, cur.Y);
-                        sub.Add(Map(box, cur.X, cur.Y));
-                        break;
-                    }
-                case 'V':
-                    {
-                        float y = Num(d, ref i);
-                        if (rel) { y += cur.Y; }
-                        cur = new PointF(cur.X, y);
-                        sub.Add(Map(box, cur.X, cur.Y));
-                        break;
-                    }
-                case 'C':
-                    {
-                        float x1 = Num(d, ref i), y1 = Num(d, ref i);
-                        float x2 = Num(d, ref i), y2 = Num(d, ref i);
-                        float x = Num(d, ref i), y = Num(d, ref i);
-                        if (rel)
-                        {
-                            x1 += cur.X; y1 += cur.Y;
-                            x2 += cur.X; y2 += cur.Y;
-                            x += cur.X; y += cur.Y;
-                        }
-                        Cubic(sub, box, cur, new PointF(x1, y1), new PointF(x2, y2), new PointF(x, y));
-                        cur = new PointF(x, y);
-                        break;
-                    }
-                case 'A':
-                    {
-                        float rx = Num(d, ref i), ry = Num(d, ref i), rot = Num(d, ref i);
-                        bool large = Num(d, ref i) != 0, sweep = Num(d, ref i) != 0;
-                        float x = Num(d, ref i), y = Num(d, ref i);
-                        if (rel) { x += cur.X; y += cur.Y; }
-                        Arc(sub, box, cur, rx, ry, rot, large, sweep, new PointF(x, y));
-                        cur = new PointF(x, y);
-                        break;
-                    }
-                case 'Z':
-                    Flush(path, sub);
-                    cur = from;
-                    break;
-                default:
-                    // 别的命令（这两段图形里没有）：不认得，能画的先留着
-                    Flush(path, sub);
-                    return path;
-            }
-        }
-        Flush(path, sub);
-        return path;
-    }
-
-    /** 一段画完了：收进路径（三 个点起步，不够的丢掉）。 */
-    private static void Flush(GraphicsPath path, List<PointF> sub)
-    {
-        if (sub.Count >= 3) { path.AddPolygon(sub.ToArray()); }
-        sub.Clear();
-    }
-
-    /** 16x16 上的一个点 → box 里的位置。 */
-    private static PointF Map(RectangleF box, float x, float y)
-    {
-        return new PointF(box.Left + x * box.Width / 16f, box.Top + y * box.Height / 16f);
-    }
-
-    /** 三次曲线：按控制多边形的长短切几段（这么小的图上十几段就看不出来了）。 */
-    private static void Cubic(List<PointF> sub, RectangleF box, PointF p0, PointF p1, PointF p2, PointF p3)
-    {
-        float len = Dist(p0, p1) + Dist(p1, p2) + Dist(p2, p3);
-        int steps = Math.Max(6, Math.Min(24, (int)Math.Ceiling(len)));
-        for (int i = 1; i <= steps; i++)
-        {
-            float t = (float)i / steps, u = 1 - t;
-            float x = u * u * u * p0.X + 3 * u * u * t * p1.X + 3 * u * t * t * p2.X + t * t * t * p3.X;
-            float y = u * u * u * p0.Y + 3 * u * u * t * p1.Y + 3 * u * t * t * p2.Y + t * t * t * p3.Y;
-            sub.Add(Map(box, x, y));
-        }
-    }
-
-    private static float Dist(PointF a, PointF b)
-    {
-        float dx = b.X - a.X, dy = b.Y - a.Y;
-        return (float)Math.Sqrt(dx * dx + dy * dy);
-    }
-
-    /**
-     * 椭圆弧：SVG 写的是“从这儿到那儿、半径和转向”，先换算成圆心和起止角再切段。
-     * 公式照 SVG 规范里那一段（端点参数化 → 圆心参数化）。
-     */
-    private static void Arc(List<PointF> sub, RectangleF box, PointF p0, float rx, float ry,
-        float rotDeg, bool large, bool sweep, PointF p1)
-    {
-        rx = Math.Abs(rx); ry = Math.Abs(ry);
-        if (rx < 1e-6f || ry < 1e-6f) { sub.Add(Map(box, p1.X, p1.Y)); return; }
-        double phi = rotDeg * Math.PI / 180.0;
-        double cos = Math.Cos(phi), sin = Math.Sin(phi);
-        double dx = (p0.X - p1.X) / 2.0, dy = (p0.Y - p1.Y) / 2.0;
-        double x1 = cos * dx + sin * dy;
-        double y1 = -sin * dx + cos * dy;
-        double lam = x1 * x1 / (rx * (double)rx) + y1 * y1 / (ry * (double)ry);
-        if (lam > 1) { double k = Math.Sqrt(lam); rx = (float)(rx * k); ry = (float)(ry * k); }
-        double num = rx * (double)rx * ry * ry - rx * (double)rx * y1 * y1 - ry * (double)ry * x1 * x1;
-        double den = rx * (double)rx * y1 * y1 + ry * (double)ry * x1 * x1;
-        double coef = den == 0 ? 0 : (large == sweep ? -1 : 1) * Math.Sqrt(Math.Max(0, num / den));
-        double cx1 = coef * (rx * y1 / ry);
-        double cy1 = coef * (-ry * x1 / rx);
-        double cx = cos * cx1 - sin * cy1 + (p0.X + p1.X) / 2.0;
-        double cy = sin * cx1 + cos * cy1 + (p0.Y + p1.Y) / 2.0;
-        double ux = (x1 - cx1) / rx, uy = (y1 - cy1) / ry;
-        double vx = (-x1 - cx1) / rx, vy = (-y1 - cy1) / ry;
-        double theta = Angle(1, 0, ux, uy);
-        double delta = Angle(ux, uy, vx, vy);
-        if (!sweep && delta > 0) { delta -= 2 * Math.PI; }
-        if (sweep && delta < 0) { delta += 2 * Math.PI; }
-        int steps = Math.Max(2, (int)Math.Ceiling(Math.Abs(delta) / 0.12));
-        for (int i = 1; i <= steps; i++)
-        {
-            double t = theta + delta * i / steps;
-            double px = cx + rx * Math.Cos(t) * cos - ry * Math.Sin(t) * sin;
-            double py = cy + rx * Math.Cos(t) * sin + ry * Math.Sin(t) * cos;
-            sub.Add(Map(box, (float)px, (float)py));
-        }
-    }
-
-    /** 两个方向之间的夹角（带正负：顺时针为正）。 */
-    private static double Angle(double ux, double uy, double vx, double vy)
-    {
-        double dot = ux * vx + uy * vy;
-        double len = Math.Sqrt((ux * ux + uy * uy) * (vx * vx + vy * vy));
-        double a = Math.Acos(len == 0 ? 1 : Math.Max(-1, Math.Min(1, dot / len)));
-        return ux * vy - uy * vx < 0 ? -a : a;
-    }
-
-    /** 读一个数：认得正负号、小数点和指数（SVG 里 1.6.1 是两个数：1.6 和 .1）。 */
-    private static float Num(string d, ref int i)
-    {
-        while (i < d.Length && (char.IsWhiteSpace(d[i]) || d[i] == ',')) { i++; }
-        int start = i;
-        bool dot = false;
-        if (i < d.Length && (d[i] == '+' || d[i] == '-')) { i++; }
-        while (i < d.Length)
-        {
-            char c = d[i];
-            if (char.IsDigit(c)) { i++; continue; }
-            if (c == '.' && !dot) { dot = true; i++; continue; }
-            break;
-        }
-        if (i < d.Length && (d[i] == 'e' || d[i] == 'E'))
-        {
-            i++;
-            if (i < d.Length && (d[i] == '+' || d[i] == '-')) { i++; }
-            while (i < d.Length && char.IsDigit(d[i])) { i++; }
-        }
-        string text = d.Substring(start, i - start);
-        float value;
-        if (!float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
-        {
-            throw new FormatException("SVG 路径里有个数没看懂：\"" + text + "\"");
-        }
-        return value;
     }
 }
 
