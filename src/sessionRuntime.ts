@@ -1332,12 +1332,6 @@ export class SessionRuntime {
         if (noteText) {
             emit({ type: "system", text: noteText });
         }
-        if (this.streaming) {
-            emit({
-                type: "system",
-                text: "该会话正在生成中：重画之前的输出不带过来，后面的输出会继续显示。",
-            });
-        }
         // 只给一个页面重画时不再广播会话列表：那份数据每个页面都一模一样，重连的页面本来就有
         if (!sink) { this.host.broadcastSessionList(); }
     }
