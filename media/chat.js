@@ -44,6 +44,9 @@
     sliders: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2 4.5h6.2M11.8 4.5H14M2 11.5h1.7M7.3 11.5H14"/><circle cx="10" cy="4.5" r="1.8"/><circle cx="5.5" cy="11.5" r="1.8"/></svg>',
     // 三根高低不一的柱子：侧边栏底部那颗「统计」（工具调用耗时）用它。
     chart: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="2" y="9" width="3" height="5" rx="0.6"/><rect x="6.5" y="5" width="3" height="9" rx="0.6"/><rect x="11" y="2" width="3" height="12" rx="0.6"/></svg>',
+    // 一只箱子（工具箱）：侧边栏底部那颗「工具」（这个会话加载了什么）用它。
+    // 描边的，跟上面那颗实心柱子摆在一起能分得开。
+    tools: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><path d="M2.2 5.4h11.6a1 1 0 0 1 1 1v6.1a1 1 0 0 1-1 1H2.2a1 1 0 0 1-1-1V6.4a1 1 0 0 1 1-1Z"/><path d="M6 5.4V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.4"/><path d="M1.2 9.2h13.6"/></svg>',
     // 子会话的拐角箭头（“↳”）：先从上面下来、再向右拐，像个挂在父会话下面的分叉。
     // 用 SVG 而不是文字符号：箭头在 Segoe UI 等字体里居中不对，画出来天然齐。
     child: '<svg width="14" height="14" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.2 1.6V8.4H12.6"/><path d="M9.8 5.6L12.8 8.4L9.8 11.2"/></svg>',
@@ -4422,6 +4425,8 @@
     reflectSessionUI();
     renderSessionBar();
     refreshOpenSessionsInPicker();
+    // 「工具」那张清单是一个会话一份：弹窗开着换了会话，就换成新会话那一份
+    if (envOpen()) { requestEnv(); }
     if (!IS_TOUCH_DEVICE) { inputEl.focus(); }
     // 切到这个会话：排在"还没有会话"名下的消息现在有主了，能发就发
     flushPendingSend();
@@ -8326,6 +8331,17 @@
         openToolStats();
       });
       view.footer.appendChild(statsBtn);
+      // 「工具」：这个会话加载着什么（工具 / 技能 / MCP 服务器）。清单是 pi 里那个扩展报上来的，
+      // 后端存着最近一份，点开这颗按钮现要一次（见下面 renderEnv）。
+      const envBtn = document.createElement("button"); envBtn.type = "button";
+      envBtn.className = "secondary pk-footer-env";
+      envBtn.title = "看这个会话现在有哪些工具、技能、MCP 服务器";
+      envBtn.innerHTML = ICONS.tools + "<span>工具</span>";
+      envBtn.addEventListener("click", () => {
+        if (!view.keepOpen) { cancelPicker(view); }
+        openEnv();
+      });
+      view.footer.appendChild(envBtn);
       // 「截图」：请插件截一张跑后端的这台电脑的桌面（手机上常用）。这颗按钮归 browserBridge.js 建，
       // 这里只管把它排在「统计」后头；后端说截不了桌面时它压根不存在。
       const shotBtn = typeof window.pichatScreenshotButton === "function" ? window.pichatScreenshotButton() : null;
@@ -9311,6 +9327,14 @@
         if (t.id === activeId) { applyBashTask(msg.task); }
         break;
       }
+      case "envInfo": {
+        // 「加载了什么」那份清单（点开那颗「工具」时要回来的 / 后端发现变了主动推来的）
+        envSnapshot = msg.env || null;
+        envSnapshotFor = typeof msg.sessionId === "string" ? msg.sessionId : t.id;
+        envWaiting = false;
+        if (envOpen()) { renderEnv(); }
+        break;
+      }
       case "system":
         addPlain(t, "system", null, msg.text, msg.id);
         break;
@@ -10133,6 +10157,189 @@
       e.preventDefault();
       e.stopImmediatePropagation();
       closeToolStats();
+    });
+  }
+
+  // ==================== 工具 / 技能 / MCP（侧边栏底部那颗「工具」）====================
+  // 这个会话现在加载着什么：工具（来自内置还是哪个文件、现在生不生效）、技能（来自哪个文件）、
+  // MCP 服务器（配了哪几个、停用了没有、真挂上来几个工具）。
+  // 清单不归界面算：pi 里那个报清单的扩展取好（见 src/envBridgeSource.ts），写成一行暗号从 stderr
+  // 交回后端，后端存着最近一份推过来（见 sessionRuntime 的 noteEnvSnapshot）。
+  // 所以这里只做两件事：点开时要一份；来了就画。
+  const envOverlay = document.getElementById("envOverlay");
+  const envBody = document.getElementById("envBody");
+  const envCloseBtn = document.getElementById("envClose");
+  /** 最近收到的那一份清单，以及它是哪个会话的。 */
+  let envSnapshot = null;
+  let envSnapshotFor = "";
+  /** 要过一份、还没回来。 */
+  let envWaiting = false;
+
+  function envOpen() {
+    return !!envOverlay && !envOverlay.classList.contains("hidden");
+  }
+
+  /** 路径缩一下：只留最后几段（全路径放悬停提示里）。 */
+  function envShortPath(path) {
+    const parts = String(path || "").split(/[\\/]+/).filter(Boolean);
+    if (parts.length <= 3) { return String(path || ""); }
+    return "…/" + parts.slice(-3).join("/");
+  }
+
+  /** 一行「来源」：内置 / 用户级 · …/pichat/ask-bridge-0.1.0.ts。 */
+  function envSourceText(item) {
+    const path = (item && item.path) || "";
+    if (path.indexOf("builtin:") === 0) { return "内置"; }
+    const scopes = { user: "用户级", project: "项目级", temporary: "临时" };
+    const scope = scopes[(item && item.scope) || ""] || "";
+    if (!path || path.charAt(0) === "<") { return scope || "扩展"; }
+    const short = envShortPath(path);
+    return scope ? scope + " · " + short : short;
+  }
+
+  /** 一个工具现在怎么给模型用：一句话。 */
+  function envToolState(tool) {
+    if (tool && tool.on) { return "生效"; }
+    const exposure = (tool && tool.exposure) || "";
+    if (exposure === "hidden") { return "用不了"; }
+    if (exposure === "codemode") { return "要从脚本里调"; }
+    if (exposure === "deferred") { return "要先被搜出来"; }
+    return "没生效";
+  }
+
+  /** 清单里的一行：名字 / 状态 / 来源（放不下的用省略号，全在悬停提示里）。 */
+  function envRowEl(name, state, source, on, title) {
+    const row = document.createElement("div");
+    row.className = "ts-row";
+    const nameEl = document.createElement("span");
+    nameEl.className = "env-name";
+    nameEl.textContent = name;
+    const stateEl = document.createElement("span");
+    stateEl.className = "env-state" + (on ? " env-on" : "");
+    stateEl.textContent = state;
+    const sourceEl = document.createElement("span");
+    sourceEl.className = "env-source";
+    sourceEl.textContent = source || "";
+    row.appendChild(nameEl);
+    row.appendChild(stateEl);
+    row.appendChild(sourceEl);
+    if (title) { row.title = title; }
+    return row;
+  }
+
+  /** 画一遍「加载了什么」：上面一句汇总，下面工具 / 技能 / MCP 三节。 */
+  function renderEnv() {
+    if (!envBody) { return; }
+    envBody.innerHTML = "";
+    envBody.scrollTop = 0;
+    const st = activeSession();
+    if (!st) {
+      envBody.appendChild(tsBlock("ts-empty", "还没有会话。"));
+      return;
+    }
+    const env = (envSnapshot && envSnapshotFor === st.id) ? envSnapshot : null;
+    if (!env) {
+      envBody.appendChild(tsBlock("ts-empty", envWaiting
+        ? "正在取…"
+        : "还没取到。等这个会话跑起来（输入框底下那颗圆环不再转）再点一次这颗按钮。"));
+      return;
+    }
+    const tools = Array.isArray(env.tools) ? env.tools : [];
+    const skills = Array.isArray(env.skills) ? env.skills : [];
+    const servers = Array.isArray(env.mcp) ? env.mcp : [];
+    // MCP 挂上来的工具名都是 mcp__服务器__工具：它们不重列在「工具」那一节里
+    // （一台服务器就能挂几十个，会把别的工具顶到屏外去），要看看下面 MCP 那一节。
+    const isMcpTool = (it) => !!it && typeof it.name === "string" && it.name.indexOf("mcp__") === 0;
+    const plainTools = tools.filter((it) => !isMcpTool(it));
+    const mcpToolCount = tools.length - plainTools.length;
+    const onCount = plainTools.filter((it) => it && it.on).length;
+    envBody.appendChild(tsBlock("ts-summary",
+      "工具 " + plainTools.length + " 个（" + onCount + " 个现在生效） · 技能 " + skills.length + " 个 · MCP "
+      + servers.length + " 个" + (mcpToolCount > 0 ? "（挂着 " + mcpToolCount + " 个工具）" : "")));
+    if (env.cwd) { envBody.appendChild(tsBlock("ts-note", env.cwd)); }
+
+    // 工具（按名字排）
+    envBody.appendChild(tsBlock("ts-section", "工具"));
+    if (!plainTools.length) {
+      envBody.appendChild(tsBlock("ts-empty", "一个工具都没有。"));
+    }
+    plainTools.slice()
+      .sort((a, b) => String(a && a.name || "").localeCompare(String(b && b.name || "")))
+      .forEach((tool) => {
+        envBody.appendChild(envRowEl(
+          tool.name || "?",
+          envToolState(tool),
+          envSourceText(tool),
+          !!tool.on,
+          [(tool.path || ""), tool.exposure ? "怎么用：" + tool.exposure : ""].filter(Boolean).join("\n")));
+      });
+    if (mcpToolCount > 0) {
+      envBody.appendChild(tsBlock("ts-note", "另有 " + mcpToolCount + " 个 MCP 工具，见下面 MCP 那一节。"));
+    }
+
+    // 技能
+    envBody.appendChild(tsBlock("ts-section", "技能"));
+    if (!skills.length) {
+      envBody.appendChild(tsBlock("ts-empty", "没有技能。"));
+    }
+    skills.slice()
+      .sort((a, b) => String(a && a.name || "").localeCompare(String(b && b.name || "")))
+      .forEach((skill) => {
+        envBody.appendChild(envRowEl(skill.name || "?", "", envSourceText(skill), false, skill.path || ""));
+      });
+
+    // MCP
+    envBody.appendChild(tsBlock("ts-section", "MCP"));
+    if (!servers.length) {
+      envBody.appendChild(tsBlock("ts-empty", "没有配 MCP 服务器。"));
+    }
+    servers.slice()
+      .sort((a, b) => String(a && a.name || "").localeCompare(String(b && b.name || "")))
+      .forEach((server) => {
+        let state = "没有工具";
+        if (server.error) { state = "读不懂"; }
+        else if (server.enabled === false) { state = "已停用"; }
+        else if (server.tools > 0) { state = "连上了 · " + server.tools + " 个工具"; }
+        // 配置读不懂那一条：名字那格是「配置有错」，错在哪儿写来源里（悬停能看全文）
+        const source = server.error ? String(server.error) : envSourceText(server);
+        envBody.appendChild(envRowEl(server.name || "?", state, source, server.tools > 0, server.error || server.path || ""));
+      });
+
+    envBody.appendChild(tsBlock("ts-note",
+      "清单由会话里的 pi 报上来，有变化就跟着更新（几秒一次）。\n"
+      + "MCP 只看得出「连上了几个工具」：连不上、连上了但一个工具都没有，这里都写「没有工具」"
+      + "（连不上的原因只有 pi 自己的日志里有）。"));
+  }
+
+  /** 现要一份清单（后端存着最近一次报上来的，可能比手上这份新）。 */
+  function requestEnv() {
+    envSnapshot = null;
+    envSnapshotFor = "";
+    envWaiting = true;
+    renderEnv();
+    vscode.postMessage({ type: "requestEnvInfo", sessionId: activeId || "" });
+  }
+
+  function openEnv() {
+    if (!envOverlay) { return; }
+    envOverlay.classList.remove("hidden");
+    requestEnv();
+  }
+
+  function closeEnv() {
+    if (envOverlay) { envOverlay.classList.add("hidden"); }
+  }
+
+  if (envOverlay) {
+    // 点外面收起来；右上角那颗叉同理
+    envOverlay.addEventListener("click", (e) => { if (e.target === envOverlay) { closeEnv(); } });
+    if (envCloseBtn) { envCloseBtn.addEventListener("click", closeEnv); }
+    // Esc 收起来：跟别的浮层一样在捕获阶段就地处掉，别顺手中止正在生成的那一轮
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || !envOpen()) { return; }
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      closeEnv();
     });
   }
 

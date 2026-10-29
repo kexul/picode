@@ -7,6 +7,7 @@
  *   title-bridge-<插件版本>.ts  自动起标题那个扩展（源码见 titleBridgeSource.ts）
  *   image-bridge-<插件版本>.ts  会话里的截图挪出会话文件（源码见 imageOffloadBridgeSource.ts）
  *   bash-bridge-<插件版本>.ts  把 bash 换成能「脱手到后台」的版本（源码见 bashBridgeSource.ts）
+ *   env-bridge-<插件版本>.ts   把「加载了什么」（工具 / 技能 / MCP）报给插件（源码见 envBridgeSource.ts）
  *
  * 几套是同一个套路：文件名、源码、落盘后顺带干的活不一样，其余（内容变了才重写、
  * 清掉旧版本留下的文件、记一份结果）都一样，所以合成一处，差别放在下面的 BRIDGES 里。
@@ -32,6 +33,7 @@ import { GOAL_BRIDGE_SOURCE } from "./goalBridgeSource";
 import { TITLE_BRIDGE_SOURCE } from "./titleBridgeSource";
 import { IMAGE_BRIDGE_SOURCE } from "./imageOffloadBridgeSource";
 import { BASH_BRIDGE_SOURCE } from "./bashBridgeSource";
+import { ENV_BRIDGE_SOURCE } from "./envBridgeSource";
 import { cleanStaleRunFiles, tabaRunsDir } from "./tabaRunFiles";
 import { askAnswersDir, cleanStaleAskAnswers } from "./askProtocol";
 import { pichatDir } from "./serverPaths";
@@ -58,7 +60,7 @@ interface BridgeKind {
     afterWrite(rootDir: string): void;
 }
 
-const BRIDGES: Record<"taba" | "ask" | "goal" | "title" | "image" | "bash", BridgeKind> = {
+const BRIDGES: Record<"taba" | "ask" | "goal" | "title" | "image" | "bash" | "env", BridgeKind> = {
     taba: {
         prefix: "taba-bridge",
         source: TABA_BRIDGE_SOURCE,
@@ -96,6 +98,12 @@ const BRIDGES: Record<"taba" | "ask" | "goal" | "title" | "image" | "bash", Brid
         prefix: "image-bridge",
         source: IMAGE_BRIDGE_SOURCE,
         // 图落在 ~/.pi/agent/images/<会话 id>/（扩展自己建目录），不归这儿管：别去清它，那是用户的图
+        afterWrite(): void { /* 没别的活 */ },
+    },
+    env: {
+        prefix: "env-bridge",
+        source: ENV_BRIDGE_SOURCE,
+        // 只往 stderr 报清单，外面不留文件：不用建目录、不用清残留
         afterWrite(): void { /* 没别的活 */ },
     },
     bash: {
@@ -203,6 +211,11 @@ export function ensureBashAssets(version: string): BridgeAssets {
     return ensureBridge(BRIDGES.bash, version);
 }
 
+/** 同上，报「加载了什么」那一套：每个会话都带（子会话的清单也可能要看）。 */
+export function ensureEnvAssets(version: string): BridgeAssets {
+    return ensureBridge(BRIDGES.env, version);
+}
+
 /** 拿记住的结果（还没写过就是 undefined）。 */
 export function getTabaAssets(): BridgeAssets | undefined {
     return cached.get(BRIDGES.taba);
@@ -226,4 +239,8 @@ export function getImageAssets(): BridgeAssets | undefined {
 
 export function getBashAssets(): BridgeAssets | undefined {
     return cached.get(BRIDGES.bash);
+}
+
+export function getEnvAssets(): BridgeAssets | undefined {
+    return cached.get(BRIDGES.env);
 }

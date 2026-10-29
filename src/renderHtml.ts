@@ -179,6 +179,16 @@ ${chatColumnClose}  <div id="sidebarDock" class="pk-host pk-drawer pk-workspace"
       <div id="toolStatsBody"></div>
     </div>
   </div>
+  <div id="envOverlay" class="hidden">
+    <div id="envPanel">
+      <div id="envHead">
+        <span id="envTitle">工具</span>
+        <span class="ts-spacer"></span>
+        <button id="envClose" type="button" title="关闭" aria-label="关闭">${ICON_CLOSE}</button>
+      </div>
+      <div id="envBody"></div>
+    </div>
+  </div>
 ${bodyBottom}${scriptTags}
 </body>
 </html>`;

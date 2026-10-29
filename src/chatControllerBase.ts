@@ -573,6 +573,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (cfg.imageExtension) { extraArgs.push("-e", cfg.imageExtension); }
         // 接管 bash（后台命令）：每个会话都带，领走备用进程的那个 panel 也一样
         if (cfg.bashExtension) { extraArgs.push("-e", cfg.bashExtension); }
+        // 报「加载了什么」（工具 / 技能 / MCP）：同上，每个会话都带
+        if (cfg.envExtension) { extraArgs.push("-e", cfg.envExtension); }
         const client = new PiClient({
             piPath: cfg.piPath,
             cwd: this.getCwd(),
@@ -2562,6 +2564,15 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 return;
             case "requestViewOptionItems":
                 this.showOptionsPicker();
+                return;
+            case "requestEnvInfo":
+                // 界面上点开了那颗「工具」：把后端存着的最近一份清单给它（还没报过来就是 null）
+                if (typeof msg.sessionId === "string" && this.panels.has(msg.sessionId)) {
+                    this.postToSession(msg.sessionId, {
+                        type: "envInfo",
+                        env: this.panels.get(msg.sessionId)?.envInfo() ?? null,
+                    });
+                }
                 return;
             case "pickerToggle":
                 if (typeof msg.action === "string" && msg.kind !== "model") {

@@ -51,6 +51,12 @@ export interface PiConfig {
     bashExtension?: string;
     /** 上面那个扩展的资源目录：后台命令的日志在它的 tasks/ 下，“放后台”的指令写在 detach/ 下。 */
     bashDir?: string;
+    /**
+     * 「把加载了什么报回来」（工具 / 技能 / MCP 服务器）那个扩展的路径（插件写在 pichat 目录里）。
+     * 每个会话都带：界面侧边栏底部那颗「工具」点开看的就是它报上来的清单。
+     * 空串或缺省表示那份清单一直取不到（那颗按钮会写着还没取到）。
+     */
+    envExtension?: string;
 }
 
 /**

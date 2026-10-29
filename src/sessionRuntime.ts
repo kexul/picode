@@ -6,6 +6,7 @@ import { parseGoalCommand } from "./goal";
 import { StderrFrameSplitter } from "./piFrames";
 import { TABA_DECODER, TabaRequest } from "./tabaProtocol";
 import { GOAL_DECODER, GoalVerdictRequest } from "./goalProtocol";
+import { ENV_DECODER, type EnvSnapshot } from "./envProtocol";
 import { NameParts } from "./names";
 import { EditTracker, type SessionChangeInfo } from "./editTracker";
 import {
@@ -246,7 +247,10 @@ export class SessionRuntime {
     /** 本 panel 启动 pi 时的额外要求（子会话才有）；进程重启时照原样再用一次。 */
     private launch?: PanelLaunch;
     /** 从本进程 stderr 里挑暗号行的切割器（派子会话、问话、目标验收、后台命令四种暗号都走它）。 */
-    private readonly piFrames = new StderrFrameSplitter([TABA_DECODER, ASK_DECODER, GOAL_DECODER, BASH_DECODER]);
+    private readonly piFrames = new StderrFrameSplitter([TABA_DECODER, ASK_DECODER, GOAL_DECODER, BASH_DECODER, ENV_DECODER]);
+    /** 这个会话加载着什么（工具 / 技能 / MCP 服务器）：env-bridge 扩展报上来的最近一份。
+     *  界面那颗「工具」点开时要它；还没报过来就是 undefined。 */
+    private envSnapshot?: EnvSnapshot;
     private readonly edits: EditTracker;
     /** 这个会话的后台命令（任务编号 → 情况）：界面那一格清单、以及「停」要用它。
      *  跟着会话活：会话关掉就没了（日志文件还在磁盘上，但没人再看了）。 */
@@ -409,6 +413,8 @@ export class SessionRuntime {
         if (cfg.imageExtension) { extraArgs.push("-e", cfg.imageExtension); }
         // “后台命令”：接管 bash，每个会话都带（子会话、判官也要能跑命令）
         if (cfg.bashExtension) { extraArgs.push("-e", cfg.bashExtension); }
+        // “加载了什么”（工具 / 技能 / MCP）：每个会话都带，界面那颗「工具」看的就是它报上来的
+        if (cfg.envExtension) { extraArgs.push("-e", cfg.envExtension); }
         if (this.launch?.extraArgs && this.launch.extraArgs.length > 0) {
             extraArgs.push(...this.launch.extraArgs);
         }
@@ -464,6 +470,11 @@ export class SessionRuntime {
                 if (frame.kind === "bash") {
                     // 后台命令的开始 / 结束：记进这一会话的清单、推给界面；跑完的交给宿主去补一条消息
                     this.noteBashTask(frame.value as BashTaskEvent);
+                    continue;
+                }
+                if (frame.kind === "env") {
+                    // 「加载了什么」的清单：存着，推给界面（那颗「工具」开着的话就跟着刷新）
+                    this.noteEnvSnapshot(frame.value as EnvSnapshot);
                     continue;
                 }
                 if (frame.kind === "ask") {
@@ -536,6 +547,8 @@ export class SessionRuntime {
         this.piSessionTitle = "";
         // 后台命令清单也跟着会话走：换会话 / 换进程以后旧的那些都不认了
         this.bashTasks.clear();
+        // 「加载了什么」同理：新进程会重新报一份
+        this.envSnapshot = undefined;
     }
 
     // ---- 后台命令（那个接管了 bash 的扩展报上来的）----
@@ -543,6 +556,19 @@ export class SessionRuntime {
     /** 这个会话的后台命令清单（新的排前面）：界面那一格「脚本」用它、刷新后重画也用它。 */
     public listBashTasks(): BashTaskInfo[] {
         return Array.from(this.bashTasks.values()).sort((a, b) => b.no - a.no);
+    }
+
+    // ---- 「加载了什么」（那个报清单的扩展报上来的）----
+
+    /** 最近一份「工具 / 技能 / MCP」清单；还没报过来就是 undefined。 */
+    public envInfo(): EnvSnapshot | undefined {
+        return this.envSnapshot;
+    }
+
+    /** 扩展报来一份清单（见 envProtocol.ts）：存下并推给界面。 */
+    private noteEnvSnapshot(snapshot: EnvSnapshot): void {
+        this.envSnapshot = snapshot;
+        this.post({ type: "envInfo", env: snapshot });
     }
 
     /** 扩展报来一条后台命令的开始 / 结束（见 bashProtocol.ts）。 */

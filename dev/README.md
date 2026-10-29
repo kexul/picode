@@ -337,6 +337,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `detailOnDemand.js` | 同上那条路的另一半（历史重放）：用真会话打开页面，标签上只有工具名、点开提示框才把全文取回来：`node dev/detailOnDemand.js --session <某个 .jsonl>` |
 | `thinkDetail.js` | 验 `think` 点开不是空的（三种会变成「（没有输出）」的情形）：想一半点「停止生成」后已经想到的那段还在；思考的收尾比正文晚到（真 pi 的 openai-completions 适配器就这样，假模型用 `FAKEPI_LATE_THINK_END=1` 演）时只出一颗标签、点开是全文；模型只给加密内容（一个字都没有）时写「（这段思考没有文字）」：`FAKEPI_LATE_THINK_END=1 FAKEPI_LONG=1500 FAKEPI_TICK_MS=25 npm run web:shot -- --fake-pi --script dev/thinkDetail.js` |
 | `toolStats.js` | 验「工具调用耗时」那张弹窗（项目与会话侧边栏底部「设置」旁边那颗「统计」）：空的时候先说一句还没跑过、跑过之后按工具名一张表（次数 / 合计 / 平均 / 最长）+ 花得最久的几次调用（长命令默认截成 …，点一下展开成完整多行、再点收起）、弹窗开着又来一条结果也跟着长、点叉与 Esc 收起；手机上铺满整屏（窄窗要先点 `<<<` 把抽屉拉出来）：`npm run web:shot -- --width 1200 --height 760 --script dev/toolStats.js` |
+| `envInfo.js` | 验侧边栏底部那颗「工具」（这个会话加载着什么：工具 / 技能 / MCP 服务器）：真会话那一份（会话刚起来时 MCP 还没连上、过几秒挂上来了跟着变），再投一份假清单看几种少见写法（用不了 / 要从脚本里调 / 要先被搜出来的工具、项目级技能、停用的 MCP、配置读错的 MCP）；点叉与 Esc 收起；窄窗要先点 `<<<` 把抽屉拉出来：`npm run web:shot -- --width 1200 --height 800 --script dev/envInfo.js` |
 | `askCards.js` | 验问话卡片（长在消息流里）：假 pi 演模型调 `ask_choice` 与扩展问用户，单选 / 多选 / 自己写 / 停止生成 / 确认 / 输入 / 选一个 / 刷新页面各走一遍；那两个输入框写着 `enterkeyhint`、“自己写”那行里回车交完光标落回下面那个输入框也在这里盯着：`npm run web:shot -- --fake-pi --script dev/askCards.js` |
 | `askQuestion.js` | 同上但那一条是真路的：真模型 → 真 pi（插件给它 `-e` 了桥扩展）→ 卡片 → 回话文件 → 工具结果（慢） |
 | `askDialog.js` + `askDialogTrigger.ts` | 验真扩展问的“要你打字 / 要你点是或否 / 选一个”：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |

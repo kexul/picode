@@ -25,7 +25,7 @@ import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
 import { isPackaged } from "./appAssets";
 import { hostOfUrl, isOwnPage, pushRemoteNotice, type RemoteNotice } from "./remoteNotice";
-import { getAskAssets, getBashAssets, getGoalAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
+import { getAskAssets, getBashAssets, getEnvAssets, getGoalAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
 import {
     listProjectDirs,
@@ -246,6 +246,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const title = getTitleAssets();
         const image = getImageAssets();
         const bash = getBashAssets();
+        const env = getEnvAssets();
         return {
             piPath: cfg.piPath,
             provider: cfg.provider,
@@ -266,6 +267,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             bashExtension: bash?.ok ? bash.extensionPath : "",
             // 后台命令那一摊在资源目录下的 bash/ 里（tasks/ 日志、detach/ 指令），见 bridgeAssets
             bashDir: bash?.ok ? path.join(bash.resourceDir, "bash") : "",
+            // 把「加载了什么」（工具 / 技能 / MCP）报回来：每个会话都带
+            envExtension: env?.ok ? env.extensionPath : "",
         };
     }
 

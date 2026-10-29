@@ -19,7 +19,7 @@ import { ChatHost } from "./chatHost";
 import { readServerConfig, updateServerConfig } from "./serverConfig";
 import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
 import { startRestart } from "./serverRestart";
-import { ensureAskAssets, ensureGoalAssets, ensureImageAssets, ensureTabaAssets, ensureTitleAssets, ensureBashAssets } from "./bridgeAssets";
+import { ensureAskAssets, ensureGoalAssets, ensureImageAssets, ensureTabaAssets, ensureTitleAssets, ensureBashAssets, ensureEnvAssets } from "./bridgeAssets";
 import { serverConfigFile } from "./serverPaths";
 
 /** 界面资源目录（chat.js / chat.css 这些）：正常跑在仓库根下，单文件 exe 时是解出来的缓存目录。 */
@@ -199,6 +199,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     const bashAssets = ensureBashAssets(VERSION);
     if (!bashAssets.ok) {
         log(`后台命令没开（文件没写成：${bashAssets.error}）`);
+    }
+
+    // 报「加载了什么」（工具 / 技能 / MCP）：同样先写好（每个会话都加载）
+    const envAssets = ensureEnvAssets(VERSION);
+    if (!envAssets.ok) {
+        log(`「工具」那颗按钮会一直空着（文件没写成：${envAssets.error}）`);
     }
 
     let started: StartedBackend;
