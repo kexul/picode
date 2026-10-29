@@ -4340,11 +4340,13 @@
     ctxIconEl.title = ctxTitle(st);
     const name = ctxIconEl.querySelector(".ci-name");
     if (name) { name.textContent = ctxName(st, state); }
-    // 横条：填多满就是用了多少；条上头那行字写整数百分比（横条这儿放得下，就带个 %，
-    // 不看形状也认得出来）。还没量出来（没配模型 / 还没报过用量）就空着。
+    // 横条：填多满就是用了多少（一个数写进 --ci-pct，横条宽度认它，见 chat.css）；
+    // 条上头那行字写整数百分比（横条这儿放得下，就带个 %，不看形状也认得出来）。
+    // 还没量出来（没配模型 / 还没报过用量）就空着；.hasfill 是给能量条的斜条与呼吸用的：
+    // 横条本来就是空的时候，也没东西可动。
     const known = (state === "idle" || state === "streaming") && typeof st.percent === "number";
-    const fill = ctxIconEl.querySelector(".ci-fill");
-    if (fill) { fill.style.width = known ? pct.toFixed(1) + "%" : "0%"; }
+    ctxIconEl.style.setProperty("--ci-pct", known ? pct.toFixed(1) + "%" : "0%");
+    ctxIconEl.classList.toggle("hasfill", known && pct > 0);
     const num = ctxIconEl.querySelector(".ci-text");
     if (num) { num.textContent = known ? Math.round(pct) + "%" : ""; }
     // 跑多快：后端推来的那个数（生成中是这一轮的实时均值，停下来就留着最后那个，没跑过就空着）

@@ -46,16 +46,18 @@ const ICON_CLOSE = '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http:
 /**
  * 输入框底下那颗胶囊：当前模型 + 上下文用量 + 生成速度（见 chat.js 的 syncStatus）。
  * 挂在 #inputRow（框底那条小横排）里，前头是新建会话那颗加号、后头是「你说过的话」。
- * 胶囊从左到右：模型名（太长从尾巴省略）、一条小横条（上下两层：上头写整数百分比、
- * 下头是那条杠，填到哪儿就是用了多少）、这一轮的生成速度（多少 t/s）。
+ * 胶囊从左到右：模型名（太长从尾巴省略）、一条小横条（上下两层：上头是「跑着的状态图标 +
+ * 整数百分比」、下头是那条杠，填到哪儿就是用了多少）、这一轮的生成速度（多少 t/s）。
  * 横条那格跟模型名那一行字差不多高——原来那颗圆环比模型名还大一圈。
+ * 上头那行里那颗 .ci-act 就是原来挂在胶囊最左边那颗状态动画（等 / 写 / 想 / 工具），
+ * 现在挪到百分比数字旁边；横条是一条“能量条”，动效见 chat.css。
  * 颜色（正常 / 黄 / 红）、提示文字、点击切模型都在 chat.js 里管。
  */
 function modelChipMarkup(): string {
     return `      <button id="ctxIcon" type="button" data-st="loading" title="加载中…" aria-label="当前模型、上下文用量与生成速度（点击切换模型）">` +
         `<span class="ci-name"></span>` +
         `<span class="ci-meter">` +
-        `<span class="ci-text"></span>` +
+        `<span class="ci-top"><span class="ci-act"></span><span class="ci-text"></span></span>` +
         `<span class="ci-bar"><span class="ci-fill"></span></span>` +
         `</span>` +
         `<span class="ci-tps"></span>` +
