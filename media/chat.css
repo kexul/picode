@@ -30,6 +30,17 @@
   }
   #chatColumn { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
   #messages { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+  /* 一个会话都没有时摆在消息流中间的那块提示（见 renderHtml 的 #noSessionHint）：
+     有会话看着时藏起来（.hidden 由 chat.js 挂 / 摘）。它只是个空窗格的占位：
+     不拦点击、不许选中。 */
+  #noSessionHint {
+    flex: 1 1 auto; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 6px;
+    padding: 24px; text-align: center; user-select: none; pointer-events: none;
+  }
+  #noSessionHint.hidden { display: none; }
+  #noSessionHint .nsh-title { opacity: 0.5; font-size: 1.05em; }
+  #noSessionHint .nsh-text { opacity: 0.38; font-size: 0.92em; line-height: 1.7; }
   /* 左右划切会话时（见 chat.js 的“左右划”那段）：两个壳一左一右摆着，越出去那半屏
      得在这儿裁掉，不然整页多出一条横向滚动条。划完就摘掉（平时别裁：提示框这些会伸到外面）。
 
@@ -208,6 +219,9 @@
   #sessionMore svg { width: 12px; height: 12px; display: block; transform: rotate(90deg); }
   #sessionMore:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
   #sessionMore.hidden { display: none; }
+  /* 骨架里那一格在没会话时藏着（见 renderHtml / chat.js 的 sessionTabEl）：藏着的量不到宽，
+     所以排这一排格时也不拿它算地方（见 chat.js 的 layoutSessionTabs）。 */
+  #sessionTabs .sn-tab.hidden { display: none; }
   /* 顶条上那颗文件侧边栏按钮：竖着撑满整个顶条（上下留白由顶条自己的
      内边距给），好点、不误触。它只在浏览器页面里存在（见本文件末尾），
      由 browserBridge.js 插在最前头，也就是顶条的第一个。 */

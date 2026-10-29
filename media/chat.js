@@ -73,6 +73,8 @@
   const goalBarEl = document.getElementById("goalBar");
   const newSessionBtn = document.getElementById("newSessionBtn");
   const sessionNameBtn = document.getElementById("sessionName");
+  // 一个会话都没有时消息流中间那块提示（见 syncNoSessionHint）
+  const noSessionHintEl = document.getElementById("noSessionHint");
   // 输入框底下那条小横排：左边是模型胶囊（model chip），右边是「你说过的话」那颗按钮。
   const ctxIconEl = document.getElementById("ctxIcon");
   // 顶条中间那一块（装着那一排会话格）：清单贴着当前那一格掉出来，点别处收起
@@ -1102,6 +1104,9 @@
         + '<span class="sn-text"></span>';
     }
     el.classList.add("sn-tab");
+    // 骨架里那一格一开始是藏着的（没会话时不许孤零零挂在顶条中间，见 renderHtml）：
+    // 这会儿真拿它当一格用了，露出来
+    el.classList.remove("hidden");
     // 名字后面那颗 ×（每格都露着）：点它关的就是这一格，点名字身上还是切过去。
     // 会话正在跑时这一下只把它变成勾（要再点一下才真关，见 askCloseSession）。
     if (!el.querySelector(".sn-close")) {
@@ -1191,7 +1196,8 @@
    * 它自己也占一块地方，露不露面会改这一排能用的宽度，所以两头对上为止（两趟就稳）。
    */
   function layoutSessionTabs() {
-    const tabs = Array.prototype.filter.call(sessionTabRow.children, (el) => el.classList.contains("sn-tab"));
+    // 藏着的（骨架里那一格没被用上时，见 renderHtml）不算这一排的东西：量到 0 宽也会占一格的位置
+    const tabs = Array.prototype.filter.call(sessionTabRow.children, (el) => el.classList.contains("sn-tab") && !el.classList.contains("hidden"));
     if (!tabs.length) { sessionCaret.classList.add("hidden"); return; }
     for (let pass = 0; pass < 3; pass++) {
       const hidden = layoutTabsOnce(tabs);
@@ -4038,7 +4044,21 @@
     const st = activeSession();
     // 一个会话都没有时那颗「+」不给点：新会话总得开在某个工作区里，先在「项目与会话」里挑一个
     if (newSessionBtn) { newSessionBtn.disabled = !st; }
+    syncNoSessionHint();
     syncEndHint(st);
+  }
+
+  /**
+   * 一个会话都没有（刚打开页面、或者刚把最后几个关掉）时，消息流中间摆一块提示：
+   * 告诉人去「项目与会话」里挑一个工作区开新会话、或者点开一条历史会话。
+   * 这会儿右边那一列已经替人摊开了（见 openWorkspaceForEmpty），只是得有一句话说明白要干什么
+   * ——以前这儿是一片白的，看着像界面没起来。
+   */
+  function syncNoSessionHint() {
+    if (!noSessionHintEl) { return; }
+    // 看的是“一个会话都没有”，不是“这一瞬没在看哪一个”：切会话、刚新建还没挂上的那一阵
+    // 会话壳已经在 sessions 里了，别闪一下提示
+    noSessionHintEl.classList.toggle("hidden", sessions.size > 0);
   }
 
   /** 消息流末尾那颗胶囊上写的是什么。 */
