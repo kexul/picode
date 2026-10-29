@@ -503,7 +503,6 @@ export class SessionRuntime {
         try {
             this.client.start();
             this.setPiReady(true);
-            this.post({ type: "system", text: "pi 已启动，可以开始对话。" });
             this.host.broadcastSessionList();
             void this.sendCurrentModel();
             void this.refreshStats();
@@ -1217,7 +1216,6 @@ export class SessionRuntime {
         this.edits.reset();
         this.hasConversation = false;
         this.post({ type: "clear" });
-        this.post({ type: "system", text: "正在加载会话…" });
 
         // 等待 pi 真正就绪（冷启动需数秒），避免命令挤在超时上
         const ready = await this.waitReady();
@@ -1255,7 +1253,6 @@ export class SessionRuntime {
         this.currentSessionPath = file;
         // 已有会话的标题不会走 session_info_changed，得主动问一次
         void this.refreshSessionTitle();
-        this.post({ type: "system", text: `已加载会话（${messages.length} 条消息）。` });
         this.loading = false;
         this.host.broadcastSessionList();
         this.refreshStats();

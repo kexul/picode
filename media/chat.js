@@ -4066,8 +4066,8 @@
   function syncEndHint(st) {
     if (!st || !st.paneEl) { return; }
     // 会话还没就绪（pi 进程刚起）时点了也发不出去：这时候不露面。
-    // “有没有可接着往下走的对话”只看用户与助手两种消息：会话刚建时窗格里那句
-    // “pi 已启动，可以开始对话。”是系统消息，不能算 —— 空会话里摆一颗“继续”没意义。
+    // “有没有可接着往下走的对话”只看用户与助手两种消息：会话里那些系统消息
+    //（正在压缩、已回滚那一类）不能算 —— 空会话里摆一颗“继续”没意义。
     const touched = st.paneEl.querySelector(".msg.user, .msg.assistant");
     const mode = (!st.piReady || !touched) ? ""
         : st.streaming ? "stuck"
@@ -9303,7 +9303,7 @@
         // 窗格这会儿是不是空的：空的就是“整屏从零画”（页面刷新 / 切会话 / 打开历史会话），
         // 这种可以把这一串重放攒着、只画最后一截（见 startReplayBuf）；重连那种
         // “窗格里本来就有东西”的走按编号对账（见 beginReconcile）。
-        // 系统消息（“pi 已启动”那一类）不算：它们随重画一起没，重放里本来也不带它们。
+        // 系统消息（「已回滚」那一类）不算：它们随重画一起没，重放里本来也不带它们。
         const fresh = !t.paneEl.querySelector(".msg:not(.system)");
         // 上一遍没画完的老消息作废（占位一起收掉）：这一遍要重新攒了
         dropOlderHint(t);

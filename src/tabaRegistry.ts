@@ -203,17 +203,6 @@ export function buildDeliveryText(p: {
     return [head, "", body, "", tail].join("\n");
 }
 
-/** 派活成功时在父会话界面上打的一行提示。 */
-export function buildSpawnNotice(p: { child: TabaChild }): string {
-    return `已派出子会话「${p.child.name}」。`;
-}
-
-/** 子会话里打的一行开场提示（只给用户看，不进对话记录）。 */
-export function buildChildIntro(p: { child: TabaChild; parentName?: string }): string {
-    const from = p.child.parentPanelId && p.parentName ? `（由「${p.parentName}」派来）` : "";
-    return `子会话「${p.child.name}」${from}：${p.child.task.trim().split("\n")[0].slice(0, 80)}`;
-}
-
 /** 子会话被关掉、结果还没交回时，给派活那个会话补一句。 */
 export function buildChildClosedNotice(p: { child: TabaChild }): string {
     const howFar = p.child.endedAt !== undefined

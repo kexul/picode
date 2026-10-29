@@ -3,7 +3,7 @@
 // 假 pi 的行为：用户这句话里带“派活”就往 stderr 发一条暗号，插件据此派一个子会话（见 dev/fakePi.js）。
 // 这里验两件事：
 //   1. 子会话跑完第一轮 → 结果交回派活的会话，子会话那个 tab 自动关掉（列表里那行没了）
-//   2. 用户进去看着它跑 → 跑完不关（那行还在，子会话里能看到“你这个会话还留着”）
+//   2. 用户进去看着它跑 → 跑完不关（列表里那行还在，点上变绿）
 //
 // 那份「项目与会话」画在哪儿都认：宽窗（≥ 900px）是右边常驻那一列，窄窗才是顶上那颗 <<< 拉出来的浮层。
 //
@@ -112,8 +112,14 @@ module.exports = async (page) => {
   if (!(await panel()).dock) { await closePicker(); }
   await page.shot("taba-4-watching.png");
 
-  // 跑完：因为用户正看着，不关；子会话里该出现“结果已交回…你这个会话还留着”
-  await page.waitText("你这个会话还留着", 40000);
+  // 跑完：因为用户正看着，不关；列表里子会话那一行的点从「在跑」变成「跑完了」
+  // （列表收起来时行是空的，所以这里得开着列表等）
+  await openPicker();
+  await until("子会话这一轮跑完", async () => page.eval(`
+    const el = document.querySelector(".pk-item.pk-open.pk-open-child .pk-open-dot");
+    return !!el && el.classList.contains("done");
+  `), 40000);
+  await closePicker();
   await page.shot("taba-5-kept.png");
 
   await openPicker();

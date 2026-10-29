@@ -44,10 +44,8 @@ import { BASH_DECODER, BashTaskInfo, buildBashTaskDelivery, readBashLogTail } fr
 import {
     TabaRegistry,
     buildChildClosedNotice,
-    buildChildIntro,
     buildDeliveryText,
     buildSpawnFailure,
-    buildSpawnNotice,
     describeTurnStatus,
     shouldCloseAfterFirstTurn,
     type TabaChild,
@@ -954,7 +952,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
             });
             return;
         }
-        const replaced = this.goalGet(rt);
         this.goals.set(rt.id, {
             objective,
             criteria: [],
@@ -966,9 +963,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.goalChecked.add(rt.id);
         this.goalSave(rt);
         this.goalBroadcast(rt.id);
-        if (replaced) {
-            this.postToSession(rt.id, { type: "system", text: "目标换了，先重新谈验收清单。" });
-        }
         rt.handleSend(buildGoalNegotiationPrompt({ objective }));
     }
 
@@ -992,10 +986,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         goal.updatedAt = Date.now();
         this.goalSave(rt);
         this.goalBroadcast(rt.id);
-        this.postToSession(rt.id, {
-            type: "system",
-            text: `目标定了（验收 ${goal.criteria.length} 条），开跑。`,
-        });
         rt.handleSend(buildGoalStartPrompt(goal));
     }
 
@@ -1008,7 +998,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         }
         if (pause) {
             if (goal.phase !== "active") {
-                this.postToSession(rt.id, { type: "system", text: "这个目标现在没在跑，不用暂停。" });
                 return;
             }
             this.goalCancelJudge(rt.id);
@@ -1017,11 +1006,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
             goal.updatedAt = Date.now();
             this.goalSave(rt);
             this.goalBroadcast(rt.id);
-            this.postToSession(rt.id, { type: "system", text: "目标暂停了。点开目标条按「继续」接着跑。" });
             return;
         }
         if (goal.phase === "active") {
-            this.postToSession(rt.id, { type: "system", text: "目标本来就在跑。" });
             return;
         }
         if (!goal.criteria.length) {
@@ -1042,17 +1029,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 目标条上的「停止」：不再追踪这个目标（对话和文件都不动）；盘上那一份也一并抹掉。 */
     protected goalClear(rt: SessionRuntime): void {
-        const had = !!this.goalGet(rt);
         this.goalCancelJudge(rt.id);
         this.goals.delete(rt.id);
         this.goalChecked.add(rt.id);   // 刚删掉的那份别再读回来
         const file = rt.currentSessionPath;
         if (file) { dropGoal(file); }
         this.goalBroadcast(rt.id);
-        this.postToSession(rt.id, {
-            type: "system",
-            text: had ? "目标停止了（不再追踪它，对话和文件都不动）。" : "本来就没有目标。",
-        });
     }
 
     /** 这个会话的目标：内存里没有就问存档要（会话重开、插件重启后接回来）。 */
@@ -1423,20 +1405,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 this.closeSession(rt.id);
                 return;
             }
-            // 判官不写名录、也不往两边的消息流里插话（没人看着它那个会话）
+            // 判官不写名录、不往两边的消息流里插话（没人看着它那个会话）
             if (!opts.hidden) {
                 this.tabaWriteRun(child);
-                this.postToSession(parentPanelId, {
-                    type: "system",
-                    text: buildSpawnNotice({ child }),
-                });
-                this.postToSession(rt.id, {
-                    type: "system",
-                    text: buildChildIntro({
-                        child,
-                        parentName: this.sessionDisplayName(parentRt),
-                    }),
-                });
             }
             this.broadcastSessionList(true);
 
@@ -1635,12 +1606,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         // 交回一律按 followUp 排队：父会话在跑就不从半路插进去，跑完再作为新的一轮处理。
         parentRt.handleSend(text, undefined, { followUp: true });
         this.taba.markDelivered(child.id, result);
-        if (child.childPanelId && !opts.tabWillClose) {
-            this.postToSession(child.childPanelId, {
-                type: "system",
-                text: `结果已交回「${this.sessionDisplayName(parentRt)}」。你这个会话还留着，可以接着问。`,
-            });
-        }
         this.broadcastSessionList(true);
         this.tabaWriteRun(child);
         return true;
