@@ -4298,6 +4298,10 @@
 
   // 同一颗胶囊上「+N」最快隔这么久才飘一次：一轮里用量会碎步刷新好几次，太密就看不清了
   const CTX_PLUS_GAP_MS = 500;
+  /** 正在飘着的那颗「+N」，以及它出生时条上头那个数字（整数百分比）和当时看着的会话。 */
+  let ctxPlusEl = null;
+  let ctxPlusNum = null;
+  let ctxPlusSession = "";
 
   /** 用量涨了：百分比数字上方飘一个「+N」。
    *  动效用的是工具标签次数方块上那个（chat.css 的 .ci-plus 与 tg-plus-float）。
@@ -4314,13 +4318,26 @@
     const now = Date.now();
     if (now - (st.plusAt || 0) < CTX_PLUS_GAP_MS) { return; }
     st.plusAt = now;
-    if (st.plusEl) { st.plusEl.remove(); }   // 上一个还在飘：换成新的，重新从底下再飘一遍
+    if (ctxPlusEl) { ctxPlusEl.remove(); }   // 上一个还在飘：换成新的，重新从底下再飘一遍
     const pop = document.createElement("span");
     pop.className = "ci-plus";
     pop.textContent = "+" + Math.max(1, Math.round(pct - from));
     topEl.appendChild(pop);
-    st.plusEl = pop;
-    setTimeout(() => { pop.remove(); if (st.plusEl === pop) { st.plusEl = null; } }, 900);
+    ctxPlusEl = pop;
+    ctxPlusNum = pct;
+    ctxPlusSession = activeId;
+    setTimeout(() => { pop.remove(); if (ctxPlusEl === pop) { ctxPlusEl = null; } }, 900);
+  }
+
+  /** 飘着的「+N」只跟它出生时那个数字、那个会话算数：数字一变（涨、退回去、换会话后不一样）
+   *  就立刻收掉。不这么做就会出现“数字看着没动，却有颗 +1 在飘”——
+   *  比如用量先粗估到 2%（飘了 +1）、几十毫秒后换成实际的 1.4%，数字退回去了，
+   *  那颗 +1 还在飞的那半秒里就成了假象。 */
+  function dropCtxPlusIfStale(num) {
+    if (!ctxPlusEl) { return; }
+    if (ctxPlusSession === activeId && ctxPlusNum === num) { return; }
+    ctxPlusEl.remove();
+    ctxPlusEl = null;
   }
 
   /** 输入框底下那颗胶囊跟上当前会话。 */
@@ -4377,7 +4394,9 @@
     // 用量涨了：数字上方飘一个「+N」（跟工具标签次数方块上那个「+1」同一套动效）。
     // 比的是条上头那个数字（整数百分比），不是原始值：不然会出现“飘了但数字没动”
     // —— 原始值涨 0.3% 数字还是 1%，看着就像坏了。数字变了才飘，飘的就是它变了多少。
-    if (known) { popCtxPlus(st, Math.round(pct)); } else if (st) { st.pctPopFrom = undefined; }
+    const shownNum = known ? Math.round(pct) : null;
+    dropCtxPlusIfStale(shownNum);
+    if (known) { popCtxPlus(st, shownNum); } else if (st) { st.pctPopFrom = undefined; }
     const num = ctxIconEl.querySelector(".ci-text");
     if (num) { num.textContent = known ? Math.round(pct) + "%" : ""; }
     // 跑多快：后端推来的那个数（生成中是这一轮的实时均值，停下来就留着最后那个，没跑过就空着）
