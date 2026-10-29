@@ -1320,8 +1320,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /**
      * RuntimeHost.onBashTask：某个会话里的后台命令跑到头了（跑完 / 失败 / 被停）。
-     * 把结果当成一条新消息交回这个会话（跟子会话交回结果一个路子：按 followUp 排队，
-     * 它正在跑就不从半路插进去，跑完再作为新的一轮处理）。
+     * 把结果当成一条新消息交回这个会话：按 steer 排队，会话正忙就在当前这轮工具跑完之后、
+     * 下一次请求模型之前投递（那条命令是它自己脱手出去的，等着这个结果），空闲时就是普通的新一轮。
      */
     public onBashTask(panelId: string, task: BashTaskInfo): void {
         const rt = this.panels.get(panelId);
@@ -1335,7 +1335,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             log: task.log,
             tail: readBashLogTail(task.log, ChatControllerBase.BASH_DELIVERY_TAIL_BYTES),
         });
-        rt.handleSend(text, undefined, { followUp: true });
+        rt.handleSend(text, undefined, { steer: true });
         const how = task.status === "done" ? "跑完了" : task.status === "stopped" ? "被停掉了" : "没跑成";
         this.postToSession(panelId, { type: "system", text: `后台命令 #${task.no} ${how}，已把结果交回本会话。` });
     }

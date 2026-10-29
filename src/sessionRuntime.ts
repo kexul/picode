@@ -696,17 +696,19 @@ export class SessionRuntime {
     public handleSend(
         text: string,
         images?: Array<{ data: string; mimeType: string }>,
-        opts?: { followUp?: boolean }
+        opts?: { followUp?: boolean; steer?: boolean }
     ): void {
         const hasImages = Array.isArray(images) && images.length > 0;
         if ((!text || !text.trim()) && !hasImages) {
             return;
         }
+        // 插件代发的消息：不当命令解析、也不按「人打的」那种猜法走，投递方式由调用方指定。
+        const fromPlugin = opts?.followUp === true || opts?.steer === true;
         // pi 的内置斜杠命令只在终端界面里处理，走 RPC 发过去只会当成普通文字交给模型。
         // 其中 /compact 插件自己接手：改发 pi 的 compact 命令（pi 的 prompt 里做不了这个）。
         // /goal 系列同样由插件接手（目标状态、提示词都在宿主那边）。
         // 带图片、或者是插件代发的（子会话结果交回这类）不当命令看。
-        if (!hasImages && !opts?.followUp) {
+        if (!hasImages && !fromPlugin) {
             const instructions = parseCompactCommand(text || "");
             if (instructions !== null) {
                 this.hasConversation = true;
@@ -746,17 +748,24 @@ export class SessionRuntime {
         // 都发 prompt + streamingBehavior，堵住“插件这边看着空闲、pi 那边其实已经在跑”的间隙
         // （两个子会话同时交回结果时，两条消息背靠背发出去：第一条开了轮，第二条还是普通 prompt，
         // pi 就报 “Agent is already processing”，消息直接丢掉）。三种走法：
-        // - 插件代发的消息（opts.followUp，子会话结果交回、派活补话这类）：一律 followUp。
-        //   结果是异步到的数据，不该在正在跑的那轮半路插进去改方向；pi 在忙就排进 followUp
-        //   队列，当前这轮整个跑完再作为新的一轮处理；空闲就直接开新轮次；
+        // - 插件代发的消息，投递方式由调用方定：
+        //   · opts.followUp（子会话结果交回、派活补话这类）：一律 followUp。那是另一件事的产出，
+        //     不该在正在跑的那轮半路插进去改方向；pi 在忙就排进 followUp 队列，当前这轮整个跑完
+        //     再作为新的一轮处理；空闲就直接开新轮次；
+        //   · opts.steer（后台命令跑完交回）：一律 steer。那条命令是模型自己脱手出去、还答应过
+        //     「跑完会告诉你」的，结果到了就该在下一个轮次边界投递，别等它把手上这轮全干完；
+        //     pi 空闲时 streamingBehavior 不起作用，跟普通新轮次一样；
         // - 人打的消息、会话看着空闲：prompt + followUp。pi 空闲就是普通新轮次；其实在忙就排进
         //   followUp 队列，当前轮跑完接着处理，不报错不丢消息；
         // - 人打的消息、会话看着在跑：prompt + steer。pi 真在忙就排进 steering 队列（当前轮工具
         //   执行完就投递，与原来发 steer 命令等效）；其实已经跑完（结束事件还没送到）就直接开
         //   新轮次，消息不会卡在队列里。
-        const cmd: Record<string, unknown> = !opts?.followUp && this.streaming
-            ? { type: "prompt", message, streamingBehavior: "steer" }
-            : { type: "prompt", message, streamingBehavior: "followUp" };
+        const streamingBehavior: "steer" | "followUp" = opts?.steer
+            ? "steer"
+            : opts?.followUp
+                ? "followUp"
+                : this.streaming ? "steer" : "followUp";
+        const cmd: Record<string, unknown> = { type: "prompt", message, streamingBehavior };
         if (hasImages) {
             cmd.images = images!.map((img) => ({
                 type: "image",
