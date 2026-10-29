@@ -2246,7 +2246,7 @@
     return body;
   }
 
-  /** 这条消息的时刻：写在正文右下角（见 chat.css 的 .msg-time）。
+  /** 这条消息的时刻：鼠标停在正文上才露（跟原来的复制按钮一个位置，见 chat.css 的 .msg-time）。
    *  at 是那条消息的开始时刻（毫秒）；拿不到（老后端 / 历史里没带）就用现在。
    *  字写进 data-time、由 CSS 的 ::after 画：它不算正文的文字（选中复制、Ctrl+A、读屏都不带上它）。 */
   function attachMsgTime(div, at) {
@@ -2298,7 +2298,7 @@
    */
   function enterCls(st) { return st.replayNow ? "" : " msg-enter"; }
 
-  function addPlain(st, cls, role, text, id, at) {
+  function addPlain(st, cls, role, text, id) {
     hideEmptyHint(st);
     st.currentToolTail = null; // 新消息块：工具标签另起一行，不往上一段后面续
     endRunningLine(st);       // 这一批工具过去了：还在留的那条位置到此为止（见 endRunningLine）
@@ -2335,7 +2335,7 @@
       body.textContent = content;
       div.appendChild(body);
     }
-    if (cls === "user") { attachMsgTime(div, at); }
+    if (cls === "assistant") { attachMsgTime(div, null); }
     if (key) { div.dataset.mid = key; div.dataset.midKind = cls; st.byId.set(key, div); }
     placeUnit(st, div);
     scrollToBottom(st);
@@ -9172,7 +9172,7 @@
         foldTailThinking(t);
         t.segmentThinking = null;
         const label = msg.imageCount ? "[" + msg.imageCount + " 张图片] " : "";
-        addPlain(t, "user", "你", label + (msg.text || ""), msg.id, msg.at);
+        addPlain(t, "user", "你", label + (msg.text || ""), msg.id);
         endThinking(t, "");
         scrollToBottom(t, true);
         // 刚发出去的这条把末尾那颗胶囊挤到了前头：重算一次（生成中会换成「卡住了」）

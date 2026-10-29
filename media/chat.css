@@ -284,15 +284,16 @@
   /* 函数/符号可点击链接：跳转到定义。用虚线下划点区别于文件链接 */
   .symbol-link { color: var(--vscode-textLink-foreground, #3794ff); text-decoration: underline dotted; text-underline-offset: 2px; cursor: pointer; }
   .symbol-link:hover { text-decoration: underline; opacity: 0.85; }
-  .msg { position: relative; margin: 10px 0; padding: 10px 14px; word-wrap: break-word; }  .msg-enter { animation: msg-enter 250ms ease-out backwards; }
+  .msg { margin: 10px 0; padding: 10px 14px; word-wrap: break-word; }  .msg-enter { animation: msg-enter 250ms ease-out backwards; }
   @keyframes msg-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
   .user { white-space: pre-wrap; background: color-mix(in srgb, var(--vscode-button-background) 18%, transparent); color: var(--vscode-foreground); border-radius: 8px; }
   /* 用户消息气泡左右缩进，外缘与 AI 回复文本对齐（pane padding 8px + msg padding 14px） */
   .msg.user { margin: 10px 14px; }
   .assistant { position: relative; background: none; padding: 10px 14px; }
-  /* 每条消息右下角一直写着它的时刻（原先那个复制按钮的位置，现在已经撤掉）。
-     不占布局位置、不挡鼠标：只是右下角一行小字。 */
-  .msg-time { position: absolute; bottom: 2px; right: 4px; padding: 3px 4px; border-radius: 4px; color: var(--vscode-descriptionForeground, #999); font-size: 12px; line-height: 1; pointer-events: none; font-variant-numeric: tabular-nums; }
+  /* 鼠标停在正文上，右下角写这条消息的时刻（原先那个复制按钮的位置，现在已经撤掉）。
+     不占布局位置、不挡鼠标：只是浮现一行小字。 */
+  .msg-time { position: absolute; bottom: 2px; right: 4px; padding: 3px 4px; border-radius: 4px; color: var(--vscode-descriptionForeground, #999); font-size: 12px; line-height: 1; opacity: 0; pointer-events: none; font-variant-numeric: tabular-nums; transition: opacity 120ms ease; }
+  .msg.assistant:hover .msg-time { opacity: 1; }
   /* 字挂在 data-time 上、由这个伪元素画出来：它就不算正文的文字（选中复制、Ctrl+A、读屏都不带上它）。 */
   .msg-time::after { content: attr(data-time); }
   .system { font-style: italic; opacity: 0.6; font-size: 0.85em; white-space: pre-wrap; text-align: center; border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25)); border-radius: 0; margin: 12px 0; }

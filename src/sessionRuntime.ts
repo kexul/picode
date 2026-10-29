@@ -907,7 +907,6 @@ export class SessionRuntime {
                         type: "userMessage",
                         text,
                         imageCount: imgs > 0 ? imgs : 0,
-                        at: Date.now(),
                     });
                     // panel 名字：创建时命名后终身保留，不随用户消息更新。
                 } else if (
@@ -1804,13 +1803,6 @@ export class SessionRuntime {
         // 消息在历史里的绝对下标（窗口模式下加上基数）：重放出来的编号跨次数稳定，
         // 界面靠它认“这条画过了、原地留着”（见 media/chat.js 的 placeNode）。
         const base = opts?.indexBase ?? 0;
-        // 一条消息的时刻（pi 记下的毫秒时间戳）：pi 记的是毫秒数，个别调试用的 pi
-        // （dev/fakePi.js）给的是 ISO 字符串：两种都认；认不出来就不带，界面自己按现在算。
-        const timeOf = (msg: any): number | undefined => {
-            const raw = msg?.timestamp;
-            const stamp = typeof raw === "number" ? raw : (typeof raw === "string" ? Date.parse(raw) : NaN);
-            return Number.isFinite(stamp) ? stamp : undefined;
-        };
         const toolResults = new Map<string, any>();
         let lastHistoryError = "";
         for (const m of messages) {
@@ -1829,7 +1821,6 @@ export class SessionRuntime {
                         type: "userMessage",
                         id: mid,
                         text: textOf(m.content),
-                        at: timeOf(m),
                     });
                     break;
                 case "assistant": {
@@ -1838,8 +1829,12 @@ export class SessionRuntime {
                     // 界面按块认，同一块重放时不会再多画一份
                     let blockNo = 0;
                     const blockId = () => `${mid}:b${blockNo++}`;
-                    // 这条消息的时刻：写在正文右下角（见 media/chat.js 的 attachMsgTime）
-                    const at = timeOf(m);
+                    // 这条消息的时刻（pi 记下的毫秒时间戳）：界面上鼠标停在正文上时写出来
+                    // （见 media/chat.js 的 attachMsgTime）。pi 记的是毫秒数，个别调试用的 pi
+                    // （dev/fakePi.js）给的是 ISO 字符串：两种都认；认不出来就不带，界面自己按现在算。
+                    const rawAt = m.timestamp;
+                    const stamp = typeof rawAt === "number" ? rawAt : (typeof rawAt === "string" ? Date.parse(rawAt) : NaN);
+                    const at = Number.isFinite(stamp) ? stamp : undefined;
                     let text = "";
                     for (const c of parts) {
                         if (c.type === "text") {

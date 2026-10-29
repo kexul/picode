@@ -165,7 +165,7 @@ static class Layered
     }
 }
 
-/** 右下角面板里的一条：哪个会话有事、它说了什么。 */
+/** 右下角面板里的一条：哪个会话有事、它说了什么、什么时候的事。 */
 class NoteItem
 {
     public string Id = "";
@@ -173,6 +173,8 @@ class NoteItem
     public string Text = "";
     public bool Ask;
     public DateTime ShownAt = DateTime.UtcNow;
+    /** 卡片右下角写的时间：这条事发生的时刻（本地时间）。 */
+    public DateTime At = DateTime.Now;
 }
 
 /**
@@ -238,7 +240,7 @@ class NoteWindow : Form
         // 像素尺寸按屏幕的实际缩放算；字体的点数由系统自己按 DPI 换算，别重复放大
         using (Graphics g = Graphics.FromHwnd(IntPtr.Zero)) { scale = Math.Max(1f, g.DpiX / 96f); }
         width = (int)Math.Round(380 * scale);
-        itemHeight = (int)Math.Round(80 * scale);
+        itemHeight = (int)Math.Round(88 * scale);
         gap = (int)Math.Round(8 * scale);
         pad = (int)Math.Round(10 * scale);
         shadow = (int)Math.Round(SHADOW_PX * scale);
@@ -436,6 +438,7 @@ class NoteWindow : Form
         Color border = light ? Color.FromArgb(0xE4, 0xE4, 0xE4) : Color.FromArgb(0x3E, 0x3E, 0x3E);
         Color nameColor = light ? Color.FromArgb(0x1A, 0x1A, 0x1A) : Color.FromArgb(0xF2, 0xF2, 0xF2);
         Color bodyColor = light ? Color.FromArgb(0x60, 0x60, 0x60) : Color.FromArgb(0xAD, 0xAD, 0xAD);
+        Color whenColor = light ? Color.FromArgb(0x9A, 0x9A, 0x9A) : Color.FromArgb(0x7C, 0x7C, 0x7C);
 
         // 外面那圈阴影：由外到内一层层叠上去，越靠外越淡
         int layers = Math.Max(3, shadow);
@@ -486,13 +489,26 @@ class NoteWindow : Form
             if (item.Text.Length > 0)
             {
                 RectangleF bodyRect = new RectangleF(left, card.Top + (int)Math.Round(30 * scale),
-                    right - left, (int)Math.Round(44 * scale));
+                    right - left, (int)Math.Round(32 * scale));
                 using (StringFormat bodyFmt = new StringFormat())
                 {
                     // 高度用满就停，最后一行超出的加省略号
                     bodyFmt.Trimming = StringTrimming.EllipsisWord;
                     bodyFmt.FormatFlags = StringFormatFlags.LineLimit;
                     using (SolidBrush b = new SolidBrush(bodyColor)) { g.DrawString(item.Text, bodyFont, b, bodyRect, bodyFmt); }
+                }
+            }
+
+            // 卡片右下角：这条事是什么时候的
+            using (StringFormat whenFmt = new StringFormat())
+            {
+                whenFmt.Alignment = StringAlignment.Far;
+                whenFmt.FormatFlags = StringFormatFlags.NoWrap;
+                RectangleF whenRect = new RectangleF(left, card.Bottom - (int)Math.Round(19 * scale),
+                    right - left, (int)Math.Round(14 * scale));
+                using (SolidBrush b = new SolidBrush(whenColor))
+                {
+                    g.DrawString(item.At.ToString("HH:mm"), tagFont, b, whenRect, whenFmt);
                 }
             }
         }
