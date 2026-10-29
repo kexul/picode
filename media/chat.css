@@ -1461,9 +1461,9 @@
   #ctxIcon.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
   #ctxIcon.err { color: var(--vscode-errorForeground, #f14c4c); }
   #ctxIcon[data-st="loading"], #ctxIcon[data-st="wait"], #ctxIcon[data-st="nomodel"], #ctxIcon[data-st="none"] { opacity: 0.55; }
-  /* 要减少动态效果时：横条不慢慢长、也不呼吸（火星那块画布压根不启动，见 chat.js 的 sparkSet；
-     那颗状态图标照旧在动——它就是用来
-     表明“还在跑”的，见上面那段注释） */
+  /* 要减少动态效果时：横条不慢慢长、也不呼吸。
+     火星与那颗状态图标照旧在动 —— 这两样都是用来表明“还在跑”的，停了就跟没了一样
+     （火星是画布自己画的，压根不走这条 media query，见 chat.js 的 sparkSync）。 */
   @media (prefers-reduced-motion: reduce) {
     #ctxIcon .ci-fill { transition: none; }
     #ctxIcon.hasfill[data-st="streaming"] .ci-fill { animation: none; opacity: 1; }

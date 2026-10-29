@@ -4303,11 +4303,13 @@
   // 拿几个固定元素循环飘出来看着就是“电子贺卡”，所以这块用一小块画布自己画
   // （画布盖在整颗胶囊上，见 chat.css 的 .ci-sparks；不吃点击）。
   // 开关条件跟能量条一致：跑着、且真量出用量了；一停就停 rAF、把画布擦干净。
+  // 有意不理会系统的「减少动态效果」（下面 sparkSync 里不查那个设置）：跟百分比旁边那颗
+  // 状态图标一个道理，它就是用来表明“还在跑”的，停了就跟没了一样。要停只停装饰性的那些
+  // （横条的呼吸还在 media query 里管着）。
   // 颜色不跟胶囊走（不然正常状态是灰的，看着像灰尘不是火星）：刚迸出来是白热，
   // 飞着飞着变黄、变橙，尾巴那截最冷最深 —— 就是金属被打下来的那点铁屑烧起来的颜色。
   const sparkCanvasEl = ctxIconEl ? ctxIconEl.querySelector(".ci-sparks") : null;
   const spark2d = sparkCanvasEl && sparkCanvasEl.getContext ? sparkCanvasEl.getContext("2d") : null;
-  const sparkReduceMotion = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
   let sparkOn = false;            // 火星在跑
   let sparkRafId = 0;
   let sparkParts = [];            // 空中那些火星
@@ -4345,11 +4347,11 @@
     }
   }
 
-  /** 火星该不该跑：跟能量条一个条件（见 syncStatus）。系统要减少动态效果时不跑。 */
+  /** 火星该不该跑：跟能量条一个条件（见 syncStatus）。系统那个「减少动态效果」照旧不查 ——
+   *  见上面那段注释（跟状态图标一样，它表明“还在跑”）。 */
   function sparkSync(on) {
     if (!spark2d) { return; }
-    const want = !!on && !(sparkReduceMotion && sparkReduceMotion.matches);
-    if (!want) { sparkStop(); return; }
+    if (!on) { sparkStop(); return; }
     if (sparkOn) { sparkMeasure(); return; }   // 已经跑着：只跟上新的发射点（用量涨了，条尾挪了）
     sparkOn = true;
     sparkParts = [];
