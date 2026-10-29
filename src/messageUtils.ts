@@ -10,6 +10,27 @@ export const THINKING_LEVEL_ORDER = [
     "off", "minimal", "low", "medium", "high", "xhigh", "max",
 ] as const;
 
+/** 消息提醒面板上的一句话预览：去掉 markdown 记号、压平空白，长了就截断。 */
+export function plainPreview(text: string, maxChars = 120): string {
+    const flat = (text || "")
+        .replace(/```[\s\S]*?```/g, " ")           // 代码块整段跳过
+        .replace(/`([^`]*)`/g, "$1")
+        .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")     // 图片
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")     // 链接只留文字
+        .replace(/^\s{0,3}#{1,6}\s+/gm, "")        // 标题的 #
+        .replace(/\*\*|__|\*/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+    if (!flat) { return ""; }
+    if (flat.length <= maxChars) { return flat; }
+    let cut = flat.slice(0, maxChars);
+    // 尽量别把最后一句切成半句
+    const at = Math.max(cut.lastIndexOf("。"), cut.lastIndexOf("；"), cut.lastIndexOf("，"),
+        cut.lastIndexOf(" "), cut.lastIndexOf("."));
+    if (at >= Math.floor(maxChars * 0.5)) { cut = cut.slice(0, at); }
+    return cut.trim() + "…";
+}
+
 /** 从 user/assistant content（string 或 parts 数组）提取纯文本。 */
 export function textOf(content: unknown): string {
     if (typeof content === "string") {

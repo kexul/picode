@@ -1,8 +1,9 @@
 /**
- * trayIcon —— 通知区域里那颗图标（Windows）。
+ * trayIcon —— 通知区域里那颗图标和右下角那块提醒面板（Windows）。
  *
- * 后端起一个常驻的小程序（bin/tray.exe，源码与来历见 bin/tray.cs），由它把托盘图标端着：
- * 有事的时候闪，点它弹一份清单，点其中的一行切到那个会话。
+ * 后端起一个常驻的小程序（bin/tray.exe，源码与来历见 bin/tray.cs），由它把这两样端着：
+ * 托盘图标有事就闪，点它弹一份清单，点其中的一行切到那个会话；右下角那块面板当场弹一条，
+ * 写着哪个会话、说了什么，点一下也是切过去。
  *
  * 为什么不在页面上发：以前靠浏览器通知，浏览器和 Windows 都会因为“发太多”把横幅收掉，
  * 而且只认 https 或本机地址（手机用局域网地址打开就发不出来），插件里的对话面板更是发不了。
@@ -22,6 +23,10 @@ export interface TrayPendingItem {
     name: string;
     /** 别的机器推来的那条才有：点了要打开它那边的页面（本机的会话没有这个）。 */
     page?: string;
+    /** 右下角那块面板上显示的摘要（一两行，后端已经截好）；没有就只显示名字。 */
+    summary?: string;
+    /** 面板上这一行算哪种事：跑完一轮 / 等你答一句。 */
+    kind?: "done" | "ask";
 }
 
 /** 人在托盘菜单里点的东西（都直接来自那颗小程序，见 bin/tray.cs 里的协议）。 */
@@ -64,6 +69,22 @@ export class TrayIcon {
         for (const item of items) {
             fields.push(flat(item.id), flat(item.name || "会话"));
         }
+        this.write(fields.join("\t"));
+    }
+
+    /**
+     * 右下角那块面板上弹一条。
+     * 跟清单不是一回事：清单是事后还能翻的那份，这条是当场摆到眼前的。
+     */
+    public pop(item: TrayPendingItem): void {
+        if (!this.start()) { return; }
+        const fields = [
+            "pop",
+            flat(item.id),
+            flat(item.name || "会话"),
+            flat(item.summary ?? ""),
+            item.kind === "ask" ? "ask" : "done",
+        ];
         this.write(fields.join("\t"));
     }
 

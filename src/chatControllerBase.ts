@@ -74,6 +74,7 @@ import { buildGoalFeedbackPrompt, buildGoalJudgePrompt } from "./goalJudge";
 import { dropGoal, readGoal, writeGoal } from "./goalFiles";
 import type { RpcSessionState } from "./piRpc";
 import { TrayIcon, type TrayPendingItem } from "./trayIcon";
+import { plainPreview } from "./messageUtils";
 import type { RemoteNotice } from "./remoteNotice";
 import type { ProjectDirEntry } from "./sessionStore";
 
@@ -1924,16 +1925,20 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 某个会话有事了（跑完一轮、模型在等你答一道选择题）。
      *
      * 提醒送到哪台是二选一（一个人只盯得了一台机器）：设置里「消息推送」填了别处的地址，
-     * 就只推到那边，这台不闪；没填（或者填的就是这台自己的地址）就在这台闪。
+     * 就只推到那边，这台不弹；没填（或者填的就是这台自己的地址）就在这台弹。
+     *
+     * @param summary 面板上显示的一句话摘要（跑完一轮是回复的头几句，选择题是题干）
+     * @param kind 这一条算跑完一轮，还是模型在等你答一句
      */
-    protected trayNote(sessionId: string, name: string): void {
+    protected trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): void {
         if (!sessionId || !this.notifyTurnEndEnabled()) { return; }
         const label = (name || "").trim() || "会话";
-        if (this.pushRemoteNote(sessionId, label)) { return; }   // 已经推给别处：这台不闪
-        // 人正坐在这个会话的输入框前（界面报过焦点）：他就在看着，再闪一下是多余的
+        const preview = plainPreview(summary);
+        if (this.pushRemoteNote(sessionId, label, preview, kind)) { return; }   // 已经推给别处：这台不弹
+        // 人正坐在这个会话的输入框前（界面报过焦点）：他就在看着，再弹一下是多余的
         if (this.inputFocusedOn(sessionId)) { return; }
         if (!this.trayClosedByUser && TrayIcon.available()) {
-            this.addTrayItem({ id: sessionId, name: label });
+            this.addTrayItem({ id: sessionId, name: label, summary: preview, kind });
         }
     }
 
@@ -1977,6 +1982,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
             id: "remote:" + notice.label + ":" + notice.sessionId,
             name: notice.label + " · " + notice.name,
             page: notice.page,
+            // 推过来的那条没带摘要（旧版本）就只显示名字
+            summary: plainPreview(notice.text ?? ""),
+            kind: notice.kind === "ask" ? "ask" : "done",
         });
     }
 
@@ -1985,6 +1993,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.trayPending = this.trayPending.filter((old) => old.id !== item.id);
         this.trayPending.push(item);
         this.traySync();
+        // 清单是事后还能翻的那份；右下角那块是当场弹出来能看见内容的 —— 两个都要
+        this.tray?.pop(item);
     }
 
     /**
@@ -2062,9 +2072,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /**
      * 把这条“有事”推给别的后端（设置里「消息推送」填了别处的地址才有这回事）。
      * 默认不推：只有知道自己地址的宿主才推得出去（见 ChatHost）。
-     * @returns 是不是推给“别处”了（推了的话，这台就不再自己闪）
+     * @returns 是不是推给“别处”了（推了的话，这台就不再自己弹）
      */
-    protected pushRemoteNote(_sessionId: string, _name: string): boolean { return false; }
+    protected pushRemoteNote(_sessionId: string, _name: string, _summary = "", _kind: "done" | "ask" = "done"): boolean { return false; }
 
     /** 收摊：让托盘小程序也退出（后端退出时不一定来得及，但尽量不落孤儿进程）。 */
     protected disposeTray(): void {
@@ -2109,7 +2119,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         };
         this.forEachClient((_clientId, send) => { send({ ...msg }); });
         // 托盘里闪一下：被中止的那一轮不算跑完；子会话的结果会交回派它的会话，那边跑完再提醒
-        if (info.status !== "cancelled" && !handedBack) { this.trayNote(info.panelId, name); }
+        if (info.status !== "cancelled" && !handedBack) { this.trayNote(info.panelId, name, info.lastReplyText ?? ""); }
     }
 
     protected onKnownFilesChangedByHost(): void { /* 默认无操作 */ }

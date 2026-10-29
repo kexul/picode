@@ -21,6 +21,10 @@ export interface RemoteNotice {
     name: string;
     /** 点了之后用浏览器打开哪个地址：推送方的页面 + 那个会话。 */
     page: string;
+    /** 面板上显示的一句话摘要（推送方已经截好）；旧版本推来的没这个字段。 */
+    text?: string;
+    /** 哪种事：跑完一轮 / 等你答一句。 */
+    kind?: "done" | "ask";
 }
 
 /** 推一次最多等这么久：对方没回应就当这条丢了（不攒着、不重试）。 */
@@ -42,7 +46,10 @@ export function readRemoteNotice(raw: unknown, fallbackLabel: string): RemoteNot
     if (!/^https?:\/\//i.test(page)) { return undefined; }
     const label = (typeof body.label === "string" ? body.label.trim() : "") || fallbackLabel || "另一台";
     const name = (typeof body.name === "string" ? body.name.trim() : "") || "会话";
-    return { label, sessionId, name, page };
+    // 摘要是可选的（旧版本不带）：带了也只是拿来显示，最长截一下
+    const text = typeof body.text === "string" ? body.text.trim().slice(0, 200) : "";
+    const kind = body.kind === "ask" ? "ask" : "done";
+    return { label, sessionId, name, page, text, kind };
 }
 
 /**

@@ -1484,7 +1484,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         }, ChatHost.ASK_WAIT_MS, req.id, true);
         // 卡片只发给“正看着这个会话”的屏；别的屏上也提醒一声（人在别的会话 / 别的窗口里时，
         // 除了这一条没别的法子知道他该去答一句）。跟“跑完一轮”那条通知同一条路。
-        this.broadcastAskWaiting(sessionId);
+        this.broadcastAskWaiting(sessionId, req.question);
         const answer = await waiting;
         const picked: string[] = Array.isArray(answer?.picks)
             ? answer.picks.filter((x: unknown) => typeof x === "string")
@@ -1497,9 +1497,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 模型在某个会话里问了一道选择题：那块屏上的卡片只管那一个正在看的屏，
      * 提醒走托盘（人在别的会话 / 别的窗口 / 根本就在别的屋里时，靠那颗图标知道要回来答一句）。
      */
-    private broadcastAskWaiting(sessionId: string | undefined): void {
+    private broadcastAskWaiting(sessionId: string | undefined, question: string): void {
         const rt = sessionId ? this.panels.get(sessionId) : undefined;
-        this.trayNote(sessionId ?? "", rt ? this.sessionDisplayName(rt) : "");
+        // 题干就是面板上那句话：光说“有人问你”的话，还得切过去才知道问的是什么
+        this.trayNote(sessionId ?? "", rt ? this.sessionDisplayName(rt) : "", question, "ask");
     }
 
     /** 托盘里点了「打开页面」：用系统默认浏览器开（默认开本机的，别的机器推来的那条开它那边的）。 */
@@ -1513,17 +1514,20 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 推不过去就算了（对方没起、网断了都一样：不重试、不攒着）。
      * @returns 推给了别处没有（推了这台就不自己闪：一个人只盯得了一台机器）
      */
-    protected override pushRemoteNote(sessionId: string, name: string): boolean {
+    protected override pushRemoteNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): boolean {
         const notify = readServerConfig().config.notify;
         const base = this.options.selfPageUrl?.();
         if (!base) { return false; }
-        // 填的是这台自己的地址（默认就显示它）等于“提醒还在这台”：不推给自己，本机自己闪
+        // 填的是这台自己的地址（默认就显示它）等于“提醒还在这台”：不推给自己，本机自己弹
         const targets = notify.pushTo.filter((target) => !isOwnPage(target, base));
         if (targets.length === 0) { return false; }
         const notice = {
             label: notify.pushLabel || hostOfUrl(base) || "Pi Chat",
             sessionId,
             name,
+            // 摘要也推过去：那台弹面板时才不会只剩一个名字
+            text: summary,
+            kind,
             // 地址里带上会话：那边点开就切到这个会话（见 media/chat.js 里读 ?session= 的那段）
             page: withSession(base, sessionId),
         };
