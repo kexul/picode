@@ -21,6 +21,10 @@
  *   - shell 怎么挑、命令怎么喂（-c 还是 stdin）直接问 pi 自己（getShellConfig），
  *     settings 里的 shellPath / shellCommandPrefix 也照它的来 —— 别再抄一份它的挑法：
  *     抄的那份漏了 shellPath，另一台机器上 bash 只注册在 settings 里，一跑命令就找不到；
+ *     问法也不能只靠 pi.getSettings()：那是个没写进文档的接口，有的版本没有、
+ *     有时候还会抛错，于是拿到的设置是空的（报错里「Searched Git Bash in」那半段就是证据）。
+ *     取不到就自己去读一份 pi 的设置文件（PI_CODING_AGENT_DIR，默认 ~/.pi/agent）；
+ *     报错里写清楚读的是哪个文件、里面有没有 shellPath，下次坏在哪儿一眼能看出来。
  *   - 超时和中止时抛的错文案（"timeout:N" / "aborted"），pi 的 bash 工具认这两个；
  *   - 输出截断、格式化、结构化内容那一层没动：仍然走 createBashTool() 给的那份定义。
  *
@@ -38,7 +42,7 @@ export const BASH_BRIDGE_SOURCE = String.raw`/**
  */
 import { createBashTool, getShellConfig } from "@earendil-works/pi-coding-agent";
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
 
 const FRAME_PREFIX = ${JSON.stringify(BASH_FRAME_PREFIX)};
@@ -87,6 +91,65 @@ function expandHome(p: string): string {
     return rest ? join(home, rest) : home;
 }
 
+/** shellPath 是从哪儿拿到的（pi 给的设置，还是自己读的文件）。 */
+let shellPathFrom = "";
+/** 自己读的那个设置文件（报错时写出来，好让人知道看的是哪份）。 */
+let settingsFile = "";
+
+/** pi 的配置目录（跟 pi 一样：设了 PI_CODING_AGENT_DIR 就用它，否则 ~/.pi/agent）。 */
+function agentDir(): string {
+    const fromEnv = process.env.PI_CODING_AGENT_DIR;
+    if (fromEnv) { return expandHome(fromEnv); }
+    const home = process.env.USERPROFILE || process.env.HOME || "";
+    return home ? join(home, ".pi", "agent") : "";
+}
+
+/** 自己去读 pi 的设置文件。返回空对象 = 读不到（没这个文件、或里面不是 JSON）。 */
+function settingsOnDisk(): any {
+    const dir = agentDir();
+    settingsFile = dir ? join(dir, "settings.json") : "";
+    if (!settingsFile) { return {}; }
+    try {
+        const text = readFileSync(settingsFile, "utf8").replace(/^\uFEFF/, "");
+        const parsed = JSON.parse(text);
+        return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+
+/** 挑 shell 要用的两样：pi 给了就用 pi 的，没给再去读它的设置文件。 */
+function loadSettings(api: any): any {
+    let fromPi: any = {};
+    try {
+        fromPi = (typeof api.getSettings === "function" ? api.getSettings() : undefined) || {};
+    } catch {
+        fromPi = {}; // 取不到就按 pi 的默认挑法来
+    }
+    if (typeof fromPi.shellPath === "string" && fromPi.shellPath) { shellPathFrom = "pi 给的设置"; }
+    let fromFile: any = {};
+    const merged: any = { ...fromPi };
+    for (const key of ["shellPath", "shellCommandPrefix"]) {
+        if (typeof merged[key] === "string" && merged[key]) { continue; }
+        if (!settingsFile) { fromFile = settingsOnDisk(); }
+        if (typeof fromFile[key] === "string" && fromFile[key]) {
+            merged[key] = fromFile[key];
+            if (key === "shellPath") { shellPathFrom = settingsFile; }
+        }
+    }
+    return merged;
+}
+
+/** 报错时说清楚：这次看到的 shellPath 是什么、从哪儿来的。 */
+function shellPathHint(): string {
+    const raw = settings.shellPath;
+    if (typeof raw === "string" && raw) {
+        return "这次用的是 shellPath = " + raw + (shellPathFrom ? "（来自 " + shellPathFrom + "）" : "");
+    }
+    const files = settingsFile ? settingsFile : "（没找到，pi 的配置目录里没有 settings.json）";
+    return "这次没读到 shellPath：pi 给的设置里没有，" + files + " 里也没有。";
+}
+
 let cachedShell: ShellConfig | undefined;
 function shellConfig(): ShellConfig {
     if (cachedShell) { return cachedShell; }
@@ -97,6 +160,7 @@ function shellConfig(): ShellConfig {
     } catch (err) {
         throw new Error("找不到 bash：装个 Git Bash、把 bash 放进 PATH，"
             + "或者在 pi 的设置文件（~/.pi/agent/settings.json）里用 shellPath 指到你的 bash。\n\n"
+            + shellPathHint() + "\n\n"
             + String((err && (err as Error).message) || err));
     }
     cachedShell = { shell: picked.shell, args: picked.args, viaStdin: picked.commandTransport === "stdin" };
@@ -341,11 +405,7 @@ const detached = new Map<string, Task>();
 const launched = new Map<string, Task>();
 
 export default function bashBridge(pi: any): void {
-    try {
-        settings = (typeof pi.getSettings === "function" ? pi.getSettings() : undefined) || {};
-    } catch {
-        settings = {}; // 取不到就按 pi 的默认挑法来
-    }
+    settings = loadSettings(pi);
     const cwd = process.cwd();
     const base = createBashTool(cwd, {
         operations: {
