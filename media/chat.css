@@ -1348,7 +1348,7 @@
      还没就绪（加载中 / 等 pi 起来 / 没配模型）时横条空着、淡下去，同样能点。
      点它切当前会话的模型。 */
   #ctxIcon {
-    position: relative; flex: 0 1 auto; min-width: 0; max-width: 70%;
+    flex: 0 1 auto; min-width: 0; max-width: 70%;
     display: inline-flex; align-items: center; gap: 6px;
     height: 26px; padding: 0 4px 0 6px;
     background: transparent; border: none; border-radius: 13px; cursor: pointer;
@@ -1373,22 +1373,26 @@
   /* 下头那条杠：淡底（::before）+ 上面那截填满的（.ci-fill），两段都用这颗按钮的 currentColor 画。
      淡底不能挂在 .ci-bar 自己身上：父级的 opacity 会把里头那截实心的也一起淡下去。
      填多满由 --ci-pct 给（chat.js 每次算完用量就写一回），就是横条本身的宽度。
-     跑着的时候（data-st=streaming 且真有数，即 .hasfill），已填充那截的右端会溅火星
-     （见下面那块 .ci-sparks 画布），条本身不动；停下了就退回一条安静的实心横杠。 */
+     跑着的时候（data-st=streaming 且真有数，即 .hasfill）这条会一明一暗地呼吸；
+     停下了就是一条安静的实心横杠。 */
   #ctxIcon .ci-bar { position: relative; height: 5px; border-radius: 2.5px; }
   #ctxIcon .ci-bar::before { content: ""; position: absolute; inset: 0; border-radius: 2.5px; background: currentColor; opacity: 0.25; }
   #ctxIcon .ci-fill {
     position: absolute; inset: 0 auto 0 0; width: var(--ci-pct, 0%); border-radius: 2.5px;
     background: currentColor; transition: width 200ms ease;
   }
-  /* 尾端溅出来的火星：一块盖在整颗胶囊上的画布（上下各多让 6px，火星掉出去一点再消失）。
-     整颗胶囊盖、而不是只盖横条那一格：火星得有地方飞。它不吃点击（pointer-events: none），
-     画什么、什么时候画都在 chat.js 里（见 sparkFrame）——纯 CSS 做不出随机、拖尾和重力。 */
-  #ctxIcon .ci-sparks {
-    position: absolute; left: 0; top: -6px; width: 100%; height: calc(100% + 12px);
-    pointer-events: none;
+  /* 用量涨了，百分比数字上方飘一个「+N」（见 chat.js 的 popCtxPlus）：跟工具标签次数方块上
+     那个「+1」是同一套动效（tg-plus-float），只是这块地方更小、字号跟着小一号；
+     上浮那 1.1em 会飘出胶囊上沿，胶囊没裁边，所以看得见。不占位置、不挡鼠标。 */
+  #ctxIcon .ci-plus {
+    position: absolute; left: 50%; top: -9px;
+    font-size: 0.72em; line-height: 1; white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    color: var(--vscode-charts-green, #3fb950);
+    pointer-events: none; user-select: none;
+    animation: tg-plus-float 900ms ease-out forwards;
   }
-  /* 呼吸：已填充那截一明一暗（跟粒子一起，看着像那条在发功） */
+  /* 呼吸：已填充那截一明一暗（跑着的时候那点“还在动”的感觉全靠它了） */
   #ctxIcon.hasfill[data-st="streaming"] .ci-fill { animation: ci-breathe 1.6s ease-in-out infinite; }
   @keyframes ci-breathe { 0%, 100% { opacity: 0.72; } 50% { opacity: 1; } }
   /* 这一轮的生成速度：跟上头那个百分比一样大（不然它比旁边那行字还高一头）；没数的时候空着（空着就不占地方） */
@@ -1461,9 +1465,8 @@
   #ctxIcon.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
   #ctxIcon.err { color: var(--vscode-errorForeground, #f14c4c); }
   #ctxIcon[data-st="loading"], #ctxIcon[data-st="wait"], #ctxIcon[data-st="nomodel"], #ctxIcon[data-st="none"] { opacity: 0.55; }
-  /* 要减少动态效果时：横条不慢慢长、也不呼吸。
-     火星与那颗状态图标照旧在动 —— 这两样都是用来表明“还在跑”的，停了就跟没了一样
-     （火星是画布自己画的，压根不走这条 media query，见 chat.js 的 sparkSync）。 */
+  /* 要减少动态效果时：横条不慢慢长、也不呼吸（那颗状态图标照旧在动 —— 它就是用来
+     表明“还在跑”的，见上面那段注释；飘上去的「+N」是一次性的一下，不管）。 */
   @media (prefers-reduced-motion: reduce) {
     #ctxIcon .ci-fill { transition: none; }
     #ctxIcon.hasfill[data-st="streaming"] .ci-fill { animation: none; opacity: 1; }
