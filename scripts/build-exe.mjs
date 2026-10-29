@@ -137,14 +137,13 @@ Promise.resolve(__load("serverMain.js").main()).catch((err) => {
  * 用法跟 exe 一样：双击 / `./pichat`；带参数就照原样交给后端。
  */
 function packagePosix(version) {
-    const payload = collectPayload(version);
-    step(`  一共 ${payload.length} 个（界面文件 + 后端）`);
+    const payload = collectPayload(version, false);
+    step(`  一共 ${payload.length} 个（后端 + 界面文件）`);
 
     // 打包内容：解出来就是“有 media/ 与 out/ 的那一层”。只收 Linux 用得上的（不带 .exe）。
     const stage = path.join(DIST, "stage");
     fs.rmSync(stage, { recursive: true, force: true });
     for (const item of payload) {
-        if (item.relative.startsWith("bin/")) { continue; }
         const target = path.join(stage, item.relative);
         fs.mkdirSync(path.dirname(target), { recursive: true });
         fs.copyFileSync(item.full, target);
@@ -187,8 +186,12 @@ function packagePosix(version) {
     process.stdout.write("要求这台机器上有 Node 20 或以上；日志在 ~/.cache/pichat/pichat.log" + "\n");
 }
 
-/** 要装进 exe 的东西（相对解出来的那个目录：media/…、bin/…、out/server/bundle.cjs）。 */
-function collectPayload(version) {
+/**
+ * 要装进产物里的东西（相对解出来的那个目录：media/…、out/server/bundle.cjs、以及 Windows 才有的 bin/…）。
+ * @param withBinaries 要不要带上那两支小程序（托盘 / 截屏）：只有 Windows 那份才用得上，
+ *                     Linux 上它们压根不编（scripts/compile.mjs 会跳过），不能强求。
+ */
+function collectPayload(version, withBinaries) {
     const entries = [];
     const add = (relative, full) => { entries.push({ relative, full }); };
     add("out/server/bundle.cjs", BUNDLE);
@@ -197,10 +200,12 @@ function collectPayload(version) {
         const full = path.join(repoRoot, "media", name);
         if (fs.statSync(full).isFile()) { add(`media/${name}`, full); }
     }
-    for (const name of ["tray.exe", "shot.exe"]) {
-        const full = path.join(repoRoot, "bin", name);
-        if (!fs.existsSync(full)) { fail(`找不到 bin/${name}：先跑 npm run compile（它顺手编这两支小程序）`); }
-        add(`bin/${name}`, full);
+    if (withBinaries) {
+        for (const name of ["tray.exe", "shot.exe"]) {
+            const full = path.join(repoRoot, "bin", name);
+            if (!fs.existsSync(full)) { fail(`找不到 bin/${name}：先跑 npm run compile（它顺手编这两支小程序）`); }
+            add(`bin/${name}`, full);
+        }
     }
     // 壳只想要那一串版本号（拿它给缓存目录起名），后端要的是一份 package.json：两个都写
     fs.writeFileSync(VERSION_TXT, version, "utf8");
@@ -211,6 +216,8 @@ function collectPayload(version) {
 /** 按当前平台打包：Windows 编 exe 壳，其它系统贴一个自解压脚本。 */
 async function main() {
     const version = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")).version;
+    // 临时文件与产物都放这儿；clean 之后这个目录不存在，先建出来
+    fs.mkdirSync(DIST, { recursive: true });
 
     step("把 out/server 打成一个 CommonJS 文件");
     writeBundle();
@@ -225,10 +232,9 @@ async function main() {
     }
     const csc = findCsc();
     if (!csc) { fail("找不到系统自带的 csc.exe（.NET Framework 4 那套），编不了壳。"); }
-    fs.mkdirSync(DIST, { recursive: true });
 
     step("列出要装进 exe 的东西");
-    const payload = collectPayload(version);
+    const payload = collectPayload(version, true);
     step(`  一共 ${payload.length} 个（界面文件 + 两支小程序 + 后端）`);
 
     step("画图标");
