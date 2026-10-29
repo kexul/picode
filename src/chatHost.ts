@@ -639,10 +639,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /**
      * 界面就绪（某个浏览器页面发来 ready）：把已有的对话整屏重画一遍——
      * 工作区里可能已经有别的屏聊出来的内容（比如手机上先开的对话）。
+     * 不透提示：刷新 / 重新打开页面是人自己刚做的动作，画回来的对话本身就是回答。
      */
     protected override onWebviewReady(): void {
         this.broadcastChatReferences();
-        void this.resyncPage(this.currentPageId, "页面已重新连接（{count} 条消息，pi 进程与上下文原样保留）。");
+        void this.resyncPage(this.currentPageId, "");
     }
 
     // ========================================================================

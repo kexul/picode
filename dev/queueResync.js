@@ -38,19 +38,20 @@ module.exports = async (page) => {
     if (!b.exists || b.hidden || b.texts.length !== 2) { problems.push("排队的那两句没显示出来：" + JSON.stringify(b)); }
 
     // ---- 第二幕：断线重连（页面报一次 ready → 后端整屏重画）----
-    // 这期间 pi 已经把两句都投递出去了，后端手上是空队列：重画该把那块清空
+    // 这期间 pi 已经把两句都投递出去了，后端手上是空队列：重画该把那块清空。
+    // 重画本身没有提示文字（刷新是用户自己的动作），所以就看那块真清掉没有。
     await page.eval(`window.acquireVsCodeApi().postMessage({ type: "ready" }); return true;`);
     const started = Date.now();
-    let sawReconnect = false;
+    let cleared = false;
     while (Date.now() - started < 20000) {
-        const text = await page.text();
-        if (text.indexOf("页面已重新连接") >= 0) { sawReconnect = true; break; }
+        const b0 = await bar();
+        if (!b0.exists || b0.hidden || !b0.texts.length) { cleared = true; break; }
         await page.sleep(300);
     }
     await page.sleep(600);
     b = await bar();
-    console.log("第二幕（重连、整屏重画之后）：\n  重画提示出现了=" + sawReconnect + " 队列条=" + JSON.stringify(b));
-    if (!sawReconnect) { problems.push("重连的整屏重画没发生（这条验的路上半截没走到）"); }
+    console.log("第二幕（重连、整屏重画之后）：\n  重画后队列条已清空=" + cleared + " 队列条=" + JSON.stringify(b));
+    if (!cleared) { problems.push("重连的整屏重画没发生（还是重画了但队列条没清）：" + JSON.stringify(b)); }
     if (b.exists && !b.hidden && b.texts.length) { problems.push("重连之后队列条里还写着那两条（实际上早发出去了）：" + JSON.stringify(b)); }
 
     // ---- 第三幕：重连之后 pi 又排队一句 → 照旧显示（别把这块弄成永远空着）----
