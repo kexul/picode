@@ -14,7 +14,7 @@ export const FOCUS_INPUT_KEYS = ["ctrlAltI", "ctrlShiftI", "altI", "ctrlAltSpace
 
 export const DEFAULT_SEND_KEY = "enter";
 export const DEFAULT_NEW_SESSION_KEY = "ctrl+alt+n";
-export const DEFAULT_CLOSE_SESSION_KEY = "ctrl+alt+w";
+export const DEFAULT_CLOSE_SESSION_KEY = "alt+w";
 export const DEFAULT_TAB_SWITCH_KEY = "ctrl+alt+arrows";
 export const DEFAULT_FOCUS_INPUT_KEY = "ctrlAltI";
 export const DEFAULT_FONT_SIZE = "14";

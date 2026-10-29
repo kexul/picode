@@ -606,7 +606,7 @@
   // ==================== 全局视图选项 ====================
   var sendKeyCombo = "enter";
   var newSessionKey = "ctrl+alt+n";
-  var closeSessionKey = "ctrl+alt+w";
+  var closeSessionKey = "alt+w";
   var tabSwitchKey = "ctrl+alt+pgupdown";
   // 这台机器的路径分不分大小写（顶条、面板、历史列表里拿路径当键比）：
   // 后端在 viewOptions 里报（process.platform !== "win32"）。没收到之前按不分大小写算，

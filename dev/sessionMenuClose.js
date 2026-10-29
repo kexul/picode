@@ -5,7 +5,7 @@
 //
 // 三处入口同一个规矩：
 //   ① 顶条上那一格点自己的 ×：那一格变红、那颗叉换成勾，这一下不真关；再点一下（勾）才关
-//   ② 在跑时按 Ctrl+Alt+W：落在顶条那一格上（同上），不再自己弹出一张清单等你找那一行
+//   ② 在跑时按 Alt+W：落在顶条那一格上（同上），不再自己弹出一张清单等你找那一行
 //   ③ 「项目与会话」里「正在对话」那几行：点叉出确认条（整行变红、行尾多一颗勾一颗叉），
 //      点叉撤销、干等 4 秒自己收回、点勾才真关；点行身也算撤销（不许替那颗勾把关会话点实了）
 // 图落在 dev/shots/：closeconfirm-1-tab / 2-key / 3-panel …
@@ -29,7 +29,7 @@ module.exports = async (page) => {
   const keyClose = async () => {
     for (const type of ["keyDown", "keyUp"]) {
       await page.cdp.send("Input.dispatchKeyEvent", {
-        type, key: "w", code: "KeyW", modifiers: 3,   // Alt=1 + Ctrl=2
+        type, key: "w", code: "KeyW", modifiers: 1,   // Alt
         windowsVirtualKeyCode: 87, nativeVirtualKeyCode: 87,
       });
     }
@@ -92,7 +92,7 @@ module.exports = async (page) => {
   console.log("① 再点一下（勾）之后：", JSON.stringify(t2));
   if (t2.count !== Math.max(0, countBefore - 1)) { throw new Error(`点勾之后该真关掉这一个（${countBefore} → ${t2.count}）`); }
 
-  // ② 跑着时按 Ctrl+Alt+W：同样落在顶条那一格上，不再弹出清单
+  // ② 跑着时按 Alt+W：同样落在顶条那一格上，不再弹出清单
   await page.click("#newSessionBtn");
   await page.sleep(1500);
   await page.send("随便演示一下");
@@ -100,7 +100,7 @@ module.exports = async (page) => {
   await keyClose();
   await page.sleep(600);
   const t3 = await tabs();
-  console.log("② 在跑时按 Ctrl+Alt+W：", JSON.stringify(t3));
+  console.log("② 在跑时按 Alt+W：", JSON.stringify(t3));
   await page.shot("closeconfirm-2-key.png");
   if (!t3.closing.some(Boolean)) { throw new Error("在跑的时候按关闭快捷键，那一格应该先变成等确认，不真关"); }
   if (t3.menu) { throw new Error("按快捷键不该再自己弹出清单（确认就在那一格上）"); }

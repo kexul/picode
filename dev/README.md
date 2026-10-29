@@ -108,7 +108,7 @@ npm run web:shot -- --width 900 --height 700 --script dev/saidList.js
 npm run web:shot -- --fake-pi --script dev/sessionFlow.js
 
 # 验关会话的二次确认（会话正在跑的时候点叉才要再点一下；跑完的直接关）。
-# 三处入口同一个规矩：顶条那一格点自己的 ×（那一格变红、叉换成勾）、在跑时按 Ctrl+Alt+W
+# 三处入口同一个规矩：顶条那一格点自己的 ×（那一格变红、叉换成勾）、在跑时按 Alt+W
 # （落在那一格上，不弹清单）、「项目与会话」里那几行（点叉出确认条、点叉或干等 4 秒撤销）：
 # 假 pi 每个工具卡 5 秒，才有时间在“正在跑”的时候去点关闭
 FAKEPI_THINK_MS=5000 npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/sessionMenuClose.js
@@ -118,7 +118,7 @@ FAKEPI_THINK_MS=5000 npm run web:shot -- --fake-pi --width 900 --height 800 --sc
 npm run web:shot -- --width 420 --height 900 --fake-pi --script dev/swipeSession.js
 npm run web:shot -- --width 1000 --height 760 --fake-pi --script dev/dragSession.js
 
-# 验「关闭会话」快捷键（设置里那一行默认 Ctrl+Alt+W；真按一下就关掉正在看的那个会话、
+# 验「关闭会话」快捷键（设置里那一行默认 Alt+W；真按一下就关掉正在看的那个会话、
 # 自动切到剩下的；焦点在输入框里按也照样关）：
 npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/closeShortcut.js
 
@@ -341,8 +341,8 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `askCards.js` | 验问话卡片（长在消息流里）：假 pi 演模型调 `ask_choice` 与扩展问用户，单选 / 多选 / 自己写 / 停止生成 / 确认 / 输入 / 选一个 / 刷新页面各走一遍；那两个输入框写着 `enterkeyhint`、“自己写”那行里回车交完光标落回下面那个输入框也在这里盯着：`npm run web:shot -- --fake-pi --script dev/askCards.js` |
 | `askQuestion.js` | 同上但那一条是真路的：真模型 → 真 pi（插件给它 `-e` 了桥扩展）→ 卡片 → 回话文件 → 工具结果（慢） |
 | `askDialog.js` + `askDialogTrigger.ts` | 验真扩展问的“要你打字 / 要你点是或否 / 选一个”：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |
-| `closeShortcut.js` | 验「关闭会话」快捷键（设置里那一行默认 `Ctrl+Alt+W`；对已经跑完的会话真按一下就关掉正在看的那个并切到剩下的；焦点在输入框里按也照样关）：`npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/closeShortcut.js` |
-| `sessionMenuClose.js` | 验关会话的二次确认（只对正在跑的会话）：顶条上那一格点 × → 那一格变红、叉换成勾（不真关），再点一下才关；在跑时按 `Ctrl+Alt+W` 同样落在那一格上、不弹清单；「项目与会话」里「正在对话」那几行点叉先出确认条（整行变红、行尾一颗勾一颗叉），点叉撤销、干等 4 秒撤销、点勾真关、点行身也算撤销：`FAKEPI_THINK_MS=5000 npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/sessionMenuClose.js` |
+| `closeShortcut.js` | 验「关闭会话」快捷键（设置里那一行默认 `Alt+W`；对已经跑完的会话真按一下就关掉正在看的那个并切到剩下的；焦点在输入框里按也照样关）：`npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/closeShortcut.js` |
+| `sessionMenuClose.js` | 验关会话的二次确认（只对正在跑的会话）：顶条上那一格点 × → 那一格变红、叉换成勾（不真关），再点一下才关；在跑时按 `Alt+W` 同样落在那一格上、不弹清单；「项目与会话」里「正在对话」那几行点叉先出确认条（整行变红、行尾一颗勾一颗叉），点叉撤销、干等 4 秒撤销、点勾真关、点行身也算撤销：`FAKEPI_THINK_MS=5000 npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/sessionMenuClose.js` |
 | `workspacePanel.js` | 验「项目与会话」面板（那颗 `<<<`）：正在对话一段、工作区那块的展开 / 收起（含记住）、组里的「加载更多」、行尾加号新建会话、标题右边那颗加号、子会话不显示：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/workspacePanel.js` |
 | `sidebarDock.js` | 验宽窗下常驻的项目与会话侧边栏（`<<<`，窗口 ≥ 900px 才常驻）：打开 / 收起 / 记住收起 / 收起时里头那份留着（再展开第一帧就有内容，不用等宿主扫磁盘）/ 两根顶线对齐 / 底部那条线与输入区上边线齐（输入框长高时线往上走、设置那颗按钮不动）/ 点行不关面板 / 开别的浮层时那一列原样留着 / 工作区那两块「加载更多」/ 改窄再拉宽（窄窗那一块得贴着右边、整屏高，不是居中的弹窗；居中那几块得还在正中），一次过一遍：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js` |
 | `sidebarRedraw.js` | 验对话更新时常驻那一列的重画范围（只该动「正在对话」那一格）：整块有没有重画、下半那一格的元素与滚动有没有动、重画过后点行还准不准：`FAKEPI_TICK_MS=60 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarRedraw.js` |
