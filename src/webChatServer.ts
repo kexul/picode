@@ -22,6 +22,7 @@ import {
     type PageChannel,
 } from "./webTransport";
 import { insideFolder, pathCaseKey, relativeTo } from "./pathRules";
+import { findListedFile } from "./fileSearch";
 import type { SessionChangeInfo } from "./editTracker";
 import type { BashTaskInfo } from "./bashProtocol";
 import { readRemoteNotice, type RemoteNotice } from "./remoteNotice";
@@ -165,23 +166,6 @@ interface DirListing {
     /** 条目太多，只列了前 MAX_DIR_ENTRIES 个 */
     truncated?: boolean;
 }
-
-/**
- * 在会话目录里按文件名找一圈（见 findFileByName）的两道定额：扫到这么多条目、或者花到这么多
- * 毫秒就收手。链接里只有光名字（`chat.js`）时才走那一条，是点一下换来的“最多等这么久”。
- *（在插件仓库上量过：整棵源码树跳过 node_modules 后约 800 个条目、4 毫秒。）
- */
-const NAME_SEARCH_MAX_ENTRIES = 4000;
-const NAME_SEARCH_BUDGET_MS = 80;
-/**
- * 按名字找时不进去的目录：大工程里这些才是大头（依赖、版本库、构建产物、虚拟环境）。
- * 跟编辑器那条「在工作区里按文件名搜」的排除名单一个意思。
- */
-const NAME_SEARCH_SKIP_DIRS: ReadonlySet<string> = new Set([
-    "node_modules", ".git", ".hg", ".svn", "out", "dist", "build", ".next", ".nuxt",
-    ".venv", "venv", "env", "__pycache__", ".pytest_cache", ".mypy_cache", "target",
-    ".cache", ".gradle", ".idea", ".vs", "coverage", ".tox",
-]);
 
 /**
  * 下载时告诉浏览器的文件名（`Content-Disposition`）。
@@ -528,19 +512,19 @@ export class PiChatWebServer {
                     this.sendText(req, res, 405, "只接受 GET。");
                     return;
                 }
-                this.sendSite(req, res, url.pathname.slice("/site/".length));
+                void this.withFailNote(req, res, this.sendSite(req, res, url.pathname.slice("/site/".length)));
                 return;
             }
             if (pathname === "/file") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                this.sendFile(req, res, url.searchParams.get("session") ?? "", url.searchParams.get("path") ?? "",
+                void this.withFailNote(req, res, this.sendFile(req, res, url.searchParams.get("session") ?? "", url.searchParams.get("path") ?? "",
                     url.searchParams.get("mtime") ?? "", url.searchParams.get("download") === "1",
-                    url.searchParams.get("anywhere") === "1");
+                    url.searchParams.get("anywhere") === "1"));
                 return;
             }
             if (pathname === "/dir") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                this.sendDir(req, res, url.searchParams.get("session") ?? "", url.searchParams.get("path") ?? "");
+                void this.withFailNote(req, res, this.sendDir(req, res, url.searchParams.get("session") ?? "", url.searchParams.get("path") ?? ""));
                 return;
             }
             // 「改动」那一格：这个会话改过哪些文件（清单），以及其中一个文件的合计 diff
@@ -591,6 +575,19 @@ export class PiChatWebServer {
             this.sendText(req, res, 404, "没有这个地址。");
         } catch (err: any) {
             this.hooks.log(`处理请求出错：${err?.message ?? String(err)}`);
+            try { this.sendText(req, res, 500, "服务内部错误。"); } catch { /* 连接可能已断 */ }
+        }
+    }
+
+    /**
+     * 等一条异步的取文件路子跑完；意料之外的错就给一句 500（route 那个 try/catch 管不到异步这边），
+     * 不让一个请求悬在那儿。回应的正文已经发出去了时 sendText 会报错，吞掉即可。
+     */
+    private async withFailNote(req: http.IncomingMessage, res: http.ServerResponse, work: Promise<void>): Promise<void> {
+        try {
+            await work;
+        } catch (err: any) {
+            this.hooks.log(`取文件出错：${err?.message ?? String(err)}`);
             try { this.sendText(req, res, 500, "服务内部错误。"); } catch { /* 连接可能已断 */ }
         }
     }
@@ -721,15 +718,15 @@ export class PiChatWebServer {
      * 匹配到的路径同样要过那道边界：清单里那个文件真身在会话目录外（读的是外面的软链接）时
      * 也不给看。
      *
-     * 第三档（同样只有文件有）在前两档都没中时走：在会话目录里按文件名找一圈，见 findFileByName。
-     * 它管的是「这个文件会话里没人碰过，但光名字本来就是想点它」——正文里写 `chat.js` 而不写
-     * `media/chat.js` 时（模型自己写的链接、人贴的路径）不至于点不动。代价是这一档要读几个目录，
-     * 所以只在前面都没中时才走，而且有定额（大工程里扫不完就当没有）。
+     * 第三档（同样只有文件有）在前两档都没中时走：在会话目录的文件清单里挑最像的那一个
+     * （见 fileSearch.ts 的 findListedFile）。它管的是「这个文件会话里没人碰过，但光名字本来就是
+     * 想点它」——正文里写 `chat.js` 而不写 `media/chat.js` 时（模型自己写的链接、人贴的路径）
+     * 不至于点不动。清单跟文件搜索共用一份、带缓存，所以点一下不用重新扫盘。
      *
      * 看不了时返回状态码与一句人话，调用方直接照它回；kind 只把话里的「文件 / 目录」说对。
      */
-    private resolveSessionPath(sessionId: string, wantPath: string, kind: "文件" | "目录"):
-        { ok: true; real: string; realCwd: string } | { ok: false; status: number; text: string } {
+    private async resolveSessionPath(sessionId: string, wantPath: string, kind: "文件" | "目录"):
+        Promise<{ ok: true; real: string; realCwd: string } | { ok: false; status: number; text: string }> {
         if (!sessionId || !wantPath || wantPath.includes("\0")) {
             return { ok: false, status: 400, text: `请求里要说明是哪个会话、哪个${kind}。` };
         }
@@ -755,57 +752,16 @@ export class PiChatWebServer {
                 return this.checkInsideSession(realHit, realCwd, kind);
             }
         }
-        // 第三档：会话里没人碰过这个名字——在会话目录里按文件名找一圈（有定额，扫不完就当没有）
+        // 第三档：会话里没人碰过这个名字——在会话目录的文件清单里挑最像的那一个
         if (kind === "文件") {
-            const hit = this.findFileByName(cwd, wantPath);
-            const realHit = hit ? realPathOr(hit) : undefined;
+            const hit = await findListedFile(cwd, wantPath);
+            const realHit = hit ? realPathOr(path.resolve(cwd, hit)) : undefined;
             if (realHit) {
                 return this.checkInsideSession(realHit, realCwd, kind);
             }
             return { ok: false, status: 404, text: "没有这个文件（会话目录里按文件名也只找了有限的一圈）。" };
         }
         return { ok: false, status: 404, text: `没有这个${kind}。` };
-    }
-
-    /**
-     * 第三档：在会话目录里按文件名找一遍（链接里只有光名字、或者路径写岔了的时候）。
-     *
-     * 三条规矩：
-     *   - **广度优先**：浅的先中（`a/chat.js` 赢过 `a/b/c/chat.js`）；路径尾巴对上那个写法（`media/chat.js`）
-     *     赢过只对上名字的，所以一边找一边记着第一个只对上名字的，找到尾巴对上的立刻返回；
-     *   - **不进的目录**：见 NAME_SEARCH_SKIP_DIRS（大工程里 node_modules、.git、构建产物才是大头）；
-     *   - **有定额**：扫够 NAME_SEARCH_MAX_ENTRIES 个条目或花掉 NAME_SEARCH_BUDGET_MS 就收手，
-     *     拿手头那个只对上名字的（没有就当没找到）。这一档只在前面两档都没中时才走，是点一下链接
-     *     换来的，所以这个定额就是“最多让它等多久”。
-     *
-     * 只读目录名字，不读文件内容；找到的路径照样要过会话目录那道边界（调用方判）。
-     */
-    private findFileByName(cwd: string, wantPath: string): string | undefined {
-        const want = wantPath.replace(/\\/g, "/");
-        const base = want.split("/").pop() || "";
-        if (!base) { return undefined; }
-        const endedAt = Date.now() + NAME_SEARCH_BUDGET_MS;
-        let seen = 0;
-        let fallback: string | undefined;
-        const pending = [cwd];
-        while (pending.length > 0) {
-            const dir = pending.shift()!;
-            let entries: fs.Dirent[];
-            try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
-            for (const entry of entries) {
-                if (++seen > NAME_SEARCH_MAX_ENTRIES || Date.now() > endedAt) { return fallback; }
-                const full = path.join(dir, entry.name);
-                if (entry.isDirectory()) {
-                    if (!NAME_SEARCH_SKIP_DIRS.has(entry.name)) { pending.push(full); }
-                    continue;
-                }
-                if (!entry.isFile() || entry.name !== base) { continue; }
-                const rel = relativeTo(cwd, full).replace(/\\/g, "/");
-                if (rel === want || rel.endsWith("/" + want)) { return full; }
-                if (!fallback) { fallback = full; }
-            }
-        }
-        return fallback;
     }
 
     /** 目录边界：真实路径必须落在会话目录里（相等也算；`..` 与软链接都已解析过）。 */
@@ -872,8 +828,8 @@ export class PiChatWebServer {
      * @param download   true = 这个请求是要把文件存下来（不设大小上限、按附件给）
      * @param anywhere   true = 整机上的图片也认（只有图片这条路放得开，见 resolveAnywhereImage）
      */
-    private sendFile(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string, wantPath: string,
-        sinceMtime = "", download = false, anywhere = false): void {
+    private async sendFile(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string, wantPath: string,
+        sinceMtime = "", download = false, anywhere = false): Promise<void> {
         let realTarget: string;
         if (anywhere) {
             // 放宽只放给图片这一种取法：下载（能存到磁盘上）与别的文件都不走这条
@@ -885,7 +841,7 @@ export class PiChatWebServer {
             if (!loose.ok) { this.sendText(req, res, loose.status, loose.text); return; }
             realTarget = loose.real;
         } else {
-            const found = this.resolveSessionPath(sessionId, wantPath, "文件");
+            const found = await this.resolveSessionPath(sessionId, wantPath, "文件");
             if (!found.ok) { this.sendText(req, res, found.status, found.text); return; }
             realTarget = found.real;
         }
@@ -967,7 +923,7 @@ export class PiChatWebServer {
      *
      * @param rest 地址里 `/site/` 后面那一段（**没解码**：会话号那一段自己解，见下）
      */
-    private sendSite(req: http.IncomingMessage, res: http.ServerResponse, rest: string): void {
+    private async sendSite(req: http.IncomingMessage, res: http.ServerResponse, rest: string): Promise<void> {
         const cut = rest.indexOf("/");
         const sessionId = cut > 0 ? decodeSegment(rest.slice(0, cut)) : undefined;
         const segments = cut > 0 ? rest.slice(cut + 1).split("/").map(decodeSegment) : [];
@@ -980,7 +936,7 @@ export class PiChatWebServer {
             this.sendText(req, res, 404, "没有这个文件（这是个目录）。");
             return;
         }
-        const found = this.resolveSessionPath(sessionId, wantPath, "文件");
+        const found = await this.resolveSessionPath(sessionId, wantPath, "文件");
         if (!found.ok) { this.sendText(req, res, found.status, found.text); return; }
         let stat: fs.Stats;
         try {
@@ -1021,15 +977,16 @@ export class PiChatWebServer {
      * 它没有大小上限、没有修改时间、也没有下载与二进制那几档；两条地址各管一件事，各自的规矩
      * 都短。`/file` 那边「这是个目录」的 404 留着兜底（手敲地址时会碰到）。
      */
-    private sendDir(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string, wantPath: string): void {
-        const found = this.resolveSessionPath(sessionId, wantPath, "目录");
+    private async sendDir(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string, wantPath: string): Promise<void> {
+        const found = await this.resolveSessionPath(sessionId, wantPath, "目录");
         if (!found.ok) { this.sendText(req, res, found.status, found.text); return; }
-        void this.listDirAsync(found.real, found.realCwd).then((listing) => {
+        try {
+            const listing = await this.listDirAsync(found.real, found.realCwd);
             this.sendJson(req, res, 200, listing);
-        }, () => {
+        } catch {
             // 路径真在、但读不动（拿文件当目录列 / 没权限 / 中途没了）：都按「没这个目录」回
             this.sendText(req, res, 404, "没有这个目录。");
-        });
+        }
     }
 
     /**

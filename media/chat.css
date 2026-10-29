@@ -1897,3 +1897,90 @@
   /* 长行折起来：一行最多占这一列的宽（不再撑出横向滚动），断不了的长串也断在栏里 */
   body.file-wrap .file-line { min-width: 0; }
   body.file-wrap .file-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+  /* ==================== 文件搜索浮层（Ctrl+Alt+F）==================== */
+  /* 跟拾取器 / 设置那几张浮层同一个路子：一层遮罩 + 一块居中的面板，只是摆得靠上一点
+     （结果一列往下长，贴顶更像命令面板）。 */
+  #fileSearchOverlay {
+    position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0,0,0,0.45);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 10vh 12px 12px;
+  }
+  #fileSearchOverlay.hidden { display: none; }
+  #fileSearchPanel {
+    width: min(720px, 94vw); max-height: 72vh;
+    display: flex; flex-direction: column;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    color: var(--vscode-foreground);
+    border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border, rgba(128,128,128,0.4)));
+    border-radius: 6px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.2), 0 6px 20px rgba(0,0,0,0.25);
+    overflow: hidden;
+  }
+  #fileSearchHead {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 8px 8px 12px;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
+  }
+  #fileSearchTitle { font-weight: 600; }
+  /* 两档：文件名 / 内容。选中的那一档描一圈边、底色淡一点。 */
+  #fileSearchModes { display: flex; gap: 2px; }
+  .fs-mode {
+    padding: 2px 8px; border-radius: 4px; font-family: inherit; font-size: 0.88em;
+    background: none; border: 1px solid transparent;
+    color: var(--vscode-descriptionForeground, inherit); cursor: pointer;
+  }
+  .fs-mode:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
+  .fs-mode.on {
+    color: var(--vscode-foreground); border-color: var(--vscode-focusBorder, rgba(128,128,128,0.5));
+    background: var(--vscode-list-inactiveSelectionBackground, rgba(128,128,128,0.12));
+  }
+  #fileSearchClose {
+    margin-left: auto; flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; padding: 0; border-radius: 3px;
+    background: none; border: none;
+    color: var(--vscode-descriptionForeground, inherit); cursor: pointer; line-height: 1;
+  }
+  #fileSearchClose:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); color: var(--vscode-foreground); }
+  #fileSearchClose svg { width: 12px; height: 12px; display: block; }
+  #fileSearchInputWrap { padding: 8px 12px; }
+  #fileSearchInput {
+    width: 100%; box-sizing: border-box;
+    background: var(--vscode-input-background, #fff); color: var(--vscode-input-foreground, inherit);
+    border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.4)); border-radius: 4px;
+    padding: 7px 9px; font-family: inherit; font-size: inherit;
+  }
+  #fileSearchInput:focus { outline: none; border-color: var(--vscode-focusBorder, #007acc); }
+  #fileSearchBody {
+    overflow-y: auto; min-height: 0;
+    padding: 2px 4px 6px;
+    font-size: 0.9em;
+  }
+  #fileSearchBody::-webkit-scrollbar { width: 8px; }
+  #fileSearchBody::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 4px; }
+  .fs-row { padding: 4px 9px; border-radius: 4px; cursor: pointer; }
+  .fs-row:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); }
+  .fs-row.on { background: var(--vscode-list-activeSelectionBackground, #0078d4); color: var(--vscode-list-activeSelectionForeground, #fff); }
+  .fs-file-line, .fs-text-head, .fs-text-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fs-dir { color: var(--vscode-descriptionForeground, inherit); }
+  .fs-row.on .fs-dir { color: inherit; opacity: 0.8; }
+  .fs-name { font-weight: 600; }
+  .fs-text-head { font-size: 0.85em; opacity: 0.75; }
+  .fs-text-line { font-family: var(--vscode-editor-font-family, monospace); }
+  .fs-row mark { background: rgba(255, 200, 40, 0.4); color: inherit; border-radius: 2px; }
+  .fs-row.on mark { background: rgba(255, 220, 80, 0.55); color: inherit; }
+  .fs-note {
+    padding: 10px 12px;
+    color: var(--vscode-descriptionForeground, inherit); opacity: 0.8;
+  }
+  /* 文件侧边栏头上那颗放大镜（手机上没键盘时开搜索的入口）：跟旁边那颗收起叉一样大。 */
+  .pk-header #fileSearchBtn {
+    align-self: center; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; margin-right: 2px; padding: 0; border-radius: 3px;
+    background: none; border: none; cursor: pointer; line-height: 1;
+    color: var(--vscode-descriptionForeground, inherit);
+  }
+  .pk-header #fileSearchBtn:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); color: var(--vscode-foreground); }
+  .pk-header #fileSearchBtn svg { width: 14px; height: 14px; display: block; }

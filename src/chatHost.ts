@@ -33,6 +33,7 @@ import {
     readProjectEntry,
 } from "./sessionStore";
 import { listDirectories } from "./dirBrowse";
+import { findFileContents, findFileNames } from "./fileSearch";
 import { ChatBroadcaster } from "./chatBroadcaster";
 import { MessageBuffer, PAGE_TRANSIENT_MESSAGE_TYPES } from "./webTransport";
 import { pickOverlayClient } from "./overlayTarget";
@@ -1069,6 +1070,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private readonly screenSession = new Map<string, string>();
     /** 最近一次问某个窗口“编辑器里开着哪些文件”的是哪块屏（回话要回给问的那块）。 */
     private readonly fileListAsker = new Map<string, string>();
+    /**
+     * 每块屏正在跑的那一次文件搜索（键是页面标识）。
+     * 搜内容时是一次 rg 进程：人接着打字，前一次就没人要了——新的一次进来时先把它掐掉。
+     */
+    private readonly fileSearches = new Map<string, AbortController>();
 
     /** 屏的登记簿（网页服务拿它做死连接巡检、写心跳）。 */
     public getScreens(): ScreenRegistry { return this.screens; }
@@ -1335,8 +1341,54 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                     }, `找符号 ${msg.name}`);
                 }
                 return true;
+            case "findFiles":
+                // 文件搜索浮层（Ctrl+Alt+F）：按文件名 / 按文件内容找，结果只回给那块屏。
+                this.startFileSearch(msg);
+                return true;
         }
         return false;
+    }
+
+    /**
+     * 跑一次文件搜索。
+     *
+     * 搜的是那块屏正在看的会话的目录；`seq` 是界面自己数的号，原样带回去——
+     * 打字快时会有好几次在飞，界面只认最后一次的回话。新的一次进来时把上一次的 rg 掐掉，
+     * 省得在后台白白扫完。
+     */
+    private startFileSearch(msg: any): void {
+        const clientId = this.currentPageId;
+        const seq = typeof msg.seq === "number" && Number.isFinite(msg.seq) ? msg.seq : 0;
+        const mode: "files" | "text" = msg.mode === "text" ? "text" : "files";
+        const query = typeof msg.query === "string" ? msg.query.slice(0, 200) : "";
+        const reply = (extra: Record<string, unknown>) => {
+            this.postToOneClient(clientId, { type: "findResults", seq, mode, query, ...extra });
+        };
+        const cwd = (() => {
+            const active = this.getActive(clientId);
+            return active ? (this.resolveSessionDir(active.id) ?? active.cwd) : undefined;
+        })();
+        // 上一次还在跑的先掐掉（哪怕这一次因为没目录而直接回话）
+        this.fileSearches.get(clientId)?.abort();
+        if (!cwd) {
+            this.fileSearches.delete(clientId);
+            reply({ files: [], hits: [], error: "这个会话还没有目录。" });
+            return;
+        }
+        const controller = new AbortController();
+        this.fileSearches.set(clientId, controller);
+        const work = mode === "text"
+            ? findFileContents(cwd, query, 200, controller.signal)
+            : findFileNames(cwd, query, 200);
+        void work.then((outcome) => {
+            if (controller.signal.aborted) { return; }
+            if (this.fileSearches.get(clientId) === controller) { this.fileSearches.delete(clientId); }
+            reply({ files: outcome.files, hits: outcome.hits, truncated: outcome.truncated, slow: outcome.slow });
+        }, (err: any) => {
+            if (this.fileSearches.get(clientId) === controller) { this.fileSearches.delete(clientId); }
+            if (controller.signal.aborted) { return; }
+            reply({ files: [], hits: [], error: `搜不了：${err?.message ?? String(err)}` });
+        });
     }
 
     /**

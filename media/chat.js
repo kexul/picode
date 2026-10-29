@@ -17,6 +17,8 @@
   const CHEVRON_SVG =
     '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true">' +
     '<path d="M6.14601 3.14579C5.95101 3.34079 5.95101 3.65779 6.14601 3.85279L10.292 7.99879L6.14601 12.1448C5.95101 12.3398 5.95101 12.6568 6.14601 12.8518C6.34101 13.0468 6.65801 13.0468 6.85301 12.8518L11.353 8.35179C11.548 8.15679 11.548 7.83979 11.353 7.64478L6.85301 3.14479C6.65801 2.94979 6.34101 2.95079 6.14601 3.14579Z"/></svg>';
+  // 文件搜索那颗放大镜：细笔画，跟浏览器桥里那几颗手画图标同一个调子（codicon 里没有细笔画版）。
+  const SEARCH_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><circle cx="7" cy="7" r="4.3"/><path d="M10.3 10.3 14 14" stroke-linecap="round"/></svg>';
   // 其余小图标：同样取自 @vscode/codicons 包，fill=currentColor 跟随文字色（files 是 24 视图）。
   const ICONS = {
     close: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8.70701 8.00001L12.353 4.35401C12.548 4.15901 12.548 3.84201 12.353 3.64701C12.158 3.45201 11.841 3.45201 11.646 3.64701L8.00001 7.29301L4.35401 3.64701C4.15901 3.45201 3.84201 3.45201 3.64701 3.64701C3.45201 3.84201 3.45201 4.15901 3.64701 4.35401L7.29301 8.00001L3.64701 11.646C3.45201 11.841 3.45201 12.158 3.64701 12.353C3.74501 12.451 3.87301 12.499 4.00101 12.499C4.12901 12.499 4.25701 12.45 4.35501 12.353L8.00101 8.70701L11.647 12.353C11.745 12.451 11.873 12.499 12.001 12.499C12.129 12.499 12.257 12.45 12.355 12.353C12.55 12.158 12.55 11.841 12.355 11.646L8.70901 8.00001H8.70701Z"/></svg>',
@@ -608,6 +610,8 @@
   var newSessionKey = "ctrl+alt+n";
   var closeSessionKey = "alt+w";
   var tabSwitchKey = "ctrl+alt+pgupdown";
+  /** 文件搜索浮层（见下面「文件搜索」那一段）：不跟别的快捷键一起进设置，先写死这个。 */
+  var fileSearchKey = "ctrl+alt+f";
   // 这台机器的路径分不分大小写（顶条、面板、历史列表里拿路径当键比）：
   // 后端在 viewOptions 里报（process.platform !== "win32"）。没收到之前按不分大小写算，
   // 跟以前一样；收到后就按真值。
@@ -709,6 +713,12 @@
     if (matchCombo(e, closeSessionKey)) {
       e.preventDefault();
       if (activeId) { askCloseSession(activeId); }
+      return;
+    }
+    // 文件搜索（含输入框聚焦时）：在界面里弹那一块浮层；再按一次收起。
+    if (matchCombo(e, fileSearchKey)) {
+      e.preventDefault();
+      toggleFileSearch();
       return;
     }
     if (tag === "INPUT" || tag === "TEXTAREA") {
@@ -7384,6 +7394,7 @@
       '<div id="filePanel" class="pk-panel">' +
         '<div id="fileHeader" class="pk-header">' +
           '<div id="fileTabs"></div>' +
+          '<button id="fileSearchBtn" type="button" title="文件搜索（Ctrl+Alt+F）" aria-label="文件搜索">' + SEARCH_ICON + '</button>' +
           '<button id="fileClose" class="pk-header-close" type="button" title="收起" aria-label="收起">' + ICONS["close-bold"] + '</button>' +
         '</div>' +
         // 看文件时正文上面那条横条：左边写这个文件叫什么，右边一颗关闭（回文件列表）
@@ -7415,6 +7426,7 @@
     fileSidebar.closeFile.addEventListener("click", () => backToFileList());
     wireFileSidebarResize(fileSidebar.resize);
     root.querySelector("#fileClose").addEventListener("click", () => setFileSidebarOpen(false));
+    root.querySelector("#fileSearchBtn").addEventListener("click", () => openFileSearch());
     root.querySelector("#fileWrap").addEventListener("click", toggleFileSidebarWrap);
     backdrop.addEventListener("click", () => setFileSidebarOpen(false));
     syncFileSidebarLayout();
@@ -7439,6 +7451,268 @@
     // 顶条左边那颗按钮（由 browserBridge.js 建）点它走这里
     window.pichatFileSidebar = { toggle: toggleFileSidebar };
   })();
+
+  // ==================== 文件搜索（Ctrl+Alt+F）====================
+  //
+  // 一块浮层：上面输入框，下面一列结果。两档：「文件名」（默认，边打边出）和「内容」
+  // （文件里的文字，带行号 + 那一行）。两档都由后端找（消息 findFiles → findResults）：
+  // 它拿会话目录的文件清单、优先用 ripgrep；浏览器页面和插件里的对话面板走同一条路。
+  //
+  // 点一条结果：浏览器页面里在左边那一列打开、停在那一行（跟点正文里的文件链接一样）；
+  // 插件里的对话面板里交给编辑器打开（见 openFileForUser）。
+  //
+  // 手机上没键盘：文件侧边栏头上那颗放大镜也能开它。
+  const fileSearch = {
+    built: false,
+    root: null, input: null, body: null, filesBtn: null, textBtn: null,
+    // 上次用的那一档留着（这次打开接着用）；开没收起不记进设备。
+    mode: "files",
+    open: false,
+    seq: 0,        // 每发一次就加一：只认最后一次的回话
+    want: 0,       // 现在等的是哪一次
+    timer: 0,      // 打字防抖
+    items: [],     // [{ path, line?, text? }]
+    sel: -1,
+  };
+
+  /** 浮层只搭一次：第一次按快捷键（或者点放大镜）时建出来，以后就只开关。 */
+  function buildFileSearch() {
+    if (fileSearch.built) { return; }
+    fileSearch.built = true;
+    const root = document.createElement("div");
+    root.id = "fileSearchOverlay";
+    root.className = "hidden";
+    root.innerHTML =
+      '<div id="fileSearchPanel" role="dialog" aria-label="文件搜索">' +
+        '<div id="fileSearchHead">' +
+          '<span id="fileSearchTitle">文件搜索</span>' +
+          '<div id="fileSearchModes">' +
+            '<button id="fsModeFiles" class="fs-mode on" type="button">文件名</button>' +
+            '<button id="fsModeText" class="fs-mode" type="button">内容</button>' +
+          '</div>' +
+          '<button id="fileSearchClose" type="button" title="关闭（Esc）" aria-label="关闭">' + ICONS["close-bold"] + '</button>' +
+        '</div>' +
+        '<div id="fileSearchInputWrap"><input id="fileSearchInput" type="text" placeholder="搜文件名…" autocomplete="off" spellcheck="false" /></div>' +
+        '<div id="fileSearchBody"></div>' +
+      '</div>';
+    document.body.appendChild(root);
+    fileSearch.root = root;
+    fileSearch.input = root.querySelector("#fileSearchInput");
+    fileSearch.body = root.querySelector("#fileSearchBody");
+    fileSearch.filesBtn = root.querySelector("#fsModeFiles");
+    fileSearch.textBtn = root.querySelector("#fsModeText");
+    root.querySelector("#fileSearchClose").addEventListener("click", () => closeFileSearch());
+    root.addEventListener("click", (e) => { if (e.target === root) { closeFileSearch(); } });
+    fileSearch.filesBtn.addEventListener("click", () => setFileSearchMode("files"));
+    fileSearch.textBtn.addEventListener("click", () => setFileSearchMode("text"));
+    fileSearch.input.addEventListener("input", scheduleFileSearch);
+    fileSearch.input.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        // 先就地把这条 Esc 吃掉：外面 document 上的监听会拿它去中止正在生成的那一轮
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        closeFileSearch();
+        return;
+      }
+      if (e.key === "ArrowDown") { e.preventDefault(); moveFileSearchSel(1); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); moveFileSearchSel(-1); return; }
+      if (e.key === "Enter") { e.preventDefault(); chooseFileSearchItem(fileSearch.sel); }
+    });
+    syncFileSearchMode();
+  }
+
+  function toggleFileSearch() {
+    if (fileSearch.open) { closeFileSearch(); } else { openFileSearch(); }
+  }
+
+  function openFileSearch() {
+    buildFileSearch();
+    fileSearch.open = true;
+    fileSearch.root.classList.remove("hidden");
+    fileSearch.input.value = "";
+    fileSearch.items = [];
+    fileSearch.sel = -1;
+    renderFileSearchNote("");
+    setTimeout(() => { if (fileSearch.open) { fileSearch.input.focus(); } }, 0);
+    runFileSearch();
+  }
+
+  function closeFileSearch() {
+    if (!fileSearch.open) { return; }
+    fileSearch.open = false;
+    clearTimeout(fileSearch.timer);
+    fileSearch.seq += 1;
+    fileSearch.want = fileSearch.seq;   // 路上那次回话作废
+    if (fileSearch.root) { fileSearch.root.classList.add("hidden"); }
+    if (fileSearch.input) { fileSearch.input.blur(); }
+  }
+
+  function setFileSearchMode(mode) {
+    if (fileSearch.mode === mode) { return; }
+    fileSearch.mode = mode;
+    syncFileSearchMode();
+    runFileSearch();
+  }
+
+  function syncFileSearchMode() {
+    if (!fileSearch.built) { return; }
+    const files = fileSearch.mode === "files";
+    fileSearch.filesBtn.classList.toggle("on", files);
+    fileSearch.textBtn.classList.toggle("on", !files);
+    fileSearch.filesBtn.setAttribute("aria-pressed", files ? "true" : "false");
+    fileSearch.textBtn.setAttribute("aria-pressed", files ? "false" : "true");
+    fileSearch.input.placeholder = files ? "搜文件名…" : "搜文件里的文字…";
+  }
+
+  function scheduleFileSearch() {
+    clearTimeout(fileSearch.timer);
+    // 内容那一档要起 rg 进程：多等一会儿，别每敲一个字母就起一次
+    fileSearch.timer = setTimeout(runFileSearch, fileSearch.mode === "text" ? 220 : 70);
+  }
+
+  function runFileSearch() {
+    if (!fileSearch.open) { return; }
+    clearTimeout(fileSearch.timer);
+    const mode = fileSearch.mode;
+    const query = fileSearch.input.value;
+    fileSearch.seq += 1;
+    fileSearch.want = fileSearch.seq;
+    if (mode === "text" && !query.trim()) {
+      fileSearch.items = [];
+      fileSearch.sel = -1;
+      renderFileSearchNote("输入要搜的文字。");
+      return;
+    }
+    // 旧结果先留着，新的回来再换：每敲一个字母就闪一下空白不好看
+    vscode.postMessage({ type: "findFiles", mode: mode, query: query, seq: fileSearch.seq });
+  }
+
+  /** 后端把这一次的结果送回来了（seq 对不上的——前面发的那几次——直接丢掉）。 */
+  function onFindResults(msg) {
+    if (!fileSearch.open || msg.seq !== fileSearch.want) { return; }
+    if (msg.error) {
+      fileSearch.items = [];
+      fileSearch.sel = -1;
+      renderFileSearchNote(String(msg.error));
+      return;
+    }
+    const query = typeof msg.query === "string" ? msg.query : "";
+    if (msg.mode === "text") {
+      fileSearch.items = (Array.isArray(msg.hits) ? msg.hits : []).map((hit) => ({
+        path: String(hit.path || ""), line: Number(hit.line) || 0, text: String(hit.text || ""),
+      }));
+    } else {
+      fileSearch.items = (Array.isArray(msg.files) ? msg.files : []).map((rel) => ({ path: String(rel) }));
+    }
+    fileSearch.sel = fileSearch.items.length > 0 ? 0 : -1;
+    if (fileSearch.items.length === 0) {
+      renderFileSearchNote(query.trim() ? "没有找到。" : "输入关键词找文件。");
+      return;
+    }
+    renderFileSearchItems(query, msg.truncated === true);
+  }
+
+  function renderFileSearchNote(text) {
+    if (!fileSearch.built) { return; }
+    fileSearch.body.innerHTML = "";
+    if (!text) { return; }
+    const note = document.createElement("div");
+    note.className = "fs-note";
+    note.textContent = text;
+    fileSearch.body.appendChild(note);
+  }
+
+  function renderFileSearchItems(query, truncated) {
+    fileSearch.body.innerHTML = "";
+    const frag = document.createDocumentFragment();
+    fileSearch.items.forEach((item, idx) => {
+      const row = document.createElement("div");
+      row.className = "fs-row" + (idx === fileSearch.sel ? " on" : "");
+      if (item.line) {
+        // 内容那一档：上面一行是「路径:行号」，下面一行是那一行文字（命中处标出来）
+        const head = document.createElement("div");
+        head.className = "fs-text-head";
+        head.appendChild(markFileSearchHit(item.path + ":" + item.line, query));
+        row.appendChild(head);
+        const text = document.createElement("div");
+        text.className = "fs-text-line";
+        text.appendChild(markFileSearchHit(item.text || "", query));
+        row.appendChild(text);
+      } else {
+        // 文件名那一档：目录淡一点，文件名粗一点
+        const line = document.createElement("div");
+        line.className = "fs-file-line";
+        const slash = item.path.lastIndexOf("/");
+        if (slash >= 0) {
+          const dir = document.createElement("span");
+          dir.className = "fs-dir";
+          dir.appendChild(markFileSearchHit(item.path.slice(0, slash + 1), query));
+          line.appendChild(dir);
+        }
+        const name = document.createElement("span");
+        name.className = "fs-name";
+        name.appendChild(markFileSearchHit(item.path.slice(slash + 1), query));
+        line.appendChild(name);
+        row.appendChild(line);
+      }
+      row.addEventListener("click", () => chooseFileSearchItem(idx));
+      frag.appendChild(row);
+    });
+    if (truncated) {
+      const more = document.createElement("div");
+      more.className = "fs-note";
+      more.textContent = "只列了一部分，再打几个字缩小范围。";
+      frag.appendChild(more);
+    }
+    fileSearch.body.appendChild(frag);
+    scrollFileSearchSel();
+  }
+
+  /** 把关键词命中的那几截包成 <mark>（大小写不敏感，不认正则）。 */
+  function markFileSearchHit(text, query) {
+    const frag = document.createDocumentFragment();
+    const whole = String(text || "");
+    const needle = String(query || "").trim().toLowerCase();
+    if (!needle) {
+      frag.appendChild(document.createTextNode(whole));
+      return frag;
+    }
+    const lower = whole.toLowerCase();
+    let at = 0;
+    while (at < whole.length) {
+      const found = lower.indexOf(needle, at);
+      if (found < 0) {
+        frag.appendChild(document.createTextNode(whole.slice(at)));
+        break;
+      }
+      if (found > at) { frag.appendChild(document.createTextNode(whole.slice(at, found))); }
+      const mark = document.createElement("mark");
+      mark.textContent = whole.slice(found, found + needle.length);
+      frag.appendChild(mark);
+      at = found + needle.length;
+    }
+    return frag;
+  }
+
+  function moveFileSearchSel(delta) {
+    if (fileSearch.items.length === 0) { return; }
+    fileSearch.sel = (fileSearch.sel + delta + fileSearch.items.length) % fileSearch.items.length;
+    const rows = fileSearch.body.querySelectorAll(".fs-row");
+    for (let i = 0; i < rows.length; i += 1) { rows[i].classList.toggle("on", i === fileSearch.sel); }
+    scrollFileSearchSel();
+  }
+
+  function scrollFileSearchSel() {
+    const row = fileSearch.body.querySelector(".fs-row.on");
+    if (row && row.scrollIntoView) { row.scrollIntoView({ block: "nearest" }); }
+  }
+
+  function chooseFileSearchItem(idx) {
+    const item = fileSearch.items[idx];
+    if (!item) { return; }
+    closeFileSearch();
+    openFileForUser(item.path, item.line || 0, 0);
+  }
 
   /** pi /resume 列表的相对时间：now / 5m / 3h / 2d / 3w / 2mo / 1y。 */
   function pickerRelTime(ms) {
@@ -9126,6 +9400,8 @@
       // 会话壳要先在（列表可能晚一步）：不在就先记着，等它出现在列表里再切
       if (id && sessions.has(id)) { pendingActivateId = null; activateSessionView(id); }
       else if (id) { pendingActivateId = id; }
+      // 搜索框开着：换成这个会话的目录重搜一次（上一个会话那份结果已经作废）
+      if (fileSearch.open) { runFileSearch(); }
       return;
     }
     if (type === "viewOptions") { applyViewOptions(msg); return; }
@@ -9207,6 +9483,7 @@
       return;
     }
     if (type === "openSettings") { openSettings(); return; }
+    if (type === "findResults") { onFindResults(msg); return; }
     if (type === "viewOptionItems") { viewOptionItems = Array.isArray(msg.items) ? msg.items : []; renderViewOpts(); return; }
     // 「编译并重启」那颗按钮的回话：后端马上要退了，成败就改那行说明（成不成它都会断，自己会连回来）
     if (type === "restartStatus") {
