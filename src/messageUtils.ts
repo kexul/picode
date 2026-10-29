@@ -404,7 +404,7 @@ export function resolveAnchorLine(
 
 // ==================== 两份文本比一遍（「改动」那一格用） ====================
 
-/** 逐行比较的上限：两边行数相乘超过它就退成「整段换掉」，免得一个大文件把页面卡住。 */
+/** 逐行比较的上限：两边行数相乘超过它就先找锚点切开再比（见 diffMiddle），免得一个大文件把页面卡住。 */
 const DIFF_MAX_CELLS = 4_000_000;
 /** 一段改动前后各带几行没变的行（跟平时看的那种 diff 一样）。 */
 const DIFF_CONTEXT = 3;
@@ -446,14 +446,27 @@ function diffLines(text: string): string[] {
     return body === "" ? [] : body.split("\n");
 }
 
-/** 两段行求差异（最长公共子序列；太大就整段换掉）。 */
-function diffMiddle(a: string[], b: string[]): DiffRow[] {
+/** 两段行求差异（最长公共子序列；太大就先找锚点切开再比，实在没得切才整段换掉）。 */
+function diffMiddle(a: string[], b: string[], depth = 0): DiffRow[] {
     const n = a.length;
     const m = b.length;
+    if (n === 0) { return b.map((text): DiffRow => ({ op: 1, text })); }
+    if (m === 0) { return a.map((text): DiffRow => ({ op: -1, text })); }
     if (n * m > DIFF_MAX_CELLS) {
+        // 中间的活太多（改了两处、中间隔了几千行没动，乘法就爆了）：找一行当锚点切开，两边各自再比。
+        // 不能直接把这一整段报成「全换了」：那样「改动」那一格的数会差出几千行（改 20 行报成四千行）。
+        const anchor = depth < 32 ? findDiffAnchor(a, b) : undefined;
+        if (!anchor) {
+            return [
+                ...a.map((text): DiffRow => ({ op: -1, text })),
+                ...b.map((text): DiffRow => ({ op: 1, text })),
+            ];
+        }
+        const [ai, bi] = anchor;
         return [
-            ...a.map((text): DiffRow => ({ op: -1, text })),
-            ...b.map((text): DiffRow => ({ op: 1, text })),
+            ...diffMiddle(a.slice(0, ai), b.slice(0, bi), depth + 1),
+            { op: 0, text: a[ai] },
+            ...diffMiddle(a.slice(ai + 1), b.slice(bi + 1), depth + 1),
         ];
     }
     const w = m + 1;
@@ -478,6 +491,39 @@ function diffMiddle(a: string[], b: string[]): DiffRow[] {
     return out;
 }
 
+/**
+ * 表格太大时用来切一段的锚点：一行“两边都只出现一次”的行，在 a、b 里各在第几行。
+ *
+ * 只认两边都只出现一次的行：这种行在 diff 里必然是一一对应的，从它那儿切不会切歪
+ * （空行、单独的 `}` 那种满篇都是的不用）。候选里取最靠 a 中间的那一个：切完两边都小一截，
+ * 递归也浅。一行都没有可当锚点的（整份重写）才返 undefined。
+ */
+function findDiffAnchor(a: string[], b: string[]): [number, number] | undefined {
+    const countA = new Map<string, number>();
+    for (const line of a) { countA.set(line, (countA.get(line) ?? 0) + 1); }
+    const countB = new Map<string, number>();
+    const indexB = new Map<string, number>();
+    for (let j = 0; j < b.length; j++) {
+        countB.set(b[j], (countB.get(b[j]) ?? 0) + 1);
+        indexB.set(b[j], j);
+    }
+    const mid = a.length / 2;
+    let lastJ = -1;
+    let best: [number, number] | undefined;
+    let bestDist = Infinity;
+    for (let i = 0; i < a.length; i++) {
+        const line = a[i];
+        if (countA.get(line) !== 1 || countB.get(line) !== 1) { continue; }
+        const j = indexB.get(line)!;
+        // 只收在 b 里也往后的锚点：跳着前后挪的那些留着也不好看
+        if (j <= lastJ) { continue; }
+        lastJ = j;
+        const dist = Math.abs(i - mid);
+        if (dist < bestDist) { bestDist = dist; best = [i, j]; }
+    }
+    return best;
+}
+
 /** 把逐行的差异切成一段段（每段前后带几行没变的行；挨得近的两段并成一段）。 */
 function diffHunks(rows: DiffRow[]): string {
     // 每行在两边各自的起始行号（1 起）
@@ -499,7 +545,7 @@ function diffHunks(rows: DiffRow[]): string {
         let last = i;
         for (let k = i; k < rows.length; k++) {
             if (rows[k].op !== 0) { last = k; continue; }
-            if (k - last > DIFF_CONTEXT) { break; }   // 中间隔得远：另起一段
+            if (k - last > DIFF_CONTEXT * 2) { break; }   // 中间隔得远：另起一段（隔得近就并成一段，不然两段的上下文会叠在一起、行号还往回跳）
         }
         const end = Math.min(rows.length, last + 1 + DIFF_CONTEXT);
         let aCount = 0;

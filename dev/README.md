@@ -236,6 +236,10 @@ node dev/lazyScripts.js
 # 文件改了就重扫）、子会话靠清单认（含不走那套文案的判官，老会话的文案兜底还在）：
 node dev/childSessions.js
 
+# 验「改动」那一格背后那个逐行比较（纯 Node）：改了两处、中间隔几千行没动时增删行数不能
+# 报成“几千行全换了”；两处挨得近时切出来的两段不能叠；按 diff 拼得回两份原文：
+node dev/diffCheck.js
+
 # 验「项目与会话」面板（顶条最右边那颗 <<<）：
 # 正在对话一段、工作区那块的展开 / 收起、组里的「加载更多」、行尾那颗加号新建会话、
 # 标题右边那颗加号（挑文件夹）、子会话不显示，一次过一遍：
@@ -319,6 +323,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `mermaidFileCheck.js` | 验文件侧边栏里那份 markdown 文档里的 mermaid（同一个播放器，换个地方；甘特图也画得出、写坏的留说明）：`node dev/mermaidFileCheck.js` |
 | `lazyScripts.js` | 验画图的 pele（700 多 KB）没排进首屏（浏览器页面按需加载、地址写在 meta 里带着指纹；面板仍然内联）：`node dev/lazyScripts.js` |
 | `childSessions.js` | 验历史列表那两件事（扫描结果按改动时间 / 大小缓存、子会话靠清单认而不是看第一条用户说了什么）：`node dev/childSessions.js` |
+| `diffCheck.js` | 验「改动」那一格背后的逐行比较（大文件改两处不报成整段换掉、挨得近的两段不叠、按 diff 拼得回原文）：`node dev/diffCheck.js` |
 | `childDot.js` | 验顶条那颗小点与它下面的数字（子会话在跑时父会话那颗点也呼吸、点下面写着还有几个在跑，零个时数字收起来；点与箭头落在两行中间）：`npm run web:shot -- --script dev/childDot.js` |
 | `tabClose.js` | 验顶条那排格上的 `×` 与排尾那颗 ▾：每格都露着 ×（跑着时点一下变成勾、不真关），闲着点一下直接关；▾ 只在有格子被藏起来时露面，点它掉出来的只有被藏起来的那几格、点一行切过去；点当前那一格不掉清单：`FAKEPI_THINK_MS=6000 npm run web:shot -- --fake-pi --script dev/tabClose.js` |
 | `tabSelectStyles.js` | 把顶条「当前这一格」的几种画法（描边 / 下划线 / 灰底 / 蓝底 …）摆成一竖排各照一张，挑样式时用（浅色 / 深色各跑一遭）：`npm run web:shot -- --fake-pi --script dev/tabSelectStyles.js`，加 `--theme dark` 跑深色那张 |
