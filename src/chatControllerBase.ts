@@ -1336,8 +1336,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
             tail: readBashLogTail(task.log, ChatControllerBase.BASH_DELIVERY_TAIL_BYTES),
         });
         rt.handleSend(text, undefined, { steer: true });
-        const how = task.status === "done" ? "跑完了" : task.status === "stopped" ? "被停掉了" : "没跑成";
-        this.postToSession(panelId, { type: "system", text: `后台命令 #${task.no} ${how}，已把结果交回本会话。` });
     }
 
     /** 交回会话时最多带多长一段输出（字节）：再长的让模型自己去 bash_tasks 取。 */
@@ -1637,7 +1635,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         // 交回一律按 followUp 排队：父会话在跑就不从半路插进去，跑完再作为新的一轮处理。
         parentRt.handleSend(text, undefined, { followUp: true });
         this.taba.markDelivered(child.id, result);
-        this.postToSession(parentRt.id, { type: "system", text: `已把子会话「${child.name}」的结果交回本会话。` });
         if (child.childPanelId && !opts.tabWillClose) {
             this.postToSession(child.childPanelId, {
                 type: "system",
@@ -1689,10 +1686,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
             this.taba.forgetChildPanel(panelId);
             if (parentRt && undelivered && !opts?.quiet) {
                 parentRt.handleSend(buildChildClosedNotice({ child }), undefined, { followUp: true });
-                this.postToSession(parentRt.id, {
-                    type: "system",
-                    text: `子会话「${child.name}」被关掉了，已把这件事交回本会话。`,
-                });
             }
         }
         if (detached.length > 0) { this.broadcastSessionList(true); }
