@@ -24,7 +24,7 @@ import { ChatControllerBase, type ViewOptionItem } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
 import { isPackaged } from "./appAssets";
-import { hostOfUrl, isOwnPage, pushRemoteNotice, withSession, type RemoteNotice } from "./remoteNotice";
+import { hostOfUrl, isOwnPage, pushRemoteNotice, type RemoteNotice } from "./remoteNotice";
 import { getAskAssets, getBashAssets, getGoalAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
 import {
@@ -97,14 +97,8 @@ export interface ChatHostOptions {
      */
     restartBackend?: () => { ok: boolean; reason?: string };
     /**
-     * 点了提醒面板上那一条、要开它那边的页面时调它（后端这侧就是用自己的地址开浏览器）。
-     * 不给就当没有这一项。
-     * @param page 要打开哪个地址：不给就是本机这个；别的机器推来的那条给的是它那边的地址
-     */
-    openPage?: (page?: string) => void;
-    /**
      * 这台机器网页服务现在的地址（`http://10.0.0.2:51883/` 这样）。
-     * 推给别的后端时要用它拼“点了打开哪个页面”。不知道就不推（推过去点了也没处去）。
+     * 推给别的后端时要用它认出“这条别推给自己”。不知道就不推。
      */
     selfPageUrl?: () => string | undefined;
 }
@@ -1504,14 +1498,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         this.trayNote(sessionId ?? "", rt ? this.sessionDisplayName(rt) : "", question, "ask");
     }
 
-    /** 要开别的机器那边的页面时用系统默认浏览器开（默认开本机的）。 */
-    protected override openFrontendPage(page?: string): void {
-        this.options.openPage?.(page);
-    }
-
     /**
      * 把这条“有事”推给别的后端（设置里「消息推送」填了别处的地址才有这回事）。
-     * 推的是一条最小的通知：哪台、哪个会话、叫什么、点了打开哪个地址。
+     * 推的是一条最小的通知：哪台、哪个会话、叫什么、说了什么。
      * 推不过去就算了（对方没起、网断了都一样：不重试、不攒着）。
      * @returns 推给了别处没有（推了这台就不自己弹：一个人只盯得了一台机器）
      */
@@ -1529,8 +1518,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             // 摘要也推过去：那台弹面板时才不会只剩一个名字
             text: summary,
             kind,
-            // 地址里带上会话：那边点开就切到这个会话（见 media/chat.js 里读 ?session= 的那段）
-            page: withSession(base, sessionId),
         };
         for (const target of targets) {
             void pushRemoteNotice(target, notice);

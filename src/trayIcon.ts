@@ -3,7 +3,7 @@
  *
  * 后端起一个常驻的小程序（bin/tray.exe，源码与来历见 bin/tray.cs），由它把这两样端着：
  * 图标只是“它在跑”的招牌（那根竖线一直红着，点它什么也不弹）；有事就在右下角弹一张卡片，
- * 写着哪个会话、说了什么，点一下切过去。
+ * 写着哪个会话、说了什么 —— 只是给人看一眼，点了也没反应。
  *
  * 为什么不在页面上发：以前靠浏览器通知，浏览器和 Windows 都会因为“发太多”把横幅收掉，
  * 而且只认 https 或本机地址（手机用局域网地址打开就发不出来），插件里的对话面板更是发不了。
@@ -21,18 +21,10 @@ export interface TrayNote {
     /** 会话标识；别的机器推来的那条是 `remote:<来源>:<会话标识>`。 */
     id: string;
     name: string;
-    /** 别的机器推来的那条才有：点了要打开它那边的页面（本机的会话没有这个）。 */
-    page?: string;
     /** 面板上显示的摘要（一两行，后端已经截好）；没有就只显示名字。 */
     summary?: string;
     /** 面板上这一条算哪种事：跑完一轮 / 等你答一句。 */
     kind?: "done" | "ask";
-}
-
-/** 人在面板上点了一条（都直接来自那颗小程序，见 bin/tray.cs 里的协议）。 */
-export interface TrayHooks {
-    /** 点了一条：本机的会话就切过去，`page` 有值就是打开那台机器的页面。 */
-    onPick?(id: string, page?: string): void;
 }
 
 /** 托盘小程序（构建时编好，见 bin/tray.cs 与 scripts/compile.mjs）；打成单个 exe 时它内嵌在 exe 里。 */
@@ -46,12 +38,8 @@ export class TrayIcon {
     }
 
     private child: ChildProcess | undefined;
-    /** 小程序写回来的半行（管道不保证一次一行到位）。 */
-    private buffer = "";
     /** 起不来了（被杀软拦下之类）：别再反复试。 */
     private broken = false;
-
-    constructor(private readonly hooks: TrayHooks = {}) {}
 
     /** 把图标放上去（后端起来时调一次；叫人弹之前也会自己起）。 */
     public show(): void {
@@ -67,7 +55,6 @@ export class TrayIcon {
             flat(item.name || "会话"),
             flat(item.summary ?? ""),
             item.kind === "ask" ? "ask" : "done",
-            flat(item.page ?? ""),
         ];
         this.write(fields.join("\t"));
     }
@@ -93,15 +80,12 @@ export class TrayIcon {
         if (this.broken || !TrayIcon.available()) { return false; }
         let child: ChildProcess;
         try {
-            child = spawn(TRAY_EXE(), [], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+            child = spawn(TRAY_EXE(), [], { stdio: ["pipe", "ignore", "ignore"], windowsHide: true });
         } catch {
             this.broken = true;
             return false;
         }
         this.child = child;
-        this.buffer = "";
-        child.stdout?.setEncoding("utf8");
-        child.stdout?.on("data", (chunk: string) => { this.onData(chunk); });
         // 小程序自己没了（被结束、出错）：下一次要弹提醒时再起一个
         child.once("exit", () => {
             if (this.child === child) { this.child = undefined; }
@@ -112,24 +96,6 @@ export class TrayIcon {
 
     private write(line: string): void {
         try { this.child?.stdin?.write(line + "\n"); } catch { /* 小程序没了就算了 */ }
-    }
-
-    /** 小程序写回来的行：`pick\t会话标识\t页面`。 */
-    private onData(chunk: string): void {
-        this.buffer += chunk;
-        let at = this.buffer.indexOf("\n");
-        while (at >= 0) {
-            const line = this.buffer.slice(0, at).replace(/\r$/, "");
-            this.buffer = this.buffer.slice(at + 1);
-            this.onLine(line);
-            at = this.buffer.indexOf("\n");
-        }
-    }
-
-    private onLine(line: string): void {
-        const parts = line.split("\t");
-        if (parts[0] !== "pick" || !parts[1]) { return; }
-        this.hooks.onPick?.(parts[1], parts[2] || undefined);
     }
 }
 

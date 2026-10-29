@@ -608,9 +608,7 @@
   // 跟以前一样；收到后就按真值。
   var caseSensitivePaths = false;
   /**
-   * 地址里带了 ?session=<标识> 就切到那个会话。
-   * 哪儿来的这种地址：别的机器上的后端“有事”推过来，这边点右下角提醒面板上那一条，
-   * 浏览器打开的就是它那边的页面 + 那一个会话（见 src/remoteNotice.ts）。
+   * 地址里带了 ?session=<标识> 就切到那个会话（自己把带会话的地址存下来 / 发给别人时用）。
    * 会话壳可能还没到：先记着，等会话列表来了再切（见 sessionList 那段）。
    */
   function activateSessionFromUrl() {

@@ -1867,7 +1867,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     // ========================================================================
-    //  通知区域里那颗图标 + 右下角那块提醒面板：有事弹一条，点它切过去（见 trayIcon.ts）
+    //  通知区域里那颗图标 + 右下角那块提醒面板：有事弹一条看一眼（见 trayIcon.ts）
     // ========================================================================
 
     /**
@@ -1915,8 +1915,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /**
-     * 别的机器上的后端推来一条“有事”：在本机右下角弹一条。
-     * 点它是打开它那边的页面并切到那个会话，不是切本机的会话（见 trayPick）。
+     * 别的机器上的后端推来一条“有事”：在本机右下角也弹一条（只是看一眼，点了没反应）。
      */
     protected trayNoteRemote(notice: RemoteNotice): void {
         if (!this.notifyTurnEndEnabled()) { return; }
@@ -1924,7 +1923,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
             // 同一个来源的同一个会话反复推过来只换不堆（面板上 id 一样就把旧的顶掉）
             id: "remote:" + notice.label + ":" + notice.sessionId,
             name: notice.label + " · " + notice.name,
-            page: notice.page,
             // 推过来的那条没带摘要（旧版本）就只显示名字
             summary: plainPreview(notice.text ?? ""),
             kind: notice.kind === "ask" ? "ask" : "done",
@@ -1944,34 +1942,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
     private ensureTray(): TrayIcon | undefined {
         if (!TrayIcon.available()) { return undefined; }
         if (!this.tray) {
-            this.tray = new TrayIcon({ onPick: (id, page) => this.trayPick(id, page) });
+            this.tray = new TrayIcon();
             this.tray.show();
         }
         return this.tray;
     }
-
-    /** 面板上点了一条：别的机器推来的那条开它那边的页面；本机的把界面切到那个会话。 */
-    private trayPick(id: string, page?: string): void {
-        if (page) { this.openFrontendPage(page); return; }
-        if (!this.panels.has(id)) { return; }   // 会话已经关掉了：没什么可切的
-        const target = this.trayTargetClient();
-        if (target === undefined) { this.openFrontendPage(); return; }
-        this.setActiveSession(id, target);
-    }
-
-    /** 该把界面切到哪块屏：最近动过的那块；一块屏都没连过就是空。 */
-    private trayTargetClient(): string | undefined {
-        if (this.currentPageId && this.clientSessions.has(this.currentPageId)) { return this.currentPageId; }
-        for (const clientId of this.clientSessions.keys()) { return clientId; }
-        return undefined;
-    }
-
-    /**
-     * 点了提醒面板上那一条、要开它那边的页面时用（page 就是它那边的地址）：
-     * 把界面打开 / 拉到前面。不给 page 就是本机的页面。
-     * 默认什么都做不了：能不能开、怎么开是宿主的活（见 ChatHost）。
-     */
-    protected openFrontendPage(_page?: string): void { /* 子类接 */ }
 
     /**
      * 把这条“有事”推给别的后端（设置里「消息推送」填了别处的地址才有这回事）。

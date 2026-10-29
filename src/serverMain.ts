@@ -284,14 +284,11 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
     // 设置浮层里那颗「编译并重启」：按钮点下去要的是「怎么起的、起在哪儿」，所以由这一层接；
     // 收摊（停网页服务、杀掉 pi 进程）也在这一层，见下面给 restartBackend 赋值那块。
     let restartBackend = (): { ok: boolean; reason?: string } => ({ ok: false, reason: "后端还没起来，不能重启。" });
-    // 要开别的机器那边页面时得有个地址，可地址要等服务起来才知道：先留个口子，起来后插进去
+    // 推给别的后端时要认出“这条别推给自己”，可地址要等服务起来才知道：先留个口子，起来后插进去
     let pageUrl: string | undefined;
     const host = new ChatHost({
         cwd, log,
         restartBackend: () => restartBackend(),
-        // 点了提醒面板上别处推来的那一条：用浏览器打开它那边的页面；不给就是本机这个地址
-        openPage: (page) => { const target = page || pageUrl; if (target) { openInDefaultBrowser(target); } },
-        // 推给别的后端时要拼“点了打开哪个页面”，用自己的地址
         selfPageUrl: () => pageUrl,
     });
     const server = new PiChatWebServer(MEDIA_DIR, host, {

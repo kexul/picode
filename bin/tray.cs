@@ -2,7 +2,7 @@
  * tray —— 通知区域里那颗图标（Windows）和右下角那块提醒面板。
  *
  * 干什么：后端有事（某个会话跑完一轮、模型在等你答一道选择题）时，在屏幕右下角弹一张小卡片，
- * 写着哪个会话、说了什么；点那张卡片，界面就切到那个会话。
+ * 写着哪个会话、说了什么。它只是给人看一眼，鼠标点它什么也不发生。
  * 通知区域里那颗图标只是“它在跑”的招牌：标记右下角那根竖线一直是红的，不闪、也不表示有没有事
  * （消息看没看过，后端判断不了）；点它什么也不弹。
  *
@@ -15,14 +15,11 @@
  * 编法见 scripts/compile.mjs（跟 bin/shot.cs 一样用系统自带的 csc.exe，
  * 只是这里用 -target:winexe，免得弹一个黑框）。
  *
- * 协议：一行一条，字段之间用制表符分开，两边都是 UTF-8。
+ * 协议：一行一条，字段之间用制表符分开，UTF-8。
  *   后端 → 这里：
- *     pop  \t 标识 \t 名字 \t 摘要 \t 类型 \t 页面   右下角弹一条
- *                                               （类型：done 跑完一轮 / ask 等你答；
- *                                                页面：别的机器推来的那一条才有）
+ *     pop \t 标识 \t 名字 \t 摘要 \t 类型   右下角弹一条（类型：done 跑完一轮 / ask 等你答）
  *     stdin 关了就是收摊（后端退出时不一定来得及说一声）
- *   这里 → 后端：
- *     pick \t 标识 \t 页面   面板上点了那一条
+ *   这里什么都不往回写：面板只是给人看的，点了也没反应。
  */
 using System;
 using System.Collections.Concurrent;
@@ -154,8 +151,6 @@ class NoteItem
     public string Id = "";
     public string Name = "会话";
     public string Text = "";
-    /** 别的机器推来的那一条才有：点了要打开它那边的页面。 */
-    public string Page = "";
     public bool Ask;
     public DateTime ShownAt = DateTime.UtcNow;
     /** 卡片右下角写的时间：这条事发生的时刻（本地时间）。 */
@@ -165,7 +160,7 @@ class NoteItem
 /**
  * 屏幕右下角那块提醒面板：有事就弹一条，最多同时三条，再来就挤掉最老的那条。
  *
- * 停几秒自己淡出；鼠标移上去就停住；点一条就切到那个会话并收起。
+ * 停几秒自己淡出；鼠标移上去就停住（好看完）；点它没任何反应。
  * 不抢焦点、不占任务栏：人正在别处打字时，它只该被看见，不该打断。
  */
 class NoteWindow : Form
@@ -183,7 +178,6 @@ class NoteWindow : Form
     private static readonly Color AskColor = Color.FromArgb(0xF2, 0xA0, 0x3D);
 
     private readonly List<NoteItem> notes = new List<NoteItem>();
-    private readonly Action<string, string> onPick;
     private readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer();
     private readonly Font titleFont;
     private readonly Font bodyFont;
@@ -202,7 +196,6 @@ class NoteWindow : Form
     private int targetLeft;
     /** 还要往左滑多少像素（滑入动画）。 */
     private int slide;
-    private int hoverIndex = -1;
     private bool fading;
     private bool placed;
     /** 整块的透明度（0~1）：滑入淡入、到点淡出都改它。 */
@@ -210,9 +203,8 @@ class NoteWindow : Form
     /** 画好之后再贴上屏幕的那张位图（尺寸不变就复用）。 */
     private Bitmap canvas;
 
-    public NoteWindow(Action<string, string> onPick)
+    public NoteWindow()
     {
-        this.onPick = onPick;
         light = Theme.IsLight();
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
@@ -255,7 +247,7 @@ class NoteWindow : Form
     }
 
     /** 后端叫弹一条：同一个会话只留最新那条（反复跑完不叠成一摞）。 */
-    public void Add(string id, string name, string text, bool ask, string page)
+    public void Add(string id, string name, string text, bool ask)
     {
         for (int i = notes.Count - 1; i >= 0; i--)
         {
@@ -265,7 +257,6 @@ class NoteWindow : Form
         item.Id = id;
         item.Name = string.IsNullOrEmpty(name) ? "会话" : name;
         item.Text = Shorten(text);
-        item.Page = page ?? "";
         item.Ask = ask;
         notes.Add(item);
         while (notes.Count > MAX_ITEMS) { notes.RemoveAt(0); }
@@ -326,8 +317,6 @@ class NoteWindow : Form
         }
         Point at = PointToClient(Cursor.Position);
         bool inside = ClientRectangle.Contains(at);
-        int hover = inside ? IndexAt(at.Y) : -1;
-        if (hover != hoverIndex) { hoverIndex = hover; Render(); }
         if (inside)
         {
             // 鼠标在上面：把每条的开始时间往后顺延一拍，计时就停住了
@@ -363,30 +352,6 @@ class NoteWindow : Form
         Render();
     }
 
-    /** 这个纵坐标落在第几条上（不在任何一条上就给 -1）。 */
-    private int IndexAt(int y)
-    {
-        y -= shadow;
-        int index = (y - pad) / (itemHeight + gap);
-        if (index < 0 || index >= notes.Count) { return -1; }
-        if ((y - pad) - index * (itemHeight + gap) > itemHeight) { return -1; }
-        return index;
-    }
-
-    /** 点了一条：交回后端（切到那个会话 / 打开它那边的页面），这条从面板上收掉。 */
-    protected override void OnMouseClick(MouseEventArgs e)
-    {
-        base.OnMouseClick(e);
-        if (e.Button != MouseButtons.Left || fading) { return; }
-        int index = IndexAt(e.Y);
-        if (index < 0) { return; }
-        NoteItem picked = notes[index];
-        notes.RemoveAt(index);
-        if (onPick != null) { onPick(picked.Id, picked.Page); }
-        if (notes.Count == 0) { fading = true; }
-        else { Relayout(); }
-    }
-
     /** 窗口靠画出来的透明像素收圆角，系统不需要再给窗口套一个方框背景。 */
     protected override void OnPaintBackground(PaintEventArgs e) { /* 内容全靠 Render 贴上去 */ }
 
@@ -420,7 +385,6 @@ class NoteWindow : Form
 
         Color shellBack = light ? Color.FromArgb(0xF7, 0xF7, 0xF7) : Color.FromArgb(0x2A, 0x2A, 0x2A);
         Color cardBack = light ? Color.FromArgb(0xFF, 0xFF, 0xFF) : Color.FromArgb(0x35, 0x35, 0x35);
-        Color cardBackHover = light ? Color.FromArgb(0xF1, 0xF1, 0xF1) : Color.FromArgb(0x40, 0x40, 0x40);
         Color border = light ? Color.FromArgb(0xE4, 0xE4, 0xE4) : Color.FromArgb(0x3E, 0x3E, 0x3E);
         Color nameColor = light ? Color.FromArgb(0x1A, 0x1A, 0x1A) : Color.FromArgb(0xF2, 0xF2, 0xF2);
         Color bodyColor = light ? Color.FromArgb(0x60, 0x60, 0x60) : Color.FromArgb(0xAD, 0xAD, 0xAD);
@@ -448,7 +412,7 @@ class NoteWindow : Form
             Rectangle card = new Rectangle(shadow + pad, shadow + pad + i * (itemHeight + gap), width - pad * 2, itemHeight);
             using (GraphicsPath path = Rounded(card, (int)Math.Round(6 * scale)))
             {
-                using (SolidBrush b = new SolidBrush(i == hoverIndex ? cardBackHover : cardBack)) { g.FillPath(b, path); }
+                using (SolidBrush b = new SolidBrush(cardBack)) { g.FillPath(b, path); }
                 using (Pen p = new Pen(border)) { g.DrawPath(p, path); }
             }
 
@@ -535,7 +499,7 @@ class NoteWindow : Form
     }
 }
 
-/** 一颗托盘图标 + 右下角那块面板 + 跟后端说话的那两头。 */
+/** 一颗托盘图标 + 右下角那块面板 + 从后端收命令的那一头。 */
 class TrayContext : ApplicationContext
 {
     /** 从 stdin 收命令的节奏：这么多个毫秒看一次有没有新的一行。 */
@@ -548,7 +512,6 @@ class TrayContext : ApplicationContext
     /** 右下角那块提醒面板：第一次有事才建，关掉后置空。 */
     private NoteWindow noteWindow;
     private readonly ConcurrentQueue<string> inbox = new ConcurrentQueue<string>();
-    private readonly StreamWriter toBackend;
     private bool closing;
 
     public TrayContext()
@@ -567,9 +530,7 @@ class TrayContext : ApplicationContext
         pump.Tick += (s, e) => Drain();
         pump.Start();
 
-        // 后端那边是管道，用明确的 UTF-8 读写，不指望控制台的代码页
-        toBackend = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false));
-        toBackend.AutoFlush = true;
+        // 后端那边是管道（这里只读不听写），用明确的 UTF-8，不指望控制台的代码页
         Thread reader = new Thread(ReadStdin) { IsBackground = true };
         reader.Start();
     }
@@ -654,7 +615,7 @@ class TrayContext : ApplicationContext
 
     /**
      * 后端叫弹一条：右下角那块面板里加一条。
-     * 面板自己管叠放（最多三条）、超时收走、点了切到那个会话。
+     * 面板自己管叠放（最多三条）、超时收走（鼠标在上面时暂停）。
      */
     private void PopNote(string[] parts)
     {
@@ -663,23 +624,12 @@ class TrayContext : ApplicationContext
         string name = parts.Length > 2 ? parts[2] : "";
         string text = parts.Length > 3 ? parts[3] : "";
         bool ask = parts.Length > 4 && parts[4] == "ask";
-        string page = parts.Length > 5 ? parts[5] : "";
         if (noteWindow == null)
         {
-            noteWindow = new NoteWindow(delegate (string picked, string pickedPage)
-            {
-                Emit("pick\t" + picked + "\t" + pickedPage);
-            });
+            noteWindow = new NoteWindow();
             noteWindow.FormClosed += delegate { noteWindow = null; };
         }
-        noteWindow.Add(id, name, text, ask, page);
-    }
-
-    /** 往后端写一行。后端没了也不当回事：下一拍读 stdin 会读到结尾，跟着退出。 */
-    private void Emit(string line)
-    {
-        try { toBackend.WriteLine(line); }
-        catch { }
+        noteWindow.Add(id, name, text, ask);
     }
 
     private void Quit()

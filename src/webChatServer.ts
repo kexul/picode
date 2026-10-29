@@ -1431,7 +1431,7 @@ export class PiChatWebServer {
         // 推送方没写名字时用它的地址（Host 头）当“哪台机器”
         const notice = readRemoteNotice(raw, splitHostHeader(req.headers.host)?.name ?? "");
         if (!notice) {
-            this.sendText(req, res, 400, "这条通知缺东西（要 sessionId 与 page，page 得是 http / https 地址）。");
+            this.sendText(req, res, 400, "这条通知缺东西（要 sessionId）。");
             return;
         }
         this.host.acceptRemoteNotice(notice);
