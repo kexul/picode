@@ -42,6 +42,8 @@ export class TrayIcon {
     private broken = false;
     /** 人在托盘菜单里点了「退出」时调它（后端该跟着收摊）。 */
     public onExitRequest: (() => void) | undefined;
+    /** 上一次告诉托盘的地址（一样的就不再发）。 */
+    private lastUrl = "";
 
     /** 把图标放上去（后端起来时调一次；叫人弹之前也会自己起）。 */
     public show(): void {
@@ -59,6 +61,18 @@ export class TrayIcon {
             item.kind === "ask" ? "ask" : "done",
         ];
         this.write(fields.join("\t"));
+    }
+
+    /**
+     * 菜单里那颗「打开」要用的地址（网页服务在哪儿）。
+     * 后端刚起来时还不知道，服务起来后再告诉它一次；不给（undefined）就是没地址，那颗点不动。
+     */
+    public setUrl(url: string | undefined): void {
+        const text = (url ?? "").trim();
+        if (this.lastUrl === text) { return; }
+        this.lastUrl = text;
+        if (text.length === 0 || !this.start()) { return; }
+        this.write(["url", flat(text)].join("\t"));
     }
 
     /**
@@ -89,6 +103,8 @@ export class TrayIcon {
             return false;
         }
         this.child = child;
+        // 小程序是刚起的：上一次发过的地址对它来说还是新的，重发一遍
+        if (this.lastUrl.length > 0) { this.write(["url", flat(this.lastUrl)].join("\t")); }
         child.stdout?.setEncoding("utf8");
         let rest = "";
         child.stdout?.on("data", (chunk: string) => {

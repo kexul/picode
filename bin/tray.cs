@@ -4,7 +4,7 @@
  * 干什么：后端有事（某个会话跑完一轮、模型在等你答一道选择题）时，在屏幕右下角弹一张小卡片，
  * 写着哪个会话、说了什么。它只是给人看一眼，鼠标点它什么也不发生。
  * 通知区域里那颗图标是“它在跑”的招牌：标记右下角那根竖线一直是红的，不闪、也不表示有没有事
- * （消息看没看过，后端判断不了）；右键弹一个小菜单，里头只有一项「退出」。
+ * （消息看没看过，后端判断不了）；右键弹一个小菜单：「打开」（用浏览器打开后端给的地址）和「退出」。
  *
  * 为什么单独一个常驻小程序：托盘图标得住在一个有窗口消息循环的进程里（.NET 的 NotifyIcon），
  * 后端（Node）那边没有这个东西，只能起这么一个把图标端着。后端退出 → 这个进程的 stdin
@@ -18,12 +18,14 @@
  * 协议：一行一条，字段之间用制表符分开，UTF-8。
  *   后端 → 这里：
  *     pop \t 标识 \t 名字 \t 摘要 \t 类型   右下角弹一条（类型：done 跑完一轮 / ask 等你答）
+ *     url \t 地址                           网页服务现在的地址（菜单里「打开」用它；可以再来一遍换掉）
  *     stdin 关了就是收摊（后端退出时不一定来得及说一声）
  *   这里 → 后端：
  *     exit                                  人在菜单里点了“退出”：后端收到就把自己也关掉
  */
 using System;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Collections.Generic;
@@ -589,6 +591,10 @@ class TrayContext : ApplicationContext
     private bool closing;
     /** 菜单里已经点过「退出」了：别再发一遍。 */
     private bool askedExit;
+    /** 网页服务的地址（后端告诉的）：菜单里「打开」用它打开浏览器。不知道就是空。 */
+    private string pageUrl = "";
+    /** 菜单里那颗「打开」：知道地址以后才点得动。 */
+    private ToolStripMenuItem openItem;
     /** 往后端写字的管子（只有点了「退出」才会用到）。 */
     private StreamWriter toBackend;
 
@@ -602,8 +608,13 @@ class TrayContext : ApplicationContext
 
         icon.Icon = mark;
         icon.Text = "Pi Chat";
-        // 右键弹菜单（左键还是什么都不做）：里头就一项「退出」
+        // 右键弹菜单（左键还是什么都不做）：两项 —— 打开（浏览器打开地址）、退出
         ContextMenuStrip menu = new ContextMenuStrip();
+        openItem = new ToolStripMenuItem("打开");
+        openItem.Enabled = false;      // 地址还没来：等后端说（见 Handle 里的 url）
+        openItem.Click += delegate { OpenPage(); };
+        menu.Items.Add(openItem);
+        menu.Items.Add(new ToolStripSeparator());
         ToolStripMenuItem quit = new ToolStripMenuItem("退出");
         quit.Click += delegate { AskExit(); };
         menu.Items.Add(quit);
@@ -694,6 +705,13 @@ class TrayContext : ApplicationContext
             case "quit":
                 Quit();
                 return;
+            case "url":
+            {
+                // 后端说网页服务在哪个地址：记下（菜单里「打开」用它），不弹任何东西
+                pageUrl = parts.Length > 1 ? parts[1].Trim() : "";
+                if (openItem != null) { openItem.Enabled = pageUrl.Length > 0; }
+                return;
+            }
         }
     }
 
@@ -714,6 +732,17 @@ class TrayContext : ApplicationContext
             noteWindow.FormClosed += delegate { noteWindow = null; };
         }
         noteWindow.Add(id, name, text, ask);
+    }
+
+    /**
+     * 菜单里点了「打开」：用系统默认浏览器打开后端给的那个地址。
+     * 打不开（没装浏览器、地址没了）就算了：不是非做不可的事，不弹错误框。
+     */
+    private void OpenPage()
+    {
+        if (pageUrl.Length == 0) { return; }
+        try { Process.Start(new ProcessStartInfo(pageUrl) { UseShellExecute = true }); }
+        catch { /* 打不开就算了 */ }
     }
 
     /**

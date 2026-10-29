@@ -193,6 +193,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         this.startTray();
     }
 
+    /** 网页服务的地址（托盘菜单里的「打开」用它打开浏览器）：后端自己知道，插件那边不知道。 */
+    protected override trayPageUrl(): string | undefined {
+        return this.options.selfPageUrl?.();
+    }
+
     /**
      * 人在托盘菜单里点了「退出」：把整个后端关掉（见 ChatHostOptions.quitBackend）。
      */
@@ -966,8 +971,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const items: ViewOptionItem[] = [
             {
                 action: "notifyTurnEnd",
-                label: "跑完弹提醒",
-                desc: "在通知区域那颗图标旁边弹一张小卡片；关掉连那颗图标也不放。",
+                label: "弹窗通知",
                 check: this.getNotifyTurnEnd(),
             },
             {

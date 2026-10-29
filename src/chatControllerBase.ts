@@ -92,7 +92,8 @@ export interface ChatReferenceItem {
  */
 export interface ViewOptionItem {
     label: string;
-    desc: string;
+    /** 名字底下那行灰字说明；不写就没有。 */
+    desc?: string;
     check: boolean | null;
     action: string;
     value?: string;
@@ -1946,8 +1947,20 @@ export abstract class ChatControllerBase implements RuntimeHost {
             this.tray = new TrayIcon();
             this.tray.onExitRequest = () => this.trayExitRequested();
             this.tray.show();
+            this.tray.setUrl(this.trayPageUrl());
         }
         return this.tray;
+    }
+
+    /**
+     * 网页服务的地址（托盘菜单里那颗「打开」用的）：知道就交出去。
+     * 默认不知道（插件那边那颗图标不开浏览器），后端会盖掉它。
+     */
+    protected trayPageUrl(): string | undefined { return undefined; }
+
+    /** 网页服务的地址变了（服务起来 / 换了端口）：告诉托盘，那颗「打开」跟着换。 */
+    public setTrayPageUrl(url: string | undefined): void {
+        try { this.tray?.setUrl(url); } catch { /* 托盘不在就算了 */ }
     }
 
     /**

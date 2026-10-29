@@ -321,6 +321,8 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
         throw new Error("网页服务没起来（端口 / 监听地址可能不对）");
     }
     pageUrl = url;
+    // 托盘菜单里的「打开」：地址有了才能点（服务起来前那颗是灰的）
+    host.setTrayPageUrl(url);
 
     // 地址文件：单实例判断与"插件找后端"（第二步）都靠它。
     const parsed = new URL(url);
