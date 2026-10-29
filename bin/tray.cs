@@ -174,8 +174,12 @@ class NoteWindow : Form
     /** 面板外面留多宽一圈给阴影（逻辑像素）。 */
     private const int SHADOW_PX = 6;
 
-    private static readonly Color Accent = Color.FromArgb(0xE5, 0x39, 0x35);
     private static readonly Color AskColor = Color.FromArgb(0xF2, 0xA0, 0x3D);
+    /** 「等你答」那颗圈和问号：浅色面板上用深一点的黄，深色的面板上用亮一点的黄。 */
+    private static readonly Color AskLight = Color.FromArgb(0xD1, 0x86, 0x16);
+    /** 行尾那颗「跑完了」的圈和勾：浅色面板上用深一点的绿，深色面板上用亮一点的绿。 */
+    private static readonly Color DoneLight = Color.FromArgb(0x1A, 0x7F, 0x37);
+    private static readonly Color DoneDark = Color.FromArgb(0x3F, 0xB9, 0x50);
 
     private readonly List<NoteItem> notes = new List<NoteItem>();
     private readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer();
@@ -416,25 +420,23 @@ class NoteWindow : Form
                 using (Pen p = new Pen(border)) { g.DrawPath(p, path); }
             }
 
-            // 左边那道竖条：跑完了一轮是红，等你答是橙
-            Color mark = item.Ask ? AskColor : Accent;
-
             int left = card.Left + (int)Math.Round(14 * scale);
             int right = card.Right - (int)Math.Round(12 * scale);
-            string tag = item.Ask ? "等你答" : "跑完了";
-            SizeF tagSize = g.MeasureString(tag, tagFont);
+            // 行尾那颗标记：跑完了一轮是绿圈里的勾，等你答是黄圈里的问号
+            int tagSide = (int)Math.Round(15 * scale);
             RectangleF titleRect = new RectangleF(left, card.Top + (int)Math.Round(8 * scale),
-                right - left - tagSize.Width - (int)Math.Round(8 * scale), (int)Math.Round(20 * scale));
-            RectangleF tagRect = new RectangleF(right - tagSize.Width, card.Top + (int)Math.Round(11 * scale),
-                tagSize.Width + 2, tagSize.Height);
+                right - left - tagSide - (int)Math.Round(8 * scale), (int)Math.Round(20 * scale));
+            RectangleF tagRect = new RectangleF(right - tagSide, card.Top + (int)Math.Round(10 * scale),
+                tagSide, tagSide);
             using (StringFormat oneLine = new StringFormat())
             {
                 oneLine.Trimming = StringTrimming.EllipsisCharacter;
                 oneLine.FormatFlags = StringFormatFlags.NoWrap;
                 oneLine.LineAlignment = StringAlignment.Near;
                 using (SolidBrush b = new SolidBrush(nameColor)) { g.DrawString(item.Name, titleFont, b, titleRect, oneLine); }
-                using (SolidBrush b = new SolidBrush(mark)) { g.DrawString(tag, tagFont, b, tagRect, oneLine); }
             }
+            if (item.Ask) { DrawAskMark(g, tagRect, light ? AskLight : AskColor); }
+            else { DrawDoneMark(g, tagRect, light ? DoneLight : DoneDark); }
 
             if (item.Text.Length > 0)
             {
@@ -473,6 +475,63 @@ class NoteWindow : Form
         bodyFont.Dispose();
         tagFont.Dispose();
         base.OnFormClosed(e);
+    }
+
+    /** 行尾那颗「跑完了」：一个圈，里头一道勾（跟字一样大的一小块地方）。 */
+    private void DrawDoneMark(Graphics g, RectangleF box, Color color)
+    {
+        float pen = Math.Max(1.4f, 1.5f * scale);
+        using (Pen p = new Pen(color, pen))
+        {
+            g.DrawEllipse(p, box.Left + pen / 2, box.Top + pen / 2, box.Width - pen, box.Height - pen);
+            p.StartCap = LineCap.Round;
+            p.EndCap = LineCap.Round;
+            p.LineJoin = LineJoin.Round;
+            PointF[] check = new PointF[]
+            {
+                new PointF(box.Left + box.Width * 0.29f, box.Top + box.Height * 0.52f),
+                new PointF(box.Left + box.Width * 0.44f, box.Top + box.Height * 0.67f),
+                new PointF(box.Left + box.Width * 0.72f, box.Top + box.Height * 0.36f),
+            };
+            g.DrawLines(p, check);
+        }
+    }
+
+    /** 行尾那颗「等你答」：一个圈，里头一个问号（跟「跑完了」那颗一样大）。 */
+    private void DrawAskMark(Graphics g, RectangleF box, Color color)
+    {
+        float pen = Math.Max(1.4f, 1.5f * scale);
+        using (Pen p = new Pen(color, pen))
+        {
+            g.DrawEllipse(p, box.Left + pen / 2, box.Top + pen / 2, box.Width - pen, box.Height - pen);
+        }
+        // 问号自己画：小字在这么小的圈里会糊成一团，两道线一个点反而清楚
+        float w = box.Width;
+        float h = box.Height;
+        float cx = box.Left + w * 0.5f;
+        float cy = box.Top + h * 0.40f;
+        float r = h * 0.165f;
+        using (Pen p = new Pen(color, pen))
+        {
+            p.StartCap = LineCap.Round;
+            p.EndCap = LineCap.Round;
+            p.LineJoin = LineJoin.Round;
+            using (GraphicsPath loop = new GraphicsPath())
+            {
+                // 从左边开口处起笔，绕过顶上到右下角：问号那把钩
+                loop.AddArc(cx - r, cy - r, r * 2, r * 2, 150, 240);
+                g.DrawPath(p, loop);
+            }
+            // 钩的末端往下收成那根竖
+            double end = 30 * Math.PI / 180;
+            g.DrawLine(p, cx + (float)Math.Cos(end) * r, cy + (float)Math.Sin(end) * r, cx, box.Top + h * 0.70f);
+        }
+        // 底下那个点
+        using (SolidBrush b = new SolidBrush(color))
+        {
+            float d = pen * 1.1f;
+            g.FillEllipse(b, cx - d / 2, box.Top + h * 0.845f - d / 2, d, d);
+        }
     }
 
     /** 一个圆角矩形的路径（面板本身和每条卡片都用它）。 */
