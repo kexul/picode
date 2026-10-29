@@ -50,7 +50,7 @@ const ICON_CLOSE = '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http:
  * 整数百分比」、下头是那条杠，填到哪儿就是用了多少）、这一轮的生成速度（多少 t/s）。
  * 横条那格跟模型名那一行字差不多高——原来那颗圆环比模型名还大一圈。
  * 上头那行里那颗 .ci-act 就是原来挂在胶囊最左边那颗状态动画（等 / 写 / 想 / 工具），
- * 现在挪到百分比数字旁边；横条是一条“能量条”，动效见 chat.css。
+ * 现在挪到百分比数字旁边；横条跑着的时候右端会溅火星（一块盖在胶囊上的画布，见 chat.js 的 sparkFrame）。
  * 颜色（正常 / 黄 / 红）、提示文字、点击切模型都在 chat.js 里管。
  */
 function modelChipMarkup(): string {
@@ -61,6 +61,7 @@ function modelChipMarkup(): string {
         `<span class="ci-bar"><span class="ci-fill"></span></span>` +
         `</span>` +
         `<span class="ci-tps"></span>` +
+        `<canvas class="ci-sparks" aria-hidden="true"></canvas>` +
         `</button>\n`;
 }
 

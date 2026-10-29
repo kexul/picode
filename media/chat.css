@@ -1348,7 +1348,7 @@
      还没就绪（加载中 / 等 pi 起来 / 没配模型）时横条空着、淡下去，同样能点。
      点它切当前会话的模型。 */
   #ctxIcon {
-    flex: 0 1 auto; min-width: 0; max-width: 70%;
+    position: relative; flex: 0 1 auto; min-width: 0; max-width: 70%;
     display: inline-flex; align-items: center; gap: 6px;
     height: 26px; padding: 0 4px 0 6px;
     background: transparent; border: none; border-radius: 13px; cursor: pointer;
@@ -1362,7 +1362,7 @@
      上头那行：百分比自己居中（跟下头横杠的正中对齐），图标绝对定位在它左边——
      不占位置，所以图标一出一收，百分比不会跟着跳；横条铺满这一格，也不受上头那行宽窄影响
      （不然图标一出一进，横条就跟着一宽一窄）。 */
-  #ctxIcon .ci-meter { flex: 0 0 auto; display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: 48px; }
+  #ctxIcon .ci-meter { flex: 0 0 auto; display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: 62px; }
   #ctxIcon .ci-top { position: relative; display: flex; align-items: center; justify-content: center; }
   /* 上头那行百分比：用界面字体（等宽字体里的中文 / 数字在小字号下不匀），数字对齐 */
   #ctxIcon .ci-text {
@@ -1373,31 +1373,23 @@
   /* 下头那条杠：淡底（::before）+ 上面那截填满的（.ci-fill），两段都用这颗按钮的 currentColor 画。
      淡底不能挂在 .ci-bar 自己身上：父级的 opacity 会把里头那截实心的也一起淡下去。
      填多满由 --ci-pct 给（chat.js 每次算完用量就写一回），就是横条本身的宽度。
-     已填充那截是一条“能量条”，跑着的时候（data-st=streaming 且真有数，即 .hasfill）：
-       里头那排斜条一直往右跑（.ci-fill::after）；
-       整截一明一暗地呼吸（.ci-breathe）；
-     停下了就退回一条安静的实心横杠（淡底还在，就是原来那样）。
-     .ci-fill 上的 overflow: hidden 是把里头的斜条裁在这一截里，别漏到没填的那段去。 */
-  #ctxIcon .ci-bar { position: relative; height: 4px; border-radius: 2px; }
-  #ctxIcon .ci-bar::before { content: ""; position: absolute; inset: 0; border-radius: 2px; background: currentColor; opacity: 0.25; }
+     跑着的时候（data-st=streaming 且真有数，即 .hasfill），已填充那截的右端会溅火星
+     （见下面那块 .ci-sparks 画布），条本身不动；停下了就退回一条安静的实心横杠。 */
+  #ctxIcon .ci-bar { position: relative; height: 5px; border-radius: 2.5px; }
+  #ctxIcon .ci-bar::before { content: ""; position: absolute; inset: 0; border-radius: 2.5px; background: currentColor; opacity: 0.25; }
   #ctxIcon .ci-fill {
-    position: absolute; inset: 0 auto 0 0; width: var(--ci-pct, 0%); border-radius: 2px; overflow: hidden;
+    position: absolute; inset: 0 auto 0 0; width: var(--ci-pct, 0%); border-radius: 2.5px;
     background: currentColor; transition: width 200ms ease;
   }
-  /* 横条里那排往右跑的斜条（斜纹式的充电条）：用 background-position 移动来跑
-     （不动 transform，免得跟外面那颗按钮的定位搅在一起）；停下时 opacity 归零，那截就只是一条实心横杠。
-     background-size 写的是斜纹在横方向上的周期（4px 的斜纹周期在 45° 下横向占 4×√2≈5.657px），
-     跑一个周期刚好接上，看不出跳接。 */
-  #ctxIcon .ci-fill::after {
-    content: ""; position: absolute; inset: 0; opacity: 0;
-    background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.55) 0 1.5px, rgba(255,255,255,0) 1.5px 4px);
-    background-size: 5.657px 100%; background-repeat: repeat-x;
+  /* 尾端溅出来的火星：一块盖在整颗胶囊上的画布（上下各多让 6px，火星掉出去一点再消失）。
+     整颗胶囊盖、而不是只盖横条那一格：火星得有地方飞。它不吃点击（pointer-events: none），
+     画什么、什么时候画都在 chat.js 里（见 sparkFrame）——纯 CSS 做不出随机、拖尾和重力。 */
+  #ctxIcon .ci-sparks {
+    position: absolute; left: 0; top: -6px; width: 100%; height: calc(100% + 12px);
+    pointer-events: none;
   }
-  /* 跑着、并且真量出用量了才亮（.hasfill：还没报过用量时横条是空的，跑起来也是空的）。 */
-  #ctxIcon.hasfill[data-st="streaming"] .ci-fill::after { opacity: 1; animation: ci-flow 1.2s linear infinite; }
-  /* 呼吸：整截一明一暗（斜条那层跟着一起呼吸，看着就是一整条在闪） */
+  /* 呼吸：已填充那截一明一暗（跟粒子一起，看着像那条在发功） */
   #ctxIcon.hasfill[data-st="streaming"] .ci-fill { animation: ci-breathe 1.6s ease-in-out infinite; }
-  @keyframes ci-flow { from { background-position: 0 0; } to { background-position: 5.657px 0; } }
   @keyframes ci-breathe { 0%, 100% { opacity: 0.72; } 50% { opacity: 1; } }
   /* 这一轮的生成速度：跟上头那个百分比一样大（不然它比旁边那行字还高一头）；没数的时候空着（空着就不占地方） */
   #ctxIcon .ci-tps {
@@ -1469,12 +1461,12 @@
   #ctxIcon.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
   #ctxIcon.err { color: var(--vscode-errorForeground, #f14c4c); }
   #ctxIcon[data-st="loading"], #ctxIcon[data-st="wait"], #ctxIcon[data-st="nomodel"], #ctxIcon[data-st="none"] { opacity: 0.55; }
-  /* 要减少动态效果时：横条不慢慢长、斜条不跑、也不呼吸（那颗状态图标照旧在动——它就是用来
+  /* 要减少动态效果时：横条不慢慢长、也不呼吸（火星那块画布压根不启动，见 chat.js 的 sparkSet；
+     那颗状态图标照旧在动——它就是用来
      表明“还在跑”的，见上面那段注释） */
   @media (prefers-reduced-motion: reduce) {
     #ctxIcon .ci-fill { transition: none; }
     #ctxIcon.hasfill[data-st="streaming"] .ci-fill { animation: none; opacity: 1; }
-    #ctxIcon.hasfill[data-st="streaming"] .ci-fill::after { animation: none; opacity: 0; }
   }
   /* 工具结果内联图片（read 读图等）：缩略图 + 点击放大 */
   .tc-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }

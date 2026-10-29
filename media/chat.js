@@ -4295,6 +4295,130 @@
   }
   /** 模型名左边那颗状态动画至少显示这么久才准换（见 syncStatus）。 */
   const ACT_MIN_MS = 300;
+
+  // ==================== 尾端溅出来的火星 ====================
+  // 跑着的时候，横条已填充那截的右端一直往外溅火星：一簇一簇的短亮线，头上一截白热、
+  // 尾巴是深橙，先快后慢（有阻力）、受重力往下坠、越飞越冷越暗。
+  // 金属被磨着的那种，不是几颗圆点往上飘 —— 圆点要不了随机、拖尾、重力这几样，
+  // 拿几个固定元素循环飘出来看着就是“电子贺卡”，所以这块用一小块画布自己画
+  // （画布盖在整颗胶囊上，见 chat.css 的 .ci-sparks；不吃点击）。
+  // 开关条件跟能量条一致：跑着、且真量出用量了；一停就停 rAF、把画布擦干净。
+  // 颜色不跟胶囊走（不然正常状态是灰的，看着像灰尘不是火星）：刚迸出来是白热，
+  // 飞着飞着变黄、变橙，尾巴那截最冷最深 —— 就是金属被打下来的那点铁屑烧起来的颜色。
+  const sparkCanvasEl = ctxIconEl ? ctxIconEl.querySelector(".ci-sparks") : null;
+  const spark2d = sparkCanvasEl && sparkCanvasEl.getContext ? sparkCanvasEl.getContext("2d") : null;
+  const sparkReduceMotion = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+  let sparkOn = false;            // 火星在跑
+  let sparkRafId = 0;
+  let sparkParts = [];            // 空中那些火星
+  let sparkEmit = null;           // 发射点（画布里的坐标）
+  let sparkDpr = 1;
+  let sparkCssW = 0, sparkCssH = 0;
+  let sparkLastT = 0;
+
+  /** 量一回场地：画布铺满胶囊（上下各多让 6px，火星掉出去一点再消失），
+   *  发射点是已填充那截的右端、横条正中。 */
+  function sparkMeasure() {
+    if (!sparkCanvasEl || !ctxIconEl) { return; }
+    const fillEl = ctxIconEl.querySelector(".ci-fill");
+    if (!fillEl) { return; }
+    const box = ctxIconEl.getBoundingClientRect();
+    sparkDpr = window.devicePixelRatio || 1;
+    sparkCssW = Math.max(1, Math.round(box.width));
+    sparkCssH = Math.max(1, Math.round(box.height + 12));
+    const pxW = Math.round(sparkCssW * sparkDpr), pxH = Math.round(sparkCssH * sparkDpr);
+    if (sparkCanvasEl.width !== pxW || sparkCanvasEl.height !== pxH) {
+      sparkCanvasEl.width = pxW; sparkCanvasEl.height = pxH;   // 改尺寸会把画布擦干净，下一帧重画
+    }
+    const f = fillEl.getBoundingClientRect();
+    // 画布顶边在胶囊上方 6px 处（见 chat.css），所以画布里的 y 要加 6
+    sparkEmit = { x: f.right - box.left, y: f.top - box.top + f.height / 2 + 6 };
+  }
+
+  function sparkStop() {
+    sparkOn = false;
+    if (sparkRafId) { cancelAnimationFrame(sparkRafId); sparkRafId = 0; }
+    sparkParts = [];
+    if (spark2d) {
+      spark2d.setTransform(1, 0, 0, 1, 0, 0);
+      spark2d.clearRect(0, 0, sparkCanvasEl.width, sparkCanvasEl.height);
+    }
+  }
+
+  /** 火星该不该跑：跟能量条一个条件（见 syncStatus）。系统要减少动态效果时不跑。 */
+  function sparkSync(on) {
+    if (!spark2d) { return; }
+    const want = !!on && !(sparkReduceMotion && sparkReduceMotion.matches);
+    if (!want) { sparkStop(); return; }
+    if (sparkOn) { sparkMeasure(); return; }   // 已经跑着：只跟上新的发射点（用量涨了，条尾挪了）
+    sparkOn = true;
+    sparkParts = [];
+    sparkLastT = 0;
+    sparkMeasure();
+    sparkRafId = requestAnimationFrame(sparkFrame);
+  }
+
+  /** 一颗新火星：从发射点往右上迸出去，方向 / 速度 / 寿命 / 粗细都不太一样。 */
+  function sparkBirth(x, y) {
+    // 角度以“向右上”为主（-70°～+25°，屏幕坐标 y 往下为正），偶尔一颗是往下掉的
+    const a = (-70 + Math.random() * 95) * Math.PI / 180;
+    const v = 2.2 + Math.random() * 2.6;
+    const life = 8 + Math.random() * 8;
+    return { x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life, life0: life, w: 0.7 + Math.random() * 0.7 };
+  }
+
+  function sparkFrame(now) {
+    sparkRafId = 0;
+    if (!sparkOn || !spark2d) { return; }
+    // dt：以“60fps 的一帧”为 1，高刷屏上不会跟着快一倍
+    const dt = sparkLastT ? Math.min(2.5, Math.max(0.2, (now - sparkLastT) / 16.7)) : 1;
+    sparkLastT = now;
+    if (!sparkEmit) { sparkMeasure(); }
+    const c = spark2d;
+    c.setTransform(sparkDpr, 0, 0, sparkDpr, 0, 0);
+    c.clearRect(0, 0, sparkCssW, sparkCssH);
+    c.lineCap = "round";
+    // 迸：平常一帧一两颗，时不时“当”一下多迸一小簇
+    const emit = sparkEmit;
+    if (emit) {
+      let n = Math.random() < 0.9 ? 1 : 0;
+      if (Math.random() < 0.06) { n += 2 + Math.floor(Math.random() * 3); }
+      for (let i = 0; i < n && sparkParts.length < 60; i++) {
+        sparkParts.push(sparkBirth(emit.x, emit.y + (Math.random() - 0.5) * 3));
+      }
+    }
+    const alive = [];
+    for (const p of sparkParts) {
+      p.vy += 0.12 * dt;                        // 重力：飞着飞着往下掉
+      const drag = Math.pow(0.84, dt);          // 阻力：冲出去那一下就慢下来
+      p.vx *= drag; p.vy *= drag;
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.life -= dt;
+      if (p.life <= 0 || p.x < -6 || p.y > sparkCssH + 6) { continue; }
+      alive.push(p);
+      // 画一条带拖尾的短线：冲得快就拉得长。尾巴那截是最冷的深橙，头上那截按“凉了多久”
+      // 从白热往黄、再往橙走 —— 一条线就交代了它正在冷下来
+      const speed = Math.hypot(p.vx, p.vy) || 1;
+      const len = 1.2 + speed * 2.2;
+      const tx = p.x - p.vx / speed * len, ty = p.y - p.vy / speed * len;
+      const mx = (p.x + tx) / 2, my = (p.y + ty) / 2;
+      const k = p.life / p.life0;               // 1 → 0
+      const a = Math.min(1, k * 1.6);
+      c.lineWidth = p.w;
+      c.globalAlpha = a * 0.55;
+      c.strokeStyle = "#ff6a00";
+      c.beginPath(); c.moveTo(tx, ty); c.lineTo(mx, my); c.stroke();
+      c.globalAlpha = a;
+      c.strokeStyle = k > 0.7 ? "#fff8ec" : k > 0.4 ? "#ffd27a" : "#ff9a3c";
+      c.beginPath(); c.moveTo(mx, my); c.lineTo(p.x, p.y); c.stroke();
+    }
+    sparkParts = alive;
+    c.globalAlpha = 1;
+    sparkRafId = requestAnimationFrame(sparkFrame);
+  }
+
+  /** 窗口大小变了，画布和发射点要重新量（正在跑的话） */
+  window.addEventListener("resize", () => { if (sparkOn) { sparkMeasure(); } });
   /** 输入框底下那颗胶囊跟上当前会话。 */
   function syncStatus() {
     if (!ctxIconEl) { return; }
@@ -4342,11 +4466,12 @@
     if (name) { name.textContent = ctxName(st, state); }
     // 横条：填多满就是用了多少（一个数写进 --ci-pct，横条宽度认它，见 chat.css）；
     // 条上头那行字写整数百分比（横条这儿放得下，就带个 %，不看形状也认得出来）。
-    // 还没量出来（没配模型 / 还没报过用量）就空着；.hasfill 是给能量条的斜条与呼吸用的：
-    // 横条本来就是空的时候，也没东西可动。
+    // 还没量出来（没配模型 / 还没报过用量）就空着。
     const known = (state === "idle" || state === "streaming") && typeof st.percent === "number";
     ctxIconEl.style.setProperty("--ci-pct", known ? pct.toFixed(1) + "%" : "0%");
     ctxIconEl.classList.toggle("hasfill", known && pct > 0);
+    // 火星跟能量条一个条件：跑着、且真量出用量了（没数的时候横条是空的，火星没地方蹦）
+    sparkSync(state === "streaming" && known && pct > 0);
     const num = ctxIconEl.querySelector(".ci-text");
     if (num) { num.textContent = known ? Math.round(pct) + "%" : ""; }
     // 跑多快：后端推来的那个数（生成中是这一轮的实时均值，停下来就留着最后那个，没跑过就空着）
