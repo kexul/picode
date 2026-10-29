@@ -4069,7 +4069,7 @@
   const END_HINT_STUCK = "卡住了";
   /** 末尾那两颗快捷按钮点下去发出去的文本（见 makeEndHintQuick）：
    *  - 「压缩」发 /compact，插件自己接手去调 pi 的压缩命令；
-   *  - 「?」发 bro 技能的正文：让 ai 用大白话把上一条重说一遍。正文照技能文件抄在代码里，
+   *  - 「啊？」发 bro 技能的正文：让 ai 用大白话把上一条重说一遍。正文照技能文件抄在代码里，
    *    不去读磁盘上的 SKILL.md（网页端读不到，也不该为这一句多开一条读文件的路）。 */
   const QUICK_COMPACT_TEXT = "/compact";
   const QUICK_BRO_TEXT = "Restate your last message. Stop using jargon and speak coherently." +
@@ -4108,7 +4108,7 @@
     const stop = st.endHintStopEl;
     const showStop = !!(st.piReady && st.streaming);
     if (stop) { stop.classList.toggle("hidden", !showStop); }
-    // 跑完时多出来的两颗快捷按钮（「压缩」「?」）：跟「继续」一起露面、一起收
+    // 跑完时多出来的两颗快捷按钮（「压缩」「啊？」）：跟「继续」一起露面、一起收
     for (const q of row.querySelectorAll(".msg-endhint-quick")) {
       q.classList.toggle("hidden", mode !== "continue");
     }
@@ -4143,7 +4143,7 @@
 
   /**
    * 建末尾那一行：主胶囊（继续 / 卡住了）、旁边那颗「停止生成」，以及闲着时才会露出来的
-   * 两颗快捷按钮「压缩」「?」。
+   * 两颗快捷按钮「压缩」「啊？」。
    * 停止生成就是主胶囊复制一份、去掉“卡住了”三个字，只留方块图标：点它只是把这一轮停掉
    * （跟按 Esc 一样，不补发“卡住了”），要“停下来再告诉它卡住了”就点旁边那颗。
    * 写什么由当前状态定（见 setEndHintMode）；露面时机与位置由 syncEndHint / placeEndHint 管。
@@ -4200,7 +4200,7 @@
     const compactBtn = makeEndHintQuick(st,
       "压缩", "压缩上下文（发一条 /compact）", QUICK_COMPACT_TEXT);
     const broBtn = makeEndHintQuick(st,
-      "?", "让 ai 用大白话把上一条重说一遍（bro 技能）", QUICK_BRO_TEXT);
+      "啊？", "让 ai 用大白话把上一条重说一遍（bro 技能）", QUICK_BRO_TEXT);
     // 顺序：压缩、?、停止生成（方块）、主胶囊（继续 / 卡住了）
     row.append(compactBtn, broBtn, stop, btn);
     st.endHintEl = btn;

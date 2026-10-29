@@ -7,7 +7,7 @@
  * 它按会话的状态换脸，两副面孔都长在消息流最末尾：
  *   1. 会话就绪、一条消息都没有时它不露面（空会话没什么可“继续”的）；
  *   2. 第一轮跑完、会话闲下来时它露面，脸是「继续」，而且就在窗格最末尾（不是输入框那一带）；
- *      同一行左边还多出两颗快捷按钮「压缩」「?」（只在闲着时露面）；
+ *      同一行左边还多出两颗快捷按钮「压缩」「啊？」（只在闲着时露面）；
  *   3. 点它直接发一条“继续”：输入框里打了一半的字留在原地（不被顶掉、不被清空）；
  *   4. 生成中它换成「卡住了」，而且一直跟在最新内容后面（新内容涌上来也还在末尾）；
  *   5. 点「卡住了」：这一轮当场停住（没跑完），停稳之后补发出一条“卡住了”给模型；
@@ -15,7 +15,7 @@
  *   7. 页面重开（刷新 / 断线重连后整屏重画）之后，它还在最末尾 —— 重画是一条条重放的，
  *      没在重放收尾时重算，它会停在重放到的那条用户消息后面；
  *   8. 生成中重开页面（手机锁屏回来、手动刷新都算）：整屏重画完它还在末尾，脸还是「卡住了」；
- *   9. 「?」点下去发的是 bro 技能的正文（让人用大白话把上一条重说一遍）；
+ *   9. 「啊？」点下去发的是 bro 技能的正文（让人用大白话把上一条重说一遍）；
  *  10. 「压缩」点下去发 /compact，后端接下这活去调 pi 的压缩命令（假 pi 秒回）。
  *
  * 假模型每轮要停一下（FAKEPI_THINK_MS），不然生成中那一下来不及看；它认中止（见 fakePi 的 pause），
@@ -39,7 +39,7 @@ module.exports = async (page) => {
             faceText: h ? h.innerText.replace(/\\s+/g, " ").trim() : "",
             atEnd: Boolean(row) && pane.lastElementChild === row,
             stop: Boolean(s) && !s.classList.contains("hidden"),
-            // 那两颗快捷按钮（「压缩」「?」）：露着哪几颗（按行里的顺序）
+            // 那两颗快捷按钮（「压缩」「啊？」）：露着哪几颗（按行里的顺序）
             quick: q.filter((b) => !b.classList.contains("hidden")).map((b) => b.innerText.trim()),
             input: inp.value,
             lastUser: users.length ? users[users.length - 1].innerText.replace(/\\s+/g, " ").slice(0, 40) : "",
@@ -118,7 +118,7 @@ module.exports = async (page) => {
     console.log("⑦ 页面重开、整屏重画完：", JSON.stringify(redrawn));
     await page.shot("endhint-6-after-redraw.png");
 
-    // 「?」：把 bro 技能的正文发出去（正文照技能文件抄在界面代码里，不去读磁盘）
+    // 「啊？」：把 bro 技能的正文发出去（正文照技能文件抄在界面代码里，不去读磁盘）
     await page.eval(`
         const q = document.querySelectorAll(".session-view:not(.off) .session-pane .msg-endhint-quick");
         if (q.length !== 2) { return false; }
@@ -126,7 +126,7 @@ module.exports = async (page) => {
         return true;
     `);
     const bro = await waitFor((s) => s.lastUser.startsWith("Restate your last message"));
-    console.log("⑧ 点「?」（发出去的是 bro 技能的正文）：", JSON.stringify(bro));
+    console.log("⑧ 点「啊？」（发出去的是 bro 技能的正文）：", JSON.stringify(bro));
     await page.shot("endhint-7-bro.png");
     // 等这一轮跑完（跑着的时候那颗「压缩」点不动，跟那颗「继续」一个规矩）
     const broIdle = await waitFor((s) => s.hint && s.face === "continue" && s.quick.length === 2);
@@ -155,7 +155,7 @@ module.exports = async (page) => {
     if (!idle) { throw new Error("第一轮跑完没看到「继续」"); }
     if (!idle.atEnd) { throw new Error("「继续」没在消息流末尾"); }
     if (idle.faceText !== "继续") { throw new Error("闲着时那颗胶囊写的不是「继续」：" + idle.faceText); }
-    if (idle.quick.join(",") !== "压缩,?") { throw new Error("闲着时那两颗快捷按钮不对：" + idle.quick.join(",")); }
+    if (idle.quick.join(",") !== "压缩,啊？") { throw new Error("闲着时那两颗快捷按钮不对：" + idle.quick.join(",")); }
     if (!busy) { throw new Error("没看到生成中的「卡住了」（把 FAKEPI_THINK_MS 调大一点再跑）"); }
     if (busy.faceText !== "卡住了") { throw new Error("生成中那颗胶囊写的不是「卡住了」：" + busy.faceText); }
     if (busy.quick.length) { throw new Error("生成中那两颗快捷按钮不该露面：" + busy.quick.join(",")); }
@@ -166,8 +166,8 @@ module.exports = async (page) => {
     if (again.lastUser !== "卡住了") { throw new Error("点了「卡住了」没发出“卡住了”（最后一条用户消息是：" + again.lastUser + "）"); }
     if (again.input !== "打了一半的字") { throw new Error("输入框里打了一半的字被动了：" + again.input); }
     if (!redrawn) { throw new Error("页面重开（整屏重画）之后末尾那颗胶囊没回到消息流末尾"); }
-    if (!bro) { throw new Error("点了「?」没看到 bro 技能的正文发出去"); }
-    if (!broIdle) { throw new Error("点了「?」那一轮跑完，那两颗快捷按钮没回来"); }
+    if (!bro) { throw new Error("点了「啊？」没看到 bro 技能的正文发出去"); }
+    if (!broIdle) { throw new Error("点了「啊？」那一轮跑完，那两颗快捷按钮没回来"); }
     if (!compacted) { throw new Error("点了「压缩」没看到压缩完成（假 pi 的压缩结果没回来）"); }
     if (!midRunStart) { throw new Error("第二轮的「卡住了」没露面（把 FAKEPI_THINK_MS 调大一点再跑）"); }
     if (!midRun) { throw new Error("生成中重开页面之后它没回到末尾、也没换成「卡住了」"); }
