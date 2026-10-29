@@ -7,7 +7,7 @@
  * 真后端、真会话、真网页服务、真界面文件，只有模型是假的（假模型那一套老剧本里
  * 第 4 步会真去改 dev/.scratch 里的 说明.txt，后端因此记下这一份改动）。
  * 验的是外面看得见的行为：
- *   1. 这一列开着时标签条上固定两格：「目录」与「改动」，都排在文件标签前面、都没有那颗叉；
+ *   1. 这一列开着时标签条上固定三格：「文件」「改动」「后台」，都排在文件标签前面、都没有那颗叉；
  *   2. 一个文件都没改过时，这一格里只有一句「这个会话还没改过文件。」；
  *   3. 假模型改完 说明.txt 之后（后端推了一条“改动变了”），这一格自己长出那一行：
  *      相对写法、+1 −1、没展开时看不到 diff；
@@ -47,7 +47,7 @@ function visibleNote(page) {
     `);
 }
 
-/** 标签条上现在是哪几格（名字、是不是「改动」「目录」、有没有那颗叉）。 */
+/** 标签条上现在是哪几格（名字、是不是「改动」「文件」、有没有那颗叉）。 */
 function tabsNow(page) {
     return page.eval(`
         return JSON.stringify(Array.from(document.querySelectorAll("#fileTabs .file-tab")).map((el) => ({
@@ -130,7 +130,7 @@ module.exports = async (page) => {
     await page.sleep(400);
     const tabs = JSON.parse(await tabsNow(page));
     console.log("标签条：" + JSON.stringify(tabs));
-    check("第一格是「目录」", !!(tabs[0] && tabs[0].proj && tabs[0].name === "目录"));
+    check("第一格是「文件」", !!(tabs[0] && tabs[0].proj && tabs[0].name === "文件"));
     check("第二格是「改动」", !!(tabs[1] && tabs[1].changes && tabs[1].name === "改动"));
     check("这两格都没有那颗叉", !tabs[0].close && !tabs[1].close);
 
