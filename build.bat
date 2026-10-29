@@ -2,6 +2,7 @@
 REM ============================================================
 REM    Outputs:
 REM      1. VSCode extension -> pi-chat-*.vsix
+REM      2. single-file backend -> dist\pichat.exe (double-click to run, see README)
 REM    Usage: build.bat [skip] [skip-pichat]
 REM              skip        - skip npm install
 REM              skip-pichat - skip the global pichat install
@@ -70,8 +71,18 @@ if not defined VSIX (
     exit /b 1
 )
 
+REM ---- build single-file backend -> dist\pichat.exe ----
+REM Not `npm run exe`: that runs npm run build first, whose clean step deletes the vsix made above.
+REM out\ and bin\tray.exe / bin\shot.exe are fresh from npm run package, so pack them directly.
+REM A running pichat.exe holds that file and blocks the rebuild; the error says so, close it and rerun.
+REM (Keep this file ASCII-only: cmd reads it in the OEM code page, UTF-8 bytes can swallow a CRLF.)
+echo.
+echo [build] building single-file backend (dist\pichat.exe)...
+call node scripts/build-exe.mjs
+if errorlevel 1 ( echo [err] exe packaging failed & exit /b 1 )
+
 REM ---- install global pichat command (backend + media, see package.json files) ----
-REM out/ 刚刚编译过，直接装；面板的界面文件从后端现取，装好 pichat 面板就是新版
+REM out/ was just compiled, install straight from it; the panel html comes from the backend.
 if "%SKIP_PICHAT%"=="1" (
     echo [build] skip global pichat install
 ) else (
@@ -85,6 +96,7 @@ REM ---- summary ----
 echo.
 echo [build] === build done ===
 echo   VSIX: %VSIX%
+echo   EXE : dist\pichat.exe
 if not "%SKIP_PICHAT%"=="1" echo   pichat: installed (if one is running, restart it to pick up the new build)
 echo.
 endlocal

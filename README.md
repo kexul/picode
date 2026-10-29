@@ -12,8 +12,12 @@
 ## 安装
 
 ```bash
-build.bat               # npm install + 编译 + 打包 vsix + 装全局 pichat 命令
+build.bat               # npm install + 编译 + 打包 vsix + 打出 dist\pichat.exe + 装全局 pichat 命令
 ```
+
+两个产物都在这条命令里：`pi-chat-vscode-<版本>.vsix`（插件）和 `dist\pichat.exe`（不用装插件的单文件后端）。
+只想打那份 exe 就 `npm run exe`（≈2.3MB，见下面 Windows 那一节）。
+打包时那个旧 exe 正在跑的话文件被占着，会报错——先关掉它再跑一次。
 
 build.bat 不会把插件装进编辑器，要自己装（版本号换成实际的），装完重载窗口（命令面板 → `Developer: Reload Window`）才生效：
 
@@ -29,6 +33,8 @@ code --install-extension pi-chat-vscode-0.1.0.vsix     :: VSCode
 ```bash
 npm run exe             # 编译 + 打包，产出 dist\pichat.exe（约 2.3MB，不进版本库）
 ```
+
+`build.bat` 也一样会顺手打出这份 exe，单独打它才用上面这条。
 
 双击 `pichat.exe` 就是传统 app 那个样子：**没有黑框**，起后端，通知区域出一颗图标，
 并把浏览器打开到 `http://<本机>:51883/`。再双击一次不会起第二个，只把那个界面打开。
