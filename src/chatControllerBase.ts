@@ -70,7 +70,7 @@ import { dropAuto, readAuto, writeAuto } from "./autoFiles";
 import type { RpcSessionState } from "./piRpc";
 import { TrayIcon } from "./trayIcon";
 import { plainPreview } from "./messageUtils";
-import type { RemoteNotice } from "./remoteNotice";
+import { REMOTE_TEXT_CHARS, type RemoteNotice } from "./remoteNotice";
 import type { ProjectDirEntry } from "./sessionStore";
 
 /** # 引用菜单里的一行：一个会话（或其某个子会话）。 */
@@ -1742,8 +1742,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): void {
         if (!sessionId || !this.notifyTurnEndEnabled()) { return; }
         const label = (name || "").trim() || "会话";
+        // 面板上那条摘要照旧短（一块小弹窗，两行就够）；推给别处的那份留长一点：
+        // 那边可能还要再发到微信里（见 remoteNotice.ts 的 REMOTE_TEXT_CHARS）
         const preview = plainPreview(summary);
-        if (this.pushRemoteNote(sessionId, label, preview, kind)) { return; }   // 已经推给别处：这台不弹
+        if (this.pushRemoteNote(sessionId, label, plainPreview(summary, REMOTE_TEXT_CHARS), kind)) { return; }   // 已经推给别处：这台不弹
         // 人正坐在这个会话的输入框前（界面报过焦点）：他就在看着，再弹一下是多余的
         if (this.inputFocusedOn(sessionId)) { return; }
         this.ensureTray()?.pop({ id: sessionId, name: label, summary: preview, kind });

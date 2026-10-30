@@ -36,6 +36,15 @@ export interface RemoteNotice {
 const PUSH_TIMEOUT_MS = 5000;
 
 /**
+ * 推进去的那段摘要最多留多少字。
+ *
+ * 收的那台除了弹一张面板，还可能要把它发到微信里（收发微信的那台替别的机器发，
+ * 见 chatHost.ts 的 pushRemoteWeixinNote）。太短的话长回复到了微信里只剩个开头，
+ * 看着像被掐断了；面板那边自己还会再截（见 chatControllerBase.ts 的 trayNoteRemote）。
+ */
+export const REMOTE_TEXT_CHARS = 400;
+
+/**
  * 从推过来的内容里读出一条通知。
  * @param raw 请求体解出来的东西（不知道对方发了什么，一律当未知处理）
  * @param fallbackLabel 对方没写名字时用什么（一般是它请求里的地址）
@@ -49,7 +58,8 @@ export function readRemoteNotice(raw: unknown, fallbackLabel: string): RemoteNot
     const label = (typeof body.label === "string" ? body.label.trim() : "") || fallbackLabel || "另一台";
     const name = (typeof body.name === "string" ? body.name.trim() : "") || "会话";
     // 摘要是可选的（旧版本不带）：带了也只是拿来显示，最长截一下
-    const text = typeof body.text === "string" ? body.text.trim().slice(0, 200) : "";
+    // （多留一个字：推方那边的上限是不含末尾那个“…”的，切在这一格上别把“…”也切掉）
+    const text = typeof body.text === "string" ? body.text.trim().slice(0, REMOTE_TEXT_CHARS + 1) : "";
     const kind = body.kind === "ask" ? "ask" : "done";
     // 回话地址也是可选的（旧版本不带）：带了才能把微信里那句话送回去
     const pageUrl = typeof body.pageUrl === "string" ? body.pageUrl.trim().slice(0, 200) : "";

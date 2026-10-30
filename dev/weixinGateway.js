@@ -17,6 +17,8 @@
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
+// 摘要上限跟服务端那份走（从编好的读，别两处各写一个数）
+const { REMOTE_TEXT_CHARS } = require("../out/server/remoteNotice.js");
 
 const WEIXIN_DIR = path.join(__dirname, ".scratch", "pichat", "weixin");
 const ACCOUNT_FILE = path.join(WEIXIN_DIR, "account.json");
@@ -26,6 +28,8 @@ const CURSOR_FILE = path.join(WEIXIN_DIR, "cursor.json");
 const OWNER = "user@fake-9";
 /** 假的“另一台机器”叫什么。 */
 const OTHER_LABEL = "家里那台";
+/** ② 里那条长摘要塞了多少段（验长度够不够用，见下文）。 */
+const LONG_PIECES = 50;
 const CONFIG_FILE = path.join(__dirname, ".scratch", "pichat", "config.json");
 
 let pushed = 0;
@@ -215,12 +219,14 @@ module.exports = async (page) => {
         console.log(`  · ① 本机会话：${record.name}（${record.panelId}）`);
 
         // ② 假装另一台机器推一条过来（回话地址写自己，这样转回来能验到）
+        //    摘要故意写长（超过老上限 200）：这台往微信推时不该只剩前半截
+        const longText = `另一台机器上那个会话跑完了：${"很长的说明，".repeat(LONG_PIECES)}`;
         const notify = {
             label: OTHER_LABEL,
             sessionId: record.panelId,
             sessionFile: record.sessionFile,
             name: record.name,
-            text: "另一台机器上那个会话跑完了",
+            text: longText,
             kind: "done",
             pageUrl: base,
         };
@@ -235,6 +241,12 @@ module.exports = async (page) => {
         console.log("  · ② 替别的机器推出去：", secondText);
         if (!secondText.startsWith(`${OTHER_LABEL} · `)) { throw new Error(`正文该以「${OTHER_LABEL} · 」开头：${secondText}`); }
         if (!secondText.includes("另一台机器上那个会话跑完了")) { throw new Error("那条的摘要没带上"); }
+        // 推过来那段的长度得原样留着（readRemoteNotice 那头不该再掐到 200）
+        const kept = (secondText.split("很长的说明").length - 1);
+        console.log(`  · ② 摘要留了多少：${kept} 段（推过来的上限 ${REMOTE_TEXT_CHARS} 字）`);
+        if (longText.length <= REMOTE_TEXT_CHARS && kept !== LONG_PIECES) {
+            throw new Error(`替别人推的那条只剩 ${kept} 段（该是 ${LONG_PIECES}）：/notify 那头还把摘要掐在 200`);
+        }
 
         // ③ 微信里引用②那条回一句：该转回“那台”（就是自己）并接进会话
         fake.inbox.push(incoming("引用那条：只回复两个字：收到", second.messageId));
@@ -262,6 +274,15 @@ module.exports = async (page) => {
         if (!got.pageUrl) { throw new Error("推进去的通知里没有回话地址（网关就没法把话送回来）"); }
         if (!got.sessionFile) { throw new Error("推进去的通知里没有会话文件"); }
         if (!got.sessionId || !got.name) { throw new Error("推进去的通知缺会话标识或名字"); }
+        // 推出去的那段摘要也放宽了（FAKEPI_REPLY_LONG 把假模型的收尾那句撑长时看得到）
+        const long = Number(process.env.FAKEPI_REPLY_LONG || 0);
+        if (long > REMOTE_TEXT_CHARS) {
+            const pushedText = String(got.text || "");
+            console.log(`  · ⑤ 推过去的摘要长度：${pushedText.length} 字`);
+            if (pushedText.length <= 200) {
+                throw new Error(`推过去的摘要只有 ${pushedText.length} 字：还是原来那个短上限`);
+            }
+        }
     } finally {
         fake.server.close();
         if (realAccount === undefined) { try { fs.rmSync(ACCOUNT_FILE, { force: true }); } catch { /* 算了 */ } }
