@@ -2680,7 +2680,8 @@
   // ==================== 正在跑的那一条 ====================
   // 工具标签只说得出工具名：命令行、读哪个文件、grep 找什么都在提示框里，不悬浮就看不见。
   // 正在跑的那一条不一样：它在当前这批标签下面单占一行，把这一行的摘要直接写出来
-  // （bash 就是「$ 命令」）。同时跑几条也只露一条 —— 只露最近开始的那条。
+  // （bash 就是「$ 命令」）。一长串命令只写核心那一段、后面灰一句「+N 段」，整条在悬浮提示里看
+  // （怎么挑核心见下面「一长串命令里的核心那一段」）。同时跑几条也只露一条 —— 只露最近开始的那条。
   // 为什么不排成几行：几条一起跑时，先跑完的那条一收，这一块就矮一行，下面的东西跟着
   // 上下跳一下（贴着底看的时候特别明显）。行数永远是 0 或 1，就没有这一下。
   // 不出这行的两种：think（思考，内容在提示框里看）与 ask_choice（问话卡片本来就铺在消息流里，
@@ -2704,6 +2705,126 @@
   const RUNNING_ROLL_HOLD_MS = 500;
   const RUNNING_CLOCK_MS = 200;     // 后面那个耗时的刷新快慢（一秒里刷五回就够看着在走）
 
+  // ==================== 一长串命令里的核心那一段 ====================
+  // 模型爱写一长串：cd 到某个目录 && 跑个脚本 | sed 看头几行。整条摆在「正在跑」那一行上，
+  // 一眼看不出在干什么（一行放不下还得横着滚半天）。这里只按字面把命令切成几段，把「正经干活」的那段挑出来：
+  //   · 挪位置的（cd / pushd / popd）、打杂的（echo / export / sleep / true …）不算事；
+  //   · 挂在管道后面、只修输出的（sed / head / tail / cut / sort / wc …）不算事；
+  //   · 剩下的头一段就是核心（grep / jq / awk / xargs 不当作修输出的：它们常常就是查的东西本身）。
+  // 分不出核心（只有一段、或者全被打杂的占满）就照原样整条写出来。
+  // 命令只是一行字，这么切只是猜：整条一直留着，悬浮那一行就能看（见 syncRunningLine）。
+  const SEG_PROG_SKIP = new Set(["sudo", "time", "env", "nohup", "command", "exec", "builtin", "nice", "!", "{", "do", "then", "else", "elif", "if", "while", "until"]);
+  const SEG_NOISE = new Set(["cd", "pushd", "popd", "echo", "printf", "export", "unset", "set", "true", "false", ":", "sleep", "wait", "clear", "sync"]);
+  const SEG_PIPE_TAIL = new Set(["sed", "head", "tail", "cut", "sort", "uniq", "wc", "tr", "tee", "column", "less", "more", "nl", "fmt", "tac", "rev", "fold", "paste"]);
+  // 显示时从段首剥掉的（「do python x.py」写成「python x.py」才对）
+  const SEG_DISPLAY_STRIP = new Set(["do", "then", "else", "elif", "!", "{"]);
+  // 段首是这些词的（for / if / while 那一套的开头）本身不是一件事
+  const SEG_KEYWORD_HEAD = /^(for|if|while|until|case|select|function)\b/;
+
+  /** 按顶层分隔符（&& || ; | & 换行）把一条命令切成几段：引号里、括号里的不算。
+   *  每段带 sepBefore —— 它前面是什么分隔开的（挑核心时要用：管道后面跟上来的才算“修输出”）。 */
+  function splitCommandSegments(cmd) {
+    const out = [];
+    const s = String(cmd || "");
+    let cur = "", pendingSep = "", quote = "", depth = 0;
+    const flush = () => {
+      const text = cur.trim();
+      cur = "";
+      if (!text) { return; }
+      out.push({ text, sepBefore: pendingSep });
+      pendingSep = "";
+    };
+    const cut = (sep) => { flush(); pendingSep = sep; };
+    for (let i = 0; i < s.length; i++) {
+      const ch = s[i], next = s[i + 1] || "", prev = i > 0 ? s[i - 1] : "";
+      if (quote) {
+        cur += ch;
+        if (ch === quote) { quote = ""; }
+        else if (ch === "\\" && quote === '"' && next) { cur += s[++i]; }
+        continue;
+      }
+      if (ch === "'" || ch === '"') { quote = ch; cur += ch; continue; }
+      if (ch === "\\" && next) { cur += ch + s[++i]; continue; }
+      if (ch === "(") { depth++; cur += ch; continue; }
+      if (ch === ")") { if (depth > 0) { depth--; } cur += ch; continue; }
+      if (depth > 0) { cur += ch; continue; }
+      if (ch === ";" || ch === "\n") { cut(";"); continue; }
+      if (ch === "|") {
+        if (next === "|") { cut("||"); i++; continue; }
+        if (next === "&") { cut("|"); i++; continue; }   // |& 也是管道
+        cut("|"); continue;
+      }
+      if (ch === "&") {
+        if (next === "&") { cut("&&"); i++; continue; }
+        if (next === ">") { cur += ch; continue; }                     // &> 重定向
+        if (prev === ">" || prev === "<") { cur += ch; continue; }    // 2>&1、>&2
+        if (next && !/\s/.test(next)) { cur += ch; continue; }         // a&b 这种少见写法别乱切
+        cut("&"); continue;
+      }
+      cur += ch;
+    }
+    flush();
+    return out;
+  }
+
+  /** 这一段跑的是哪个程序：跳过前面的环境变量赋值（FOO=1）与 sudo / time 这类前缀，
+   *  取第一个词，带路径的只留文件名。 */
+  function segmentProgram(text) {
+    for (const raw of String(text || "").trim().split(/\s+/)) {
+      const w = raw.replace(/^["']+|["']+$/g, "");
+      if (!w) { continue; }
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) { continue; }
+      if (SEG_PROG_SKIP.has(w)) { continue; }
+      const base = w.replace(/^.*[\\/]/, "");
+      if (SEG_PROG_SKIP.has(base)) { continue; }
+      return base;
+    }
+    return "";
+  }
+
+  /** 一段正经干活吗（挑核心时用）：挪位置的、打杂的、管道后面修输出的都不算。 */
+  function isCoreSegment(seg, i) {
+    if (SEG_KEYWORD_HEAD.test(seg.text)) { return false; }
+    const prog = segmentProgram(seg.text);
+    if (!prog || SEG_NOISE.has(prog)) { return false; }
+    if (i > 0 && seg.sepBefore === "|" && SEG_PIPE_TAIL.has(prog)) { return false; }
+    return true;
+  }
+
+  /** 这一段写在那一行上长什么样：剥掉段首那几个连接词（do / then / ! …）。 */
+  function segmentDisplay(text) {
+    let out = String(text || "").trim();
+    for (;;) {
+      const m = /^(\S+)\s+([\s\S]*)$/.exec(out);
+      if (!m || !SEG_DISPLAY_STRIP.has(m[1])) { return out; }
+      out = m[2].trim();
+    }
+  }
+
+  /** bash 调用里那条命令原文（参数是 JSON 字符串）。 */
+  function bashCommandOf(argStr) {
+    try {
+      const a = JSON.parse(argStr || "");
+      return a && typeof a.command === "string" ? a.command : "";
+    } catch (e) { return ""; }
+  }
+
+  /** 「正在跑」那一行写什么：一长串 bash 命令只写核心那一段（后面灰一句「+N 段」），
+   *  整条留在这一行的悬浮提示里。分不出来就照原样整条写。 */
+  function runningLineText(call) {
+    const whole = call.text || call.name || "";
+    if (call.name !== "bash") { return { main: whole, more: "" }; }
+    const cmd = bashCommandOf(call.argStr);
+    const segs = splitCommandSegments(cmd);
+    if (segs.length < 2) { return { main: whole, more: "" }; }
+    const core = segs.find(isCoreSegment);
+    if (!core) { return { main: whole, more: "" }; }
+    // 整条摘要里 "$ " + 命令 后面那点尾巴（timeout 这类）照旧跟着写
+    const head = "$ " + cmd;
+    const tail = whole.startsWith(head) ? whole.slice(head.length).trim() : "";
+    return { main: "$ " + segmentDisplay(core.text) + (tail ? " " + tail : ""), more: "+" + (segs.length - 1) + " 段" };
+  }
+
   /** 现在还有哪些调用在跑、各自那一行摘要与开始时刻（一条一行，按页面上标签的顺序）。
    *  直接看页面上那些转圈的标签：批次换了行、重放历史都不影响 —— 写出来的跟看到的是同一份。
    *  startedAt 是这条开始的时刻（毫秒）；0 表示不知道（重放历史里的老调用，见 addToolToGroup）——
@@ -2715,7 +2836,7 @@
       if (g) {
         for (const e of g.entries) {
           if (!e.done && !RUNNING_LINE_SKIP.has(e.name)) {
-            out.push({ text: e.tipCall || e.name, startedAt: e.startedAt || 0, id: e.id || "", name: e.name || "" });
+            out.push({ text: e.tipCall || e.name, startedAt: e.startedAt || 0, id: e.id || "", name: e.name || "", argStr: e.argStr || "" });
           }
         }
         continue;
@@ -2726,6 +2847,7 @@
           startedAt: tag._startedAt || 0,
           id: tag._toolCallId || "",
           name: tag._toolName || "",
+          argStr: tag._argStr || "",
         });
       }
     }
@@ -2774,8 +2896,20 @@
     item.insertAdjacentHTML("afterbegin", GEAR_SVG);
     const t = document.createElement("span");
     t.className = "tr-text";
-    t.textContent = call.text;
+    const shown = runningLineText(call);
+    t.textContent = shown.main;
     item.appendChild(t);
+    // 只写了核心那一段：后面灰一句「+N 段」（这一句不跟着滚，一直看得见）
+    if (shown.more) {
+      const more = document.createElement("span");
+      more.className = "tr-more";
+      more.textContent = shown.more;
+      item.appendChild(more);
+      // 整条命令（原来那一行字）就在这一行的悬浮提示里，跟工具标签用的同一套提示框
+      item._tipCall = call.text;
+      item._tipBody = "";
+      attachTagTipHandlers(item);
+    }
     // 这条是 bash 命令：给一颗「放后台」（点了就不在这儿等它跑完，命令转到后台接着跑）。
     // 只有 browser 页面里能点：插件里的对话面板没有文件侧边栏，看不到后台清单；
     // 而且那边一关会话，命令的后台状态就没处看了。
@@ -2807,7 +2941,7 @@
     startRunClock(st);
     // 量「这一行放不放得下」得等它排到页面上（新起一条时上面那一步才把它插进去），
     // 所以挪完位置再看一眼：放不下的改成自己滚（见 rollRunningText）。
-    rollRunningText(t, call.text, el);
+    rollRunningText(t, el);
   }
 
   /** 那条「正在跑」上后面那个耗时：每 RUNNING_CLOCK_MS 重写一次（只动那几个数字，不动字、
@@ -2842,9 +2976,10 @@
 
   /** 这一条的字一行放得下就不动（末尾不够就省略号）；放不下就让它自己慢慢横向滚：
    *  滚的距离就是溢出的那些像素（--tr-shift），一趟多长由「走的那段每秒 30 像素 + 两头各停
-   *  RUNNING_ROLL_HOLD_MS」算出来（--tr-dur），停顿的写法见下一条。 */
-  function rollRunningText(t, text, line) {
-    t.textContent = text;
+   *  RUNNING_ROLL_HOLD_MS」算出来（--tr-dur），停顿的写法见下一条。
+   *  进来时 .tr-text 里已经写好了（可能还带一个灰色小尾巴以外的东西，见 syncRunningLine）：
+   *  这里只把它那几块整体挪进滚动那一层，一个字的样式都不变。 */
+  function rollRunningText(t, line) {
     t.classList.remove("roll");
     t.style.removeProperty("--tr-shift");
     t.style.removeProperty("--tr-dur");
@@ -2853,8 +2988,7 @@
     if (over < RUNNING_ROLL_MIN_PX) { return; }
     const run = document.createElement("span");
     run.className = "tr-run";
-    run.textContent = text;
-    t.textContent = "";
+    while (t.firstChild) { run.appendChild(t.firstChild); }
     t.appendChild(run);
     t.classList.add("roll");
     const dur = over / RUNNING_ROLL_SPEED * 1000 + RUNNING_ROLL_HOLD_MS * 2;
