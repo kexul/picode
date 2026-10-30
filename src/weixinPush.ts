@@ -26,6 +26,8 @@ export interface WeixinNote {
     panelId: string;
     /** 那个会话的会话文件：重启以后 panelId 就换了，这个还认得。 */
     sessionFile?: string;
+    /** 那个会话跑在哪个目录：会话关掉之后要把它重新开起来，得在这个目录里起 pi。 */
+    cwd?: string;
     /** 一句话摘要（调用方已经截过）。 */
     summary?: string;
     kind: "done" | "ask";
@@ -34,12 +36,43 @@ export interface WeixinNote {
 }
 
 /** 记下"这条是我为了哪个会话发的"：键是服务端 message_id。 */
-interface SentRecord {
+export interface SentRecord {
     panelId: string;
     sessionFile?: string;
+    cwd?: string;
     name: string;
     kind: "done" | "ask";
     at: number;
+}
+
+/** 把那张对账表整个读出来（键是服务端 message_id）；没有 / 读不动就是空的。 */
+export function readSentNotes(file: string = weixinSentFile()): Record<string, SentRecord> {
+    try {
+        const raw = JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
+        if (raw && typeof raw === "object" && !Array.isArray(raw)) { return raw as Record<string, SentRecord>; }
+    } catch { /* 见上 */ }
+    return {};
+}
+
+/**
+ * 一条收到的微信想接回哪个会话。
+ *
+ * 引用了某条推送 → 就是那一条对应的会话；
+ * 什么也没引用 → 最近一次推过的那个会话（"不引用就接它的下文"）。
+ * @returns 没有记录（还没推过任何东西）就是 undefined
+ */
+export function findRouteForInbound(
+    refMessageId: string | undefined,
+    file: string = weixinSentFile(),
+): SentRecord | undefined {
+    const all = readSentNotes(file);
+    if (refMessageId && all[refMessageId]) { return all[refMessageId]; }
+    if (refMessageId) { return undefined; }   // 引用了但对不上：不瞎猜
+    let newest: SentRecord | undefined;
+    for (const record of Object.values(all)) {
+        if (!newest || (record.at ?? 0) > (newest.at ?? 0)) { newest = record; }
+    }
+    return newest;
 }
 
 /** 记多少条：够人回头翻一两天就够了，再多也没人引用到那么早的。 */
@@ -87,6 +120,7 @@ function rememberSent(file: string, messageId: string, note: WeixinNote): void {
     all[messageId] = {
         panelId: note.panelId,
         sessionFile: note.sessionFile,
+        cwd: note.cwd,
         name: note.name,
         kind: note.kind,
         at: Date.now(),

@@ -29,6 +29,8 @@ const BOT_TYPE = "3";
 /** 正常请求等多久；二维码状态是长轮询，服务器可能压着不回，得等更久。 */
 const API_TIMEOUT_MS = 15_000;
 const QR_POLL_TIMEOUT_MS = 35_000;
+/** 收消息也压着等（服务器那头有新消息就立刻回）；等超时算这一轮没消息。 */
+const UPDATES_TIMEOUT_MS = 35_000;
 
 /** 登录二维码的接口地址（固定这一个域名，跟官方一样；扫到一半可能被指到别的主机去）。 */
 const FIXED_API_BASE = "https://ilinkai.weixin.qq.com";
@@ -356,4 +358,130 @@ export async function pollLoginStatus(
         default:
             return { status: "wait" };
     }
+}
+
+/** 收到的第一条里那几种东西（只认用得上的：文字、引用了哪条）。 */
+interface RawItem {
+    type?: number;
+    text_item?: { text?: string };
+    /** 引用回复：被引用的那条挂在消息项上。 */
+    ref_msg?: {
+        /** 被引用那条的服务端编号（新版客户端只给这个，不给正文）。 */
+        svr_id?: string;
+        /** 被引用那条的摘要（有的客户端给）。 */
+        title?: string;
+        message_item?: { msg_id?: string; text_item?: { text?: string } };
+    };
+}
+
+interface RawMessage {
+    message_id?: string;
+    from_user_id?: string;
+    message_type?: number;
+    context_token?: string;
+    item_list?: RawItem[];
+}
+
+/** 一条从微信那头收到的消息（已经挑出这里用得上的东西）。 */
+export interface WeixinInbound {
+    /** 谁发的（对方的 iLink 用户标识）。 */
+    fromUserId: string;
+    /** 正文（几条文字项拼起来的）。 */
+    text: string;
+    /**
+     * 这条是"引用回复"的话，被引用那条的服务端编号。
+     * 这就是把微信里的一句话接回某个会话的那根线（我们发出去的每条都记着这个号）。
+     */
+    refMessageId?: string;
+    /** 被引用那条的正文（没引用、或者客户端没给就是空串）。 */
+    refText: string;
+}
+
+/** 一次长轮询的结果：这轮收到的消息 + 下次该带上哪个游标。 */
+export interface UpdatesResult {
+    messages: WeixinInbound[];
+    /** 下次请求原样带回去的游标（服务器给的全量 buf）。 */
+    cursor: string;
+    /** 服务器建议的下次长轮询等多久（ms）；没给就是 undefined。 */
+    timeoutMs?: number;
+}
+
+/** 长轮询一次：收消息。没有新消息时服务器会压着不回（压到超时为止），那是正常的。 */
+export async function getUpdates(
+    sender: WeixinSender,
+    cursor: string,
+    opts: { timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<UpdatesResult> {
+    const timeoutMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : UPDATES_TIMEOUT_MS;
+    let text: string;
+    try {
+        text = await request("ilink/bot/getupdates", {
+            method: "POST",
+            body: {
+                get_updates_buf: cursor ?? "",
+                base_info: { channel_version: CHANNEL_VERSION, bot_agent: `pichat/${appVersion()}` },
+            },
+            timeoutMs,
+            baseUrl: sender.baseUrl,
+            token: sender.botToken,
+            signal: opts.signal,
+        });
+    } catch (err) {
+        // 长轮询自己等超时是正常控制流（这一轮就是没消息）：当成空的一轮，别当故障
+        if (err instanceof WeixinRequestError && err.message.includes("等超时") && !opts.signal?.aborted) {
+            return { messages: [], cursor: cursor ?? "" };
+        }
+        throw err;
+    }
+    let raw: { ret?: number; errcode?: number; errmsg?: string; msgs?: RawMessage[]; get_updates_buf?: string; longpolling_timeout_ms?: number };
+    try {
+        raw = parseWeixinJson<typeof raw>(text);
+    } catch {
+        throw new WeixinRequestError(`微信那头回的不是 JSON：${text.slice(0, 200)}`);
+    }
+    const ret = typeof raw.ret === "number" ? raw.ret : 0;
+    const errcode = typeof raw.errcode === "number" ? raw.errcode : 0;
+    if ((ret !== 0 && ret !== undefined) || errcode !== 0) {
+        const code = errcode || ret;
+        throw new WeixinRequestError(code === -14
+            ? "微信那头说这个登录已经过期了（errcode -14）：重新扫一次码。"
+            : `收消息失败：ret=${ret} errcode=${errcode} ${raw.errmsg ?? ""}`.trim());
+    }
+    const messages: WeixinInbound[] = [];
+    for (const msg of Array.isArray(raw.msgs) ? raw.msgs : []) {
+        const inbound = readInbound(msg);
+        if (inbound) { messages.push(inbound); }
+    }
+    return {
+        messages,
+        cursor: typeof raw.get_updates_buf === "string" ? raw.get_updates_buf : (cursor ?? ""),
+        timeoutMs: typeof raw.longpolling_timeout_ms === "number" ? raw.longpolling_timeout_ms : undefined,
+    };
+}
+
+/** 把一条原始消息认成这里用得上的样子；认不出来（没有正文、或者不是人发的）给 undefined。 */
+function readInbound(msg: RawMessage): WeixinInbound | undefined {
+    // 只认人发的（机器人自己发的那条也会滚回来：认了就会自己跟自己说话）
+    if (typeof msg.message_type === "number" && msg.message_type !== 1) { return undefined; }
+    const fromUserId = typeof msg.from_user_id === "string" ? msg.from_user_id.trim() : "";
+    if (!fromUserId) { return undefined; }
+    const items = Array.isArray(msg.item_list) ? msg.item_list : [];
+    const texts: string[] = [];
+    let refMessageId: string | undefined;
+    let refText = "";
+    for (const item of items) {
+        const text = item?.text_item?.text;
+        if (typeof text === "string" && text) { texts.push(text); }
+        const ref = item?.ref_msg;
+        if (!ref) { continue; }
+        const id = (typeof ref.svr_id === "string" && ref.svr_id.trim())
+            || (typeof ref.message_item?.msg_id === "string" && ref.message_item.msg_id.trim())
+            || "";
+        if (id) { refMessageId = id; }
+        const quoted = ref.message_item?.text_item?.text;
+        refText = (typeof quoted === "string" && quoted) ? quoted : (typeof ref.title === "string" ? ref.title : "");
+    }
+    const text = texts.join("\n").trim();
+    if (!text && !refMessageId) { return undefined; }
+    return { fromUserId, text, refMessageId, refText };
 }

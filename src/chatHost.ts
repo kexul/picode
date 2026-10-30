@@ -46,7 +46,10 @@ import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { describeRestart } from "./serverRestart";
 import { WeixinLogin, readWeixinAccount } from "./weixinLogin";
-import { pushWeixinNote } from "./weixinPush";
+import { findRouteForInbound, pushWeixinNote, type SentRecord } from "./weixinPush";
+import { WeixinInbox } from "./weixinInbox";
+import { sendText, type WeixinInbound } from "./weixinIlink";
+import type { SessionRuntime } from "./sessionRuntime";
 import { plainPreview } from "./messageUtils";
 import {
     DEFAULT_AUTO_LOAD_LAST,
@@ -195,6 +198,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         this.state = new ServerStateStore(serverStateFile());
         // 通知区域那颗图标：一起来就放上去（开着那一项、又是 Windows 的话）
         this.startTray();
+        // 微信那头：一起来就开始收（人不在电脑前也能从微信里接上话）
+        this.startWeixinInbox();
     }
 
     /** 网页服务的地址（托盘菜单里的「打开」用它打开浏览器）：后端自己知道，插件那边不知道。 */
@@ -724,6 +729,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             name: (name || "").trim() || "会话",
             panelId,
             sessionFile: this.panels.get(panelId)?.currentSessionPath,
+            cwd: this.panels.get(panelId)?.cwd,
             summary: plainPreview(summary),
             kind,
             pageUrl: base ? `${base}/?session=${encodeURIComponent(panelId)}` : undefined,
@@ -741,11 +747,94 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
+     * 微信那头来消息的那条长轮询（见 weixinInbox.ts）；第一次用到时建一个。
+     */
+    private weixinInbox: WeixinInbox | undefined;
+
+    private startWeixinInbox(): void {
+        if (this.weixinInbox) { this.weixinInbox.start(); return; }
+        this.weixinInbox = new WeixinInbox(
+            (msg) => { void this.handleWeixinInbound(msg); },
+            (text) => this.log(text),
+        );
+        this.weixinInbox.start();
+    }
+
+    /**
+     * 微信那头来了一条消息：当成某个会话里用户说的一句话。
+     *
+     * 接哪个会话：引用了哪条推送就是那一条对应的，没引用就接最近一次推过的那个
+     * （见 weixinPush.ts 的 findRouteForInbound）。那个会话要是已经关掉了（人关的，
+     * 或者后端重启过），就按记下的会话文件与目录把它重新开起来——总之别把人的一句话丢了。
+     *
+     * 这一句接进去以后会当一轮跑；跑完照旧推一条回微信（见 trayNote），人就接着聊下去。
+     */
+    private async handleWeixinInbound(msg: WeixinInbound): Promise<void> {
+        const account = readWeixinAccount();
+        if (!account?.userId) { return; }
+        // 这个机器人是绑给一个人的：别人发来的一概不办（不然谁加了这个号都能指挥这台机器）
+        if (msg.fromUserId !== account.userId) {
+            this.log("[微信] 收到一条不是本人的消息，不理它");
+            return;
+        }
+        const text = msg.text.trim();
+        if (!text) { return; }
+        const route = findRouteForInbound(msg.refMessageId);
+        if (!route) {
+            this.log("[微信] 这条对不上任何会话，回一句告诉他怎么用");
+            await this.replyWeixin(account, msg.refMessageId
+                ? "这条引用的是哪个会话，我认不出来（是重启过吗？）。等我再推一条，然后引用那条消息回复。"
+                : "还没有往微信里推过任何会话。等我推一条，你再引用它回复；或者直接回复，会接进最近那个会话。");
+            return;
+        }
+        const rt = await this.resumeWeixinSession(route);
+        if (!rt) {
+            this.log(`[微信] 会话「${route.name}」打不开了`);
+            await this.replyWeixin(account, `想接进「${route.name}」，可那个会话打不开了（它的会话文件找不到了）。`);
+            return;
+        }
+        this.log(`[微信] 收到一句话，接进会话：${route.name}`);
+        rt.handleSend(text);
+    }
+
+    /**
+     * 找一个能接话的会话：先看还开着没有（开着的那个得确实是同一个会话文件——
+     * 界面上的会话标识每次重启都重算，不能只看标识），没有就按记下的文件重新开一个。
+     */
+    private async resumeWeixinSession(record: SentRecord): Promise<SessionRuntime | undefined> {
+        const open = this.panels.get(record.panelId);
+        if (open && (!record.sessionFile || this.samePath(open.currentSessionPath, record.sessionFile))) {
+            return open;
+        }
+        if (!record.sessionFile) { return undefined; }
+        // 同一个会话文件可能已经被人从历史里打开了：直接用那个，不再开第二个
+        const running = this.sessionRunningFile(record.sessionFile);
+        if (running) { return running; }
+        const launch = record.cwd ? { cwd: record.cwd, skipSpare: true } : {};
+        const rt = this.createPanelRuntime(this.getActive()?.currentModel(), launch);
+        await rt.loadSession(record.sessionFile);
+        this.broadcastSessionList();
+        return rt;
+    }
+
+    /** 回一句给微信里的人（发不出去就只记日志：不回也不该把后端弄挂）。 */
+    private async replyWeixin(account: { botToken: string; baseUrl?: string; userId?: string }, text: string): Promise<void> {
+        if (!account.userId) { return; }
+        try {
+            await sendText(
+                { botToken: account.botToken, baseUrl: account.baseUrl },
+                { to: account.userId, text },
+            );
+        } catch (err) {
+            this.log(`[微信] 回话没发出去：${err instanceof Error ? err.message : String(err)}`);
+        }
+    }
+
+    /**
      * 设置浮层里那块「微信」（扫码登录）。
      *
      * 为什么挤进显示选项那张清单里（而不再开一种消息）：那块浮层每次打开都重问一遍选项
-     * （见 media/chat.js 的 openSettings），夹在选项里就天然是“最新的一份”，不用另记状态、
-     * 也不用担心页面刷新后对不上。登录状态一变就重推这张清单（见 weixinChanged）。
+     * （见 media/chat.js 的 openSettings），夹在选项里就天然是“最新的一份”，不用另记状态、     * 也不用担心页面刷新后对不上。登录状态一变就重推这张清单（见 weixinChanged）。
      */
     private weixinOptionItem(): ViewOptionItem {
         const state = this.weixinLogin().current();
@@ -1800,6 +1889,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         if (this.disposed) { return; }
         this.disposed = true;
         this.disposeTray();
+        this.weixinInbox?.stop();
+        this.weixinInbox = undefined;
         this.disposeAllPickers();
         this.disposeAllCards();
         this.disposeAllConversations();
