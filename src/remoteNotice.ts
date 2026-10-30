@@ -22,6 +22,14 @@ export interface RemoteNotice {
     text?: string;
     /** 哪种事：跑完一轮 / 等你答一句。 */
     kind?: "done" | "ask";
+    /**
+     * 推送方那个后端的网页地址（`http://10.0.0.2:51883`）。
+     * 收到的那台要"把一句话送回那个会话"时往这个地址发（见 webChatServer.ts 的 `/weixinReply`）。
+     * 旧版本推来的没这个字段：那就只能弹一下面板，回不了话。
+     */
+    pageUrl?: string;
+    /** 推送方那个会话的**会话文件**：回话时那台靠它确认没把话送错会话（会话标识重启会重算）。 */
+    sessionFile?: string;
 }
 
 /** 推一次最多等这么久：对方没回应就当这条丢了（不攒着、不重试）。 */
@@ -43,7 +51,14 @@ export function readRemoteNotice(raw: unknown, fallbackLabel: string): RemoteNot
     // 摘要是可选的（旧版本不带）：带了也只是拿来显示，最长截一下
     const text = typeof body.text === "string" ? body.text.trim().slice(0, 200) : "";
     const kind = body.kind === "ask" ? "ask" : "done";
-    return { label, sessionId, name, text, kind };
+    // 回话地址也是可选的（旧版本不带）：带了才能把微信里那句话送回去
+    const pageUrl = typeof body.pageUrl === "string" ? body.pageUrl.trim().slice(0, 200) : "";
+    const sessionFile = typeof body.sessionFile === "string" ? body.sessionFile.trim().slice(0, 500) : "";
+    return {
+        label, sessionId, name, text, kind,
+        ...(pageUrl ? { pageUrl } : {}),
+        ...(sessionFile ? { sessionFile } : {}),
+    };
 }
 
 /**
@@ -107,4 +122,50 @@ export function isOwnPage(target: string, ownUrl: string | undefined): boolean {
 function isLoopbackHost(name: string): boolean {
     const host = name.replace(/^\[|\]$/g, "").toLowerCase();
     return host === "127.0.0.1" || host === "localhost" || host === "::1";
+}
+
+/**
+ * 收发微信的那台把微信里的一句话转给推它的那台（反方向的 `POST /weixinReply`）。
+ *
+ * 为什么要转：会话开在推它的那台的进程里，收发微信的那台碰不到它；
+ * 而人在微信里引用那条消息回一句，本来就该落进那个会话。
+ */
+export interface WeixinReply {
+    /** 那台那边这个会话的标识（就是它推送时给的 sessionId）。 */
+    sessionId: string;
+    text: string;
+    /** 那台那个会话的会话文件：收的那台靠它确认没送错会话（会话标识重启会重算）。 */
+    sessionFile?: string;
+    /** 那个会话叫什么（只用来写日志与报错）。 */
+    name?: string;
+}
+
+/** 从转过来的内容里读一句回话；字段不齐就给 undefined。 */
+export function readWeixinReply(raw: unknown): WeixinReply | undefined {
+    if (!raw || typeof raw !== "object") { return undefined; }
+    const body = raw as Record<string, unknown>;
+    const sessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
+    const text = typeof body.text === "string" ? body.text : "";
+    if (!sessionId || !text.trim()) { return undefined; }
+    const sessionFile = typeof body.sessionFile === "string" ? body.sessionFile.trim().slice(0, 500) : "";
+    const name = typeof body.name === "string" ? body.name.trim().slice(0, 200) : "";
+    return { sessionId, text, ...(sessionFile ? { sessionFile } : {}), ...(name ? { name } : {}) };
+}
+
+/** 把一句话送给那台（多久等不到就算没送到：不攒着、不重试，人那边会收到一句说明）。 */
+export async function pushWeixinReply(target: string, reply: WeixinReply): Promise<{ ok: boolean; reason: string }> {
+    const url = target.replace(/\/+$/, "") + "/weixinReply";
+    try {
+        const res = await fetch(url, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(reply),
+            signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
+        });
+        if (res.ok) { return { ok: true, reason: "" }; }
+        const text = await res.text().catch(() => "");
+        return { ok: false, reason: `那台回了 ${res.status}${text ? `：${text.slice(0, 120)}` : ""}` };
+    } catch (err) {
+        return { ok: false, reason: `连不上那台（${(err as Error)?.message ?? String(err)}）` };
+    }
 }

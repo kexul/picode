@@ -16,6 +16,15 @@ import * as path from "path";
 import { sendText, type WeixinSender } from "./weixinIlink";
 import { weixinSentFile } from "./serverPaths";
 
+/** 这条是替别的机器发的：那台叫什么、它的地址（回话往这儿发）。 */
+export interface RemoteOrigin {
+    label: string;
+    /** 那台后端的网页地址（它推过来时给的 `pageUrl`）；没给就是空串（回不去）。 */
+    url: string;
+    /** 那台那个会话的**会话文件**：回话时那台靠它确认没送错会话。 */
+    sessionFile?: string;
+}
+
 /** 一条要发到微信的事。 */
 export interface WeixinNote {
     /** 哪个会话（界面上显示的那个名字）；这就是那行的“标题”。 */
@@ -29,6 +38,8 @@ export interface WeixinNote {
     /** 一句话摘要（调用方已经截过）。 */
     summary?: string;
     kind: "done" | "ask";
+    /** 替别的机器发的：带上它，微信里回一句才知道该转给哪台（见 chatHost.ts 的 handleWeixinInbound）。 */
+    remote?: RemoteOrigin;
 }
 
 /** 记下"这条是我为了哪个会话发的"：键是服务端 message_id。 */
@@ -39,6 +50,12 @@ export interface SentRecord {
     name: string;
     kind: "done" | "ask";
     at: number;
+    /**
+     * 替别的机器发的：那台叫什么、它的地址。
+     * 有这一条时 panelId 是**那台那边**的会话标识，别在本机找它、也别想在本机重新开起来
+     * （会话文件与目录都在那台，见 chatHost.ts 的 handleWeixinInbound）。
+     */
+    remote?: RemoteOrigin;
 }
 
 /** 把那张对账表整个读出来（键是服务端 message_id）；没有 / 读不动就是空的。 */
@@ -74,9 +91,14 @@ export function findRouteForInbound(
 /** 记多少条：够人回头翻一两天就够了，再多也没人引用到那么早的。 */
 const SENT_KEEP = 200;
 
-/** 排成一条微信消息该长的样子：`会话名：摘要`（没有摘要就只剩会话名）。 */
+/**
+ * 排成一条微信消息该长的样子：`会话名：摘要`（没有摘要就只剩会话名）。
+ * 替别的机器发的在前面多一段 `哪台 · `：几台机器一起用时，光看会话名分不出是哪台。
+ */
 export function formatWeixinNote(note: WeixinNote): string {
-    const name = (note.name ?? "").trim() || "会话";
+    const own = (note.name ?? "").trim() || "会话";
+    const label = (note.remote?.label ?? "").trim();
+    const name = label ? `${label} · ${own}` : own;
     const summary = (note.summary ?? "").trim();
     return summary ? `${name}：${summary}` : name;
 }
@@ -116,6 +138,7 @@ function rememberSent(file: string, messageId: string, note: WeixinNote): void {
         name: note.name,
         kind: note.kind,
         at: Date.now(),
+        ...(note.remote ? { remote: note.remote } : {}),
     };
     // 只留最近的这些条：按时间排序，把老的丢掉（编号本身不表顺序，得看 at）
     const keys = Object.keys(all);

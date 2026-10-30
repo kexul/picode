@@ -24,7 +24,7 @@ import { ChatControllerBase, type ViewOptionItem } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
 import { isPackaged } from "./appAssets";
-import { hostOfUrl, isOwnPage, pushRemoteNotice, type RemoteNotice } from "./remoteNotice";
+import { hostOfUrl, isOwnPage, pushRemoteNotice, pushWeixinReply, type RemoteNotice } from "./remoteNotice";
 import { getAskAssets, getBashAssets, getEnvAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
 import {
@@ -748,6 +748,41 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
+     * 别的机器推来一条"有事"：本机右下角弹一条（照旧），微信里也发一条（登录过就发）。
+     *
+     * 微信那条要记住“这是替哪台发的”：人在微信里引用它回一句时，那句话得转回那台去办
+     * （会话在那台的进程里，这台碰不到）。
+     */
+    protected override trayNoteRemote(notice: RemoteNotice): void {
+        void this.pushRemoteWeixinNote(notice);
+        super.trayNoteRemote(notice);
+    }
+
+    /** 替别的机器推一条到微信。没登录、开关关着就什么都不做，发不出去只记日志。 */
+    private async pushRemoteWeixinNote(notice: RemoteNotice): Promise<void> {
+        if (!this.getWeixinPush()) { return; }
+        const account = readWeixinAccount();
+        if (!account?.userId) { return; }
+        const result = await pushWeixinNote({
+            name: notice.name,
+            panelId: notice.sessionId,
+            sessionFile: notice.sessionFile,
+            summary: plainPreview(notice.text ?? ""),
+            kind: notice.kind ?? "done",
+            remote: { label: notice.label, url: notice.pageUrl ?? "", sessionFile: notice.sessionFile },
+        }, {
+            botToken: account.botToken,
+            baseUrl: account.baseUrl,
+            to: account.userId,
+        });
+        if (result.ok) {
+            this.log(`[微信] 替「${notice.label}」推了一条：${notice.name}`);
+        } else {
+            this.log(`[微信] 替「${notice.label}」这条没推出去：${result.error}`);
+        }
+    }
+
+    /**
      * 微信那头来消息的那条长轮询（见 weixinInbox.ts）；第一次用到时建一个。
      */
     private weixinInbox: WeixinInbox | undefined;
@@ -788,6 +823,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 : "还没有往微信里推过任何会话。等我推一条，你再引用它回复；或者直接回复，会接进最近那个会话。");
             return;
         }
+        // 替别的机器发的那条：这句话得转回那台去办（会话开在那台的进程里）
+        if (route.remote) {
+            await this.forwardWeixinReply(route, account, text);
+            return;
+        }
         const rt = await this.resumeWeixinSession(route);
         if (!rt) {
             this.log(`[微信] 会话「${route.name}」打不开了`);
@@ -816,6 +856,52 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         await rt.loadSession(record.sessionFile);
         this.broadcastSessionList();
         return rt;
+    }
+
+    /**
+     * 把微信里的这一句转给推它的那台机器。
+     * 送不到就回一句告诉人：一声不吐比送错了强。
+     */
+    private async forwardWeixinReply(route: SentRecord, account: { botToken: string; baseUrl?: string; userId?: string }, text: string): Promise<void> {
+        const remote = route.remote;
+        const url = (remote?.url ?? "").replace(/\/+$/, "");
+        if (!url) {
+            await this.replyWeixin(account, `这条是「${remote?.label ?? "别的机器"}」推来的，可它没告诉过我回话该往哪儿发，接不上。`);
+            return;
+        }
+        const result = await pushWeixinReply(url, {
+            sessionId: route.panelId,
+            sessionFile: route.sessionFile,
+            name: route.name,
+            text,
+        });
+        if (!result.ok) {
+            this.log(`[微信] 转给「${remote?.label}」没成：${result.reason}`);
+            await this.replyWeixin(account, `那句话没送到「${remote?.label}」：${result.reason}`);
+            return;
+        }
+        this.log(`[微信] 收到一句话，转给「${remote?.label}」的会话：${route.name}`);
+    }
+
+    /**
+     * 别处（就是收发微信的那台）把微信里的一句话转过来：当成这个会话里用户说的一句话。
+     *
+     * 先认会话是不是还在、是不是还是那一个（会话标识每次重启都重算，光看标识会把话送错会话，
+     * 所以比对会话文件）。接进去以后照常跑一轮、跑完再推回微信。
+     */
+    public acceptWeixinReply(
+        sessionId: string,
+        text: string,
+        opts: { sessionFile?: string; name?: string } = {},
+    ): { ok: boolean; reason?: string } {
+        const rt = this.panels.get(sessionId);
+        if (!rt) { return { ok: false, reason: "那个会话已经不在那台后端上了（关掉过、或者后端重启过）" }; }
+        if (opts.sessionFile && rt.currentSessionPath && !this.samePath(rt.currentSessionPath, opts.sessionFile)) {
+            return { ok: false, reason: "那个会话标识在那台已经换成别的会话了" };
+        }
+        this.log(`[微信] 一句话从收发微信的那台转进来，接进会话：${this.sessionDisplayName(rt)}`);
+        rt.handleSend(text);
+        return { ok: true };
     }
 
     /** 回一句给微信里的人（发不出去就只记日志：不回也不该把后端弄挂）。 */
@@ -1828,6 +1914,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             // 摘要也推过去：那台弹面板时才不会只剩一个名字
             text: summary,
             kind,
+            // 回话地址与那个会话的文件名：对方收到的那台能把微信里那句话送回这个会话
+            // （见 webChatServer.ts 的 /weixinReply）
+            pageUrl: base.replace(/\/+$/, ""),
+            sessionFile: this.panels.get(sessionId)?.currentSessionPath,
         };
         for (const target of targets) {
             void pushRemoteNotice(target, notice);

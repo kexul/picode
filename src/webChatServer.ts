@@ -25,7 +25,7 @@ import { insideFolder, pathCaseKey, relativeTo } from "./pathRules";
 import { findListedFile } from "./fileSearch";
 import type { SessionChangeInfo } from "./editTracker";
 import type { BashTaskInfo } from "./bashProtocol";
-import { readRemoteNotice, type RemoteNotice } from "./remoteNotice";
+import { readRemoteNotice, readWeixinReply, type RemoteNotice } from "./remoteNotice";
 
 /**
  * PiChatWebServer —— 独立后端的网页服务：一个地址，手机和电脑都看这一份会话。
@@ -260,6 +260,12 @@ export interface WebServerHost {
     getThemeMode(): "light" | "dark";
     /** 别处推来一条“有事”（`POST /notify`，口令已经核对过）：在本机右下角弹一条。 */
     acceptRemoteNotice(notice: RemoteNotice): void;
+    /**
+     * 收发微信的那台把微信里的一句话转了过来（`POST /weixinReply`）：
+     * 当成这个会话里用户说的一句话接进去。
+     * @returns 接上了没有；没接上时带一句人话（会原样回到微信那边给人看）
+     */
+    acceptWeixinReply(sessionId: string, text: string, opts: { sessionFile?: string; name?: string }): { ok: boolean; reason?: string };
 }
 
 export interface WebServerHooks {
@@ -490,6 +496,11 @@ export class PiChatWebServer {
             // 别的 pichat 后端推来的“有事”（机器对机器，见 src/remoteNotice.ts）
             if (pathname === "/notify") {
                 void this.handleRemoteNotice(req, res);
+                return;
+            }
+            // 收发微信的那台把微信里的一句话转回来（机器对机器，同上）
+            if (pathname === "/weixinReply") {
+                void this.handleWeixinReply(req, res);
                 return;
             }
             if (pathname === "/" || pathname === "/index.html") {
@@ -1392,6 +1403,44 @@ export class PiChatWebServer {
             return;
         }
         this.host.acceptRemoteNotice(notice);
+        res.writeHead(204, { "Cache-Control": "no-store" });
+        res.end();
+    }
+
+    /**
+     * 收发微信的那台把微信里的一句话转了过来：交给宿主接进那个会话。
+     * 成不成都要回一句（那边要把"没送到"的原因说给微信里的人听）。
+     */
+    private async handleWeixinReply(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (req.method !== "POST") {
+            this.sendText(req, res, 405, "只接受 POST。");
+            return;
+        }
+        const text = await readBody(req, MAX_REQUEST_BYTES);
+        if (text === undefined) {
+            this.sendText(req, res, 413, "请求内容过大。");
+            return;
+        }
+        let raw: unknown;
+        try {
+            raw = JSON.parse(text);
+        } catch {
+            this.sendText(req, res, 400, "请求内容不是合法的 JSON。");
+            return;
+        }
+        const reply = readWeixinReply(raw);
+        if (!reply) {
+            this.sendText(req, res, 400, "这句话缺东西（要 sessionId 和 text）。");
+            return;
+        }
+        const result = this.host.acceptWeixinReply(reply.sessionId, reply.text, {
+            sessionFile: reply.sessionFile,
+            name: reply.name,
+        });
+        if (!result.ok) {
+            this.sendText(req, res, 409, result.reason ?? "接不上。");
+            return;
+        }
         res.writeHead(204, { "Cache-Control": "no-store" });
         res.end();
     }
