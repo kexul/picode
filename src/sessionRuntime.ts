@@ -2,10 +2,9 @@ import * as fs from "fs";
 import { PiClient } from "./piClient";
 import { ASK_DECODER, AskDoneNotice, AskRequest } from "./askProtocol";
 import { BASH_DECODER, BashTaskEvent, BashTaskInfo, readBashLogTail } from "./bashProtocol";
-import { parseGoalCommand } from "./goal";
+import { parseAutoCommand } from "./auto";
 import { StderrFrameSplitter } from "./piFrames";
 import { TABA_DECODER, TabaRequest } from "./tabaProtocol";
-import { GOAL_DECODER, GoalVerdictRequest } from "./goalProtocol";
 import { ENV_DECODER, type EnvSnapshot } from "./envProtocol";
 import { NameParts } from "./names";
 import { EditTracker, type SessionChangeInfo } from "./editTracker";
@@ -75,11 +74,11 @@ export const BUILTIN_COMPACT_ITEM: SlashCommandItem = {
     source: "builtin",
 };
 
-/** 目标（/goal）：插件自己接手的命令，见 goal.ts。 */
-export const BUILTIN_GOAL_ITEM: SlashCommandItem = {
-    insert: "/goal ",
-    name: "goal",
-    description: "定一个目标，一直干到验收通过（先谈验收清单）",
+/** 自动接着干（/auto）：插件自己接手的命令，见 auto.ts。 */
+export const BUILTIN_AUTO_ITEM: SlashCommandItem = {
+    insert: "/auto",
+    name: "auto",
+    description: "每轮跑完自动接着干（要停就点自动条上的按钮）",
     source: "builtin",
 };
 
@@ -127,9 +126,9 @@ export function commandMenuItems(commands: RpcCommandInfo[]): SlashCommandItem[]
                 ? c.source
                 : "other",
         }))
-        // 同名时别盖掉插件自己认下的那几条（/compact、/goal）
-        .filter((it) => it.name !== BUILTIN_COMPACT_ITEM.name && it.name !== BUILTIN_GOAL_ITEM.name)
-        .concat([BUILTIN_COMPACT_ITEM, BUILTIN_GOAL_ITEM])
+        // 同名时别盖掉插件自己认下的那几条（/compact、/auto）
+        .filter((it) => it.name !== BUILTIN_COMPACT_ITEM.name && it.name !== BUILTIN_AUTO_ITEM.name)
+        .concat([BUILTIN_COMPACT_ITEM, BUILTIN_AUTO_ITEM])
         .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -250,7 +249,7 @@ export class SessionRuntime {
     /** 本 panel 启动 pi 时的额外要求（子会话才有）；进程重启时照原样再用一次。 */
     private launch?: PanelLaunch;
     /** 从本进程 stderr 里挑暗号行的切割器（派子会话、问话、目标验收、后台命令四种暗号都走它）。 */
-    private readonly piFrames = new StderrFrameSplitter([TABA_DECODER, ASK_DECODER, GOAL_DECODER, BASH_DECODER, ENV_DECODER]);
+    private readonly piFrames = new StderrFrameSplitter([TABA_DECODER, ASK_DECODER, BASH_DECODER, ENV_DECODER]);
     /** 这个会话加载着什么（工具 / 技能 / MCP 服务器）：env-bridge 扩展报上来的最近一份。
      *  界面那颗「工具」点开时要它；还没报过来就是 undefined。 */
     private envSnapshot?: EnvSnapshot;
@@ -461,13 +460,6 @@ export class SessionRuntime {
                         ? `[派子会话] 收到派活请求：「${req.name}」（${req.id}，任务 ${req.task.length} 字）`
                         : `[派子会话] 收到停止请求：「${req.name || req.id || ""}」`);
                     this.host.onTabaRequest?.(this.id, req);
-                    continue;
-                }
-                if (frame.kind === "goal") {
-                    // 判官会话里 update_goal 的结论：交回宿主去改目标状态
-                    const verdict = frame.value as GoalVerdictRequest;
-                    console.error(`[目标验收] 判官报了结论：${verdict.pass ? "通过" : "没过"}（${verdict.summary}）`);
-                    this.host.onGoalVerdict?.(this.id, verdict);
                     continue;
                 }
                 if (frame.kind === "bash") {
@@ -734,7 +726,7 @@ export class SessionRuntime {
         const fromPlugin = opts?.followUp === true || opts?.steer === true;
         // pi 的内置斜杠命令只在终端界面里处理，走 RPC 发过去只会当成普通文字交给模型。
         // 其中 /compact 插件自己接手：改发 pi 的 compact 命令（pi 的 prompt 里做不了这个）。
-        // /goal 系列同样由插件接手（目标状态、提示词都在宿主那边）。
+        // /auto 同样由插件接手（开关状态、判官那一轮的提示都在宿主那边）。
         // 带图片、或者是插件代发的（子会话结果交回这类）不当命令看。
         if (!hasImages && !fromPlugin) {
             const instructions = parseCompactCommand(text || "");
@@ -746,13 +738,13 @@ export class SessionRuntime {
                 void this.compactContext(instructions);
                 return;
             }
-            const goalCmd = parseGoalCommand(text || "");
-            if (goalCmd && this.host.onGoalCommand) {
+            const autoCmd = parseAutoCommand(text || "");
+            if (autoCmd && this.host.onAutoCommand) {
                 this.hasConversation = true;
                 if (!this.client || !this.client.isRunning()) {
                     this.startClient();
                 }
-                this.host.onGoalCommand(this.id, goalCmd);
+                this.host.onAutoCommand(this.id, autoCmd);
                 return;
             }
         }

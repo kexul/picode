@@ -18,7 +18,7 @@ import { PiChatWebServer, type WebServerSettings } from "./webChatServer";
 import { ChatHost } from "./chatHost";
 import { readServerConfig, updateServerConfig, seedPrompts } from "./serverConfig";import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
 import { startRestart } from "./serverRestart";
-import { ensureAskAssets, ensureGoalAssets, ensureImageAssets, ensureTabaAssets, ensureTitleAssets, ensureBashAssets, ensureEnvAssets } from "./bridgeAssets";
+import { ensureAskAssets, ensureImageAssets, ensureTabaAssets, ensureTitleAssets, ensureBashAssets, ensureEnvAssets } from "./bridgeAssets";
 import { serverConfigFile } from "./serverPaths";
 
 /** 界面资源目录（chat.js / chat.css 这些）：正常跑在仓库根下，单文件 exe 时是解出来的缓存目录。 */
@@ -188,13 +188,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     const askAssets = ensureAskAssets(VERSION, cfg.prompts);
     if (!askAssets.ok) {
         log(`问话（ask_choice）这个工具没开（文件没写成：${askAssets.error}）`);
-    }
-
-    // 目标（/goal）判官会话里那个 update_goal：同样先写好（它只在判官会话里加载）。
-    // 说明那一段人能改，所以把当前那份提示词传进去（拼接在生成的文件里）。
-    const goalAssets = ensureGoalAssets(VERSION, cfg.prompts);
-    if (!goalAssets.ok) {
-        log(`目标的验收（/goal 的判官）没开（文件没写成：${goalAssets.error}）`);
     }
 
     // 自动起标题：同样先写好（它只在主会话里加载）

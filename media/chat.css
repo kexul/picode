@@ -489,33 +489,29 @@
   #queueBar:empty, #queueBar.hidden { display: none; }
   /* 目标条：输入框上头那一条「目标」的账（只在有目标时出现）。
      平时一行；展开是点开的正文（目标原文 + 验收清单）。 */
-  #goalBar { display: flex; flex-direction: column; gap: 2px; padding: 0; background: transparent; font-size: var(--vscode-font-size); }
-  #goalBar:empty, #goalBar.hidden { display: none; }
-  #goalBar .gb-row { display: flex; align-items: center; gap: 4px; }
-  #goalBar .gb-head { display: flex; align-items: center; gap: 6px; padding: 2px 0; border: none; background: transparent; font-family: inherit; font-size: inherit; color: var(--vscode-descriptionForeground, inherit); cursor: pointer; user-select: none; text-align: left; flex: 0 1 auto; min-width: 0; }
-  #goalBar .gb-head:hover { background: color-mix(in srgb, var(--vscode-list-hoverBackground, rgba(128,128,128,0.1)) 50%, transparent); border-radius: 3px; }
-  #goalBar .gb-head:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
-  #goalBar .gb-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; background: var(--vscode-descriptionForeground, rgba(128,128,128,0.8)); }
-  #goalBar.talk .gb-dot { background: var(--vscode-charts-yellow, #cca700); animation: qb-pulse 1.2s ease-in-out infinite; }
-  #goalBar.run .gb-dot { background: var(--vscode-charts-green, #89d185); animation: qb-pulse 1.2s ease-in-out infinite; }
-  #goalBar.stop .gb-dot { background: var(--vscode-charts-orange, #d18616); }
-  #goalBar.done .gb-dot { background: var(--vscode-charts-green, #89d185); }
-  #goalBar .gb-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #goalBar .gb-caret { margin-left: auto; opacity: 0.7; flex-shrink: 0; cursor: pointer; transition: transform 200ms ease; }
-  #goalBar .gb-caret svg { width: 1em; height: 1em; display: block; }
-  #goalBar.open .gb-caret { transform: rotate(90deg); }
-  #goalBar .gb-body { display: none; margin: 1px 0 3px 12px; font-size: 0.92em; color: var(--vscode-foreground); max-height: 220px; overflow: auto; }
+  #autoBar { display: flex; flex-direction: column; gap: 2px; padding: 0; background: transparent; font-size: var(--vscode-font-size); }
+  #autoBar:empty, #autoBar.hidden { display: none; }
+  #autoBar .gb-row { display: flex; align-items: center; gap: 4px; }
+  #autoBar .gb-head { display: flex; align-items: center; gap: 6px; padding: 2px 0; border: none; background: transparent; font-family: inherit; font-size: inherit; color: var(--vscode-descriptionForeground, inherit); cursor: pointer; user-select: none; text-align: left; flex: 0 1 auto; min-width: 0; }
+  #autoBar .gb-head:hover { background: color-mix(in srgb, var(--vscode-list-hoverBackground, rgba(128,128,128,0.1)) 50%, transparent); border-radius: 3px; }
+  #autoBar .gb-head:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+  #autoBar .gb-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; background: var(--vscode-descriptionForeground, rgba(128,128,128,0.8)); }
+  #autoBar.run .gb-dot { background: var(--vscode-charts-green, #89d185); animation: qb-pulse 1.2s ease-in-out infinite; }
+  #autoBar.stop .gb-dot { background: var(--vscode-charts-orange, #d18616); }
+  #autoBar .gb-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #autoBar .gb-caret { margin-left: auto; opacity: 0.7; flex-shrink: 0; cursor: pointer; transition: transform 200ms ease; }
+  #autoBar .gb-caret svg { width: 1em; height: 1em; display: block; }
+  #autoBar.open .gb-caret { transform: rotate(90deg); }
+  #autoBar .gb-body { display: none; margin: 1px 0 3px 12px; font-size: 0.92em; color: var(--vscode-foreground); max-height: 220px; overflow: auto; }
   /* 这一行右边那两颗：开始 / 暂停（同一颗）、停止。紧跟在字后面，离最右边的箭头远一点（不至于误点）。 */
-  #goalBar .gb-acts { display: flex; align-items: center; gap: 8px; margin-left: 8px; flex-shrink: 0; }
-  #goalBar .gb-act { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 18px; padding: 0; border: 1px solid var(--vscode-button-border, transparent); border-radius: 3px; background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.16)); color: var(--vscode-button-secondaryForeground, inherit); font-family: inherit; font-size: inherit; cursor: pointer; }
-  #goalBar .gb-act svg { display: block; width: 11px; height: 11px; }
-  #goalBar .gb-act:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,0.28)); }
-  #goalBar .gb-act:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
-  #goalBar.open .gb-body { display: block; }
-  #goalBar .gb-label { margin: 4px 0 1px; opacity: 0.7; font-size: 0.9em; }
-  #goalBar .gb-objective { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: inherit; }
-  #goalBar .gb-criteria { margin: 0; padding-left: 18px; }
-  #goalBar .gb-criteria li { margin: 1px 0; }
+  #autoBar .gb-acts { display: flex; align-items: center; gap: 8px; margin-left: 8px; flex-shrink: 0; }
+  #autoBar .gb-act { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 18px; padding: 0; border: 1px solid var(--vscode-button-border, transparent); border-radius: 3px; background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.16)); color: var(--vscode-button-secondaryForeground, inherit); font-family: inherit; font-size: inherit; cursor: pointer; }
+  #autoBar .gb-act svg { display: block; width: 11px; height: 11px; }
+  #autoBar .gb-act:hover { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,0.28)); }
+  #autoBar .gb-act:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+  #autoBar.open .gb-body { display: block; }
+  #autoBar .gb-label { margin: 4px 0 1px; opacity: 0.7; font-size: 0.9em; }
+  #autoBar .gb-note { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: inherit; }
   #queueBar .qb-block { overflow: hidden; }
   #queueBar .qb-head { display: flex; align-items: center; gap: 6px; padding: 2px 0; border-radius: 3px; cursor: pointer; user-select: none; }
   #queueBar .qb-head:hover { background: color-mix(in srgb, var(--vscode-list-hoverBackground, rgba(128,128,128,0.1)) 50%, transparent); }

@@ -3,7 +3,6 @@
  *
  *   taba-bridge-<插件版本>.ts   派子会话（taba）那个扩展（源码见 tabaBridgeSource.ts）
  *   ask-bridge-<插件版本>.ts    问话（ask_choice）那个扩展（源码见 askBridgeSource.ts）
- *   goal-bridge-<插件版本>.ts   目标（/goal）那个扩展：判官会话里的 update_goal（源码见 goalBridgeSource.ts）
  *   title-bridge-<插件版本>.ts  自动起标题那个扩展（源码见 titleBridgeSource.ts）
  *   image-bridge-<插件版本>.ts  会话里的截图挪出会话文件（源码见 imageOffloadBridgeSource.ts）
  *   bash-bridge-<插件版本>.ts  把 bash 换成能「脱手到后台」的版本（源码见 bashBridgeSource.ts）
@@ -29,7 +28,6 @@ import * as fs from "fs";
 import * as path from "path";
 import { tabaBridgeSource } from "./tabaBridgeSource";
 import { askBridgeSource } from "./askBridgeSource";
-import { goalBridgeSource } from "./goalBridgeSource";
 import { titleBridgeSource } from "./titleBridgeSource";
 import { IMAGE_BRIDGE_SOURCE } from "./imageOffloadBridgeSource";
 import { bashBridgeSource } from "./bashBridgeSource";
@@ -66,7 +64,7 @@ interface BridgeKind {
     afterWrite(rootDir: string): void;
 }
 
-const BRIDGES: Record<"taba" | "ask" | "goal" | "title" | "image" | "bash" | "env", BridgeKind> = {
+const BRIDGES: Record<"taba" | "ask" | "title" | "image" | "bash" | "env", BridgeKind> = {
     taba: {
         prefix: "taba-bridge",
         source: tabaBridgeSource,
@@ -87,12 +85,6 @@ const BRIDGES: Record<"taba" | "ask" | "goal" | "title" | "image" | "bash" | "en
             fs.mkdirSync(askAnswersDir(rootDir), { recursive: true });
             cleanStaleAskAnswers(rootDir);
         },
-    },
-    goal: {
-        prefix: "goal-bridge",
-        source: goalBridgeSource,
-        // 判官只报个结论，外面不留文件：不用建目录、不用清残留
-        afterWrite(): void { /* 没别的活 */ },
     },
     title: {
         prefix: "title-bridge",
@@ -198,11 +190,6 @@ export function ensureAskAssets(version: string, over?: PromptOverrides): Bridge
     return ensureBridge(BRIDGES.ask, version, over);
 }
 
-/** 同上，目标（/goal）那套：只有判官会话加载它（update_goal）。 */
-export function ensureGoalAssets(version: string, over?: PromptOverrides): BridgeAssets {
-    return ensureBridge(BRIDGES.goal, version, over);
-}
-
 /** 同上，自动起标题那套：只有主会话加载它（子会话、判官不带）。 */
 export function ensureTitleAssets(version: string, over?: PromptOverrides): BridgeAssets {
     return ensureBridge(BRIDGES.title, version, over);
@@ -230,10 +217,6 @@ export function getTabaAssets(): BridgeAssets | undefined {
 
 export function getAskAssets(): BridgeAssets | undefined {
     return cached.get(BRIDGES.ask);
-}
-
-export function getGoalAssets(): BridgeAssets | undefined {
-    return cached.get(BRIDGES.goal);
 }
 
 export function getTitleAssets(): BridgeAssets | undefined {

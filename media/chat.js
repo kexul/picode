@@ -75,7 +75,7 @@
   const imgPreviewEl = document.getElementById("imgPreview");
   const fileMenuEl = document.getElementById("fileMenu");
   const queueBarEl = document.getElementById("queueBar");
-  const goalBarEl = document.getElementById("goalBar");
+  const autoBarEl = document.getElementById("autoBar");
   const newSessionBtn = document.getElementById("newSessionBtn");
   const sessionNameBtn = document.getElementById("sessionName");
   // 一个会话都没有时消息流中间那块提示（见 syncNoSessionHint）
@@ -880,11 +880,11 @@
       // 生成速度（t/s）：后端算好了推过来（只算模型真在吐字的那段时间，见 sessionRuntime 的
       // noteGenTokens）；停了就挂着这一轮最后的数，下一轮开始清空
       tps: undefined,
-      // 目标（/goal）：goal 是这个会话的目标状态（后端推来，见 case "goal"），
-      // goalOpen 是目标条展不展开（点一下换一面）。
-      goal: null,
-      goalSummary: null,
-      goalOpen: false,
+      // 自动接着干（/auto）：auto 是这个会话的开关状态（后端推来，见 case "auto"），
+      // autoOpen 是自动条展不展开（点一下换一面）。
+      auto: null,
+      autoSummary: null,
+      autoOpen: false,
       // 工具调用耗时（见 noteToolDuration / renderToolStats）：只算这次打开页面之后跑过的调用。
       // byTool：工具名 → { count, totalMs, maxMs }；slowest：跑得最久的那几次（最多 TOOL_STATS_SLOWEST 条）。
       toolStats: { calls: 0, totalMs: 0, byTool: new Map(), slowest: [] },
@@ -4147,101 +4147,81 @@
     };
   }
 
-  // ==================== 目标条（/goal，输入框上头那一条）====================
+  // ==================== 自动条（/auto，输入框上头那一条）====================
   /**
-   * 把当前会话的目标条画出来：`summary` 那行字由后端拼好（目标状态的文案只写一处，
-   * 见 goal.ts 的 goalBarSummary），这里只管三副脸、展开收起、点开看全文。
+   * 把当前会话的自动条画出来：`summary` 那行字由后端拼好（文案只写一处，
+   * 见 auto.ts 的 autoBarSummary），这里只管两副脸、展开收起、点开看判官说了什么。
    */
-  function renderGoalBar() {
-    if (!goalBarEl) { return; }
+  function renderAutoBar() {
+    if (!autoBarEl) { return; }
     const st = activeSession();
-    const goal = st ? st.goal : null;
-    const summary = st ? st.goalSummary : null;
-    if (!goal || !summary) {
-      goalBarEl.className = "hidden";
-      goalBarEl.innerHTML = "";
+    const auto = st ? st.auto : null;
+    const summary = st ? st.autoSummary : null;
+    if (!auto || !summary) {
+      autoBarEl.className = "hidden";
+      autoBarEl.innerHTML = "";
       return;
     }
-    goalBarEl.className = summary.tone + (st.goalOpen ? " open" : "");
-    goalBarEl.innerHTML = "";
+    autoBarEl.className = summary.tone + (st.autoOpen ? " open" : "");
+    autoBarEl.innerHTML = "";
     // 一行排开：左边是那一行字（点了展开），右边两颗按钮 —— 收着的时候也能点，不用先展开。
     const row = document.createElement("div"); row.className = "gb-row";
     const head = document.createElement("button");
     head.type = "button";
     head.className = "gb-head";
-    head.title = "目标 · 点开看目标原文与验收清单";
-    head.setAttribute("aria-expanded", String(!!st.goalOpen));
+    head.title = "自动接着干 · 点开看判官最近说了什么";
+    head.setAttribute("aria-expanded", String(!!st.autoOpen));
     const dot = document.createElement("span"); dot.className = "gb-dot";
     const text = document.createElement("span"); text.className = "gb-text";
     text.textContent = summary.text;
     head.append(dot, text);
     row.appendChild(head);
 
-    // 两颗按钮就管这个目标：左边那颗是播放 / 暂停（是在跑就画暂停，点一下换一面），
-    // 右边那颗是停止（不再追踪这个目标，等于以前那个 /goal 清除）。
-    // 面上只画图标，文字放 title / aria-label（鼠标指上去才看得到）。
+    // 两颗按钮：左边那颗是继续 / 暂停（开着的时候画暂停，点一下换一面），
+    // 右边那颗是停止（关掉这个开关）。面上只画图标，文字放 title / aria-label。
+    const running = auto.phase === "on";
     const acts = document.createElement("div"); acts.className = "gb-acts";
-    if (goal.phase !== "complete") {
-      const running = goal.phase === "active";
-      const label = running ? "暂停" : "开始";
-      const play = document.createElement("button");
-      play.type = "button";
-      play.className = "gb-act gb-play";
-      play.dataset.act = running ? "pause" : "start";
-      play.setAttribute("aria-label", label);
-      play.title = running ? "暂停这个目标（随时能接着跑）" : "开始干（清单已经有了就开跑）";
-      play.innerHTML = running ? ICONS.pause : ICONS.play;
-      play.addEventListener("click", () => {
-        vscode.postMessage({ type: "goalAct", sessionId: st.id, act: running ? "pause" : "start" });
-      });
-      acts.appendChild(play);
-    }
+    const play = document.createElement("button");
+    play.type = "button";
+    play.className = "gb-act gb-play";
+    play.dataset.act = running ? "pause" : "start";
+    play.setAttribute("aria-label", running ? "暂停" : "继续");
+    play.title = running ? "暂停（不再自动往下催，随时能接着开）" : "继续（下一轮跑完又开始判断）";
+    play.innerHTML = running ? ICONS.pause : ICONS.play;
+    play.addEventListener("click", () => {
+      vscode.postMessage({ type: "autoAct", sessionId: st.id, act: running ? "pause" : "start" });
+    });
+    acts.appendChild(play);
     const stop = document.createElement("button");
     stop.type = "button";
     stop.className = "gb-act gb-stop";
     stop.dataset.act = "stop";
     stop.setAttribute("aria-label", "停止");
-    stop.title = "停止这个目标（不再追踪它，对话和文件都不动）";
+    stop.title = "停止自动接着干（不再往下催，对话和文件都不动）";
     stop.innerHTML = ICONS["stop-small"];
     stop.addEventListener("click", () => {
-      vscode.postMessage({ type: "goalAct", sessionId: st.id, act: "stop" });
+      vscode.postMessage({ type: "autoAct", sessionId: st.id, act: "stop" });
     });
     acts.appendChild(stop);
     row.appendChild(acts);
     const caret = document.createElement("span"); caret.className = "gb-caret";
     caret.innerHTML = CHEVRON_SVG;
     row.appendChild(caret);
-    goalBarEl.appendChild(row);
+    autoBarEl.appendChild(row);
 
     const body = document.createElement("div"); body.className = "gb-body";
-    const objLabel = document.createElement("div"); objLabel.className = "gb-label";
-    objLabel.textContent = "目标";
-    const objective = document.createElement("pre"); objective.className = "gb-objective";
-    objective.textContent = goal.objective || "";
-    body.append(objLabel, objective);
-    if (typeof goal.note === "string" && goal.note.trim()) {
-      const noteLabel = document.createElement("div"); noteLabel.className = "gb-label";
-      noteLabel.textContent = "最近一次结论";
-      const noteText = document.createElement("pre"); noteText.className = "gb-objective";
-      noteText.textContent = goal.note.trim();
-      body.append(noteLabel, noteText);
-    }
-    if (Array.isArray(goal.criteria) && goal.criteria.length) {
-      const crLabel = document.createElement("div"); crLabel.className = "gb-label";
-      crLabel.textContent = "验收清单（" + goal.criteria.length + " 条）";
-      const list = document.createElement("ul"); list.className = "gb-criteria";
-      for (const c of goal.criteria) {
-        const li = document.createElement("li");
-        li.textContent = c;
-        list.appendChild(li);
-      }
-      body.append(crLabel, list);
-    }
-    goalBarEl.appendChild(body);
+    const noteLabel = document.createElement("div"); noteLabel.className = "gb-label";
+    noteLabel.textContent = "判官最近说的";
+    const noteText = document.createElement("pre"); noteText.className = "gb-note";
+    noteText.textContent = (typeof auto.note === "string" && auto.note.trim())
+      ? auto.note.trim()
+      : "还没有结论。每轮跑完判官看一眼：还要接着干就发一句「继续」。";
+    body.append(noteLabel, noteText);
+    autoBarEl.appendChild(body);
 
     const toggle = () => {
-      st.goalOpen = !st.goalOpen;
-      renderGoalBar();
+      st.autoOpen = !st.autoOpen;
+      renderAutoBar();
     };
     head.addEventListener("click", toggle);
     caret.addEventListener("click", toggle);
@@ -4738,7 +4718,7 @@
     updateSendState();
     syncStatus();
     renderQueueBar(st);
-    renderGoalBar();
+    renderAutoBar();
     syncJumpBottom(st);
   }
 
@@ -9716,11 +9696,11 @@
         st.activityDetail = typeof s.activityDetail === "string" ? s.activityDetail : "";
         st.piReady = s.piReady !== false;
         st.loading = !!s.loading;
-        // 目标（/goal）：每次列表都带一份（跟模型名一样，是一次性推送的补位）——
-        // 刷新页面 / 重连后目标条就靠它回来。
-        st.goal = s.goal || null;
-        st.goalSummary = s.goalSummary || null;
-        if (!st.goal) { st.goalOpen = false; }
+        // 自动接着干（/auto）：每次列表都带一份（跟模型名一样，是一次性推送的补位）——
+        // 刷新页面 / 重连后自动条就靠它回来。
+        st.auto = s.auto || null;
+        st.autoSummary = s.autoSummary || null;
+        if (!st.auto) { st.autoOpen = false; }
         syncSessionLoading(st);
         // 界面重建（网页重连、视图隐藏重开、窗口重载）后 sessionList 是唯一信源：
         // modelChanged 是一次性推送，不在此恢复会导致输入框底下那颗胶囊的模型名丢失。
@@ -9761,10 +9741,10 @@
         const pending = pendingActivateId;
         pendingActivateId = null;
         if (sessions.has(pending)) { activateSessionView(pending); }
-        else if (activeId && sessions.has(activeId)) { mountActiveSession(); syncStatus(); renderGoalBar(); }
+        else if (activeId && sessions.has(activeId)) { mountActiveSession(); syncStatus(); renderAutoBar(); }
       } else if (activeId && sessions.has(activeId)) {
         mountActiveSession();
-        renderGoalBar();
+        renderAutoBar();
       }
       renderSessionBar();
       // 会话目录这时候才认识：这一列开着又空着的话，把「目录」那一格摆上（见票 13）
@@ -10340,13 +10320,13 @@
         t.provider = msg.provider || "";
         if (activeId === t.id) { syncStatus(); }
         break;
-      case "goal":
-        // 目标状态（/goal）：目标条常驻在输入框上头，不再往消息流里写一条
-        t.goal = msg.goal || null;
-        t.goalSummary = msg.summary || null;
-        if (msg.open === true) { t.goalOpen = true; }
-        if (!t.goal) { t.goalOpen = false; }
-        if (activeId === t.id) { renderGoalBar(); }
+      case "auto":
+        // 开关状态（/auto）：自动条常驻在输入框上头，不再往消息流里写一条
+        t.auto = msg.auto || null;
+        t.autoSummary = msg.summary || null;
+        if (msg.open === true) { t.autoOpen = true; }
+        if (!t.auto) { t.autoOpen = false; }
+        if (activeId === t.id) { renderAutoBar(); }
         break;
       case "thinkingChanged":
         t.thinkingLevel = msg.level || "";

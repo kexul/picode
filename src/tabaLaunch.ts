@@ -59,14 +59,14 @@ export function buildTabaLaunch(extraArgs: string[], cwd: string): PanelLaunch {
 /**
  * 派子会话那一步的几种变化。
  *
- * 判官（目标验收）跟普通子会话走的是同一条路，差别都在这里：
+ * 自动接着干（/auto）的判官跟普通子会话走的是同一条路，差别都在这里：
  *   普通子会话：进列表、写名录、跑完把结果交回父会话；
- *   判官：全都不做，只用 update_goal 报结论。
+ *   判官：全都不做，它的结论从它最后那条回复里读（见 chatControllerBase 的 autoJudgeOnTurnEnd）。
  */
 export interface TabaSpawnOptions {
     /** 不写名录、不给模型看见、跑完不交回（见 TabaChild.hidden）。 */
     hidden?: boolean;
-    /** 额外命令行参数（判官要 `-e <goal 扩展>` 才有 update_goal）。 */
+    /** 额外命令行参数（判官用 `--no-tools --no-mcp` 起：它只读一段文字回一句话）。 */
     extraArgs?: string[];
     /** 任务原文直接发，不拼「任务 + 收尾要求」（判官的提示词自己就是完整的一轮）。 */
     rawTask?: boolean;

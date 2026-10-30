@@ -28,7 +28,7 @@ export function serverAddressFile(dir: string = pichatDir()): string {
     return path.join(dir, "server.json");
 }
 
-/** 各会话的「/goal 目标」存这里（键是会话文件路径，见 goalFiles.ts）。 */
-export function goalsFile(dir: string = pichatDir()): string {
-    return path.join(dir, "goals.json");
+/** 各会话的「自动接着干（/auto）开关」存这里（键是会话文件路径，见 autoFiles.ts）。 */
+export function autoFile(dir: string = pichatDir()): string {
+    return path.join(dir, "auto.json");
 }

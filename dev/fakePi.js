@@ -127,8 +127,8 @@ function loadBridges() {
         if (!file) { console.error("[假 pi] " + dir + " 里找不到 " + prefix + "-*.ts：那套工具这次跑不了。"); continue; }
         loadBridgeFile(path.join(dir, file));
     }
-    // 命令行上直接指过来的扩展（`-e <文件>`）：目标判官那个 goal-bridge 走这条路
-    // （逐字对齐真 pi 的写法，免得这里验的和真跑的不是同一份加载方式）
+    // 命令行上直接指过来的扩展（`-e <文件>`）：逐字对齐真 pi 的写法，
+    // 免得这里验的和真跑的不是同一份加载方式
     const argv = process.argv.slice(2);
     for (let i = 0; i < argv.length; i++) {
         if (argv[i] !== "-e" || i + 1 >= argv.length) { continue; }
@@ -138,11 +138,11 @@ function loadBridges() {
 }
 loadBridges();
 
-// `--tools` 是白名单：真 pi 用它过滤工具（连扩展注册的那些也一起过一遍，不在名单里就不给模型）。
-// 这里照着挡一道 —— 不挡的话，“传了白名单、结果把扩展工具也挡掉了”这种错在调试里永远看不见
-//（2026-10-21 判官就是这么连着两轮报不上结论的：白名单里漏了 update_goal）。
+// `--tools` 是白名单、`--no-tools` 是一个都不给：真 pi 用它过滤工具（连扩展注册的那些也一起过一遍，
+// 不在名单里就不给模型）。这里照着挡一道 —— 不挡的话，“给了工具限制、结果跟真 pi 不一样”这种错在调试里看不见。
 const allowedTools = (() => {
     const argv = process.argv.slice(2);
+    if (argv.indexOf("--no-tools") >= 0) { return []; }
     const at = argv.indexOf("--tools");
     if (at < 0 || at + 1 >= argv.length) { return null; }
     return argv[at + 1].split(",").map((s) => s.trim()).filter(Boolean);
@@ -435,56 +435,21 @@ async function runScript(userText) {
         return;
     }
 
-    // ---- /goal 的「谈验收条件」那一轮（见 goal.ts 的谈判提示）：回一份清单就收工，
-    // 让 dev/goalCommand.js 能验「清单被取下来 → 目标条变脸」整条路，不用真模型 ----
-    if (/先别动手/.test(userText)) {
-        await say([
-            "这目标我拆成三条来验：",
-            "",
-            " [验收清单]",
-            "- dev/README.md 里每条命令都能原样跑通，退出码为 0",
-            "- 文档里提到的文件都在仓库里真实存在",
-            "- 从空目录照文档做一遍不报错",
-            "",
-            "有一处要你拍板：「写一份能照着做的说明」是并在 README 里，还是单开一个文件？",
-        ].join("\n"));
-        finish();
-        return;
-    }
-
-    // ---- 目标（/goal）的判官那一轮（见 goalJudge.ts）：演一次“自己跑命令验 + 调 update_goal 报结论” ----
+    // ---- 自动接着干（/auto）的判官那一轮（见 auto.ts 的 autoJudge）：一句话判"继不继续" ----
     // 判官是另起的 pi 进程，每轮一份：轮数记在会话目录里的一个文件上，跨进程才数得对。
-    //   FAKEPI_JUDGE_PASS_ON=n  第 n 轮开始报“通过”（默认 2：前一轮不过、后一轮过）
-    if (/【验收第 \d+ 轮】/.test(userText)) {
-        await say("（假模型）我是判官：先看一眼工人的会话文件，再跑一条验证命令。");
-        // 判官一般要跑几分钟；这里可以用环境变量把它拖慢一点，好让“判官正在验”在界面上露出来
+    //   FAKEPI_AUTO_STOP_ON=n  第 n 轮开始说「结束」（默认 2：前一轮继续、后一轮收工）
+    if (/判断主会话还要不要接着干/.test(userText)) {
+        // 判官一般要跑一会儿；这里可以把它拖慢一点，好让「判官正在看」在界面上露出来
         await pause(Number(process.env.FAKEPI_JUDGE_MS || 0));
-        const workerFile = (userText.match(/【工人的会话文件】([^\n]+)/) || [])[1] || "";
-        if (workerFile) {
-            await act("read", { path: workerFile.trim(), offset: 1, limit: 20 }, {
-                content: [{ type: "text", text: "Read " + workerFile.trim() }],
-                raw: { content: [{ type: "text", text: "Read " + workerFile.trim() }] },
-            });
-        }
-        await act("bash", { command: "echo 验一下" }, {
-            content: [{ type: "text", text: "验一下\n" }],
-            raw: { content: [{ type: "text", text: "验一下\n" }] },
-        });
         const counterFile = path.join(process.cwd(), ".judge-rounds");
         let round = 1;
         try { round = (Number(fs.readFileSync(counterFile, "utf8")) || 0) + 1; } catch { round = 1; }
         try { fs.writeFileSync(counterFile, String(round), "utf8"); } catch { /* 写不进去就当第一轮 */ }
-        const passOn = Number(process.env.FAKEPI_JUDGE_PASS_ON || 2);
-        const pass = round >= passOn;
-        const reply = await actReal("update_goal", pass
-            ? { pass: true, summary: "（假判官）验收清单都验过了", missing: [], next: "" }
-            : {
-                pass: false,
-                summary: "（假判官）第二条没过：文件名对不上",
-                missing: ["文档里提到的文件都在仓库里真实存在"],
-                next: "把 README 里提到的文件名改成仓库里真实存在的那些",
-            });
-        await say("报完了 —— " + reply);
+        const stopOn = Number(process.env.FAKEPI_AUTO_STOP_ON || 2);
+        const stop = round >= stopOn;
+        await say(stop
+            ? "结束\n（假判官）它说活干完了。"
+            : "继续\n（假判官）它说还有没做完的。");
         finish();
         return;
     }

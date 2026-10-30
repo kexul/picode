@@ -119,7 +119,7 @@ function createHarness(options = {}) {
     const { ChatViewProvider } = require(OUT_ENTRY);
     const { startBackend } = require(OUT_SERVER);
     const { updateServerConfig, readServerConfig, seedPrompts } = require(OUT_CONFIG);
-    const { ensureTabaAssets, ensureAskAssets, ensureGoalAssets, ensureImageAssets, ensureBashAssets, ensureEnvAssets } = require(OUT_BRIDGES);
+    const { ensureTabaAssets, ensureAskAssets, ensureImageAssets, ensureBashAssets, ensureEnvAssets } = require(OUT_BRIDGES);
     const version = packageVersion();
 
     // 调试用的设置写进后端那份 config.json：模型跟真后端一样从文件读，界面颜色也在那里定。
@@ -155,8 +155,6 @@ function createHarness(options = {}) {
     ensureTabaAssets(version, prompts);
     // 问话（ask_choice）那个工具要用的扩展：同理
     ensureAskAssets(version, prompts);
-    // 目标判官那个 update_goal 扩展：同理（只有判官会话会加载它）
-    ensureGoalAssets(version, prompts);
     // 会话里的截图挪出会话文件那个扩展：同理（每个会话都加载它）
     ensureImageAssets(version);
     // 接管 bash（后台命令、放后台）：同理（每个会话都加载它）

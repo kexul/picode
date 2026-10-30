@@ -130,25 +130,10 @@ FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev
 # 所以要慢一点儿的假 pi，才来得及在它还在跑的时候停掉：
 FAKEPI_THINK_MS=4000 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaTools.js
 
-# 验目标（/goal）：谈验收清单 → 目标条上按播放 / 暂停（同一颗）、按停止、刷新后还在。
-# 判官循环会接着转，所以这个脚本自己把假判官拖慢、并且让它一直报不过，
-# 好让目标停在“进行中”上验命令本身：
-npm run web:shot -- --fake-pi --script dev/goalCommand.js
-
-# 验目标条那几种脸（待确认 / 进行中 / 已暂停 / 已完成 / 点开看全文）：
-# 目标状态直接投给页面，不真叫模型：
-npm run web:shot -- --fake-pi --script dev/goalFlow.js
-
-# 验判官循环整条路：工人跑完一轮 → 派判官去验 → 没过就把批评发回工人 → 过了就收工；
-# 顺便验判官在跑的时候进「项目与会话」列表、报完结论就关掉（列表回到只剩工人一个）：
-npm run web:shot -- --fake-pi --script dev/goalLoop.js
-
-# 验“插话不停目标”（目标跑着时你插一句：目标条还是进行中、正在验的判官不被动、
-# 它验完的结论照样发回工人、循环接着转；想停就点目标条上那颗「暂停」）：
-npm run web:shot -- --fake-pi --script dev/goalInterject.js
-
-# 验“判官连着几轮报的是同一批没过条目也不自动停”（只有验收通过、判官坏了、你点「暂停」才停）：
-npm run web:shot -- --fake-pi --script dev/goalStale.js
+# 验「自动接着干」（/auto）：开开关 → 一轮跑完派判官 → 判官说「继续」就再来一轮 →
+# 说「结束」就自己关掉；暂停 / 继续同一颗按钮、刷新后还在、「停止」抹掉存档、
+# /auto 后面带别的东西只回一句提示。判官循环就在这个脚本里跑完，不用另外配参数：
+npm run web:shot -- --fake-pi --script dev/autoLoop.js
 
 # 验顶条中间那颗小点（本会话闲着、派出去的子会话还在跑时也亮着呼吸，点下面写着还有几个在跑；
 # 小点与箭头是落在“会话名 + 目录两行”中间，不是只对着会话名那一行；投假会话列表，不真派活）：

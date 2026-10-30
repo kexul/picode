@@ -25,7 +25,7 @@ import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
 import { isPackaged } from "./appAssets";
 import { hostOfUrl, isOwnPage, pushRemoteNotice, type RemoteNotice } from "./remoteNotice";
-import { getAskAssets, getBashAssets, getEnvAssets, getGoalAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
+import { getAskAssets, getBashAssets, getEnvAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
 import {
     listProjectDirs,
@@ -264,7 +264,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const cfg = readServerConfig().config;
         const taba = getTabaAssets();
         const ask = getAskAssets();
-        const goal = getGoalAssets();
         const title = getTitleAssets();
         const image = getImageAssets();
         const bash = getBashAssets();
@@ -283,8 +282,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             tabaDir: taba?.ok ? taba.resourceDir : "",
             askExtension: ask?.ok ? ask.extensionPath : "",
             askDir: ask?.ok ? ask.resourceDir : "",
-            // 目标（/goal）的判官工具：只给判官会话加载（普通会话没有 update_goal）
-            goalExtension: goal?.ok ? goal.extensionPath : "",
             // 自动起标题：只给主会话加载（子会话、判官不带）
             titleExtension: title?.ok ? title.extensionPath : "",
             // 会话里的截图挪出会话文件：每个会话都带

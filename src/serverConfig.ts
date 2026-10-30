@@ -12,7 +12,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { serverConfigFile } from "./serverPaths";
 import { normalizeOrigin } from "./webTransport";
-import { isPromptKey, builtinPrompts } from "./promptText";
+import { isPromptKey, isRetiredPromptKey, builtinPrompts } from "./promptText";
 import {
     DEFAULT_AUTO_LOAD_LAST,
     DEFAULT_CLOSE_SESSION_KEY,
@@ -375,7 +375,8 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
         if (Object.keys(promptsRaw).length === 0) { promptsEmpty = true; }
         for (const [name, value] of Object.entries(promptsRaw)) {
             if (!isPromptKey(name)) {
-                warnings.push(`配置里有不认识的项：prompts.${name}`);
+                // /goal 那一套是以前写进去的：不报错、也不读，留着让人自己删
+                if (!isRetiredPromptKey(name)) { warnings.push(`配置里有不认识的项：prompts.${name}`); }
                 continue;
             }
             const text = pickPromptValue(value, `prompts.${name}`, warnings);
