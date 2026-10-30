@@ -299,7 +299,11 @@ export class EditTracker {
         return info && info.diff ? info.diff : undefined;
     }
 
-    /** 把一个文件整份写回这个会话第一次改它之前的样子（先问一句再动手）。 */
+    /**
+     * 把一个文件整份写回这个会话第一次改它之前的样子。
+     * 界面那边已经问过一遍了（「改动」那一格里的「回滚」要连点两下才走到这儿，见 chat.js 的
+     * askRevertChange），所以这里不再往消息流里塞确认卡片。
+     */
     public async revertFileChanges(relPath: string): Promise<void> {
         const abs = this.changeAbsOf(relPath);
         const before = abs === undefined ? undefined : this.fileBaselines.get(abs);
@@ -317,12 +321,6 @@ export class EditTracker {
         if (current === before) {
             this.host.post({ type: "system", text: `无需回滚：${label} 已是修改前的内容。` });
             this.host.post({ type: "changesChanged" });
-            return;
-        }
-        const ok = await this.host.confirmRevert(
-            `${label} 会回到这个会话第一次改它之前的样子：这个会话对它做过的改动都会没有。确定继续？`
-        );
-        if (!ok) {
             return;
         }
         try {

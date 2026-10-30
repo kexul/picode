@@ -21,6 +21,9 @@
  *      切会话时摆出那个会话自己那一份（每个会话各记一份开过的标签，切回去原样回来）；
  *      换个会话不把上一个会话看过的文件内容留在面板里；
  *      ≥1200px 常驻在左边、窄了滑入、点外面收起；手机上两块侧边栏互斥；
+ *      右边那条缝能拖宽度：常驻时能拖（夹在 300 到「窗口宽度 − 360」之间），电脑上滑入的那一层也能拖
+ *      （最多到窗口的 86%，跟 CSS 那条 width 对得上）；手机上铺满整屏时那条缝不露面；
+ *      拖出来的宽度记在这台设备里（刷新后还是那个数，窗口变窄只收不带改存的那个值）；
  *      顶条左边那颗按钮点开点收、刷新后还是刚才的样子；
  *      目录外 / 不存在 / 超过 2 MB 的文本、超过 20 MB 的图片时页面上给一句说明；
  *      正看着的文件被改（脚本直接改会话目录里的文件，见下）以后，这一列不用重新点链接就换成
@@ -38,7 +41,7 @@
  *      （自己滑出来、停在第一行），插件里的对话面板里还是交给编辑器打开（最后那段按网页视图验）；
  *      这一列角上那颗折行开关：默认一行就是一行（长行横向滚），点一下长行折起来（横向不滚），
  *      再点一下又回去；开关管的是整块正文（换个文件也照样）；选的那个记在这台设备里，
- *      刷新页面后还是刚才那样；
+ *      刷新页面后还是刚才那样；清单、「改动」「后台」那几格里没有它，只有真在看一个文件时才露面；
  *   2. 在页面里用 fetch 直接打那条只读文件地址与目录地址，核对拒绝的几种情形（目录外含 .. 绕出去的写法、
  *      没有这个文件 / 目录、超过文本那道 2 MB 线、超过图片那道 20 MB 线）、图片与二进制各自给什么、
  *      目录清单的形状（文件带着字节数、图片带着 image 标记）、以及「没变就别再给
@@ -881,7 +884,7 @@ module.exports = async (page) => {
     /**
      * 拖右边那条缝（真按真拖：pointerdown → 六段 pointermove → pointerup）。
      * 中途先读一次这一列的宽度：读到的跟要拖到的地方一样，就说明是拖着就在变、不是松手才变。
-     * 滑入式里那条缝是不显示的，这些事件发上去也该没反应（那时宽读出来就是原来的数）。
+     * 手机上那一层铺满整屏，那条缝不显示，这些事件发上去也该没反应（那时宽读出来就是原来的数）。
      */
     const dragEdge = (fromX, toX) => page.eval(`
         const h = document.getElementById("fileResize");
@@ -2360,21 +2363,27 @@ module.exports = async (page) => {
     check("刷新之后还是拖出来的那个宽度", wz7.open && wz7.dock && wz7.panelWidth === cap1280,
         JSON.stringify({ w: wz7.panelWidth, want: cap1280 }));
 
-    // 滑入式（窗口 <1200）：那条缝不给拖，宽度就是这个数跟「窗口的 86%」里小的那个
+    // 滑入式（窗口 <1200）：PC 上这一层也能拖宽度；没拖之前宽度是「存的那个数」跟「窗口的 86%」里小的那个
     await page.cdp.send("Emulation.setDeviceMetricsOverride", { width: 1000, height: 800, deviceScaleFactor: 1, mobile: false });
     await page.sleep(500);
     const drawerWant = Math.min(cap1280, Math.round(1000 * 0.86));
     const wz8 = await look("宽度 · 滑入式（1000px 的窗口）");
     check("窗口不够宽：又变回滑入式（底下垫着那层遮罩）", !wz8.dock && wz8.open && wz8.backdropShown);
-    check("滑入式里那条缝不给拖（它就不显示）", !wz8.resizeShown);
-    check("滑入式里宽度就是拖出来的那个数（最多到窗口的 86%）",
+    check("滑入式里那条缝也在（贴在这一列右边）", wz8.resizeShown && wz8.resizeAtEdge);
+    check("滑入式里宽度就是存的那个数（最多到窗口的 86%）",
         wz8.panelWidth === drawerWant, JSON.stringify({ w: wz8.panelWidth, want: drawerWant }));
     await dragEdge(drawerWant, 300);
     await page.sleep(250);
-    const wz9 = await look("宽度 · 滑入式里想拖一下");
-    check("滑入式里拖了也白拖（宽度跟存的那个数都没动）",
-        wz9.panelWidth === drawerWant && wz9.storedW === String(cap1280),
+    const wz9 = await look("宽度 · 滑入式里拖到 300");
+    check("滑入式里也能拖（拖到 " + FILE_W_MIN + " 就是 " + FILE_W_MIN + "，记进本机）",
+        wz9.panelWidth === FILE_W_MIN && wz9.storedW === String(FILE_W_MIN),
         JSON.stringify({ w: wz9.panelWidth, stored: wz9.storedW }));
+    await dragEdge(FILE_W_MIN, 2000);
+    await page.sleep(250);
+    const wz9b = await look("宽度 · 滑入式里拖到底");
+    check("滑入式里往右拖到底：夹在窗口的 86%＝" + drawerWant,
+        wz9b.panelWidth === drawerWant && wz9b.storedW === String(drawerWant),
+        JSON.stringify({ w: wz9b.panelWidth, stored: wz9b.storedW, want: drawerWant }));
 
     // 手机（触屏）：滑出来铺满整屏，收起靠头上那颗叉——那条「点外面」的路被盖住了
     //（触屏是页面加载时认一次的，所以先把模拟打开再刷新）
@@ -2395,7 +2404,7 @@ module.exports = async (page) => {
         wzb.topAtRight !== "fileBackdrop" && wzb.topAtRight !== "",
         JSON.stringify({ right: wzb.topAtRight, chat: wzb.topAtChat }));
     check("铺满时也不给拖（那条缝不显示）", !wzb.resizeShown);
-    check("手机上铺满不会把电脑上拖出来的宽度改掉", wzb.storedW === String(cap1280), String(wzb.storedW));
+    check("手机上铺满不会把电脑上拖出来的宽度改掉", wzb.storedW === String(drawerWant), String(wzb.storedW));
     await page.shot("file-17-phone-full.png");
 
     await page.click("#fileClose");

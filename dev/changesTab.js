@@ -14,8 +14,9 @@
  *   4. 点那一行展开：这一块的 diff 里既有删掉的那行、也有加上的那行（颜色类是 del / add）；
  *   5. 刷新页面：清单还在（数据在后端会话的内存里，不跟着页面走）——这正是“刷新浏览器不丢”；
  *   6. 把磁盘上那个文件删了以后再问一次：那一行标「已删除」，展开仍看得到整份都是删掉的；
- *   7. 点「回滚」先弹一句确认；点确定之后文件真被写回去、那一行也从清单里消失
- *      （清单空了就回到那句提示）；
+ *   7. 点「回滚」不往消息流里塞确认卡片：那颗按钮先变红、字换成「确定回滚」，再点一下
+ *      才真写回去（几秒不动就自己收回，跟关会话那颗叉一个规矩）；写回去之后那一行
+ *      也从清单里消失（清单空了就回到那句提示）；
  *   8. 模型新写一个文件（write 那条路）：清单里那一行是 +3 −0，展开三行都是新加的。
  *
  * 造的话说在前头：脚本自己动 dev/.scratch 里的文件（那个目录不进版本库，随便造）。
@@ -82,43 +83,6 @@ async function openChangesTab(page) {
 /** 右边那两个数（+1 / −1）：紧凑排在一起，检查时分开看更稳。 */
 function countsAre(text, add, del) {
     return String(text).indexOf("+" + add) >= 0 && String(text).indexOf("−" + del) >= 0;
-}
-
-/** 等问话卡片长出来，把上面的字读回来（没有就给空串）。 */
-async function waitConfirm(page) {
-    for (let i = 0; i < 60; i++) {
-        const text = await page.eval(`
-            const cards = document.querySelectorAll(".ask-card:not(.done)");
-            const card = cards[cards.length - 1];
-            return card ? (card.innerText || "") : "";
-        `);
-        if (text) { return text; }
-        await page.sleep(100);
-    }
-    return "";
-}
-
-/** 等问话卡片长出来，点它上面那颗「确定」。 */
-async function answerConfirm(page) {
-    for (let i = 0; i < 60; i++) {
-        const ready = await page.eval(`
-            const cards = document.querySelectorAll(".ask-card:not(.done)");
-            const card = cards[cards.length - 1];
-            return !!(card && card.querySelector(".ask-btn.primary"));
-        `);
-        if (ready) { break; }
-        await page.sleep(100);
-    }
-    const pressed = await page.eval(`
-        const cards = document.querySelectorAll(".ask-card:not(.done)");
-        const card = cards[cards.length - 1];
-        const btn = card && card.querySelector(".ask-btn.primary");
-        if (!btn) { return false; }
-        btn.click();
-        return true;
-    `);
-    await page.sleep(600);
-    return pressed;
 }
 
 module.exports = async (page) => {
@@ -204,13 +168,27 @@ module.exports = async (page) => {
     check("删掉的文件展开后整份都是删掉的行", Number(removedLines) > 0, "删掉的行数 " + removedLines);
     await page.shot("changes-5-deleted.png");
 
-    // ---- 7. 回滚：先问一句，再真写回去 ----
+    // ---- 7. 回滚：那颗按钮自己等第二下，不在消息流里弹确认卡片 ----
     await page.click("#fileBody .file-page:not([hidden]) .change-revert");
-    const asked = await waitConfirm(page);
-    console.log("确认框：" + asked.replace(/\s+/g, " ").slice(0, 80));
-    check("点「回滚」先弹一句确认", asked.indexOf("回到这个会话第一次改它之前") >= 0);
+    await page.sleep(300);
+    const firstClick = JSON.parse(await page.eval(`
+        const page = document.querySelector("#fileBody .file-page:not([hidden])");
+        const btn = page && page.querySelector(".change-revert");
+        return JSON.stringify({
+            text: btn ? (btn.textContent || "").trim() : "",
+            confirm: !!btn && btn.classList.contains("confirm"),
+            cards: document.querySelectorAll(".ask-card:not(.done)").length,
+        });
+    `));
+    console.log("点一下「回滚」：" + JSON.stringify(firstClick));
+    check("点一下「回滚」：这颗按钮先变成确认的样子（变红、字换成「确定回滚」）",
+        firstClick.confirm && firstClick.text === "确定回滚", JSON.stringify(firstClick));
+    check("这一下不往消息流里塞确认卡片（消息流里没多出一张）", firstClick.cards === 0,
+        String(firstClick.cards));
+    check("只点一下还没动手（文件仍是删掉的）", !fs.existsSync(path.join(SCRATCH_DIR, SCRIPT_FILE)));
     await page.shot("changes-6-confirm.png");
-    await answerConfirm(page);
+    // 再点一下才真回滚
+    await page.click("#fileBody .file-page:not([hidden]) .change-revert");
     await page.sleep(900);
     const restored = fs.readFileSync(path.join(SCRATCH_DIR, SCRIPT_FILE), "utf8");
     check("文件真被写回去了（连删掉的那个也回来了）", restored.indexOf("假模型改的") < 0 && restored.length > 0,

@@ -6022,6 +6022,13 @@
   function fileSidebarWide() { return window.innerWidth >= FILE_SIDEBAR_MIN_WIDTH; }
   /** 这一列此刻常驻在左边吗。 */
   function fileSidebarDocked() { return fileSidebar.open && fileSidebarWide(); }
+  /**
+   * 这一列此刻能不能拖宽度：常驻时能；PC 上从左边滑入的那一层也能。
+   * 手机上滑入的那一层铺满整屏，宽度归窗口管，那条缝也不露面（见 chat.css 的 #fileResize）。
+   */
+  function fileSidebarResizable() {
+    return fileSidebar.open && !document.body.classList.contains("file-full");
+  }
 
   /**
    * 把宽度夹回能用的范围：先夹在 300～1200 之间；常驻时再跟「窗口宽度 − 360」取小
@@ -6031,6 +6038,15 @@
     const room = reserveForChat ? window.innerWidth - FILE_SIDEBAR_W_RESERVE : FILE_SIDEBAR_W_MAX;
     const cap = Math.max(FILE_SIDEBAR_W_MIN, Math.min(FILE_SIDEBAR_W_MAX, room));
     return Math.max(FILE_SIDEBAR_W_MIN, Math.min(px, cap));
+  }
+  /**
+   * 拖的时候这一列最宽能到多少：常驻时跟上面那个一样（给对话留 360）；滑入时再按 chat.css
+   * 那条 `min(…, 86vw)` 收一道——松手后宽度回到 CSS 上，屏幕上不该跳一下。
+   */
+  function clampFileSidebarDragWidth(px) {
+    const base = clampFileSidebarWidth(px, fileSidebarDocked());
+    if (fileSidebarDocked()) { return base; }
+    return Math.min(base, Math.max(FILE_SIDEBAR_W_MIN, Math.floor(window.innerWidth * 0.86)));
   }
   /**
    * 人拖出来的那个宽度。只夹 300～1200，不按窗口收：窗口大小变了不该把人家存的值改掉
@@ -6109,7 +6125,7 @@
   /** 一格标签悬停提示上的全路径：目录那一格是它现在待的那一层。 */
   function fileSidebarTabFullPath(tab) {
     if (tab.change) { return FILE_SIDEBAR_CHANGES_NAME; }
-    if (tab.scripts) { return FILE_SIDEBAR_SCRIPTS_NAME; }
+    if (tab.scriptsTab) { return FILE_SIDEBAR_SCRIPTS_NAME; }
     return tab.proj ? fileSidebarProjectFullPath(tab) : tab.path;
   }
 
@@ -6156,7 +6172,7 @@
    */
   function fileSidebarNewScriptsTab() {
     return {
-      path: "", proj: false, scripts: true, line: 0, scrollTop: 0, mtime: "", loading: false, imageUrl: "",
+      path: "", proj: false, scriptsTab: true, line: 0, scrollTop: 0, mtime: "", loading: false, imageUrl: "",
       page: null,
       drawn: false,
       scripts: [],      // 后端给的清单：{ no, cmd, log, pid, startedAt, status, exitCode, elapsedMs, ... }
@@ -6186,7 +6202,7 @@
 
   /** 「后台」那一格在标签条上的位置（没有就是 -1）。 */
   function fileSidebarScriptsIndex() {
-    for (let i = 0; i < fileSidebar.tabs.length; i++) { if (fileSidebar.tabs[i].scripts) { return i; } }
+    for (let i = 0; i < fileSidebar.tabs.length; i++) { if (fileSidebar.tabs[i].scriptsTab) { return i; } }
     return -1;
   }
 
@@ -6276,6 +6292,10 @@
     if (!bar) { return; }
     const tab = fileSidebar.tabs[fileSidebar.active];
     const show = !!tab && !!tab.home && !tab.proj;
+    // 角上那颗折行开关只在真看一个文件时露面：清单、「改动」「后台」那几格里没有长行可折
+    const wrapBtn = document.getElementById("fileWrap");
+    const viewingFile = !!tab && !tab.proj && !tab.change && !tab.scriptsTab;
+    if (wrapBtn) { wrapBtn.hidden = !viewingFile; }
     bar.hidden = !show;
     if (!show) { return; }
     if (fileSidebar.barName) {
@@ -6330,7 +6350,7 @@
       el.setAttribute("data-path", tab.path);
       if (tab.home) { el.setAttribute("data-proj", "1"); }
       if (tab.change) { el.setAttribute("data-changes", "1"); }
-      if (tab.scripts) { el.setAttribute("data-scripts", "1"); }
+      if (tab.scriptsTab) { el.setAttribute("data-scripts", "1"); }
       el.title = fileSidebarTabFullPath(tab);   // 文件那一格悬停给现在这一层 / 这个文件的全路径
       const name = document.createElement("span");
       name.className = "file-tab-name";
@@ -6366,7 +6386,7 @@
       if (tab.drawn) { fetchChanges(tab); } else { showFileNote("正在读取…"); fetchChanges(tab); }
       return;
     }
-    if (tab.scripts) {
+    if (tab.scriptsTab) {
       if (tab.drawn) { fetchScripts(tab); } else { showFileNote("正在读取…"); fetchScripts(tab); }
       return;
     }
@@ -6928,6 +6948,7 @@
   function drawChanges(tab) {
     const page = fileTabPage(tab);
     if (!page || !fileSidebar.body) { return; }
+    cancelChangeRevert();   // 重画就不是刚才那一行了：正等第二下的那一下作废
     const showing = fileSidebar.tabs[fileSidebar.active] === tab;
     const top = showing ? fileSidebar.body.scrollTop : tab.scrollTop;
     page.innerHTML = "";
@@ -6945,6 +6966,45 @@
     tab.drawn = true;
     tab.scrollTop = top;
     if (showing) { fileSidebar.body.scrollTop = top; }
+  }
+
+  const CHANGE_REVERT_TEXT = "回滚";
+  const CHANGE_REVERT_TITLE = "把这个文件撤回到这个会话第一次改它之前（整份，不是只撤一次调用）";
+  /**
+   * 「改动」那一格里点过「回滚」、正等第二下确认的那一个文件：再点一下才真回滚
+   *（跟关会话那颗叉一个规矩：第一下只把按钮换成确认的样子，几秒不动就自己收回去）。
+   */
+  let changeRevertPending = null;   // { path, btn, timer }
+
+  /** 把「等第二下确认」的那一颗收回去（超时、这一格重画都走它）：只抹状态，不碰清单。 */
+  function cancelChangeRevert() {
+    if (!changeRevertPending) { return; }
+    const { btn, timer } = changeRevertPending;
+    changeRevertPending = null;
+    if (timer) { clearTimeout(timer); }
+    if (btn && btn.isConnected) {
+      btn.classList.remove("confirm");
+      btn.textContent = CHANGE_REVERT_TEXT;
+      btn.title = CHANGE_REVERT_TITLE;
+    }
+  }
+
+  /**
+   * 点「回滚」：第一下只把这一颗按钮换成确认的样子（几秒后自己收回），再点一下才真回滚——
+   * 不再往消息流里塞一张确认卡片（那儿会挡住正在看的消息）。
+   */
+  function askRevertChange(path, btn) {
+    if (changeRevertPending && changeRevertPending.path === path && changeRevertPending.btn === btn) {
+      cancelChangeRevert();
+      vscode.postMessage({ type: "revertFileChanges", sessionId: activeId, path });
+      return;
+    }
+    cancelChangeRevert();
+    btn.classList.add("confirm");
+    btn.textContent = "确定回滚";
+    btn.title = "再点一下就撤回去（几秒不动就取消）";
+    const timer = setTimeout(cancelChangeRevert, 4000);
+    changeRevertPending = { path, btn, timer };
   }
 
   /**
@@ -6993,11 +7053,11 @@
     const revert = document.createElement("button");
     revert.type = "button";
     revert.className = "change-revert";
-    revert.textContent = "回滚";
-    revert.title = "把这个文件撤回到这个会话第一次改它之前（整份，不是只撤一次调用）";
+    revert.textContent = CHANGE_REVERT_TEXT;
+    revert.title = CHANGE_REVERT_TITLE;
     revert.addEventListener("click", (e) => {
       e.stopPropagation();   // 别顺带把这一块展开 / 收起
-      vscode.postMessage({ type: "revertFileChanges", sessionId: activeId, path: item.path });
+      askRevertChange(item.path, revert);
     });
     head.appendChild(revert);
     if (!item.tooBig) { head.addEventListener("click", () => toggleChangeBlock(tab, item.path)); }
@@ -7356,7 +7416,7 @@
     if (!tab || !body || tab.loading) { return; }   // 还没开文件 / 还在取：这一轮先不问
     if (tab.proj) { return; }   // 目录不跟着刷新：清单不是「正看着的那个文件」，点一下才重新列
     if (tab.change) { return; }   // 「改动」那一格也不跟着刷新：模板变了由 changesChanged 叫它（见那条消息）
-    if (tab.scripts) { return; }   // 「后台」那一格同样不跟着刷新：后台命令有动静由 bashTask 叫它
+    if (tab.scriptsTab) { return; }   // 「后台」那一格同样不跟着刷新：后台命令有动静由 bashTask 叫它
     if (isHtmlPath(tab.path)) { pollHtmlFile(tab, at); return; }   // 网页：只问修改时间，改过才重载
     const token = fileSidebar.token;
     filePolling = true;
@@ -7629,7 +7689,7 @@
   }
 
   /**
-   * 拖右边那条缝改宽度（只有常驻时才给拖，见 chat.css 的 #fileResize）。
+   * 拖右边那条缝改宽度（常驻时能拖，PC 上从左边滑入的那一层也能拖，见 chat.css 的 #fileResize）。
    * 按住之后指针捕获在这一格上，拖到面板外面、拖到窗口边上都不断线。
    * 拖动中只动这一列自己：它是浮在对话上面的（position: fixed），动它不碰版面；
    * 对话那边空出多宽由 body.file-dock::before 那块占位决定，那块先冻着不动——
@@ -7643,7 +7703,7 @@
     let grabOffset = 0;
     const move = (e) => {
       if (!dragging) { return; }
-      const w = clampFileSidebarWidth(e.clientX - grabOffset, true);
+      const w = clampFileSidebarDragWidth(e.clientX - grabOffset);
       fileSidebar.width = w;
       fileSidebar.root.style.width = w + "px";   // 只写在这一格上：CSS 变量别动，那块占位看的正是它
     };
@@ -7661,7 +7721,7 @@
       syncDockHeaderHeight();
     };
     handle.addEventListener("pointerdown", (e) => {
-      if (e.button !== 0 || !fileSidebarDocked()) { return; }   // 滑入 / 铺满那两种摆法不给拖
+      if (e.button !== 0 || !fileSidebarResizable()) { return; }   // 手机上铺满整屏那一层不给拖
       e.preventDefault();
       dragging = true;
       grabOffset = e.clientX - handle.parentNode.getBoundingClientRect().width;

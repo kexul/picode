@@ -1632,9 +1632,11 @@
   }
   /* 拖宽度的那条缝（#fileResize，chat.js 建）：热区就贴在右边那条分隔线上，不新增看得见的东西；
      指针移上去、或者正拖着的时候，那条线亮成强调色（画的是一颗 2px 的伪元素，正压在那条线上）。
-     只在这一列常驻时给拖：滑入 / 铺满那两种摆法本来就盖在对话上，宽度归窗口管。 */
+     常驻时给拖；PC 上从左边滑入的那一层也给拖（那一层盖在对话上，松手后对话照样不用让宽度）。
+     手机上那一层铺满整屏（body.file-full），宽度归窗口管，所以那里不给拖、那条缝也不露面。 */
   #fileResize { display: none; }
-  body.file-dock #fileResize {
+  body.file-dock #fileResize,
+  body.file-open:not(.file-dock):not(.file-full) #fileResize {
     display: block; position: absolute; top: 0; bottom: 0; right: 0;
     width: 12px; margin-right: -6px;   /* 一半压在线上，一半搭在对话那边：手指也按得中 */
     z-index: 2; cursor: ew-resize; touch-action: none;
@@ -1767,6 +1769,14 @@
     font-family: var(--vscode-font-family);
   }
   .change-revert:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
+  /* 点过一下、正等第二下确认的那颗（跟关会话那颗叉一个规矩）：整颗变红，字换成「确定回滚」 */
+  .change-revert.confirm {
+    opacity: 1;
+    color: var(--vscode-charts-red, #f14c4c);
+    border-color: var(--vscode-charts-red, #f14c4c);
+    background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 14%, transparent);
+  }
+  .change-revert.confirm:hover { background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 22%, transparent); }
   /* 收起的那一块要彻底不占地方（hidden 自带 display:none，这里只是把话说清楚） */
   .change-body[hidden] { display: none; }
   /* 展开的那一块 diff：不自己再滚一道（这一列本来就在滚），字号跟正文一起；
@@ -1874,6 +1884,9 @@
     color: var(--vscode-descriptionForeground, inherit); opacity: 0.7;
   }
   #fileWrap svg { width: 14px; height: 14px; display: block; }
+  /* 只有真在看一个文件时才露面（清单、「改动」「后台」那几格里没有可折的长行，见 chat.js 的 syncFileBar）；
+     刷掉的是 [hidden] 那条 UA 样式：这里写了 display: flex，不动它一句就盖不住 */
+  #fileWrap[hidden] { display: none; }
   /* 「文件」那一格看文件时，正文上面多一条横条（见 chat.js 的 syncFileBar）：
      左边是这个文件叫什么（相对会话目录的写法，一行放不下就省略，悬停看全），右边一颗关闭。
      它摆在正文外面（#fileBody 才是滚动的那一块），所以往下拖的时候一直看得见。 */
