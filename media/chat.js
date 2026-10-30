@@ -2721,12 +2721,42 @@
   // 段首是这些词的（for / if / while 那一套的开头）本身不是一件事
   const SEG_KEYWORD_HEAD = /^(for|if|while|until|case|select|function)\b/;
 
-  /** 按顶层分隔符（&& || ; | & 换行）把一条命令切成几段：引号里、括号里的不算。
+  /** 这一行的收尾标记（heredoc 的 `<<EOF`）：`<<` 后面那个词，引号去掉、`<<-` 的前导 tab 也认。
+   *  不是 heredoc（`<<<` 是 herestring、或者后面没东西）就返回空。 */
+  function heredocDelim(s, i) {
+    if (s[i + 2] === "<") { return ""; }          // <<< 不是 heredoc
+    let j = i + 2;
+    if (s[j] === "-") { j++; }
+    while (s[j] === " " || s[j] === "\t") { j++; }
+    let word = "";
+    while (j < s.length && !/[\s;&|<>]/.test(s[j])) { word += s[j++]; }
+    return word.replace(/^["'\\]|["'\\]$/g, "");
+  }
+
+  /** 从 p（heredoc 正文第一行的开头）吃到收尾那一行：正文里的东西一个字都不是命令（一段脚本、一份数据）。
+   *  返回正文原文与收尾行结尾的位置（`next` 就是那行的换行符，或者到了末尾）；找不到收尾行就吃到末尾。 */
+  function takeHeredocBody(s, p, delim) {
+    let at = p;
+    while (at < s.length) {
+      let end = s.indexOf("\n", at);
+      if (end < 0) { end = s.length; }
+      // 收尾行：整行就是那个标记（`<<-` 允许前面有 tab；行尾的 \r 不算）
+      const line = s.slice(at, end).replace(/\r$/, "").replace(/^\t+/, "").trimEnd();
+      if (line === delim) { return { text: s.slice(p, end), next: end }; }
+      at = end + 1;
+    }
+    return { text: s.slice(p), next: s.length };
+  }
+
+  /** 按顶层分隔符（&& || ; | & 换行）把一条命令切成几段：引号里、括号里、heredoc 正文里的不算。
    *  每段带 sepBefore —— 它前面是什么分隔开的（挑核心时要用：管道后面跟上来的才算“修输出”）。 */
   function splitCommandSegments(cmd) {
     const out = [];
     const s = String(cmd || "");
     let cur = "", pendingSep = "", quote = "", depth = 0;
+    // 这一行上挂着的 heredoc 收尾标记（`cat <<A <<B` 会有两个，按顺序吃）：
+    // 有它就不能拿换行当分隔符 —— 下面是那段正文，一直到单独一行就是它为止
+    const heredocs = [];
     const flush = () => {
       const text = cur.trim();
       cur = "";
@@ -2748,6 +2778,24 @@
       if (ch === "(") { depth++; cur += ch; continue; }
       if (ch === ")") { if (depth > 0) { depth--; } cur += ch; continue; }
       if (depth > 0) { cur += ch; continue; }
+      if (ch === "<") {
+        const delim = heredocDelim(s, i);
+        if (delim) { heredocs.push(delim); }
+      }
+      if (ch === "\n" && heredocs.length) {
+        // 接下来这几块是正文：原样吃进来，一个字都不切
+        let at = i + 1;
+        while (heredocs.length) {
+          const got = takeHeredocBody(s, at, heredocs.shift());
+          cur += (cur.endsWith("\n") ? "" : "\n") + got.text;
+          at = got.next;
+          if (at >= s.length) { break; }
+          at += 1;   // 跳过收尾行的换行，接着吃下一个 heredoc 的正文
+        }
+        cut(";");
+        i = at - 1;
+        continue;
+      }
       if (ch === ";" || ch === "\n") { cut(";"); continue; }
       if (ch === "|") {
         if (next === "|") { cut("||"); i++; continue; }
@@ -2791,14 +2839,17 @@
     return true;
   }
 
-  /** 这一段写在那一行上长什么样：剥掉段首那几个连接词（do / then / ! …）。 */
+  /** 这一段写在那一行上长什么样：剥掉段首那几个连接词（do / then / ! …）；
+   *  带 heredoc 正文的那种只写头一行（下面那一整块是脚本 / 数据，不是命令，整条在提示里看）。 */
   function segmentDisplay(text) {
     let out = String(text || "").trim();
     for (;;) {
       const m = /^(\S+)\s+([\s\S]*)$/.exec(out);
-      if (!m || !SEG_DISPLAY_STRIP.has(m[1])) { return out; }
+      if (!m || !SEG_DISPLAY_STRIP.has(m[1])) { break; }
       out = m[2].trim();
     }
+    const nl = out.indexOf("\n");
+    return nl < 0 ? out : out.slice(0, nl).trim();
   }
 
   /** bash 调用里那条命令原文（参数是 JSON 字符串）。 */
@@ -2808,21 +2859,31 @@
       return a && typeof a.command === "string" ? a.command : "";
     } catch (e) { return ""; }
   }
-
   /** 「正在跑」那一行写什么：一长串 bash 命令只写核心那一段（后面灰一句「+N 段」），
-   *  整条留在这一行的悬浮提示里。分不出来就照原样整条写。 */
+   *  整条留在这一行的悬浮提示里（trimmed=true 说明有字没写出来，得给个提示）。分不出来就照原样写。 */
   function runningLineText(call) {
     const whole = call.text || call.name || "";
-    if (call.name !== "bash") { return { main: whole, more: "" }; }
+    const oneLine = (text) => {
+      const nl = text.indexOf("\n");
+      return nl < 0 ? text : text.slice(0, nl).trim();
+    };
+    const asIs = () => {
+      const main = oneLine(whole);   // 多行的那种（heredoc 脚本）只写头一行，其余在提示里
+      return { main, more: "", trimmed: main !== whole };
+    };
+    if (call.name !== "bash") { return asIs(); }
     const cmd = bashCommandOf(call.argStr);
     const segs = splitCommandSegments(cmd);
-    if (segs.length < 2) { return { main: whole, more: "" }; }
-    const core = segs.find(isCoreSegment);
-    if (!core) { return { main: whole, more: "" }; }
+    if (!segs.length) { return asIs(); }
+    // 只有一段就用那一段（哪怕它是 cd / echo）；好几段才挑「正经干活」的那段
+    const core = segs.length > 1 ? segs.find(isCoreSegment) : segs[0];
+    if (!core) { return asIs(); }
     // 整条摘要里 "$ " + 命令 后面那点尾巴（timeout 这类）照旧跟着写
     const head = "$ " + cmd;
     const tail = whole.startsWith(head) ? whole.slice(head.length).trim() : "";
-    return { main: "$ " + segmentDisplay(core.text) + (tail ? " " + tail : ""), more: "+" + (segs.length - 1) + " 段" };
+    const main = "$ " + segmentDisplay(core.text) + (tail ? " " + tail : "");
+    const more = segs.length > 1 ? "+" + (segs.length - 1) + " 段" : "";
+    return { main, more, trimmed: !!more || main !== whole };
   }
 
   /** 现在还有哪些调用在跑、各自那一行摘要与开始时刻（一条一行，按页面上标签的顺序）。
@@ -2905,7 +2966,9 @@
       more.className = "tr-more";
       more.textContent = shown.more;
       item.appendChild(more);
-      // 整条命令（原来那一行字）就在这一行的悬浮提示里，跟工具标签用的同一套提示框
+    }
+    if (shown.trimmed) {
+      // 有字没写出来（只写了核心那一段 / 脚本只写了头一行）：整条语句在悬浮提示里看
       item._tipCall = call.text;
       item._tipBody = "";
       attachTagTipHandlers(item);

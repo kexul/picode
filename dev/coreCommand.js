@@ -12,6 +12,8 @@
  *   · 只有一段（git status --short）→ 照原样；
  *   · 两段都在干活（npm run build && npm test）→ 写头一段，「+1 段」；
  *   · for 循环那句 → 不拿「for f in …」当核心，写循环体里那句（「do」那层剥掉）；
+ *   · heredoc（`python - <<'EOF'` 后面一整段脚本）→ 正文里的换行不当分隔符，只写「$ python - <<'EOF'」，
+ *     段数不再数出十几段来；单独一条 heredoc 也照这个写；
  *   · 悬浮这一行 → 提示框里是整条命令（一个字不少）；
  *   · 「+N 段」那一句不跟着字横向滚（放不下的字自己滚，它不动）；
  *   · 不是 bash 的调用（read / grep）照旧整条写，不写「+N 段」。
@@ -34,6 +36,16 @@ const CASES = [
     { cmd: "npm run build && npm test", main: "$ npm run build", more: "+1 段", why: "两段都在干活：写头一段" },
     { cmd: 'for f in a.py b.py; do python "$f"; done', main: '$ python "$f"', more: "+2 段", why: "别拿 for 那截当核心，写循环体里那句" },
     { cmd: "ls -la | head -5", main: "$ ls -la", more: "+1 段", why: "管道后面修输出的不算事" },
+    {
+        cmd: "cd /d/projects/pesai && python - <<'EOF'\nimport sys\nprint(sys.path)\nprint('跑完了')\nEOF",
+        main: "$ python - <<'EOF'", more: "+1 段",
+        why: "heredoc 正文里的换行不是分隔符（不然会数出十几段来）",
+    },
+    {
+        cmd: "python - <<'EOF'\nimport sys\nEOF",
+        main: "$ python - <<'EOF'", more: "",
+        why: "单独一条 heredoc：只写头一行，脚本正文在提示里看",
+    },
 ];
 
 module.exports = async (page) => {
