@@ -88,6 +88,15 @@ export function findRouteForInbound(
     return newest;
 }
 
+/**
+ * 一条推送里那条摘要最多留多少字。
+ *
+ * 一开始是 120：长一点的回复在微信里只露个头，看着就像被谁掐断了。
+ * 400 上下一条消息还装得下（手机上不用点开也能看个大概），又不至于糊满一屏；
+ * 真更长的回复照样截（要接着问，引用这条回一句就是了）。
+ */
+export const WEIXIN_PREVIEW_CHARS = 400;
+
 /** 记多少条：够人回头翻一两天就够了，再多也没人引用到那么早的。 */
 const SENT_KEEP = 200;
 

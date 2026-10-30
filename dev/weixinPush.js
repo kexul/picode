@@ -4,6 +4,9 @@
  *
  *   npm run web:shot -- --fake-pi --script dev/weixinPush.js
  *
+ * 验长摘要（回复比上限长时，摘要该截在上限、以“…”收尾）：
+ *   FAKEPI_REPLY_LONG=1000 npm run web:shot -- --fake-pi --script dev/weixinPush.js
+ *
  * 做法：把登录态临时换成一份假的（baseUrl 指到本地那个假服务，userId 是个假号），
  * 跑一轮假模型的对话，看那头收到的那条消息长什么样、`weixin/sent.json` 里有没有记下
  * "这条是为了哪个会话发的"（以后微信里引用回复要靠它认会话）。
@@ -118,6 +121,21 @@ module.exports = async (page) => {
         const key = "7521950497986457864";
         if (!sent[key]) { throw new Error(`sent.json 里没有那条的编号（现有：${Object.keys(sent).join(",")}）`); }
         console.log("  · 记下了：", JSON.stringify(sent[key]));
+
+        // 摘要的长度：上限跟 src/weixinPush.ts 里那个数走（这里从编好的那份读，免得两份各写一个数）
+        const { WEIXIN_PREVIEW_CHARS } = require("../out/server/weixinPush.js");
+        const name = String(sent[key].name || "会话");
+        const summary = String(text).slice(name.length + 1);
+        console.log(`  · 摘要长度：${summary.length} 字（上限 ${WEIXIN_PREVIEW_CHARS}）`);
+        if (summary.length > WEIXIN_PREVIEW_CHARS + 1) {
+            throw new Error(`摘要比上限还长：${summary.length} 字（上限 ${WEIXIN_PREVIEW_CHARS}）`);
+        }
+        // FAKEPI_REPLY_LONG 把假模型的收尾那句撑长时，摘要得是被截到上限、以「…」收尾的那种
+        const long = Number(process.env.FAKEPI_REPLY_LONG || 0);
+        if (long > WEIXIN_PREVIEW_CHARS) {
+            if (!summary.endsWith("…")) { throw new Error(`回复比上限长，摘要该以“…”结尾：${summary}`); }
+            if (summary.length <= 120) { throw new Error(`摘要只留了 ${summary.length} 字：还是原来那个短上限，没放宽`); }
+        }
     } finally {
         if (fake) { fake.server.close(); }
         // 先把登录态放回去（那是你自己的令牌，比开关要紧），再管开关

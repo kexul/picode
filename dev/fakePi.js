@@ -53,6 +53,10 @@ const LONG_TEXT_CHARS = Number(process.env.FAKEPI_LONG || 0);
  *  正文边流边给，整条流跑完才把每个块收尾），见 dev/thinkDetail.js。 */
 const LATE_THINK_END = !!process.env.FAKEPI_LATE_THINK_END;
 
+/** 让这一轮最后那句收尾话变多长（字符数；0 = 剧本原样）：
+ *  验“跑完一轮推到微信的那条摘要有多长”时用，见 dev/weixinPush.js。 */
+const REPLY_LONG_CHARS = Number(process.env.FAKEPI_REPLY_LONG || 0);
+
 /** 把一段文字撑到 n 个字符（不够就顺着编号往下写）。 */
 function padTo(text, n) {
     if (n <= text.length) { return text; }
@@ -555,7 +559,7 @@ async function runScript(userText) {
             details: { diff: "--- 说明.txt\n+++ 说明.txt\n@@ -1 +1 @@\n-这是 Pi Chat 插件的调试用工作目录（dev/.scratch）。\n+这是 Pi Chat 插件的调试用工作目录（dev/.scratch）（假模型改的）。\n" },
         },
     });
-    await say("完事。三个工具都跑过了：read（带图）、bash、edit。");
+    await say(padTo("完事。三个工具都跑过了：read（带图）、bash、edit。", REPLY_LONG_CHARS));
     finish();
 }
 
