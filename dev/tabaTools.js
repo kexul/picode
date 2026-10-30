@@ -19,6 +19,11 @@
  *   - 别拿整页文字去 includes：工具回话在页面上只出现在悬浮提示框里，而那一层挂在 body 上，
  *     会把整页 innerText 插花（「已发出停止请求」会被别的字拆开）。
  */
+
+// 第二步要「趁它还在跑」把它停掉：假子会话默认几百毫秒就结束，这里让它磨一会儿。
+// 就算真没停掉，它也会自己结束，不会把后面几幕卡死。
+process.env.FAKEPI_CHILD_SLOW_MS = process.env.FAKEPI_CHILD_SLOW_MS || "15000";
+
 module.exports = async (page) => {
   /** 反复试到 fn 返回真值为止。 */
   const until = async (what, fn, ms = 30000) => {
@@ -51,6 +56,9 @@ module.exports = async (page) => {
   console.log("① 派活：子会话派出去了（回话由真扩展给）");
 
   // ---- 2. 停掉：趁它还在跑，走真扩展的 taba_stop ----
+  // 先等一下：子会话自己的 pi 进程要冷启动一两秒，派出去当场就停等于停一个还没跑起来的东西
+  // （那种情况下它不会被中止，待会儿自己跑完交回「跑完了」，下一步就等不到「没有正常跑完」）。
+  await page.sleep(2500);
   await say("停掉子会话", "已发出停止请求");
   console.log("② 停掉：真扩展回了「已发出停止请求」");
   await until("被停掉的子会话交回结果", async () => ((await userText()).indexOf("没有正常跑完") >= 0 ? true : ""), 60000);

@@ -151,12 +151,32 @@ module.exports = async (page) => {
   const kept = await openRows();
   check("你正看着它的时候，判官报完结论不硬关掉", kept.some((r) => r.includes("判官 · 第 1 轮")), kept);
 
-  // 看完了自己关：Ctrl+Alt+W（当前看的就是它），关掉以后列表里就没了
-  const key = (type) => page.cdp.send("Input.dispatchKeyEvent", {
-    type, key: "w", code: "KeyW", windowsVirtualKeyCode: 87, nativeVirtualKeyCode: 87, modifiers: 3,
-  });
-  await key("keyDown");
-  await key("keyUp");
+  // 看完了自己关：按设置里「关闭会话」那个组合键（当前看的就是它），关掉以后列表里就没了。
+  // 不能写死成某一个键：默认是 Alt+W，人在设置里换过就是别的（函数要求修饰键完全一致，
+  // 多按一个 Ctrl 就不认，于是那一下什么也不发生、只是等着超时）。
+  const closeKey = (() => {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(path.join(process.env.PICHAT_HOME || path.join(scratch, "pichat"), "config.json"), "utf8"));
+      return typeof cfg.closeSessionKey === "string" && cfg.closeSessionKey ? cfg.closeSessionKey : "alt+w";
+    } catch { return "alt+w"; }
+  })();
+  const pressCloseKey = async () => {
+    const parts = closeKey.split("+").map((s) => s.trim().toLowerCase());
+    const name = parts.pop() || "w";
+    let modifiers = 0;   // CDP 的位：Alt=1、Ctrl=2、Meta=4、Shift=8
+    if (parts.includes("alt")) { modifiers |= 1; }
+    if (parts.includes("ctrl")) { modifiers |= 2; }
+    if (parts.includes("meta")) { modifiers |= 4; }
+    if (parts.includes("shift")) { modifiers |= 8; }
+    const vk = name.toUpperCase().charCodeAt(0);
+    for (const type of ["keyDown", "keyUp"]) {
+      await page.cdp.send("Input.dispatchKeyEvent", {
+        type, key: name, code: "Key" + name.toUpperCase(),
+        windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers,
+      });
+    }
+  };
+  await pressCloseKey();
   const gone = await until("自己关掉的判官从列表里消失", async () => {
     const rows = await openRows();
     return !rows.some((r) => r.includes("判官 · 第 1 轮"));
