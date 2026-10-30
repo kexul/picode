@@ -64,6 +64,8 @@
     pause: '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="3.6" y="2.6" width="3.2" height="10.8" rx="0.8"/><rect x="9.2" y="2.6" width="3.2" height="10.8" rx="0.8"/></svg>',
     // 停止小方块：跟上面两颗一样大（12px），不然它看着比暂停粗一圈
     "stop-small": '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="3.4" y="3.4" width="9.2" height="9.2" rx="1.2"/></svg>',
+    // 转圈圈：自动模式开着时输入框右头那颗（点一下就停）。
+    auto: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M8 2.4a5.6 5.6 0 1 1-5.6 5.6"/></svg>',
     // 三条横线：输入框右边那颗「你说过的话」（一句话一行，所以是清单）。
     said: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>',
   };
@@ -75,7 +77,6 @@
   const imgPreviewEl = document.getElementById("imgPreview");
   const fileMenuEl = document.getElementById("fileMenu");
   const queueBarEl = document.getElementById("queueBar");
-  const autoBarEl = document.getElementById("autoBar");
   const newSessionBtn = document.getElementById("newSessionBtn");
   const sessionNameBtn = document.getElementById("sessionName");
   // 一个会话都没有时消息流中间那块提示（见 syncNoSessionHint）
@@ -880,11 +881,10 @@
       // 生成速度（t/s）：后端算好了推过来（只算模型真在吐字的那段时间，见 sessionRuntime 的
       // noteGenTokens）；停了就挂着这一轮最后的数，下一轮开始清空
       tps: undefined,
-      // 自动接着干（/auto）：auto 是这个会话的开关状态（后端推来，见 case "auto"），
-      // autoOpen 是自动条展不展开（点一下换一面）。
+      // 自动模式（/auto）：auto 是这个会话的开关状态（后端推来，见 case "auto"），
+      // autoTitle 是那颗转圈圈图标指上去说什么（后端拼好，见 auto.ts 的 autoIndicatorTitle）。
       auto: null,
-      autoSummary: null,
-      autoOpen: false,
+      autoTitle: null,
       // 工具调用耗时（见 noteToolDuration / renderToolStats）：只算这次打开页面之后跑过的调用。
       // byTool：工具名 → { count, totalMs, maxMs }；slowest：跑得最久的那几次（最多 TOOL_STATS_SLOWEST 条）。
       toolStats: { calls: 0, totalMs: 0, byTool: new Map(), slowest: [] },
@@ -4147,84 +4147,42 @@
     };
   }
 
-  // ==================== 自动条（/auto，输入框上头那一条）====================
-  /**
-   * 把当前会话的自动条画出来：`summary` 那行字由后端拼好（文案只写一处，
-   * 见 auto.ts 的 autoBarSummary），这里只管两副脸、展开收起、点开看判官说了什么。
-   */
-  function renderAutoBar() {
-    if (!autoBarEl) { return; }
-    const st = activeSession();
-    const auto = st ? st.auto : null;
-    const summary = st ? st.autoSummary : null;
-    if (!auto || !summary) {
-      autoBarEl.className = "hidden";
-      autoBarEl.innerHTML = "";
-      return;
-    }
-    autoBarEl.className = summary.tone + (st.autoOpen ? " open" : "");
-    autoBarEl.innerHTML = "";
-    // 一行排开：左边是那一行字（点了展开），右边两颗按钮 —— 收着的时候也能点，不用先展开。
-    const row = document.createElement("div"); row.className = "gb-row";
-    const head = document.createElement("button");
-    head.type = "button";
-    head.className = "gb-head";
-    head.title = "自动接着干 · 点开看判官最近说了什么";
-    head.setAttribute("aria-expanded", String(!!st.autoOpen));
-    const dot = document.createElement("span"); dot.className = "gb-dot";
-    const text = document.createElement("span"); text.className = "gb-text";
-    text.textContent = summary.text;
-    head.append(dot, text);
-    row.appendChild(head);
-
-    // 两颗按钮：左边那颗是继续 / 暂停（开着的时候画暂停，点一下换一面），
-    // 右边那颗是停止（关掉这个开关）。面上只画图标，文字放 title / aria-label。
-    const running = auto.phase === "on";
-    const acts = document.createElement("div"); acts.className = "gb-acts";
-    const play = document.createElement("button");
-    play.type = "button";
-    play.className = "gb-act gb-play";
-    play.dataset.act = running ? "pause" : "start";
-    play.setAttribute("aria-label", running ? "暂停" : "继续");
-    play.title = running ? "暂停（不再自动往下催，随时能接着开）" : "继续（下一轮跑完又开始判断）";
-    play.innerHTML = running ? ICONS.pause : ICONS.play;
-    play.addEventListener("click", () => {
-      vscode.postMessage({ type: "autoAct", sessionId: st.id, act: running ? "pause" : "start" });
-    });
-    acts.appendChild(play);
-    const stop = document.createElement("button");
-    stop.type = "button";
-    stop.className = "gb-act gb-stop";
-    stop.dataset.act = "stop";
-    stop.setAttribute("aria-label", "停止");
-    stop.title = "停止自动接着干（不再往下催，对话和文件都不动）";
-    stop.innerHTML = ICONS["stop-small"];
-    stop.addEventListener("click", () => {
+  // ==================== 自动模式那颗转圈圈的图标（/auto，输入框右头）====================
+  // 开着才露面，挨在「你说过的话」那颗（三条横线）左边；指上去写着现在第几轮、判官是不是正在看，
+  // 点一下就是关掉。所有字都由后端拼好（见 auto.ts 的 autoIndicatorTitle），这里只管露面 / 收起。
+  let autoBtn = null;
+  (function buildAutoButton() {
+    const row = document.getElementById("inputRow");
+    if (!row) { return; }
+    autoBtn = document.createElement("button");
+    autoBtn.type = "button";
+    autoBtn.id = "autoBtn";
+    autoBtn.className = "hidden";
+    autoBtn.innerHTML = ICONS.auto;
+    autoBtn.title = "自动模式";
+    autoBtn.setAttribute("aria-label", "自动模式");
+    // 挨在「你说过的话」那颗（三条横线）左边：那一颗早就挂上了（见上面那个 IIFE），
+    // 这一颗插到它前头。
+    if (saidBtn) { row.insertBefore(autoBtn, saidBtn); } else { row.appendChild(autoBtn); }
+    autoBtn.addEventListener("click", () => {
+      const st = activeSession();
+      if (!st) { return; }
       vscode.postMessage({ type: "autoAct", sessionId: st.id, act: "stop" });
     });
-    acts.appendChild(stop);
-    row.appendChild(acts);
-    const caret = document.createElement("span"); caret.className = "gb-caret";
-    caret.innerHTML = CHEVRON_SVG;
-    row.appendChild(caret);
-    autoBarEl.appendChild(row);
+  })();
 
-    const body = document.createElement("div"); body.className = "gb-body";
-    const noteLabel = document.createElement("div"); noteLabel.className = "gb-label";
-    noteLabel.textContent = "判官最近说的";
-    const noteText = document.createElement("pre"); noteText.className = "gb-note";
-    noteText.textContent = (typeof auto.note === "string" && auto.note.trim())
-      ? auto.note.trim()
-      : "还没有结论。每轮跑完判官看一眼：还要接着干就发一句「继续」。";
-    body.append(noteLabel, noteText);
-    autoBarEl.appendChild(body);
-
-    const toggle = () => {
-      st.autoOpen = !st.autoOpen;
-      renderAutoBar();
-    };
-    head.addEventListener("click", toggle);
-    caret.addEventListener("click", toggle);
+  function renderAutoIndicator() {
+    if (!autoBtn) { return; }
+    const st = activeSession();
+    const auto = st ? st.auto : null;
+    if (!auto) {
+      autoBtn.classList.add("hidden");
+      return;
+    }
+    const title = (st && st.autoTitle) || "自动模式（点一下停止）";
+    autoBtn.title = title;
+    autoBtn.setAttribute("aria-label", title);
+    autoBtn.classList.remove("hidden");
   }
 
   function renderQueueBar(st) {
@@ -4718,7 +4676,7 @@
     updateSendState();
     syncStatus();
     renderQueueBar(st);
-    renderAutoBar();
+    renderAutoIndicator();
     syncJumpBottom(st);
   }
 
@@ -9696,11 +9654,10 @@
         st.activityDetail = typeof s.activityDetail === "string" ? s.activityDetail : "";
         st.piReady = s.piReady !== false;
         st.loading = !!s.loading;
-        // 自动接着干（/auto）：每次列表都带一份（跟模型名一样，是一次性推送的补位）——
-        // 刷新页面 / 重连后自动条就靠它回来。
+        // 自动模式（/auto）：每次列表都带一份（跟模型名一样，是一次性推送的补位）——
+        // 刷新页面 / 重连后那颗转圈圈的图标就靠它回来。
         st.auto = s.auto || null;
-        st.autoSummary = s.autoSummary || null;
-        if (!st.auto) { st.autoOpen = false; }
+        st.autoTitle = s.autoTitle || null;
         syncSessionLoading(st);
         // 界面重建（网页重连、视图隐藏重开、窗口重载）后 sessionList 是唯一信源：
         // modelChanged 是一次性推送，不在此恢复会导致输入框底下那颗胶囊的模型名丢失。
@@ -9741,10 +9698,10 @@
         const pending = pendingActivateId;
         pendingActivateId = null;
         if (sessions.has(pending)) { activateSessionView(pending); }
-        else if (activeId && sessions.has(activeId)) { mountActiveSession(); syncStatus(); renderAutoBar(); }
+        else if (activeId && sessions.has(activeId)) { mountActiveSession(); syncStatus(); renderAutoIndicator(); }
       } else if (activeId && sessions.has(activeId)) {
         mountActiveSession();
-        renderAutoBar();
+        renderAutoIndicator();
       }
       renderSessionBar();
       // 会话目录这时候才认识：这一列开着又空着的话，把「目录」那一格摆上（见票 13）
@@ -10321,12 +10278,10 @@
         if (activeId === t.id) { syncStatus(); }
         break;
       case "auto":
-        // 开关状态（/auto）：自动条常驻在输入框上头，不再往消息流里写一条
+        // 开关状态（/auto）：界面上只多不多一颗转圈圈的图标，不往消息流里写
         t.auto = msg.auto || null;
-        t.autoSummary = msg.summary || null;
-        if (msg.open === true) { t.autoOpen = true; }
-        if (!t.auto) { t.autoOpen = false; }
-        if (activeId === t.id) { renderAutoBar(); }
+        t.autoTitle = msg.title || null;
+        if (activeId === t.id) { renderAutoIndicator(); }
         break;
       case "thinkingChanged":
         t.thinkingLevel = msg.level || "";

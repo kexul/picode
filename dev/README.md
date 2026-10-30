@@ -130,8 +130,8 @@ FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev
 # 所以要慢一点儿的假 pi，才来得及在它还在跑的时候停掉：
 FAKEPI_THINK_MS=4000 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaTools.js
 
-# 验「自动接着干」（/auto）：开开关 → 一轮跑完派判官 → 判官说「继续」就再来一轮 →
-# 说「结束」就自己关掉；暂停 / 继续同一颗按钮、刷新后还在、「停止」抹掉存档、
+# 验「自动模式」（/auto）：开开关 → 一轮跑完派判官 → 判官说「继续」就再来一轮 →
+# 说「结束」就自己关掉；输入框右头那颗转圈圈的图标（点一下就停）、刷新后还在、
 # /auto 后面带别的东西只回一句提示。判官循环就在这个脚本里跑完，不用另外配参数：
 npm run web:shot -- --fake-pi --script dev/autoLoop.js
 

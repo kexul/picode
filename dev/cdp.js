@@ -304,14 +304,6 @@ class Page {
         return true;
     }
 
-    /**
-     * 按目标条上的按钮：act 给 "play"（开始 / 暂停同一颗）或 "stop"（停止）。
-     * 目标条收着的时候按钮也在（只是看不见），所以不用先点开。
-     */
-    async autoPress(act) {
-        return this.click(`#autoBar .gb-act.gb-${act}`);
-    }
-
     /** 截图，存到 dev/shots/。不给名字就按顺序编号。 */
     async shot(name) {
         fs.mkdirSync(this.shotDir, { recursive: true });

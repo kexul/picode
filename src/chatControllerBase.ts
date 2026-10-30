@@ -59,7 +59,7 @@ import { noteChildSession } from "./childSessions";
 import {
     AUTO_CONTINUE_TEXT,
     MAX_AUTO_ROUNDS,
-    autoBarSummary,
+    autoIndicatorTitle,
     buildAutoJudgePrompt,
     parseAutoVerdict,
     type AutoCommand,
@@ -912,20 +912,18 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 判官的启动参数：一个工具都不给（它只读一段文字回一句话，给了工具只会慢、还会乱跑）。 */
     private static readonly AUTO_JUDGE_ARGS = ["--no-tools", "--no-mcp"];
 
-    /** RuntimeHost.onAutoCommand：/auto 命令，以及自动条上那两颗按钮。 */
+    /** RuntimeHost.onAutoCommand：/auto 命令，以及输入框底下那颗转圈圈的图标。 */
     public onAutoCommand(panelId: string, cmd: AutoCommand): void {
         const rt = this.panels.get(panelId);
         if (!rt) { return; }
         switch (cmd.kind) {
             case "on": this.autoOn(rt); return;
-            case "show": this.autoBroadcast(rt.id, true); return;
-            case "pause": this.autoHold(rt, true); return;
-            case "resume": this.autoHold(rt, false); return;
+            case "show": this.autoBroadcast(rt.id); return;
             case "off": this.autoOff(rt); return;
             case "hint":
                 this.postToSession(rt.id, {
                     type: "system",
-                    text: "「/auto」不接东西：开了就自己接着干；要停就点上面那条上的按钮。",
+                    text: "「/auto」不接东西：开了就自己接着干；要停就点输入框底下那颗转圈的图标。",
                 });
                 return;
         }
@@ -944,38 +942,27 @@ export abstract class ChatControllerBase implements RuntimeHost {
             });
             return;
         }
-        if (this.autoGet(rt)) {
-            this.autoBroadcast(rt.id, true);
+        const running = this.autoGet(rt);
+        if (running) {
+            this.autoBroadcast(rt.id);
+            this.postToSession(rt.id, {
+                type: "system",
+                text: `自动模式已经开着（第 ${running.rounds} 轮）。要停就点输入框底下那颗转圈的图标。`,
+            });
             return;
         }
-        this.autos.set(rt.id, { phase: "on", rounds: 0, updatedAt: Date.now() });
+        this.autos.set(rt.id, { rounds: 0, updatedAt: Date.now() });
         this.autoChecked.add(rt.id);
         this.autoSave(rt);
-        this.autoBroadcast(rt.id, true);
+        this.autoBroadcast(rt.id);
         this.postToSession(rt.id, {
             type: "system",
-            text: "自动接着干开了：之后每一轮跑完，判官看一眼要不要接着干，要就发一句「继续」。"
-                + "要停就点上面那条上的按钮。",
+            text: "自动模式开了：之后每一轮跑完，判官看一眼要不要接着干，要就发一句「继续」。"
+                + "要停就点输入框底下那颗转圈的图标。",
         });
     }
 
-    /** 暂停 / 恢复（只是不再往下催；对话、文件都不动）。 */
-    protected autoHold(rt: SessionRuntime, pause: boolean): void {
-        const auto = this.autoGet(rt);
-        if (!auto) { return; }
-        if (pause) {
-            if (auto.phase !== "on") { return; }
-            this.autoCancelJudge(rt.id);
-            auto.phase = "paused";
-        } else {
-            if (auto.phase === "on") { return; }
-            auto.phase = "on";
-        }
-        this.autoSave(rt);
-        this.autoBroadcast(rt.id);
-    }
-
-    /** 关掉开关（自动条上的「停止」，以及判官说不用继续、轮数到顶）。盘上那一份也一并抹掉。 */
+    /** 关掉开关（点那颗转圈圈的图标，以及判官说不用继续、轮数到顶）。盘上那一份也一并抹掉。 */
     protected autoOff(rt: SessionRuntime, reason?: string): void {
         this.autoCancelJudge(rt.id);
         this.autos.delete(rt.id);
@@ -1010,18 +997,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /** 把这个会话的开关推给所有屏（null = 关了）。内存里没有的先从存档接回来。 */
-    protected autoBroadcast(panelId: string, open = false): void {
+    protected autoBroadcast(panelId: string): void {
         const rt = this.panels.get(panelId);
         const auto = (rt ? this.autoGet(rt) : this.autos.get(panelId)) ?? null;
         this.postToSession(panelId, {
             type: "auto",
             auto,
-            summary: auto ? autoBarSummary(auto, this.autoJudgeRun.has(panelId)) ?? null : null,
-            open,
+            title: auto ? autoIndicatorTitle(auto, this.autoJudgeRun.has(panelId)) : null,
         });
     }
 
-    /** 这个会话现在是不是正有判官在看（自动条上写出来，不然看着像卡住了）。 */
+    /** 这个会话现在是不是正有判官在看（那颗图标指上去要写出来，不然看着像卡住了）。 */
     protected autoIsJudging(panelId: string): boolean {
         return this.autoJudgeRun.has(panelId);
     }
@@ -1030,7 +1016,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected autoLoopOnTurnEnd(info: TurnEndInfo): void {
         if (info.status !== "done") { return; }   // 被打断 / 出错的一轮：不算，等下一轮
         const auto = this.autos.get(info.panelId);
-        if (!auto || auto.phase !== "on") { return; }
+        if (!auto) { return; }
         if (this.autoJudgeRun.has(info.panelId)) { return; }   // 上一个判官还在（正常不会）：不叠着开
         const rt = this.panels.get(info.panelId);
         if (!rt) { return; }
@@ -1086,7 +1072,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.taba.noteTurnEnd(judge.id, info.status, Date.now());
         const auto = this.autos.get(workerPanelId);
         const workerRt = this.panels.get(workerPanelId);
-        if (ours && auto && workerRt && auto.phase === "on") {
+        if (ours && auto && workerRt) {
             // 判官这一轮没正常跑完就当它什么都没说：一个字都没有，也是"继续"
             const said = info.status === "done" ? (info.lastReplyText ?? "").trim() : "";
             if (!said) {
@@ -1110,11 +1096,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return true;
     }
 
-    /** 判官说接着干：给主会话发一句「继续」。中途开关关了 / 暂停了就不催了。 */
+    /** 判官说接着干：给主会话发一句「继续」。中途开关关掉了就不催了。 */
     protected autoContinue(workerPanelId: string): void {
         const rt = this.panels.get(workerPanelId);
         if (!rt) { return; }
-        if (this.autoGet(rt)?.phase !== "on") { return; }
+        if (!this.autoGet(rt)) { return; }
         rt.handleSend(AUTO_CONTINUE_TEXT, undefined, { followUp: true });
     }
 
@@ -1636,9 +1622,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
             // 派子会话：这个会话是子会话、或者它派过子会话（前端据此画标记）
             taba: this.tabaPanelInfo(rt.id) ?? null,
             // 自动接着干（/auto）：跟 modelChanged 一样是一次性推送，所以每次列表都带一份 ——
-            // 页面刷新 / 重连后界面重建，自动条就靠它补回来。
+            // 页面刷新 / 重连后界面重建，那颗转圈圈的图标就靠它补回来。
             auto: auto ?? null,
-            autoSummary: auto ? autoBarSummary(auto, this.autoIsJudging(rt.id)) ?? null : null,
+            autoTitle: auto ? autoIndicatorTitle(auto, this.autoIsJudging(rt.id)) : null,
         };
     }
 
@@ -2475,11 +2461,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 break;
             }
             case "autoAct": {
-                // 自动条上那两颗按钮：继续 / 暂停（同一颗，按下换一面）、停止（= 关掉）
-                const act = msg.act;
-                if (act === "start") { this.onAutoCommand(target.id, { kind: "resume" }); }
-                else if (act === "pause") { this.onAutoCommand(target.id, { kind: "pause" }); }
-                else if (act === "stop") { this.onAutoCommand(target.id, { kind: "off" }); }
+                // 输入框底下那颗转圈圈的图标：点一下就是关掉自动模式
+                if (msg.act === "stop") { this.onAutoCommand(target.id, { kind: "off" }); }
                 break;
             }
             case "abort": {

@@ -78,7 +78,7 @@ export const BUILTIN_COMPACT_ITEM: SlashCommandItem = {
 export const BUILTIN_AUTO_ITEM: SlashCommandItem = {
     insert: "/auto",
     name: "auto",
-    description: "每轮跑完自动接着干（要停就点自动条上的按钮）",
+    description: "每轮跑完自动接着干（要停就点那颗转圈的图标）",
     source: "builtin",
 };
 

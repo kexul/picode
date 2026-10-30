@@ -1,12 +1,12 @@
 // @ts-nocheck
 /**
- * autoLoop —— 验「自动接着干」（/auto）整条路（后端 + 界面一起，模型一头是假的）。
+ * autoLoop —— 验「自动模式」（/auto）整条路（后端 + 界面一起，模型一头是假的）。
  *
  * 要验的几件事：
- *   1. /auto 只开开关：不往对话里发东西、自动条出现、存档里记下"开着"；
+ *   1. /auto 只开开关：不往对话里发东西、输入框右头多一颗转圈圈的图标、存档里记下"开着"；
  *   2. 主会话跑完一轮 → 插件自动派判官 → 判官说「继续」→ 主会话收到一句「继续」又跑一轮；
- *   3. 判官说「结束」→ 开关自己关掉、自动条收掉、系统提示说清为什么；
- *   4. 暂停 / 继续同一颗按钮、刷新页面后自动条还在、「停止」把存档也抹掉；
+ *   3. 判官说「结束」→ 开关自己关掉、图标收掉、系统提示说清为什么；
+ *   4. 那颗图标点一下就是停；刷新页面后图标还在；
  *   5. 打 /auto 后面带别的东西：只回一句提示，不当成普通消息发出去；命令菜单里有 /auto。
  *
  * 模型那头是假的（`--fake-pi`）：假 pi 看到判官提示词就按轮数说「继续」/「结束」
@@ -46,20 +46,17 @@ module.exports = async (page) => {
     return keys.length === 1 ? all[keys[0]] : null;
   };
 
-  const bar = () => page.eval(`
-    const el = document.getElementById("autoBar");
+  /** 输入框右头那颗转圈圈的图标：露没露面、指上去说什么、在不在「你说过的话」左边。 */
+  const ind = () => page.eval(`
+    const el = document.getElementById("autoBtn");
     if (!el) { return { exists: false }; }
-    const text = el.querySelector(".gb-text");
+    const said = document.getElementById("saidBtn");
     return {
       exists: true,
       hidden: el.classList.contains("hidden"),
-      tone: el.className.replace(/\\s*open\\b/, "").trim(),
-      text: text ? text.textContent.trim() : "",
+      title: el.title || "",
+      beforeSaid: !!(said && (el.compareDocumentPosition(said) & Node.DOCUMENT_POSITION_FOLLOWING)),
     };
-  `);
-  const playLabel = () => page.eval(`
-    const el = document.querySelector("#autoBar .gb-act.gb-play");
-    return el ? (el.getAttribute("aria-label") || "") + "/" + (el.dataset.act || "") : "";
   `);
   const userSays = () => page.eval(`
     return Array.from(document.querySelectorAll(".msg.user")).map((el) => el.textContent.trim());
@@ -104,28 +101,27 @@ module.exports = async (page) => {
   // ---- 1. /auto：只开开关，不往对话里发东西 ----
   // 注意 /auto 后头那个空格：不写的话输入框会弹「/ 命令菜单」，回车被它吃掉（只把命令补进输入框），
   // 这是现有行为（/compact 也一样），不是这个功能的事。
-  const beforeMsgs = await page.eval(`return document.querySelectorAll(".msg").length;`);
   await page.send("/auto ");
   await page.sleep(800);
 
-  let b = await bar();
-  check("自动条出现了，写着「自动接着干」", !b.hidden && b.tone === "run" && b.text === "自动接着干", b);
-  check("开开关不多出一条对话消息（只多一条系统提示）",
-    (await page.eval(`return document.querySelectorAll(".msg.user").length;`)) === 0,
-    await page.eval(`return document.querySelectorAll(".msg").length - ${beforeMsgs};`));
+  let i = await ind();
+  check("输入框右头多了一颗转圈圈的图标，挨在「你说过的话」左边",
+    i.exists && !i.hidden && i.beforeSaid, i);
+  check("指上去写着「自动模式」（点一下停止）", i.title === "自动模式（点一下停止）", i.title);
+  check("开开关不多出一条对话消息",
+    (await page.eval(`return document.querySelectorAll(".msg.user").length;`)) === 0);
   const a1 = onlyAuto();
-  check("存档：这个会话的开关是「开着」、还没跑过轮", !!a1 && a1.phase === "on" && a1.rounds === 0,
-    a1 && { phase: a1.phase, rounds: a1.rounds });
+  check("存档：这个会话的开关是「开着」、还没跑过轮", !!a1 && a1.rounds === 0, a1 && { rounds: a1.rounds });
   await page.shot("auto-on.png");
 
   // ---- 2. 第一轮跑完 → 判官说「继续」→ 主会话收到一句「继续」再跑一轮 ----
   await page.send("随便干点活，演示一下");
   await page.waitAnswer("三个工具都跑过");
   const judged = await until(async () => {
-    const now = await bar();
-    return { ok: now.text.includes("判官正在看"), text: now.text };
+    const now = await ind();
+    return { ok: now.title.includes("判官正在看") && now.title.includes("第 1 轮"), title: now.title };
   }, 20000);
-  check("判官在跑的时候自动条写着「判官正在看」", judged && judged.ok, judged);
+  check("判官在跑的时候图标写着「第 1 轮 · 判官正在看」", judged && judged.ok, judged);
   const judgingRows = await openRows();
   check("判官在跑的时候在「项目与会话」列表里看得见", judgingRows.some((r) => r.includes("判官")), judgingRows);
   await page.shot("auto-judging.png");
@@ -140,10 +136,10 @@ module.exports = async (page) => {
 
   // ---- 3. 第二轮判官说「结束」→ 开关自己关掉 ----
   const stopped = await until(async () => {
-    const now = await bar();
-    return { ok: now.hidden === true, text: now.text, tone: now.tone };
+    const now = await ind();
+    return { ok: now.hidden === true, hidden: now.hidden };
   }, 90000);
-  check("判官说结束：自动条自己收掉", stopped && stopped.ok, stopped);
+  check("判官说结束：那颗图标自己收掉", stopped && stopped.ok, stopped);
   const said2 = await systemSays();
   check("系统提示说清了为什么停", said2.includes("判官说不用继续了"), said2.slice(-160));
   check("存档：关掉以后那条也没了", Object.keys(autos()).length === 0, autos());
@@ -152,41 +148,26 @@ module.exports = async (page) => {
     !rowsAfter.some((r) => r.includes("判官")) && rowsAfter.length === 1, rowsAfter);
   await page.shot("auto-stopped.png");
 
-  // ---- 4. 再开一次：暂停 / 继续同一颗按钮、刷新后还在、「停止」抹掉存档 ----
+  // ---- 4. 再开一次：刷新页面后图标还在；点一下那颗图标就是停 ----
   await page.send("/auto ");
   await page.sleep(600);
-  b = await bar();
-  check("再打一次 /auto 又开了", !b.hidden && b.text === "自动接着干", b);
-  check("开着的时候那颗按钮是暂停", (await playLabel()) === "暂停/pause", await playLabel());
+  i = await ind();
+  check("再打一次 /auto 又开了", !i.hidden && i.title === "自动模式（点一下停止）", i);
 
-  await page.autoPress("play");
-  await page.sleep(400);
-  b = await bar();
-  check("点了暂停：自动条写着已暂停", b.text.includes("已暂停") && b.tone === "stop", b);
-  check("存档：状态是 paused", (onlyAuto() || {}).phase === "paused", onlyAuto() && onlyAuto().phase);
-  check("停下来以后那颗按钮变回继续", (await playLabel()) === "继续/start", await playLabel());
-
-  await page.autoPress("play");
-  await page.sleep(400);
-  b = await bar();
-  check("再点继续：回到「自动接着干」", b.text === "自动接着干" && b.tone === "run", b);
-  check("存档：状态是 on", (onlyAuto() || {}).phase === "on", onlyAuto() && onlyAuto().phase);
-
-  // 刷新页面（重连）：自动条要能从后端补回来
   await page.eval("location.reload(); return true;");
   await page.sleep(1200);
   await page.waitReady(60000);
   const back = await until(async () => {
-    const now = await bar();
-    return { ok: now.exists && !now.hidden, text: now.text };
+    const now = await ind();
+    return { ok: now.exists && !now.hidden, title: now.title };
   }, 20000);
-  check("刷新页面后自动条还在（会话列表里带的）", back && back.ok, back);
+  check("刷新页面后图标还在（会话列表里带的）", back && back.ok, back);
 
-  await page.autoPress("stop");
+  await page.click("#autoBtn");
   await page.sleep(500);
-  b = await bar();
-  check("点停止：自动条收掉", b.hidden, b);
-  check("点停止：存档里也没了", Object.keys(autos()).length === 0, autos());
+  i = await ind();
+  check("点一下那颗图标：自动模式关掉、图标收掉", i.hidden, i);
+  check("点一下那颗图标：存档里也没了", Object.keys(autos()).length === 0, autos());
 
   // ---- 5. /auto 后面带别的东西：一句话回你，不当成普通消息 ----
   const userCount = await page.eval(`return document.querySelectorAll(".msg.user").length;`);
@@ -196,7 +177,7 @@ module.exports = async (page) => {
   check("打 /auto 带别的东西：只回一句提示，不发给模型",
     said3.includes("不接东西")
     && (await page.eval(`return document.querySelectorAll(".msg.user").length;`)) === userCount
-    && (await bar()).hidden,
+    && (await ind()).hidden,
     said3.slice(-120));
 
   // ---- 6. 命令菜单里要有 /auto 那一条 ----
@@ -211,7 +192,7 @@ module.exports = async (page) => {
   await page.shot("auto-menu.png");
 
   if (problems.length) {
-    throw new Error("自动接着干有问题：\n- " + problems.join("\n- "));
+    throw new Error("自动模式有问题：\n- " + problems.join("\n- "));
   }
-  console.log("自动接着干全过。");
+  console.log("自动模式全过。");
 };

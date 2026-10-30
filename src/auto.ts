@@ -1,40 +1,30 @@
 /**
- * 自动接着干（/auto）：每轮跑完，让一个判官看一眼主会话最后说的话，决定要不要再催一句「继续」。
+ * 自动模式（/auto）：每轮跑完，让一个判官看一眼主会话最后说的话，决定要不要再催一句「继续」。
  *
  * 没有目标、没有验收清单：/auto 只是个开关，打开以后不往对话里发任何东西。
  * 之后每一轮正常跑完，插件另起一个短会话当判官（不带工具），把这一轮最后那条回复交给它，
  * 只问一件事：还要不要接着干。说继续就发一句「继续」；说不继续就把这个开关关掉。
  *
- * 全是纯函数：认命令、拼判官那一轮的提示、从判官回复里认出结论、算自动条上那一行字。
+ * 全是纯函数：认命令、拼判官那一轮的提示、从判官回复里认出结论、算那颗图标上指着的说明。
  * 存盘在 autoFiles.ts；提示词的原文在 promptText.ts（那边可被 config.json 覆盖）。
  */
 import { promptText, type PromptOverrides } from "./promptText";
 
-/** 这个开关现在是什么状态。 */
-export type AutoPhase =
-    /** 开着：每轮跑完叫一次判官 */
-    | "on"
-    /** 用户按了暂停（或者轮数到顶自己停下）：不再往下催 */
-    | "paused";
-
 export interface AutoState {
-    phase: AutoPhase;
     /** 叫过几次判官（这个开关开着以来的轮数）。 */
     rounds: number;
-    /** 最近一句：判官说了什么（自动条展开时给人看）。 */
+    /** 最近一句：判官说了什么（停的时候写进系统提示）。 */
     note?: string;
     /** 最近一次改动的时刻（写盘、比对用）。 */
     updatedAt: number;
 }
 
-/** 打进来的命令，也是自动条上那两颗按钮按下时用的（见 chatControllerBase.onAutoCommand）。 */
+/** 打进来的命令，也是输入框底下那颗转圈圈图标按下时用的（见 chatControllerBase.onAutoCommand）。 */
 export type AutoCommand =
     /** 打开（已经开着就是看状态） */
     | { kind: "on" }
     /** 只看状态 */
     | { kind: "show" }
-    | { kind: "pause" }
-    | { kind: "resume" }
     /** 关掉，不再追踪 */
     | { kind: "off" }
     /** 打成了 `/auto 别的什么`：这命令不接东西 */
@@ -71,7 +61,7 @@ export function buildAutoJudgePrompt(p: { round: number; said: string }, over?: 
 export interface AutoVerdict {
     /** 还要接着干。 */
     go: boolean;
-    /** 判官说的一句话（写进自动条、也写进那条系统提示）；没有就是空串。 */
+    /** 判官说的一句话（写进系统提示）；没有就是空串。 */
     note: string;
 }
 
@@ -98,25 +88,14 @@ export function parseAutoVerdict(reply: string): AutoVerdict {
     return { go: true, note };
 }
 
-/** 自动条上那一行字（纯函数；界面直接显示它）。 */
-export interface AutoBarSummary {
-    /** 一行摘要。 */
-    text: string;
-    /** 颜色 / 呼吸那套：跑着 / 停了。 */
-    tone: "run" | "stop";
-}
-
 /**
- * @param judging 这一轮正有判官在看（主会话自己已经跑完了）：要写出来，
- *   不然界面看着像卡住了。
+ * 输入框底下那颗转圈圈图标指上去说什么（纯函数；界面直接用它当 title）。
+ *
+ * @param judging 这一轮正有判官在看（主会话已经跑完了）：要写出来，不然看着像卡住了。
  */
-export function autoBarSummary(auto?: AutoState | null, judging = false): AutoBarSummary | undefined {
-    if (!auto) { return undefined; }
-    if (auto.phase === "paused") { return { text: "自动接着干已暂停", tone: "stop" }; }
-    return {
-        text: "自动接着干"
-            + (auto.rounds > 0 ? ` · 第 ${auto.rounds} 轮` : "")
-            + (judging ? " · 判官正在看" : ""),
-        tone: "run",
-    };
+export function autoIndicatorTitle(auto: AutoState, judging: boolean): string {
+    return "自动模式"
+        + (auto.rounds > 0 ? ` · 第 ${auto.rounds} 轮` : "")
+        + (judging ? " · 判官正在看" : "")
+        + "（点一下停止）";
 }

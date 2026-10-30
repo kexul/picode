@@ -128,7 +128,6 @@ ${bodyTop}${chatColumnOpen}${sessionBar}  <div id="messages">
     </div>
   </div>
   <div id="inputArea">
-    <div id="autoBar" class="hidden"></div>
     <div id="queueBar" class="hidden"></div>
     <div id="imgPreview"></div>
     <!-- 输入那个圆角大盒子（#composer）：上半是打字的地方，下半一条小横排（#inputRow）。
