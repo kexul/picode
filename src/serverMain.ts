@@ -156,10 +156,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     if (!cfgRead.existed) {
         updateServerConfig({});
         console.log(`[${stamp()}] 已写出默认设置：${cfgRead.file}`);
-    } else if (cfgRead.retired.length > 0) {
+    } else if (cfgRead.retired.length > 0 || cfgRead.promptsOneLine) {
         // 早先的版本里能配、现在不用了的项：顺手重写一遍，别让文件里留着一堆没用的东西
+        // （提示词也顺手改成一行一项：内容不动，只是好改）
         updateServerConfig({});
-        console.log(`[${stamp()}] 设置文件里这些项已经不用了，已经删掉：${cfgRead.retired.join("、")}`);
+        if (cfgRead.retired.length > 0) {
+            console.log(`[${stamp()}] 设置文件里这些项已经不用了，已经删掉：${cfgRead.retired.join("、")}`);
+        }
+        if (cfgRead.promptsOneLine) {
+            console.log(`[${stamp()}] 设置文件里的提示词改成了一行一项（原来是每段一整行）：${cfgRead.file}`);
+        }
     }
     // 提示词第一次能被改：把内置原文写进 prompts 那一节当起点，人照着字句改就行。
     // 只写一次（那一节填上之后再也不动）；删掉某一项 = 那一项回内置，

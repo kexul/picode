@@ -273,6 +273,30 @@ function pickPromptValue(value: unknown, label: string, warnings: string[]): str
     return undefined;
 }
 
+/**
+ * 提示词写回文件时的样子：一段一个字符串列表，一行一项。
+ *
+ * 为什么不照内存里那样整段写成一句：JSON 里换行只能写成 `\n`，一段话就成了一行，
+ * 人改的时候既看不清、也插不进新的一行（改一句得在长线上找半天）。拆成一行一项以后，
+ * 加一行就是加一行。读的时候两种写法都认（见 pickPromptValue），所以老文件不用人管。
+ */
+function promptsForFile(prompts: Record<string, string>): Record<string, string | string[]> {
+    const out: Record<string, string | string[]> = {};
+    for (const [name, text] of Object.entries(prompts)) {
+        // 只留一行、或者干脆是空的，原样写着就好（空 = 用内置原文）
+        out[name] = text.includes("\n") ? text.split("\n") : text;
+    }
+    return out;
+}
+
+/** 文件里的提示词还是老写法：整段藏在一行里（换行是 `\n`），改起来费劲，启动时顺手重写一遍。 */
+function promptsWrittenAsOneLine(raw: unknown): boolean {
+    if (!isPlainObject(raw)) { return false; }
+    const prompts = raw.prompts;
+    if (!isPlainObject(prompts)) { return false; }
+    return Object.values(prompts).some((value) => typeof value === "string" && value.includes("\n"));
+}
+
 /** 把任意来源的对象规范化成 ServerConfig。这层全是纯函数。 */
 /**
  * 文件里还摆着、但现在已经不用的键（改名的、删掉的、搬到设置面板去的）：
@@ -426,6 +450,8 @@ export function readServerConfig(dir?: string): {
     retired: string[];
     /** 文件里没有 prompts 那一节、或者一项都没填（启动时据此把内置提示词补进去）。 */
     promptsEmpty: boolean;
+    /** 提示词还是老写法：一段写成一行（内容一样，只是断行藏在 `\n` 里）。 */
+    promptsOneLine: boolean;
 } {
     const file = serverConfigFile(dir);
     let text: string;
@@ -434,10 +460,13 @@ export function readServerConfig(dir?: string): {
     } catch (err) {
         // 第一次跑时文件还没建，这是正常情况，不该报警
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-            return { config: defaults(), file, existed: false, warnings: [], retired: [], promptsEmpty: true };
+            return {
+                config: defaults(), file, existed: false, warnings: [], retired: [],
+                promptsEmpty: true, promptsOneLine: false,
+            };
         }
         return {
-            config: defaults(), file, existed: false, retired: [], promptsEmpty: false,
+            config: defaults(), file, existed: false, retired: [], promptsEmpty: false, promptsOneLine: false,
             warnings: [`读设置文件失败：${file}（${describeError(err)}）`],
         };
     }
@@ -454,12 +483,16 @@ export function readServerConfig(dir?: string): {
             existed: true,
             retired: [],
             promptsEmpty: false,
+            promptsOneLine: false,
             warnings: [`设置文件不是合法的 JSON：${file}（${describeError(err)}）`],
         };
     }
 
     const { config, warnings, promptsEmpty } = normalizeServerConfig(raw);
-    return { config, file, existed: true, warnings, retired: retiredKeysIn(raw), promptsEmpty };
+    return {
+        config, file, existed: true, warnings, retired: retiredKeysIn(raw),
+        promptsEmpty, promptsOneLine: promptsWrittenAsOneLine(raw),
+    };
 }
 
 /** 把 patch 合并进现有设置，写回文件，返回写完的结果。 */
@@ -473,7 +506,8 @@ export function updateServerConfig(patch: DeepPartial<ServerConfig>, dir?: strin
     try {
         // 写全量而不是只写 patch：人打开文件能看见所有可改的项，也好照着改
         fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+        // 只有提示词换个写法（一行一项）：内存里还是整段一句，拼提示词那边照旧
+        fs.writeFileSync(file, `${JSON.stringify({ ...config, prompts: promptsForFile(config.prompts) }, null, 2)}\n`, "utf8");
     } catch (err) {
         // 写不动（目录没权限、盘满）也别抛：设置改不了是小事，别把正在跑的会话带崩
         problems.push(`写设置文件失败：${file}（${describeError(err)}）`);
