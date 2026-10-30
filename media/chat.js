@@ -2714,15 +2714,21 @@
   // 分不出核心（只有一段、或者全被打杂的占满）就照原样整条写出来。
   // 命令只是一行字，这么切只是猜：整条一直留着，悬浮那一行就能看（见 syncRunningLine）。
   const SEG_PROG_SKIP = new Set(["sudo", "time", "env", "nohup", "command", "exec", "builtin", "nice", "!", "{", "do", "then", "else", "elif", "if", "while", "until"]);
-  const SEG_NOISE = new Set(["cd", "pushd", "popd", "echo", "printf", "export", "unset", "set", "true", "false", ":", "sleep", "wait", "clear", "sync"]);
+  const SEG_NOISE = new Set(["cd", "pushd", "popd", "echo", "printf", "export", "unset", "set", "true", "false", ":", "sleep", "wait", "clear", "sync",
+    "continue", "break", "exit", "return", "shift", "local", "declare", "readonly", "umask", "dirs"]);
   const SEG_PIPE_TAIL = new Set(["sed", "head", "tail", "cut", "sort", "uniq", "wc", "tr", "tee", "column", "less", "more", "nl", "fmt", "tac", "rev", "fold", "paste"]);
   // 只翻看一眼的（ls / cat / wc / head …）：有正经干活的段时它们不抢核心，
   // 一条正经活都没有（就 dd 看一眼、数数行）才轮得到它们（见 pickCoreSegment）
   const SEG_GLANCE = new Set(["ls", "cat", "wc", "head", "tail", "file", "stat", "du", "tree", "pwd", "which", "where", "type", "readlink"]);
-  // 显示时从段首剥掉的（「do python x.py」写成「python x.py」才对）
-  const SEG_DISPLAY_STRIP = new Set(["do", "then", "else", "elif", "!", "{"]);
+  // 框架词：单独占一段时它就是 for / if 那套的骨头，不是一件活（`done`、`fi` 曾被当成核心写出来过）
+  const SEG_FRAME = new Set(["do", "then", "else", "elif", "fi", "done", "esac", "in", "{", "}", "(", ")"]);
+  // 条件判断本身（`[ -f "$f" ]` / `test …`）：算「只翻一眼」那档 —— 循环体里它后面往往才是真干活
+  const SEG_CHECK = new Set(["[", "[[", "test"]);
   // 段首是这些词的（for / if / while 那一套的开头）本身不是一件事
-  const SEG_KEYWORD_HEAD = /^(for|if|while|until|case|select|function)\b/;
+  const SEG_LOOP_HEAD = new Set(["for", "while", "until", "select"]);
+  const SEG_COND_HEAD = new Set(["if", "case"]);
+  // 显示时从段首剥掉的：框架词（「do python x.py」写成「python x.py」、「if grep …」写成「grep …」）
+  const SEG_DISPLAY_STRIP = new Set(["do", "then", "else", "elif", "!", "{", "if", "while", "until", "for", "case", "select"]);
 
   /** 这一行的收尾标记（heredoc 的 `<<EOF`）：`<<` 后面那个词，引号去掉、`<<-` 的前导 tab 也认。
    *  不是 heredoc（`<<<` 是 herestring、或者后面没东西）就返回空。 */
@@ -2833,27 +2839,62 @@
     return "";
   }
 
-  /** 这一段值多少（挑核心时用）：2 = 正经干活；1 = 只翻看一眼（ls / cat / wc / head …）；
-   *  0 = 不算事（挪位置的、打杂的、管道后面修输出的、循环和条件的开头）。 */
-  function segmentRank(seg, i) {
-    if (SEG_KEYWORD_HEAD.test(seg.text)) { return 0; }
-    const prog = segmentProgram(seg.text);
-    if (!prog || SEG_NOISE.has(prog)) { return 0; }
-    if (i > 0 && seg.sepBefore === "|" && SEG_PIPE_TAIL.has(prog)) { return 0; }
-    return SEG_GLANCE.has(prog) ? 1 : 2;
+  /** 这一段开头的那个词（认 do / then / done / fi / if / [ 这些框架用；前面挂的（ { ! 先剥掉）。 */
+  function segmentHeadWord(text) {
+    const m = /^[({!\s]*([^\s]+)/.exec(String(text || ""));
+    return m ? m[1].replace(/[)};]+$/, "") : "";
   }
 
-  /** 挑核心段：先找正经干活的那段；一条都没有，才退到「只翻看一眼」的那段。
+  /** 这一段值多少（挑核心时用）：2 = 正经干活；1 = 只翻看一眼（ls / cat / wc / [ 这类）；
+   *  0 = 不算事（挪位置的、打杂的、管道后面修输出的、for / if 那套的骨头）。
+   *  判之前先把段首的框架词剥掉：`do if grep …` 里真正干活的是 grep，不是 do。 */
+  function segmentRank(seg, i) {
+    const rawHead = segmentHeadWord(seg.text);
+    // for / while / case 的循环头本身不是一件活（剥掉 for 只剩个变量名）
+    if (SEG_LOOP_HEAD.has(rawHead) || rawHead === "case" || rawHead === "function") { return 0; }
+    const body = segmentDisplay(seg.text);
+    const head = segmentHeadWord(body);
+    if (!body || SEG_FRAME.has(head)) { return 0; }
+    const prog = segmentProgram(body);
+    if (!prog || SEG_NOISE.has(prog)) { return 0; }
+    if (i > 0 && seg.sepBefore === "|" && SEG_PIPE_TAIL.has(prog)) { return 0; }
+    if (SEG_CHECK.has(head) || SEG_GLANCE.has(prog)) { return 1; }
+    return 2;
+  }
+
+  /** 每一段外面套着的是什么框架：「循环里」还是「条件里」（两个都不是就空字）。
+   *  挑出来的核心如果是从循环体里挑的，那一行要说明它是对着一堆东西反复跑的。 */
+  function segFrameworkMarks(segs) {
+    const out = [];
+    let loop = 0, cond = 0;
+    for (const seg of segs) {
+      const head = segmentHeadWord(seg.text);
+      if (head === "do") { loop++; }
+      else if (head === "then" || head === "else" || head === "elif") { cond++; }
+      else if (head === "done") { if (loop > 0) { loop--; } }
+      else if (head === "fi" || head === "esac") { if (cond > 0) { cond--; } }
+      out.push(loop > 0 ? "循环里" : (cond > 0 ? "条件里" : ""));
+    }
+    return out;
+  }
+
+  /** 挑核心段：先找正经干活的那段（2 分）；一条都没有，才退到「只翻看一眼」的那段（1 分）。
    *  同样值的取头一个 —— 所以「ls 一眼、再 grep 真查」挑出来的是 grep，
-   *  「ls 一眼、再 wc -l 数行数」两条都只值一分，还是挑头一个。 */
+   *  「ls 一眼、再 wc -l 数行数」两条都只值一分，还是挑头一个。
+   *  返回 { seg, mark }：mark 是它外面套着的框架（「循环里」/「条件里」/空）。 */
   function pickCoreSegment(segs) {
-    let glance = null;
+    const marks = segFrameworkMarks(segs);
+    let best = -1, bestRank = 0;
     for (let i = 0; i < segs.length; i++) {
       const rank = segmentRank(segs[i], i);
-      if (rank === 2) { return segs[i]; }
-      if (rank === 1 && !glance) { glance = segs[i]; }
+      if (rank > bestRank) {
+        bestRank = rank;
+        best = i;
+        if (rank === 2) { break; }   // 2 分到顶了：头一个正经干活的就够了
+      }
     }
-    return glance;
+    if (best < 0) { return null; }
+    return { seg: segs[best], mark: marks[best] };
   }
 
   /** 这一段写在那一行上长什么样：剥掉段首那几个连接词（do / then / ! …）；
@@ -2893,13 +2934,17 @@
     const segs = splitCommandSegments(cmd);
     if (!segs.length) { return asIs(); }
     // 只有一段就用那一段（哪怕它是 cd / echo）；好几段才挑「正经干活」的那段
-    const core = segs.length > 1 ? pickCoreSegment(segs) : segs[0];
-    if (!core) { return asIs(); }
+    const picked = segs.length > 1 ? pickCoreSegment(segs) : { seg: segs[0], mark: "" };
+    if (!picked) { return asIs(); }
     // 整条摘要里 "$ " + 命令 后面那点尾巴（timeout 这类）照旧跟着写
     const head = "$ " + cmd;
     const tail = whole.startsWith(head) ? whole.slice(head.length).trim() : "";
-    const main = "$ " + segmentDisplay(core.text) + (tail ? " " + tail : "");
-    const more = segs.length > 1 ? "+" + (segs.length - 1) + " 段" : "";
+    const main = "$ " + segmentDisplay(picked.seg.text) + (tail ? " " + tail : "");
+    // 灰字那句：核心是在循环 / 条件里跑的，先说这个（对着好几个文件反复跑，跟跑一遍不是一回事）
+    const extra = [];
+    if (picked.mark) { extra.push(picked.mark); }
+    if (segs.length > 1) { extra.push("+" + (segs.length - 1) + " 段"); }
+    const more = extra.join(" · ");
     return { main, more, trimmed: !!more || main !== whole };
   }
 

@@ -16,6 +16,9 @@
  *     段数不再数出十几段来；单独一条 heredoc 也照这个写；
  *   · 先 `ls` / `wc -l` 看一眼、再 `grep` / `sed` 真干活的 → 核心挑后面那条（只翻一眼的不抢核心）；
  *     整条上全是翻一眼的（ls + wc -l）→ 还是挑头一个；
+ *   · 循环（`for …; do …; done`）→ 拿循环体里的活当核心，`for` / `do` / `if` 那层剥掉，
+ *     灰字先说「循环里」（它是对着一堆东西反复跑的）；`done` / `fi` / `[ -f … ]` / `continue` 不抢核心；
+ *     循环体里只有 echo 这种 → 整条照原样写；
  *   · 悬浮这一行 → 提示框里是整条命令（一个字不少）；
  *   · 「+N 段」那一句不跟着字横向滚（放不下的字自己滚，它不动）；
  *   · 不是 bash 的调用（read / grep）照旧整条写，不写「+N 段」。
@@ -36,7 +39,7 @@ const CASES = [
     { cmd: "cd /tmp && echo 开始", main: "$ cd /tmp && echo 开始", more: "", why: "一段正经活都没有：照原样整条写" },
     { cmd: "git status --short", main: "$ git status --short", more: "", why: "只有一段：照原样" },
     { cmd: "npm run build && npm test", main: "$ npm run build", more: "+1 段", why: "两段都在干活：写头一段" },
-    { cmd: 'for f in a.py b.py; do python "$f"; done', main: '$ python "$f"', more: "+2 段", why: "别拿 for 那截当核心，写循环体里那句" },
+    { cmd: 'for f in a.py b.py; do python "$f"; done', main: '$ python "$f"', more: "循环里 · +2 段", why: "别拿 for 那截当核心，写循环体里那句" },
     { cmd: "ls -la | head -5", main: "$ ls -la", more: "+1 段", why: "管道后面修输出的不算事" },
     {
         cmd: "cd /d/projects/pesai && python - <<'EOF'\nimport sys\nprint(sys.path)\nprint('跑完了')\nEOF",
@@ -62,6 +65,26 @@ const CASES = [
         cmd: "cd x && ls a && wc -l a",
         main: "$ ls a", more: "+2 段",
         why: "一条正经活都没有：退到翻看的那段（头一个）",
+    },
+    {
+        cmd: 'cd x && for m in libs/*/*/exports.txt; do if grep -q "12CreateOutput" $m 2>/dev/null; then echo "== $m"; fi; done',
+        main: '$ grep -q "12CreateOutput" $m 2>/dev/null', more: "循环里 · +5 段",
+        why: "循环体里的活才是核心：do / if 那层剥掉，灰字说明这是在循环里跑",
+    },
+    {
+        cmd: 'cd x && for d in recordings/*/; do f="$d/timeline.jsonl"; [ -f "$f" ] || continue; python tools/x.py "$f"; done',
+        main: '$ python tools/x.py "$f"', more: "循环里 · +6 段",
+        why: "「[ -f ]」这种条件判断跟 continue 不抢核心",
+    },
+    {
+        cmd: "cd x && for i in 1 2; do ../adb shell monkey 1; sleep 3; done",
+        main: "$ ../adb shell monkey 1", more: "循环里 · +4 段",
+        why: "循环头上那句（for i in 1 2）不是核心，循环体里那句才是",
+    },
+    {
+        cmd: "cd x && for f in a b c; do echo $f; done",
+        main: "$ cd x && for f in a b c; do echo $f; done", more: "",
+        why: "循环体里只有 echo（没正经活）：整条照原样写，不瞎挑",
     },
 ];
 
@@ -130,6 +153,8 @@ module.exports = async (page) => {
         }
 
         await post([{ type: "toolResult", toolCallId: id, isError: false, resultText: "好了", durationMs: 120 }]);
+        // 循环那一幕存一张图：灰字里要能一眼看出「循环里 · +5 段」
+        if (seq === 13) { await page.shot("core-command-loop.png"); }
         await page.sleep(80);
     }
 
