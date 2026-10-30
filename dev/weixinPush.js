@@ -105,8 +105,12 @@ module.exports = async (page) => {
 
         if (to !== "user@fake-9") { throw new Error(`发给谁不对：${to}`); }
         if (note.msg.message_type !== 2) { throw new Error("message_type 该是 2（机器人发的）"); }
-        if (!String(text).includes("跑完了一轮")) { throw new Error("正文里没写跑完了一轮"); }
-        if (!/\?session=[^&\s]+/.test(String(text))) { throw new Error("正文里没有能点开那个会话的地址"); }
+        // 正文就该是一行 `会话名：回复的开头几句`：不带机器名、不带“跑完了一轮”、不带地址
+        if (/[\r\n]/.test(String(text))) { throw new Error(`正文该是一行：${text}`); }
+        if (!/^[^：]+：.+$/.test(String(text))) { throw new Error(`正文该是“会话名：摘要”，实际是：${text}`); }
+        if (String(text).includes("跑完了一轮") || /https?:\/\//.test(String(text))) {
+            throw new Error(`正文里不该有“跑完了一轮”或地址：${text}`);
+        }
 
         // 记下"这条是为了哪个会话发的"了没有
         if (!fs.existsSync(SENT_FILE)) { throw new Error("sent.json 没写出来（引用回复以后认不出会话）"); }

@@ -121,7 +121,9 @@ module.exports = async (page) => {
         console.log("  · ② 引用回复落进会话了（页面上看到这句话）");
         const second = await waitPushed(fake, 2, "引用回复跑完的推送");
         const secondText = second.body?.msg?.item_list?.[0]?.text_item?.text || "";
-        if (!secondText.includes("跑完了一轮")) { throw new Error(`引用回复跑完没推回来：${secondText}`); }
+        if (!/^[^：]+：/.test(secondText) || /[\r\n]/.test(secondText)) {
+            throw new Error(`引用回复跑完没推回来（该是一行“会话名：摘要”）：${secondText}`);
+        }
 
         // ③ 不引用直接回一句：该落进最近那个会话
         fake.inbox.push(incoming("不引用也说一句：只回复两个字：好"));

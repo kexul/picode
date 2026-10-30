@@ -1,9 +1,9 @@
 /**
  * weixinPush —— 会话有事时往微信里发一条。
  *
- * 干什么：本机右下角那块提醒面板出来的时候（或者设置里把提醒推到别的机器去了、这台本来不弹的时候），
- * 微信里也发一条同样的意思：哪台机器、哪个会话、跑完了一轮（还是在等你答一道选择题）、回复的开头几句，
- * 最后一行是这个后端的地址 —— 手机点开就落到那个会话上。
+ * 发出去就一行：`会话名：回复的开头几句`（没有回复文字就只写会话名）。
+ * 不写是哪台机器、不写"跑完了一轮"、也不附地址：微信里看到的就是"哪个会话说了什么"，
+ * 想知道是哪台、想接着聊，引用这条消息回一句就是了（那才是这件事真正的入口）。
  *
  * 为什么要发而不是只弹面板：面板只在跑后端的那台 Windows 上有，人可能在别的屋里、在外面。
  * 微信这条也不看"人是不是正坐在输入框前面"（见 chatHost.ts 的 trayNote）：那是给不在电脑前准备的。
@@ -18,9 +18,7 @@ import { weixinSentFile } from "./serverPaths";
 
 /** 一条要发到微信的事。 */
 export interface WeixinNote {
-    /** 这台机器叫什么（设置里的「推送标签」；没写就用地址里的主机名）。 */
-    label: string;
-    /** 哪个会话（界面上显示的那个名字）。 */
+    /** 哪个会话（界面上显示的那个名字）；这就是那行的“标题”。 */
     name: string;
     /** 会话标识（界面上那一格）。 */
     panelId: string;
@@ -31,8 +29,6 @@ export interface WeixinNote {
     /** 一句话摘要（调用方已经截过）。 */
     summary?: string;
     kind: "done" | "ask";
-    /** 手机能点开的地址（带 ?session=）；没有就不写这一行。 */
-    pageUrl?: string;
 }
 
 /** 记下"这条是我为了哪个会话发的"：键是服务端 message_id。 */
@@ -78,15 +74,11 @@ export function findRouteForInbound(
 /** 记多少条：够人回头翻一两天就够了，再多也没人引用到那么早的。 */
 const SENT_KEEP = 200;
 
-/** 排成一条微信消息该长的样子。 */
+/** 排成一条微信消息该长的样子：`会话名：摘要`（没有摘要就只剩会话名）。 */
 export function formatWeixinNote(note: WeixinNote): string {
-    const head = note.label ? `${note.label} · ${note.name}` : note.name;
-    const what = note.kind === "ask" ? "在等你答一道选择题" : "跑完了一轮";
-    const lines = [`${head}：${what}`];
+    const name = (note.name ?? "").trim() || "会话";
     const summary = (note.summary ?? "").trim();
-    if (summary) { lines.push(summary); }
-    if (note.pageUrl) { lines.push(note.pageUrl); }
-    return lines.join("\n");
+    return summary ? `${name}：${summary}` : name;
 }
 
 /**

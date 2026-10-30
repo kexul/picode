@@ -726,16 +726,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         if (!this.getWeixinPush()) { return; }
         const account = readWeixinAccount();
         if (!account?.userId) { return; }
-        const base = (this.options.selfPageUrl?.() ?? "").replace(/\/+$/, "");
+        const rt = this.panels.get(panelId);
         const note = {
-            label: this.notifyPushLabel() || hostOfUrl(base) || "Pi Chat",
             name: (name || "").trim() || "会话",
             panelId,
-            sessionFile: this.panels.get(panelId)?.currentSessionPath,
-            cwd: this.panels.get(panelId)?.cwd,
+            sessionFile: rt?.currentSessionPath,
+            cwd: rt?.cwd,
             summary: plainPreview(summary),
             kind,
-            pageUrl: base ? `${base}/?session=${encodeURIComponent(panelId)}` : undefined,
         };
         const result = await pushWeixinNote(note, {
             botToken: account.botToken,
