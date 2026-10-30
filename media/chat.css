@@ -1814,14 +1814,18 @@
   .script-stop:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
   .script-stop:disabled { opacity: 0.4; cursor: default; }
   /* 命令那一行：缩到编号下面（27px = 三角 5px + 间距，跟头一行那几颗对齐）。
-     收着的时候只占一行、放不下就截掉（悬停看全）；展开的时候把整条命令折行铺开
-     （下面那段输出的头两行就是这条命令，已经掐掉了，命令得在这一行看全）。 */
+     收着的时候只占一行、放不下就截掉（悬停看全），也不垫底色；
+     展开的时候把整条命令折行铺开、垫一层浅底（当成一块命令头），下面那段就是输出。 */
   .script-cmd {
     padding: 0 10px 5px 27px; opacity: 0.8;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-family: var(--vscode-editor-font-family, monospace); font-size: 0.86em;
   }
-  .script-item.open .script-cmd { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .script-item.open .script-cmd {
+    white-space: pre-wrap; overflow-wrap: anywhere;
+    background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.12));
+    padding-top: 3px; padding-bottom: 4px;
+  }
   .script-body[hidden] { display: none; }
   /* 展开的那一段输出：等宽、长行折起来；跟 diff 一样不自己再滚一道（这一列本来就在滚），
      往下拖的时候上面那一行粘在顶上（见 .script-head 的 sticky）。 */
@@ -1829,8 +1833,6 @@
     margin: 0; padding: 4px 10px 8px 27px;
     white-space: pre-wrap; overflow-wrap: anywhere;
     font-family: var(--vscode-editor-font-family, monospace); font-size: 0.86em;
-    /* 跟上面那条命令（也是等宽字）画一道分界，不然命令接输出看不出接到哪儿 */
-    border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.18));
   }
 
 
