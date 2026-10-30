@@ -258,8 +258,9 @@ const MD_PLAIN_LINES = [
 ];
 /**
  * 光名字那一摊：链接里只有 `only-name.js` 这种光名字、或者路径写岔了时，后端先按会话目录拼；
- * 拼不到，就在「这个会话碰过的文件」（read / edit / write 过的，后端有这份清单）里按文件名找；
- * 还没有，就在会话目录里按名字找一圈（不进 node_modules 这类目录，有定额）。
+ * 拼不到，就先在「这个会话碰过的文件」（read / edit / write 过的，后端有这份清单）里按文件名找——
+ * 对上了就直接开，不再去仓库里全部找一遍（大仓库里省的就是这一下）；还没有，才在会话目录里
+ * 按名字找一圈（不进 node_modules 这类目录，有定额）。
  * 素材：子目录里藏一个（光名字链接靠第二档找到它）、会话目录里与子目录里各放一个同名的
  *（先按会话目录拼那一档该赢）、会话目录外面那个 package.json（清单里匹配到了，边界也得挡住）、
  * 深浅两层同名的一个（会话里没人碰过，靠第三档找到浅的那一份）、以及藏在 node_modules 里那个
@@ -1350,7 +1351,10 @@ module.exports = async (page) => {
 
     // ==================== 二进制：一句说明 + 一个能存下来的下载 ====================
     console.log("点文件链接：" + await clickLink(FILE.binary));
-    const bin1 = await waitLook("二进制那句说明上来", (x) => x.downloadCount > 0 || x.note.indexOf("二进制") >= 0);
+    // 等的是「这一格换成 data.bin 了」：上一个文件（超大图那张）也已经挂着一颗下载链接，
+    // 只看 downloadCount 会当场就满足、读到的还是上一张的内容
+    const bin1 = await waitLook("二进制那句说明上来",
+        (x) => activeFilePath(x) === FILE.binary && (x.downloadCount > 0 || x.note.indexOf("二进制") >= 0));
     check("点二进制文件：给一句「这是个二进制文件」", bin1.note.indexOf("二进制文件") >= 0, bin1.note);
     check("二进制文件：给一个下载链接、正文一个字节都不给",
         bin1.rowCount === 0 && bin1.downloadCount === 1 && bin1.bodyChars < 300

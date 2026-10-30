@@ -45,8 +45,13 @@ interface FileList {
 const MAX_LISTED_FILES = 100_000;
 /** 会话目录里走一圈的定额（只在没有 rg 时用得上）。 */
 const WALK_BUDGET_MS = 4_000;
-/** 清单缓存的寿命：这段时间里反复打字 / 点链接都用同一份；过了再问一次盘。 */
+/** 清单缓存的寿命：这段时间里算「新鲜」，直接给（搜索框每敲一个字都问一次，得看得见新建的文件）。 */
 const LIST_CACHE_MS = 5_000;
+/**
+ * 点链接时能忍多旧的清单：手上那份先给（不必为这一下把整个仓库扫一遍），过了上面那 5 秒就顺手
+ * 在后台重列一遍、下一次用新的。大仓库里连着点几个链接，只有第一下要等那一次扫盘。
+ */
+const LIST_STALE_MS = 120_000;
 /** 同时留几个目录的清单（切会话、开几个项目时不至于无限攒着）。 */
 const LIST_CACHE_DIRS = 4;
 /** 列清单最多等这么久（大工程在慢盘上也就一两秒）。 */
@@ -195,10 +200,20 @@ const listCache = new Map<string, { at: number; list: FileList }>();
 const pendingLists = new Map<string, Promise<FileList>>();
 
 /** 同一个目录同时来两次（打字快、点链接）只要问一遍盘。 */
-function listSessionFiles(cwd: string): Promise<FileList> {
+function listSessionFiles(cwd: string, maxAgeMs = LIST_CACHE_MS): Promise<FileList> {
     const key = path.resolve(cwd);
     const hit = listCache.get(key);
-    if (hit && Date.now() - hit.at < LIST_CACHE_MS) { return Promise.resolve(hit.list); }
+    const age = hit ? Date.now() - hit.at : Infinity;
+    if (hit && age < maxAgeMs) {
+        // 旧了但还不算不能用（点链接那一路）：这一下先用它，顺手在后台重列一遍
+        if (age >= LIST_CACHE_MS) { void loadAndCache(key).catch(() => { /* 重列不成：下次再试 */ }); }
+        return Promise.resolve(hit.list);
+    }
+    return loadAndCache(key);
+}
+
+/** 真去问一遍盘，回来记进缓存。 */
+function loadAndCache(key: string): Promise<FileList> {
     const running = pendingLists.get(key);
     if (running) { return running; }
     const loading = loadList(key)
@@ -454,6 +469,9 @@ async function searchContentsSlowly(cwd: string, q: string, limit: number,
  * 完全照写的路径就在 → 只回它一个（写得清楚就不问）；拼不到时才把同名的都列出来
  * （文件清单里的，加上这个会话碰过、并且真身在会话目录里的）。
  * 一个都没有也照原样返回（界面就拿原来那个写法去开，该 404 / 403 就让它报）。
+ *
+ * 会话碰过的文件先认：名字对得上就直接回它（跟编辑器那一侧同一个规矩），不为了这一下把整个
+ * 仓库扫一遍——大仓库里，这一下省掉的就是点链接时最卡的那一段。
  */
 export async function findPathCandidates(cwd: string, wantPath: string,
     knownFiles: readonly string[] = []): Promise<string[]> {
@@ -466,27 +484,48 @@ export async function findPathCandidates(cwd: string, wantPath: string,
     } catch { /* 没这个文件，接着挑 */ }
     const base = want.split("/").pop() || "";
     if (!base) { return []; }
+    // 会话里碰过、名字对得上、真身也在会话目录里：直接认（不用扫仓库）
+    const knownHits = knownPathMatches(cwdResolved, knownFiles, base);
+    if (knownHits.length > 0) {
+        knownHits.sort((a, b) => compareCandidates(want, a, b));
+        return knownHits;
+    }
+    const list = await listSessionFiles(cwd, LIST_STALE_MS);
     const found: string[] = [];
     const seen = new Set<string>();
-    const add = (rel: string) => {
+    for (const rel of list.files) {
+        if ((rel.split("/").pop() || "") !== base) { continue; }
         // Windows 上同一个文件可能大小写不同（清单里一种、工具调用里一种），别列两遍
         const key = process.platform === "win32" ? rel.toLowerCase() : rel;
-        if (seen.has(key)) { return; }
+        if (seen.has(key)) { continue; }
         seen.add(key);
         found.push(rel);
-    };
-    const list = await listSessionFiles(cwd);
-    for (const rel of list.files) {
-        if ((rel.split("/").pop() || "") === base) { add(rel); }
     }
+    found.sort((a, b) => compareCandidates(want, a, b));
+    return found;
+}
+
+/** 会话碰过、名字（最后那一段）对得上、而且真身在会话目录里的那几份（相对写法，去重后）。 */
+function knownPathMatches(cwdResolved: string, knownFiles: readonly string[], base: string): string[] {
+    const out: string[] = [];
+    const seen = new Set<string>();
     for (const known of knownFiles) {
         const rel = relativeTo(cwdResolved, path.resolve(known));
         // 会话目录外面那个不开（那条路本来就会报 403，不往选择里放）
         if (!rel || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel)) { continue; }
-        if ((rel.split("/").pop() || "") === base) { add(rel); }
+        if ((rel.split("/").pop() || "") !== base) { continue; }
+        // 碰过、但现在已经不在了（删了 / 挪走了）：不拿它当候选，照旧去文件清单里找
+        try {
+            if (!fs.statSync(path.resolve(cwdResolved, rel)).isFile()) { continue; }
+        } catch {
+            continue;
+        }
+        const key = process.platform === "win32" ? rel.toLowerCase() : rel;
+        if (seen.has(key)) { continue; }
+        seen.add(key);
+        out.push(rel);
     }
-    found.sort((a, b) => compareCandidates(want, a, b));
-    return found;
+    return out;
 }
 
 /**

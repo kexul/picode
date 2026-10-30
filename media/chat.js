@@ -5964,6 +5964,11 @@
   /** 跟着刷新：每隔这么久问一次现在看着的那个文件变了没（问法见 pollActiveFile）。 */
   const FILE_SIDEBAR_POLL_MS = 1500;
   /**
+   * 点链接问后端「这个名字对上了几个文件」最多等多久：后端自己那两道时限是 10 秒（有 rg）
+   * 与 4 秒（没 rg、自己走目录），这边留出余量。等不到才按写的那样硬开。
+   */
+  const FILE_CANDIDATES_WAIT_MS = 12000;
+  /**
    * 上色那条线：正文不超过这么多字符才上色，超过就黑白、只带行号（见 highlightFileLines）。
    * 整段高亮是一次同步调用，几十万字符就要几百毫秒，而这里一列正文可以到 2 MB——
    * 不给它设个上限，点开一个大文件就把页面卡在那儿了。
@@ -7625,12 +7630,14 @@
     if (!path) { return; }
     if (dir) { openFileDirect(path, line, col, dir); return; }
     const requestId = ++fileCandidatesSeq;
-    // 后端没回话（版本对不上、断线）：照老样子直接开，别让点一下没反应
+    // 后端没回话（版本对不上、断线）：照老样子直接开，别让点一下没反应。
+    // 等得比后端自己那两道时限都长（无 ripgrep 时走目录 4 秒、有 rg 时 10 秒）：
+    // 大仓库里先放弃的话，会赶在真话之前按写的那样硬开，结果是「看不了」。
     const timer = setTimeout(() => {
       if (!pendingFileCandidates.has(requestId)) { return; }
       pendingFileCandidates.delete(requestId);
       openFileDirect(path, line, col);
-    }, 3000);
+    }, FILE_CANDIDATES_WAIT_MS);
     pendingFileCandidates.set(requestId, { path: path, line: line, col: col, timer: timer });
     vscode.postMessage({ type: "pathCandidates", path: path, requestId: requestId });
   }
