@@ -14,6 +14,8 @@
  *   · for 循环那句 → 不拿「for f in …」当核心，写循环体里那句（「do」那层剥掉）；
  *   · heredoc（`python - <<'EOF'` 后面一整段脚本）→ 正文里的换行不当分隔符，只写「$ python - <<'EOF'」，
  *     段数不再数出十几段来；单独一条 heredoc 也照这个写；
+ *   · 先 `ls` / `wc -l` 看一眼、再 `grep` / `sed` 真干活的 → 核心挑后面那条（只翻一眼的不抢核心）；
+ *     整条上全是翻一眼的（ls + wc -l）→ 还是挑头一个；
  *   · 悬浮这一行 → 提示框里是整条命令（一个字不少）；
  *   · 「+N 段」那一句不跟着字横向滚（放不下的字自己滚，它不动）；
  *   · 不是 bash 的调用（read / grep）照旧整条写，不写「+N 段」。
@@ -45,6 +47,21 @@ const CASES = [
         cmd: "python - <<'EOF'\nimport sys\nEOF",
         main: "$ python - <<'EOF'", more: "",
         why: "单独一条 heredoc：只写头一行，脚本正文在提示里看",
+    },
+    {
+        cmd: 'cd x && ls -la tools && grep -n "CreateOutput" a.txt | head -20',
+        main: '$ grep -n "CreateOutput" a.txt', more: "+3 段",
+        why: "先 ls 看一眼不算事：核心挑真正在查的那条",
+    },
+    {
+        cmd: "cd x && wc -l a.py && sed -n 1,80p a.py",
+        main: "$ sed -n 1,80p a.py", more: "+2 段",
+        why: "数行数只是翻一眼，核心是后面读文件那截",
+    },
+    {
+        cmd: "cd x && ls a && wc -l a",
+        main: "$ ls a", more: "+2 段",
+        why: "一条正经活都没有：退到翻看的那段（头一个）",
     },
 ];
 

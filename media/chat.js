@@ -2716,6 +2716,9 @@
   const SEG_PROG_SKIP = new Set(["sudo", "time", "env", "nohup", "command", "exec", "builtin", "nice", "!", "{", "do", "then", "else", "elif", "if", "while", "until"]);
   const SEG_NOISE = new Set(["cd", "pushd", "popd", "echo", "printf", "export", "unset", "set", "true", "false", ":", "sleep", "wait", "clear", "sync"]);
   const SEG_PIPE_TAIL = new Set(["sed", "head", "tail", "cut", "sort", "uniq", "wc", "tr", "tee", "column", "less", "more", "nl", "fmt", "tac", "rev", "fold", "paste"]);
+  // 只翻看一眼的（ls / cat / wc / head …）：有正经干活的段时它们不抢核心，
+  // 一条正经活都没有（就 dd 看一眼、数数行）才轮得到它们（见 pickCoreSegment）
+  const SEG_GLANCE = new Set(["ls", "cat", "wc", "head", "tail", "file", "stat", "du", "tree", "pwd", "which", "where", "type", "readlink"]);
   // 显示时从段首剥掉的（「do python x.py」写成「python x.py」才对）
   const SEG_DISPLAY_STRIP = new Set(["do", "then", "else", "elif", "!", "{"]);
   // 段首是这些词的（for / if / while 那一套的开头）本身不是一件事
@@ -2830,13 +2833,27 @@
     return "";
   }
 
-  /** 一段正经干活吗（挑核心时用）：挪位置的、打杂的、管道后面修输出的都不算。 */
-  function isCoreSegment(seg, i) {
-    if (SEG_KEYWORD_HEAD.test(seg.text)) { return false; }
+  /** 这一段值多少（挑核心时用）：2 = 正经干活；1 = 只翻看一眼（ls / cat / wc / head …）；
+   *  0 = 不算事（挪位置的、打杂的、管道后面修输出的、循环和条件的开头）。 */
+  function segmentRank(seg, i) {
+    if (SEG_KEYWORD_HEAD.test(seg.text)) { return 0; }
     const prog = segmentProgram(seg.text);
-    if (!prog || SEG_NOISE.has(prog)) { return false; }
-    if (i > 0 && seg.sepBefore === "|" && SEG_PIPE_TAIL.has(prog)) { return false; }
-    return true;
+    if (!prog || SEG_NOISE.has(prog)) { return 0; }
+    if (i > 0 && seg.sepBefore === "|" && SEG_PIPE_TAIL.has(prog)) { return 0; }
+    return SEG_GLANCE.has(prog) ? 1 : 2;
+  }
+
+  /** 挑核心段：先找正经干活的那段；一条都没有，才退到「只翻看一眼」的那段。
+   *  同样值的取头一个 —— 所以「ls 一眼、再 grep 真查」挑出来的是 grep，
+   *  「ls 一眼、再 wc -l 数行数」两条都只值一分，还是挑头一个。 */
+  function pickCoreSegment(segs) {
+    let glance = null;
+    for (let i = 0; i < segs.length; i++) {
+      const rank = segmentRank(segs[i], i);
+      if (rank === 2) { return segs[i]; }
+      if (rank === 1 && !glance) { glance = segs[i]; }
+    }
+    return glance;
   }
 
   /** 这一段写在那一行上长什么样：剥掉段首那几个连接词（do / then / ! …）；
@@ -2876,7 +2893,7 @@
     const segs = splitCommandSegments(cmd);
     if (!segs.length) { return asIs(); }
     // 只有一段就用那一段（哪怕它是 cd / echo）；好几段才挑「正经干活」的那段
-    const core = segs.length > 1 ? segs.find(isCoreSegment) : segs[0];
+    const core = segs.length > 1 ? pickCoreSegment(segs) : segs[0];
     if (!core) { return asIs(); }
     // 整条摘要里 "$ " + 命令 后面那点尾巴（timeout 这类）照旧跟着写
     const head = "$ " + cmd;
