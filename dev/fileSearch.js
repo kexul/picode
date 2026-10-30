@@ -1,11 +1,11 @@
 // @ts-nocheck
 /**
- * fileSearch —— 验「按 Ctrl+Alt+F 搜文件」那块浮层。
+ * fileSearch —— 验「按 Ctrl+Shift+F 搜文件」那块浮层。
  *
  *   npm run web:shot -- --fake-pi --script dev/fileSearch.js
  *
  * 真后端、真会话、真网页服务、真界面文件（只有模型是假的），验的是外面看得见的行为：
- *   1. 按 Ctrl+Alt+F 弹出浮层，输入框自己拿到焦点；再按一次（或 Esc）收起；
+ *   1. 按 Ctrl+Shift+F 弹出浮层，输入框自己拿到焦点；再按一次（或 Esc）收起；
  *   2. 「文件名」那一档边打边出：命中的那几个字母标出来；回车（或点一行）在左边的文件侧边栏
  *      打开那个文件；文件侧边栏头上那颗放大镜也能开它（手机上没键盘时的入口）；
  *   3. 「内容」那一档搜文件里的文字：一条结果两行——「路径:行号」和那一行（命中处标出来）；
@@ -93,12 +93,12 @@ module.exports = async (page) => {
     prepareFiles(cwd);
     console.log("测试文件写进 " + path.join(cwd, FIX.dir));
 
-    /** 真按一下 Ctrl+Alt+F（Ctrl=2、Alt=1）。 */
+    /** 真按一下 Ctrl+Shift+F（Ctrl=2、Shift=8）。 */
     const pressSearchKey = () => page.cdp.send("Input.dispatchKeyEvent", {
-        type: "keyDown", key: "f", code: "KeyF", modifiers: 3,
+        type: "keyDown", key: "f", code: "KeyF", modifiers: 10,
         windowsVirtualKeyCode: 70, nativeVirtualKeyCode: 70,
     }).then(() => page.cdp.send("Input.dispatchKeyEvent", {
-        type: "keyUp", key: "f", code: "KeyF", modifiers: 3,
+        type: "keyUp", key: "f", code: "KeyF", modifiers: 10,
         windowsVirtualKeyCode: 70, nativeVirtualKeyCode: 70,
     }));
     const pressEsc = () => page.cdp.send("Input.dispatchKeyEvent", {
@@ -167,7 +167,7 @@ module.exports = async (page) => {
     };
 
     // ==================== 一、按快捷键弹出 / 收起 ====================
-    console.log("按 Ctrl+Alt+F：");
+    console.log("按 Ctrl+Shift+F：");
     await pressSearchKey();
     await page.sleep(500);
     const opened = await searchState();
@@ -178,7 +178,7 @@ module.exports = async (page) => {
     check("空着先把文件列出来（不是空白一张）", opened.rows.length > 0, String(opened.rows.length));
     await page.shot("search-1-open.png");
 
-    console.log("再按一次 Ctrl+Alt+F：");
+    console.log("再按一次 Ctrl+Shift+F：");
     await pressSearchKey();
     await page.sleep(250);
     check("再按一次收起来了", !(await searchState()).shown);

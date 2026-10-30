@@ -611,7 +611,7 @@
   var closeSessionKey = "alt+w";
   var tabSwitchKey = "ctrl+alt+pgupdown";
   /** 文件搜索浮层（见下面「文件搜索」那一段）：不跟别的快捷键一起进设置，先写死这个。 */
-  var fileSearchKey = "ctrl+alt+f";
+  var fileSearchKey = "ctrl+shift+f";
   // 这台机器的路径分不分大小写（顶条、面板、历史列表里拿路径当键比）：
   // 后端在 viewOptions 里报（process.platform !== "win32"）。没收到之前按不分大小写算，
   // 跟以前一样；收到后就按真值。
@@ -7394,7 +7394,7 @@
       '<div id="filePanel" class="pk-panel">' +
         '<div id="fileHeader" class="pk-header">' +
           '<div id="fileTabs"></div>' +
-          '<button id="fileSearchBtn" type="button" title="文件搜索（Ctrl+Alt+F）" aria-label="文件搜索">' + SEARCH_ICON + '</button>' +
+          '<button id="fileSearchBtn" type="button" title="文件搜索（Ctrl+Shift+F）" aria-label="文件搜索">' + SEARCH_ICON + '</button>' +
           '<button id="fileClose" class="pk-header-close" type="button" title="收起" aria-label="收起">' + ICONS["close-bold"] + '</button>' +
         '</div>' +
         // 看文件时正文上面那条横条：左边写这个文件叫什么，右边一颗关闭（回文件列表）
@@ -7452,7 +7452,7 @@
     window.pichatFileSidebar = { toggle: toggleFileSidebar };
   })();
 
-  // ==================== 文件搜索（Ctrl+Alt+F）====================
+  // ==================== 文件搜索（Ctrl+Shift+F）====================
   //
   // 一块浮层：上面输入框，下面一列结果。两档：「文件名」（默认，边打边出）和「内容」
   // （文件里的文字，带行号 + 那一行）。两档都由后端找（消息 findFiles → findResults）：
