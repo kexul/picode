@@ -38,6 +38,9 @@ export const CHAT_UI_FILES: readonly ChatUiFile[] = [
     { name: "browserBridge.js", role: "bridge" },
     { name: "marked.js", role: "vendor-script" },
     { name: "highlight.js", role: "vendor-script" },
+    // 二维码（「微信」那块扫码登录现画那张码用）：56 KB，跟着首屏一起下来，
+    // 比“第一次真要点登录时才去拉、还要处理拉不到”少一道心思。
+    { name: "qrcode.js", role: "vendor-script" },
     // pele（画 mermaid 图的那个库）有 700 多 KB：只有真出现 ```mermaid 代码块时才值得付这笔下载与解析
     { name: "pele.js", role: "lazy-script" },
     { name: "chat.js", role: "main-script" },

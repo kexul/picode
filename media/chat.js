@@ -11178,6 +11178,7 @@
       if (it.kind === "slider") { renderSliderRow(row, it); viewOptsRoot.appendChild(row); return; }
       if (it.kind === "button") { renderButtonRow(row, it); viewOptsRoot.appendChild(row); return; }
       if (it.kind === "text") { renderTextRow(row, it); viewOptsRoot.appendChild(row); return; }
+      if (it.kind === "weixin") { renderWeixinRow(row, it); viewOptsRoot.appendChild(row); return; }
       if (Array.isArray(it.options) && it.options.length) {
         // 按钮组：直接点选某个选项
         row.classList.add("vo-item-group");
@@ -11212,6 +11213,142 @@
       }
       viewOptsRoot.appendChild(row);
     });
+  }
+
+  /**
+   * 「微信」那一块：扫码登录（后端在 chatHost.ts 的 weixinOptionItem 里给这几项）。
+   *
+   * 二维码是现画的（media/qrcode.js）：页面只许连本站，不能引外站的图。
+   * 走到哪一步全看后端给的 phase —— 界面这边不猜，也不记着自己那份：
+   * 每次登录状态一变，后端就把整份选项重推一遍（见 chatHost.ts 的 weixinLogin）。
+   */
+  function renderWeixinRow(row, it) {
+    row.classList.add("vo-item-weixin");
+    const txt = document.createElement("div"); txt.className = "vo-text";
+    const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "微信";
+    txt.appendChild(label);
+    row.appendChild(txt);
+
+    const body = document.createElement("div"); body.className = "vo-wx-body";
+    row.appendChild(body);
+
+    const phase = String(it.phase || "idle");
+    const message = String(it.message || "");
+    // 正在扫的时候这块得看得见：设置那一列挺长，它本来可能半截在框外（人点了“扫码登录”总得看到码）
+    if (phase === "wait" || phase === "scaned" || phase === "needcode") {
+      setTimeout(() => { try { row.scrollIntoView({ block: "nearest" }); } catch (e) { /* 滚不动就算了 */ } }, 0);
+    }
+
+    function note(text, isError) {
+      if (!text) { return; }
+      const el = document.createElement("div");
+      el.className = "vo-wx-note" + (isError ? " error" : "");
+      el.textContent = text;
+      body.appendChild(el);
+    }
+    function button(text, onClick, primary) {
+      const btn = document.createElement("button");
+      btn.type = "button"; btn.className = "vo-btn"; btn.textContent = text;
+      if (primary) { btn.style.background = "var(--vscode-button-background, #007acc)"; btn.style.color = "var(--vscode-button-foreground, #fff)"; }
+      btn.addEventListener("click", onClick);
+      return btn;
+    }
+
+    if (phase === "done") {
+      const who = document.createElement("div"); who.className = "vo-wx-account";
+      who.textContent = it.account ? ("已登录：" + it.account) : "已登录";
+      body.appendChild(who);
+      note(message);
+      // 再扫一张：换了微信、或者以后令牌过期了，得能重新绑一次（不用去删文件）
+      const line = document.createElement("div"); line.className = "vo-wx-row";
+      line.appendChild(button("重新扫码", () => {
+        vscode.postMessage({ type: "weixinLogin", action: "start" });
+      }));
+      body.appendChild(line);
+      return;
+    }
+
+    if (phase === "wait" || phase === "scaned" || phase === "needcode") {
+      const qrBox = document.createElement("div"); qrBox.className = "vo-wx-qr";
+      const canvas = document.createElement("canvas");
+      qrBox.appendChild(canvas);
+      body.appendChild(qrBox);
+      if (!drawQrInto(canvas, String(it.qr || ""))) {
+        qrBox.remove();
+        note("二维码画不出来（这页的二维码库没加载上）", true);
+        if (it.qr) {
+          const link = document.createElement("div"); link.className = "vo-wx-link"; link.textContent = String(it.qr);
+          body.appendChild(link);
+        }
+      }
+      note(message, false);
+      if (phase === "needcode") {
+        const line = document.createElement("div"); line.className = "vo-wx-row";
+        const input = document.createElement("input");
+        input.type = "text"; input.className = "vo-input vo-wx-code"; input.spellcheck = false;
+        input.placeholder = "手机上的数字";
+        input.addEventListener("keydown", (e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") { e.preventDefault(); submit(); }
+        });
+        function submit() { vscode.postMessage({ type: "weixinLogin", action: "code", code: input.value }); }
+        line.appendChild(input);
+        line.appendChild(button("确定", submit, true));
+        body.appendChild(line);
+        setTimeout(() => input.focus(), 0);
+        return;
+      }
+      const line = document.createElement("div"); line.className = "vo-wx-row";
+      line.appendChild(button("取消", () => { vscode.postMessage({ type: "weixinLogin", action: "cancel" }); }));
+      body.appendChild(line);
+      return;
+    }
+
+    // idle / error：一颗按钮重来
+    note(message || "扫一下就把这台后端绑到你的微信上", phase === "error");
+    const line = document.createElement("div"); line.className = "vo-wx-row";
+    line.appendChild(button(phase === "error" ? "再试一次" : "扫码登录", () => {
+      vscode.postMessage({ type: "weixinLogin", action: "start" });
+    }, true));
+    body.appendChild(line);
+  }
+
+  /**
+   * 把一串字画成二维码（media/qrcode.js 那个库的矩阵，自己一格一格画到 canvas 上）。
+   * @returns 画成了没有（库没加载上 / 没字就是 false）
+   */
+  function drawQrInto(canvas, text) {
+    if (!text || typeof qrcode !== "function") { return false; }
+    let qr;
+    try {
+      qr = qrcode(0, "M");          // 0 = 按内容挑最小的版本
+      qr.addData(text, "Byte");
+      qr.make();
+    } catch (e) { return false; }
+    const count = qr.getModuleCount();
+    const cell = 5;                  // 每个小格几像素（配合下面最多 260px 的宽度自己缩）
+    const quiet = 2;                 // 四周留的静区（格数）：留窄了手机认不出来
+    const side = (count + quiet * 2) * cell;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(side * dpr);
+    canvas.height = Math.round(side * dpr);
+    // 大码别撑破这块地方：按 260px 折算成缩放后的显示尺寸（画布本身仍是清楚的）
+    const shown = Math.min(side, 260);
+    canvas.style.width = shown + "px";
+    canvas.style.height = shown + "px";
+    const ctx = canvas.getContext("2d");
+    if (!ctx) { return false; }
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#000";
+    const unit = cell * dpr;
+    for (let r = 0; r < count; r++) {
+      for (let c = 0; c < count; c++) {
+        if (!qr.isDark(r, c)) { continue; }
+        ctx.fillRect(Math.round((c + quiet) * unit), Math.round((r + quiet) * unit), Math.ceil(unit), Math.ceil(unit));
+      }
+    }
+    return true;
   }
 
   /**

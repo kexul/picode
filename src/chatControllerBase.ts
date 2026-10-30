@@ -104,6 +104,15 @@ export interface ViewOptionItem {
     unit?: string;
     button?: string;
     disabled?: boolean;
+    // ---- kind: "weixin"（微信扫码登录那块，见 chatHost.ts 的 weixinOptionItem）----
+    /** 现在走到哪一步了：idle / wait / scaned / needcode / done / error。 */
+    phase?: string;
+    /** 要画成二维码的那串字（wait / scaned / needcode 时有）。 */
+    qr?: string;
+    /** 已经登录时：绑的是哪个机器人。 */
+    account?: string;
+    /** 块里那句说明。 */
+    message?: string;
 }
 
 /**

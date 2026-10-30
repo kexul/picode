@@ -1219,6 +1219,21 @@
   }
   .vo-btn:hover:not(:disabled) { background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,0.35)); }
   .vo-btn:disabled { opacity: .45; cursor: default; }
+  /* 「微信」那一块（扫码登录，见 chat.js 的 renderWeixinRow）：标题一行、二维码居中、底下说明与按钮 */
+  .vo-item-weixin { flex-direction: column; align-items: stretch; gap: 8px; cursor: default; }
+  .vo-item-weixin:hover { background: transparent; }
+  .vo-wx-body { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .vo-wx-qr {
+    /* 白底黑格：深浅配色下二维码也得能扫（不跟着界面走） */
+    background: #fff; border-radius: 4px; padding: 4px; line-height: 0;
+  }
+  .vo-wx-qr canvas { display: block; }
+  .vo-wx-note { font-size: 11px; opacity: .7; text-align: center; }
+  .vo-wx-note.error { opacity: 1; color: var(--vscode-errorForeground, #f14c4c); }
+  .vo-wx-row { display: flex; gap: 6px; align-items: center; }
+  .vo-wx-code { width: 120px; }
+  .vo-wx-account { font-size: 12px; word-break: break-all; opacity: .85; }
+  .vo-wx-link { font-size: 11px; opacity: .6; word-break: break-all; }
   .pk-section { padding: 8px 10px 4px; font-size: 0.74em; font-weight: 600; opacity: 0.55; text-transform: uppercase; letter-spacing: 0.04em; user-select: none; }
   /* 模型选择器 provider 分组：居中分割线样式（左右横线 + 中间名称计数） */
   .pk-section.pk-provider {

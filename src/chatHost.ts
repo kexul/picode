@@ -45,6 +45,9 @@ import type { BashTaskInfo } from "./bashProtocol";
 import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { describeRestart } from "./serverRestart";
+import { WeixinLogin, readWeixinAccount } from "./weixinLogin";
+import { pushWeixinNote } from "./weixinPush";
+import { plainPreview } from "./messageUtils";
 import {
     DEFAULT_AUTO_LOAD_LAST,
     DEFAULT_CLOSE_SESSION_KEY,
@@ -681,6 +684,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         if (!msg || typeof msg.type !== "string") { return; }
         // 「编译并重启」不是会话上的事，不进消息分发：直接交给这一层，再回一句话给点它的那块屏
         if (msg.type === "restartBackend") { this.requestRestart(pageId); return; }
+        // 「微信」那块（扫码登录）也不是会话上的事：具体见 handleWeixinMessage
+        if (msg.type === "weixinLogin") { this.handleWeixinMessage(msg); return; }
         const previous = this.currentPageId;
         this.currentPageId = pageId;
         try {
@@ -688,6 +693,95 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         } finally {
             this.currentPageId = previous;
         }
+    }
+
+    /**
+     * 会话有事了（跑完一轮 / 模型在等你答选择题）：本机那块提醒面板的出口在这儿拦一下，
+     * 微信里也发一条（登录过就发）。
+     *
+     * 本机弹不弹还是原来那套规矩（推到别的机器去了、人正坐在输入框前面就不弹）；
+     * 微信这条不受它们管 —— 它本来就是给"人不在电脑前"用的。
+     * 开关跟着「弹窗通知」走：那个人不想被打扰的时候，微信里也不该冒出来。
+     */
+    protected override trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): void {
+        void this.pushWeixinNote(sessionId, name, summary, kind);
+        super.trayNote(sessionId, name, summary, kind);
+    }
+
+    /**
+     * 把这条提醒发到微信。
+     *
+     * 没登录、登录回话里没写“发给谁”（`ilink_user_id`）就什么也不做；发不出去只记一行日志
+     * —— 提醒失败不该影响会话本身。
+     */
+    private async pushWeixinNote(panelId: string, name: string, summary: string, kind: "done" | "ask"): Promise<void> {
+        if (!this.getNotifyTurnEnd()) { return; }
+        const account = readWeixinAccount();
+        if (!account?.userId) { return; }
+        const base = (this.options.selfPageUrl?.() ?? "").replace(/\/+$/, "");
+        const note = {
+            label: this.notifyPushLabel() || hostOfUrl(base) || "Pi Chat",
+            name: (name || "").trim() || "会话",
+            panelId,
+            sessionFile: this.panels.get(panelId)?.currentSessionPath,
+            summary: plainPreview(summary),
+            kind,
+            pageUrl: base ? `${base}/?session=${encodeURIComponent(panelId)}` : undefined,
+        };
+        const result = await pushWeixinNote(note, {
+            botToken: account.botToken,
+            baseUrl: account.baseUrl,
+            to: account.userId,
+        });
+        if (result.ok) {
+            this.log(`[微信] 推了一条（${kind === "ask" ? "等你答一句" : "跑完一轮"}）：${note.name}`);
+        } else {
+            this.log(`[微信] 这条没推出去：${result.error}`);
+        }
+    }
+
+    /**
+     * 设置浮层里那块「微信」（扫码登录）。
+     *
+     * 为什么挤进显示选项那张清单里（而不再开一种消息）：那块浮层每次打开都重问一遍选项
+     * （见 media/chat.js 的 openSettings），夹在选项里就天然是“最新的一份”，不用另记状态、
+     * 也不用担心页面刷新后对不上。登录状态一变就重推这张清单（见 weixinChanged）。
+     */
+    private weixinOptionItem(): ViewOptionItem {
+        const state = this.weixinLogin().current();
+        return {
+            action: "weixin",
+            label: "微信",
+            check: null,
+            kind: "weixin",
+            phase: state.phase,
+            qr: state.qr ?? "",
+            account: state.account ?? "",
+            message: state.message ?? "",
+        };
+    }
+
+    /** 登录这摊事第一次用到时才建（没登录过的人不该为一个文件读一次盘）。 */
+    private weixinLoginInstance: WeixinLogin | undefined;
+
+    private weixinLogin(): WeixinLogin {
+        if (!this.weixinLoginInstance) {
+            this.weixinLoginInstance = new WeixinLogin((state) => {
+                // 状态变了：把显示选项整份重推一遍（浮层开着的话当场跟着变，没开就等下次打开）
+                this.log(`[微信] ${state.message ?? state.phase}`);
+                this.showOptionsPicker();
+            });
+        }
+        return this.weixinLoginInstance;
+    }
+
+    /** 页面在那个块里点了什么：扫码 / 输数字 / 取消。 */
+    private handleWeixinMessage(msg: any): void {
+        const login = this.weixinLogin();
+        const action = typeof msg.action === "string" ? msg.action : "";
+        if (action === "start") { login.start(); return; }
+        if (action === "cancel") { login.cancel(); return; }
+        if (action === "code") { login.submitCode(typeof msg.code === "string" ? msg.code : ""); return; }
     }
 
     /**
@@ -961,7 +1055,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return { themeMode: this.getThemeMode() };
     }
 
-    /** 显示选项浮层里追加的两行：界面颜色（按钮组）、重启后端（按钮）。 */
+    /** 显示选项浮层里追加的几行：界面颜色（按钮组）、微信（扫码登录）、重启后端（按钮）。 */
     protected override viewOptionItemsExtra(): ViewOptionItem[] {
         // 能不能从这里编译并重启：代码旁边得有仓库里的 build.bat / build.sh（见 serverRestart.ts）。
         // 单文件 exe 也认这一行：它得放在仓库的 dist\ 里，点下去会重新打包 exe 再重启；
@@ -969,6 +1063,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const able = describeRestart();
         const can = able.ok && !!this.options.restartBackend;
         const items: ViewOptionItem[] = [
+            // 微信排在这一节最前面：它跟下面「消息推送 / 推送标签」是一类事（通知往哪儿送）
+            this.weixinOptionItem(),
             {
                 action: "notifyTurnEnd",
                 label: "弹窗通知",
