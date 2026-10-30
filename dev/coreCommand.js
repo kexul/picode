@@ -3,25 +3,25 @@
  * coreCommand —— 验「正在跑的那一条」只写一长串命令里的核心那一段。
  *
  * 模型爱写一长串：cd 到某个目录 && 跑个脚本 | sed 看头几行。整条摆在那一行上，人一眼看不出在干什么
- * （一行放不下还得横着滚半天）。现在按字面把命令切成几段，只写「正经干活」的那段，后面灰一句「+N 段」，
+ * （一行放不下还得横着滚半天）。现在按字面把命令切成几段，只写「正经干活」的那段，后面灰一个「+N」，
  * 整条留在这一行的悬浮提示里（跟工具标签用的同一套提示框，见 chat.js 的 runningLineText）。
  * 一次验这几件事：
- *   · cd 到某个目录 && 跑脚本 | sed 看输出 → 只写脚本那条，后面「+2 段」；
- *   · npm test 2>&1 | tail -30 → 2>&1 不算分隔符，只写「npm test 2>&1」，「+1 段」；
- *   · 一段正经活都没有（cd + echo）→ 照原样整条写，不写「+N 段」；
+ *   · cd 到某个目录 && 跑脚本 | sed 看输出 → 只写脚本那条，后面「+2」；
+ *   · npm test 2>&1 | tail -30 → 2>&1 不算分隔符，只写「npm test 2>&1」，「+1」；
+ *   · 一段正经活都没有（cd + echo）→ 照原样整条写，不写「+N」；
  *   · 只有一段（git status --short）→ 照原样；
- *   · 两段都在干活（npm run build && npm test）→ 写头一段，「+1 段」；
+ *   · 两段都在干活（npm run build && npm test）→ 写头一段，「+1」；
  *   · for 循环那句 → 不拿「for f in …」当核心，写循环体里那句（「do」那层剥掉）；
  *   · heredoc（`python - <<'EOF'` 后面一整段脚本）→ 正文里的换行不当分隔符，只写「$ python - <<'EOF'」，
  *     段数不再数出十几段来；单独一条 heredoc 也照这个写；
  *   · 先 `ls` / `wc -l` 看一眼、再 `grep` / `sed` 真干活的 → 核心挑后面那条（只翻一眼的不抢核心）；
  *     整条上全是翻一眼的（ls + wc -l）→ 还是挑头一个；
  *   · 循环（`for …; do …; done`）→ 拿循环体里的活当核心，`for` / `do` / `if` 那层剥掉，
- *     灰字先说「循环里」（它是对着一堆东西反复跑的）；`done` / `fi` / `[ -f … ]` / `continue` 不抢核心；
+ *     灰字照旧只是一个「+N」（不再写「循环里」这句话）；`done` / `fi` / `[ -f … ]` / `continue` 不抢核心；
  *     循环体里只有 echo 这种 → 整条照原样写；
  *   · 悬浮这一行 → 提示框里是整条命令（一个字不少）；
- *   · 「+N 段」那一句不跟着字横向滚（放不下的字自己滚，它不动）；
- *   · 不是 bash 的调用（read / grep）照旧整条写，不写「+N 段」。
+ *   · 「+N」那一句不跟着字横向滚（放不下的字自己滚，它不动）；
+ *   · 不是 bash 的调用（read / grep）照旧整条写，不写「+N」。
  *
  *   npm run web:shot -- --width 1000 --height 620 --script dev/coreCommand.js
  * 图落在 dev/shots/。
@@ -32,18 +32,18 @@ const CASES = [
     {
         cmd: "cd /d/projects/picode/dev && python run_checks.py --all 2>&1 | sed -n '1,40p'",
         main: "$ python run_checks.py --all 2>&1",
-        more: "+2 段",
+        more: "+2",
         why: "cd 挪位置、sed 只看头几行，核心是跑脚本那条",
     },
-    { cmd: "npm test 2>&1 | tail -30", main: "$ npm test 2>&1", more: "+1 段", why: "2>&1 不是分隔符；tail 是收尾巴" },
+    { cmd: "npm test 2>&1 | tail -30", main: "$ npm test 2>&1", more: "+1", why: "2>&1 不是分隔符；tail 是收尾巴" },
     { cmd: "cd /tmp && echo 开始", main: "$ cd /tmp && echo 开始", more: "", why: "一段正经活都没有：照原样整条写" },
     { cmd: "git status --short", main: "$ git status --short", more: "", why: "只有一段：照原样" },
-    { cmd: "npm run build && npm test", main: "$ npm run build", more: "+1 段", why: "两段都在干活：写头一段" },
-    { cmd: 'for f in a.py b.py; do python "$f"; done', main: '$ python "$f"', more: "循环里 · +2 段", why: "别拿 for 那截当核心，写循环体里那句" },
-    { cmd: "ls -la | head -5", main: "$ ls -la", more: "+1 段", why: "管道后面修输出的不算事" },
+    { cmd: "npm run build && npm test", main: "$ npm run build", more: "+1", why: "两段都在干活：写头一段" },
+    { cmd: 'for f in a.py b.py; do python "$f"; done', main: '$ python "$f"', more: "+2", why: "别拿 for 那截当核心，写循环体里那句" },
+    { cmd: "ls -la | head -5", main: "$ ls -la", more: "+1", why: "管道后面修输出的不算事" },
     {
         cmd: "cd /d/projects/pesai && python - <<'EOF'\nimport sys\nprint(sys.path)\nprint('跑完了')\nEOF",
-        main: "$ python - <<'EOF'", more: "+1 段",
+        main: "$ python - <<'EOF'", more: "+1",
         why: "heredoc 正文里的换行不是分隔符（不然会数出十几段来）",
     },
     {
@@ -53,32 +53,32 @@ const CASES = [
     },
     {
         cmd: 'cd x && ls -la tools && grep -n "CreateOutput" a.txt | head -20',
-        main: '$ grep -n "CreateOutput" a.txt', more: "+3 段",
+        main: '$ grep -n "CreateOutput" a.txt', more: "+3",
         why: "先 ls 看一眼不算事：核心挑真正在查的那条",
     },
     {
         cmd: "cd x && wc -l a.py && sed -n 1,80p a.py",
-        main: "$ sed -n 1,80p a.py", more: "+2 段",
+        main: "$ sed -n 1,80p a.py", more: "+2",
         why: "数行数只是翻一眼，核心是后面读文件那截",
     },
     {
         cmd: "cd x && ls a && wc -l a",
-        main: "$ ls a", more: "+2 段",
+        main: "$ ls a", more: "+2",
         why: "一条正经活都没有：退到翻看的那段（头一个）",
     },
     {
         cmd: 'cd x && for m in libs/*/*/exports.txt; do if grep -q "12CreateOutput" $m 2>/dev/null; then echo "== $m"; fi; done',
-        main: '$ grep -q "12CreateOutput" $m 2>/dev/null', more: "循环里 · +5 段",
-        why: "循环体里的活才是核心：do / if 那层剥掉，灰字说明这是在循环里跑",
+        main: '$ grep -q "12CreateOutput" $m 2>/dev/null', more: "+5",
+        why: "循环体里的活才是核心：do / if 那层剥掉",
     },
     {
         cmd: 'cd x && for d in recordings/*/; do f="$d/timeline.jsonl"; [ -f "$f" ] || continue; python tools/x.py "$f"; done',
-        main: '$ python tools/x.py "$f"', more: "循环里 · +6 段",
+        main: '$ python tools/x.py "$f"', more: "+6",
         why: "「[ -f ]」这种条件判断跟 continue 不抢核心",
     },
     {
         cmd: "cd x && for i in 1 2; do ../adb shell monkey 1; sleep 3; done",
-        main: "$ ../adb shell monkey 1", more: "循环里 · +4 段",
+        main: "$ ../adb shell monkey 1", more: "+4",
         why: "循环头上那句（for i in 1 2）不是核心，循环体里那句才是",
     },
     {
@@ -125,7 +125,7 @@ module.exports = async (page) => {
         console.log("\n第 " + seq + " 幕（" + c.why + "）\n   投进去：" + JSON.stringify(c.cmd) + "\n   这一行：" + show(s));
         if (!s) { problems.push("这一行没出现：" + JSON.stringify(c.cmd)); continue; }
         if (s.text !== c.main) { problems.push("核心那段挑得不对：该写 " + JSON.stringify(c.main) + "，写成了 " + JSON.stringify(s.text)); }
-        if (s.more !== c.more) { problems.push("后面那句「+N 段」不对：该是 " + JSON.stringify(c.more) + "，写成了 " + JSON.stringify(s.more)); }
+        if (s.more !== c.more) { problems.push("后面那句「+N」不对：该是 " + JSON.stringify(c.more) + "，写成了 " + JSON.stringify(s.more)); }
 
         // ---- 第一幕：悬浮这一行 → 提示框里是整条命令（一个字不少）----
         if (seq === 1) {
@@ -153,14 +153,14 @@ module.exports = async (page) => {
         }
 
         await post([{ type: "toolResult", toolCallId: id, isError: false, resultText: "好了", durationMs: 120 }]);
-        // 循环那一幕存一张图：灰字里要能一眼看出「循环里 · +5 段」
+        // 循环那一幕存一张图：灰字里要能一眼看出「+5」
         if (seq === 13) { await page.shot("core-command-loop.png"); }
         await page.sleep(80);
     }
 
-    // ---- 「+N 段」那一句不跟着字横向滚 ----
+    // ---- 「+N」那一句不跟着字横向滚 ----
     // 一条故意写得超长的（放不下就得滚）：滚起来是 .tr-text 里套一层 .tr-run，
-    // 「+N 段」得在外面（跟着滚的话它一会儿就滚没了）。
+    // 「+N」得在外面（跟着滚的话它一会儿就滚没了）。
     await post([
         { type: "assistantFull", text: "再投一条长得放不下的。" },
         {
@@ -186,7 +186,7 @@ module.exports = async (page) => {
     if (!rolled) { problems.push("长命令那一行没了"); }
     else {
         if (!rolled.roll) { problems.push("这么长的命令该自己横向滚（这一行没滚）：" + JSON.stringify(rolled)); }
-        if (rolled.inRun) { problems.push("「+N 段」跟着字一起滚了（该钉在外面一直看得见）"); }
+        if (rolled.inRun) { problems.push("「+N」跟着字一起滚了（该钉在外面一直看得见）"); }
     }
     await page.shot("core-command.png");
 

@@ -2680,7 +2680,7 @@
   // ==================== 正在跑的那一条 ====================
   // 工具标签只说得出工具名：命令行、读哪个文件、grep 找什么都在提示框里，不悬浮就看不见。
   // 正在跑的那一条不一样：它在当前这批标签下面单占一行，把这一行的摘要直接写出来
-  // （bash 就是「$ 命令」）。一长串命令只写核心那一段、后面灰一句「+N 段」，整条在悬浮提示里看
+  // （bash 就是「$ 命令」）。一长串命令只写核心那一段、后面灰一个「+N」，整条在悬浮提示里看
   // （怎么挑核心见下面「一长串命令里的核心那一段」）。同时跑几条也只露一条 —— 只露最近开始的那条。
   // 为什么不排成几行：几条一起跑时，先跑完的那条一收，这一块就矮一行，下面的东西跟着
   // 上下跳一下（贴着底看的时候特别明显）。行数永远是 0 或 1，就没有这一下。
@@ -2862,28 +2862,10 @@
     return 2;
   }
 
-  /** 每一段外面套着的是什么框架：「循环里」还是「条件里」（两个都不是就空字）。
-   *  挑出来的核心如果是从循环体里挑的，那一行要说明它是对着一堆东西反复跑的。 */
-  function segFrameworkMarks(segs) {
-    const out = [];
-    let loop = 0, cond = 0;
-    for (const seg of segs) {
-      const head = segmentHeadWord(seg.text);
-      if (head === "do") { loop++; }
-      else if (head === "then" || head === "else" || head === "elif") { cond++; }
-      else if (head === "done") { if (loop > 0) { loop--; } }
-      else if (head === "fi" || head === "esac") { if (cond > 0) { cond--; } }
-      out.push(loop > 0 ? "循环里" : (cond > 0 ? "条件里" : ""));
-    }
-    return out;
-  }
-
   /** 挑核心段：先找正经干活的那段（2 分）；一条都没有，才退到「只翻看一眼」的那段（1 分）。
    *  同样值的取头一个 —— 所以「ls 一眼、再 grep 真查」挑出来的是 grep，
-   *  「ls 一眼、再 wc -l 数行数」两条都只值一分，还是挑头一个。
-   *  返回 { seg, mark }：mark 是它外面套着的框架（「循环里」/「条件里」/空）。 */
+   *  「ls 一眼、再 wc -l 数行数」两条都只值一分，还是挑头一个。 */
   function pickCoreSegment(segs) {
-    const marks = segFrameworkMarks(segs);
     let best = -1, bestRank = 0;
     for (let i = 0; i < segs.length; i++) {
       const rank = segmentRank(segs[i], i);
@@ -2893,8 +2875,7 @@
         if (rank === 2) { break; }   // 2 分到顶了：头一个正经干活的就够了
       }
     }
-    if (best < 0) { return null; }
-    return { seg: segs[best], mark: marks[best] };
+    return best < 0 ? null : segs[best];
   }
 
   /** 这一段写在那一行上长什么样：剥掉段首那几个连接词（do / then / ! …）；
@@ -2917,7 +2898,7 @@
       return a && typeof a.command === "string" ? a.command : "";
     } catch (e) { return ""; }
   }
-  /** 「正在跑」那一行写什么：一长串 bash 命令只写核心那一段（后面灰一句「+N 段」），
+  /** 「正在跑」那一行写什么：一长串 bash 命令只写核心那一段（后面灰一个「+N」），
    *  整条留在这一行的悬浮提示里（trimmed=true 说明有字没写出来，得给个提示）。分不出来就照原样写。 */
   function runningLineText(call) {
     const whole = call.text || call.name || "";
@@ -2934,17 +2915,13 @@
     const segs = splitCommandSegments(cmd);
     if (!segs.length) { return asIs(); }
     // 只有一段就用那一段（哪怕它是 cd / echo）；好几段才挑「正经干活」的那段
-    const picked = segs.length > 1 ? pickCoreSegment(segs) : { seg: segs[0], mark: "" };
-    if (!picked) { return asIs(); }
+    const core = segs.length > 1 ? pickCoreSegment(segs) : segs[0];
+    if (!core) { return asIs(); }
     // 整条摘要里 "$ " + 命令 后面那点尾巴（timeout 这类）照旧跟着写
     const head = "$ " + cmd;
     const tail = whole.startsWith(head) ? whole.slice(head.length).trim() : "";
-    const main = "$ " + segmentDisplay(picked.seg.text) + (tail ? " " + tail : "");
-    // 灰字那句：核心是在循环 / 条件里跑的，先说这个（对着好几个文件反复跑，跟跑一遍不是一回事）
-    const extra = [];
-    if (picked.mark) { extra.push(picked.mark); }
-    if (segs.length > 1) { extra.push("+" + (segs.length - 1) + " 段"); }
-    const more = extra.join(" · ");
+    const main = "$ " + segmentDisplay(core.text) + (tail ? " " + tail : "");
+    const more = segs.length > 1 ? "+" + (segs.length - 1) : "";
     return { main, more, trimmed: !!more || main !== whole };
   }
 
@@ -3022,7 +2999,7 @@
     const shown = runningLineText(call);
     t.textContent = shown.main;
     item.appendChild(t);
-    // 只写了核心那一段：后面灰一句「+N 段」（这一句不跟着滚，一直看得见）
+    // 只写了核心那一段：后面灰一个「+N」（这一句不跟着滚，一直看得见）
     if (shown.more) {
       const more = document.createElement("span");
       more.className = "tr-more";
