@@ -92,42 +92,12 @@ async function waitPushed(fake, n, label) {
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-/** 设置里那颗「弹窗通知」（推送跟着它走）。 */
-const NOTIFY_ROW = `Array.from(document.querySelectorAll("#viewOptsRoot .vo-item"))
-    .find((r) => (r.querySelector(".vo-label") || {}).textContent === "弹窗通知")`;
-
-async function openSettings(page) {
-    for (let i = 0; i < 3; i++) {
-        if (await page.eval('return !!document.querySelector(".pk-footer-settings");')) { break; }
-        await page.click("#browserMenuBtn");
-        await sleep(400);
-    }
-    await page.click(".pk-footer-settings");
-    await sleep(500);
-}
-
-/** 保证推送开关是开着的；返回原来是不是开着的。 */
-async function ensureNotifyOn(page) {
-    await openSettings(page);
-    const wasOn = await page.eval(`const hit = ${NOTIFY_ROW};
-return hit ? !!hit.querySelector(".vo-check.on") : null;`);
-    if (wasOn === null) { throw new Error("设置里没找到「弹窗通知」那一行"); }
-    if (!wasOn) {
-        await page.eval(`const hit = ${NOTIFY_ROW}; hit.click(); return true;`);
-        await sleep(500);
-    }
-    await page.click("#settingsOverlay");
-    await sleep(300);
-    return wasOn;
-}
-
 module.exports = async (page) => {
     fs.mkdirSync(WEIXIN_DIR, { recursive: true });
     const realAccount = fs.existsSync(ACCOUNT_FILE) ? fs.readFileSync(ACCOUNT_FILE, "utf8") : undefined;
     try { fs.rmSync(SENT_FILE, { force: true }); } catch { /* 没有就算了 */ }
     try { fs.rmSync(CURSOR_FILE, { force: true }); } catch { /* 没有就算了 */ }
 
-    const notifyWasOn = await ensureNotifyOn(page);
     const fake = await startFakeIlink();
     console.log(`  · 假 iLink 服务：http://127.0.0.1:${fake.port}`);
     fs.writeFileSync(ACCOUNT_FILE, JSON.stringify({
@@ -175,15 +145,5 @@ module.exports = async (page) => {
         fake.server.close();
         if (realAccount === undefined) { try { fs.rmSync(ACCOUNT_FILE, { force: true }); } catch { /* 算了 */ } }
         else { fs.writeFileSync(ACCOUNT_FILE, realAccount, "utf8"); }
-        if (!notifyWasOn) {
-            try {
-                await openSettings(page);
-                await page.eval(`const hit = ${NOTIFY_ROW}; if (hit) { hit.click(); } return true;`);
-                await sleep(400);
-                await page.click("#settingsOverlay");
-            } catch (err) {
-                console.log(`  ！「弹窗通知」没点回去（${err && err.message ? err.message : err}）`);
-            }
-        }
     }
 };

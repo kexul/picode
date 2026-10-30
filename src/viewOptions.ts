@@ -20,6 +20,8 @@ export const DEFAULT_FOCUS_INPUT_KEY = "ctrlAltI";
 export const DEFAULT_FONT_SIZE = "14";
 export const DEFAULT_THEME_MODE: "light" | "dark" = "light";
 export const DEFAULT_NOTIFY_TURN_END = true;
+/** 微信里推不推那一条（绑上之后默认推：人绑它就是为了这个）。 */
+export const DEFAULT_WEIXIN_PUSH = true;
 export const DEFAULT_AUTO_LOAD_LAST = false;
 
 /** 取候选列表里的下一个值（用在“点一下换下一个”的按钮上）；当前值不在列表里就从第一个开始。 */

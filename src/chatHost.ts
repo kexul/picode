@@ -58,6 +58,7 @@ import {
     DEFAULT_FONT_SIZE,
     DEFAULT_NEW_SESSION_KEY,
     DEFAULT_NOTIFY_TURN_END,
+    DEFAULT_WEIXIN_PUSH,
     DEFAULT_SEND_KEY,
     DEFAULT_TAB_SWITCH_KEY,
     DEFAULT_THEME_MODE,
@@ -179,6 +180,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private static readonly KEY_FOCUS_INPUT_KEY = "piChat.focusInputKey";
     private static readonly KEY_FONT_SIZE = "piChat.fontSize";
     private static readonly KEY_NOTIFY_TURN_END = "piChat.notifyTurnEnd";
+    /** 微信里推不推那一条。跟「弹窗通知」分开：那是 Windows 右下角那块面板，这是手机上的事。 */
+    private static readonly KEY_WEIXIN_PUSH = "piChat.weixinPush";
     private static readonly KEY_THEME = "piChat.themeMode";
 
     /** 会话显示名用的名字池：panel 关闭后会释放对应名字。 */
@@ -706,7 +709,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      *
      * 本机弹不弹还是原来那套规矩（推到别的机器去了、人正坐在输入框前面就不弹）；
      * 微信这条不受它们管 —— 它本来就是给"人不在电脑前"用的。
-     * 开关跟着「弹窗通知」走：那个人不想被打扰的时候，微信里也不该冒出来。
+     * 它自己有一个开关（设置里「微信推送」），跟「弹窗通知」（Windows 右下角那块面板）互不相干。
      */
     protected override trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): void {
         void this.pushWeixinNote(sessionId, name, summary, kind);
@@ -720,7 +723,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * —— 提醒失败不该影响会话本身。
      */
     private async pushWeixinNote(panelId: string, name: string, summary: string, kind: "done" | "ask"): Promise<void> {
-        if (!this.getNotifyTurnEnd()) { return; }
+        if (!this.getWeixinPush()) { return; }
         const account = readWeixinAccount();
         if (!account?.userId) { return; }
         const base = (this.options.selfPageUrl?.() ?? "").replace(/\/+$/, "");
@@ -1111,6 +1114,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return this.readOption<boolean>(ChatHost.KEY_NOTIFY_TURN_END, DEFAULT_NOTIFY_TURN_END) === true;
     }
 
+    /** 微信里推不推那一条（绑上之后默认推）。 */
+    public getWeixinPush(): boolean {
+        return this.readOption<boolean>(ChatHost.KEY_WEIXIN_PUSH, DEFAULT_WEIXIN_PUSH) === true;
+    }
+
     /** 设置面板里「有事也推到别的机器」那一行现在填着什么（设置文件里的 notify.pushTo）。 */
     protected override notifyPushTargets(): string[] {
         return [...readServerConfig().config.notify.pushTo];
@@ -1154,6 +1162,15 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const items: ViewOptionItem[] = [
             // 微信排在这一节最前面：它跟下面「消息推送 / 推送标签」是一类事（通知往哪儿送）
             this.weixinOptionItem(),
+            // 微信有没有在推、要不要推：登录上了才给这颗开关（没绑上之前它没什么可管的）
+            ...(this.weixinLogin().current().phase === "done"
+                ? [{
+                    action: "weixinPush",
+                    label: "微信推送",
+                    desc: "会话跑完一轮（或者在等你答一句）时往微信里发一条",
+                    check: this.getWeixinPush(),
+                } as ViewOptionItem]
+                : []),
             {
                 action: "notifyTurnEnd",
                 label: "弹窗通知",
@@ -1206,6 +1223,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         } else if (action === "fontSize") {
             const next = typeof value === "string" && /^\d+$/.test(value) ? value : "";
             this.writeOption(ChatHost.KEY_FONT_SIZE, next);
+        } else if (action === "weixinPush") {
+            this.writeOption(ChatHost.KEY_WEIXIN_PUSH, !this.getWeixinPush());
         } else if (action === "notifyTurnEnd") {
             this.writeOption(ChatHost.KEY_NOTIFY_TURN_END, !this.getNotifyTurnEnd());
             // 当场照着新设置来：刚打开就把图标放上去，刚关掉就收掉（别留一颗不干活的）
