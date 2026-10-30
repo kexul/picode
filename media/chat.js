@@ -7262,6 +7262,17 @@
     }
   }
 
+  /**
+   * 日志文件开头那两行是文件自己写的「$ 命令」加一个空行（见 src/bashBridgeSource.ts）；
+   * 而这一行上面已经写着同一条命令了，画输出的时候把这两行掐掉，别让一条命令并排出现两遍。
+   * 掐的是跟这条命令一模一样的那一行：命令自己带了空行也不会多掐。
+   */
+  function scriptLogText(text, cmd) {
+    const all = String(text || "");
+    const head = "$ " + String(cmd || "") + "\n\n";
+    return cmd && all.startsWith(head) ? all.slice(head.length) : all;
+  }
+
   /** 把这条命令的输出填进去：取过就用攒着的，没取过就问后端（一条只问一次）。 */
   function fillScriptLog(tab, key, body) {
     if (!body) { return; }
@@ -7294,10 +7305,11 @@
         body.appendChild(bad);
         return;
       }
-      tab.logs.set(key, text);
+      const out = scriptLogText(text, (tab.scripts.find((it) => it && String(it.no) === String(key)) || {}).cmd);
+      tab.logs.set(key, out);
       const pre = document.createElement("pre");
       pre.className = "script-log";
-      pre.textContent = text || "（还没有输出）";
+      pre.textContent = out || "（还没有输出）";
       body.appendChild(pre);
     }).catch(() => {
       body.innerHTML = "";
