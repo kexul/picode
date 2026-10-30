@@ -27,13 +27,14 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import { TABA_BRIDGE_SOURCE } from "./tabaBridgeSource";
-import { ASK_BRIDGE_SOURCE } from "./askBridgeSource";
-import { GOAL_BRIDGE_SOURCE } from "./goalBridgeSource";
-import { TITLE_BRIDGE_SOURCE } from "./titleBridgeSource";
+import { tabaBridgeSource } from "./tabaBridgeSource";
+import { askBridgeSource } from "./askBridgeSource";
+import { goalBridgeSource } from "./goalBridgeSource";
+import { titleBridgeSource } from "./titleBridgeSource";
 import { IMAGE_BRIDGE_SOURCE } from "./imageOffloadBridgeSource";
-import { BASH_BRIDGE_SOURCE } from "./bashBridgeSource";
+import { bashBridgeSource } from "./bashBridgeSource";
 import { ENV_BRIDGE_SOURCE } from "./envBridgeSource";
+import { type PromptOverrides } from "./promptText";
 import { cleanStaleRunFiles, tabaRunsDir } from "./tabaRunFiles";
 import { askAnswersDir, cleanStaleAskAnswers } from "./askProtocol";
 import { pichatDir } from "./serverPaths";
@@ -54,8 +55,13 @@ export interface BridgeAssets {
 interface BridgeKind {
     /** 扩展文件名前缀，也是认旧文件的依据（两套的前缀不一样，互不动对方的文件）。 */
     prefix: string;
-    /** 落盘的那份源码。 */
-    source: string;
+    /**
+     * 落盘的那份源码。
+     *
+     * 是函数不是常量：工具说明那几句人能改（config.json 的 prompts 一节），写文件的时候把
+     * 当前那一份拼进去。所以改完要重启后端（下次启动重写扩展文件，新开的会话才拿得到新话）。
+     */
+    source(over?: PromptOverrides): string;
     /** 落盘之后顺带干的活：建自己那份目录、清太老的残留。 */
     afterWrite(rootDir: string): void;
 }
@@ -63,7 +69,7 @@ interface BridgeKind {
 const BRIDGES: Record<"taba" | "ask" | "goal" | "title" | "image" | "bash" | "env", BridgeKind> = {
     taba: {
         prefix: "taba-bridge",
-        source: TABA_BRIDGE_SOURCE,
+        source: tabaBridgeSource,
         afterWrite(rootDir: string): void {
             // 老版本插件留下的角色目录：角色已经不支持了，顺手清掉。
             for (const name of ["taba-roles", "taba-prompts"]) {
@@ -75,7 +81,7 @@ const BRIDGES: Record<"taba" | "ask" | "goal" | "title" | "image" | "bash" | "en
     },
     ask: {
         prefix: "ask-bridge",
-        source: ASK_BRIDGE_SOURCE,
+        source: askBridgeSource,
         afterWrite(rootDir: string): void {
             // 回话目录顺手建出来，并清掉没人来读的残留（插件或会话死了留下的）。
             fs.mkdirSync(askAnswersDir(rootDir), { recursive: true });
@@ -84,31 +90,31 @@ const BRIDGES: Record<"taba" | "ask" | "goal" | "title" | "image" | "bash" | "en
     },
     goal: {
         prefix: "goal-bridge",
-        source: GOAL_BRIDGE_SOURCE,
+        source: goalBridgeSource,
         // 判官只报个结论，外面不留文件：不用建目录、不用清残留
         afterWrite(): void { /* 没别的活 */ },
     },
     title: {
         prefix: "title-bridge",
-        source: TITLE_BRIDGE_SOURCE,
+        source: titleBridgeSource,
         // 标题走 pi 自己的会话名，不要插件配合：不用建目录、不用清残留
         afterWrite(): void { /* 没别的活 */ },
     },
     image: {
         prefix: "image-bridge",
-        source: IMAGE_BRIDGE_SOURCE,
+        source: () => IMAGE_BRIDGE_SOURCE,
         // 图落在 ~/.pi/agent/images/<会话 id>/（扩展自己建目录），不归这儿管：别去清它，那是用户的图
         afterWrite(): void { /* 没别的活 */ },
     },
     env: {
         prefix: "env-bridge",
-        source: ENV_BRIDGE_SOURCE,
+        source: () => ENV_BRIDGE_SOURCE,
         // 只往 stderr 报清单，外面不留文件：不用建目录、不用清残留
         afterWrite(): void { /* 没别的活 */ },
     },
     bash: {
         prefix: "bash-bridge",
-        source: BASH_BRIDGE_SOURCE,
+        source: bashBridgeSource,
         afterWrite(rootDir: string): void {
             // 两个目录先建出来：后台命令的输出、以及“放后台”的指令文件都在里面
             const base = path.join(rootDir, "bash");
@@ -145,15 +151,16 @@ function safeVersionForFile(version: string): string {
 }
 
 /** 把一套桥的扩展写进 rootDir。 */
-function writeBridge(kind: BridgeKind, rootDir: string, version: string): BridgeAssets {
+function writeBridge(kind: BridgeKind, rootDir: string, version: string, over?: PromptOverrides): BridgeAssets {
     const extensionPath = path.join(rootDir, `${kind.prefix}-${safeVersionForFile(version)}.ts`);
+    const source = kind.source(over);
     try {
         fs.mkdirSync(rootDir, { recursive: true });
         // 扩展文件：内容变了才重写（插件升级后的新行为要能生效）
         let current = "";
         try { current = fs.readFileSync(extensionPath, "utf8"); } catch { current = ""; }
-        if (current !== kind.source) {
-            fs.writeFileSync(extensionPath, kind.source, "utf8");
+        if (current !== source) {
+            fs.writeFileSync(extensionPath, source, "utf8");
         }
         // 清掉旧版本留下的扩展文件，免得越攒越多（只认自己这个前缀，不动另一套桥的）
         const staleRe = new RegExp(`^${kind.prefix}-.*\\.ts$`);
@@ -173,32 +180,32 @@ function writeBridge(kind: BridgeKind, rootDir: string, version: string): Bridge
 /** 已经写过的那几套（哪一套 → 结果）。 */
 const cached = new Map<BridgeKind, BridgeAssets>();
 
-function ensureBridge(kind: BridgeKind, version: string): BridgeAssets {
+function ensureBridge(kind: BridgeKind, version: string, over?: PromptOverrides): BridgeAssets {
     const hit = cached.get(kind);
     if (hit) { return hit; }
-    const result = writeBridge(kind, pichatDir(), version);
+    const result = writeBridge(kind, pichatDir(), version, over);
     cached.set(kind, result);
     return result;
 }
 
 /** 后端启动时调一次：写好派子会话那套桥，并记住结果。 */
-export function ensureTabaAssets(version: string): BridgeAssets {
-    return ensureBridge(BRIDGES.taba, version);
+export function ensureTabaAssets(version: string, over?: PromptOverrides): BridgeAssets {
+    return ensureBridge(BRIDGES.taba, version, over);
 }
 
 /** 同上，问话（ask_choice）那套。 */
-export function ensureAskAssets(version: string): BridgeAssets {
-    return ensureBridge(BRIDGES.ask, version);
+export function ensureAskAssets(version: string, over?: PromptOverrides): BridgeAssets {
+    return ensureBridge(BRIDGES.ask, version, over);
 }
 
 /** 同上，目标（/goal）那套：只有判官会话加载它（update_goal）。 */
-export function ensureGoalAssets(version: string): BridgeAssets {
-    return ensureBridge(BRIDGES.goal, version);
+export function ensureGoalAssets(version: string, over?: PromptOverrides): BridgeAssets {
+    return ensureBridge(BRIDGES.goal, version, over);
 }
 
 /** 同上，自动起标题那套：只有主会话加载它（子会话、判官不带）。 */
-export function ensureTitleAssets(version: string): BridgeAssets {
-    return ensureBridge(BRIDGES.title, version);
+export function ensureTitleAssets(version: string, over?: PromptOverrides): BridgeAssets {
+    return ensureBridge(BRIDGES.title, version, over);
 }
 
 /** 同上，把会话里的截图挪出去那一套：每个会话都带（子会话读图一样要挪）。 */
@@ -207,8 +214,8 @@ export function ensureImageAssets(version: string): BridgeAssets {
 }
 
 /** 同上，接管 bash 那一套：每个会话都带（子会话、判官也跑命令）。 */
-export function ensureBashAssets(version: string): BridgeAssets {
-    return ensureBridge(BRIDGES.bash, version);
+export function ensureBashAssets(version: string, over?: PromptOverrides): BridgeAssets {
+    return ensureBridge(BRIDGES.bash, version, over);
 }
 
 /** 同上，报「加载了什么」那一套：每个会话都带（子会话的清单也可能要看）。 */

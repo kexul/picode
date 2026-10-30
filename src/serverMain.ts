@@ -16,8 +16,7 @@ import * as path from "path";
 import { appVersion, isPackaged, mediaDir } from "./appAssets";
 import { PiChatWebServer, type WebServerSettings } from "./webChatServer";
 import { ChatHost } from "./chatHost";
-import { readServerConfig, updateServerConfig } from "./serverConfig";
-import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
+import { readServerConfig, updateServerConfig, seedPrompts } from "./serverConfig";import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
 import { startRestart } from "./serverRestart";
 import { ensureAskAssets, ensureGoalAssets, ensureImageAssets, ensureTabaAssets, ensureTitleAssets, ensureBashAssets, ensureEnvAssets } from "./bridgeAssets";
 import { serverConfigFile } from "./serverPaths";
@@ -153,7 +152,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     }
 
     // 第一次启动顺手写一份默认设置出来：不然人不知道有哪些项可改。
-    const cfgRead = readServerConfig();
+    let cfgRead = readServerConfig();
     if (!cfgRead.existed) {
         updateServerConfig({});
         console.log(`[${stamp()}] 已写出默认设置：${cfgRead.file}`);
@@ -162,29 +161,38 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         updateServerConfig({});
         console.log(`[${stamp()}] 设置文件里这些项已经不用了，已经删掉：${cfgRead.retired.join("、")}`);
     }
+    // 提示词第一次能被改：把内置原文写进 prompts 那一节当起点，人照着字句改就行。
+    // 只写一次（那一节填上之后再也不动）；删掉某一项 = 那一项回内置，
+    // 整节删掉、或者把里面清空 = 下次启动重新写一份。
+    const seeded = seedPrompts();
+    if (seeded.seeded) {
+        cfgRead = readServerConfig();
+        console.log(`[${stamp()}] 已把内置提示词写进设置文件的 prompts 一节（可以照着改）：${seeded.file}`);
+    }
     for (const warning of cfgRead.warnings) { log(`设置文件有问题：${warning}`); }
     const cfg = cfgRead.config;
 
     // 派子会话要用的文件（那个 pi 扩展 + 自带角色文件）：跟插件启动时一样，先写好。
-    const tabaAssets = ensureTabaAssets(VERSION);
+    const tabaAssets = ensureTabaAssets(VERSION, cfg.prompts);
     if (!tabaAssets.ok) {
         log(`派子会话的功能没开（文件没写成：${tabaAssets.error}）`);
     }
 
     // 问话（ask_choice）要用的那个 pi 扩展：同样先写好（它不依赖上面那个开关）
-    const askAssets = ensureAskAssets(VERSION);
+    const askAssets = ensureAskAssets(VERSION, cfg.prompts);
     if (!askAssets.ok) {
         log(`问话（ask_choice）这个工具没开（文件没写成：${askAssets.error}）`);
     }
 
-    // 目标（/goal）判官会话里那个 update_goal：同样先写好（它只在判官会话里加载）
-    const goalAssets = ensureGoalAssets(VERSION);
+    // 目标（/goal）判官会话里那个 update_goal：同样先写好（它只在判官会话里加载）。
+    // 说明那一段人能改，所以把当前那份提示词传进去（拼接在生成的文件里）。
+    const goalAssets = ensureGoalAssets(VERSION, cfg.prompts);
     if (!goalAssets.ok) {
         log(`目标的验收（/goal 的判官）没开（文件没写成：${goalAssets.error}）`);
     }
 
     // 自动起标题：同样先写好（它只在主会话里加载）
-    const titleAssets = ensureTitleAssets(VERSION);
+    const titleAssets = ensureTitleAssets(VERSION, cfg.prompts);
     if (!titleAssets.ok) {
         log(`自动起标题没开（文件没写成：${titleAssets.error}）`);
     }
@@ -196,7 +204,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     }
 
     // 接管 bash（后台命令、把正在跑的命令切后台）：同样先写好（每个会话都加载）
-    const bashAssets = ensureBashAssets(VERSION);
+    const bashAssets = ensureBashAssets(VERSION, cfg.prompts);
     if (!bashAssets.ok) {
         log(`后台命令没开（文件没写成：${bashAssets.error}）`);
     }

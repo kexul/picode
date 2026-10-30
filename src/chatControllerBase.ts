@@ -69,6 +69,7 @@ import {
     type GoalState,
 } from "./goal";
 import { buildGoalFeedbackPrompt, buildGoalJudgePrompt } from "./goalJudge";
+import { promptText } from "./promptText";
 import { dropGoal, readGoal, writeGoal } from "./goalFiles";
 import type { RpcSessionState } from "./piRpc";
 import { TrayIcon } from "./trayIcon";
@@ -956,7 +957,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.goalChecked.add(rt.id);
         this.goalSave(rt);
         this.goalBroadcast(rt.id);
-        rt.handleSend(buildGoalNegotiationPrompt({ objective }));
+        rt.handleSend(buildGoalNegotiationPrompt({ objective }, this.getConfig().prompts));
     }
 
     /** 目标条上的「开始」：清单有了就正式开跑；清单还没拿到就再要一次。 */
@@ -971,7 +972,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 type: "system",
                 text: "还没拿到验收清单，再跟模型要一次（清单出来以后目标条会变）。",
             });
-            rt.handleSend(buildGoalNegotiationPrompt({ objective: goal.objective }));
+            rt.handleSend(buildGoalNegotiationPrompt({ objective: goal.objective }, this.getConfig().prompts));
             return;
         }
         goal.phase = "active";
@@ -979,7 +980,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         goal.updatedAt = Date.now();
         this.goalSave(rt);
         this.goalBroadcast(rt.id);
-        rt.handleSend(buildGoalStartPrompt(goal));
+        rt.handleSend(buildGoalStartPrompt(goal, this.getConfig().prompts));
     }
 
     /** 「暂停」与「继续」（只是不再自动往前推，对话、文件都不动）。 */
@@ -1009,7 +1010,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 type: "system",
                 text: "还没拿到验收清单，再跟模型要一次（清单出来以后目标条会变）。",
             });
-            rt.handleSend(buildGoalNegotiationPrompt({ objective: goal.objective }));
+            rt.handleSend(buildGoalNegotiationPrompt({ objective: goal.objective }, this.getConfig().prompts));
             return;
         }
         goal.phase = "active";
@@ -1017,7 +1018,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         goal.updatedAt = Date.now();
         this.goalSave(rt);
         this.goalBroadcast(rt.id);
-        rt.handleSend(buildGoalResumePrompt(goal));
+        rt.handleSend(buildGoalResumePrompt(goal, this.getConfig().prompts));
     }
 
     /** 目标条上的「停止」：不再追踪这个目标（对话和文件都不动）；盘上那一份也一并抹掉。 */
@@ -1149,7 +1150,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 workerReport: report,
                 workerSessionFile: workerRt.currentSessionPath ?? "",
                 cwd: workerRt.cwd,
-            }),
+            }, cfg.prompts),
             cwd: workerRt.cwd,
         };
         this.goalJudgeRun.set(workerPanelId, req.id);
@@ -1209,7 +1210,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                             missing: [],
                             next: said.slice(0, 4000),
                         },
-                    }), undefined, { followUp: true });
+                    }, this.getConfig().prompts), undefined, { followUp: true });
                 } else {
                     this.goalStop(workerPanelId, "判官既没报结论也没说话");
                 }
@@ -1249,7 +1250,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
             type: "system",
             text: `第 ${goal.rounds} 轮没过：${verdict.summary}`,
         });
-        workerRt.handleSend(buildGoalFeedbackPrompt({ round: goal.rounds, judge: verdict }), undefined, { followUp: true });
+        workerRt.handleSend(
+            buildGoalFeedbackPrompt({ round: goal.rounds, judge: verdict }, this.getConfig().prompts),
+            undefined,
+            { followUp: true },
+        );
     }
 
     /** 停下循环：目标变暂停（除非已经完成），写清为什么，并告诉界面。 */
@@ -1309,7 +1314,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             elapsedMs: task.elapsedMs,
             log: task.log,
             tail: readBashLogTail(task.log, ChatControllerBase.BASH_DELIVERY_TAIL_BYTES),
-        });
+        }, this.getConfig().prompts);
         rt.handleSend(text, undefined, { steer: true });
     }
 
@@ -1410,7 +1415,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 task: req.task,
                 parentSessionFile: this.tabaParentSessionFile(parentRt, req),
                 parentSessionName: this.sessionDisplayName(parentRt),
-            });
+            }, this.getConfig().prompts);
             const ready = await rt.waitReady(ChatControllerBase.TABA_CHILD_READY_TIMEOUT_MS);
             // 等待期间会话被关掉了：登记在关会话时已经清掉了，这里什么都不用做
             if (!this.panels.has(rt.id)) { return; }
@@ -1595,7 +1600,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             status: opts.status ?? child.lastStatus ?? "done",
             childSessionName: childRt ? this.sessionDisplayName(childRt) : undefined,
             tabClosed: opts.tabWillClose,
-        });
+        }, this.getConfig().prompts);
         // 交回一律按 followUp 排队：父会话在跑就不从半路插进去，跑完再作为新的一轮处理。
         parentRt.handleSend(text, undefined, { followUp: true });
         this.taba.markDelivered(child.id, result);
@@ -2109,14 +2114,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
         const lines = sections.map((s) =>
             `- 会话「${s.title}」：${s.file}（约 ${this.formatSize(s.size)}${s.streaming ? "，仍在持续追加" : ""}）`);
-        const body = [
-            "以下是其他会话的记录文件，需要了解其内容时再读取，不必现在读：",
-            ...lines,
-            "pi 会话文件是 JSON Lines 格式，每行一个 JSON 对象，对话内容在 type 为",
-            "\"message\" 的行里（助手消息里还有 thinking 块，按需忽略）。文件可能很大，",
-            "不要整读：可以先用 grep -n 定位感兴趣的行，再用 read 按行号分段读，",
-            "或用 node / python 写几行脚本只抽取需要的字段。",
-        ].join("\n");
+        const body = promptText(this.getConfig().prompts, "chatReference", { 会话: lines.join("\n") });
         const totalSize = sections.reduce((n, s) => n + s.size, 0);
         return { title: `${cardTitle} · ${this.formatSize(totalSize)}`, text: body };
     }

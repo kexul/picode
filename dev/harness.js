@@ -118,7 +118,7 @@ function createHarness(options = {}) {
 
     const { ChatViewProvider } = require(OUT_ENTRY);
     const { startBackend } = require(OUT_SERVER);
-    const { updateServerConfig } = require(OUT_CONFIG);
+    const { updateServerConfig, readServerConfig, seedPrompts } = require(OUT_CONFIG);
     const { ensureTabaAssets, ensureAskAssets, ensureGoalAssets, ensureImageAssets, ensureBashAssets, ensureEnvAssets } = require(OUT_BRIDGES);
     const version = packageVersion();
 
@@ -146,17 +146,21 @@ function createHarness(options = {}) {
     // 留着上一跑记下的那份，下一跑里那个文件就整个被当成子会话藏起来（历史列表、自动开最近会话都受影响）。
     try { fs.rmSync(path.join(SCRATCH_PICHAT_DIR, "child-sessions.json"), { force: true }); } catch { /* 同上 */ }
     updateServerConfig(patch, SCRATCH_PICHAT_DIR);
+    // 提示词：调试目录也要走真后端那条路（第一次把内置原文写进 config.json），
+    // 不然调试会话里的提示词跟真跑起来的不一样。
+    seedPrompts(SCRATCH_PICHAT_DIR);
+    const prompts = readServerConfig(SCRATCH_PICHAT_DIR).config.prompts;
 
     // 派子会话要用的文件：真后端启动器会写，这里也得写一份（不然调试时派子会话是坏的）
-    ensureTabaAssets(version);
+    ensureTabaAssets(version, prompts);
     // 问话（ask_choice）那个工具要用的扩展：同理
-    ensureAskAssets(version);
+    ensureAskAssets(version, prompts);
     // 目标判官那个 update_goal 扩展：同理（只有判官会话会加载它）
-    ensureGoalAssets(version);
+    ensureGoalAssets(version, prompts);
     // 会话里的截图挪出会话文件那个扩展：同理（每个会话都加载它）
     ensureImageAssets(version);
     // 接管 bash（后台命令、放后台）：同理（每个会话都加载它）
-    ensureBashAssets(version);
+    ensureBashAssets(version, prompts);
     // 报「加载了什么」（工具 / 技能 / MCP）：同理（每个会话都加载它）
     ensureEnvAssets(version);
 

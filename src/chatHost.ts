@@ -277,6 +277,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             model: cfg.model,
             extraArgs: [],
             trustProject: true,
+            // 人改过的提示词（见 promptText.ts）：键不在、或者值是空的就用内置原文
+            prompts: cfg.prompts,
             tabaExtension: taba?.ok ? taba.extensionPath : "",
             tabaDir: taba?.ok ? taba.resourceDir : "",
             askExtension: ask?.ok ? ask.extensionPath : "",

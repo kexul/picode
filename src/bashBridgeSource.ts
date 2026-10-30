@@ -37,8 +37,10 @@
  * 用 String.raw 包着：里面的反斜杠原样保留。
  */
 import { BASH_FRAME_PREFIX } from "./bashProtocol";
+import { promptText, type PromptOverrides } from "./promptText";
 
-export const BASH_BRIDGE_SOURCE = String.raw`/**
+export function bashBridgeSource(over?: PromptOverrides): string {
+    return String.raw`/**
  * 这是 VSCode 插件 Pi Chat 自动生成的文件，不要手改：插件版本一变就会重新生成，改动会丢。
  *
  * 把 bash 换成可以「脱手到后台」的版本，另加一个 bash_tasks 工具。
@@ -49,6 +51,9 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, sta
 import { join } from "node:path";
 
 const FRAME_PREFIX = ${JSON.stringify(BASH_FRAME_PREFIX)};
+
+/** bash 工具说明里插件加的那一段（人可以在 config.json 的 prompts.toolBash 里改）。 */
+const BACKGROUND_NOTE = ${JSON.stringify(promptText(over, "toolBash"))};
 
 /** 往 stderr 写一行暗号（插件在读）。 */
 function emit(payload: Record<string, unknown>): void {
@@ -521,9 +526,7 @@ export default function bashBridge(pi: any): void {
 
     pi.registerTool({
         ...base,
-        description: base.description
-            + "\n\n也可以把命令放到后台跑（background: true）：工具立刻返回一个任务编号，"
-            + "命令在后台接着跑，跑完会自动把结果告诉你；中途要看输出用 bash_tasks <编号>。",
+        description: base.description + "\n\n" + BACKGROUND_NOTE,
         parameters: {
             type: "object",
             properties: {
@@ -580,8 +583,7 @@ export default function bashBridge(pi: any): void {
         name: "bash_tasks",
         label: "后台命令",
         description:
-            "管这个会话里放到后台跑的命令。不带编号：列出都有哪些、跑到哪一步了；"
-            + "带编号：看这条命令输出的最后一段；带编号再加 stop: true：把它和它派出来的进程一起停掉。",
+            ${JSON.stringify(promptText(over, "toolBashTasks"))},
         promptSnippet: "列后台命令、看它的输出尾部、把它停掉。",
         parameters: {
             type: "object",
@@ -644,3 +646,4 @@ export default function bashBridge(pi: any): void {
     });
 }
 `;
+}

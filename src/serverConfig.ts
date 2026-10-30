@@ -12,6 +12,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { serverConfigFile } from "./serverPaths";
 import { normalizeOrigin } from "./webTransport";
+import { isPromptKey, builtinPrompts } from "./promptText";
 import {
     DEFAULT_AUTO_LOAD_LAST,
     DEFAULT_CLOSE_SESSION_KEY,
@@ -68,6 +69,11 @@ export interface ServerConfig {
     focusInputKey: string;
     fontSize: string;
     themeMode: "light" | "dark";
+    /**
+     * 人改过的提示词：键见 promptText.ts 的 PromptKey，值就是整段话。
+     * 哪一项空着、或者根本不存在，就用内置原文（第一次启动会把内置原文写进来当起点）。
+     */
+    prompts: Record<string, string>;
     notify: ServerNotifySettings;
     webServer: ServerWebSettings;
 }
@@ -86,6 +92,9 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = deepFreeze({
     focusInputKey: DEFAULT_FOCUS_INPUT_KEY,
     fontSize: DEFAULT_FONT_SIZE,
     themeMode: DEFAULT_THEME_MODE,
+    // 提示词默认全部空着（空 = 用内置原文）：具体文字在 promptText.ts，
+    // 第一次启动后端会把内置原文填进来，人照着改就行
+    prompts: {},
     // 跨机器的“有事”提醒默认不推（收到就收，不用写什么）
     notify: { pushTo: [], pushLabel: "" },
     // 默认对所有网卡开放（手机等设备打开地址就能用）；只给自己用就改 127.0.0.1，或启动时加 --host 127.0.0.1
@@ -107,6 +116,7 @@ function deepFreeze<T>(value: T): T {
 function defaults(): ServerConfig {
     return {
         ...DEFAULT_SERVER_CONFIG,
+        prompts: {},
         notify: { ...DEFAULT_SERVER_CONFIG.notify, pushTo: [] },
         webServer: { ...DEFAULT_SERVER_CONFIG.webServer, trustedOrigins: [] },
     };
@@ -250,6 +260,19 @@ function pickText(value: unknown, label: string, warnings: string[]): string {
     return value.trim();
 }
 
+/**
+ * 一项提示词：字符串原样收；字符串列表按行拼起来（写长文本时比满屏 \n 好改）。
+ * 类型不对就当没写（用内置原文）。
+ */
+function pickPromptValue(value: unknown, label: string, warnings: string[]): string | undefined {
+    if (typeof value === "string") { return value; }
+    if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+        return (value as string[]).join("\n");
+    }
+    warnings.push(`${label} 得是字符串，或者一行一项的字符串列表，已用内置原文`);
+    return undefined;
+}
+
 /** 把任意来源的对象规范化成 ServerConfig。这层全是纯函数。 */
 /**
  * 文件里还摆着、但现在已经不用的键（改名的、删掉的、搬到设置面板去的）：
@@ -267,13 +290,19 @@ function retiredKeysIn(raw: unknown): string[] {
     return found;
 }
 
-export function normalizeServerConfig(raw: unknown): { config: ServerConfig; warnings: string[] } {
+/**
+ * promptsEmpty：文件里没有 prompts 那一节，或者有但是一项都没填。
+ * 启动时靠它把内置原文补进去当起点。注意不能只看「有没有这一节」：
+ * 只要人改过任何一项设置，写回文件时 prompts: {} 就会被写出来（那是空壳，不是一个选择）。
+ * 已经填了几项的就不动（缺哪一项就用哪一项的内置）。
+ */
+export function normalizeServerConfig(raw: unknown): { config: ServerConfig; warnings: string[]; promptsEmpty: boolean } {
     const warnings: string[] = [];
     const config = defaults();
     if (!isPlainObject(raw)) {
         // 文件里可能就是个数组或字符串；照样给默认值，只提示一声
         warnings.push("配置内容不是一个对象，已全部用默认值");
-        return { config, warnings };
+        return { config, warnings, promptsEmpty: true };
     }
 
     const knownKeys = new Set(Object.keys(DEFAULT_SERVER_CONFIG));
@@ -307,6 +336,26 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
             config.themeMode = raw.themeMode;
         } else {
             warnings.push(`themeMode 只能是 light 或 dark，已用默认值${showDefault(DEFAULT_THEME_MODE)}`);
+        }
+    }
+
+    // ---- 提示词（config.json 的 prompts 一节）----
+    // 空字符串 = 用内置原文（跟删掉这一项一个意思）
+    let promptsEmpty = false;
+    const promptsRaw = raw.prompts;
+    if (promptsRaw === undefined) {
+        promptsEmpty = true;
+    } else if (!isPlainObject(promptsRaw)) {
+        warnings.push("prompts 不是一个对象，已全部用内置原文");
+    } else {
+        if (Object.keys(promptsRaw).length === 0) { promptsEmpty = true; }
+        for (const [name, value] of Object.entries(promptsRaw)) {
+            if (!isPromptKey(name)) {
+                warnings.push(`配置里有不认识的项：prompts.${name}`);
+                continue;
+            }
+            const text = pickPromptValue(value, `prompts.${name}`, warnings);
+            if (text !== undefined) { config.prompts[name] = text; }
         }
     }
 
@@ -346,7 +395,19 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
         }
     }
 
-    return { config, warnings };
+    return { config, warnings, promptsEmpty };
+}
+
+/**
+ * 提示词第一次能被改：把内置原文写进设置文件当起点，人照着字句改就行。
+ * 已经填过就不动（那一节是空的才写）；删掉某一项 = 那一项回内置。
+ * 放在这儿而不是启动器里：插件、独立后端、调试那一套都要它。
+ */
+export function seedPrompts(dir?: string): { seeded: boolean; file: string } {
+    const read = readServerConfig(dir);
+    if (!read.promptsEmpty) { return { seeded: false, file: read.file }; }
+    const wrote = updateServerConfig({ prompts: builtinPrompts() }, dir);
+    return { seeded: true, file: wrote.file };
 }
 
 /**
@@ -357,7 +418,15 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
  * 而人手工改坏的那份文件不能被默认值默默盖掉——那是他的设置，提示一行让他自己去修就好。
  * 内容能不能用看 warnings：有 warning 就是有项回落到默认值了（坏 JSON 也是全回默认值）。
  */
-export function readServerConfig(dir?: string): { config: ServerConfig; file: string; existed: boolean; warnings: string[]; retired: string[] } {
+export function readServerConfig(dir?: string): {
+    config: ServerConfig;
+    file: string;
+    existed: boolean;
+    warnings: string[];
+    retired: string[];
+    /** 文件里没有 prompts 那一节、或者一项都没填（启动时据此把内置提示词补进去）。 */
+    promptsEmpty: boolean;
+} {
     const file = serverConfigFile(dir);
     let text: string;
     try {
@@ -365,9 +434,12 @@ export function readServerConfig(dir?: string): { config: ServerConfig; file: st
     } catch (err) {
         // 第一次跑时文件还没建，这是正常情况，不该报警
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-            return { config: defaults(), file, existed: false, warnings: [], retired: [] };
+            return { config: defaults(), file, existed: false, warnings: [], retired: [], promptsEmpty: true };
         }
-        return { config: defaults(), file, existed: false, retired: [], warnings: [`读设置文件失败：${file}（${describeError(err)}）`] };
+        return {
+            config: defaults(), file, existed: false, retired: [], promptsEmpty: false,
+            warnings: [`读设置文件失败：${file}（${describeError(err)}）`],
+        };
     }
 
     let raw: unknown;
@@ -375,17 +447,19 @@ export function readServerConfig(dir?: string): { config: ServerConfig; file: st
         raw = JSON.parse(text);
     } catch (err) {
         // 坏 JSON 不让整个后端起不来：不抛，全用默认值，把路径和原因带出去给人修
+        // （也不补提示词：那份文件是人手改坏的，不要再往上盖东西）
         return {
             config: defaults(),
             file,
             existed: true,
             retired: [],
+            promptsEmpty: false,
             warnings: [`设置文件不是合法的 JSON：${file}（${describeError(err)}）`],
         };
     }
 
-    const { config, warnings } = normalizeServerConfig(raw);
-    return { config, file, existed: true, warnings, retired: retiredKeysIn(raw) };
+    const { config, warnings, promptsEmpty } = normalizeServerConfig(raw);
+    return { config, file, existed: true, warnings, retired: retiredKeysIn(raw), promptsEmpty };
 }
 
 /** 把 patch 合并进现有设置，写回文件，返回写完的结果。 */

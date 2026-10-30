@@ -7,8 +7,9 @@
  *   第二段（还没做）—— 每轮跑完派一个判官子会话去验，没过就把批评发回来接着干。
  *
  * 全是纯函数：认命令、拼谈判提示、从模型回复里抽验收清单、算目标条上那一行字。
- * 存盘在 goalFiles.ts。
+ * 存盘在 goalFiles.ts；拼提示词用到的原文在 promptText.ts（那边可被 config.json 覆盖）。
  */
+import { promptText, type PromptOverrides } from "./promptText";
 
 /** 目标处于哪一步。 */
 export type GoalPhase =
@@ -88,25 +89,11 @@ export function isGoalControlWord(text: string): boolean {
  * 用户打的那一行原文放在开头：记录里、还有「你说过的话」里都能看见是他自己说的那句话，
  * 但整条只有这一条消息 —— 分开成两条的话，模型会先把原文当任务干起来，再看到「先别动手」。
  */
-export function buildGoalNegotiationPrompt(p: { objective: string }): string {
-    return [
-        "你打的是：/goal " + p.objective.split("\n")[0].slice(0, 200),
-        "",
-        "先别动手。这一轮只把「怎样算完成」谈定。",
-        "",
-        "【目标】",
-        p.objective.trim(),
-        "",
-        "【要求】",
-        "1. 把目标拆成一条条能验证的验收条目：每条都要能被一条命令、一次测试、或者一个文件里看得见的事实证明。"
-        + "「做得好」「体验不错」这种没法验的不要写。",
-        "2. 三到八条，一条一行，用下面这个记号开头，方便机器取出来：",
-        GOAL_CRITERIA_MARK,
-        "- 第一条",
-        "- 第二条",
-        "3. 清单下面可以补一两句「有歧义、要用户拍板的地方」，没有就别硬凑。",
-        "4. 这一轮不要改文件、不要开始实现：用户看完清单会在目标条上按「开始」，在那之前目标还不算开始。",
-    ].join("\n");
+export function buildGoalNegotiationPrompt(p: { objective: string }, over?: PromptOverrides): string {
+    return promptText(over, "goalNegotiate", {
+        原文首行: p.objective.split("\n")[0].slice(0, 200),
+        目标: p.objective.trim(),
+    });
 }
 
 /**
@@ -144,40 +131,19 @@ function bulletText(line: string): string | undefined {
 }
 
 /** 开跑提示：清单定了，让模型现在动手，一直干到清单全过。 */
-export function buildGoalStartPrompt(goal: GoalState): string {
-    return [
-        "【目标定了，开始干】",
-        "",
-        "【目标】",
-        goal.objective.trim(),
-        "",
-        "【验收清单】",
-        ...goal.criteria.map((c) => "- " + c),
-        "",
-        "【要求】",
-        "- 现在就动手，接着往下做；已经做过的部分不用重来。",
-        "- 中途别停下来问，按最合理的做法处理；真卡住了就直说卡在哪。",
-        "- 一直干到清单上每一条都过为止（不是干一轮就算完）。",
-        "- 最后一条回复里逐条对照清单写清证据：跑了什么命令、输出是什么、改了哪些文件；"
-        + "没做到的条目老实说没做到。",
-    ].join("\n");
+export function buildGoalStartPrompt(goal: GoalState, over?: PromptOverrides): string {
+    return promptText(over, "goalStart", {
+        目标: goal.objective.trim(),
+        验收清单: goal.criteria.map((c) => "- " + c).join("\n"),
+    });
 }
 
 /** 恢复时补的一句：目标接着算，别从头再来。 */
-export function buildGoalResumePrompt(goal: GoalState): string {
-    return [
-        "【目标接着算】",
-        "",
-        "【目标】",
-        goal.objective.trim(),
-        "",
-        "【验收清单】",
-        ...goal.criteria.map((c) => "- " + c),
-        "",
-        "【要求】",
-        "- 接着上次的进度往下做，别从头再来。",
-        "- 干到清单上每一条都过为止；最后一条回复里逐条写明证据。",
-    ].join("\n");
+export function buildGoalResumePrompt(goal: GoalState, over?: PromptOverrides): string {
+    return promptText(over, "goalResume", {
+        目标: goal.objective.trim(),
+        验收清单: goal.criteria.map((c) => "- " + c).join("\n"),
+    });
 }
 
 /** 目标条上那一行字（纯函数；界面直接显示它）。 */

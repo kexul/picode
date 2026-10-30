@@ -7,6 +7,7 @@
  * 本文件不碰文件、不碰 vscode，全是内存里的东西。
  */
 import type { TurnEndStatus } from "./runtimeTypes";
+import { promptText, type PromptOverrides } from "./promptText";
 
 /**
  * 子会话现在处于哪一步：
@@ -190,17 +191,20 @@ export function buildDeliveryText(p: {
     childSessionName?: string;
     /** 交回之后是不是立刻把这个子会话的 tab 关掉（见 shouldCloseAfterFirstTurn）。 */
     tabClosed?: boolean;
-}): string {
+}, over?: PromptOverrides): string {
     const head = p.status === "done"
         ? `【子会话「${p.child.name}」跑完了，用时 ${formatElapsedMs(p.elapsedMs)}】`
         : `【子会话「${p.child.name}」没有正常跑完（${describeTurnStatus(p.status)}），已用 ${formatElapsedMs(p.elapsedMs)}】`;
-    const body = p.result.trim() || "（没有拿到任何回复）";
     const tail = p.tabClosed
         ? "（tab 已经自动关掉，要接着做就再派一个。）"
         : p.childSessionName
             ? `（tab 还开着（「${p.childSessionName}」），可以到那边接着问。）`
             : "（要补做点什么就再派一个。）";
-    return [head, "", body, "", tail].join("\n");
+    return promptText(over, "tabaDelivery", {
+        标题: head,
+        正文: p.result.trim() || "（没有拿到任何回复）",
+        尾巴: tail,
+    });
 }
 
 /** 子会话被关掉、结果还没交回时，给派活那个会话补一句。 */

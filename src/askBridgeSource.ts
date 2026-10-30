@@ -9,8 +9,10 @@
  * 用 String.raw 包着：里面的反斜杠原样保留（比如 "\n" 不能被外层先转义成真换行）。
  */
 import { ASK_FRAME_PREFIX } from "./askProtocol";
+import { promptText, type PromptOverrides } from "./promptText";
 
-export const ASK_BRIDGE_SOURCE = String.raw`/**
+export function askBridgeSource(over?: PromptOverrides): string {
+    return String.raw`/**
  * 这是 VSCode 插件 Pi Chat 自动生成的文件，不要手改：插件版本一变就会重新生成，改动会丢。
  *
  * 作用：给模型一个工具 ask_choice，让它问用户"选一个 / 选几个"的选择题，
@@ -154,12 +156,7 @@ const ASK_PARAMS = {
     additionalProperties: false,
 };
 
-const ASK_DESCRIPTION =
-    "问用户一个选择题，让他在界面上点选（不用自己打字）。单选、多选都行，界面上还有一行「自己写」，选项里都不合适时用户可以自己写一句话。" +
-    "一次只问一个问题：前一个答完了再问下一个。问题和你给的选项都要短（各占一行最好）。" +
-    "问之前先把你自己的推荐和理由写在正文里（工具调用之前那段话）。" +
-    "作答回来的可能是勾中的选项，也可能是用户自己写的一句话（那种按「用户自己的说法」理解）。" +
-    "用户不答了、或者一直没答（等很久也没回应），就当作没作答：不要再重复问同一个问题，等用户开口。";
+const ASK_DESCRIPTION = ${JSON.stringify(promptText(over, "toolAsk"))};
 
 /** 注册一个工具；名字被别人占了就跳过（不要让整个 pi 起不来）。 */
 function safeRegister(pi: any, def: any): void {
@@ -245,3 +242,4 @@ export default function askBridge(pi: any): void {
     });
 }
 `;
+}

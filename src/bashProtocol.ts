@@ -11,6 +11,7 @@
  *
  * 本文件不依赖 vscode。
  */
+import { promptText, type PromptOverrides } from "./promptText";
 
 import * as fs from "fs";
 import type { FrameDecoder } from "./piFrames";
@@ -186,21 +187,18 @@ export function buildBashTaskDelivery(p: {
     elapsedMs?: number;
     log: string;
     tail: string;
-}): string {
+}, over?: PromptOverrides): string {
     const used = elapsedText(p.elapsedMs ?? 0);
     const head = p.status === "done"
         ? `【后台命令 #${p.no} 跑完了（退出码 0，用了 ${used}）】`
         : p.status === "stopped"
             ? `【后台命令 #${p.no} 被停掉了（用了 ${used}）】`
             : `【后台命令 #${p.no} 没跑成（退出码 ${p.exitCode === null || p.exitCode === undefined ? "无" : p.exitCode}，用了 ${used}）】`;
-    const body = p.tail.trim() || "（没有输出）";
-    return [
-        head,
-        `命令：${p.cmd}`,
-        "",
-        "最后一段输出：",
-        body,
-        "",
-        `（完整输出在 ${p.log}；要看别的片段用 bash_tasks ${p.no}。）`,
-    ].join("\n");
+    return promptText(over, "bashDelivery", {
+        标题: head,
+        命令: p.cmd,
+        输出: p.tail.trim() || "（没有输出）",
+        日志: p.log,
+        编号: String(p.no),
+    });
 }

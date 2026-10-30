@@ -8,10 +8,16 @@
  * 工具被调用时只往本进程的 stderr 写一行暗号（见 goalProtocol.ts），插件读到就知道判官的结论。
  *
  * 用 String.raw 包着：里面的反斜杠原样保留。
+ *
+ * 这是一份函数而不是一个常量：`update_goal` 的说明是人可以改的（config.json 的
+ * prompts.toolUpdateGoal），写文件时把当前那份拼进去（见 bridgeAssets）。所以就靠
+ * 后端启动那一次生效：改完重启后端，下一次新开的会话才是新话。
  */
 import { GOAL_FRAME_PREFIX } from "./goalProtocol";
+import { promptText, type PromptOverrides } from "./promptText";
 
-export const GOAL_BRIDGE_SOURCE = String.raw`/**
+export function goalBridgeSource(over?: PromptOverrides): string {
+    return String.raw`/**
  * 这是 VSCode 插件 Pi Chat 自动生成的文件，不要手改：插件版本一变就会重新生成，改动会丢。
  *
  * 作用：给「判官」会话一个工具 update_goal —— 它验完工人这一轮的活，用这个工具报结论。
@@ -63,10 +69,7 @@ const PARAMS = {
     additionalProperties: false,
 };
 
-const DESCRIPTION =
-    "报出这次验收的结论。你（判官）验完工人这一轮的活以后必须调用它，只能调一次。" +
-    "pass=true 表示验收清单每一条都过了（要有证据）；否则 pass=false，在 missing 里写清哪几条没过、" +
-    "在 next 里写清让工人接着改什么。结论会交回插件，插件据它决定是让工人继续干还是收工。";
+const DESCRIPTION = ${JSON.stringify(promptText(over, "toolUpdateGoal"))};
 
 export default function goalBridge(pi) {
     try {
@@ -105,3 +108,4 @@ export default function goalBridge(pi) {
     }
 }
 `;
+}

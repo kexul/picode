@@ -9,8 +9,10 @@
  * 用 String.raw 包着：里面的反斜杠原样保留（比如 "\n" 不能被外层先转义成真换行）。
  */
 import { TABA_FRAME_PREFIX } from "./tabaProtocol";
+import { promptText, type PromptOverrides } from "./promptText";
 
-export const TABA_BRIDGE_SOURCE = String.raw`/**
+export function tabaBridgeSource(over?: PromptOverrides): string {
+    return String.raw`/**
  * 这是 VSCode 插件 Pi Chat 自动生成的文件，不要手改：插件版本一变就会重新生成，改动会丢。
  *
  * 作用：给模型三个工具，让它能派子会话。
@@ -152,13 +154,7 @@ const TABA_PARAMS = {
     additionalProperties: false,
 };
 
-const TABA_DESCRIPTION =
-    "新开一个 tab，派一个子会话去干一件事。这个工具不等结果：调用完立刻返回，你可以接着做别的、或者直接结束这一轮。" +
-    "子会话跑完第一轮后，它的最后一条回复会自动交回到本会话（当成一条新的用户消息），你不用轮询、不用读文件、不用反复查看。" +
-    "在结果交回来之前，绝对不要猜测或者编造它的产出。" +
-    "适合派出去的活：摸底看清某块代码、照着说明改一批文件、评审改动、把一大段资料读一遍再回报结论。" +
-    "一次可以派好几个，它们并行跑，各自跑完各自交回来。" +
-    "用户要在子会话那个 tab 里跟它说话，得趁它第一轮还在跑：它跑完第一轮、结果交回之后，插件会自动把那个 tab 关掉（出错、或者用户当时正看着它除外）。";
+const TABA_DESCRIPTION = ${JSON.stringify(promptText(over, "toolTaba"))};
 
 const TABA_PROMPT_SNIPPET =
     "派一个子会话去干一件事：新开一个 tab 跑，不等结果，它跑完第一轮后最后一条回复自动交回本会话。";
@@ -224,8 +220,7 @@ export default function tabaBridge(pi: any): void {
         name: "taba_stop",
         label: "停子会话这一轮",
         description:
-            "停掉某个子会话正在跑的这一轮。它的 tab 和会话都留着，用户可以接着用；只是当前这轮生成被打断。" +
-            "按编号或显示名指名，只能停你这个会话派出去的子会话。",
+            ${JSON.stringify(promptText(over, "toolTabaStop"))},
         parameters: STOP_PARAMS,
         async execute(_toolCallId: string, params: any) {
             const id = text(params?.id, 64);
@@ -251,10 +246,7 @@ export default function tabaBridge(pi: any): void {
         name: "taba_peek",
         label: "看子会话情况",
         description:
-            "看一个子会话现在的情况：状态、跑了多久、它的会话文件（.jsonl）在哪、多大多少行，以及它最后一条回复的开头一段。" +
-            "要看细节就自己用 read 或 bash 去读那个文件：一行一条记录，用户的话、AI 的话、每次工具调用与返回都在里面。" +
-            "文件可能很大，别一次整个读进来：用 read 的 offset / limit 从末尾往上翻，或者用 bash 的 tail / grep 挑重点。" +
-            "子会话跑完第一轮后结论会自动交回本会话，所以不要为了等结果反复调用这个工具。",
+            ${JSON.stringify(promptText(over, "toolTabaPeek"))},
         promptSnippet: "看一个子会话现在的情况：状态、用时、它的会话文件路径与大小、最后一条回复的开头。",
         parameters: {
             type: "object",
@@ -320,3 +312,4 @@ export default function tabaBridge(pi: any): void {
     });
 }
 `;
+}

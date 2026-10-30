@@ -13,6 +13,11 @@ export interface PiConfig {
     extraArgs: string[];
     trustProject: boolean;
     /**
+     * 人改过的提示词（config.json 里 prompts 那一节）：键见 promptText.ts 的 PromptKey，
+     * 键不在 / 值空着就用内置原文。拼提示词的地方拿它比对就行。
+     */
+    prompts?: Record<string, string>;
+    /**
      * “派子会话”要加载的 pi 扩展文件路径（插件写在 ~/.pi/pichat/ 下）。
      * 空串或缺省表示这个工作区不开这个能力：
      * 不给 pi 加载扩展，模型那边就不会出现 taba 这几个工具。
