@@ -11,10 +11,12 @@
  *   3. 「内容」那一档搜文件里的文字：一条结果两行——「路径:行号」和那一行（命中处标出来）；
  *      点一条就在文件侧边栏打开、停在那一行；只在 node_modules 里的不出现，超过 2 MB 的
  *      文件不当正文搜（但它的名字照样能按名字搜到）；
- *   4. 消息流里那种只有光名字、或者路径写岔了的链接：现在也从同一份文件清单里挑
+ *   4. 同一个名字有好几个文件：点链接（或工具卡片那颗「跳转」）时停下来，把搜索浮层
+ *      弹出来、预填这个名字让人挑（挑中的还停在链接说的那一行）；只有一个就直接开；
+ *   5. 消息流里那种只有光名字、或者路径写岔了的链接：现在也从同一份文件清单里挑
  *      （第三档，见 fileSearch.ts 的 findListedFile）——光名字找得到、写岔了找得到、
  *      只在 node_modules 里的找不到、写全了照样打得开；
- *   5. 最后一趟按「插件里的对话面板」跑（在页面脚本里先塞一个网页视图接口）：
+ *   6. 最后一趟按「插件里的对话面板」跑（在页面脚本里先塞一个网页视图接口）：
  *      浮层还在、也还能按快捷键打开，点一条结果是给插件发 openFile（那边没有左边那一列）。
  *
  * 测试文件现写进会话目录（dev/.scratch/find/），那个目录不进版本库，随便造。
@@ -33,6 +35,9 @@ const FIX = {
     big: "find/big.txt",
     /** 只用来验「光名字 / 路径写岔了」那一档：名字在整个测试目录里不会撞上别的。 */
     only: "find/deep/qqonly.txt",
+    /** 同名的那两个：点 `same.js` 这种链接时该停下来问一声。 */
+    sameA: "find/a/same.js",
+    sameB: "find/nested/same.js",
 };
 /** 内容那一档搜的那个词：alpha 与 beta 里有（big、hidden 里也有，但它们不该出现）。 */
 const MARK = "青鸟标记";
@@ -72,6 +77,10 @@ function prepareFiles(cwd) {
     ].join("\n"), "utf8");
     fs.writeFileSync(path.join(cwd, FIX.hidden), MARK + "（只在 node_modules 里）\n", "utf8");
     fs.writeFileSync(path.join(cwd, FIX.only), "qqonly 第 1 行\n", "utf8");
+    fs.mkdirSync(path.join(dir, "a"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "nested"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, FIX.sameA), "same A 第 1 行\nsame A 第 2 行\n", "utf8");
+    fs.writeFileSync(path.join(cwd, FIX.sameB), "same B 第 1 行\nsame B 第 2 行\n", "utf8");
     fs.writeFileSync(path.join(cwd, FIX.big), MARK + "\n" + "x".repeat(BIG_BYTES) + "\n", "utf8");
 }
 
@@ -126,6 +135,10 @@ module.exports = async (page) => {
                 };
             }),
             note: (document.querySelector("#fileSearchBody .fs-note") || {}).textContent || "",
+            hint: (document.getElementById("fileSearchHint") || {}).textContent || "",
+            hintShown: !!document.getElementById("fileSearchHint")
+                && !document.getElementById("fileSearchHint").classList.contains("hidden"),
+            inputValue: (document.getElementById("fileSearchInput") || {}).value || "",
         });
     `));
     const waitSearch = async (what, cond, timeoutMs) => {
@@ -293,7 +306,76 @@ module.exports = async (page) => {
     check("写全了照样打得开（写全的那一档不受清单管）",
         hiddenExact.status === 200 && hiddenExact.body.indexOf(MARK) >= 0, String(hiddenExact.status));
 
-    // ==================== 六、插件里的对话面板那一趟 ====================
+    // ==================== 六、同名文件不止一个：点链接先停下来问 ====================
+    // 投一条带两个链接的正文：`same.js:2`（会话目录里有两个同名文件）与 `qqonly.txt:1`（只有一个）。
+    const SAME_LINK_TEXT = "同名：" + String.fromCharCode(96) + "same.js:2" + String.fromCharCode(96)
+        + " 与唯一：" + String.fromCharCode(96) + "qqonly.txt:1" + String.fromCharCode(96) + "。";
+    console.log("投两个链接（一个同名、一个唯一）：");
+    await page.eval(`
+        window.postMessage({
+            type: "assistantFull",
+            text: ${JSON.stringify(SAME_LINK_TEXT)},
+            sessionId: ${JSON.stringify(info.sessionId)},
+        }, "*");
+        return true;
+    `);
+    await page.sleep(400);
+    const clickLink = (path) => page.eval(`
+        const a = Array.from(document.querySelectorAll("a.file-link"))
+            .find(function (x) { return x.getAttribute("data-file") === ${JSON.stringify(path)}; });
+        if (!a) { return false; }
+        a.click();
+        return true;
+    `);
+    const clickLinkOk = await clickLink("same.js");
+    check("消息流里那两个链接都在", clickLinkOk === true);
+
+    console.log("点同名的那个链接：");
+    const amb = await waitSearch("同名链接弹出选择", (s) => s.shown && s.hintShown && s.rows.length >= 2);
+    check("同名不止一个：不直接开，弹出搜索浮层",
+        amb.shown && amb.hintShown, JSON.stringify({ shown: amb.shown, hint: amb.hint }));
+    check("浮层里预填了那个名字（还是「文件名」那一档）",
+        amb.inputValue === "same.js" && amb.mode === "fsModeFiles",
+        JSON.stringify({ input: amb.inputValue, mode: amb.mode }));
+    check("头顶那句说清楚对上了几个", amb.hint.indexOf("2 个同名文件") >= 0, amb.hint);
+    check("两个同名文件都列出来了",
+        amb.rows.some((r) => r.text.indexOf(FIX.sameA) >= 0) && amb.rows.some((r) => r.text.indexOf(FIX.sameB) >= 0),
+        JSON.stringify(amb.rows.map((r) => r.text)));
+    await page.shot("search-7-same-name.png");
+
+    console.log("挑其中一个：");
+    await page.eval(`
+        const want = ${JSON.stringify(FIX.sameB)};
+        const row = Array.from(document.querySelectorAll("#fileSearchBody .fs-row"))
+            .find(function (r) { return (r.innerText || "").indexOf(want) >= 0; });
+        if (!row) { return false; }
+        row.click();
+        return true;
+    `);
+    const picked = await waitOpenFile("挑中的那个在左边打开", (x) => x.barName === FIX.sameB && x.rowCount === 2);
+    check("点哪一条就开哪一条（这里是 nested 那个）", picked.barName === FIX.sameB && picked.rowCount === 2,
+        JSON.stringify(picked));
+    check("还停在那条链接说的第 2 行", picked.hitNum === "2" && picked.hitText.indexOf("same B 第 2 行") >= 0,
+        JSON.stringify({ hit: picked.hitNum, text: picked.hitText }));
+    await page.shot("search-8-same-picked.png");
+
+    console.log("点唯一的那个链接：");
+    await clickLink("qqonly.txt");
+    const directOpen = await waitOpenFile("唯一的同名直接开", (x) => x.barName === FIX.only);
+    check("只有一个同名文件：不弹选择，直接开它",
+        directOpen.barName === FIX.only && !(await searchState()).shown, JSON.stringify(directOpen));
+
+    // 改一下关键词，头顶那句说明就该收掉（它说的是上一次点链接的数）
+    await clickLink("same.js");
+    await waitSearch("再弹一次选择", (s) => s.shown && s.hintShown);
+    await typeSearch("same.jsx");
+    await page.sleep(300);
+    const typed = await searchState();
+    check("一改关键词，那句「对上了几个」就收掉", !typed.hintShown, JSON.stringify({ hint: typed.hint, shown: typed.hintShown }));
+    await pressEsc();
+    await page.sleep(200);
+
+    // ==================== 七、插件里的对话面板那一趟 ====================
     // 在页面脚本里先塞一个网页视图接口（真 VSCode 里本来就有这个函数），界面就会按
     // 「插件里的对话面板」那套跑起来；然后重新加载页面看区别。这一段摆在最后。
     console.log("按插件里的对话面板再跑一遍：");

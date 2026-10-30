@@ -7308,13 +7308,55 @@
   /**
    * 点一个文件的时候去哪儿：浏览器页面里开左边这一列看（后端自己读），插件里的对话面板里
    * 照旧交给编辑器打开。正文里的文件链接与工具卡片那颗「跳转」都走这里，别各写一遍。
+   *
+   * 先问后端一句「这个名字对上了几个文件」：一个就直接开；同名的不止一个就把搜索浮层
+   * 弹出来、预填这个名字，让点的人自己挑（挑中的还停在链接说的那一行）。
    * @param dir 这是个目录（只有正文里以斜杠结尾的写法会带；工具卡片那颗按钮没有这种）
    */
   function openFileForUser(path, line, col, dir) {
     if (!path) { return; }
+    if (dir) { openFileDirect(path, line, col, dir); return; }
+    const requestId = ++fileCandidatesSeq;
+    // 后端没回话（版本对不上、断线）：照老样子直接开，别让点一下没反应
+    const timer = setTimeout(() => {
+      if (!pendingFileCandidates.has(requestId)) { return; }
+      pendingFileCandidates.delete(requestId);
+      openFileDirect(path, line, col);
+    }, 3000);
+    pendingFileCandidates.set(requestId, { path: path, line: line, col: col, timer: timer });
+    vscode.postMessage({ type: "pathCandidates", path: path, requestId: requestId });
+  }
+
+  /** 后端回了「这个名字对上了哪几个文件」：一个就开，好几个就弹搜索浮层。 */
+  function onPathCandidates(msg) {
+    const pend = pendingFileCandidates.get(msg.requestId);
+    if (!pend) { return; }
+    pendingFileCandidates.delete(msg.requestId);
+    clearTimeout(pend.timer);
+    const list = Array.isArray(msg.candidates)
+      ? msg.candidates.filter((x) => typeof x === "string" && x !== "") : [];
+    if (list.length > 1) {
+      const name = String(pend.path).replace(/\\/g, "/").split("/").pop() || String(pend.path);
+      openFileSearch({
+        query: name,
+        line: pend.line || 0,
+        hint: "「" + pend.path + "」对上了 " + list.length + " 个同名文件，点一个打开。",
+      });
+      return;
+    }
+    openFileDirect(list.length === 1 ? list[0] : pend.path, pend.line, pend.col);
+  }
+
+  /** 真去开一个文件（不再问同名的事了）。 */
+  function openFileDirect(path, line, col, dir) {
+    if (!path) { return; }
     if (fileSidebar.root) { openSidebarLink(path, line, dir); return; }
     vscode.postMessage({ type: "openFile", path, line, col });
   }
+
+  let fileCandidatesSeq = 0;
+  /** 正在等后端回话的那几次点链接（键是 requestId）。 */
+  const pendingFileCandidates = new Map();
 
   /**
    * 切会话：手上这一份标签（开着的文件、看的是哪一个）记在它会话名下，
@@ -7441,7 +7483,7 @@
       e.preventDefault();
       const path = a.getAttribute("data-file");
       if (!path) { return; }
-      openSidebarLink(path, a.dataset.line ? parseInt(a.dataset.line, 10) : 0, a.getAttribute("data-dir") === "1");
+      openFileForUser(path, a.dataset.line ? parseInt(a.dataset.line, 10) : 0, a.getAttribute("data-dir") === "1");
     });
     // 跟着刷新：开着而且有正看着的文件时，隔一会儿问一次（页面在后台时不问：手机上别白耗电）
     setInterval(() => {
@@ -7464,7 +7506,7 @@
   // 手机上没键盘：文件侧边栏头上那颗放大镜也能开它。
   const fileSearch = {
     built: false,
-    root: null, input: null, body: null, filesBtn: null, textBtn: null,
+    root: null, input: null, body: null, filesBtn: null, textBtn: null, hintEl: null,
     // 上次用的那一档留着（这次打开接着用）；开没收起不记进设备。
     mode: "files",
     open: false,
@@ -7473,6 +7515,9 @@
     timer: 0,      // 打字防抖
     items: [],     // [{ path, line?, text? }]
     sel: -1,
+    // 点了一个同名链接弹出来的：打开选中的那个时停在哪一行、头顶那一句说明
+    line: 0,
+    hint: "",
   };
 
   /** 浮层只搭一次：第一次按快捷键（或者点放大镜）时建出来，以后就只开关。 */
@@ -7493,6 +7538,7 @@
           '<button id="fileSearchClose" type="button" title="关闭（Esc）" aria-label="关闭">' + ICONS["close-bold"] + '</button>' +
         '</div>' +
         '<div id="fileSearchInputWrap"><input id="fileSearchInput" type="text" placeholder="搜文件名…" autocomplete="off" spellcheck="false" /></div>' +
+        '<div id="fileSearchHint" class="fs-hint hidden"></div>' +
         '<div id="fileSearchBody"></div>' +
       '</div>';
     document.body.appendChild(root);
@@ -7501,11 +7547,19 @@
     fileSearch.body = root.querySelector("#fileSearchBody");
     fileSearch.filesBtn = root.querySelector("#fsModeFiles");
     fileSearch.textBtn = root.querySelector("#fsModeText");
+    fileSearch.hintEl = root.querySelector("#fileSearchHint");
     root.querySelector("#fileSearchClose").addEventListener("click", () => closeFileSearch());
     root.addEventListener("click", (e) => { if (e.target === root) { closeFileSearch(); } });
     fileSearch.filesBtn.addEventListener("click", () => setFileSearchMode("files"));
     fileSearch.textBtn.addEventListener("click", () => setFileSearchMode("text"));
-    fileSearch.input.addEventListener("input", scheduleFileSearch);
+    fileSearch.input.addEventListener("input", () => {
+      // 一开始那句「对上了 N 个同名文件」是上一次点链接说的，一改关键词就不作数了
+      if (fileSearch.hint) {
+        fileSearch.hint = "";
+        renderFileSearchHint();
+      }
+      scheduleFileSearch();
+    });
     fileSearch.input.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         // 先就地把这条 Esc 吃掉：外面 document 上的监听会拿它去中止正在生成的那一轮
@@ -7525,16 +7579,35 @@
     if (fileSearch.open) { closeFileSearch(); } else { openFileSearch(); }
   }
 
-  function openFileSearch() {
+  function openFileSearch(opts) {
     buildFileSearch();
     fileSearch.open = true;
     fileSearch.root.classList.remove("hidden");
-    fileSearch.input.value = "";
+    const prefill = opts && typeof opts.query === "string" ? opts.query : "";
+    fileSearch.line = opts && Number(opts.line) > 0 ? Number(opts.line) : 0;
+    fileSearch.hint = opts && opts.hint ? String(opts.hint) : "";
+    renderFileSearchHint();
+    // 点同名链接弹出来的那次一定是找文件（不是搜内容），而且名字已经填好了
+    if (prefill) { fileSearch.mode = "files"; }
+    syncFileSearchMode();
+    fileSearch.input.value = prefill;
     fileSearch.items = [];
     fileSearch.sel = -1;
     renderFileSearchNote("");
-    setTimeout(() => { if (fileSearch.open) { fileSearch.input.focus(); } }, 0);
+    setTimeout(() => {
+      if (!fileSearch.open) { return; }
+      fileSearch.input.focus();
+      // 预填的名字把光标放在最后：再打几个字就是接着缩小范围
+      try { fileSearch.input.setSelectionRange(prefill.length, prefill.length); } catch (e) { /* 不管 */ }
+    }, 0);
     runFileSearch();
+  }
+
+  /** 输入框下面那行说明：只在点同名链接弹出来时有（写对上了几个）。 */
+  function renderFileSearchHint() {
+    if (!fileSearch.built) { return; }
+    fileSearch.hintEl.textContent = fileSearch.hint || "";
+    fileSearch.hintEl.classList.toggle("hidden", !fileSearch.hint);
   }
 
   function closeFileSearch() {
@@ -7710,8 +7783,10 @@
   function chooseFileSearchItem(idx) {
     const item = fileSearch.items[idx];
     if (!item) { return; }
+    // 内容那一档的结果自带行号；点同名链接弹出来的那次，停在那条链接说的行
+    const line = item.line || fileSearch.line || 0;
     closeFileSearch();
-    openFileForUser(item.path, item.line || 0, 0);
+    openFileDirect(item.path, line, 0);
   }
 
   /** pi /resume 列表的相对时间：now / 5m / 3h / 2d / 3w / 2mo / 1y。 */
@@ -9484,6 +9559,7 @@
     }
     if (type === "openSettings") { openSettings(); return; }
     if (type === "findResults") { onFindResults(msg); return; }
+    if (type === "pathCandidatesResult") { onPathCandidates(msg); return; }
     if (type === "viewOptionItems") { viewOptionItems = Array.isArray(msg.items) ? msg.items : []; renderViewOpts(); return; }
     // 「编译并重启」那颗按钮的回话：后端马上要退了，成败就改那行说明（成不成它都会断，自己会连回来）
     if (type === "restartStatus") {

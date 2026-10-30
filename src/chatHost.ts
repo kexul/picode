@@ -33,7 +33,7 @@ import {
     readProjectEntry,
 } from "./sessionStore";
 import { listDirectories } from "./dirBrowse";
-import { findFileContents, findFileNames } from "./fileSearch";
+import { findFileContents, findFileNames, findPathCandidates } from "./fileSearch";
 import { ChatBroadcaster } from "./chatBroadcaster";
 import { MessageBuffer, PAGE_TRANSIENT_MESSAGE_TYPES } from "./webTransport";
 import { pickOverlayClient } from "./overlayTarget";
@@ -1342,8 +1342,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 }
                 return true;
             case "findFiles":
-                // 文件搜索浮层（Ctrl+Alt+F）：按文件名 / 按文件内容找，结果只回给那块屏。
+                // 文件搜索浮层（Ctrl+Shift+F）：按文件名 / 按文件内容找，结果只回给那块屏。
                 this.startFileSearch(msg);
+                return true;
+            case "pathCandidates":
+                // 点文件链接之前先问一句：这个名字对上了几个文件（同名的不止一个就让界面弹选择）
+                this.startPathCandidates(msg);
                 return true;
         }
         return false;
@@ -1389,6 +1393,29 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             if (controller.signal.aborted) { return; }
             reply({ files: [], hits: [], error: `搜不了：${err?.message ?? String(err)}` });
         });
+    }
+
+    /**
+     * 点链接前问一句：这个名字在会话目录里对上了几个文件。
+     *
+     * 回 `pathCandidatesResult`：`candidates` 是相对写法、按「最该赢的」排在前面。
+     * 一个就照直开那个；好几个由界面弹选择；一个都没有也照原样开（让 `/file` 那条路去报 404）。
+     */
+    private startPathCandidates(msg: any): void {
+        const clientId = this.currentPageId;
+        const requestId = typeof msg.requestId === "number" && Number.isFinite(msg.requestId) ? msg.requestId : 0;
+        const want = typeof msg.path === "string" ? msg.path.slice(0, 500) : "";
+        const active = this.getActive(clientId);
+        const cwd = active ? (this.resolveSessionDir(active.id) ?? active.cwd) : undefined;
+        const reply = (candidates: string[]) => {
+            this.postToOneClient(clientId, { type: "pathCandidatesResult", requestId, path: want, candidates });
+        };
+        if (!cwd || !want) {
+            reply([]);
+            return;
+        }
+        const known = active ? this.knownSessionFiles(active.id) : [];
+        findPathCandidates(cwd, want, known).then(reply, () => { reply([]); });
     }
 
     /**

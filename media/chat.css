@@ -1898,7 +1898,7 @@
   body.file-wrap .file-line { min-width: 0; }
   body.file-wrap .file-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 
-  /* ==================== 文件搜索浮层（Ctrl+Alt+F）==================== */
+  /* ==================== 文件搜索浮层（Ctrl+Shift+F）==================== */
   /* 跟拾取器 / 设置那几张浮层同一个路子：一层遮罩 + 一块居中的面板，只是摆得靠上一点
      （结果一列往下长，贴顶更像命令面板）。 */
   #fileSearchOverlay {
@@ -1953,6 +1953,12 @@
     padding: 7px 9px; font-family: inherit; font-size: inherit;
   }
   #fileSearchInput:focus { outline: none; border-color: var(--vscode-focusBorder, #007acc); }
+  /* 输入框下面那行说明（点同名链接弹出来时说对上了几个）：平时不占地方 */
+  #fileSearchHint {
+    padding: 0 12px 8px; font-size: 0.85em;
+    color: var(--vscode-descriptionForeground, inherit); opacity: 0.85;
+  }
+  #fileSearchHint.hidden { display: none; }
   #fileSearchBody {
     overflow-y: auto; min-height: 0;
     padding: 2px 4px 6px;

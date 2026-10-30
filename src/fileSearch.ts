@@ -449,11 +449,64 @@ async function searchContentsSlowly(cwd: string, q: string, limit: number,
 // ==================== 按一个写岔了的路径找那个文件 ====================
 
 /**
+ * 点链接前先问一句：这个写法在会话目录里对上了几个文件（相对写法，按「最该赢的」排在前面）。
+ *
+ * 完全照写的路径就在 → 只回它一个（写得清楚就不问）；拼不到时才把同名的都列出来
+ * （文件清单里的，加上这个会话碰过、并且真身在会话目录里的）。
+ * 一个都没有也照原样返回（界面就拿原来那个写法去开，该 404 / 403 就让它报）。
+ */
+export async function findPathCandidates(cwd: string, wantPath: string,
+    knownFiles: readonly string[] = []): Promise<string[]> {
+    const cwdResolved = path.resolve(cwd);
+    const want = String(wantPath ?? "").replace(/\\/g, "/").replace(/^\.\//, "");
+    if (!want) { return []; }
+    // 照写的路径就在：写得清楚，不挑
+    try {
+        if (fs.statSync(path.resolve(cwd, want)).isFile()) { return [want]; }
+    } catch { /* 没这个文件，接着挑 */ }
+    const base = want.split("/").pop() || "";
+    if (!base) { return []; }
+    const found: string[] = [];
+    const seen = new Set<string>();
+    const add = (rel: string) => {
+        // Windows 上同一个文件可能大小写不同（清单里一种、工具调用里一种），别列两遍
+        const key = process.platform === "win32" ? rel.toLowerCase() : rel;
+        if (seen.has(key)) { return; }
+        seen.add(key);
+        found.push(rel);
+    };
+    const list = await listSessionFiles(cwd);
+    for (const rel of list.files) {
+        if ((rel.split("/").pop() || "") === base) { add(rel); }
+    }
+    for (const known of knownFiles) {
+        const rel = relativeTo(cwdResolved, path.resolve(known));
+        // 会话目录外面那个不开（那条路本来就会报 403，不往选择里放）
+        if (!rel || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel)) { continue; }
+        if ((rel.split("/").pop() || "") === base) { add(rel); }
+    }
+    found.sort((a, b) => compareCandidates(want, a, b));
+    return found;
+}
+
+/**
+ * 一串同名文件里谁排在前面：尾巴对上的赢，然后浅的、短的、按名字排在前面的。
+ * 点链接自动挑那一个、以及弹出选择时列表的先后，都用这一个规矩。
+ */
+function compareCandidates(want: string, a: string, b: string): number {
+    const tailA = a === want || a.endsWith("/" + want) ? 0 : 1;
+    const tailB = b === want || b.endsWith("/" + want) ? 0 : 1;
+    if (tailA !== tailB) { return tailA - tailB; }
+    const depthA = a.split("/").length;
+    const depthB = b.split("/").length;
+    if (depthA !== depthB) { return depthA - depthB; }
+    if (a.length !== b.length) { return a.length - b.length; }
+    return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
  * 消息流里的文件链接只有光名字（`chat.js`）、或者路径写岔了（`src/chat.js` 写成 `lib/chat.js`）时，
- * 在会话目录的清单里挑最像的那一个：
- *   - 先找尾巴对上的（`media/chat.js` 这种写法对上整条相对路径）；
- *   - 再找浅的（`a/chat.js` 赢过 `a/b/c/chat.js`）；
- *   - 名字要一模一样（大小写也算），不猜。
+ * 在会话目录的清单里挑最像的那一个（规矩见 compareCandidates）。
  * 清单读不到时给 undefined（调用方当「没找到」处理）。
  */
 export async function findListedFile(cwd: string, wantPath: string): Promise<string | undefined> {
@@ -461,27 +514,8 @@ export async function findListedFile(cwd: string, wantPath: string): Promise<str
     const want = String(wantPath ?? "").replace(/\\/g, "/").replace(/^\.\//, "");
     const base = want.split("/").pop() || "";
     if (!base) { return undefined; }
-    let best: string | undefined;
-    let bestTail = false;
-    let bestDepth = Infinity;
-    let bestLength = Infinity;
-    for (const rel of list.files) {
-        const slash = rel.lastIndexOf("/");
-        const name = slash < 0 ? rel : rel.slice(slash + 1);
-        if (name !== base) { continue; }
-        const tail = rel === want || rel.endsWith("/" + want);
-        const depth = rel.split("/").length;
-        // 尾巴对上的总是赢（旧做法也是：一边找一边记着只对上名字的那一个，尾巴对上的立刻用）；
-        // 同一种里再比深浅、再比长短（清单是排过序的，长短也一样时先到的那个留下）。
-        const better = best === undefined
-            || (tail && !bestTail)
-            || (tail === bestTail && (depth < bestDepth || (depth === bestDepth && rel.length < bestLength)));
-        if (better) {
-            best = rel;
-            bestTail = tail;
-            bestDepth = depth;
-            bestLength = rel.length;
-        }
-    }
-    return best;
+    const candidates = list.files.filter((rel) => (rel.split("/").pop() || "") === base);
+    if (candidates.length === 0) { return undefined; }
+    candidates.sort((a, b) => compareCandidates(want, a, b));
+    return candidates[0];
 }
