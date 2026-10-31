@@ -17,7 +17,7 @@
  *   8. 生成中重开页面（手机锁屏回来、手动刷新都算）：整屏重画完它还在末尾，脸还是「卡住了」；
  *   9. 「啊？」点下去发的是 bro 技能的正文（让人用大白话把上一条重说一遍）；
  *  10. 「压缩」点下去发 /compact，后端接下这活去调 pi 的压缩命令（假 pi 秒回）；
- *  11. 最右边那颗关会话的叉：只在闲着时露面（生成中不出现），点了这个会话就关掉（顶条上那一格跟着没）。
+ *  11. 最左边那颗关会话的叉：只在闲着时露面（生成中不出现），点了这个会话就关掉（顶条上那一格跟着没）。
  *
  * 假模型每轮要停一下（FAKEPI_THINK_MS），不然生成中那一下来不及看；它认中止（见 fakePi 的 pause），
  * 所以第 5 幕点下去那一轮是真停住的（剧本没跑完就不会说出结尾那句“完事”）；
@@ -43,10 +43,11 @@ module.exports = async (page) => {
             stop: Boolean(s) && !s.classList.contains("hidden"),
             // 那两颗快捷按钮（「压缩」「啊？」）：露着哪几颗（按行里的顺序）
             quick: q.filter((b) => !b.classList.contains("hidden")).map((b) => b.innerText.trim()),
-            // 最右边那颗关会话的叉露没露；顶条上还挂着几格
+            // 最左边那颗关会话的叉露没露；顶条上还挂着几格
             close: Boolean(c) && !c.classList.contains("hidden"),
             tabs: document.querySelectorAll("#sessionTabs .sn-tab:not(.hidden)").length,
-            input: inp.value,
+            // 页面正在重载的那一下（Page.reload 之后头几帧）连输入框都还没有：别让整条脚本因此挂掉
+            input: inp ? inp.value : null,
             lastUser: users.length ? users[users.length - 1].innerText.replace(/\\s+/g, " ").slice(0, 40) : "",
             // 剧本结尾那句“完事”每跑完一轮就多一句：点「卡住了」当场停住的那一轮不会说它，
             // 所以那一刻数到的句数就能看出这一轮是停住了还是自己跑完了。
@@ -155,10 +156,10 @@ module.exports = async (page) => {
     console.log("⑩ 生成中重开页面（重画完）：", JSON.stringify(midRun));
     await page.shot("endhint-7-reload-midrun.png");
 
-    // ⑪ 最右边那颗叉：关掉这个会话（跟「压缩」「啊？」一样只在闲着时露面，点了直接关）
+    // ⑪ 最左边那颗叉：关掉这个会话（跟「压缩」「啊？」一样只在闲着时露面，点了直接关）
     if (midRun && midRun.close) { throw new Error("生成中不该露那颗关会话的叉"); }
     const idleForClose = await waitFor((s) => s.hint && s.face === "continue" && s.close);
-    console.log("⑪ 跑完闲下来（最右边那颗叉露面了）：", JSON.stringify({ close: idleForClose && idleForClose.close, tabs: idleForClose && idleForClose.tabs }));
+    console.log("⑪ 跑完闲下来（最左边那颗叉露面了）：", JSON.stringify({ close: idleForClose && idleForClose.close, tabs: idleForClose && idleForClose.tabs }));
     await page.shot("endhint-9-close-idle.png");
     const tabsBefore = idleForClose ? idleForClose.tabs : 0;
     await page.click(".session-view:not(.off) .session-pane .msg-endhint-close");
@@ -187,6 +188,6 @@ module.exports = async (page) => {
     if (!compacted) { throw new Error("点了「压缩」没看到压缩完成（假 pi 的压缩结果没回来）"); }
     if (!midRunStart) { throw new Error("第二轮的「卡住了」没露面（把 FAKEPI_THINK_MS 调大一点再跑）"); }
     if (!midRun) { throw new Error("生成中重开页面之后它没回到末尾、也没换成「卡住了」"); }
-    if (!idleForClose) { throw new Error("跑完闲下来时最右边那颗关会话的叉没露面"); }
+    if (!idleForClose) { throw new Error("跑完闲下来时最左边那颗关会话的叉没露面"); }
     if (!closed) { throw new Error("点了末尾那颗叉，会话没关掉（顶条上那一格还在）"); }
 };

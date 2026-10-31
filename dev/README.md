@@ -335,7 +335,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `tabSelectStyles.js` | 把顶条「当前这一格」的几种画法（描边 / 下划线 / 灰底 / 蓝底 …）摆成一竖排各照一张，挑样式时用（浅色 / 深色各跑一遭）：`npm run web:shot -- --fake-pi --script dev/tabSelectStyles.js`，加 `--theme dark` 跑深色那张 |
 | `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并 + 正文之后补来的那段跑完并回本段那颗；正在想时那颗齿轮在转、想完停住）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |
 | `thinkTipPerf.js` | 验 `think` 提示框开着时思考边流边长的开销与表现（节流、跟着贴底、往回滚就不跟）：`npm run web:shot -- --fake-pi --script dev/thinkTipPerf.js` |
-| `endHint.js` | 验消息流末尾那颗胶囊（空会话不露面、跑完在末尾露面且脸是「继续」、点它发一条“继续”、打的字留着、生成中换成「卡住了」且跟得住末尾、点「卡住了」这一轮当场停住并补发一条“卡住了”、再跑完回到末尾、页面重开（含生成中重开）后还在末尾、最右边那颗关会话的叉只在闲着时露面且点了会话就关掉）：`FAKEPI_THINK_MS=2500 npm run web:shot -- --fake-pi --script dev/endHint.js` |
+| `endHint.js` | 验消息流末尾那颗胶囊（空会话不露面、跑完在末尾露面且脸是「继续」、点它发一条“继续”、打的字留着、生成中换成「卡住了」且跟得住末尾、点「卡住了」这一轮当场停住并补发一条“卡住了”、再跑完回到末尾、页面重开（含生成中重开）后还在末尾、最左边那颗关会话的叉只在闲着时露面且点了会话就关掉）：`FAKEPI_THINK_MS=2500 npm run web:shot -- --fake-pi --script dev/endHint.js` |
 | `saidList.js` | 验输入框右边那颗「你说过的话」与它弹出来的清单（按钮常显、点开一行一句、当前那句标亮、点一行跳过去、Esc 与点别处收起、空会话只说一句“还没说过话”、手机上往上弹不出屏；假数据，不叫模型）：`npm run web:shot -- --width 900 --height 700 --script dev/saidList.js` |
 | `msgTime.js` | 验正文右下角那个「消息的时刻」（不悬停不露面、原来那颗复制按钮确实没了、今天只写时分 / 别的日子补日期 / 跨年写全年、title 是完整年月日时分秒、没带时刻的按现在算、那颗小字不挡鼠标）：`npm run web:shot -- --fake-pi --script dev/msgTime.js` |
 | `firstLoad.js` | 量“手机上第一次打开”到底下了多少字节、花了多久：把一个真会话文件装进调试后端，用全新浏览器打开页面，按 URL 与消息类型列字节账，报“从点开到能打字 / 到历史画完”：`node dev/firstLoad.js --session <某个 .jsonl> --cpu 4`（4 ≈ 手机的 CPU 档位） |
