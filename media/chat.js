@@ -5924,7 +5924,8 @@
     view.footer.classList.remove("pk-history-footer");
     const leftoverClose = view.root.querySelector(".pk-header-close");
     if (leftoverClose) { leftoverClose.remove(); }
-    if (view.searchWrap) { view.searchWrap.classList.remove("hidden"); }
+    // 筛选框收起来（骨架里默认就是藏着的，见 renderHtml）：只有真要筛的面板（选模型）画的时候才露
+    if (view.searchWrap) { view.searchWrap.classList.add("hidden"); }
     // “关闭会话”的确认条只在列表里有效：列表一关就撤销（下次打开不要停在确认态）
     cancelPendingClose();
     view.state = null;

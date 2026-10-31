@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { isKnownChildSession } from "./childSessions";
+import { dirKey } from "./pathRules";
 import { TABA_CLOSING_MARK } from "./tabaTask";
 
 /**
@@ -428,14 +429,45 @@ export interface ProjectDirEntry {
 }
 
 /**
- * 列出项目目录本身，按最近活动倒序。
+ * 「项目与会话」下半那份目录清单：后端一起来扫一次，之后一直用这一份。
  *
- * 一个目录只碰两下：readdir 看一眼里面有哪些会话文件，再 stat 最新的那一个。
- * 不再把每个项目里每个会话文件都 stat 一遍（上百个项目加起来往往上千个，那一遍就是几十毫秒），
- * 更不读文件内容 —— 那一行到底是谁、要画几行，留到真要显示时再看（见 readProjectEntry）。
- * 没跑过 pi（目录不存在 / 不是目录）就是空清单，不抛。
+ * 这一份说的是“哪些目录跑过会话”，运行中基本不动，所以不必每回打开面板重扫一遍。
+ * 这一趟运行里才第一次有会话的目录由 rememberProjectDir 补进来。
  */
+let projectDirsOnce: ProjectDirEntry[] | null = null;
+
+/** 列出项目目录本身，按最近活动倒序（扫一次就留着，见上面那个缓存）。
+ *  没跑过 pi（目录不存在 / 不是目录）就是空清单，不抛。 */
 export async function listProjectDirs(): Promise<ProjectDirEntry[]> {
+    if (!projectDirsOnce) { projectDirsOnce = await scanProjectDirs(); }
+    // 给出去一份副本：这一份是共用的，别处动它（见 rememberProjectDir）不该动到正拿着它画的那一头
+    return projectDirsOnce.slice();
+}
+
+/**
+ * 把一个目录补进那份清单：这一趟运行里才第一次有会话的目录（刚在里面新开过会话），
+ * 不补它就得到重启后才出现在「项目与会话」下半。
+ * 还没扫过就什么也不做（扫的时候自然会带上它）；目录里没有会话文件也什么也不做。
+ */
+export async function rememberProjectDir(cwd: string): Promise<void> {
+    const dirs = projectDirsOnce;
+    if (!dirs || !cwd) { return; }
+    const dir = path.join(sessionsRoot(), encodeCwd(cwd));
+    const key = dirKey(dir);
+    if (dirs.some((d) => dirKey(d.dir) === key)) { return; }
+    const entry = await scanProjectDir(dir);
+    if (!entry) { return; }
+    dirs.push(entry);
+    dirs.sort((a, b) => b.lastActivity - a.lastActivity);
+}
+
+/**
+ * 扫一遍项目目录（每个目录 readdir 一次、再 stat 最新那个会话文件），按最近活动倒序。
+ *
+ * 不进目录里逐个 stat、也不读文件内容 —— 那一行到底是谁、要画几行，留到真要显示时再看
+ * （见 readProjectEntry）。
+ */
+async function scanProjectDirs(): Promise<ProjectDirEntry[]> {
     const root = sessionsRoot();
     let entries: fs.Dirent[];
     try {

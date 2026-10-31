@@ -31,6 +31,7 @@ import {
     listProjectDirs,
     listSessionFiles,
     readProjectEntry,
+    rememberProjectDir,
 } from "./sessionStore";
 import { listDirectories } from "./dirBrowse";
 import { findFileContents, findFileNames, findPathCandidates } from "./fileSearch";
@@ -199,6 +200,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         super("server");
         this.log = options.log ?? ((text) => console.log(text));
         this.state = new ServerStateStore(serverStateFile());
+        // 「项目与会话」下半那份目录清单这时先扫出来（见 sessionStore 的 listProjectDirs）：
+        // 扫一次就定下来，第一条打开面板就不用再等这一趟
+        void listProjectDirs();
         // 通知区域那颗图标：一起来就放上去（开着那一项、又是 Windows 的话）
         this.startTray();
         // 微信那头：一起来就开始收（人不在电脑前也能从微信里接上话）
@@ -516,6 +520,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      */
     private async buildWorkspacePanel(clientId: string, expandedDirs?: string[]): Promise<Record<string, unknown>> {
         const state = this.pickerStateOf(clientId);
+        // 这一趟运行里才第一次有会话的目录（刚在里面新开过会话）补进那份清单：
+        // 清单是启动时扫的，不补它就得到重启后才出现在这里
+        await Promise.all(Array.from(this.panels.values()).map((rt) => rememberProjectDir(rt.cwd)));
         // 每个目录 readdir 一下 + stat 最新那一个会话文件（见 sessionStore.listProjectDirs）
         state.workspaceDirs = await listProjectDirs();
         state.workspaceOffset = 0;
