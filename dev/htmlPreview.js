@@ -18,7 +18,8 @@
 const fs = require("fs");
 const path = require("path");
 
-const PAGE = { html: "html-site.html", css: "html-site.css", js: "html-site.js" };
+// 名字往前面排：会话目录里的东西多，清单只列前 500 个（见 src/webChatServer.ts 的 MAX_DIR_ENTRIES）
+const PAGE = { html: "0-html-site.html", css: "0-html-site.css", js: "0-html-site.js" };
 const TITLE_BEFORE = "相对样式与脚本";
 const TITLE_AFTER = "改过之后";
 /** 链接里带一个行号：网页这条路上它等于没带（跟 markdown 那个特例一样）。 */
@@ -83,11 +84,11 @@ module.exports = async (page) => {
     `);
     check("消息流里那张网页的链接点得着", clicked === true);
 
-    // 每个标签各留自己那一块正文（切走只是藏起来，见 chat.js 的 fileTabPage）：
-    // 一律从「露着的那一块」查，别从整个 #fileBody 查（那儿同时躺着别的标签的内容）。
+    // 打开着的那一块正文（见 chat.js 的 fileTabPage）：它挂在 #fileBody 下面。
+    // 清单那一块现在在上格 #dirPane，不跟它抢地方。
     await page.eval(`
         window.__fileView = function () {
-            return document.querySelector("#fileBody .file-page:not([hidden])")
+            return document.querySelector("#fileBody .file-page")
                 || document.getElementById("fileBody");
         };
         return true;
@@ -150,45 +151,36 @@ module.exports = async (page) => {
         JSON.stringify({ color: after.color, script: after.script }));
     await page.shot("html-2-reload.png");
 
-    // 4b. 切到别的标签再切回来：那个 iframe 不许重新加载
-    //     （一挪位置、一重造，页面里的滚动、输入、跑着的脚本全丢，靠脚本画出来的图表等于白画一遍）
-    console.log("在网页里做个记号：" + await page.eval(`
-        const view = window.__fileView();
-        const frame = view.querySelector("iframe.file-site");
-        if (!frame) { return "没有 iframe"; }
-        frame.setAttribute("data-mark", "keep");
-        try { frame.contentWindow.__mark = "alive"; } catch (e) { return "碰不到那个页面：" + e.message; }
-        return "记上了";
-    `));
-    console.log("点「项目目录」那一格：" + await page.eval(`
-        const t = document.querySelector("#fileTabs .file-tab[data-proj='1']");
-        if (!t) { return "没有那一格"; }
-        t.click();
+    // 4b. 点横条那颗返回回清单，再从清单点开这个网页：重新摆一个 iframe（内容还是最新的）
+    //     打开着的东西整列显示、回清单就收起来（见 chat.js 的 syncFileView）：页面状态不跟着留，重开就是重载。
+    console.log("点横条那颗返回：" + await page.eval(`
+        document.getElementById("fileCloseFile").click();
         return "点了";
     `));
     await page.sleep(600);
-    console.log("点回网页那一格：" + await page.eval(`
-        const t = Array.from(document.querySelectorAll("#fileTabs .file-tab"))
-            .find(function (x) { return x.getAttribute("data-path") === ${JSON.stringify(PAGE.html)}; });
-        if (!t) { return "没有那一格"; }
-        t.click();
-        return "点了";
-    `));
-    await page.sleep(300);
-    const backFrame = JSON.parse(await page.eval(`
-        const view = window.__fileView();
-        const frame = view.querySelector("iframe.file-site");
+    const backToList = JSON.parse(await page.eval(`
         return JSON.stringify({
-            same: !!frame && frame.getAttribute("data-mark") === "keep",
-            mark: frame && frame.contentWindow ? (frame.contentWindow.__mark || "") : "",
-            title: frame && frame.contentDocument
-                ? ((frame.contentDocument.getElementById("site-title") || {}).textContent || "") : "",
-            frames: view.querySelectorAll("iframe.file-site").length,
+            barHidden: document.getElementById("fileBar").hidden,
+            view: document.body.classList.contains("file-view"),
+            rows: document.querySelectorAll("#dirPane .file-entry").length,
         });
     `));
-    check("切到别的标签再切回来：还是原来那个 iframe（没重新加载，页面里的状态还在）",
-        backFrame.same && backFrame.mark === "alive" && backFrame.title === TITLE_AFTER && backFrame.frames === 1,
-        JSON.stringify(backFrame));
+    check("回清单：横条收起来、上面那一格又列出了目录",
+        backToList.barHidden && !backToList.view && backToList.rows > 0, JSON.stringify(backToList));
+    console.log("再从清单点开那个网页：" + await page.eval(`
+        const row = Array.from(document.querySelectorAll("#dirPane .file-entry"))
+            .find(function (r) { return r.getAttribute("data-path") === ${JSON.stringify(PAGE.html)}; });
+        if (!row) { return "清单里没有它"; }
+        row.click();
+        return "点了";
+    `));
+    const reopened = await waitFrame(TITLE_AFTER, 10000);
+    check("重新点开：又摆出一个 iframe，内容跟磁盘上那份一致",
+        reopened.found && reopened.ready && reopened.title === TITLE_AFTER,
+        JSON.stringify({ found: reopened.found, title: reopened.title }));
+    check("这一列里只有一个 iframe（旧的跟着回清单一起收掉了）",
+        await page.eval(`return document.querySelectorAll("#fileBody iframe.file-site").length === 1;`),
+        String(await page.eval(`return document.querySelectorAll("#fileBody iframe.file-site").length;`)));
 
     // 5. 那条地址自己的规矩：HEAD 给修改时间、没有的文件 404、目录外的 403
     const probe = JSON.parse(await page.eval(`

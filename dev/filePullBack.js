@@ -6,7 +6,7 @@
  *
  * 真后端、真会话、真网页服务、真界面文件（只有模型是假的），验的是外面看得见的行为：
  *   1. 看一个文件、正文在最上头，手指往下拖：写着文件路径的那条横条 + 正文这一块（#fileSheet）
- *      跟着手指一起往下走（有阻尼，走的路比手指短），最上面那一行（标签条）不动；
+ *      跟着手指一起往下走（有阻尼，走的路比手指短），最上面那行标题不动；
  *   2. 上面那道缝里露出一层清单（#fileBehind，就是点 ← 会回去的那一层）：越往下拉越清楚、
  *      越实，过了那条线就全清楚；缝里先写「继续往下拉，回清单」，拖过那条线变成「松手，回清单」；
  *   3. 松手过线：回到刚才那一层清单（横条收起来、清单那一行行出来）；
@@ -22,7 +22,8 @@ const path = require("path");
 const { SCRATCH_DIR } = require("./harness.js");
 
 /** 够长，好验“往下滚过一段再拉不算”。 */
-const PULL_FILE = "pull.txt";
+// 名字往前面排（目录里的东西多，清单只列前 500 个；会话目录里已经攒了一堆文件了）
+const PULL_FILE = "0-pull.txt";
 const PULL_LINES = 200;
 
 module.exports = async (page) => {
@@ -43,7 +44,7 @@ module.exports = async (page) => {
     fs.writeFileSync(path.join(cwd, PULL_FILE), lines.join("\n") + "\n", "utf8");
     console.log("测试文件写进 " + path.join(cwd, PULL_FILE));
 
-    /** 这一片现在什么样：那一块下去了多少、标签条动没动、背后那层露没露、提示词写的什么。 */
+    /** 这一片现在什么样：那一块下去了多少、最上面那行标题动没动、背后那层露没露、提示词写的什么。 */
     const state = async () => JSON.parse(await page.eval(`
         const sheet = document.getElementById("fileSheet");
         const stage = document.getElementById("fileStage");
@@ -67,7 +68,7 @@ module.exports = async (page) => {
             armed: hint.classList.contains("armed"),
             scrollTop: Math.round(body.scrollTop),
             barShown: !document.getElementById("fileBar").hidden,
-            rows: body.querySelectorAll(".file-entry").length,
+            rows: document.querySelectorAll("#dirPane .file-entry").length,
             springing: document.body.classList.contains("file-pull-spring"),
         });
     `));
@@ -106,10 +107,8 @@ module.exports = async (page) => {
     // ==================== 一、打开一个文件 ====================
     await page.eval(`document.getElementById("fileSidebarBtn").click(); return true;`);
     await page.sleep(900);
-    await page.eval(`document.querySelector("#fileTabs .file-tab").click(); return true;`);
-    await page.sleep(400);
     const openedIt = await page.eval(`
-        const row = Array.from(document.querySelectorAll("#fileBody .file-entry"))
+        const row = Array.from(document.querySelectorAll("#dirPane .file-entry"))
             .find(function (r) { return r.getAttribute("data-path") === ${JSON.stringify(PULL_FILE)}; });
         if (!row) { return false; }
         row.click();
@@ -127,7 +126,7 @@ module.exports = async (page) => {
     const half = await waitBehind();
     check("写着文件路径的横条 + 正文这一块跟着往下走（走的路比手指短：有阻尼）",
         half.sheetTop > 0 && half.sheetTop < 40, "那一块下去了 " + half.sheetTop + "px（手指走了 40px）");
-    check("最上面那一行（标签条）一动不动", half.headerTop === atFile.headerTop,
+    check("最上面那行标题一动不动", half.headerTop === atFile.headerTop,
         JSON.stringify({ before: atFile.headerTop, now: half.headerTop }));
     check("上头那道缝里露出一层清单（就是点 ← 会回去的那一层）",
         half.behindShown && half.behindRows > 0 && half.behindHasFile,
@@ -167,7 +166,7 @@ module.exports = async (page) => {
     // ==================== 三、不到线松手 / 推回去 ====================
     console.log("再点开那个文件，拖 50px 就松手：");
     await page.eval(`
-        const row = Array.from(document.querySelectorAll("#fileBody .file-entry"))
+        const row = Array.from(document.querySelectorAll("#dirPane .file-entry"))
             .find(function (r) { return r.getAttribute("data-path") === ${JSON.stringify(PULL_FILE)}; });
         if (row) { row.click(); }
         return true;

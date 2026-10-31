@@ -1606,7 +1606,7 @@
   #filePanel {
     box-sizing: border-box; width: 100%; height: 100%; max-height: none;
     font-size: calc(var(--vscode-font-size, 13px) - 1px);
-    position: relative;   /* 角上那颗折行开关（#fileWrap）按这一格摆 */
+    position: relative;
     border-top: 0; border-left: 0; border-bottom: 0; border-radius: 0; box-shadow: none;
   }
   /* 拖宽度的那条缝（#fileResize，chat.js 建）：热区就贴在右边那条分隔线上，不新增看得见的东西；
@@ -1629,66 +1629,55 @@
   }
   /* 正拖着的时候：整页的光标都是左右拖的样子，指针划过的地方也不许选中文字 */
   body.file-resizing { cursor: ew-resize; user-select: none; }
-  /* 这一列的头顶就是标签条（没有另外一行写路径的头）：「收起」那颗叉钉在这一行右端，
-     标签条占满剩下的地方、开着的标签多了自己左右滚；头上那根横线还是 .pk-header 自己画的。
-     这一行的高度跟顶条量齐（见 chat.js 的 syncDockHeaderHeight），它不许被压扁
-     （正文几百行的时候，按比例缩的弹性会把它从量好的高度缩回一行字那么高，跟顶条对不齐）。 */
+  /* 这一列的头就一行字（文件与改动），右端放大镜 + 收起叉（跟右边那列「项目与会话」一个样子）。
+     高度跟顶条量齐（见 chat.js 的 syncDockHeaderHeight），不许被正文挤扁。 */
   #fileHeader {
     box-sizing: border-box; flex: 0 0 auto;
-    padding: 0 4px 0 0; align-items: stretch; gap: 0;
-    min-height: 28px;   /* 一个标签都没有的时候（会话目录还没认识）也不至于压成一条 */
+    padding: 0 4px 0 12px; align-items: center; gap: 2px;
+    min-height: 30px;
   }
-  /* 标签条：看过的文件一个占一个标签（见 chat.js）。点名字切过去、点那颗叉关掉。
-     高度一律按 .file-tab 的 min-height 来（见下）：这一条不许被里面装的东西撑矮。 */
-  #fileTabs {
-    flex: 1 1 auto; min-width: 0; display: flex; align-items: stretch;
-    overflow-x: auto; overflow-y: hidden;
-  }
-  #fileTabs:empty { display: none; }
-  #fileTabs::-webkit-scrollbar { height: 6px; }
-  #fileTabs::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 3px; }
-  /* 一格标签：每格一样高、一样宽窄（min-height 这一句是给「目录」那一格兜底的——
-     它没有右边那颗叉，只剩它自己开着的时候，这一条会缩成一行字那么矮，
-     跟有文件的标签（叉是固定 18px，撑着高度）一比就矮一截）。 */
-  .file-tab {
-    flex: 0 1 auto; box-sizing: border-box; min-width: 64px; max-width: 170px; min-height: 28px;
-    display: flex; align-items: center; gap: 2px;
-    padding: 3px 4px 3px 10px; cursor: pointer; user-select: none; white-space: nowrap;
+  #fileTitle {
+    flex: 1 1 auto; min-width: 0;
     font-size: calc(var(--vscode-font-size, 13px) - 2px);
-    border-right: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
-    opacity: 0.65;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .file-tab:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); opacity: 1; }
-  .file-tab.active {
-    opacity: 1;
-    background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.08));
-    box-shadow: inset 0 2px 0 0 var(--vscode-focusBorder, #007acc);
+  /* 上下两格（跟右边那列「项目与会话」一个摆法）：上格「文件」吃剩下的地方（看文件时尽量大），
+     下格「改动」按内容占高、最多占这一列的 45%；两格各滚各的，中间一条分隔线。 */
+  #filePanes {
+    display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0;
+    padding: 0; overflow: hidden; font-size: inherit;
   }
-  /* 常驻那两格（目录 / 改动）里只有名字、没有右边那颗叉：字放中间，左右内边距对等
-     （别的标签右边要留那颗叉的位置，所以它们还是左边对齐）。 */
-  .file-tab[data-proj], .file-tab[data-changes] {
-    justify-content: center;
-    padding: 3px 10px;
+  /* 上格「文件」：列目录的那张清单，自己滚（点开一个文件就整列显示，见下） */
+  #dirPane {
+    flex: 1 1 0; min-height: 0; overflow-y: auto;
+    padding: 6px 0 12px; font-size: inherit;
   }
-  .file-tab-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  /* 标签上那颗叉：一直看得见（手机上没有悬浮这回事），点它关掉这个标签 */
-  .file-tab-close {
-    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
-    width: 18px; height: 18px; padding: 0; border: none; border-radius: 3px;
-    background: none; color: inherit; opacity: 0.7; cursor: pointer; line-height: 1;
+  #dirPane::-webkit-scrollbar { width: 8px; }
+  #dirPane::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 4px; }
+  /* 打开的样子（一个文件 / 一份 diff）：整列都是它，上下两格收起来 */
+  #fileStage { display: none; }
+  body.file-view #filePanes { display: none; }
+  body.file-view #fileStage { display: flex; }
+  #changePane {
+    /* 按内容占高、最多 45%；不许被上面那格挤（flex-shrink: 0）：内容多了在它自己里滚 */
+    flex: 0 0 auto; min-height: 0; max-height: 45%;
+    overflow-y: auto; padding: 4px 0 10px;
+    border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
+    font-size: inherit;
   }
-  .file-tab-close svg { width: 10px; height: 10px; display: block; }
-  .file-tab-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.25)); }
+  #changePane::-webkit-scrollbar { width: 8px; }
+  #changePane::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 4px; }
   /* 正文跟这一列的头一样大（写在 #filePanel 上）：这里得自己说一句「跟上面一样」，
      不然 .pk-body 那条 0.9em 会盖上来（那条是给浮层里的清单用的）。 */
   #fileBody { flex: 1 1 auto; min-height: 0; padding: 6px 0 12px; font-size: inherit; position: relative; }
   /* 下拉回清单（手势在 chat.js 的 wireFilePullBack）：看着文件、正文又在最顶上时，手指再往下拖，
      写着文件路径的那条横条 + 正文这一块（#fileSheet）跟着手指往下走，上面一点点露出一层模糊的
-     清单（#fileBehind）；缝里写着会去哪儿。最上面那一行（标签条）不动。
+     清单（#fileBehind）；缝里写着会去哪儿。最上面那行标题不动。
      高度、位移都由手指走多远决定（写在行内样式里），这里只管这一片怎么叠、模糊成什么样。 */
   #fileStage {
+    /* 打开的样子那一块：整列高（两格这时候收起来了，见上面 body.file-view） */
     position: relative; flex: 1 1 auto; min-height: 0;
-    display: flex; flex-direction: column; overflow: hidden;
+    flex-direction: column; overflow: hidden;
   }
   /* 那一块自己（横条 + 正文）得是不透明的：背后那层模糊的清单就在它底下，
      不透的话清单会从正文里透出来，看着像两份东西叠在一起。只有拉出来的那道缝里看得到背后。 */
@@ -1720,10 +1709,8 @@
   /* 松手以后加一道过渡：那一块滑回原处，不是一下跳回去 */
   body.file-pull-spring #fileSheet { transition: transform 200ms ease-out; }
   body.file-pull-spring #filePullHint { transition: height 200ms ease-out; }
-  /* 每个标签自己那一块正文（见 chat.js 的 fileTabPage）：都挂在 #fileBody 下面，
-     同一时刻只露正看着的那一块，别的只是藏起来——切回来时不重画，网页那个 iframe
-     也不重新加载（一个 iframe 从文档里挪一次位置就会重新加载，所以谁也不挪，只换露哪一块）。 */
-  .file-page[hidden] { display: none; }
+  /* 每一格自己那一块正文（见 chat.js 的 fileTabPage）：清单挂在上格 / 下格，打开着的挂在 #fileBody，
+     谁也不挪（网页那个 iframe 从文档里挪一次就会重新加载）。 */
   /* 文件正文：一行一格（行号 + 那一行的原文）。默认长行左右滚；角上那颗开关
      （#fileWrap，票 08）打开时 body 上多一个 file-wrap，长行折起来、横向就不滚了。 */
   .file-line { display: flex; align-items: flex-start; min-width: max-content; line-height: 1.55; }
@@ -1743,19 +1730,16 @@
   /* markdown 文件：排好版渲染成文档（样式就是消息流里那一套 .md），不留行号。 */
   .file-md { padding: 2px 14px 6px; }
   .file-note { padding: 12px 14px; line-height: 1.6; opacity: 0.75; }
-  /* 「改动」那一格（见 chat.js 的 changeBlock）：一行一个文件——头一行左边一颗三角、中间相对写法、
-     右边多了几行少了几行与「回滚」，点这一行展开下面的 diff。
-     三角在展开时转成正的（系统里开了「减少动态效果」就不转，直接换姿势）。 */
-  .change-item { border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.18)); }
+  /* 「改动」那一格（见 chat.js 的 changeRow）：一行一个文件——左边一颗三角、中间相对写法、
+     右边多了几行少了几行与「回滚」；点这一行就把那份 diff 整列打开（跟看一个文件一样）。 */
   .change-head {
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
     padding: 4px 10px 4px 8px; cursor: pointer; user-select: none;
     font-size: calc(var(--vscode-font-size, 13px) - 1px);
-    /* 这一块 diff 展开得长、往下滚的时候，这一行粘在顶上（滚出这一块才算完）。
-       底色得是不透明的：透明的会让底下的 diff 从字缝里透上来。 */
-    position: sticky; top: 0; z-index: 1;
-    background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #fff));
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.18));
   }
+  /* 太大的文件没有 diff 可打开：那一行点不开，光标也不变 */
+  .change-head.no-diff { cursor: default; }
   /* 悬停那层色用 background-image 叠上去：换成 background 会把上面那层不透明底色顶掉 */
   .change-head:hover {
     background-image: linear-gradient(var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)),
@@ -1766,8 +1750,7 @@
     border-left: 5px solid currentColor; border-top: 4px solid transparent; border-bottom: 4px solid transparent;
     opacity: 0.6; transition: transform 0.1s;
   }
-  .change-item.open .change-arrow { transform: rotate(90deg); }
-  @media (prefers-reduced-motion: reduce) { .change-arrow { transition: none; } }
+
   .change-path {
     flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-family: var(--vscode-editor-font-family, monospace);
@@ -1794,14 +1777,12 @@
     background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 14%, transparent);
   }
   .change-revert.confirm:hover { background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 22%, transparent); }
-  /* 收起的那一块要彻底不占地方（hidden 自带 display:none，这里只是把话说清楚） */
-  .change-body[hidden] { display: none; }
-  /* 展开的那一块 diff：不自己再滚一道（这一列本来就在滚），字号跟正文一起；
+  /* 整列看一份 diff 时那一块：不自己再滚一道（#fileBody 本来就在滚），字号跟正文一起；
      长行一律折起来——这里读的是「改了什么」，左右拖着看半句话没有意义
      （文件正文那边才按角上那颗折行开关走） */
-  .change-body .edit-diff { max-height: none; padding: 2px 0 6px; font-size: 0.95em; }
-  .change-body .edit-diff-inner { width: 100%; }
-  .change-body .diff-line { white-space: pre-wrap; overflow-wrap: anywhere; }
+  #fileBody .file-page > .edit-diff { max-height: none; padding: 6px 0 12px; font-size: 0.95em; }
+  #fileBody .file-page > .edit-diff .edit-diff-inner { width: 100%; }
+  #fileBody .file-page > .edit-diff .diff-line { white-space: pre-wrap; overflow-wrap: anywhere; }
   /* 目录清单：一项一行（名字前一颗图标），点子目录往下走、点文件打开它（见 chat.js 的
      renderDirListing）；待在子目录里时最上面多一行「上一层」（同一套样子，图标是那颗朝上的箭头）。 */
   .file-entry { display: flex; align-items: center; gap: 6px; padding: 3px 12px; cursor: pointer; line-height: 1.5; }
@@ -1829,7 +1810,7 @@
   /* 看不了但能下载（二进制 / 太大）：那一句说明后面跟着的下载链接（整颗不拆行） */
   .file-download { color: var(--vscode-textLink-foreground, #3794ff); text-decoration: none; white-space: nowrap; }
   .file-download:hover { text-decoration: underline; }
-  /* 折行开关：摆在 #filePanel 自己的角上（右下方贴角），不挤标签条也不挤这一列的头。
+  /* 折行开关：摆在「文件」那一格的右下方贴角（#fileBody 里，正文自己滚，它跟着滚），不挤横条。
      默认（没记过）是一行就是一行，这时它是淡的；折行打开时加 .on，带一道强调色的边。 */
   #fileWrap {
     position: absolute; right: 8px; bottom: 8px; z-index: 1;
@@ -1840,7 +1821,7 @@
     color: var(--vscode-descriptionForeground, inherit); opacity: 0.7;
   }
   #fileWrap svg { width: 14px; height: 14px; display: block; }
-  /* 只有真在看一个文件时才露面（清单、「改动」「后台」那几格里没有可折的长行，见 chat.js 的 syncFileBar）；
+  /* 只有真在看一个文件时才露面（清单、「改动」那一格里没有可折的长行，见 chat.js 的 syncFileBar）；
      刷掉的是 [hidden] 那条 UA 样式：这里写了 display: flex，不动它一句就盖不住 */
   #fileWrap[hidden] { display: none; }
   /* 「文件」那一格看文件时，正文上面多一条横条（见 chat.js 的 syncFileBar）：

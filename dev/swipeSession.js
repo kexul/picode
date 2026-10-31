@@ -75,9 +75,12 @@ module.exports = async (page) => {
     await page.send("第一个会话里说的话");
     await page.sleep(900);
 
-    /** 左边那一列头顶那三格（文件 / 改动 / 后台）：拉出来的是不是个空壳就看它。 */
-    const fileTabs = () => page.eval(`
-        return JSON.stringify(Array.from(document.querySelectorAll("#fileTabs .file-tab")).map((el) => el.textContent.trim()));
+    /** 左边那一列现在长什么样：标题写着「文件与改动」、上下两格都在（拉出来的是不是个空壳就看它）。 */
+    const fileLook = () => page.eval(`
+        const title = document.getElementById("fileTitle");
+        const dirPane = document.getElementById("dirPane");
+        const changePane = document.getElementById("changePane");
+        return JSON.stringify({ title: title ? title.textContent.trim() : "", panes: !!dirPane && !!changePane });
     `).then(JSON.parse);
     /** 某一块的盒子（横划收起那几步要用：手指得按在面板身上，不能按在遮罩上）。 */
     const rectOf = (sel) => page.eval(`
@@ -110,18 +113,40 @@ module.exports = async (page) => {
     await drag(cx - 60, cy, cx + 160, cy);
     await page.sleep(700);
     const loneLeft = await look("唯一的会话往右划");
-    const loneTabs = await fileTabs();
-    console.log(loneLeft.file === "开" && loneLeft.active === lone.active && loneTabs.join("/") === "文件/改动/后台"
-        ? "    ✓ 左边的文件侧边栏拉出来了（三格都在：" + loneTabs.join("/") + "）"
+    const loneTabs = await fileLook();
+    console.log(loneLeft.file === "开" && loneLeft.active === lone.active && loneTabs.title === "文件与改动" && loneTabs.panes
+        ? "    ✓ 左边的文件侧边栏拉出来了（标题是「文件与改动」，上下两格都在）"
         : "    ✗ 只有一个会话时往右划该开左边的文件侧边栏，现在拉出来的是：" + JSON.stringify(loneTabs));
     await page.click("#fileClose");
     await page.sleep(600);
 
-    // 再多开两个会话（切会话得有得切）
-    for (let i = 0; i < 2; i++) {
-        await page.click("#newSessionBtn");
-        await page.sleep(700);
+    // 再多开两个会话（切会话得有得切）。
+    // 点输入框那颗加号不行：它会把闲着的那一个关掉（见 GLOSSARY 的「输入框」那一条），还是只有一个会话。
+    // 走「项目与会话」里工作区行尾那颗加号：在同一个目录里再开一个，谁的也不关。
+    const tabCount = () => page.eval(`return document.querySelectorAll("#sessionBar .sn-tab").length;`);
+    // 那两行要塞在右边那列里才画得出来（窄窗里它收着就不摆内容）：先把它拉出来
+    await page.eval(`if (window.pichatSidebar) { window.pichatSidebar.toggle(); } return true;`);
+    for (let t = 0; t < 40; t++) {
+        await page.sleep(200);
+        const n = await page.eval(`return document.querySelectorAll(".pk-space-head .pk-space-add").length;`);
+        if (n > 0) { break; }
     }
+    for (let i = 0; i < 2; i++) {
+        const want = (await tabCount()) + 1;
+        await page.eval(`
+            const add = document.querySelector(".pk-space-head .pk-space-add");
+            if (add) { add.click(); }
+            return true;
+        `);
+        for (let t = 0; t < 40; t++) {
+            await page.sleep(250);
+            if ((await tabCount()) >= want) { break; }
+        }
+        await page.sleep(400);
+    }
+    console.log("（开了三个会话：顶条上 " + await tabCount() + " 格）");
+    await page.eval(`if (window.pichatSidebar) { window.pichatSidebar.toggle(); } return true;`);
+    await page.sleep(600);
     // 三个会话按「正在对话」那一列的顺序排，当前（最后开的那个）在末位。
     // 切到中间那一格：左右两边都有得切（滑到头是另一回事，见后面第 6 到 8 步）
     await page.click('#sessionBar .sn-tab[data-idx="1"]');
@@ -241,12 +266,11 @@ module.exports = async (page) => {
     });
     await page.sleep(700);
     const edgeLeft = await look("最左那个往右划完、松手");
-    const edgeTabs = await fileTabs();
+    const edgeTabs = await fileLook();
     console.log(edgeLeft.file === "开" && edgeLeft.active === atFirst.active && edgeLeft.moved.length === 0 &&
-        pulledOf(edgeLeft.drawer) < 1 && edgeTabs.join("/") === "文件/改动/后台"
-        ? "    ✓ 没换会话，左边的文件侧边栏拉出来了（三格都在）"
+        pulledOf(edgeLeft.drawer) < 1 && edgeTabs.title === "文件与改动" && edgeTabs.panes
+        ? "    ✓ 没换会话，左边的文件侧边栏拉出来了（标题是「文件与改动」，上下两格都在）"
         : "    ✗ 滑到头该把左边的文件侧边栏拉出来，现在拉出来的是：" + JSON.stringify(edgeTabs));
-    await page.shot("swipe-edge-file.png");
 
     // 9. 左边那一列开着：在它身上往左划一把就收起来
     const fileBox = await rectOf("#fileSidebar");

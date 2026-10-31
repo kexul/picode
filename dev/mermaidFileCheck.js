@@ -49,10 +49,10 @@ const DOC_TEXT = [
 ].join("\n") + "\n";
 
 const LOOK = () => {
-    // 每个标签各留自己那一块正文（切走只是藏起来，见 chat.js 的 fileTabPage）：
-    // 正看着的那一块才装得下刚打开的那个文件，别从整个 #fileBody 查。
+    // 打开着的那个文件那一块正文（见 chat.js 的 fileTabPage）：它挂在 #fileBody 下面。
+    // 别从整个 #fileBody 查（清单那一块也在页面里，只是上面那格的）。
     const box = document.getElementById("fileBody");
-    const body = box ? (box.querySelector(".file-page:not([hidden])") || box) : null;
+    const body = box ? (box.querySelector(".file-page") || box) : null;
     const doc = body ? body.querySelector(".file-md") : null;
     if (!doc) { return { doc: false }; }
     const figs = [...doc.querySelectorAll(".md-mermaid")];
@@ -69,11 +69,10 @@ const LOOK = () => {
         notes: notes.length,
         noteText: notes[0] ? notes[0].textContent.trim() : "",
         pre: doc.querySelectorAll("pre").length,
-        // 正看着的那一格是哪个文件（头上不写路径了，看标签的 data-path）
+        // 正看着的是哪个文件：顶上那条横条写着它的写法（见 chat.js 的 syncFileBar）
         activePath: (function () {
-            const t = Array.from(document.querySelectorAll("#fileTabs .file-tab"))
-                .filter(function (x) { return x.classList.contains("active"); })[0];
-            return t ? (t.getAttribute("data-path") || "") : "";
+            const n = document.querySelector("#fileBar .file-bar-name");
+            return n ? (n.textContent || "") : "";
         })(),
     };
 };

@@ -156,7 +156,7 @@ module.exports = async (page) => {
     };
     /** 左边那一列现在开着哪个文件、停在哪一行（正文里那一行有 .hit）。 */
     const openFile = async () => JSON.parse(await page.eval(`
-        const page = document.querySelector("#fileBody .file-page:not([hidden])");
+        const page = document.querySelector("#fileBody .file-page");
         const rows = page ? Array.from(page.querySelectorAll(".file-line")) : [];
         const hit = rows.find(function (r) { return r.classList.contains("hit"); });
         const name = document.querySelector("#fileBar .file-bar-name");
@@ -250,7 +250,7 @@ module.exports = async (page) => {
     await page.eval(`document.getElementById("fileCloseFile").click(); return true;`);
     await page.sleep(400);
     check("这个文件收起不看，回到刚才那一层清单", await page.eval(`
-        return document.getElementById("fileBar").hidden && !!document.querySelector("#fileBody .file-entry");
+        return document.getElementById("fileBar").hidden && !!document.querySelector("#dirPane .file-entry");
     `));
 
     // ==================== 三、按内容找 ====================

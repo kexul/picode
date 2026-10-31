@@ -5056,7 +5056,7 @@
    * 遮罩跟着淡，过了线就收、不够就弹回原位。
    *
    * 不接的几种：竖着划（那是滚清单）、反着划（那是往回拉，这里不管）、按在按钮 / 链接 / 输入上、
-   * 以及横着能滚的地方（长文件名、不折行的代码、标签条挤了）—— 那儿横划是人家自己滚。
+   * 以及横着能滚的地方（长文件名、不折行的代码）—— 那儿横划是人家自己滚。
    * @param el 哪一块（跟手挪的就是它）
    * @param kind "right" / "left"
    * @param sign 收的时候往哪边出去：右边那块 +1、左边那块 -1
@@ -6251,31 +6251,32 @@
   const FILE_SIDEBAR_PROJECT_PATH = ".";
   /** 这一列那一摊：容器、里面那几块、开着哪几个文件。 */
   const fileSidebar = {
-    root: null, header: null, title: null, tabsEl: null, body: null, resize: null,
+    root: null, header: null, dirBody: null, body: null, changeBody: null, resize: null,
     bar: null, barName: null, closeFile: null,
     open: false,     // 这台设备上人要不要它开着（记在 localStorage；开着时宽窗常驻、窄窗滑入）
     // 人拖出来的宽度（像素数，也记在本机里）：没拖过就是 FILE_SIDEBAR_W_DEFAULT。
     // 写到版式上的那个值还可能被窗口收小，但这里留着的永远是原值（见 applyFileSidebarWidth）。
     width: 0,
     wrap: false,     // 长行折起来还是横向滚（记在 localStorage；默认一行就是一行，见 chat.css 末尾）
-    // 常驻的两格（文件 / 改动），从左到右：[{ path, home, proj, dir, line, scrollTop, mtime, loading, imageUrl, page, drawn }]
+    // 两格（上面「文件」、下面「改动」）：见 fileSidebarNewTab / fileSidebarNewChangesTab
     //（不记进设备，刷新就没了）
-    //   home：这是「文件」那一格（排在最前、没有关闭那颗叉）
-    //   proj：这一格现在在列清单（true）还是在显示一个文件（false）
+    //   proj：上面那一格现在在列清单（true）还是在显示一个文件（false）
     //   path：清单模式是它现在待的那一层（相对会话目录：`.` 就是会话目录自己）；
     //   文件模式是那个文件的写法
-    //   dir：进文件之前待的那一层：点右上角那颗关闭回这里（见 backToFileList）
-    //   mtime：画在这一列上的那份内容的修改时间（下次问「变了没」时带上去）
+    //   dir：进文件之前待的那一层：点顶上那颗返回回这里（见 backToFileList）
+    //   mtime：画在这一格上的那份内容的修改时间（下次问「变了没」时带上去）
     //   loading：还在取（正文那块写着「正在读取…」）
-    //   imageUrl：图片那个显示地址（blob:…）；换成别的图或关掉标签时要放掉它
-    //   page：这一格自己那一块正文（挂在 #fileBody 下面，切走时只是藏起来，不重画）；
-    //   切回来直接摆上——网页那个 iframe 挪一次位置就会重新加载，所以谁也不挪，只换露哪一块
-    //   drawn：那一块里已经有画好的内容了（切回来不必再去后端取）
-    tabs: [],
-    active: -1,      // 现在看的是哪一个标签（下标）；一个都没开就是 -1
-    token: 0,        // 取文件是异步的：换标签 / 收起之后回来的旧回应就不算数了
-    hintPage: null,  // 一个标签都没开时那句提示画在哪儿（跟标签那几块同一层，只露一块）
-    sessionId: null,  // 现在手头这一份标签是哪个会话的（见 resetFileSidebarForSession）
+    //   imageUrl：图片那个显示地址（blob:…）；换成别的图或关掉这一格时要放掉它
+    //   page：这一格自己那一块正文（挂在 #fileBody / #changePane 下面，一直在，不挪）
+    //   drawn：那一块里已经有画好的内容了（刷新那一轮不必再问一次）
+    fileTab: null,     // 上面那一格：列目录 / 看一个文件
+    changeTab: null,   // 下面那一格：这个会话改过哪些文件
+    // 打开着的那一份 diff（「改动」清单里点一行）：path 空 = 没在看 diff。
+    // 打开着的东西（一个文件 / 一份 diff）整列显示，见 fileViewing 与 #fileStage。
+    diff: { path: "", page: null },
+    token: 0,        // 取东西是异步的：换了文件 / 收起之后回来的旧回应就不算数了
+    hintPage: null,  // 会话目录还没认识时那句提示画在哪儿（跟「文件」那一格同一层）
+
   };
   /** 上一条「变了没」的询问还在路上（手机网慢）：这一轮先不发，别越堆越多。 */
   let filePolling = false;
@@ -6353,7 +6354,7 @@
       wrapBtn.classList.toggle("on", fileSidebar.wrap);
     }
     syncDockHeaderHeight();
-    syncFileBar();   // 开着 / 收起变了：那条横条跟着换
+    syncFileView();   // 开着 / 收起变了：横条、上下两格跟着换
   }
   function rememberFileSidebar(open) {
     try { localStorage.setItem(FILE_SIDEBAR_STORE_KEY, open ? "1" : "0"); } catch (e) { /* 存不了就只管这一次 */ }
@@ -6374,7 +6375,7 @@
 
   /**
    * 「目录」那一格现在这一层的全路径（`.` 那一层就是会话目录本身）：标签的悬停提示写它
-   *（这一列头上不再写路径，进到哪一层只看这个提示，见 renderFileTabs）。
+   *（这一列头上不再写路径，进到哪一层只看这个提示）。
    */
   function fileSidebarProjectFullPath(tab) {
     const base = activeSessionCwd();
@@ -6382,6 +6383,14 @@
     if (tab.path === FILE_SIDEBAR_PROJECT_PATH) { return base; }
     const sep = base.indexOf("\\") >= 0 ? "\\" : "/";
     return base.replace(/[\\/]+$/, "") + sep + String(tab.path).replace(/\//g, sep);
+  }
+
+  /** 一个文件的写法（相对会话目录）→ 全路径：横条的悬停提示用它。 */
+  function fileSidebarFullPathOf(relPath) {
+    const base = activeSessionCwd();
+    if (!base || !relPath) { return relPath || ""; }
+    const sep = base.indexOf("\\") >= 0 ? "\\" : "/";
+    return base.replace(/[\\/]+$/, "") + sep + String(relPath).replace(/\//g, sep);
   }
 
   /** 一格标签悬停提示上的全路径：目录那一格是它现在待的那一层。 */
@@ -6396,16 +6405,16 @@
   }
 
 
-  /** 「目录」那一格在标签条上的下标（没有就是 -1）。 */
-  function fileSidebarProjectIndex() {
-    for (let i = 0; i < fileSidebar.tabs.length; i++) { if (fileSidebar.tabs[i].home) { return i; } }
-    return -1;
-  }
+  /**
+   * 这一列的两格：上面「文件」（列目录 / 看一个文件）、下面「改动」（这个会话改过哪些文件）。
+   * 两格同时露着，各滚各的（跟右边那列「项目与会话」一个摆法，见 chat.css 的 #filePanes）。
+   */
 
   /** 「文件」那一格的字段（它一开始在列清单；点开文件就变成显示文件）。 */
   function fileSidebarNewTab(path, proj) {
     return {
       path: path, home: true, proj: !!proj, dir: path, line: 0, scrollTop: 0,
+      seq: 0,        // 这一格取过几次：回来的旧回应认这个号（两格同时取，不能共用一个号）
       mtime: "", loading: false, imageUrl: "",
       page: null,    // 这一格自己那一块正文（见 fileTabPage）
       drawn: false,  // 那一块里已经有画好的内容了
@@ -6414,135 +6423,150 @@
 
   /**
    * 「改动」那一格：这个会话改过哪些文件（后端给的清单）、哪几个块是展开的、取回来的 diff。
-   * 它不像文件那样按 path 取内容，所以 path 留空；每回摆上这一格都重问一遍清单（见 showFileTab）。
+   * 它不像文件那样按 path 取内容，所以 path 留空。
    */
   function fileSidebarNewChangesTab() {
     return {
-      path: "", proj: false, change: true, line: 0, scrollTop: 0, mtime: "", loading: false, imageUrl: "",
+      path: "", proj: false, change: true, line: 0, scrollTop: 0, seq: 0,
+      mtime: "", loading: false, imageUrl: "",
       page: null,
       drawn: false,
       changes: [],      // 后端给的清单：{ path, added, removed, deleted, tooBig }
-      open: new Set(),  // 展开了哪几个文件（相对写法）
-      diffs: new Map(), // 取回来的 diff 文字（相对写法 → 文字）
     };
   }
 
   /**
-   * 把「目录」那一格摆到标签条最前面（只摆、不取内容）：这一列里没有它的时候摆。
-   * 会话目录还不认识（会话列表还没到）就先不摆，等它到了再来（见 setFileSidebarOpen 与 sessionList 那段）。
-   * @returns 摆了没有
+   * 摆上这两格（只摆、不取内容）：刚打开、切会话、刷新页面走的都是这里。
+   * 会话目录还不认识（会话列表还没到）就先不摆，留一句提示，等它到了再来（见 sessionList 那段）。
    */
-  function addProjectDirTab() {
-    if (!fileSidebar.root || fileSidebarProjectIndex() >= 0) { return false; }
-    if (!activeSessionCwd()) { return false; }
-    fileSidebar.tabs.unshift(fileSidebarNewTab(FILE_SIDEBAR_PROJECT_PATH, true));
-    if (fileSidebar.active >= 0) { fileSidebar.active++; }   // 挪下标：正看着的那一格不变
-    return true;
-  }
-
-  /** 「改动」那一格在标签条上的位置（没有就是 -1）。 */
-  function fileSidebarChangesIndex() {
-    for (let i = 0; i < fileSidebar.tabs.length; i++) { if (fileSidebar.tabs[i].change) { return i; } }
-    return -1;
-  }
-
-  /**
-   * 把「改动」那一格摆上（只摆、不取内容）：它是常驻的一格，固定在「目录」后面、
-   * 排在所有文件标签前面。会话目录还不认识就不摆（跟「目录」同一个条件）。
-   * @returns 摆了没有
-   */
-  function addChangesTab() {
-    if (!fileSidebar.root || fileSidebarChangesIndex() >= 0) { return false; }
-    if (!activeSessionCwd()) { return false; }
-    const at = fileSidebarProjectIndex() >= 0 ? fileSidebarProjectIndex() + 1 : 0;
-    fileSidebar.tabs.splice(at, 0, fileSidebarNewChangesTab());
-    if (fileSidebar.active >= at) { fileSidebar.active++; }   // 挪下标：正看着的那一格不变
-    return true;
-  }
-
-  /**
-   * 这一列开着又空着（一个标签都没有）的时候，摆上「目录」那一格并显示它：
-   * 刚打开、切会话、刷新页面走的都是这里；会话目录还没认识就留一句提示。
-   */
-  function ensureProjectDirTab() {
-    if (!fileSidebar.root || !fileSidebar.open || fileSidebar.active >= 0) { return; }
-    if (addProjectDirTab()) {
-      addChangesTab();   // 「改动」那一格跟着一起来（固定排在「目录」后面）
-      showFileTab(0, 0);
-      return;
+  function ensureFilePanes() {
+    if (!fileSidebar.root || !fileSidebar.open) { return; }
+    if (!activeSessionCwd()) { showFileNote(FILE_SIDEBAR_HINT); return; }
+    if (!fileSidebar.fileTab) {
+      fileSidebar.fileTab = fileSidebarNewTab(FILE_SIDEBAR_PROJECT_PATH, true);
+      showFileTab(fileSidebar.fileTab, 0);
     }
-    showFileNote(FILE_SIDEBAR_HINT);
-  }
-
-  /** 把现在这一格读到哪儿记进它那个标签（切走、重画之前）。 */
-  function rememberFileTabScroll() {
-    const tab = fileSidebar.tabs[fileSidebar.active];
-    if (tab && fileSidebar.body) { tab.scrollTop = fileSidebar.body.scrollTop; }
+    if (!fileSidebar.changeTab) {
+      fileSidebar.changeTab = fileSidebarNewChangesTab();
+      showChanges();
+    }
   }
 
   /**
-   * 一个标签自己那一块正文：每个标签一块，都挂在 #fileBody 下面，同一时刻只露正看着的那一块。
-   * 切标签时不动里面画好的东西（网页那个 iframe 从文档里挪一次就会重新加载），只换露不露。
+   * 一格自己那一块正文（.file-page）挂在哪儿：
+   *   · 「文件」那一格在列清单（tab.proj）→ 上面那一格（#dirPane）；
+   *   · 打开着一个文件、或者打开着一份 diff → 整列那一块滚动区（#fileBody，见 syncFileView）；
+   *   · 「改动」那一格的清单 → 下面那一格（#changePane）。
    * 一块都还没建就先建一个。
    */
   function fileTabPage(tab) {
-    if (!tab || !fileSidebar.body) { return null; }
+    if (!tab) { return null; }
+    const host = tab.change
+      ? fileSidebar.changeBody
+      : (tab.proj ? fileSidebar.dirBody : fileSidebar.body);
+    if (!host) { return null; }
     if (!tab.page) {
       tab.page = document.createElement("div");
       tab.page.className = "file-page";
-      fileSidebar.body.appendChild(tab.page);
+      host.appendChild(tab.page);
     }
     return tab.page;
   }
 
-  /** 一个标签都没开时那句提示画在哪儿（跟标签那几块同一层，只露一块）。 */
+  /** 一句提示画在哪儿（会话目录还没认识的时候）：「文件」那一格那块地方。 */
   function fileHintPage() {
-    if (!fileSidebar.body) { return null; }
+    if (!fileSidebar.dirBody) { return null; }
     if (!fileSidebar.hintPage) {
       fileSidebar.hintPage = document.createElement("div");
       fileSidebar.hintPage.className = "file-page";
-      fileSidebar.body.appendChild(fileSidebar.hintPage);
+      fileSidebar.dirBody.appendChild(fileSidebar.hintPage);
     }
     return fileSidebar.hintPage;
   }
 
+  /** 打开的那一份 diff 那一块（跟文件正文同一个地方：整列那一块；同时只会有其中一个）。 */
+  function diffPage() {
+    if (!fileSidebar.body) { return null; }
+    const d = fileSidebar.diff;
+    if (!d.page) {
+      d.page = document.createElement("div");
+      d.page.className = "file-page";
+      fileSidebar.body.appendChild(d.page);
+    }
+    return d.page;
+  }
+  /** 把打开的那份 diff 那一块撤掉（退回去、换一份、切会话都走它）。 */
+  function dropDiffPage() {
+    const d = fileSidebar.diff;
+    if (d.page && d.page.parentNode) { d.page.parentNode.removeChild(d.page); }
+    d.page = null;
+  }
+
+  /** 现在是「打开了的样子」（整列看一个文件 / 一份 diff），还是「上下两格」（两张清单）？ */
+  function fileViewing() {
+    return !!fileSidebar.diff.path || !!(fileSidebar.fileTab && !fileSidebar.fileTab.proj);
+  }
+
   /**
-   * 正文上面那条横条：只有「文件」那一格在看一个文件时露出来，左边是这个文件的写法
-   * （相对会话目录，一行放不下就省略、悬停看全），右边一颗关闭（点了回清单，见 backToFileList）。
+   * 按「打开着没有」摆版面：打开着（一个文件 / 一份 diff）就是整列那一块（#fileStage），
+   * 下面那张「改动」的清单收起来；没打开就是上下两格。横条也顺手跟着换。
+   */
+  function syncFileView() {
+    const viewing = fileViewing();
+    document.body.classList.toggle("file-view", viewing);
+    // 上面那一格（清单）悬停能看到现在待在哪一层（整列打开着的时候那一格收起来了，就不写）
+    const ft = fileSidebar.fileTab;
+    if (fileSidebar.dirBody) {
+      fileSidebar.dirBody.title = !viewing && ft && ft.proj ? fileSidebarProjectFullPath(ft) : "";
+    }
+    syncFileBar();
+  }
+
+  /**
+   * 顶上那条横条（只有「打开了的样子」才有）：左边一颗返回、右边写路径
+   * （diff 写它那个文件的写法，文件写这个文件的写法），一行放不下就省略、悬停看全。
    * 它摆在正文外面（#fileBody 是滚动的那一块），所以往下拖的时候它一直看得见。
    */
   function syncFileBar() {
     const bar = fileSidebar.bar;
     if (!bar) { return; }
-    const tab = fileSidebar.tabs[fileSidebar.active];
-    const show = !!tab && !!tab.home && !tab.proj;
-    // 角上那颗折行开关只在真看一个文件时露面：清单、「改动」那几格里没有长行可折
+    const diffPath = fileSidebar.diff.path;
+    const tab = fileSidebar.fileTab;
+    const show = !!diffPath || (!!tab && !tab.proj);
+    // 角上那颗折行开关只在真看一个文件时露面：清单、diff 里没有长行可折
     const wrapBtn = document.getElementById("fileWrap");
-    const viewingFile = !!tab && !tab.proj && !tab.change;
-    if (wrapBtn) { wrapBtn.hidden = !viewingFile; }
+    if (wrapBtn) { wrapBtn.hidden = !show || !!diffPath; }
     bar.hidden = !show;
     if (!show) { return; }
     if (fileSidebar.barName) {
-      fileSidebar.barName.textContent = tab.path;
-      fileSidebar.barName.title = fileSidebarTabFullPath(tab);
+      const rel = diffPath || tab.path;
+      fileSidebar.barName.textContent = rel;
+      fileSidebar.barName.title = fileSidebarFullPathOf(rel);
     }
   }
 
-  /** 正文里现在该画在哪儿：正看着的那个标签那一块；一个标签都没开就是这一列自己那一块。 */
-  function filePage() {
-    const tab = fileSidebar.tabs[fileSidebar.active];
-    return tab ? fileTabPage(tab) : fileHintPage();
+  /** 「文件」那一格现在该画在哪儿：手头这一格那块正文；还没摆上就是留一句提示那一块。 */
+  function filePanePage() {
+    return fileSidebar.fileTab ? fileTabPage(fileSidebar.fileTab) : fileHintPage();
   }
 
-  /** 正文里只露正看着的那一块（别的那几块留着，切回来直接摆上）。 */
-  function syncFilePages() {
-    if (!fileSidebar.body) { return; }
-    const tab = fileSidebar.tabs[fileSidebar.active];
-    const keep = tab ? fileTabPage(tab) : fileHintPage();
-    Array.prototype.forEach.call(fileSidebar.body.children, (page) => {
-      const hide = page !== keep;
-      if (page.hidden !== hide) { page.hidden = hide; }
-    });
+  /** 从那颗返回箭头 / 下拉回来：打开着 diff 就回两格，打开着一个文件就回清单。 */
+  function backFromFileView() {
+    if (fileSidebar.diff.path) { closeDiffView(); return; }
+    backToFileList();
+  }
+
+  /** 把打开的那份 diff 收起来（回到上下两格，「改动」那张清单顺手重问一遍）。 */
+  function closeDiffView() {
+    if (!fileSidebar.diff.path) { return; }
+    fileSidebar.diff.path = "";
+    dropDiffPage();
+    cancelChangeRevert();
+    syncFileView();
+    if (fileSidebar.changeTab) { fetchChanges(fileSidebar.changeTab); }
+    // 上面那格的清单刚才给 diff 让过位（见 openDiffInSidebar）：重新列一次
+    const ft = fileSidebar.fileTab;
+    if (ft && ft.proj && !ft.drawn) { showFileTab(ft, 0); }
   }
 
   /**
@@ -6561,54 +6585,20 @@
   }
 
   /**
-   * 重画标签条：常驻三格（文件 / 改动 / 后台），点名字切过去。三格都不带那颗叉。
-   * 「文件」那一格的名字一直写「文件」：看的是哪个文件，正文上面那条横条里写着（见 syncFileBar）。
+   * 把「文件」那一格摆出来（上面那格）：这一格现在是在列清单还是在看一个文件，由 tab.proj 说。
+   * @param tab 就是 fileSidebar.fileTab
+   * @param hitLine 这次链接说的那一行（1 起）；0 = 没有要停的行，回这一格上次读到的地方
    */
-  function renderFileTabs() {
-    const bar = fileSidebar.tabsEl;
-    if (!bar) { return; }
-    bar.innerHTML = "";
-    fileSidebar.tabs.forEach((tab, i) => {
-      const el = document.createElement("div");
-      el.className = "file-tab" + (i === fileSidebar.active ? " active" : "");
-      el.setAttribute("data-path", tab.path);
-      if (tab.home) { el.setAttribute("data-proj", "1"); }
-      if (tab.change) { el.setAttribute("data-changes", "1"); }
-      el.title = fileSidebarTabFullPath(tab);   // 文件那一格悬停给现在这一层 / 这个文件的全路径
-      const name = document.createElement("span");
-      name.className = "file-tab-name";
-      name.textContent = tab.home
-        ? FILE_SIDEBAR_PROJECT_NAME
-        : FILE_SIDEBAR_CHANGES_NAME;
-      el.appendChild(name);
-      el.addEventListener("click", () => showFileTab(i, 0));
-      bar.appendChild(el);
-    });
-    // 开着的标签多了会往右跑出这一列：把现在这个带进来看得见的地方
-    const active = bar.querySelector(".file-tab.active");
-    if (active) { active.scrollIntoView({ block: "nearest", inline: "nearest" }); }
-  }
-
-  /**
-   * 摆上某一个标签：标签条、正文都跟着换。
-   * @param index 哪一个标签
-   * @param hitLine 这次链接说的那一行（1 起）；0 = 没有要停的行，回这个标签上次读到的地方
-   */
-  function showFileTab(index, hitLine) {
-    const tab = fileSidebar.tabs[index];
+  function showFileTab(tab, hitLine) {
     if (!tab || !fileSidebar.body) { return; }
-    rememberFileTabScroll();
-    fileSidebar.active = index;
+    if (!tab.proj && fileSidebar.diff.path) {
+      // 要打开一个文件：打开着的 diff 让位（打开的样子只有一块地方）
+      fileSidebar.diff.path = "";
+      dropDiffPage();
+    }
     const linkLine = Number(hitLine) > 0 ? Number(hitLine) : 0;
     if (linkLine > 0) { tab.line = linkLine; }
-    renderFileTabs();
-    syncFilePages();
-    syncFileBar();
-    // 「改动」那一格不取文件内容：先摆上手上这一份，再问一遍清单（没画过就等取回来再画）
-    if (tab.change) {
-      if (tab.drawn) { fetchChanges(tab); } else { showFileNote("正在读取…"); fetchChanges(tab); }
-      return;
-    }
+    syncFileView();
     // 这一格以前画过：那一块还在，直接摆上（不必再去后端取；最多旧一个刷新节拍，
     // 下面顺手问一次「变了没」，变了就换成新的）
     if (tab.drawn) {
@@ -6626,6 +6616,85 @@
   }
 
   /**
+   * 把「改动」那一格摆出来（下面那格）：先摆上手上这一份，再问一遍清单
+   *（每回都是先摆旧的再问，看着不闪白）。
+   */
+  function showChanges() {
+    const tab = fileSidebar.changeTab;
+    if (!tab) { return; }
+    if (!tab.drawn) { showChangeNote("正在读取…"); }
+    fetchChanges(tab);
+  }
+
+  /**
+   * 把「改动」清单里某个文件的 diff 打开：跟看一个文件一样，整列都是它
+   *（顶上那条横条写着路径、左边一颗返回，见 syncFileBar），往下拖过那条线也回得来。
+   */
+  function openDiffInSidebar(item) {
+    const tab = fileSidebar.changeTab;
+    if (!tab || !item || !item.path || item.tooBig) { return; }
+    // 「文件」那一格要是正开着一个文件，先把它收回清单：打开的样子只有一块地方
+    const ft = fileSidebar.fileTab;
+    if (ft && !ft.proj) {
+      dropFileTabPage(ft);
+      ft.proj = true;
+      ft.path = ft.dir || FILE_SIDEBAR_PROJECT_PATH;
+      ft.line = 0;
+      ft.mtime = "";
+      ft.loading = false;
+      ft.scrollTop = 0;
+      ft.drawn = false;
+      releaseTabImage(ft);
+    }
+    dropDiffPage();
+    fileSidebar.diff.path = item.path;
+    syncFileView();
+    if (fileSidebar.body) { fileSidebar.body.scrollTop = 0; }
+    const page = diffPage();
+    if (!page) { return; }
+    page.scrollTop = 0;
+    const note = document.createElement("div");
+    note.className = "file-note";
+    note.textContent = "正在读取…";
+    page.innerHTML = "";
+    page.appendChild(note);
+    const path = item.path;
+    fetch(changeDiffUrl(path)).then(async (resp) => {
+      if (fileSidebar.diff.path !== path) { return; }   // 已经退回去 / 换成别的了：这条丢掉
+      const text = await readDeadResponse(resp);
+      page.innerHTML = "";
+      if (resp.status !== 200) {
+        const bad = document.createElement("div");
+        bad.className = "file-note";
+        bad.textContent = text;
+        page.appendChild(bad);
+        return;
+      }
+      page.appendChild(renderDiffBlock(null, text, ""));
+    }).catch(() => {
+      if (fileSidebar.diff.path !== path) { return; }
+      page.innerHTML = "";
+      const bad = document.createElement("div");
+      bad.className = "file-note";
+      bad.textContent = "读不出来：连不上后端。";
+      page.appendChild(bad);
+    });
+  }
+
+  /** 「改动」那一格里那句提示（还没取回来 / 取不回来）：跟文件正文里那句一个样子。 */
+  function showChangeNote(text) {
+    const page = fileTabPage(fileSidebar.changeTab);
+    if (!page) { return; }
+    const only = page.children.length === 1 ? page.firstElementChild : null;
+    if (only && only.className === "file-note" && only.textContent === text) { return; }
+    page.innerHTML = "";
+    const note = document.createElement("div");
+    note.className = "file-note";
+    note.textContent = text;
+    page.appendChild(note);
+  }
+
+  /**
    * 把一格标签自己那块正文撤掉（关掉标签、切会话时）：这一块连着里面的东西一起不要了，
    * 图那个显示地址也放掉。标签本身还留着的话（切会话）下次摆上时重读一遍。
    */
@@ -6637,8 +6706,6 @@
     tab.drawn = false;
   }
 
-  /** 点标签上那颗叉：关掉这一个。全关光后这一列不收起，留一句提示。 */
-
   /**
    * 这一列里那一段纯粹的文字（提示、看不了的原因、正在读取）；看不了但能下载时一并放上链接。
    * 已经就是这一句（连同同一个下载地址）就别再重画：跟着刷新每轮都会来报「还是看不了」，
@@ -6647,7 +6714,7 @@
    */
   function showFileNote(text, download) {
     if (!fileSidebar.body) { return; }
-    const page = filePage();
+    const page = filePanePage();
     if (!page) { return; }
     const href = download ? download.url : "";
     const only = page.children.length === 1 ? page.firstElementChild : null;
@@ -6701,9 +6768,9 @@
 
   /** 现在看着的「目录」那一格该有「上一层」这一行时，把它摆到正文最上面。 */
   function prependFileUpRow() {
-    const page = filePage();
+    const page = filePanePage();
     if (!page) { return; }
-    const row = buildFileUpRow(fileSidebar.tabs[fileSidebar.active]);
+    const row = buildFileUpRow(fileSidebar.fileTab);
     if (row) { page.insertBefore(row, page.firstChild); }
   }
 
@@ -6724,7 +6791,7 @@
    * 图片没有「链接说的那一行」可停，也不该画成一行行文字。
    */
   function renderFileImage(blob, tab) {
-    const page = filePage();
+    const page = filePanePage();
     if (!page) { return; }
     const url = URL.createObjectURL(blob);
     releaseTabImage(tab);
@@ -6777,7 +6844,7 @@
    * @param tab 正看着的「目录」那一格（它现在待在哪一层决定要不要「上一层」那一行）
    */
   function renderDirListing(listing, tab) {
-    const page = filePage();
+    const page = filePanePage();
     const body = fileSidebar.body;
     if (!page || !body) { return; }
     page.innerHTML = "";
@@ -6918,7 +6985,7 @@
    * 文档里的文件链接由文件侧边栏那段代点（见 buildFileSidebar），照旧开在这一列里。
    */
   function renderFileMarkdown(text, path) {
-    const page = filePage();
+    const page = filePanePage();
     if (!page) { return; }
     page.innerHTML = "";
     const doc = document.createElement("div");
@@ -6943,7 +7010,7 @@
    * @param path 这个文件叫什么名字（按扩展名上色用）
    */
   function renderFileText(text, hitLine, path) {
-    const page = filePage();
+    const page = filePanePage();
     if (!page) { return null; }
     page.innerHTML = "";
     const lines = String(text).split("\n");
@@ -7021,7 +7088,7 @@
    * @param force 这个文件改过了、要重载一遍：同一个地址浏览器不会自己重新取
    */
   function renderFileHtml(tab, force) {
-    const page = filePage();
+    const page = filePanePage();
     if (!page) { return; }
     const src = siteUrl(tab);
     const old = force ? null : page.querySelector("iframe.file-site");
@@ -7053,9 +7120,10 @@
    * @param linkLine 这次链接说的那一行（1 起）；0 = 没有要停的行，回这个标签上次读到的地方
    */
   function loadIntoSidebar(linkLine) {
-    const tab = fileSidebar.tabs[fileSidebar.active];
+    const tab = fileSidebar.fileTab;
     if (!tab) { return; }
-    const token = ++fileSidebar.token;
+    const token = fileSidebar.token;
+    const seq = ++tab.seq;
     if (!tab.proj && isHtmlPath(tab.path)) {
       // 网页：内容由浏览器自己按 `/site/` 那条地址去取，不走下面这个 fetch
       //（链接里带的行号在这条路上等于没带：网页里没有“第 42 行”可停）
@@ -7069,7 +7137,7 @@
     tab.loading = true;
     fetch(sidebarUrl(tab, "")).then(async (resp) => {
       tab.loading = false;
-      if (token !== fileSidebar.token) { return; }   // 已经换成别的标签了，这条回应丢掉
+      if (token !== fileSidebar.token || seq !== tab.seq) { return; }   // 换了文件 / 切了会话 / 收起：这条回应丢掉
       tab.mtime = resp.headers.get("X-File-Mtime") || "";   // 看不了时也记：跟着刷新那轮靠它省重传
       if (resp.status !== 200) {
         await showFileRefusal(resp, tab);
@@ -7112,42 +7180,27 @@
    * 哪个文件的增删行数变了，它那段 diff 就作废（下次展开时重取），没变的一直留着。
    */
   function fetchChanges(tab) {
-    const token = ++fileSidebar.token;
+    const token = fileSidebar.token;
+    const seq = ++tab.seq;
     tab.loading = true;
     fetch(changesUrl()).then(async (resp) => {
-      if (token !== fileSidebar.token) { return; }   // 换了标签 / 切了会话 / 收起：这条回应丢掉
+      if (token !== fileSidebar.token || seq !== tab.seq) { return; }   // 又问了新的一份 / 切了会话 / 收起：这条丢掉
       tab.loading = false;
       if (resp.status !== 200) {
         // 真看不了（会话不在了之类）：没画过就把后端那句话摆上；画过的留着旧的那一份
-        if (!tab.drawn) { showFileNote(await readDeadResponse(resp)); }
+        if (!tab.drawn) { showChangeNote(await readDeadResponse(resp)); }
         return;
       }
       const data = await resp.json().catch(() => null);
-      if (token !== fileSidebar.token) { return; }
+      if (token !== fileSidebar.token || seq !== tab.seq) { return; }
       const list = data && Array.isArray(data.changes) ? data.changes : [];
-      // 这一份跟前一份比：没变的文件手上那段 diff 还作数（展开了不必又去取一次）
-      const oldSig = new Map(tab.changes.map((it) => [it.path, changeSignature(it)]));
-      list.forEach((it) => {
-        if (oldSig.get(it.path) !== changeSignature(it)) { tab.diffs.delete(it.path); }
-      });
-      // 已经不在这份清单里的路径：攒着的 diff 与「展开着」都清掉（改回去又改回来时不该自己弹开）
-      const alive = new Set(list.map((it) => (it && it.path) || ""));
-      Array.from(tab.diffs.keys()).forEach((p) => { if (!alive.has(p)) { tab.diffs.delete(p); } });
-      Array.from(tab.open).forEach((p) => { if (!alive.has(p)) { tab.open.delete(p); } });
       tab.changes = list;
       drawChanges(tab);
     }).catch(() => {
       tab.loading = false;
-      if (token !== fileSidebar.token) { return; }
-      if (!tab.drawn) { showFileNote("读不出来：连不上后端。"); }
+      if (token !== fileSidebar.token || seq !== tab.seq) { return; }
+      if (!tab.drawn) { showChangeNote("读不出来：连不上后端。"); }
     });
-  }
-
-  /** 清单里一个文件的「这份 diff 还作不作数」：增删行数与删没删掉都没变就不必重取。 */
-  function changeSignature(item) {
-    if (!item) { return ""; }
-    if (item.tooBig) { return "big"; }
-    return (item.deleted ? "gone:" : "") + (Number(item.added) || 0) + ":" + (Number(item.removed) || 0);
   }
 
   /** 后端回的「看不了」那句话；连正文都读不出来就给一句兜底。 */
@@ -7161,15 +7214,15 @@
   }
 
   /**
-   * 把清单画到这一格里：一行一个文件。展开着的那几块、读到哪儿都照原样留着
-   *（来一条新改动就重画一遍，不能让人正在看的那一块跳走）。
+   * 把清单画到这一格里：一行一个文件（点了就打开那一份 diff，见 openDiffInSidebar）。
+   * 读到哪儿照原样留着（来一条新改动就重画一遍，不能让人正看的那一行跳走）。
    */
   function drawChanges(tab) {
     const page = fileTabPage(tab);
-    if (!page || !fileSidebar.body) { return; }
+    const pane = fileSidebar.changeBody;
+    if (!page || !pane) { return; }
     cancelChangeRevert();   // 重画就不是刚才那一行了：正等第二下的那一下作废
-    const showing = fileSidebar.tabs[fileSidebar.active] === tab;
-    const top = showing ? fileSidebar.body.scrollTop : tab.scrollTop;
+    const top = pane.scrollTop;
     page.innerHTML = "";
     if (tab.changes.length === 0) {
       const note = document.createElement("div");
@@ -7178,19 +7231,22 @@
       page.appendChild(note);
       tab.drawn = true;
       tab.scrollTop = 0;
-      if (showing) { fileSidebar.body.scrollTop = 0; }
-      return;
+      pane.scrollTop = 0;
+    } else {
+      tab.changes.forEach((item) => { if (item && item.path) { page.appendChild(changeRow(item)); } });
+      tab.drawn = true;
+      tab.scrollTop = top;
+      pane.scrollTop = top;
     }
-    tab.changes.forEach((item) => { if (item && item.path) { page.appendChild(changeBlock(tab, item)); } });
-    tab.drawn = true;
-    tab.scrollTop = top;
-    if (showing) { fileSidebar.body.scrollTop = top; }
+    // 正看着的那份 diff 已经不在这份清单里了（刚回滚掉 / 改回去了）：退回上下两格
+    const openPath = fileSidebar.diff.path;
+    if (openPath && !tab.changes.some((it) => it && it.path === openPath)) { closeDiffView(); }
   }
 
   const CHANGE_REVERT_TEXT = "回滚";
   const CHANGE_REVERT_TITLE = "把这个文件撤回到这个会话第一次改它之前（整份，不是只撤一次调用）";
   /**
-   * 「改动」那一格里点过「回滚」、正等第二下确认的那一个文件：再点一下才真回滚
+   * 「改动」清单里点过「回滚」、正等第二下确认的那一个文件：再点一下才真回滚
    *（跟关会话那颗叉一个规矩：第一下只把按钮换成确认的样子，几秒不动就自己收回去）。
    */
   let changeRevertPending = null;   // { path, btn, timer }
@@ -7227,27 +7283,24 @@
   }
 
   /**
-   * 清单里的一行：头一行是相对写法 + 多了几行少了几行（删掉的写「已删除」）+「回滚」，
-   * 下面那一块是它的 diff（收着的时候只是藏着，展开过就留着，不必重取）。
+   * 清单里的一行：相对写法 + 多了几行少了几行（删掉的写「已删除」）+「回滚」。
+   * 点这一行就把这个文件的 diff 打开（整列都是它，跟看一个文件一样）；
+   * 太大的文件后端不比 diff，那一行点不开，只剩「回滚」。
    */
-  function changeBlock(tab, item) {
-    const open = tab.open.has(item.path);
-    const block = document.createElement("div");
-    block.className = "change-item" + (open ? " open" : "");
-    block.setAttribute("data-path", item.path);
-    const head = document.createElement("div");
-    head.className = "change-head";
-    head.title = item.path;   // 一行放不下时悬停看全
-    // 太大的文件没有 diff 可展开（后端不比）：那一行就不摆三角、点也不开
+  function changeRow(item) {
+    const row = document.createElement("div");
+    row.className = "change-head" + (item.tooBig ? " no-diff" : "");
+    row.setAttribute("data-path", item.path);
+    row.title = item.path;   // 一行放不下时悬停看全
     if (!item.tooBig) {
       const arrow = document.createElement("span");
       arrow.className = "change-arrow";
-      head.appendChild(arrow);
+      row.appendChild(arrow);
     }
     const name = document.createElement("span");
     name.className = "change-path";
     name.textContent = item.path;
-    head.appendChild(name);
+    row.appendChild(name);
     const counts = document.createElement("span");
     counts.className = "change-counts";
     if (item.tooBig) {
@@ -7268,97 +7321,25 @@
       counts.appendChild(add);
       counts.appendChild(del);
     }
-    head.appendChild(counts);
+    row.appendChild(counts);
     const revert = document.createElement("button");
     revert.type = "button";
     revert.className = "change-revert";
     revert.textContent = CHANGE_REVERT_TEXT;
     revert.title = CHANGE_REVERT_TITLE;
     revert.addEventListener("click", (e) => {
-      e.stopPropagation();   // 别顺带把这一块展开 / 收起
+      e.stopPropagation();   // 别顺带把这一份 diff 打开
       askRevertChange(item.path, revert);
     });
-    head.appendChild(revert);
-    if (!item.tooBig) { head.addEventListener("click", () => toggleChangeBlock(tab, item.path)); }
-    block.appendChild(head);
-    if (item.tooBig) { return block; }   // 这一行只有「回滚」，没有可展开的东西
-    const body = document.createElement("div");
-    body.className = "change-body";
-    body.hidden = !open;
-    block.appendChild(body);
-    if (open) { fillChangeBody(tab, item.path, body); }
-    return block;
+    row.appendChild(revert);
+    if (!item.tooBig) { row.addEventListener("click", () => openDiffInSidebar(item)); }
+    return row;
   }
 
-  /** 点一行：展开 / 收起这一块的 diff（展开的那一下才去后端取，取过就攒着）。 */
-  function toggleChangeBlock(tab, relPath) {
-    const open = !tab.open.has(relPath);
-    if (open) { tab.open.add(relPath); } else { tab.open.delete(relPath); }
-    const block = changeBlockEl(tab, relPath);
-    if (!block) { return; }
-    block.classList.toggle("open", open);
-    const body = block.querySelector(".change-body");
-    if (body) { body.hidden = !open; }
-    if (open) { fillChangeBody(tab, relPath, body); }
-  }
-
-  /** 清单里某一个文件那一块（点开 / 填内容时按相对写法找它）。 */
-  function changeBlockEl(tab, relPath) {
-    const page = fileTabPage(tab);
-    if (!page) { return null; }
-    for (const el of page.children) {
-      if (el.getAttribute("data-path") === relPath) { return el; }
-    }
-    return null;
-  }
-
-  /** 把这一块的 diff 填进去：取过就用攒着的，没取过就问后端（一个文件只问一次）。 */
-  function fillChangeBody(tab, relPath, body) {
-    if (!body) { return; }
-    if (body.getAttribute("data-filled") === "1" || body.getAttribute("data-filled") === "loading") { return; }
-    const cached = tab.diffs.get(relPath);
-    if (cached) {
-      body.innerHTML = "";
-      body.appendChild(renderDiffBlock(null, cached, ""));
-      body.setAttribute("data-filled", "1");
-      return;
-    }
-    body.setAttribute("data-filled", "loading");
-    body.innerHTML = "";
-    const note = document.createElement("div");
-    note.className = "file-note";
-    note.textContent = "正在读取…";
-    body.appendChild(note);
-    fetch(changeDiffUrl(relPath)).then(async (resp) => {
-      if (fileSidebar.tabs.indexOf(tab) < 0) { return; }   // 切了会话、这一格没了：丢掉
-      const text = await readDeadResponse(resp);
-      body.innerHTML = "";
-      body.setAttribute("data-filled", "1");
-      if (resp.status !== 200) {
-        const bad = document.createElement("div");
-        bad.className = "file-note";
-        bad.textContent = text;
-        body.appendChild(bad);
-        return;
-      }
-      tab.diffs.set(relPath, text);
-      body.appendChild(renderDiffBlock(null, text, ""));
-    }).catch(() => {
-      body.innerHTML = "";
-      body.removeAttribute("data-filled");   // 没连上：下次展开再试
-      const bad = document.createElement("div");
-      bad.className = "file-note";
-      bad.textContent = "读不出来：连不上后端。";
-      body.appendChild(bad);
-    });
-  }
-
-  /** 后端说「改动变了」：正看着那一格就重问一遍清单（没看着不必忙，摆上时会自己重问）。 */
+  /** 后端说「改动变了」：重问一遍清单（下面那一格一直露着，不必再问看没看着）。 */
   function refreshChangesTab() {
-    const at = fileSidebarChangesIndex();
-    const tab = at >= 0 ? fileSidebar.tabs[at] : null;
-    if (!tab || fileSidebar.tabs[fileSidebar.active] !== tab) { return; }
-    fetchChanges(tab);
+    const tab = fileSidebar.changeTab;
+    if (tab) { fetchChanges(tab); }
   }
 
   /**
@@ -7371,17 +7352,15 @@
    */
   function pollActiveFile() {
     if (filePolling) { return; }               // 上一条还在路上，别越堆越多
-    const at = fileSidebar.active;
-    const tab = fileSidebar.tabs[at];
+    const tab = fileSidebar.fileTab;
     const body = fileSidebar.body;
     if (!tab || !body || tab.loading) { return; }   // 还没开文件 / 还在取：这一轮先不问
     if (tab.proj) { return; }   // 目录不跟着刷新：清单不是「正看着的那个文件」，点一下才重新列
-    if (tab.change) { return; }   // 「改动」那一格也不跟着刷新：模板变了由 changesChanged 叫它（见那条消息）
-    if (isHtmlPath(tab.path)) { pollHtmlFile(tab, at); return; }   // 网页：只问修改时间，改过才重载
+    if (isHtmlPath(tab.path)) { pollHtmlFile(tab); return; }   // 网页：只问修改时间，改过才重载
     const token = fileSidebar.token;
     filePolling = true;
     fetch(sidebarUrl(tab, tab.mtime)).then(async (resp) => {
-      if (token !== fileSidebar.token || fileSidebar.active !== at) { return; }   // 换了标签 / 切了会话 / 收起
+      if (token !== fileSidebar.token || fileSidebar.fileTab !== tab) { return; }   // 换了文件 / 切了会话 / 收起
       if (resp.status === 204) { return; }   // 没变：正文一个字节都没过来
       tab.mtime = resp.headers.get("X-File-Mtime") || "";
       if (resp.status !== 200) {
@@ -7403,12 +7382,12 @@
    * 跟着刷新那一轮里的网页：只问修改时间（HEAD），改过了才把那个 iframe 重载一遍。
    * 重载会把页面里的状态（滚动、输入、跑着的脚本）清掉，所以只有真改过才做。
    */
-  function pollHtmlFile(tab, at) {
+  function pollHtmlFile(tab) {
     if (filePolling) { return; }
     const token = fileSidebar.token;
     filePolling = true;
     fetch(siteUrl(tab), { method: "HEAD", cache: "no-store" }).then(async (resp) => {
-      if (token !== fileSidebar.token || fileSidebar.active !== at) { return; }   // 换了标签 / 切了会话 / 收起
+      if (token !== fileSidebar.token || fileSidebar.fileTab !== tab) { return; }   // 换了文件 / 切了会话 / 收起
       if (resp.status !== 200) { await showFileRefusal(resp, tab); return; }
       const mtime = resp.headers.get("X-File-Mtime") || "";
       if (mtime && mtime === tab.mtime) { return; }   // 没变：一个字都不动
@@ -7441,9 +7420,10 @@
     if (!fileSidebar.open) { fileSidebar.token++; clearPullStyles("left"); }   // 还等着的那条回应别再画进来
     syncFileSidebarLayout();
     if (fileSidebar.open) {
-      ensureProjectDirTab();   // 空着的时候先把「目录」那一格摆上（会话目录还没认识就留那句提示）
-      if (fileSidebar.active < 0) { showFileNote(FILE_SIDEBAR_HINT); }
-      else { pollActiveFile(); }   // 收起那阵子文件可能改过了：马上问一次，别等下一个节拍
+      ensureFilePanes();   // 空着的时候先把两格摆上（会话目录还没认识就留那句提示）
+      // 收起那阵子文件可能改过了：马上问一次，别等下一个节拍
+      pollActiveFile();
+      if (fileSidebar.changeTab) { fetchChanges(fileSidebar.changeTab); }
     }
   }
 
@@ -7477,27 +7457,24 @@
    */
   function prepareFileSidebar() {
     closeRightSidebarForFile();
-    addProjectDirTab();   // 第一格留给「文件」（只摆不取，排在前面）
-    if (!fileSidebar.open) { setFileSidebarOpen(true); } else { syncFileSidebarLayout(); }
+    // 开着的话它只是把两格摆好、各问一次最新内容；收着就顺手开出来
+    setFileSidebarOpen(true);
   }
 
   /**
    * 点消息流里的文件链接（或者这一列清单上的一个文件）：把那个文件取回来显示
-   *（停在链接说的那一行）。已经开着这个文件就切回它那个标签、按这次链接说的行滚过去，
-   * 不再开一个重复的标签。
+   *（停在链接说的那一行）。打开着的东西占满整列（见 syncFileView）。
    */
   function openFileInSidebar(path, line) {
     if (!fileSidebar.root || !path) { return; }
     prepareFileSidebar();
-    const at = fileSidebarProjectIndex();
-    const tab = at >= 0 ? fileSidebar.tabs[at] : null;
+    const tab = fileSidebar.fileTab;
     if (!tab) { return; }
     if (tab.proj) {
       tab.dir = tab.path;   // 从清单点进去：记住这一层，关掉文件时回到这儿
-    } else {
-      // 已经在看另一个文件：那一块正文扔掉（里面画的是上一个文件）
-      dropFileTabPage(tab);
     }
+    // 那一块正文扔掉：从清单点进去时它挂在上面那格，现在要画的在里面那一条（见 fileTabPage）
+    dropFileTabPage(tab);
     tab.proj = false;
     tab.path = path;
     tab.line = Number(line) > 0 ? Number(line) : 0;
@@ -7506,13 +7483,12 @@
     tab.scrollTop = 0;
     tab.drawn = false;
     releaseTabImage(tab);
-    showFileTab(at, line);
+    showFileTab(tab, line);
   }
 
   /** 「文件」那一格顶上那颗关闭：手头这个文件收起不看，回到刚才那一层目录。 */
   function backToFileList() {
-    const at = fileSidebarProjectIndex();
-    const tab = at >= 0 ? fileSidebar.tabs[at] : null;
+    const tab = fileSidebar.fileTab;
     if (!tab || tab.proj) { return; }
     dropFileTabPage(tab);
     tab.proj = true;
@@ -7523,7 +7499,8 @@
     tab.scrollTop = 0;
     tab.drawn = false;
     releaseTabImage(tab);
-    showFileTab(at, 0);
+    syncFileView();   // 回清单：整列那一块收起，两格回来
+    showFileTab(tab, 0);
   }
 
   /**
@@ -7536,9 +7513,8 @@
     if (!fileSidebar.root) { return; }
     const key = String(path || "").replace(/\/+$/, "") || FILE_SIDEBAR_PROJECT_PATH;
     prepareFileSidebar();
-    const at = fileSidebarProjectIndex();
-    if (at < 0) { return; }
-    const tab = fileSidebar.tabs[at];
+    const tab = fileSidebar.fileTab;
+    if (!tab) { return; }
     if (!tab.proj) {
       // 正在看文件：那块正文扔掉，回到清单模式（下面按新的一层重新列）
       dropFileTabPage(tab);
@@ -7549,7 +7525,7 @@
     tab.dir = key;
     tab.line = 0;
     tab.drawn = false;   // 换了一层：这一块里画的是上一层那份清单，作废（下面重新取）
-    showFileTab(at, 0);
+    showFileTab(tab, 0);
   }
 
   /** 上一层目录的相对写法（`dirA/sub` → `dirA`；`dirA` → `.`，就是会话目录本身）。 */
@@ -7564,13 +7540,12 @@
    *（到会话目录本身那一层就退不动了，那一行也不出现，见 buildFileUpRow）。
    */
   function goUpProjectDir() {
-    const at = fileSidebarProjectIndex();
-    const tab = at >= 0 ? fileSidebar.tabs[at] : null;
+    const tab = fileSidebar.fileTab;
     if (!tab || tab.proj !== true || tab.path === FILE_SIDEBAR_PROJECT_PATH) { return; }
     tab.path = parentDirPath(tab.path);
     tab.dir = tab.path;
     tab.drawn = false;   // 换了一层：那一块里是原来那一层的清单，作废（下面重新取）
-    showFileTab(at, 0);
+    showFileTab(tab, 0);
   }
 
   /**
@@ -7632,22 +7607,22 @@
    * 切会话：手上这一份标签（开着的文件、看的是哪一个）记在它会话名下，
    * 然后把新会话自己那一份摆出来（切回一个会话时，它的标签原样回来、内容重读一次）。
    *
-   * 正文那几块不跟着串会话：标签里的路径是相对那个会话目录写的，
+   * 两格那两块正文不跟着串会话：路径是相对那个会话目录写的，
    * 所以切走时把它们撤掉（连着网页那个 iframe、图片那个显示地址）。
    */
   function resetFileSidebarForSession() {
     if (!fileSidebar.root) { return; }
     fileSidebar.token++;
-    rememberFileTabScroll();
-    // 常驻那三格跟着会话走：一次全撤掉重建（文件那一格回到清单——上一个会话的文件不该跟过来）
-    fileSidebar.tabs.forEach(dropFileTabPage);
-    fileSidebar.tabs = [];
-    fileSidebar.active = -1;
-    fileSidebar.sessionId = activeId || null;
-    renderFileTabs();
-    syncFilePages();
+    // 两格都跟着会话走：一次全撤掉重建（上面那格回到清单——上一个会话的文件不该跟过来）
+    dropFileTabPage(fileSidebar.fileTab);
+    dropFileTabPage(fileSidebar.changeTab);
+    fileSidebar.fileTab = null;
+    fileSidebar.changeTab = null;
+    fileSidebar.diff.path = "";
+    dropDiffPage();
+    syncFileView();
     showFileNote(FILE_SIDEBAR_HINT);
-    ensureProjectDirTab();   // 开着就换成新会话的目录；收着的那就等打开时再说
+    ensureFilePanes();   // 开着就换成新会话的目录；收着的那就等打开时再说
   }
 
   /**
@@ -7698,10 +7673,10 @@
 
   // ==================== 下拉回清单（手机上的手势）====================
   //
-  // 看文件时正文已经滑到最顶上，手指再往下拖：整个这一列（标签栏 + 横条 + 正文，即 #fileSlide）
+  // 看文件时正文已经滑到最顶上，手指再往下拖：上面那一格（横条 + 正文，即 #fileSheet）
   // 跟着手指一起往下走，上面一点点露出背后那一层——要回去的那层清单，模糊的（#fileBehind）；
   // 缝里一行字写着会去哪儿。拖过那条线松手就回到那一层清单（跟横条上那颗 ← 是同一件事，
-  // 见 backToFileList），不到线就滑回去。清单、「改动」「后台」那几格不认这个手势
+  // 见 backToFileList），不到线就滑回去。清单、「改动」那一格不认这个手势
   // （它们没有“上一级”）。
   //
   // 用 touch 事件而不是 pointer：往外一拖，浏览器就拿指针事件去做它自己的手势（滚动、下拉刷新），
@@ -7729,7 +7704,7 @@
    */
   function fillFilePullBehind() {
     const behind = fileSidebar.behind;
-    const tab = fileSidebar.tabs[fileSidebar.active];
+    const tab = fileSidebar.fileTab;
     if (!behind || !tab) { return; }
     const dir = tab.dir || FILE_SIDEBAR_PROJECT_PATH;   // 跟 backToFileList 回到的是同一层
     if (behind.getAttribute("data-dir") === dir) { return; }
@@ -7858,7 +7833,7 @@
       // 真回去的那一趟：这一列当场滑回原处（那里摆的就是清单），不演回弹——再滑一下只会
       // 让那句话盖在清单前几行上。不回去的那趟才滑回去。
       release(p, !goBack);
-      if (goBack) { backToFileList(); }
+      if (goBack) { backFromFileView(); }
     };
     body.addEventListener("touchend", (e) => finish(e, false));
     body.addEventListener("touchcancel", (e) => finish(e, true));
@@ -7869,34 +7844,42 @@
     if (IN_WEBVIEW) { return; }
     const root = document.createElement("div");
     root.id = "fileSidebar";
-    // 这一列没有单独的头：标签条就在最上面那一行，「收起」那颗叉摆在它右端。
-    // 从上往下三块，为的是“下拉回清单”那个手势（见 wireFilePullBack）：
-    //   #fileHeader 最上面那一行（文件 / 改动 / 后台 那几格 + 放大镜 + 收起叉）—— 不动；
-    //   #fileStage  它底下那一片：看文件时候拉着往下走的就是这一片里的 #fileSheet
+    // 这一列跟右边那列「项目与会话」一个摆法：最上面一行是标题（文件与改动），
+    // 底下上下两格——上格「文件」（列目录 / 看一个文件）、下格「改动」（这个会话改过哪些文件），
+    // 两格同时露着、各滚各的：上格吃剩下的地方，下格按内容占高、最多 45%（见 chat.css 的 #filePanes）。
+    // 上格里面还是那三块，为的是“下拉回清单”那个手势（见 wireFilePullBack）：
+    //   #fileStage  看文件时拉着往下走的就是这一片里的 #fileSheet
     //               （写着文件路径的那条横条 + 正文），#fileBehind 是它背后那层模糊的清单；
     //   #filePullHint 缝里那行提示词：钉在最上头不跟手走，缝长多高它多高。
     root.innerHTML =
       '<div id="filePanel" class="pk-panel">' +
         '<div id="fileHeader" class="pk-header">' +
-          '<div id="fileTabs"></div>' +
+          '<span id="fileTitle" class="pk-header-title">文件与改动</span>' +
           '<button id="fileSearchBtn" type="button" title="文件搜索（Ctrl+Shift+F）" aria-label="文件搜索">' + SEARCH_ICON + '</button>' +
           '<button id="fileClose" class="pk-header-close" type="button" title="收起" aria-label="收起">' + ICONS["close-bold"] + '</button>' +
         '</div>' +
+        '<div id="filePanes" class="pk-body">' +
+          // 上格「文件」：列目录、一层层往里走（点开一个文件就整列显示，见下）
+          '<div id="dirPane"></div>' +
+          // 下格「改动」：这个会话改过哪些文件，一行一个（点一行整列看那份 diff）
+          '<div id="changePane"></div>' +
+        '</div>' +
+        // 打开的样子：一个文件 / 一份 diff，整列都是它（两格收起来，见 syncFileView）
         '<div id="fileStage">' +
-          '<div id="fileBehind"></div>' +
-          '<div id="fileSheet">' +
-            // 看文件时正文上面那条横条：左边一颗返回（回文件列表），右边写这个文件叫什么。
-            // 返回摆在最左边、画成箭头：以前它是一颗叉、钉在右角上，正好跟上面那颗收起整列的叉
-            // 上下叠成一列（两者中心只隔 28px），手指一点就点岔 —— 一个收起整列、一个退回清单。
-            '<div id="fileBar" hidden>' +
-              '<button id="fileCloseFile" type="button" title="关掉这个文件，回到文件列表" aria-label="回到文件列表">'
-                + ICONS["arrow-left"] + '</button>' +
-              '<span class="file-bar-name"></span>' +
+            '<div id="fileBehind"></div>' +
+            '<div id="fileSheet">' +
+              // 看文件时正文上面那条横条：左边一颗返回（回文件列表），右边写这个文件叫什么。
+              // 返回摆在最左边、画成箭头：以前它是一颗叉、钉在右角上，正好跟上面那颗收起整列的叉
+              // 上下叠成一列（两者中心只隔 28px），手指一点就点岔 —— 一个收起整列、一个退回清单。
+              '<div id="fileBar" hidden>' +
+                '<button id="fileCloseFile" type="button" title="关掉这个文件，回到文件列表" aria-label="回到文件列表">'
+                  + ICONS["arrow-left"] + '</button>' +
+                '<span class="file-bar-name"></span>' +
+              '</div>' +
+              '<div id="fileBody" class="pk-body"></div>' +
+              '<button id="fileWrap" type="button" aria-label="折行开关" aria-pressed="false">' + ICONS.wrap + '</button>' +
             '</div>' +
-            '<div id="fileBody" class="pk-body"></div>' +
-            '<button id="fileWrap" type="button" aria-label="折行开关" aria-pressed="false">' + ICONS.wrap + '</button>' +
-          '</div>' +
-          '<div id="filePullHint"></div>' +
+            '<div id="filePullHint"></div>' +
         '</div>' +
       '</div>' +
       // 拖宽度的那条缝：摆在面板外面（面板自己 overflow: hidden，摆在里面就被它裁掉了）
@@ -7907,8 +7890,9 @@
     document.body.appendChild(backdrop);
     fileSidebar.root = root;
     fileSidebar.header = root.querySelector("#fileHeader");
-    fileSidebar.tabsEl = root.querySelector("#fileTabs");
+    fileSidebar.dirBody = root.querySelector("#dirPane");
     fileSidebar.body = root.querySelector("#fileBody");
+    fileSidebar.changeBody = root.querySelector("#changePane");
     fileSidebar.panel = root.querySelector("#filePanel");
     fileSidebar.sheet = root.querySelector("#fileSheet");
     fileSidebar.behind = root.querySelector("#fileBehind");
@@ -7920,7 +7904,7 @@
     fileSidebar.bar = root.querySelector("#fileBar");
     fileSidebar.barName = root.querySelector("#fileBar .file-bar-name");
     fileSidebar.closeFile = root.querySelector("#fileCloseFile");
-    fileSidebar.closeFile.addEventListener("click", () => backToFileList());
+    fileSidebar.closeFile.addEventListener("click", () => backFromFileView());
     wireFileSidebarResize(fileSidebar.resize);
     wireFilePullBack();
     root.querySelector("#fileClose").addEventListener("click", () => setFileSidebarOpen(false));
@@ -7928,7 +7912,7 @@
     root.querySelector("#fileWrap").addEventListener("click", toggleFileSidebarWrap);
     backdrop.addEventListener("click", () => setFileSidebarOpen(false));
     syncFileSidebarLayout();
-    if (fileSidebar.open) { ensureProjectDirTab(); }
+    if (fileSidebar.open) { ensureFilePanes(); }
     // 拖窗口过那道门槛：常驻 / 滑入两种摆法跟着换
     window.addEventListener("resize", () => { if (fileSidebar.open) { syncFileSidebarLayout(); } });
     // 文档里那些文件链接（renderMarkdown 挂上去的）点了也开在这一列里：跟消息流里的链接同一个去处。
@@ -9924,7 +9908,7 @@
       }
       renderSessionBar();
       // 会话目录这时候才认识：这一列开着又空着的话，把「目录」那一格摆上（见票 13）
-      ensureProjectDirTab();
+      ensureFilePanes();
       // 后台任务那颗按钮：刚连上 / 重连 / 换了会话就把清单重问一份（有命令在跑就变蓝）
       syncBashTasks();
       updateSendState();
