@@ -19,7 +19,7 @@
  *
  * 只用来查性能，不动别人的环境（后端用 PICHAT_HOME 指到 dev/.scratch，用假 pi）。
  */
-const { createHarness } = require("./harness.js");
+const { createHarness, openSessionIn } = require("./harness.js");
 const { openPage, sleep } = require("./cdp.js");
 
 async function metrics(cdp) {
@@ -94,8 +94,9 @@ async function main() {
         console.log(`造了 ${pairs} 轮（约 ${Math.round((text.length + 60) * pairs / 1024)} KB）：注入用 ${injected} 毫秒，` +
             `DOM ${dom.nodes} 个元素，${dom.messages} 条消息，内容高 ${dom.paneHeight} 像素`);
 
-        // 建第二个会话（空的那个），量完再切回来
-        await page.eval(`document.getElementById("newSessionBtn").click(); return true;`);
+        // 建第二个会话（空的那个），量完再切回来。走「项目与会话」那条路：
+        // 顶条那颗加号是 /new 那套（旧的闲着就关掉），开不出第二个壳（见 harness 的 openSessionIn）
+        await openSessionIn(page, harness.cwd);
         await sleep(2000);
         const secondId = await page.eval(`return document.querySelector("#messages .session-view:not(.off) .session-pane").dataset.sessionId`);
         if (!secondId || secondId === firstId) { throw new Error("没建出第二个会话"); }

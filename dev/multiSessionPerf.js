@@ -17,7 +17,7 @@
  *
  * 只用来查性能，不动别人的环境（后端用 PICHAT_HOME 指到 dev/.scratch，用假 pi）。
  */
-const { createHarness } = require("./harness.js");
+const { createHarness, openSessionIn } = require("./harness.js");
 const { openPage, sleep } = require("./cdp.js");
 
 async function metrics(cdp) {
@@ -70,17 +70,9 @@ async function main() {
             await page.eval(`const s = document.createElement("style"); s.textContent = "*{animation:none!important}"; document.head.appendChild(s); return true;`);
         }
 
-        // 点「＋」凑够会话（每点一次都等到新壳挂出来）
-        for (let i = 1; i < sessions; i++) {
-            await page.click("#newSessionBtn");
-            const deadline = Date.now() + 20000;
-            for (;;) {
-                const has = await page.eval("return document.querySelectorAll('.session-view').length;");
-                if (has > i) { break; }
-                if (Date.now() > deadline) { throw new Error("新建会话等超时了"); }
-                await sleep(300);
-            }
-        }
+        // 凑够会话：走「项目与会话」那条路（顶条那颗加号现在是 /new 那套，旧的闲着就关掉，
+        // 开不出第二个壳，见 harness 的 openSessionIn）
+        for (let i = 1; i < sessions; i++) { await openSessionIn(page, harness.cwd); }
         const ids = await page.eval(`
             return Array.from(document.querySelectorAll(".session-view")).map(function (v) {
                 return v.querySelector(".session-pane").dataset.sessionId;

@@ -48,6 +48,26 @@ function installFakeVscode(options) {
     return fake;
 }
 
+/**
+ * 再开一个会话，旧的留着（不等后端把它关掉）。量“同时开着好几个会话”的脚本用。
+ *
+ * 顶条那颗加号现在是 pi 里 /new 那套：旧的闲着就顺手关掉、顶条上只留一格
+ * （见 chatControllerBase 里 newSession 那段），所以那些脚本不能再点那颗加号，
+ * 得走「项目与会话」里行尾那颗加号那条路（newSessionInWorkspace）——它不碰别的会话。
+ * 新壳挂出来再返回。
+ */
+async function openSessionIn(page, dir, timeoutMs = 20000) {
+    const before = await page.eval(`return document.querySelectorAll(".session-view").length;`);
+    await page.eval(`window.acquireVsCodeApi().postMessage({ type: "newSessionInWorkspace", path: ${JSON.stringify(dir)} }); return true;`);
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+        const now = await page.eval(`return document.querySelectorAll(".session-view").length;`);
+        if (now > before) { return; }
+        if (Date.now() > deadline) { throw new Error("新会话的壳没挂出来（path=" + dir + "）"); }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+}
+
 /** 调试会话的工作目录：没有就建一个，顺便放两个小文件，好在界面上试"读文件 / 改文件"这类工具卡片。 */
 function ensureScratchDir(dir) {
     fs.mkdirSync(dir, { recursive: true });
@@ -208,4 +228,4 @@ function createHarness(options = {}) {
     };
 }
 
-module.exports = { createHarness, ensureScratchDir, repoRoot, MEDIA_DIR, SCRATCH_DIR, SCRATCH_PICHAT_DIR };
+module.exports = { createHarness, ensureScratchDir, openSessionIn, repoRoot, MEDIA_DIR, SCRATCH_DIR, SCRATCH_PICHAT_DIR };

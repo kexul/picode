@@ -15,7 +15,7 @@
  *
  * 只用来查性能，不动别人的环境（后端用 PICHAT_HOME 指到 dev/.scratch，用假 pi）。
  */
-const { createHarness } = require("./harness.js");
+const { createHarness, openSessionIn } = require("./harness.js");
 const { openPage, sleep } = require("./cdp.js");
 
 function buildText(bytes) {
@@ -94,14 +94,15 @@ async function main() {
         await fill(firstId, "A");
         await sleep(2500);
 
-        await page.eval(`document.getElementById("newSessionBtn").click(); return true;`);
+        // 顶条那颗加号是 /new 那套（旧的闲着就关掉），要两个壳得走「项目与会话」那条路
+        await openSessionIn(page, harness.cwd);
         await sleep(2500);
         const secondId = await page.eval(`return document.querySelector("#messages .session-view:not(.off) .session-pane").dataset.sessionId`);
         if (!secondId || secondId === firstId) { throw new Error("没建出第二个会话"); }
         await fill(secondId, "B");
         // 再开几个空会话（会话清单重的时候，切一下要处理的列表和界面更多）
         for (let i = 0; i < extra; i++) {
-            await page.eval(`document.getElementById("newSessionBtn").click(); return true;`);
+            await openSessionIn(page, harness.cwd);
             await sleep(1200);
         }
         // 回到第一个会话（从它开始划）：走后端那条真路，不然后端记的“这块屏在看哪个”
