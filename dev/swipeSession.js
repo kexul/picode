@@ -14,6 +14,9 @@
 const LOOK = `
     const views = Array.from(document.querySelectorAll(".session-view"));
     const shown = views.filter((v) => !v.classList.contains("off"));
+    const panelEl = document.getElementById("pickerPanel");
+    const fileEl = document.getElementById("fileSidebar");
+    const drawer = panelEl.style.transform || fileEl.style.transform || "-";
     return {
         active: shown.length === 1 ? shown[0].dataset.sessionId : "(" + shown.length + " 个露着)",
         title: (document.querySelector(".session-view:not(.off) .msg.user") || {}).innerText || "(空会话)",
@@ -23,6 +26,7 @@ const LOOK = `
         swiping: document.getElementById("messages").classList.contains("swiping"),
         panel: document.getElementById("pickerOverlay").classList.contains("hidden") ? "关" : "开",
         file: document.body.classList.contains("file-open") ? "开" : "关",
+        drawer: drawer,
         moved: views
             .filter((v) => v.style.transform)
             .map((v) => "…" + v.dataset.sessionId.slice(-4) + ":" + v.style.transform.replace("translateX(", "").replace(")", "")),
@@ -34,7 +38,8 @@ module.exports = async (page) => {
         const r = JSON.parse(await page.eval(`const f = function () { ${LOOK} }; return JSON.stringify(f());`));
         console.log(`${label}\n    正在看：…${r.active.slice(-4)}「${r.title.trim().slice(0, 20)}」` +
             `　壳 ${r.views} 个（露着 ${r.shown} 个）` +
-            `\n    截边(swiping)：${r.swiping}　侧边栏：项目与会话 ${r.panel} / 文件 ${r.file}　位移：${JSON.stringify(r.moved)}`);
+            `\n    截边(swiping)：${r.swiping}　侧边栏：项目与会话 ${r.panel} / 文件 ${r.file}　抽屉位置：${r.drawer}` +
+            `　位移：${JSON.stringify(r.moved)}`);
         return r;
     };
     const touch = (type, x, y) => page.cdp.send("Input.dispatchTouchEvent", {
@@ -164,47 +169,56 @@ module.exports = async (page) => {
         return true;
     `).catch(() => {});
 
-    // 6. 最右那一格再往左划：不再绕到第一格，跟着拉一小段、松手把「项目与会话」滑进来
+    // 6. 最右那一格再往左划：不再绕到第一格，改成把「项目与会话」跟手拉出来
     await page.click('#sessionBar .sn-tab[data-idx="2"]');
     await page.sleep(600);
     const atLast = await look("切到最右那一格");
     if (atLast.idx !== "2") { throw new Error("没切到最右那一格：" + JSON.stringify(atLast)); }
-    await drag(cx + 60, cy, cx - 160, cy, 8, async () => {
+    const pulledOf = (tr) => Math.abs(parseFloat(String(tr).replace(/[^0-9.\-]/g, "")) || 0);
+    await drag(cx + 60, cy, cx - 200, cy, 10, async () => {
         const half = await look("最右那个再往左划到一半（还没松手）");
-        // 没有下一个会话跟着进来，只有正在看的这个被拉开一小段（而且拉不多）
-        const pulled = Math.abs(parseFloat((half.moved[0] || "x:0").split(":")[1]) || 0);
-        console.log((half.moved.length === 1 && pulled > 4 && pulled < box.w * 0.4)
-            ? "    ✓ 只有一个壳被拉开一小段" : "    ✗ 到头的拉法不对");
+        // 会话那排不动，倒是右边那块面板跟着手指出来了（还差一截没到位）
+        console.log((half.moved.length === 0 && half.panel === "开" && pulledOf(half.drawer) > 10 && pulledOf(half.drawer) < box.w * 0.9)
+            ? "    ✓ 会话没挪，右边那块侧边栏跟手出来了一截" : "    ✗ 到头那一下的跟手不对");
         await page.shot("swipe-edge-half.png");
     });
     await page.sleep(700);
     const edgeRight = await look("最右那个往左划完、松手");
-    console.log(edgeRight.panel === "开" && edgeRight.active === atLast.active && edgeRight.moved.length === 0
-        ? "    ✓ 没换会话，右边的「项目与会话」滑进来了"
-        : "    ✗ 滑到头该开右边的侧边栏");
+    console.log(edgeRight.panel === "开" && edgeRight.active === atLast.active && edgeRight.moved.length === 0 &&
+        pulledOf(edgeRight.drawer) < 1
+        ? "    ✓ 没换会话，右边的「项目与会话」收到位了"
+        : "    ✗ 滑到头该把右边的侧边栏拉出来");
     await page.shot("swipe-edge-panel.png");
     await page.eval('document.getElementById("pickerOverlay").click(); return true;');
     await page.sleep(600);
+    const closed = await look("点遮罩收起来");
+    console.log(closed.panel === "关" && closed.drawer === "-" ? "    ✓ 收得干净（临时样式也摘了）" : "    ✗ 收起后还留着抽屉的位置");
 
-    // 7. 只慢慢拉一小截（没过线又没甩）：弹回去，什么也不开
-    await slowDrag(cx + 60, cy, cx + 20, cy, 5, 70);
-    await page.sleep(700);
+    // 7. 只慢慢拉一小截（没过线又没甩）：滑回去，什么也不开
+    await slowDrag(cx + 60, cy, cx + 30, cy, 6, 70);
+    await page.sleep(800);
     const edgeTiny = await look("最右那个只慢慢往左拉一小截");
     console.log(edgeTiny.panel === "关" && edgeTiny.active === atLast.active && edgeTiny.moved.length === 0
-        ? "    ✓ 没开侧边栏，对话弹回去了"
-        : "    ✗ 拉得不够也开了 / 没弹回去");
+        ? "    ✓ 没开侧边栏，抽屉滑回去了"
+        : "    ✗ 拉得不够也开了 / 没滑回去");
 
     // 8. 最左那一格再往右划：把左边的文件侧边栏滑进来
     await page.click('#sessionBar .sn-tab[data-idx="0"]');
     await page.sleep(600);
     const atFirst = await look("切到最左那一格");
     if (atFirst.idx !== "0") { throw new Error("没切到最左那一格：" + JSON.stringify(atFirst)); }
-    await drag(cx - 60, cy, cx + 160, cy);
+    await drag(cx - 60, cy, cx + 200, cy, 10, async () => {
+        const half = await look("最左那个再往右划到一半（还没松手）");
+        console.log((half.moved.length === 0 && half.file === "开" && pulledOf(half.drawer) > 10 && pulledOf(half.drawer) < box.w * 0.9)
+            ? "    ✓ 会话没挪，左边那一列跟手出来了一截" : "    ✗ 往右划到头那一下的跟手不对");
+        await page.shot("swipe-edge-file-half.png");
+    });
     await page.sleep(700);
     const edgeLeft = await look("最左那个往右划完、松手");
-    console.log(edgeLeft.file === "开" && edgeLeft.active === atFirst.active && edgeLeft.moved.length === 0
-        ? "    ✓ 没换会话，左边的文件侧边栏滑进来了"
-        : "    ✗ 滑到头该开左边的文件侧边栏");
+    console.log(edgeLeft.file === "开" && edgeLeft.active === atFirst.active && edgeLeft.moved.length === 0 &&
+        pulledOf(edgeLeft.drawer) < 1
+        ? "    ✓ 没换会话，左边的文件侧边栏拉出来了"
+        : "    ✗ 滑到头该把左边的文件侧边栏拉出来");
     await page.shot("swipe-edge-file.png");
 
     console.log(`\n页面报错：${page.pageErrors.length ? JSON.stringify(page.pageErrors.slice(0, 5)) : "无"}`);

@@ -4889,14 +4889,14 @@
   // 位置滑完那一小段（见 mountActiveSession 开头那段）。
   //
   // 走的是主会话：派出去的子会话跳过（顶条那一排摆的也是主会话）。走到头不绕回来了 ——
-  // 最右那一个再往左划、最左那一个再往右划，没有下一个会话可换，改成“拉到那一侧的侧边栏”：
-  // 窄窗里手指还能跟着拉一小段（越拉越沉），松手把那一侧的侧边栏滑进来、对话弹回原位；
-  // 宽窗里那两块是常驻的，没有“滑进来”这回事，滑到头就当没这一趟。
+  // 最右那一个再往左划、最左那一个再往右划，没有下一个会话可换，改成把那一侧的侧边栏跟手
+  // 拉出来（右：项目与会话 / 左：文件侧边栏，见下面 drawerPullBegin）；宽窗里那两块是常驻的，
+  // 没有“拉出来”这回事，滑到头就当没这一趟。
   const SWIPE_LOCK_PX = 6;       // 横向动这么多就认成“左右划”（快划时那段“没反应”就是它，越小越跟手）
   const SWIPE_CANCEL_PX = 10;    // 竖着动这么多、而且比横向多：这是滚动，这一趟不管了
   const SWIPE_FINISH_MS = 180;   // 松手后滑完的那一小段
   const SWIPE_WAIT_MS = 1500;    // 松手后等后端回话的耐心（回话迟了就先弹回去）
-  const SWIPE_EDGE_MAX = 0.22;   // 到头了还能拉动多少（占屏宽的比例，越拉越沉、拉不过这个数）
+  const DRAWER_SLIDE_MS = 170;   // 松手后那块侧边栏滑完剩下那一点（跟样式表里那两条滑入动画一样长）
 
   function swipeWidth() { return messagesEl.clientWidth || window.innerWidth || 320; }
 
@@ -4917,25 +4917,130 @@
   }
 
   /**
-   * 划到头那一下的位移：拉得越远越沉，最多拉到 SWIPE_EDGE_MAX 那么多就几乎不动了
-   *（跟“这一侧到头了、再往后是另一块面板”的手感对上，也提示到这儿还有东西）。
-   */
-  function swipeEdgeOffset(dx, width) {
-    const cap = width * SWIPE_EDGE_MAX;
-    const moved = cap * (1 - Math.exp(-Math.abs(dx) / (cap * 1.5)));
-    return (dx < 0 ? -1 : 1) * moved;
-  }
-
-  /**
-   * 划到头时这一侧能滑进来哪一块侧边栏（空串 = 这一侧没有）。
-   * 往左划（next）进来的是右边那块「项目与会话」，往右划（prev）进来的是左边的文件侧边栏。
-   * 宽窗里那两块是常驻的一列，不滑入：这时返回空串（滑到头什么也不发生）。
-   * 插件里的对话面板没有文件侧边栏（见 buildFileSidebar），那边往右划到头也一样什么也不发生。
+   * 划到头时这一侧能拉出来哪一块侧边栏（空串 = 这一侧没有，滑到头就当没这一趟）。
+   * 往左划（next）是右边那块「项目与会话」，往右划（prev）是左边的文件侧边栏。
+   * 宽窗里那两块是常驻的一列，不滑入；已经开着的也不用再拉（窄窗的桌面窗口里它只盖住一半，
+   * 对话还在旁边）。插件里的对话面板没有文件侧边栏（见 buildFileSidebar）。
    */
   function swipeEdgeSidebar(dir) {
-    if (dir === "next") { return sidebarWide() ? "" : "right"; }
-    if (!fileSidebar.root || fileSidebarWide()) { return ""; }
+    if (drawerPull || Date.now() < drawerClosingUntil) { return ""; }
+    if (dir === "next") { return (sidebarWide() || pickerModalOpen()) ? "" : "right"; }
+    if (!fileSidebar.root || fileSidebarWide() || fileSidebar.open) { return ""; }
     return "left";
+  }
+
+  // ==================== 划到头：把那一侧的侧边栏跟手拉出来 ====================
+  // 窄窗里这两块本来就是从边上滑进来的（见 chat.css 的 pk-drawer-in / file-drawer-in），
+  // 只不过平时那一段是 170 毫秒自己跑完的。划到头的时候位置归手指管：滑入那段动画先关掉
+  //（.pk-pulling / body.file-pulling），面板跟着手指 1:1 挪出来、遮罩跟着浓；松手过了线
+  // 就把剩下那一点滑完、收住，没过线就滑回去、收起来。
+  //
+  // 内容是各自本来那一套去要的：右边那块跟点 <<< 一样发一条 openWorkspace（后端要扫一眼磁盘，
+  // 回来之前拉的是一块空面板），左边那块跟点顶条那颗按钮一样先开出来、再取目录。
+  /** 正跟着手指拉的那块侧边栏（见下面 begin / place / finish）。 */
+  let drawerPull = null;
+  /** 滑回去那一段还没走完（到这一刻为止不接新的一趟，不然那一条收尾会把新的一趟收掉）。 */
+  let drawerClosingUntil = 0;
+
+  /** 认成“到头了”：把那一块露出来、摆到屏幕外那个位置，等手指来拉。 */
+  function drawerPullBegin(kind) {
+    let el = null;
+    let sign = 1;
+    let backdrop = null;
+    if (kind === "right") {
+      // 内容先要去（跟点 <<< 那条路一样）；回来之前先拉的是一块空面板
+      if (!pickerModalOpen()) {
+        emptyWorkspace = "";
+        vscode.postMessage({ type: "openWorkspace", expanded: expandedDirsForHost() });
+      }
+      closeFileSidebarForRightSidebar();
+      const root = modalView.root;
+      root.classList.remove("hidden");
+      root.classList.add("pk-drawer", "pk-workspace", "pk-pulling");
+      if (modalView.title) { modalView.title.textContent = "项目与会话"; }
+      el = modalView.panel;
+      sign = 1;
+    } else {
+      // 这一列开出来（目录那一格、内容照旧由那一套去要），只是滑入那段动画这会儿归手指管
+      prepareFileSidebar();
+      document.body.classList.add("file-pulling");
+      el = fileSidebar.root;
+      sign = -1;
+      backdrop = document.getElementById("fileBackdrop");
+    }
+    const w = el ? el.getBoundingClientRect().width : 0;
+    drawerPull = { kind, el, w, sign, backdrop, t0: Date.now(), pulled: 0 };
+    drawerPullPlace(0);
+  }
+
+  /** 跟着手指摆：pulled = 已经从边上拉出来多少像素（1:1 跟手，拉过一整块的宽度就不再往里）。 */
+  function drawerPullPlace(pulled) {
+    const d = drawerPull;
+    if (!d || !d.el) { return; }
+    d.pulled = Math.max(0, Math.min(d.w, pulled));
+    const rest = d.w - d.pulled;   // 还差多少没露出来
+    d.el.style.transition = "none";
+    d.el.style.transform = "translateX(" + (d.sign > 0 ? rest : -rest) + "px)";
+    const p = d.w > 0 ? d.pulled / d.w : 1;
+    if (d.kind === "right") {
+      // 遮罩就是这一层自己的背景色：只改颜色，不动 opacity（那会把面板一起弄淡）
+      modalView.root.style.backgroundColor = "rgba(0, 0, 0, " + (0.45 * p).toFixed(3) + ")";
+    } else if (d.backdrop) {
+      d.backdrop.style.opacity = String(p);
+    }
+  }
+
+  /** 松手：拉过四成（或者甩得快）就把这块面板收下来，不够就滑回去。 */
+  function drawerPullPast() {
+    const d = drawerPull;
+    if (!d || !d.w) { return false; }
+    const ms = Math.max(1, Date.now() - d.t0);
+    return d.pulled >= d.w * 0.4 || (d.pulled >= 40 && d.pulled / ms >= 0.5);
+  }
+
+  /** 松手：commit = 收下来（滑完剩下那一点），否则滑回屏幕外、收起来。 */
+  function drawerPullFinish(commit) {
+    const d = drawerPull;
+    drawerPull = null;
+    if (!d || !d.el) { return; }
+    d.el.style.transition = "transform " + DRAWER_SLIDE_MS + "ms ease-out";
+    d.el.style.transform = "translateX(" + (commit ? 0 : d.sign * d.w) + "px)";
+    if (!commit) { drawerClosingUntil = Date.now() + DRAWER_SLIDE_MS + 60; }
+    if (d.kind === "right") {
+      modalView.root.style.backgroundColor = commit ? "" : "rgba(0, 0, 0, 0)";
+    } else if (d.backdrop) {
+      d.backdrop.style.opacity = commit ? "" : "0";
+    }
+    setTimeout(() => {
+      if (commit) {
+        // 站住了：位置钉在 0（用 inline 钉着，别让样式表里那段滑入动画再跑一遍，见 clearPullStyles）
+        d.el.style.transition = "";
+        d.el.style.transform = "translateX(0px)";
+        return;
+      }
+      // 滑回去了：这会儿再收起来（收起那一下会顺手把这一趟的临时样式摘掉）。
+      // 内容还在路上的那趟也得收得掉（state 还是空的，见 closePickerAnyway）。
+      if (d.kind === "right") { closePickerAnyway(); } else { setFileSidebarOpen(false); }
+      drawerClosingUntil = 0;
+    }, DRAWER_SLIDE_MS + 30);
+  }
+
+  /** 拉出来的那一趟留下的临时样式（位移、遮罩、临时关掉的滑入动画）：收起时一并摘掉。 */
+  function clearPullStyles(kind) {
+    if (kind === "left") {
+      document.body.classList.remove("file-pulling");
+      if (fileSidebar.root) {
+        fileSidebar.root.style.transition = "";
+        fileSidebar.root.style.transform = "";
+      }
+      const backdrop = document.getElementById("fileBackdrop");
+      if (backdrop) { backdrop.style.opacity = ""; }
+      return;
+    }
+    modalView.root.classList.remove("pk-pulling");
+    modalView.root.style.backgroundColor = "";
+    modalView.panel.style.transition = "";
+    modalView.panel.style.transform = "";
   }
 
   /** 一节样式里的位移一改就要滑一小段：给它挂上过渡。 */
@@ -4989,21 +5094,10 @@
   }
 
   /**
-   * 划到头了：没有要进来的壳，只有正在看的这个被拉开一段。
-   * 要做的跟 swipeBegin 一样 —— 把这个壳从过渡手里拿出来、别让越出去的那点把整页撑出横向滚动条。
+   * 划到头了：没有要进来的壳，那一侧的侧边栏跟着手指拉出来（见 drawerPullBegin）。
    */
   function swipeBeginEdge(s) {
-    s.fromView.style.transition = "none";
-    messagesEl.classList.add("swiping");
-    edgePullBegin(s.dir);
-    if (s.finger === "mouse") { dropSelection(); }
-  }
-
-  // 到头那一下给那个壳挂的类（样式见 chat.css 的 #messages.edge-pull-*）：
-  // 白底挪白底，光看位移几乎看不出来（挪出去的那半屏也是白的），它旁边那道阴影才是“再拉有东西”的提示。
-  function edgePullBegin(dir) {
-    messagesEl.classList.remove("edge-pull-next", "edge-pull-prev");
-    messagesEl.classList.add(dir === "next" ? "edge-pull-next" : "edge-pull-prev");
+    drawerPullBegin(s.edge);
   }
 
   /** 跟着手指摆：正在看的那个挪 eff，进来的那个紧贴在它旁边（隔一个整屏）。 */
@@ -5020,33 +5114,13 @@
     return dist >= Math.max(72, s.width * 0.3) || (dist >= 36 && dist / ms >= 0.5);
   }
 
-  /**
-   * 划到头松手：够远（或者甩得快）就把那一侧的侧边栏滑进来。
-   * 门槛比正常切会话低一点：拉开那一段已经被阻力压小了，手底看不到真实挪了多少，只能靠“想不想拉”。
-   */
-  function swipePastEdge(s) {
-    const dist = Math.abs(s.dx);
-    const ms = Math.max(1, Date.now() - s.t0);
-    return dist >= Math.max(48, s.width * 0.18) || (dist >= 28 && dist / ms >= 0.4);
-  }
-
-  /**
-   * 不切了：这一趟摆出去的样子滑回原位，进来的那个重新藏起来。
-   * 划到头那一趟（没有要进来的壳，只有正在看的这个被拉开一段）也一样走这里。
-   */
+  /** 不切了：这一趟摆出去的样子滑回原位，进来的那个重新藏起来。 */
   function swipeSpringBack(p) {
     tabSwipeEnd(true);
-    if (!p || !p.fromView) { messagesEl.classList.remove("swiping"); return; }
+    if (!p || !p.fromView || !p.toView) { messagesEl.classList.remove("swiping"); return; }
     const from = p.fromView;
     const to = p.toView;
     slideTo(from, 0, SWIPE_FINISH_MS);
-    if (!to) {
-      afterSlide(from, () => {
-        clearSlideStyles(from);
-        messagesEl.classList.remove("swiping", "edge-pull-next", "edge-pull-prev");
-      });
-      return;
-    }
     slideTo(to, p.dir === "next" ? p.width : -p.width, SWIPE_FINISH_MS);
     afterSlide(to, () => {
       clearSlideStyles(from);
@@ -5097,18 +5171,17 @@
         swipeBegin(s);
         tabSwipeBegin(s);
       } else {
-        // 这一侧没有下一个主会话（到头了）。窄窗里还能往那个方向拉一小段，
-        // 松手把那一侧的侧边栏滑进来（见 swipeEnd）；宽窗里那两块是常驻的，滑到头就当没这一趟。
-        const edge = swipeEdgeSidebar(s.dir);
-        if (!edge) { swipe = null; return false; }
-        s.edge = edge;
+        // 这一侧没有下一个主会话（到头了）：那一侧的侧边栏跟着手指拉出来（见 drawerPullBegin）；
+        // 宽窗里那两块是常驻的，滑到头就当没这一趟。
+        const side = swipeEdgeSidebar(s.dir);
+        if (!side) { swipe = null; return false; }
+        s.edge = side;
         swipeBeginEdge(s);
       }
     }
     s.dx = dx;
     if (s.edge) {
-      s.eff = swipeEdgeOffset(dx, s.width);
-      slideTo(s.fromView, s.eff, 0);
+      drawerPullPlace(Math.abs(dx));
       return true;
     }
     s.eff = swipeOffset(dx, s.width);
@@ -5238,7 +5311,9 @@
   function swipeAbort() {
     const s = swipe;
     swipe = null;
-    if (s && s.lock === "x") { swipeSpringBack(s); }
+    if (!s || s.lock !== "x") { return; }
+    if (s.edge) { drawerPullFinish(false); return; }
+    swipeSpringBack(s);
   }
 
   /** 手抬起来了（或者被打断）：按位置决定切不切（取消的那种直接弹回去）。 */
@@ -5246,7 +5321,7 @@
     const s = swipe;
     swipe = null;
     if (!s || s.lock !== "x") { return; }
-    if (s.edge) { swipeEndAtEdge(s, cancelled); return; }
+    if (s.edge) { swipeEndAtEdge(cancelled); return; }
     if (cancelled || !swipePast(s)) { swipeSettleMs(s); swipeSpringBack(s); return; }
     swipeSettleMs(s);
     // 松手：一边跟后端要那个会话，一边当场把画面滑到位。
@@ -5270,14 +5345,10 @@
   }
 
   /**
-   * 划到头松手：拉得够远就把那一侧的侧边栏滑进来，同时对话滑回原位（不等那张抽屉：
-   * 它自己有自己的滑入，两边同时动）；没拉够就只弹回去。
+   * 划到头松手：拉得够远就把那一块收下来（滑完剩下那一点），不够就滑回屏幕外、收起来。
    */
-  function swipeEndAtEdge(s, cancelled) {
-    const open = !cancelled && swipePastEdge(s);
-    swipeSpringBack(s);
-    if (!open) { return; }
-    if (s.edge === "right") { toggleSidebar(); } else { toggleFileSidebar(); }
+  function swipeEndAtEdge(cancelled) {
+    drawerPullFinish(!cancelled && drawerPullPast());
   }
 
   messagesEl.addEventListener("touchend", (e) => {
@@ -5751,6 +5822,9 @@
 
   /** 收掉一块面板、把它那份状态清干净（哪一块由 view 指定，默认是浮层那份）。 */
   function hidePicker(view = modalView) {
+    // 划到头跟手拉出来的那一趟（见“划到头：把那一侧的侧边栏跟手拉出来”那段）：
+    // 收起时把它的临时样式（位移、遮罩、临时关掉的滑入动画）一并摘掉，下次点开照旧滑进来
+    if (view === modalView) { clearPullStyles("right"); }
     // 常驻那一列的几颗类写在 HTML 里（staticChrome），收起时不摘：它下次展开还要用同一套版式
     if (!view.staticChrome) {
       view.root.classList.add("hidden");
@@ -7585,7 +7659,7 @@
     if (!fileSidebar.root) { return; }
     fileSidebar.open = !!open;
     rememberFileSidebar(fileSidebar.open);
-    if (!fileSidebar.open) { fileSidebar.token++; }   // 还等着的那条回应别再画进来
+    if (!fileSidebar.open) { fileSidebar.token++; clearPullStyles("left"); }   // 还等着的那条回应别再画进来
     syncFileSidebarLayout();
     if (fileSidebar.open) {
       ensureProjectDirTab();   // 空着的时候先把「目录」那一格摆上（会话目录还没认识就留那句提示）
@@ -9030,6 +9104,16 @@
     vscode.postMessage({ type: "pickerChoice", kind, payload });
   }
 
+  /**
+   * 收起「项目与会话」那一层。手里还没有内容时（划到头刚拉出来、后端那份还在路上）也照收 ——
+   * 那会儿 state 还是空的，cancelPicker 会当“本来就没开着”直接回来，把屏上这一块留在那儿。
+   */
+  function closePickerAnyway() {
+    if (modalView.state) { cancelPicker(modalView); return; }
+    hidePicker(modalView);
+    vscode.postMessage({ type: "pickerCancel", kind: "workspace" });
+  }
+
   function cancelPicker(view = modalView) {
     const st = view.state; if (!st) { return; }
     const kind = st.kind;
@@ -9442,7 +9526,8 @@
   }
   // 点遮罩收起来：只管浮层那份（常驻那一列不靠点外面收：它不是浮层，那颗 <<< 与面板里那颗叉才管收）
   modalView.root.addEventListener("click", (e) => {
-    if (e.target === modalView.root) { cancelPicker(modalView); }
+    if (e.target !== modalView.root) { return; }
+    closePickerAnyway();
   });
   modalView.search.addEventListener("input", () => {
     if (!modalView.state) { return; }
@@ -9454,10 +9539,12 @@
   // 它开头那句“浮层开着就跳开”的判断这会儿已经被 cancelPicker 改掉了
   // （两个监听都在 document 上，按注册顺序跑，靠 stopImmediatePropagation 拦下来才管用）。
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape" || !pickerModalOpen()) { return; }
+    // 划到头刚拉出来、内容还在路上那一趟也算（那会儿 pickerModalOpen 还是 false）
+    const pulling = modalView.root.classList.contains("pk-pulling");
+    if (e.key !== "Escape" || !(pickerModalOpen() || pulling)) { return; }
     e.preventDefault();
     e.stopImmediatePropagation();
-    cancelPicker(modalView);
+    closePickerAnyway();
   });
 
 
