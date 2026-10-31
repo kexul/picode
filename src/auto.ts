@@ -89,6 +89,27 @@ export function parseAutoVerdict(reply: string): AutoVerdict {
 }
 
 /**
+ * 自动模式开着的时候替人答一张选择题（`ask_choice`）：选它自己推荐的那几项；
+ * 一个都没推荐就选第一项。单选只留一项（推荐了多项就取最靠前的那一项）。
+ *
+ * 有这个函数是因为「自动模式下问问题就当继续」：没人来点那张卡片，模型会一直等着，
+ * 所以卡片根本不发出去，直接按它推荐的那一项把答案写回去。
+ */
+export function autoAskPicks(req: { options?: unknown; multi?: unknown; recommended?: unknown }): string[] {
+    const options = (Array.isArray(req.options) ? req.options : [])
+        .filter((x): x is string => typeof x === "string" && x.trim() !== "");
+    if (options.length === 0) { return []; }
+    const want = new Set<number>();
+    for (const n of Array.isArray(req.recommended) ? req.recommended : []) {
+        const i = Math.trunc(Number(n));
+        if (Number.isFinite(i) && i >= 1 && i <= options.length) { want.add(i - 1); }
+    }
+    if (want.size === 0) { want.add(0); }
+    const picked = Array.from(want).sort((a, b) => a - b).map((i) => options[i]);
+    return req.multi === true ? picked : picked.slice(0, 1);
+}
+
+/**
  * 输入框底下那颗转圈圈图标指上去说什么（纯函数；界面直接用它当 title）。
  *
  * @param judging 这一轮正有判官在看（主会话已经跑完了）：要写出来，不然看着像卡住了。

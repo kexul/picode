@@ -180,7 +180,26 @@ module.exports = async (page) => {
     && (await ind()).hidden,
     said3.slice(-120));
 
-  // ---- 6. 命令菜单里要有 /auto 那一条 ----
+  // ---- 6. 自动模式开着时模型问的选择题（ask_choice）：卡片不弹，插件直接替你点推荐项 ----
+  // （不替你点的话倒数就卡在那张卡片上：自动模式下没人会来点它）
+  // 放在“命令菜单”那一段前面：那一段会往输入框里打 /auto 却不发出去，
+  // 留着的字会跟后面的 send 拼成一条无效命令（/auto 就打不开了）。
+  await page.send("/auto ");
+  await page.sleep(600);
+  check("（异常前提）自动模式又开了", !(await ind()).hidden, await ind());
+  const cardsBefore = await page.eval(`return document.querySelectorAll(".ask-card").length;`);
+  await page.send("问单选");   // 假模型：options ["A", "B"]，recommended [1]（也就是 A）
+  const askedReply = await page.waitAnswer("用户选了：A");
+  const cardsAfter = await page.eval(`return document.querySelectorAll(".ask-card").length;`);
+  const saidAsk = await systemSays();
+  check("自动模式下问的选择题不弹卡片，直接按它推荐的那一项作答",
+    cardsAfter === cardsBefore
+    && saidAsk.includes("自动模式：这题替你选了「A」（选 A 还是 B？）"),
+    { cardsBefore, cardsAfter, said: saidAsk.slice(-200) });
+  check("模型拿到的是「用户选了：A」", askedReply.includes("用户选了：A"), askedReply.slice(-160));
+  await page.shot("auto-ask.png");
+
+  // ---- 7. 命令菜单里要有 /auto 那一条 ----
   await page.type("/auto");
   await page.sleep(600);
   const menu = await page.eval(`

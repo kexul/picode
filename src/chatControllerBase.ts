@@ -38,6 +38,7 @@ import type { PanelLaunch, TurnEndStatus } from "./runtimeTypes";
 import type { TabaRequest, TabaSpawnRequest, TabaStopRequest } from "./tabaProtocol";
 import { TABA_DECODER } from "./tabaProtocol";
 import { ASK_DECODER } from "./askProtocol";
+import type { AskRequest } from "./askProtocol";
 import { StderrFrameSplitter } from "./piFrames";
 import { BASH_DECODER, BashTaskInfo, buildBashTaskDelivery, readBashLogTail } from "./bashProtocol";
 import {
@@ -59,6 +60,7 @@ import { noteChildSession } from "./childSessions";
 import {
     AUTO_CONTINUE_TEXT,
     MAX_AUTO_ROUNDS,
+    autoAskPicks,
     autoIndicatorTitle,
     buildAutoJudgePrompt,
     parseAutoVerdict,
@@ -1121,6 +1123,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.autoBroadcast(workerPanelId);
         this.postToSession(workerPanelId, { type: "system", text: `判官没起来（${reason}），这一轮就当继续。` });
         this.autoContinue(workerPanelId);
+    }
+
+    /**
+     * 自动模式开着时，模型问的选择题替人答：给它推荐的那几项（没推荐就第一项）。
+     * 没开自动模式、或者没选项就返回 undefined —— 那还是走正常的问话卡片。
+     */
+    protected autoAnswerAsk(req: AskRequest, sessionId?: string): string[] | undefined {
+        const rt = sessionId ? this.panels.get(sessionId) : undefined;
+        if (!rt || !this.autoGet(rt)) { return undefined; }
+        const picks = autoAskPicks(req);
+        return picks.length > 0 ? picks : undefined;
     }
 
     /** 关掉某个主会话正在跑的那个判官（暂停 / 关掉开关 / 主会话被关掉时用）。 */

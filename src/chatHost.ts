@@ -1863,6 +1863,18 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      */
     public async askQuestion(req: AskRequest, sessionId?: string): Promise<void> {
         const answerDir = this.getConfig().askDir ?? "";
+        // 自动模式开着：这题没人会来点卡片，替人答（选它推荐的那几项），
+        // 答案直接写回话文件，会话里留一句话说选了哪个；卡片不画、也不提醒。
+        const autoPicked = this.autoAnswerAsk(req, sessionId);
+        if (autoPicked && writeAskAnswer(answerDir, { id: req.id, cancelled: false, picked: autoPicked, text: "" })) {
+            if (sessionId) {
+                this.postToSession(sessionId, {
+                    type: "system",
+                    text: `自动模式：这题替你选了「${autoPicked.join("、")}」（${req.question}）`,
+                });
+            }
+            return;
+        }
         const waiting = this.askOnScreens(sessionId, {
             kind: "choice",
             question: req.question,
