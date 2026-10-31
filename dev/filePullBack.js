@@ -7,8 +7,8 @@
  * 真后端、真会话、真网页服务、真界面文件（只有模型是假的），验的是外面看得见的行为：
  *   1. 看一个文件、正文在最上头，手指往下拖：写着文件路径的那条横条 + 正文这一块（#fileSheet）
  *      跟着手指一起往下走（有阻尼，走的路比手指短），最上面那一行（标签条）不动；
- *   2. 上面那道缝里露出一层模糊的清单（#fileBehind，就是点 ← 会回去的那一层），
- *      缝里先写「继续往下拉，回清单」，拖过那条线变成「松手，回清单」；
+ *   2. 上面那道缝里露出一层清单（#fileBehind，就是点 ← 会回去的那一层）：越往下拉越清楚、
+ *      越实，过了那条线就全清楚；缝里先写「继续往下拉，回清单」，拖过那条线变成「松手，回清单」；
  *   3. 松手过线：回到刚才那一层清单（横条收起来、清单那一行行出来）；
  *   4. 不到线松手、或者拖着拖着又推回去：那一块滑回原处，还留在文件上；
  *   5. 正文不在最上头（往下滚过一段）时下拉：不算这个手势，还是普通滚动；
@@ -53,12 +53,15 @@ module.exports = async (page) => {
         const body = document.getElementById("fileBody");
         const stageTop = stage.getBoundingClientRect().top;
         const behindShown = getComputedStyle(behind).display !== "none";
+        const behindStyle = getComputedStyle(behind);
         return JSON.stringify({
             sheetTop: Math.round(sheet.getBoundingClientRect().top - stageTop),
             headerTop: Math.round(header.getBoundingClientRect().top),
             behindShown: behindShown,
             behindRows: behind.querySelectorAll(".file-entry").length,
             behindHasFile: (behind.textContent || "").indexOf(${JSON.stringify(PULL_FILE)}) >= 0,
+            behindBlur: parseFloat((behindStyle.filter.match(/blur\\(([\\d.]+)px\\)/) || [0, "0"])[1]),
+            behindOpacity: Number(behindStyle.opacity),
             hintHeight: Math.round(hint.getBoundingClientRect().height),
             hintText: hint.textContent,
             armed: hint.classList.contains("armed"),
@@ -132,6 +135,9 @@ module.exports = async (page) => {
     check("缝里先写「继续往下拉，回清单」",
         half.hintText === "继续往下拉，回清单" && half.hintHeight > 0 && !half.armed,
         JSON.stringify({ text: half.hintText, h: half.hintHeight }));
+    check("还没过线：背后那层清单还糊着、还淡着",
+        half.behindBlur > 1 && half.behindOpacity < 0.9,
+        JSON.stringify({ blur: half.behindBlur, opacity: half.behindOpacity }));
     await page.shot("pull-0-half.png");
 
     console.log("接着拖到 160px（过线了）：");
@@ -142,6 +148,9 @@ module.exports = async (page) => {
     check("缝跟着手指张高（正好是那一块让出来的那截）",
         armed.hintHeight > 80 && armed.hintHeight === armed.sheetTop,
         JSON.stringify({ h: armed.hintHeight, sheetTop: armed.sheetTop }));
+    check("过线以后背后那层清单全清楚了（越拉越清楚）",
+        armed.behindBlur === 0 && armed.behindOpacity >= 0.99 && armed.behindBlur < half.behindBlur,
+        JSON.stringify({ blur: armed.behindBlur, opacity: armed.behindOpacity, wasBlur: half.behindBlur }));
     await page.shot("pull-1-armed.png");
 
     console.log("松手：");
