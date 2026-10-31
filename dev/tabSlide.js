@@ -66,74 +66,47 @@ module.exports = async (page) => {
         };
     `);
 
-    // ⓪ 只有两个会话（放着够宽、没挤成窄块）也要一涨一缩：向右边划回去
+    // ⓪ 手机上最常见的两格：当前这一格是大 tab、另一个挤成一颗点。滑过去时那点要真的在涨、
+    //    大 tab 在收（以前那点一直不动，松手才猛地涨开 —— 看着就是“先不动、最后跳一下”）
     await page.click("#newSessionBtn");
-    await page.sleep(1400);
-    // 两个标题故意弄成一长一短（真用起来就是这样）：这样才量得出“一涨一缩”
-    await page.eval(`
+    await page.sleep(1500);
+    const widthsAll = () => page.eval(`
         const tabs = [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden"));
-        tabs[0].querySelector(".sn-text").textContent = "短";
-        tabs[1].querySelector(".sn-text").textContent = "很长很长的一个会话标题";
-        return true;
+        return tabs.map((t) => Math.round(t.getBoundingClientRect().width));
     `);
-    await page.sleep(200);
-    const twoBefore = await widths();
+    const twoBefore = await widthsAll();
     await touch("touchStart", 80, 420);
     for (let i = 1; i <= 4; i++) {
         await touch("touchMove", 80 + 260 * (i / 8), 420);
         await page.sleep(16);
     }
-    const twoHalf = await widths();
-    console.log("  ⓪ 两个会话、划到一半：之前 " + JSON.stringify(twoBefore) + " → 现在 " + JSON.stringify(twoHalf));
+    const twoHalf = await widthsAll();
     for (let i = 5; i <= 8; i++) {
         await touch("touchMove", 80 + 260 * (i / 8), 420);
         await page.sleep(16);
     }
     await touch("touchEnd", 340, 420);
-    await page.sleep(60);
-    const twoAfter = await widths();
-    await page.sleep(300);
-    const twoSettled = await widths();
-    console.log("  ⓪ 松手：60 毫秒后 " + JSON.stringify(twoAfter) + " → 到站 " + JSON.stringify(twoSettled));
-    if (!(twoHalf.当前宽 < twoBefore.当前宽)) {
-        throw new Error("两个会话划的时候，当前那一格没有收窄：" + JSON.stringify({ twoBefore, twoHalf }));
-    }
-    if (!(twoHalf.正在变宽的那格 > 0)) {
-        throw new Error("两个会话划的时候，没找到正在变宽的那一格：" + JSON.stringify(twoHalf));
-    }
-    if (!(twoAfter.当前宽 < twoSettled.当前宽 - 1) && !(twoAfter.当前宽 > twoSettled.当前宽 + 1)) {
-        throw new Error("两个会话松手那一下宽度一下跳到最终值了（该接着变）：" + JSON.stringify({ twoAfter, twoSettled }));
-    }
-
-    // 多开几个会话（挤了以后切换会重排，才有位置可滑）
-    for (let i = 0; i < 4; i++) { await page.click("#newSessionBtn"); await page.sleep(1300); }
     await page.sleep(400);
-    const before = await look("① 五个会话、当前是最后一个");
-
-    // 点最左边那一格：切过去（一边切一边采样顶条那排的位移）
-    const watched = page.eval(WATCH);
-    await page.eval(`
-        document.querySelectorAll("#sessionTabs .sn-tab")[0].click();
-        return true;
-    `);
-    const seen = await watched;
-    await page.sleep(400);
-    const after = await look("① 切完以后");
-    console.log("  ① 切的那一下出现过的平移：" + JSON.stringify(seen));
-    if (!seen.length) { throw new Error("切标签的时候顶条那排没有滑（一个平移补偿都没有）"); }
-    if (after.还在滑 || after.还挂着过渡) { throw new Error("滑完以后没清干净：" + JSON.stringify(after)); }
-    if (String(after.底色过渡).indexOf("background-color") < 0) {
-        throw new Error("底色不是渐变过去的：" + after.底色过渡);
+    const twoSettled = await widthsAll();
+    console.log("  ⓪ 两个会话：划之前 " + JSON.stringify(twoBefore) + " → 划到一半 " + JSON.stringify(twoHalf)
+        + " → 松手切完 " + JSON.stringify(twoSettled));
+    if (!(twoHalf[0] > twoBefore[0] + 1)) {
+        throw new Error("划到一半，那颗小点没有跟着涨开：" + JSON.stringify({ twoBefore, twoHalf }));
     }
-    await page.shot("tabslide-1-switched.png");
-
-    // 先把当前切到中间那一格，左右划才有两边可走（挨着切，不跨环）
-    await page.eval(`
-        const tabs = [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden"));
-        tabs[2].click();
-        return true;
+    if (!(twoHalf[1] < twoBefore[1] - 1)) {
+        throw new Error("划到一半，当前那一格没有跟着收：" + JSON.stringify({ twoBefore, twoHalf }));
+    }
+    const leftover = await page.eval(`
+        return [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => t.style.width).length;
     `);
-    await page.sleep(700);
+    if (leftover) {
+        throw new Error("松手切完之后还留着钉住的宽度：" + leftover);
+    }
+    if (!(twoSettled[0] > twoHalf[0] + 1)) {
+        throw new Error("松手那一下没有接着涨（该从手指停下的宽度接着长）：" + JSON.stringify({ twoHalf, twoSettled }));
+    }
+
+
 
     /** 给“现在的当前这一格”打个记号，一会儿看它切完落到哪一边。 */
     const markOld = () => page.eval(`
@@ -182,8 +155,9 @@ module.exports = async (page) => {
     }
     const seenSwipe = await slideSeen;
     await page.sleep(500);
+    // 这一趟不再补平移：位置完全跟着宽度走（整排居中自己会挪）。这里只把采到的打出来，
+    // 有的话是别的格子被重排了（不该有，但不算错）。
     console.log("  ② 划过去那一下出现过的平移：" + JSON.stringify(seenSwipe));
-    if (!seenSwipe.length) { throw new Error("左右划切会话时顶条那排没有跟着动"); }
     const end = await look("② 划完以后");
     if (end.还在滑 || end.还挂着过渡) { throw new Error("划完以后没清干净：" + JSON.stringify(end)); }
     const leftDir = await whereOld();
@@ -229,5 +203,36 @@ module.exports = async (page) => {
     if (back.还挂着过渡) { throw new Error("弹回去以后过渡没放开：" + JSON.stringify(back)); }
     await page.shot("tabslide-4-springback.png");
 
+    // ① 挤着的时候点另一张标签切过去：位置要滑过去、底色要淡过去。
+    //    这里用注入的会话：真会话刚建出来还在预加载，点了得等后端回话，验不稳。
+    const names = ["甲会话", "乙会话", "丙会话", "丁会话", "戊会话"];
+    const fake = names.map((name, i) => ({
+        id: "px" + i, name, cwd: "dev/.scratch", file: "", title: "", parentId: null,
+        streaming: false, loading: false, activity: "idle", activityDetail: "", piReady: true,
+        modelId: "fake/model", provider: "fake", thinkingLevel: "medium", taba: null,
+    }));
+    await page.eval(`
+        for (const m of ${JSON.stringify([{ type: "sessionList", sessions: fake }, { type: "sessionActivated", sessionId: "px4" }])}) {
+            window.postMessage(m, "*");
+        }
+        return true;
+    `);
+    await page.sleep(800);
+    const before = await look("① 五个会话、当前是最后一个");
+    const watched = page.eval(WATCH);
+    await page.eval(`
+        document.querySelectorAll("#sessionTabs .sn-tab")[0].click();
+        return true;
+    `);
+    const seen = await watched;
+    await page.sleep(400);
+    const after = await look("① 切完以后");
+    console.log("  ① 切的那一下出现过的平移：" + JSON.stringify(seen));
+    if (!seen.length) { throw new Error("切标签的时候顶条那排没有滑（一个平移补偿都没有）"); }
+    if (after.还在滑 || after.还挂着过渡) { throw new Error("滑完以后没清干净：" + JSON.stringify(after)); }
+    if (String(after.底色过渡).indexOf("background-color") < 0) {
+        throw new Error("底色不是渐变过去的：" + after.底色过渡);
+    }
+    await page.shot("tabslide-1-switched.png");
     console.log("通过");
 };

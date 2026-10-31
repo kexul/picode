@@ -1353,20 +1353,23 @@
       const oldW = widthsBefore ? widthsBefore.get(el) : undefined;
       const dx = oldLeft === undefined ? 0 : oldLeft - el.getBoundingClientRect().left;
       const grow = oldW !== undefined && Math.abs(oldW - w) >= 1;
-      if (Math.abs(dx) < 1 && !grow) { return; }
-      moves.push({ el: el, dx: dx, fromW: grow ? oldW : undefined, w: w });
+      // 宽度正在变的那两格不补位置：它俩一涨一缩，整排居中自己会跟着挪；
+      // 再叠一段平移就是“先到中间、又蹭一下”（滑动切过去时就露这一手）。
+      const useDx = !grow;
+      if ((!useDx || Math.abs(dx) < 1) && !grow) { return; }
+      moves.push({ el: el, dx: useDx ? dx : 0, fromW: grow ? oldW : undefined, w: w });
     });
     if (!moves.length) { return; }
     // 先按旧的样摆回去（位置、宽度都先按旧的来），下一帧再放开
     moves.forEach((m) => {
       m.el.style.transition = "none";
-      m.el.style.transform = "translateX(" + m.dx + "px)";
+      if (m.dx) { m.el.style.transform = "translateX(" + m.dx + "px)"; }
       if (m.fromW !== undefined) { m.el.style.width = m.fromW + "px"; }
     });
     requestAnimationFrame(() => {
       moves.forEach((m) => {
         m.el.style.transition = "transform " + TAB_SLIDE_MS + "ms ease-out, width " + TAB_SLIDE_MS + "ms ease-out";
-        m.el.style.transform = "";
+        if (m.dx) { m.el.style.transform = ""; }
         if (m.fromW !== undefined) { m.el.style.width = m.w + "px"; }
       });
     });
@@ -1402,12 +1405,27 @@
     const fromEl = activeId ? sessionTabEls.get(activeId) : null;
     const toEl = s && s.toId ? sessionTabEls.get(s.toId) : null;
     if (!fromEl || !toEl || fromEl === toEl) { return; }
+    // 放得下的时候（两个会话、名字都写着）宽度各由自己的标题长度定，换了当前也不会变 ——
+    // 这时候别去动宽度：动了就是“先变一下、松手再变回来”，看着就是整排跳一下。
+    // 只有挤成窄块（只剩一颗点的那张）才涨开 / 收回去。
+    if (!toEl.classList.contains("strip")) { return; }
     const fromW = fromEl.getBoundingClientRect().width;
     const toW = toEl.getBoundingClientRect().width;
     if (!fromW || !toW) { return; }
-    // 挤成窄块的时候，名字是收着 / 放的，得跟着淡；放得下的时候名字本来就都写着，只变宽度
-    const fade = toEl.classList.contains("strip");
-    tabSwipe = { fromEl: fromEl, toEl: toEl, toId: s.toId, fromW: fromW, toW: toW, growW: fromW, fade: fade };
+    // 它变成“当前”以后会有多宽：临时把它按“大格子”摆一下量（名字露出来、宽度交给内容），
+    // 量完立刻复原。不量的话只能拿旧的当前宽凑数，两条标题长短不一样时松手就会再缩一下 —— 那一下就是“跳”。
+    let growW = fromW;
+    const prevWidth = toEl.style.width;
+    const wasStrip = toEl.classList.contains("strip");
+    if (wasStrip) {
+      toEl.classList.remove("strip");
+      toEl.style.width = "auto";
+      growW = toEl.getBoundingClientRect().width || fromW;
+      toEl.style.width = prevWidth;
+      toEl.classList.add("strip");
+    }
+    const fade = true;
+    tabSwipe = { fromEl: fromEl, toEl: toEl, toId: s.toId, fromW: fromW, toW: toW, growW: growW, fade: fade };
     fromEl.style.width = fromW + "px";
     toEl.style.width = toW + "px";
     fromEl.classList.add("tab-shrinking");
