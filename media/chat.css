@@ -206,6 +206,10 @@
   @media (hover: none) { .sn-tab .sn-close { opacity: 0.6; } }
   .sn-tab.closing { background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 14%, transparent); }
   .sn-tab.closing .sn-close { opacity: 1; color: var(--vscode-charts-green, #3fb950); }
+  /* 左右划切会话的时候（见 chat.js 的 tabSwipeBegin）：要进来的那一格把名字露出来、
+     宽度跟着手指涨；要退场的那个跟着收。松手弹回去时给宽度补一段过渡。 */
+  .sn-tab.strip.tab-growing .sn-text { display: block; }
+  .sn-tab.tab-settling { transition: width 180ms ease-out; }
   /* 顶条挤了（见 chat.js 的 layoutSessionTabs）：除了当前这一格，别的收成一条窄块，
      只留那颗点 —— 名字、×、子会话个数都收起（名字在悬停提示里）。
      窄块一样宽、点靠左摆；每张往左压一点（压多少由 chat.js 一张一张给），

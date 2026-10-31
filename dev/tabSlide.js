@@ -75,13 +75,34 @@ module.exports = async (page) => {
     await page.shot("tabslide-1-switched.png");
 
     // ② 手机上左右划：内容区滑的同时，顶条那排也该跟着动
-    const slideSeen = page.eval(WATCH);
+    //   划到一半就量一下：要进来的那一格变宽了（名字露出来）、当前那一格收窄了
     const touch = (type, x, y) => page.cdp.send("Input.dispatchTouchEvent", {
         type,
         touchPoints: type === "touchEnd" ? [] : [{ x: Math.round(x), y: Math.round(y) }],
     });
+    const widths = () => page.eval(`
+        const tabs = [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden"));
+        const cur = tabs.find((t) => t.classList.contains("current"));
+        const grow = tabs.find((t) => t.classList.contains("tab-growing"));
+        return {
+            当前宽: cur ? Math.round(cur.getBoundingClientRect().width) : 0,
+            正在变宽的那格: grow ? Math.round(grow.getBoundingClientRect().width) : 0,
+            变宽的那格有名字: !!grow && !!grow.querySelector(".sn-text") && getComputedStyle(grow.querySelector(".sn-text")).display !== "none",
+        };
+    `);
+    const swipeBefore = await widths();
     await touch("touchStart", 340, 420);
-    for (let i = 1; i <= 8; i++) {
+    for (let i = 1; i <= 4; i++) {
+        await touch("touchMove", 340 - (340 - 80) * (i / 8), 420);
+        await page.sleep(16);
+    }
+    const swipeHalf = await widths();
+    console.log("  ② 划到一半：之前 " + JSON.stringify(swipeBefore) + " → 现在 " + JSON.stringify(swipeHalf));
+    if (!swipeHalf.变宽的那格有名字) { throw new Error("划到一半时，要进来的那一格名字没露出来"); }
+    if (!(swipeHalf.当前宽 < swipeBefore.当前宽)) { throw new Error("划到一半时，当前那一格没有收窄"); }
+    if (!(swipeHalf.正在变宽的那格 > 0)) { throw new Error("划到一半时，没找到正在变宽的那一格"); }
+    const slideSeen = page.eval(WATCH);
+    for (let i = 5; i <= 8; i++) {
         await touch("touchMove", 340 - (340 - 80) * (i / 8), 420);
         await page.sleep(16);
     }
@@ -93,6 +114,24 @@ module.exports = async (page) => {
     const end = await look("② 划完以后");
     if (end.还在滑 || end.还挂着过渡) { throw new Error("划完以后没清干净：" + JSON.stringify(end)); }
     await page.shot("tabslide-2-swipe.png");
+
+    // ③ 划一小截就松手（不到线，弹回去）：宽度得滑回原样，不留 inline 宽度
+    const widthsOf = () => page.eval(`
+        const tabs = [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden"));
+        return tabs.map((t) => t.style.width || "-");
+    `);
+    await touch("touchStart", 340, 420);
+    for (let i = 1; i <= 3; i++) {
+        await touch("touchMove", 340 - 60 * (i / 3), 420);
+        await page.sleep(16);
+    }
+    await touch("touchEnd", 280, 420);
+    await page.sleep(400);
+    const leftInline = (await widthsOf()).filter((w) => w !== "-");
+    const back = await look("③ 划一小截松手以后");
+    if (leftInline.length) { throw new Error("弹回去以后还留着钉住的宽度：" + JSON.stringify(leftInline)); }
+    if (back.还挂着过渡) { throw new Error("弹回去以后过渡没放开：" + JSON.stringify(back)); }
+    await page.shot("tabslide-3-springback.png");
 
     console.log("通过");
 };
