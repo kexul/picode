@@ -34,6 +34,11 @@
  * 注意不能写进 ~/.pi/agent/extensions/：那个目录 pi 会自动发现，
  * 你在终端里手跑的 pi 也会被换掉 bash。
  *
+ * 「放到后台」返回给模型的那段话里必须写明白「不用等」：后台命令跑完的结果只能在
+ * 这一轮的模型调用都跑完、下一次请求模型之前交进去（pi 的 steering 就是这个时机），
+ * 模型要是写个 sleep 60 干等，结果就被压在队列里陪着一起等（2026-10-31 踩过：
+ * 后台命令 21 秒就跑完了，模型 sleep 60 硬等到第 66 秒才拿到结果）。
+ *
  * 用 String.raw 包着：里面的反斜杠原样保留。
  */
 import { BASH_FRAME_PREFIX } from "./bashProtocol";
@@ -54,6 +59,18 @@ const FRAME_PREFIX = ${JSON.stringify(BASH_FRAME_PREFIX)};
 
 /** bash 工具说明里插件加的那一段（人可以在 config.json 的 prompts.toolBash 里改）。 */
 const BACKGROUND_NOTE = ${JSON.stringify(promptText(over, "toolBash"))};
+
+/**
+ * bash 工具说明末尾固定接的一句（不让人改、也不进 prompts 那套）。
+ *
+ * 为什么不写进上面的 BACKGROUND_NOTE：设置文件里的 prompts 一节只写一次，里面存着
+ * 第一次启动时的那份原文，改内置原文对已经装过的机器不生效（那些机器上一直是老话）。
+ * 而「别干等」这句一旦缺了，模型就会拿 sleep 去凑时间，结果只能在一轮跑完之后才交进来，
+ * 干等多久就白等多久（见文件开头）。这一句必须永远能送到模型眼前，所以写在代码里。
+ */
+const NO_WAIT_NOTE = "放到后台以后不用等结果：你可以接着去干别的，或者直接把这一轮说完结束；"
+    + "它跑完的结果会当成一条新消息交回本会话（开头是「后台命令 #编号 跑完了」）。"
+    + "别用 sleep 之类的命令干等，也别反复用 bash_tasks 查 —— 你干等的时候结果只能排在后面，等多久就白等多久。";
 
 /** 往 stderr 写一行暗号（插件在读）。 */
 function emit(payload: Record<string, unknown>): void {
@@ -526,7 +543,7 @@ export default function bashBridge(pi: any): void {
 
     pi.registerTool({
         ...base,
-        description: base.description + "\n\n" + BACKGROUND_NOTE,
+        description: base.description + "\n\n" + BACKGROUND_NOTE + "\n" + NO_WAIT_NOTE,
         parameters: {
             type: "object",
             properties: {
@@ -558,7 +575,10 @@ export default function bashBridge(pi: any): void {
                 lines2.push("已经在后台跑了（编号 " + bgTask.no + "）。");
                 lines2.push("命令：" + bgTask.cmd);
                 lines2.push("输出写在这儿：" + bgTask.log);
-                lines2.push("跑完会自动有人把结果告诉你；中途要看输出用 bash_tasks " + bgTask.no + "，要停用 bash_tasks " + bgTask.no + " stop。");
+                lines2.push("不用等它：你可以接着去干别的，或者直接把这一轮说完结束。");
+                lines2.push("它跑完的结果会当成一条新消息交进来（开头是「后台命令 #" + bgTask.no + " 跑完了」）。");
+                lines2.push("别用 sleep 之类的命令干等，也别反复用 bash_tasks 查 —— 你干等的时候结果只能排在后面，等多久就白等多久。");
+                lines2.push("中途要看输出用 bash_tasks " + bgTask.no + "，要停用 bash_tasks " + bgTask.no + " stop。");
                 return {
                     content: [{ type: "text", text: lines2.join("\n") }],
                     details: { backgroundNo: bgTask.no, log: bgTask.log, pid: bgTask.pid },
@@ -571,7 +591,10 @@ export default function bashBridge(pi: any): void {
             lines.push("这条命令在跑的时候被转到后台了（编号 " + task.no + "），现在还在后台接着跑。");
             lines.push("命令：" + task.cmd);
             lines.push("输出写在这儿：" + task.log);
-            lines.push("跑完会自动有人告诉你；中途要看输出用 bash_tasks " + task.no + "，要停用 bash_tasks " + task.no + " stop。");
+            lines.push("接下来不用等它：你可以接着去干别的，或者直接把这一轮说完结束。");
+            lines.push("它跑完的结果会当成一条新消息交进来（开头是「后台命令 #" + task.no + " 跑完了」）。");
+            lines.push("别用 sleep 之类的命令干等，也别反复用 bash_tasks 查 —— 你干等的时候结果只能排在后面，等多久就白等多久。");
+            lines.push("中途要看输出用 bash_tasks " + task.no + "，要停用 bash_tasks " + task.no + " stop。");
             return {
                 content: [{ type: "text", text: lines.join("\n") }],
                 details: { backgroundNo: task.no, log: task.log, pid: task.pid },
