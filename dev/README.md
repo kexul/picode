@@ -208,6 +208,11 @@ node dev/perfProbe.js --stream --prefill 24000 --cpu 4     # 模型正在流式�
 node dev/perfProbe.js --scroll 10 --prefill 24000          # 手指滑动看长会话
 node dev/perfProbe.js --batch 30                           # 打开长会话时的整屏重画
 
+# 量“同时有好几个会话在跑”时的 CPU（一台机器上常是两三个会话一起跑，屏幕上只有一个）：
+node dev/multiSessionPerf.js                             # 3 个会话一起吐字，停在同一个上
+node dev/multiSessionPerf.js --switch-every 2000         # 一边吐字一边每 2 秒切一次 tab
+node dev/multiSessionPerf.js --sessions 1                # 只有一个会话（基线）
+
 # 流式正文现在是按块切开渲染的（只重画尾巴）：改过媒体端渲染逻辑后跑一遍，
 # 逐个样例对一下“按块渲染出来的文字”跟“整段渲染的文字”是否一字不差：
 node dev/markdownBlocksCheck.js
@@ -346,6 +351,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `sidebarRedraw.js` | 验对话更新时常驻那一列的重画范围（只该动「正在对话」那一格）：整块有没有重画、下半那一格的元素与滚动有没有动、重画过后点行还准不准：`FAKEPI_TICK_MS=60 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarRedraw.js` |
 | `newSessionRedraw.js` | 验开新会话时常驻那一列的重画范围（整块一次都不该重画、下半展开的组不许坍、新会话那一行加进上半、重画过后点上下的行都还准）：`FAKEPI_TICK_MS=60 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/newSessionRedraw.js` |
 | `switchPerf.js` | 量「在会话之间切换」多少毫秒（造一个装满消息的会话，跟空会话来回切）：真按快捷键走完后端一圈的耗时 / 只塞一条 `sessionActivated` 只剩挂壳的耗时，细分到排版、算样式、长任务：`node dev/switchPerf.js --pairs 1000 --rounds 3` |
+| `multiSessionPerf.js` | 量「同时有好几个会话在跑」时界面吃多少 CPU（屏幕上只有一个，其余几个的字照样在回来）：几个会话一起投流式内容，报主线程忙（拆成脚本 / 排版 / 算样式），可以 `--switch-every 2000` 一边吐字一边切 tab、`--no-anim` 关掉循环动画、`--sessions 1` 作基线；最后验一遍切过去补画有没有漏字：`node dev/multiSessionPerf.js --switch-every 2000` |
 | `sidebarPerf.js` | 量那颗 `<<<` 打开一次多少毫秒、滑入动画有没有被顶住（长任务 / 逐帧间隔）：`npm run web:shot -- --script dev/sidebarPerf.js` |
 | `swipePerf.js` | 量「手机上左右划切会话」卡不卡：两个会话各塞一屋子消息，按下 / 跟手 / 松手三段分开报（帧间隔中位与最长、最长那帧在挪动后多久、长任务、排版与算样式各花多少），还能设设备像素比、`--cold`（要进来的那个壳没预排版）、`--extra`（多开几个会话）、`--cpu N`（主线程拖慢几倍，近似手机）、`--profile`（剖整趟）、`--css`（临时塞一段样式试别的写法）：`node dev/swipePerf.js --pairs 800 --rounds 2 --cold --dsf 3 --cpu 4 --profile` |
 | `fileSidebar.js` | 验浏览器页面左边那一列「文件侧边栏」（点消息里的文件链接之后：行号与停在那一行、标签页、跟着刷新、图片直接看、二进制与超大给下载、目录、光名字（会话碰过的文件里按名字找）、工具卡片那颗「跳转」也开在这里、看不了的几种情形、认得的几种语言带颜色（别的黑白、太大的不上色也不卡页面）、markdown 文件排好版渲染成文档（不留行号，别的文件照旧带行号）、这一列角上那颗折行开关（选过记在这台设备里），以及那条只读文件地址本身的拒绝情形）：`npm run web:shot -- --fake-pi --script dev/fileSidebar.js` |

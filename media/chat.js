@@ -2088,7 +2088,14 @@
   }
 
   // ==================== 流式渲染节流 ====================
-  function renderInterval(rawLen) {
+  // 不在屏幕上那个会话（顶条别的格 / 还没有壳的）多久重画一次。它画出来也没人看：重画一次就是
+  // 把新来的那段重新解析、把没写完那个代码块重新上色一遍，手机上这就是吐字时最贵的那一项。
+  // 几个会话一起跑时（一台机器上常常是两三个），屏幕上只有一个，其余全按这个间隔慢慢画；
+  // 切过去时补画一次（见 activateSessionView），补一次就是一次普通重画的代价。
+  // 量法：dev/multiSessionPerf.js（3 个会话一起吐字，解析+上色那一项从 13.2% 降到 7.0%）。
+  const HIDDEN_RENDER_MS = 600;
+  function renderInterval(rawLen, shown) {
+    if (shown === false) return HIDDEN_RENDER_MS;
     if (rawLen < 4000) return 0;
     if (rawLen < 16000) return 60;
     if (rawLen < 64000) return 150;
@@ -2225,7 +2232,7 @@
     const now = performance.now();
     if (st.textDirty && st.currentAssistant) {
       const raw = st.currentAssistant.raw || "";
-      const interval = renderInterval(raw.length);
+      const interval = renderInterval(raw.length, paneShown(st.paneEl));
       if (interval > 0 && now - st.lastRenderAt < interval) {
         st.rafId = requestAnimationFrame(() => flushDeltas(st));
       } else if (activeId === st.id && isSelectingIn(st.currentAssistant.el)) {
@@ -4727,6 +4734,16 @@
     const shown = sessions.get(id);
     if (shown && shown.turnDone) { shown.turnDone = false; }
     mountActiveSession();
+    // 后台那个画得稀（见 renderInterval）：切过来先把还没画出来的字补一次，别让字停在半秒前。
+    // 挪到下一帧：这一帧忙着挂壳（新挂进来的那一大块要排版一次），挤在一起白排一遍。
+    if (shown && shown.textDirty) {
+      requestAnimationFrame(() => {
+        if (activeId !== id || !shown.textDirty) { return; }
+        shown.lastRenderAt = 0;
+        cancelFlush(shown);
+        flushDeltas(shown);
+      });
+    }
     closeSaidMenu();   // 清单里排的是上一个会话说过的话：换了会话就收起来
     restoreInputState();
     reflectSessionUI();
