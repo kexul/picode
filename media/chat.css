@@ -215,11 +215,14 @@
   /* 顶条挤了（见 chat.js 的 layoutSessionTabs）：除了当前这一格，别的收成一条窄块，
      只留那颗点 —— 名字、×、子会话个数都收起（名字在悬停提示里）。
      窄块一样宽、点靠左摆；每张往左压一点（压多少由 chat.js 一张一张给），
-     越往外压得越多 —— 叠成一摞牌那样，各位只露出左边那一截。 */
+     越往外压得越多 —— 叠成一摞牌那样，各位只露出左边那一截。
+     底色跟着前景色混（浅色主题的前景是暗的、深色主题是亮的），窄块才会比顶条底暗一点或亮一点，
+     所以背景留 color-mix；左边那道阴影本来就是个黑，直接写 rgba 就行——少一层 color-mix 的计算，
+     重画（里面那颗点会呼吸）时不用再算一遍颜色。 */
   .sn-tab.strip {
     box-sizing: border-box; width: 21px; padding: 6px 0 5px 8px; gap: 0; justify-content: flex-start;
     background: color-mix(in srgb, var(--vscode-foreground) 9%, var(--vscode-editor-background));
-    box-shadow: -2px 0 3px color-mix(in srgb, #000 12%, transparent);
+    box-shadow: -2px 0 3px rgba(0, 0, 0, 0.12);
     border-radius: 6px 6px 0 0;
   }
   .sn-tab.strip:hover { background: color-mix(in srgb, var(--vscode-foreground) 16%, var(--vscode-editor-background)); }
@@ -232,6 +235,8 @@
   .sn-tab.child-running .sn-dot {
     background: var(--vscode-charts-blue, #3794ff);
     animation: pi-pulse 1.2s ease-in-out infinite;
+    /* 呼吸只改这一颗的透明度：让它自己占一层，别带着整格（连那道阴影）每帧重画一遍。 */
+    will-change: opacity;
   }
   /* 骨架里那一格在没会话时藏着（见 renderHtml / chat.js 的 sessionTabEl）：藏着的量不到宽，
      所以排这一排格时也不拿它算地方（见 chat.js 的 layoutSessionTabs）。 */
