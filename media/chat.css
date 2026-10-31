@@ -532,7 +532,7 @@
   }
   #composer:focus-within { border-color: var(--vscode-focusBorder); }
   /* 自动模式开着的时候，输入框外面那圈跑一道流光（一道亮光顺着边转一圈）。
-     做法：盒子外再铺一层 1.5px 宽的边（::before + 两层 mask 只留边），
+     做法：盒子外面再铺一层 1px 宽的细边（::before + 两层 mask 只留边，正好盖住原来那圈边框），
      亮光是一条锥形渐变（conic-gradient）里的高光，角度一路转过去。
      关掉就把这层收掉，一点开销都不留。 */
   @property --pichat-flow {
@@ -542,8 +542,8 @@
   }
   #composer.auto { border-color: rgba(63, 191, 106, 0.28); }
   #composer.auto::before {
-    content: ""; position: absolute; inset: -2.5px; box-sizing: border-box; padding: 2.5px;
-    border-radius: 16.5px; pointer-events: none;
+    content: ""; position: absolute; inset: -1px; box-sizing: border-box; padding: 1px;
+    border-radius: 15px; pointer-events: none;
     background: conic-gradient(from var(--pichat-flow),
       transparent 0 66%,
       rgba(47, 175, 95, 0.55) 78%,
