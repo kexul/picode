@@ -32,8 +32,6 @@ function dump(page) {
         const rows = [];
         const tagText = (el) => {
             const c = el.cloneNode(true);
-            // +1 小动画只是动画，不算标签文字（见 chat.js 的 popPlusOne）
-            for (const n of c.querySelectorAll(".tg-plus")) { n.remove(); }
             return c.textContent.trim().replace(/\\s+/g, " ");
         };
         for (const pane of document.querySelectorAll(".session-view:not(.off) .session-pane")) {

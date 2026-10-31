@@ -110,7 +110,7 @@ module.exports = async (page) => {
   await page.click("#autoBtn");
   await page.sleep(800);
   i = await ind();
-  check("点一下：小开关拨到右边（开着）、输入框外面那圈跑起流光", i.on && i.flow, i);
+  check("点一下：小开关拨到右边（开着）、输入框外面那圈边框变绿", i.on && i.flow, i);
   check("指上去写着「自动模式」（点一下停止）", i.title === "自动模式（点一下停止）", i.title);
   check("点一下不多出一条对话消息",
     (await page.eval(`return document.querySelectorAll(".msg.user").length;`)) === 0);
@@ -143,7 +143,7 @@ module.exports = async (page) => {
     const now = await ind();
     return { ok: now.exists && now.on === false, ...now };
   }, 90000);
-  check("判官说结束：那颗按钮回到暗色（不消失）、流光也收掉",
+  check("判官说结束：那颗按钮回到暗色（不消失）、绿边也收掉",
     stopped && stopped.ok && stopped.title === "自动模式（点一下开始）" && stopped.flow === false, stopped);
   const said2 = await systemSays();
   check("系统提示说清了为什么停", said2.includes("判官说不用继续了"), said2.slice(-160));

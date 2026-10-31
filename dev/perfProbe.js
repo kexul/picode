@@ -108,7 +108,7 @@ async function main() {
         console.log(`地址：${url}  （视口 412x915 @3x，${stream ? "流式回复中" : toSend ? "发消息后" : "什么都不做"}，量 ${seconds} 秒）`);
 
         if (autoMode) {
-            // 自动模式开着：电脑上输入框外面那圈流光一直在转（它转的是 CSS 角度，只能在主线程上算；手机上不放，见 chat.css）。
+      // 自动模式开着：输入框外面那圈边框变绿（以前那里跑一道流光，就是当年最贵的那一项，已经删了）。
             await page.eval(`document.getElementById("composer").classList.add("auto"); return true;`);
             console.log("自动模式开着");
         }

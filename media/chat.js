@@ -811,8 +811,8 @@
       pendingToolTags: new Map(),
       // 这个会话消息流里的问话卡片：卡片编号 → { el, kind, multi, picked, done }（见 renderAskCard）
       askCards: new Map(),
-      // 正在重放历史（切会话、重连、加载更早的一批）时不飘 +1：那些是老消息，不是新涨的
-      noCountPop: true,
+      // 正在重放历史（切会话、重连、加载更早的一批）：那时候的工具调用都是老消息，不写耗时（见下头 startedAt）
+      fromHistory: true,
       // 历史窗口（网页端「只发最近一段」）：顶部按钮、加载更早的暂存区等
       hasMoreHistory: false,
       _historyBtn: null,
@@ -1852,7 +1852,7 @@
     // 会把内容顶来顶去，浏览器自己那套滚动锚定在这种批量替换里也不靠谱。
     st.redrawRestore = takeScrollAnchor(st);
     st.suppressScroll = true;
-    st.noCountPop = true;
+    st.fromHistory = true;
     // 正插到一半的「加载更早」那批作废：它插进来的是旧节点，会跟这一遍对账打架
     if (st._stage) { st._stage = null; st._stageDropped = true; }
     st._historyBtn = null;
@@ -1896,7 +1896,7 @@
     // 这一遍没再来「加载更早」那条：说明这次发的是全部，按钮收掉（跟清空重画时一个结果）
     if (!rec.historyWindow) { setHistoryWindow(st, false, 0); }
     st.suppressScroll = false;
-    st.noCountPop = false;
+    st.fromHistory = false;
     syncEndHint(st);
     // 正在跑的那一条在对账开始时被收掉了：按真实状态重算一次（长命令跑着的时候它该在）
     syncRunningLine(st);
@@ -2515,7 +2515,7 @@
     tag._isError = false;
     tag._done = !running;
     // 开始时刻（重放历史里的老调用记 0，不写耗时，见 runningCalls）
-    tag._startedAt = st.noCountPop ? 0 : Date.now();
+    tag._startedAt = st.fromHistory ? 0 : Date.now();
     // 提示内容：运行中显示调用参数（输入）；结果到达后由 setTagTip 填入全部原文（输出）。
     // 带图片的结果（read 读图这类）不走提示框：结果到了会把这个标签整个换成对话里的一块图，
     // 见 mountToolImageBlock。
@@ -2556,8 +2556,7 @@
       tag.appendChild(nameEl);
       tag.appendChild(countEl);
       // 合并标签上不挂单条结果（_toolName / _resultText 那一套）：每条的数据都在 g.entries 里
-      // plusAt / plusEl：这条标签上「+1」小动画的上一次时间与正在飘的那个（见 popPlusOne）
-      g = { row, tag, nameEl, countEl, name: toolName, entries: [], plusAt: 0, plusEl: null, st };
+      g = { row, tag, nameEl, countEl, name: toolName, entries: [], st };
       tag._tipFill = (content) => fillGroupTip(g, content);
       tag._tipGroup = g;   // 提示框那边靠它看这组还在不在长（见 tipContentIsGrowing）
       attachTagTipHandlers(tag);
@@ -2577,41 +2576,16 @@
       // 无 id 的静态调用无结果事件；被中断的那条也是——结果永远不会来（见 settleInterruptedTools）
       done: !toolCallId || !!interrupted,
       // 这条从什么时候开始跑的（毫秒）：「正在跑的那一条」后面那个耗时拿它算（见 runningCalls）。
-      // 重放历史里的老调用（noCountPop）不知道它当时什么时候开始的：记 0，那种就不写耗时。
-      startedAt: st.noCountPop ? 0 : Date.now(),
+      // 重放历史里的老调用（fromHistory）不知道它当时什么时候开始的：记 0，那种就不写耗时。
+      startedAt: st.fromHistory ? 0 : Date.now(),
     };
     g.entries.push(entry);
     if (toolCallId && !interrupted) { st.toolGroupEntries.set(toolCallId, entry); }
     syncGroupTag(st, g);
     // 问话卡片有时候比这条工具行先到（两条通道各有快慢）：把它挪到这一行下面
     dockAskCardToRow(st, toolCallId, g.row);
-    // 方块上飘个 +1：只有“本来就是它、又攒了一条”才飘，重放历史时（noCountPop）不飘
-    if (g.entries.length > 1 && !st.noCountPop) { popPlusOne(g); }
     scrollToBottom(st);
     return entry;
-  }
-
-  // 同一颗标签上「+1」最快隔这么久才飘一次：连着一串调用时不至于一直跳
-  const PLUS_MIN_GAP_MS = 600;
-
-  /** 次数方块上飘一个「+1」：从方块上方浮起来一点、淡掉，飘完自己从页面上收走。
-   *  锚在标签里（标签自己是 position: relative），不占布局位置、不挡鼠标。
-   *  同一颗标签上有间隔限制（PLUS_MIN_GAP_MS）：太密就不飘，免得一串调用看得人眼花。 */
-  function popPlusOne(g) {
-    const count = g.countEl;
-    if (!count || !count.offsetWidth) { return; }
-    const now = Date.now();
-    if (now - (g.plusAt || 0) < PLUS_MIN_GAP_MS) { return; }
-    g.plusAt = now;
-    if (g.plusEl) { g.plusEl.remove(); }   // 上一个还在飘：换成新的，重新从底下飘一遍
-    const pop = document.createElement("span");
-    pop.className = "tg-plus";
-    pop.textContent = "+1";
-    g.tag.appendChild(pop);
-    pop.style.left = (count.offsetLeft + count.offsetWidth / 2) + "px";
-    pop.style.top = (count.offsetTop - (pop.offsetHeight || 10) - 1) + "px";   // 方块正上方，不盖住数字
-    g.plusEl = pop;
-    setTimeout(() => { pop.remove(); if (g.plusEl === pop) { g.plusEl = null; } }, 900);
   }
 
   /** 合并标签长什么样：工具名 + 次数（一个写着数字的小方块；只调一次就不写数字）；
@@ -4212,7 +4186,7 @@
     autoBtn.title = title;
     autoBtn.setAttribute("aria-label", title);
     autoBtn.classList.toggle("on", !!auto);
-    // 开着的时候输入框外面那圈有流光（见 chat.css 的 #composer.auto）：不用盯着那颗小开关也知道它在自己跑
+    // 开着的时候输入框外面那圈边框变绿（见 chat.css 的 #composer.auto）：不用盯着那颗小开关也知道它在自己跑
     const composer = document.getElementById("composer");
     if (composer) { composer.classList.toggle("auto", !!auto); }
   }
@@ -4516,50 +4490,6 @@
   /** 模型名左边那颗状态动画至少显示这么久才准换（见 syncStatus）。 */
   const ACT_MIN_MS = 300;
 
-  // 同一颗胶囊上「+N」最快隔这么久才飘一次：一轮里用量会碎步刷新好几次，太密就看不清了
-  const CTX_PLUS_GAP_MS = 500;
-  /** 正在飘着的那颗「+N」，以及它出生时条上头那个数字（整数百分比）和当时看着的会话。 */
-  let ctxPlusEl = null;
-  let ctxPlusNum = null;
-  let ctxPlusSession = "";
-
-  /** 用量涨了：百分比数字上方飘一个「+N」。
-   *  动效用的是工具标签次数方块上那个（chat.css 的 .ci-plus 与 tg-plus-float）。
-   *  锚在 .ci-top（position: relative）里，不占位置、不挡鼠标。
-   *  传进来的是条上头那个数字（整数百分比，见 syncStatus）：只有它真变了才飘，
-   *  飘的量就是它变了几点（涨 1 点飘 +1，一下涨 4 点飘 +4）。
-   *  用量掉了（压缩上下文）不飘。同一颗胶囊有间隔限制，刷得再密也半秒最多一回。 */
-  function popCtxPlus(st, pct) {
-    const from = st ? st.pctPopFrom : undefined;
-    if (st) { st.pctPopFrom = pct; }
-    if (!st || typeof from !== "number" || pct <= from) { return; }
-    const topEl = ctxIconEl.querySelector(".ci-top");
-    if (!topEl) { return; }
-    const now = Date.now();
-    if (now - (st.plusAt || 0) < CTX_PLUS_GAP_MS) { return; }
-    st.plusAt = now;
-    if (ctxPlusEl) { ctxPlusEl.remove(); }   // 上一个还在飘：换成新的，重新从底下再飘一遍
-    const pop = document.createElement("span");
-    pop.className = "ci-plus";
-    pop.textContent = "+" + Math.max(1, Math.round(pct - from));
-    topEl.appendChild(pop);
-    ctxPlusEl = pop;
-    ctxPlusNum = pct;
-    ctxPlusSession = activeId;
-    setTimeout(() => { pop.remove(); if (ctxPlusEl === pop) { ctxPlusEl = null; } }, 900);
-  }
-
-  /** 飘着的「+N」只跟它出生时那个数字、那个会话算数：数字一变（涨、退回去、换会话后不一样）
-   *  就立刻收掉。不这么做就会出现“数字看着没动，却有颗 +1 在飘”——
-   *  比如用量先粗估到 2%（飘了 +1）、几十毫秒后换成实际的 1.4%，数字退回去了，
-   *  那颗 +1 还在飞的那半秒里就成了假象。 */
-  function dropCtxPlusIfStale(num) {
-    if (!ctxPlusEl) { return; }
-    if (ctxPlusSession === activeId && ctxPlusNum === num) { return; }
-    ctxPlusEl.remove();
-    ctxPlusEl = null;
-  }
-
   /** 输入框底下那颗胶囊跟上当前会话。 */
   function syncStatus() {
     if (!ctxIconEl) { return; }
@@ -4567,7 +4497,7 @@
     const pct = ctxPercent(st);
     const state = ctxState(st);
     ctxIconEl.dataset.st = state;
-    // 跑着的时候再细一层，挂到 data-act 上（界面按它换形象与动法，见 chat.css 那几条）：
+    // 跑着的时候再细一层，挂到 data-act 上（界面按它换形象，见 chat.css 那几条）：
     //   thinking 后端说在想；tool 后端说工具在跑；
     //   剩下那种后端只说 working 的，界面再分两面：正文正在流（写）与还没吐字（等）。
     //   “正文在流”看 st.currentAssistant：它在第一条正文增量时建、这段吐完就清（见 assistantDelta /
@@ -4611,12 +4541,6 @@
     const known = (state === "idle" || state === "streaming") && typeof st.percent === "number";
     ctxIconEl.style.setProperty("--ci-pct", known ? pct.toFixed(1) + "%" : "0%");
     ctxIconEl.classList.toggle("hasfill", known && pct > 0);
-    // 用量涨了：数字上方飘一个「+N」（跟工具标签次数方块上那个「+1」同一套动效）。
-    // 比的是条上头那个数字（整数百分比），不是原始值：不然会出现“飘了但数字没动”
-    // —— 原始值涨 0.3% 数字还是 1%，看着就像坏了。数字变了才飘，飘的就是它变了多少。
-    const shownNum = known ? Math.round(pct) : null;
-    dropCtxPlusIfStale(shownNum);
-    if (known) { popCtxPlus(st, shownNum); } else if (st) { st.pctPopFrom = undefined; }
     const num = ctxIconEl.querySelector(".ci-text");
     if (num) { num.textContent = known ? Math.round(pct) + "%" : ""; }
     // 跑多快：后端推来的那个数（生成中是这一轮的实时均值，停下来就留着最后那个，没跑过就空着）
@@ -10442,7 +10366,7 @@
 
     switch (type) {
       case "userMessage": {
-        t.noCountPop = false;   // 自己这边开始的一轮：后面涨的次数是真新长出来的，+1 该飘
+        t.fromHistory = false;   // 自己这边开始的一轮：后面再接进来的调用都是真新长出来的
         finalizeCurrentAssistant(t);
         // 新的一段对话开始：先把上一段末尾那颗（如果有）并回去，本段的 think 再从头算
         foldTailThinking(t);
@@ -10458,7 +10382,7 @@
         break;
       }
       case "streamStart":
-        t.noCountPop = false;   // 模型开始回了：这一轮里后面长出来的次数都是新的
+        t.fromHistory = false;   // 模型开始回了：这一轮里后面长出来的都是新的
         t.activity = msg.activity || "working";
         t.activityDetail = msg.detail || "";
         // 新一轮生成：速度清零（后端 agent_start 也从零开始算，数跟消息一起过来）
@@ -10611,8 +10535,8 @@
         startReplayBuf(t);
         cancelFlush(t);
         hideTagTip();
-        // 重画历史（切会话 / 重连）随之开始：这之后涌进来的工具调用都是老消息，别飘 +1
-        t.noCountPop = true;
+        // 重画历史（切会话 / 重连）随之开始：这之后涌进来的工具调用都是老消息，不写耗时
+        t.fromHistory = true;
         t.byId.clear();   // 窗格整个重写了：编号表跟着作废
         t.reconcile = null;
         t.paneEl.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
@@ -10868,7 +10792,7 @@
       case "historyBatchEvent": {
         // 「加载更早」那批消息：逐条包在 event 里送来。先渲染进暂存区（不在页面上），
         // historyBatchEnd 到了再整体插到顶部——中间若穿插流式消息，它们照常走真实窗格，不会串序。
-        t.noCountPop = true;   // 补齐更早的历史，同样别飘 +1
+        t.fromHistory = true;   // 补齐更早的历史同样算老调用
         if (t._stageDropped) { break; }
         const inner = msg.event && typeof msg.event === "object" ? msg.event : null;
         if (!inner) { break; }

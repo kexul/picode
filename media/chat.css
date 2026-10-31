@@ -350,10 +350,6 @@
   .tool.tool-group .tg-count { display: inline-flex; align-items: center; justify-content: center; line-height: 1; padding: 0.12em 0.32em 0.05em; margin-left: 0.5em; border-radius: 3px; background: rgba(128,128,128,0.28); vertical-align: baseline; }
   /* 只调一次时不写次数：空的方块整个不出现，免得留一块没字的灰 */
   .tool.tool-group .tg-count:empty { display: none; }
-  /* 新摞上一条调用时，次数方块上飘一个「+1」（见 chat.js 的 popPlusOne）：
-     从方块上方浮起来一点、淡掉；不占位置、不挡鼠标（飘过去的这一下不该打断看的人）。 */
-  .tg-plus { position: absolute; transform: translateX(-50%); font-size: 0.95em; line-height: 1; white-space: nowrap; color: var(--vscode-charts-green, #3fb950); pointer-events: none; user-select: none; animation: tg-plus-float 900ms ease-out forwards; }
-  @keyframes tg-plus-float { from { opacity: 1; transform: translate(-50%, 0); } to { opacity: 0; transform: translate(-50%, -1.1em); } }
   /* 工具标签自绘提示框（系统 title 提示要等约一秒，改用短延迟的自绘框），随主题配色；
      手机电脑统一：内容可滚动看全部结果；电脑鼠标移开收起，触屏点外面收起 */
   .tag-tip { position: fixed; z-index: 900; display: flex; flex-direction: column; max-width: 640px; max-height: 60vh; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-panel-border, rgba(128,128,128,0.35))); background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, #252526)); color: var(--vscode-editorHoverWidget-foreground, var(--vscode-editor-foreground, inherit)); font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
@@ -490,45 +486,15 @@
     transition: border-color 200ms;
   }
   #composer:focus-within { border-color: var(--vscode-focusBorder); }
-  /* 自动模式开着的时候，输入框外面那圈跑一道流光（一道亮光顺着边转一圈）。
-     做法：盒子外面再铺一层 1px 宽的细边（::before + 两层 mask 只留边，正好盖住原来那圈边框），
-     亮光是一条锥形渐变（conic-gradient）里的高光，角度一路转过去。
-     关掉就把这层收掉，一点开销都不留。 */
-  @property --pichat-flow {
-    syntax: "<angle>";
-    inherits: false;
-    initial-value: 0deg;
-  }
-  #composer.auto { border-color: rgba(63, 191, 106, 0.28); }
-  #composer.auto::before {
-    content: ""; position: absolute; inset: -1px; box-sizing: border-box; padding: 1px;
-    border-radius: 15px; pointer-events: none;
-    background: conic-gradient(from var(--pichat-flow),
-      transparent 0 66%,
-      rgba(47, 175, 95, 0.55) 78%,
-      rgb(38, 158, 82) 87%,
-      rgba(47, 175, 95, 0.55) 95%,
-      transparent 100%);
-    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-    -webkit-mask-composite: xor;
-    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-    mask-composite: exclude;
-    animation: composer-flow 2.4s linear infinite;
-  }
-  @keyframes composer-flow {
-    from { --pichat-flow: 0deg; }
-    to { --pichat-flow: 360deg; }
-  }
-  /* 手机上不放这道流光：那个角度是 CSS 自定义属性，浏览器没法交给显卡算，只能每帧在主线程上
-     把整页样式重算一遍、再把输入框那一整条重画一遍。量过（412x915@3x、CPU 降速 4 倍，什么都不干）：
-     放着它 13.3% 主线程忙（每秒算样式 60 次），不放 0.01%。它跟“在不在跑”无关，自动模式一开着就在跑。
-     量法：node dev/perfProbe.js --auto --cpu 4。
-     “自动模式开着”这件事改由边框说：直接一根绿边，一眼看得出来（光不转）。
-     换个便宜写法（转一个合成层而不是转角度）能不能把效果保住，还没试。 */
-  @media (hover: none) and (pointer: coarse) {
-    #composer.auto::before { display: none; }
-    #composer.auto { border-color: var(--vscode-charts-green, #3fb950); }
-  }
+  /* 自动模式开着的时候：输入框外面那圈边框直接变绿（一根绿边），一眼看出它在自己跑。
+     以前这里跑一道流光（一道亮光顺着边转一圈），先在手机上换成绿边，现在电脑上也一样了，
+     两头只剩这根绿边，没有动画。
+     为什么不要它（当时量过，412x915@3x、CPU 降速 4 倍、什么都不干）：它转的是一个 CSS 角度，
+     浏览器没法交给显卡算，只能每帧在主线程上把整页样式重算一遍、再把输入框那一整条重画一遍 ——
+     放着它主线程 13.3% 忙（每秒算样式 60 次），不放 0.01%。而且它跟“在不在跑”无关，
+     自动模式一开着就在跑，是查到的单项最贵的一项。
+     量法：node dev/perfProbe.js --auto --cpu 4。 */
+  #composer.auto { border-color: var(--vscode-charts-green, #3fb950); }
   #inputRow { display: flex; align-items: center; gap: 2px; }
   /* 框底那条横排左头那颗加号（新建会话）、右头那颗「你说过的话」和再往右的自动模式按钮：
      一样的矮方块，鼠标扫过亮一下。中间是模型胶囊（见下面的 #ctxIcon）。 */
@@ -1387,17 +1353,6 @@
     position: absolute; inset: 0 auto 0 0; width: var(--ci-pct, 0%); border-radius: 2.5px;
     background: currentColor; transition: width 200ms ease;
   }
-  /* 用量涨了，百分比数字上方飘一个「+N」（见 chat.js 的 popCtxPlus）：跟工具标签次数方块上
-     那个「+1」是同一套动效（tg-plus-float），只是这块地方更小、字号跟着小一号；
-     上浮那 1.1em 会飘出胶囊上沿，胶囊没裁边，所以看得见。不占位置、不挡鼠标。 */
-  #ctxIcon .ci-plus {
-    position: absolute; left: 50%; top: -9px;
-    font-size: 0.72em; line-height: 1; white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-    color: var(--vscode-charts-green, #3fb950);
-    pointer-events: none; user-select: none;
-    animation: tg-plus-float 900ms ease-out forwards;
-  }
   /* 这一轮的生成速度：跟上头那个百分比一样大（不然它比旁边那行字还高一头）；没数的时候空着（空着就不占地方） */
   #ctxIcon .ci-tps {
     flex: 0 0 auto; white-space: nowrap;
@@ -1406,17 +1361,18 @@
   }
   #ctxIcon .ci-tps:empty { display: none; }
   /* 百分比数字旁边那颗状态动画（.ci-act）：跑着时才出现，停下就收掉（名字一直是原来那个灰）。
-     四个状态各是一个形象、各有各的动法 —— 不是同一颗圆圈换颜色：
-       等（waiting）还没吐字（等第一个字、想完等正文、等工具参数）：一个沙漏，慢慢翻过来，蓝
-       写（writing）正文正在流：一支笔，一笔一笔地写（左右轻摆），蓝
-       想（thinking）在后端报 thinking 时：一颗灯泡，一明一暗，黄
-       工具在跑（tool）在后端报 tool 时：一把扳手，来回扳，绿
+     四个状态各是一个形象 —— 不是同一颗圆圈换颜色：
+       等（waiting）还没吐字（等第一个字、想完等正文、等工具参数）：一个沙漏，蓝
+       写（writing）正文正在流：一支笔，蓝
+       想（thinking）在后端报 thinking 时：一颗灯泡，黄
+       工具在跑（tool）在后端报 tool 时：一把扳手，绿
      图形都是 data URI 里的 SVG，当 mask 用：看着的颜色由 background-color 给（颜色各状态自己定），
      mask 只决定形状。--ci-icon 一处写、下面 webkit 与标准两行共用。
      笔 / 灯泡 / 扳手三条路径原样取自 Material Icons（Apache-2.0）的 edit / lightbulb / build；
      沙漏那个是自己画的（两个漏斗上下对扣），不依赖谁的图标集。
-     这颗动画有意不理会系统的「减少动态效果」（下面那个 media query 只管横条那几样）：
-     它就是用来表明“还在跑”的，停了就跟没了一样。
+     这四颗只是静止的图形，不动（以前沙漏慢慢翻、笔左右摆、灯泡一明一暗、扳手来回扳，
+     手机上先删了，后来电脑上也一并删了，两头一样）：看出“还在跑”靠的是形状与颜色在换，
+     换形象那一下有 180ms 的淡入（见下面那四条 ci-appear-*），不是靠一直动。
      数据从后端来（working / thinking / tool，见 chat.js 的 syncStatus 与 setActivity）；
      “等”和“写”是界面自己分的：后端只说 working，界面看正文有没有在流（st.currentAssistant）。 */
   #ctxIcon .ci-act { position: absolute; top: calc(50% - 5px); right: calc(50% + 13px); display: none; width: 10px; height: 10px; }
@@ -1430,29 +1386,29 @@
        那个 transition 只在这颗小东西上，开销可以忽略。 */
     transition: background-color 0.25s ease;
   }
-  /* 等：沙漏，翻过来再翻过去（翻到 180° 跟 0° 长得一样，所以那一下跳回来看不出来） */
+  /* 等：沙漏 */
   #ctxIcon[data-act="waiting"] .ci-act {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M6 2h12v2h-1L12 12 7 4H6zM6 22h12v-2h-1L12 12 7 20H6z'/%3E%3C/svg%3E");
     background-color: var(--vscode-charts-blue, #3b82f6);
-    animation: ci-appear-waiting 0.18s ease-out, ci-hourglass 2.6s ease-in-out infinite;
+    animation: ci-appear-waiting 0.18s ease-out;
   }
-  /* 写：笔，一笔一笔地摆 */
+  /* 写：笔 */
   #ctxIcon[data-act="writing"] .ci-act {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 0 0 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z'/%3E%3C/svg%3E");
     background-color: var(--vscode-charts-blue, #3b82f6);
-    animation: ci-appear-writing 0.18s ease-out, ci-pen 0.7s ease-in-out infinite;
+    animation: ci-appear-writing 0.18s ease-out;
   }
-  /* 在想：灯泡，一明一暗（明暗用亮度做，把 opacity 留给上面那 180ms 的淡入） */
+  /* 在想：灯泡 */
   #ctxIcon[data-act="thinking"] .ci-act {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7z'/%3E%3C/svg%3E");
     background-color: var(--vscode-charts-yellow, #d97706);
-    animation: ci-appear-thinking 0.18s ease-out, ci-bulb 1.6s ease-in-out infinite;
+    animation: ci-appear-thinking 0.18s ease-out;
   }
-  /* 工具在跑：扳手，来回扳 */
+  /* 工具在跑：扳手 */
   #ctxIcon[data-act="tool"] .ci-act {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z'/%3E%3C/svg%3E");
     background-color: var(--vscode-charts-green, #16a34a);
-    animation: ci-appear-tool 0.18s ease-out, ci-wrench 1s ease-in-out infinite;
+    animation: ci-appear-tool 0.18s ease-out;
   }
   /* 换形象时那一下淡入：形状是硬切的（mask 不能过渡），靠这 180ms 把切口藏在淡入里。
      四条内容一样、名字故意不同 —— 同一个 animation-name 在切换时不会重放，
@@ -1461,21 +1417,17 @@
   @keyframes ci-appear-writing { from { opacity: 0; } to { opacity: 1; } }
   @keyframes ci-appear-thinking { from { opacity: 0; } to { opacity: 1; } }
   @keyframes ci-appear-tool { from { opacity: 0; } to { opacity: 1; } }
-  @keyframes ci-hourglass { 0%, 40% { transform: rotate(0deg); } 60%, 100% { transform: rotate(180deg); } }
-  @keyframes ci-pen { 0%, 100% { transform: rotate(-14deg) translate(-0.5px, 0.5px); } 50% { transform: rotate(14deg) translate(0.5px, -1px); } }
-  @keyframes ci-bulb { 0%, 100% { filter: brightness(0.6); transform: scale(0.94); } 50% { filter: brightness(1.25); transform: scale(1.05); } }
-  @keyframes ci-wrench { 0%, 100% { transform: rotate(-30deg); } 50% { transform: rotate(30deg); } }
   #ctxIcon.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
   #ctxIcon.err { color: var(--vscode-errorForeground, #f14c4c); }
   #ctxIcon[data-st="loading"], #ctxIcon[data-st="wait"], #ctxIcon[data-st="nomodel"], #ctxIcon[data-st="none"] { opacity: 0.55; }
-  /* 要减少动态效果时：横条不慢慢长（那颗状态图标照旧在动 —— 它就是用来
-     表明“还在跑”的，见上面那段注释；飘上去的「+N」是一次性的一下，不管）。 */
+  /* 要减少动态效果时：横条不慢慢长（那四颗状态图本来就不动了，见上面那段注释）。 */
   @media (prefers-reduced-motion: reduce) {
     #ctxIcon .ci-fill { transition: none; }
   }
-  /* 那些“一直动”的小东西（顶条那颗点的呼吸、齿轮、那行命令自己横向滚、圆环里那颗状态图标的摆动）
-     单独量下来每一样都在 1 个点以内（吐字时），丢了反而让人觉得“怎么不动了”，都留着，手机上也不另外省。
-     真正花得出来的只有输入框那圈流光，手机上换成一根绿边（见 #composer.auto）。 */
+  /* 剩下那几样“一直动”的小东西（顶条那颗点的呼吸、齿轮、那行命令自己横向滚）单独量下来
+     每一样都在 1 个点以内（吐字时），丢了反而让人觉得“怎么不动了”，都留着，电脑和手机一样。
+     两头都不动的只有这几样：圆环里那四颗状态图、排队那条上的黄点、胶囊里那条用量横条、
+     输入框那圈流光（前两样早先删了，这最后一次把状态图与流光也一并删掉，两头不再有区别）。 */
   /* 工具结果内联图片（read 读图等）：缩略图 + 点击放大 */
   .tc-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }
   .tc-img { max-width: 100%; max-height: 320px; border-radius: 6px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); background: rgba(128,128,128,0.08); cursor: zoom-in; }

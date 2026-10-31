@@ -34,12 +34,7 @@ function post(page, messages) {
 function dump(page) {
     return page.eval(`
         const rows = [];
-        // 标签上可能正飘着“+1”小动画（见 chat.js 的 popPlusOne）：它只是动画，不算标签的文字
-        const tagText = (el) => {
-            const c = el.cloneNode(true);
-            for (const n of c.querySelectorAll(".tg-plus")) { n.remove(); }
-            return c.textContent.trim().replace(/\\s+/g, " ");
-        };
+        const tagText = (el) => el.textContent.trim().replace(/\\s+/g, " ");
         for (const pane of document.querySelectorAll(".session-view:not(.off) .session-pane")) {
             for (const el of pane.children) {
                 const cls = el.className || "";
