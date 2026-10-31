@@ -832,6 +832,7 @@
       piReady: false,
       textDirty: false,
       rafId: 0,
+      flushTimer: 0,
       lastRenderAt: 0,
       stickToBottom: true,
       // 整屏重画（重连后补不上、页面刷新）期间：视野先冻住，画完一次放回原处。
@@ -2221,17 +2222,28 @@
     decorateMermaid(cur.el);
   }
 
-  function scheduleFlush(st) { if (!st.rafId) { st.rafId = requestAnimationFrame(() => flushDeltas(st)); } }
+  function scheduleFlush(st) {
+    if (st.rafId || st.flushTimer) { return; }
+    st.rafId = requestAnimationFrame(() => flushDeltas(st));
+  }
   function flushDeltas(st) {
     st.rafId = 0;
+    if (st.flushTimer) { clearTimeout(st.flushTimer); st.flushTimer = 0; }
     const now = performance.now();
     // 这一趟有没有真画进去新的内容：没画就不去动滚动位置（见 smoothScrollToBottom）
     let painted = false;
     if (st.textDirty && st.currentAssistant) {
       const raw = st.currentAssistant.raw || "";
       const interval = renderInterval(raw.length, paneShown(st.paneEl));
-      if (interval > 0 && now - st.lastRenderAt < interval) {
-        st.rafId = requestAnimationFrame(() => flushDeltas(st));
+      const wait = interval - (now - st.lastRenderAt);
+      if (wait > 0) {
+        // 还不到该画的时候：挂一个定时器等它，别再一帧一帧地空转。
+        // 长回复时正文每 150~300 毫秒才真画一次，而吐字一秒来几十条：以前每来一条排一帧、
+        // 每帧再去看一眼“到点没有”，这些帧一帧都没画东西，光空转就比画一次还贵。
+        // 量法（一个会话在全部 2.4 万字的回复里每秒来 40 条，手机档位、同一份内容，两边各三遍）：
+        // 主线程忙 18.8 / 18.1 / 16.0 → 12.2 / 11.8 / 11.6；帧回调从每秒 64 次降到 17 次，
+        // 正文照旧每秒画 5~6 次（字一个不少，见 dev/multiSessionPerf.js 的“对上了”）。
+        st.flushTimer = setTimeout(() => { st.flushTimer = 0; scheduleFlush(st); }, wait);
       } else if (activeId === st.id && isSelectingIn(st.currentAssistant.el)) {
         st.rafId = requestAnimationFrame(() => flushDeltas(st));
       } else {
@@ -2243,7 +2255,11 @@
     }
     smoothScrollToBottom(st, painted);
   }
-  function cancelFlush(st) { if (st.rafId) { cancelAnimationFrame(st.rafId); st.rafId = 0; } st.textDirty = false; }
+  function cancelFlush(st) {
+    if (st.rafId) { cancelAnimationFrame(st.rafId); st.rafId = 0; }
+    if (st.flushTimer) { clearTimeout(st.flushTimer); st.flushTimer = 0; }
+    st.textDirty = false;
+  }
   function finalizeCurrentAssistant(st) {
     cancelFlush(st);
     if (st.currentAssistant) {
@@ -10406,7 +10422,7 @@
         endThinking(t, "");
         break;
       case "streamEnd":
-        if (t.rafId) { flushDeltas(t); }
+        if (t.rafId || t.flushTimer) { flushDeltas(t); }
         finalizeCurrentAssistant(t);
         endThinking(t, "");   // 想一半被中止（或后端没发收尾）：标签也得停住
         t.activity = msg.activity || "idle";
