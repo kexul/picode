@@ -46,6 +46,14 @@ export function weixinCursorFile(dir: string = pichatDir()): string {
     return path.join(dir, "weixin", "cursor.json");
 }
 
+/**
+ * 回信要带的凭据（微信的 context_token，每个来信的人一份，随来信刷新）。
+ * 推送是隔了一段时间才发的，手上得留着最近一份才发得出去（见 weixinInbox.ts）。
+ */
+export function weixinContextFile(dir: string = pichatDir()): string {
+    return path.join(dir, "weixin", "context.json");
+}
+
 /** 往微信里发过哪些提醒（服务端 message_id → 是哪个会话）：引用回复要把两边对上。 */
 export function weixinSentFile(dir: string = pichatDir()): string {
     return path.join(dir, "weixin", "sent.json");

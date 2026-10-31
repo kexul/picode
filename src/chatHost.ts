@@ -46,9 +46,9 @@ import type { BashTaskInfo } from "./bashProtocol";
 import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { describeRestart } from "./serverRestart";
-import { WeixinLogin, readWeixinAccount } from "./weixinLogin";
+import { WeixinLogin, readWeixinAccount, type WeixinAccount } from "./weixinLogin";
 import { findRouteForInbound, pushWeixinNote, WEIXIN_PREVIEW_CHARS, type SentRecord } from "./weixinPush";
-import { WeixinInbox } from "./weixinInbox";
+import { WeixinInbox, readContextToken } from "./weixinInbox";
 import { sendText, type WeixinInbound } from "./weixinIlink";
 import type { SessionRuntime } from "./sessionRuntime";
 import { plainPreview } from "./messageUtils";
@@ -736,6 +736,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             botToken: account.botToken,
             baseUrl: account.baseUrl,
             to: account.userId,
+            contextToken: this.weixinContextToken(account),
         });
         if (result.ok) {
             this.log(`[微信] 推了一条（${kind === "ask" ? "等你答一句" : "跑完一轮"}）：${note.name}`);
@@ -771,6 +772,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             botToken: account.botToken,
             baseUrl: account.baseUrl,
             to: account.userId,
+            contextToken: this.weixinContextToken(account),
         });
         if (result.ok) {
             this.log(`[微信] 替「${notice.label}」推了一条：${notice.name}`);
@@ -859,7 +861,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 把微信里的这一句转给推它的那台机器。
      * 送不到就回一句告诉人：一声不吐比送错了强。
      */
-    private async forwardWeixinReply(route: SentRecord, account: { botToken: string; baseUrl?: string; userId?: string }, text: string): Promise<void> {
+    private async forwardWeixinReply(route: SentRecord, account: WeixinAccount, text: string): Promise<void> {
         const remote = route.remote;
         const url = (remote?.url ?? "").replace(/\/+$/, "");
         if (!url) {
@@ -901,13 +903,26 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return { ok: true };
     }
 
+    /**
+     * 手上留着的那份回信凭据（那个微信号最近一条来信里带的）。
+     * 推送要带着它，微信才认（见 weixinInbox.ts 的 rememberContextToken）；没收到过话就没有。
+     */
+    private weixinContextToken(account: { accountId: string; userId?: string }): string | undefined {
+        if (!account.userId) { return undefined; }
+        return readContextToken(account.accountId, account.userId);
+    }
+
     /** 回一句给微信里的人（发不出去就只记日志：不回也不该把后端弄挂）。 */
-    private async replyWeixin(account: { botToken: string; baseUrl?: string; userId?: string }, text: string): Promise<void> {
+    private async replyWeixin(account: WeixinAccount, text: string): Promise<void> {
         if (!account.userId) { return; }
         try {
             await sendText(
                 { botToken: account.botToken, baseUrl: account.baseUrl },
-                { to: account.userId, text },
+                {
+                    to: account.userId,
+                    text,
+                    contextToken: this.weixinContextToken(account),
+                },
             );
         } catch (err) {
             this.log(`[微信] 回话没发出去：${err instanceof Error ? err.message : String(err)}`);

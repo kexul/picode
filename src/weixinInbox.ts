@@ -15,7 +15,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { getUpdates, type WeixinInbound, WeixinRequestError } from "./weixinIlink";
 import { readWeixinAccount } from "./weixinLogin";
-import { weixinCursorFile } from "./serverPaths";
+import { weixinContextFile, weixinCursorFile } from "./serverPaths";
 
 /** 没登录上时多久看一次"登录上了没有"。 */
 const NOT_LOGGED_IN_POLL_MS = 1000;
@@ -27,6 +27,64 @@ const EXPIRED_RETRY_MS = 60_000;
 interface Cursor {
     accountId: string;
     cursor: string;
+}
+
+/** 回信要带的凭据（按键是发信人）：换过账号就整份作废。 */
+interface TokenStore {
+    accountId: string;
+    tokens: Record<string, string>;
+}
+
+/** 最多留几个人的：这个机器人只绑给一个人，留几个是免得别人发来的越积越多。 */
+const CONTEXT_KEEP = 10;
+
+/**
+ * 记下最近一条来信里带的那份回信凭据。
+ *
+ * 为什么要记到盘上：推送离人上一句话可能已经过了很久、后端也可能重启过，
+ * 而微信只认最近那份（不带、或带了旧的都回 `ret=-2 prepare failed`）。
+ */
+export function rememberContextToken(
+    accountId: string,
+    userId: string,
+    token: string,
+    file: string = weixinContextFile(),
+): void {
+    if (!userId || !token) { return; }
+    const store: TokenStore = { accountId, tokens: {} };
+    try {
+        const raw = JSON.parse(fs.readFileSync(file, "utf8")) as TokenStore;
+        if (raw && raw.accountId === accountId && raw.tokens && typeof raw.tokens === "object") {
+            store.tokens = { ...raw.tokens };
+        }
+    } catch { /* 没有 / 读不动 / 换过账号：从空的开始 */ }
+    delete store.tokens[userId];            // 挪到末尾，裁的时候从最老的裁
+    store.tokens[userId] = token;
+    const keys = Object.keys(store.tokens);
+    for (const key of keys.slice(0, Math.max(0, keys.length - CONTEXT_KEEP))) { delete store.tokens[key]; }
+    try {
+        fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+        // 这也算一份凭据：别人拿到就能拿这个号发消息，只给自己读；先写别处再换上，免得到别处读的时候撞上半个文件
+        const tmp = `${file}.${process.pid}.tmp`;
+        fs.writeFileSync(tmp, JSON.stringify(store, null, 2), { encoding: "utf8", mode: 0o600 });
+        fs.renameSync(tmp, file);
+    } catch { /* 记不下来：这一次照旧能回，只是下次推送可能又发不出去 */ }
+}
+
+/** 手上留着的那个人那份回信凭据；没有 / 换过账号就是 undefined。 */
+export function readContextToken(
+    accountId: string,
+    userId: string,
+    file: string = weixinContextFile(),
+): string | undefined {
+    try {
+        const raw = JSON.parse(fs.readFileSync(file, "utf8")) as TokenStore;
+        if (!raw || raw.accountId !== accountId || !raw.tokens) { return undefined; }
+        const token = raw.tokens[userId];
+        return typeof token === "string" && token.trim() ? token.trim() : undefined;
+    } catch {
+        return undefined;
+    }
 }
 
 export class WeixinInbox {
@@ -78,6 +136,11 @@ export class WeixinInbox {
                 if (result.cursor !== saved) { this.writeCursor(account.accountId, result.cursor); }
                 for (const msg of result.messages) {
                     if (signal.aborted) { return; }
+                    // 先把回信凭据记下来：这一条哪怕是别人发的也得记（按发信人各存一份），
+                    // 免得等会儿要回话时手上没有最新的那份
+                    if (msg.contextToken) {
+                        rememberContextToken(account.accountId, msg.fromUserId, msg.contextToken);
+                    }
                     try {
                         this.onMessage(msg);
                     } catch (err) {

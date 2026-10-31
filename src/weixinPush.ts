@@ -114,23 +114,39 @@ export function formatWeixinNote(note: WeixinNote): string {
 
 /**
  * 把这条发出去，顺手记下它对哪个会话。
+ * @param sender 除了令牌与地址，还带着"回信凭据"（微信只认最近一条来信里带的那份，见 weixinInbox.ts）
  * @returns ok 是发出去了没有；发不出去只把原因带回去（不抛：提醒失败不该影响会话）
  */
 export async function pushWeixinNote(
     note: WeixinNote,
-    sender: WeixinSender & { to: string },
+    sender: WeixinSender & { to: string; contextToken?: string },
     file: string = weixinSentFile(),
 ): Promise<{ ok: boolean; messageId?: string; error?: string }> {
     try {
         const sent = await sendText(sender, {
             to: sender.to,
             text: formatWeixinNote(note),
+            contextToken: sender.contextToken,
         });
         if (sent.messageId) { rememberSent(file, sent.messageId, note); }
         return { ok: true, messageId: sent.messageId };
     } catch (err) {
-        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: explainSendFailure(message, sender.contextToken) };
     }
+}
+
+/**
+ * 发不出去时那句日志多说一句该怎么办。
+ *
+ * `ret=-2 prepare failed` 是微信那头最常见的拒收（官方那套也是这么解释的）：回信凭据没带、或者过期了。
+ * 光看这个数猜不出来，于是就地把该做的事写在后面。
+ */
+function explainSendFailure(message: string, contextToken?: string): string {
+    if (!message.includes("ret=-2")) { return message; }
+    return contextToken
+        ? `${message}（手上这份回信凭据过期了：在微信里给机器人随便发一句话就来新的）`
+        : `${message}（手上还没有回信凭据：先在微信里给机器人发一句话，之后的推送才发得出去）`;
 }
 
 /** 追加一条"这条消息是为了哪个会话发的"；文件坏了就重来（别为了留档把提醒本身弄挂）。 */

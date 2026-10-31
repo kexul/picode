@@ -395,6 +395,11 @@ export interface WeixinInbound {
     refMessageId?: string;
     /** 被引用那条的正文（没引用、或者客户端没给就是空串）。 */
     refText: string;
+    /**
+     * 回信用得上的那份凭据：微信只认「最近一条来信里带的」这一份。
+     * 想主动推一条，就得把手上最新的这一份带上（见 weixinInbox.ts 的 rememberContextToken）。
+     */
+    contextToken?: string;
 }
 
 /** 一次长轮询的结果：这轮收到的消息 + 下次该带上哪个游标。 */
@@ -483,5 +488,8 @@ function readInbound(msg: RawMessage): WeixinInbound | undefined {
     }
     const text = texts.join("\n").trim();
     if (!text && !refMessageId) { return undefined; }
-    return { fromUserId, text, refMessageId, refText };
+    const contextToken = typeof msg.context_token === "string" && msg.context_token.trim()
+        ? msg.context_token.trim()
+        : undefined;
+    return { fromUserId, text, refMessageId, refText, contextToken };
 }
