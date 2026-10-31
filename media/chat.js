@@ -64,8 +64,8 @@
     pause: '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="3.6" y="2.6" width="3.2" height="10.8" rx="0.8"/><rect x="9.2" y="2.6" width="3.2" height="10.8" rx="0.8"/></svg>',
     // 停止小方块：跟上面两颗一样大（12px），不然它看着比暂停粗一圈
     "stop-small": '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="3.4" y="3.4" width="9.2" height="9.2" rx="1.2"/></svg>',
-    // 三条横线：输入框右边那颗「你说过的话」（一句话一行，所以是清单）。
-    said: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>',
+    // 三条横线：输入框右边那颗「后台任务」（一条命令一行，所以是清单）。
+    tasks: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>',
   };
   /** 文件夹选择器里行首那颗图标：名字由宿主给（见 chatHost.ts 里 showFolderPicker 的 items）。 */
   const FOLDER_ROW_ICONS = { check: ICONS.check, up: ICONS["arrow-up"], folder: ICONS.folder };
@@ -2240,8 +2240,10 @@
         // 还不到该画的时候：挂一个定时器等它，别再一帧一帧地空转。
         // 长回复时正文每 150~300 毫秒才真画一次，而吐字一秒来几十条：以前每来一条排一帧、
         // 每帧再去看一眼“到点没有”，这些帧一帧都没画东西，光空转就比画一次还贵。
-        // 量法（一个会话在全部 2.4 万字的回复里每秒来 40 条，手机档位、同一份内容，两边各三遍）：
-        // 主线程忙 18.8 / 18.1 / 16.0 → 12.2 / 11.8 / 11.6；帧回调从每秒 64 次降到 17 次，
+        // 量法（dev/multiSessionPerf.js --chunk 5 --tick 25 = 每秒 40 条，手机档位、同一份内容）：
+        //   · 一个会话：帧回调每秒 64 次 → 17 次，主线程忙 18.8 / 18.1 / 16.0 → 12.2 / 11.8 / 11.6；
+        //   · 三个会话：每秒 175 次 → 23 次，主线程忙 27.5 / 27.5 → 22 / 23 上下。
+        // 三个会话省的百分比小（三个的身子重，画三份正文那份没变），空转省的次数反而更多。
         // 正文照旧每秒画 5~6 次（字一个不少，见 dev/multiSessionPerf.js 的“对上了”）。
         st.flushTimer = setTimeout(() => { st.flushTimer = 0; scheduleFlush(st); }, wait);
       } else if (activeId === st.id && isSelectingIn(st.currentAssistant.el)) {
@@ -6200,10 +6202,6 @@
   const FILE_SIDEBAR_CHANGES_NAME = "改动";
   /** 这一格里一个文件都没改过时那句提示。 */
   const FILE_SIDEBAR_CHANGES_HINT = "这个会话还没改过文件。";
-  /** 「后台」那一格：这个会话放到后台跑的命令、跑到哪一步了（标签上就写这两个字）。 */
-  const FILE_SIDEBAR_SCRIPTS_NAME = "后台";
-  /** 这一格里一条后台命令都没有时那句提示。 */
-  const FILE_SIDEBAR_SCRIPTS_HINT = "这个会话还没有放到后台跑的命令。";
   /** 问后端「会话目录自己」用这个相对写法（列目录那条地址不认空路径，`.` 就是会话目录）。 */
   const FILE_SIDEBAR_PROJECT_PATH = ".";
   /** 这一列那一摊：容器、里面那几块、开着哪几个文件。 */
@@ -6215,7 +6213,7 @@
     // 写到版式上的那个值还可能被窗口收小，但这里留着的永远是原值（见 applyFileSidebarWidth）。
     width: 0,
     wrap: false,     // 长行折起来还是横向滚（记在 localStorage；默认一行就是一行，见 chat.css 末尾）
-    // 常驻的三格（文件 / 改动 / 后台），从左到右：[{ path, home, proj, dir, line, scrollTop, mtime, loading, imageUrl, page, drawn }]
+    // 常驻的两格（文件 / 改动），从左到右：[{ path, home, proj, dir, line, scrollTop, mtime, loading, imageUrl, page, drawn }]
     //（不记进设备，刷新就没了）
     //   home：这是「文件」那一格（排在最前、没有关闭那颗叉）
     //   proj：这一格现在在列清单（true）还是在显示一个文件（false）
@@ -6344,7 +6342,6 @@
   /** 一格标签悬停提示上的全路径：目录那一格是它现在待的那一层。 */
   function fileSidebarTabFullPath(tab) {
     if (tab.change) { return FILE_SIDEBAR_CHANGES_NAME; }
-    if (tab.scriptsTab) { return FILE_SIDEBAR_SCRIPTS_NAME; }
     return tab.proj ? fileSidebarProjectFullPath(tab) : tab.path;
   }
 
