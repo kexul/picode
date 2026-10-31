@@ -543,17 +543,25 @@
     color: var(--vscode-descriptionForeground, inherit); cursor: pointer;
   }
   #newSessionBtn svg,
-  #autoBtn svg,
   #saidBtn svg { width: 15px; height: 15px; display: block; }
   #newSessionBtn:hover,
   #autoBtn:hover,
   #saidBtn:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); color: var(--vscode-foreground); }
-  /* 自动模式那颗按钮：一直在输入框右下角最右边。没开时暗着（点一下开始），
-     开了变绿、圈一直转（点一下停）。 */
-  #autoBtn { color: var(--vscode-descriptionForeground, inherit); }
-  #autoBtn.on { color: var(--vscode-charts-green, #89d185); }
-  #autoBtn.on svg { animation: auto-spin 2.6s linear infinite; }
-  @keyframes auto-spin { to { transform: rotate(360deg); } }
+  /* 自动模式那颗按钮：一直在输入框右下角最右边，长的是一颗小开关 ——
+     圆角胶囊里一颗滑块：没开时滑块在左、胶囊灰着；开着时滑块滑到右边、胶囊变绿。
+     点一下就是拨一下（开着时再点就是停）。 */
+  #autoBtn .autoPill {
+    position: relative; display: block; width: 22px; height: 12px; border-radius: 6px;
+    background: var(--vscode-input-border, rgba(128,128,128,0.5));
+    transition: background 160ms;
+  }
+  #autoBtn .autoPill::after {
+    content: ""; position: absolute; top: 1px; left: 1px; width: 10px; height: 10px;
+    border-radius: 50%; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.12);
+    transition: transform 160ms;
+  }
+  #autoBtn.on .autoPill { background: var(--vscode-charts-green, #89d185); }
+  #autoBtn.on .autoPill::after { transform: translateX(10px); }
   /* 一个会话都没有时那颗加号灰掉（新会话总得开在某个工作区里，先去面板里挑一个） */
   #newSessionBtn:disabled { opacity: 0.4; cursor: default; }
   #newSessionBtn:disabled:hover { background: transparent; color: var(--vscode-descriptionForeground, inherit); }

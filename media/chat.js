@@ -64,8 +64,6 @@
     pause: '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="3.6" y="2.6" width="3.2" height="10.8" rx="0.8"/><rect x="9.2" y="2.6" width="3.2" height="10.8" rx="0.8"/></svg>',
     // 停止小方块：跟上面两颗一样大（12px），不然它看着比暂停粗一圈
     "stop-small": '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="3.4" y="3.4" width="9.2" height="9.2" rx="1.2"/></svg>',
-    // 圆圈：输入框右下角那颗自动模式的按钮（点一下开始、再点一下停）。
-    auto: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M8 2.4a5.6 5.6 0 1 1-5.6 5.6"/></svg>',
     // 三条横线：输入框右边那颗「你说过的话」（一句话一行，所以是清单）。
     said: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>',
   };
@@ -4148,7 +4146,8 @@
   }
 
   // ==================== 自动模式那颗按钮（输入框右下角最右边）====================
-  // 一直在（没开的时候暗着）：点一下开始，开着的时候变绿转圈、再点一下就是停。
+  // 长成一颗小开关（圆角胶囊里一颗滑块）：滑块在左、灰着 = 没开，拨到右、变绿 = 开着。
+  // 点一下就是拨一下：开的时候再点就是停。
   // 指上去写着现在第几轮、判官是不是正在看，字都由后端拼好（见 auto.ts 的 autoIndicatorTitle）。
   let autoBtn = null;
   (function buildAutoButton() {
@@ -4157,7 +4156,8 @@
     autoBtn = document.createElement("button");
     autoBtn.type = "button";
     autoBtn.id = "autoBtn";
-    autoBtn.innerHTML = ICONS.auto;
+    // 小开关：胶囊 + 滑块，样子全在 chat.css 里（#autoBtn .autoPill）
+    autoBtn.innerHTML = '<span class="autoPill" aria-hidden="true"></span>';
     autoBtn.title = "自动模式（点一下开始）";
     autoBtn.setAttribute("aria-label", "自动模式");
     // 摆在框底那条横排的最右头（前头依次是加号、模型胶囊、「你说过的话」）

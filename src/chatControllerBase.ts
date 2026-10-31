@@ -902,7 +902,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     //  自动接着干：每轮跑完让判官看一眼，决定要不要再发一句「继续」
     // ========================================================================
     //
-    //  开关就是输入框右下角那颗圆圈的按钮：点一下开始，再点一下停；开了不往对话里发话。
+    //  开关就是输入框右下角那颗小开关：点一下拨开，再点一下停；开了不往对话里发话。
     //  开着的时候，每一轮正常跑完，插件另起一个短会话当判官（一个工具都不给，只回一句话），
     //  把这一轮最后那条回复交给它，问「还要不要接着干」。说继续就发一句「继续」；
     //  说不继续就把开关关掉。
@@ -924,7 +924,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 判官的启动参数：一个工具都不给（它只读一段文字回一句话，给了工具只会慢、还会乱跑）。 */
     private static readonly AUTO_JUDGE_ARGS = ["--no-tools", "--no-mcp"];
 
-    /** RuntimeHost.onAutoCommand：输入框右下角那颗圆圈按钮按下时，以及有人打了 `/auto` 这几个字时。 */
+    /** RuntimeHost.onAutoCommand：输入框右下角那颗小开关按下去时，以及有人打了 `/auto` 这几个字时。 */
     public onAutoCommand(panelId: string, cmd: AutoCommand): void {
         const rt = this.panels.get(panelId);
         if (!rt) { return; }
@@ -2482,7 +2482,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 break;
             }
             case "autoAct": {
-                // 输入框右下角那颗圆圈的按钮：开着就停，没开就开始
+                // 输入框右下角那颗小开关：开着就停，没开就开始
                 if (msg.act === "stop") { this.onAutoCommand(target.id, { kind: "off" }); }
                 else if (msg.act === "start") { this.onAutoCommand(target.id, { kind: "on" }); }
                 break;

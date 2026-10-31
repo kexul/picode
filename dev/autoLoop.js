@@ -102,13 +102,13 @@ module.exports = async (page) => {
 
   // ---- 1. 右下角那颗按钮一直在；点一下开始：不往对话里发东西 ----
   let i = await ind();
-  check("输入框右下角最右边那颗按钮一直在（在「你说过的话」右边）", i.exists && i.afterSaid, i);
-  check("没开的时候暗着：指上去写着「点一下开始」", !i.on && i.title === "自动模式（点一下开始）", i);
+  check("输入框右下角最右边那颗小开关一直在（在「你说过的话」右边）", i.exists && i.afterSaid, i);
+  check("没开的时候滑块在左、灰着：指上去写着「点一下开始」", !i.on && i.title === "自动模式（点一下开始）", i);
 
   await page.click("#autoBtn");
   await page.sleep(800);
   i = await ind();
-  check("点一下：按钮亮起来（绿圈开始转）", i.on, i);
+  check("点一下：小开关拨到右边（开着）", i.on, i);
   check("指上去写着「自动模式」（点一下停止）", i.title === "自动模式（点一下停止）", i.title);
   check("点一下不多出一条对话消息",
     (await page.eval(`return document.querySelectorAll(".msg.user").length;`)) === 0);
