@@ -7,7 +7,7 @@
  * 真后端、真会话、真网页服务、真界面文件（只有模型是假的），验的是外面看得见的行为：
  *   1. 按 Ctrl+Shift+F 弹出浮层，输入框自己拿到焦点；再按一次（或 Esc）收起；
  *   2. 「文件名」那一档边打边出：命中的那几个字母标出来；回车（或点一行）在左边的文件侧边栏
- *      打开那个文件；文件侧边栏头上那颗放大镜也能开它（手机上没键盘时的入口），
+ *      打开那个文件（横条上那颗回清单的箭头摆在最左边，不跟上头收起整列的叉叠在一起）；文件侧边栏头上那颗放大镜也能开它（手机上没键盘时的入口），
  *      而且开出来的浮层压在那一边列上面（那一列滑入时铺在浮层下一层，别让人先去收起它）；
  *   3. 「内容」那一档搜文件里的文字：一条结果两行——「路径:行号」和那一行（命中处标出来）；
  *      点一条就在文件侧边栏打开、停在那一行；只在 node_modules 里的不出现，超过 2 MB 的
@@ -224,6 +224,34 @@ module.exports = async (page) => {
         openedGamma.barName === FIX.gamma && openedGamma.rowCount === GAMMA_LINES, JSON.stringify(openedGamma));
     check("打开以后浮层自己收起来", !(await searchState()).shown);
     await page.shot("search-3-open-gamma.png");
+
+    // 横条上那颗返回：以前是颗叉、钉在右角上，跟上头那颗收起整列的叉上下叠成一列，
+    // 手指一点就点到收起上（手机上尤其容易）。现在它在横条最左边、画成箭头，离那颗叉最远。
+    const barLayout = JSON.parse(await page.eval(`
+        const bar = document.getElementById("fileBar");
+        const btn = document.getElementById("fileCloseFile").getBoundingClientRect();
+        const cx = btn.left + btn.width / 2;
+        const cy = btn.top + btn.height / 2;
+        const c = document.getElementById("fileClose").getBoundingClientRect();
+        const distance = Math.round(Math.hypot(cx - (c.left + c.width / 2), cy - (c.top + c.height / 2)));
+        const name = document.querySelector("#fileBar .file-bar-name").getBoundingClientRect();
+        return JSON.stringify({
+            inBarLeft: Math.round(btn.left - bar.getBoundingClientRect().left),
+            leftOfName: btn.right <= name.left,
+            distance: distance,
+        });
+    `));
+    check("横条那颗返回在横条最左边（在文件名前面）", barLayout.leftOfName && barLayout.inBarLeft <= 8,
+        JSON.stringify(barLayout));
+    check("它离右上角那颗收起整列的叉远远的（不上下叠成一列）", barLayout.distance >= 100,
+        String(barLayout.distance));
+
+    console.log("点横条那颗返回：");
+    await page.eval(`document.getElementById("fileCloseFile").click(); return true;`);
+    await page.sleep(400);
+    check("这个文件收起不看，回到刚才那一层清单", await page.eval(`
+        return document.getElementById("fileBar").hidden && !!document.querySelector("#fileBody .file-entry");
+    `));
 
     // ==================== 三、按内容找 ====================
     console.log("换到「内容」那一档，搜 " + MARK + "：");

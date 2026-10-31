@@ -7690,11 +7690,13 @@
           '<button id="fileSearchBtn" type="button" title="文件搜索（Ctrl+Shift+F）" aria-label="文件搜索">' + SEARCH_ICON + '</button>' +
           '<button id="fileClose" class="pk-header-close" type="button" title="收起" aria-label="收起">' + ICONS["close-bold"] + '</button>' +
         '</div>' +
-        // 看文件时正文上面那条横条：左边写这个文件叫什么，右边一颗关闭（回文件列表）
+        // 看文件时正文上面那条横条：左边一颗返回（回文件列表），右边写这个文件叫什么。
+        // 返回摆在最左边、画成箭头：以前它是一颗叉、钉在右角上，正好跟上面那颗收起整列的叉
+        // 上下叠成一列（两者中心只隔 28px），手指一点就点岔 —— 一个收起整列、一个退回清单。
         '<div id="fileBar" hidden>' +
-          '<span class="file-bar-name"></span>' +
           '<button id="fileCloseFile" type="button" title="关掉这个文件，回到文件列表" aria-label="回到文件列表">'
-            + ICONS["close-bold"] + '</button>' +
+            + ICONS["arrow-left"] + '</button>' +
+          '<span class="file-bar-name"></span>' +
         '</div>' +
         '<div id="fileBody" class="pk-body"></div>' +
         '<button id="fileWrap" type="button" aria-label="折行开关" aria-pressed="false">' + ICONS.wrap + '</button>' +
