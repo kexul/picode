@@ -74,11 +74,12 @@ export const BUILTIN_COMPACT_ITEM: SlashCommandItem = {
     source: "builtin",
 };
 
-/** 自动接着干（/auto）：插件自己接手的命令，见 auto.ts。 */
+/** 自动接着干：菜单里不再列了（开关就是输入框右下角那颗按钮）；
+ *  留着这个名字只为把 pi 那边同名的一条挡掉（免得菜单里冒出一条没用的 /auto）。 */
 export const BUILTIN_AUTO_ITEM: SlashCommandItem = {
     insert: "/auto",
     name: "auto",
-    description: "每轮跑完自动接着干（要停就点那颗转圈的图标）",
+    description: "（已改成输入框右下角那颗按钮）",
     source: "builtin",
 };
 
@@ -126,9 +127,9 @@ export function commandMenuItems(commands: RpcCommandInfo[]): SlashCommandItem[]
                 ? c.source
                 : "other",
         }))
-        // 同名时别盖掉插件自己认下的那几条（/compact、/auto）
+        // 同名时别盖掉插件自己认下的那一条（/compact）；/auto 不再进菜单（开关改成按钮了）
         .filter((it) => it.name !== BUILTIN_COMPACT_ITEM.name && it.name !== BUILTIN_AUTO_ITEM.name)
-        .concat([BUILTIN_COMPACT_ITEM, BUILTIN_AUTO_ITEM])
+        .concat([BUILTIN_COMPACT_ITEM])
         .sort((a, b) => a.name.localeCompare(b.name));
 }
 

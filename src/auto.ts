@@ -1,12 +1,12 @@
 /**
- * 自动模式（/auto）：每轮跑完，让一个判官看一眼主会话最后说的话，决定要不要再催一句「继续」。
+ * 自动模式：每轮跑完，让一个判官看一眼主会话最后说的话，决定要不要再催一句「继续」。
  *
- * 没有目标、没有验收清单：/auto 只是个开关，打开以后不往对话里发任何东西。
+ * 开关就是输入框右下角那颗圆圈的按钮：点一下开始，再点一下停；开了不往对话里发任何东西。
  * 之后每一轮正常跑完，插件另起一个短会话当判官（不带工具），把这一轮最后那条回复交给它，
  * 只问一件事：还要不要接着干。说继续就发一句「继续」；说不继续就把这个开关关掉。
  *
- * 全是纯函数：认命令、拼判官那一轮的提示、从判官回复里认出结论、算那颗图标上指着的说明。
- * 存盘在 autoFiles.ts；提示词的原文在 promptText.ts（那边可被 config.json 覆盖）。
+ * 全是纯函数：拼判官那一轮的提示、从判官回复里认出结论、算那颗按钮上指着的说明、
+ * 自动模式下替人答选择题时选哪几项。存盘在 autoFiles.ts；提示词的原文在 promptText.ts（那边可被 config.json 覆盖）。
  */
 import { promptText, type PromptOverrides } from "./promptText";
 
@@ -19,7 +19,7 @@ export interface AutoState {
     updatedAt: number;
 }
 
-/** 打进来的命令，也是输入框底下那颗转圈圈图标按下时用的（见 chatControllerBase.onAutoCommand）。 */
+/** 那颗按钮按下时用的（见 chatControllerBase.onAutoCommand），另外 `silent` 是打 /auto 那种字样用的。 */
 export type AutoCommand =
     /** 打开（已经开着就是看状态） */
     | { kind: "on" }
@@ -27,20 +27,18 @@ export type AutoCommand =
     | { kind: "show" }
     /** 关掉，不再追踪 */
     | { kind: "off" }
-    /** 打成了 `/auto 别的什么`：这命令不接东西 */
-    | { kind: "hint" };
+    /** 打的是 `/auto` 这几个字：吞掉（不发给模型、也不回话） */
+    | { kind: "silent" };
 
 /**
  * 这一句是不是 /auto。
  *
- * 只有 `/auto` 一个词：它不接任何东西（没有目标可写）。后面跟着别的字就回一句提示，
- * 免得那一串字悄悄被吞掉。
+ * 开关现在是那颗按钮（右下角），所以 `/auto` 这几个字只是不让它落到模型眼里：
+ * 吞掉就算了，不回话。
  */
 export function parseAutoCommand(text: string): AutoCommand | null {
     if (typeof text !== "string") { return null; }
-    const m = text.match(/^\/auto(?:[ \t]+([\s\S]*))?$/i);
-    if (!m) { return null; }
-    return (m[1] ?? "").trim() ? { kind: "hint" } : { kind: "on" };
+    return /^\/auto(?:[ \t]|$)/i.test(text) ? { kind: "silent" } : null;
 }
 
 /** 一路都答不出个所以然时最多连多少轮：防一个永远说"还差一点"的会话把钱烧光。 */
@@ -110,7 +108,7 @@ export function autoAskPicks(req: { options?: unknown; multi?: unknown; recommen
 }
 
 /**
- * 输入框底下那颗转圈圈图标指上去说什么（纯函数；界面直接用它当 title）。
+ * 输入框右下角那颗按钮指上去说什么（纯函数；界面直接用它当 title）。
  *
  * @param judging 这一轮正有判官在看（主会话已经跑完了）：要写出来，不然看着像卡住了。
  */

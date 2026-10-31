@@ -158,7 +158,7 @@ export interface RuntimeHost {
     onTurnEnd(info: TurnEndInfo): void;
 
     /**
-     * 某个会话里用户打了 /auto（自动模式），或者点了那颗转圈圈的图标（= 关掉）。
+     * 某个会话里用户点了输入框右下角那颗自动模式的按钮（= 开 / 关）。
      * 开关状态、判官那一轮的提示都归宿主管（见 chatControllerBase 里 auto 那段）。
      * 不实现就当没这个功能：/auto 会当成普通消息发给模型。可选。
      */

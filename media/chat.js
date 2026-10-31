@@ -64,7 +64,7 @@
     pause: '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="3.6" y="2.6" width="3.2" height="10.8" rx="0.8"/><rect x="9.2" y="2.6" width="3.2" height="10.8" rx="0.8"/></svg>',
     // 停止小方块：跟上面两颗一样大（12px），不然它看着比暂停粗一圈
     "stop-small": '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="3.4" y="3.4" width="9.2" height="9.2" rx="1.2"/></svg>',
-    // 转圈圈：自动模式开着时输入框右头那颗（点一下就停）。
+    // 圆圈：输入框右下角那颗自动模式的按钮（点一下开始、再点一下停）。
     auto: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M8 2.4a5.6 5.6 0 1 1-5.6 5.6"/></svg>',
     // 三条横线：输入框右边那颗「你说过的话」（一句话一行，所以是清单）。
     said: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>',
@@ -881,8 +881,8 @@
       // 生成速度（t/s）：后端算好了推过来（只算模型真在吐字的那段时间，见 sessionRuntime 的
       // noteGenTokens）；停了就挂着这一轮最后的数，下一轮开始清空
       tps: undefined,
-      // 自动模式（/auto）：auto 是这个会话的开关状态（后端推来，见 case "auto"），
-      // autoTitle 是那颗转圈圈图标指上去说什么（后端拼好，见 auto.ts 的 autoIndicatorTitle）。
+      // 自动模式：auto 是这个会话的开关状态（后端推来，见 case "auto"），
+      // autoTitle 是那颗按钮指上去说什么（后端拼好，见 auto.ts 的 autoIndicatorTitle）。
       auto: null,
       autoTitle: null,
       // 工具调用耗时（见 noteToolDuration / renderToolStats）：只算这次打开页面之后跑过的调用。
@@ -4147,9 +4147,9 @@
     };
   }
 
-  // ==================== 自动模式那颗转圈圈的图标（/auto，输入框右头）====================
-  // 开着才露面，挨在「你说过的话」那颗（三条横线）左边；指上去写着现在第几轮、判官是不是正在看，
-  // 点一下就是关掉。所有字都由后端拼好（见 auto.ts 的 autoIndicatorTitle），这里只管露面 / 收起。
+  // ==================== 自动模式那颗按钮（输入框右下角最右边）====================
+  // 一直在（没开的时候暗着）：点一下开始，开着的时候变绿转圈、再点一下就是停。
+  // 指上去写着现在第几轮、判官是不是正在看，字都由后端拼好（见 auto.ts 的 autoIndicatorTitle）。
   let autoBtn = null;
   (function buildAutoButton() {
     const row = document.getElementById("inputRow");
@@ -4157,17 +4157,16 @@
     autoBtn = document.createElement("button");
     autoBtn.type = "button";
     autoBtn.id = "autoBtn";
-    autoBtn.className = "hidden";
     autoBtn.innerHTML = ICONS.auto;
-    autoBtn.title = "自动模式";
+    autoBtn.title = "自动模式（点一下开始）";
     autoBtn.setAttribute("aria-label", "自动模式");
-    // 挨在「你说过的话」那颗（三条横线）左边：那一颗早就挂上了（见上面那个 IIFE），
-    // 这一颗插到它前头。
-    if (saidBtn) { row.insertBefore(autoBtn, saidBtn); } else { row.appendChild(autoBtn); }
+    // 摆在框底那条横排的最右头（前头依次是加号、模型胶囊、「你说过的话」）
+    row.appendChild(autoBtn);
     autoBtn.addEventListener("click", () => {
       const st = activeSession();
       if (!st) { return; }
-      vscode.postMessage({ type: "autoAct", sessionId: st.id, act: "stop" });
+      // 开着就停，没开就开始（那颗按钮上看着是什么就做什么）
+      vscode.postMessage({ type: "autoAct", sessionId: st.id, act: st.auto ? "stop" : "start" });
     });
   })();
 
@@ -4175,14 +4174,10 @@
     if (!autoBtn) { return; }
     const st = activeSession();
     const auto = st ? st.auto : null;
-    if (!auto) {
-      autoBtn.classList.add("hidden");
-      return;
-    }
-    const title = (st && st.autoTitle) || "自动模式（点一下停止）";
+    const title = auto ? ((st && st.autoTitle) || "自动模式（点一下停止）") : "自动模式（点一下开始）";
     autoBtn.title = title;
     autoBtn.setAttribute("aria-label", title);
-    autoBtn.classList.remove("hidden");
+    autoBtn.classList.toggle("on", !!auto);
   }
 
   function renderQueueBar(st) {
@@ -9654,8 +9649,8 @@
         st.activityDetail = typeof s.activityDetail === "string" ? s.activityDetail : "";
         st.piReady = s.piReady !== false;
         st.loading = !!s.loading;
-        // 自动模式（/auto）：每次列表都带一份（跟模型名一样，是一次性推送的补位）——
-        // 刷新页面 / 重连后那颗转圈圈的图标就靠它回来。
+        // 自动模式：每次列表都带一份（跟模型名一样，是一次性推送的补位）——
+        // 刷新页面 / 重连后那颗按钮亮不亮就靠它回来。
         st.auto = s.auto || null;
         st.autoTitle = s.autoTitle || null;
         syncSessionLoading(st);
@@ -10278,7 +10273,7 @@
         if (activeId === t.id) { syncStatus(); }
         break;
       case "auto":
-        // 开关状态（/auto）：界面上只多不多一颗转圈圈的图标，不往消息流里写
+        // 开关状态（自动模式）：界面上只是那颗按钮亮不亮，不往消息流里写
         t.auto = msg.auto || null;
         t.autoTitle = msg.title || null;
         if (activeId === t.id) { renderAutoIndicator(); }

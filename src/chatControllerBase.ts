@@ -899,12 +899,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     // ---- Fork（原生克隆会话到新 panel）----
     // ========================================================================
-    //  自动接着干（/auto）：每轮跑完让判官看一眼，决定要不要再发一句「继续」
+    //  自动接着干：每轮跑完让判官看一眼，决定要不要再发一句「继续」
     // ========================================================================
     //
-    //  /auto 只是个开关：不接东西、不往对话里发话。开着的时候，每一轮正常跑完，插件另起
-    //  一个短会话当判官（一个工具都不给，只回一句话），把这一轮最后那条回复交给它，问
-    //  「还要不要接着干」。说继续就发一句「继续」；说不继续就把开关关掉。
+    //  开关就是输入框右下角那颗圆圈的按钮：点一下开始，再点一下停；开了不往对话里发话。
+    //  开着的时候，每一轮正常跑完，插件另起一个短会话当判官（一个工具都不给，只回一句话），
+    //  把这一轮最后那条回复交给它，问「还要不要接着干」。说继续就发一句「继续」；
+    //  说不继续就把开关关掉。
     //
     //  只有一条自己停的条件：轮数到了 MAX_AUTO_ROUNDS（防一个永远说"还差一点"的会话烧钱）。
     //  判官起不来、或者答不出个所以然，一律当"继续" —— 这是个无情的继续机器：
@@ -923,7 +924,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 判官的启动参数：一个工具都不给（它只读一段文字回一句话，给了工具只会慢、还会乱跑）。 */
     private static readonly AUTO_JUDGE_ARGS = ["--no-tools", "--no-mcp"];
 
-    /** RuntimeHost.onAutoCommand：/auto 命令，以及输入框底下那颗转圈圈的图标。 */
+    /** RuntimeHost.onAutoCommand：输入框右下角那颗圆圈按钮按下时，以及有人打了 `/auto` 这几个字时。 */
     public onAutoCommand(panelId: string, cmd: AutoCommand): void {
         const rt = this.panels.get(panelId);
         if (!rt) { return; }
@@ -931,17 +932,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
             case "on": this.autoOn(rt); return;
             case "show": this.autoBroadcast(rt.id); return;
             case "off": this.autoOff(rt); return;
-            case "hint":
-                this.postToSession(rt.id, {
-                    type: "system",
-                    text: "「/auto」不接东西：开了就自己接着干；要停就点输入框底下那颗转圈的图标。",
-                });
-                return;
+            // 打了 `/auto` 这几个字：吞掉就算了（开关在那颗按钮上），不回话
+            case "silent": return;
         }
     }
 
     /**
-     * /auto：打开开关。不往对话里发任何东西 —— 下一句活还是你自己说，
+     * 打开开关（那颗按钮按下去）。不往对话里发任何东西 —— 下一句活还是你自己说，
      * 它管的是之后每一轮跑完要不要接着催。
      */
     protected autoOn(rt: SessionRuntime): void {
@@ -958,7 +955,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             this.autoBroadcast(rt.id);
             this.postToSession(rt.id, {
                 type: "system",
-                text: `自动模式已经开着（第 ${running.rounds} 轮）。要停就点输入框底下那颗转圈的图标。`,
+                text: `自动模式已经开着（第 ${running.rounds} 轮）。要停就再点一下那颗按钮。`,
             });
             return;
         }
@@ -969,11 +966,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.postToSession(rt.id, {
             type: "system",
             text: "自动模式开了：之后每一轮跑完，判官看一眼要不要接着干，要就发一句「继续」。"
-                + "要停就点输入框底下那颗转圈的图标。",
+                + "要停就再点一下那颗按钮。",
         });
     }
 
-    /** 关掉开关（点那颗转圈圈的图标，以及判官说不用继续、轮数到顶）。盘上那一份也一并抹掉。 */
+    /** 关掉开关（再点一下那颗按钮，以及判官说不用继续、轮数到顶）。盘上那一份也一并抹掉。 */
     protected autoOff(rt: SessionRuntime, reason?: string): void {
         this.autoCancelJudge(rt.id);
         this.autos.delete(rt.id);
@@ -1032,7 +1029,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const rt = this.panels.get(info.panelId);
         if (!rt) { return; }
         if (auto.rounds >= MAX_AUTO_ROUNDS) {
-            this.autoOff(rt, `连着跑了 ${auto.rounds} 轮，先停下（要接着跑就再打一次 /auto）。`);
+            this.autoOff(rt, `连着跑了 ${auto.rounds} 轮，先停下（要接着跑就再点一下那颗按钮）。`);
             return;
         }
         void this.autoSpawnJudge(info.panelId, auto, info.lastReplyText ?? "");
@@ -1097,7 +1094,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                     this.autoBroadcast(workerPanelId);
                     this.autoContinue(workerPanelId);
                 } else {
-                    this.autoOff(workerRt, `第 ${auto.rounds} 轮：判官说不用继续了。要再开就打 /auto。`);
+                    this.autoOff(workerRt, `第 ${auto.rounds} 轮：判官说不用继续了。要再开就点一下右下角那颗按钮。`);
                 }
             }
         }
@@ -1644,7 +1641,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             // 派子会话：这个会话是子会话、或者它派过子会话（前端据此画标记）
             taba: this.tabaPanelInfo(rt.id) ?? null,
             // 自动接着干（/auto）：跟 modelChanged 一样是一次性推送，所以每次列表都带一份 ——
-            // 页面刷新 / 重连后界面重建，那颗转圈圈的图标就靠它补回来。
+            // 页面刷新 / 重连后界面重建，那颗按钮亮不亮就靠它补回来。
             auto: auto ?? null,
             autoTitle: auto ? autoIndicatorTitle(auto, this.autoIsJudging(rt.id)) : null,
         };
@@ -2485,8 +2482,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 break;
             }
             case "autoAct": {
-                // 输入框底下那颗转圈圈的图标：点一下就是关掉自动模式
+                // 输入框右下角那颗圆圈的按钮：开着就停，没开就开始
                 if (msg.act === "stop") { this.onAutoCommand(target.id, { kind: "off" }); }
+                else if (msg.act === "start") { this.onAutoCommand(target.id, { kind: "on" }); }
                 break;
             }
             case "abort": {

@@ -532,9 +532,8 @@
   }
   #composer:focus-within { border-color: var(--vscode-focusBorder); }
   #inputRow { display: flex; align-items: center; gap: 2px; }
-  /* 框底那条横排左头那颗加号（新建会话）、右头那颗「你说过的话」：一样的矮方块，
-     鼠标扫过亮一下。中间是模型胶囊（见下面的 #ctxIcon）；「你说过的话」那颗
-     由 chat.js 挂进来。 */
+  /* 框底那条横排左头那颗加号（新建会话）、右头那颗「你说过的话」和再往右的自动模式按钮：
+     一样的矮方块，鼠标扫过亮一下。中间是模型胶囊（见下面的 #ctxIcon）。 */
   #newSessionBtn,
   #autoBtn,
   #saidBtn {
@@ -549,20 +548,19 @@
   #newSessionBtn:hover,
   #autoBtn:hover,
   #saidBtn:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); color: var(--vscode-foreground); }
-  /* 自动模式开着时，输入框右头多一颗转圈圈的图标（挨在「你说过的话」左边，点一下就是停）。
-     它自己靠右；没开的时候那块地方归「你说过的话」自己占着（见下面那条 margin-left: auto）。 */
-  #autoBtn.hidden { display: none; }
-  #autoBtn { margin-left: auto; color: var(--vscode-charts-green, #89d185); }
-  #autoBtn svg { animation: auto-spin 2.6s linear infinite; }
+  /* 自动模式那颗按钮：一直在输入框右下角最右边。没开时暗着（点一下开始），
+     开了变绿、圈一直转（点一下停）。 */
+  #autoBtn { color: var(--vscode-descriptionForeground, inherit); }
+  #autoBtn.on { color: var(--vscode-charts-green, #89d185); }
+  #autoBtn.on svg { animation: auto-spin 2.6s linear infinite; }
   @keyframes auto-spin { to { transform: rotate(360deg); } }
   /* 一个会话都没有时那颗加号灰掉（新会话总得开在某个工作区里，先去面板里挑一个） */
   #newSessionBtn:disabled { opacity: 0.4; cursor: default; }
   #newSessionBtn:disabled:hover { background: transparent; color: var(--vscode-descriptionForeground, inherit); }
   /* 清单开着的时候这颗按钮一直亮着（一眼看出是哪颗按钮弹的） */
   #saidBtn.on { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); color: var(--vscode-foreground); }
-  /* 「你说过的话」靠着右头：中间空出来的地方就是留白（自动模式那颗在前面时，它挨着那颗） */
+  /* 「你说过的话」靠着右头：中间空出来的地方就是留白（它右边紧挨着自动模式那颗） */
   #saidBtn { margin-left: auto; }
-  #autoBtn + #saidBtn { margin-left: 0; }
   /* 打字的地方：框里剩下多少地方全是它的（宽度沾满，高度自己按内容长，见 autoResize）。
      这里不能写 flex: 1 —— 盒子是竖排，flex-basis: 0 会把 height 顶掉，
      打字一多就长不高了（框里自己滚）。 */

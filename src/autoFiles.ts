@@ -60,7 +60,7 @@ export function writeAuto(auto: AutoState, sessionFile: string, file: string = a
     return writeAll(file, data);
 }
 
-/** 清掉一个会话的开关（点那颗转圈圈的图标、判官说不用继续，都走这里）。 */
+/** 清掉一个会话的开关（点那颗按钮、判官说不用继续，都走这里）。 */
 export function dropAuto(sessionFile: string, file: string = autoFile()): void {
     if (!sessionFile) { return; }
     const data = readAll(file);
