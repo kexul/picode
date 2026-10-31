@@ -11,6 +11,7 @@
  *   node dev/multiSessionPerf.js --switch-every 2000             # 一边吐字一边每 2 秒切一次
  *   node dev/multiSessionPerf.js --sessions 1                    # 只有一个会话（基线）
  *   node dev/multiSessionPerf.js --no-anim                       # 把所有循环动画关掉再量
+ *   node dev/multiSessionPerf.js --sessions 3 --profile          # 顺便报一份采样热点（谁在吃 CPU）
  *
  * 报的是这十几秒里主线程忙了多少（拆成脚本 / 排版 / 算样式），最后还验一遍「切过去有没有
  * 漏画」：后端发过来多少字、页面上原文多长，两个数得对上。
@@ -18,7 +19,7 @@
  * 只用来查性能，不动别人的环境（后端用 PICHAT_HOME 指到 dev/.scratch，用假 pi）。
  */
 const { createHarness, openSessionIn } = require("./harness.js");
-const { openPage, sleep } = require("./cdp.js");
+const { openPage, sleep, printHotspots } = require("./cdp.js");
 
 async function metrics(cdp) {
     const { metrics: list } = await cdp.send("Performance.getMetrics");
@@ -53,6 +54,7 @@ async function main() {
     const seconds = Number(arg("seconds", 15));
     const switchEvery = Number(arg("switch-every", 0));
     const noAnim = argv.includes("--no-anim");
+    const profile = argv.includes("--profile");   // 顺便报一份采样热点：谁在吃 CPU
 
     const harness = createHarness({ fakePi: true });
     const url = await harness.start();
@@ -105,6 +107,11 @@ async function main() {
         await sleep(4000);   // 先让它们跑起来，别把"刚垫进去那一下"算进来
 
         const before = await metrics(cdp);
+        if (profile) {
+            await cdp.send("Profiler.enable");
+            await cdp.send("Profiler.setSamplingInterval", { interval: 200 });
+            await cdp.send("Profiler.start");
+        }
         const t0 = Date.now();
         if (switchEvery > 0) {
             let n = 0;
@@ -117,6 +124,7 @@ async function main() {
         }
         const wall = Date.now() - t0;
         const after = await metrics(cdp);
+        const prof = profile ? (await cdp.send("Profiler.stop")).profile : null;
         const d = (k) => Math.max(0, (after[k] || 0) - (before[k] || 0));
         const pct = (v) => ((v * 1000 / wall) * 100).toFixed(1) + "%";
         console.log("");
@@ -128,6 +136,7 @@ async function main() {
         console.log("排版 " + d("LayoutCount") + " 次，算样式 " + d("RecalcStyleCount") + " 次");
         const dom = await page.eval("return { views: document.querySelectorAll('.session-view').length, nodes: document.getElementsByTagName('*').length };");
         console.log("DOM：" + dom.nodes + " 个元素，" + dom.views + " 个会话壳");
+        if (prof) { printHotspots(prof); }
 
         // 漏不漏画：停掉吐字，挨个切过去，看画出来的原文是不是已经到最新
         await page.eval("window.__timers.forEach(clearInterval); window.__timers = []; return true;");
