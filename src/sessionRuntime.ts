@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import { PiClient } from "./piClient";
 import { ASK_DECODER, AskDoneNotice, AskRequest } from "./askProtocol";
-import { BASH_DECODER, BashTaskEvent, BashTaskInfo, readBashLogTail } from "./bashProtocol";
+import { BASH_DECODER, BashTaskEvent, BashTaskInfo } from "./bashProtocol";
 import { parseAutoCommand } from "./auto";
 import { StderrFrameSplitter } from "./piFrames";
 import { TABA_DECODER, TabaRequest } from "./tabaProtocol";
@@ -549,9 +549,17 @@ export class SessionRuntime {
 
     // ---- 后台命令（那个接管了 bash 的扩展报上来的）----
 
-    /** 这个会话的后台命令清单（新的排前面）：界面那一格「脚本」用它、刷新后重画也用它。 */
+    /** 这个会话的后台命令清单（新的排前面）：界面那颗「后台任务」按钮弹出来的弹窗用它、刷新后重问一次也用它。 */
     public listBashTasks(): BashTaskInfo[] {
         return Array.from(this.bashTasks.values()).sort((a, b) => b.no - a.no);
+    }
+
+    /** 这个会话还有没有放到后台、正在跑的命令（新建会话时据此决定要不要把旧的那个留着）。 */
+    public hasRunningBashTasks(): boolean {
+        for (const task of this.bashTasks.values()) {
+            if (task.status === "running") { return true; }
+        }
+        return false;
     }
 
     // ---- 「加载了什么」（那个报清单的扩展报上来的）----
@@ -612,16 +620,6 @@ export class SessionRuntime {
             return false;
         }
     }
-
-    /** 界面点开一条后台命令时要看的那段输出（日志尾部）；不属于这个会话就是 undefined。 */
-    public bashTaskLog(no: number): string | undefined {
-        const task = this.bashTasks.get(no);
-        if (!task) { return undefined; }
-        return readBashLogTail(task.log, SessionRuntime.BASH_LOG_VIEW_BYTES);
-    }
-
-    /** 界面上一次最多给多少输出（字节）：再多让模型/人自己去读文件。 */
-    private static readonly BASH_LOG_VIEW_BYTES = 64 * 1024;
 
     /** 界面点「停」：把这条后台命令连它派出来的进程一起杀掉。停的了返回 true。 */
     public stopBashTask(no: number): boolean {

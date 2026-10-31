@@ -2406,7 +2406,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 // 先建新的、再关旧的：新会话要继承旧会话的目录与模型，关早了就只剩宿主自己的默认目录了。
                 const old = this.getActive();
                 const rt = this.newSession();
-                if (old && old.id !== rt.id && !old.streaming) { this.closeSession(old.id); }
+                if (old && old.id !== rt.id && !old.streaming && !old.hasRunningBashTasks()) {
+                    this.closeSession(old.id);
+                }
                 return;
             }
             case "switchSession":
@@ -2462,6 +2464,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
                     });
                 }
                 return;
+            case "bashTasks": {
+                // 输入框右边那颗「后台任务」要一份清单：弹窗里列哪些还在后台跑、那颗按钮亮不亮。
+                // 只回问的那块屏；清单跟着会话的内存走，会话关了就没了。
+                const id = typeof msg.sessionId === "string" && this.panels.has(msg.sessionId)
+                    ? msg.sessionId
+                    : this.getActive()?.id;
+                const tasks = id ? (this.panels.get(id)?.listBashTasks() ?? []) : [];
+                this.postToOneClient(this.currentPageId, { type: "bashTasks", sessionId: id ?? "", tasks });
+                return;
+            }
             case "pickerToggle":
                 if (typeof msg.action === "string" && msg.kind !== "model") {
                     this.doViewOptionToggle(msg.action, typeof msg.value === "string" ? msg.value : undefined);

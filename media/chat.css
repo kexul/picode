@@ -95,10 +95,12 @@
   #jumpBottom.hidden { display: none; }
   #jumpBottom svg { width: 14px; height: 14px; display: block; }
 
-  /* 「你说过的话」（框底那条横排右头那颗按钮点开，见 chat.js 的 openSaidMenu）：从输入那个盒子
+  /* 「后台任务」（框底那条横排右头那颗按钮点开，见 chat.js 的 openBashMenu）：从输入那个盒子
      上头往上弹的一小张清单（输入框本来就在屏幕底，往上弹才不会被键盘顶到），贴着按钮
-     那一头（右边），高度封顶，多了自己滚。 */
-  #saidMenu {
+     那一头（右边），高度封顶，多了自己滚。
+     里面一行一条还在后台跑的命令：头一行是编号 + 在跑 + 已经跑了多久 + 一颗「停」，
+     下面一行是命令原文（一行放不下就截掉，悬停看全）。 */
+  #bashMenu {
     position: absolute; bottom: 100%; right: 0; margin-bottom: 6px; z-index: 20;
     box-sizing: border-box;
     width: min(420px, calc(100vw - 24px));
@@ -110,24 +112,33 @@
     border-radius: 6px;
     box-shadow: 0 4px 16px rgba(0,0,0,0.28);
   }
-  #saidMenu.hidden { display: none; }
-  /* 里一行是一颗 button：全局 button 那条蓝底白字得压掉（这里只是“点一行文字”）。
-     类名比 .pk-item 多一颗，也压得住它那条 display: block。 */
-  .pk-item.said-item {
-    display: flex; align-items: baseline; gap: 8px;
-    width: 100%; text-align: left; font: inherit;
-    background: transparent; color: inherit; border: none;
+  #bashMenu.hidden { display: none; }
+  .bash-item { padding: 5px 8px 6px; border-radius: 4px; }
+  .bash-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
+  .bash-head { display: flex; align-items: center; gap: 8px; font-size: calc(var(--vscode-font-size, 13px) - 1px); }
+  .bash-no { flex: 0 0 auto; opacity: 0.7; font-family: var(--vscode-editor-font-family, monospace); }
+  /* 「在跑」：跟那颗按钮亮着时一个颜色，一眼看出这条是活的 */
+  .bash-state { flex: 0 0 auto; color: var(--vscode-charts-blue, #3794ff); }
+  .bash-time {
+    flex: 0 0 auto; margin-left: auto; opacity: 0.8;
+    font-variant-numeric: tabular-nums;
+    font-family: var(--vscode-editor-font-family, monospace); font-size: 0.92em;
   }
-  .said-no { flex: 0 0 auto; min-width: 1.6em; text-align: right; opacity: 0.5; font-variant-numeric: tabular-nums; }
-  .said-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .said-empty { padding: 18px 10px; text-align: center; opacity: 0.6; }
-
-  /* 跳过去的那一条闪一下底色（才知道跳到哪儿了）。底色从高亮回到用户气泡本来的那个色。 */
-  .msg.user.msg-flash { animation: msg-flash 1.3s ease-out; }
-  @keyframes msg-flash {
-    0% { background-color: color-mix(in srgb, var(--vscode-focusBorder, #007acc) 45%, transparent); }
-    100% { background-color: color-mix(in srgb, var(--vscode-button-background) 18%, transparent); }
+  /* 「停」是一颗小胶囊：全局 button 那条蓝底白字要压掉（它只是顺手点一下的小动作） */
+  .bash-stop {
+    flex: 0 0 auto; padding: 1px 8px; font-size: 0.88em; cursor: pointer;
+    background: none; color: var(--vscode-foreground); opacity: 0.75;
+    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); border-radius: 9px;
+    font-family: var(--vscode-font-family);
   }
+  .bash-stop:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
+  .bash-stop:disabled { opacity: 0.4; cursor: default; }
+  .bash-cmd {
+    margin-top: 2px; opacity: 0.8;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: var(--vscode-editor-font-family, monospace); font-size: 0.86em;
+  }
+  .bash-empty { padding: 18px 10px; text-align: center; opacity: 0.6; }
 
   /* ---- 顶条：中间一排会话格与当前目录，左右几颗按钮（网页端自己接的那几颗） ---- */
   /* 一格一个主会话，点一下切过去；宽度不够就收窄、再不够就叠起来（见 chat.js 的 layoutSessionTabs），
@@ -294,7 +305,6 @@
      那种时候没东西可在那条上说），界面上就一处都不转了。想完（running 摘掉）齿轮停住。 */
   .tool-think.running .tool-icon { animation: tool-spin 1.1s linear infinite; }
   @keyframes tool-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-  .tool.error { opacity: 1; color: var(--vscode-errorForeground, #f48771); }
   /* 改动被回滚了：这一组的标签划掉（一组里有没回滚的就不划，见 chat.js 的 syncGroupTag） */
   .tool.reverted { text-decoration: line-through; opacity: 0.6; }
   /* 正在跑的那一条：贴在当前这批工具标签下面，一行一条（同时跑几条就排几行）。
@@ -504,21 +514,21 @@
      量法：node dev/perfProbe.js --auto --cpu 4。 */
   #composer.auto { border-color: var(--vscode-charts-green, #3fb950); }
   #inputRow { display: flex; align-items: center; gap: 2px; }
-  /* 框底那条横排左头那颗加号（新建会话）、右头那颗「你说过的话」和再往右的自动模式按钮：
+  /* 框底那条横排左头那颗加号（新建会话）、右头那颗「后台任务」和再往右的自动模式按钮：
      一样的矮方块，鼠标扫过亮一下。中间是模型胶囊（见下面的 #ctxIcon）。 */
   #newSessionBtn,
   #autoBtn,
-  #saidBtn {
+  #bashBtn {
     flex: 0 0 auto; width: 26px; height: 26px; padding: 0;
     display: flex; align-items: center; justify-content: center;
     background: transparent; border: none; border-radius: 8px;
     color: var(--vscode-descriptionForeground, inherit); cursor: pointer;
   }
   #newSessionBtn svg,
-  #saidBtn svg { width: 15px; height: 15px; display: block; }
+  #bashBtn svg { width: 15px; height: 15px; display: block; }
   #newSessionBtn:hover,
   #autoBtn:hover,
-  #saidBtn:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); color: var(--vscode-foreground); }
+  #bashBtn:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); color: var(--vscode-foreground); }
   /* 自动模式那颗按钮：一直在输入框右下角最右边，长的是一颗小开关 ——
      圆角胶囊里一颗滑块：没开时滑块在左、胶囊灰着；开着时滑块滑到右边、胶囊变绿。
      点一下就是拨一下（开着时再点就是停）。 */
@@ -538,9 +548,12 @@
   #newSessionBtn:disabled { opacity: 0.4; cursor: default; }
   #newSessionBtn:disabled:hover { background: transparent; color: var(--vscode-descriptionForeground, inherit); }
   /* 清单开着的时候这颗按钮一直亮着（一眼看出是哪颗按钮弹的） */
-  #saidBtn.on { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); color: var(--vscode-foreground); }
-  /* 「你说过的话」靠着右头：中间空出来的地方就是留白（它右边紧挨着自动模式那颗） */
-  #saidBtn { margin-left: auto; }
+  #bashBtn.on { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); color: var(--vscode-foreground); }
+  /* 「后台任务」靠着右头：中间空出来的地方就是留白（它右边紧挨着自动模式那颗） */
+  #bashBtn { margin-left: auto; }
+  /* 有命令在后台跑的时候那颗按钮变蓝（没有就是灰的，见 chat.js 的 syncBashBtn）：
+     它是这颗按钮上唯一会变的东西，一眼看出“还有活在外头跑着”。 */
+  #bashBtn.busy, #bashBtn.busy:hover { color: var(--vscode-charts-blue, #3794ff); }
   /* 打字的地方：框里剩下多少地方全是它的（宽度沾满，高度自己按内容长，见 autoResize）。
      这里不能写 flex: 1 —— 盒子是竖排，flex-basis: 0 会把 height 顶掉，
      打字一多就长不高了（框里自己滚）。 */
@@ -1651,9 +1664,9 @@
     background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.08));
     box-shadow: inset 0 2px 0 0 var(--vscode-focusBorder, #007acc);
   }
-  /* 常驻那几格（目录 / 改动 / 后台）里只有名字、没有右边那颗叉：字放中间，左右内边距对等
+  /* 常驻那两格（目录 / 改动）里只有名字、没有右边那颗叉：字放中间，左右内边距对等
      （别的标签右边要留那颗叉的位置，所以它们还是左边对齐）。 */
-  .file-tab[data-proj], .file-tab[data-changes], .file-tab[data-scripts] {
+  .file-tab[data-proj], .file-tab[data-changes] {
     justify-content: center;
     padding: 3px 10px;
   }
@@ -1789,67 +1802,6 @@
   .change-body .edit-diff { max-height: none; padding: 2px 0 6px; font-size: 0.95em; }
   .change-body .edit-diff-inner { width: 100%; }
   .change-body .diff-line { white-space: pre-wrap; overflow-wrap: anywhere; }
-  /* 「脚本」那一格（见 chat.js 的 scriptRow）：一行一条放到后台跑的命令——
-     头一行左边一颗三角、中间编号 + 跑到哪一步 + 用时，还在跑的那条右边一颗「停」；
-     下面一行是命令；点这一行展开它最后一段输出。
-     三角、可点的整行、悬停底色都跟「改动」那一格一个做法，看起来是同一种东西。 */
-  .script-item { border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.18)); }
-  .script-head {
-    display: flex; align-items: center; gap: 6px;
-    padding: 4px 10px 4px 8px; cursor: pointer; user-select: none;
-    font-size: calc(var(--vscode-font-size, 13px) - 1px);
-    /* 跟「改动」那一行一个做法：输出拖得再长，这一行粘在顶上 */
-    position: sticky; top: 0; z-index: 1;
-    background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #fff));
-  }
-  .script-head:hover {
-    background-image: linear-gradient(var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)),
-      var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)));
-  }
-  .script-item.open .change-arrow { transform: rotate(90deg); }
-  .script-no {
-    flex: 0 0 auto; opacity: 0.7;
-    font-family: var(--vscode-editor-font-family, monospace);
-  }
-  .script-state { flex: 0 0 auto; }
-  .script-state.running { color: var(--vscode-charts-blue, #3794ff); }
-  .script-state.failed { color: var(--vscode-errorForeground, #f14c4c); }
-  .script-time {
-    flex: 0 0 auto; margin-left: auto; padding-left: 8px; opacity: 0.8;
-    font-variant-numeric: tabular-nums;
-    font-family: var(--vscode-editor-font-family, monospace); font-size: 0.92em;
-  }
-  .script-stop {
-    flex: 0 0 auto; padding: 1px 8px; font-size: 0.88em; cursor: pointer;
-    background: none; color: var(--vscode-foreground); opacity: 0.75;
-    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); border-radius: 9px;
-    font-family: var(--vscode-font-family);
-  }
-  .script-stop:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
-  .script-stop:disabled { opacity: 0.4; cursor: default; }
-  /* 命令那一行：缩到编号下面（27px = 三角 5px + 间距，跟头一行那几颗对齐）。
-     收着的时候只占一行、放不下就截掉（悬停看全），也不垫底色；
-     展开的时候把整条命令折行铺开、垫一层浅底（当成一块命令头），下面那段就是输出。 */
-  .script-cmd {
-    padding: 0 10px 5px 27px; opacity: 0.8;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    font-family: var(--vscode-editor-font-family, monospace); font-size: 0.86em;
-  }
-  .script-item.open .script-cmd {
-    white-space: pre-wrap; overflow-wrap: anywhere;
-    background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.12));
-    padding-top: 3px; padding-bottom: 4px;
-  }
-  .script-body[hidden] { display: none; }
-  /* 展开的那一段输出：等宽、长行折起来；跟 diff 一样不自己再滚一道（这一列本来就在滚），
-     往下拖的时候上面那一行粘在顶上（见 .script-head 的 sticky）。 */
-  .script-log {
-    margin: 0; padding: 4px 10px 8px 27px;
-    white-space: pre-wrap; overflow-wrap: anywhere;
-    font-family: var(--vscode-editor-font-family, monospace); font-size: 0.86em;
-  }
-
-
   /* 目录清单：一项一行（名字前一颗图标），点子目录往下走、点文件打开它（见 chat.js 的
      renderDirListing）；待在子目录里时最上面多一行「上一层」（同一套样子，图标是那颗朝上的箭头）。 */
   .file-entry { display: flex; align-items: center; gap: 6px; padding: 3px 12px; cursor: pointer; line-height: 1.5; }

@@ -334,16 +334,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return this.panels.get(sessionId)?.getChanges() ?? [];
     }
 
-    /** 一条后台命令的输出（界面点开那一行要看的那段）；不属于这个会话就是 undefined。 */
-    public sessionBashLog(sessionId: string, no: number): string | undefined {
-        return this.panels.get(sessionId)?.bashTaskLog(no);
-    }
-
-    /** 这个会话的后台命令（文件侧边栏那一格「脚本」用）：跟「改动」一样只活在本会话期间。 */
-    public sessionBashTasks(sessionId: string): BashTaskInfo[] {
-        return this.panels.get(sessionId)?.listBashTasks() ?? [];
-    }
-
     /** 一个文件的合计 diff（相对写法 = 清单里那一行）；没改出差别就不给。 */
     public sessionChangeDiff(sessionId: string, relPath: string): string | undefined {
         return this.panels.get(sessionId)?.changeDiff(relPath);

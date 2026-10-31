@@ -48,18 +48,18 @@ module.exports = async (page) => {
     return keys.length === 1 ? all[keys[0]] : null;
   };
 
-  /** 右下角那颗自动模式的按钮：一直在不在、亮没亮（开着）、指上去说什么、在不在「你说过的话」右边。 */
+  /** 右下角那颗自动模式的按钮：一直在不在、亮没亮（开着）、指上去说什么、在不在「后台任务」右边。 */
   const ind = () => page.eval(`
     const el = document.getElementById("autoBtn");
     if (!el) { return { exists: false }; }
-    const said = document.getElementById("saidBtn");
+    const bash = document.getElementById("bashBtn");
     const composer = document.getElementById("composer");
     return {
       exists: true,
       on: el.classList.contains("on"),
       flow: !!composer && composer.classList.contains("auto"),
       title: el.title || "",
-      afterSaid: !!(said && (said.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)),
+      afterBash: !!(bash && (bash.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)),
     };
   `);
   const userSays = () => page.eval(`
@@ -104,7 +104,7 @@ module.exports = async (page) => {
 
   // ---- 1. 右下角那颗按钮一直在；点一下开始：不往对话里发东西 ----
   let i = await ind();
-  check("输入框右下角最右边那颗小开关一直在（在「你说过的话」右边）", i.exists && i.afterSaid, i);
+  check("输入框右下角最右边那颗小开关一直在（在「后台任务」右边）", i.exists && i.afterBash, i);
   check("没开的时候滑块在左、灰着：指上去写着「点一下开始」", !i.on && i.title === "自动模式（点一下开始）", i);
 
   await page.click("#autoBtn");

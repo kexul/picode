@@ -7,7 +7,7 @@
  *   · 同一个名字一个标签（工具名 + 一个写着次数的小方块，这批里一共调了几次，只调一次就不写数字）；
  *     名字不同 → 各占一个；中间夹了别的调用（不同名的）不影响它攒数；
  *   · 鼠标停上去 → 提示框里一条条列出各条的调用与结果；
- *   · 结果乱序回来、有的失败、有一条还在跑 → 各自归位，标签上跟着标红、转圈；
+ *   · 结果乱序回来、有的失败、有一条还在跑 → 各自归位，标签上跟着转圈（失败不标红，只在提示框里看）；
  *   · taba（点名不合并）单独一个；codemode 跟别的工具一样收成一个（带次数）；
  *   · write / edit 也照这一套收（标签上只有工具名和次数）：改了哪个文件、diff / 写入预览、
  *     跳转 / 回滚都在提示框里，一条调用一块；
@@ -41,7 +41,6 @@ function dump(page) {
                 if (cls.indexOf("tool-row") >= 0) {
                     rows.push("工具行：" + Array.from(el.children).map((c) => "[" + tagText(c)
                         + (c.classList.contains("running") ? " 转圈" : "")
-                        + (c.classList.contains("error") ? " 标红" : "")
                         + (c.classList.contains("reverted") ? " 划掉" : "") + "]").join(""));
                 } else if (cls.indexOf("tool-image-block") >= 0) {
                     rows.push("图片块：" + el.querySelector(".tib-text").textContent.trim());
@@ -229,7 +228,7 @@ module.exports = async (page) => {
     console.log("\n  两条都回滚了（整颗标签划掉）：\n  " + allBackRow);
     if (!allBackRow.includes("[edit2 划掉]")) { problems.push("两条都回滚了，标签没划掉：" + allBackRow); }
 
-    // ---- 第六幕：write 也一样收；一条成功一条失败 —— 提示框里各一块，失败的把整颗标签标红 ----
+    // ---- 第六幕：write 也一样收；一条成功一条失败 —— 提示框里各一块（失败的只在提示框里看，标签不标红）----
     await post(page, [
         { type: "assistantFull", text: "再写两个文件：" },
         editStart("w1", "write", "dev/note.txt", { path: "dev/note.txt", content: "第一行\n第二行\n第三行" }),
@@ -239,7 +238,7 @@ module.exports = async (page) => {
     ]);
     await page.sleep(400);
     const writeRow = await dump(page);
-    console.log("\n第六幕（连着两次 write：收成一颗带次数 2；一条成功一条失败 → 整颗标签标红）：\n  " + writeRow);
+    console.log("\n第六幕（连着两次 write：收成一颗带次数 2；一条成功一条失败 → 标签不标红）：\n  " + writeRow);
     await hoverNamed(page, "write");
     await page.sleep(400);
     const writeTip = await tipText(page);
@@ -248,7 +247,8 @@ module.exports = async (page) => {
     await page.shot("merge-write-tip.png");
     await leaveNamed(page, "write");
     await page.sleep(200);
-    if (!writeRow.includes("[write2 标红]")) { problems.push("两次 write 没收成一颗带次数 2 并标红的标签"); }
+    if (!writeRow.includes("[write2]")) { problems.push("两次 write 没收成一颗带次数 2 的标签"); }
+    if (writeRow.includes("标红")) { problems.push("标签不该因为一条失败就标红（失败只在提示框里看）"); }
     if (writeCounts.calls !== 2 || writeCounts.writeArgs !== 1 || writeCounts.jump !== 1 || writeCounts.err !== 1) {
         problems.push("write 的提示框没按「一条调用一块」画（该一条带写入预览与跳转、一条是错误）：" + JSON.stringify(writeCounts));
     }
