@@ -75,6 +75,11 @@ module.exports = async (page) => {
     await page.send("第一个会话里说的话");
     await page.sleep(900);
 
+    /** 左边那一列头顶那三格（文件 / 改动 / 后台）：拉出来的是不是个空壳就看它。 */
+    const fileTabs = () => page.eval(`
+        return JSON.stringify(Array.from(document.querySelectorAll("#fileTabs .file-tab")).map((el) => el.textContent.trim()));
+    `).then(JSON.parse);
+
     const box = JSON.parse(await page.eval(`
         const r = document.getElementById("messages").getBoundingClientRect();
         return JSON.stringify({ x: r.left, y: r.top, w: r.width, h: r.height });
@@ -95,9 +100,10 @@ module.exports = async (page) => {
     await drag(cx - 60, cy, cx + 160, cy);
     await page.sleep(700);
     const loneLeft = await look("唯一的会话往右划");
-    console.log(loneLeft.file === "开" && loneLeft.active === lone.active
-        ? "    ✓ 左边的文件侧边栏滑进来了"
-        : "    ✗ 只有一个会话时往右划该开左边的文件侧边栏");
+    const loneTabs = await fileTabs();
+    console.log(loneLeft.file === "开" && loneLeft.active === lone.active && loneTabs.join("/") === "文件/改动/后台"
+        ? "    ✓ 左边的文件侧边栏拉出来了（三格都在：" + loneTabs.join("/") + "）"
+        : "    ✗ 只有一个会话时往右划该开左边的文件侧边栏，现在拉出来的是：" + JSON.stringify(loneTabs));
     await page.click("#fileClose");
     await page.sleep(600);
 
@@ -215,10 +221,11 @@ module.exports = async (page) => {
     });
     await page.sleep(700);
     const edgeLeft = await look("最左那个往右划完、松手");
+    const edgeTabs = await fileTabs();
     console.log(edgeLeft.file === "开" && edgeLeft.active === atFirst.active && edgeLeft.moved.length === 0 &&
-        pulledOf(edgeLeft.drawer) < 1
-        ? "    ✓ 没换会话，左边的文件侧边栏拉出来了"
-        : "    ✗ 滑到头该把左边的文件侧边栏拉出来");
+        pulledOf(edgeLeft.drawer) < 1 && edgeTabs.join("/") === "文件/改动/后台"
+        ? "    ✓ 没换会话，左边的文件侧边栏拉出来了（三格都在）"
+        : "    ✗ 滑到头该把左边的文件侧边栏拉出来，现在拉出来的是：" + JSON.stringify(edgeTabs));
     await page.shot("swipe-edge-file.png");
 
     console.log(`\n页面报错：${page.pageErrors.length ? JSON.stringify(page.pageErrors.slice(0, 5)) : "无"}`);

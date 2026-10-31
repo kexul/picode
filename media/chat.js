@@ -4961,9 +4961,12 @@
       el = modalView.panel;
       sign = 1;
     } else {
-      // 这一列开出来（目录那一格、内容照旧由那一套去要），只是滑入那段动画这会儿归手指管
-      prepareFileSidebar();
+      // 跟点顶条那颗按钮完全同一条路（三格标签、目录清单都由 open 那一套摆好），
+      // 只是滑入那段动画这会儿归手指管。注意别走 prepareFileSidebar（那是点文件链接前那条：
+      // 它先把「目录」那一格塞上，打开那一套再看就以为已经摆过了，三格标签反而不建）。
+      closeRightSidebarForFile();
       document.body.classList.add("file-pulling");
+      setFileSidebarOpen(true);
       el = fileSidebar.root;
       sign = -1;
       backdrop = document.getElementById("fileBackdrop");
