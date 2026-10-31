@@ -116,7 +116,7 @@ FAKEPI_THINK_MS=5000 npm run web:shot -- --fake-pi --width 900 --height 800 --sc
 # 验左右划切会话（手机上手指横着划；电脑上在没有文字的地方按住鼠标拖。两种都是跟手、松手过小半屏就切；
 # 从文字上按下（选字）、划得不够远、竖着划都不切；走到头（最右 / 最左那个）不绕回另一头，
 # 窄窗里是跟手把那一侧的侧边栏拉出来（往左划是右边的「项目与会话」、往右划是左边的文件侧边栏，
-# 松手过四成就留下、不够就滑回去）；
+# 松手过四成就留下、不够就滑回去）；开着的时候在它身上往它来的那一边横着一划也能推回去；
 # 宽窗里那两块是常驻的，滑到头什么都不发生。子会话跳过不占站位）：
 npm run web:shot -- --width 420 --height 900 --fake-pi --script dev/swipeSession.js
 npm run web:shot -- --width 1000 --height 760 --fake-pi --script dev/dragSession.js

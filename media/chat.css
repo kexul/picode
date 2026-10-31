@@ -1610,7 +1610,7 @@
   @keyframes file-drawer-in { from { transform: translateX(-100%); } to { transform: translateX(0); } }
   @media (prefers-reduced-motion: reduce) { body.file-open:not(.file-dock) #fileSidebar { animation: none; } }
   /* 划到头跟手拉出来那一路（同右侧那一块）：拉的时候位置归手指管，滑入那段动画先关掉 */
-  body.file-open.file-pulling:not(.file-dock) #fileSidebar { animation: none; }
+  body.file-open.file-drag:not(.file-dock) #fileSidebar { animation: none; }
   /* 滑入式底下那层遮罩：点它 = 收起这一列（常驻时不垫） */
   #fileBackdrop { display: none; }
   body.file-open:not(.file-dock) #fileBackdrop {

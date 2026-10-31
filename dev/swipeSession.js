@@ -79,6 +79,11 @@ module.exports = async (page) => {
     const fileTabs = () => page.eval(`
         return JSON.stringify(Array.from(document.querySelectorAll("#fileTabs .file-tab")).map((el) => el.textContent.trim()));
     `).then(JSON.parse);
+    /** 某一块的盒子（横划收起那几步要用：手指得按在面板身上，不能按在遮罩上）。 */
+    const rectOf = (sel) => page.eval(`
+        const r = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect();
+        return JSON.stringify({ x: r.left, y: r.top, w: r.width, h: r.height });
+    `).then(JSON.parse);
 
     const box = JSON.parse(await page.eval(`
         const r = document.getElementById("messages").getBoundingClientRect();
@@ -227,6 +232,51 @@ module.exports = async (page) => {
         ? "    ✓ 没换会话，左边的文件侧边栏拉出来了（三格都在）"
         : "    ✗ 滑到头该把左边的文件侧边栏拉出来，现在拉出来的是：" + JSON.stringify(edgeTabs));
     await page.shot("swipe-edge-file.png");
+
+    // 9. 左边那一列开着：在它身上往左划一把就收起来
+    const fileBox = await rectOf("#fileSidebar");
+    const fileMidY = fileBox.y + fileBox.h / 2;
+    await drag(fileBox.x + fileBox.w - 40, fileMidY, fileBox.x + fileBox.w - 260, fileMidY, 10, async () => {
+        const half = await look("文件侧边栏被推到一半（还没松手）");
+        console.log((half.file === "开" && pulledOf(half.drawer) > 10 && pulledOf(half.drawer) < box.w * 0.9)
+            ? "    ✓ 它跟着手指滑出去了（还差一截没收完）" : "    ✗ 横划收起那一趟没跟手");
+        await page.shot("swipe-close-file-half.png");
+    });
+    await page.sleep(800);
+    const fileClosed = await look("在文件侧边栏上往左划一把");
+    console.log(fileClosed.file === "关" && fileClosed.drawer === "-"
+        ? "    ✓ 往左划把文件侧边栏收起来了"
+        : "    ✗ 在文件侧边栏上横着一划没收掉");
+
+    // 10. 再拉出来，然后只轻轻划一小截（没过线）：弹回原位，这一列还开着
+    await drag(cx - 60, cy, cx + 200, cy, 10);
+    await page.sleep(700);
+    const fileAgain = await rectOf("#fileSidebar");
+    const fileAgainY = fileAgain.y + fileAgain.h / 2;
+    await drag(fileAgain.x + fileAgain.w - 60, fileAgainY, fileAgain.x + fileAgain.w - 120, fileAgainY, 10);
+    await page.sleep(800);
+    const fileKept = await look("在文件侧边栏上只划一小截");
+    console.log(fileKept.file === "开" && pulledOf(fileKept.drawer) < 1
+        ? "    ✓ 划得不够，它弹回原位还开着"
+        : "    ✗ 划得不够却收掉了 / 没弹回原位");
+    await page.click("#fileClose");
+    await page.sleep(600);
+
+    // 11. 右边那块（项目与会话）也一样：在它身上往右划一把就收起来
+    await page.click('#sessionBar .sn-tab[data-idx="2"]');
+    await page.sleep(600);
+    await drag(cx + 60, cy, cx - 200, cy, 10);
+    await page.sleep(800);
+    const panelOpened = await look("先把「项目与会话」拉出来");
+    if (panelOpened.panel !== "开") { throw new Error("第 11 步没把它拉出来：" + JSON.stringify(panelOpened)); }
+    const panelBox = await rectOf("#pickerPanel");
+    const panelMidY = panelBox.y + panelBox.h / 2;
+    await drag(panelBox.x + 40, panelMidY, panelBox.x + 260, panelMidY, 10);
+    await page.sleep(800);
+    const panelClosed = await look("在「项目与会话」上往右划一把");
+    console.log(panelClosed.panel === "关" && panelClosed.drawer === "-"
+        ? "    ✓ 往右划把它收起来了"
+        : "    ✗ 在「项目与会话」上横着一划没收掉");
 
     console.log(`\n页面报错：${page.pageErrors.length ? JSON.stringify(page.pageErrors.slice(0, 5)) : "无"}`);
 };

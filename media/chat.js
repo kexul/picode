@@ -4890,7 +4890,7 @@
   //
   // 走的是主会话：派出去的子会话跳过（顶条那一排摆的也是主会话）。走到头不绕回来了 ——
   // 最右那一个再往左划、最左那一个再往右划，没有下一个会话可换，改成把那一侧的侧边栏跟手
-  // 拉出来（右：项目与会话 / 左：文件侧边栏，见下面 drawerPullBegin）；宽窗里那两块是常驻的，
+  // 拉出来（右：项目与会话 / 左：文件侧边栏，见下面 drawerDragFromClosed）；宽窗里那两块是常驻的，
   // 没有“拉出来”这回事，滑到头就当没这一趟。
   const SWIPE_LOCK_PX = 6;       // 横向动这么多就认成“左右划”（快划时那段“没反应”就是它，越小越跟手）
   const SWIPE_CANCEL_PX = 10;    // 竖着动这么多、而且比横向多：这是滚动，这一趟不管了
@@ -4923,27 +4923,31 @@
    * 对话还在旁边）。插件里的对话面板没有文件侧边栏（见 buildFileSidebar）。
    */
   function swipeEdgeSidebar(dir) {
-    if (drawerPull || Date.now() < drawerClosingUntil) { return ""; }
+    if (drawerDrag || Date.now() < drawerClosingUntil) { return ""; }
     if (dir === "next") { return (sidebarWide() || pickerModalOpen()) ? "" : "right"; }
     if (!fileSidebar.root || fileSidebarWide() || fileSidebar.open) { return ""; }
     return "left";
   }
 
-  // ==================== 划到头：把那一侧的侧边栏跟手拉出来 ====================
+  // ==================== 侧边栏跟手：划到头拉出来 / 开着时横着一划收起来 ====================
   // 窄窗里这两块本来就是从边上滑进来的（见 chat.css 的 pk-drawer-in / file-drawer-in），
-  // 只不过平时那一段是 170 毫秒自己跑完的。划到头的时候位置归手指管：滑入那段动画先关掉
-  //（.pk-pulling / body.file-pulling），面板跟着手指 1:1 挪出来、遮罩跟着浓；松手过了线
-  // 就把剩下那一点滑完、收住，没过线就滑回去、收起来。
+  // 只不过平时那一段是 170 毫秒自己跑完的。有手指按着的时候位置归手指管：滑入那段动画先关掉
+  //（.pk-pulling / body.file-drag），面板跟着手指 1:1 挪、遮罩跟着浓淡；松手过了线就滑完剩下
+  // 那一点、留在该在的地方，不够就滑回原位。
+  //
+  // 两个来处都走这一套：
+  //   · 划到头（最右 / 最左那个会话再往外划）：那一侧的侧边栏跟着手指出来（见 swipeMove）；
+  //   · 它开着的时候在上面横着一划：跟着手指滑出去（见 wireDrawerCloseSwipe）。
   //
   // 内容是各自本来那一套去要的：右边那块跟点 <<< 一样发一条 openWorkspace（后端要扫一眼磁盘，
   // 回来之前拉的是一块空面板），左边那块跟点顶条那颗按钮一样先开出来、再取目录。
-  /** 正跟着手指拉的那块侧边栏（见下面 begin / place / finish）。 */
-  let drawerPull = null;
+  /** 正跟着手指挪的那块侧边栏（见下面 FromClosed / FromOpen / Place / Finish）。 */
+  let drawerDrag = null;
   /** 滑回去那一段还没走完（到这一刻为止不接新的一趟，不然那一条收尾会把新的一趟收掉）。 */
   let drawerClosingUntil = 0;
 
   /** 认成“到头了”：把那一块露出来、摆到屏幕外那个位置，等手指来拉。 */
-  function drawerPullBegin(kind) {
+  function drawerDragFromClosed(kind) {
     let el = null;
     let sign = 1;
     let backdrop = null;
@@ -4965,20 +4969,32 @@
       // 只是滑入那段动画这会儿归手指管。注意别走 prepareFileSidebar（那是点文件链接前那条：
       // 它先把「目录」那一格塞上，打开那一套再看就以为已经摆过了，三格标签反而不建）。
       closeRightSidebarForFile();
-      document.body.classList.add("file-pulling");
+      document.body.classList.add("file-drag");
       setFileSidebarOpen(true);
       el = fileSidebar.root;
       sign = -1;
       backdrop = document.getElementById("fileBackdrop");
     }
     const w = el ? el.getBoundingClientRect().width : 0;
-    drawerPull = { kind, el, w, sign, backdrop, t0: Date.now(), pulled: 0 };
-    drawerPullPlace(0);
+    drawerDrag = { kind, el, w, sign, backdrop, t0: Date.now(), pulled: 0 };
+    drawerDragPlace(0);
+  }
+
+  /**
+   * 这一块已经开着、人在上面横着一划：把跟手接过来（位置从它现在待的地方算起，也就是 0）。
+   * @param sign 关的时候往哪边出去：右边那块 +1、左边那块 -1
+   */
+  function drawerDragFromOpen(el, kind, sign) {
+    drawerDrag = {
+      kind, el, sign, t0: Date.now(), pulled: 0,
+      w: el ? el.getBoundingClientRect().width : 0,
+      backdrop: kind === "left" ? document.getElementById("fileBackdrop") : null,
+    };
   }
 
   /** 跟着手指摆：pulled = 已经从边上拉出来多少像素（1:1 跟手，拉过一整块的宽度就不再往里）。 */
-  function drawerPullPlace(pulled) {
-    const d = drawerPull;
+  function drawerDragPlace(pulled) {
+    const d = drawerDrag;
     if (!d || !d.el) { return; }
     d.pulled = Math.max(0, Math.min(d.w, pulled));
     const rest = d.w - d.pulled;   // 还差多少没露出来
@@ -4993,32 +5009,45 @@
     }
   }
 
-  /** 松手：拉过四成（或者甩得快）就把这块面板收下来，不够就滑回去。 */
-  function drawerPullPast() {
-    const d = drawerPull;
+  /** 拉出来那一趟松手：拉过四成（或者甩得快）就留下，不够就滑回去。 */
+  function drawerOutPast() {
+    const d = drawerDrag;
     if (!d || !d.w) { return false; }
     const ms = Math.max(1, Date.now() - d.t0);
     return d.pulled >= d.w * 0.4 || (d.pulled >= 40 && d.pulled / ms >= 0.5);
   }
 
-  /** 松手：commit = 收下来（滑完剩下那一点），否则滑回屏幕外、收起来。 */
-  function drawerPullFinish(commit) {
-    const d = drawerPull;
-    drawerPull = null;
+  /** 收起来那一趟松手：推出去三成五（或者甩得快）就收，不够就滑回原位。 */
+  function drawerBackPast() {
+    const d = drawerDrag;
+    if (!d || !d.w) { return false; }
+    const moved = d.w - d.pulled;   // 推出去多少
+    const ms = Math.max(1, Date.now() - d.t0);
+    return moved >= d.w * 0.35 || (moved >= 40 && moved / ms >= 0.5);
+  }
+
+  /** 松手：open = 留在开着的这一边（滑完剩下那一点），否则滑出屏幕、收起来。 */
+  function drawerDragFinish(open) {
+    const d = drawerDrag;
+    drawerDrag = null;
     if (!d || !d.el) { return; }
     d.el.style.transition = "transform " + DRAWER_SLIDE_MS + "ms ease-out";
-    d.el.style.transform = "translateX(" + (commit ? 0 : d.sign * d.w) + "px)";
-    if (!commit) { drawerClosingUntil = Date.now() + DRAWER_SLIDE_MS + 60; }
+    d.el.style.transform = "translateX(" + (open ? 0 : d.sign * d.w) + "px)";
+    if (!open) { drawerClosingUntil = Date.now() + DRAWER_SLIDE_MS + 60; }
     if (d.kind === "right") {
-      modalView.root.style.backgroundColor = commit ? "" : "rgba(0, 0, 0, 0)";
+      modalView.root.style.backgroundColor = open ? "" : "rgba(0, 0, 0, 0)";
     } else if (d.backdrop) {
-      d.backdrop.style.opacity = commit ? "" : "0";
+      d.backdrop.style.opacity = open ? "" : "0";
     }
     setTimeout(() => {
-      if (commit) {
-        // 站住了：位置钉在 0（用 inline 钉着，别让样式表里那段滑入动画再跑一遍，见 clearPullStyles）
+      if (open) {
         d.el.style.transition = "";
-        d.el.style.transform = "translateX(0px)";
+        // 从收着拉出来的那一趟：位置钉在 0（inline 钉着，别让样式表里那段滑入动画再跑一遍，
+        // 见 clearPullStyles）；本来就是开着的那一趟（横划收起来又弹回去）交回样式表就行
+        const fromClosed = d.kind === "right"
+          ? modalView.root.classList.contains("pk-pulling")
+          : document.body.classList.contains("file-drag");
+        d.el.style.transform = fromClosed ? "translateX(0px)" : "";
         return;
       }
       // 滑回去了：这会儿再收起来（收起那一下会顺手把这一趟的临时样式摘掉）。
@@ -5028,10 +5057,69 @@
     }, DRAWER_SLIDE_MS + 30);
   }
 
+  /**
+   * 侧边栏开着的时候，在它身上横着一划就把它收起来：手指往哪边划、这一块就往哪边滑出去
+   *（右边那块「项目与会话」往右、左边那块文件侧边栏往左）。跟拉出来时一样 1:1 跟手、
+   * 遮罩跟着淡，过了线就收、不够就弹回原位。
+   *
+   * 不接的几种：竖着划（那是滚清单）、反着划（那是往回拉，这里不管）、按在按钮 / 链接 / 输入上、
+   * 以及横着能滚的地方（长文件名、不折行的代码、标签条挤了）—— 那儿横划是人家自己滚。
+   * @param el 哪一块（跟手挪的就是它）
+   * @param kind "right" / "left"
+   * @param sign 收的时候往哪边出去：右边那块 +1、左边那块 -1
+   * @param usable 这会儿能不能收（不是滑入式、或者本来就收着，都不接）
+   */
+  function wireDrawerCloseSwipe(el, kind, sign, usable) {
+    if (!el) { return; }
+    let s = null;
+    el.addEventListener("touchstart", (e) => {
+      if (s || drawerDrag || Date.now() < drawerClosingUntil) { return; }
+      if (e.touches.length !== 1 || !usable()) { return; }
+      if (swipeOnControl(e.target) || drawerStartsInScrollable(el, e.target)) { return; }
+      const t = e.touches[0];
+      s = { finger: t.identifier, x0: t.clientX, y0: t.clientY, lock: "" };
+    }, { passive: true });
+    el.addEventListener("touchmove", (e) => {
+      if (!s) { return; }
+      const t = e.touches.length === 1 ? e.touches[0] : null;
+      if (!t || t.identifier !== s.finger) { s = null; return; }
+      const dx = t.clientX - s.x0;
+      const dy = t.clientY - s.y0;
+      if (!s.lock) {
+        if (Math.abs(dy) > SWIPE_CANCEL_PX && Math.abs(dy) > Math.abs(dx)) { s = null; return; }   // 竖着滚
+        if (Math.abs(dx) < SWIPE_LOCK_PX || Math.abs(dx) < Math.abs(dy)) { return; }
+        if (dx * sign <= 0) { s = null; return; }   // 反着划：不是收这一块
+        s.lock = "x";
+        drawerDragFromOpen(el, kind, sign);
+      }
+      if (e.cancelable) { e.preventDefault(); }
+      drawerDragPlace((drawerDrag ? drawerDrag.w : 0) - Math.abs(dx));
+    }, { passive: false });
+    const finish = (e, cancelled) => {
+      if (!s) { return; }
+      const t = e.changedTouches && e.changedTouches[0];
+      if (t && t.identifier !== s.finger) { return; }
+      const locked = s.lock === "x";
+      s = null;
+      if (!locked) { return; }
+      drawerDragFinish(!cancelled && !drawerBackPast());
+    };
+    el.addEventListener("touchend", (e) => finish(e, false));
+    el.addEventListener("touchcancel", (e) => finish(e, true));
+  }
+
+  /** 这一下是不是按在横着能滚的东西上（到 el 为止）：那样横划是人家自己滚，不收这一块。 */
+  function drawerStartsInScrollable(root, node) {
+    for (let n = node; n && n !== root; n = n.parentElement) {
+      if (n.scrollWidth - n.clientWidth > 4) { return true; }
+    }
+    return false;
+  }
+
   /** 拉出来的那一趟留下的临时样式（位移、遮罩、临时关掉的滑入动画）：收起时一并摘掉。 */
   function clearPullStyles(kind) {
     if (kind === "left") {
-      document.body.classList.remove("file-pulling");
+      document.body.classList.remove("file-drag");
       if (fileSidebar.root) {
         fileSidebar.root.style.transition = "";
         fileSidebar.root.style.transform = "";
@@ -5097,10 +5185,10 @@
   }
 
   /**
-   * 划到头了：没有要进来的壳，那一侧的侧边栏跟着手指拉出来（见 drawerPullBegin）。
+   * 划到头了：没有要进来的壳，那一侧的侧边栏跟着手指拉出来（见 drawerDragFromClosed）。
    */
   function swipeBeginEdge(s) {
-    drawerPullBegin(s.edge);
+    drawerDragFromClosed(s.edge);
   }
 
   /** 跟着手指摆：正在看的那个挪 eff，进来的那个紧贴在它旁边（隔一个整屏）。 */
@@ -5174,7 +5262,7 @@
         swipeBegin(s);
         tabSwipeBegin(s);
       } else {
-        // 这一侧没有下一个主会话（到头了）：那一侧的侧边栏跟着手指拉出来（见 drawerPullBegin）；
+        // 这一侧没有下一个主会话（到头了）：那一侧的侧边栏跟着手指拉出来（见 drawerDragFromClosed）；
         // 宽窗里那两块是常驻的，滑到头就当没这一趟。
         const side = swipeEdgeSidebar(s.dir);
         if (!side) { swipe = null; return false; }
@@ -5184,7 +5272,7 @@
     }
     s.dx = dx;
     if (s.edge) {
-      drawerPullPlace(Math.abs(dx));
+      drawerDragPlace(Math.abs(dx));
       return true;
     }
     s.eff = swipeOffset(dx, s.width);
@@ -5315,7 +5403,7 @@
     const s = swipe;
     swipe = null;
     if (!s || s.lock !== "x") { return; }
-    if (s.edge) { drawerPullFinish(false); return; }
+    if (s.edge) { drawerDragFinish(false); return; }
     swipeSpringBack(s);
   }
 
@@ -5351,7 +5439,7 @@
    * 划到头松手：拉得够远就把那一块收下来（滑完剩下那一点），不够就滑回屏幕外、收起来。
    */
   function swipeEndAtEdge(cancelled) {
-    drawerPullFinish(!cancelled && drawerPullPast());
+    drawerDragFinish(!cancelled && drawerOutPast());
   }
 
   messagesEl.addEventListener("touchend", (e) => {
@@ -8172,6 +8260,8 @@
     }, FILE_SIDEBAR_POLL_MS);
     // 顶条左边那颗按钮（由 browserBridge.js 建）点它走这里
     window.pichatFileSidebar = { toggle: toggleFileSidebar };
+    // 手机上：这一列从左边滑出来以后，在上面横着一划（往左）就把它收回去
+    wireDrawerCloseSwipe(root, "left", -1, () => fileSidebar.open && !fileSidebarWide());
   })();
 
   // ==================== 文件搜索（Ctrl+Shift+F）====================
@@ -9532,6 +9622,10 @@
     if (e.target !== modalView.root) { return; }
     closePickerAnyway();
   });
+  // 手机上：「项目与会话」滑出来以后，在它身上横着一划（往右）就把它收回去
+  //（电脑上还是点外面、或者点面板角上那颗叉；鼠标拖出去那套只有消息流那边认）
+  wireDrawerCloseSwipe(modalView.panel, "right", 1,
+    () => modalView.root.classList.contains("pk-drawer") && !sidebarWide());
   modalView.search.addEventListener("input", () => {
     if (!modalView.state) { return; }
     renderPickerItems(modalView);
