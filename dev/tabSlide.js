@@ -74,6 +74,28 @@ module.exports = async (page) => {
     }
     await page.shot("tabslide-1-switched.png");
 
+    // 先把当前切到中间那一格，左右划才有两边可走（挨着切，不跨环）
+    await page.eval(`
+        const tabs = [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden"));
+        tabs[2].click();
+        return true;
+    `);
+    await page.sleep(700);
+
+    /** 给“现在的当前这一格”打个记号，一会儿看它切完落到哪一边。 */
+    const markOld = () => page.eval(`
+        const cur = [...document.querySelectorAll("#sessionTabs .sn-tab")].find((t) => t.classList.contains("current"));
+        if (cur) { cur.dataset.oldCur = "1"; }
+        return !!cur;
+    `);
+    const whereOld = () => page.eval(`
+        const tabs = [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden"));
+        const oldAt = tabs.findIndex((t) => t.dataset.oldCur === "1");
+        const curAt = tabs.findIndex((t) => t.classList.contains("current"));
+        tabs.forEach((t) => { delete t.dataset.oldCur; });
+        return { 旧当前在: oldAt, 当前在: curAt, 总共: tabs.length };
+    `);
+
     // ② 手机上左右划：内容区滑的同时，顶条那排也该跟着动
     //   划到一半就量一下：要进来的那一格变宽了（名字露出来）、当前那一格收窄了
     const touch = (type, x, y) => page.cdp.send("Input.dispatchTouchEvent", {
@@ -90,6 +112,7 @@ module.exports = async (page) => {
             变宽的那格有名字: !!grow && !!grow.querySelector(".sn-text") && getComputedStyle(grow.querySelector(".sn-text")).display !== "none",
         };
     `);
+    await markOld();
     const swipeBefore = await widths();
     await touch("touchStart", 340, 420);
     for (let i = 1; i <= 4; i++) {
@@ -113,9 +136,32 @@ module.exports = async (page) => {
     if (!seenSwipe.length) { throw new Error("左右划切会话时顶条那排没有跟着动"); }
     const end = await look("② 划完以后");
     if (end.还在滑 || end.还挂着过渡) { throw new Error("划完以后没清干净：" + JSON.stringify(end)); }
+    const leftDir = await whereOld();
+    console.log("  ② 向左划切完：旧的那一格落在 " + JSON.stringify(leftDir));
+    if (!(leftDir.旧当前在 >= 0 && leftDir.当前在 >= 0)) { throw new Error("没找着旧的/新的当前格：" + JSON.stringify(leftDir)); }
+    if (!(leftDir.旧当前在 < leftDir.当前在)) {
+        throw new Error("向左划切到下一个，刚下来的那一格该落在左边：" + JSON.stringify(leftDir));
+    }
     await page.shot("tabslide-2-swipe.png");
 
-    // ③ 划一小截就松手（不到线，弹回去）：宽度得滑回原样，不留 inline 宽度
+    // ③ 再向右划回去：刚下来的那一格这回该落在右边
+    await markOld();
+    await touch("touchStart", 80, 420);
+    for (let i = 1; i <= 8; i++) {
+        await touch("touchMove", 80 + (340 - 80) * (i / 8), 420);
+        await page.sleep(16);
+    }
+    await touch("touchEnd", 340, 420);
+    await page.sleep(500);
+    const rightDir = await whereOld();
+    console.log("  ③ 向右划切完：旧的那一格落在 " + JSON.stringify(rightDir));
+    if (!(rightDir.旧当前在 >= 0 && rightDir.当前在 >= 0)) { throw new Error("没找着旧的/新的当前格：" + JSON.stringify(rightDir)); }
+    if (!(rightDir.旧当前在 > rightDir.当前在)) {
+        throw new Error("向右划切到上一个，刚下来的那一格该落在右边：" + JSON.stringify(rightDir));
+    }
+    await page.shot("tabslide-3-swipe-back.png");
+
+    // ④ 划一小截就松手（不到线，弹回去）：宽度得滑回原样，不留 inline 宽度
     const widthsOf = () => page.eval(`
         const tabs = [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden"));
         return tabs.map((t) => t.style.width || "-");
@@ -128,10 +174,10 @@ module.exports = async (page) => {
     await touch("touchEnd", 280, 420);
     await page.sleep(400);
     const leftInline = (await widthsOf()).filter((w) => w !== "-");
-    const back = await look("③ 划一小截松手以后");
+    const back = await look("④ 划一小截松手以后");
     if (leftInline.length) { throw new Error("弹回去以后还留着钉住的宽度：" + JSON.stringify(leftInline)); }
     if (back.还挂着过渡) { throw new Error("弹回去以后过渡没放开：" + JSON.stringify(back)); }
-    await page.shot("tabslide-3-springback.png");
+    await page.shot("tabslide-4-springback.png");
 
     console.log("通过");
 };

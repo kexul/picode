@@ -1204,9 +1204,15 @@
     const tabs = Array.prototype.filter.call(sessionTabRow.children, (el) => el.classList.contains("sn-tab") && !el.classList.contains("hidden"));
     const cur = tabs.find((el) => el.classList.contains("current"));
     if (!cur) { return; }
-    const others = tabs.filter((el) => el !== cur);
-    const half = Math.ceil(others.length / 2);
-    const order = others.slice(0, half).concat([cur], others.slice(half));
+    // 左边放会话清单里排在它前面的、右边放排在它后面的（挨着它的顺序不动：
+    // 手机上往右划切到上一个时，刚下来的那一格才会落在右边，不会反过来）。
+    // 两边差得多（当前这一张本来就是头一个 / 最后一个）就从另一边最远的那头搬几个过来，让它站在中间。
+    const at = tabs.indexOf(cur);
+    const left = tabs.slice(0, at);
+    const right = tabs.slice(at + 1);
+    while (left.length < right.length - 1) { left.unshift(right.pop()); }
+    while (right.length < left.length - 1) { right.push(left.shift()); }
+    const order = left.concat([cur], right);
     // 已经是这个顺序就别动（append 一遍会把这些元素在 DOM 里挪来挪去）
     const kids = Array.prototype.filter.call(sessionTabRow.children, (el) => el.classList.contains("sn-tab") && !el.classList.contains("hidden"));
     if (order.every((el, i) => kids[i] === el)) { return; }
