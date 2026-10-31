@@ -3766,7 +3766,7 @@
     };
   }
 
-  function openLightbox(src) {
+  function openLightbox(src, alt) {
     if (!lightboxEl) {
       lightboxEl = document.createElement("div");
       lightboxEl.className = "lightbox hidden";
@@ -3852,9 +3852,14 @@
     lightboxView.drag = false;
     lightboxEl.classList.remove("dragging");
     lightboxReset();
+    lightboxEl.firstChild.alt = alt || "";
     lightboxEl.firstChild.src = src;
     lightboxEl.classList.remove("hidden");
   }
+
+  // 这层看图也借给「桌面截图」用（那颗 📷 截回来的图，见 media/browserBridge.js）：
+  // 那边是个更早跑的独立脚本，拿不到这里面的函数，只能走 window 这颗接口。
+  window.pichatLightbox = { open: openLightbox };
 
   // Esc 关这一层。放在捕获阶段、并且就地吃掉这条按键：document 上后面那个「Esc 中止这一轮」
   // 也是听同一个键，不拦下来就会顺手把正在生成的这轮也停了（跟「项目与会话」那层一个道理）。

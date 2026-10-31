@@ -735,21 +735,20 @@
     if (busy) { shotBtn.classList.add("busy"); } else { shotBtn.classList.remove("busy"); }
   }
 
-  /** 全屏显示推回来的截图，点任意处关闭（复用 chat.css 里 .lightbox 那套看图样式）。 */
+  /**
+   * 全屏显示推回来的截图：就借 chat.js 那层看图（`window.pichatLightbox`）。
+   * 那层本来就会滚轮缩放、手机上双指放大、放大后拖着看别处，双击还原、Esc 或点黑底关掉。
+   * 这儿只把图交过去，不另画一层（另画一层就只剩“点一下关”，图都缩不进）。
+   * 那颗 📷 本身是 chat.js 画出来的，所以走到这儿时 `window.pichatLightbox` 一定已经在。
+   */
   function showDesktopScreenshot(data) {
     setShotBusy(false);
     var base64 = data && typeof data.data === "string" ? data.data : "";
     if (!base64) { return; }
-    var overlay = document.createElement("div");
-    overlay.className = "lightbox";
-    var img = document.createElement("img");
-    img.alt = "桌面截图";
-    img.src = "data:" + (data && typeof data.mimeType === "string" && data.mimeType ? data.mimeType : "image/png") + ";base64," + base64;
-    overlay.appendChild(img);
-    overlay.addEventListener("click", function () {
-      if (overlay.parentNode) { overlay.parentNode.removeChild(overlay); }
-    });
-    document.body.appendChild(overlay);
+    var mimeType = data && typeof data.mimeType === "string" && data.mimeType ? data.mimeType : "image/jpeg";
+    var src = "data:" + mimeType + ";base64," + base64;
+    var box = window.pichatLightbox;
+    if (box && typeof box.open === "function") { box.open(src, "桌面截图"); }
   }
 
   /** 截图失败：按钮还原，弹一句原因。 */
