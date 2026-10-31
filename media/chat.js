@@ -1293,14 +1293,58 @@
     return openSessionItems().filter((item) => !item.depth || item.current);
   }
 
-  /** 顶条那一排格：一格一个主会话（带在跑的小点、派出去的子会话个数、关它的那颗 ×）。 */
+  /**
+   * 顶条那一排格：一格一个主会话（带在跑的小点、派出去的子会话个数、关它的那颗 ×）。
+   * 重画之后让换了位置的格子滑过去（见 slideTabsFrom）：手机上左右划切会话时，
+   * 下面那一大块是滑过去的，顶上这一排要是“啪”地一跳就打架。
+   */
   function renderSessionBar() {
+    // 上一次滑动还没到站就先按停：位置要按“都站定了”量，不然越算越偏
+    sessionTabEls.forEach((el) => { el.style.transition = ""; el.style.transform = ""; });
+    const before = new Map();
+    sessionTabEls.forEach((el, id) => {
+      if (!el.isConnected || el.classList.contains("hidden")) { return; }
+      before.set(id, el.getBoundingClientRect().left);
+    });
     const items = sessionTabItems();
     renderSessionTabs(items);
     // 名字、小点都换过了：宽窄跟着变，重摆一次（挤了就收窄、叠起来）
     layoutSessionTabs();
+    slideTabsFrom(before);
     // 顶条自己也会长高变矮（目录那行有 / 没有）：两边常驻那一列的面板头跟着它齐（见 syncDockHeaderHeight）
     syncDockHeaderHeight();
+  }
+
+  /** 顶条那一排格换位置时滑这一小段（跟手机上切会话那块一起动，见 SWIPE_FINISH_MS）。 */
+  const TAB_SLIDE_MS = 180;
+
+  /**
+   * 重画之后，位置变了的格子从旧地方滑到新地方（不然就是“啪”地跳过去）：
+   * 先把它挪回旧地方（这一下不给过渡），下一帧再放开 —— 浏览器就会补一段平移。
+   * 只补横向：挤了以后收窄、变高那种当场就变，不跟着滑。
+   */
+  function slideTabsFrom(before) {
+    const moving = [];
+    sessionTabEls.forEach((el, id) => {
+      const oldLeft = before.get(id);
+      if (oldLeft === undefined || !el.isConnected || el.classList.contains("hidden")) { return; }
+      const dx = oldLeft - el.getBoundingClientRect().left;
+      if (Math.abs(dx) < 1) { return; }
+      el.style.transition = "none";
+      el.style.transform = "translateX(" + dx + "px)";
+      moving.push(el);
+    });
+    if (!moving.length) { return; }
+    requestAnimationFrame(() => {
+      moving.forEach((el) => {
+        el.style.transition = "transform " + TAB_SLIDE_MS + "ms ease-out";
+        el.style.transform = "";
+      });
+    });
+    // 到站就放开：inline 的过渡留着会盖掉下面那条“底色淡过去”
+    setTimeout(() => {
+      moving.forEach((el) => { el.style.transition = ""; el.style.transform = ""; });
+    }, TAB_SLIDE_MS + 60);
   }
 
   // 宽窄一变，“停着”的那些会话的版全要重排：先全放掉，闲下来会自动再停一遍（见 unkeep）

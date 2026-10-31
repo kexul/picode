@@ -164,6 +164,8 @@
     font-size: inherit;
     cursor: pointer; user-select: none;
   }
+  /* 当前这一张换到别处时，底色淡过去（不是“啪”地跳）；换位置的滑动由 chat.js 的 slideTabsFrom 补。 */
+  .sn-tab { transition: background-color 150ms ease-out; }
   .sn-tab:hover { background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent); }
   /* 正在看的这一张：正文的底色，底边压过那道分隔线（负的 1px 正好盖掉它）。 */
   .sn-tab.current {
