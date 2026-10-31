@@ -4178,6 +4178,9 @@
     autoBtn.title = title;
     autoBtn.setAttribute("aria-label", title);
     autoBtn.classList.toggle("on", !!auto);
+    // 开着的时候输入框外面那圈有流光（见 chat.css 的 #composer.auto）：不用盯着那颗小开关也知道它在自己跑
+    const composer = document.getElementById("composer");
+    if (composer) { composer.classList.toggle("auto", !!auto); }
   }
 
   function renderQueueBar(st) {

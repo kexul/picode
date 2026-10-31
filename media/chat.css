@@ -531,6 +531,35 @@
     transition: border-color 200ms;
   }
   #composer:focus-within { border-color: var(--vscode-focusBorder); }
+  /* 自动模式开着的时候，输入框外面那圈跑一道流光（一道亮光顺着边转一圈）。
+     做法：盒子外再铺一层 1.5px 宽的边（::before + 两层 mask 只留边），
+     亮光是一条锥形渐变（conic-gradient）里的高光，角度一路转过去。
+     关掉就把这层收掉，一点开销都不留。 */
+  @property --pichat-flow {
+    syntax: "<angle>";
+    inherits: false;
+    initial-value: 0deg;
+  }
+  #composer.auto { border-color: rgba(63, 191, 106, 0.28); }
+  #composer.auto::before {
+    content: ""; position: absolute; inset: -2.5px; box-sizing: border-box; padding: 2.5px;
+    border-radius: 16.5px; pointer-events: none;
+    background: conic-gradient(from var(--pichat-flow),
+      transparent 0 66%,
+      rgba(47, 175, 95, 0.55) 78%,
+      rgb(38, 158, 82) 87%,
+      rgba(47, 175, 95, 0.55) 95%,
+      transparent 100%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    animation: composer-flow 2.4s linear infinite;
+  }
+  @keyframes composer-flow {
+    from { --pichat-flow: 0deg; }
+    to { --pichat-flow: 360deg; }
+  }
   #inputRow { display: flex; align-items: center; gap: 2px; }
   /* 框底那条横排左头那颗加号（新建会话）、右头那颗「你说过的话」和再往右的自动模式按钮：
      一样的矮方块，鼠标扫过亮一下。中间是模型胶囊（见下面的 #ctxIcon）。 */
