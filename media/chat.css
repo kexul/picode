@@ -452,8 +452,8 @@
   #queueBar .qb-head { display: flex; align-items: center; gap: 6px; padding: 2px 0; border-radius: 3px; cursor: pointer; user-select: none; }
   #queueBar .qb-head:hover { background: color-mix(in srgb, var(--vscode-list-hoverBackground, rgba(128,128,128,0.1)) 50%, transparent); }
   #queueBar .qb-head:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
-  #queueBar .qb-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--vscode-charts-yellow, #cca700); animation: qb-pulse 1.2s ease-in-out infinite; flex-shrink: 0; }
-  @keyframes qb-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+  /* 排队那一条前头那颗点：一颗黄点，不呼吸（它是“这条排着”的记号，动不动都不多说什么）。 */
+  #queueBar .qb-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--vscode-charts-yellow, #cca700); flex-shrink: 0; }
   #queueBar .qb-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground, inherit); }
   #queueBar .qb-body { margin: 1px 0 3px 12px; padding: 0; font-family: inherit; font-size: 0.9em; white-space: pre-wrap; word-break: break-word; color: var(--vscode-foreground); max-height: 160px; overflow: auto; }
   #queueBar .qb-block.collapsed .qb-body { display: none; }
@@ -1380,8 +1380,7 @@
   /* 下头那条杠：淡底（::before）+ 上面那截填满的（.ci-fill），两段都用这颗按钮的 currentColor 画。
      淡底不能挂在 .ci-bar 自己身上：父级的 opacity 会把里头那截实心的也一起淡下去。
      填多满由 --ci-pct 给（chat.js 每次算完用量就写一回），就是横条本身的宽度。
-     跑着的时候（data-st=streaming 且真有数，即 .hasfill）这条会一明一暗地呼吸；
-     停下了就是一条安静的实心横杠。 */
+     它一直是一条安静的实心横杠（以前跑着的时候会一明一暗，去掉了：那是纯装饰，看得出用量多少就够了）。 */
   #ctxIcon .ci-bar { position: relative; height: 5px; border-radius: 2.5px; }
   #ctxIcon .ci-bar::before { content: ""; position: absolute; inset: 0; border-radius: 2.5px; background: currentColor; opacity: 0.25; }
   #ctxIcon .ci-fill {
@@ -1399,9 +1398,6 @@
     pointer-events: none; user-select: none;
     animation: tg-plus-float 900ms ease-out forwards;
   }
-  /* 呼吸：已填充那截一明一暗（跑着的时候那点“还在动”的感觉全靠它了） */
-  #ctxIcon.hasfill[data-st="streaming"] .ci-fill { animation: ci-breathe 1.6s ease-in-out infinite; }
-  @keyframes ci-breathe { 0%, 100% { opacity: 0.72; } 50% { opacity: 1; } }
   /* 这一轮的生成速度：跟上头那个百分比一样大（不然它比旁边那行字还高一头）；没数的时候空着（空着就不占地方） */
   #ctxIcon .ci-tps {
     flex: 0 0 auto; white-space: nowrap;
@@ -1472,15 +1468,14 @@
   #ctxIcon.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
   #ctxIcon.err { color: var(--vscode-errorForeground, #f14c4c); }
   #ctxIcon[data-st="loading"], #ctxIcon[data-st="wait"], #ctxIcon[data-st="nomodel"], #ctxIcon[data-st="none"] { opacity: 0.55; }
-  /* 要减少动态效果时：横条不慢慢长、也不呼吸（那颗状态图标照旧在动 —— 它就是用来
+  /* 要减少动态效果时：横条不慢慢长（那颗状态图标照旧在动 —— 它就是用来
      表明“还在跑”的，见上面那段注释；飘上去的「+N」是一次性的一下，不管）。 */
   @media (prefers-reduced-motion: reduce) {
     #ctxIcon .ci-fill { transition: none; }
-    #ctxIcon.hasfill[data-st="streaming"] .ci-fill { animation: none; opacity: 1; }
   }
-  /* 手机上（触屏）不再为这些“一直动”的小东西特地省：顶条那颗点的呼吸、齿轮、那行命令自己横向滚、
-     圆环里那颗状态图标的摆动、横条的一明一暗、排队那条上的点 —— 单独量下来每一样都在 1 个点以内
-     （吐字时），丢了反而让人觉得“怎么不动了”。真正花得出来的只有输入框那圈流光（见 #composer.auto）。 */
+  /* 那些“一直动”的小东西（顶条那颗点的呼吸、齿轮、那行命令自己横向滚、圆环里那颗状态图标的摆动）
+     单独量下来每一样都在 1 个点以内（吐字时），丢了反而让人觉得“怎么不动了”，都留着，手机上也不另外省。
+     真正花得出来的只有输入框那圈流光，手机上换成一根绿边（见 #composer.auto）。 */
   /* 工具结果内联图片（read 读图等）：缩略图 + 点击放大 */
   .tc-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }
   .tc-img { max-width: 100%; max-height: 320px; border-radius: 6px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); background: rgba(128,128,128,0.08); cursor: zoom-in; }
