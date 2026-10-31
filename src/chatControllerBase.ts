@@ -755,7 +755,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return rt;
     }
 
-    /** 新建一个会话并切过去（成为这块屏现在看的会话）。
+    /** 新建一个会话并切过去（成为这块屏现在看的会话）。只建新的，不动旧的那个
+     *  （顶条那颗加号那条路会顺手把没在跑的旧的关掉，见 processMessage 的 newSession）。
      *  跑在哪个目录：跟这块屏现在看的会话走（顶条上那个会话在别的项目里，新会话也开在那个项目里）。
      *  一个会话都没有时（刚启动、刚把最后几个会话关完）用宿主自己的默认目录。
      *  @param spareDelayMs 备用进程预热的延迟毫秒数（启动路径传 SPARE_PREWARM_DELAY_MS）。
@@ -2398,9 +2399,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 this.ensureSpare(ChatControllerBase.SPARE_PREWARM_DELAY_MS);
                 return;
             }
-            case "newSession":
-                this.newSession();
+            case "newSession": {
+                // 跟 pi 的 /new 一样：随手换一个干净的会话接着干，顶条上就留一格 ——
+                // 旧的那个关掉（它已经在盘上了，去「项目与会话」里的历史会话点得回来）。
+                // 例外：旧的那个还在跑（正在生成 / 跑工具），那就留着，不把没跑完的活掐掉。
+                // 先建新的、再关旧的：新会话要继承旧会话的目录与模型，关早了就只剩宿主自己的默认目录了。
+                const old = this.getActive();
+                const rt = this.newSession();
+                if (old && old.id !== rt.id && !old.streaming) { this.closeSession(old.id); }
                 return;
+            }
             case "switchSession":
                 if (typeof msg.sessionId === "string") { this.setActiveSession(msg.sessionId); }
                 return;
