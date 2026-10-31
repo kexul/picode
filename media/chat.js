@@ -4854,6 +4854,27 @@
     return ids[(from + delta + ids.length) % ids.length] || null;
   }
 
+  /**
+   * 手机上左右划切会话用哪一个：也是那一段的行序，但只落在主会话上（子会话跳过，
+   * 跟顶条那一排只摆主会话一个道理）。走到头就返回 null —— 不再绕回另一头，
+   * 那一侧要开的是侧边栏（见 swipeMove）。
+   */
+  function sessionIdBySwipe(direction) {
+    const items = openSessionItems();
+    if (items.length < 2) { return null; }
+    const delta = direction === "next" ? 1 : -1;
+    const curIdx = items.findIndex((item) => item.sessionId === activeId);
+    // 当前那个不在那几行里（它已经被别的窗口关掉、画面还留在这屏）：下一个从第一行起、上一个从末行起
+    let i = curIdx < 0 ? (delta > 0 ? -1 : items.length) : curIdx;
+    for (;;) {
+      i += delta;
+      // 走到头了：不绕回另一头（那一头是侧边栏的地盘，见 swipeMove）
+      if (i < 0 || i >= items.length) { return null; }
+      if (items[i].sessionId === activeId) { continue; }
+      if (!items[i].depth) { return items[i].sessionId; }
+    }
+  }
+
   /** 按快捷键切上一个 / 下一个会话（顺序见 sessionIdByDirection）。 */
   function switchSessionByDirection(direction) {
     const target = sessionIdByDirection(direction);
@@ -4866,10 +4887,16 @@
   // 没过线就弹回去。竖着划不管（那是滚动），横着能滚的东西（代码块、表格）上也不管。
   // 切过去那一刻位置由后端说了算：松手先跟后端要，它回话说“切到这个了”时再从手指离开的
   // 位置滑完那一小段（见 mountActiveSession 开头那段）。
+  //
+  // 走的是主会话：派出去的子会话跳过（顶条那一排摆的也是主会话）。走到头不绕回来了 ——
+  // 最右那一个再往左划、最左那一个再往右划，没有下一个会话可换，改成“拉到那一侧的侧边栏”：
+  // 窄窗里手指还能跟着拉一小段（越拉越沉），松手把那一侧的侧边栏滑进来、对话弹回原位；
+  // 宽窗里那两块是常驻的，没有“滑进来”这回事，滑到头就当没这一趟。
   const SWIPE_LOCK_PX = 6;       // 横向动这么多就认成“左右划”（快划时那段“没反应”就是它，越小越跟手）
   const SWIPE_CANCEL_PX = 10;    // 竖着动这么多、而且比横向多：这是滚动，这一趟不管了
   const SWIPE_FINISH_MS = 180;   // 松手后滑完的那一小段
   const SWIPE_WAIT_MS = 1500;    // 松手后等后端回话的耐心（回话迟了就先弹回去）
+  const SWIPE_EDGE_MAX = 0.22;   // 到头了还能拉动多少（占屏宽的比例，越拉越沉、拉不过这个数）
 
   function swipeWidth() { return messagesEl.clientWidth || window.innerWidth || 320; }
 
@@ -4887,6 +4914,28 @@
     const a = Math.abs(dx);
     if (a <= cap) { return dx; }
     return (dx < 0 ? -1 : 1) * (cap + (a - cap) * 0.25);
+  }
+
+  /**
+   * 划到头那一下的位移：拉得越远越沉，最多拉到 SWIPE_EDGE_MAX 那么多就几乎不动了
+   *（跟“这一侧到头了、再往后是另一块面板”的手感对上，也提示到这儿还有东西）。
+   */
+  function swipeEdgeOffset(dx, width) {
+    const cap = width * SWIPE_EDGE_MAX;
+    const moved = cap * (1 - Math.exp(-Math.abs(dx) / (cap * 1.5)));
+    return (dx < 0 ? -1 : 1) * moved;
+  }
+
+  /**
+   * 划到头时这一侧能滑进来哪一块侧边栏（空串 = 这一侧没有）。
+   * 往左划（next）进来的是右边那块「项目与会话」，往右划（prev）进来的是左边的文件侧边栏。
+   * 宽窗里那两块是常驻的一列，不滑入：这时返回空串（滑到头什么也不发生）。
+   * 插件里的对话面板没有文件侧边栏（见 buildFileSidebar），那边往右划到头也一样什么也不发生。
+   */
+  function swipeEdgeSidebar(dir) {
+    if (dir === "next") { return sidebarWide() ? "" : "right"; }
+    if (!fileSidebar.root || fileSidebarWide()) { return ""; }
+    return "left";
   }
 
   /** 一节样式里的位移一改就要滑一小段：给它挂上过渡。 */
@@ -4939,6 +4988,24 @@
     } catch (e) { /* 拿不到就算了 */ }
   }
 
+  /**
+   * 划到头了：没有要进来的壳，只有正在看的这个被拉开一段。
+   * 要做的跟 swipeBegin 一样 —— 把这个壳从过渡手里拿出来、别让越出去的那点把整页撑出横向滚动条。
+   */
+  function swipeBeginEdge(s) {
+    s.fromView.style.transition = "none";
+    messagesEl.classList.add("swiping");
+    edgePullBegin(s.dir);
+    if (s.finger === "mouse") { dropSelection(); }
+  }
+
+  // 到头那一下给那个壳挂的类（样式见 chat.css 的 #messages.edge-pull-*）：
+  // 白底挪白底，光看位移几乎看不出来（挪出去的那半屏也是白的），它旁边那道阴影才是“再拉有东西”的提示。
+  function edgePullBegin(dir) {
+    messagesEl.classList.remove("edge-pull-next", "edge-pull-prev");
+    messagesEl.classList.add(dir === "next" ? "edge-pull-next" : "edge-pull-prev");
+  }
+
   /** 跟着手指摆：正在看的那个挪 eff，进来的那个紧贴在它旁边（隔一个整屏）。 */
   function swipePlace(s) {
     const w = s.width;
@@ -4953,13 +5020,33 @@
     return dist >= Math.max(72, s.width * 0.3) || (dist >= 36 && dist / ms >= 0.5);
   }
 
-  /** 不切了：这一趟摆出去的样子滑回原位，进来的那个重新藏起来。 */
+  /**
+   * 划到头松手：够远（或者甩得快）就把那一侧的侧边栏滑进来。
+   * 门槛比正常切会话低一点：拉开那一段已经被阻力压小了，手底看不到真实挪了多少，只能靠“想不想拉”。
+   */
+  function swipePastEdge(s) {
+    const dist = Math.abs(s.dx);
+    const ms = Math.max(1, Date.now() - s.t0);
+    return dist >= Math.max(48, s.width * 0.18) || (dist >= 28 && dist / ms >= 0.4);
+  }
+
+  /**
+   * 不切了：这一趟摆出去的样子滑回原位，进来的那个重新藏起来。
+   * 划到头那一趟（没有要进来的壳，只有正在看的这个被拉开一段）也一样走这里。
+   */
   function swipeSpringBack(p) {
     tabSwipeEnd(true);
-    if (!p || !p.fromView || !p.toView) { messagesEl.classList.remove("swiping"); return; }
+    if (!p || !p.fromView) { messagesEl.classList.remove("swiping"); return; }
     const from = p.fromView;
     const to = p.toView;
     slideTo(from, 0, SWIPE_FINISH_MS);
+    if (!to) {
+      afterSlide(from, () => {
+        clearSlideStyles(from);
+        messagesEl.classList.remove("swiping", "edge-pull-next", "edge-pull-prev");
+      });
+      return;
+    }
     slideTo(to, p.dir === "next" ? p.width : -p.width, SWIPE_FINISH_MS);
     afterSlide(to, () => {
       clearSlideStyles(from);
@@ -4980,12 +5067,13 @@
     swipe = {
       finger: finger, x0: x, y0: y, t0: Date.now(), lock: "", dir: "", dx: 0, eff: 0,
       width: swipeWidth(), fromView: view, toView: null, to: null, toId: "", pointerId: 0,
+      edge: "",
     };
     return true;
   }
 
   /**
-   * 动到 (x,y)：认成横划就摆两下壳、返回 true（调用方把浏览器自己的动作拦掉）。
+   * 动到 (x,y)：认成横划就跟手摆、返回 true（调用方把浏览器自己的动作拦掉）。
    * 竖着先动起来就当场作废，这一趟不管了（那是滚动 / 选字）。
    */
   function swipeMove(x, y) {
@@ -5000,17 +5088,29 @@
       if (Math.abs(dx) < SWIPE_LOCK_PX || Math.abs(dx) < Math.abs(dy)) { return false; }
       s.lock = "x";
       s.dir = dx < 0 ? "next" : "prev";
-      const toId = sessionIdByDirection(s.dir);
+      const toId = sessionIdBySwipe(s.dir);
       const to = toId ? sessions.get(toId) : null;
-      // 只有一个会话：没得换，也就不摆样子（不拦，让人家照旧）
-      if (!to || !to.viewEl) { swipe = null; return false; }
-      s.toId = toId;
-      s.to = to;
-      s.toView = to.viewEl;
-      swipeBegin(s);
-      tabSwipeBegin(s);
+      if (to && to.viewEl) {
+        s.toId = toId;
+        s.to = to;
+        s.toView = to.viewEl;
+        swipeBegin(s);
+        tabSwipeBegin(s);
+      } else {
+        // 这一侧没有下一个主会话（到头了）。窄窗里还能往那个方向拉一小段，
+        // 松手把那一侧的侧边栏滑进来（见 swipeEnd）；宽窗里那两块是常驻的，滑到头就当没这一趟。
+        const edge = swipeEdgeSidebar(s.dir);
+        if (!edge) { swipe = null; return false; }
+        s.edge = edge;
+        swipeBeginEdge(s);
+      }
     }
     s.dx = dx;
+    if (s.edge) {
+      s.eff = swipeEdgeOffset(dx, s.width);
+      slideTo(s.fromView, s.eff, 0);
+      return true;
+    }
     s.eff = swipeOffset(dx, s.width);
     swipePlace(s);
     tabSwipePlace(s);
@@ -5146,6 +5246,7 @@
     const s = swipe;
     swipe = null;
     if (!s || s.lock !== "x") { return; }
+    if (s.edge) { swipeEndAtEdge(s, cancelled); return; }
     if (cancelled || !swipePast(s)) { swipeSettleMs(s); swipeSpringBack(s); return; }
     swipeSettleMs(s);
     // 松手：一边跟后端要那个会话，一边当场把画面滑到位。
@@ -5166,6 +5267,17 @@
     if (tabSwipe) { swipeHoldTimer = setTimeout(() => { tabSwipeEnd(false); }, SWIPE_WAIT_MS + 600); }
     if (s.to) { slideToPlace(slide, s.to); }
     vscode.postMessage({ type: "switchSession", sessionId: s.toId });
+  }
+
+  /**
+   * 划到头松手：拉得够远就把那一侧的侧边栏滑进来，同时对话滑回原位（不等那张抽屉：
+   * 它自己有自己的滑入，两边同时动）；没拉够就只弹回去。
+   */
+  function swipeEndAtEdge(s, cancelled) {
+    const open = !cancelled && swipePastEdge(s);
+    swipeSpringBack(s);
+    if (!open) { return; }
+    if (s.edge === "right") { toggleSidebar(); } else { toggleFileSidebar(); }
   }
 
   messagesEl.addEventListener("touchend", (e) => {

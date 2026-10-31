@@ -50,7 +50,12 @@ module.exports = async (page) => {
         await page.click("#newSessionBtn");
         await page.sleep(600);
     }
-    const before = await look("开三个会话之后");
+    // 三个会话按「正在对话」那一列的顺序排，最后开的那个在末位。
+    // 切到中间那一格：左右两边都有得切（滑到头没有下一个，见第 5 步）
+    await page.click('#sessionBar .sn-tab[data-idx="1"]');
+    await page.sleep(600);
+    const before = await look("开三个会话、切到中间那个");
+    if (!before.active) { throw new Error("没切到中间那一格：" + JSON.stringify(before)); }
 
     // 一块“没有文字的地方”（最后一条消息下面的空地）
     const spot = JSON.parse(await page.eval(`
@@ -107,5 +112,15 @@ module.exports = async (page) => {
     await page.sleep(400);
     const vertical = await look("竖着拖");
     console.log(vertical.active === afterDrag.active ? "    ✓ 没切" : "    ✗ 竖着拖不该切");
+    // 5. 最右那一格再往左拖：宽窗里右边那块「项目与会话」本来就常驻着，没有“滑进来”这回事，
+    //    所以这一拖什么也不发生（不换会话、也不动那块面板）
+    await page.click('#sessionBar .sn-tab[data-idx="2"]');
+    await page.sleep(600);
+    const atLast = await look("切到最右那一格");
+    await drag(blankX, blankY, blankX - 240, blankY);
+    await page.sleep(500);
+    const edge = await look("最右那一格再往左拖");
+    console.log(edge.active === atLast.active && edge.moved === 0 ? "    ✓ 没换会话（宽窗里那两块是常驻的，不滑入）" : "    ✗ 滑到头的行为不对");
+
     console.log(`\n页面报错：${page.pageErrors.length ? JSON.stringify(page.pageErrors.slice(0, 5)) : "无"}`);
 };

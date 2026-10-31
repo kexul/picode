@@ -114,9 +114,14 @@ npm run web:shot -- --fake-pi --script dev/sessionFlow.js
 FAKEPI_THINK_MS=5000 npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/sessionMenuClose.js
 
 # 验左右划切会话（手机上手指横着划；电脑上在没有文字的地方按住鼠标拖。两种都是跟手、松手过小半屏就切；
-# 从文字上按下（选字）、划得不够远、竖着划都不切）：
+# 从文字上按下（选字）、划得不够远、竖着划都不切；走到头（最右 / 最左那个）不绕回另一头，
+# 窄窗里是拉到那一侧的侧边栏：往左划开右边的「项目与会话」、往右划开左边的文件侧边栏；
+# 宽窗里那两块是常驻的，滑到头什么都不发生。子会话跳过不占站位）：
 npm run web:shot -- --width 420 --height 900 --fake-pi --script dev/swipeSession.js
 npm run web:shot -- --width 1000 --height 760 --fake-pi --script dev/dragSession.js
+
+# 验左右划跳过子会话（先派一个子会话挂着，再从它父会话往左划：该落在下一个主会话上）：
+FAKEPI_THINK_MS=6000 FAKEPI_TICK_MS=40 npm run web:shot -- --width 420 --height 900 --fake-pi --script dev/swipeSkipChild.js
 
 # 验「关闭会话」快捷键（设置里那一行默认 Alt+W；真按一下就关掉正在看的那个会话、
 # 自动切到剩下的；焦点在输入框里按也照样关）：

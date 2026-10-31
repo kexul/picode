@@ -53,6 +53,12 @@
      （手机 3 倍像素下那一帧的画字活儿不便宜；主线程上是看不到它花的时间的，见 dev/swipePerf.js。）
      只划的时候加：平时多两层要多点内存，而且流式输出时多一层反而不划算。 */
   #messages.swiping .session-view { will-change: transform; }
+  /* 划到头那一下（见 chat.js 的“到头了”那段）：这一侧没有下一个会话可换，该滑进来的是那一侧的侧边栏 ——
+     手指还能把当前这块拉开一小段，这块壳旁边落一道阴影，看着像底下还压着一层、再拉就翻开了。
+     阴影挂在那个壳身上（它划的时候已经升成一层了，见上面那句 will-change）：阴影只画一次，
+     后面只是跟着图层挪，不进每帧的重画。 */
+  #messages.edge-pull-next .session-view:not(.off),
+  #messages.edge-pull-prev .session-view:not(.off) { box-shadow: 0 0 24px rgba(0, 0, 0, 0.3); }
   /* 一个会话一层壳：里面就一块消息窗格（.session-pane），它自己滚。
      绝对定位铺满 #messages：同时有好几个壳挂着（只一个露在外面，见下面 .off 那段）。
      为什么不用“摆进列的流里”（flex 子项）：那样子壳“停着”（见下）与“露出来”两种状态的
