@@ -79,6 +79,7 @@ async function main() {
     const cpuRate = Number(arg("cpu", 1));
     const scrollSwipes = Number(arg("scroll", 0));
     const batch = Number(arg("batch", 0));
+    const autoMode = flag("auto");
 
     const harness = createHarness({ fakePi: flag("fake-pi") });
     const url = await harness.start();
@@ -105,6 +106,12 @@ async function main() {
         try { await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 }); } catch (e) { /* 旧浏览器不支持就算了 */ }
         if (cpuRate > 1) { await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuRate }); }
         console.log(`地址：${url}  （视口 412x915 @3x，${stream ? "流式回复中" : toSend ? "发消息后" : "什么都不做"}，量 ${seconds} 秒）`);
+
+        if (autoMode) {
+            // 自动模式开着：电脑上输入框外面那圈流光一直在转（它转的是 CSS 角度，只能在主线程上算；手机上不放，见 chat.css）。
+            await page.eval(`document.getElementById("composer").classList.add("auto"); return true;`);
+            console.log("自动模式开着");
+        }
 
         if (stream) {
             const answer = bigCode > 0 ? buildBigCode(bigCode) : buildAnswer(6, 2);

@@ -519,6 +519,16 @@
     from { --pichat-flow: 0deg; }
     to { --pichat-flow: 360deg; }
   }
+  /* 手机上不放这道流光：那个角度是 CSS 自定义属性，浏览器没法交给显卡算，只能每帧在主线程上
+     把整页样式重算一遍、再把输入框那一整条重画一遍。量过（412x915@3x、CPU 降速 4 倍，什么都不干）：
+     放着它 13.3% 主线程忙（每秒算样式 60 次），不放 0.01%。它跟“在不在跑”无关，自动模式一开着就在跑。
+     量法：node dev/perfProbe.js --auto --cpu 4。
+     “自动模式开着”这件事改由边框说：直接一根绿边，一眼看得出来（光不转）。
+     换个便宜写法（转一个合成层而不是转角度）能不能把效果保住，还没试。 */
+  @media (hover: none) and (pointer: coarse) {
+    #composer.auto::before { display: none; }
+    #composer.auto { border-color: var(--vscode-charts-green, #3fb950); }
+  }
   #inputRow { display: flex; align-items: center; gap: 2px; }
   /* 框底那条横排左头那颗加号（新建会话）、右头那颗「你说过的话」和再往右的自动模式按钮：
      一样的矮方块，鼠标扫过亮一下。中间是模型胶囊（见下面的 #ctxIcon）。 */

@@ -207,6 +207,7 @@ node dev/perfProbe.js                                     # 开着什么都不�
 node dev/perfProbe.js --stream --prefill 24000 --cpu 4     # 模型正在流式回答（先垫 2.4 万字）
 node dev/perfProbe.js --scroll 10 --prefill 24000          # 手指滑动看长会话
 node dev/perfProbe.js --batch 30                           # 打开长会话时的整屏重画
+node dev/perfProbe.js --auto --cpu 4                       # 自动模式开着（输入框那圈流光在转）、什么都不做
 
 # 量“同时有好几个会话在跑”时的 CPU（一台机器上常是两三个会话一起跑，屏幕上只有一个）：
 node dev/multiSessionPerf.js                             # 3 个会话一起吐字，停在同一个上
