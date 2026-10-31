@@ -129,7 +129,18 @@ module.exports = async (page) => {
         await touch("touchMove", 340 - (340 - 80) * (i / 8), 420);
         await page.sleep(16);
     }
+    // 松手前一瞬那格有多宽：切过去以后它得从这儿接着长，不是一下跳到最终宽
+    const beforeRelease = await widths();
     await touch("touchEnd", 80, 420);
+    await page.sleep(60);
+    const rightAfter = await widths();
+    await page.sleep(260);
+    const settled = await widths();
+    console.log("  ② 松手：手离开时 " + JSON.stringify(beforeRelease) + " → 60 毫秒后 " + JSON.stringify(rightAfter)
+        + " → 到站 " + JSON.stringify(settled));
+    if (!(rightAfter.当前宽 < settled.当前宽 - 1)) {
+        throw new Error("松手那一下宽度一下跳到最终值了（该接着长）：" + JSON.stringify({ rightAfter, settled }));
+    }
     const seenSwipe = await slideSeen;
     await page.sleep(500);
     console.log("  ② 划过去那一下出现过的平移：" + JSON.stringify(seenSwipe));

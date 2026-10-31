@@ -1229,6 +1229,9 @@
    * 顶条一变宽窄（窗口、左边文件侧边栏、右边那一列）就重新摆一次。
    */
   function layoutSessionTabs() {
+    // 手指还按着（或者刚松开、还在等后端回话）：这一趟别动布局 —— 那两格的宽度正被
+    // tabSwipePlace 钉着、跟着手指走，这里一重算就把它们打回原样了（看着就是“先缩成小标签、再弹开”）。
+    if (tabSwipe) { return; }
     // 骨架里那一格没被用上时是藏着的：它不算这一排的东西（量到 0 宽也会占一格的位置）
     const tabs = Array.prototype.filter.call(sessionTabRow.children, (el) => el.classList.contains("sn-tab") && !el.classList.contains("hidden"));
     if (!tabs.length) { return; }
@@ -1305,8 +1308,18 @@
    * 下面那一大块是滑过去的，顶上这一排要是“啪”地一跳就打架。
    */
   function renderSessionBar() {
-    // 左右划那一路临时钉住的宽度先交回去（布局要重排了）
-    tabSwipeEnd(false);
+    // 松手切过去的那一刻：这两格现在各有多宽先记下来 —— 下面重画完宽度接着长（接着收），
+    // 不从半路一下跳回最终的样子（那一下看着就是“先缩成小标签、再啪地弹开”）。
+    // 真切过去了（后端说“切到这个了”）才结束这一趟；只是列表 / 名字变了的那些重画不算，
+    // 那会儿手底下的宽度还得接着跟着手指（见 layoutSessionTabs 开头那条）。
+    const widthsBefore = new Map();
+    if (tabSwipe && tabSwipe.toId === activeId) {
+      [tabSwipe.fromEl, tabSwipe.toEl].forEach((el) => {
+        if (el && el.isConnected) { widthsBefore.set(el, el.getBoundingClientRect().width); }
+      });
+      // 左右划那一路临时钉住的宽度先交回去（布局要重排了）
+      tabSwipeEnd(false);
+    }
     // 上一次滑动还没到站就先按停：位置要按“都站定了”量，不然越算越偏
     sessionTabEls.forEach((el) => { el.style.transition = ""; el.style.transform = ""; });
     const before = new Map();
@@ -1318,9 +1331,53 @@
     renderSessionTabs(items);
     // 名字、小点都换过了：宽窄跟着变，重摆一次（挤了就收窄、叠起来）
     layoutSessionTabs();
-    slideTabsFrom(before);
+    settleTabs(before, widthsBefore);
     // 顶条自己也会长高变矮（目录那行有 / 没有）：两边常驻那一列的面板头跟着它齐（见 syncDockHeaderHeight）
     syncDockHeaderHeight();
+  }
+
+  /** 顶条那一排格换位置时滑这一小段（跟手机上切会话那块一起动，见 SWIPE_FINISH_MS）。 */
+  const TAB_SLIDE_MS = 180;
+
+  /**
+   * 重画之后把这一排接上：换了位置的从旧地方滑过去，宽度变了的（手上还没长完 / 收完的）
+   * 接着长、接着收。两件事一起做 —— 同一个元素上只挂得住一份过渡，分两回写会互相盖掉。
+   * 宽度只补横向；高度、内边距那种当场就变，不跟着滑。
+   */
+  function settleTabs(before, widthsBefore) {
+    const moves = [];
+    sessionTabEls.forEach((el, id) => {
+      if (!el.isConnected || el.classList.contains("hidden")) { return; }
+      const w = el.getBoundingClientRect().width;
+      const oldLeft = before.get(id);
+      const oldW = widthsBefore ? widthsBefore.get(el) : undefined;
+      const dx = oldLeft === undefined ? 0 : oldLeft - el.getBoundingClientRect().left;
+      const grow = oldW !== undefined && Math.abs(oldW - w) >= 1;
+      if (Math.abs(dx) < 1 && !grow) { return; }
+      moves.push({ el: el, dx: dx, fromW: grow ? oldW : undefined, w: w });
+    });
+    if (!moves.length) { return; }
+    // 先按旧的样摆回去（位置、宽度都先按旧的来），下一帧再放开
+    moves.forEach((m) => {
+      m.el.style.transition = "none";
+      m.el.style.transform = "translateX(" + m.dx + "px)";
+      if (m.fromW !== undefined) { m.el.style.width = m.fromW + "px"; }
+    });
+    requestAnimationFrame(() => {
+      moves.forEach((m) => {
+        m.el.style.transition = "transform " + TAB_SLIDE_MS + "ms ease-out, width " + TAB_SLIDE_MS + "ms ease-out";
+        m.el.style.transform = "";
+        if (m.fromW !== undefined) { m.el.style.width = m.w + "px"; }
+      });
+    });
+    // 到站就放开：inline 的过渡留着会盖掉下面那条“底色淡过去”，pinned 的宽度留着会挡住布局
+    setTimeout(() => {
+      moves.forEach((m) => {
+        m.el.style.transition = "";
+        m.el.style.transform = "";
+        m.el.style.width = "";
+      });
+    }, TAB_SLIDE_MS + 60);
   }
 
   // ==================== 左右划的时候，顶条那一排也跟着动 ====================
@@ -1328,6 +1385,8 @@
   // 进度就跟着手指走（手指走到哪儿就变到哪儿）；松手切过去 / 弹回去再交回正常布局。
   // 只有挤成窄块的时候才用得上——放得下的时候每格本来就写着名字，没什么可变的。
   let tabSwipe = null;
+  /** 松手以后这一趟还得留多久：兜底清掉（后端一直不回话、又不走弹回那条路时，别把它永远钉住）。 */
+  let swipeHoldTimer = 0;
 
   /** 这一格的说明文字（名字）透明到 p（0 看不见，1 全看得见）。 */
   function tabNameOpacity(el, p) {
@@ -1338,6 +1397,7 @@
   /** 认成横划了：把这一趟要变宽、要收窄的那两格记下来（宽度先钉住，后面每帧都改它）。 */
   function tabSwipeBegin(s) {
     tabSwipeEnd(false);
+    swipeHoldTimer = 0;
     const fromEl = activeId ? sessionTabEls.get(activeId) : null;
     const toEl = s && s.toId ? sessionTabEls.get(s.toId) : null;
     if (!fromEl || !toEl || fromEl === toEl) { return; }
@@ -1345,7 +1405,7 @@
     const fromW = fromEl.getBoundingClientRect().width;
     const toW = toEl.getBoundingClientRect().width;
     if (!fromW || !toW) { return; }
-    tabSwipe = { fromEl: fromEl, toEl: toEl, fromW: fromW, toW: toW, growW: fromW };
+    tabSwipe = { fromEl: fromEl, toEl: toEl, toId: s.toId, fromW: fromW, toW: toW, growW: fromW };
     fromEl.style.width = fromW + "px";
     toEl.style.width = toW + "px";
     fromEl.classList.add("tab-shrinking");
@@ -1366,9 +1426,10 @@
 
   /**
    * 这一趟完了：把宽度交回布局。弹回去的那一趟让它滑回去（别一下跳），
-   * 真切过去的那一趟当场交回（下面整排重排、由 slideTabsFrom 接上位置）。
+   * 真切过去的那一趟当场交回（下面整排重排，由 settleTabs 接着把位置和宽度补完）。
    */
   function tabSwipeEnd(slideBack) {
+    if (swipeHoldTimer) { clearTimeout(swipeHoldTimer); swipeHoldTimer = 0; }
     const t = tabSwipe;
     if (!t) { return; }
     tabSwipe = null;
@@ -1384,38 +1445,6 @@
     els.forEach((el) => { el.classList.add("tab-settling"); });
     requestAnimationFrame(() => { els.forEach((el) => { el.style.width = ""; }); });
     setTimeout(() => { els.forEach((el) => { el.classList.remove("tab-settling"); }); }, 240);
-  }
-
-  /** 顶条那一排格换位置时滑这一小段（跟手机上切会话那块一起动，见 SWIPE_FINISH_MS）。 */
-  const TAB_SLIDE_MS = 180;
-
-  /**
-   * 重画之后，位置变了的格子从旧地方滑到新地方（不然就是“啪”地跳过去）：
-   * 先把它挪回旧地方（这一下不给过渡），下一帧再放开 —— 浏览器就会补一段平移。
-   * 只补横向：挤了以后收窄、变高那种当场就变，不跟着滑。
-   */
-  function slideTabsFrom(before) {
-    const moving = [];
-    sessionTabEls.forEach((el, id) => {
-      const oldLeft = before.get(id);
-      if (oldLeft === undefined || !el.isConnected || el.classList.contains("hidden")) { return; }
-      const dx = oldLeft - el.getBoundingClientRect().left;
-      if (Math.abs(dx) < 1) { return; }
-      el.style.transition = "none";
-      el.style.transform = "translateX(" + dx + "px)";
-      moving.push(el);
-    });
-    if (!moving.length) { return; }
-    requestAnimationFrame(() => {
-      moving.forEach((el) => {
-        el.style.transition = "transform " + TAB_SLIDE_MS + "ms ease-out";
-        el.style.transform = "";
-      });
-    });
-    // 到站就放开：inline 的过渡留着会盖掉下面那条“底色淡过去”
-    setTimeout(() => {
-      moving.forEach((el) => { el.style.transition = ""; el.style.transform = ""; });
-    }, TAB_SLIDE_MS + 60);
   }
 
   // 宽窄一变，“停着”的那些会话的版全要重排：先全放掉，闲下来会自动再停一遍（见 unkeep）
@@ -5097,6 +5126,8 @@
       swipeSpringBack(slide);
     }, SWIPE_WAIT_MS);
     pendingSlide = slide;
+    // 顶条那两格的样子留到真切过去为止（后端一直不回话的话，最晚跟等它的耐心一起放手）
+    if (tabSwipe) { swipeHoldTimer = setTimeout(() => { tabSwipeEnd(false); }, SWIPE_WAIT_MS + 600); }
     if (s.to) { slideToPlace(slide, s.to); }
     vscode.postMessage({ type: "switchSession", sessionId: s.toId });
   }
