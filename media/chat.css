@@ -1736,6 +1736,43 @@
   /* 正文跟这一列的头一样大（写在 #filePanel 上）：这里得自己说一句「跟上面一样」，
      不然 .pk-body 那条 0.9em 会盖上来（那条是给浮层里的清单用的）。 */
   #fileBody { flex: 1 1 auto; min-height: 0; padding: 6px 0 12px; font-size: inherit; position: relative; }
+  /* 下拉回清单（手势在 chat.js 的 wireFilePullBack）：看着文件、正文又在最顶上时，手指再往下拖，
+     写着文件路径的那条横条 + 正文这一块（#fileSheet）跟着手指往下走，上面一点点露出一层模糊的
+     清单（#fileBehind）；缝里写着会去哪儿。最上面那一行（标签条）不动。
+     高度、位移都由手指走多远决定（写在行内样式里），这里只管这一片怎么叠、模糊成什么样。 */
+  #fileStage {
+    position: relative; flex: 1 1 auto; min-height: 0;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  /* 那一块自己（横条 + 正文）得是不透明的：背后那层模糊的清单就在它底下，
+     不透的话清单会从正文里透出来，看着像两份东西叠在一起。只有拉出来的那道缝里看得到背后。 */
+  #fileSheet {
+    position: relative; z-index: 1; width: 100%;
+    flex: 1 1 auto; min-height: 0;
+    display: flex; flex-direction: column;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  }
+  /* 背后那一层：要回去的那层清单，模糊给个大致样子（不给人点，也不滚）。
+     它自己也垫着面板底色：这一层只在下面那道缝里看得见，不跟着往正文里透。 */
+  #fileBehind {
+    display: none; position: absolute; inset: 0; z-index: 0;
+    overflow: hidden; padding: 6px 0;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    filter: blur(4px); opacity: 0.7; pointer-events: none;
+  }
+  body.file-pulling #fileBehind { display: block; }
+  #filePullHint {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 2;
+    height: 0; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    font-size: calc(var(--vscode-font-size, 13px) - 2px);
+    color: var(--vscode-descriptionForeground, inherit);
+    pointer-events: none;   /* 不能把手指摸到的那一下吃掉 */
+  }
+  #filePullHint.armed { color: var(--vscode-focusBorder, #007acc); }
+  /* 松手以后加一道过渡：那一块滑回原处，不是一下跳回去 */
+  body.file-pull-spring #fileSheet { transition: transform 200ms ease-out; }
+  body.file-pull-spring #filePullHint { transition: height 200ms ease-out; }
   /* 每个标签自己那一块正文（见 chat.js 的 fileTabPage）：都挂在 #fileBody 下面，
      同一时刻只露正看着的那一块，别的只是藏起来——切回来时不重画，网页那个 iframe
      也不重新加载（一个 iframe 从文档里挪一次位置就会重新加载，所以谁也不挪，只换露哪一块）。 */

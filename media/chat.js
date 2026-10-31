@@ -7677,12 +7677,172 @@
     });
   }
 
+  // ==================== 下拉回清单（手机上的手势）====================
+  //
+  // 看文件时正文已经滑到最顶上，手指再往下拖：整个这一列（标签栏 + 横条 + 正文，即 #fileSlide）
+  // 跟着手指一起往下走，上面一点点露出背后那一层——要回去的那层清单，模糊的（#fileBehind）；
+  // 缝里一行字写着会去哪儿。拖过那条线松手就回到那一层清单（跟横条上那颗 ← 是同一件事，
+  // 见 backToFileList），不到线就滑回去。清单、「改动」「后台」那几格不认这个手势
+  // （它们没有“上一级”）。
+  //
+  // 用 touch 事件而不是 pointer：往外一拖，浏览器就拿指针事件去做它自己的手势（滚动、下拉刷新），
+  // pointercancel 一来追踪就断了（跟对话区那套横划同一个路子，见 messagesEl 那几段）。
+  // 认成下拉之后每一动都 preventDefault：不然浏览器会去滚、或者弹出它自己的下拉刷新。
+  /** 拉出来多远才算数（这是这一列实际下去的位移；手指要拖得更远，有阻尼）。 */
+  const FILE_PULL_BACK_PX = 110;
+  /** 最多跟到这么远：再往下就不动了，免得把这一列拖出屏幕一大截。 */
+  const FILE_PULL_MAX_PX = 300;
+  /** 阻尼：手指挑 10px，这一列走 8px（“越拉越沉”的手感靠它）。 */
+  const FILE_PULL_DAMPING = 0.8;
+  /** 开始拉之前先让开这么多：一次普通点击 / 手抖不该把这一列挪动。 */
+  const FILE_PULL_SLOP_PX = 8;
+  /** 正在拉的那一趟（手抬起来 / 被打断就清成 null）。 */
+  let filePull = null;
+
+  /**
+   * 背后那一层：要回去的那层清单，模糊着铺满那一片（#fileBehind）。
+   * 只在真往下拉的时候才去取（后端那份清单有缓存，一般几毫秒就回来，拉到底之前就铺好了）；
+   * 同一层已经铺好了就不再要一遍（连着拉几次不用重复取）。取不到就算了：那一层空着也拉得回去。
+   */
+  function fillFilePullBehind() {
+    const behind = fileSidebar.behind;
+    const tab = fileSidebar.tabs[fileSidebar.active];
+    if (!behind || !tab) { return; }
+    const dir = tab.dir || FILE_SIDEBAR_PROJECT_PATH;   // 跟 backToFileList 回到的是同一层
+    if (behind.getAttribute("data-dir") === dir) { return; }
+    behind.setAttribute("data-dir", dir);
+    behind.innerHTML = "";
+    const url = "/dir?session=" + encodeURIComponent(activeId || "") + "&path=" + encodeURIComponent(dir);
+    fetch(url).then((resp) => (resp.ok ? resp.json() : null)).then((listing) => {
+      if (!listing || behind.getAttribute("data-dir") !== dir) { return; }
+      behind.innerHTML = "";
+      const frag = document.createDocumentFragment();
+      ((listing && listing.entries) || []).forEach((entry) => {
+        const row = document.createElement("div");
+        row.className = "file-entry" + (entry.dir ? " dir" : "");
+        row.textContent = pathLabel(entry.name, entry.dir);
+        frag.appendChild(row);
+      });
+      behind.appendChild(frag);
+    }).catch(() => { /* 取不到就算 */ });
+  }
+
+  /**
+   * 接上“往下拉就回清单”那个手势（只在看一个文件时算，看的是横条露不露）。
+   * 正文要么已经滚到最上头，要么根本没得滚（图、一句提示）。
+   */
+  function wireFilePullBack() {
+    const body = fileSidebar.body;
+    const sheet = fileSidebar.sheet;
+    const hint = fileSidebar.pullHint;
+    if (!body || !sheet || !hint) { return; }
+    let springTimer = 0;
+
+    /** 按手指现在的位置摆：那一条横条 + 正文这一块下去多少（背后就露出多少）、那句话写到哪一句。 */
+    const paint = (p) => {
+      const distance = Math.min(FILE_PULL_MAX_PX, Math.round(p.dy * FILE_PULL_DAMPING));
+      p.distance = distance;
+      sheet.style.transform = distance > 0 ? "translateY(" + distance + "px)" : "";
+      // 那句提示那条跟着长高：那一块下去多少，它就有多高（正好落在那道缝里，不挡正文）
+      hint.style.height = distance + "px";
+      const armed = distance >= FILE_PULL_BACK_PX;
+      if (armed !== p.armed) {
+        p.armed = armed;
+        hint.textContent = armed ? "松手，回清单" : "继续往下拉，回清单";
+        hint.classList.toggle("armed", armed);
+      }
+    };
+
+    /** 这一趟收回去：那一块滑回原处，那句话收掉（animate = 滑回去，否则当场收）。 */
+    const release = (p, animate) => {
+      clearTimeout(springTimer);
+      sheet.style.transform = "";
+      hint.style.height = "0px";
+      hint.textContent = "";
+      hint.classList.remove("armed");
+      if (!animate) {
+        document.body.classList.remove("file-pulling");
+        hint.style.height = "";
+        return;
+      }
+      // 加那道过渡只要一瞬间：下一趟拉的时候得立刻跟手
+      document.body.classList.add("file-pull-spring");
+      springTimer = setTimeout(() => {
+        document.body.classList.remove("file-pull-spring", "file-pulling");
+        hint.style.height = "";
+      }, 240);
+    };
+
+    body.addEventListener("touchstart", (e) => {
+      if (filePull || e.touches.length !== 1) { return; }
+      if (!fileSidebar.bar || fileSidebar.bar.hidden) { return; }   // 不是在看一个文件
+      if (body.scrollTop > 0) { return; }                            // 正文不在最上头：这一下是正常滚动
+      if (swipeOnControl(e.target)) { return; }                      // 按在按钮 / 链接 / 图上：不动
+      clearTimeout(springTimer);
+      document.body.classList.remove("file-pull-spring");
+      filePull = {
+        finger: e.touches[0].identifier, y: e.touches[0].clientY,
+        // armed 先留空：第一次摆的时候那句提示才写得上去（想成 false 就永远不再写了）
+        dy: 0, distance: 0, armed: null, pulling: false,
+      };
+    }, { passive: true });
+
+    body.addEventListener("touchmove", (e) => {
+      const p = filePull;
+      if (!p) { return; }
+      const t = e.touches.length === 1 ? e.touches[0] : null;
+      if (!t || t.identifier !== p.finger) {
+        // 又上来一根手指 / 换了手指：这一趟不算
+        filePull = null;
+        if (p.pulling) { release(p, true); }
+        return;
+      }
+      const dy = t.clientY - p.y;
+      if (dy <= 0) {
+        // 往上 / 没动：这不是下拉，交回给滚动（已经拉出来的一半收回去）
+        if (p.pulling) { p.pulling = false; p.dy = 0; release(p, true); }
+        return;
+      }
+      if (!p.pulling) {
+        if (dy < FILE_PULL_SLOP_PX) { return; }
+        p.pulling = true;
+        // 背后那一层现在就去取：后端那份清单有缓存，一般几毫秒就回来，拉到底之前就铺好了
+        fillFilePullBehind();
+      }
+      if (e.cancelable) { e.preventDefault(); }
+      document.body.classList.add("file-pulling");
+      p.dy = dy;
+      paint(p);
+    }, { passive: false });
+
+    const finish = (e, cancelled) => {
+      const p = filePull;
+      if (!p) { return; }
+      const t = e.changedTouches && e.changedTouches[0];
+      if (t && t.identifier !== p.finger) { return; }
+      filePull = null;
+      if (!p.pulling) { return; }
+      const goBack = !cancelled && p.distance >= FILE_PULL_BACK_PX;
+      // 真回去的那一趟：这一列当场滑回原处（那里摆的就是清单），不演回弹——再滑一下只会
+      // 让那句话盖在清单前几行上。不回去的那趟才滑回去。
+      release(p, !goBack);
+      if (goBack) { backToFileList(); }
+    };
+    body.addEventListener("touchend", (e) => finish(e, false));
+    body.addEventListener("touchcancel", (e) => finish(e, true));
+  }
+
   // 这一列只在浏览器页面里搭出来：插件里的对话面板里连这一列的容器都没有。
   (function buildFileSidebar() {
     if (IN_WEBVIEW) { return; }
     const root = document.createElement("div");
     root.id = "fileSidebar";
-    // 这一列没有单独的头：标签条就在最上面那一行，「收起」那颗叉摆在它右端
+    // 这一列没有单独的头：标签条就在最上面那一行，「收起」那颗叉摆在它右端。
+    // 从上往下三块，为的是“下拉回清单”那个手势（见 wireFilePullBack）：
+    //   #fileHeader 最上面那一行（文件 / 改动 / 后台 那几格 + 放大镜 + 收起叉）—— 不动；
+    //   #fileStage  它底下那一片：看文件时候拉着往下走的就是这一片里的 #fileSheet
+    //               （写着文件路径的那条横条 + 正文），#fileBehind 是它背后那层模糊的清单；
+    //   #filePullHint 缝里那行提示词：钉在最上头不跟手走，缝长多高它多高。
     root.innerHTML =
       '<div id="filePanel" class="pk-panel">' +
         '<div id="fileHeader" class="pk-header">' +
@@ -7690,16 +7850,22 @@
           '<button id="fileSearchBtn" type="button" title="文件搜索（Ctrl+Shift+F）" aria-label="文件搜索">' + SEARCH_ICON + '</button>' +
           '<button id="fileClose" class="pk-header-close" type="button" title="收起" aria-label="收起">' + ICONS["close-bold"] + '</button>' +
         '</div>' +
-        // 看文件时正文上面那条横条：左边一颗返回（回文件列表），右边写这个文件叫什么。
-        // 返回摆在最左边、画成箭头：以前它是一颗叉、钉在右角上，正好跟上面那颗收起整列的叉
-        // 上下叠成一列（两者中心只隔 28px），手指一点就点岔 —— 一个收起整列、一个退回清单。
-        '<div id="fileBar" hidden>' +
-          '<button id="fileCloseFile" type="button" title="关掉这个文件，回到文件列表" aria-label="回到文件列表">'
-            + ICONS["arrow-left"] + '</button>' +
-          '<span class="file-bar-name"></span>' +
+        '<div id="fileStage">' +
+          '<div id="fileBehind"></div>' +
+          '<div id="fileSheet">' +
+            // 看文件时正文上面那条横条：左边一颗返回（回文件列表），右边写这个文件叫什么。
+            // 返回摆在最左边、画成箭头：以前它是一颗叉、钉在右角上，正好跟上面那颗收起整列的叉
+            // 上下叠成一列（两者中心只隔 28px），手指一点就点岔 —— 一个收起整列、一个退回清单。
+            '<div id="fileBar" hidden>' +
+              '<button id="fileCloseFile" type="button" title="关掉这个文件，回到文件列表" aria-label="回到文件列表">'
+                + ICONS["arrow-left"] + '</button>' +
+              '<span class="file-bar-name"></span>' +
+            '</div>' +
+            '<div id="fileBody" class="pk-body"></div>' +
+            '<button id="fileWrap" type="button" aria-label="折行开关" aria-pressed="false">' + ICONS.wrap + '</button>' +
+          '</div>' +
+          '<div id="filePullHint"></div>' +
         '</div>' +
-        '<div id="fileBody" class="pk-body"></div>' +
-        '<button id="fileWrap" type="button" aria-label="折行开关" aria-pressed="false">' + ICONS.wrap + '</button>' +
       '</div>' +
       // 拖宽度的那条缝：摆在面板外面（面板自己 overflow: hidden，摆在里面就被它裁掉了）
       '<div id="fileResize" title="拖这里改宽度"></div>';
@@ -7711,6 +7877,10 @@
     fileSidebar.header = root.querySelector("#fileHeader");
     fileSidebar.tabsEl = root.querySelector("#fileTabs");
     fileSidebar.body = root.querySelector("#fileBody");
+    fileSidebar.panel = root.querySelector("#filePanel");
+    fileSidebar.sheet = root.querySelector("#fileSheet");
+    fileSidebar.behind = root.querySelector("#fileBehind");
+    fileSidebar.pullHint = root.querySelector("#filePullHint");
     fileSidebar.open = readFileSidebarWanted();
     fileSidebar.wrap = readFileSidebarWrapWanted();
     fileSidebar.width = readFileSidebarWidthWanted();
@@ -7720,6 +7890,7 @@
     fileSidebar.closeFile = root.querySelector("#fileCloseFile");
     fileSidebar.closeFile.addEventListener("click", () => backToFileList());
     wireFileSidebarResize(fileSidebar.resize);
+    wireFilePullBack();
     root.querySelector("#fileClose").addEventListener("click", () => setFileSidebarOpen(false));
     root.querySelector("#fileSearchBtn").addEventListener("click", () => openFileSearch());
     root.querySelector("#fileWrap").addEventListener("click", toggleFileSidebarWrap);
