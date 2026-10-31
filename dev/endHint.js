@@ -16,7 +16,8 @@
  *      没在重放收尾时重算，它会停在重放到的那条用户消息后面；
  *   8. 生成中重开页面（手机锁屏回来、手动刷新都算）：整屏重画完它还在末尾，脸还是「卡住了」；
  *   9. 「啊？」点下去发的是 bro 技能的正文（让人用大白话把上一条重说一遍）；
- *  10. 「压缩」点下去发 /compact，后端接下这活去调 pi 的压缩命令（假 pi 秒回）。
+ *  10. 「压缩」点下去发 /compact，后端接下这活去调 pi 的压缩命令（假 pi 秒回）；
+ *  11. 最右边那颗关会话的叉：只在闲着时露面（生成中不出现），点了这个会话就关掉（顶条上那一格跟着没）。
  *
  * 假模型每轮要停一下（FAKEPI_THINK_MS），不然生成中那一下来不及看；它认中止（见 fakePi 的 pause），
  * 所以第 5 幕点下去那一轮是真停住的（剧本没跑完就不会说出结尾那句“完事”）；
@@ -27,9 +28,10 @@ module.exports = async (page) => {
     const state = () => page.eval(`
         const pane = document.querySelector(".session-view:not(.off) .session-pane");
         const row = pane ? pane.querySelector(".end-hint-row") : null;
-        const h = row ? row.querySelector(".msg-endhint:not(.msg-endhint-stop):not(.msg-endhint-quick)") : null;
+        const h = row ? row.querySelector(".msg-endhint:not(.msg-endhint-stop):not(.msg-endhint-quick):not(.msg-endhint-close)") : null;
         const q = row ? Array.from(row.querySelectorAll(".msg-endhint-quick")) : [];
         const s = document.querySelector(".session-view:not(.off) .msg-endhint-stop");
+        const c = row ? row.querySelector(".msg-endhint-close") : null;
         const inp = document.getElementById("input");
         const users = pane ? Array.from(pane.querySelectorAll(".msg.user")) : [];
         const text = pane ? pane.innerText.replace(/\\s+/g, " ") : "";
@@ -41,6 +43,9 @@ module.exports = async (page) => {
             stop: Boolean(s) && !s.classList.contains("hidden"),
             // 那两颗快捷按钮（「压缩」「啊？」）：露着哪几颗（按行里的顺序）
             quick: q.filter((b) => !b.classList.contains("hidden")).map((b) => b.innerText.trim()),
+            // 最右边那颗关会话的叉露没露；顶条上还挂着几格
+            close: Boolean(c) && !c.classList.contains("hidden"),
+            tabs: document.querySelectorAll("#sessionTabs .sn-tab:not(.hidden)").length,
             input: inp.value,
             lastUser: users.length ? users[users.length - 1].innerText.replace(/\\s+/g, " ").slice(0, 40) : "",
             // 剧本结尾那句“完事”每跑完一轮就多一句：点「卡住了」当场停住的那一轮不会说它，
@@ -81,7 +86,7 @@ module.exports = async (page) => {
         el.dispatchEvent(new Event("input", { bubbles: true }));
         return el.value;
     `);
-    await page.click(".session-view:not(.off) .session-pane .msg-endhint:not(.msg-endhint-stop):not(.msg-endhint-quick)");
+    await page.click(".session-view:not(.off) .session-pane .msg-endhint:not(.msg-endhint-stop):not(.msg-endhint-quick):not(.msg-endhint-close)");
     await page.sleep(300);
     console.log("③ 点完那一下：", JSON.stringify(await state()));
 
@@ -101,7 +106,7 @@ module.exports = async (page) => {
     }
 
     // 点「卡住了」：这一轮当场停住，停稳之后补发一条“卡住了”
-    await page.click(".session-view:not(.off) .session-pane .msg-endhint:not(.msg-endhint-stop):not(.msg-endhint-quick)");
+    await page.click(".session-view:not(.off) .session-pane .msg-endhint:not(.msg-endhint-stop):not(.msg-endhint-quick):not(.msg-endhint-close)");
     const stuckSent = await waitFor((s) => s.lastUser === "卡住了");
     console.log("⑤ 点完「卡住了」（这一轮停住、补发了“卡住了”）：", JSON.stringify(stuckSent));
     await page.shot("endhint-4-stuck-clicked.png");
@@ -150,6 +155,17 @@ module.exports = async (page) => {
     console.log("⑩ 生成中重开页面（重画完）：", JSON.stringify(midRun));
     await page.shot("endhint-7-reload-midrun.png");
 
+    // ⑪ 最右边那颗叉：关掉这个会话（跟「压缩」「啊？」一样只在闲着时露面，点了直接关）
+    if (midRun && midRun.close) { throw new Error("生成中不该露那颗关会话的叉"); }
+    const idleForClose = await waitFor((s) => s.hint && s.face === "continue" && s.close);
+    console.log("⑪ 跑完闲下来（最右边那颗叉露面了）：", JSON.stringify({ close: idleForClose && idleForClose.close, tabs: idleForClose && idleForClose.tabs }));
+    await page.shot("endhint-9-close-idle.png");
+    const tabsBefore = idleForClose ? idleForClose.tabs : 0;
+    await page.click(".session-view:not(.off) .session-pane .msg-endhint-close");
+    const closed = await waitFor((s) => s.tabs === tabsBefore - 1, 40);
+    console.log("⑫ 点完那颗叉（这个会话关掉了）：", JSON.stringify({ tabsBefore, tabs: closed && closed.tabs }));
+    await page.shot("endhint-10-closed.png");
+
     if (empty.hint) { throw new Error("空会话里不该有末尾那颗胶囊"); }
     if (empty.quick.length) { throw new Error("空会话里不该有那两颗快捷按钮"); }
     if (!idle) { throw new Error("第一轮跑完没看到「继续」"); }
@@ -171,4 +187,6 @@ module.exports = async (page) => {
     if (!compacted) { throw new Error("点了「压缩」没看到压缩完成（假 pi 的压缩结果没回来）"); }
     if (!midRunStart) { throw new Error("第二轮的「卡住了」没露面（把 FAKEPI_THINK_MS 调大一点再跑）"); }
     if (!midRun) { throw new Error("生成中重开页面之后它没回到末尾、也没换成「卡住了」"); }
+    if (!idleForClose) { throw new Error("跑完闲下来时最右边那颗关会话的叉没露面"); }
+    if (!closed) { throw new Error("点了末尾那颗叉，会话没关掉（顶条上那一格还在）"); }
 };

@@ -648,7 +648,8 @@
   }
   .end-hint-row.hidden { display: none; }
   .end-hint-row .msg-endhint { margin: 0; }
-  .msg-endhint-stop { padding: 4px 10px; }
+  /* 只有图标的几颗（停止生成的方块、最右边那颗关会话的叉）：左右内边距收窄一点 */
+  .msg-endhint-stop, .msg-endhint-close { padding: 4px 10px; }
   .msg-endhint-stop.hidden { display: none; }
   /* 跑完时多出来的两颗快捷按钮（「压缩」「啊？」，见 chat.js 的 makeEndHintQuick）：
      跟「继续」一样是细描边的小胶囊，只是窄一点（它们是顺手点一下的小动作）。 */

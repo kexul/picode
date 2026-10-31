@@ -4305,8 +4305,8 @@
     const stop = st.endHintStopEl;
     const showStop = !!(st.piReady && st.streaming);
     if (stop) { stop.classList.toggle("hidden", !showStop); }
-    // 跑完时多出来的两颗快捷按钮（「压缩」「啊？」）：跟「继续」一起露面、一起收
-    for (const q of row.querySelectorAll(".msg-endhint-quick")) {
+    // 跑完时多出来的几颗（「压缩」「啊？」与最右边那颗关会话的叉）：跟「继续」一起露面、一起收
+    for (const q of row.querySelectorAll(".msg-endhint-quick, .msg-endhint-close")) {
       q.classList.toggle("hidden", mode !== "continue");
     }
     row.classList.toggle("hidden", !mode && !showStop);
@@ -4340,7 +4340,7 @@
 
   /**
    * 建末尾那一行：主胶囊（继续 / 卡住了）、旁边那颗「停止生成」，以及闲着时才会露出来的
-   * 两颗快捷按钮「压缩」「啊？」。
+   * 两颗快捷按钮「压缩」「啊？」和最右边那颗关会话的叉。
    * 停止生成就是主胶囊复制一份、去掉“卡住了”三个字，只留方块图标：点它只是把这一轮停掉
    * （跟按 Esc 一样，不补发“卡住了”），要“停下来再告诉它卡住了”就点旁边那颗。
    * 写什么由当前状态定（见 setEndHintMode）；露面时机与位置由 syncEndHint / placeEndHint 管。
@@ -4398,8 +4398,18 @@
       "压缩", "压缩上下文（发一条 /compact）", QUICK_COMPACT_TEXT);
     const broBtn = makeEndHintQuick(st,
       "啊？", "让 ai 用大白话把上一条重说一遍（bro 技能）", QUICK_BRO_TEXT);
-    // 顺序：压缩、?、停止生成（方块）、主胶囊（继续 / 卡住了）
-    row.append(compactBtn, broBtn, stop, btn);
+    // 最右边那颗叉：关掉这个会话。跟「压缩」「啊？」一样只在闲着时露面（跑着的一轮不该
+    // 被这一下打断，也就不需要像顶条那格那样问第二遍），点了直接关：会话文件留在盘上，
+    // 历史会话里点得回来；关掉的正是正在看的那个，后端会把这块屏切到别的会话去。
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "msg-endhint msg-endhint-close";
+    closeBtn.title = "关闭这个会话";
+    closeBtn.setAttribute("aria-label", "关闭这个会话");
+    closeBtn.innerHTML = ICONS["close-bold"];
+    closeBtn.addEventListener("click", () => { closeSession(st.id); });
+    // 顺序：压缩、?、停止生成（方块）、主胶囊（继续 / 卡住了）、叉（关掉这个会话）
+    row.append(compactBtn, broBtn, stop, btn, closeBtn);
     st.endHintEl = btn;
     st.endHintStopEl = stop;
     return row;
