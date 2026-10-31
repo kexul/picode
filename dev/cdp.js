@@ -333,7 +333,12 @@ function matches(text, wanted) {
     return text.includes(pattern);
 }
 
-/** 把采样剖析里的"自己花时间最多"的函数挑出来打印。 */
+/**
+ * 把采样剖析里的"自己花时间最多"的函数挑出来打印。
+ *
+ * 按「函数名 + 文件」合起来算（不按行）：同一个函数有好几个行号时、不合并就会把它的时间
+ * 拆成一堆 0.1% 的小行，看着像"什么都不热"。
+ */
 function printHotspots(profile, title) {
     if (!profile || !profile.nodes) { return; }
     const byId = new Map();
@@ -341,26 +346,24 @@ function printHotspots(profile, title) {
     // 统计每个节点被采样到的次数（含内联进来的子节点）
     const selfHits = new Map();
     for (const id of profile.samples || []) { selfHits.set(id, (selfHits.get(id) || 0) + 1); }
-    const rows = [];
+    const rows = new Map();
     for (const [id, hits] of selfHits) {
         const node = byId.get(id);
         if (!node) { continue; }
         const f = node.callFrame || {};
         const name = f.functionName || "(匿名)";
-        const where = (f.url || "").replace(/^.*\//, "") + ":" + ((f.lineNumber || 0) + 1);
-        rows.push({ hits, what: name + "  @ " + where });
+        const where = (f.url || "").replace(/^.*\//, "");
+        const what = name + (where ? "  @ " + where : "  @ :0");
+        rows.set(what, (rows.get(what) || 0) + hits);
     }
-    rows.sort((a, b) => b.hits - a.hits);
+    const list = Array.from(rows, ([what, hits]) => ({ what, hits })).sort((a, b) => b.hits - a.hits);
     const total = (profile.samples || []).length;
     const perSample = (profile.timeDeltas || []).reduce((a, b) => a + b, 0) / 1e6 / (total || 1);
     console.log("=== CPU 采样热点" + (title ? "（" + title + "）" : "") + "（共 " + total + " 个采样，每个约 " + (perSample * 1000).toFixed(2) + " 毫秒） ===");
-    const seen = new Set();
     let printed = 0;
-    for (const row of rows) {
-        if (seen.has(row.what)) { continue; }
-        seen.add(row.what);
+    for (const row of list) {
         console.log("  " + String(((row.hits / (total || 1)) * 100).toFixed(1)).padStart(5) + "%  " + row.what);
-        if (++printed >= 20) { break; }
+        if (++printed >= 15) { break; }
     }
     if (!printed) { console.log("  （没有采到任何脚本执行）"); }
 }

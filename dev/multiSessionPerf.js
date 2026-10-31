@@ -12,6 +12,7 @@
  *   node dev/multiSessionPerf.js --sessions 1                    # 只有一个会话（基线）
  *   node dev/multiSessionPerf.js --no-anim                       # 把所有循环动画关掉再量
  *   node dev/multiSessionPerf.js --sessions 3 --profile          # 顺便报一份采样热点（谁在吃 CPU）
+ *   node dev/multiSessionPerf.js --chunk 20 --tick 100           # 同样的字数、粗一点地来（每秒 10 条而不是 40 条）
  *
  * 报的是这十几秒里主线程忙了多少（拆成脚本 / 排版 / 算样式），最后还验一遍「切过去有没有
  * 漏画」：后端发过来多少字、页面上原文多长，两个数得对上。
@@ -55,6 +56,10 @@ async function main() {
     const switchEvery = Number(arg("switch-every", 0));
     const noAnim = argv.includes("--no-anim");
     const profile = argv.includes("--profile");   // 顺便报一份采样热点：谁在吃 CPU
+    // 逐字增量粗一点地来：每 tick 毫秒来 chunk 个字符（默认 5 个 / 25 毫秒 = 每秒 40 条）。
+    // 同样的字数、不同的条数，两边一减就是「每多收一条消息」的代价。
+    const chunk = Number(arg("chunk", 5));
+    const tick = Number(arg("tick", 25));
 
     const harness = createHarness({ fakePi: true });
     const url = await harness.start();
@@ -96,15 +101,30 @@ async function main() {
                 let at = 24000;
                 window.__timers.push(setInterval(function () {
                     if (at >= answer.length) { return; }
-                    send(id, { type: "assistantDelta", delta: answer.slice(at, at + 5) });
-                    at += 5;
+                    send(id, { type: "assistantDelta", delta: answer.slice(at, at + ${chunk}) });
+                    at += ${chunk};
                     window.__sent[i] = at;
-                }, 25));
+                }, ${tick}));
             });
             window.__switch = function (id) { window.acquireVsCodeApi().postMessage({ type: "switchSession", sessionId: id }); };
             return true;
         `);
         await sleep(4000);   // 先让它们跑起来，别把"刚垫进去那一下"算进来
+
+        // 数一下正文真重画了几次（.md 上 data-raw 变了多少次）：流式正文是按 150~300 毫秒
+        // 的节流画的（看不见的会话按 600 毫秒），这里顺手报出来——"画得稀"这件事得看得见，
+        // 不然改坏了（比如节流失效、每条消息都画一次）只看主线程忙是看不出原因的。
+        const countRenders = () => page.eval(`
+            window.__renders = 0;
+            window.__renderWatchers = [];
+            for (const md of document.querySelectorAll(".session-view .assistant .md")) {
+                const ob = new MutationObserver(function (list) { window.__renders += list.length; });
+                ob.observe(md, { attributes: true, attributeFilter: ["data-raw"] });
+                window.__renderWatchers.push(ob);
+            }
+            return true;
+        `);
+        await countRenders();
 
         const before = await metrics(cdp);
         if (profile) {
@@ -131,11 +151,13 @@ async function main() {
         console.log("=== " + ids.length + " 个会话一起吐字，"
             + (switchEvery > 0 ? "每 " + switchEvery + " 毫秒切一次，" : "停在同一个会话上，")
             + (wall / 1000).toFixed(0) + " 秒（412x915@3x，CPU 降速 4 倍" + (noAnim ? "，动画全关" : "") + "） ===");
+        console.log("逐字增量：每 " + tick + " 毫秒 " + chunk + " 个字符（每个会话每秒 " + (1000 / tick).toFixed(0) + " 条消息）");
         console.log("主线程忙：" + pct(d("TaskDuration")) + "（脚本 " + pct(d("ScriptDuration"))
             + "，排版 " + pct(d("LayoutDuration")) + "，算样式 " + pct(d("RecalcStyleDuration")) + "）");
         console.log("排版 " + d("LayoutCount") + " 次，算样式 " + d("RecalcStyleCount") + " 次");
-        const dom = await page.eval("return { views: document.querySelectorAll('.session-view').length, nodes: document.getElementsByTagName('*').length };");
+        const dom = await page.eval("return { views: document.querySelectorAll('.session-view').length, nodes: document.getElementsByTagName('*').length, renders: window.__renders || 0 };");
         console.log("DOM：" + dom.nodes + " 个元素，" + dom.views + " 个会话壳");
+        console.log("正文重画：" + dom.renders + " 次（每秒 " + (dom.renders / (wall / 1000)).toFixed(1) + " 次）");
         if (prof) { printHotspots(prof); }
 
         // 漏不漏画：停掉吐字，挨个切过去，看画出来的原文是不是已经到最新
