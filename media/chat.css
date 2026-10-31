@@ -143,7 +143,7 @@
   #sessionCenter {
     flex: 1 1 auto; min-width: 0; display: flex;
   }
-  /* 那一排格：整排居中 —— 当前这一张在中间，别的会话分在它两边（按会话本来的顺序）。
+  /* 那一排格：整排居中，顺序就是会话清单的顺序（当前这一张在哪就在哪：最左那个会话就在最左边）。
      一格自己就比整条还宽时（窗口窄、名字长）也不撑破顶条。 */
   #sessionTabs {
     flex: 1 1 auto; min-width: 0; display: flex; align-items: stretch; justify-content: center; gap: 2px;

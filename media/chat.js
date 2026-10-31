@@ -1170,7 +1170,7 @@
       if (item.current) { el.id = "sessionName"; }
       else if (el.id) { el.removeAttribute("id"); }
       // 按会话清单的顺序摆（每次 append 都放到末尾，一路排下来就是那个顺序）。
-      // 挤的时候当前这一格会被挪到中间（见 layoutSessionTabs），宽回来就照这个序号排回去。
+      // 序号就是清单的顺序（挤了也不变，见 layoutSessionTabs），宽回来照这个序号摆。
       el.dataset.idx = String(i);
       sessionTabRow.appendChild(el);
     });
@@ -1196,34 +1196,11 @@
   }
 
   /**
-   * 挤的时候把当前这一格挪到这一排的中间：别的会话按会话清单的顺序分成两半，
-   * 前面那一半摆在它左边（顺序不变，最外的在最左），后面那一半摆在它右边。
-   * 会话本来就排在中间时，这个顺序跟原样一样（挪了也看不出来）。
-   */
-  function centerCurrentTab() {
-    const tabs = Array.prototype.filter.call(sessionTabRow.children, (el) => el.classList.contains("sn-tab") && !el.classList.contains("hidden"));
-    const cur = tabs.find((el) => el.classList.contains("current"));
-    if (!cur) { return; }
-    // 左边放会话清单里排在它前面的、右边放排在它后面的（挨着它的顺序不动：
-    // 手机上往右划切到上一个时，刚下来的那一格才会落在右边，不会反过来）。
-    // 两边差得多（当前这一张本来就是头一个 / 最后一个）就从另一边最远的那头搬几个过来，让它站在中间。
-    const at = tabs.indexOf(cur);
-    const left = tabs.slice(0, at);
-    const right = tabs.slice(at + 1);
-    while (left.length < right.length - 1) { left.unshift(right.pop()); }
-    while (right.length < left.length - 1) { right.push(left.shift()); }
-    const order = left.concat([cur], right);
-    // 已经是这个顺序就别动（append 一遍会把这些元素在 DOM 里挪来挪去）
-    const kids = Array.prototype.filter.call(sessionTabRow.children, (el) => el.classList.contains("sn-tab") && !el.classList.contains("hidden"));
-    if (order.every((el, i) => kids[i] === el)) { return; }
-    order.forEach((el) => { sessionTabRow.appendChild(el); });
-  }
-
-  /**
    * 摆这一排格：开着的会话全在条上，一个也不藏。
-   * ① 每格都写名字，放得下就这样（整排居中，当前这一张在中间）；
+   * ① 每格都写名字，放得下就这样（整排居中）；
    * ② 放不下：除了当前这一格，别的收成一条窄块，只露那颗点（见 chat.css 的 .strip）。
-   *    窄块按会话本来的顺序分在两边（当前这一张之前的在左、之后的在右），
+   *    顺序一直是会话清单的顺序（当前这一张在哪就在哪：最左那个会话就在最左边，
+   *    不为了让它站中间把别的会话搬到它左边去 —— 那样看着就像旁边还有个能划过去的会话），
    *    越往外越窄（紧挨着的那张 STRIP_W_MAX，最外那张收到 STRIP_W_MIN，只剩一颗点）；
    * ③ 这样还放不下：每张再一起往下缩（最小 STRIP_W_TINY），再放不下就让它溢出、被裁掉。
    * 顶条一变宽窄（窗口、左边文件侧边栏、右边那一列）就重新摆一次。
@@ -1242,10 +1219,8 @@
     if (!tabs.every((el, i) => kids[i] === el)) { tabs.forEach((el) => { sessionTabRow.appendChild(el); }); }
     const room = sessionTabRow.clientWidth;
     if (sessionTabsWidth(tabs) <= room) { return; }
-    // 挤了：当前这一格挪到中间（别的会话按会话清单的顺序分成两半：前面的在左、后面的在右），
-    // 除了它自己，别的收成窄块（名字进悬停提示）
-    centerCurrentTab();
-    // 挪完位置，按这一排现在的先后（＝看得见的左右）重新数一遍：紧挨当前这一张的算近
+    // 挤了：除了当前这一张，别的收成窄块（名字进悬停提示）。顺序不动（就是会话清单的顺序），
+    // 紧挨当前这一张的算近、越往外越窄。
     const row = Array.prototype.filter.call(sessionTabRow.children, (el) => el.classList.contains("sn-tab") && !el.classList.contains("hidden"));
     const curIdx = row.findIndex((el) => el.classList.contains("current"));
     let widest = 1;

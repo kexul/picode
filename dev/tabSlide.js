@@ -4,11 +4,11 @@
  *
  *   npm run web:shot -- --fake-pi --width 420 --height 700 --script dev/tabSlide.js
  *
- * 验三件事：
- *   ① 挤着的时候点另一张标签切过去：有格子出现平移补偿（transform: translateX），
- *      三百毫秒后清干净（不留 inline 过渡，免得盖掉下面那条“底色淡过去”）；
- *   ② 底色是渐变过去的（顶条那排格上有 background-color 的过渡）；
- *   ③ 手机上左右划切会话：内容区滑过去的同时，顶条那排也跟着动（同样出现平移补偿）。
+ * 验这么几件事：
+ *   ⓪ 挤成“一张大的 + 两颗点”时左右划：那颗点真跟着手指涨开（名字慢慢露出来）、当前这一格跟着收，
+ *      松手切过去那一下从手指停下的宽度接着长（不先缩成小标签再弹开），切完不留钉住的宽度；
+ *   ①②③④ 点另一张标签切过去时会滑过去、底色淡过去；左右划切过去时旧的那一格落在划过去的那一边；
+ *      划一小截弹回去不留钉住的宽度。
  */
 const LOOK = `
     const tabs = [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden"));
@@ -66,35 +66,47 @@ module.exports = async (page) => {
         };
     `);
 
-    // ⓪ 手机上最常见的两格：当前这一格是大 tab、另一个挤成一颗点。滑过去时那点要真的在涨、
-    //    大 tab 在收（以前那点一直不动，松手才猛地涨开 —— 看着就是“先不动、最后跳一下”）
-    await page.click("#newSessionBtn");
-    await page.sleep(1500);
+    // ⓪ 手机上最常见的挤法（三个会话：当前这一格是大 tab、别的收成一颗点）。滑过去时
+    //    那颗点要真的在涨、大 tab 在收（以前那点一直不动，松手才猛地涨开 —— 看着就是“先不动、最后跳一下”）。
+    //    两个会话时放得下（每格都写着名字），那种情况宽度本来就不该动，不在这儿验。
+    for (let i = 0; i < 2; i++) {
+        await page.click("#newSessionBtn");
+        await page.sleep(1500);
+    }
     const widthsAll = () => page.eval(`
         const tabs = [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden"));
         return tabs.map((t) => Math.round(t.getBoundingClientRect().width));
     `);
     const twoBefore = await widthsAll();
+    const growBefore = await widths();
+    if (!(twoBefore.length === 3 && twoBefore.filter((w) => w <= 30).length === 2)) {
+        throw new Error("三个会话该挤成“一张大的 + 两颗点”，现在量到的是：" + JSON.stringify(twoBefore));
+    }
     await touch("touchStart", 80, 420);
     for (let i = 1; i <= 4; i++) {
-        await touch("touchMove", 80 + 260 * (i / 8), 420);
+        await touch("touchMove", 80 + (340 - 80) * (i / 8), 420);
         await page.sleep(16);
     }
-    const twoHalf = await widthsAll();
+    const twoHalfAll = await widthsAll();
+    const twoHalf = await widths();
+    console.log("  ⓪ 三个会话：划之前 " + JSON.stringify(twoBefore) + " → 划到一半 " + JSON.stringify(twoHalfAll)
+        + "（要进来的那格 " + twoHalf.正在变宽的那格 + "，当前 " + twoHalf.当前宽 + "）");
+    if (!(twoHalf.正在变宽的那格 > 21 + 1 && twoHalf.变宽的那格有名字)) {
+        throw new Error("划到一半，要进来的那一格没有跟着涨开：" + JSON.stringify({ twoBefore, twoHalf }));
+    }
+    if (!(twoHalf.当前宽 < growBefore.当前宽 - 1)) {
+        throw new Error("划到一半，当前那一格没有跟着收：" + JSON.stringify({ growBefore, twoHalf }));
+    }
     for (let i = 5; i <= 8; i++) {
-        await touch("touchMove", 80 + 260 * (i / 8), 420);
+        await touch("touchMove", 80 + (340 - 80) * (i / 8), 420);
         await page.sleep(16);
     }
     await touch("touchEnd", 340, 420);
     await page.sleep(400);
-    const twoSettled = await widthsAll();
-    console.log("  ⓪ 两个会话：划之前 " + JSON.stringify(twoBefore) + " → 划到一半 " + JSON.stringify(twoHalf)
-        + " → 松手切完 " + JSON.stringify(twoSettled));
-    if (!(twoHalf[0] > twoBefore[0] + 1)) {
-        throw new Error("划到一半，那颗小点没有跟着涨开：" + JSON.stringify({ twoBefore, twoHalf }));
-    }
-    if (!(twoHalf[1] < twoBefore[1] - 1)) {
-        throw new Error("划到一半，当前那一格没有跟着收：" + JSON.stringify({ twoBefore, twoHalf }));
+    const twoSettled = await widths();
+    console.log("  ⓪ 松手切完：当前这一格 " + twoSettled.当前宽 + "（手指离开时它 " + twoHalf.正在变宽的那格 + "）");
+    if (!(twoSettled.当前宽 > twoHalf.正在变宽的那格 + 1)) {
+        throw new Error("松手那一下没有接着涨（该从手指停下的宽度接着长）：" + JSON.stringify({ twoHalf, twoSettled }));
     }
     const leftover = await page.eval(`
         return [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => t.style.width).length;
@@ -102,11 +114,6 @@ module.exports = async (page) => {
     if (leftover) {
         throw new Error("松手切完之后还留着钉住的宽度：" + leftover);
     }
-    if (!(twoSettled[0] > twoHalf[0] + 1)) {
-        throw new Error("松手那一下没有接着涨（该从手指停下的宽度接着长）：" + JSON.stringify({ twoHalf, twoSettled }));
-    }
-
-
 
     /** 给“现在的当前这一格”打个记号，一会儿看它切完落到哪一边。 */
     const markOld = () => page.eval(`

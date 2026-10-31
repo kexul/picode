@@ -84,6 +84,11 @@ module.exports = async (page) => {
         const r = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect();
         return JSON.stringify({ x: r.left, y: r.top, w: r.width, h: r.height });
     `).then(JSON.parse);
+    /** 顶条那排格的先后（dataset.idx 的序列）与当前那一格在里头的位置（-1 就是没找到）。 */
+    const tabRow = () => page.eval(`
+        const tabs = [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden"));
+        return JSON.stringify({ order: tabs.map((t) => t.dataset.idx), cur: tabs.findIndex((t) => t.classList.contains("current")) });
+    `).then(JSON.parse);
 
     const box = JSON.parse(await page.eval(`
         const r = document.getElementById("messages").getBoundingClientRect();
@@ -185,6 +190,11 @@ module.exports = async (page) => {
     await page.sleep(600);
     const atLast = await look("切到最右那一格");
     if (atLast.idx !== "2") { throw new Error("没切到最右那一格：" + JSON.stringify(atLast)); }
+    // 顶条还是清单的先后（当前这一张在右端，左边是那两颗点）
+    const lastRow = await tabRow();
+    console.log(lastRow.order.join(",") === "0,1,2" && lastRow.cur === 2
+        ? "    ✓ 顶条按清单顺序摆（当前这个在右端）"
+        : "    ✗ 顶条的先后乱了：" + JSON.stringify(lastRow));
     const pulledOf = (tr) => Math.abs(parseFloat(String(tr).replace(/[^0-9.\-]/g, "")) || 0);
     await drag(cx + 60, cy, cx - 200, cy, 10, async () => {
         const half = await look("最右那个再往左划到一半（还没松手）");
@@ -218,6 +228,11 @@ module.exports = async (page) => {
     await page.sleep(600);
     const atFirst = await look("切到最左那一格");
     if (atFirst.idx !== "0") { throw new Error("没切到最左那一格：" + JSON.stringify(atFirst)); }
+    // 最左那个会话就在最左边：它左边不该还摆着别的格（不然看着像“还往左划得过去”）
+    const firstRow = await tabRow();
+    console.log(firstRow.order.join(",") === "0,1,2" && firstRow.cur === 0
+        ? "    ✓ 顶条按清单顺序摆（当前这个在左端，左边没有别的格）"
+        : "    ✗ 最左那一格左边还摆着别的格：" + JSON.stringify(firstRow));
     await drag(cx - 60, cy, cx + 200, cy, 10, async () => {
         const half = await look("最左那个再往右划到一半（还没松手）");
         console.log((half.moved.length === 0 && half.file === "开" && pulledOf(half.drawer) > 10 && pulledOf(half.drawer) < box.w * 0.9)
