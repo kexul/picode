@@ -100,6 +100,9 @@ async function main() {
         await cdp.send("Emulation.setDeviceMetricsOverride", {
             width: 412, height: 915, deviceScaleFactor: 3, mobile: true,
         });
+        // 光给窄屏不够：界面认手机看的是 (hover: none) and (pointer: coarse)（见 chat.js 的 IS_TOUCH_DEVICE），
+        // 不把触屏也模拟上，那些只在手机上走的分支（不放循环动画、不自动聚焦键盘）量不到。
+        try { await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 }); } catch (e) { /* 旧浏览器不支持就算了 */ }
         if (cpuRate > 1) { await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuRate }); }
         console.log(`地址：${url}  （视口 412x915 @3x，${stream ? "流式回复中" : toSend ? "发消息后" : "什么都不做"}，量 ${seconds} 秒）`);
 

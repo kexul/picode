@@ -62,6 +62,8 @@ async function main() {
         await page.waitReady();
         // 手机的样子：3 倍像素密度 + CPU 降速 4 倍（≈ 手机的档位）
         await cdp.send("Emulation.setDeviceMetricsOverride", { width: 412, height: 915, deviceScaleFactor: 3, mobile: true });
+        // 界面认手机看的是 (hover: none) and (pointer: coarse)：触屏也模拟上，手机上才走的分支才量得到
+        try { await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 }); } catch (e) { /* 不支持就算了 */ }
         await cdp.send("Emulation.setCPUThrottlingRate", { rate: 4 });
         await cdp.send("Performance.enable");
         if (noAnim) {
