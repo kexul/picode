@@ -1956,9 +1956,12 @@
 
   /* ==================== 文件搜索浮层（Ctrl+Shift+F）==================== */
   /* 跟拾取器 / 设置那几张浮层同一个路子：一层遮罩 + 一块居中的面板，只是摆得靠上一点
-     （结果一列往下长，贴顶更像命令面板）。 */
+     （结果一列往下长，贴顶更像命令面板）。
+     它得压过滑入式的文件侧边栏：头上那颗放大镜就在那一层里（手机上那一层还铺满整屏，
+     见 body.file-full），浮层要是压在它下面，点了半天看着什么都没发生。所以这里不用
+     浮层惯用的 1000，比那一层（1001）高一档。 */
   #fileSearchOverlay {
-    position: fixed; inset: 0; z-index: 1000;
+    position: fixed; inset: 0; z-index: 1002;
     background: rgba(0,0,0,0.45);
     display: flex; align-items: flex-start; justify-content: center;
     padding: 10vh 12px 12px;

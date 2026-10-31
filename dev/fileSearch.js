@@ -7,7 +7,8 @@
  * 真后端、真会话、真网页服务、真界面文件（只有模型是假的），验的是外面看得见的行为：
  *   1. 按 Ctrl+Shift+F 弹出浮层，输入框自己拿到焦点；再按一次（或 Esc）收起；
  *   2. 「文件名」那一档边打边出：命中的那几个字母标出来；回车（或点一行）在左边的文件侧边栏
- *      打开那个文件；文件侧边栏头上那颗放大镜也能开它（手机上没键盘时的入口）；
+ *      打开那个文件；文件侧边栏头上那颗放大镜也能开它（手机上没键盘时的入口），
+ *      而且开出来的浮层压在那一边列上面（那一列滑入时铺在浮层下一层，别让人先去收起它）；
  *   3. 「内容」那一档搜文件里的文字：一条结果两行——「路径:行号」和那一行（命中处标出来）；
  *      点一条就在文件侧边栏打开、停在那一行；只在 node_modules 里的不出现，超过 2 MB 的
  *      文件不当正文搜（但它的名字照样能按名字搜到）；
@@ -283,6 +284,22 @@ module.exports = async (page) => {
     await page.eval(`document.getElementById("fileSearchBtn").click(); return true;`);
     await page.sleep(400);
     check("放大镜也能把搜索浮层开出来", (await searchState()).shown);
+    // 放大镜就在那一列头上（手机上那一列铺满整屏）：浮层得压在这一列上面，不然点一下
+    // 看着什么都没发生，得先把这一列收起来才看得见（窄窗里点面板正中那一点，落到的
+    // 元素该在浮层里，不该是那一列）
+    const onTop = JSON.parse(await page.eval(`
+        const rect = document.getElementById("fileSearchPanel").getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + 8);
+        const sb = document.getElementById("fileSidebar");
+        return JSON.stringify({
+            sidebarOpen: !!sb && getComputedStyle(sb).display !== "none",
+            hit: hit ? (hit.id || hit.className || hit.tagName) : "",
+            hitInSearch: hit ? !!hit.closest("#fileSearchOverlay") : false,
+        });
+    `));
+    check("文件侧边栏开着的时候，浮层压在这一列上面（点得到）",
+        onTop.sidebarOpen && onTop.hitInSearch, JSON.stringify(onTop));
+    await page.shot("search-6-over-sidebar.png");
     await pressEsc();
     await page.sleep(200);
 
