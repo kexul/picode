@@ -1724,7 +1724,11 @@ export class SessionRuntime {
         return {
             list: messages.slice(start, endBefore),
             start,
-            hasMore: start > 0,
+            // 看 hidden 而不是 start：真 pi 的会话开头总有一条 system（初始提示 + 工具清单），
+            // 它不画、也补不出来，上面那个起点会被推到它后面——start > 0 就成了一句空话，
+            // 顶上那颗「加载更早的消息」会一直挂着、点一下什么也不变（一条消息的会话刷新一下
+            // 就长出来一颗）。起点前面真有一条 user / assistant 才算“还有更早的”。
+            hasMore: hidden > 0,
             hidden,
         };
     }

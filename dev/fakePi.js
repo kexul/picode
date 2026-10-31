@@ -75,7 +75,9 @@ const SAMPLE_PNG_BASE64 =
 // ---------------------------------------------------------------------------
 
 /** 本会话的消息历史（get_messages 原样给出去；形状照抄真 pi 的会话文件）。 */
-const messages = [];
+// 开头这条 system 也照抄：真 pi 的会话都从“初始提示 + 工具清单”这一条起头，get_messages 里带着它
+// （界面上不画它，但算“还有没有更早的”时要认出来，见 src/sessionRuntime.ts 的 sliceHistoryWindow）。
+const messages = [{ role: "system", content: [{ type: "text", text: "初始提示 + 工具清单（假 pi 的占位）" }], timestamp: 0 }];
 let seq = 0;
 /** 剧本自己的状态（比如“标题已经报过了”）：不进行消息历史。 */
 const scriptState = {};
