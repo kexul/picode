@@ -1388,10 +1388,11 @@
   /** 松手以后这一趟还得留多久：兜底清掉（后端一直不回话、又不走弹回那条路时，别把它永远钉住）。 */
   let swipeHoldTimer = 0;
 
-  /** 这一格的说明文字（名字）透明到 p（0 看不见，1 全看得见）。 */
+  /** 这一格的说明文字（名字）透明到 p（0 看不见，1 全看得见）；给空串就交回样式表。 */
   function tabNameOpacity(el, p) {
     const name = el.querySelector(".sn-text");
-    if (name) { name.style.opacity = String(Math.max(0, Math.min(1, p))); }
+    if (!name) { return; }
+    name.style.opacity = p === "" ? "" : String(Math.max(0, Math.min(1, p)));
   }
 
   /** 认成横划了：把这一趟要变宽、要收窄的那两格记下来（宽度先钉住，后面每帧都改它）。 */
@@ -1401,16 +1402,17 @@
     const fromEl = activeId ? sessionTabEls.get(activeId) : null;
     const toEl = s && s.toId ? sessionTabEls.get(s.toId) : null;
     if (!fromEl || !toEl || fromEl === toEl) { return; }
-    if (!toEl.classList.contains("strip")) { return; }   // 放得下：两边都写着名字，不用变
     const fromW = fromEl.getBoundingClientRect().width;
     const toW = toEl.getBoundingClientRect().width;
     if (!fromW || !toW) { return; }
-    tabSwipe = { fromEl: fromEl, toEl: toEl, toId: s.toId, fromW: fromW, toW: toW, growW: fromW };
+    // 挤成窄块的时候，名字是收着 / 放的，得跟着淡；放得下的时候名字本来就都写着，只变宽度
+    const fade = toEl.classList.contains("strip");
+    tabSwipe = { fromEl: fromEl, toEl: toEl, toId: s.toId, fromW: fromW, toW: toW, growW: fromW, fade: fade };
     fromEl.style.width = fromW + "px";
     toEl.style.width = toW + "px";
     fromEl.classList.add("tab-shrinking");
     toEl.classList.add("tab-growing");
-    tabNameOpacity(toEl, 0);
+    if (fade) { tabNameOpacity(toEl, 0); }
   }
 
   /** 跟着手指摆：p 是这一趟走了多少（0 = 刚认出来，1 = 走满一屏）。 */
@@ -1420,8 +1422,10 @@
     const p = Math.max(0, Math.min(1, Math.abs(s.eff) / Math.max(1, s.width)));
     t.fromEl.style.width = (t.fromW + (t.toW - t.fromW) * p).toFixed(1) + "px";
     t.toEl.style.width = (t.toW + (t.growW - t.toW) * p).toFixed(1) + "px";
-    tabNameOpacity(t.fromEl, 1 - p);
-    tabNameOpacity(t.toEl, p);
+    if (t.fade) {
+      tabNameOpacity(t.fromEl, 1 - p);
+      tabNameOpacity(t.toEl, p);
+    }
   }
 
   /**
@@ -1436,7 +1440,7 @@
     const els = [t.fromEl, t.toEl];
     els.forEach((el) => {
       el.classList.remove("tab-shrinking", "tab-growing");
-      tabNameOpacity(el, 1);
+      tabNameOpacity(el, "");
     });
     if (!slideBack) {
       els.forEach((el) => { el.style.width = ""; });

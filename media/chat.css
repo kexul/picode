@@ -153,7 +153,7 @@
      底边伸出去 1px 把那道分隔线盖掉（跟下面连成一片）。
      左边那颗状态点（底下还挂一个子会话个数）、右边名字；名字长了从尾巴省略。
      宽度按内容来，不缩也不伸 —— 摆不下就收成窄块、再摆不下就叠起来（见 chat.js 的 layoutSessionTabs）。
-     当前这一格名字可以再长一点（手机上它是唯一一个写名字的）。 */
+     上限对每一格都一样（当前这一格也不放宽）：不然一换当前，那一格偷偷变宽、整排跟着挪一下。 */
   .sn-tab {
     flex: 0 0 auto; min-width: 0; max-width: min(200px, 50vw);
     display: flex; align-items: center; justify-content: center; gap: 5px;
@@ -169,7 +169,7 @@
   .sn-tab:hover { background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent); }
   /* 正在看的这一张：正文的底色，底边压过那道分隔线（负的 1px 正好盖掉它）。 */
   .sn-tab.current {
-    background: var(--vscode-editor-background); max-width: min(240px, 60vw);
+    background: var(--vscode-editor-background);
     margin-bottom: -1px; padding-bottom: 6px;
   }
   .sn-tab .sn-text {
@@ -210,6 +210,8 @@
      宽度跟着手指涨；要退场的那个跟着收。松手弹回去时给宽度补一段过渡。 */
   .sn-tab.strip.tab-growing .sn-text { display: block; }
   .sn-tab.tab-settling { transition: width 180ms ease-out; }
+  /* 滑动的那两格宽度完全由手指说了算：别让当前 / 普通两种上限（240 / 200）卡住它 */
+  .sn-tab.tab-growing, .sn-tab.tab-shrinking { max-width: none; }
   /* 顶条挤了（见 chat.js 的 layoutSessionTabs）：除了当前这一格，别的收成一条窄块，
      只留那颗点 —— 名字、×、子会话个数都收起（名字在悬停提示里）。
      窄块一样宽、点靠左摆；每张往左压一点（压多少由 chat.js 一张一张给），

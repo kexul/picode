@@ -51,6 +51,59 @@ module.exports = async (page) => {
     await page.waitReady();
     await page.cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
     await page.sleep(1200);
+    const touch = (type, x, y) => page.cdp.send("Input.dispatchTouchEvent", {
+        type,
+        touchPoints: type === "touchEnd" ? [] : [{ x: Math.round(x), y: Math.round(y) }],
+    });
+    const widths = () => page.eval(`
+        const tabs = [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden"));
+        const cur = tabs.find((t) => t.classList.contains("current"));
+        const grow = tabs.find((t) => t.classList.contains("tab-growing"));
+        return {
+            当前宽: cur ? Math.round(cur.getBoundingClientRect().width) : 0,
+            正在变宽的那格: grow ? Math.round(grow.getBoundingClientRect().width) : 0,
+            变宽的那格有名字: !!grow && !!grow.querySelector(".sn-text") && getComputedStyle(grow.querySelector(".sn-text")).display !== "none",
+        };
+    `);
+
+    // ⓪ 只有两个会话（放着够宽、没挤成窄块）也要一涨一缩：向右边划回去
+    await page.click("#newSessionBtn");
+    await page.sleep(1400);
+    // 两个标题故意弄成一长一短（真用起来就是这样）：这样才量得出“一涨一缩”
+    await page.eval(`
+        const tabs = [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden"));
+        tabs[0].querySelector(".sn-text").textContent = "短";
+        tabs[1].querySelector(".sn-text").textContent = "很长很长的一个会话标题";
+        return true;
+    `);
+    await page.sleep(200);
+    const twoBefore = await widths();
+    await touch("touchStart", 80, 420);
+    for (let i = 1; i <= 4; i++) {
+        await touch("touchMove", 80 + 260 * (i / 8), 420);
+        await page.sleep(16);
+    }
+    const twoHalf = await widths();
+    console.log("  ⓪ 两个会话、划到一半：之前 " + JSON.stringify(twoBefore) + " → 现在 " + JSON.stringify(twoHalf));
+    for (let i = 5; i <= 8; i++) {
+        await touch("touchMove", 80 + 260 * (i / 8), 420);
+        await page.sleep(16);
+    }
+    await touch("touchEnd", 340, 420);
+    await page.sleep(60);
+    const twoAfter = await widths();
+    await page.sleep(300);
+    const twoSettled = await widths();
+    console.log("  ⓪ 松手：60 毫秒后 " + JSON.stringify(twoAfter) + " → 到站 " + JSON.stringify(twoSettled));
+    if (!(twoHalf.当前宽 < twoBefore.当前宽)) {
+        throw new Error("两个会话划的时候，当前那一格没有收窄：" + JSON.stringify({ twoBefore, twoHalf }));
+    }
+    if (!(twoHalf.正在变宽的那格 > 0)) {
+        throw new Error("两个会话划的时候，没找到正在变宽的那一格：" + JSON.stringify(twoHalf));
+    }
+    if (!(twoAfter.当前宽 < twoSettled.当前宽 - 1) && !(twoAfter.当前宽 > twoSettled.当前宽 + 1)) {
+        throw new Error("两个会话松手那一下宽度一下跳到最终值了（该接着变）：" + JSON.stringify({ twoAfter, twoSettled }));
+    }
 
     // 多开几个会话（挤了以后切换会重排，才有位置可滑）
     for (let i = 0; i < 4; i++) { await page.click("#newSessionBtn"); await page.sleep(1300); }
@@ -98,20 +151,6 @@ module.exports = async (page) => {
 
     // ② 手机上左右划：内容区滑的同时，顶条那排也该跟着动
     //   划到一半就量一下：要进来的那一格变宽了（名字露出来）、当前那一格收窄了
-    const touch = (type, x, y) => page.cdp.send("Input.dispatchTouchEvent", {
-        type,
-        touchPoints: type === "touchEnd" ? [] : [{ x: Math.round(x), y: Math.round(y) }],
-    });
-    const widths = () => page.eval(`
-        const tabs = [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden"));
-        const cur = tabs.find((t) => t.classList.contains("current"));
-        const grow = tabs.find((t) => t.classList.contains("tab-growing"));
-        return {
-            当前宽: cur ? Math.round(cur.getBoundingClientRect().width) : 0,
-            正在变宽的那格: grow ? Math.round(grow.getBoundingClientRect().width) : 0,
-            变宽的那格有名字: !!grow && !!grow.querySelector(".sn-text") && getComputedStyle(grow.querySelector(".sn-text")).display !== "none",
-        };
-    `);
     await markOld();
     const swipeBefore = await widths();
     await touch("touchStart", 340, 420);
