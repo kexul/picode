@@ -1336,8 +1336,26 @@
     syncDockHeaderHeight();
   }
 
-  /** 顶条那一排格换位置时滑这一小段（跟手机上切会话那块一起动，见 SWIPE_FINISH_MS）。 */
-  const TAB_SLIDE_MS = 180;
+  /**
+   * 顶条那排格收尾用什么曲线：跟手那段是 1:1 的（手走多少它就变多少，加了缓动反而不跟手），
+   * 松手以后剩下的那点变化交给缓出曲线。
+   *   TAB_EASE   —— easeOutQuint：尾巴收得软，不回弹（默认）
+   *   TAB_SPRING —— 弹簧：到位时轻轻过一点再退回来（地址上带 ?tabspring=1 时用它，挑样式时对比用）
+   */
+  const TAB_EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
+  const TAB_SPRING = "linear(0, 0.04 7%, 0.16 14%, 0.42 23%, 0.72 32%, 0.93 41%, 1.02 50%,"
+    + " 1.035 57%, 1.02 66%, 1.008 75%, 1.002 84%, 1)";
+  const TAB_EASING = /[?&]tabspring=1/.test(location.search) ? TAB_SPRING : TAB_EASE;
+  /** 松手以后那一段走多久：跟着甩的速度算（快甩 150、慢慢松 270），见 swipeSettleMs。 */
+  let tabSettleMs = 180;
+
+  /** 松手时这一下甩得多快（像素 / 毫秒）→ 收尾走多久。甩得快就少走一会儿，不然像被黏住。 */
+  function swipeSettleMs(s) {
+    const spent = Math.max(1, Date.now() - s.t0);
+    const speed = Math.abs(s.dx) / spent;
+    const t = Math.max(0, Math.min(1, (speed - 0.2) / 1.2));
+    tabSettleMs = Math.round(270 - 120 * t);
+  }
 
   /**
    * 重画之后把这一排接上：换了位置的从旧地方滑过去，宽度变了的（手上还没长完 / 收完的）
@@ -1368,7 +1386,7 @@
     });
     requestAnimationFrame(() => {
       moves.forEach((m) => {
-        m.el.style.transition = "transform " + TAB_SLIDE_MS + "ms ease-out, width " + TAB_SLIDE_MS + "ms ease-out";
+        m.el.style.transition = "transform " + tabSettleMs + "ms " + TAB_EASING + ", width " + tabSettleMs + "ms " + TAB_EASING;
         if (m.dx) { m.el.style.transform = ""; }
         if (m.fromW !== undefined) { m.el.style.width = m.w + "px"; }
       });
@@ -1380,7 +1398,7 @@
         m.el.style.transform = "";
         m.el.style.width = "";
       });
-    }, TAB_SLIDE_MS + 60);
+    }, tabSettleMs + 60);
   }
 
   // ==================== 左右划的时候，顶条那一排也跟着动 ====================
@@ -1464,9 +1482,9 @@
       els.forEach((el) => { el.style.width = ""; });
       return;
     }
-    els.forEach((el) => { el.classList.add("tab-settling"); });
+    els.forEach((el) => { el.style.transition = "width " + tabSettleMs + "ms " + TAB_EASING; });
     requestAnimationFrame(() => { els.forEach((el) => { el.style.width = ""; }); });
-    setTimeout(() => { els.forEach((el) => { el.classList.remove("tab-settling"); }); }, 240);
+    setTimeout(() => { els.forEach((el) => { el.style.transition = ""; }); }, tabSettleMs + 60);
   }
 
   // 宽窄一变，“停着”的那些会话的版全要重排：先全放掉，闲下来会自动再停一遍（见 unkeep）
@@ -5133,7 +5151,8 @@
     const s = swipe;
     swipe = null;
     if (!s || s.lock !== "x") { return; }
-    if (cancelled || !swipePast(s)) { swipeSpringBack(s); return; }
+    if (cancelled || !swipePast(s)) { swipeSettleMs(s); swipeSpringBack(s); return; }
+    swipeSettleMs(s);
     // 松手：一边跟后端要那个会话，一边当场把画面滑到位。
     // 不等它回话再滑：快划时松手得很快，等那几十毫秒就冻住一瞬（回话只决定“算不算切过去”）。
     const slide = {

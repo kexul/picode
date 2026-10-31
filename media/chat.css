@@ -209,7 +209,7 @@
   /* 左右划切会话的时候（见 chat.js 的 tabSwipeBegin）：要进来的那一格把名字露出来、
      宽度跟着手指涨；要退场的那个跟着收。松手弹回去时给宽度补一段过渡。 */
   .sn-tab.strip.tab-growing .sn-text { display: block; }
-  .sn-tab.tab-settling { transition: width 180ms ease-out; }
+  /* 弹回去那一段的过渡时长由 chat.js 按甩的速度写进 inline（见 tabSwipeEnd）。 */
   /* 滑动的那两格宽度完全由手指说了算：别让当前 / 普通两种上限（240 / 200）卡住它 */
   .sn-tab.tab-growing, .sn-tab.tab-shrinking { max-width: none; }
   /* 顶条挤了（见 chat.js 的 layoutSessionTabs）：除了当前这一格，别的收成一条窄块，

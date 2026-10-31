@@ -234,5 +234,27 @@ module.exports = async (page) => {
         throw new Error("底色不是渐变过去的：" + after.底色过渡);
     }
     await page.shot("tabslide-1-switched.png");
+    // ⑤ 弹簧那套（地址上带 ?tabspring=1）：曲线换成 linear(...)，别的一样
+    await page.eval(`location.search = "?tabspring=1"; return true;`);
+    await page.sleep(1200);
+    await page.waitReady();
+    await page.sleep(600);
+    await touch("touchStart", 80, 420);
+    for (let i = 1; i <= 6; i++) {
+        await touch("touchMove", 80 + 260 * (i / 8), 420);
+        await page.sleep(16);
+    }
+    await touch("touchEnd", 340, 420);
+    await page.sleep(40);
+    const springTransition = await page.eval(`
+        const t = [...document.querySelectorAll("#sessionTabs .sn-tab")].find((el) => el.style.transition);
+        return t ? t.style.transition : "";
+    `);
+    await page.sleep(600);
+    console.log("  ⑤ 弹簧那套的过渡：" + JSON.stringify(springTransition));
+    if (springTransition.indexOf("linear(") < 0) {
+        throw new Error("地址上带了 ?tabspring=1，过渡却没换成弹簧曲线：" + springTransition);
+    }
+
     console.log("通过");
 };
