@@ -61,22 +61,23 @@ module.exports = async (page) => {
   if (after.rows !== before.rows - 1) { throw new Error("点一下叉就该关掉那条会话：" + JSON.stringify(before) + " → " + JSON.stringify(after)); }
   await page.shot("session-close-done.png");
 
-  // 顶条那颗会话名的下拉框里那颗 × 也一样：点一下就关，没有第二下
-  // （先把前面那张「项目与会话」面板按 Esc 收掉，不然它会盖住下拉框）
-  await page.eval("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));");
-  await page.sleep(400);
+  // 顶条上另一格那颗 × 也一样：点一下就关，没有第二下
   await page.click("#newSessionBtn");
   await page.sleep(1500);
-  await page.click("#sessionName");
-  await page.sleep(500);
-  const menuBefore = JSON.parse(await page.eval('return JSON.stringify({ rows: document.querySelectorAll("#sessionMenu .sm-item").length });'));
-  await page.shot("session-menu-open.png");
-  await page.eval("document.querySelectorAll('#sessionMenu .sm-item')[1].querySelector('.sm-close').click();");
+  const barCount = () => page.eval(`
+    return [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden")).length;
+  `);
+  const barBefore = { rows: await barCount() };
+  await page.eval(`
+    const t = [...document.querySelectorAll("#sessionTabs .sn-tab")].find((el) => !el.classList.contains("current"));
+    t.querySelector(".sn-close").click();
+    return true;
+  `);
   await page.sleep(1200);
-  const menuAfter = JSON.parse(await page.eval('return JSON.stringify({ rows: document.querySelectorAll("#sessionMenu .sm-item").length });'));
-  console.log("下拉框里点叉之后：", JSON.stringify(menuBefore), "→", JSON.stringify(menuAfter));
-  if (menuBefore.rows !== 2 || menuAfter.rows !== 1) {
-    throw new Error("下拉框里点一下叉就该关掉那条会话：" + JSON.stringify(menuBefore) + " → " + JSON.stringify(menuAfter));
+  const barAfter = { rows: await barCount() };
+  console.log("顶条另一格点叉之后：", JSON.stringify(barBefore), "→", JSON.stringify(barAfter));
+  if (barBefore.rows !== 2 || barAfter.rows !== 1) {
+    throw new Error("顶条上点一下叉就该关掉那一格：" + JSON.stringify(barBefore) + " → " + JSON.stringify(barAfter));
   }
   await page.shot("session-menu-closed.png");
 };

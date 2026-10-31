@@ -100,29 +100,23 @@
   });
   // 顶条中间那一排会话格（见下面 renderSessionTabs）：一格一个主会话，点一下切过去。
   const sessionTabRow = document.getElementById("sessionTabs");
-  // 右边那颗 ▾：掉出清单，列的只是摆不下、被藏起来的那几格（全摆得下时它不露面）。
-  // 画的还是那份 chevron（画的是朝右），转 90° 成朝下（见 chat.css 的 #sessionMore）。
-  const sessionCaret = document.createElement("button");
-  sessionCaret.type = "button";
-  sessionCaret.id = "sessionMore";
-  sessionCaret.className = "hidden";
-  sessionCaret.title = "摆不下的会话";
-  sessionCaret.setAttribute("aria-label", "摆不下的会话");
-  sessionCaret.innerHTML = CHEVRON_SVG;
-  sessionCaret.addEventListener("click", (e) => { e.stopPropagation(); toggleSessionMenu(); });
-  sessionTabRow.appendChild(sessionCaret);
-  // 一个会话都没有时不掉清单（里头什么都没有）：去把「项目与会话」摊开，那里才有东西可挑。
+  // 开着的会话全摆在这一条上（不藏进下拉）：挤了就收窄、再挤就一格压一格地叠起来，见 layoutSessionTabs。
+  // 一个会话都没有时点这一条：去把「项目与会话」摊开，那里才有东西可挑。
   sessionTabRow.addEventListener("click", () => {
     if (!activeSession()) { openWorkspaceForEmpty(); }
   });
   // （会话跑在哪个目录不上顶条：一排格子已经够挤，完整路径放在每格的悬停提示里。）
   // 格与格之间那个间距（量摆设时用，跟 chat.css 里 #sessionTabs 的 gap 一个数）
-  const TAB_GAP = 4;
-  // 那一排的宽度一变（窗口、左边那一列、右边那一列）就重摆一次：放得下几个就放几个。
+  const TAB_GAP = 2;
+  /** 挤的时候那张窄块本身的宽（那颗点靠左摆，右边留出来给后一张压住）。 */
+  const STRIP_W = 21;
+  /** 一张窄块露出来的宽：紧挨当前这一张的最多、最外那张最少（只剩一颗点），再挤就一起缩到 TINY。 */
+  const STRIP_W_MIN = 13;
+  const STRIP_W_TINY = 11;
+  // 那一排的宽度一变（窗口、左边那一列、右边那一列）就重摆一次：放不下就收窄、叠起来。
   // 摆出来的东西不改那一排自己的宽度，所以不会来回打转。
-  // ▾ 那张清单列的就是“被藏起来的那几格”：宽度一变那个集合就变了，开着的那张跟着重画。
   if (typeof ResizeObserver === "function") {
-    new ResizeObserver(() => { layoutSessionTabs(); refreshSessionMenu(); }).observe(sessionTabRow);
+    new ResizeObserver(() => { layoutSessionTabs(); }).observe(sessionTabRow);
   }
 
   // ---- 会话本地状态（后端 sessionList 消息驱动）----
@@ -1101,7 +1095,7 @@
   }
 
   // ==================== 顶条那一排会话格 ====================
-  // 一格一个主会话（跟 ▾ 那张清单同一份行：主会话，加上本屏正在看的那个子会话）。
+  // 一格一个主会话（主会话，加上本屏正在看的那个子会话）。
   // 点别的格直接切过去；点当前这一格什么也不做（关会话点每格自己那颗 ×）。
   // 骨架里那一格（#sessionName）头一回要画时拿去做某一格。
   let spareTabEl = sessionNameBtn;
@@ -1134,10 +1128,8 @@
       el.appendChild(close);
     }
     // 点这一格：不是当前这个就切过去（一下就换了）；就是当前这个什么也不做
-    // （以前点它会掉出清单，现在清单只列摆不下、被藏起来的那几格，摆得下的用不着从里头挑）
     el.addEventListener("click", () => {
       if (activeId === sessionId) { return; }
-      closeSessionMenu();
       requestSwitch(sessionId);
     });
     sessionTabEls.set(sessionId, el);
@@ -1152,10 +1144,10 @@
       if (el.parentElement) { el.parentElement.removeChild(el); }
       sessionTabEls.delete(id);
     }
-    items.forEach((item) => {
+    items.forEach((item, i) => {
       const el = sessionTabEl(item.sessionId);
       const st = sessions.get(item.sessionId);
-      // 派出去的子会话还有几个在跑 / 几个跑完了：小点底下那个数、那颗绿点用它
+      // 派出去的子会话还有几个在跑：小点底下那个数用它
       const kids = st ? runningChildCount(st.id) : 0;
       const doneKids = st ? doneChildCount(st.id) : 0;
       const nameEl = el.querySelector(".sn-text");
@@ -1167,8 +1159,6 @@
       // 派出去的子会话还在跑：本会话自己闲着也把那颗点亮出来（一样呼吸），
       // 一眼看得出这一家子还在干活（等的是子会话，不是本会话在答）。
       el.classList.toggle("child-running", kids > 0);
-      // 绿点：这一轮跑完了（不管当时有没有看着它），或者派出去的子会话跑完了、又没有谁在跑
-      el.classList.toggle("done", !!item.turnDone || (doneKids > 0 && kids === 0));
       // 目录放在这一格身上（顶条上不写目录了；调试脚本要知道“当前会话跑在哪儿”就取这个）
       el.dataset.cwd = item.cwd || "";
       el.title = (item.label || "")
@@ -1179,8 +1169,10 @@
       // 当前这一格就叫 #sessionName（“当前会话叫什么”照旧拿这个名字找）
       if (item.current) { el.id = "sessionName"; }
       else if (el.id) { el.removeAttribute("id"); }
-      // 按清单顺序摆，▾ 永远在最后
-      sessionTabRow.insertBefore(el, sessionCaret);
+      // 按会话清单的顺序摆（每次 append 都放到末尾，一路排下来就是那个顺序）。
+      // 挤的时候当前这一格会被挪到中间（见 layoutSessionTabs），宽回来就照这个序号排回去。
+      el.dataset.idx = String(i);
+      sessionTabRow.appendChild(el);
     });
     // 上面那一趟会把每一格重写一遍（名字、小点）：哪一格在等第二下确认跟一遍
     refreshSessionTabClose();
@@ -1204,50 +1196,90 @@
   }
 
   /**
-   * 摆得下几格：先按原样量一遍，放不下就只留摆得下的（从当前这一格起往后塞、再往前补），
-   * 其余的藏起来 —— 藏起来的都在 ▾ 那张完整清单里。
-   * 顶条一变宽窄（窗口、左边文件侧边栏、右边那一列）就重新摆一次。
-   * 排尾那颗 ▾ 只在真有格子被藏起来时才露面（全放得下时点开也没别的可挑）：
-   * 它自己也占一块地方，露不露面会改这一排能用的宽度，所以两头对上为止（两趟就稳）。
+   * 挤的时候把当前这一格挪到这一排的中间：别的会话按会话清单的顺序分成两半，
+   * 前面那一半摆在它左边（顺序不变，最外的在最左），后面那一半摆在它右边。
+   * 会话本来就排在中间时，这个顺序跟原样一样（挪了也看不出来）。
    */
-  function layoutSessionTabs() {
-    // 藏着的（骨架里那一格没被用上时，见 renderHtml）不算这一排的东西：量到 0 宽也会占一格的位置
+  function centerCurrentTab() {
     const tabs = Array.prototype.filter.call(sessionTabRow.children, (el) => el.classList.contains("sn-tab") && !el.classList.contains("hidden"));
-    if (!tabs.length) { sessionCaret.classList.add("hidden"); return; }
-    for (let pass = 0; pass < 3; pass++) {
-      const hidden = layoutTabsOnce(tabs);
-      if ((hidden > 0) === !sessionCaret.classList.contains("hidden")) { return; }
-      sessionCaret.classList.toggle("hidden", hidden === 0);
-    }
+    const cur = tabs.find((el) => el.classList.contains("current"));
+    if (!cur) { return; }
+    const others = tabs.filter((el) => el !== cur);
+    const half = Math.ceil(others.length / 2);
+    const order = others.slice(0, half).concat([cur], others.slice(half));
+    // 已经是这个顺序就别动（append 一遍会把这些元素在 DOM 里挪来挪去）
+    const kids = Array.prototype.filter.call(sessionTabRow.children, (el) => el.classList.contains("sn-tab") && !el.classList.contains("hidden"));
+    if (order.every((el, i) => kids[i] === el)) { return; }
+    order.forEach((el) => { sessionTabRow.appendChild(el); });
   }
 
-  /** 量一遍、把放不下的那几格藏起来；返回一共藏起来几格（▾ 露不露面看它，见 layoutSessionTabs）。 */
-  function layoutTabsOnce(tabs) {
-    // 量之前先把上一回藏起来的放出来：藏着的量不到宽（量到的会是 0）
-    tabs.forEach((el) => { el.classList.remove("tab-hidden"); });
-    const widths = tabs.map((el) => el.offsetWidth);
-    // ▾ 收起来时它量到 0（display: none）：那一块地方就还给这排格了
-    const caretW = sessionCaret.offsetWidth ? sessionCaret.offsetWidth + TAB_GAP : 0;
-    const room = Math.max(0, sessionTabRow.clientWidth - caretW);
-    const need = (from, to) => {
-      let w = 0;
-      for (let i = from; i < to; i++) { w += widths[i] + (i > from ? TAB_GAP : 0); }
-      return w;
-    };
-    let start = 0;
-    let end = tabs.length;
-    if (need(0, tabs.length) > room) {
-      // 当前这一格一定留着（就算它自己都放不下也留着：名字自己省略）
-      const curIdx = tabs.findIndex((el) => el.classList.contains("current"));
-      start = curIdx < 0 ? 0 : curIdx;
-      end = start + 1;
-      while (end < tabs.length && need(start, end + 1) <= room) { end++; }
-      while (start > 0 && need(start - 1, end) <= room) { start--; }
+  /**
+   * 摆这一排格：开着的会话全在条上，一个也不藏。
+   * ① 每格都写名字，放得下就这样（整排居中，当前这一张在中间）；
+   * ② 放不下：除了当前这一格，别的收成一条窄块，只露那颗点（见 chat.css 的 .strip）。
+   *    窄块按会话本来的顺序分在两边（当前这一张之前的在左、之后的在右），
+   *    越往外越窄（紧挨着的那张 STRIP_W_MAX，最外那张收到 STRIP_W_MIN，只剩一颗点）；
+   * ③ 这样还放不下：每张再一起往下缩（最小 STRIP_W_TINY），再放不下就让它溢出、被裁掉。
+   * 顶条一变宽窄（窗口、左边文件侧边栏、右边那一列）就重新摆一次。
+   */
+  function layoutSessionTabs() {
+    // 骨架里那一格没被用上时是藏着的：它不算这一排的东西（量到 0 宽也会占一格的位置）
+    const tabs = Array.prototype.filter.call(sessionTabRow.children, (el) => el.classList.contains("sn-tab") && !el.classList.contains("hidden"));
+    if (!tabs.length) { return; }
+    // 量之前先回到原样：上一回收窄、往左压、挪位置的痕迹都抹掉（按会话清单的顺序排回去）
+    tabs.forEach((el) => { el.classList.remove("strip"); el.style.width = ""; el.style.marginLeft = ""; });
+    tabs.sort((a, b) => Number(a.dataset.idx || 0) - Number(b.dataset.idx || 0));
+    const kids = Array.prototype.filter.call(sessionTabRow.children, (el) => el.classList.contains("sn-tab") && !el.classList.contains("hidden"));
+    if (!tabs.every((el, i) => kids[i] === el)) { tabs.forEach((el) => { sessionTabRow.appendChild(el); }); }
+    const room = sessionTabRow.clientWidth;
+    if (sessionTabsWidth(tabs) <= room) { return; }
+    // 挤了：当前这一格挪到中间（别的会话按会话清单的顺序分成两半：前面的在左、后面的在右），
+    // 除了它自己，别的收成窄块（名字进悬停提示）
+    centerCurrentTab();
+    // 挪完位置，按这一排现在的先后（＝看得见的左右）重新数一遍：紧挨当前这一张的算近
+    const row = Array.prototype.filter.call(sessionTabRow.children, (el) => el.classList.contains("sn-tab") && !el.classList.contains("hidden"));
+    const curIdx = row.findIndex((el) => el.classList.contains("current"));
+    let widest = 1;
+    row.forEach((el, i) => {
+      if (i === curIdx) { return; }
+      el.classList.add("strip");
+      widest = Math.max(widest, Math.abs(i - curIdx));
+    });
+    // 从紧挨着当前这一张的往两头走，一张比一张窄
+    const widths = row.map((el, i) => {
+      if (i === curIdx) { return 0; }
+      const t = widest > 1 ? (Math.abs(i - curIdx) - 1) / (widest - 1) : 0;
+      return Math.round(STRIP_W - (STRIP_W - STRIP_W_MIN) * t);
+    });
+    // 这样还放不下：每张按同一个比例再缩一点，最小 STRIP_W_TINY（再小那颗点就看不清了）
+    let need = 0;
+    row.forEach((el, i) => {
+      need += (i ? TAB_GAP : 0) + (i === curIdx ? el.offsetWidth : widths[i]);
+    });
+    if (need > room) {
+      const stripCount = widths.filter((w) => w > 0).length;
+      const stripsNeed = widths.reduce((n, w) => n + w, 0);
+      // 给窄块留下的宽度：从整条里扣掉当前这一张、所有缝、每张的最低限度
+      const stripRoom = room - (curIdx >= 0 ? row[curIdx].offsetWidth : 0)
+        - TAB_GAP * (row.length - 1) - STRIP_W_TINY * stripCount;
+      const scale = stripsNeed ? Math.max(0, stripRoom) / stripsNeed : 1;
+      widths.forEach((w, i) => {
+        if (i === curIdx || !w) { return; }
+        widths[i] = Math.max(STRIP_W_TINY, Math.round(STRIP_W_TINY + (w - STRIP_W_TINY) * scale));
+      });
     }
-    for (let i = 0; i < tabs.length; i++) {
-      if (i < start || i >= end) { tabs[i].classList.add("tab-hidden"); }
-    }
-    return start + (tabs.length - end);
+    // 每张往左压一点（露出 reveal，剩下的藏到前一张底下）：越往外压得越多，叠成一摞
+    widths.forEach((w, i) => {
+      if (i === curIdx || !w) { return; }
+      row[i].style.marginLeft = (w - STRIP_W) + "px";
+    });
+  }
+
+  /** 这一排现在摆出来一共要多宽（含格与格之间的间距）。 */
+  function sessionTabsWidth(tabs) {
+    let w = 0;
+    tabs.forEach((el, i) => { w += el.offsetWidth + (i ? TAB_GAP : 0); });
+    return w;
   }
 
   /**
@@ -1265,171 +1297,12 @@
   function renderSessionBar() {
     const items = sessionTabItems();
     renderSessionTabs(items);
-    // ▾ 露不露面在这一步里定（有格子被藏起来才露）
+    // 名字、小点都换过了：宽窄跟着变，重摆一次（挤了就收窄、叠起来）
     layoutSessionTabs();
-    // 清单开着的时候它会跟着变（换会话、改标题、某个会话跑完了）：重画完还要重新摆——
-    // 内容变宽变窄了，贴着屏幕边的位置就不对了。
-    refreshSessionMenu();
     // 顶条自己也会长高变矮（目录那行有 / 没有）：两边常驻那一列的面板头跟着它齐（见 syncDockHeaderHeight）
     syncDockHeaderHeight();
   }
 
-  // ==================== 顶条排尾那颗 ▾ 的下拉框 ====================
-  // 点排尾那颗 ▾ → 从它下面掉出一张清单，列的只是「顶条上摆不下、被藏起来的那几格」
-  // （摆得下的直接点格子就行）：点一行就切过去。
-  // 这一格永远摆得出来（见 layoutSessionTabs），所以清单里不会有当前这个。
-  // 看历史 / 换工作区 / 在别的目录里开会话也走「项目与会话」面板。
-  const sessionMenuEl = document.createElement("div");
-  sessionMenuEl.id = "sessionMenu";
-  sessionMenuEl.className = "hidden";
-  document.body.appendChild(sessionMenuEl);
-  let sessionMenuOpen = false;
-  // 某一行转成确认条（行尾多一颗勾）以后要钉住的宽度：点叉的那一下量下来。
-  let sessionMenuPin = 0;
-
-  /** 把清单贴在中间那一列底下（名字与目录两行都在它上面，清单别盖住目录行）：
-   *  先量准宽度，再把整块夹进屏幕里（左右各留 8px）。
-   *  有人正在确认关会话时宽度钉在点叉之前的那个值上：行尾多一颗勾也不许把整张清单撑宽。 */
-  function placeSessionMenu() {
-    // 贴在当前那一格底下（点 ▾ 掉出来的也一样：那一格就在 ▾ 边上，不会跑太远）
-    const cur = activeId ? sessionTabEls.get(activeId) : null;
-    const anchor = (cur || sessionCenterEl || sessionNameBtn).getBoundingClientRect();
-    const margin = 8;
-    // 量之前先把上一次留下的 left / width 清掉：left 留着会挤小可用宽度、
-    // 上一次钉死的 width 会掩盖内容的自然宽度，两种都会把宽度量成错的。
-    sessionMenuEl.style.left = "0px";
-    sessionMenuEl.style.width = "";
-    const room = Math.max(140, window.innerWidth - margin * 2);
-    const natural = sessionMenuEl.offsetWidth;
-    // 确认条收回去（或关了会话）就放开：宽度又跟着内容自己走
-    if (!pendingCloseId) { sessionMenuPin = 0; }
-    const width = Math.min(sessionMenuPin || natural, room);
-    // 只有需要钉住的时候才写死宽度：确认条那阵、或者整块比一屏还宽
-    // （CSS 的 max-width 是以内容盒算的，这里按整块算）。其余时候让它自己跟着内容走。
-    if (sessionMenuPin || natural > room) { sessionMenuEl.style.width = width + "px"; }
-    const wantLeft = anchor.left + anchor.width / 2 - width / 2;
-    const left = Math.max(margin, Math.min(wantLeft, window.innerWidth - margin - width));
-    sessionMenuEl.style.left = Math.round(left) + "px";
-    sessionMenuEl.style.top = Math.round(anchor.bottom + 4) + "px";
-  }
-
-  /**
-   * 那张清单要列的行：顶条上被藏起来的那几格（摆得下的直接点格子，不靠这张清单）。
-   * 一格被藏没藏，看它身上那个类（layoutSessionTabs 摆出来的）。
-   */
-  function overflowSessionItems() {
-    return sessionTabItems().filter((item) => {
-      const el = sessionTabEls.get(item.sessionId);
-      return !!el && el.classList.contains("tab-hidden");
-    });
-  }
-
-  /** 画一遍清单内容：一行一个（行尾一颗关闭叉；会话正在跑时点了先变确认条，再点勾才真关）。 */
-  function renderSessionMenu() {
-    sessionMenuEl.innerHTML = "";
-    overflowSessionItems().forEach((item) => {
-      const el = document.createElement("div");
-      el.className = "sm-item" + (item.current ? " current" : "");
-      el.title = (item.label || "") + (item.cwd ? "\n" + item.cwd : "");
-      // 行首那颗小点、下面「名字 + 目录」两段：普通行与确认条共用这一份
-      // （确认条只是行尾那颗叉旁边多一颗勾，行里的东西一点不动：关的是哪一个照样看得见，
-      //  整张清单的宽窄也不跟着变——宽度在点叉那一下已经钉住，见 placeSessionMenu）。
-      const dot = document.createElement("span");
-      dot.className = "sm-dot" + openDotClass(item);
-      el.appendChild(dot);
-      const body = document.createElement("div");
-      body.className = "sm-body";
-      const name = document.createElement("span");
-      name.className = "sm-name";
-      name.textContent = item.label || "";
-      body.appendChild(name);
-      if (item.cwd) {
-        const dir = document.createElement("span");
-        dir.className = "sm-path";
-        dir.textContent = item.cwd;
-        body.appendChild(dir);
-      }
-      el.appendChild(body);
-      if (item.pendingClose) {
-        // 点过行尾那颗叉（这个会话正在跑，还得再点一下）：整行底色变红，行尾多一颗勾——点勾才真关，点叉撤销。
-        el.classList.add("sm-confirm");
-        const yes = document.createElement("button");
-        yes.type = "button"; yes.className = "sm-yes";
-        yes.title = "关闭这个会话";
-        yes.setAttribute("aria-label", "关闭这个会话");
-        yes.innerHTML = ICONS["check-bold"];
-        yes.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(item.sessionId); });
-        const no = document.createElement("button");
-        no.type = "button"; no.className = "sm-no";
-        no.title = "取消";
-        no.setAttribute("aria-label", "取消");
-        no.innerHTML = ICONS["close-bold"];
-        no.addEventListener("click", (e) => {
-          e.stopPropagation();
-          cancelPendingClose();
-          refreshSessionMenu();
-        });
-        el.appendChild(yes); el.appendChild(no);
-      } else {
-        // 行尾不再挂「当前」/「在跑」：当前那条整行有底色，在跑 / 跑完了看名字前头那颗小点。
-        // 行尾这颗叉：点行是切过去（大目标），点叉才关（会话正在跑时要再点一下勾）。
-        const close = document.createElement("span");
-        close.className = "sm-close";
-        close.title = "关闭这个会话";
-        close.setAttribute("aria-label", "关闭这个会话");
-        close.innerHTML = ICONS["close-bold"];
-        close.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(item.sessionId); });
-        el.appendChild(close);
-        el.addEventListener("click", () => {
-          closeSessionMenu();
-          if (!item.current) { requestSwitch(item.sessionId); }
-        });
-      }
-      sessionMenuEl.appendChild(el);
-    });
-  }
-
-  /** 清单开着就重画一遍（关会话的确认条变来变去）；重画完还得重新摆位（宽窄变了：确认条那阵宽度是钉住的）。 */
-  function refreshSessionMenu() {
-    if (!sessionMenuOpen) { return; }
-    // 行都关没了就先收起这张空壳（全摆得下了、或者被藏起来的都关掉了）
-    if (!overflowSessionItems().length) { closeSessionMenu(); return; }
-    renderSessionMenu();
-    placeSessionMenu();
-  }
-
-  function openSessionMenu() {
-    // 顶条全摆得下（没有格子被藏起来）：没东西可翻，不开这张空壳
-    if (!overflowSessionItems().length) { return; }
-    renderSessionMenu();
-    sessionMenuEl.classList.remove("hidden");
-    sessionMenuOpen = true;
-    placeSessionMenu();
-  }
-
-  function closeSessionMenu() {
-    if (!sessionMenuOpen) { return; }
-    sessionMenuOpen = false;
-    sessionMenuPin = 0;
-    sessionMenuEl.classList.add("hidden");
-  }
-
-  function toggleSessionMenu() {
-    if (sessionMenuOpen) { closeSessionMenu(); return; }
-    openSessionMenu();
-  }
-
-  // 点别处 / 按 Esc 收起来；窗口尺寸变了重新贴回名字底下。
-  document.addEventListener("pointerdown", (e) => {
-    if (!sessionMenuOpen) { return; }
-    if (sessionMenuEl.contains(e.target) || sessionCenterEl.contains(e.target)) { return; }
-    closeSessionMenu();
-  }, true);
-  document.addEventListener("keydown", (e) => {
-    // 捕获阶段收掉，别让它顺手把正在生成的这一轮也中止了（Esc 另有中止的用途）
-    if (e.key === "Escape" && sessionMenuOpen) { e.stopPropagation(); closeSessionMenu(); }
-  }, true);
-  window.addEventListener("resize", () => { if (sessionMenuOpen) { placeSessionMenu(); } });
   // 宽窄一变，“停着”的那些会话的版全要重排：先全放掉，闲下来会自动再停一遍（见 unkeep）
   window.addEventListener("resize", unkeepAll);
 
@@ -5222,19 +5095,15 @@
       closeSession(id);
       return;
     }
-    // 点第一下（某一行转成确认条）：就手把清单现在的宽度记下来钉住，
-    // 行尾多出一颗勾也不许把整张清单撑宽（钉住的值在 placeSessionMenu 里用）。
-    if (sessionMenuOpen && !pendingCloseId) { sessionMenuPin = sessionMenuEl.offsetWidth; }
+    // 点第一下（这一格转成确认条）：这一格变红、那颗× 换成勾，再点一下才真关
     pendingCloseId = id;
     refreshSessionTabClose();
     if (pendingCloseTimer) { clearTimeout(pendingCloseTimer); }
     pendingCloseTimer = setTimeout(() => {
       cancelPendingClose();
       refreshOpenSessionsInPicker();
-      refreshSessionMenu();
     }, 4000);
     refreshOpenSessionsInPicker();
-    refreshSessionMenu();
   }
 
   /**
@@ -7696,6 +7565,10 @@
   const FILE_PULL_DAMPING = 0.8;
   /** 开始拉之前先让开这么多：一次普通点击 / 手抖不该把这一列挪动。 */
   const FILE_PULL_SLOP_PX = 8;
+  /** 刚拉出来时背后那一层糊成什么样（px）；越往下拉越清楚，过了那条线就全清楚。 */
+  const FILE_PULL_BLUR_PX = 6;
+  /** 背后那一层一开始多淡；同样越往下拉越实（过了那条线就跟真清单一样不透明）。 */
+  const FILE_PULL_BEHIND_OPACITY = 0.55;
   /** 正在拉的那一趟（手抬起来 / 被打断就清成 null）。 */
   let filePull = null;
 
@@ -7745,6 +7618,14 @@
       sheet.style.transform = distance > 0 ? "translateY(" + distance + "px)" : "";
       // 那句提示那条跟着长高：那一块下去多少，它就有多高（正好落在那道缝里，不挡正文）
       hint.style.height = distance + "px";
+      // 背后那层清单：拉得越多越清楚（糊不糊、淡不淡都跟着走），过了那条线就全清楚、全实
+      // （意思是“松手就到这儿了”）；松手没到线的话它跟着一起糊回去、藏起来。
+      const progress = Math.min(1, distance / FILE_PULL_BACK_PX);
+      const behind = fileSidebar.behind;
+      if (behind) {
+        behind.style.filter = "blur(" + (FILE_PULL_BLUR_PX * (1 - progress)).toFixed(1) + "px)";
+        behind.style.opacity = (FILE_PULL_BEHIND_OPACITY + (1 - FILE_PULL_BEHIND_OPACITY) * progress).toFixed(2);
+      }
       const armed = distance >= FILE_PULL_BACK_PX;
       if (armed !== p.armed) {
         p.armed = armed;
@@ -7757,6 +7638,7 @@
     const release = (p, animate) => {
       clearTimeout(springTimer);
       sheet.style.transform = "";
+      if (fileSidebar.behind) { fileSidebar.behind.style.filter = ""; fileSidebar.behind.style.opacity = ""; }
       hint.style.height = "0px";
       hint.textContent = "";
       hint.classList.remove("armed");
@@ -9120,11 +9002,8 @@
       }
     }
     const toDock = view === dockView;
-    // 顶条那颗下拉与面板是同一块地方上的两种界面，浮层那份弹出来就把它收掉；
     // 常驻那一列不算「弹面板」：它平时就一直在右边，而新建 / 关掉一个会话之后宿主都会
-    // 推一份过来，顺手把下拉收掉的话，在那清单里关掉一条就没法接着关下一条了
-    // （清单自己用的是另一套行，见 refreshSessionMenu）。
-    if (!toDock) { closeSessionMenu(); }
+    // 推一份过来。
     // “项目与会话”面板不放搜索框：上半会话、下半工作区两块结构，这个框帮不上忙还占一截
     // （要找项目看路径就行）；历史面板的搜索留着。
     const searchable = msg.searchable !== false && !toggle && kind !== "workspace";

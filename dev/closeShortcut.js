@@ -38,7 +38,7 @@ module.exports = async (page) => {
   if (!docked) { await page.click("#browserMenuBtn"); }
   await page.sleep(400);
 
-  // 会话开着几个就看顶条那排格（会话清单那颗 ▾ 只在摆不下时才露面，别拿它数数）
+  // 会话开着几个就看顶条那排格（开着的会话全在条上，一个也不藏）
   const state = () => page.eval(`
     const all = [...document.querySelectorAll("#sessionTabs .sn-tab")];
     return {

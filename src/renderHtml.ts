@@ -73,7 +73,7 @@ export function renderHTML(opts: RenderHTMLOpts): string {
         .join("");
 
     const head = opts.extraHead ? `  ${opts.extraHead}\n` : "";
-    // 顶条：中间一排会话格（一格一个主会话，点一下就切过去；放不下的收进末尾那颗 ▾），
+    // 顶条：中间一排会话格（一格一个主会话，点一下就切过去；挤了就收窄、叠起来，见 chat.js 的 layoutSessionTabs），
     // 右边几颗网页端按钮（左边那颗文件侧边栏开关只有浏览器页面里有，由 browserBridge.js 插在最前头）。
     // 「新建会话」那颗加号在输入框底下那条小横排里，见下面的 #composer。
     // 骨架里先摆当前这一格，其余由 chat.js 按会话列表补上（见 renderSessionTabs）。

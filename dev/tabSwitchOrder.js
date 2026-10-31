@@ -63,11 +63,9 @@ module.exports = async (page) => {
   // ---- 造现场：A（打开时自带）→ 建 B → 回 A 派个子会话 → 建 C ----
   await page.click("#newSessionBtn");          // B
   await page.sleep(1500);
-  await page.eval(`document.getElementById("sessionName").click(); return true;`);
-  await page.sleep(400);
   await page.eval(`
-    const first = document.querySelector("#sessionMenu .sm-item");
-    if (!first) { throw new Error("顶条那颗会话名的清单里一行都没有"); }
+    const first = document.querySelector("#sessionTabs .sn-tab:not(.current)");
+    if (!first) { throw new Error("顶条上只有一格，没有别的会话可切"); }
     first.click();
     return true;
   `);

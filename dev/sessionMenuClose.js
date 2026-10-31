@@ -47,7 +47,6 @@ module.exports = async (page) => {
         const d = p ? p.getAttribute("d") : "";
         return d.indexOf("M2.6") === 0 ? "勾" : (d.indexOf("M2.5") === 0 ? "叉" : "?");
       }),
-      menu: !document.getElementById("sessionMenu").classList.contains("hidden"),
     };
   `);
 
@@ -84,7 +83,6 @@ module.exports = async (page) => {
   await page.shot("closeconfirm-1-tab.png");
   if (!t1.closing[t1.count - 1] && !t1.closing.some(Boolean)) { throw new Error("跑着的时候点 × 应该让那一格进入等确认（变红）"); }
   if (!t1.icons.some((i) => i === "勾")) { throw new Error("等确认时那颗叉应该换成勾"); }
-  if (t1.menu) { throw new Error("点那一格上的 × 不该弹出清单"); }
   const countBefore = t1.count;
   await clickCurrentTabClose();
   await page.sleep(1500);
@@ -103,7 +101,6 @@ module.exports = async (page) => {
   console.log("② 在跑时按 Alt+W：", JSON.stringify(t3));
   await page.shot("closeconfirm-2-key.png");
   if (!t3.closing.some(Boolean)) { throw new Error("在跑的时候按关闭快捷键，那一格应该先变成等确认，不真关"); }
-  if (t3.menu) { throw new Error("按快捷键不该再自己弹出清单（确认就在那一格上）"); }
   await keyClose();
   await page.sleep(1500);
   const t4 = await tabs();

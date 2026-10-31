@@ -109,7 +109,7 @@ npm run web:shot -- --fake-pi --script dev/sessionFlow.js
 
 # 验关会话的二次确认（会话正在跑的时候点叉才要再点一下；跑完的直接关）。
 # 三处入口同一个规矩：顶条那一格点自己的 ×（那一格变红、叉换成勾）、在跑时按 Alt+W
-# （落在那一格上，不弹清单）、「项目与会话」里那几行（点叉出确认条、点叉或干等 4 秒撤销）：
+# （落在那一格上）、「项目与会话」里那几行（点叉出确认条、点叉或干等 4 秒撤销）：
 # 假 pi 每个工具卡 5 秒，才有时间在“正在跑”的时候去点关闭
 FAKEPI_THINK_MS=5000 npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/sessionMenuClose.js
 
@@ -316,7 +316,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `diffCheck.js` | 验「改动」那一格背后的逐行比较（大文件改两处不报成整段换掉、挨得近的两段不叠、按 diff 拼得回原文）：`node dev/diffCheck.js` |
 | `linkCandidates.js` | 验点文件链接时后端怎么挑文件（写清楚的直接开、会话读写过的同名文件先认且不扫仓库、没碰过的才列清单、目录外的不认）：`node dev/linkCandidates.js` |
 | `childDot.js` | 验顶条那颗小点与它下面的数字（子会话在跑时父会话那颗点也呼吸、点下面写着还有几个在跑，零个时数字收起来；点与箭头落在两行中间）：`npm run web:shot -- --script dev/childDot.js` |
-| `tabClose.js` | 验顶条那排格上的 `×` 与排尾那颗 ▾：每格都露着 ×（跑着时点一下变成勾、不真关），闲着点一下直接关；▾ 只在有格子被藏起来时露面，点它掉出来的只有被藏起来的那几格、点一行切过去；点当前那一格不掉清单：`FAKEPI_THINK_MS=6000 npm run web:shot -- --fake-pi --script dev/tabClose.js` |
+| `tabClose.js` | 验顶条那排格上的 `×` 与挤了以后怎么收窄、怎么叠：每格都露着 ×（跑着时点一下变成勾、不真关），闲着点一下直接关；挤了（420 宽、五个会话）当前这一张挪到中间写名字、别的收成窄块只露那颗点，越往外越窄也越往旁边那张底下压，开着的会话一个不少（点一张照样切过去）；窗口放宽名字都回来：`FAKEPI_THINK_MS=6000 npm run web:shot -- --fake-pi --script dev/tabClose.js` |
 | `tabSelectStyles.js` | 把顶条「当前这一格」的几种画法（描边 / 下划线 / 灰底 / 蓝底 …）摆成一竖排各照一张，挑样式时用（浅色 / 深色各跑一遭）：`npm run web:shot -- --fake-pi --script dev/tabSelectStyles.js`，加 `--theme dark` 跑深色那张 |
 | `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并 + 正文之后补来的那段跑完并回本段那颗；正在想时那颗齿轮在转、想完停住）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |
 | `thinkTipPerf.js` | 验 `think` 提示框开着时思考边流边长的开销与表现（节流、跟着贴底、往回滚就不跟）：`npm run web:shot -- --fake-pi --script dev/thinkTipPerf.js` |
@@ -333,7 +333,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `askQuestion.js` | 同上但那一条是真路的：真模型 → 真 pi（插件给它 `-e` 了桥扩展）→ 卡片 → 回话文件 → 工具结果（慢） |
 | `askDialog.js` + `askDialogTrigger.ts` | 验真扩展问的“要你打字 / 要你点是或否 / 选一个”：触发扩展先复制到 `~/.pi/agent/extensions/`，不用模型 |
 | `closeShortcut.js` | 验「关闭会话」快捷键（设置里那一行默认 `Alt+W`；对已经跑完的会话真按一下就关掉正在看的那个并切到剩下的；焦点在输入框里按也照样关）：`npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/closeShortcut.js` |
-| `sessionMenuClose.js` | 验关会话的二次确认（只对正在跑的会话）：顶条上那一格点 × → 那一格变红、叉换成勾（不真关），再点一下才关；在跑时按 `Alt+W` 同样落在那一格上、不弹清单；「项目与会话」里「正在对话」那几行点叉先出确认条（整行变红、行尾一颗勾一颗叉），点叉撤销、干等 4 秒撤销、点勾真关、点行身也算撤销：`FAKEPI_THINK_MS=5000 npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/sessionMenuClose.js` |
+| `sessionMenuClose.js` | 验关会话的二次确认（只对正在跑的会话）：顶条上那一格点 × → 那一格变红、叉换成勾（不真关），再点一下才关；在跑时按 `Alt+W` 同样落在那一格上；「项目与会话」里「正在对话」那几行点叉先出确认条（整行变红、行尾一颗勾一颗叉），点叉撤销、干等 4 秒撤销、点勾真关、点行身也算撤销：`FAKEPI_THINK_MS=5000 npm run web:shot -- --fake-pi --width 900 --height 800 --script dev/sessionMenuClose.js` |
 | `workspacePanel.js` | 验「项目与会话」面板（那颗 `<<<`）：正在对话一段、工作区那块的展开 / 收起（含记住）、组里的「加载更多」、行尾加号新建会话、标题右边那颗加号、子会话不显示：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/workspacePanel.js` |
 | `sidebarDock.js` | 验宽窗下常驻的项目与会话侧边栏（`<<<`，窗口 ≥ 900px 才常驻）：打开 / 收起 / 记住收起 / 收起时里头那份留着（再展开第一帧就有内容，不用等宿主扫磁盘）/ 两根顶线对齐 / 底部那条线与输入区上边线齐（输入框长高时线往上走、设置那颗按钮不动）/ 点行不关面板 / 开别的浮层时那一列原样留着 / 工作区那两块「加载更多」/ 改窄再拉宽（窄窗那一块得贴着右边、整屏高，不是居中的弹窗；居中那几块得还在正中），一次过一遍：`npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarDock.js` |
 | `sidebarRedraw.js` | 验对话更新时常驻那一列的重画范围（只该动「正在对话」那一格）：整块有没有重画、下半那一格的元素与滚动有没有动、重画过后点行还准不准：`FAKEPI_TICK_MS=60 npm run web:shot -- --width 1200 --height 760 --fake-pi --script dev/sidebarRedraw.js` |
