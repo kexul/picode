@@ -10,7 +10,11 @@
  *   2. 走一次“工具结果 → 自己滚到底”，等那一帧过去，再在两帧之间让内容长一截
  *      （用一块撑高的空盒子代表“消息落在两帧之间”），然后接着流一小段：还得贴着底；
  *   3. 用户自己往回滚一下：接着流，视野不许被拽回底部（那颗「跳到最新」该露出来）；
- *   4. 点那颗「跳到最新」：又贴回去了。
+ *   4. 点那颗「跳到最新」：又贴回去了；
+ *   5. 手机上最常见的那一手：往上滑一下、再往回拖，停在离底「一屏的 1/6」以内（手指抬起来时
+ *      差的那一截）：那颗「跳到最新」该当场收掉，接着流也该重新跟住（以前只在离底 40 像素
+ *      以内才认，而且只在你滚动的那一下检查，于是常常一整轮都收不掉，人得亲手再拖到底一次）；
+ *   6. 往上翻半屏看旧内容：那颗按钮该露出来，视野不许被拽走。
  *
  *   npm run web:shot -- --width 420 --height 800 --script dev/followBottom.js
  */
@@ -87,6 +91,41 @@ module.exports = async (page) => {
     if (v.dist > 2) { problems.push("点了「跳到最新」没贴回底部：" + JSON.stringify(v)); }
     if (v.jump) { problems.push("贴回底部之后那颗「跳到最新」还露着：" + JSON.stringify(v)); }
     await page.shot("follow-bottom.png");
+
+    // ---- 第五幕：拖回到离底「一屏的 1/6」以内（手机手指抬起来时差的那一截） ----
+    // 先往上滑一屏的 1/3，再拖回到离底一屏的 1/6 以内（但不是 0）：那颗按钮该收掉。
+    const size = await page.eval(`
+        const pane = document.querySelector(".session-view:not(.off) .session-pane");
+        return { h: pane.clientHeight, up: Math.round(pane.clientHeight / 3), near: Math.round(pane.clientHeight / 10) };
+    `);
+    const scrollToDist = (dist) => page.eval(`
+        const pane = document.querySelector(".session-view:not(.off) .session-pane");
+        pane.scrollTop = pane.scrollHeight - pane.clientHeight - ${dist};
+        return Math.round(pane.scrollTop);
+    `);
+    await scrollToDist(size.up);
+    await page.sleep(150);
+    let mid = await view();
+    if (!mid.jump) { problems.push("往上滑了 " + size.up + " 像素，那颗「跳到最新」该露出来：" + JSON.stringify(mid)); }
+    await scrollToDist(size.near);
+    await page.sleep(200);
+    v = await view();
+    console.log("\n第五幕（往上滑 " + size.up + " 再拖回离底 " + size.near + " 像素，窗格高 " + size.h + "）：\n  " + JSON.stringify(v));
+    if (v.jump) { problems.push("拖回到离底 " + size.near + " 像素（一屏的 1/6 以内）了，那颗「跳到最新」该收掉：" + JSON.stringify(v)); }
+    await post([{ type: "assistantDelta", sessionId: sid, delta: para.repeat(3) }]);
+    await page.sleep(500);
+    v = await view();
+    if (v.dist > 2) { problems.push("回到离底 " + size.near + " 像素之后没重新跟住底部（离底 " + v.dist + " 像素）"); }
+
+    // ---- 第六幕：往上翻半屏看旧内容：按钮露着，视野不被拽走 ----
+    const half = await scrollToDist(Math.round(size.h / 2));
+    await page.sleep(150);
+    await post([{ type: "assistantDelta", sessionId: sid, delta: para.repeat(3) }]);
+    await page.sleep(500);
+    v = await view();
+    console.log("\n第六幕（往上翻半屏到 " + half + "，再流一段）：\n  " + JSON.stringify(v));
+    if (v.top < half - 4) { problems.push("往上翻着看旧内容，视野被拽回去了：" + half + " → " + v.top); }
+    if (!v.jump) { problems.push("往上翻着看旧内容，那颗「跳到最新」该露出来：" + JSON.stringify(v)); }
 
     if (problems.length) { throw new Error("有对不上的地方：\n  - " + problems.join("\n  - ")); }
     console.log("\n  全部通过。");

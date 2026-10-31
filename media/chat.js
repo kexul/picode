@@ -769,7 +769,7 @@
       if (pane.scrollTop < prevTop - 1) { userTookOverScroll(st); return; }
       // 反过来：本来没在跟底，人自己滚回底部了，就恢复跟随。
       // 只在“没在跟底”时才量（追底期间不量：那会让每次滚动都多逼一次排版）。
-      if (!st.stickToBottom && isNearBottomPane(st)) {
+      if (!st.stickToBottom && atBottomForRestick(st)) {
         st.stickToBottom = true;
         if (st.hasNewContent) { st.hasNewContent = false; }
         syncJumpBottom(st);
@@ -865,7 +865,6 @@
       scrollAt: 0,
       scrollPrev: 0,
       scrollFastUntil: 0,
-      lerpRafId: 0,
       hasNewContent: false,
       modelId: "",
       provider: "",
@@ -1500,31 +1499,30 @@
   }
 
   // ==================== 滚动 ====================
+  // 「到底」的最小宽限：40 像素（窗格再矮也按这个算，见 atBottomForRestick）
   const BOTTOM_THRESHOLD = 40;
   /**
-   * 离底部这么近就直接过去，不再一帧一帧地缓（见 lerpScrollStep）。
+   * 「人已经回到最底了」的宽限：离底一屏的 1/6 以内就算到了。
    *
-   * 流式输出时内容每来一小段就把底部往下推十几像素。原来的尺子是“差 1 像素以内算到底”，
-   * 那点距离永远达不到：每来一小段就要连排两三帧、连写两三次 scrollTop 才收尾。
-   * 实测（贴底流式 6 秒、240 批内容）：写入从 316 次降到 241 次、排帧从 556 降到 481。
-   * 排版次数不变（264 → 263）：那是“量一次底部有多远”的固有开销，这个阀值动不了它。
+   * 原来卡在 40 像素，手机上那颗「跳到最新」根本收不掉：拖到底的时候内容还在往下长、
+   * 手指一抬常常差着一截（一屏的 1/6 ≈ 手机窗格上 120 像素，正好是这一截的宽度）；
+   * 差过 40 像素就不再认，此后内容照旧往下长、人却不再滚动，也就再没有机会重认一次，
+   * 那颗按钮于是一直亮着。再放宽就会把「只想回看上一句」的人也拽回底部，所以到 1/6 为止。
+   * 量法：dev/followBottom.js 第五幕（拖回离底 100 像素那颗按钮该收掉、接着流该跟住）。
    */
-  const STICK_JUMP_PX = 120;
-  function isNearBottomPane(st) {
-    return st.paneEl.scrollHeight - st.paneEl.scrollTop - st.paneEl.clientHeight <= BOTTOM_THRESHOLD;
+  function atBottomForRestick(st) {
+    const slack = Math.max(BOTTOM_THRESHOLD, Math.round(st.paneEl.clientHeight / 6));
+    return st.paneEl.scrollHeight - st.paneEl.scrollTop - st.paneEl.clientHeight <= slack;
   }
-  function lerpScrollStep(st) {
-    if (!st.stickToBottom) { st.lerpRafId = 0; return; }
-    const target = st.paneEl.scrollHeight - st.paneEl.clientHeight;
-    const cur = st.paneEl.scrollTop;
-    const diff = target - cur;
-    if (Math.abs(diff) <= STICK_JUMP_PX) { st.paneEl.scrollTop = target; st.lastScrollTop = target; st.lerpRafId = 0; return; }
-    const next = cur + diff * 0.3;
-    st.paneEl.scrollTop = next;
-    st.lastScrollTop = next;
-    st.lerpRafId = requestAnimationFrame(() => lerpScrollStep(st));
-  }
-  function smoothScrollToBottom(st) {
+  /**
+   * 跟着底部走（流式输出时内容往下长）。
+   *
+   * 只在这一帧真画了内容时写一次到底——不读 scrollHeight，浏览器自己夹到最大值（见 scrollToBottom）。
+   * 原来是一帧一帧地「缓」过去：每帧读一次 scrollHeight（逼浏览器当场重排一次）、再写一次
+   * scrollTop（整屏重画一次），60 次/秒全花在追一个 6.7 次/秒才增长的内容上。量一下（412x915@3x，
+   * CPU 降速 4 倍，2.4 万字的回复在吐字）：那条追底循环自己在主线程上就占 1.6%。
+   */
+  function smoothScrollToBottom(st, contentGrew) {
     // 只对挂在页面上的窗格（当前会话那个）追底
     if (!paneShown(st.paneEl)) { return; }
     if (!st.stickToBottom) {
@@ -1533,7 +1531,8 @@
       syncJumpBottom(st);
       return;
     }
-    if (!st.lerpRafId) { st.lerpRafId = requestAnimationFrame(() => lerpScrollStep(st)); }
+    if (!contentGrew) { return; }
+    scrollToBottom(st);
   }
   /**
    * 滚到底。两点讲究（都是从“打开长会话要好几秒”那个坑里总结出来的）：
@@ -1549,7 +1548,6 @@
     // 整屏重画中：重放出来的几百条老消息不该一条一条把人拽到底，等画完一次放好（见 finishRedraw）
     if (st.suppressScroll) { return; }
     if (!force && !st.stickToBottom) { return; }
-    if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); st.lerpRafId = 0; }
     st.stickToBottom = true;
     st.hasNewContent = false;
     syncJumpBottom(st);
@@ -1663,7 +1661,6 @@
     // 重画之前排着的“追底”那一帧（上一刻还在流式输出就会有一条）作废：
     // 它落下去的时候窗格已经被清空重建了，一落就是砸到半截内容的底部
     if (st.scrollRafId) { cancelAnimationFrame(st.scrollRafId); st.scrollRafId = 0; }
-    if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); st.lerpRafId = 0; }
     // 兜底：syncPoint 没等到（旧版后端、或者那一条半路丢了）也别一直不跟着走
     st.redrawTimer = setTimeout(() => { if (st.suppressScroll) { finishRedraw(st); } }, 8000);
   }
@@ -1924,12 +1921,11 @@
     st.paneEl.style.overflowAnchor = "";
   }
 
-  // 用户主动接管滚动（滚轮/触屏/键盘向上）：立刻停掉 lerp 追底，交还控制权。
+  // 用户主动接管滚动（滚轮/触屏/键盘向上）：立刻停掉追底，交还控制权。
   // 流式中同步亮起“跳到最新”按钮；非流式不打扰（用户只是回看已结束的回复）。
   function userTookOverScroll(st) {
     if (!st.stickToBottom) { return; }
     st.stickToBottom = false;
-    if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); st.lerpRafId = 0; }
     if (st.scrollRafId) { cancelAnimationFrame(st.scrollRafId); st.scrollRafId = 0; }
     if (st.streaming) { st.hasNewContent = true; syncJumpBottom(st); }
   }
@@ -1947,7 +1943,6 @@
   function jumpToUserMessage(st, el) {
     if (!el || !el.isConnected) { return; }
     userTookOverScroll(st);   // 跟用户自己往回滚一样：停掉追底；正在生成时把「跳到最新」亮起来
-    if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); st.lerpRafId = 0; }
     if (st.scrollRafId) { cancelAnimationFrame(st.scrollRafId); st.scrollRafId = 0; }
     st.paneEl.scrollTop = Math.max(0, el.offsetTop - 6);
     flashMessage(el);
@@ -2230,6 +2225,8 @@
   function flushDeltas(st) {
     st.rafId = 0;
     const now = performance.now();
+    // 这一趟有没有真画进去新的内容：没画就不去动滚动位置（见 smoothScrollToBottom）
+    let painted = false;
     if (st.textDirty && st.currentAssistant) {
       const raw = st.currentAssistant.raw || "";
       const interval = renderInterval(raw.length, paneShown(st.paneEl));
@@ -2241,9 +2238,10 @@
         renderStreamBody(st, raw);
         st.lastRenderAt = now;
         st.textDirty = false;
+        painted = true;
       }
     }
-    smoothScrollToBottom(st);
+    smoothScrollToBottom(st, painted);
   }
   function cancelFlush(st) { if (st.rafId) { cancelAnimationFrame(st.rafId); st.rafId = 0; } st.textDirty = false; }
   function finalizeCurrentAssistant(st) {
@@ -2259,7 +2257,7 @@
       // 流式期间不给活跃消息挂符号链接（见 symbolSet 那段），收尾这里补上：
       // 不然要等下一次符号集合变化才可点。
       applySymbolLinks(st.currentAssistant.el);
-      smoothScrollToBottom(st);
+      smoothScrollToBottom(st, true);
       st.currentAssistant = null;
       // 正文这一段吐完了、还没接上下一段（工具 / 想 / 再等）：动画换回「等」
       if (activeId === st.id) { syncStatus(); }
@@ -11302,7 +11300,6 @@
     cancelFlush(st);
     if (st.viewRaf) { cancelAnimationFrame(st.viewRaf); st.viewRaf = 0; }
     if (st.viewTimer) { clearTimeout(st.viewTimer); st.viewTimer = 0; }
-    if (st.lerpRafId) { cancelAnimationFrame(st.lerpRafId); }
     dropRunningLine(st);   // 那条「正在跑」的定时器与耗时那只钟（见 startRunClock）一并停掉
     for (const tg of st.pendingToolTags.values()) { clearInterval(tg._timer); }
     st.viewEl.remove();
