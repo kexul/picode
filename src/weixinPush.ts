@@ -1,15 +1,19 @@
 /**
  * weixinPush —— 会话有事时往微信里发一条。
  *
- * 发出去就一行：`会话名：回复的开头几句`（没有回复文字就只写会话名）。
- * 不写是哪台机器、不写"跑完了一轮"、也不附地址：微信里看到的就是"哪个会话说了什么"，
- * 想知道是哪台、想接着聊，引用这条消息回一句就是了（那才是这件事真正的入口）。
+ * 发出去的头一行是会话名（替别的机器发的再前面加一句 `哪台 · `），空一行，底下是这一轮的
+ * 回复原文 —— markdown 原样发，微信自己会渲染。太长就按 `WEIXIN_CHUNK_CHARS` 切成几条接着发
+ * （微信单条消息有长度上限）。没有回复文字就只发会话名那一行。
+ *
+ * 不写“跑完了一轮”、也不附地址：微信里看到的就是“哪个会话说了什么”，
+ * 想接着聊，引用这条消息回一句就是了（那才是这件事真正的入口）。
  *
  * 为什么要发而不是只弹面板：面板只在跑后端的那台 Windows 上有，人可能在别的屋里、在外面。
- * 微信这条也不看"人是不是正坐在输入框前面"（见 chatHost.ts 的 trayNote）：那是给不在电脑前准备的。
+ * 微信这条也不看“人是不是正坐在输入框前面”（见 chatHost.ts 的 trayNote）：那是给不在电脑前准备的。
  *
- * 发出去的每条都记下服务端给的 message_id：以后"在微信里引用这条消息回一句"要知道接哪个会话
- * （那个 id 是唯一能把两边对上的东西）。记在 weixin/sent.json 里，后端重启以后还认得。
+ * 发出去的每条都记下服务端给的 message_id：以后“在微信里引用这条消息回一句”要知道接哪个会话
+ * （那个 id 是唯一能把两边对上的东西）。分块发出去时每块都记，引用哪一块都认。
+ * 记在 weixin/sent.json 里，后端重启以后还认得。
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -89,51 +93,95 @@ export function findRouteForInbound(
 }
 
 /**
- * 一条推送里那条摘要最多留多少字。
+ * 一条微信消息最多装多少字。
  *
- * 一开始是 120：长一点的回复在微信里只露个头，看着就像被谁掐断了。
- * 400 上下一条消息还装得下（手机上不用点开也能看个大概），又不至于糊满一屏；
- * 真更长的回复照样截（要接着问，引用这条回一句就是了）。
+ * 4000 这个数是跟 pi-weixin-bridge 那个桥一致的（它拿这个数切了很久）：微信单条消息有上限，
+ * 拿不准具体数字就照这个已经能通的来。超了就切成几条接着发。
  */
-export const WEIXIN_PREVIEW_CHARS = 400;
+export const WEIXIN_CHUNK_CHARS = 4000;
+
+/** 按字素簇切：👨‍👩‍👧、👋🏽、🇨🇳 这种由好几个码点凑成的一个字，切在中间就成乱码了。 */
+const GRAPHEME = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/**
+ * 把一段话切成每条不超过 maxChars 的几条。
+ *
+ * 优先整行整行地搬（markdown 的列表、代码块都靠行）：一行装不下才按字素簇硬切。
+ * 注意代码围栏（```）没有特殊照顾：一个超长的代码块会横跨两条、各自不闭合（跟 pi-weixin-bridge 一样）。
+ */
+export function chunkWeixinText(text: string, maxChars = WEIXIN_CHUNK_CHARS): string[] {
+    if (!text) { return []; }
+    if (text.length <= maxChars) { return [text]; }
+    const chunks: string[] = [];
+    let current = "";
+    for (const line of text.split("\n")) {
+        const next = current ? `${current}\n${line}` : line;
+        if (next.length > maxChars && current) {
+            chunks.push(current);
+            current = line;
+        } else {
+            current = next;
+        }
+        // 单行自己就超过一条了：按字素簇硬切（不把字切成两半）
+        while (current.length > maxChars) {
+            let head = "";
+            for (const { segment } of GRAPHEME.segment(current)) {
+                if (head.length + segment.length > maxChars) { break; }
+                head += segment;
+            }
+            if (!head) { break; }
+            chunks.push(head);
+            current = current.slice(head.length);
+        }
+    }
+    if (current) { chunks.push(current); }
+    return chunks;
+}
+
+/**
+ * 排成要发的那几条：头一条是`会话名`空一行接回复原文，后面就是原文接着往下（没有回复文字就只发会话名）。
+ * 替别的机器发的，会话名前加一段 `哪台 · `：几台机器一起用时，光看会话名分不出是哪台。
+ */
+export function buildWeixinMessages(note: WeixinNote): string[] {
+    const own = (note.name ?? "").trim() || "会话";
+    const label = (note.remote?.label ?? "").trim();
+    const title = label ? `${label} · ${own}` : own;
+    const body = (note.summary ?? "").trim();
+    if (!body) { return [title]; }
+    // 头一条要让出标题那一行和空行：每块都按这个窄一点的宽度切，拼起来才不会超
+    const chunks = chunkWeixinText(body, WEIXIN_CHUNK_CHARS - title.length - 2);
+    return chunks.map((chunk, index) => (index === 0 ? `${title}\n\n${chunk}` : chunk));
+}
 
 /** 记多少条：够人回头翻一两天就够了，再多也没人引用到那么早的。 */
 const SENT_KEEP = 200;
 
 /**
- * 排成一条微信消息该长的样子：`会话名：摘要`（没有摘要就只剩会话名）。
- * 替别的机器发的在前面多一段 `哪台 · `：几台机器一起用时，光看会话名分不出是哪台。
- */
-export function formatWeixinNote(note: WeixinNote): string {
-    const own = (note.name ?? "").trim() || "会话";
-    const label = (note.remote?.label ?? "").trim();
-    const name = label ? `${label} · ${own}` : own;
-    const summary = (note.summary ?? "").trim();
-    return summary ? `${name}：${summary}` : name;
-}
-
-/**
- * 把这条发出去，顺手记下它对哪个会话。
+ * 把这条发出去，顺手记下它对哪个会话；太长的那段按 `WEIXIN_CHUNK_CHARS` 分几条接着发。
  * @param sender 除了令牌与地址，还带着"回信凭据"（微信只认最近一条来信里带的那份，见 weixinInbox.ts）
- * @returns ok 是发出去了没有；发不出去只把原因带回去（不抛：提醒失败不该影响会话）
+ * @returns ok 是全都发出去了没有；发不出去只把原因带回去（不抛：提醒失败不该影响会话）
  */
 export async function pushWeixinNote(
     note: WeixinNote,
     sender: WeixinSender & { to: string; contextToken?: string },
     file: string = weixinSentFile(),
-): Promise<{ ok: boolean; messageId?: string; error?: string }> {
-    try {
-        const sent = await sendText(sender, {
-            to: sender.to,
-            text: formatWeixinNote(note),
-            contextToken: sender.contextToken,
-        });
-        if (sent.messageId) { rememberSent(file, sent.messageId, note); }
-        return { ok: true, messageId: sent.messageId };
-    } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return { ok: false, error: explainSendFailure(message, sender.contextToken) };
+): Promise<{ ok: boolean; messageId?: string; messageIds: string[]; error?: string }> {
+    const messageIds: string[] = [];
+    for (const text of buildWeixinMessages(note)) {
+        try {
+            const sent = await sendText(sender, {
+                to: sender.to, text, contextToken: sender.contextToken,
+            });
+            if (sent.messageId) {
+                rememberSent(file, sent.messageId, note);
+                messageIds.push(sent.messageId);
+            }
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            return { ok: false, messageId: messageIds[0], messageIds, error: explainSendFailure(message, sender.contextToken) };
+        }
     }
+    return { ok: true, messageId: messageIds[0], messageIds };
 }
 
 /**

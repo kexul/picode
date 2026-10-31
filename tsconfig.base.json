@@ -5,7 +5,7 @@
     "module": "commonjs",
     "target": "ES2021",
     "rootDir": "src",
-    "lib": ["ES2021", "DOM"],
+    "lib": ["ES2021", "ES2022.Intl", "DOM"],
     "sourceMap": true,
     "strict": true,
     "esModuleInterop": true,

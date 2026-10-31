@@ -161,8 +161,9 @@ module.exports = async (page) => {
         console.log("  · ② 引用回复落进会话了（页面上看到这句话）");
         const second = await waitPushed(fake, 3, "引用回复跑完的推送");
         const secondText = second.body?.msg?.item_list?.[0]?.text_item?.text || "";
-        if (!/^[^：]+：/.test(secondText) || /[\r\n]/.test(secondText)) {
-            throw new Error(`引用回复跑完没推回来（该是一行“会话名：摘要”）：${secondText}`);
+        // 新样子：头一行是会话名，空一行，底下是回复原文（这里验形状；分块与全文在 weixinPush.js）
+        if (!secondText.includes("\n\n") || secondText.split("\n\n")[1].trim().length === 0) {
+            throw new Error(`引用回复跑完没推回来（该是会话名 + 空行 + 回复原文）：${secondText}`);
         }
 
         // ③ 不引用直接回一句：该落进最近那个会话

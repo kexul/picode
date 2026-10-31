@@ -47,11 +47,10 @@ import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { describeRestart } from "./serverRestart";
 import { WeixinLogin, readWeixinAccount, type WeixinAccount } from "./weixinLogin";
-import { findRouteForInbound, pushWeixinNote, WEIXIN_PREVIEW_CHARS, type SentRecord } from "./weixinPush";
+import { findRouteForInbound, pushWeixinNote, type SentRecord } from "./weixinPush";
 import { WeixinInbox, readContextToken } from "./weixinInbox";
 import { sendText, type WeixinInbound } from "./weixinIlink";
 import type { SessionRuntime } from "./sessionRuntime";
-import { plainPreview } from "./messageUtils";
 import {
     DEFAULT_AUTO_LOAD_LAST,
     DEFAULT_CLOSE_SESSION_KEY,
@@ -729,7 +728,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             panelId,
             sessionFile: rt?.currentSessionPath,
             cwd: rt?.cwd,
-            summary: plainPreview(summary, WEIXIN_PREVIEW_CHARS),
+            summary,
             kind,
         };
         const result = await pushWeixinNote(note, {
@@ -765,7 +764,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             name: notice.name,
             panelId: notice.sessionId,
             sessionFile: notice.sessionFile,
-            summary: plainPreview(notice.text ?? "", WEIXIN_PREVIEW_CHARS),
+            summary: notice.text ?? "",
             kind: notice.kind ?? "done",
             remote: { label: notice.label, url: notice.pageUrl ?? "", sessionFile: notice.sessionFile },
         }, {
