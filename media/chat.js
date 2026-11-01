@@ -7075,13 +7075,14 @@
   }
 
   /**
-   * 清单第一行那颗「上一层」：「目录」那一格待在某一层子目录里、而且正看着它的时候才有这一行
+   * 清单第一行那颗「上一层」：清单列的是某一层子目录的时候才有这一行
    *（`.` 就是会话目录本身，到那一层就没有再往上的了——不许走到会话目录外面去）。
    * 它长在清单里（第一行），不在这一列头上那颗「收起」旁边。
+   * @param path 这份清单是哪一层
    * @returns 这一行；不该有的时候给 null
    */
-  function buildFileUpRow(tab) {
-    if (!tab || !tab.proj || tab.path === FILE_SIDEBAR_PROJECT_PATH) { return null; }
+  function buildFileUpRow(path) {
+    if (!path || path === FILE_SIDEBAR_PROJECT_PATH) { return null; }
     const row = document.createElement("div");
     row.className = "file-entry up";
     row.title = "回到上一层";
@@ -7099,9 +7100,10 @@
 
   /** 现在看着的「目录」那一格该有「上一层」这一行时，把它摆到正文最上面。 */
   function prependFileUpRow(tab) {
+    if (!tab || !tab.proj) { return; }
     const page = fileTabPage(tab);
     if (!page) { return; }
-    const row = buildFileUpRow(tab);
+    const row = buildFileUpRow(tab.path);
     if (row) { page.insertBefore(row, page.firstChild); }
   }
 
@@ -7168,26 +7170,29 @@
   const DIR_THUMB_MAX_BYTES = 2 * 1024 * 1024;
 
   /**
-   * 一份目录清单画进正文：一项一行（名字前一颗图标），点子目录就在这一格里往里走、点文件打开它。
+   * 一份目录清单摆进一块正文里：一项一行（名字前一颗图标），点子目录就在这一格里往里走、点文件打开它。
    * 清单里那个相对写法就是下一次请求的路径，跟点消息流里的链接走同一条路
    *（开不开得了由后端那道边界管：指到目录外的条目点了给一句说明）。
    * 待在子目录里时，清单第一行是「上一层」（见 buildFileUpRow）。
-   * @param tab 正看着的「目录」那一格（它现在待在哪一层决定要不要「上一层」那一行）
+   * 清单不管画在哪儿都走这一处：上面那一格（见 renderDirListing）、
+   * 往右划换层时垫在清单底下那一份（见 wireDirSwipe）。
+   * @param container 摆进哪一块（.file-page）
+   * @param path 这份清单是哪一层（决定要不要「上一层」那一行）
+   * @param tab 这一格（画出来的行按这一格现在的层去办事）
    */
-  function renderDirListing(listing, tab) {
-    const page = fileTabPage(tab);
-    const body = fileSidebar.body;
-    if (!page || !body) { return; }
-    page.innerHTML = "";
-    body.scrollTop = 0;   // 换到这一层：清单从头看（不是停在上一层读到的地方）
+  function fillDirListing(container, listing, tab, path) {
+    if (!container) { return; }
     const entries = (listing && listing.entries) || [];
+    const up = buildFileUpRow(path);
+    if (up) { container.appendChild(up); }
     if (entries.length === 0) {
-      showFileNote(tab, "这个目录是空的。");   // 空目录里也照样有「上一层」那一行（showFileNote 会摆上）
-      return;
+      // 空目录里也照样有「上一层」那一行（上面已经摆上了）
+      const note = document.createElement("div");
+      note.className = "file-note";
+      note.textContent = "这个目录是空的。";
+      container.appendChild(note);
     }
     const frag = document.createDocumentFragment();
-    const up = buildFileUpRow(tab);
-    if (up) { frag.appendChild(up); }
     entries.forEach((entry) => {
       const row = document.createElement("div");
       row.className = "file-entry" + (entry.dir ? " dir" : "");
@@ -7203,13 +7208,25 @@
       row.addEventListener("click", () => openSidebarLink(entry.path, 0, !!entry.dir));
       frag.appendChild(row);
     });
-    page.appendChild(frag);
-    if (listing.truncated) {
+    container.appendChild(frag);
+    if (listing && listing.truncated) {
       const more = document.createElement("div");
       more.className = "file-note";
       more.textContent = "这个目录里的东西太多，只列出了一部分。";
-      page.appendChild(more);
+      container.appendChild(more);
     }
+  }
+
+  /**
+   * 把取回来的清单画到「目录」那一格里（换了一层之后就走这里）。
+   * @param tab 正看着的「目录」那一格
+   */
+  function renderDirListing(listing, tab) {
+    const page = fileTabPage(tab);
+    if (!page) { return; }
+    page.innerHTML = "";
+    if (fileSidebar.dirBody) { fileSidebar.dirBody.scrollTop = 0; }   // 换到这一层：清单从头看（不是停在上一层读到的地方）
+    fillDirListing(page, listing, tab, tab.path);
   }
 
   /**
@@ -7766,11 +7783,23 @@
     prepareFileSidebar();
     const tab = fileSidebar.fileTab;
     if (!tab) { return; }
-    tab.path = key;
-    tab.dir = key;
+    setProjectDir(tab, key, null);
+  }
+
+  /**
+   * 「目录」那一格换到某一层：本就在那一层也一样（相当于重新列一次）。
+   * @param listing 手上正好有那一层的清单就直接画上（往右划换层时刚去要过一份，见 wireDirSwipe）；
+   *                没给就去后端要一次
+   */
+  function setProjectDir(tab, path, listing) {
+    tab.path = path;
+    tab.dir = path;
     tab.line = 0;
     tab.drawn = false;   // 换了一层：这一块里画的是上一层那份清单，作废（下面重新取）
-    showFileList(tab);
+    if (!listing) { showFileList(tab); return; }
+    renderDirListing(listing, tab);
+    tab.drawn = true;
+    syncFileView();   // 上面那一格的悬停提示写着现在待在哪一层
   }
 
   /** 上一层目录的相对写法（`dirA/sub` → `dirA`；`dirA` → `.`，就是会话目录本身）。 */
@@ -7787,10 +7816,7 @@
   function goUpProjectDir() {
     const tab = fileSidebar.fileTab;
     if (!tab || tab.proj !== true || tab.path === FILE_SIDEBAR_PROJECT_PATH) { return; }
-    tab.path = parentDirPath(tab.path);
-    tab.dir = tab.path;
-    tab.drawn = false;   // 换了一层：那一块里是原来那一层的清单，作废（下面重新取）
-    showFileList(tab);
+    setProjectDir(tab, parentDirPath(tab.path), null);
   }
 
   /**
@@ -8030,6 +8056,154 @@
     body.addEventListener("touchcancel", (e) => finish(e, true));
   }
 
+  // ==================== 清单往右划退到上一层（手机上的手势）====================
+  //
+  // 「文件」那一格待在子目录里时，在清单上往右划：清单跟着手指往右走，底下露出一层
+  //（就是上一个目录那一份清单，先垫在底下不动，跟往下一拉收起弹窗一个路数），
+  // 过了四成松手就换到那一层（跟点清单最上面那行「上一层」是同一件事，见 goUpProjectDir），
+  // 不到线就滑回原位。往左划不接（那是把这一列收回去，见 wireDrawerCloseSwipe），
+  // 待在会话目录本身那一层也不接（那一层没有上一层）。
+  //
+  // 底下那份清单是拖起来以后才去要的（平时不多问一次）：手指挪到四成之前它就回来了，
+  // 所以露出来的就是真清单；万一没回来，那底下先空着，松手换过去时再照常去要一次。
+  /** 横着动这么多就认成“划”（跟对话区那一套同一个门槛）。 */
+  const DIR_SWIPE_LOCK_PX = 6;
+  /** 竖着动这么多、而且比横向多：这是滚清单，这一趟不管。 */
+  const DIR_SWIPE_CANCEL_PX = 10;
+  /** 松手时这一层滑出去多少算过线（这一块宽的四成）。 */
+  const DIR_SWIPE_PASS = 0.4;
+  /** 松手后滑完剩下那一点走多久。 */
+  const DIR_SWIPE_MS = 180;
+
+  /** 正跟着手指挪的那一趟（手抬起来 / 被打断就清成 null）。 */
+  let dirSwipe = null;
+  /** 上一下收尾那一段还没走完（到这一刻为止不接新的一趟，不然那一条收尾会把新的一趟收掉）。 */
+  let dirSwipeCoolUntil = 0;
+
+  function wireDirSwipe() {
+    const pane = fileSidebar.dirBody;
+    if (!pane) { return; }
+    let settleTimer = 0;
+
+    /** 这会儿能不能划：上面那格正列着某一层子目录，而且那一层已经摆出来了。 */
+    const usable = () => {
+      const tab = fileSidebar.fileTab;
+      return !!tab && tab.proj === true && tab.drawn && tab.path !== FILE_SIDEBAR_PROJECT_PATH;
+    };
+
+    /** 按手指现在的位置摆：清单往右走 eff（上一层那份在它底下不动，让出来的地方就露出它）。 */
+    const paint = (s) => {
+      s.eff = swipeOffset(s.dx, s.width);
+      if (s.page) { s.page.style.transform = "translateX(" + s.eff + "px)"; }
+    };
+
+    /** 认成横划了：底下先垫上上一层那一块（这一次才去要那一层的清单），上面的清单跟着手指走。 */
+    const begin = (s) => {
+      s.moved = true;
+      s.page = fileTabPage(s.tab);
+      s.width = pane.clientWidth || 300;
+      s.scrollTop = pane.scrollTop;
+      const layer = document.createElement("div");
+      layer.className = "dir-up-layer";
+      // 它不跟手走：钉在这一格看到的顶上，上面的清单挪开多少就露出它多少
+      layer.style.transform = "translateY(" + s.scrollTop + "px)";
+      s.layer = layer;
+      pane.insertBefore(layer, pane.firstChild);   // 垫在清单底下（见 chat.css 的 .dir-up-layer）
+      paint(s);
+      fetch(sidebarUrl({ proj: true, path: s.upPath }, "")).then(async (resp) => {
+        if (dirSwipe !== s || resp.status !== 200) { return; }
+        const listing = await resp.json();
+        if (dirSwipe !== s || !s.layer) { return; }   // 已经松手了：这一份不要了
+        s.listing = listing;
+        fillDirListing(s.layer, listing, s.tab, s.upPath);
+      }).catch(() => { /* 要不到就先空着：松手换过去时再照常去要一次 */ });
+    };
+
+    /** 松手时算不算过线：滑出去四成，或者甩得快（跟拉侧边栏那套一个门槛）。 */
+    const passed = (s) => {
+      const ms = Math.max(1, Date.now() - s.t0);
+      return s.eff >= s.width * DIR_SWIPE_PASS || (s.eff >= 40 && s.eff / ms >= 0.5);
+    };
+
+    /** 松手过了线：这一格真的换到上一层（那份清单已经取回来了就直接画上）。 */
+    const switchUp = (s) => {
+      // 半路换了会话 / 把这一列收起来了：这一下不算
+      if (!fileSidebar.open || fileSidebar.fileTab !== s.tab) { return; }
+      pane.scrollTop = 0;   // 换进来的是上一层：从它顶上开始看（跟刚滑进来那一份对齐）
+      setProjectDir(s.tab, s.upPath, s.listing);
+    };
+
+    /** 收尾：那块滑进来的清单拿掉，两块的行内样式抹平（换层时清单已经在它该在的地方了）。 */
+    const cleanup = (s) => {
+      if (s.layer && s.layer.parentNode) { s.layer.parentNode.removeChild(s.layer); }
+      s.layer = null;
+      if (s.page) { s.page.style.transform = ""; s.page.style.transition = ""; }
+    };
+
+    /** 松手：past = 换层、否则滑回原位。两路都是先滑完剩下那一点，再做收尾的事。 */
+    const release = (s, past) => {
+      clearTimeout(settleTimer);
+      dirSwipeCoolUntil = Date.now() + DIR_SWIPE_MS + 60;
+      if (s.page) {
+        s.page.style.transition = "transform " + DIR_SWIPE_MS + "ms ease-out";
+        s.page.style.transform = "translateX(" + (past ? s.width : 0) + "px)";
+      }
+      settleTimer = setTimeout(() => {
+        if (past) { switchUp(s); }
+        cleanup(s);
+      }, DIR_SWIPE_MS + 30);
+    };
+
+    pane.addEventListener("touchstart", (e) => {
+      if (dirSwipe || drawerDrag || Date.now() < dirSwipeCoolUntil || Date.now() < drawerClosingUntil) { return; }
+      if (e.touches.length !== 1 || !usable()) { return; }
+      if (swipeOnControl(e.target)) { return; }   // 按在按钮 / 链接 / 图上：那是点它，不是划
+      const t = e.touches[0];
+      const tab = fileSidebar.fileTab;
+      dirSwipe = {
+        finger: t.identifier, x0: t.clientX, y0: t.clientY, t0: Date.now(),
+        dx: 0, eff: 0, moved: false,
+        tab: tab, upPath: parentDirPath(tab.path),
+        page: null, layer: null, listing: null, width: 0, scrollTop: 0,
+      };
+    }, { passive: true });
+
+    pane.addEventListener("touchmove", (e) => {
+      const s = dirSwipe;
+      if (!s) { return; }
+      const t = e.touches.length === 1 ? e.touches[0] : null;
+      if (!t || t.identifier !== s.finger) {
+        // 又上来一根手指 / 换了手指：这一趟不算（已经跟着挪了的滑回去）
+        dirSwipe = null;
+        if (s.moved) { release(s, false); }
+        return;
+      }
+      const dx = t.clientX - s.x0;
+      const dy = t.clientY - s.y0;
+      if (!s.moved) {
+        if (Math.abs(dy) > DIR_SWIPE_CANCEL_PX && Math.abs(dy) > Math.abs(dx)) { dirSwipe = null; return; }   // 竖着滚清单
+        if (Math.abs(dx) < DIR_SWIPE_LOCK_PX || Math.abs(dx) < Math.abs(dy)) { return; }
+        if (dx <= 0) { dirSwipe = null; return; }   // 往左划：那是把这一列收回去（见 wireDrawerCloseSwipe）
+        begin(s);
+      }
+      if (e.cancelable) { e.preventDefault(); }
+      s.dx = dx;
+      paint(s);
+    }, { passive: false });
+
+    const finish = (e, cancelled) => {
+      const s = dirSwipe;
+      if (!s) { return; }
+      const t = e.changedTouches && e.changedTouches[0];
+      if (t && t.identifier !== s.finger) { return; }
+      dirSwipe = null;
+      if (!s.moved) { return; }
+      release(s, !cancelled && passed(s));
+    };
+    pane.addEventListener("touchend", (e) => finish(e, false));
+    pane.addEventListener("touchcancel", (e) => finish(e, true));
+  }
+
   // 这一列只在浏览器页面里搭出来：插件里的对话面板里连这一列的容器都没有。
   // 搭两块：左边这一列（标题 + 上下两格）与弹窗（#fileStage，盖住对话那一块，点开一个文件 / 一份 diff 才露面）。
   (function buildFileSidebar() {
@@ -8119,6 +8293,7 @@
     wireFileSidebarResize(fileSidebar.resize);
     wireFileViewerBoxMoves();
     wireFilePullDown();
+    wireDirSwipe();
     root.querySelector("#fileClose").addEventListener("click", () => setFileSidebarOpen(false));
     root.querySelector("#fileSearchBtn").addEventListener("click", () => openFileSearch());
     stage.querySelector("#fileWrap").addEventListener("click", () => toggleFileSidebarWrap());

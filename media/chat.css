@@ -1647,11 +1647,22 @@
     display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0;
     padding: 0; overflow: hidden; font-size: inherit;
   }
-  /* 上格「文件」：列目录的那张清单，自己滚（点开一个文件就整列显示，见下） */
+  /* 上格「文件」：列目录的那张清单，自己滚（点开一个文件就整列显示，见下）
+     往右划退到上一层时（见 chat.js 的 wireDirSwipe）：清单整个往右挪、左边那块（.dir-up-layer）
+     跟着手指进来，所以这一格得是个定位块，也别因为两块横着摆出去而生出一条横向滚动条。 */
   #dirPane {
-    flex: 1 1 0; min-height: 0; overflow-y: auto;
+    flex: 1 1 0; min-height: 0; overflow-y: auto; overflow-x: hidden;
+    position: relative;
     padding: 6px 0 12px; font-size: inherit;
   }
+  /* 往右划退到上一层时垫在底下的那一份（见 chat.js 的 wireDirSwipe）：它不跟手走，
+     钉在这一格看到的顶上，上面那份清单往右挪开多少就露出它多少（跟往下一拉收起弹窗一个路数）。 */
+  #dirPane > .dir-up-layer {
+    position: absolute; top: 0; left: 0; width: 100%;
+    padding: 6px 0 12px;
+  }
+  /* 清单盖在那一块上面（两块都是定位 / 带位移的，靠它钉住谁在上头） */
+  #dirPane > .file-page { position: relative; z-index: 1; }
   #dirPane::-webkit-scrollbar { width: 8px; }
   #dirPane::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 4px; }
   /* 点开一个文件 / 一份 diff：开一块盖住对话那一块的弹窗（#fileStage），左边那两格照旧露着。
