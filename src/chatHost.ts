@@ -327,15 +327,16 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
 
     /**
      * 这个会话改过哪些文件（文件侧边栏那一格「改动」用）。
-     * 和 knownFiles 一样跟着会话运行的那份内存走：会话关了就没了。
+     * 数从会话开始那一刻的工作区快照来（见 changeSnapshot.ts）；快照没有时退回 edit / write 那套。
+     * 跟 knownFiles 一样跟着会话运行的那份内存走：会话关了就没了。
      */
-    public sessionChanges(sessionId: string): SessionChangeInfo[] {
-        return this.panels.get(sessionId)?.getChanges() ?? [];
+    public async sessionChanges(sessionId: string): Promise<SessionChangeInfo[]> {
+        return (await this.panels.get(sessionId)?.getChanges()) ?? [];
     }
 
     /** 一个文件的合计 diff（相对写法 = 清单里那一行）；没改出差别就不给。 */
-    public sessionChangeDiff(sessionId: string, relPath: string): string | undefined {
-        return this.panels.get(sessionId)?.changeDiff(relPath);
+    public async sessionChangeDiff(sessionId: string, relPath: string): Promise<string | undefined> {
+        return await this.panels.get(sessionId)?.changeDiff(relPath);
     }
 
     public getCwd(): string {

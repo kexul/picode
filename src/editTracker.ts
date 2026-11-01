@@ -47,8 +47,10 @@ const MAX_CHANGE_BYTES = 2 * 1024 * 1024;
 export class EditTracker {
     private pendingEdits = new Map<string, { path: string; before: string }>();
     private editSnapshots = new Map<string, { path: string; before: string; after: string }>();
-    /** 每个文件「这个会话第一次改它之前」的内容（绝对路径 → 内容）：文件侧边栏那一格
-     *  「改动」按它算合计 diff，也按它回滚。会话重开就没了（这一格本来也只在会话活着时看）。 */
+    /** 每个文件「这个会话第一次改它之前」的内容（绝对路径 → 内容）：
+     *  「改动」那一格算合计 diff、以及「回滚」都按它（那一格显示的数以工作区快照为准，
+     *  见 changeSnapshot.ts；这一份是快照算不出来时的退路，也是回滚的依据）。
+     *  会话重开就没了（这一格本来也只在会话活着时看）。 */
     private fileBaselines = new Map<string, string>();
     /** 算过的 diff 攒着（绝对路径 → 它当时对应的磁盘状态与结果）：跟着改一次不用把
      *  整个文件重比一遍，「改动」那一格每来一条改动都会重问一次清单。 */

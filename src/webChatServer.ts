@@ -232,12 +232,12 @@ export interface WebServerHost {
      * 这个会话改过哪些文件（相对写法 + 增删行数），文件侧边栏那一格「改动」的清单就是它。
      * 认不出这个会话就给空数组。
      */
-    sessionChanges(sessionId: string): SessionChangeInfo[];
+    sessionChanges(sessionId: string): Promise<SessionChangeInfo[]>;
     /**
-     * 一个文件的合计 diff（本会话第一次改之前 → 现在磁盘上的）；没改出差别返回 undefined。
+     * 一个文件的合计 diff（会话开始 → 现在磁盘上的）；没改出差别返回 undefined。
      * @param relPath 相对会话目录的写法（跟 sessionChanges 里那一行一模一样）
      */
-    sessionChangeDiff(sessionId: string, relPath: string): string | undefined;
+    sessionChangeDiff(sessionId: string, relPath: string): Promise<string | undefined>;
     /**
      * 一条推送连接建立（页面连上 / 重连）。
      * @param since 页面报上来的「我处理到第几条」（连接地址上的 since），没报就是 undefined。
@@ -534,13 +534,13 @@ export class PiChatWebServer {
             // 「改动」那一格：这个会话改过哪些文件（清单），以及其中一个文件的合计 diff
             if (pathname === "/changes") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                this.sendChanges(req, res, url.searchParams.get("session") ?? "");
+                void this.withFailNote(req, res, this.sendChanges(req, res, url.searchParams.get("session") ?? ""));
                 return;
             }
             if (pathname === "/changes/diff") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                this.sendChangeDiff(req, res, url.searchParams.get("session") ?? "",
-                    url.searchParams.get("path") ?? "");
+                void this.withFailNote(req, res, this.sendChangeDiff(req, res, url.searchParams.get("session") ?? "",
+                    url.searchParams.get("path") ?? ""));
                 return;
             }
             if (pathname === "/events") {
@@ -987,32 +987,33 @@ export class PiChatWebServer {
      * `path` 是相对会话目录的写法（页面拿它当这一行的键，也原样贴回下面那条地址）；
      * 只算真出了差别的（改了又改回去的、失败的编辑不列），按路径排。
      *
-     * 数据全在会话的内存里（见 EditTracker 的 fileBaselines）：页面刷新重拿一次就是这个结果，
-     * 插件重启 / 会话关掉就没了。
+     * 数从会话开始那一刻的工作区快照来（见 changeSnapshot.ts）：bash 里跑的脚本、命令改的
+     * 文件也在里面；快照没有时（目录太大、没装 git、拍之前）退回只算 edit / write 那套。
+     * 页面刷新重拿一次就是这个结果；会话关掉、或者插件重启之后就没了。
      */
-    private sendChanges(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string): void {
+    private async sendChanges(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string): Promise<void> {
         if (!sessionId) { this.sendText(req, res, 400, "请求里要说明是哪个会话。"); return; }
         if (!this.host.resolveSessionDir(sessionId)) {
             this.sendText(req, res, 404, "这个会话不在了（页面可能开得太久），刷新页面再试。");
             return;
         }
-        this.sendJson(req, res, 200, { changes: this.host.sessionChanges(sessionId) });
+        this.sendJson(req, res, 200, { changes: await this.host.sessionChanges(sessionId) });
     }
 
     /**
      * 一个文件的合计 diff（`/changes/diff?session=…&path=…`），纯文本。
      *
      * 这里不走 resolveSessionPath 那道目录边界：路径不拿去拼文件系统，只拿去跟
-     * 「这个会话改过的那几个文件」对名字（见 EditTracker.changeDiff），对不上就给 404。
-     * 所以能看到的只能是会话里真改过的文件（包括已经删掉的：删掉的也有改之前那一份）。
+     * 「这个会话改过的那几个文件」对名字（见 ChangeSnapshot.diff 与 EditTracker.changeDiff），
+     * 对不上就给 404。所以能看到的只能是会话里真改过的文件（包括已经删掉的）。
      */
-    private sendChangeDiff(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string,
-        wantPath: string): void {
+    private async sendChangeDiff(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string,
+        wantPath: string): Promise<void> {
         if (!sessionId || !wantPath) {
             this.sendText(req, res, 400, "请求里要说明是哪个会话、哪个文件。");
             return;
         }
-        const diff = this.host.sessionChangeDiff(sessionId, wantPath);
+        const diff = await this.host.sessionChangeDiff(sessionId, wantPath);
         if (diff === undefined) {
             this.sendText(req, res, 404, "这个文件不在这次的改动里（可能已经改回去了）。");
             return;

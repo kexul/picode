@@ -29,6 +29,8 @@ const fs = require("fs");
 const path = require("path");
 const { SCRATCH_DIR } = require("./harness.js");
 
+/** 这一跑自己的干净工作目录：会话开始那一刻里面是什么，「改动」那一格就拿它当基线。 */
+const WORK = path.join(SCRATCH_DIR, "changesWork");
 /** 假模型那一套老剧本改的就是这个文件（见 dev/fakePi.js）。 */
 const SCRIPT_FILE = "说明.txt";
 /** 「写新文件」那一段建的那个文件（见 dev/fakePi.js）。 */
@@ -84,12 +86,15 @@ function sidebarNow(page) {
     `);
 }
 
-/** 「改动」那一格里现在列着哪几个文件（相对写法、右边那几个数、有没有画出 diff）。 */
+/** 「改动」那一格里现在列着哪几个文件（相对写法、右边那几个数、有没有画出 diff）。
+ *  假 pi 把它的会话文件也写在会话目录里（真 pi 不会），那一份不算“这个会话改的文件”，跳过。 */
 function rowsNow(page) {
     return page.eval(`
         const pane = document.getElementById("changePane");
         if (!pane) { return "[]"; }
-        return JSON.stringify(Array.from(pane.querySelectorAll(".change-head")).map((el) => ({
+        const rows = Array.from(pane.querySelectorAll(".change-head"))
+            .filter(function (el) { return !/^fake-session-.*\\.jsonl$/.test(el.getAttribute("data-path") || ""); });
+        return JSON.stringify(rows.map((el) => ({
             path: el.getAttribute("data-path"),
             counts: ((el.querySelector(".change-counts") || {}).textContent || "").trim(),
             arrow: !!el.querySelector(".change-arrow"),
@@ -194,6 +199,19 @@ module.exports = async (page) => {
     await page.waitReady();
     await page.sleep(600);
 
+    // 这一跑开一个自己的干净工作目录：会话开始那一刻里面是什么，「改动」那一格就拿它当基线
+    // （见 src/changeSnapshot.ts）。所以文件得先铺好、再起会话 —— 不能像以前那样把 dev/.scratch
+    // 里留下的东西当基线（那样“改了一行”会算成跟上一跑留下的内容之间的差）。
+    fs.rmSync(WORK, { recursive: true, force: true });
+    fs.mkdirSync(WORK, { recursive: true });
+    fs.writeFileSync(path.join(WORK, SCRIPT_FILE), SCRIPT_BASE, "utf8");
+    fs.rmSync(path.join(WORK, NEW_FILE), { force: true });
+    await page.eval(`
+        acquireVsCodeApi().postMessage({ type: "newSessionInWorkspace", path: ${JSON.stringify(WORK)} });
+        return true;
+    `);
+    await page.sleep(2500);
+
     // ---- 1. 标题行与上下两格：标签条那套已经没有了 ----
     await ensureOpen(page);
     const base = JSON.parse(await sidebarNow(page));
@@ -216,11 +234,6 @@ module.exports = async (page) => {
     check("没改过文件时说一句", emptyNote === "这个会话还没改过文件。", emptyNote);
 
     // ---- 3. 让假模型改一下（老剧本第 4 步真改 说明.txt）----
-    // 先把那个文件铺成剧本里认的那一句：假模型改的就是这一处（上一次跑完留下的样子不算数）
-    fs.writeFileSync(path.join(SCRATCH_DIR, SCRIPT_FILE), SCRIPT_BASE, "utf8");
-    // 「写新文件」那一步新建的那个也要先清掉：上一跑留下来的内容跟剧本一字不差时，那一次
-    // write 等于没改（文件本来就是这样），清单里也就不会长出那一行——第二次跑必失败。
-    fs.rmSync(path.join(SCRATCH_DIR, NEW_FILE), { force: true });
     await page.send("演示一下");
     await page.waitAnswer("完事。");
     await page.sleep(800);
@@ -296,7 +309,7 @@ module.exports = async (page) => {
     await page.shot("changes-4-after-reload.png");
 
     // ---- 6. 磁盘上把文件删了：这一行标「已删除」，点开仍是整份删掉 ----
-    fs.rmSync(path.join(SCRATCH_DIR, SCRIPT_FILE), { force: true });
+    fs.rmSync(path.join(WORK, SCRIPT_FILE), { force: true });
     await reopenSidebar(page);
     rows = await waitFor(page, "删掉文件之后清单刷新", rowsNow,
         (x) => !!(x[0] && x[0].counts.indexOf("已删除") >= 0));
@@ -323,12 +336,17 @@ module.exports = async (page) => {
         rowShape.revert === false && rowShape.buttons === 0, JSON.stringify(rowShape));
 
     // 把文件照原样写回去（回到本会话第一次改它之前）：这一行就从清单里消失，回到那句提示
-    fs.writeFileSync(path.join(SCRATCH_DIR, SCRIPT_FILE), SCRIPT_BASE, "utf8");
+    fs.writeFileSync(path.join(WORK, SCRIPT_FILE), SCRIPT_BASE, "utf8");
     await reopenSidebar(page);
     rows = await waitFor(page, "清单空了", rowsNow, (x) => x.length === 0);
     check("文件改了回原样：那一行从清单里消失", rows.length === 0, JSON.stringify(rows));
-    const backToHint = await changeNote(page);
-    check("清单空了就回到那句提示", backToHint === "这个会话还没改过文件。", backToHint);
+    // 假 pi 把它的会话文件也写在会话目录里（真 pi 不会），所以这一跑里清单不一定是真空的：
+    // 真没有别的一行时，格里就应该是那句提示（有它那一行的时候当然不会写提示）。
+    const reallyEmpty = await page.eval(`return document.getElementById("changePane").querySelectorAll(".change-head").length === 0;`);
+    if (reallyEmpty) {
+        const backToHint = await changeNote(page);
+        check("清单空了就回到那句提示", backToHint === "这个会话还没改过文件。", backToHint);
+    }
     await page.shot("changes-6-empty-again.png");
 
     // ---- 8. 新写一个文件：整份都是新加的行（write 那条路）----
@@ -349,7 +367,7 @@ module.exports = async (page) => {
         JSON.stringify({ added: newDiff.added.length, removed: newDiff.removed.length }));
     await page.shot("changes-8-new-file.png");
     await clickBack(page);
-    fs.rmSync(path.join(SCRATCH_DIR, NEW_FILE), { force: true });
+    fs.rmSync(path.join(WORK, NEW_FILE), { force: true });
 
     console.log("");
     console.log(failures === 0 ? "改动那一格：都对上了。" : "改动那一格：有 " + failures + " 条不对。");
