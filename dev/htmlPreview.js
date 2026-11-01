@@ -88,7 +88,7 @@ module.exports = async (page) => {
     // 清单那一块现在在上格 #dirPane，不跟它抢地方。
     await page.eval(`
         window.__fileView = function () {
-            return document.querySelector("#fileBody .file-page")
+            return document.querySelector("#fileBody .file-page.active")
                 || document.getElementById("fileBody");
         };
         return true;

@@ -156,7 +156,7 @@ module.exports = async (page) => {
     };
     /** 左边那一列现在开着哪个文件、停在哪一行（正文里那一行有 .hit）。 */
     const openFile = async () => JSON.parse(await page.eval(`
-        const page = document.querySelector("#fileBody .file-page");
+        const page = document.querySelector("#fileBody .file-page.active");
         const rows = page ? Array.from(page.querySelectorAll(".file-line")) : [];
         const hit = rows.find(function (r) { return r.classList.contains("hit"); });
         const name = document.querySelector("#fileBar .file-bar-name");

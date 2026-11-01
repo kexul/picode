@@ -518,7 +518,7 @@ module.exports = async (page) => {
     // 「改动」那份清单在 #changePane —— 三个地方同一时刻只摆一块。
     const FILE_VIEW_SOURCE = `
         // 弹窗里正摆着的那一块（没开弹窗就是 null）
-        window.__fileViewer = function () { return document.querySelector("#fileBody .file-page"); };
+        window.__fileViewer = function () { return document.querySelector("#fileBody .file-page.active"); };
         // 上格「文件」那份清单（一直在）
         window.__fileList = function () {
             const pages = document.querySelectorAll("#dirPane .file-page");
@@ -666,6 +666,13 @@ module.exports = async (page) => {
                 barTitle: barName ? (barName.getAttribute("title") || "") : "",
                 closeFileShown: shown(closeFile),
                 bodyPages: document.querySelectorAll("#fileBody .file-page").length,
+                activePages: document.querySelectorAll("#fileBody .file-page.active").length,
+                viewTabs: Array.from(document.querySelectorAll("#fileViewTabs .file-tab")).map(function (el) {
+                    const n = el.querySelector(".file-tab-name");
+                    return (n ? (n.textContent || "") : "");
+                }),
+                viewTabsShown: !!document.getElementById("fileViewTabs")
+                    && getComputedStyle(document.getElementById("fileViewTabs")).display !== "none",
                 dirPages: document.querySelectorAll("#dirPane .file-page").length,
                 changePages: document.querySelectorAll("#changePane .file-page").length,
                 diffLines: document.querySelectorAll("#fileBody .diff-line").length,
@@ -1032,15 +1039,17 @@ module.exports = async (page) => {
         JSON.stringify({ bar: wide5.barBottom, file: wide5.fileHeaderBottom }));
     await page.shot("file-2-line.png");
 
-    // 再点另一个文件：在同一个地方换掉，前一个文件的内容不再留在页面上
+    // 再点另一个文件：另开一格标签（前一份留着，只是藏起来），现在露着的是新的那份
     console.log("点文件链接：" + await clickLink(FILE.sample));
     await page.sleep(500);
     const wide6 = await look("宽窗 · 点 sample.js:" + SAMPLE_HIT);
     check("换一个文件：内容跟着换", wide6.rowCount === 5);
     check("也停在那个文件的第 " + SAMPLE_HIT + " 行", wide6.hitNum === String(SAMPLE_HIT) && wide6.hitText.indexOf("sample " + SAMPLE_HIT) >= 0);
-    check("前一个文件的内容没留在页面上（整列还是只有这一块）",
-        wide6.fileView && wide6.bodyPages === 1 && activeFilePath(wide6) === FILE.sample,
-        JSON.stringify({ pages: wide6.bodyPages, bar: wide6.barName }));
+    check("前一份留在它自己那格标签里（页面上只露现在这份）",
+        wide6.fileView && wide6.bodyPages === 2 && wide6.activePages === 1 && activeFilePath(wide6) === FILE.sample,
+        JSON.stringify({ pages: wide6.bodyPages, active: wide6.activePages, bar: wide6.barName }));
+    check("顶上多出一格标签，排着两份", wide6.viewTabsShown && wide6.viewTabs.length === 2,
+        JSON.stringify(wide6.viewTabs));
     check("横条换成新文件的写法", wide6.barName === FILE.sample, wide6.barName);
     await page.shot("file-2b-replaced.png");
 
@@ -1048,8 +1057,9 @@ module.exports = async (page) => {
     console.log("点文件链接：" + await clickLink(FILE.long, HIT_LINE_AGAIN));
     await page.sleep(600);
     const wide7 = await look("宽窗 · 再点一次 long.js:" + HIT_LINE_AGAIN);
-    check("再点回原来那个文件：还是弹窗里那一块（没有多出一格）",
-        wide7.fileView && wide7.bodyPages === 1 && activeFilePath(wide7) === FILE.long);
+    check("再点回原来那个文件：切回它那格标签（没有多出一格）",
+        wide7.fileView && wide7.bodyPages === 2 && wide7.activePages === 1 && activeFilePath(wide7) === FILE.long,
+        JSON.stringify({ pages: wide7.bodyPages, tabs: wide7.viewTabs }));
     check("重新读了一遍、按这次链接说的第 " + HIT_LINE_AGAIN + " 行滚过去",
         wide7.rowCount === LONG_LINES && wide7.hitNum === String(HIT_LINE_AGAIN) && wide7.hitVisible);
     await page.shot("file-8-switch-back.png");
@@ -1073,8 +1083,8 @@ module.exports = async (page) => {
     console.log("点文件链接：" + await clickLink(FILE.long, HIT_LINE_AGAIN));
     const backAfter = await waitLook("再点回 long.js、内容重新读上来",
         (x) => activeFilePath(x) === FILE.long && x.rowCount === LONG_LINES);
-    check("再点回原来那个文件：还是整列那一块（没有多出一格）",
-        backAfter.fileView && backAfter.bodyPages === 1 && activeFilePath(backAfter) === FILE.long);
+    check("再点回原来那个文件：还是切回它那格标签",
+        backAfter.fileView && backAfter.bodyPages === 2 && activeFilePath(backAfter) === FILE.long);
     const backTab = JSON.parse(await page.eval(`
         const view = window.__fileView();
         const rows = Array.from(view.querySelectorAll(".file-line"));
@@ -1087,10 +1097,47 @@ module.exports = async (page) => {
             pages: document.querySelectorAll("#fileBody .file-page").length,
         });
     `));
-    check("点回来是重新读的一遍（记号不在、内容照旧、中间也没停在「正在读取…」）",
-        backTab.mark === "" && backTab.rowMark === "" && backTab.rows === LONG_LINES
-        && backTab.note === "" && backTab.pages === 1,
+    check("点回来还是刚才那一份（标签切回去，内容没重读：记号还在）",
+        backTab.mark === "keep" && backTab.rowMark === "keep" && backTab.rows === LONG_LINES
+        && backTab.note === "" && backTab.pages === 2,
         JSON.stringify(backTab));
+
+    // 顶上那排标签：点一格切过去（内容还在，不重读），点格尾那颗叉关掉那一份
+    console.log("点 sample.js 那格标签：");
+    const tabClick = await page.eval(`
+        const tabs = Array.from(document.querySelectorAll("#fileViewTabs .file-tab"));
+        const tab = tabs.find(function (el) {
+            const n = el.querySelector(".file-tab-name");
+            return n && n.textContent === ${JSON.stringify(FILE.sample)};
+        });
+        if (!tab) { return "没有那格标签"; }
+        tab.click();
+        return "点了";
+    `);
+    check("顶上那排标签里排着开着的两份", tabClick === "点了",
+        JSON.stringify(JSON.parse(await page.eval(`return JSON.stringify(Array.from(document.querySelectorAll("#fileViewTabs .file-tab")).map(function (el) { return (el.querySelector(".file-tab-name") || {}).textContent; }));`))));
+    await page.sleep(500);
+    const onTab = await look("点标签切到 sample.js");
+    check("点一格就切过去（那格变「现在这一份」，内容还在、没重读）",
+        onTab.barName === FILE.sample && onTab.rowCount === 5 && onTab.activePages === 1
+        && onTab.viewTabs.length === 2,
+        JSON.stringify({ bar: onTab.barName, rows: onTab.rowCount, tabs: onTab.viewTabs }));
+    const closedTab = await page.eval(`
+        const tabs = Array.from(document.querySelectorAll("#fileViewTabs .file-tab"));
+        const tab = tabs.find(function (el) {
+            const n = el.querySelector(".file-tab-name");
+            return n && n.textContent === ${JSON.stringify(FILE.sample)};
+        });
+        if (!tab) { return "没有那格标签"; }
+        tab.querySelector(".file-tab-close").click();
+        return "点了";
+    `);
+    await page.sleep(500);
+    const afterTabClose = await look("关掉 sample.js 那格");
+    check("点格尾那颗叉：那一份关掉、弹窗还开着（剩下那格接着看）",
+        closedTab === "点了" && afterTabClose.fileView && afterTabClose.viewTabs.length === 1
+        && afterTabClose.bodyPages === 1 && activeFilePath(afterTabClose) === FILE.long,
+        JSON.stringify({ tabs: afterTabClose.viewTabs, bar: afterTabClose.barName, pages: afterTabClose.bodyPages }));
 
     // 点横条左边那颗返回箭头：整列那块收起来，回到上下两格
     console.log("点返回箭头：" + await clickBack());
@@ -1269,10 +1316,10 @@ module.exports = async (page) => {
     check("超过 2 MB：页面上给一句说明、不给内容", big.rowCount === 0 && big.note.indexOf("太大") >= 0, big.note);
     // 手机那一段点过一次 long.js，这里又点了三个看不了的文件：都在同一个地方换掉，
     // 现在整列开着的是最后一个（还是那一块，没有多出别的）
-    check("看不了的文件也是在同一个地方换掉（整列只有这一块）",
-        big.fileView && big.bodyPages === 1 && big.barName === FILE.big
+    check("看不了的文件也是开在弹窗里（只露着现在这一块、一句说明）",
+        big.fileView && big.activePages === 1 && big.barName === FILE.big
         && big.rowCount === 0 && big.note.indexOf("太大") >= 0,
-        JSON.stringify({ bar: big.barName, pages: big.bodyPages, note: big.note }));
+        JSON.stringify({ bar: big.barName, active: big.activePages, note: big.note }));
     await page.shot("file-6-refused.png");
 
     // ==================== 工具卡片那颗「跳转」：跟正文里的文件链接去同一个地方 ====================
@@ -1323,8 +1370,8 @@ module.exports = async (page) => {
         JSON.stringify(img1.imgShown));
     check("图片不画行号、也不给那句「看不了」的说明",
         img1.rowCount === 0 && img1.note === "" && img1.downloadCount === 0 && img1.bodyChars < 200);
-    check("整列开着那张图，横条写着它（图片不占行号、只留这一块）",
-        img1.fileView && img1.barName === FILE.image && img1.bodyPages === 1,
+    check("弹窗里看着那张图，横条写着它（图片不占行号、只留这一块）",
+        img1.fileView && img1.barName === FILE.image && img1.activePages === 1,
         JSON.stringify({ bar: img1.barName, pages: img1.bodyPages }));
     await page.shot("file-14-image.png");
 

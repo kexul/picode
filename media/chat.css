@@ -1692,6 +1692,9 @@
   /* 正文跟这一列的头一样大（写在 #filePanel 上）：这里得自己说一句「跟上面一样」，
      不然 .pk-body 那条 0.9em 会盖上来（那条是给浮层里的清单用的）。 */
   #fileBody { flex: 1 1 auto; min-height: 0; padding: 6px 0 12px; font-size: inherit; position: relative; }
+  /* 弹窗里开着好几份：只露现在看着的那一块，别的藏着（还留着，切回来不必重读） */
+  #fileBody > .file-page { display: none; }
+  #fileBody > .file-page.active { display: block; }
   /* 每一格自己那一块正文（见 chat.js 的 fileTabPage）：清单挂在上格 / 下格，打开着的挂在 #fileBody，
      谁也不挪（网页那个 iframe 从文档里挪一次就会重新加载）。 */
   /* 文件正文：一行一格（行号 + 那一行的原文）。默认长行左右滚；角上那颗开关
@@ -1794,6 +1797,37 @@
     flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-family: var(--vscode-editor-font-family, monospace);
   }
+  #fileBar .file-bar-name[hidden] { display: none; }
+  /* 开着好几份时顶上那排标签（见 chat.js 的 renderFileTabs）：一份一格，点一个切过去，
+     格子尾上那颗小叉关掉这一份。多了就横着滚，不把右边那几颗按钮挤走。 */
+  #fileViewTabs {
+    flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 4px;
+    overflow-x: auto; overflow-y: hidden;
+  }
+  #fileViewTabs[hidden] { display: none; }
+  .file-tab {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 2px;
+    max-width: 220px; padding: 2px 2px 2px 8px; border-radius: 4px;
+    cursor: pointer; user-select: none;
+    color: var(--vscode-descriptionForeground, inherit);
+  }
+  .file-tab:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
+  /* 现在看着的那一份：底色亮一点、字用正文字色，一眼看得出是哪一格 */
+  .file-tab.active {
+    background: var(--vscode-list-inactiveSelectionBackground, rgba(128,128,128,0.22));
+    color: var(--vscode-foreground);
+  }
+  .file-tab-name {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: var(--vscode-editor-font-family, monospace);
+  }
+  .file-tab-close {
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; padding: 0; cursor: pointer;
+    border: 0; border-radius: 3px; background: none; color: inherit; opacity: 0.65;
+  }
+  .file-tab-close svg { width: 10px; height: 10px; display: block; }
+  .file-tab-close:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.25)); }
   /* 右边那颗叉：把弹窗关掉（回对话；左边那两格照旧在那儿） */
   #fileCloseFile {
     flex: 0 0 auto; display: flex; align-items: center; justify-content: center;

@@ -117,7 +117,7 @@ function diffNow(page) {
         const body = document.getElementById("fileBody");
         const barName = document.querySelector("#fileBar .file-bar-name");
         const wrap = document.getElementById("fileWrap");
-        const pane = body ? body.querySelector(".file-page") : null;
+        const pane = body ? body.querySelector(".file-page.active") : null;
         const lines = pane ? Array.from(pane.querySelectorAll(".diff-line")) : [];
         return JSON.stringify({
             fileView: document.body.classList.contains("file-view"),
@@ -128,7 +128,7 @@ function diffNow(page) {
             barTitle: barName ? (barName.getAttribute("title") || "") : "",
             backShown: shown(document.getElementById("fileCloseFile")),
             wrapHidden: !wrap || wrap.hidden,
-            pages: body ? body.querySelectorAll(".file-page").length : 0,
+            pages: body ? body.querySelectorAll(".file-page.active").length : 0,
             lines: lines.length,
             added: lines.filter((el) => el.classList.contains("add")).map((el) => el.textContent),
             removed: lines.filter((el) => el.classList.contains("del")).map((el) => el.textContent),

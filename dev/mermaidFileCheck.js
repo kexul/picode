@@ -52,7 +52,7 @@ const LOOK = () => {
     // 打开着的那个文件那一块正文（见 chat.js 的 fileTabPage）：它挂在 #fileBody 下面。
     // 别从整个 #fileBody 查（清单那一块也在页面里，只是上面那格的）。
     const box = document.getElementById("fileBody");
-    const body = box ? (box.querySelector(".file-page") || box) : null;
+    const body = box ? (box.querySelector(".file-page.active") || box) : null;
     const doc = body ? body.querySelector(".file-md") : null;
     if (!doc) { return { doc: false }; }
     const figs = [...doc.querySelectorAll(".md-mermaid")];
