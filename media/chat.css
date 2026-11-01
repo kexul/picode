@@ -1727,7 +1727,12 @@
   body.file-pull-spring #fileStage { transition: transform 200ms ease-out; }
   /* 正文跟这一列的头一样大（写在 #filePanel 上）：这里得自己说一句「跟上面一样」，
      不然 .pk-body 那条 0.9em 会盖上来（那条是给浮层里的清单用的）。 */
-  #fileBody { flex: 1 1 auto; min-height: 0; padding: 6px 0 12px; font-size: inherit; position: relative; }
+  #fileBody {
+    flex: 1 1 auto; min-height: 0; padding: 6px 0 12px; position: relative;
+    /* 正文的字号：顶上那两颗 A− / A+ 调的（见 chat.js 的 applyFileViewerFont）；
+       没设过就是跟原来一样（界面字号）。diff、markdown 都按 em 跟着它走。 */
+    font-size: var(--pichat-file-font, inherit);
+  }
   /* 弹窗里开着好几份：只露现在看着的那一块，别的藏着（还留着，切回来不必重读） */
   #fileBody > .file-page { display: none; }
   #fileBody > .file-page.active { display: block; }
@@ -1873,6 +1878,17 @@
   }
   #fileCloseFile svg { width: 14px; height: 14px; display: block; }
   #fileCloseFile:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
+  /* 字号那两颗（A− / A+）：跟折行开关并排、一样的方框，只是里面是字；到两头就按下去 */
+  .file-bar-btn {
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+    min-width: 26px; height: 24px; padding: 0 4px; cursor: pointer;
+    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); border-radius: 4px;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #fff));
+    color: var(--vscode-descriptionForeground, inherit); opacity: 0.8;
+    font-family: var(--vscode-font-family, inherit); font-size: 11px; line-height: 1;
+  }
+  .file-bar-btn:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
+  .file-bar-btn:disabled { opacity: 0.35; cursor: default; }
   /* 折行开关：摆在顶上那条里、关掉那颗叉的左边。
      默认（没记过）是一行就是一行，这时它是淡的；折行打开时加 .on，带一道强调色的边。 */
   #fileWrap {

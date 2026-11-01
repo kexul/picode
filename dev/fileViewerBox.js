@@ -9,7 +9,9 @@
  *   2. 拖顶上那条：整块跟着走（按在标签、按钮上不算）；
  *   3. 拖右下角那个角：大小跟着变（有最小值）；
  *   4. 刷新页面再打开同一个文件：还摆在刚才那儿、还是刚才那么大（记在这台设备里）；
- *   5. 手机上不出这两样（那一块铺满整屏）——由 dev/filePullDown.js 那一遍验。
+ *   5. 顶上那两颗 A− / A+：只改正文的字号（一次一像素），到两头那颗按钮按下去，
+ *      字号也记在这台设备里（刷新之后还是这个字号）；
+ *   6. 手机上不出拖、改大小这两样（那一块铺满整屏）——由 dev/filePullDown.js 那一遍验。
  *
  * 测试文件现写进会话目录（dev/.scratch），那个目录不进版本库，随便造。
  */
@@ -141,6 +143,72 @@ module.exports = async (page) => {
         && Math.abs(after.w - before.w) <= 1 && Math.abs(after.h - before.h) <= 1,
         JSON.stringify({ before: [before.left, before.top, before.w, before.h], after: [after.left, after.top, after.w, after.h], reopened: reopened }));
     await page.shot("viewerbox-4-remembered.png");
+
+    // 顶上那两颗字号按钮：只改正文（代码行的字号），一次一像素；到两头按下去
+    const fontNow = async () => JSON.parse(await page.eval(`
+        const body = document.getElementById("fileBody");
+        const row = body.querySelector(".file-line .file-text") || body.querySelector(".file-line");
+        const minus = document.getElementById("fileFontMinus");
+        const plus = document.getElementById("fileFontPlus");
+        return JSON.stringify({
+            body: parseFloat(getComputedStyle(body).fontSize),
+            row: row ? parseFloat(getComputedStyle(row).fontSize) : 0,
+            bar: parseFloat(getComputedStyle(document.getElementById("fileBar")).fontSize),
+            minusShown: !!minus && getComputedStyle(minus).display !== "none",
+            plusShown: !!plus && getComputedStyle(plus).display !== "none",
+            minusOff: !!minus && minus.disabled,
+            plusOff: !!plus && plus.disabled,
+            stored: localStorage.getItem("pichat.fileViewerFont"),
+        });
+    `));
+    const font0 = await fontNow();
+    check("顶上那两颗字号的按钮在（看文件的时候露面）", font0.minusShown && font0.plusShown,
+        JSON.stringify({ minus: font0.minusShown, plus: font0.plusShown }));
+    await page.eval(`document.getElementById("fileFontPlus").click(); return true;`);
+    await page.sleep(200);
+    const font1 = await fontNow();
+    check("点 A+：正文的字大了一像素（顶上那条不变）",
+        Math.abs(font1.body - font0.body - 1) < 0.01 && Math.abs(font1.row - font0.row - 1) < 0.01
+        && font1.bar === font0.bar,
+        JSON.stringify({ body: [font0.body, font1.body], row: [font0.row, font1.row], bar: font1.bar }));
+    await page.eval(`document.getElementById("fileFontMinus").click(); document.getElementById("fileFontMinus").click(); return true;`);
+    await page.sleep(200);
+    const font2 = await fontNow();
+    check("点两下 A−：又回到原来那么大、再小一像素",
+        Math.abs(font2.body - font0.body + 1) < 0.01, JSON.stringify({ body: font2.body, was: font0.body }));
+    check("改过的字号记进了本机", font2.stored === String(Math.round(font2.body)), String(font2.stored));
+    // 一直点到底：那颗按钮按下去，字号不再变小
+    for (let i = 0; i < 20; i += 1) {
+        await page.eval(`const b = document.getElementById("fileFontMinus"); if (!b.disabled) { b.click(); } return true;`);
+    }
+    await page.sleep(200);
+    const fontMin = await fontNow();
+    check("一直点 A−：到最小那头那颗按钮按下去、字号不再小",
+        fontMin.minusOff && fontMin.body >= 9 && fontMin.body < font1.body,
+        JSON.stringify({ body: fontMin.body, off: fontMin.minusOff }));
+    await page.shot("viewerbox-5-font.png");
+
+    // 刷新之后字号还是那个
+    await page.eval("location.reload(); return true;");
+    await page.waitReady();
+    await page.sleep(1200);
+    await page.eval(`
+        if (!document.body.classList.contains("file-open")) { document.getElementById("fileSidebarBtn").click(); }
+        return true;
+    `);
+    await page.sleep(800);
+    await page.eval(`
+        const row = Array.from(document.querySelectorAll("#dirPane .file-entry"))
+            .find(function (r) { return r.getAttribute("data-path") === ${JSON.stringify(FILE)}; });
+        if (row) { row.click(); }
+        return true;
+    `);
+    await page.sleep(900);
+    const fontAfterReload = await fontNow();
+    check("刷新之后再打开：字号还是刚才那个",
+        Math.abs(fontAfterReload.body - fontMin.body) < 0.01,
+        JSON.stringify({ before: fontMin.body, after: fontAfterReload.body }));
+    await page.eval(`localStorage.removeItem("pichat.fileViewerFont"); return true;`);
 
     const passed = checks.filter((c) => c[1]).length;
     console.log("");

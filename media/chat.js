@@ -6240,6 +6240,8 @@
   const FILE_SIDEBAR_WIDTH_STORE_KEY = "pichat.fileSidebarWidth";
   /** 弹窗那一块的位置与大小（电脑上拖出来、拖右下角改出来的）：跟宽度一样记在这台设备里。 */
   const FILE_VIEWER_BOX_STORE_KEY = "pichat.fileViewerBox";
+  /** 弹窗里正文的字号（像素数）：也记在这台设备里（没设过就是 0，跟界面字号走）。 */
+  const FILE_VIEWER_FONT_STORE_KEY = "pichat.fileViewerFont";
   /** 长行怎么摆（折起来 / 一行就是一行）：也记在这台设备里（跟收没收起同一个做法）。 */
   const FILE_SIDEBAR_WRAP_STORE_KEY = "pichat.fileSidebarWrap";
   /** 「目录」那一格：标签上就写这两个字，悬停提示给这一层的全路径（见 fileSidebarProjectFullPath）。 */
@@ -6285,6 +6287,9 @@
     sessionId: null,
     // 电脑上那一块的位置与大小（见 readFileViewerBox / syncFileViewerBox）：拖过就照它摆
     box: null,
+    // 正文的字号（像素数，0 = 没设过、跟界面字号走）：见 applyFileViewerFont
+    font: 0,
+    fontMinus: null, fontPlus: null,
 
   };
   /**
@@ -6652,6 +6657,51 @@
     const r = stage.getBoundingClientRect();
     fileSidebar.box = { w: Math.round(r.width), h: Math.round(r.height), x: Math.round(r.left), y: Math.round(r.top) };
     try { localStorage.setItem(FILE_VIEWER_BOX_STORE_KEY, JSON.stringify(fileSidebar.box)); } catch (e) { /* 存不了就只管这一次 */ }
+  }
+
+  /** 记在这台设备里的正文字号：没设过 / 记坏了给 0（跟界面字号走）。 */
+  function readFileViewerFontWanted() {
+    try {
+      const n = parseInt(localStorage.getItem(FILE_VIEWER_FONT_STORE_KEY), 10);
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    } catch (e) { return 0; }
+  }
+
+  /** 这一块正文没设字号时长多大：跟界面字号一样（我们只往 #fileBody 上写字号，弹窗本身不动）。 */
+  function fileViewerBaseFont() {
+    const stage = fileSidebar.stage;
+    const got = stage ? parseFloat(getComputedStyle(stage).fontSize) : 0;
+    return got > 0 ? got : 13;
+  }
+
+  /** 字号能调的那一头一尾：比界面字号小 4 到大 10（差得再多就没法看了）。 */
+  function fileViewerFontRange() {
+    const base = Math.round(fileViewerBaseFont());
+    return { min: Math.max(9, base - 4), max: base + 10, base: base };
+  }
+
+  /** 把记着的字号写到那一块正文上（--pichat-file-font，见 chat.css 的 #fileBody）；两头那颗按钮按下去。 */
+  function applyFileViewerFont() {
+    const stage = fileSidebar.stage;
+    if (!stage) { return; }
+    const font = Number(fileSidebar.font) || 0;
+    if (font > 0) { stage.style.setProperty("--pichat-file-font", font + "px"); }
+    else { stage.style.removeProperty("--pichat-file-font"); }
+    const range = fileViewerFontRange();
+    const now = font > 0 ? font : range.base;
+    if (fileSidebar.fontMinus) { fileSidebar.fontMinus.disabled = now <= range.min; }
+    if (fileSidebar.fontPlus) { fileSidebar.fontPlus.disabled = now >= range.max; }
+  }
+
+  /** 字大一点 / 小一点（delta 是 ±1）：记进本机，下次打开还是这个字号。 */
+  function stepFileViewerFont(delta) {
+    const range = fileViewerFontRange();
+    const now = Number(fileSidebar.font) > 0 ? Number(fileSidebar.font) : range.base;
+    const next = Math.min(range.max, Math.max(range.min, now + delta));
+    if (next === now) { return; }
+    fileSidebar.font = next;
+    try { localStorage.setItem(FILE_VIEWER_FONT_STORE_KEY, String(next)); } catch (e) { /* 存不了就只管这一次 */ }
+    applyFileViewerFont();
   }
 
   /** 顶条下边那一条线（弹窗不让往上压过它）。 */
@@ -8022,6 +8072,8 @@
           // 开着好几份的时候就是排标签（一份的时候就只写那个写法，见 syncFileBar / renderFileTabs）
           '<div id="fileViewTabs" hidden></div>' +
           '<span class="file-bar-name"></span>' +
+          '<button id="fileFontMinus" class="file-bar-btn" type="button" title="字小一点" aria-label="字小一点">A−</button>' +
+          '<button id="fileFontPlus" class="file-bar-btn" type="button" title="字大一点" aria-label="字大一点">A+</button>' +
           '<button id="fileWrap" type="button" aria-label="折行开关" aria-pressed="false">' + ICONS.wrap + '</button>' +
           '<button id="fileCloseFile" type="button" title="关掉（Esc）" aria-label="关掉">' + ICONS["close-bold"] + '</button>' +
         '</div>' +
@@ -8048,6 +8100,9 @@
     fileSidebar.barName = stage.querySelector("#fileBar .file-bar-name");
     fileSidebar.tabs = stage.querySelector("#fileViewTabs");
     fileSidebar.grip = stage.querySelector("#fileStageGrip");
+    fileSidebar.fontMinus = stage.querySelector("#fileFontMinus");
+    fileSidebar.fontPlus = stage.querySelector("#fileFontPlus");
+    fileSidebar.font = readFileViewerFontWanted();
     fileSidebar.pullHint = stage.querySelector("#filePullHint");
     fileSidebar.pullHintText = stage.querySelector("#filePullHint span");
     fileSidebar.box = readFileViewerBox();
@@ -8066,6 +8121,9 @@
     root.querySelector("#fileClose").addEventListener("click", () => setFileSidebarOpen(false));
     root.querySelector("#fileSearchBtn").addEventListener("click", () => openFileSearch());
     stage.querySelector("#fileWrap").addEventListener("click", () => toggleFileSidebarWrap());
+    fileSidebar.fontMinus.addEventListener("click", () => stepFileViewerFont(-1));
+    fileSidebar.fontPlus.addEventListener("click", () => stepFileViewerFont(1));
+    applyFileViewerFont();
     backdrop.addEventListener("click", () => setFileSidebarOpen(false));
     syncFileSidebarLayout();
     if (fileSidebar.open) { ensureFilePanes(); }
