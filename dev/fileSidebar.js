@@ -17,7 +17,8 @@
  *      标签条那一套（#fileTabs / .file-tab / data-proj / data-changes）整个没了；
  *      目录不整列打开：点目录链接、点清单里的子目录都在上格「文件」里发生，清单最上面一行
  *      「上一层」往回退（到会话目录本身那一层就没有这一行了），刷新页面时这一格回到会话目录本身，
- *      切会话时摆出新会话自己那一份；换个会话不把上一个会话看过的文件内容留在面板里；
+ *      切会话时每个会话各记各的那一份（切回来还是刚才打开的那个文件、文件是从那一层点开的就回那一层；
+ *      没看过的会话从它自己的目录开始）；换个会话不把上一个会话看过的文件内容留在面板里；
  *      ≥1200px 常驻在左边、窄了滑入、点外面收起；手机上两块侧边栏互斥；
  *      右边那条缝能拖宽度：常驻时能拖（夹在 300 到「窗口宽度 − 360」之间），电脑上滑入的那一层也能拖
  *      （最多到窗口的 86%，跟 CSS 那条 width 对得上）；手机上铺满整屏时那条缝不露面；
@@ -2211,11 +2212,11 @@ module.exports = async (page) => {
         rawName.absent.status === 404 && rawName.absent.text.indexOf("没有这个文件") >= 0,
         JSON.stringify({ status: rawName.absent.status, text: rawName.absent.text }));
 
-    // ==================== 切会话：上格换成新会话的目录，整列那块清掉 ====================
+    // ==================== 切会话：每个会话各记各的那一份 ====================
     // 真开一个新会话（会话目录就是 dirA，跟当前这个会话的目录不一样）：走的是后端真会话编排，
     // 消息形状与后端推的那份一样，所以下面几条真会话的检查放在它后面。
     const otherDir = path.join(cwd, DIR.top);
-    // 切之前先走到某一层子目录里、再打开一个文件：切过去以后该回到新会话的目录本身
+    // 切之前先走到某一层子目录里、再打开一个文件：两边都记下来
     console.log("点目录链接：" + await clickDir(DIR.sub));
     const dirBeforeSwitch = await waitLook("切会话之前先走进子目录",
         (x) => x.entryCount === 1 && atDir(x, DIR.sub));
@@ -2234,33 +2235,60 @@ module.exports = async (page) => {
     const switched = await waitLook("切到新会话、上格换成新目录", (x) => !x.fileView && panesOk(x)
         && JSON.stringify(x.entryNames.map(function (n) { return n.replace(/\/$/, ""); })) === JSON.stringify(DIR_TOP_NAMES), 15000);
     const newCwd = await page.eval(`return ((document.getElementById("sessionName") || {}).dataset || {}).cwd || "";`);
-    check("切会话：面板还开着、回到上下两格（上一个会话打开的文件清掉了）",
+    check("切到一个没看过的会话：面板还开着、回到上下两格（它自己没记过什么）",
         switched.open && !switched.fileView && switched.bodyPages === 0,
         JSON.stringify({ view: switched.fileView, pages: switched.bodyPages }));
-    check("切会话：上格回到新会话的目录本身（不记住上一个会话走到哪一层）",
+    check("切到一个没看过的会话：上格从它的会话目录本身开始",
         atDir(switched, ".") && samePathText(newCwd, otherDir),
         JSON.stringify({ cwd: newCwd, want: otherDir, up: switched.upShown }));
     check("切会话：列的是新会话目录里的东西（不是上一个会话那份）",
         JSON.stringify(switched.entryNames.map(function (n) { return n.replace(/\/$/, ""); })) === JSON.stringify(DIR_TOP_NAMES),
         JSON.stringify(switched.entryNames));
-    check("切会话：上一个会话的文件内容也不留在面板里", switched.rowCount === 0 && switched.note === "");
+    check("切会话：上一个会话的文件内容不留在面板里", switched.rowCount === 0 && switched.note === "");
     await page.shot("file-10-session-switch.png");
 
-    // 再切回原来那个会话：两格重新摆在这个会话的目录本身（见 chat.js 的 resetFileSidebarForSession）
+    // 再切回原来那个会话：它自己记着的那一份摆回来（还是刚才打开的那个文件、内容重读一遍）
     // 这趟跑的是网页端，切会话走它自己那条消息（跟顶条下拉框、面板里点一行是同一件事）
+    const otherSessionId = await page.eval(`
+        const pane = document.querySelector(".session-view:not(.off) .session-pane");
+        return pane ? (pane.dataset.sessionId || "") : "";
+    `);
     console.log("切回原来那个会话：" + await page.eval(`
         acquireVsCodeApi().postMessage({ type: "switchSession", sessionId: ${JSON.stringify(sessionInfo.sessionId)} });
         return "说了";
     `));
-    const backSession = await waitLook("切回原来那个会话、两格重新摆好",
-        (x) => !x.fileView && panesOk(x) && x.entryCount > 0 && !x.upShown, 15000);
-    check("切回原来那个会话：两格重新摆开、回到它的会话目录本身",
-        panesOk(backSession) && atDir(backSession, "."),
-        JSON.stringify({ up: backSession.upShown, entries: backSession.entryPaths.slice(0, 3) }));
-    check("切回来也没把上一个会话看的东西带回来（没有文件内容）",
-        !backSession.fileView && backSession.bodyPages === 0,
-        JSON.stringify({ view: backSession.fileView, pages: backSession.bodyPages }));
+    const backSession = await waitLook("切回原来那个会话、回到刚才打开的那个文件",
+        (x) => x.fileView && x.rowCount === LONG_LINES, 15000);
+    check("切回来还是刚才打开的那个文件（内容重读一遍）",
+        backSession.fileView && activeFilePath(backSession) === FILE.long && backSession.rowCount === LONG_LINES,
+        JSON.stringify({ view: backSession.fileView, bar: backSession.barName, rows: backSession.rowCount }));
     await page.shot("file-10b-session-back.png");
+
+    // 点返回箭头：回到它刚才待的那一层（进文件之前走进的那个子目录），不是会话目录本身
+    console.log("点横条那颗返回箭头：" + await clickBack());
+    const backList = await waitLook("从文件回来、回到它刚才待的那一层",
+        (x) => !x.fileView && x.entryCount > 0);
+    check("从文件回来还是刚才那一层子目录（文件是从哪儿点开的就回哪儿）",
+        atDir(backList, DIR.sub),
+        JSON.stringify({ up: backList.upShown, entries: backList.entryPaths.slice(0, 3) }));
+
+    // 在清单这一层再切一个来回：回来还停在这一层（不是回到会话目录本身）
+    console.log("再切到另一个会话：" + await page.eval(`
+        acquireVsCodeApi().postMessage({ type: "switchSession", sessionId: ${JSON.stringify("" + otherSessionId)} });
+        return "说了";
+    `));
+    await waitLook("切到另一个会话",
+        (x) => !x.fileView && panesOk(x) && x.entryCount > 0 && !x.upShown, 15000);
+    console.log("再切回原来那个会话：" + await page.eval(`
+        acquireVsCodeApi().postMessage({ type: "switchSession", sessionId: ${JSON.stringify(sessionInfo.sessionId)} });
+        return "说了";
+    `));
+    const backDir = await waitLook("切回来还停在刚才那一层",
+        (x) => !x.fileView && panesOk(x) && x.entryCount > 0 && x.upShown, 15000);
+    check("切一个来回：清单还停在刚才那一层（不是回到会话目录本身）",
+        atDir(backDir, DIR.sub),
+        JSON.stringify({ up: backDir.upShown, entries: backDir.entryPaths.slice(0, 3) }));
+    await page.shot("file-10c-session-dir.png");
 
     // ==================== 宽度：能拖、记在这台设备里、上下限跟着窗口走；手机上铺满 ====================
     // 这一段会把拖出来的宽度记进本机、还会开一下触摸模拟，所以摆在最后（网页视图那一趟不看宽度）。

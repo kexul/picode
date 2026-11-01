@@ -251,6 +251,28 @@ module.exports = async (page) => {
     check("diff 里也有删掉的那行", diff.removed.length > 0 && diff.added.length > 0);
     await page.shot("changes-3-diff.png");
 
+    // ---- 4b. 切到别的会话再切回来：还停在刚才那份 diff 上（每个会话各记各的）----
+    const sessionId = await page.eval(`
+        const pane = document.querySelector(".session-view:not(.off) .session-pane");
+        return pane ? (pane.dataset.sessionId || "") : "";
+    `);
+    const otherDir = path.join(SCRATCH_DIR, "另一个会话");
+    fs.mkdirSync(otherDir, { recursive: true });
+    await page.eval(`
+        acquireVsCodeApi().postMessage({ type: "newSessionInWorkspace", path: ${JSON.stringify(otherDir)} });
+        return true;
+    `);
+    await page.sleep(2500);
+    await page.eval(`
+        acquireVsCodeApi().postMessage({ type: "switchSession", sessionId: ${JSON.stringify(sessionId)} });
+        return true;
+    `);
+    const diffAgain = await waitFor(page, "切回来还停在那份 diff 上", diffNow,
+        (x) => x.fileView && x.lines > 0, 15000);
+    check("切到别的会话再切回来：还停在刚才那份 diff 上（每个会话各记各的）",
+        diffAgain.fileView && diffAgain.barName === SCRIPT_FILE && diffAgain.lines === diff.lines,
+        JSON.stringify({ bar: diffAgain.barName, lines: diffAgain.lines }));
+
     // 点返回箭头：回到上下两格，清单还在
     await clickBack(page);
     const back = JSON.parse(await sidebarNow(page));

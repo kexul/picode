@@ -6274,8 +6274,16 @@
     // 打开着的东西（一个文件 / 一份 diff）整列显示，见 fileViewing 与 #fileStage。
     diff: { path: "", page: null },
     token: 0,        // 取东西是异步的：换了文件 / 收起之后回来的旧回应就不算数了
+    // 手头这一份标签是哪个会话的：切走时记到它名下（见 rememberFileTabs）
+    sessionId: null,
 
   };
+  /**
+   * 每个会话自己那一份标签：会话 id → { proj, path, dir, line, scrollTop, diff }，
+   * 切走时记上、切回来照它摆（路径都是相对那个会话目录写的，所以只能各记各的）。
+   * 没记过的会话就从会话目录开始（跟以前一样）。
+   */
+  const fileTabsBySession = new Map();
   /** 上一条「变了没」的询问还在路上（手机网慢）：这一轮先不发，别越堆越多。 */
   let filePolling = false;
 
@@ -6435,12 +6443,15 @@
 
   /**
    * 摆上这两格（只摆、不取内容）：刚打开、切会话、刷新页面走的都是这里。
-   * 会话目录还不认识（会话列表还没到）就先不摆，留一句提示，等它到了再来（见 sessionList 那段）。
+   * 这个会话之前看过的话先把它自己那一份摆回来（见 restoreFileTabs），没看过就从会话目录开始。
+   * 会话目录还不认识（会话列表还没到）就先不摆，等它到了再来（见 sessionList 那段）。
    */
   function ensureFilePanes() {
     if (!fileSidebar.root || !fileSidebar.open) { return; }
     if (!activeSessionCwd()) { return; }   // 会话目录还没认识：等它到了再来（见 sessionList 那段）
     if (!fileSidebar.fileTab) {
+      if (restoreFileTabs()) { return; }
+      fileSidebar.sessionId = activeId || null;
       fileSidebar.fileTab = fileSidebarNewTab(FILE_SIDEBAR_PROJECT_PATH, true);
       showFileTab(fileSidebar.fileTab, 0);
     }
@@ -6448,6 +6459,46 @@
       fileSidebar.changeTab = fileSidebarNewChangesTab();
       showChanges();
     }
+  }
+
+  /**
+   * 切走之前：把手上这一份标签记在它会话名下（切回来原样摆上）。
+   * 记的是「在看哪个文件（或者清单停在哪一层）、正文读到哪儿、打开着哪份 diff」；
+   * 还没有摆上任何东西时不动（免得把上一趟记的那份换成根目录）。
+   */
+  function rememberFileTabs() {
+    const id = fileSidebar.sessionId;
+    const tab = fileSidebar.fileTab;
+    if (!id || !tab) { return; }
+    fileTabsBySession.set(id, {
+      proj: !!tab.proj,
+      path: tab.path,
+      dir: tab.dir || FILE_SIDEBAR_PROJECT_PATH,
+      line: tab.line || 0,
+      scrollTop: tab.scrollTop || 0,
+      diff: fileSidebar.diff.path || "",
+    });
+  }
+
+  /**
+   * 切回一个会话：把它自己记着的那一份摆回来（看文件就重读一遍、停在读到的那一行，
+   * 清单就从那一层列起，开着 diff 就把那份 diff 再打开）。
+   * @returns 摆上了没有：没记过就给 false，调用方从会话目录开始
+   */
+  function restoreFileTabs() {
+    const mem = activeId ? fileTabsBySession.get(activeId) : null;
+    if (!mem) { return false; }
+    fileSidebar.sessionId = activeId;
+    const tab = fileSidebarNewTab(mem.path || FILE_SIDEBAR_PROJECT_PATH, mem.proj);
+    tab.dir = mem.dir || FILE_SIDEBAR_PROJECT_PATH;
+    tab.line = mem.line || 0;
+    tab.scrollTop = mem.scrollTop || 0;
+    fileSidebar.fileTab = tab;
+    fileSidebar.changeTab = fileSidebarNewChangesTab();
+    showFileTab(tab, 0);
+    showChanges();
+    if (mem.diff) { openDiffInSidebar({ path: mem.diff }); }
+    return true;
   }
 
   /**
@@ -7591,8 +7642,9 @@
   const pendingFileCandidates = new Map();
 
   /**
-   * 切会话：手上这一份标签（开着的文件、看的是哪一个）记在它会话名下，
-   * 然后把新会话自己那一份摆出来（切回一个会话时，它的标签原样回来、内容重读一次）。
+   * 切会话：手上这一份标签（开着的文件、看的是哪一个）先记在它会话名下
+   *（见 rememberFileTabs），然后把新会话自己那一份摆出来：
+   * 以前看过这个会话就回到它那一层 / 那个文件，没看过就从它的会话目录开始。
    *
    * 两格那两块正文不跟着串会话：路径是相对那个会话目录写的，
    * 所以切走时把它们撤掉（连着网页那个 iframe、图片那个显示地址）。
@@ -7600,7 +7652,8 @@
   function resetFileSidebarForSession() {
     if (!fileSidebar.root) { return; }
     fileSidebar.token++;
-    // 两格都跟着会话走：一次全撤掉重建（上面那格回到清单——上一个会话的文件不该跟过来）
+    rememberFileTabs();
+    // 两格都跟着会话走：一次全撤掉重建（上一个会话的东西不该跟过来）
     dropFileTabPage(fileSidebar.fileTab);
     dropFileTabPage(fileSidebar.changeTab);
     fileSidebar.fileTab = null;
@@ -7608,7 +7661,7 @@
     fileSidebar.diff.path = "";
     dropDiffPage();
     syncFileView();
-    ensureFilePanes();   // 开着就换成新会话的目录；收着的那就等打开时再说
+    ensureFilePanes();   // 开着就摆上新会话自己那一份（以前看过就从记着的地方起）；收着的那就等打开时再说
   }
 
   /**
