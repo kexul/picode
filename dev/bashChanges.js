@@ -15,7 +15,8 @@
  * 验的是外面看得见的行为：
  *   1. 磁盘上改一个文件：那一格长出那一行，+N −M 是对的，点开看得到 diff；
  *   2. 磁盘上新写一个文件：+N −0；
- *   3. 删掉一个文件：标「已删除」。
+ *   3. 删掉一个文件：标「已删除」；
+ *   4. 名单外的（日志、图片这种）不进清单：只收源码 / 文档 / 配置（见 src/changeSnapshot.ts）。
  */
 const fs = require("fs");
 const path = require("path");
@@ -25,6 +26,8 @@ const { SCRATCH_DIR } = require("./harness.js");
 const WORK = path.join(SCRATCH_DIR, "bashChangesWork");
 const MODIFIED = "说明.txt";
 const CREATED = "命令建的文件.txt";
+/** 名单之外的一个文件：改了也不该进清单。 */
+const IGNORED = "跑出来的日志.log";
 
 let failures = 0;
 function check(label, ok, detail) {
@@ -145,6 +148,13 @@ module.exports = async (page) => {
     });
     const gone = rows.find((one) => one.path === MODIFIED);
     check("删掉的文件标「已删除」", !!gone && gone.counts.includes("已删除"), gone && gone.counts);
+
+    // ---- 4. 名单外的（日志、图片这种）不进清单 ----
+    fs.writeFileSync(path.join(WORK, IGNORED), "随便写点什么\n", "utf8");
+    await reopen(page);
+    await page.sleep(900);
+    rows = JSON.parse(await rowsNow(page));
+    check("名单外的日志文件不进清单", !rows.some((one) => one.path === IGNORED), JSON.stringify(rows));
 
     await page.shot("bash-changes.png");
 

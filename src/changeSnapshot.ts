@@ -10,8 +10,10 @@
  *     快照几乎不占磁盘；会话目录只是大仓库里的一层时按普通目录处理（不去碰上一层的东西）。
  *   - 不是仓库时只能自己存一份，所以先估个大小，太大就不拍（那一格退回只看 edit / write，
  *     见 EditTracker），免得一个巨大的目录把盘和内存吃掉。
- *   - 「哪些文件不用管」交给 git 判断：工作区自己的 .gitignore 在影子仓库里照样生效
- *     （非仓库目录也认），另外在影子仓库的 info/exclude 里补几条几乎不可能是源码的名字。
+ *   - 「哪些文件算数」只收「源码 / 文档 / 配置」那几类（白名单见下面 CODE_EXTS）：日志、
+ *     会话记录（`.jsonl`）、补丁、图片这些不进快照 —— 它们是成本大头，也没有 diff 可看。
+ *     白名单之外的东西仍然由 edit / write 那套管（它们本来就精确记着）。工作区自己的
+ *     `.gitignore` 在影子仓库里照样生效（非仓库目录也认）。
  *
  * 口径统一是「会话开始 → 现在」：清单里的行数和点开的 diff 都从这一份快照算出来，不会打架。
  */
@@ -52,22 +54,44 @@ const SNAPSHOT_TIMEOUT_MS = 60_000;
 const DIFF_TIMEOUT_MS = 20_000;
 
 /**
- * 影子仓库自己的排除名单：只放「几乎不可能是源码」的名字。
+ * 白名单：这一格只收这几类文件（「源码 / 文档 / 配置」）。要加就往这儿加。
+ *
+ * 为什么按白名单而不是黑名单：快照的成本按“要存多少内容”算，而目录里真正肥的是
+ * 日志、会话记录（`.jsonl`）、补丁、图片这些（实测一个调试目录里 100 MB 里有 90 MB 是它们，
+ * 源码才 4 MB）；它们本来也没有 diff 可看。代价是：名单外的东西看不见——所以这个名单
+ * 要跟着语言 / 项目长，觉得少了什么就往下面那两行里添一个。
+ */
+const CODE_EXTS = [
+    // 前端 / 脚本
+    "ts", "tsx", "js", "jsx", "mjs", "cjs", "vue", "svelte", "astro",
+    "css", "scss", "sass", "less", "styl", "html", "htm", "md", "mdx", "rst", "txt", "adoc",
+    // 配置 / 数据
+    "json", "jsonc", "json5", "yml", "yaml", "toml", "ini", "cfg", "conf", "properties",
+    "xml", "plist", "env", "sql", "graphql", "gql", "proto", "thrift", "csv",
+    // 后端 / 系统
+    "py", "pyi", "rb", "php", "pl", "pm", "lua", "go", "rs", "java", "kt", "kts",
+    "scala", "groovy", "gradle", "cs", "csproj", "sln", "fs", "fsx", "vb", "swift",
+    "m", "mm", "c", "h", "cc", "cpp", "cxx", "hpp", "hh", "hxx", "cu", "cuh",
+    "asm", "s", "dart", "ex", "exs", "erl", "hrl", "hs", "lhs", "clj", "cljs", "elm",
+    "jl", "r", "zig", "v", "nim", "sol", "move",
+    // 构建 / 基础设施 / 命令
+    "sh", "bash", "zsh", "fish", "ps1", "psm1", "bat", "cmd", "awk", "sed", "el", "vim",
+    "cmake", "mk", "tf", "tfvars", "hcl", "nix", "tex", "bib", "patch",
+];
+
+/** 没有扩展名、但名字固定的那几个（Makefile、LICENSE 这些也算文档 / 配置）。 */
+const CODE_NAMES = [
+    "Makefile", "makefile", "Dockerfile", "Containerfile", "Justfile",
+    "LICENSE", "COPYING", "NOTICE", "README", ".env*",
+    ".gitignore", ".gitattributes", ".gitmodules", ".editorconfig", ".npmrc", ".nvmrc",
+];
+
+/**
+ * 不管名单怎么说都跳过的目录（依赖、版本库、编辑器缓存）：不跳的话 git 会往里翻几十万个文件。
  * 产物目录（dist / build / out / bin / lib / vendor / target）故意不放：很多项目里它们是源码目录，
  * 该不该排除让项目自己的 .gitignore 说，比我们猜准。
  */
-const EXCLUDE_TEXT = [
-    "# 这个目录是自动建的临时快照仓库，可以随时整个删掉。",
-    "# 只列几乎不可能是源码的名字；产物目录交给项目自己的 .gitignore。",
-    ".git",
-    "node_modules",
-    "__pycache__",
-    ".venv",
-    "venv",
-    ".idea",
-    ".DS_Store",
-    "",
-].join("\n");
+const SKIP_DIRS = [".git/", "node_modules/", "__pycache__/", ".venv/", "venv/", ".idea/", ".DS_Store"];
 
 /** 每次调 git 都带上的配置：别按平台改行尾、路径别转义成八进制、别自动打包。 */
 const GIT_FLAGS = [
@@ -201,10 +225,27 @@ async function prepareSnapshot(gitDir: string, workTree: string, limit: boolean)
     return true;
 }
 
-/** 影子仓库的排除名单：几乎不可能是源码的那几个名字，加上后端自己的目录（万一会话目录罩着它）。 */
+/**
+ * 影子仓库的排除名单：先用 `*` 把一切都排除，再把「算代码的那几类」逐个放回来。
+ * 不这么写就没法“只收白名单”：gitignore 没有“只收”这种写法，只能先全关再一个个开
+ * （放行目录的那一行是让 git 还肯往目录里走，不然它连看都不看就整棵树跳过）。
+ * @param workTree 会话目录（后端自己的文件正好落在里面时要多跳一条，见 ownFilesExclude）
+ */
 function excludeText(workTree: string): string {
+    const lines = [
+        "# 这个目录是自动建的临时快照仓库，可以随时整个删掉。",
+        "# 只收「源码 / 文档 / 配置」这几类（名单见 src/changeSnapshot.ts）；日志、会话记录、",
+        "# 补丁、图片这些不进快照 —— 它们是这一格的成本大头，也没有 diff 可看。",
+        "*",
+        "!*/",
+        ...SKIP_DIRS,
+    ];
     const own = ownFilesExclude(workTree);
-    return own ? `${EXCLUDE_TEXT}${own}\n` : EXCLUDE_TEXT;
+    if (own) { lines.push(own); }
+    for (const ext of CODE_EXTS) { lines.push(`!*.${ext}`); }
+    for (const name of CODE_NAMES) { lines.push(`!${name}`); }
+    lines.push("");
+    return lines.join("\n");
 }
 
 /** 一段 diff 文字是不是太长了（太长的清单那一行标成看不了，别往页面上拖）。 */
