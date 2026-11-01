@@ -7861,8 +7861,12 @@
         '<div id="filePanes" class="pk-body">' +
           // 上格「文件」：列目录、一层层往里走（点开一个文件就整列显示，见下）
           '<div id="dirPane"></div>' +
-          // 下格「改动」：这个会话改过哪些文件，一行一个（点一行整列看那份 diff）
-          '<div id="changePane"></div>' +
+          // 下格「改动」：这个会话改过哪些文件，一行一个（点一行整列看那份 diff）。
+          // 头上那行小字跟右边「项目与会话」的「正在对话 / 工作区」一个样子：上面那道线是两格的分界，
+          // 线底下的这块叫「改动」（上面那块不另写：「文件与改动」的标题已经有了）。
+          '<div id="changePane">' +
+            '<div class="file-pane-title">改动</div>' +
+          '</div>' +
         '</div>' +
         // 打开的样子：一个文件 / 一份 diff，整列都是它（两格收起来，见 syncFileView）
         '<div id="fileStage">' +

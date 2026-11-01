@@ -1661,9 +1661,15 @@
   #changePane {
     /* 按内容占高、最多 45%；不许被上面那格挤（flex-shrink: 0）：内容多了在它自己里滚 */
     flex: 0 0 auto; min-height: 0; max-height: 45%;
-    overflow-y: auto; padding: 4px 0 10px;
+    overflow-y: auto; padding: 0 0 10px;
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
     font-size: inherit;
+  }
+  /* 下格头上那行小字（「改动」）：跟右边那列「项目与会话」的分节标题（.pk-section）一个长相：
+     11px、半粗、正文字色。它跟下面那些行一起滚，不钉着。 */
+  .file-pane-title {
+    padding: 8px 12px 5px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+    color: var(--vscode-foreground); opacity: 0.9;
   }
   #changePane::-webkit-scrollbar { width: 8px; }
   #changePane::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 4px; }
