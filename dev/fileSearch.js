@@ -246,7 +246,13 @@ module.exports = async (page) => {
     console.log("点弹窗顶上那颗叉：");
     await page.eval(`document.getElementById("fileCloseFile").click(); return true;`);
     await page.sleep(400);
-    check("弹窗关掉、回到刚才那一层清单", await page.eval(`
+    // 点链接只开弹窗、不动左边那一列：这里把它开出来，看看关掉弹窗之后清单照旧列着
+    await page.eval(`
+        if (!document.body.classList.contains("file-open")) { document.getElementById("fileSidebarBtn").click(); return "开了"; }
+        return "本来就开着";
+    `);
+    await page.sleep(700);
+    check("弹窗关掉、左边那一列照旧列着那份清单", await page.eval(`
         return document.getElementById("fileBar").hidden && !!document.querySelector("#dirPane .file-entry");
     `));
 
@@ -305,6 +311,12 @@ module.exports = async (page) => {
     await page.sleep(200);
 
     // ==================== 四、放大镜入口（手机上没键盘） ====================
+    // 那一列得先开着：放大镜就在它头上
+    await page.eval(`
+        if (!document.body.classList.contains("file-open")) { document.getElementById("fileSidebarBtn").click(); }
+        return true;
+    `);
+    await page.sleep(600);
     console.log("点文件侧边栏头上那颗放大镜：");
     await page.eval(`document.getElementById("fileSearchBtn").click(); return true;`);
     await page.sleep(400);

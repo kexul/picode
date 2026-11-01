@@ -6238,6 +6238,8 @@
   const FILE_SIDEBAR_STORE_KEY = "pichat.fileSidebarOpen";
   /** 拖出来的宽度（像素数）：跟收没收起一样记在这台设备里。 */
   const FILE_SIDEBAR_WIDTH_STORE_KEY = "pichat.fileSidebarWidth";
+  /** 弹窗那一块的位置与大小（电脑上拖出来、拖右下角改出来的）：跟宽度一样记在这台设备里。 */
+  const FILE_VIEWER_BOX_STORE_KEY = "pichat.fileViewerBox";
   /** 长行怎么摆（折起来 / 一行就是一行）：也记在这台设备里（跟收没收起同一个做法）。 */
   const FILE_SIDEBAR_WRAP_STORE_KEY = "pichat.fileSidebarWrap";
   /** 「目录」那一格：标签上就写这两个字，悬停提示给这一层的全路径（见 fileSidebarProjectFullPath）。 */
@@ -6251,7 +6253,8 @@
   /** 这一列那一摊：容器、里面那几块、开着的东西。 */
   const fileSidebar = {
     root: null, header: null, dirBody: null, body: null, changeBody: null, resize: null,
-    stage: null, bar: null, barName: null, closeFile: null, tabs: null,
+    stage: null, bar: null, barName: null, closeFile: null, tabs: null, grip: null,
+    pullHint: null, pullHintText: null,
     open: false,     // 这台设备上人要不要它开着（记在 localStorage；开着时宽窗常驻、窄窗滑入）
     // 人拖出来的宽度（像素数，也记在本机里）：没拖过就是 FILE_SIDEBAR_W_DEFAULT。
     // 写到版式上的那个值还可能被窗口收小，但这里留着的永远是原值（见 applyFileSidebarWidth）。
@@ -6280,6 +6283,8 @@
     token: 0,        // 取东西是异步的：换了文件 / 收起之后回来的旧回应就不算数了
     // 手头这一份标签是哪个会话的：切走时记到它名下（见 rememberFileTabs）
     sessionId: null,
+    // 电脑上那一块的位置与大小（见 readFileViewerBox / syncFileViewerBox）：拖过就照它摆
+    box: null,
 
   };
   /**
@@ -6472,12 +6477,13 @@
    */
   function rememberFileTabs() {
     const id = fileSidebar.sessionId;
+    if (!id) { return; }
     const tab = fileSidebar.fileTab;
-    if (!id || !tab) { return; }
     const view = fileSidebar.view;
+    if (!tab && view.tabs.length === 0) { return; }
     const cur = viewTab();
     fileTabsBySession.set(id, {
-      path: tab.path || FILE_SIDEBAR_PROJECT_PATH,
+      path: tab ? (tab.path || FILE_SIDEBAR_PROJECT_PATH) : FILE_SIDEBAR_PROJECT_PATH,
       tabs: view.tabs.map((e) => ({ kind: e.kind, path: e.path })),
       at: view.at,
       viewLine: cur && cur.file ? (cur.file.line || 0) : 0,
@@ -6494,12 +6500,20 @@
     const mem = activeId ? fileTabsBySession.get(activeId) : null;
     if (!mem) { return false; }
     fileSidebar.sessionId = activeId;
-    const tab = fileSidebarNewTab(mem.path || FILE_SIDEBAR_PROJECT_PATH, true);
-    tab.dir = tab.path;
-    fileSidebar.fileTab = tab;
-    fileSidebar.changeTab = fileSidebarNewChangesTab();
-    showFileList(tab);
-    showChanges();
+    if (fileSidebar.open) {
+      const tab = fileSidebarNewTab(mem.path || FILE_SIDEBAR_PROJECT_PATH, true);
+      tab.dir = tab.path;
+      fileSidebar.fileTab = tab;
+      fileSidebar.changeTab = fileSidebarNewChangesTab();
+      showFileList(tab);
+      showChanges();
+    }
+    restoreFileViewTabs(mem);
+    return true;
+  }
+
+  /** 弹窗里那几份重新开一遍，再切回当时看的那一份（读到哪儿也照旧）。 */
+  function restoreFileViewTabs(mem) {
     (mem.tabs || []).forEach((t) => {
       if (!t || !t.path) { return; }
       if (t.kind === "diff") { openDiffInSidebar({ path: t.path }); }
@@ -6516,7 +6530,6 @@
       activateViewTab(at);
       syncFileView();
     }
-    return true;
   }
 
   /**
@@ -6617,6 +6630,40 @@
     syncFileBar();
   }
 
+  /** 记在这台设备里的那一块（位置 + 大小）：没记过 / 记坏了就给 null。 */
+  function readFileViewerBox() {
+    try {
+      const raw = localStorage.getItem(FILE_VIEWER_BOX_STORE_KEY);
+      const got = raw ? JSON.parse(raw) : null;
+      if (!got) { return null; }
+      const w = Math.round(Number(got.w) || 0);
+      const h = Math.round(Number(got.h) || 0);
+      const num = (v) => (v === null || v === undefined || v === "" ? null : Math.round(Number(v)));
+      const x = num(got.x);
+      const y = num(got.y);
+      return w > 0 && h > 0 ? { w: w, h: h, x: x, y: y } : null;
+    } catch (e) { return null; }
+  }
+
+  /** 把弹窗那一块现在的样子记进本机（拖完、改完大小那一下）。 */
+  function rememberFileViewerBox() {
+    const stage = fileSidebar.stage;
+    if (!stage) { return; }
+    const r = stage.getBoundingClientRect();
+    fileSidebar.box = { w: Math.round(r.width), h: Math.round(r.height), x: Math.round(r.left), y: Math.round(r.top) };
+    try { localStorage.setItem(FILE_VIEWER_BOX_STORE_KEY, JSON.stringify(fileSidebar.box)); } catch (e) { /* 存不了就只管这一次 */ }
+  }
+
+  /** 顶条下边那一条线（弹窗不让往上压过它）。 */
+  function topBarBottom() {
+    const bar = document.getElementById("sessionBar");
+    return bar ? Math.round(bar.getBoundingClientRect().bottom) : 0;
+  }
+
+  /** 弹窗那一块最小 / 最大能到多大（最大就是窗口里装得下的那点地方）。 */
+  const FILE_VIEWER_MIN_W = 320;
+  const FILE_VIEWER_MIN_H = 240;
+
   /**
    * 弹窗的范围（每一回摆版面都重算一道）：
    *   · 手机上 / 很窄的窗口：铺满整屏（顶条也盖住，那一列铺满的时候本来就挡着顶条）；
@@ -6634,16 +6681,78 @@
       stage.style.height = "100%";
       return;
     }
-    const bar = document.getElementById("sessionBar");
-    const top0 = bar ? Math.round(bar.getBoundingClientRect().bottom) : 0;   // 顶条底下算起
-    const availH = window.innerHeight - top0;
-    const w = Math.min(1000, Math.max(320, window.innerWidth - 48));
-    const h = Math.min(820, Math.max(240, availH - 32));
+    const top0 = topBarBottom();   // 顶条底下算起
+    const maxW = Math.max(FILE_VIEWER_MIN_W, window.innerWidth - 24);
+    const maxH = Math.max(FILE_VIEWER_MIN_H, window.innerHeight - top0 - 24);
+    const box = fileSidebar.box;
+    // 记过就照记的摆（窗口变小了就收进窗口里），没记过就居中、默认 1000×820
+    const w = Math.min(maxW, Math.max(FILE_VIEWER_MIN_W, box && box.w ? box.w : Math.min(1000, window.innerWidth - 48)));
+    const h = Math.min(maxH, Math.max(FILE_VIEWER_MIN_H, box && box.h ? box.h : Math.min(820, window.innerHeight - top0 - 32)));
+    const wantX = box && box.x !== null && box.x !== undefined ? box.x : Math.round((window.innerWidth - w) / 2);
+    const wantY = box && box.y !== null && box.y !== undefined
+      ? box.y : Math.round(top0 + ((window.innerHeight - top0) - h) / 2);
+    const x = Math.min(Math.max(0, wantX), Math.max(0, window.innerWidth - w));
+    const y = Math.min(Math.max(top0, wantY), Math.max(top0, window.innerHeight - h));
     stage.classList.add("floating");
     stage.style.width = w + "px";
     stage.style.height = h + "px";
-    stage.style.left = Math.round((window.innerWidth - w) / 2) + "px";
-    stage.style.top = Math.round(top0 + (availH - h) / 2) + "px";
+    stage.style.left = x + "px";
+    stage.style.top = y + "px";
+  }
+
+  /**
+   * 电脑上那一块能拖、能改大小：拖顶上那条挪位置（那几颗按钮、那几格标签不算），
+   * 拖右下角那个角改大小。松手那一下记进本机（下次打开还摆在这儿、这么大）。
+   * 手机上不出这套：那一块铺满整屏，收起靠那颗叉或者往下拉（见 wireFilePullDown）。
+   */
+  function wireFileViewerBoxMoves() {
+    const stage = fileSidebar.stage;
+    const bar = fileSidebar.bar;
+    const grip = fileSidebar.grip;
+    if (!stage || !bar || !grip) { return; }
+    const clampX = (v, w) => Math.min(Math.max(0, v), Math.max(0, window.innerWidth - w));
+    const clampY = (v, h) => {
+      const top0 = topBarBottom();
+      return Math.min(Math.max(top0, v), Math.max(top0, window.innerHeight - h));
+    };
+    /** 按住之后跟着指针走：start 是按下那一刻的位置/大小，size 为真就是改大小而不是挪。 */
+    const beginDrag = (e, size) => {
+      if (e.button !== 0 || !stage.classList.contains("floating")) { return; }
+      e.preventDefault();
+      const r = stage.getBoundingClientRect();
+      const state = { size: size, px: e.clientX, py: e.clientY, x: r.left, y: r.top, w: r.width, h: r.height, moved: false };
+      const move = (ev) => {
+        state.moved = true;
+        if (state.size) {
+          const maxW = Math.max(FILE_VIEWER_MIN_W, window.innerWidth - 24);
+          const maxH = Math.max(FILE_VIEWER_MIN_H, window.innerHeight - topBarBottom() - 24);
+          const w = Math.min(maxW, Math.max(FILE_VIEWER_MIN_W, state.w + (ev.clientX - state.px)));
+          const h = Math.min(maxH, Math.max(FILE_VIEWER_MIN_H, state.h + (ev.clientY - state.py)));
+          stage.style.width = Math.round(w) + "px";
+          stage.style.height = Math.round(h) + "px";
+          return;
+        }
+        stage.style.left = Math.round(clampX(state.x + (ev.clientX - state.px), state.w)) + "px";
+        stage.style.top = Math.round(clampY(state.y + (ev.clientY - state.py), state.h)) + "px";
+      };
+      const finish = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", finish);
+        window.removeEventListener("pointercancel", finish);
+        document.body.classList.remove("file-box-moving");
+        if (state.moved) { rememberFileViewerBox(); }   // 拖定了就记下（下次还摆这儿）
+      };
+      document.body.classList.add("file-box-moving");
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", finish);
+      window.addEventListener("pointercancel", finish);
+    };
+    bar.addEventListener("pointerdown", (e) => {
+      // 那几颗按钮、那几格标签按自己的事办（点标签切过去、点叉关掉）
+      if (e.target.closest("button, .file-tab")) { return; }
+      beginDrag(e, false);
+    });
+    grip.addEventListener("pointerdown", (e) => beginDrag(e, true));
   }
 
   /**
@@ -6764,7 +6873,7 @@
    */
   function openFileViewer(path, line) {
     if (!fileSidebar.root || !path) { return; }
-    prepareFileSidebar();
+    fileSidebar.sessionId = activeId || null;   // 这几份标签是这个会话的（切走时记到它名下）
     const linkLine = Number(line) > 0 ? Number(line) : 0;
     const v = fileSidebar.view;
     const at = v.tabs.findIndex((e) => e.kind === "file" && e.path === path);
@@ -6810,7 +6919,7 @@
    */
   function openDiffInSidebar(item) {
     if (!fileSidebar.root || !item || !item.path || item.tooBig) { return; }
-    prepareFileSidebar();
+    fileSidebar.sessionId = activeId || null;   // 这几份标签是这个会话的（切走时记到它名下）
     const v = fileSidebar.view;
     const at = v.tabs.findIndex((e) => e.kind === "diff" && e.path === item.path);
     if (at >= 0) {
@@ -7551,7 +7660,7 @@
     if (!fileSidebar.root) { return; }
     fileSidebar.open = !!open;
     rememberFileSidebar(fileSidebar.open);
-    if (!fileSidebar.open) { fileSidebar.token++; clearPullStyles("left"); closeFileViewer(); }   // 还等着的那条回应别再画进来
+    if (!fileSidebar.open) { fileSidebar.token++; clearPullStyles("left"); }   // 还等着的那条回应别再画进来
     syncFileSidebarLayout();
     if (fileSidebar.open) {
       ensureFilePanes();   // 空着的时候先把两格摆上（会话目录还没认识就留那句提示）
@@ -7586,19 +7695,13 @@
   }
 
   /**
-   * 点链接、进目录之前的张罗：窄窗里把右边那块让开，把「目录」那一格摆到第一格
-   *（还没有就摆上；会话目录还不认识时它会留一句提示），再把这一列开出来。
+   * 点目录之前的张罗（只有目录要这一列）：窄窗里把右边那块让开，再把这一列开出来
+   *（开着的话它只是把两格摆好、各问一次最新内容）。点文件不开它：那一份直接在弹窗里看。
    */
   function prepareFileSidebar() {
     closeRightSidebarForFile();
-    // 开着的话它只是把两格摆好、各问一次最新内容；收着就顺手开出来
     setFileSidebarOpen(true);
   }
-
-  /**
-   * 点消息流里的文件链接（或者这一列清单上的一个文件）：把那个文件取回来、在弹窗里看
-   *（停在链接说的那一行）。
-   */
 
   /**
    * 点一个目录：在「文件」那一格里走（目录不占地方）——换成这一层重新列出来；
@@ -7713,7 +7816,10 @@
     fileSidebar.fileTab = null;
     fileSidebar.changeTab = null;
     syncFileView();
-    ensureFilePanes();   // 开着就摆上新会话自己那一份（以前看过就从记着的地方起）；收着的那就等打开时再说
+    if (fileSidebar.open) { ensureFilePanes(); return; }   // 开着：两格与弹窗一起摆回它自己那一份
+    // 收着：两格等打开时再说，弹窗里以前开着的那几份先摆回来（它本来就不靠那一列）
+    const mem = activeId ? fileTabsBySession.get(activeId) : null;
+    if (mem) { fileSidebar.sessionId = activeId; restoreFileViewTabs(mem); }
   }
 
   /**
@@ -7763,6 +7869,116 @@
     });
   }
 
+  // ==================== 往下拉收起弹窗（手机上的手势）====================
+  //
+  // 正文已经滚到最上头时，手指再往下拖：整块弹窗（#fileStage）跟着手指一起往下走，
+  // 上面一点点露出背后那一层（对话，或者还开着的那份清单）；拖过那条线松手就收起
+  // （跟顶上那颗叉是同一件事，见 closeFileViewer），不到线就滑回去。电脑上那一块浮着、
+  // 拖它靠拖顶上那条与右下角（见 wireFileViewerBoxMoves），不走这个手势。
+  //
+  // 用 touch 事件而不是 pointer：往外一拖浏览器就拿指针事件去做它自己的手势（滚动、下拉刷新），
+  // pointercancel 一来追踪就断了（跟对话区那套横划同一个路子）。
+  /** 拉出来多远才算数（这是那一块实际下去的位移；手指要拖得更远，有阻尼）。 */
+  const FILE_PULL_BACK_PX = 110;
+  /** 最多跟到这么远：再往下就不动了。 */
+  const FILE_PULL_MAX_PX = 300;
+  /** 阻尼：手指挑 10px，那一块走 8px。 */
+  const FILE_PULL_DAMPING = 0.8;
+  /** 开始拉之前先让开这么多：一次普通点击 / 手抖不该把它挪动。 */
+  const FILE_PULL_SLOP_PX = 8;
+  /** 正在拉的那一趟（手抬起来 / 被打断就清成 null）。 */
+  let filePull = null;
+
+  function wireFilePullDown() {
+    const body = fileSidebar.body;
+    const stage = fileSidebar.stage;
+    const hint = fileSidebar.pullHintText;
+    if (!body || !stage || !hint) { return; }
+    let springTimer = 0;
+
+    /** 按手指现在的位置摆：那一块下去多少（上面就露出多少）、那句话写到哪一句。 */
+    const paint = (p) => {
+      const distance = Math.min(FILE_PULL_MAX_PX, Math.round(p.dy * FILE_PULL_DAMPING));
+      p.distance = distance;
+      stage.style.transform = distance > 0 ? "translateY(" + distance + "px)" : "";
+      const armed = distance >= FILE_PULL_BACK_PX;
+      if (armed !== p.armed) {
+        p.armed = armed;
+        hint.textContent = armed ? "松手，收起" : "继续往下拉，收起";
+        hint.classList.toggle("armed", armed);
+      }
+    };
+
+    /** 这一趟收回去：那一块滑回原处，那句话收掉（animate = 滑回去，否则当场收）。 */
+    const release = (p, animate) => {
+      clearTimeout(springTimer);
+      stage.style.transform = "";
+      document.body.classList.remove("file-pulling");
+      p.armed = null;
+      hint.classList.remove("armed");
+      if (!animate) { hint.textContent = ""; return; }
+      document.body.classList.add("file-pull-spring");
+      springTimer = setTimeout(() => {
+        document.body.classList.remove("file-pull-spring");
+        hint.textContent = "";
+      }, 240);
+    };
+
+    body.addEventListener("touchstart", (e) => {
+      if (filePull || e.touches.length !== 1) { return; }
+      if (!fileViewing() || stage.classList.contains("floating")) { return; }   // 电脑上那一块浮着：不走这个手势
+      if (body.scrollTop > 0) { return; }                                        // 正文不在最上头：这一下是正常滚动
+      if (swipeOnControl(e.target)) { return; }                                  // 按在按钮 / 链接 / 图上：不动
+      clearTimeout(springTimer);
+      document.body.classList.remove("file-pull-spring");
+      filePull = {
+        finger: e.touches[0].identifier, y: e.touches[0].clientY,
+        // armed 先留空：第一次摆的时候那句话才写得上去（想成 false 就永远不再写了）
+        dy: 0, distance: 0, armed: null, pulling: false,
+      };
+    }, { passive: true });
+
+    body.addEventListener("touchmove", (e) => {
+      const p = filePull;
+      if (!p) { return; }
+      const t = e.touches.length === 1 ? e.touches[0] : null;
+      if (!t || t.identifier !== p.finger) {
+        // 又上来一根手指 / 换了手指：这一趟不算
+        filePull = null;
+        if (p.pulling) { release(p, true); }
+        return;
+      }
+      const dy = t.clientY - p.y;
+      if (dy <= 0) {
+        // 往上 / 没动：这不是下拉，交回给滚动（已经拉出来的一半收回去）
+        if (p.pulling) { p.pulling = false; p.dy = 0; release(p, true); }
+        return;
+      }
+      if (!p.pulling) {
+        if (dy < FILE_PULL_SLOP_PX) { return; }
+        p.pulling = true;
+      }
+      if (e.cancelable) { e.preventDefault(); }
+      document.body.classList.add("file-pulling");
+      p.dy = dy;
+      paint(p);
+    }, { passive: false });
+
+    const finish = (e, cancelled) => {
+      const p = filePull;
+      if (!p) { return; }
+      const t = e.changedTouches && e.changedTouches[0];
+      if (t && t.identifier !== p.finger) { return; }
+      filePull = null;
+      if (!p.pulling) { return; }
+      const goBack = !cancelled && p.distance >= FILE_PULL_BACK_PX;
+      release(p, !goBack);
+      if (goBack) { closeFileViewer(); }
+    };
+    body.addEventListener("touchend", (e) => finish(e, false));
+    body.addEventListener("touchcancel", (e) => finish(e, true));
+  }
+
   // 这一列只在浏览器页面里搭出来：插件里的对话面板里连这一列的容器都没有。
   // 搭两块：左边这一列（标题 + 上下两格）与弹窗（#fileStage，盖住对话那一块，点开一个文件 / 一份 diff 才露面）。
   (function buildFileSidebar() {
@@ -7809,7 +8025,11 @@
           '<button id="fileWrap" type="button" aria-label="折行开关" aria-pressed="false">' + ICONS.wrap + '</button>' +
           '<button id="fileCloseFile" type="button" title="关掉（Esc）" aria-label="关掉">' + ICONS["close-bold"] + '</button>' +
         '</div>' +
-        '<div id="fileBody" class="pk-body"></div>';
+        '<div id="fileBody" class="pk-body"></div>' +
+        // 手机上往下拉收起时浮在顶上那句话（钉着不跟手走，见 wireFilePullDown）
+        '<div id="filePullHint"><span></span></div>' +
+        // 电脑上右下角那颗改大小的角（铺满整屏时不出面，见 chat.css）
+        '<div id="fileStageGrip" title="拖这里改大小"></div>';
     document.body.appendChild(root);
     document.body.appendChild(backdrop);
     document.body.appendChild(stage);
@@ -7827,6 +8047,10 @@
     fileSidebar.bar = stage.querySelector("#fileBar");
     fileSidebar.barName = stage.querySelector("#fileBar .file-bar-name");
     fileSidebar.tabs = stage.querySelector("#fileViewTabs");
+    fileSidebar.grip = stage.querySelector("#fileStageGrip");
+    fileSidebar.pullHint = stage.querySelector("#filePullHint");
+    fileSidebar.pullHintText = stage.querySelector("#filePullHint span");
+    fileSidebar.box = readFileViewerBox();
     fileSidebar.closeFile = stage.querySelector("#fileCloseFile");
     fileSidebar.closeFile.addEventListener("click", () => closeFileViewer());
     // Esc 也能关掉弹窗（浮层、清单开着的时候不接：那会儿 Esc 是收那一层）
@@ -7837,6 +8061,8 @@
       closeFileViewer();
     });
     wireFileSidebarResize(fileSidebar.resize);
+    wireFileViewerBoxMoves();
+    wireFilePullDown();
     root.querySelector("#fileClose").addEventListener("click", () => setFileSidebarOpen(false));
     root.querySelector("#fileSearchBtn").addEventListener("click", () => openFileSearch());
     stage.querySelector("#fileWrap").addEventListener("click", () => toggleFileSidebarWrap());
@@ -7857,7 +8083,7 @@
     });
     // 跟着刷新：开着而且有正看着的文件时，隔一会儿问一次（页面在后台时不问：手机上别白耗电）
     setInterval(() => {
-      if (!fileSidebar.open || document.hidden) { return; }
+      if (document.hidden || (!fileSidebar.open && !fileViewing())) { return; }
       pollActiveFile();
     }, FILE_SIDEBAR_POLL_MS);
     // 顶条左边那颗按钮（由 browserBridge.js 建）点它走这里

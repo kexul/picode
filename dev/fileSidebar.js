@@ -737,6 +737,7 @@ module.exports = async (page) => {
                 wrapInBar: !!wrapBtn && !!bar && bar.contains(wrapBtn),
                 wrapTop: wrapRect ? Math.round(wrapRect.top) : -1,
                 barTop: bar ? Math.round(bar.getBoundingClientRect().top) : -1,
+                stageTop: stage ? Math.round(stage.getBoundingClientRect().top) : -1,
                 wrapAtCorner: !!(wrapRect && panelRect)
                     && panelRect.right - wrapRect.right >= 0 && panelRect.right - wrapRect.right <= 24
                     && panelRect.bottom - wrapRect.bottom >= 0 && panelRect.bottom - wrapRect.bottom <= 24,
@@ -1023,20 +1024,21 @@ module.exports = async (page) => {
     const wide4 = await look("宽窗 · 收起之后刷新");
     check("收起之后刷新还是收起", !wide4.open && !wide4.dock);
 
-    // 点文件链接：左边开出来、整列显示那个文件、停在链接说的那一行
+    // 点文件链接：只开弹窗（左边那一列不去动它）、停在链接说的那一行
     console.log("点文件链接：" + await clickLink(FILE.long));
     await page.sleep(600);
     const wide5 = await look("宽窗 · 点 long.js:" + HIT_LINE);
-    check("点上链接左边开出来（不用先点按钮）", wide5.open && wide5.dock && wide5.panelLeft === 0);
-    check("弹窗里都是那个文件（左边那两格照旧露着）",
-        wide5.fileView && wide5.stageShown && wide5.panesShown && wide5.bodyPages === 1,
-        JSON.stringify({ view: wide5.fileView, panes: wide5.panesShown }));
+    check("点上链接：弹窗开出来，左边那一列不去动它（还是收着的）", wide5.fileView && !wide5.open && !wide5.dock,
+        JSON.stringify({ view: wide5.fileView, open: wide5.open }));
+    check("弹窗里都是那个文件（左边那一列这时候收着）",
+        wide5.fileView && wide5.stageShown && !wide5.open && wide5.bodyPages === 1,
+        JSON.stringify({ view: wide5.fileView, open: wide5.open }));
     check("横条写着这个文件的写法、左边那颗返回箭头在",
         wide5.barShown && wide5.barName === FILE.long && wide5.closeFileShown, wide5.barName);
     check("内容带行号、行数对得上", wide5.rowCount === LONG_LINES && wide5.firstRow.indexOf("1") >= 0, wide5.firstRow);
     check("停在链接说的那一行并高亮", wide5.hitNum === String(HIT_LINE) && wide5.hitText.indexOf("第 " + HIT_LINE + " 行") >= 0 && wide5.hitVisible);
-    check("正文很长也不把这一列的头挤扁（跟顶条的横线还是齐的）", wide5.fileHeaderBottom === wide5.barBottom,
-        JSON.stringify({ bar: wide5.barBottom, file: wide5.fileHeaderBottom }));
+    check("弹窗顶上那条钉在弹窗最上面（正文再长也不把它挤走）",
+        wide5.barTop === wide5.stageTop, JSON.stringify({ bar: wide5.barTop, stage: wide5.stageTop }));
     await page.shot("file-2-line.png");
 
     // 再点另一个文件：另开一格标签（前一份留着，只是藏起来），现在露着的是新的那份
@@ -1143,12 +1145,10 @@ module.exports = async (page) => {
     console.log("点返回箭头：" + await clickBack());
     await page.sleep(600);
     const wide9 = await look("宽窗 · 点返回箭头");
-    check("点返回箭头：回到上下两格（打开的样子收起来）",
-        panesOk(wide9) && wide9.bodyPages === 0, JSON.stringify({ view: wide9.fileView, panes: wide9.panesShown }));
-    check("面板还开着、没跟着收起", wide9.open && wide9.dock && wide9.panelShown);
-    check("上格摆回来的是会话目录那份清单（同一个地方换掉，不留文件内容）",
-        atDir(wide9, ".") && wide9.bodyPages === 0 && wide9.note.indexOf("这个文件") < 0,
-        JSON.stringify({ up: wide9.upShown, note: wide9.note }));
+    check("点那颗叉：弹窗收起来、页面上不留文件内容",
+        !wide9.fileView && wide9.bodyPages === 0, JSON.stringify({ view: wide9.fileView, pages: wide9.bodyPages }));
+    check("关弹窗没顺手把左边那一列开出来", !wide9.open && !wide9.dock,
+        JSON.stringify({ open: wide9.open, dock: wide9.dock }));
     await page.shot("file-8b-back-to-panes.png");
 
     // 刷新：文件不恢复，上格回到会话目录本身
@@ -1277,23 +1277,41 @@ module.exports = async (page) => {
     console.log("点文件链接：" + await clickLink(FILE.long));
     await page.sleep(600);
     const phone2 = JSON.parse(await page.eval(`
+        const stage = document.getElementById("fileStage").getBoundingClientRect();
+        return JSON.stringify({
+            right: !document.getElementById("pickerOverlay").classList.contains("hidden"),
+            left: document.body.classList.contains("file-open"),
+            view: document.body.classList.contains("file-view"),
+            full: Math.round(stage.left) === 0 && Math.round(stage.top) === 0
+                && Math.round(stage.width) === window.innerWidth,
+        });
+    `));
+    check("手机上点文件链接：只开弹窗（铺满整屏），两块侧边栏都不去动它",
+        phone2.view && phone2.full && !phone2.left && phone2.right, JSON.stringify(phone2));
+    await page.shot("file-4-phone-popup.png");
+    // 关掉弹窗，再开左边那块：开后一块收另一块
+    await page.eval(`document.getElementById("fileCloseFile").click(); return true;`);
+    await page.sleep(400);
+    await page.click("#fileSidebarBtn");
+    await page.sleep(800);
+    const phone3 = JSON.parse(await page.eval(`
         return JSON.stringify({
             right: !document.getElementById("pickerOverlay").classList.contains("hidden"),
             left: document.body.classList.contains("file-open"),
             dock: document.body.classList.contains("file-dock"),
         });
     `));
-    check("手机上开左边这块：右边那块自己收起", phone2.left && !phone2.right && !phone2.dock);
-    await page.shot("file-4-phone-left.png");
+    check("手机上开左边那块：右边那块自己收起", phone3.left && !phone3.right && !phone3.dock);
+    await page.shot("file-5-phone-left.png");
     await page.click("#browserMenuBtn");
     await page.sleep(800);
-    const phone3 = JSON.parse(await page.eval(`
+    const phone3b = JSON.parse(await page.eval(`
         return JSON.stringify({
             right: !document.getElementById("pickerOverlay").classList.contains("hidden"),
             left: document.body.classList.contains("file-open"),
         });
     `));
-    check("手机上再开右边那块：左边那块自己收起", phone3.right && !phone3.left);
+    check("手机上再开右边那块：左边那块自己收起", phone3b.right && !phone3b.left);
     await page.shot("file-5-phone-right.png");
     // 收掉右边的抽屉，后面的检查别被它挡着
     await page.eval(`document.getElementById("pickerOverlay").dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: 3, clientY: 3 })); return true;`);
@@ -1324,11 +1342,11 @@ module.exports = async (page) => {
 
     // ==================== 工具卡片那颗「跳转」：跟正文里的文件链接去同一个地方 ====================
     // write 卡片收在工具行里那颗小标签上：鼠标停上去（触屏点一下）出提示框，里面那颗「跳转」
-    // 在浏览器页面里该跟正文里的文件链接一样——左边那一列自己开出来、停在文件第一行。
+    // 在浏览器页面里该跟正文里的文件链接一样——弹窗里打开它、停在文件第一行（不碰左边那一列）。
     await page.cdp.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
     await page.sleep(400);
-    await page.click("#fileSidebarBtn");   // 先收起来：验点「跳转」自己把它开出来
-    await page.sleep(300);
+    await page.eval(`if (document.body.classList.contains("file-open")) { document.getElementById("fileSidebarBtn").click(); } return true;`);
+    await page.sleep(400);
     const jumpClosed = await look("点「跳转」之前 · 面板收着");
     check("点「跳转」之前：左边那一列收着", !jumpClosed.open && !jumpClosed.dock);
 
@@ -1344,10 +1362,11 @@ module.exports = async (page) => {
         jumpBtn.title.indexOf("文件侧边栏") >= 0 && jumpBtn.title.indexOf(JUMP_FILE) >= 0, jumpBtn.title);
     console.log("点「跳转」：" + await clickJumpBtn());
     const jump1 = await waitLook("跳转开的文件上来", (x) => x.rowCount === JUMP_LINES && activeFilePath(x) === JUMP_FILE);
-    check("点工具卡片那颗「跳转」：左边那一列自己开出来", jump1.open && jump1.dock && jump1.panelShown);
+    check("点工具卡片那颗「跳转」：弹窗开出来，左边那一列照旧收着",
+        jump1.fileView && !jump1.open && !jump1.dock, JSON.stringify({ view: jump1.fileView, open: jump1.open }));
     check("文件显示出来、带行号", jump1.rowCount === JUMP_LINES && jump1.firstRow.indexOf("1") >= 0, jump1.firstRow);
-    check("整列开着它（横条写着那个文件的写法）", jump1.fileView
-        && jump1.bodyPages === 1 && jump1.barName === JUMP_FILE, JSON.stringify({ view: jump1.fileView, bar: jump1.barName }));
+    check("弹窗里开着它（横条写着那个文件的写法）", jump1.fileView
+        && jump1.activePages === 1 && jump1.barName === JUMP_FILE, JSON.stringify({ view: jump1.fileView, bar: jump1.barName }));
     check("停在第一行（跟以前交给编辑器打开时一个口径）", jump1.hitNum === "1" && jump1.hitVisible);
     await page.shot("file-26-tool-jump.png");
 
@@ -1495,6 +1514,9 @@ module.exports = async (page) => {
         JSON.stringify({ inCode: dirLinks.inCode, plain: dirLinks.plain }));
     check("英文里的 and/or 不认成路径", dirLinks.andPaths === 0 && dirLinks.text.indexOf("and/or") >= 0);
 
+    // 先把弹窗关掉再量：这一节看的是上格那份清单，弹窗开着的时候量到的都是弹窗里那一块
+    await page.eval(`if (document.body.classList.contains("file-view")) { document.getElementById("fileCloseFile").click(); } return true;`);
+    await page.sleep(400);
     // 先收起这一列再点目录链接：它自己该开出来（跟文件链接一样）
     await page.click("#fileSidebarBtn");
     await page.sleep(300);

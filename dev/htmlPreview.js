@@ -158,6 +158,12 @@ module.exports = async (page) => {
         return "点了";
     `));
     await page.sleep(600);
+    // 点链接只开弹窗、不动左边那一列：这里把它开出来，看看关掉弹窗之后清单照旧列着
+    await page.eval(`
+        if (!document.body.classList.contains("file-open")) { document.getElementById("fileSidebarBtn").click(); }
+        return true;
+    `);
+    await page.sleep(700);
     const backToList = JSON.parse(await page.eval(`
         return JSON.stringify({
             barHidden: document.getElementById("fileBar").hidden,

@@ -1683,12 +1683,48 @@
     flex-direction: column; overflow: hidden;
     background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
   }
-  /* 浮着的那一块（电脑上）：圆角 + 一圈边 + 一点阴影，看得出来是叠在上面的一张纸 */
+  /* 浮着的那一块（电脑上）：圆角 + 一圈边 + 一点阴影，看得出来是叠在上面的一张纸。
+     顶上那条能拖着挪位置（鼠标是「移动」那颗光标），右下角有个角能拖大小（见 chat.js 的
+     wireFileViewerBoxMoves）；手机上那一块铺满整屏，这两样都不出面。 */
   #fileStage.floating {
     border-radius: 8px;
     box-shadow: 0 0 0 1px var(--vscode-panel-border, rgba(128,128,128,0.4)),
       0 8px 28px rgba(0, 0, 0, 0.28);
   }
+  #fileStage.floating #fileBar { cursor: move; }
+  /* 拖着挪 / 拖角改大小的时候：别顺手选中了字，光标也别在那儿闪来闪去 */
+  body.file-box-moving { user-select: none; cursor: move; }
+  body.file-box-moving #fileBar, body.file-box-moving #fileStageGrip { cursor: inherit; }
+  /* 右下角那颗改大小的角：只在浮着的时候露面 */
+  #fileStageGrip { display: none; }
+  #fileStage.floating #fileStageGrip {
+    display: block; position: absolute; right: 0; bottom: 0; z-index: 3;
+    width: 18px; height: 18px; cursor: nwse-resize; touch-action: none;
+  }
+  #fileStage.floating #fileStageGrip::after {
+    content: ""; position: absolute; right: 4px; bottom: 4px; width: 7px; height: 7px;
+    border-right: 2px solid var(--vscode-descriptionForeground, rgba(128,128,128,0.75));
+    border-bottom: 2px solid var(--vscode-descriptionForeground, rgba(128,128,128,0.75));
+    border-radius: 0 0 2px 0; opacity: 0.8;
+  }
+  /* 手机上往下拉收起时浮在顶上那句话（钉着不跟手走，见 chat.js 的 wireFilePullDown） */
+  #filePullHint {
+    position: absolute; top: 34px; left: 0; right: 0; z-index: 2;
+    display: flex; justify-content: center;
+    pointer-events: none;
+    opacity: 0; transition: opacity 120ms ease-out;
+  }
+  body.file-pulling #filePullHint { opacity: 1; }
+  #filePullHint span {
+    padding: 3px 10px; border-radius: 999px;
+    background: rgba(0, 0, 0, 0.62); color: #fff;
+    font-size: calc(var(--vscode-font-size, 13px) - 2px);
+    white-space: nowrap;
+  }
+  #filePullHint span:empty { display: none; }
+  #filePullHint span.armed { background: var(--vscode-focusBorder, #007acc); }
+  /* 松手以后加一道过渡：那一块滑回原处，不是一下跳回去 */
+  body.file-pull-spring #fileStage { transition: transform 200ms ease-out; }
   /* 正文跟这一列的头一样大（写在 #filePanel 上）：这里得自己说一句「跟上面一样」，
      不然 .pk-body 那条 0.9em 会盖上来（那条是给浮层里的清单用的）。 */
   #fileBody { flex: 1 1 auto; min-height: 0; padding: 6px 0 12px; font-size: inherit; position: relative; }
