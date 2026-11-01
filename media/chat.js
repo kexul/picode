@@ -6240,7 +6240,6 @@
   const FILE_SIDEBAR_WIDTH_STORE_KEY = "pichat.fileSidebarWidth";
   /** 长行怎么摆（折起来 / 一行就是一行）：也记在这台设备里（跟收没收起同一个做法）。 */
   const FILE_SIDEBAR_WRAP_STORE_KEY = "pichat.fileSidebarWrap";
-  const FILE_SIDEBAR_HINT = "点消息里的文件链接，这里会显示那个文件。";
   /** 「目录」那一格：标签上就写这两个字，悬停提示给这一层的全路径（见 fileSidebarProjectFullPath）。 */
   const FILE_SIDEBAR_PROJECT_NAME = "文件";
   /** 「改动」那一格：这个会话改了哪些文件、每个改成什么样（标签上就写这两个字）。 */
@@ -6275,7 +6274,6 @@
     // 打开着的东西（一个文件 / 一份 diff）整列显示，见 fileViewing 与 #fileStage。
     diff: { path: "", page: null },
     token: 0,        // 取东西是异步的：换了文件 / 收起之后回来的旧回应就不算数了
-    hintPage: null,  // 会话目录还没认识时那句提示画在哪儿（跟「文件」那一格同一层）
 
   };
   /** 上一条「变了没」的询问还在路上（手机网慢）：这一轮先不发，别越堆越多。 */
@@ -6441,7 +6439,7 @@
    */
   function ensureFilePanes() {
     if (!fileSidebar.root || !fileSidebar.open) { return; }
-    if (!activeSessionCwd()) { showFileNote(FILE_SIDEBAR_HINT); return; }
+    if (!activeSessionCwd()) { return; }   // 会话目录还没认识：等它到了再来（见 sessionList 那段）
     if (!fileSidebar.fileTab) {
       fileSidebar.fileTab = fileSidebarNewTab(FILE_SIDEBAR_PROJECT_PATH, true);
       showFileTab(fileSidebar.fileTab, 0);
@@ -6473,15 +6471,9 @@
     return tab.page;
   }
 
-  /** 一句提示画在哪儿（会话目录还没认识的时候）：「文件」那一格那块地方。 */
-  function fileHintPage() {
-    if (!fileSidebar.dirBody) { return null; }
-    if (!fileSidebar.hintPage) {
-      fileSidebar.hintPage = document.createElement("div");
-      fileSidebar.hintPage.className = "file-page";
-      fileSidebar.dirBody.appendChild(fileSidebar.hintPage);
-    }
-    return fileSidebar.hintPage;
+  /** 「文件」那一格现在该画在哪儿：手头这一格那块正文。 */
+  function filePanePage() {
+    return fileSidebar.fileTab ? fileTabPage(fileSidebar.fileTab) : null;
   }
 
   /** 打开的那一份 diff 那一块（跟文件正文同一个地方：整列那一块；同时只会有其中一个）。 */
@@ -6545,12 +6537,7 @@
     }
   }
 
-  /** 「文件」那一格现在该画在哪儿：手头这一格那块正文；还没摆上就是留一句提示那一块。 */
-  function filePanePage() {
-    return fileSidebar.fileTab ? fileTabPage(fileSidebar.fileTab) : fileHintPage();
-  }
-
-  /** 从那颗返回箭头 / 下拉回来：打开着 diff 就回两格，打开着一个文件就回清单。 */
+  /** 从那颗返回箭头 / 往右划回来：打开着 diff 就回两格，打开着一个文件就回清单。 */
   function backFromFileView() {
     if (fileSidebar.diff.path) { closeDiffView(); return; }
     backToFileList();
@@ -7621,7 +7608,6 @@
     fileSidebar.diff.path = "";
     dropDiffPage();
     syncFileView();
-    showFileNote(FILE_SIDEBAR_HINT);
     ensureFilePanes();   // 开着就换成新会话的目录；收着的那就等打开时再说
   }
 
@@ -7671,38 +7657,37 @@
     });
   }
 
-  // ==================== 下拉回清单（手机上的手势）====================
+  // ==================== 往右划回清单（手机上的手势）====================
   //
-  // 看文件时正文已经滑到最顶上，手指再往下拖：上面那一格（横条 + 正文，即 #fileSheet）
-  // 跟着手指一起往下走，上面一点点露出背后那一层——要回去的那层清单，模糊的（#fileBehind）；
-  // 缝里一行字写着会去哪儿。拖过那条线松手就回到那一层清单（跟横条上那颗 ← 是同一件事，
-  // 见 backToFileList），不到线就滑回去。清单、「改动」那一格不认这个手势
+  // 看文件时手指往右划：上面那一格（横条 + 正文，即 #fileSheet）跟着手指一起往右走，
+  // 左边一点点露出背后那一层——要回去的那层清单（#fileBehind），跟真清单一个样子；
+  // 那一块上头浮着一句话写着会去哪儿。划过那条线松手就回到那一层清单（跟横条上那颗 ← 是同一件事，
+  // 见 backFromFileView），不到线就滑回去。清单、「改动」那一格不认这个手势
   // （它们没有“上一级”）。
   //
-  // 用 touch 事件而不是 pointer：往外一拖，浏览器就拿指针事件去做它自己的手势（滚动、下拉刷新），
+  // 往左那一侧已经有主了：这一列开着的时候横着一划（往左）是把它收回去
+  // （见 wireDrawerCloseSwipe，挂在这一列的根上）；这里只认往右这一侧，两边不打架。
+  //
+  // 用 touch 事件而不是 pointer：往外一划，浏览器就拿指针事件去做它自己的手势（滚动、退回上一页），
   // pointercancel 一来追踪就断了（跟对话区那套横划同一个路子，见 messagesEl 那几段）。
-  // 认成下拉之后每一动都 preventDefault：不然浏览器会去滚、或者弹出它自己的下拉刷新。
-  /** 拉出来多远才算数（这是这一列实际下去的位移；手指要拖得更远，有阻尼）。 */
-  const FILE_PULL_BACK_PX = 110;
-  /** 最多跟到这么远：再往下就不动了，免得把这一列拖出屏幕一大截。 */
-  const FILE_PULL_MAX_PX = 300;
-  /** 阻尼：手指挑 10px，这一列走 8px（“越拉越沉”的手感靠它）。 */
-  const FILE_PULL_DAMPING = 0.8;
-  /** 开始拉之前先让开这么多：一次普通点击 / 手抖不该把这一列挪动。 */
-  const FILE_PULL_SLOP_PX = 8;
-  /** 刚拉出来时背后那一层糊成什么样（px）；越往下拉越清楚，过了那条线就全清楚。 */
-  const FILE_PULL_BLUR_PX = 6;
-  /** 背后那一层一开始多淡；同样越往下拉越实（过了那条线就跟真清单一样不透明）。 */
-  const FILE_PULL_BEHIND_OPACITY = 0.55;
-  /** 正在拉的那一趟（手抬起来 / 被打断就清成 null）。 */
-  let filePull = null;
+  // 认成右划之后每一动都 preventDefault：不然浏览器会去滚、或者退回上一页。
+  /** 划出去多远才算数（这是这一列实际挪出去的位移；手指要划得更远，有阻尼）。 */
+  const FILE_SWIPE_BACK_PX = 110;
+  /** 最多跟到这么远：再往右就不动了，免得把这一列整个划出屏幕（手机上这一列铺满整屏）。 */
+  const FILE_SWIPE_MAX_PX = 240;
+  /** 阻尼：手指划 10px，这一列走 8px（“越划越沉”的手感靠它）。 */
+  const FILE_SWIPE_DAMPING = 0.8;
+  /** 开始划之前先让开这么多：一次普通点击 / 手抖不该把这一列挪动。 */
+  const FILE_SWIPE_SLOP_PX = 8;
+  /** 正在划的那一趟（手抬起来 / 被打断就清成 null）。 */
+  let fileSwipe = null;
 
   /**
-   * 背后那一层：要回去的那层清单，模糊着铺满那一片（#fileBehind）。
-   * 只在真往下拉的时候才去取（后端那份清单有缓存，一般几毫秒就回来，拉到底之前就铺好了）；
-   * 同一层已经铺好了就不再要一遍（连着拉几次不用重复取）。取不到就算了：那一层空着也拉得回去。
+   * 背后那一层：要回去的那层清单，铺满那一片（#fileBehind），跟真清单一个样子。
+   * 只在真往右划的时候才去取（后端那份清单有缓存，一般几毫秒就回来，划到底之前就铺好了）；
+   * 同一层已经铺好了就不再要一遍（连着划几次不用重复取）。取不到就算了：那一层空着也回得去。
    */
-  function fillFilePullBehind() {
+  function fillFileSwipeBehind() {
     const behind = fileSidebar.behind;
     const tab = fileSidebar.fileTab;
     if (!behind || !tab) { return; }
@@ -7726,35 +7711,27 @@
   }
 
   /**
-   * 接上“往下拉就回清单”那个手势（只在看一个文件时算，看的是横条露不露）。
-   * 正文要么已经滚到最上头，要么根本没得滚（图、一句提示）。
+   * 接上“往右划就回清单”那个手势（只在看一个文件时算，看的是横条露不露）。
+   * 正文可以竖着滚（那是普通滚动），但只要不是横着已经滚出去一段（长行不折行时
+   * 那一下是人家自己滚回左边），就往右划算数。
    */
-  function wireFilePullBack() {
+  function wireFileSwipeBack() {
     const body = fileSidebar.body;
     const sheet = fileSidebar.sheet;
-    const hint = fileSidebar.pullHint;
+    const hint = fileSidebar.pullHintText;
     if (!body || !sheet || !hint) { return; }
     let springTimer = 0;
 
-    /** 按手指现在的位置摆：那一条横条 + 正文这一块下去多少（背后就露出多少）、那句话写到哪一句。 */
+    /** 按手指现在的位置摆：那一条横条 + 正文这一块往右挪多少（左边就露出多少）、那句话写到哪一句。 */
     const paint = (p) => {
-      const distance = Math.min(FILE_PULL_MAX_PX, Math.round(p.dy * FILE_PULL_DAMPING));
+      const distance = Math.min(FILE_SWIPE_MAX_PX, Math.round(p.dx * FILE_SWIPE_DAMPING));
       p.distance = distance;
-      sheet.style.transform = distance > 0 ? "translateY(" + distance + "px)" : "";
-      // 那句提示那条跟着长高：那一块下去多少，它就有多高（正好落在那道缝里，不挡正文）
-      hint.style.height = distance + "px";
-      // 背后那层清单：拉得越多越清楚（糊不糊、淡不淡都跟着走），过了那条线就全清楚、全实
-      // （意思是“松手就到这儿了”）；松手没到线的话它跟着一起糊回去、藏起来。
-      const progress = Math.min(1, distance / FILE_PULL_BACK_PX);
-      const behind = fileSidebar.behind;
-      if (behind) {
-        behind.style.filter = "blur(" + (FILE_PULL_BLUR_PX * (1 - progress)).toFixed(1) + "px)";
-        behind.style.opacity = (FILE_PULL_BEHIND_OPACITY + (1 - FILE_PULL_BEHIND_OPACITY) * progress).toFixed(2);
-      }
-      const armed = distance >= FILE_PULL_BACK_PX;
+      sheet.style.transform = distance > 0 ? "translateX(" + distance + "px)" : "";
+      // 背后那层清单不用跟着变样子：它本来就长得跟真清单一样，划开多少就看见多少
+      const armed = distance >= FILE_SWIPE_BACK_PX;
       if (armed !== p.armed) {
         p.armed = armed;
-        hint.textContent = armed ? "松手，回清单" : "继续往下拉，回清单";
+        hint.textContent = armed ? "松手，回清单" : "往右划，回清单";
         hint.classList.toggle("armed", armed);
       }
     };
@@ -7763,73 +7740,78 @@
     const release = (p, animate) => {
       clearTimeout(springTimer);
       sheet.style.transform = "";
-      if (fileSidebar.behind) { fileSidebar.behind.style.filter = ""; fileSidebar.behind.style.opacity = ""; }
-      hint.style.height = "0px";
-      hint.textContent = "";
+      document.body.classList.remove("file-pulling");   // 那句话跟着淡下去（见 chat.css）
+      p.armed = null;
       hint.classList.remove("armed");
       if (!animate) {
-        document.body.classList.remove("file-pulling");
-        hint.style.height = "";
+        hint.textContent = "";
         return;
       }
-      // 加那道过渡只要一瞬间：下一趟拉的时候得立刻跟手
+      // 加那道过渡只要一瞬间：下一趟划的时候得立刻跟手
       document.body.classList.add("file-pull-spring");
       springTimer = setTimeout(() => {
-        document.body.classList.remove("file-pull-spring", "file-pulling");
-        hint.style.height = "";
+        document.body.classList.remove("file-pull-spring");
+        hint.textContent = "";
       }, 240);
     };
 
     body.addEventListener("touchstart", (e) => {
-      if (filePull || e.touches.length !== 1) { return; }
+      if (fileSwipe || e.touches.length !== 1) { return; }
       if (!fileSidebar.bar || fileSidebar.bar.hidden) { return; }   // 不是在看一个文件
-      if (body.scrollTop > 0) { return; }                            // 正文不在最上头：这一下是正常滚动
+      if (body.scrollLeft > 0) { return; }                           // 长行已经横着滚出去一段：这一下是那一块自己滚回去
       if (swipeOnControl(e.target)) { return; }                      // 按在按钮 / 链接 / 图上：不动
       clearTimeout(springTimer);
       document.body.classList.remove("file-pull-spring");
-      filePull = {
-        finger: e.touches[0].identifier, y: e.touches[0].clientY,
-        // armed 先留空：第一次摆的时候那句提示才写得上去（想成 false 就永远不再写了）
-        dy: 0, distance: 0, armed: null, pulling: false,
+      fileSwipe = {
+        finger: e.touches[0].identifier, x: e.touches[0].clientX,
+        // armed 先留空：第一次摆的时候那句话才写得上去（想成 false 就永远不再写了）
+        dx: 0, distance: 0, armed: null, swiping: false,
       };
     }, { passive: true });
 
     body.addEventListener("touchmove", (e) => {
-      const p = filePull;
+      const p = fileSwipe;
       if (!p) { return; }
       const t = e.touches.length === 1 ? e.touches[0] : null;
       if (!t || t.identifier !== p.finger) {
         // 又上来一根手指 / 换了手指：这一趟不算
-        filePull = null;
-        if (p.pulling) { release(p, true); }
+        fileSwipe = null;
+        if (p.swiping) { release(p, true); }
         return;
       }
+      const dx = t.clientX - p.x;
       const dy = t.clientY - p.y;
-      if (dy <= 0) {
-        // 往上 / 没动：这不是下拉，交回给滚动（已经拉出来的一半收回去）
-        if (p.pulling) { p.pulling = false; p.dy = 0; release(p, true); }
-        return;
-      }
-      if (!p.pulling) {
-        if (dy < FILE_PULL_SLOP_PX) { return; }
-        p.pulling = true;
-        // 背后那一层现在就去取：后端那份清单有缓存，一般几毫秒就回来，拉到底之前就铺好了
-        fillFilePullBehind();
+      if (!p.swiping) {
+        if (Math.abs(dy) > SWIPE_CANCEL_PX && Math.abs(dy) > Math.abs(dx)) {
+          // 竖着划：那是滚正文，这一趟不接（已经划出来的一半收回去）
+          fileSwipe = null;
+          if (p.distance > 0) { release(p, true); }
+          return;
+        }
+        if (dx <= -FILE_SWIPE_SLOP_PX) {
+          // 往左：那是把这一列收回去（见 wireDrawerCloseSwipe），不归这里管
+          fileSwipe = null;
+          return;
+        }
+        if (dx < FILE_SWIPE_SLOP_PX || dx <= Math.abs(dy)) { return; }
+        p.swiping = true;
+        // 背后那一层现在就去取：后端那份清单有缓存，一般几毫秒就回来，划到底之前就铺好了
+        fillFileSwipeBehind();
       }
       if (e.cancelable) { e.preventDefault(); }
       document.body.classList.add("file-pulling");
-      p.dy = dy;
+      p.dx = Math.max(0, dx);
       paint(p);
     }, { passive: false });
 
     const finish = (e, cancelled) => {
-      const p = filePull;
+      const p = fileSwipe;
       if (!p) { return; }
       const t = e.changedTouches && e.changedTouches[0];
       if (t && t.identifier !== p.finger) { return; }
-      filePull = null;
-      if (!p.pulling) { return; }
-      const goBack = !cancelled && p.distance >= FILE_PULL_BACK_PX;
+      fileSwipe = null;
+      if (!p.swiping) { return; }
+      const goBack = !cancelled && p.distance >= FILE_SWIPE_BACK_PX;
       // 真回去的那一趟：这一列当场滑回原处（那里摆的就是清单），不演回弹——再滑一下只会
       // 让那句话盖在清单前几行上。不回去的那趟才滑回去。
       release(p, !goBack);
@@ -7847,10 +7829,10 @@
     // 这一列跟右边那列「项目与会话」一个摆法：最上面一行是标题（文件与改动），
     // 底下上下两格——上格「文件」（列目录 / 看一个文件）、下格「改动」（这个会话改过哪些文件），
     // 两格同时露着、各滚各的：上格吃剩下的地方，下格按内容占高、最多 45%（见 chat.css 的 #filePanes）。
-    // 上格里面还是那三块，为的是“下拉回清单”那个手势（见 wireFilePullBack）：
-    //   #fileStage  看文件时拉着往下走的就是这一片里的 #fileSheet
-    //               （写着文件路径的那条横条 + 正文），#fileBehind 是它背后那层模糊的清单；
-    //   #filePullHint 缝里那行提示词：钉在最上头不跟手走，缝长多高它多高。
+    // 上格里面还是那三块，为的是“往右划回清单”那个手势（见 wireFileSwipeBack）：
+    //   #fileStage  看文件时跟着手指往右走的就是这一片里的 #fileSheet
+    //               （写着文件路径的那条横条 + 正文），#fileBehind 是它背后那层清单；
+    //   #filePullHint 划的时候浮在上面那句话（钉着不跟手走，里面的 span 是个小药丸形的底）。
     root.innerHTML =
       '<div id="filePanel" class="pk-panel">' +
         '<div id="fileHeader" class="pk-header">' +
@@ -7883,7 +7865,7 @@
               '<div id="fileBody" class="pk-body"></div>' +
               '<button id="fileWrap" type="button" aria-label="折行开关" aria-pressed="false">' + ICONS.wrap + '</button>' +
             '</div>' +
-            '<div id="filePullHint"></div>' +
+            '<div id="filePullHint"><span></span></div>' +
         '</div>' +
       '</div>' +
       // 拖宽度的那条缝：摆在面板外面（面板自己 overflow: hidden，摆在里面就被它裁掉了）
@@ -7901,6 +7883,7 @@
     fileSidebar.sheet = root.querySelector("#fileSheet");
     fileSidebar.behind = root.querySelector("#fileBehind");
     fileSidebar.pullHint = root.querySelector("#filePullHint");
+    fileSidebar.pullHintText = root.querySelector("#filePullHint span");
     fileSidebar.open = readFileSidebarWanted();
     fileSidebar.wrap = readFileSidebarWrapWanted();
     fileSidebar.width = readFileSidebarWidthWanted();
@@ -7910,7 +7893,7 @@
     fileSidebar.closeFile = root.querySelector("#fileCloseFile");
     fileSidebar.closeFile.addEventListener("click", () => backFromFileView());
     wireFileSidebarResize(fileSidebar.resize);
-    wireFilePullBack();
+    wireFileSwipeBack();
     root.querySelector("#fileClose").addEventListener("click", () => setFileSidebarOpen(false));
     root.querySelector("#fileSearchBtn").addEventListener("click", () => openFileSearch());
     root.querySelector("#fileWrap").addEventListener("click", toggleFileSidebarWrap);
