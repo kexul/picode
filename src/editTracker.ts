@@ -299,41 +299,6 @@ export class EditTracker {
         return info && info.diff ? info.diff : undefined;
     }
 
-    /**
-     * 把一个文件整份写回这个会话第一次改它之前的样子。
-     * 界面那边已经问过一遍了（「改动」那一格里的「回滚」要连点两下才走到这儿，见 chat.js 的
-     * askRevertChange），所以这里不再往消息流里塞确认卡片。
-     */
-    public async revertFileChanges(relPath: string): Promise<void> {
-        const abs = this.changeAbsOf(relPath);
-        const before = abs === undefined ? undefined : this.fileBaselines.get(abs);
-        if (abs === undefined || before === undefined) {
-            this.host.post({ type: "systemError", text: "无法回滚：缺失修改前的快照。" });
-            return;
-        }
-        const label = this.host.relativeTo(this.host.getCwd(), abs);
-        let current: string | undefined;
-        try {
-            current = fs.readFileSync(abs, "utf8");
-        } catch {
-            current = undefined;   // 文件被删了：写回去就是恢复它
-        }
-        if (current === before) {
-            this.host.post({ type: "system", text: `无需回滚：${label} 已是修改前的内容。` });
-            this.host.post({ type: "changesChanged" });
-            return;
-        }
-        try {
-            fs.writeFileSync(abs, before, "utf8");
-        } catch (e: any) {
-            this.host.post({ type: "systemError", text: `回滚失败: ${e.message}` });
-            return;
-        }
-        this.changeCache.delete(abs);
-        this.host.post({ type: "system", text: `已回滚: ${label}` });
-        this.host.post({ type: "changesChanged" });
-    }
-
     /** 界面报的是相对写法（跟清单里那一行一样）：按它找回这个文件的绝对路径。 */
     private changeAbsOf(relPath: string): string | undefined {
         for (const abs of this.fileBaselines.keys()) {

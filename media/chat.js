@@ -6599,7 +6599,6 @@
     if (!fileSidebar.diff.path) { return; }
     fileSidebar.diff.path = "";
     dropDiffPage();
-    cancelChangeRevert();
     syncFileView();
     if (fileSidebar.changeTab) { fetchChanges(fileSidebar.changeTab); }
     // 上面那格的清单刚才给 diff 让过位（见 openDiffInSidebar）：重新列一次
@@ -7199,7 +7198,7 @@
 
   // ==================== 「改动」那一格：这个会话改过哪些文件 ====================
   // 这个会话改过的东西都在这一格看：一行一个文件（本会话第一次改它之前 → 现在磁盘上的），
-  // 点一行展开这一块的 diff，块头右边那颗「回滚」把这一个文件整份撤回去。
+  // 点一行展开这一块的 diff。
   // 数据全在后端会话的内存里，刷新页面重问一次就有（插件重启 / 会话关掉就没了，
   // 见 src/editTracker.ts 的 fileBaselines）。
 
@@ -7259,7 +7258,6 @@
     const page = fileTabPage(tab);
     const pane = fileSidebar.changeBody;
     if (!page || !pane) { return; }
-    cancelChangeRevert();   // 重画就不是刚才那一行了：正等第二下的那一下作废
     const top = pane.scrollTop;
     page.innerHTML = "";
     if (tab.changes.length === 0) {
@@ -7276,54 +7274,15 @@
       tab.scrollTop = top;
       pane.scrollTop = top;
     }
-    // 正看着的那份 diff 已经不在这份清单里了（刚回滚掉 / 改回去了）：退回上下两格
+    // 正看着的那份 diff 已经不在这份清单里了（内容改回原样了）：退回上下两格
     const openPath = fileSidebar.diff.path;
     if (openPath && !tab.changes.some((it) => it && it.path === openPath)) { closeDiffView(); }
   }
 
-  const CHANGE_REVERT_TEXT = "回滚";
-  const CHANGE_REVERT_TITLE = "把这个文件撤回到这个会话第一次改它之前（整份，不是只撤一次调用）";
   /**
-   * 「改动」清单里点过「回滚」、正等第二下确认的那一个文件：再点一下才真回滚
-   *（跟关会话那颗叉一个规矩：第一下只把按钮换成确认的样子，几秒不动就自己收回去）。
-   */
-  let changeRevertPending = null;   // { path, btn, timer }
-
-  /** 把「等第二下确认」的那一颗收回去（超时、这一格重画都走它）：只抹状态，不碰清单。 */
-  function cancelChangeRevert() {
-    if (!changeRevertPending) { return; }
-    const { btn, timer } = changeRevertPending;
-    changeRevertPending = null;
-    if (timer) { clearTimeout(timer); }
-    if (btn && btn.isConnected) {
-      btn.classList.remove("confirm");
-      btn.textContent = CHANGE_REVERT_TEXT;
-      btn.title = CHANGE_REVERT_TITLE;
-    }
-  }
-
-  /**
-   * 点「回滚」：第一下只把这一颗按钮换成确认的样子（几秒后自己收回），再点一下才真回滚——
-   * 不再往消息流里塞一张确认卡片（那儿会挡住正在看的消息）。
-   */
-  function askRevertChange(path, btn) {
-    if (changeRevertPending && changeRevertPending.path === path && changeRevertPending.btn === btn) {
-      cancelChangeRevert();
-      vscode.postMessage({ type: "revertFileChanges", sessionId: activeId, path });
-      return;
-    }
-    cancelChangeRevert();
-    btn.classList.add("confirm");
-    btn.textContent = "确定回滚";
-    btn.title = "再点一下就撤回去（几秒不动就取消）";
-    const timer = setTimeout(cancelChangeRevert, 4000);
-    changeRevertPending = { path, btn, timer };
-  }
-
-  /**
-   * 清单里的一行：相对写法 + 多了几行少了几行（删掉的写「已删除」）+「回滚」。
+   * 清单里的一行：相对写法 + 多了几行少了几行（删掉的写「已删除」）。
    * 点这一行就把这个文件的 diff 打开（整列都是它，跟看一个文件一样）；
-   * 太大的文件后端不比 diff，那一行点不开，只剩「回滚」。
+   * 太大的文件后端不比 diff，那一行点不开。
    */
   function changeRow(item) {
     const row = document.createElement("div");
@@ -7360,16 +7319,6 @@
       counts.appendChild(del);
     }
     row.appendChild(counts);
-    const revert = document.createElement("button");
-    revert.type = "button";
-    revert.className = "change-revert";
-    revert.textContent = CHANGE_REVERT_TEXT;
-    revert.title = CHANGE_REVERT_TITLE;
-    revert.addEventListener("click", (e) => {
-      e.stopPropagation();   // 别顺带把这一份 diff 打开
-      askRevertChange(item.path, revert);
-    });
-    row.appendChild(revert);
     if (!item.tooBig) { row.addEventListener("click", () => openDiffInSidebar(item)); }
     return row;
   }

@@ -1228,11 +1228,6 @@ export class SessionRuntime {
         return this.edits.changeDiff(relPath);
     }
 
-    /** 把一个文件整份回到这个会话第一次改它之前的样子。 */
-    public async revertFileChanges(relPath: string): Promise<void> {
-        return this.edits.revertFileChanges(relPath);
-    }
-
     // ---- 会话加载 ----
     public async loadSession(file: string): Promise<void> {
         if (!this.client || !this.client.isRunning()) {

@@ -18,10 +18,10 @@
  *      既有删掉的那行、也有加上的那行（颜色类是 del / add）；点返回箭头回到上下两格；
  *   5. 刷新页面：清单还在（数据在后端会话的内存里，不跟着页面走）——这正是“刷新浏览器不丢”；
  *   6. 把磁盘上那个文件删了以后再问一次：那一行标「已删除」，点开仍看得到整份都是删掉的；
- *   7. 点「回滚」不往消息流里塞确认卡片：那颗按钮先变红、字换成「确定回滚」，再点一下
- *      才真写回去（几秒不动就自己收回，跟关会话那颗叉一个规矩）；写回去之后那一行
- *      也从清单里消失（清单空了就回到那句提示）；
- *   8. 模型新写一个文件（write 那条路）：清单里那一行是 +3 −0，点开三行都是新加的。
+ *   7. 那一行只有三角、写法、增删数：没有「回滚」那颗按钮（这一格只看不改）；
+ *      把文件照原样写回去以后，那一行从清单里消失（清单空了就回到那句提示）；
+ *   8. 模型新写一个文件（write 那条路）：清单里那一行是 +3 −0，点开三行都是新加的；
+ *   9. 切到别的会话再切回来：还停在该才那份 diff 上（每个会话各记各的）。
  *
  * 造的话说在前头：脚本自己动 dev/.scratch 里的文件（那个目录不进版本库，随便造）。
  */
@@ -35,6 +35,8 @@ const SCRIPT_FILE = "说明.txt";
 const NEW_FILE = "新文件.txt";
 /** 这一份文件开局那一段（跟 dev/harness.js 铺的那一份一样）：剧本要按原文换掉“调试”两个字。 */
 const WELCOME_LINE = "这是 Pi Chat 插件的调试用工作目录（dev/.scratch）。";
+/** 说明.txt 本来的样子（假模型改的就是它；把这份写回去，那一行就从清单里消失）。 */
+const SCRIPT_BASE = WELCOME_LINE + "\n调试时起的会话就跑在这里，随便改，它不进版本库，也不会碰到插件自己的代码。\n";
 
 let failures = 0;
 
@@ -90,7 +92,6 @@ function rowsNow(page) {
         return JSON.stringify(Array.from(pane.querySelectorAll(".change-head")).map((el) => ({
             path: el.getAttribute("data-path"),
             counts: ((el.querySelector(".change-counts") || {}).textContent || "").trim(),
-            revert: ((el.querySelector(".change-revert") || {}).textContent || "").trim(),
             arrow: !!el.querySelector(".change-arrow"),
             noDiff: el.classList.contains("no-diff"),
             diffLines: el.querySelectorAll(".diff-line").length,
@@ -166,7 +167,7 @@ async function reopenSidebar(page) {
     await page.sleep(700);
 }
 
-/** 点「改动」清单里某个文件那一行（点路径那一截，别落在回滚那颗按钮上）。 */
+/** 点「改动」清单里某个文件那一行（点写法那一截）。 */
 function clickRow(page, file) {
     return page.eval(`
         const row = Array.from(document.querySelectorAll("#changePane .change-head"))
@@ -216,8 +217,7 @@ module.exports = async (page) => {
 
     // ---- 3. 让假模型改一下（老剧本第 4 步真改 说明.txt）----
     // 先把那个文件铺成剧本里认的那一句：假模型改的就是这一处（上一次跑完留下的样子不算数）
-    fs.writeFileSync(path.join(SCRATCH_DIR, SCRIPT_FILE),
-        WELCOME_LINE + "\n调试时起的会话就跑在这里，随便改，它不进版本库，也不会碰到插件自己的代码。\n", "utf8");
+    fs.writeFileSync(path.join(SCRATCH_DIR, SCRIPT_FILE), SCRIPT_BASE, "utf8");
     // 「写新文件」那一步新建的那个也要先清掉：上一跑留下来的内容跟剧本一字不差时，那一次
     // write 等于没改（文件本来就是这样），清单里也就不会长出那一行——第二次跑必失败。
     fs.rmSync(path.join(SCRATCH_DIR, NEW_FILE), { force: true });
@@ -311,35 +311,25 @@ module.exports = async (page) => {
     await page.shot("changes-5-deleted.png");
     await clickBack(page);
 
-    // ---- 7. 回滚：那颗按钮自己等第二下，不在消息流里弹确认卡片 ----
-    await page.click("#changePane .change-revert");
-    await page.sleep(300);
-    const firstClick = JSON.parse(await page.eval(`
-        const btn = document.querySelector("#changePane .change-revert");
+    // ---- 7. 这一格只看不改：那一行没有「回滚」那颗按钮 ----
+    const rowShape = JSON.parse(await page.eval(`
+        const row = document.querySelector("#changePane .change-head");
         return JSON.stringify({
-            text: btn ? (btn.textContent || "").trim() : "",
-            confirm: !!btn && btn.classList.contains("confirm"),
-            cards: document.querySelectorAll(".ask-card:not(.done)").length,
+            revert: !!document.querySelector("#changePane .change-revert"),
+            buttons: row ? row.querySelectorAll("button").length : -1,
         });
     `));
-    console.log("点一下「回滚」：" + JSON.stringify(firstClick));
-    check("点一下「回滚」：这颗按钮先变成确认的样子（变红、字换成「确定回滚」）",
-        firstClick.confirm && firstClick.text === "确定回滚", JSON.stringify(firstClick));
-    check("这一下不往消息流里塞确认卡片（消息流里没多出一张）", firstClick.cards === 0,
-        String(firstClick.cards));
-    check("只点一下还没动手（文件仍是删掉的）", !fs.existsSync(path.join(SCRATCH_DIR, SCRIPT_FILE)));
-    await page.shot("changes-6-confirm.png");
-    // 再点一下才真回滚
-    await page.click("#changePane .change-revert");
-    await page.sleep(900);
-    const restored = fs.readFileSync(path.join(SCRATCH_DIR, SCRIPT_FILE), "utf8");
-    check("文件真被写回去了（连删掉的那个也回来了）", restored.indexOf("假模型改的") < 0 && restored.length > 0,
-        JSON.stringify(restored.slice(0, 40)));
-    rows = JSON.parse(await rowsNow(page));
-    check("清单空了（那一行没了）", rows.length === 0, JSON.stringify(rows));
+    check("那一行里没有「回滚」按钮（这一格只看不改）",
+        rowShape.revert === false && rowShape.buttons === 0, JSON.stringify(rowShape));
+
+    // 把文件照原样写回去（回到本会话第一次改它之前）：这一行就从清单里消失，回到那句提示
+    fs.writeFileSync(path.join(SCRATCH_DIR, SCRIPT_FILE), SCRIPT_BASE, "utf8");
+    await reopenSidebar(page);
+    rows = await waitFor(page, "清单空了", rowsNow, (x) => x.length === 0);
+    check("文件改了回原样：那一行从清单里消失", rows.length === 0, JSON.stringify(rows));
     const backToHint = await changeNote(page);
     check("清单空了就回到那句提示", backToHint === "这个会话还没改过文件。", backToHint);
-    await page.shot("changes-7-reverted.png");
+    await page.shot("changes-6-empty-again.png");
 
     // ---- 8. 新写一个文件：整份都是新加的行（write 那条路）----
     await page.send("写新文件");

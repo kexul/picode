@@ -1745,7 +1745,7 @@
   .file-md { padding: 2px 14px 6px; }
   .file-note { padding: 12px 14px; line-height: 1.6; opacity: 0.75; }
   /* 「改动」那一格（见 chat.js 的 changeRow）：一行一个文件——左边一颗三角、中间相对写法、
-     右边多了几行少了几行与「回滚」；点这一行就把那份 diff 整列打开（跟看一个文件一样）。 */
+     右边多了几行少了几行；点这一行就把那份 diff 整列打开（跟看一个文件一样）。 */
   .change-head {
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
     padding: 4px 10px 4px 8px; cursor: pointer; user-select: none;
@@ -1776,21 +1776,6 @@
   .change-add { color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
   .change-del { color: var(--vscode-gitDecoration-deletedResourceForeground, #ad0707); }
   .change-flag { font-family: var(--vscode-font-family); opacity: 0.9; }
-  .change-revert {
-    flex: 0 0 auto; padding: 1px 8px; font-size: 0.88em; cursor: pointer;
-    background: none; color: var(--vscode-foreground); opacity: 0.75;
-    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); border-radius: 9px;
-    font-family: var(--vscode-font-family);
-  }
-  .change-revert:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
-  /* 点过一下、正等第二下确认的那颗（跟关会话那颗叉一个规矩）：整颗变红，字换成「确定回滚」 */
-  .change-revert.confirm {
-    opacity: 1;
-    color: var(--vscode-charts-red, #f14c4c);
-    border-color: var(--vscode-charts-red, #f14c4c);
-    background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 14%, transparent);
-  }
-  .change-revert.confirm:hover { background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 22%, transparent); }
   /* 整列看一份 diff 时那一块：不自己再滚一道（#fileBody 本来就在滚），字号跟正文一起；
      长行一律折起来——这里读的是「改了什么」，左右拖着看半句话没有意义
      （文件正文那边才按角上那颗折行开关走） */
