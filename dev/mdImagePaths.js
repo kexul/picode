@@ -113,7 +113,7 @@ module.exports = async (page) => {
                     "&path=" + encodeURIComponent(p);
                 const loose = (p, extra) => q(p, "&anywhere=1" + (extra || ""));
                 const image = await fetch(loose(${JSON.stringify(slashes(outsideFile))}), { cache: "no-store" });
-                const notImage = await fetch(loose(${JSON.stringify(slashes(path.join(cwd, "说明.txt")))}));
+                const notImage = await fetch(loose(${JSON.stringify(slashes(path.join(cwd, "说明.md")))}));
                 const download = await fetch(loose(${JSON.stringify(slashes(outsideFile))}, "&download=1"));
                 const strict = await fetch(q(${JSON.stringify(slashes(outsideFile))}));
                 return JSON.stringify({

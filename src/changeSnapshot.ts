@@ -10,10 +10,12 @@
  *     快照几乎不占磁盘；会话目录只是大仓库里的一层时按普通目录处理（不去碰上一层的东西）。
  *   - 不是仓库时只能自己存一份，所以先估个大小，太大就不拍（那一格退回只看 edit / write，
  *     见 EditTracker），免得一个巨大的目录把盘和内存吃掉。
- *   - 「哪些文件算数」只收「源码 / 文档 / 配置」那几类（白名单见下面 CODE_EXTS）：日志、
- *     会话记录（`.jsonl`）、补丁、图片这些不进快照 —— 它们是成本大头，也没有 diff 可看。
- *     白名单之外的东西仍然由 edit / write 那套管（它们本来就精确记着）。工作区自己的
- *     `.gitignore` 在影子仓库里照样生效（非仓库目录也认）。
+ *   - 「哪些文件算数」分两条路：
+ *       · 会话目录本身就是 git 仓库的根：跟 git 走（工作区里 `git` 认为变了的都算，
+ *         `.gitignore` 忽略的除外），不另筛类型 —— 这儿的仓库只是借它的对象库，不多存东西；
+ *       · 不是仓库（要真存一份）：只收代码那一类（白名单见下面 CODE_EXTS），
+ *         日志、会话记录（`.jsonl`）、纯文本转储、补丁、图片、超过 2 MB 的都不进 ——
+ *         它们是成本大头，也画不出 diff。名单之外的东西仍然由 edit / write 那套管。
  *
  * 口径统一是「会话开始 → 现在」：清单里的行数和点开的 diff 都从这一份快照算出来，不会打架。
  */
@@ -35,7 +37,7 @@ export interface SnapshotChange {
     tooBig: boolean;
 }
 
-/** 单个文件愿意比的文本上限（跟 EditTracker 那条线一样）。 */
+/** 单个文件愿意比的文本上限：超过它的既不进快照，也不算行数（本来也画不出 diff）。 */
 const MAX_CHANGE_BYTES = 2 * 1024 * 1024;
 /** 一份 diff 的行数上限：再多就不往页面上拖了（那一行标成「看不了」）。 */
 const MAX_DIFF_LINES = 20_000;
@@ -43,8 +45,6 @@ const MAX_DIFF_LINES = 20_000;
 const MAX_SNAPSHOT_FILES = 20_000;
 /** 拍快照时最多认多少字节：超了就不拍。 */
 const MAX_SNAPSHOT_BYTES = 200 * 1024 * 1024;
-/** 单个文件超过这个大小就不进快照（这种文件多半是二进制，存一份太亏；它自己照旧由 edit / write 管）。 */
-const MAX_SINGLE_FILE_BYTES = 20 * 1024 * 1024;
 /** 影子仓库最多留多少个（超了删最老的）：会话正常关掉会自己删，留下的都是异常退出那种。 */
 const SHADOW_MAX_DIRS = 32;
 /** 影子仓库搁多久算「没人要了」（毫秒）：异常退出留下的，过了这个时间下次启动顺手删掉。 */
@@ -54,17 +54,17 @@ const SNAPSHOT_TIMEOUT_MS = 60_000;
 const DIFF_TIMEOUT_MS = 20_000;
 
 /**
- * 白名单：这一格只收这几类文件（「源码 / 文档 / 配置」）。要加就往这儿加。
- *
- * 为什么按白名单而不是黑名单：快照的成本按“要存多少内容”算，而目录里真正肥的是
- * 日志、会话记录（`.jsonl`）、补丁、图片这些（实测一个调试目录里 100 MB 里有 90 MB 是它们，
- * 源码才 4 MB）；它们本来也没有 diff 可看。代价是：名单外的东西看不见——所以这个名单
- * 要跟着语言 / 项目长，觉得少了什么就往下面那两行里添一个。
+ * 白名单：会话目录不是仓库时，只收这几类（「代码 ＋ 配置 ＋ 文档」）。要加就往这儿加。
+ * 为什么只在“不是仓库”时用：那种目录要真存一份内容，而里面真正肥的是日志、会话记录
+ * （`.jsonl`）、纯文本转储、补丁、图片这些（实测一个调试目录里 100 MB 有 90 MB 是它们，
+ * 代码才几 MB）；是仓库时对象库都是现成的，不必筛，跟 git 走就行。
+ * 代价：名单外的东西（`bash` 改的）看不见——所以这个名单要跟着语言 / 项目长。
+ * 不收 `.txt`：实际项目里的纯文本转储、日志落盘多数是这个后缀，代价大于收益。
  */
 const CODE_EXTS = [
     // 前端 / 脚本
     "ts", "tsx", "js", "jsx", "mjs", "cjs", "vue", "svelte", "astro",
-    "css", "scss", "sass", "less", "styl", "html", "htm", "md", "mdx", "rst", "txt", "adoc",
+    "css", "scss", "sass", "less", "styl", "html", "htm", "md", "mdx", "rst", "adoc",
     // 配置 / 数据
     "json", "jsonc", "json5", "yml", "yaml", "toml", "ini", "cfg", "conf", "properties",
     "xml", "plist", "env", "sql", "graphql", "gql", "proto", "thrift", "csv",
@@ -76,7 +76,7 @@ const CODE_EXTS = [
     "jl", "r", "zig", "v", "nim", "sol", "move",
     // 构建 / 基础设施 / 命令
     "sh", "bash", "zsh", "fish", "ps1", "psm1", "bat", "cmd", "awk", "sed", "el", "vim",
-    "cmake", "mk", "tf", "tfvars", "hcl", "nix", "tex", "bib", "patch",
+    "cmake", "mk", "tf", "tfvars", "hcl", "nix", "tex", "bib",
 ];
 
 /** 没有扩展名、但名字固定的那几个（Makefile、LICENSE 这些也算文档 / 配置）。 */
@@ -213,7 +213,7 @@ async function prepareSnapshot(gitDir: string, workTree: string, limit: boolean)
         let st: fs.Stats;
         try { st = fs.statSync(path.resolve(workTree, rel)); } catch { continue; }
         if (!st.isFile()) { continue; }
-        if (st.size > MAX_SINGLE_FILE_BYTES) { oversized.push(rel); continue; }
+        if (st.size > MAX_CHANGE_BYTES) { oversized.push(rel); continue; }
         total += st.size;
         if (limit && total > MAX_SNAPSHOT_BYTES) { return false; }
     }
@@ -226,22 +226,33 @@ async function prepareSnapshot(gitDir: string, workTree: string, limit: boolean)
 }
 
 /**
- * 影子仓库的排除名单：先用 `*` 把一切都排除，再把「算代码的那几类」逐个放回来。
+ * 影子仓库的排除名单。
+ *
+ * 不是仓库（要真存一份内容）：先用 `*` 把一切都排除，再把白名单那几类逐个放回来。
  * 不这么写就没法“只收白名单”：gitignore 没有“只收”这种写法，只能先全关再一个个开
  * （放行目录的那一行是让 git 还肯往目录里走，不然它连看都不看就整棵树跳过）。
+ *
+ * 是仓库（只借它的对象库）：不筛类型，跟 git 自己 `.gitignore` 的那套走 ——
+ * 那时候“改了什么”应该由仓库说了算，不该我们另订一套。
  * @param workTree 会话目录（后端自己的文件正好落在里面时要多跳一条，见 ownFilesExclude）
+ * @param whitelist 要不要只收白名单里那几类
  */
-function excludeText(workTree: string): string {
+function excludeText(workTree: string, whitelist: boolean): string {
     const lines = [
         "# 这个目录是自动建的临时快照仓库，可以随时整个删掉。",
-        "# 只收「源码 / 文档 / 配置」这几类（名单见 src/changeSnapshot.ts）；日志、会话记录、",
-        "# 补丁、图片这些不进快照 —— 它们是这一格的成本大头，也没有 diff 可看。",
-        "*",
-        "!*/",
+        whitelist
+            ? "# 只收代码 / 配置 / 文档那几类（名单见 src/changeSnapshot.ts）；日志、会话记录、"
+                + "纯文本转储、补丁、图片这些不进快照 —— 它们是成本大头，也画不出 diff。"
+            : "# 跟 git 自己的 .gitignore 走，这里只补几条依赖 / 缓存目录。",
+        ...(whitelist ? ["*", "!*/"] : []),
         ...SKIP_DIRS,
     ];
     const own = ownFilesExclude(workTree);
     if (own) { lines.push(own); }
+    if (!whitelist) {
+        lines.push("");
+        return lines.join("\n");
+    }
     for (const ext of CODE_EXTS) { lines.push(`!*.${ext}`); }
     for (const name of CODE_NAMES) { lines.push(`!${name}`); }
     lines.push("");
@@ -294,7 +305,7 @@ export class ChangeSnapshot {
             fs.mkdirSync(path.join(gitDir, "info"), { recursive: true });
             const init = await runGit(["init", "--quiet", "--bare", gitDir], { timeoutMs: INIT_TIMEOUT_MS });
             if (!init.ok) { removeDir(gitDir); return undefined; }
-            fs.writeFileSync(path.join(gitDir, "info", "exclude"), excludeText(workTree), "utf8");
+            fs.writeFileSync(path.join(gitDir, "info", "exclude"), excludeText(workTree, !objects), "utf8");
             if (objects) {
                 fs.mkdirSync(path.join(gitDir, "objects", "info"), { recursive: true });
                 fs.writeFileSync(path.join(gitDir, "objects", "info", "alternates"), `${objects}\n`, "utf8");

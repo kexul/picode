@@ -527,7 +527,7 @@ async function runScript(userText) {
     // ---- 「写新文件」：write 工具真建一个文件（验「改动」那一格里整份都是新加的那种）----
     if (/写新文件/.test(userText)) {
         await say("（假模型）我新建一个文件。");
-        await act("write", { path: "新文件.txt", content: NEW_FILE_TEXT }, {
+        await act("write", { path: "新文件.md", content: NEW_FILE_TEXT }, {
             content: [{ type: "text", text: "已写入" }],
             raw: {
                 content: [{ type: "text", text: "已写入" }],
@@ -549,16 +549,16 @@ async function runScript(userText) {
         ],
         raw: { content: [{ type: "text", text: "Read image file [image/png]" }], details: { dims: "10x10" } },
     });
-    const bashText = padTo("示例.js\n示例图片.png\n说明.txt", LONG_TEXT_CHARS);
+    const bashText = padTo("示例.js\n示例图片.png\n说明.md", LONG_TEXT_CHARS);
     await act("bash", { command: "ls" }, {
         content: [{ type: "text", text: bashText }],
         raw: { content: [{ type: "text", text: bashText }], exitCode: 0 },
     });
-    await act("edit", { path: "说明.txt", oldText: "调试", newText: "调试（假模型改的）" }, {
+    await act("edit", { path: "说明.md", oldText: "调试", newText: "调试（假模型改的）" }, {
         content: [{ type: "text", text: "已编辑" }],
         raw: {
             content: [{ type: "text", text: "已编辑" }],
-            details: { diff: "--- 说明.txt\n+++ 说明.txt\n@@ -1 +1 @@\n-这是 Pi Chat 插件的调试用工作目录（dev/.scratch）。\n+这是 Pi Chat 插件的调试用工作目录（dev/.scratch）（假模型改的）。\n" },
+            details: { diff: "--- 说明.md\n+++ 说明.md\n@@ -1 +1 @@\n-这是 Pi Chat 插件的调试用工作目录（dev/.scratch）。\n+这是 Pi Chat 插件的调试用工作目录（dev/.scratch）（假模型改的）。\n" },
         },
     });
     await say(padTo("完事。三个工具都跑过了：read（带图）、bash、edit。", REPLY_LONG_CHARS));
@@ -569,7 +569,7 @@ async function runScript(userText) {
 // 命令分发
 // ---------------------------------------------------------------------------
 
-const SCRIPT_FILE = "说明.txt";
+const SCRIPT_FILE = "说明.md";
 
 /** 剧本里新建那个文件的内容（「写新文件」那一段用）。 */
 const NEW_FILE_TEXT = "第一行\n第二行\n第三行\n";
@@ -578,7 +578,7 @@ const NEW_FILE_TEXT = "第一行\n第二行\n第三行\n";
 function applyToolChange(toolName, args) {
     if (toolName !== "write") { applyFakeEdit(args); return; }
     try {
-        const p = path.resolve(process.cwd(), args.path || "新文件.txt");
+        const p = path.resolve(process.cwd(), args.path || "新文件.md");
         fs.writeFileSync(p, typeof args.content === "string" ? args.content : "", "utf8");
     } catch { /* 写不进去就算了，剧本照演 */ }
 }

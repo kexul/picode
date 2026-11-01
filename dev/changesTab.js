@@ -5,13 +5,13 @@
  *   npm run web:shot -- --fake-pi --script dev/changesTab.js
  *
  * 真后端、真会话、真网页服务、真界面文件，只有模型是假的（假模型那一套老剧本里
- * 第 4 步会真去改 dev/.scratch 里的 说明.txt，后端因此记下这一份改动）。
+ * 第 4 步会真去改 dev/.scratch 里的 说明.md，后端因此记下这一份改动）。
  * 验的是外面看得见的行为：
  *   1. 最上面一行是标题行（写着「文件与改动」，右端是文件搜索那颗放大镜和收起那颗叉），
  *      底下上下两格同时露着：上格「文件」（只有目录清单）、下格「改动」；各滚各的，
  *      下格按内容占高、最多占这一列的 45%；标签条那一套（#fileTabs / .file-tab）整个没了；
  *   2. 一个文件都没改过时，「改动」那一格里只有一句「这个会话还没改过文件。」；
- *   3. 假模型改完 说明.txt 之后（后端推了一条“改动变了”），这一格自己长出那一行：
+ *   3. 假模型改完 说明.md 之后（后端推了一条“改动变了”），这一格自己长出那一行：
  *      相对写法、+1 −1，行里不展开 diff；
  *   4. 点那一行：整列打开那份 diff（body 上多一个 file-view、上下两格收起来、#fileStage 露出来，
  *      横条左边一颗返回箭头、右边写着这个文件的写法），diff 在 #fileBody 里，
@@ -32,12 +32,12 @@ const { SCRATCH_DIR } = require("./harness.js");
 /** 这一跑自己的干净工作目录：会话开始那一刻里面是什么，「改动」那一格就拿它当基线。 */
 const WORK = path.join(SCRATCH_DIR, "changesWork");
 /** 假模型那一套老剧本改的就是这个文件（见 dev/fakePi.js）。 */
-const SCRIPT_FILE = "说明.txt";
+const SCRIPT_FILE = "说明.md";
 /** 「写新文件」那一段建的那个文件（见 dev/fakePi.js）。 */
-const NEW_FILE = "新文件.txt";
+const NEW_FILE = "新文件.md";
 /** 这一份文件开局那一段（跟 dev/harness.js 铺的那一份一样）：剧本要按原文换掉“调试”两个字。 */
 const WELCOME_LINE = "这是 Pi Chat 插件的调试用工作目录（dev/.scratch）。";
-/** 说明.txt 本来的样子（假模型改的就是它；把这份写回去，那一行就从清单里消失）。 */
+/** 说明.md 本来的样子（假模型改的就是它；把这份写回去，那一行就从清单里消失）。 */
 const SCRIPT_BASE = WELCOME_LINE + "\n调试时起的会话就跑在这里，随便改，它不进版本库，也不会碰到插件自己的代码。\n";
 
 let failures = 0;
@@ -233,13 +233,13 @@ module.exports = async (page) => {
     const emptyNote = await changeNote(page);
     check("没改过文件时说一句", emptyNote === "这个会话还没改过文件。", emptyNote);
 
-    // ---- 3. 让假模型改一下（老剧本第 4 步真改 说明.txt）----
+    // ---- 3. 让假模型改一下（老剧本第 4 步真改 说明.md）----
     await page.send("演示一下");
     await page.waitAnswer("完事。");
     await page.sleep(800);
     let rows = JSON.parse(await rowsNow(page));
     console.log("改完之后：" + JSON.stringify(rows));
-    check("清单里长出 说明.txt", !!(rows[0] && rows[0].path === SCRIPT_FILE));
+    check("清单里长出 说明.md", !!(rows[0] && rows[0].path === SCRIPT_FILE));
     check("右边写着 +1 −1", !!(rows[0] && countsAre(rows[0].counts, 1, 1)), rows[0] && rows[0].counts);
     check("行里不展开 diff（那一行里一行 diff 都没有）", !!(rows[0] && rows[0].diffLines === 0));
     check("这一行点得开（有那颗三角，不是「太大」）", !!(rows[0] && rows[0].arrow && !rows[0].noDiff));

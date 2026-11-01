@@ -3,7 +3,7 @@
  * options —— 两个调试命令（web:dev / web:shot）共用的命令行参数。
  *
  * 动作（--send / --wait / --shot 这些）按写在前面的先做，这样一条命令就能描述一整段操作：
- *   npm run web:shot -- --send "读一下说明.txt" --wait "说明" --shot read.png
+ *   npm run web:shot -- --send "读一下说明.md" --wait "说明" --shot read.png
  */
 
 const OPTION_KEYS = {

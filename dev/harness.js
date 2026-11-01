@@ -71,7 +71,7 @@ async function openSessionIn(page, dir, timeoutMs = 20000) {
 /** 调试会话的工作目录：没有就建一个，顺便放两个小文件，好在界面上试"读文件 / 改文件"这类工具卡片。 */
 function ensureScratchDir(dir) {
     fs.mkdirSync(dir, { recursive: true });
-    const welcome = path.join(dir, "说明.txt");
+    const welcome = path.join(dir, "说明.md");
     if (!fs.existsSync(welcome)) {
         fs.writeFileSync(welcome,
             "这是 Pi Chat 插件的调试用工作目录（dev/.scratch）。\n" +

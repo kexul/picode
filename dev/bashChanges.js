@@ -24,8 +24,8 @@ const { SCRATCH_DIR } = require("./harness.js");
 
 /** 会话开在这儿：干净、小，快照拍得出来。 */
 const WORK = path.join(SCRATCH_DIR, "bashChangesWork");
-const MODIFIED = "说明.txt";
-const CREATED = "命令建的文件.txt";
+const MODIFIED = "说明.md";
+const CREATED = "命令建的文件.md";
 /** 名单之外的一个文件：改了也不该进清单。 */
 const IGNORED = "跑出来的日志.log";
 
