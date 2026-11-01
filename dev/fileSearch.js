@@ -225,31 +225,28 @@ module.exports = async (page) => {
     check("打开以后浮层自己收起来", !(await searchState()).shown);
     await page.shot("search-3-open-gamma.png");
 
-    // 横条上那颗返回：以前是颗叉、钉在右角上，跟上头那颗收起整列的叉上下叠成一列，
-    // 手指一点就点到收起上（手机上尤其容易）。现在它在横条最左边、画成箭头，离那颗叉最远。
+    // 弹窗顶上那颗叉（关掉弹窗）：在它自己那条横条的右端，文件名在左边。
     const barLayout = JSON.parse(await page.eval(`
-        const bar = document.getElementById("fileBar");
+        const bar = document.getElementById("fileBar").getBoundingClientRect();
         const btn = document.getElementById("fileCloseFile").getBoundingClientRect();
-        const cx = btn.left + btn.width / 2;
-        const cy = btn.top + btn.height / 2;
-        const c = document.getElementById("fileClose").getBoundingClientRect();
-        const distance = Math.round(Math.hypot(cx - (c.left + c.width / 2), cy - (c.top + c.height / 2)));
         const name = document.querySelector("#fileBar .file-bar-name").getBoundingClientRect();
+        const stage = document.getElementById("fileStage").getBoundingClientRect();
         return JSON.stringify({
-            inBarLeft: Math.round(btn.left - bar.getBoundingClientRect().left),
-            leftOfName: btn.right <= name.left,
-            distance: distance,
+            atBarRight: Math.round(bar.right - btn.right) <= 8,
+            rightOfName: btn.left >= name.right - 1,
+            stageFull: Math.round(stage.left) === 0 && Math.round(stage.top) === 0
+                && Math.round(stage.width) === window.innerWidth,
         });
     `));
-    check("横条那颗返回在横条最左边（在文件名前面）", barLayout.leftOfName && barLayout.inBarLeft <= 8,
+    check("弹窗顶上那颗叉在那一条的右端（文件名在左边）", barLayout.atBarRight && barLayout.rightOfName,
         JSON.stringify(barLayout));
-    check("它离右上角那颗收起整列的叉远远的（不上下叠成一列）", barLayout.distance >= 100,
-        String(barLayout.distance));
+    check("手机（窄窗）上弹窗铺满整屏：左边那一列整个被它盖住", barLayout.stageFull,
+        JSON.stringify(barLayout));
 
-    console.log("点横条那颗返回：");
+    console.log("点弹窗顶上那颗叉：");
     await page.eval(`document.getElementById("fileCloseFile").click(); return true;`);
     await page.sleep(400);
-    check("这个文件收起不看，回到刚才那一层清单", await page.eval(`
+    check("弹窗关掉、回到刚才那一层清单", await page.eval(`
         return document.getElementById("fileBar").hidden && !!document.querySelector("#dirPane .file-entry");
     `));
 

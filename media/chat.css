@@ -1654,9 +1654,9 @@
   }
   #dirPane::-webkit-scrollbar { width: 8px; }
   #dirPane::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 4px; }
-  /* 打开的样子（一个文件 / 一份 diff）：整列都是它，上下两格收起来 */
+  /* 点开一个文件 / 一份 diff：开一块盖住对话那一块的弹窗（#fileStage），左边那两格照旧露着。
+     弹窗的范围由 chat.js 写在这一格上（常驻时从这一列右边开始、上边让出顶条；其余情形铺满整屏）。 */
   #fileStage { display: none; }
-  body.file-view #filePanes { display: none; }
   body.file-view #fileStage { display: flex; }
   #changePane {
     /* 按内容占高、最多 45%；不许被上面那格挤（flex-shrink: 0）：内容多了在它自己里滚 */
@@ -1673,56 +1673,25 @@
   }
   #changePane::-webkit-scrollbar { width: 8px; }
   #changePane::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 4px; }
+  /* 弹窗那一块：浮在对话上面的一张纸，得是不透明的（底下是消息流）。
+     位置与大小由 chat.js 写在行内样式上（见 syncFileViewerBox）：手机上铺满整屏，
+     电脑上是对话那一块里居中的一块（body 上那颗 .floating 管圆角与阴影）。
+     z-index 压过侧边栏那两层（900 / 1001，手机上那一层铺满整屏），又比文件搜索浮层（1004）低：
+     从这一列头上点放大镜时，那一层要盖在它上面。 */
+  #fileStage {
+    position: fixed; z-index: 1003;
+    flex-direction: column; overflow: hidden;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  }
+  /* 浮着的那一块（电脑上）：圆角 + 一圈边 + 一点阴影，看得出来是叠在上面的一张纸 */
+  #fileStage.floating {
+    border-radius: 8px;
+    box-shadow: 0 0 0 1px var(--vscode-panel-border, rgba(128,128,128,0.4)),
+      0 8px 28px rgba(0, 0, 0, 0.28);
+  }
   /* 正文跟这一列的头一样大（写在 #filePanel 上）：这里得自己说一句「跟上面一样」，
      不然 .pk-body 那条 0.9em 会盖上来（那条是给浮层里的清单用的）。 */
   #fileBody { flex: 1 1 auto; min-height: 0; padding: 6px 0 12px; font-size: inherit; position: relative; }
-  /* 往右划回清单（手势在 chat.js 的 wireFileSwipeBack）：看着文件的时候手指往右划，
-     写着文件路径的那条横条 + 正文这一块（#fileSheet）跟着手指往右走，左边一点点露出那层清单
-     （#fileBehind，长得跟真清单一样）；那一块上头浮着一句话写着会去哪儿。最上面那行标题不动。
-     位移由手指划多远决定（写在行内样式里），这里只管这一片怎么叠。 */
-  #fileStage {
-    /* 打开的样子那一块：整列高（两格这时候收起来了，见上面 body.file-view） */
-    position: relative; flex: 1 1 auto; min-height: 0;
-    flex-direction: column; overflow: hidden;
-  }
-  /* 那一块自己（横条 + 正文）得是不透明的：背后那层清单就在它底下，
-     不透的话清单会从正文里透出来，看着像两份东西叠在一起。只有划出来的那道缝里看得到背后。 */
-  #fileSheet {
-    position: relative; z-index: 1; width: 100%;
-    flex: 1 1 auto; min-height: 0;
-    display: flex; flex-direction: column;
-    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-  }
-  /* 划的时候那一边投一道阴影：看着像一张纸抽出来了，不是整屏一起平移 */
-  body.file-pulling #fileSheet { box-shadow: -8px 0 18px rgba(0, 0, 0, 0.22); }
-  /* 背后那一层：要回去的那层清单，跟真清单一排排长得一样（不给人点，也不滚）。
-     它不跟着手指变样子：划开多少就看见多少。这一层只在左面那道缝里看得见，不跟着往正文里透。 */
-  #fileBehind {
-    display: none; position: absolute; inset: 0; z-index: 0;
-    overflow: hidden; padding: 6px 0;
-    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-    pointer-events: none;
-  }
-  body.file-pulling #fileBehind { display: block; }
-  /* 划的时候那一句话：浮在这一块顶上（不跟手走），划过了那条线就换个颜色（意思是“松手就到这儿了”）。
-     一句话有多宽是定的，缝有多宽都看得全，所以不跟着缝伸缩。 */
-  #filePullHint {
-    position: absolute; top: 8px; left: 0; right: 0; z-index: 2;
-    display: flex; justify-content: center;
-    pointer-events: none;   /* 不能把手指摸到的那一下吃掉 */
-    opacity: 0; transition: opacity 120ms ease-out;
-  }
-  body.file-pulling #filePullHint { opacity: 1; }
-  #filePullHint span {
-    padding: 3px 10px; border-radius: 999px;
-    background: rgba(0, 0, 0, 0.62); color: #fff;
-    font-size: calc(var(--vscode-font-size, 13px) - 2px);
-    white-space: nowrap;
-  }
-  #filePullHint span:empty { display: none; }
-  #filePullHint span.armed { background: var(--vscode-focusBorder, #007acc); }
-  /* 松手以后加一道过渡：那一块滑回原处，不是一下跳回去 */
-  body.file-pull-spring #fileSheet { transition: transform 200ms ease-out; }
   /* 每一格自己那一块正文（见 chat.js 的 fileTabPage）：清单挂在上格 / 下格，打开着的挂在 #fileBody，
      谁也不挪（网页那个 iframe 从文档里挪一次就会重新加载）。 */
   /* 文件正文：一行一格（行号 + 那一行的原文）。默认长行左右滚；角上那颗开关
@@ -1809,32 +1778,15 @@
   /* 看不了但能下载（二进制 / 太大）：那一句说明后面跟着的下载链接（整颗不拆行） */
   .file-download { color: var(--vscode-textLink-foreground, #3794ff); text-decoration: none; white-space: nowrap; }
   .file-download:hover { text-decoration: underline; }
-  /* 折行开关：摆在「文件」那一格的右下方贴角（#fileBody 里，正文自己滚，它跟着滚），不挤横条。
-     默认（没记过）是一行就是一行，这时它是淡的；折行打开时加 .on，带一道强调色的边。 */
-  #fileWrap {
-    position: absolute; right: 8px; bottom: 8px; z-index: 1;
-    display: flex; align-items: center; justify-content: center;
-    width: 24px; height: 24px; padding: 0; cursor: pointer;
-    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); border-radius: 4px;
-    background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #fff));
-    color: var(--vscode-descriptionForeground, inherit); opacity: 0.7;
-  }
-  #fileWrap svg { width: 14px; height: 14px; display: block; }
-  /* 只有真在看一个文件时才露面（清单、「改动」那一格里没有可折的长行，见 chat.js 的 syncFileBar）；
-     刷掉的是 [hidden] 那条 UA 样式：这里写了 display: flex，不动它一句就盖不住 */
-  #fileWrap[hidden] { display: none; }
-  /* 「文件」那一格看文件时，正文上面多一条横条（见 chat.js 的 syncFileBar）：
-     左边一颗返回箭头（回刚才那一层清单），右边写这个文件叫什么（相对会话目录的写法，
-     一行放不下就省略，悬停看全）。它摆在正文外面（#fileBody 才是滚动的那一块），
-     所以往下拖的时候一直看得见。
-     返回摆在最左边、画成箭头，不是叉：它以前钉在右角上，跟上头那颗收起整列的叉正好上下
-     叠成一列（中心相距 28px、水平相差 3px），手指一点就点到收起整列上。 */
+  /* 弹窗顶上那条（见 chat.js 的 syncFileBar）：左边写看的是什么（相对会话目录的写法，
+     一行放不下就省略，悬停看全），右边是折行开关与关掉那颗叉。它摆在正文外面
+     （#fileBody 才是滚动的那一块），所以正文怎么滚它都在。 */
   #fileBar {
     flex: 0 0 auto; box-sizing: border-box;
     display: flex; align-items: center; gap: 6px;
-    min-height: 26px; padding: 2px 12px 2px 4px;
+    min-height: 30px; padding: 2px 8px 2px 12px;
     border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
-    font-size: calc(var(--vscode-font-size, 13px) - 2px);
+    font-size: calc(var(--vscode-font-size, 13px) - 1px);
     color: var(--vscode-descriptionForeground, inherit);
   }
   #fileBar[hidden] { display: none; }
@@ -1842,7 +1794,7 @@
     flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-family: var(--vscode-editor-font-family, monospace);
   }
-  /* 横条左边那颗返回：把手上这个文件收起不看，回到刚才那一层清单 */
+  /* 右边那颗叉：把弹窗关掉（回对话；左边那两格照旧在那儿） */
   #fileCloseFile {
     flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
     width: 22px; height: 22px; padding: 0; cursor: pointer;
@@ -1851,6 +1803,20 @@
   }
   #fileCloseFile svg { width: 14px; height: 14px; display: block; }
   #fileCloseFile:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
+  /* 折行开关：摆在顶上那条里、关掉那颗叉的左边。
+     默认（没记过）是一行就是一行，这时它是淡的；折行打开时加 .on，带一道强调色的边。 */
+  #fileWrap {
+    flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; padding: 0; cursor: pointer;
+    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); border-radius: 4px;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #fff));
+    color: var(--vscode-descriptionForeground, inherit); opacity: 0.7;
+  }
+  #fileWrap svg { width: 14px; height: 14px; display: block; }
+  /* 只有真在看一个文件时才露面（看 diff 时没有这个开关，见 chat.js 的 syncFileBar）；
+     刷掉的是 [hidden] 那条 UA 样式：这里写了 display: flex，不动它一句就盖不住 */
+  #fileWrap[hidden] { display: none; }
   #fileWrap:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
   #fileWrap.on {
     opacity: 1; color: var(--vscode-focusBorder, #007acc); border-color: var(--vscode-focusBorder, #007acc);
@@ -1865,9 +1831,10 @@
      （结果一列往下长，贴顶更像命令面板）。
      它得压过滑入式的文件侧边栏：头上那颗放大镜就在那一层里（手机上那一层还铺满整屏，
      见 body.file-full），浮层要是压在它下面，点了半天看着什么都没发生。所以这里不用
-     浮层惯用的 1000，比那一层（1001）高一档。 */
+     浮层惯用的 1000，比那一层（1001）高一档；看文件的弹窗（1003）也是从这一列头上开的，
+     所以它还要压在弹窗上面。 */
   #fileSearchOverlay {
-    position: fixed; inset: 0; z-index: 1002;
+    position: fixed; inset: 0; z-index: 1004;
     background: rgba(0,0,0,0.45);
     display: flex; align-items: flex-start; justify-content: center;
     padding: 10vh 12px 12px;

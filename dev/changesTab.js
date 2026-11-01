@@ -240,8 +240,8 @@ module.exports = async (page) => {
         view: diff.fileView, bar: diff.barName, lines: diff.lines,
         added: diff.added.length, removed: diff.removed.length,
     }));
-    check("整列打开那份 diff（body 上有 file-view、两格收起来、打开的样子露出来）",
-        diff.fileView && !diff.panesShown && diff.stageShown, JSON.stringify({ view: diff.fileView, panes: diff.panesShown }));
+    check("点那一行：弹窗打开、左边那两格照旧露着",
+        diff.fileView && diff.panesShown && diff.stageShown, JSON.stringify({ view: diff.fileView, panes: diff.panesShown }));
     check("横条写着那个文件的写法、左边那颗返回箭头在",
         diff.barShown && diff.barName === SCRIPT_FILE && diff.backShown, diff.barName);
     check("看 diff 时折行开关藏着（没有长行可折）", diff.wrapHidden);

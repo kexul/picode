@@ -10,10 +10,10 @@
  *      最上面一行是标题行（写着「文件与改动」，右端是文件搜索那颗放大镜和收起那颗叉）；
  *      底下上下两格同时露着、各滚各的：上格「文件」只列目录清单（吃掉剩下的高度，
  *      最上面一行「上一层」），下格「改动」列这个会话改过哪些文件（按内容占高、最多 45%）；
- *      点开一个文件就是「打开了的样子」：整列都是它（body 上多一个 file-view，两格收起来），
- *      上面单独一条横条：左边一颗返回箭头、右边写着这个文件的写法（横条停一下有提示）；
- *      再点另一个文件就在同一个地方换掉（前一个文件的内容不再留在页面上），
- *      点回原来那个文件是重新读一遍（不保留滚动位置）；点返回箭头回到上下两格；
+ *      点开一个文件就是「看文件的弹窗」（body 上多一个 file-view，左边那两格照旧露着）：
+ *      电脑上是页面上居中的一块、手机铺满整屏，顶上一条横条写着这个文件的写法（横条停一下有提示）；
+ *      再点另一个文件就在同一个弹窗里换掉（前一个文件的内容不再留在页面上），
+ *      点回原来那个文件是重新读一遍（不保留滚动位置）；点弹窗顶上那颗叉关掉；
  *      标签条那一套（#fileTabs / .file-tab / data-proj / data-changes）整个没了；
  *      目录不整列打开：点目录链接、点清单里的子目录都在上格「文件」里发生，清单最上面一行
  *      「上一层」往回退（到会话目录本身那一层就没有这一行了），刷新页面时这一格回到会话目录本身，
@@ -36,7 +36,7 @@
  *      认得的几种语言（TypeScript 含 JavaScript 与 JSON、C++、Python，别名一起算）按扩展名带颜色，
  *      行号还在、跟内容对得上，跨多行的注释 / 模板串不会在行号那儿断开；别的语言仍是黑白；
  *      超过上色那条线的大文件不上色（行号照旧），也不把页面卡住；
- *      工具卡片（write）那颗「跳转」跟正文里的文件链接去同一个地方：浏览器页面里整列打开看它
+ *      工具卡片（write）那颗「跳转」跟正文里的文件链接去同一个地方：浏览器页面里在弹窗里打开看它
  *      （自己滑出来、停在第一行），插件里的对话面板里还是交给编辑器打开（最后那段按网页视图验）；
  *      这一列角上那颗折行开关：默认一行就是一行（长行横向滚），点一下长行折起来（横向不滚），
  *      再点一下又回去；开关管的是整块正文（换个文件也照样）；选的那个记在这台设备里，
@@ -517,12 +517,17 @@ module.exports = async (page) => {
     // 打开一个文件 / 一份 diff 时它在 #fileBody，在上格列清单时它在 #dirPane，
     // 「改动」那份清单在 #changePane —— 三个地方同一时刻只摆一块。
     const FILE_VIEW_SOURCE = `
+        // 弹窗里正摆着的那一块（没开弹窗就是 null）
+        window.__fileViewer = function () { return document.querySelector("#fileBody .file-page"); };
+        // 上格「文件」那份清单（一直在）
+        window.__fileList = function () {
+            const pages = document.querySelectorAll("#dirPane .file-page");
+            return pages.length ? pages[pages.length - 1] : null;
+        };
+        // 「现在摆着的那一块正文」：弹窗开着就是弹窗里那个，否则是清单那一块
         window.__fileView = function () {
-            const inBody = document.querySelector("#fileBody .file-page");
-            if (inBody) { return inBody; }
-            const dirPages = document.querySelectorAll("#dirPane .file-page");
-            if (dirPages.length) { return dirPages[dirPages.length - 1]; }
-            return document.querySelector("#changePane .file-page") || document.getElementById("dirPane");
+            return window.__fileViewer() || window.__fileList()
+                || document.querySelector("#changePane .file-page") || document.getElementById("dirPane");
         };
     `;
     let fileViewEverywhere = false;
@@ -563,6 +568,7 @@ module.exports = async (page) => {
         const f = function () {
             const root = document.getElementById("fileSidebar");
             const body = window.__fileView();                  // 现在摆着的那一块正文（内容从这儿查）
+            const list = window.__fileList();                  // 上格「文件」那份清单（弹窗开着时也一直在）
             const host = body && body.closest ? body.closest("#fileBody, #dirPane, #changePane") : null;
             const box = host || document.getElementById("fileBody");   // 那一块自己那个滚动区
             const rows = body ? Array.from(body.querySelectorAll(".file-line")) : [];
@@ -578,14 +584,14 @@ module.exports = async (page) => {
             const img = body ? body.querySelector(".file-image img") : null;
             const imgRect = img ? img.getBoundingClientRect() : null;
             // 目录清单里图片那一行的缩略图（别把整页里消息流的图算进来：只看清单里那几行）
-            const thumbs = body ? Array.from(body.querySelectorAll(".file-entry .file-entry-icon img")) : [];
-            const up = body ? body.querySelector(".file-entry.up") : null;
+            const thumbs = list ? Array.from(list.querySelectorAll(".file-entry .file-entry-icon img")) : [];
+            const up = list ? list.querySelector(".file-entry.up") : null;
             const panelEl = document.getElementById("filePanel");
             const panelRect = panelEl ? panelEl.getBoundingClientRect() : null;
             const upRect = up ? up.getBoundingClientRect() : null;
             const closeEl = document.getElementById("fileClose");
             const closeRect = closeEl ? closeEl.getBoundingClientRect() : null;
-            // 标题行与底下那两块：两格同时露着；点开一个文件 / 一份 diff 时换成 #fileStage（整列都是它）
+            // 标题行与底下那两块：两格同时露着；点开一个文件 / 一份 diff 时另开一块 #fileStage（弹窗）
             const header = document.getElementById("fileHeader");
             const titleEl = document.getElementById("fileTitle");
             const panes = document.getElementById("filePanes");
@@ -605,7 +611,7 @@ module.exports = async (page) => {
             const insidePanel = function (r) {
                 return !!r && !!panelRect && r.left >= panelRect.left - 1 && r.right <= panelRect.right + 1;
             };
-            const entries = body ? Array.from(body.querySelectorAll(".file-entry:not(.up)")) : [];
+            const entries = list ? Array.from(list.querySelectorAll(".file-entry:not(.up)")) : [];
             const wrapBtn = document.getElementById("fileWrap");
             const wrapRect = wrapBtn && getComputedStyle(wrapBtn).display !== "none" ? wrapBtn.getBoundingClientRect() : null;
             const textEl = body ? body.querySelector(".file-text") : null;
@@ -667,7 +673,7 @@ module.exports = async (page) => {
                 changeRowPaths: changeRows.map(function (r) { return r.getAttribute("data-path") || ""; }),
                 upShown: !!up,
                 upInHeader: !!up && !!up.closest("#fileHeader"),
-                upFirstRow: !!up && !!body && body.firstElementChild === up,
+                upFirstRow: !!up && !!list && list.firstElementChild === up,
                 upText: up ? (up.innerText || "") : "",
                 upInside: insidePanel(upRect),
                 closeInside: insidePanel(closeRect),
@@ -683,6 +689,7 @@ module.exports = async (page) => {
                 imgShown: imgRect ? { w: Math.round(imgRect.width), h: Math.round(imgRect.height) } : null,
                 imgBroken: img ? (img.complete && img.naturalWidth === 0) : false,
                 bodyChars: body ? (body.textContent || "").length : -1,
+                bodyW: box ? Math.round(box.getBoundingClientRect().width) : -1,
                 rowCount: rows.length,
                 // markdown 渲染出来的那份文档有几块、行号格子有几个（markdown 该是 0 / 0）
                 mdCount: body ? body.querySelectorAll(".file-md").length : -1,
@@ -720,7 +727,9 @@ module.exports = async (page) => {
                 wrapInHeader: !!wrapBtn && !!document.getElementById("fileHeader")
                     && document.getElementById("fileHeader").contains(wrapBtn),
                 wrapInStage: !!wrapBtn && !!stage && stage.contains(wrapBtn),
+                wrapInBar: !!wrapBtn && !!bar && bar.contains(wrapBtn),
                 wrapTop: wrapRect ? Math.round(wrapRect.top) : -1,
+                barTop: bar ? Math.round(bar.getBoundingClientRect().top) : -1,
                 wrapAtCorner: !!(wrapRect && panelRect)
                     && panelRect.right - wrapRect.right >= 0 && panelRect.right - wrapRect.right <= 24
                     && panelRect.bottom - wrapRect.bottom >= 0 && panelRect.bottom - wrapRect.bottom <= 24,
@@ -1012,8 +1021,8 @@ module.exports = async (page) => {
     await page.sleep(600);
     const wide5 = await look("宽窗 · 点 long.js:" + HIT_LINE);
     check("点上链接左边开出来（不用先点按钮）", wide5.open && wide5.dock && wide5.panelLeft === 0);
-    check("整列都是那个文件（两格收起来、打开的样子露出来）",
-        wide5.fileView && wide5.stageShown && !wide5.panesShown && wide5.bodyPages === 1,
+    check("弹窗里都是那个文件（左边那两格照旧露着）",
+        wide5.fileView && wide5.stageShown && wide5.panesShown && wide5.bodyPages === 1,
         JSON.stringify({ view: wide5.fileView, panes: wide5.panesShown }));
     check("横条写着这个文件的写法、左边那颗返回箭头在",
         wide5.barShown && wide5.barName === FILE.long && wide5.closeFileShown, wide5.barName);
@@ -1039,7 +1048,7 @@ module.exports = async (page) => {
     console.log("点文件链接：" + await clickLink(FILE.long, HIT_LINE_AGAIN));
     await page.sleep(600);
     const wide7 = await look("宽窗 · 再点一次 long.js:" + HIT_LINE_AGAIN);
-    check("再点回原来那个文件：还是整列那一块（没有多出一格）",
+    check("再点回原来那个文件：还是弹窗里那一块（没有多出一格）",
         wide7.fileView && wide7.bodyPages === 1 && activeFilePath(wide7) === FILE.long);
     check("重新读了一遍、按这次链接说的第 " + HIT_LINE_AGAIN + " 行滚过去",
         wide7.rowCount === LONG_LINES && wide7.hitNum === String(HIT_LINE_AGAIN) && wide7.hitVisible);
@@ -1156,7 +1165,7 @@ module.exports = async (page) => {
     check("行数、停在的那一行都还在", changed.rowCount === LIVE_LINES && changed.hitNum === String(LIVE_HIT));
     check("滚动位置一点没动（读到哪儿还停在哪儿）", changed.bodyTop === live0.bodyTop,
         JSON.stringify({ before: live0.bodyTop, after: changed.bodyTop }));
-    check("没被这次刷新搅乱（还是整列那一块、还是 live.js）", changed.fileView
+    check("没被这次刷新搅乱（还是弹窗里那一块、还是 live.js）", changed.fileView
         && activeFilePath(changed) === FILE.live && changed.bodyPages === 1);
     const probe1 = JSON.parse(await page.eval("return JSON.stringify(window.__fileProbe)"));
     check("变了才给正文：这回有一条 200 带着新正文回来",
@@ -1178,11 +1187,14 @@ module.exports = async (page) => {
     const back = await waitLook("面板换回内容", (x) => x.rowCount === LIVE_LINES);
     check("文件写回来：面板自己又显示出来（还停在原来那一行）", back.rowCount === LIVE_LINES
         && back.hitNum === String(LIVE_HIT), String(back.rowCount));
-    check("一路都是 live.js（整列那一块，没多出别的）", back.fileView
+    check("一路都是 live.js（弹窗里那一块，没多出别的）", back.fileView
         && activeFilePath(back) === FILE.live && back.bodyPages === 1);
     await page.shot("file-13-live-back.png");
 
     // ==================== 门槛：1200px ====================
+    // 先把弹窗关掉：它开着的时候盖着对话那一块（窄窗里是整屏），下面量的是这一列与遮罩
+    await page.eval(`document.getElementById("fileCloseFile").click(); return true;`);
+    await page.sleep(400);
     await page.cdp.send("Emulation.setDeviceMetricsOverride", { width: 1199, height: 800, deviceScaleFactor: 1, mobile: false });
     await page.sleep(500);
     const edge1 = await look("1199px");
@@ -1305,8 +1317,8 @@ module.exports = async (page) => {
     check("点图片链接：面板里直接显示出那张图（不是一行行看不懂的字符）",
         img1.imgCount === 1 && img1.imgNatural[0] === IMAGE_W && img1.imgNatural[1] === IMAGE_H && !img1.imgBroken,
         JSON.stringify({ img: img1.imgNatural, broken: img1.imgBroken }));
-    check("图按面板宽度等比例缩、没撑破这一列",
-        !!img1.imgShown && img1.imgShown.w > 100 && img1.imgShown.w <= FILE_W_DEFAULT
+    check("图按弹窗那一块的宽度等比例缩、没撑破它",
+        !!img1.imgShown && img1.imgShown.w > 100 && img1.imgShown.w <= img1.bodyW
         && Math.abs(img1.imgShown.h - img1.imgShown.w * IMAGE_H / IMAGE_W) <= 2,
         JSON.stringify(img1.imgShown));
     check("图片不画行号、也不给那句「看不了」的说明",
@@ -1323,8 +1335,8 @@ module.exports = async (page) => {
         imgBig.imgCount === 1 && imgBig.imgNatural[0] === BIG_IMAGE_W && imgBig.imgNatural[1] === BIG_IMAGE_H
         && !imgBig.imgBroken && imgBig.downloadCount === 0 && imgBig.note === "",
         JSON.stringify({ img: imgBig.imgNatural, broken: imgBig.imgBroken, download: imgBig.downloadCount, note: imgBig.note }));
-    check("大图也是等比例缩到这一列的宽（不横着撑出去）",
-        !!imgBig.imgShown && imgBig.imgShown.w <= FILE_W_DEFAULT
+    check("大图也是等比例缩到那一块的宽（不横着撑出去）",
+        !!imgBig.imgShown && imgBig.imgShown.w <= imgBig.bodyW
         && Math.abs(imgBig.imgShown.h - imgBig.imgShown.w * BIG_IMAGE_H / BIG_IMAGE_W) <= 2,
         JSON.stringify(imgBig.imgShown));
     await page.shot("file-14b-big-image.png");
@@ -1487,12 +1499,12 @@ module.exports = async (page) => {
         JSON.stringify({ view: dir2.fileView, up: dir2.upShown }));
     await page.shot("file-18-dir-sub.png");
 
-    // 点清单里的文件：整列打开它（带行号）
+    // 点清单里的文件：在弹窗里打开它（带行号）
     console.log("点清单里的文件：" + await clickEntry(DIR.subFile));
     const dir3 = await waitLook("清单里那个文件的内容上来", (x) => x.rowCount === DIR_SUB_FILE_LINES);
-    check("点清单里的文件：面板里显示它（带行号）", dir3.rowCount === DIR_SUB_FILE_LINES
-        && dir3.firstRow.indexOf("three 第 1 行") >= 0 && dir3.entryCount === 0);
-    check("清单里的文件：整列打开它（横条写着这个文件）", dir3.fileView && dir3.bodyPages === 1
+    check("点清单里的文件：弹窗里显示它（带行号；上面那份清单照旧列着）", dir3.rowCount === DIR_SUB_FILE_LINES
+        && dir3.firstRow.indexOf("three 第 1 行") >= 0 && dir3.entryCount > 0);
+    check("清单里的文件：弹窗开着它（横条写着这个文件）", dir3.fileView && dir3.bodyPages === 1
         && activeFilePath(dir3) === DIR.subFile, JSON.stringify({ view: dir3.fileView, bar: dir3.barName }));
     await page.shot("file-19-dir-file.png");
 
@@ -1581,8 +1593,8 @@ module.exports = async (page) => {
     console.log("点清单里的文件：" + await clickEntry(DIR.topFile));
     const proj3 = await waitLook("从目录点开文件", (x) => x.rowCount === DIR_ONE_LINES);
     check("从目录那一格点开文件：显示它（带行号、跟票 05 一样）", proj3.rowCount === DIR_ONE_LINES
-        && proj3.firstRow.indexOf("one 第 1 行") >= 0 && activeFilePath(proj3) === DIR.topFile && proj3.entryCount === 0);
-    check("点开的文件整列打开它（不是把清单顶掉，也不是多出一格）",
+        && proj3.firstRow.indexOf("one 第 1 行") >= 0 && activeFilePath(proj3) === DIR.topFile && proj3.entryCount > 0);
+    check("点开的文件在弹窗里（不是把清单顶掉，也不是多出一格）",
         proj3.fileView && proj3.bodyPages === 1 && activeFilePath(proj3) === DIR.topFile,
         JSON.stringify({ view: proj3.fileView, bar: proj3.barName, pages: proj3.bodyPages }));
 
@@ -1792,7 +1804,7 @@ module.exports = async (page) => {
     check("链接里带的 :" + MD.hit + " 不生效、也不报错（没有点亮的那一行、也没有一句看不了的说明）",
         mdDoc.hitCount === 0 && mdDoc.note === "" && mdDoc.text.indexOf(MD.code) >= 0
         && md1.note === "" && md1.hitNum === "", JSON.stringify({ note: mdDoc.note }));
-    check("markdown 文件照样整列打开它（横条写着它）",
+    check("markdown 文件照样开在弹窗里（横条写着它）",
         mdDoc.fileView && mdDoc.barName === MD.doc && activeFilePath(mdDoc) === MD.doc,
         JSON.stringify({ bar: mdDoc.barName, view: mdDoc.fileView }));
     await page.shot("file-26-markdown.png");
@@ -1832,11 +1844,11 @@ module.exports = async (page) => {
     console.log("点文件链接：" + await clickLink(FILE.wrap, WRAP_HIT));
     const wrap0 = await waitLook("那条超长行的文件上来",
         (x) => x.rowCount === WRAP_LINES && x.headRowLens[1] >= WRAP_LONG_CHARS);
-    check("折行开关在看文件时露面（在这一列这一块里，不在面板头里；上下两格里没有它）",
-        wrap0.wrapShown && wrap0.wrapInPanel && wrap0.wrapInStage && !wrap0.wrapInHeader
-        && wrap0.wrapAtCorner && wrap0.wrapTop > wrap0.barBottom && wrap0.fileView,
-        JSON.stringify({ shown: wrap0.wrapShown, panel: wrap0.wrapInPanel, stage: wrap0.wrapInStage,
-            header: wrap0.wrapInHeader, corner: wrap0.wrapAtCorner, top: wrap0.wrapTop, bar: wrap0.barBottom }));
+    check("折行开关在看文件时露面（在弹窗顶上那条里，挨着关掉那颗叉）",
+        wrap0.wrapShown && wrap0.wrapInStage && wrap0.wrapInBar && !wrap0.wrapAtCorner
+        && wrap0.wrapTop >= wrap0.barTop && wrap0.fileView,
+        JSON.stringify({ shown: wrap0.wrapShown, stage: wrap0.wrapInStage, bar: wrap0.wrapInBar,
+            corner: wrap0.wrapAtCorner, top: wrap0.wrapTop, barTop: wrap0.barTop }));
     check("默认是「一行就是一行」：长行不折、正文横向滚得动",
         wrap0.whiteSpace === "pre" && wrap0.headRowHeights[1] === wrap0.headRowHeights[0] && wrap0.hScroll > 0,
         JSON.stringify({ ws: wrap0.whiteSpace, heights: wrap0.headRowHeights, hScroll: wrap0.hScroll }));
