@@ -392,10 +392,62 @@
     return { anywhere: absolute || !base ? p : base + p };
   }
 
+  // ==================== 按需脚本 ====================
+  // 首屏只排主脚本和那几个都要用的第三方脚本；大的、偶尔才用得上的不排（画图的 pele.js 700 多 KB、
+  // 画二维码的 qrcode.js 56 KB），头一次真要用时才照页面 head 里那张纸条（pichat-lazy-scripts，地址见
+  // src/pageHtml.ts）去拉。面板那边没有可引的地址，这些都是内联的，一加载就在，根本不会走到这里。
+
+  /** 每个按需脚本的现状：state 是 idle（还没人要用）/ loading（正在拉）/ ready / failed，waiters 是排队等着的那些回话。 */
+  const lazyScripts = new Map();
+
+  /** head 里那张纸条上这个脚本的地址（带着内容指纹）；纸上没写这条（老后端给的页面）就是空串。 */
+  function lazyScriptUrl(name) {
+    try {
+      const meta = document.querySelector('meta[name="pichat-lazy-scripts"]');
+      const map = JSON.parse((meta && meta.getAttribute("content")) || "{}") || {};
+      return typeof map[name] === "string" ? map[name] : "";
+    } catch (e) {
+      return "";
+    }
+  }
+
+  /**
+   * 拉一个按需脚本；同一个脚本只拉一次，同时在等的那几个排队回话。
+   * @param done 到了给 true、拉不到（或纸条上没有这条）给 false；已经问过结果的当场回
+   */
+  function loadLazyScript(name, done) {
+    let entry = lazyScripts.get(name);
+    if (!entry) {
+      entry = { state: "idle", waiters: [] };
+      lazyScripts.set(name, entry);
+    }
+    if (entry.state === "ready") { done(true); return; }
+    if (entry.state === "failed") { done(false); return; }
+    entry.waiters.push(done);
+    if (entry.state === "loading") { return; }
+    entry.state = "loading";
+    const url = lazyScriptUrl(name);
+    if (!url) { finishLazyScript(name, false); return; }
+    const script = document.createElement("script");
+    script.src = url;
+    script.onload = () => { finishLazyScript(name, true); };
+    script.onerror = () => { finishLazyScript(name, false); };
+    document.head.appendChild(script);
+  }
+
+  /** 拉完了：叫醒等着的那几个。 */
+  function finishLazyScript(name, ok) {
+    const entry = lazyScripts.get(name);
+    if (!entry) { return; }
+    entry.state = ok ? "ready" : "failed";
+    const waiters = entry.waiters.slice();
+    entry.waiters.length = 0;
+    for (const waiter of waiters) { waiter(ok); }
+  }
+
   // ==================== mermaid 图 ====================
   // ```mermaid 代码块画成图（media/pele.js：按 Mermaid 12.1 的语法画，同步出 SVG 字符串，不碰 DOM）。
-  // 它有 700 多 KB，所以不排进首屏：头一次真出现 ```mermaid 时才照页面 head 里那张纸条去拉
-  //（地址见 pageHtml.ts 的 pichat-lazy-scripts；面板里那个脚本本来是内联的，一加载就在，不用拉）。
+  // 它有 700 多 KB，所以不排进首屏：头一次真出现 ```mermaid 时才去拉（见上面那套按需脚本）。
   // 画不出来的（语法错、认不出是哪种图）把代码块原样留着、底下加一行说明——
   // 不把“画不出来”装成“没有图”。
   // 流式里只在块定型之后才画（见 syncStreamBlocks / finalizeCurrentAssistant）：
@@ -403,8 +455,8 @@
 
   /** 画图那个脚本叫什么：清单里它是 lazy-script 那一条（见 src/chatUiFiles.ts）。 */
   const MERMAID_SCRIPT = "pele.js";
-  /** 画图那个脚本现在到哪一步了：idle（还没人要用）/ loading（正在拉）/ ready（能用）/ failed（拉不到）。 */
-  let mermaidLibState = "idle";
+  /** 已经确认拉不到了：再问就不必再试，直接补说明。 */
+  let mermaidLibBroken = false;
   /** 脚本还在路上、图已经等着的那些正文节点（拉回来之后回头再画一遍）。 */
   const mermaidWaiting = new Set();
   const MERMAID_CACHE = new Map();
@@ -416,44 +468,39 @@
       /(^|\s)language-mermaid(\s|$)/i.test(code.className || "");
   }
 
+  /** 这一块里的 mermaid 代码块（没有就是空数组）。 */
+  function mermaidBlocksOf(root) {
+    if (!root || !root.querySelectorAll) { return []; }
+    const blocks = [];
+    for (const code of root.querySelectorAll("pre > code")) {
+      if (isMermaidBlock(code)) { blocks.push(code); }
+    }
+    return blocks;
+  }
+
   /**
    * 画图的脚本到了没：到了给 true，没到给 false（顺便开始拉）。
    * 面板里那个脚本是内联的，第一次问就是 true；浏览器页面里第一次问会去拉，拉回来再画等着的那几张。
    */
   function ensureMermaidLib() {
-    if (globalThis.pele) { mermaidLibState = "ready"; return true; }
-    if (mermaidLibState === "idle") { loadMermaidLib(); }
-    return false;
-  }
-
-  /** 照 head 里那张纸条（pichat-lazy-scripts）插一个 <script>；同一时间只拉一次。 */
-  function loadMermaidLib() {
-    mermaidLibState = "loading";
-    let url = "";
-    try {
-      const meta = document.querySelector('meta[name="pichat-lazy-scripts"]');
-      const map = JSON.parse((meta && meta.getAttribute("content")) || "{}") || {};
-      url = typeof map[MERMAID_SCRIPT] === "string" ? map[MERMAID_SCRIPT] : "";
-    } catch (e) { url = ""; }
-    // 纸条上没有这条（老后端给的页面）：当拉不到
-    if (!url) { mermaidLibFailed(); return; }
-    const script = document.createElement("script");
-    script.src = url;
-    script.onload = () => {
-      if (!globalThis.pele) { mermaidLibFailed(); return; }
-      mermaidLibState = "ready";
+    if (globalThis.pele) { return true; }
+    loadLazyScript(MERMAID_SCRIPT, (ok) => {
+      if (!ok || !globalThis.pele) { mermaidLibFailed(); return; }
       // 等着的那几张：现在画（这些节点可能已经被换掉了，画了也不显示，但也就这一下）
       for (const root of mermaidWaiting) { decorateMermaid(root); }
       mermaidWaiting.clear();
-    };
-    script.onerror = () => { mermaidLibFailed(); };
-    document.head.appendChild(script);
+    });
+    return false;
   }
 
   /** 拉不到：等着的那些各补一行说明，别一直空着。 */
   function mermaidLibFailed() {
-    mermaidLibState = "failed";
-    for (const root of mermaidWaiting) { decorateMermaid(root); }
+    mermaidLibBroken = true;
+    for (const root of mermaidWaiting) {
+      for (const code of mermaidBlocksOf(root)) {
+        showMermaidNote(code, "没画出来：画图那个脚本没拉下来（刷新页面试试）");
+      }
+    }
     mermaidWaiting.clear();
   }
 
@@ -507,15 +554,11 @@
    * （画过的 pre 已经不在了）；画不出来的留着代码块，后面补一行说明。
    */
   function decorateMermaid(root) {
-    if (!root || !root.querySelectorAll) { return; }
-    const blocks = [];
-    for (const code of root.querySelectorAll("pre > code")) {
-      if (isMermaidBlock(code)) { blocks.push(code); }
-    }
+    const blocks = mermaidBlocksOf(root);
     if (blocks.length === 0) { return; }   // 这一块里没有 mermaid：不用去拉那个脚本
     if (!ensureMermaidLib()) {
-      // 还在路上就先等着（脚本到了会回头再画一遍）；拉不到就各补一行说明
-      if (mermaidLibState === "failed") {
+      // 还在路上就先等着（脚本到了会回头再画一遍）；已经拉不到就各补一行说明
+      if (mermaidLibBroken) {
         for (const code of blocks) { showMermaidNote(code, "没画出来：画图那个脚本没拉下来（刷新页面试试）"); }
       } else {
         mermaidWaiting.add(root);
@@ -12387,6 +12430,8 @@
    * 走到哪一步全看后端给的 phase —— 界面这边不猜，也不记着自己那份：
    * 每次登录状态一变，后端就把整份选项重推一遍（见 chatHost.ts 的 weixinLogin）。
    */
+  /** 画二维码那个脚本叫什么：清单里它是 lazy-script 那一条（见 src/chatUiFiles.ts）。 */
+  const QRCODE_SCRIPT = "qrcode.js";
   function renderWeixinRow(row, it) {
     row.classList.add("vo-item-weixin");
     const txt = document.createElement("div"); txt.className = "vo-text";
@@ -12438,13 +12483,21 @@
       const canvas = document.createElement("canvas");
       qrBox.appendChild(canvas);
       body.appendChild(qrBox);
-      if (!drawQrInto(canvas, String(it.qr || ""))) {
+      const qrText = String(it.qr || "");
+      const paint = () => {
+        if (drawQrInto(canvas, qrText)) { return; }
         qrBox.remove();
         note("二维码画不出来（这页的二维码库没加载上）", true);
-        if (it.qr) {
-          const link = document.createElement("div"); link.className = "vo-wx-link"; link.textContent = String(it.qr);
+        if (qrText) {
+          const link = document.createElement("div"); link.className = "vo-wx-link"; link.textContent = qrText;
           body.appendChild(link);
         }
+      };
+      // 二维码那个库不排进首屏（56 KB，只有真扫码时才用得上）：第一次画时现拉，拉回来再画
+      if (qrText && typeof qrcode !== "function") {
+        loadLazyScript(QRCODE_SCRIPT, () => { paint(); });
+      } else {
+        paint();
       }
       note(message, false);
       if (phase === "needcode") {
@@ -12480,7 +12533,8 @@
 
   /**
    * 把一串字画成二维码（media/qrcode.js 那个库的矩阵，自己一格一格画到 canvas 上）。
-   * @returns 画成了没有（库没加载上 / 没字就是 false）
+   * 那个库是按需的（见 loadLazyScript），没拉回来时这里会返回 false，调用方拉回来再画一次。
+   * @returns 画成了没有（库没到 / 没字就是 false）
    */
   function drawQrInto(canvas, text) {
     if (!text || typeof qrcode !== "function") { return false; }

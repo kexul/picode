@@ -1,11 +1,12 @@
 // @ts-nocheck
 /**
- * lazyScripts —— 验「按需加载的那几个脚本真的没排进首屏」（现在只有 pele，画 mermaid 图用的，700 多 KB）。
+ * lazyScripts —— 验「按需加载的那几个脚本真的没排进首屏」（现在有两个：pele 画 mermaid 图，700 多 KB；
+ * qrcode 画「微信」扫码那张码，56 KB）。
  *
  * 两种装法各验一遍：
- *   - 浏览器页面：<script src> 里没有 pele.js，head 的 meta 里写着带内容指纹的地址，
- *     地址能原样解回来（页面里的加载器就照这个读，见 chat.js 的 loadMermaidLib）；
- *   - 面板：pele 仍然内联在整页里（面板没有可引的资源地址），也不该出现那份 meta。
+ *   - 浏览器页面：<script src> 里没有它们，head 的 meta 里写着带内容指纹的地址，
+ *     地址能原样解回来（页面里的加载器就照这个读，见 chat.js 的 loadLazyScript）；
+ *   - 面板：它们仍然内联在整页里（面板没有可引的资源地址），也不该出现那份 meta。
  *
  *   npm run compile && node dev/lazyScripts.js
  *
@@ -35,11 +36,14 @@ function lazyUrls() {
 
 const checks = [
     ["浏览器页面：首屏 <script src> 里没有 pele", !scriptSrc(browser).some((s) => s.includes("pele"))],
+    ["浏览器页面：首屏 <script src> 里没有 qrcode", !scriptSrc(browser).some((s) => s.includes("qrcode"))],
     ["浏览器页面：head 里写了按需地址，带着内容指纹", !!metaTag && /pele\.js\?v=[0-9a-f]{6,}/.test(metaTag[1])],
-    ["浏览器页面：那份地址能解回来（页面里的加载器就这么读）", typeof lazyUrls()["pele.js"] === "string" && lazyUrls()["pele.js"].includes("pele.js")],
+    ["浏览器页面：二维码那一条也在按需地址里", !!metaTag && /qrcode\.js\?v=[0-9a-f]{6,}/.test(metaTag[1])],
+    ["浏览器页面：那份地址能解回来（页面里的加载器就这么读）", typeof lazyUrls()["pele.js"] === "string" && lazyUrls()["pele.js"].includes("pele.js") && typeof lazyUrls()["qrcode.js"] === "string" && lazyUrls()["qrcode.js"].includes("qrcode.js")],
     ["浏览器页面：其余第三方脚本照旧在首屏", scriptSrc(browser).some((s) => s.includes("marked")) && scriptSrc(browser).some((s) => s.includes("highlight"))],
     ["浏览器页面：主脚本仍然排在最后", (scriptSrc(browser).slice(-1)[0] || "").includes("chat.js")],
     ["面板：pele 仍然内联进来（它没有可引的资源地址）", /Pele \d+\.\d+/.test(panel)],
+    ["面板：qrcode 也内联进来", panel.includes("qrcode-generator 1.4.4")],
     ["面板：不给按需地址", !panel.includes('<meta name="pichat-lazy-scripts"')],
 ];
 
