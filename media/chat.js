@@ -4114,7 +4114,7 @@
   }
 
   /** 卡片结果区渲染：预览截断（尾部 N 行，同 TUI）+ 元信息 + 展开/收起。 */
-  function renderDiffBlock(st, diffText, filePath, langPath) {
+  function renderDiffBlock(st, diffText, filePath) {
     const wrap = document.createElement("div");
     wrap.className = "edit-diff";
     // 内层收缩包裹：宽度 = max(卡片宽, 最宽行)，让所有行背景一致铺满，横向滚动时短行不断色
@@ -4143,19 +4143,19 @@
       }
       inner.appendChild(div);
     }
-    // 整行都算改太笼统：再问一句「哪几个字变了」（没装 omnidiff 就问不出来，那就算了）
-    changedCharRanges(String(diffText), langPath || filePath || "")
+    // 整行都算改太笼统：再问一句「哪几个字变了」（见 src/wordDiff.ts）
+    changedCharRanges(String(diffText))
       .then((got) => { if (got) { paintChangedChars(inner, got); } });
     return wrap;
   }
 
   /** 问后端一段 diff 里「哪几个字变了」（见 src/wordDiff.ts）；算不出来给 null。 */
-  function changedCharRanges(diffText, filePath) {
+  function changedCharRanges(diffText) {
     if (!diffText) { return Promise.resolve(null); }
     return fetch("/diff/highlight", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: filePath || "", diff: diffText }),
+      body: JSON.stringify({ diff: diffText }),
     }).then((resp) => (resp.status === 200 ? resp.json() : null))
       .then((got) => (got && Array.isArray(got.lines) ? got.lines : null))
       .catch(() => null);
@@ -4191,7 +4191,7 @@
   }
 
   /**
-   * 一份 diff 摆成两栏（像 omnidiff 那样）：左「最近一次提交」右「现在」，各带行号，
+   * 一份 diff 摆成两栏（左边「之前」右边「之后」，跟平时那种对照看的一样）：左「最近一次提交」右「现在」，各带行号，
    * 删的那几行与加的那几行在同一水平线上对齐，两段改动之间那一截用一行「⋯」带过。
    * 行是后端拆好的（见 src/wordDiff.ts 的 diffRows）：这一头不自己猜 diff 的文字格式。
    */

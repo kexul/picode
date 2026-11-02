@@ -5,9 +5,8 @@
  *
  *   npm run web:shot -- --fake-pi --script dev/wordHighlight.js
  *
- * 那些「哪几个字变了」的区间不是自己硬算的，是交给 omnidiff（https://github.com/ivankovic/omnidiff）
- * 按语法树比出来的。它得人自己装在 PATH 里（AGPL，不打进插件）；没装就只是不涂深、两栏照旧 ——
- * 这一跑照样能过。
+ * 「哪几个字变了」是把删的那几行与加的那几行配成对、一对一对按字比出来的（Google 的 diff-match-patch，
+ * 照抄在 src/diffMatchPatch.js）：它不懂语法，但改一个标识符涂的就是那个标识符。
  *
  * 验三件事：
  *   1. 纯 Node，直接喂 out/server/wordDiff.js 几种 diff 文字：git 那种（`+` / `-` / ` ` 前缀）、
@@ -15,11 +14,12 @@
  *      两段改动隔得远（中间得插一行「⋯」而不是把没变的那几十行全摆出来）、两边一样（不该有区间）。
  *      每种都钉住一条：**涂深前后那一行的文字一个字都不能变**（只许切、不许丢字重字），
  *      涂到的字里不能有空的，带行号那种不许把行号涂上；两栏的行号得对得上原文的行；
- *   2. 真后端、真仓库、真界面：改一个 .py 的一行，点开「改动」里那份 diff：
+ *   2. 「配对」与「整行换掉不涂」：删三行加一行时挑最像的那一行配（另两行不涂）、
+ *      整行都换掉的不涂（那种行了整行本来就是变了的，再涂一层只是一块色）；
+ *   3. 真后端、真仓库、真界面：改一个 .py 的一行，点开「改动」里那份 diff：
  *      两栏对得齐（左边那一格与右边那一格同一行同高）、每栏带行号、
  *      被涂深的就是那几个变了的标识符（`numbers` → `values`、`s` → `total`），
- *      没改的那一行（`print(...)`）一个字都不涂；
- *   3. 没装 omnidiff 时（这一跑的 PATH 里找不到它）：两栏照旧、不报错，只是没有涂深的字。
+ *      没改的那一行（`print(...)`）一个字都不涂。
  */
 const fs = require("fs");
 const path = require("path");
@@ -86,24 +86,11 @@ function checkRanges(name, diffText, lines) {
     return { paintedCount, marked: raw.map((line, i) => markRanges(line, lines[i])), paintedPerLine };
 }
 
-/** 这一跑有没有 omnidiff 可用（没有的话下面那一堆都只当「跳过」）。 */
-async function hasOmnidiff() {
-    return Array.isArray(await changedCharRanges(makeUnifiedDiff("a = 1\n", "a = 2\n"), "probe.py"));
-}
-
 module.exports = async (page) => {
     // ---------------- 1. 纯 Node：几种 diff 文字 ----------------
     console.log("\n【1】纯 Node：diff 拆行 + 变了的字");
-    const withBin = await hasOmnidiff();
-    if (!withBin) {
-        console.log("  （PATH 里没有 omnidiff：涂深那一半这一跑验不了，只验「没装也不出错」）");
-        check("没装 omnidiff：不给区间（页面照旧整行上色）",
-            (await changedCharRanges(makeUnifiedDiff(BASE, AFTER), FILE)) === undefined);
-    }
-
-    // 两栏要的行号：不管装没装 omnidiff 都得对（它不依赖 omnidiff）
     const gitStyle = makeUnifiedDiff(BASE, AFTER);
-    const gitRows = await diffRows(gitStyle, FILE);
+    const gitRows = diffRows(gitStyle);
     const dels = gitRows.filter((r) => r.kind === "del");
     const adds = gitRows.filter((r) => r.kind === "add");
     check("git 那种：删的那三行在「之前」那份里是 1、2、3 行",
@@ -121,7 +108,7 @@ module.exports = async (page) => {
     const longAfter = long.slice();
     longAfter[1] = "改了甲";
     longAfter[38] = "改了乙";
-    const farRows = await diffRows(makeUnifiedDiff(long.join("\n") + "\n", longAfter.join("\n") + "\n"), "x.txt");
+    const farRows = diffRows(makeUnifiedDiff(long.join("\n") + "\n", longAfter.join("\n") + "\n"));
     check("两段改动隔得远：中间只有一行「⋯」（不是把没变的那几十行都摆出来）",
         farRows.filter((r) => r.kind === "gap").length === 1,
         JSON.stringify(farRows.map((r) => r.kind)));
@@ -140,7 +127,7 @@ module.exports = async (page) => {
         "+ 4 ",
         "  5 print(total([1, 2, 3]))",
     ].join("\n");
-    const piRows = await diffRows(numbered, FILE);
+    const piRows = diffRows(numbered);
     check("pi 那种（带行号）：删的是原第 2、3、4 行，加的是第 2、3、4 行",
         piRows.filter((r) => r.kind === "del").map((r) => r.before).join(",") === "2,3,4"
         && piRows.filter((r) => r.kind === "add").map((r) => r.after).join(",") === "2,3,4",
@@ -150,56 +137,70 @@ module.exports = async (page) => {
         piRows.filter((r) => r.kind === "del")[0].text === "    s = sum(numbers)",
         JSON.stringify(piRows.filter((r) => r.kind === "del").map((r) => r.text)));
 
-    if (withBin) {
-        const gitLines = await changedCharRanges(gitStyle, FILE);
-        const git = checkRanges("git 那种", gitStyle, gitLines);
-        console.log(git.marked.join("\n"));
-        check("git 那种：涂深了（改一个标识符，涂的是那几个字，不是整行）", git.paintedCount > 0, git.paintedCount + " 段");
-        const gitRaw = gitStyle.split("\n");
-        const gitWords = (prefix) => git.paintedPerLine
-            .filter((words, i) => gitRaw[i].startsWith(prefix) && words.length > 0)
-            .flat();
-        check("git 那种：删的那几行涂到 numbers、加的那几行涂到 values",
-            gitWords("-").includes("numbers") && gitWords("+").includes("values"),
-            JSON.stringify({ 删: gitWords("-"), 加: gitWords("+") }));
-        check("git 那种：没改的那一行（print 那一行）一个字都不涂",
-            gitWords(" ").length === 0, JSON.stringify(gitWords(" ")));
+    const gitLines = changedCharRanges(gitStyle);
+    const git = checkRanges("git 那种", gitStyle, gitLines);
+    console.log(git.marked.join("\n"));
+    check("git 那种：涂深了（改一个标识符，涂的是那几个字，不是整行）", git.paintedCount > 0, git.paintedCount + " 段");
+    const gitRaw = gitStyle.split("\n");
+    const gitWords = (prefix) => git.paintedPerLine
+        .filter((words, i) => gitRaw[i].startsWith(prefix) && words.length > 0)
+        .flat();
+    check("git 那种：删的那几行涂到 numbers、加的那几行涂到 values（是整个词，不是半个）",
+        gitWords("-").includes("numbers") && gitWords("+").includes("values"),
+        JSON.stringify({ 删: gitWords("-"), 加: gitWords("+") }));
+    check("git 那种：没改的那一行（print 那一行）一个字都不涂",
+        gitWords(" ").length === 0, JSON.stringify(gitWords(" ")));
 
-        const numberedLines = await changedCharRanges(numbered, FILE);
-        const pi = checkRanges("pi 那种（带行号）", numbered, numberedLines);
-        console.log(pi.marked.join("\n"));
-        const prefixLength = (line) => (/^[+\- ] *\d+ /.exec(line) || [""])[0].length;
-        const offByPrefix = numbered.split("\n")
-            .some((line, i) => (numberedLines[i] || []).some(([start]) => start < prefixLength(line)));
-        check("pi 那种：涂到的字全在原文里（没把行号、前缀涂上）",
-            pi.paintedCount > 0 && !offByPrefix,
-            JSON.stringify({ 涂到: pi.paintedPerLine.filter((w) => w.length > 0) }));
+    const numberedLines = changedCharRanges(numbered);
+    const pi = checkRanges("pi 那种（带行号）", numbered, numberedLines);
+    console.log(pi.marked.join("\n"));
+    const prefixLength = (line) => (/^[+\- ] *\d+ /.exec(line) || [""])[0].length;
+    const offByPrefix = numbered.split("\n")
+        .some((line, i) => (numberedLines[i] || []).some(([start]) => start < prefixLength(line)));
+    check("pi 那种：涂到的字全在原文里（没把行号、前缀涂上）",
+        pi.paintedCount > 0 && !offByPrefix,
+        JSON.stringify({ 涂到: pi.paintedPerLine.filter((w) => w.length > 0) }));
 
-        // 中文：一个汉字三个字节；区间要是按字节算，切出来就会是半个字或者空
-        const cnDiff = makeUnifiedDiff("第一行：支持手动查询当前排行榜\n第二行：随便\n", "第一行：支持手动查询当前榜单\n第二行：随便\n");
-        const cnLines = await changedCharRanges(cnDiff, "随便.md");
-        const cn = checkRanges("中文", cnDiff, cnLines);
-        console.log(cn.marked.join("\n"));
-        const cnPainted = cn.paintedPerLine.flat();
-        check("中文：涂到的是完整的字（汉字三个字节，不算到字中间去）",
-            cnPainted.length > 0 && cnPainted.every((w) => Array.from(w).every((ch) => ch.charCodeAt(0) > 0x2e80)),
-            JSON.stringify(cnPainted));
+    // 中文：一个汉字三个字节；区间要是按字节算，切出来就会是半个字或者空
+    const cnDiff = makeUnifiedDiff("第一行：支持手动查询当前排行榜\n第二行：随便\n", "第一行：支持手动查询当前榜单\n第二行：随便\n");
+    const cnLines = changedCharRanges(cnDiff);
+    const cn = checkRanges("中文", cnDiff, cnLines);
+    console.log(cn.marked.join("\n"));
+    const cnPainted = cn.paintedPerLine.flat();
+    check("中文：涂到的是完整的字（汉字三个字节，不算到字中间去）",
+        cnPainted.length > 0 && cnPainted.every((w) => Array.from(w).every((ch) => ch.charCodeAt(0) > 0x2e80)),
+        JSON.stringify(cnPainted));
 
-        check("两边一样：没有区间（页面什么都不涂）",
-            (await changedCharRanges(makeUnifiedDiff(BASE, BASE), FILE)) === undefined);
-    }
+    check("两边一样：没有区间（页面什么都不涂）",
+        changedCharRanges(makeUnifiedDiff(BASE, BASE)) === undefined);
 
-    // ---------------- 2. 真页面：点开「改动」里那份 diff ----------------
-    console.log("\n【2】真页面：「改动」那一格里点开一份 .py 的 diff");
+    // ---------------- 2. 配对与「整行换掉」 ----------------
+    console.log("\n【2】删几行加几行时怎么配对");
+    const pairDiff = makeUnifiedDiff("a = 1\nb = 2\nc = 3\nd = 4\n", "a = 1\nbbb = 22\n");
+    const pairLines = changedCharRanges(pairDiff);
+    const pairMarked = pairDiff.split("\n").map((line, i) => markRanges(line, pairLines && pairLines[i]));
+    console.log(pairMarked.join("\n"));
+    // 最像的一对是「b = 2」与「bbb = 22」：加的那一边涂 bbb / 22，删的那一边一个字都没删
+    // （所以它不涂）。要是配到了 c = 3 那两行，删的那一边就会涂上 c / 3。
+    const markedDel = pairMarked.filter((line) => line.startsWith("-") && line.indexOf("[") >= 0);
+    const markedAdd = pairMarked.filter((line) => line.startsWith("+") && line.indexOf("[") >= 0);
+    check("删三行加一行：配到的是最像的那一对（加的那行涂了，另两行删的不涂）",
+        markedAdd.length === 1 && markedDel.length === 0, JSON.stringify(pairMarked));
+    check("整行都换掉的不涂（那一行本来就是变了的，涂出来只是一块色）",
+        changedCharRanges(makeUnifiedDiff("x = 111\n", "qwerty = 999\n")) === undefined,
+        String(changedCharRanges(makeUnifiedDiff("x = 111\n", "qwerty = 999\n"))));
+
+    // ---------------- 3. 真页面：点开「改动」里那份 diff ----------------
+    console.log("\n【3】真页面：「改动」那一格里点开一份 .py 的 diff");
     await page.waitReady();
     await page.sleep(600);
     fs.rmSync(WORK, { recursive: true, force: true });
     fs.mkdirSync(WORK, { recursive: true });
     fs.writeFileSync(path.join(WORK, FILE), BASE, "utf8");
-    const git = (...args) => execFileSync("git", ["-c", "core.autocrlf=false", ...args], { cwd: WORK, stdio: "ignore" });
-    git("init", "-q", ".");
-    git("add", "-A");
-    git("-c", "user.email=dev@example.invalid", "-c", "user.name=dev", "commit", "-qm", "基线");
+    const runGit = (...args) => execFileSync("git", ["-c", "core.autocrlf=false", ...args], { cwd: WORK, stdio: "ignore" });
+    runGit("init", "-q", ".");
+    runGit("add", "-A");
+    runGit("-c", "user.email=dev@example.invalid", "-c", "user.name=dev", "commit", "-qm", "基线");
     await page.eval(`
         acquireVsCodeApi().postMessage({ type: "newSessionInWorkspace", path: ${JSON.stringify(WORK)} });
         return true;
@@ -259,16 +260,11 @@ module.exports = async (page) => {
         shown.nums.join(","));
     check("三行删、三行加", shown.removed === 3 && shown.added === 3,
         JSON.stringify({ 加: shown.added, 删: shown.removed }));
-    if (withBin) {
-        const paintedWords = new Set(shown.painted.flat());
-        check("页面上真涂深了那几个字", paintedWords.size > 0, JSON.stringify([...paintedWords]));
-        check("删的那一边涂到 numbers、加的那一边涂到 values",
-            shown.painted.some((one) => one.includes("numbers")) && shown.painted.some((one) => one.includes("values")),
-            JSON.stringify(shown.painted));
-    } else {
-        check("没装 omnidiff：页面上没有涂深的字，两栏照旧",
-            shown.painted.flat().length === 0, JSON.stringify(shown.painted.flat()));
-    }
+    const paintedWords = new Set(shown.painted.flat());
+    check("页面上真涂深了那几个字", paintedWords.size > 0, JSON.stringify([...paintedWords]));
+    check("删的那一边涂到 numbers、加的那一边涂到 values（整个词）",
+        paintedWords.has("numbers") && paintedWords.has("values"),
+        JSON.stringify([...paintedWords]));
     const printAt = shown.texts.findIndex((t) => t.startsWith("print("));
     check("没改的那一行（print 那一行）一个字都不涂",
         printAt >= 0 && shown.painted[printAt].length === 0

@@ -1225,7 +1225,7 @@ export class PiChatWebServer {
      * 算不出差别就给 404（已经改回去了、太大了、不在仓库里）。
      *
      * 回 `{ lines: [{ kind, before, after, text, hl }] }`（见 wordDiff.ts 的 DiffRowLine）：
-     * 两边各自的真实行号、去掉前缀的原文、变了的字在原文里的区间。没装 omnidiff 时 hl 全是 null。
+     * 两边各自的真实行号、去掉前缀的原文、变了的字在原文里的区间。
      */
     private async sendChangeDiff(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string,
         wantPath: string): Promise<void> {
@@ -1238,15 +1238,14 @@ export class PiChatWebServer {
             this.sendText(req, res, 404, "这个文件不在这次的改动里（可能已经改回去了）。");
             return;
         }
-        this.sendJson(req, res, 200, { lines: await diffRows(diff, wantPath) });
+        this.sendJson(req, res, 200, { lines: diffRows(diff) });
     }
 
     /**
-     * 一段 diff 里「到底是哪几个字变了」（`POST /diff/highlight`，内容是 `{ path, diff }`）。
+     * 一段 diff 里「到底是哪几个字变了」（`POST /diff/highlight`，内容是 `{ diff }`）。
      *
      * 页面照旧自己排行、自己上色，只拿它把变了的几个字再涂深一点（见 wordDiff.ts）。
-     * 算不出来（没装 omnidiff、太大、它自己不认）就回 `{ lines: null }`：页面照旧整行上色，这不是错。
-     * `path` 只用来看出扩展名（它按扩展名挑语法），不拿去拼文件系统。
+     * 没什么可涂的就回 `{ lines: null }`：页面照旧整行上色，这不是错。
      */
     private async sendDiffHighlight(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         const text = await readBody(req, MAX_REQUEST_BYTES);
@@ -1259,8 +1258,7 @@ export class PiChatWebServer {
             return;
         }
         const diff = typeof body?.diff === "string" ? body.diff : "";
-        const wantPath = typeof body?.path === "string" ? body.path : "";
-        const lines: LineRanges[] | undefined = await changedCharRanges(diff, wantPath);
+        const lines: LineRanges[] | undefined = changedCharRanges(diff);
         this.sendJson(req, res, 200, { lines: lines ?? null });
     }
 

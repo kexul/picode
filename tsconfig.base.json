@@ -9,6 +9,9 @@
     "sourceMap": true,
     "strict": true,
     "esModuleInterop": true,
+    // src/diffMatchPatch.js 是照抄来的 JS（Google 的 diff-match-patch，见那个文件开头），
+    // 不算 TypeScript，但要让 import 找得到它（类型在旁边的 .d.ts 里）
+    "allowJs": true,
     "skipLibCheck": true,
     "resolveJsonModule": true
   }

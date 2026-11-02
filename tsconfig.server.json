@@ -6,5 +6,7 @@
   "compilerOptions": {
     "outDir": "out/server"
   },
-  "include": ["src/serverMain.ts"]
+  // src/diffMatchPatch.js 是照抄来的 JS（Google 的 diff-match-patch）：后端要用它，
+  // 但它从 serverMain.ts 那里 import 到的是旁边的 .d.ts（类型），所以得单独列进来才编得出。
+  "include": ["src/serverMain.ts", "src/diffMatchPatch.js"]
 }

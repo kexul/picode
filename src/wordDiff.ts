@@ -1,21 +1,17 @@
 /**
- * 「这一段里到底是哪几个字变了」：交给 omnidiff（https://github.com/ivankovic/omnidiff）算。
+ * 「这一段里到底是哪几个字变了」：给页面涂深用（整行都算改太笼统了）。
  *
- * 页面照旧自己排行、自己上色，只拿它给的区间把变了的几个字再涂深一点 —— 不然改一个标识符，
- * 整行都算改，看着累。omnidiff 是按语法树比的，能认出「这几个字只是搬了个位置、压根没改」，
- * 自己按字符硬比做不到这个。
+ * 算的办法：把删的那几行与加的那几行配成对（一行对一行），一对一对地用
+ * Google 的 diff-match-patch 按**字**比，把它认出来的那几段区间交出去（见 src/diffMatchPatch.js）。
+ * 那一步带上「语义整理」，所以改一个标识符得到的是「这几个字变了」，不是「一个字母一个色块」。
  *
- * 它要的是两个文件，给不了区间：所以把这段 diff 里「删行 + 没变的行」拼成 a、「增行 + 没变的行」
- * 拼成 b，临时落在系统临时目录（扩展名跟着改的那个文件走：它按扩展名挑语法），比完就删。
- * 它回的是两边各自的字节区间（0 起的行、行内字节列），这里换算成「这一行正文里的第几个字」。
- *
- * 没装 omnidiff（PATH 里找不到）就什么区间都不给：页面照旧整行上色。
- * 也别把它打进插件一起发：它是 AGPL v3，插件是 MIT，只能调人自己装好的那一个（跟 git difftool 一样）。
+ * 两件事说明白：
+ *   · 它不懂语法（要按语法结构比就得带上几十种语言的语法剖析器，那是另一个量级的事）：认得字、认不得结构。所以
+ *     「这段只是搬了个位置」会被算成改了，改一个字符也会算成改了一个词——看着不影响用。
+ *   · 删 3 行加 1 行这种，哪一行跟哪一行配是猜的（见 pairLines：按像不像挑）；配不上、
+ *     或者一对里改掉的字占了大半，就不涂那几个字——整行本来就是变了的，再涂一层只会是一块色。
  */
-import { execFile } from "child_process";
-import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
+import diff_match_patch from "./diffMatchPatch";
 
 /** 一行里要涂深的区间：`[起, 止)`，单位是这一行的第几个字（不是字节）。 */
 export type LineRanges = Array<[number, number]> | null;
@@ -33,28 +29,29 @@ export interface DiffRowLine {
     hl: Array<[number, number]> | null;
 }
 
-/** 一段 diff 最多多大才值得算法：再大的本来也没人一行行看（页面那边也有自己的上限）。 */
+/** 一段 diff 最多多大才值得一行行比：再大的本来也没人一行行看（页面那边也有自己的上限）。 */
 const MAX_DIFF_CHARS = 400_000;
-/** 它自己的目标是一份 diff 100 毫秒以内；慢成这样就别等了，页面照旧画。 */
-const TIMEOUT_MS = 3000;
-/** 刚找过没找着的时候，隔一会再翻一遍 PATH（人可能刚装好），别每段 diff 都翻一遍。 */
-const RESCAN_MS = 30_000;
-/** 算过的留着：同一份 diff 会重画好几遍（历史回放、开关弹窗）。 */
-const CACHE_MAX = 64;
+/** 一对里改掉的字占这么多就不涂了：整行都算改，涂出来只会是一片色块。 */
+const WHOLE_LINE = 0.6;
+/** 配对时最多试这么多个组合（删 M 行 × 加 N 行）：再大就直接按顺序配，别在这儿耗时间。 */
+const PAIR_TRIES = 100;
+/** 太不像的两行不配（相似度低于这个）：配错了，涂出来的颜色反而更乱。 */
+const PAIR_MIN = 0.3;
 
-let foundBin: string | undefined;
-let scannedAt = 0;
-const cache = new Map<string, Analyzed>();
+/** 操作码：跟 diff-match-patch 里那几个一致（那个文件是照抄的 JS，没带类型，这里自己写一份）。 */
+const DIFF_DELETE = -1;
+const DIFF_INSERT = 1;
+const DIFF_EQUAL = 0;
 
 /**
  * 一段 diff 里每一行要涂深的区间，跟 `diffText.split("\n")` 一一对应（单位是那一行显示出来的文字）；
- * 这一行不用涂就是 null。undefined = 算不出来（没装 omnidiff / 太大 / 它自己不认这一对文件）。
+ * 这一行不用涂就是 null。undefined = 这一份什么都不用涂（没改动 / 太大 / 一行都配不上）。
  */
-export async function changedCharRanges(diffText: string, relPath: string): Promise<LineRanges[] | undefined> {
-    const got = await analyze(diffText, relPath);
-    if (!got || got.ranges === undefined) { return undefined; }
-    const out: LineRanges[] = got.lines.map((line, i) => {
-        const ranges = rangesOf(got, line, i);
+export function changedCharRanges(diffText: string): LineRanges[] | undefined {
+    const got = analyze(diffText);
+    if (!got) { return undefined; }
+    const out: LineRanges[] = got.lines.map((line) => {
+        const ranges = got.hl.get(line);
         if (!ranges) { return null; }
         // 显示出来的是「前缀 + 原文」：整体往后挪，再夹到这一行显示出来的长度以内
         const shifted: Array<[number, number]> = [];
@@ -70,15 +67,15 @@ export async function changedCharRanges(diffText: string, relPath: string): Prom
 
 /**
  * 一段 diff 拆成一行行：两边的真实行号、原文、变了的字（见 DiffRowLine）。
- * 页面拿它摆「之前 | 之后」两栏；没装 omnidiff 时 `hl` 全是 null，两栏照旧能看。
+ * 页面拿它摆「之前 | 之后」两栏。
  */
-export async function diffRows(diffText: string, relPath: string): Promise<DiffRowLine[]> {
-    const got = await analyze(diffText, relPath);
+export function diffRows(diffText: string): DiffRowLine[] {
+    const got = analyze(diffText);
     if (!got) { return []; }
     const out: DiffRowLine[] = [];
     let before = 0;
     let after = 0;
-    got.lines.forEach((line, i) => {
+    for (const line of got.lines) {
         if (line.kind === "other") {
             const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line.content);
             if (hunk) {
@@ -88,39 +85,27 @@ export async function diffRows(diffText: string, relPath: string): Promise<DiffR
             // `@@` 与 pi 那种 `...`（省掉了中间一截）各占一行「这里省了」；`--- a/x` 那种头不占行
             const elided = hunk !== null || ["...", "…"].includes(line.content.trim());
             if (elided && out.length) { out.push({ kind: "gap", before: 0, after: 0, text: "", hl: null }); }
-            return;
+            continue;
         }
-        const hl = rangesOf(got, line, i);
+        const hl = got.hl.get(line) ?? null;
         if (line.kind === "del") {
             if (line.number !== undefined) { before = line.number; }
             out.push({ kind: "del", before: before++, after: 0, text: line.content, hl });
-            return;
+            continue;
         }
         if (line.kind === "add") {
             if (line.number !== undefined) { after = line.number; }
             out.push({ kind: "add", before: 0, after: after++, text: line.content, hl });
-            return;
+            continue;
         }
         // 没变的行：两边行号一样（带行号的就照它，否则两边各数各的）
         if (line.number !== undefined) {
             before = line.number;
             after = line.number;
         }
-        out.push({ kind: "ctx", before: before++, after: after++, text: line.content, hl });
-    });
+        out.push({ kind: "ctx", before: before++, after: after++, text: line.content, hl: null });
+    }
     return out;
-}
-
-/** 这一行变了的字，在它正文里的区间；不涂就是 null。 */
-function rangesOf(got: Analyzed, line: DiffLine, i: number): Array<[number, number]> | null {
-    if (line.kind !== "del" && line.kind !== "add") { return null; }
-    const [own, ranges] = line.kind === "del" ? [got.before, got.beforeRanges] : [got.after, got.afterRanges];
-    const row = own.rowOf[i];
-    if (row < 0 || row >= own.parts.length) { return null; }
-    const bytes = ranges.get(row);
-    if (!bytes) { return null; }
-    const out = charRanges(bytes, own.parts[row]);
-    return out.length ? out : null;
 }
 
 // ==================== 一段 diff 拆成两边 ====================
@@ -135,24 +120,10 @@ interface DiffLine {
     number?: number;
 }
 
-interface Side {
-    /** 这一边拼起来的全文（行尾都是 `\n`）。 */
-    text: string;
-    /** 每一行去掉前缀以后的原文。 */
-    parts: string[];
-    /** diff 里的第几行 → 这一边全文的第几行；-1 = 这一行不在这一边。 */
-    rowOf: Int32Array;
-}
-
-/** 一段 diff 拆开的结果：哪几行、两边各是哪几行、变了的字各在哪儿（`ranges` 为空 = 没算出区间）。 */
+/** 一段 diff 拆开的结果：哪几行，以及哪几行里变了的字在哪儿（键是 lines 里的下标）。 */
 interface Analyzed {
     lines: DiffLine[];
-    before: Side;
-    after: Side;
-    beforeRanges: Map<number, Array<[number, number]>>;
-    afterRanges: Map<number, Array<[number, number]>>;
-    /** undefined = 这一份算不出区间（没装 omnidiff / 太大 / 它自己不认）。 */
-    ranges: true | undefined;
+    hl: Map<DiffLine, Array<[number, number]>>;
 }
 
 /** 两种 diff 的文字都认：git 与我们自己那份是「前缀 + 原文」，pi 那边是「前缀 + 右对齐的行号 + 空格 + 原文」。 */
@@ -163,6 +134,14 @@ const MARKER = /^[+\- ]/;
 function isHeaderLine(line: string): boolean {
     return line.startsWith("@@") || line.startsWith("diff --git ") || line.startsWith("index ")
         || line.startsWith("--- ") || line.startsWith("+++ ") || line.startsWith("\\ No newline");
+}
+
+/** 一段 diff 拆开，并且把变了的字算出来（算不出来时 hl 里就没有那一行）。 */
+function analyze(diffText: string): Analyzed | undefined {
+    if (!diffText || diffText.length > MAX_DIFF_CHARS) { return undefined; }
+    const lines = parseDiffLines(diffText);
+    if (!lines.some((line) => line.kind === "del" || line.kind === "add")) { return undefined; }
+    return { lines, hl: lineRanges(lines) };
 }
 
 function parseDiffLines(diffText: string): DiffLine[] {
@@ -185,197 +164,154 @@ function parseDiffLines(diffText: string): DiffLine[] {
     });
 }
 
-/** 把 diff 拆成一边的全文：前（删行 + 没变的行）或者后（增行 + 没变的行）。 */
-function sideOf(lines: DiffLine[], side: "before" | "after"): Side {
-    const parts: string[] = [];
-    const rowOf = new Int32Array(lines.length).fill(-1);
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        const take = side === "before" ? line.kind === "ctx" || line.kind === "del" : line.kind === "ctx" || line.kind === "add";
-        if (!take) { continue; }
-        rowOf[i] = parts.length;
-        parts.push(line.content);
-    }
-    return { text: parts.length ? parts.join("\n") + "\n" : "", parts, rowOf };
-}
+// ==================== 哪几行配成对、哪几个字变了 ====================
 
-/**
- * 一段 diff 拆开，并且（如果装了 omnidiff）问一遍变了的字在哪儿。
- * 结果按 diff 文字缓存：同一份 diff 会重画好几遍。
- */
-async function analyze(diffText: string, relPath: string): Promise<Analyzed | undefined> {
-    if (!diffText || diffText.length > MAX_DIFF_CHARS) { return undefined; }
-    const ext = languageExt(relPath);
-    const key = ext + "\u0000" + diffText;
-    const hit = cache.get(key);
-    if (hit) {
-        cache.delete(key);   // 用过的挪到队尾（Map 按插入顺序，最前面那个就是最久没用的）
-        cache.set(key, hit);
-        return hit;
-    }
-    const lines = parseDiffLines(diffText);
-    const before = sideOf(lines, "before");
-    const after = sideOf(lines, "after");
-    if (before.parts.length === 0 && after.parts.length === 0) { return undefined; }
-    const bin = findOmnidiff();    const json = bin ? await runOmnidiff(bin, before.text, after.text, ext) : undefined;
-    const got: Analyzed = {
-        lines,
-        before,
-        after,
-        beforeRanges: rangesOfSide(json?.before, before),
-        afterRanges: rangesOfSide(json?.after, after),
-        ranges: json ? true : undefined,
-    };
-    // 只记算成功过的：没装 omnidiff 时不要把它“算不出来”也记下来（人可能刚装好，下一次该重试）
-    if (got.ranges === true) {
-        if (cache.size >= CACHE_MAX) { cache.delete(cache.keys().next().value as string); }
-        cache.set(key, got);
-    }
-    return got;
-}
-
-// ==================== 它给的那些区间 ====================
-
-interface RowRange {
-    start_row?: number;
-    start_column?: number;
-    end_row?: number;
-    end_column?: number;
-}
-
-interface Hunk {
-    operation?: string;
-    range?: RowRange;
-}
-
-/** 一边的每个改动行 → 这一行上变了的字节区间。`move` 不算：那几个字只是搬了位置，没改。 */
-function rangesOfSide(side: unknown, own: Side): Map<number, Array<[number, number]>> {
-    const out = new Map<number, Array<[number, number]>>();
-    const hunks = (side as { hunks?: unknown } | undefined)?.hunks;
-    if (!Array.isArray(hunks)) { return out; }
-    for (const hunk of hunks as Hunk[]) {
-        if (!hunk || hunk.operation === "move" || !hunk.range) { continue; }
-        const { start_row: sr, start_column: sc = 0, end_row: er, end_column: ec = 0 } = hunk.range;
-        if (typeof sr !== "number" || typeof er !== "number" || er < sr) { continue; }
-        if (sr === er) { addRange(out, own, sr, sc, ec); continue; }
-        addRange(out, own, sr, sc, byteLength(own.parts[sr]));
-        for (let row = sr + 1; row < er; row++) { addRange(out, own, row, 0, byteLength(own.parts[row])); }
-        addRange(out, own, er, 0, ec);
+/** 整段 diff 里变了的字：删的那一段与加的那一段成对地比（见 pairLines）。 */
+function lineRanges(lines: DiffLine[]): Map<DiffLine, Array<[number, number]>> {
+    const out = new Map<DiffLine, Array<[number, number]>>();
+    const dmp = new diff_match_patch();
+    for (let i = 0; i < lines.length;) {
+        if (lines[i].kind !== "del") { i++; continue; }
+        const dels: DiffLine[] = [];
+        while (i < lines.length && lines[i].kind === "del") { dels.push(lines[i++]); }
+        const adds: DiffLine[] = [];
+        while (i < lines.length && lines[i].kind === "add") { adds.push(lines[i++]); }
+        if (!adds.length) { continue; }
+        for (const [left, right] of pairLines(dels, adds, dmp)) {
+            if (!left || !right || similar(left.content, right.content, dmp) < PAIR_MIN) { continue; }
+            const changed = changedIn(left.content, right.content, dmp);
+            if (!changed) { continue; }
+            if (changed.left) { out.set(left, changed.left); }
+            if (changed.right) { out.set(right, changed.right); }
+        }
     }
     return out;
 }
 
-function addRange(out: Map<number, Array<[number, number]>>, own: Side, row: number, from: number, to: number): void {
-    if (!(row >= 0) || row >= own.parts.length) { return; }
-    const end = Math.min(to, byteLength(own.parts[row]));
-    const start = Math.max(0, from);
-    if (end <= start) { return; }
-    const list = out.get(row);
-    if (list) { list.push([start, end]); } else { out.set(row, [[start, end]]); }
+/**
+ * 删的那几行与加的那几行怎么配成对：行数一样就照顺序配（绝大多数 diff 都是这样），
+ * 不一样（删 3 加 1 那种）就按「谁跟谁像」挑，剩下的晾着不配。
+ */
+function pairLines(dels: DiffLine[], adds: DiffLine[], dmp: diff_match_patch): Array<[DiffLine?, DiffLine?]> {
+    if (dels.length === adds.length) { return dels.map((line, i) => [line, adds[i]]); }
+    if (dels.length * adds.length > PAIR_TRIES) {
+        // 太多组合了：按顺序配，多出来的那几行不配（那种大块多半是整段换掉，涂不涂那几个字无所谓）
+        const count = Math.max(dels.length, adds.length);
+        const out: Array<[DiffLine?, DiffLine?]> = [];
+        for (let i = 0; i < count; i++) { out.push([dels[i], adds[i]]); }
+        return out;
+    }
+    const pairs: Array<{ left: DiffLine; right: DiffLine; score: number }> = [];
+    for (const left of dels) {
+        for (const right of adds) { pairs.push({ left, right, score: similar(left.content, right.content, dmp) }); }
+    }
+    pairs.sort((a, b) => b.score - a.score);
+    const usedLeft = new Set<DiffLine>();
+    const usedRight = new Set<DiffLine>();
+    const out: Array<[DiffLine?, DiffLine?]> = [];
+    for (const pair of pairs) {
+        if (usedLeft.has(pair.left) || usedRight.has(pair.right)) { continue; }
+        usedLeft.add(pair.left);
+        usedRight.add(pair.right);
+        out.push([pair.left, pair.right]);
+    }
+    for (const left of dels) { if (!usedLeft.has(left)) { out.push([left, undefined]); } }
+    for (const right of adds) { if (!usedRight.has(right)) { out.push([undefined, right]); } }
+    return out;
 }
 
-function byteLength(text: string | undefined): number {
-    return text === undefined ? 0 : Buffer.byteLength(text, "utf8");
+/** 两行像不像（0—1）：按「改了多少个字」算，1 = 一模一样。 */
+function similar(left: string, right: string, dmp: diff_match_patch): number {
+    if (left === right) { return 1; }
+    const longest = Math.max(left.length, right.length);
+    if (longest === 0) { return 1; }
+    return 1 - dmp.diff_levenshtein(dmp.diff_main(left, right, false)) / longest;
+}
+
+interface Changed {
+    left?: Array<[number, number]>;
+    right?: Array<[number, number]>;
 }
 
 /**
- * 字节区间（行内字节列）→ 这一行正文里的字的区间（UTF-16 的计法）。
- * 一个汉字占 3 个字节、算 1 个字符，所以对不上，得按那一行的原文一个个字地数过去。
+ * 一对行里变了的字：删的那一边给了哪些区间、加的那一边给了哪些区间。
+ * 改掉的字占了大半就不给（整行都是新的，涂出来是一块色）；只改了空白也不给（看不见）。
  */
-function charRanges(bytes: Array<[number, number]>, content: string): Array<[number, number]> {
-    const chars = charsOf(content);
-    const limit = content.length;
+function changedIn(left: string, right: string, dmp: diff_match_patch): Changed | undefined {
+    const diffs = dmp.diff_main(left, right, false);
+    dmp.diff_cleanupSemantic(diffs);
+    const leftRanges: Array<[number, number]> = [];
+    const rightRanges: Array<[number, number]> = [];
+    let atLeft = 0;
+    let atRight = 0;
+    for (const [op, text] of diffs) {
+        if (op === DIFF_EQUAL) {
+            atLeft += text.length;
+            atRight += text.length;
+        } else if (op === DIFF_DELETE) {
+            leftRanges.push([atLeft, atLeft + text.length]);
+            atLeft += text.length;
+        } else if (op === DIFF_INSERT) {
+            rightRanges.push([atRight, atRight + text.length]);
+            atRight += text.length;
+        }
+    }
+    const leftTrimmed = trimRanges(left, leftRanges);
+    const rightTrimmed = trimRanges(right, rightRanges);
+    if (!leftTrimmed.length && !rightTrimmed.length) { return undefined; }
+    // 先按「真正变了的字」占多少来判：扩到整个词以后会显得改得更多，拿那个数判会把该涂的也毙掉
+    const longest = Math.max(left.length, right.length, 1);
+    const biggest = Math.max(changedLength(leftTrimmed), changedLength(rightTrimmed));
+    if (biggest / longest > WHOLE_LINE) { return undefined; }
+    const leftWide = widenRanges(left, leftTrimmed);
+    const rightWide = widenRanges(right, rightTrimmed);
+    return { left: leftWide.length ? leftWide : undefined, right: rightWide.length ? rightWide : undefined };
+}
+
+/** 区间两头把空白削掉：空白变了界面上看不出来，涂上去只是一道细细的色条。 */
+function trimRanges(text: string, ranges: Array<[number, number]>): Array<[number, number]> {
     const out: Array<[number, number]> = [];
-    for (const [from, to] of bytes) {
-        const start = unitsAt(chars, from);
-        const end = Math.min(limit, unitsAt(chars, to));
+    for (const [from, to] of ranges) {
+        let start = from;
+        let end = to;
+        while (start < end && /\s/.test(text[start])) { start++; }
+        while (end > start && /\s/.test(text[end - 1])) { end--; }
         if (end > start) { out.push([start, end]); }
     }
-    out.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    return mergeRanges(out);
+}
+
+/** 落在标识符中间的区间扩到整个标识符上（`numbers` 不会只涂成 `number`、剩下那个 `s` 不涂）。 */
+function widenRanges(text: string, ranges: Array<[number, number]>): Array<[number, number]> {
+    const out: Array<[number, number]> = [];
+    for (const [from, to] of ranges) {
+        let start = from;
+        let end = to;
+        while (start > 0 && isWordChar(text[start - 1]) && isWordChar(text[start])) { start--; }
+        while (end < text.length && isWordChar(text[end]) && isWordChar(text[end - 1])) { end++; }
+        out.push([start, end]);
+    }
+    return mergeRanges(out);
+}
+
+/** 挨上、叠上的区间并成一段（同一个字别被切两遍）。 */
+function mergeRanges(ranges: Array<[number, number]>): Array<[number, number]> {
+    const sorted = ranges.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
     const merged: Array<[number, number]> = [];
-    for (const range of out) {
+    for (const range of sorted) {
         const last = merged[merged.length - 1];
-        if (last && range[0] <= last[1]) { last[1] = Math.max(last[1], range[1]); } else { merged.push([range[0], range[1]]); }
+        if (last && range[0] <= last[1]) { last[1] = Math.max(last[1], range[1]); } else { merged.push(range); }
     }
     return merged;
 }
 
-/** 一行原文里每个字（码点）从第几个字节起、到第几个字符为止，用来把字节列翻成字符列。 */
-function charsOf(text: string): Array<[number, number]> {
-    const out: Array<[number, number]> = [];
-    let bytes = 0;
-    let units = 0;
-    for (const ch of text) {
-        out.push([bytes, units]);
-        bytes += Buffer.byteLength(ch, "utf8");
-        units += ch.length;
-    }
-    out.push([bytes, units]);
-    return out;
+/** 算不算标识符里那类字（只认英文字母数字这些：中文不当词切，涂到哪儿算哪儿）。 */
+function isWordChar(ch: string | undefined): boolean {
+    return ch !== undefined && /[A-Za-z0-9_$]/.test(ch);
 }
 
-/** 第几个字节落在第几个字符：落在字中间（不该有）就取这个字的开头。 */
-function unitsAt(chars: Array<[number, number]>, byte: number): number {
-    if (byte <= 0) { return 0; }
-    let low = 0;
-    let high = chars.length - 1;
-    while (low < high) {
-        const mid = (low + high + 1) >> 1;
-        if (chars[mid][0] <= byte) { low = mid; } else { high = mid - 1; }
-    }
-    return chars[low][1];
-}
-
-// ==================== 叫它干活 ====================
-
-/** 临时文件用哪个扩展名：它按扩展名挑语法（`.py` 按 Python 比，不认识的当纯文本比）。 */
-function languageExt(relPath: string): string {
-    const ext = path.extname(relPath || "");
-    return /^\.[A-Za-z0-9]{1,12}$/.test(ext) ? ext : ".txt";
-}
-
-/** 装在哪：PATH 里挨个目录找。找着一次就一直记着。 */
-function findOmnidiff(): string | undefined {
-    if (foundBin !== undefined) { return foundBin; }
-    const now = Date.now();
-    if (scannedAt !== 0 && now - scannedAt < RESCAN_MS) { return undefined; }
-    scannedAt = now;
-    const names = process.platform === "win32" ? ["omnidiff.exe", "omnidiff"] : ["omnidiff"];
-    for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
-        if (!dir) { continue; }
-        for (const name of names) {
-            const full = path.join(dir, name);
-            try {
-                fs.accessSync(full, fs.constants.X_OK);
-                foundBin = full;
-                return full;
-            } catch { /* 这个目录里没有 */ }
-        }
-    }
-    return undefined;
-}
-
-/** 让它比一遍两个临时文件，拿它回的 JSON；哪一种失败都当「算不出来」。 */
-async function runOmnidiff(bin: string, before: string, after: string, ext: string): Promise<any | undefined> {
-    let dir: string | undefined;
-    try {
-        dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pichat-diff-"));
-        const a = path.join(dir, "a" + ext);
-        const b = path.join(dir, "b" + ext);
-        await fs.promises.writeFile(a, before, "utf8");
-        await fs.promises.writeFile(b, after, "utf8");
-        const out = await new Promise<string | undefined>((resolve) => {
-            execFile(bin, ["--mode", "json", a, b], {
-                timeout: TIMEOUT_MS,
-                maxBuffer: 8 * 1024 * 1024,
-                windowsHide: true,
-                env: { ...process.env, NO_COLOR: "1", OMNIDIFF_GRAPHICS: "halfblocks" },
-            }, (err, stdout) => { resolve(err ? undefined : stdout); });
-        });
-        return out ? JSON.parse(out) : undefined;
-    } catch {
-        return undefined;
-    } finally {
-        if (dir) { fs.promises.rm(dir, { recursive: true, force: true }).catch(() => { /* 删不掉就算了 */ }); }
-    }
+function changedLength(ranges: Array<[number, number]>): number {
+    let total = 0;
+    for (const [from, to] of ranges) { total += to - from; }
+    return total;
 }
