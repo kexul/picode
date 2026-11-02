@@ -551,7 +551,7 @@ export default function bashBridge(pi: any): void {
                 timeout: { type: "number", description: "超时秒数（可选）；放到后台的任务也照这个时间掐掉。" },
                 background: {
                     type: "boolean",
-                    description: "放到后台跑：立刻返回，不挡当前这一轮。适合跑测试、起服务、等编译这类慢命令。",
+                    description: "放到后台跑：立刻返回，不挡当前这一轮。",
                 },
             },
             required: ["command"],
