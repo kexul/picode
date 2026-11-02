@@ -75,6 +75,69 @@ function wantsGzip(accept: string | string[] | undefined): boolean {
     return false;
 }
 
+/**
+ * 一条推送连接（服务端写给页面的那一串事件）。
+ *
+ * 请求方说能收 gzip 时就压着发：会话消息大半是文字（整屏重画一次能有几百 KB），压完只剩
+ * 三成上下 —— 手机走流量时这是最实在的一笔。插件里那块对话面板是自己用 Node 连的、不带
+ * Accept-Encoding，照旧发原文，两边都不用改。
+ *
+ * 事件得一条一条立刻送到，所以每写一段就刷一次（zlib 的 Z_SYNC_FLUSH）：不刷就攒在压缩器的
+ * 缓冲区里，页面要等攒够一大块才看得见，等于把「边跑边出字」变成一顿一顿。代价是每次刷都多
+ * 十几字节的块头 —— 心跳那种几十字节的小事件等于涨了一截，但一屏文字只剩三成，加起来划算。
+ */
+class PageStream {
+    /** 压缩器；请求方不收 gzip 时没有这一层，直接往响应里写。 */
+    private readonly packer?: zlib.Gzip;
+    /** 积压超过这么多字节就当作页面没在读（见 write）。 */
+    private readonly limit: number;
+
+    constructor(private readonly res: http.ServerResponse, pack: boolean, limit: number) {
+        this.limit = limit;
+        if (!pack) { return; }
+        this.packer = zlib.createGzip({ flush: zlib.constants.Z_SYNC_FLUSH });
+        this.packer.on("data", (chunk: Buffer) => {
+            if (this.res.writableEnded || this.res.destroyed) { return; }
+            this.res.write(chunk);
+        });
+        this.packer.on("error", () => { /* 压不下去基本不会：下面按积压/断开那两条路兜着 */ });
+    }
+
+    /** 还没送出去的字节（压缩器里的加上响应缓冲里的）。 */
+    get backlog(): number {
+        return (this.packer?.writableLength ?? 0) + this.res.writableLength;
+    }
+
+    /**
+     * 写一段事件文本。
+     * @returns "gone" 这条连接已经断了；"backlogged" 页面没在读、积压过线了；"ok" 写进去了
+     */
+    write(text: string): "ok" | "gone" | "backlogged" {
+        if (this.res.writableEnded || this.res.destroyed) { return "gone"; }
+        try {
+            if (this.packer) { this.packer.write(text); } else { this.res.write(text); }
+        } catch {
+            return "gone";
+        }
+        return this.backlog > this.limit ? "backlogged" : "ok";
+    }
+
+    /** 收尾：note 给了就先写一句告别话（页面收到就不再重连），然后断开；空串表示直接断。 */
+    end(note: string): void {
+        if (this.res.writableEnded || this.res.destroyed) { return; }
+        const farewell = note ? `event: end\ndata: ${JSON.stringify({ note })}\n\n` : "";
+        try {
+            if (this.packer) {
+                // 告别话也得从压缩器走：直接 res.end() 会让页面收到半截 gzip 流
+                this.packer.once("end", () => { try { this.res.end(); } catch { /* 已经断了 */ } });
+                this.packer.end(farewell);
+                return;
+            }
+            if (farewell) { this.res.write(farewell); this.res.end(); } else { this.res.destroy(); }
+        } catch { /* 连接已经断了 */ }
+    }
+}
+
 /** 取文件名的扩展名（带点、小写；没有就是空串）。 */
 function extensionOf(filePath: string): string {
     const dot = filePath.lastIndexOf(".");
@@ -285,8 +348,8 @@ export class PiChatWebServer {
     private trustedOrigins: string[] = [];
     /** 上面那些来源里的主机名（对照 Host 头用：反代转来的 Host 可能还是原来那个域名）。 */
     private trustedHostnames: string[] = [];
-    /** 页面标识 → 它那条连接的响应对象（心跳要往里写 tick）。 */
-    private readonly streams = new Map<string, http.ServerResponse>();
+    /** 页面标识 → 它那条连接（心跳要往里写 tick）。 */
+    private readonly streams = new Map<string, PageStream>();
     /** 屏标识 → 它那条连接的响应对象。 */
     private readonly screenStreams = new Map<string, http.ServerResponse>();
     private heartbeat?: ReturnType<typeof setInterval>;
@@ -1367,24 +1430,20 @@ export class PiChatWebServer {
         // 页面标识正常都是服务发出页面时写进去的那个；万一没有就自己编一个，别把好几个页面混成一条
         const id = pageId || `p-anon-${crypto.randomUUID()}`;
         const broadcaster = this.host.getBroadcaster();
+        // 先定下这条连接压不压、把头写完：之后往这条连接写的每一段都得跟这个头对得上
+        const stream = this.openStream(res, req.headers["accept-encoding"]);
         const { channel, replaced, openSeq } = broadcaster.addChannel(
             id,
-            (msg) => { this.writeChunk(channel, res, `event: msg\ndata: ${JSON.stringify(msg)}\n\n`); },
-            (note) => { this.endStream(res, note); },
+            (msg) => { this.writeChunk(channel, stream, `event: msg\ndata: ${JSON.stringify(msg)}\n\n`); },
+            (note) => { stream.end(note); },
         );
-        this.streams.set(id, res);
-        res.writeHead(200, {
-            "Content-Type": "text/event-stream; charset=utf-8",
-            "Cache-Control": "no-store, no-transform",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        });
+        this.streams.set(id, stream);
         // retry 是给浏览器看的：万一由浏览器自己重连，隔 1 秒就来一次（页面那头也会自己管重连）
-        res.write("retry: 1000\n\n");
-        res.write(": connected\n\n");
+        this.writeChunk(channel, stream, "retry: 1000\n\n");
+        this.writeChunk(channel, stream, ": connected\n\n");
         // 握手把三个时间一起报给页面：网页那一份是纯 JS（browserBridge.js），读不了
         // chatProtocol.ts，报给它在那边就不留规则 —— 免得两边各写死一套、改一边就白重连。
-        this.writeChunk(channel, res, `event: msg\ndata: ${JSON.stringify({
+        this.writeChunk(channel, stream, `event: msg\ndata: ${JSON.stringify({
             type: "hello",
             seq: openSeq,
             heartbeatMs: HEARTBEAT_MS,
@@ -1409,19 +1468,34 @@ export class PiChatWebServer {
      * 继续往里塞只是把这些字节堆在插件进程里。积压超过上限直接掐掉连接，页面回来会自己重连，
      * 重连后插件给它整屏重画一遍，内容不会少。
      */
-    private writeChunk(channel: PageChannel, res: http.ServerResponse, chunk: string): void {
-        if (res.writableEnded || res.destroyed) { this.dropChannel(channel); return; }
-        try {
-            const flushed = res.write(chunk);
-            if (!flushed && res.writableLength > this.backlogBytes) {
-                this.hooks.log(`页面 ${channel.id} 有一阵子没在读推送流（积压 ${Math.round(res.writableLength / 1024)} KB），` +
-                    "掐掉这条连接。页面回到前台会自己重连，重连后整屏重画一遍。");
-                channel.close("");
-                this.dropChannel(channel);
-            }
-        } catch {
-            this.dropChannel(channel);
+    private writeChunk(channel: PageChannel, stream: PageStream, chunk: string): void {
+        const verdict = stream.write(chunk);
+        if (verdict === "ok") { return; }
+        if (verdict === "backlogged") {
+            this.hooks.log(`页面 ${channel.id} 有一阵子没在读推送流（积压 ${Math.round(stream.backlog / 1024)} KB），` +
+                "掐掉这条连接。页面回到前台会自己重连，重连后整屏重画一遍。");
+            channel.close("");
         }
+        this.dropChannel(channel);
+    }
+
+    /**
+     * 开一条推送连接：头先写好（收不收压缩在这里定），再把这个连接对象交出去。
+     *
+     * 压缩是按请求方的 Accept-Encoding 定的，所以响应头得先说清楚（压了就是 Content-Encoding:
+     * gzip，没压就什么都不带）；定了之后这条连接上写的每一段都得照这个来。
+     */
+    private openStream(res: http.ServerResponse, accept: string | string[] | undefined): PageStream {
+        const pack = wantsGzip(accept);
+        const stream = new PageStream(res, pack, this.backlogBytes);
+        res.writeHead(200, {
+            "Content-Type": "text/event-stream; charset=utf-8",
+            "Cache-Control": "no-store, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            ...(pack ? { "Content-Encoding": "gzip", "Vary": "Accept-Encoding" } : {}),
+        });
+        return stream;
     }
 
     /** 断开一条推送连接（页面走了 / 死连接被巡检掐掉 / 积压太多）。 */
@@ -1465,9 +1539,9 @@ export class PiChatWebServer {
             this.host.onPageDisconnected(id);
         }
         broadcaster.forEachChannel((channel) => {
-            const res = this.streams.get(channel.id);
-            if (!res) { return; }
-            this.writeChunk(channel, res, `event: tick\ndata: ${JSON.stringify({ t: now })}\n\n`);
+            const stream = this.streams.get(channel.id);
+            if (!stream) { return; }
+            this.writeChunk(channel, stream, `event: tick\ndata: ${JSON.stringify({ t: now })}\n\n`);
         });
         // 屏那边同样收一遍：VS Code 窗口半天没动静（死机、网断了没通知到）就别留在登记簿里，
         // 否则点文件会被派给一个已经不在的窗口。
