@@ -22,6 +22,8 @@
  *      把文件照原样写回去以后，那一行从清单里消失（清单空了就回到那句提示）；
  *   8. 模型新写一个文件（write 那条路）：清单里那一行是 +3 −0，点开三行都是新加的；
  *   9. 切到别的会话再切回来：还停在该才那份 diff 上（每个会话各记各的）。
+ *  10. 整份行尾从 LF 换成 CRLF（Windows 上很常见：仓库按 CRLF 检出、编辑工具按 LF 写回去）：
+ *      这不算改动，那一行该从清单里消失；CRLF 的文件里真改一行，数是 +1 −1，不是整份重写。
  *
  * 造的话说在前头：脚本自己动 dev/.scratch 里的文件（那个目录不进版本库，随便造）。
  */
@@ -35,6 +37,9 @@ const WORK = path.join(SCRATCH_DIR, "changesWork");
 const SCRIPT_FILE = "说明.md";
 /** 「写新文件」那一段建的那个文件（见 dev/fakePi.js）。 */
 const NEW_FILE = "新文件.md";
+/** 行尾那一段用的文件：开局按 LF 写一份，后来整份换成 CRLF（内容一个字不改）。 */
+const EOL_FILE = "行尾.md";
+const EOL_BASE = "第一行\n第二行\n第三行\n";
 /** 这一份文件开局那一段（跟 dev/harness.js 铺的那一份一样）：剧本要按原文换掉“调试”两个字。 */
 const WELCOME_LINE = "这是 Pi Chat 插件的调试用工作目录（dev/.scratch）。";
 /** 说明.md 本来的样子（假模型改的就是它；把这份写回去，那一行就从清单里消失）。 */
@@ -205,6 +210,7 @@ module.exports = async (page) => {
     fs.rmSync(WORK, { recursive: true, force: true });
     fs.mkdirSync(WORK, { recursive: true });
     fs.writeFileSync(path.join(WORK, SCRIPT_FILE), SCRIPT_BASE, "utf8");
+    fs.writeFileSync(path.join(WORK, EOL_FILE), EOL_BASE, "utf8");   // 行尾那一段就改这一份
     fs.rmSync(path.join(WORK, NEW_FILE), { force: true });
     await page.eval(`
         acquireVsCodeApi().postMessage({ type: "newSessionInWorkspace", path: ${JSON.stringify(WORK)} });
@@ -369,6 +375,33 @@ module.exports = async (page) => {
     await page.shot("changes-8-new-file.png");
     await clickBack(page);
     fs.rmSync(path.join(WORK, NEW_FILE), { force: true });
+
+    // ---- 9. 整份行尾换成 CRLF：不算改动 ----
+    // Windows 上很常见：仓库按 CRLF 检出（core.autocrlf），编辑工具按 LF 写回去，
+    // 内容是“没改”的，但逐行比出来就是整份重写（一个 2000 行的文件报 +2033 −2034）。
+    const eolPath = path.join(WORK, EOL_FILE);
+    fs.writeFileSync(eolPath, EOL_BASE.replace(/\n/g, "\r\n"), "utf8");
+    await reopenSidebar(page);
+    rows = await waitFor(page, "行尾换掉以后清单刷新，那一行不该在",
+        rowsNow, (x) => !x.some((one) => one.path === EOL_FILE));
+    check("整份行尾从 LF 换成 CRLF：不算改动，那一行不进清单",
+        !rows.some((one) => one.path === EOL_FILE), JSON.stringify(rows));
+
+    // ---- 10. CRLF 的文件里真改一行：数是 +1 −1 ----
+    fs.writeFileSync(eolPath, "第一行改过了\r\n第二行\r\n第三行\r\n", "utf8");
+    await reopenSidebar(page);
+    rows = await waitFor(page, "CRLF 的文件改一行", rowsNow, (x) => x.some((one) => one.path === EOL_FILE));
+    const eolRow = rows.find((one) => one.path === EOL_FILE);
+    check("CRLF 的文件里真改一行：+1 −1（不是整份重写）",
+        !!(eolRow && countsAre(eolRow.counts, 1, 1)), eolRow && eolRow.counts);
+    console.log("点那一行：" + await clickRow(page, EOL_FILE));
+    const eolDiff = await waitFor(page, "行尾那一份 diff 打开", diffNow, (x) => x.fileView && x.lines > 0);
+    check("点开也是 +1 −1 那么两行，不是整份",
+        eolDiff.added.length === 1 && eolDiff.removed.length === 1,
+        JSON.stringify({ added: eolDiff.added.length, removed: eolDiff.removed.length }));
+    await page.shot("changes-9-eol.png");
+    await clickBack(page);
+    fs.rmSync(eolPath, { force: true });
 
     console.log("");
     console.log(failures === 0 ? "改动那一格：都对上了。" : "改动那一格：有 " + failures + " 条不对。");

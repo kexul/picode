@@ -331,7 +331,9 @@ export class ChangeSnapshot {
     public async changes(): Promise<SnapshotChange[]> {
         const out: SnapshotChange[] = [];
         const seen = new Set<string>();
-        const numstat = await runGit(["diff", "--numstat", "--no-renames", "-z", this.baseTree], {
+        // --ignore-cr-at-eol：整份行尾从 LF 变成 CRLF（Windows 上仓库按 CRLF 检出、编辑工具按 LF
+        // 写回去，很常见）不算改动。不加这个，内容一个字没改的文件会报成整份重写（+2033 −2034）。
+        const numstat = await runGit(["diff", "--numstat", "--no-renames", "--ignore-cr-at-eol", "-z", this.baseTree], {
             gitDir: this.gitDir, workTree: this.workTree, timeoutMs: DIFF_TIMEOUT_MS,
         });
         if (!numstat.ok) { return []; }
@@ -370,7 +372,7 @@ export class ChangeSnapshot {
 
     /** 一个文件从快照到现在的 diff（统一格式，界面照现成的画法画）；没差别返回 undefined。 */
     public async diff(relPath: string): Promise<string | undefined> {
-        const r = await runGit(["diff", "-U3", this.baseTree, "--", relPath], {
+        const r = await runGit(["diff", "-U3", "--ignore-cr-at-eol", this.baseTree, "--", relPath], {
             gitDir: this.gitDir, workTree: this.workTree, timeoutMs: DIFF_TIMEOUT_MS,
         });
         if (r.ok && r.stdout.trim()) {
