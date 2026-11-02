@@ -6017,10 +6017,10 @@
   /**
    * 常驻那一列的面板头跟对话那边的顶条对齐：两根横线（顶条的底边、面板头的底边）落在
    * 同一条线上，而且要落在整像素上（不取整那条线会压在半个像素上，看着发虚）。
-   * 顶条的高度是跟内容走的（会话名 + 目录两行、字号设置、面板宽度），所以量出来向上取整，
+   * 顶条的高度是跟内容走的（那一排会话格、字号设置、面板宽度），所以量出来向上取整，
    * 两边写同一个数；量之前先把上一回写死的高度摘掉，量到的才是它本来的高度。
    * 左边那一列（文件侧边栏）常驻时也拿同一个数：三根横线齐。
-   * 老白量一次不好（会多搭一次重排）：顶条的高度只跟字号 / 目录那行有没有 / 面板宽度有关，
+   * 老白量一次不好（会多搭一次重排）：顶条的高度只跟字号 / 面板宽窄 / 那一排格里写的什么有关，
    * 这几样没变就直接回来。 */
   let dockBarKey = "";
   function syncDockHeaderHeight() {
@@ -6041,9 +6041,22 @@
     }
     // 左边那一列的宽度也算进键里：对话那边一变宽窄，顶条里那排会话格的高度可能就变了
     //（拖宽度拖完定下来的那一下会调到这里，见 wireFileSidebarResize）。
-    // 那一排格自己的高度也算进来：派出去的子会话在跑时小点底下多一个数，整条会高两个像素。
+    // 那一排格自己的内容也算进来：格出来了、名字从空到有、收成窄块了、派出去的子会话
+    // 在跑时小点底下多一个数 —— 顶条都会跟着高一两个像素。
+    // 这一项不能换成“量出来的那一排的高度”：顶条的高度被写死以后，那一排是被它拉着走的
+    //（一个格都还没有的时候由右边那几颗按钮定成 20，格出来了、名字也有了，它还是 20），
+    // 量出来不随内容变，这个键就一直不变 —— 于是顶条一直按刚开页那一会儿的矮高度待着
+    //（名字被裁掉半截，跟右边那一列的头也差一截），非得等窗口宽度一变才重量一次。
+    const tabSig = Array.prototype.filter.call(sessionTabRow.children, (el) => {
+      return el.classList.contains("sn-tab") && !el.classList.contains("hidden");
+    }).map((el) => {
+      const text = el.querySelector(".sn-text");
+      const count = el.querySelector(".sn-count");
+      return (text ? text.textContent : "") + (el.classList.contains("strip") ? "*" : "")
+        + (count ? count.textContent : "");
+    }).join("|");
     const key = (document.body.style.getPropertyValue("--vscode-font-size") || "") + "|" +
-      Math.ceil(sessionTabRow.getBoundingClientRect().height) + "|" + window.innerWidth + "|" +
+      tabSig + "|" + window.innerWidth + "|" +
       (rightDock ? "r" : "") + (fileDock ? "l" + Math.round(fileSidebar.width) + "|" : "");
     if (key === dockBarKey) { return; }
     bar.style.height = "";
