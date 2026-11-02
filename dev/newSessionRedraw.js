@@ -90,7 +90,14 @@ module.exports = async (page) => {
     if (JSON.parse(baseline).groupRows === 0) { throw new Error("下半那一格一个展开的组都没有，换个目录再跑（要看它有没有塌）"); }
 
     await page.eval("window.__log.length = 0; window.__frames.length = 0; window.__t0 = Math.round(performance.now()); return true;");
-    await page.click("#newSessionBtn");
+    // 点下半「工作区」里某一行的加号（顶条那颗加号现在是 pi 里 /new 那套：旧的闲着会被关掉，
+    // 顶部只留一格，凑不出“上半多一行”）。这里点行尾那颗，它不碰别的会话，而且正好是这一列自己的路。
+    await page.eval(`
+        const add = document.querySelector("#dockBody .pk-space-pane .pk-space-add");
+        if (!add) { throw new Error("下半那一格没有行尾加号"); }
+        add.click();
+        return true;
+    `);
     await page.sleep(3000);
 
     const log = JSON.parse(await page.eval("return JSON.stringify(window.__log)"));

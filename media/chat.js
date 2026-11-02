@@ -132,6 +132,9 @@
   let activeId = null;               // 当前显示的会话 id
   // 后端说“你这块屏切到这个会话”但那个会话的壳还没建出来（列表在路上）：记下来等它到了一起用
   let pendingActivateId = null;
+  // 从「项目与会话」里点加号新开一个会话：新会话挂好后把光标放进输入框（手机上也不等再点一下）。
+  // 只认这一小段时间里的那一次切换：新会话一直没开起来（pi 不在、消息丢了）就作废。
+  let focusAfterNewSessionUntil = 0;
   // 会话列表里点过“关闭”的那一行：等第二次点击确认（几秒后自动撤销，防误触）。
   // 只有会话正在跑的时候才会走到这儿（跑完了点一下就关，不用问，见 askCloseSession）。
   let pendingCloseId = null;
@@ -4935,6 +4938,11 @@
     // 「工具」那张清单是一个会话一份：弹窗开着换了会话，就换成新会话那一份
     if (envOpen()) { requestEnv(); }
     if (!IS_TOUCH_DEVICE) { inputEl.focus(); }
+    // 刚从「项目与会话」里点加号开出来的会话：手机上也要把光标放进去（那是人自己点的一下，
+    // 不是切会话，不该还要他再点一次输入框）
+    const focusFromNewSession = focusAfterNewSessionUntil && Date.now() <= focusAfterNewSessionUntil;
+    focusAfterNewSessionUntil = 0;
+    if (focusFromNewSession) { inputEl.focus(); }
     // 切到这个会话：排在"还没有会话"名下的消息现在有主了，能发就发
     flushPendingSend();
     // 刚切走那个（以及别的）闲下来后先排好版，下次切过去不用现排
@@ -6124,9 +6132,9 @@
     if (view.searchWrap) { view.searchWrap.classList.add("hidden"); }
     // “关闭会话”的确认条只在列表里有效：列表一关就撤销（下次打开不要停在确认态）
     cancelPendingClose();
-    // 这张抽屉还是先摆出来的空壳（后端那份没到）就被人收了：晚到的那份别再弹回来
-    if (view === modalView && view.state && view.state.kind === "workspace" && view.state.pending) {
-      workspaceShellDropped = true;
+    // 人已经把这张抽屉收了：后端早先发出的那一份晚到了，别再把它弹回来（见 workspacePanelDropped）
+    if (view === modalView && view.state && view.state.kind === "workspace") {
+      workspacePanelDropped = true;
     }
     view.state = null;
     if (view === modalView) { emptyWorkspace = ""; }   // 那张抽屉没了：“替没有会话摊开”的账也结掉
@@ -6162,10 +6170,12 @@
    */
   let emptyWorkspace = "";
   /**
-   * 那张抽屉是先摆出空壳、在等后端那份时被人自己收掉的（见 hidePicker 与 showWorkspaceShell）：
-   * 晚到的那份就不要再把它弹回来（人已经说了不要）。
+   * 人把「项目与会话」那张抽屉收掉之后，宿主早先发出去的那一份可能才到（它要扫一眼磁盘，
+   * 手机上还要走一段网络）：晚到的这份不要再把抽屉弹回来。这个账一直挂着，直到人自己再开一次
+   * （见 showWorkspaceShell / openWorkspaceForEmpty）——新建 / 关掉一个会话都会让宿主重推一份，
+   * 而那两下常常正好隔着一收一开。
    */
-  let workspaceShellDropped = false;
+  let workspacePanelDropped = false;
 
   function readSidebarWanted() {
     try { return localStorage.getItem(SIDEBAR_STORE_KEY) !== "0"; } catch (e) { return true; }
@@ -6322,6 +6332,7 @@
     // 两边同一时刻只开一块（跟点 <<< 那一套一样）
     closeFileSidebarForRightSidebar();
     emptyWorkspace = "asked";
+    workspacePanelDropped = false;   // 这一下是替“没有会话”自己摊开的，算一次新开
     vscode.postMessage({ type: "openWorkspace", expanded: expandedDirsForHost() });
   }
 
@@ -6378,7 +6389,7 @@
    */
   function showWorkspaceShell() {
     // 这一下是重新摆的：之前那一趟被人收掉、还挂着“晚到那份不要”的账，作废
-    workspaceShellDropped = false;
+    workspacePanelDropped = false;
     renderPicker({
       kind: "workspace",
       dock: false,
@@ -9769,6 +9780,10 @@
         add.innerHTML = ICONS.add;
         add.addEventListener("click", (e) => {
           e.stopPropagation();
+          // 这一下是要去那个工作区新开一个会话：手机上的抽屉先收起来（跟点一行会话一样），
+          // 不然新会话开好了它还挡在上面，还得再划一次才能打字。
+          if (!view.keepOpen) { cancelPicker(view); }
+          focusAfterNewSessionUntil = Date.now() + 15000;
           vscode.postMessage({ type: "newSessionInWorkspace", path: item.file });
         });
         main.appendChild(add);
@@ -10198,11 +10213,12 @@
       }
     }
     const toDock = view === dockView;
-    // 人已经把那张抽屉收了（点外面 / 横着一划），后端那份才晚到：别再弹回来，
-    // 回它一句取消，宿主那边也别再等（见 workspaceShellDropped）
-    if (kind === "workspace" && !toDock && workspaceShellDropped) {
-      workspaceShellDropped = false;
-      vscode.postMessage({ type: "pickerCancel", kind: "workspace" });
+    // 人已经把那张抽屉收了（点外面 / 横着一划 / 会话开好后自己收的），后端那份才晚到：
+    // 别再弹回来，宿主那边也别再等（见 workspacePanelDropped）。
+    // 要是这会儿开着的是别的面板（选模型、逛文件夹），这一份更不能碰它，也不能回取消——
+    // 那句取消会把宿主正等着的那个面板一并放掉。
+    if (kind === "workspace" && !toDock && workspacePanelDropped) {
+      if (!modalView.state) { vscode.postMessage({ type: "pickerCancel", kind: "workspace" }); }
       return;
     }
     // 常驻那一列不算「弹面板」：它平时就一直在右边，而新建 / 关掉一个会话之后宿主都会
