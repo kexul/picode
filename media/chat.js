@@ -9697,6 +9697,26 @@
     return out;
   }
 
+  /**
+   * 某个工作区里的会话文件变了（新会话头一回落盘、会话被关掉）：那一组留在手里的清单作废，
+   * 下次重拼时重扫一遍。别的工作区不动 —— 扫一组要 readdir 加读几个会话文件的头，
+   * 为一个会话把展开着的每个组都扫一遍不值当。
+   *
+   * 已经取回的行先留着（g.items 不动）：新的一批回来那次（offset 0）整组换掉，中间不闪。
+   * 常驻那一列收起着也照作废：展开时先按手上这份画，接着就会去要新的（见 expandSidebar）。
+   */
+  function invalidateWorkspaceGroup(cwd) {
+    if (!cwd) { return; }
+    const key = normPathKey(cwd);
+    [dockView, modalView].forEach((view) => {
+      const st = view.state;
+      if (!st || st.kind !== "workspace" || !st.groups) { return; }
+      const g = st.groups.get(key);
+      if (!g) { return; }
+      g.loaded = false;
+    });
+  }
+
   /** 某一组的那一摊（展开 / 收起之间留着已经取回的行，再展开就不用等）。 */
   function groupState(st, path) {
     const key = normPathKey(path);
@@ -10547,6 +10567,10 @@
       const incoming = msg.sessions || [];
       const seen = new Set();
       const order = [];
+      // 会话文件的增减会让某个工作区那一组的历史清单变样（新会话头一回落盘、会话被关掉）：
+      // 记下涉及的那几个目录，这一批处理完把它们那一组作废（见 invalidateWorkspaceGroup）。
+      // 只作废涉及的那几个 —— 展开着的别的组重扫一遍没必要。
+      const touchedCwds = [];
       incoming.forEach((s) => {
         seen.add(s.id);
         order.push(s.id);
@@ -10584,9 +10608,12 @@
         // 派子会话：这个会话是子会话、或者它派过子会话（列表里据此画标记与缩进）
         st.taba = s.taba || null;
         // 当前用的会话文件（用来把列表里的历史行标成“已打开”）；路径比法两边同归一化
+        const fileBefore = st.sessionFile || "";
         st.sessionFile = typeof s.file === "string" ? s.file : "";
         // 这个会话跑在哪个目录：面板里按它把会话归到当前显示的那个工作区下面
         st.cwd = typeof s.cwd === "string" ? s.cwd : "";
+        // 新会话 / 头一回落盘 / 换了会话文件：它所在那个工作区那一组的历史清单得重扫了
+        if (fileBefore !== st.sessionFile) { touchedCwds.push(st.cwd); }
         // 这一批状态是权威的（重连 / 刷新 / 别的窗口动过）：末尾那颗胶囊跟着重算一次
         syncEndHint(st);
         // 整屏重画收尾也走这儿：重放出来末尾那颗「补来的思考」跟当场生成时一样并回去
@@ -10599,10 +10626,17 @@
       // 一个会话都不剩时不留：没有别的可切，就回到“还没有会话”那一屏，等人挑一个工作区。
       Array.from(sessions.keys()).forEach((id) => {
         if (seen.has(id)) { return; }
+        // 关掉的这个会话的文件还在盘上，它该出现在那个工作区的历史清单里：
+        // 记下它的目录，下面把那一组作废（画面还留在本屏的那个也算）。
+        const gone = sessions.get(id);
+        if (gone && gone.cwd) { touchedCwds.push(gone.cwd); }
         if (incoming.length > 0 && id === activeId && pendingCloseId !== id) { return; }
         if (pendingCloseId === id) { pendingCloseId = null; }
         removeSession(id);
       });
+      // 上面记下的那几个工作区：展开着的那一组清单作废，下面 refreshOpenSessionsInPicker()
+      // 重拼时会去跟宿主要新的一批（回来的 offset 0 整组替换），别的组一根手指不碰
+      touchedCwds.forEach((cwd) => invalidateWorkspaceGroup(cwd));
       // 当前会话是这块屏自己的事：别的屏切了会话（sessionList 里那个 activeId）不管，
       // 只有后端单发给本屏的 sessionActivated 才会切。这里只把画面重新挂好、状态刷一遍。
       // 后端说的“你看这个”比会话壳先到时先记着（见上面 sessionActivated 那段）：
