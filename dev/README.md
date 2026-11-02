@@ -299,6 +299,12 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
   （「最近一次提交 → 现在磁盘上的样子」，见 `src/gitChanges.ts`），目录不在仓库里时它整格收起来。
   所以脚本先铺好文件、`git init` + `git add` + `git commit`（那就是“最后一次提交”），再起会话；
   默认的 `dev/.scratch` 自己在插件仓库里、又被 `.gitignore` 挡着，拿它验不出东西。
+- **「哪几个字变了」靠人自己装的 [omnidiff](https://github.com/ivankovic/omnidiff)**：它不在 `PATH` 里就只是不涂深、两栏照旧，
+  所有脚本照跑（`dev/wordHighlight.js` 会把那一半标成“跳过”）。要验那一半就自己下一份放进来：
+  它的 release 页有 Windows / macOS / Linux 的预编译包，解出来一个 `omnidiff.exe`；调试时放进 `dev/.scratch/omnidiff/`
+  （不进版本库），跑脚本时把它挂到 `PATH` 前面：
+  `PATH="$PWD/dev/.scratch/omnidiff:$PATH" npm run web:shot -- --fake-pi --script dev/wordHighlight.js`。
+  它是 AGPL v3、插件是 MIT：只能调人装好的那一个，别把二进制或它仓库里的东西拷进这个仓库。
 - **截图默认把滚动条藏掉**（`--hide-scrollbars`）：图干净，但滚动条也就占不了宽度，
   跟浏览器里看到的会差一行半行。要照真样子看就加 `--scrollbars`，或者用 `node dev/inputProbe.js`
   （它默认就用真滚动条，还会把输入框的高度与滚动状态打印出来）。
@@ -384,6 +390,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `changesTab.js` | 验文件侧边栏下面那一格「改动」（会话目录跟它最后一次提交差了什么）：跟上格「文件」同时露着、各滚各的（下格按内容占高、最多 45%）、跟提交一样时一句提示、假模型真改完一个文件之后那一行长出来（相对写法 + `+1` `−1`、行里不展开 diff）、点这一行在弹窗里打开那份 diff（横条写着它、左边一颗返回箭头，点它回两格）、刷新页面清单还在（后端每次现问 git，不跟着页面走）、磁盘上把文件删掉后那一行标「已删除」且点开整份都是删掉的、那一行里没有「回滚」按钮（这一格只看不改）、文件改回原样后那一行消失且回到那句提示、切走再切回来还停在刚才那份 diff 上、整份行尾从 LF 换成 CRLF 不算改动（真改一行就是 `+1` `−1`，不是整份重写）、不是 git 仓库的目录里这一格整格收起来（切回去又露出来）：`npm run web:shot -- --fake-pi --script dev/changesTab.js` |
 | `bashChanges.js` | 验「改动」那一格能看到命令改的文件（这个脚本一个字都不经过 `edit` / `write`，全是 `fs` 直接动磁盘）：改一个文件进清单（`+1` `−1`，点开是那份 diff）、新写一个文件（`+N` `−0`）、删掉一个文件（标「已删除」）、`.gitignore` 挡在外面的日志不进清单：`npm run web:shot -- --fake-pi --script dev/bashChanges.js` |
 | `diffRollback.js` | 验「打开一份 diff 时横条上那颗『回滚』」（撤到最近一次提交）：看 diff 时有这颗、看普通文件时没有、点第一下只变成「确定回滚」（磁盘不动，关掉弹窗再打开又回到「回滚」）、点第二下文件真回去且那一行从清单里消失、那份 diff 自己关掉、消息流里留一句「已回滚」、提交里没有的新文件回滚就是删掉、会话里被删掉的文件回滚照提交写回来：`npm run web:shot -- --fake-pi --script dev/diffRollback.js` |
+| `wordHighlight.js` | 验「改动」里点开的那份 diff 怎么摆（两栏）+「哪几个字变了」：纯 Node 那半验 diff 拆行（两边真实行号、pi 那种带行号的格式、两段改动隔得远只插一行「⋯」）与变了的字（git 那种 / pi 那种 / 中文多字节 / 两边一样；涂深前后那一行的文字一个字不变）；真页面那半验两栏对得齐、每栏带行号、涂到的就是那几个标识符、没改的行不涂。变了的字靠 PATH 里的 omnidiff（AGPL，不打进插件），没装就只验「两栏照旧、只是不涂深」：`npm run web:shot -- --fake-pi --script dev/wordHighlight.js` |
 | `fileEdit.js` | 验在「看文件的弹窗」里改一个代码文件、存回磁盘：铅笔只在会语法上色的那几种代码上露面（纯文本 / markdown / html 都没有）、点它换成一块文本框（行号与上色都没了）、敲字后「存」亮起来且标签挂一颗圆点、`Ctrl+S` 与点「存」都真写进磁盘并重画、「改动」那一格跟着长出这一份、没存的话关弹窗 / 切会话都不丢（再打开直接是编辑态）、点「放弃」才回到盘上那份、盘上被别人改过时不默默盖上去（提示 + 那两颗变成「覆盖」「用盘上的」）、行尾（CRLF）与 BOM 不会被顺手改掉、以及写地址自己那几种拒绝（目录外 403、没有 404、非文本 415、没给 text 400、旧 mtime 409）：`npm run web:shot -- --fake-pi --script dev/fileEdit.js` |
 | `htmlPreview.js` | 验文件侧边栏里把 html 当网页打开（点 `.html` 链接摆出的是渲染好的页面，不是源码：页面里的相对样式与脚本真生效、链接里带的行号等于没带、文件改过这一列自己重载那张网页；以及 `/site/` 那条地址的规矩：HEAD 只给头与修改时间、没这个文件 404、会话目录外的 403）：`npm run web:shot -- --fake-pi --script dev/htmlPreview.js` |
 | `mdImagePaths.js` | 验正文里的图片路径放宽到整机（会话目录里的相对写法走 `/site/`；`../x.png`、`C:/…`、`file:///…` 走 `/file?anywhere=1`；外站地址照旧不加载；文件侧边栏那份 `.md` 里同样；那条放宽的地址只认图片——非图片 403、带 `download=1` 403、不带开关时会话目录外照旧 403）：`npm run web:shot -- --fake-pi --script dev/mdImagePaths.js` |

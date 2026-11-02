@@ -675,7 +675,7 @@ module.exports = async (page) => {
                     && getComputedStyle(document.getElementById("fileViewTabs")).display !== "none",
                 dirPages: document.querySelectorAll("#dirPane .file-page").length,
                 changePages: document.querySelectorAll("#changePane .file-page").length,
-                diffLines: document.querySelectorAll("#fileBody .diff-line").length,
+                diffLines: document.querySelectorAll("#fileBody .diff2-cell").length,
                 changeRowCount: changeRows.length,
                 changeRowPaths: changeRows.map(function (r) { return r.getAttribute("data-path") || ""; }),
                 upShown: !!up,
@@ -701,7 +701,9 @@ module.exports = async (page) => {
                 // markdown 渲染出来的那份文档有几块、行号格子有几个（markdown 该是 0 / 0）
                 mdCount: body ? body.querySelectorAll(".file-md").length : -1,
                 numCount: body ? body.querySelectorAll(".file-num").length : -1,
-                firstRow: rows.length ? rows[0].innerText : "",
+                // 用 textContent 而不是 innerText：看不见的那些行被 content-visibility 跳过排版，
+                // 它们的 innerText 是空的（见 chat.css 里 .file-line 那条），而这一格查的就是“写了什么”
+                firstRow: rows.length ? rows[0].textContent : "",
                 hitText: hit ? hit.innerText : "",
                 hitNum: hit ? ((hit.querySelector(".file-num") || {}).textContent || "") : "",
                 hitVisible: !!(hitRect && bodyRect

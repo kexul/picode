@@ -747,6 +747,9 @@
   .diff-line.del { background: var(--vscode-diffEditor-removedLineBackground, rgba(255,0,0,0.1)); color: var(--vscode-gitDecoration-deletedResourceForeground, #ad0707); }
   .diff-line.add { background: var(--vscode-diffEditor-insertedLineBackground, rgba(0,255,0,0.1)); color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
   .diff-line.ctx { opacity: 0.6; }
+  /* 这一行里到底哪几个字变了（见 src/wordDiff.ts）：叠在整行底色上面再打一层 */
+  .diff-line.add .diff-hl { background: var(--vscode-diffEditor-insertedTextBackground, rgba(64, 200, 96, 0.5)); border-radius: 2px; }
+  .diff-line.del .diff-hl { background: var(--vscode-diffEditor-removedTextBackground, rgba(255, 90, 90, 0.45)); border-radius: 2px; }
   .diff-line.jumpable { cursor: pointer; }
   .diff-line.jumpable:hover { outline: 1px solid var(--vscode-focusBorder, rgba(128,128,128,0.6)); outline-offset: -1px; }
   .empty-hint { text-align: center; opacity: 0.35; font-size: 0.9em; padding: 40px 0; user-select: none; }
@@ -1788,6 +1791,11 @@
   /* 文件正文：一行一格（行号 + 那一行的原文）。默认长行左右滚；角上那颗开关
      （#fileWrap，票 08）打开时 body 上多一个 file-wrap，长行折起来、横向就不滚了。 */
   .file-line { display: flex; align-items: flex-start; min-width: max-content; line-height: 1.55; }
+  /* 看不见的那些行不排版（content-visibility）：一份一两万行的文件，光逐行量文字宽度就要一秒多，
+     点开就卡在那儿。屏幕上只有几十行，余下的等滚到跟前再排版。
+     不折行时每行一样高，那份「估算的高度」跟真的一模一样，滚动条的长度和位置都对得上；
+     折行时一行可能占好几行，估不准（跳到第几千行会落偏），所以只在没折行时这么干。 */
+  body:not(.file-wrap) .file-line { content-visibility: auto; contain-intrinsic-size: auto 1.55em; }
   .file-num {
     flex: 0 0 auto; width: 3.2em; padding-right: 8px; text-align: right;
     opacity: 0.45; user-select: none; font-variant-numeric: tabular-nums;
@@ -1835,12 +1843,55 @@
   .change-add { color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
   .change-del { color: var(--vscode-gitDecoration-deletedResourceForeground, #ad0707); }
   .change-flag { font-family: var(--vscode-font-family); opacity: 0.9; }
-  /* 整列看一份 diff 时那一块：不自己再滚一道（#fileBody 本来就在滚），字号跟正文一起；
-     长行一律折起来——这里读的是「改了什么」，左右拖着看半句话没有意义
-     （文件正文那边才按角上那颗折行开关走） */
-  #fileBody .file-page > .edit-diff { max-height: none; padding: 6px 0 12px; font-size: 0.95em; }
-  #fileBody .file-page > .edit-diff .edit-diff-inner { width: 100%; }
-  #fileBody .file-page > .edit-diff .diff-line { white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* 「改动」里点开的那份 diff：两栏（见 chat.js 的 renderDiffPanes）：左“最近一次提交”、右“现在”。
+     一行两格（同一张网格，不是两张独立的表）—— 两栏的行才对得上；中间那道竖线画在网格上。 */
+  .diff2 { padding: 4px 0 12px; font-size: 0.95em; }
+  .diff2-body {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: 10px;
+    background-image: linear-gradient(to right,
+      transparent calc(50% - 0.5px), var(--vscode-panel-border, rgba(128,128,128,0.28)) calc(50% - 0.5px),
+      var(--vscode-panel-border, rgba(128,128,128,0.28)) calc(50% + 0.5px), transparent calc(50% + 0.5px));
+  }
+  .diff2-label {
+    padding: 2px 8px 5px 12px; opacity: 0.55;
+    font-family: var(--vscode-font-family); font-size: 0.9em; user-select: none;
+  }
+  .diff2-cell { display: flex; align-items: flex-start; min-width: 0; padding-right: 6px; }
+  .diff2-cell .file-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .diff2-cell.ctx .file-text { opacity: 0.72; }
+  .diff2-cell.del {
+    background: var(--vscode-diffEditor-removedLineBackground, rgba(255,0,0,0.1));
+    box-shadow: inset 3px 0 0 var(--vscode-gitDecoration-deletedResourceForeground, #ad0707);
+  }
+  .diff2-cell.add {
+    background: var(--vscode-diffEditor-insertedLineBackground, rgba(0,255,0,0.1));
+    box-shadow: inset 3px 0 0 var(--vscode-gitDecoration-addedResourceForeground, #587c0c);
+  }
+  /* 对面没有这一行时的空位：淡斜纹，跟对面那一格一样高；左边那道细条跟“对面那边变了什么”一个颜色 */
+  .diff2-cell.empty {
+    background-image: repeating-linear-gradient(135deg,
+      transparent 0 6px, rgba(128,128,128,0.07) 6px 12px);
+  }
+  .diff2-cell.empty.del { box-shadow: inset 3px 0 0 var(--vscode-gitDecoration-deletedResourceForeground, #ad0707); }
+  .diff2-cell.empty.add { box-shadow: inset 3px 0 0 var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
+  .diff2-cell.del .diff-hl { background: var(--vscode-diffEditor-removedTextBackground, rgba(255,90,90,0.45)); border-radius: 2px; }
+  .diff2-cell.add .diff-hl { background: var(--vscode-diffEditor-insertedTextBackground, rgba(64,200,96,0.5)); border-radius: 2px; }
+  /* 两段改动之间省掉的那一截（两大块之间那一条虚线） */
+  .diff2-gap {
+    grid-column: 1 / -1; display: flex; align-items: center; gap: 10px;
+    padding: 4px 12px; opacity: 0.35; user-select: none;
+    font-family: var(--vscode-font-family); font-size: 0.85em;
+  }
+  .diff2-gap::before, .diff2-gap::after { content: ""; flex: 1 1 auto; border-top: 1px dashed currentColor; }
+  /* 手机上两栏挤（每栏只剩半屏）：行号与间距都收一收，字还是能看（字号顶上两颗 A− / A+ 另调） */
+  @media (max-width: 640px) {
+    .diff2 { font-size: 0.9em; }
+    .diff2-body { column-gap: 6px; }
+    .diff2-cell { padding-right: 4px; }
+    .diff2-cell .file-num { width: 2.4em; padding-right: 5px; }
+    .diff2-label { padding: 2px 6px 5px 8px; }
+  }
   /* 目录清单：一项一行（名字前一颗图标），点子目录往下走、点文件打开它（见 chat.js 的
      renderDirListing）；待在子目录里时最上面多一行「上一层」（同一套样子，图标是那颗朝上的箭头）。 */
   .file-entry { display: flex; align-items: center; gap: 6px; padding: 3px 12px; cursor: pointer; line-height: 1.5; }

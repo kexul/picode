@@ -4114,7 +4114,7 @@
   }
 
   /** 卡片结果区渲染：预览截断（尾部 N 行，同 TUI）+ 元信息 + 展开/收起。 */
-  function renderDiffBlock(st, diffText, filePath) {
+  function renderDiffBlock(st, diffText, filePath, langPath) {
     const wrap = document.createElement("div");
     wrap.className = "edit-diff";
     // 内层收缩包裹：宽度 = max(卡片宽, 最宽行)，让所有行背景一致铺满，横向滚动时短行不断色
@@ -4143,7 +4143,128 @@
       }
       inner.appendChild(div);
     }
+    // 整行都算改太笼统：再问一句「哪几个字变了」（没装 omnidiff 就问不出来，那就算了）
+    changedCharRanges(String(diffText), langPath || filePath || "")
+      .then((got) => { if (got) { paintChangedChars(inner, got); } });
     return wrap;
+  }
+
+  /** 问后端一段 diff 里「哪几个字变了」（见 src/wordDiff.ts）；算不出来给 null。 */
+  function changedCharRanges(diffText, filePath) {
+    if (!diffText) { return Promise.resolve(null); }
+    return fetch("/diff/highlight", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: filePath || "", diff: diffText }),
+    }).then((resp) => (resp.status === 200 ? resp.json() : null))
+      .then((got) => (got && Array.isArray(got.lines) ? got.lines : null))
+      .catch(() => null);
+  }
+
+  /** 把一行文字按区间切开放进去，涂深的那几段用 .diff-hl 包一层。 */
+  function appendMarked(parent, text, ranges) {
+    let at = 0;
+    for (const [start, end] of ranges || []) {
+      if (start > at) { parent.appendChild(document.createTextNode(text.slice(at, start))); }
+      const mark = document.createElement("span");
+      mark.className = "diff-hl";
+      mark.textContent = text.slice(Math.max(at, start), end);
+      parent.appendChild(mark);
+      at = Math.max(at, end);
+    }
+    if (at < text.length) { parent.appendChild(document.createTextNode(text.slice(at))); }
+  }
+
+  /** 把变了的几个字涂深：行和整行的底色不动，只在这些字上再叠一层。 */
+  function paintChangedChars(inner, rangesPerLine) {
+    if (!inner.isConnected) { return; }   // 这一块已经不在了（换会话、关弹窗）
+    const lines = inner.children;
+    for (let i = 0; i < lines.length && i < rangesPerLine.length; i++) {
+      const ranges = rangesPerLine[i];
+      const div = lines[i];
+      if (!ranges || !ranges.length) { continue; }
+      if (!div.classList.contains("add") && !div.classList.contains("del")) { continue; }
+      const text = div.textContent;
+      div.textContent = "";
+      appendMarked(div, text, ranges);
+    }
+  }
+
+  /**
+   * 一份 diff 摆成两栏（像 omnidiff 那样）：左「最近一次提交」右「现在」，各带行号，
+   * 删的那几行与加的那几行在同一水平线上对齐，两段改动之间那一截用一行「⋯」带过。
+   * 行是后端拆好的（见 src/wordDiff.ts 的 diffRows）：这一头不自己猜 diff 的文字格式。
+   */
+  function renderDiffPanes(rows) {
+    const wrap = document.createElement("div");
+    wrap.className = "diff2";
+    const body = document.createElement("div");
+    body.className = "diff2-body";
+    const label = (text) => {
+      const el = document.createElement("div");
+      el.className = "diff2-label";
+      el.textContent = text;
+      return el;
+    };
+    body.appendChild(label("最近一次提交"));
+    body.appendChild(label("现在"));
+    /** 一行两格：左边是「之前」那一行，右边是「之后」那一行（哪边没有就给一格空位）。 */
+    const pair = (left, right) => {
+      body.appendChild(left
+        ? diffCell(left.kind, left.before, left.text, left.hl)
+        : emptyDiffCell(right ? right.kind : "ctx"));
+      body.appendChild(right
+        ? diffCell(right.kind, right.after, right.text, right.hl)
+        : emptyDiffCell(left ? left.kind : "ctx"));
+    };
+    let i = 0;
+    while (i < rows.length) {
+      const row = rows[i];
+      if (row.kind === "ctx") {
+        pair({ kind: "ctx", before: row.before, text: row.text, hl: null },
+          { kind: "ctx", after: row.after, text: row.text, hl: null });
+        i++;
+        continue;
+      }
+      if (row.kind === "gap") {
+        const gap = document.createElement("div");
+        gap.className = "diff2-gap";
+        gap.textContent = "⋯";
+        body.appendChild(gap);
+        i++;
+        continue;
+      }
+      // 一段删、接一段加：成对的摆在同一行上，多出来的那些对面是空位
+      const dels = [];
+      while (i < rows.length && rows[i].kind === "del") { dels.push(rows[i++]); }
+      const adds = [];
+      while (i < rows.length && rows[i].kind === "add") { adds.push(rows[i++]); }
+      for (let k = 0; k < Math.max(dels.length, adds.length); k++) { pair(dels[k], adds[k]); }
+    }
+    wrap.appendChild(body);
+    return wrap;
+  }
+
+  /** 两栏里的一格：行号 + 这一行的原文（变了的字涂深）。 */
+  function diffCell(kind, no, text, ranges) {
+    const cell = document.createElement("div");
+    cell.className = "diff2-cell " + kind;
+    const num = document.createElement("span");
+    num.className = "file-num";
+    num.textContent = no ? String(no) : "";
+    const line = document.createElement("span");
+    line.className = "file-text";
+    appendMarked(line, text, ranges);
+    cell.appendChild(num);
+    cell.appendChild(line);
+    return cell;
+  }
+
+  /** 这一边没有对应行时的空位（跟对面那一格同高，两栏才对得齐）；kind 是「对面那边」是改还是删。 */
+  function emptyDiffCell(kind) {
+    const cell = document.createElement("div");
+    cell.className = "diff2-cell empty" + (kind === "del" || kind === "add" ? " " + kind : "");
+    return cell;
   }
 
   /**
@@ -7294,16 +7415,26 @@
     const path = item.path;
     fetch(changeDiffUrl(path)).then(async (resp) => {
       if (!v.tabs.includes(entry)) { return; }   // 关掉了：这条丢掉
-      const text = await readDeadResponse(resp);
-      page.innerHTML = "";
       if (resp.status !== 200) {
+        const message = await readDeadResponse(resp);
+        page.innerHTML = "";
         const bad = document.createElement("div");
         bad.className = "file-note";
-        bad.textContent = text;
+        bad.textContent = message;
         page.appendChild(bad);
         return;
       }
-      page.appendChild(renderDiffBlock(null, text, ""));
+      const got = await resp.json().catch(() => null);
+      const rows = got && Array.isArray(got.lines) ? got.lines : [];
+      page.innerHTML = "";
+      if (!rows.length) {
+        const bad = document.createElement("div");
+        bad.className = "file-note";
+        bad.textContent = "读不出来：后端没给这份 diff。";
+        page.appendChild(bad);
+        return;
+      }
+      page.appendChild(renderDiffPanes(rows));
     }).catch(() => {
       if (!v.tabs.includes(entry)) { return; }
       page.innerHTML = "";
@@ -7655,9 +7786,33 @@
   }
 
   /**
+   * 一批最多占主线程多久（见 renderFileText）：一份一万多行的文件一口气建 DOM，主线程要卡住
+   * 两秒多（手机上更久）。切成几十批、每批只花十几毫秒，页面就一直答得上话。
+   * 按时间而不是按行数切：机器快就一批多画几行、慢就少画几行，不用挑一个两边合适的数。
+   */
+  const FILE_RENDER_BUDGET_MS = 12;
+
+  /** 正文里的一行：行号加那一行的原文（colored 是上过色的那几行，没上色就是 null）。 */
+  function fileLineRow(line, num, colored, index) {
+    const row = document.createElement("div");
+    row.className = "file-line";
+    const numEl = document.createElement("span");
+    numEl.className = "file-num";
+    numEl.textContent = String(num);
+    const code = document.createElement("span");
+    code.className = "file-text";
+    if (colored) { code.innerHTML = colored[index]; } else { code.textContent = line; }
+    row.appendChild(numEl);
+    row.appendChild(code);
+    return row;
+  }
+
+  /**
    * 把一个文件画出来：一行一格、带行号，hitLine 那一行点亮（0 = 不点亮）。
    * 本仓库认得的那几种语言按扩展名上色（见 highlightFileLines），其余黑白。
-   * 只画，不管滚到哪儿（那是 scrollFileBody 的事）：返回点亮的那一行，没点亮就是 null。
+   * 一行一格是分批画的：第一批当场画完（点开就看得见开头），剩下的让出主线程一批一批补上，
+   * 免得一份大文件把页面卡在那儿。要停的那一行落在后面几批里，等它画到页面上再滚过去。
+   * 只画，不管滚到哪儿（那是 scrollFileBody 的事）：返回点亮的那一行，没点亮（或者还没画到）就是 null。
    * @param text 文件全文（后端按 UTF-8 给回来的）
    * @param tab 那个文件的标签（按它的写法认语言、上色）
    */
@@ -7669,23 +7824,31 @@
     // 文件末尾那个换行会多出一个空行：不画它（行号也就不会凭空多出一个）
     if (lines.length > 1 && lines[lines.length - 1] === "") { lines.pop(); }
     const colored = highlightFileLines(String(text), tab.path);
-    const frag = document.createDocumentFragment();
+    const seq = tab.seq;      // 画到一半又读了一遍 / 换成了别的文件：排着的那几批就不作数了
+    let at = 0;               // 画到第几行了
     let hitRow = null;
-    lines.forEach((line, i) => {
-      const row = document.createElement("div");
-      row.className = "file-line";
-      const num = document.createElement("span");
-      num.className = "file-num";
-      num.textContent = String(i + 1);
-      const code = document.createElement("span");
-      code.className = "file-text";
-      if (colored) { code.innerHTML = colored[i]; } else { code.textContent = line; }
-      row.appendChild(num);
-      row.appendChild(code);
-      if (hitLine > 0 && i + 1 === hitLine) { row.classList.add("hit"); hitRow = row; }
-      frag.appendChild(row);
-    });
-    page.appendChild(frag);
+    let first = true;         // 第一批是当场画的：那一行要是在这批里，交给调用方去滚
+    let hitScrolled = false;
+    const drawBatch = () => {
+      if (tab.seq !== seq || !page.isConnected) { return; }
+      const frag = document.createDocumentFragment();
+      const until = performance.now() + FILE_RENDER_BUDGET_MS;
+      while (at < lines.length) {
+        const row = fileLineRow(lines[at], at + 1, colored, at);
+        if (hitLine > 0 && at + 1 === hitLine) { row.classList.add("hit"); hitRow = row; }
+        frag.appendChild(row);
+        at += 1;
+        // 每 32 行看一次表（看表本身也有代价，一行一看白花）
+        if ((at & 31) === 0 && performance.now() >= until) { break; }
+      }
+      page.appendChild(frag);
+      // 要停的那一行画到页面上了：滚过去（第一批里的那一行走调用方那条路，这里再滚一次会把人
+      // 刚拖走的位置拽回去）
+      if (!first && hitRow && !hitScrolled) { hitScrolled = true; scrollFileBody(hitRow, hitLine, tab.scrollTop); }
+      if (at < lines.length) { setTimeout(drawBatch, 0); }
+    };
+    drawBatch();
+    first = false;
     return hitRow;
   }
 

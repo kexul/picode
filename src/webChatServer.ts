@@ -25,6 +25,7 @@ import { insideFolder, pathCaseKey, relativeTo } from "./pathRules";
 import { findListedFile } from "./fileSearch";
 import type { SessionChanges } from "./gitChanges";
 import { readRemoteNotice, readWeixinReply, type RemoteNotice } from "./remoteNotice";
+import { changedCharRanges, diffRows, type LineRanges } from "./wordDiff";
 
 /**
  * PiChatWebServer —— 独立后端的网页服务：一个地址，手机和电脑都看这一份会话。
@@ -547,6 +548,11 @@ export class PiChatWebServer {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
                 void this.withFailNote(req, res, this.sendChangeDiff(req, res, url.searchParams.get("session") ?? "",
                     url.searchParams.get("path") ?? ""));
+                return;
+            }
+            if (pathname === "/diff/highlight") {
+                if (req.method !== "POST") { this.sendText(req, res, 405, "只接受 POST。"); return; }
+                void this.withFailNote(req, res, this.sendDiffHighlight(req, res));
                 return;
             }
             if (pathname === "/events") {
@@ -1148,6 +1154,16 @@ export class PiChatWebServer {
      * （见 gitChanges.ts 的 changeDiff：越界的写法、不归这个会话目录管的路径都不给），
      * 算不出差别就给 404（已经改回去了、太大了、不在仓库里）。
      */
+    /**
+     * 一个文件的合计 diff（`/changes/diff?session=…&path=…`）：拆好的一行行，给页面摆两栏。
+     *
+     * 这里不走 resolveSessionPath 那道目录边界：路径不拿去拼文件系统，只交给 git 算
+     * （见 gitChanges.ts 的 changeDiff：越界的写法、不归这个会话目录管的路径都不给），
+     * 算不出差别就给 404（已经改回去了、太大了、不在仓库里）。
+     *
+     * 回 `{ lines: [{ kind, before, after, text, hl }] }`（见 wordDiff.ts 的 DiffRowLine）：
+     * 两边各自的真实行号、去掉前缀的原文、变了的字在原文里的区间。没装 omnidiff 时 hl 全是 null。
+     */
     private async sendChangeDiff(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string,
         wantPath: string): Promise<void> {
         if (!sessionId || !wantPath) {
@@ -1159,10 +1175,30 @@ export class PiChatWebServer {
             this.sendText(req, res, 404, "这个文件不在这次的改动里（可能已经改回去了）。");
             return;
         }
-        this.writeBody(req, res, 200, Buffer.from(diff, "utf8"), {
-            "Content-Type": "text/plain; charset=utf-8",
-            "Cache-Control": "no-store",
-        });
+        this.sendJson(req, res, 200, { lines: await diffRows(diff, wantPath) });
+    }
+
+    /**
+     * 一段 diff 里「到底是哪几个字变了」（`POST /diff/highlight`，内容是 `{ path, diff }`）。
+     *
+     * 页面照旧自己排行、自己上色，只拿它把变了的几个字再涂深一点（见 wordDiff.ts）。
+     * 算不出来（没装 omnidiff、太大、它自己不认）就回 `{ lines: null }`：页面照旧整行上色，这不是错。
+     * `path` 只用来看出扩展名（它按扩展名挑语法），不拿去拼文件系统。
+     */
+    private async sendDiffHighlight(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        const text = await readBody(req, MAX_REQUEST_BYTES);
+        if (text === undefined) { this.sendText(req, res, 413, "请求内容过大。"); return; }
+        let body: any;
+        try {
+            body = JSON.parse(text);
+        } catch {
+            this.sendText(req, res, 400, "请求内容不是合法的 JSON。");
+            return;
+        }
+        const diff = typeof body?.diff === "string" ? body.diff : "";
+        const wantPath = typeof body?.path === "string" ? body.path : "";
+        const lines: LineRanges[] | undefined = await changedCharRanges(diff, wantPath);
+        this.sendJson(req, res, 200, { lines: lines ?? null });
     }
 
     /**

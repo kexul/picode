@@ -87,7 +87,8 @@ function viewerNow(page) {
         const rollback = document.getElementById("fileRollback");
         const wrap = document.getElementById("fileWrap");
         const pane = body ? body.querySelector(".file-page.active") : null;
-        const lines = pane ? Array.from(pane.querySelectorAll(".diff-line")) : [];
+        // 一份 diff 现在是两栏（见 chat.js 的 renderDiffPanes）：空位那一格不算增删行
+        const lines = pane ? Array.from(pane.querySelectorAll(".diff2-cell")).filter((el) => !el.classList.contains("empty")) : [];
         return JSON.stringify({
             fileView: document.body.classList.contains("file-view"),
             stageShown: shown(document.getElementById("fileStage")),

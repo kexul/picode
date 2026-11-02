@@ -145,7 +145,9 @@ function diffNow(page) {
         const barName = document.querySelector("#fileBar .file-bar-name");
         const wrap = document.getElementById("fileWrap");
         const pane = body ? body.querySelector(".file-page.active") : null;
-        const lines = pane ? Array.from(pane.querySelectorAll(".diff-line")) : [];
+        // 一份 diff 现在是两栏（见 chat.js 的 renderDiffPanes）：一格 = 一边的一行，
+        // 空位那一格也算一格（.empty），数增删行时得跳过它。
+        const lines = pane ? Array.from(pane.querySelectorAll(".diff2-cell")).filter((el) => !el.classList.contains("empty")) : [];
         return JSON.stringify({
             fileView: document.body.classList.contains("file-view"),
             panesShown: shown(document.getElementById("filePanes")),
