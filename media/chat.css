@@ -161,9 +161,16 @@
     flex: 1 1 auto; min-width: 0; display: flex;
   }
   /* 那一排格：整排居中，顺序就是会话清单的顺序（当前这一张在哪就在哪：最左那个会话就在最左边）。
-     一格自己就比整条还宽时（窗口窄、名字长）也不撑破顶条。 */
+     一格自己就比整条还宽时（窗口窄、名字长）也不撑破顶条。
+
+     一个会话都没有时这一排是空的，可也得留出一格那么高：不然开第一个会话那一下顶条会
+     突然长高 8 像素（右边那一列的面板头跟着跳）。所以这里给一条最小高：
+     11px 是一格上下的内边距（6 + 5），1.1875em 是名字那一行（.sn-text 是 0.95em 的字、行高 1.25），
+     14px 是名字后面那颗 ×——字号再小就轮到它定高。这三个数跟 .sn-tab 那几条规则是一份，
+     改这边就得同步改那边（不然有会话 / 没会话两种高度又对不上了）。 */
   #sessionTabs {
     flex: 1 1 auto; min-width: 0; display: flex; align-items: stretch; justify-content: center; gap: 2px;
+    min-height: calc(11px + max(1.1875em, 14px));
     overflow: hidden;
   }
   /* 一格：像浏览器顶上的一张标签页 —— 上边两角圆、淡底，当前这一张是正文色、
@@ -179,6 +186,9 @@
     color: var(--vscode-foreground); font-family: inherit;
     /* 按钮自带 13.33px 的字号（浏览器给的），这里要跟外头一档；名字再按 em 缩。 */
     font-size: inherit;
+    /* 名字那一行的高度按字号算死（不给行高跟着字体走）：没有会话时顶条靠下面 #sessionTabs
+       那条最小高撑出一格的高度，两边得用同一个数，不然两个高度又差一两个像素。 */
+    line-height: 1.25;
     cursor: pointer; user-select: none;
   }
   /* 当前这一张换到别处时，底色淡过去（不是“啪”地跳）；换位置的滑动由 chat.js 的 slideTabsFrom 补。 */
@@ -937,6 +947,12 @@
     flex: 1 1 auto;
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
   }
+  /* 「正在对话」那一段一条会话都没有的时候整格收掉（那两格由 chat.js 建，见 renderPickerItems）：
+     留着的话它自己那 10 像素的内边距（上下 2 + 8）会把下面「工作区」那格的顶线顶到面板头下面
+     10 像素处——没会话的时候右上角就多出一条跟面板头并排的横线。
+     一格都收掉以后那条分隔线也没意义了（上面没东西可隔），一起去掉。 */
+  .pk-host.pk-workspace .pk-session-pane:empty { display: none; }
+  .pk-host.pk-workspace .pk-session-pane:empty + .pk-space-pane { border-top: none; }
   /* ==== 文件夹选择器（一层一层追目录那个）：按 VS Code 资源管理器的列表画：
      每行就一行（行首一格图标 + 名字）、行矮、鼠标停在哪行哪行是方角的整行底色；不给筛选框。==== */
   .pk-host.pk-folders #pickerPanel { width: min(560px, 94vw); max-height: 76vh; }
