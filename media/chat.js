@@ -8898,6 +8898,28 @@
       e.preventDefault();
       closeFileViewer();
     });
+    // 电脑上那一块浮在页面上：点它外面（对话、顶条、输入框……）就收起来，跟那颗叉、Esc 一个结果。
+    // 挑文件的那几处不算外面 —— 左边那一列（文件清单、「改动」）、消息里的文件链接、
+    // 文件搜索里的一条：在那儿点一下是要在弹窗里打开它（多开一格），不是要收起来。
+    // 手机上那一块铺满整屏、压根没有外面，所以只看浮着的那种。
+    // 按下在哪儿得记一道：拖着什么东西松手也会有个 click，那个事件的位置在弹窗外面
+    //（拖弹窗自己顶上那条就是这样），那不是“点了一下外面”，不许拿它关弹窗。
+    const KEEP_PATHS = "#fileStage, #fileSidebar, #fileSearchOverlay, a.file-link";
+    let fileOutsideDown = null;
+    document.addEventListener("pointerdown", (e) => {
+      fileOutsideDown = { x: e.clientX, y: e.clientY };
+    }, true);
+    document.addEventListener("click", (e) => {
+      const down = fileOutsideDown;
+      if (!fileViewing() || !stage.classList.contains("floating")) { return; }
+      if (down && (Math.abs(e.clientX - down.x) > 4 || Math.abs(e.clientY - down.y) > 4)) { return; }
+      // 看这一下走过的整条路，不只看落点那个元素：点弹窗里那几格标签时，标签自己的处理先跑、
+      // 顺手把整排重画一遍，冒到这里的时候落点那个元素已经摘下去了 —— 那会儿 closest 什么也找不到，
+      // 会被当成“点在弹窗外面”。
+      const path = typeof e.composedPath === "function" ? e.composedPath() : [e.target];
+      if (path.some((n) => n && n.nodeType === 1 && n.matches(KEEP_PATHS))) { return; }
+      closeFileViewer();
+    });
     wireFileSidebarResize(fileSidebar.resize);
     wireFileViewerBoxMoves();
     wireFilePullDown();
