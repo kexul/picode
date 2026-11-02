@@ -1783,12 +1783,13 @@
      点这一行就把那份 diff 整列打开（跟看一个文件一样）。
      只写文件名，不写它所在的目录（全路径看悬停提示，打开那份 diff 以后弹窗横条上也写着）。
      前面不摆三角（这一行不是“展开”，是打开一份 diff；点得开看光标就是手型）。
-     一行就是一行，不折行：这一列窄，一折成两行、右边那两个数就掉到第二行上去，看着七高八低。 */
+     一行就是一行，不折行：这一列窄，一折成两行、右边那两个数就掉到第二行上去，看着七高八低。
+     行与行之间不画分隔线：靠左右两头对齐就分得清，那道横线在这么细的一列里只是噪音
+     （鼠标停在哪一行看悬停的底色）。 */
   .change-head {
     display: flex; align-items: center; gap: 5px;
     padding: 3px 10px; cursor: pointer; user-select: none;
     font-size: calc(var(--vscode-font-size, 13px) - 1px);
-    border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.18));
   }
   /* 太大的文件没有 diff 可打开：那一行点不开，光标也不变 */
   .change-head.no-diff { cursor: default; }
