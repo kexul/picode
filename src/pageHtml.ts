@@ -35,9 +35,6 @@ function readMedia(mediaDir: string, name: string): string {
  * @param themeMode 初始界面颜色（显示选项里的"界面颜色"）
  */
 export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: "light" | "dark"): string {
-    // 浏览器专用的那份样式也用内联：导出会话时 chat.js 只抓 <style> 里的内容，
-    // 用 <link> 引的话导出的 HTML 里就没有样式了。
-    const chatCss = readMedia(mediaDir, chatUiFileOfRole("chat-style").name);
     const browserCss = readMedia(mediaDir, chatUiFileOfRole("theme-style").name);
 
     // 地址里带上这份文件的内容指纹：文件没变时浏览器直接用自己存的那份（手机上刷新就不用
@@ -83,7 +80,9 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
 
     return renderHTML({
         csp,
-        chatCss,
+        // 主样式（154 KB）走外链：整页 HTML 是 no-store（里面写着页面标识），每次打开都会重下，
+        // 样式内联在里面的活动不动就是四十几 KB；外链地址带指纹，浏览器能一直存着。
+        chatCssHref: mediaUrl(chatUiFileOfRole("chat-style").name),
         extraHead,
         extraBodyBottom,
         // 第三方脚本 + 主脚本，排的先后照清单来（见 chatUiFiles.ts）。按需脚本不在这里：

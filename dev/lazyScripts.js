@@ -1,12 +1,13 @@
 // @ts-nocheck
 /**
- * lazyScripts —— 验「按需加载的那几个脚本真的没排进首屏」（现在有两个：pele 画 mermaid 图，700 多 KB；
- * qrcode 画「微信」扫码那张码，56 KB）。
+ * lazyScripts —— 验两件“什么时候去取”的事：按需脚本真的没排进首屏（现在有两个：pele 画 mermaid 图，
+ * 700 多 KB；qrcode 画「微信」扫码那张码，56 KB），以及浏览器页面的主样式走外链（整页 HTML 每次打开都重下，
+ * 154 KB 的样式塞在里面就是四十几 KB）。
  *
  * 两种装法各验一遍：
  *   - 浏览器页面：<script src> 里没有它们，head 的 meta 里写着带内容指纹的地址，
- *     地址能原样解回来（页面里的加载器就照这个读，见 chat.js 的 loadLazyScript）；
- *   - 面板：它们仍然内联在整页里（面板没有可引的资源地址），也不该出现那份 meta。
+ *     地址能原样解回来（页面里的加载器就照这个读，见 chat.js 的 loadLazyScript）；样式用 <link> 引；
+ *   - 面板：它们仍然内联在整页里（面板没有可引的资源地址），也不该出现那份 meta，样式照旧内联。
  *
  *   npm run compile && node dev/lazyScripts.js
  *
@@ -40,10 +41,13 @@ const checks = [
     ["浏览器页面：head 里写了按需地址，带着内容指纹", !!metaTag && /pele\.js\?v=[0-9a-f]{6,}/.test(metaTag[1])],
     ["浏览器页面：二维码那一条也在按需地址里", !!metaTag && /qrcode\.js\?v=[0-9a-f]{6,}/.test(metaTag[1])],
     ["浏览器页面：那份地址能解回来（页面里的加载器就这么读）", typeof lazyUrls()["pele.js"] === "string" && lazyUrls()["pele.js"].includes("pele.js") && typeof lazyUrls()["qrcode.js"] === "string" && lazyUrls()["qrcode.js"].includes("qrcode.js")],
+    ["浏览器页面：主样式走 <link>（不带内容指纹的地址不算）", /<link rel="stylesheet" href="\/media\/chat\.css\?v=[0-9a-f]{6,}"/.test(browser)],
+    ["浏览器页面：整页 HTML 里没再塞着那份 154 KB 样式", browser.length < 30000],
     ["浏览器页面：其余第三方脚本照旧在首屏", scriptSrc(browser).some((s) => s.includes("marked")) && scriptSrc(browser).some((s) => s.includes("highlight"))],
     ["浏览器页面：主脚本仍然排在最后", (scriptSrc(browser).slice(-1)[0] || "").includes("chat.js")],
     ["面板：pele 仍然内联进来（它没有可引的资源地址）", /Pele \d+\.\d+/.test(panel)],
     ["面板：qrcode 也内联进来", panel.includes("qrcode-generator 1.4.4")],
+    ["面板：样式照旧内联（它没有可引的资源地址）", /<style>\s*\.pk-panel/.test(panel) || panel.includes(".pk-panel")],
     ["面板：不给按需地址", !panel.includes('<meta name="pichat-lazy-scripts"')],
 ];
 

@@ -3,9 +3,7 @@
  *
  * 导出 renderHTML(opts)：生成聊天界面 HTML。
  * 聊天 DOM 结构 + CSS + 脚本位次在此定义；调用方通过 opts 注入 CSP、
- * chat.css 文本、脚本清单（外链或内联）、额外 head/body。
- *
- * chat.css 由调用方读取文本后通过 opts.chatCss 传入（本模块运行时不读文件）。
+ * chat.css（文本或地址，面板内联、浏览器页面外链）、脚本清单（外链或内联）、额外 head/body。
  */
 
 /** 脚本清单里的一项：要么给外链地址，要么给内联内容，二选一。 */
@@ -19,8 +17,10 @@ export interface RenderScript {
 export interface RenderHTMLOpts {
     /** CSP 字符串（各宿主自行构造，含各自 nonce）。 */
     csp: string;
-    /** chat.css 的文本内容（由调用方读取后传入）。 */
-    chatCss: string;
+    /** chat.css 的文本内容（供内联用；给了 chatCssHref 时不用它）。 */
+    chatCss?: string;
+    /** chat.css 的地址（浏览器页面走外链：地址带内容指纹，浏览器能单独把它存一年）。 */
+    chatCssHref?: string;
     /** 注入 <head> 末尾的额外内容。 */
     extraHead?: string;
     /** 注入 <body> 开头的额外 DOM。 */
@@ -73,6 +73,12 @@ export function renderHTML(opts: RenderHTMLOpts): string {
         .join("");
 
     const head = opts.extraHead ? `  ${opts.extraHead}\n` : "";
+    // 主样式：浏览器页面给地址（<link>，地址带内容指纹、浏览器能长期存下这份 154 KB），
+    // 面板没有可引的资源地址，只能整份内联。它必须排在 extraHead 里那份主题样式前面
+    //（主题只补颜色，页面那些规则得先到位）。
+    const styleTag = opts.chatCssHref
+        ? `<link rel="stylesheet" href="${opts.chatCssHref}" />\n`
+        : `<style>\n${opts.chatCss ?? ""}\n</style>\n`;
     // 顶条：中间一排会话格（一格一个主会话，点一下就切过去；挤了就收窄、叠起来，见 chat.js 的 layoutSessionTabs），
     // 右边几颗网页端按钮（左边那颗文件侧边栏开关只有浏览器页面里有，由 browserBridge.js 插在最前头）。
     // 「新建会话」那颗加号在输入框底下那条小横排里，见下面的 #composer。
@@ -112,10 +118,7 @@ export function renderHTML(opts: RenderHTMLOpts): string {
 <meta charset="UTF-8" />
 <meta http-equiv="Content-Security-Policy" content="${opts.csp}" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<style>
-${opts.chatCss}
-</style>
-${head}</head>
+${styleTag}${head}</head>
 <body>
 ${bodyTop}${chatColumnOpen}${sessionBar}  <div id="messages">
     <button id="jumpBottom" class="hidden" title="跳到最新" aria-label="跳到最新">${ICON_ARROW_DOWN}</button>
