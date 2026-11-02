@@ -2541,7 +2541,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 if (typeof msg.toolCallId === "string") { void target.revertEdit(msg.toolCallId); }
                 break;
             case "revertChange":
-                // 「改动」里那份 diff 横条上的「回滚」：把这个文件整个撤到会话开始那一刻
+                // 「改动」里那份 diff 横条上的「回滚」：把这个文件撤到它最近一次提交的样子
                 if (typeof msg.path === "string" && msg.path) { void target.revertChange(msg.path); }
                 break;
             case "loadOlderHistory":

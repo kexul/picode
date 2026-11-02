@@ -295,6 +295,10 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
   （正在跑才留着），顶条上只留一格。脚本里用 `require("./harness.js").openSessionIn(page)`
   （不给目录就开在页面上现在看着的那个会话的目录里）：它走的是「项目与会话」里行尾那颗加号那条路，
   不碰别的会话，新壳挂出来才返回。
+- **要验「改动」那一格的脚本，先把会话目录弄成 git 仓库**：那一格现在直接问会话目录所在的 git 仓库
+  （「最近一次提交 → 现在磁盘上的样子」，见 `src/gitChanges.ts`），目录不在仓库里时它整格收起来。
+  所以脚本先铺好文件、`git init` + `git add` + `git commit`（那就是“最后一次提交”），再起会话；
+  默认的 `dev/.scratch` 自己在插件仓库里、又被 `.gitignore` 挡着，拿它验不出东西。
 - **截图默认把滚动条藏掉**（`--hide-scrollbars`）：图干净，但滚动条也就占不了宽度，
   跟浏览器里看到的会差一行半行。要照真样子看就加 `--scrollbars`，或者用 `node dev/inputProbe.js`
   （它默认就用真滚动条，还会把输入框的高度与滚动状态打印出来）。
@@ -377,7 +381,9 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `weixinPush.js` | 验“会话跑完一轮就往微信里推一条”（假模型 + 假 iLink 服务）：把登录态临时换成假的，看那头收到的几条：头一条是会话名 + 空行 + 这一轮的回复原文（markdown 原样、不截、不带“跑完了一轮”/地址），`weixin/sent.json` 里每条都记下了“这是为了哪个会话发的”（大整数编号要原样当字符串收下）；跑完把真登录态放回去。要验长回复分块（每块不超过 4000 字、拼起来与原文一字不差、每条都记账）就 `FAKEPI_REPLY_LONG=9000 npm run web:shot -- --fake-pi --script dev/weixinPush.js`。要真发到自己微信上就加 `PICHAT_WEIXIN_REAL=1`（用你扫出来的那份真令牌）：`npm run web:shot -- --fake-pi --script dev/weixinPush.js` |
 | `weixinLogin.js` | 验设置里那块「微信」的扫码登录（**假 iLink 服务**：`PICHAT_WEIXIN_API` 指到本地一个假端，先回「还没人扫」→「扫了」→ 要一次数字 → 给一枚假令牌）：二维码画出来了没有、状态字跟不跟着变、数字输入框出不出来、令牌有没有落到 `dev/.scratch/pichat/weixin/account.json`：`npm run web:shot -- --script dev/weixinLogin.js` |
 | `weixinScan.js` | 真机扫一次（走真微信那头）：打开设置 → 微信 → 点「扫码登录」，把窗口留着让人扫。先另开一个终端 `npm run web:dev`，再 `npm run web:shot -- --url http://127.0.0.1:51999/ --headed --keep --script dev/weixinScan.js` |
-| `changesTab.js` | 验文件侧边栏下面那一格「改动」（这个会话改过哪些文件，一个地方全看）：跟上格「文件」同时露着、各滚各的（下格按内容占高、最多 45%）、没改过文件时一句提示、假模型真改完一个文件之后那一行长出来（相对写法 + `+1` `−1`、行里不展开 diff）、点这一行整列打开那份 diff（横条写着它、左边一颗返回箭头，点它回两格）、刷新页面清单还在（数据在后端会话的内存里，不跟着页面走）、磁盘上把文件删掉后那一行标「已删除」且点开整份都是删掉的（开在弹窗里）、那一行里没有「回滚」按钮（这一格只看不改）、文件改回原样后那一行消失且回到那句提示、切走再切回来还停在刚才那份 diff 上、整份行尾从 LF 换成 CRLF 不算改动（真改一行就是 `+1` `−1`，不是整份重写）：`npm run web:shot -- --fake-pi --script dev/changesTab.js` |
+| `changesTab.js` | 验文件侧边栏下面那一格「改动」（会话目录跟它最后一次提交差了什么）：跟上格「文件」同时露着、各滚各的（下格按内容占高、最多 45%）、跟提交一样时一句提示、假模型真改完一个文件之后那一行长出来（相对写法 + `+1` `−1`、行里不展开 diff）、点这一行在弹窗里打开那份 diff（横条写着它、左边一颗返回箭头，点它回两格）、刷新页面清单还在（后端每次现问 git，不跟着页面走）、磁盘上把文件删掉后那一行标「已删除」且点开整份都是删掉的、那一行里没有「回滚」按钮（这一格只看不改）、文件改回原样后那一行消失且回到那句提示、切走再切回来还停在刚才那份 diff 上、整份行尾从 LF 换成 CRLF 不算改动（真改一行就是 `+1` `−1`，不是整份重写）、不是 git 仓库的目录里这一格整格收起来（切回去又露出来）：`npm run web:shot -- --fake-pi --script dev/changesTab.js` |
+| `bashChanges.js` | 验「改动」那一格能看到命令改的文件（这个脚本一个字都不经过 `edit` / `write`，全是 `fs` 直接动磁盘）：改一个文件进清单（`+1` `−1`，点开是那份 diff）、新写一个文件（`+N` `−0`）、删掉一个文件（标「已删除」）、`.gitignore` 挡在外面的日志不进清单：`npm run web:shot -- --fake-pi --script dev/bashChanges.js` |
+| `diffRollback.js` | 验「打开一份 diff 时横条上那颗『回滚』」（撤到最近一次提交）：看 diff 时有这颗、看普通文件时没有、点第一下只变成「确定回滚」（磁盘不动，关掉弹窗再打开又回到「回滚」）、点第二下文件真回去且那一行从清单里消失、那份 diff 自己关掉、消息流里留一句「已回滚」、提交里没有的新文件回滚就是删掉、会话里被删掉的文件回滚照提交写回来：`npm run web:shot -- --fake-pi --script dev/diffRollback.js` |
 | `fileEdit.js` | 验在「看文件的弹窗」里改一个代码文件、存回磁盘：铅笔只在会语法上色的那几种代码上露面（纯文本 / markdown / html 都没有）、点它换成一块文本框（行号与上色都没了）、敲字后「存」亮起来且标签挂一颗圆点、`Ctrl+S` 与点「存」都真写进磁盘并重画、「改动」那一格跟着长出这一份、没存的话关弹窗 / 切会话都不丢（再打开直接是编辑态）、点「放弃」才回到盘上那份、盘上被别人改过时不默默盖上去（提示 + 那两颗变成「覆盖」「用盘上的」）、行尾（CRLF）与 BOM 不会被顺手改掉、以及写地址自己那几种拒绝（目录外 403、没有 404、非文本 415、没给 text 400、旧 mtime 409）：`npm run web:shot -- --fake-pi --script dev/fileEdit.js` |
 | `htmlPreview.js` | 验文件侧边栏里把 html 当网页打开（点 `.html` 链接摆出的是渲染好的页面，不是源码：页面里的相对样式与脚本真生效、链接里带的行号等于没带、文件改过这一列自己重载那张网页；以及 `/site/` 那条地址的规矩：HEAD 只给头与修改时间、没这个文件 404、会话目录外的 403）：`npm run web:shot -- --fake-pi --script dev/htmlPreview.js` |
 | `mdImagePaths.js` | 验正文里的图片路径放宽到整机（会话目录里的相对写法走 `/site/`；`../x.png`、`C:/…`、`file:///…` 走 `/file?anywhere=1`；外站地址照旧不加载；文件侧边栏那份 `.md` 里同样；那条放宽的地址只认图片——非图片 403、带 `download=1` 403、不带开关时会话目录外照旧 403）：`npm run web:shot -- --fake-pi --script dev/mdImagePaths.js` |

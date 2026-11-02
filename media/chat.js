@@ -6284,10 +6284,10 @@
   const FILE_SIDEBAR_WRAP_STORE_KEY = "pichat.fileSidebarWrap";
   /** 「目录」那一格：标签上就写这两个字，悬停提示给这一层的全路径（见 fileSidebarProjectFullPath）。 */
   const FILE_SIDEBAR_PROJECT_NAME = "文件";
-  /** 「改动」那一格：这个会话改了哪些文件、每个改成什么样（标签上就写这两个字）。 */
+  /** 「改动」那一格：跟最后一次提交差了什么、每个文件差成什么样。 */
   const FILE_SIDEBAR_CHANGES_NAME = "改动";
   /** 这一格里一个文件都没改过时那句提示。 */
-  const FILE_SIDEBAR_CHANGES_HINT = "这个会话还没改过文件。";
+  const FILE_SIDEBAR_CHANGES_HINT = "跟最后一次提交一样，没有改动。";
   /** 问后端「会话目录自己」用这个相对写法（列目录那条地址不认空路径，`.` 就是会话目录）。 */
   const FILE_SIDEBAR_PROJECT_PATH = ".";
   /** 这一列那一摊：容器、里面那几块、开着的东西。 */
@@ -6311,7 +6311,7 @@
     //   page：这一格自己那一块正文（挂在 #dirPane / #changePane / 弹窗的 #fileBody 下面，一直在，不挪）
     //   drawn：那一块里已经有画好的内容了（刷新那一轮不必再问一次）
     fileTab: null,     // 上面那一格：列目录（一层层往里走）
-    changeTab: null,   // 下面那一格：这个会话改过哪些文件
+    changeTab: null,   // 下面那一格：这个会话目录跟最后一次提交差了什么
     // 弹窗里开着的那几份（点清单里的文件 / 「改动」里的一行，一份开一格标签）：
     //   tabs：按打开先后排的那几份，每份 { kind, path, file, page, top }
     //     kind："file" 看一个文件（file 就是那一格，跟 fileSidebarNewTab 一个形状）
@@ -6651,7 +6651,7 @@
 
 
   /**
-   * 这一列的两格：上面「文件」（列目录 / 看一个文件）、下面「改动」（这个会话改过哪些文件）。
+   * 这一列的两格：上面「文件」（列目录 / 看一个文件）、下面「改动」（会话目录跟最后一次提交差了什么）。
    * 两格同时露着，各滚各的（跟右边那列「项目与会话」一个摆法，见 chat.css 的 #filePanes）。
    */
 
@@ -6670,7 +6670,7 @@
   }
 
   /**
-   * 「改动」那一格：这个会话改过哪些文件（后端给的清单）、哪几个块是展开的、取回来的 diff。
+   * 「改动」那一格：会话目录跟最后一次提交差了什么（后端给的清单）、取回来的 diff。
    * 它不像文件那样按 path 取内容，所以 path 留空。
    */
   function fileSidebarNewChangesTab() {
@@ -7078,7 +7078,7 @@
         : "放弃这次改动（没存的就不存了）";
       revertBtn.setAttribute("aria-label", conflict ? "扔掉我改的、看盘上那一份" : "放弃这次改动");
     }
-    // 看 diff 时的那颗「回滚」：把这个文件整个撤到会话开始那一刻（那份 diff 的左边）。
+    // 看 diff 时的那颗「回滚」：把这个文件撤到它最近一次提交的样子（见 src/gitChanges.ts）。
     // 点第一下变成「确定回滚」、第二下才真撤（会丢掉东西的动作，得像退出那样再问一句；
     // 确认不走卡片：看文件的弹窗盖着对话那一块，卡片开在消息流里看不见）
     const rollbackBtn = document.getElementById("fileRollback");
@@ -7090,8 +7090,8 @@
       rollbackBtn.title = !diffEntry
         ? "回滚"
         : (diffEntry.confirming
-          ? `${diffEntry.path} 会回到会话开始那一刻，本会话对它的改动全都丢掉（再点一下就撤）`
-          : `${diffEntry.path} 回到会话开始那一刻（本会话对它的改动全都丢掉）`);
+          ? `${diffEntry.path} 会回到最近一次提交，这之后的改动全都丢掉（再点一下就撤）`
+          : `${diffEntry.path} 回到最近一次提交（这之后的改动全都丢掉）`);
     }
     if (editing) { syncFileEditNote(fileTab); }
     bar.hidden = !viewing;
@@ -7249,8 +7249,20 @@
   function showChanges() {
     const tab = fileSidebar.changeTab;
     if (!tab) { return; }
-    if (!tab.drawn) { showChangeNote("正在读取…"); }
+    if (!tab.drawn) {
+      // 刚换成这一份（刚打开 / 切了会话）：先按会话目录有 git 摆着，等后端那句话
+      showChangesPane(true);
+      showChangeNote("正在读取…");
+    }
     fetchChanges(tab);
+  }
+
+  /**
+   * 「改动」那一格露不露面：会话目录不在 git 仓库里时整格收起来
+   * （那行小字、上面那道分隔线、连同下面的地方一起没掉，上面「文件」那格占满）。
+   */
+  function showChangesPane(shown) {
+    if (fileSidebar.changeBody) { fileSidebar.changeBody.hidden = !shown; }
   }
 
   /**
@@ -7831,14 +7843,13 @@
     return fileSidebar.view.tabs.some((e) => e.file === tab);
   }
 
-  // ==================== 「改动」那一格：这个会话改过哪些文件 ====================
-  // 这个会话改过的东西都在这一格看：一行一个文件（会话开始那一刻 → 现在磁盘上的），
-  // 点一行展开这一块的 diff。
-  // 数据全在后端会话里：一份是会话开始时拍的工作区快照（bash 里跑的脚本、命令改的也在里面，
-  // 见 src/changeSnapshot.ts），一份是 edit / write 自己记的那份（快照算不出来的退路）。
+  // ==================== 「改动」那一格：这个会话目录和最后一次提交差了什么 ====================
+  // 一行一个文件（最近一次提交 → 现在磁盘上的），点一行就在弹窗里展开那一份 diff。
+  // 数据全在后端现算：直接问会话目录所在的 git 仓库（bash 里跑的脚本、命令改的也在里面，
+  // 见 src/gitChanges.ts）。会话目录不在 git 仓库里时后端回 vcs:false，这一格整格收起来。
   // 刷新页面重问一次就有；插件重启 / 会话关掉就没了。
 
-  /** 问清单的地址：这个会话改过哪些文件（相对写法 + 增删行数）。 */
+  /** 问清单的地址：会话目录跟最后一次提交差了什么（相对写法 + 增删行数）。 */
   function changesUrl() {
     return "/changes?session=" + encodeURIComponent(activeId || "");
   }
@@ -7866,6 +7877,10 @@
       }
       const data = await resp.json().catch(() => null);
       if (token !== fileSidebar.token || seq !== tab.seq) { return; }
+      // 会话目录不在 git 仓库里：这一格整格收起来（连同头上那行小字与上面那道分隔线）
+      const vcs = !(data && data.vcs === false);
+      showChangesPane(vcs);
+      if (!vcs) { tab.changes = []; tab.drawn = true; return; }
       const list = data && Array.isArray(data.changes) ? data.changes : [];
       tab.changes = list;
       drawChanges(tab);
@@ -8527,7 +8542,7 @@
     const root = document.createElement("div");
     root.id = "fileSidebar";
     // 这一列跟右边那列「项目与会话」一个摆法：最上面一行是标题（文件与改动），
-    // 底下上下两格——上格「文件」（只列目录，一层层往里走）、下格「改动」（这个会话改过哪些文件），
+    // 底下上下两格——上格「文件」（只列目录，一层层往里走）、下格「改动」（会话目录跟最后一次提交差了什么），
     // 两格同时露着、各滚各的：上格吃剩下的地方，下格按内容占高、最多 45%（见 chat.css 的 #filePanes）。
     // 点开一个文件 / 一份 diff 不开在这里，而是盖住对话那一块的弹窗（见下面那块 #fileStage）。
     root.innerHTML =
@@ -8540,7 +8555,7 @@
         '<div id="filePanes" class="pk-body">' +
           // 上格「文件」：列目录、一层层往里走（点开一个文件就开弹窗，见下）
           '<div id="dirPane"></div>' +
-          // 下格「改动」：这个会话改过哪些文件，一行一个（点一行开弹窗看那份 diff）。
+          // 下格「改动」：会话目录跟最后一次提交差了什么，一行一个（点一行开弹窗看那份 diff）。
           // 头上那行小字跟右边「项目与会话」的「正在对话 / 工作区」一个样子：上面那道线是两格的分界，
           // 线底下的这块叫「改动」（上面那块不另写：「文件与改动」的标题已经有了）。
           '<div id="changePane">' +
@@ -8568,8 +8583,8 @@
           '<button id="fileEdit" class="file-bar-btn" type="button" title="改一下这个文件" aria-label="改一下这个文件">' + ICONS.edit + '</button>' +
           '<button id="fileSave" class="file-bar-btn" type="button" title="存到磁盘（Ctrl+S）" aria-label="存到磁盘">' + ICONS.save + '</button>' +
           '<button id="fileRevert" class="file-bar-btn" type="button" title="放弃这次改动" aria-label="放弃这次改动">' + ICONS.discard + '</button>' +
-          // 一份 diff（「改动」那一格点开的那份）上那颗「回滚」：把这个文件整个撤到会话开始那一刻
-          //（那份 diff 的左边），只在看 diff 时露面，见 syncFileBar
+          // 一份 diff（「改动」那一格点开的那份）上那颗「回滚」：把这个文件撤到它最近一次提交的样子，
+          // 只在看 diff 时露面，见 syncFileBar
           '<button id="fileRollback" class="file-bar-btn wide" type="button" title="回滚" aria-label="回滚">' + ICONS.discard + ' 回滚</button>' +
           '<button id="fileFontMinus" class="file-bar-btn" type="button" title="字小一点" aria-label="字小一点">A−</button>' +
           '<button id="fileFontPlus" class="file-bar-btn" type="button" title="字大一点" aria-label="字大一点">A+</button>' +
@@ -8621,7 +8636,7 @@
       const entry = viewTab();
       if (entry && entry.kind === "file" && entry.file.editing) { discardFileEdit(entry.file); }
     });
-    // 看一份 diff 时那颗「回滚」：把这个文件整个撤到会话开始那一刻（那份 diff 的左边）。
+    // 看一份 diff 时那颗「回滚」：把这个文件撤到它最近一次提交的样子（见 src/gitChanges.ts）。
     // 点第一下只是把按钮变成「确定回滚」（这步会丢掉东西，得再点一下），点第二下才真发；
     // 撤完后端会重问「改动」清单，这一份就不在清单里了 —— 这个标签自己就关掉（见 drawChanges）
     stage.querySelector("#fileRollback").addEventListener("click", () => {

@@ -5,16 +5,17 @@
  *   npm run web:shot -- --fake-pi --script dev/diffRollback.js
  *
  * 真后端、真会话、真网页服务、真界面文件，只有模型是假的（假模型那一套老剧本里
- * 第 4 步会真去改 dev/.scratch 里的 说明.md；说「写新文件」时它会真建一个 新文件.md）。
- * 那颗回滚撤的是：这个文件在本会话里的全部改动 —— 就是那份 diff 左边那一份。
+ * 第 4 步会真去改 说明.md；说「写新文件」时它会真建一个 新文件.md）。
+ * 那颗回滚撤的是：这个文件回到它最近一次提交的样子（`git checkout HEAD -- 那个文件`，
+ * 见 src/gitChanges.ts）—— 也就是那份 diff 左边那一份。
  *
  * 验的是外面看得见的行为：
  *   1. 打开一份 diff，横条上有那颗「回滚」（看普通文件时没有，看 diff 时折行开关照旧藏着）；
  *   2. 点第一下只是把按钮变成「确定回滚」（磁盘上一个字都不动；关掉弹窗再打开又回到「回滚」）；
- *   3. 点第二下才真撤：磁盘上那个文件回到会话开始那一刻，清单里那一行消失、那份 diff 自己关掉，
+ *   3. 点第二下才真撤：磁盘上那个文件回到最近一次提交，清单里那一行消失、那份 diff 自己关掉，
  *      消息流里多一句「已回滚」；
- *   4. 会话里新出现的文件（write 建的）：回滚就是把它删掉；
- *   5. 会话里被删掉的文件：点开那份 diff（整份都是删掉的）也能回滚，文件照会话开始那一刻写回来。
+ *   4. 提交里没有的文件（write 新建、还没提交）：回滚就是把它删掉；
+ *   5. 会话里被删掉的文件：点开那份 diff（整份都是删掉的）也能回滚，文件照最近一次提交写回来。
  *
  * 造的话说在前头：脚本自己动 dev/.scratch 里的文件（那个目录不进版本库，随便造）。
  */
@@ -22,7 +23,7 @@ const fs = require("fs");
 const path = require("path");
 const { SCRATCH_DIR } = require("./harness.js");
 
-/** 这一跑自己的干净工作目录：会话开始那一刻里面是什么，那份 diff 就拿它当左边。 */
+/** 这一跑自己的干净工作目录：铺好的这一份提交上去，那份 diff 就拿它当左边。 */
 const WORK = path.join(SCRATCH_DIR, "diffRollbackWork");
 /** 假模型那一套老剧本改的就是这个文件（见 dev/fakePi.js）。 */
 const SCRIPT_FILE = "说明.md";
@@ -33,6 +34,15 @@ const SCRIPT_BASE = "这是 Pi Chat 插件的调试用工作目录（dev/.scratc
     + "调试时起的会话就跑在这里，随便改，它不进版本库，也不会碰到插件自己的代码。\n";
 
 let failures = 0;
+
+/** 把这一份铺好的东西提交上去（那就是“最近一次提交”）。 */
+function initRepo(dir) {
+    const git = (...args) => require("child_process").execFileSync("git",
+        ["-c", "core.autocrlf=false", ...args], { cwd: dir, stdio: "ignore" });
+    git("init", "-q", ".");
+    git("add", "-A");
+    git("-c", "user.email=dev@example.invalid", "-c", "user.name=dev", "commit", "-qm", "基线");
+}
 
 function check(label, ok, detail) {
     console.log((ok ? "  ✓ " : "  ✗ ") + label + (detail === undefined ? "" : "：" + detail));
@@ -161,10 +171,12 @@ module.exports = async (page) => {
     await page.waitReady();
     await page.sleep(600);
 
-    // 这一跑开一个自己的干净工作目录，先铺好文件、再起会话（那份 diff 的左边就是这一刻）
+    // 这一跑开一个自己的干净工作目录：先铺好文件、提交上去，再起会话（那份 diff 的左边就是提交那一份）
     fs.rmSync(WORK, { recursive: true, force: true });
     fs.mkdirSync(WORK, { recursive: true });
     fs.writeFileSync(path.join(WORK, SCRIPT_FILE), SCRIPT_BASE, "utf8");
+    fs.writeFileSync(path.join(WORK, ".gitignore"), "fake-session-*.jsonl\n", "utf8");
+    initRepo(WORK);
     await page.eval(`
         acquireVsCodeApi().postMessage({ type: "newSessionInWorkspace", path: ${JSON.stringify(WORK)} });
         return true;
@@ -184,8 +196,8 @@ module.exports = async (page) => {
     console.log("打开之后：" + JSON.stringify(diff));
     check("点那一行：那份 diff 打开了", diff.fileView && diff.stageShown && diff.barName === SCRIPT_FILE, diff.barName);
     check("看 diff 时横条上有那颗「回滚」", diff.rollbackShown);
-    check("悬停提示写着回滚撤的是什么（回到会话开始那一刻）",
-        diff.rollbackTitle.indexOf("回到会话开始那一刻") >= 0, diff.rollbackTitle);
+    check("悬停提示写着回滚撤的是什么（回到最近一次提交）",
+        diff.rollbackTitle.indexOf("回到最近一次提交") >= 0, diff.rollbackTitle);
     check("看 diff 时折行开关照旧藏着", diff.wrapHidden);
     await page.shot("rollback-1-diff.png");
 
@@ -207,13 +219,13 @@ module.exports = async (page) => {
     check("关掉弹窗再打开：按钮回到「回滚」（上一下没点完的作废）",
         rearmed.text === "回滚" && !rearmed.armed, rearmed.text);
 
-    // ---- 4. 点两下：文件回到会话开始那一刻 ----
+    // ---- 4. 点两下：文件回到最近一次提交 ----
     await page.click("#fileRollback");
     await page.sleep(200);
     await page.click("#fileRollback");
     const started = Date.now();
     while (Date.now() - started < 10000 && String(disk(SCRIPT_FILE)) !== SCRIPT_BASE) { await page.sleep(250); }
-    check("点第二下：磁盘上的文件回到会话开始那一刻", disk(SCRIPT_FILE) === SCRIPT_BASE,
+    check("点第二下：磁盘上的文件回到最近一次提交", disk(SCRIPT_FILE) === SCRIPT_BASE,
         JSON.stringify(disk(SCRIPT_FILE)));
     rows = await waitFor(page, "清单里那一行消失", rowsNow, (x) => !x.some((one) => one.path === SCRIPT_FILE));
     check("回滚之后清单里那一行消失", !rows.some((one) => one.path === SCRIPT_FILE), JSON.stringify(rows));
@@ -224,7 +236,7 @@ module.exports = async (page) => {
     check("消息流里多一句「已回滚」", msg.indexOf("已回滚") >= 0 && msg.indexOf(SCRIPT_FILE) >= 0, msg);
     await page.shot("rollback-3-done.png");
 
-    // ---- 5. 会话里新出现的文件：回滚就是把它删掉 ----
+    // ---- 5. 提交里没有的文件（会话里新建的）：回滚就是把它删掉 ----
     await runScript(page, "写新文件", "写完了。");
     rows = await waitFor(page, "新文件进清单", rowsNow, (x) => x.some((one) => one.path === NEW_FILE));
     check("新建的文件进清单了", rows.some((one) => one.path === NEW_FILE), JSON.stringify(rows));
@@ -243,7 +255,7 @@ module.exports = async (page) => {
     rows = await waitFor(page, "新文件那一行消失", rowsNow, (x) => !x.some((one) => one.path === NEW_FILE));
     check("回滚之后清单里也没有它了", !rows.some((one) => one.path === NEW_FILE), JSON.stringify(rows));
 
-    // ---- 6. 会话里被删掉的文件：也能回滚（照会话开始那一刻写回来）----
+    // ---- 6. 会话里被删掉的文件：也能回滚（照最近一次提交写回来）----
     fs.rmSync(path.join(WORK, SCRIPT_FILE), { force: true });
     await reopenSidebar(page);
     rows = await waitFor(page, "删掉文件之后清单刷新", rowsNow,
@@ -261,7 +273,7 @@ module.exports = async (page) => {
     await page.click("#fileRollback");
     const backBy = Date.now();
     while (Date.now() - backBy < 10000 && disk(SCRIPT_FILE) !== SCRIPT_BASE) { await page.sleep(250); }
-    check("回滚删掉的文件：照会话开始那一刻写回来了", disk(SCRIPT_FILE) === SCRIPT_BASE, JSON.stringify(disk(SCRIPT_FILE)));
+    check("回滚删掉的文件：照最近一次提交写回来了", disk(SCRIPT_FILE) === SCRIPT_BASE, JSON.stringify(disk(SCRIPT_FILE)));
     rows = await waitFor(page, "写回来之后那一行消失", rowsNow, (x) => !x.some((one) => one.path === SCRIPT_FILE));
     check("写回来之后清单里那一行消失", !rows.some((one) => one.path === SCRIPT_FILE), JSON.stringify(rows));
     await page.shot("rollback-4-restored.png");

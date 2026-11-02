@@ -41,7 +41,7 @@ import { pickOverlayClient } from "./overlayTarget";
 import { ScreenRegistry } from "./screenRegistry";
 import { dirInsideAny, dirKey } from "./pathRules";
 import type { WebServerHost } from "./webChatServer";
-import type { SessionChangeInfo } from "./editTracker";
+import type { SessionChanges } from "./gitChanges";
 import type { BashTaskInfo } from "./bashProtocol";
 import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
@@ -326,12 +326,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
-     * 这个会话改过哪些文件（文件侧边栏那一格「改动」用）。
-     * 数从会话开始那一刻的工作区快照来（见 changeSnapshot.ts）；快照没有时退回 edit / write 那套。
-     * 跟 knownFiles 一样跟着会话运行的那份内存走：会话关了就没了。
+     * 这个会话目录相对它最后一次提交改过哪些文件（文件侧边栏那一格「改动」用）。
+     * 每次都现问 git（见 gitChanges.ts）；会话目录不在 git 仓库里时 vcs=false（那一格整格收起来）。
      */
-    public async sessionChanges(sessionId: string): Promise<SessionChangeInfo[]> {
-        return (await this.panels.get(sessionId)?.getChanges()) ?? [];
+    public async sessionChanges(sessionId: string): Promise<SessionChanges> {
+        const panel = this.panels.get(sessionId);
+        return panel ? await panel.getChanges() : { vcs: false, changes: [] };
     }
 
     /** 一个文件的合计 diff（相对写法 = 清单里那一行）；没改出差别就不给。 */

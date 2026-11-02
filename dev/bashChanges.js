@@ -5,28 +5,28 @@
  *   npm run web:shot -- --fake-pi --script dev/bashChanges.js
  *
  * 为什么要验这个：这一格以前只认 edit / write（它们在动手之前，插件手上有旧内容），
- * 用命令（sed、脚本、构建）改的文件一个都进不来。现在改成会话开始给工作区拍一份快照
- * （见 src/changeSnapshot.ts），谁改的都能算出来。这个脚本一个字都不经过 edit / write：
- * 全是 fs 直接动磁盘，等于“bash 里跑的程序改的”。
+ * 用命令（sed、脚本、构建）改的文件一个都进不来。现在改成直接问会话目录所在的 git 仓库
+ * （见 src/gitChanges.ts，「最近一次提交 → 现在磁盘上的样子」），谁改的都能算出来。
+ * 这个脚本一个字都不经过 edit / write：全是 fs 直接动磁盘，等于“bash 里跑的程序改的”。
  *
- * 会话开在一个干净的小目录里（dev/.scratch 本身太大，快照按设计会放弃，见那个文件的限额），
- * 那个目录每次跑之前重建，不进版本库。
+ * 会话开在一个干净的小仓库里（那个目录每次跑之前重建，不进版本库）。
  *
  * 验的是外面看得见的行为：
  *   1. 磁盘上改一个文件：那一格长出那一行，+N −M 是对的，点开看得到 diff；
  *   2. 磁盘上新写一个文件：+N −0；
  *   3. 删掉一个文件：标「已删除」；
- *   4. 名单外的（日志、图片这种）不进清单：只收源码 / 文档 / 配置（见 src/changeSnapshot.ts）。
+ *   4. .gitignore 挡在外面的（日志、图片这种）不进清单：那一格跟仓库自己的规矩走。
  */
 const fs = require("fs");
 const path = require("path");
+const { execFileSync } = require("child_process");
 const { SCRATCH_DIR } = require("./harness.js");
 
-/** 会话开在这儿：干净、小，快照拍得出来。 */
+/** 会话开在这儿：干净、小，先把里面的东西提交上去当基线。 */
 const WORK = path.join(SCRATCH_DIR, "bashChangesWork");
 const MODIFIED = "说明.md";
 const CREATED = "命令建的文件.md";
-/** 名单之外的一个文件：改了也不该进清单。 */
+/** .gitignore 挡在外面的一个文件：改了也不该进清单。 */
 const IGNORED = "跑出来的日志.log";
 
 let failures = 0;
@@ -92,13 +92,18 @@ module.exports = async (page) => {
     await page.waitReady();
     await page.sleep(600);
 
-    // 干净的小目录，里面的内容就是“会话开始时的样子”
+    // 干净的小仓库：里面这一份提交上去，就是“最后一次提交”
     fs.rmSync(WORK, { recursive: true, force: true });
     fs.mkdirSync(WORK, { recursive: true });
     fs.writeFileSync(path.join(WORK, MODIFIED), "第一行\n第二行\n第三行\n", "utf8");
     fs.writeFileSync(path.join(WORK, "另一个文件.md"), "随便\n", "utf8");
+    fs.writeFileSync(path.join(WORK, ".gitignore"), "*.log\n", "utf8");
+    const git = (...args) => execFileSync("git", ["-c", "core.autocrlf=false", ...args], { cwd: WORK, stdio: "ignore" });
+    git("init", "-q", ".");
+    git("add", "-A");
+    git("-c", "user.email=dev@example.invalid", "-c", "user.name=dev", "commit", "-qm", "基线");
 
-    // 在这个目录里开一个新会话（快照就是在它起来那一刻拍的）
+    // 在这个目录里开一个新会话
     await page.eval(`
         acquireVsCodeApi().postMessage({ type: "newSessionInWorkspace", path: ${JSON.stringify(WORK)} });
         return true;
@@ -106,7 +111,7 @@ module.exports = async (page) => {
     await page.sleep(2500);
     await open(page);
     let rows = await waitRows(page, (x) => x.length === 0, 4000);
-    check("刚开的时候清单是空的（还没人改过东西）", rows.length === 0, JSON.stringify(rows));
+    check("刚开的时候清单是空的（跟最后一次提交一样）", rows.length === 0, JSON.stringify(rows));
 
     // ---- 1. 磁盘上改一行（不经过 edit / write）----
     fs.writeFileSync(path.join(WORK, MODIFIED), "第一行\n第二行改过\n第三行\n", "utf8");
@@ -149,12 +154,12 @@ module.exports = async (page) => {
     const gone = rows.find((one) => one.path === MODIFIED);
     check("删掉的文件标「已删除」", !!gone && gone.counts.includes("已删除"), gone && gone.counts);
 
-    // ---- 4. 名单外的（日志、图片这种）不进清单 ----
+    // ---- 4. .gitignore 挡在外面的（日志这种）不进清单 ----
     fs.writeFileSync(path.join(WORK, IGNORED), "随便写点什么\n", "utf8");
     await reopen(page);
     await page.sleep(900);
     rows = JSON.parse(await rowsNow(page));
-    check("名单外的日志文件不进清单", !rows.some((one) => one.path === IGNORED), JSON.stringify(rows));
+    check(".gitignore 挡在外面的日志不进清单", !rows.some((one) => one.path === IGNORED), JSON.stringify(rows));
 
     await page.shot("bash-changes.png");
 

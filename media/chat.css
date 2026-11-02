@@ -1709,6 +1709,9 @@
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
     font-size: inherit;
   }
+  /* 会话目录不在 git 仓库里：这一格整格收起来（见 chat.js 的 showChangesPane）。
+     这道分隔线在这格身上，所以连它一起没掉；上面「文件」那格自己就占满了。 */
+  #changePane[hidden] { display: none; }
   /* 下格头上那行小字（「改动」）：跟右边那列「项目与会话」的分节标题（.pk-section）一个长相：
      11px、半粗、正文字色。它跟下面那些行一起滚，不钉着。 */
   .file-pane-title {
@@ -1980,7 +1983,7 @@
   body.file-wrap .file-edit-text { white-space: pre-wrap; overflow-wrap: anywhere; }
   /* 盘上变了时「存」那颗变成「覆盖」、放弃那颗变成「用盘上的」：里面是字，得让它宽一点 */
   .file-bar-btn.wide { width: auto; padding: 0 6px; }
-  /* 看一份 diff 时横条上那颗「回滚」（图标 + 两个字）：把这个文件整个撤到会话开始那一刻。
+  /* 看一份 diff 时横条上那颗「回滚」（图标 + 两个字）：把这个文件撤到它最近一次提交的样子。
      点第一下变成「确定回滚」、按钮带一道告警色的边（再点一下才真撤，见 syncFileBar）。 */
   #fileRollback { gap: 3px; }
   #fileRollback svg { width: 13px; height: 13px; display: block; }

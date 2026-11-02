@@ -1,37 +1,44 @@
 // @ts-nocheck
 /**
- * changesTab —— 验文件侧边栏那一格「改动」（这个会话改过哪些文件，一个地方全看）。
+ * changesTab —— 验文件侧边栏那一格「改动」（这个会话目录和它最后一次提交差了什么）。
  *
  *   npm run web:shot -- --fake-pi --script dev/changesTab.js
  *
  * 真后端、真会话、真网页服务、真界面文件，只有模型是假的（假模型那一套老剧本里
- * 第 4 步会真去改 dev/.scratch 里的 说明.md，后端因此记下这一份改动）。
+ * 第 4 步会真去改这个工作目录里的 说明.md，后端因此重问一次清单）。
+ * 这一格现在直接问会话目录所在的 git 仓库（见 src/gitChanges.ts）：口径是
+ * 「最近一次提交 → 现在磁盘上的样子」。所以这一跑先搭一个小仓库、把铺好的文件提交上去，
+ * 那就是“基线”（会话开始之前就有的未提交改动也会算进来，这一跑里没造那种东西）。
+ *
  * 验的是外面看得见的行为：
  *   1. 最上面一行是标题行（写着「文件与改动」，右端是文件搜索那颗放大镜和收起那颗叉），
  *      底下上下两格同时露着：上格「文件」（只有目录清单）、下格「改动」；各滚各的，
  *      下格按内容占高、最多占这一列的 45%；标签条那一套（#fileTabs / .file-tab）整个没了；
- *   2. 一个文件都没改过时，「改动」那一格里只有一句「这个会话还没改过文件。」；
+ *   2. 跟最后一次提交一样时，「改动」那一格里只有一句「跟最后一次提交一样，没有改动。」；
  *   3. 假模型改完 说明.md 之后（后端推了一条“改动变了”），这一格自己长出那一行：
  *      相对写法、+1 −1，行里不展开 diff；
- *   4. 点那一行：整列打开那份 diff（body 上多一个 file-view、上下两格收起来、#fileStage 露出来，
+ *   4. 点那一行：弹窗打开那份 diff（body 上多一个 file-view、#fileStage 露出来），
  *      横条左边一颗返回箭头、右边写着这个文件的写法），diff 在 #fileBody 里，
  *      既有删掉的那行、也有加上的那行（颜色类是 del / add）；点返回箭头回到上下两格；
- *   5. 刷新页面：清单还在（数据在后端会话的内存里，不跟着页面走）——这正是“刷新浏览器不丢”；
+ *   5. 刷新页面：清单还在（后端每次现问 git，不跟着页面走）——这正是“刷新浏览器不丢”；
  *   6. 把磁盘上那个文件删了以后再问一次：那一行标「已删除」，点开仍看得到整份都是删掉的；
  *   7. 那一行只有文件名、增删数：没有「回滚」那颗按钮（这一格只看不改）；
  *      把文件照原样写回去以后，那一行从清单里消失（清单空了就回到那句提示）；
  *   8. 模型新写一个文件（write 那条路）：清单里那一行是 +3 −0，点开三行都是新加的；
- *   9. 切到别的会话再切回来：还停在该才那份 diff 上（每个会话各记各的）。
+ *   9. 切到别的会话再切回来：还停在该才那份 diff 上（每个会话各记各的）；
  *  10. 整份行尾从 LF 换成 CRLF（Windows 上很常见：仓库按 CRLF 检出、编辑工具按 LF 写回去）：
- *      这不算改动，那一行该从清单里消失；CRLF 的文件里真改一行，数是 +1 −1，不是整份重写。
+ *      这不算改动，那一行该从清单里消失；CRLF 的文件里真改一行，数是 +1 −1，不是整份重写；
+ *  11. 会话目录不是 git 仓库：这一格整格收起来（那行小字、上面那道分隔线一起没掉，
+ *      上面「文件」那格占满）。
  *
  * 造的话说在前头：脚本自己动 dev/.scratch 里的文件（那个目录不进版本库，随便造）。
  */
 const fs = require("fs");
 const path = require("path");
+const { execFileSync } = require("child_process");
 const { SCRATCH_DIR } = require("./harness.js");
 
-/** 这一跑自己的干净工作目录：会话开始那一刻里面是什么，「改动」那一格就拿它当基线。 */
+/** 这一跑自己的干净工作目录：先把这一份提交上去，那就是「最近一次提交」。 */
 const WORK = path.join(SCRATCH_DIR, "changesWork");
 /** 假模型那一套老剧本改的就是这个文件（见 dev/fakePi.js）。 */
 const SCRIPT_FILE = "说明.md";
@@ -44,6 +51,16 @@ const EOL_BASE = "第一行\n第二行\n第三行\n";
 const WELCOME_LINE = "这是 Pi Chat 插件的调试用工作目录（dev/.scratch）。";
 /** 说明.md 本来的样子（假模型改的就是它；把这份写回去，那一行就从清单里消失）。 */
 const SCRIPT_BASE = WELCOME_LINE + "\n调试时起的会话就跑在这里，随便改，它不进版本库，也不会碰到插件自己的代码。\n";
+/** 假 pi 把它的会话文件也写在会话目录里（真 pi 不会）：拿 .gitignore 挡在清单外面。 */
+const GITIGNORE = "fake-session-*.jsonl\n";
+
+/** 把这一份铺好的东西提交上去（那就是“最后一次提交”）；同样的配置跟后端问 git 时一样。 */
+function commitBase(dir) {
+    const git = (...args) => execFileSync("git", ["-c", "core.autocrlf=false", ...args], { cwd: dir, stdio: "ignore" });
+    git("init", "-q", ".");
+    git("add", "-A");
+    git("-c", "user.email=dev@example.invalid", "-c", "user.name=dev", "commit", "-qm", "基线");
+}
 
 let failures = 0;
 
@@ -204,14 +221,15 @@ module.exports = async (page) => {
     await page.waitReady();
     await page.sleep(600);
 
-    // 这一跑开一个自己的干净工作目录：会话开始那一刻里面是什么，「改动」那一格就拿它当基线
-    // （见 src/changeSnapshot.ts）。所以文件得先铺好、再起会话 —— 不能像以前那样把 dev/.scratch
-    // 里留下的东西当基线（那样“改了一行”会算成跟上一跑留下的内容之间的差）。
+    // 这一跑开一个自己的干净工作目录，铺好的这一份提交上去当基线（见 src/gitChanges.ts）。
+    // 文件得先铺好、提交、再起会话 —— 会话开始之后才动的东西才算“改动”。
     fs.rmSync(WORK, { recursive: true, force: true });
     fs.mkdirSync(WORK, { recursive: true });
     fs.writeFileSync(path.join(WORK, SCRIPT_FILE), SCRIPT_BASE, "utf8");
     fs.writeFileSync(path.join(WORK, EOL_FILE), EOL_BASE, "utf8");   // 行尾那一段就改这一份
+    fs.writeFileSync(path.join(WORK, ".gitignore"), GITIGNORE, "utf8");
     fs.rmSync(path.join(WORK, NEW_FILE), { force: true });
+    commitBase(WORK);
     await page.eval(`
         acquireVsCodeApi().postMessage({ type: "newSessionInWorkspace", path: ${JSON.stringify(WORK)} });
         return true;
@@ -235,9 +253,9 @@ module.exports = async (page) => {
     check("标签条那一套整个没了（#fileTabs / .file-tab 都不存在）", !base.hasTabs);
     await page.shot("changes-1-empty.png");
 
-    // ---- 2. 还没改过文件：一句提示 ----
+    // ---- 2. 跟最后一次提交一样：一句提示 ----
     const emptyNote = await changeNote(page);
-    check("没改过文件时说一句", emptyNote === "这个会话还没改过文件。", emptyNote);
+    check("没有改动时说一句", emptyNote === "跟最后一次提交一样，没有改动。", emptyNote);
 
     // ---- 3. 让假模型改一下（老剧本第 4 步真改 说明.md）----
     await page.send("演示一下");
@@ -352,7 +370,7 @@ module.exports = async (page) => {
     const reallyEmpty = await page.eval(`return document.getElementById("changePane").querySelectorAll(".change-head").length === 0;`);
     if (reallyEmpty) {
         const backToHint = await changeNote(page);
-        check("清单空了就回到那句提示", backToHint === "这个会话还没改过文件。", backToHint);
+        check("清单空了就回到那句提示", backToHint === "跟最后一次提交一样，没有改动。", backToHint);
     }
     await page.shot("changes-6-empty-again.png");
 
@@ -402,6 +420,37 @@ module.exports = async (page) => {
     await page.shot("changes-9-eol.png");
     await clickBack(page);
     fs.rmSync(eolPath, { force: true });
+
+    // ---- 11. 不是 git 仓库的目录：这一格整格收起来 ----
+    // 得挑一个在任何仓库外面的目录（dev/.scratch 自己在插件的仓库里，拿它验不出来）
+    const plainDir = path.join(require("os").tmpdir(), "pichat-no-git-" + process.pid);
+    fs.rmSync(plainDir, { recursive: true, force: true });
+    fs.mkdirSync(plainDir, { recursive: true });
+    fs.writeFileSync(path.join(plainDir, "随便.md"), "随便\n", "utf8");
+    await page.eval(`
+        acquireVsCodeApi().postMessage({ type: "newSessionInWorkspace", path: ${JSON.stringify(plainDir)} });
+        return true;
+    `);
+    await page.sleep(2500);
+    await ensureOpen(page);
+    const plain = await waitFor(page, "不是仓库的目录里那一格收起来", sidebarNow,
+        (x) => x.changeShown === false, 15000);
+    console.log("普通目录里：" + JSON.stringify({
+        change: plain.changeShown, dir: plain.dirShown, 这一列高: plain.panelH,
+    }));
+    check("没有 git 的目录：下格「改动」整格收起来", plain.changeShown === false && plain.dirShown,
+        JSON.stringify({ change: plain.changeShown, dir: plain.dirShown }));
+    check("收起来以后上格「文件」照样露着、占满这一列",
+        plain.dirShown && plain.dirRows > 0, String(plain.dirRows) + " 行");
+    await page.shot("changes-10-no-git.png");
+
+    // 切回仓库里那个会话：那一格自己又露出来
+    await page.eval(`
+        acquireVsCodeApi().postMessage({ type: "switchSession", sessionId: ${JSON.stringify(sessionId)} });
+        return true;
+    `);
+    const again = await waitFor(page, "切回仓库里那个会话", sidebarNow, (x) => x.changeShown === true, 15000);
+    check("切回仓库里的会话：那一格又露出来", again.changeShown === true, JSON.stringify(again.changeShown));
 
     console.log("");
     console.log(failures === 0 ? "改动那一格：都对上了。" : "改动那一格：有 " + failures + " 条不对。");

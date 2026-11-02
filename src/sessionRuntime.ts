@@ -7,8 +7,8 @@ import { StderrFrameSplitter } from "./piFrames";
 import { TABA_DECODER, TabaRequest } from "./tabaProtocol";
 import { ENV_DECODER, type EnvSnapshot } from "./envProtocol";
 import { NameParts } from "./names";
-import { EditTracker, type SessionChangeInfo } from "./editTracker";
-import { ChangeSnapshot } from "./changeSnapshot";
+import { EditTracker } from "./editTracker";
+import { changeDiff as gitChangeDiff, listChanges, revertToHead, type SessionChanges } from "./gitChanges";
 import {
     countImages,
     extractResultImages,
@@ -256,13 +256,6 @@ export class SessionRuntime {
      *  界面那颗「工具」点开时要它；还没报过来就是 undefined。 */
     private envSnapshot?: EnvSnapshot;
     private readonly edits: EditTracker;
-    /** 会话开始那一刻的工作区快照（影子仓库，见 changeSnapshot.ts）：bash 里改的也靠它才算得出。
-     *  拍好之前、或者压根拍不出来（目录太大、没装 git）时，「改动」那一格就只有 edit / write 那套。 */
-    private changeBase?: ChangeSnapshot;
-    /** 正在拍的那一份：拍之前来问的按「还没有」处理，不挡人。 */
-    private changeBaseTask?: Promise<void>;
-    /** 这一份试过、拍不出来：别再试，免得每条消息都白等一次。 */
-    private changeBaseOff = false;
     /** 「改动」那一格的提醒要节流：一个回合里可能连着跑十几个工具，页面不必每次都重问。 */
     private changesNotifyTimer?: ReturnType<typeof setTimeout>;
     /** 这个会话的后台命令（任务编号 → 情况）：界面那一格清单、以及「停」要用它。
@@ -380,8 +373,6 @@ export class SessionRuntime {
         }
         if (launch) { this.launch = launch; }
         this.setPiReady(false);
-        // 会话一开始就给工作区拍一份快照（异步、不挡人）：见 changeSnapshot.ts
-        this.ensureChangeBase();
 
         const want = modelOverride ?? this.currentModel();
 
@@ -539,14 +530,12 @@ export class SessionRuntime {
             this.client.stop();
             this.client = undefined;
         }
-        // 会话关掉：工作区快照没用了，影子仓库随即删掉（异常退出留下的那份，下次启动再收）
+        // 会话关掉：「改动」那一格不用清（它每次都现问 git，见 gitChanges.ts），
+        // 只有这条节流用的定时器得收掉
         if (this.changesNotifyTimer) {
             clearTimeout(this.changesNotifyTimer);
             this.changesNotifyTimer = undefined;
         }
-        this.changeBase?.dispose();
-        this.changeBase = undefined;
-        this.changeBaseOff = true;   // 拍着的那一份回来也直接扔掉（见 ensureChangeBase）
     }
 
     /** 记下 pi 上报的会话标题；真的变了才通知界面重推会话列表。 */
@@ -1240,33 +1229,10 @@ export class SessionRuntime {
         return this.edits.revertEdit(toolCallId);
     }
 
-    // ---- 「改动」那一格的数据源：会话开始那一刻的工作区快照 ----
-    /**
-     * 拍这一份快照。同一个会话只拍一次（pi 进程重启也沿用会话开始那一刻的基线）。
-     * 异步、不挡人：拍好之前那一格按只有 edit / write 那套处理。
-     */
-    private ensureChangeBase(): void {
-        if (this.changeBase || this.changeBaseTask || this.changeBaseOff) { return; }
-        this.changeBaseTask = ChangeSnapshot.open({ sessionId: this.id, workTree: this.cwd })
-            .then((snap) => {
-                if (this.changeBaseOff) { snap?.dispose(); return; }   // 拍的过程中会话已经关了：别留一份影子仓库在盘上
-                if (snap) { this.changeBase = snap; } else { this.changeBaseOff = true; }
-            })
-            .catch(() => { this.changeBaseOff = true; })
-            .finally(() => { this.changeBaseTask = undefined; });
-    }
-
-    /** 换了一份会话（历史里点了别的）：旧快照作废，按现在这一刻重拍。 */
-    private resetChangeBase(): void {
-        this.changeBase?.dispose();
-        this.changeBase = undefined;
-        this.changeBaseOff = false;
-        this.ensureChangeBase();
-    }
-
+    // ---- 「改动」那一格的数据源：直接问会话目录所在的 git 仓库 ----
     /**
      * 有工具跑完了：提醒页面重问一遍「改动」清单（节流：一个回合里连着跑好几个也合成一次）。
-     * 为什么不等 edit / write 自己报：bash 里改的文件没人报（见 changeSnapshot.ts）。
+     * 为什么不等 edit / write 自己报：bash 里改的文件没人报（见 gitChanges.ts）。
      */
     private notifyChangesSoon(): void {
         if (this.changesNotifyTimer) { return; }
@@ -1277,89 +1243,41 @@ export class SessionRuntime {
     }
 
     /**
-     * 这个会话改过哪些文件（文件侧边栏那一格「改动」用）。
-     * 以工作区快照为准（bash 里改的也算）；快照没有时退回 edit / write 那套。
-     * 快照算漏的（被 .gitignore 忽略的、快照拍之前就有的）由 edit / write 那套补上。
+     * 这个会话目录相对它最后一次提交改过哪些文件（文件侧边栏那一格「改动」用）。
+     * 直接问 git（见 gitChanges.ts）：bash 里跑的脚本、命令改的也算在里面。
+     * 会话目录不在 git 仓库里时 vcs=false，界面把那一格整格收起来。
      */
-    public async getChanges(): Promise<SessionChangeInfo[]> {
-        const tracked = this.edits.changes();
-        const base = this.changeBase;
-        if (!base) { return tracked; }
-        let listed: SessionChangeInfo[] = [];
-        try { listed = await base.changes(); } catch { listed = []; }
-        if (listed.length === 0) { return tracked; }
-        const have = new Set(listed.map((one) => one.path));
-        return [...listed, ...tracked.filter((one) => !have.has(one.path))].sort((a, b) => a.path.localeCompare(b.path));
+    public async getChanges(): Promise<SessionChanges> {
+        return (await listChanges(this.cwd)) ?? { vcs: false, changes: [] };
     }
 
-    /** 一个文件的合计 diff（相对写法 = 清单里那一行）。 */
+    /** 一个文件的合计 diff（相对写法 = 清单里那一行）；没改出差别就不给。 */
     public async changeDiff(relPath: string): Promise<string | undefined> {
-        const base = this.changeBase;
-        if (base) {
-            try {
-                const diff = await base.diff(relPath);
-                if (diff !== undefined) { return diff; }
-            } catch { /* 算不出来就退回 edit / write 那份 */ }
-        }
-        return this.edits.changeDiff(relPath);
+        return await gitChangeDiff(this.cwd, relPath);
     }
 
     /**
-     * 把「改动」那一格里一个文件整个撤回会话开始那一刻（就是那份 diff 的左边）。
-     * 跟消息里那些卡片上的「回滚」不是一回事：那颗撤的是某一次调用，这个撤的是这个文件在这一会话里的全部改动。
-     *
-     * 基线跟那份 diff 同一个口径：先用工作区快照；快照里说不清的（被 .gitignore 挡在外面、
-     * 快照拍不出来）退回 edit / write 自己记的那份。
-     * 那时还没有这个文件 → 删掉它。
+     * 把「改动」那一格里一个文件撤到它最近一次提交的样子（`git checkout HEAD -- 那个文件`）。
+     * 跟消息里那些卡片上的「回滚」不是一回事：那颗撤的是某一次调用，这个撤的是这个文件
+     * 到目前为止的全部改动。最近一次提交里没有它（会话开始之后才新建的）→ 删掉。
      */
     public async revertChange(relPath: string): Promise<void> {
-        const abs = this.host.resolvePath(relPath, this.cwd);
-        const base = this.changeBase;
-        let fromSnap: { existed: boolean; text?: string } | undefined;
-        if (base) {
-            try { fromSnap = await base.baseFile(relPath); } catch { fromSnap = undefined; }
+        const done = await revertToHead(this.cwd, relPath);
+        if (!done) {
+            this.post({ type: "systemError", text: `无法回滚：${relPath} 不在这个会话目录的 git 仓库里。` });
+            return;
         }
-        const fromEdits = this.edits.baselineOf(relPath);
-        // 快照说“那时没有它”，但 edit / write 记着那时有：那多半是被 .gitignore 挡在快照外面的文件，听后者
-        let plan = fromSnap;
-        if (fromEdits && (!fromSnap || (!fromSnap.existed && fromEdits.existed))) { plan = fromEdits; }
-        if (!plan) {
-            this.post({ type: "systemError", text: `无法回滚：找不到 ${relPath} 一开始的内容。` });
+        if (!done.ok) {
+            this.post({ type: "systemError", text: `回滚失败：git 没能把 ${relPath} 退回去。` });
             return;
         }
 
-        let current = "";
-        let present = true;
-        try {
-            current = fs.readFileSync(abs, "utf8");
-        } catch {
-            present = false;
-        }
-        if (present === plan.existed && current === (plan.text ?? "")) {
-            this.post({ type: "system", text: `无需回滚：${relPath} 已经是会话开始时的样子。` });
-            return;
-        }
-
-        // 确认在界面上做（就看那份 diff 的横条上：那颗按钮点第一下变成「确定回滚」、再点一下才真撤），
-        // 不走确认卡片：看文件的弹窗盖着对话那一块，卡片开在消息流里根本看不见（手机上尤其）。
-
-        try {
-            if (plan.existed) {
-                fs.writeFileSync(abs, plan.text ?? "", "utf8");
-            } else {
-                fs.rmSync(abs, { force: true });
-            }
-        } catch (e: any) {
-            this.post({ type: "systemError", text: `回滚失败: ${e.message}` });
-            return;
-        }
-
-        // 这个文件已经回到一开始的样子：各次调用的快照跟着作废（提示框里那些卡片不再给「回滚」）
+        // 这个文件已经是提交里的样子：各次调用的快照跟着作废（提示框里那些卡片不再给「回滚」）
         for (const toolCallId of this.edits.forgetSnapshotsOf(relPath)) {
             this.post({ type: "editReverted", toolCallId });
         }
         this.post({ type: "changesChanged" });
-        this.post({ type: "system", text: `已回滚: ${relPath}` });
+        this.post({ type: "system", text: `已回滚: ${relPath}（回到最近一次提交）` });
     }
 
     // ---- 会话加载 ----
@@ -1370,9 +1288,6 @@ export class SessionRuntime {
         this.loading = true;
         this.host.broadcastSessionList();
         this.edits.reset();
-        // 换了一份会话：旧快照作废。刚打开面板时 startClient 拍的那份留着 ——
-        // 那时 currentSessionPath 还是空的，说明是同一个会话刚开局，不必再拍一遍。
-        if (this.currentSessionPath) { this.resetChangeBase(); }
         this.hasConversation = false;
         this.post({ type: "clear" });
 

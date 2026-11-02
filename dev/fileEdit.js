@@ -202,6 +202,15 @@ function touchFromOutside(file, text) {
     fs.utimesSync(full, future, future);
 }
 
+/** 把这一份铺好的东西提交上去（那就是“最近一次提交”）。 */
+function initRepo(dir) {
+    const git = (...args) => require("child_process").execFileSync("git",
+        ["-c", "core.autocrlf=false", ...args], { cwd: dir, stdio: "ignore" });
+    git("init", "-q", ".");
+    git("add", "-A");
+    git("-c", "user.email=dev@example.invalid", "-c", "user.name=dev", "commit", "-qm", "基线");
+}
+
 /** 「改动」那一格里有没有这一份（手改的也算，那一格是按磁盘算的）。 */
 function changeRow(page, file) {
     return page.eval(`
@@ -228,6 +237,9 @@ module.exports = async (page) => {
     fs.mkdirSync(path.join(WORK, "sub"), { recursive: true });
     fs.writeFileSync(path.join(WORK, "sub", "bare.js"), "// 只有子目录里有这个名字\nconst bare = 1;\n", "utf8");
     fs.writeFileSync(path.join(SCRATCH_DIR, OUTSIDE), OUTSIDE_TEXT, "utf8");
+    // 这一份提交上去当基线：左边「改动」那一格直接问会话目录所在的 git 仓库（见 src/gitChanges.ts），
+    // 没有这个仓库它整格收起来，「手改的也算」那条就验不了
+    initRepo(WORK);
     await page.eval(`
         acquireVsCodeApi().postMessage({ type: "newSessionInWorkspace", path: ${JSON.stringify(WORK)} });
         return true;
