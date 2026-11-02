@@ -2540,6 +2540,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
             case "revertEdit":
                 if (typeof msg.toolCallId === "string") { void target.revertEdit(msg.toolCallId); }
                 break;
+            case "revertChange":
+                // 「改动」里那份 diff 横条上的「回滚」：把这个文件整个撤到会话开始那一刻
+                if (typeof msg.path === "string" && msg.path) { void target.revertChange(msg.path); }
+                break;
             case "loadOlderHistory":
                 // 网页端顶部的「加载更早的消息」按钮：把当前窗口之前的一段补发过来。
                 // 只在开过历史窗口的会话上有意义；没开过窗口时运行时自己会忽略。

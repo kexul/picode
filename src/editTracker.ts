@@ -47,11 +47,11 @@ const MAX_CHANGE_BYTES = 2 * 1024 * 1024;
 export class EditTracker {
     private pendingEdits = new Map<string, { path: string; before: string }>();
     private editSnapshots = new Map<string, { path: string; before: string; after: string }>();
-    /** 每个文件「这个会话第一次改它之前」的内容（绝对路径 → 内容）：
+    /** 每个文件「这个会话第一次改它之前」的内容（绝对路径 → 内容 + 那时在不在）：
      *  「改动」那一格算合计 diff、以及「回滚」都按它（那一格显示的数以工作区快照为准，
      *  见 changeSnapshot.ts；这一份是快照算不出来时的退路，也是回滚的依据）。
      *  会话重开就没了（这一格本来也只在会话活着时看）。 */
-    private fileBaselines = new Map<string, string>();
+    private fileBaselines = new Map<string, { text: string; existed: boolean }>();
     /** 算过的 diff 攒着（绝对路径 → 它当时对应的磁盘状态与结果）：跟着改一次不用把
      *  整个文件重比一遍，「改动」那一格每来一条改动都会重问一次清单。 */
     private changeCache = new Map<string, { key: string; diff: string; added: number; removed: number; deleted: boolean }>();
@@ -196,7 +196,9 @@ export class EditTracker {
             return;
         }
         let before = "";
+        let existed = false;
         try {
+            existed = fs.statSync(p).isFile();   // 那时在不在：不在的话回滚就是把它删掉
             before = fs.readFileSync(p, "utf8");
         } catch {
             before = "";
@@ -204,7 +206,7 @@ export class EditTracker {
         this.pendingEdits.set(evt.toolCallId, { path: p, before });
         // 这个会话第一次改它：把「改之前」留一份（后面再改几次都还按这一份算合计）
         if (!this.fileBaselines.has(p)) {
-            this.fileBaselines.set(p, before);
+            this.fileBaselines.set(p, { text: before, existed });
         }
     }
 
@@ -301,6 +303,33 @@ export class EditTracker {
         return info && info.diff ? info.diff : undefined;
     }
 
+    /**
+     * 这个文件在本会话第一次被改之前长什么样（「改动」里那份 diff 的「回滚」用）。
+     * 这一套里没有它（没被 edit / write 改过）就返回 undefined。
+     */
+    public baselineOf(relPath: string): { existed: boolean; text: string } | undefined {
+        const abs = this.changeAbsOf(relPath);
+        const base = abs ? this.fileBaselines.get(abs) : undefined;
+        return base ? { existed: base.existed, text: base.text } : undefined;
+    }
+
+    /**
+     * 一个文件被整个回滚了（回到会话开始那一刻）：各次调用的快照跟着作废，
+     * 提示框里那些卡片不再给「回滚」（它们要的是中间那个样子，跟现在对不上了）。
+     * @returns 作废掉的那几次调用（界面按「已回滚」把它们划掉）
+     */
+    public forgetSnapshotsOf(relPath: string): string[] {
+        const abs = this.changeAbsOf(relPath);
+        if (!abs) { return []; }
+        const gone: string[] = [];
+        for (const [id, snap] of Array.from(this.editSnapshots.entries())) {
+            if (snap.path !== abs) { continue; }
+            this.editSnapshots.delete(id);
+            gone.push(id);
+        }
+        return gone;
+    }
+
     /** 界面报的是相对写法（跟清单里那一行一样）：按它找回这个文件的绝对路径。 */
     private changeAbsOf(relPath: string): string | undefined {
         for (const abs of this.fileBaselines.keys()) {
@@ -315,8 +344,9 @@ export class EditTracker {
      */
     private changeOf(abs: string): { path: string; added: number; removed: number;
         deleted: boolean; tooBig: boolean; diff: string } | undefined {
-        const before = this.fileBaselines.get(abs);
-        if (before === undefined) { return undefined; }
+        const saved = this.fileBaselines.get(abs);
+        if (saved === undefined) { return undefined; }
+        const before = saved.text;
         const relPath = this.host.relativeTo(this.host.getCwd(), abs);
         let current = "";
         let deleted = false;

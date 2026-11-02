@@ -1304,6 +1304,64 @@ export class SessionRuntime {
         return this.edits.changeDiff(relPath);
     }
 
+    /**
+     * 把「改动」那一格里一个文件整个撤回会话开始那一刻（就是那份 diff 的左边）。
+     * 跟消息里那些卡片上的「回滚」不是一回事：那颗撤的是某一次调用，这个撤的是这个文件在这一会话里的全部改动。
+     *
+     * 基线跟那份 diff 同一个口径：先用工作区快照；快照里说不清的（被 .gitignore 挡在外面、
+     * 快照拍不出来）退回 edit / write 自己记的那份。
+     * 那时还没有这个文件 → 删掉它。
+     */
+    public async revertChange(relPath: string): Promise<void> {
+        const abs = this.host.resolvePath(relPath, this.cwd);
+        const base = this.changeBase;
+        let fromSnap: { existed: boolean; text?: string } | undefined;
+        if (base) {
+            try { fromSnap = await base.baseFile(relPath); } catch { fromSnap = undefined; }
+        }
+        const fromEdits = this.edits.baselineOf(relPath);
+        // 快照说“那时没有它”，但 edit / write 记着那时有：那多半是被 .gitignore 挡在快照外面的文件，听后者
+        let plan = fromSnap;
+        if (fromEdits && (!fromSnap || (!fromSnap.existed && fromEdits.existed))) { plan = fromEdits; }
+        if (!plan) {
+            this.post({ type: "systemError", text: `无法回滚：找不到 ${relPath} 一开始的内容。` });
+            return;
+        }
+
+        let current = "";
+        let present = true;
+        try {
+            current = fs.readFileSync(abs, "utf8");
+        } catch {
+            present = false;
+        }
+        if (present === plan.existed && current === (plan.text ?? "")) {
+            this.post({ type: "system", text: `无需回滚：${relPath} 已经是会话开始时的样子。` });
+            return;
+        }
+
+        // 确认在界面上做（就看那份 diff 的横条上：那颗按钮点第一下变成「确定回滚」、再点一下才真撤），
+        // 不走确认卡片：看文件的弹窗盖着对话那一块，卡片开在消息流里根本看不见（手机上尤其）。
+
+        try {
+            if (plan.existed) {
+                fs.writeFileSync(abs, plan.text ?? "", "utf8");
+            } else {
+                fs.rmSync(abs, { force: true });
+            }
+        } catch (e: any) {
+            this.post({ type: "systemError", text: `回滚失败: ${e.message}` });
+            return;
+        }
+
+        // 这个文件已经回到一开始的样子：各次调用的快照跟着作废（提示框里那些卡片不再给「回滚」）
+        for (const toolCallId of this.edits.forgetSnapshotsOf(relPath)) {
+            this.post({ type: "editReverted", toolCallId });
+        }
+        this.post({ type: "changesChanged" });
+        this.post({ type: "system", text: `已回滚: ${relPath}` });
+    }
+
     // ---- 会话加载 ----
     public async loadSession(file: string): Promise<void> {
         if (!this.client || !this.client.isRunning()) {

@@ -391,6 +391,27 @@ export class ChangeSnapshot {
         return diff && !tooManyDiffLines(diff) ? diff : undefined;
     }
 
+    /**
+     * 会话开始那一刻这个文件长什么样（「改动」里点开一份 diff、按那颗「回滚」时用：
+     * 就是把这份 diff 左边那一份写回磁盘）。
+     *
+     * @returns existed=false 表示那时还没有这个文件（回滚就是把它删掉）；
+     *          快照里说不清（git 出错）、或者读出来是二进制（没法往回写）给 undefined。
+     */
+    public async baseFile(relPath: string): Promise<{ existed: boolean; text?: string } | undefined> {
+        const listed = await runGit(["ls-tree", "-z", "--name-only", this.baseTree, "--", relPath], {
+            gitDir: this.gitDir, workTree: this.workTree, timeoutMs: DIFF_TIMEOUT_MS,
+        });
+        if (!listed.ok) { return undefined; }
+        if (!listed.stdout.split("\0").includes(relPath)) { return { existed: false }; }
+        const blob = await runGit(["cat-file", "blob", `${this.baseTree}:${relPath}`], {
+            gitDir: this.gitDir, workTree: this.workTree, timeoutMs: DIFF_TIMEOUT_MS,
+        });
+        if (!blob.ok) { return undefined; }
+        if (blob.stdout.includes("\0")) { return undefined; }   // 二进制：写回去只会把那文件弄坏
+        return { existed: true, text: blob.stdout };
+    }
+
     /** 会话关掉时叫它：影子仓库整个删掉（异常退出留下的那份由 pruneOldShadowDirs 收）。 */
     public dispose(): void {
         removeDir(this.gitDir);

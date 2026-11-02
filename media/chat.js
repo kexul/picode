@@ -6842,6 +6842,8 @@
     const cur = viewTab();
     if (cur) { cur.top = body ? body.scrollTop : (cur.top || 0); }
     v.at = index >= 0 && index < v.tabs.length ? index : -1;
+    // 换了一份：上一步没点完的「确定回滚」作废（那颗按钮是“这一份”的临时状态）
+    v.tabs.forEach((e) => { e.confirming = false; });
     syncViewPages();
     const next = viewTab();
     if (body) { body.scrollTop = next ? (Number(next.top) > 0 ? Number(next.top) : 0) : 0; }
@@ -7075,6 +7077,21 @@
         ? "盘上已经变了：点它扔掉你改的、看盘上那一份"
         : "放弃这次改动（没存的就不存了）";
       revertBtn.setAttribute("aria-label", conflict ? "扔掉我改的、看盘上那一份" : "放弃这次改动");
+    }
+    // 看 diff 时的那颗「回滚」：把这个文件整个撤到会话开始那一刻（那份 diff 的左边）。
+    // 点第一下变成「确定回滚」、第二下才真撤（会丢掉东西的动作，得像退出那样再问一句；
+    // 确认不走卡片：看文件的弹窗盖着对话那一块，卡片开在消息流里看不见）
+    const rollbackBtn = document.getElementById("fileRollback");
+    if (rollbackBtn) {
+      const diffEntry = viewing && entry.kind === "diff" ? entry : null;
+      rollbackBtn.hidden = !diffEntry;
+      rollbackBtn.classList.toggle("armed", !!(diffEntry && diffEntry.confirming));
+      rollbackBtn.innerHTML = diffEntry && diffEntry.confirming ? "确定回滚" : ICONS.discard + " 回滚";
+      rollbackBtn.title = !diffEntry
+        ? "回滚"
+        : (diffEntry.confirming
+          ? `${diffEntry.path} 会回到会话开始那一刻，本会话对它的改动全都丢掉（再点一下就撤）`
+          : `${diffEntry.path} 回到会话开始那一刻（本会话对它的改动全都丢掉）`);
     }
     if (editing) { syncFileEditNote(fileTab); }
     bar.hidden = !viewing;
@@ -8551,6 +8568,9 @@
           '<button id="fileEdit" class="file-bar-btn" type="button" title="改一下这个文件" aria-label="改一下这个文件">' + ICONS.edit + '</button>' +
           '<button id="fileSave" class="file-bar-btn" type="button" title="存到磁盘（Ctrl+S）" aria-label="存到磁盘">' + ICONS.save + '</button>' +
           '<button id="fileRevert" class="file-bar-btn" type="button" title="放弃这次改动" aria-label="放弃这次改动">' + ICONS.discard + '</button>' +
+          // 一份 diff（「改动」那一格点开的那份）上那颗「回滚」：把这个文件整个撤到会话开始那一刻
+          //（那份 diff 的左边），只在看 diff 时露面，见 syncFileBar
+          '<button id="fileRollback" class="file-bar-btn wide" type="button" title="回滚" aria-label="回滚">' + ICONS.discard + ' 回滚</button>' +
           '<button id="fileFontMinus" class="file-bar-btn" type="button" title="字小一点" aria-label="字小一点">A−</button>' +
           '<button id="fileFontPlus" class="file-bar-btn" type="button" title="字大一点" aria-label="字大一点">A+</button>' +
           '<button id="fileWrap" type="button" aria-label="折行开关" aria-pressed="false">' + ICONS.wrap + '</button>' +
@@ -8600,6 +8620,21 @@
     stage.querySelector("#fileRevert").addEventListener("click", () => {
       const entry = viewTab();
       if (entry && entry.kind === "file" && entry.file.editing) { discardFileEdit(entry.file); }
+    });
+    // 看一份 diff 时那颗「回滚」：把这个文件整个撤到会话开始那一刻（那份 diff 的左边）。
+    // 点第一下只是把按钮变成「确定回滚」（这步会丢掉东西，得再点一下），点第二下才真发；
+    // 撤完后端会重问「改动」清单，这一份就不在清单里了 —— 这个标签自己就关掉（见 drawChanges）
+    stage.querySelector("#fileRollback").addEventListener("click", () => {
+      const entry = viewTab();
+      if (!entry || entry.kind !== "diff") { return; }
+      if (!entry.confirming) {
+        entry.confirming = true;
+        syncFileBar();
+        return;
+      }
+      entry.confirming = false;
+      syncFileBar();
+      vscode.postMessage({ type: "revertChange", sessionId: activeId, path: entry.path });
     });
     // Esc 也能关掉弹窗（浮层、清单开着的时候不接：那会儿 Esc 是收那一层）
     document.addEventListener("keydown", (e) => {

@@ -1980,6 +1980,15 @@
   body.file-wrap .file-edit-text { white-space: pre-wrap; overflow-wrap: anywhere; }
   /* 盘上变了时「存」那颗变成「覆盖」、放弃那颗变成「用盘上的」：里面是字，得让它宽一点 */
   .file-bar-btn.wide { width: auto; padding: 0 6px; }
+  /* 看一份 diff 时横条上那颗「回滚」（图标 + 两个字）：把这个文件整个撤到会话开始那一刻。
+     点第一下变成「确定回滚」、按钮带一道告警色的边（再点一下才真撤，见 syncFileBar）。 */
+  #fileRollback { gap: 3px; }
+  #fileRollback svg { width: 13px; height: 13px; display: block; }
+  #fileRollback.armed {
+    opacity: 1; color: var(--vscode-errorForeground, #f14c4c);
+    border-color: var(--vscode-errorForeground, #f14c4c);
+    background: color-mix(in srgb, var(--vscode-errorForeground, #f14c4c) 12%, transparent);
+  }
   /* 那颗铅笔 / 存 / 放弃 只在该露面时露面（这条写了 display: flex，就得自己刷掉 [hidden]） */
   .file-bar-btn[hidden] { display: none; }
 
