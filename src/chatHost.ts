@@ -188,8 +188,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 会话显示名用的名字池：panel 关闭后会释放对应名字。 */
     private readonly usedChatNames = new Set<string>();
 
-    /** 「项目与会话」面板那份列表的指纹（开着的会话 + 各自的会话文件）：变了就重推一次，见 broadcastSessionList。 */
-    private workspacePanelKey = "";
+    /**
+     * 「项目与会话」面板那份列表的指纹（开着的会话 → 各自的会话文件与跑在哪个目录）：
+     * 变了就重推一次，见 broadcastSessionList。null = 还没记过。
+     */
+    private workspacePanelKey: Map<string, { file: string; cwd: string }> | null = null;
 
     // ---- 后端进程这一层：设置与显示选项存哪、日志出口、收没收摊 ----
     private readonly state: ServerStateStore;
@@ -480,18 +483,28 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      */
     public override broadcastSessionList(immediate = false): void {
         super.broadcastSessionList(immediate);
-        const key = Array.from(this.panels.values())
-            .map((rt) => `${rt.id}:${rt.currentSessionPath || ""}`)
-            .sort()
-            .join("|");
-        const changed = this.workspacePanelKey !== "" && key !== this.workspacePanelKey;
-        this.workspacePanelKey = key;
-        if (changed) {
-            // 这也是会话文件有增有减的那一下（新会话头一回落盘、会话被关掉）：手里记着的
-            // 那几份目录清单跟着丢掉，重推面板时现扫（见 sessionStore.dropSessionFileLists）
-            dropSessionFileLists();
-            void this.refreshWorkspacePanels();
+        // 开着的会话 → 各自的会话文件与目录（这一刻的一份）
+        const now = new Map<string, { file: string; cwd: string }>();
+        for (const rt of this.panels.values()) {
+            now.set(rt.id, { file: rt.currentSessionPath || "", cwd: rt.cwd });
         }
+        const before = this.workspacePanelKey;
+        this.workspacePanelKey = now;
+        if (!before) { return; }
+        // 变了的那几个会话算在哪个目录：新建的、刚头一回落盘的、被关掉的
+        const touched = new Set<string>();
+        for (const [id, v] of now) {
+            const old = before.get(id);
+            if (!old || old.file !== v.file) { touched.add(v.cwd); }
+        }
+        for (const [id, v] of before) {
+            if (!now.has(id)) { touched.add(v.cwd); }
+        }
+        if (touched.size === 0) { return; }
+        // 这也是会话文件有增有减的那一下（新会话头一回落盘、会话被关掉）：变动涉及的那几个
+        // 目录，手里那份清单丢掉、重推时现扫；别的工作区那份留着（见 sessionStore.dropSessionFileLists）
+        dropSessionFileLists(Array.from(touched));
+        void this.refreshWorkspacePanels();
     }
 
     /** 面板里点了一行会话：切过去（要不要关面板是界面的事：常驻那一列不关）。

@@ -122,15 +122,15 @@ function contentToText(content: unknown): string {
  *
  * 结果留 {@link FILE_LIST_TTL_MS} 这么久：一个目录里几百上千个会话文件时，光 stat 一遍就要
  * 一百多毫秒，而打开面板、展开一组、自动打开最近会话都会问同一份。会话文件有增有减的那一刻
- *（新建会话头一回落盘、会话被关掉）由调用方 {@link dropSessionFileLists} 把这份丢掉。
+ *（新建会话头一回落盘、会话被关掉）由调用方 {@link dropSessionFileLists} 把变动涉及的
+ * 那几个目录的清单丢掉。
  */
 export async function listSessionFiles(cwd: string): Promise<SessionFileEntry[]> {
-    const dir = await resolveSessionDir(cwd);
-    if (!dir) { return []; }
-    const key = path.resolve(dir);
+    const key = listKey(cwd);
     const hit = fileListCache.get(key);
     if (hit && Date.now() - hit.at < FILE_LIST_TTL_MS) { return hit.list; }
-    const list = await listDirSessionFiles(dir);
+    const dir = await resolveSessionDir(cwd);
+    const list = dir ? await listDirSessionFiles(dir) : [];
     if (fileListCache.size >= FILE_LIST_CACHE_DIRS) {
         // 超了就把最久没存过的那个丢掉（面板一次最多显示 5 个工作区、展开 20 组，32 份够用）
         let oldestKey = "";
@@ -144,6 +144,12 @@ export async function listSessionFiles(cwd: string): Promise<SessionFileEntry[]>
     return list;
 }
 
+/** 一份清单挂在哪个目录下：正斜反斜、大小写、末尾斜杠的写法不同也算同一个目录。 */
+function listKey(cwd: string): string {
+    const abs = path.resolve(cwd);
+    return process.platform === "win32" ? abs.toLowerCase() : abs;
+}
+
 /** 扫过的目录 → 那一份清单（readdir + 给目录里每个会话文件 stat 一遍的结果）。 */
 const fileListCache = new Map<string, { at: number; list: SessionFileEntry[] }>();
 /** 那份清单留多久（跟 fileSearch 那份文件清单一个量级：够盖住“连着打开几次”）。 */
@@ -152,12 +158,14 @@ const FILE_LIST_TTL_MS = 5000;
 const FILE_LIST_CACHE_DIRS = 32;
 
 /**
- * 丢掉手里记着的那些目录清单：会话文件有增有减的那一下调它（新建会话头一回落盘、会话被关掉），
- * 不然刚出现的那个会话要在清单外面待上几秒。
- * 整份清掉：一份就几个路径，按目录挑不如全清来得省事。
+ * 丢掉这几个工作区目录的清单：会话文件有增有减的那一下调它（新建会话头一回落盘、会话被关掉），
+ * 不然刚出现的那个会话要在清单外面待上几秒。只丢变动涉及的那几个目录，别的工作区那份留着。
+ * @param cwds 会话跑在的那些目录（「项目与会话」按它分组的那一层）
  */
-export function dropSessionFileLists(): void {
-    fileListCache.clear();
+export function dropSessionFileLists(cwds: string[]): void {
+    for (const cwd of cwds) {
+        if (cwd) { fileListCache.delete(listKey(cwd)); }
+    }
 }
 
 /** 一个会话目录里的会话文件（逐个 stat，按改动时间倒序）。 */
