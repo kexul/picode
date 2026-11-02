@@ -55,6 +55,10 @@
     // 折行开关（文件侧边栏角上）：上面一条整线、下面一条短线，中间那条走到头再拐回来
     //（「长行折回来」那个意思）。
     wrap: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h12M2 7h9.4a2.5 2.5 0 0 1 0 5H8"/><path d="M10.2 9.6 7.6 12l2.6 2.4"/><path d="M2 12h2.4"/></svg>',
+    // 一支铅笔：看文件的弹窗横条上那颗「改一下这个文件」。
+    edit: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.2 2.1a1.3 1.3 0 0 1 1.8 0l1 1a1.3 1.3 0 0 1 0 1.8l-7.7 7.7-3.9.9.9-3.9z"/><path d="M9.9 3.4l2.8 2.8"/></svg>',
+    // 一张软盘：编辑时横条上那颗「存」。
+    save: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M2.4 2.9a.5.5 0 0 1 .5-.5h8.2l2.5 2.5v8.2a.5.5 0 0 1-.5.5H2.9a.5.5 0 0 1-.5-.5z"/><path d="M5 2.4h5.3v3.3H5z"/><path d="M4.7 8.6h6.6v4.5H4.7z"/></svg>',
     // 往右的箭头：消息流末尾那条「继续」上用（VSCode 官方 codicon 的 arrow-right）
     "arrow-right": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M8.85355 3.14645C8.65829 2.95118 8.34171 2.95118 8.14645 3.14645C7.95118 3.34171 7.95118 3.65829 8.14645 3.85355L11.7929 7.5H2.5C2.22386 7.5 2 7.72386 2 8C2 8.27614 2.22386 8.5 2.5 8.5H11.7929L8.14645 12.1464C7.95118 12.3417 7.95118 12.6583 8.14645 12.8536C8.34171 13.0488 8.65829 13.0488 8.85355 12.8536L13.3536 8.35355C13.5488 8.15829 13.5488 7.84171 13.3536 7.64645L8.85355 3.14645Z"/></svg>',
     // 实心方块：消息流末尾那两颗「卡住了」「停止生成」上都用它
@@ -6458,6 +6462,193 @@
     return String(path).replace(/\\/g, "/").split("/").pop() || String(path);
   }
 
+  // ==================== 在弹窗里改一个文件（只有浏览器页面里有）====================
+  //
+  // 带行号看代码那一路（见 renderFileText）吃的是后端那条只读的 `/file`；这里多一条写回去的路：
+  // 顶上那颗铅笔把正文换成一块文本框（见 renderFileEditor），存的时候 POST 回 `/file`。
+  //
+  // 只给“会语法上色的那几种代码”：markdown 排好版、html 那族摆 iframe、图片、二进制、太大的文件
+  // 都没有这颗铅笔（认语言跟正文上色走同一处，见 isEditableCodePath）。
+  //
+  // 改到一半的正文按「会话 + 这个文件的写法」记在 fileDrafts 里，不跟着标签关掉 / 切会话丢：
+  // 下次打开这个文件还是那几句没存的话，直接就在改的那一态上（横条上是「存」「放弃」）。
+  // 所以这里不弹“要不要保存”那种框，也不会默默把人写的东西丢掉。
+  //
+  // 存的时候带上当初读到的那份修改时间：盘上已经不是它了（模型或者别的程序刚改过）后端回 409，
+  // 横条上那颗「存」变成「覆盖」，正文顶上那句提示说清两条路（覆盖 / 换成盘上的）。
+  /** 改到一半的正文：键是「会话 + 文件写法」，值是 { text, base, mtime, real }。 */
+  const fileDrafts = new Map();
+
+  /** 一份没存的正文记在哪个键下（跟着会话走：切回来还是它）。 */
+  function fileDraftKey(path) {
+    return String(fileSidebar.sessionId || activeId || "") + "\u0000" + String(path);
+  }
+
+  /** 这个写法下一次打开时手上那一份没存的正文（没改过就是 null）。
+   *  base 是读进来那一份的原文（判「改过没有」），mtime 是它的修改时间（存的时候带着，见后端的
+   *  writeFile），real 是后端说的「这个文件到底在会话目录哪儿」（链接里只有光名字时靠它写到真文件上）。 */
+  function fileDraftOf(path) { return fileDrafts.get(fileDraftKey(path)) || null; }
+
+  /** 这份没存的正文跟读进来那一份不一样了吗（「存」那颗按钮亮不亮看它）。 */
+  function fileDraftDirty(tab) {
+    const draft = tab ? fileDraftOf(tab.path) : null;
+    return !!draft && draft.text !== draft.base;
+  }
+
+  /** 这些写法上色等于没上（hljs 里“纯文本”那一语言，别名 text / txt 都算）。
+   *  它们的扩展名一样能认到一个语言对象，所以光看“认不认得出来”不够（见 isEditableCodePath）。 */
+  const PLAIN_TEXT_LANGS = new Set(["plaintext", "text", "txt", "plain"]);
+
+  /** 能在这里改吗：会语法上色的那几种代码（认语言跟正文上色走同一处）。
+   *  markdown 排好版、html 那族摆 iframe，它们不是“带行号的代码”，不走这条；
+   *  纯文本（.txt / .log 这类）上色等于没上，也不算这一种。 */
+  function isEditableCodePath(path) {
+    if (!path || isMarkdownPath(path) || isHtmlPath(path)) { return false; }
+    const { hljs } = globalThis.hljsBundle || {};
+    if (!hljs) { return false; }
+    const language = resolveHighlightLanguage(hljs, lastExt(path));
+    return !!language && !PLAIN_TEXT_LANGS.has(language);
+  }
+
+  /** 现在看着的这一份能不能进编辑态：真画出了正文（tab.text 有）且写法是那种代码。 */
+  function canEditFile(tab) {
+    return !!tab && !tab.change && !tab.proj && typeof tab.text === "string"
+        && isEditableCodePath(tab.path);
+  }
+
+  /** 进编辑态：手上那份没存的还在就用它，没有就把刚读进来的正文当底稿。 */
+  function startFileEdit(tab) {
+    if (!tab || tab.editing || !canEditFile(tab)) { return; }
+    if (!fileDraftOf(tab.path)) {
+      fileDrafts.set(fileDraftKey(tab.path), {
+        text: tab.text, base: tab.text, mtime: tab.mtime || "", real: tab.real || tab.path,
+      });
+    }
+    tab.editing = true;
+    tab.conflict = false;
+    tab.err = "";
+    renderFileEditor(tab);
+    syncFileBar();
+  }
+
+  /** 一块文本框铺满正文那一块（见 chat.css 的 .file-edit）：不排行号、不上色。
+   *  打字时最要紧的是光标、撤销、输入法不出岔子，那几样都是浏览器自己那套文本框最稳。 */
+  function renderFileEditor(tab) {
+    const draft = tab ? fileDraftOf(tab.path) : null;
+    const page = tab ? fileTabPage(tab) : null;
+    if (!page || !draft) { return; }
+    page.innerHTML = "";
+    const box = document.createElement("div");
+    box.className = "file-edit";
+    const note = document.createElement("div");
+    note.className = "file-edit-note";
+    note.hidden = true;
+    box.appendChild(note);
+    const area = document.createElement("textarea");
+    area.className = "file-edit-text";
+    area.spellcheck = false;
+    area.wrap = "off";
+    area.setAttribute("aria-label", "改 " + tab.path);
+    area.value = draft.text;
+    area.addEventListener("input", () => {
+      const cur = fileDraftOf(tab.path);
+      if (!cur) { return; }
+      cur.text = area.value;
+      syncFileBar();
+    });
+    area.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && String(e.key).toLowerCase() === "s") {
+        e.preventDefault();
+        saveFileEdit(tab, !!tab.conflict);   // 有冲突时这一下就是「覆盖」
+      }
+    });
+    box.appendChild(area);
+    page.appendChild(box);
+    syncFileEditNote(tab);
+    if (fileSidebar.body) { fileSidebar.body.scrollTop = 0; fileSidebar.body.scrollLeft = 0; }
+  }
+
+  /** 编辑时正文顶上那一句提示：盘上已经变了、或者存不进去的原因（没什么可说的就收起来）。 */
+  function syncFileEditNote(tab) {
+    const page = tab ? fileTabPage(tab) : null;
+    const note = page ? page.querySelector(".file-edit-note") : null;
+    if (!note) { return; }
+    const text = tab.conflict
+      ? "盘上已经变了（模型或者别的程序刚改过这个文件）。点「覆盖」就用你改的盖上去，点「用盘上的」就扔掉你改的。"
+      : (tab.err || "");
+    note.textContent = text;
+    note.hidden = !text;
+  }
+
+  /** 把这一份存回磁盘。force = 盘上变了也照我这份盖（人在那句提示里选的「覆盖」）。 */
+  function saveFileEdit(tab, force) {
+    if (!tab || !tab.editing || tab.saving) { return; }
+    const draft = fileDraftOf(tab.path);
+    if (!draft) { return; }
+    const token = fileSidebar.token;
+    tab.saving = true;
+    tab.err = "";
+    syncFileBar();
+    syncFileEditNote(tab);
+    const url = "/file?session=" + encodeURIComponent(activeId || "")
+        + "&path=" + encodeURIComponent(draft.real || tab.path);
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: draft.text, mtime: draft.mtime || "", force: !!force }),
+    }).then(async (resp) => {
+      tab.saving = false;
+      if (token !== fileSidebar.token) { return; }   // 切了会话：这条回应不算数了
+      if (resp.status === 409) {
+        tab.conflict = true;
+        syncFileBar();
+        syncFileEditNote(tab);
+        return;
+      }
+      if (resp.status !== 200) {
+        tab.err = (await resp.text().catch(() => "")) || "存不进去。";
+        syncFileBar();
+        syncFileEditNote(tab);
+        return;
+      }
+      const got = await resp.json().catch(() => null);
+      fileDrafts.delete(fileDraftKey(tab.path));
+      tab.editing = false;
+      tab.conflict = false;
+      tab.err = "";
+      tab.text = undefined;   // 按盘上那一份重读一遍：行尾、BOM 这些以盘上为准
+      if (got && got.mtime) { tab.mtime = String(got.mtime); }
+      tab.drawn = false;
+      if (isTabShown(tab)) {
+        showFileNote(tab, "正在读取…");
+        loadIntoSidebar(tab, tab.line || 0);
+      }
+      syncFileBar();
+      refreshChangesTab();   // 「改动」那一格按磁盘算：手改的这会儿也进去了
+    }).catch(() => {
+      tab.saving = false;
+      tab.err = "存不进去：连不上后端。";
+      syncFileBar();
+      syncFileEditNote(tab);
+    });
+  }
+
+  /** 扔掉这一份没存的正文，回到盘上那份（「放弃」/「用盘上的」，或者存成功以后）。 */
+  function discardFileEdit(tab) {
+    if (!tab) { return; }
+    fileDrafts.delete(fileDraftKey(tab.path));
+    tab.editing = false;
+    tab.conflict = false;
+    tab.err = "";
+    tab.saving = false;
+    tab.drawn = false;
+    if (isTabShown(tab)) {
+      showFileNote(tab, "正在读取…");
+      loadIntoSidebar(tab, tab.line || 0);
+    }
+    syncFileBar();
+  }
+
 
   /**
    * 这一列的两格：上面「文件」（列目录 / 看一个文件）、下面「改动」（这个会话改过哪些文件）。
@@ -6472,6 +6663,9 @@
       mtime: "", loading: false, imageUrl: "",
       page: null,    // 这一格自己那一块正文（见 fileTabPage）
       drawn: false,  // 那一块里已经有画好的内容了
+      // 改这个文件那一摊（见 startFileEdit）：text 是刚读进来那一份的原文（能不能改看它有没有），
+      // real 是后端说的「这个文件到底在会话目录哪儿」（写回去照它写），剩下几项是编辑态与卡在哪儿。
+      text: undefined, real: "", editing: false, saving: false, conflict: false, err: "",
     };
   }
 
@@ -6841,16 +7035,48 @@
 
   /**
    * 弹窗顶上那条：开着几份就是几个标签（一份的时候不排标签，直接写它的写法），
-   * 右边是折行开关与关掉弹窗那颗叉。它在 #fileBody 外面，所以正文怎么滚它都在。
+   * 右边是颗铅笔（改这个文件）/ 存 / 放弃、折行开关与关掉弹窗那颗叉。它在 #fileBody 外面，
+   * 所以正文怎么滚它都在。
    */
   function syncFileBar() {
     const bar = fileSidebar.bar;
     if (!bar) { return; }
     const entry = viewTab();
     const viewing = !!entry;
-    // 折行开关只在真看一个文件时露面：diff 里没有这个开关（那边一律折起来）
+    const fileTab = entry && entry.kind === "file" ? entry.file : null;
+    const editing = !!(fileTab && fileTab.editing);
+    const conflict = !!(fileTab && fileTab.conflict);
+    // 折行开关只在真看一个文件时露面：diff 里没有这个开关（那边一律折起来）；
+    // 改的时候照样有用（那一块文本框也跟着折）
     const wrapBtn = document.getElementById("fileWrap");
     if (wrapBtn) { wrapBtn.hidden = !viewing || entry.kind !== "file"; }
+    // 铅笔：真看着一份能改的代码、还没在改的时候才露面（见 canEditFile）
+    const editBtn = document.getElementById("fileEdit");
+    if (editBtn) { editBtn.hidden = !fileTab || editing || !canEditFile(fileTab); }
+    const saveBtn = document.getElementById("fileSave");
+    if (saveBtn) {
+      saveBtn.hidden = !editing;
+      saveBtn.disabled = !fileDraftDirty(fileTab) || !!(fileTab && fileTab.saving);
+      // 盘上变了：这一颗就是「覆盖」（里面那两个字的宽度自己涨一点，见 chat.css 的 .wide）
+      saveBtn.classList.toggle("wide", conflict);
+      saveBtn.innerHTML = conflict ? "覆盖" : ICONS.save;
+      saveBtn.title = conflict
+        ? "盘上已经变了：点它就用你改的盖上去"
+        : (fileTab && fileTab.saving ? "正在存…" : "存到磁盘（Ctrl+S）");
+      saveBtn.setAttribute("aria-label", conflict ? "覆盖盘上那一份" : "存到磁盘");
+    }
+    const revertBtn = document.getElementById("fileRevert");
+    if (revertBtn) {
+      revertBtn.hidden = !editing;
+      revertBtn.disabled = !!(fileTab && fileTab.saving);
+      revertBtn.classList.toggle("wide", conflict);
+      revertBtn.innerHTML = conflict ? "用盘上的" : ICONS.discard;
+      revertBtn.title = conflict
+        ? "盘上已经变了：点它扔掉你改的、看盘上那一份"
+        : "放弃这次改动（没存的就不存了）";
+      revertBtn.setAttribute("aria-label", conflict ? "扔掉我改的、看盘上那一份" : "放弃这次改动");
+    }
+    if (editing) { syncFileEditNote(fileTab); }
     bar.hidden = !viewing;
     const many = viewing && fileSidebar.view.tabs.length > 1;
     if (fileSidebar.tabs) { fileSidebar.tabs.hidden = !many; }
@@ -6859,10 +7085,23 @@
       // 开着好几份的时候写法写在各自的标签上（这一条藏起来）
       fileSidebar.barName.hidden = many;
       if (viewing) {
-        fileSidebar.barName.textContent = entry.path;
+        fileSidebar.barName.textContent = fileViewTabLabel(entry);
         fileSidebar.barName.title = fileSidebarFullPathOf(entry.path);
       }
     }
+  }
+
+  /** 一格标签上写什么：写法；这一份有**没存的改动**就前面挂个圆点（关掉过、切走过也看得出来）。 */
+  function fileViewTabLabel(entry) {
+    if (!entry) { return ""; }
+    return (fileTabDirty(entry) ? "● " : "") + entry.path;
+  }
+
+  /** 这一份有没有没存的改动（只是进过编辑态、一字未改的，不算）。 */
+  function fileTabDirty(entry) {
+    if (!entry || entry.kind !== "file") { return false; }
+    const draft = fileDraftOf(entry.path);
+    return !!draft && draft.text !== draft.base;
   }
 
   /** 顶上那排标签：一份一个（名字 + 关掉这一份的叉），点一个就切过去。 */
@@ -6877,7 +7116,7 @@
       el.title = fileSidebarFullPathOf(entry.path);
       const name = document.createElement("span");
       name.className = "file-tab-name";
-      name.textContent = fileSidebarTabName(entry.path);
+      name.textContent = (fileTabDirty(entry) ? "● " : "") + fileSidebarTabName(entry.path);
       el.appendChild(name);
       const close = document.createElement("button");
       close.type = "button";
@@ -7294,11 +7533,13 @@
   async function drawFileResponse(resp, tab) {
     const type = (resp.headers.get("Content-Type") || "").toLowerCase();
     if (type.indexOf("image/") === 0) {
+      tab.text = undefined;   // 图没法改（见 canEditFile）
       renderFileImage(await resp.blob(), tab);
       return null;
     }
     releaseTabImage(tab);   // 这个文件以前是张图（现在换成文本了），把那份地址放掉
     const text = await resp.text();
+    tab.text = text;        // 能不能在弹窗里改，看的就是这一份（见 canEditFile）
     if (isMarkdownPath(tab.path)) { renderFileMarkdown(text, tab); return null; }
     return renderFileText(text, tab.line, tab);
   }
@@ -7450,6 +7691,16 @@
   }
 
   /**
+   * 后端回的「这个文件相对会话目录到底在哪儿」（`X-File-Path`，中文路径过不了头，后端百分号编码过）。
+   * 正文里写的光名字、写豁了的路径也会被后端落到真文件上；写回磁盘要照它写，不能照链接里那个写法写。
+   */
+  function resolvedFilePath(resp, fallback) {
+    const raw = resp.headers.get("X-File-Path") || "";
+    if (!raw) { return fallback; }
+    try { return decodeURIComponent(raw); } catch (e) { return fallback; }
+  }
+
+  /**
    * 一个文件当网页渲染时的那条地址：`/site/<会话>/<相对路径>`。
    * 路径摆进地址里是为了页面里的相对引用（`./a.css`、`img/x.png`）由浏览器自己接着解析，
    * 那些子请求也落在同一条地址下面；跟 `/file` 那条一样只读、只认会话目录里的东西。
@@ -7506,6 +7757,16 @@
     if (!tab) { return; }
     const token = fileSidebar.token;
     const seq = ++tab.seq;
+    // 这个文件手上还有一份没存的正文（关掉过、或切到别的会话又切回来）：摆它，不去盘上读——
+    // 读了就把人写的东西顶掉了（见 startFileEdit）
+    if (!tab.proj && !tab.change && fileDraftOf(tab.path)) {
+      tab.loading = false;
+      tab.editing = true;
+      tab.drawn = true;
+      renderFileEditor(tab);
+      syncFileBar();
+      return;
+    }
     if (!tab.proj && isHtmlPath(tab.path)) {
       // 网页：内容由浏览器自己按 `/site/` 那条地址去取，不走下面这个 fetch
       //（链接里带的行号在这条路上等于没带：网页里没有“第 42 行”可停）
@@ -7522,9 +7783,11 @@
       if (token !== fileSidebar.token || seq !== tab.seq) { return; }   // 换了文件 / 切了会话 / 收起：这条回应丢掉
       if (!isTabShown(tab)) { return; }   // 弹窗已经关掉（或者换成别的了）：不往那儿画了
       tab.mtime = resp.headers.get("X-File-Mtime") || "";   // 看不了时也记：跟着刷新那轮靠它省重传
+      tab.real = resolvedFilePath(resp, tab.path);           // 写回磁盘照它写（见 saveFileEdit）
       if (resp.status !== 200) {
         await showFileRefusal(resp, tab);
         tab.drawn = true;   // 看不了也是一句“看不了”（切回来不必再问一次）
+        syncFileBar();
         return;
       }
       if (tab.proj) {
@@ -7534,6 +7797,7 @@
       }
       scrollFileBody(await drawFileResponse(resp, tab), linkLine, tab.scrollTop);
       tab.drawn = true;
+      syncFileBar();   // 刚画完：能改的文件这会儿才该冒出那颗铅笔（见 canEditFile）
     }).catch(() => {
       tab.loading = false;
       if (token !== fileSidebar.token) { return; }
@@ -7699,6 +7963,8 @@
     const tab = cur && cur.kind === "file" ? cur.file : null;
     const body = fileSidebar.body;
     if (!tab || !body || tab.loading) { return; }   // 弹窗没开 / 还在取：这一轮先不问
+    // 手上有一份没存的正文（正在改）：不去问盘上那一份——问回来就把人写的东西顶掉了
+    if (tab.editing || fileDraftOf(tab.path)) { return; }
     if (isHtmlPath(tab.path)) { pollHtmlFile(tab); return; }   // 网页：只问修改时间，改过才重载
     const token = fileSidebar.token;
     filePolling = true;
@@ -7706,6 +7972,7 @@
       if (token !== fileSidebar.token || !isTabShown(tab) || !viewTab() || viewTab().file !== tab) { return; }
       if (resp.status === 204) { return; }   // 没变：正文一个字节都没过来
       tab.mtime = resp.headers.get("X-File-Mtime") || "";
+      tab.real = resolvedFilePath(resp, tab.path);
       if (resp.status !== 200) {
         await showFileRefusal(resp, tab);
         return;
@@ -8279,6 +8546,11 @@
           // 开着好几份的时候就是排标签（一份的时候就只写那个写法，见 syncFileBar / renderFileTabs）
           '<div id="fileViewTabs" hidden></div>' +
           '<span class="file-bar-name"></span>' +
+          // 改这个文件那颗铅笔（只在能改的代码文件上露面，见 syncFileBar / canEditFile），
+          // 以及改的时候那两颗：存（Ctrl+S）与放弃（盘上变了时这两颗变成「覆盖」「用盘上的」）
+          '<button id="fileEdit" class="file-bar-btn" type="button" title="改一下这个文件" aria-label="改一下这个文件">' + ICONS.edit + '</button>' +
+          '<button id="fileSave" class="file-bar-btn" type="button" title="存到磁盘（Ctrl+S）" aria-label="存到磁盘">' + ICONS.save + '</button>' +
+          '<button id="fileRevert" class="file-bar-btn" type="button" title="放弃这次改动" aria-label="放弃这次改动">' + ICONS.discard + '</button>' +
           '<button id="fileFontMinus" class="file-bar-btn" type="button" title="字小一点" aria-label="字小一点">A−</button>' +
           '<button id="fileFontPlus" class="file-bar-btn" type="button" title="字大一点" aria-label="字大一点">A+</button>' +
           '<button id="fileWrap" type="button" aria-label="折行开关" aria-pressed="false">' + ICONS.wrap + '</button>' +
@@ -8315,6 +8587,20 @@
     fileSidebar.box = readFileViewerBox();
     fileSidebar.closeFile = stage.querySelector("#fileCloseFile");
     fileSidebar.closeFile.addEventListener("click", () => closeFileViewer());
+    // 铅笔 / 存 / 放弃 三颗：改一个文件那一摊都在这一块（见 startFileEdit / saveFileEdit）
+    stage.querySelector("#fileEdit").addEventListener("click", () => {
+      const entry = viewTab();
+      if (entry && entry.kind === "file") { startFileEdit(entry.file); }
+    });
+    stage.querySelector("#fileSave").addEventListener("click", () => {
+      const entry = viewTab();
+      if (!entry || entry.kind !== "file" || !entry.file.editing) { return; }
+      saveFileEdit(entry.file, !!entry.file.conflict);   // 盘上变了时这一颗就是「覆盖」
+    });
+    stage.querySelector("#fileRevert").addEventListener("click", () => {
+      const entry = viewTab();
+      if (entry && entry.kind === "file" && entry.file.editing) { discardFileEdit(entry.file); }
+    });
     // Esc 也能关掉弹窗（浮层、清单开着的时候不接：那会儿 Esc 是收那一层）
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape" || !fileViewing()) { return; }

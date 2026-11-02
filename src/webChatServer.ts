@@ -520,6 +520,11 @@ export class PiChatWebServer {
                 return;
             }
             if (pathname === "/file") {
+                if (req.method === "POST") {
+                    void this.withFailNote(req, res, this.writeFile(req, res, url.searchParams.get("session") ?? "",
+                        url.searchParams.get("path") ?? ""));
+                    return;
+                }
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
                 void this.withFailNote(req, res, this.sendFile(req, res, url.searchParams.get("session") ?? "", url.searchParams.get("path") ?? "",
                     url.searchParams.get("mtime") ?? "", url.searchParams.get("download") === "1",
@@ -822,6 +827,8 @@ export class PiChatWebServer {
     private async sendFile(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string, wantPath: string,
         sinceMtime = "", download = false, anywhere = false): Promise<void> {
         let realTarget: string;
+        /** 这个文件真正落在会话目录的哪儿（页面要照它把内容写回去，见下面那个头）。 */
+        let realCwd = "";
         if (anywhere) {
             // 放宽只放给图片这一种取法：下载（能存到磁盘上）与别的文件都不走这条
             if (download) {
@@ -835,6 +842,7 @@ export class PiChatWebServer {
             const found = await this.resolveSessionPath(sessionId, wantPath, "文件");
             if (!found.ok) { this.sendText(req, res, found.status, found.text); return; }
             realTarget = found.real;
+            realCwd = found.realCwd;
         }
         let stat: fs.Stats;
         try {
@@ -848,6 +856,11 @@ export class PiChatWebServer {
             return;
         }
         const mtime = String(Math.floor(stat.mtimeMs));
+        // 这个文件相对会话目录到底在哪儿：链接里只有光名字、或者路径写豁了时，后端会落到另一个
+        // 路径上（见 resolveSessionPath 后两档），页面要照这个写回去，不能照链接里那个写法写。
+        // 头字段只能放 latin-1，中文路径得百分号编码（页面自己解，见 resolvedFilePath）。
+        const relPath = realCwd ? relativeTo(realCwd, realTarget) : "";
+        const pathHeader: Record<string, string> = relPath ? { "X-File-Path": encodeURIComponent(relPath) } : {};
         // 下载（页面那颗下载链接）：不设大小上限，按附件流式给出去
         if (download) {
             this.streamFile(res, realTarget, 200, stat.size, {
@@ -860,7 +873,7 @@ export class PiChatWebServer {
         }
         // 文件还是页面手上那一次改动：正文一个字节都不用给（跟着刷新那轮省下的就是它）
         if (sinceMtime && sinceMtime === mtime) {
-            res.writeHead(204, { "Cache-Control": "no-store", "X-File-Mtime": mtime });
+            res.writeHead(204, { "Cache-Control": "no-store", "X-File-Mtime": mtime, ...pathHeader });
             res.end();
             return;
         }
@@ -896,8 +909,133 @@ export class PiChatWebServer {
                 "Content-Type": "text/plain; charset=utf-8",
                 "Cache-Control": "no-store",
                 "X-File-Mtime": mtime,
+                ...pathHeader,
             });
         });
+    }
+
+    /**
+     * 把页面里改好的正文写回磁盘（`POST /file?session=…&path=…`，请求体是 JSON）。
+     *
+     * 只有浏览器页面里那个「看文件的弹窗」会走这条（插件里的对话面板是交给编辑器打开的，不经过这儿）。
+     * 写的是**同一个文件**：只认会话目录里已经存在的那个文件，不按名字去猜（这里不是 resolveSessionPath
+     * 后两档那种“链接写豁了也帮你找到”的场合：猜错了就是覆盖到别的文件上）。边界与 `/file` 同一套。
+     *
+     * 请求体：`{ text, mtime, force }`
+     *   - text：整份新正文（页面交回来的换行一律是 `\n`）；
+     *   - mtime：页面开始改之前从 `/file` 拿到的那个修改时间。盘上已经不是它时回 409，
+     *     页面弹一句「盘上已经变了」让人选（模型或者别的程序刚改过这个文件，不能默默拿旧的盖上去）；
+     *   - force：true = 不管上面那条，直接按页面这份盖上去（人在那句提示里选的「覆盖」）。
+     *
+     * 两件替人看着的小事：
+     *   - **行尾**：页面是一个文本框，交给我们的换行一定是 `\n`。原文件要是 CRLF（Windows 上很常见），
+     *     写回去就整份换了行尾，白白多出一份“整份重写”的改动（见 changeSnapshot.ts 那条）。所以按原文件
+     *     的行尾写回去；
+     *   - **BOM**：浏览器的 `resp.text()` 会把开头的 BOM 吃掉，写回去就少了那三个字节；原来有就补回来。
+     *
+     * 回应 200 给 `{ mtime }`（这次写入后的修改时间），页面存完拿它接着盯着变没变。
+     */
+    private async writeFile(req: http.IncomingMessage, res: http.ServerResponse,
+        sessionId: string, wantPath: string): Promise<void> {
+        const body = await readBody(req, MAX_REQUEST_BYTES);
+        if (body === undefined) {
+            this.sendText(req, res, 413, "请求内容过大。");
+            return;
+        }
+        let raw: any;
+        try {
+            raw = JSON.parse(body);
+        } catch {
+            this.sendText(req, res, 400, "请求内容不是合法的 JSON。");
+            return;
+        }
+        const text = raw && typeof raw.text === "string" ? raw.text : undefined;
+        if (text === undefined) {
+            this.sendText(req, res, 400, "要写什么（text）没给。");
+            return;
+        }
+        if (Buffer.byteLength(text, "utf8") > PiChatWebServer.MAX_FILE_BYTES) {
+            this.sendText(req, res, 413, `太大了（超过 ${PiChatWebServer.MAX_FILE_BYTES} 字节），这里改不了。`);
+            return;
+        }
+        const found = this.resolveExistingFile(sessionId, wantPath);
+        if (!found.ok) {
+            this.sendText(req, res, found.status, found.text);
+            return;
+        }
+        const realTarget = found.real;
+        if (fileFormatOf(realTarget) !== "text") {
+            this.sendText(req, res, 415, "这个文件不是文本，改不了。");
+            return;
+        }
+        let old: Buffer;
+        let stat: fs.Stats;
+        try {
+            stat = fs.statSync(realTarget);
+            if (!stat.isFile()) {
+                this.sendText(req, res, 404, "没有这个文件（这是个目录）。");
+                return;
+            }
+            if (stat.size > PiChatWebServer.MAX_FILE_BYTES) {
+                this.sendText(req, res, 413, `文件太大了（${stat.size} 字节），这里改不了。`);
+                return;
+            }
+            old = fs.readFileSync(realTarget);
+        } catch {
+            this.sendText(req, res, 404, "没有这个文件（可能刚被删掉了）。");
+            return;
+        }
+        const mtime = String(Math.floor(stat!.mtimeMs));
+        const sinceMtime = typeof raw.mtime === "string" ? raw.mtime : "";
+        if (!raw.force && sinceMtime && sinceMtime !== mtime) {
+            this.sendText(req, res, 409, "盘上已经变了（模型或者别的程序刚改过这个文件）。");
+            return;
+        }
+        const crlf = countCrlf(old) > 0 && countLoneLf(old) === 0;
+        let out = crlf ? text.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n") : text;
+        if (old.length >= 3 && old[0] === 0xef && old[1] === 0xbb && old[2] === 0xbf && !out.startsWith("\uFEFF")) {
+            out = "\uFEFF" + out;
+        }
+        try {
+            fs.writeFileSync(realTarget, Buffer.from(out, "utf8"));
+        } catch (err: any) {
+            this.sendText(req, res, 500, `写不进去：${err?.message ?? String(err)}`);
+            return;
+        }
+        let next = mtime;
+        try { next = String(Math.floor(fs.statSync(realTarget).mtimeMs)); } catch { /* 刚写完就没了：回原来的 */ }
+        this.writeBody(req, res, 200, Buffer.from(JSON.stringify({ mtime: next }), "utf8"), {
+            "Content-Type": "application/json; charset=utf-8",
+            "Cache-Control": "no-store",
+        });
+    }
+
+    /**
+     * 把一个路径解成「会话目录里已经存在的那个真实文件」（写回磁盘用）。
+     *
+     * 跟 resolveSessionPath 只差一处：**不猜**。后两档（在会话碰过的文件里按名字找、在会话目录的
+     * 文件清单里挑最像的）在“看”的时候很好用，落到“写”上就是拿错了文件去覆盖，所以这里只按
+     * 会话目录拼一次，拼不到就说没有。
+     */
+    private resolveExistingFile(sessionId: string, wantPath: string):
+        { ok: true; real: string } | { ok: false; status: number; text: string } {
+        if (!sessionId || !wantPath || wantPath.includes("\0")) {
+            return { ok: false, status: 400, text: "请求里要说明是哪个会话、哪个文件。" };
+        }
+        const cwd = this.host.resolveSessionDir(sessionId);
+        if (!cwd) {
+            return { ok: false, status: 404, text: "这个会话不在了（页面可能开得太久），刷新页面再试。" };
+        }
+        const realCwd = realPathOr(cwd);
+        if (!realCwd) {
+            return { ok: false, status: 404, text: "没有这个文件。" };
+        }
+        const real = realPathOr(path.resolve(cwd, wantPath));
+        if (!real) {
+            return { ok: false, status: 404, text: "没有这个文件（可能刚被删掉了）。" };
+        }
+        const checked = this.checkInsideSession(real, realCwd, "文件");
+        return checked.ok ? { ok: true, real: checked.real } : checked;
     }
 
     /**
@@ -1581,6 +1719,26 @@ function lanIpv4Addresses(): string[] {
 /** 解析真实路径（软链接一起解开）；解不开（文件不在）返回 undefined。 */
 function realPathOr(p: string): string | undefined {
     try { return fs.realpathSync(p); } catch { return undefined; }
+}
+
+/** 这段字节里有多少个 `\r\n`（判原文件是不是 CRLF 行尾用，见 writeFile）。 */
+function countCrlf(bytes: Buffer): number {
+    let n = 0;
+    for (let i = 1; i < bytes.length; i += 1) {
+        if (bytes[i] === 0x0a && bytes[i - 1] === 0x0d) { n += 1; }
+    }
+    return n;
+}
+
+/** 这段字节里有多少个没有 `\r` 打头的 `\n`（跟 countCrlf 合起来看是哪种行尾）。 */
+function countLoneLf(bytes: Buffer): number {
+    let n = 0;
+    for (let i = 0; i < bytes.length; i += 1) {
+        if (bytes[i] !== 0x0a) { continue; }
+        if (i > 0 && bytes[i - 1] === 0x0d) { continue; }
+        n += 1;
+    }
+    return n;
 }
 
 /**

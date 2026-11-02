@@ -1955,6 +1955,34 @@
   body.file-wrap .file-line { min-width: 0; }
   body.file-wrap .file-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 
+  /* 改一个文件时那一块（见 chat.js 的 renderFileEditor）：一块文本框铺满正文那一块，
+     不排行号、不上色。打字时最要紧的是光标、撤销、输入法不出岔子，那几样都是浏览器自己
+     那套文本框最稳。按 #fileBody 定位（那边本来就是 position: relative），
+     所以进出编辑态时下面那几块不用重排。 */
+  .file-edit { position: absolute; inset: 0; display: flex; flex-direction: column; }
+  /* 编辑时正文顶上那一句提示（盘上已经变了 / 存不进去的原因）：没什么可说的就收起来 */
+  .file-edit-note {
+    flex: 0 0 auto; padding: 6px 12px; font-size: 0.86em; line-height: 1.5;
+    color: var(--vscode-errorForeground, #f14c4c);
+    background: color-mix(in srgb, var(--vscode-errorForeground, #f14c4c) 10%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--vscode-errorForeground, #f14c4c) 30%, transparent);
+  }
+  .file-edit-note[hidden] { display: none; }
+  .file-edit-text {
+    flex: 1 1 auto; min-height: 0; box-sizing: border-box; width: 100%; margin: 0;
+    padding: 6px 12px 12px; border: 0; outline: none; resize: none; border-radius: 0;
+    background: transparent; color: inherit;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: inherit; line-height: 1.55;
+    white-space: pre; overflow: auto; tab-size: 4;
+  }
+  /* 长行折不折：跟看文件那一路同一颗开关（body 上的 file-wrap），文本框也跟着走 */
+  body.file-wrap .file-edit-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* 盘上变了时「存」那颗变成「覆盖」、放弃那颗变成「用盘上的」：里面是字，得让它宽一点 */
+  .file-bar-btn.wide { width: auto; padding: 0 6px; }
+  /* 那颗铅笔 / 存 / 放弃 只在该露面时露面（这条写了 display: flex，就得自己刷掉 [hidden]） */
+  .file-bar-btn[hidden] { display: none; }
+
   /* ==================== 文件搜索浮层（Ctrl+Shift+F）==================== */
   /* 跟拾取器 / 设置那几张浮层同一个路子：一层遮罩 + 一块居中的面板，只是摆得靠上一点
      （结果一列往下长，贴顶更像命令面板）。
