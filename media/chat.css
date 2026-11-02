@@ -133,9 +133,11 @@
   }
   .bash-stop:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
   .bash-stop:disabled { opacity: 0.4; cursor: default; }
+  /* 命令原文：一个字都别截（长命令、一行里几段用 && 接起来的、带换行的脚本都照原样排），
+     一行放不下就换行，长到顶了由上面那条 max-height 让它自己滚。 */
   .bash-cmd {
     margin-top: 2px; opacity: 0.8;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    white-space: pre-wrap; overflow-wrap: anywhere;
     font-family: var(--vscode-editor-font-family, monospace); font-size: 0.86em;
   }
   .bash-empty { padding: 18px 10px; text-align: center; opacity: 0.6; }
@@ -550,10 +552,19 @@
   /* 清单开着的时候这颗按钮一直亮着（一眼看出是哪颗按钮弹的） */
   #bashBtn.on { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); color: var(--vscode-foreground); }
   /* 「后台任务」靠着右头：中间空出来的地方就是留白（它右边紧挨着自动模式那颗） */
-  #bashBtn { margin-left: auto; }
-  /* 有命令在后台跑的时候那颗按钮变蓝（没有就是灰的，见 chat.js 的 syncBashBtn）：
-     它是这颗按钮上唯一会变的东西，一眼看出“还有活在外头跑着”。 */
-  #bashBtn.busy, #bashBtn.busy:hover { color: var(--vscode-charts-blue, #3794ff); }
+  #bashBtn { position: relative; margin-left: auto; }
+  /* 有命令在后台跑的时候，那颗按钮右下角挂一个小数字（几条在跑；没有就什么也不挂，见 chat.js 的
+     syncBashBtn）：按钮本身不变色，只是那颗图标右下角正好空着，数字就摆在那儿。
+     不垫底色（垫了的话鼠标扫过按钮时那块底色会碍眼），一个个位数正好落在横线下面那块空当里。 */
+  #bashBtn .bash-count {
+    position: absolute; right: 2px; bottom: 1px;
+    font-size: 10px; line-height: 1; font-weight: 600; font-variant-numeric: tabular-nums;
+    color: var(--vscode-charts-blue, #3794ff);
+    pointer-events: none;   /* 点着的还是那颗按钮 */
+  }
+  /* 两位数（9+）：字号缩一点，右边还贴着同一个位置，多出来的宽度往左让 */
+  #bashBtn .bash-count.wide { font-size: 8.5px; }
+  #bashBtn .bash-count.hidden { display: none; }
   /* 打字的地方：框里剩下多少地方全是它的（宽度沾满，高度自己按内容长，见 autoResize）。
      这里不能写 flex: 1 —— 盒子是竖排，flex-basis: 0 会把 height 顶掉，
      打字一多就长不高了（框里自己滚）。 */

@@ -1940,13 +1940,15 @@
   // ==================== 后台任务（输入框右边那颗按钮）====================
   // 这个会话放到后台跑的命令都在这一小张清单里：一行一条（编号、在跑、已经跑了多久、命令），
   // 还在跑的那条右边一颗「停」。跑完的不列——跑完的结果会当成一条新消息交回会话。
-  // 有命令在跑时那颗按钮是蓝的，一条都没有就是灰的。
+  // 有几条在跑时那颗按钮右下角挂一个小数字（几条），一条都没有就不挂。
   // 那颗按钮一直露着（还没挑会话、空会话里也点得开，点开只说一句“没有在后台跑的命令”）。
   // 清单从输入行上头往上弹（输入框就在屏幕底，往下弹会顶到键盘、出屏幕），贴着按钮那一头（右边）。
   // 清单跟着会话的内存走（见 src/sessionRuntime.ts 的 bashTasks）：问一次要一次（见 requestBashTasks），
   // 有动静时后端自己推 bashTask 过来（见底下 case "bashTask"）；怎么让命令转后台：消息流里那颗「放后台」。
   let bashBtn = null;
   let bashMenu = null;
+  /** 那颗按钮右下角的小数字（几条在跑）。 */
+  let bashCount = null;
   /** 当前会话还在后台跑的命令（后端那份清单里 status 是 running 的那几条，新的排前面）。 */
   let bashTasks = [];
   /** 手上这份清单是哪个会话的（换了会话就作废、重问一份）。null = 还没问过。 */
@@ -1963,6 +1965,10 @@
     bashBtn.innerHTML = ICONS.tasks;
     bashBtn.title = "后台任务";
     bashBtn.setAttribute("aria-label", "后台任务");
+    // 右下角那个小数字：几条在跑。那颗图标右下角本来就是空的，数字摆在那儿不压线条。
+    bashCount = document.createElement("span");
+    bashCount.className = "bash-count hidden";
+    bashBtn.appendChild(bashCount);
     // 摆在框底那条横排的右头（前头依次是新建会话那颗加号、模型那颗胶囊，见 renderHtml 的 #composer）
     row.appendChild(bashBtn);
     // 清单挂在框底那条横排里，但定位靠的是外头那个圆角盒子（#composer 是 relative，
@@ -1992,9 +1998,18 @@
 
   function bashOpen() { return !!bashMenu && !bashMenu.classList.contains("hidden"); }
 
-  /** 那颗按钮的颜色：有命令在跑就是蓝的，一条都没有就是灰的（见 chat.css 的 #bashBtn.busy）。 */
+  /** 那颗按钮右下角的小数字：有几条在跑就写几（两位数以上写 9+），一条都没有就藏起来。 */
   function syncBashBtn() {
-    if (bashBtn) { bashBtn.classList.toggle("busy", bashTasks.length > 0); }
+    if (!bashBtn) { return; }
+    const n = bashTasks.length;
+    if (bashCount) {
+      bashCount.textContent = n > 9 ? "9+" : String(n);
+      bashCount.classList.toggle("wide", n > 9);
+      bashCount.classList.toggle("hidden", n === 0);
+    }
+    const tip = n ? "后台任务（" + n + " 条在跑）" : "后台任务";
+    bashBtn.title = tip;
+    bashBtn.setAttribute("aria-label", tip);
   }
 
   /** 去后端要一份当前会话的后台命令清单（回话走 bashTasks 那条消息，见 applyBashTasks）。 */
@@ -2016,7 +2031,7 @@
     requestBashTasks();
   }
 
-  /** 后端回的清单：只留还在跑的（跑完的不列，那颗按钮的颜色也只看它们）。 */
+  /** 后端回的清单：只留还在跑的（跑完的不列，那颗按钮上的小数字也只看它们）。 */
   function applyBashTasks(sessionId, list) {
     if (!activeId || sessionId !== activeId) { return; }   // 切走了：这份是上一个会话的，不要
     bashTasksFor = sessionId;
@@ -2076,7 +2091,7 @@
 
   /**
    * 清单里的一行：编号 + 在跑 + 已经跑了多久 + 一颗「停」，下面一行是命令原文
-   *（一行放不下就截掉，悬停看全）。
+   *（不截：长了就换行，清单自己封顶自己滚）。
    */
   function bashTaskRow(task) {
     const block = document.createElement("div");
@@ -2107,7 +2122,6 @@
     const cmd = document.createElement("div");
     cmd.className = "bash-cmd";
     cmd.textContent = task.cmd || "";
-    cmd.title = task.cmd || "";
     block.appendChild(cmd);
     return block;
   }
@@ -10301,7 +10315,7 @@
       renderSessionBar();
       // 会话目录这时候才认识：这一列开着又空着的话，把「目录」那一格摆上（见票 13）
       ensureFilePanes();
-      // 后台任务那颗按钮：刚连上 / 重连 / 换了会话就把清单重问一份（有命令在跑就变蓝）
+      // 后台任务那颗按钮：刚连上 / 重连 / 换了会话就把清单重问一份（有命令在跑就挂上数字）
       syncBashTasks();
       updateSendState();
       syncStatus();
