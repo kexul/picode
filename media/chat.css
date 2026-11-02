@@ -151,8 +151,10 @@
     display: flex; align-items: stretch; gap: 6px; flex: 0 0 auto;
     box-sizing: border-box;   /* 常驻的项目与会话侧边栏开着时它的高度会被写成一个整数（见 chat.js 的 syncDockHeaderHeight） */
     /* 一条比正文底、比正文稍深的底（跟浏览器顶上那条一个意思）：当前这一格是正文色，
-       底边再伸出去 1px 盖住那道分隔线，看着就跟下面连成一片。 */
-    padding: 5px 8px 0;
+       底边再伸出去 1px 盖住那道分隔线，看着就跟下面连成一片。
+       左右两边不写上内边距（上边那 5px 写在下面 #sessionTabs 身上）：两边那几颗按钮
+       竖着撑满整条、靠 align-items: center 居中，顶条自己不上下一般高的话它们就偏心。 */
+    padding: 0 8px;
     background: color-mix(in srgb, var(--vscode-foreground) 6%, var(--vscode-editor-background));
     border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
   }
@@ -165,12 +167,15 @@
 
      一个会话都没有时这一排是空的，可也得留出一格那么高：不然开第一个会话那一下顶条会
      突然长高 8 像素（右边那一列的面板头跟着跳）。所以这里给一条最小高：
+     5px 是格子上面那点空（格子的底边要贴着顶条底下那条线，所以空全留在上边），
      11px 是一格上下的内边距（6 + 5），1.1875em 是名字那一行（.sn-text 是 0.95em 的字、行高 1.25），
-     14px 是名字后面那颗 ×——字号再小就轮到它定高。这三个数跟 .sn-tab 那几条规则是一份，
+     14px 是名字后面那颗 ×——字号再小就轮到它定高。这几个数跟 .sn-tab 那几条规则是一份，
      改这边就得同步改那边（不然有会话 / 没会话两种高度又对不上了）。 */
   #sessionTabs {
     flex: 1 1 auto; min-width: 0; display: flex; align-items: stretch; justify-content: center; gap: 2px;
-    min-height: calc(11px + max(1.1875em, 14px));
+    box-sizing: border-box;
+    padding-top: 5px;
+    min-height: calc(16px + max(1.1875em, 14px));
     overflow: hidden;
   }
   /* 一格：像浏览器顶上的一张标签页 —— 上边两角圆、淡底，当前这一张是正文色、
