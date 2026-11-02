@@ -7632,19 +7632,13 @@
       arrow.className = "change-arrow";
       row.appendChild(arrow);
     }
-    // 文件名在前、后面跟着它所在的目录（灰一点）：这一列窄，先写 path 那样满一行的时候
-    // 省略号恰好落在文件名上，只剩半截目录看不出改的是哪个文件。目录那截放不下就自己收。
+    // 只写文件名那一截（全路径见这一行的悬停提示，打开那份 diff 以后横条上也写着）：
+    // 这一列窄，写整条 path 的时候省略号恰好落在文件名上，只剩半截目录，看不出改的是哪个文件。
     const cut = item.path.lastIndexOf("/");
     const name = document.createElement("span");
     name.className = "change-path";
     name.textContent = cut >= 0 ? item.path.slice(cut + 1) : item.path;
     row.appendChild(name);
-    if (cut >= 0) {
-      const dir = document.createElement("span");
-      dir.className = "change-dir";
-      dir.textContent = item.path.slice(0, cut + 1);
-      row.appendChild(dir);
-    }
     const counts = document.createElement("span");
     counts.className = "change-counts";
     if (item.tooBig) {
