@@ -7,8 +7,8 @@
 
   1. 输入框起步高度。VSCode 老界面固定占 144px（约七行）；网页端只要两行（打字打多了
      照样往上涨，最高 640px 不变）。这个值只管打字那一块（#input），框底那条小横排
-     （模型胶囊 + 两颗按钮）的高度不算在里面。
-  2. 顶条最右边的“📷 桌面截图”与“<<< 项目与会话”两颗按钮（见 chat.css 的 #sessionBarTail），底部按钮条整条藏掉。
+     （模型胶囊 + 几颗小按钮）的高度不算在里面。
+  2. 顶条最右边的“<<< 项目与会话”那颗按钮（见 chat.css 的 #sessionBarTail），底部按钮条整条藏掉。
   3. 输入框右下角的“停止生成”：生成中露面（会话闲着时那条「继续」不在这里 ——
      它长在消息流末尾，见 chat.css 的 .msg-continue）。
 
@@ -35,8 +35,8 @@ html, body {
   挂进 #sessionBarTail（顶条的尾巴），尺寸与左边那颗“+”一致（见 chat.css 的 #newSessionBtn）：
   竖着撑满整个顶条（align-self: stretch），上下留白由顶条的内边距给。
   外层 #sessionBarTail 自己带了 margin-left: auto，这里不用再顶。
-  （“📷 截图”那颗不在顶条上了：它排在「项目与会话」面板底部那一行，见 chat.js 画 footer 那段
-  与 chat.css 里 .pk-footer.pk-history-footer 的按钮样式。）
+  （“📷 截图”那颗不在顶条上：它在输入框底下那条小横排里、「后台任务」左边，
+  见 browserBridge.js 建它那段与 chat.css 的 #browserScreenshotBtn。）
 */
 /* 截屏从点击到图推回来要一两秒：期间压暗并暂时点不动（见 browserBridge.js 的 busy 状态） */
 #browserScreenshotBtn.busy {
@@ -64,7 +64,7 @@ html, body {
 /* 图标是 browserBridge.js 内联的 codicon SVG，尺寸在这里控制。
    三尖角比相机那颗大一挡：它三根尖角本身在 viewBox 里留白多，同样 18px 时
    画出来只有 11.6px 宽（相机 13.5），所以给它 20px 补上。
-   （底部那行的截图按钮由 chat.css 的 footer 按钮样式管，图标 13px。） */
+   （输入框底下那颗截图按钮由 chat.css 的输入行按钮样式管，图标 15px。） */
 #browserMenuBtn svg { width: 20px; height: 20px; display: block; }
 
 #browserMenuBtn:hover {

@@ -532,21 +532,24 @@
      量法：node dev/perfProbe.js --auto --cpu 4。 */
   #composer.auto { border-color: var(--vscode-charts-green, #3fb950); }
   #inputRow { display: flex; align-items: center; gap: 2px; }
-  /* 框底那条横排左头那颗加号（新建会话）、右头那颗「后台任务」和再往右的自动模式按钮：
+  /* 框底那条横排左头那颗加号（新建会话）、右头那颗「截图」与「后台任务」、再往右的自动模式按钮：
      一样的矮方块，鼠标扫过亮一下。中间是模型胶囊（见下面的 #ctxIcon）。 */
   #newSessionBtn,
   #autoBtn,
-  #bashBtn {
+  #bashBtn,
+  #browserScreenshotBtn {
     flex: 0 0 auto; width: 26px; height: 26px; padding: 0;
     display: flex; align-items: center; justify-content: center;
     background: transparent; border: none; border-radius: 8px;
     color: var(--vscode-descriptionForeground, inherit); cursor: pointer;
   }
   #newSessionBtn svg,
-  #bashBtn svg { width: 15px; height: 15px; display: block; }
+  #bashBtn svg,
+  #browserScreenshotBtn svg { width: 15px; height: 15px; display: block; }
   #newSessionBtn:hover,
   #autoBtn:hover,
-  #bashBtn:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); color: var(--vscode-foreground); }
+  #bashBtn:hover,
+  #browserScreenshotBtn:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); color: var(--vscode-foreground); }
   /* 自动模式那颗按钮：一直在输入框右下角最右边，长的是一颗小开关 ——
      圆角胶囊里一颗滑块：没开时滑块在左、胶囊灰着；开着时滑块滑到右边、胶囊变绿。
      点一下就是拨一下（开着时再点就是停）。 */
@@ -567,7 +570,11 @@
   #newSessionBtn:disabled:hover { background: transparent; color: var(--vscode-descriptionForeground, inherit); }
   /* 清单开着的时候这颗按钮一直亮着（一眼看出是哪颗按钮弹的） */
   #bashBtn.on { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); color: var(--vscode-foreground); }
-  /* 「后台任务」靠着右头：中间空出来的地方就是留白（它右边紧挨着自动模式那颗） */
+  /* 「截图」与「后台任务」一起靠着右头（截图在最前，紧挨着三根横线左边）：
+     中间空出来的地方就是留白，所以那个 margin-left: auto 挂在「截图」身上；
+     这台机器截不了桌面、没有截图按钮时，照旧挂在「后台任务」上（见底下那条规则）。 */
+  #browserScreenshotBtn { margin-left: auto; }
+  #browserScreenshotBtn + #bashBtn { margin-left: 0; }
   #bashBtn { position: relative; margin-left: auto; }
   /* 有命令在后台跑的时候，那颗按钮右下角挂一个小数字（几条在跑；没有就什么也不挂，见 chat.js 的
      syncBashBtn）：按钮本身不变色，只是那颗图标右下角正好空着，数字就摆在那儿。

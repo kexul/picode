@@ -6420,7 +6420,7 @@
   // 或者只跑了后端没开编辑器的时候，点链接才有着落。
   //
   // 只有浏览器页面里有它：插件里的对话面板里点链接照旧交给编辑器打开。判据就是上面那个
-  // IN_WEBVIEW 标记（界面桥放在 window 上的，跟顶条上那颗桌面截图按钮同一路）。
+  // IN_WEBVIEW 标记（界面桥放在 window 上的，跟输入框底下那颗桌面截图按钮同一路）。
   //
   // 看过的文件在这一列头上排成一排标签：再点别的文件就多一个标签、原来那个还留着；点一个
   // 已经开着的文件就切回它那个标签、按这次链接说的行滚过去（同一个文件只留一个标签）；
@@ -10310,10 +10310,6 @@
         openEnv();
       });
       view.footer.appendChild(envBtn);
-      // 「截图」：请插件截一张跑后端的这台电脑的桌面（手机上常用）。这颗按钮归 browserBridge.js 建，
-      // 这里只管把它排在「统计」后头；后端说截不了桌面时它压根不存在。
-      const shotBtn = typeof window.pichatScreenshotButton === "function" ? window.pichatScreenshotButton() : null;
-      if (shotBtn) { view.footer.appendChild(shotBtn); }
     } else if (toggle) {
       view.footer.classList.remove("hidden");
       const closeBtn = document.createElement("button"); closeBtn.className = "secondary"; closeBtn.textContent = "关闭";

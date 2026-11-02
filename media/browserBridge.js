@@ -711,7 +711,7 @@
   }
 
   // ==================== 桌面截图 ====================
-  // 顶条上的“📷”按钮：请插件截一张这台电脑的桌面（可能就是本机，
+  // 输入框底下那颗“📷”按钮：请插件截一张这台电脑的桌面（可能就是本机，
   // 也可能是你在手机浏览器里看的这台开发机），截好推回来全屏显示。
   // 消息由插件那头的 ChatViewProvider 接：
   //   requestDesktopScreenshot → desktopScreenshot（图片 base64）/ desktopScreenshotResult（失败）。
@@ -772,7 +772,7 @@
 
   // ==================== “📷”与顶栏最右边的“<<<”两颗按钮 ====================
   //  - 📷（截图）：把开发机的桌面截一张发回页面看（手机上常用）。它不占顶条，
-  //    排在「项目与会话」面板底部那一行（「设置」「统计」后头，见 chat.js 画 footer 那段）：
+  //    排在输入框底下那条小横排上、「后台任务」那颗（三根横线）左边：
   //    顶条中间要摆一排会话格，右边只留那颗 <<<。
   //  - <<<：挂在 #sessionBarTail 里（顶条最右边），点它让“项目与会话”列表从右侧滑进来
   //    （消息由后端的 ChatHost 接）：最上面是“浏览文件夹…”与当前目录，下面是用 pi
@@ -783,13 +783,18 @@
     shotBtn = document.createElement("button");
     shotBtn.type = "button";
     shotBtn.id = "browserScreenshotBtn";
-    shotBtn.innerHTML = ICON_CAMERA + "<span>截图</span>";
+    shotBtn.innerHTML = ICON_CAMERA;
     shotBtn.title = "查看桌面截图（截的是运行 VSCode 的这台电脑）";
+    shotBtn.setAttribute("aria-label", "截图");
     shotBtn.addEventListener("click", requestDesktopScreenshot);
-    // 自己不摆进页面：那一行由 chat.js 画（每次重画都把它接到「统计」后头），
-    // 这里只把元素交出去。后端说这台机器截不了桌面时它就是 null（那颗按钮压根不出现）。
-    window.pichatScreenshotButton = function () { return desktopShotEnabled ? shotBtn : null; };
-    if (!desktopShotEnabled) { shotBtn = null; }
+    // 摆进输入框底下那条小横排（#inputRow），落在「后台任务」那颗（三根横线）左边。
+    // 那颗由 chat.js 后头加（本文件比主脚本先加载），这会儿还没有，所以直接排进横排
+    // 就落在它前头；万一已经有了，也插在它左边。截不了桌面时由 setDesktopShotEnabled 摘掉。
+    (function () {
+      var row = document.getElementById("inputRow");
+      if (!row) { return; }
+      row.insertBefore(shotBtn, document.getElementById("bashBtn") || null);
+    })();
 
     var btn = document.createElement("button");
     btn.type = "button";
