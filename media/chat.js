@@ -7627,11 +7627,6 @@
     row.className = "change-head" + (item.tooBig ? " no-diff" : "");
     row.setAttribute("data-path", item.path);
     row.title = item.path;   // 一行放不下时悬停看全
-    if (!item.tooBig) {
-      const arrow = document.createElement("span");
-      arrow.className = "change-arrow";
-      row.appendChild(arrow);
-    }
     // 只写文件名那一截（全路径见这一行的悬停提示，打开那份 diff 以后横条上也写着）：
     // 这一列窄，写整条 path 的时候省略号恰好落在文件名上，只剩半截目录，看不出改的是哪个文件。
     const cut = item.path.lastIndexOf("/");

@@ -1779,13 +1779,14 @@
   /* markdown 文件：排好版渲染成文档（样式就是消息流里那一套 .md），不留行号。 */
   .file-md { padding: 2px 14px 6px; }
   .file-note { padding: 12px 14px; line-height: 1.6; opacity: 0.75; }
-  /* 「改动」那一格（见 chat.js 的 changeRow）：一行一个文件——左边一颗三角、中间文件名、
-     右边多了几行少了几行；点这一行就把那份 diff 整列打开（跟看一个文件一样）。
+  /* 「改动」那一格（见 chat.js 的 changeRow）：一行一个文件——文件名、右边多了几行少了几行；
+     点这一行就把那份 diff 整列打开（跟看一个文件一样）。
      只写文件名，不写它所在的目录（全路径看悬停提示，打开那份 diff 以后弹窗横条上也写着）。
+     前面不摆三角（这一行不是“展开”，是打开一份 diff；点得开看光标就是手型）。
      一行就是一行，不折行：这一列窄，一折成两行、右边那两个数就掉到第二行上去，看着七高八低。 */
   .change-head {
     display: flex; align-items: center; gap: 5px;
-    padding: 3px 8px; cursor: pointer; user-select: none;
+    padding: 3px 10px; cursor: pointer; user-select: none;
     font-size: calc(var(--vscode-font-size, 13px) - 1px);
     border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.18));
   }
@@ -1796,12 +1797,6 @@
     background-image: linear-gradient(var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)),
       var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)));
   }
-  .change-arrow {
-    flex: 0 0 auto; width: 0; height: 0;
-    border-left: 5px solid currentColor; border-top: 4px solid transparent; border-bottom: 4px solid transparent;
-    opacity: 0.6; transition: transform 0.1s;
-  }
-
   /* 文件名：放得下就写全，一行放不下才自己收 */
   .change-path {
     flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

@@ -18,7 +18,7 @@
  *      既有删掉的那行、也有加上的那行（颜色类是 del / add）；点返回箭头回到上下两格；
  *   5. 刷新页面：清单还在（数据在后端会话的内存里，不跟着页面走）——这正是“刷新浏览器不丢”；
  *   6. 把磁盘上那个文件删了以后再问一次：那一行标「已删除」，点开仍看得到整份都是删掉的；
- *   7. 那一行只有三角、写法、增删数：没有「回滚」那颗按钮（这一格只看不改）；
+ *   7. 那一行只有文件名、增删数：没有「回滚」那颗按钮（这一格只看不改）；
  *      把文件照原样写回去以后，那一行从清单里消失（清单空了就回到那句提示）；
  *   8. 模型新写一个文件（write 那条路）：清单里那一行是 +3 −0，点开三行都是新加的；
  *   9. 切到别的会话再切回来：还停在该才那份 diff 上（每个会话各记各的）。
@@ -97,8 +97,8 @@ function rowsNow(page) {
         return JSON.stringify(rows.map((el) => ({
             path: el.getAttribute("data-path"),
             counts: ((el.querySelector(".change-counts") || {}).textContent || "").trim(),
-            arrow: !!el.querySelector(".change-arrow"),
             noDiff: el.classList.contains("no-diff"),
+            cursor: getComputedStyle(el).cursor,
             diffLines: el.querySelectorAll(".diff-line").length,
         })));
     `);
@@ -242,7 +242,8 @@ module.exports = async (page) => {
     check("清单里长出 说明.md", !!(rows[0] && rows[0].path === SCRIPT_FILE));
     check("右边写着 +1 −1", !!(rows[0] && countsAre(rows[0].counts, 1, 1)), rows[0] && rows[0].counts);
     check("行里不展开 diff（那一行里一行 diff 都没有）", !!(rows[0] && rows[0].diffLines === 0));
-    check("这一行点得开（有那颗三角，不是「太大」）", !!(rows[0] && rows[0].arrow && !rows[0].noDiff));
+    check("这一行点得开（光标是手型，不是「太大」那一行）",
+        !!(rows[0] && rows[0].cursor === "pointer" && !rows[0].noDiff));
     await page.shot("changes-2-row.png");
 
     // ---- 4. 点开那一行：整列打开那份 diff ----
