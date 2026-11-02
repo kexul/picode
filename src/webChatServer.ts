@@ -55,24 +55,42 @@ const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
  *  掐掉让它重连重画。不掐的话这些字节全堆在插件进程里，回来时也不会被 GC 回收。 */
 const STREAM_BACKLOG_BYTES = 8 * 1024 * 1024;
 /** 小于这么多字节就不费劲压了（压完省不了几个字节，还白搭一次 CPU）。 */
-const GZIP_MIN_BYTES = 1024;
+const COMPRESS_MIN_BYTES = 1024;
 /** 压缩结果最多缓存多少份（界面文件就那几个，纯粹防着缓存无限长大）。 */
-const GZIP_CACHE_MAX = 64;
+const COMPRESS_CACHE_MAX = 64;
+/**
+ * brotli 用哪一档：9 是量出来的折中。chat.js（667 KB）用 11 档能压到 162 KB、但一次要 630 ms
+ * —— 每个文件编译后第一次被请求就要堵住服务端半秒；9 档是 175 KB、27 ms；gzip 是 213 KB。
+ */
+const BROTLI_QUALITY = 9;
 
 /**
- * 请求方能不能收 gzip（按 Accept-Encoding 一个字一个字看，q=0 表示"别给我这个"）。
- * 浏览器都会发 `gzip, deflate, br`；手工 curl 不带这个头时照旧发原文。
+ * 请求方说它收哪些压缩方式（名字 → q 值；没提就是没有，q=0 当作不收）。
+ * 浏览器都会发 `gzip, deflate, br`；手工 curl 不带这个头时什么都不收，照旧发原文。
  */
-function wantsGzip(accept: string | string[] | undefined): boolean {
-    const value = Array.isArray(accept) ? accept.join(",") : accept;
-    if (!value) { return false; }
+function acceptedEncodings(accept: string | string[] | undefined): Map<string, number> {
+    const value = Array.isArray(accept) ? accept.join(",") : accept ?? "";
+    const out = new Map<string, number>();
     for (const part of value.split(",")) {
-        const [name, ...params] = part.trim().split(";");
-        if (name.trim().toLowerCase() !== "gzip") { continue; }
-        const q = params.map((p) => p.trim()).find((p) => p.startsWith("q="));
-        return !(q && Number(q.slice(2)) === 0);
+        const [rawName, ...params] = part.trim().split(";");
+        const name = rawName.trim().toLowerCase();
+        if (!name) { continue; }
+        const qParam = params.map((p) => p.trim()).find((p) => p.startsWith("q="));
+        const q = qParam ? Number(qParam.slice(2)) : 1;
+        out.set(name, Number.isFinite(q) ? q : 1);
     }
-    return false;
+    return out;
+}
+
+/**
+ * 正文压不压、用哪种：brotli 比 gzip 再省一成多（chat.js 175 KB 对 213 KB），所以它排在前面。
+ * 两种都不收（老代理、手敲的 curl）就发原文。
+ */
+function pickBodyEncoding(accept: string | string[] | undefined): "br" | "gzip" | undefined {
+    const accepted = acceptedEncodings(accept);
+    if ((accepted.get("br") ?? 0) > 0) { return "br"; }
+    if ((accepted.get("gzip") ?? 0) > 0) { return "gzip"; }
+    return undefined;
 }
 
 /**
@@ -356,8 +374,8 @@ export class PiChatWebServer {
     private readonly heartbeatMs = HEARTBEAT_MS;
     private readonly pageStaleMs = PAGE_STALE_MS;
     private readonly backlogBytes = STREAM_BACKLOG_BYTES;
-    /** 压缩结果缓存：界面文件的内容没变时不用重压（键是"文件名@修改标记"，见 sendMedia）。 */
-    private readonly gzipCache = new Map<string, Buffer>();
+    /** 压缩结果缓存：界面文件的内容没变时不用重压（键是"压缩方式@文件名@修改标记"，见 sendMedia）。 */
+    private readonly compressCache = new Map<string, Buffer>();
     /** 本次监听开始服务的时刻（`/health` 报出去；重启会更新）。 */
     private startedAt = 0;
     private settings: WebServerSettings = { enabled: false, port: 0, host: "0.0.0.0", trustedOrigins: [] };
@@ -1358,8 +1376,8 @@ export class PiChatWebServer {
     /**
      * 写一个响应体（页面 / 界面文件 / JSON / 纯文本）。
      *
-     * 请求头说能收 gzip、内容又够大时就压了再发：浏览器页面的 HTML 里内联着 72KB 样式、
-     * 界面脚本 350KB，压完只剩三成左右（手机网速下这是好几百毫秒的差别）。
+     * 请求头说能收压缩、内容又够大时就压了再发：浏览器页面的 HTML 里内联着 154 KB 样式、
+     * 界面脚本 318 KB，压完只剩三成左右（手机网速下这是好几百毫秒的差别）。
      * 压不了 / 对方不收就发原文；够大的响应都带上 Vary，让中间的缓存别把两种混起来。
      *
      * @param cacheKey 给了就按它缓存压缩结果（界面文件那种“内容不变、每台设备各下一次”的最划算）；
@@ -1374,38 +1392,40 @@ export class PiChatWebServer {
         cacheKey?: string,
     ): void {
         if (res.headersSent) { res.end(); return; }
-        const gzipped = this.gzipFor(req, body, cacheKey);
+        const encoding = pickBodyEncoding(req.headers["accept-encoding"]);
+        const packed = this.compressFor(encoding, body, cacheKey);
         const out: Record<string, string | number> = { ...headers };
-        if (body.length >= GZIP_MIN_BYTES) { out["Vary"] = "Accept-Encoding"; }
-        if (gzipped) {
-            out["Content-Encoding"] = "gzip";
-            out["Content-Length"] = gzipped.length;
+        if (body.length >= COMPRESS_MIN_BYTES) { out["Vary"] = "Accept-Encoding"; }
+        if (packed && encoding) {
+            out["Content-Encoding"] = encoding;
+            out["Content-Length"] = packed.length;
         } else {
             out["Content-Length"] = body.length;
         }
         res.writeHead(status, out);
-        res.end(gzipped ?? body);
+        res.end(packed ?? body);
     }
 
-    /** 该不该压、压出来的字节；不值得压（对方不收 / 内容太小）时给 undefined。 */
-    private gzipFor(req: http.IncomingMessage, body: Buffer, cacheKey?: string): Buffer | undefined {
-        if (body.length < GZIP_MIN_BYTES || !wantsGzip(req.headers["accept-encoding"])) {
-            return undefined;
-        }
-        if (cacheKey) {
-            const hit = this.gzipCache.get(cacheKey);
+    /** 该不该压、压出来的字节；不值得压（对方不收 / 内容太小 / 压不了）时给 undefined。 */
+    private compressFor(encoding: "br" | "gzip" | undefined, body: Buffer, cacheKey?: string): Buffer | undefined {
+        if (!encoding || body.length < COMPRESS_MIN_BYTES) { return undefined; }
+        const key = cacheKey ? `${encoding}@${cacheKey}` : "";
+        if (key) {
+            const hit = this.compressCache.get(key);
             if (hit) { return hit; }
         }
         let out: Buffer;
         try {
-            out = zlib.gzipSync(body);
+            out = encoding === "br"
+                ? zlib.brotliCompressSync(body, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: BROTLI_QUALITY } })
+                : zlib.gzipSync(body);
         } catch {
             return undefined;   // 压不了就发原文，别把响应弄坏
         }
-        if (cacheKey) {
+        if (key) {
             // 只留最近这些份：界面文件就那几个，够用了
-            if (this.gzipCache.size >= GZIP_CACHE_MAX) { this.gzipCache.clear(); }
-            this.gzipCache.set(cacheKey, out);
+            if (this.compressCache.size >= COMPRESS_CACHE_MAX) { this.compressCache.clear(); }
+            this.compressCache.set(key, out);
         }
         return out;
     }
@@ -1482,9 +1502,11 @@ export class PiChatWebServer {
      *
      * 压缩是按请求方的 Accept-Encoding 定的，所以响应头得先说清楚（压了就是 Content-Encoding:
      * gzip，没压就什么都不带）；定了之后这条连接上写的每一段都得照这个来。
+     *
+     * 这一条只认 gzip：brotli 的思路是“一次把所有东西压到最小”，边写边刷不是它的强项。
      */
     private openStream(res: http.ServerResponse, accept: string | string[] | undefined): PageStream {
-        const pack = wantsGzip(accept);
+        const pack = (acceptedEncodings(accept).get("gzip") ?? 0) > 0;
         const stream = new PageStream(res, pack, this.backlogBytes);
         res.writeHead(200, {
             "Content-Type": "text/event-stream; charset=utf-8",
