@@ -50,7 +50,8 @@
      只改 overflow，别在这儿加 user-select: none。那个是会往下继承的属性，一加上浏览器就得
      给整棵消息树重算一遍样式，而这一帧正是手指刚开始动的那一帧：量过 1.4 万个元素的会话
      要 20—40 毫秒（见 dev/swipePerf.js），会话越大越久 —— 表现出来就是“起手顿一下、之后才跟手”。
-     鼠标拖的时候怕糊上选中，那是 chat.js 在拖的过程中自己抹掉的（dropSelection）。 */
+     鼠标拖的时候怕糊上选中：按下那一下就 preventDefault（见 chat.js 的 pointerdown 那段），
+     浏览器那套拖选根本起不来；拖的过程中每帧抹一次（dropSelection）留着当兜底。 */
   #messages.swiping { overflow: hidden; }
   /* 划的这会儿，两个壳各自升成一层：挪的时候交给合成器搬这张图，不用每帧把两屏文字重画一遍。
      （手机 3 倍像素下那一帧的画字活儿不便宜；主线程上是看不到它花的时间的，见 dev/swipePerf.js。）

@@ -5361,6 +5361,13 @@
     if (swipeStartsInScrollable(e.target)) { return; }
     if (swipeHitsText(e.clientX, e.clientY)) { return; }
     if (!swipeStart(e, e.clientX, e.clientY, "mouse")) { return; }
+    // 这一下别让浏览器顺手开始“从这儿拖选”（手指一动就往字上刷一层蓝的那道）：它是在我们
+    // 这帧的活干完之后才把选中铺出来的，下面 pointermove 里事后抹（dropSelection）总慢一帧，
+    // 起手那一两帧就露出来。拦在按下这一下最省，那套拖选根本不起来。
+    // 代价（量过）：这一整段鼠标动作的 mousedown / mousemove / mouseup 不再派发（21 次
+    // mousemove → 1 次），消息区里没有别人靠它们；click 照旧派发（会话照旧切），只是按一下
+    // 消息区不再把输入框的焦点拿走。
+    e.preventDefault();
     swipe.pointerId = e.pointerId;
     // 按住了就一直跟着走：拖到对话区外面也不断（不然手一快就丢）
     try { messagesEl.setPointerCapture(e.pointerId); } catch (err) { /* 捕获不到就靠冒泡 */ }
