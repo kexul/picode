@@ -1044,8 +1044,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         // 这块屏（重新）连上：把“你在看哪个会话”和一份最新的会话列表单发给它。
         // 断线期间漏掉的变化（会话关了、新开了）靠它补齐——会话列表不再进补发暂存了
         // （里面带着“每块屏在看哪一个”，补发给别的屏会把人家的画面带偏）。
+        // 这条是“再说一遍我记得的”，不是刚刚谁按下的（replay）：网络上它可能比人刚按的那一下还旧。
         const mine = this.focusedIdFor(pageId);
-        if (mine) { this.postToOneClient(pageId, { type: "sessionActivated", sessionId: mine }); }
+        if (mine) { this.postToOneClient(pageId, { type: "sessionActivated", sessionId: mine, replay: true }); }
         this.sendSessionListTo(pageId);
         // 显示选项条目也是一次性要来的数据：浮层开着的时候那块屏刚连上，就重给它一份最新的
         //（「编译并重启」那颗按下去以后一直是灰的、说明停在“正在重启”，靠这条回正）。

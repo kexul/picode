@@ -4941,6 +4941,10 @@
     scheduleKeep();
   }
 
+  /** 本屏自己开口要切会话已经几次了：每发一条 switchSession 加一，跟着请求一起发出去、
+   *  后端回话时原样带回来（见下面 sessionActivated 那段）。*/
+  let switchAsked = 0;
+
   /**
    * 切到某个会话：本机先切，不等后端回话。
    *
@@ -4953,7 +4957,8 @@
     const st = sessions.get(sessionId);
     // 壳已经在、也没在加载：先切过去。没壳（没到 / 以前关掉的）就先发请求，等后端把列表推回来
     if (st && !st.loading && sessionId !== activeId) { activateSessionView(sessionId); }
-    vscode.postMessage({ type: "switchSession", sessionId: sessionId });
+    switchAsked += 1;
+    vscode.postMessage({ type: "switchSession", sessionId: sessionId, switchId: switchAsked });
   }
 
   /** 这份会话文件是不是有会话正开着（列表里把这种历史行标成“已打开”）。 */
@@ -10997,6 +11002,17 @@
     }
     if (type === "sessionActivated") {
       const id = msg.sessionId;
+      // 回话比手慢的时候（一路来回几百毫秒，手已经连按了两下）：先回来的是上一下要切的会话，
+      // 人早切到后一下那个了。照着它切回去，画面就退回前一格、停一下才过去 —— 只认最新这一下
+      // 的确认。没有 switchId 的是后端自己决定的切换（新开一个会话、打开历史会话这类）。
+      if (typeof msg.switchId === "number" && msg.switchId < switchAsked) { return; }
+      // 断线重连接回画面时，后端把“它记着的、你在看的那个”再说一遍（replay）：那一条在路上可能
+      // 比人刚按下的那一下还旧（手机上网络差的时候，切换请求还在排队重发），照着它切回去就是
+      // “切过去又跳回原来那一格”。自己这边看着的那个还在，就以自己为准，顺手把它再报给后端一遍。
+      if (msg.replay && activeId && activeId !== id && sessions.has(activeId)) {
+        requestSwitch(activeId);
+        return;
+      }
       // 会话壳要先在（列表可能晚一步）：不在就先记着，等它出现在列表里再切
       if (id && sessions.has(id)) { pendingActivateId = null; activateSessionView(id); }
       else if (id) { pendingActivateId = id; }

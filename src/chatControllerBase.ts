@@ -813,8 +813,14 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     // ---- 切换 ----
-    /** 把某块屏（默认正在说话的那块）切到某个会话：不新开、不重载，那个会话的进程一直跑着。 */
-    public setActiveSession(panelId: string, clientId: string = this.currentPageId): void {
+    /**
+     * 把某块屏（默认正在说话的那块）切到某个会话：不新开、不重载，那个会话的进程一直跑着。
+     *
+     * switchId：界面那头开口要切的那一下排第几（见 media/chat.js 的 requestSwitch），
+     * 原样带回给那块屏。回话比手慢的时候，界面上按得快的几条确认会挤在一起，
+     * 界面靠这个号认出“这条说的是我上一下要的，已经过时了”。
+     */
+    public setActiveSession(panelId: string, clientId: string = this.currentPageId, switchId?: unknown): void {
         if (!this.panels.has(panelId)) { return; }
         if (this.clientSessions.get(clientId) === panelId) { return; }
         this.clientSessions.set(clientId, panelId);
@@ -824,7 +830,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         // 先发列表，再说“你看的是哪一个”：界面上要先生出这个会话的壳，才认得这个标识
         this.broadcastSessionList(true);
         // 只告诉动手的这块屏：别的屏各看各的，不跟着切
-        this.postToOneClient(clientId, { type: "sessionActivated", sessionId: panelId });
+        this.postToOneClient(clientId, typeof switchId === "number"
+            ? { type: "sessionActivated", sessionId: panelId, switchId }
+            : { type: "sessionActivated", sessionId: panelId });
     }
 
     // ---- 某块屏该看哪个会话（它刚连上时挑 / 开一个）----
@@ -2385,8 +2393,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
                     this.postToSession(rt.id, { type: "piReady", ready: rt.piReady });
                 }
                 // 刚刚挑 / 开过的，上面那两步已经说过一次了；本来就在看的这里再说一遍
-                // （网页视图重建后它本地什么都没有，得靠这一条把画面接回去）
-                if (had) { this.postToOneClient(clientId, { type: "sessionActivated", sessionId: had }); }
+                // （网页视图重建后它本地什么都没有，得靠这一条把画面接回去）。
+                // 带 replay：这是“再说一遍我记得的”，不是刚刚谁按下的 —— 界面自己那边要是有
+                // 更后的选择（网络慢，刚按下的切换还在路上），以界面为准（见 media/chat.js 那段）。
+                if (had) { this.postToOneClient(clientId, { type: "sessionActivated", sessionId: had, replay: true }); }
                 this.onWebviewReady();
                 if (fresh) { void this.maybeAutoLoadLastSession(clientId); }
                 // webview 就绪后后台预热备用进程，后续新会话免冷启动。
@@ -2408,7 +2418,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 return;
             }
             case "switchSession":
-                if (typeof msg.sessionId === "string") { this.setActiveSession(msg.sessionId); }
+                if (typeof msg.sessionId === "string") { this.setActiveSession(msg.sessionId, this.currentPageId, msg.switchId); }
                 return;
             case "closeSession":
                 if (typeof msg.sessionId === "string") { this.closeSession(msg.sessionId); }
