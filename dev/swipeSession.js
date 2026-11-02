@@ -2,8 +2,8 @@
 /**
  * 验「手机上左右划切会话」：在对话区横着划一下就跟手走（正在看的那个跟着手指挪、
  * 下一个从另一边进来），松手过了线就真切过去；划得不够远、竖着划都不切。
- * 滑到头（最左 / 最右那个会话）不再绕到另一头：跟着拉一小段、松手把那一侧的侧边栏滑进来
- *（往左划开右边的「项目与会话」，往右划开左边的文件侧边栏）。
+ * 滑到头（最左 / 最右那个会话）不绕到另一头，也不再拉出那一侧的侧边栏：这一趟什么也不发生
+ *（画面一下都不动，两块侧边栏也不会被划出来 —— 看改动走「消息滑到底再往上拖」，见 dev/changeSheet.js）。
  *
  *   npm run web:shot -- --width 420 --height 900 --fake-pi --script dev/swipeSession.js
  *
@@ -75,13 +75,6 @@ module.exports = async (page) => {
     await page.send("第一个会话里说的话");
     await page.sleep(900);
 
-    /** 左边那一列现在长什么样：标题写着「文件与改动」、上下两格都在（拉出来的是不是个空壳就看它）。 */
-    const fileLook = () => page.eval(`
-        const title = document.getElementById("fileTitle");
-        const dirPane = document.getElementById("dirPane");
-        const changePane = document.getElementById("changePane");
-        return JSON.stringify({ title: title ? title.textContent.trim() : "", panes: !!dirPane && !!changePane });
-    `).then(JSON.parse);
     /** 某一块的盒子（横划收起那几步要用：手指得按在面板身上，不能按在遮罩上）。 */
     const rectOf = (sel) => page.eval(`
         const r = document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect();
@@ -99,26 +92,25 @@ module.exports = async (page) => {
     `));
     const cx = box.x + box.w / 2;
     const cy = box.y + box.h / 2;
+    /** 抽屉身上那条位移（translateX）的绝对值：看它跟手出来 / 收回去多少。 */
+    const pulledOf = (tr) => Math.abs(parseFloat(String(tr).replace(/[^0-9.\-]/g, "")) || 0);
 
-    // 0. 只开着一个会话时，左右两边都是头：往左划开右边的「项目与会话」、往右划开左边的文件侧边栏
+    // 0. 只开着一个会话时，左右两边都是头：两下都什么也不发生（没得换、也不弹侧边栏）
     const lone = await look("只有一个会话");
     await drag(cx + 60, cy, cx - 160, cy);
     await page.sleep(700);
     const loneRight = await look("唯一的会话往左划");
-    console.log(loneRight.panel === "开" && loneRight.active === lone.active
-        ? "    ✓ 没换会话（没得换），右边的「项目与会话」滑进来了"
-        : "    ✗ 只有一个会话时往左划该开右边的侧边栏");
-    await page.eval('document.getElementById("pickerOverlay").click(); return true;');
-    await page.sleep(600);
+    console.log(loneRight.panel === "关" && loneRight.active === lone.active && loneRight.moved.length === 0 &&
+        loneRight.drawer === "-"
+        ? "    ✓ 没换会话（没得换），右边的「项目与会话」也没被划出来"
+        : "    ✗ 只有一个会话时往左划该什么也不发生：" + JSON.stringify(loneRight));
     await drag(cx - 60, cy, cx + 160, cy);
     await page.sleep(700);
     const loneLeft = await look("唯一的会话往右划");
-    const loneTabs = await fileLook();
-    console.log(loneLeft.file === "开" && loneLeft.active === lone.active && loneTabs.title === "文件与改动" && loneTabs.panes
-        ? "    ✓ 左边的文件侧边栏拉出来了（标题是「文件与改动」，上下两格都在）"
-        : "    ✗ 只有一个会话时往右划该开左边的文件侧边栏，现在拉出来的是：" + JSON.stringify(loneTabs));
-    await page.click("#fileClose");
-    await page.sleep(600);
+    console.log(loneLeft.file === "关" && loneLeft.active === lone.active && loneLeft.moved.length === 0 &&
+        loneLeft.drawer === "-"
+        ? "    ✓ 往右划也一样：会话没挪、左边的文件侧边栏没出来"
+        : "    ✗ 只有一个会话时往右划该什么也不发生：" + JSON.stringify(loneLeft));
 
     // 再多开两个会话（切会话得有得切）。
     // 点输入框那颗加号不行：它会把闲着的那一个关掉（见 GLOSSARY 的「输入框」那一条），还是只有一个会话。
@@ -131,7 +123,8 @@ module.exports = async (page) => {
         const n = await page.eval(`return document.querySelectorAll(".pk-space-head .pk-space-add").length;`);
         if (n > 0) { break; }
     }
-    for (let i = 0; i < 2; i++) {
+    // 点一次加号没成（面板那份内容晚到 / 新会话还没挂上）就再点一次，最多试六回
+    for (let i = 0; i < 6 && (await tabCount()) < 3; i++) {
         const want = (await tabCount()) + 1;
         await page.eval(`
             const add = document.querySelector(".pk-space-head .pk-space-add");
@@ -144,15 +137,29 @@ module.exports = async (page) => {
         }
         await page.sleep(400);
     }
-    console.log("（开了三个会话：顶条上 " + await tabCount() + " 格）");
-    await page.eval(`if (window.pichatSidebar) { window.pichatSidebar.toggle(); } return true;`);
+    const count = await tabCount();
+    console.log("（开了 " + count + " 个会话：顶条上 " + count + " 格）");
+    // 面板开着会盖住对话那一片（后面几趟都在对话区上划）：收掉它再往下走
+    for (let t = 0; t < 20; t++) {
+        const state = await page.eval(`
+            return document.getElementById("pickerOverlay").classList.contains("hidden") ? "关" : "开";
+        `);
+        if (state === "关") { break; }
+        await page.eval(`if (window.pichatSidebar) { window.pichatSidebar.toggle(); } return true;`);
+        await page.sleep(500);
+    }
+    const opened = await page.eval(`
+        return document.getElementById("pickerOverlay").classList.contains("hidden") ? "关" : "开";
+    `);
+    if (opened !== "关") { throw new Error("「项目与会话」收不掉，后面几趟要在对话区上划"); }
+    await page.sleep(300);
+    // 那几个会话按「正在对话」那一列的顺序排，当前（最后开的那个）在末位。
+    // 切到倒数第二格：左右两边都有得切（滑到头是另一回事，见后面第 6 到 8 步）
+    const midIdx = count >= 3 ? 1 : 0;
+    await page.click('#sessionBar .sn-tab[data-idx="' + midIdx + '"]');
     await page.sleep(600);
-    // 三个会话按「正在对话」那一列的顺序排，当前（最后开的那个）在末位。
-    // 切到中间那一格：左右两边都有得切（滑到头是另一回事，见后面第 6 到 8 步）
-    await page.click('#sessionBar .sn-tab[data-idx="1"]');
-    await page.sleep(600);
-    const before = await look("开三个会话、切到中间那个");
-    if (!before.active || before.idx !== "1") { throw new Error("没切到中间那一格：" + JSON.stringify(before)); }
+    const before = await look("开好几个会话、切到中间那个");
+    if (!before.active || before.idx !== String(midIdx)) { throw new Error("没切到中间那一格：" + JSON.stringify(before)); }
 
     // 1. 往左划一大截（下一个），划到一半停下来看看跟手的样子
     await drag(cx + 60, cy, cx - 120, cy, 8, async () => {
@@ -194,7 +201,8 @@ module.exports = async (page) => {
         };
         return true;
     `);
-    await drag(cx - 60, cy, cx + 120, cy);
+    // 往有邻居的那一边划（只开着两个会话时，最左那一格往右划是到头了，什么也不会发生）
+    if (midIdx > 0) { await drag(cx - 60, cy, cx + 120, cy); } else { await drag(cx + 60, cy, cx - 120, cy); }
     await page.sleep(200);
     const half = await look("后端还没回话（松手 200 毫秒后）");
     await page.sleep(900);
@@ -210,69 +218,68 @@ module.exports = async (page) => {
         return true;
     `).catch(() => {});
 
-    // 6. 最右那一格再往左划：不再绕到第一格，改成把「项目与会话」跟手拉出来
-    await page.click('#sessionBar .sn-tab[data-idx="2"]');
+    // 6. 最右那一格再往左划：不再绕到第一格，也不再拉出右边的「项目与会话」—— 这一下什么也不发生
+    const lastIdx = String(count - 1);
+    await page.click('#sessionBar .sn-tab[data-idx="' + lastIdx + '"]');
     await page.sleep(600);
     const atLast = await look("切到最右那一格");
-    if (atLast.idx !== "2") { throw new Error("没切到最右那一格：" + JSON.stringify(atLast)); }
-    // 顶条还是清单的先后（当前这一张在右端，左边是那两颗点）
+    if (atLast.idx !== lastIdx) { throw new Error("没切到最右那一格：" + JSON.stringify(atLast)); }
+    // 顶条还是清单的先后（当前这一张在右端，左边是那几个点）
     const lastRow = await tabRow();
-    console.log(lastRow.order.join(",") === "0,1,2" && lastRow.cur === 2
+    const wantOrder = Array.from({ length: count }, (_, i) => String(i)).join(",");
+    console.log(lastRow.order.join(",") === wantOrder && lastRow.cur === count - 1
         ? "    ✓ 顶条按清单顺序摆（当前这个在右端）"
         : "    ✗ 顶条的先后乱了：" + JSON.stringify(lastRow));
-    const pulledOf = (tr) => Math.abs(parseFloat(String(tr).replace(/[^0-9.\-]/g, "")) || 0);
     await drag(cx + 60, cy, cx - 200, cy, 10, async () => {
         const half = await look("最右那个再往左划到一半（还没松手）");
-        // 会话那排不动，倒是右边那块面板跟着手指出来了（还差一截没到位）
-        console.log((half.moved.length === 0 && half.panel === "开" && pulledOf(half.drawer) > 10 && pulledOf(half.drawer) < box.w * 0.9)
-            ? "    ✓ 会话没挪，右边那块侧边栏跟手出来了一截" : "    ✗ 到头那一下的跟手不对");
+        // 什么都不跟手：会话不挪、右边那块面板也没被拉出来
+        console.log((half.moved.length === 0 && half.panel === "关" && half.drawer === "-")
+            ? "    ✓ 到头那一下什么都不跟手" : "    ✗ 划到头还是把右边那块拉出来了");
         await page.shot("swipe-edge-half.png");
     });
     await page.sleep(700);
     const edgeRight = await look("最右那个往左划完、松手");
-    console.log(edgeRight.panel === "开" && edgeRight.active === atLast.active && edgeRight.moved.length === 0 &&
-        pulledOf(edgeRight.drawer) < 1
-        ? "    ✓ 没换会话，右边的「项目与会话」收到位了"
-        : "    ✗ 滑到头该把右边的侧边栏拉出来");
-    await page.shot("swipe-edge-panel.png");
-    await page.eval('document.getElementById("pickerOverlay").click(); return true;');
-    await page.sleep(600);
-    const closed = await look("点遮罩收起来");
-    console.log(closed.panel === "关" && closed.drawer === "-" ? "    ✓ 收得干净（临时样式也摘了）" : "    ✗ 收起后还留着抽屉的位置");
+    console.log(edgeRight.panel === "关" && edgeRight.active === atLast.active && edgeRight.moved.length === 0 &&
+        edgeRight.drawer === "-"
+        ? "    ✓ 没换会话，右边的「项目与会话」也没开"
+        : "    ✗ 滑到头该什么也不发生：" + JSON.stringify(edgeRight));
 
-    // 7. 只慢慢拉一小截（没过线又没甩）：滑回去，什么也不开
+    // 7. 慢慢拉一小截也一样：什么也不开
     await slowDrag(cx + 60, cy, cx + 30, cy, 6, 70);
     await page.sleep(800);
     const edgeTiny = await look("最右那个只慢慢往左拉一小截");
     console.log(edgeTiny.panel === "关" && edgeTiny.active === atLast.active && edgeTiny.moved.length === 0
-        ? "    ✓ 没开侧边栏，抽屉滑回去了"
-        : "    ✗ 拉得不够也开了 / 没滑回去");
+        ? "    ✓ 也没开侧边栏"
+        : "    ✗ 拉了一小截也开了 / 会话挪了");
 
-    // 8. 最左那一格再往右划：把左边的文件侧边栏滑进来
+    // 8. 最左那一格再往右划：也不把左边的文件侧边栏滑进来
     await page.click('#sessionBar .sn-tab[data-idx="0"]');
     await page.sleep(600);
     const atFirst = await look("切到最左那一格");
     if (atFirst.idx !== "0") { throw new Error("没切到最左那一格：" + JSON.stringify(atFirst)); }
     // 最左那个会话就在最左边：它左边不该还摆着别的格（不然看着像“还往左划得过去”）
     const firstRow = await tabRow();
-    console.log(firstRow.order.join(",") === "0,1,2" && firstRow.cur === 0
+    console.log(firstRow.order.join(",") === wantOrder && firstRow.cur === 0
         ? "    ✓ 顶条按清单顺序摆（当前这个在左端，左边没有别的格）"
         : "    ✗ 最左那一格左边还摆着别的格：" + JSON.stringify(firstRow));
     await drag(cx - 60, cy, cx + 200, cy, 10, async () => {
         const half = await look("最左那个再往右划到一半（还没松手）");
-        console.log((half.moved.length === 0 && half.file === "开" && pulledOf(half.drawer) > 10 && pulledOf(half.drawer) < box.w * 0.9)
-            ? "    ✓ 会话没挪，左边那一列跟手出来了一截" : "    ✗ 往右划到头那一下的跟手不对");
+        console.log((half.moved.length === 0 && half.file === "关" && half.drawer === "-")
+            ? "    ✓ 会话没挪，左边那一列也没出来" : "    ✗ 往右划到头那一下还是把左边那一列拉出来了");
         await page.shot("swipe-edge-file-half.png");
     });
     await page.sleep(700);
     const edgeLeft = await look("最左那个往右划完、松手");
-    const edgeTabs = await fileLook();
-    console.log(edgeLeft.file === "开" && edgeLeft.active === atFirst.active && edgeLeft.moved.length === 0 &&
-        pulledOf(edgeLeft.drawer) < 1 && edgeTabs.title === "文件与改动" && edgeTabs.panes
-        ? "    ✓ 没换会话，左边的文件侧边栏拉出来了（标题是「文件与改动」，上下两格都在）"
-        : "    ✗ 滑到头该把左边的文件侧边栏拉出来，现在拉出来的是：" + JSON.stringify(edgeTabs));
+    console.log(edgeLeft.file === "关" && edgeLeft.active === atFirst.active && edgeLeft.moved.length === 0 &&
+        edgeLeft.drawer === "-"
+        ? "    ✓ 没换会话，左边的文件侧边栏也没开"
+        : "    ✗ 滑到头该什么也不发生，现在是：" + JSON.stringify(edgeLeft));
 
-    // 9. 左边那一列开着：在它身上往左划一把就收起来
+    // 9. 左边那一列开着：在它身上往左划一把就收起来（这一列现在只能从顶条那颗按钮开）
+    await page.click("#fileSidebarBtn");
+    await page.sleep(700);
+    const fileOpened = await look("点顶条那颗按钮把文件侧边栏开出来");
+    if (fileOpened.file !== "开") { throw new Error("文件侧边栏没开出来：" + JSON.stringify(fileOpened)); }
     const fileBox = await rectOf("#fileSidebar");
     const fileMidY = fileBox.y + fileBox.h / 2;
     await drag(fileBox.x + fileBox.w - 40, fileMidY, fileBox.x + fileBox.w - 260, fileMidY, 10, async () => {
@@ -287,8 +294,8 @@ module.exports = async (page) => {
         ? "    ✓ 往左划把文件侧边栏收起来了"
         : "    ✗ 在文件侧边栏上横着一划没收掉");
 
-    // 10. 再拉出来，然后只轻轻划一小截（没过线）：弹回原位，这一列还开着
-    await drag(cx - 60, cy, cx + 200, cy, 10);
+    // 10. 再开出来，然后只轻轻划一小截（没过线）：弹回原位，这一列还开着
+    await page.click("#fileSidebarBtn");
     await page.sleep(700);
     const fileAgain = await rectOf("#fileSidebar");
     const fileAgainY = fileAgain.y + fileAgain.h / 2;
@@ -302,11 +309,11 @@ module.exports = async (page) => {
     await page.sleep(600);
 
     // 11. 右边那块（项目与会话）也一样：在它身上往右划一把就收起来
-    await page.click('#sessionBar .sn-tab[data-idx="2"]');
+    await page.click('#sessionBar .sn-tab[data-idx="' + lastIdx + '"]');
     await page.sleep(600);
-    await drag(cx + 60, cy, cx - 200, cy, 10);
+    await page.click("#browserMenuBtn");
     await page.sleep(800);
-    const panelOpened = await look("先把「项目与会话」拉出来");
+    const panelOpened = await look("先把「项目与会话」开出来");
     if (panelOpened.panel !== "开") { throw new Error("第 11 步没把它拉出来：" + JSON.stringify(panelOpened)); }
     const panelBox = await rectOf("#pickerPanel");
     const panelMidY = panelBox.y + panelBox.h / 2;

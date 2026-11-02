@@ -4916,6 +4916,8 @@
     activeId = id;
     // 左边那一列看的是会话目录里的文件：换了会话就收成一句提示
     resetFileSidebarForSession();
+    // 底下那一块看的是这个会话目录跟最后一次提交差了什么：也跟着换（开着才重问）
+    resetChangeSheetForSession();
     // 看过了：那颗“这一轮跑完了”的小绿点收掉
     const shown = sessions.get(id);
     if (shown && shown.turnDone) { shown.turnDone = false; }
@@ -5045,7 +5047,7 @@
   /**
    * 手机上左右划切会话用哪一个：也是那一段的行序，但只落在主会话上（子会话跳过，
    * 跟顶条那一排只摆主会话一个道理）。走到头就返回 null —— 不再绕回另一头，
-   * 那一侧要开的是侧边栏（见 swipeMove）。
+   * 那一下什么也不发生（见 swipeMove）。
    */
   function sessionIdBySwipe(direction) {
     const items = openSessionItems();
@@ -5056,7 +5058,7 @@
     let i = curIdx < 0 ? (delta > 0 ? -1 : items.length) : curIdx;
     for (;;) {
       i += delta;
-      // 走到头了：不绕回另一头（那一头是侧边栏的地盘，见 swipeMove）
+      // 走到头了：不绕回另一头（那一下什么也不发生，见 swipeMove）
       if (i < 0 || i >= items.length) { return null; }
       if (items[i].sessionId === activeId) { continue; }
       if (!items[i].depth) { return items[i].sessionId; }
@@ -5076,10 +5078,9 @@
   // 切过去那一刻位置由后端说了算：松手先跟后端要，它回话说“切到这个了”时再从手指离开的
   // 位置滑完那一小段（见 mountActiveSession 开头那段）。
   //
-  // 走的是主会话：派出去的子会话跳过（顶条那一排摆的也是主会话）。走到头不绕回来了 ——
-  // 最右那一个再往左划、最左那一个再往右划，没有下一个会话可换，改成把那一侧的侧边栏跟手
-  // 拉出来（右：项目与会话 / 左：文件侧边栏，见下面 drawerDragFromClosed）；宽窗里那两块是常驻的，
-  // 没有“拉出来”这回事，滑到头就当没这一趟。
+  // 走的是主会话：派出去的子会话跳过（顶条那一排摆的也是主会话）。走到头就停 ——
+  // 最右那一个再往左划、最左那一个再往右划，没有下一个会话可换，这一趟什么也不发生
+  //（不跟手、也不弹出侧边栏：看改动走底下那一块，见“消息滑到底再往上拖”那段）。
   const SWIPE_LOCK_PX = 6;       // 横向动这么多就认成“左右划”（快划时那段“没反应”就是它，越小越跟手）
   const SWIPE_CANCEL_PX = 10;    // 竖着动这么多、而且比横向多：这是滚动，这一趟不管了
   const SWIPE_FINISH_MS = 180;   // 松手后滑完的那一小段
@@ -5104,70 +5105,17 @@
     return (dx < 0 ? -1 : 1) * (cap + (a - cap) * 0.25);
   }
 
-  /**
-   * 划到头时这一侧能拉出来哪一块侧边栏（空串 = 这一侧没有，滑到头就当没这一趟）。
-   * 往左划（next）是右边那块「项目与会话」，往右划（prev）是左边的文件侧边栏。
-   * 宽窗里那两块是常驻的一列，不滑入；已经开着的也不用再拉（窄窗的桌面窗口里它只盖住一半，
-   * 对话还在旁边）。插件里的对话面板没有文件侧边栏（见 buildFileSidebar）。
-   */
-  function swipeEdgeSidebar(dir) {
-    if (drawerDrag || Date.now() < drawerClosingUntil) { return ""; }
-    if (dir === "next") { return (sidebarWide() || pickerModalOpen()) ? "" : "right"; }
-    if (!fileSidebar.root || fileSidebarWide() || fileSidebar.open) { return ""; }
-    return "left";
-  }
-
-  // ==================== 侧边栏跟手：划到头拉出来 / 开着时横着一划收起来 ====================
+  // ==================== 侧边栏开着时横着一划，把它推回去 ====================
   // 窄窗里这两块本来就是从边上滑进来的（见 chat.css 的 pk-drawer-in / file-drawer-in），
-  // 只不过平时那一段是 170 毫秒自己跑完的。有手指按着的时候位置归手指管：滑入那段动画先关掉
-  //（.pk-pulling / body.file-drag），面板跟着手指 1:1 挪、遮罩跟着浓淡；松手过了线就滑完剩下
-  // 那一点、留在该在的地方，不够就滑回原位。
+  // 平时那一段是 170 毫秒自己跑完的。有手指按着的时候位置归手指管：面板跟着手指 1:1 挪、
+  // 遮罩跟着浓淡；松手过了线就滑完剩下那一点、收起来，不够就滑回原位。
   //
-  // 两个来处都走这一套：
-  //   · 划到头（最右 / 最左那个会话再往外划）：那一侧的侧边栏跟着手指出来（见 swipeMove）；
-  //   · 它开着的时候在上面横着一划：跟着手指滑出去（见 wireDrawerCloseSwipe）。
-  //
-  // 内容是各自本来那一套去要的：右边那块跟点 <<< 一样发一条 openWorkspace（后端要扫一眼磁盘，
-  // 回来之前先摆上一块空壳，见 showWorkspaceShell），左边那块跟点顶条那颗按钮一样先开出来、再取目录。
-  /** 正跟着手指挪的那块侧边栏（见下面 FromClosed / FromOpen / Place / Finish）。 */
+  // 只有这一个来处：它开着的时候在上面横着一划（见 wireDrawerCloseSwipe）。
+  // 划到头不再拉出侧边栏了（那是另一条已经拿掉的路）。
+  /** 正跟着手指挪的那块侧边栏（见下面 FromOpen / Place / Finish）。 */
   let drawerDrag = null;
   /** 滑回去那一段还没走完（到这一刻为止不接新的一趟，不然那一条收尾会把新的一趟收掉）。 */
   let drawerClosingUntil = 0;
-
-  /** 认成“到头了”：把那一块露出来、摆到屏幕外那个位置，等手指来拉。 */
-  function drawerDragFromClosed(kind) {
-    let el = null;
-    let sign = 1;
-    let backdrop = null;
-    if (kind === "right") {
-      // 内容先要去（跟点 <<< 那条路一样）；回来之前先把空壳摆上（上半「正在对话」本地就画得出来）
-      if (!pickerModalOpen()) {
-        emptyWorkspace = "";
-        showWorkspaceShell();
-        vscode.postMessage({ type: "openWorkspace", expanded: expandedDirsForHost() });
-      }
-      closeFileSidebarForRightSidebar();
-      const root = modalView.root;
-      root.classList.remove("hidden");
-      root.classList.add("pk-drawer", "pk-workspace", "pk-pulling");
-      if (modalView.title) { modalView.title.textContent = "项目与会话"; }
-      el = modalView.panel;
-      sign = 1;
-    } else {
-      // 跟点顶条那颗按钮完全同一条路（三格标签、目录清单都由 open 那一套摆好），
-      // 只是滑入那段动画这会儿归手指管。注意别走 prepareFileSidebar（那是点文件链接前那条：
-      // 它先把「目录」那一格塞上，打开那一套再看就以为已经摆过了，三格标签反而不建）。
-      closeRightSidebarForFile();
-      document.body.classList.add("file-drag");
-      setFileSidebarOpen(true);
-      el = fileSidebar.root;
-      sign = -1;
-      backdrop = document.getElementById("fileBackdrop");
-    }
-    const w = el ? el.getBoundingClientRect().width : 0;
-    drawerDrag = { kind, el, w, sign, backdrop, t0: Date.now(), pulled: 0 };
-    drawerDragPlace(0);
-  }
 
   /**
    * 这一块已经开着、人在上面横着一划：把跟手接过来（位置从它现在待的地方算起，也就是 0）。
@@ -5198,14 +5146,6 @@
     }
   }
 
-  /** 拉出来那一趟松手：拉过四成（或者甩得快）就留下，不够就滑回去。 */
-  function drawerOutPast() {
-    const d = drawerDrag;
-    if (!d || !d.w) { return false; }
-    const ms = Math.max(1, Date.now() - d.t0);
-    return d.pulled >= d.w * 0.4 || (d.pulled >= 40 && d.pulled / ms >= 0.5);
-  }
-
   /** 收起来那一趟松手：推出去三成五（或者甩得快）就收，不够就滑回原位。 */
   function drawerBackPast() {
     const d = drawerDrag;
@@ -5230,13 +5170,9 @@
     }
     setTimeout(() => {
       if (open) {
+        // 推出去又弹回来：位置交回样式表（它本来就开着，inline 摘掉就是它原来的位置）
         d.el.style.transition = "";
-        // 从收着拉出来的那一趟：位置钉在 0（inline 钉着，别让样式表里那段滑入动画再跑一遍，
-        // 见 clearPullStyles）；本来就是开着的那一趟（横划收起来又弹回去）交回样式表就行
-        const fromClosed = d.kind === "right"
-          ? modalView.root.classList.contains("pk-pulling")
-          : document.body.classList.contains("file-drag");
-        d.el.style.transform = fromClosed ? "translateX(0px)" : "";
+        d.el.style.transform = "";
         return;
       }
       // 滑回去了：这会儿再收起来（收起那一下会顺手把这一趟的临时样式摘掉）。
@@ -5305,10 +5241,9 @@
     return false;
   }
 
-  /** 拉出来的那一趟留下的临时样式（位移、遮罩、临时关掉的滑入动画）：收起时一并摘掉。 */
+  /** 跟手那一趟留下的临时样式（位移、遮罩）：收起时一并摘掉。 */
   function clearPullStyles(kind) {
     if (kind === "left") {
-      document.body.classList.remove("file-drag");
       if (fileSidebar.root) {
         fileSidebar.root.style.transition = "";
         fileSidebar.root.style.transform = "";
@@ -5317,7 +5252,6 @@
       if (backdrop) { backdrop.style.opacity = ""; }
       return;
     }
-    modalView.root.classList.remove("pk-pulling");
     modalView.root.style.backgroundColor = "";
     modalView.panel.style.transition = "";
     modalView.panel.style.transform = "";
@@ -5373,13 +5307,6 @@
     } catch (e) { /* 拿不到就算了 */ }
   }
 
-  /**
-   * 划到头了：没有要进来的壳，那一侧的侧边栏跟着手指拉出来（见 drawerDragFromClosed）。
-   */
-  function swipeBeginEdge(s) {
-    drawerDragFromClosed(s.edge);
-  }
-
   /** 跟着手指摆：正在看的那个挪 eff，进来的那个紧贴在它旁边（隔一个整屏）。 */
   function swipePlace(s) {
     const w = s.width;
@@ -5421,7 +5348,7 @@
     swipe = {
       finger: finger, x0: x, y0: y, t0: Date.now(), lock: "", dir: "", dx: 0, eff: 0,
       width: swipeWidth(), fromView: view, toView: null, to: null, toId: "", pointerId: 0,
-      edge: "",
+      dead: false,   // 到头了：这一下不换会话也不摆什么，但仍旧从浏览器手里拿过来（见 swipeMove）
     };
     return true;
   }
@@ -5451,19 +5378,14 @@
         swipeBegin(s);
         tabSwipeBegin(s);
       } else {
-        // 这一侧没有下一个主会话（到头了）：那一侧的侧边栏跟着手指拉出来（见 drawerDragFromClosed）；
-        // 宽窗里那两块是常驻的，滑到头就当没这一趟。
-        const side = swipeEdgeSidebar(s.dir);
-        if (!side) { swipe = null; return false; }
-        s.edge = side;
-        swipeBeginEdge(s);
+        // 这一侧没有下一个主会话（到头了）：这一趟什么也不发生（不跟手、也不弹侧边栏）。
+        // 但这一下仍旧要从浏览器手里拿过来（返回 true 让调用方 preventDefault）：
+        // 不拦的话，横着划会变成浏览器自己的“后退 / 前进”手势，整页就翻到别处去了。
+        s.dead = true;
       }
     }
     s.dx = dx;
-    if (s.edge) {
-      drawerDragPlace(Math.abs(dx));
-      return true;
-    }
+    if (s.dead) { return true; }
     s.eff = swipeOffset(dx, s.width);
     swipePlace(s);
     tabSwipePlace(s);
@@ -5598,8 +5520,7 @@
   function swipeAbort() {
     const s = swipe;
     swipe = null;
-    if (!s || s.lock !== "x") { return; }
-    if (s.edge) { drawerDragFinish(false); return; }
+    if (!s || s.lock !== "x" || s.dead) { return; }
     swipeSpringBack(s);
   }
 
@@ -5607,8 +5528,7 @@
   function swipeEnd(cancelled) {
     const s = swipe;
     swipe = null;
-    if (!s || s.lock !== "x") { return; }
-    if (s.edge) { swipeEndAtEdge(cancelled); return; }
+    if (!s || s.lock !== "x" || s.dead) { return; }
     if (cancelled || !swipePast(s)) { swipeSettleMs(s); swipeSpringBack(s); return; }
     swipeSettleMs(s);
     // 松手：一边跟后端要那个会话，一边当场把画面滑到位。
@@ -5631,13 +5551,6 @@
     vscode.postMessage({ type: "switchSession", sessionId: s.toId });
   }
 
-  /**
-   * 划到头松手：拉得够远就把那一块收下来（滑完剩下那一点），不够就滑回屏幕外、收起来。
-   */
-  function swipeEndAtEdge(cancelled) {
-    drawerDragFinish(!cancelled && drawerOutPast());
-  }
-
   messagesEl.addEventListener("touchend", (e) => {
     const s = swipe;
     if (!s) { return; }
@@ -5652,6 +5565,321 @@
     if (!t || t.identifier !== s.finger) { return; }
     swipeEnd(true);
   });
+
+  // ==================== 消息滑到底再往上拖：把「改动」那一块拖出来 ====================
+  // 里面就是这个会话目录跟最后一次提交差了什么（跟左边文件侧边栏下格「改动」是同一份清单），
+  // 从屏幕底下升起来：对话让出下面一截、缩在上面，两块各占一块，谁也不盖谁。
+  // 起手：消息已经滚到最底下，再往上拖（带阻尼：走的路比手指短），拖过那一条线（或者甩得快）
+  // 就留在那儿，不够就滑回去。开着的时候拖着它头上那一条往下拉就收回去（点那颗叉也行）。
+  // 左右划那条路不往这儿带了：划到头就停（见上面那段）。
+  //
+  // 这一块只长在浏览器页面里：插件里的对话面板没有文件侧边栏（见 buildFileSidebar），
+  // 也没有问 git 的那条路。
+  const CHANGE_SHEET_RATIO = 0.45;    // 最多占对话那一列的 45%（跟左边下格「改动」一个规矩）
+  const CHANGE_SHEET_SLIDE_MS = 180;  // 松手以后滑到位的那一小段
+  const CHANGE_SHEET_DAMPING = 0.5;   // 跟手：手指往上走 2 像素，这一块涨 1 像素
+  const CHANGE_SHEET_OPEN_PX = 64;    // 拖到它长这么高（手指走了两倍的路）就认，松手就留下
+  const changeSheet = {
+    root: null, bar: null, body: null,
+    open: false,     // 现在是开着的那一份（松手过线以后为 true，收起来那一刻改回 false）
+    height: 0,       // 现在的高度（像素）
+    seq: 0,          // 第几次问清单：切会话 / 收起以后，晚到的那条回应不算数
+    drawn: false,    // 手上这份清单已经画出来了（换会话就作废）
+    pull: null,      // 正跟着手指往上拖的那一趟（开起来）
+    closeDrag: null, // 正拖着头上那一条往下拉的那一趟（收回去）
+    timer: 0,
+  };
+
+  /** 这一块最高能到多少：对话那一列的 45%。 */
+  function changeSheetCap() {
+    const column = document.getElementById("chatColumn");
+    const h = column && column.clientHeight ? column.clientHeight : window.innerHeight;
+    return Math.max(96, Math.round(h * CHANGE_SHEET_RATIO));
+  }
+
+  /** 跟着手指长高：一半跟手；过了封顶那一段再收紧（手底有点阻力）。 */
+  function changeSheetPullHeight(px) {
+    const cap = changeSheetCap();
+    const want = px * CHANGE_SHEET_DAMPING;
+    if (want <= cap) { return Math.round(want); }
+    return Math.round(cap + (want - cap) * 0.2);
+  }
+
+  /**
+   * 把高度摆上（ms > 0 就滑过去）。高度归零以后把这一块整个藏起来（不占版面）。
+   * 摆之前那个窗格要是贴着底的，摆完仍旧贴着底：底下那几行不该被这一块顶出去（或者留一截空）。
+   */
+  function changeSheetSetHeight(h, ms) {
+    const s = changeSheet;
+    if (!s.root) { return; }
+    const pane = activePaneEl();
+    const pin = !!pane && paneAtBottom(pane);
+    s.height = Math.max(0, Math.round(h));
+    clearTimeout(s.timer);
+    if (s.height > 0) { s.root.classList.remove("hidden"); }
+    s.root.style.transition = ms ? "height " + ms + "ms ease-out" : "none";
+    s.root.style.height = s.height + "px";
+    if (pin) { pane.scrollTop = pane.scrollHeight; }
+    if (!ms) { return; }
+    s.timer = setTimeout(() => {
+      if (!s.root) { return; }
+      s.root.style.transition = "";
+      if (s.height <= 0) { s.root.classList.add("hidden"); }
+    }, ms + 40);
+  }
+
+  /**
+   * 松手以后停在哪儿：按内容占高（清单长了就在它自己里滚），最多到封顶那一条线。
+   * 量的时候临时把高度放开成 auto、封顶压成 cap（正文那一格的高度是压着的，量 scrollHeight 只会
+   * 量到它自己那么高，量不准），量完当场摆回去 —— 同一个任务里画不到中间那一下。
+   */
+  function changeSheetRestingHeight() {
+    const s = changeSheet;
+    if (!s.root) { return 0; }
+    const cap = changeSheetCap();
+    const barH = s.bar.offsetHeight;
+    const wasHidden = s.root.classList.contains("hidden");
+    s.root.classList.remove("hidden");
+    s.root.style.transition = "none";
+    s.root.style.maxHeight = cap + "px";
+    s.root.style.height = "auto";
+    const want = Math.round(s.root.getBoundingClientRect().height);
+    s.root.style.maxHeight = "";
+    s.root.style.height = s.height + "px";
+    if (wasHidden) { s.root.classList.add("hidden"); }
+    return Math.max(barH, Math.min(want, cap));
+  }
+
+  /** 这一格里的那行小字（还没取回来 / 取不回来 / 没有改动）。 */
+  function showSheetNote(text) {
+    const s = changeSheet;
+    if (!s.body) { return; }
+    s.body.innerHTML = "";
+    const note = document.createElement("div");
+    note.className = "file-note";
+    note.textContent = text;
+    s.body.appendChild(note);
+  }
+
+  /** 问一遍清单（会话目录跟最后一次提交差了什么），回来画上。 */
+  function fetchSheetChanges() {
+    const s = changeSheet;
+    if (!s.root) { return; }
+    const seq = ++s.seq;
+    fetch(changesUrl()).then(async (resp) => {
+      if (seq !== s.seq) { return; }
+      if (resp.status !== 200) {
+        // 真看不了（会话不在了之类）：没画过就把后端那句话摆上；画过的留着旧的那一份
+        if (!s.drawn) { showSheetNote(await readDeadResponse(resp)); }
+        return;
+      }
+      const data = await resp.json().catch(() => null);
+      if (seq !== s.seq) { return; }
+      drawSheetChanges(!(data && data.vcs === false), data && Array.isArray(data.changes) ? data.changes : []);
+    }).catch(() => {
+      if (seq !== s.seq || s.drawn) { return; }
+      showSheetNote("读不出来：连不上后端。");
+    });
+  }
+
+  /** 把清单画上：一行一个文件（点了看那份 diff，跟左边那一格一个样子）。 */
+  function drawSheetChanges(vcs, list) {
+    const s = changeSheet;
+    s.drawn = true;
+    s.body.innerHTML = "";
+    if (!vcs) {
+      showSheetNote("这个会话目录不在 git 仓库里，没有改动可看。");
+    } else if (!list.length) {
+      showSheetNote(FILE_SIDEBAR_CHANGES_HINT);
+    } else {
+      list.forEach((item) => { if (item && item.path) { s.body.appendChild(changeRow(item, true)); } });
+    }
+    if (s.open) { changeSheetSetHeight(changeSheetRestingHeight(), 140); }
+  }
+
+  /** 手上还没有清单就先写上那句话、去问一遍（拖起来那一刻、开起来那一刻都走它，问过就不再问）。 */
+  function changeSheetLoad() {
+    const s = changeSheet;
+    if (!s.root || s.drawn) { return; }
+    showSheetNote("正在读取…");
+    fetchSheetChanges();
+  }
+
+  /** 手里那份作废、重问一遍（换了会话、后端说改动变了都走它）。收着的时候不用问：等下一趟。 */
+  function reloadChangeSheet() {
+    const s = changeSheet;
+    if (!s.root) { return; }
+    s.drawn = false;
+    s.body.innerHTML = "";
+    if (!s.open) { return; }
+    changeSheetLoad();
+    changeSheetSetHeight(changeSheetRestingHeight(), CHANGE_SHEET_SLIDE_MS);
+  }
+
+  /** 开起来（往上拖过线以后走这儿）：拖的时候已经问回来的那份直接摆上，没回来就接着等它。 */
+  function openChangeSheet() {
+    const s = changeSheet;
+    if (!s.root || s.open) { return; }
+    s.open = true;
+    s.root.classList.remove("hidden");
+    changeSheetLoad();
+    changeSheetSetHeight(changeSheetRestingHeight(), CHANGE_SHEET_SLIDE_MS);
+  }
+
+  /** 收起来：滑下去，滑完把这一块藏起来（不占版面）。 */
+  function closeChangeSheet() {
+    const s = changeSheet;
+    if (!s.root) { return; }
+    s.open = false;
+    s.seq += 1;   // 还等着的那条回应别再画进来
+    changeSheetSetHeight(0, CHANGE_SHEET_SLIDE_MS);
+  }
+
+  /** 换了会话：这一块看的是那个会话目录的改动，开着就换内容（收着就等下一趟再问）。 */
+  function resetChangeSheetForSession() {
+    const s = changeSheet;
+    if (!s.root || !s.open) { return; }
+    reloadChangeSheet();
+  }
+
+  /** 正在看的那个会话的窗格（滚动的就是它）。 */
+  function activePaneEl() {
+    const cur = activeSession();
+    return cur ? cur.paneEl : null;
+  }
+
+  /** 这个窗格是不是已经贴到底了（差一两像素也算：手机上惯性滚完常差那么一点）。 */
+  function paneAtBottom(pane) {
+    return pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 2;
+  }
+
+  // 往上拖那一趟：从消息区起手。竖着往上走、消息又已经到底了，就把这一下从浏览器手里拿过来
+  //（preventDefault），跟着手指把这一块拉起来。横着 / 往下走的仍旧交还给上面那两套（切会话、滚动）。
+  messagesEl.addEventListener("touchstart", (e) => {
+    const s = changeSheet;
+    if (!s.root || s.open || s.pull || e.touches.length !== 1) { return; }
+    const pane = activePaneEl();
+    if (!pane || !paneAtBottom(pane)) { return; }
+    if (swipeOnControl(e.target)) { return; }   // 按在按钮 / 链接 / 图上：不动
+    const t = e.touches[0];
+    s.pull = { finger: t.identifier, x0: t.clientX, y0: t.clientY, t0: Date.now(), lock: false, height: 0 };
+  }, { passive: true });
+
+  messagesEl.addEventListener("touchmove", (e) => {
+    const s = changeSheet;
+    const p = s.pull;
+    if (!p) { return; }
+    const t = e.touches.length === 1 ? e.touches[0] : null;
+    if (!t || t.identifier !== p.finger) { s.pull = null; return; }
+    const dy = t.clientY - p.y0;   // 往上拖是负的
+    const dx = t.clientX - p.x0;
+    if (!p.lock) {
+      // 往下（回看上面的内容）、横着（切会话）：都不是这一趟
+      if (dy > SWIPE_CANCEL_PX || Math.abs(dx) > SWIPE_CANCEL_PX) { s.pull = null; return; }
+      if (-dy < SWIPE_LOCK_PX || -dy < Math.abs(dx)) { return; }
+      p.lock = true;
+      swipe = null;   // 横着那一趟这一下不算了（反正也没到线）
+      changeSheetLoad();   // 这一趟真拉起来了：先去问清单，松手时手上就有东西
+    }
+    if (e.cancelable) { e.preventDefault(); }
+    p.height = changeSheetPullHeight(-dy);
+    changeSheetSetHeight(p.height, 0);
+  }, { passive: false });
+
+  const changeSheetPullDone = (e, cancelled) => {
+    const s = changeSheet;
+    const p = s.pull;
+    if (!p) { return; }
+    const t = e.changedTouches && e.changedTouches[0];
+    if (!t || t.identifier !== p.finger) { return; }
+    s.pull = null;
+    if (!p.lock) { return; }
+    const ms = Math.max(1, Date.now() - p.t0);
+    // 过线：长到那一条线（矮窗里按这一块能到的高度的四成算，别让封顶高的窗要多拖一大截），
+    // 或者甩得快 —— 甩的那条也按这个高度算（跟手走的就是它）
+    const line = Math.min(CHANGE_SHEET_OPEN_PX, changeSheetCap() * 0.4);
+    const past = !cancelled && (p.height >= line || (p.height >= 30 && p.height / ms >= 0.2));
+    if (!past) { changeSheetSetHeight(0, CHANGE_SHEET_SLIDE_MS); return; }
+    openChangeSheet();   // 松手滑到内容该有的高度（不够那个高度就滑回去一点）
+  };
+  messagesEl.addEventListener("touchend", (e) => changeSheetPullDone(e, false));
+  messagesEl.addEventListener("touchcancel", (e) => changeSheetPullDone(e, true));
+
+  /**
+   * 拖着头上那一条往下拉，这一块就跟着手指下去（带阻尼），松手过了三成就收回去。
+   * 按在那颗叉上是它的活（见下面那段），不算拖。
+   */
+  function wireChangeSheetCloseDrag() {
+    const s = changeSheet;
+    const bar = s.bar;
+    if (!bar) { return; }
+    const finish = (e, cancelled) => {
+      const d = s.closeDrag;
+      if (!d) { return; }
+      const t = e.changedTouches && e.changedTouches[0];
+      if (!t || t.identifier !== d.finger) { return; }
+      s.closeDrag = null;
+      if (!d.lock) { return; }
+      const moved = d.h0 - s.height;   // 往下拉了多少
+      const ms = Math.max(1, Date.now() - d.t0);
+      const past = !cancelled && (moved >= d.h0 * 0.3 || (moved >= 40 && moved / ms >= 0.3));
+      if (past) { closeChangeSheet(); return; }
+      changeSheetSetHeight(changeSheetRestingHeight(), CHANGE_SHEET_SLIDE_MS);
+    };
+    bar.addEventListener("touchstart", (e) => {
+      if (!s.open || s.closeDrag || e.touches.length !== 1) { return; }
+      if (swipeOnControl(e.target)) { return; }
+      const t = e.touches[0];
+      s.closeDrag = { finger: t.identifier, y0: t.clientY, x0: t.clientX, t0: Date.now(), lock: false, h0: s.height };
+    }, { passive: true });
+    bar.addEventListener("touchmove", (e) => {
+      const d = s.closeDrag;
+      if (!d) { return; }
+      const t = e.touches.length === 1 ? e.touches[0] : null;
+      if (!t || t.identifier !== d.finger) { s.closeDrag = null; return; }
+      const dy = t.clientY - d.y0;
+      const dx = t.clientX - d.x0;
+      if (!d.lock) {
+        if (dy < -SWIPE_CANCEL_PX || Math.abs(dx) > SWIPE_CANCEL_PX) { s.closeDrag = null; return; }
+        if (dy < SWIPE_LOCK_PX || dy < Math.abs(dx)) { return; }
+        d.lock = true;
+      }
+      if (e.cancelable) { e.preventDefault(); }
+      changeSheetSetHeight(Math.max(0, d.h0 - dy), 0);
+    }, { passive: false });
+    bar.addEventListener("touchend", (e) => finish(e, false));
+    bar.addEventListener("touchcancel", (e) => finish(e, true));
+  }
+
+  // 这一块搭在对话那一列里、消息区下面（#inputArea 上面）：它长起来，消息区就跟着矮下去。
+  (function buildChangeSheet() {
+    if (IN_WEBVIEW) { return; }
+    const column = document.getElementById("chatColumn");
+    const inputArea = document.getElementById("inputArea");
+    if (!column || !inputArea) { return; }
+    const root = document.createElement("div");
+    root.id = "changeSheet";
+    root.className = "hidden";
+    root.innerHTML =
+      '<div id="changeSheetBar">' +
+        '<span class="cs-title">改动</span>' +
+        // 中间那颗小横条是抓的地方：拖着这一条往下拉就收回去（见 wireChangeSheetCloseDrag）
+        '<span class="cs-grip"></span>' +
+        '<button id="changeSheetClose" type="button" title="收起" aria-label="收起">' + ICONS["close-bold"] + '</button>' +
+      '</div>' +
+      '<div id="changeSheetBody"></div>';
+    column.insertBefore(root, inputArea);
+    changeSheet.root = root;
+    changeSheet.bar = root.querySelector("#changeSheetBar");
+    changeSheet.body = root.querySelector("#changeSheetBody");
+    root.querySelector("#changeSheetClose").addEventListener("click", closeChangeSheet);
+    wireChangeSheetCloseDrag();
+    // 窗口大小变了：开着的话按新窗口重新夹一下（最多 45% 那条线跟着窗口走）
+    window.addEventListener("resize", () => {
+      if (!changeSheet.open || changeSheet.pull || changeSheet.closeDrag) { return; }
+      changeSheetSetHeight(changeSheetRestingHeight(), 0);
+    });
+  })();
 
   /**
    * 会话行鼠标停上去的那行提示：标题 + 它的完整目录。
@@ -6109,8 +6337,7 @@
 
   /** 收掉一块面板、把它那份状态清干净（哪一块由 view 指定，默认是浮层那份）。 */
   function hidePicker(view = modalView) {
-    // 划到头跟手拉出来的那一趟（见“划到头：把那一侧的侧边栏跟手拉出来”那段）：
-    // 收起时把它的临时样式（位移、遮罩、临时关掉的滑入动画）一并摘掉，下次点开照旧滑进来
+    // 跟手那一趟留下的临时样式（位移、遮罩）：收起时一并摘掉，下次点开照旧滑进来
     if (view === modalView) { clearPullStyles("right"); }
     // 常驻那一列的几颗类写在 HTML 里（staticChrome），收起时不摘：它下次展开还要用同一套版式
     if (!view.staticChrome) {
@@ -6381,7 +6608,7 @@
   }
 
   /**
-   * 窄窗里先把「项目与会话」这块空壳摆上：点 <<<（或者划到头把它拉出来）那一刻就滑出来，不等一个来回。
+   * 窄窗里先把「项目与会话」这块空壳摆上：点 <<< 那一刻就滑出来，不等一个来回。
    * 两块里现在就有东西：上半「正在对话」由手里这份会话状态画，下半「工作区」里当前工作区那一行
    * 和它展开了的那几组也是本地就知道的（见 withCurrentWorkspaceFirst）；只有“别的工作区”那一批
    * 得等宿主读一遍磁盘，回来那份由 renderPicker 按格补（见 paintWorkspacePanel）。
@@ -8193,18 +8420,20 @@
    * 清单里的一行：相对写法 + 多了几行少了几行（删掉的写「已删除」）。
    * 点这一行就把这个文件的 diff 开在弹窗里（跟看一个文件一样）；
    * 太大的文件后端不比 diff，那一行点不开。
+   * @param fullPath 写整条相对写法（底下那一块宽，写全一眼认得出是哪个目录里的）；
+   *   不写就只写文件名那一截（左边那一列窄，写整条时省略号恰好落在文件名上，只剩半截目录）
    */
-  function changeRow(item) {
+  function changeRow(item, fullPath) {
     const row = document.createElement("div");
     row.className = "change-head" + (item.tooBig ? " no-diff" : "");
     row.setAttribute("data-path", item.path);
     row.title = item.path;   // 一行放不下时悬停看全
-    // 只写文件名那一截（全路径见这一行的悬停提示，打开那份 diff 以后横条上也写着）：
+    // 左边那一列只写文件名那一截（全路径见这一行的悬停提示，打开那份 diff 以后横条上也写着）：
     // 这一列窄，写整条 path 的时候省略号恰好落在文件名上，只剩半截目录，看不出改的是哪个文件。
     const cut = item.path.lastIndexOf("/");
     const name = document.createElement("span");
     name.className = "change-path";
-    name.textContent = cut >= 0 ? item.path.slice(cut + 1) : item.path;
+    name.textContent = (fullPath || cut < 0) ? item.path : item.path.slice(cut + 1);
     row.appendChild(name);
     const counts = document.createElement("span");
     counts.className = "change-counts";
@@ -8231,10 +8460,14 @@
     return row;
   }
 
-  /** 后端说「改动变了」：重问一遍清单（下面那一格一直露着，不必再问看没看着）。 */
+  /**
+   * 后端说「改动变了」：重问一遍清单（下面那一格一直露着，不必再问看没看着）。
+   * 底下那一块开着的话也一起问（它看的是同一份清单）。
+   */
   function refreshChangesTab() {
     const tab = fileSidebar.changeTab;
     if (tab) { fetchChanges(tab); }
+    if (changeSheet.open) { fetchSheetChanges(); }
   }
 
   /**
@@ -9912,7 +10145,7 @@
   }
 
   /**
-   * 收起「项目与会话」那一层。手里还没有内容时（划到头刚拉出来、后端那份还在路上）也照收 ——
+   * 收起「项目与会话」那一层。手里还没有内容时（刚摆上壳、后端那份还在路上）也照收 ——
    * 那会儿 state 还是空的，cancelPicker 会当“本来就没开着”直接回来，把屏上这一块留在那儿。
    */
   function closePickerAnyway() {
@@ -10377,9 +10610,7 @@
   // 它开头那句“浮层开着就跳开”的判断这会儿已经被 cancelPicker 改掉了
   // （两个监听都在 document 上，按注册顺序跑，靠 stopImmediatePropagation 拦下来才管用）。
   document.addEventListener("keydown", (e) => {
-    // 划到头刚拉出来、内容还在路上那一趟也算（那会儿 pickerModalOpen 还是 false）
-    const pulling = modalView.root.classList.contains("pk-pulling");
-    if (e.key !== "Escape" || !(pickerModalOpen() || pulling)) { return; }
+    if (e.key !== "Escape" || !pickerModalOpen()) { return; }
     e.preventDefault();
     e.stopImmediatePropagation();
     closePickerAnyway();

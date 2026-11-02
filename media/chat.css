@@ -822,10 +822,6 @@
   }
   @keyframes pk-drawer-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
   @media (prefers-reduced-motion: reduce) { .pk-host.pk-drawer #pickerPanel { animation: none; } }
-  /* 划到头跟手拉出来那一路（见 chat.js 的“划到头：把那一侧的侧边栏跟手拉出来”）：
-     拉的时候位置归手指管，滑入那段动画得关掉（它会在面板一露面就自己跑到正中），
-     松手以后也留着，到收起时才摘下（否则摘的那一下又会把它重跑一遍）。 */
-  #pickerOverlay.pk-pulling #pickerPanel { animation: none; }
   .pk-header {
     display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
     padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
@@ -1634,8 +1630,6 @@
   body.file-full.file-open:not(.file-dock) #fileSidebar { width: 100%; }
   @keyframes file-drawer-in { from { transform: translateX(-100%); } to { transform: translateX(0); } }
   @media (prefers-reduced-motion: reduce) { body.file-open:not(.file-dock) #fileSidebar { animation: none; } }
-  /* 划到头跟手拉出来那一路（同右侧那一块）：拉的时候位置归手指管，滑入那段动画先关掉 */
-  body.file-open.file-drag:not(.file-dock) #fileSidebar { animation: none; }
   /* 滑入式底下那层遮罩：点它 = 收起这一列（常驻时不垫） */
   #fileBackdrop { display: none; }
   body.file-open:not(.file-dock) #fileBackdrop {
@@ -1850,6 +1844,48 @@
   .change-add { color: var(--vscode-gitDecoration-addedResourceForeground, #587c0c); }
   .change-del { color: var(--vscode-gitDecoration-deletedResourceForeground, #ad0707); }
   .change-flag { font-family: var(--vscode-font-family); opacity: 0.9; }
+  /* 底下那一块「改动」（见 chat.js 的“消息滑到底再往上拖”那段）：消息滑到底再往上拖，它就从底下升起来。
+     它在对话那一列里、消息区下面 —— #messages 是 flex: 1，这一块长起来它就跟着矮下去，两块各占一块、
+     谁也不盖谁。高度由 chat.js 写在行内（跟手时跟着手指走，松手后按内容定、最多 45%）。
+     里面一行一个文件：用的就是上面那儿条 .change-head（跟左边文件侧边栏下格「改动」一个长相）。 */
+  #changeSheet {
+    flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
+  }
+  #changeSheet.hidden { display: none; }
+  /* 头上那一条：左边写「改动」，右边一颗叉；正中间那颗小横条是抓的地方（拖着它往下拉就收回去）。 */
+  #changeSheetBar {
+    position: relative; flex: 0 0 auto;
+    display: flex; align-items: center; gap: 4px;
+    min-height: 28px; padding: 0 4px 0 12px;
+    touch-action: none;   /* 在这一条上往下拖是收起来，别让浏览器拿去滚页面 */
+  }
+  #changeSheetBar .cs-title {
+    flex: 1 1 auto; min-width: 0;
+    font-size: calc(var(--vscode-font-size, 13px) - 2px);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #changeSheetBar .cs-grip {
+    position: absolute; left: 50%; top: 5px; width: 34px; height: 3px; margin-left: -17px;
+    border-radius: 2px; background: currentColor; opacity: 0.22;
+  }
+  #changeSheetClose {
+    flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; padding: 0; border-radius: 3px;
+    background: none; border: none; cursor: pointer; line-height: 1;
+    color: var(--vscode-descriptionForeground, inherit);
+  }
+  #changeSheetClose svg { width: 12px; height: 12px; display: block; }
+  #changeSheetClose:hover {
+    background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); color: var(--vscode-foreground);
+  }
+  /* 清单自己滚（多了就在它里头滚，这一块不再长高） */
+  #changeSheetBody { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 0 10px; }
+  #changeSheetBody::-webkit-scrollbar { width: 8px; }
+  #changeSheetBody::-webkit-scrollbar-thumb {
+    background: var(--vscode-scrollbarSlider-background, rgba(128,128,128,0.4)); border-radius: 4px;
+  }
   /* 「改动」里点开的那份 diff：两栏（见 chat.js 的 renderDiffPanes）：左“最近一次提交”、右“现在”。
      一行两格（同一张网格，不是两张独立的表）—— 两栏的行才对得上；中间那道竖线画在网格上。 */
   .diff2 { padding: 4px 0 12px; font-size: 0.95em; }
