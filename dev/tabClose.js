@@ -4,7 +4,9 @@
 //
 // 验六件事：
 //   ① 两个会话、放得下：每格名字后面都有一颗 ×
-//   ② 点闲着的那个会话的 ×：一下就关掉那一个（不用确认）
+//      （两个格是这么来的：先发一句让这一格跑着，再点「＋」——点「＋」现在等于 pi 的 /new，
+//        旧的那个闲着会被顺手关掉，正在跑才留着，所以先让它跑起来才有两格）
+//   ② 旧的那一格跑完、闲下来：点它的 × 一下就关掉那一个（不用确认），只剩当前这一格
 //   ③ 会话正在跑时点 ×：那一格变红、叉换成勾，这一下不关；再点两下（叉 + 勾）才关
 //   ④ 挤了（420 宽、五个会话）：开着的会话一个不少都还在条上；当前这一张写名字，
 //     别的收成窄块、只露那颗点（名字藏起来）
@@ -43,23 +45,7 @@ module.exports = async (page) => {
     await page.sleep(400);
   };
 
-  // ① 两个会话、放得下
-  await page.click("#newSessionBtn");
-  await page.sleep(1500);
-  await say("① 两个会话（900 宽）");
-  await page.shot("tabclose-1-two.png");
-
-  // ② 闲着的那个会话：点它的 × 一下就关
-  await page.eval(`
-    const t = [...document.querySelectorAll("#sessionTabs .sn-tab")].find((el) => !el.classList.contains("current"));
-    t.querySelector(".sn-close").click();
-    return true;
-  `);
-  await page.sleep(1500);
-  await say("② 关掉闲着的那一个之后");
-
-  // ③ 正在跑的会话：点 × 先变成勾（不关），再点一下才关
-  await page.send("说点什么");
+  /** 等当前这一格真的跑起来（那颗圆环写“在生成”）；等不到就是 false。 */
   const untilStreaming = async (ms) => {
     const end = Date.now() + (ms || 20000);
     while (Date.now() < end) {
@@ -68,6 +54,39 @@ module.exports = async (page) => {
     }
     return false;
   };
+
+  // ① 两个会话、放得下
+  // 点「＋」等于 pi 的 /new：旧的那个闲着会被顺手关掉（顶条上只留一格），正在跑才留着。
+  // 所以先发一句让它跑着、再点「＋」，才有两格可比。
+  await page.send("说点什么");
+  await untilStreaming();
+  await page.click("#newSessionBtn");
+  await page.sleep(2000);
+  await say("① 两个会话（900 宽）");
+  await page.shot("tabclose-1-two.png");
+
+  // ② 旧的那一格跑完、闲下来：点它的 × 一下就关（跑着的时候点才要第二下，见 ③）
+  const idleBy = Date.now() + 30000;
+  while (Date.now() < idleBy) {
+    const idle = await page.eval(`
+      const tabs = [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden"));
+      const old = tabs.find((t) => !t.classList.contains("current"));
+      return !!old && !old.classList.contains("streaming");
+    `);
+    if (idle) { break; }
+    await page.sleep(200);
+  }
+  await say("② 旧的那一格闲下来");
+  await page.eval(`
+    const t = [...document.querySelectorAll("#sessionTabs .sn-tab")].find((el) => !el.classList.contains("current"));
+    t.querySelector(".sn-close").click();
+    return true;
+  `);
+  await page.sleep(1500);
+  await say("② 点它的 × 之后");
+
+  // ③ 正在跑的会话：点 × 先变成勾（不关），再点一下才关
+  await page.send("说点什么");
   await untilStreaming();
   await page.eval(`document.querySelector("#sessionTabs .sn-tab.current .sn-close").click(); return true;`);
   await page.sleep(300);
@@ -95,17 +114,16 @@ module.exports = async (page) => {
     await page.eval(`for (const m of ${JSON.stringify(msgs)}) { window.postMessage(m, "*"); } return true;`);
     await page.sleep(500);
   };
-  /** 顶条上每一格现在长什么样：在不在条上、收窄没有、名字藏没藏、宽度、当前格在不在中间、那颗点在不在。 */
-  const shape = () => page.eval(`
+  /** 顶条上每一格现在长什么样：在不在条上、收窄没有、名字藏没藏、宽度、顺序对不对（就是清单顺序）、那颗点在不在。 */
+  const shape = (want) => page.eval(`
     const row = document.getElementById("sessionTabs");
     const tabs = [...row.querySelectorAll(".sn-tab")].filter((t) => !t.classList.contains("hidden"));
-    const curIdx = tabs.findIndex((t) => t.classList.contains("current"));
     return {
       条上格数: tabs.length,
       当前: tabs.filter((t) => t.classList.contains("current")).map((t) => (t.querySelector(".sn-text") || {}).textContent),
       窄块: tabs.filter((t) => t.classList.contains("strip")).length,
       宽度: tabs.map((t) => Math.round(t.getBoundingClientRect().width)),
-      当前在中间: curIdx < 0 ? "-" : (Math.abs(curIdx - (tabs.length - 1 - curIdx)) <= 1),
+      顺序对: tabs.map((t) => (t.querySelector(".sn-text") || {}).textContent || "").join("|") === ${JSON.stringify(want.join("|"))},
       名字都藏着: tabs.every((t) => !t.classList.contains("strip") || getComputedStyle(t.querySelector(".sn-text")).display === "none"),
       点都露着: tabs.every((t) => {
         const d = t.querySelector(".sn-dot");
@@ -119,14 +137,14 @@ module.exports = async (page) => {
 
   await setWidth(420);
   await inject(fake, "fake0");
-  console.log("  ④ 五个会话（420 宽）：" + JSON.stringify(await shape()));
+  console.log("  ④ 五个会话（420 宽）：" + JSON.stringify(await shape(names)));
   await page.shot("tabclose-4-narrow.png");
 
   // ⑤ 会话更多：叠起来，但一个不少、点都在
   const many = [];
   for (let i = 0; i < 14; i++) { many.push(fakeOf("会话" + (i + 1), i)); }
   await inject(many, "fake0");
-  console.log("  ⑤ 十四个会话（420 宽）：" + JSON.stringify(await shape()));
+  console.log("  ⑤ 十四个会话（420 宽）：" + JSON.stringify(await shape(many.map((f) => f.name))));
   await page.shot("tabclose-6-folded.png");
   // 点中间那一张窄块：切过去（说明被压住的格子照样点得到）
   const switched = await page.eval(`
@@ -140,8 +158,9 @@ module.exports = async (page) => {
     return t ? t.querySelector(".sn-text").textContent : "";
   `)) + "（真的点下去了：" + switched + "）");
 
-  await setWidth(1000);
+  // ⑥ 窗口放宽到 1200（再窄的话，五格的名字加起来还是放不下；右边那一列在 900 宽以上还常驻着）
+  await setWidth(1200);
   await inject(fake, "fake0");
-  console.log("  ⑥ 同样的五个会话（1000 宽）：" + JSON.stringify(await shape()));
+  console.log("  ⑥ 同样的五个会话（1200 宽）：" + JSON.stringify(await shape(names)));
   await page.shot("tabclose-5-wide.png");
 };
