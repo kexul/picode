@@ -5115,7 +5115,7 @@
   //   · 它开着的时候在上面横着一划：跟着手指滑出去（见 wireDrawerCloseSwipe）。
   //
   // 内容是各自本来那一套去要的：右边那块跟点 <<< 一样发一条 openWorkspace（后端要扫一眼磁盘，
-  // 回来之前拉的是一块空面板），左边那块跟点顶条那颗按钮一样先开出来、再取目录。
+  // 回来之前先摆上一块空壳，见 showWorkspaceShell），左边那块跟点顶条那颗按钮一样先开出来、再取目录。
   /** 正跟着手指挪的那块侧边栏（见下面 FromClosed / FromOpen / Place / Finish）。 */
   let drawerDrag = null;
   /** 滑回去那一段还没走完（到这一刻为止不接新的一趟，不然那一条收尾会把新的一趟收掉）。 */
@@ -5127,9 +5127,10 @@
     let sign = 1;
     let backdrop = null;
     if (kind === "right") {
-      // 内容先要去（跟点 <<< 那条路一样）；回来之前先拉的是一块空面板
+      // 内容先要去（跟点 <<< 那条路一样）；回来之前先把空壳摆上（上半「正在对话」本地就画得出来）
       if (!pickerModalOpen()) {
         emptyWorkspace = "";
+        showWorkspaceShell();
         vscode.postMessage({ type: "openWorkspace", expanded: expandedDirsForHost() });
       }
       closeFileSidebarForRightSidebar();
@@ -6118,6 +6119,10 @@
     if (view.searchWrap) { view.searchWrap.classList.add("hidden"); }
     // “关闭会话”的确认条只在列表里有效：列表一关就撤销（下次打开不要停在确认态）
     cancelPendingClose();
+    // 这张抽屉还是先摆出来的空壳（后端那份没到）就被人收了：晚到的那份别再弹回来
+    if (view === modalView && view.state && view.state.kind === "workspace" && view.state.pending) {
+      workspaceShellDropped = true;
+    }
     view.state = null;
     if (view === modalView) { emptyWorkspace = ""; }   // 那张抽屉没了：“替没有会话摊开”的账也结掉
     view.openSessionsShown = "";
@@ -6151,6 +6156,11 @@
    * 面板还在路上（要扫一眼磁盘才拼得出来）的时候会话已经开好了，那就不弹了。
    */
   let emptyWorkspace = "";
+  /**
+   * 那张抽屉是先摆出空壳、在等后端那份时被人自己收掉的（见 hidePicker 与 showWorkspaceShell）：
+   * 晚到的那份就不要再把它弹回来（人已经说了不要）。
+   */
+  let workspaceShellDropped = false;
 
   function readSidebarWanted() {
     try { return localStorage.getItem(SIDEBAR_STORE_KEY) !== "0"; } catch (e) { return true; }
@@ -6345,10 +6355,34 @@
       // 两边同一时刻只开一块：左边那块开着就先收起来
       closeFileSidebarForRightSidebar();
       emptyWorkspace = "";   // 这一下是人自己点的
+      // 先把抽屉摆出来、滑入动画立刻开始，内容随后填（跟左边文件侧边栏一个路子）。
+      // 等宿主那份回来才滑出的话，手机上就是一个来回的“点了没反应”—— 它还要扫一眼磁盘。
+      showWorkspaceShell();
       vscode.postMessage({ type: "openWorkspace", expanded: expandedDirsForHost() });
       return;
     }
     if (sidebarEnabled()) { collapseSidebar(); } else { expandSidebar(); }
+  }
+
+  /**
+   * 窄窗里先把「项目与会话」这块空壳摆上：点 <<<（或者划到头把它拉出来）那一刻就滑出来，不等一个来回。
+   * 两块里现在就有东西：上半「正在对话」由手里这份会话状态画，下半「工作区」里当前工作区那一行
+   * 和它展开了的那几组也是本地就知道的（见 withCurrentWorkspaceFirst）；只有“别的工作区”那一批
+   * 得等宿主读一遍磁盘，回来那份由 renderPicker 按格补（见 paintWorkspacePanel）。
+   * 那份真数据到了以后走的还是同一块 view（renderPicker 那份拼法），所以不会重摆一遍、也不再滑入。
+   */
+  function showWorkspaceShell() {
+    // 这一下是重新摆的：之前那一趟被人收掉、还挂着“晚到那份不要”的账，作废
+    workspaceShellDropped = false;
+    renderPicker({
+      kind: "workspace",
+      dock: false,
+      title: "项目与会话",
+      spaces: { items: [], hasMore: false },
+      groups: [],
+      current: null,
+      pending: true,
+    });
   }
 
   // 换窗口宽窄（拖边、转手机屏幕）：跨过那道门槛时把版面与面板跟着换过来
@@ -9473,7 +9507,9 @@
     }
     if (st.filtered.length === 0) {
       const empty = document.createElement("div"); empty.className = "pk-empty";
-      empty.textContent = q ? "没有匹配项。" : "列表为空。";
+      // 刚摆出来的空壳（宿主那份还在路上）写“正在读取”：它马上就有东西，不能说“列表为空”
+      // （一条会话都没有时这一句才看得出来；有会话时上半那一格已经画出东西，见 showWorkspaceShell）
+      empty.textContent = st.pending ? "正在读取…" : (q ? "没有匹配项。" : "列表为空。");
       view.body.appendChild(empty);
       if (st.kind === "history" && st.historyHasMore) { view.body.appendChild(buildLoadMoreBtn(view, st, "sessions")); }
       if (st.kind === "model") { renderModelFooter(view, st); }
@@ -9903,6 +9939,9 @@
     st.spaceItems = workspaceFlatItems(msg);
     st.spacesHasMore = !!(msg.spaces && msg.spaces.hasMore);
     st.current = msg.current || null;
+    // 宿主那份还在路上（先摆出来的空壳，见 showWorkspaceShell）：
+    // 面板里一行都列不出来时那句写“正在读取”，不写“列表为空”
+    st.pending = msg.pending === true;
     return st;
   }
 
@@ -10132,6 +10171,13 @@
       }
     }
     const toDock = view === dockView;
+    // 人已经把那张抽屉收了（点外面 / 横着一划），后端那份才晚到：别再弹回来，
+    // 回它一句取消，宿主那边也别再等（见 workspaceShellDropped）
+    if (kind === "workspace" && !toDock && workspaceShellDropped) {
+      workspaceShellDropped = false;
+      vscode.postMessage({ type: "pickerCancel", kind: "workspace" });
+      return;
+    }
     // 常驻那一列不算「弹面板」：它平时就一直在右边，而新建 / 关掉一个会话之后宿主都会
     // 推一份过来。
     // “项目与会话”面板不放搜索框：上半会话、下半工作区两块结构，这个框帮不上忙还占一截

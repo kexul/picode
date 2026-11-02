@@ -1,7 +1,7 @@
 // @ts-nocheck
 /**
  * 量「项目与会话」面板（顶条最右边那颗 <<<）打开时卡不卡：
- *  - 点击 → 面板可见：多少毫秒（这里面全是等宿主扫磁盘）；
+ *  - 点击 → 面板可见：多少毫秒（不改网络的话这里面全是等宿主扫磁盘）；
  *  - 从点击那一刻起，主线程上有没有长任务（>50 毫秒的一帧 = 一眼能看出的停顿）；
  *  - 第一次打开时 CPU 到底花在哪（采样剖析的热点）。
  *
@@ -10,6 +10,9 @@
  *   SIDEBAR_BATCHES=40  先垫多少轮长对话
  *   SIDEBAR_CPU=4       CPU 降速倍数（1 = 不降速）
  *   SIDEBAR_ROUNDS=5    开开关关几轮
+ *   SIDEBAR_DELAY=700   把往后端发的那条 openWorkspace 压后这么多毫秒（模拟网络不好）：
+ *                       面板该照样一按就出来（宿主那份随后才填进去），
+ *                       等一个来回才滑出来的话这里会直接报错
  *
  *   npm run web:shot -- --script dev/sidebarPerf.js
  */
@@ -17,6 +20,8 @@ module.exports = async (page) => {
     const batches = Number(process.env.SIDEBAR_BATCHES || 0);
     const cpu = Number(process.env.SIDEBAR_CPU || 4);
     const rounds = Number(process.env.SIDEBAR_ROUNDS || 3);
+    // 网络不好：后端那份面板要等一个来回。界面上该先滑出来、内容随后填，不是等回来才滑
+    const delay = Number(process.env.SIDEBAR_DELAY || 0);
 
     await page.waitReady();
 
@@ -25,6 +30,27 @@ module.exports = async (page) => {
         if (cpu > 1) { await page.cdp.send("Emulation.setCPUThrottlingRate", { rate: cpu }); }
         console.log(`视口 412x915@3x，CPU 降速 ${cpu} 倍`);
     } catch (e) { console.log("（设不了手机参数：" + e.message + "）"); }
+
+    if (delay > 0) {
+        await page.eval(`
+            (function () {
+                window.__openDelay = ${delay};
+                const f = window.fetch;
+                window.fetch = function (url, opt) {
+                    const body = opt && typeof opt.body === "string" ? opt.body : "";
+                    if (body.indexOf("openWorkspace") >= 0) {
+                        const args = arguments;
+                        return new Promise(function (res, rej) {
+                            setTimeout(function () { f.apply(window, args).then(res, rej); }, window.__openDelay);
+                        });
+                    }
+                    return f.apply(window, arguments);
+                };
+                return true;
+            })();
+        `);
+        console.log(`模拟网络不好：往后端发的 openWorkspace 压后 ${delay} 毫秒`);
+    }
 
     if (batches > 0) {
         await page.eval(`
@@ -110,6 +136,10 @@ module.exports = async (page) => {
         `);
         const worst = r.frames.reduce((m, f) => Math.max(m, f[1]), 0);
         console.log(`\n【第 ${i} 次打开】点击→可见 ${r.toVisible} 毫秒   最长一帧 ${worst} 毫秒`);
+        // 面板该先滑出来（宿主那份还在路上就不等）：可见时刻离点击太远，就是又在等那个来回了
+        if (delay > 0 && r.toVisible >= delay * 0.6) {
+            throw new Error(`面板等了宿主 ${r.toVisible} 毫秒才出来（应马上滑出来，内容随后填）`);
+        }
         console.log("  帧（[点击后多少毫秒, 这一帧多长]）：" + JSON.stringify(r.frames.slice(0, 8)));
         console.log("  长任务：" + JSON.stringify(r.longTasks));
         rows.push(worst);
