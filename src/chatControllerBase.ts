@@ -2213,9 +2213,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 每批展示/扫描的文件数。 */
     private static readonly HISTORY_BATCH_SIZE = 10;
 
-    /** 一批最多往下扫这么多倍的文件：子会话要跳过，凑不满一批就接着往后扫，但也别无上限地扫下去。 */
-    private static readonly HISTORY_SCAN_FACTOR = 6;
-
     /** 「启动时自动打开最近会话」最多往后试几个文件（都是子会话就算了，留给用户自己挑）。 */
     private static readonly AUTO_LOAD_SKIP_MAX = 10;
 
@@ -2258,7 +2255,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 从一份会话文件清单（按改动时间倒序）里往下扫，凑一批要显示的会话。
      *
      * 子会话（第一条用户消息是派活那套文字，见 sessionStore）不显示：碰上一个就跳过接着扫，
-     * 所以这一批可能要多扫几个文件才凑得满，最多扫一批条数的 HISTORY_SCAN_FACTOR 倍。
+     * 所以这一批可能要多扫几个文件才凑得满。这里不设「最多往下扫多少个文件」的上限：
+     * 派活多的目录里子会话常常连成几十上百个，一设上限，正撞上那一串的这一批就是 0 条 ——
+     * 点了「加载更多」什么都不出来，看着像按钮坏了。扫到凑满这一批或者文件到头为止。
      * 扫完在这一批里按“最后说话时间”再排一遍：屏幕上这一屏看上去是最近聊过的在前面。
      *
      * @param offset 从清单里第几个文件接着扫（不是“第几条会话”：跳过的子会话也占游标）。
@@ -2271,13 +2270,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
     ): Promise<{ items: SessionListItem[]; nextOffset: number; hasMore: boolean }> {
         const items: SessionListItem[] = [];
         let at = offset;
-        let scanned = 0;
-        const scanMax = size * ChatControllerBase.HISTORY_SCAN_FACTOR;
-        while (items.length < size && scanned < scanMax) {
+        while (items.length < size && at < files.length) {
             const batch = files.slice(at, at + (size - items.length));
             if (batch.length === 0) { break; }
             at += batch.length;
-            scanned += batch.length;
             const scannedItems = await Promise.all(batch.map((f) => scanSessionInfo(f)));
             for (const s of scannedItems) {
                 if (s && !s.child) { items.push(s); }
