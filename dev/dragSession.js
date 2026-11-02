@@ -7,6 +7,8 @@
  *
  * 鼠标动作用 CDP 的 Input.dispatchMouseEvent（跟真人按下一模一样，浏览器照常派发 pointer 事件）。
  */
+const { openSessionIn } = require("./harness.js");
+
 const LOOK = `
     const views = Array.from(document.querySelectorAll(".session-view"));
     const shown = views.filter((v) => !v.classList.contains("off"));
@@ -44,11 +46,12 @@ module.exports = async (page) => {
     await page.waitReady();
     await page.sleep(900);
     // 第一个会话里说一句（假模型秒回），再多开两个会话
+    // （用 openSessionIn：「＋」是 pi 里的 /new，旧的那个闲着会顺手关掉）
     await page.send("第一个会话里说的话");
     await page.sleep(900);
     for (let i = 0; i < 2; i++) {
-        await page.click("#newSessionBtn");
-        await page.sleep(600);
+        await openSessionIn(page);
+        await page.sleep(300);
     }
     // 三个会话按「正在对话」那一列的顺序排，最后开的那个在末位。
     // 切到中间那一格：左右两边都有得切（滑到头没有下一个，见第 5 步）

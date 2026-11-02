@@ -5,6 +5,11 @@
 //   ② 真按一下 Alt+W（走浏览器的真按键事件，不是直接调函数）→ 当前会话被关掉、切到剩下那个
 //   ③ 焦点在输入框里时按也照样关（这个键不该只在消息区里管用）
 // 图落在 dev/shots/：close-key-1-settings / 2-after-key / 3-from-input。
+//
+// 第二个会话用 openSessionIn 开（走「项目与会话」里行尾那颗加号）：输入框那颗「＋」是 pi 里的 /new，
+// 旧的那个闲着会顺手关掉，凑不出两个。
+const { openSessionIn } = require("./harness.js");
+
 module.exports = async (page) => {
   await page.waitReady();
   await page.sleep(800);
@@ -49,7 +54,7 @@ module.exports = async (page) => {
   `);
 
   // 第二个会话（第一个是打开页面时自带的那个），现在是它
-  await page.click("#newSessionBtn");
+  await openSessionIn(page);
   await page.sleep(1500);
   const before = await state();
   console.log("② 两个会话：", JSON.stringify(before));
@@ -76,7 +81,7 @@ module.exports = async (page) => {
   if (!after.current[0]) { throw new Error("剩下那个会话应该被切成正在看的"); }
 
   // 焦点在输入框里：照样关（关之前再开一个，这样关掉后还剩一个）
-  await page.click("#newSessionBtn");
+  await openSessionIn(page);
   await page.sleep(1500);
   await page.type("草稿还留在输入框里");
   await page.sleep(300);

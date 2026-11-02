@@ -7,7 +7,12 @@
 //   6. 点第 2 条的行身 → 该切过去，不该真关
 //   7. 切回第 1 条，点第 2 条行尾那颗 × → 一下就关掉，不用再点第二下
 // 这里的会话都已经跑完了，点叉就关（正在跑的要再点一下勾，见 dev/sessionMenuClose.js）：
-// 关掉的那条从列表里消失，别的照旧。
+// 跟掉的那条从列表里消失，别的照旧。
+//
+// B 会话用 openSessionIn 开（走「项目与会话」里行尾那颗加号）：输入框那颗「＋」是 pi 里的 /new，
+// 旧的那个闲着会顺手关掉，凑不出两条并排的会话。
+const { openSessionIn } = require("./harness.js");
+
 module.exports = async (page) => {
   await page.send("第一个会话：看看标题");
   await page.sleep(3000);
@@ -15,7 +20,7 @@ module.exports = async (page) => {
   await page.sleep(300);
   await page.shot("session-a.png");
 
-  await page.click("#newSessionBtn");
+  await openSessionIn(page);
   await page.sleep(1000);
   await page.send("第二个会话：标题也该变");
   await page.sleep(3000);
@@ -62,7 +67,7 @@ module.exports = async (page) => {
   await page.shot("session-close-done.png");
 
   // 顶条上另一格那颗 × 也一样：点一下就关，没有第二下
-  await page.click("#newSessionBtn");
+  await openSessionIn(page);
   await page.sleep(1500);
   const barCount = () => page.eval(`
     return [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden")).length;

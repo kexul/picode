@@ -10,6 +10,8 @@
  *   ①②③④ 点另一张标签切过去时会滑过去、底色淡过去；左右划切过去时旧的那一格落在划过去的那一边；
  *      划一小截弹回去不留钉住的宽度。
  */
+const { openSessionIn } = require("./harness.js");
+
 const LOOK = `
     const tabs = [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden"));
     const cur = tabs.find((t) => t.classList.contains("current"));
@@ -70,8 +72,8 @@ module.exports = async (page) => {
     //    那颗点要真的在涨、大 tab 在收（以前那点一直不动，松手才猛地涨开 —— 看着就是“先不动、最后跳一下”）。
     //    两个会话时放得下（每格都写着名字），那种情况宽度本来就不该动，不在这儿验。
     for (let i = 0; i < 2; i++) {
-        await page.click("#newSessionBtn");
-        await page.sleep(1500);
+        await openSessionIn(page);
+        await page.sleep(300);
     }
     const widthsAll = () => page.eval(`
         const tabs = [...document.querySelectorAll("#sessionTabs .sn-tab")].filter((t) => !t.classList.contains("hidden"));

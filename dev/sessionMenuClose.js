@@ -9,6 +9,11 @@
 //   ③ 「项目与会话」里「正在对话」那几行：点叉出确认条（整行变红、行尾多一颗勾一颗叉），
 //      点叉撤销、干等 4 秒自己收回、点勾才真关；点行身也算撤销（不许替那颗勾把关会话点实了）
 // 图落在 dev/shots/：closeconfirm-1-tab / 2-key / 3-panel …
+//
+// 后两个会话用 openSessionIn 开（走「项目与会话」里行尾那颗加号）：输入框那颗「＋」是 pi 里的 /new，
+// 旧的那个闲着会顺手关掉，凑不出「几行并排」的现场（① 关掉一个之后还得剩下一个）。
+const { openSessionIn } = require("./harness.js");
+
 module.exports = async (page) => {
   await page.waitReady();
   await page.sleep(800);
@@ -69,7 +74,7 @@ module.exports = async (page) => {
   `);
 
   // 第二个会话 B，说一句让它跑起来
-  await page.click("#newSessionBtn");
+  await openSessionIn(page);
   await page.sleep(1500);
   await page.send("随便演示一下");
   if (!(await waitStreaming(20000))) { throw new Error("会话没跑起来（等不到 streaming）"); }
@@ -91,7 +96,7 @@ module.exports = async (page) => {
   if (t2.count !== Math.max(0, countBefore - 1)) { throw new Error(`点勾之后该真关掉这一个（${countBefore} → ${t2.count}）`); }
 
   // ② 跑着时按 Alt+W：同样落在顶条那一格上，不再弹出清单
-  await page.click("#newSessionBtn");
+  await openSessionIn(page);
   await page.sleep(1500);
   await page.send("随便演示一下");
   if (!(await waitStreaming(20000))) { throw new Error("第二个会话没跑起来"); }
@@ -108,7 +113,7 @@ module.exports = async (page) => {
   if (t4.count !== Math.max(0, t3.count - 1)) { throw new Error(`再按一下该真关掉（${t3.count} → ${t4.count}）`); }
 
   // ③ 「项目与会话」里「正在对话」那几行：同一套规矩
-  await page.click("#newSessionBtn");
+  await openSessionIn(page);
   await page.sleep(1500);
   await page.send("随便演示一下");
   if (!(await waitStreaming(20000))) { throw new Error("第三个会话没跑起来"); }

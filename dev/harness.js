@@ -55,15 +55,19 @@ function installFakeVscode(options) {
  * （见 chatControllerBase 里 newSession 那段），所以那些脚本不能再点那颗加号，
  * 得走「项目与会话」里行尾那颗加号那条路（newSessionInWorkspace）——它不碰别的会话。
  * 新壳挂出来再返回。
+ *
+ * @param dir 开在哪个目录；不给就用页面上现在看着的那个会话的目录（顶条当前那一格的 data-cwd）。
  */
 async function openSessionIn(page, dir, timeoutMs = 20000) {
+    const target = dir || await page.eval(`return (document.getElementById("sessionName") || { dataset: {} }).dataset.cwd || "";`);
+    if (!target) { throw new Error("页面上没有正在看的会话，问不出开在哪个目录：直接给一个目录。"); }
     const before = await page.eval(`return document.querySelectorAll(".session-view").length;`);
-    await page.eval(`window.acquireVsCodeApi().postMessage({ type: "newSessionInWorkspace", path: ${JSON.stringify(dir)} }); return true;`);
+    await page.eval(`window.acquireVsCodeApi().postMessage({ type: "newSessionInWorkspace", path: ${JSON.stringify(target)} }); return true;`);
     const deadline = Date.now() + timeoutMs;
     for (;;) {
         const now = await page.eval(`return document.querySelectorAll(".session-view").length;`);
         if (now > before) { return; }
-        if (Date.now() > deadline) { throw new Error("新会话的壳没挂出来（path=" + dir + "）"); }
+        if (Date.now() > deadline) { throw new Error("新会话的壳没挂出来（path=" + target + "）"); }
         await new Promise((resolve) => setTimeout(resolve, 200));
     }
 }

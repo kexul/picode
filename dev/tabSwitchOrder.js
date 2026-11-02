@@ -7,6 +7,11 @@
 // 造一份「行序 ≠ 建立序」的现场（建立序 A→B→子会话→C，面板行序 A→子会话→B→C），
 // 然后每按一下快捷键就核一次：当前会话在行序里正好挪了一格（走到底回绕）。
 // 子会话要一直在跑（假 pi 慢一点），跑完就自动关、行序会变。
+//
+// 三个主会话是用 openSessionIn 一个一个开的（走「项目与会话」里行尾那颗加号）：输入框那颗「＋」
+// 是 pi 里的 /new，旧的那个闲着会顺手关掉，凑不出三个。
+const { openSessionIn } = require("./harness.js");
+
 module.exports = async (page) => {
   /** 「项目与会话」画在哪一块：宽窗是右边常驻那一列，窄窗是浮层（见 dev/tabaFlow.js）。 */
   const ROOT_EXPR = `(function () {
@@ -61,7 +66,7 @@ module.exports = async (page) => {
   }
 
   // ---- 造现场：A（打开时自带）→ 建 B → 回 A 派个子会话 → 建 C ----
-  await page.click("#newSessionBtn");          // B
+  await openSessionIn(page);                  // B
   await page.sleep(1500);
   await page.eval(`
     const first = document.querySelector("#sessionTabs .sn-tab:not(.current)");
@@ -78,7 +83,7 @@ module.exports = async (page) => {
     return list.some((r) => r.child) ? list : false;
   }, 40000);
 
-  await page.click("#newSessionBtn");          // C
+  await openSessionIn(page);                  // C
   await page.sleep(1500);
 
   const list = await rows();
