@@ -28,6 +28,7 @@ import { hostOfUrl, isOwnPage, pushRemoteNotice, pushWeixinReply, type RemoteNot
 import { getAskAssets, getBashAssets, getEnvAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
 import {
+    dropSessionFileLists,
     listProjectDirs,
     listSessionFiles,
     readProjectEntry,
@@ -485,7 +486,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             .join("|");
         const changed = this.workspacePanelKey !== "" && key !== this.workspacePanelKey;
         this.workspacePanelKey = key;
-        if (changed) { void this.refreshWorkspacePanels(); }
+        if (changed) {
+            // 这也是会话文件有增有减的那一下（新会话头一回落盘、会话被关掉）：手里记着的
+            // 那几份目录清单跟着丢掉，重推面板时现扫（见 sessionStore.dropSessionFileLists）
+            dropSessionFileLists();
+            void this.refreshWorkspacePanels();
+        }
     }
 
     /** 面板里点了一行会话：切过去（要不要关面板是界面的事：常驻那一列不关）。
