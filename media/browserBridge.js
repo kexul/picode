@@ -888,15 +888,54 @@
     close.innerHTML = "&times;";
     close.title = "关掉";
     close.setAttribute("aria-label", "关掉");
-    close.addEventListener("click", function () { closeDesktopLive(); });
+    close.addEventListener("click", function (e) {
+      // 松手补的那一下 click 落在层里也不管事（见 armSwallowClick）
+      if (swallowClick()) { e.stopPropagation(); return; }
+      closeDesktopLive();
+    });
     // 点黑底也关（跟看图和侧边栏那几层一个习惯）；点画面本身不关，免得手一抖就没了
     liveLayer.addEventListener("click", function (e) {
+      if (swallowClick()) { return; }
       if (e.target === liveLayer) { closeDesktopLive(); }
     });
+    // 手机上长按会顺带弹出“保存图片 / 选中文字”那套菜单，按在层上也吃掉
+    liveLayer.addEventListener("contextmenu", function (e) { e.preventDefault(); });
     liveLayer.appendChild(liveImg);
     liveLayer.appendChild(liveNote);
     liveLayer.appendChild(close);
     document.body.appendChild(liveLayer);
+  }
+
+  var swallowClickArmed = false;
+  var swallowClickTimer = null;
+
+  /**
+   * 松手补的那一下 click 要不要吃掉。
+   *
+   * 手机上按住不放：长按是从 pointerdown 起算的，等那一层弹出来以后手指还在屏上，
+   * 松手时浏览器会在“手指下面那个元素”上补一个 click —— 那时候手指下面是刚弹出来的
+   * 这一层（黑底），于是“点黑底就关”那条立刻把它收掉了，人只看到闪一下。鼠标没这个毛病：
+   * 按下与松手不在同一个元素上就不算点击。
+   *
+   * 所以松手那一刻（pointerup / pointercancel）把紧跟的那一颗 click 标成“不是人点的”，
+   * 谁来接都吃掉一次；万一压根没有 click（手拖到别的元素上松的），这个标记等一小会儿
+   * 自己失效，不攒着吃后面的真点击。
+   */
+  function armSwallowClick() {
+    swallowClickArmed = true;
+    if (swallowClickTimer) { clearTimeout(swallowClickTimer); }
+    swallowClickTimer = setTimeout(function () {
+      swallowClickTimer = null;
+      swallowClickArmed = false;
+    }, 1000);
+  }
+
+  /** 吃到就吃一颗（返回 true = 这一下不算人点的）。 */
+  function swallowClick() {
+    if (!swallowClickArmed) { return false; }
+    swallowClickArmed = false;
+    if (swallowClickTimer) { clearTimeout(swallowClickTimer); swallowClickTimer = null; }
+    return true;
   }
 
   /** 按住不放：开一层看着这台电脑的桌面。 */
@@ -1017,8 +1056,18 @@
         openDesktopLive();
       }, LONG_PRESS_MS);
     });
-    shotBtn.addEventListener("pointerup", cancelPress);
-    shotBtn.addEventListener("pointercancel", cancelPress);
+    shotBtn.addEventListener("pointerup", function (e) {
+      cancelPress();
+      // 刚才是按住不放（那一层已经弹出来了）：紧跟的这颗 click 是松手补的，
+      // 它落在刚弹出来的那一层上，不算人点的（见 armSwallowClick）。
+      // 只有手指会这样：鼠标按下与松手不在同一个元素上就不发 click，不用管（管了反而
+      // 会把人紧接着去点叉的那一下吃掉）。
+      if (pressFired && e.pointerType === "touch") { armSwallowClick(); }
+    });
+    shotBtn.addEventListener("pointercancel", function (e) {
+      cancelPress();
+      if (pressFired && e.pointerType === "touch") { armSwallowClick(); }
+    });
     shotBtn.addEventListener("pointerleave", cancelPress);
     // 手机上长按会顺带弹出“保存图片 / 选中文字”那套菜单，把那一下吃掉
     shotBtn.addEventListener("contextmenu", function (e) { e.preventDefault(); });
@@ -1026,6 +1075,7 @@
       if (pressFired) {
         // 那是按住不放松手时补的那一下：不截屏，只把它记回去
         pressFired = false;
+        swallowClick();          // 这一颗已经吃过了，别留着再吃后头的
         e.preventDefault();
         e.stopPropagation();
         return;

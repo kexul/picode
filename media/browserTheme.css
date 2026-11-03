@@ -110,6 +110,11 @@ html, body {
   justify-content: center;
   background: rgba(0, 0, 0, 0.72);
   -webkit-tap-highlight-color: transparent;
+  /* 这一层是拿来“看”的，不该能选中文字：手机上长按会把层里的字（连那颗“×”）选中，
+     顺带弹出“保存图片 / 选中文字”那套菜单。禁掉选中与 callout，菜单那儿另外也吃掉 contextmenu。 */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .desktop-live.hidden { display: none; }
@@ -150,9 +155,8 @@ html, body {
   animation: desktop-live-spin .8s linear infinite;
 }
 @keyframes desktop-live-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) {
-  .desktop-live-spin { animation: none; }
-}
+/* 系统开了“减少动画”时这一环照转：它是这一层唯一一个“还在办事”的信号，停住就成了个
+   缺口的圈，看着更像坏了（别的转圈比如正在载入会话，停了还有一行字说明，这里没有）。 */
 
 .desktop-live-close {
   position: absolute;

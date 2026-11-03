@@ -298,12 +298,65 @@ async function main() {
             .then(() => true, () => false);
         check(gone2, `收起来以后那支小程序又退了（剩 ${liveProcessCount()} 支）`);
 
-        // ---- 六、页面报错 ----
+        // ---- 六、手机上按住不放：松手那一下不能把刚弹出来的那一层关掉 ----
+        // 手指按住是 pointerdown 起算的，等那一层弹出来时手指还在屏上；松手时浏览器会在
+        // 手指下面那个元素（就是刚弹出来的黑底）上补一个 click，正好撞上“点黑底就关”。
+        await a.cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
+        const touchAt = await buttonCenter(a);
+        await a.cdp.send("Input.dispatchTouchEvent", {
+            type: "touchStart",
+            touchPoints: [{ x: touchAt.x, y: touchAt.y, radiusX: 8, radiusY: 8, force: 1, id: 1 }],
+        });
+        // 按久一点：松手时离弹出那一刻早过了一秒，靠“刚弹出来那会儿”的时间窗口糊弄不过去
+        await a.sleep(1500);
+        await a.cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await a.sleep(500);
+        const touchReleased = await liveState(a);
+        check(touchReleased.open, "手指按住 1.5 秒再松手，那一层还在（松手补的那一下 click 已经吃掉）");
+        check(!/×/.test(touchReleased.noteText), "等着的那句里没有多出来的字");
+        // 那一层只用来“看”，长按不该能选中里面的字（手机长按会选中，连那颗叉都会）
+        const notSelectable = await a.eval(`
+            const layer = document.getElementById("desktopLiveLayer");
+            const close = layer.querySelector(".desktop-live-close");
+            const range = document.createRange();
+            range.selectNodeContents(close);
+            const s = window.getSelection();
+            s.removeAllRanges();
+            s.addRange(range);
+            const captured = s.toString();
+            s.removeAllRanges();
+            return { userSelect: getComputedStyle(layer).userSelect, captured };
+        `);
+        check(notSelectable.userSelect === "none" && notSelectable.captured === "", "那一层里的字选不中（长按不会选中那颗叉）");
+        // 眼睛自己点的黑底照旧能关
+        await a.cdp.send("Input.dispatchTouchEvent", {
+            type: "touchStart",
+            touchPoints: [{ x: 4, y: 4, radiusX: 8, radiusY: 8, force: 1, id: 2 }],
+        });
+        await a.sleep(60);
+        await a.cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await a.sleep(500);
+        check(!(await liveState(a)).open, "手指点黑底照样收得起（吃掉的是松手那一颗，不是人点的）");
+        await waitFor(() => Promise.resolve(liveProcessCount() === 0), 4000, "小程序最后再退一次").catch(() => { /* 下面那行会报 */ });
+        check(liveProcessCount() === 0, `收了以后那支小程序也退了（剩 ${liveProcessCount()} 支）`);
+        await a.cdp.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+
+        // 系统开着“减少动画”时那一环也照转：它是这一层唯一一个“还在办事”的信号
+        await a.cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+        const spinUnderReduce = await a.eval(`
+            const layer = document.getElementById("desktopLiveLayer");
+            const spin = layer.querySelector(".desktop-live-spin");
+            return spin ? getComputedStyle(spin).animationName : null;
+        `);
+        check(spinUnderReduce === "desktop-live-spin", `系统开“减少动画”时那一环还转（${spinUnderReduce}）`);
+        await a.cdp.send("Emulation.setEmulatedMedia", { features: [] });
+
+        // ---- 七、页面报错 ----
         const errs = [...(a.pageErrors || []), ...(b.pageErrors || [])];
         check(errs.length === 0, errs.length ? "页面有报错：" + errs.slice(0, 3).join(" / ") : "两块屏都没有报错");
 
         if (failed) { throw new Error("桌面实时画面没验过：" + failed + " 处"); }
-        console.log("\n✓ 点一下截图、按住不放看实时画面、两块屏共用一份、收起来就停，都验过了");
+        console.log("\n✓ 点一下截图、按住不放看实时画面、两块屏共用一份、收起来就停、手机上松手不误关，都验过了");
     } finally {
         for (const item of opened) { await item.close().catch(() => { /* 已经关了 */ }); }
         await harness.stop().catch(() => { /* 已经停了 */ });
