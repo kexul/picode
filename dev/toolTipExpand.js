@@ -12,7 +12,9 @@
  *     别的条照旧收着；
  *   · 再点那行 → 收回去，高矮回到刚打开那一刻；
  *   · write / edit 的标题行也是这一套：点它才画 diff / 写入预览；
- *   · 关掉提示框再悬浮回来，又是只画输入（上回点开过也不记得）。
+ *   · 关掉提示框再悬浮回来，又是只画输入（上回点开过也不记得）；
+ *   · 铺开 / 收起 / 输出长高时弹窗锁住先摆好的那条边：开在下头锁顶边、开在上头锁底边，
+ *     不翻转、横向也不挪 —— 鼠标底下那一行不动，弹窗不会自己跑出鼠标底下然后被收掉。
  *
  *   npm run web:shot -- --width 1000 --height 760 --script dev/toolTipExpand.js
  * 图落在 dev/shots/。
@@ -46,6 +48,30 @@ function leaveNamed(page, name) {
     `);
 }
 
+/** 那颗标签现在的位置（弹窗锁没锁得住边，得对着它算）。 */
+function namedRect(page, name) {
+    return page.eval(`
+        const el = Array.from(document.querySelectorAll(".tool-row .tool-group"))
+            .filter((t) => { const n = t.querySelector(".tg-name"); return n && n.textContent === " " + ${JSON.stringify(name)}; })
+            .pop();
+        if (!el) { throw new Error("页面上没有这个标签：" + ${JSON.stringify(name)}); }
+        const r = el.getBoundingClientRect();
+        return JSON.stringify({ top: Math.round(r.top), bottom: Math.round(r.bottom) });
+    `);
+}
+
+/** 把那颗标签滚到对话区顶部（block: start）或底部（block: end）。滚完才悬浮：滚动本身会把提示框收掉。 */
+function scrollNamed(page, name, where) {
+    return page.eval(`
+        const el = Array.from(document.querySelectorAll(".tool-row .tool-group"))
+            .filter((t) => { const n = t.querySelector(".tg-name"); return n && n.textContent === " " + ${JSON.stringify(name)}; })
+            .pop();
+        if (!el) { throw new Error("页面上没有这个标签：" + ${JSON.stringify(name)}); }
+        el.scrollIntoView({ block: ${JSON.stringify(where)} });
+        return true;
+    `);
+}
+
 /** 提示框现在的样子：高矮、有几行输入、铺开了几条结果、那行「没带过来」的小字在不在、写着什么。 */
 function tipState(page) {
     return page.eval(`
@@ -56,6 +82,9 @@ function tipState(page) {
             open: true,
             width: Math.round(r.width),
             height: Math.round(r.height),
+            top: Math.round(r.top),
+            left: Math.round(r.left),
+            bottom: Math.round(r.bottom),
             inputs: el.querySelectorAll(".tag-tip-click").length,
             outputs: el.querySelectorAll(".tag-tip-result").length,
             clips: el.querySelectorAll(".tag-tip-clip").length,
@@ -155,6 +184,55 @@ module.exports = async (page) => {
     need(reopened.outputs === 0, "重新悬浮时还记着上回铺开的状态：" + JSON.stringify(reopened));
     need(reopened.height === opened.height, "重新悬浮时的高矮跟第一次打开不一样（" + opened.height + " → " + reopened.height + "）");
     await leaveNamed(page, "bash");
+    await page.sleep(300);
+
+    // ---- 七、铺开 / 收起时弹窗锁住先摆好的边：不翻转、不横向挪窝 ----
+    // 先把对话区撑长（不然滚不动，「滚到底部」是空话），再：
+    // 标签滚到对话区顶部 → 弹窗开在下头（锁顶边）；滚到底部 → 开在上头（锁底边，也就是原先会翻转的那种）。
+    await post(page, Array.from({ length: 40 }, (_, i) => ({ type: "assistantFull", text: "第 " + (i + 1) + " 段填充：把对话区撑到能滚起来，好把标签摆到屏幕底上去。\n再占一行。\n再占一行。" })));
+    // 末尾垫三条 read：这颗标签天生贴在对话区底，收着的弹窗（三行）比标签底下的空档高，只能开在上头
+    await post(page, ["r1", "r2", "r3", "r4"].flatMap((id) => [
+        { type: "tool", toolName: "read", args: { path: id + ".txt" }, toolCallId: id },
+        { type: "toolResult", toolCallId: id, isError: false, durationMs: 10, resultText: id + " 的内容" },
+    ]));
+    await page.sleep(400);
+    // start：bash 标签在记录最顶上，滚到对话区顶 → 弹窗开在下头（锁顶边）；
+    // end：read 标签贴在对话区底（滚到底部）→ 弹窗开在上头（锁底边，也就是原先会翻转的那种）。
+    const cases = [
+        { where: "start", name: "bash", scroll: true },
+        { where: "end", name: "read", scroll: false },
+    ];
+    for (const { where, name, scroll } of cases) {
+        if (scroll) {
+            await scrollNamed(page, name, where);
+        } else {
+            // 上一轮把对话区滚到了顶，界面当成「用户在看」就不再自动跟底；悬浮前手动滚回底部
+            await page.eval(`document.querySelector(".session-pane").scrollTop = 1e9; return true;`);
+            await page.sleep(200);
+        }
+        await hoverNamed(page, name);
+        await page.sleep(600);
+        const at = await state();
+        const tag = JSON.parse(await namedRect(page, name));
+        need(at.open, "七（" + where + "）：悬浮之后提示框没出来");
+        const above = at.bottom <= tag.top + 1;   // 整块在标签上头 = 开在上头
+        const edgeOf = (s) => (above ? s.bottom : s.top);
+        const sideName = above ? "底边" : "顶边";
+        const near = (a, b) => Math.abs(a - b) <= 2;   // 亚像素取整会有 1px 上下的抖动，不认那个
+        for (const act of ["铺开", "收起"]) {
+            await page.eval(`const el = document.querySelectorAll(".tag-tip .tag-tip-click")[0];
+                el.dispatchEvent(new MouseEvent("click", { bubbles: true })); return true;`);
+            await page.sleep(act === "铺开" ? 800 : 300);
+            const now = await state();
+            await page.shot("tip-anchor-" + where + "-" + act + ".png");
+            need(now.open, "七（" + where + " " + act + "）：提示框没了");
+            need(near(edgeOf(now), edgeOf(at)), "七（" + where + " " + act + "）：开在" + (above ? "上头" : "下头") + "该锁" + sideName
+                + "，却从 " + edgeOf(at) + " 挪到 " + edgeOf(now));
+            need(near(now.left, at.left), "七（" + where + " " + act + "）：横向挪了（" + at.left + " → " + now.left + "）");
+        }
+        await leaveNamed(page, name);
+        await page.sleep(300);
+    }
 
     if (problems.length) {
         throw new Error("有对不上的地方：\n  - " + problems.join("\n  - "));

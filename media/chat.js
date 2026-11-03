@@ -3659,6 +3659,9 @@
   let tagTipPaintAt = 0;    // 上一次重画的时刻（performance.now）
   let tagTipFollow = true;  // 还在长的内容要不要跟着贴底（用户往回滚过就不跟了）
   let tagTipTag = null;
+  // 这次打开先摆好的位置：side 是开在标签底下还是上头，top/left 是摆下的像素，bottom 是「开在上头」时锁住的底边。
+  // 重画（铺开输出、内容长高）时按它锁边重摆，弹窗不翻转、鼠标底下那行不动；收起后再开才重新从头摆。
+  let tagTipAnchor = null;
 
   function cancelTagTipPaint() {
     if (tagTipPaintTimer) { cancelAnimationFrame(tagTipPaintTimer); tagTipPaintTimer = 0; }
@@ -3669,6 +3672,7 @@
     if (tagTipHideTimer) { clearTimeout(tagTipHideTimer); tagTipHideTimer = 0; }
     if (tagTipTimer) { clearTimeout(tagTipTimer); tagTipTimer = 0; }
     tagTipTag = null;
+    tagTipAnchor = null;
     if (tagTipEl) { tagTipEl.classList.add("hidden"); }
   }
   function cancelTagTipHide() {
@@ -3805,16 +3809,34 @@
   function placeTagTip(el, tag) {
     const r = tag.getBoundingClientRect();
     el.style.maxWidth = Math.max(160, Math.min(640, window.innerWidth - 16)) + "px";
-    const w = el.offsetWidth;
-    const h = el.offsetHeight;
-    let x = Math.max(8, Math.min(r.left, window.innerWidth - 8 - w));
-    let y = r.bottom + 6;
-    if (y + h > window.innerHeight - 8) {
-      const above = r.top - h - 6;
-      y = above >= 8 ? above : Math.max(8, window.innerHeight - 8 - h);
+    el.style.maxHeight = "";
+    if (!tagTipAnchor) {
+      // 第一次摆：贴标签底下，摆不下翻到上头；把摆下的边记下来当锚
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      const x = Math.max(8, Math.min(r.left, window.innerWidth - 8 - w));
+      let y = r.bottom + 6;
+      let side = "below";
+      if (y + h > window.innerHeight - 8) {
+        const above = r.top - h - 6;
+        side = "above";
+        y = above >= 8 ? above : Math.max(8, window.innerHeight - 8 - h);
+      }
+      tagTipAnchor = { side: side, top: y, left: x, bottom: y + h };
+      el.style.left = x + "px";
+      el.style.top = y + "px";
+    } else {
+      // 重摆：锁住先摆好的那条边（底下开锁上边、上头开锁底边），只朝屏幕内长，
+      // 高到快出屏幕就封顶给内容区滚 —— 弹窗不翻转，鼠标底下那行不动。
+      // 封顶照旧不超过 CSS 里那个 60vh 的上限，取两者里小的。
+      const a = tagTipAnchor;
+      const w = el.offsetWidth;
+      const cap = Math.min(window.innerHeight * 0.6, a.side === "below" ? window.innerHeight - 8 - a.top : a.bottom - 8);
+      el.style.maxHeight = Math.max(120, cap) + "px";
+      el.style.left = Math.max(8, Math.min(a.left, window.innerWidth - 8 - w)) + "px";
+      el.style.top = (a.side === "below" ? a.top : a.bottom - el.offsetHeight) + "px";
+      return;
     }
-    el.style.left = x + "px";
-    el.style.top = y + "px";
   }
   // 内容滚动或窗口变化后提示位置会错位，直接收起；滚动提示框自己（看长结果）不算。
   document.addEventListener("scroll", (e) => {
