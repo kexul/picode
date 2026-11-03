@@ -372,6 +372,9 @@ export const PAGE_TRANSIENT_MESSAGE_TYPES: ReadonlySet<string> = new Set([
     // 防以后改走广播时，把好几百 KB 的截图塞进补发暂存，把真正的历史消息挤掉。
     "desktopScreenshot",         // 桌面截图（网页端“桌面截图”按钮）
     "desktopScreenshotResult",   // 桌面截图的失败提示
+    // 长按那颗按钮看桌面实时画面：一秒两张、一张几十 KB，走 sendTo 只给看着的那块屏
+    "desktopLiveFrame",          // 实时画面的一帧（base64 的 JPEG）
+    "desktopLiveResult",         // 实时画面起不来 / 拍到一半断了（这一层该收掉，带一句原因）
 ]);
 
 /**

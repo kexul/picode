@@ -33,10 +33,12 @@ const projects = [
     { label: "全量检查", config: "tsconfig.json" },
 ];
 
-// 两支小程序的源码与产物（见 bin/shot.cs、bin/tray.cs）：
+// 三支小程序的源码与产物（见 bin/shot.cs、bin/live.cs、bin/tray.cs）：
 // 都用系统自带的 csc.exe 编，随 npm 包一起装到后端那边。
 const SHOT_SOURCE = path.join(repoRoot, "bin", "shot.cs");
 const SHOT_EXE = path.join(repoRoot, "bin", "shot.exe");
+const LIVE_SOURCE = path.join(repoRoot, "bin", "live.cs");
+const LIVE_EXE = path.join(repoRoot, "bin", "live.exe");
 const TRAY_SOURCE = path.join(repoRoot, "bin", "tray.cs");
 const TRAY_EXE = path.join(repoRoot, "bin", "tray.exe");
 
@@ -70,6 +72,7 @@ async function compileOnce() {
         }
     }
     compileShotExe();
+    compileLiveExe();
     compileTrayExe();
     process.stdout.write("都编完了。\n");
 }
@@ -89,6 +92,23 @@ function compileShotExe() {
         references: ["System.Drawing.dll"],
         whySkip: "桌面截图只在 Windows 上能用，没必要编",
         whyFail: "运行时会退回 PowerShell 那套",
+    });
+}
+
+/**
+ * 编“一直拍桌面”那支小程序（bin/live.cs → bin/live.exe）。
+ *
+ * 跟截屏那支一样不算构建失败：没有它只是长按截图按钮看不了实时画面（点一下截图照旧能用）。
+ */
+function compileLiveExe() {
+    runCsc({
+        label: "实时画面小程序",
+        source: LIVE_SOURCE,
+        output: LIVE_EXE,
+        target: "exe",
+        references: ["System.Drawing.dll"],
+        whySkip: "桌面实时画面只在 Windows 上能用，没必要编",
+        whyFail: "长按截图按钮看桌面实时画面就用不了",
     });
 }
 

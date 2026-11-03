@@ -46,6 +46,7 @@ import type { SessionChanges } from "./gitChanges";
 import type { BashTaskInfo } from "./bashProtocol";
 import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
+import { DesktopLive } from "./desktopLive";
 import { describeRestart } from "./serverRestart";
 import { WeixinLogin, readWeixinAccount, type WeixinAccount } from "./weixinLogin";
 import { findRouteForInbound, pushWeixinNote, type SentRecord } from "./weixinPush";
@@ -198,6 +199,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private readonly state: ServerStateStore;
     private readonly log: (text: string) => void;
     private disposed = false;
+    /** 桌面实时画面那一路（长按「截图」按钮）：没人看的时候不起进程，见 src/desktopLive.ts。 */
+    private readonly desktopLive = new DesktopLive();
 
     constructor(private readonly options: ChatHostOptions) {
         super("server");
@@ -1062,6 +1065,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         this.forgetInputFocus(pageId);
         this.dropCardsForClient(pageId);
         this.dropPickerForClient(pageId);
+        // 这块屏还在看桌面实时画面的话，它这一走就别再拍了
+        this.desktopLive.removeViewer(pageId);
         // 整屏重画画到一半页面走了：重画的内容不进补发暂存，它回来对账时会“看似不缺”，
         // 内容却缺一截。记下来，它一连上就重新整画一遍。
         if (this.resyncingPages.delete(pageId)) {
@@ -1080,6 +1085,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         this.outbox.clear();
         this.pendingResyncPages.clear();
         this.resyncingPages.clear();
+        // 页面都收到告别话了：桌面实时画面也别拍了
+        this.desktopLive.stop();
     }
 
     /** 这块屏换了新连接：它原来那条连接上"卡片已送到"的记录清掉（见 onPageConnected）。 */
@@ -1647,6 +1654,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             case "requestDesktopScreenshot":
                 this.sendDesktopScreenshot();
                 return true;
+            case "requestDesktopLive":
+                // 长按「截图」按钮：一直看着这台电脑的桌面，帧只发给按下去的那块屏
+                this.startDesktopLive();
+                return true;
+            case "stopDesktopLive":
+                // 那块屏把那一层收掉了：不看了就别再拍（别的一块屏还在看就照旧拍）
+                this.desktopLive.removeViewer(this.currentPageId);
+                return true;
             case "openSettingsPanel":
                 // 弹设置界面的请求：只回给请求它的那块屏。
                 this.sendToOneClient(this.currentPageId, { type: "openSettings" });
@@ -1750,6 +1765,29 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 ? { type: "desktopScreenshot", data: result.data, mimeType: result.mimeType }
                 : { type: "desktopScreenshotResult", ok: false, error: result.error };
             this.sendToOneClient(target, msg);
+        });
+    }
+
+    /**
+     * 同一颗按钮按住不放：一直看着这台电脑的桌面。
+     *
+     * 帧走 sendToOneClient 只发给按下去的那块屏（别的页面不跟着弹），而且是“一次性”消息、
+     * 不进补发暂存（见 PAGE_TRANSIENT_MESSAGE_TYPES）：一秒两张、一张几十 KB，
+     * 攒进去几下就把真正要补的历史挤掉了。起不来 / 拍到一半断了发 desktopLiveResult。
+     */
+    private startDesktopLive(): void {
+        const target = this.currentPageId;
+        if (!target) { return; }
+        this.desktopLive.addViewer(target, {
+            onFrame: (frame) => {
+                const sent = this.sendToOneClient(target, { type: "desktopLiveFrame", data: frame.data, mimeType: frame.mimeType });
+                // 那块屏已经不在了（连接收了）就别再拍了；正常情况下它走的时候
+                // onPageDisconnected 会把它摘掉，这一句是兼那个漏网的
+                if (!sent) { this.desktopLive.removeViewer(target); }
+            },
+            onFail: (note) => {
+                this.sendToOneClient(target, { type: "desktopLiveResult", ok: false, error: note });
+            },
         });
     }
 
@@ -2042,6 +2080,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         this.disposeTray();
         this.weixinInbox?.stop();
         this.weixinInbox = undefined;
+        this.desktopLive.stop();
         this.disposeAllPickers();
         this.disposeAllCards();
         this.disposeAllConversations();

@@ -5,13 +5,13 @@
  *                        Linux / macOS：dist/pichat（一个可执行文件，约 2.4MB）
  *
  * 两边装的东西一样：后端打成一个 CommonJS 文件 + 界面文件 + 启动用的那点东西
- * （Windows 还带上托盘与截屏两支小程序，Linux 上没有托盘，不带）。
+ * （Windows 还带上托盘与桌面画面那几支小程序，Linux 上没有托盘，不带）。
  * 也都不带 Node 运行时：跑的时候用这台机器上装好的 Node（`PICHAT_NODE` → PATH → 常见位置）。
  *
  * 里面装的是什么（跟 Node 单文件应用那种 90MB 的做法不一样）：
  *   - 一份壳（bin/launcher.cs，编出来是个窗口程序，天生没有黑框）；
  *   - 后端打成一个 CommonJS 文件（我们零运行时依赖，相对路径自己接一下就行）；
- *   - 界面文件（media/）与两支小程序（bin/tray.exe、bin/shot.exe）。
+ *   - 界面文件（media/）与三支小程序（bin/tray.exe、bin/shot.exe、bin/live.exe）。
  * **不带 Node 运行时**：跑的时候用这台机器上装好的 Node（`PICHAT_NODE` → PATH → 常见安装位置）。
  * 所以产物只有几 MB；代价是目标机器得有 Node 20 或以上（找不到时壳会弹一句人话）。
  *
@@ -188,7 +188,7 @@ function packagePosix(version) {
 
 /**
  * 要装进产物里的东西（相对解出来的那个目录：media/…、out/server/bundle.cjs、以及 Windows 才有的 bin/…）。
- * @param withBinaries 要不要带上那两支小程序（托盘 / 截屏）：只有 Windows 那份才用得上，
+ * @param withBinaries 要不要带上那几支小程序（托盘 / 截屏 / 实时画面）：只有 Windows 那份才用得上，
  *                     Linux 上它们压根不编（scripts/compile.mjs 会跳过），不能强求。
  */
 function collectPayload(version, withBinaries) {
@@ -201,9 +201,9 @@ function collectPayload(version, withBinaries) {
         if (fs.statSync(full).isFile()) { add(`media/${name}`, full); }
     }
     if (withBinaries) {
-        for (const name of ["tray.exe", "shot.exe"]) {
+        for (const name of ["tray.exe", "shot.exe", "live.exe"]) {
             const full = path.join(repoRoot, "bin", name);
-            if (!fs.existsSync(full)) { fail(`找不到 bin/${name}：先跑 npm run compile（它顺手编这两支小程序）`); }
+            if (!fs.existsSync(full)) { fail(`找不到 bin/${name}：先跑 npm run compile（它顺手编这几支小程序）`); }
             add(`bin/${name}`, full);
         }
     }

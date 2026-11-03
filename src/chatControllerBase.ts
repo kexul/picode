@@ -34,6 +34,7 @@ import {
 import { randomNameParts, composeName } from "./names";
 import { pathCaseKey, relativeTo as pathRelativeTo, sameDir } from "./pathRules";
 import { desktopScreenshotSupported } from "./desktopScreenshot";
+import { desktopLiveSupported } from "./desktopLive";
 import type { PanelLaunch, TurnEndStatus } from "./runtimeTypes";
 import type { TabaRequest, TabaSpawnRequest, TabaStopRequest } from "./tabaProtocol";
 import { TABA_DECODER } from "./tabaProtocol";
@@ -429,6 +430,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
             caseSensitivePaths: process.platform !== "win32",
             // 截不了桌面的机器（Linux）上界面把那颗按钮藏起来，省得点下去只弹一句“只在 Windows 上可用”
             desktopScreenshot: desktopScreenshotSupported(),
+            // 能不能长按它看桌面实时画面（要那支“一直拍”的小程序在）：不在的话长按什么也不做
+            desktopLive: desktopLiveSupported(),
             ...this.viewOptionsExtra(),
         });
     }

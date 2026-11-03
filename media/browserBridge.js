@@ -239,18 +239,23 @@
 
   // ==================== 入站：两处页面都要自己拦的消息 ====================
 
-  /** 两处页面都要自己接的消息：界面颜色跟随、桌面截图。 */
+  /** 两处页面都要自己接的消息：界面颜色跟随、桌面画面（截图 / 实时画面）。 */
   function inspectIncoming(data) {
     var type = data && data.type;
-    // 桌面截图：两颗按钮（浏览器页面与插件里的对话面板）都挂，图推回来也只有这里能接。
-    // chat.js 不认识这两个类型，转发给它等于什么都不发生（插件面板以前就是这样：
+    // 桌面画面：两颗按钮（浏览器页面与插件里的对话面板）都挂，图推回来也只有这里能接。
+    // chat.js 不认识这几个类型，转发给它等于什么都不发生（插件面板以前就是这样：
     // 按钮压暗一会儿自己弹回来，图永远不出来）。
     if (type === "desktopScreenshot") { showDesktopScreenshot(data); return true; }
     if (type === "desktopScreenshotResult") { handleDesktopScreenshotResult(data); return true; }
+    if (type === "desktopLiveFrame") { showDesktopLiveFrame(data); return true; }
+    if (type === "desktopLiveResult") { handleDesktopLiveResult(data); return true; }
     if (type === "viewOptions" && data.themeMode) {
       applyTheme(data.themeMode === "dark" ? "dark" : "light");
     }
-    if (type === "viewOptions") { setDesktopShotEnabled(data.desktopScreenshot !== false); }
+    if (type === "viewOptions") {
+      setDesktopShotEnabled(data.desktopScreenshot !== false);
+      setDesktopLiveEnabled(data.desktopLive !== false);
+    }
     return false;
   }
 
@@ -482,6 +487,10 @@
         // 报活的定时器已经开着，按新周期重开一次
         if (pingTimer) { clearInterval(pingTimer); pingTimer = setInterval(ping, PING_MS); }
       }
+      // 断线重连：那块屏一断，后端就把“有人在看桌面实时画面”那一笔划掉了
+      //（见 ChatHost.onPageDisconnected）。这一层要是还开着就再要一次，
+      // 不然画面停在最后那一帧不动、人也不知道为什么。第一次连上时这一层还没开，走不到这儿。
+      if (liveOpen) { enqueue({ type: "requestDesktopLive" }); }
       return;
     }
     if (type === "syncPoint") {
@@ -710,18 +719,28 @@
     bannerText(text, withReload !== false);
   }
 
-  // ==================== 桌面截图 ====================
-  // 输入框底下那颗“📷”按钮：请插件截一张这台电脑的桌面（可能就是本机，
-  // 也可能是你在手机浏览器里看的这台开发机），截好推回来全屏显示。
-  // 消息由插件那头的 ChatViewProvider 接：
-  //   requestDesktopScreenshot → desktopScreenshot（图片 base64）/ desktopScreenshotResult（失败）。
-  // 推回来的这两条在 inspectIncoming 里接（两种页面都走那儿），别只挂在下面的
+  // ==================== 桌面画面（点一下 / 按住不放） ====================
+  // 输入框底下那颗“📷”按钮，两种手法两个结果：
+  //   · 点一下：请插件截一张这台电脑的桌面（可能就是本机，也可能是你在手机浏览器里看的这台
+  //     开发机），截好推回来全屏显示；
+  //   · 按住不放（约半秒）：弹出一层，里面一直换着这这台电脑的桌面画面（一秒两张），
+  //     收起来就告诉插件别拍了。
+  // 消息由插件那头的 ChatHost 接：
+  //   requestDesktopScreenshot → desktopScreenshot（图片 base64）/ desktopScreenshotResult（失败）；
+  //   requestDesktopLive → desktopLiveFrame（一帧一帧）/ desktopLiveResult（起不来、断了）；
+  //   收起来时发 stopDesktopLive。
+  // 推回来的这几条在 inspectIncoming 里接（两种页面都走那儿），别只挂在下面的
   // dispatch 上：那条路只有网页端走。
   var shotBtn = null;
   var shotBusyTimer = null;
   // 这台机器能不能截桌面（后端在 viewOptions 里报）：截不了（比如后端跑在 Linux 上）就不露那颗按钮，
   // 省得点下去只弹一句“只在 Windows 上可用”。
   var desktopShotEnabled = true;
+  // 能不能按住不放看实时画面（要后端带着那支“一直拍”的小程序，见 src/desktopLive.ts）：
+  // 不能在的话长按就跟点一下一样，什么额外的事都不发生。
+  var desktopLiveEnabled = true;
+  // 按住多久算“按住不放”。太短会跟“点一下”撞车，太长按着手太酸；半秒上下是手机上常见的那一档。
+  var LONG_PRESS_MS = 450;
 
   /** 后端说这台机器截不了桌面：按钮收起来（已经画出来的也拿掉）。 */
   function setDesktopShotEnabled(enabled) {
@@ -730,6 +749,15 @@
       shotBtn.parentNode.removeChild(shotBtn);
       shotBtn = null;
     }
+  }
+
+  /** 后端说这台机器没有实时画面那一路：长按不比点一下多做什么，提示也跟着改回去。 */
+  function setDesktopLiveEnabled(enabled) {
+    desktopLiveEnabled = enabled !== false;
+    if (!shotBtn) { return; }
+    shotBtn.title = desktopLiveEnabled
+      ? "点一下看桌面截图，按住不放看桌面实时画面（截的是运行 VSCode 的这台电脑）"
+      : "查看桌面截图（截的是运行 VSCode 的这台电脑）";
   }
 
   /** 截屏从点击到图推回来要一两秒：期间按钮压暗并暂时点不动。 */
@@ -770,9 +798,116 @@
     enqueue({ type: "requestDesktopScreenshot" });
   }
 
+  // ==================== 桌面实时画面那一层 ====================
+  // 就一张图一直换（一秒两张），外面一圈黑底，右上角一颗叉。
+  // 没有缩放：这一层是用来看“现在屏幕上是什么样”的，不是看图；多出来那套手势
+  // 在这么小的图上只会帮倒忙（要仔细看就点一下截一张，那一层能放大）。
+  var liveLayer = null;
+  var liveImg = null;
+  var liveNote = null;
+  var liveOpen = false;
+  /** 这一回收到第几帧了（第一帧一到就把“正在连…”收掉）。 */
+  var liveFrames = 0;
+  /** 等着第一帧的兜底：一直没有画面的原因写在 note 里给人看。 */
+  var liveWaitTimer = null;
+
+  /** 把那一层搭出来（第一次要看的时候才建）。 */
+  function ensureLiveLayer() {
+    if (liveLayer) { return; }
+    liveLayer = document.createElement("div");
+    liveLayer.id = "desktopLiveLayer";
+    liveLayer.className = "desktop-live hidden";
+    liveImg = document.createElement("img");
+    liveImg.className = "desktop-live-img";
+    liveImg.alt = "桌面实时画面";
+    liveNote = document.createElement("div");
+    liveNote.className = "desktop-live-note";
+    var close = document.createElement("button");
+    close.type = "button";
+    close.className = "desktop-live-close";
+    close.innerHTML = "&times;";
+    close.title = "关掉";
+    close.setAttribute("aria-label", "关掉");
+    close.addEventListener("click", function () { closeDesktopLive(); });
+    // 点黑底也关（跟看图和侧边栏那几层一个习惯）；点画面本身不关，免得手一抖就没了
+    liveLayer.addEventListener("click", function (e) {
+      if (e.target === liveLayer) { closeDesktopLive(); }
+    });
+    liveLayer.appendChild(liveImg);
+    liveLayer.appendChild(liveNote);
+    liveLayer.appendChild(close);
+    document.body.appendChild(liveLayer);
+  }
+
+  /** 按住不放：开一层看着这台电脑的桌面。 */
+  function openDesktopLive() {
+    if (liveOpen) { return; }
+    ensureLiveLayer();
+    liveOpen = true;
+    liveFrames = 0;
+    liveImg.removeAttribute("src");
+    liveNote.textContent = "正在连……";
+    liveNote.style.display = "";
+    liveLayer.classList.remove("hidden");
+    enqueue({ type: "requestDesktopLive" });
+    // 一直等不到画面（锁屏、远程会话断开、后端那头没起来）：别让人对着“正在连…”干等
+    if (liveWaitTimer) { clearTimeout(liveWaitTimer); }
+    liveWaitTimer = setTimeout(function () {
+      liveWaitTimer = null;
+      if (!liveOpen || liveFrames > 0) { return; }
+      liveNote.textContent = "一直没有画面（电脑锁屏或远程会话断开时可能这样）。";
+    }, 10000);
+  }
+
+  /** 收起那一层，并且告诉后端别再拍了。 */
+  function closeDesktopLive() {
+    if (!liveOpen) { return; }
+    liveOpen = false;
+    if (liveWaitTimer) { clearTimeout(liveWaitTimer); liveWaitTimer = null; }
+    if (liveLayer) { liveLayer.classList.add("hidden"); }
+    if (liveImg) { liveImg.removeAttribute("src"); }
+    enqueue({ type: "stopDesktopLive" });
+  }
+
+  /** 后端推来一帧：换上，把“正在连…”收掉。 */
+  function showDesktopLiveFrame(data) {
+    // 已经收起来了：手上可能还有几帧在路上，丢掉就是（那几帧正是关掉那一刻的）
+    if (!liveOpen || !liveImg) { return; }
+    var base64 = data && typeof data.data === "string" ? data.data : "";
+    if (!base64) { return; }
+    var mimeType = data && typeof data.mimeType === "string" && data.mimeType ? data.mimeType : "image/jpeg";
+    liveImg.src = "data:" + mimeType + ";base64," + base64;
+    liveFrames++;
+    if (liveFrames === 1) { liveNote.style.display = "none"; }
+  }
+
+  /** 实时画面起不来 / 拍到一半断了：那一刻跟截图失败一个待遇（收起来，说一句）。 */
+  function handleDesktopLiveResult(data) {
+    var error = data && typeof data.error === "string" && data.error ? data.error : "桌面实时画面看不了。";
+    if (!liveOpen) { return; }
+    closeDesktopLive();
+    window.alert(error);
+  }
+
+  // Esc 关掉这一层。放在捕获阶段、就地吃掉这条键：chat.js 那边「Esc 中止正在生成的这一轮」
+  // 与看图那一层都听同一个键，不拦下来就会顺手把正在跑的那轮停掉。
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape" || !liveOpen) { return; }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    closeDesktopLive();
+  }, true);
+
+  // 页面退到后台（锁屏 / 切到别的应用）就收起来：看不见的东西不该一直吃流量与电，
+  // 回来时按住不放再开一次就好。
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "hidden") { closeDesktopLive(); }
+  });
+  window.addEventListener("pagehide", function () { closeDesktopLive(); });
+
   // ==================== “📷”与顶栏最右边的“<<<”两颗按钮 ====================
-  //  - 📷（截图）：把开发机的桌面截一张发回页面看（手机上常用）。它不占顶条，
-  //    排在输入框底下那条小横排上、「后台任务」那颗（三根横线）左边：
+  //  - 📷（桌面画面）：点一下把开发机的桌面截一张发回页面看（手机上常用），按住不放是一直
+  //    看着那个桌面。它不占顶条，排在输入框底下那条小横排上、「后台任务」那颗（三根横线）左边：
   //    顶条中间要摆一排会话格，右边只留那颗 <<<。
   //  - <<<：挂在 #sessionBarTail 里（顶条最右边），点它让“项目与会话”列表从右侧滑进来
   //    （消息由后端的 ChatHost 接）：最上面是“浏览文件夹…”与当前目录，下面是用 pi
@@ -784,9 +919,43 @@
     shotBtn.type = "button";
     shotBtn.id = "browserScreenshotBtn";
     shotBtn.innerHTML = ICON_CAMERA;
-    shotBtn.title = "查看桌面截图（截的是运行 VSCode 的这台电脑）";
-    shotBtn.setAttribute("aria-label", "截图");
-    shotBtn.addEventListener("click", requestDesktopScreenshot);
+    shotBtn.title = "点一下看桌面截图，按住不放看桌面实时画面（截的是运行 VSCode 的这台电脑）";    shotBtn.setAttribute("aria-label", "截图");
+    // 点两下会出事：按住不放已经弹出了实时画面，松手时浏览器还会补一个 click，
+    // 那一下不能再当成“点一下”去截一张（不然实时画面底下又弹一张图）。
+    var pressTimer = null;
+    var pressFired = false;
+    function cancelPress() {
+      if (!pressTimer) { return; }
+      clearTimeout(pressTimer);
+      pressTimer = null;
+    }
+    shotBtn.addEventListener("pointerdown", function (e) {
+      // 只认主键 / 手指：右键、中键不掺和
+      if (e.button !== undefined && e.button !== 0) { return; }
+      pressFired = false;
+      cancelPress();
+      pressTimer = setTimeout(function () {
+        pressTimer = null;
+        if (!desktopLiveEnabled) { return; }
+        pressFired = true;
+        openDesktopLive();
+      }, LONG_PRESS_MS);
+    });
+    shotBtn.addEventListener("pointerup", cancelPress);
+    shotBtn.addEventListener("pointercancel", cancelPress);
+    shotBtn.addEventListener("pointerleave", cancelPress);
+    // 手机上长按会顺带弹出“保存图片 / 选中文字”那套菜单，把那一下吃掉
+    shotBtn.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+    shotBtn.addEventListener("click", function (e) {
+      if (pressFired) {
+        // 那是按住不放松手时补的那一下：不截屏，只把它记回去
+        pressFired = false;
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      requestDesktopScreenshot();
+    });
     // 摆进输入框底下那条小横排（#inputRow），落在「后台任务」那颗（三根横线）左边。
     // 那颗由 chat.js 后头加（本文件比主脚本先加载），这会儿还没有，所以直接排进横排
     // 就落在它前头；万一已经有了，也插在它左边。截不了桌面时由 setDesktopShotEnabled 摘掉。

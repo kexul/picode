@@ -44,6 +44,72 @@ html, body {
   pointer-events: none;
 }
 
+/* 长按那颗按钮会顺带弹出“选中文字 / 保存图片”那套菜单，按着的时候也别让它选中 */
+#browserScreenshotBtn {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/*
+  按住“📷”不放弹出来的那一层：黑底上摆一张图，一秒换两张（见 browserBridge.js 的桌面实时画面那段）。
+  跟看图的 .lightbox（chat.css）一个摆法，但不带缩放手势：这一层是用来看“现在屏幕上是什么样”的，
+  图本身只有 512 长边，放大只剩糊（要仔细看就点一下截一张，那一层能放大）。
+  压在 9999 层：跟看图那一层一样高，但它自己弹的时候不该被别的浮层盖住。
+*/
+.desktop-live {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.72);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.desktop-live.hidden { display: none; }
+
+/* 图按它本来的大小摆（512 长边）：手机屏比它宽就缩到屏内，电脑上不放大 */
+.desktop-live img {
+  max-width: 96vw;
+  max-height: 96vh;
+  border-radius: 8px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+  background: #000;
+}
+
+/* 等着第一帧的时候那一句（之后整句收掉，不盖画面） */
+.desktop-live-note {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 12%;
+  text-align: center;
+  color: #e6e6e6;
+  font-size: 13px;
+  pointer-events: none;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+.desktop-live-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f5f5f5;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.desktop-live-close:hover { background: rgba(255, 255, 255, 0.24); }
+
 #browserMenuBtn {
   flex: 0 0 auto;
   align-self: stretch;

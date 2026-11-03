@@ -73,7 +73,7 @@ npm run exe             # 产出 dist/pichat（约 750KB，不进版本库）
 - 设置文件还是 `~/.pi/pichat/config.json`，跟插件版、命令行版共用一份。
 - **没有托盘图标**（那是 Windows 那份才有的）：这条提醒在这台看不到，但
   **「消息推送」照常能用**——设置里填上另一台（Windows）的地址，这台跑完就推过去。
-- 桌面截图也没有（只在 Windows 上）。
+- 桌面截图与桌面实时画面也没有（只在 Windows 上）。
 - `./build.sh` 会把这份 `dist/pichat` 一起打出来。
 
 ### 在 Linux 上跑后端（只用 pichat，不装编辑器插件）
@@ -106,7 +106,7 @@ pichat --cwd ~/work     # 起后端；终端里会打出地址，Ctrl+C 停
 - **想让它一直在后台**：`pichat` 是在前台跑的，关掉终端就停。要常驻就用
   `nohup pichat --cwd ~/work > ~/.pi/pichat/pichat.log 2>&1 &`。
   一个后端只能起一个（再起会告诉你已经有一个在跑、地址是多少），所以别重复起。
-- **桌面截图没有**：那功能只在 Windows 上能用（截的是跑后端的这台机器的桌面），
+- **桌面截图与桌面实时画面都没有**：这两样只在 Windows 上能用（截的是跑后端的这台机器的桌面），
   后端在 Linux 上时输入框底下那颗「截图」（相机图标）不出现，其它功能都在。
 
 ## 使用
@@ -186,7 +186,7 @@ pichat --cwd ~/work     # 起后端；终端里会打出地址，Ctrl+C 停
 ## 开发
 
 ```bash
-npm run compile   # 编译 + 类型检查（顺带编桌面截图那支小程序，见 bin/shot.cs）
+npm run compile   # 编译 + 类型检查（顺带编桌面画面那几支小程序，见 bin/shot.cs、bin/live.cs）
 npm run web:dev   # 起后端常驻，浏览器打开看界面
 ```
 
