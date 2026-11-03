@@ -685,6 +685,9 @@
     autoResize();
     // 顶条（会话名 + 目录两行）也会跟着长高变矮：常驻那一列的面板头得重新跟它对齐
     syncDockHeaderHeight();
+    // 看文件的弹窗里那两颗字号按钮的一头一尾是跟着界面字号算的（见 fileViewerFontRange）：
+    // 界面字号一改就得重算一道，不然记着的字号已经不在范围里了、按钮还照旧灰着或亮着
+    applyFileViewerFont();
   }
   function applyViewOptions(opts) {
     if (typeof opts.fontSize === "string") { applyFontSize(opts.fontSize); }
@@ -7369,6 +7372,8 @@
    */
   function syncFileView() {
     document.body.classList.toggle("file-view", fileViewing());
+    // 打开 / 换一份的时候把字号那两颗按钮重算一遍：记着的字号得按现在的界面字号验一道（见 applyFileViewerFont）
+    applyFileViewerFont();
     // 上面那一格（清单）悬停能看到现在待在哪一层
     const ft = fileSidebar.fileTab;
     if (fileSidebar.dirBody) {
@@ -7427,10 +7432,18 @@
   function applyFileViewerFont() {
     const stage = fileSidebar.stage;
     if (!stage) { return; }
-    const font = Number(fileSidebar.font) || 0;
+    const range = fileViewerFontRange();
+    let font = Number(fileSidebar.font) || 0;
+    // 记着的字号落在能调的范围外（以前调小过、后来界面字号又改大了）：这个数就不作数了，
+    // 回到跟界面字号一样大 —— 不然一打开那颗 A− 就灰着按不动（字号明明还能调），
+    // 正文还比界面小好几岁，得先按一下 A+ 才“活过来”。
+    if (font > 0 && (font < range.min || font > range.max)) {
+      font = 0;
+      fileSidebar.font = 0;
+      try { localStorage.removeItem(FILE_VIEWER_FONT_STORE_KEY); } catch (e) { /* 存不了就只管这一次 */ }
+    }
     if (font > 0) { stage.style.setProperty("--pichat-file-font", font + "px"); }
     else { stage.style.removeProperty("--pichat-file-font"); }
-    const range = fileViewerFontRange();
     const now = font > 0 ? font : range.base;
     if (fileSidebar.fontMinus) { fileSidebar.fontMinus.disabled = now <= range.min; }
     if (fileSidebar.fontPlus) { fileSidebar.fontPlus.disabled = now >= range.max; }

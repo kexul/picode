@@ -10,7 +10,8 @@
  *   3. 拖右下角那个角：大小跟着变（有最小值）；
  *   4. 刷新页面再打开同一个文件：还摆在刚才那儿、还是刚才那么大（记在这台设备里）；
  *   5. 顶上那两颗 A− / A+：只改正文的字号（一次一像素），到两头那颗按钮按下去，
- *      字号也记在这台设备里（刷新之后还是这个字号）；
+ *      字号也记在这台设备里（刷新之后还是这个字号）；记着的字号要是落在能调的范围外
+ *      （以前调小过、后来界面字号又改大了），不当数：正文回到跟界面字号一样大、A− 不灰；
  *   6. 手机上不出拖、改大小这两样（那一块铺满整屏）——由 dev/filePullDown.js 那一遍验。
  *
  * 测试文件现写进会话目录（dev/.scratch），那个目录不进版本库，随便造。
@@ -154,6 +155,7 @@ module.exports = async (page) => {
             body: parseFloat(getComputedStyle(body).fontSize),
             row: row ? parseFloat(getComputedStyle(row).fontSize) : 0,
             bar: parseFloat(getComputedStyle(document.getElementById("fileBar")).fontSize),
+            base: parseFloat(getComputedStyle(document.body).fontSize),
             minusShown: !!minus && getComputedStyle(minus).display !== "none",
             plusShown: !!plus && getComputedStyle(plus).display !== "none",
             minusOff: !!minus && minus.disabled,
@@ -209,6 +211,35 @@ module.exports = async (page) => {
         Math.abs(fontAfterReload.body - fontMin.body) < 0.01,
         JSON.stringify({ before: fontMin.body, after: fontAfterReload.body }));
     await page.eval(`localStorage.removeItem("pichat.fileViewerFont"); return true;`);
+
+    // 记着的字号落在能调的范围外（比现在能调的最小还小：以前调小过、后来界面字号又改大了）：
+    // 这个数不作数，正文回到跟界面字号一样大，那颗 A− 不能一打开就灰着按不动
+    // —— 以前得先按一下 A+ 才「活过来」（见 applyFileViewerFont）
+    const stale = await page.eval(`
+        const base = Math.round(parseFloat(getComputedStyle(document.body).fontSize) || 13);
+        const stale = String(Math.max(1, base - 5));
+        localStorage.setItem("pichat.fileViewerFont", stale);
+        return stale;
+    `);
+    await page.eval("location.reload(); return true;");
+    await page.waitReady();
+    await page.sleep(1200);
+    await page.eval(`
+        if (!document.body.classList.contains("file-open")) { document.getElementById("fileSidebarBtn").click(); }
+        return true;
+    `);
+    await page.sleep(800);
+    await page.eval(`
+        const row = Array.from(document.querySelectorAll("#dirPane .file-entry"))
+            .find(function (r) { return r.getAttribute("data-path") === ${JSON.stringify(FILE)}; });
+        if (row) { row.click(); }
+        return true;
+    `);
+    await page.sleep(900);
+    const fontStale = await fontNow();
+    check("记着的字号落出范围外：正文回到跟界面字号一样大、A− 不是灰的",
+        Math.abs(fontStale.base - fontStale.body) < 0.01 && !fontStale.minusOff && fontStale.stored === null,
+        JSON.stringify({ stale: stale, body: fontStale.body, base: fontStale.base, off: fontStale.minusOff, stored: fontStale.stored }));
 
     const passed = checks.filter((c) => c[1]).length;
     console.log("");
