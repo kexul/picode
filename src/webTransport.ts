@@ -370,8 +370,9 @@ export const PAGE_TRANSIENT_MESSAGE_TYPES: ReadonlySet<string> = new Set([
                                  // 只有正在点的那块屏用得上，一条就几十 KB，不能占补发暂存的额度
     // 下面两条走 sendTo 定向发给请求它的那个页面，本来就不进补发暂存；列在这里是
     // 防以后改走广播时，把好几百 KB 的截图塞进补发暂存，把真正的历史消息挤掉。
-    "desktopScreenshot",         // 桌面截图（网页端“桌面截图”按钮）
-    "desktopScreenshotResult",   // 桌面截图的失败提示
+    // （浏览器页面不走这两条：那边直接拉 `/shot`，拿的是字节。理由见 webChatServer.ts。）
+    "desktopScreenshot",         // 桌面截图（只有插件面板走这条）
+    "desktopScreenshotResult",   // 桌面截图的失败提示（只有插件面板走这条）
     // 长按那颗按钮看桌面实时画面：一秒两张、一张几十 KB。浏览器页面直接拉一条 `/live`（不走消息）；
     // 插件里那块面板连不出去，只能这么推，走 sendTo 只给看着的那块屏
     "desktopLiveFrame",          // 实时画面的一帧（base64 的 JPEG）

@@ -23,6 +23,7 @@ import {
     type PageChannel,
 } from "./webTransport";
 import { insideFolder, pathCaseKey, relativeTo } from "./pathRules";
+import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { findListedFile } from "./fileSearch";
 import type { SessionChanges } from "./gitChanges";
 import { readRemoteNotice, readWeixinReply, type RemoteNotice } from "./remoteNotice";
@@ -648,6 +649,11 @@ export class PiChatWebServer {
             if (pathname === "/diff/highlight") {
                 if (req.method !== "POST") { this.sendText(req, res, 405, "只接受 POST。"); return; }
                 void this.withFailNote(req, res, this.sendDiffHighlight(req, res));
+                return;
+            }
+            if (pathname === "/shot") {
+                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                void this.withFailNote(req, res, this.sendDesktopShot(req, res, url.searchParams.get("pageId") ?? ""));
                 return;
             }
             if (pathname === "/live") {
@@ -1454,6 +1460,35 @@ export class PiChatWebServer {
     // ========================================================================
 
     /**
+     * 截一张桌面：`GET /shot?pageId=…`，正文就是那张 JPEG 原样（浏览器页面点一下「截图」）。
+     *
+     * 为什么不像面板那样包成一条 base64 消息：一张长边 1600 的图约 270 KB，转成 base64 是
+     * 356 KB，手机上要拼这么长的字符串、再解回字节、再从 `data:` 地址解码一次 —— 那道
+     * base64 全是白做的。直接给字节，浏览器自己解，还不用排在聊天那条推送流后面。
+     *
+     * 失败时正文就是一句原因（页面拿它弹提示），状态码 4xx/5xx 跟内容对得上。
+     */
+    private async sendDesktopShot(req: http.IncomingMessage, res: http.ServerResponse, pageId: string): Promise<void> {
+        // 只认本服务发出过的页面标识：别的网站里放一张 <img> 猜不到这个串
+        if (!this.host.getBroadcaster().isKnown(pageId)) {
+            this.sendText(req, res, 409, "此页面不是当前这个网页服务发出的（服务可能重启过）。刷新页面就好。");
+            return;
+        }
+        const result = await captureDesktopScreenshot();
+        if (!result.ok) {
+            this.sendText(req, res, 503, result.error ?? "桌面截图失败。");
+            return;
+        }
+        const jpeg = Buffer.from(result.data, "base64");
+        res.writeHead(200, {
+            "Content-Type": result.mimeType || "image/jpeg",
+            "Content-Length": jpeg.length,
+            "Cache-Control": "no-store",
+        });
+        res.end(jpeg);
+    }
+
+    /**
      * 一条桌面实时画面的直连：`GET /live?pageId=…`（浏览器页面按住「截图」按钮那一下）。
      *
      * 页面那边就是一张 `<img>`：这份响应按 multipart/x-mixed-replace 一帧一段往后写，
@@ -1465,6 +1500,11 @@ export class PiChatWebServer {
      * 拍画面的小程序什么时候起停由 DesktopLive 管（还有人看就接着拍）。
      */
     private openDesktopLive(req: http.IncomingMessage, res: http.ServerResponse, pageId: string): void {
+        // 只认本服务发出过的页面标识：别的网站里放一张 <img> 猜不到这个串，也就拉不起这一路
+        if (!this.host.getBroadcaster().isKnown(pageId)) {
+            this.sendText(req, res, 409, "此页面不是当前这个网页服务发出的（服务可能重启过）。刷新页面就好。");
+            return;
+        }
         const boundary = "pichatframe";
         res.writeHead(200, {
             "Content-Type": `multipart/x-mixed-replace; boundary=${boundary}`,

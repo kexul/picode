@@ -16,6 +16,8 @@
  *       画面可以被丢弃，正经内容一条都不能少。
  *   四、直连（`/live`）：浏览器页面那条路真能收到帧，而且是一张张完整的 JPEG；
  *       页面断开后就不拍了（小程序收掉）。
+ *   五、一次一张（`/shot`）：正文就是一张完整的 JPEG（Content-Length 对得上），
+ *       没名没姓的页面标识不给（别的网站猜不到这个串，也就拉不走你的桌面）。
  *
  * 为什么要这条：它是「页面读得慢」时才走的那条路，平时永远碰不到；写错了只会
  * 在手机网络差的那一刻表现成「画面卡住 / 整屏重画」，跑起来一声不响。
@@ -56,6 +58,18 @@ function fetchText(url, maxBytes = 65536) {
                 }
             });
             res.on("end", () => resolve(text));
+        });
+        req.on("error", reject);
+    });
+}
+
+/** 发一个 GET，把正文收全（只给 /shot 那种「收完就完」的用）。 */
+function httpGet(url) {
+    return new Promise((resolve, reject) => {
+        const req = http.get(url, (res) => {
+            const chunks = [];
+            res.on("data", (chunk) => chunks.push(chunk));
+            res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) }));
         });
         req.on("error", reject);
     });
@@ -202,6 +216,29 @@ async function main() {
             check(started.host["desktopLive"].running === false, "页面断开后不再拍了（小程序已经收掉）");
         } finally {
             try { liveReq?.destroy(); } catch { /* 已经断了 */ }
+        }
+
+        // ====================================================================
+        //  五、直连：点一下截一张
+        // ====================================================================
+        console.log("【五】直连 /shot：正文就是一张完整的 JPEG；没名没姓的页面标识不给");
+        {
+            const shot = await httpGet(started.url + "shot?pageId=" + encodeURIComponent(pageId));
+            const jpeg = shot.body;
+            check(shot.status === 200 && String(shot.headers["content-type"] ?? "") === "image/jpeg",
+                "状态 200、类型 image/jpeg（实际 " + shot.status + " / " + shot.headers["content-type"] + "）");
+            check(Number(shot.headers["content-length"]) === jpeg.length,
+                "Content-Length 跟正文对得上（" + jpeg.length + " 字节，约 " + Math.round(jpeg.length / 1024) + " KB）");
+            check(jpeg.length > 1000 && jpeg[0] === 0xff && jpeg[1] === 0xd8 &&
+                jpeg[jpeg.length - 2] === 0xff && jpeg[jpeg.length - 1] === 0xd9,
+                "头 FF D8、尾 FF D9：是一张完整的 JPEG");
+
+            const forged = await httpGet(started.url + "shot?pageId=p-guessed");
+            check(forged.status === 409, "换一个猜出来的页面标识：不给（" + forged.status + " " +
+                forged.body.toString("utf8").slice(0, 24) + "…）");
+
+            const forgedLive = await httpGet(started.url + "live?pageId=p-guessed");
+            check(forgedLive.status === 409, "实时画面那条也一样（" + forgedLive.status + "）");
         }
     } finally {
         try { eventsReq?.destroy(); } catch { /* 已经断了 */ }

@@ -725,11 +725,13 @@
   //     开发机），截好推回来全屏显示；
   //   · 按住不放（约半秒）：弹出一层，里面一直换着这这台电脑的桌面画面（一秒两张），
   //     收起来就告诉插件别拍了。
-  // 消息由插件那头的 ChatHost 接：
+  // 两条路：**浏览器页面**直接跟后端要（点一下 `/shot`、按住 `/live`，拿的是字节，不转 base64、
+  // 也不占聊天那条推送流）；**插件面板**连不出去（页面是内联的、安全策略只放 data:/blob:），
+  // 照旧走消息。消息由插件那头的 ChatHost 接，都只有面板走：
   //   requestDesktopScreenshot → desktopScreenshot（图片 base64）/ desktopScreenshotResult（失败）；
-  //   requestDesktopLive → desktopLiveFrame（一帧一帧，**只有面板走这条**）/ desktopLiveResult（起不来、断了，两种页面都收）；
-  //   收起来时发 stopDesktopLive（也只有面板发）。
-  // 浏览器页面的实时画面不走消息：那一层的那张图直接指后端 `/live`（见下面那一节）。
+  //   requestDesktopLive → desktopLiveFrame（一帧一帧）/ desktopLiveResult（起不来、断了）；
+  //   收起来时发 stopDesktopLive。
+  // 例外：desktopLiveResult 两种页面都收（直连那条是图，没法在图里带一句失败原因）。
   // 推回来的这几条在 inspectIncoming 里接（两种页面都走那儿），别只挂在下面的
   // dispatch 上：那条路只有网页端走。
   var shotBtn = null;
@@ -786,6 +788,19 @@
     if (box && typeof box.open === "function") { box.open(src, "桌面截图"); }
   }
 
+  /** 这张截图的 blob 地址：换下一张时把上一张放掉（不然它一直在内存里挂着）。 */
+  var shotUrl = "";
+
+  /** 浏览器页面：拿到的是一张图的字节（见 requestDesktopScreenshot），转成本地地址交给看图那一层。 */
+  function showDesktopShot(blob) {
+    var box = window.pichatLightbox;
+    if (!box || typeof box.open !== "function") { return; }
+    var url = URL.createObjectURL(blob);
+    if (shotUrl) { try { URL.revokeObjectURL(shotUrl); } catch (e) { /* 放不掉就算了 */ } }
+    shotUrl = url;
+    box.open(url, "桌面截图");
+  }
+
   /** 截图失败：按钮还原，弹一句原因。 */
   function handleDesktopScreenshotResult(data) {
     setShotBusy(false);
@@ -798,6 +813,28 @@
     setShotBusy(true);
     // 截屏迟迟没有回音（插件那头卡住了）：过一会儿放开按钮，允许再点一次
     shotBusyTimer = setTimeout(function () { setShotBusy(false); }, 25000);
+    if (!IN_WEBVIEW) {
+      // 浏览器页面：直接跟后端要那张图的字节（`/shot`，JPEG 原样）——不走消息那条道，
+      // 也不用把几十万个字符拼成 base64 再解回来（手机 CPU 慢，那一道是白做的）。
+      // 失败时后端把原因写在正文里，直接拿去弹。
+      fetch("/shot?pageId=" + encodeURIComponent(pageId))
+        .then(function (resp) {
+          if (!resp.ok) {
+            return resp.text().then(function (text) { throw new Error((text || "").trim()); });
+          }
+          return resp.blob();
+        })
+        .then(function (blob) {
+          setShotBusy(false);
+          showDesktopShot(blob);
+        })
+        .catch(function (err) {
+          setShotBusy(false);
+          var reason = err && typeof err.message === "string" ? err.message : "";
+          window.alert(reason && reason.indexOf("Failed to fetch") < 0 ? reason : "桌面截图没取到（后端可能停了一下）。");
+        });
+      return;
+    }
     enqueue({ type: "requestDesktopScreenshot" });
   }
 
