@@ -129,11 +129,29 @@ html, body {
   left: 0;
   right: 0;
   bottom: 12%;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   color: #e6e6e6;
   font-size: 13px;
   pointer-events: none;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+/* 等着第一帧时字前面那一环转圈（跟长按那颗按钮的进度环一个画法，只是一直转） */
+.desktop-live-spin {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #e6e6e6;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  animation: desktop-live-spin .8s linear infinite;
+}
+@keyframes desktop-live-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .desktop-live-spin { animation: none; }
 }
 
 .desktop-live-close {

@@ -875,6 +875,13 @@
     });
     liveNote = document.createElement("div");
     liveNote.className = "desktop-live-note";
+    // 转圈那一环（跟长按截图按钮那一环一个画法）：让人一眼看出是在等，不是断在这儿
+    var spin = document.createElement("span");
+    spin.className = "desktop-live-spin";
+    liveNote.appendChild(spin);
+    var noteText = document.createElement("span");
+    noteText.textContent = "正在连接";
+    liveNote.appendChild(noteText);
     var close = document.createElement("button");
     close.type = "button";
     close.className = "desktop-live-close";
@@ -899,8 +906,8 @@
     liveOpen = true;
     liveFrames = 0;
     liveImg.removeAttribute("src");
-    liveNote.textContent = "正在连接";
-    liveNote.style.display = "";
+    liveNote.style.display = "none";
+    liveNote.lastChild.textContent = "正在连接";
     liveLayer.classList.remove("hidden");
     if (IN_WEBVIEW) {
       // 面板：帧走消息那条道，后端照旧走 startDesktopLive（见 src/chatHost.ts）
@@ -914,7 +921,7 @@
     liveWaitTimer = setTimeout(function () {
       liveWaitTimer = null;
       if (!liveOpen || liveFrames > 0) { return; }
-      liveNote.textContent = "一直没有画面（电脑锁屏或远程会话断开时可能这样）。";
+      liveNote.lastChild.textContent = "一直没有画面（电脑锁屏或远程会话断开时可能这样）。";
     }, 10000);
   }
 
