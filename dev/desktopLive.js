@@ -351,12 +351,41 @@ async function main() {
         check(spinUnderReduce === "desktop-live-spin", `系统开“减少动画”时那一环还转（${spinUnderReduce}）`);
         await a.cdp.send("Emulation.setEmulatedMedia", { features: [] });
 
-        // ---- 七、页面报错 ----
+        // ---- 七、等第一帧的时候看得见“正在连接”和前面那一环转圈 ----
+        // 平时第一帧几十毫秒就到、提示一闪就收了，看不准；这一段把 `/live` 这条堵掉，
+        // 一帧都到不了，提示就一直露着。
+        await a.cdp.send("Network.enable");
+        await a.cdp.send("Network.setBlockedURLs", { urls: ["*/live?*"] });
+        const waitingAt = await pressAndHold(a, 700);
+        await a.sleep(400);
+        const waiting = await a.eval(`
+            const layer = document.getElementById("desktopLiveLayer");
+            const note = layer.querySelector(".desktop-live-note");
+            const spin = layer.querySelector(".desktop-live-spin");
+            return {
+                open: !layer.classList.contains("hidden"),
+                shown: !!note && note.style.display !== "none",
+                text: note ? note.textContent.trim() : "",
+                spinAnimation: spin ? getComputedStyle(spin).animationName : null,
+                spinRunning: spin ? spin.getAnimations().some((x) => x.playState === "running") : false,
+            };
+        `);
+        check(waiting.open && waiting.shown, "等第一帧的时候那句提示是露着的");
+        check(waiting.text === "正在连接", `提示就写着“正在连接”（实际“${waiting.text}”）`);
+        check(waiting.spinAnimation === "desktop-live-spin" && waiting.spinRunning, "提示前面那一环正在转");
+        await a.shot("live-waiting.png");
+        await mouse(a, "mouseReleased", waitingAt);
+        await a.sleep(200);
+        await a.click("#desktopLiveLayer .desktop-live-close");
+        await a.sleep(400);
+        await a.cdp.send("Network.setBlockedURLs", { urls: [] });
+
+        // ---- 八、页面报错 ----
         const errs = [...(a.pageErrors || []), ...(b.pageErrors || [])];
         check(errs.length === 0, errs.length ? "页面有报错：" + errs.slice(0, 3).join(" / ") : "两块屏都没有报错");
 
         if (failed) { throw new Error("桌面实时画面没验过：" + failed + " 处"); }
-        console.log("\n✓ 点一下截图、按住不放看实时画面、两块屏共用一份、收起来就停、手机上松手不误关，都验过了");
+        console.log("\n✓ 点一下截图、按住不放看实时画面、两块屏共用一份、收起来就停、手机上松手不误关、等画面时提示看得见，都验过了");
     } finally {
         for (const item of opened) { await item.close().catch(() => { /* 已经关了 */ }); }
         await harness.stop().catch(() => { /* 已经停了 */ });
