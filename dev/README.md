@@ -58,10 +58,15 @@ npm run web:shot -- --fake-pi --send "随便说点什么" --shot fake.png
 # 同一个名字只出一个标签（标签停在第一次调用的位置），不同名的各占一个，一条线上还是能排好几个
 npm run web:shot -- --width 1000 --height 620 --script dev/toolRow.js
 
-# 验合并本身（同名的收成一个、悬浮提示里一条条列出来、write / edit 也按名字收且每条的
-# 「跳转 / 回滚」排在各自的标题行上、读图那条摘出去、不合并的那几个、重放后一样，
+# 验合并本身（同名的收成一个、悬浮提示里一条条列出各条的调用、write / edit 也按名字收且
+# 每条的「跳转 / 回滚」排在各自的标题行上、读图那条摘出去、不合并的那几个、重放后一样，
 # 读图铺出来的那块图排在这条调用当时的位置上：后面接着调的、后面才到的正文都在它下面）：
 npm run web:shot -- --width 1000 --height 760 --script dev/toolMerge.js
+
+# 验工具标签的提示框（打开只画输入：收着的那些一个字都不问后端，所以高矮不会自己跳；
+# 点那一行输入才铺开它自己的输出、高矮跟着变；write / edit 点标题行才画 diff / 写入预览；
+# 关掉再悬浮回来又是只画输入）：
+npm run web:shot -- --width 1000 --height 760 --script dev/toolTipExpand.js
 
 # 验看图那一层（点开带图的工具结果后还能放大缩小）：滚轮定点缩放、手机上两指捏合、
 # 放大后按住拖动、双击还原、Esc 关掉（且不顺手停掉正在生成的那一轮）、没放大时点图本身照旧关：
@@ -358,15 +363,15 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `tabClose.js` | 验顶条那排格上的 `×` 与挤了以后怎么收窄、怎么叠：每格都露着 ×（跑着时点一下变成勾、不真关），闲着点一下直接关；挤了（420 宽、五个会话）当前那一张写名字（顺序就是会话清单的顺序，当前那一张在哪就在哪）、别的收成窄块只露那颗点，越往外越窄也越往旁边那张底下压，开着的会话一个不少（点一张照样切过去）；窗口放宽到 1200 名字都回来。两格是这么来的：先发一句让这一格跑着再点「＋」（点「＋」等于 pi 的 /new，旧的那个闲着会被顺手关掉、正在跑才留着），等旧的那个跑完再点它的 ×（一下就好）：`FAKEPI_THINK_MS=6000 npm run web:shot -- --fake-pi --script dev/tabClose.js` |
 | `tabSlide.js` | 验顶条那排格的过渡：切会话（点别的格 / 手机上左右划）时，换了位置的格子从旧地方滑过去、底色淡过去；左右划到一半时当前那一格已经收窄、要进来的那一格已经涨宽且名字露出来（三个会话挤成一张大的 + 两颗点时；两个会话放得下、每格都写着名字的那种宽度本来就不该动）；松手切过去那一下从手指停下的宽度接着长（不先缩成小标签再弹开）；弹回去以后不留钉住的宽度：`npm run web:shot -- --fake-pi --width 420 --height 700 --script dev/tabSlide.js` |
 | `tabSelectStyles.js` | 把顶条「当前这一格」的几种画法（描边 / 下划线 / 灰底 / 蓝底 …）摆成一竖排各照一张，挑样式时用（浅色 / 深色各跑一遭）：`npm run web:shot -- --fake-pi --script dev/tabSelectStyles.js`，加 `--theme dark` 跑深色那张 |
-| `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并 + 正文之后补来的那段跑完并回本段那颗；正在想时那颗齿轮在转、想完停住）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |
-| `thinkTipPerf.js` | 验 `think` 提示框开着时思考边流边长的开销与表现（节流、跟着贴底、往回滚就不跟）：`npm run web:shot -- --fake-pi --script dev/thinkTipPerf.js` |
+| `thinkRow.js` | 验模型的思考显示成工具行里的 `think` 标签（当场生成 + 刷新重放 + 同批两段合并 + 正文之后补来的那段跑完并回本段那颗；正在想时那颗齿轮在转、想完停住；提示框里点开那一行才看思考正文）：`npm run web:shot -- --fake-pi --script dev/thinkRow.js` |
+| `thinkTipPerf.js` | 验 `think` 提示框开着、思考那一条点开时边流边长的开销与表现（节流、跟着贴底、往回滚就不跟）：`npm run web:shot -- --fake-pi --script dev/thinkTipPerf.js` |
 | `endHint.js` | 验消息流末尾那颗胶囊（空会话不露面、跑完在末尾露面且脸是「继续」、点它发一条“继续”、打的字留着、生成中换成「卡住了」且跟得住末尾、点「卡住了」这一轮当场停住并补发一条“卡住了”、再跑完回到末尾、页面重开（含生成中重开）后还在末尾、最左边那颗关会话的叉只在闲着时露面且点了会话就关掉）：`FAKEPI_THINK_MS=2500 npm run web:shot -- --fake-pi --script dev/endHint.js` |
 | `bashTasks.js` | 验输入框右边那颗「后台任务」与它弹出来的清单（按钮常显、一条都没在跑时右下角不挂数字、有命令在跑时挂个蓝色小数字且按钮本身不变色、十来条时写 9+ 且按钮不被撑大；清单一行一条在跑的：编号 + 在跑 + 已经跑了多久 + 停 + 命令原文（长了换行写全、不截），跑完的不列、用时自己往上走、Esc 与点别处收起、手机上往上弹不出屏；假数据，不叫模型）：`npm run web:shot -- --width 900 --height 700 --script dev/bashTasks.js` |
 | `desktopLive.js` | 验「按住截图按钮不放，看这台电脑的桌面实时画面」（真按住、真起那支一直拍桌面的小程序、真把帧画到页面上：按住时按钮当场给反应（压暗 + 一圈进度按着住的时长转），不到时间松手算点一下、转满才弹那一层；画面一直在换、松手后还在；两块屏一起看只起一支小程序、关掉一块还在拍、全关了才停；点黑底 / 点叉 / Esc 都能收起；只能在 Windows 上跑）：`node dev/desktopLive.js` |
 | `msgTime.js` | 验正文右下角那个「消息的时刻」（不悬停不露面、原来那颗复制按钮确实没了、今天只写时分 / 别的日子补日期 / 跨年写全年、title 是完整年月日时分秒、没带时刻的按现在算、那颗小字不挡鼠标）：`npm run web:shot -- --fake-pi --script dev/msgTime.js` |
 | `firstLoad.js` | 量“手机上第一次打开”到底下了多少字节、花了多久：把一个真会话文件装进调试后端，用全新浏览器打开页面，按 URL 与消息类型列字节账，报“从点开到能打字 / 到历史画完”：`node dev/firstLoad.js --session <某个 .jsonl> --cpu 4`（4 ≈ 手机的 CPU 档位） |
-| `liveDetail.js` | 验“实时流里思考 / 工具内容一个字都不发”：假模型把思考与 bash 输出撑长（`FAKEPI_LONG=3000`），这一轮推过去的思考增量是 0 字，点开 `think` / 工具标签时提示框先写一行「还有 N 字没带过来，正在取…」，一会儿换成全文；调用参数只带那行摘要（`$ ls` 一直看得见），write 的写入预览要点开才来：`FAKEPI_LONG=3000 npm run web:shot -- --fake-pi --script dev/liveDetail.js` |
-| `detailOnDemand.js` | 同上那条路的另一半（历史重放）：用真会话打开页面，标签上只有工具名、点开提示框才把全文取回来：`node dev/detailOnDemand.js --session <某个 .jsonl>` |
+| `liveDetail.js` | 验“实时流里思考 / 工具内容一个字都不发”：假模型把思考与 bash 输出撑长（`FAKEPI_LONG=3000`），这一轮推过去的思考增量是 0 字，悬浮出来只画那一行调用（一个字都不取），点开那一行才写上「还有 N 字没带过来，正在取…」、一会儿换成全文；调用参数只带那行摘要（`$ ls` 一直看得见），write 的写入预览要点开才来：`FAKEPI_LONG=3000 npm run web:shot -- --fake-pi --script dev/liveDetail.js` |
+| `detailOnDemand.js` | 同上那条路的另一半（历史重放）：用真会话打开页面，标签上只有工具名、悬浮出来只画输入、点开那一行才把全文取回来：`node dev/detailOnDemand.js --session <某个 .jsonl>` |
 | `thinkDetail.js` | 验 `think` 点开不是空的（三种会变成「（没有输出）」的情形）：想一半点「停止生成」后已经想到的那段还在；思考的收尾比正文晚到（真 pi 的 openai-completions 适配器就这样，假模型用 `FAKEPI_LATE_THINK_END=1` 演）时只出一颗标签、点开是全文；模型只给加密内容（一个字都没有）时写「（这段思考没有文字）」：`FAKEPI_LATE_THINK_END=1 FAKEPI_LONG=1500 FAKEPI_TICK_MS=25 npm run web:shot -- --fake-pi --script dev/thinkDetail.js` |
 | `toolStats.js` | 验「工具调用耗时」那张弹窗（项目与会话侧边栏底部「设置」旁边那颗「统计」）：空的时候先说一句还没跑过、跑过之后按工具名一张表（次数 / 合计 / 平均 / 最长）+ 花得最久的几次调用（长命令默认截成 …，点一下展开成完整多行、再点收起）、弹窗开着又来一条结果也跟着长、点叉与 Esc 收起；手机上铺满整屏（窄窗要先点 `<<<` 把抽屉拉出来）：`npm run web:shot -- --width 1200 --height 760 --script dev/toolStats.js` |
 | `envInfo.js` | 验侧边栏底部那颗「工具」（这个会话加载着什么：工具 / 技能 / MCP 服务器）：真会话那一份（会话刚起来时 MCP 还没连上、过几秒挂上来了跟着变），再投一份假清单看几种少见写法（用不了 / 要从脚本里调 / 要先被搜出来的工具、项目级技能、停用的 MCP、配置读错的 MCP）；点叉与 Esc 收起；窄窗要先点 `<<<` 把抽屉拉出来：`npm run web:shot -- --width 1200 --height 800 --script dev/envInfo.js` |

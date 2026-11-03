@@ -5,11 +5,12 @@
  *
  *   FAKEPI_LONG=3000 npm run web:shot -- --fake-pi --script dev/liveDetail.js
  *
- * 假模型（dev/fakePi.js）在 FAKEPI_LONG 里把思考与 bash 输出撑长，一个来回里验四件事：
+ * 假模型（dev/fakePi.js）在 FAKEPI_LONG 里把思考与 bash 输出撑长，一个来回里验五件事：
  *   · 推送流里思考增量是 0 字（不是那 3000 字）；
  *   · 收尾的 thinkingFull 带上了“一共多少字”；
- *   · 点开 think 标签：正文一个字都没有、只有一行「还有 N 字没带过来，正在取…」，一会儿换成全文；
- *   · 点开 bash 标签：输出同样是“先什么都没有、点开才来”。
+ *   · 悬浮出来只画那一行调用（输入）：一个字都不取、也没有「正在取…」（取就会让高矮跳一下）；
+ *   · 点开那一行：“还有 N 字没带过来，正在取…” → 一会儿换成全文；
+ *   · bash 标签、write 的写入预览也一样：“先只有输入、点了才取”。
  */
 const LONG = Number(process.env.FAKEPI_LONG || 3000);
 
@@ -91,8 +92,13 @@ module.exports = async (page) => {
     if (!(await hover(page, "think"))) { check("找到 think 标签", false, "页面上没有这颗标签"); }
     await page.sleep(600);
     const first = await tipState(page);
-    check("先看到开头 + “正在取…”", first.open && first.chars <= 700 && !!first.note,
+    check("悬浮出来只画那一行输入（一个字都不取）", first.open && first.chars < 200 && !first.note,
         `${first.chars} 字，小字：${first.note || "（没有）"}`);
+    await page.expandTip();     // 点开那一行：这一下才去要全文
+    await page.sleep(400);
+    const fetching = await tipState(page);
+    check("点开来才取全文（先看到“正在取…”）", fetching.open && !!fetching.note,
+        `${fetching.chars} 字，小字：${fetching.note || "（没有）"}`);
     await page.shot("detail-note.png");     // 这一张：“还有 3000 字没带过来，正在取…”
     await blockApi(false);
     await page.sleep(2500);
@@ -107,13 +113,18 @@ module.exports = async (page) => {
     if (!(await hover(page, "bash"))) { check("找到 bash 标签", false, "页面上没有这颗标签"); }
     await page.sleep(600);
     const toolFirst = await tipState(page);
-    check("点开时还没有输出、只有“正在取…”", toolFirst.open && toolFirst.chars < 200 && !!toolFirst.note,
+    check("点开时只写那一行调用摘要（输出收着、不取）", toolFirst.open && toolFirst.chars < 200 && !toolFirst.note,
         `${toolFirst.chars} 字，小字：${toolFirst.note || "（没有）"}`);
+    await page.expandTip();
+    await page.sleep(400);
+    const toolFetching = await tipState(page);
+    check("点开来才去取输出（“正在取…”）", toolFetching.open && !!toolFetching.note,
+        `${toolFetching.chars} 字，小字：${toolFetching.note || "（没有）"}`);
     await blockApi(false);
     await page.sleep(2500);
     const toolAfter = await tipState(page);
-    check("bash 输出全文取回来了", toolAfter.open && toolAfter.chars > toolFirst.chars + 500 && !toolAfter.note,
-        `${toolFirst.chars} → ${toolAfter.chars} 字，小字：${toolAfter.note || "（没有）"}`);
+    check("bash 输出全文取回来了", toolAfter.open && toolAfter.chars > toolFetching.chars + 500 && !toolAfter.note,
+        `${toolFetching.chars} → ${toolAfter.chars} 字，小字：${toolAfter.note || "（没有）"}`);
     // 调用参数只带“一行字那么多”的摘要：那行一直看得见的调用摘要（`$ ls`）不用点开就有，
     // 整份参数（write 的正文那种几十 KB 的）才要点开取。
     const callLine = await page.eval(`
@@ -150,7 +161,14 @@ module.exports = async (page) => {
         const el = document.querySelector('.tag-tip .tc-args');
         return el ? el.textContent : '';
     `);
-    check("点开时还没有预览（参数没带过来）", noPreview === "", noPreview ? `先有了：${noPreview.slice(0, 20)}` : "预览还没有");
+    check("悬浮出来只写改了哪个文件（不画预览、不取参数）", noPreview === "", noPreview ? `先有了：${noPreview.slice(0, 20)}` : "预览还没有");
+    await page.expandTip();     // 点标题行：这才去要参数
+    await page.sleep(400);
+    const stillNoPreview = await page.eval(`
+        const el = document.querySelector('.tag-tip .tc-args');
+        return el ? el.textContent : '';
+    `);
+    check("点开来才去取参数（预览这会儿还画不出来）", stillNoPreview === "", stillNoPreview ? `先有了：${stillNoPreview.slice(0, 20)}` : "预览还没有");
     await blockApi(false);
     await page.sleep(2500);
     const preview = await page.eval(`

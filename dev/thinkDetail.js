@@ -37,7 +37,7 @@ function thinkEntries(page) {
     `);
 }
 
-/** 悬浮到最后一颗 think 标签上，把提示框里的字读回来。 */
+/** 悬浮到最后一颗 think 标签上，点开那一行（提示框打开时只画输入），把提示框里的字读回来。 */
 async function hoverLastThink(page) {
     const ok = await page.eval(`
         const tags = Array.from(document.querySelectorAll('.session-view:not(.off) .session-pane .tool'))
@@ -48,7 +48,9 @@ async function hoverLastThink(page) {
         return true;
     `);
     if (!ok) { return { open: false, text: "" }; }
-    await page.sleep(1500);      // 200 毫秒弹出来，之后还要等取全文那一趟
+    await page.sleep(500);       // 200 毫秒弹出来
+    await page.expandTip();      // 点开那一行输入：这一下才去取思考全文
+    await page.sleep(1000);
     return await page.eval(`
         const el = document.querySelector('.tag-tip');
         if (!el || el.classList.contains('hidden')) { return { open: false, text: '' }; }

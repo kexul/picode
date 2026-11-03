@@ -8,7 +8,9 @@
  * 假模型那边的那一路（实时流）见 dev/liveDetail.js。
  *
  * 用真后端 + 真 pi 打开一个真会话（不发消息），在页面上挨个悬浮标签，检查：
- *   · 提示框里先什么都没有、只有一行「还有 N 字没带过来，正在取…」；
+ *   · 悬浮出来只写那几行调用（输入）：一个字不取，也就没有「还有 N 字没带过来」那行小字
+ *     （不然全文一回来整块高矮就跳一下）；
+ *   · 点开那一行输入：这才叫取全文，那行小字出来；
  *   · 一秒内全文回来，提示框里变成完整内容，那行小字消失。
  */
 const fs = require("fs");
@@ -134,9 +136,14 @@ async function main() {
         await hideTip(warm.page);
         await blockApi(true);
         await hoverTip(warm.page, t.i);
-        await sleep(600);                 // 提示框 200 毫秒后弹出，之后才发出取全文的请求
+        await sleep(600);                 // 提示框 200 毫秒后弹出：这会儿只画输入，一点也不取
         const first = await tipState(warm.page);
-        const noteOk = first.open && !!first.note;
+        const onlyInput = first.open && !first.note;
+        // 点开那一行输入：这一下才去要全文，这时候堵着的请求发不出去，就停在那行小字上
+        await warm.page.expandTip();
+        await sleep(400);
+        const fetching = await tipState(warm.page);
+        const noteOk = fetching.open && !!fetching.note;
         await blockApi(false);
         await sleep(2500);                // 请求发出去、回话回来
         const after = await tipState(warm.page);
@@ -149,11 +156,12 @@ async function main() {
             });
         `);
         if (stuck.length > 0) { console.log("    还差：" + JSON.stringify(stuck)); }
-        if (!noteOk) { console.log("    （这次没看到那行小字：提示框弹出来时内容已经取到了）"); }
+        if (!onlyInput) { console.log("    （悬浮出来就取了全文：收着的时候就该一个字都不问）"); }
+        if (!noteOk) { console.log("    （这次没看到那行小字：点开时内容已经取到了）"); }
         const grown = after.open && after.chars > first.chars;
         const noteGone = after.open && !after.note;
-        console.log(`  [${t.i}] ${t.name}：先 ${first.chars} 字（小字${noteOk ? "在" : "没在"}）→ ${after.chars} 字，小字${noteGone ? "收了" : "还在"} ${noteOk && grown && noteGone ? "✅" : "❌"}`);
-        if (noteOk && grown && noteGone) { agreed += 1; }
+        console.log(`  [${t.i}] ${t.name}：先 ${first.chars} 字（只画输入${onlyInput ? "✅" : "❌"}）→ 点开时小字${noteOk ? "在" : "没在"} → ${after.chars} 字，小字${noteGone ? "收了" : "还在"} ${onlyInput && noteOk && grown && noteGone ? "✅" : "❌"}`);
+        if (onlyInput && noteOk && grown && noteGone) { agreed += 1; }
     }
     console.log(`
 验过的“只带开头”的标签：${Math.min(targets.length, 3)} 个，点开取到全文的：${agreed} 个`);

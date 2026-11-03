@@ -304,6 +304,22 @@ class Page {
         return true;
     }
 
+    /** 提示框里那几行输入点一下：把它的输出铺开。
+     *  提示框打开时只画输入，点那一行才铺开它自己的输出（见 chat.js 的 fillGroupTip / fillTagTip）。
+     *  不给 index 就把当前提示框里的几行全点开；给了（数字或数字数组）就从 0 数只点那几个。
+     *  点一下会让整个提示框重画（节点全换），所以一行一行地点、每下重新找。 */
+    async expandTip(index) {
+        const total = Number(await this.eval(`return document.querySelectorAll(".tag-tip .tag-tip-click").length`)) || 0;
+        const list = index === undefined ? Array.from({ length: total }, (_, i) => i) : (Array.isArray(index) ? index : [index]);
+        for (const i of list) {
+            await this.eval(`const el = document.querySelectorAll(".tag-tip .tag-tip-click")[${i}];
+                if (el) { el.dispatchEvent(new MouseEvent("click", { bubbles: true })); }
+                return !!el;`);
+        }
+        await this.sleep(150);
+        return list.length;
+    }
+
     /** 截图，存到 dev/shots/。不给名字就按顺序编号。 */
     async shot(name) {
         fs.mkdirSync(this.shotDir, { recursive: true });

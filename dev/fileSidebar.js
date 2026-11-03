@@ -886,15 +886,25 @@ module.exports = async (page) => {
         console.log("（等超时：" + what + "，现在这样：" + JSON.stringify(got) + "）");
         return got;
     };
-    /** write 卡片那颗小标签：把它的提示框弄出来（电脑上悬浮、触屏上点一下，两种都发一下动作）。 */
-    const showJumpTip = () => page.eval(`
-        const pill = Array.from(document.querySelectorAll("#messages .tool-group"))
-            .find(function (p) { const n = p.querySelector(".tg-name"); return n && n.textContent.trim() === "write"; });
-        if (!pill) { return "没有 write 那个标签"; }
-        pill.dispatchEvent(new MouseEvent("mouseenter"));
-        pill.click();
-        return "把提示框弄出来了";
-    `);
+    /** write 卡片那颗小标签：把它的提示框弄出来（电脑上悬浮、触屏上点一下，两种都发一下动作），
+     *  再把里面那行标题点开——提示框打开时只画输入，diff 与「跳转 / 回滚」点了那一行才铺开。 */
+    const showJumpTip = async () => {
+        const what = await page.eval(`
+            const pill = Array.from(document.querySelectorAll("#messages .tool-group"))
+                .find(function (p) { const n = p.querySelector(".tg-name"); return n && n.textContent.trim() === "write"; });
+            if (!pill) { return "没有 write 那个标签"; }
+            pill.dispatchEvent(new MouseEvent("mouseenter"));
+            pill.click();
+            return "把提示框弄出来了";
+        `);
+        if (what !== "把提示框弄出来了") { return what; }
+        for (let i = 0; i < 20; i++) {   // 电脑上 200 毫秒后才弹出来
+            if ((Number(await page.eval(`return document.querySelectorAll(".tag-tip .tag-tip-click").length`)) || 0) > 0) { break; }
+            await page.sleep(100);
+        }
+        await page.expandTip();
+        return what;
+    };
     /** 等提示框里那颗「跳转」画出来（电脑上悬浮 200ms 后才画），顺手把它那句悬停说明读回来。 */
     const waitJumpBtn = async () => {
         const started = Date.now();

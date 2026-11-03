@@ -6,7 +6,7 @@
  * 一次验这几件事：
  *   · 同一个名字一个标签（工具名 + 一个写着次数的小方块，这批里一共调了几次，只调一次就不写数字）；
  *     名字不同 → 各占一个；中间夹了别的调用（不同名的）不影响它攒数；
- *   · 鼠标停上去 → 提示框里一条条列出各条的调用与结果；
+ *   · 鼠标停上去 → 提示框里一条条列出各条的调用（输入）；点开那一行才铺开它自己的结果（输出）：
  *   · 结果乱序回来、有的失败、有一条还在跑 → 各自归位，标签上跟着转圈（失败不标红，只在提示框里看）；
  *   · taba（点名不合并）单独一个；codemode 跟别的工具一样收成一个（带次数）；
  *   · write / edit 也照这一套收（标签上只有工具名和次数）：改了哪个文件、diff / 写入预览、
@@ -175,6 +175,7 @@ module.exports = async (page) => {
     console.log("\n第五幕·一条回来了、一条还在跑（edit 收成一颗带次数 2、齿轮转圈）：\n  " + editRow);
     await hoverNamed(page, "edit");
     await page.sleep(400);
+    await page.expandTip();     // 提示框打开时只画输入：点开那几行，diff / 写入预览才铺开
     const halfTip = await tipText(page);
     const halfCounts = JSON.parse(await tipCounts(page));
     console.log("  提示框（该是两条的文件名：一条带 diff 与「回滚」，一条写「生成中…」）：" + halfTip);
@@ -193,6 +194,7 @@ module.exports = async (page) => {
     const settledRow = await dump(page);
     await hoverNamed(page, "edit");
     await page.sleep(400);
+    await page.expandTip();
     const bothTip = await tipText(page);
     const bothCounts = JSON.parse(await tipCounts(page));
     console.log("\n  两条都回来了（提示框里两条各自的 diff + 「回滚」）：\n    " + bothTip);
@@ -212,6 +214,7 @@ module.exports = async (page) => {
     const oneBackRow = await dump(page);
     await hoverNamed(page, "edit");
     await page.sleep(400);
+    await page.expandTip();
     const oneBackTip = await tipText(page);
     const oneBackCounts = JSON.parse(await tipCounts(page));
     console.log("\n  回滚了第一条（提示框里那一条标「（已回滚）」、自己的按钮收掉，另一条不受影响）：\n    " + oneBackTip);
@@ -241,6 +244,7 @@ module.exports = async (page) => {
     console.log("\n第六幕（连着两次 write：收成一颗带次数 2；一条成功一条失败 → 标签不标红）：\n  " + writeRow);
     await hoverNamed(page, "write");
     await page.sleep(400);
+    await page.expandTip();
     const writeTip = await tipText(page);
     const writeCounts = JSON.parse(await tipCounts(page));
     console.log("  提示框（一条带写入预览与「跳转」，一条是错误）：" + writeTip);

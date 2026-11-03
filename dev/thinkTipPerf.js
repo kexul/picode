@@ -130,6 +130,7 @@ module.exports = async (page) => {
     // ---- 第二幕：提示框开着继续吐思考（以前就是这里卡到浏览器报无响应）----
     await hoverTag(page, "think");
     await page.sleep(400);
+    await page.expandTip();   // 提示框打开时只画输入：点开那一行，思考正文才铺开、才跟着长
     const opened = await tipState(page);
     console.log(`\n悬浮 think 标签后提示框：${JSON.stringify(opened)}`);
     if (!opened.shown) { problems.push("悬浮 think 标签没能把提示框开出来"); }
@@ -211,6 +212,7 @@ module.exports = async (page) => {
     `);
     await hoverTag(page, "think");
     await page.sleep(400);
+    await page.expandTip();
     const shortBits = [];
     let lagged = 0;
     for (let i = 0; i < 8; i++) {
@@ -238,6 +240,7 @@ module.exports = async (page) => {
         return true;
     `);
     await page.sleep(400);
+    await page.expandTip();
     await countFills(page);
     let partial = "";
     const bits = [];

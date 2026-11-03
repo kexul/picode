@@ -90,6 +90,7 @@ module.exports = async (page) => {
         return true;
     `);
     await page.sleep(500);
+    await page.expandTip();          // 提示框打开时只画输入：点开那一行，输出才铺开
     console.log("提示框：" + await page.eval(`
         const tip = document.querySelector(".tag-tip");
         return tip && !tip.classList.contains("hidden") ? JSON.stringify(tip.innerText) : "（没弹出来）";

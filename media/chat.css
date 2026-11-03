@@ -392,6 +392,10 @@
   .tag-tip-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
   /* 输入（调用参数）块：比外框稍深一点的底色（5% 黑色透明叠加），和输出（结果）区分开 */
   .tag-tip-call { padding: 4px 8px; border-radius: 4px; background: rgba(0,0,0,0.05); }
+  /* 那一行输入点了就铺开它自己的输出（再点一下收起）：手形，指上去亮一点，看得出手点得下去。
+     收着的时候后端一个字都不问，所以提示框打开之后高矮不会自己变（见 chat.js 的 pumpClipDetails）。 */
+  .tag-tip .tag-tip-click { cursor: pointer; }
+  .tag-tip .tag-tip-click:hover { background: rgba(128,128,128,0.18); }
   /* 合并标签的提示框：一组里不止一条调用，第二块起往上拉开距离，好一条条分开看 */
   .tag-tip-call-next { margin-top: 10px; }
   .tag-tip-result { margin-top: 6px; }

@@ -58,8 +58,10 @@ function gearSpin(page, name) {
     `);
 }
 
-/** 提示框里现在写着什么（没出来就说明没挂上）。 */
-function tipText(page) {
+/** 提示框里现在写着什么（没出来就说明没挂上）。
+ *  先把里面那几行输入点开：提示框打开时只画输入，点那一行才铺开它自己的输出（见 chat.js 的 fillGroupTip）。 */
+async function tipText(page) {
+    await page.expandTip();
     return page.eval(`
         const el = document.querySelector(".tag-tip");
         if (!el || el.classList.contains("hidden")) { return "（提示框没出来）"; }

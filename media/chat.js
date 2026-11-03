@@ -2643,11 +2643,12 @@
     tag._done = !running;
     // 开始时刻（重放历史里的老调用记 0，不写耗时，见 runningCalls）
     tag._startedAt = st.fromHistory ? 0 : Date.now();
-    // 提示内容：运行中显示调用参数（输入）；结果到达后由 setTagTip 填入全部原文（输出）。
+    // 提示内容：先只写调用那行（输入）；结果到了也只是记下来，点开那行才铺开（输出）
     // 带图片的结果（read 读图这类）不走提示框：结果到了会把这个标签整个换成对话里的一块图，
     // 见 mountToolImageBlock。
     tag._tipCall = tagTipCallText(toolName, argStr);
     tag._tipBody = interrupted ? INTERRUPTED_NOTE : "";
+    tag._expanded = false;   // 那条输出收着：点一下才铺开（见 fillTagTip）
     tag._st = st;
     attachTagTipHandlers(tag);
     mountToolTag(st, tag);
@@ -2700,6 +2701,8 @@
       resultText: interrupted ? INTERRUPTED_NOTE : "",
       meta: {},
       isError: false,
+      // 这一条自己的输出收着 / 铺开（见 fillGroupTip）：默认收着，点它那一行才铺
+      expanded: false,
       // 无 id 的静态调用无结果事件；被中断的那条也是——结果永远不会来（见 settleInterruptedTools）
       done: !toolCallId || !!interrupted,
       // 这条从什么时候开始跑的（毫秒）：「正在跑的那一条」后面那个耗时拿它算（见 runningCalls）。
@@ -2728,16 +2731,24 @@
     syncRunningLine(st);   // 这组里有在跑的：末尾那行跟着变
   }
 
-  /** 合并标签的提示内容：一条调用一行（输入），下面紧跟它的结果（输出），一条条排下来。 */
+  /** 合并标签的提示内容：一条调用一行（输入），点那一行才铺开它自己的结果（输出），一条条排下来。
+   *  收着的那几条不画结果、也不去后端取（见 pumpClipDetails）；大小也就不会在打开后自己变。 */
   function fillGroupTip(g, content) {
     content.textContent = "";
     g.entries.forEach((e, i) => {
       // write / edit 那一条自带一块画法（文件名 + diff + 按钮）：整块交给它自己画
       if (e.tipFill) { e.tipFill(content, i > 0); return; }
       const call = document.createElement("div");
-      call.className = "tag-tip-call" + (i > 0 ? " tag-tip-call-next" : "");
+      call.className = "tag-tip-call tag-tip-click" + (i > 0 ? " tag-tip-call-next" : "");
       call.textContent = e.tipCall || e.name;
+      call.addEventListener("click", (ev) => {
+        ev.stopPropagation();   // 别让“点外头收起”那个监听当场把提示框关掉
+        e.expanded = !e.expanded;
+        startClipPump(g.tag);   // 铺开的这就去取全文（收着的照样一个都不问）
+        repaintTagTip(g.tag);
+      });
       content.appendChild(call);
+      if (!e.expanded) { return; }
       const res = document.createElement("div");
       let showResult = true;
       if (e.done) {
@@ -3573,17 +3584,20 @@
     content.appendChild(note);
   }
 
-  /** 这一条还有要不要接着问的（没取到全文，或者这一条还在长）。 */
+  /** 这一条还有要不要接着问的（铺开了、没取到全文，或者这一条还在长）。 */
   function clipNeedsMore(tag) {
     const g = tag._tipGroup;
     if (g) {
-      return g.entries.some((e) => (e.clip && (!e.clip.loaded || !e.done)) || (e.argsClip && !e.argsClip.loaded));
+      return g.entries.some((e) => e.expanded
+        && ((e.clip && (!e.clip.loaded || !e.done)) || (e.argsClip && !e.argsClip.loaded)));
     }
+    if (!tag._expanded) { return false; }
     return (tag._resultClip && (!tag._resultClip.loaded || tag._done !== true))
       || (!!tag._argsClip && !tag._argsClip.loaded);
   }
 
-  /** 把打开着的这个提示框里没带全的那些一次问回来（一条消息问一把，别一条一个来回）。 */
+  /** 把打开着的这个提示框里已经铺开的那几条没带全的内容一次问回来（一条消息问一把，别一条一个来回）。
+   *  收着的那些一个字都不要：提示框一打开就去问，正文回来整块高矮就跳一下（打开时只画输入，见 showTagTip）。 */
   function pumpClipDetails(tag) {
     const st = tag._tipGroup ? tag._tipGroup.st : tag._st;
     const sessionId = st ? st.id : "";
@@ -3596,10 +3610,12 @@
     const g = tag._tipGroup;
     if (g) {
       for (const e of g.entries) {
+        if (!e.expanded) { continue; }
         want(e.clip, e.done);
         want(e.argsClip, true);      // 调用参数：要一次就够（它不会再变）
       }
     } else {
+      if (!tag._expanded) { return; }
       want(tag._resultClip, tag._done === true);
       want(tag._argsClip, true);
     }
@@ -3660,16 +3676,28 @@
     cancelTagTipHide();
     tagTipHideTimer = setTimeout(() => { tagTipHideTimer = 0; hideTagTip(); }, TAG_TIP_HIDE_GRACE_MS);
   }
-  /** 把标签的调用与结果填进内容区：调用一行稍深底色（输入），结果原样（输出）。 */
+  /** 把标签的调用与结果填进内容区：调用一行稍深底色（输入），结果原样（输出）。
+   *  打开时只画输入；点那一行才铺开它自己的结果（输出）—— 见 chat.css 的 .tag-tip-click。 */
   function fillTagTip(tag) {
     tagTipContent.textContent = "";
     // 自定义内容钩子（write / edit 那一条用：标题行 + diff / 写入预览 + 跳转 / 回滚按钮）
     if (tag._tipFill) { tag._tipFill(tagTipContent); return; }
-    tagTipContent.textContent = "";
     const call = document.createElement("div");
     call.className = "tag-tip-call";
     call.textContent = tag._tipCall || "";
+    // 这一条有输出可铺（拿到结果了、拿到的只是开头、或者还在跑）才让它点：没有的话点了什么都不会发生，
+    // 别给一只手形光标（「正在跑的那一条」那个提示框就是只有一行字的那种）
+    if (tag._tipBody || tag._resultClip || tag._done === false) {
+      call.className += " tag-tip-click";
+      call.addEventListener("click", (e) => {
+        e.stopPropagation();   // 别让下面那个“点外头收起”的监听当场把它关掉
+        tag._expanded = !tag._expanded;
+        startClipPump(tag);    // 铺开的这就去取全文（收着的照样一个都不问）
+        repaintTagTip(tag);
+      });
+    }
     tagTipContent.appendChild(call);
+    if (!tag._expanded) { return; }
     if (tag._tipBody) {
       const result = document.createElement("div");
       result.className = "tag-tip-result";
@@ -3677,6 +3705,18 @@
       tagTipContent.appendChild(result);
     }
     appendClipNote(tagTipContent, tag._resultClip);
+  }
+  /** 每次点开提示框都从“只看输入”开始：铺开是手里那一下的事，看过了下次悬浮照样收着。
+   *  高矮也就不会在打开之后自己变（收着的那些不去后端要内容，见 pumpClipDetails）。 */
+  function resetTagTipExpansion(tag) {
+    const g = tag._tipGroup;
+    if (g) { for (const e of g.entries) { e.expanded = false; } }
+    tag._expanded = false;
+  }
+  /** 点了那一行输入（铺开 / 收起一条输出）之后重画一次：高矮变了，位置得跟着重摆。 */
+  function repaintTagTip(tag) {
+    if (tagTipTag !== tag || !tagTipEl || tagTipEl.classList.contains("hidden")) { return; }
+    paintTagTip(tag, tipContentIsGrowing(tag));
   }
   function showTagTip(tag) {
     // 已在显示同一个标签（如鼠标从提示框移回标签）：只刷新位置，不闪没再闪出
@@ -3710,8 +3750,9 @@
       }
       tagTipEl.classList.remove("hidden");
       tagTipFollow = true;   // 这次打开从“跟着最新一段走”开始
+      resetTagTipExpansion(tag);
       paintTagTip(tag, tipContentIsGrowing(tag));
-      startClipPump(tag);    // 没带全的那些（思考全文 / 工具输出）这就去要
+      startClipPump(tag);   // 刚清过：没有铺开的，这一下什么都不问，只是把上一个标签的计时停掉
     };
     // 触屏设备没有悬浮：点一下是明确动作，立即显示；电脑上悬浮短暂停留后再显示
     if (IS_TOUCH_DEVICE) { render(); } else { tagTipTimer = setTimeout(render, TAG_TIP_DELAY_MS); }
@@ -3736,17 +3777,18 @@
     }
     paintTagTip(tag, growing);
   }
-  /** 这个标签还在长吗：内容已经攒长了，而且这一条（这一组）还有在跑的。
-   *  合并组看组里的条目（think、同名工具）；单独一个标签的（taba 这类不合并的）看它自己。 */
+  /** 这个标签还在长吗：铺开着的内容已经攒长了，而且这一条（这一组）还有在跑的。
+   *  合并组看组里的条目（think、同名工具）；单独一个标签的（taba 这类不合并的）看它自己。
+   *  收着的 Entry 不算：画出来的东西不跟着变，重画就是白花。 */
   function tipContentIsGrowing(tag) {
     const g = tag._tipGroup;
     if (g) {
-      if (!g.entries.some((e) => !e.done)) { return false; }
+      if (!g.entries.some((e) => e.expanded && !e.done)) { return false; }
       let chars = 0;
-      for (const e of g.entries) { chars += (e.resultText || "").length + (e.tipCall || "").length; }
+      for (const e of g.entries) { if (e.expanded) { chars += (e.resultText || "").length + (e.tipCall || "").length; } }
       return chars >= TAG_TIP_STREAM_MIN_CHARS;
     }
-    if (tag._done !== false) { return false; }
+    if (!tag._expanded || tag._done !== false) { return false; }
     return ((tag._tipBody || "").length + (tag._tipCall || "").length) >= TAG_TIP_STREAM_MIN_CHARS;
   }
   /** 真画一次：填内容、量尺寸、摆好位置。followNewest：还在长的内容让内容区跟着贴底。 */
@@ -4324,21 +4366,32 @@
     let pendingResult = null;   // 结果（含 diff）：提示框随取随画
     let resultDone = false;
     let reverted = false;
-    // 参数一开始可能一点没带过来（后端只留了“一共多少字”），点开提示框时再取：
+    // 参数一开始可能一点没带过来（后端只留了“一共多少字”），铺开那一条时再取：
     // 取回来换到这里，写入预览才画得出来（见 detail 那条消息）
     let argsJson = argStr;
     let argsTruncated = !!argsClipped;
 
     /** 提示框里属于这一条的那一块：标题行（工具名 + 路径 + 状态，右边跟「跳转 / 回滚」排在同一行）
-     *  + 下面的 diff / 写入预览。isNext：这一条不是组里的第一条，往上拉开距离（跟别的工具那一条同一个类）。 */
+     *  + 下面的 diff / 写入预览。isNext：这一条不是组里的第一条，往上拉开距离（跟别的工具那一条同一个类）。
+     *  标题行就是这一条的输入：点它才铺开下面那些（输出），打开提示框的时候高矮不会自己变。 */
+    let entry = null;   // 下面挂进那一批时才有（fillEntry 只在画提示框时才用得到它）
     function fillEntry(content, isNext) {
       const head = document.createElement("div");
-      head.className = "tag-tip-call tag-tip-head" + (isNext ? " tag-tip-call-next" : "");
+      head.className = "tag-tip-call tag-tip-click tag-tip-head" + (isNext ? " tag-tip-call-next" : "");
       const title = document.createElement("span");
       title.className = "tag-tip-title";
       title.textContent = toolName + " " + (label || filePath || "") + (reverted ? "（已回滚）" : "");
       head.appendChild(title);
+      head.addEventListener("click", (e) => {
+        // 标题行右边那两颗自己管自己（它们本来就不往外冒）
+        if (!entry || (e.target.closest && e.target.closest(".et-jump, .et-revert"))) { return; }
+        e.stopPropagation();
+        entry.expanded = !entry.expanded;
+        startClipPump(entry.group.tag);   // 铺开的这就去取参数（写入预览要它）
+        repaintTagTip(entry.group.tag);
+      });
       content.appendChild(head);
+      if (!entry || !entry.expanded) { return; }
       if (resultDone && pendingResult) {
         if (pendingResult.isError) {
           const err = document.createElement("div");
@@ -4375,7 +4428,7 @@
       }
     }
     // 挂进那一批（同名收成一个标签）：提示框里那一块交给上面 fillEntry 画
-    const entry = addToolToGroup(st, toolName, argStr, toolCallId, fillEntry);
+    entry = addToolToGroup(st, toolName, argStr, toolCallId, fillEntry);
 
     // 参数取回来了：换掉那一份，并把“只带了开头”改成实话
     entry.applyArgs = (json) => {
