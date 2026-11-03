@@ -18,6 +18,7 @@ import {
     isWildcardHost,
     localHostnames,
     originHostnames,
+    PAGE_DROPPABLE_MESSAGE_TYPES,
     splitHostHeader,
     type PageChannel,
 } from "./webTransport";
@@ -54,6 +55,9 @@ const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
 /** 一条推送连接最多积压多少字节：页面不读了（屏黑了 / 网络卡住）就别再往里塞，
  *  掐掉让它重连重画。不掐的话这些字节全堆在插件进程里，回来时也不会被 GC 回收。 */
 const STREAM_BACKLOG_BYTES = 8 * 1024 * 1024;
+/** 一条推送连接排着这么多字节时，「过时了就没用」的那类消息（实时画面的帧）就别再往里塞了：
+ *  画面本来就有下一帧，塞进去只会让它更落后，顺手把真正的消息挤在后面。 */
+const STREAM_STALE_BYTES = 128 * 1024;
 /** 小于这么多字节就不费劲压了（压完省不了几个字节，还白搭一次 CPU）。 */
 const COMPRESS_MIN_BYTES = 1024;
 /** 压缩结果最多缓存多少份（界面文件就那几个，纯粹防着缓存无限长大）。 */
@@ -1452,7 +1456,11 @@ export class PiChatWebServer {
         const stream = this.openStream(res, req.headers["accept-encoding"]);
         const { channel, replaced, openSeq } = broadcaster.addChannel(
             id,
-            (msg) => { this.writeChunk(channel, stream, `event: msg\ndata: ${JSON.stringify(msg)}\n\n`); },
+            (msg) => {
+                // 过时了就没用的那类（实时画面的帧）在页面读得慢时可以整条丢掉，别的照旧
+                const droppable = typeof msg.type === "string" && PAGE_DROPPABLE_MESSAGE_TYPES.has(msg.type);
+                this.writeChunk(channel, stream, `event: msg\ndata: ${JSON.stringify(msg)}\n\n`, droppable);
+            },
             (note) => { stream.end(note); },
         );
         this.streams.set(id, stream);
@@ -1485,8 +1493,13 @@ export class PiChatWebServer {
      * 写不动了就把它注销掉：页面那头（手机屏黑了、退到后台、网络断了）多半已经收不到，
      * 继续往里塞只是把这些字节堆在插件进程里。积压超过上限直接掐掉连接，页面回来会自己重连，
      * 重连后插件给它整屏重画一遍，内容不会少。
+     *
+     * @param droppable 这条消息"过时了就没用"（实时画面的帧）：这段连接已经排着不少字节时
+     *                  干脆不发，不占它的队伍。别的消息不发就真少了一块内容，不能这么干。
      */
-    private writeChunk(channel: PageChannel, stream: PageStream, chunk: string): void {
+    private writeChunk(channel: PageChannel, stream: PageStream, chunk: string, droppable = false): void {
+        // 「过时了就没用」的那类：这条连接已经排着不少字节了，这一条干脆不发
+        if (droppable && stream.backlog > STREAM_STALE_BYTES) { return; }
         const verdict = stream.write(chunk);
         if (verdict === "ok") { return; }
         if (verdict === "backlogged") {

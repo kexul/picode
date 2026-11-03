@@ -378,6 +378,17 @@ export const PAGE_TRANSIENT_MESSAGE_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * 推给页面的消息里「过时了就没用、干脆别发」的那些类型。
+ *
+ * 这类消息不是内容，是随时会被下一张盖掉的画面。页面读得慢（手机网络卡、屏黑了、
+ * 在后台）时别让它排队：排在后面的帧送到时早就过时了，还把这期间真正的消息挤在后头。
+ * 丢掉不影响任何东西——页面手里那张旧的照旧显示，下一帧一两秒就到。
+ */
+export const PAGE_DROPPABLE_MESSAGE_TYPES: ReadonlySet<string> = new Set([
+    "desktopLiveFrame",          // 桌面实时画面的一帧
+]);
+
+/**
  * 一个都没有页面连着时的消息缓冲。
  *
  * 浏览器页面的加载顺序是：先发起推送连接，再由 chat.js 发出 ready。
