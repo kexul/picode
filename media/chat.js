@@ -12839,7 +12839,7 @@
   /** 画一条选项（种类见 ViewOptionItem 的 kind）。 */
   function buildViewOptsRow(it) {
     const row = document.createElement("div"); row.className = "vo-item";
-    if (it.kind === "slider") { renderSliderRow(row, it); return row; }
+    if (it.kind === "number") { renderNumberRow(row, it); return row; }
     if (it.kind === "button") { renderButtonRow(row, it); return row; }
     if (it.kind === "text") { renderTextRow(row, it); return row; }
     if (it.kind === "weixin") { renderWeixinRow(row, it); return row; }
@@ -13078,36 +13078,48 @@
     row.appendChild(input);
   }
 
-  function renderSliderRow(row, it) {
-    row.classList.add("vo-item-slider");
+  /**
+   * 数值那一行（字号）：名字在左，右边一个小框填数，框后头跟个单位。
+   * 填完（回车 / 点别处）才发出去；Esc 是反悔，恢复成原来的值；
+   * 填的不是数、或者超出范围，就按范围掐一下（掐完跟原来一样就什么也不发）。
+   */
+  function renderNumberRow(row, it) {
+    row.classList.add("vo-item-number");
     const txt = document.createElement("div"); txt.className = "vo-text";
     const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "";
     txt.appendChild(label);
     if (it.desc) { const d = document.createElement("div"); d.className = "vo-desc"; d.textContent = it.desc; txt.appendChild(d); }
     row.appendChild(txt);
-    const ctrl = document.createElement("div"); ctrl.className = "vo-slider";
-    const range = document.createElement("input");
-    range.type = "range";
-    range.min = String(it.min ?? 0); range.max = String(it.max ?? 100); range.step = String(it.step ?? 1);
-    // 当前值：有存值用存值；否则读 body 实际字号，让滑块初始位置反映现状
-    const cur = it.value && /^\d+$/.test(String(it.value))
+
+    const min = Number(it.min ?? 1), max = Number(it.max ?? 99);
+    // 当前值：有存值用存值；没有（空串 = 跟着宿主走）就读 body 实际字号，让框里显示的是眼下这个数
+    const stored = it.value && /^\d+$/.test(String(it.value))
       ? Number(it.value)
       : Math.round(parseFloat(getComputedStyle(document.body).fontSize) || 13);
-    range.value = String(cur);
-    const out = document.createElement("span"); out.className = "vo-slider-val"; out.textContent = cur + (it.unit || "");
-    range.addEventListener("input", () => { out.textContent = range.value + (it.unit || ""); });
-    range.addEventListener("change", () => {
-      vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: range.value });
+    const shown = Math.min(max, Math.max(min, stored));
+
+    const ctrl = document.createElement("div"); ctrl.className = "vo-number";
+    const input = document.createElement("input");
+    input.type = "number";
+    input.className = "vo-input vo-number-input";
+    input.inputMode = "numeric";
+    input.min = String(min); input.max = String(max); input.step = String(it.step ?? 1);
+    input.value = String(shown);
+    ctrl.appendChild(input);
+    if (it.unit) { const unit = document.createElement("span"); unit.className = "vo-number-unit"; unit.textContent = it.unit; ctrl.appendChild(unit); }
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+      else if (e.key === "Escape") { e.preventDefault(); input.value = String(shown); input.blur(); }
     });
-    ctrl.appendChild(range); ctrl.appendChild(out);
-    // 「跟随 VSCode」紧跟在数值后面（跟它管的那根滑块同一行）：
-    // 原来是行里的另一个孩子，column 布局会把它拉成整行宽的一条。
-    const reset = document.createElement("button"); reset.type = "button"; reset.className = "vo-slider-reset";
-    reset.textContent = "跟随 VSCode";
-    reset.addEventListener("click", () => {
-      vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: "" });
+    input.addEventListener("change", () => {
+      const typed = Number(input.value);
+      if (!input.value.trim() || !Number.isFinite(typed)) { input.value = String(shown); return; }
+      const next = Math.min(max, Math.max(min, Math.round(typed)));
+      input.value = String(next);
+      if (next === shown) { return; }
+      vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: String(next) });
     });
-    ctrl.appendChild(reset);
     row.appendChild(ctrl);
   }
 

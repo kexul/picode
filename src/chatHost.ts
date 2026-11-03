@@ -1346,8 +1346,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             const next = inList(FOCUS_INPUT_KEYS, value) ? value : this.getFocusInputKey();
             this.writeOption(ChatHost.KEY_FOCUS_INPUT_KEY, next);
         } else if (action === "fontSize") {
-            const next = typeof value === "string" && /^\d+$/.test(value) ? value : "";
-            this.writeOption(ChatHost.KEY_FONT_SIZE, next);
+            // 只收 "14" 这样的整数字符串（范围由界面上的框掐过）：别的写法不认，保持原值
+            if (typeof value === "string" && /^\d+$/.test(value)) {
+                this.writeOption(ChatHost.KEY_FONT_SIZE, value);
+            }
         } else if (action === "weixinPush") {
             this.writeOption(ChatHost.KEY_WEIXIN_PUSH, !this.getWeixinPush());
         } else if (action === "notifyTurnEnd") {

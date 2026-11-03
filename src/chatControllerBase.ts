@@ -87,7 +87,7 @@ export interface ChatReferenceItem {
  * 显示选项浮层里的一行（界面按 kind 画）：
  *   不写 kind  = 勾选框 / 开关（check 有值就是勾上了）
  *   按钮组（options 有值） = 直接点选某个选项
- *   "slider"   = 滑块（min / max / step / unit）
+ *   "number"   = 数值输入框（min / max / step / unit）
  *   "button"   = 一颗按钮（button 是按钮上的字，disabled 时点不动）
  */
 export interface ViewOptionItem {
@@ -501,7 +501,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 label: "字号",
                 desc: "",
                 check: null,
-                kind: "slider",
+                kind: "number",
                 value: this.getFontSize(),
                 min: 11, max: 22, step: 1, unit: "px",
             },

@@ -22,6 +22,29 @@ module.exports = async (page) => {
     if (!tabs.length) { throw new Error("标签那一排没出来"); }
     await page.shot("settings-base.png");
 
+    // 字号那一行是个填数的框（不是滑块，也没有「跟随 VSCode」）：填 18 试一下，肉眼看字有没有变大，
+    // 完事再填回原来的数，别把调试目录留成奇怪的字号
+    const typeSize = (n) => page.eval(`const input = document.querySelector('#viewOptsRoot .vo-number-input');
+if (!input) { return null; }
+input.value = '${n}';
+input.dispatchEvent(new Event('change', { bubbles: true }));
+return true;`);
+    const before = await page.eval(`const input = document.querySelector('#viewOptsRoot .vo-number-input');
+return input ? input.value : null;`);
+    if (before === null) { throw new Error("字号那一行没有输入框"); }
+    const slider = await page.eval(`return !!document.querySelector('#viewOptsRoot .vo-slider, #viewOptsRoot input[type=range]');`);
+    if (slider) { throw new Error("字号那一行还有滑块"); }
+    const follow = await page.eval(`return Array.from(document.querySelectorAll('#viewOptsRoot button')).some((b) => b.textContent.indexOf('跟随') >= 0);`);
+    if (follow) { throw new Error("字号那一行还有「跟随 VSCode」"); }
+    await typeSize(18);
+    await page.sleep(600);
+    const size = await page.eval(`return getComputedStyle(document.body).fontSize;`);
+    console.log(`  · 字号框原来是 ${before}，填 18 后正文：${size}`);
+    if (size !== "18px") { throw new Error("填了 18，正文没跟着变"); }
+    await page.shot("settings-base-18.png");
+    await typeSize(before);
+    await page.sleep(400);
+
     const keyTab = tabs.findIndex((t) => t.replace("*", "") === "快捷键");
     if (keyTab < 0) { throw new Error("没有「快捷键」这一页"); }
     await page.eval(`document.querySelectorAll('#settingsTabBar .settings-tab')[${keyTab}].click(); return true;`);
