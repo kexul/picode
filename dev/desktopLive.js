@@ -6,7 +6,7 @@
  *   node dev/desktopLive.js
  *
  * 走的是真路：真的按住那颗按钮、真的起那支一直拍桌面的小程序（bin/live.exe）、
- * 真的把帧推到页面上画出来。验的是
+ * 真的把帧推到页面上画出来（浏览器页面那条是直连 `/live`，一帧一段往同一张图上写）。验的是
  *   1. 点一下还是截一张（跟从前一样），不会顺带弹出实时画面那一层；
  *   2. 按住不放约半秒才弹那一层，里面有画面、画面一直在换、松手之后那一层还在
  *      （按住不放不是“另一次点击”）、点黑底 / 点叉 / Esc 都能收掉；
@@ -16,7 +16,7 @@
  * 只能在 Windows 上跑（桌面是这台机器的真桌面）；屏幕锁着 / 没有交互桌面时第二段会红。
  */
 const path = require("path");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawn } = require("child_process");
 const { createHarness } = require("./harness.js");
 const { openPage, sleep } = require("./cdp.js");
 
@@ -38,6 +38,8 @@ async function liveState(page) {
             naturalW: img ? img.naturalWidth : 0,
             naturalH: img ? img.naturalHeight : 0,
             hasSrc: !!(img && img.getAttribute("src")),
+            // “有画面了”看的是真解出来的一张图：直连那条地址一开始就有、图却要等第一帧下来
+            hasPicture: !!(img && img.naturalWidth > 0),
             noteShown: note ? note.style.display !== "none" && !!(note.textContent || "").trim() : false,
             noteText: note ? (note.textContent || "") : "",
             swaps: window.__liveSwap || 0,
@@ -45,15 +47,30 @@ async function liveState(page) {
     `);
 }
 
-/** 开始数「画面换了几次」（盯住那张图的 src 变化）。 */
+/**
+ * 开始数「画面换了几次」：隔一会儿把那张图上画着的像素算个和，变了就算换了一张。
+ *
+ * 为什么不算图的地址：浏览器页面那条是直连（`/live`，一帧一段往同一张图上写，地址从头到尾
+ * 不变），面板那条才是一帧一个新地址。像素对两条路都算数。
+ */
 async function watchSwaps(page) {
     return page.eval(`
         window.__liveSwap = 0;
-        const img = document.querySelector("#desktopLiveLayer img");
-        if (!img) { return false; }
-        if (window.__liveObs) { window.__liveObs.disconnect(); }
-        window.__liveObs = new MutationObserver(function () { window.__liveSwap++; });
-        window.__liveObs.observe(img, { attributes: true, attributeFilter: ["src"] });
+        window.__liveSig = "";
+        if (window.__liveTimer) { clearInterval(window.__liveTimer); }
+        window.__liveTimer = setInterval(function () {
+          const img = document.querySelector("#desktopLiveLayer img");
+          if (!img || !img.naturalWidth) { return; }
+          const c = document.createElement("canvas");
+          c.width = img.naturalWidth;
+          c.height = img.naturalHeight;
+          const g = c.getContext("2d");
+          g.drawImage(img, 0, 0);
+          const d = g.getImageData(0, 0, c.width, c.height).data;
+          let s = 0;
+          for (let i = 0; i < d.length; i += 97) { s = (s * 31 + d[i]) % 1000000007; }
+          if (s !== window.__liveSig) { window.__liveSig = s; window.__liveSwap++; }
+        }, 100);
         return true;
     `);
 }
@@ -125,6 +142,25 @@ function liveProcessCount() {
     }
 }
 
+/**
+ * 让桌面动一下（开一个记事本再关掉）。
+ *
+ * 桌面一动不动的时候小程序一帧都不发（省流量，见 src/desktopLive.ts），所以「等下一帧」
+ * 可能白等：第二块屏接上时那支小程序已经在拍了，它不会为后来的人补一帧。
+ */
+async function nudgeDesktop() {
+    let p;
+    try {
+        p = spawn("notepad.exe", [], { detached: true, stdio: "ignore" });
+        p.unref();
+    } catch {
+        return;   // 起不来就算了，后面的等待会超时报红
+    }
+    await sleep(900);
+    try { p.kill(); } catch { /* 已经关了 */ }
+    await sleep(500);
+}
+
 /** 等一个条件成立，最多等 ms 毫秒。 */
 async function waitFor(fn, ms, what) {
     const deadline = Date.now() + ms;
@@ -188,7 +224,7 @@ async function main() {
             .then(() => true, () => false);
         check(opened, "按住不放弹出了实时画面那一层");
         check(!(await holdState(a)).holding, "弹出来以后那一圈收了");
-        const firstFrame = await waitFor(async () => (await liveState(a)).hasSrc, 8000, "第一帧画面")
+        const firstFrame = await waitFor(async () => (await liveState(a)).hasPicture, 8000, "第一帧画面")
             .then(() => true, () => false);
         check(firstFrame, "弹出之后很快就有画面了");
         const first = await liveState(a);
@@ -212,7 +248,8 @@ async function main() {
         const b = await openOne();
         await b.sleep(500);
         const heldB = await pressAndHold(b, 700);
-        const bHasFrame = await waitFor(async () => (await liveState(b)).hasSrc, 8000, "第二块屏的画面")
+        await nudgeDesktop();   // 桌面不动的话乙这块屏一帧都等不到
+        const bHasFrame = await waitFor(async () => (await liveState(b)).hasPicture, 8000, "第二块屏的画面")
             .then(() => true, () => false);
         check(bHasFrame, "第二块屏按住不放也有画面");
         await a.sleep(600);
@@ -247,7 +284,7 @@ async function main() {
         await a.sleep(300);
 
         const heldAgain = await pressAndHold(a, 700);
-        const reopened = await waitFor(async () => (await liveState(a)).hasSrc, 8000, "再一次的实时画面")
+        const reopened = await waitFor(async () => (await liveState(a)).hasPicture, 8000, "再一次的实时画面")
             .then(() => true, () => false);
         check(reopened, "再按住不放看一次也行（小程序又起了一支）");
         await mouse(a, "mouseReleased", heldAgain);

@@ -201,6 +201,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private disposed = false;
     /** 桌面实时画面那一路（长按「截图」按钮）：没人看的时候不起进程，见 src/desktopLive.ts。 */
     private readonly desktopLive = new DesktopLive();
+    /** 直连那几路（`/live`）的编号：一条请求一个号，新旧两条不会互相误杀。 */
+    private desktopLiveSeq = 0;
 
     constructor(private readonly options: ChatHostOptions) {
         super("server");
@@ -1769,18 +1771,22 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
-     * 同一颗按钮按住不放：一直看着这台电脑的桌面。
+     * 同一颗按钮按住不放：一直看着这台电脑的桌面（**插件面板**走这条路）。
      *
      * 帧走 sendToOneClient 只发给按下去的那块屏（别的页面不跟着弹），而且是“一次性”消息、
      * 不进补发暂存（见 PAGE_TRANSIENT_MESSAGE_TYPES）：一秒两张、一张几十 KB，
      * 攒进去几下就把真正要补的历史挤掉了。起不来 / 拍到一半断了发 desktopLiveResult。
+     *
+     * 浏览器页面不走这条：那边直接拉一条 `/live`（见 {@link watchDesktopLive}）。
      */
     private startDesktopLive(): void {
         const target = this.currentPageId;
         if (!target) { return; }
         this.desktopLive.addViewer(target, {
             onFrame: (frame) => {
-                const sent = this.sendToOneClient(target, { type: "desktopLiveFrame", data: frame.data, mimeType: frame.mimeType });
+                const sent = this.sendToOneClient(target, {
+                    type: "desktopLiveFrame", data: frame.jpeg.toString("base64"), mimeType: "image/jpeg",
+                });
                 // 那块屏已经不在了（连接收了）就别再拍了；正常情况下它走的时候
                 // onPageDisconnected 会把它摘掉，这一句是兼那个漏网的
                 if (!sent) { this.desktopLive.removeViewer(target); }
@@ -1789,6 +1795,30 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 this.sendToOneClient(target, { type: "desktopLiveResult", ok: false, error: note });
             },
         });
+    }
+
+    /**
+     * 一块屏要看桌面实时画面，帧直接交给它（**浏览器页面**走这条路：网页服务把它写进
+     * `/live` 那条响应里，一帧一张图，不用转 base64、也不用套进一条消息）。
+     *
+     * 拍画面的小程序仍然只有那一支：这儿跟面板那条加的是同一个登记簿，谁在看都算。
+     * 起不来 / 拍到一半断了照旧发一条 desktopLiveResult 给这块屏（跟面板同一种处理：
+     * 那边收到就收掉那一层、说一句原因）—— 这一路是直连的，没法在图上带一句原因。
+     *
+     * @param pageId 哪块屏要看（断了的消息就发给她）
+     * @param onFrame 来了一帧（一张完整的 JPEG）
+     * @returns 不看了（页面关掉那一层 / 连接断了）
+     */
+    public watchDesktopLive(pageId: string, onFrame: (jpeg: Buffer) => void): () => void {
+        // 一条请求一个号：同一个页面重开一次时新旧两条不会互相误杀（旧的那条自己会断）
+        const key = `live:${pageId}:${++this.desktopLiveSeq}`;
+        this.desktopLive.addViewer(key, {
+            onFrame: (frame) => { onFrame(frame.jpeg); },
+            onFail: (note) => {
+                this.sendToOneClient(pageId, { type: "desktopLiveResult", ok: false, error: note });
+            },
+        });
+        return () => { this.desktopLive.removeViewer(key); };
     }
 
     // ========================================================================

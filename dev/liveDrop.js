@@ -14,6 +14,8 @@
  *   三、真连接 + 真消息：积压过线时推一帧实时画面，连接里的字节不涨；紧接着推一条
  *       普通消息（assistantDelta），字节照涨。这就是这一条改动的全部承诺：
  *       画面可以被丢弃，正经内容一条都不能少。
+ *   四、直连（`/live`）：浏览器页面那条路真能收到帧，而且是一张张完整的 JPEG；
+ *       页面断开后就不拍了（小程序收掉）。
  *
  * 为什么要这条：它是「页面读得慢」时才走的那条路，平时永远碰不到；写错了只会
  * 在手机网络差的那一刻表现成「画面卡住 / 整屏重画」，跑起来一声不响。
@@ -63,6 +65,34 @@ function fetchText(url, maxBytes = 65536) {
 function fakeStream(backlog) {
     const writes = [];
     return { writes, get backlog() { return backlog; }, write: (text) => { writes.push(text); return "ok"; } };
+}
+
+/**
+ * 在 `/live` 收到的字节里找出“一帧一张 JPEG”的那些段。
+ * 每段长这样：`--pichatframe\r\nContent-Type: image/jpeg\r\nContent-Length: N\r\n\r\n<N 字节>`。
+ * @returns 已经收全的那几帧（收全 = 声明的大小跟实际字节数对得上），以及是不是一张完整的 JPEG
+ */
+function liveFrames(chunks) {
+    const buf = Buffer.concat(chunks);
+    const head = Buffer.from("--pichatframe\r\nContent-Type: image/jpeg\r\nContent-Length: ");
+    const found = [];
+    let at = 0;
+    for (;;) {
+        const start = buf.indexOf(head, at);
+        if (start < 0) { break; }
+        const eol = buf.indexOf("\r\n\r\n", start + head.length);
+        if (eol < 0) { break; }
+        const declared = Number(buf.slice(start + head.length, eol).toString());
+        const body = eol + 4;
+        if (!Number.isFinite(declared) || declared <= 0 || buf.length < body + declared) { break; }   // 还没收全
+        const jpeg = buf.slice(body, body + declared);
+        found.push({
+            bytes: declared,
+            jpeg: jpeg[0] === 0xff && jpeg[1] === 0xd8 && jpeg[declared - 2] === 0xff && jpeg[declared - 1] === 0xd9,
+        });
+        at = body + declared;
+    }
+    return found;
 }
 
 async function main() {
@@ -140,6 +170,38 @@ async function main() {
             const after2 = stream.backlog;
             check(after2 - before2 > 10 * 1024,
                 "推一条普通消息（同样 30 KB）：积压涨了 " + Math.round((after2 - before2) / 1024) + " KB，没被丢");
+        }
+
+        // ====================================================================
+        //  四、直连：浏览器页面拿帧的那条路
+        // ====================================================================
+        console.log("【四】直连 /live：真收到帧（一张完整的 JPEG），断开后就不再拍了");
+        let liveReq = null;
+        try {
+            const chunks = [];
+            let headers = null;
+            liveReq = http.get(started.url + "live?pageId=" + encodeURIComponent(pageId), (r) => {
+                headers = r.headers;
+                r.on("data", (chunk) => chunks.push(chunk));
+            });
+            liveReq.on("error", () => { /* 最后自己掐的，不算错 */ });
+            // 桌面不动的时候小程序不发帧（见 src/desktopLive.ts），所以等第一帧得有点耐心
+            const deadline = Date.now() + 8000;
+            while (Date.now() < deadline && liveFrames(chunks).length === 0) { await sleep(200); }
+            check(String(headers?.["content-type"] ?? "").startsWith("multipart/x-mixed-replace; boundary=pichatframe"),
+                "响应头说的是“接着来的多张图”：" + headers?.["content-type"]);
+            const got = liveFrames(chunks);
+            check(got.length >= 1, "收到 " + got.length + " 帧（桌面一直不动时本来就一帧不发，等最多 8 秒）");
+            check(got.length > 0 && got.every((f) => f.jpeg),
+                "每帧都是完整的一张 JPEG（声明的大小跟实际字节数对得上，头 FF D8、尾 FF D9）" +
+                (got.length ? "，第一帧 " + Math.round(got[0].bytes / 1024) + " KB" : ""));
+
+            liveReq.destroy();
+            liveReq = null;
+            await sleep(600);
+            check(started.host["desktopLive"].running === false, "页面断开后不再拍了（小程序已经收掉）");
+        } finally {
+            try { liveReq?.destroy(); } catch { /* 已经断了 */ }
         }
     } finally {
         try { eventsReq?.destroy(); } catch { /* 已经断了 */ }

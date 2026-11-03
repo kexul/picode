@@ -727,8 +727,9 @@
   //     收起来就告诉插件别拍了。
   // 消息由插件那头的 ChatHost 接：
   //   requestDesktopScreenshot → desktopScreenshot（图片 base64）/ desktopScreenshotResult（失败）；
-  //   requestDesktopLive → desktopLiveFrame（一帧一帧）/ desktopLiveResult（起不来、断了）；
-  //   收起来时发 stopDesktopLive。
+  //   requestDesktopLive → desktopLiveFrame（一帧一帧，**只有面板走这条**）/ desktopLiveResult（起不来、断了，两种页面都收）；
+  //   收起来时发 stopDesktopLive（也只有面板发）。
+  // 浏览器页面的实时画面不走消息：那一层的那张图直接指后端 `/live`（见下面那一节）。
   // 推回来的这几条在 inspectIncoming 里接（两种页面都走那儿），别只挂在下面的
   // dispatch 上：那条路只有网页端走。
   var shotBtn = null;
@@ -804,6 +805,13 @@
   // 就一张图一直换（一秒两张），外面一圈黑底，右上角一颗叉。
   // 没有缩放：这一层是用来看“现在屏幕上是什么样”的，不是看图；多出来那套手势
   // 在这么小的图上只会帮倒忙（要仔细看就点一下截一张，那一层能放大）。
+  //
+  // 帧怎么到这张图上，两种页面两条路（见 src/desktopLive.ts）：
+  //   - 浏览器页面：图片地址直接指后端那条直连（webChatServer.ts 的 /live），一帧一段往后写，
+  //     浏览器自己换图 —— 不转 base64、不套消息；
+  //   - 插件里那块对话面板：连不出去（页面是内联的、安全策略只放 data:/blob:），照旧走消息，
+  //     一帧一条 desktopLiveFrame（见下面 showDesktopLiveFrame）。
+  // 起不来 / 拍到一半断了两种页面一个待遇：收一条 desktopLiveResult，收掉这一层、说一句原因。
   var liveLayer = null;
   var liveImg = null;
   var liveNote = null;
@@ -822,6 +830,12 @@
     liveImg = document.createElement("img");
     liveImg.className = "desktop-live-img";
     liveImg.alt = "桌面实时画面";
+    // 直连那一路上，每换上一张图就响一次 load（一帧一次）：第一帧到了就把“正在连…”收掉
+    liveImg.addEventListener("load", function () {
+      if (!liveOpen) { return; }
+      liveFrames++;
+      if (liveFrames === 1) { liveNote.style.display = "none"; }
+    });
     liveNote = document.createElement("div");
     liveNote.className = "desktop-live-note";
     var close = document.createElement("button");
@@ -851,7 +865,13 @@
     liveNote.textContent = "正在连……";
     liveNote.style.display = "";
     liveLayer.classList.remove("hidden");
-    enqueue({ type: "requestDesktopLive" });
+    if (IN_WEBVIEW) {
+      // 面板：帧走消息那条道，后端照旧走 startDesktopLive（见 src/chatHost.ts）
+      enqueue({ type: "requestDesktopLive" });
+    } else {
+      // 浏览器页面：自己去拉那条直连（地址只认自己这个页面标识，帧不回消息那条道）
+      liveImg.src = "/live?pageId=" + encodeURIComponent(pageId);
+    }
     // 一直等不到画面（锁屏、远程会话断开、后端那头没起来）：别让人对着“正在连…”干等
     if (liveWaitTimer) { clearTimeout(liveWaitTimer); }
     liveWaitTimer = setTimeout(function () {
@@ -867,8 +887,9 @@
     liveOpen = false;
     if (liveWaitTimer) { clearTimeout(liveWaitTimer); liveWaitTimer = null; }
     if (liveLayer) { liveLayer.classList.add("hidden"); }
+    // 直连那条：把地址摘掉浏览器就把这条请求断了，后端跟着不拍
     if (liveImg) { liveImg.removeAttribute("src"); }
-    enqueue({ type: "stopDesktopLive" });
+    if (IN_WEBVIEW) { enqueue({ type: "stopDesktopLive" }); }
   }
 
   /** 后端推来一帧：换上，把“正在连…”收掉。 */

@@ -35,7 +35,8 @@ import { changedCharRanges, diffRows, type LineRanges } from "./wordDiff";
  *   - **页面线**（浏览器 / 手机，以及 VS Code 里的那块网页视图）：对话页面（`/`）、
  *     插件里那块对话面板的整页（`/panel`）、界面资源（`/media/…`）、
  *     后端推给页面的消息流（`/events`）、页面发给后端的消息（`/api`）、
- *     页面要看的文件与目录（`/file`、`/dir`，只读、只看得到当前会话目录里的）。
+ *     页面要看的文件与目录（`/file`、`/dir`，只读、只看得到当前会话目录里的）、
+ *     桌面实时画面（`/live`，一帧一段往后写，给浏览器页面那张图自己取）。
  *     VS Code 里的网页视图走同样的 `/events` + `/api`（只是中间隔着插件进程转发）、
  *     跑同一样一份界面代码，只有整页交给它时是内联版（`/panel`，见 pageHtml.ts）；
  *   - **屏线**（VS Code 窗口，`/screen` + `/screenapi`）：窗口在后端登记自己是打开着哪些
@@ -43,6 +44,8 @@ import { changedCharRanges, diffRows, type LineRanges } from "./wordDiff";
  *   另外有一个 `/health`，给单实例判断探活用。
  *
  * 方向：后端 → 页面/屏用"服务器推送"（长连接，随时能写）；页面/屏 → 后端用普通请求（POST）。
+ * 桌面实时画面是唯一一条例外：页面自己开一条长连接把帧拉下去（一帧一段，
+ * 不需要把每帧转成 base64 再套进一条消息；只有插件面板走不了这条路，见 chatHost.ts）。
  * 一个页面占一条推送连接，几个页面（手机 + 电脑 + 几个 VS Code 窗口）可以同时连着，
  * 推的消息发给每一个；确认框、选项浮层只发给"人最近在里面动过"的那个页面。
  *
@@ -56,7 +59,8 @@ const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
  *  掐掉让它重连重画。不掐的话这些字节全堆在插件进程里，回来时也不会被 GC 回收。 */
 const STREAM_BACKLOG_BYTES = 8 * 1024 * 1024;
 /** 一条推送连接排着这么多字节时，「过时了就没用」的那类消息（实时画面的帧）就别再往里塞了：
- *  画面本来就有下一帧，塞进去只会让它更落后，顺手把真正的消息挤在后面。 */
+ *  画面本来就有下一帧，塞进去只会让它更落后，顺手把真正的消息挤在后面。
+ *  直连那条（`/live`）也是按这个数丢帧，两边一条规矩。 */
 const STREAM_STALE_BYTES = 128 * 1024;
 /** 小于这么多字节就不费劲压了（压完省不了几个字节，还白搭一次 CPU）。 */
 const COMPRESS_MIN_BYTES = 1024;
@@ -303,6 +307,12 @@ export interface WebServerHost {
     processScreenMessage(msg: any, screenId: string): unknown;
     /** 页面发来一条消息（/api POST）。 */
     processPageMessage(msg: any, pageId: string): void;
+    /**
+     * 一块屏要看这台电脑的桌面实时画面（浏览器页面按住「截图」按钮那一下）。
+     * 来一帧叫一次 onFrame；这一路起不来 / 断了照旧给这块屏发一条 desktopLiveResult。
+     * @returns 不看了（页面关掉那一层 / 连接断了）
+     */
+    watchDesktopLive(pageId: string, onFrame: (jpeg: Buffer) => void): () => void;
     /**
      * 一个会话跑在哪个目录（只读的文件地址按它解路径）。
      * 跑着的会话、以及刚关掉还记着的会话都认；两条都对不上返回 undefined（页面拿不到内容）。
@@ -638,6 +648,11 @@ export class PiChatWebServer {
             if (pathname === "/diff/highlight") {
                 if (req.method !== "POST") { this.sendText(req, res, 405, "只接受 POST。"); return; }
                 void this.withFailNote(req, res, this.sendDiffHighlight(req, res));
+                return;
+            }
+            if (pathname === "/live") {
+                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                this.openDesktopLive(req, res, url.searchParams.get("pageId") ?? "");
                 return;
             }
             if (pathname === "/events") {
@@ -1437,6 +1452,42 @@ export class PiChatWebServer {
     // ========================================================================
     //  推送连接（插件 → 页面）
     // ========================================================================
+
+    /**
+     * 一条桌面实时画面的直连：`GET /live?pageId=…`（浏览器页面按住「截图」按钮那一下）。
+     *
+     * 页面那边就是一张 `<img>`：这份响应按 multipart/x-mixed-replace 一帧一段往后写，
+     * 浏览器拿到一帧就换一张图。不用转 base64、不用套 JSON、不用 gzip —— 那些都是为了
+     * 把帧塞进聊天消息那条推送流才要的（插件里那块面板只能用那条，它连不出去，
+     * 见 chatHost.startDesktopLive）。
+     *
+     * 页面关掉那一层 = 浏览器把这边的地址摘掉、这条请求跟着断，这儿就不看了；
+     * 拍画面的小程序什么时候起停由 DesktopLive 管（还有人看就接着拍）。
+     */
+    private openDesktopLive(req: http.IncomingMessage, res: http.ServerResponse, pageId: string): void {
+        const boundary = "pichatframe";
+        res.writeHead(200, {
+            "Content-Type": `multipart/x-mixed-replace; boundary=${boundary}`,
+            "Cache-Control": "no-store, no-transform",
+            "Connection": "keep-alive",
+            // 前面要是挂了反代：别把这一段攒成一整块再往外给，攒了就不是“实时”了
+            "X-Accel-Buffering": "no",
+        });
+        res.socket?.setNoDelay(true);
+        const stop = this.host.watchDesktopLive(pageId, (jpeg) => {
+            // 这块屏读得慢（网卡、退到后台）：这一帧不写了。画面本来就有下一帧，
+            // 塞进去只会让它越落越远（跟推送流那边丢帧是同一条规矩，见 STREAM_STALE_BYTES）
+            if (res.writableLength > STREAM_STALE_BYTES) { return; }
+            res.write(`--${boundary}\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\n\r\n`);
+            res.write(jpeg);
+            res.write("\r\n");
+        });
+        // 页面走了 / 关掉那一层 / 服务停了：不看了（还有别人看就接着拍，DesktopLive 自己算）
+        const done = () => { stop(); };
+        req.on("close", done);
+        res.on("close", done);
+        res.on("error", done);
+    }
 
     /**
      * 一个页面来开推送连接。

@@ -372,7 +372,8 @@ export const PAGE_TRANSIENT_MESSAGE_TYPES: ReadonlySet<string> = new Set([
     // 防以后改走广播时，把好几百 KB 的截图塞进补发暂存，把真正的历史消息挤掉。
     "desktopScreenshot",         // 桌面截图（网页端“桌面截图”按钮）
     "desktopScreenshotResult",   // 桌面截图的失败提示
-    // 长按那颗按钮看桌面实时画面：一秒两张、一张几十 KB，走 sendTo 只给看着的那块屏
+    // 长按那颗按钮看桌面实时画面：一秒两张、一张几十 KB。浏览器页面直接拉一条 `/live`（不走消息）；
+    // 插件里那块面板连不出去，只能这么推，走 sendTo 只给看着的那块屏
     "desktopLiveFrame",          // 实时画面的一帧（base64 的 JPEG）
     "desktopLiveResult",         // 实时画面起不来 / 拍到一半断了（这一层该收掉，带一句原因）
 ]);
@@ -383,9 +384,12 @@ export const PAGE_TRANSIENT_MESSAGE_TYPES: ReadonlySet<string> = new Set([
  * 这类消息不是内容，是随时会被下一张盖掉的画面。页面读得慢（手机网络卡、屏黑了、
  * 在后台）时别让它排队：排在后面的帧送到时早就过时了，还把这期间真正的消息挤在后头。
  * 丢掉不影响任何东西——页面手里那张旧的照旧显示，下一帧一两秒就到。
+ *
+ * （浏览器页面的帧不走消息，直连 `/live`；那边是同一条规矩，只是搬到了那儿，
+ * 见 webChatServer.ts 的 openDesktopLive。这里管的是插件面板那一路。）
  */
 export const PAGE_DROPPABLE_MESSAGE_TYPES: ReadonlySet<string> = new Set([
-    "desktopLiveFrame",          // 桌面实时画面的一帧
+    "desktopLiveFrame",          // 桌面实时画面的一帧（只有插件面板走这条路）
 ]);
 
 /**
