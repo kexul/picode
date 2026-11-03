@@ -964,6 +964,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return {
             action: "weixin",
             label: "微信",
+            section: "微信",
             check: null,
             kind: "weixin",
             phase: state.phase,
@@ -1285,7 +1286,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const able = describeRestart();
         const can = able.ok && !!this.options.restartBackend;
         const items: ViewOptionItem[] = [
-            // 微信排在这一节最前面：它跟下面「消息推送 / 推送标签」是一类事（通知往哪儿送）
+            // 微信这一段（登录 + 要不要推）：跟「通知」那一段挨着，一个是往哪儿送、一个是往微信里送不送
             this.weixinOptionItem(),
             // 微信有没有在推、要不要推：登录上了才给这颗开关（没绑上之前它没什么可管的）
             ...(this.weixinLogin().current().phase === "done"
@@ -1293,18 +1294,21 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                     action: "weixinPush",
                     label: "微信推送",
                     desc: "会话跑完一轮（或者在等你答一句）时往微信里发一条",
+                    section: "微信",
                     check: this.getWeixinPush(),
                 } as ViewOptionItem]
                 : []),
             {
                 action: "notifyTurnEnd",
                 label: "弹窗通知",
+                section: "通知",
                 check: this.getNotifyTurnEnd(),
             },
             {
                 action: "theme",
                 label: "界面颜色",
                 desc: "",
+                section: "外观",
                 check: null,
                 value: this.getThemeMode(),
                 options: [
@@ -1315,6 +1319,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             {
                 action: "restartBackend",
                 label: "重启后端",
+                section: "维护",
                 desc: can
                     ? (isPackaged()
                         ? "先拉最新代码、重新打包 exe，然后重启（正在跑的回复会断）"

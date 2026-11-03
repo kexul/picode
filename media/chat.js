@@ -12807,6 +12807,22 @@
     return groups;
   }
 
+  /**
+   * 一页里再按 section 分小节（见 chatControllerBase.ts 的 ViewOptionItem）：
+   * 没写 section 的凑成一组（不画标题）；小节按第一次出现的顺序摆。
+   */
+  function viewOptsSections(items) {
+    const groups = [];
+    const byName = new Map();
+    items.forEach((it) => {
+      const name = typeof it.section === "string" ? it.section : "";
+      let g = byName.get(name);
+      if (!g) { g = { name, items: [] }; byName.set(name, g); groups.push(g); }
+      g.items.push(it);
+    });
+    return groups;
+  }
+
   function renderViewOpts() {
     viewOptsRoot.innerHTML = "";
     settingsTabBar.innerHTML = "";
@@ -12833,7 +12849,14 @@
       settingsTabBar.appendChild(btn);
     });
     const cur = groups.find((g) => g.name === settingsTabNow) || groups[0];
-    cur.items.forEach((it) => { viewOptsRoot.appendChild(buildViewOptsRow(it)); });
+    viewOptsSections(cur.items).forEach((sec) => {
+      if (sec.name) {
+        const head = document.createElement("div");
+        head.className = "vo-section"; head.textContent = sec.name;
+        viewOptsRoot.appendChild(head);
+      }
+      sec.items.forEach((it) => { viewOptsRoot.appendChild(buildViewOptsRow(it)); });
+    });
   }
 
   /** 画一条选项（种类见 ViewOptionItem 的 kind）。 */
@@ -12871,7 +12894,8 @@
     txt.appendChild(label);
     const desc = it.desc || "";
     if (desc) { const d = document.createElement("div"); d.className = "vo-desc"; d.textContent = desc; txt.appendChild(d); }
-    row.appendChild(check); row.appendChild(txt);
+    // 名字在左、勾选框在右（跟数值、按钮、按钮组这些行同一条竖线）
+    row.appendChild(txt); row.appendChild(check);
     row.addEventListener("click", () => {
       vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: it.value });
     });
@@ -12889,11 +12913,7 @@
   const QRCODE_SCRIPT = "qrcode.js";
   function renderWeixinRow(row, it) {
     row.classList.add("vo-item-weixin");
-    const txt = document.createElement("div"); txt.className = "vo-text";
-    const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "微信";
-    txt.appendChild(label);
-    row.appendChild(txt);
-
+    // 这一块上面已经有一行小节标题写着「微信」（后端给这一项的 section），这里不再重复写一遍名字
     const body = document.createElement("div"); body.className = "vo-wx-body";
     row.appendChild(body);
 

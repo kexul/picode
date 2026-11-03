@@ -109,6 +109,8 @@ export interface ViewOptionItem {
     disabled?: boolean;
     /** 归到设置面板的哪一页（不写就是「基础」）；页面按选项里第一次出现的顺序摆标签。 */
     tab?: string;
+    /** 那一页里归到哪一小节（不写就不画小节标题）；页面按第一次出现的顺序摆小节。 */
+    section?: string;
     // ---- kind: "weixin"（微信扫码登录那块，见 chatHost.ts 的 weixinOptionItem）----
     /** 现在走到哪一步了：idle / wait / scaned / needcode / done / error。 */
     phase?: string;
@@ -453,6 +455,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 action: "autoLoadLastSession",
                 label: "启动时自动打开最近会话",
                 desc: "",
+                section: "启动",
                 check: this.getAutoLoadLast(),
             },
             {
@@ -500,6 +503,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 action: "fontSize",
                 label: "字号",
                 desc: "",
+                section: "外观",
                 check: null,
                 kind: "number",
                 value: this.getFontSize(),
@@ -509,6 +513,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 action: "notifyPushTo",
                 label: "消息推送",
                 desc: "",
+                section: "通知",
                 check: null,
                 kind: "text",
                 placeholder: this.notifyPushExample(),
@@ -519,6 +524,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 action: "notifyPushLabel",
                 label: "推送标签",
                 desc: "",
+                section: "通知",
                 check: null,
                 kind: "text",
                 placeholder: "家里那台",
