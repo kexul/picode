@@ -1,7 +1,7 @@
 /*
  * shot —— 截一张桌面（Windows）的独立小程序。
  *
- * 干什么：把当前桌面（所有显示器拼成的那一整块）拍下来，缩到长边 1600 以内，
+ * 干什么：把当前桌面（所有显示器拼成的那一整块）拍下来，缩到长边 1024 以内，
  * 存成 JPEG 并把 base64 打到标准输出。插件后端（见 src/desktopScreenshot.ts）拿它当
  * 「桌面截图」按钮的那双手。
  *
@@ -12,7 +12,7 @@
  * 编法见 scripts/compile.mjs：用 Windows 自带的 csc.exe（.NET Framework）编成 bin/shot.exe，
  * 编译时带上 /codepage:65001（本文件是 UTF-8，不指明白 csc 会按系统代码页读，中文注释会乱）。
  *
- * 用法：shot.exe [长边上限，默认 1600]
+ * 用法：shot.exe [长边上限，默认 1024]
  *   成功：base64 打到标准输出（不换行、不带别的字）
  *   失败：往标准错误写一句人话，退出码 1
  */
@@ -43,7 +43,7 @@ class Shot
     {
         try
         {
-            int maxEdge = 1600;
+            int maxEdge = 1024;
             if (args.Length > 0)
             {
                 maxEdge = int.Parse(args[0]);
