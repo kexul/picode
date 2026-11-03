@@ -9,7 +9,9 @@
  * 这一跑自己搭一个小仓库当会话目录、把铺好的文件提交上去，那就是「最近一次提交」。
  *
  * 验的是外面看得见的行为：
- *   1. 消息已经贴到底时往上拖：底下那一块跟着手指长起来，但走得比手指短（有阻尼）；
+ *   1. 消息已经贴到底时，从最底下那一小截（胶囊那一排连它底下的空当）往上拖：底下那一块跟着
+ *      手指长起来，但走得比手指短（有阻尼）；
+ *   1b. 起手在消息区中间（那一小截上头）：不接，那是正常滚动；
  *   2. 拖到一半时看出两块各占一块：消息区矮下去，这一块的顶边就是消息区的底边（谁也不盖谁）；
  *   3. 松手过线：它留在那儿，高度按内容定、不超过对话那一列的 45%；清单里列着改过的那几个文件
  *      （写的是整条相对写法、右边 +几行 −几行）；
@@ -124,7 +126,8 @@ module.exports = async (page) => {
         });
     `).then(JSON.parse);
 
-    /** 消息区那一块（手指从这儿起手）。 */
+    /** 手指起手的位置：最底下那一小截（改动层只认从这儿起手的上滑，见 chat.js）；
+     * midY 是消息区中间，验“起在别处不接”用的。 */
     const box = JSON.parse(await page.eval(`
         const r = document.getElementById("messages").getBoundingClientRect();
         const el = document.querySelector(".session-view:not(.off) .session-pane");
@@ -134,7 +137,8 @@ module.exports = async (page) => {
         });
     `));
     const cx = box.x + box.w / 2;
-    const cy = box.y + Math.round(box.h * 0.7);
+    const cy = box.y + box.h - 20;   // 最底下那一小截里（离底 20 像素，避开关着的时候的边线）
+    const midY = box.y + Math.round(box.h * 0.6);
 
     /** 从 (x0,y0) 划到 (x1,y1)：分几步走，走到头可以停下来看看、拍张照。 */
     const drag = async (x0, y0, x1, y1, steps, atEnd) => {
@@ -152,6 +156,13 @@ module.exports = async (page) => {
     check("界面里搭出了底下那一块（一开始藏着、不占版面）", start.exists && start.hidden && start.h <= 0,
         JSON.stringify({ 藏: start.hidden, 高: start.h }));
     const msgH0 = start.msgsH;
+
+    // ---- 1b. 起手在消息区中间（最底下那一小截的上头）：不接，那是正常滚动 ----
+    await drag(cx, midY, cx, midY - 260, 12);
+    await page.sleep(700);
+    const midStart = await sheetNow();
+    check("起手在消息区中间：不接（那一块还藏着）", midStart.hidden && midStart.h <= 0,
+        JSON.stringify({ 藏: midStart.hidden, 高: midStart.h }));
 
     // ---- 1/2. 往上拖 260 像素（分 12 步），拖到一半看看跟手与阻尼 ----
     const PULL = 260;

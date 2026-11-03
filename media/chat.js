@@ -5647,8 +5647,10 @@
   // ==================== 消息滑到底再往上拖：把「改动」那一块拖出来 ====================
   // 里面就是这个会话目录跟最后一次提交差了什么（跟左边文件侧边栏下格「改动」是同一份清单），
   // 从屏幕底下升起来：对话让出下面一截、缩在上面，两块各占一块，谁也不盖谁。
-  // 起手：消息已经滚到最底下，再往上拖（带阻尼：走的路比手指短），拖过那一条线（或者甩得快）
-  // 就留在那儿，不够就滑回去。开着的时候拖着它头上那一条往下拉就收回去（点那颗叉也行）。
+  // 起手：消息已经滚到最底下，而且手指落在最底下那一小截（末尾那排胶囊「压缩 / 啊？」连它底下的
+  // 空当，约 48 像素）里 —— 消息区哪儿都能起手的话，滚到底以后随手一划就把它拽出来，太容易误触；
+  // 那一排没露面（空会话）时也是这一条。再往上拖（带阻尼：走的路比手指短），拖过那一条线（或者
+  // 甩得快）就留在那儿，不够就滑回去。开着的时候拖着它头上那一条往下拉就收回去（点那颗叉也行）。
   // 左右划那条路不往这儿带了：划到头就停（见上面那段）。
   //
   // 这一块只长在浏览器页面里：插件里的对话面板没有文件侧边栏（见 buildFileSidebar），
@@ -5657,6 +5659,7 @@
   const CHANGE_SHEET_SLIDE_MS = 180;  // 松手以后滑到位的那一小段
   const CHANGE_SHEET_DAMPING = 0.5;   // 跟手：手指往上走 2 像素，这一块涨 1 像素
   const CHANGE_SHEET_OPEN_PX = 64;    // 拖到它长这么高（手指走了两倍的路）就认，松手就留下
+  const CHANGE_SHEET_GRAB_PX = 48;    // 起手只认最底下这么高的一小截（胶囊那一排连它底下的空当）
   const changeSheet = {
     root: null, bar: null, body: null,
     open: false,     // 现在是开着的那一份（松手过线以后为 true，收起来那一刻改回 false）
@@ -5844,8 +5847,9 @@
     return pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 2;
   }
 
-  // 往上拖那一趟：从消息区起手。竖着往上走、消息又已经到底了，就把这一下从浏览器手里拿过来
-  //（preventDefault），跟着手指把这一块拉起来。横着 / 往下走的仍旧交还给上面那两套（切会话、滚动）。
+  // 往上拖那一趟：从消息区最底下那一小截起手。竖着往上走、消息又已经到底了，就把这一下
+  // 从浏览器手里拿过来（preventDefault），跟着手指把这一块拉起来。起在那一小截上头
+  // （消息正文里）的不算 —— 那是回看 / 滚动；横着 / 往下走的仍旧交还给上面那两套（切会话、滚动）。
   messagesEl.addEventListener("touchstart", (e) => {
     const s = changeSheet;
     if (!s.root || s.open || s.pull || e.touches.length !== 1) { return; }
@@ -5853,6 +5857,8 @@
     if (!pane || !paneAtBottom(pane)) { return; }
     if (swipeOnControl(e.target)) { return; }   // 按在按钮 / 链接 / 图上：不动
     const t = e.touches[0];
+    const bottom = messagesEl.getBoundingClientRect().bottom;
+    if (bottom - t.clientY > CHANGE_SHEET_GRAB_PX) { return; }   // 起在那一小截上头：不是这一趟
     s.pull = { finger: t.identifier, x0: t.clientX, y0: t.clientY, t0: Date.now(), lock: false, height: 0 };
   }, { passive: true });
 
