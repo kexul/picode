@@ -1854,7 +1854,8 @@
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
   }
   #changeSheet.hidden { display: none; }
-  /* 头上那一条：左边写「改动」，右边一颗叉；正中间那颗小横条是抓的地方（拖着它往下拉就收回去）。 */
+  /* 头上那一条：左边写「改动」，右边一颗叉；正中间那颗小横条是抓的地方
+     （拖着它往下拉就收回去；清单滚到最上头以后在清单上接着往下拉也一样，见 chat.js 的 wireChangeSheetCloseDrag）。 */
   #changeSheetBar {
     position: relative; flex: 0 0 auto;
     display: flex; align-items: center; gap: 4px;

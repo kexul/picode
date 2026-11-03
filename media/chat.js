@@ -5585,6 +5585,7 @@
     height: 0,       // 现在的高度（像素）
     seq: 0,          // 第几次问清单：切会话 / 收起以后，晚到的那条回应不算数
     drawn: false,    // 手上这份清单已经画出来了（换会话就作废）
+    loading: false,  // 有一条问清单的还在路上（别越堆越多）
     pull: null,      // 正跟着手指往上拖的那一趟（开起来）
     closeDrag: null, // 正拖着头上那一条往下拉的那一趟（收回去）
     timer: 0,
@@ -5666,8 +5667,10 @@
     const s = changeSheet;
     if (!s.root) { return; }
     const seq = ++s.seq;
+    s.loading = true;
     fetch(changesUrl()).then(async (resp) => {
       if (seq !== s.seq) { return; }
+      s.loading = false;
       if (resp.status !== 200) {
         // 真看不了（会话不在了之类）：没画过就把后端那句话摆上；画过的留着旧的那一份
         if (!s.drawn) { showSheetNote(await readDeadResponse(resp)); }
@@ -5677,8 +5680,9 @@
       if (seq !== s.seq) { return; }
       drawSheetChanges(!(data && data.vcs === false), data && Array.isArray(data.changes) ? data.changes : []);
     }).catch(() => {
-      if (seq !== s.seq || s.drawn) { return; }
-      showSheetNote("读不出来：连不上后端。");
+      if (seq !== s.seq) { return; }
+      s.loading = false;
+      if (!s.drawn) { showSheetNote("读不出来：连不上后端。"); }
     });
   }
 
@@ -5697,11 +5701,14 @@
     if (s.open) { changeSheetSetHeight(changeSheetRestingHeight(), 140); }
   }
 
-  /** 手上还没有清单就先写上那句话、去问一遍（拖起来那一刻、开起来那一刻都走它，问过就不再问）。 */
+  /**
+   * 去问一遍清单（拖起来那一刻走它）：手上有旧的先摆着（回来再顶掉，看着不闪白），
+   * 没有就先写上那句「正在读取…」。正在问就不重复问。
+   */
   function changeSheetLoad() {
     const s = changeSheet;
-    if (!s.root || s.drawn) { return; }
-    showSheetNote("正在读取…");
+    if (!s.root || s.loading) { return; }
+    if (!s.drawn) { showSheetNote("正在读取…"); }
     fetchSheetChanges();
   }
 
@@ -5709,6 +5716,9 @@
   function reloadChangeSheet() {
     const s = changeSheet;
     if (!s.root) { return; }
+    // 还在路上的那条作废：它问的是上一个会话目录（换了会话时），回来也不该画到这一份上
+    s.seq += 1;
+    s.loading = false;
     s.drawn = false;
     s.body.innerHTML = "";
     if (!s.open) { return; }
@@ -5716,13 +5726,15 @@
     changeSheetSetHeight(changeSheetRestingHeight(), CHANGE_SHEET_SLIDE_MS);
   }
 
-  /** 开起来（往上拖过线以后走这儿）：拖的时候已经问回来的那份直接摆上，没回来就接着等它。 */
+  /**
+   * 开起来（往上拖过线以后走这儿）：清单在拖起来那一刻就问上了（见 changeSheetLoad），
+   * 回来的那份直接摆上；还没回来就先停在「正在读取…」那个高度，等它回来再按内容定高。
+   */
   function openChangeSheet() {
     const s = changeSheet;
     if (!s.root || s.open) { return; }
     s.open = true;
     s.root.classList.remove("hidden");
-    changeSheetLoad();
     changeSheetSetHeight(changeSheetRestingHeight(), CHANGE_SHEET_SLIDE_MS);
   }
 
@@ -5731,7 +5743,8 @@
     const s = changeSheet;
     if (!s.root) { return; }
     s.open = false;
-    s.seq += 1;   // 还等着的那条回应别再画进来
+    s.seq += 1;         // 还等着的那条回应别再画进来
+    s.loading = false;  // 那条不算数了，下一趟照旧能问
     changeSheetSetHeight(0, CHANGE_SHEET_SLIDE_MS);
   }
 
@@ -5806,13 +5819,17 @@
   messagesEl.addEventListener("touchcancel", (e) => changeSheetPullDone(e, true));
 
   /**
-   * 拖着头上那一条往下拉，这一块就跟着手指下去（带阻尼），松手过了三成就收回去。
+   * 往下拉：这一块跟着手指下去（带阻尼），松手过了三成就收回去，不够就弹回原处。
+   * 两处都能起手：头上那一条（什么时候都算），清单那一块（清单已经滚到最上头才算，
+   * 不然那一下是翻清单里上面那几条）。
    * 按在那颗叉上是它的活（见下面那段），不算拖。
+   * @param el 在哪一块上拖：头上那一条（什么时候都算），或者清单那一块（只在清单已经滚到最上头时算：
+   *   没到顶的那一下是翻清单里上面那几条，不是收起来）
+   * @param isList 是不是清单那一块
    */
-  function wireChangeSheetCloseDrag() {
+  function wireChangeSheetCloseDrag(el, isList) {
     const s = changeSheet;
-    const bar = s.bar;
-    if (!bar) { return; }
+    if (!el) { return; }
     const finish = (e, cancelled) => {
       const d = s.closeDrag;
       if (!d) { return; }
@@ -5826,13 +5843,14 @@
       if (past) { closeChangeSheet(); return; }
       changeSheetSetHeight(changeSheetRestingHeight(), CHANGE_SHEET_SLIDE_MS);
     };
-    bar.addEventListener("touchstart", (e) => {
+    el.addEventListener("touchstart", (e) => {
       if (!s.open || s.closeDrag || e.touches.length !== 1) { return; }
+      if (isList && s.body.scrollTop > 0) { return; }   // 清单不在最上头：这一下是翻上面那几条
       if (swipeOnControl(e.target)) { return; }
       const t = e.touches[0];
       s.closeDrag = { finger: t.identifier, y0: t.clientY, x0: t.clientX, t0: Date.now(), lock: false, h0: s.height };
     }, { passive: true });
-    bar.addEventListener("touchmove", (e) => {
+    el.addEventListener("touchmove", (e) => {
       const d = s.closeDrag;
       if (!d) { return; }
       const t = e.touches.length === 1 ? e.touches[0] : null;
@@ -5847,8 +5865,8 @@
       if (e.cancelable) { e.preventDefault(); }
       changeSheetSetHeight(Math.max(0, d.h0 - dy), 0);
     }, { passive: false });
-    bar.addEventListener("touchend", (e) => finish(e, false));
-    bar.addEventListener("touchcancel", (e) => finish(e, true));
+    el.addEventListener("touchend", (e) => finish(e, false));
+    el.addEventListener("touchcancel", (e) => finish(e, true));
   }
 
   // 这一块搭在对话那一列里、消息区下面（#inputArea 上面）：它长起来，消息区就跟着矮下去。
@@ -5863,7 +5881,7 @@
     root.innerHTML =
       '<div id="changeSheetBar">' +
         '<span class="cs-title">改动</span>' +
-        // 中间那颗小横条是抓的地方：拖着这一条往下拉就收回去（见 wireChangeSheetCloseDrag）
+        // 中间那颗小横条是抓的地方：拖着这一条往下拉就收回去（清单滚到最上头以后接着往下拉也算）
         '<span class="cs-grip"></span>' +
         '<button id="changeSheetClose" type="button" title="收起" aria-label="收起">' + ICONS["close-bold"] + '</button>' +
       '</div>' +
@@ -5873,7 +5891,8 @@
     changeSheet.bar = root.querySelector("#changeSheetBar");
     changeSheet.body = root.querySelector("#changeSheetBody");
     root.querySelector("#changeSheetClose").addEventListener("click", closeChangeSheet);
-    wireChangeSheetCloseDrag();
+    wireChangeSheetCloseDrag(changeSheet.bar, false);
+    wireChangeSheetCloseDrag(changeSheet.body, true);
     // 窗口大小变了：开着的话按新窗口重新夹一下（最多 45% 那条线跟着窗口走）
     window.addEventListener("resize", () => {
       if (!changeSheet.open || changeSheet.pull || changeSheet.closeDrag) { return; }

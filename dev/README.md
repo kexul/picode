@@ -125,7 +125,8 @@ npm run web:shot -- --width 420 --height 900 --fake-pi --script dev/swipeSession
 npm run web:shot -- --width 1000 --height 760 --fake-pi --script dev/dragSession.js
 
 # 验「消息滑到底再往上拖，把改动清单拖出来」（底下那一块跟着手指长起来、有阻尼；松手过线留下、
-# 按内容占高最多 45%；两块各占一块不互相盖；点一行看那份 diff；拖着它头上那一条往下拉 / 点叉收起来；
+# 按内容占高最多 45%；两块各占一块不互相盖、贴底拖时最后一行没被顶出去；点一行看那份 diff；
+# 拖着它头上那一条往下拉 / 清单滚到最上头再往下拉 / 点叉都能收起来（清单没到顶时往下拉是翻清单）；
 # 消息没贴底时往上拖不算；没改动 / 不是 git 仓库时里面写一句）：
 npm run web:shot -- --width 420 --height 900 --fake-pi --script dev/changeSheet.js
 

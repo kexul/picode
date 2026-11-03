@@ -115,6 +115,12 @@ module.exports = async (page) => {
             view: document.body.classList.contains("file-view"),
             stageShown: !!stage && getComputedStyle(stage).display !== "none",
             bar: b ? { x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2) } : null,
+            listBox: body ? (function () {
+                const r = body.getBoundingClientRect();
+                return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), h: Math.round(r.height) };
+            })() : null,
+            listTop: body ? Math.round(body.scrollTop) : -1,
+            listScrollable: !!body && body.scrollHeight > body.clientHeight + 2,
         });
     `).then(JSON.parse);
 
@@ -314,6 +320,68 @@ module.exports = async (page) => {
         if (gone.hidden) { break; }
     }
     check("点头上那颗叉：收起来", gone.hidden && gone.h <= 0, JSON.stringify({ 藏: gone.hidden, 高: gone.h }));
+
+    // ---- 9. 清单长了以后：在清单上往下拉也能收，但只在清单已经滚到最上头时算 ----
+    const extra = [];
+    for (let i = 1; i <= 20; i++) {
+        const name = "长清单-" + i + ".txt";
+        fs.writeFileSync(path.join(WORK, name), "第 " + i + " 个文件\n", "utf8");
+        extra.push(name);
+    }
+    await drag(cx, cy, cx, cy - 300, 12);
+    let long = null;
+    for (let t = 0; t < 30; t++) {
+        await page.sleep(250);
+        long = await sheetNow();
+        if (!long.hidden && long.rows.length > 20) { break; }
+    }
+    const capLong = Math.round((await page.eval(`return document.getElementById("chatColumn").clientHeight;`)) * 0.45);
+    check("清单长了：这一块停在封顶那儿，清单自己滚",
+        !long.hidden && Math.abs(long.h - capLong) <= 2 && long.listScrollable,
+        JSON.stringify({ 高: long.h, 封顶: capLong, 能滚: long.listScrollable, 行: long.rows.length }));
+    await page.shot("sheet-long.png");
+
+    // 清单滚到中间时往下拖：那是翻清单里上面那几条，这一块不动、也不收
+    await page.eval(`
+        const body = document.getElementById("changeSheetBody");
+        if (body) { body.scrollTop = 120; }
+        return true;
+    `);
+    await page.sleep(300);
+    const beforeScroll = await sheetNow();
+    const listX = beforeScroll.listBox.x;
+    const listY = beforeScroll.listBox.y;
+    await drag(listX, listY, listX, listY + 60, 8);
+    await page.sleep(500);
+    const afterScroll = await sheetNow();
+    check("清单不在最上头时往下拖：那一下是翻清单（这一块不收、也不矮）",
+        !afterScroll.hidden && Math.abs(afterScroll.h - beforeScroll.h) <= 2 && afterScroll.listTop < beforeScroll.listTop,
+        JSON.stringify({ 高: afterScroll.h, 原来: beforeScroll.h, 清单顶: afterScroll.listTop, 拖之前: beforeScroll.listTop }));
+
+    // 清单在最上头时往下拖：这一块跟着矮下去，松手过三成就收起来
+    await page.eval(`
+        const body = document.getElementById("changeSheetBody");
+        if (body) { body.scrollTop = 0; }
+        return true;
+    `);
+    await page.sleep(300);
+    const topNow = await sheetNow();
+    let listDrag = null;
+    await drag(topNow.listBox.x, topNow.listBox.y, topNow.listBox.x, topNow.listBox.y + Math.round(topNow.h * 0.45), 8, async () => {
+        listDrag = await sheetNow();
+    });
+    check("清单在最上头时往下拖：这一块跟着矮下去",
+        listDrag && listDrag.h < topNow.h && listDrag.h > 0,
+        JSON.stringify({ 拖之前: topNow.h, 拉到一半: listDrag && listDrag.h }));
+    let closedByList = null;
+    for (let t = 0; t < 20; t++) {
+        await page.sleep(200);
+        closedByList = await sheetNow();
+        if (closedByList.hidden) { break; }
+    }
+    check("松手过了三成：收起来了（没顺手把那份 diff 打开）",
+        closedByList.hidden && closedByList.h <= 0 && !closedByList.view,
+        JSON.stringify({ 藏: closedByList.hidden, 高: closedByList.h, 弹窗: closedByList.view }));
 
     if (failures) { throw new Error("有 " + failures + " 条不对"); }
 };
