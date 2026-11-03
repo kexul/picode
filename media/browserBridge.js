@@ -740,6 +740,8 @@
   // 不能在的话长按就跟点一下一样，什么额外的事都不发生。
   var desktopLiveEnabled = true;
   // 按住多久算“按住不放”。太短会跟“点一下”撞车，太长按着手太酸；半秒上下是手机上常见的那一档。
+  // 按下去以后按钮上那一圈进度就是按这个时长转满的（时长写进 --hold-ms 交给样式，
+  // 见 browserTheme.css）：转满才弹那一层，没转满就松手算点一下、截一张图。
   var LONG_PRESS_MS = 450;
 
   /** 后端说这台机器截不了桌面：按钮收起来（已经画出来的也拿掉）。 */
@@ -919,24 +921,33 @@
     shotBtn.type = "button";
     shotBtn.id = "browserScreenshotBtn";
     shotBtn.innerHTML = ICON_CAMERA;
-    shotBtn.title = "点一下看桌面截图，按住不放看桌面实时画面（截的是运行 VSCode 的这台电脑）";    shotBtn.setAttribute("aria-label", "截图");
+    shotBtn.title = "点一下看桌面截图，按住不放看桌面实时画面（截的是运行 VSCode 的这台电脑）";
+    shotBtn.setAttribute("aria-label", "截图");
+    shotBtn.style.setProperty("--hold-ms", LONG_PRESS_MS + "ms");
+    // 按住时那一圈进度（样式见 browserTheme.css）：viewBox 24 里画个半径 10 的圈，
+    // 转满就是 LONG_PRESS_MS 到了。没按住时 opacity 是 0（什么都不显）。
+    shotBtn.innerHTML += '<svg class="hold-ring" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle></svg>';
     // 点两下会出事：按住不放已经弹出了实时画面，松手时浏览器还会补一个 click，
     // 那一下不能再当成“点一下”去截一张（不然实时画面底下又弹一张图）。
     var pressTimer = null;
     var pressFired = false;
+    /** 松开 / 划走 / 浏览器收回：进度圈收起，这一次不算长按。 */
     function cancelPress() {
-      if (!pressTimer) { return; }
-      clearTimeout(pressTimer);
-      pressTimer = null;
+      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+      if (shotBtn) { shotBtn.classList.remove("holding"); }
     }
     shotBtn.addEventListener("pointerdown", function (e) {
       // 只认主键 / 手指：右键、中键不掺和
       if (e.button !== undefined && e.button !== 0) { return; }
       pressFired = false;
       cancelPress();
+      // 这台机器没有实时画面那一路：按住就什么额外的事也不做（不给进度圈，
+      // 省得人以为转满了会有什么发生）
+      if (!desktopLiveEnabled) { return; }
+      shotBtn.classList.add("holding");
       pressTimer = setTimeout(function () {
         pressTimer = null;
-        if (!desktopLiveEnabled) { return; }
+        shotBtn.classList.remove("holding");
         pressFired = true;
         openDesktopLive();
       }, LONG_PRESS_MS);

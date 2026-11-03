@@ -46,9 +46,53 @@ html, body {
 
 /* 长按那颗按钮会顺带弹出“选中文字 / 保存图片”那套菜单，按着的时候也别让它选中 */
 #browserScreenshotBtn {
+  position: relative;
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
+}
+
+/*
+  按住不放时按钮上的反馈（见 browserBridge.js 的 pointerdown 那段）：图压暗，外圈一圈进度
+  按着按住的时长转满（450ms，时长由那边写在 --hold-ms 上）。
+  为什么要有这个：不按住只看得到“弹出来了”，按着的那几百毫秒里界面一动不动，
+  人分不清“我这一下是点还是按”、也不知道还差多少。转满了就是按住不放（弹实时画面），
+  没转满就松手算点一下（截一张）。
+  画的是一圈 SVG（半径 10、周长约 62.83）：转满 = stroke-dashoffset 从 62.83 走到 0。
+*/
+#browserScreenshotBtn.holding > svg:not(.hold-ring) {
+  opacity: 0.45;
+}
+
+#browserScreenshotBtn .hold-ring {
+  position: absolute;
+  inset: -3px;
+  width: calc(100% + 6px);
+  height: calc(100% + 6px);
+  transform: rotate(-90deg);
+  opacity: 0;
+  pointer-events: none;
+}
+
+#browserScreenshotBtn .hold-ring circle {
+  fill: none;
+  stroke: var(--vscode-focusBorder, #0090f1);
+  stroke-width: 1.6;
+  stroke-dasharray: 62.83;
+  stroke-dashoffset: 62.83;
+}
+
+#browserScreenshotBtn.holding .hold-ring {
+  opacity: 1;
+}
+
+#browserScreenshotBtn.holding .hold-ring circle {
+  animation: pichat-hold-ring var(--hold-ms, 450ms) linear forwards;
+}
+
+@keyframes pichat-hold-ring {
+  from { stroke-dashoffset: 62.83; }
+  to { stroke-dashoffset: 0; }
 }
 
 /*

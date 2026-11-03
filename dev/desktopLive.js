@@ -89,6 +89,23 @@ async function mouse(page, type, at) {
     });
 }
 
+/** 按住时的反馈：按钮上是“按着”那个类吗、那圈进度是不是露着并在转。 */
+async function holdState(page) {
+    return page.eval(`
+        const btn = document.getElementById("browserScreenshotBtn");
+        const ring = btn ? btn.querySelector(".hold-ring") : null;
+        // 动的是圈里那个 circle（svg 只是个框），所以动画看它
+        const circle = ring ? ring.querySelector("circle") : null;
+        const cs = circle ? getComputedStyle(circle) : null;
+        return {
+            holding: !!(btn && btn.classList.contains("holding")),
+            ringOpacity: ring ? getComputedStyle(ring).opacity : null,
+            ringAnimation: cs ? cs.animationName : null,
+            ringDuration: cs ? cs.animationDuration : null,
+        };
+    `);
+}
+
 /** 长按一会儿（按下去不放）。 */
 async function pressAndHold(page, ms) {
     const at = await buttonCenter(page);
@@ -141,24 +158,36 @@ async function main() {
         const a = await openOne();
         await a.sleep(500);
 
-        // ---- 一、点一下：还是截一张，不会弹出实时画面那一层 ----
+        // ---- 一、按得快：还是截一张，不会弹出实时画面那一层；按着的时候按钮上看得见“在按” ----
         const at = await buttonCenter(a);
         check(!!at, "输入框底下有那颗「📷」");
         await mouse(a, "mousePressed", at);
-        await a.sleep(80);                       // 比“按住不放”短得多：这一次是点一下
+        await a.sleep(150);
+        const holdingShort = await holdState(a);
+        check(holdingShort.holding && holdingShort.ringOpacity === "1", "按下去按钮当场有反应（压暗 + 那一圈进度露出来）");
+        check(holdingShort.ringAnimation === "pichat-hold-ring" && holdingShort.ringDuration === "0.45s",
+            `那一圈是按着住的时长转的（${holdingShort.ringAnimation} / ${holdingShort.ringDuration}）`);
+        await a.sleep(100);                        // 一共 250ms：还不到 450ms，算点一下
+        const holdingBeforeThreshold = await holdState(a);
+        check(holdingBeforeThreshold.holding, "不到时间之前那一圈还在转（看得出来还没到）");
+        check(!(await liveState(a)).open, "没转满的时候还没有弹出实时画面");
         await mouse(a, "mouseReleased", at);
         const shotOpen = await waitFor(() => lightboxOpen(a).then((open) => open || false), 8000, "截图那张图");
         const liveAfterClick = await liveState(a);
-        check(shotOpen, "点一下之后截图那张图出来了（老行为还在）");
+        check(shotOpen, "松手得早了一点：算点一下，截图那张图出来了（老行为还在）");
         check(!liveAfterClick.open, "点一下没有顺带弹出实时画面那一层");
+        check(!(await holdState(a)).holding, "松手以后那一圈收了（不留在那儿一直转）");
         await a.press("Escape");
         await a.sleep(300);
 
-        // ---- 二、按住不放：弹出那一层，画面一直在换 ----
-        const heldAt = await pressAndHold(a, 700);
+        // ---- 二、按住不放：转满才弹，弹出之后画面一直在换 ----
+        const heldAt = await pressAndHold(a, 200);
+        check((await holdState(a)).holding, "按住不放的时候那一圈在转");
+        check(!(await liveState(a)).open, "才按了 200ms，还没到（没提前弹）");
         const opened = await waitFor(async () => (await liveState(a)).open, 3000, "实时画面那一层")
             .then(() => true, () => false);
         check(opened, "按住不放弹出了实时画面那一层");
+        check(!(await holdState(a)).holding, "弹出来以后那一圈收了");
         const firstFrame = await waitFor(async () => (await liveState(a)).hasSrc, 8000, "第一帧画面")
             .then(() => true, () => false);
         check(firstFrame, "弹出之后很快就有画面了");
