@@ -12785,54 +12785,97 @@
   /** 「重启后端」那行说明的那个元素（后端回话时改它）；没画出这一行时是 null。 */
   let restartNoteEl = null;
   const viewOptsRoot = document.getElementById("viewOptsRoot");
+  const settingsTabBar = document.getElementById("settingsTabBar");
+  /** 设置面板里第一页叫什么：选项条目没写 tab 的都进这一页。 */
+  const SETTINGS_BASE_TAB = "基础";
+  /** 现在看着哪一页（每次打开设置都从「基础」开始）。 */
+  let settingsTabNow = SETTINGS_BASE_TAB;
+
+  /**
+   * 选项按 tab 分页：第一页总是「基础」，别的页按选项里第一次出现的顺序排在后面。
+   * 后端在每条选项上写 tab（见 chatControllerBase.ts 的 ViewOptionItem），这里只管分。
+   */
+  function viewOptsGroups() {
+    const groups = [{ name: SETTINGS_BASE_TAB, items: [] }];
+    const byName = new Map([[SETTINGS_BASE_TAB, groups[0]]]);
+    viewOptionItems.forEach((it) => {
+      const name = typeof it.tab === "string" && it.tab ? it.tab : SETTINGS_BASE_TAB;
+      let g = byName.get(name);
+      if (!g) { g = { name, items: [] }; byName.set(name, g); groups.push(g); }
+      g.items.push(it);
+    });
+    return groups;
+  }
 
   function renderViewOpts() {
     viewOptsRoot.innerHTML = "";
+    settingsTabBar.innerHTML = "";
     restartNoteEl = null;
     if (!viewOptionItems.length) {
+      settingsTabBar.classList.add("hidden");
       const empty = document.createElement("div"); empty.className = "vo-empty"; empty.textContent = "没有可配置项";
       viewOptsRoot.appendChild(empty); return;
     }
-    viewOptionItems.forEach((it) => {
-      const row = document.createElement("div"); row.className = "vo-item";
-      if (it.kind === "slider") { renderSliderRow(row, it); viewOptsRoot.appendChild(row); return; }
-      if (it.kind === "button") { renderButtonRow(row, it); viewOptsRoot.appendChild(row); return; }
-      if (it.kind === "text") { renderTextRow(row, it); viewOptsRoot.appendChild(row); return; }
-      if (it.kind === "weixin") { renderWeixinRow(row, it); viewOptsRoot.appendChild(row); return; }
-      if (Array.isArray(it.options) && it.options.length) {
-        // 按钮组：直接点选某个选项
-        row.classList.add("vo-item-group");
-        const txt = document.createElement("div"); txt.className = "vo-text";
-        const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "";
-        txt.appendChild(label);
-        if (it.desc) { const d = document.createElement("div"); d.className = "vo-desc"; d.textContent = it.desc; txt.appendChild(d); }
-        row.appendChild(txt);
-        const group = document.createElement("div"); group.className = "vo-group";
-        it.options.forEach((opt) => {
-          const b = document.createElement("button"); b.type = "button";
-          b.className = "vo-group-btn" + (opt.value === it.value ? " on" : "");
-          b.textContent = opt.label;
-          b.addEventListener("click", () => {
-            vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: opt.value });
-          });
-          group.appendChild(b);
-        });
-        row.appendChild(group);
-      } else {
-        const check = document.createElement("span"); check.className = "vo-check" + (it.check === true ? " on" : "");
-        check.innerHTML = it.check === true ? ICONS.check : "";
-        const txt = document.createElement("div"); txt.className = "vo-text";
-        const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "";
-        txt.appendChild(label);
-        const desc = it.desc || "";
-        if (desc) { const d = document.createElement("div"); d.className = "vo-desc"; d.textContent = desc; txt.appendChild(d); }
-        row.appendChild(check); row.appendChild(txt);
-        row.addEventListener("click", () => {
-          vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: it.value });
-        });
-      }
-      viewOptsRoot.appendChild(row);
+    const groups = viewOptsGroups();
+    // 只有一页时不摆那一行标签（一排只有一个按钮，白占一行）
+    settingsTabBar.classList.toggle("hidden", groups.length < 2);
+    if (!groups.some((g) => g.name === settingsTabNow)) { settingsTabNow = groups[0].name; }
+    groups.forEach((g) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "settings-tab" + (g.name === settingsTabNow ? " on" : "");
+      btn.textContent = g.name;
+      btn.addEventListener("click", () => {
+        if (settingsTabNow === g.name) { return; }
+        settingsTabNow = g.name;
+        renderViewOpts();
+      });
+      settingsTabBar.appendChild(btn);
     });
+    const cur = groups.find((g) => g.name === settingsTabNow) || groups[0];
+    cur.items.forEach((it) => { viewOptsRoot.appendChild(buildViewOptsRow(it)); });
+  }
+
+  /** 画一条选项（种类见 ViewOptionItem 的 kind）。 */
+  function buildViewOptsRow(it) {
+    const row = document.createElement("div"); row.className = "vo-item";
+    if (it.kind === "slider") { renderSliderRow(row, it); return row; }
+    if (it.kind === "button") { renderButtonRow(row, it); return row; }
+    if (it.kind === "text") { renderTextRow(row, it); return row; }
+    if (it.kind === "weixin") { renderWeixinRow(row, it); return row; }
+    if (Array.isArray(it.options) && it.options.length) {
+      // 按钮组：直接点选某个选项
+      row.classList.add("vo-item-group");
+      const txt = document.createElement("div"); txt.className = "vo-text";
+      const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "";
+      txt.appendChild(label);
+      if (it.desc) { const d = document.createElement("div"); d.className = "vo-desc"; d.textContent = it.desc; txt.appendChild(d); }
+      row.appendChild(txt);
+      const group = document.createElement("div"); group.className = "vo-group";
+      it.options.forEach((opt) => {
+        const b = document.createElement("button"); b.type = "button";
+        b.className = "vo-group-btn" + (opt.value === it.value ? " on" : "");
+        b.textContent = opt.label;
+        b.addEventListener("click", () => {
+          vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: opt.value });
+        });
+        group.appendChild(b);
+      });
+      row.appendChild(group);
+      return row;
+    }
+    const check = document.createElement("span"); check.className = "vo-check" + (it.check === true ? " on" : "");
+    check.innerHTML = it.check === true ? ICONS.check : "";
+    const txt = document.createElement("div"); txt.className = "vo-text";
+    const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "";
+    txt.appendChild(label);
+    const desc = it.desc || "";
+    if (desc) { const d = document.createElement("div"); d.className = "vo-desc"; d.textContent = desc; txt.appendChild(d); }
+    row.appendChild(check); row.appendChild(txt);
+    row.addEventListener("click", () => {
+      vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: it.value });
+    });
+    return row;
   }
 
   /**
@@ -13072,6 +13115,7 @@
     // 每次打开都重问一遍选项的当前值：真正存着的是后端那份插件设置，
     // 别的窗口 / 别的设备改过之后，这边不能拿着旧值显示。
     vscode.postMessage({ type: "requestViewOptionItems" });
+    settingsTabNow = SETTINGS_BASE_TAB;
     renderViewOpts();
     settingsOverlay.classList.remove("hidden");
   }

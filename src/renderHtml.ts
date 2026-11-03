@@ -170,6 +170,7 @@ ${chatColumnClose}  <div id="sidebarDock" class="pk-host pk-drawer pk-workspace"
         <span class="settings-tabs-spacer"></span>
         <button id="settingsClose" type="button" title="关闭" aria-label="关闭">${ICON_CLOSE}</button>
       </div>
+      <div id="settingsTabBar" class="hidden"></div>
       <div id="viewOptsRoot"></div>
     </div>
   </div>

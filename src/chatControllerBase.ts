@@ -107,6 +107,8 @@ export interface ViewOptionItem {
     unit?: string;
     button?: string;
     disabled?: boolean;
+    /** 归到设置面板的哪一页（不写就是「基础」）；页面按选项里第一次出现的顺序摆标签。 */
+    tab?: string;
     // ---- kind: "weixin"（微信扫码登录那块，见 chatHost.ts 的 weixinOptionItem）----
     /** 现在走到哪一步了：idle / wait / scaned / needcode / done / error。 */
     phase?: string;
@@ -264,6 +266,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         "ctrlAltI": "Ctrl+Alt+I", "ctrlShiftI": "Ctrl+Shift+I",
         "altI": "Alt+I", "ctrlAltSpace": "Ctrl+Alt+Space",
     };
+
+    /** 快捷键那几行单独一页（设置面板里的「快捷键」标签）。 */
+    protected static readonly KEY_TAB = "快捷键";
 
     /** 把标签映射转成按钮组选项列表。 */
     protected static keyOptions(labels: Record<string, string>): Array<{ value: string; label: string }> {
@@ -455,6 +460,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 label: "发送键",
                 desc: "",
                 check: null,
+                tab: ChatControllerBase.KEY_TAB,
                 value: this.getSendKey(),
                 options: ChatControllerBase.keyOptions(ChatControllerBase.SEND_KEY_LABELS),
             },
@@ -463,6 +469,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 label: "新建会话",
                 desc: "",
                 check: null,
+                tab: ChatControllerBase.KEY_TAB,
                 value: this.getNewSessionKey(),
                 options: ChatControllerBase.keyOptions(ChatControllerBase.NEW_SESSION_KEY_LABELS),
             },
@@ -471,6 +478,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 label: "关闭会话",
                 desc: "",
                 check: null,
+                tab: ChatControllerBase.KEY_TAB,
                 value: this.getCloseSessionKey(),
                 options: ChatControllerBase.keyOptions(ChatControllerBase.CLOSE_SESSION_KEY_LABELS),
             },
@@ -479,11 +487,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 label: "切换会话",
                 desc: "",
                 check: null,
+                tab: ChatControllerBase.KEY_TAB,
                 value: this.getTabSwitchKey(),
                 options: ChatControllerBase.keyOptions(ChatControllerBase.TAB_SWITCH_KEY_LABELS),
             },
             {
                 action: "focusInputKey", label: "聚焦输入框", desc: "", check: null,
+                tab: ChatControllerBase.KEY_TAB,
                 value: this.getFocusInputKey(), options: ChatControllerBase.keyOptions(ChatControllerBase.FOCUS_INPUT_KEY_LABELS),
             },
             {
