@@ -899,7 +899,7 @@
     liveOpen = true;
     liveFrames = 0;
     liveImg.removeAttribute("src");
-    liveNote.textContent = "正在连……";
+    liveNote.textContent = "正在连接";
     liveNote.style.display = "";
     liveLayer.classList.remove("hidden");
     if (IN_WEBVIEW) {
