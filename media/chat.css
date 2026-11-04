@@ -106,18 +106,21 @@
     display: flex; align-items: center; gap: 4px; min-width: 0; padding-left: 6px;
     font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.75;
   }
-  /* 比这一行的字大一圈（1.15em）：表盘跟针在十来像素上才看得清 */
+  /* 比这一行的字大一圈（1.3em）：表盘跟针在十来像素上才看得清 */
   .bash-clock { flex: 0 0 auto; }
-  .bash-clock svg { display: block; width: 1.15em; height: 1.15em; }
-  /* 钟自己走：长针（分针）一分钟一圈，短针（时针）十二小时一圈 —— 看得出在转的是长针。
+  .bash-clock svg { display: block; width: 1.3em; height: 1.3em; }
+  /* 钟自己走：长针半秒跳一格（六十格一圈 = 三十秒一圈），短针十二小时一圈。
+     为什么不按真钟那样一分钟慢慢扫：这一根针在屏幕上只有三四个像素长，一分钟一圈的话
+     针尖一秒走不到半个像素，看着就是「一动不动」—— 量过，放大了看才知道它在动。
+     半秒跳一格（一格 12 度）就一眼看得出「它在走」，还是表盘上扫过去，不像个打转的圈。
      转的是针，绕的是表盘正中（view-box 的 8,8），不是这根线自己的小框。 */
   .bash-clock .ck-hour, .bash-clock .ck-min { transform-box: view-box; transform-origin: 8px 8px; }
-  .bash-clock .ck-min { animation: bash-clock-min 60s linear infinite; }
+  .bash-clock .ck-min { animation: bash-clock-min 30s steps(60, end) infinite; }
   .bash-clock .ck-hour { animation: bash-clock-hour 720s linear infinite; }
   @keyframes bash-clock-min { to { transform: rotate(360deg); } }
   @keyframes bash-clock-hour { to { transform: rotate(360deg); } }
-  /* 系统里开了「减少动态效果」：针就不走了（旁边那几个字照旧在数，不靠它） */
-  @media (prefers-reduced-motion: reduce) { .bash-clock .ck-min, .bash-clock .ck-hour { animation: none; } }
+  /* 不做「减少动态效果」的例外：这根针一停，这一块看着就跟「没在跑」一个样，
+     而它要说的正是「时间在走」（底下那几个数字照旧在数，可人一眼看的是针）。 */
   /* 编号：排在钟后面、命令前面，不跟着字一起滚 */
   .bash-run-no { flex: 0 0 auto; opacity: 0.8; }
 

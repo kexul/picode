@@ -94,6 +94,7 @@ module.exports = async (page) => {
                     handCount: hands.length,
                     minName: min ? getComputedStyle(min).animationName : "",
                     minDur: min ? getComputedStyle(min).animationDuration : "",
+                    minTiming: min ? getComputedStyle(min).animationTimingFunction : "",
                     hourDur: hour ? getComputedStyle(hour).animationDuration : "",
                     handTransform: min ? getComputedStyle(min).transform : "",
                     origin: min ? getComputedStyle(min).transformOrigin : "",
@@ -143,8 +144,10 @@ module.exports = async (page) => {
     if (!s1.items.every((it) => it.hasClock && it.handCount === 2)) {
         problems.push("每行头上该有一只钟（两根针，实际 " + JSON.stringify(s1.items.map((it) => it.handCount)) + " 根）");
     }
-    if (!s1.items.every((it) => it.minName === "bash-clock-min" && it.minDur === "60s")) {
-        problems.push("长针该一分钟转一圈（实际 " + (s1.items[0] || {}).minName + " / " + (s1.items[0] || {}).minDur + "）");
+    // 长针三十秒一圈、一格 12 度（steps(60)）：这个尺寸上慢慢扫看不出来，非得跳着走才看得出
+    if (!s1.items.every((it) => it.minName === "bash-clock-min" && it.minDur === "30s" && /steps\(60/.test(it.minTiming))) {
+        problems.push("长针该半秒跳一格、三十秒一圈（实际 " + (s1.items[0] || {}).minName + " / "
+            + (s1.items[0] || {}).minDur + " / " + (s1.items[0] || {}).minTiming + "）");
     }
     if (!s1.items.every((it) => it.hourDur === "720s")) {
         problems.push("短针该十二小时一圈（实际 " + (s1.items[0] || {}).hourDur + "）");
