@@ -2,7 +2,8 @@
  * tray —— 通知区域里那颗图标（Windows）和右下角那块提醒面板。
  *
  * 干什么：后端有事（某个会话跑完一轮、模型在等你答一道选择题）时，在屏幕右下角弹一张小卡片，
- * 写着哪个会话、说了什么。它只是给人看一眼，鼠标点它什么也不发生。
+ * 写着哪个会话、说了什么，同时响一声（两种事声音不一样，见 Chime）。它只是给人看一眼，
+ * 鼠标点它什么也不发生。
  * 通知区域里那颗图标是“它在跑”的招牌：标记右下角那根竖线一直是红的，不闪、也不表示有没有事
  * （消息看没看过，后端判断不了）；右键弹一个小菜单：「打开」（用浏览器打开后端给的地址）和「退出」。
  *
@@ -33,6 +34,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Media;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
@@ -72,6 +74,95 @@ static class Theme
         {
             return false;
         }
+    }
+}
+
+/**
+ * 弹卡片时那一声：跑完一轮和等你答一句各一段（波形在代码里算，不另带音频文件）。
+ *
+ * 为什么不用系统提示音：Windows 的声音方案里把「通知」设成无声时，系统音就一声也不出，
+ * 而这里要的是“弹了就有声”。绕开的只是那套声音方案；整台机器静音时照样不响（那是系统管的）。
+ *
+ * 两段怎么区分：
+ *   跑完一轮 —— 两个音往上走（A5 → D6），长一点、松弛，听着是“完事了”。
+ *   等你答一句 —— 同一个音（C6）快快敲三下，像敲门，提醒人回来。
+ * 都是正弦波加一点二次谐波、两头淡入淡出（直接切开波形会“啪”一下），音量压得不大。
+ */
+static class Chime
+{
+    private const int Rate = 44100;
+    /** 第一次响时做好留着：每段音不到 35 KB，做一次就够了。 */
+    private static SoundPlayer done;
+    private static SoundPlayer ask;
+
+    public static void Play(bool askKind)
+    {
+        try
+        {
+            SoundPlayer player = askKind ? (ask ?? (ask = Build(true))) : (done ?? (done = Build(false)));
+            // Play 自己开一个线程放，不挡界面；放不出来（没声卡之类）就算了，卡片照样弹
+            player.Play();
+        }
+        catch { /* 放不出来不影响弹卡片 */ }
+    }
+
+    private static SoundPlayer Build(bool askKind)
+    {
+        return new SoundPlayer(new MemoryStream(Rendered(askKind)));
+    }
+
+    /** 两段音的波形（16 位 PCM 单声道，套上 wav 头）。internal 只是给自测用的。 */
+    internal static byte[] Rendered(bool askKind)
+    {
+        // 一段音 = 频率(Hz) + 多长(毫秒)；音和音之间空 40 毫秒
+        int[][] steps = askKind
+            ? new[] { new[] { 1047, 80 }, new[] { 1047, 80 }, new[] { 1047, 80 } }
+            : new[] { new[] { 880, 130 }, new[] { 1175, 190 } };
+        int gapSamples = Rate * 40 / 1000;
+        int frames = gapSamples * (steps.Length - 1);
+        for (int i = 0; i < steps.Length; i++) { frames += Rate * steps[i][1] / 1000; }
+
+        byte[] pcm = new byte[frames * 2];
+        int at = 0;
+        for (int i = 0; i < steps.Length; i++)
+        {
+            int freq = steps[i][0];
+            int tone = Rate * steps[i][1] / 1000;
+            for (int n = 0; n < tone; n++)
+            {
+                // 起手 10 毫秒淡入、最后 40 毫秒淡出
+                double env = Math.Min(Math.Min(1.0, n / (Rate * 0.01)), (tone - n) / (Rate * 0.04));
+                double phase = 2 * Math.PI * freq * n / Rate;
+                double v = (Math.Sin(phase) + 0.25 * Math.Sin(2 * phase)) / 1.25 * env * 0.28;
+                short s = (short)Math.Round(v * short.MaxValue);
+                pcm[at++] = (byte)(s & 0xFF);
+                pcm[at++] = (byte)((s >> 8) & 0xFF);
+            }
+            if (i < steps.Length - 1) { at += gapSamples * 2; }
+        }
+        return WavOf(pcm);
+    }
+
+    /** 给一段 16 位 PCM 套上 44 字节的 wav 头。 */
+    private static byte[] WavOf(byte[] pcm)
+    {
+        MemoryStream stream = new MemoryStream();
+        BinaryWriter w = new BinaryWriter(stream);
+        w.Write(Encoding.ASCII.GetBytes("RIFF"));
+        w.Write(36 + pcm.Length);
+        w.Write(Encoding.ASCII.GetBytes("WAVEfmt "));
+        w.Write(16);        // fmt 块长度
+        w.Write((short)1);  // PCM
+        w.Write((short)1);  // 单声道
+        w.Write(Rate);
+        w.Write(Rate * 2);  // 每秒字节数
+        w.Write((short)2);  // 每帧字节数
+        w.Write((short)16); // 位深
+        w.Write(Encoding.ASCII.GetBytes("data"));
+        w.Write(pcm.Length);
+        w.Write(pcm);
+        w.Flush();
+        return stream.ToArray();
     }
 }
 
@@ -298,6 +389,9 @@ class NoteWindow : Form
         item.Ask = ask;
         notes.Add(item);
         while (notes.Count > MAX_ITEMS) { notes.RemoveAt(0); }
+
+        // 弹出这一条的同时响一声：跑完一轮和等你答一句是两段不同的音（见 Chime）
+        Chime.Play(ask);
 
         if (fading)
         {
