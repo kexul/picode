@@ -16,9 +16,9 @@ export function tabaBridgeSource(over?: PromptOverrides): string {
  * 这是 VSCode 插件 Pi Chat 自动生成的文件，不要手改：插件版本一变就会重新生成，改动会丢。
  *
  * 作用：给模型三个工具，让它能派子会话。
- *   taba        新开一个 tab，派一个子会话去干一件事（不等结果）
- *   taba_stop   停掉某个子会话正在跑的这一轮
- *   taba_peek   看某个子会话的情况
+ *   task        新开一个 tab，派一个子会话去干一件事（不等结果）
+ *   task_stop   停掉某个子会话正在跑的这一轮
+ *   task_peek   看某个子会话的情况
  *
  * 工具被调用时，这里只往本进程的 stderr 写一行暗号：
  *   ${TABA_FRAME_PREFIX} 后面跟 base64 编码的 JSON
@@ -64,7 +64,7 @@ function cwdOf(ctx: any): string {
     return typeof got === "string" && got ? got : process.cwd();
 }
 
-// ---- 子会话名录（taba_peek 用）----
+// ---- 子会话名录（task_peek 用）----
 // 插件在子会话状态变化时往 <资源目录>/taba-runs/<编号>.json 写一份小名录，
 // 里面最要紧的就是那个子会话的 .jsonl 在哪（这个路径只有插件知道）。
 // 拿到路径以后，详细内容让模型自己用 read / bash 去读。
@@ -179,7 +179,7 @@ function safeRegister(pi: any, def: any): void {
 
 export default function tabaBridge(pi: any): void {
     safeRegister(pi, {
-        name: "taba",
+        name: "task",
         label: "派子会话",
         description: TABA_DESCRIPTION,
         promptSnippet: TABA_PROMPT_SNIPPET,
@@ -217,7 +217,7 @@ export default function tabaBridge(pi: any): void {
     });
 
     safeRegister(pi, {
-        name: "taba_stop",
+        name: "task_stop",
         label: "停子会话这一轮",
         description:
             ${JSON.stringify(promptText(over, "toolTabaStop"))},
@@ -243,7 +243,7 @@ export default function tabaBridge(pi: any): void {
     });
 
     safeRegister(pi, {
-        name: "taba_peek",
+        name: "task_peek",
         label: "看子会话情况",
         description:
             ${JSON.stringify(promptText(over, "toolTabaPeek"))},

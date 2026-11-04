@@ -416,12 +416,12 @@ async function runScript(userText) {
     };
 
     // ---- 子会话那三个工具（调试用：一句话演一个；调的是真扩展的代码）----
-    // 派活 = taba（新开子会话）；看子会话 = taba_peek（读名录）；停掉子会话 = taba_stop。
+    // 派活 = task（新开子会话）；看子会话 = task_peek（读名录）；停掉子会话 = task_stop。
     // 子会话收到的任务正文里也有“派活”两个字：那种要排除掉，不然子进程也会演一遍。
     // 子会话收到的任务正文（带【任务】那段）里也有"派活""子会话"这些字：那三种都别让子进程再演一遍
     const isChildTask = /【任务】/.test(userText);
     // 子会话故意磨一会儿才回话：测「趁它还在跑的时候把它停掉」那一幕要用（不然子会话
-    // 几百毫秒就跑完、tab 都被关掉了，taba_stop 只能回「找不到」）。停了会当场抛 ABORTED（见 pause）。
+    // 几百毫秒就跑完、tab 都被关掉了，task_stop 只能回「找不到」）。停了会当场抛 ABORTED（见 pause）。
     if (isChildTask) {
         const slow = Number(process.env.FAKEPI_CHILD_SLOW_MS || 0);
         if (slow > 0) { await pause(slow); }
@@ -432,10 +432,10 @@ async function runScript(userText) {
     if (tabaKind) {
         await say("（假模型）我演一次子会话工具：" + tabaKind);
         const reply = tabaKind === "spawn"
-            ? await actReal("taba", { name: "假子会话", task: "看看子会话在列表里会不会缩进" })
+            ? await actReal("task", { name: "假子会话", task: "看看子会话在列表里会不会缩进" })
             : tabaKind === "peek"
-                ? await actReal("taba_peek", { name: "假子会话" })
-                : await actReal("taba_stop", { name: "假子会话" });
+                ? await actReal("task_peek", { name: "假子会话" })
+                : await actReal("task_stop", { name: "假子会话" });
         await say("子会话工具回话 —— " + reply);
         finish();
         return;
@@ -606,7 +606,7 @@ async function handle(cmd) {
             return;
         }
         // 剧本（每轮照着演一遍）：1 说一句 → 2 read 图 → 3 bash → 4 edit → 5 收尾。
-        // 用户这句话里带“派活”时，先往 stderr 写一行暗号（假扮模型调了 taba_spawn）。
+        // 用户这句话里带“派活”时，先往 stderr 写一行暗号（假扮模型调了 task）。
         case "prompt": {
             // 真 pi：preflight 成功先回一次 response，然后事件流，最后 agent_settled
             respond(id, "prompt", { disposition: "handled" });

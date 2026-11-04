@@ -66,7 +66,7 @@ export const PROMPTS: Record<PromptKey, PromptSpec> = {
         ].join("\n"),
     },
     toolTaba: {
-        label: "派子会话那个 taba 工具的说明",
+        label: "派子会话那个 task 工具的说明",
         vars: [],
         text:
             "新开一个 tab，派一个子会话去干一件事。这个工具不等结果：调用完立刻返回，你可以接着做别的、或者直接结束这一轮。"
@@ -77,14 +77,14 @@ export const PROMPTS: Record<PromptKey, PromptSpec> = {
             + "用户要在子会话那个 tab 里跟它说话，得趁它第一轮还在跑：它跑完第一轮、结果交回之后，插件会自动把那个 tab 关掉（出错、或者用户当时正看着它除外）。",
     },
     toolTabaStop: {
-        label: "taba_stop 工具的说明",
+        label: "task_stop 工具的说明",
         vars: [],
         text:
             "停掉某个子会话正在跑的这一轮。它的 tab 和会话都留着，用户可以接着用；只是当前这轮生成被打断。"
             + "按编号或显示名指名，只能停你这个会话派出去的子会话。",
     },
     toolTabaPeek: {
-        label: "taba_peek 工具的说明",
+        label: "task_peek 工具的说明",
         vars: [],
         text:
             "看一个子会话现在的情况：状态、跑了多久、它的会话文件（.jsonl）在哪、多大多少行，以及它最后一条回复的开头一段。"

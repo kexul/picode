@@ -8,7 +8,7 @@
  *     名字不同 → 各占一个；中间夹了别的调用（不同名的）不影响它攒数；
  *   · 鼠标停上去 → 提示框里一条条列出各条的调用（输入）；点开那一行才铺开它自己的结果（输出）：
  *   · 结果乱序回来、有的失败、有一条还在跑 → 各自归位，标签上跟着转圈（失败不标红，只在提示框里看）；
- *   · taba（点名不合并）单独一个；codemode 跟别的工具一样收成一个（带次数）；
+ *   · task（点名不合并）单独一个；codemode 跟别的工具一样收成一个（带次数）；
  *   · write / edit 也照这一套收（标签上只有工具名和次数）：改了哪个文件、diff / 写入预览、
  *     跳转 / 回滚都在提示框里，一条调用一块；
  *   · 结果带图的 read → 从组里摘出去，在对话里铺成一整块图（组里剩几条，小方块里的数字跟着重算）；
@@ -104,7 +104,7 @@ module.exports = async (page) => {
     ]);
     console.log("\n第二幕（grep,grep,read,grep,ls —— 同名的一个标签，不同名各占一个）：\n" + await dump(page));
 
-    // ---- 第三幕：codemode 跟普通工具一样收成一个（带次数），只剩 taba 单独一个 ----
+    // ---- 第三幕：codemode 跟普通工具一样收成一个（带次数），只剩 task 单独一个 ----
     await post(page, [
         call("c1", "codemode", { code: "return 1" }),
         call("c2", "bash", { command: "node scripts/compile.mjs --check" }),
@@ -112,7 +112,7 @@ module.exports = async (page) => {
         ...editCard("c4", "edit", "media/chat.css"),
         call("c5", "bash", { command: "git diff --stat" }),
         call("c6", "codemode", { code: "return 2" }),
-        call("c7", "taba", { name: "侦察: 工具调用显示", task: "看一遍 chat.js" }),
+        call("c7", "task", { name: "侦察: 工具调用显示", task: "看一遍 chat.js" }),
         call("c8", "find", { pattern: "**/*.md", path: "dev" }),
         done("c1", "1"),
         done("c2", "文件在"),

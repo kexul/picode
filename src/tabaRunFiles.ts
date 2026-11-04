@@ -4,7 +4,7 @@
  * 为什么要有这个文件：子会话的 .jsonl 在哪只有插件知道（全新会话的文件名是 pi 自己起的），
  * 而 pi 进程到插件只有 stderr 那条单向暗号，
  * 插件没法直接回话给工具。所以插件在子会话状态变化时往这里写一份很小的名录，
- * 桥扩展里的 taba_peek 读它，把 .jsonl 的路径交给模型，剩下的让模型自己用 read / bash 去读。
+ * 桥扩展里的 task_peek 读它，把 .jsonl 的路径交给模型，剩下的让模型自己用 read / bash 去读。
  *
  * 目录：<资源目录>/taba-runs/<子会话编号>.json
  * 里面的内容就是下面的 TabaRunRecord，两边靠 TABA_RUN_FILE_VERSION 认版本。

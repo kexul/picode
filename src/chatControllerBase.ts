@@ -1334,9 +1334,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         }
     }
 
-    /** 把某个子会话的情况写到名录文件里（模型那边 taba_peek 读的就是它）。 */
+    /** 把某个子会话的情况写到名录文件里（模型那边 task_peek 读的就是它）。 */
     protected tabaWriteRun(child: TabaChild | undefined, state?: TabaRunState): void {
-        if (!child || child.hidden) { return; }   // 判官不给模型看见（taba_peek 读的就是这份名录）
+        if (!child || child.hidden) { return; }   // 判官不给模型看见（task_peek 读的就是这份名录）
         const cfg = this.getConfig();
         if (!cfg.tabaDir) { return; }
         writeRunRecord(tabaRunsDir(cfg.tabaDir), buildRunRecord({ child, state }));
@@ -1460,7 +1460,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             return;
         }
         // 后面的轮次（一般是用户在子会话里接管了）：不再自动交回，
-        // 但名录要跟上，否则主对话那边 taba_peek 看到的“最后一条回复的开头”一直停在旧的
+        // 但名录要跟上，否则主对话那边 task_peek 看到的“最后一条回复的开头”一直停在旧的
         if (info.lastReplyText) { child.result = info.lastReplyText; }
         this.tabaWriteRun(child);
     }

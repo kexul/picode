@@ -2612,13 +2612,13 @@
   // 鼠标停上去，提示框里把它们一条一条列出来（调用 + 结果），见 fillGroupTip。
   //
   // 不合并的（每次单独一个标签，连着来也各占一个）：
-  //   · taba / taba_stop / taba_peek（派子会话）—— 每次派的活不一样，各自单独看一眼更清楚；
+  //   · task / task_stop / task_peek（派子会话）—— 每次派的活不一样，各自单独看一眼更清楚；
   //   · 结果带图的 read —— 是不是图要等结果回来才知道，那条到了会从组里摘出去，
   //     在对话里铺成一整块图（见 removeEntryFromGroup）。
   // write / edit 也跟别的工具一样按名字收（改了好几处就收成「edit ×3」）：标签上只有工具名和次数，
   // 改了哪个文件、diff、跳转 / 回滚都在悬浮提示里一条条看（见 buildEditCard）。
   // 一条正文（或用户消息）到来就换行、另起一批，上批的标签不再攒数。
-  const NO_MERGE_TOOLS = new Set(["taba", "taba_stop", "taba_peek"]);
+  const NO_MERGE_TOOLS = new Set(["task", "task_stop", "task_peek"]);
   const GROUP_RUNNING_TEXT = "运行中…";
   /** 没有结果、而且也不会再有了（那一轮被中断 / pi 进程没了）：提示框里写这一句。 */
   const INTERRUPTED_NOTE = "（这一轮被中断，没有结果）";

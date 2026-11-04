@@ -229,13 +229,13 @@ module.exports = async (page) => {
     // ---- 第七幕：单独一个标签（taba 这类不合并的）连着长，也一样节流 ----
     await page.eval(`
         window.postMessage({ type: "clear", keepDraft: true }, "*");
-        window.postMessage({ type: "tool", toolName: "taba_peek", toolCallId: "taba-1", args: { id: "taba-1" } }, "*");
+        window.postMessage({ type: "tool", toolName: "task_peek", toolCallId: "task-1", args: { id: "task-1" } }, "*");
         return true;
     `);
     await page.sleep(300);
     await page.eval(`
-        const el = Array.from(document.querySelectorAll(".tool")).find((t) => !t.classList.contains("tool-group") && t.textContent.includes("taba_peek"));
-        if (!el) { throw new Error("没找到单独那个 taba_peek 标签"); }
+        const el = Array.from(document.querySelectorAll(".tool")).find((t) => !t.classList.contains("tool-group") && t.textContent.includes("task_peek"));
+        if (!el) { throw new Error("没找到单独那个 task_peek 标签"); }
         el.dispatchEvent(new MouseEvent("mouseenter"));
         return true;
     `);
@@ -252,7 +252,7 @@ module.exports = async (page) => {
     }
     await page.sleep(500);
     const singleFills = await takeFills(page);
-    console.log(`\n第七幕：单独一个标签（taba_peek）边跑边长 ${partial.length} 字，提示框重画了 ${singleFills} 次` +
+    console.log(`\n第七幕：单独一个标签（task_peek）边跑边长 ${partial.length} 字，提示框重画了 ${singleFills} 次` +
         `（${bits.length} 次更新，用了 ${Date.now() - beforeSingle} 毫秒）`);
     if (singleFills >= bits.length / 4) { problems.push(`单独标签的提示框没节流：${bits.length} 次更新重画了 ${singleFills} 次`); }
     await page.shot("think-tip-single.png");
