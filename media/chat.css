@@ -109,7 +109,7 @@
   /* 比这一行的字大一圈（1.15em）：表盘跟针在十来像素上才看得清 */
   .bash-clock { flex: 0 0 auto; }
   .bash-clock svg { display: block; width: 1.15em; height: 1.15em; }
-  /* 钟自己走：长针（分针）一分钟一圈，短针（时针）十二小时一圈。
+  /* 钟自己走：长针（分针）一分钟一圈，短针（时针）十二小时一圈 —— 看得出在转的是长针。
      转的是针，绕的是表盘正中（view-box 的 8,8），不是这根线自己的小框。 */
   .bash-clock .ck-hour, .bash-clock .ck-min { transform-box: view-box; transform-origin: 8px 8px; }
   .bash-clock .ck-min { animation: bash-clock-min 60s linear infinite; }

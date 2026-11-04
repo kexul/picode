@@ -77,6 +77,14 @@ module.exports = async (page) => {
                 const run = el.querySelector(".tr-run");
                 const more = el.querySelector(".tr-more");
                 const hands = el.querySelectorAll(".bash-clock .ck-min, .bash-clock .ck-hour");
+                const min = el.querySelector(".bash-clock .ck-min");
+                const hour = el.querySelector(".bash-clock .ck-hour");
+                // 那根针的针尖到圆心有多远（path 从针尖起画；留一位小数）
+                const measure = (g) => {
+                    const path = g ? g.querySelector("path") : null;
+                    if (!path) { return 0; }
+                    return Math.round((8 - path.getPointAtLength(0).y) * 10) / 10;
+                };
                 const r = el.getBoundingClientRect();
                 return {
                     no: (el.querySelector(".bash-run-no") || {}).textContent || "",
@@ -84,10 +92,14 @@ module.exports = async (page) => {
                     cmd: text ? text.textContent : "",
                     hasClock: !!el.querySelector(".bash-clock svg"),
                     handCount: hands.length,
-                    minName: hands.length ? getComputedStyle(el.querySelector(".bash-clock .ck-min")).animationName : "",
-                    minDur: hands.length ? getComputedStyle(el.querySelector(".bash-clock .ck-min")).animationDuration : "",
-                    minTransform: hands.length ? getComputedStyle(el.querySelector(".bash-clock .ck-min")).transform : "",
-                    origin: hands.length ? getComputedStyle(el.querySelector(".bash-clock .ck-min")).transformOrigin : "",
+                    minName: min ? getComputedStyle(min).animationName : "",
+                    minDur: min ? getComputedStyle(min).animationDuration : "",
+                    hourDur: hour ? getComputedStyle(hour).animationDuration : "",
+                    handTransform: min ? getComputedStyle(min).transform : "",
+                    origin: min ? getComputedStyle(min).transformOrigin : "",
+                    // 针尖到圆心多远（表盘坐标）：针那条 path 从针尖起画，取它第一个点
+                    minLen: measure(min),
+                    hourLen: measure(hour),
                     stop: !!stop,
                     stopDisabled: !!stop && stop.disabled,
                     more: more ? more.textContent : "",
@@ -128,9 +140,21 @@ module.exports = async (page) => {
     if (s1.items.some((it) => it.no === "#5")) { problems.push("跑完的那条（#5）不该列出来"); }
     if (!s1.items.every((it) => it.stop)) { problems.push("在跑的那几条右边该有一颗「停」"); }
     if (!s1.items.every((it) => it.stopLeft < it.timeLeft)) { problems.push("「停」该排在耗时左边（跟「正在跑的那一条」上那颗「放后台」一个位置）"); }
-    if (!s1.items.every((it) => it.hasClock && it.handCount === 2)) { problems.push("每行头上该有一只钟（两根针）"); }
+    if (!s1.items.every((it) => it.hasClock && it.handCount === 2)) {
+        problems.push("每行头上该有一只钟（两根针，实际 " + JSON.stringify(s1.items.map((it) => it.handCount)) + " 根）");
+    }
     if (!s1.items.every((it) => it.minName === "bash-clock-min" && it.minDur === "60s")) {
-        problems.push("钟的长针该一分钟转一圈（实际 " + (s1.items[0] || {}).minName + " / " + (s1.items[0] || {}).minDur + "）");
+        problems.push("长针该一分钟转一圈（实际 " + (s1.items[0] || {}).minName + " / " + (s1.items[0] || {}).minDur + "）");
+    }
+    if (!s1.items.every((it) => it.hourDur === "720s")) {
+        problems.push("短针该十二小时一圈（实际 " + (s1.items[0] || {}).hourDur + "）");
+    }
+    // 针尖不沾圆：分针 4.2（笔帽再占 0.6），离圆内沿（5.8）还留着一截
+    if (!s1.items.every((it) => it.minLen === 4.2 && it.hourLen === 2.1)) {
+        problems.push("两根针的长短不对（分针 " + (s1.items[0] || {}).minLen + "、时针 " + (s1.items[0] || {}).hourLen + "）");
+    }
+    if (!s1.items.every((it) => it.minLen + 0.6 <= 5.8 - 0.6)) {
+        problems.push("分针尖该跟表盘那道圆留出空当，别沾上去（长 " + (s1.items[0] || {}).minLen + "）");
     }
     if (!s1.items.every((it) => /8px 8px/.test(it.origin))) {
         problems.push("针该绕表盘正中转（transform-origin 实际 " + (s1.items[0] || {}).origin + "）");
@@ -181,9 +205,9 @@ module.exports = async (page) => {
     await page.sleep(1300);
     const t1 = await blockState();
     console.log("\n第三幕（针在走、用时在数）：\n  用时 " + t0.items[0].time + " → " + t1.items[0].time
-        + "\n  长针 " + t0.items[0].minTransform + " → " + t1.items[0].minTransform);
+        + "\n  那根针 " + t0.items[0].handTransform + " → " + t1.items[0].handTransform);
     if (t0.items[0].time === t1.items[0].time) { problems.push("在跑的那几条用时该自己往上走（" + t0.items[0].time + " 没变）"); }
-    if (t0.items[0].minTransform === t1.items[0].minTransform) { problems.push("钟的长针该在走（1.3 秒过去还停在原处：" + t1.items[0].minTransform + "）"); }
+    if (t0.items[0].handTransform === t1.items[0].handTransform) { problems.push("钟那根针该在走（1.3 秒过去还停在原处：" + t1.items[0].handTransform + "）"); }
 
     // ---- 第四幕：点「停」：那颗按钮先灰掉，等后端推送回来再按真实状态画 ----
     await page.eval(`document.querySelector(".session-view:not(.off) .bash-run .tr-act").click(); return true;`);
@@ -225,27 +249,61 @@ module.exports = async (page) => {
     await page.cdp.send("Emulation.setDeviceMetricsOverride", { width: 900, height: 700, deviceScaleFactor: 1, mobile: false });
     await page.sleep(200);
 
-    // ---- 第七幕：有了对话以后，那一块仍旧排在最后（所有消息后面、末尾那颗胶囊前面） ----
-    await page.send("随便说点什么");
-    await page.sleep(2500);
-    await feed(tasksAt(Date.now()));
-    const order = await page.eval(`
+    // 等这一轮真跑完（末尾那颗胶囊换成「继续」并露出来）再往下量：假 pi 还在吐字的时候量，
+    // 那一块的位置会跟新来的那条打架，量出来的就不是这一件事了
+    const waitIdle = async () => {
+        for (let i = 0; i < 40; i++) {
+            const idle = await page.eval(`
+                const row = document.querySelector(".session-view:not(.off) .session-pane .end-hint-row");
+                const btn = row ? row.querySelector(".msg-endhint") : null;
+                return !!btn && !row.classList.contains("hidden") && btn.dataset.mode === "continue";
+            `);
+            if (idle) { return; }
+            await page.sleep(250);
+        }
+    };
+
+    /** 那一块现在排在窗格的哪儿：是不是最后一条消息、末尾那颗胶囊在不在它后头、最后几样是什么。 */
+    const tailOrder = () => page.eval(`
         const pane = document.querySelector(".session-view:not(.off) .session-pane");
         const block = pane.querySelector(".bash-running");
         const row = pane.querySelector(".end-hint-row");
         const msgs = Array.from(pane.querySelectorAll(".msg"));
         return {
             msgs: msgs.length,
+            tail: Array.from(pane.children).slice(-4).map((el) => el.className),
             blockIsLastMsg: !!block && msgs[msgs.length - 1] === block,
             rowHidden: !row || row.classList.contains("hidden"),
             rowAfter: !!block && !!row && block.nextElementSibling === row,
         };
     `);
+
+    // ---- 第七幕：有了对话以后，那一块仍旧排在最后（所有消息后面、末尾那颗胶囊前面） ----
+    await page.send("随便说点什么");
+    await waitIdle();
+    await feed(tasksAt(Date.now()));
+    const order = await tailOrder();
     console.log("\n第七幕（有了对话）：\n  消息条数=" + order.msgs + " 那一块排在最后一条消息上=" + order.blockIsLastMsg
-        + " 末尾胶囊排在它后面=" + (order.rowHidden ? "（没露面）" : order.rowAfter));
+        + " 末尾胶囊排在它后面=" + (order.rowHidden ? "（没露面）" : order.rowAfter)
+        + "\n  窗格最后几样=" + order.tail.join(" | "));
     if (!order.blockIsLastMsg) { problems.push("有了对话以后，那一块该排在所有消息后面"); }
     if (!order.rowHidden && !order.rowAfter) { problems.push("末尾那颗胶囊该排在那一块后面（它是页脚）"); }
     await page.shot("bash-7-with-chat.png");
+
+    // ---- 第八幕：那一块已经在末尾了，又来一条新消息：它仍旧被推回末尾（不卡在新消息上头） ----
+    // 这一条直接投给页面（不走后端）：真发一句的话，整屏重画会把这个会话的后台清单重问一遍，
+    // 而这里那两条命令是编的（后端不知道），一问就没了 —— 要验的是位置，不是后端。
+    await page.eval(`window.postMessage({ type: "userMessage", text: "再来一句" }, "*");
+        window.postMessage({ type: "assistantFull", text: "好，我再说一句。" }, "*"); return true;`);
+    await page.sleep(400);
+    const order2 = await tailOrder();
+    console.log("\n第八幕（那一块在末尾时又来一条）：\n  消息条数=" + order2.msgs
+        + " 那一块还排在最后一条消息上=" + order2.blockIsLastMsg
+        + " 末尾胶囊排在它后面=" + (order2.rowHidden ? "（没露面）" : order2.rowAfter)
+        + "\n  窗格最后几样=" + order2.tail.join(" | "));
+    if (!order2.blockIsLastMsg) { problems.push("来了新消息以后，那一块该仍旧排在所有消息后面"); }
+    if (!order2.rowHidden && !order2.rowAfter) { problems.push("来了新消息以后，末尾那颗胶囊该仍旧排在那一块后面"); }
+    await page.shot("bash-8-new-message.png");
 
     if (problems.length) {
         throw new Error("有对不上的地方：\n  - " + problems.join("\n  - "));

@@ -646,11 +646,13 @@
   // 后台命令那一行头上的钟（见 renderBashBlock）：一只表盘 + 两根针，针会自己走（见 chat.css 的
   // .bash-clock）。齿轮是「模型在忙」的意思，钟是「这条在后台自己跑、时间在走」—— 两样不能混用，
   // 所以这只钟是画出来的（codicon 的 clock 把针焊在一条 path 里，动不了）。
+  // 两根针都别顶到圆上：表盘半径 6.4、圆边那道线又占 0.6，针尖到圆心 4.2 就够长了（留出一截空当，
+  // 十来像素上看着才是「指针在盘里」，而不是糊在圈上）。
   const CLOCK_SVG = '<span class="bash-clock">'
     + '<svg viewBox="0 0 16 16" width="1em" height="1em" fill="none" stroke="currentColor" aria-hidden="true">'
     + '<circle cx="8" cy="8" r="6.4" stroke-width="1.2"/>'
-    + '<g class="ck-hour"><path d="M8 5.6V8" stroke-width="1.6" stroke-linecap="round"/></g>'
-    + '<g class="ck-min"><path d="M8 2.7V8" stroke-width="1.2" stroke-linecap="round"/></g>'
+    + '<g class="ck-hour"><path d="M8 5.9V8" stroke-width="1.6" stroke-linecap="round"/></g>'
+    + '<g class="ck-min"><path d="M8 3.8V8" stroke-width="1.2" stroke-linecap="round"/></g>'
     + '</svg></span>';
   // ==================== 全局视图选项 ====================
   var sendKeyCombo = "enter";
