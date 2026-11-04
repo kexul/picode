@@ -36,8 +36,9 @@
  *      认得的几种语言（TypeScript 含 JavaScript 与 JSON、C++、Python，别名一起算）按扩展名带颜色，
  *      行号还在、跟内容对得上，跨多行的注释 / 模板串不会在行号那儿断开；别的语言仍是黑白；
  *      超过上色那条线的大文件不上色（行号照旧），也不把页面卡住；
- *      工具卡片（write）那颗「跳转」跟正文里的文件链接去同一个地方：浏览器页面里在弹窗里打开看它
- *      （自己滑出来、停在第一行），插件里的对话面板里还是交给编辑器打开（最后那段按网页视图验）；
+ *      工具卡片（write）那颗「跳转」、以及 edit 卡片提示框里 diff 那一行，都跟正文里的文件链接去同一个地方：
+ *      浏览器页面里在弹窗里打开看它（「跳转」停在第一行、diff 那一行停在那一行），
+ *      插件里的对话面板里还是交给编辑器打开（最后那段按网页视图验）；
  *      这一列角上那颗折行开关：默认一行就是一行（长行横向滚），点一下长行折起来（横向不滚），
  *      再点一下又回去；开关管的是整块正文（换个文件也照样）；选的那个记在这台设备里，
  *      刷新页面后还是刚才那样；上下两格（清单、「改动」）里没有它，只有真在看一个文件时才露面，
@@ -340,6 +341,12 @@ const JUMP_ARGS = {
     path: JUMP_FILE,
     content: "// sample 1\n// sample 2\n// sample 3 这一行\n// sample 4\n// sample 5\n",
 };
+/**
+ * 提示框里 diff 那一行验的：一张 edit 卡片，diff 里加的那一行指着会话目录里现成的 long.js 第 HIT_LINE 行。
+ * 点那一行该跟正文里的文件链接一样：弹窗里打开这个文件、停在那一行。
+ */
+const DIFF_CARD_ID = "diff-card";
+const DIFF_LINE = "+ " + HIT_LINE + " 这一行是改出来的";
 const LINK_TEXT =
     "看这几个文件：\n\n" +
     "`" + FILE.long + ":" + HIT_LINE + "` 这一行、`" + FILE.sample + ":" + SAMPLE_HIT + "` 这一行，\n" +
@@ -927,6 +934,40 @@ module.exports = async (page) => {
         return "点了";
     `);
 
+    /** edit 卡片的提示框：先把别人的提示框收掉（悬浮着的那颗先移开），悬浮这颗小标签，
+     *  再点开那一行（diff 是点了那一行才画的）。 */
+    const showEditDiffTip = async () => {
+        await page.eval(`document.querySelectorAll("#messages .tool-group").forEach(function (p) { p.dispatchEvent(new MouseEvent("mouseleave")); }); return true;`);
+        await page.sleep(500);
+        const what = await page.eval(`
+            const pill = Array.from(document.querySelectorAll("#messages .tool-group"))
+                .filter(function (p) { const n = p.querySelector(".tg-name"); return n && n.textContent.trim() === "edit"; })
+                .pop();
+            if (!pill) { return "没有 edit 那个标签"; }
+            pill.dispatchEvent(new MouseEvent("mouseenter"));
+            return "把提示框弄出来了";
+        `);
+        if (what !== "把提示框弄出来了") { return what; }
+        for (let i = 0; i < 20; i++) {   // 等这颗标签自己的提示框出来（上一颗的还没收干净时别认错）
+            const head = await page.eval(`
+                const t = document.querySelector(".tag-tip");
+                const ttl = t && !t.classList.contains("hidden") ? t.querySelector(".tag-tip-title") : null;
+                return ttl ? (ttl.textContent || "") : "";
+            `);
+            if (String(head).indexOf("edit") === 0) { break; }
+            await page.sleep(100);
+        }
+        await page.expandTip();
+        return what;
+    };
+    /** 点提示框里 diff 那一条能点的行（改出来的那一行）。 */
+    const clickDiffRow = () => page.eval(`
+        const row = document.querySelector(".tag-tip .edit-diff .diff-line.jumpable");
+        if (!row) { return "提示框里没有能点的行"; }
+        row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        return "点了";
+    `);
+
     /** 右边那条缝现在什么颜色：不在指针下时该是透明的（热区本身看不见），指针移上去该亮起来。 */
     const edgeLine = () => page.eval(`
         const z = document.getElementById("fileResize");
@@ -1385,6 +1426,30 @@ module.exports = async (page) => {
     // 收掉刚弹出来的提示框，别给后面的检查留下遮挡
     await page.eval(`const h = document.getElementById("fileHeader"); if (h) { h.click(); } return true;`);
     await page.sleep(300);
+
+    // ==================== 提示框里 diff 那一行：点它也是开「看文件的弹窗」、停在那一行 ====================
+    // 跟正文里的文件链接、跟 write 卡片那颗「跳转」同一个去处（插件里的对话面板那边才是交给编辑器打开）。
+    // 以前这条路上只发一条「交给编辑器」的消息，浏览器页面里没人接，点下去什么也不会发生。
+    await page.eval(`if (document.body.classList.contains("file-view")) { document.getElementById("fileCloseFile").click(); } return true;`);
+    await page.sleep(300);
+    await page.eval(`for (const m of ${JSON.stringify([
+        {
+            type: "editCardStart", toolCallId: DIFF_CARD_ID, toolName: "edit", path: FILE.long, label: FILE.long,
+            args: { path: FILE.long, oldText: "换掉这一行", newText: "这一行是改出来的" },
+        },
+        { type: "editCardResult", toolCallId: DIFF_CARD_ID, diff: DIFF_LINE, canRevert: false },
+    ])}) { window.postMessage(m, "*"); } return true;`);
+    await page.sleep(300);
+    console.log("点 edit 卡片那颗标签：" + await showEditDiffTip());
+    console.log("点 diff 那一行：" + await clickDiffRow());
+    const diffJump = await waitLook("点 diff 行开的文件上来", (x) => x.rowCount === LONG_LINES && activeFilePath(x) === FILE.long);
+    check("点提示框里 diff 那一行：弹窗开出来，就是这个文件",
+        diffJump.fileView && activeFilePath(diffJump) === FILE.long && diffJump.activePages === 1,
+        JSON.stringify({ view: diffJump.fileView, bar: diffJump.barName, active: diffJump.activePages }));
+    check("停在 diff 说的那一行（跟正文里的文件链接一个口径）",
+        diffJump.hitNum === String(HIT_LINE) && diffJump.hitVisible,
+        JSON.stringify({ num: diffJump.hitNum, visible: diffJump.hitVisible }));
+    await page.shot("file-27-diff-row-jump.png");
 
     // ==================== 图片：点链接直接在这一列里看到那张图 ====================
     // 回到宽窗（前面那段在手机上跑）：这一列常驻在左边，图该按这一列的宽度等比例缩。
@@ -2617,6 +2682,24 @@ module.exports = async (page) => {
         return m && m.type === "openFile" && m.path === ${JSON.stringify(JUMP_FILE)};
     }));`));
     check("插件里的对话面板里点那颗「跳转」照旧交给编辑器打开", jumpSent.length === 1 && jumpSent[0].line === 1, JSON.stringify(jumpSent));
+
+    // 提示框里 diff 那一行在这边也是交给编辑器打开（那边没有「看文件的弹窗」）
+    await page.eval(`for (const m of ${JSON.stringify([
+        {
+            type: "editCardStart", toolCallId: DIFF_CARD_ID + "-view", toolName: "edit", path: FILE.long, label: FILE.long,
+            args: { path: FILE.long, oldText: "换掉这一行", newText: "这一行是改出来的" }, sessionId: sessionInfo.sessionId,
+        },
+        { type: "editCardResult", toolCallId: DIFF_CARD_ID + "-view", diff: DIFF_LINE, canRevert: false, sessionId: sessionInfo.sessionId },
+    ])}) { window.postMessage(m, "*"); } return true;`);
+    await page.sleep(300);
+    console.log("点 edit 卡片那颗标签：" + await showEditDiffTip());
+    console.log("点 diff 那一行：" + await clickDiffRow());
+    await page.sleep(400);
+    const diffSent = JSON.parse(await page.eval(`return JSON.stringify((window.__sentToHost || []).filter(function (m) {
+        return m && m.type === "openEditLocation" && m.path === ${JSON.stringify(FILE.long)};
+    }));`));
+    check("插件里的对话面板里点 diff 那一行照旧交给编辑器打开（带行号）",
+        diffSent.length === 1 && diffSent[0].line === HIT_LINE, JSON.stringify(diffSent));
     await page.shot("file-7-webview.png");
 
     const failed = checks.filter((c) => !c[1]).map((c) => c[0]);

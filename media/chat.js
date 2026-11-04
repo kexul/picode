@@ -4251,6 +4251,9 @@
         div.classList.add("jumpable");
         div.title = "跳转到第 " + target + " 行";
         div.addEventListener("click", () => {
+          // 去哪儿跟别的「跳转」同一个去处（见 openFileForUser）：浏览器页面里开「看文件的弹窗」、
+          // 停在那一行；插件里的对话面板里那边没有这一块，交给编辑器打开（它还能按这一行的原文找准位置）
+          if (fileSidebar.root) { openFileForUser(filePath, target); return; }
           vscode.postMessage({ type: "openEditLocation", sessionId: st.id, path: filePath, line: target, anchor });
         });
       }
@@ -8754,7 +8757,8 @@
 
   /**
    * 点一个文件的时候去哪儿：浏览器页面里开左边这一列看（后端自己读），插件里的对话面板里
-   * 照旧交给编辑器打开。正文里的文件链接与工具卡片那颗「跳转」都走这里，别各写一遍。
+   * 照旧交给编辑器打开。正文里的文件链接、工具卡片那颗「跳转」、提示框里 diff 那一行都走这里，
+   * 别各写一遍。
    *
    * 先问后端一句「这个名字对上了几个文件」：一个就直接开；同名的不止一个就把搜索浮层
    * 弹出来、预填这个名字，让点的人自己挑（挑中的还停在链接说的那一行）。
