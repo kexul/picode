@@ -12,7 +12,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { serverConfigFile } from "./serverPaths";
 import { normalizeOrigin } from "./webTransport";
-import { isPromptKey, isRetiredPromptKey, builtinPrompts } from "./promptText";
+import { isPromptKey, isRetiredPromptKey, isRenamedPromptKey, currentPromptKey, builtinPrompts } from "./promptText";
 import {
     DEFAULT_AUTO_LOAD_LAST,
     DEFAULT_CLOSE_SESSION_KEY,
@@ -311,6 +311,13 @@ function retiredKeysIn(raw: unknown): string[] {
             if (RETIRED_WEB_KEYS.has(key)) { found.push(`webServer.${key}`); }
         }
     }
+    const prompts = raw.prompts;
+    if (isPlainObject(prompts)) {
+        // 提示词里改过名的键：值已经按新名字收下了，文件重写一遍就只剩新名字
+        for (const key of Object.keys(prompts)) {
+            if (isRenamedPromptKey(key)) { found.push(`prompts.${key}`); }
+        }
+    }
     return found;
 }
 
@@ -373,13 +380,15 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
         warnings.push("prompts 不是一个对象，已全部用内置原文");
     } else {
         if (Object.keys(promptsRaw).length === 0) { promptsEmpty = true; }
-        for (const [name, value] of Object.entries(promptsRaw)) {
+        for (const [rawName, value] of Object.entries(promptsRaw)) {
+            // 改过名的旧键（toolTaba → toolTask）：按新名字收下，人改过的字句不丢
+            const name = currentPromptKey(rawName);
             if (!isPromptKey(name)) {
                 // /goal 那一套是以前写进去的：不报错、也不读，留着让人自己删
-                if (!isRetiredPromptKey(name)) { warnings.push(`配置里有不认识的项：prompts.${name}`); }
+                if (!isRetiredPromptKey(rawName)) { warnings.push(`配置里有不认识的项：prompts.${rawName}`); }
                 continue;
             }
-            const text = pickPromptValue(value, `prompts.${name}`, warnings);
+            const text = pickPromptValue(value, `prompts.${rawName}`, warnings);
             if (text !== undefined) { config.prompts[name] = text; }
         }
     }

@@ -154,7 +154,7 @@ const TABA_PARAMS = {
     additionalProperties: false,
 };
 
-const TABA_DESCRIPTION = ${JSON.stringify(promptText(over, "toolTaba"))};
+const TABA_DESCRIPTION = ${JSON.stringify(promptText(over, "toolTask"))};
 
 const TABA_PROMPT_SNIPPET =
     "派一个子会话去干一件事：新开一个 tab 跑，不等结果，它跑完第一轮后最后一条回复自动交回本会话。";
@@ -220,7 +220,7 @@ export default function tabaBridge(pi: any): void {
         name: "task_stop",
         label: "停子会话这一轮",
         description:
-            ${JSON.stringify(promptText(over, "toolTabaStop"))},
+            ${JSON.stringify(promptText(over, "toolTaskStop"))},
         parameters: STOP_PARAMS,
         async execute(_toolCallId: string, params: any) {
             const id = text(params?.id, 64);
@@ -246,7 +246,7 @@ export default function tabaBridge(pi: any): void {
         name: "task_peek",
         label: "看子会话情况",
         description:
-            ${JSON.stringify(promptText(over, "toolTabaPeek"))},
+            ${JSON.stringify(promptText(over, "toolTaskPeek"))},
         promptSnippet: "看一个子会话现在的情况：状态、用时、它的会话文件路径与大小、最后一条回复的开头。",
         parameters: {
             type: "object",

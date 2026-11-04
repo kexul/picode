@@ -13,7 +13,7 @@ import { promptText, type PromptOverrides } from "./promptText";
  * 子会话的记号：派活那套文字里一定有这一行，而它只会出现在子会话的第一条用户消息里。
  * 历史会话列表拿它把子会话认出来、不显示（见 sessionStore.scanSessionInfo）。
  *
- * 提示词可以被人改（prompts.tabaClosing）：改掉「【收尾要求】」这一行的话，
+ * 提示词可以被人改（prompts.taskClosing）：改掉「【收尾要求】」这一行的话，
  * 新文件得靠 child-sessions 那份清单认（见 childSessions），老文件就认不出来了。
  */
 export const TABA_CLOSING_MARK = "【收尾要求】";
@@ -27,7 +27,7 @@ export function buildParentContextText(p: {
     parentSessionFile: string;
     parentSessionName?: string;
 }, over?: PromptOverrides): string {
-    return promptText(over, "tabaParentContext", {
+    return promptText(over, "taskParentContext", {
         // 「派活的会话名」外面包一层「」：原文里是「派你来的「名字」，它的…」
         会话: p.parentSessionName ? `「${p.parentSessionName}」` : "派活给你的那个会话",
         会话文件: p.parentSessionFile,
@@ -50,6 +50,6 @@ export function buildTaskText(p: {
             parentSessionName: p.parentSessionName,
         }, over));
     }
-    parts.push(promptText(over, "tabaClosing"));
+    parts.push(promptText(over, "taskClosing"));
     return parts.join("\n\n---\n\n");
 }

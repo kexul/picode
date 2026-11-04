@@ -200,7 +200,7 @@ export function buildDeliveryText(p: {
         : p.childSessionName
             ? `（tab 还开着（「${p.childSessionName}」），可以到那边接着问。）`
             : "（要补做点什么就再派一个。）";
-    return promptText(over, "tabaDelivery", {
+    return promptText(over, "taskDelivery", {
         标题: head,
         正文: p.result.trim() || "（没有拿到任何回复）",
         尾巴: tail,

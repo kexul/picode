@@ -22,16 +22,16 @@ export type PromptKey =
     // ---- 自动接着干（/auto）----
     | "autoJudge"
     // ---- 工具说明（模型挑工具时看的）----
-    | "toolTaba"
-    | "toolTabaStop"
-    | "toolTabaPeek"
+    | "toolTask"
+    | "toolTaskStop"
+    | "toolTaskPeek"
     | "toolBash"
     | "toolBashTasks"
     | "toolAsk"
-    // ---- 派子会话（taba）----
-    | "tabaClosing"
-    | "tabaParentContext"
-    | "tabaDelivery"
+    // ---- 派子会话 ----
+    | "taskClosing"
+    | "taskParentContext"
+    | "taskDelivery"
     // ---- 其它来回话的正文 ----
     | "bashDelivery"
     | "chatReference"
@@ -65,7 +65,7 @@ export const PROMPTS: Record<PromptKey, PromptSpec> = {
             "【怎么回】第一行只写两个字：「继续」或者「结束」。要说明理由就在第二行写一句，别多写。",
         ].join("\n"),
     },
-    toolTaba: {
+    toolTask: {
         label: "派子会话那个 task 工具的说明",
         vars: [],
         text:
@@ -76,14 +76,14 @@ export const PROMPTS: Record<PromptKey, PromptSpec> = {
             + "一次可以派好几个，它们并行跑，各自跑完各自交回来。"
             + "用户要在子会话那个 tab 里跟它说话，得趁它第一轮还在跑：它跑完第一轮、结果交回之后，插件会自动把那个 tab 关掉（出错、或者用户当时正看着它除外）。",
     },
-    toolTabaStop: {
+    toolTaskStop: {
         label: "task_stop 工具的说明",
         vars: [],
         text:
             "停掉某个子会话正在跑的这一轮。它的 tab 和会话都留着，用户可以接着用；只是当前这轮生成被打断。"
             + "按编号或显示名指名，只能停你这个会话派出去的子会话。",
     },
-    toolTabaPeek: {
+    toolTaskPeek: {
         label: "task_peek 工具的说明",
         vars: [],
         text:
@@ -116,7 +116,7 @@ export const PROMPTS: Record<PromptKey, PromptSpec> = {
             + "作答回来的可能是勾中的选项，也可能是用户自己写的一句话（那种按「用户自己的说法」理解）。"
             + "用户不答了、或者一直没答（等很久也没回应），就当作没作答：不要再重复问同一个问题，等用户开口。",
     },
-    tabaClosing: {
+    taskClosing: {
         label: "发给子会话的那段收尾要求（子会话靠它写最后的交代）",
         vars: [],
         text: [
@@ -128,7 +128,7 @@ export const PROMPTS: Record<PromptKey, PromptSpec> = {
             "这一轮还在跑的时候，用户可能直接进这个会话跟你说话，那时按用户说的做。",
         ].join("\n"),
     },
-    tabaParentContext: {
+    taskParentContext: {
         label: "发给子会话的「派活给你的会话」那段（只给路径，不贴对话）",
         vars: ["会话", "会话文件"],
         text: [
@@ -142,7 +142,7 @@ export const PROMPTS: Record<PromptKey, PromptSpec> = {
             + "文件可能很大，别一次整个读进来：用 read 的 offset / limit，或者 bash 的 tail / grep 挑重点。",
         ].join("\n"),
     },
-    tabaDelivery: {
+    taskDelivery: {
         label: "子会话跑完、把结果交回给派活的会话那段",
         vars: ["标题", "正文", "尾巴"],
         text: ["{{标题}}", "", "{{正文}}", "", "{{尾巴}}"].join("\n"),
@@ -206,6 +206,29 @@ const RETIRED_PROMPT_KEYS = [
 
 export function isRetiredPromptKey(name: string): boolean {
     return RETIRED_PROMPT_KEYS.indexOf(name) >= 0;
+}
+
+/**
+ * 改过名的键：toolTaba 那一套叫过这个名字。读设置文件时按新名字收下，
+ * 这样人已经改过的字句不会因为改名丢掉；文件重写一遍就只剩新名字了。
+ */
+const RENAMED_PROMPT_KEYS: Record<string, string> = {
+    toolTaba: "toolTask",
+    toolTabaStop: "toolTaskStop",
+    toolTabaPeek: "toolTaskPeek",
+    tabaClosing: "taskClosing",
+    tabaParentContext: "taskParentContext",
+    tabaDelivery: "taskDelivery",
+};
+
+/** 旧键名换成现在的叫法；不是改过名的就原样返回。 */
+export function currentPromptKey(name: string): string {
+    return RENAMED_PROMPT_KEYS[name] || name;
+}
+
+/** 这个键是不是改过名的旧名字（设置文件重写一遍就能把旧名字换成新的）。 */
+export function isRenamedPromptKey(name: string): boolean {
+    return !!RENAMED_PROMPT_KEYS[name];
 }
 
 /** 一份「全是内置原文」的覆盖表：第一次跑时拿它写进设置文件当起点。 */
