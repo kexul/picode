@@ -4,6 +4,8 @@
  * 那颗蓝点也亮着、也呼吸（以前只在本会话自己答的时候才亮），点下面那个小数字写着
  * 还有几个子会话在跑（零个时数字收起来、点也不亮）；子会话跑完了（结果已交回）、又没有
  * 谁在跑时，同一颗点换成绿的、不闪；本会话自己这一轮跑完了（你正看着它跑完）也是绿点。
+ * 后台还有命令在跑也一样算没干完：这一轮答完了那颗点照旧蓝点呼吸，命令跑完了才变绿，
+ * 那一格上也一样要点两下才能关（见最后那块）。
  *
  * 只要验前端画得对不对，所以不真派子会话：直接往页面里投假的 sessionList
  * （跟后端推的是同一种消息）。六种情形各看一眼，类名 / 显示 / 动画 / 那个数字都打成文字，各裁一张小图：
@@ -14,6 +16,8 @@
  *   5 本会话自己在跑                → 亮、呼吸、没数字（数字只算子会话）
  *   6 两个子会话在跑 + 一个在等    → 亮、呼吸、写 2
  *   7 本会话这一轮跑完了（turnEnd done）→ 绿点、不闪、没数字
+ *   8 跑完了、后台还有命令在跑   → 亮、呼吸、没数字（蓝点盖过那颗“跑完了”的绿点）
+ *   9 那条后台命令也跑完了       → 绿点、不闪（这一轮确实是干完了）
  * 最后再量一下位置：那颗点与箭头是贴着“会话名 + 目录两行”整体居中的，
  * 不是只贴着会话名那一行（目录行收起来时它们才回到名字上）；有数字的时候
  * 是“点 + 数字”这一小竖条一起居中，数字落在点的正下面。
@@ -36,6 +40,8 @@ function session(over) {
     title: "",
     parentId: null,
     streaming: false,
+    // 后台还有命令在跑（后端 sessionList 里那份）：这一轮答完了也算没干完，那颗点照旧蓝点呼吸
+    bashRunning: false,
     loading: false,
     activity: "idle",
     activityDetail: "",
@@ -158,6 +164,19 @@ module.exports = async (page) => {
       // 跑完一轮的通知：现在不管当时看着哪个会话都是绿点
       extra: [{ type: "turnEnd", sessionId: "p1", status: "done", text: "跑完了一轮" }],
     },
+    {
+      id: "8-bash-running", what: "跑完了、后台还有命令在跑",
+      want: { visible: true, animation: "pi-pulse", count: "", titleHas: "后台还有命令在跑" },
+      sessions: [session({ bashRunning: true })],
+      // 这一轮已经答完、结果交回了，后台那条命令还在跑：算没干完，那颗点照旧蓝点呼吸
+      extra: [{ type: "turnEnd", sessionId: "p1", status: "done", text: "跑完了一轮" }],
+    },
+    {
+      id: "9-bash-done", what: "那条后台命令也跑完了",
+      want: { visible: true, animation: "none", count: "", bg: "green" },
+      // 命令跑完：后端重推一份会话清单（bashRunning 变 false），这会儿才换成绿点
+      sessions: [session()],
+    },
   ];
 
   let bad = 0;
@@ -170,7 +189,8 @@ module.exports = async (page) => {
     const ok = got.visible === c.want.visible && got.animation === c.want.animation
       && got.count === c.want.count && got.countVisible === (c.want.count !== "")
       && (c.want.bg === undefined || (c.want.bg === "green" ? isGreen : got.bg === c.want.bg))
-      && (c.want.count === "" || got.title.includes(c.want.count + " 个子会话在跑"));
+      && (c.want.count === "" || got.title.includes(c.want.count + " 个子会话在跑"))
+      && (!c.want.titleHas || got.title.includes(c.want.titleHas));
     if (!ok) { bad++; }
     const file = await shotBar(`child-dot-${c.id}.png`);
     console.log(
@@ -180,27 +200,48 @@ module.exports = async (page) => {
     );
   }
 
-  // ---- 绿点看一眼就收：切到别的会话再切回来，那颗点该灭了 ----
+  // ---- 绿点看一眼就收：「项目与会话」里那一行行首的点（顶条每一格自己那颗点是常驻绿的，没这回事）----
   const post = async (messages) => {
     await page.eval(`for (const m of ${JSON.stringify(messages)}) { window.postMessage(m, "*"); } return true;`);
     await page.sleep(250);
   };
+  /** 「项目与会话」里某个会话那一行行首那颗点的类名（行还没出来时是空串）。 */
+  const rowDotClass = (name) => page.eval(`
+    const rows = [...document.querySelectorAll(".pk-item.pk-open")];
+    const row = rows.find((r) => ((r.querySelector(".pk-history-title") || {}).textContent || "") === ${JSON.stringify(name)});
+    const el = row ? row.querySelector(".pk-open-dot") : null;
+    return el ? el.className : "";
+  `);
+  // 宽窗里右边那一列本来就常驻着（不是浮层）；窄窗才要先点那颗按钮把它拉出来
+  await page.eval(`
+    if (!document.body.classList.contains("dock-sidebar") && window.pichatSidebar && window.pichatSidebar.toggle) {
+      window.pichatSidebar.toggle();
+    }
+    return true;
+  `);
+  await page.sleep(300);
   await post([
     { type: "sessionList", sessions: [session(), other()] },
     { type: "sessionActivated", sessionId: "p1" },
     { type: "turnEnd", sessionId: "p1", status: "done", text: "跑完了一轮" },
   ]);
-  const beforeSwitch = await dotState();
+  // 常驻那一列要先跟宿主再要一份面板内容（openWorkspace 跑一圈）：等到行出来为止
+  for (let i = 0; i < 20; i++) {
+    const n = await page.eval(`return document.querySelectorAll(".pk-item.pk-open").length;`);
+    if (n >= 2) { break; }
+    await page.sleep(250);
+  }
+  const doneBefore = await rowDotClass("主会话");
   await post([{ type: "sessionActivated", sessionId: "p2" }]);
   await post([{ type: "sessionActivated", sessionId: "p1" }]);
-  const afterSwitch = await dotState();
+  const doneAfter = await rowDotClass("主会话");
   {
-    const greenBefore = /\bdone\b/.test(beforeSwitch.cls) && beforeSwitch.visible;
-    const ok = greenBefore && !afterSwitch.visible;
+    const greenBefore = /\bdone\b/.test(doneBefore);
+    const ok = greenBefore && !/\b(done|running|error)\b/.test(doneAfter);
     if (!ok) { bad++; }
     console.log(
-      `${ok ? "√" : "×"} 看完就收：跑完时${greenBefore ? "亮绿点" : `却是「${beforeSwitch.cls || "不亮"}」`}，` +
-      `切到别的会话再切回来${afterSwitch.visible ? `还亮着（「${afterSwitch.cls}」）` : "就不亮了"}`
+      `${ok ? "√" : "×"} 看完就收：跑完时${greenBefore ? "亮绿点" : `却是「${doneBefore || "不亮"}」`}，` +
+      `切到别的会话再切回来${/\b(done|running|error)\b/.test(doneAfter) ? `还亮着（「${doneAfter}」）` : "就不亮了"}`
     );
   }
 
@@ -258,9 +299,10 @@ module.exports = async (page) => {
     );
   }
 
-  // ---- 「项目与会话」面板里的行首点：跑完了（子会话、别的会话）都该是绿的，当前在跑的那个不绿 ----
-  await inject([session(), child("waiting", { streaming: false, activity: "idle" }), other()],
-    [{ type: "turnEnd", sessionId: "p2", status: "done", text: "跑完了一轮" }]);
+  // ---- 「项目与会话」面板里的行首点：跑完了（子会话、别的会话）都该是绿的，后台还在跑的那个是蓝的，当前在跑的那个不绿 ----
+  await inject([session(), child("waiting", { streaming: false, activity: "idle" }), other(),
+    other({ id: "p3", name: "后台还在跑", bashRunning: true })],
+  [{ type: "turnEnd", sessionId: "p2", status: "done", text: "跑完了一轮" }]);
   // 右边那一列可能已经常驻开着（宽窗默认开着、这是这台设备记下的）：只有收着才去展开它
   await page.eval(`
     if (!document.body.classList.contains("dock-sidebar") && window.pichatSidebar && window.pichatSidebar.toggle) {
@@ -286,22 +328,47 @@ module.exports = async (page) => {
     }));
   `));
   {
-    // 跑完的那两行（子会话、别的会话）该是绿点；当前这个（p1，正看着、没在跑）不该亮
-    const want = { "侦察: 认证模块": true, "另一个会话": true, "主会话": false };
-    for (const [name, green] of Object.entries(want)) {
+    // 跑完的那两行（子会话、别的会话）该是绿点；后台还在跑的那一行跟“正在答”一样是蓝点（也在呼吸）；
+    // 当前这个（p1，正看着、没在跑也没后台命令）不该亮
+    const want = { "侦察: 认证模块": "done", "另一个会话": "done", "后台还在跑": "running", "主会话": "" };
+    for (const [name, kind] of Object.entries(want)) {
       const row = panelDots.find((r) => r.name === name);
       const rgb2 = ((row && row.bg || "").match(/\d+/g) || []).map(Number);
       const isGreen = rgb2.length >= 3 && rgb2[1] > rgb2[0] && rgb2[1] > rgb2[2];
-      const ok = !!row && (green ? isGreen && /\bdone\b/.test(row.cls) : !/\b(done|running|error)\b/.test(row.cls));
+      const isBlue = rgb2.length >= 3 && rgb2[2] > rgb2[0] && rgb2[2] > rgb2[1];
+      const cls = row ? row.cls : "";
+      const ok = !!row && (kind === "done" ? isGreen && /\bdone\b/.test(cls)
+        : kind === "running" ? isBlue && /\brunning\b/.test(cls)
+          : !/\b(done|running|error)\b/.test(cls));
       if (!ok) { bad++; }
       console.log(
         `${ok ? "√" : "×"} 面板里「${name}」那一行行首的点：` +
-        (row ? `${/\b(done|running|error)\b/.test(row.cls) ? `亮${isGreen ? "绿" : "的却是 " + row.bg}` : "不亮"}（类名 "${row.cls}"）` : "没有这一行") +
-        `，期望${green ? "绿点" : "不亮"}`
+        (row ? `${/\b(done|running|error)\b/.test(cls) ? `亮${isGreen ? "绿" : isBlue ? "蓝" : "的却是 " + row.bg}` : "不亮"}（类名 "${cls}"）` : "没有这一行") +
+        `，期望${{ done: "绿点", running: "蓝点呼吸", "": "不亮" }[kind]}`
       );
     }
   }
   await page.shot("child-dot-7-panel.png");
+
+  // ---- 后台还有命令在跑时：顶条那一格的 × 先换成勾（跟“正在答”一样要点两下）----
+  await inject([session({ bashRunning: true }), other()]);
+  await page.eval(`document.querySelector("#sessionName .sn-close").click(); return true;`);
+  await page.sleep(300);
+  const confirm = JSON.parse(await page.eval(`
+    const btn = document.getElementById("sessionName");
+    const p = btn.querySelector(".sn-close path");
+    const d = p ? p.getAttribute("d") : "";
+    return JSON.stringify({ closing: btn.classList.contains("closing"), check: d.indexOf("M2.6") === 0 });
+  `));
+  {
+    const ok = confirm.closing && confirm.check;
+    if (!ok) { bad++; }
+    console.log(
+      `${ok ? "√" : "×"} 后台还有命令在跑时点 ×：这一格` +
+      `${confirm.closing ? "变红" : "没变红"}、那颗叉${confirm.check ? "换成了勾" : "还是叉"}（不真关）`
+    );
+  }
+  await page.shot("child-dot-8-close-confirm.png");
 
   if (bad > 0) { throw new Error(`有 ${bad} 处画得不对（见上面 × 那几行）`); }
 };

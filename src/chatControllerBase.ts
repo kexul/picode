@@ -1654,6 +1654,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
             // 子会话挂在哪个会话下面（前端据此缩进）；不是子会话就是 null
             parentId: child?.parentPanelId ?? null,
             streaming: !!rt.streaming,
+            // 后台还有命令在跑：这一轮答完了也算没干完（会话格、列表行首那颗点照旧蓝点呼吸）。
+            bashRunning: rt.hasRunningBashTasks(),
             activity: rt.activity || "idle",
             activityDetail: rt.activityDetail || "",
             piReady: rt.piReady,

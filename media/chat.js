@@ -869,6 +869,8 @@
       _stage: null,
       _stageDropped: false,
       streaming: false,
+      // 后台还有命令在跑（后端 sessionList 里那份）：这一轮答完了也算没干完，那颗点照旧蓝点呼吸。
+      bashRunning: false,
       // 这一轮跑完了（不管是你在看着它跑完的，还是在别处时它跑完的）：名字旁边那颗点变绿。
       // 看一眼（切到那个会话）或者又开始跑下一轮就收掉。见 markTurnDone。
       turnDone: false,
@@ -1205,7 +1207,7 @@
       const countEl = el.querySelector(".sn-count");
       if (countEl) { countEl.textContent = kids > 0 ? String(kids) : ""; }
       el.classList.toggle("current", !!item.current);
-      el.classList.toggle("streaming", !!(item.streaming || item.loading));
+      el.classList.toggle("streaming", !!(item.streaming || item.loading || item.bashRunning));
       // 派出去的子会话还在跑：本会话自己闲着也把那颗点亮出来（一样呼吸），
       // 一眼看得出这一家子还在干活（等的是子会话，不是本会话在答）。
       el.classList.toggle("child-running", kids > 0);
@@ -1214,6 +1216,7 @@
       el.title = (item.label || "")
         + (kids > 0 ? "，" + kids + " 个子会话在跑" : "")
         + (doneKids > 0 && kids === 0 ? "，" + doneKids + " 个子会话跑完了" : "")
+        + (item.bashRunning ? "，后台还有命令在跑" : "")
         + (item.cwd ? "\n" + item.cwd : "")
         + "\n" + (item.current ? "当前会话" : "点这里切过去");
       // 当前这一格就叫 #sessionName（“当前会话叫什么”照旧拿这个名字找）
@@ -5062,10 +5065,11 @@
 
   /**
    * 「正在对话」这些行列首那颗小点的样式名（顶条下拉框与面板共用同一套）：
-   * 在跑＝蓝点呼吸，出错＝红点，跑完了＝绿点不闪（主会话、子会话都是），其余不显示。
+   * 在跑（这一轮在答、或者后台还有命令在跑）＝蓝点呼吸，出错＝红点，跑完了＝绿点不闪（主会话、子会话都是），
+   * 其余不显示。
    */
   function openDotClass(item) {
-    if (item.streaming || item.loading) { return " running"; }
+    if (item.streaming || item.loading || item.bashRunning) { return " running"; }
     if (item.taba && item.taba.state === "error") { return " error"; }
     if (item.turnDone || (item.taba && item.taba.state === "waiting")) { return " done"; }
     return "";
@@ -5088,6 +5092,7 @@
         section: "正在对话",
         current: st.id === activeId,
         streaming: !!st.streaming,
+        bashRunning: !!st.bashRunning,
         loading: !!st.loading,
         turnDone: !!st.turnDone,
         taba: st.taba || null,
@@ -6044,9 +6049,10 @@
 
   /** 这个会话现在是不是在跑（会话列表上那颗“在跑”的小点看的就是它）。
    *  关它之前要不要再问一句，就看这一个：跑着的会话关下去会打断这一轮，闲着的没什么可丢。 */
+  /** 这个会话算不算“还在干活”（顶条那颗 × 要先问一下）：这一轮在答，或者后台还有命令在跑。 */
   function sessionRunning(id) {
     const st = id ? sessions.get(id) : null;
-    return !!(st && st.streaming);
+    return !!(st && (st.streaming || st.bashRunning));
   }
 
   /** 关一个会话：这一下就走（会话文件留着，历史列表里能重新打开；
@@ -6100,7 +6106,7 @@
     const files = Array.from(sessions.values()).map((t) => t.sessionFile || "").sort().join(",");
     return files + "\u0000" + items.map((it) => [
       it.sessionId, it.label || "", it.depth || 0, it.current ? 1 : 0,
-      it.streaming ? 1 : 0, it.loading ? 1 : 0, it.turnDone ? 1 : 0,
+      it.streaming ? 1 : 0, it.loading ? 1 : 0, it.bashRunning ? 1 : 0, it.turnDone ? 1 : 0,
       (it.taba && it.taba.state) || "", it.pendingClose ? 1 : 0,
     ].join("|")).join("\n");
   }
@@ -11318,6 +11324,7 @@
         // pi 起的标题（没有就空串）；界面上显示名字的地方一律走 sessionLabel()
         st.piTitle = typeof s.title === "string" ? s.title : "";
         st.streaming = !!s.streaming;
+        st.bashRunning = !!s.bashRunning;
         const incomingActivity = s.activity;
         st.activity = incomingActivity === "working" || incomingActivity === "thinking" || incomingActivity === "tool" || incomingActivity === "idle"
           ? incomingActivity

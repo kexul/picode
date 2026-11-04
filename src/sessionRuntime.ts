@@ -261,6 +261,8 @@ export class SessionRuntime {
     /** 这个会话的后台命令（任务编号 → 情况）：界面那一格清单、以及「停」要用它。
      *  跟着会话活：会话关掉就没了（日志文件还在磁盘上，但没人再看了）。 */
     private readonly bashTasks = new Map<number, BashTaskInfo>();
+    /** 上一次推给界面的「后台还有命令在跑」是哪种说法：只有它变了才重推会话清单（见 syncBashRunning）。 */
+    private bashRunningShown = false;
     // ---- 网页端「只发最近一段历史」的窗口（宿主 wantsTrimmedHistory 为 true 时启用）----
     /** 当前窗口在完整消息数组里的起点下标；-1 表示没开窗口（全量发过 / 非网页端）。 */
     private historyWindowStart = -1;
@@ -552,6 +554,7 @@ export class SessionRuntime {
         this.piSessionTitle = "";
         // 后台命令清单也跟着会话走：换会话 / 换进程以后旧的那些都不认了
         this.bashTasks.clear();
+        this.bashRunningShown = false;
         // 「加载了什么」同理：新进程会重新报一份
         this.envSnapshot = undefined;
     }
@@ -563,12 +566,23 @@ export class SessionRuntime {
         return Array.from(this.bashTasks.values()).sort((a, b) => b.no - a.no);
     }
 
-    /** 这个会话还有没有放到后台、正在跑的命令（新建会话时据此决定要不要把旧的那个留着）。 */
+    /** 这个会话还有没有放到后台、正在跑的命令（会话格那颗状态点、新建会话时据此决定要不要把旧的那个留着）。 */
     public hasRunningBashTasks(): boolean {
         for (const task of this.bashTasks.values()) {
             if (task.status === "running") { return true; }
         }
         return false;
+    }
+
+    /**
+     * 「后台还有命令在跑」变了才重推一次会话清单：会话格那颗状态点在煮它 —— 这一轮答完了、
+     * 后台命令还在跑时，照旧算没完成（蓝点呼吸），跑完了才变绿。
+     */
+    private syncBashRunning(): void {
+        const now = this.hasRunningBashTasks();
+        if (now === this.bashRunningShown) { return; }
+        this.bashRunningShown = now;
+        this.host.broadcastSessionList();
     }
 
     // ---- 「加载了什么」（那个报清单的扩展报上来的）----
@@ -607,6 +621,7 @@ export class SessionRuntime {
         this.bashTasks.set(ev.no, info);
         console.error(`[后台命令] #${ev.no} ${ev.kind === "start" ? "转到后台" : status === "done" ? "跑完" : "结束（" + status + "）"}：${ev.cmd.slice(0, 80)}`);
         this.post({ type: "bashTask", task: info });
+        this.syncBashRunning();
         if (ev.kind === "end") { this.host.onBashTask?.(this.id, info); }
     }
 
@@ -638,6 +653,7 @@ export class SessionRuntime {
         const next: BashTaskInfo = { ...task, status: "stopped" };
         this.bashTasks.set(no, next);
         this.post({ type: "bashTask", task: next });
+        this.syncBashRunning();
         return true;
     }
 

@@ -365,7 +365,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `diffCheck.js` | 验「改动」那一格背后的逐行比较（大文件改两处不报成整段换掉、挨得近的两段不叠、按 diff 拼得回原文）：`node dev/diffCheck.js` |
 | `linkCandidates.js` | 验点文件链接时后端怎么挑文件（写清楚的直接开、会话读写过的同名文件先认且不扫仓库、没碰过的才列清单、目录外的不认）：`node dev/linkCandidates.js` |
 | `emptyBar.js` | 验还没开会话那一屏的顶条跟右边那一列：顶条跟有会话时一样高（会话格那一排空着也留出一格的高度，开第一个会话那一下不跳、面板头不跟着跳），右边那一列不多出一条线（「正在对话」那一格空着就整个收掉、它底下那条分隔线也不画）：`npm run web:shot -- --fake-pi --skip-ready --width 1280 --height 800 --script dev/emptyBar.js` |
-| `childDot.js` | 验顶条那颗小点与它下面的数字（子会话在跑时父会话那颗点也呼吸、点下面写着还有几个在跑，零个时数字收起来；点与箭头落在两行中间）：`npm run web:shot -- --script dev/childDot.js` |
+| `childDot.js` | 验会话格那颗状态点、它下面的数字、面板行首那颗点（子会话在跑时父会话那颗点也呼吸、点下面写着还有几个在跑，零个时数字收起来；后台还有命令在跑时这一轮答完了照旧蓝点呼吸、命令跑完才变绿、那颗 × 要先换成勾才关；点与箭头落在两行中间）：`npm run web:shot -- --script dev/childDot.js` |
 | `tabClose.js` | 验顶条那排格上的 `×` 与挤了以后怎么收窄、怎么叠：每格都露着 ×（跑着时点一下变成勾、不真关），闲着点一下直接关；挤了（420 宽、五个会话）当前那一张写名字（顺序就是会话清单的顺序，当前那一张在哪就在哪）、别的收成窄块只露那颗点，越往外越窄也越往旁边那张底下压，开着的会话一个不少（点一张照样切过去）；窗口放宽到 1200 名字都回来。两格是这么来的：先发一句让这一格跑着再点「＋」（点「＋」等于 pi 的 /new，旧的那个闲着会被顺手关掉、正在跑才留着），等旧的那个跑完再点它的 ×（一下就好）：`FAKEPI_THINK_MS=6000 npm run web:shot -- --fake-pi --script dev/tabClose.js` |
 | `tabSlide.js` | 验顶条那排格的过渡：切会话（点别的格 / 手机上左右划）时，换了位置的格子从旧地方滑过去、底色淡过去；左右划到一半时当前那一格已经收窄、要进来的那一格已经涨宽且名字露出来（三个会话挤成一张大的 + 两颗点时；两个会话放得下、每格都写着名字的那种宽度本来就不该动）；松手切过去那一下从手指停下的宽度接着长（不先缩成小标签再弹开）；弹回去以后不留钉住的宽度：`npm run web:shot -- --fake-pi --width 420 --height 700 --script dev/tabSlide.js` |
 | `tabSelectStyles.js` | 把顶条「当前这一格」的几种画法（描边 / 下划线 / 灰底 / 蓝底 …）摆成一竖排各照一张，挑样式时用（浅色 / 深色各跑一遭）：`npm run web:shot -- --fake-pi --script dev/tabSelectStyles.js`，加 `--theme dark` 跑深色那张 |
