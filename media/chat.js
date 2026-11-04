@@ -2591,18 +2591,14 @@
     toolTagHost(st).appendChild(tag);
   }
 
-  /** 标签的悬浮/点按触发：触屏点一下显示、再点一下（或点外面）关闭；电脑悬浮显示，
-   *  从标签移进提示框不收，两边都离开才收（见 scheduleTagTipHide）。
+  /** 标签的触发：点一下就在标签旁边打开提示框，再点一下（或点外面）关掉。
+   *  不跟鼠标走 —— 鼠标一停就弹、一挪就飘走，还挡着底下要读的字，手感很差（所以不再有悬浮）。
    *  各种工具标签共用这一套。 */
   function attachTagTipHandlers(tag) {
-    if (IS_TOUCH_DEVICE) {
-      tag.addEventListener("click", () => {
-        if (tagTipTag === tag) { hideTagTip(); } else { showTagTip(tag); }
-      });
-    } else {
-      tag.addEventListener("mouseenter", () => showTagTip(tag));
-      tag.addEventListener("mouseleave", scheduleTagTipHide);
-    }
+    tag.classList.add("tip-click");   // 点得下去的样子：手形光标（见 chat.css）
+    tag.addEventListener("click", () => {
+      if (tagTipTag === tag) { hideTagTip(); } else { showTagTip(tag); }
+    });
   }
 
   // ==================== 工具标签：合并 ====================
@@ -2616,7 +2612,7 @@
   //   · 结果带图的 read —— 是不是图要等结果回来才知道，那条到了会从组里摘出去，
   //     在对话里铺成一整块图（见 removeEntryFromGroup）。
   // write / edit 也跟别的工具一样按名字收（改了好几处就收成「edit ×3」）：标签上只有工具名和次数，
-  // 改了哪个文件、diff、跳转 / 回滚都在悬浮提示里一条条看（见 buildEditCard）。
+  // 改了哪个文件、diff、跳转 / 回滚都在点开的提示框里一条条看（见 buildEditCard）。
   // 一条正文（或用户消息）到来就换行、另起一批，上批的标签不再攒数。
   const NO_MERGE_TOOLS = new Set(["task", "task_stop", "task_peek"]);
   const GROUP_RUNNING_TEXT = "运行中…";
@@ -2636,7 +2632,7 @@
     tag.className = "tool" + (running ? " running" : "");
     tag.insertAdjacentHTML("afterbegin", GEAR_SVG);
     tag.appendChild(document.createTextNode(" " + toolName));
-    // 悬浮提示显示调用与结果（见 showTagTip）；read 读图的结果也在提示框里出图。
+    // 点开这颗标签看调用与结果（见 showTagTip）；read 读图的结果也在提示框里出图。
     tag._toolName = toolName;
     tag._toolCallId = toolCallId || "";
     tag._argStr = argStr;
@@ -2824,9 +2820,9 @@
   }
 
   // ==================== 正在跑的那一条 ====================
-  // 工具标签只说得出工具名：命令行、读哪个文件、grep 找什么都在提示框里，不悬浮就看不见。
+  // 工具标签只说得出工具名：命令行、读哪个文件、grep 找什么都在提示框里，不点开就看不见。
   // 正在跑的那一条不一样：它在当前这批标签下面单占一行，把这一行的摘要直接写出来
-  // （bash 就是「$ 命令」）。一长串命令只写核心那一段、后面灰一个「+N」，整条在悬浮提示里看
+  // （bash 就是「$ 命令」）。一长串命令只写核心那一段、后面灰一个「+N」，整条点开那条才看得到
   // （怎么挑核心见下面「一长串命令里的核心那一段」）。同时跑几条也只露一条 —— 只露最近开始的那条。
   // 为什么不排成几行：几条一起跑时，先跑完的那条一收，这一块就矮一行，下面的东西跟着
   // 上下跳一下（贴着底看的时候特别明显）。行数永远是 0 或 1，就没有这一下。
@@ -2858,7 +2854,7 @@
   //   · 挂在管道后面、只修输出的（sed / head / tail / cut / sort / wc …）不算事；
   //   · 剩下的头一段就是核心（grep / jq / awk / xargs 不当作修输出的：它们常常就是查的东西本身）。
   // 分不出核心（只有一段、或者全被打杂的占满）就照原样整条写出来。
-  // 命令只是一行字，这么切只是猜：整条一直留着，悬浮那一行就能看（见 syncRunningLine）。
+  // 命令只是一行字，这么切只是猜：整条一直留着，点开那一行就能看（见 syncRunningLine）。
   const SEG_PROG_SKIP = new Set(["sudo", "time", "env", "nohup", "command", "exec", "builtin", "nice", "!", "{", "do", "then", "else", "elif", "if", "while", "until"]);
   const SEG_NOISE = new Set(["cd", "pushd", "popd", "echo", "printf", "export", "unset", "set", "true", "false", ":", "sleep", "wait", "clear", "sync",
     "continue", "break", "exit", "return", "shift", "local", "declare", "readonly", "umask", "dirs"]);
@@ -3045,7 +3041,7 @@
     } catch (e) { return ""; }
   }
   /** 「正在跑」那一行写什么：一长串 bash 命令只写核心那一段（后面灰一个「+N」），
-   *  整条留在这一行的悬浮提示里（trimmed=true 说明有字没写出来，得给个提示）。分不出来就照原样写。 */
+   *  整条留在点开这一行的提示框里（trimmed=true 说明有字没写出来，得给个提示）。分不出来就照原样写。 */
   function runningLineText(call) {
     const whole = call.text || call.name || "";
     const oneLine = (text) => {
@@ -3153,7 +3149,7 @@
       item.appendChild(more);
     }
     if (shown.trimmed) {
-      // 有字没写出来（只写了核心那一段 / 脚本只写了头一行）：整条语句在悬浮提示里看
+      // 有字没写出来（只写了核心那一段 / 脚本只写了头一行）：点开这条看整条语句
       item._tipCall = call.text;
       item._tipBody = "";
       attachTagTipHandlers(item);
@@ -3541,11 +3537,10 @@
   }
 
   // ==================== 工具标签提示框 ====================
-  // 鼠标停在工具标签上（触屏设备改为点一下标签），用自绘的提示框显示调用与结果。
-  // 系统自带的 title 提示要等约一秒才出现，这里电脑上悬浮 TAG_TIP_DELAY_MS 就出。
+  // 点一下工具标签，就在它旁边打开这块自绘的提示框，显示调用与结果（不用系统 title 那套）。
   // 运行中只显示调用参数（输入）；结果到达后显示「调用 + 结果」两块，结果放
-  // pi 发来的全部原文不再截断——提示框内容区可滚动。关闭方式：电脑鼠标移开或点别处，
-  // 触屏点提示框外面或再点一下标签。
+  // pi 发来的全部原文不再截断——提示框内容区可滚动。关闭方式：点提示框外面、再点一下标签、
+  // 滚对话或换窗口大小。
   /** 调用摘要的单行纯文本（复用摘要排版，如 bash → "$ npm test"）。 */
   function tagTipCallText(toolName, argStr) {
     try { return buildMediumSummary(toolName, argStr).textContent.trim() || toolName; }
@@ -3640,10 +3635,8 @@
     }, DETAIL_REFRESH_MS);
   }
 
-  // 自绘提示框：全局复用同一个元素。外框（含右上角关闭按钮）+ 内容区（可滚动）。
+  // 自绘提示框：全局复用同一个元素。外框 + 内容区（可滚动）。
   // 内容区分两块：调用一行（输入）、结果一块稍深底色（输出）。
-  const TAG_TIP_DELAY_MS = 200; // 电脑上悬浮多久后出现
-  const TAG_TIP_HIDE_GRACE_MS = 150; // 电脑上鼠标离开后宽限多久再收（移进提示框的间隙不闪没）
   // 还在长的内容（正在想的思考、正在跑的工具）多久重画一次。
   // 为什么不像别的更新那样“一变就重画”：重画一次等于把提示框内容整个重排一次，代价随内容长度涨
   // （上十万字的思考一次就好几毫秒），思考/工具的增量却是一秒几十条 —— 每条都来一次就能把主线程占满，
@@ -3653,8 +3646,6 @@
   const TAG_TIP_STREAM_INTERVAL_MS = 300;
   let tagTipEl = null;      // 外框
   let tagTipContent = null; // 内容区（可滚动）
-  let tagTipTimer = 0;      // 电脑上的悬浮延迟计时
-  let tagTipHideTimer = 0;  // 电脑上的鼠标离开宽限计时
   let tagTipPaintTimer = 0; // 节流：攒着的下一次重画（下一帧再定画不画）
   let tagTipPaintAt = 0;    // 上一次重画的时刻（performance.now）
   let tagTipFollow = true;  // 还在长的内容要不要跟着贴底（用户往回滚过就不跟了）
@@ -3669,19 +3660,9 @@
   function hideTagTip() {
     stopClipPump();
     cancelTagTipPaint();
-    if (tagTipHideTimer) { clearTimeout(tagTipHideTimer); tagTipHideTimer = 0; }
-    if (tagTipTimer) { clearTimeout(tagTipTimer); tagTipTimer = 0; }
     tagTipTag = null;
     tagTipAnchor = null;
     if (tagTipEl) { tagTipEl.classList.add("hidden"); }
-  }
-  function cancelTagTipHide() {
-    if (tagTipHideTimer) { clearTimeout(tagTipHideTimer); tagTipHideTimer = 0; }
-  }
-  /** 电脑上鼠标离开标签/提示框后，宽限片刻再收，期间移回任一方就取消。 */
-  function scheduleTagTipHide() {
-    cancelTagTipHide();
-    tagTipHideTimer = setTimeout(() => { tagTipHideTimer = 0; hideTagTip(); }, TAG_TIP_HIDE_GRACE_MS);
   }
   /** 把标签的调用与结果填进内容区：调用一行稍深底色（输入），结果原样（输出）。
    *  打开时只画输入；点那一行才铺开它自己的结果（输出）—— 见 chat.css 的 .tag-tip-click。 */
@@ -3713,7 +3694,7 @@
     }
     appendClipNote(tagTipContent, tag._resultClip);
   }
-  /** 每次点开提示框都从“只看输入”开始：铺开是手里那一下的事，看过了下次悬浮照样收着。
+  /** 每次点开提示框都从“只看输入”开始：铺开是手里那一下的事，看过了下次点开照样收着。
    *  高矮也就不会在打开之后自己变（收着的那些不去后端要内容，见 pumpClipDetails）。 */
   function resetTagTipExpansion(tag) {
     const g = tag._tipGroup;
@@ -3726,43 +3707,26 @@
     paintTagTip(tag, tipContentIsGrowing(tag));
   }
   function showTagTip(tag) {
-    // 已在显示同一个标签（如鼠标从提示框移回标签）：只刷新位置，不闪没再闪出
-    if (tagTipTag === tag && tagTipEl && !tagTipEl.classList.contains("hidden")) {
-      cancelTagTipHide();
-      placeTagTip(tagTipEl, tag);
-      return;
-    }
     hideTagTip();
     if (!tag._tipCall && !tag._tipFill) { return; }
     tagTipTag = tag;
-    const render = () => {
-      tagTipTimer = 0;
-      if (tagTipTag !== tag || !tag.isConnected) { return; }
-      if (!tagTipEl) {
-        tagTipEl = document.createElement("div");
-        tagTipEl.className = "tag-tip hidden";
-        tagTipContent = document.createElement("div");
-        tagTipContent.className = "tag-tip-content";
-        tagTipEl.appendChild(tagTipContent);
-        document.body.appendChild(tagTipEl);
-        if (!IS_TOUCH_DEVICE) {
-          // 电脑：鼠标在提示框上不算离开，从标签移进来不收，再移出去才收
-          tagTipEl.addEventListener("mouseenter", cancelTagTipHide);
-          tagTipEl.addEventListener("mouseleave", scheduleTagTipHide);
-        }
-        // 用户自己往回滚了（滚到离底还远的地方）就不再跟着新内容往下走
-        tagTipContent.addEventListener("scroll", () => {
-          if (tagTipContent.scrollHeight - tagTipContent.scrollTop - tagTipContent.clientHeight > 8) { tagTipFollow = false; }
-        });
-      }
-      tagTipEl.classList.remove("hidden");
-      tagTipFollow = true;   // 这次打开从“跟着最新一段走”开始
-      resetTagTipExpansion(tag);
-      paintTagTip(tag, tipContentIsGrowing(tag));
-      startClipPump(tag);   // 刚清过：没有铺开的，这一下什么都不问，只是把上一个标签的计时停掉
-    };
-    // 触屏设备没有悬浮：点一下是明确动作，立即显示；电脑上悬浮短暂停留后再显示
-    if (IS_TOUCH_DEVICE) { render(); } else { tagTipTimer = setTimeout(render, TAG_TIP_DELAY_MS); }
+    if (!tagTipEl) {
+      tagTipEl = document.createElement("div");
+      tagTipEl.className = "tag-tip hidden";
+      tagTipContent = document.createElement("div");
+      tagTipContent.className = "tag-tip-content";
+      tagTipEl.appendChild(tagTipContent);
+      document.body.appendChild(tagTipEl);
+      // 用户自己往回滚了（滚到离底还远的地方）就不再跟着新内容往下走
+      tagTipContent.addEventListener("scroll", () => {
+        if (tagTipContent.scrollHeight - tagTipContent.scrollTop - tagTipContent.clientHeight > 8) { tagTipFollow = false; }
+      });
+    }
+    tagTipEl.classList.remove("hidden");
+    tagTipFollow = true;   // 这次打开从“跟着最新一段走”开始
+    resetTagTipExpansion(tag);
+    paintTagTip(tag, tipContentIsGrowing(tag));
+    startClipPump(tag);   // 刚清过：没有铺开的，这一下什么都不问，只是把上一个标签的计时停掉
   }
   /** 显示期间内容更新（思考增量、结果刚到）时，刷新正在显示的提示内容与位置。
    *  内容还在长、又已经很长时按 TAG_TIP_STREAM_INTERVAL_MS 节流（见上面常量的说明）。 */
@@ -4385,7 +4349,7 @@
 
   /**
    * write / edit 的一次调用：跟别的工具一样按名字收进那条工具调用行（连着改几处就收成
-   * 「edit ×3」，标签上只有工具名和次数），改了哪个文件、diff、跳转 / 回滚都在悬浮提示里，
+   * 「edit ×3」，标签上只有工具名和次数），改了哪个文件、diff、跳转 / 回滚都在点开的提示框里，
    * 一条调用一块（见 fillEntry）。调用方拿到的是这一条自己的把手：结果回来、回滚了各调一下
    * （见 editCardResult / editReverted）。
    */
@@ -11897,14 +11861,14 @@
           noteToolDuration(t, tagEl._toolName, tagEl._tipCall, msg.durationMs);
           tagEl.classList.remove("running");
           syncRunningLine(t);   // 这条不跑了：末尾那行跟着少一条
-          // 记录结果：文字结果供悬浮提示用（见 setTagTip），带图的走另一条路
+          // 记录结果：文字结果供提示框用（见 setTagTip），带图的走另一条路
           tagEl._done = true;
           tagEl._isError = !!msg.isError;
           tagEl._resultText = msg.resultText || "";
           tagEl._resultClip = clipOf(msg);
           tagEl._resultMeta = { isError: !!msg.isError, durationMs: msg.durationMs, truncation: msg.truncation || null, images: msg.images || null };
           t.pendingToolTags.delete(msg.toolCallId);
-          // read 读图：小标签收掉，换成对话里的一整块图（不再走悬浮提示）
+          // read 读图：小标签收掉，换成对话里的一整块图（不再走提示框）
           if (Array.isArray(msg.images) && msg.images.length > 0) {
             // 先插图、再收标签（行空了连行一起收）：顺序反过来就找不着图该待的地方了
             mountToolImageBlock(t, { toolName: tagEl._toolName, argStr: tagEl._argStr, tipCall: tagEl._tipCall, toolCallId: msg.toolCallId, row: tagEl.parentElement }, msg.images);

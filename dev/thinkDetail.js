@@ -37,14 +37,14 @@ function thinkEntries(page) {
     `);
 }
 
-/** 悬浮到最后一颗 think 标签上，点开那一行（提示框打开时只画输入），把提示框里的字读回来。 */
+/** 点开最后一颗 think 标签，点开那一行（提示框打开时只画输入），把提示框里的字读回来。 */
 async function hoverLastThink(page) {
     const ok = await page.eval(`
         const tags = Array.from(document.querySelectorAll('.session-view:not(.off) .session-pane .tool'))
             .filter(function (t) { return /^think/.test((t.innerText || '').trim()); });
         const tag = tags[tags.length - 1];
         if (!tag) { return false; }
-        tag.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
+        tag.click();
         return true;
     `);
     if (!ok) { return { open: false, text: "" }; }
@@ -61,7 +61,7 @@ async function hoverLastThink(page) {
 function hideTip(page) {
     return page.eval(`
         document.querySelectorAll('.session-view:not(.off) .session-pane .tool').forEach(function (t) {
-            t.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+            document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
         });
         return true;
     `);

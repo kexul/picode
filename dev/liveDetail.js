@@ -8,19 +8,19 @@
  * 假模型（dev/fakePi.js）在 FAKEPI_LONG 里把思考与 bash 输出撑长，一个来回里验五件事：
  *   · 推送流里思考增量是 0 字（不是那 3000 字）；
  *   · 收尾的 thinkingFull 带上了“一共多少字”；
- *   · 悬浮出来只画那一行调用（输入）：一个字都不取、也没有「正在取…」（取就会让高矮跳一下）；
+ *   · 点开只画那一行调用（输入）：一个字都不取、也没有「正在取…」（取就会让高矮跳一下）；
  *   · 点开那一行：“还有 N 字没带过来，正在取…” → 一会儿换成全文；
  *   · bash 标签、write 的写入预览也一样：“先只有输入、点了才取”。
  */
 const LONG = Number(process.env.FAKEPI_LONG || 3000);
 
-/** 悬浮到名字是 name 的那个标签上。 */
+/** 点开名字是 name 的那个标签。 */
 function hover(page, name) {
     return page.eval(`
         const tags = Array.from(document.querySelectorAll('.session-view:not(.off) .session-pane .tool'));
         const tag = tags.find(function (t) { return ((t.innerText || '').trim().split(/\\s+/)[0] === ${JSON.stringify(name)}); });
         if (!tag) { return false; }
-        tag.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
+        tag.click();
         return true;
     `);
 }
@@ -38,7 +38,7 @@ function tipState(page) {
 function hideTip(page) {
     return page.eval(`
         document.querySelectorAll('.session-view:not(.off) .session-pane .tool').forEach(function (t) {
-            t.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+            document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
         });
         return true;
     `);
@@ -92,7 +92,7 @@ module.exports = async (page) => {
     if (!(await hover(page, "think"))) { check("找到 think 标签", false, "页面上没有这颗标签"); }
     await page.sleep(600);
     const first = await tipState(page);
-    check("悬浮出来只画那一行输入（一个字都不取）", first.open && first.chars < 200 && !first.note,
+    check("点开只画那一行输入（一个字都不取）", first.open && first.chars < 200 && !first.note,
         `${first.chars} 字，小字：${first.note || "（没有）"}`);
     await page.expandTip();     // 点开那一行：这一下才去要全文
     await page.sleep(400);
@@ -161,7 +161,7 @@ module.exports = async (page) => {
         const el = document.querySelector('.tag-tip .tc-args');
         return el ? el.textContent : '';
     `);
-    check("悬浮出来只写改了哪个文件（不画预览、不取参数）", noPreview === "", noPreview ? `先有了：${noPreview.slice(0, 20)}` : "预览还没有");
+    check("点开只写改了哪个文件（不画预览、不取参数）", noPreview === "", noPreview ? `先有了：${noPreview.slice(0, 20)}` : "预览还没有");
     await page.expandTip();     // 点标题行：这才去要参数
     await page.sleep(400);
     const stillNoPreview = await page.eval(`

@@ -58,14 +58,14 @@ npm run web:shot -- --fake-pi --send "随便说点什么" --shot fake.png
 # 同一个名字只出一个标签（标签停在第一次调用的位置），不同名的各占一个，一条线上还是能排好几个
 npm run web:shot -- --width 1000 --height 620 --script dev/toolRow.js
 
-# 验合并本身（同名的收成一个、悬浮提示里一条条列出各条的调用、write / edit 也按名字收且
+# 验合并本身（同名的收成一个、点开的提示框里一条条列出各条的调用、write / edit 也按名字收且
 # 每条的「跳转 / 回滚」排在各自的标题行上、读图那条摘出去、不合并的那几个、重放后一样，
 # 读图铺出来的那块图排在这条调用当时的位置上：后面接着调的、后面才到的正文都在它下面）：
 npm run web:shot -- --width 1000 --height 760 --script dev/toolMerge.js
 
-# 验工具标签的提示框（打开只画输入：收着的那些一个字都不问后端，所以高矮不会自己跳；
-# 点那一行输入才铺开它自己的输出、高矮跟着变；write / edit 点标题行才画 diff / 写入预览；
-# 关掉再悬浮回来又是只画输入）：
+# 验工具标签的提示框（点一下标签才打开，鼠标停上去不再弹；打开只画输入：收着的那些一个字都不问后端，
+# 所以高矮不会自己跳；点那一行输入才铺开它自己的输出、高矮跟着变；
+# write / edit 点标题行才画 diff / 写入预览；关掉再点开又是只画输入）：
 npm run web:shot -- --width 1000 --height 760 --script dev/toolTipExpand.js
 
 # 验看图那一层（点开带图的工具结果后还能放大缩小）：滚轮定点缩放、手机上两指捏合、
@@ -376,8 +376,8 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `desktopLive.js` | 验「按住截图按钮不放，看这台电脑的桌面实时画面」（真按住、真起那支一直拍桌面的小程序、真把帧画到页面上：按住时按钮当场给反应（压暗 + 一圈进度按着住的时长转），不到时间松手算点一下、转满才弹那一层；画面一直在换、松手后还在；两块屏一起看只起一支小程序、关掉一块还在拍、全关了才停；点黑底 / 点叉 / Esc 都能收起；只能在 Windows 上跑）：`node dev/desktopLive.js` |
 | `msgTime.js` | 验正文右下角那个「消息的时刻」（不悬停不露面、原来那颗复制按钮确实没了、今天只写时分 / 别的日子补日期 / 跨年写全年、title 是完整年月日时分秒、没带时刻的按现在算、那颗小字不挡鼠标）：`npm run web:shot -- --fake-pi --script dev/msgTime.js` |
 | `firstLoad.js` | 量“手机上第一次打开”到底下了多少字节、花了多久：把一个真会话文件装进调试后端，用全新浏览器打开页面，按 URL 与消息类型列字节账，报“从点开到能打字 / 到历史画完”：`node dev/firstLoad.js --session <某个 .jsonl> --cpu 4`（4 ≈ 手机的 CPU 档位） |
-| `liveDetail.js` | 验“实时流里思考 / 工具内容一个字都不发”：假模型把思考与 bash 输出撑长（`FAKEPI_LONG=3000`），这一轮推过去的思考增量是 0 字，悬浮出来只画那一行调用（一个字都不取），点开那一行才写上「还有 N 字没带过来，正在取…」、一会儿换成全文；调用参数只带那行摘要（`$ ls` 一直看得见），write 的写入预览要点开才来：`FAKEPI_LONG=3000 npm run web:shot -- --fake-pi --script dev/liveDetail.js` |
-| `detailOnDemand.js` | 同上那条路的另一半（历史重放）：用真会话打开页面，标签上只有工具名、悬浮出来只画输入、点开那一行才把全文取回来：`node dev/detailOnDemand.js --session <某个 .jsonl>` |
+| `liveDetail.js` | 验“实时流里思考 / 工具内容一个字都不发”：假模型把思考与 bash 输出撑长（`FAKEPI_LONG=3000`），这一轮推过去的思考增量是 0 字，点开只画那一行调用（一个字都不取），点开那一行才写上「还有 N 字没带过来，正在取…」、一会儿换成全文；调用参数只带那行摘要（`$ ls` 一直看得见），write 的写入预览要点开才来：`FAKEPI_LONG=3000 npm run web:shot -- --fake-pi --script dev/liveDetail.js` |
+| `detailOnDemand.js` | 同上那条路的另一半（历史重放）：用真会话打开页面，标签上只有工具名、点开只画输入、再点那一行才把全文取回来：`node dev/detailOnDemand.js --session <某个 .jsonl>` |
 | `thinkDetail.js` | 验 `think` 点开不是空的（三种会变成「（没有输出）」的情形）：想一半点「停止生成」后已经想到的那段还在；思考的收尾比正文晚到（真 pi 的 openai-completions 适配器就这样，假模型用 `FAKEPI_LATE_THINK_END=1` 演）时只出一颗标签、点开是全文；模型只给加密内容（一个字都没有）时写「（这段思考没有文字）」：`FAKEPI_LATE_THINK_END=1 FAKEPI_LONG=1500 FAKEPI_TICK_MS=25 npm run web:shot -- --fake-pi --script dev/thinkDetail.js` |
 | `toolStats.js` | 验「工具调用耗时」那张弹窗（项目与会话侧边栏底部「设置」旁边那颗「统计」）：空的时候先说一句还没跑过、跑过之后按工具名一张表（次数 / 合计 / 平均 / 最长）+ 花得最久的几次调用（长命令默认截成 …，点一下展开成完整多行、再点收起）、弹窗开着又来一条结果也跟着长、点叉与 Esc 收起；手机上铺满整屏（窄窗要先点 `<<<` 把抽屉拉出来）：`npm run web:shot -- --width 1200 --height 760 --script dev/toolStats.js` |
 | `envInfo.js` | 验侧边栏底部那颗「工具」（这个会话加载着什么：工具 / 技能 / MCP 服务器）：真会话那一份（会话刚起来时 MCP 还没连上、过几秒挂上来了跟着变），再投一份假清单看几种少见写法（用不了 / 要从脚本里调 / 要先被搜出来的工具、项目级技能、停用的 MCP、配置读错的 MCP）；点叉与 Esc 收起；窄窗要先点 `<<<` 把抽屉拉出来：`npm run web:shot -- --width 1200 --height 800 --script dev/envInfo.js` |

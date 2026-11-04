@@ -6,13 +6,13 @@
  * 现在收着的那些一个字都不问，所以提示框打开之后高矮不会自己变。
  *
  * 这个脚本验这几件事：
- *   · 悬浮出来只写那几行调用（输入）：一条结果块都没有、也没有「还有 N 字没带过来」那行小字；
+ *   · 点开只写那几行调用（输入）：一条结果块都没有、也没有「还有 N 字没带过来」那行小字；
  *   · 就那么放着（后端那边全文留着），提示框的高矮一秒多之后跟刚打开时一样；
  *   · 点一行输入 → 这一条的输出铺开（后端只带了开头的，这一下才去取）、提示框跟着变高；
  *     别的条照旧收着；
  *   · 再点那行 → 收回去，高矮回到刚打开那一刻；
  *   · write / edit 的标题行也是这一套：点它才画 diff / 写入预览；
- *   · 关掉提示框再悬浮回来，又是只画输入（上回点开过也不记得）；
+ *   · 关掉提示框再点开，又是只画输入（上回点开过也不记得）；
  *   · 铺开 / 收起 / 输出长高时弹窗锁住先摆好的那条边：开在下头锁顶边、开在上头锁底边，
  *     不翻转、横向也不挪 —— 鼠标底下那一行不动，弹窗不会自己跑出鼠标底下然后被收掉。
  *
@@ -25,25 +25,25 @@ function post(page, messages) {
     return page.eval(`for (const m of ${JSON.stringify(messages)}) { window.postMessage(m, "*"); } return true;`);
 }
 
-/** 让「工具名 + 次数」那颗标签进入悬浮状态（电脑上没有触屏那一套，靠 mouseenter 触发提示框）。 */
+/** 点开「工具名 + 次数」那颗标签的提示框。 */
 function hoverNamed(page, name) {
     return page.eval(`
         const el = Array.from(document.querySelectorAll(".tool-row .tool-group"))
             .filter((t) => { const n = t.querySelector(".tg-name"); return n && n.textContent === " " + ${JSON.stringify(name)}; })
             .pop();
         if (!el) { throw new Error("页面上没有这个标签：" + ${JSON.stringify(name)}); }
-        el.dispatchEvent(new MouseEvent("mouseenter"));
+        el.click();
         return true;
     `);
 }
 
-/** 鼠标离开那颗标签（提示框宽限片刻才收，跟真人移开手一样）。 */
+/** 收起提示框（点一下别处，跟真人点外面一样）。 */
 function leaveNamed(page, name) {
     return page.eval(`
         const el = Array.from(document.querySelectorAll(".tool-row .tool-group"))
             .filter((t) => { const n = t.querySelector(".tg-name"); return n && n.textContent === " " + ${JSON.stringify(name)}; })
             .pop();
-        if (el) { el.dispatchEvent(new MouseEvent("mouseleave")); }
+        if (el) { document.body.dispatchEvent(new MouseEvent("click", { bubbles: true })); }
         return true;
     `);
 }
@@ -60,7 +60,7 @@ function namedRect(page, name) {
     `);
 }
 
-/** 把那颗标签滚到对话区顶部（block: start）或底部（block: end）。滚完才悬浮：滚动本身会把提示框收掉。 */
+/** 把那颗标签滚到对话区顶部（block: start）或底部（block: end）。滚完才点开：滚动本身会把提示框收掉。 */
 function scrollNamed(page, name, where) {
     return page.eval(`
         const el = Array.from(document.querySelectorAll(".tool-row .tool-group"))
@@ -70,6 +70,32 @@ function scrollNamed(page, name, where) {
         el.scrollIntoView({ block: ${JSON.stringify(where)} });
         return true;
     `);
+}
+
+/** 那颗标签的中心点在屏幕上哪儿（拿真鼠标去停、去点它用）。 */
+function namedCenter(page, name) {
+    return page.eval(`
+        const el = Array.from(document.querySelectorAll(".tool-row .tool-group"))
+            .filter((t) => { const n = t.querySelector(".tg-name"); return n && n.textContent === " " + ${JSON.stringify(name)}; })
+            .pop();
+        if (!el) { throw new Error("页面上没有这个标签：" + ${JSON.stringify(name)}); }
+        const r = el.getBoundingClientRect();
+        return JSON.stringify({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) });
+    `).then(JSON.parse);
+}
+
+/** 真鼠标挪到某处（悬浮、点击只认真事件，dispatchEvent 糊弄不了它们）。 */
+function mouseMove(page, x, y) {
+    return page.cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: Math.round(x), y: Math.round(y), button: "none" });
+}
+
+/** 真鼠标在某处点一下。 */
+function mouseClick(page, x, y) {
+    return (async () => {
+        await mouseMove(page, x, y);
+        await page.cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: Math.round(x), y: Math.round(y), button: "left", clickCount: 1 });
+        await page.cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: Math.round(x), y: Math.round(y), button: "left", clickCount: 1 });
+    })();
 }
 
 /** 提示框现在的样子：高矮、有几行输入、铺开了几条结果、那行「没带过来」的小字在不在、写着什么。 */
@@ -119,14 +145,31 @@ module.exports = async (page) => {
     ]);
     await page.sleep(400);
 
-    // ---- 一、悬浮：只画输入 ----
+    // ---- 零、鼠标停上去不弹，点一下才弹（真鼠标：悬浮那种交互已经去掉了）----
+    const at = await namedCenter(page, "bash");
+    await mouseMove(page, at.x, at.y);
+    await page.sleep(700);
+    const afterHover = await state();
+    console.log("\n零、鼠标停上去（该什么都不弹）：" + (afterHover.open ? "弹了：" + afterHover.text : "没弹"));
+    need(!afterHover.open, "鼠标只是停上去就把提示框弹开了（说好的改成点开）");
+    await mouseClick(page, at.x, at.y);
+    await page.sleep(300);
+    const afterClick = await state();
+    console.log("  点了一下（该弹出来）：" + (afterClick.open ? JSON.stringify(afterClick.text) : "没弹"));
+    await page.shot("tip-click-open.png");
+    need(afterClick.open, "点了一下标签，提示框没弹出来");
+    await page.eval(`document.body.dispatchEvent(new MouseEvent("click", { bubbles: true })); return true;`);
+    await page.sleep(200);
+    need(!(await state()).open, "点了一下别处，提示框没收");
+
+    // ---- 一、点开：只画输入 ----
     await hoverNamed(page, "bash");
     await page.sleep(600);
     const opened = await state();
-    console.log("\n一、悬浮出来（只画输入）：\n  高 " + opened.height + "，输入 " + opened.inputs + " 行，铺开的结果 " + opened.outputs
+    console.log("\n一、点开（只画输入）：\n  高 " + opened.height + "，输入 " + opened.inputs + " 行，铺开的结果 " + opened.outputs
         + " 块，「没带过来」小字 " + opened.clips + " 条\n  写着：" + opened.text);
     await page.shot("tip-input-only.png");
-    need(opened.open, "悬浮之后提示框没出来");
+    need(opened.open, "点开之后提示框没出来");
     need(opened.outputs === 0, "刚打开就把结果铺开了（该只画输入）：" + JSON.stringify(opened));
     need(opened.clips === 0, "刚打开就写了「还有 N 字没带过来」（那说明正在取，高矮会跳）：" + JSON.stringify(opened));
 
@@ -164,7 +207,7 @@ module.exports = async (page) => {
     await page.sleep(600);
     const editOpened = await state();
     console.log("\n五、edit 的提示框（开头只写改了哪个文件）：\n  高 " + editOpened.height + "，diff " + editOpened.diffs + " 块\n  写着：" + editOpened.text);
-    need(editOpened.open, "edit 那颗标签悬浮之后提示框没出来");
+    need(editOpened.open, "edit 那颗标签点开之后提示框没出来");
     need(editOpened.diffs === 0, "edit 的提示框一打开就把 diff 画出来了（该点标题行才画）：" + JSON.stringify(editOpened));
     await page.eval(`const el = document.querySelectorAll(".tag-tip .tag-tip-click")[0];
         el.dispatchEvent(new MouseEvent("click", { bubbles: true })); return true;`);
@@ -176,13 +219,13 @@ module.exports = async (page) => {
     await leaveNamed(page, "edit");
     await page.sleep(400);
 
-    // ---- 六、关掉再悬浮回来：又是只画输入 ----
+    // ---- 六、关掉再点开：又是只画输入 ----
     await hoverNamed(page, "bash");
     await page.sleep(600);
     const reopened = await state();
-    console.log("\n六、关掉再悬浮回来（上回点开过也不记得）：\n  铺开的结果 " + reopened.outputs + " 块，高 " + reopened.height);
-    need(reopened.outputs === 0, "重新悬浮时还记着上回铺开的状态：" + JSON.stringify(reopened));
-    need(reopened.height === opened.height, "重新悬浮时的高矮跟第一次打开不一样（" + opened.height + " → " + reopened.height + "）");
+    console.log("\n六、关掉再点开（上回点开过也不记得）：\n  铺开的结果 " + reopened.outputs + " 块，高 " + reopened.height);
+    need(reopened.outputs === 0, "重新点开时还记着上回铺开的状态：" + JSON.stringify(reopened));
+    need(reopened.height === opened.height, "重新点开时的高矮跟第一次打开不一样（" + opened.height + " → " + reopened.height + "）");
     await leaveNamed(page, "bash");
     await page.sleep(300);
 
@@ -205,6 +248,8 @@ module.exports = async (page) => {
     for (const { where, name, scroll } of cases) {
         if (scroll) {
             await scrollNamed(page, name, where);
+            // 滚动本身会把提示框收掉（滚动事件还比这一下晚到一帧）：等它过去再点
+            await page.sleep(300);
         } else {
             // 上一轮把对话区滚到了顶，界面当成「用户在看」就不再自动跟底；悬浮前手动滚回底部
             await page.eval(`document.querySelector(".session-pane").scrollTop = 1e9; return true;`);

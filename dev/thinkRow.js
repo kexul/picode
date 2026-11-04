@@ -69,22 +69,22 @@ async function tipText(page) {
     `);
 }
 
-/** 让名字开头是 name 的那个标签进入悬浮状态（电脑上没有触屏那一套，靠 mouseenter 触发提示框）。 */
+/** 点一下名字开头是 name 的那个标签，把提示框打开。 */
 function hoverTag(page, name) {
     return page.eval(`
         const el = Array.from(document.querySelectorAll(".tool-group")).find((t) => t.textContent.trim().startsWith(${JSON.stringify(name)}));
         if (!el) { throw new Error("页面上没有这个标签：" + ${JSON.stringify(name)}); }
-        el.dispatchEvent(new MouseEvent("mouseenter"));
+        el.click();
         return true;
     `);
 }
 
-/** 悬浮结束（提示框有一段宽限时间才收，见 scheduleTagTipHide）。 */
+/** 收起提示框（点一下别处）。 */
 function leaveTag(page, name) {
     return page.eval(`
         const el = Array.from(document.querySelectorAll(".tool-group")).find((t) => t.textContent.trim().startsWith(${JSON.stringify(name)}));
         if (!el) { return false; }
-        el.dispatchEvent(new MouseEvent("mouseleave"));
+        document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
         return true;
     `);
 }

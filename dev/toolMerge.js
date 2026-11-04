@@ -128,14 +128,14 @@ module.exports = async (page) => {
     await page.eval(`
         const el = Array.from(document.querySelectorAll(".tool-group")).find((t) => t.textContent.trim().startsWith("codemode"));
         if (!el) { throw new Error("页面上没有 codemode 标签"); }
-        el.dispatchEvent(new MouseEvent("mouseenter"));
+        el.click();
         return true;
     `);
     await page.sleep(500);
     await page.shot("merge-codemode-tip.png");
     await page.eval(`
         const el = Array.from(document.querySelectorAll(".tool-group")).find((t) => t.textContent.trim().startsWith("codemode"));
-        if (el) { el.dispatchEvent(new MouseEvent("mouseleave")); }
+        if (el) { document.body.dispatchEvent(new MouseEvent("click", { bubbles: true })); }
         return true;
     `);
     await page.sleep(200);
@@ -333,17 +333,17 @@ module.exports = async (page) => {
     console.log("\n  全部通过。");
 };
 
-/** 让页面上的某个元素进入悬浮状态（电脑上没有触屏那一套，靠 mouseenter 触发提示框）。 */
+/** 点一下页面上的某个元素，把它的提示框打开。 */
 function hover(page, selector) {
-    return page.eval(`const el = document.querySelector(${JSON.stringify(selector)}); if (!el) { throw new Error("页面上没有这个元素："); } el.dispatchEvent(new MouseEvent("mouseenter")); return true;`);
+    return page.eval(`const el = document.querySelector(${JSON.stringify(selector)}); if (!el) { throw new Error("页面上没有这个元素："); } el.click(); return true;`);
 }
 
-/** 悬浮结束（提示框有一段宽限时间才收，见 scheduleTagTipHide）。 */
+/** 收起提示框（点一下别处）。 */
 function leave(page, selector) {
-    return page.eval(`const el = document.querySelector(${JSON.stringify(selector)}); if (!el) { return false; } el.dispatchEvent(new MouseEvent("mouseleave")); return true;`);
+    return page.eval(`const el = document.querySelector(${JSON.stringify(selector)}); if (!el) { return false; } document.body.dispatchEvent(new MouseEvent("click", { bubbles: true })); return true;`);
 }
 
-/** 让「工具名 + 次数」那颗标签进入悬浮状态：按标签上的工具名找，页面上有好几颗时取最后那一颗
+/** 点开「工具名 + 次数」那颗标签的提示框：按标签上的工具名找，页面上有好几颗时取最后那一颗
  *  （就是刚投进去的那一批）。 */
 function hoverNamed(page, name) {
     return page.eval(`
@@ -351,19 +351,19 @@ function hoverNamed(page, name) {
             .filter((t) => { const n = t.querySelector(".tg-name"); return n && n.textContent === " " + ${JSON.stringify(name)}; })
             .pop();
         if (!el) { throw new Error("页面上没有这个标签：" + ${JSON.stringify(name)}); }
-        el.dispatchEvent(new MouseEvent("mouseenter"));
+        el.click();
         return true;
     `);
 }
 
-/** 同一颗标签的悬浮结束。 */
+/** 收起提示框（点一下别处）。 */
 function leaveNamed(page, name) {
     return page.eval(`
         const el = Array.from(document.querySelectorAll(".tool-row .tool-group"))
             .filter((t) => { const n = t.querySelector(".tg-name"); return n && n.textContent === " " + ${JSON.stringify(name)}; })
             .pop();
         if (!el) { return false; }
-        el.dispatchEvent(new MouseEvent("mouseleave"));
+        document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
         return true;
     `);
 }

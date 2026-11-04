@@ -883,26 +883,25 @@ module.exports = async (page) => {
         console.log("（等超时：" + what + "，现在这样：" + JSON.stringify(got) + "）");
         return got;
     };
-    /** write 卡片那颗小标签：把它的提示框弄出来（电脑上悬浮、触屏上点一下，两种都发一下动作），
+    /** write 卡片那颗小标签：点一下把它的提示框弄出来，
      *  再把里面那行标题点开——提示框打开时只画输入，diff 与「跳转 / 回滚」点了那一行才铺开。 */
     const showJumpTip = async () => {
         const what = await page.eval(`
             const pill = Array.from(document.querySelectorAll("#messages .tool-group"))
                 .find(function (p) { const n = p.querySelector(".tg-name"); return n && n.textContent.trim() === "write"; });
             if (!pill) { return "没有 write 那个标签"; }
-            pill.dispatchEvent(new MouseEvent("mouseenter"));
             pill.click();
             return "把提示框弄出来了";
         `);
         if (what !== "把提示框弄出来了") { return what; }
-        for (let i = 0; i < 20; i++) {   // 电脑上 200 毫秒后才弹出来
+        for (let i = 0; i < 20; i++) {   // 点了就弹出来（留点余量等它画完）
             if ((Number(await page.eval(`return document.querySelectorAll(".tag-tip .tag-tip-click").length`)) || 0) > 0) { break; }
             await page.sleep(100);
         }
         await page.expandTip();
         return what;
     };
-    /** 等提示框里那颗「跳转」画出来（电脑上悬浮 200ms 后才画），顺手把它那句悬停说明读回来。 */
+    /** 等提示框里那颗「跳转」画出来（点开那一行之后才画），顺手把它那句悬停说明读回来。 */
     const waitJumpBtn = async () => {
         const started = Date.now();
         let got = { found: false, title: "" };
@@ -924,17 +923,17 @@ module.exports = async (page) => {
         return "点了";
     `);
 
-    /** edit 卡片的提示框：先把别人的提示框收掉（悬浮着的那颗先移开），悬浮这颗小标签，
+    /** edit 卡片的提示框：先点一下别处把别人的提示框收掉，再点这颗小标签，
      *  再点开那一行（diff 是点了那一行才画的）。 */
     const showEditDiffTip = async () => {
-        await page.eval(`document.querySelectorAll("#messages .tool-group").forEach(function (p) { p.dispatchEvent(new MouseEvent("mouseleave")); }); return true;`);
-        await page.sleep(500);
+        await page.eval(`document.body.dispatchEvent(new MouseEvent("click", { bubbles: true })); return true;`);
+        await page.sleep(200);
         const what = await page.eval(`
             const pill = Array.from(document.querySelectorAll("#messages .tool-group"))
                 .filter(function (p) { const n = p.querySelector(".tg-name"); return n && n.textContent.trim() === "edit"; })
                 .pop();
             if (!pill) { return "没有 edit 那个标签"; }
-            pill.dispatchEvent(new MouseEvent("mouseenter"));
+            pill.click();
             return "把提示框弄出来了";
         `);
         if (what !== "把提示框弄出来了") { return what; }

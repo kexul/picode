@@ -313,6 +313,9 @@
   .tool { display: inline-block; position: relative; min-width: 0; max-width: 100%; margin: 2px 4px 0 0; vertical-align: middle; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.7; white-space: normal; overflow-wrap: anywhere; background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1)); border-radius: 4px; padding: 2px 6px; cursor: default; transition: background 150ms, opacity 150ms; }
   .tool-row .tool { margin: 0; }
   .tool:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); opacity: 1; }
+  /* 点一下能打开提示框的那些（工具标签、跑着的那一行里没写完的那条）：手形光标，
+     不然看不出它点得下去（见 chat.js 的 attachTagTipHandlers）。放在 .tool 后面才能盖掉它的 cursor。 */
+  .tip-click { cursor: pointer; }
   .tool-icon { display: inline-block; line-height: 0; vertical-align: middle; transform-origin: 50% 50%; }
   .tool-icon > svg { display: block; }
   /* 工具标签上这颗齿轮不转：这排标签是“跑过哪些调用”的记账（跑完的、还在跑的都在里头），
@@ -386,8 +389,8 @@
   .tool.tool-group .tg-count { display: inline-flex; align-items: center; justify-content: center; line-height: 1; padding: 0.12em 0.32em 0.05em; margin-left: 0.5em; border-radius: 3px; background: rgba(128,128,128,0.28); vertical-align: baseline; }
   /* 只调一次时不写次数：空的方块整个不出现，免得留一块没字的灰 */
   .tool.tool-group .tg-count:empty { display: none; }
-  /* 工具标签自绘提示框（系统 title 提示要等约一秒，改用短延迟的自绘框），随主题配色；
-     手机电脑统一：内容可滚动看全部结果；电脑鼠标移开收起，触屏点外面收起 */
+  /* 工具标签的提示框：点一下标签打开、开在它旁边，点外面或再点一下标签收起（不再跟鼠标悬浮走）；
+     随主题配色；手机电脑统一：内容可滚动看全部结果 */
   .tag-tip { position: fixed; z-index: 900; display: flex; flex-direction: column; max-width: 640px; max-height: 60vh; padding: 6px 10px; border-radius: 4px; border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-panel-border, rgba(128,128,128,0.35))); background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, #252526)); color: var(--vscode-editorHoverWidget-foreground, var(--vscode-editor-foreground, inherit)); font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
   .tag-tip-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
   /* 输入（调用参数）块：比外框稍深一点的底色（5% 黑色透明叠加），和输出（结果）区分开 */
@@ -638,7 +641,7 @@
   .file-item .cmd-badge.cmd-extension { color: var(--vscode-charts-purple, #b180d7); }
   .file-item .cmd-badge.cmd-builtin { color: var(--vscode-charts-orange, #d18616); }
   /* edit/write 收起态是工具行里的小标签（跟别的工具一样按名字收，改了几处就带次数），
-     展开内容全在悬浮提示框里，不再有整张卡片。
+     展开内容全在点开的提示框里，不再有整张卡片。
      提示框内：一条调用一块，标题行复用 .tag-tip-call，标题右边就是这一条的「跳转 / 回滚」，
      下面接 diff / 写入预览 —— 按钮就待在它改的那个文件旁边，不用滚过 diff 才找得到 */
   .tag-tip .tag-tip-head { display: flex; align-items: center; gap: 8px; }

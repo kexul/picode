@@ -4,7 +4,7 @@
  *
  * 模型爱写一长串：cd 到某个目录 && 跑个脚本 | sed 看头几行。整条摆在那一行上，人一眼看不出在干什么
  * （一行放不下还得横着滚半天）。现在按字面把命令切成几段，只写「正经干活」的那段，后面灰一个「+N」，
- * 整条留在这一行的悬浮提示里（跟工具标签用的同一套提示框，见 chat.js 的 runningLineText）。
+ * 整条留在点开这一行的提示框里（跟工具标签用的同一套，只是改成点开，见 chat.js 的 runningLineText）。
  * 一次验这几件事：
  *   · cd 到某个目录 && 跑脚本 | sed 看输出 → 只写脚本那条，后面「+2」；
  *   · npm test 2>&1 | tail -30 → 2>&1 不算分隔符，只写「npm test 2>&1」，「+1」；
@@ -19,7 +19,7 @@
  *   · 循环（`for …; do …; done`）→ 拿循环体里的活当核心，`for` / `do` / `if` 那层剥掉，
  *     灰字照旧只是一个「+N」（不再写「循环里」这句话）；`done` / `fi` / `[ -f … ]` / `continue` 不抢核心；
  *     循环体里只有 echo 这种 → 整条照原样写；
- *   · 悬浮这一行 → 提示框里是整条命令（一个字不少）；
+ *   · 点开这一行 → 提示框里是整条命令（一个字不少）；
  *   · 「+N」那一句不跟着字横向滚（放不下的字自己滚，它不动）；
  *   · 不是 bash 的调用（read / grep）照旧整条写，不写「+N」。
  *
@@ -93,8 +93,6 @@ module.exports = async (page) => {
     const problems = [];
 
     const post = (messages) => page.eval(`for (const m of ${JSON.stringify(messages)}) { window.postMessage(m, "*"); } return true;`);
-    /** 把真鼠标挪到某个地方（CSS 的 :hover 只认真鼠标，dispatchEvent 糊弄不了它）。 */
-    const move = (x, y) => page.cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: Math.round(x), y: Math.round(y), button: "none" });
     /** 这一行现在写着什么。 */
     const state = () => page.eval(`
         const pane = document.querySelector(".session-view:not(.off) .session-pane");
@@ -127,28 +125,27 @@ module.exports = async (page) => {
         if (s.text !== c.main) { problems.push("核心那段挑得不对：该写 " + JSON.stringify(c.main) + "，写成了 " + JSON.stringify(s.text)); }
         if (s.more !== c.more) { problems.push("后面那句「+N」不对：该是 " + JSON.stringify(c.more) + "，写成了 " + JSON.stringify(s.more)); }
 
-        // ---- 第一幕：悬浮这一行 → 提示框里是整条命令（一个字不少）----
+        // ---- 第一幕：点开这一行 → 提示框里是整条命令（一个字不少）----
         if (seq === 1) {
-            const at = await page.eval(`
+            const ok = await page.eval(`
                 const item = document.querySelector(".session-view:not(.off) .session-pane .tool-running .tool-running-item");
-                if (!item) { return null; }
-                const r = item.getBoundingClientRect();
-                return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                if (!item) { return false; }
+                item.click();
+                return true;
             `);
-            if (at) {
-                await move(at.x, at.y);
+            if (ok) {
                 await page.sleep(500);
                 const tip = await page.eval(`
                     const el = document.querySelector(".tag-tip");
                     if (!el || el.classList.contains("hidden")) { return null; }
                     return el.textContent;
                 `);
-                console.log("   悬浮这一行：提示框里写的是 " + JSON.stringify(tip));
-                if (!tip) { problems.push("悬浮这一行没出提示框（整条命令就没地方看了）"); }
+                console.log("   点开这一行：提示框里写的是 " + JSON.stringify(tip));
+                if (!tip) { problems.push("点开这一行没出提示框（整条命令就没地方看了）"); }
                 else if (!tip.includes(c.cmd)) { problems.push("提示框里不是整条命令：" + JSON.stringify(tip)); }
                 await page.shot("core-command-tip.png");
-                await move(6, 6);   // 鼠标挪开，别挡着后面的截图
-                await page.sleep(300);
+                await page.eval(`document.body.dispatchEvent(new MouseEvent("click", { bubbles: true })); return true;`);
+                await page.sleep(200);
             }
         }
 

@@ -7,8 +7,8 @@
  *
  * 假模型那边的那一路（实时流）见 dev/liveDetail.js。
  *
- * 用真后端 + 真 pi 打开一个真会话（不发消息），在页面上挨个悬浮标签，检查：
- *   · 悬浮出来只写那几行调用（输入）：一个字不取，也就没有「还有 N 字没带过来」那行小字
+ * 用真后端 + 真 pi 打开一个真会话（不发消息），在页面上挨个点开标签，检查：
+ *   · 点开只写那几行调用（输入）：一个字不取，也就没有「还有 N 字没带过来」那行小字
  *     （不然全文一回来整块高矮就跳一下）；
  *   · 点开那一行输入：这才叫取全文，那行小字出来；
  *   · 一秒内全文回来，提示框里变成完整内容，那行小字消失。
@@ -39,13 +39,13 @@ process.env.PI_CODING_AGENT_SESSION_DIR = sessionsRoot;
 const { createHarness } = require("./harness.js");
 const { openPage, sleep } = require("./cdp.js");
 
-/** 悬浮到第 n 个标签上，返回提示框内容。 */
+/** 点开第 n 个标签，返回提示框内容。 */
 async function hoverTip(page, index) {
     return await page.eval(`
         const tags = Array.from(document.querySelectorAll('.session-view:not(.off) .session-pane .tool'));
         const tag = tags[${index}];
         if (!tag) { return { error: "没有第 ${index} 个标签（一共 " + tags.length + " 个）" }; }
-        tag.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
+        tag.click();
         return { total: tags.length, cls: tag.className, name: (tag.innerText || '').trim().slice(0, 30) };
     `);
 }
@@ -68,7 +68,7 @@ async function tipState(page) {
 async function hideTip(page) {
     await page.eval(`
         document.querySelectorAll('.session-view:not(.off) .session-pane .tool').forEach((t) => {
-            t.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+            document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
         });
         return true;
     `);
@@ -156,7 +156,7 @@ async function main() {
             });
         `);
         if (stuck.length > 0) { console.log("    还差：" + JSON.stringify(stuck)); }
-        if (!onlyInput) { console.log("    （悬浮出来就取了全文：收着的时候就该一个字都不问）"); }
+        if (!onlyInput) { console.log("    （点开就取了全文：收着的时候就该一个字都不问）"); }
         if (!noteOk) { console.log("    （这次没看到那行小字：点开时内容已经取到了）"); }
         const grown = after.open && after.chars > first.chars;
         const noteGone = after.open && !after.note;

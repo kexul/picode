@@ -65,12 +65,12 @@ function tipState(page) {
     `);
 }
 
-/** 悬浮到某个工具标签上（电脑上没有触屏那一套，靠 mouseenter 触发提示框）。 */
+/** 点开某个工具标签的提示框。 */
 function hoverTag(page, name) {
     return page.eval(`
         const el = Array.from(document.querySelectorAll(".tool-group")).find((t) => t.textContent.trim().startsWith(${JSON.stringify(name)}));
         if (!el) { throw new Error("页面上没有这个标签：" + ${JSON.stringify(name)}); }
-        el.dispatchEvent(new MouseEvent("mouseenter"));
+        el.click();
         return true;
     `);
 }
@@ -78,7 +78,7 @@ function hoverTag(page, name) {
 function leaveTag(page, name) {
     return page.eval(`
         const el = Array.from(document.querySelectorAll(".tool-group")).find((t) => t.textContent.trim().startsWith(${JSON.stringify(name)}));
-        if (el) { el.dispatchEvent(new MouseEvent("mouseleave")); }
+        if (el) { document.body.dispatchEvent(new MouseEvent("click", { bubbles: true })); }
         return true;
     `);
 }
@@ -113,7 +113,7 @@ module.exports = async (page) => {
         return true;
     `);
 
-    // ---- 第一幕：先攒一段没多长的思考（此时没人悬浮，提示框没开）----
+    // ---- 第一幕：先攒一段没多长的思考（此时没点开，提示框没开）----
     await page.eval(`
         window.postMessage({ type: "clear", keepDraft: true }, "*");
         window.postMessage({ type: "thinkingStart" }, "*");
@@ -132,8 +132,8 @@ module.exports = async (page) => {
     await page.sleep(400);
     await page.expandTip();   // 提示框打开时只画输入：点开那一行，思考正文才铺开、才跟着长
     const opened = await tipState(page);
-    console.log(`\n悬浮 think 标签后提示框：${JSON.stringify(opened)}`);
-    if (!opened.shown) { problems.push("悬浮 think 标签没能把提示框开出来"); }
+    console.log(`\n点开 think 标签后提示框：${JSON.stringify(opened)}`);
+    if (!opened.shown) { problems.push("点开 think 标签没能把提示框开出来"); }
 
     // 数一数提示框内容被重画了几次（一次重画在整个内容区里换一批节点，算一次 MutationObserver 回调）
     await countFills(page);
@@ -236,7 +236,7 @@ module.exports = async (page) => {
     await page.eval(`
         const el = Array.from(document.querySelectorAll(".tool")).find((t) => !t.classList.contains("tool-group") && t.textContent.includes("task_peek"));
         if (!el) { throw new Error("没找到单独那个 task_peek 标签"); }
-        el.dispatchEvent(new MouseEvent("mouseenter"));
+        el.click();
         return true;
     `);
     await page.sleep(400);
@@ -248,13 +248,14 @@ module.exports = async (page) => {
     const beforeSingle = Date.now();
     for (const bit of bits) {
         partial += bit;
-        await page.eval(`window.postMessage({ type: "toolResultUpdate", toolCallId: "taba-1", resultText: ${JSON.stringify(partial)} }, "*"); return true;`);
+        await page.eval(`window.postMessage({ type: "toolResultUpdate", toolCallId: "task-1", resultText: ${JSON.stringify(partial)} }, "*"); return true;`);
     }
     await page.sleep(500);
     const singleFills = await takeFills(page);
     console.log(`\n第七幕：单独一个标签（task_peek）边跑边长 ${partial.length} 字，提示框重画了 ${singleFills} 次` +
         `（${bits.length} 次更新，用了 ${Date.now() - beforeSingle} 毫秒）`);
     if (singleFills >= bits.length / 4) { problems.push(`单独标签的提示框没节流：${bits.length} 次更新重画了 ${singleFills} 次`); }
+    if (singleFills === 0) { problems.push("单独标签的提示框一次都没重画（多半是没打开、或者铺开的那条没在长）"); }
     await page.shot("think-tip-single.png");
 
     const longTasks = await page.eval("return window.__tips || []");

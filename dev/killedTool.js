@@ -31,10 +31,10 @@ module.exports = async (page) => {
         .filter((t) => t.includes("pi 进程") || t.includes("中断")).join(" / "));
     await page.shot("killed-after.png");
 
-    // 鼠标停到那颗标签上：提示框里应该写着「这一轮被中断，没有结果」
+    // 点开那颗标签：提示框里应该写着「这一轮被中断，没有结果」
     await page.eval(`
         const tag = Array.from(document.querySelectorAll(".tool")).find((e) => e.innerText.includes("bash"));
-        if (tag) { tag.dispatchEvent(new MouseEvent("mouseenter", { bubbles: false })); }
+        if (tag) { tag.click(); }
         return true;
     `);
     await page.sleep(500);

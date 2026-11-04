@@ -83,10 +83,10 @@ module.exports = async (page) => {
     console.log("重放完：" + await page.eval(PROBE));
     await page.shot("orphan-replay.png");
 
-    // 鼠标停到那条 read 上：提示框里应该写着「这一轮被中断，没有结果」
+    // 点开那条 read：提示框里应该写着「这一轮被中断，没有结果」
     await page.eval(`
         const tag = Array.from(document.querySelectorAll(".tool")).find((e) => e.innerText.includes("read"));
-        if (tag) { tag.dispatchEvent(new MouseEvent("mouseenter", { bubbles: false })); }
+        if (tag) { tag.click(); }
         return true;
     `);
     await page.sleep(500);
