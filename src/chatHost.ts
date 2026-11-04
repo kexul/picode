@@ -20,7 +20,7 @@ import * as path from "path";
 import type { AskRequest } from "./askProtocol";
 import { writeAskAnswer } from "./askProtocol";
 import type { MessageSink } from "./sessionRuntime";
-import { ChatControllerBase, type ViewOptionItem } from "./chatControllerBase";
+import { ChatControllerBase, type ViewOptionItem, type WorkspacePage } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
 import { isPackaged } from "./appAssets";
@@ -33,6 +33,7 @@ import {
     listSessionFiles,
     readProjectEntry,
     rememberProjectDir,
+    type ProjectDirEntry,
 } from "./sessionStore";
 import { listDirectories } from "./dirBrowse";
 import { findFileContents, findFileNames, findPathCandidates } from "./fileSearch";
@@ -538,14 +539,16 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         // 清单是启动时扫的，不补它就得到重启后才出现在这里
         await Promise.all(Array.from(this.panels.values()).map((rt) => rememberProjectDir(rt.cwd)));
         // 每个目录 readdir 一下 + stat 最新那一个会话文件（见 sessionStore.listProjectDirs）
-        state.workspaceDirs = await listProjectDirs();
-        state.workspaceOffset = 0;
-        state.workspaceSeen = new Set();
+        // 拿一页就用一份新的游标：新建 / 关掉会话时会连着推好几份，共用一份的话
+        // 两份一起往前走，某一页就会少几行、顺序也乱（看着就是“工作区排来排去”）
+        const page = this.newWorkspacePage(await listProjectDirs());
+        const items = await this.takeWorkspacePage(page);
+        state.workspacePage = page;
         const payload: Record<string, unknown> = {
             title: "项目与会话",
             spaces: {
-                items: await this.takeWorkspacePage(clientId),
-                hasMore: state.workspaceOffset < state.workspaceDirs.length,
+                items,
+                hasMore: page.offset < page.dirs.length,
             },
         };
         // 界面展开着的那几组：第一批会话跟着工作区一块送过去（见 media/chat.js 的 expandedDirsForHost）。
@@ -591,16 +594,15 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 取下一批工作区行（一次 WORKSPACE_BATCH 个）。
      * 到这里才真进目录（readdir + 读一个会话文件的开头）—— 只对真要显示的那几行做。
      */
-    private async takeWorkspacePage(clientId: string): Promise<any[]> {
-        const state = this.pickerStateOf(clientId);
+    private async takeWorkspacePage(page: WorkspacePage): Promise<any[]> {
         const rows: any[] = [];
-        while (rows.length < ChatHost.WORKSPACE_BATCH && state.workspaceOffset < state.workspaceDirs.length) {
-            const entry = state.workspaceDirs[state.workspaceOffset++];
+        while (rows.length < ChatHost.WORKSPACE_BATCH && page.offset < page.dirs.length) {
+            const entry = page.dirs[page.offset++];
             const p = await readProjectEntry(entry);
             if (!p) { continue; }                                // 空目录 / 坏文件：跳过，不占一行
             const key = dirKey(p.cwd);
-            if (state.workspaceSeen.has(key)) { continue; }       // 当前工作区另有上面那一行；同一个目录只占一行
-            state.workspaceSeen.add(key);
+            if (page.seen.has(key)) { continue; }                  // 同一个目录只占一行
+            page.seen.add(key);
             rows.push({
                 label: p.name,
                 file: p.cwd,
@@ -611,16 +613,23 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return rows;
     }
 
+    /** 一页工作区行的开头：目录清单从一开始拿，「已列过」从空开始。 */
+    private newWorkspacePage(dirs: ProjectDirEntry[]): WorkspacePage {
+        return { dirs, offset: 0, seen: new Set() };
+    }
+
     /** 面板里点工作区那块的「加载更多」：再送一批过去。 */
     public async loadMoreWorkspaces(): Promise<void> {
         const clientId = this.currentPageId;
         const state = this.pickerStateOf(clientId);
         if (!state.workspaceOpen) { return; }
-        const items = await this.takeWorkspacePage(clientId);
+        const page = state.workspacePage;
+        if (!page) { return; }
+        const items = await this.takeWorkspacePage(page);
         this.sendOverlayTo(clientId, {
             type: "workspacePageAppend",
             items,
-            hasMore: state.workspaceOffset < state.workspaceDirs.length,
+            hasMore: page.offset < page.dirs.length,
         });
     }
 

@@ -10157,8 +10157,8 @@
         // 工作区行：就是个组头——小三角、文件夹图标、名字 + 目录路径一行。
         // 点整行展开 / 收起；行尾那颗加号是在这个目录里开新会话。
         el.classList.add("pk-history", "pk-space-head");
-        // 当前会话所在的那个目录标一颗「当前」（它不因此挪位置：清单的顺序一直是宿主那份，
-        // 见 spaceRowsWithCurrent）—— 切会话时一行都不动，只有这颗标跟着走。
+        // 当前会话所在的那个目录把名字写成蓝色（它不因此挪位置：清单的顺序一直是宿主那份，
+        // 见 spaceRowsWithCurrent）—— 切会话时一行都不动，只有那颗蓝跟着走。
         const expanded = groupExpanded(item.file);
         if (expanded) { el.classList.add("expanded"); }
         const main = document.createElement("div"); main.className = "pk-history-main";
@@ -10168,11 +10168,10 @@
         const icon = document.createElement("span"); icon.className = "pk-row-icon"; icon.innerHTML = ICONS.folder;
         main.appendChild(icon);
         const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.label || "";
+        // 当前会话跑在这个目录：名字写成蓝色（位置不动：清单的顺序一直是宿主那份，
+        // 见 spaceRowsWithCurrent；切的会话变了就这一颗蓝跟着走）
+        if (item.current) { title.classList.add("pk-space-current"); }
         main.appendChild(title);
-        if (item.current) {
-          const cur = document.createElement("span"); cur.className = "pk-open-tag pk-space-current"; cur.textContent = "当前";
-          main.appendChild(cur);
-        }
         // 目录的完整路径就摆在名字后面（淡淡的；太长从尾巴上截，整条路径鼠标停上去还能看到）：
         // 名字前面那一段父目录才是认目录的关键，所以截的是尾巴不是开头。
         if (item.folderPath) {

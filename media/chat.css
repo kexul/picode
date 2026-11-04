@@ -1081,10 +1081,10 @@
     flex: 1 1 auto; min-width: 0; font-size: 11px; opacity: 0.55;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  /* 当前会话所在的那个工作区：名字后面挂一颗「当前」（跟会话行上的「已打开」同一款小标）。
-     它不改变行的位置——整份清单的顺序一直是宿主给的那一份（见 chat.js 的 spaceRowsWithCurrent）。 */
-  .pk-host.pk-workspace .pk-item.pk-space-head .pk-open-tag.pk-space-current {
-    flex: none; align-self: center;
+  /* 当前会话所在的那个工作区：名字写成蓝色（不挪位置——整份清单的顺序一直是宿主给的那一份，
+     见 chat.js 的 spaceRowsWithCurrent）。 */
+  .pk-host.pk-workspace .pk-item.pk-space-head .pk-history-title.pk-space-current {
+    color: var(--vscode-textLink-foreground, #3794ff);
   }
   /* 名字与路径挨得紧一点（基础行距是 10px，看着太散） */
   .pk-host.pk-workspace .pk-item.pk-space-head .pk-history-main { gap: 7px; }

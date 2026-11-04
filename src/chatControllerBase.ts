@@ -141,13 +141,22 @@ export interface PickerState {
     /** 这个面板是不是常驻在右边那一列（常驻的不等人选、收起是界面自己说了算）。 */
     workspaceDock: boolean;
     /** 「项目与会话」面板在这块屏上开着（常驻那一列或滑出来的抽屉都算）。
-     *  常驻那一列收起时宿主不知道（界面自己说了算），所以它可能留着 true：推过去会被丢掉。 */
+     *  常驻那一列收起时宙主不知道（界面自己说了算），所以它可能留着 true：推过去会被丢掉。 */
     workspaceOpen: boolean;
-    /** 项目面板下半段还没拿出来的项目目录（按最近活动倒序）与游标。 */
-    workspaceDirs: ProjectDirEntry[];
-    workspaceOffset: number;
+    /** 项目面板下半段那几行的来源：目录清单（按最近活动倒序）+ 拿了几行 + 已经列过的目录。
+     *  每拿一页就换一份新的（见 chatHost.ts 的 buildWorkspacePanel）：新建 / 关掉会话时会连着
+     *  推好几份，大家抢同一份游标的话某一页就会少几行、顺序也乱。「加载更多」才接着上一份往后拿。 */
+    workspacePage: WorkspacePage | null;
+}
+
+/** 项目面板下半段那一页的游标（一份页面自己一份，见 PickerState.workspacePage）。 */
+export interface WorkspacePage {
+    /** 还没拿出来的项目目录（按最近活动倒序）。 */
+    dirs: ProjectDirEntry[];
+    /** 拿到第几个了。 */
+    offset: number;
     /** 已经列过的目录（按真实路径归一，见 dirKey）：同一个项目只占一行。 */
-    workspaceSeen: Set<string>;
+    seen: Set<string>;
 }
 
 export abstract class ChatControllerBase implements RuntimeHost {
@@ -201,7 +210,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             st = {
                 kind: "", resolve: null,
                 historyFiles: [], historyOffset: 0, workspaceDock: false, workspaceOpen: false,
-                workspaceDirs: [], workspaceOffset: 0, workspaceSeen: new Set(),
+                workspacePage: null,
             };
             this.pickers.set(clientId, st);
         }

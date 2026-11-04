@@ -500,6 +500,9 @@ export async function rememberProjectDir(cwd: string): Promise<void> {
     if (dirs.some((d) => dirKey(d.dir) === key)) { return; }
     const entry = await scanProjectDir(dir);
     if (!entry) { return; }
+    // 等扫的这会儿可能已经有人把它补进去了（同一份清单会被几块屏同时问）：
+    // 再确认一次，不然同一目录会在清单里占两格，拉出来的那几行就跟着少一行。
+    if (dirs.some((d) => dirKey(d.dir) === key)) { return; }
     dirs.push(entry);
     dirs.sort((a, b) => b.lastActivity - a.lastActivity);
 }

@@ -7,7 +7,7 @@
  * 面板现在长这样：
  *   · 「正在对话」一段在最上面：所有开着的会话（不分目录、没有「新建会话」那一行）；
  *   · 「工作区」那一块是分组的：一行一个目录（顺序是最近有人聊过的在前，当前会话跑在哪个目录，
- *     那一行的名字后面挂一颗「当前」，切会话不重排），点整行展开 / 收起，
+ *     那一行的名字就写成蓝色，切会话不重排），点整行展开 / 收起，
  *     展开以后挂它的会话（一组一次 5 条，组里末尾一颗「加载更多」，子会话不出现）；
  *   · 行尾那颗加号（鼠标停在这一行才露出来）= 在那个目录里新建会话；
  *   · 「工作区」标题右边那颗加号 = 原来的「打开文件夹…」那一行。
@@ -77,7 +77,7 @@ const LOOK = `
         currentDir: ((((document.getElementById("sessionName") || {}).dataset || {}).cwd) || "").trim(),
         markedHeads: items.filter(function (i) { return i.classList.contains("pk-space-head"); }).map(function (i) {
             const t = i.querySelector(".pk-history-title");
-            return (t ? t.textContent : "?") + (i.querySelector(".pk-space-current") ? "[当前]" : "");
+            return (t ? t.textContent : "?") + (t && t.classList.contains("pk-space-current") ? "[蓝]" : "");
         }),
     };
 `;
@@ -88,13 +88,13 @@ module.exports = async (page) => {
         console.log(`${label}\n    分节：${JSON.stringify(r.sections)}｜组头：${JSON.stringify(r.heads)}｜` +
             `组里会话 ${r.groupRows.length} 行｜组里「加载更多」${r.groupMore} 颗｜行尾加号 ${r.addBtns} 颗（第一颗透明度 ${r.addOpacity}）｜` +
             `标题加号 ${r.sectionAdd}｜「新建会话」行 ${r.newSessionRows} 行｜当前目录 ${r.currentDir}`);
-        console.log(`    工作区那几行（带「当前」的是当前标）：${JSON.stringify(r.markedHeads)}`);
+        console.log(`    工作区那几行（名字带[蓝]的是当前会话所在的那个目录）：${JSON.stringify(r.markedHeads)}`);
         return r;
     };
-    /** 工作区那几行的顺序（「当前」标不参与比较：该动的是它，不是行的位置）。 */
-    const orderOf = (r) => r.markedHeads.map((h) => h.replace("[当前]", "")).join("｜");
+    /** 工作区那几行的顺序（那颗蓝不参与比较：该动的是它，不是行的位置）。 */
+    const orderOf = (r) => r.markedHeads.map((h) => h.replace("[蓝]", "")).join("｜");
     /** 当前标落在哪一行。 */
-    const markedOf = (r) => r.markedHeads.filter((h) => h.indexOf("[当前]") >= 0).join(",");
+    const markedOf = (r) => r.markedHeads.filter((h) => h.indexOf("[蓝]") >= 0).join(",");
     const rect = async (selector, index) => JSON.parse(await page.eval(`
         const list = Array.from(document.querySelectorAll(${JSON.stringify(selector)}));
         const el = list[${index || 0}];
