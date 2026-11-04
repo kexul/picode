@@ -6023,28 +6023,33 @@
   }
 
   /**
-   * 工作区那些行：把“当前会话所在目录”那一行挪到最上面（不标“当前”，只是排第一）。
+   * 工作区那些行：位置照宿主给的顺序（最近有人聊过的在前），一个也不挪；
+   * 只有“当前会话跑在哪个目录”那一行多一个 current（画的时候标一颗「当前」）。
    *
    * 目录跟着正在看的那个会话走（面板自己不再有“选中的工作区”），所以要在画的时候现算：
-   * 切到别的目录的会话，那一行自己跟着换，不用等宿主重推一份。
-   * 列表里没有它（比如刚挑了个没跑过会话的新目录）就现造一行，那颗加号照样能点。
+   * 切到别的目录的会话，那一颗「当前」自己跟着换，不用等宿主重推一份。
+   * 当前那个目录不在这份清单里（它还排在「加载更多工作区」后面那一页、或者清单里还没有它）时
+   * 补一行接在末尾：不然“这一轮在哪个工作区里”就没地方看了。补的那一行照样能展开、能点加号，
+   * 等它从清单里冒出来就不再补（免得同一个目录占两行）。
    *
    * @param items 宿主给的那些工作区行
    */
-  function withCurrentWorkspaceFirst(items) {
+  function spaceRowsWithCurrent(items) {
     const cwd = activeSessionCwd();
     if (!cwd) { return items; }
-    let hit = null;
-    const rest = [];
-    for (const it of items) {
-      if (!hit && samePath(it.file, cwd)) { hit = it; continue; }
-      rest.push(it);
+    let hit = false;
+    const out = items.map((it) => {
+      if (!samePath(it.file, cwd)) { return it; }
+      hit = true;
+      return Object.assign({}, it, { current: true });
+    });
+    if (!hit) {
+      out.push({
+        __section: "space", section: "工作区", current: true,
+        label: baseNameOfPath(cwd), file: cwd, folderPath: cwd,
+      });
     }
-    const first = hit || {
-      __section: "space", section: "工作区",
-      label: baseNameOfPath(cwd), file: cwd, folderPath: cwd,
-    };
-    return [first].concat(rest);
+    return out;
   }
 
   /** 这个会话现在是不是在跑（会话列表上那颗“在跑”的小点看的就是它）。
@@ -6719,7 +6724,7 @@
   /**
    * 窄窗里先把「项目与会话」这块空壳摆上：点 <<< 那一刻就滑出来，不等一个来回。
    * 两块里现在就有东西：上半「正在对话」由手里这份会话状态画，下半「工作区」里当前工作区那一行
-   * 和它展开了的那几组也是本地就知道的（见 withCurrentWorkspaceFirst）；只有“别的工作区”那一批
+   * 和它展开了的那几组也是本地就知道的（见 spaceRowsWithCurrent）；只有“别的工作区”那一批
    * 得等宿主读一遍磁盘，回来那份由 renderPicker 按格补（见 paintWorkspacePanel）。
    * 那份真数据到了以后走的还是同一块 view（renderPicker 那份拼法），所以不会重摆一遍、也不再滑入。
    */
@@ -10152,8 +10157,8 @@
         // 工作区行：就是个组头——小三角、文件夹图标、名字 + 目录路径一行。
         // 点整行展开 / 收起；行尾那颗加号是在这个目录里开新会话。
         el.classList.add("pk-history", "pk-space-head");
-        // 不标「当前工作区」的选中态：几个工作区里的会话可以同时开着，标一个“当前”反倒误导
-        // （哪个目录是当前会话所在的，看它排在最上面、看「正在对话」那一段就行）
+        // 当前会话所在的那个目录标一颗「当前」（它不因此挪位置：清单的顺序一直是宿主那份，
+        // 见 spaceRowsWithCurrent）—— 切会话时一行都不动，只有这颗标跟着走。
         const expanded = groupExpanded(item.file);
         if (expanded) { el.classList.add("expanded"); }
         const main = document.createElement("div"); main.className = "pk-history-main";
@@ -10164,6 +10169,10 @@
         main.appendChild(icon);
         const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.label || "";
         main.appendChild(title);
+        if (item.current) {
+          const cur = document.createElement("span"); cur.className = "pk-open-tag pk-space-current"; cur.textContent = "当前";
+          main.appendChild(cur);
+        }
         // 目录的完整路径就摆在名字后面（淡淡的；太长从尾巴上截，整条路径鼠标停上去还能看到）：
         // 名字前面那一段父目录才是认目录的关键，所以截的是尾巴不是开头。
         if (item.folderPath) {
@@ -10406,13 +10415,14 @@
   }
 
   /**
-   * 工作区那一块的行：当前会话所在那个组排最上面，展开了的组把它的会话行挂在组头下面，
+   * 工作区那一块的行：顺序就是宿主给的顺序（切会话也不重排，只在当前那个目录那一行标一颗
+   * 「当前」，见 spaceRowsWithCurrent），展开了的组把它的会话行挂在组头下面，
    * 「加载更多」卡在那一组的末尾。
    */
   function buildSpaceRows(view, fetch) {
     const st = view.state;
     const out = [];
-    for (const it of withCurrentWorkspaceFirst(st.spaceItems)) {
+    for (const it of spaceRowsWithCurrent(st.spaceItems)) {
       out.push(it);
       if (!groupExpanded(it.file)) { continue; }
       const g = groupState(st, it.file);
