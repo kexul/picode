@@ -38,6 +38,9 @@ export const CHAT_UI_FILES: readonly ChatUiFile[] = [
     { name: "browserBridge.js", role: "bridge" },
     { name: "marked.js", role: "vendor-script" },
     { name: "highlight.js", role: "vendor-script" },
+    // 看文件的弹窗只摆看得见的那一段（见 chat.js 的 mountFileRows）：才 7 KB，跟着首屏一起下，
+    // 不用像 pele 那样按需拉。
+    { name: "clusterize.js", role: "vendor-script" },
     // 二维码（「微信」那块扫码登录现画那张码用）有 56 KB，只有真扫码时才用得上，跟 pele 一样按需拉
     //（界面那头第一次画码时才去取，见 media/chat.js 的 loadLazyScript）。
     { name: "qrcode.js", role: "lazy-script" },

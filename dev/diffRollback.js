@@ -85,7 +85,6 @@ function viewerNow(page) {
         const body = document.getElementById("fileBody");
         const barName = document.querySelector("#fileBar .file-bar-name");
         const rollback = document.getElementById("fileRollback");
-        const wrap = document.getElementById("fileWrap");
         const pane = body ? body.querySelector(".file-page.active") : null;
         // 一份 diff 现在是两栏（见 chat.js 的 renderDiffPanes）：空位那一格不算增删行
         const lines = pane ? Array.from(pane.querySelectorAll(".diff2-cell")).filter((el) => !el.classList.contains("empty")) : [];
@@ -96,7 +95,7 @@ function viewerNow(page) {
             rollbackShown: shown(rollback),
             rollbackText: rollback ? (rollback.textContent || "").trim() : "",
             rollbackTitle: rollback ? (rollback.getAttribute("title") || "") : "",
-            wrapHidden: !wrap || wrap.hidden,
+            hasWrap: !!document.getElementById("fileWrap"),
             lines: lines.length,
             added: lines.filter((el) => el.classList.contains("add")).length,
             removed: lines.filter((el) => el.classList.contains("del")).length,
@@ -199,7 +198,7 @@ module.exports = async (page) => {
     check("看 diff 时横条上有那颗「回滚」", diff.rollbackShown);
     check("悬停提示写着回滚撤的是什么（回到最近一次提交）",
         diff.rollbackTitle.indexOf("回到最近一次提交") >= 0, diff.rollbackTitle);
-    check("看 diff 时折行开关照旧藏着", diff.wrapHidden);
+    check("折行开关已经拿掉了（看 diff 时也没有）", !diff.hasWrap);
     await page.shot("rollback-1-diff.png");
 
     // ---- 3. 点回滚：第一下只是把按钮变成「确定回滚」，第二下才真撤 ----

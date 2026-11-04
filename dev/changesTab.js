@@ -79,7 +79,6 @@ function sidebarNow(page) {
         const dir = document.getElementById("dirPane");
         const change = document.getElementById("changePane");
         const barName = document.querySelector("#fileBar .file-bar-name");
-        const wrap = document.getElementById("fileWrap");
         const pRect = panel ? panel.getBoundingClientRect() : null;
         const cRect = change ? change.getBoundingClientRect() : null;
         return JSON.stringify({
@@ -96,7 +95,7 @@ function sidebarNow(page) {
             barShown: shown(document.getElementById("fileBar")),
             barName: barName ? (barName.textContent || "") : "",
             backShown: shown(document.getElementById("fileCloseFile")),
-            wrapHidden: !wrap || wrap.hidden,
+            hasWrap: !!document.getElementById("fileWrap"),
             dirRows: dir ? dir.querySelectorAll(".file-entry").length : -1,
             panelH: pRect ? Math.round(pRect.height) : -1,
             changeH: cRect ? Math.round(cRect.height) : -1,
@@ -143,7 +142,6 @@ function diffNow(page) {
         };
         const body = document.getElementById("fileBody");
         const barName = document.querySelector("#fileBar .file-bar-name");
-        const wrap = document.getElementById("fileWrap");
         const pane = body ? body.querySelector(".file-page.active") : null;
         // 一份 diff 现在是两栏（见 chat.js 的 renderDiffPanes）：一格 = 一边的一行，
         // 空位那一格也算一格（.empty），数增删行时得跳过它。
@@ -156,7 +154,6 @@ function diffNow(page) {
             barName: barName ? (barName.textContent || "") : "",
             barTitle: barName ? (barName.getAttribute("title") || "") : "",
             backShown: shown(document.getElementById("fileCloseFile")),
-            wrapHidden: !wrap || wrap.hidden,
             pages: body ? body.querySelectorAll(".file-page.active").length : 0,
             lines: lines.length,
             added: lines.filter((el) => el.classList.contains("add")).map((el) => el.textContent),
@@ -284,7 +281,7 @@ module.exports = async (page) => {
         diff.fileView && diff.panesShown && diff.stageShown, JSON.stringify({ view: diff.fileView, panes: diff.panesShown }));
     check("横条写着那个文件的写法、左边那颗返回箭头在",
         diff.barShown && diff.barName === SCRIPT_FILE && diff.backShown, diff.barName);
-    check("看 diff 时折行开关藏着（没有长行可折）", diff.wrapHidden);
+    check("折行开关已经拿掉了（长行一律不折，看 diff 时也没有）", !diff.hasWrap);
     check("diff 里只有这一份（#fileBody 里只有一块），加上的那行是假模型改的",
         diff.pages === 1 && diff.added.some((l) => l.indexOf("假模型改的") >= 0),
         JSON.stringify(diff.added));

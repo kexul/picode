@@ -10,6 +10,7 @@
 | `media/pele.js` | [Pele](https://github.com/obsidianmd/pele)（把 ```mermaid 画成图） | 1.10.0 | MIT |
 | `media/marked.js` | [marked](https://github.com/markedjs/marked)（把 markdown 排成文档） | 18.0.7 | MIT |
 | `media/qrcode.js` | [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator)（微信登录的二维码） | 1.4.4 | MIT |
+| `media/clusterize.js` | [Clusterize.js](https://github.com/NeXTs/Clusterize.js)（看文件的弹窗里只摆看得见的那一段） | 1.0.0 | MIT |
 | `media/highlight.js` | [highlight.js](https://github.com/highlightjs/highlight.js)（代码上色） | 11.x（当初是从 npm 上打包拿的，文件里没留版本号） | BSD-3-Clause |
 
 ## diff-match-patch（Apache-2.0）
@@ -221,7 +222,7 @@ Apache License
    limitations under the License.
 ```
 
-## MIT（Pele / marked / qrcode-generator）
+## MIT（Pele / marked / qrcode-generator / Clusterize.js）
 
 这几份各自保留了原来的版权行（在文件开头）。许可正文：
 

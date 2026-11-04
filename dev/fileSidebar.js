@@ -39,10 +39,9 @@
  *      工具卡片（write）那颗「跳转」、以及 edit 卡片提示框里 diff 那一行，都跟正文里的文件链接去同一个地方：
  *      浏览器页面里在弹窗里打开看它（「跳转」停在第一行、diff 那一行停在那一行），
  *      插件里的对话面板里还是交给编辑器打开（最后那段按网页视图验）；
- *      这一列角上那颗折行开关：默认一行就是一行（长行横向滚），点一下长行折起来（横向不滚），
- *      再点一下又回去；开关管的是整块正文（换个文件也照样）；选的那个记在这台设备里，
- *      刷新页面后还是刚才那样；上下两格（清单、「改动」）里没有它，只有真在看一个文件时才露面，
- *      看 diff 时也藏着；
+ *      长行一律不折（一行就是一行、横向滚；那颗折行开关已经拿掉了），
+ *      一份几千上万行的文件在页面上只摆看得见的那几百行（其余用两块空白撑住高度）：
+ *      滚到最底下露出来的是最后一行、行号对得上，跳行也落得准；
  *   2. 在页面里用 fetch 直接打那条只读文件地址与目录地址，核对拒绝的几种情形（目录外含 .. 绕出去的写法、
  *      没有这个文件 / 目录、超过文本那道 2 MB 线、超过图片那道 20 MB 线）、图片与二进制各自给什么、
  *      目录清单的形状（文件带着字节数、图片带着 image 标记）、以及「没变就别再给
@@ -61,7 +60,7 @@ const HIT_LINE = 137;
 /** 第二次点 long.js 时链接说的那一行（同一个文件再点一次是重新读一遍、按这次的行滚）。 */
 const HIT_LINE_AGAIN = 260;
 const SAMPLE_HIT = 3;
-/** 折行开关那一摊：wrap.js 第 2 行是一整条超长的行（一个断点都没有），专门看折还是横向滚。 */
+/** 长行那一摊：wrap.js 第 2 行是一整条超长的行（一个断点都没有），专门看它折不折、横向滚不滚。 */
 const WRAP_LINES = 3;
 const WRAP_HIT = 2;
 const WRAP_LONG_CHARS = 400;
@@ -428,7 +427,7 @@ function prepareFiles(cwd) {
     fs.writeFileSync(path.join(cwd, FILE.sample),
         "// sample 1\n// sample 2\n// sample 3 这一行\n// sample 4\n// sample 5\n", "utf8");
     writeLive(cwd, false, 0);
-    // 折行开关那一摊：第 2 行是一整条 400 个字、一个断点都没有的长行
+    // 长行那一摊：第 2 行是一整条 400 个字、一个断点都没有的长行
     fs.writeFileSync(path.join(cwd, FILE.wrap),
         ["// wrap 1", "// " + "x".repeat(WRAP_LONG_CHARS) + " 超长的一行", "// wrap 3"].join("\n") + "\n", "utf8");
     prepareNameFixtures(cwd);
@@ -619,8 +618,7 @@ module.exports = async (page) => {
                 return !!r && !!panelRect && r.left >= panelRect.left - 1 && r.right <= panelRect.right + 1;
             };
             const entries = list ? Array.from(list.querySelectorAll(".file-entry:not(.up)")) : [];
-            const wrapBtn = document.getElementById("fileWrap");
-            const wrapRect = wrapBtn && getComputedStyle(wrapBtn).display !== "none" ? wrapBtn.getBoundingClientRect() : null;
+            const wrapBtn = null;   // 折行开关已经拿掉了（长行一律不折，见 chat.js 的 renderFileText）
             const textEl = body ? body.querySelector(".file-text") : null;
             return {
                 vw: window.innerWidth,
@@ -737,23 +735,15 @@ module.exports = async (page) => {
                 // 所以往上找最近那个带 id 的（通常是 #fileBody、遮罩、或者这一列本身）
                 topAtChat: pointAtId(Math.round(window.innerWidth * 0.5)),
                 topAtRight: pointAtId(Math.round(window.innerWidth - 40)),
-                wrapButton: !!wrapBtn,
-                wrapShown: !!wrapRect,
-                wrapInPanel: !!wrapBtn && !!panelEl && panelEl.contains(wrapBtn),
-                wrapInHeader: !!wrapBtn && !!document.getElementById("fileHeader")
-                    && document.getElementById("fileHeader").contains(wrapBtn),
-                wrapInStage: !!wrapBtn && !!stage && stage.contains(wrapBtn),
-                wrapInBar: !!wrapBtn && !!bar && bar.contains(wrapBtn),
-                wrapTop: wrapRect ? Math.round(wrapRect.top) : -1,
+                wrapButton: !!wrapBtn,   // 那一颗折行开关已经没了（长行一律不折）：留着量它不该在
                 barTop: bar ? Math.round(bar.getBoundingClientRect().top) : -1,
                 stageTop: stage ? Math.round(stage.getBoundingClientRect().top) : -1,
-                wrapAtCorner: !!(wrapRect && panelRect)
-                    && panelRect.right - wrapRect.right >= 0 && panelRect.right - wrapRect.right <= 24
-                    && panelRect.bottom - wrapRect.bottom >= 0 && panelRect.bottom - wrapRect.bottom <= 24,
-                wrapPressed: wrapBtn ? (wrapBtn.getAttribute("aria-pressed") || "") : "",
-                wrapOnClass: !!wrapBtn && wrapBtn.classList.contains("on"),
                 whiteSpace: textEl ? getComputedStyle(textEl).whiteSpace : "",
                 hScroll: box ? Math.round(box.scrollWidth - box.clientWidth) : -1,
+                // 行号从几到几、页面上一共摆了几行（只摆看得见的那一段，见 chat.js 的 mountFileRows）
+                rowFirstNum: rows.length ? ((rows[0].querySelector(".file-num") || {}).textContent || "") : "",
+                rowLastNum: rows.length
+                    ? ((rows[rows.length - 1].querySelector(".file-num") || {}).textContent || "") : "",
                 headRowHeights: rows.slice(0, 4).map(function (r) { return Math.round(r.getBoundingClientRect().height); }),
                 headRowLens: rows.slice(0, 4).map(function (r) {
                     return ((r.querySelector(".file-text") || {}).textContent || "").length;
@@ -972,14 +962,6 @@ module.exports = async (page) => {
     const edgeLine = () => page.eval(`
         const z = document.getElementById("fileResize");
         return z ? getComputedStyle(z, "::before").backgroundColor : "";
-    `);
-
-    /** 点这一列角上那颗折行开关。 */
-    const clickWrap = () => page.eval(`
-        const b = document.getElementById("fileWrap");
-        if (!b) { return "没有折行开关"; }
-        b.click();
-        return "点了";
     `);
 
     /**
@@ -1786,9 +1768,11 @@ module.exports = async (page) => {
     /** 点开一个带颜色的文件（line 是投出去那句话里链接说的行）、等它画上来。 */
     const openColor = async (file, line, wantRows) => {
         console.log("点文件链接：" + await clickLink(file, line));
-        // 等的不只是行数：有的文件行数跟前一个一样（6 行），只盯行数会读到上一个文件的颜色
+        // 等的不只是行数：有的文件行数跟前一个一样（6 行），只盯行数会读到上一个文件的颜色。
+        // 大文件页面上只摆看得见的那一段（见 chat.js 的 mountFileRows），行数就不等于文件的行数了。
         return await waitLook("带颜色的 " + file + " 上来",
-            (x) => x.rowCount === wantRows && activeFilePath(x) === file, 15000);
+            (x) => activeFilePath(x) === file && x.rowFirstNum === "1"
+                && (wantRows < 1000 ? x.rowLastNum === String(wantRows) : x.rowCount > 0), 15000);
     };
     /** 页面上最长一次「卡住没答理」有多久（对着一堆行画那一下）：先摆上秒表、点完再读。 */
     const startFreezeWatch = () => page.eval(`
@@ -1851,45 +1835,55 @@ module.exports = async (page) => {
     check("不认得的语言（.rb）还是黑白：一个记号也没有、字跟原文一样",
         sameLines(rbCol, COLOR_RUBY_LINES) && rbCol.tokens === 0, JSON.stringify(rbCol.kinds));
 
-    // 上色那条线以内的中等文件：照样上色（线是 384 KB 字符，这个 200 KB）
+    // 上色那条线以内的中等文件：照样上色（线是 384 KB 字符，这个 200 KB）。
+    // 页面上只摆了看得见的那一段（见 chat.js 的 mountFileRows），所以数的是那一段里的记号。
     await openColor(COLOR.mid, 3, COLOR_MID.lines);
     const midCol = JSON.parse(await page.eval(`
+        const body = window.__fileView();
+        const rows = Array.from(body.querySelectorAll(".file-line"));
         return JSON.stringify({
-            rows: window.__fileView().querySelectorAll(".file-line").length,
-            tokens: window.__fileView().querySelectorAll(".file-text [class*='hljs-']").length,
+            rows: rows.length,
+            firstNum: rows.length ? rows[0].querySelector(".file-num").textContent : "",
+            lastNum: rows.length ? rows[rows.length - 1].querySelector(".file-num").textContent : "",
+            firstText: rows.length ? rows[0].querySelector(".file-text").textContent : "",
+            tokens: body.querySelectorAll(".file-text [class*=hljs-]").length,
         });
     `));
     check("上色那条线以内的中等文件（" + Math.round(COLOR_MID.text.length / 1024) + " KB）照样上色",
-        midCol.rows === COLOR_MID.lines && midCol.tokens > 0, JSON.stringify(midCol));
+        midCol.tokens > 0 && midCol.firstNum === "1" && midCol.firstText === COLOR_UNIT.split("\n")[0],
+        JSON.stringify({ rows: midCol.rows, tokens: midCol.tokens }));
+    check("中等文件也只摆了看得见的那一段（" + COLOR_MID.lines + " 行里只摆 " + midCol.rows + " 行，行号连着的）",
+        midCol.rows > 0 && midCol.rows < 1000 && midCol.lastNum === String(midCol.rows),
+        JSON.stringify({ rows: midCol.rows, last: midCol.lastNum }));
 
     // 大文件：不上色（整段高亮 1.5 MB 要好几秒，会把页面卡在那儿），行号照旧、页面得答得上话。
     // 秒表先摆上再点：下面这条“最长卡住多久”的量就是这一下里最长的那个停顿。
     await startFreezeWatch();
     console.log("点文件链接：" + await clickLink(COLOR.big, 3));
-    const bigCol = await waitLook("大到不上色的那个文件上来", (x) => x.rowCount === COLOR_BIG.lines, 30000);
+    const bigCol = await waitLook("大到不上色的那个文件上来",
+        (x) => x.rowCount > 0 && x.rowFirstNum === "1" && activeFilePath(x) === COLOR.big, 30000);
     const bigFreeze = await readFreeze();
     const bigStats = JSON.parse(await page.eval(`
-        const rows = window.__fileView().querySelectorAll(".file-line");
-        const first = rows[0], last = rows[rows.length - 1];
+        const body = window.__fileView();
+        const rows = Array.from(body.querySelectorAll(".file-line"));
+        const first = rows[0];
         return JSON.stringify({
             rows: rows.length,
-            tokens: window.__fileView().querySelectorAll(".file-text [class*='hljs-']").length,
+            tokens: body.querySelectorAll(".file-text [class*=hljs-]").length,
             firstNum: first ? first.querySelector(".file-num").textContent : "",
-            lastNum: last ? last.querySelector(".file-num").textContent : "",
             firstText: first ? first.querySelector(".file-text").textContent : "",
-            lastText: last ? last.querySelector(".file-text").textContent : "",
-            note: (window.__fileView().querySelector(".file-note") || {}).textContent || "",
+            note: (body.querySelector(".file-note") || {}).textContent || "",
         });
     `));
-    check("大文件不上色（黑白、" + COLOR_BIG.lines + " 行都在、行号从 1 到最后一行都对）",
-        bigStats.rows === COLOR_BIG.lines && bigStats.tokens === 0 && bigStats.note === ""
-        && bigStats.firstNum === "1" && bigStats.lastNum === String(COLOR_BIG.lines)
+    check("大文件不上色（黑白，一个记号也没有；开头那一行跟原文一字不差）",
+        bigStats.tokens === 0 && bigStats.note === "" && bigStats.firstNum === "1"
         && bigStats.firstText === COLOR_UNIT.split("\n")[0],
-        JSON.stringify({ rows: bigStats.rows, tokens: bigStats.tokens, first: bigStats.firstNum, last: bigStats.lastNum }));
+        JSON.stringify({ rows: bigStats.rows, tokens: bigStats.tokens, first: bigStats.firstNum }));
     check("停在链接说的第 3 行", bigCol.hitNum === "3" && bigCol.hitVisible);
-    check("大文件没把页面卡住（画这一下最长的停顿有上界；上色硬塞进来就会翻好几倍）",
+    check("大文件没把页面卡住（点开这一下最长的停顿有上界；把几万行都摆上就会翻好几十倍）",
         bigFreeze > 0 && bigFreeze < 2500, bigFreeze + "ms");
     await page.shot("file-25-color-big.png");
+
     // 这一大堆行别拖给后面的检查：点返回箭头回上格清单
     console.log("点返回箭头：" + await clickBack());
     await page.sleep(600);
@@ -1984,83 +1978,42 @@ module.exports = async (page) => {
         && mdPlain.hitNum === "2" && mdPlain.hitVisible,
         JSON.stringify({ rows: mdPlain.rowCount, nums: mdPlain.numCount, first: mdPlain.firstRow }));
     await page.shot("file-27-markdown-plain.png");
-    // ==================== 折行开关：长行折起来，还是一行就是一行 ====================
-    // 这一列角上那颗开关：「长行折起来」与「一行就是一行、横向滚」之间切，选的那个记在这台设备里
-    //（跟「收没收起」同一个做法），刷新页面后还是刚才那样。
+    // ==================== 长行一律不折：一行就是一行，横向滚 ====================
+    // 折行开关已经拿掉了（票 08 那一条不要了）：一行一样高，弹窗才能只摆看得见的那一段
+    //（见 chat.js 的 mountFileRows），也才能直接算出第几千行在哪儿。
     console.log("点文件链接：" + await clickLink(FILE.wrap, WRAP_HIT));
     const wrap0 = await waitLook("那条超长行的文件上来",
         (x) => x.rowCount === WRAP_LINES && x.headRowLens[1] >= WRAP_LONG_CHARS);
-    check("折行开关在看文件时露面（在弹窗顶上那条里，挨着关掉那颗叉）",
-        wrap0.wrapShown && wrap0.wrapInStage && wrap0.wrapInBar && !wrap0.wrapAtCorner
-        && wrap0.wrapTop >= wrap0.barTop && wrap0.fileView,
-        JSON.stringify({ shown: wrap0.wrapShown, stage: wrap0.wrapInStage, bar: wrap0.wrapInBar,
-            corner: wrap0.wrapAtCorner, top: wrap0.wrapTop, barTop: wrap0.barTop }));
-    check("默认是「一行就是一行」：长行不折、正文横向滚得动",
+    check("长行一律不折：那条 400 个字的长行还是一行，正文横向滚得动",
         wrap0.whiteSpace === "pre" && wrap0.headRowHeights[1] === wrap0.headRowHeights[0] && wrap0.hScroll > 0,
         JSON.stringify({ ws: wrap0.whiteSpace, heights: wrap0.headRowHeights, hScroll: wrap0.hScroll }));
-    await page.shot("file-26-wrap-off.png");
+    check("长行里没少字、行号也没乱（就是那一整行横着滚）",
+        wrap0.rowCount === WRAP_LINES && wrap0.hitNum === String(WRAP_HIT)
+        && wrap0.hitText.indexOf("超长的一行") >= 0 && wrap0.rowLastNum === String(WRAP_LINES),
+        JSON.stringify({ rows: wrap0.rowCount, hit: wrap0.hitNum, last: wrap0.rowLastNum }));
+    check("弹窗顶上那颗折行开关没了", !wrap0.wrapButton);
+    await page.shot("file-26-nowrap.png");
 
-    console.log("点折行开关：" + await clickWrap());
-    const wrap1 = await waitLook("长行折起来", (x) => x.whiteSpace === "pre-wrap");
-    check("点一下开关：长行折起来（那一行占了好几行的高度）、横向不再滚",
-        wrap1.headRowHeights[1] > wrap1.headRowHeights[0] * 3 && wrap1.hScroll === 0
-        && wrap1.headRowLens[1] >= WRAP_LONG_CHARS,
-        JSON.stringify({ heights: wrap1.headRowHeights, hScroll: wrap1.hScroll, lens: wrap1.headRowLens }));
-    check("折起来以后字一个没少、行号也没乱（只是摆法换了）",
-        wrap1.rowCount === WRAP_LINES && wrap1.headRowLens[1] >= WRAP_LONG_CHARS
-        && wrap1.hitNum === String(WRAP_HIT) && wrap1.hitText.indexOf("超长的一行") >= 0,
-        JSON.stringify(wrap1.headRowLens));
-    check("开关看得出现在是折行的（按下去那个样子）", wrap1.wrapPressed === "true" && wrap1.wrapOnClass);
-    await page.shot("file-27-wrap-on.png");
-
-    // 开关管的是整块正文：换到另一个开着长行的文件（就在同一个地方换掉），它也是折的
-    console.log("点文件链接：" + await clickLink(COLOR.mid, 3));
-    const wrapOther = await waitLook("换到 color-mid.ts", (x) => x.rowCount === COLOR_MID.lines, 20000);
-    check("折行管的是整块正文（换一个文件也照样折、横向不滚）",
-        wrapOther.whiteSpace === "pre-wrap" && wrapOther.hScroll === 0,
-        JSON.stringify({ ws: wrapOther.whiteSpace, hScroll: wrapOther.hScroll }));
-    console.log("点文件链接：" + await clickLink(FILE.wrap, WRAP_HIT));
-    const wrapBack = await waitLook("再点回那条超长行", (x) => x.rowCount === WRAP_LINES);
-    check("再点回来还是折的（这个选择不跟着文件走）", wrapBack.whiteSpace === "pre-wrap" && wrapBack.hScroll === 0);
-
-    // 刷新页面：选的那个还在（跟收没收起一个做法）
-    await page.eval("location.reload(); return true;");
-    await page.sleep(1500);
-    await page.waitReady();
-    await page.sleep(500);
-    await installFileView();
-    await page.eval(POST_LINKS);
-    await page.sleep(300);
-    console.log("点文件链接：" + await clickLink(FILE.wrap, WRAP_HIT));
-    const wrap2 = await waitLook("刷新之后长行还是折的",
-        (x) => x.rowCount === WRAP_LINES && x.whiteSpace === "pre-wrap");
-    check("刷新页面之后还是刚才那样（折行的选择记在这台设备里）",
-        wrap2.whiteSpace === "pre-wrap" && wrap2.hScroll === 0
-        && wrap2.headRowHeights[1] > wrap2.headRowHeights[0] * 3 && wrap2.wrapPressed === "true",
-        JSON.stringify({ ws: wrap2.whiteSpace, heights: wrap2.headRowHeights }));
-
-    console.log("点折行开关：" + await clickWrap());
-    const wrap3 = await waitLook("长行又不折了", (x) => x.whiteSpace === "pre");
-    check("再点一下开关：又变回「一行就是一行、横向滚」",
-        wrap3.whiteSpace === "pre" && wrap3.hScroll > 0 && wrap3.headRowHeights[1] === wrap3.headRowHeights[0]
-        && wrap3.wrapPressed === "false" && !wrap3.wrapOnClass,
-        JSON.stringify({ ws: wrap3.whiteSpace, hScroll: wrap3.hScroll }));
-
-    // 关掉的选择也记着：再刷新一遍还是「一行就是一行」
-    await page.eval("location.reload(); return true;");
-    await page.sleep(1500);
-    await page.waitReady();
-    await page.sleep(500);
-    await installFileView();
-    await page.eval(POST_LINKS);
-    await page.sleep(300);
-    console.log("点文件链接：" + await clickLink(FILE.wrap, WRAP_HIT));
-    const wrap4 = await waitLook("刷新之后长行还是横着滚",
-        (x) => x.rowCount === WRAP_LINES && x.whiteSpace === "pre");
-    check("关掉的选择也记得（刷新之后还是「一行就是一行」）",
-        wrap4.whiteSpace === "pre" && wrap4.hScroll > 0 && wrap4.wrapPressed === "false"
-        && wrap4.headRowHeights[1] === wrap4.headRowHeights[0]);
-    await page.shot("file-28-wrap-remembered.png");
+    // ==================== 长文件只摆看得见的那一段 ====================
+    // 一份两万行的文件要是每行都建元素，光摆上去就一两秒（手机上更久）。现在只摆看得见的那几百行，
+    // 其余的用两块空白撑住高度：滚到底要能看到最后一行、行号对得上，跳行也得落得准。
+    console.log("点文件链接：" + await clickLink(COLOR.big, 3));
+    const wideBig = await waitLook("那个一万多行的文件上来",
+        (x) => activeFilePath(x) === COLOR.big && x.rowFirstNum === "1", 30000);
+    check("长文件只摆了一小段（不是几万行都在页面上）",
+        wideBig.rowCount > 0 && wideBig.rowCount < 1000 && wideBig.rowLastNum === String(wideBig.rowCount),
+        JSON.stringify({ rows: wideBig.rowCount, first: wideBig.rowFirstNum, last: wideBig.rowLastNum }));
+    // 滚到最底下：最后一行得是那个文件的最后一行，行号也对
+    console.log("滚到最底下：" + await page.eval(`
+        const box = document.getElementById("fileBody");
+        box.scrollTop = 1e9;
+        return "滚了";
+    `));
+    const tailLook = await waitLook("滚到底露出来的是最后那几行",
+        (x) => x.rowLastNum === String(COLOR_BIG.lines), 15000);
+    check("滚到最底下：露出来的是这个文件的最后一行（行号也是那个数）",
+        tailLook.rowLastNum === String(COLOR_BIG.lines),
+        JSON.stringify({ last: tailLook.rowLastNum, want: COLOR_BIG.lines }));
 
     // ==================== 直接打那条文件地址（拒绝的几种情形 + 条件请求）====================
     const raw = await page.eval(`

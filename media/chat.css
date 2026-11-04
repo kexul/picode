@@ -1809,6 +1809,9 @@
   /* 正文跟这一列的头一样大（写在 #filePanel 上）：这里得自己说一句「跟上面一样」，
      不然 .pk-body 那条 0.9em 会盖上来（那条是给浮层里的清单用的）。 */
   #fileBody {
+    /* 别让浏览器自己挪滚动位置（overflow-anchor）：这一块的行是换着摆的，
+       它一「锚定」就跟我们算的那一份打架（换字号、重摆窗口的时候就对不上了） */
+    overflow-anchor: none;
     flex: 1 1 auto; min-height: 0; padding: 6px 0 12px; position: relative;
     /* 正文的字号：顶上那两颗 A− / A+ 调的（见 chat.js 的 applyFileViewerFont）；
        没设过就是跟原来一样（界面字号）。diff、markdown 都按 em 跟着它走。 */
@@ -1819,14 +1822,9 @@
   #fileBody > .file-page.active { display: block; }
   /* 每一格自己那一块正文（见 chat.js 的 fileTabPage）：清单挂在上格 / 下格，打开着的挂在 #fileBody，
      谁也不挪（网页那个 iframe 从文档里挪一次就会重新加载）。 */
-  /* 文件正文：一行一格（行号 + 那一行的原文）。默认长行左右滚；角上那颗开关
-     （#fileWrap，票 08）打开时 body 上多一个 file-wrap，长行折起来、横向就不滚了。 */
+  /* 文件正文：一行一格（行号 + 那一行的原文）。长行一律不折、横向滚：一行一样高，
+     弹窗才能只摆看得见的那一段（见 chat.js 的 mountFileRows），也才能直接算出第几千行在哪儿。 */
   .file-line { display: flex; align-items: flex-start; min-width: max-content; line-height: 1.55; }
-  /* 看不见的那些行不排版（content-visibility）：一份一两万行的文件，光逐行量文字宽度就要一秒多，
-     点开就卡在那儿。屏幕上只有几十行，余下的等滚到跟前再排版。
-     不折行时每行一样高，那份「估算的高度」跟真的一模一样，滚动条的长度和位置都对得上；
-     折行时一行可能占好几行，估不准（跳到第几千行会落偏），所以只在没折行时这么干。 */
-  body:not(.file-wrap) .file-line { content-visibility: auto; contain-intrinsic-size: auto 1.55em; }
   .file-num {
     flex: 0 0 auto; width: 3.2em; padding-right: 8px; text-align: right;
     opacity: 0.45; user-select: none; font-variant-numeric: tabular-nums;
@@ -1994,7 +1992,7 @@
   .file-download { color: var(--vscode-textLink-foreground, #3794ff); text-decoration: none; white-space: nowrap; }
   .file-download:hover { text-decoration: underline; }
   /* 弹窗顶上那条（见 chat.js 的 syncFileBar）：左边写看的是什么（相对会话目录的写法，
-     一行放不下就省略，悬停看全），右边是折行开关与关掉那颗叉。它摆在正文外面
+     一行放不下就省略，悬停看全），右边是字号那两颗与关掉那颗叉。它摆在正文外面
      （#fileBody 才是滚动的那一块），所以正文怎么滚它都在。 */
   #fileBar {
     flex: 0 0 auto; box-sizing: border-box;
@@ -2049,7 +2047,7 @@
   }
   #fileCloseFile svg { width: 14px; height: 14px; display: block; }
   #fileCloseFile:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
-  /* 字号那两颗（A− / A+）：跟折行开关并排、一样的方框，只是里面是字；到两头就按下去 */
+  /* 字号那两颗（A− / A+）：一样的方框，只是里面是字；到两头就按下去 */
   .file-bar-btn {
     flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
     min-width: 26px; height: 24px; padding: 0 4px; cursor: pointer;
@@ -2060,29 +2058,6 @@
   }
   .file-bar-btn:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
   .file-bar-btn:disabled { opacity: 0.35; cursor: default; }
-  /* 折行开关：摆在顶上那条里、关掉那颗叉的左边。
-     默认（没记过）是一行就是一行，这时它是淡的；折行打开时加 .on，带一道强调色的边。 */
-  #fileWrap {
-    flex: 0 0 auto;
-    display: flex; align-items: center; justify-content: center;
-    width: 24px; height: 24px; padding: 0; cursor: pointer;
-    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); border-radius: 4px;
-    background: var(--vscode-editorWidget-background, var(--vscode-editor-background, #fff));
-    color: var(--vscode-descriptionForeground, inherit); opacity: 0.7;
-  }
-  #fileWrap svg { width: 14px; height: 14px; display: block; }
-  /* 只有真在看一个文件时才露面（看 diff 时没有这个开关，见 chat.js 的 syncFileBar）；
-     刷掉的是 [hidden] 那条 UA 样式：这里写了 display: flex，不动它一句就盖不住 */
-  #fileWrap[hidden] { display: none; }
-  #fileWrap:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
-  #fileWrap.on {
-    opacity: 1; color: var(--vscode-focusBorder, #007acc); border-color: var(--vscode-focusBorder, #007acc);
-    background: color-mix(in srgb, var(--vscode-focusBorder, #007acc) 15%, transparent);
-  }
-  /* 长行折起来：一行最多占这一列的宽（不再撑出横向滚动），断不了的长串也断在栏里 */
-  body.file-wrap .file-line { min-width: 0; }
-  body.file-wrap .file-text { white-space: pre-wrap; overflow-wrap: anywhere; }
-
   /* 改一个文件时那一块（见 chat.js 的 renderFileEditor）：一块文本框铺满正文那一块，
      不排行号、不上色。打字时最要紧的是光标、撤销、输入法不出岔子，那几样都是浏览器自己
      那套文本框最稳。按 #fileBody 定位（那边本来就是 position: relative），
@@ -2104,8 +2079,6 @@
     font-size: inherit; line-height: 1.55;
     white-space: pre; overflow: auto; tab-size: 4;
   }
-  /* 长行折不折：跟看文件那一路同一颗开关（body 上的 file-wrap），文本框也跟着走 */
-  body.file-wrap .file-edit-text { white-space: pre-wrap; overflow-wrap: anywhere; }
   /* 盘上变了时「存」那颗变成「覆盖」、放弃那颗变成「用盘上的」：里面是字，得让它宽一点 */
   .file-bar-btn.wide { width: auto; padding: 0 6px; }
   /* 看一份 diff 时横条上那颗「回滚」（图标 + 两个字）：把这个文件撤到它最近一次提交的样子。

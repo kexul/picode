@@ -52,9 +52,6 @@
     // 子会话的拐角箭头（“↳”）：先从上面下来、再向右拐，像个挂在父会话下面的分叉。
     // 用 SVG 而不是文字符号：箭头在 Segoe UI 等字体里居中不对，画出来天然齐。
     child: '<svg width="14" height="14" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.2 1.6V8.4H12.6"/><path d="M9.8 5.6L12.8 8.4L9.8 11.2"/></svg>',
-    // 折行开关（文件侧边栏角上）：上面一条整线、下面一条短线，中间那条走到头再拐回来
-    //（「长行折回来」那个意思）。
-    wrap: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h12M2 7h9.4a2.5 2.5 0 0 1 0 5H8"/><path d="M10.2 9.6 7.6 12l2.6 2.4"/><path d="M2 12h2.4"/></svg>',
     // 一支铅笔：看文件的弹窗横条上那颗「改一下这个文件」。
     edit: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.2 2.1a1.3 1.3 0 0 1 1.8 0l1 1a1.3 1.3 0 0 1 0 1.8l-7.7 7.7-3.9.9.9-3.9z"/><path d="M9.9 3.4l2.8 2.8"/></svg>',
     // 一张软盘：编辑时横条上那颗「存」。
@@ -6827,8 +6824,13 @@
   const FILE_VIEWER_BOX_STORE_KEY = "pichat.fileViewerBox";
   /** 弹窗里正文的字号（像素数）：也记在这台设备里（没设过就是 0，跟界面字号走）。 */
   const FILE_VIEWER_FONT_STORE_KEY = "pichat.fileViewerFont";
-  /** 长行怎么摆（折起来 / 一行就是一行）：也记在这台设备里（跟收没收起同一个做法）。 */
-  const FILE_SIDEBAR_WRAP_STORE_KEY = "pichat.fileSidebarWrap";
+  /**
+   * 一份文件一次往页面里摆多少行（见 mountFileRows）：屏幕上一眼就看得见几十行，
+   * 摆的比那多好几倍——滚的时候不至于每过一行重排一次；但也就几百行，
+   * 一份两万行的文件在页面上永远只有这么多。
+   */
+  const FILE_ROWS_IN_BLOCK = 300;
+  const FILE_BLOCKS_PER_VIEW = 2;
   /** 「目录」那一格：标签上就写这两个字，悬停提示给这一层的全路径（见 fileSidebarProjectFullPath）。 */
   const FILE_SIDEBAR_PROJECT_NAME = "文件";
   /** 「改动」那一格：跟最后一次提交差了什么、每个文件差成什么样。 */
@@ -6939,25 +6941,17 @@
     document.documentElement.style.setProperty("--pichat-file-sidebar-w", w + "px");
   }
 
-  /** 按“开没收起、常驻还是滑入、长行折还是滚”摆版面（版式看 body 上的 file-open / file-dock / file-wrap，见 chat.css 末尾）。 */
+  /** 按“开没收起、常驻还是滑入”摆版面（版式看 body 上的 file-open / file-dock，见 chat.css 末尾）。 */
   function syncFileSidebarLayout() {
     document.body.classList.toggle("file-open", fileSidebar.open);
     const docked = fileSidebarDocked();
     document.body.classList.toggle("file-dock", docked);
-    document.body.classList.toggle("file-wrap", fileSidebar.wrap);
     // 触屏（手机 / 平板）上滑入的那一层铺满整屏（见 chat.css 的 body.file-full）：
     // 底下那层遮罩整个被盖住，「点外面收起」在那条路上就没了，收起看头上那颗叉。
     document.body.classList.toggle("file-full", fileSidebar.open && !docked && IS_TOUCH_DEVICE);
     applyFileSidebarWidth();
     const btn = document.getElementById("fileSidebarBtn");
     if (btn) { btn.title = fileSidebar.open ? "收起文件侧边栏" : "文件侧边栏"; }
-    const wrapBtn = document.getElementById("fileWrap");
-    if (wrapBtn) {
-      // 角上那颗开关点下去要做什么就在悬停提示里说清楚，按下去的样子（.on）表示现在是折行的。
-      wrapBtn.title = fileSidebar.wrap ? "长行折起来了，点一下改成一行就是一行" : "一行就是一行，点一下把长行折起来";
-      wrapBtn.setAttribute("aria-pressed", fileSidebar.wrap ? "true" : "false");
-      wrapBtn.classList.toggle("on", fileSidebar.wrap);
-    }
     syncDockHeaderHeight();
     syncFileView();   // 开着 / 收起变了：横条、上下两格跟着换
   }
@@ -6966,13 +6960,6 @@
   }
   function readFileSidebarWanted() {
     try { return localStorage.getItem(FILE_SIDEBAR_STORE_KEY) === "1"; } catch (e) { return false; }
-  }
-  function rememberFileSidebarWrap(wrap) {
-    try { localStorage.setItem(FILE_SIDEBAR_WRAP_STORE_KEY, wrap ? "1" : "0"); } catch (e) { /* 存不了就只管这一次 */ }
-  }
-  /** 没记过时是一行就是一行（跟这一列本来的摆法一致）。 */
-  function readFileSidebarWrapWanted() {
-    try { return localStorage.getItem(FILE_SIDEBAR_WRAP_STORE_KEY) === "1"; } catch (e) { return false; }
   }
 
   /** 路径在界面上的写法：目录带一个末尾斜杠，一眼看出它不是文件。 */
@@ -7084,6 +7071,7 @@
     const draft = tab ? fileDraftOf(tab.path) : null;
     const page = tab ? fileTabPage(tab) : null;
     if (!page || !draft) { return; }
+    dropFileRows(tab);
     page.innerHTML = "";
     const box = document.createElement("div");
     box.className = "file-edit";
@@ -7382,6 +7370,8 @@
   /**
    * 切到第 index 份标签：只露它那一块正文，其余的藏着（它们还留着：切回来不必重读，
    * 内容与读到哪儿都在）。走之前把现在这一份读到哪儿记在它名下。
+   * 藏着的那一份照样听着滚动（它自己也只摆了几百行，开销很小）：切回来不必把行重新摆一遍，
+   * 人在这儿选着的字也还在。行高要是跟着字号变过，切回来那一下由 syncFileView 重量（见 refreshFileRows）。
    */
   function activateViewTab(index) {
     const v = fileSidebar.view;
@@ -7393,6 +7383,7 @@
     v.tabs.forEach((e) => { e.confirming = false; });
     syncViewPages();
     const next = viewTab();
+    if (next && next.file && next.file.rows && !next.file.cluster) { mountFileRows(next.file); }
     if (body) { body.scrollTop = next ? (Number(next.top) > 0 ? Number(next.top) : 0) : 0; }
   }
 
@@ -7405,6 +7396,8 @@
     document.body.classList.toggle("file-view", fileViewing());
     // 打开 / 换一份的时候把字号那两颗按钮重算一遍：记着的字号得按现在的界面字号验一道（见 applyFileViewerFont）
     applyFileViewerFont();
+    // 弹窗收起来又打开、窗口改过大小：行高得重量一道（藏着的时候浏览器量出来是 0）
+    refreshFileRows();
     // 上面那一格（清单）悬停能看到现在待在哪一层
     const ft = fileSidebar.fileTab;
     if (fileSidebar.dirBody) {
@@ -7412,6 +7405,14 @@
     }
     syncFileViewerBox();
     syncFileBar();
+  }
+
+  /** 现在看着的那一份要是行：让它重量一道行高、重摆一下看得见的那一段（见 mountFileRows）。 */
+  function refreshFileRows() {
+    const entry = viewTab();
+    const cz = entry && entry.file ? entry.file.cluster : null;
+    if (!cz) { return; }
+    try { cz.refresh(true); } catch (e) { /* 摆不了就照旧摆着 */ }
   }
 
   /** 记在这台设备里的那一块（位置 + 大小）：没记过 / 记坏了就给 null。 */
@@ -7489,6 +7490,7 @@
     fileSidebar.font = next;
     try { localStorage.setItem(FILE_VIEWER_FONT_STORE_KEY, String(next)); } catch (e) { /* 存不了就只管这一次 */ }
     applyFileViewerFont();
+    reflowFileRows();   // 行高变了：分量一遍、看到的那一行也摆回去（见 reflowFileRows）
   }
 
   /** 顶条下边那一条线（弹窗不让往上压过它）。 */
@@ -7594,7 +7596,7 @@
 
   /**
    * 弹窗顶上那条：开着几份就是几个标签（一份的时候不排标签，直接写它的写法），
-   * 右边是颗铅笔（改这个文件）/ 存 / 放弃、折行开关与关掉弹窗那颗叉。它在 #fileBody 外面，
+   * 右边是颗铅笔（改这个文件）/ 存 / 放弃、字号两颗与关掉弹窗那颗叉。它在 #fileBody 外面，
    * 所以正文怎么滚它都在。
    */
   function syncFileBar() {
@@ -7605,10 +7607,6 @@
     const fileTab = entry && entry.kind === "file" ? entry.file : null;
     const editing = !!(fileTab && fileTab.editing);
     const conflict = !!(fileTab && fileTab.conflict);
-    // 折行开关只在真看一个文件时露面：diff 里没有这个开关（那边一律折起来）；
-    // 改的时候照样有用（那一块文本框也跟着折）
-    const wrapBtn = document.getElementById("fileWrap");
-    if (wrapBtn) { wrapBtn.hidden = !viewing || entry.kind !== "file"; }
     // 铅笔：真看着一份能改的代码、还没在改的时候才露面（见 canEditFile）
     const editBtn = document.getElementById("fileEdit");
     if (editBtn) { editBtn.hidden = !fileTab || editing || !canEditFile(fileTab); }
@@ -7737,18 +7735,31 @@
   }
 
   /**
-   * 在这一格已经画好的正文里跳到某一行：切回一个开着、内容还在的标签时用，不必重新读文件。
-   * @returns 跳到了没有：这一块里没有那一行（图、目录，或者缓存旧了行数变少）给 false，调用方去重读
+   * 在这一格已经摆好的正文里跳到某一行：切回一个开着、内容还在的标签时用，不必重新读文件。
+   * @returns 跳到了没有：这份里没有那一行（图、目录，或者缓存旧了行数变少）给 false，调用方去重读
    */
   function jumpInFilePage(tab, line) {
-    const page = fileTabPage(tab);
-    const rows = page ? page.querySelectorAll(".file-line") : [];
-    const row = rows[line - 1] || null;
-    if (!row) { return false; }
-    page.querySelectorAll(".file-line.hit").forEach((r) => r.classList.remove("hit"));
-    row.classList.add("hit");
-    scrollFileBody(row, line, tab.scrollTop);
+    if (!tab || !tab.rows || !tab.cluster || !(line > 0) || line > tab.rowCount) { return false; }
+    markFileHitLine(tab, line);
+    scrollFileBody(tab, line, tab.scrollTop);
     return true;
+  }
+
+  /**
+   * 把点亮的那一行换成这一行：只改 tab.rows 里那两行再让它重摆（那一行这会儿多半不在页面上，
+   * 得等滚到它那儿才看得见）。
+   */
+  function markFileHitLine(tab, line) {
+    if (!tab || !tab.rows || tab.hitLine === line) { return; }
+    const old = tab.hitLine;
+    if (old > 0 && tab.rows[old - 1]) {
+      tab.rows[old - 1] = tab.rows[old - 1].replace('class="file-line hit"', 'class="file-line"');
+    }
+    if (line > 0 && tab.rows[line - 1]) {
+      tab.rows[line - 1] = tab.rows[line - 1].replace('class="file-line"', 'class="file-line hit"');
+    }
+    tab.hitLine = line > 0 ? line : 0;
+    if (tab.cluster) { tab.cluster.update(tab.rows); }
   }
 
   /**
@@ -7781,7 +7792,7 @@
       if (tab.drawn) {
         if (linkLine > 0 && jumpInFilePage(tab, linkLine)) { pollActiveFile(); return; }
         if (linkLine === 0) {
-          scrollFileBody(null, 0, tab.scrollTop);
+          scrollFileBody(tab, 0, tab.scrollTop);
           pollActiveFile();
           return;
         }
@@ -7900,6 +7911,7 @@
    */
   function dropFileTabPage(tab) {
     if (!tab) { return; }
+    dropFileRows(tab);
     releaseTabImage(tab);
     if (tab.page && tab.page.parentNode) { tab.page.parentNode.removeChild(tab.page); }
     tab.page = null;
@@ -7914,6 +7926,8 @@
    */
   function showFileNote(tab, text, download) {
     if (!fileSidebar.body) { return; }
+    // 这里要摆的是一句话，不是一行一行的正文：前端那一段（见 mountFileRows）先撤掉
+    dropFileRows(tab);
     const page = fileTabPage(tab);
     if (!page) { return; }
     const href = download ? download.url : "";
@@ -7995,6 +8009,7 @@
   function renderFileImage(blob, tab) {
     const page = fileTabPage(tab);
     if (!page) { return; }
+    dropFileRows(tab);
     const url = URL.createObjectURL(blob);
     releaseTabImage(tab);
     tab.imageUrl = url;
@@ -8124,20 +8139,20 @@
   /**
    * 把一条 200 的回应画进正文：图片按图片显示；markdown 排好版渲染成文档（不留行号，
    * 链接里带的行号在这条路上等于没带）；其余当文本、一行一格带行号。
-   * @returns 文本那一路点亮的那一行（图片与 markdown 文档没有行，给 null）
+   * 只画，不管滚到哪儿（那是 scrollFileBody 的事）。
    */
   async function drawFileResponse(resp, tab) {
     const type = (resp.headers.get("Content-Type") || "").toLowerCase();
     if (type.indexOf("image/") === 0) {
       tab.text = undefined;   // 图没法改（见 canEditFile）
       renderFileImage(await resp.blob(), tab);
-      return null;
+      return;
     }
     releaseTabImage(tab);   // 这个文件以前是张图（现在换成文本了），把那份地址放掉
     const text = await resp.text();
     tab.text = text;        // 能不能在弹窗里改，看的就是这一份（见 canEditFile）
-    if (isMarkdownPath(tab.path)) { renderFileMarkdown(text, tab); return null; }
-    return renderFileText(text, tab.line, tab);
+    if (isMarkdownPath(tab.path)) { renderFileMarkdown(text, tab); return; }
+    renderFileText(text, tab.line, tab);
   }
 
   /**
@@ -8206,6 +8221,7 @@
   function renderFileMarkdown(text, tab) {
     const page = fileTabPage(tab);
     if (!page) { return; }
+    dropFileRows(tab);
     page.innerHTML = "";
     const doc = document.createElement("div");
     doc.className = "md file-md";
@@ -8221,88 +8237,125 @@
     return i < 0 ? "" : String(path).slice(0, i);
   }
 
-  /**
-   * 一批最多占主线程多久（见 renderFileText）：一份一万多行的文件一口气建 DOM，主线程要卡住
-   * 两秒多（手机上更久）。切成几十批、每批只花十几毫秒，页面就一直答得上话。
-   * 按时间而不是按行数切：机器快就一批多画几行、慢就少画几行，不用挑一个两边合适的数。
-   */
-  const FILE_RENDER_BUDGET_MS = 12;
+  /** 一段原文放进 HTML 里的写法（上过色的那几行已经是 HTML 了，不用再过这一道）。 */
+  function escapeHtmlText(text) {
+    return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
 
   /** 正文里的一行：行号加那一行的原文（colored 是上过色的那几行，没上色就是 null）。 */
-  function fileLineRow(line, num, colored, index) {
-    const row = document.createElement("div");
-    row.className = "file-line";
-    const numEl = document.createElement("span");
-    numEl.className = "file-num";
-    numEl.textContent = String(num);
-    const code = document.createElement("span");
-    code.className = "file-text";
-    if (colored) { code.innerHTML = colored[index]; } else { code.textContent = line; }
-    row.appendChild(numEl);
-    row.appendChild(code);
-    return row;
+  function fileLineHtml(line, num, colored, index, hit) {
+    const body = colored ? colored[index] : escapeHtmlText(line);
+    return '<div class="file-line' + (hit ? ' hit' : '') + '">'
+        + '<span class="file-num">' + num + '</span>'
+        + '<span class="file-text">' + body + '</span>'
+        + '</div>';
   }
 
   /**
-   * 把一个文件画出来：一行一格、带行号，hitLine 那一行点亮（0 = 不点亮）。
+   * 把一个文件摆出来：一行一格、带行号，hitLine 那一行点亮（0 = 不点亮）。
    * 本仓库认得的那几种语言按扩展名上色（见 highlightFileLines），其余黑白。
-   * 一行一格是分批画的：第一批当场画完（点开就看得见开头），剩下的让出主线程一批一批补上，
-   * 免得一份大文件把页面卡在那儿。要停的那一行落在后面几批里，等它画到页面上再滚过去。
-   * 只画，不管滚到哪儿（那是 scrollFileBody 的事）：返回点亮的那一行，没点亮（或者还没画到）就是 null。
+   *
+   * 先把全文化成一行一段的 HTML 存在标签上（tab.rows），再交给 Clusterize 摆（见 mountFileRows）：
+   * 页面里只留看得见的那一段。不这么做的话，一份两万行的文件光建行元素就要一两秒，
+   * 手机上更久（这就是当初靠 content-visibility 顶住的那一下）。
+   * 只摆，不管滚到哪儿（那是 scrollFileBody 的事）。
    * @param text 文件全文（后端按 UTF-8 给回来的）
    * @param tab 那个文件的标签（按它的写法认语言、上色）
    */
   function renderFileText(text, hitLine, tab) {
-    const page = fileTabPage(tab);
-    if (!page) { return null; }
-    page.innerHTML = "";
+    if (!fileTabPage(tab)) { return; }
     const lines = String(text).split("\n");
     // 文件末尾那个换行会多出一个空行：不画它（行号也就不会凭空多出一个）
     if (lines.length > 1 && lines[lines.length - 1] === "") { lines.pop(); }
     const colored = highlightFileLines(String(text), tab.path);
-    const seq = tab.seq;      // 画到一半又读了一遍 / 换成了别的文件：排着的那几批就不作数了
-    let at = 0;               // 画到第几行了
-    let hitRow = null;
-    let first = true;         // 第一批是当场画的：那一行要是在这批里，交给调用方去滚
-    let hitScrolled = false;
-    const drawBatch = () => {
-      if (tab.seq !== seq || !page.isConnected) { return; }
-      const frag = document.createDocumentFragment();
-      const until = performance.now() + FILE_RENDER_BUDGET_MS;
-      while (at < lines.length) {
-        const row = fileLineRow(lines[at], at + 1, colored, at);
-        if (hitLine > 0 && at + 1 === hitLine) { row.classList.add("hit"); hitRow = row; }
-        frag.appendChild(row);
-        at += 1;
-        // 每 32 行看一次表（看表本身也有代价，一行一看白花）
-        if ((at & 31) === 0 && performance.now() >= until) { break; }
-      }
-      page.appendChild(frag);
-      // 要停的那一行画到页面上了：滚过去（第一批里的那一行走调用方那条路，这里再滚一次会把人
-      // 刚拖走的位置拽回去）
-      if (!first && hitRow && !hitScrolled) { hitScrolled = true; scrollFileBody(hitRow, hitLine, tab.scrollTop); }
-      if (at < lines.length) { setTimeout(drawBatch, 0); }
-    };
-    drawBatch();
-    first = false;
-    return hitRow;
+    const hit = Number(hitLine) > 0 && Number(hitLine) <= lines.length ? Number(hitLine) : 0;
+    const rows = new Array(lines.length);
+    for (let i = 0; i < lines.length; i++) {
+      rows[i] = fileLineHtml(lines[i], i + 1, colored, i, hit === i + 1);
+    }
+    tab.rows = rows;
+    tab.rowCount = rows.length;
+    tab.hitLine = hit;
+    mountFileRows(tab);
+  }
+
+  /**
+   * 把这一格的行摆进它那块正文里（只摆看得见的那一段）：交给 Clusterize 按滚动位置换窗口。
+   * 行高一样高才能这么算（见 chat.css 的 .file-line：长行一律不折，一行就是一行），
+   * 所以一份文件从第一行到最后一行都能直接算出位置、直接跳过去。
+   */
+  function mountFileRows(tab) {
+    const page = fileTabPage(tab);
+    if (!page || !tab.rows) { return; }
+    unmountFileRows(tab);
+    page.innerHTML = "";
+    const Clusterize = globalThis.Clusterize;
+    if (!Clusterize) {
+      // 这个文件没取到（理论上不该发生）：行还是给出来，只是全部摆上，不再分窗口
+      page.innerHTML = tab.rows.join("");
+      return;
+    }
+    tab.cluster = new Clusterize({
+      rows: tab.rows,
+      scrollElem: fileSidebar.body,
+      contentElem: page,
+      rows_in_block: FILE_ROWS_IN_BLOCK,
+      blocks_in_cluster: FILE_BLOCKS_PER_VIEW,
+      show_no_data_row: false,
+      keep_parity: false,
+    });
+  }
+
+  /**
+   * 把这一格的行从正文里撤掉（关掉、换成图 / 文档 / 一句说明之前）：听滚动的那一份也跟着放掉。
+   * 行本身还留在 tab.rows 里：换个文件又读一遍的时候它会被顶掉，不顶掉的那几处（见图 / 文档）
+   * 走的是 dropFileRows，连行一起丢掉。
+   */
+  function unmountFileRows(tab) {
+    if (!tab || !tab.cluster) { return; }
+    try { tab.cluster.destroy(true); } catch (e) { /* 放不掉就算了 */ }
+    tab.cluster = null;
+  }
+
+  /** 这一格不再是一行一行的正文了（图 / 文档 / 网页 / 文本框 / 一句说明）：行也一起丢掉。 */
+  function dropFileRows(tab) {
+    if (!tab) { return; }
+    unmountFileRows(tab);
+    tab.rows = null;
+    tab.rowCount = 0;
+    tab.hitLine = 0;
+  }
+
+  /**
+   * 字号变了：行高也跟着变，Clusterize 存的那一份（连着撑开总高的那两块空白）得重量一遍。
+   * 顺便把“现在看到的是第几行”摆回去：不摆的话，字大一点、底下就多跑出去好几行。
+   */
+  function reflowFileRows() {
+    const entry = viewTab();
+    const cz = entry && entry.file ? entry.file.cluster : null;
+    const body = fileSidebar.body;
+    if (!cz || !body) { return; }
+    const old = cz.options.item_height || 0;
+    const topLine = old > 0 ? body.scrollTop / old : 0;
+    try { cz.refresh(true); } catch (e) { return; }
+    const now = cz.options.item_height || 0;
+    if (now > 0) { body.scrollTop = Math.max(0, topLine * now); }
   }
 
   /**
    * 把正文滚到该在的地方。
-   * @param hitRow 点亮的那一行（没有就是 null）
+   * 要停的那一行这会儿可能还不在页面上（只摆了看得见的那一段），所以不能照它的位置算，
+   * 按“第几行 × 行高”直接算（行一样高，见 mountFileRows）。
+   * @param tab 看的是哪一个文件（行高存在它的 Clusterize 里）
    * @param centerOnLine 这次链接说的那一行（0 = 没有）：>0 就停在它那里、居中
    * @param savedTop 没有要停的行时，回到这个标签上次读到的地方
    */
-  function scrollFileBody(hitRow, centerOnLine, savedTop) {
+  function scrollFileBody(tab, centerOnLine, savedTop) {
     const body = fileSidebar.body;
     if (!body) { return; }
-    if (hitRow && centerOnLine > 0) {
-      // 停在那一行：按两边的位置差算滚动量（scrollIntoView 会连外面那几层一起滚，不行）
-      const bodyRect = body.getBoundingClientRect();
-      const rowRect = hitRow.getBoundingClientRect();
-      const delta = (rowRect.top - bodyRect.top) - (bodyRect.height - rowRect.height) / 2;
-      body.scrollTop = Math.max(0, body.scrollTop + delta);
+    const h = tab && tab.cluster ? (tab.cluster.options.item_height || 0) : 0;
+    if (Number(centerOnLine) > 0 && h > 0) {
+      body.scrollTop = Math.max(0, (Number(centerOnLine) - 1) * h - (body.clientHeight - h) / 2);
       return;
     }
     body.scrollTop = Number(savedTop) > 0 ? Number(savedTop) : 0;
@@ -8354,6 +8407,7 @@
     const src = siteUrl(tab);
     const old = force ? null : page.querySelector("iframe.file-site");
     if (old && old.getAttribute("src") === src) { return; }
+    dropFileRows(tab);
     page.innerHTML = "";
     const frame = document.createElement("iframe");
     frame.className = "file-site";
@@ -8423,7 +8477,8 @@
         tab.drawn = true;
         return;
       }
-      scrollFileBody(await drawFileResponse(resp, tab), linkLine, tab.scrollTop);
+      await drawFileResponse(resp, tab);
+      scrollFileBody(tab, linkLine, tab.scrollTop);
       tab.drawn = true;
       syncFileBar();   // 刚画完：能改的文件这会儿才该冒出那颗铅笔（见 canEditFile）
     }).catch(() => {
@@ -8679,13 +8734,6 @@
     if (fileSidebar.open) { setFileSidebarOpen(false); return; }
     closeRightSidebarForFile();
     setFileSidebarOpen(true);
-  }
-
-  /** 这一列角上那颗折行开关：「长行折起来」与「一行就是一行、横向滚」两个来回切，选的那个记在这台设备里。 */
-  function toggleFileSidebarWrap() {
-    fileSidebar.wrap = !fileSidebar.wrap;
-    rememberFileSidebarWrap(fileSidebar.wrap);
-    syncFileSidebarLayout();
   }
 
   /**
@@ -9176,7 +9224,7 @@
     // 弹窗（一个文件 / 一份 diff）：盖住对话那一块，左边那一列照旧露着（见 syncFileViewerBox）。
     // 它单独挂在 body 上（不放进这一列里）：这一列在手机上本身就是铺满整屏的一层，
     // 弹窗要盖得住它，得跟它平级、z-index 比它高（见 chat.css 的 #fileStage）。
-    // 顶上那条横条写着看的是什么，右边是折行开关与关掉那颗叉。
+    // 顶上那条横条写着看的是什么，右边是字号那两颗与关掉那颗叉。
     const stage = document.createElement("div");
     stage.id = "fileStage";
     stage.innerHTML =
@@ -9194,7 +9242,6 @@
           '<button id="fileRollback" class="file-bar-btn wide" type="button" title="回滚" aria-label="回滚">' + ICONS.discard + ' 回滚</button>' +
           '<button id="fileFontMinus" class="file-bar-btn" type="button" title="字小一点" aria-label="字小一点">A−</button>' +
           '<button id="fileFontPlus" class="file-bar-btn" type="button" title="字大一点" aria-label="字大一点">A+</button>' +
-          '<button id="fileWrap" type="button" aria-label="折行开关" aria-pressed="false">' + ICONS.wrap + '</button>' +
           '<button id="fileCloseFile" type="button" title="关掉（Esc）" aria-label="关掉">' + ICONS["close-bold"] + '</button>' +
         '</div>' +
         '<div id="fileBody" class="pk-body"></div>' +
@@ -9212,7 +9259,6 @@
     fileSidebar.changeBody = root.querySelector("#changePane");
     fileSidebar.panel = root.querySelector("#filePanel");
     fileSidebar.open = readFileSidebarWanted();
-    fileSidebar.wrap = readFileSidebarWrapWanted();
     fileSidebar.width = readFileSidebarWidthWanted();
     fileSidebar.resize = root.querySelector("#fileResize");
     fileSidebar.stage = stage;
@@ -9292,7 +9338,6 @@
     wireDirSwipe();
     root.querySelector("#fileClose").addEventListener("click", () => setFileSidebarOpen(false));
     root.querySelector("#fileSearchBtn").addEventListener("click", () => openFileSearch());
-    stage.querySelector("#fileWrap").addEventListener("click", () => toggleFileSidebarWrap());
     fileSidebar.fontMinus.addEventListener("click", () => stepFileViewerFont(-1));
     fileSidebar.fontPlus.addEventListener("click", () => stepFileViewerFont(1));
     applyFileViewerFont();
