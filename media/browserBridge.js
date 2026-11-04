@@ -1082,13 +1082,13 @@
       }
       requestDesktopScreenshot();
     });
-    // 摆进输入框底下那条小横排（#inputRow），落在「后台任务」那颗（三根横线）左边。
-    // 那颗由 chat.js 后头加（本文件比主脚本先加载），这会儿还没有，所以直接排进横排
+    // 摆进输入框底下那条小横排（#inputRow）右头，紧挨着最右边那颗自动模式的开关。
+    // 那颗开关由 chat.js 后头加（本文件比主脚本先加载），这会儿还没有，所以直接排进横排
     // 就落在它前头；万一已经有了，也插在它左边。截不了桌面时由 setDesktopShotEnabled 摘掉。
     (function () {
       var row = document.getElementById("inputRow");
       if (!row) { return; }
-      row.insertBefore(shotBtn, document.getElementById("bashBtn") || null);
+      row.insertBefore(shotBtn, document.getElementById("autoBtn") || null);
     })();
 
     var btn = document.createElement("button");

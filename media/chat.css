@@ -96,52 +96,30 @@
   #jumpBottom.hidden { display: none; }
   #jumpBottom svg { width: 14px; height: 14px; display: block; }
 
-  /* 「后台任务」（框底那条横排右头那颗按钮点开，见 chat.js 的 openBashMenu）：从输入那个盒子
-     上头往上弹的一小张清单（输入框本来就在屏幕底，往上弹才不会被键盘顶到），贴着按钮
-     那一头（右边），高度封顶，多了自己滚。
-     里面一行一条还在后台跑的命令：头一行是编号 + 在跑 + 已经跑了多久 + 一颗「停」，
-     下面一行是命令原文（一行放不下就截掉，悬停看全）。 */
-  #bashMenu {
-    position: absolute; bottom: 100%; right: 0; margin-bottom: 6px; z-index: 20;
-    box-sizing: border-box;
-    width: min(420px, calc(100vw - 24px));
-    max-height: min(320px, 55vh); overflow-y: auto;
-    padding: 4px;
-    background: var(--vscode-dropdown-background, var(--vscode-editorWidget-background));
-    color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
-    border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border, rgba(128,128,128,0.4)));
-    border-radius: 6px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.28);
+  /* 后台命令那一块（消息流最末尾，见 chat.js 的 renderBashBlock）：一条一行，就长成
+     「正在跑的那一条」那样 —— 钟 + 编号 + 命令 + 一颗「停」+ 已经跑了多久（耗时靠右），
+     一行放不下的字自己横向滚（那几条 .tr-* 见下面「正在跑的那一条」那一节，两处共用一套）。
+     钟跟齿轮是两件事：齿轮转 = 模型这会儿正忙着，你插不进话；钟的针在走 = 这条命令在后台
+     自己跑，不挡你说话，跑完它自己把结果交回这个会话。 */
+  .bash-running { display: flex; flex-direction: column; gap: 2px; margin: 2px 0; padding: 0 14px; }
+  .bash-run {
+    display: flex; align-items: center; gap: 4px; min-width: 0; padding-left: 6px;
+    font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.75;
   }
-  #bashMenu.hidden { display: none; }
-  .bash-item { padding: 5px 8px 6px; border-radius: 4px; }
-  .bash-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
-  .bash-head { display: flex; align-items: center; gap: 8px; font-size: calc(var(--vscode-font-size, 13px) - 1px); }
-  .bash-no { flex: 0 0 auto; opacity: 0.7; font-family: var(--vscode-editor-font-family, monospace); }
-  /* 「在跑」：跟那颗按钮亮着时一个颜色，一眼看出这条是活的 */
-  .bash-state { flex: 0 0 auto; color: var(--vscode-charts-blue, #3794ff); }
-  .bash-time {
-    flex: 0 0 auto; margin-left: auto; opacity: 0.8;
-    font-variant-numeric: tabular-nums;
-    font-family: var(--vscode-editor-font-family, monospace); font-size: 0.92em;
-  }
-  /* 「停」是一颗小胶囊：全局 button 那条蓝底白字要压掉（它只是顺手点一下的小动作） */
-  .bash-stop {
-    flex: 0 0 auto; padding: 1px 8px; font-size: 0.88em; cursor: pointer;
-    background: none; color: var(--vscode-foreground); opacity: 0.75;
-    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); border-radius: 9px;
-    font-family: var(--vscode-font-family);
-  }
-  .bash-stop:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
-  .bash-stop:disabled { opacity: 0.4; cursor: default; }
-  /* 命令原文：一个字都别截（长命令、一行里几段用 && 接起来的、带换行的脚本都照原样排），
-     一行放不下就换行，长到顶了由上面那条 max-height 让它自己滚。 */
-  .bash-cmd {
-    margin-top: 2px; opacity: 0.8;
-    white-space: pre-wrap; overflow-wrap: anywhere;
-    font-family: var(--vscode-editor-font-family, monospace); font-size: 0.86em;
-  }
-  .bash-empty { padding: 18px 10px; text-align: center; opacity: 0.6; }
+  /* 比这一行的字大一圈（1.15em）：表盘跟针在十来像素上才看得清 */
+  .bash-clock { flex: 0 0 auto; }
+  .bash-clock svg { display: block; width: 1.15em; height: 1.15em; }
+  /* 钟自己走：长针（分针）一分钟一圈，短针（时针）十二小时一圈。
+     转的是针，绕的是表盘正中（view-box 的 8,8），不是这根线自己的小框。 */
+  .bash-clock .ck-hour, .bash-clock .ck-min { transform-box: view-box; transform-origin: 8px 8px; }
+  .bash-clock .ck-min { animation: bash-clock-min 60s linear infinite; }
+  .bash-clock .ck-hour { animation: bash-clock-hour 720s linear infinite; }
+  @keyframes bash-clock-min { to { transform: rotate(360deg); } }
+  @keyframes bash-clock-hour { to { transform: rotate(360deg); } }
+  /* 系统里开了「减少动态效果」：针就不走了（旁边那几个字照旧在数，不靠它） */
+  @media (prefers-reduced-motion: reduce) { .bash-clock .ck-min, .bash-clock .ck-hour { animation: none; } }
+  /* 编号：排在钟后面、命令前面，不跟着字一起滚 */
+  .bash-run-no { flex: 0 0 auto; opacity: 0.8; }
 
   /* ---- 顶条：中间一排会话格与当前目录，左右几颗按钮（网页端自己接的那几颗） ---- */
   /* 一格一个主会话，点一下切过去；宽度不够就收窄、再不够就叠起来（见 chat.js 的 layoutSessionTabs），
@@ -342,22 +320,24 @@
   /* 跑完的那一条：齿轮停住（这一条上那颗是「在不在跑」的指示），字与耗时都留着不动 */
   .tool-running-item.done .tool-icon { animation: none; }
   /* 字自己滚的时候，后面那个耗时不跟着动：它钉在这一条的末尾（margin-left: auto 推到右边），
-     不缩水（flex: 0 0 auto），所以字滚它的、数字坐它的。 */
-  .tool-running-item .tr-time { flex: 0 0 auto; margin-left: auto; padding-left: 8px; opacity: 0.8; font-variant-numeric: tabular-nums; }
-  .tool-running-item .tr-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+     不缩水（flex: 0 0 auto），所以字滚它的、数字坐它的。
+     下面这几条 .tr-* 两处共用：「正在跑的那一条」（.tool-running-item）与消息流末尾的后台命令
+     （.bash-run，见上面的 .bash-running）。 */
+  .tool-running-item .tr-time, .bash-run .tr-time { flex: 0 0 auto; margin-left: auto; padding-left: 8px; opacity: 0.8; font-variant-numeric: tabular-nums; }
+  .tool-running-item .tr-text, .bash-run .tr-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 一长串命令只写了核心那一段时，后面跟一个「+N」（见 chat.js 的 runningLineText）：
      灰一点、不跟着字横向滚，也不缩水 —— 一眼就知道还有没写出来的那几段，整条在那个提示框里看。 */
   .tool-running-item .tr-more { flex: 0 0 auto; opacity: 0.6; font-size: 0.92em; }
   /* 这一条是 bash 命令时，右边多出来那颗「放后台」（见 chat.js 的 syncRunningLine）：
      点了就把这条命令转到后台，不在这儿等它跑完。它排在耗时左边：字 | 按钮 | 耗时（靠右）。 */
-  .tool-running-item .tr-act {
+  .tool-running-item .tr-act, .bash-run .tr-act {
     flex: 0 0 auto; padding: 0 7px; font-size: 0.92em; cursor: pointer;
     background: none; color: var(--vscode-foreground); opacity: 0.8;
     border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.4)); border-radius: 9px;
     font-family: var(--vscode-font-family);
   }
-  .tool-running-item .tr-act:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
-  .tool-running-item .tr-act:disabled { opacity: 0.45; cursor: default; }
+  .tool-running-item .tr-act:hover, .bash-run .tr-act:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
+  .tool-running-item .tr-act:disabled, .bash-run .tr-act:disabled { opacity: 0.45; cursor: default; }
   /* 一行放不下的（长命令行）：字自己横向滚，只往一个方向 —— 从头滚到末尾，到末尾停一下、
      再从开头来（不回程）。滚多远（--tr-shift）、一趟多久（--tr-dur）由 chat.js 量出来现算
      （见 rollRunningText）。两头的停顿是固定半秒，写在一条一份的 keyframes 里（叫 tr-roll-<编号>，
@@ -367,9 +347,9 @@
      系统里开了「减少动态效果」也照旧滚：这一条滚的就是一行字、又是慢慢走的，不碍事；
      停下来就只剩截断（下面那条 clip 把省略号也去掉了），后面那半条命令在界面上就再也看不全
      ——真机上撞到过：人看到的是半截命令一动不动，以为界面卡住了。 */
-  .tool-running-item .tr-text.roll { text-overflow: clip; }
-  .tool-running-item .tr-run { display: block; }
-  .tool-running-item .tr-text.roll .tr-run { animation: tr-roll var(--tr-dur, 6s) linear infinite; }
+  .tool-running-item .tr-text.roll, .bash-run .tr-text.roll { text-overflow: clip; }
+  .tool-running-item .tr-run, .bash-run .tr-run { display: block; }
+  .tool-running-item .tr-text.roll .tr-run, .bash-run .tr-text.roll .tr-run { animation: tr-roll var(--tr-dur, 6s) linear infinite; }
   @keyframes tr-roll {
     0%, 3% { transform: translateX(0); }
     94%, 100% { transform: translateX(var(--tr-shift, 0px)); }
@@ -539,11 +519,10 @@
      量法：node dev/perfProbe.js --auto --cpu 4。 */
   #composer.auto { border-color: var(--vscode-charts-green, #3fb950); }
   #inputRow { display: flex; align-items: center; gap: 2px; }
-  /* 框底那条横排左头那颗加号（新建会话）、右头那颗「截图」与「后台任务」、再往右的自动模式按钮：
+  /* 框底那条横排左头那颗加号（新建会话）、右头那颗「截图」、再往右的自动模式按钮：
      一样的矮方块，鼠标扫过亮一下。中间是模型胶囊（见下面的 #ctxIcon）。 */
   #newSessionBtn,
   #autoBtn,
-  #bashBtn,
   #browserScreenshotBtn {
     flex: 0 0 auto; width: 26px; height: 26px; padding: 0;
     display: flex; align-items: center; justify-content: center;
@@ -551,11 +530,9 @@
     color: var(--vscode-descriptionForeground, inherit); cursor: pointer;
   }
   #newSessionBtn svg,
-  #bashBtn svg,
   #browserScreenshotBtn svg { width: 15px; height: 15px; display: block; }
   #newSessionBtn:hover,
   #autoBtn:hover,
-  #bashBtn:hover,
   #browserScreenshotBtn:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); color: var(--vscode-foreground); }
   /* 自动模式那颗按钮：一直在输入框右下角最右边，长的是一颗小开关 ——
      圆角胶囊里一颗滑块：没开时滑块在左、胶囊灰着；开着时滑块滑到右边、胶囊变绿。
@@ -575,26 +552,8 @@
   /* 一个会话都没有时那颗加号灰掉（新会话总得开在某个工作区里，先去面板里挑一个） */
   #newSessionBtn:disabled { opacity: 0.4; cursor: default; }
   #newSessionBtn:disabled:hover { background: transparent; color: var(--vscode-descriptionForeground, inherit); }
-  /* 清单开着的时候这颗按钮一直亮着（一眼看出是哪颗按钮弹的） */
-  #bashBtn.on { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); color: var(--vscode-foreground); }
-  /* 「截图」与「后台任务」一起靠着右头（截图在最前，紧挨着三根横线左边）：
-     中间空出来的地方就是留白，所以那个 margin-left: auto 挂在「截图」身上；
-     这台机器截不了桌面、没有截图按钮时，照旧挂在「后台任务」上（见底下那条规则）。 */
+  /* 「截图」靠着右头：中间空出来的地方就是留白，所以那个 margin-left: auto 挂在它身上。 */
   #browserScreenshotBtn { margin-left: auto; }
-  #browserScreenshotBtn + #bashBtn { margin-left: 0; }
-  #bashBtn { position: relative; margin-left: auto; }
-  /* 有命令在后台跑的时候，那颗按钮右下角挂一个小数字（几条在跑；没有就什么也不挂，见 chat.js 的
-     syncBashBtn）：按钮本身不变色，只是那颗图标右下角正好空着，数字就摆在那儿。
-     不垫底色（垫了的话鼠标扫过按钮时那块底色会碍眼），一个个位数正好落在横线下面那块空当里。 */
-  #bashBtn .bash-count {
-    position: absolute; right: 2px; bottom: 1px;
-    font-size: 10px; line-height: 1; font-weight: 600; font-variant-numeric: tabular-nums;
-    color: var(--vscode-charts-blue, #3794ff);
-    pointer-events: none;   /* 点着的还是那颗按钮 */
-  }
-  /* 两位数（9+）：字号缩一点，右边还贴着同一个位置，多出来的宽度往左让 */
-  #bashBtn .bash-count.wide { font-size: 8.5px; }
-  #bashBtn .bash-count.hidden { display: none; }
   /* 打字的地方：框里剩下多少地方全是它的（宽度沾满，高度自己按内容长，见 autoResize）。
      这里不能写 flex: 1 —— 盒子是竖排，flex-basis: 0 会把 height 顶掉，
      打字一多就长不高了（框里自己滚）。 */

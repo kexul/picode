@@ -561,7 +561,7 @@ export class SessionRuntime {
 
     // ---- 后台命令（那个接管了 bash 的扩展报上来的）----
 
-    /** 这个会话的后台命令清单（新的排前面）：界面那颗「后台任务」按钮弹出来的弹窗用它、刷新后重问一次也用它。 */
+    /** 这个会话的后台命令清单（新的排前面）：消息流末尾那一块「后台任务」用它、刷新后重问一次也用它。 */
     public listBashTasks(): BashTaskInfo[] {
         return Array.from(this.bashTasks.values()).sort((a, b) => b.no - a.no);
     }

@@ -65,8 +65,6 @@
     pause: '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="3.6" y="2.6" width="3.2" height="10.8" rx="0.8"/><rect x="9.2" y="2.6" width="3.2" height="10.8" rx="0.8"/></svg>',
     // 停止小方块：跟上面两颗一样大（12px），不然它看着比暂停粗一圈
     "stop-small": '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="3.4" y="3.4" width="9.2" height="9.2" rx="1.2"/></svg>',
-    // 三条横线：输入框右边那颗「后台任务」（一条命令一行，所以是清单）。
-    tasks: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h7"/></svg>',
   };
   /** 文件夹选择器里行首那颗图标：名字由宿主给（见 chatHost.ts 里 showFolderPicker 的 items）。 */
   const FOLDER_ROW_ICONS = { check: ICONS.check, up: ICONS["arrow-up"], folder: ICONS.folder };
@@ -645,6 +643,15 @@
   // 小尺寸下比原来那颗描边齿轮干净得多：这个图标在界面上只有 1em（十来像素），
   // 描边版每根线不到一个像素，八颗小牙糊成一个毛边小圈。
   const GEAR_SVG = '<span class="tool-icon"><svg viewBox="0 0 16 16" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M7.99997 6C6.89497 6 5.99997 6.895 5.99997 8C5.99997 9.105 6.89497 10 7.99997 10C9.10497 10 9.99997 9.105 9.99997 8C9.99997 6.895 9.10497 6 7.99997 6ZM7.99997 9C7.44797 9 6.99997 8.552 6.99997 8C6.99997 7.448 7.44797 7 7.99997 7C8.55197 7 8.99997 7.448 8.99997 8C8.99997 8.552 8.55197 9 7.99997 9ZM14.565 9.715L13.279 8.628C13.245 8.599 13.213 8.567 13.184 8.533C12.888 8.186 12.931 7.667 13.279 7.372L14.565 6.285C14.693 6.177 14.742 6.003 14.691 5.844C14.386 4.903 13.882 4.04 13.219 3.308C13.139 3.22 13.027 3.172 12.912 3.172C12.865 3.172 12.818 3.18 12.773 3.196L11.186 3.761C11.144 3.776 11.1 3.788 11.056 3.796C11.006 3.805 10.956 3.81 10.907 3.81C10.515 3.81 10.167 3.532 10.094 3.134L9.79097 1.482C9.76097 1.318 9.63397 1.188 9.46997 1.153C8.98997 1.051 8.49897 1 8.00097 1C7.50297 1 7.01097 1.052 6.53097 1.153C6.36697 1.188 6.23997 1.318 6.20997 1.482L5.90797 3.134C5.89997 3.178 5.88797 3.221 5.87297 3.263C5.75197 3.6 5.43397 3.81 5.09397 3.81C5.00197 3.81 4.90797 3.794 4.81597 3.762L3.22897 3.197C3.18397 3.181 3.13597 3.173 3.08997 3.173C2.97497 3.173 2.86297 3.221 2.78297 3.309C2.11897 4.041 1.61597 4.904 1.30997 5.845C1.25797 6.004 1.30797 6.178 1.43597 6.286L2.72197 7.373C2.75597 7.402 2.78797 7.434 2.81697 7.468C3.11297 7.815 3.06997 8.334 2.72197 8.629L1.43597 9.716C1.30797 9.824 1.25897 9.998 1.30997 10.157C1.61497 11.098 2.11897 11.961 2.78297 12.693C2.86297 12.781 2.97497 12.829 3.08997 12.829C3.13697 12.829 3.18397 12.821 3.22897 12.805L4.81597 12.24C4.85797 12.225 4.90197 12.213 4.94597 12.205C4.99597 12.196 5.04597 12.192 5.09497 12.192C5.48697 12.192 5.83497 12.47 5.90797 12.868L6.20997 14.52C6.23997 14.684 6.36697 14.814 6.53097 14.849C7.01097 14.951 7.50297 15.002 8.00097 15.002C8.49897 15.002 8.99097 14.95 9.46997 14.849C9.63397 14.814 9.76097 14.684 9.79097 14.52L10.094 12.868C10.102 12.824 10.114 12.781 10.129 12.739C10.25 12.402 10.568 12.192 10.908 12.192C11 12.192 11.094 12.208 11.186 12.24L12.772 12.805C12.818 12.821 12.865 12.829 12.911 12.829C13.026 12.829 13.138 12.781 13.218 12.693C13.882 11.961 14.385 11.098 14.69 10.157C14.742 9.998 14.692 9.824 14.564 9.716L14.565 9.715ZM12.728 11.726L11.521 11.296C11.323 11.226 11.117 11.19 10.908 11.19C10.139 11.19 9.44697 11.676 9.18797 12.399C9.15397 12.492 9.12897 12.588 9.11097 12.686L8.88097 13.937C8.59097 13.979 8.29597 14 8.00097 14C7.70597 14 7.41097 13.979 7.11997 13.936L6.89097 12.685C6.73197 11.818 5.97697 11.189 5.09497 11.189C4.98697 11.189 4.87697 11.199 4.76597 11.219C4.66897 11.237 4.57397 11.262 4.47997 11.295L3.27297 11.725C2.90497 11.264 2.61097 10.759 2.39397 10.214L3.36797 9.391C3.74097 9.076 3.96797 8.634 4.00797 8.148C4.04797 7.662 3.89497 7.19 3.57797 6.818C3.51397 6.743 3.44297 6.672 3.36797 6.608L2.39397 5.785C2.61097 5.24 2.90497 4.734 3.27297 4.274L4.47997 4.704C4.67797 4.774 4.88397 4.81 5.09397 4.81C5.86297 4.81 6.55497 4.324 6.81397 3.601C6.84797 3.507 6.87297 3.411 6.89097 3.314L7.11997 2.063C7.41097 2.021 7.70597 1.999 8.00097 1.999C8.29597 1.999 8.59097 2.02 8.88097 2.062L9.10997 3.313C9.26897 4.18 10.024 4.809 10.906 4.809C11.014 4.809 11.124 4.799 11.234 4.779C11.331 4.761 11.427 4.736 11.521 4.703L12.728 4.273C13.096 4.733 13.39 5.239 13.607 5.784L12.634 6.607C12.261 6.922 12.033 7.364 11.994 7.85C11.954 8.336 12.107 8.809 12.424 9.18C12.489 9.256 12.559 9.326 12.635 9.39L13.609 10.213C13.392 10.758 13.098 11.264 12.73 11.724L12.728 11.726Z"/></svg></span>';
+  // 后台命令那一行头上的钟（见 renderBashBlock）：一只表盘 + 两根针，针会自己走（见 chat.css 的
+  // .bash-clock）。齿轮是「模型在忙」的意思，钟是「这条在后台自己跑、时间在走」—— 两样不能混用，
+  // 所以这只钟是画出来的（codicon 的 clock 把针焊在一条 path 里，动不了）。
+  const CLOCK_SVG = '<span class="bash-clock">'
+    + '<svg viewBox="0 0 16 16" width="1em" height="1em" fill="none" stroke="currentColor" aria-hidden="true">'
+    + '<circle cx="8" cy="8" r="6.4" stroke-width="1.2"/>'
+    + '<g class="ck-hour"><path d="M8 5.6V8" stroke-width="1.6" stroke-linecap="round"/></g>'
+    + '<g class="ck-min"><path d="M8 2.7V8" stroke-width="1.2" stroke-linecap="round"/></g>'
+    + '</svg></span>';
   // ==================== 全局视图选项 ====================
   var sendKeyCombo = "enter";
   var newSessionKey = "ctrl+alt+n";
@@ -871,6 +878,13 @@
       streaming: false,
       // 后台还有命令在跑（后端 sessionList 里那份）：这一轮答完了也算没干完，那颗点照旧蓝点呼吸。
       bashRunning: false,
+      // 这个会话放到后台、还在跑的命令（后端那份清单里 status 是 running 的，新的排前面）。
+      // 消息流末尾那一块画的就是它们（见 renderBashBlock）。
+      bashTasks: [],
+      // 消息流末尾那一块（一条都没有时是 null）
+      bashBlock: null,
+      // 那一块里「跑了多久」每半秒重写一次的定时器
+      bashClock: 0,
       // 这一轮跑完了（不管是你在看着它跑完的，还是在别处时它跑完的）：名字旁边那颗点变绿。
       // 看一眼（切到那个会话）或者又开始跑下一轮就收掉。见 markTurnDone。
       turnDone: false,
@@ -1807,8 +1821,8 @@
     const rec = st.reconcile;
     // 不在对账中，或者正在往「加载更早」的暂存区（paneEl 被临时换成 _stage）里画：
     // 都只是追加，别去动对账那只游标（它属真正的那块窗格）
-    if (!rec || rec.pane !== pane) { pane.appendChild(el); return el; }
-    if (!force && !st.replayNow) { rec.touched.add(el); pane.appendChild(el); return el; }
+    if (!rec || rec.pane !== pane) { pane.appendChild(el); keepBashBlockLast(st); return el; }
+    if (!force && !st.replayNow) { rec.touched.add(el); pane.appendChild(el); keepBashBlockLast(st); return el; }
     rec.touched.add(el);
     if (rec.alignNext) {
       // 这一遍的第一条决定游标从哪儿起。
@@ -1835,6 +1849,15 @@
     rec.cursor = el.nextSibling;
     rec.last = el;
     return el;
+  }
+
+  /**
+   * 新的一条接上来以后，把后台命令那一块仍旧摆到最末尾：它是“现在”的状态，不是历史里的一条。
+   * 对账中（重放历史）不调：那时候位置由游标管，收尾时再摆一次（见 endReconcile）。
+   */
+  function keepBashBlockLast(st) {
+    if (!st.bashBlock) { return; }
+    placeBashBlock(st);
   }
 
   /**
@@ -1866,7 +1889,9 @@
     return !!el && (el.classList.contains("history-more")
       || el.classList.contains("older-hint")
       || el.classList.contains("empty-hint")
-      || el.classList.contains("session-loading"));
+      || el.classList.contains("session-loading")
+      // 后台命令那一块：它不是历史里的一条，对账别把它当成没人认领的旧节点收掉（见 renderBashBlock）
+      || el.classList.contains("bash-running"));
   }
 
   /** 重放开始（带编号）：不清空窗格，重置“正在长的那几样”，从这里开始按编号对账。 */
@@ -1951,6 +1976,8 @@
     syncEndHint(st);
     // 正在跑的那一条在对账开始时被收掉了：按真实状态重算一次（长命令跑着的时候它该在）
     syncRunningLine(st);
+    // 后台命令那一块也重摆一次：重放出来的消息都接在它后头了（它是“现在”的状态，得留在末尾）
+    placeBashBlock(st);
     // 贴底的人照旧跟到底；在中间看的人放回原来那条消息那儿
     const anchor = st.redrawRestore;
     st.redrawRestore = null;
@@ -1990,150 +2017,49 @@
     jumpBottomBtn.classList.toggle("hidden", !show);
   }
 
-  // ==================== 后台任务（输入框右边那颗按钮）====================
-  // 这个会话放到后台跑的命令都在这一小张清单里：一行一条（编号、在跑、已经跑了多久、命令），
-  // 还在跑的那条右边一颗「停」。跑完的不列——跑完的结果会当成一条新消息交回会话。
-  // 有几条在跑时那颗按钮右下角挂一个小数字（几条），一条都没有就不挂。
-  // 那颗按钮一直露着（还没挑会话、空会话里也点得开，点开只说一句“没有在后台跑的命令”）。
-  // 清单从输入行上头往上弹（输入框就在屏幕底，往下弹会顶到键盘、出屏幕），贴着按钮那一头（右边）。
-  // 清单跟着会话的内存走（见 src/sessionRuntime.ts 的 bashTasks）：问一次要一次（见 requestBashTasks），
-  // 有动静时后端自己推 bashTask 过来（见底下 case "bashTask"）；怎么让命令转后台：消息流里那颗「放后台」。
-  let bashBtn = null;
-  let bashMenu = null;
-  /** 那颗按钮右下角的小数字（几条在跑）。 */
-  let bashCount = null;
-  /** 当前会话还在后台跑的命令（后端那份清单里 status 是 running 的那几条，新的排前面）。 */
-  let bashTasks = [];
-  /** 手上这份清单是哪个会话的（换了会话就作废、重问一份）。null = 还没问过。 */
-  let bashTasksFor = null;
-  /** 清单里那个计时：有在跑的命令时，每半秒把那一行的用时改一下（不重画清单）。 */
-  let bashClock = 0;
-  (function buildBashButton() {
-    const row = document.getElementById("inputRow");
-    const input = document.getElementById("input");
-    if (!row || !input) { return; }
-    bashBtn = document.createElement("button");
-    bashBtn.type = "button";
-    bashBtn.id = "bashBtn";
-    bashBtn.innerHTML = ICONS.tasks;
-    bashBtn.title = "后台任务";
-    bashBtn.setAttribute("aria-label", "后台任务");
-    // 右下角那个小数字：几条在跑。那颗图标右下角本来就是空的，数字摆在那儿不压线条。
-    bashCount = document.createElement("span");
-    bashCount.className = "bash-count hidden";
-    bashBtn.appendChild(bashCount);
-    // 摆在框底那条横排的右头（前头依次是新建会话那颗加号、模型那颗胶囊，见 renderHtml 的 #composer）
-    row.appendChild(bashBtn);
-    // 清单挂在框底那条横排里，但定位靠的是外头那个圆角盒子（#composer 是 relative，
-    // 这条横排自己不定位）：bottom: 100% 就从盒子上头往上弹，不会盖住打字的地方。
-    bashMenu = document.createElement("div");
-    bashMenu.id = "bashMenu";
-    bashMenu.className = "hidden";
-    row.appendChild(bashMenu);
-    bashBtn.addEventListener("click", (e) => {
-      e.stopPropagation();   // 别让下面那个“点外头收起”的监听当场又把它关掉
-      toggleBashMenu();
-    });
-    document.addEventListener("click", (e) => {
-      if (!bashOpen()) { return; }
-      if (bashMenu.contains(e.target) || bashBtn.contains(e.target)) { return; }
-      closeBashMenu();
-    });
-    // Esc 收起。这条监听得比输入框那条先跑（stopImmediatePropagation）：
-    // 不然输入框那边会把 Esc 当成“中止这一轮”。
-    document.addEventListener("keydown", (e) => {
-      if (e.key !== "Escape" || !bashOpen()) { return; }
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      closeBashMenu();
-    });
-  })();
+  // ==================== 后台命令（消息流末尾那几条）====================
+  // 放到后台跑的命令写在消息流最末尾（末尾那颗胶囊上面），一条一行、就长成「正在跑的那一条」那样：
+  // 一只走着的钟 + 编号 + 命令 + 一颗「停」+ 已经跑了多久（耗时靠右），一行放不下的字自己横向滚。
+  // 钟跟齿轮是两回事：齿轮转（「正在跑的那一条」上那颗）是「模型这会儿正忙着」；
+  // 钟的针在走是「这条命令在后台自己跑，不挡你说话，跑完它自己把结果交回这个会话」。
+  // 跑完的不列：那条结果会当成一条新消息交回会话，去消息流里看。
+  // 清单跟着会话走（见 src/sessionRuntime.ts 的 bashTasks）：每个会话自己记一份（st.bashTasks），
+  // 切会话、刚连上就问一次（见 syncBashTasks），有动静时后端自己推 bashTask 过来（见 case "bashTask"）。
+  // 怎么让命令转后台：消息流里那颗「放后台」（见 syncRunningLine）。
 
-  function bashOpen() { return !!bashMenu && !bashMenu.classList.contains("hidden"); }
-
-  /** 那颗按钮右下角的小数字：有几条在跑就写几（两位数以上写 9+），一条都没有就藏起来。 */
-  function syncBashBtn() {
-    if (!bashBtn) { return; }
-    const n = bashTasks.length;
-    if (bashCount) {
-      bashCount.textContent = n > 9 ? "9+" : String(n);
-      bashCount.classList.toggle("wide", n > 9);
-      bashCount.classList.toggle("hidden", n === 0);
-    }
-    const tip = n ? "后台任务（" + n + " 条在跑）" : "后台任务";
-    bashBtn.title = tip;
-    bashBtn.setAttribute("aria-label", tip);
+  /** 去后端要一份某个会话的后台命令清单（回话走 bashTasks 那条消息，见 applyBashTasks）。 */
+  function requestBashTasks(sessionId) {
+    if (!sessionId) { return; }
+    vscode.postMessage({ type: "bashTasks", sessionId });
   }
 
-  /** 去后端要一份当前会话的后台命令清单（回话走 bashTasks 那条消息，见 applyBashTasks）。 */
-  function requestBashTasks() {
-    if (!activeId) { return; }
-    bashTasksFor = activeId;
-    vscode.postMessage({ type: "bashTasks", sessionId: activeId });
-  }
-
-  /**
-   * 换了会话 / 刚连上：手上这份清单不是这个会话的就清掉重问一份（清单跟着会话走）。
-   * 上一张清单也顺手收起来：里头排的是上一个会话的命令。
-   */
+  /** 换了会话 / 刚连上：按当前会话重问一份清单（别的会话手上那份照旧摆在各自的窗格里）。 */
   function syncBashTasks() {
-    if (bashTasksFor === activeId) { return; }
-    closeBashMenu();
-    bashTasks = [];
-    syncBashBtn();
-    requestBashTasks();
+    requestBashTasks(activeId);
   }
 
-  /** 后端回的清单：只留还在跑的（跑完的不列，那颗按钮上的小数字也只看它们）。 */
+  /** 后端回的整份清单：存进那个会话，再把它末尾那一块重画一遍。 */
   function applyBashTasks(sessionId, list) {
-    if (!activeId || sessionId !== activeId) { return; }   // 切走了：这份是上一个会话的，不要
-    bashTasksFor = sessionId;
-    bashTasks = list.filter((it) => it && it.status === "running");
-    syncBashBtn();
-    if (bashOpen()) { renderBashList(); }
+    const st = sessions.get(sessionId);
+    if (!st) { return; }
+    st.bashTasks = (list || [])
+      .filter((it) => it && it.status === "running")
+      .sort((a, b) => b.no - a.no);
+    renderBashBlock(st);
   }
 
-  function toggleBashMenu() {
-    if (bashOpen()) { closeBashMenu(); return; }
-    openBashMenu();
-  }
-
-  function openBashMenu() {
-    if (!bashMenu) { return; }
-    // 输入框上头那几个下拉（@ 文件、# 会话、/ 命令）同一时刻只开一个
-    hideFileMenu();
-    hideHashMenu();
-    closeSlashMenu();
-    renderBashList();     // 手上这份先画出来
-    requestBashTasks();   // 再问一遍：开着的时候刚跑完的那条就收掉了
-    bashMenu.classList.remove("hidden");
-    if (bashBtn) { bashBtn.classList.add("on"); }
-  }
-
-  function closeBashMenu() {
-    stopBashClock();
-    if (!bashMenu || !bashOpen()) { return; }
-    bashMenu.classList.add("hidden");
-    bashMenu.innerHTML = "";
-    if (bashBtn) { bashBtn.classList.remove("on"); }
-  }
-
-  /** 把清单铺满：一行一条还在后台跑的命令。 */
-  function renderBashList() {
-    if (!bashMenu) { return; }
-    bashMenu.innerHTML = "";
-    if (!bashTasks.length) {
-      const empty = document.createElement("div");
-      empty.className = "bash-empty";
-      empty.textContent = "这个会话没有在后台跑的命令。";
-      bashMenu.appendChild(empty);
-      stopBashClock();
-      return;
+  /** 后端推来一条（转到后台 / 跑完 / 被停）：按这一条改它那个会话的那份清单。 */
+  function noteBashTask(st, task) {
+    if (!st || !task || typeof task.no !== "number") { return; }
+    const list = st.bashTasks || (st.bashTasks = []);
+    const i = list.findIndex((it) => it.no === task.no);
+    if (task.status === "running") {
+      if (i >= 0) { list[i] = task; } else { list.push(task); }
+      list.sort((a, b) => b.no - a.no);
+    } else if (i >= 0) {
+      list.splice(i, 1);
     }
-    const frag = document.createDocumentFragment();
-    bashTasks.forEach((task) => { frag.appendChild(bashTaskRow(task)); });
-    bashMenu.appendChild(frag);
-    startBashClock();
+    renderBashBlock(st);
   }
 
   /** 一条命令已经跑了多久（后端没给开始时刻就不写）。 */
@@ -2143,58 +2069,133 @@
   }
 
   /**
-   * 清单里的一行：编号 + 在跑 + 已经跑了多久 + 一颗「停」，下面一行是命令原文
-   *（不截：长了就换行，清单自己封顶自己滚）。
+   * 画一个会话末尾那一块后台命令：一条一行，一条都不在跑就把整块收掉。
+   * 只在真窗格里画（往「加载更早」的暂存区补历史时不碰，同 placeEndHint）。
    */
-  function bashTaskRow(task) {
-    const block = document.createElement("div");
-    block.className = "bash-item";
-    block.setAttribute("data-no", String(task.no));
-    const head = document.createElement("div");
-    head.className = "bash-head";
-    const no = document.createElement("span");
-    no.className = "bash-no";
-    no.textContent = "#" + task.no;
-    const state = document.createElement("span");
-    state.className = "bash-state";
-    state.textContent = "在跑";
-    const time = document.createElement("span");
-    time.className = "bash-time";
-    time.textContent = bashElapsedText(task);
-    const stop = document.createElement("button");
-    stop.type = "button";
-    stop.className = "bash-stop";
-    stop.textContent = "停";
-    stop.title = "把这条命令连它派出来的进程一起停掉";
-    stop.addEventListener("click", () => {
-      stop.disabled = true;   // 等后端推送回来再按真实状态画
-      vscode.postMessage({ type: "bashStop", sessionId: activeId, no: task.no });
-    });
-    head.append(no, state, time, stop);
-    block.appendChild(head);
-    const cmd = document.createElement("div");
-    cmd.className = "bash-cmd";
-    cmd.textContent = task.cmd || "";
-    block.appendChild(cmd);
-    return block;
+  function renderBashBlock(st) {
+    if (!st || !st.paneEl || isStageRender(st)) { return; }
+    const tasks = st.bashTasks || [];
+    if (!tasks.length) {
+      stopBashClock(st);
+      if (st.bashBlock) {
+        for (const el of st.bashBlock.children) { dropRollKeyframes(el); }
+        st.bashBlock.remove();
+        st.bashBlock = null;
+      }
+      return;
+    }
+    if (!st.bashBlock) {
+      st.bashBlock = document.createElement("div");
+      st.bashBlock.className = "msg bash-running";
+    }
+    const block = st.bashBlock;
+    // 排的还是同一批命令（只是耗时变了）就不重画：重画会把那几只钟的针拨回十二点，
+    // 看着像又从头开始走了一遍。
+    const key = tasks.map((it) => it.no).join(",");
+    if (block.dataset.nos !== key) {
+      for (const el of block.children) { dropRollKeyframes(el); }
+      block.dataset.nos = key;
+      block.textContent = "";
+      for (const task of tasks) { block.appendChild(bashRunRow(st, task)); }
+    } else {
+      for (const el of block.children) {
+        const task = tasks.find((it) => String(it.no) === el.getAttribute("data-no"));
+        const time = el.querySelector(".tr-time");
+        if (task && time) { time.textContent = bashElapsedText(task); }
+      }
+    }
+    placeBashBlock(st);
+    // 量「放不放得下」得等它排到页面上（上面那一步才把它摆进去），所以摆好位置以后再量：
+    // 放不下的那条字自己横向滚（跟「正在跑的那一条」一模一样，见 rollRunningText）。
+    for (const el of block.children) {
+      const text = el.querySelector(".tr-text");
+      if (text) { rollRunningText(text, el); }
+    }
+    startBashClock(st);
   }
 
-  /** 清单开着的时候跑那个计时（收起 / 一条都不在跑就停，见 closeBashMenu 与 renderBashList）。 */
-  function startBashClock() {
-    if (bashClock) { return; }
-    bashClock = setInterval(() => {
-      if (!bashOpen()) { stopBashClock(); return; }
-      for (const el of bashMenu.querySelectorAll(".bash-item")) {
-        const task = bashTasks.find((it) => String(it.no) === el.getAttribute("data-no"));
-        const time = el.querySelector(".bash-time");
+  /** 这一块永远摆在消息流最末尾：末尾那颗胶囊是页脚，永远排在它后头。 */
+  function placeBashBlock(st) {
+    const block = st.bashBlock;
+    if (!block || !st.paneEl) { return; }
+    const pane = st.paneEl;
+    if (block.parentElement !== pane || pane.lastElementChild !== block) { pane.appendChild(block); }
+    const hint = st.endHintRow;
+    if (hint && hint.parentElement === pane && block.nextElementSibling !== hint) {
+      pane.insertBefore(hint, block.nextSibling);
+    }
+  }
+
+  /**
+   * 一块里的那一行：钟 + 编号 + 命令 + 一颗「停」+ 已经跑了多久，就一行。
+   * 跟「正在跑的那一条」同一个样子（齿轮换成钟，前面多一个编号）：一行放不下的字自己横向滚，
+   * 耗时钉在右头不动（见 chat.css 里那几条 .tr-*）。
+   */
+  function bashRunRow(st, task) {
+    const row = document.createElement("div");
+    row.className = "bash-run";
+    row.setAttribute("data-no", String(task.no));
+    row.title = "在后台跑：不耽误你说话，跑完结果会交回这个会话";
+    row.insertAdjacentHTML("afterbegin", CLOCK_SVG);
+    const no = document.createElement("span");
+    no.className = "bash-run-no";
+    no.textContent = "#" + task.no;
+    row.appendChild(no);
+    // 命令原文也跟「正在跑的那一条」用同一套写法：一长串只写核心那一段（见 runningLineText），
+    // 后面灰一个「+N」，整条点开这一行看（见 attachTagTipHandlers）。
+    const cmd = task.cmd || "";
+    const shown = runningLineText({ name: "bash", argStr: JSON.stringify({ command: cmd }), text: "$ " + cmd });
+    const text = document.createElement("span");
+    text.className = "tr-text";
+    text.textContent = shown.main;
+    row.appendChild(text);
+    if (shown.more) {
+      const more = document.createElement("span");
+      more.className = "tr-more";
+      more.textContent = shown.more;
+      row.appendChild(more);
+    }
+    if (shown.trimmed) {
+      row._tipCall = "$ " + cmd;
+      row._tipBody = "";
+      attachTagTipHandlers(row);
+    }
+    // 「停」排在耗时左边（跟「正在跑的那一条」上那颗「放后台」一个位置）：字 | 停 | 耗时（靠右）
+    const stop = document.createElement("button");
+    stop.type = "button";
+    stop.className = "tr-act";
+    stop.textContent = "停";
+    stop.title = "把这条命令连它派出来的进程一起停掉";
+    stop.addEventListener("click", (e) => {
+      e.stopPropagation();   // 别让这一行的“点开看整条命令”跟着打开
+      stop.disabled = true;   // 等后端推送回来再按真实状态画
+      vscode.postMessage({ type: "bashStop", sessionId: st.id, no: task.no });
+    });
+    row.appendChild(stop);
+    const time = document.createElement("span");
+    time.className = "tr-time";
+    time.textContent = bashElapsedText(task);
+    row.appendChild(time);
+    return row;
+  }
+
+  /** 那一块里「跑了多久」每半秒重写一次（钟的针自己走，这几个字跟着数）。没那块了就停。 */
+  function startBashClock(st) {
+    if (st.bashClock) { return; }
+    st.bashClock = setInterval(() => {
+      const block = st.bashBlock;
+      if (!block || !block.parentElement) { stopBashClock(st); return; }
+      for (const el of block.children) {
+        const task = (st.bashTasks || []).find((it) => String(it.no) === el.getAttribute("data-no"));
+        const time = el.querySelector(".tr-time");
         if (task && time) { time.textContent = bashElapsedText(task); }
       }
     }, 500);
   }
-  function stopBashClock() {
-    if (!bashClock) { return; }
-    clearInterval(bashClock);
-    bashClock = 0;
+  function stopBashClock(st) {
+    if (!st || !st.bashClock) { return; }
+    clearInterval(st.bashClock);
+    st.bashClock = 0;
   }
 
   // ==================== 流式渲染节流 ====================
@@ -3155,7 +3156,7 @@
       attachTagTipHandlers(item);
     }
     // 这条是 bash 命令：给一颗「放后台」（点了就不在这儿等它跑完，命令转到后台接着跑）。
-    // 两个壳里都能点：后台清单在输入框右边那颗按钮里（两边都有），跟文件侧边栏无关了。
+    // 两个壳里都能点：转过去以后在消息流末尾那一块里看（两边都有），跟文件侧边栏无关。
     if (call.name === "bash" && call.id) {
       const detach = document.createElement("button");
       detach.type = "button";
@@ -4977,7 +4978,7 @@
         flushDeltas(shown);
       });
     }
-    syncBashTasks();   // 清单里排的是上一个会话的命令：换了会话就收起来，按新会话重问一份
+    syncBashTasks();   // 换到的这个会话手上那份可能旧了：按它重问一份（新的那份到了就照它重画）
     restoreInputState();
     reflectSessionUI();
     renderSessionBar();
@@ -9281,7 +9282,7 @@
     // Esc 也能关掉弹窗（浮层、清单开着的时候不接：那会儿 Esc 是收那一层）
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape" || !fileViewing()) { return; }
-      if (pickerModalOpen() || fileSearch.open || bashOpen()) { return; }
+      if (pickerModalOpen() || fileSearch.open) { return; }
       e.preventDefault();
       closeFileViewer();
     });
@@ -11178,8 +11179,6 @@
       // 浮层开着的时候这条键归浮层（收回它）：别顺手把正在生成的那一轮也中止了。
       // 这里只管“不中止”，收回浮层由 document 上那个监听做。
       if (pickerModalOpen()) { return; }
-      // 清单开着也一样：这条键归那张清单（收回它），别顺手把正在生成的那一轮中止了
-      if (bashOpen()) { return; }
       // 看文件（或 diff）的弹窗开着：这条键归那个弹窗（关掉它，见 buildFileSidebar）
       if (fileViewing()) { return; }
       if (abortActiveTab()) { e.preventDefault(); }
@@ -11367,7 +11366,7 @@
       renderSessionBar();
       // 会话目录这时候才认识：这一列开着又空着的话，把「目录」那一格摆上（见票 13）
       ensureFilePanes();
-      // 后台任务那颗按钮：刚连上 / 重连 / 换了会话就把清单重问一份（有命令在跑就挂上数字）
+      // 后台命令：刚连上 / 重连 / 换了会话就把这个会话那份清单重问一份
       syncBashTasks();
       updateSendState();
       syncStatus();
@@ -11487,7 +11486,7 @@
     if (type === "findResults") { onFindResults(msg); return; }
     if (type === "pathCandidatesResult") { onPathCandidates(msg); return; }
     if (type === "viewOptionItems") { viewOptionItems = Array.isArray(msg.items) ? msg.items : []; renderViewOpts(); return; }
-    // 后台命令清单的回话（问的那条见 requestBashTasks）：只认当前会话那份，弹窗开着就重画一遍
+    // 后台命令清单的回话（问的那条见 requestBashTasks）：存给那个会话，再把它末尾那一块重画一遍
     if (type === "bashTasks") {
       applyBashTasks(typeof msg.sessionId === "string" ? msg.sessionId : "", Array.isArray(msg.tasks) ? msg.tasks : []);
       return;
@@ -11722,8 +11721,8 @@
         break;
       }
       case "bashTask": {
-        // 某条后台命令有动静（转到后台 / 跑完 / 被停）：重问一份清单（那颗按钮的颜色也跟着换）
-        if (t.id === activeId) { requestBashTasks(); }
+        // 某条后台命令有动静（转到后台 / 跑完 / 被停）：按这一条改那个会话末尾那一块
+        noteBashTask(t, msg.task);
         break;
       }
       case "envInfo": {
@@ -11789,6 +11788,9 @@
         t.tailThinking = null;
         t.currentToolTail = null;
         dropRunningLine(t);   // 这条连着窗格一起没了（上面的 innerHTML 已经清掉它）；定时器也一并清
+        // 后台命令那一块同上（清单还在，等重放完了照它重画一遍；见底下的 renderBashBlock）
+        stopBashClock(t);
+        t.bashBlock = null;
         t.toolGroups = null;
         t.toolGroupEntries.clear();
         t.pendingToolCards.clear();
@@ -11812,6 +11814,10 @@
         // 重画后窗格是空的（重放的消息随后一批批进来）：这颗胶囊按当前状态先收着，
         // 真有对话的话等重放完那一批（historyBatchEnd）或本轮结束（streamEnd）再露面。
         syncEndHint(t);
+        // 后台命令那一块跟着重画一遍（窗格清空时它一起没了，清单还在手上）
+        renderBashBlock(t);
+        // 重画也可能是因为这个会话刚换了（换了会话文件 / 新进程）：后台那份清单同样作废了，重问一份
+        requestBashTasks(t.id);
         break;
       }
       case "toolResultUpdate": {

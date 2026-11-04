@@ -2501,7 +2501,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 }
                 return;
             case "bashTasks": {
-                // 输入框右边那颗「后台任务」要一份清单：弹窗里列哪些还在后台跑、那颗按钮亮不亮。
+                // 界面要一份后台命令清单：消息流末尾那一块（「后台任务」）照它画哪几条还在跑。
                 // 只回问的那块屏；清单跟着会话的内存走，会话关了就没了。
                 const id = typeof msg.sessionId === "string" && this.panels.has(msg.sessionId)
                     ? msg.sessionId
