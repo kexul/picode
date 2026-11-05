@@ -51,7 +51,7 @@ const ICON_CLOSE = '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http:
  */
 function ctxTopMarkup(): string {
     return `      <div id="ctxTop" aria-hidden="true">` +
-        `<span id="ctxAct" class="ct-act"></span>` +
+        `<span class="ct-cell"><span id="ctxAct" class="ct-act"></span></span>` +
         `<span id="ctxBar"><span class="ct-fill"></span></span>` +
         `<span id="ctxTps"></span>` +
         `</div>\n`;
