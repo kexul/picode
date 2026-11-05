@@ -1406,11 +1406,11 @@
   #composer.ctx-warn #ctxBar .ct-fill { background: var(--vscode-editorWarning-foreground, #cca700); }
   #composer.ctx-err #ctxBar .ct-fill { background: var(--vscode-errorForeground, #f14c4c); }
   /* 这一轮的生成速度：写在右头（不跑就整格收掉，横杠就铺到右头）。
-     宽度钉住、靠右排：这个数每 250 毫秒刷一次，位数一变（9.8 → 116.5）就宽窄一下，
-     横杠的右头跟着一抽一抽地跳 —— 钉住以后跑着的时候横杠不动。 */
+     宽度跟着字走 —— 跟横杠之间只隔那 6px，不会空出一截。
+     数字之间不会因此抖：`tabular-nums` 让每个数字一样宽，只有位数真变了（9.8 → 116.5）
+     才会挪一下，那时候横杠本来就该跟着变。 */
   #ctxTop #ctxTps {
-    flex: 0 0 auto; min-width: 50px; text-align: right; padding: 0 1px;
-    white-space: nowrap; font-variant-numeric: tabular-nums;
+    flex: 0 0 auto; white-space: nowrap; font-variant-numeric: tabular-nums;
     font-size: 11px; line-height: 1; color: var(--vscode-descriptionForeground, #999);
   }
   #ctxTop #ctxTps:empty { display: none; }

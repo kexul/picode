@@ -92,15 +92,21 @@ module.exports = async (page) => {
         if (r.fillLeft !== r.left) { throw new Error(`填充没从横杠左头起：横杠 ${r.left}，填充 ${r.fillLeft}`); }
         if (c.act && r.actRight > r.left) { throw new Error(`图标压在横杠上了：图标右边缘 ${r.actRight}，横杠从 ${r.left} 起`); }
         if (c.tps && r.tpsLeft < r.right) { throw new Error(`速度数压在横杠上了：横杠到 ${r.right} 止，速度从 ${r.tpsLeft} 起`); }
+        // 速度数跟横杠之间只该隔那一行的间隙（6px），不许空出一截来
+        if (c.tps && r.tpsLeft - r.right > 8) {
+            throw new Error(`速度数离横杠太远：空 ${r.tpsLeft - r.right}px（应当只有那一行的 6px 间隙）`);
+        }
         if (seen.length && r.nameLeft !== seen[0].nameLeft) { throw new Error(`模型名被挤动了：${seen[0].nameLeft} → ${r.nameLeft}`); }
         seen.push({ at: r.left + ".." + r.right, w: r.width, fill: r.fill, nameLeft: r.nameLeft,
+                    gap: r.tpsLeft === null ? null : r.tpsLeft - r.right,
                     act: c.act || "（无）", tps: c.tps || "（无）" });
     }
     console.log("");
     console.log("横杠的位置（有图 / 有速度时短一点，都没有时铺满）与 63% 的填充：");
     for (const s of seen) {
         const pct = ((s.fill / s.w) * 100).toFixed(1);
-        console.log(`  ${s.at} w=${s.w} 填充 ${s.fill}（${pct}%）  状态图 ${s.act}  速度 ${s.tps}`);
+        console.log(`  ${s.at} w=${s.w} 填充 ${s.fill}（${pct}%）  状态图 ${s.act}  速度 ${s.tps}` +
+            (s.gap === null ? "" : `（离横杠 ${s.gap}px）`));
     }
     // 每种摆法里填充都该是横杠长度的 63%
     for (const s of seen) {
