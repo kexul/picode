@@ -1376,30 +1376,25 @@
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
   }
 
-  /* 输入框顶边上那条：上下文用量画在盒子的顶边框上 —— 最左边一格是跑着时的状态图
-     （等 / 写 / 想 / 工具），中间是横杠（填到哪儿就是用了多少），右头一格写这一轮的生成速度。
-     这样输入框底下那条横排里只剩模型名，不再往那儿挤五样东西（手机上挤不开）。
-     用量与速度都不是控件、不用点，只有模型名要天天点，所以让它们去不占横向位置的地方。
-     两头那两格是**永远**留着的（不跑、没速度也一样）：横杠的位置、长度、刻度在什么场景下都不变 ——
-     原来它一跑起来就往里缩，让位给图标，看着像条子自己变短了。
-     盒子的顶边框整条不要（透明）：只留横杠这一段 —— 横杠从最左头（圆角后）画到右头那一格之前，
-     深的这截永远从横杠自己最左头起。顶边要是还画着一条 1px 的边框，那它跟横杠同色，
-     看着就像“条子从最左头就开始了、深色才从中间开始”。
-     状态图就站在横杠的左头上（压在线那一格上）：那一格用 mask 挖掉，所以图形底下没有线、
-     它右边紧接的就是深色那截，中间不空一截浅色。速度那一格在右头（用输入框底色把线遮出口子）。
-     几何全是钉死的：横杠多长、填到哪儿，跑起来 / 停下 / 速度数变宽都不动一个像素。
-     量法：dev/ctxChip.js 的第三段（挨个摆各种情况，横杠两端只该有一种位置）。 */
+  /* 输入框顶边上那条：中间一段是上下文用量（横杠 + 深的填充），两头各留一块**空**的地方 ——
+     左边那块放跑着时的状态图（等 / 写 / 想 / 工具），右边那块放这一轮的生成速度（t/s）；
+     有就显示，没有就空着，位置一直留着。所以横杠的起止点、长度、刻度在什么场景下都不变，
+     深的这截也永远从横杠自己的左头起（前面没有“一截浅的”，那两头是空的，不是线）。
+     这两头不能画线：以前盒子顶上那条 1px 边框留着，它跟横杠的空槽同色，
+     看着就像“条子从最左头就开始了、深色才从中间开始”，像条坏掉的进度条。
+     它骑在顶边框的位置上（top: -1px，2px 高），盒子自己的顶边框调成透明。
+     量法：dev/ctxChip.js 的第三段（六种摆法，横杠两端只该有一种位置）。 */
   #composer { border-top-color: transparent; --ctx-track: var(--vscode-input-border, rgba(128,128,128,0.35)); }
   #ctxTop {
     position: absolute; top: -1px; left: 0; right: 0; height: 2px;
     pointer-events: none;
-    /* 右头那一格留给速度数（宽里给，四位数也放得下）。横杠就是「整条减掉这一格」，从头到尾不变。
-       左头那一格给状态图：它只挖掉“看得见的那一层”，横杠本身还是从最左头量起的。 */
-    --ctx-lead: 15px;
+    /* 两头各留一块空的，宽度写死：左边给状态图，右边给速度数（往宽里给，四位数也放得下）。
+       横杠就是「整条减掉这两块」，从头到尾不变。 */
+    --ctx-lead: 22px;
     --ctx-tail: 64px;
   }
-  /* 状态图：站在横杠的左头上（跟横杠同一条中线），只画不占位 —— 它进不进出都不动横杠。
-     它脚下那一格由下面那条 mask 挖掉：图形底下没有线，右边紧接的就是深色那截。
+  /* 状态图：站在左边那块空地里（跟横杠同一条中线），只画不占位 —— 它进不进出都不动横杠。
+     那块地方本来就没有线（横杠从它右边才起），所以不用挖、也不会压着谁。
      形状与颜色见下面那几条 */
   #ctxTop .ct-cell { position: absolute; top: -7px; left: 13px; width: 12px; height: 12px; display: none; }
   #ctxTop .ct-cell:has(.ct-act[data-act]:not([data-act=""])) { display: block; }
@@ -1408,17 +1403,12 @@
      空槽取输入框边框那个颜色，压在顶边框上，看着就是那一段粗一点点的边框。 */
   #ctxTop #ctxBar {
     position: absolute; top: 0; height: 2px; border-radius: 1px;
-    left: 13px; right: calc(13px + var(--ctx-tail));
+    left: calc(13px + var(--ctx-lead)); right: calc(13px + var(--ctx-tail));
     background: var(--ctx-track, var(--vscode-input-border, rgba(128,128,128,0.35)));
   }
-  /* 有状态图的时候：把横杠左头那一格挖掉（正好是那颗图站的宽度）—— 图形底下没有线，
-     它右边紧接的就是深色那截。挖的是“看得见的那一层”，横杠本身的起止点和刻度一点没变。 */
-  #ctxTop:has(.ct-act[data-act]:not([data-act=""])) #ctxBar {
-    -webkit-mask-image: linear-gradient(to right, transparent 0 var(--ctx-lead), #000 var(--ctx-lead));
-    mask-image: linear-gradient(to right, transparent 0 var(--ctx-lead), #000 var(--ctx-lead));
-  }
   /* 填充：填多满由 --ci-pct 给（chat.js 每次算完用量就写一回，0~1 的一个数）。
-     尺子就是横杠自己那一段，所以撞不到两头的格子，也不会因为速度数宽窄而变。 */
+     尺子就是横杠自己那一段 —— 从它的左头起，所以深的这截永远从 0 开始，
+     也不会因为速度数在不在、宽窄怎么变而变。 */
   #ctxTop #ctxBar .ct-fill {
     position: absolute; left: 0; top: 0; bottom: 0; border-radius: 1px;
     width: calc(100% * var(--ci-pct, 0));
@@ -1430,16 +1420,12 @@
   /* 用量 ≥70% 黄、≥90% 红（跟以前一样） */
   #ctxTop #ctxBar.warn .ct-fill { background: var(--vscode-editorWarning-foreground, #cca700); }
   #ctxTop #ctxBar.err .ct-fill { background: var(--vscode-errorForeground, #f14c4c); }
-  /* 这一轮的生成速度：浮在右头那一格上，用输入框的底色把底下的空槽盖掉 —— 看上去就是横杠
-     在右端切了一个口子。没数的时候整格收掉（那儿就露出空槽，看着一条普通边框）。
+  /* 这一轮的生成速度：写在右边那块空地里（那儿本来就没有线，不用遮）。没数的时候整块空着。
      宽度钉死、靠右排：这个数每 250 毫秒刷一次，位数一变（9.8 → 116.5）就宽窄一下，
      横杠的右头跟着一抽一抽地跳 —— 钉住以后跑着的时候横杠一动不动。 */
   #ctxTop #ctxTps {
     position: absolute; top: -5px; right: 13px; box-sizing: border-box;
     width: var(--ctx-tail); padding: 0 6px; text-align: right; white-space: nowrap;
-    /* 遮线那层只从横杠那一行往下涂（上面前 4px 透明）：这一格是骑在盒子顶边上的，
-       上半截露在盒子外面 —— 涂满会有一块跟页面底色不一样的方块。 */
-    background: linear-gradient(to bottom, transparent 0 4px, var(--vscode-input-background) 4px);
     font-size: 11px; line-height: 1; font-variant-numeric: tabular-nums;
     color: var(--vscode-descriptionForeground, #999);
   }

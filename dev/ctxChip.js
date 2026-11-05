@@ -64,8 +64,8 @@ module.exports = async (page) => {
 
     // ---- 三、横杠的位置、长度、刻度，在什么场景下都一样 ----
     // 挨个摆一遍（速度数在不在、位数多宽、状态图在不在），每次量横杠的两端和填充：
-    // 横杠永远待在两头留出来的那一段里，只该有一种位置 —— 它一跑起来就往里缩（让位给图标）
-    // 或者一抽一抽地抖（数字变宽），都是当年踩过的坑。
+    // 横杠永远待在中间那一段（两头各留一块空的），只该有一种位置，填充也只该从它的左头起 ——
+    // 它一跑起来就往里缩、或者一抽一抽地抖（数字变宽），都是当年踩过的坑。
     const cases = [
         { act: "tool", tps: "116.5 t/s" },
         { act: "tool", tps: "9.8 t/s" },
@@ -86,31 +86,29 @@ module.exports = async (page) => {
             const t = document.getElementById("ctxTps").getBoundingClientRect();
             const cs = getComputedStyle(document.getElementById("ctxBar"));
             const masked = (cs.maskImage || cs.webkitMaskImage || "none") !== "none";
-            const lead = parseFloat(getComputedStyle(document.getElementById("ctxTop")).getPropertyValue("--ctx-lead"));
             return { left: Math.round(b.left), right: Math.round(b.right), width: Math.round(b.width),
                      fill: Math.round(f.width), fillLeft: Math.round(f.left), actRight: Math.round(a.right),
                      masked, lineStart: Math.round(b.left + (masked ? lead : 0)),
                      tpsLeft: t.width ? Math.round(t.left) : null };`);
-        // 有图必须真挖（不然线从图底下穿过去）、没图必须没挖（不然不跑时左边会缺一截）
-        if (c.act && !r.masked) { throw new Error("有状态图，但横杠左头那一格没挖掉：线会从图底下穿过去"); }
-        if (!c.act && r.masked) { throw new Error("没有状态图，横杠左头那一格却被挖掉了"); }
+        // 横杠两头都是空出来的格子（不画线），所以不该再有 mask
+        if (r.masked) { throw new Error("横杠被人挖了一块：两头本来就是空的，不该再动 mask"); }
         // 深色那截必须从横杠自己的左头起（元素上；画面上有图时那格被挖掉，右边紧接的就是它）
         if (r.fillLeft !== r.left) { throw new Error(`填充没从横杠左头起：横杠 ${r.left}，填充 ${r.fillLeft}`); }
-        // 有图时画面上线的起点 = 横杠左头 + 挖掉那一格：图标（带旋转的外接框）不许越过它
-        if (c.act && r.actRight > r.lineStart) {
-            throw new Error(`图标压在横杠上了：图标右边缘 ${r.actRight}，画面上线从 ${r.lineStart} 起`);
+        // 图标（带旋转的外接框）不许越过横杠的左头
+        if (c.act && r.actRight > r.left) {
+            throw new Error(`图标压在横杠上了：图标右边缘 ${r.actRight}，横杠从 ${r.left} 起`);
         }
         if (c.tps && r.tpsLeft < r.right) {
             throw new Error(`速度数压在横杠上了：横杠到 ${r.right} 止，速度那格从 ${r.tpsLeft} 起`);
         }
         seen.push({ at: r.left + ".." + r.right, w: r.width, fill: r.fill, act: c.act || "（无）", tps: c.tps || "（无）",
-                    iconGap: c.act ? r.lineStart - r.actRight : null, tpsGap: c.tps ? r.tpsLeft - r.right : null });
+                    iconGap: c.act ? r.left - r.actRight : null, tpsGap: c.tps ? r.tpsLeft - r.right : null });
     }
     console.log("");
     console.log("横杠的位置（应当只有一种），以及 63% 时填充的长度：");
     for (const s of seen) {
         console.log(`  ${s.at} w=${s.w} 填充 ${s.fill}  状态图 ${s.act}  速度 ${s.tps}` +
-            (s.iconGap === null ? "" : `  图标右边离画面上线的起点还空 ${s.iconGap}px`) +
+            (s.iconGap === null ? "" : `  图标右边离横杠还空 ${s.iconGap}px`) +
             (s.tpsGap === null ? "" : `  速度与横杠之间空 ${s.tpsGap}px`));
     }
     const spots = new Set(seen.map((s) => s.at));
