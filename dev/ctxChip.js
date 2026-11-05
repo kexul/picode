@@ -81,11 +81,17 @@ module.exports = async (page) => {
             const b = document.getElementById("ctxBar").getBoundingClientRect();
             const f = document.querySelector("#ctxBar .ct-fill").getBoundingClientRect();
             const a = document.getElementById("ctxAct").getBoundingClientRect();
+            const bar = document.getElementById("ctxBar");
+            const cs = getComputedStyle(bar);
             const lead = parseFloat(getComputedStyle(document.getElementById("ctxTop")).getPropertyValue("--ctx-lead"));
-            // 横杠左头那一格在有图的时候被挖掉（mask），所以画面上的线从 b.left + lead 起；
-            // 图标右边缘（带旋转，取外接框）不该越过那里
+            // 有图的时候横杠左头那一格是被 mask 挖掉的 —— 得真挖了才算数（这条当年漏过：
+            // 规则被误放进“减少动态效果”的 media query 里，正常情况根本没生效，线还是从图标底下过）。
+            const masked = (cs.maskImage || cs.webkitMaskImage || "none") !== "none";
+            const lineStart = Math.round(b.left + (masked ? lead : 0));
             return { left: Math.round(b.left), right: Math.round(b.right), width: Math.round(b.width),
-                     fill: Math.round(f.width), actRight: Math.round(a.right), lineStart: Math.round(b.left + lead) };`);
+                     fill: Math.round(f.width), actRight: Math.round(a.right), masked, lineStart };`);
+        if (c.act && !r.masked) { throw new Error("有状态图，但横杠左头那一格没被挖掉：线会从图标底下穿过去"); }
+        if (!c.act && r.masked) { throw new Error("没有状态图，横杠左头那一格却被挖掉了（不跑的时候前面会缺一截）"); }
         if (c.act && r.actRight > r.lineStart) {
             throw new Error(`图标压在横杠上了：图标右边缘 ${r.actRight}，线上班的地方 ${r.lineStart}`);
         }
@@ -100,8 +106,8 @@ module.exports = async (page) => {
     }
     const spots = new Set(seen.map((s) => s.at));
     if (spots.size > 1) { throw new Error("横杠在挪：" + JSON.stringify(seen)); }
-    // 刻度对不对：填充 = (横杠宽 - 左头那一格 18 - 右头那一格 60) × 63%
-    const lead = 18, tail = 60;
-    const expect = Math.round((seen[0].w - lead - tail) * 0.63);
+    // 刻度对不对：填充 = (横杠宽 - 右头那一格 60) × 63%（左头那一格只挖掉看得见的那层，不算在尺子里）
+    const tail = 60;
+    const expect = Math.round((seen[0].w - tail) * 0.63);
     console.log(`刻度：应当 ${expect}px，实际 ${seen[0].fill}px${Math.abs(expect - seen[0].fill) <= 1 ? " ✓" : " ✗"}`);
 };

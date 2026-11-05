@@ -1408,18 +1408,23 @@
     position: absolute; top: 0; left: 13px; right: 13px; height: 2px; border-radius: 1px;
     background: var(--ctx-track, var(--vscode-input-border, rgba(128,128,128,0.35)));
   }
-  /* 填充：填多满由 --ci-pct 给（chat.js 每次算完用量就写一回，0~1 的一个数）。
-     尺子是「整条减去两头那两格」（左边 18 给状态图、右边 60 给速度）：两格都写死，
-     所以状态图在不在、速度数在不在、位数怎么变，这把尺子和这条横杠都一个像素不动。 */
   /* 有状态图的时候：横杠左头那一格（--ctx-lead）挖掉 —— 图标正好落在挖出来的空当里，
-     线不会从它底下穿过去。挖的是“看得见的那一层”，横杠本身的长度和刻度一点没变（还是整条 13→13）。 */
-  #ctxTop[data-act] #ctxBar {
+     线不会从它底下穿过去（浅色的空槽也算线，只把填充躲开不算数）。
+     挖的是“看得见的那一层”，横杠本身的长度一点没变（还是整条 13→13）。 */
+  /* 用 :has() 直接看那颗图自己挂没挂 data-act，不再让 chat.js 另写一份标记（两份容易对不上：
+     当年那条规则就是既写错了地方、标记也没跟上，结果一直没生效）。 */
+  #ctxTop:has(.ct-act[data-act]:not([data-act=""])) #ctxBar {
     -webkit-mask-image: linear-gradient(to right, transparent 0 var(--ctx-lead), #000 var(--ctx-lead));
     mask-image: linear-gradient(to right, transparent 0 var(--ctx-lead), #000 var(--ctx-lead));
   }
+  /* 填充：填多满由 --ci-pct 给（chat.js 每次算完用量就写一回，0~1 的一个数）。
+     从线的起点起算、右头留出速度那一格（--ctx-tail）。不把左头那 18px 也算进尺子里：
+     不跑的时候（没有状态图）填充得贴着线的起点，否则前面会空出一小截浅色，
+     看着像“条子没从头开始”（浅 / 深 / 浅 三段）。跑着时那 18px 连同填充一起被上面那条挖掉，
+     图标补在空当里。 */
   #ctxTop #ctxBar .ct-fill {
-    position: absolute; left: var(--ctx-lead); top: 0; bottom: 0; border-radius: 1px;
-    width: calc((100% - var(--ctx-lead) - var(--ctx-tail)) * var(--ci-pct, 0));
+    position: absolute; left: 0; top: 0; bottom: 0; border-radius: 1px;
+    width: calc((100% - var(--ctx-tail)) * var(--ci-pct, 0));
     /* 填进来的那截：跟字一样的前景色压七成（浅色主题下是一条深灰、深色主题下是一条浅灰），
        一眼就是“实的这头是用掉的”。空槽（--ctx-track）会跟着焦点 / 自动模式换色，这一截不跟着换。 */
     background: var(--vscode-foreground, #444); opacity: 0.7;
@@ -1539,13 +1544,7 @@
   /* 要减少动态效果时：横杠不慢慢长。头那四颗状态图照旧在动 —— 它们就是用来表明“还在跑”的，
      停了就跟没了一样（这条跟以前一样，是有意不理那个设置）。 */
   @media (prefers-reduced-motion: reduce) {
-    /* 有状态图的时候：横杠左头那一格（--ctx-lead）挖掉 —— 图标正好落在挖出来的空当里，
-     线不会从它底下穿过去。挖的是“看得见的那一层”，横杠本身的长度和刻度一点没变（还是整条 13→13）。 */
-  #ctxTop[data-act] #ctxBar {
-    -webkit-mask-image: linear-gradient(to right, transparent 0 var(--ctx-lead), #000 var(--ctx-lead));
-    mask-image: linear-gradient(to right, transparent 0 var(--ctx-lead), #000 var(--ctx-lead));
-  }
-  #ctxTop #ctxBar .ct-fill { transition: none; }
+    #ctxTop #ctxBar .ct-fill { transition: none; }
   }
 
   /* 剩下那几样“一直动”的小东西（顶条那颗点的呼吸、齿轮、那行命令自己横向滚）单独量下来
