@@ -12,3 +12,8 @@ dev/fake-session-*.jsonl
 bin/shot.exe
 bin/live.exe
 bin/tray.exe
+# 安卓 app 的构建产物与这台机器的 SDK 路径
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties

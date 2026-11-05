@@ -42,7 +42,7 @@ import { changedCharRanges, diffRows, type LineRanges } from "./wordDiff";
  *     跑同一样一份界面代码，只有整页交给它时是内联版（`/panel`，见 pageHtml.ts）；
  *   - **屏线**（VS Code 窗口，`/screen` + `/screenapi`）：窗口在后端登记自己是打开着哪些
  *     文件夹的，好让"用编辑器打开这个文件"这类活得有人干。
- *   另外有一个 `/health`，给单实例判断探活用。
+ *   另外有一条 `/phone`（手机 app 里那个前台服务连的），以及一个 `/health`，给单实例判断探活用。
  *
  * 方向：后端 → 页面/屏用"服务器推送"（长连接，随时能写）；页面/屏 → 后端用普通请求（POST）。
  * 桌面实时画面是唯一一条例外：页面自己开一条长连接把帧拉下去（一帧一段，
@@ -364,6 +364,27 @@ export interface WebServerHost {
     acceptWeixinReply(sessionId: string, text: string, opts: { sessionFile?: string; name?: string }): { ok: boolean; reason?: string };
 }
 
+/**
+ * 手机上要看到的那条“有事”（`/phone` 那条长连接上写的就是它）。
+ *
+ * 只有该看见的那点东西：哪个会话、哪一类、说了什么。手机那边照这个弹一条通知，
+ * 点通知就拿 sessionId 让页面切到那个会话（跟顶条上点一下那格一样）。
+ */
+export interface PhoneNote {
+    /** 哪个会话（界面上那一格的名字）。 */
+    name: string;
+    /** 会话标识：手机点通知时拿它切过去。 */
+    sessionId: string;
+    /** 跑完一轮，还是模型在等你答一句。 */
+    kind: "done" | "ask";
+    /** 一句话摘要（跑完一轮是回复开头，等你答是题干）。 */
+    summary: string;
+    /** 这条是什么时候的事（毫秒）。 */
+    at: number;
+    /** 别的机器推来的：那台叫什么（有它手机那边多显示一句“哪台”）。 */
+    from?: string;
+}
+
 export interface WebServerHooks {
     /** 地址变化（启动、停止、换端口）时回调，用于刷新状态栏提示。 */
     onUrlChanged?(url: string | undefined): void;
@@ -390,6 +411,8 @@ export class PiChatWebServer {
     private readonly streams = new Map<string, PageStream>();
     /** 屏标识 → 它那条连接的响应对象。 */
     private readonly screenStreams = new Map<string, http.ServerResponse>();
+    /** 手机标识 → 它那条连接的响应对象（见 /phone）。 */
+    private readonly phoneStreams = new Map<string, http.ServerResponse>();
     private heartbeat?: ReturnType<typeof setInterval>;
     private readonly heartbeatMs = HEARTBEAT_MS;
     private readonly pageStaleMs = PAGE_STALE_MS;
@@ -534,6 +557,13 @@ export class PiChatWebServer {
             channel.close(quiet ? "" : "网页服务已停止。");
         }
         this.streams.clear();
+        for (const res of this.phoneStreams.values()) {
+            try {
+                this.writePhone(res, "end", { note: quiet ? "" : "网页服务已停止。" });
+                res.end();
+            } catch { /* 已经断了 */ }
+        }
+        this.phoneStreams.clear();
         for (const [id, res] of this.screenStreams) {
             this.host.detachScreen(id);
             this.endStream(res, quiet ? "" : "服务已停止。");
@@ -602,6 +632,11 @@ export class PiChatWebServer {
             // 收发微信的那台把微信里的一句话转回来（机器对机器，同上）
             if (pathname === "/weixinReply") {
                 void this.handleWeixinReply(req, res);
+                return;
+            }
+            // 手机 app 里那个前台服务连的（机器对机器，同上）
+            if (pathname === "/phone") {
+                this.openPhone(req, res, url.searchParams.get("client") ?? "");
                 return;
             }
             if (pathname === "/" || pathname === "/index.html") {
@@ -1692,6 +1727,76 @@ export class PiChatWebServer {
             if (!res) { continue; }
             this.writeScreenChunk(screen.id, res, `event: tick\ndata: ${JSON.stringify({ t: now })}\n\n`);
         }
+        // 手机那条连接只往它写心跳：写不动就说明那头没了（手机睡了 / 网断了），
+        // 丢掉等它回来（app 自己会重连），漏掉的通知就漏掉了。
+        this.dropDeadPhones((res) => this.writePhone(res, "tick", { t: now }));
+    }
+
+    // ========================================================================
+    //  手机 app 的连接（前台服务 → /phone）
+    // ========================================================================
+
+    /**
+     * 一台手机连上来：`GET /phone?client=…`。
+     *
+     * 跟页面的推送流不是一回事：不补发（漏一条通知不算事，重连以后照常收新的）、
+     * 不参与“人正坐在输入框前”那类判断、也不进页面登记簿 ——
+     * 它就是一条“有事往这儿写一行”的管子。
+     *
+     * 谁都能连：跟 `/notify` 一个规矩（机器对机器、不带 Origin，只在信得过的网络里用）。
+     */
+    private openPhone(req: http.IncomingMessage, res: http.ServerResponse, clientId: string): void {
+        if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+        const id = clientId || `ph-${crypto.randomUUID()}`;
+        res.writeHead(200, {
+            "Content-Type": "text/event-stream; charset=utf-8",
+            "Cache-Control": "no-store, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        });
+        res.write("retry: 2000\n\n");
+        this.writePhone(res, "hello", { app: "pichat", now: Date.now() });
+        res.socket?.setNoDelay(true);
+        // 同一台手机又连了一次（断线重连、app 重开）：旧的那条安静收掉
+        const old = this.phoneStreams.get(id);
+        this.phoneStreams.set(id, res);
+        if (old && old !== res) { try { old.destroy(); } catch { /* 已经断了 */ } }
+        const onClose = () => {
+            if (this.phoneStreams.get(id) !== res) { return; }
+            this.phoneStreams.delete(id);
+        };
+        res.on("close", onClose);
+        res.on("error", onClose);
+        this.hooks.log(`手机连上了（${id}）：现在连着 ${this.phoneStreams.size} 台。`);
+    }
+
+    /** 往一台手机写一段；写不动了返回 false。 */
+    private writePhone(res: http.ServerResponse, event: string, data: unknown): boolean {
+        if (res.writableEnded || res.destroyed) { return false; }
+        try {
+            res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /** 挨个往连着的手机写一段，写不动的（已经走的）当场丢掉。 */
+    private dropDeadPhones(write: (res: http.ServerResponse) => boolean): void {
+        for (const [id, res] of Array.from(this.phoneStreams)) {
+            if (write(res)) { continue; }
+            this.phoneStreams.delete(id);
+            try { res.destroy(); } catch { /* 已经断了 */ }
+        }
+    }
+
+    /**
+     * 会话有事了：往每台连着的手机写一条（手机上弹一条通知）。
+     * 一台都没连着就什么也不做（没连着说明人手机上没开那颗服务）。
+     */
+    public notifyPhones(note: PhoneNote): void {
+        if (this.phoneStreams.size === 0) { return; }
+        this.dropDeadPhones((res) => this.writePhone(res, "note", note));
     }
 
     // ========================================================================

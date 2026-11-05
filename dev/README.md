@@ -54,6 +54,11 @@ npm run web:shot -- --script dev/myFlow.js
 npm run web:dev -- --fake-pi
 npm run web:shot -- --fake-pi --send "随便说点什么" --shot fake.png
 
+# 验手机通知（android/ 那个 app）：往后端塞一条「有事」，app 收到就弹一条
+# 不给地址就用 http://127.0.0.1:51999（npm run web:dev / server 起在本机时）；末尾加 ask 是「等你答一句」那种
+node dev/phoneNote.mjs
+node dev/phoneNote.mjs http://127.0.0.1:51999 ask
+
 # 验“一批工具调用全挤在同一条线上”（往页面里投一批工具消息，前后加正文，截图）：
 # 同一个名字只出一个标签（标签停在第一次调用的位置），不同名的各占一个，一条线上还是能排好几个
 npm run web:shot -- --width 1000 --height 620 --script dev/toolRow.js

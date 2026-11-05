@@ -319,6 +319,8 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
         host: bindHost,
         trustedOrigins: options.trustedOrigins ?? [],
     };
+    // 手机上那个 app（前台服务）连着的时候，会话有事也往那儿推一条（见 webChatServer.ts 的 /phone）
+    host.setPhoneNotifier((note) => server.notifyPhones(note));
     await server.applySettings(settings);
 
     const url = server.url;

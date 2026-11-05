@@ -44,7 +44,7 @@ import { MessageBuffer, PAGE_TRANSIENT_MESSAGE_TYPES } from "./webTransport";
 import { pickOverlayClient } from "./overlayTarget";
 import { ScreenRegistry } from "./screenRegistry";
 import { dirInsideAny, dirKey } from "./pathRules";
-import type { WebServerHost } from "./webChatServer";
+import type { PhoneNote, WebServerHost } from "./webChatServer";
 import type { SessionChanges } from "./gitChanges";
 import type { BashTaskInfo } from "./bashProtocol";
 import { uniqueNameParts, composeName, type NameParts } from "./names";
@@ -53,6 +53,8 @@ import { DesktopLive } from "./desktopLive";
 import { describeRestart } from "./serverRestart";
 import { WeixinLogin, readWeixinAccount, type WeixinAccount } from "./weixinLogin";
 import { findRouteForInbound, pushWeixinNote, type SentRecord } from "./weixinPush";
+import { REMOTE_TEXT_CHARS } from "./remoteNotice";
+import { plainPreview } from "./messageUtils";
 import { WeixinInbox, readContextToken } from "./weixinInbox";
 import { sendText, type WeixinInbound } from "./weixinIlink";
 import type { SessionRuntime } from "./sessionRuntime";
@@ -187,6 +189,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private static readonly KEY_NOTIFY_TURN_END = "piChat.notifyTurnEnd";
     /** 微信里推不推那一条。跟「弹窗通知」分开：那是 Windows 右下角那块面板，这是手机上的事。 */
     private static readonly KEY_WEIXIN_PUSH = "piChat.weixinPush";
+    /** 手机 app（那个前台服务）连着的时候：有事往它那儿写一条的出口（见 serverMain.ts 接进来的）。 */
+    private phoneNotifier?: (note: PhoneNote) => void;
     private static readonly KEY_THEME = "piChat.themeMode";
 
     /** 会话显示名用的名字池：panel 关闭后会释放对应名字。 */
@@ -761,8 +765,36 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 它自己有一个开关（设置里「微信推送」），跟「弹窗通知」（Windows 右下角那块面板）互不相干。
      */
     protected override trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): void {
+        this.pushPhoneNote(sessionId, name, summary, kind);
         void this.pushWeixinNote(sessionId, name, summary, kind);
         super.trayNote(sessionId, name, summary, kind);
+    }
+
+    /**
+     * 网页服务起来以后接上手机那条出口（网页服务才是往手机上写的那一端，见 webChatServer.ts 的 /phone）。
+     * 没接上（网页服务没跑）就不推：手机上收不到通知而已，会话照常。
+     */
+    public setPhoneNotifier(notifier: (note: PhoneNote) => void): void { this.phoneNotifier = notifier; }
+
+    /**
+     * 把这条提醒推给连着的手机 app。
+     *
+     * 跟微信那条一样不受“人正坐在输入框前”管（它本来就是给不在电脑前准备的），
+     * 但跟着设置里「弹窗通知」那颗开关走（关掉就一路都不弹）。
+     * 摘要留长一点（手机上看得清跑完那一轮说了什么），具体多长见 remoteNotice.ts。
+     */
+    private pushPhoneNote(panelId: string, name: string, summary: string, kind: "done" | "ask", from?: string): void {
+        if (!this.phoneNotifier || !this.notifyTurnEndEnabled()) { return; }
+        const label = (name || "").trim() || "会话";
+        this.phoneNotifier({
+            name: label,
+            sessionId: panelId,
+            kind,
+            summary: plainPreview(summary, REMOTE_TEXT_CHARS),
+            at: Date.now(),
+            ...(from ? { from } : {}),
+        });
+        this.log(`[手机] 推了一条（${kind === "ask" ? "等你答一句" : "跑完一轮"}）：${from ? from + " · " : ""}${label}`);
     }
 
     /**
@@ -804,6 +836,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * （会话在那台的进程里，这台碰不到）。
      */
     protected override trayNoteRemote(notice: RemoteNotice): void {
+        this.pushPhoneNote(notice.sessionId, notice.name, notice.text ?? "", notice.kind === "ask" ? "ask" : "done", notice.label);
         void this.pushRemoteWeixinNote(notice);
         super.trayNoteRemote(notice);
     }
