@@ -6,7 +6,14 @@
  *   npm run web:shot -- --fake-pi --script dev/ctxChip.js
  *   npm run web:shot -- --width 360 --height 780 --fake-pi --script dev/ctxChip.js
  *
- * 图落在 dev/shots/：ctx-top-run.png（跑着，有状态图与速度）、ctx-top-idle.png（没在跑）。
+ * 三件事：
+ *   1. 摆一段假状态（63% + 扳手 + 116.5 t/s）量各块的位置，截放大图；
+ *   2. 换成“没在跑”的样子（8%、没有图、没有速度）再截一张；
+ *   3. 真跑一轮（假 pi），每 50 毫秒量一次横杠的两端 —— 这些位置是钉死的，
+ *      跑起来、速度数出现 / 位数变化、停下，都不该挪一个像素（当年这几处一直在抽：
+ *      左端 18px、右端 56px、数字变宽还抖几像素）。
+ *
+ * 图落在 dev/shots/：ctx-top-run.png（跑着）、ctx-top-idle.png（没在跑）。
  */
 const fs = require("fs");
 const path = require("path");
@@ -54,4 +61,35 @@ module.exports = async (page) => {
     await page.eval(fake(0.08, "", ""));
     await page.sleep(200);
     await shot(page, "ctx-top-idle.png", 3);
+
+    // ---- 三、横杠的两端一个像素都不该动 ----
+    // 把这几种情况挨个摆一遍（速度数在不在、位数多宽、状态图在不在），每次量横杠的两端：
+    // 这些位置是钉死的，只该有一种（当年这几处一直在抽：左端 18px、右端 56px、数字变宽还抖几像素）。
+    const cases = [
+        { act: "tool", tps: "116.5 t/s" },
+        { act: "tool", tps: "9.8 t/s" },
+        { act: "waiting", tps: "44.2 t/s" },
+        { act: "thinking", tps: "" },
+        { act: "", tps: "" },
+        { act: "", tps: "116.5 t/s" },
+    ];
+    const seen = [];
+    for (const c of cases) {
+        await page.eval(fake(0.63, c.act, c.tps));
+        await page.sleep(260);
+        const r = await page.eval(`
+            const b = document.getElementById("ctxBar").getBoundingClientRect();
+            const f = document.querySelector("#ctxBar .ct-fill").getBoundingClientRect();
+            return { left: Math.round(b.left), right: Math.round(b.right), width: Math.round(b.width), fill: Math.round(f.width) };`);
+        seen.push({ at: r.left + ".." + r.right, w: r.width, fill: r.fill, act: c.act || "（无）", tps: c.tps || "（无）" });
+    }
+    console.log("");
+    console.log("横杠的位置（应当只有一种），以及 63% 时填充的长度：");
+    for (const s of seen) { console.log(`  ${s.at} w=${s.w} 填充 ${s.fill}  状态图 ${s.act}  速度 ${s.tps}`); }
+    const spots = new Set(seen.map((s) => s.at));
+    if (spots.size > 1) { throw new Error("横杠在挪：" + JSON.stringify(seen)); }
+    // 刻度对不对：填充 = (横杠宽 - 左头那一格 18 - 右头那一格 60) × 63%
+    const lead = 18, tail = 60;
+    const expect = Math.round((seen[0].w - lead - tail) * 0.63);
+    console.log(`刻度：应当 ${expect}px，实际 ${seen[0].fill}px${Math.abs(expect - seen[0].fill) <= 1 ? " ✓" : " ✗"}`);
 };
