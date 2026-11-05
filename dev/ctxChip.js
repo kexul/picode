@@ -82,31 +82,34 @@ module.exports = async (page) => {
             const b = document.getElementById("ctxBar").getBoundingClientRect();
             const f = document.querySelector("#ctxBar .ct-fill").getBoundingClientRect();
             const a = document.getElementById("ctxAct").getBoundingClientRect();
+            /* 图标的外接框（带旋转） */
             const t = document.getElementById("ctxTps").getBoundingClientRect();
             const cs = getComputedStyle(document.getElementById("ctxBar"));
             return { left: Math.round(b.left), right: Math.round(b.right), width: Math.round(b.width),
-                     fill: Math.round(f.width), actRight: Math.round(a.right), masked: (cs.maskImage || cs.webkitMaskImage || "none") !== "none",
+                     fill: Math.round(f.width), actRight: Math.round(a.right), actBottom: Math.round(a.bottom), top: Math.round(b.top),
+                     masked: (cs.maskImage || cs.webkitMaskImage || "none") !== "none",
                      tpsLeft: t.width ? Math.round(t.left) : null };`);
         if (r.masked) { throw new Error("横杠被人挖了一块：位置应当全靠两头留格子，不该再动 mask"); }
-        if (c.act && r.actRight > r.left) {
-            throw new Error(`图标压在横杠上了：图标右边缘 ${r.actRight}，横杠从 ${r.left} 起`);
+        // 图标悬在横杠左头的上方：它的下边不许碰到横杠（横杠从 r.left 起、顶上那条边是 r.top）
+        if (c.act && r.actBottom > r.top) {
+            throw new Error(`图标压到横杠上了：图标下边 ${r.actBottom}，横杠上边 ${r.top}`);
         }
         if (c.tps && r.tpsLeft < r.right) {
             throw new Error(`速度数压在横杠上了：横杠到 ${r.right} 止，速度那格从 ${r.tpsLeft} 起`);
         }
         seen.push({ at: r.left + ".." + r.right, w: r.width, fill: r.fill, act: c.act || "（无）", tps: c.tps || "（无）",
-                    iconGap: c.act ? r.left - r.actRight : null, tpsGap: c.tps ? r.tpsLeft - r.right : null });
+                    iconGap: c.act ? r.top - r.actBottom : null, tpsGap: c.tps ? r.tpsLeft - r.right : null });
     }
     console.log("");
     console.log("横杠的位置（应当只有一种），以及 63% 时填充的长度：");
     for (const s of seen) {
         console.log(`  ${s.at} w=${s.w} 填充 ${s.fill}  状态图 ${s.act}  速度 ${s.tps}` +
-            (s.iconGap === null ? "" : `  图标与横杠之间空 ${s.iconGap}px`) +
+            (s.iconGap === null ? "" : `  图标下边离横杠还空 ${s.iconGap}px`) +
             (s.tpsGap === null ? "" : `  速度与横杠之间空 ${s.tpsGap}px`));
     }
     const spots = new Set(seen.map((s) => s.at));
     if (spots.size > 1) { throw new Error("横杠在挪：" + JSON.stringify(seen)); }
-    // 刻度对不对：填充 = 横杠宽 × 63%
+    // 刻度对不对：填充 = 横杠宽 × 63%（横杠的左边就是填充的 0 点）
     const expect = Math.round(seen[0].w * 0.63);
     console.log(`刻度：应当 ${expect}px，实际 ${seen[0].fill}px${Math.abs(expect - seen[0].fill) <= 1 ? " ✓" : " ✗"}`);
 };

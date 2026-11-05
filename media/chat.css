@@ -1382,37 +1382,30 @@
      用量与速度都不是控件、不用点，只有模型名要天天点，所以让它们去不占横向位置的地方。
      两头那两格是**永远**留着的（不跑、没速度也一样）：横杠的位置、长度、刻度在什么场景下都不变 ——
      原来它一跑起来就往里缩，让位给图标，看着像条子自己变短了。
-     盒子的顶边框照旧画着（1px），横杠是压在上面那条 2px 的尺子，只在中间这一段 ——
-     所以两头空出来的地方看着还是一根正常的边框，不是“盒子裂了个口”。
+     盒子的顶边框照旧画着（1px），横杠从最左头（圆角后）一直画到右头那一格之前 ——
+     深的这截永远从横杠自己最左头起，不存在“前面还有一截浅的”那种看着像坏掉的样子。
+     状态图不占横杠的地方：它悬在横杠左头的正上方（不压线）。速度那一格在右头，
+     用输入框的底色把底下的线遮出口子（那本来就是“还没用到”那一段，遮了不碍事）。
      几何全是钉死的：横杠多长、填到哪儿，跑起来 / 停下 / 速度数变宽都不动一个像素。
      量法：dev/ctxChip.js 的第三段（挨个摆各种情况，横杠两端只该有一种位置）。 */
   #composer { --ctx-track: var(--vscode-input-border, rgba(128,128,128,0.35)); }
   #ctxTop {
     position: absolute; top: -1px; left: 0; right: 0; height: 2px;
     pointer-events: none;
-    /* 两头各留一格，宽度写死：左边给状态图，右边给速度数（都往宽里给，字多一点也放得下）。
-       横杠就是「整条减掉这两格」，从头到尾不变。 */
-    --ctx-lead: 22px;
+    /* 右头那一格留给速度数（宽里给，四位数也放得下）。横杠就是「整条减掉这一格」，从头到尾不变。 */
     --ctx-tail: 64px;
   }
-  /* 状态图那一格（13px 起，12px 见方）：只画不占位 —— 它进不进出都不动横杠。
-     格子里先垫一层“把顶边框擦掉”的底（::before），图形再放上去 ——
-     不然那条 1px 的边框会从图形底下穿过去。垫的这层只在边框那一行往下涂，上半截透明
-     （这一格有一半露在盒子外面，涂满会在页面底色上露出一块方块）。
-     横杠本来就从这一格右边起，所以横杠碰不到它。
+  /* 状态图：悬在横杠左头的正上方（底下留 2px，不压线），只画不占位 ——
+     它进不进出都不动横杠，也不占横杠的地方；横杠的深色那截永远从最左头起。
      形状与颜色见下面那几条 */
-  #ctxTop .ct-cell { position: absolute; top: -7px; left: 13px; width: 12px; height: 12px; display: none; }
-  #ctxTop .ct-cell::before {
-    content: ""; position: absolute; inset: 0 -1px;
-    background: linear-gradient(to bottom, transparent 0 7px, var(--vscode-input-background) 7px);
-  }
+  #ctxTop .ct-cell { position: absolute; top: -14px; left: 13px; width: 12px; height: 12px; display: none; }
   #ctxTop .ct-cell:has(.ct-act[data-act]:not([data-act=""])) { display: block; }
   #ctxTop .ct-act { position: absolute; inset: 0; }
   /* 横杠（空槽 + 填充）：从左边那一格之后起、到右头那一格之前止，永远这一段。
      空槽取输入框边框那个颜色，压在顶边框上，看着就是那一段粗一点点的边框。 */
   #ctxTop #ctxBar {
     position: absolute; top: 0; height: 2px; border-radius: 1px;
-    left: calc(13px + var(--ctx-lead)); right: calc(13px + var(--ctx-tail));
+    left: 13px; right: calc(13px + var(--ctx-tail));
     background: var(--ctx-track, var(--vscode-input-border, rgba(128,128,128,0.35)));
   }
   /* 填充：填多满由 --ci-pct 给（chat.js 每次算完用量就写一回，0~1 的一个数）。
