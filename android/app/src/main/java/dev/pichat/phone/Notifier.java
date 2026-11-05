@@ -36,7 +36,7 @@ final class Notifier {
         nm.createNotificationChannel(notes);
     }
 
-    /** 前台服务挂着的那条：正文写着现在连到哪儿了。 */
+    /** 前台服务挂着的那条：正文写着现在连到哪儿了。点它就打开 app，并把填地址那一块摊开。 */
     static Notification service(Context ctx, String status) {
         return new Notification.Builder(ctx, CHANNEL_SERVICE)
             .setSmallIcon(R.drawable.ic_note)
@@ -44,7 +44,7 @@ final class Notifier {
             .setContentText(status)
             .setOngoing(true)
             .setShowWhen(false)
-            .setContentIntent(openApp(ctx, null))
+            .setContentIntent(appIntent(ctx, null, true))
             .build();
     }
 
@@ -62,7 +62,7 @@ final class Notifier {
             .setAutoCancel(true)
             .setShowWhen(true)
             .setWhen(at > 0 ? at : System.currentTimeMillis())
-            .setContentIntent(openApp(ctx, sessionId));
+            .setContentIntent(appIntent(ctx, sessionId, false));
         if ("ask".equals(kind)) {
             builder.setSubText("在等你回一句");
         }
@@ -70,12 +70,18 @@ final class Notifier {
         nm.notify(id, builder.build());
     }
 
-    /** 点通知进来的那条路：打开 app，并让它把页面切到那个会话。 */
-    private static PendingIntent openApp(Context ctx, String sessionId) {
+    /**
+     * 点通知进来的那条路：打开 app。点的是常驻那条就把填地址那块摊开，
+     * 点的是提醒那条就切到它说的那个会话。
+     */
+    private static PendingIntent appIntent(Context ctx, String sessionId, boolean openSettings) {
         Intent intent = new Intent(ctx, MainActivity.class)
             .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         if (sessionId != null && !sessionId.isEmpty()) {
             intent.putExtra(MainActivity.EXTRA_SESSION, sessionId);
+        }
+        if (openSettings) {
+            intent.putExtra(MainActivity.EXTRA_SETTINGS, true);
         }
         int requestCode = sessionId == null ? 0 : sessionId.hashCode();
         return PendingIntent.getActivity(ctx, requestCode, intent,

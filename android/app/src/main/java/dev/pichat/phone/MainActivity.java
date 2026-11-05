@@ -20,7 +20,6 @@ import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
-import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -29,17 +28,19 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
 /**
- * 一屏：上面填后端地址、开那颗开关，下面直接是网页端本身（看会话、回话都在里面）。
+ * 一屏：整屏就是网页端本身（看会话、回话都在里面）；填地址那一块平时收着，要用时才摊开。
  *
  * 不另外写一套对话界面：手机上打开后端那个地址看到的就是这一份，嵌进来就全都有了。
- * 通知点进来时带着会话标识，页面就绪以后让它切到那个会话（跟顶条上点一下那格一样）。
+ * 摊开填地址那一块的入口只有通知栏：点那条常驻通知就摊开（第一次装、网页打不开时也自己摊开）。
+ * 点会话提醒那条进来时带着会话标识，页面就绪以后让它切到那个会话（跟顶条上点一下那格一样）。
  */
 public class MainActivity extends Activity {
-    /** 通知点进来时带的会话标识（要切过去的那个会话）。 */
+    /** 提醒点进来时带的会话标识（要切过去的那个会话）。 */
     static final String EXTRA_SESSION = "sessionId";
+    /** 常驻通知点进来时带的标记：把填地址那一块摊开。 */
+    static final String EXTRA_SETTINGS = "openSettings";
 
     private EditText urlBox;
-    private Switch toggle;
     private TextView statusLine;
     private LinearLayout settingsPanel;
     private WebView web;
@@ -60,8 +61,7 @@ public class MainActivity extends Activity {
 
         String saved = Settings.baseUrl(this);
         urlBox.setText(saved);
-        toggle.setChecked(Settings.on(this) && !saved.isEmpty());
-        if (toggle.isChecked()) { PhoneService.start(this); }
+        if (!saved.isEmpty()) { PhoneService.start(this); }
         loadPage(saved);
         // 还没填地址：把那行摊开来（填完就收回去，平时整屏都是网页）
         showSettings(saved.isEmpty());
@@ -71,25 +71,11 @@ public class MainActivity extends Activity {
 
     private View buildUi() {
         final int pad = Math.round(8 * getResources().getDisplayMetrics().density);
-        final int barHeight = Math.round(30 * getResources().getDisplayMetrics().density);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
 
-        // 顶头那条细线：只剩右边一颗「后端地址」按钮（连接状态看通知栏那条常驻通知，
-        // 或者点开这行以后看下面那行小灰字）
-        LinearLayout topBar = new LinearLayout(this);
-        topBar.setOrientation(LinearLayout.HORIZONTAL);
-        topBar.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-
-        android.widget.ImageButton tune = new android.widget.ImageButton(this);
-        tune.setImageResource(R.drawable.ic_tune);
-        tune.setBackgroundColor(0x00000000);
-        tune.setContentDescription("后端地址");
-        tune.setOnClickListener(v -> showSettings(settingsPanel.getVisibility() != View.VISIBLE));
-        topBar.addView(tune, new LinearLayout.LayoutParams(barHeight + pad, barHeight));
-        root.addView(topBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, barHeight));
-
-        // 设置那一块（地址、开关、现在连到哪儿了）：默认收起来，点右边那颗才摊开
+        // 填地址那一块（地址、现在连到哪儿了）：平时不占地方，整屏都是网页。
+        // 点通知栏那条常驻通知才摊开（第一次装、网页打不开时也自己摊开），收起来靠底下那颗「收起」。
         settingsPanel = new LinearLayout(this);
         settingsPanel.setOrientation(LinearLayout.VERTICAL);
 
@@ -109,20 +95,29 @@ public class MainActivity extends Activity {
         save.setText("保存");
         save.setOnClickListener(v -> onSave());
         bar.addView(save);
-
-        toggle = new Switch(this);
-        toggle.setText("收提醒");
-        toggle.setOnCheckedChangeListener((v, checked) -> onToggle(checked));
-        bar.addView(toggle);
         settingsPanel.addView(bar);
 
-        // 现在连到哪儿了：平时收着不显示，摊开这一块时看得到
+        // 底下那一行：左边现在连到哪儿了，右边一颗「收起」（点通知进来的，看完就收回去）。
+        // 地址还没填时收不起来（那时通知栏里还没有那条常驻通知，收起来就再没入口了，见 showSettings）。
+        LinearLayout foot = new LinearLayout(this);
+        foot.setOrientation(LinearLayout.HORIZONTAL);
+        foot.setGravity(Gravity.CENTER_VERTICAL);
+        foot.setPadding(pad, 0, pad, pad);
+
         statusLine = new TextView(this);
         statusLine.setTextSize(11);
         statusLine.setSingleLine(true);
         statusLine.setTextColor(0xFF8A8A8A);
-        statusLine.setPadding(pad, 0, pad, pad);
-        settingsPanel.addView(statusLine);
+        foot.addView(statusLine, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView hide = new TextView(this);
+        hide.setText("收起");
+        hide.setTextSize(12);
+        hide.setTextColor(0xFF6A6A6A);
+        hide.setPadding(pad, pad / 2, pad, pad / 2);
+        hide.setOnClickListener(v -> showSettings(false));
+        foot.addView(hide);
+        settingsPanel.addView(foot);
         root.addView(settingsPanel);
 
         web = new WebView(this);
@@ -156,11 +151,12 @@ public class MainActivity extends Activity {
         return root;
     }
 
-    /** 那行设置露不露出来（网页本身占满剩下的地方）。 */
+    /** 填地址那一块露不露出来（网页本身占满剩下的地方）。地址还没填时收不起来。 */
     private void showSettings(boolean show) {
-        settingsPanel.setVisibility(show ? View.VISIBLE : View.GONE);
+        boolean visible = show || Settings.baseUrl(this).isEmpty();
+        settingsPanel.setVisibility(visible ? View.VISIBLE : View.GONE);
     }
-    /** 「保存」：存下地址、打开开关、开始收提醒、把页面载进来。 */
+    /** 「保存」：存下地址、开始收提醒、把页面载进来，然后把这行收回去。 */
     private void onSave() {
         String url = Settings.normalize(urlBox.getText().toString());
         urlBox.setText(url);
@@ -169,27 +165,10 @@ public class MainActivity extends Activity {
             return;
         }
         Settings.setBaseUrl(this, url);
-        if (!Settings.on(this)) {
-            Settings.setOn(this, true);
-            toggle.setChecked(true);
-        }
+        PhoneService.start(this);
         loadPage(url);
         // 存好了就把这行收回去：平时整屏都是网页
         showSettings(false);
-    }
-
-    /** 那颗开关：关了就停收（常驻通知也跟着没了），开了就接着收。 */
-    private void onToggle(boolean checked) {
-        Settings.setOn(this, checked);
-        if (!checked) {
-            PhoneService.stop(this);
-            return;
-        }
-        if (Settings.baseUrl(this).isEmpty()) {
-            Toast.makeText(this, "先在上面填后端地址再打开", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        PhoneService.start(this);
     }
 
     private void loadPage(String url) {
@@ -202,9 +181,12 @@ public class MainActivity extends Activity {
         if (!url.equals(web.getUrl())) { web.loadUrl(url); }
     }
 
-    /** 通知点进来带的那条会话标识。 */
+    /** 点通知进来的：常驻那条要摊开填地址那块，提醒那条要切到它说的会话。 */
     private void handleIntent(Intent intent) {
         if (intent == null) { return; }
+        if (intent.getBooleanExtra(EXTRA_SETTINGS, false)) {
+            showSettings(true);
+        }
         String session = intent.getStringExtra(EXTRA_SESSION);
         if (session != null && !session.isEmpty()) {
             pendingSession = session;
@@ -282,14 +264,19 @@ public class MainActivity extends Activity {
         @Override
         public void run() {
             if (!resumed) { return; }
-            boolean on = Settings.on(MainActivity.this) && !Settings.baseUrl(MainActivity.this).isEmpty();
-            statusLine.setText(on ? PhoneService.status() : "收提醒关着：填上地址，把「收提醒」打开");
+            boolean filled = !Settings.baseUrl(MainActivity.this).isEmpty();
+            statusLine.setText(filled ? PhoneService.status() : "还没填后端地址");
             ui.postDelayed(this, 1000);
         }
     };
 
     @Override
     public void onBackPressed() {
+        // 摊开的填地址那块先收起来（地址没填时收不起来，那就停在这儿，见 showSettings）
+        if (settingsPanel != null && settingsPanel.getVisibility() == View.VISIBLE) {
+            showSettings(false);
+            return;
+        }
         if (web != null && web.canGoBack()) {
             web.goBack();
             return;

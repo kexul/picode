@@ -30,7 +30,6 @@ import java.nio.charset.StandardCharsets;
  */
 public class PhoneService extends Service {
     static final String ACTION_START = "dev.pichat.phone.START";
-    static final String ACTION_STOP = "dev.pichat.phone.STOP";
 
     private static final String TAG = "pichat-phone";
 
@@ -39,14 +38,9 @@ public class PhoneService extends Service {
 
     static String status() { return status; }
 
-    /** 把服务挂起来（界面上开开关、开机自启都走这条）。 */
+    /** 把服务挂起来（存好地址、开机自启都走这条）。一直挂着：手机上没地方关它。 */
     static void start(Context ctx) {
         ctx.startForegroundService(new Intent(ctx, PhoneService.class).setAction(ACTION_START));
-    }
-
-    /** 收掉（界面上关开关时走这条）。 */
-    static void stop(Context ctx) {
-        ctx.stopService(new Intent(ctx, PhoneService.class));
     }
 
     private volatile boolean running;
@@ -68,12 +62,8 @@ public class PhoneService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null && ACTION_STOP.equals(intent.getAction())) {
-            stopSelf();
-            return START_NOT_STICKY;
-        }
-        // 开关关着：不该挂在这儿（开机自启、系统把它拉起来时都可能碰上）
-        if (!Settings.on(this)) { stopSelf(); return START_NOT_STICKY; }
+        // 地址还没有：不该挂在这儿（开机自启、系统把它拉起来时都可能碰上）
+        if (Settings.baseUrl(this).isEmpty()) { stopSelf(); return START_NOT_STICKY; }
         if (worker == null) {
             running = true;
             worker = new Thread(this::loop, "phone-link");
