@@ -1376,29 +1376,38 @@
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
   }
 
-  /* 输入框顶边上那条：上下文用量画在盒子的顶边框上 —— 最左边一格是跑着时的状态图
-     （等 / 写 / 想 / 工具），中间一条横杠，填到哪儿就是用了多少，右端切出一个口子写这一轮的生成速度。
+  /* 输入框顶边上那条：上下文用量画在盒子的顶边框上 —— 最左边贴着角落是跑着时的状态图
+     （等 / 写 / 想 / 工具），整条是横杠，填到哪儿就是用了多少，右端一格写这一轮的生成速度。
      这样输入框底下那条横排里只剩模型名，不再往那儿挤五样东西（手机上挤不开）。
      用量与速度都不是控件、不用点，只有模型名要天天点，所以让它们去不占横向位置的地方。
      不跑、没速度的时候状态图与速度都不出现，整条看着就是一条普通边框。
      它骑在顶边框上（top: -1px，2px 高）：盒子自己的顶边框调成透明，让这条顶上来的当边框，
-     所以左右两头各留 13px 给圆角，横杠走在这中间。 */
+     所以左右两头各留 13px 给圆角，横杠走在这中间。
+     几何全是钉死的，跑着的时候一个像素都不挪 —— 这三样原来是用横排（flex）排的，
+     图标一出一收横杠左端挪 18px、速度出现 / 清空右端挪 56px、数字位数一变再抖几像素，
+     一条一直在抽的线。现在：状态图绝对定位骑在横杠起点上（只画、不占位），
+     速度那一格永远留着位置，用量的刻度按「整条减去那一格」算（--ctx-gutter）。 */
   #composer { border-top-color: transparent; --ctx-track: var(--vscode-input-border, rgba(128,128,128,0.35)); }
   #ctxTop {
-    position: absolute; top: -1px; left: 13px; right: 13px; height: 2px;
-    display: flex; align-items: center; gap: 6px;
+    position: absolute; top: -1px; left: 0; right: 0; height: 2px;
     pointer-events: none;
+    /* 右头留给速度那一格的宽度（见下面 #ctxTps） */
+    --ctx-gutter: 60px;
   }
-  /* 状态图那一格：12px 见方，不跑时整格收掉（横杠就顶到最左）；形状与颜色见下面那几条 */
-  #ctxTop .ct-act { flex: 0 0 auto; display: none; width: 12px; height: 12px; }
-  /* 用量横杠：淡底就是空槽（取输入框边框那个颜色，看着跟别的三条边是一条），
-     填多满由 --ci-pct 给（chat.js 每次算完用量就写一回），就是这条横杠本身的宽度。 */
+  /* 状态图：骑在横杠的起点上（左边跟横杠一样从 13px 起），只画不占位 —— 它进不进出都不动横杠。
+     压住的只是用量不到 3% 的那一小截（那时候它自己就把“在这儿”说清楚了）。
+     形状与颜色见下面那几条 */
+  #ctxTop .ct-act { position: absolute; top: -7px; left: 13px; display: none; width: 12px; height: 12px; }
+  /* 空槽：整条（圆角后到圆角前），就是盒子的顶边框（取输入框边框那个颜色，看着跟别的三条边是一条） */
   #ctxTop #ctxBar {
-    flex: 1 1 auto; position: relative; height: 2px; border-radius: 1px;
+    position: absolute; top: 0; left: 13px; right: 13px; height: 2px; border-radius: 1px;
     background: var(--ctx-track, var(--vscode-input-border, rgba(128,128,128,0.35)));
   }
+  /* 填充：填多满由 --ci-pct 给（chat.js 每次算完用量就写一回，0~1 的一个数）。
+     尺子是「整条减去右头那一格」：所以速度数在不在、宽窄怎么变，都不影响这把尺子。 */
   #ctxTop #ctxBar .ct-fill {
-    position: absolute; inset: 0 auto 0 0; width: var(--ci-pct, 0%); border-radius: 1px;
+    position: absolute; left: 0; top: 0; bottom: 0; border-radius: 1px;
+    width: calc((100% - var(--ctx-gutter)) * var(--ci-pct, 0));
     /* 填进来的那截：跟字一样的前景色压七成（浅色主题下是一条深灰、深色主题下是一条浅灰），
        一眼就是“实的这头是用掉的”。空槽（--ctx-track）会跟着焦点 / 自动模式换色，这一截不跟着换。 */
     background: var(--vscode-foreground, #444); opacity: 0.7;
@@ -1407,11 +1416,16 @@
   /* 用量 ≥70% 黄、≥90% 红（跟以前一样） */
   #ctxTop #ctxBar.warn .ct-fill { background: var(--vscode-editorWarning-foreground, #cca700); }
   #ctxTop #ctxBar.err .ct-fill { background: var(--vscode-errorForeground, #f14c4c); }
-  /* 这一轮的生成速度：写在右端那个口子里（横杠到它左边就断了）；
-     没数的时候整格收掉，横杠就铺到右头 —— 也就是看着一条普通边框。 */
+  /* 这一轮的生成速度：浮在右头那一格上，用输入框的底色把底下的空槽盖掉 —— 看上去就是横杠
+     在右端切了一个口子。没数的时候整格收掉（那儿就露出空槽，看着一条普通边框）。
+     宽度钉死、靠右排：这个数每 250 毫秒刷一次，位数一变（9.8 → 116.5）就宽窄一下，
+     横杠的右头跟着一抽一抽地跳 —— 钉住以后跑着的时候横杠一动不动。 */
   #ctxTop #ctxTps {
-    flex: 0 0 auto; white-space: nowrap; font-variant-numeric: tabular-nums;
-    font-size: 11px; line-height: 1; color: var(--vscode-descriptionForeground, #999);
+    position: absolute; top: -5px; right: 13px; box-sizing: border-box;
+    width: var(--ctx-gutter); padding: 0 6px; text-align: right; white-space: nowrap;
+    background: var(--vscode-input-background);
+    font-size: 11px; line-height: 1; font-variant-numeric: tabular-nums;
+    color: var(--vscode-descriptionForeground, #999);
   }
   #ctxTop #ctxTps:empty { display: none; }
 

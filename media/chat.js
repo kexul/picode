@@ -4849,10 +4849,10 @@
     if (ctxBarEl) {
       ctxBarEl.classList.toggle("warn", pct >= 70 && pct < 90);
       ctxBarEl.classList.toggle("err", pct >= 90);
-      // 横杠：填多满就是用了多少（一个数写进 --ci-pct，横杠宽度认它，见 chat.css）。
+      // 横杠：填多满就是用了多少（0~1 的一个数写进 --ci-pct，横杠宽度认它，见 chat.css）。
       // 还没量出来（没配模型 / 还没报过用量）就空着。精确的百分比在悬浮提示里（见 ctxTitle）。
       const known = (state === "idle" || state === "streaming") && typeof st.percent === "number";
-      ctxBarEl.style.setProperty("--ci-pct", known ? pct.toFixed(1) + "%" : "0%");
+      ctxBarEl.style.setProperty("--ci-pct", known ? (pct / 100).toFixed(4) : "0");
     }
     ctxIconEl.title = ctxTitle(st);
     const name = ctxIconEl.querySelector(".ci-name");

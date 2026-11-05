@@ -38,7 +38,7 @@ async function shot(page, name, scale) {
 
 module.exports = async (page) => {
     await page.waitReady();
-    await page.eval(fake("63%", "tool", "116.5 t/s"));
+    await page.eval(fake(0.63, "tool", "116.5 t/s"));
     await page.sleep(400);
     const rects = await page.eval(`
         const q = (s) => { const e = document.querySelector(s); if (!e) { return null; }
@@ -51,7 +51,7 @@ module.exports = async (page) => {
     console.log(JSON.stringify(rects, null, 2));
     await shot(page, "ctx-top-run.png", 3);
 
-    await page.eval(fake("8%", "", ""));
+    await page.eval(fake(0.08, "", ""));
     await page.sleep(200);
     await shot(page, "ctx-top-idle.png", 3);
 };
