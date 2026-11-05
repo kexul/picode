@@ -1388,15 +1388,20 @@
   #ctxTop {
     position: absolute; top: -1px; left: 0; right: 0; height: 2px;
     pointer-events: none;
-    /* 两头各留一块空的，宽度写死：左边给状态图，右边给速度数（往宽里给，四位数也放得下）。
+    /* 两头各留一块空的，**两块一样宽**（横杠才在正中间，两头看着才对称）：
+       左边放状态图、右边放速度数（宽里给，四位数也放得下），两样东西各自在格子里居中；
+       有就显示、没有就空着。
        横杠就是「整条减掉这两块」，从头到尾不变。 */
-    --ctx-lead: 22px;
-    --ctx-tail: 64px;
+    --ctx-lead: 58px;
+    --ctx-tail: 58px;
   }
   /* 状态图：站在左边那块空地里（跟横杠同一条中线），只画不占位 —— 它进不进出都不动横杠。
      那块地方本来就没有线（横杠从它右边才起），所以不用挖、也不会压着谁。
      形状与颜色见下面那几条 */
-  #ctxTop .ct-cell { position: absolute; top: -7px; left: 13px; width: 12px; height: 12px; display: none; }
+  #ctxTop .ct-cell {
+    position: absolute; top: -7px; left: calc(13px + (var(--ctx-lead) - 12px) / 2);
+    width: 12px; height: 12px; display: none;
+  }
   #ctxTop .ct-cell:has(.ct-act[data-act]:not([data-act=""])) { display: block; }
   #ctxTop .ct-act { position: absolute; inset: 0; }
   /* 横杠（空槽 + 填充）：从左边那一格之后起、到右头那一格之前止，永远这一段。
@@ -1425,7 +1430,7 @@
      横杠的右头跟着一抽一抽地跳 —— 钉住以后跑着的时候横杠一动不动。 */
   #ctxTop #ctxTps {
     position: absolute; top: -5px; right: 13px; box-sizing: border-box;
-    width: var(--ctx-tail); padding: 0 6px; text-align: right; white-space: nowrap;
+    width: var(--ctx-tail); padding: 0 6px; text-align: center; white-space: nowrap;
     font-size: 11px; line-height: 1; font-variant-numeric: tabular-nums;
     color: var(--vscode-descriptionForeground, #999);
   }
