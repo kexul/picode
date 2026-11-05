@@ -44,30 +44,31 @@ const ICON_ARROW_DOWN = '<svg width="14" height="14" viewBox="0 0 16 16" xmlns="
 const ICON_CLOSE = '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.5 2.5 L13.5 13.5 M13.5 2.5 L2.5 13.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>';
 
 /**
- * 输入框顶边上那条：这个会话的上下文用了多少 —— 一条横杠（填到哪儿就是用了多少）从左边圆角后
- * 一直画到右边圆角前，整条就是盒子的顶边框。两头不留空当、也不切缺口：
- * 跑着时的状态图与这一轮的生成速度都在下面那条小横排上（见 inputRowMarkup）。
+ * 输入框顶边上那条：从左到右三样排成一行 —— 跑着时的状态图（等 / 写 / 想 / 工具，不跑就收掉）、
+ * 一条用量横杠（填到哪儿就是用了多少，吃掉中间剩下的位置）、这一轮的生成速度（不跑就收掉）。
+ * 横杠的长度是弹性的：两样都有的时候短一点，都没有的时候它就铺满整条（看着就是盒子的顶边框）。
  * 颜色（正常 / 黄 / 红）、提示文字都在 chat.js 里管。
  */
 function ctxTopMarkup(): string {
-    return `      <div id="ctxTop" aria-hidden="true"><span id="ctxBar"><span class="ct-fill"></span></span></div>\n`;
+    return `      <div id="ctxTop" aria-hidden="true">` +
+        `<span class="ct-cell"><span id="ctxAct" class="ct-act"></span></span>` +
+        `<span id="ctxBar"><span class="ct-fill"></span></span>` +
+        `<span id="ctxTps"></span>` +
+        `</div>\n`;
 }
 
 /**
- * 输入框底下那条小横排里、由骨架自己排好的几样（别的按钮由别的脚本往后挂）：
- * 新建会话那颗加号、跑着时的状态图（等 / 写 / 想 / 工具，不跑时整格收掉）、
- * 当前模型那颗胶囊、这一轮的生成速度（顶到最右头，不跑就空着）。
+ * 输入框底下那条小横排里、由骨架自己排好的那几样（别的按钮由别的脚本往后挂）：
+ * 新建会话那颗加号、当前模型那颗胶囊。
  */
 function inputRowMarkup(): string {
     return `        <button id="newSessionBtn" title="新建会话 (Ctrl+Alt+N)" aria-label="新建会话">${ICON_ADD}</button>\n` +
-        `        <span class="ct-cell"><span id="ctxAct" class="ct-act"></span></span>\n` +
-        modelChipMarkup() +
-        `        <span id="ctxTps"></span>\n`;
+        modelChipMarkup();
 }
 
 /**
  * 输入框底下那颗胶囊：当前模型名（点它弹模型选择器）。
- * 用量横杠在盒子顶边上（见上面的 ctxTopMarkup），生成速度在同一行最右头（见 inputRowMarkup），
+ * 上下文用量与生成速度都在盒子顶边上那条里（见 ctxTopMarkup），
  * 这里只管名字。长相（颜色、提示文字、点击切模型）都在 chat.css / chat.js 里管。
  */
 function modelChipMarkup(): string {

@@ -18,12 +18,12 @@
 const fs = require("fs");
 const path = require("path");
 
-/** 往页面里摆一段假状态：模型名、用量、状态图、速度（真数据要跑一轮才有）。 */
+/** 往页面里摆一段假状态：模型名、用量（写到 #composer 上）、状态图、速度（真数据要跑一轮才有）。 */
 const fake = (pct, act, tps) => `
     const el = document.getElementById("ctxIcon");
     const top = document.getElementById("composer");
     el.querySelector(".ci-name").textContent = "deepseek-flash";
-    document.getElementById("ctxBar").style.setProperty("--ci-pct", ${JSON.stringify(pct)});
+    document.getElementById("composer").style.setProperty("--ci-pct", ${JSON.stringify(pct)});
     document.getElementById("ctxAct").dataset.act = ${JSON.stringify(act)};
     document.getElementById("ctxTps").textContent = ${JSON.stringify(tps)};
     return true;
@@ -52,8 +52,8 @@ module.exports = async (page) => {
             const r = e.getBoundingClientRect();
             return { x: +r.x.toFixed(2), y: +r.y.toFixed(2), w: +r.width.toFixed(2), h: +r.height.toFixed(2),
                      cy: +((r.top + r.bottom) / 2).toFixed(2) }; };
-        return { chip: q("#ctxIcon"), name: q("#ctxIcon .ci-name"), top: q("#ctxTop"),
-                 act: q("#ctxAct"), bar: q("#ctxBar"), fill: q("#ctxBar .ct-fill"), tps: q("#ctxTps") };
+        return { chip: q("#ctxIcon"), name: q("#ctxIcon .ci-name"), composer: q("#composer"),
+                 act: q("#ctxAct"), tps: q("#ctxTps") };
     `);
     console.log(JSON.stringify(rects, null, 2));
     await shot(page, "ctx-top-run.png", 3);
@@ -62,10 +62,10 @@ module.exports = async (page) => {
     await page.sleep(200);
     await shot(page, "ctx-top-idle.png", 3);
 
-    // ---- 三、横杠的位置、长度、刻度，在什么场景下都一样；两样读数都在下面那行 ----
+    // ---- 三、横杠的位置随两头的东西伸缩，但填充永远从它自己的左头起 ----
     // 挨个摆一遍（速度数在不在、位数多宽、状态图在不在），每次量横杠的两端和填充：
-    // 横杠整条铺在盒子的顶边上，只该有一种位置，填充也只该从它的左头起。
-    // 状态图与速度数现在都在底下那条小横排里（不在顶边那条上），所以不许跟横杠有任何重叠。
+    // 这是“弹性”那版 —— 横杠吃掉中间剩下的位置，所以有图 / 有速度时短一点，都没有时铺满整条。
+    // 要守的是：填充从横杠自己的左头起、图标与速度都不压着横杠、模型名不被挤动。
     const cases = [
         { act: "tool", tps: "116.5 t/s" },
         { act: "tool", tps: "9.8 t/s" },
@@ -83,33 +83,28 @@ module.exports = async (page) => {
             const f = document.querySelector("#ctxBar .ct-fill").getBoundingClientRect();
             const a = document.getElementById("ctxAct").getBoundingClientRect();
             const t = document.getElementById("ctxTps").getBoundingClientRect();
-            const name = document.querySelector("#ctxIcon").getBoundingClientRect();
-            return { nameLeft: Math.round(name.left),
-                     left: Math.round(b.left), right: Math.round(b.right), width: Math.round(b.width),
+            const name = document.getElementById("ctxIcon").getBoundingClientRect();
+            return { left: Math.round(b.left), right: Math.round(b.right), width: Math.round(b.width),
                      fill: Math.round(f.width), fillLeft: Math.round(f.left),
-                     barBottom: Math.round(b.bottom),
-                     actTop: a.width ? Math.round(a.top) : null,
-                     actRight: Math.round(a.right),
-                     tpsTop: t.width ? Math.round(t.top) : null,
-                     tpsRight: t.width ? Math.round(t.right) : null };`);
-        // 深色那截必须从横杠自己的左头起
+                     actRight: a.width ? Math.round(a.right) : null,
+                     tpsLeft: t.width ? Math.round(t.left) : null,
+                     nameLeft: Math.round(name.left) };`);
         if (r.fillLeft !== r.left) { throw new Error(`填充没从横杠左头起：横杠 ${r.left}，填充 ${r.fillLeft}`); }
-        // 状态图那一格一直在（只是空的），所以模型名的左边不该跟着动
-        if (r.nameLeft !== seen[0]?.nameLeft && seen.length) {
-            throw new Error(`模型名被挤动了：${seen[0].nameLeft} → ${r.nameLeft}`);
-        }
-        // 两样读数都在下面那行：上边必须在横杠下边之下
-        if (c.act && r.actTop < r.barBottom) { throw new Error(`状态图跑到顶边那条上了：上边 ${r.actTop}，横杠下边 ${r.barBottom}`); }
-        if (c.tps && r.tpsTop < r.barBottom) { throw new Error(`速度数跑到顶边那条上了：上边 ${r.tpsTop}，横杠下边 ${r.barBottom}`); }
+        if (c.act && r.actRight > r.left) { throw new Error(`图标压在横杠上了：图标右边缘 ${r.actRight}，横杠从 ${r.left} 起`); }
+        if (c.tps && r.tpsLeft < r.right) { throw new Error(`速度数压在横杠上了：横杠到 ${r.right} 止，速度从 ${r.tpsLeft} 起`); }
+        if (seen.length && r.nameLeft !== seen[0].nameLeft) { throw new Error(`模型名被挤动了：${seen[0].nameLeft} → ${r.nameLeft}`); }
         seen.push({ at: r.left + ".." + r.right, w: r.width, fill: r.fill, nameLeft: r.nameLeft,
                     act: c.act || "（无）", tps: c.tps || "（无）" });
     }
     console.log("");
-    console.log("横杠的位置（应当只有一种），以及 63% 时填充的长度：");
-    for (const s of seen) { console.log(`  ${s.at} w=${s.w} 填充 ${s.fill}  名字左边 ${s.nameLeft}  状态图 ${s.act}  速度 ${s.tps}`); }
-    const spots = new Set(seen.map((s) => s.at));
-    if (spots.size > 1) { throw new Error("横杠在挪：" + JSON.stringify(seen)); }
-    // 刻度对不对：填充 = 横杠宽 × 63%
-    const expect = Math.round(seen[0].w * 0.63);
-    console.log(`刻度：应当 ${expect}px，实际 ${seen[0].fill}px${Math.abs(expect - seen[0].fill) <= 1 ? " ✓" : " ✗"}`);
+    console.log("横杠的位置（有图 / 有速度时短一点，都没有时铺满）与 63% 的填充：");
+    for (const s of seen) {
+        const pct = ((s.fill / s.w) * 100).toFixed(1);
+        console.log(`  ${s.at} w=${s.w} 填充 ${s.fill}（${pct}%）  状态图 ${s.act}  速度 ${s.tps}`);
+    }
+    // 每种摆法里填充都该是横杠长度的 63%
+    for (const s of seen) {
+        if (Math.abs(s.fill / s.w - 0.63) > 0.01) { throw new Error(`刻度不对：${s.at} 填充 ${s.fill} / 横杠 ${s.w}`); }
+    }
+    console.log("刻度：每种摆法都是横杠长的 63% ✓");
 };

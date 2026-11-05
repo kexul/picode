@@ -511,8 +511,7 @@
     border-radius: 14px; padding: 6px 6px 3px;
     transition: border-color 200ms;
   }
-  /* 顶边那条上压着用量横杠（见下面 #ctxTop 那段）：横杠的空槽跟着一起换色（--ctx-track），
-     两个颜色一样，看着就是同一条边框粗了一点。 */
+  /* 顶边那条的横杠跟着边框一起换色（--ctx-track）—— 点进去是焦点色、自动模式开着是绿。 */
   #composer:focus-within { border-color: var(--vscode-focusBorder); border-top-color: transparent; --ctx-track: var(--vscode-focusBorder); }
   /* 自动模式开着的时候：输入框外面那圈边框直接变绿（一根绿边），一眼看出它在自己跑。
      以前这里跑一道流光（一道亮光顺着边转一圈），先在手机上换成绿边，现在电脑上也一样了，
@@ -1376,47 +1375,45 @@
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
   }
 
-  /* 输入框顶边上那条：这个会话的上下文用了多少 —— 一条横杠从左边圆角后一直画到右边圆角前，
-     整条就是盒子的顶边框（盒子自己的顶边框调成透明，让这条顶上来当边框）。
-     深的这截从横杠最左头起，填到哪儿就是用了多少。两头不留空当、也不切缺口：
-     跑着时的状态图与这一轮的生成速度都在下面那条小横排上（见 #inputRow 里那两样）。
-     量法：dev/ctxChip.js 的第三段（六种摆法，横杠位置只该有一种）。 */
+  /* 输入框顶边上那条：从左到右三样排成一行（横排）—— 跑着时的状态图、中间一条用量横杠
+     （填到哪儿就是用了多少）、右头写这一轮的生成速度。
+     横杠是弹性的（吃掉中间剩下的位置）：有图 / 有速度的时候它短一点，两样都没有的时候铺满整条，
+     看着就是盒子的一条边框。盒子自己的顶边框调成透明，让这一条顶上来当边框；
+     左右两头各留 13px 给圆角。 */
   #composer { border-top-color: transparent; --ctx-track: var(--vscode-input-border, rgba(128,128,128,0.35)); }
-  #ctxTop { position: absolute; top: -1px; left: 0; right: 0; height: 2px; pointer-events: none; }
-  /* 横杠（空槽 + 填充）：从左边圆角后到右边圆角前，整条；空槽取输入框边框那个颜色 */
+  #ctxTop {
+    position: absolute; top: -1px; left: 13px; right: 13px; height: 2px;
+    display: flex; align-items: center; gap: 6px; pointer-events: none;
+  }
+  /* 状态图那一格：12px 见方，不跑时整格收掉（横杠就顶到最左）；形状与颜色见下面那几条 */
+  #ctxTop .ct-cell { position: relative; flex: 0 0 auto; width: 12px; height: 12px; display: none; }
+  #ctxTop .ct-cell:has(.ct-act[data-act]:not([data-act=""])) { display: block; }
+  #ctxTop .ct-act { position: absolute; inset: 0; }
+  /* 用量横杠：空槽（取输入框边框那个颜色）+ 里面那截填充。填多满由 --ci-pct 给
+     （chat.js 每次算完用量就写一回，0~1 的一个数，写在 #composer 上）。 */
   #ctxTop #ctxBar {
-    position: absolute; top: 0; left: 13px; right: 13px; height: 2px; border-radius: 1px;
+    flex: 1 1 auto; min-width: 0; position: relative; height: 2px; border-radius: 1px;
     background: var(--ctx-track, var(--vscode-input-border, rgba(128,128,128,0.35)));
   }
-  /* 填充：填多满由 --ci-pct 给（chat.js 每次算完用量就写一回，0~1 的一个数），从横杠左头起 */
   #ctxTop #ctxBar .ct-fill {
     position: absolute; left: 0; top: 0; bottom: 0; border-radius: 1px;
     width: calc(100% * var(--ci-pct, 0));
-    /* 填进来的那截：跟字一样的前景色压七成（浅色主题下是一条深灰、深色主题下是一条浅灰），
-       一眼就是“实的这头是用掉的”。空槽（--ctx-track）会跟着焦点 / 自动模式换色，这一截不跟着换。 */
-    background: var(--vscode-foreground, #444); opacity: 0.7;
+    /* 填进来的那截：跟字一样的前景色压七成（浅色主题下是一条深灰、深色主题下是一条浅灰） */
+    background: color-mix(in srgb, var(--vscode-foreground, #444) 70%, transparent);
     transition: width 200ms ease;
   }
   /* 用量 ≥70% 黄、≥90% 红（跟以前一样） */
-  #ctxTop #ctxBar.warn .ct-fill { background: var(--vscode-editorWarning-foreground, #cca700); }
-  #ctxTop #ctxBar.err .ct-fill { background: var(--vscode-errorForeground, #f14c4c); }
-
-  /* 下面那条小横排里的两样读数（都在 #inputRow 里，不在顶边那条上）：
-     跑着时的状态图（等 / 写 / 想 / 工具）挨着加号，这一轮的生成速度顶到最右头。
-     状态图不跑时整格收掉（连位置一起），速度没数时也整格收掉 —— 那两格里本来什么都没有，
-     收了也不会把别的东西挤得动来动去（模型名是这一行里唯一会伸缩的那个）。 */
-  /* 那一格一直在（12px），只是不跑的时候里面什么都没有 —— 这样图一出一收，
-     旁边的模型名不会跟着左右跳。 */
-  #inputRow .ct-cell { position: relative; flex: 0 0 12px; width: 12px; height: 12px; margin: 0 4px 0 3px; }
-  .ct-act { position: absolute; inset: 0; }
-  /* 挨着模型名放（右边那颗「截图」自带 margin-left: auto，所以空当会留在中间，
-     这块不会被推到右头去）。 */
-  #inputRow #ctxTps {
-    flex: 0 0 auto; margin: 0 0 0 8px; padding: 0 2px;
+  #composer.ctx-warn #ctxBar .ct-fill { background: var(--vscode-editorWarning-foreground, #cca700); }
+  #composer.ctx-err #ctxBar .ct-fill { background: var(--vscode-errorForeground, #f14c4c); }
+  /* 这一轮的生成速度：写在右头（不跑就整格收掉，横杠就铺到右头）。
+     宽度钉住、靠右排：这个数每 250 毫秒刷一次，位数一变（9.8 → 116.5）就宽窄一下，
+     横杠的右头跟着一抽一抽地跳 —— 钉住以后跑着的时候横杠不动。 */
+  #ctxTop #ctxTps {
+    flex: 0 0 auto; min-width: 50px; text-align: right; padding: 0 1px;
     white-space: nowrap; font-variant-numeric: tabular-nums;
     font-size: 11px; line-height: 1; color: var(--vscode-descriptionForeground, #999);
   }
-  #inputRow #ctxTps:empty { display: none; }
+  #ctxTop #ctxTps:empty { display: none; }
 
   /* 底下那颗胶囊：只剩当前模型的名字（点它弹模型选择器）。
      用量与生成速度都搬到输入框顶边上了（见上面那段），它这儿就只有名字。
@@ -1511,15 +1508,13 @@
   @keyframes ct-bulb { 0%, 100% { transform: scale(0.88); } 50% { transform: scale(1.1); } }
   @keyframes ct-wrench { 0%, 100% { transform: rotate(-30deg); } 50% { transform: rotate(30deg); } }
   #ctxIcon[data-st="loading"], #ctxIcon[data-st="wait"], #ctxIcon[data-st="nomodel"], #ctxIcon[data-st="none"] { opacity: 0.55; }
-  /* 要减少动态效果时：横杠不慢慢长。头那四颗状态图照旧在动 —— 它们就是用来表明“还在跑”的，
-     停了就跟没了一样（这条跟以前一样，是有意不理那个设置）。 */
-  @media (prefers-reduced-motion: reduce) {
-    #ctxTop #ctxBar .ct-fill { transition: none; }
-  }
+  /* 要减少动态效果时：用量那条现在没有过渡（渐变换不了）；那四颗状态图照旧在动 ——
+     它们就是用来表明“还在跑”的，停了就跟没了一样（这条跟以前一样，是有意不理那个设置）。 */
+  @media (prefers-reduced-motion: reduce) { /* 用量那条现在没有过渡（渐变换不了），这条留着占个位 */ }
 
   /* 剩下那几样“一直动”的小东西（顶条那颗点的呼吸、齿轮、那行命令自己横向滚）单独量下来
      每一样都在 1 个点以内（吐字时），丢了反而让人觉得“怎么不动了”，都留着，电脑和手机一样。
-     两头都不动的只有这几样：排队那条上的黄点、顶边上那条用量横杠、输入框那圈流光
+     两头都不动的只有这几样：排队那条上的黄点、顶边框上那条用量、输入框那圈流光
      （黄点与横杠这两样没有信息、只是装饰，早先删了；流光 13 个点，删了换成一根绿边）。 */
   /* 工具结果内联图片（read 读图等）：缩略图 + 点击放大 */
   .tc-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }

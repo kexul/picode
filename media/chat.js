@@ -81,7 +81,9 @@
   const ctxIconEl = document.getElementById("ctxIcon");
   // 输入框顶边上那条：状态图 + 用量横杠 + 生成速度（见 syncStatus）。
   const ctxActEl = document.getElementById("ctxAct");
-  const ctxBarEl = document.getElementById("ctxBar");
+  // 上下文用量那截画在 #composer 的顶边框上（见 chat.css 的 #composer::after）：
+  // --ci-pct 给它填到哪儿，warn / err 给它换成黄 / 红。
+  const composerEl = document.getElementById("composer");
   const ctxTpsEl = document.getElementById("ctxTps");
   // 顶条中间那一块（装着那一排会话格）：清单贴着当前那一格掉出来，点别处收起
   const sessionCenterEl = document.getElementById("sessionCenter");
@@ -4759,7 +4761,7 @@
   // 界面这边只管把数写出来（见 syncStatus），数存在 st.tps 上。
   // ==================== 输入框顶边那条：状态图 + 用量横杠 + 生成速度 ====================
   // 原来每个会话底部占一整行状态栏，后来收成顶条左边一颗圆环，再后来搬进输入框底下那条
-  // 小横排里跟模型名合成一颗胶囊；现在是画在输入框（#composer）的顶边框上（见 renderHtml 的 ctxTopMarkup）：
+  // 小横排里跟模型名合成一颗胶囊；现在是直接画在输入框（#composer）的顶边框上（见 chat.css 的 #composer::after）：
   // 最左一格是跑着时的状态图（等 / 写 / 想 / 工具，不跑就收掉），中间一条用量横杠
   // （填到哪儿就是用了多少，≥70% 黄、≥90% 红），右端切出一个口子写这一轮的生成速度（不跑就收掉）。
   // 底下那行里就只剩模型名了 —— 让用量与速度不再占横向位置（手机上那条行挤不下这么多东西）。
@@ -4847,13 +4849,13 @@
     // 顶边那条：状态图跑着才有（它的 data-act 一空，CSS 就把那一格收掉；
     // 有图的时候横杠左头那一格也靠它挖掉 —— 见 chat.css 里那条 :has()）
     if (ctxActEl) { ctxActEl.dataset.act = shown; }
-    if (ctxBarEl) {
-      ctxBarEl.classList.toggle("warn", pct >= 70 && pct < 90);
-      ctxBarEl.classList.toggle("err", pct >= 90);
-      // 横杠：填多满就是用了多少（0~1 的一个数写进 --ci-pct，横杠宽度认它，见 chat.css）。
+    if (composerEl) {
+      composerEl.classList.toggle("ctx-warn", pct >= 70 && pct < 90);
+      composerEl.classList.toggle("ctx-err", pct >= 90);
+      // 用量：0~1 的一个数写进 --ci-pct，顶边框上那截深色画到哪儿认它（见 chat.css）。
       // 还没量出来（没配模型 / 还没报过用量）就空着。精确的百分比在悬浮提示里（见 ctxTitle）。
       const known = (state === "idle" || state === "streaming") && typeof st.percent === "number";
-      ctxBarEl.style.setProperty("--ci-pct", known ? (pct / 100).toFixed(4) : "0");
+      composerEl.style.setProperty("--ci-pct", known ? (pct / 100).toFixed(4) : "0");
     }
     ctxIconEl.title = ctxTitle(st);
     const name = ctxIconEl.querySelector(".ci-name");
