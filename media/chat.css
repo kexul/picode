@@ -511,7 +511,9 @@
     border-radius: 14px; padding: 6px 6px 3px;
     transition: border-color 200ms;
   }
-  #composer:focus-within { border-color: var(--vscode-focusBorder); }
+  /* 顶边那条被用量横杠顶替了（见下面 #ctxTop 那段），所以它一直是透明的：
+     焦点色 / 自动模式那根绿边只画在另外三条边上，顶边靠横杠自己的空槽颜色跟着变（--ctx-track）。 */
+  #composer:focus-within { border-color: var(--vscode-focusBorder); border-top-color: transparent; --ctx-track: var(--vscode-focusBorder); }
   /* 自动模式开着的时候：输入框外面那圈边框直接变绿（一根绿边），一眼看出它在自己跑。
      以前这里跑一道流光（一道亮光顺着边转一圈），先在手机上换成绿边，现在电脑上也一样了，
      两头只剩这根绿边，没有动画。
@@ -520,7 +522,7 @@
      放着它主线程 13.3% 忙（每秒算样式 60 次），不放 0.01%。而且它跟“在不在跑”无关，
      自动模式一开着就在跑，是查到的单项最贵的一项。
      量法：node dev/perfProbe.js --auto --cpu 4。 */
-  #composer.auto { border-color: var(--vscode-charts-green, #3fb950); }
+  #composer.auto { border-color: var(--vscode-charts-green, #3fb950); border-top-color: transparent; --ctx-track: var(--vscode-charts-green, #3fb950); }
   #inputRow { display: flex; align-items: center; gap: 2px; }
   /* 框底那条横排左头那颗加号（新建会话）、右头那颗「截图」、再往右的自动模式按钮：
      一样的矮方块，鼠标扫过亮一下。中间是模型胶囊（见下面的 #ctxIcon）。 */
@@ -1374,54 +1376,60 @@
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
   }
 
-  /* 输入框底下那颗胶囊：当前模型 + 上下文用量 + 生成速度（原来它是顶条最左边那颗光秃的圆环，
-     现在搬到框底那条横排里、跟模型名合成一颗胶囊 —— 见 renderHtml 的 #composer）。
-     胶囊从左到右：模型名、一条小横条（上头是「状态图标 + 百分比」、下头那条杠填到哪儿就是用了多少）、
-     这一轮的 t/s。横条那格跟模型名那一行字差不多高：原来是颗比模型名还大一圈的圆环。
-     用量 ≥70% 黄、≥90% 红；精确百分比 / 速度 / 模型全名在悬浮提示里；
-     还没就绪（加载中 / 等 pi 起来 / 没配模型）时横条空着、淡下去，同样能点。
-     点它切当前会话的模型。 */
+  /* 输入框顶边上那条：上下文用量画在盒子的顶边框上 —— 最左边一格是跑着时的状态图
+     （等 / 写 / 想 / 工具），中间一条横杠，填到哪儿就是用了多少，右端切出一个口子写这一轮的生成速度。
+     这样输入框底下那条横排里只剩模型名，不再往那儿挤五样东西（手机上挤不开）。
+     用量与速度都不是控件、不用点，只有模型名要天天点，所以让它们去不占横向位置的地方。
+     不跑、没速度的时候状态图与速度都不出现，整条看着就是一条普通边框。
+     它骑在顶边框上（top: -1px，2px 高）：盒子自己的顶边框调成透明，让这条顶上来的当边框，
+     所以左右两头各留 13px 给圆角，横杠走在这中间。 */
+  #composer { border-top-color: transparent; --ctx-track: var(--vscode-input-border, rgba(128,128,128,0.35)); }
+  #ctxTop {
+    position: absolute; top: -1px; left: 13px; right: 13px; height: 2px;
+    display: flex; align-items: center; gap: 6px;
+    pointer-events: none;
+  }
+  /* 状态图那一格：12px 见方，不跑时整格收掉（横杠就顶到最左）；形状与颜色见下面那几条 */
+  #ctxTop .ct-act { flex: 0 0 auto; display: none; width: 12px; height: 12px; }
+  /* 用量横杠：淡底就是空槽（取输入框边框那个颜色，看着跟别的三条边是一条），
+     填多满由 --ci-pct 给（chat.js 每次算完用量就写一回），就是这条横杠本身的宽度。 */
+  #ctxTop #ctxBar {
+    flex: 1 1 auto; position: relative; height: 2px; border-radius: 1px;
+    background: var(--ctx-track, var(--vscode-input-border, rgba(128,128,128,0.35)));
+  }
+  #ctxTop #ctxBar .ct-fill {
+    position: absolute; inset: 0 auto 0 0; width: var(--ci-pct, 0%); border-radius: 1px;
+    /* 填进来的那截：跟字一样的前景色压七成（浅色主题下是一条深灰、深色主题下是一条浅灰），
+       一眼就是“实的这头是用掉的”。空槽（--ctx-track）会跟着焦点 / 自动模式换色，这一截不跟着换。 */
+    background: var(--vscode-foreground, #444); opacity: 0.7;
+    transition: width 200ms ease;
+  }
+  /* 用量 ≥70% 黄、≥90% 红（跟以前一样） */
+  #ctxTop #ctxBar.warn .ct-fill { background: var(--vscode-editorWarning-foreground, #cca700); }
+  #ctxTop #ctxBar.err .ct-fill { background: var(--vscode-errorForeground, #f14c4c); }
+  /* 这一轮的生成速度：写在右端那个口子里（横杠到它左边就断了）；
+     没数的时候整格收掉，横杠就铺到右头 —— 也就是看着一条普通边框。 */
+  #ctxTop #ctxTps {
+    flex: 0 0 auto; white-space: nowrap; font-variant-numeric: tabular-nums;
+    font-size: 11px; line-height: 1; color: var(--vscode-descriptionForeground, #999);
+  }
+  #ctxTop #ctxTps:empty { display: none; }
+
+  /* 底下那颗胶囊：只剩当前模型的名字（点它弹模型选择器）。
+     用量与生成速度都搬到输入框顶边上了（见上面那段），它这儿就只有名字。
+     还没就绪时（加载中 / 等 pi 起来 / 没配模型）名字那格写一句短话，同样能点。 */
   #ctxIcon {
-    flex: 0 1 auto; min-width: 0; max-width: 70%;
-    display: inline-flex; align-items: center; gap: 6px;
+    flex: 0 1 auto; min-width: 0;
+    display: inline-flex; align-items: center;
     height: 26px; padding: 0 4px 0 6px;
     background: transparent; border: none; border-radius: 13px; cursor: pointer;
     font-family: inherit; font-size: 0.86em;
     color: var(--vscode-descriptionForeground, #999);
   }
   #ctxIcon:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); color: var(--vscode-foreground); }
-  /* 模型名：这一堆里唯一会缩的东西（胶囊封顶 70% 宽，长了从尾巴省略） */
+  /* 模型名：长了从尾巴省略（这一行里只有它会缩） */
   #ctxIcon .ci-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* 用量那一格：上下两层（上头「状态图标 + 百分比」、下头横杠），加起来跟旁边那行字差不多高。
-     上头那行：百分比自己居中（跟下头横杠的正中对齐），图标绝对定位在它左边——
-     不占位置，所以图标一出一收，百分比不会跟着跳；横条铺满这一格，也不受上头那行宽窄影响
-     （不然图标一出一进，横条就跟着一宽一窄）。 */
-  #ctxIcon .ci-meter { flex: 0 0 auto; display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: 62px; }
-  #ctxIcon .ci-top { position: relative; display: flex; align-items: center; justify-content: center; }
-  /* 上头那行百分比：用界面字体（等宽字体里的中文 / 数字在小字号下不匀），数字对齐 */
-  #ctxIcon .ci-text {
-    font-family: var(--vscode-font-family, system-ui, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif);
-    font-variant-numeric: tabular-nums; letter-spacing: -0.15px;
-    font-size: 0.76em; line-height: 1; text-align: center;
-  }
-  /* 下头那条杠：淡底（::before）+ 上面那截填满的（.ci-fill），两段都用这颗按钮的 currentColor 画。
-     淡底不能挂在 .ci-bar 自己身上：父级的 opacity 会把里头那截实心的也一起淡下去。
-     填多满由 --ci-pct 给（chat.js 每次算完用量就写一回），就是横条本身的宽度。
-     它一直是一条安静的实心横杠（以前跑着的时候会一明一暗，去掉了：那是纯装饰，看得出用量多少就够了）。 */
-  #ctxIcon .ci-bar { position: relative; height: 5px; border-radius: 0; }
-  #ctxIcon .ci-bar::before { content: ""; position: absolute; inset: 0; border-radius: 0; background: currentColor; opacity: 0.25; }
-  #ctxIcon .ci-fill {
-    position: absolute; inset: 0 auto 0 0; width: var(--ci-pct, 0%); border-radius: 0;
-    background: currentColor; transition: width 200ms ease;
-  }
-  /* 这一轮的生成速度：跟上头那个百分比一样大（不然它比旁边那行字还高一头）；没数的时候空着（空着就不占地方） */
-  #ctxIcon .ci-tps {
-    flex: 0 0 auto; white-space: nowrap;
-    font-family: var(--vscode-font-family, system-ui, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif);
-    font-variant-numeric: tabular-nums; font-size: 0.76em;
-  }
-  #ctxIcon .ci-tps:empty { display: none; }
-  /* 百分比数字旁边那颗状态动画（.ci-act）：跑着时才出现，停下就收掉（名字一直是原来那个灰）。
+  /* 顶边那条上的状态图（.ct-act）：跑着时才显出来，停下就收掉。
      四个状态各是一个形象 —— 不是同一颗圆圈换颜色：
        等（waiting）还没吐字（等第一个字、想完等正文、等工具参数）：一个沙漏，蓝
        写（writing）正文正在流：一支笔，蓝
@@ -1433,11 +1441,13 @@
      沙漏那个是自己画的（两个漏斗上下对扣），不依赖谁的图标集。
      这四颗只是静止的图形，不动（以前沙漏慢慢翻、笔左右摆、灯泡一明一暗、扳手来回扳，
      手机上先删了，后来电脑上也一并删了，两头一样）：看出“还在跑”靠的是形状与颜色在换，
-     换形象那一下有 180ms 的淡入（见下面那四条 ci-appear-*），不是靠一直动。
-     数据从后端来（working / thinking / tool，见 chat.js 的 syncStatus 与 setActivity）；
+     换形象那一下有 180ms 的淡入（见下面那四条 ct-appear-*），不是靠一直动。
+     数据从后端来（working / thinking / tool，见 chat.js 的 syncStatus）；
      “等”和“写”是界面自己分的：后端只说 working，界面看正文有没有在流（st.currentAssistant）。 */
-  #ctxIcon .ci-act { position: absolute; top: calc(50% - 5px); right: calc(50% + 13px); display: none; width: 10px; height: 10px; }
-  #ctxIcon[data-st="streaming"] .ci-act {
+  #ctxTop .ct-act[data-act="waiting"],
+  #ctxTop .ct-act[data-act="writing"],
+  #ctxTop .ct-act[data-act="thinking"],
+  #ctxTop .ct-act[data-act="tool"] {
     display: block;
     -webkit-mask-image: var(--ci-icon); mask-image: var(--ci-icon);
     -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
@@ -1448,46 +1458,45 @@
     transition: background-color 0.25s ease;
   }
   /* 等：沙漏 */
-  #ctxIcon[data-act="waiting"] .ci-act {
+  #ctxTop .ct-act[data-act="waiting"] {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M6 2h12v2h-1L12 12 7 4H6zM6 22h12v-2h-1L12 12 7 20H6z'/%3E%3C/svg%3E");
     background-color: var(--vscode-charts-blue, #3b82f6);
-    animation: ci-appear-waiting 0.18s ease-out;
+    animation: ct-appear-waiting 0.18s ease-out;
   }
   /* 写：笔 */
-  #ctxIcon[data-act="writing"] .ci-act {
+  #ctxTop .ct-act[data-act="writing"] {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 0 0 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z'/%3E%3C/svg%3E");
     background-color: var(--vscode-charts-blue, #3b82f6);
-    animation: ci-appear-writing 0.18s ease-out;
+    animation: ct-appear-writing 0.18s ease-out;
   }
   /* 在想：灯泡 */
-  #ctxIcon[data-act="thinking"] .ci-act {
+  #ctxTop .ct-act[data-act="thinking"] {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7z'/%3E%3C/svg%3E");
     background-color: var(--vscode-charts-yellow, #d97706);
-    animation: ci-appear-thinking 0.18s ease-out;
+    animation: ct-appear-thinking 0.18s ease-out;
   }
   /* 工具在跑：扳手 */
-  #ctxIcon[data-act="tool"] .ci-act {
+  #ctxTop .ct-act[data-act="tool"] {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z'/%3E%3C/svg%3E");
     background-color: var(--vscode-charts-green, #16a34a);
-    animation: ci-appear-tool 0.18s ease-out;
+    animation: ct-appear-tool 0.18s ease-out;
   }
   /* 换形象时那一下淡入：形状是硬切的（mask 不能过渡），靠这 180ms 把切口藏在淡入里。
      四条内容一样、名字故意不同 —— 同一个 animation-name 在切换时不会重放，
      只有名字变了浏览器才当成一条新动画从头放。 */
-  @keyframes ci-appear-waiting { from { opacity: 0; } to { opacity: 1; } }
-  @keyframes ci-appear-writing { from { opacity: 0; } to { opacity: 1; } }
-  @keyframes ci-appear-thinking { from { opacity: 0; } to { opacity: 1; } }
-  @keyframes ci-appear-tool { from { opacity: 0; } to { opacity: 1; } }
-  #ctxIcon.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
-  #ctxIcon.err { color: var(--vscode-errorForeground, #f14c4c); }
+  @keyframes ct-appear-waiting { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes ct-appear-writing { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes ct-appear-thinking { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes ct-appear-tool { from { opacity: 0; } to { opacity: 1; } }
   #ctxIcon[data-st="loading"], #ctxIcon[data-st="wait"], #ctxIcon[data-st="nomodel"], #ctxIcon[data-st="none"] { opacity: 0.55; }
-  /* 要减少动态效果时：横条不慢慢长（那四颗状态图本来就不动了，见上面那段注释）。 */
+  /* 要减少动态效果时：横杠不慢慢长（那四颗状态图本来就不动了，见上面那段注释）。 */
   @media (prefers-reduced-motion: reduce) {
-    #ctxIcon .ci-fill { transition: none; }
+    #ctxTop #ctxBar .ct-fill { transition: none; }
   }
+
   /* 剩下那几样“一直动”的小东西（顶条那颗点的呼吸、齿轮、那行命令自己横向滚）单独量下来
      每一样都在 1 个点以内（吐字时），丢了反而让人觉得“怎么不动了”，都留着，电脑和手机一样。
-     两头都不动的只有这几样：圆环里那四颗状态图、排队那条上的黄点、胶囊里那条用量横条、
+     两头都不动的只有这几样：顶边上那四颗状态图、排队那条上的黄点、顶边上那条用量横杠、
      输入框那圈流光（前两样早先删了，这最后一次把状态图与流光也一并删掉，两头不再有区别）。 */
   /* 工具结果内联图片（read 读图等）：缩略图 + 点击放大 */
   .tc-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }

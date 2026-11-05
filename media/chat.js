@@ -78,8 +78,11 @@
   const sessionNameBtn = document.getElementById("sessionName");
   // 一个会话都没有时消息流中间那块提示（见 syncNoSessionHint）
   const noSessionHintEl = document.getElementById("noSessionHint");
-  // 输入框底下那条小横排：左边是模型胶囊（model chip），右边是「你说过的话」那颗按钮。
   const ctxIconEl = document.getElementById("ctxIcon");
+  // 输入框顶边上那条：状态图 + 用量横杠 + 生成速度（见 syncStatus）。
+  const ctxActEl = document.getElementById("ctxAct");
+  const ctxBarEl = document.getElementById("ctxBar");
+  const ctxTpsEl = document.getElementById("ctxTps");
   // 顶条中间那一块（装着那一排会话格）：清单贴着当前那一格掉出来，点别处收起
   const sessionCenterEl = document.getElementById("sessionCenter");
   // 输入框的起步高度：固定占 144px（约七行）；浏览器那份页面在 CSS 里把
@@ -4754,14 +4757,15 @@
   // 算在后端（见 src/sessionRuntime.ts 的 noteGenTokens）：思考、正文、工具参数都算 token，
   // 时间只算模型真在吐字的那段；250ms 推一次，停下了推最后那个数（见 case "tps"）。
   // 界面这边只管把数写出来（见 syncStatus），数存在 st.tps 上。
-  // ==================== 输入框底下那颗胶囊：模型名 + 上下文用量 + 生成速度 ====================
-  // 原来每个会话底部占一整行状态栏，后来收成顶条左边一颗圆环，现在搬进输入框底下那条
-  // 小横排里、跟模型名合成一颗胶囊（见 renderHtml 的 #composer / #ctxIcon）：
-  // 左边是模型名，中间一条小横条（上头写百分比、下头那条杠填到哪儿就是用了多少，
-  // ≥70% 黄、≥90% 红），右边是这一轮的生成速度（t/s）；
-  // 模型全名、精确百分比也放悬浮提示里；点它切当前会话的模型。
+  // ==================== 输入框顶边那条：状态图 + 用量横杠 + 生成速度 ====================
+  // 原来每个会话底部占一整行状态栏，后来收成顶条左边一颗圆环，再后来搬进输入框底下那条
+  // 小横排里跟模型名合成一颗胶囊；现在是画在输入框（#composer）的顶边框上（见 renderHtml 的 ctxTopMarkup）：
+  // 最左一格是跑着时的状态图（等 / 写 / 想 / 工具，不跑就收掉），中间一条用量横杠
+  // （填到哪儿就是用了多少，≥70% 黄、≥90% 红），右端切出一个口子写这一轮的生成速度（不跑就收掉）。
+  // 底下那行里就只剩模型名了 —— 让用量与速度不再占横向位置（手机上那条行挤不下这么多东西）。
+  // 模型全名、精确百分比也放悬浮提示里（挂在模型名那颗按钮上）；点它切当前会话的模型。
   // 它说的是当前会话（一次只看一个）：切会话、模型变了、用量变了、速度涨了都调 syncStatus 重刷。
-  // 还没就绪的几种状态另挂在 data-st 上（loading / wait / nomodel / idle / streaming），
+  // 还没就绪的几种状态另挂在模型名那颗按钮的 data-st 上（loading / wait / nomodel / idle / streaming），
   // dev/ 那套调试工具靠它判断“可以发消息了”与“这轮跑完没”。
   function ctxPercent(st) {
     if (!st || typeof st.percent !== "number") { return 0; }
@@ -4787,8 +4791,9 @@
     return parts.join(" · ") + "\n点击切换模型";
   }
   /**
-   * 胶囊里那个模型名（横条左边）。只写模型 id，全名 / 思考档在悬浮提示里（见 modelFullFor）。
-   * 还没就绪的几种状态写一句短的：不然胶囊里只剩一条空横条，点了也不知道会发生什么。
+   * 顶边那条上写的模型名（状态图右边那条横杠不在这里，它只管名字）。
+   * 只写模型 id，全名 / 思考档在悬浮提示里（见 modelFullFor）。
+   * 还没就绪的几种状态写一句短的：不然那儿就一片空白，点了也不知道会发生什么。
    */
   function ctxName(st, state) {
     if (state === "none") { return "没有会话"; }
@@ -4800,7 +4805,7 @@
   /** 模型名左边那颗状态动画至少显示这么久才准换（见 syncStatus）。 */
   const ACT_MIN_MS = 300;
 
-  /** 输入框底下那颗胶囊跟上当前会话。 */
+  /** 输入框顶边那条、底下那颗胶囊跟上当前会话。 */
   function syncStatus() {
     if (!ctxIconEl) { return; }
     const st = activeSession();
@@ -4839,25 +4844,24 @@
             st.actShownAt = Date.now();
         }
     }
-    ctxIconEl.dataset.act = shown;
-    ctxIconEl.classList.toggle("warn", pct >= 70 && pct < 90);
-    ctxIconEl.classList.toggle("err", pct >= 90);
+    // 顶边那条：状态图跑着才有（它的 data-act 一空，CSS 就把那一格收掉）
+    if (ctxActEl) { ctxActEl.dataset.act = shown; }
+    if (ctxBarEl) {
+      ctxBarEl.classList.toggle("warn", pct >= 70 && pct < 90);
+      ctxBarEl.classList.toggle("err", pct >= 90);
+      // 横杠：填多满就是用了多少（一个数写进 --ci-pct，横杠宽度认它，见 chat.css）。
+      // 还没量出来（没配模型 / 还没报过用量）就空着。精确的百分比在悬浮提示里（见 ctxTitle）。
+      const known = (state === "idle" || state === "streaming") && typeof st.percent === "number";
+      ctxBarEl.style.setProperty("--ci-pct", known ? pct.toFixed(1) + "%" : "0%");
+    }
     ctxIconEl.title = ctxTitle(st);
     const name = ctxIconEl.querySelector(".ci-name");
     if (name) { name.textContent = ctxName(st, state); }
-    // 横条：填多满就是用了多少（一个数写进 --ci-pct，横条宽度认它，见 chat.css）；
-    // 条上头那行字写整数百分比（横条这儿放得下，就带个 %，不看形状也认得出来）。
-    // 还没量出来（没配模型 / 还没报过用量）就空着。
-    const known = (state === "idle" || state === "streaming") && typeof st.percent === "number";
-    ctxIconEl.style.setProperty("--ci-pct", known ? pct.toFixed(1) + "%" : "0%");
-    ctxIconEl.classList.toggle("hasfill", known && pct > 0);
-    const num = ctxIconEl.querySelector(".ci-text");
-    if (num) { num.textContent = known ? Math.round(pct) + "%" : ""; }
-    // 跑多快：后端推来的那个数（生成中是这一轮的实时均值，停下来就留着最后那个，没跑过就空着）
-    const speed = ctxIconEl.querySelector(".ci-tps");
-    if (speed) {
+    // 跑多快：后端推来的那个数（生成中是这一轮的实时均值，停下来就留着最后那个，没跑过就空着），
+    // 写在顶边右端那个口子里（空着的时候那一格收掉，横杠就铺到右头）。
+    if (ctxTpsEl) {
       const tps = st ? st.tps : undefined;
-      speed.textContent = typeof tps === "number" ? tps.toFixed(1) + " t/s" : "";
+      ctxTpsEl.textContent = typeof tps === "number" ? tps.toFixed(1) + " t/s" : "";
     }
   }
 

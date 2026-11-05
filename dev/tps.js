@@ -26,8 +26,8 @@ module.exports = async (page) => {
 
     /** 胶囊最右边那格写了什么（没有就是空串）。 */
     const tpsText = () => page.eval(`
-        const el = document.querySelector("#ctxIcon .ci-tps");
-        return el ? el.textContent.trim() : "<里面没有 .ci-tps>";
+        const el = document.getElementById("ctxTps");
+        return el ? el.textContent.trim() : "<页面上没有 #ctxTps>";
     `);
     const post = (messages) => page.eval(
         `for (const m of ${JSON.stringify(messages)}) { window.postMessage(m, "*"); } return true;`);
