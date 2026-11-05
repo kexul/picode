@@ -75,17 +75,11 @@ public class MainActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
 
-        // 顶头那条细线：左边是连接状态（跑着的时候看看），右边一颗「后端地址」按钮
+        // 顶头那条细线：只剩右边一颗「后端地址」按钮（连接状态看通知栏那条常驻通知，
+        // 或者点开这行以后看下面那行小灰字）
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
-        topBar.setGravity(Gravity.CENTER_VERTICAL);
-
-        statusLine = new TextView(this);
-        statusLine.setTextSize(10);
-        statusLine.setSingleLine(true);
-        statusLine.setTextColor(0xFF8A8A8A);
-        statusLine.setPadding(pad + 2, 0, 0, 0);
-        topBar.addView(statusLine, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        topBar.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
 
         android.widget.ImageButton tune = new android.widget.ImageButton(this);
         tune.setImageResource(R.drawable.ic_tune);
@@ -95,14 +89,14 @@ public class MainActivity extends Activity {
         topBar.addView(tune, new LinearLayout.LayoutParams(barHeight + pad, barHeight));
         root.addView(topBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, barHeight));
 
-        // 设置那一块（地址、开关）：默认收起来，点右边那颗才摊开
+        // 设置那一块（地址、开关、现在连到哪儿了）：默认收起来，点右边那颗才摊开
         settingsPanel = new LinearLayout(this);
         settingsPanel.setOrientation(LinearLayout.VERTICAL);
 
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(pad, 0, pad, pad);
+        bar.setPadding(pad, 0, pad, 0);
 
         urlBox = new EditText(this);
         urlBox.setHint("后端地址，例如 100.64.0.2:51883");
@@ -121,6 +115,14 @@ public class MainActivity extends Activity {
         toggle.setOnCheckedChangeListener((v, checked) -> onToggle(checked));
         bar.addView(toggle);
         settingsPanel.addView(bar);
+
+        // 现在连到哪儿了：平时收着不显示，摊开这一块时看得到
+        statusLine = new TextView(this);
+        statusLine.setTextSize(11);
+        statusLine.setSingleLine(true);
+        statusLine.setTextColor(0xFF8A8A8A);
+        statusLine.setPadding(pad, 0, pad, pad);
+        settingsPanel.addView(statusLine);
         root.addView(settingsPanel);
 
         web = new WebView(this);
@@ -158,7 +160,6 @@ public class MainActivity extends Activity {
     private void showSettings(boolean show) {
         settingsPanel.setVisibility(show ? View.VISIBLE : View.GONE);
     }
-
     /** 「保存」：存下地址、打开开关、开始收提醒、把页面载进来。 */
     private void onSave() {
         String url = Settings.normalize(urlBox.getText().toString());
@@ -282,7 +283,7 @@ public class MainActivity extends Activity {
         public void run() {
             if (!resumed) { return; }
             boolean on = Settings.on(MainActivity.this) && !Settings.baseUrl(MainActivity.this).isEmpty();
-            statusLine.setText(on ? PhoneService.status() : "收提醒关着：点右边那颗，把地址填上、开关打开");
+            statusLine.setText(on ? PhoneService.status() : "收提醒关着：填上地址，把「收提醒」打开");
             ui.postDelayed(this, 1000);
         }
     };
