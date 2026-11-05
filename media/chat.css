@@ -1376,44 +1376,19 @@
     border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
   }
 
-  /* 输入框顶边上那条：中间一段是上下文用量（横杠 + 深的填充），两头各留一块**空**的地方 ——
-     左边那块放跑着时的状态图（等 / 写 / 想 / 工具），右边那块放这一轮的生成速度（t/s）；
-     有就显示，没有就空着，位置一直留着。所以横杠的起止点、长度、刻度在什么场景下都不变，
-     深的这截也永远从横杠自己的左头起（前面没有“一截浅的”，那两头是空的，不是线）。
-     这两头不能画线：以前盒子顶上那条 1px 边框留着，它跟横杠的空槽同色，
-     看着就像“条子从最左头就开始了、深色才从中间开始”，像条坏掉的进度条。
-     它骑在顶边框的位置上（top: -1px，2px 高），盒子自己的顶边框调成透明。
-     量法：dev/ctxChip.js 的第三段（六种摆法，横杠两端只该有一种位置）。 */
+  /* 输入框顶边上那条：这个会话的上下文用了多少 —— 一条横杠从左边圆角后一直画到右边圆角前，
+     整条就是盒子的顶边框（盒子自己的顶边框调成透明，让这条顶上来当边框）。
+     深的这截从横杠最左头起，填到哪儿就是用了多少。两头不留空当、也不切缺口：
+     跑着时的状态图与这一轮的生成速度都在下面那条小横排上（见 #inputRow 里那两样）。
+     量法：dev/ctxChip.js 的第三段（六种摆法，横杠位置只该有一种）。 */
   #composer { border-top-color: transparent; --ctx-track: var(--vscode-input-border, rgba(128,128,128,0.35)); }
-  #ctxTop {
-    position: absolute; top: -1px; left: 0; right: 0; height: 2px;
-    pointer-events: none;
-    /* 两头各留一块空的，**两块一样宽**（横杠才在正中间，两头看着才对称）：
-       左边放状态图、右边放速度数（宽里给，四位数也放得下），两样东西各自在格子里居中；
-       有就显示、没有就空着。
-       横杠就是「整条减掉这两块」，从头到尾不变。 */
-    --ctx-lead: 58px;
-    --ctx-tail: 58px;
-  }
-  /* 状态图：站在左边那块空地里（跟横杠同一条中线），只画不占位 —— 它进不进出都不动横杠。
-     那块地方本来就没有线（横杠从它右边才起），所以不用挖、也不会压着谁。
-     形状与颜色见下面那几条 */
-  #ctxTop .ct-cell {
-    position: absolute; top: -7px; left: calc(13px + (var(--ctx-lead) - 12px) / 2);
-    width: 12px; height: 12px; display: none;
-  }
-  #ctxTop .ct-cell:has(.ct-act[data-act]:not([data-act=""])) { display: block; }
-  #ctxTop .ct-act { position: absolute; inset: 0; }
-  /* 横杠（空槽 + 填充）：从左边那一格之后起、到右头那一格之前止，永远这一段。
-     空槽取输入框边框那个颜色，压在顶边框上，看着就是那一段粗一点点的边框。 */
+  #ctxTop { position: absolute; top: -1px; left: 0; right: 0; height: 2px; pointer-events: none; }
+  /* 横杠（空槽 + 填充）：从左边圆角后到右边圆角前，整条；空槽取输入框边框那个颜色 */
   #ctxTop #ctxBar {
-    position: absolute; top: 0; height: 2px; border-radius: 1px;
-    left: calc(13px + var(--ctx-lead)); right: calc(13px + var(--ctx-tail));
+    position: absolute; top: 0; left: 13px; right: 13px; height: 2px; border-radius: 1px;
     background: var(--ctx-track, var(--vscode-input-border, rgba(128,128,128,0.35)));
   }
-  /* 填充：填多满由 --ci-pct 给（chat.js 每次算完用量就写一回，0~1 的一个数）。
-     尺子就是横杠自己那一段 —— 从它的左头起，所以深的这截永远从 0 开始，
-     也不会因为速度数在不在、宽窄怎么变而变。 */
+  /* 填充：填多满由 --ci-pct 给（chat.js 每次算完用量就写一回，0~1 的一个数），从横杠左头起 */
   #ctxTop #ctxBar .ct-fill {
     position: absolute; left: 0; top: 0; bottom: 0; border-radius: 1px;
     width: calc(100% * var(--ci-pct, 0));
@@ -1425,16 +1400,23 @@
   /* 用量 ≥70% 黄、≥90% 红（跟以前一样） */
   #ctxTop #ctxBar.warn .ct-fill { background: var(--vscode-editorWarning-foreground, #cca700); }
   #ctxTop #ctxBar.err .ct-fill { background: var(--vscode-errorForeground, #f14c4c); }
-  /* 这一轮的生成速度：写在右边那块空地里（那儿本来就没有线，不用遮）。没数的时候整块空着。
-     宽度钉死、靠右排：这个数每 250 毫秒刷一次，位数一变（9.8 → 116.5）就宽窄一下，
-     横杠的右头跟着一抽一抽地跳 —— 钉住以后跑着的时候横杠一动不动。 */
-  #ctxTop #ctxTps {
-    position: absolute; top: -5px; right: 13px; box-sizing: border-box;
-    width: var(--ctx-tail); padding: 0 6px; text-align: center; white-space: nowrap;
-    font-size: 11px; line-height: 1; font-variant-numeric: tabular-nums;
-    color: var(--vscode-descriptionForeground, #999);
+
+  /* 下面那条小横排里的两样读数（都在 #inputRow 里，不在顶边那条上）：
+     跑着时的状态图（等 / 写 / 想 / 工具）挨着加号，这一轮的生成速度顶到最右头。
+     状态图不跑时整格收掉（连位置一起），速度没数时也整格收掉 —— 那两格里本来什么都没有，
+     收了也不会把别的东西挤得动来动去（模型名是这一行里唯一会伸缩的那个）。 */
+  /* 那一格一直在（12px），只是不跑的时候里面什么都没有 —— 这样图一出一收，
+     旁边的模型名不会跟着左右跳。 */
+  #inputRow .ct-cell { position: relative; flex: 0 0 12px; width: 12px; height: 12px; margin: 0 4px 0 3px; }
+  .ct-act { position: absolute; inset: 0; }
+  /* 挨着模型名放（右边那颗「截图」自带 margin-left: auto，所以空当会留在中间，
+     这块不会被推到右头去）。 */
+  #inputRow #ctxTps {
+    flex: 0 0 auto; margin: 0 0 0 8px; padding: 0 2px;
+    white-space: nowrap; font-variant-numeric: tabular-nums;
+    font-size: 11px; line-height: 1; color: var(--vscode-descriptionForeground, #999);
   }
-  #ctxTop #ctxTps:empty { display: none; }
+  #inputRow #ctxTps:empty { display: none; }
 
   /* 底下那颗胶囊：只剩当前模型的名字（点它弹模型选择器）。
      用量与生成速度都搬到输入框顶边上了（见上面那段），它这儿就只有名字。
@@ -1450,7 +1432,7 @@
   #ctxIcon:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); color: var(--vscode-foreground); }
   /* 模型名：长了从尾巴省略（这一行里只有它会缩） */
   #ctxIcon .ci-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* 顶边那条上的状态图（.ct-act）：跑着时才显出来，停下就收掉。
+  /* 状态图（.ct-act）：在下面那条小横排上、挨着加号；跑着时才显出来，停下就收掉。
      四个状态各是一个形象 —— 不是同一颗圆圈换颜色：
        等（waiting）还没吐字（等第一个字、想完等正文、等工具参数）：一个沙漏，蓝
        写（writing）正文正在流：一支笔，蓝
@@ -1473,10 +1455,10 @@
      换形象那一下另有 180ms 的淡入（见下面那四条 ct-appear-*），那个是一次性的。
      数据从后端来（working / thinking / tool，见 chat.js 的 syncStatus）；
      “等”和“写”是界面自己分的：后端只说 working，界面看正文有没有在流（st.currentAssistant）。 */
-  #ctxTop .ct-act[data-act="waiting"],
-  #ctxTop .ct-act[data-act="writing"],
-  #ctxTop .ct-act[data-act="thinking"],
-  #ctxTop .ct-act[data-act="tool"] {
+  .ct-cell .ct-act[data-act="waiting"],
+  .ct-cell .ct-act[data-act="writing"],
+  .ct-cell .ct-act[data-act="thinking"],
+  .ct-cell .ct-act[data-act="tool"] {
     display: block;
     -webkit-mask-image: var(--ci-icon); mask-image: var(--ci-icon);
     -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
@@ -1490,25 +1472,25 @@
     will-change: transform;
   }
   /* 等：沙漏 */
-  #ctxTop .ct-act[data-act="waiting"] {
+  .ct-cell .ct-act[data-act="waiting"] {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M6 2h12v2h-1L12 12 7 4H6zM6 22h12v-2h-1L12 12 7 20H6z'/%3E%3C/svg%3E");
     background-color: var(--vscode-charts-blue, #3b82f6);
     animation: ct-appear-waiting 0.18s ease-out, ct-hourglass 2.6s ease-in-out infinite;
   }
   /* 写：笔 */
-  #ctxTop .ct-act[data-act="writing"] {
+  .ct-cell .ct-act[data-act="writing"] {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 0 0 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z'/%3E%3C/svg%3E");
     background-color: var(--vscode-charts-blue, #3b82f6);
     animation: ct-appear-writing 0.18s ease-out, ct-pen 0.9s ease-in-out infinite;
   }
   /* 在想：灯泡 */
-  #ctxTop .ct-act[data-act="thinking"] {
+  .ct-cell .ct-act[data-act="thinking"] {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7z'/%3E%3C/svg%3E");
     background-color: var(--vscode-charts-yellow, #d97706);
     animation: ct-appear-thinking 0.18s ease-out, ct-bulb 1.6s ease-in-out infinite;
   }
   /* 工具在跑：扳手 */
-  #ctxTop .ct-act[data-act="tool"] {
+  .ct-cell .ct-act[data-act="tool"] {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z'/%3E%3C/svg%3E");
     background-color: var(--vscode-charts-green, #16a34a);
     animation: ct-appear-tool 0.18s ease-out, ct-wrench 1.2s ease-in-out infinite;

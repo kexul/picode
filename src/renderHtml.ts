@@ -44,23 +44,31 @@ const ICON_ARROW_DOWN = '<svg width="14" height="14" viewBox="0 0 16 16" xmlns="
 const ICON_CLOSE = '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.5 2.5 L13.5 13.5 M13.5 2.5 L2.5 13.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>';
 
 /**
- * 输入框顶边上那条：左边跑着时的状态图（等 / 写 / 想 / 工具，单独一格，不跑时收掉），
- * 中间一条用量横杠（填到哪儿就是用了多少），右端切出一个口子写这一轮的生成速度（不跑时这格收掉，
- * 横杠就铺到右头）。整条就画在盒子的顶边框上：不跑、没速度的时候看着就是一条普通边框。
+ * 输入框顶边上那条：这个会话的上下文用了多少 —— 一条横杠（填到哪儿就是用了多少）从左边圆角后
+ * 一直画到右边圆角前，整条就是盒子的顶边框。两头不留空当、也不切缺口：
+ * 跑着时的状态图与这一轮的生成速度都在下面那条小横排上（见 inputRowMarkup）。
  * 颜色（正常 / 黄 / 红）、提示文字都在 chat.js 里管。
  */
 function ctxTopMarkup(): string {
-    return `      <div id="ctxTop" aria-hidden="true">` +
-        `<span class="ct-cell"><span id="ctxAct" class="ct-act"></span></span>` +
-        `<span id="ctxBar"><span class="ct-fill"></span></span>` +
-        `<span id="ctxTps"></span>` +
-        `</div>\n`;
+    return `      <div id="ctxTop" aria-hidden="true"><span id="ctxBar"><span class="ct-fill"></span></span></div>\n`;
+}
+
+/**
+ * 输入框底下那条小横排里、由骨架自己排好的几样（别的按钮由别的脚本往后挂）：
+ * 新建会话那颗加号、跑着时的状态图（等 / 写 / 想 / 工具，不跑时整格收掉）、
+ * 当前模型那颗胶囊、这一轮的生成速度（顶到最右头，不跑就空着）。
+ */
+function inputRowMarkup(): string {
+    return `        <button id="newSessionBtn" title="新建会话 (Ctrl+Alt+N)" aria-label="新建会话">${ICON_ADD}</button>\n` +
+        `        <span class="ct-cell"><span id="ctxAct" class="ct-act"></span></span>\n` +
+        modelChipMarkup() +
+        `        <span id="ctxTps"></span>\n`;
 }
 
 /**
  * 输入框底下那颗胶囊：当前模型名（点它弹模型选择器）。
- * 用量横杠与生成速度现在在盒子顶边上（见上面的 ctxTopMarkup），这里只管名字。
- * 长相（颜色、略、提示文字、点击切模型）都在 chat.css / chat.js 里管。
+ * 用量横杠在盒子顶边上（见上面的 ctxTopMarkup），生成速度在同一行最右头（见 inputRowMarkup），
+ * 这里只管名字。长相（颜色、提示文字、点击切模型）都在 chat.css / chat.js 里管。
  */
 function modelChipMarkup(): string {
     return `        <button id="ctxIcon" type="button" data-st="loading" title="加载中…" aria-label="当前模型（点击切换）">` +
@@ -138,9 +146,9 @@ ${bodyTop}${chatColumnOpen}${sessionBar}  <div id="messages">
     <div id="queueBar" class="hidden"></div>
     <div id="imgPreview"></div>
     <!-- 输入那个圆角大盒子（#composer）：上半是打字的地方，下半一条小横排（#inputRow）。
-         横排里从左到右：新建会话那颗加号、当前模型那颗胶囊（只有模型名，点它切模型）、
-         「你说过的话」（最后那颗由 chat.js 挂进来）。
-         上下文用量那条跑到盒子的顶边上了（见 modelChipMarkup），不再占横排。 -->
+         横排里从左到右：新建会话那颗加号、跑着时的状态图、当前模型那颗胶囊（只有模型名，
+         点它切模型）、这一轮的生成速度（靠最右头），后头再接别处挂进来的几颗按钮。
+         上下文用量那条跑到盒子的顶边上了（见 ctxTopMarkup），不再占横排。 -->
     <div id="composer">
       <div id="fileMenu" class="hidden"></div>
       <!-- rows=1：autoResize 把 height 设回 auto 时，textarea 的高度由 rows 决定
@@ -148,8 +156,7 @@ ${bodyTop}${chatColumnOpen}${sessionBar}  <div id="messages">
            真被 rows 定成两行的话清空以后也回不下去 -->
       <textarea id="input" rows="1"></textarea>
 ${ctxTopMarkup()}      <div id="inputRow">
-        <button id="newSessionBtn" title="新建会话 (Ctrl+Alt+N)" aria-label="新建会话">${ICON_ADD}</button>
-${modelChipMarkup()}      </div>
+${inputRowMarkup()}      </div>
     </div>
   </div>
 ${chatColumnClose}  <div id="sidebarDock" class="pk-host pk-drawer pk-workspace">
