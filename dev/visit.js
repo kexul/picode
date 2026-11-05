@@ -107,7 +107,7 @@ async function main() {
             // 给脚本配上截图记录：脚本里调 page.shot 时会自己存文件，这里只负责把它记下来
             const originalShot = page.shot.bind(page);
             page.shot = async (name) => { const file = await originalShot(name); shots.push(file); return file; };
-            await script(page);
+            await script(page, { host: harness ? harness.host() : undefined, url });
         } else {
             for (const action of options.actions) {
                 if (action.kind === "shot") {

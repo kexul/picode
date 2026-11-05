@@ -11406,6 +11406,12 @@
       if (fileSearch.open) { runFileSearch(); }
       return;
     }
+    if (type === "switchToSession") {
+      // 后端叫这块屏切过去（有人点了右下角的弹窗，跳到那条“有事”的会话）：
+      // 跟自己开口要切走同一条路（本机先切，请求照发，后端回话时对上号）
+      requestSwitch(msg.sessionId);
+      return;
+    }
     if (type === "viewOptions") { applyViewOptions(msg); return; }
     if (type === "picker") { renderPicker(msg); return; }
     // 插件那头把浮层收了（超时、被新的浮层顶掉、页面被换下）：这边跟着收起来，别留一个点不动的空壳。

@@ -3,7 +3,9 @@
  *
  * 后端起一个常驻的小程序（bin/tray.exe，源码与来历见 bin/tray.cs），由它把这两样端着：
  * 图标只是“它在跑”的招牌（那根竖线一直红着，点它什么也不弹）；有事就在右下角弹一张卡片，
- * 写着哪个会话、说了什么 —— 只是给人看一眼，点了也没反应。
+ * 写着哪个会话、说了什么。点卡片一下，小程序把浏览器窗口拉到前台，同时往这儿报一句
+ * 「这条被点了」（onOpenRequest），控制器负责把页面切到那个会话（见 chatControllerBase 的
+ * trayOpenRequested）。
  *
  * 为什么不在页面上发：以前靠浏览器通知，浏览器和 Windows 都会因为“发太多”把横幅收掉，
  * 而且只认 https 或本机地址（手机用局域网地址打开就发不出来），插件里的对话面板更是发不了。
@@ -25,6 +27,10 @@ export interface TrayNote {
     summary?: string;
     /** 面板上这一条算哪种事：跑完一轮 / 等你答一句。 */
     kind?: "done" | "ask";
+    /**
+     * 浏览器页面标题的开头（像 `我的电脑-pi`）：点卡片时小程序按它认浏览器窗口、拉到前台。
+    别的机器推来的那条是那台机器的；不给就是点了不去认窗口。 */
+    host?: string;
 }
 
 /** 托盘小程序（构建时编好，见 bin/tray.cs 与 scripts/compile.mjs）；打成单个 exe 时它内嵌在 exe 里。 */
@@ -42,6 +48,8 @@ export class TrayIcon {
     private broken = false;
     /** 人在托盘菜单里点了「退出」时调它（后端该跟着收摊）。 */
     public onExitRequest: (() => void) | undefined;
+    /** 有人点了右下角的一条卡片：标识 + 浏览器窗口拉到前台了没有。 */
+    public onOpenRequest: ((id: string, focused: boolean) => void) | undefined;
     /** 上一次告诉托盘的地址（一样的就不再发）。 */
     private lastUrl = "";
 
@@ -59,6 +67,7 @@ export class TrayIcon {
             flat(item.name || "会话"),
             flat(item.summary ?? ""),
             item.kind === "ask" ? "ask" : "done",
+            flat(item.host ?? ""),
         ];
         this.write(fields.join("\t"));
     }
@@ -96,7 +105,7 @@ export class TrayIcon {
         if (this.broken || !TrayIcon.available()) { return false; }
         let child: ChildProcess;
         try {
-            // stdout 要读：菜单里点「退出」时它往这儿写一句 exit（见下面那段读）
+            // stdout 要读：菜单里点「退出」、点卡片时它往这儿写（exit / open，见下面那段读）
             child = spawn(TRAY_EXE(), [], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
         } catch {
             this.broken = true;
@@ -115,6 +124,14 @@ export class TrayIcon {
                 rest = rest.slice(at + 1);
                 if (line === "exit") {
                     try { this.onExitRequest?.(); } catch { /* 收摊出错不拦路 */ }
+                }
+                // 有人点了一条卡片：open \t 标识 \t 认到没（1 / 0，见 bin/tray.cs 的 NoteClicked）
+                else if (line.startsWith("open\t")) {
+                    const parts = line.split("\t");
+                    const id = (parts[1] ?? "").trim();
+                    if (id.length > 0) {
+                        try { this.onOpenRequest?.(id, (parts[2] ?? "").trim() === "1"); } catch { /* 后端出错不拦路 */ }
+                    }
                 }
                 at = rest.indexOf("\n");
             }

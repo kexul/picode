@@ -2,8 +2,9 @@
  * tray —— 通知区域里那颗图标（Windows）和右下角那块提醒面板。
  *
  * 干什么：后端有事（某个会话跑完一轮、模型在等你答一道选择题）时，在屏幕右下角弹一张小卡片，
- * 写着哪个会话、说了什么，同时响一声（两种事声音不一样，见 Chime）。它只是给人看一眼，
- * 鼠标点它什么也不发生。
+ * 写着哪个会话、说了什么，同时响一声（两种事声音不一样，见 Chime）。点卡片一下：把正在显示
+ * 这台机器页面的那个浏览器窗口拉到前台（窗口标题的开头是后端告诉的，见 FocusBrowserWindow），
+ * 同时告诉后端「这条被人点了」，后端负责把页面切到那个会话。
  * 通知区域里那颗图标是“它在跑”的招牌：标记右下角那根竖线一直是红的，不闪、也不表示有没有事
  * （消息看没看过，后端判断不了）；右键弹一个小菜单：「打开」（用浏览器打开后端给的地址）和「退出」。
  *
@@ -18,11 +19,16 @@
  *
  * 协议：一行一条，字段之间用制表符分开，UTF-8。
  *   后端 → 这里：
- *     pop \t 标识 \t 名字 \t 摘要 \t 类型   右下角弹一条（类型：done 跑完一轮 / ask 等你答）
+ *     pop \t 标识 \t 名字 \t 摘要 \t 类型 \t 标题开头   右下角弹一条（类型：done 跑完一轮 /
+ *                                            ask 等你答；标题开头是这台机器浏览器页面的标题
+ *                                            开头，像 `我的电脑-pi`，点卡片认窗口用它；
+ *                                            旧版本后端不给这格，点了就不认窗口）
  *     url \t 地址                           网页服务现在的地址（菜单里「打开」用它；可以再来一遍换掉）
  *     stdin 关了就是收摊（后端退出时不一定来得及说一声）
  *   这里 → 后端：
  *     exit                                  人在菜单里点了“退出”：后端收到就把自己也关掉
+ *     open \t 标识 \t 认到没                 有人点了那条卡片（“认到没”是 1 / 0：浏览器窗口拉到前台
+ *                                           了没有）。后端收到就负责把页面切到那个会话
  */
 using System;
 using System.Collections.Concurrent;
@@ -247,6 +253,8 @@ class NoteItem
     public string Name = "会话";
     public string Text = "";
     public bool Ask;
+    /** 这台机器浏览器页面标题的开头（像 `我的电脑-pi`）：点卡片认浏览器窗口用它；空就是别认了。 */
+    public string Host = "";
     public DateTime ShownAt = DateTime.UtcNow;
     /** 卡片右下角写的时间：这条事发生的时刻（本地时间）。 */
     public DateTime At = DateTime.Now;
@@ -255,7 +263,7 @@ class NoteItem
 /**
  * 屏幕右下角那块提醒面板：有事就弹一条，最多同时三条，再来就挤掉最老的那条。
  *
- * 停几秒自己淡出；鼠标移上去就停住（好看完）；点它没任何反应。
+ * 停几秒自己淡出；鼠标移上去就停住（好看完）；点卡片一下就是「跳过去」（见 NoteClicked）。
  * 不抢焦点、不占任务栏：人正在别处打字时，它只该被看见，不该打断。
  */
 class NoteWindow : Form
@@ -375,8 +383,11 @@ class NoteWindow : Form
         }
     }
 
+    /** 点了一条卡片：由 TrayContext 接手（认浏览器窗口、告诉后端）。 */
+    public Action<NoteItem> OnNoteClick;
+
     /** 后端叫弹一条：同一个会话只留最新那条（反复跑完不叠成一摞）。 */
-    public void Add(string id, string name, string text, bool ask)
+    public void Add(string id, string name, string text, bool ask, string host)
     {
         for (int i = notes.Count - 1; i >= 0; i--)
         {
@@ -387,6 +398,7 @@ class NoteWindow : Form
         item.Name = string.IsNullOrEmpty(name) ? "会话" : name;
         item.Text = Shorten(text);
         item.Ask = ask;
+        item.Host = host ?? "";
         notes.Add(item);
         while (notes.Count > MAX_ITEMS) { notes.RemoveAt(0); }
 
@@ -488,6 +500,34 @@ class NoteWindow : Form
     protected override void OnPaintBackground(PaintEventArgs e) { /* 内容全靠 Render 贴上去 */ }
 
     protected override void OnPaint(PaintEventArgs e) { /* 同上：分层窗口不靠这块画 */ }
+
+    /**
+     * 点了一张卡片：把它交出去（认浏览器窗口、告诉后端，见 OnNoteClick），顺手把这条收走 ——
+     * 事已经看过了，别再占着地方。剩下的还有就接着摆，一张不剩就照超时那样淡出。
+     */
+    protected override void OnMouseClick(MouseEventArgs e)
+    {
+        base.OnMouseClick(e);
+        NoteItem item = HitNote(e.Location);
+        if (item == null) { return; }
+        notes.Remove(item);
+        if (notes.Count == 0) { fading = true; alpha = 1f; }
+        else { Relayout(); }
+        Action<NoteItem> cb = OnNoteClick;
+        if (cb != null) { cb(item); }
+    }
+
+    /** 点的这一下落在哪张卡片上（不在任何卡片上就是 null）。 */
+    private NoteItem HitNote(Point at)
+    {
+        for (int i = 0; i < notes.Count; i++)
+        {
+            Rectangle card = new Rectangle(shadow + pad, shadow + pad + i * (itemHeight + gap),
+                width - pad * 2, itemHeight);
+            if (card.Contains(at)) { return notes[i]; }
+        }
+        return null;
+    }
 
     /** 画一遍整块面板，再整张贴到屏幕上（圆角是画出来的，所以边缘是平滑的）。 */
     private void Render()
@@ -689,8 +729,10 @@ class TrayContext : ApplicationContext
     private string pageUrl = "";
     /** 菜单里那颗「打开」：知道地址以后才点得动。 */
     private ToolStripMenuItem openItem;
-    /** 往后端写字的管子（只有点了「退出」才会用到）。 */
+    /** 往后端写字的管子（点了「退出」、点了卡片都会用到）。 */
     private StreamWriter toBackend;
+    /** 写管子的锁：读 stdin 的线程、点卡片的界面线程两边都要写。 */
+    private readonly object outLock = new object();
 
     public TrayContext()
     {
@@ -823,9 +865,52 @@ class TrayContext : ApplicationContext
         if (noteWindow == null)
         {
             noteWindow = new NoteWindow();
+            noteWindow.OnNoteClick = NoteClicked;
             noteWindow.FormClosed += delegate { noteWindow = null; };
         }
-        noteWindow.Add(id, name, text, ask);
+        // 标题开头是可选的（旧版本后端不给）：没有就点不出窗口
+        string host = parts.Length > 5 ? parts[5] : "";
+        noteWindow.Add(id, name, text, ask, host);
+    }
+
+    /**
+     * 有人点了一张卡片：先把浏览器窗口拉到前台（拉窗口要有「刚收到过点击」的资格，
+     * 只有这儿有 —— 后端的 Node 进程没有），再告诉后端「这条被点了」，
+     * 后端负责把页面切到那个会话。
+     */
+    private void NoteClicked(NoteItem item)
+    {
+        bool focused = FocusBrowserWindow(item.Host);
+        SendLine(string.Join("\t", "open", item.Id, focused ? "1" : "0"));
+    }
+
+    /**
+     * 把显示着这台机器页面的浏览器窗口拉到前台：按窗口标题的开头认
+     * （页面的标题是「机器名-pi」，浏览器窗口的标题拿当前那张标签页的标题开头拼）。
+     * 认不到（页面开在后台标签页里、或者压根没开）就返回 false，后端会接着处理。
+     */
+    private bool FocusBrowserWindow(string titlePrefix)
+    {
+        if (string.IsNullOrEmpty(titlePrefix)) { return false; }
+        IntPtr found = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr hwnd, IntPtr lParam)
+        {
+            if (!IsWindowVisible(hwnd)) { return true; }
+            if ((GetWindowLong(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0) { return true; }
+            StringBuilder sb = new StringBuilder(512);
+            if (GetWindowText(hwnd, sb, 512) == 0) { return true; }
+            if (!sb.ToString().StartsWith(titlePrefix, StringComparison.OrdinalIgnoreCase)) { return true; }
+            found = hwnd;
+            return false;
+        }, IntPtr.Zero);
+        if (found == IntPtr.Zero) { return false; }
+        try
+        {
+            if (IsIconic(found)) { ShowWindow(found, SW_RESTORE); }
+            SetForegroundWindow(found);
+        }
+        catch { /* 拉不上来就算了：会话切换在后端那头照旧做 */ }
+        return true;
     }
 
     /**
@@ -848,14 +933,23 @@ class TrayContext : ApplicationContext
     {
         if (askedExit) { return; }
         askedExit = true;
+        SendLine("exit");
+    }
+
+    /** 往后端写一行（两处会写：点了「退出」、点了卡片）；管子断了就当后端已经没了。 */
+    private void SendLine(string line)
+    {
         try
         {
-            if (toBackend == null)
+            lock (outLock)
             {
-                toBackend = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false));
+                if (toBackend == null)
+                {
+                    toBackend = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false));
+                }
+                toBackend.WriteLine(line);
+                toBackend.Flush();
             }
-            toBackend.WriteLine("exit");
-            toBackend.Flush();
         }
         catch
         {
@@ -877,4 +971,25 @@ class TrayContext : ApplicationContext
         catch { }
         ExitThread();
     }
+
+    // ---- 把浏览器窗口拉到前台要用的几个 Windows 调用 ----
+    private delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumProc callback, IntPtr lParam);
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int command);
+    [DllImport("user32.dll")]
+    private static extern int GetWindowLong(IntPtr hWnd, int index);
+
+    private const int SW_RESTORE = 9;
+    private const int GWL_EXSTYLE = -20;
+    private const int WS_EX_TOOLWINDOW = 0x80;
 }

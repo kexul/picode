@@ -361,6 +361,7 @@ export const PAGE_TRANSIENT_MESSAGE_TYPES: ReadonlySet<string> = new Set([
     "picker",                    // 浮层选择器
     "pickerCancel",              // 浮层超时取消
     "openSettings",              // 打开设置面板
+    "switchToSession",           // 后端叫这块屏切会话（有人点了右下角的弹窗）：一次性动作，补发再切一遍会打扰人
     "turnEnd",                   // 某个会话跑完了一轮（名字旁边那颗点变绿）
     "changesChanged",            // 「改动」那一格该重问一遍清单了（纯提醒，重连后会自己去取）
     "bashTask",                  // 某条后台命令有动静（纯提醒，重连后由 /bash 重新取一份清单）

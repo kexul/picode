@@ -352,6 +352,11 @@ export interface WebServerHost {
     /** 别处推来一条“有事”（`POST /notify`，口令已经核对过）：在本机右下角弹一条。 */
     acceptRemoteNotice(notice: RemoteNotice): void;
     /**
+     * 别的后端说「把你开着的页面切到这个会话」（`POST /switch`：那台机器有人点了
+     * 右下角的弹窗，跳的是这边开着的页面）：广播给所有连着的页面。
+     */
+    acceptSwitchRequest(sessionId: string): void;
+    /**
      * 收发微信的那台把微信里的一句话转了过来（`POST /weixinReply`）：
      * 当成这个会话里用户说的一句话接进去。
      * @returns 接上了没有；没接上时带一句人话（会原样回到微信那边给人看）
@@ -587,6 +592,11 @@ export class PiChatWebServer {
             // 别的 pichat 后端推来的“有事”（机器对机器，见 src/remoteNotice.ts）
             if (pathname === "/notify") {
                 void this.handleRemoteNotice(req, res);
+                return;
+            }
+            // 那台机器有人点了右下角的弹窗、要跳到这边开着的页面：广播切会话（机器对机器，同上）
+            if (pathname === "/switch") {
+                void this.handleSwitchRequest(req, res);
                 return;
             }
             // 收发微信的那台把微信里的一句话转回来（机器对机器，同上）
@@ -1727,6 +1737,41 @@ export class PiChatWebServer {
             return;
         }
         this.host.acceptRemoteNotice(notice);
+        res.writeHead(204, { "Cache-Control": "no-store" });
+        res.end();
+    }
+
+    /**
+     * 别的后端说「把你开着的页面切到这个会话」。
+     *
+     * 这条是机器对机器发的（那台有人点了弹窗）：没有 Origin 头，也没有口令 ——
+     * 跟 `/notify` 一个道理（见上面那条的注释）。
+     */
+    private async handleSwitchRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (req.method !== "POST") {
+            this.sendText(req, res, 405, "只接受 POST。");
+            return;
+        }
+        const text = await readBody(req, MAX_REQUEST_BYTES);
+        if (text === undefined) {
+            this.sendText(req, res, 413, "请求内容过大。");
+            return;
+        }
+        let raw: unknown;
+        try {
+            raw = JSON.parse(text);
+        } catch {
+            this.sendText(req, res, 400, "请求内容不是合法的 JSON。");
+            return;
+        }
+        const sessionId = raw && typeof raw === "object"
+            && typeof (raw as Record<string, unknown>).sessionId === "string"
+            ? ((raw as Record<string, unknown>).sessionId as string).trim() : "";
+        if (!sessionId) {
+            this.sendText(req, res, 400, "这条请求缺东西（要 sessionId）。");
+            return;
+        }
+        this.host.acceptSwitchRequest(sessionId);
         res.writeHead(204, { "Cache-Control": "no-store" });
         res.end();
     }

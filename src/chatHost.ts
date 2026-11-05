@@ -17,6 +17,7 @@
  */
 import * as crypto from "crypto";
 import * as path from "path";
+import { spawn } from "child_process";
 import type { AskRequest } from "./askProtocol";
 import { writeAskAnswer } from "./askProtocol";
 import type { MessageSink } from "./sessionRuntime";
@@ -38,6 +39,7 @@ import {
 import { listDirectories } from "./dirBrowse";
 import { findFileContents, findFileNames, findPathCandidates } from "./fileSearch";
 import { ChatBroadcaster } from "./chatBroadcaster";
+import { machineName } from "./pageHtml";
 import { MessageBuffer, PAGE_TRANSIENT_MESSAGE_TYPES } from "./webTransport";
 import { pickOverlayClient } from "./overlayTarget";
 import { ScreenRegistry } from "./screenRegistry";
@@ -221,6 +223,23 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 网页服务的地址（托盘菜单里的「打开」用它打开浏览器）：后端自己知道，插件那边不知道。 */
     protected override trayPageUrl(): string | undefined {
         return this.options.selfPageUrl?.();
+    }
+
+    /** 现在连着的浏览器页面一个都没有吗（弹窗点了、没处跳时要开一次新页面）。 */
+    protected override hasConnectedPages(): boolean {
+        let count = 0;
+        this.broadcaster.forEachChannel(() => { count += 1; });
+        return count > 0;
+    }
+
+    /** 用系统默认浏览器开一个地址（弹窗点了、没处跳时的兑底；开不动就算了）。 */
+    protected override openInBrowser(url: string): void {
+        try {
+            const command = process.platform === "win32" ? "cmd"
+                : process.platform === "darwin" ? "open" : "xdg-open";
+            const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+            spawn(command, args, { stdio: "ignore", detached: true }).unref();
+        } catch { /* 开不动就算了 */ }
     }
 
     /**
@@ -2046,6 +2065,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             // （见 webChatServer.ts 的 /weixinReply）
             pageUrl: base.replace(/\/+$/, ""),
             sessionFile: this.panels.get(sessionId)?.currentSessionPath,
+            // 本机名字：对方点弹出来的面板时按它认浏览器窗口（页面的标题开头是它拼的）
+            host: machineName(),
         };
         for (const target of targets) {
             void pushRemoteNotice(target, notice);
@@ -2056,6 +2077,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 别的机器上的后端推来一条“有事”（网页服务那条 /notify 收到、口令核对过了）。 */
     public acceptRemoteNotice(notice: RemoteNotice): void {
         this.trayNoteRemote(notice);
+    }
+
+    /** 别的后端说「把你开着的页面切到这个会话」（那台有人点了弹窗）：广播给所有页面。 */
+    public acceptSwitchRequest(sessionId: string): void {
+        this.postToWebview({ type: "switchToSession", sessionId });
     }
 
 

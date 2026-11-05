@@ -148,7 +148,7 @@ export function getPanelChatHtml(
  * 这台机器的名字（系统里的主机名）。取不到就空串。
  * 主机名可能带引号、尖括号这类字符，写进 HTML 前照样 {@link escapeAttr} 转义。
  */
-function machineName(): string {
+export function machineName(): string {
     try {
         return os.hostname();
     } catch { /* 见上 */ }

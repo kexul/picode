@@ -3,7 +3,9 @@
  *
  * 干什么：一台机器上的后端跑完一轮、或者模型在那儿问你一道选择题时，除了在本机右下角
  * 弹一张提醒面板，还能把这条“有事”推给另外几台机器（设置文件里 notify.pushTo 写了地址的那些）。
- * 收到的那台也弹一张面板（哪台、哪个会话、说了什么）；面板只是看一眼，点了没反应。
+ * 收到的那台也弹一张面板（哪台、哪个会话、说了什么）；点了那张面板能跳过去 ——
+ * 那台把显示着推送方页面的浏览器窗口拉到前台，再顺着 notice.pageUrl 把
+ * 「切到这个会话」发回来（见 pushSwitchSession，网页服务那边是 `POST /switch`）。
  *
  * 为什么不反过来（收到的那台去连推送方）：那样要常年维持连接、断了要重连、还得处理断线
  * 期间漏掉的事件。一次 POST 失败就当没发生，简单得多。
@@ -30,6 +32,11 @@ export interface RemoteNotice {
     pageUrl?: string;
     /** 推送方那个会话的**会话文件**：回话时那台靠它确认没把话送错会话（会话标识重启会重算）。 */
     sessionFile?: string;
+    /**
+     * 推送方这台机器的名字（主机名）：浏览器页面标题的开头用它拼（`机器名-pi`），
+     * 点面板时按它认浏览器窗口。旧版本推来的没这个字段：那点了就不认窗口。
+     */
+    host?: string;
 }
 
 /** 推一次最多等这么久：对方没回应就当这条丢了（不攒着、不重试）。 */
@@ -64,10 +71,13 @@ export function readRemoteNotice(raw: unknown, fallbackLabel: string): RemoteNot
     // 回话地址也是可选的（旧版本不带）：带了才能把微信里那句话送回去
     const pageUrl = typeof body.pageUrl === "string" ? body.pageUrl.trim().slice(0, 200) : "";
     const sessionFile = typeof body.sessionFile === "string" ? body.sessionFile.trim().slice(0, 500) : "";
+    // 机器名也是可选的（旧版本不带）：带了点面板才认得出浏览器窗口
+    const host = typeof body.host === "string" ? body.host.trim().slice(0, 100) : "";
     return {
         label, sessionId, name, text, kind,
         ...(pageUrl ? { pageUrl } : {}),
         ...(sessionFile ? { sessionFile } : {}),
+        ...(host ? { host } : {}),
     };
 }
 
@@ -83,6 +93,27 @@ export async function pushRemoteNotice(target: string, notice: RemoteNotice): Pr
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(notice),
+            signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
+        });
+        return res.ok;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * 告诉一台机器「把你开着的页面切到这个会话」。
+ *
+ * 有人在这边点了右下角的弹窗、那边页面也开着时用：那台收到就广播给所有页面
+ * （见 webChatServer.ts 的 `POST /switch`）。推不过去就当没有：面板那条卡片已经收走了。
+ */
+export async function pushSwitchSession(target: string, sessionId: string): Promise<boolean> {
+    const url = target.replace(/\/+$/, "") + "/switch";
+    try {
+        const res = await fetch(url, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ sessionId }),
             signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
         });
         return res.ok;
