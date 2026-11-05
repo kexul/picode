@@ -80,6 +80,7 @@
   const noSessionHintEl = document.getElementById("noSessionHint");
   const ctxIconEl = document.getElementById("ctxIcon");
   // 输入框顶边上那条：状态图 + 用量横杠 + 生成速度（见 syncStatus）。
+  const ctxTopEl = document.getElementById("ctxTop");
   const ctxActEl = document.getElementById("ctxAct");
   const ctxBarEl = document.getElementById("ctxBar");
   const ctxTpsEl = document.getElementById("ctxTps");
@@ -4844,8 +4845,13 @@
             st.actShownAt = Date.now();
         }
     }
-    // 顶边那条：状态图跑着才有（它的 data-act 一空，CSS 就把那一格收掉）
+    // 顶边那条：状态图跑着才有（它的 data-act 一空，CSS 就把那一格收掉）。
+    // 同一份也挂在容器上：有图的时候横杠左头那一格要挖掉，让图标落在空当里（不然空槽从它底下穿过去，
+    // 看着就是叠在一起）。
     if (ctxActEl) { ctxActEl.dataset.act = shown; }
+    if (ctxTopEl) {
+      if (shown) { ctxTopEl.dataset.act = shown; } else { delete ctxTopEl.dataset.act; }
+    }
     if (ctxBarEl) {
       ctxBarEl.classList.toggle("warn", pct >= 70 && pct < 90);
       ctxBarEl.classList.toggle("err", pct >= 90);

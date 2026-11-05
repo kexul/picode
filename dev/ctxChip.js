@@ -80,12 +80,24 @@ module.exports = async (page) => {
         const r = await page.eval(`
             const b = document.getElementById("ctxBar").getBoundingClientRect();
             const f = document.querySelector("#ctxBar .ct-fill").getBoundingClientRect();
-            return { left: Math.round(b.left), right: Math.round(b.right), width: Math.round(b.width), fill: Math.round(f.width) };`);
-        seen.push({ at: r.left + ".." + r.right, w: r.width, fill: r.fill, act: c.act || "（无）", tps: c.tps || "（无）" });
+            const a = document.getElementById("ctxAct").getBoundingClientRect();
+            const lead = parseFloat(getComputedStyle(document.getElementById("ctxTop")).getPropertyValue("--ctx-lead"));
+            // 横杠左头那一格在有图的时候被挖掉（mask），所以画面上的线从 b.left + lead 起；
+            // 图标右边缘（带旋转，取外接框）不该越过那里
+            return { left: Math.round(b.left), right: Math.round(b.right), width: Math.round(b.width),
+                     fill: Math.round(f.width), actRight: Math.round(a.right), lineStart: Math.round(b.left + lead) };`);
+        if (c.act && r.actRight > r.lineStart) {
+            throw new Error(`图标压在横杠上了：图标右边缘 ${r.actRight}，线上班的地方 ${r.lineStart}`);
+        }
+        seen.push({ at: r.left + ".." + r.right, w: r.width, fill: r.fill, act: c.act || "（无）", tps: c.tps || "（无）",
+                    gap: c.act ? r.lineStart - r.actRight : null });
     }
     console.log("");
     console.log("横杠的位置（应当只有一种），以及 63% 时填充的长度：");
-    for (const s of seen) { console.log(`  ${s.at} w=${s.w} 填充 ${s.fill}  状态图 ${s.act}  速度 ${s.tps}`); }
+    for (const s of seen) {
+        console.log(`  ${s.at} w=${s.w} 填充 ${s.fill}  状态图 ${s.act}  速度 ${s.tps}` +
+            (s.gap === null ? "" : `  图标与线之间还空 ${s.gap}px`));
+    }
     const spots = new Set(seen.map((s) => s.at));
     if (spots.size > 1) { throw new Error("横杠在挪：" + JSON.stringify(seen)); }
     // 刻度对不对：填充 = (横杠宽 - 左头那一格 18 - 右头那一格 60) × 63%

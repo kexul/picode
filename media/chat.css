@@ -1399,7 +1399,8 @@
     --ctx-tail: 60px;
   }
   /* 状态图：占左边那一格（13px 起，12px 见方），只画不占位 —— 它进不进出都不动横杠。
-     用量那条从这一格右边才起算，所以压不着它、它也压不着横杠。
+     用量那条从这一格右边才起算；横杠自己那一格在有图的时候挖掉（见下面 [data-act] 那条），
+     所以图标是落在空当里，不是压在线上。
      形状与颜色见下面那几条 */
   #ctxTop .ct-act { position: absolute; top: -7px; left: 13px; display: none; width: 12px; height: 12px; }
   /* 空槽：整条（圆角后到圆角前），就是盒子的顶边框（取输入框边框那个颜色，看着跟别的三条边是一条） */
@@ -1410,6 +1411,12 @@
   /* 填充：填多满由 --ci-pct 给（chat.js 每次算完用量就写一回，0~1 的一个数）。
      尺子是「整条减去两头那两格」（左边 18 给状态图、右边 60 给速度）：两格都写死，
      所以状态图在不在、速度数在不在、位数怎么变，这把尺子和这条横杠都一个像素不动。 */
+  /* 有状态图的时候：横杠左头那一格（--ctx-lead）挖掉 —— 图标正好落在挖出来的空当里，
+     线不会从它底下穿过去。挖的是“看得见的那一层”，横杠本身的长度和刻度一点没变（还是整条 13→13）。 */
+  #ctxTop[data-act] #ctxBar {
+    -webkit-mask-image: linear-gradient(to right, transparent 0 var(--ctx-lead), #000 var(--ctx-lead));
+    mask-image: linear-gradient(to right, transparent 0 var(--ctx-lead), #000 var(--ctx-lead));
+  }
   #ctxTop #ctxBar .ct-fill {
     position: absolute; left: var(--ctx-lead); top: 0; bottom: 0; border-radius: 1px;
     width: calc((100% - var(--ctx-lead) - var(--ctx-tail)) * var(--ci-pct, 0));
@@ -1532,7 +1539,13 @@
   /* 要减少动态效果时：横杠不慢慢长。头那四颗状态图照旧在动 —— 它们就是用来表明“还在跑”的，
      停了就跟没了一样（这条跟以前一样，是有意不理那个设置）。 */
   @media (prefers-reduced-motion: reduce) {
-    #ctxTop #ctxBar .ct-fill { transition: none; }
+    /* 有状态图的时候：横杠左头那一格（--ctx-lead）挖掉 —— 图标正好落在挖出来的空当里，
+     线不会从它底下穿过去。挖的是“看得见的那一层”，横杠本身的长度和刻度一点没变（还是整条 13→13）。 */
+  #ctxTop[data-act] #ctxBar {
+    -webkit-mask-image: linear-gradient(to right, transparent 0 var(--ctx-lead), #000 var(--ctx-lead));
+    mask-image: linear-gradient(to right, transparent 0 var(--ctx-lead), #000 var(--ctx-lead));
+  }
+  #ctxTop #ctxBar .ct-fill { transition: none; }
   }
 
   /* 剩下那几样“一直动”的小东西（顶条那颗点的呼吸、齿轮、那行命令自己横向滚）单独量下来
