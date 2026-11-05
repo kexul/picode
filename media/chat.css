@@ -1439,9 +1439,17 @@
      mask 只决定形状。--ci-icon 一处写、下面 webkit 与标准两行共用。
      笔 / 灯泡 / 扳手三条路径原样取自 Material Icons（Apache-2.0）的 edit / lightbulb / build；
      沙漏那个是自己画的（两个漏斗上下对扣），不依赖谁的图标集。
-     这四颗只是静止的图形，不动（以前沙漏慢慢翻、笔左右摆、灯泡一明一暗、扳手来回扳，
-     手机上先删了，后来电脑上也一并删了，两头一样）：看出“还在跑”靠的是形状与颜色在换，
-     换形象那一下有 180ms 的淡入（见下面那四条 ct-appear-*），不是靠一直动。
+     这四颗各自慢慢动：沙漏翻过来、笔左右轻摆、灯泡一缩一胀、扳手来回扳（见下面那四条 ct-*）。
+     动的地方只有 transform（灯泡那个原来拿 filter: brightness 做明暗，换成了缩放 ——
+     亮度是真每帧重画一遍：同样的页面、只换这一个写法，主线程 0.42% 对 0.31%，
+     虽然都不大，但亮度那个是主线程的、缩放是显卡的，手机上不必留这一样）。
+     它们在合成层上跑，不进主线程重算样式、也不排版：412x915@3x、CPU 降 4 倍、
+     页面上只挂着这一颗时量下来，不转 0.03~0.11%、转着 0.29~0.65%（沙漏那种翻半圈的更少），
+     算样式 0~1 次、排版 0 次，采样剖面里 99.8% 是空的；吐字的时候（主线程 15~20%）
+     那点数夹在噪声里，来回量三次都看不出差别。量法：node dev/iconAnim.js。
+     当年删掉不是为了省性能：一开始是手机上不放、电脑上照旧，后来为了“两头一样”一并停了；
+     真正花钱的是自动模式那圈流光（13 个点），那个是真删了、不打算回来。
+     换形象那一下另有 180ms 的淡入（见下面那四条 ct-appear-*），那个是一次性的。
      数据从后端来（working / thinking / tool，见 chat.js 的 syncStatus）；
      “等”和“写”是界面自己分的：后端只说 working，界面看正文有没有在流（st.currentAssistant）。 */
   #ctxTop .ct-act[data-act="waiting"],
@@ -1456,30 +1464,33 @@
     /* 颜色用 background-color 给（形状交给 mask）。换状态时颜色渐变过去，不是“啪”地换；
        那个 transition 只在这颗小东西上，开销可以忽略。 */
     transition: background-color 0.25s ease;
+    /* 要转起来了：先把这一层提上来（12px 的一张位图，内存可以忽略），
+       这样动画期间不用每帧重新决定怎么切层。它只在跑着的时候存在（上面那条 display: none）。 */
+    will-change: transform;
   }
   /* 等：沙漏 */
   #ctxTop .ct-act[data-act="waiting"] {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M6 2h12v2h-1L12 12 7 4H6zM6 22h12v-2h-1L12 12 7 20H6z'/%3E%3C/svg%3E");
     background-color: var(--vscode-charts-blue, #3b82f6);
-    animation: ct-appear-waiting 0.18s ease-out;
+    animation: ct-appear-waiting 0.18s ease-out, ct-hourglass 2.6s ease-in-out infinite;
   }
   /* 写：笔 */
   #ctxTop .ct-act[data-act="writing"] {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 0 0 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z'/%3E%3C/svg%3E");
     background-color: var(--vscode-charts-blue, #3b82f6);
-    animation: ct-appear-writing 0.18s ease-out;
+    animation: ct-appear-writing 0.18s ease-out, ct-pen 0.9s ease-in-out infinite;
   }
   /* 在想：灯泡 */
   #ctxTop .ct-act[data-act="thinking"] {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7z'/%3E%3C/svg%3E");
     background-color: var(--vscode-charts-yellow, #d97706);
-    animation: ct-appear-thinking 0.18s ease-out;
+    animation: ct-appear-thinking 0.18s ease-out, ct-bulb 1.6s ease-in-out infinite;
   }
   /* 工具在跑：扳手 */
   #ctxTop .ct-act[data-act="tool"] {
     --ci-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z'/%3E%3C/svg%3E");
     background-color: var(--vscode-charts-green, #16a34a);
-    animation: ct-appear-tool 0.18s ease-out;
+    animation: ct-appear-tool 0.18s ease-out, ct-wrench 1.2s ease-in-out infinite;
   }
   /* 换形象时那一下淡入：形状是硬切的（mask 不能过渡），靠这 180ms 把切口藏在淡入里。
      四条内容一样、名字故意不同 —— 同一个 animation-name 在切换时不会重放，
@@ -1488,16 +1499,25 @@
   @keyframes ct-appear-writing { from { opacity: 0; } to { opacity: 1; } }
   @keyframes ct-appear-thinking { from { opacity: 0; } to { opacity: 1; } }
   @keyframes ct-appear-tool { from { opacity: 0; } to { opacity: 1; } }
+  /* 四条一直在转的（都只动 transform）：
+     沙漏翻到 180° 跟 0° 长得一样，所以那一下跳回来看不出来；笔摆 ±16°（12px 上笔尖挪一两个像素，
+     摆多了整颗在跳）；灯泡一缩一胀（原来用 filter: brightness，那是主线程算的，换成缩放）；
+     扳手 ±30°（扳手的头离中心最远，同样的角度看着最明显）。 */
+  @keyframes ct-hourglass { 0%, 40% { transform: rotate(0deg); } 60%, 100% { transform: rotate(180deg); } }
+  @keyframes ct-pen { 0%, 100% { transform: rotate(-16deg); } 50% { transform: rotate(16deg); } }
+  @keyframes ct-bulb { 0%, 100% { transform: scale(0.88); } 50% { transform: scale(1.1); } }
+  @keyframes ct-wrench { 0%, 100% { transform: rotate(-30deg); } 50% { transform: rotate(30deg); } }
   #ctxIcon[data-st="loading"], #ctxIcon[data-st="wait"], #ctxIcon[data-st="nomodel"], #ctxIcon[data-st="none"] { opacity: 0.55; }
-  /* 要减少动态效果时：横杠不慢慢长（那四颗状态图本来就不动了，见上面那段注释）。 */
+  /* 要减少动态效果时：横杠不慢慢长。头那四颗状态图照旧在动 —— 它们就是用来表明“还在跑”的，
+     停了就跟没了一样（这条跟以前一样，是有意不理那个设置）。 */
   @media (prefers-reduced-motion: reduce) {
     #ctxTop #ctxBar .ct-fill { transition: none; }
   }
 
   /* 剩下那几样“一直动”的小东西（顶条那颗点的呼吸、齿轮、那行命令自己横向滚）单独量下来
      每一样都在 1 个点以内（吐字时），丢了反而让人觉得“怎么不动了”，都留着，电脑和手机一样。
-     两头都不动的只有这几样：顶边上那四颗状态图、排队那条上的黄点、顶边上那条用量横杠、
-     输入框那圈流光（前两样早先删了，这最后一次把状态图与流光也一并删掉，两头不再有区别）。 */
+     两头都不动的只有这几样：排队那条上的黄点、顶边上那条用量横杠、输入框那圈流光
+     （黄点与横杠这两样没有信息、只是装饰，早先删了；流光 13 个点，删了换成一根绿边）。 */
   /* 工具结果内联图片（read 读图等）：缩略图 + 点击放大 */
   .tc-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }
   .tc-img { max-width: 100%; max-height: 320px; border-radius: 6px; border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35)); background: rgba(128,128,128,0.08); cursor: zoom-in; }
