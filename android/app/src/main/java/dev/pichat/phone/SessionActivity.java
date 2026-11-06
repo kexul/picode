@@ -208,13 +208,19 @@ public class SessionActivity extends Activity {
         meta.setTextColor(0xFF7A7A7A);
         box.addView(meta);
 
-        TextView text = new TextView(this);
-        text.setText(note.text.isEmpty() ? "（没有文字）" : note.text);
-        text.setTextSize(15);
-        text.setTextColor(0xFF202020);
-        // 跑完那一轮可能很长：整段都在、能选、能复制
-        text.setTextIsSelectable(true);
-        box.addView(text);
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        if (note.text.isEmpty()) {
+            TextView none = new TextView(this);
+            none.setText("（没有文字）");
+            none.setTextSize(15);
+            none.setTextColor(0xFF202020);
+            body.addView(none);
+        } else {
+            // 跑完那一轮可能很长，也可能带 markdown：按段落 / 列表 / 代码块画（见 Markdown.java）
+            Markdown.render(this, body, note.text, 15, 0xFF202020, 0xFF7A7A7A);
+        }
+        box.addView(body);
 
         if (note.ask != null) { box.addView(askBlock(note)); }
 

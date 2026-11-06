@@ -340,7 +340,8 @@ public class MainActivity extends Activity {
 
     /** 列表上那一两句：跑完是回复开头，问的是题干，自己说的是「我：」。换行压成空格。 */
     private static String summary(Store.Note note) {
-        String text = note.text == null ? "" : note.text.replaceAll("\\s+", " ").trim();
+        // 列表上只要一句话：markdown 的记号（反引号、星号、列表点）先去掉
+        String text = note.text == null ? "" : Markdown.plainOneLine(note.text).replaceAll("\\s+", " ").trim();
         if (text.isEmpty()) { text = "（没有文字）"; }
         if ("ask".equals(note.kind)) { return "问：" + text; }
         if ("me".equals(note.kind)) { return "我：" + text; }
