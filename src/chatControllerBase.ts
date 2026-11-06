@@ -196,8 +196,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
      */
     private readonly closedSessions = new Map<string, { cwd: string; file?: string }>();
     private static readonly CLOSED_REMEMBER_MAX = 20;
-    /** 别的机器推来的“有事”记档（面板标识 → 从哪儿来）：点那张面板时照它把「切会话」发回去。 */
-    protected readonly remoteNotes = new Map<string, { pageUrl: string; sessionId: string; sessionFile?: string; name: string }>();
+    /**
+     * 别的机器推来的“有事”记档（面板标识 → 从哪儿来）：点那张面板时照它把「切会话」发回去。
+     * fromAddress 是那台连过来时的地址：它自己报的 pageUrl 万一我们到不了，回话时换这个再试。
+     */
+    protected readonly remoteNotes = new Map<string, { pageUrl: string; sessionId: string; sessionFile?: string; name: string; fromAddress?: string }>();
     /** 输入框正有焦点的那些屏：人在敲字就是人正看着这个会话，不用再弹（见 noteInputFocus）。 */
     private readonly inputFocusedClients = new Set<string>();
 
@@ -1851,8 +1854,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 手机 / 桌面那个小窗口里回话时，靠它把话送回原来那台（见 ChatHost 的 phoneSend）。
      * 卡片本身由那个小窗口照着 /phone 推过去的那条自己画（见 ChatHost.trayNoteRemote）。
      */
-    protected trayNoteRemote(notice: RemoteNotice): void {
-        if (!this.notifyTurnEndEnabled()) { return; }
+    protected trayNoteRemote(notice: RemoteNotice, fromAddress?: string): void {
+        // 弹窗通知关着也照记：手机 / 桌面上那个小窗口的列表里照样会列出那台的会话，
+        // 那里面回话就靠这一笔（挡在这里的话：能看到、能点开，一发言就“回不了”）。
         const id = "remote:" + notice.label + ":" + notice.sessionId;
         if (!notice.pageUrl) { return; }
         // 只留最近的几十条，别越长越大。
@@ -1861,6 +1865,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             pageUrl: notice.pageUrl,
             sessionId: notice.sessionId,
             ...(notice.sessionFile ? { sessionFile: notice.sessionFile } : {}),
+            ...(fromAddress ? { fromAddress } : {}),
             // 手机上、桌面上那个小窗口里回话时，那条话要带着“哪台 · 会话名”
             name: notice.label + " · " + notice.name,
         });

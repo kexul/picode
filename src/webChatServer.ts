@@ -352,7 +352,7 @@ export interface WebServerHost {
     /** 当前界面颜色（写进页面的初始主题）。 */
     getThemeMode(): "light" | "dark";
     /** 别处推来一条“有事”（`POST /notify`，口令已经核对过）：在本机右下角弹一条。 */
-    acceptRemoteNotice(notice: RemoteNotice): void;
+    acceptRemoteNotice(notice: RemoteNotice, fromAddress?: string): void;
     /**
      * 别的后端说「把你开着的页面切到这个会话」（`POST /switch`：那台机器有人点了
      * 右下角的弹窗，跳的是这边开着的页面）：广播给所有连着的页面。
@@ -2047,7 +2047,9 @@ export class PiChatWebServer {
             this.sendText(req, res, 400, "这条通知缺东西（要 sessionId）。");
             return;
         }
-        this.host.acceptRemoteNotice(notice);
+        // 这条是谁发来的：那台自己报的地址不一定是我们到得了的（多网卡时它可能挑了别的网段），
+        // 回话时连不上就拿这个地址换个端口再试（见 chatHost 的 phoneSend）
+        this.host.acceptRemoteNotice(notice, (req.socket.remoteAddress ?? "").replace(/^::ffff:/, ""));
         res.writeHead(204, { "Cache-Control": "no-store" });
         res.end();
     }

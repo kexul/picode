@@ -132,6 +132,23 @@ function withDefaultPort(url: string): string {
     }
 }
 
+/**
+ * 同一个网页服务换个主机地址：那台报给我们的 pageUrl 是它自己挑的一块网卡，
+ * 我们到不了的时候，用它连过来时的地址配上那个端口再试（见 phoneSend）。
+ * 换出来跟原来一样，就给 undefined（不必再试一遍）。
+ */
+function samePortVariant(pageUrl: string, address: string): string | undefined {
+    const host = address.trim();
+    if (!host) { return undefined; }
+    try {
+        const parsed = new URL(pageUrl);
+        const origin = `http://${host.includes(":") ? `[${host}]` : host}${parsed.port ? `:${parsed.port}` : ""}`;
+        return origin === parsed.origin ? undefined : origin;
+    } catch {
+        return undefined;
+    }
+}
+
 /** 这条消息是不是“一次性界面”（确认框、浮层、跑完提醒）：补发里只有序号位、没有内容。 */
 function isTransientPageMessage(msg: Record<string, unknown>): boolean {
     return typeof msg.type === "string" && PAGE_TRANSIENT_MESSAGE_TYPES.has(msg.type);
@@ -798,7 +815,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 推进去；标识用 /phone 那边的 `remote:` 写法（哪台 + 哪个会话），这样在那台上回话时
      * 会照 {@link remoteNotes} 记的那笔转回原来那台（见 phoneSend）。
      */
-    protected override trayNoteRemote(notice: RemoteNotice): void {
+    protected override trayNoteRemote(notice: RemoteNotice, fromAddress?: string): void {
         // 这台根本没有那个会话：手机上那条拿“哪台 + 会话”当标识，回话会照它转回去
         this.pushPhoneNote(
             "remote:" + notice.label + ":" + notice.sessionId,
@@ -808,7 +825,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             notice.label,
         );
         // 回话要的那笔账照旧（摆在后头：旧版本推来的没 pageUrl，卡片照样得弹）
-        super.trayNoteRemote(notice);
+        super.trayNoteRemote(notice, fromAddress);
     }
 
     /**
@@ -902,11 +919,22 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         if (sessionId.startsWith("remote:")) {
             const route = this.remoteNotes.get(sessionId);
             if (!route) { return { ok: false, reason: "这台没记着那条通知是哪台发来的（可能重启过），回不了" }; }
-            const result = await pushSessionReply(route.pageUrl, {
+            const reply = {
                 sessionId: route.sessionId,
                 text: body,
                 ...(route.sessionFile ? { sessionFile: route.sessionFile } : {}),
-            });
+            };
+            let result = await pushSessionReply(route.pageUrl, reply);
+            if (!result.ok) {
+                // 那台报给我们的是它自己挑的一个地址（多网卡时可能是我们到不了的那个网段）：
+                // 用它连过来时的地址、同一个端口再试一次；通了就记住，以后直接用这个。
+                const alt = route.fromAddress ? samePortVariant(route.pageUrl, route.fromAddress) : undefined;
+                if (alt) {
+                    this.log(`[手机] 连不上「${route.name}」的 ${route.pageUrl}，改用 ${alt} 再试一次`);
+                    result = await pushSessionReply(alt, reply);
+                    if (result.ok) { route.pageUrl = alt; }
+                }
+            }
             if (!result.ok) { return { ok: false, reason: result.reason }; }
             this.log(`[手机] 一句话转给「${route.name}」那台：${body.slice(0, 40)}`);
             this.pushPhoneNote(sessionId, route.name, body, "me");
@@ -2021,8 +2049,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /** 别的机器上的后端推来一条“有事”（网页服务那条 /notify 收到、口令核对过了）。 */
-    public acceptRemoteNotice(notice: RemoteNotice): void {
-        this.trayNoteRemote(notice);
+    public acceptRemoteNotice(notice: RemoteNotice, fromAddress?: string): void {
+        this.trayNoteRemote(notice, fromAddress);
     }
 
     /** 别的后端说「把你开着的页面切到这个会话」（那台有人点了弹窗）：广播给所有页面。 */
