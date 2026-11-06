@@ -21,7 +21,7 @@ import { spawn } from "child_process";
 import type { AskRequest } from "./askProtocol";
 import { writeAskAnswer } from "./askProtocol";
 import type { MessageSink } from "./sessionRuntime";
-import { ChatControllerBase, type ViewOptionItem, type WorkspacePage } from "./chatControllerBase";
+import { ChatControllerBase, type ViewOptionItem, type WorkspacePage, desktopAppPath } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
 import { isPackaged } from "./appAssets";
@@ -238,41 +238,37 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         // 「项目与会话」下半那份目录清单这时先扫出来（见 sessionStore 的 listProjectDirs）：
         // 扫一次就定下来，第一条打开面板就不用再等这一趟
         void listProjectDirs();
-        // 通知区域那颗图标：一起来就放上去（开着那一项、又是 Windows 的话）
-        this.startTray();
         // 微信那头：一起来就开始收（人不在电脑前也能从微信里接上话）
         this.startWeixinInbox();
     }
 
-    /** 网页服务的地址（托盘菜单里的「打开」用它打开浏览器）：后端自己知道，插件那边不知道。 */
-    protected override trayPageUrl(): string | undefined {
-        return this.options.selfPageUrl?.();
-    }
-
-    /** 现在连着的浏览器页面一个都没有吗（弹窗点了、没处跳时要开一次新页面）。 */
-    protected override hasConnectedPages(): boolean {
-        let count = 0;
-        this.broadcaster.forEachChannel(() => { count += 1; });
-        return count > 0;
-    }
-
-    /** 用系统默认浏览器开一个地址（弹窗点了、没处跳时的兑底；开不动就算了）。 */
-    protected override openInBrowser(url: string): void {
+    /**
+     * 后端起来、地址也有了以后调一次：把桌面那个小窗口拉起来。
+     *
+     * 它起来只待在托盘里（`--hidden`），左键点那颗图标才开主界面。拉的是 desktop/PiChat
+     * 编出来的那个 exe（见 desktopAppPath）；没编出来就什么都不做 —— 这台机器上就没有
+     * 托盘和提醒卡片了，其余照常（浏览器页面、手机 app 都不受影响）。
+     */
+    public startDesktopApp(url: string | undefined): void {
+        const exe = desktopAppPath();
+        if (!exe) { return; }
+        const args = ["--hidden"];
+        if (url) { args.push("--url", url); }
         try {
-            const command = process.platform === "win32" ? "cmd"
-                : process.platform === "darwin" ? "open" : "xdg-open";
-            const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
-            spawn(command, args, { stdio: "ignore", detached: true }).unref();
-        } catch { /* 开不动就算了 */ }
+            spawn(exe, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+            this.log(`桌面那个小窗口已经叫起来了：${exe}`);
+        } catch (err: any) {
+            this.log(`叫不起桌面那个小窗口（${exe}）：${err?.message ?? String(err)}`);
+        }
     }
 
     /**
-     * 人在托盘菜单里点了「退出」：把整个后端关掉（见 ChatHostOptions.quitBackend）。
+     * 桌面那个小窗口的托盘菜单里点了「退出」：把整个后端关掉（见 ChatHostOptions.quitBackend）。
      */
-    protected trayExitRequested(): void {
+    public requestQuit(): void {
         const quit = this.options.quitBackend;
         if (!quit) {
-            this.log("托盘菜单里点了「退出」，但这边不知道该怎么退（不是 pichat 起的？）。");
+            this.log("那个小窗口里点了「退出」，但这边不知道该怎么退（不是 pichat 起的？）。");
             return;
         }
         quit();
@@ -1539,8 +1535,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             this.writeOption(ChatHost.KEY_WEIXIN_PUSH, !this.getWeixinPush());
         } else if (action === "notifyTurnEnd") {
             this.writeOption(ChatHost.KEY_NOTIFY_TURN_END, !this.getNotifyTurnEnd());
-            // 当场照着新设置来：刚打开就把图标放上去，刚关掉就收掉（别留一颗不干活的）
-            if (this.getNotifyTurnEnd()) { this.startTray(); } else { this.disposeTray(); }
+            // 不用收放托盘了：托盘长在桌面那个小窗口里（独立的一个程序），跟这颗开关无关
         } else if (action === "notifyPushTo") {
             // 填的是给人看的写法：逗号 / 空格 / 换行都算分隔；没写 http:// 的补上，
             // 没写端口的补上 Pi Chat 出厂那个（51883）——否则按 http 的默认端口 80 算，打不通。
@@ -2311,7 +2306,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     public dispose(): void {
         if (this.disposed) { return; }
         this.disposed = true;
-        this.disposeTray();
         this.weixinInbox?.stop();
         this.weixinInbox = undefined;
         this.desktopLive.stop();

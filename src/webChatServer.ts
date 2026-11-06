@@ -369,6 +369,11 @@ export interface WebServerHost {
     phoneSend(sessionId: string, text: string): Promise<{ ok: boolean; reason?: string }>;
     /** 手机那头答了一道选择题（`/phone/answer`）：把还挂着的那张卡片按这个答案收掉。 */
     phoneAnswer(cardId: string, picks: string[], text: string): { ok: boolean; reason?: string };
+    /**
+     * 桌面那个小窗口的托盘菜单里点了「退出」（`POST /shutdown`）：
+     * 跟终端里按 Ctrl+C 一样把这个后端收摊（停网页服务、收会话、清地址文件）。
+     */
+    requestQuit(): void;
 }
 
 /**
@@ -683,6 +688,14 @@ export class PiChatWebServer {
             }
             if (pathname === "/phone/answer") {
                 void this.handlePhoneAnswer(req, res);
+                return;
+            }
+            // 桌面那个小窗口的托盘菜单里点了「退出」（机器对机器，同一个规矩）
+            if (pathname === "/shutdown") {
+                if (req.method !== "POST") { this.sendText(req, res, 405, "只接受 POST。"); return; }
+                res.writeHead(204, { "Cache-Control": "no-store" });
+                res.end();
+                this.host.requestQuit();
                 return;
             }
             if (pathname === "/" || pathname === "/index.html") {

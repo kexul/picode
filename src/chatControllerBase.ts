@@ -71,12 +71,10 @@ import {
 import { promptText } from "./promptText";
 import { dropAuto, readAuto, writeAuto } from "./autoFiles";
 import type { RpcSessionState } from "./piRpc";
-import { TrayIcon } from "./trayIcon";
 import { appRoot } from "./appAssets";
 import { plainPreview } from "./messageUtils";
-import { REMOTE_TEXT_CHARS, pushSwitchSession, type RemoteNotice } from "./remoteNotice";
+import { REMOTE_TEXT_CHARS, type RemoteNotice } from "./remoteNotice";
 import type { PhoneAsk } from "./phoneInbox";
-import { machineName } from "./pageHtml";
 import type { ProjectDirEntry } from "./sessionStore";
 
 /** # 引用菜单里的一行：一个会话（或其某个子会话）。 */
@@ -168,7 +166,7 @@ export interface WorkspacePage {
  * 没编出来就没有（那就照旧开浏览器）。先看环境变量 PICHAT_DESKTOP_APP，
  * 再看看这个跟仓库放在一起的默认位置。
  */
-function desktopAppPath(): string | undefined {
+export function desktopAppPath(): string | undefined {
     const candidates = [
         process.env.PICHAT_DESKTOP_APP,
         path.join(appRoot(), "desktop", "PiChat", "bin", "Release", "net8.0-windows", "PiChat.exe"),
@@ -206,11 +204,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
      */
     private readonly closedSessions = new Map<string, { cwd: string; file?: string }>();
     private static readonly CLOSED_REMEMBER_MAX = 20;
-    /**
-     * 通知区域里那颗图标和右下角那块提醒面板（Windows，见 trayIcon.ts）。
-     * 后端起来时就起那个小程序（见 startTray）：图标一直在，有事才弹一条。
-     */
-    private tray: TrayIcon | undefined;
     /** 别的机器推来的“有事”记档（面板标识 → 从哪儿来）：点那张面板时照它把「切会话」发回去。 */
     protected readonly remoteNotes = new Map<string, { pageUrl: string; sessionId: string; sessionFile?: string; name: string }>();
     /** 输入框正有焦点的那些屏：人在敲字就是人正看着这个会话，不用再弹（见 noteInputFocus）。 */
@@ -1807,28 +1800,24 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     // ========================================================================
-    //  通知区域里那颗图标 + 右下角那块提醒面板：有事弹一条看一眼（见 trayIcon.ts）
+    //  “有事”往哪儿送
     // ========================================================================
 
     /**
      * 某个会话有事了（跑完一轮、模型在等你答一道选择题）。
      *
-     * 提醒送到哪台是二选一（一个人只盯得了一台机器）：设置里「消息推送」填了别处的地址，
-     * 就只推到那边，这台不弹；没填（或者填的就是这台自己的地址）就在这台弹。
+     * 这里只剩两件事：推给别的机器（设置里「消息推送」填了别处地址时）、以及子类自己那一套
+     * （手机上那条、微信、桌面那个小窗口的卡片见 ChatHost）。这台机器上的提醒卡片由桌面那个
+     * 小窗口自己画（它连着 /phone 那条，见 desktop/PiChat），后端不再管画卡片这件事。
      *
-     * @param summary 面板上显示的一句话摘要（跑完一轮是回复的头几句，选择题是题干）
+     * @param summary 一句话摘要（跑完一轮是回复开头，选择题是题干）
      * @param kind 这一条算跑完一轮，还是模型在等你答一句
      */
     protected trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done", _ask?: PhoneAsk): void {
         if (!sessionId || !this.notifyTurnEndEnabled()) { return; }
         const label = (name || "").trim() || "会话";
-        // 面板上那条摘要照旧短（一块小弹窗，两行就够）；推给别处的那份留长一点：
-        // 那边可能还要再发到微信里（见 remoteNotice.ts 的 REMOTE_TEXT_CHARS）
-        const preview = plainPreview(summary);
-        if (this.pushRemoteNote(sessionId, label, plainPreview(summary, REMOTE_TEXT_CHARS), kind)) { return; }   // 已经推给别处：这台不弹
-        // 人正坐在这个会话的输入框前（界面报过焦点）：他就在看着，再弹一下是多余的
-        if (this.inputFocusedOn(sessionId)) { return; }
-        this.ensureTray()?.pop({ id: sessionId, name: label, summary: preview, kind, host: this.pageTitleMatch() });
+        // 推给别处的那份留长一点：那边可能还要再发到微信里（见 remoteNotice.ts 的 REMOTE_TEXT_CHARS）
+        this.pushRemoteNote(sessionId, label, plainPreview(summary, REMOTE_TEXT_CHARS), kind);
     }
 
     /**
@@ -1857,117 +1846,37 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /**
-     * 本机浏览器页面标题的开头（像 `我的电脑-pi`，见 pageHtml.ts）：弹窗被点时
-     * 托盘小程序按它认浏览器窗口、拉到前台。
-     */
-    private pageTitleMatch(): string {
-        const host = machineName();
-        return host ? host + "-pi" : "pi";
-    }
-
-    /**
-     * 别的机器上的后端推来一条“有事”：在本机右下角也弹一条。点它能跳过去 ——
-     * 显示那台机器页面的浏览器窗口拉到前台，再由 trayOpenRequested 把「切会话」发回那台。
+     * 别的机器上的后端推来一条“有事”。
+     *
+     * 这里要干的只有一件事：把“从哪儿来、那个会话叫什么”记一笔（`remoteNotes`）——
+     * 手机 / 桌面那个小窗口里回话时，靠它把话送回原来那台（见 ChatHost 的 phoneSend）。
+     * 卡片本身由那个小窗口照着 /phone 推过去的那条自己画。
      */
     protected trayNoteRemote(notice: RemoteNotice): void {
         if (!this.notifyTurnEndEnabled()) { return; }
         const id = "remote:" + notice.label + ":" + notice.sessionId;
-        // 记下这条是从哪儿来的：点面板时要往那个地址说「切到这个会话」。
+        if (!notice.pageUrl) { return; }
         // 只留最近的几十条，别越长越大。
-        if (notice.pageUrl) {
-            this.remoteNotes.delete(id);
-            this.remoteNotes.set(id, {
-                pageUrl: notice.pageUrl,
-                sessionId: notice.sessionId,
-                ...(notice.sessionFile ? { sessionFile: notice.sessionFile } : {}),
-                // 手机上、桌面上那个小窗口里回话时，那条话要带着“哪台 · 会话名”
-                name: notice.label + " · " + notice.name,
-            });
-            while (this.remoteNotes.size > 30) {
-                const oldest = this.remoteNotes.keys().next().value;
-                if (oldest === undefined) { break; }
-                this.remoteNotes.delete(oldest);
-            }
-        }
-        this.ensureTray()?.pop({
-            // 同一个来源的同一个会话反复推过来只换不堆（面板上 id 一样就把旧的顶掉）
-            id,
+        this.remoteNotes.delete(id);
+        this.remoteNotes.set(id, {
+            pageUrl: notice.pageUrl,
+            sessionId: notice.sessionId,
+            ...(notice.sessionFile ? { sessionFile: notice.sessionFile } : {}),
+            // 手机上、桌面上那个小窗口里回话时，那条话要带着“哪台 · 会话名”
             name: notice.label + " · " + notice.name,
-            // 推过来的那条没带摘要（旧版本）就只显示名字
-            summary: plainPreview(notice.text ?? ""),
-            kind: notice.kind === "ask" ? "ask" : "done",
-            // 那台机器页面的标题开头（旧版本推来没带就空着）：点面板时按它认窗口
-            host: notice.host ? notice.host + "-pi" : "",
         });
-    }
-
-    /**
-     * 后端起来时调一次：设置里开着、这台机器也支持，就把那颗图标先放上去。
-     * 它不表示有没有事（竖线一直红着），只是让人看得出“它在跑”。
-     */
-    public startTray(): void {
-        if (!this.notifyTurnEndEnabled()) { return; }
-        this.ensureTray();
-    }
-
-    /** 要放图标 / 弹提醒时才起那个小程序（起不来就没有托盘，照常干活）。 */
-    private ensureTray(): TrayIcon | undefined {
-        if (!TrayIcon.available()) { return undefined; }
-        if (!this.tray) {
-            this.tray = new TrayIcon();
-            this.tray.onExitRequest = () => this.trayExitRequested();
-            this.tray.onOpenRequest = (id, focused) => this.trayOpenRequested(id, focused);
-            this.tray.show();
-            this.tray.setUrl(this.trayPageUrl());
+        while (this.remoteNotes.size > 30) {
+            const oldest = this.remoteNotes.keys().next().value;
+            if (oldest === undefined) { break; }
+            this.remoteNotes.delete(oldest);
         }
-        return this.tray;
     }
 
     /**
-     * 网页服务的地址（托盘菜单里那颗「打开」用的）：知道就交出去。
-     * 默认不知道（插件那边那颗图标不开浏览器），后端会盖掉它。
+     * 人在桌面那个小窗口的托盘菜单里点了「退出」：跟终端里按 Ctrl+C 一样收拾掉整个后端。
+     * 默认什么也不做：插件那边没有“整个退出”这回事，后端自己起的那个（见 ChatHost）会接手。
      */
-    protected trayPageUrl(): string | undefined { return undefined; }
-
-    /** 网页服务的地址变了（服务起来 / 换了端口）：告诉托盘，那颗「打开」跟着换。 */
-    public setTrayPageUrl(url: string | undefined): void {
-        try { this.tray?.setUrl(url); } catch { /* 托盘不在就算了 */ }
-    }
-
-    /**
-     * 人在托盘菜单里点了「退出」。默认什么也不做：插件那边没有“整个退出”这回事，
-     * 后端自己起的那个（见 ChatHost）会接手去收摊。
-     */
-    protected trayExitRequested(): void { /* 默认不管 */ }
-
-    /**
-     * 右下角的弹窗被点了一下（trayIcon.ts 报来）：跳到那条“有事”的会话。
-     *
-     * 拉浏览器窗口那一步是托盘小程序自己做的（要有「刚收到过点击」的资格才拉得动，
-     * 见 bin/tray.cs 的 NoteClicked）；这里只管会话切换：
-     *   - 本机会话：广播给所有连着的页面，各自切到那一格；
-     *   - 别的机器推来的（面板标识是 remote: 开头）：照记档把「切会话」发回那台，它的页面自己切；
-     *   - 浏览器窗口没认到、这边也没有页面连着：开一次新页面（不然点了没处跳）。
-     */
-    public trayOpenRequested(id: string, focused: boolean): void {
-        if (id.startsWith("remote:")) {
-            const saved = this.remoteNotes.get(id);
-            if (saved) { void pushSwitchSession(saved.pageUrl, saved.sessionId); }
-            return;
-        }
-        if (!focused && !this.hasConnectedPages()) {
-            const url = this.trayPageUrl();
-            if (url) { this.openInBrowser(url); }
-            return;
-        }
-        this.postToWebview({ type: "switchToSession", sessionId: id });
-    }
-
-    /** 现在连着的浏览器页面一个都没有吗：决定弹窗点了要不要开一次新页面。 */
-    protected abstract hasConnectedPages(): boolean;
-
-    /** 用系统默认浏览器开一个地址（弹窗点了、没处跳时的兑底）。 */
-    protected abstract openInBrowser(url: string): void;
+    public requestQuit(): void { /* 默认不管 */ }
 
     /**
      * 把这条“有事”推给别的后端（设置里「消息推送」填了别处的地址才有这回事）。
@@ -1975,12 +1884,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * @returns 是不是推给“别处”了（推了的话，这台就不再自己弹）
      */
     protected pushRemoteNote(_sessionId: string, _name: string, _summary = "", _kind: "done" | "ask" = "done"): boolean { return false; }
-
-    /** 收摊：让托盘小程序也退出（后端退出时不一定来得及，但尽量不落孤儿进程）。 */
-    protected disposeTray(): void {
-        try { this.tray?.dispose(); } catch { /* 收摊出错不拦路 */ }
-        this.tray = undefined;
-    }
 
     /**
      * RuntimeHost.onTurnEnd：一个会话跑完了一轮。

@@ -139,7 +139,7 @@
     }
   },
   "scripts": {
-    "clean": "node -e \"const fs=require('fs');const soft=(f)=>{try{fs.rmSync(f,{recursive:true,force:true})}catch(e){}};soft('out');soft('bin/shot.exe');soft('bin/tray.exe');for(const f of fs.readdirSync('.').filter(f=>/^pi-chat.*\\.vsix$/.test(f)))soft(f)\"",
+    "clean": "node -e \"const fs=require('fs');const soft=(f)=>{try{fs.rmSync(f,{recursive:true,force:true})}catch(e){}};soft('out');soft('bin/shot.exe');soft('bin/live.exe');for(const f of fs.readdirSync('.').filter(f=>/^pi-chat.*\\.vsix$/.test(f)))soft(f)\"",
     "compile": "node scripts/compile.mjs",
     "build": "npm run clean && npm run compile",
     "watch": "node scripts/compile.mjs --watch",

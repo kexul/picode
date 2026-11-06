@@ -6,9 +6,21 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <!-- 托盘图标用的是 WinForms 的 NotifyIcon（它在同一个 Windows 桌面框架里，不引第三方包） -->
+    <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>PiChat</AssemblyName>
     <RootNamespace>PiChat</RootNamespace>
     <ApplicationIcon />
   </PropertyGroup>
+
+  <!--
+    上面把 WinForms 打开了（为了托盘用的 NotifyIcon），它会顺手把 System.Drawing 与
+    System.Windows.Forms 也塞进全局 using；那样 Brush / TextBox / Button / Application 这些名字
+    就跟 WPF 里的撞了。这里把那两条撤掉，真要用的文件（TrayUi.cs）自己写清楚。
+  -->
+  <ItemGroup>
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
 
 </Project>

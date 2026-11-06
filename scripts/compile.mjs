@@ -8,7 +8,7 @@
  *
  *   node scripts/compile.mjs           挨个跑一遍，哪份错了就停在那里（npm run compile）
  *   node scripts/compile.mjs --watch   三份各起一个 tsc -w，改一下就编一下（npm run watch；
- *                                      两支小程序不在里面，改过 bin/shot.cs 或 bin/tray.cs
+ *                                      两支小程序不在里面，改过 bin/shot.cs 或 bin/live.cs
  *                                      就跑一次 npm run compile）
  */
 import { spawn, spawnSync } from "node:child_process";
@@ -33,14 +33,12 @@ const projects = [
     { label: "全量检查", config: "tsconfig.json" },
 ];
 
-// 三支小程序的源码与产物（见 bin/shot.cs、bin/live.cs、bin/tray.cs）：
+// 两支小程序的源码与产物（见 bin/shot.cs、bin/live.cs）：
 // 都用系统自带的 csc.exe 编，随 npm 包一起装到后端那边。
 const SHOT_SOURCE = path.join(repoRoot, "bin", "shot.cs");
 const SHOT_EXE = path.join(repoRoot, "bin", "shot.exe");
 const LIVE_SOURCE = path.join(repoRoot, "bin", "live.cs");
 const LIVE_EXE = path.join(repoRoot, "bin", "live.exe");
-const TRAY_SOURCE = path.join(repoRoot, "bin", "tray.cs");
-const TRAY_EXE = path.join(repoRoot, "bin", "tray.exe");
 
 const watch = process.argv.includes("--watch");
 
@@ -73,7 +71,6 @@ async function compileOnce() {
     }
     compileShotExe();
     compileLiveExe();
-    compileTrayExe();
     process.stdout.write("都编完了。\n");
 }
 
@@ -109,25 +106,6 @@ function compileLiveExe() {
         references: ["System.Drawing.dll"],
         whySkip: "桌面实时画面只在 Windows 上能用，没必要编",
         whyFail: "长按截图按钮看桌面实时画面就用不了",
-    });
-}
-
-/**
- * 编通知区域那颗图标（bin/tray.cs → bin/tray.exe）。
- *
- * 跟截屏那支一样：编不出来不算构建失败，只是没有托盘图标和右下角那块提醒面板（见 src/trayIcon.ts），
- * 界面照常能用。
- */
-function compileTrayExe() {
-    runCsc({
-        label: "托盘图标",
-        source: TRAY_SOURCE,
-        output: TRAY_EXE,
-        // winexe：托盘是个纯图标的小程序，跑起来不该带黑框
-        target: "winexe",
-        references: ["System.Drawing.dll", "System.Windows.Forms.dll"],
-        whySkip: "托盘图标只有 Windows 有，没必要编",
-        whyFail: "这个包在 Windows 上就没有托盘图标和提醒面板",
     });
 }
 

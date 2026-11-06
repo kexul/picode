@@ -11,7 +11,7 @@
  * 里面装的是什么（跟 Node 单文件应用那种 90MB 的做法不一样）：
  *   - 一份壳（bin/launcher.cs，编出来是个窗口程序，天生没有黑框）；
  *   - 后端打成一个 CommonJS 文件（我们零运行时依赖，相对路径自己接一下就行）；
- *   - 界面文件（media/）与三支小程序（bin/tray.exe、bin/shot.exe、bin/live.exe）。
+ *   - 界面文件（media/）与两支小程序（bin/shot.exe、bin/live.exe）。
  * **不带 Node 运行时**：跑的时候用这台机器上装好的 Node（`PICHAT_NODE` → PATH → 常见安装位置）。
  * 所以产物只有几 MB；代价是目标机器得有 Node 20 或以上（找不到时壳会弹一句人话）。
  *
@@ -201,7 +201,7 @@ function collectPayload(version, withBinaries) {
         if (fs.statSync(full).isFile()) { add(`media/${name}`, full); }
     }
     if (withBinaries) {
-        for (const name of ["tray.exe", "shot.exe", "live.exe"]) {
+        for (const name of ["shot.exe", "live.exe"]) {
             const full = path.join(repoRoot, "bin", name);
             if (!fs.existsSync(full)) { fail(`找不到 bin/${name}：先跑 npm run compile（它顺手编这几支小程序）`); }
             add(`bin/${name}`, full);

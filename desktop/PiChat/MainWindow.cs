@@ -53,8 +53,14 @@ internal sealed class MainWindow : Window
         public List<Note> Notes = new();
     }
 
-    public MainWindow(StartupOptions options)
+    private readonly Application _app;
+    private readonly TrayUi _tray;
+    /** 真退（菜单里点了退出 / 程序要收摊）：不是退到托盘去。 */
+    private bool _quitting;
+
+    public MainWindow(StartupOptions options, Application app)
     {
+        _app = app;
         _config = Config.Load();
         if (!string.IsNullOrWhiteSpace(options.Url))
         {
@@ -75,7 +81,83 @@ internal sealed class MainWindow : Window
         _backend.Ended += OnEnded;
         _backend.Start();
 
+        // 托盘图标：左键开主界面，右键三项（打开主界面 / 打开网页端 / 退出）
+        _tray = new TrayUi(ShowMain, OpenWebUi, QuitAll);
+        _tray.SetStatus("正在连接后端…");
+
         RenderSession();
+    }
+
+    /// <summary>开主界面（托盘左键、菜单第一项、别的进程叫过来时走这条）。</summary>
+    public void ShowMain()
+    {
+        if (_quitting) { return; }
+        Dispatcher.Invoke(() =>
+        {
+            Show();
+            ShowInTaskbar = true;
+            if (WindowState == WindowState.Minimized) { WindowState = WindowState.Normal; }
+            Activate();
+            // 被别的窗口压在下面时，先置顶一下再放开（不然点了托盘也跳不上来）
+            Topmost = true;
+            Topmost = false;
+            _inputBox.Focus();
+        });
+    }
+
+    /// <summary>
+    /// 后端说它现在在哪个地址（又被叫起来一次时带着 --url）：跟着换过去。
+    /// 后端换端口重启、而这个小窗口一直在跑的时候，靠这一下把连接接回新地址。
+    /// </summary>
+    public void UseBackendUrl(string url)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            if (Backend.Normalize(url) == _backend.Url) { return; }
+            ApplyUrl(url);
+        });
+    }
+
+    /// <summary>托盘菜单里的「打开网页端」：用系统默认浏览器打开这个后端的地址。</summary>
+    private void OpenWebUi()
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(_config.Url) { UseShellExecute = true });
+        }
+        catch
+        {
+            // 打不开就算了
+        }
+    }
+
+    /// <summary>托盘菜单里的「退出」：跟终端里按 Ctrl+C 一样，连后端一起收摊，然后自己退。</summary>
+    private void QuitAll()
+    {
+        if (_quitting) { return; }
+        SetQuitting();
+        // 先告诉后端「收摊」（它要停网页服务、杀掉那些会话），再把界面关掉
+        _ = _backend.RequestQuitAsync();
+        Dispatcher.InvokeAsync(async () =>
+        {
+            await System.Threading.Tasks.Task.Delay(400);
+            Close();
+            _app.Shutdown();
+        });
+    }
+
+    /// <summary>真的要退了：让窗口这次真的关掉、不再退到托盘。</summary>
+    public void SetQuitting()
+    {
+        _quitting = true;
+        ShowInTaskbar = true;
+    }
+
+    /// <summary>程序收尾：把托盘图标摘掉（不然它会留在通知区域里成一个死图标）。</summary>
+    public void DisposeUi()
+    {
+        try { _tray.Dispose(); } catch { /* 已经没了 */ }
+        try { _backend.Stop(); } catch { /* 已经没了 */ }
     }
 
     // ---------------------------------------------------------------- 界面
@@ -317,6 +399,19 @@ internal sealed class MainWindow : Window
             _config.Height = bounds.Height;
         }
         Config.Save(_config);
+
+        if (!_quitting)
+        {
+            // 点右上角那颗叉只是把窗口收起来：托盘图标还在，左键点它就回来。
+            // 真退只有一条路 —— 托盘菜单里的「退出」（见 QuitAll）。
+            e.Cancel = true;
+            ShowInTaskbar = false;
+            Hide();
+            return;
+        }
+
+        Toast.ForgetAll();
+        _tray.Dispose();
         _backend.Stop();
         base.OnClosing(e);
     }
@@ -325,6 +420,7 @@ internal sealed class MainWindow : Window
 
     private void OnStatus(string text, bool connected)
     {
+        _tray.SetStatus("Pi Chat · " + text);
         _statusText.Text = text;
         _statusText.Foreground = connected ? Green : Orange;
         _statusText.ToolTip = text;
@@ -422,6 +518,27 @@ internal sealed class MainWindow : Window
 
         RebuildSessionList();
         if (_selectedId == note.SessionId) { RenderSession(); }
+
+        // 有事就弹一张卡片（自己刚说的那句、还有已经把答案填了的题不算）
+        if (note.Kind is "done" or "ask") { MaybeToast(state, note); }
+    }
+
+    /// <summary>
+    /// 该不该弹那张右下角卡片：人正开着窗口、看的正是这个会话，就不弹（他就在看着）；
+    /// 其余情况都弹 —— 窗口收在托盘里、在看别的会话、正在干别的。
+    /// </summary>
+    private void MaybeToast(SessionState state, Note note)
+    {
+        var looking = IsVisible && IsActive && _selectedId == note.SessionId;
+        if (looking) { return; }
+        // note.Name 里已经带了「哪台 · 会话名」（后端推过来时就拼好了），别再叠一层
+        var title = note.Name;
+        if (note.Kind == "ask") { title = "在等你答一句 · " + title; }
+        Toast.Show(note.SessionId, title, Markdown.PlainOneLine(note.Text), note.Kind == "ask", () =>
+        {
+            ShowMain();
+            SelectSession(note.SessionId);
+        });
     }
 
     /// <summary>某道题在别处（网页上、另一台设备上）答过了：那张卡片置灰，别让人再点一次。</summary>

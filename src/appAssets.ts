@@ -1,5 +1,5 @@
 /**
- * appAssets —— 界面文件（media/）与两支小程序（bin/tray.exe、bin/shot.exe）在哪儿。
+ * appAssets —— 界面文件（media/）与两支小程序（bin/shot.exe、bin/live.exe）在哪儿。
  *
  * 两种跑法，路径的算法其实一样（都是“这个文件往上两层”）：
  *   1. 仓库里 / 全局装的那份包：`out/server/*.js` → 往上两层就是仓库根，下面有 media/ 与 bin/。
@@ -38,7 +38,7 @@ export function mediaDir(): string {
     return path.join(appRoot(), "media");
 }
 
-/** 两支小程序里某一支的完整路径（`shot.exe` / `tray.exe`）。 */
+/** 两支小程序里某一支的完整路径（`shot.exe` / `live.exe`）。 */
 export function appBin(name: string): string {
     return path.join(appRoot(), "bin", name);
 }
