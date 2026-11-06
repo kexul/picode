@@ -353,6 +353,10 @@ export interface WebServerHost {
     getThemeMode(): "light" | "dark";
     /** 别处推来一条“有事”（`POST /notify`，口令已经核对过）：在本机右下角弹一条。 */
     acceptRemoteNotice(notice: RemoteNotice, fromAddress?: string): void;
+    /** 别台请这台配对（`POST /pair/request`）：记下来等人去设置面板点头（拒过的直接回绝）。 */
+    receivePairRequest(address: string, name: string): { ok: boolean; reason?: string };
+    /** 别台回了这台那下配对请求（`POST /pair/reply`）：接受了就配上，拒绝了就把这条拿掉。 */
+    receivePairReply(address: string, accepted: boolean): void;
     /**
      * 别的后端说「把你开着的页面切到这个会话」（`POST /switch`：那台机器有人点了
      * 右下角的弹窗，跳的是这边开着的页面）：广播给所有连着的页面。
@@ -684,6 +688,15 @@ export class PiChatWebServer {
             // 别的机器把一句话转回来（机器对机器，同上）
             if (pathname === "/reply") {
                 void this.handleSessionReply(req, res);
+                return;
+            }
+            // 跨机器配对（机器对机器，同一个规矩）：这台请那台点头、那台回了这台一句
+            if (pathname === "/pair/request") {
+                void this.handlePairRequest(req, res);
+                return;
+            }
+            if (pathname === "/pair/reply") {
+                void this.handlePairReply(req, res);
                 return;
             }
             // 手机 app 里那个前台服务连的（机器对机器，同上）
@@ -2098,6 +2111,69 @@ export class PiChatWebServer {
      * 别的机器把一句话转了过来：交给宿主接进那个会话。
      * 成不成都要回一句（那边要把"没送到"的原因说给人听）。
      */
+    /** 别台请这台配对（`POST /pair/request`）：记下来等人去设置面板点头；拒过的直接回 403。 */
+    private async handlePairRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (req.method !== "POST") {
+            this.sendText(req, res, 405, "只接受 POST。");
+            return;
+        }
+        const text = await readBody(req, MAX_REQUEST_BYTES);
+        if (text === undefined) {
+            this.sendText(req, res, 413, "请求内容过大。");
+            return;
+        }
+        let raw: unknown;
+        try {
+            raw = JSON.parse(text);
+        } catch {
+            this.sendText(req, res, 400, "请求内容不是合法的 JSON。");
+            return;
+        }
+        const body = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+        const address = typeof body.address === "string" ? body.address.trim() : "";
+        const name = typeof body.name === "string" ? body.name.trim().slice(0, 60) : "";
+        if (!address) {
+            this.sendJson(req, res, 400, { ok: false, reason: "要 address（你这台的地址）" });
+            return;
+        }
+        const result = this.host.receivePairRequest(address, name);
+        if (!result.ok) {
+            this.sendJson(req, res, 403, { ok: false, reason: result.reason ?? "不接受。" });
+            return;
+        }
+        res.writeHead(204, { "Cache-Control": "no-store" });
+        res.end();
+    }
+
+    /** 那台回了这台那下配对请求（`POST /pair/reply`）：接受 / 不接受 / 解除都走这条。 */
+    private async handlePairReply(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (req.method !== "POST") {
+            this.sendText(req, res, 405, "只接受 POST。");
+            return;
+        }
+        const text = await readBody(req, MAX_REQUEST_BYTES);
+        if (text === undefined) {
+            this.sendText(req, res, 413, "请求内容过大。");
+            return;
+        }
+        let raw: unknown;
+        try {
+            raw = JSON.parse(text);
+        } catch {
+            this.sendText(req, res, 400, "请求内容不是合法的 JSON。");
+            return;
+        }
+        const body = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+        const address = typeof body.address === "string" ? body.address.trim() : "";
+        if (!address) {
+            this.sendJson(req, res, 400, { ok: false, reason: "要 address（你这台的地址）" });
+            return;
+        }
+        this.host.receivePairReply(address, body.accepted === true);
+        res.writeHead(204, { "Cache-Control": "no-store" });
+        res.end();
+    }
+
     private async handleSessionReply(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (req.method !== "POST") {
             this.sendText(req, res, 405, "只接受 POST。");

@@ -24,7 +24,7 @@ import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase, type ViewOptionItem, type WorkspacePage, desktopAppPath } from "./chatControllerBase";
 import type { TurnEndInfo } from "./runtimeTypes";
 import { ServerStateStore } from "./serverState";
-import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
+import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig, type ServerPairing } from "./serverConfig";
 import { hostOfUrl, isOwnPage, pushRemoteNotice, pushSessionReply, type RemoteNotice } from "./remoteNotice";
 import { getAskAssets, getBashAssets, getEnvAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
@@ -40,7 +40,7 @@ import { listDirectories } from "./dirBrowse";
 import { findFileContents, findFileNames, findPathCandidates } from "./fileSearch";
 import { ChatBroadcaster } from "./chatBroadcaster";
 import { machineName } from "./pageHtml";
-import { MessageBuffer, PAGE_TRANSIENT_MESSAGE_TYPES } from "./webTransport";
+import { MessageBuffer, PAGE_TRANSIENT_MESSAGE_TYPES, normalizeOrigin } from "./webTransport";
 import { pickOverlayClient } from "./overlayTarget";
 import { ScreenRegistry } from "./screenRegistry";
 import { dirInsideAny, dirKey } from "./pathRules";
@@ -52,7 +52,6 @@ import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { DesktopLive } from "./desktopLive";
 import { describeRestart } from "./serverRestart";
-import { discoverTailscalePeers } from "./tailscalePeers";
 import type { SessionRuntime } from "./sessionRuntime";
 import { clipText } from "./messageUtils";
 import {
@@ -171,6 +170,16 @@ function remoteBaseUrls(peer: { address?: string; pageUrl?: string }): string[] 
  * 一个地址里的主机名（`http://100.73.1.2:51883/` → `100.73.1.2`）：
  * 同一个地址可能以不同名字出现（推送时叫「家里」、发现时叫主机名），靠它认出来是同一台。
  */
+/**
+ * 人填的配对地址 → `http://主机:端口`：没写 `http://` 补上，没写端口按出厂那个（51883）算，
+ * 末尾斜杠去掉。不像话的给 undefined（不试、不报错）。
+ */
+function pairOriginOf(raw: string): string | undefined {
+    const text = String(raw ?? "").trim();
+    if (!text) { return undefined; }
+    return normalizeOrigin(withDefaultPort(/^https?:\/\//i.test(text) ? text : "http://" + text));
+}
+
 function hostOfMaybe(url?: string): string {
     if (!url) { return ""; }
     try { return new URL(url).hostname; } catch { return ""; }
@@ -961,38 +970,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         this.remotePollTimer.unref?.();
     }
 
-    /** 发现那一路的定时器（见 startPeerDiscovery）。 */
-    private peerDiscoveryTimer?: ReturnType<typeof setInterval>;
-    private static readonly PEER_DISCOVERY_MS = 30000;
-
-    /**
-     * 起「找同一 tailnet 里的其它 Pi Chat」这一路（见 tailscalePeers）：
-     * 找到的机器接进 remotePeers，之后跟推送学到的地址一样定时去拉它的会话列表。
-     * 没装 tailscale / 不在 tailnet 里时它什么都不做，也不报错。
-     */
-    public startPeerDiscovery(): void {
-        if (this.peerDiscoveryTimer || this.disposed) { return; }
-        const tick = async (): Promise<void> => {
-            if (this.disposed) { return; }
-            let peers;
-            try { peers = await discoverTailscalePeers(); } catch { return; }
-            let added = false;
-            for (const peer of peers) {
-                if (!this.remotePeers.has(peer.label)) { added = true; }
-                this.rememberPeer(peer.label, peer.address, peer.pageUrl);
-            }
-            if (added) {
-                this.log(`[发现] 同一 tailnet 里还有 ${peers.length} 台 Pi Chat：${peers.map((peer) => peer.label).join("、")}`);
-                void this.pollRemotePeers();
-            }
-        };
-        this.peerDiscoveryTimer = setInterval(() => { void tick(); }, ChatHost.PEER_DISCOVERY_MS);
-        this.peerDiscoveryTimer.unref?.();
-        // 起来以后先找一遍，别让人干等半分钟
-        const first = setTimeout(() => { void tick(); }, 2000);
-        first.unref?.();
-    }
-
     /** 挨台去拉一次：拉到了就把那台的会话换成本次的，拉不到就留住上一次的。 */
     private async pollRemotePeers(): Promise<void> {
         if (this.disposed || this.remotePeers.size === 0) { return; }
@@ -1497,6 +1474,166 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
     protected notifyTurnEndEnabled(): boolean { return this.getNotifyTurnEnd(); }
 
+    // ========================================================================
+    //  跨机器配对（设置面板里填地址发起，对方点接受）
+    // ========================================================================
+
+    /** 设置面板里「配对情况」那一块的几行（已配对、等我答的）。 */
+    protected override pairRows(): Array<{ address: string; name: string; incoming: boolean; confirmed: boolean }> {
+        return readServerConfig().config.pairs.peers.map((peer) => ({
+            address: peer.address,
+            name: peer.name,
+            incoming: peer.incoming,
+            confirmed: peer.confirmed,
+        }));
+    }
+
+    /** 这台在配对里叫什么（设置里那个「推送标签」，没写就用地址里的主机名）。 */
+    private pairSelfName(): string {
+        const label = readServerConfig().config.notify.pushLabel;
+        if (label) { return label; }
+        return hostOfUrl(this.options.selfPageUrl?.() ?? "") || "Pi Chat";
+    }
+
+    /** 写一条配对（同一个地址覆盖旧的）；confirmed 的顺手接进拉取列表。 */
+    private savePair(entry: ServerPairing): void {
+        const peers = readServerConfig().config.pairs.peers.filter((peer) => peer.address !== entry.address);
+        peers.push(entry);
+        updateServerConfig({ pairs: { peers } });
+        if (entry.confirmed) {
+            this.forgetRejected(entry.address);
+            this.rememberPeer(entry.name, undefined, entry.address);
+            void this.pollRemotePeers();
+        }
+    }
+
+    /** 删一条配对（连它列出来的那些会话一起拿掉）；顺手把它从「拒绝过」的名单里擦掉。 */
+    private dropPair(address: string, rejected: boolean): void {
+        const cfg = readServerConfig().config.pairs;
+        const peers = cfg.peers.filter((peer) => peer.address !== address);
+        const rejectedList = cfg.rejected.filter((item) => item !== address);
+        updateServerConfig({ pairs: { peers, rejected: rejected ? [...rejectedList, address] : rejectedList } });
+        for (const [label, peer] of [...this.remotePeers]) {
+            if (peer.pageUrl?.replace(/\/+$/, "") !== address) { continue; }
+            this.remotePeers.delete(label);
+            this.dropRemoteSessions(label);
+        }
+    }
+
+    private forgetRejected(address: string): void {
+        const cfg = readServerConfig().config.pairs;
+        if (!cfg.rejected.includes(address)) { return; }
+        updateServerConfig({ pairs: { rejected: cfg.rejected.filter((item) => item !== address) } });
+    }
+
+    /**
+     * 设置面板里填了个地址、要跟那台配对：先记下“我在等它答”，再请它点头（`POST /pair/request`）。
+     * 它连不上也照记 —— 人家可能只是暂时不在，设置面板里能删。
+     */
+    public pairInvite(raw: string): { ok: boolean; reason?: string } {
+        const address = pairOriginOf(raw);
+        if (!address) { return { ok: false, reason: "地址写得不对（要像 100.93.255.114 或 100.93.255.114:51883 这样）" }; }
+        const self = this.options.selfPageUrl?.()?.replace(/\/+$/, "");
+        if (!self) { return { ok: false, reason: "这台还没有网页服务地址，没法配对" }; }
+        if (isOwnPage(address, self)) { return { ok: false, reason: "这是这台自己" }; }
+        this.savePair({ address, name: hostOfUrl(address) || address, confirmed: false, incoming: false });
+        void this.sendPairRequest(address, self, this.pairSelfName());
+        return { ok: true };
+    }
+
+    /** 设置面板里点「接受」：两边算配上了，它以后就能被拉进列表。 */
+    public acceptPair(address: string): void {
+        const peer = readServerConfig().config.pairs.peers.find((item) => item.address === address);
+        const name = peer?.name || hostOfUrl(address) || address;
+        this.savePair({ address, name, confirmed: true, incoming: false });
+        this.log(`[配对] 跟「${name}」配上了：它开着的会话会出现在列表里。`);
+        void this.sendPairReply(address, true, this.pairSelfName());
+    }
+
+    /** 设置面板里点「不接受」：记下来，它再来求也不弹。 */
+    public rejectPair(address: string): void {
+        this.dropPair(address, true);
+        this.log(`[配对] 不接受「${address}」：它开着的会话不会出现在列表里。`);
+        void this.sendPairReply(address, false, this.pairSelfName());
+    }
+
+    /** 解除已经配上的那台（在它那也一并说一声）。 */
+    public removePair(address: string): void {
+        this.dropPair(address, false);
+        this.log(`[配对] 跟「${address}」解除了，不再列它的会话。`);
+        void this.sendPairReply(address, false, this.pairSelfName());
+    }
+
+    /** 别台发来配对请求（`POST /pair/request`）：记下来等人点头；拒过的直接回绝。 */
+    public receivePairRequest(address: string, name: string): { ok: boolean; reason?: string } {
+        const origin = pairOriginOf(address);
+        if (!origin) { return { ok: false, reason: "少了地址" }; }
+        if (readServerConfig().config.pairs.rejected.includes(origin)) {
+            return { ok: false, reason: "这台不接受跟你的配对" };
+        }
+        const existing = readServerConfig().config.pairs.peers.find((item) => item.address === origin);
+        if (existing?.confirmed) { return { ok: true }; }
+        this.savePair({ address: origin, name: name || hostOfUrl(origin) || origin, confirmed: false, incoming: true });
+        this.log(`[配对] 「${name || origin}」想跟你配对：去设置面板里点接受或拒绝。`);
+        this.pushPhoneSessionsSoon();
+        return { ok: true };
+    }
+
+    /** 别台回了那一下（`POST /pair/reply`）：接受了就配上，拒绝了就把这条拿掉。 */
+    public receivePairReply(address: string, accepted: boolean): void {
+        const origin = pairOriginOf(address);
+        if (!origin) { return; }
+        if (accepted) {
+            const peer = readServerConfig().config.pairs.peers.find((item) => item.address === origin);
+            this.savePair({ address: origin, name: peer?.name || hostOfUrl(origin) || origin, confirmed: true, incoming: false });
+            this.log(`[配对] 「${origin}」接受了：它开着的会话会出现在列表里。`);
+            return;
+        }
+        this.dropPair(origin, false);
+        this.log(`[配对] 「${origin}」那边不配对了，这条拿掉了。`);
+    }
+
+    /** 起来时把已经配上的那几台接上（重启后列表还在）。 */
+    public loadPairs(): void {
+        for (const peer of readServerConfig().config.pairs.peers) {
+            if (!peer.confirmed) { continue; }
+            this.rememberPeer(peer.name, undefined, peer.address);
+        }
+        // 立刻拉一遍，别看一屏空等到下一轮
+        if (this.remotePeers.size > 0) { void this.pollRemotePeers(); }
+    }
+
+    /** 请那台点头（机器对机器，跟 /notify 一个规矩：没口令，只在信得过的网络里用）。 */
+    private async sendPairRequest(address: string, self: string, name: string): Promise<void> {
+        try {
+            const res = await fetch(address + "/pair/request", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ address: self, name }),
+                signal: AbortSignal.timeout(5000),
+            });
+            if (res.ok) {
+                this.log(`[配对] 已经请「${address}」点头：它接受之后，它开着的会话就会出现在列表里。`);
+                return;
+            }
+            this.log(`[配对] 「${address}」没接这个请求（${res.status}）`);
+        } catch {
+            this.log(`[配对] 连不上「${address}」：这台机器在不在、地址对不对、端口是不是 51883？`);
+        }
+    }
+
+    /** 把结果回给对方（接受 / 不接受 / 解除都用它）。 */
+    private async sendPairReply(address: string, accepted: boolean, name: string): Promise<void> {
+        try {
+            await fetch(address + "/pair/reply", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ address: this.options.selfPageUrl?.()?.replace(/\/+$/, "") ?? "", accepted, name }),
+                signal: AbortSignal.timeout(5000),
+            });
+        } catch { /* 对方不在也就算了：下次配对时会重来 */ }
+    }
+
     /**
      * 对话界面的深浅配色。
      * 默认浅色（就是网页端现在的白底那套取值）；深色按 VSCode 深色主题的取值写死，
@@ -1591,6 +1728,19 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             updateServerConfig({ notify: { pushTo: urls } });
         } else if (action === "notifyPushLabel") {
             updateServerConfig({ notify: { pushLabel: String(value ?? "").trim() } });
+        } else if (action === "pairInvite") {
+            // 填了一下地址就请人家点头（填空什么都不做：面板上那行永远是空的，靠它“提交”）
+            const text = String(value ?? "").trim();
+            if (text) {
+                const result = this.pairInvite(text);
+                this.log(result.ok ? `[配对] 已经请「${text}」点头。` : `[配对] 没发出去：${result.reason ?? "不知道什么原因"}`);
+            }
+        } else if (action === "pairAccept") {
+            if (value) { this.acceptPair(value); }
+        } else if (action === "pairReject") {
+            if (value) { this.rejectPair(value); }
+        } else if (action === "pairRemove") {
+            if (value) { this.removePair(value); }
         } else if (action === "theme") {
             const next = value === "dark" || value === "light"
                 ? value
@@ -2351,7 +2501,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         if (this.disposed) { return; }
         this.disposed = true;
         if (this.remotePollTimer) { clearInterval(this.remotePollTimer); this.remotePollTimer = undefined; }
-        if (this.peerDiscoveryTimer) { clearInterval(this.peerDiscoveryTimer); this.peerDiscoveryTimer = undefined; }
         this.desktopLive.stop();
         this.disposeAllPickers();
         this.disposeAllCards();

@@ -58,6 +58,31 @@ export interface ServerNotifySettings {
     pushLabel: string;
 }
 
+/**
+ * 配对上的一台机器（见 src/chatHost.ts 的 pairInvite / acceptPair）。
+ *
+ * 两边都点头了（confirmed）才互相列表、才能互相发话；只点头一边的不算 ——
+ * 我发出去还没被接受的、别人求我我还没答的，都是 confirmed=false。
+ */
+export interface ServerPairing {
+    /** 对方网页服务的地址（`http://100.x:51883`，不带末尾斜杠）。 */
+    address: string;
+    /** 它叫什么（它设置里的「推送标签」，没写就是地址里的主机名）。 */
+    name: string;
+    /** 两边都点头了没有。 */
+    confirmed: boolean;
+    /** 这条是不是别人求我的（我还没答）。 */
+    incoming: boolean;
+}
+
+/** 跨机器配对（config.json 的 pairs 一节）。 */
+export interface ServerPairSettings {
+    /** 配过的那些台：只有 confirmed 的进列表（见 chatHost 的 phoneSessions）。 */
+    peers: ServerPairing[];
+    /** 明确拒绝过的地址：它们再来求也不弹（人不想要的就是不想要）。 */
+    rejected: string[];
+}
+
 export interface ServerConfig {
     provider: string;
     model: string;
@@ -75,6 +100,7 @@ export interface ServerConfig {
      */
     prompts: Record<string, string>;
     notify: ServerNotifySettings;
+    pairs: ServerPairSettings;
     webServer: ServerWebSettings;
 }
 
@@ -97,6 +123,8 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = deepFreeze({
     prompts: {},
     // 跨机器的“有事”提醒默认不推（收到就收，不用写什么）
     notify: { pushTo: [], pushLabel: "" },
+    // 跨机器配对默认一台也没有：得人自己填地址发起（见设置面板的「配对」）
+    pairs: { peers: [], rejected: [] },
     // 默认对所有网卡开放（手机等设备打开地址就能用）；只给自己用就改 127.0.0.1，或启动时加 --host 127.0.0.1
     webServer: { port: 51883, host: "0.0.0.0", trustedOrigins: [] },
 });
@@ -118,6 +146,7 @@ function defaults(): ServerConfig {
         ...DEFAULT_SERVER_CONFIG,
         prompts: {},
         notify: { ...DEFAULT_SERVER_CONFIG.notify, pushTo: [] },
+        pairs: { ...DEFAULT_SERVER_CONFIG.pairs, peers: [], rejected: [] },
         webServer: { ...DEFAULT_SERVER_CONFIG.webServer, trustedOrigins: [] },
     };
 }
@@ -258,6 +287,42 @@ function pickText(value: unknown, label: string, warnings: string[]): string {
         return "";
     }
     return value.trim();
+}
+
+/**
+ * 一组配对（pairs.peers）：地址合法的才收，同一个地址只留一条（后来的覆盖先来的）。
+ */
+function pickPairList(value: unknown, label: string, warnings: string[]): ServerPairing[] {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) {
+        warnings.push(`${label} 不是数组，已当成空列表`);
+        return [];
+    }
+    const kept: ServerPairing[] = [];
+    let bad = 0;
+    for (const item of value) {
+        if (!isPlainObject(item)) { bad += 1; continue; }
+        const address = typeof item.address === "string" ? normalizeOrigin(item.address) : undefined;
+        if (!address) { bad += 1; continue; }
+        const name = typeof item.name === "string" ? item.name.trim().slice(0, 60) : "";
+        const entry: ServerPairing = {
+            address,
+            name: name || hostOf(address),
+            confirmed: item.confirmed === true,
+            incoming: item.incoming === true,
+        };
+        const at = kept.findIndex((one) => one.address === address);
+        if (at >= 0) { kept[at] = entry; } else { kept.push(entry); }
+    }
+    if (bad > 0) {
+        warnings.push(`${label} 里有 ${bad} 项不是配对（要有 address），已丢掉`);
+    }
+    return kept;
+}
+
+/** 一个地址里的主机名（`http://100.1.2.3:51883` → `100.1.2.3`）：没写名字的时候拿它当名字。 */
+function hostOf(origin: string): string {
+    try { return new URL(origin).hostname; } catch { return origin; }
 }
 
 /**
@@ -405,6 +470,22 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
             const unknownNotifyKeys = Object.keys(notify).filter((key) => !knownNotifyKeys.has(key));
             if (unknownNotifyKeys.length > 0) {
                 warnings.push(`配置里有不认识的项：notify.${unknownNotifyKeys.join("、notify.")}`);
+            }
+        }
+    }
+
+    // ---- 跨机器配对（config.json 的 pairs 一节）----
+    const pairs = raw.pairs;
+    if (pairs !== undefined) {
+        if (!isPlainObject(pairs)) {
+            warnings.push("pairs 不是一个对象，已全部用默认值");
+        } else {
+            config.pairs.peers = pickPairList(pairs.peers, "pairs.peers", warnings);
+            config.pairs.rejected = pickUrlList(pairs.rejected, "pairs.rejected", warnings);
+            const knownPairKeys = new Set(Object.keys(DEFAULT_SERVER_CONFIG.pairs));
+            const unknownPairKeys = Object.keys(pairs).filter((key) => !knownPairKeys.has(key));
+            if (unknownPairKeys.length > 0) {
+                warnings.push(`配置里有不认识的项：pairs.${unknownPairKeys.join("、pairs.")}`);
             }
         }
     }

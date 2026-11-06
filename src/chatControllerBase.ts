@@ -103,6 +103,11 @@ export interface ViewOptionItem {
     kind?: string;
     /** 填字那一行（kind: "text"）里那句灰字提示。 */
     placeholder?: string;
+    /**
+     * 一组行（kind: "pairs"）：配对面板用。
+     * 每行一个地址 + 名字 + 现在什么状态（incoming：它求我点头；confirmed：两边配上了）。
+     */
+    items?: Array<{ address: string; name: string; incoming?: boolean; confirmed?: boolean }>;
     min?: number;
     max?: number;
     step?: number;
@@ -365,6 +370,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 设置面板里「推送标签」那一行现在填着什么（空 = 用主机名）。 */
     protected notifyPushLabel(): string { return ""; }
     /**
+     * 设置面板里「配对」那一块现在是什么情况：已经配上的、等我点头的（见 chatHost 的 pairRows）。
+     * 默认一台也没有（插件那边没有跨机器这回事）。
+     */
+    protected pairRows(): Array<{ address: string; name: string; incoming: boolean; confirmed: boolean }> {
+        return [];
+    }
+    /**
      * 设置面板里「消息推送」那一行空着时显示的例子：一般就是这台机器自己的地址，
      * 人照着它改成别的机器的地址即可（填成本机等于自己推自己，清单里会多一行重复的）。
      */
@@ -549,6 +561,30 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 kind: "text",
                 placeholder: "家里那台",
                 value: this.notifyPushLabel(),
+            },
+            {
+                action: "pairInvite",
+                label: "配对",
+                desc: "填对方的地址（IP，或者 IP:端口），回车：对方在设置里点「接受」之后，两边就互相看得到对方开着的会话",
+                section: "配对",
+                check: null,
+                kind: "text",
+                placeholder: "100.93.255.114",
+                value: "",
+            },
+            {
+                action: "pairList",
+                label: "配对情况",
+                desc: "",
+                section: "配对",
+                check: null,
+                kind: "pairs",
+                items: this.pairRows().map((row) => ({
+                    address: row.address,
+                    name: row.name,
+                    incoming: row.incoming,
+                    confirmed: row.confirmed,
+                })),
             },
         ];
     }

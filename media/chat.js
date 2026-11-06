@@ -13018,6 +13018,7 @@
     if (it.kind === "number") { renderNumberRow(row, it); return row; }
     if (it.kind === "button") { renderButtonRow(row, it); return row; }
     if (it.kind === "text") { renderTextRow(row, it); return row; }
+    if (it.kind === "pairs") { renderPairsRow(row, it); return row; }
     if (Array.isArray(it.options) && it.options.length) {
       // 按钮组：直接点选某个选项
       row.classList.add("vo-item-group");
@@ -13082,6 +13083,62 @@
    * 填字那一行（地址、名字这种）：说明在上面，框占满下面一行。
    * 填完（回车 / 点别处）才发出去；Esc 是反悔，恢复成原来的值。
    */
+  /**
+   * 配对那一块（kind: "pairs"）：一行一台，写着名字（地址）跟现在什么情况，
+   * 右边是那颗该点的按钮 —— 别人求我点头的就是「接受 / 不接受」，已经配上的就是「解除」。
+   */
+  function renderPairsRow(row, it) {
+    row.classList.add("vo-item-pairs");
+    const txt = document.createElement("div"); txt.className = "vo-text";
+    const label = document.createElement("div"); label.className = "vo-label"; label.textContent = it.label || "";
+    txt.appendChild(label);
+    row.appendChild(txt);
+
+    const items = Array.isArray(it.items) ? it.items : [];
+    if (!items.length) {
+      const empty = document.createElement("div"); empty.className = "vo-desc";
+      empty.textContent = "还没有配对的机器。在上面那行填对方的地址（回车）就能请它点头。";
+      txt.appendChild(empty);
+      return row;
+    }
+
+    const list = document.createElement("div"); list.className = "pair-list";
+    items.forEach((item) => {
+      const line = document.createElement("div"); line.className = "pair-line";
+      const who = document.createElement("div"); who.className = "pair-who";
+      const name = document.createElement("div"); name.className = "pair-name";
+      name.textContent = item.name || item.address || "";
+      who.appendChild(name);
+      const meta = document.createElement("div"); meta.className = "pair-meta";
+      const state = item.confirmed ? "已配对" : (item.incoming ? "想跟你配对" : "等它点头");
+      meta.textContent = state + (item.address && item.address !== item.name ? " · " + item.address : "");
+      who.appendChild(meta);
+      line.appendChild(who);
+
+      const acts = document.createElement("div"); acts.className = "pair-acts";
+      const addBtn = (text, action) => {
+        const b = document.createElement("button"); b.type = "button"; b.className = "vo-btn";
+        b.textContent = text;
+        b.addEventListener("click", () => {
+          vscode.postMessage({ type: "pickerToggle", kind: "options", action, value: item.address });
+        });
+        acts.appendChild(b);
+      };
+      if (item.incoming && !item.confirmed) {
+        addBtn("接受", "pairAccept");
+        addBtn("不接受", "pairReject");
+      } else if (item.confirmed) {
+        addBtn("解除", "pairRemove");
+      } else {
+        addBtn("取消", "pairRemove");
+      }
+      line.appendChild(acts);
+      list.appendChild(line);
+    });
+    txt.appendChild(list);
+    return row;
+  }
+
   function renderTextRow(row, it) {
     row.classList.add("vo-item-text");
     const txt = document.createElement("div"); txt.className = "vo-text";

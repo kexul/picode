@@ -1243,6 +1243,15 @@
   /* 「重启后端」那一行：说明占满左边，右边一颗按钮（点完整行没有悬停底色：它不是开关） */
   .vo-item-button { align-items: center; cursor: default; }
   .vo-item-button:hover { background: transparent; }
+  /* 配对那一块：一行一台，左边名字与状态，右边接受 / 不接受 / 解除 */
+  .vo-item-pairs { flex-direction: column; align-items: stretch; gap: 6px; cursor: default; }
+  .vo-item-pairs:hover { background: transparent; }
+  .pair-list { display: flex; flex-direction: column; gap: 6px; }
+  .pair-line { display: flex; align-items: center; gap: 8px; }
+  .pair-who { flex: 1 1 auto; min-width: 0; }
+  .pair-name { font-size: 12px; }
+  .pair-meta { font-size: 11px; opacity: .65; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pair-acts { display: flex; flex: none; gap: 6px; }
   .vo-btn {
     flex-shrink: 0;
     background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.25));
