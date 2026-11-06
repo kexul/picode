@@ -174,23 +174,27 @@ public class SessionActivity extends Activity {
         notesKey = freshKey;
         int keep = scroller.getScrollY();
         messages.removeAllViews();
-        if (list.isEmpty()) {
-            TextView hint = new TextView(this);
-            hint.setText("这里还没有事。等后端推一条过来就有了。");
-            hint.setTextSize(14);
-            hint.setTextColor(0xFF8A8A8A);
-            hint.setPadding(0, dp(16), 0, 0);
-            messages.addView(hint);
-        }
         for (Store.Note note : list) {
             messages.addView(bubble(note));
         }
         // 「这一轮」摆在最后（跟聊天一样，最新的在最底下）：正在跑的时候能看它说到哪儿了；
-        // 跑完就收起来 —— 那时这一轮的原话已经作为一条「有事」推过来了，不必摆两份。
+        // 一条「有事」都还没有的时候也摆它 —— 那是刚重启过后端 / 刚才才连上，
+        // 「有事」早就没了，而进来时拉回来的那条最后回复还在（见 fetchDetail），
+        // 不摆的话人就只能对着一屏空白等下一次推送。
+        // 跑完了、也已经收到过「有事」的话不摆：那一轮的原话就是最后那条，不必两份。
         View live = null;
-        if (now != null && now.running) {
+        if (now != null && (now.running || list.isEmpty())) {
             live = liveCard(now);
             if (live != null) { messages.addView(live); }
+        }
+        // 这个会话连“有这一行”都还轮不上（列表里点进来的那条已经没了）：至少说一声
+        if (list.isEmpty() && now == null) {
+            TextView hint = new TextView(this);
+            hint.setText("这个会话还没有消息。");
+            hint.setTextSize(14);
+            hint.setTextColor(0xFF8A8A8A);
+            hint.setPadding(0, dp(16), 0, 0);
+            messages.addView(hint);
         }
         final View liveView = live;
         scroller.post(() -> {

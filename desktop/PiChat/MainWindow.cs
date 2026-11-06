@@ -805,25 +805,16 @@ internal sealed class MainWindow : Window
         _sendButton.ToolTip = _inputBox.ToolTip;
         SetHint("回车发送", false);
 
-        if (state.Notes.Count == 0)
-        {
-            _messages.Children.Add(new TextBlock
-            {
-                Text = "这个会话还没有消息。",
-                FontSize = 12,
-                Foreground = Gray,
-                Margin = new Thickness(2, 6, 0, 0),
-            });
-            return;
-        }
-
         foreach (var note in state.Notes)
         {
             _messages.Children.Add(MakeBubble(state, note));
         }
 
         // 「这一轮」摆在最后（跟聊天一样，最新的在最底下）：正在跑的时候能看它说到哪儿了；
-        // 跑完就收起来 —— 那时这一轮的原话已经作为一条「有事」推过来了，不必摆两份。
+        // 一条「有事」都还没有的时候也摆它 —— 那是刚重启过后端 / 这台才刚连上来，
+        // 「有事」早就没了，而拉回来的那条最后回复还在（见 LoadFullSessionAsync），
+        // 不摆的话人就只能对着一屏空白等下一次推送。
+        // 跑完了、也已经收到过「有事」的话不摆：那一轮的原话就是最后那条，不必两份。
         if (state.Info.Running || state.Notes.Count == 0)
         {
             var live = MakeLiveCard(state);
