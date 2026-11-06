@@ -172,6 +172,8 @@ public class SessionActivity extends Activity {
         String freshKey = list.size() + "|" + lastSeq;
         boolean fresh = !freshKey.equals(notesKey);
         notesKey = freshKey;
+        // 重画之前先看人是不是贴着底：贴着才跟着新内容走，翻在上面看旧的就一眼也不动他
+        boolean follow = atBottom();
         int keep = scroller.getScrollY();
         messages.removeAllViews();
         for (Store.Note note : list) {
@@ -198,12 +200,22 @@ public class SessionActivity extends Activity {
         }
         final View liveView = live;
         scroller.post(() -> {
-            if (!fresh) { scroller.scrollTo(0, keep); return; }
-            // 来了新的：滚到「这一轮」那张卡的开头（这样「正在跑…」那一行也看得到），
-            // 没有卡片就照旧滚到最底下
-            if (liveView != null) { scroller.scrollTo(0, liveView.getTop()); }
-            else { scroller.fullScroll(View.FOCUS_DOWN); }
+            // 来了新的、人又贴着底：滚到「这一轮」那张卡的开头（这样「正在跑…」那一行也看得到），
+            // 没有卡片就照旧滚到最底下。
+            if (fresh && follow) {
+                if (liveView != null) { scroller.scrollTo(0, liveView.getTop()); }
+                else { scroller.fullScroll(View.FOCUS_DOWN); }
+                return;
+            }
+            // 没来新的、或者人正翻在上面看旧的：还他原来的位置，别拽他
+            scroller.scrollTo(0, keep);
         });
+    }
+
+    /** 人是不是已经贴着底了（24 dp 的宽限）：贴着才跟着新内容走，翻在上面看旧的不算。 */
+    private boolean atBottom() {
+        if (scroller == null) { return true; }
+        return scroller.getScrollY() + scroller.getHeight() >= messages.getHeight() - dp(24);
     }
 
     /** 「这一轮」那张卡：正在跑就在这儿看它说到哪儿了。 */

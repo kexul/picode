@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using IOPath = System.IO.Path;
 using System.Windows;
@@ -27,6 +28,10 @@ internal sealed class MainWindow : Window
     private TextBlock _placeholder = null!;
     private StackPanel _sessionList = null!;
     private StackPanel _messages = null!;
+    /** 这一遍要不要直接跳到最底下（换会话、刚连上这种）：平时的重画都看人贴在哪儿。 */
+    private bool _jumpToBottom = true;
+    /** 上一遍画的是哪一份（见 ContentKey）：一模一样就别重画，人正看着的地方也就不会被拽走。 */
+    private string _renderedKey = "";
     private ScrollViewer _messageScroll = null!;
     private TextBox _inputBox = null!;
     private Button _sendButton = null!;
@@ -713,6 +718,7 @@ internal sealed class MainWindow : Window
     {
         if (_selectedId == id) { return; }
         _selectedId = id;
+        _jumpToBottom = true;
         _config.LastSessionId = id;
         Config.Save(_config);
         RebuildSessionList();
@@ -754,13 +760,13 @@ internal sealed class MainWindow : Window
 
     private void RenderSession()
     {
-        _messages.Children.Clear();
-
         SessionState? state = null;
         if (_selectedId != null) { _sessions.TryGetValue(_selectedId, out state); }
 
         if (state == null)
         {
+            _messages.Children.Clear();
+            _renderedKey = "";
             _inputBox.IsEnabled = false;
             _sendButton.IsEnabled = false;
             _inputBox.Clear();
@@ -769,6 +775,19 @@ internal sealed class MainWindow : Window
             SetHint("先挑一个会话", false);
             return;
         }
+
+        // 4 秒一次拉回来的多半一模一样：那就一个字也别重画，人正看着的地方一点都不会动
+        var key = ContentKey(state);
+        if (key == _renderedKey) { return; }
+        _renderedKey = key;
+
+        // 重画之前先记下人正看在哪儿：贴着底才跟着新内容往下走，翻在上面看旧的就别拽他
+        // （换会话那一遍不算：新会话当然从头看，见 SelectSession）。
+        var follow = _jumpToBottom || IsNearBottom();
+        _jumpToBottom = false;
+        var keep = _messageScroll.VerticalOffset;
+
+        _messages.Children.Clear();
 
         var canReply = true;
         _inputBox.IsEnabled = canReply;
@@ -787,16 +806,47 @@ internal sealed class MainWindow : Window
         // 「有事」早就没了，而拉回来的那条最后回复还在（见 LoadFullSessionAsync），
         // 不摆的话人就只能对着一屏空白等下一次推送。
         // 跑完了、也已经收到过「有事」的话不摆：那一轮的原话就是最后那条，不必两份。
+        FrameworkElement? live = null;
         if (state.Info.Running || state.Notes.Count == 0)
         {
-            var live = MakeLiveCard(state);
+            live = MakeLiveCard(state);
             _messages.Children.Add(live);
-            // 滚到卡片开头（这样「正在跑…」那一行也看得到），而不是一路到底
-            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => live.BringIntoView()));
-            return;
         }
 
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => _messageScroll.ScrollToEnd()));
+        var card = live;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            // 人没在跟着：原样放回他刚才看的地方（新内容都加在底下，翻在上面的那一段不动）
+            if (!follow) { _messageScroll.ScrollToVerticalOffset(keep); return; }
+            // 滚到「这一轮」那张卡的开头（这样「正在跑…」那一行也看得到），而不是一路到底
+            if (card != null) { card.BringIntoView(); } else { _messageScroll.ScrollToEnd(); }
+        }));
+    }
+
+    /// <summary>人是不是已经贴着底了（24 像素的宽限）：贴着才跟着新内容走，翻在上面看旧的不算。</summary>
+    private bool IsNearBottom() =>
+        _messageScroll.VerticalOffset + _messageScroll.ViewportHeight >= _messageScroll.ExtentHeight - 24;
+
+    /// <summary>
+    /// 这个会话现在这一份看着是什么样：会话、消息、答过的题、「这一轮」那张卡片都在里面。
+    /// 跟上一遍一样就不用重画（见 RenderSession）。
+    /// </summary>
+    private string ContentKey(SessionState state)
+    {
+        var key = new StringBuilder();
+        key.Append(state.Info.Id).Append('|').Append(state.Info.Running ? '1' : '0')
+            .Append('|').Append(state.Info.Activity).Append('|').Append(state.Info.ActivityDetail);
+        foreach (var note in state.Notes)
+        {
+            key.Append('|').Append(note.Seq).Append(note.Settled ? "s" : "");
+            if (note.Ask != null)
+            {
+                key.Append(_answers.TryGetValue(note.Ask.CardId, out var answer) ? answer : "?");
+            }
+        }
+        var reply = _lastReply;
+        key.Append("|r").Append(reply?.Text?.Length ?? 0);
+        return key.ToString();
     }
 
     private FrameworkElement MakeBubble(SessionState state, Note note)
