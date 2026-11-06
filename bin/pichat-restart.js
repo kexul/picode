@@ -9,12 +9,15 @@
  *   1. 等老后端退干净（它收到重启请求后会停网页服务、杀掉所有 pi 进程）；
  *      15 秒还没退就直接杀掉（那种情况下它自己那几个 pi 进程可能留在那儿）。
  *   2. 拉最新代码（git pull --ff-only）；拉不到就拿现在的代码接着编，日志里记一笔。
- *   3. 在仓库里编译：`npm run build` + `npm i -g .`（装全局 pichat 命令）。
+ *   3. 在仓库里编译后端：`npm run build` + `npm i -g .`（装全局 pichat 命令）。
  *      成功才起后端；失败就停在这儿（后端不再起来，修好后再手工起一次）。
- *   4. 照老后端当初的命令行把后端起回来：同一个端口、同一个会话目录 —— 页面在原来的
+ *   4. 桌面那个小窗口先关掉再编：它开着的时候 PiChat.exe 被占着，dotnet build 复制不进去
+ *      （MSB3027）。这一步放在起后端之前 —— 后端一起来就会去开这个 exe，得让它开的是刚编出来的
+ *      那个。编不过只记日志（多半是没装 .NET SDK），后端照常起来。
+ *   5. 照老后端当初的命令行把后端起回来：同一个端口、同一个会话目录 —— 页面在原来的
  *      地址上一连就回来了。新后端放后台跑。
- *   5. 顺手把桌面那个小窗口与安卓 app 也编了（有源码、有工具才编；编不过只记日志，
- *      不影响已经跑着的后端）。
+ *   6. 刚才那个小窗口是开着窗口的，就把它叫成开着窗口的样子（后端叫起来的那份只出托盘图标）。
+ *   7. 顺手把安卓 app 也编了（有源码、有工具才编；编不过只记日志，不影响已经跑着的后端）。
  *
  * 编译输出与新后端的日志都追加到计划里的 logFile（默认 ~/.pi/pichat/restart.log）：
  * 重启之后原来那个终端就看不到什么了，出问题只能看这份日志。
@@ -165,31 +168,110 @@ function startBackend(plan, logFd) {
     return child;
 }
 
-/**
- * 顺手把桌面那个小窗口和安卓 app 也编了。
- *
- * 这两样不是后端的一部分：编不过只在日志里记一笔，后端照常起来（跟 build.bat 那边一个规矩：
- * 缺工具 / 缺 SDK 都是跳过，不是失败）。没装 .NET SDK、没装 JDK、没配 Android SDK 都会走到这里。
- */
-async function buildClients(plan, logFd) {
-    // 桌面小窗口：WPF，只有 Windows 有
-    const desktopProject = path.join(plan.repoDir, "desktop", "PiChat", "PiChat.csproj");
-    if (process.platform === "win32" && fs.existsSync(desktopProject)) {
-        const code = await run(`dotnet build -c Release "${desktopProject}"`, plan.repoDir, logFd, CLIENT_BUILD_TIMEOUT_MS);
-        write(logFd, code === 0
-            ? "桌面小窗口编好了（desktop/PiChat/bin/Release/net8.0-windows/PiChat.exe）。"
-            : "桌面小窗口没编过（不影响后端；多半是没装 .NET 8 SDK）。");
-    }
+/** 桌面那个小窗口编出来的那个 exe 在哪儿。 */
+function desktopExePath(plan) {
+    return path.join(plan.repoDir, "desktop", "PiChat", "bin", "Release", "net8.0-windows", "PiChat.exe");
+}
 
-    // 安卓 app：跟着仓库里那个 Gradle 工程编（要 JDK 17+ 和 Android SDK）
+/**
+ * 按可执行文件的完整路径找正在跑的进程（Windows 上，问一下 PowerShell）。
+ *
+ * 认路径而不是只认名字：这台机器上别的目录里那个 PiChat.exe 不该被牵连。
+ * 找不到、问不出来都当「没在跑」。
+ */
+function findRunningByPath(exe) {
+    const name = path.basename(exe).replace(/\.exe$/i, "").replace(/'/g, "''");
+    const full = exe.replace(/'/g, "''");
+    const script = `Get-Process -Name '${name}' -ErrorAction SilentlyContinue `
+        + `| Where-Object { $_.Path -eq '${full}' } | ForEach-Object { $_.Id }`;
+    let result;
+    try {
+        result = cp.spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], {
+            windowsHide: true,
+            encoding: "utf8",
+            timeout: 20000,
+        });
+    } catch {
+        return [];
+    }
+    if (!result || !result.stdout) { return []; }
+    return result.stdout.split(/\r?\n/)
+        .map((line) => Number(line.trim()))
+        .filter((pid) => Number.isInteger(pid) && pid > 0);
+}
+
+/**
+ * 桌面那个小窗口要是开着，先关掉（返回它是不是真关掉了）。
+ *
+ * 不关的话它的 exe 一直被人占着，dotnet build 复制不进去（MSB3027，重试十次然后失败），
+ * 而且旧窗口本来也该换成新编的那个。关的是这个仓库里编出来的那一个，别处的不动。
+ */
+async function stopDesktopApp(plan, logFd) {
+    const exe = desktopExePath(plan);
+    if (process.platform !== "win32" || !fs.existsSync(exe)) { return false; }
+    const pids = findRunningByPath(exe);
+    if (pids.length === 0) { return false; }
+    write(logFd, `桌面那个小窗口开着（进程 ${pids.join("、")}），先关掉：它占着 exe，不关编不了。`);
+    for (const pid of pids) { forceKill(pid); }
+    const stubborn = [];
+    for (const pid of pids) {
+        if (!(await waitForExit(pid, KILL_WAIT_MS))) { stubborn.push(pid); }
+    }
+    if (stubborn.length > 0) {
+        write(logFd, `关不掉（进程 ${stubborn.join("、")}，怕是要管理员权限）：这次的桌面小窗口多半编不过。`);
+        return false;
+    }
+    write(logFd, "桌面那个小窗口已关。");
+    return true;
+}
+
+/** 把桌面那个小窗口叫回来，开着窗口（不是只留个托盘图标）。 */
+function startDesktopApp(plan, logFd) {
+    const exe = desktopExePath(plan);
+    const args = plan.url ? ["--url", plan.url] : [];
+    write(logFd, "叫回桌面那个小窗口：" + [exe, ...args].join(" "));
+    try {
+        cp.spawn(exe, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    } catch (err) {
+        write(logFd, `叫不起来（不影响后端）：${err && err.message ? err.message : err}`);
+    }
+}
+
+/**
+ * 编桌面那个小窗口（WPF，只有 Windows 有）。
+ *
+ * 它不是后端的一部分：编不过只在日志里记一笔，后端照常起来（跟 build.bat 那边一个规矩：
+ * 缺工具 / 缺 SDK 都是跳过，不是失败）。要不要编、能不能编先看 canBuildDesktop ——
+ * 没装 dotnet 的话不必白关一次窗口。
+ */
+async function buildDesktop(plan, logFd) {
+    const project = path.join(plan.repoDir, "desktop", "PiChat", "PiChat.csproj");
+    const code = await run(`dotnet build -c Release "${project}"`, plan.repoDir, logFd, CLIENT_BUILD_TIMEOUT_MS);
+    write(logFd, code === 0
+        ? "桌面小窗口编好了（desktop/PiChat/bin/Release/net8.0-windows/PiChat.exe）。"
+        : "桌面小窗口没编过（不影响后端；多是真编译错误）。");
+}
+
+/** 这台机器上能不能编桌面那个小窗口：仓库里有那个工程，而且找得到 dotnet。 */
+function canBuildDesktop(plan) {
+    if (process.platform !== "win32") { return false; }
+    if (!fs.existsSync(path.join(plan.repoDir, "desktop", "PiChat", "PiChat.csproj"))) { return false; }
+    const probe = cp.spawnSync("dotnet", ["--version"], { windowsHide: true, timeout: 20000 });
+    return !probe.error && probe.status === 0;
+}
+
+/**
+ * 编安卓 app：跟着仓库里那个 Gradle 工程编（要 JDK 17+ 和 Android SDK）。
+ * 同样编不过只记一笔。
+ */
+async function buildAndroid(plan, logFd) {
     const androidDir = path.join(plan.repoDir, "android");
     const gradlew = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
-    if (fs.existsSync(path.join(androidDir, gradlew))) {
-        const code = await run(`"${path.join(androidDir, gradlew)}" assembleDebug`, androidDir, logFd, CLIENT_BUILD_TIMEOUT_MS);
-        write(logFd, code === 0
-            ? "安卓 app 编好了（android/app/build/outputs/apk/debug/app-debug.apk）。"
-            : "安卓 app 没编过（不影响后端；多半是没装 JDK / Android SDK，见 android/README.md）。");
-    }
+    if (!fs.existsSync(path.join(androidDir, gradlew))) { return; }
+    const code = await run(`"${path.join(androidDir, gradlew)}" assembleDebug`, androidDir, logFd, CLIENT_BUILD_TIMEOUT_MS);
+    write(logFd, code === 0
+        ? "安卓 app 编好了（android/app/build/outputs/apk/debug/app-debug.apk）。"
+        : "安卓 app 没编过（不影响后端；多半是没装 JDK / Android SDK，见 android/README.md）。");
 }
 
 async function main() {
@@ -236,7 +318,13 @@ async function main() {
         return;
     }
 
-    // 4. 照老命令行起回来
+    // 4. 桌面那个小窗口：先关掉再编（它开着的时候 exe 被占着）。放在起后端之前 ——
+    //    后端一起来就会去开这个 exe，得让它开的是刚编出来的那个。
+    const desktopBuildable = canBuildDesktop(plan);
+    const desktopClosed = desktopBuildable ? await stopDesktopApp(plan, logFd) : false;
+    if (desktopBuildable) { await buildDesktop(plan, logFd); }
+
+    // 5. 照老命令行起回来
     const child = startBackend(plan, logFd);
     await sleep(START_VERIFY_MS);
     if (alive(child.pid)) {
@@ -247,8 +335,11 @@ async function main() {
         return;
     }
 
-    // 5. 顺手编桌面那个小窗口与安卓 app（编不过只记一笔，后端已经在跑了）
-    await buildClients(plan, logFd);
+    // 6. 刚才是开着窗口的（已经关掉了）：把它叫成开着窗口的样子（后端叫起来的那份只出托盘图标）
+    if (desktopClosed) { startDesktopApp(plan, logFd); }
+
+    // 7. 安卓 app 最后编（编不过只记一笔，后端已经在跑了）
+    await buildAndroid(plan, logFd);
 }
 
 main().catch((err) => {
