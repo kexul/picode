@@ -42,6 +42,7 @@ import { ASK_DECODER } from "./askProtocol";
 import type { AskRequest } from "./askProtocol";
 import { StderrFrameSplitter } from "./piFrames";
 import { BASH_DECODER, BashTaskInfo, buildBashTaskDelivery, readBashLogTail } from "./bashProtocol";
+import { ENV_DECODER } from "./envProtocol";
 import {
     TabaRegistry,
     buildChildClosedNotice,
@@ -638,7 +639,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.preparingSpare = client;
         // 备用进程的 stderr 只记“不是暗号行”的那些（暗号是一大串 base64，整行打出来把日志刷没）。
         // 请求由领走它的那个会话解析（这里只切割、不处理，不然同一行会被处理两次）。
-        const spareStderr = new StderrFrameSplitter([TABA_DECODER, ASK_DECODER, BASH_DECODER]);
+        // 「加载了什么」那份清单也认掉：它是一次性报告、不是请求，领走它的会话会收到 pi 的
+        // session_start，那份清单会重报一遍，所以这里看过就丢、别落成日志。
+        const spareStderr = new StderrFrameSplitter([TABA_DECODER, ASK_DECODER, BASH_DECODER, ENV_DECODER]);
         client.on("stderr", (text: string) => {
             spareStderr.feed(text);
             for (const line of spareStderr.takeOtherLines()) { console.error("[pi spare stderr]", line); }
