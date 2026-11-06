@@ -105,7 +105,7 @@ internal sealed class Backend
     public static string Normalize(string raw)
     {
         var text = (raw ?? "").Trim();
-        if (text.Length == 0) { return "http://127.0.0.1:51991"; }
+        if (text.Length == 0) { return "http://127.0.0.1:51883"; }
         if (!text.Contains("://", StringComparison.Ordinal)) { text = "http://" + text; }
         return text.TrimEnd('/');
     }
@@ -386,21 +386,6 @@ internal sealed class Backend
     public async Task<(bool Ok, string Reason)> SendAsync(string sessionId, string text)
     {
         return await PostJsonAsync("/phone/send", new { sessionId, text });
-    }
-
-    /// <summary>托盘菜单里点了「退出」：告诉后端收摊（它停网页服务、杀掉会话，然后自己退）。</summary>
-    public async Task RequestQuitAsync()
-    {
-        try
-        {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            using var content = new StringContent("{}", Encoding.UTF8, "application/json");
-            await _http.PostAsync(_url + "/shutdown", content, timeout.Token);
-        }
-        catch
-        {
-            // 后端没在跑 / 已经断了：那就不用说什么了
-        }
     }
 
     /// <summary>答一道题。选项传选项原文，「自己写」那一句单独传。</summary>

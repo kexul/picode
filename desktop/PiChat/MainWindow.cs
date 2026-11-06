@@ -54,6 +54,7 @@ internal sealed class MainWindow : Window
     }
 
     private readonly Application _app;
+    private readonly BackendHost _host = new();
     private readonly TrayUi _tray;
     /** 真退（菜单里点了退出 / 程序要收摊）：不是退到托盘去。 */
     private bool _quitting;
@@ -67,7 +68,7 @@ internal sealed class MainWindow : Window
             _config.Url = Backend.Normalize(options.Url);
             Config.Save(_config);
         }
-        if (!Backend.IsValid(_config.Url)) { _config.Url = "http://127.0.0.1:51991"; }
+        if (!Backend.IsValid(_config.Url)) { _config.Url = "http://127.0.0.1:51883"; }
         _pendingSelect = options.SessionId;
 
         BuildUi();
@@ -81,11 +82,32 @@ internal sealed class MainWindow : Window
         _backend.Ended += OnEnded;
         _backend.Start();
 
+        // 这个程序是入口：后端没在跑就自己拉一个起来（双击它就等于以前双击 dist\pichat.exe）。
+        // 已经起来的那个后端（上次拉起的 / VS Code 起的 / 终端里起的）就直接接上去。
+        _ = EnsureBackendAsync();
+
         // 托盘图标：左键开主界面，右键三项（打开主界面 / 打开网页端 / 退出）
         _tray = new TrayUi(ShowMain, OpenWebUi, QuitAll);
         _tray.SetStatus("正在连接后端…");
 
         RenderSession();
+    }
+
+    /// <summary>
+    /// 后端没在跑就拉一个起来。界面不用等它：正在连的那条会自己连上（它一直在重试），
+    /// 这里只负责把后端叫起来、以及把「正在起」写在状态里。
+    /// </summary>
+    private async Task EnsureBackendAsync()
+    {
+        try
+        {
+            await _host.EnsureAsync(_config.Url, text => Dispatcher.InvokeAsync(() => OnStatus(text, false)));
+        }
+        catch (Exception err)
+        {
+            Dispatcher.InvokeAsync(() => OnStatus(err.Message, false));
+            AppLog.Write("后端没起来：" + err.Message);
+        }
     }
 
     /// <summary>开主界面（托盘左键、菜单第一项、别的进程叫过来时走这条）。</summary>
@@ -136,11 +158,11 @@ internal sealed class MainWindow : Window
     {
         if (_quitting) { return; }
         SetQuitting();
-        // 先告诉后端「收摊」（它要停网页服务、杀掉那些会话），再把界面关掉
-        _ = _backend.RequestQuitAsync();
+        // 先让后端收摊（它要停网页服务、杀掉那些会话），再把界面关掉。
+        // 自己拉起来的那个后端由 _host 负责确认它真退了（不退就杀）。
         Dispatcher.InvokeAsync(async () =>
         {
-            await System.Threading.Tasks.Task.Delay(400);
+            try { await _host.ShutdownAsync(_config.Url); } catch { /* 收不干净也要退 */ }
             Close();
             _app.Shutdown();
         });
@@ -986,7 +1008,7 @@ internal sealed class MainWindow : Window
         var url = Backend.Normalize(raw);
         if (!Backend.IsValid(url))
         {
-            OnStatus("地址写得不对，要像 http://127.0.0.1:51991 这样", false);
+            OnStatus("地址写得不对，要像 http://127.0.0.1:51883 这样", false);
             return;
         }
         if (url == _backend.Url) { OnStatus("已经连的就是这个地址", false); return; }
@@ -1082,7 +1104,7 @@ internal sealed class MainWindow : Window
             Padding = new Thickness(6, 0, 6, 0),
             VerticalContentAlignment = VerticalAlignment.Center,
             Text = _config.Url,
-            ToolTip = "像 http://127.0.0.1:51991 这样；换了点「连接」，下次打开还用它",
+            ToolTip = "像 http://127.0.0.1:51883 这样；换了点「连接」，下次打开还用它",
         };
         panel.Children.Add(urlBox);
 
@@ -1151,7 +1173,7 @@ internal sealed class MainWindow : Window
 /// <summary>%APPDATA%\PiChat\config.json：后端地址、窗口大小位置、上次选的会话。</summary>
 internal sealed class Config
 {
-    public string Url { get; set; } = "http://127.0.0.1:51991";
+    public string Url { get; set; } = "http://127.0.0.1:51883";
     public double? Left { get; set; }
     public double? Top { get; set; }
     public double? Width { get; set; }
@@ -1172,7 +1194,7 @@ internal sealed class Config
                 var config = JsonSerializer.Deserialize<Config>(File.ReadAllText(FilePath), Json.Options);
                 if (config != null)
                 {
-                    if (string.IsNullOrWhiteSpace(config.Url)) { config.Url = "http://127.0.0.1:51991"; }
+                    if (string.IsNullOrWhiteSpace(config.Url)) { config.Url = "http://127.0.0.1:51883"; }
                     return config;
                 }
             }
