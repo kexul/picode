@@ -23,11 +23,11 @@ internal sealed class MainWindow : Window
 
     private TextBlock _statusText = null!;
     private TextBox _urlBox = null!;
+    private StackPanel _settingsPanel = null!;
+    private TextBlock _placeholder = null!;
     private StackPanel _sessionList = null!;
     private StackPanel _messages = null!;
     private ScrollViewer _messageScroll = null!;
-    private TextBlock _titleText = null!;
-    private TextBlock _subtitleText = null!;
     private TextBox _inputBox = null!;
     private Button _sendButton = null!;
     private TextBlock _hintText = null!;
@@ -92,72 +92,9 @@ internal sealed class MainWindow : Window
         Background = B("#f5f5f5");
 
         var root = new Grid();
-        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-        // 顶上一条：连接状态 + 后端地址
-        var top = new Grid { Margin = new Thickness(12, 8, 12, 8) };
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(230) });
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-        _statusText = new TextBlock
-        {
-            Text = "正在连接后端…",
-            Foreground = Orange,
-            VerticalAlignment = VerticalAlignment.Center,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-        };
-        Grid.SetColumn(_statusText, 0);
-        top.Children.Add(_statusText);
-
-        var urlLabel = new TextBlock
-        {
-            Text = "后端地址",
-            Foreground = Gray,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(8, 0, 6, 0),
-        };
-        Grid.SetColumn(urlLabel, 1);
-        top.Children.Add(urlLabel);
-
-        _urlBox = new TextBox
-        {
-            Height = 26,
-            Padding = new Thickness(6, 0, 6, 0),
-            VerticalContentAlignment = VerticalAlignment.Center,
-            Text = _config.Url,
-            ToolTip = "换了地址点「连接」；下次打开还用它",
-        };
-        Grid.SetColumn(_urlBox, 2);
-        top.Children.Add(_urlBox);
-
-        var connectButton = new Button
-        {
-            Content = "连接",
-            Padding = new Thickness(12, 2, 12, 2),
-            Margin = new Thickness(6, 0, 0, 0),
-        };
-        connectButton.Click += (_, _) => ApplyUrl();
-        _urlBox.KeyDown += (_, e) =>
-        {
-            if (e.Key == Key.Enter) { e.Handled = true; ApplyUrl(); }
-        };
-        Grid.SetColumn(connectButton, 3);
-        top.Children.Add(connectButton);
-
-        var topBorder = new Border
-        {
-            Background = White,
-            BorderBrush = Line,
-            BorderThickness = new Thickness(0, 0, 0, 1),
-            Child = top,
-        };
-        Grid.SetRow(topBorder, 0);
-        root.Children.Add(topBorder);
-
-        // 下面：左边会话，右边内容
+        // 下面：左边会话（底下是「设置」与连接状态），右边内容
         var main = new Grid();
         main.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(280), MinWidth = 180 });
         main.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -166,6 +103,8 @@ internal sealed class MainWindow : Window
         var left = new Grid();
         left.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         left.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        left.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        left.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         var leftTitle = new TextBlock
         {
             Text = "会话",
@@ -186,6 +125,78 @@ internal sealed class MainWindow : Window
         };
         Grid.SetRow(listScroll, 1);
         left.Children.Add(listScroll);
+
+        // 列底下：换后端地址那一块（平时收着，点「设置」才摊开）
+        _settingsPanel = new StackPanel { Margin = new Thickness(10, 0, 10, 8), Visibility = Visibility.Collapsed };
+        _settingsPanel.Children.Add(new TextBlock
+        {
+            Text = "后端地址",
+            FontSize = 11,
+            Foreground = Gray,
+            Margin = new Thickness(0, 0, 0, 4),
+        });
+        _urlBox = new TextBox
+        {
+            Height = 26,
+            Padding = new Thickness(6, 0, 6, 0),
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Text = _config.Url,
+            ToolTip = "换了地址点「连接」；下次打开还用它",
+        };
+        _settingsPanel.Children.Add(_urlBox);
+        var connectButton = new Button
+        {
+            Content = "连接",
+            Padding = new Thickness(12, 2, 12, 2),
+            Height = 26,
+            Margin = new Thickness(0, 6, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        connectButton.Click += (_, _) => ApplyUrl();
+        _urlBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter) { e.Handled = true; ApplyUrl(); }
+        };
+        _settingsPanel.Children.Add(connectButton);
+        Grid.SetRow(_settingsPanel, 2);
+        left.Children.Add(_settingsPanel);
+
+        // 左下角：一颗「设置」+ 现在连到哪儿了
+        var footer = new Grid { Margin = new Thickness(10, 0, 10, 8) };
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        var settingsButton = new Button
+        {
+            Content = "设置",
+            Padding = new Thickness(8, 2, 8, 2),
+            Height = 24,
+            FontSize = 12,
+            ToolTip = "换后端地址",
+        };
+        settingsButton.Click += (_, _) =>
+        {
+            _settingsPanel.Visibility = _settingsPanel.Visibility == Visibility.Visible
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            if (_settingsPanel.Visibility == Visibility.Visible) { _urlBox.Focus(); _urlBox.SelectAll(); }
+        };
+        Grid.SetColumn(settingsButton, 0);
+        footer.Children.Add(settingsButton);
+
+        _statusText = new TextBlock
+        {
+            Text = "正在连接后端…",
+            Foreground = Orange,
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            ToolTip = "现在和后端的连接状态",
+        };
+        Grid.SetColumn(_statusText, 1);
+        footer.Children.Add(_statusText);
+        Grid.SetRow(footer, 3);
+        left.Children.Add(footer);
 
         var leftBorder = new Border
         {
@@ -210,38 +221,8 @@ internal sealed class MainWindow : Window
         main.Children.Add(splitter);
 
         var right = new Grid();
-        right.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         right.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         right.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-        var header = new StackPanel { Margin = new Thickness(14, 10, 14, 10) };
-        _titleText = new TextBlock
-        {
-            Text = "挑一个会话",
-            FontSize = 16,
-            FontWeight = FontWeights.SemiBold,
-            Foreground = Ink,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-        };
-        _subtitleText = new TextBlock
-        {
-            Text = "左边点一个会话",
-            FontSize = 12,
-            Foreground = Gray,
-            Margin = new Thickness(0, 3, 0, 0),
-            TextWrapping = TextWrapping.Wrap,
-        };
-        header.Children.Add(_titleText);
-        header.Children.Add(_subtitleText);
-        var headerBorder = new Border
-        {
-            Background = White,
-            BorderBrush = Line,
-            BorderThickness = new Thickness(0, 0, 0, 1),
-            Child = header,
-        };
-        Grid.SetRow(headerBorder, 0);
-        right.Children.Add(headerBorder);
 
         _messages = new StackPanel();
         _messageScroll = new ScrollViewer
@@ -251,53 +232,67 @@ internal sealed class MainWindow : Window
             Padding = new Thickness(12, 10, 12, 4),
             Content = _messages,
         };
-        Grid.SetRow(_messageScroll, 1);
+        Grid.SetRow(_messageScroll, 0);
         right.Children.Add(_messageScroll);
 
-        // 底下：输入框 + 发送
+        // 底下：输入框 + 发送（一样高的一行；提示语写在输入框里，不另占一行）
         var inputGrid = new Grid();
         inputGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         inputGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        inputGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        inputGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
         _inputBox = new TextBox
         {
-            MinHeight = 56,
-            MaxHeight = 110,
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.Wrap,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            Padding = new Thickness(6, 5, 6, 5),
+            Height = 30,
+            Padding = new Thickness(8, 0, 8, 0),
+            VerticalContentAlignment = VerticalAlignment.Center,
+            AcceptsReturn = false,
+            TextWrapping = TextWrapping.NoWrap,
         };
         _inputBox.KeyDown += InputBox_KeyDown;
+        _inputBox.TextChanged += (_, _) => UpdatePlaceholder();
         ToolTipService.SetShowOnDisabled(_inputBox, true);
         Grid.SetColumn(_inputBox, 0);
         inputGrid.Children.Add(_inputBox);
+
+        // 输入框里那行浅灰字（自己画的占位：WPF 的 TextBox 没有这个东西）
+        _placeholder = new TextBlock
+        {
+            Text = "回车发送",
+            FontSize = 12,
+            Foreground = LightGray,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(11, 0, 0, 0),
+            IsHitTestVisible = false,
+        };
+        Grid.SetColumn(_placeholder, 0);
+        inputGrid.Children.Add(_placeholder);
 
         _sendButton = new Button
         {
             Content = "发送",
             Width = 76,
-            Height = 32,
+            Height = 30,
             Margin = new Thickness(8, 0, 0, 0),
-            VerticalAlignment = VerticalAlignment.Bottom,
         };
         _sendButton.Click += (_, _) => _ = SendInputAsync();
         ToolTipService.SetShowOnDisabled(_sendButton, true);
         Grid.SetColumn(_sendButton, 1);
         inputGrid.Children.Add(_sendButton);
 
+        // 出错才露出来的一行红字（平时收起来，不占地方）
         _hintText = new TextBlock
         {
-            Text = "回车发送，Shift+回车换行",
+            Text = "",
             FontSize = 11,
-            Foreground = Gray,
+            Foreground = B("#b91c1c"),
             Margin = new Thickness(0, 5, 0, 0),
+            TextWrapping = TextWrapping.Wrap,
+            Visibility = Visibility.Collapsed,
         };
-        Grid.SetRow(_hintText, 1);
-        Grid.SetColumnSpan(_hintText, 2);
-        inputGrid.Children.Add(_hintText);
+
+        var inputStack = new StackPanel();
+        inputStack.Children.Add(inputGrid);
+        inputStack.Children.Add(_hintText);
 
         var inputBorder = new Border
         {
@@ -305,15 +300,15 @@ internal sealed class MainWindow : Window
             BorderBrush = Line,
             BorderThickness = new Thickness(0, 1, 0, 0),
             Padding = new Thickness(14, 10, 14, 10),
-            Child = inputGrid,
+            Child = inputStack,
         };
-        Grid.SetRow(inputBorder, 2);
+        Grid.SetRow(inputBorder, 1);
         right.Children.Add(inputBorder);
 
         Grid.SetColumn(right, 2);
         main.Children.Add(right);
 
-        Grid.SetRow(main, 1);
+        Grid.SetRow(main, 0);
         root.Children.Add(main);
 
         Content = root;
@@ -434,7 +429,7 @@ internal sealed class MainWindow : Window
         }
 
         RebuildSessionList();
-        if (_selectedId == null) { RenderSession(); } else { UpdateHeader(); }
+        if (_selectedId == null) { RenderSession(); }
     }
 
     private void OnNote(Note note)
@@ -556,8 +551,8 @@ internal sealed class MainWindow : Window
         });
 
         var badges = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
+        // 别的机器上的会话不另外标：名字前面那个「家里 ·」已经说清了
         if (HasUnansweredAsk(state)) { badges.Children.Add(Badge("在等你答一句", Orange, OrangeBg)); }
-        if (info.Remote) { badges.Children.Add(Badge("别的机器推来的", Gray, LightGray)); }
         if (badges.Children.Count > 0) { box.Children.Add(badges); }
 
         var border = new Border
@@ -621,29 +616,8 @@ internal sealed class MainWindow : Window
 
     // ---------------------------------------------------------------- 右边那一块
 
-    private void UpdateHeader()
-    {
-        if (_selectedId != null && _sessions.TryGetValue(_selectedId, out var state))
-        {
-            _titleText.Text = state.Info.Name;
-            _subtitleText.Text = SubtitleOf(state.Info);
-        }
-        else
-        {
-            _titleText.Text = "挑一个会话";
-            _subtitleText.Text = _sessions.Count == 0 ? "左边还没有会话，等后端推过来" : "左边点一个会话";
-        }
-    }
-
-    private static string SubtitleOf(SessionInfo info)
-    {
-        if (info.Remote) { return "别的机器上的会话（这里说的话会转给那台）"; }
-        return info.Running ? "正在跑" : "没有在跑";
-    }
-
     private void RenderSession()
     {
-        UpdateHeader();
         _messages.Children.Clear();
 
         SessionState? state = null;
@@ -654,8 +628,9 @@ internal sealed class MainWindow : Window
             _inputBox.IsEnabled = false;
             _sendButton.IsEnabled = false;
             _inputBox.Clear();
-            _hintText.Text = "先挑一个会话";
-            _hintText.Foreground = Gray;
+            _hintText.Text = "";
+            _hintText.Visibility = Visibility.Collapsed;
+            SetHint("先挑一个会话", false);
             return;
         }
 
@@ -664,7 +639,7 @@ internal sealed class MainWindow : Window
         _sendButton.IsEnabled = canReply;
         _inputBox.ToolTip = state.Info.Remote ? "这是别的机器上的会话：这句话会转给那台" : null;
         _sendButton.ToolTip = _inputBox.ToolTip;
-        SetHint("回车发送，Shift+回车换行", false);
+        SetHint("回车发送", false);
 
         if (state.Notes.Count == 0)
         {
@@ -895,7 +870,7 @@ internal sealed class MainWindow : Window
         if (ok)
         {
             _inputBox.Clear();
-            SetHint("回车发送，Shift+回车换行", false);
+            SetHint("回车发送", false);
             _inputBox.Focus();
         }
         else
@@ -904,10 +879,28 @@ internal sealed class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 底下那条提示：平时是输入框里的浅灰字（回车发送 / 先挑一个会话）；
+    /// 出了错才在输入框下面多出一行红字（那时它比占位字管用）。
+    /// </summary>
     private void SetHint(string text, bool isError)
     {
-        _hintText.Text = text;
-        _hintText.Foreground = isError ? B("#b91c1c") : Gray;
+        if (isError)
+        {
+            _hintText.Text = text;
+            _hintText.Visibility = Visibility.Visible;
+            return;
+        }
+        _hintText.Text = "";
+        _hintText.Visibility = Visibility.Collapsed;
+        _placeholder.Text = text;
+        UpdatePlaceholder();
+    }
+
+    /** 输入框里那行浅灰字：里面有字就藏起来。 */
+    private void UpdatePlaceholder()
+    {
+        _placeholder.Visibility = _inputBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void ApplyUrl()
