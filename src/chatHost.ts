@@ -783,12 +783,38 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
-     * 会话有事了（跑完一轮 / 模型在等你答选择题）：本机那块提醒面板的出口在这儿拦一下，
-     * 本机弹不弹还是原来那套规矩（推到别的机器去了、人正坐在输入框前面就不弹）。
+     * 会话有事了（跑完一轮 / 模型在等你答选择题）。
+     *
+     * 推给了别的机器就到此为止：这台也不弹（桌面那个小窗口与连在这台上的手机都走 /phone 那条，
+     * 一起安静下来 —— 人只盯得了那台，两个地方同时弹没意义）。
+     * 没推出去（没填别处、或者填的就是这台自己的地址）才在这台弹。
+     *
+     * @returns 同基类：是不是推给别处了（推了这台连手机 / 小窗口都不推）
      */
-    protected override trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done", ask?: PhoneAsk): void {
+    protected override trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done", ask?: PhoneAsk): boolean {
+        if (super.trayNote(sessionId, name, summary, kind)) { return true; }
         this.pushPhoneNote(sessionId, name, summary, kind, undefined, ask);
-        super.trayNote(sessionId, name, summary, kind);
+        return false;
+    }
+
+    /**
+     * 别的机器推来一条“有事”（设置里别处的 pushTo 写到了这台）。
+     *
+     * 这台也要弹：桌面那个小窗口与连在这台上的手机都靠 /phone 那条，所以照本机那一条的样子
+     * 推进去；标识用 /phone 那边的 `remote:` 写法（哪台 + 哪个会话），这样在那台上回话时
+     * 会照 {@link remoteNotes} 记的那笔转回原来那台（见 phoneSend）。
+     */
+    protected override trayNoteRemote(notice: RemoteNotice): void {
+        // 这台根本没有那个会话：手机上那条拿“哪台 + 会话”当标识，回话会照它转回去
+        this.pushPhoneNote(
+            "remote:" + notice.label + ":" + notice.sessionId,
+            notice.label + " · " + notice.name,
+            notice.text ?? "",
+            notice.kind === "ask" ? "ask" : "done",
+            notice.label,
+        );
+        // 回话要的那笔账照旧（摆在后头：旧版本推来的没 pageUrl，卡片照样得弹）
+        super.trayNoteRemote(notice);
     }
 
     /**

@@ -1800,18 +1800,21 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /**
      * 某个会话有事了（跑完一轮、模型在等你答一道选择题）。
      *
-     * 这里只剩两件事：推给别的机器（设置里「消息推送」填了别处地址时）、以及子类自己那一套
-     * （手机上那条、桌面那个小窗口的卡片见 ChatHost）。这台机器上的提醒卡片由桌面那个
-     * 小窗口自己画（它连着 /phone 那条，见 desktop/PiChat），后端不再管画卡片这件事。
+     * 提醒送到哪台是二选一（一个人只盯得了一台机器）：设置里「消息推送」填了别处的地址，
+     * 就只推到那边，这台不弹；没填（或者填的就是这台自己的地址）就在这台弹。
+     *
+     * 这一层只办“推给别处”那一半；“在这台弹”那一半由子类接着办（手机上那条、桌面那个
+     * 小窗口的卡片见 ChatHost.trayNote），所以这里要把推没推出去交回去。
      *
      * @param summary 一句话摘要（跑完一轮是回复开头，选择题是题干）
      * @param kind 这一条算跑完一轮，还是模型在等你答一句
+     * @returns 是不是推给别处了（推了这台就不弹）
      */
-    protected trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done", _ask?: PhoneAsk): void {
-        if (!sessionId || !this.notifyTurnEndEnabled()) { return; }
+    protected trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done", _ask?: PhoneAsk): boolean {
+        if (!sessionId || !this.notifyTurnEndEnabled()) { return false; }
         const label = (name || "").trim() || "会话";
         // 推给别处的那份留长一点（见 remoteNotice.ts 的 REMOTE_TEXT_CHARS）
-        this.pushRemoteNote(sessionId, label, plainPreview(summary, REMOTE_TEXT_CHARS), kind);
+        return this.pushRemoteNote(sessionId, label, plainPreview(summary, REMOTE_TEXT_CHARS), kind);
     }
 
     /**
@@ -1844,7 +1847,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
      *
      * 这里要干的只有一件事：把“从哪儿来、那个会话叫什么”记一笔（`remoteNotes`）——
      * 手机 / 桌面那个小窗口里回话时，靠它把话送回原来那台（见 ChatHost 的 phoneSend）。
-     * 卡片本身由那个小窗口照着 /phone 推过去的那条自己画。
+     * 卡片本身由那个小窗口照着 /phone 推过去的那条自己画（见 ChatHost.trayNoteRemote）。
      */
     protected trayNoteRemote(notice: RemoteNotice): void {
         if (!this.notifyTurnEndEnabled()) { return; }
