@@ -26,9 +26,7 @@ import { insideFolder, pathCaseKey, relativeTo } from "./pathRules";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { findListedFile } from "./fileSearch";
 import type { SessionChanges } from "./gitChanges";
-import { readRemoteNotice, readSessionReply, type RemoteNotice } from "./remoteNotice";
-import { PhoneInbox, type PhoneAsk, type PhoneNoteKind, type PhoneNoteRecord } from "./phoneInbox";
-import { parseMarkdown } from "./markdownBlocks";
+import { readRemoteNotice, type RemoteNotice } from "./remoteNotice";
 import { changedCharRanges, diffRows, type LineRanges } from "./wordDiff";
 
 /**
@@ -44,7 +42,7 @@ import { changedCharRanges, diffRows, type LineRanges } from "./wordDiff";
  *     跑同一样一份界面代码，只有整页交给它时是内联版（`/panel`，见 pageHtml.ts）；
  *   - **屏线**（VS Code 窗口，`/screen` + `/screenapi`）：窗口在后端登记自己是打开着哪些
  *     文件夹的，好让"用编辑器打开这个文件"这类活得有人干。
- *   另外有一条 `/phone`（手机 app 里那个前台服务连的），以及一个 `/health`，给单实例判断探活用。
+ *   另外有一个 `/health`，给单实例判断探活用；还有机器对机器那几条（`/notify`、`/pair/*`，见下面）。
  *
  * 方向：后端 → 页面/屏用"服务器推送"（长连接，随时能写）；页面/屏 → 后端用普通请求（POST）。
  * 桌面实时画面是唯一一条例外：页面自己开一条长连接把帧拉下去（一帧一段，
@@ -357,79 +355,6 @@ export interface WebServerHost {
     receivePairRequest(address: string, name: string): { ok: boolean; reason?: string };
     /** 别台回了这台那下配对请求（`POST /pair/reply`）：接受了就配上，拒绝了就把这条拿掉。 */
     receivePairReply(address: string, accepted: boolean): void;
-    /**
-     * 别的后端说「把你开着的页面切到这个会话」（`POST /switch`：那台机器有人点了
-     * 右下角的弹窗，跳的是这边开着的页面）：广播给所有连着的页面。
-     */
-    acceptSwitchRequest(sessionId: string): void;
-    /**
-     * 别的机器把一句话转了过来（`POST /reply`）：当成这个会话里用户说的一句话接进去。
-     * 手机 / 桌面那个小窗口里回别处的会话，就走这条。
-     * @returns 接上了没有；没接上时带一句人话（会原样回给发来的那台）
-     */
-    acceptSessionReply(sessionId: string, text: string, opts: { sessionFile?: string; name?: string }): { ok: boolean; reason?: string };
-    /** 现在开着哪些会话（手机 / 桌上那个小窗口的列表就是它）。 */
-    phoneSessions(): PhoneSessionInfo[];
-    /**
-     * 某个会话「这一轮 / 上一轮」的原话（点开会话时先看一眼它说到哪儿了）。
-     * 取不到（没开始跑过、pi 没答上来）就返回空串。
-     */
-    phoneLastReply(sessionId: string): Promise<string>;
-    /** 手机那头说了一句话：送进那个会话（跟自己在输入框里敲一句一样）。 */
-    phoneSend(sessionId: string, text: string): Promise<{ ok: boolean; reason?: string }>;
-    /** 手机那头答了一道选择题（`/phone/answer`）：把还挂着的那张卡片按这个答案收掉。 */
-    phoneAnswer(cardId: string, picks: string[], text: string): { ok: boolean; reason?: string };
-}
-
-/**
- * 手机上要看到的那条“有事”（`/phone` 那条长连接上写的就是它）。
- *
- * 只有该看见的那点东西：哪个会话、哪一类、说了什么。手机那边照这个弹一条通知，
- * 点通知就拿 sessionId 让页面切到那个会话（跟顶条上点一下那格一样）。
- */
-export interface PhoneNote {
-    /** 哪个会话（界面上那一格的名字）。 */
-    name: string;
-    /** 会话标识：手机点通知时拿它切过去。 */
-    sessionId: string;
-    /** 跑完一轮、在等你答一句，还是你自己刚说的一句话。 */
-    kind: PhoneNoteKind;
-    /** 一句话摘要（跑完一轮是回复开头，等你答是题干）。 */
-    summary: string;
-    /** 这条是什么时候的事（毫秒）。 */
-    at: number;
-    /** 别的机器推来的：那台叫什么（有它手机那边多显示一句“哪台”）。 */
-    from?: string;
-    /** 在等你答一句时那道题本身（选项、能不能多选）：手机那头直接摆成能点的按钮。 */
-    ask?: PhoneAsk;
-}
-
-/**
- * 手机 / 桌上那个小窗口列表里的一个会话。
- *
- * 就是现在开着的那些（一个会话一个标签页），跟网页顶条上那一排是同一批。
- */
-export interface PhoneSessionInfo {
-    id: string;
-    name: string;
-    /**
-     * 哪台机器上的会话：列表按它分组（同一台排一块，组头写它）。
-     * 本机的写「本机」，别的机器推来的写那台的名字（它就是名字开头那个「家里 · 」）。
-     */
-    machine: string;
-    /** 这一轮正在跑。 */
-    running: boolean;
-    /** 正在干什么（网页顶条上那颗点旁边那句也是这个：thinking / 工具名 / idle）。 */
-    activity?: string;
-    /** 更具体一点：正在改哪个文件、在跑什么命令。 */
-    activityDetail?: string;
-    /** 别的机器上的会话（这台已经没有那个会话了，只剩推过来的通知）。 */
-    remote?: boolean;
-    /**
-     * 列表上那一行要的最后一条（本机的由 phoneInbox 补；从别台拉回来的直接带对方的）。
-     * 见 chatHost 的 remoteSessions。
-     */
-    last?: PhoneNoteRecord;
 }
 
 export interface WebServerHooks {
@@ -458,10 +383,6 @@ export class PiChatWebServer {
     private readonly streams = new Map<string, PageStream>();
     /** 屏标识 → 它那条连接的响应对象。 */
     private readonly screenStreams = new Map<string, http.ServerResponse>();
-    /** 手机标识 → 它那条连接的响应对象（见 /phone）。 */
-    private readonly phoneStreams = new Map<string, http.ServerResponse>();
-    /** 手机上留着的那一串「有事」（每个会话最近若干条，见 src/phoneInbox.ts）。 */
-    private readonly phoneInbox = new PhoneInbox();
     private heartbeat?: ReturnType<typeof setInterval>;
     private readonly heartbeatMs = HEARTBEAT_MS;
     private readonly pageStaleMs = PAGE_STALE_MS;
@@ -606,15 +527,6 @@ export class PiChatWebServer {
             channel.close(quiet ? "" : "网页服务已停止。");
         }
         this.streams.clear();
-        for (const res of this.phoneStreams.values()) {
-            try {
-                this.writePhone(res, "end", { note: quiet ? "" : "网页服务已停止。" });
-                res.end();
-            } catch { /* 已经断了 */ }
-        }
-        this.phoneStreams.clear();
-        // 服务停了（包括换端口重启）：留着的那些也丢掉（后端重启就没了，见 src/phoneInbox.ts）
-        this.phoneInbox.clear();
         for (const [id, res] of this.screenStreams) {
             this.host.detachScreen(id);
             this.endStream(res, quiet ? "" : "服务已停止。");
@@ -675,16 +587,6 @@ export class PiChatWebServer {
                 void this.handleRemoteNotice(req, res);
                 return;
             }
-            // 那台机器有人点了右下角的弹窗、要跳到这边开着的页面：广播切会话（机器对机器，同上）
-            if (pathname === "/switch") {
-                void this.handleSwitchRequest(req, res);
-                return;
-            }
-            // 别的机器把一句话转回来（机器对机器，同上）
-            if (pathname === "/reply") {
-                void this.handleSessionReply(req, res);
-                return;
-            }
             // 跨机器配对（机器对机器，同一个规矩）：这台请那台点头、那台回了这台一句
             if (pathname === "/pair/request") {
                 void this.handlePairRequest(req, res);
@@ -692,30 +594,6 @@ export class PiChatWebServer {
             }
             if (pathname === "/pair/reply") {
                 void this.handlePairReply(req, res);
-                return;
-            }
-            // 手机 app 里那个前台服务连的（机器对机器，同上）
-            if (pathname === "/phone") {
-                this.openPhone(req, res, url.searchParams.get("client") ?? "");
-                return;
-            }
-            // 手机 / 桌上那个小窗口要的那份列表与某个会话留着的几条（机器对机器，同上）
-            if (pathname === "/phone/sessions") {
-                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                this.sendJson(req, res, 200, { sessions: this.phoneSessionsPayload() });
-                return;
-            }
-            if (pathname === "/phone/session") {
-                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                void this.sendPhoneSession(req, res, url.searchParams.get("id") ?? "");
-                return;
-            }
-            if (pathname === "/phone/send") {
-                void this.handlePhoneSend(req, res);
-                return;
-            }
-            if (pathname === "/phone/answer") {
-                void this.handlePhoneAnswer(req, res);
                 return;
             }
             if (pathname === "/" || pathname === "/index.html") {
@@ -1806,208 +1684,6 @@ export class PiChatWebServer {
             if (!res) { continue; }
             this.writeScreenChunk(screen.id, res, `event: tick\ndata: ${JSON.stringify({ t: now })}\n\n`);
         }
-        // 手机那条连接只往它写心跳：写不动就说明那头没了（手机睡了 / 网断了），
-        // 丢掉等它回来（app 自己会重连），漏掉的通知就漏掉了。
-        this.dropDeadPhones((res) => this.writePhone(res, "tick", { t: now }));
-    }
-
-    // ========================================================================
-    //  手机 app 的连接（前台服务 → /phone）
-    // ========================================================================
-
-    /**
-     * 一台手机连上来：`GET /phone?client=…`。
-     *
-     * 除了「有事」就往这儿写一行，连上时还先给一份现在是什么样（开着哪些会话、每个会话留着的那几条）：
-     * 手机那边要把它当成一串话看，不能像以前那样“没赶上就算了”。之后有新的一条推一条。
-     *
-     * 不参与“人正坐在输入框前”那类判断、也不进页面登记簿：它不是一块屏。
-     *
-     * 谁都能连：跟 `/notify` 一个规矩（机器对机器、不带 Origin，只在信得过的网络里用）。
-     */
-    private openPhone(req: http.IncomingMessage, res: http.ServerResponse, clientId: string): void {
-        if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-        const id = clientId || `ph-${crypto.randomUUID()}`;
-        res.writeHead(200, {
-            "Content-Type": "text/event-stream; charset=utf-8",
-            "Cache-Control": "no-store, no-transform",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        });
-        res.write("retry: 2000\n\n");
-        this.writePhone(res, "hello", { app: "pichat", now: Date.now() });
-        res.socket?.setNoDelay(true);
-        // 同一台手机又连了一次（断线重连、app 重开）：旧的那条安静收掉
-        const old = this.phoneStreams.get(id);
-        this.phoneStreams.set(id, res);
-        if (old && old !== res) { try { old.destroy(); } catch { /* 已经断了 */ } }
-        // 先给现状：开着哪些会话、每个会话留着的那几条
-        const sessions = this.phoneSessionsPayload();
-        this.writePhone(res, "snapshot", {
-            sessions: sessions.map((item) => ({ ...item, notes: this.phoneInbox.list(item.id) })),
-            now: Date.now(),
-        });
-        const onClose = () => {
-            if (this.phoneStreams.get(id) !== res) { return; }
-            this.phoneStreams.delete(id);
-        };
-        res.on("close", onClose);
-        res.on("error", onClose);
-        this.hooks.log(`手机连上了（${id}）：现在连着 ${this.phoneStreams.size} 台。`);
-    }
-
-    /**
-     * 列表要显示的那些会话：现在开着的那些，外加「这台已经没有、只剩推过来的通知」的那几个
-     * （别的机器推来的，见 chatHost 的 trayNote）。每一项带上最后一条，列表上那一行靠它。
-     */
-    private phoneSessionsPayload(): Array<PhoneSessionInfo & { last?: PhoneNoteRecord }> {
-        const items: Array<PhoneSessionInfo & { last?: PhoneNoteRecord }> = this.host.phoneSessions().map((item) => {
-            const last = this.phoneInbox.last(item.id) ?? item.last;
-            return last ? { ...item, last } : { ...item };
-        });
-        const known = new Set(items.map((item) => item.id));
-        // 只剩通知的那几个：别的机器推来的会话（本机关掉过、重启过的会话就直接丢掉，不往回列）
-        for (const sessionId of this.phoneInbox.sessionIds()) {
-            if (known.has(sessionId) || !sessionId.startsWith("remote:")) { continue; }
-            const last = this.phoneInbox.last(sessionId);
-            if (!last) { continue; }
-            // 那台的名字就写在 last.from 里（旧记录没带就从标识里取：`remote:哪台:会话`）
-            const machine = last.from || sessionId.split(":")[1] || "另一台";
-            items.push({ id: sessionId, name: last.name, machine, running: false, remote: true, last });
-            known.add(sessionId);
-        }
-        // 不在了的那些会话，留着的那几条也没人看得见了
-        this.phoneInbox.prune(known);
-        return items;
-    }
-
-    /** 会话列表变了（新建 / 关掉 / 开始跑 / 跑完了）：推一份新的给连着的手机。 */
-    public notifyPhoneSessions(): void {
-        if (this.phoneStreams.size === 0) { return; }
-        const payload = { sessions: this.phoneSessionsPayload() };
-        this.dropDeadPhones((res) => this.writePhone(res, "sessions", payload));
-    }
-
-    /**
-     * 一张卡片收尾了（不论是在网页上答的、在手机上答的，还是到点没人答）：
-     * 告诉连着的那几台，让它们把那几个选项置灰（不然另一台还可以点，点了才被告知“已经答过了”）。
-     */
-    public notifyPhoneAskDone(cardId: string): void {
-        this.phoneInbox.markAskDone(cardId);
-        if (this.phoneStreams.size === 0) { return; }
-        this.dropDeadPhones((res) => this.writePhone(res, "askdone", { cardId }));
-    }
-
-    /** 某个会话留着的那几条（`GET /phone/session?id=…`）：进去时拉一次，之后靠长连接推。 */
-    private async sendPhoneSession(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string): Promise<void> {
-        const session = this.phoneSessionsPayload().find((item) => item.id === sessionId);
-        if (!session) {
-            this.sendJson(req, res, 404, { ok: false, reason: "这个会话不在了（关掉过、或者后端重启过）" });
-            return;
-        }
-        // 最近一条回复的原话：点开会话时先看一眼它说到哪儿了（跑着的时候这个会跟着变）
-        let lastReply = "";
-        try { lastReply = session.remote ? (session.last?.text ?? "") : await this.host.phoneLastReply(sessionId); } catch { /* 取不到就算了 */ }
-        // 把它也解析成「怎么画」：这一轮的原话在两端都按 markdown 画，跟「有事」里的那些一个待遇
-        const replyDoc = parseMarkdown(lastReply);
-        this.sendJson(req, res, 200, {
-            session,
-            notes: this.phoneInbox.list(sessionId),
-            lastReply: { text: lastReply, blocks: replyDoc.blocks },
-        });
-    }
-
-    /** 手机那头说了一句话（`POST /phone/send`）：送进那个会话。 */
-    private async handlePhoneSend(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-        const body = await this.readPhoneBody(req, res);
-        if (!body) { return; }
-        const sessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
-        const text = typeof body.text === "string" ? body.text : "";
-        if (!sessionId || !text.trim()) {
-            this.sendJson(req, res, 400, { ok: false, reason: "要 sessionId 与 text" });
-            return;
-        }
-        this.sendJson(req, res, 200, await this.host.phoneSend(sessionId, text));
-    }
-
-    /** 手机那头答了一道题（`POST /phone/answer`）：把还挂着的那张卡片按这个答案收掉。 */
-    private async handlePhoneAnswer(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-        const body = await this.readPhoneBody(req, res);
-        if (!body) { return; }
-        const cardId = typeof body.cardId === "string" ? body.cardId.trim() : "";
-        const picks = Array.isArray(body.picks) ? body.picks.filter((x): x is string => typeof x === "string") : [];
-        const text = typeof body.text === "string" ? body.text : "";
-        if (!cardId) {
-            this.sendJson(req, res, 400, { ok: false, reason: "要 cardId" });
-            return;
-        }
-        this.sendJson(req, res, 200, this.host.phoneAnswer(cardId, picks, text));
-    }
-
-    /** 读一个 POST 请求的 JSON 体（读不出来就自己回一个 400，返 undefined 让调用方收工）。 */
-    private async readPhoneBody(req: http.IncomingMessage, res: http.ServerResponse): Promise<Record<string, unknown> | undefined> {
-        if (req.method !== "POST") {
-            this.sendText(req, res, 405, "只接受 POST。");
-            return undefined;
-        }
-        const text = await readBody(req, MAX_REQUEST_BYTES);
-        if (text === undefined) {
-            this.sendText(req, res, 413, "请求内容过大。");
-            return undefined;
-        }
-        try {
-            const raw: unknown = JSON.parse(text);
-            if (raw && typeof raw === "object") { return raw as Record<string, unknown>; }
-        } catch { /* 落到下面那个 400 */ }
-        this.sendText(req, res, 400, "请求内容不是合法的 JSON。");
-        return undefined;
-    }
-
-    /** 往一台手机写一段；写不动了返回 false。 */
-    private writePhone(res: http.ServerResponse, event: string, data: unknown): boolean {
-        if (res.writableEnded || res.destroyed) { return false; }
-        try {
-            res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-            return true;
-        } catch {
-            return false;
-        }
-    }
-
-    /** 挨个往连着的手机写一段，写不动的（已经走的）当场丢掉。 */
-    private dropDeadPhones(write: (res: http.ServerResponse) => boolean): void {
-        for (const [id, res] of Array.from(this.phoneStreams)) {
-            if (write(res)) { continue; }
-            this.phoneStreams.delete(id);
-            try { res.destroy(); } catch { /* 已经断了 */ }
-        }
-    }
-
-    /**
-     * 会话有事了：记一条下来，再往每台连着的手机推一条（手机上弹一条通知 + 放进那个会话）。
-     * 一台都没连着也照记：下一台连上来时那份现状里就有它（这是以前“漏掉的不补发”的另一种做法）。
-     */
-    public notifyPhones(note: PhoneNote): void {
-        // 解析一次就够：正文怎么画、列表上那一行写什么，都在这儿定下来（见 src/markdownBlocks.ts）
-        const doc = parseMarkdown(note.summary);
-        const record = this.phoneInbox.add({
-            sessionId: note.sessionId,
-            name: note.name,
-            kind: note.kind,
-            text: note.summary,
-            blocks: doc.blocks,
-            plain: doc.plain,
-            at: note.at,
-            ...(note.from ? { from: note.from } : {}),
-            ...(note.ask ? { ask: note.ask } : {}),
-        });
-        if (this.phoneStreams.size === 0) { return; }
-        const sessions = { sessions: this.phoneSessionsPayload() };
-        this.dropDeadPhones((res) => {
-            if (!this.writePhone(res, "note", record)) { return false; }
-            // 列表上那一行（最后一句、时间）也跟着变
-            return this.writePhone(res, "sessions", sessions);
-        });
     }
 
     // ========================================================================
@@ -2053,51 +1729,12 @@ export class PiChatWebServer {
             return;
         }
         // 这条是谁发来的：那台自己报的地址不一定是我们到得了的（多网卡时它可能挑了别的网段），
-        // 回话时连不上就拿这个地址换个端口再试（见 chatHost 的 phoneSend）
+        // 记下来，以后连它就用这个地址（见 chatHost 的 rememberPeer）
         this.host.acceptRemoteNotice(notice, (req.socket.remoteAddress ?? "").replace(/^::ffff:/, ""));
         res.writeHead(204, { "Cache-Control": "no-store" });
         res.end();
     }
 
-    /**
-     * 别的后端说「把你开着的页面切到这个会话」。
-     *
-     * 这条是机器对机器发的（那台有人点了弹窗）：没有 Origin 头，也没有口令 ——
-     * 跟 `/notify` 一个道理（见上面那条的注释）。
-     */
-    private async handleSwitchRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-        if (req.method !== "POST") {
-            this.sendText(req, res, 405, "只接受 POST。");
-            return;
-        }
-        const text = await readBody(req, MAX_REQUEST_BYTES);
-        if (text === undefined) {
-            this.sendText(req, res, 413, "请求内容过大。");
-            return;
-        }
-        let raw: unknown;
-        try {
-            raw = JSON.parse(text);
-        } catch {
-            this.sendText(req, res, 400, "请求内容不是合法的 JSON。");
-            return;
-        }
-        const sessionId = raw && typeof raw === "object"
-            && typeof (raw as Record<string, unknown>).sessionId === "string"
-            ? ((raw as Record<string, unknown>).sessionId as string).trim() : "";
-        if (!sessionId) {
-            this.sendText(req, res, 400, "这条请求缺东西（要 sessionId）。");
-            return;
-        }
-        this.host.acceptSwitchRequest(sessionId);
-        res.writeHead(204, { "Cache-Control": "no-store" });
-        res.end();
-    }
-
-    /**
-     * 别的机器把一句话转了过来：交给宿主接进那个会话。
-     * 成不成都要回一句（那边要把"没送到"的原因说给人听）。
-     */
     /** 别台请这台配对（`POST /pair/request`）：记下来等人去设置面板点头；拒过的直接回 403。 */
     private async handlePairRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (req.method !== "POST") {
@@ -2157,40 +1794,6 @@ export class PiChatWebServer {
             return;
         }
         this.host.receivePairReply(address, body.accepted === true);
-        res.writeHead(204, { "Cache-Control": "no-store" });
-        res.end();
-    }
-
-    private async handleSessionReply(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-        if (req.method !== "POST") {
-            this.sendText(req, res, 405, "只接受 POST。");
-            return;
-        }
-        const text = await readBody(req, MAX_REQUEST_BYTES);
-        if (text === undefined) {
-            this.sendText(req, res, 413, "请求内容过大。");
-            return;
-        }
-        let raw: unknown;
-        try {
-            raw = JSON.parse(text);
-        } catch {
-            this.sendText(req, res, 400, "请求内容不是合法的 JSON。");
-            return;
-        }
-        const reply = readSessionReply(raw);
-        if (!reply) {
-            this.sendText(req, res, 400, "这句话缺东西（要 sessionId 和 text）。");
-            return;
-        }
-        const result = this.host.acceptSessionReply(reply.sessionId, reply.text, {
-            sessionFile: reply.sessionFile,
-            name: reply.name,
-        });
-        if (!result.ok) {
-            this.sendText(req, res, 409, result.reason ?? "接不上。");
-            return;
-        }
         res.writeHead(204, { "Cache-Control": "no-store" });
         res.end();
     }

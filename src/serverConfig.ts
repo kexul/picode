@@ -60,7 +60,7 @@ export interface ServerPairing {
 
 /** 跨机器配对（config.json 的 pairs 一节）。 */
 export interface ServerPairSettings {
-    /** 配过的那些台：只有 confirmed 的进列表（见 chatHost 的 phoneSessions）。 */
+    /** 配过的那些台：只有 confirmed 的才推提醒过去（见 chatHost 的 pushRemoteNote）。 */
     peers: ServerPairing[];
     /** 明确拒绝过的地址：它们再来求也不弹（人不想要的就是不想要）。 */
     rejected: string[];

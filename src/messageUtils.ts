@@ -12,8 +12,8 @@ export const THINKING_LEVEL_ORDER = [
 
 /**
  * 一条通知上的字：去掉两头空白，太长就截至（末尾一个省略号）。
- * 不动机器里的 markdown：那一段要原样带到别的机器上，由收到的那台解析一遍再画
- * （见 src/markdownBlocks.ts）。在这儿压成纯文本的话，粗体、列表、代码块就全没了。
+ * 不动机器里的 markdown：那张卡片上写的就是回复原文（markdown 记号照旧），
+ * 在这儿压成纯文本的话，粗体、列表、代码块就全没了。
  */
 export function clipText(text: string, maxChars: number): string {
     const body = (text ?? "").replace(/^\s+|\s+$/g, "");

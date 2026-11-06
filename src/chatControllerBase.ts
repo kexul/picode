@@ -74,7 +74,6 @@ import { dropAuto, readAuto, writeAuto } from "./autoFiles";
 import type { RpcSessionState } from "./piRpc";
 import { clipText } from "./messageUtils";
 import { REMOTE_TEXT_CHARS, type RemoteNotice } from "./remoteNotice";
-import type { PhoneAsk } from "./phoneInbox";
 import type { ProjectDirEntry } from "./sessionStore";
 
 /** # 引用菜单里的一行：一个会话（或其某个子会话）。 */
@@ -182,13 +181,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
      */
     private readonly closedSessions = new Map<string, { cwd: string; file?: string }>();
     private static readonly CLOSED_REMEMBER_MAX = 20;
-    /**
-     * 别的机器推来的“有事”记档（面板标识 → 从哪儿来）：点那张面板时照它把「切会话」发回去。
-     * fromAddress 是那台连过来时的地址：它自己报的 pageUrl 万一我们到不了，回话时换这个再试。
-     */
-    protected readonly remoteNotes = new Map<string, { pageUrl: string; sessionId: string; sessionFile?: string; name: string; fromAddress?: string }>();
-    /** 输入框正有焦点的那些屏：人在敲字就是人正看着这个会话，不用再弹（见 noteInputFocus）。 */
-    private readonly inputFocusedClients = new Set<string>();
 
     /** sessionList 节流：流式 activity 变更很频繁，合并到下一帧附近推送。 */
     private sessionListTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1806,76 +1798,20 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 提醒送到哪台是二选一（一个人只盯得了一台机器）：设置里「消息推送」填了别处的地址，
      * 就只推到那边，这台不弹；没填（或者填的就是这台自己的地址）就在这台弹。
      *
-     * 这一层只办“推给别处”那一半；“在这台弹”那一半由子类接着办（手机上那条、桌面那个
-     * 小窗口的卡片见 ChatHost.trayNote），所以这里要把推没推出去交回去。
+     * 这一层只办“推给别处”那一半；“在这台弹”那一半由子类接着办（见 ChatHost.trayNote），
+     * 所以这里要把推没推出去交回去。
      *
      * @param summary 一句话摘要（跑完一轮是回复开头，选择题是题干）
      * @param kind 这一条算跑完一轮，还是模型在等你答一句
      * @returns 是不是推给别处了（推了这台就不弹）
      */
-    protected trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done", _ask?: PhoneAsk): boolean {
+    protected trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): boolean {
         if (!sessionId || !this.notifyTurnEndEnabled()) { return false; }
         const label = (name || "").trim() || "会话";
         // 推给别处的那份留长一点（见 remoteNotice.ts 的 REMOTE_TEXT_CHARS），
-        // 但不压成纯文本：markdown 原样过去，收到的那台自己解析一遍再画
-        // （跟本机这条走同一条路：见 webChatServer.ts 的 notifyPhones）
+        // 但不压成纯文本：markdown 原样过去，收到的那台自己画那张卡片
         return this.pushRemoteNote(sessionId, label, clipText(summary, REMOTE_TEXT_CHARS), kind);
     }
-
-    /**
-     * 某块屏报来“输入框有焦点 / 没了”（见 media/chat.js 里那段）。
-     *
-     * 有焦点 = 人正坐在这块屏前、看着它现在这个会话：这个会话再跑完一轮不弹提醒（见 trayNote）。
-     * 反过来，窗口失焦、换到别的窗口之后就不算了：那时候人可能真不在跟前，该弹还得弹。
-     */
-    public noteInputFocus(clientId: string, focused: boolean): void {
-        if (!clientId) { return; }
-        if (!focused) { this.inputFocusedClients.delete(clientId); return; }
-        this.inputFocusedClients.add(clientId);
-    }
-
-    /** 这块屏的连接断了 / 刚接上：它的输入框焦点状态作废（人再来敲字时它会重新报）。 */
-    protected forgetInputFocus(clientId: string): void {
-        if (clientId) { this.inputFocusedClients.delete(clientId); }
-    }
-
-    /** 有没有一块“输入框正有焦点”的屏在看这个会话。 */
-    private inputFocusedOn(sessionId: string): boolean {
-        for (const clientId of this.inputFocusedClients) {
-            if (this.focusedIdFor(clientId) === sessionId) { return true; }
-        }
-        return false;
-    }
-
-    /**
-     * 别的机器上的后端推来一条“有事”。
-     *
-     * 这里要干的只有一件事：把“从哪儿来、那个会话叫什么”记一笔（`remoteNotes`）——
-     * 手机 / 桌面那个小窗口里回话时，靠它把话送回原来那台（见 ChatHost 的 phoneSend）。
-     * 卡片本身由那个小窗口照着 /phone 推过去的那条自己画（见 ChatHost.trayNoteRemote）。
-     */
-    protected trayNoteRemote(notice: RemoteNotice, fromAddress?: string): void {
-        // 弹窗通知关着也照记：手机 / 桌面上那个小窗口的列表里照样会列出那台的会话，
-        // 那里面回话就靠这一笔（挡在这里的话：能看到、能点开，一发言就“回不了”）。
-        const id = "remote:" + notice.label + ":" + notice.sessionId;
-        if (!notice.pageUrl) { return; }
-        // 只留最近的几十条，别越长越大。
-        this.remoteNotes.delete(id);
-        this.remoteNotes.set(id, {
-            pageUrl: notice.pageUrl,
-            sessionId: notice.sessionId,
-            ...(notice.sessionFile ? { sessionFile: notice.sessionFile } : {}),
-            ...(fromAddress ? { fromAddress } : {}),
-            // 手机上、桌面上那个小窗口里回话时，那条话要带着“哪台 · 会话名”
-            name: notice.label + " · " + notice.name,
-        });
-        while (this.remoteNotes.size > 30) {
-            const oldest = this.remoteNotes.keys().next().value;
-            if (oldest === undefined) { break; }
-            this.remoteNotes.delete(oldest);
-        }
-    }
-
 
     /**
      * 把这条“有事”推给别的后端（设置里「消息推送」填了别处的地址才有这回事）。
@@ -1907,7 +1843,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         // 子会话跑完第一轮：结果先交回派活的那个会话（不等会话标题）
         this.tabaOnTurnEnd(info);
         // 每条屏都收到：界面据此把那个会话名字旁边那颗点变绿（不看这块屏当时看着的是哪一个）。
-        // 弹提醒不走这条路了，走托盘（见 trayNote）。
+        // 弹提醒不走这条路，走右下角那张卡片（见 trayNote）。
         const rt = this.panels.get(info.panelId);
         const name = rt ? this.sessionDisplayName(rt) : "";
         const msg = {

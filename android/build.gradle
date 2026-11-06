@@ -1,4 +1,0 @@
-// 只有一条：Android 插件本身（app 里什么都不引，纯 Android SDK）。
-plugins {
-    id 'com.android.application' version '8.13.1' apply false
-}

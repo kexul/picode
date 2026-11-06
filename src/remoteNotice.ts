@@ -2,10 +2,9 @@
  * remoteNotice —— 别的 pichat 后端“有事”时推到这边的那么一条（跨机器）。
  *
  * 干什么：一台机器上的后端跑完一轮、或者模型在那儿问你一道选择题时，除了在本机右下角
- * 弹一张提醒面板，还能把这条“有事”推给另外几台机器（设置文件里 pairs.peers 里已经配上的那些，见 chatHost 的 pairInvite）。
- * 收到的那台也弹一张面板（哪台、哪个会话、说了什么）；点了那张面板能跳过去 ——
- * 那台把显示着推送方页面的浏览器窗口拉到前台，再顺着 notice.pageUrl 把
- * 「切到这个会话」发回来（见 pushSwitchSession，网页服务那边是 `POST /switch`）。
+ * 弹一张提醒卡片，还能把这条“有事”推给另外几台机器（设置文件里 pairs.peers 里已经配上的那些，见 chatHost 的 pairInvite）。
+ * 收到的那台也弹一张卡片（哪台、哪个会话、说了什么）；点它就用浏览器打开那边那个会话
+ * （notice.pageUrl 拼上 `?session=`，页面自己会切过去）。
  *
  * 为什么不反过来（收到的那台去连推送方）：那样要常年维持连接、断了要重连、还得处理断线
  * 期间漏掉的事件。一次 POST 失败就当没发生，简单得多。
@@ -29,18 +28,10 @@ export interface RemoteNotice {
     /** 哪种事：跑完一轮 / 等你答一句。 */
     kind?: "done" | "ask";
     /**
-     * 推送方那个后端的网页地址（`http://10.0.0.2:51883`）。
-     * 收到的那台要"把一句话送回那个会话"时往这个地址发（见 webChatServer.ts 的 `/reply`）。
-     * 旧版本推来的没这个字段：那就只能弹一下面板，回不了话。
+     * 推送方那个后端的网页地址（`http://10.0.0.2:51883`）：收到的那台点卡片时打开它，
+     * 拼上 `?session=` 就切到那个会话。旧版本推来的没这个字段：那点了只能关掉卡片。
      */
     pageUrl?: string;
-    /** 推送方那个会话的**会话文件**：回话时那台靠它确认没把话送错会话（会话标识重启会重算）。 */
-    sessionFile?: string;
-    /**
-     * 推送方这台机器的名字（主机名）：浏览器页面标题的开头用它拼（`机器名-pi`），
-     * 点面板时按它认浏览器窗口。旧版本推来的没这个字段：那点了就不认窗口。
-     */
-    host?: string;
 }
 
 /** 推一次最多等这么久：对方没回应就当这条丢了（不攒着、不重试）。 */
@@ -50,7 +41,7 @@ const PUSH_TIMEOUT_MS = 5000;
  * 推进去的那段正文最多留多少字。
  *
  * 收的那台拿它干三件事：右下角弹一张面板（那边还会再截到一两行，见 chatControllerBase.ts 的
- * trayNoteRemote）、手机上 / 桌面上那个小窗口里当一条消息读。
+ * chatHost 的 acceptRemoteNotice）上那条正文。
  * 所以留得跟本机那条一样长：手机上要看的就是这一轮的回复原文（见 chatHost.ts 的 PHONE_TEXT_CHARS），
  * 只留开头几句的话，跟本机那个会话在手机上看到的差得远。
  *
@@ -78,15 +69,7 @@ export function readRemoteNotice(raw: unknown, fallbackLabel: string): RemoteNot
     const kind = body.kind === "ask" ? "ask" : "done";
     // 回话地址也是可选的（旧版本不带）：带了才能把一句话送回原来那台
     const pageUrl = typeof body.pageUrl === "string" ? body.pageUrl.trim().slice(0, 200) : "";
-    const sessionFile = typeof body.sessionFile === "string" ? body.sessionFile.trim().slice(0, 500) : "";
-    // 机器名也是可选的（旧版本不带）：带了点面板才认得出浏览器窗口
-    const host = typeof body.host === "string" ? body.host.trim().slice(0, 100) : "";
-    return {
-        label, sessionId, name, text, kind,
-        ...(pageUrl ? { pageUrl } : {}),
-        ...(sessionFile ? { sessionFile } : {}),
-        ...(host ? { host } : {}),
-    };
+    return { label, sessionId, name, text, kind, ...(pageUrl ? { pageUrl } : {}) };
 }
 
 /**
@@ -101,27 +84,6 @@ export async function pushRemoteNotice(target: string, notice: RemoteNotice): Pr
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(notice),
-            signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
-        });
-        return res.ok;
-    } catch {
-        return false;
-    }
-}
-
-/**
- * 告诉一台机器「把你开着的页面切到这个会话」。
- *
- * 有人在这边点了右下角的弹窗、那边页面也开着时用：那台收到就广播给所有页面
- * （见 webChatServer.ts 的 `POST /switch`）。推不过去就当没有：面板那条卡片已经收走了。
- */
-export async function pushSwitchSession(target: string, sessionId: string): Promise<boolean> {
-    const url = target.replace(/\/+$/, "") + "/switch";
-    try {
-        const res = await fetch(url, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ sessionId }),
             signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
         });
         return res.ok;
@@ -171,55 +133,4 @@ export function isOwnPage(target: string, ownUrl: string | undefined): boolean {
 function isLoopbackHost(name: string): boolean {
     const host = name.replace(/^\[|\]$/g, "").toLowerCase();
     return host === "127.0.0.1" || host === "localhost" || host === "::1";
-}
-
-/**
- * 那边把一句话转给推它的那台（反方向的 `POST /reply`）。
- *
- * 为什么要转：会话开在推它的那台的进程里，这边碰不到它；
- * 而人在手机 / 桌面那个小窗口里回一句，本来就该落进那个会话。
- */
-export interface SessionReply {
-    /** 那台那边这个会话的标识（就是它推送时给的 sessionId）。 */
-    sessionId: string;
-    text: string;
-    /** 那台那个会话的会话文件：收的那台靠它确认没送错会话（会话标识重启会重算）。 */
-    sessionFile?: string;
-    /** 那个会话叫什么（只用来写日志与报错）。 */
-    name?: string;
-}
-
-/** 从转过来的内容里读一句回话；字段不齐就给 undefined。 */
-export function readSessionReply(raw: unknown): SessionReply | undefined {
-    if (!raw || typeof raw !== "object") { return undefined; }
-    const body = raw as Record<string, unknown>;
-    const sessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
-    const text = typeof body.text === "string" ? body.text : "";
-    if (!sessionId || !text.trim()) { return undefined; }
-    const sessionFile = typeof body.sessionFile === "string" ? body.sessionFile.trim().slice(0, 500) : "";
-    const name = typeof body.name === "string" ? body.name.trim().slice(0, 200) : "";
-    return { sessionId, text, ...(sessionFile ? { sessionFile } : {}), ...(name ? { name } : {}) };
-}
-
-/** 把一句话送给那台（多久等不到就算没送到：不攒着、不重试，人那边会收到一句说明）。
- *  timeoutMs 可以单独给：回话可能要换个地址再试一次，第一次试短一点，别让人干等两回。 */
-export async function pushSessionReply(
-    target: string,
-    reply: SessionReply,
-    timeoutMs = PUSH_TIMEOUT_MS,
-): Promise<{ ok: boolean; reason: string }> {
-    const url = target.replace(/\/+$/, "") + "/reply";
-    try {
-        const res = await fetch(url, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(reply),
-            signal: AbortSignal.timeout(timeoutMs),
-        });
-        if (res.ok) { return { ok: true, reason: "" }; }
-        const text = await res.text().catch(() => "");
-        return { ok: false, reason: `那台回了 ${res.status}${text ? `：${text.slice(0, 120)}` : ""}` };
-    } catch (err) {
-        return { ok: false, reason: `连不上那台（${(err as Error)?.message ?? String(err)}）` };
-    }
 }

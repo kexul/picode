@@ -858,7 +858,7 @@ export class SessionRuntime {
 
     /**
      * 这一轮已经写出来的字（正在跑的时候才有意义）。
-     * 手机 / 桌面那个小窗口点开会话时，用它显示「现在说到哪儿了」。
+     * 界面上「这一轮说到哪儿了」那一块用它（见 streamingText）。
      */
     public streamingText(): string {
         return this.streamingReply;
@@ -1062,7 +1062,7 @@ export class SessionRuntime {
                         this.setActivity("working");
                         if (a.type === "text_delta") {
                             this.noteGenTokens(a.delta);
-                            // 攒一份「这一轮已经写出来的字」：手机 / 桌面那个小窗口点进来看结果就靠它
+                            // 攒一份「这一轮已经写出来的字」：消息流那一段流式正文就靠它
                             // （手机上那两处只刷最近一次，攒着就不会只知道最后几个字）
                             this.streamingReply += a.delta;
                             if (this.streamingReply.length > 8000) {

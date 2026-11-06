@@ -69,6 +69,5 @@ fi
 echo
 echo "[build] === 好了 ==="
 echo "  起后端：pichat --cwd ~/你的项目目录"
-echo "  Windows 上那个桌面小窗口（带托盘和主界面，后端也嵌在它里面）不在这条路上编："
-echo "  在 Windows 里跑 build.bat，或者 npm run desktop。"
+echo "  右下角那张提醒卡片只有 Windows 上弹（bin/notice.exe，npm run compile 时现编）。"
 echo "  已经在跑的后端要重启一次才会用上新编的代码。"
