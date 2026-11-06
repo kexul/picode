@@ -169,6 +169,19 @@ function appendSession(record) {
     try { fs.appendFileSync(sessionFile, JSON.stringify(record) + "\n", "utf8"); } catch { /* 写不进去就算了 */ }
 }
 
+/** 后台命令那条暗号的前缀（跟 src/bashProtocol.ts 里那个一致）。 */
+const BASH_FRAME_PREFIX = "##PICHAT_BASH##";
+
+/** 照真扩展的样子往 stderr 写一行后台命令暗号（start / end）。 */
+function emitBash(payload) {
+    try {
+        process.stderr.write(BASH_FRAME_PREFIX + Buffer.from(JSON.stringify(payload), "utf8").toString("base64") + "\n");
+    } catch { /* 写不出去就算了，命令照样跑 */ }
+}
+
+/** 这个假进程报过的后台命令条数：每条一个编号，跟真扩展一样从 1 往上数。 */
+let bashSeqs = 0;
+
 /** 桥要的两样东西：这个会话在哪个目录、它的 .jsonl 在哪（见 tabaBridgeSource.ts 的 cwdOf / sessionFileOf）。 */
 function bridgeCtx() {
     return {
@@ -457,6 +470,38 @@ async function runScript(userText) {
             ? "结束\n（假判官）它说活干完了。"
             : "继续\n（假判官）它说还有没做完的。");
         finish();
+        return;
+    }
+
+    // ---- 后台命令：一句话演一条「放到后台以后还在跑」的命令（见 dev/autoBg.js）----
+    // 真的 bash 桥在这儿起不来（它要 pi 自己那份 bash 实现），所以照它写的那两行暗号直接发：
+    // 先把 start 报上去（后端记进清单，消息流末尾那一块就有了），过一会儿再报 end
+    // （后端把结果当成一条新消息交回本会话，跟真的一条后台命令跑完一模一样）。
+    if (/后台跑一会/.test(userText)) {
+        const ms = Number(process.env.FAKEPI_BG_MS || 8000);
+        const no = ++bashSeqs;
+        const cmd = "npm run build（假后台命令）";
+        const dir = process.env.PICHAT_BASH_DIR || "";
+        const log = dir ? path.join(dir, "tasks", no + ".log") : "";
+        if (log) {
+            try {
+                fs.mkdirSync(path.dirname(log), { recursive: true });
+                fs.writeFileSync(log, "$ " + cmd + "\n\n（假后台命令）先干 " + ms + " 毫秒。\n");
+            } catch { /* 写不进去后端就读不到尾巴，清单照样有 */ }
+        }
+        const pid = process.pid;
+        const startedAt = Date.now();
+        emitBash({ kind: "start", no, toolCallId: "call_bg_" + no, cmd, log, background: true, pid, startedAt });
+        await say("（假模型）我把活扔到后台了（编号 " + no + "），这一轮说完就收工。");
+        finish();
+        // 这一轮已经说完：过一会儿那条命令跑完，照真扩展那样报一声
+        setTimeout(() => {
+            if (log) { try { fs.appendFileSync(log, "（假后台命令）跑完了。\n"); } catch { /* 算了 */ } }
+            emitBash({
+                kind: "end", no, toolCallId: "call_bg_" + no, cmd, log, background: true,
+                pid, exitCode: 0, elapsedMs: Date.now() - startedAt,
+            });
+        }, ms);
         return;
     }
 
