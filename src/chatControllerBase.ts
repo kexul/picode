@@ -971,8 +971,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
     //  判官起不来、或者答不出个所以然，一律当"继续" —— 这是个无情的继续机器：
     //  宁可多跑一轮，也不让人回来手动打一句「继续」。
     //
-    //  后台还有命令在跑时不叫判官（也不往对话里写话）：那条命令跑完的结果本来就会当一条新消息
-    //  交回这个会话，等它进来、那一轮跑完再判（见 autoLoopOnTurnEnd）。
+    //  后台还有命令在跑、或者派出去的子会话还有没跑完的时候不叫判官（也不往对话里写话）：那些结果
+    //  本来就会当一条新消息交回这个会话，等它们进来、那一轮跑完再判（见 autoLoopOnTurnEnd）。
     //
     //  判官走的是派子会话同一条路（tabaSpawn + hidden）：不写名录、不给模型看见、
     //  跑完不交回结果；它跑完了在这里读最后那条回复（见 autoJudgeOnTurnEnd）。
@@ -1091,9 +1091,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (this.autoJudgeRun.has(info.panelId)) { return; }   // 上一个判官还在（正常不会）：不叠着开
         const rt = this.panels.get(info.panelId);
         if (!rt) { return; }
-        // 后台还有命令在跑：这一轮先不叫判官，也不往对话里写话。它跑完的结果本来就当一条新消息
-        // 交回这个会话，那一轮跑完再看要不要继续 —— 两边一起催，同一个会话就撞在一处了。
+        // 后台还有命令在跑、或者派出去的子会话还有没跑完的：这一轮先不叫判官，也不往对话里写话。
+        // 它们的结果本来就会当一条新消息交回这个会话，那一轮跑完再看要不要继续 —— 两边一起催，
+        // 同一个会话就撞在一处了。
         if (rt.hasRunningBashTasks()) { return; }
+        if (this.taba.hasRunningChildren(info.panelId)) { return; }
         if (auto.rounds >= MAX_AUTO_ROUNDS) {
             this.autoOff(rt, `连着跑了 ${auto.rounds} 轮，先停下（要接着跑就再点一下那颗按钮）。`);
             return;

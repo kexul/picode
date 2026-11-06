@@ -78,6 +78,15 @@ export class TabaRegistry {
         return this.all().filter((c) => c.parentPanelId === panelId);
     }
 
+    /**
+     * 这个会话派出去的子会话里还有没有在跑的（刚派出、任务还没发出去也算）。
+     * 判官那种 hidden 子会话不算：它不是替人干的活，也不是结果要交回来的那些。
+     */
+    public hasRunningChildren(panelId: string): boolean {
+        return this.childrenOf(panelId).some((c) =>
+            !c.hidden && (c.state === "starting" || c.state === "running"));
+    }
+
     public noteTaskSent(id: string): void {
         const child = this.byId.get(id);
         if (child && child.state === "starting") { child.state = "running"; }

@@ -1,24 +1,26 @@
 // @ts-nocheck
 /**
- * autoBg —— 验「自动模式遇上后台命令」：后台还有命令在跑的时候，这一轮跑完不叫判官。
+ * autoSkip —— 验「自动模式该等的时候先不叫判官」：后台命令还在跑、派出去的子会话还没跑完。
  *
  * 要验的几件事：
- *   1. 一轮跑完、后台命令还在跑：不派判官（轮数还是 0、列表里没有判官），
- *      也不往对话里写话（悄悄跳过）；
- *   2. 那条命令跑完、结果当一条新消息交回来、这一轮也跑完：这时候才派判官
- *      （judge 那一轮该说「继续」就继续、该说「结束」就关开关）；
- *   3. 界面上「后台任务」那一块照常在（不是把后台命令当没看见）。
+ *   1. 一轮跑完、后台命令还在跑：不派判官（轮数还是 0、列表里没有判官），也不往对话里写话；
+ *   2. 那条命令跑完、结果交回来、这一轮也跑完之后才派判官（judge 说「继续」就继续、说「结束」就关开关）；
+ *   3. 派出去的子会话还没跑完时也一样：先不叫，等它的结果交回来、那一轮跑完才叫；
+ *   4. 界面上「后台任务」那一块照常在（不是把后台命令当没看见）。
  *
- * 后台命令由假模型演：它照真扩展的样子往 stderr 写 start / end 两行暗号
- * （见 dev/fakePi.js 里「后台跑一会」那一段），后端那边全是真的。
+ * 后台命令和子会话都由假模型演：前者照真扩展的样子往 stderr 写 start / end 两行暗号
+ * （见 dev/fakePi.js 里「后台跑一会」那一段），后者调的是真扩展注册的那个 task 工具；
+ * 后端那边全是真的。
  *
- *   npm run web:shot -- --fake-pi --script dev/autoBg.js
+ *   npm run web:shot -- --fake-pi --script dev/autoSkip.js
  */
 const fs = require("fs");
 const path = require("path");
 
 // 后台那条命令要跑多久才收工（毫秒）：够短，一眼看完；够长，够脚本查「这段时间里没叫判官」
 process.env.FAKEPI_BG_MS = process.env.FAKEPI_BG_MS || "9000";
+// 子会话同理：故意磨蹭一会儿，才查得到「它还在跑的那段时间里没叫判官」
+process.env.FAKEPI_CHILD_SLOW_MS = process.env.FAKEPI_CHILD_SLOW_MS || "9000";
 // 判官要跑一会儿才看得到「判官正在看」、也才来得及在「项目与会话」列表里露一面
 process.env.FAKEPI_JUDGE_MS = process.env.FAKEPI_JUDGE_MS || "2500";
 // 判官第一轮就说「结束」：这一跑只看「该不该叫判官」，不必再让主会话多跑几轮
@@ -162,8 +164,46 @@ module.exports = async (page) => {
   check("判官说结束：那颗按钮回到暗色、开关也收了", stopped && stopped.ok && Object.keys(autos()).length === 0, stopped);
   await page.shot("auto-bg-stopped.png");
 
-  if (problems.length) {
-    throw new Error("自动模式遇上后台命令有问题：\n- " + problems.join("\n- "));
+  // ---- 5. 子会话还没跑完时也一样：先不叫判官，等它交回结果、这一轮跑完再叫 ----
+  await page.click("#autoBtn");
+  await page.sleep(600);
+  check("（前提）自动模式再点开", (await ind()).on, await ind());
+  const sysAfterOn2 = await systemSays();
+  await page.send("派活");
+  await page.waitAnswer("子会话工具回话");
+  let sawJudge2 = null;
+  let roundsMoved2 = null;
+  const watchingChildUntil = Date.now() + (Number(process.env.FAKEPI_CHILD_SLOW_MS) - 3500);
+  while (Date.now() < watchingChildUntil) {
+    const now = await ind();
+    if (now.title.includes("判官")) { sawJudge2 = now.title; break; }
+    const a = onlyAuto();
+    if (a && a.rounds > 0) { roundsMoved2 = a.rounds; break; }
+    await page.sleep(400);
   }
-  console.log("自动模式遇上后台命令：全过。");
+  check("子会话还在跑的时候不叫判官（那颗按钮上一直没提判官）", !sawJudge2, sawJudge2);
+  check("子会话还在跑的时候不叫判官（轮数还是 0）", !roundsMoved2, roundsMoved2);
+  check("子会话还在跑的时候也不往对话里写话", (await systemSays()) === sysAfterOn2,
+    (await systemSays()).slice(-160));
+  const rowsWhileChild = await openRows();
+  check("子会话还在跑的时候列表里只有它，没有判官",
+    rowsWhileChild.length === 2 && !rowsWhileChild.some((r) => r.includes("判官")), rowsWhileChild);
+
+  const childBack = await until(async () => {
+    const said = await userSays();
+    return { ok: said.some((t) => t.includes("跑完了，用时")), said };
+  }, 60000);
+  check("子会话跑完，结果交回了派它的会话", childBack && childBack.ok,
+    childBack && childBack.said.filter((t) => t.includes("跑完了，用时")));
+  const judged2 = await until(async () => {
+    const now = await ind();
+    return { ok: now.title.includes("判官正在看"), title: now.title };
+  }, 60000);
+  check("子会话交回结果、那一轮也跑完之后才派判官", judged2 && judged2.ok, judged2);
+  await page.shot("auto-skip-child.png");
+
+  if (problems.length) {
+    throw new Error("自动模式该等的时候先不叫判官：有问题：\n- " + problems.join("\n- "));
+  }
+  console.log("自动模式该等的时候先不叫判官：全过。");
 };

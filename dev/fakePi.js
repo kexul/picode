@@ -477,7 +477,8 @@ async function runScript(userText) {
     // 真的 bash 桥在这儿起不来（它要 pi 自己那份 bash 实现），所以照它写的那两行暗号直接发：
     // 先把 start 报上去（后端记进清单，消息流末尾那一块就有了），过一会儿再报 end
     // （后端把结果当成一条新消息交回本会话，跟真的一条后台命令跑完一模一样）。
-    if (/后台跑一会/.test(userText)) {
+    // 子会话收到的任务正文里也会带派它的那个会话的名字（那儿可能就有「后台跑一会」这几个字）：排除掉
+    if (!isChildTask && /后台跑一会/.test(userText)) {
         const ms = Number(process.env.FAKEPI_BG_MS || 8000);
         const no = ++bashSeqs;
         const cmd = "npm run build（假后台命令）";
