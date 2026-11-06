@@ -28,6 +28,7 @@ import { findListedFile } from "./fileSearch";
 import type { SessionChanges } from "./gitChanges";
 import { readRemoteNotice, readWeixinReply, type RemoteNotice } from "./remoteNotice";
 import { PhoneInbox, type PhoneAsk, type PhoneNoteKind, type PhoneNoteRecord } from "./phoneInbox";
+import { parseMarkdown } from "./markdownBlocks";
 import { changedCharRanges, diffRows, type LineRanges } from "./wordDiff";
 
 /**
@@ -1957,11 +1958,15 @@ export class PiChatWebServer {
      * 一台都没连着也照记：下一台连上来时那份现状里就有它（这是以前“漏掉的不补发”的另一种做法）。
      */
     public notifyPhones(note: PhoneNote): void {
+        // 解析一次就够：正文怎么画、列表上那一行写什么，都在这儿定下来（见 src/markdownBlocks.ts）
+        const doc = parseMarkdown(note.summary);
         const record = this.phoneInbox.add({
             sessionId: note.sessionId,
             name: note.name,
             kind: note.kind,
             text: note.summary,
+            blocks: doc.blocks,
+            plain: doc.plain,
             at: note.at,
             ...(note.from ? { from: note.from } : {}),
             ...(note.ask ? { ask: note.ask } : {}),

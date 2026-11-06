@@ -556,7 +556,7 @@ internal sealed class MainWindow : Window
         // note.Name 里已经带了「哪台 · 会话名」（后端推过来时就拼好了），别再叠一层
         var title = note.Name;
         if (note.Kind == "ask") { title = "在等你答一句 · " + title; }
-        Toast.Show(note.SessionId, title, Markdown.PlainOneLine(note.Text), note.Kind == "ask", () =>
+        Toast.Show(note.SessionId, title, PreviewOf(note), note.Kind == "ask", () =>
         {
             ShowMain();
             SelectSession(note.SessionId);
@@ -650,7 +650,7 @@ internal sealed class MainWindow : Window
         box.Children.Add(row1);
         box.Children.Add(new TextBlock
         {
-            Text = FirstLine(last?.Text ?? ""),
+            Text = PreviewOf(last),
             FontSize = 12,
             Foreground = Gray,
             TextTrimming = TextTrimming.CharacterEllipsis,
@@ -785,7 +785,7 @@ internal sealed class MainWindow : Window
             });
         }
 
-        stack.Children.Add(Markdown.Render(note.Text, 13, Ink, Gray));
+        stack.Children.Add(Markdown.Render(note.Blocks, note.Text, 13, Ink, Gray));
 
         if (note.Kind == "ask" && note.Ask != null)
         {
@@ -1157,12 +1157,20 @@ internal sealed class MainWindow : Window
     }
 
     /// <summary>列表第二行写最后一条通知的第一句。</summary>
-    /// <summary>列表那一行的一句话：只取头一行，把 markdown 的记号去掉（反引号、星号、井号、列表点）。</summary>
+    /// <summary>列表上那一行：后端已经压好的那句话（老后端没有就自己截一下）。</summary>
+    private static string PreviewOf(Note? note)
+    {
+        if (note is null) { return ""; }
+        var plain = string.IsNullOrWhiteSpace(note.Plain) ? FirstLine(note.Text) : note.Plain!.Trim();
+        if (plain.Length > 40) { plain = plain[..40] + "…"; }
+        return plain;
+    }
+
+    /// <summary>只取头一行（老后端没有 plain 时的兜底）。</summary>
     private static string FirstLine(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) { return ""; }
         var line = text.Replace("\r", "").Split('\n').FirstOrDefault(item => item.Trim().Length > 0)?.Trim() ?? "";
-        line = Markdown.PlainOneLine(line);
         var cut = line.IndexOfAny(new[] { '。', '！', '？', '!', '?' });
         if (cut > 0) { line = line[..cut]; }
         if (line.Length > 40) { line = line[..40] + "…"; }

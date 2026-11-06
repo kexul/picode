@@ -8,6 +8,8 @@
  * 只活在内存里：后端重启就没了。手机上少几条旧话不算事，会话本身一点不受影响。
  */
 
+import type { MdBlock } from "./markdownBlocks";
+
 /** 一条「有事」是哪一种：跑完一轮 / 在等你答一句 / 你自己说的一句话。 */
 export type PhoneNoteKind = "done" | "ask" | "me";
 
@@ -33,6 +35,10 @@ export interface PhoneNoteRecord {
     name: string;
     kind: PhoneNoteKind;
     text: string;
+    /** 这句话「怎么画」（后端解析好的 markdown，见 src/markdownBlocks.ts）：两端照着画就行。 */
+    blocks?: MdBlock[];
+    /** 压成一句话的预览：会话列表上那一行用。 */
+    plain?: string;
     /** 什么时候的事（毫秒）。 */
     at: number;
     /** 别的机器推来的：那台叫什么。 */
@@ -48,6 +54,8 @@ export interface PhoneNoteInput {
     name: string;
     kind: PhoneNoteKind;
     text: string;
+    blocks?: MdBlock[];
+    plain?: string;
     at?: number;
     from?: string;
     ask?: PhoneAsk;
@@ -69,6 +77,8 @@ export class PhoneInbox {
             name: note.name,
             kind: note.kind,
             text: note.text,
+            ...(note.blocks ? { blocks: note.blocks } : {}),
+            ...(note.plain !== undefined ? { plain: note.plain } : {}),
             at: note.at ?? Date.now(),
             ...(note.from ? { from: note.from } : {}),
             ...(note.ask ? { ask: note.ask } : {}),

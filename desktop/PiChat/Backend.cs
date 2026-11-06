@@ -2,6 +2,7 @@ using System.IO;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Windows.Threading;
 
 namespace PiChat;
@@ -17,8 +18,49 @@ internal sealed class Note
     public long At { get; set; }
     public string? From { get; set; }
     public Ask? Ask { get; set; }
+    /// <summary>这句话「怎么画」：后端解析好的一份结构（见 src/markdownBlocks.ts）。</summary>
+    public List<MdBlock>? Blocks { get; set; }
+    /// <summary>压成一句话的预览（会话列表上那一行）。</summary>
+    public string? Plain { get; set; }
     /// <summary>这道题已经在别处（网页上、另一台设备上）答过了：那几个选项直接置灰。</summary>
     public bool Settled { get; set; }
+}
+
+/// <summary>正文里的一个块（后端解析好的；键名短，见 src/markdownBlocks.ts）。</summary>
+internal sealed class MdBlock
+{
+    [JsonPropertyName("k")] public string Kind { get; set; } = "";
+    /// <summary>段落 / 标题 / 引用里的那几截字。</summary>
+    [JsonPropertyName("r")] public List<MdRun>? Runs { get; set; }
+    /// <summary>标题级数（1~6）。</summary>
+    [JsonPropertyName("n")] public int Level { get; set; }
+    /// <summary>列表是不是有序的。</summary>
+    [JsonPropertyName("o")] public bool Ordered { get; set; }
+    [JsonPropertyName("i")] public List<MdItem>? Items { get; set; }
+    /// <summary>代码块的原文。</summary>
+    [JsonPropertyName("v")] public string? Value { get; set; }
+    /// <summary>表格每一列的对齐（0 左 / 1 中 / 2 右）。</summary>
+    [JsonPropertyName("a")] public List<int>? Align { get; set; }
+    /// <summary>表格的格子：行 → 列 → 那几截字。</summary>
+    [JsonPropertyName("g")] public List<List<List<MdRun>>>? Grid { get; set; }
+}
+
+/// <summary>列表里的一项。</summary>
+internal sealed class MdItem
+{
+    [JsonPropertyName("m")] public string? Marker { get; set; }
+    [JsonPropertyName("r")] public List<MdRun>? Runs { get; set; }
+}
+
+/// <summary>行内的一截字（同一个样式的连续几个字）。</summary>
+internal sealed class MdRun
+{
+    [JsonPropertyName("v")] public string? Value { get; set; }
+    [JsonPropertyName("b")] public int Bold { get; set; }
+    [JsonPropertyName("i")] public int Italic { get; set; }
+    [JsonPropertyName("s")] public int Strike { get; set; }
+    [JsonPropertyName("c")] public int Code { get; set; }
+    [JsonPropertyName("l")] public int Link { get; set; }
 }
 
 /// <summary>模型问的那道题。</summary>

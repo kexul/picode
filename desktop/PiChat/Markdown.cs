@@ -1,4 +1,3 @@
-using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -7,11 +6,12 @@ using System.Windows.Media;
 namespace PiChat;
 
 /// <summary>
-/// 把一条回复里的 markdown 画出来：段落、标题、列表、引用、代码块，加上行内的粗体 / 斜体 / 行内代码 / 链接。
+/// 把一条回复画出来：段落、标题、列表、表格、引用、代码块、分隔线，加上行内的粗体 / 斜体 /
+/// 删除线 / 行内代码 / 链接文字。
 ///
-/// 只做聊天里真会碰到的那几样，不是完整的 markdown（表格、脚注、HTML 那些不认）。
-/// 网页端那边用 marked（见 media/chat.js 的 mdOptions：breaks 开着，所以单个换行就是换行），
-/// 这里跟着那条走：一段里的换行照旧换行，空行才分段。
+/// **解析不在这儿**：后端推过来的每条通知里已经带好一份「怎么画」的结构（见 src/markdownBlocks.ts），
+/// 这里只负责照着画。手机那个 app 也是这么干的 —— 同一段字在两边画得一样，加新东西也只用改后端。
+/// 老后端推来的没有这份结构，那就把整段文字当一段画（丑一点，但不会少字）。
 /// </summary>
 internal static class Markdown
 {
@@ -22,10 +22,23 @@ internal static class Markdown
     private static readonly Brush RuleColor = Freeze("#e5e7eb");
 
     /// <summary>画成一摞块（直接塞进气泡里）。</summary>
-    public static FrameworkElement Render(string text, double fontSize, Brush ink, Brush subtle)
+    /// <param name="blocks">后端解析好的结构；没有就退到 <paramref name="fallbackText"/></param>
+    public static FrameworkElement Render(IReadOnlyList<MdBlock>? blocks, string fallbackText, double fontSize, Brush ink, Brush subtle)
     {
+        if (blocks is null || blocks.Count == 0)
+        {
+            var text = new TextBlock
+            {
+                FontSize = fontSize,
+                Foreground = ink,
+                TextWrapping = TextWrapping.Wrap,
+                LineHeight = fontSize * 1.65,
+                Text = fallbackText ?? "",
+            };
+            return text;
+        }
+
         var panel = new StackPanel();
-        var blocks = ParseBlocks(text ?? "");
         for (var i = 0; i < blocks.Count; i++)
         {
             var element = MakeBlock(blocks[i], fontSize, ink, subtle);
@@ -36,379 +49,158 @@ internal static class Markdown
     }
 
     // ======================================================================
-    //  块：先切成一段一段的
-    // ======================================================================
-
-    private abstract record Block;
-    private sealed record ParagraphBlock(string Text) : Block;
-    private sealed record HeadingBlock(int Level, string Text) : Block;
-    /// <summary>列表里的一项：Marker 是「•」或者「3.」。</summary>
-    private sealed record Item(string Marker, string Text);
-    private sealed record ListBlock(bool Ordered, List<Item> Items) : Block;
-    private sealed record CodeBlock(string Text) : Block;
-    private sealed record QuoteBlock(string Text) : Block;
-    private sealed record RuleBlock : Block;
-    /// <summary>一张表格：对齐方式（0 左 / 1 中 / 2 右），Rows[0] 是表头。</summary>
-    private sealed record TableBlock(List<int> Align, List<string[]> Rows) : Block;
-
-    private static List<Block> ParseBlocks(string text)
-    {
-        var blocks = new List<Block>();
-        var lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-        var i = 0;
-        while (i < lines.Length)
-        {
-            var raw = lines[i];
-            var line = raw.Trim();
-            if (line.Length == 0) { i++; continue; }
-
-            // 代码块：``` 或者 ~~~ 开头，一直到同一种栅栏收尾（后面跟着的语言名不管）
-            if (line.StartsWith("```", StringComparison.Ordinal) || line.StartsWith("~~~", StringComparison.Ordinal))
-            {
-                var fence = line[..3];
-                var code = new StringBuilder();
-                i++;
-                while (i < lines.Length && !lines[i].TrimStart().StartsWith(fence, StringComparison.Ordinal))
-                {
-                    code.Append(lines[i]).Append('\n');
-                    i++;
-                }
-                if (i < lines.Length) { i++; }        // 收尾的那一行
-                blocks.Add(new CodeBlock(code.ToString().TrimEnd('\n')));
-                continue;
-            }
-
-            // 一条横线
-            if (IsRule(line)) { blocks.Add(new RuleBlock()); i++; continue; }
-
-            // 标题：# 到 ######，后面得有个空格
-            var hashes = 0;
-            while (hashes < line.Length && line[hashes] == '#') { hashes++; }
-            if (hashes is >= 1 and <= 6 && line.Length > hashes && line[hashes] == ' ')
-            {
-                blocks.Add(new HeadingBlock(hashes, line[(hashes + 1)..].Trim()));
-                i++;
-                continue;
-            }
-
-            // 引用：连着几行以 > 开头的合成一段
-            if (line.StartsWith('>'))
-            {
-                var quote = new StringBuilder();
-                while (i < lines.Length && lines[i].TrimStart().StartsWith('>'))
-                {
-                    var piece = lines[i].TrimStart()[1..];
-                    if (piece.StartsWith(' ')) { piece = piece[1..]; }
-                    if (quote.Length > 0) { quote.Append('\n'); }
-                    quote.Append(piece);
-                    i++;
-                }
-                blocks.Add(new QuoteBlock(quote.ToString().TrimEnd()));
-                continue;
-            }
-
-            // 列表：连着几项，类型得一样（隔一个空行断了，就另起一截）
-            if (TryItem(line, out var ordered, out var marker, out var first))
-            {
-                var items = new List<Item> { new(marker, first) };
-                i++;
-                while (i < lines.Length && TryItem(lines[i].Trim(), out var sameOrdered, out var nextMarker, out var nextText)
-                    && sameOrdered == ordered)
-                {
-                    items.Add(new Item(nextMarker, nextText));
-                    i++;
-                }
-                blocks.Add(new ListBlock(ordered, items));
-                continue;
-            }
-
-            // 表格：这一行有竖线、下一行是「|---|---|」那种分隔行
-            if (line.Contains('|') && i + 1 < lines.Length && IsTableRule(lines[i + 1]))
-            {
-                var align = SplitRow(lines[i + 1]).Select(AlignOf).ToList();
-                var rows = new List<string[]> { SplitRow(line).ToArray() };
-                i += 2;
-                while (i < lines.Length && lines[i].Trim().Length > 0 && lines[i].Contains('|'))
-                {
-                    rows.Add(SplitRow(lines[i].Trim()).ToArray());
-                    i++;
-                }
-                // 每行补到列数一样（写 markdown 的人常常少写几格）
-                for (var r = 0; r < rows.Count; r++)
-                {
-                    var row = rows[r];
-                    while (row.Length < align.Count) { row = row.Append("").ToArray(); }
-                    rows[r] = row;
-                }
-                blocks.Add(new TableBlock(align, rows));
-                continue;
-            }
-
-            // 剩下的就是一段：一直到空行 / 下一个块的开头
-            var paragraph = new StringBuilder(raw.TrimEnd());
-            i++;
-            while (i < lines.Length && IsParagraphLine(lines[i]))
-            {
-                paragraph.Append('\n').Append(lines[i].TrimEnd());
-                i++;
-            }
-            blocks.Add(new ParagraphBlock(paragraph.ToString()));
-        }
-        return blocks;
-    }
-
-    private static bool IsParagraphLine(string raw)
-    {
-        var line = raw.Trim();
-        if (line.Length == 0) { return false; }
-        if (line.StartsWith("```", StringComparison.Ordinal) || line.StartsWith("~~~", StringComparison.Ordinal)) { return false; }
-        if (IsRule(line)) { return false; }
-        if (line.StartsWith('>')) { return false; }
-        if (TryItem(line, out _, out _, out _)) { return false; }
-        if (line.StartsWith('|')) { return false; }
-        var hashes = 0;
-        while (hashes < line.Length && line[hashes] == '#') { hashes++; }
-        return !(hashes is >= 1 and <= 6 && line.Length > hashes && line[hashes] == ' ');
-    }
-
-    private static bool IsRule(string line)
-    {
-        if (line.Length < 3) { return false; }
-        foreach (var c in line)
-        {
-            if (c is not ('-' or '*' or '_')) { return false; }
-        }
-        var first = line[0];
-        foreach (var c in line) { if (c != first) { return false; } }
-        return true;
-    }
-
-    /// <summary>`|---|---:|:---:|` 这种分隔行：决定每一列对齐，也用它认出「这是表格」。</summary>
-    private static bool IsTableRule(string raw)
-    {
-        var cells = SplitRow(raw.Trim());
-        if (cells.Count == 0) { return false; }
-        foreach (var cell in cells)
-        {
-            var text = cell.Trim();
-            if (text.Length < 1) { return false; }
-            var start = text[0] == ':';
-            var end = text[^1] == ':';
-            var dashes = text.Trim(':');
-            if (dashes.Length == 0) { return false; }
-            foreach (var ch in dashes) { if (ch != '-') { return false; } }
-            _ = start; _ = end;
-        }
-        return true;
-    }
-
-    /// <summary>对齐：0 左 / 1 中 / 2 右（看分隔行那一格两头有没有冒号）。</summary>
-    private static int AlignOf(string cell)
-    {
-        var text = cell.Trim();
-        var left = text.StartsWith(':');
-        var right = text.EndsWith(':');
-        if (left && right) { return 1; }
-        return right ? 2 : 0;
-    }
-
-    /// <summary>把一行竖线格切成几格（去掉两头的竖线，`\|` 当普通的竖线）。</summary>
-    private static List<string> SplitRow(string raw)
-    {
-        var line = raw.Trim();
-        if (line.StartsWith('|')) { line = line[1..]; }
-        if (line.EndsWith('|') && !line.EndsWith("\\|")) { line = line[..^1]; }
-        var cells = new List<string>();
-        var buffer = new StringBuilder();
-        for (var i = 0; i < line.Length; i++)
-        {
-            var ch = line[i];
-            if (ch == '\\' && i + 1 < line.Length && line[i + 1] == '|') { buffer.Append('|'); i++; continue; }
-            if (ch == '|') { cells.Add(buffer.ToString().Trim()); buffer.Clear(); continue; }
-            buffer.Append(ch);
-        }
-        cells.Add(buffer.ToString().Trim());
-        return cells;
-    }
-
-    /// <summary>这一行是不是列表项（`- x`、`* x`、`1. x`、`1) x`）。</summary>
-    private static bool TryItem(string line, out bool ordered, out string marker, out string text)
-    {
-        ordered = false;
-        marker = "";
-        text = "";
-        if (line.Length < 2) { return false; }
-
-        if (line[0] is '-' or '*' or '+')
-        {
-            if (line.Length < 2 || line[1] != ' ') { return false; }
-            marker = "•";
-            text = line[2..].Trim();
-            return text.Length > 0;
-        }
-
-        var digits = 0;
-        while (digits < line.Length && char.IsAsciiDigit(line[digits])) { digits++; }
-        if (digits == 0 || digits > 3) { return false; }
-        if (digits + 1 >= line.Length) { return false; }
-        var sep = line[digits];
-        if (sep != '.' && sep != ')') { return false; }
-        if (line[digits + 1] != ' ') { return false; }
-        ordered = true;
-        marker = line[..digits] + ".";
-        text = line[(digits + 2)..].Trim();
-        return text.Length > 0;
-    }
-
-    // ======================================================================
     //  块 → 控件
     // ======================================================================
 
-    private static FrameworkElement MakeBlock(Block block, double fontSize, Brush ink, Brush subtle)
+    private static FrameworkElement MakeBlock(MdBlock block, double fontSize, Brush ink, Brush subtle)
     {
-        switch (block)
+        switch (block.Kind)
         {
-            case ParagraphBlock p:
-            {
-                var text = TextBlockOf(p.Text, fontSize, ink);
-                text.LineHeight = fontSize * 1.65;
-                return text;
-            }
-
-            case HeadingBlock h:
-            {
-                var size = h.Level switch { 1 => 1.45, 2 => 1.3, 3 => 1.15, _ => 1.05 };
-                var text = TextBlockOf(h.Text, fontSize * size, ink, bold: true);
-                text.Margin = new Thickness(0, h.Level <= 2 ? fontSize * 0.35 : 0, 0, 0);
-                return text;
-            }
-
-            case ListBlock list:
-            {
-                var panel = new StackPanel();
-                foreach (var item in list.Items)
+            case "p":
                 {
-                    var row = new Grid { Margin = new Thickness(0, 0, 0, fontSize * 0.25) };
-                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                    var bullet = new TextBlock
-                    {
-                        Text = item.Marker,
-                        FontSize = fontSize,
-                        Foreground = subtle,
-                        Margin = new Thickness(list.Ordered ? 2 : 4, 0, 8, 0),
-                        VerticalAlignment = VerticalAlignment.Top,
-                    };
-                    Grid.SetColumn(bullet, 0);
-                    var body = TextBlockOf(item.Text, fontSize, ink);
-                    body.LineHeight = fontSize * 1.65;
-                    Grid.SetColumn(body, 1);
-                    row.Children.Add(bullet);
-                    row.Children.Add(body);
-                    panel.Children.Add(row);
+                    var text = TextBlockOf(block.Runs, fontSize, ink);
+                    text.LineHeight = fontSize * 1.65;
+                    return text;
                 }
-                panel.Margin = new Thickness(4, 0, 0, 0);
-                return panel;
-            }
 
-            case CodeBlock code:
-            {
-                // 只读的 TextBox：能选、能复制，横向能滚（长命令 / 长路径不会被折断）
-                var box = new TextBox
+            case "h":
                 {
-                    Text = code.Text,
-                    IsReadOnly = true,
-                    BorderThickness = new Thickness(0),
-                    Background = Brushes.Transparent,
-                    FontFamily = Mono,
-                    FontSize = fontSize - 1,
-                    TextWrapping = TextWrapping.NoWrap,
-                    HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                    VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                    Padding = new Thickness(0),
-                    IsReadOnlyCaretVisible = false,
-                };
-                return new Border
-                {
-                    Background = CodeBg,
-                    BorderBrush = CodeBorder,
-                    BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(6),
-                    Padding = new Thickness(10, 8, 10, 8),
-                    Child = box,
-                };
-            }
-
-            case QuoteBlock quote:
-            {
-                return new Border
-                {
-                    Background = CodeBg,
-                    BorderBrush = RuleColor,
-                    BorderThickness = new Thickness(3, 0, 0, 0),
-                    Padding = new Thickness(10, 6, 8, 6),
-                    Child = TextBlockOf(quote.Text, fontSize, subtle),
-                };
-            }
-
-            case TableBlock table:
-            {
-                var grid = new Grid { HorizontalAlignment = HorizontalAlignment.Left };
-                for (var c = 0; c < table.Align.Count; c++)
-                {
-                    grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                    var level = Math.Clamp(block.Level, 1, 6);
+                    var size = level switch { 1 => 1.45, 2 => 1.3, 3 => 1.15, _ => 1.05 };
+                    var text = TextBlockOf(block.Runs, fontSize * size, ink, bold: true);
+                    text.Margin = new Thickness(0, level <= 2 ? fontSize * 0.35 : 0, 0, 0);
+                    return text;
                 }
-                for (var r = 0; r < table.Rows.Count; r++)
+
+            case "l":
                 {
-                    grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-                    var row = table.Rows[r];
-                    for (var c = 0; c < table.Align.Count; c++)
+                    var panel = new StackPanel { Margin = new Thickness(4, 0, 0, 0) };
+                    foreach (var item in block.Items ?? new List<MdItem>())
                     {
-                        var cellText = c < row.Length ? row[c] : "";
-                        var cellTextBlock = TextBlockOf(cellText, fontSize - 1, ink, bold: r == 0);
-                        cellTextBlock.TextAlignment = table.Align[c] switch
+                        var row = new Grid { Margin = new Thickness(0, 0, 0, fontSize * 0.25) };
+                        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                        var bullet = new TextBlock
                         {
-                            1 => TextAlignment.Center,
-                            2 => TextAlignment.Right,
-                            _ => TextAlignment.Left,
+                            Text = item.Marker ?? "•",
+                            FontSize = fontSize,
+                            Foreground = subtle,
+                            Margin = new Thickness(block.Ordered ? 2 : 4, 0, 8, 0),
+                            VerticalAlignment = VerticalAlignment.Top,
                         };
-                        cellTextBlock.TextWrapping = TextWrapping.NoWrap;
-                        var cell = new Border
-                        {
-                            BorderBrush = CodeBorder,
-                            BorderThickness = new Thickness(0, r > 0 ? 1 : 0, c > 0 ? 1 : 0, r == 0 ? 1 : 0),
-                            Background = r == 0 ? CodeBg : Brushes.Transparent,
-                            Padding = new Thickness(8, 4, 8, 4),
-                            Child = cellTextBlock,
-                        };
-                        Grid.SetRow(cell, r);
-                        Grid.SetColumn(cell, c);
-                        grid.Children.Add(cell);
+                        Grid.SetColumn(bullet, 0);
+                        var body = TextBlockOf(item.Runs, fontSize, ink);
+                        body.LineHeight = fontSize * 1.65;
+                        Grid.SetColumn(body, 1);
+                        row.Children.Add(bullet);
+                        row.Children.Add(body);
+                        panel.Children.Add(row);
                     }
+                    return panel;
                 }
-                // 列一多就横向滚（挤窄了反而看不清）
-                return new ScrollViewer
-                {
-                    HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                    VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                    Content = grid,
-                };
-            }
 
-            case RuleBlock:
-                return new Border
+            case "code":
                 {
-                    Height = 1,
-                    Background = RuleColor,
-                    Margin = new Thickness(0, 2, 0, 2),
-                };
+                    // 只读的 TextBox：能选、能复制，横向能滚（长命令 / 长路径不会被折断）
+                    var box = new TextBox
+                    {
+                        Text = block.Value ?? "",
+                        IsReadOnly = true,
+                        BorderThickness = new Thickness(0),
+                        Background = Brushes.Transparent,
+                        FontFamily = Mono,
+                        FontSize = fontSize - 1,
+                        TextWrapping = TextWrapping.NoWrap,
+                        HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                        VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                        Padding = new Thickness(0),
+                        IsReadOnlyCaretVisible = false,
+                    };
+                    return new Border
+                    {
+                        Background = CodeBg,
+                        BorderBrush = CodeBorder,
+                        BorderThickness = new Thickness(1),
+                        CornerRadius = new CornerRadius(6),
+                        Padding = new Thickness(10, 8, 10, 8),
+                        Child = box,
+                    };
+                }
+
+            case "q":
+                {
+                    return new Border
+                    {
+                        Background = CodeBg,
+                        BorderBrush = RuleColor,
+                        BorderThickness = new Thickness(3, 0, 0, 0),
+                        Padding = new Thickness(10, 6, 8, 6),
+                        Child = TextBlockOf(block.Runs, fontSize, subtle),
+                    };
+                }
+
+            case "hr":
+                {
+                    return new Border
+                    {
+                        Height = 1,
+                        Background = RuleColor,
+                        Margin = new Thickness(0, 2, 0, 2),
+                    };
+                }
+
+            case "t":
+                {
+                    var align = block.Align ?? new List<int>();
+                    var grid = new Grid { HorizontalAlignment = HorizontalAlignment.Left };
+                    for (var c = 0; c < align.Count; c++)
+                    {
+                        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                    }
+                    var rows = block.Grid ?? new List<List<List<MdRun>>>();
+                    for (var r = 0; r < rows.Count; r++)
+                    {
+                        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                        var cells = rows[r];
+                        for (var c = 0; c < align.Count; c++)
+                        {
+                            var runs = c < cells.Count ? cells[c] : null;
+                            var cellText = TextBlockOf(runs, fontSize - 1, ink, bold: r == 0);
+                            cellText.TextAlignment = align[c] switch
+                            {
+                                1 => TextAlignment.Center,
+                                2 => TextAlignment.Right,
+                                _ => TextAlignment.Left,
+                            };
+                            cellText.TextWrapping = TextWrapping.NoWrap;
+                            var cell = new Border
+                            {
+                                BorderBrush = CodeBorder,
+                                BorderThickness = new Thickness(0, r > 0 ? 1 : 0, c > 0 ? 1 : 0, r == 0 ? 1 : 0),
+                                Background = r == 0 ? CodeBg : Brushes.Transparent,
+                                Padding = new Thickness(8, 4, 8, 4),
+                                Child = cellText,
+                            };
+                            Grid.SetRow(cell, r);
+                            Grid.SetColumn(cell, c);
+                            grid.Children.Add(cell);
+                        }
+                    }
+                    // 列一多就横向滚（挤窄了反而看不清）
+                    return new ScrollViewer
+                    {
+                        HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                        VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                        Content = grid,
+                    };
+                }
 
             default:
                 return new TextBlock { Text = "", FontSize = fontSize };
         }
     }
 
-    private static TextBlock TextBlockOf(string text, double fontSize, Brush ink, bool bold = false)
+    private static TextBlock TextBlockOf(IReadOnlyList<MdRun>? runs, double fontSize, Brush ink, bool bold = false)
     {
         var block = new TextBlock
         {
@@ -418,167 +210,49 @@ internal static class Markdown
             LineHeight = fontSize * 1.6,
         };
         if (bold) { block.FontWeight = FontWeights.SemiBold; }
-        AddInlines(block, text, fontSize, ink, bold);
+        AddRuns(block, runs, fontSize, ink);
         return block;
     }
 
-    // ======================================================================
-    //  行内的那几样：`代码` **粗** *斜* ~~删掉~~ [链接](地址)
-    // ======================================================================
-
-    private static void AddInlines(TextBlock block, string text, double fontSize, Brush ink, bool bold)
+    /// <summary>把一段行内内容（几截带样式的字）塞进 TextBlock。</summary>
+    private static void AddRuns(TextBlock block, IReadOnlyList<MdRun>? runs, double fontSize, Brush ink)
     {
-        var buffer = new StringBuilder();
-
-        void Flush()
+        if (runs is null) { return; }
+        foreach (var run in runs)
         {
-            if (buffer.Length == 0) { return; }
-            block.Inlines.Add(new Run(buffer.ToString()) { Foreground = ink });
-            buffer.Clear();
-        }
+            var text = run.Value ?? "";
+            if (text.Length == 0) { continue; }
 
-        var i = 0;
-        while (i < text.Length)
-        {
-            var c = text[i];
-
-            if (c == '\n')
+            // 换行：后端把段落里的换行原样留在字里（跟网页端 breaks: true 一个意思）
+            var pieces = text.Split('\n');
+            for (var p = 0; p < pieces.Length; p++)
             {
-                Flush();
-                block.Inlines.Add(new LineBreak());
-                i++;
-                continue;
-            }
+                if (p > 0) { block.Inlines.Add(new LineBreak()); }
+                if (pieces[p].Length == 0) { continue; }
 
-            // 行内代码：`这样`
-            if (c == '`')
-            {
-                var end = text.IndexOf('`', i + 1);
-                if (end > i + 1)
+                var element = new Run(pieces[p]) { Foreground = run.Code == 1 ? ink : ink };
+                if (run.Bold == 1) { element.FontWeight = FontWeights.SemiBold; }
+                if (run.Italic == 1) { element.FontStyle = FontStyles.Italic; }
+                if (run.Strike == 1) { element.TextDecorations = TextDecorations.Strikethrough; }
+                if (run.Code == 1)
                 {
-                    Flush();
-                    block.Inlines.Add(new Run(text[(i + 1)..end])
-                    {
-                        FontFamily = Mono,
-                        FontSize = fontSize * 0.92,
-                        Background = CodeBg,
-                    });
-                    i = end + 1;
-                    continue;
+                    element.FontFamily = Mono;
+                    element.FontSize = fontSize * 0.92;
+                    element.Background = CodeBg;
                 }
-            }
-
-            // 链接：[这几个字](这个地址) —— 只显示那几个字，点不开（要跳就去浏览器里看）
-            if (c == '[')
-            {
-                var close = text.IndexOf(']', i + 1);
-                if (close > i + 1 && close + 1 < text.Length && text[close + 1] == '(')
+                if (run.Link == 1)
                 {
-                    var end = text.IndexOf(')', close + 2);
-                    if (end > close + 1)
-                    {
-                        Flush();
-                        block.Inlines.Add(new Run(text[(i + 1)..close])
-                        {
-                            Foreground = LinkColor,
-                            TextDecorations = TextDecorations.Underline,
-                        });
-                        i = end + 1;
-                        continue;
-                    }
+                    element.Foreground = LinkColor;
+                    element.TextDecorations = TextDecorations.Underline;
                 }
+                block.Inlines.Add(element);
             }
-
-            // 成对的记号：先试两个字的（** __ ~~），再试一个字的（* _）
-            if (TryWrap(text, i, "**", out var strong) || TryWrap(text, i, "__", out strong))
-            {
-                Flush();
-                var run = new Run(strong) { Foreground = ink, FontWeight = FontWeights.SemiBold };
-                block.Inlines.Add(run);
-                i += strong.Length + 4;
-                continue;
-            }
-            if (TryWrap(text, i, "~~", out var struck))
-            {
-                Flush();
-                block.Inlines.Add(new Run(struck) { Foreground = ink, TextDecorations = TextDecorations.Strikethrough });
-                i += struck.Length + 4;
-                continue;
-            }
-            if (TryWrap(text, i, "*", out var em) || TryWrap(text, i, "_", out em))
-            {
-                Flush();
-                block.Inlines.Add(new Run(em) { Foreground = ink, FontStyle = FontStyles.Italic });
-                i += em.Length + 2;
-                continue;
-            }
-
-            buffer.Append(c);
-            i++;
         }
-        Flush();
-    }
-
-    /// <summary>
-    /// 从 i 开始是不是夹着一对 marker（内容不能空、不能以空格开头或结尾：
-    /// 这样 `a * b`、`文件名_x` 这类就不会被当成强调）。
-    /// </summary>
-    private static bool TryWrap(string text, int start, string marker, out string inner)
-    {
-        inner = "";
-        if (start + marker.Length >= text.Length) { return false; }
-        if (string.CompareOrdinal(text, start, marker, 0, marker.Length) != 0) { return false; }
-        var from = start + marker.Length;
-        if (char.IsWhiteSpace(text[from])) { return false; }
-        var end = text.IndexOf(marker, from, StringComparison.Ordinal);
-        if (end <= from) { return false; }
-        if (char.IsWhiteSpace(text[end - 1])) { return false; }
-        // 单字形的 *_ 不要在词中间动手（snake_case、2*3）
-        if (marker.Length == 1 && start > 0 && (char.IsLetterOrDigit(text[start - 1]) || text[start - 1] == '_'))
-        {
-            return false;
-        }
-        // 两个字的记号里面不该再出现它自己（**a **b** c** 这种）
-        inner = text[from..end];
-        if (marker.Length == 2 && inner.Contains(marker, StringComparison.Ordinal)) { return false; }
-        return true;
     }
 
     // ======================================================================
     //  小工具
     // ======================================================================
-
-    /// <summary>一行里把 markdown 的记号去掉（列表预览用）：代码块只留第一行、不掉字。</summary>
-    public static string PlainOneLine(string text)
-    {
-        var line = (text ?? "").Replace("\r", "");
-        // 代码块的栅栏与它里面那几行：只拿第一行内容
-        if (line.StartsWith("```", StringComparison.Ordinal) || line.StartsWith("~~~", StringComparison.Ordinal))
-        {
-            var rest = line[3..].Trim();
-            return rest.Length > 0 ? rest : "代码";
-        }
-        line = line.Trim();
-        var hashes = 0;
-        while (hashes < line.Length && line[hashes] == '#') { hashes++; }
-        if (hashes is >= 1 and <= 6 && line.Length > hashes) { line = line[hashes..].Trim(); }
-        if (line.StartsWith('>')) { line = line.TrimStart('>').Trim(); }
-        if (TryItem(line, out _, out _, out var itemText)) { line = itemText; }
-        line = line.Replace("**", "").Replace("__", "").Replace("~~", "").Replace("`", "");
-        line = line.Replace("*", "").Replace("_", "");
-        // [这几个字](地址) → 这几个字
-        var open = line.IndexOf('[');
-        while (open >= 0)
-        {
-            var close = line.IndexOf(']', open + 1);
-            if (close < 0) { break; }
-            var end = close + 1 < line.Length && line[close + 1] == '(' ? line.IndexOf(')', close + 2) : -1;
-            if (end < 0) { break; }
-            line = line[..open] + line[(open + 1)..close] + line[(end + 1)..];
-            open = line.IndexOf('[', open);
-        }
-        return line.Trim();
-    }
 
     private static FrameworkElement WithBottomGap(FrameworkElement element, double gap)
     {

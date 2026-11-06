@@ -46,6 +46,10 @@ final class Store {
         final long at;
         /** 只有 kind 是 ask 才有：cardId、选项那些，原样留着。 */
         final JSONObject ask;
+        /** 这句话「怎么画」：后端解析好的一份结构（见 src/markdownBlocks.ts）；自己刚发的那句没有。 */
+        final JSONArray blocks;
+        /** 压成一句话的预览（会话列表上那一行）。 */
+        final String plain;
         /** 这道题已经在别处答过了：界面上那几个选项直接置灰。 */
         final boolean settled;
 
@@ -58,6 +62,8 @@ final class Store {
             from = json.optString("from", "");
             at = json.optLong("at", System.currentTimeMillis());
             ask = json.optJSONObject("ask");
+            blocks = json.optJSONArray("blocks");
+            plain = json.optString("plain", "");
         // 这道题已经在别处答过了（重新连上时后端给的那份里带着）：那几个选项直接置灰
         settled = json.optBoolean("settled", false);
         }
@@ -71,6 +77,8 @@ final class Store {
             this.from = "";
             this.at = at;
             this.ask = null;
+            this.blocks = null;
+            this.plain = "";
             this.settled = false;
         }
 
