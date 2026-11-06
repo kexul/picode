@@ -396,9 +396,9 @@
   }
 
   // ==================== 按需脚本 ====================
-  // 首屏只排主脚本和那几个都要用的第三方脚本；大的、偶尔才用得上的不排（画图的 pele.js 700 多 KB、
-  // 画二维码的 qrcode.js 56 KB），头一次真要用时才照页面 head 里那张纸条（pichat-lazy-scripts，地址见
-  // src/pageHtml.ts）去拉。面板那边没有可引的地址，这些都是内联的，一加载就在，根本不会走到这里。
+  // 首屏只排主脚本和那几个都要用的第三方脚本；大的、偶尔才用得上的不排（画图的 pele.js 700 多 KB），
+  // 头一次真要用时才照页面 head 里那张纸条（pichat-lazy-scripts，地址见 src/pageHtml.ts）去拉。
+  // 面板那边没有可引的地址，这些都是内联的，一加载就在，根本不会走到这里。
 
   /** 每个按需脚本的现状：state 是 idle（还没人要用）/ loading（正在拉）/ ready / failed，waiters 是排队等着的那些回话。 */
   const lazyScripts = new Map();
@@ -12943,7 +12943,6 @@
     if (it.kind === "number") { renderNumberRow(row, it); return row; }
     if (it.kind === "button") { renderButtonRow(row, it); return row; }
     if (it.kind === "text") { renderTextRow(row, it); return row; }
-    if (it.kind === "weixin") { renderWeixinRow(row, it); return row; }
     if (Array.isArray(it.options) && it.options.length) {
       // 按钮组：直接点选某个选项
       row.classList.add("vo-item-group");
@@ -12978,149 +12977,6 @@
       vscode.postMessage({ type: "pickerToggle", kind: "options", action: it.action, value: it.value });
     });
     return row;
-  }
-
-  /**
-   * 「微信」那一块：扫码登录（后端在 chatHost.ts 的 weixinOptionItem 里给这几项）。
-   *
-   * 二维码是现画的（media/qrcode.js）：页面只许连本站，不能引外站的图。
-   * 走到哪一步全看后端给的 phase —— 界面这边不猜，也不记着自己那份：
-   * 每次登录状态一变，后端就把整份选项重推一遍（见 chatHost.ts 的 weixinLogin）。
-   */
-  /** 画二维码那个脚本叫什么：清单里它是 lazy-script 那一条（见 src/chatUiFiles.ts）。 */
-  const QRCODE_SCRIPT = "qrcode.js";
-  function renderWeixinRow(row, it) {
-    row.classList.add("vo-item-weixin");
-    // 这一块上面已经有一行小节标题写着「微信」（后端给这一项的 section），这里不再重复写一遍名字
-    const body = document.createElement("div"); body.className = "vo-wx-body";
-    row.appendChild(body);
-
-    const phase = String(it.phase || "idle");
-    const message = String(it.message || "");
-    // 正在扫的时候这块得看得见：设置那一列挺长，它本来可能半截在框外（人点了“扫码登录”总得看到码）
-    if (phase === "wait" || phase === "scaned" || phase === "needcode") {
-      setTimeout(() => { try { row.scrollIntoView({ block: "nearest" }); } catch (e) { /* 滚不动就算了 */ } }, 0);
-    }
-
-    function note(text, isError) {
-      if (!text) { return; }
-      const el = document.createElement("div");
-      el.className = "vo-wx-note" + (isError ? " error" : "");
-      el.textContent = text;
-      body.appendChild(el);
-    }
-    function button(text, onClick, primary) {
-      const btn = document.createElement("button");
-      btn.type = "button"; btn.className = "vo-btn"; btn.textContent = text;
-      if (primary) { btn.style.background = "var(--vscode-button-background, #007acc)"; btn.style.color = "var(--vscode-button-foreground, #fff)"; }
-      btn.addEventListener("click", onClick);
-      return btn;
-    }
-
-    if (phase === "done") {
-      const who = document.createElement("div"); who.className = "vo-wx-account";
-      who.textContent = it.account ? ("已登录：" + it.account) : "已登录";
-      body.appendChild(who);
-      note(message);
-      // 再扫一张：换了微信、或者以后令牌过期了，得能重新绑一次（不用去删文件）
-      const line = document.createElement("div"); line.className = "vo-wx-row";
-      line.appendChild(button("重新扫码", () => {
-        vscode.postMessage({ type: "weixinLogin", action: "start" });
-      }));
-      body.appendChild(line);
-      return;
-    }
-
-    if (phase === "wait" || phase === "scaned" || phase === "needcode") {
-      const qrBox = document.createElement("div"); qrBox.className = "vo-wx-qr";
-      const canvas = document.createElement("canvas");
-      qrBox.appendChild(canvas);
-      body.appendChild(qrBox);
-      const qrText = String(it.qr || "");
-      const paint = () => {
-        if (drawQrInto(canvas, qrText)) { return; }
-        qrBox.remove();
-        note("二维码画不出来（这页的二维码库没加载上）", true);
-        if (qrText) {
-          const link = document.createElement("div"); link.className = "vo-wx-link"; link.textContent = qrText;
-          body.appendChild(link);
-        }
-      };
-      // 二维码那个库不排进首屏（56 KB，只有真扫码时才用得上）：第一次画时现拉，拉回来再画
-      if (qrText && typeof qrcode !== "function") {
-        loadLazyScript(QRCODE_SCRIPT, () => { paint(); });
-      } else {
-        paint();
-      }
-      note(message, false);
-      if (phase === "needcode") {
-        const line = document.createElement("div"); line.className = "vo-wx-row";
-        const input = document.createElement("input");
-        input.type = "text"; input.className = "vo-input vo-wx-code"; input.spellcheck = false;
-        input.placeholder = "手机上的数字";
-        input.addEventListener("keydown", (e) => {
-          e.stopPropagation();
-          if (e.key === "Enter") { e.preventDefault(); submit(); }
-        });
-        function submit() { vscode.postMessage({ type: "weixinLogin", action: "code", code: input.value }); }
-        line.appendChild(input);
-        line.appendChild(button("确定", submit, true));
-        body.appendChild(line);
-        setTimeout(() => input.focus(), 0);
-        return;
-      }
-      const line = document.createElement("div"); line.className = "vo-wx-row";
-      line.appendChild(button("取消", () => { vscode.postMessage({ type: "weixinLogin", action: "cancel" }); }));
-      body.appendChild(line);
-      return;
-    }
-
-    // idle / error：一颗按钮重来
-    note(message || "扫一下就把这台后端绑到你的微信上", phase === "error");
-    const line = document.createElement("div"); line.className = "vo-wx-row";
-    line.appendChild(button(phase === "error" ? "再试一次" : "扫码登录", () => {
-      vscode.postMessage({ type: "weixinLogin", action: "start" });
-    }, true));
-    body.appendChild(line);
-  }
-
-  /**
-   * 把一串字画成二维码（media/qrcode.js 那个库的矩阵，自己一格一格画到 canvas 上）。
-   * 那个库是按需的（见 loadLazyScript），没拉回来时这里会返回 false，调用方拉回来再画一次。
-   * @returns 画成了没有（库没到 / 没字就是 false）
-   */
-  function drawQrInto(canvas, text) {
-    if (!text || typeof qrcode !== "function") { return false; }
-    let qr;
-    try {
-      qr = qrcode(0, "M");          // 0 = 按内容挑最小的版本
-      qr.addData(text, "Byte");
-      qr.make();
-    } catch (e) { return false; }
-    const count = qr.getModuleCount();
-    const cell = 5;                  // 每个小格几像素（配合下面最多 260px 的宽度自己缩）
-    const quiet = 2;                 // 四周留的静区（格数）：留窄了手机认不出来
-    const side = (count + quiet * 2) * cell;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(side * dpr);
-    canvas.height = Math.round(side * dpr);
-    // 大码别撑破这块地方：按 260px 折算成缩放后的显示尺寸（画布本身仍是清楚的）
-    const shown = Math.min(side, 260);
-    canvas.style.width = shown + "px";
-    canvas.style.height = shown + "px";
-    const ctx = canvas.getContext("2d");
-    if (!ctx) { return false; }
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#000";
-    const unit = cell * dpr;
-    for (let r = 0; r < count; r++) {
-      for (let c = 0; c < count; c++) {
-        if (!qr.isDark(r, c)) { continue; }
-        ctx.fillRect(Math.round((c + quiet) * unit), Math.round((r + quiet) * unit), Math.ceil(unit), Math.ceil(unit));
-      }
-    }
-    return true;
   }
 
   /**

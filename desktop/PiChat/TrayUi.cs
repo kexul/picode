@@ -84,7 +84,7 @@ internal sealed class TrayUi : IDisposable
             using var brush = new SolidBrush(ink);
             using var bar = new SolidBrush(red);
             // 左上那一块（上面一条横条 + 右边一截）
-            g.FillPolygon(brush, Poly(size, 420, 280, 280, 280, 280, 280, 140, 0, 140, 0, 0, 420, 0));
+            g.FillPolygon(brush, Poly(size, 420, 280, 280, 280, 280, 140, 0, 140, 0, 0, 420, 0));
             // 右下角那根竖线
             g.FillPolygon(bar, Poly(size, 560, 560, 420, 560, 420, 280, 560, 280));
             // 左下那一块（阶梯状）

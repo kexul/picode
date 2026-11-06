@@ -33,28 +33,3 @@ export function autoFile(dir: string = pichatDir()): string {
     return path.join(dir, "auto.json");
 }
 
-/**
- * 微信那头（ClawBot）的登录态：拿到的令牌、绑的是哪个机器人、以后发消息该往哪个地址发。
- * 这里面是凭据（拿到就等于能拿这个号发消息），POSIX 上只给自己读（见 weixinLogin.ts 存盘那段）。
- */
-export function weixinAccountFile(dir: string = pichatDir()): string {
-    return path.join(dir, "weixin", "account.json");
-}
-
-/** 微信那头收到的消息读到哪儿了（重启后接着读，不把老消息再办一遍）。 */
-export function weixinCursorFile(dir: string = pichatDir()): string {
-    return path.join(dir, "weixin", "cursor.json");
-}
-
-/**
- * 回信要带的凭据（微信的 context_token，每个来信的人一份，随来信刷新）。
- * 推送是隔了一段时间才发的，手上得留着最近一份才发得出去（见 weixinInbox.ts）。
- */
-export function weixinContextFile(dir: string = pichatDir()): string {
-    return path.join(dir, "weixin", "context.json");
-}
-
-/** 往微信里发过哪些提醒（服务端 message_id → 是哪个会话）：引用回复要把两边对上。 */
-export function weixinSentFile(dir: string = pichatDir()): string {
-    return path.join(dir, "weixin", "sent.json");
-}

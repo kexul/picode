@@ -26,7 +26,7 @@ export interface RemoteNotice {
     kind?: "done" | "ask";
     /**
      * 推送方那个后端的网页地址（`http://10.0.0.2:51883`）。
-     * 收到的那台要"把一句话送回那个会话"时往这个地址发（见 webChatServer.ts 的 `/weixinReply`）。
+     * 收到的那台要"把一句话送回那个会话"时往这个地址发（见 webChatServer.ts 的 `/reply`）。
      * 旧版本推来的没这个字段：那就只能弹一下面板，回不了话。
      */
     pageUrl?: string;
@@ -46,8 +46,7 @@ const PUSH_TIMEOUT_MS = 5000;
  * 推进去的那段正文最多留多少字。
  *
  * 收的那台拿它干三件事：右下角弹一张面板（那边还会再截到一两行，见 chatControllerBase.ts 的
- * trayNoteRemote）、手机上 / 桌面上那个小窗口里当一条消息读、以及发到微信（收发微信的那台替别的机器发，
- * 见 chatHost.ts 的 pushRemoteWeixinNote，太长会自己分块）。
+ * trayNoteRemote）、手机上 / 桌面上那个小窗口里当一条消息读。
  * 所以留得跟本机那条一样长：手机上要看的就是这一轮的回复原文（见 chatHost.ts 的 PHONE_TEXT_CHARS），
  * 只留开头几句的话，跟本机那个会话在手机上看到的差得远。
  */
@@ -70,7 +69,7 @@ export function readRemoteNotice(raw: unknown, fallbackLabel: string): RemoteNot
     // （多留一个字：推方那边的上限是不含末尾那个“…”的，切在这一格上别把“…”也切掉）
     const text = typeof body.text === "string" ? body.text.trim().slice(0, REMOTE_TEXT_CHARS + 1) : "";
     const kind = body.kind === "ask" ? "ask" : "done";
-    // 回话地址也是可选的（旧版本不带）：带了才能把微信里那句话送回去
+    // 回话地址也是可选的（旧版本不带）：带了才能把一句话送回原来那台
     const pageUrl = typeof body.pageUrl === "string" ? body.pageUrl.trim().slice(0, 200) : "";
     const sessionFile = typeof body.sessionFile === "string" ? body.sessionFile.trim().slice(0, 500) : "";
     // 机器名也是可选的（旧版本不带）：带了点面板才认得出浏览器窗口
@@ -168,12 +167,12 @@ function isLoopbackHost(name: string): boolean {
 }
 
 /**
- * 收发微信的那台把微信里的一句话转给推它的那台（反方向的 `POST /weixinReply`）。
+ * 那边把一句话转给推它的那台（反方向的 `POST /reply`）。
  *
- * 为什么要转：会话开在推它的那台的进程里，收发微信的那台碰不到它；
- * 而人在微信里引用那条消息回一句，本来就该落进那个会话。
+ * 为什么要转：会话开在推它的那台的进程里，这边碰不到它；
+ * 而人在手机 / 桌面那个小窗口里回一句，本来就该落进那个会话。
  */
-export interface WeixinReply {
+export interface SessionReply {
     /** 那台那边这个会话的标识（就是它推送时给的 sessionId）。 */
     sessionId: string;
     text: string;
@@ -184,7 +183,7 @@ export interface WeixinReply {
 }
 
 /** 从转过来的内容里读一句回话；字段不齐就给 undefined。 */
-export function readWeixinReply(raw: unknown): WeixinReply | undefined {
+export function readSessionReply(raw: unknown): SessionReply | undefined {
     if (!raw || typeof raw !== "object") { return undefined; }
     const body = raw as Record<string, unknown>;
     const sessionId = typeof body.sessionId === "string" ? body.sessionId.trim() : "";
@@ -196,8 +195,8 @@ export function readWeixinReply(raw: unknown): WeixinReply | undefined {
 }
 
 /** 把一句话送给那台（多久等不到就算没送到：不攒着、不重试，人那边会收到一句说明）。 */
-export async function pushWeixinReply(target: string, reply: WeixinReply): Promise<{ ok: boolean; reason: string }> {
-    const url = target.replace(/\/+$/, "") + "/weixinReply";
+export async function pushSessionReply(target: string, reply: SessionReply): Promise<{ ok: boolean; reason: string }> {
+    const url = target.replace(/\/+$/, "") + "/reply";
     try {
         const res = await fetch(url, {
             method: "POST",

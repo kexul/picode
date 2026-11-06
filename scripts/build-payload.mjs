@@ -30,7 +30,7 @@ function fail(text) {
 }
 
 function step(text) {
-    process.stdout.write(`· ${text}\n`);
+    process.stdout.write(`- ${text}\n`);
 }
 
 /** 把 out/server 打成一个 CommonJS 文件：每个编译结果包一层，require 只接管相对路径。 */
@@ -124,7 +124,7 @@ function main() {
     fs.writeFileSync(path.join(TARGET, "package.json"), JSON.stringify({ version }), "utf8");
 
     const bytes = sizeOf(TARGET);
-    process.stdout.write(`\n好了：desktop/PiChat/payload/（${(bytes / 1024).toFixed(0)} KB，编 exe 时整棵嵌进去）\n`);
+    process.stdout.write(`\ndone: desktop/PiChat/payload/ (${(bytes / 1024).toFixed(0)} KB, gets embedded into the exe)\n`);
 }
 
 /** 一个目录加起来多大（打日志用）。 */

@@ -10,7 +10,8 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>PiChat</AssemblyName>
     <RootNamespace>PiChat</RootNamespace>
-    <ApplicationIcon />
+    <!-- 那个标记：三块拼起来的方框 + 右下角一根红线（跟托盘图标、窗口标题栏同一个图形） -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
   </PropertyGroup>
 
   <!--

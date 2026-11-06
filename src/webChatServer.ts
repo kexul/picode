@@ -26,7 +26,7 @@ import { insideFolder, pathCaseKey, relativeTo } from "./pathRules";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { findListedFile } from "./fileSearch";
 import type { SessionChanges } from "./gitChanges";
-import { readRemoteNotice, readWeixinReply, type RemoteNotice } from "./remoteNotice";
+import { readRemoteNotice, readSessionReply, type RemoteNotice } from "./remoteNotice";
 import { PhoneInbox, type PhoneAsk, type PhoneNoteKind, type PhoneNoteRecord } from "./phoneInbox";
 import { parseMarkdown } from "./markdownBlocks";
 import { changedCharRanges, diffRows, type LineRanges } from "./wordDiff";
@@ -359,11 +359,11 @@ export interface WebServerHost {
      */
     acceptSwitchRequest(sessionId: string): void;
     /**
-     * 收发微信的那台把微信里的一句话转了过来（`POST /weixinReply`）：
-     * 当成这个会话里用户说的一句话接进去。
-     * @returns 接上了没有；没接上时带一句人话（会原样回到微信那边给人看）
+     * 别的机器把一句话转了过来（`POST /reply`）：当成这个会话里用户说的一句话接进去。
+     * 手机 / 桌面那个小窗口里回别处的会话，就走这条。
+     * @returns 接上了没有；没接上时带一句人话（会原样回给发来的那台）
      */
-    acceptWeixinReply(sessionId: string, text: string, opts: { sessionFile?: string; name?: string }): { ok: boolean; reason?: string };
+    acceptSessionReply(sessionId: string, text: string, opts: { sessionFile?: string; name?: string }): { ok: boolean; reason?: string };
     /** 现在开着哪些会话（手机 / 桌上那个小窗口的列表就是它）。 */
     phoneSessions(): PhoneSessionInfo[];
     /**
@@ -671,9 +671,9 @@ export class PiChatWebServer {
                 void this.handleSwitchRequest(req, res);
                 return;
             }
-            // 收发微信的那台把微信里的一句话转回来（机器对机器，同上）
-            if (pathname === "/weixinReply") {
-                void this.handleWeixinReply(req, res);
+            // 别的机器把一句话转回来（机器对机器，同上）
+            if (pathname === "/reply") {
+                void this.handleSessionReply(req, res);
                 return;
             }
             // 手机 app 里那个前台服务连的（机器对机器，同上）
@@ -2081,10 +2081,10 @@ export class PiChatWebServer {
     }
 
     /**
-     * 收发微信的那台把微信里的一句话转了过来：交给宿主接进那个会话。
-     * 成不成都要回一句（那边要把"没送到"的原因说给微信里的人听）。
+     * 别的机器把一句话转了过来：交给宿主接进那个会话。
+     * 成不成都要回一句（那边要把"没送到"的原因说给人听）。
      */
-    private async handleWeixinReply(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    private async handleSessionReply(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (req.method !== "POST") {
             this.sendText(req, res, 405, "只接受 POST。");
             return;
@@ -2101,12 +2101,12 @@ export class PiChatWebServer {
             this.sendText(req, res, 400, "请求内容不是合法的 JSON。");
             return;
         }
-        const reply = readWeixinReply(raw);
+        const reply = readSessionReply(raw);
         if (!reply) {
             this.sendText(req, res, 400, "这句话缺东西（要 sessionId 和 text）。");
             return;
         }
-        const result = this.host.acceptWeixinReply(reply.sessionId, reply.text, {
+        const result = this.host.acceptSessionReply(reply.sessionId, reply.text, {
             sessionFile: reply.sessionFile,
             name: reply.name,
         });

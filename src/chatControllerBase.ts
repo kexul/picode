@@ -112,15 +112,6 @@ export interface ViewOptionItem {
     tab?: string;
     /** 那一页里归到哪一小节（不写就不画小节标题）；页面按第一次出现的顺序摆小节。 */
     section?: string;
-    // ---- kind: "weixin"（微信扫码登录那块，见 chatHost.ts 的 weixinOptionItem）----
-    /** 现在走到哪一步了：idle / wait / scaned / needcode / done / error。 */
-    phase?: string;
-    /** 要画成二维码的那串字（wait / scaned / needcode 时有）。 */
-    qr?: string;
-    /** 已经登录时：绑的是哪个机器人。 */
-    account?: string;
-    /** 块里那句说明。 */
-    message?: string;
 }
 
 /**
@@ -1807,7 +1798,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 某个会话有事了（跑完一轮、模型在等你答一道选择题）。
      *
      * 这里只剩两件事：推给别的机器（设置里「消息推送」填了别处地址时）、以及子类自己那一套
-     * （手机上那条、微信、桌面那个小窗口的卡片见 ChatHost）。这台机器上的提醒卡片由桌面那个
+     * （手机上那条、桌面那个小窗口的卡片见 ChatHost）。这台机器上的提醒卡片由桌面那个
      * 小窗口自己画（它连着 /phone 那条，见 desktop/PiChat），后端不再管画卡片这件事。
      *
      * @param summary 一句话摘要（跑完一轮是回复开头，选择题是题干）
@@ -1816,7 +1807,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done", _ask?: PhoneAsk): void {
         if (!sessionId || !this.notifyTurnEndEnabled()) { return; }
         const label = (name || "").trim() || "会话";
-        // 推给别处的那份留长一点：那边可能还要再发到微信里（见 remoteNotice.ts 的 REMOTE_TEXT_CHARS）
+        // 推给别处的那份留长一点（见 remoteNotice.ts 的 REMOTE_TEXT_CHARS）
         this.pushRemoteNote(sessionId, label, plainPreview(summary, REMOTE_TEXT_CHARS), kind);
     }
 

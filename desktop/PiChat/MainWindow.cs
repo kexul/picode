@@ -59,10 +59,6 @@ internal sealed class MainWindow : Window
     private readonly DispatcherTimer _liveTimer = new() { Interval = TimeSpan.FromSeconds(4) };
     /// <summary>这个会话最近一条回复的原话（「这一轮」那张卡片用；跑着的时候后端会一直变）。</summary>
     private LastReplyPayload? _lastReply;
-    /// <summary>「这一轮」那张卡片的刷新记号：换了会话、或者停了就别再刷了。</summary>
-    private int _liveToken;
-    /// <summary>「这一轮」的轮询是否正在跑（同一时间只留一条链）。</summary>
-    private bool _livePolling;
     private readonly TrayUi _tray;
     /** 真退（菜单里点了退出 / 程序要收摊）：不是退到托盘去。 */
     private bool _quitting;
