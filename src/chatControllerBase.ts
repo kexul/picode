@@ -73,7 +73,7 @@ import { promptText } from "./promptText";
 import { dropAuto, readAuto, writeAuto } from "./autoFiles";
 import type { RpcSessionState } from "./piRpc";
 import { appRoot } from "./appAssets";
-import { plainPreview } from "./messageUtils";
+import { clipText } from "./messageUtils";
 import { REMOTE_TEXT_CHARS, type RemoteNotice } from "./remoteNotice";
 import type { PhoneAsk } from "./phoneInbox";
 import type { ProjectDirEntry } from "./sessionStore";
@@ -1813,8 +1813,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done", _ask?: PhoneAsk): boolean {
         if (!sessionId || !this.notifyTurnEndEnabled()) { return false; }
         const label = (name || "").trim() || "会话";
-        // 推给别处的那份留长一点（见 remoteNotice.ts 的 REMOTE_TEXT_CHARS）
-        return this.pushRemoteNote(sessionId, label, plainPreview(summary, REMOTE_TEXT_CHARS), kind);
+        // 推给别处的那份留长一点（见 remoteNotice.ts 的 REMOTE_TEXT_CHARS），
+        // 但不压成纯文本：markdown 原样过去，收到的那台自己解析一遍再画
+        // （跟本机这条走同一条路：见 webChatServer.ts 的 notifyPhones）
+        return this.pushRemoteNote(sessionId, label, clipText(summary, REMOTE_TEXT_CHARS), kind);
     }
 
     /**

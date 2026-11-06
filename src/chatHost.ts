@@ -53,6 +53,7 @@ import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { DesktopLive } from "./desktopLive";
 import { describeRestart } from "./serverRestart";
 import type { SessionRuntime } from "./sessionRuntime";
+import { clipText } from "./messageUtils";
 import {
     DEFAULT_AUTO_LOAD_LAST,
     DEFAULT_CLOSE_SESSION_KEY,
@@ -147,16 +148,9 @@ function openWorkspaceDirs(msg: Record<string, unknown>): string[] | undefined {
  * 手机 / 桌上那个小窗口一条通知最多留多少字。
  *
  * 托盘那块面板只能放两行（“瞥一眼”），这边是要把这一轮说的话读一遍，所以留得长；
- * 也不像面板那样把 markdown 记号与代码块去掉（去掉以后代码就整个消失了）。再多就把快照撑大了。
+ * markdown 记号与代码块原样留着，手机上 / 小窗口里解析一遍再画。再多就把快照撑大了。
  */
 const PHONE_TEXT_CHARS = 1200;
-
-/** 一条通知上的字：去肵两头空白，太长就截至（末尾一个省略号）。 */
-function phoneText(text: string): string {
-    const flat = (text ?? "").replace(/^\s+|\s+$/g, "");
-    if (flat.length <= PHONE_TEXT_CHARS) { return flat; }
-    return flat.slice(0, PHONE_TEXT_CHARS).replace(/\s+$/, "") + "…";
-}
 
 export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 文件夹列表里“就用这个目录”那一行的标识（会话文件、目录都是绝对路径，撞不上这种带 \0 的）。 */
@@ -958,7 +952,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             name: label,
             sessionId: panelId,
             kind,
-            summary: phoneText(summary),
+            summary: clipText(summary, PHONE_TEXT_CHARS),
             at: Date.now(),
             ...(from ? { from } : {}),
             ...(ask ? { ask } : {}),

@@ -20,7 +20,11 @@ export interface RemoteNotice {
     sessionId: string;
     /** 那个会话叫什么。 */
     name: string;
-    /** 面板上显示的一句话摘要（推送方已经截好）；旧版本推来的没这个字段。 */
+    /**
+     * 面板上显示的那段话（推送方已经截好长度）。
+     * 是 markdown 原文，不压成纯文本：收到的那台解析一遍再画（见 webChatServer.ts 的 notifyPhones），
+     * 跟本机自己那条同一个画法。旧版本推来的没这个字段。
+     */
     text?: string;
     /** 哪种事：跑完一轮 / 等你答一句。 */
     kind?: "done" | "ask";
@@ -49,6 +53,9 @@ const PUSH_TIMEOUT_MS = 5000;
  * trayNoteRemote）、手机上 / 桌面上那个小窗口里当一条消息读。
  * 所以留得跟本机那条一样长：手机上要看的就是这一轮的回复原文（见 chatHost.ts 的 PHONE_TEXT_CHARS），
  * 只留开头几句的话，跟本机那个会话在手机上看到的差得远。
+ *
+ * 留的是 markdown 原文（粗体、列表、代码块都在）：收到的那台自己解析一遍再画，
+ * 不在这里压成纯文本。
  */
 export const REMOTE_TEXT_CHARS = 1200;
 

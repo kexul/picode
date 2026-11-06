@@ -10,25 +10,15 @@ export const THINKING_LEVEL_ORDER = [
     "off", "minimal", "low", "medium", "high", "xhigh", "max",
 ] as const;
 
-/** 消息提醒面板上的一句话预览：去掉 markdown 记号、压平空白，长了就截断。 */
-export function plainPreview(text: string, maxChars = 120): string {
-    const flat = (text || "")
-        .replace(/```[\s\S]*?```/g, " ")           // 代码块整段跳过
-        .replace(/`([^`]*)`/g, "$1")
-        .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")     // 图片
-        .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")     // 链接只留文字
-        .replace(/^\s{0,3}#{1,6}\s+/gm, "")        // 标题的 #
-        .replace(/\*\*|__|\*/g, "")
-        .replace(/\s+/g, " ")
-        .trim();
-    if (!flat) { return ""; }
-    if (flat.length <= maxChars) { return flat; }
-    let cut = flat.slice(0, maxChars);
-    // 尽量别把最后一句切成半句
-    const at = Math.max(cut.lastIndexOf("。"), cut.lastIndexOf("；"), cut.lastIndexOf("，"),
-        cut.lastIndexOf(" "), cut.lastIndexOf("."));
-    if (at >= Math.floor(maxChars * 0.5)) { cut = cut.slice(0, at); }
-    return cut.trim() + "…";
+/**
+ * 一条通知上的字：去掉两头空白，太长就截至（末尾一个省略号）。
+ * 不动机器里的 markdown：那一段要原样带到别的机器上，由收到的那台解析一遍再画
+ * （见 src/markdownBlocks.ts）。在这儿压成纯文本的话，粗体、列表、代码块就全没了。
+ */
+export function clipText(text: string, maxChars: number): string {
+    const body = (text ?? "").replace(/^\s+|\s+$/g, "");
+    if (body.length <= maxChars) { return body; }
+    return body.slice(0, maxChars).replace(/\s+$/, "") + "…";
 }
 
 /** 从 user/assistant content（string 或 parts 数组）提取纯文本。 */
