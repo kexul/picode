@@ -43,13 +43,15 @@ export interface RemoteNotice {
 const PUSH_TIMEOUT_MS = 5000;
 
 /**
- * 推进去的那段摘要最多留多少字。
+ * 推进去的那段正文最多留多少字。
  *
- * 收的那台除了弹一张面板，还可能要把它发到微信里（收发微信的那台替别的机器发，
- * 见 chatHost.ts 的 pushRemoteWeixinNote）。太短的话长回复到了微信里只剩个开头，
- * 看着像被掐断了；面板那边自己还会再截（见 chatControllerBase.ts 的 trayNoteRemote）。
+ * 收的那台拿它干三件事：右下角弹一张面板（那边还会再截到一两行，见 chatControllerBase.ts 的
+ * trayNoteRemote）、手机上 / 桌面上那个小窗口里当一条消息读、以及发到微信（收发微信的那台替别的机器发，
+ * 见 chatHost.ts 的 pushRemoteWeixinNote，太长会自己分块）。
+ * 所以留得跟本机那条一样长：手机上要看的就是这一轮的回复原文（见 chatHost.ts 的 PHONE_TEXT_CHARS），
+ * 只留开头几句的话，跟本机那个会话在手机上看到的差得远。
  */
-export const REMOTE_TEXT_CHARS = 400;
+export const REMOTE_TEXT_CHARS = 1200;
 
 /**
  * 从推过来的内容里读出一条通知。

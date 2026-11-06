@@ -646,14 +646,7 @@ internal sealed class MainWindow : Window
             });
         }
 
-        stack.Children.Add(new TextBlock
-        {
-            Text = note.Text,
-            FontSize = 13,
-            LineHeight = 20,
-            TextWrapping = TextWrapping.Wrap,
-            Foreground = Ink,
-        });
+        stack.Children.Add(Markdown.Render(note.Text, 13, Ink, Gray));
 
         if (note.Kind == "ask" && note.Ask != null)
         {
@@ -1025,10 +1018,12 @@ internal sealed class MainWindow : Window
     }
 
     /// <summary>列表第二行写最后一条通知的第一句。</summary>
+    /// <summary>列表那一行的一句话：只取头一行，把 markdown 的记号去掉（反引号、星号、井号、列表点）。</summary>
     private static string FirstLine(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) { return ""; }
         var line = text.Replace("\r", "").Split('\n').FirstOrDefault(item => item.Trim().Length > 0)?.Trim() ?? "";
+        line = Markdown.PlainOneLine(line);
         var cut = line.IndexOfAny(new[] { '。', '！', '？', '!', '?' });
         if (cut > 0) { line = line[..cut]; }
         if (line.Length > 40) { line = line[..40] + "…"; }

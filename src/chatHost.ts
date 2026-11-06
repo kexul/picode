@@ -54,8 +54,6 @@ import { DesktopLive } from "./desktopLive";
 import { describeRestart } from "./serverRestart";
 import { WeixinLogin, readWeixinAccount, type WeixinAccount } from "./weixinLogin";
 import { findRouteForInbound, pushWeixinNote, type SentRecord } from "./weixinPush";
-import { REMOTE_TEXT_CHARS } from "./remoteNotice";
-import { plainPreview } from "./messageUtils";
 import { WeixinInbox, readContextToken } from "./weixinInbox";
 import { sendText, type WeixinInbound } from "./weixinIlink";
 import type { SessionRuntime } from "./sessionRuntime";
@@ -901,7 +899,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             name: label,
             sessionId: panelId,
             kind,
-            summary: plainPreview(summary, REMOTE_TEXT_CHARS),
+            summary: phoneText(summary),
             at: Date.now(),
             ...(from ? { from } : {}),
             ...(ask ? { ask } : {}),
