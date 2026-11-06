@@ -54,6 +54,8 @@ export interface BashTaskEvent {
     startedAt?: number;
     /** 结束时的退出码；被信号杀掉时是 null。end 才有。 */
     exitCode?: number | null;
+    /** 这条命令是怎么收场的（停掉的不看退出码：Windows 上被杀掉也可能是 1）。end 才有。 */
+    status?: BashTaskInfo["status"];
     /** 跑了多久（毫秒）。end 才有。 */
     elapsedMs?: number;
 }
@@ -108,6 +110,7 @@ export function normalizeBashTaskEvent(raw: unknown): BashTaskEvent | undefined 
     const startedAt = num(o.startedAt);
     if (startedAt) { ev.startedAt = startedAt; }
     if (o.kind === "end") {
+        if (o.status === "done" || o.status === "failed" || o.status === "stopped") { ev.status = o.status; }
         if (o.exitCode === null) {
             ev.exitCode = null;
         } else {

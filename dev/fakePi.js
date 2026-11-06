@@ -501,6 +501,16 @@ async function runScript(userText) {
                 kind: "end", no, toolCallId: "call_bg_" + no, cmd, log, background: true,
                 pid, exitCode: 0, elapsedMs: Date.now() - startedAt,
             });
+            // 老版后台脚本会再报一遍结尾（停掉时当场报一次，进程退出又报一次）：
+            // 照它再发一份，验后端只交回会话一次
+            if (process.env.FAKEPI_BG_DOUBLE) {
+                setTimeout(() => {
+                    emitBash({
+                        kind: "end", no, toolCallId: "call_bg_" + no, cmd, log, background: true,
+                        pid, exitCode: 1, elapsedMs: Date.now() - startedAt,
+                    });
+                }, 400);
+            }
         }, ms);
         return;
     }

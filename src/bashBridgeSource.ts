@@ -235,6 +235,8 @@ interface Task {
     background: boolean;
     /** 报给过插件没有（前台正常跑完的不报：插件从工具事件流里已经知道了）。 */
     announced: boolean;
+    /** 结尾报给过插件没有：一条任务只报一次结尾（停掉之后进程退出、两份回调都会走到，别报两遍）。 */
+    reported: boolean;
 }
 
 const tasks = new Map<number, Task>();
@@ -355,6 +357,7 @@ function startTask(
         exitCode: null,
         background,
         announced: false,
+        reported: false,
     };
     tasks.set(no, task);
     if (shell.viaStdin && child.stdin) {
@@ -426,6 +429,8 @@ function announce(task: Task, background: boolean): void {
 }
 
 function reportEnd(task: Task): void {
+    if (task.reported) { return; }
+    task.reported = true;
     emit({
         kind: "end",
         no: task.no,
@@ -434,6 +439,7 @@ function reportEnd(task: Task): void {
         log: task.log,
         background: task.background,
         pid: task.pid,
+        status: task.status,
         exitCode: task.exitCode,
         elapsedMs: elapsedMs(task),
     });

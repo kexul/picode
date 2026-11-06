@@ -261,6 +261,8 @@ export class SessionRuntime {
     /** 这个会话的后台命令（任务编号 → 情况）：界面那一格清单、以及「停」要用它。
      *  跟着会话活：会话关掉就没了（日志文件还在磁盘上，但没人再看了）。 */
     private readonly bashTasks = new Map<number, BashTaskInfo>();
+    /** 已经收过结尾的那几条：同一编号的结尾只算一次（停掉 + 进程退出会各报一份，旧版脚本还会两份都发）。 */
+    private readonly bashEnded = new Set<number>();
     /** 上一次推给界面的「后台还有命令在跑」是哪种说法：只有它变了才重推会话清单（见 syncBashRunning）。 */
     private bashRunningShown = false;
     // ---- 网页端「只发最近一段历史」的窗口（宿主 wantsTrimmedHistory 为 true 时启用）----
@@ -554,6 +556,7 @@ export class SessionRuntime {
         this.piSessionTitle = "";
         // 后台命令清单也跟着会话走：换会话 / 换进程以后旧的那些都不认了
         this.bashTasks.clear();
+        this.bashEnded.clear();
         this.bashRunningShown = false;
         // 「加载了什么」同理：新进程会重新报一份
         this.envSnapshot = undefined;
@@ -600,12 +603,17 @@ export class SessionRuntime {
 
     /** 扩展报来一条后台命令的开始 / 结束（见 bashProtocol.ts）。 */
     private noteBashTask(ev: BashTaskEvent): void {
+        // 同一编号的结尾只认第一次：不然「停掉」和「进程退出」会各交回会话一次（模型就收到两遍同一件事）
+        if (ev.kind === "end") {
+            if (this.bashEnded.has(ev.no)) { return; }
+            this.bashEnded.add(ev.no);
+        }
         const prev = this.bashTasks.get(ev.no);
         // 界面上点过「停」的那条：扩展那边也会看到进程退出，别把它改写成「失败」
         const stopped = prev?.status === "stopped";
         const status: BashTaskInfo["status"] = ev.kind === "start"
             ? "running"
-            : (stopped ? "stopped" : (ev.exitCode === 0 ? "done" : "failed"));
+            : (stopped ? "stopped" : (ev.status ?? (ev.exitCode === 0 ? "done" : "failed")));
         const info: BashTaskInfo = {
             no: ev.no,
             toolCallId: ev.toolCallId,
