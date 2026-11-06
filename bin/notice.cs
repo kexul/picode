@@ -27,7 +27,6 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.IO;
 using System.Media;
 using System.Runtime.InteropServices;
@@ -199,7 +198,7 @@ static class Hub
 }
 
 /// <summary>
-/// 一张卡片：浅色圆角，左边一条竖线（等你答是黄的，跑完是绿的），右上角一颗 ×。
+/// 一张卡片：白底方形（四个角都是直角），左边一条竖线（等你答是黄的，跑完是绿的），右上角一颗 ×。
 /// 它不抢焦点（ShowWithoutActivation），鼠标点上去才有反应；不会自己走掉 ——
 /// 要么人点了它 / 点掉那颗 ×，要么后端说那个会话已经说上话了。
 /// </summary>
@@ -210,7 +209,6 @@ sealed class NoticeCard : Form
     private const int PadY = 9;
     private const int TitleGap = 4;
     private const int MaxBodyLines = 3;
-    private const int Radius = 8;
     private const int AccentWidth = 3;
 
     private static readonly Font TitleFont = new Font("Microsoft YaHei UI", 9.75f, FontStyle.Bold);
@@ -294,57 +292,23 @@ sealed class NoticeCard : Form
         }
     }
 
-    protected override void OnHandleCreated(EventArgs e)
-    {
-        base.OnHandleCreated(e);
-        ApplyRegion();
-    }
-
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
         closeRect = new Rectangle(Width - 26, 6, 18, 18);
-        ApplyRegion();
-    }
-
-    /// <summary>整张卡片裁成圆角：方角那片底色不能露出来。</summary>
-    private void ApplyRegion()
-    {
-        if (Width <= 0 || Height <= 0) { return; }
-        using (var path = Rounded(new Rectangle(0, 0, Width, Height), Radius))
-        {
-            var old = Region;
-            Region = new Region(path);
-            if (old != null) { old.Dispose(); }
-        }
-    }
-
-    private static GraphicsPath Rounded(Rectangle bounds, int radius)
-    {
-        var path = new GraphicsPath();
-        var d = radius * 2;
-        path.AddArc(bounds.X, bounds.Y, d, d, 180, 90);
-        path.AddArc(bounds.Right - d, bounds.Y, d, d, 270, 90);
-        path.AddArc(bounds.Right - d, bounds.Bottom - d, d, d, 0, 90);
-        path.AddArc(bounds.X, bounds.Bottom - d, d, d, 90, 90);
-        path.CloseFigure();
-        return path;
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
-        g.SmoothingMode = SmoothingMode.AntiAlias;
         var outline = new Rectangle(0, 0, Width - 1, Height - 1);
-        using (var path = Rounded(outline, Radius))
-        {
-            using (var fill = new SolidBrush(Color.White)) { g.FillPath(fill, path); }
-            using (var pen = new Pen(BorderColor)) { g.DrawPath(pen, path); }
-        }
+        using (var fill = new SolidBrush(Color.White)) { g.FillRectangle(fill, outline); }
+        using (var pen = new Pen(BorderColor)) { g.DrawRectangle(pen, outline); }
 
+        // 左边那条竖线：一整条，从头到底，两头是平的（卡片没有圆角，不用担心被裁）
         using (var accent = new SolidBrush(asking ? AskColor : DoneColor))
         {
-            g.FillRectangle(accent, 1, 2, AccentWidth, Height - 4);
+            g.FillRectangle(accent, 0, 0, AccentWidth + 1, Height);
         }
 
         var textX = AccentWidth + PadX;
