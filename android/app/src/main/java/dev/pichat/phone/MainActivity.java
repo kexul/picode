@@ -260,15 +260,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** activity 那几个词说成人话（后端给的是 thinking / working / idle 这些）。 */
-    private static String activityLabel(String activity) {
-        if (activity == null) { return ""; }
-        if ("thinking".equals(activity)) { return "在想"; }
-        if ("working".equals(activity)) { return "在干"; }
-        if ("idle".equals(activity)) { return ""; }
-        return activity;
-    }
-
     /** 列表上一行：状态点、会话名、最后一条的一两句、时间。 */
     private View row(Store.Session session) {
         int pad = dp(10);
@@ -313,20 +304,6 @@ public class MainActivity extends Activity {
         name.setSingleLine(true);
         name.setEllipsize(TextUtils.TruncateAt.END);
         middle.addView(name);
-
-        if (session.running) {
-            String what = session.activityDetail;
-            if (what == null || what.isEmpty()) { what = activityLabel(session.activity); }
-            if (what != null && !what.isEmpty()) {
-                TextView running = new TextView(this);
-                running.setText("正在跑：" + what);
-                running.setTextSize(12);
-                running.setTextColor(0xFF2F7BE0);
-                running.setSingleLine(true);
-                running.setEllipsize(TextUtils.TruncateAt.END);
-                middle.addView(running);
-            }
-        }
 
         Store.Note last = session.last;
         if (last != null) {

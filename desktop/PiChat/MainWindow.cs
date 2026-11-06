@@ -210,19 +210,8 @@ internal sealed class MainWindow : Window
         main.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 300 });
 
         var left = new Grid();
-        left.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         left.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         left.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        var leftTitle = new TextBlock
-        {
-            Text = "会话",
-            FontWeight = FontWeights.SemiBold,
-            FontSize = 13,
-            Foreground = Gray,
-            Margin = new Thickness(12, 10, 12, 8),
-        };
-        Grid.SetRow(leftTitle, 0);
-        left.Children.Add(leftTitle);
 
         _sessionList = new StackPanel();
         var listScroll = new ScrollViewer
@@ -231,10 +220,9 @@ internal sealed class MainWindow : Window
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Content = _sessionList,
         };
-        Grid.SetRow(listScroll, 1);
+        Grid.SetRow(listScroll, 0);
         left.Children.Add(listScroll);
 
-        // 左下角：一颗齿轮（齿轮图标）+ 现在连到哪儿了。地址那些在它的弹窗里改。
         // 左下角：一颗齿轮（齿轮图标）+ 现在连到哪儿了。地址那些在它的弹窗里改。
         var footer = new Grid { Margin = new Thickness(10, 0, 10, 8) };
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -266,7 +254,7 @@ internal sealed class MainWindow : Window
         };
         Grid.SetColumn(_statusText, 1);
         footer.Children.Add(_statusText);
-        Grid.SetRow(footer, 3);
+        Grid.SetRow(footer, 1);
         left.Children.Add(footer);
 
         var leftBorder = new Border
@@ -661,22 +649,6 @@ internal sealed class MainWindow : Window
             TextTrimming = TextTrimming.CharacterEllipsis,
             Margin = new Thickness(0, 3, 0, 0),
         });
-
-        if (info.Running)
-        {
-            var what = string.IsNullOrWhiteSpace(info.ActivityDetail) ? ActivityLabel(info.Activity) : info.ActivityDetail;
-            if (!string.IsNullOrWhiteSpace(what))
-            {
-                box.Children.Add(new TextBlock
-                {
-                    Text = "正在跑：" + what,
-                    FontSize = 11,
-                    Foreground = Blue,
-                    TextTrimming = TextTrimming.CharacterEllipsis,
-                    Margin = new Thickness(0, 3, 0, 0),
-                });
-            }
-        }
 
         var badges = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
         // 别的机器上的会话不另外标：名字前面那个「家里 ·」已经说清了
