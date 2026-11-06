@@ -2,7 +2,7 @@
  * remoteNotice —— 别的 pichat 后端“有事”时推到这边的那么一条（跨机器）。
  *
  * 干什么：一台机器上的后端跑完一轮、或者模型在那儿问你一道选择题时，除了在本机右下角
- * 弹一张提醒面板，还能把这条“有事”推给另外几台机器（设置文件里 notify.pushTo 写了地址的那些）。
+ * 弹一张提醒面板，还能把这条“有事”推给另外几台机器（设置文件里 pairs.peers 里已经配上的那些，见 chatHost 的 pairInvite）。
  * 收到的那台也弹一张面板（哪台、哪个会话、说了什么）；点了那张面板能跳过去 ——
  * 那台把显示着推送方页面的浏览器窗口拉到前台，再顺着 notice.pageUrl 把
  * 「切到这个会话」发回来（见 pushSwitchSession，网页服务那边是 `POST /switch`）。
@@ -14,7 +14,7 @@
  * 塞不进东西来（带 Origin 的请求过不了那道关），机器对机器发的请求没有 Origin，照收。
  */
 export interface RemoteNotice {
-    /** 哪台机器推来的：它设置里写的 notify.pushLabel；没写就用它地址里的主机名。 */
+    /** 哪台机器推来的：它那台的名字（设置里「这台叫什么」，见 pageHtml 的 displayName）。 */
     label: string;
     /** 推送方那边的会话标识。 */
     sessionId: string;
@@ -149,7 +149,7 @@ export function hostOfUrl(url: string): string {
 /**
  * 这条推送目标是不是就是本机自己（照本机网页服务的地址比）。
  *
- * 为什么要认这个：设置里「消息推送」默认就显示这台机器自己的地址，人把它留着等于
+ * 为什么要认这个：配对表里可能写的是这台自己的地址（自己配自己），那等于
  * “提醒还在这台”；只有填了别处的地址才算把提醒挪走（见 ChatControllerBase.trayNote）。
  * 比的时候主机名与端口都要对得上；本机那几个回环写法（127.0.0.1 / localhost）只要端口一样就认。
  */

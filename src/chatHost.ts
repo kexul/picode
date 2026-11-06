@@ -39,7 +39,7 @@ import {
 import { listDirectories } from "./dirBrowse";
 import { findFileContents, findFileNames, findPathCandidates } from "./fileSearch";
 import { ChatBroadcaster } from "./chatBroadcaster";
-import { machineName } from "./pageHtml";
+import { displayName, machineName } from "./pageHtml";
 import { MessageBuffer, PAGE_TRANSIENT_MESSAGE_TYPES, normalizeOrigin } from "./webTransport";
 import { pickOverlayClient } from "./overlayTarget";
 import { ScreenRegistry } from "./screenRegistry";
@@ -864,7 +864,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
-     * 别的机器推来一条“有事”（设置里别处的 pushTo 写到了这台）。
+     * 别的机器推来一条“有事”（已经配对的那台推过来的，见 pushRemoteNote）。
      *
      * 这台也要弹：桌面那个小窗口与连在这台上的手机都靠 /phone 那条，所以照本机那一条的样子
      * 推进去；标识用 /phone 那边的 `remote:` 写法（哪台 + 哪个会话），这样在那台上回话时
@@ -949,7 +949,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 记住这台机器该往哪儿去问它的会话列表（收到它推来的通知时调，或者发现到它时）。 */
     private rememberPeer(label: string, fromAddress?: string, pageUrl?: string): void {
         if (!label) { return; }
-        // 同一个地址可能已经有一个名字了（推送时用的是它设置里的 notify.pushLabel，发现时用的是主机名）：
+        // 同一个地址可能已经有一个名字了（推送时用的是它报的名字，配对时用的是我填的）：
         // 沿用已经有的那个，免得同一台在列表里出现两组。
         const host = hostOfMaybe(pageUrl) || fromAddress || "";
         if (host) {
@@ -1458,25 +1458,21 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return this.readOption<boolean>(ChatHost.KEY_NOTIFY_TURN_END, DEFAULT_NOTIFY_TURN_END) === true;
     }
 
-    /** 设置面板里「有事也推到别的机器」那一行现在填着什么（设置文件里的 notify.pushTo）。 */
-    protected override notifyPushTargets(): string[] {
-        return [...readServerConfig().config.notify.pushTo];
-    }
-
-    /** 设置面板里「推到那边时叫它什么」那一行现在填着什么（设置文件里的 notify.pushLabel）。 */
-    protected override notifyPushLabel(): string {
-        return readServerConfig().config.notify.pushLabel;
-    }
-
-    /** 「消息推送」空着时那句灰字例子：这台机器自己的地址。 */
-    protected override notifyPushExample(): string {
-        return this.options.selfPageUrl?.()?.replace(/\/+$/, "") ?? super.notifyPushExample();
-    }
     protected notifyTurnEndEnabled(): boolean { return this.getNotifyTurnEnd(); }
 
     // ========================================================================
     //  跨机器配对（设置面板里填地址发起，对方点接受）
     // ========================================================================
+
+    /** 设置里「这台叫什么」现在填着什么（空 = 用机器名，见 pageHtml 的 displayName）。 */
+    protected override machineLabel(): string {
+        return readServerConfig().config.label;
+    }
+
+    /** 「这台叫什么」空着时那句灰字提示：就是电脑名。 */
+    protected override machineLabelExample(): string {
+        return machineName();
+    }
 
     /** 设置面板里「配对情况」那一块的几行（已配对、等我答的）。 */
     protected override pairRows(): Array<{ address: string; name: string; incoming: boolean; confirmed: boolean }> {
@@ -1488,11 +1484,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         }));
     }
 
-    /** 这台在配对里叫什么（设置里那个「推送标签」，没写就用地址里的主机名）。 */
+    /** 这台在配对里叫什么（设置里那项「这台叫什么」，空着就是机器名；对方列表里组头用的就是它）。 */
     private pairSelfName(): string {
-        const label = readServerConfig().config.notify.pushLabel;
-        if (label) { return label; }
-        return hostOfUrl(this.options.selfPageUrl?.() ?? "") || "Pi Chat";
+        return displayName();
     }
 
     /** 写一条配对（同一个地址覆盖旧的）；confirmed 的顺手接进拉取列表。 */
@@ -1714,20 +1708,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             if (typeof value === "string" && /^\d+$/.test(value)) {
                 this.writeOption(ChatHost.KEY_FONT_SIZE, value);
             }
-        } else if (action === "notifyPushTo") {
-            // 填的是给人看的写法：逗号 / 空格 / 换行都算分隔；没写 http:// 的补上，
-            // 没写端口的补上 Pi Chat 出厂那个（51883）——否则按 http 的默认端口 80 算，打不通。
-            // 地址合不合法由设置文件那层把关（不合适的会被丢掉，面板上就看不见它们了）。
-            const urls = String(value ?? "")
-                .split(/[\s,;]+/)
-                .map((item) => item.trim())
-                .filter((item) => item.length > 0)
-                .map((item) => withDefaultPort(/^https?:\/\//i.test(item) ? item : "http://" + item))
-                // 填本机自己的地址等于没填（面板上照样显示它，但设置文件里不留这行废话）
-                .filter((item) => !isOwnPage(item, this.options.selfPageUrl?.()));
-            updateServerConfig({ notify: { pushTo: urls } });
-        } else if (action === "notifyPushLabel") {
-            updateServerConfig({ notify: { pushLabel: String(value ?? "").trim() } });
+        } else if (action === "machineLabel") {
+            updateServerConfig({ label: String(value ?? "").trim() });
         } else if (action === "pairInvite") {
             // 填了一下地址就请人家点头（填空什么都不做：面板上那行永远是空的，靠它“提交”）
             const text = String(value ?? "").trim();
@@ -2391,20 +2373,23 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
-     * 把这条“有事”推给别的后端（设置里「消息推送」填了别处的地址才有这回事）。
+     * 把这条“有事”推给别的后端（已经配上的那几台，见 pairInvite）。
      * 推的是一条最小的通知：哪台、哪个会话、叫什么、说了什么。
      * 推不过去就算了（对方没起、网断了都一样：不重试、不攒着）。
      * @returns 推给了别处没有（推了这台就不自己弹：一个人只盯得了一台机器）
      */
     protected override pushRemoteNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): boolean {
-        const notify = readServerConfig().config.notify;
         const base = this.options.selfPageUrl?.();
         if (!base) { return false; }
-        // 填的是这台自己的地址（默认就显示它）等于“提醒还在这台”：不推给自己，本机自己弹
-        const targets = notify.pushTo.filter((target) => !isOwnPage(target, base));
+        // 推给谁：已经配上的那几台（配对就是订阅，见 pairInvite）。
+        // 本机照弹（返回 false）：两边都弹 —— 人不会只坐在一台前了。
+        const targets = readServerConfig().config.pairs.peers
+            .filter((peer) => peer.confirmed)
+            .map((peer) => peer.address)
+            .filter((target) => !isOwnPage(target, base));
         if (targets.length === 0) { return false; }
         const notice = {
-            label: notify.pushLabel || hostOfUrl(base) || "Pi Chat",
+            label: this.pairSelfName(),
             sessionId,
             name,
             // 摘要也推过去：那台弹面板时才不会只剩一个名字
@@ -2414,8 +2399,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             // （见 webChatServer.ts 的 /reply）
             pageUrl: base.replace(/\/+$/, ""),
             sessionFile: this.panels.get(sessionId)?.currentSessionPath,
-            // 本机名字：对方点弹出来的面板时按它认浏览器窗口（页面的标题开头是它拼的）
-            host: machineName(),
+            // 本机名字：对方点弹出来的面板时按它认浏览器窗口（页面的标题开头是它拼的，见 pageHtml）
+            host: displayName(),
         };
         for (const target of targets) {
             void pushRemoteNotice(target, notice);

@@ -137,7 +137,7 @@ return hit ? !!hit.querySelector(".vo-check.on") : null;`);
 }
 
 /**
- * 把设置里的「消息推送」指向一个本地收件口，跑一轮，看它推过来的那条。
+ * 假装成一台「已经配对」的机器（在设置文件的 pairs 里塞一条），跑一轮，看它推过来的那条。
  * 跑完把设置文件放回原样。
  */
 async function watchNotify(page) {
@@ -158,7 +158,15 @@ async function watchNotify(page) {
     try {
         let config = {};
         try { config = JSON.parse(configBefore || "{}"); } catch { config = {}; }
-        config.notify = { ...(config.notify || {}), pushTo: [`http://127.0.0.1:${port}`], pushLabel: OTHER_LABEL };
+        // 配对就是订阅：把临时收件口写成一台“已配对”的机器，有事就推到这儿
+        const pairs = config.pairs && typeof config.pairs === "object" ? config.pairs : {};
+        config.pairs = {
+            ...pairs,
+            peers: [
+                ...(Array.isArray(pairs.peers) ? pairs.peers : []),
+                { address: `http://127.0.0.1:${port}`, name: OTHER_LABEL, confirmed: true, incoming: false },
+            ],
+        };
         fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), "utf8");
 

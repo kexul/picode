@@ -42,23 +42,6 @@ export interface ServerWebSettings {
 }
 
 /**
- * 跨机器的“有事”提醒（另一台机器上的后端跑完一轮，往这台推一条）。
- *
- * 只改推送方那一台：notify.pushTo（推到哪儿去）+ notify.pushLabel（自己是哪台）。
- * 接收方什么都不用写（收到了就收）。不写 pushTo 就谁也不推。详见 src/remoteNotice.ts。
- *
- * 没有口令：这个后端本来就没有登录（README 里写着“只在信得过的网络里用”），
- * 再加一道通知口令只是多一处要人对着抄的东西。浏览器那边仍然过 Origin 那道关
- * （网页脚本没法替你往 /notify 里塞东西），机器对机器发的请求没有 Origin，照收。
- */
-export interface ServerNotifySettings {
-    /** 推到这些地址（对方网页服务的地址，比如 `http://10.0.0.2:51883`）；一个都没有 = 不推。 */
-    pushTo: string[];
-    /** 推到对方那边时显示的名字（空 = 用这台机器地址里的主机名）。 */
-    pushLabel: string;
-}
-
-/**
  * 配对上的一台机器（见 src/chatHost.ts 的 pairInvite / acceptPair）。
  *
  * 两边都点头了（confirmed）才互相列表、才能互相发话；只点头一边的不算 ——
@@ -95,11 +78,15 @@ export interface ServerConfig {
     fontSize: string;
     themeMode: "light" | "dark";
     /**
+     * 这台叫什么：别人那边的列表、提醒卡片、以及浏览器标签页标题都用它。
+     * 空着就用机器名（`GIH-D-26741` 这种，不好看但总是有的）。
+     */
+    label: string;
+    /**
      * 人改过的提示词：键见 promptText.ts 的 PromptKey，值就是整段话。
      * 哪一项空着、或者根本不存在，就用内置原文（第一次启动会把内置原文写进来当起点）。
      */
     prompts: Record<string, string>;
-    notify: ServerNotifySettings;
     pairs: ServerPairSettings;
     webServer: ServerWebSettings;
 }
@@ -118,11 +105,11 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = deepFreeze({
     focusInputKey: DEFAULT_FOCUS_INPUT_KEY,
     fontSize: DEFAULT_FONT_SIZE,
     themeMode: DEFAULT_THEME_MODE,
+    // 空 = 用机器名（见 pageHtml 的 displayName）
+    label: "",
     // 提示词默认全部空着（空 = 用内置原文）：具体文字在 promptText.ts，
     // 第一次启动后端会把内置原文填进来，人照着改就行
     prompts: {},
-    // 跨机器的“有事”提醒默认不推（收到就收，不用写什么）
-    notify: { pushTo: [], pushLabel: "" },
     // 跨机器配对默认一台也没有：得人自己填地址发起（见设置面板的「配对」）
     pairs: { peers: [], rejected: [] },
     // 默认对所有网卡开放（手机等设备打开地址就能用）；只给自己用就改 127.0.0.1，或启动时加 --host 127.0.0.1
@@ -145,7 +132,6 @@ function defaults(): ServerConfig {
     return {
         ...DEFAULT_SERVER_CONFIG,
         prompts: {},
-        notify: { ...DEFAULT_SERVER_CONFIG.notify, pushTo: [] },
         pairs: { ...DEFAULT_SERVER_CONFIG.pairs, peers: [], rejected: [] },
         webServer: { ...DEFAULT_SERVER_CONFIG.webServer, trustedOrigins: [] },
     };
@@ -158,6 +144,8 @@ const RETIRED_KEYS = new Set([
     "piPath", "extraArgs", "trustProject", "tabaEnabled",
     // 现在在设置面板里（存 state.json），不再从这儿读
     "notifyTurnEnd",
+    // 跨机器的提醒改成“配对即订阅”了：以前手填的推送地址不再读（见 README 的配对那段）
+    "notify",
 ]);
 /** 同上，webServer 那层里去掉的键。 */
 const RETIRED_WEB_KEYS = new Set(["enabled"]);
@@ -257,7 +245,7 @@ function pickOrigins(value: unknown, warnings: string[]): string[] {
 }
 
 /**
- * 一组地址（比如 notify.pushTo）：只收 http / https 的，规范化成 `http://主机:端口`
+ * 一组地址（比如 pairs.rejected）：只收 http / https 的，规范化成 `http://主机:端口`
  * （去掉末尾斜杠与路径），重复的并掉。
  */
 function pickUrlList(value: unknown, label: string, warnings: string[]): string[] {
@@ -435,6 +423,14 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
         }
     }
 
+    // ---- 这台叫什么（浏览器标题、别人那边的列表和提醒卡片都用它）----
+    // 早先那项「推送标签」（notify.pushLabel）改成了通用的一项：老配置里还写着就搬过来。
+    const legacyNotify = raw.notify;
+    const legacyLabel = isPlainObject(legacyNotify) && typeof legacyNotify.pushLabel === "string"
+        ? legacyNotify.pushLabel.trim()
+        : "";
+    config.label = pickText(raw.label, "label", warnings) || legacyLabel;
+
     // ---- 提示词（config.json 的 prompts 一节）----
     // 空字符串 = 用内置原文（跟删掉这一项一个意思）
     let promptsEmpty = false;
@@ -455,22 +451,6 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
             }
             const text = pickPromptValue(value, `prompts.${rawName}`, warnings);
             if (text !== undefined) { config.prompts[name] = text; }
-        }
-    }
-
-    // ---- 跨机器的“有事”提醒（config.json 的 notify 一节）----
-    const notify = raw.notify;
-    if (notify !== undefined) {
-        if (!isPlainObject(notify)) {
-            warnings.push("notify 不是一个对象，已全部用默认值");
-        } else {
-            config.notify.pushTo = pickUrlList(notify.pushTo, "notify.pushTo", warnings);
-            config.notify.pushLabel = pickText(notify.pushLabel, "notify.pushLabel", warnings);
-            const knownNotifyKeys = new Set(Object.keys(DEFAULT_SERVER_CONFIG.notify));
-            const unknownNotifyKeys = Object.keys(notify).filter((key) => !knownNotifyKeys.has(key));
-            if (unknownNotifyKeys.length > 0) {
-                warnings.push(`配置里有不认识的项：notify.${unknownNotifyKeys.join("、notify.")}`);
-            }
         }
     }
 
@@ -617,8 +597,7 @@ function mergeServerConfig(base: ServerConfig, patch: DeepPartial<ServerConfig>)
     const baseRecord = base as unknown as Record<string, unknown>;
     for (const [key, value] of Object.entries(patch)) {
         if (value === undefined) continue;
-        // 一节一节的（webServer、notify）是“改这一项”，不是“整节换掉”：只覆盖给到的键。
-        // 不这样的话，改 notify.pushLabel 会把 notify.pushTo 一起打回默认值。
+        // 一节一节的（webServer、pairs）是“改这一项”，不是“整节换掉”：只覆盖给到的键。
         const old = baseRecord[key];
         if (isPlainObject(value) && isPlainObject(old)) {
             merged[key] = { ...(old as Record<string, unknown>), ...(value as Record<string, unknown>) };

@@ -16,7 +16,9 @@ import * as path from "path";
 import { appVersion, mediaDir } from "./appAssets";
 import { PiChatWebServer, type WebServerSettings } from "./webChatServer";
 import { ChatHost } from "./chatHost";
-import { readServerConfig, updateServerConfig, seedPrompts } from "./serverConfig";import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
+import { displayName } from "./pageHtml";
+import { readServerConfig, updateServerConfig, seedPrompts } from "./serverConfig";
+import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
 import { startRestart } from "./serverRestart";
 import { ensureAskAssets, ensureImageAssets, ensureTabaAssets, ensureTitleAssets, ensureBashAssets, ensureEnvAssets } from "./bridgeAssets";
 import { serverConfigFile } from "./serverPaths";
@@ -301,8 +303,8 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
         log: (text) => log(`[网页服务] ${text}`),
         onUrlChanged: () => { /* 启动器自己会打印地址，这里不用管 */ },
         info: () => {
-            // name：这台叫什么（设置里「推到那边时叫它什么」）：别的机器发现到它时，列表里就用这个名字
-            const name = readServerConfig().config.notify.pushLabel;
+            // name：这台叫什么（配对列表里显示的就是它）
+            const name = displayName();
             return { version: VERSION, ...(name ? { name } : {}) };
         },
     });

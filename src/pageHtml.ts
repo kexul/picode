@@ -5,6 +5,7 @@ import * as path from "path";
 import { renderHTML } from "./renderHtml";
 import { mediaVersion } from "./mediaVersion";
 import { chatUiFileOfRole, chatUiFilesOfRole } from "./chatUiFiles";
+import { readServerConfig } from "./serverConfig";
 
 /**
  * pageHtml —— 生成对话界面的整页 HTML：同一份骨架、同一份清单，两种装法。
@@ -59,9 +60,9 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
         `base-uri 'none'; ` +
         `form-action 'none';`;
 
-    // 浏览器 tab 的标题用这台机器的名字（形如 `我的电脑-pi`）：同时开着几台机器的页面时，
-    // 光看标题分不出谁是谁。机器名取不到就只剩 `pi`。
-    const host = machineName();
+    // 浏览器 tab 的标题用这台的名字（形如 `家里-pi`）：同时开着几台机器的页面时，
+    // 光看标题分不出谁是谁。名字是设置里那项「这台叫什么」，空着就用机器名；都取不到就只剩 `pi`。
+    const host = displayName();
     // 按需加载的脚本（现在只有 pele，画 mermaid 图用的）不排进首屏，地址写进 meta，主脚本真要用时自己去拉。
     // 地址放这儿而不是写死在 chat.js 里，是为了让它带着内容指纹（见 mediaVersion.ts）。
     const lazyScripts = chatUiFilesOfRole("lazy-script");
@@ -148,6 +149,18 @@ export function getPanelChatHtml(
  * 这台机器的名字（系统里的主机名）。取不到就空串。
  * 主机名可能带引号、尖括号这类字符，写进 HTML 前照样 {@link escapeAttr} 转义。
  */
+/**
+ * 这台叫什么：设置里那项「这台叫什么」（浏览器标题、别人那边的列表与提醒卡片都用它），
+ * 没写就用机器名（`GIH-D-26741` 这种）。
+ */
+export function displayName(): string {
+    try {
+        const label = readServerConfig().config.label;
+        if (label) { return label; }
+    } catch { /* 读不到设置就用机器名 */ }
+    return machineName();
+}
+
 export function machineName(): string {
     try {
         return os.hostname();
