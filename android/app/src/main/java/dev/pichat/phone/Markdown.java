@@ -15,6 +15,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
+import android.widget.TableLayout;
+import android.widget.TableRow;
 import android.widget.TextView;
 
 import java.util.ArrayList;
@@ -91,6 +93,13 @@ final class Markdown {
     private static final class Quote { final String text; Quote(String t) { text = t; } }
     private static final class Rule { }
 
+    /** 一张表格：对齐（0 左 / 1 中 / 2 右），rows.get(0) 是表头。 */
+    private static final class Table {
+        final List<Integer> align;
+        final List<List<String>> rows;
+        Table(List<Integer> a, List<List<String>> r) { align = a; rows = r; }
+    }
+
     private static List<Object> parse(String text) {
         List<Object> blocks = new ArrayList<>();
         String[] lines = text.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1);
@@ -159,6 +168,26 @@ final class Markdown {
                 continue;
             }
 
+            // 表格：这一行有竖线、下一行是「|---|---|」那种分隔行
+            if (line.contains("|") && i + 1 < lines.length && isTableRule(lines[i + 1])) {
+                List<String> ruleCells = splitRow(lines[i + 1]);
+                List<Integer> align = new ArrayList<>();
+                for (String cell : ruleCells) { align.add(alignOf(cell)); }
+                List<List<String>> rows = new ArrayList<>();
+                rows.add(splitRow(line));
+                i += 2;
+                while (i < lines.length && !lines[i].trim().isEmpty() && lines[i].contains("|")) {
+                    rows.add(splitRow(lines[i].trim()));
+                    i++;
+                }
+                // 每行补到列数一样（写 markdown 的人常常少写几格）
+                for (List<String> row : rows) {
+                    while (row.size() < align.size()) { row.add(""); }
+                }
+                blocks.add(new Table(align, rows));
+                continue;
+            }
+
             // 剩下的就是一段：一直到空行 / 下一个块的开头
             StringBuilder paragraph = new StringBuilder(trimEnd(raw));
             i++;
@@ -178,6 +207,7 @@ final class Markdown {
         if (isRule(line)) { return false; }
         if (line.startsWith(">")) { return false; }
         if (itemOf(line) != null) { return false; }
+        if (line.startsWith("|")) { return false; }
         int hashes = 0;
         while (hashes < line.length() && line.charAt(hashes) == '#') { hashes++; }
         return !(hashes >= 1 && hashes <= 6 && line.length() > hashes && line.charAt(hashes) == ' ');
@@ -191,6 +221,56 @@ final class Markdown {
             if (line.charAt(i) != first) { return false; }
         }
         return true;
+    }
+
+    /** `|---|---:|:---:|` 这种分隔行：决定每一列对齐，也用它认出「这是表格」。 */
+    private static boolean isTableRule(String raw) {
+        List<String> cells = splitRow(raw.trim());
+        if (cells.isEmpty()) { return false; }
+        for (String cell : cells) {
+            String text = cell.trim();
+            if (text.isEmpty()) { return false; }
+            String dashes = text.replace(":", "");
+            if (dashes.isEmpty()) { return false; }
+            for (int i = 0; i < dashes.length(); i++) {
+                if (dashes.charAt(i) != '-') { return false; }
+            }
+        }
+        return true;
+    }
+
+    /** 对齐：0 左 / 1 中 / 2 右（看分隔行那一格两头有没有冒号）。 */
+    private static int alignOf(String cell) {
+        String text = cell.trim();
+        boolean left = text.startsWith(":");
+        boolean right = text.endsWith(":");
+        if (left && right) { return 1; }
+        return right ? 2 : 0;
+    }
+
+    /** 把一行竖线格切成几格（去掉两头的竖线，`\|` 当普通的竖线）。 */
+    private static List<String> splitRow(String raw) {
+        String line = raw.trim();
+        if (line.startsWith("|")) { line = line.substring(1); }
+        if (line.endsWith("|") && !line.endsWith("\\|")) { line = line.substring(0, line.length() - 1); }
+        List<String> cells = new ArrayList<>();
+        StringBuilder buffer = new StringBuilder();
+        for (int i = 0; i < line.length(); i++) {
+            char ch = line.charAt(i);
+            if (ch == '\\' && i + 1 < line.length() && line.charAt(i + 1) == '|') {
+                buffer.append('|');
+                i++;
+                continue;
+            }
+            if (ch == '|') {
+                cells.add(buffer.toString().trim());
+                buffer.setLength(0);
+                continue;
+            }
+            buffer.append(ch);
+        }
+        cells.add(buffer.toString().trim());
+        return cells;
     }
 
     /** 这一行是不是列表项（`- x`、`* x`、`1. x`、`1) x`）。 */
@@ -306,6 +386,36 @@ final class Markdown {
             wrapper.addView(bar, new LinearLayout.LayoutParams(dp(ctx, 3), ViewGroup.LayoutParams.MATCH_PARENT));
             wrapper.addView(view, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
             return wrapper;
+        }
+
+        if (block instanceof Table) {
+            Table table = (Table) block;
+            // TableLayout 自己会把同一列撑成一样宽，天生对齐
+            TableLayout layout = new TableLayout(ctx);
+            layout.setStretchAllColumns(false);
+            layout.setShrinkAllColumns(false);
+            for (int r = 0; r < table.rows.size(); r++) {
+                TableRow row = new TableRow(ctx);
+                List<String> cells = table.rows.get(r);
+                for (int c = 0; c < table.align.size(); c++) {
+                    String text = c < cells.size() ? cells.get(c) : "";
+                    TextView cell = textView(ctx, text, size - 1, ink, r == 0);
+                    cell.setSingleLine(true);
+                    cell.setPadding(dp(ctx, 8), dp(ctx, 5), dp(ctx, 8), dp(ctx, 5));
+                    int a = table.align.get(c);
+                    cell.setGravity(a == 1 ? android.view.Gravity.CENTER : a == 2 ? android.view.Gravity.END : android.view.Gravity.START);
+                    if (r == 0) { cell.setBackgroundColor(CODE_BG); }
+                    row.addView(cell, new TableRow.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                }
+                layout.addView(row, new TableLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
+            // 列一多就横向滑（挤窄了反而看不清）
+            HorizontalScrollView scroll = new HorizontalScrollView(ctx);
+            scroll.setHorizontalScrollBarEnabled(true);
+            scroll.addView(layout);
+            return scroll;
         }
 
         if (block instanceof Rule) {

@@ -48,6 +48,8 @@ internal static class Markdown
     private sealed record CodeBlock(string Text) : Block;
     private sealed record QuoteBlock(string Text) : Block;
     private sealed record RuleBlock : Block;
+    /// <summary>一张表格：对齐方式（0 左 / 1 中 / 2 右），Rows[0] 是表头。</summary>
+    private sealed record TableBlock(List<int> Align, List<string[]> Rows) : Block;
 
     private static List<Block> ParseBlocks(string text)
     {
@@ -120,6 +122,28 @@ internal static class Markdown
                 continue;
             }
 
+            // 表格：这一行有竖线、下一行是「|---|---|」那种分隔行
+            if (line.Contains('|') && i + 1 < lines.Length && IsTableRule(lines[i + 1]))
+            {
+                var align = SplitRow(lines[i + 1]).Select(AlignOf).ToList();
+                var rows = new List<string[]> { SplitRow(line).ToArray() };
+                i += 2;
+                while (i < lines.Length && lines[i].Trim().Length > 0 && lines[i].Contains('|'))
+                {
+                    rows.Add(SplitRow(lines[i].Trim()).ToArray());
+                    i++;
+                }
+                // 每行补到列数一样（写 markdown 的人常常少写几格）
+                for (var r = 0; r < rows.Count; r++)
+                {
+                    var row = rows[r];
+                    while (row.Length < align.Count) { row = row.Append("").ToArray(); }
+                    rows[r] = row;
+                }
+                blocks.Add(new TableBlock(align, rows));
+                continue;
+            }
+
             // 剩下的就是一段：一直到空行 / 下一个块的开头
             var paragraph = new StringBuilder(raw.TrimEnd());
             i++;
@@ -141,6 +165,7 @@ internal static class Markdown
         if (IsRule(line)) { return false; }
         if (line.StartsWith('>')) { return false; }
         if (TryItem(line, out _, out _, out _)) { return false; }
+        if (line.StartsWith('|')) { return false; }
         var hashes = 0;
         while (hashes < line.Length && line[hashes] == '#') { hashes++; }
         return !(hashes is >= 1 and <= 6 && line.Length > hashes && line[hashes] == ' ');
@@ -156,6 +181,54 @@ internal static class Markdown
         var first = line[0];
         foreach (var c in line) { if (c != first) { return false; } }
         return true;
+    }
+
+    /// <summary>`|---|---:|:---:|` 这种分隔行：决定每一列对齐，也用它认出「这是表格」。</summary>
+    private static bool IsTableRule(string raw)
+    {
+        var cells = SplitRow(raw.Trim());
+        if (cells.Count == 0) { return false; }
+        foreach (var cell in cells)
+        {
+            var text = cell.Trim();
+            if (text.Length < 1) { return false; }
+            var start = text[0] == ':';
+            var end = text[^1] == ':';
+            var dashes = text.Trim(':');
+            if (dashes.Length == 0) { return false; }
+            foreach (var ch in dashes) { if (ch != '-') { return false; } }
+            _ = start; _ = end;
+        }
+        return true;
+    }
+
+    /// <summary>对齐：0 左 / 1 中 / 2 右（看分隔行那一格两头有没有冒号）。</summary>
+    private static int AlignOf(string cell)
+    {
+        var text = cell.Trim();
+        var left = text.StartsWith(':');
+        var right = text.EndsWith(':');
+        if (left && right) { return 1; }
+        return right ? 2 : 0;
+    }
+
+    /// <summary>把一行竖线格切成几格（去掉两头的竖线，`\|` 当普通的竖线）。</summary>
+    private static List<string> SplitRow(string raw)
+    {
+        var line = raw.Trim();
+        if (line.StartsWith('|')) { line = line[1..]; }
+        if (line.EndsWith('|') && !line.EndsWith("\\|")) { line = line[..^1]; }
+        var cells = new List<string>();
+        var buffer = new StringBuilder();
+        for (var i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (ch == '\\' && i + 1 < line.Length && line[i + 1] == '|') { buffer.Append('|'); i++; continue; }
+            if (ch == '|') { cells.Add(buffer.ToString().Trim()); buffer.Clear(); continue; }
+            buffer.Append(ch);
+        }
+        cells.Add(buffer.ToString().Trim());
+        return cells;
     }
 
     /// <summary>这一行是不是列表项（`- x`、`* x`、`1. x`、`1) x`）。</summary>
@@ -275,6 +348,50 @@ internal static class Markdown
                     BorderThickness = new Thickness(3, 0, 0, 0),
                     Padding = new Thickness(10, 6, 8, 6),
                     Child = TextBlockOf(quote.Text, fontSize, subtle),
+                };
+            }
+
+            case TableBlock table:
+            {
+                var grid = new Grid { HorizontalAlignment = HorizontalAlignment.Left };
+                for (var c = 0; c < table.Align.Count; c++)
+                {
+                    grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                }
+                for (var r = 0; r < table.Rows.Count; r++)
+                {
+                    grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                    var row = table.Rows[r];
+                    for (var c = 0; c < table.Align.Count; c++)
+                    {
+                        var cellText = c < row.Length ? row[c] : "";
+                        var cellTextBlock = TextBlockOf(cellText, fontSize - 1, ink, bold: r == 0);
+                        cellTextBlock.TextAlignment = table.Align[c] switch
+                        {
+                            1 => TextAlignment.Center,
+                            2 => TextAlignment.Right,
+                            _ => TextAlignment.Left,
+                        };
+                        cellTextBlock.TextWrapping = TextWrapping.NoWrap;
+                        var cell = new Border
+                        {
+                            BorderBrush = CodeBorder,
+                            BorderThickness = new Thickness(0, r > 0 ? 1 : 0, c > 0 ? 1 : 0, r == 0 ? 1 : 0),
+                            Background = r == 0 ? CodeBg : Brushes.Transparent,
+                            Padding = new Thickness(8, 4, 8, 4),
+                            Child = cellTextBlock,
+                        };
+                        Grid.SetRow(cell, r);
+                        Grid.SetColumn(cell, c);
+                        grid.Children.Add(cell);
+                    }
+                }
+                // 列一多就横向滚（挤窄了反而看不清）
+                return new ScrollViewer
+                {
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                    Content = grid,
                 };
             }
 
