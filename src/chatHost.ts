@@ -1084,12 +1084,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         }));
     }
 
-    /** 这台在配对里叫什么（设置里那项「这台叫什么」，空着就是机器名；对方列表里组头用的就是它）。 */
+    /** 这台在配对里叫什么（设置里那项「这台叫什么」，空着就是机器名；对方那张卡片上写的就是它）。 */
     private pairSelfName(): string {
         return displayName();
     }
 
-    /** 写一条配对（同一个地址覆盖旧的）；confirmed 的顺手接进拉取列表。 */
+    /** 写一条配对（同一个地址覆盖旧的）。 */
     private savePair(entry: ServerPairing): void {
         const peers = readServerConfig().config.pairs.peers.filter((peer) => peer.address !== entry.address);
         peers.push(entry);
@@ -1097,7 +1097,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         if (entry.confirmed) { this.forgetRejected(entry.address); }
     }
 
-    /** 删一条配对（连它列出来的那些会话一起拿掉）；顺手把它从「拒绝过」的名单里擦掉。 */
+    /** 删一条配对；顺手把它从「拒绝过」的名单里擦掉（rejected 为真时把它记进去）。 */
     private dropPair(address: string, rejected: boolean): void {
         const cfg = readServerConfig().config.pairs;
         const peers = cfg.peers.filter((peer) => peer.address !== address);
@@ -1126,26 +1126,26 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return { ok: true };
     }
 
-    /** 设置面板里点「接受」：两边算配上了，它以后就能被拉进列表。 */
+    /** 设置面板里点「接受」：两边算配上了，它以后有事就推一张过来。 */
     public acceptPair(address: string): void {
         const peer = readServerConfig().config.pairs.peers.find((item) => item.address === address);
         const name = peer?.name || hostOfUrl(address) || address;
         this.savePair({ address, name, confirmed: true, incoming: false });
-        this.log(`[配对] 跟「${name}」配上了：它开着的会话会出现在列表里。`);
+        this.log(`[配对] 跟「${name}」配上了：它那边有事会推一张卡片过来。`);
         void this.sendPairReply(address, true, this.pairSelfName());
     }
 
     /** 设置面板里点「不接受」：记下来，它再来求也不弹。 */
     public rejectPair(address: string): void {
         this.dropPair(address, true);
-        this.log(`[配对] 不接受「${address}」：它开着的会话不会出现在列表里。`);
+        this.log(`[配对] 不接受「${address}」：它推来的提醒不收。`);
         void this.sendPairReply(address, false, this.pairSelfName());
     }
 
     /** 解除已经配上的那台（在它那也一并说一声）。 */
     public removePair(address: string): void {
         this.dropPair(address, false);
-        this.log(`[配对] 跟「${address}」解除了，不再列它的会话。`);
+        this.log(`[配对] 跟「${address}」解除了，不再收它推来的提醒。`);
         void this.sendPairReply(address, false, this.pairSelfName());
     }
 
@@ -1170,7 +1170,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         if (accepted) {
             const peer = readServerConfig().config.pairs.peers.find((item) => item.address === origin);
             this.savePair({ address: origin, name: peer?.name || hostOfUrl(origin) || origin, confirmed: true, incoming: false });
-            this.log(`[配对] 「${origin}」接受了：它开着的会话会出现在列表里。`);
+            this.log(`[配对] 「${origin}」接受了：它那边有事会推一张卡片过来。`);
             return;
         }
         this.dropPair(origin, false);
