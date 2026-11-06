@@ -22,8 +22,8 @@ internal sealed class MainWindow : Window
     private string? _pendingSelect;
 
     private TextBlock _statusText = null!;
-    private TextBox _urlBox = null!;
-    private StackPanel _settingsPanel = null!;
+    /** 设置那个小窗口开着时，它里面那行状态（关了就是 null）。 */
+    private TextBlock? _dialogStatus;
     private TextBlock _placeholder = null!;
     private StackPanel _sessionList = null!;
     private StackPanel _messages = null!;
@@ -75,7 +75,6 @@ internal sealed class MainWindow : Window
         _backend.Ended += OnEnded;
         _backend.Start();
 
-        _urlBox.Text = _config.Url;
         RenderSession();
     }
 
@@ -104,7 +103,6 @@ internal sealed class MainWindow : Window
         left.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         left.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         left.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        left.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         var leftTitle = new TextBlock
         {
             Text = "会话",
@@ -126,60 +124,21 @@ internal sealed class MainWindow : Window
         Grid.SetRow(listScroll, 1);
         left.Children.Add(listScroll);
 
-        // 列底下：换后端地址那一块（平时收着，点「设置」才摊开）
-        _settingsPanel = new StackPanel { Margin = new Thickness(10, 0, 10, 8), Visibility = Visibility.Collapsed };
-        _settingsPanel.Children.Add(new TextBlock
-        {
-            Text = "后端地址",
-            FontSize = 11,
-            Foreground = Gray,
-            Margin = new Thickness(0, 0, 0, 4),
-        });
-        _urlBox = new TextBox
-        {
-            Height = 26,
-            Padding = new Thickness(6, 0, 6, 0),
-            VerticalContentAlignment = VerticalAlignment.Center,
-            Text = _config.Url,
-            ToolTip = "换了地址点「连接」；下次打开还用它",
-        };
-        _settingsPanel.Children.Add(_urlBox);
-        var connectButton = new Button
-        {
-            Content = "连接",
-            Padding = new Thickness(12, 2, 12, 2),
-            Height = 26,
-            Margin = new Thickness(0, 6, 0, 0),
-            HorizontalAlignment = HorizontalAlignment.Left,
-        };
-        connectButton.Click += (_, _) => ApplyUrl();
-        _urlBox.KeyDown += (_, e) =>
-        {
-            if (e.Key == Key.Enter) { e.Handled = true; ApplyUrl(); }
-        };
-        _settingsPanel.Children.Add(connectButton);
-        Grid.SetRow(_settingsPanel, 2);
-        left.Children.Add(_settingsPanel);
-
-        // 左下角：一颗「设置」+ 现在连到哪儿了
+        // 左下角：一颗齿轮（齿轮图标）+ 现在连到哪儿了。地址那些在它的弹窗里改。
+        // 左下角：一颗齿轮（齿轮图标）+ 现在连到哪儿了。地址那些在它的弹窗里改。
         var footer = new Grid { Margin = new Thickness(10, 0, 10, 8) };
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         var settingsButton = new Button
         {
-            Content = "设置",
-            Padding = new Thickness(8, 2, 8, 2),
-            Height = 24,
-            FontSize = 12,
-            ToolTip = "换后端地址",
+            Content = "\u2699",
+            Width = 26,
+            Height = 26,
+            FontSize = 14,
+            Padding = new Thickness(0),
+            ToolTip = "设置（后端地址）",
         };
-        settingsButton.Click += (_, _) =>
-        {
-            _settingsPanel.Visibility = _settingsPanel.Visibility == Visibility.Visible
-                ? Visibility.Collapsed
-                : Visibility.Visible;
-            if (_settingsPanel.Visibility == Visibility.Visible) { _urlBox.Focus(); _urlBox.SelectAll(); }
-        };
+        settingsButton.Click += (_, _) => ShowSettings();
         Grid.SetColumn(settingsButton, 0);
         footer.Children.Add(settingsButton);
 
@@ -367,12 +326,19 @@ internal sealed class MainWindow : Window
         _statusText.Text = text;
         _statusText.Foreground = connected ? Green : Orange;
         _statusText.ToolTip = text;
+        if (_dialogStatus != null)
+        {
+            _dialogStatus.Text = text;
+            _dialogStatus.Foreground = connected ? Green : Orange;
+        }
     }
 
     private void OnEnded(string reason)
     {
-        _statusText.Text = reason.Length > 0 ? "后端停了：" + reason : "后端停了，不再重连";
+        var text = reason.Length > 0 ? "后端停了：" + reason : "后端停了，不再重连";
+        _statusText.Text = text;
         _statusText.Foreground = Orange;
+        if (_dialogStatus != null) { _dialogStatus.Text = text; _dialogStatus.Foreground = Orange; }
     }
 
     private void OnSessions(List<SessionInfo> list, bool withNotes)
@@ -903,15 +869,14 @@ internal sealed class MainWindow : Window
         _placeholder.Visibility = _inputBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void ApplyUrl()
+    private void ApplyUrl(string raw)
     {
-        var url = Backend.Normalize(_urlBox.Text);
+        var url = Backend.Normalize(raw);
         if (!Backend.IsValid(url))
         {
             OnStatus("地址写得不对，要像 http://127.0.0.1:51991 这样", false);
             return;
         }
-        _urlBox.Text = url;
         if (url == _backend.Url) { OnStatus("已经连的就是这个地址", false); return; }
 
         _config.Url = url;
@@ -926,6 +891,74 @@ internal sealed class MainWindow : Window
     }
 
     // ---------------------------------------------------------------- 小工具
+
+    /// <summary>
+    /// 左下角那颗齿轮：弹一个小窗口换后端地址（不在主界面上占地方）。
+    /// 窗口里那行状态跟着主界面一起变（连没连上看得到），点「关闭」/按 Esc 回去。
+    /// </summary>
+    private void ShowSettings()
+    {
+        var dialog = new Window
+        {
+            Title = "设置",
+            Owner = this,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            SizeToContent = SizeToContent.Height,
+            Width = 400,
+            ResizeMode = ResizeMode.NoResize,
+            ShowInTaskbar = false,
+            Background = White,
+            FontFamily = FontFamily,
+        };
+
+        var panel = new StackPanel { Margin = new Thickness(18, 16, 18, 16) };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "后端地址",
+            FontSize = 12,
+            Foreground = Gray,
+            Margin = new Thickness(0, 0, 0, 6),
+        });
+        var urlBox = new TextBox
+        {
+            Height = 28,
+            Padding = new Thickness(6, 0, 6, 0),
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Text = _config.Url,
+            ToolTip = "像 http://127.0.0.1:51991 这样；换了点「连接」，下次打开还用它",
+        };
+        panel.Children.Add(urlBox);
+
+        _dialogStatus = new TextBlock
+        {
+            Text = _statusText.Text,
+            Foreground = _statusText.Foreground,
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        panel.Children.Add(_dialogStatus);
+
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 16, 0, 0),
+        };
+        var connect = new Button { Content = "连接", Padding = new Thickness(16, 3, 16, 3), IsDefault = true };
+        connect.Click += (_, _) => ApplyUrl(urlBox.Text);
+        var close = new Button { Content = "关闭", Padding = new Thickness(16, 3, 16, 3), Margin = new Thickness(8, 0, 0, 0), IsCancel = true };
+        close.Click += (_, _) => dialog.Close();
+        buttons.Children.Add(connect);
+        buttons.Children.Add(close);
+        panel.Children.Add(buttons);
+
+        dialog.Content = panel;
+        dialog.Closed += (_, _) => { _dialogStatus = null; };
+        dialog.ShowDialog();
+        // 关掉以后手能接着打字
+        _inputBox.Focus();
+    }
 
     private static string TimeLabel(long? milliseconds)
     {
