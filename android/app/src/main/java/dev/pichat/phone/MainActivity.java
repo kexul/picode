@@ -4,54 +4,58 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.Log;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.util.List;
 
 /**
- * 一屏：整屏就是网页端本身（看会话、回话都在里面）；填地址那一块平时收着，要用时才摊开。
+ * 一屏会话列表：一行一个会话，有事的排前面，点一行进去看那个会话。
  *
- * 不另外写一套对话界面：手机上打开后端那个地址看到的就是这一份，嵌进来就全都有了。
- * 摊开填地址那一块的入口只有通知栏：点那条常驻通知就摊开（第一次装、网页打不开时也自己摊开）。
- * 点会话提醒那条进来时带着会话标识，页面就绪以后让它切到那个会话（跟顶条上点一下那格一样）。
+ * 顶上一颗「设置」：点它摊开填后端地址那一块，底下写着现在连到哪儿了（已连上 / 重连中…）。
+ * 地址还没填时它自己摊开，并且收不起来（那时还没有别的地方能填）。
+ * 长连接正断着、列表又空的时候，中间有一句人话和一颗「重新连」。
+ *
+ * 数据都在 Store 里（收提醒的服务一直在往里写），这儿只是照着摆。
  */
 public class MainActivity extends Activity {
-    /** 提醒点进来时带的会话标识（要切过去的那个会话）。 */
-    static final String EXTRA_SESSION = "sessionId";
     /** 常驻通知点进来时带的标记：把填地址那一块摊开。 */
     static final String EXTRA_SETTINGS = "openSettings";
 
     private EditText urlBox;
     private TextView statusLine;
     private LinearLayout settingsPanel;
-    private WebView web;
+    private LinearLayout list;
+    private LinearLayout emptyBox;
+    private TextView emptyLine;
+
     private final Handler ui = new Handler(Looper.getMainLooper());
-    /** 通知点进来要切过去的会话：页面还没载好时先记着，载好了再说。 */
-    private String pendingSession;
-    /** 已经跟后端说了几次「切到那个会话」（页面刚载好时可能还没连上，说几次）。 */
-    private int switchTries;
-    /** 页面载完没（载完才叫它切：刚载到一半时它还没连上后端）。 */
-    private boolean pageLoaded;
     private boolean resumed;
+    /** 进这个界面以后拉过一次列表没有（省得来回切都去问一遍）。 */
+    private boolean askedSessions;
+    private final Runnable onChange = () -> {
+        if (!isFinishing()) { refreshList(); }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -61,21 +65,46 @@ public class MainActivity extends Activity {
 
         String saved = Settings.baseUrl(this);
         urlBox.setText(saved);
-        if (!saved.isEmpty()) { PhoneService.start(this); }
-        loadPage(saved);
-        // 还没填地址：把那行摊开来（填完就收回去，平时整屏都是网页）
         showSettings(saved.isEmpty());
+        Store.listen(onChange);
+        refreshList();
+
         handleIntent(getIntent());
+        if (!saved.isEmpty()) {
+            PhoneService.start(this);
+            fetchSessions(true);
+        }
         askNotificationPermission();
     }
 
     private View buildUi() {
-        final int pad = Math.round(8 * getResources().getDisplayMetrics().density);
+        int pad = dp(10);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
 
-        // 填地址那一块（地址、现在连到哪儿了）：平时不占地方，整屏都是网页。
-        // 点通知栏那条常驻通知才摊开（第一次装、网页打不开时也自己摊开），收起来靠底下那颗「收起」。
+        // 顶上一行：名字 + 设置
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(pad, pad, pad, pad);
+
+        TextView name = new TextView(this);
+        name.setText("Pi Chat");
+        name.setTextSize(20);
+        name.setTextColor(0xFF1E1E1E);
+        name.setTypeface(null, Typeface.BOLD);
+        header.addView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView settings = new TextView(this);
+        settings.setText("设置");
+        settings.setTextSize(14);
+        settings.setTextColor(0xFF3A6EA5);
+        settings.setPadding(pad, pad / 2, 0, pad / 2);
+        settings.setOnClickListener(v -> showSettings(settingsPanel.getVisibility() != View.VISIBLE));
+        header.addView(settings);
+        root.addView(header);
+
+        // 填地址那一块（地址、保存、现在连到哪儿了）：平时收着
         settingsPanel = new LinearLayout(this);
         settingsPanel.setOrientation(LinearLayout.VERTICAL);
 
@@ -97,8 +126,6 @@ public class MainActivity extends Activity {
         bar.addView(save);
         settingsPanel.addView(bar);
 
-        // 底下那一行：左边现在连到哪儿了，右边一颗「收起」（点通知进来的，看完就收回去）。
-        // 地址还没填时收不起来（那时通知栏里还没有那条常驻通知，收起来就再没入口了，见 showSettings）。
         LinearLayout foot = new LinearLayout(this);
         foot.setOrientation(LinearLayout.HORIZONTAL);
         foot.setGravity(Gravity.CENTER_VERTICAL);
@@ -120,43 +147,51 @@ public class MainActivity extends Activity {
         settingsPanel.addView(foot);
         root.addView(settingsPanel);
 
-        web = new WebView(this);
-        WebSettings settings = web.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setDomStorageEnabled(true);
-        settings.setUseWideViewPort(true);
-        settings.setLoadWithOverviewMode(true);
-        web.setWebViewClient(new WebViewClient() {
-            @Override
-            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
-                pageLoaded = false;
-            }
+        // 中间：列表；没有会话时摆一句人话和一颗「重新连」
+        FrameLayout content = new FrameLayout(this);
 
-            @Override
-            public void onPageFinished(WebView view, String url) {
-                pageLoaded = true;
-                applyPendingSwitch();
-            }
+        ScrollView scroller = new ScrollView(this);
+        list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(pad, 0, pad, pad);
+        scroller.addView(list, new ScrollView.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        content.addView(scroller, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-            @Override
-            public void onReceivedError(WebView view, android.webkit.WebResourceRequest request, android.webkit.WebResourceError error) {
-                // 打不开（地址写错了 / 后端没开 / 不在同一个网）：把那行摊开来让人改
-                if (request != null && request.isForMainFrame()) { showSettings(true); }
-            }
-        });
-        root.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        emptyBox = new LinearLayout(this);
+        emptyBox.setOrientation(LinearLayout.VERTICAL);
+        emptyBox.setGravity(Gravity.CENTER);
+        emptyBox.setPadding(pad, 0, pad, 0);
 
-        // 键盘弹出来时网页让出位置，别把输入框盖住
+        emptyLine = new TextView(this);
+        emptyLine.setTextSize(14);
+        emptyLine.setTextColor(0xFF8A8A8A);
+        emptyLine.setGravity(Gravity.CENTER);
+        emptyBox.addView(emptyLine);
+
+        Button reconnect = new Button(this);
+        reconnect.setText("重新连");
+        reconnect.setAllCaps(false);
+        reconnect.setOnClickListener(v -> onReconnect());
+        emptyBox.addView(reconnect);
+        content.addView(emptyBox, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        root.addView(content, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         return root;
     }
 
-    /** 填地址那一块露不露出来（网页本身占满剩下的地方）。地址还没填时收不起来。 */
+    /** 填地址那一块露不露出来。地址还没填时收不起来（那时别处没有入口）。 */
     private void showSettings(boolean show) {
         boolean visible = show || Settings.baseUrl(this).isEmpty();
         settingsPanel.setVisibility(visible ? View.VISIBLE : View.GONE);
     }
-    /** 「保存」：存下地址、开始收提醒、把页面载进来，然后把这行收回去。 */
+
+    /** 「保存」：存下地址、换一条连接、把列表重新要一份，然后把这行收回去。 */
     private void onSave() {
         String url = Settings.normalize(urlBox.getText().toString());
         urlBox.setText(url);
@@ -164,33 +199,159 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "先填后端地址（浏览器里打开后端时那个地址）", Toast.LENGTH_SHORT).show();
             return;
         }
+        boolean changed = !url.equals(Settings.baseUrl(this));
         Settings.setBaseUrl(this, url);
-        PhoneService.start(this);
-        loadPage(url);
-        // 存好了就把这行收回去：平时整屏都是网页
+        if (changed) { Store.clear(); }
+        PhoneService.reconnect(this);
         showSettings(false);
+        emptyLine.setText("正在连…");
+        fetchSessions(true);
     }
 
-    private void loadPage(String url) {
-        if (url == null || url.isEmpty()) {
-            web.loadData("<html><body style=\"font:15px sans-serif;padding:24px;color:#666\">"
-                + "上面填后端地址（就是浏览器里打开 Pi Chat 时那个地址），保存以后这里就是对话页面。</body></html>",
-                "text/html", "utf-8");
+    /** 手动刷新：再连一次，同时问后端要一份列表（长连接可能正断着）。 */
+    private void onReconnect() {
+        if (Settings.baseUrl(this).isEmpty()) {
+            showSettings(true);
             return;
         }
-        if (!url.equals(web.getUrl())) { web.loadUrl(url); }
+        emptyLine.setText("正在重新连…");
+        PhoneService.reconnect(this);
+        fetchSessions(true);
     }
 
-    /** 点通知进来的：常驻那条要摊开填地址那块，提醒那条要切到它说的会话。 */
+    /** 列表的简版（GET /phone/sessions）：长连接还没连上时先靠它把这一屏填上。 */
+    private void fetchSessions(boolean complain) {
+        final String base = Settings.baseUrl(this);
+        if (base.isEmpty()) { return; }
+        askedSessions = true;
+        new Thread(() -> {
+            try {
+                JSONObject res = Store.get(base + "/phone/sessions");
+                JSONArray array = res.optJSONArray("sessions");
+                if (array != null) { Store.applySessions(array); }
+            } catch (Exception e) {
+                ui.post(() -> {
+                    if (!complain || isFinishing()) { return; }
+                    if (!Store.sessions().isEmpty()) { return; }
+                    // 连不上（地址写错了 / 后端没开 / 不在同一个网）：跟原来一样，把填地址那块摊开
+                    emptyLine.setText("连不上后端，看看地址对不对（" + Store.reason(e) + "）");
+                    showSettings(true);
+                });
+            }
+        }, "phone-sessions").start();
+    }
+
+    /** 照着 Store 里那份，把列表重摆一遍。 */
+    private void refreshList() {
+        if (list == null || isFinishing()) { return; }
+        list.removeAllViews();
+        List<Store.Session> sessions = Store.sessions();
+        boolean hasAddress = !Settings.baseUrl(this).isEmpty();
+        if (sessions.isEmpty()) {
+            emptyBox.setVisibility(View.VISIBLE);
+            emptyLine.setText(hasAddress
+                ? "现在没有开着会话。在电脑上开一个，这里就会出现。"
+                : "还没填后端地址。点右上角「设置」填一下。");
+            return;
+        }
+        emptyBox.setVisibility(View.GONE);
+        for (Store.Session session : sessions) {
+            list.addView(row(session));
+        }
+    }
+
+    /** 列表上一行：在跑的小圆点、会话名、最后一条的一两句、时间。 */
+    private View row(Store.Session session) {
+        int pad = dp(10);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(pad, pad, pad, pad);
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(0xFFF7F7F7);
+        background.setCornerRadius(dp(10));
+        row.setBackground(background);
+        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rowParams.bottomMargin = dp(6);
+        row.setLayoutParams(rowParams);
+
+        TextView dot = new TextView(this);
+        dot.setText("●");
+        dot.setTextSize(10);
+        dot.setTextColor(0xFF2F7BE0);
+        dot.setVisibility(session.running ? View.VISIBLE : View.INVISIBLE);
+        LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        dotParams.rightMargin = dp(6);
+        row.addView(dot, dotParams);
+
+        LinearLayout middle = new LinearLayout(this);
+        middle.setOrientation(LinearLayout.VERTICAL);
+        row.addView(middle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView name = new TextView(this);
+        name.setText(session.name);
+        name.setTextSize(16);
+        name.setTextColor(0xFF1E1E1E);
+        name.setSingleLine(true);
+        name.setEllipsize(TextUtils.TruncateAt.END);
+        middle.addView(name);
+
+        Store.Note last = session.last;
+        if (last != null) {
+            TextView summary = new TextView(this);
+            summary.setText(summary(last));
+            summary.setTextSize(13);
+            summary.setTextColor(0xFF6A6A6A);
+            summary.setMaxLines(2);
+            summary.setEllipsize(TextUtils.TruncateAt.END);
+            middle.addView(summary);
+
+            if (Store.waitingAnswer(session.id)) {
+                TextView waiting = new TextView(this);
+                waiting.setText("在等你答一句");
+                waiting.setTextSize(12);
+                waiting.setTextColor(0xFFB26A00);
+                middle.addView(waiting);
+            }
+        } else {
+            TextView none = new TextView(this);
+            none.setText("还没有新的事");
+            none.setTextSize(13);
+            none.setTextColor(0xFF9A9A9A);
+            middle.addView(none);
+        }
+
+        TextView time = new TextView(this);
+        time.setText(Store.shortTime(last == null ? 0 : last.at));
+        time.setTextSize(12);
+        time.setTextColor(0xFF9A9A9A);
+        LinearLayout.LayoutParams timeParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        timeParams.leftMargin = dp(8);
+        row.addView(time, timeParams);
+
+        row.setOnClickListener(v -> startActivity(new Intent(this, SessionActivity.class)
+            .putExtra(SessionActivity.EXTRA_SESSION, session.id)
+            .putExtra(SessionActivity.EXTRA_NAME, session.name)));
+        return row;
+    }
+
+    /** 列表上那一两句：跑完是回复开头，问的是题干，自己说的是「我：」。换行压成空格。 */
+    private static String summary(Store.Note note) {
+        String text = note.text == null ? "" : note.text.replaceAll("\\s+", " ").trim();
+        if (text.isEmpty()) { text = "（没有文字）"; }
+        if ("ask".equals(note.kind)) { return "问：" + text; }
+        if ("me".equals(note.kind)) { return "我：" + text; }
+        return text;
+    }
+
+    /** 点通知进来的：常驻那条要摊开填地址那块（别的入口已经直接进会话页了）。 */
     private void handleIntent(Intent intent) {
         if (intent == null) { return; }
         if (intent.getBooleanExtra(EXTRA_SETTINGS, false)) {
             showSettings(true);
-        }
-        String session = intent.getStringExtra(EXTRA_SESSION);
-        if (session != null && !session.isEmpty()) {
-            pendingSession = session;
-            switchTries = 0;
         }
     }
 
@@ -199,57 +360,16 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         handleIntent(intent);
-        applyPendingSwitch();
-    }
-
-    /**
-     * 让开着的页面切到通知说的那个会话。
-     *
-     * 自己不往页面里塞脚本（那要靠页面内部的东西，一变就不管用了），而是叫后端说一句：
-     * `POST /switch`，跟有人点了右下角那张提醒卡一个走法（后端广播给每个开着的页面）。
-     * 页面刚载完那一小会儿可能还没连上后端，那就过一会儿再说，几次还不行就算了——
-     * 人自己点顶条上那格也一样。
-     */
-    private void applyPendingSwitch() {
-        final String session = pendingSession;
-        if (session == null || !pageLoaded) { return; }
-        requestSwitch(session);
-        if (++switchTries >= 3) {
-            pendingSession = null;
-            return;
-        }
-        ui.postDelayed(this::applyPendingSwitch, switchTries == 1 ? 1200 : 2500);
-    }
-
-    /** 跟后端说一句「把开着的页面切到这个会话」。 */
-    private void requestSwitch(String sessionId) {
-        final String base = Settings.baseUrl(this);
-        if (base.isEmpty() || sessionId == null || sessionId.isEmpty()) { return; }
-        final String body = "{\"sessionId\":" + org.json.JSONObject.quote(sessionId) + "}";
-        new Thread(() -> {
-            HttpURLConnection conn = null;
-            try {
-                conn = (HttpURLConnection) new URL(base + "/switch").openConnection();
-                conn.setRequestMethod("POST");
-                conn.setConnectTimeout(5000);
-                conn.setReadTimeout(5000);
-                conn.setDoOutput(true);
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.getOutputStream().write(body.getBytes(StandardCharsets.UTF_8));
-                Log.d("pichat-phone", "说要切到 " + sessionId + "：HTTP " + conn.getResponseCode());
-            } catch (Exception ignored) {
-                // 切不过去就算了：人自己点顶条上那格也一样
-            } finally {
-                if (conn != null) { conn.disconnect(); }
-            }
-        }, "switch-session").start();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         resumed = true;
+        refreshList();
         ui.post(statusTick);
+        // 从会话页回来、刚开的那一次没拉上（比如地址刚填）：补一次
+        if (!askedSessions && !Settings.baseUrl(this).isEmpty()) { fetchSessions(true); }
     }
 
     @Override
@@ -259,7 +379,13 @@ public class MainActivity extends Activity {
         super.onPause();
     }
 
-    /** 底下那行小字：现在连到哪儿了（每秒看一眼，省一套监听）。 */
+    @Override
+    protected void onDestroy() {
+        Store.unlisten(onChange);
+        super.onDestroy();
+    }
+
+    /** 填地址那一块底下那行小字：现在连到哪儿了（每秒看一眼，省一套监听）。 */
     private final Runnable statusTick = new Runnable() {
         @Override
         public void run() {
@@ -272,13 +398,9 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        // 摊开的填地址那块先收起来（地址没填时收不起来，那就停在这儿，见 showSettings）
+        // 摊开的填地址那块先收起来（地址没填时收不起来，那就停在这儿）
         if (settingsPanel != null && settingsPanel.getVisibility() == View.VISIBLE) {
             showSettings(false);
-            return;
-        }
-        if (web != null && web.canGoBack()) {
-            web.goBack();
             return;
         }
         super.onBackPressed();
@@ -289,5 +411,9 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT < 33) { return; }
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) { return; }
         requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS }, 1);
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 }

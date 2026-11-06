@@ -321,6 +321,10 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
     };
     // 手机上那个 app（前台服务）连着的时候，会话有事也往那儿推一条（见 webChatServer.ts 的 /phone）
     host.setPhoneNotifier((note) => server.notifyPhones(note));
+    // 会话列表变了（新建 / 关掉 / 在跑 / 跑完了）也推一份：手机 / 桌上那个小窗口的列表靠它跟上
+    host.setPhoneSessionsNotifier(() => server.notifyPhoneSessions());
+    // 一张卡片收尾了（在哪儿答的都算）：别的设备上那几个选项该置灰了
+    host.setPhoneAskDoneNotifier((cardId) => server.notifyPhoneAskDone(cardId));
     await server.applySettings(settings);
 
     const url = server.url;

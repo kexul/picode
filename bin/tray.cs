@@ -24,6 +24,8 @@
  *                                            开头，像 `我的电脑-pi`，点卡片认窗口用它；
  *                                            旧版本后端不给这格，点了就不认窗口）
  *     url \t 地址                           网页服务现在的地址（菜单里「打开」用它；可以再来一遍换掉）
+ *     app \t 程序路径                       桌面那个小窗口的程序（有它时：「打开」直接开它，
+ *                                           点卡片带着会话标识开它；没给就还是开浏览器）
  *     stdin 关了就是收摊（后端退出时不一定来得及说一声）
  *   这里 → 后端：
  *     exit                                  人在菜单里点了“退出”：后端收到就把自己也关掉
@@ -729,6 +731,8 @@ class TrayContext : ApplicationContext
     private string pageUrl = "";
     /** 菜单里那颗「打开」：知道地址以后才点得动。 */
     private ToolStripMenuItem openItem;
+    /** 桌面那个小窗口的程序（后端说的，见协议里那条 app）：有它就开它，没有就开浏览器。 */
+    private string appExe = "";
     /** 往后端写字的管子（点了「退出」、点了卡片都会用到）。 */
     private StreamWriter toBackend;
     /** 写管子的锁：读 stdin 的线程、点卡片的界面线程两边都要写。 */
@@ -845,7 +849,14 @@ class TrayContext : ApplicationContext
             {
                 // 后端说网页服务在哪个地址：记下（菜单里「打开」用它），不弹任何东西
                 pageUrl = parts.Length > 1 ? parts[1].Trim() : "";
-                if (openItem != null) { openItem.Enabled = pageUrl.Length > 0; }
+                if (openItem != null) { openItem.Enabled = pageUrl.Length > 0 || appExe.Length > 0; }
+                return;
+            }
+            case "app":
+            {
+                // 桌面那个小窗口的程序：有它的话「打开」和点卡片都开它（没编出来时后端不会发这一行）
+                appExe = parts.Length > 1 ? parts[1].Trim() : "";
+                if (openItem != null) { openItem.Enabled = pageUrl.Length > 0 || appExe.Length > 0; }
                 return;
             }
         }
@@ -880,8 +891,32 @@ class TrayContext : ApplicationContext
      */
     private void NoteClicked(NoteItem item)
     {
+        // 有桌面那个小窗口就带着会话标识开它（已经开着就跑到它前面、切到那个会话）；
+        // 没有才照旧去拉浏览器窗口。
+        if (appExe.Length > 0)
+        {
+            bool opened = StartApp("--session \"" + item.Id + "\"");
+            SendLine(string.Join("\t", "open", item.Id, opened ? "1" : "0"));
+            return;
+        }
         bool focused = FocusBrowserWindow(item.Host);
         SendLine(string.Join("\t", "open", item.Id, focused ? "1" : "0"));
+    }
+
+    /**
+     * 起桌面那个小窗口：给参数就按里面的意思（`--session <标识>`）。
+     * 已经开着一个也没关系：它自己会把已有那个窗口叫到前面来。
+     */
+    private bool StartApp(string arguments)
+    {
+        try
+        {
+            ProcessStartInfo start = new ProcessStartInfo(appExe) { UseShellExecute = true };
+            if (!string.IsNullOrEmpty(arguments)) { start.Arguments = arguments; }
+            Process.Start(start);
+            return true;
+        }
+        catch { return false; }
     }
 
     /**
@@ -919,6 +954,8 @@ class TrayContext : ApplicationContext
      */
     private void OpenPage()
     {
+        // 有桌面那个小窗口就开它（这才是「像 app」的那一个）；没有就还是开浏览器。
+        if (appExe.Length > 0) { StartApp(""); return; }
         if (pageUrl.Length == 0) { return; }
         try { Process.Start(new ProcessStartInfo(pageUrl) { UseShellExecute = true }); }
         catch { /* 打不开就算了 */ }

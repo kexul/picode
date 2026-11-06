@@ -44,7 +44,8 @@ import { MessageBuffer, PAGE_TRANSIENT_MESSAGE_TYPES } from "./webTransport";
 import { pickOverlayClient } from "./overlayTarget";
 import { ScreenRegistry } from "./screenRegistry";
 import { dirInsideAny, dirKey } from "./pathRules";
-import type { PhoneNote, WebServerHost } from "./webChatServer";
+import type { PhoneNote, PhoneSessionInfo, WebServerHost } from "./webChatServer";
+import type { PhoneAsk, PhoneNoteKind } from "./phoneInbox";
 import type { SessionChanges } from "./gitChanges";
 import type { BashTaskInfo } from "./bashProtocol";
 import { uniqueNameParts, composeName, type NameParts } from "./names";
@@ -149,6 +150,21 @@ function openWorkspaceDirs(msg: Record<string, unknown>): string[] | undefined {
     return dirs.length > 0 ? dirs : undefined;
 }
 
+/**
+ * 手机 / 桌上那个小窗口一条通知最多留多少字。
+ *
+ * 托盘那块面板只能放两行（“瞥一眼”），这边是要把这一轮说的话读一遍，所以留得长；
+ * 也不像面板那样把 markdown 记号与代码块去掉（去掉以后代码就整个消失了）。再多就把快照撑大了。
+ */
+const PHONE_TEXT_CHARS = 1200;
+
+/** 一条通知上的字：去肵两头空白，太长就截至（末尾一个省略号）。 */
+function phoneText(text: string): string {
+    const flat = (text ?? "").replace(/^\s+|\s+$/g, "");
+    if (flat.length <= PHONE_TEXT_CHARS) { return flat; }
+    return flat.slice(0, PHONE_TEXT_CHARS).replace(/\s+$/, "") + "…";
+}
+
 export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 文件夹列表里“就用这个目录”那一行的标识（会话文件、目录都是绝对路径，撞不上这种带 \0 的）。 */
     private static readonly USE_DIR_ROW = "\u0000pichat:use-dir";
@@ -191,6 +207,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private static readonly KEY_WEIXIN_PUSH = "piChat.weixinPush";
     /** 手机 app（那个前台服务）连着的时候：有事往它那儿写一条的出口（见 serverMain.ts 接进来的）。 */
     private phoneNotifier?: (note: PhoneNote) => void;
+    /** 「会话列表变了」那条出口（见 setPhoneSessionsNotifier）。 */
+    private phoneSessionsNotifier?: () => void;
+    /** 「一张卡片收尾了」那条出口（见 setPhoneAskDoneNotifier）。 */
+    private phoneAskDoneNotifier?: (cardId: string) => void;
+    /** 催一催「会话列表变了」这件事：一时涌来一堆变更，合成一次发（见 pushPhoneSessionsSoon）。 */
+    private phoneSessionsTimer?: ReturnType<typeof setTimeout>;
     private static readonly KEY_THEME = "piChat.themeMode";
 
     /** 会话显示名用的名字池：panel 关闭后会释放对应名字。 */
@@ -512,6 +534,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      */
     public override broadcastSessionList(immediate = false): void {
         super.broadcastSessionList(immediate);
+        // 手机 / 桌上那个小窗口的列表也跟上（新建、关掉、在跑、跑完了）
+        this.pushPhoneSessionsSoon();
         // 开着的会话 → 各自的会话文件与目录（这一刻的一份）
         const now = new Map<string, { file: string; cwd: string }>();
         for (const rt of this.panels.values()) {
@@ -764,8 +788,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 微信这条不受它们管 —— 它本来就是给"人不在电脑前"用的。
      * 它自己有一个开关（设置里「微信推送」），跟「弹窗通知」（Windows 右下角那块面板）互不相干。
      */
-    protected override trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): void {
-        this.pushPhoneNote(sessionId, name, summary, kind);
+    protected override trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done", ask?: PhoneAsk): void {
+        this.pushPhoneNote(sessionId, name, summary, kind, undefined, ask);
         void this.pushWeixinNote(sessionId, name, summary, kind);
         super.trayNote(sessionId, name, summary, kind);
     }
@@ -777,14 +801,101 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     public setPhoneNotifier(notifier: (note: PhoneNote) => void): void { this.phoneNotifier = notifier; }
 
     /**
-     * 把这条提醒推给连着的手机 app。
+     * 接上「会话列表变了」这条出口：手机 / 桌上那个小窗口的列表靠它跟上（新建、关掉、开始跑、跑完了）。
+     * 不接就什么都不推（网页服务没跑）。
+     */
+    public setPhoneSessionsNotifier(notifier: () => void): void { this.phoneSessionsNotifier = notifier; }
+
+    /** 接上「一张卡片收尾了」这条出口：答过的那几个选项在别的设备上该置灰了。 */
+    public setPhoneAskDoneNotifier(notifier: (cardId: string) => void): void { this.phoneAskDoneNotifier = notifier; }
+
+    /** 列表变了（新建 / 关掉 / 开始跑 / 跑完了）：一秒内只发一次（流式输出时这个信号很密）。 */
+    private pushPhoneSessionsSoon(): void {
+        if (!this.phoneSessionsNotifier || this.phoneSessionsTimer) { return; }
+        this.phoneSessionsTimer = setTimeout(() => {
+            this.phoneSessionsTimer = undefined;
+            try { this.phoneSessionsNotifier?.(); } catch { /* 推不出去不拦路 */ }
+        }, 1000);
+        this.phoneSessionsTimer.unref?.();
+    }
+
+    /**
+     * 手机 / 桌上那个小窗口的会话列表：就是现在开着的那些（跟网页顶条上那一排同一批）。
+     * 子会话不列（它们挂在父会话下面，网页那边也一样）。
+     */
+    public phoneSessions(): PhoneSessionInfo[] {
+        const items: PhoneSessionInfo[] = [];
+        for (const rt of this.panels.values()) {
+            if (this.taba.byChildPanel(rt.id)) { continue; }
+            items.push({
+                id: rt.id,
+                name: this.sessionDisplayName(rt),
+                running: !!rt.streaming,
+            });
+        }
+        return items;
+    }
+
+    /**
+     * 手机 / 桌上那个小窗口里说了一句话：送进那个会话（跟自己在输入框里敲一句一样）。
+     * 自己的话也记成一条发回所有连着的手机，不然发完以后别的设备上什么都不显示。
+     *
+     * 会话标识是 `remote:` 开头时，那是别的机器推来的（这台根本没开那个会话）：
+     * 把话送回原来那台（跟微信里引用一句回过去是同一条路，见 /weixinReply）。
+     */
+    public async phoneSend(sessionId: string, text: string): Promise<{ ok: boolean; reason?: string }> {
+        const body = text.trim();
+        if (!body) { return { ok: false, reason: "没有文字" }; }
+        if (sessionId.startsWith("remote:")) {
+            const route = this.remoteNotes.get(sessionId);
+            if (!route) { return { ok: false, reason: "这台没记着那条通知是哪台发来的（可能重启过），回不了" }; }
+            const result = await pushWeixinReply(route.pageUrl, {
+                sessionId: route.sessionId,
+                text: body,
+                ...(route.sessionFile ? { sessionFile: route.sessionFile } : {}),
+            });
+            if (!result.ok) { return { ok: false, reason: result.reason }; }
+            this.log(`[手机] 一句话转给「${route.name}」那台：${body.slice(0, 40)}`);
+            this.pushPhoneNote(sessionId, route.name, body, "me");
+            return { ok: true };
+        }
+        const rt = this.panels.get(sessionId);
+        if (!rt) { return { ok: false, reason: "那个会话已经关掉了" }; }
+        rt.handleSend(body);
+        this.log(`[手机] 收到一句话，送进会话：${this.sessionDisplayName(rt)}`);
+        this.pushPhoneNote(sessionId, this.sessionDisplayName(rt), body, "me");
+        return { ok: true };
+    }
+
+    /**
+     * 手机那头答了一道题：把还挂着的那张卡片按这个答案收掉（谁先答算谁的，跟网页上点一样）。
+     * @param picks 勾中的那几项（单选就一项）
+     * @param text 「自己写」那一行里的话
+     */
+    public phoneAnswer(cardId: string, picks: string[], text: string): { ok: boolean; reason?: string } {
+        const state = this.openCards.get(cardId);
+        if (!state || state.settled) { return { ok: false, reason: "这道题已经答过了，或者已经不在了" }; }
+        this.settleCard(cardId, {
+            picks: picks.filter((x) => typeof x === "string"),
+            text,
+            yes: picks.length > 0 || !!text.trim(),
+            cancelled: false,
+        });
+        this.log(`[手机] 答了一道题：${picks.join("、") || text}`);
+        return { ok: true };
+    }
+
+    /**
+     * 把这条提醒推给连着的手机。
      *
      * 跟微信那条一样不受“人正坐在输入框前”管（它本来就是给不在电脑前准备的），
-     * 但跟着设置里「弹窗通知」那颗开关走（关掉就一路都不弹）。
+     * 但跟着设置里「弹窗通知」那颗开关走（关掉就一路都不弹）—— 自己刚说的那句话不算：
+     * 那是这次对话里的一行，不发出去就等于说完了没了。
      * 摘要留长一点（手机上看得清跑完那一轮说了什么），具体多长见 remoteNotice.ts。
      */
-    private pushPhoneNote(panelId: string, name: string, summary: string, kind: "done" | "ask", from?: string): void {
-        if (!this.phoneNotifier || !this.notifyTurnEndEnabled()) { return; }
+    private pushPhoneNote(panelId: string, name: string, summary: string, kind: PhoneNoteKind, from?: string, ask?: PhoneAsk): void {
+        if (!this.phoneNotifier) { return; }
+        if (kind !== "me" && !this.notifyTurnEndEnabled()) { return; }
         const label = (name || "").trim() || "会话";
         this.phoneNotifier({
             name: label,
@@ -793,8 +904,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             summary: plainPreview(summary, REMOTE_TEXT_CHARS),
             at: Date.now(),
             ...(from ? { from } : {}),
+            ...(ask ? { ask } : {}),
         });
-        this.log(`[手机] 推了一条（${kind === "ask" ? "等你答一句" : "跑完一轮"}）：${from ? from + " · " : ""}${label}`);
+        if (kind !== "me") {
+            this.log(`[手机] 推了一条（${kind === "ask" ? "等你答一句" : "跑完一轮"}）：${from ? from + " · " : ""}${label}`);
+        }
     }
 
     /**
@@ -836,7 +950,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * （会话在那台的进程里，这台碰不到）。
      */
     protected override trayNoteRemote(notice: RemoteNotice): void {
-        this.pushPhoneNote(notice.sessionId, notice.name, notice.text ?? "", notice.kind === "ask" ? "ask" : "done", notice.label);
+        // 手机上那条用“哪台 + 会话”当标识：这台根本没有那个会话（回话会失败，那也没关系）
+        this.pushPhoneNote(
+            "remote:" + notice.label + ":" + notice.sessionId,
+            notice.label + " · " + notice.name,
+            notice.text ?? "",
+            notice.kind === "ask" ? "ask" : "done",
+            notice.label,
+        );
         void this.pushRemoteWeixinNote(notice);
         super.trayNoteRemote(notice);
     }
@@ -1940,6 +2061,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * @param waitMs 最多等多久（毫秒）。
      * @param srcId 提问方的编号（ask_choice 那次提问的编号）：扩展不等了时靠它认领这张卡片。
      * @param hangOn 一块屏都不剩（都断开了）时还等不等：问答题等（切回来还能答），扩展问的那些不等。
+     * @param onOpen 卡片生出来时报一下它的编号（手机那头要拿它把答案送回来，见 chatHost 的 phoneAnswer）。
      * @returns 用户答的那几样（picks / text / yes / cancelled）；没作答或到点是 undefined。
      */
     protected askOnScreens(
@@ -1948,6 +2070,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         waitMs: number,
         srcId = "",
         hangOn = false,
+        onOpen?: (id: string) => void,
     ): Promise<any | undefined> {
         const id = `card-${++this.cardSeq}`;
         return new Promise<any | undefined>((resolve) => {
@@ -1962,6 +2085,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 settle: resolve,
             };
             this.openCards.set(id, state);
+            try { onOpen?.(id); } catch { /* 报不出来不拦路 */ }
             if (waitMs > 0) { state.timer = setTimeout(() => { this.settleCard(id, undefined); }, waitMs); }
             if (sessionId) {
                 for (const target of this.clientsViewing(sessionId)) { this.sendCardToScreen(id, state, target); }
@@ -1996,6 +2120,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         }
         state.screens.clear();
         state.settle(answer ?? undefined);
+        // 别的设备上那张卡片也该定住了（手机上、桌上那个小窗口里）
+        try { this.phoneAskDoneNotifier?.(id); } catch { /* 推不出去不拦路 */ }
     }
 
     /** 界面上答了一张卡片（见 media/chat.js）。 */
@@ -2031,6 +2157,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      */
     public async askQuestion(req: AskRequest, sessionId?: string): Promise<void> {
         const answerDir = this.getConfig().askDir ?? "";
+        /** 卡片编号（生出来时才知道）：手机那头答这道题时要带回来。 */
+        let ask: PhoneAsk | undefined;
         // 自动模式开着：这题没人会来点卡片，替人答（选它推荐的那几项），
         // 答案直接写回话文件，会话里留一句话说选了哪个；卡片不画、也不提醒。
         const autoPicked = this.autoAnswerAsk(req, sessionId);
@@ -2052,10 +2180,13 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             allowText: req.allowText,
             // 界面靠它把这行卡片挂到那条工具行下面
             ...(req.toolCallId ? { toolCallId: req.toolCallId } : {}),
-        }, ChatHost.ASK_WAIT_MS, req.id, true);
+        }, ChatHost.ASK_WAIT_MS, req.id, true, (cardId) => {
+            // 卡片编号得带到手机那条通知里：手机上点选项时把它带回来（见 phoneAnswer）
+            ask = { cardId, options: req.options, multi: req.multi, recommended: req.recommended, allowText: req.allowText };
+        });
         // 卡片只发给“正看着这个会话”的屏；别的屏上也提醒一声（人在别的会话 / 别的窗口里时，
         // 除了这一条没别的法子知道他该去答一句）。跟“跑完一轮”那条通知同一条路。
-        this.broadcastAskWaiting(sessionId, req.question);
+        this.broadcastAskWaiting(sessionId, req.question, ask);
         const answer = await waiting;
         const picked: string[] = Array.isArray(answer?.picks)
             ? answer.picks.filter((x: unknown) => typeof x === "string")
@@ -2068,10 +2199,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 模型在某个会话里问了一道选择题：那块屏上的卡片只管那一个正在看的屏，
      * 提醒走右下角那块面板（人在别的会话 / 别的窗口 / 根本就在别的屋里时，靠它知道要回来答一句）。
      */
-    private broadcastAskWaiting(sessionId: string | undefined, question: string): void {
+    private broadcastAskWaiting(sessionId: string | undefined, question: string, ask?: PhoneAsk): void {
         const rt = sessionId ? this.panels.get(sessionId) : undefined;
         // 题干就是面板上那句话：光说“有人问你”的话，还得切过去才知道问的是什么
-        this.trayNote(sessionId ?? "", rt ? this.sessionDisplayName(rt) : "", question, "ask");
+        this.trayNote(sessionId ?? "", rt ? this.sessionDisplayName(rt) : "", question, "ask", ask);
     }
 
     /**

@@ -1,0 +1,449 @@
+package dev.pichat.phone;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.graphics.drawable.GradientDrawable;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.TextUtils;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.WindowManager;
+import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * 一个会话：进来先摆这儿已经有那几条，同时跟后端要一份对齐；之后这个会话来了新的就跟着加。
+ *
+ * 一条条竖着排，像聊天记录：跑完一轮说的话、模型问的题靠一边，自己说的靠另一边。
+ * 问的那条底下画选项，点一下就答；底下能再回一句。别的机器推来的会话只能看，回不了。
+ */
+public class SessionActivity extends Activity {
+    static final String EXTRA_SESSION = "sessionId";
+    static final String EXTRA_NAME = "name";
+
+    private String sessionId = "";
+    private TextView title;
+    private ScrollView scroller;
+    private LinearLayout messages;
+    private LinearLayout inputRow;
+    private EditText input;
+    private Button send;
+
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    /** 上一次画的是哪一份（没有新东西就不重画，正在输入的字不会被清掉）。 */
+    private String drawn = "";
+    /** 上一次画的时候有几条（只有来了新的一条才滚到最底下，答完题别把看的位置跳走）。 */
+    private String notesKey = "";
+
+    private final Runnable onChange = () -> {
+        if (!isFinishing()) { render(); }
+    };
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        sessionId = getIntent().getStringExtra(EXTRA_SESSION);
+        if (sessionId == null) { sessionId = ""; }
+        setContentView(buildUi());
+        String name = getIntent().getStringExtra(EXTRA_NAME);
+        if (name != null && !name.isEmpty()) { title.setText(name); }
+        Store.listen(onChange);
+        render();
+        fetchDetail();
+    }
+
+    private View buildUi() {
+        int pad = dp(10);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+
+        // 顶上：返回 + 会话名
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.setPadding(pad, pad, pad, pad);
+
+        TextView back = new TextView(this);
+        back.setText("‹ 返回");
+        back.setTextSize(15);
+        back.setTextColor(0xFF3A6EA5);
+        back.setPadding(0, pad / 2, pad, pad / 2);
+        back.setOnClickListener(v -> finish());
+        top.addView(back);
+
+        title = new TextView(this);
+        title.setText("会话");
+        title.setTextSize(17);
+        title.setTextColor(0xFF1E1E1E);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tlp.leftMargin = pad;
+        top.addView(title, tlp);
+        root.addView(top);
+
+        // 中间：一条条躺着，能上下滚
+        scroller = new ScrollView(this);
+        messages = new LinearLayout(this);
+        messages.setOrientation(LinearLayout.VERTICAL);
+        messages.setPadding(pad, 0, pad, pad);
+        scroller.addView(messages, new ScrollView.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(scroller, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        // 底下：回一句
+        inputRow = new LinearLayout(this);
+        inputRow.setOrientation(LinearLayout.HORIZONTAL);
+        inputRow.setGravity(Gravity.BOTTOM);
+        inputRow.setPadding(pad, pad / 2, pad, pad);
+
+        input = new EditText(this);
+        input.setHint("回一句");
+        input.setTextSize(15);
+        input.setSingleLine(false);
+        input.setMaxLines(4);
+        inputRow.addView(input, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        send = new Button(this);
+        send.setText("发送");
+        send.setAllCaps(false);
+        send.setOnClickListener(v -> sendText());
+        inputRow.addView(send);
+        root.addView(inputRow);
+
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        return root;
+    }
+
+    /** 把这一份会话画出来：几条、哪道题答过了、能不能回，都在这一遍里定。 */
+    private void render() {
+        if (isFinishing() || messages == null) { return; }
+
+        Store.Session session = Store.session(sessionId);
+        String header = "";
+        if (session != null) {
+            title.setText(session.name);
+            // 别的机器推来的会话也能回：后端把这句话转回那台（见 webChatServer.ts 的 /phone/send）
+            header = session.name + "|" + session.remote;
+        }
+
+        List<Store.Note> list = Store.notes(sessionId);
+        int answeredCount = 0;
+        for (Store.Note note : list) {
+            if (note.ask != null && Store.isAnswered(note.cardId())) { answeredCount++; }
+        }
+        long lastSeq = list.isEmpty() ? 0 : list.get(list.size() - 1).seq;
+        String key = header + "|" + list.size() + "|" + answeredCount + "|" + lastSeq;
+        if (key.equals(drawn)) { return; }
+        drawn = key;
+
+        String freshKey = list.size() + "|" + lastSeq;
+        boolean fresh = !freshKey.equals(notesKey);
+        notesKey = freshKey;
+        int keep = scroller.getScrollY();
+        messages.removeAllViews();
+        if (list.isEmpty()) {
+            TextView hint = new TextView(this);
+            hint.setText("这里还没有事。等后端推一条过来就有了。");
+            hint.setTextSize(14);
+            hint.setTextColor(0xFF8A8A8A);
+            hint.setPadding(0, dp(16), 0, 0);
+            messages.addView(hint);
+        }
+        for (Store.Note note : list) {
+            messages.addView(bubble(note));
+        }
+        scroller.post(() -> {
+            if (fresh) {
+                scroller.fullScroll(View.FOCUS_DOWN);
+            } else {
+                scroller.scrollTo(0, keep);
+            }
+        });
+    }
+
+    /** 一条：对方发的靠左、底色浅灰；自己发的靠右、底色浅蓝。 */
+    private View bubble(Store.Note note) {
+        boolean mine = "me".equals(note.kind);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(mine ? Gravity.END : Gravity.START);
+        row.setPadding(0, dp(4), 0, dp(4));
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(12), dp(8), dp(12), dp(8));
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(mine ? 0xFFD9E9FF : 0xFFF0F0F0);
+        background.setCornerRadius(dp(12));
+        box.setBackground(background);
+
+        TextView meta = new TextView(this);
+        StringBuilder line = new StringBuilder();
+        if (!note.from.isEmpty()) { line.append("来自 ").append(note.from).append(" · "); }
+        if ("ask".equals(note.kind)) { line.append("在等你答一句 · "); }
+        line.append(Store.fullTime(note.at));
+        meta.setText(line.toString());
+        meta.setTextSize(11);
+        meta.setTextColor(0xFF7A7A7A);
+        box.addView(meta);
+
+        TextView text = new TextView(this);
+        text.setText(note.text.isEmpty() ? "（没有文字）" : note.text);
+        text.setTextSize(15);
+        text.setTextColor(0xFF202020);
+        // 跑完那一轮可能很长：整段都在、能选、能复制
+        text.setTextIsSelectable(true);
+        box.addView(text);
+
+        if (note.ask != null) { box.addView(askBlock(note)); }
+
+        row.addView(box);
+        return row;
+    }
+
+    /** 一道题：选项按钮 / 勾选框，能自己写一句；答过以后都灰掉、写一句「已答」。 */
+    private View askBlock(Store.Note note) {
+        JSONObject ask = note.ask;
+        boolean answered = Store.isAnswered(note.cardId());
+        boolean multi = ask.optBoolean("multi", false);
+        boolean allowText = ask.optBoolean("allowText", true);
+
+        List<String> options = new ArrayList<>();
+        JSONArray array = ask.optJSONArray("options");
+        if (array != null) {
+            for (int i = 0; i < array.length(); i++) { options.add(array.optString(i, "")); }
+        }
+        Set<Integer> recommended = new HashSet<>();
+        JSONArray rec = ask.optJSONArray("recommended");
+        if (rec != null) {
+            for (int i = 0; i < rec.length(); i++) { recommended.add(rec.optInt(i, 0)); }
+        }
+
+        LinearLayout block = new LinearLayout(this);
+        block.setOrientation(LinearLayout.VERTICAL);
+        block.setPadding(0, dp(6), 0, 0);
+
+        List<CheckBox> checks = new ArrayList<>();
+        List<View> switches = new ArrayList<>();
+        for (int i = 0; i < options.size(); i++) {
+            final String option = options.get(i);
+            String label = option + (recommended.contains(i + 1) ? "　（我推荐）" : "");
+            if (multi) {
+                CheckBox check = new CheckBox(this);
+                check.setText(label);
+                check.setTextSize(14);
+                check.setEnabled(!answered);
+                check.setTag(option);
+                checks.add(check);
+                switches.add(check);
+                block.addView(check);
+            } else {
+                Button button = new Button(this);
+                button.setText(label);
+                button.setAllCaps(false);
+                button.setTextSize(14);
+                button.setEnabled(!answered);
+                button.setOnClickListener(v ->
+                    sendAnswer(note, Collections.singletonList(option), "", switches));
+                switches.add(button);
+                block.addView(button);
+            }
+        }
+
+        EditText free = null;
+        if (allowText) {
+            free = new EditText(this);
+            free.setHint("自己写一句");
+            free.setTextSize(14);
+            free.setSingleLine(false);
+            free.setMaxLines(4);
+            free.setEnabled(!answered);
+            block.addView(free);
+        }
+
+        // 多选要一颗「发送」；单选又能自己写时也要一颗（选项点一下就发，这句靠它发）
+        if (multi || allowText) {
+            Button sendButton = new Button(this);
+            sendButton.setText("发送");
+            sendButton.setAllCaps(false);
+            sendButton.setTextSize(14);
+            sendButton.setEnabled(!answered);
+            final EditText freeBox = free;
+            sendButton.setOnClickListener(v -> {
+                List<String> picks = new ArrayList<>();
+                for (CheckBox check : checks) {
+                    if (check.isChecked()) { picks.add(String.valueOf(check.getTag())); }
+                }
+                String written = freeBox == null ? "" : freeBox.getText().toString().trim();
+                if (picks.isEmpty() && written.isEmpty()) {
+                    Toast.makeText(this, "先选一项、或者自己写一句", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                sendAnswer(note, picks, written, switches);
+            });
+            switches.add(sendButton);
+            block.addView(sendButton);
+        }
+
+        if (answered) {
+            TextView done = new TextView(this);
+            done.setText("已答");
+            done.setTextSize(12);
+            done.setTextColor(0xFF7A7A7A);
+            done.setPadding(0, dp(4), 0, 0);
+            block.addView(done);
+        }
+        return block;
+    }
+
+    /** 把答案送回去（POST /phone/answer）；没答上的原因用 Toast 说出来。 */
+    private void sendAnswer(Store.Note note, List<String> picks, String text, List<View> disable) {
+        final String base = Settings.baseUrl(this);
+        if (base.isEmpty()) {
+            Toast.makeText(this, "还没填后端地址", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final String cardId = note.cardId();
+        final JSONObject body = new JSONObject();
+        try {
+            body.put("cardId", cardId);
+            body.put("picks", new JSONArray(picks));
+            body.put("text", text);
+        } catch (Exception ignored) {
+            // 这几个都是简单值，放不进去只可能是内存都没了
+        }
+        for (View view : disable) { view.setEnabled(false); }
+        new Thread(() -> {
+            try {
+                JSONObject res = Store.post(base + "/phone/answer", body);
+                if (res.optBoolean("ok", false)) {
+                    Store.markAnswered(cardId);
+                } else {
+                    ui.post(() -> {
+                        for (View view : disable) { view.setEnabled(true); }
+                        Toast.makeText(this, "没答上去：" + Store.reason(res), Toast.LENGTH_LONG).show();
+                    });
+                }
+            } catch (Exception e) {
+                ui.post(() -> {
+                    for (View view : disable) { view.setEnabled(true); }
+                    Toast.makeText(this, "没答上去：" + Store.reason(e), Toast.LENGTH_LONG).show();
+                });
+            }
+        }, "phone-answer").start();
+    }
+
+    /** 回一句（POST /phone/send）：成了先自己上屏，后端再推回来的那条就不会重复。 */
+    private void sendText() {
+        final String text = input.getText().toString().trim();
+        if (text.isEmpty()) { return; }
+        final String base = Settings.baseUrl(this);
+        if (base.isEmpty()) {
+            Toast.makeText(this, "还没填后端地址", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final String id = sessionId;
+        final String name = title.getText().toString();
+        send.setEnabled(false);
+        new Thread(() -> {
+            try {
+                JSONObject body = new JSONObject().put("sessionId", id).put("text", text);
+                JSONObject res = Store.post(base + "/phone/send", body);
+                if (res.optBoolean("ok", false)) {
+                    ui.post(() -> input.setText(""));
+                    Store.addLocalMe(id, name, text);
+                } else {
+                    ui.post(() -> Toast.makeText(this, "没发出去：" + Store.reason(res), Toast.LENGTH_LONG).show());
+                }
+            } catch (Exception e) {
+                ui.post(() -> Toast.makeText(this, "没发出去：" + Store.reason(e), Toast.LENGTH_LONG).show());
+            } finally {
+                ui.post(() -> send.setEnabled(true));
+            }
+        }, "phone-send").start();
+    }
+
+    /** 进来时跟后端要一份（GET /phone/session）：长连接上漏掉的、别处答过的，这一下对齐。 */
+    private void fetchDetail() {
+        final String base = Settings.baseUrl(this);
+        final String id = sessionId;
+        if (base.isEmpty() || id.isEmpty()) { return; }
+        new Thread(() -> {
+            try {
+                String url = base + "/phone/session?id="
+                    + URLEncoder.encode(id, StandardCharsets.UTF_8.name());
+                JSONObject res = Store.get(url);
+                if (res.optBoolean("ok", true)) {
+                    Store.applyDetail(id, res.optJSONObject("session"), res.optJSONArray("notes"));
+                } else {
+                    ui.post(() -> Toast.makeText(this, Store.reason(res), Toast.LENGTH_LONG).show());
+                }
+            } catch (Exception e) {
+                ui.post(() -> Toast.makeText(this, "拉这个会话没成功：" + Store.reason(e), Toast.LENGTH_LONG).show());
+            }
+        }, "phone-session").start();
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        String id = intent.getStringExtra(EXTRA_SESSION);
+        if (id != null && !id.isEmpty() && !id.equals(sessionId)) {
+            sessionId = id;
+            drawn = "";
+            notesKey = "";
+            input.setText("");
+            Store.setViewing(sessionId);
+            render();
+        }
+        String name = intent.getStringExtra(EXTRA_NAME);
+        if (name != null && !name.isEmpty()) { title.setText(name); }
+        fetchDetail();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        Store.setViewing(sessionId);
+        render();
+        fetchDetail();
+    }
+
+    @Override
+    protected void onPause() {
+        if (Store.isViewing(sessionId)) { Store.setViewing(""); }
+        super.onPause();
+    }
+
+    @Override
+    protected void onDestroy() {
+        Store.unlisten(onChange);
+        super.onDestroy();
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+}

@@ -2,7 +2,7 @@ plugins {
     id 'com.android.application'
 }
 
-// 什么都不引：界面是网页视图，长连接用 HttpURLConnection 读流，通知用系统的。
+// 什么都不引：界面是原生控件，长连接用 HttpURLConnection 读流，通知用系统的。
 android {
     namespace 'dev.pichat.phone'
     compileSdk 36

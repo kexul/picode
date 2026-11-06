@@ -212,7 +212,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
      */
     private tray: TrayIcon | undefined;
     /** 别的机器推来的“有事”记档（面板标识 → 从哪儿来）：点那张面板时照它把「切会话」发回去。 */
-    private readonly remoteNotes = new Map<string, { pageUrl: string; sessionId: string }>();
+    protected readonly remoteNotes = new Map<string, { pageUrl: string; sessionId: string; sessionFile?: string; name: string }>();
     /** 输入框正有焦点的那些屏：人在敲字就是人正看着这个会话，不用再弹（见 noteInputFocus）。 */
     private readonly inputFocusedClients = new Set<string>();
 
@@ -1874,7 +1874,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
         // 只留最近的几十条，别越长越大。
         if (notice.pageUrl) {
             this.remoteNotes.delete(id);
-            this.remoteNotes.set(id, { pageUrl: notice.pageUrl, sessionId: notice.sessionId });
+            this.remoteNotes.set(id, {
+                pageUrl: notice.pageUrl,
+                sessionId: notice.sessionId,
+                ...(notice.sessionFile ? { sessionFile: notice.sessionFile } : {}),
+                // 手机上、桌面上那个小窗口里回话时，那条话要带着“哪台 · 会话名”
+                name: notice.label + " · " + notice.name,
+            });
             while (this.remoteNotes.size > 30) {
                 const oldest = this.remoteNotes.keys().next().value;
                 if (oldest === undefined) { break; }

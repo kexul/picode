@@ -52,6 +52,8 @@ export class TrayIcon {
     public onOpenRequest: ((id: string, focused: boolean) => void) | undefined;
     /** 上一次告诉托盘的地址（一样的就不再发）。 */
     private lastUrl = "";
+    /** 上一次告诉托盘的桌面程序路径（同上）。 */
+    private lastApp = "";
 
     /** 把图标放上去（后端起来时调一次；叫人弹之前也会自己起）。 */
     public show(): void {
@@ -85,6 +87,18 @@ export class TrayIcon {
     }
 
     /**
+     * 桌面那个小窗口的程序在哪儿（见 desktop/PiChat）。给了它：托盘的「打开」直接开它，
+     * 点卡片就带着会话标识开它；不给（undefined）就还是开浏览器。
+     */
+    public setApp(exePath: string | undefined): void {
+        const text = (exePath ?? "").trim();
+        if (this.lastApp === text) { return; }
+        this.lastApp = text;
+        if (!this.start()) { return; }
+        this.write(["app", flat(text)].join("\t"));
+    }
+
+    /**
      * 收摊：把 stdin 关掉（小程序读到结尾就自己退，图标跟着没），再把进程从“要等的活”里摘出去。
      * 不直接杀：它自己收图标更干净，退出路径上杀子进程也容易在关句柄时撞车。
      */
@@ -114,6 +128,7 @@ export class TrayIcon {
         this.child = child;
         // 小程序是刚起的：上一次发过的地址对它来说还是新的，重发一遍
         if (this.lastUrl.length > 0) { this.write(["url", flat(this.lastUrl)].join("\t")); }
+        if (this.lastApp.length > 0) { this.write(["app", flat(this.lastApp)].join("\t")); }
         child.stdout?.setEncoding("utf8");
         let rest = "";
         child.stdout?.on("data", (chunk: string) => {

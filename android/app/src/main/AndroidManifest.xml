@@ -25,6 +25,13 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".SessionActivity"
+            android:configChanges="keyboardHidden|orientation|screenSize|screenLayout"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize" />
+
         <service
             android:name=".PhoneService"
             android:exported="false"
