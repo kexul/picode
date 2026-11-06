@@ -13,7 +13,11 @@
 
 ```bash
 build.bat               # npm install + 编译 + 打包 vsix + 打出 dist\pichat.exe + 装全局 pichat 命令
+                        # 顺手也编桌面那个小窗口（desktop\PiChat）与安卓 app（android），
+                        # 没装 .NET 8 SDK / JDK 或没找到 Android SDK 的那一项就跳过并说一句
 ```
+
+只想要其中几样就加参数（可以叠）：`build.bat skip-desktop skip-android`、`build.bat skip skip-pichat`。
 
 两个产物都在这条命令里：`pi-chat-vscode-<版本>.vsix`（插件）和 `dist\pichat.exe`（不用装插件的单文件后端）。
 只想打那份 exe 就 `npm run exe`（≈2.3MB，见下面 Windows 那一节）。

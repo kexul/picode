@@ -63,6 +63,8 @@ cd android
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
+仓库根目录的 `build.bat` 也会顺手编它（不想要就加 `skip-android`；没找到 SDK 或 javac 时会跳过并说一句）。
+
 - 要 JDK 17 以上、Android SDK（`compileSdk 36`）。没有 `./gradlew` 就用本机的 Gradle 8.13 以上直接跑：
   `gradle assembleDebug`。
 - `local.properties`（`sdk.dir=...`）是这台机器的路径，不进版本库。
