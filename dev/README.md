@@ -231,7 +231,8 @@ FAKEPI_THINK_MS=2500 npm run web:shot -- --fake-pi --script dev/endHint.js
 #   场景五 反复把连接弄断（验序号补发不重不漏，重连地址上带着 since）、
 #   场景六 锁屏期间连接悄悄断了（正文到了、尾巴丢了），回来页面自己重开连接补回丢失的消息、
 #   场景七 断线那段里模型问的选择题（连接悄悄死掉、卡片没送到），回来重连后卡片要补上、能答、
-#   场景八 补不上、只能整屏重画时（序号对不上）：视野留在原处、看过的消息不被裁掉
+#   场景八 补不上、只能整屏重画时（序号对不上）：只发最后一轮，更早的挂在顶上那颗
+#         「加载更早的消息」后面（按钮上写着还有多少条，点一下取回来）
 node dev/reconnect.js                    # 全部
 node dev/reconnect.js --scene taillost    # 只跑某一个（逗号可写多个）
 node dev/reconnect.js --scene askcard     # 只跑场景七（断线期间问的选择题）
@@ -369,7 +370,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `visit.js` | `npm run web:shot` 的入口：按动作跑一遍并截图 |
 | `focusCheck.js` | 验“每块屏各看各的会话”（两块浏览页面 + 模拟的 VSCode 窗口）：`node dev/focusCheck.js` |
 | `trustedOrigin.js` | 验“页面是从 https 反代的地址打开的”（设置里 `webServer.trustedOrigins` 写下的来源放行、别人的照旧 403、反代后面页面照常收发、现签证书 + 本机起一个 https 反代来跑）：`node dev/trustedOrigin.js` |
-| `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接 / 断线期间问的选择题 / 补不上时整屏重画的视野）：`node dev/reconnect.js` |
+| `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接 / 断线期间问的选择题 / 补不上时整屏重画只发最后一轮）：`node dev/reconnect.js` |
 | `mermaidCheck.js` | 验消息流里的 ```mermaid 画成图（各种图都出图、写坏的留代码块加一行说明、画图那个脚本出现图才去拉、中文节点名不被吞、换深色不重画就跟着变、面板那一份也画得出、页面不报错）：`node dev/mermaidCheck.js` |
 | `mermaidFileCheck.js` | 验文件侧边栏里那份 markdown 文档里的 mermaid（同一个播放器，换个地方；甘特图也画得出、写坏的留说明）：`node dev/mermaidFileCheck.js` |
 | `lazyScripts.js` | 验画图的 pele（700 多 KB）没排进首屏（浏览器页面按需加载、地址写在 meta 里带着指纹；面板仍然内联）：`node dev/lazyScripts.js` |

@@ -173,11 +173,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /**
      * 页面要重画、可它那条推送连接还没连上：先记下“给哪块屏、带什么提示、要不要全量”。
      * 两种来源：刚刷新时重画请求先到（页面本来就没内容，不必全量）；上一轮整屏重画被
-     * 打断（页面手上是有内容的，再画就发全量，不然它正看着的更早那些会被裁掉）。
+     * 打断（页面手上是有内容的，照原来那一种再来一遍）。
      */
-    private readonly pendingResyncPages = new Map<string, { note: string; full: boolean }>();
-    /** 正在整屏重画的页面：重画没画完页面就断了的话，得等它回来重新整画一遍。 */
-    private readonly resyncingPages = new Set<string>();
+    private readonly pendingResyncPages = new Map<string, { note: string; full: boolean; lastRound: boolean }>();
+    /** 正在整屏重画的页面：重画没画完页面就断了的话，得等它回来重新整画一遍（怎么画照旧）。 */
+    private readonly resyncingPages = new Map<string, { lastRound: boolean }>();
     /** 还等着的问话卡片：卡片编号（宿主自己发）→ 这一摊。 */
     private readonly openCards = new Map<string, OpenCard>();
     /** 卡片编号发到几了（界面上只拿它认领"哪张卡"、并把答案送回来）。 */
@@ -852,7 +852,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const pending = this.pendingResyncPages.get(pageId);
         if (pending !== undefined) {
             this.pendingResyncPages.delete(pageId);
-            void this.resyncPage(pageId, pending.note, { fullHistory: pending.full });
+            void this.resyncPage(pageId, pending.note, { fullHistory: pending.full, lastRound: pending.lastRound });
         } else if (typeof since === "number") {
             this.resumePageTo(pageId, since);
         }
@@ -889,9 +889,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         // 这块屏还在看桌面实时画面的话，它这一走就别再拍了
         this.desktopLive.removeViewer(pageId);
         // 整屏重画画到一半页面走了：重画的内容不进补发暂存，它回来对账时会“看似不缺”，
-        // 内容却缺一截。记下来，它一连上就重新整画一遍。
-        if (this.resyncingPages.delete(pageId)) {
-            this.pendingResyncPages.set(pageId, { note: "", full: true });
+        // 内容却缺一截。记下来，它一连上就照原来那一种重画一遍。
+        const inflight = this.resyncingPages.get(pageId);
+        if (inflight) {
+            this.resyncingPages.delete(pageId);
+            this.pendingResyncPages.set(pageId, { note: "", full: false, lastRound: inflight.lastRound });
         }
     }
 
@@ -949,9 +951,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             this.resendCardsTo(pageId);
             return;
         }
-        // 会话列表先给它（界面上那些会话壳先建起来），再整屏重画。
+        // 会话列表先给它（界面上那些会话壳先建起来），再整屏重画——只发最后一轮：
+        // 断线可能已经很久，为了把漏掉的补全而把整个会话再发一遍、再对一遍账，
+        // 在手机上很重；更早的那些留给顶上那颗「加载更早的消息」。
         this.sendSessionListTo(pageId);
-        void this.resyncPage(pageId, "", { fullHistory: true });
+        void this.resyncPage(pageId, "", { lastRound: true });
     }
 
     /**
@@ -961,27 +965,28 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 更不该把正在生成的半句话清掉。
      * @param pageId 要重画给哪一块屏（页面标识）。
      * @param note 重画后给的一行提示；空串表示不给。
-     * @param opts.fullHistory 重画时发全部历史，不裁成「最近一段」（见 replayHistory）。
-     *        只有“页面本来就有这些内容、只是中间缺了一段”的重连才传：裁掉的正是人当时
-     *        看着的那些消息，一裁视野就丢了。刚打开 / 刚刷新的页面不传（首屏要快）。
+     * @param opts.fullHistory 重画时发全部历史，不裁成「最近一段」。只有“会话搬家、
+     *        页面手上本来就有这些内容”那几条路才传它。刚打开 / 刚刷新的页面不传（首屏要快）。
+     * @param opts.lastRound 只发最后一轮（见 sessionRuntime 的 replayHistory）：页面重连后
+     *        补不上、只能整屏重画时用它，顶上一颗「加载更早的消息」补更早那些。
      */
-    private resyncPage(pageId: string, note: string, opts?: { fullHistory?: boolean }): Promise<void> {
+    private resyncPage(pageId: string, note: string, opts?: { fullHistory?: boolean; lastRound?: boolean }): Promise<void> {
         if (pageId && !this.broadcaster.hasPage(pageId)) {
             // 页面的重画请求到得比它的推送连接还早（刚刷新的那一瞬间）：现在送也是白送，
             // 先记下来，它一连上就画（见 onPageConnected）。
-            this.pendingResyncPages.set(pageId, { note, full: opts?.fullHistory === true });
+            this.pendingResyncPages.set(pageId, { note, full: opts?.fullHistory === true, lastRound: opts?.lastRound === true });
             return Promise.resolve();
         }
         // 只发给这一块屏；拿不到出口（理论上不会）就退回广播：宁可多画一次，也不能让界面缺内容
         const sink: MessageSink | undefined = pageId
             ? ((msg) => { this.broadcaster.sendTo(pageId, msg); })
             : undefined;
-        if (pageId) { this.resyncingPages.add(pageId); }
+        if (pageId) { this.resyncingPages.set(pageId, { lastRound: opts?.lastRound === true }); }
         const replays: Array<Promise<void>> = [];
         for (const rt of this.panels.values()) {
             // 刚建的空会话不用重画：newSession 已经把它需要的东西发过去了
             if (rt.isConversationEmpty()) { continue; }
-            replays.push(rt.replayHistory({ note, sink, full: opts?.fullHistory }));
+            replays.push(rt.replayHistory({ note, sink, full: opts?.fullHistory, lastRound: opts?.lastRound }));
         }
         return Promise.all(replays).then(() => {
             // 重画把还等着的问话卡片也抹掉了：重发给这块屏（见 resendCardsTo）
