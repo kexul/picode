@@ -22,6 +22,7 @@ import type { AskRequest } from "./askProtocol";
 import { writeAskAnswer } from "./askProtocol";
 import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase, type ViewOptionItem, type WorkspacePage, desktopAppPath } from "./chatControllerBase";
+import type { TurnEndInfo } from "./runtimeTypes";
 import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
 import { hostOfUrl, isOwnPage, pushRemoteNotice, pushWeixinReply, type RemoteNotice } from "./remoteNotice";
@@ -823,10 +824,44 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             items.push({
                 id: rt.id,
                 name: this.sessionDisplayName(rt),
-                running: !!rt.streaming,
+                // 跟网页端一个规矩：后台还有命令没跑完（bashRunning）也算「正在跑」
+                running: !!rt.streaming || rt.hasRunningBashTasks(),
+                activity: rt.activity || "idle",
+                ...(rt.activityDetail ? { activityDetail: rt.activityDetail } : {}),
             });
         }
         return items;
+    }
+
+    /** 每一轮跑完时记下的原文（问 pi 要一次要花一趟 RPC，而且它正在跑的时候问不到东西）。 */
+    private readonly lastReplyByPanel = new Map<string, string>();
+
+    /**
+     * 某个会话「这一轮说到哪儿了」：
+     *   - 正在跑：给这一轮已经写出来的字（还没开始写就是空串，界面上会显示「还没开始说话」）；
+     *   - 没在跑：给上一轮跑完时记下的原文。
+     * 都取不到就是空串。
+     */
+    public async phoneLastReply(sessionId: string): Promise<string> {
+        const rt = this.panels.get(sessionId);
+        if (!rt) { return ""; }
+        if (rt.streaming) {
+            const live = rt.streamingText();
+            if (live.trim().length > 0) { return live; }
+        }
+        const cached = this.lastReplyByPanel.get(sessionId);
+        if (cached !== undefined) { return cached; }
+        // 还没跑完过一轮（缓存里没有）：问 pi 要一次
+        try { return await rt.getLastAssistantText(); } catch { return ""; }
+    }
+
+    /**
+     * 一个会话跑完了一轮：先记下这一轮的原文（手机 / 桌面那个小窗口点开会话时要看它），
+     * 其余照旧交给父类（交回子会话结果、通知各块屏、弹提醒）。
+     */
+    public override onTurnEnd(info: TurnEndInfo): void {
+        this.lastReplyByPanel.set(info.panelId, info.lastReplyText ?? "");
+        super.onTurnEnd(info);
     }
 
     /**

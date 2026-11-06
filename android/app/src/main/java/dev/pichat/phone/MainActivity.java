@@ -260,7 +260,16 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 列表上一行：在跑的小圆点、会话名、最后一条的一两句、时间。 */
+    /** activity 那几个词说成人话（后端给的是 thinking / working / idle 这些）。 */
+    private static String activityLabel(String activity) {
+        if (activity == null) { return ""; }
+        if ("thinking".equals(activity)) { return "在想"; }
+        if ("working".equals(activity)) { return "在干"; }
+        if ("idle".equals(activity)) { return ""; }
+        return activity;
+    }
+
+    /** 列表上一行：状态点、会话名、最后一条的一两句、时间。 */
     private View row(Store.Session session) {
         int pad = dp(10);
         LinearLayout row = new LinearLayout(this);
@@ -276,11 +285,18 @@ public class MainActivity extends Activity {
         rowParams.bottomMargin = dp(6);
         row.setLayoutParams(rowParams);
 
+        // 状态点：跟网页端一个规矩 —— 正在跑是蓝点、呼吸；闲着（跑完了）是绿点、不闪
         TextView dot = new TextView(this);
         dot.setText("●");
         dot.setTextSize(10);
-        dot.setTextColor(0xFF2F7BE0);
-        dot.setVisibility(session.running ? View.VISIBLE : View.INVISIBLE);
+        dot.setTextColor(session.running ? 0xFF2F7BE0 : 0xFF2E7D32);
+        if (session.running) {
+            android.animation.ObjectAnimator anim = android.animation.ObjectAnimator.ofFloat(dot, "alpha", 1f, 0.3f);
+            anim.setDuration(700);
+            anim.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+            anim.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+            anim.start();
+        }
         LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         dotParams.rightMargin = dp(6);
@@ -297,6 +313,20 @@ public class MainActivity extends Activity {
         name.setSingleLine(true);
         name.setEllipsize(TextUtils.TruncateAt.END);
         middle.addView(name);
+
+        if (session.running) {
+            String what = session.activityDetail;
+            if (what == null || what.isEmpty()) { what = activityLabel(session.activity); }
+            if (what != null && !what.isEmpty()) {
+                TextView running = new TextView(this);
+                running.setText("正在跑：" + what);
+                running.setTextSize(12);
+                running.setTextColor(0xFF2F7BE0);
+                running.setSingleLine(true);
+                running.setEllipsize(TextUtils.TruncateAt.END);
+                middle.addView(running);
+            }
+        }
 
         Store.Note last = session.last;
         if (last != null) {

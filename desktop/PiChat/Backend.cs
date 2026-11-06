@@ -80,6 +80,10 @@ internal sealed class SessionInfo
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
     public bool Running { get; set; }
+    /// <summary>正在干什么（thinking / working / idle）。</summary>
+    public string? Activity { get; set; }
+    /// <summary>更具体一点：正在改哪个文件、在跑什么命令。</summary>
+    public string? ActivityDetail { get; set; }
     /// <summary>别的机器推来的会话：这台没有它，回不了话。</summary>
     public bool Remote { get; set; }
     public Note? Last { get; set; }
@@ -96,8 +100,17 @@ internal sealed class SessionPayload
 {
     public SessionInfo? Session { get; set; }
     public List<Note>? Notes { get; set; }
+    /// <summary>最近一条回复的原话（跑着的时候会跟着变）。</summary>
+    public LastReplyPayload? LastReply { get; set; }
     public bool Ok { get; set; }
     public string? Reason { get; set; }
+}
+
+/// <summary>最近一条回复：原文 + 后端解析好的「怎么画」。</summary>
+internal sealed class LastReplyPayload
+{
+    public string? Text { get; set; }
+    public List<MdBlock>? Blocks { get; set; }
 }
 
 internal sealed class OkPayload
@@ -401,7 +414,7 @@ internal sealed class Backend
     }
 
     /// <summary>进去时拉一次这个会话的完整一份；不在了把后端给的原因带回来。</summary>
-    public async Task<(SessionInfo? Session, List<Note>? Notes, string Reason)> LoadSessionAsync(string sessionId)
+    public async Task<(SessionInfo? Session, List<Note>? Notes, string Reason, LastReplyPayload? LastReply)> LoadSessionAsync(string sessionId)
     {
         try
         {
@@ -412,15 +425,15 @@ internal sealed class Backend
             {
                 var reason = "";
                 try { reason = JsonSerializer.Deserialize<OkPayload>(text, Json.Options)?.Reason ?? ""; } catch { /* 不是 JSON */ }
-                return (null, null, reason.Length > 0 ? reason : "后端回了 " + (int)response.StatusCode);
+                return (null, null, reason.Length > 0 ? reason : "后端回了 " + (int)response.StatusCode, null);
             }
             var payload = JsonSerializer.Deserialize<SessionPayload>(text, Json.Options);
-            if (payload?.Session == null) { return (null, null, payload?.Reason ?? "后端没给这个会话"); }
-            return (payload.Session, payload.Notes ?? new List<Note>(), "");
+            if (payload?.Session == null) { return (null, null, payload?.Reason ?? "后端没给这个会话", null); }
+            return (payload.Session, payload.Notes ?? new List<Note>(), "", payload.LastReply);
         }
         catch (Exception ex)
         {
-            return (null, null, "连不上后端：" + ex.Message);
+            return (null, null, "连不上后端：" + ex.Message, null);
         }
     }
 

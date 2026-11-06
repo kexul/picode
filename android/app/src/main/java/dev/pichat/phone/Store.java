@@ -98,6 +98,10 @@ final class Store {
         final String name;
         final boolean running;
         final boolean remote;
+        /** 正在干什么（thinking / working / idle）。 */
+        final String activity;
+        /** 更具体一点：正在改哪个文件、在跑什么命令。 */
+        final String activityDetail;
         final Note last;
 
         Session(JSONObject json) {
@@ -106,6 +110,8 @@ final class Store {
             name = raw.isEmpty() ? "会话" : raw;
             running = json.optBoolean("running", false);
             remote = json.optBoolean("remote", false);
+            activity = json.optString("activity", "");
+            activityDetail = json.optString("activityDetail", "");
             JSONObject lastJson = json.optJSONObject("last");
             last = lastJson == null ? null : new Note(lastJson);
         }
@@ -115,11 +121,24 @@ final class Store {
             this.name = name;
             this.running = running;
             this.remote = remote;
+            this.activity = "";
+            this.activityDetail = "";
+            this.last = last;
+        }
+
+        private Session(String id, String name, boolean running, boolean remote,
+                        String activity, String activityDetail, Note last) {
+            this.id = id;
+            this.name = name;
+            this.running = running;
+            this.remote = remote;
+            this.activity = activity == null ? "" : activity;
+            this.activityDetail = activityDetail == null ? "" : activityDetail;
             this.last = last;
         }
 
         Session withLast(Note note) {
-            return new Session(id, name, running, remote, note);
+            return new Session(id, name, running, remote, activity, activityDetail, note);
         }
     }
 
@@ -212,8 +231,22 @@ final class Store {
         replace(array, false);
     }
 
+    /** 最近一条回复的原话（点开会话时看它说到哪儿了）。 */
+    private static final Map<String, JSONObject> lastReplies = new HashMap<>();
+
+    /** 这个会话最近一条回复（{text, blocks}）；没有就是 null。 */
+    static synchronized JSONObject lastReply(String sessionId) {
+        return lastReplies.get(sessionId);
+    }
+
+    /** 那条回复的原文（界面上拿去比「变了没」，不想每帧都解析一遍）。 */
+    static synchronized String lastReplyText(String sessionId) {
+        JSONObject reply = lastReplies.get(sessionId);
+        return reply == null ? "" : reply.optString("text", "");
+    }
+
     /** 会话页进来时对齐的那一份（GET /phone/session）：会话这一行和它留着的几条都换成这一份。 */
-    static void applyDetail(String sessionId, JSONObject session, JSONArray array) {
+    static void applyDetail(String sessionId, JSONObject session, JSONArray array, JSONObject lastReply) {
         synchronized (Store.class) {
             if (session != null) {
                 Session parsed = new Session(session);
@@ -231,6 +264,7 @@ final class Store {
                 }
             }
             notes.put(sessionId, list);
+            if (lastReply != null) { lastReplies.put(sessionId, lastReply); }
         }
         wake();
     }

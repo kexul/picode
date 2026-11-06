@@ -366,6 +366,11 @@ export interface WebServerHost {
     acceptWeixinReply(sessionId: string, text: string, opts: { sessionFile?: string; name?: string }): { ok: boolean; reason?: string };
     /** 现在开着哪些会话（手机 / 桌上那个小窗口的列表就是它）。 */
     phoneSessions(): PhoneSessionInfo[];
+    /**
+     * 某个会话「这一轮 / 上一轮」的原话（点开会话时先看一眼它说到哪儿了）。
+     * 取不到（没开始跑过、pi 没答上来）就返回空串。
+     */
+    phoneLastReply(sessionId: string): Promise<string>;
     /** 手机那头说了一句话：送进那个会话（跟自己在输入框里敲一句一样）。 */
     phoneSend(sessionId: string, text: string): Promise<{ ok: boolean; reason?: string }>;
     /** 手机那头答了一道选择题（`/phone/answer`）：把还挂着的那张卡片按这个答案收掉。 */
@@ -410,6 +415,10 @@ export interface PhoneSessionInfo {
     name: string;
     /** 这一轮正在跑。 */
     running: boolean;
+    /** 正在干什么（网页顶条上那颗点旁边那句也是这个：thinking / 工具名 / idle）。 */
+    activity?: string;
+    /** 更具体一点：正在改哪个文件、在跑什么命令。 */
+    activityDetail?: string;
     /** 别的机器上的会话（这台已经没有那个会话了，只剩推过来的通知）。 */
     remote?: boolean;
 }
@@ -680,7 +689,7 @@ export class PiChatWebServer {
             }
             if (pathname === "/phone/session") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                this.sendPhoneSession(req, res, url.searchParams.get("id") ?? "");
+                void this.sendPhoneSession(req, res, url.searchParams.get("id") ?? "");
                 return;
             }
             if (pathname === "/phone/send") {
@@ -1878,13 +1887,22 @@ export class PiChatWebServer {
     }
 
     /** 某个会话留着的那几条（`GET /phone/session?id=…`）：进去时拉一次，之后靠长连接推。 */
-    private sendPhoneSession(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string): void {
+    private async sendPhoneSession(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string): Promise<void> {
         const session = this.phoneSessionsPayload().find((item) => item.id === sessionId);
         if (!session) {
             this.sendJson(req, res, 404, { ok: false, reason: "这个会话不在了（关掉过、或者后端重启过）" });
             return;
         }
-        this.sendJson(req, res, 200, { session, notes: this.phoneInbox.list(sessionId) });
+        // 最近一条回复的原话：点开会话时先看一眼它说到哪儿了（跑着的时候这个会跟着变）
+        let lastReply = "";
+        try { lastReply = await this.host.phoneLastReply(sessionId); } catch { /* 取不到就算了 */ }
+        // 把它也解析成「怎么画」：这一轮的原话在两端都按 markdown 画，跟「有事」里的那些一个待遇
+        const replyDoc = parseMarkdown(lastReply);
+        this.sendJson(req, res, 200, {
+            session,
+            notes: this.phoneInbox.list(sessionId),
+            lastReply: { text: lastReply, blocks: replyDoc.blocks },
+        });
     }
 
     /** 手机那头说了一句话（`POST /phone/send`）：送进那个会话。 */

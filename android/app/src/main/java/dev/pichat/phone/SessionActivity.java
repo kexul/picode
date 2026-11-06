@@ -58,6 +58,15 @@ public class SessionActivity extends Activity {
         if (!isFinishing()) { render(); }
     };
 
+    /** 页面开着就每 4 秒拉一次：「这一轮」那张卡片要跟着长出来（关掉就不拉了）。 */
+    private final Runnable liveTick = new Runnable() {
+        @Override
+        public void run() {
+            fetchDetail();
+            ui.postDelayed(this, 4000);
+        }
+    };
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -153,7 +162,10 @@ public class SessionActivity extends Activity {
             if (note.ask != null && Store.isAnswered(note.cardId())) { answeredCount++; }
         }
         long lastSeq = list.isEmpty() ? 0 : list.get(list.size() - 1).seq;
-        String key = header + "|" + list.size() + "|" + answeredCount + "|" + lastSeq;
+        Store.Session now = Store.session(sessionId);
+        String liveKey = now == null ? "" : (now.running + "|" + now.activity + "|" + now.activityDetail
+            + "|" + Store.lastReplyText(sessionId).length());
+        String key = header + "|" + list.size() + "|" + answeredCount + "|" + lastSeq + "|" + liveKey;
         if (key.equals(drawn)) { return; }
         drawn = key;
 
@@ -173,13 +185,90 @@ public class SessionActivity extends Activity {
         for (Store.Note note : list) {
             messages.addView(bubble(note));
         }
+        // 「这一轮」摆在最后（跟聊天一样，最新的在最底下）：正在跑的时候能看它说到哪儿了；
+        // 跑完就收起来 —— 那时这一轮的原话已经作为一条「有事」推过来了，不必摆两份。
+        View live = null;
+        if (now != null && now.running) {
+            live = liveCard(now);
+            if (live != null) { messages.addView(live); }
+        }
+        final View liveView = live;
         scroller.post(() -> {
-            if (fresh) {
-                scroller.fullScroll(View.FOCUS_DOWN);
-            } else {
-                scroller.scrollTo(0, keep);
-            }
+            if (!fresh) { scroller.scrollTo(0, keep); return; }
+            // 来了新的：滚到「这一轮」那张卡的开头（这样「正在跑…」那一行也看得到），
+            // 没有卡片就照旧滚到最底下
+            if (liveView != null) { scroller.scrollTo(0, liveView.getTop()); }
+            else { scroller.fullScroll(View.FOCUS_DOWN); }
         });
+    }
+
+    /** 「这一轮」那张卡：正在跑就在这儿看它说到哪儿了。 */
+    private View liveCard(Store.Session session) {
+        boolean running = session != null && session.running;
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(12), dp(8), dp(12), dp(10));
+        GradientDrawable background = new GradientDrawable();
+        background.setColor(0xFFFFFFFF);
+        background.setCornerRadius(dp(12));
+        background.setStroke(dp(1), 0xFFE3E3E3);
+        box.setBackground(background);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.bottomMargin = dp(8);
+        box.setLayoutParams(params);
+
+        // 头一行：状态点 + 现在在干什么
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView dot = new TextView(this);
+        dot.setText("●");
+        dot.setTextSize(10);
+        dot.setTextColor(running ? 0xFF2F7BE0 : 0xFF2E7D32);
+        head.addView(dot);
+        if (running) { breathe(dot); }
+
+        TextView state = new TextView(this);
+        String detail = session == null ? "" : session.activityDetail;
+        String label = running ? (detail.isEmpty() ? "正在跑…" : detail) : "这一轮已经跑完了";
+        state.setText(" " + label);
+        state.setTextSize(13);
+        state.setSingleLine(true);
+        state.setEllipsize(TextUtils.TruncateAt.END);
+        state.setTextColor(running ? 0xFF2F7BE0 : 0xFF2E7D32);
+        head.addView(state, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        box.addView(head);
+
+        JSONObject reply = Store.lastReply(sessionId);
+        String text = reply == null ? "" : reply.optString("text", "");
+        if (text.trim().isEmpty()) {
+            TextView hint = new TextView(this);
+            hint.setText(running ? "（还没开始说话）" : "（这个会话还没有跑完过一轮）");
+            hint.setTextSize(13);
+            hint.setTextColor(0xFF9A9A9A);
+            hint.setPadding(0, dp(6), 0, 0);
+            box.addView(hint);
+            return box;
+        }
+
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(0, dp(6), 0, 0);
+        Markdown.render(this, body, reply.optJSONArray("blocks"), text, 14, 0xFF202020, 0xFF7A7A7A);
+        box.addView(body);
+        return box;
+    }
+
+    /** 在跑的那颗蓝点：一明一暗地呼吸（跟网页端那颗点一个意思）。 */
+    private void breathe(View dot) {
+        android.animation.ObjectAnimator anim = android.animation.ObjectAnimator.ofFloat(dot, "alpha", 1f, 0.3f);
+        anim.setDuration(700);
+        anim.setRepeatMode(android.animation.ValueAnimator.REVERSE);
+        anim.setRepeatCount(android.animation.ValueAnimator.INFINITE);
+        anim.start();
     }
 
     /** 一条：对方发的靠左、底色浅灰；自己发的靠右、底色浅蓝。 */
@@ -401,7 +490,9 @@ public class SessionActivity extends Activity {
                     + URLEncoder.encode(id, StandardCharsets.UTF_8.name());
                 JSONObject res = Store.get(url);
                 if (res.optBoolean("ok", true)) {
-                    Store.applyDetail(id, res.optJSONObject("session"), res.optJSONArray("notes"));
+                    Store.applyDetail(id, res.optJSONObject("session"), res.optJSONArray("notes"),
+                        res.optJSONObject("lastReply"));
+                    ui.post(() -> { if (!isFinishing()) { render(); } });
                 } else {
                     ui.post(() -> Toast.makeText(this, Store.reason(res), Toast.LENGTH_LONG).show());
                 }
@@ -435,10 +526,12 @@ public class SessionActivity extends Activity {
         Store.setViewing(sessionId);
         render();
         fetchDetail();
+        ui.post(liveTick);
     }
 
     @Override
     protected void onPause() {
+        ui.removeCallbacks(liveTick);
         if (Store.isViewing(sessionId)) { Store.setViewing(""); }
         super.onPause();
     }

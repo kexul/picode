@@ -55,6 +55,14 @@ internal sealed class MainWindow : Window
 
     private readonly Application _app;
     private readonly BackendHost _host = new();
+    /// <summary>「这一轮」那张卡片的刷新定时器（4 秒一次，看着窗口的时候才刷）。</summary>
+    private readonly DispatcherTimer _liveTimer = new() { Interval = TimeSpan.FromSeconds(4) };
+    /// <summary>这个会话最近一条回复的原话（「这一轮」那张卡片用；跑着的时候后端会一直变）。</summary>
+    private LastReplyPayload? _lastReply;
+    /// <summary>「这一轮」那张卡片的刷新记号：换了会话、或者停了就别再刷了。</summary>
+    private int _liveToken;
+    /// <summary>「这一轮」的轮询是否正在跑（同一时间只留一条链）。</summary>
+    private bool _livePolling;
     private readonly TrayUi _tray;
     /** 真退（菜单里点了退出 / 程序要收摊）：不是退到托盘去。 */
     private bool _quitting;
@@ -85,6 +93,8 @@ internal sealed class MainWindow : Window
         // 这个程序是入口：后端没在跑就自己拉一个起来（双击它就等于以前双击 dist\pichat.exe）。
         // 已经起来的那个后端（上次拉起的 / VS Code 起的 / 终端里起的）就直接接上去。
         _ = EnsureBackendAsync();
+
+        StartLiveTick();
 
         // 托盘图标：左键开主界面，右键三项（打开主界面 / 打开网页端 / 退出）
         _tray = new TrayUi(ShowMain, OpenWebUi, QuitAll);
@@ -607,20 +617,19 @@ internal sealed class MainWindow : Window
         var title = new Grid();
         title.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         title.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        if (info.Running)
+        // 状态点：跟网页端一个规矩 —— 正在跑是蓝点、呼吸；闲着（跑完了）是绿点、不闪
+        var dot = new Ellipse
         {
-            var dot = new Ellipse
-            {
-                Width = 8,
-                Height = 8,
-                Fill = Blue,
-                Margin = new Thickness(0, 0, 5, 0),
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            dot.ToolTip = "正在跑";
-            Grid.SetColumn(dot, 0);
-            title.Children.Add(dot);
-        }
+            Width = 8,
+            Height = 8,
+            Fill = info.Running ? Blue : Green,
+            Margin = new Thickness(0, 0, 5, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        dot.ToolTip = info.Running ? "正在跑" : "没在跑";
+        if (info.Running) { Breathe(dot); }
+        Grid.SetColumn(dot, 0);
+        title.Children.Add(dot);
         var nameBlock = new TextBlock
         {
             Text = info.Name,
@@ -657,6 +666,22 @@ internal sealed class MainWindow : Window
             Margin = new Thickness(0, 3, 0, 0),
         });
 
+        if (info.Running)
+        {
+            var what = string.IsNullOrWhiteSpace(info.ActivityDetail) ? ActivityLabel(info.Activity) : info.ActivityDetail;
+            if (!string.IsNullOrWhiteSpace(what))
+            {
+                box.Children.Add(new TextBlock
+                {
+                    Text = "正在跑：" + what,
+                    FontSize = 11,
+                    Foreground = Blue,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Margin = new Thickness(0, 3, 0, 0),
+                });
+            }
+        }
+
         var badges = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
         // 别的机器上的会话不另外标：名字前面那个「家里 ·」已经说清了
         if (HasUnansweredAsk(state)) { badges.Children.Add(Badge("在等你答一句", Orange, OrangeBg)); }
@@ -675,6 +700,29 @@ internal sealed class MainWindow : Window
         border.MouseLeftButtonDown += (_, _) => SelectSession(info.Id);
         return border;
     }
+
+    /// <summary>在跑的那颗蓝点：一明一暗地呼吸（跟网页端那颗点一个意思）。</summary>
+    private static void Breathe(UIElement dot)
+    {
+        var fade = new System.Windows.Media.Animation.DoubleAnimation
+        {
+            From = 1.0,
+            To = 0.3,
+            Duration = TimeSpan.FromMilliseconds(700),
+            AutoReverse = true,
+            RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever,
+        };
+        dot.BeginAnimation(OpacityProperty, fade);
+    }
+
+    /// <summary>activity 那几个词说成人话（后端给的是 thinking / working / idle 这些）。</summary>
+    private static string ActivityLabel(string? activity) => activity switch
+    {
+        "thinking" => "在想",
+        "working" => "在干",
+        "idle" => "",
+        _ => activity ?? "",
+    };
 
     private static Border Badge(string text, Brush foreground, Brush background) => new()
     {
@@ -706,7 +754,7 @@ internal sealed class MainWindow : Window
 
     private async Task LoadFullSessionAsync(string id)
     {
-        var (session, notes, reason) = await _backend.LoadSessionAsync(id);
+        var (session, notes, reason, lastReply) = await _backend.LoadSessionAsync(id);
         if (_selectedId != id) { return; }
         if (!_sessions.TryGetValue(id, out var state)) { return; }
 
@@ -717,8 +765,21 @@ internal sealed class MainWindow : Window
         }
         state.Info = session;
         state.Notes = notes ?? new List<Note>();
+        _lastReply = lastReply;
         RebuildSessionList();
         RenderSession();
+
+    }
+
+    /// <summary>开着窗口就每 4 秒拉一次当前会话（「这一轮」那张卡片要跟着长出来）。</summary>
+    private void StartLiveTick()
+    {
+        _liveTimer.Tick += (_, _) =>
+        {
+            if (!IsVisible || _selectedId is null) { return; }
+            _ = LoadFullSessionAsync(_selectedId);
+        };
+        _liveTimer.Start();
     }
 
     // ---------------------------------------------------------------- 右边那一块
@@ -763,6 +824,17 @@ internal sealed class MainWindow : Window
         foreach (var note in state.Notes)
         {
             _messages.Children.Add(MakeBubble(state, note));
+        }
+
+        // 「这一轮」摆在最后（跟聊天一样，最新的在最底下）：正在跑的时候能看它说到哪儿了；
+        // 跑完就收起来 —— 那时这一轮的原话已经作为一条「有事」推过来了，不必摆两份。
+        if (state.Info.Running || state.Notes.Count == 0)
+        {
+            var live = MakeLiveCard(state);
+            _messages.Children.Add(live);
+            // 滚到卡片开头（这样「正在跑…」那一行也看得到），而不是一路到底
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => live.BringIntoView()));
+            return;
         }
 
         Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => _messageScroll.ScrollToEnd()));
@@ -813,6 +885,70 @@ internal sealed class MainWindow : Window
             MaxWidth = 520,
             HorizontalAlignment = mine ? HorizontalAlignment.Right : HorizontalAlignment.Left,
             Margin = new Thickness(0, 0, 0, 8),
+            Child = stack,
+        };
+    }
+
+    /// <summary>「这一轮」那张卡：正在跑就在这儿看它说到哪儿了。</summary>
+    private FrameworkElement MakeLiveCard(SessionState state)
+    {
+        var info = state.Info;
+        var stack = new StackPanel();
+
+        var head = new StackPanel { Orientation = Orientation.Horizontal };
+        var dot = new Ellipse
+        {
+            Width = 8,
+            Height = 8,
+            Fill = info.Running ? Blue : Green,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 6, 0),
+        };
+        if (info.Running) { Breathe(dot); }
+        head.Children.Add(dot);
+        var what = info.Running
+            ? (string.IsNullOrWhiteSpace(info.ActivityDetail) ? (ActivityLabel(info.Activity) is { Length: > 0 } label ? label + "…" : "正在跑…") : info.ActivityDetail!)
+            : "这一轮已经跑完了";
+        head.Children.Add(new TextBlock
+        {
+            Text = what,
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = info.Running ? Blue : Green,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        stack.Children.Add(head);
+
+        var reply = _lastReply;
+        if (reply is null || string.IsNullOrWhiteSpace(reply.Text))
+        {
+            stack.Children.Add(new TextBlock
+            {
+                Text = info.Running ? "（还没开始说话）" : "（这个会话还没有跑完过一轮）",
+                FontSize = 12,
+                Foreground = Gray,
+                Margin = new Thickness(0, 6, 0, 0),
+            });
+        }
+        else
+        {
+            stack.Children.Add(new Border
+            {
+                Margin = new Thickness(0, 6, 0, 0),
+                Child = Markdown.Render(reply.Blocks, reply.Text ?? "", 13, Ink, Gray),
+            });
+        }
+
+        return new Border
+        {
+            Background = White,
+            BorderBrush = Line,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(12, 9, 12, 9),
+            Margin = new Thickness(0, 0, 0, 8),
+            MaxWidth = 620,
+            HorizontalAlignment = HorizontalAlignment.Left,
             Child = stack,
         };
     }

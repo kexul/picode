@@ -213,6 +213,8 @@ export class SessionRuntime {
     public activity: RuntimeActivity = "idle";
     /** 当前阶段的附加信息，例如正在执行的工具名。 */
     public activityDetail = "";
+    /** 这一轮正在写出来的字（agent_start 清空，每个 text_delta 往后接）。 */
+    private streamingReply = "";
     public piReady = false;
     /** 正在加载会话 / 分叉（pi 冷启动 + 切换会话期间为 true，供宿主展示加载态）。 */
     public loading = false;
@@ -851,6 +853,14 @@ export class SessionRuntime {
         return this.client.waitReady(timeoutMs);
     }
 
+    /**
+     * 这一轮已经写出来的字（正在跑的时候才有意义）。
+     * 手机 / 桌面那个小窗口点开会话时，用它显示「现在说到哪儿了」。
+     */
+    public streamingText(): string {
+        return this.streamingReply;
+    }
+
     /** 取本会话最后一条 assistant 回复的文本；无则空串（分屏接力用）。 */
     public async getLastAssistantText(): Promise<string> {
         const resp = await this.request<{ text: string | null }>({ type: "get_last_assistant_text" });
@@ -977,6 +987,7 @@ export class SessionRuntime {
             }
             case "agent_start":
                 this.streaming = true;
+                this.streamingReply = "";
                 this.runStarted = true;
                 this.abortRequested = false;
                 this.lastShownRunError = "";
@@ -1048,6 +1059,12 @@ export class SessionRuntime {
                         this.setActivity("working");
                         if (a.type === "text_delta") {
                             this.noteGenTokens(a.delta);
+                            // 攒一份「这一轮已经写出来的字」：手机 / 桌面那个小窗口点进来看结果就靠它
+                            // （手机上那两处只刷最近一次，攒着就不会只知道最后几个字）
+                            this.streamingReply += a.delta;
+                            if (this.streamingReply.length > 8000) {
+                                this.streamingReply = this.streamingReply.slice(-8000);
+                            }
                             this.post({ type: "assistantDelta", delta: a.delta });
                         }
                         break;
