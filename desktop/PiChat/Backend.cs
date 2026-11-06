@@ -378,8 +378,14 @@ internal sealed class Backend
 
                 case "askdone":
                 {
-                    using var doc = JsonDocument.Parse(json);
-                    if (doc.RootElement.TryGetProperty("cardId", out var card)) { Post(() => AskDone?.Invoke(card.GetString() ?? "")); }
+                    // 先把字取出来，再交给界面线程：那个 JsonDocument 出了这个块就了，
+                    // 在 Post 里再去读它只能撞上 ObjectDisposedException（见 app.log 里那几条）
+                    var cardId = "";
+                    using (var doc = JsonDocument.Parse(json))
+                    {
+                        if (doc.RootElement.TryGetProperty("cardId", out var card)) { cardId = card.GetString() ?? ""; }
+                    }
+                    Post(() => AskDone?.Invoke(cardId));
                     break;
                 }
 
