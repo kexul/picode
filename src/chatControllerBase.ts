@@ -2265,13 +2265,18 @@ export abstract class ChatControllerBase implements RuntimeHost {
     public async loadMoreHistory(): Promise<void> {
         const clientId = this.currentPageId;
         const state = this.pickerStateOf(clientId);
-        const before = state.historyOffset;
-        const items = await this.scanHistoryBatch(clientId);
-        if (items.length === 0 && state.historyOffset === before) {
+        try {
+            const before = state.historyOffset;
+            const items = await this.scanHistoryBatch(clientId);
+            if (items.length === 0 && state.historyOffset === before) {
+                this.sendOverlayTo(clientId, { type: "historyPageEnd" });
+                return;
+            }
+            this.sendOverlayTo(clientId, { type: "historyPageAppend", items, hasMore: state.historyOffset < state.historyFiles.length });
+        } catch {
+            // 扫出错也得回一句：界面那颗按钮正等着它把“加载中”放掉
             this.sendOverlayTo(clientId, { type: "historyPageEnd" });
-            return;
         }
-        this.sendOverlayTo(clientId, { type: "historyPageAppend", items, hasMore: state.historyOffset < state.historyFiles.length });
     }
 
     /**

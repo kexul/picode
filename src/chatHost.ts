@@ -619,7 +619,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private async sendWorkspaceSessions(dir: string, offset: number): Promise<void> {
         const clientId = this.currentPageId;
         if (!dir) { return; }
-        this.sendOverlayTo(clientId, { type: "workspaceSessionsPage", ...(await this.scanGroupPage(dir, offset, clientId)) });
+        try {
+            this.sendOverlayTo(clientId, { type: "workspaceSessionsPage", ...(await this.scanGroupPage(dir, offset, clientId)) });
+        } catch {
+            // 读盘出错也得回一句：界面那一组末尾的「加载更多」正等着它把“加载中”放掉
+            this.sendOverlayTo(clientId, { type: "workspaceSessionsPage", path: dir, offset, items: [], nextOffset: offset, hasMore: false });
+        }
     }
 
     /**
@@ -650,19 +655,33 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return { dirs, offset: 0, seen: new Set() };
     }
 
-    /** 面板里点工作区那块的「加载更多」：再送一批过去。 */
-    public async loadMoreWorkspaces(): Promise<void> {
+    /**
+     * 面板里点工作区那块的「加载更多」：再送一批过去。
+     *
+     * 两条收尾的路都得回话：这边手里没那份游标了（换过屏、面板被顶掉过）就重新摊一份第一页给这块屏；
+     * 读盘出错就回一条空的。界面那颗按钮等的是回话，一条不回它就一直卡在“加载中…”。
+     * @param dock 点的那颗按钮在不在常驻那一列（掉线重摊时照原样摆）
+     */
+    public async loadMoreWorkspaces(dock = false): Promise<void> {
         const clientId = this.currentPageId;
         const state = this.pickerStateOf(clientId);
-        if (!state.workspaceOpen) { return; }
-        const page = state.workspacePage;
-        if (!page) { return; }
-        const items = await this.takeWorkspacePage(page);
-        this.sendOverlayTo(clientId, {
-            type: "workspacePageAppend",
-            items,
-            hasMore: page.offset < page.dirs.length,
-        });
+        try {
+            const page = state.workspacePage;
+            if (!state.workspaceOpen || !page) {
+                // 手里没有这份游标：重新摊一份（界面那边回到第一页，那颗按钮也回到能点的样子）
+                if (dock || state.workspaceDock) { await this.showDockedWorkspacePanel(clientId); }
+                else { void this.showWorkspacePicker(clientId); }
+                return;
+            }
+            const items = await this.takeWorkspacePage(page);
+            this.sendOverlayTo(clientId, {
+                type: "workspacePageAppend",
+                items,
+                hasMore: page.offset < page.dirs.length,
+            });
+        } catch {
+            this.sendOverlayTo(clientId, { type: "workspacePageAppend", items: [], hasMore: false });
+        }
     }
 
     /**
@@ -1572,8 +1591,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 );
                 return true;
             case "workspaceLoadMore":
-                // 工作区那块的「加载更多」：再送一批（一次 10 个）。
-                void this.loadMoreWorkspaces();
+                // 工作区那块的「加载更多」：再送一批（一次 4 个）。
+                // dock = 点它的那颗在不在常驻那一列（掉了就照原样重摊一份）。
+                void this.loadMoreWorkspaces(msg.dock === true);
                 return true;
             case "newSessionInWorkspace":
                 // 工作区那一行行尾的加号：就在那一行的目录里开新会话。

@@ -10220,13 +10220,56 @@
       repaintPickerPanel(view);
       // 宿主回来的那批不带“哪一块面板点的”：这里先记一笔（浮层那份与常驻那一列两边都可能点）
       loadMoreWaiters[which].push(view);
-      vscode.postMessage({ type: isSpaces ? "workspaceLoadMore" : "historyLoadMore" });
+      armLoadMoreTimer(which, view, isSpaces, st);
+      // 常驻那一列 / 浮层那张抽屉：宿主那边万一没这份游标了，照这个把面板重新摊一份给这块屏
+      vscode.postMessage({
+        type: isSpaces ? "workspaceLoadMore" : "historyLoadMore",
+        dock: view.keepOpen === true,
+      });
     });
     return btn;
   }
 
   /** 点过「加载更多」的面板（先来后到），宿主回来的那批按它对上主。 */
   const loadMoreWaiters = { sessions: [], spaces: [] };
+
+  /**
+   * 「加载更多」等宿主回话最多等这么久。
+   * 回话万一没来（断线、宿主那边读盘出错、它手里那份游标没了），就把“加载中”放掉、
+   * 把那笔账撤掉：不然那颗按钮会一直卡在“加载中…”点不动，只能刷新页面。
+   */
+  const LOAD_MORE_TIMER_MS = 8000;
+  /** 正在等回话的按钮（哪块屏的哪一颗）→ 那个闹钟。 */
+  const loadMoreTimers = { sessions: new Map(), spaces: new Map() };
+
+  /**
+   * 给这颗按钮上一个“最多等这么久”的闹钟。
+   * 到点了还在等就把“加载中”放掉，顺带把 waiters 里那笔账也撤掉（那份回话当成丢了）。
+   */
+  function armLoadMoreTimer(which, view, isSpaces, st) {
+    clearLoadMoreTimer(which, view);
+    const timer = setTimeout(() => {
+      loadMoreTimers[which].delete(view);
+      // 回话已经来了（或者那块面板换了人）：不用再管
+      if ((isSpaces ? st.spacesLoading : st.historyLoading) !== true) { return; }
+      const queue = loadMoreWaiters[which];
+      const at = queue.indexOf(view);
+      if (at >= 0) { queue.splice(at, 1); }
+      if (isSpaces) { st.spacesLoading = false; } else { st.historyLoading = false; }
+      repaintPickerPanel(view);
+    }, LOAD_MORE_TIMER_MS);
+    if (timer && typeof timer.unref === "function") { timer.unref(); }
+    loadMoreTimers[which].set(view, timer);
+  }
+
+  /** 回话来了（或者那块面板换人了）：那颗闹钟不用再响了。 */
+  function clearLoadMoreTimer(which, view) {
+    const timers = loadMoreTimers[which];
+    const timer = timers.get(view);
+    if (!timer) { return; }
+    clearTimeout(timer);
+    timers.delete(view);
+  }
 
   /**
    * 「加载更多」回来的那批记到哪块面板上：先看是哪一块点的（按先来后到），
@@ -10443,7 +10486,7 @@
     const key = normPathKey(path);
     let g = st.groups.get(key);
     if (!g) {
-      g = { items: [], nextOffset: 0, hasMore: false, loading: false, loaded: false };
+      g = { items: [], nextOffset: 0, hasMore: false, loading: false, loaded: false, timer: null };
       st.groups.set(key, g);
     }
     return g;
@@ -10523,8 +10566,36 @@
     const g = groupState(st, path);
     if (g.loading) { return; }
     g.loading = true;
+    armGroupTimer(view, path, g);
     groupWaits.push({ path: normPathKey(path), view });
     vscode.postMessage({ type: "workspaceSessions", path, offset });
+  }
+
+  /**
+   * 这一组最多等多久回话（跟两颗「加载更多」一个道理：回话没来就把“加载中”放掉，
+   * 不然那一组末尾的按钮一直卡在“加载中…”点不动）。
+   */
+  function armGroupTimer(view, path, g) {
+    clearGroupTimer(g);
+    const timer = setTimeout(() => {
+      g.timer = null;
+      if (!g.loading) { return; }
+      g.loading = false;
+      const key = normPathKey(path);
+      for (let i = 0; i < groupWaits.length; i++) {
+        if (groupWaits[i].path === key && groupWaits[i].view === view) { groupWaits.splice(i, 1); break; }
+      }
+      repaintPickerPanel(view);
+    }, LOAD_MORE_TIMER_MS);
+    if (timer && typeof timer.unref === "function") { timer.unref(); }
+    g.timer = timer;
+  }
+
+  /** 某一组的回话来了：那个闹钟不用再响了。 */
+  function clearGroupTimer(g) {
+    if (!g || !g.timer) { return; }
+    clearTimeout(g.timer);
+    g.timer = null;
   }
 
   /** 回来的那一批要交给谁：按先来后到找等它的那块面板。 */
@@ -11447,6 +11518,7 @@
         }
         st.historyHasMore = msg.hasMore === true;
         st.historyLoading = false;
+        clearLoadMoreTimer("sessions", view);
         repaintPickerPanel(view);
       }
       return;
@@ -11456,6 +11528,7 @@
       const st = view ? view.state : null;
       if (st && (st.kind === "history" || st.kind === "workspace")) {
         st.historyLoading = false;
+        clearLoadMoreTimer("sessions", view);
         repaintPickerPanel(view);
       }
       return;
@@ -11475,6 +11548,7 @@
         st.spaceItems = st.spaceItems.concat(more);
         st.spacesHasMore = msg.hasMore === true;
         st.spacesLoading = false;
+        clearLoadMoreTimer("spaces", view);
         rebuildWorkspaceItems(view);
         repaintPickerPanel(view);
       }
@@ -11492,6 +11566,7 @@
         g.hasMore = msg.hasMore === true;
         g.loading = false;
         g.loaded = true;
+        clearGroupTimer(g);
         rebuildWorkspaceItems(view);
         repaintPickerPanel(view);
       }
