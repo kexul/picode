@@ -924,16 +924,23 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 text: body,
                 ...(route.sessionFile ? { sessionFile: route.sessionFile } : {}),
             };
-            let result = await pushSessionReply(route.pageUrl, reply);
-            if (!result.ok) {
-                // 那台报给我们的是它自己挑的一个地址（多网卡时可能是我们到不了的那个网段）：
-                // 用它连过来时的地址、同一个端口再试一次；通了就记住，以后直接用这个。
-                const alt = route.fromAddress ? samePortVariant(route.pageUrl, route.fromAddress) : undefined;
-                if (alt) {
-                    this.log(`[手机] 连不上「${route.name}」的 ${route.pageUrl}，改用 ${alt} 再试一次`);
-                    result = await pushSessionReply(alt, reply);
-                    if (result.ok) { route.pageUrl = alt; }
+            // 先往哪个地址送：那台自己报的 pageUrl 是它从自己几块网卡里挑的一块，不一定是我们到得了的；
+            // 而它连过来时的地址（fromAddress）我们已经验证能通信，多半反过来也通，所以先试这个。
+            // 剩下的那个当兜底。两个地址一样时就只有一个。
+            const fromIt = route.fromAddress ? samePortVariant(route.pageUrl, route.fromAddress) : undefined;
+            const targets = fromIt ? [fromIt, route.pageUrl] : [route.pageUrl];
+            let result: { ok: boolean; reason: string } = { ok: false, reason: "没试过" };
+            for (let i = 0; i < targets.length; i += 1) {
+                const target = targets[i];
+                // 第一下短一点（错了也就错 2.5 秒），兜底的给满 5 秒
+                result = await pushSessionReply(target, reply, i === 0 ? 2500 : undefined);
+                if (!result.ok) {
+                    const next = targets[i + 1];
+                    if (next) { this.log(`[手机] 连不上「${route.name}」的 ${target}，改用 ${next} 再试一次`); }
+                    continue;
                 }
+                route.pageUrl = target;   // 记住了：以后就直接走这个地址
+                break;
             }
             if (!result.ok) { return { ok: false, reason: result.reason }; }
             this.log(`[手机] 一句话转给「${route.name}」那台：${body.slice(0, 40)}`);

@@ -201,15 +201,20 @@ export function readSessionReply(raw: unknown): SessionReply | undefined {
     return { sessionId, text, ...(sessionFile ? { sessionFile } : {}), ...(name ? { name } : {}) };
 }
 
-/** 把一句话送给那台（多久等不到就算没送到：不攒着、不重试，人那边会收到一句说明）。 */
-export async function pushSessionReply(target: string, reply: SessionReply): Promise<{ ok: boolean; reason: string }> {
+/** 把一句话送给那台（多久等不到就算没送到：不攒着、不重试，人那边会收到一句说明）。
+ *  timeoutMs 可以单独给：回话可能要换个地址再试一次，第一次试短一点，别让人干等两回。 */
+export async function pushSessionReply(
+    target: string,
+    reply: SessionReply,
+    timeoutMs = PUSH_TIMEOUT_MS,
+): Promise<{ ok: boolean; reason: string }> {
     const url = target.replace(/\/+$/, "") + "/reply";
     try {
         const res = await fetch(url, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(reply),
-            signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
+            signal: AbortSignal.timeout(timeoutMs),
         });
         if (res.ok) { return { ok: true, reason: "" }; }
         const text = await res.text().catch(() => "");
