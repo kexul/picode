@@ -36,6 +36,7 @@ dotnet build -c Release
 
 仓库根目录的 `build.bat` 也会顺手编它（不想要就加 `skip-desktop`）；
 只想编它就 `npm run desktop`（先编后端、再打 payload、最后编 exe）。
+两步都是先关掉开着的那一个再编（它占着 `PiChat.exe`，不关就是 MSB3027），编完再把它叫回来。
 
 一个第三方包都不引：界面用 WPF、网络用 `HttpClient`、JSON 用 `System.Text.Json`，全是系统自带的。
 所以不用还原 NuGet，也不用连网，`dotnet build` 直接过。

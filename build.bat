@@ -103,20 +103,17 @@ if "%SKIP_PICHAT%"=="1" (
 REM ---- desktop window (WPF, .NET 8) -> desktop\PiChat\bin\Release\net8.0-windows\PiChat.exe ----
 REM Missing tooling is only a skip (the vsix and the exe above are the grown-up outputs);
 REM a real compile error is an error.
+REM A running PiChat.exe locks its own file, so dotnet build cannot replace it (MSB3027):
+REM bin\pichat-restart.js --rebuild-desktop closes this repo's one first and starts it again after.
 echo.
 if "%SKIP_DESKTOP%"=="1" (
     echo [build] skip desktop window
 ) else if not exist "desktop\PiChat\PiChat.csproj" (
     echo [build] desktop window: desktop\PiChat is not here, skipped
 ) else (
-    where dotnet >nul 2>&1
-    if errorlevel 1 (
-        echo [build] desktop window: dotnet not found ^(needs .NET 8 SDK^), skipped
-    ) else (
-        echo [build] building desktop window ^(desktop\PiChat^)...
-        call dotnet build -c Release "desktop\PiChat\PiChat.csproj"
-        if errorlevel 1 ( echo [err] desktop window build failed ^(see the text above^) & exit /b 1 )
-    )
+    echo [build] building desktop window ^(desktop\PiChat^)...
+    call node bin\pichat-restart.js --rebuild-desktop
+    if errorlevel 1 ( echo [err] desktop window build failed ^(see the text above^) & exit /b 1 )
 )
 
 REM ---- android app -> android\app\build\outputs\apk\debug\app-debug.apk ----

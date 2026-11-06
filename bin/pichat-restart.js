@@ -22,7 +22,12 @@
  * 编译输出与新后端的日志都追加到计划里的 logFile（默认 ~/.pi/pichat/restart.log）：
  * 重启之后原来那个终端就看不到什么了，出问题只能看这份日志。
  *
- * 用法（只在插件内部用）：node pichat-restart.js <plan.json>
+ * 参数二：
+ *   <重启计划>.json  后端发起的重启（设置浮层里那颗按钮）：见上面那几步。
+ *   --rebuild-desktop  只编桌面那个小窗口：开着的那一个先关掉、编完再叫回来
+ *                      （build.bat 与 `npm run desktop` 用这条；退出码 0 = 编好了，1 = 编不过）。
+ *
+ * 用法（只在插件 / 仓库脚本内部用）：node pichat-restart.js <plan.json | --rebuild-desktop>
  */
 "use strict";
 
@@ -169,8 +174,8 @@ function startBackend(plan, logFd) {
 }
 
 /** 桌面那个小窗口编出来的那个 exe 在哪儿。 */
-function desktopExePath(plan) {
-    return path.join(plan.repoDir, "desktop", "PiChat", "bin", "Release", "net8.0-windows", "PiChat.exe");
+function desktopExePath(repoDir) {
+    return path.join(repoDir, "desktop", "PiChat", "bin", "Release", "net8.0-windows", "PiChat.exe");
 }
 
 /**
@@ -206,8 +211,8 @@ function findRunningByPath(exe) {
  * 不关的话它的 exe 一直被人占着，dotnet build 复制不进去（MSB3027，重试十次然后失败），
  * 而且旧窗口本来也该换成新编的那个。关的是这个仓库里编出来的那一个，别处的不动。
  */
-async function stopDesktopApp(plan, logFd) {
-    const exe = desktopExePath(plan);
+async function stopDesktopApp(repoDir, logFd) {
+    const exe = desktopExePath(repoDir);
     if (process.platform !== "win32" || !fs.existsSync(exe)) { return false; }
     const pids = findRunningByPath(exe);
     if (pids.length === 0) { return false; }
@@ -225,10 +230,10 @@ async function stopDesktopApp(plan, logFd) {
     return true;
 }
 
-/** 把桌面那个小窗口叫回来，开着窗口（不是只留个托盘图标）。 */
-function startDesktopApp(plan, logFd) {
-    const exe = desktopExePath(plan);
-    const args = plan.url ? ["--url", plan.url] : [];
+/** 把桌面那个小窗口叫回来，开着窗口（不是只留个托盘图标）。不传地址就用它自己记着的那个。 */
+function startDesktopApp(repoDir, logFd, url) {
+    const exe = desktopExePath(repoDir);
+    const args = url ? ["--url", url] : [];
     write(logFd, "叫回桌面那个小窗口：" + [exe, ...args].join(" "));
     try {
         cp.spawn(exe, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
@@ -243,21 +248,43 @@ function startDesktopApp(plan, logFd) {
  * 它不是后端的一部分：编不过只在日志里记一笔，后端照常起来（跟 build.bat 那边一个规矩：
  * 缺工具 / 缺 SDK 都是跳过，不是失败）。要不要编、能不能编先看 canBuildDesktop ——
  * 没装 dotnet 的话不必白关一次窗口。
+ * @returns 编过了没有
  */
-async function buildDesktop(plan, logFd) {
-    const project = path.join(plan.repoDir, "desktop", "PiChat", "PiChat.csproj");
-    const code = await run(`dotnet build -c Release "${project}"`, plan.repoDir, logFd, CLIENT_BUILD_TIMEOUT_MS);
+async function buildDesktop(repoDir, logFd) {
+    const project = path.join(repoDir, "desktop", "PiChat", "PiChat.csproj");
+    const code = await run(`dotnet build -c Release "${project}"`, repoDir, logFd, CLIENT_BUILD_TIMEOUT_MS);
     write(logFd, code === 0
         ? "桌面小窗口编好了（desktop/PiChat/bin/Release/net8.0-windows/PiChat.exe）。"
         : "桌面小窗口没编过（不影响后端；多是真编译错误）。");
+    return code === 0;
 }
 
 /** 这台机器上能不能编桌面那个小窗口：仓库里有那个工程，而且找得到 dotnet。 */
-function canBuildDesktop(plan) {
+function canBuildDesktop(repoDir) {
     if (process.platform !== "win32") { return false; }
-    if (!fs.existsSync(path.join(plan.repoDir, "desktop", "PiChat", "PiChat.csproj"))) { return false; }
+    if (!fs.existsSync(path.join(repoDir, "desktop", "PiChat", "PiChat.csproj"))) { return false; }
     const probe = cp.spawnSync("dotnet", ["--version"], { windowsHide: true, timeout: 20000 });
     return !probe.error && probe.status === 0;
+}
+
+/**
+ * 编桌面那个小窗口，一步到底：开着的那一个先关掉（它占着 exe，不关编不了），编完再叫回来。
+ *
+ * build.bat 与 `npm run desktop` 编的那一步走这条（`--rebuild-desktop`）：
+ * 本来就有个窗口开着的时候，编完这个窗口还在原处，只是里头是刚编出来的那个。
+ *
+ * @returns 退出码：0 = 编好了（或者这台机器上不编它），1 = 真编不过
+ */
+async function rebuildDesktop(repoDir) {
+    if (!canBuildDesktop(repoDir)) {
+        write(1, "这台机器上不编桌面那个小窗口（不是 Windows / 没装 dotnet / 仓库里没那个工程），跳过。");
+        return 0;
+    }
+    const closed = await stopDesktopApp(repoDir, 1);
+    const ok = await buildDesktop(repoDir, 1);
+    // 编没过也把它叫回来：窗口没了总不是个事，旧的那个总比没有强
+    if (closed) { startDesktopApp(repoDir, 1, undefined); }
+    return ok ? 0 : 1;
 }
 
 /**
@@ -320,9 +347,9 @@ async function main() {
 
     // 4. 桌面那个小窗口：先关掉再编（它开着的时候 exe 被占着）。放在起后端之前 ——
     //    后端一起来就会去开这个 exe，得让它开的是刚编出来的那个。
-    const desktopBuildable = canBuildDesktop(plan);
-    const desktopClosed = desktopBuildable ? await stopDesktopApp(plan, logFd) : false;
-    if (desktopBuildable) { await buildDesktop(plan, logFd); }
+    const desktopBuildable = canBuildDesktop(plan.repoDir);
+    const desktopClosed = desktopBuildable ? await stopDesktopApp(plan.repoDir, logFd) : false;
+    if (desktopBuildable) { await buildDesktop(plan.repoDir, logFd); }
 
     // 5. 照老命令行起回来
     const child = startBackend(plan, logFd);
@@ -336,13 +363,23 @@ async function main() {
     }
 
     // 6. 刚才是开着窗口的（已经关掉了）：把它叫成开着窗口的样子（后端叫起来的那份只出托盘图标）
-    if (desktopClosed) { startDesktopApp(plan, logFd); }
+    if (desktopClosed) { startDesktopApp(plan.repoDir, logFd, plan.url); }
 
     // 7. 安卓 app 最后编（编不过只记一笔，后端已经在跑了）
     await buildAndroid(plan, logFd);
 }
 
-main().catch((err) => {
-    console.error(err && err.stack ? err.stack : err);
-    process.exitCode = 1;
-});
+if (process.argv[2] === "--rebuild-desktop") {
+    // 仓库根目录（这个文件在 bin/ 里）
+    void rebuildDesktop(path.join(__dirname, ".."))
+        .then((code) => { process.exitCode = code; })
+        .catch((err) => {
+            console.error(err && err.stack ? err.stack : err);
+            process.exitCode = 1;
+        });
+} else {
+    main().catch((err) => {
+        console.error(err && err.stack ? err.stack : err);
+        process.exitCode = 1;
+    });
+}

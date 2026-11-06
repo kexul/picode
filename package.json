@@ -147,7 +147,7 @@
     "web:dev": "npm run compile && node dev/browserHost.js",
     "web:shot": "npm run compile && node dev/visit.js",
     "payload": "node scripts/build-payload.mjs",
-    "desktop": "npm run compile && npm run payload && dotnet build -c Release desktop/PiChat/PiChat.csproj",
+    "desktop": "npm run compile && npm run payload && node bin/pichat-restart.js --rebuild-desktop",
     "server": "npm run compile && node out/server/serverMain.js"
   },
   "devDependencies": {

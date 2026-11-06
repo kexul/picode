@@ -41,6 +41,7 @@ npm run desktop         # 编译后端 + 打包 payload + 编 exe（三步一体
 ```
 
 产物是 `desktop\PiChat\bin\Release\net8.0-windows\PiChat.exe`（约 3MB）。
+编它之前会先把开着的那一个关掉（它占着 `PiChat.exe`，不关编不过：MSB3027），编完再叫回来。
 **后端就在这个 exe 里**（打好的 bundle + 界面文件 + 截屏那两支小程序都嵌在里面）：
 双击它，后端没在跑就自己拉一个起来，然后通知区域出一颗图标、主界面也打开。
 再双击一次不会起第二个，只把已经在跑的那个叫出来。
