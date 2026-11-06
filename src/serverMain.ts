@@ -300,7 +300,11 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
     const server = new PiChatWebServer(MEDIA_DIR, host, {
         log: (text) => log(`[网页服务] ${text}`),
         onUrlChanged: () => { /* 启动器自己会打印地址，这里不用管 */ },
-        info: () => ({ version: VERSION }),
+        info: () => {
+            // name：这台叫什么（设置里「推到那边时叫它什么」）：别的机器发现到它时，列表里就用这个名字
+            const name = readServerConfig().config.notify.pushLabel;
+            return { version: VERSION, ...(name ? { name } : {}) };
+        },
     });
 
     const settings: WebServerSettings = {
@@ -313,6 +317,8 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
     host.setPhoneNotifier((note) => server.notifyPhones(note));
     // 会话列表变了（新建 / 关掉 / 在跑 / 跑完了）也推一份：手机 / 桌上那个小窗口的列表靠它跟上
     host.setPhoneSessionsNotifier(() => server.notifyPhoneSessions());
+    // 找找同一 tailnet 里的其它 Pi Chat（见 tailscalePeers）：找到的会自动出现在手机 / 桌面那个小窗口的列表里
+    host.startPeerDiscovery();
     // 一张卡片收尾了（在哪儿答的都算）：别的设备上那几个选项该置灰了
     host.setPhoneAskDoneNotifier((cardId) => server.notifyPhoneAskDone(cardId));
     await server.applySettings(settings);

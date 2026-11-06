@@ -45,13 +45,14 @@ import { pickOverlayClient } from "./overlayTarget";
 import { ScreenRegistry } from "./screenRegistry";
 import { dirInsideAny, dirKey } from "./pathRules";
 import type { PhoneNote, PhoneSessionInfo, WebServerHost } from "./webChatServer";
-import type { PhoneAsk, PhoneNoteKind } from "./phoneInbox";
+import type { PhoneAsk, PhoneNoteKind, PhoneNoteRecord } from "./phoneInbox";
 import type { SessionChanges } from "./gitChanges";
 import type { BashTaskInfo } from "./bashProtocol";
 import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { DesktopLive } from "./desktopLive";
 import { describeRestart } from "./serverRestart";
+import { discoverTailscalePeers } from "./tailscalePeers";
 import type { SessionRuntime } from "./sessionRuntime";
 import { clipText } from "./messageUtils";
 import {
@@ -147,6 +148,51 @@ function samePortVariant(pageUrl: string, address: string): string | undefined {
     } catch {
         return undefined;
     }
+}
+
+/**
+ * 去问一台的会话列表时可以试的地址（见 pollRemotePeers）：
+ * 先试它连过来时的地址配它报的那个端口，再试它报的地址本身。
+ */
+function remoteBaseUrls(peer: { address?: string; pageUrl?: string }): string[] {
+    const out: string[] = [];
+    const pageUrl = peer.pageUrl?.replace(/\/+$/, "");
+    if (peer.address && pageUrl) {
+        const variant = samePortVariant(pageUrl, peer.address);
+        if (variant) { out.push(variant); }
+    }
+    if (pageUrl) { out.push(pageUrl); } else if (peer.address) {
+        out.push(`http://${peer.address.includes(":") ? `[${peer.address}]` : peer.address}`);
+    }
+    return out;
+}
+
+/**
+ * 一个地址里的主机名（`http://100.73.1.2:51883/` → `100.73.1.2`）：
+ * 同一个地址可能以不同名字出现（推送时叫「家里」、发现时叫主机名），靠它认出来是同一台。
+ */
+function hostOfMaybe(url?: string): string {
+    if (!url) { return ""; }
+    try { return new URL(url).hostname; } catch { return ""; }
+}
+
+/** 对方列表里带的那条“最后一条”：只挑认得出来的字段，别把不认识的东西搬进列表。 */
+function readPeerLast(raw: unknown): PhoneNoteRecord | undefined {
+    if (!raw || typeof raw !== "object") { return undefined; }
+    const item = raw as Record<string, unknown>;
+    const text = typeof item.text === "string" ? item.text : "";
+    if (!text) { return undefined; }
+    const kind: PhoneNoteKind = item.kind === "ask" ? "ask" : item.kind === "me" ? "me" : "done";
+    return {
+        seq: typeof item.seq === "number" ? item.seq : 0,
+        sessionId: typeof item.sessionId === "string" ? item.sessionId : "",
+        name: typeof item.name === "string" ? item.name : "",
+        kind,
+        text,
+        at: typeof item.at === "number" ? item.at : 0,
+        ...(typeof item.plain === "string" ? { plain: item.plain } : {}),
+        ...(Array.isArray(item.blocks) ? { blocks: item.blocks as PhoneNoteRecord["blocks"] } : {}),
+    };
 }
 
 /** 这条消息是不是“一次性界面”（确认框、浮层、跑完提醒）：补发里只有序号位、没有内容。 */
@@ -855,7 +901,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
 
     /**
      * 手机 / 桌上那个小窗口的会话列表：就是现在开着的那些（跟网页顶条上那一排同一批）。
-     * 子会话不列（它们挂在父会话下面，网页那边也一样）。
+     * 子会话不列（它们挂在父会话下面，网页那边也一样）。后面再搭上从别台拉回来的（见 pollRemotePeers）。
      */
     public phoneSessions(): PhoneSessionInfo[] {
         const items: PhoneSessionInfo[] = [];
@@ -864,7 +910,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             items.push({
                 id: rt.id,
                 name: this.sessionDisplayName(rt),
-                // 这台后端跑的会话都算「本机」：别的机器推来的那些走不到这里（见 webChatServer 的 phoneSessionsPayload）
+                // 这台后端跑的会话都算「本机」：别的机器上的那些由 remoteSessions 搭在后面
                 machine: "本机",
                 // 跟网页端一个规矩：后台还有命令没跑完（bashRunning）也算「正在跑」
                 running: !!rt.streaming || rt.hasRunningBashTasks(),
@@ -872,7 +918,179 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 ...(rt.activityDetail ? { activityDetail: rt.activityDetail } : {}),
             });
         }
+        for (const item of this.remoteSessions.values()) { items.push(item); }
         return items;
+    }
+
+    // ---------------------------------------------------------------- 别台开着的会话
+
+    /**
+     * 最近推过来通知的那几台（哪台 → 怎么去问它的会话列表）。
+     * 址子有两个：它连过来时的地址（先试这个，反方向多半也通）和它自己报的地址。
+     */
+    private readonly remotePeers = new Map<string, { address?: string; pageUrl?: string }>();
+    /** 从别台拉回来的那些会话（标识是 remote:哪台:会话，跟推来的那条一个写法）。 */
+    private readonly remoteSessions = new Map<string, PhoneSessionInfo>();
+    /** 拉取定时器：收到第一台的通知才开，一台都没有就不跑。 */
+    private remotePollTimer?: ReturnType<typeof setInterval>;
+    /** 每台连着几次没拉到：连着几次都不通就把那台的会话从列表里拿掉（真关了 / 断网了）。 */
+    private readonly remoteFailures = new Map<string, number>();
+    private static readonly REMOTE_POLL_MS = 5000;
+
+    /** 记住这台机器该往哪儿去问它的会话列表（收到它推来的通知时调，或者发现到它时）。 */
+    private rememberPeer(label: string, fromAddress?: string, pageUrl?: string): void {
+        if (!label) { return; }
+        // 同一个地址可能已经有一个名字了（推送时用的是它设置里的 notify.pushLabel，发现时用的是主机名）：
+        // 沿用已经有的那个，免得同一台在列表里出现两组。
+        const host = hostOfMaybe(pageUrl) || fromAddress || "";
+        if (host) {
+            for (const [known, peer] of this.remotePeers) {
+                if (known === label) { continue; }
+                const knownHost = hostOfMaybe(peer.pageUrl) || peer.address || "";
+                if (knownHost && knownHost === host) { label = known; break; }
+            }
+        }
+        const before = this.remotePeers.get(label);
+        this.remotePeers.set(label, {
+            ...(fromAddress ?? before?.address ? { address: fromAddress ?? before?.address } : {}),
+            ...(pageUrl ?? before?.pageUrl ? { pageUrl: pageUrl ?? before?.pageUrl } : {}),
+        });
+        if (this.remotePollTimer) { return; }
+        // 收着上游那张表一起走：一台都没有时这个定时器不该开着
+        this.remotePollTimer = setInterval(() => { void this.pollRemotePeers(); }, ChatHost.REMOTE_POLL_MS);
+        this.remotePollTimer.unref?.();
+    }
+
+    /** 发现那一路的定时器（见 startPeerDiscovery）。 */
+    private peerDiscoveryTimer?: ReturnType<typeof setInterval>;
+    private static readonly PEER_DISCOVERY_MS = 30000;
+
+    /**
+     * 起「找同一 tailnet 里的其它 Pi Chat」这一路（见 tailscalePeers）：
+     * 找到的机器接进 remotePeers，之后跟推送学到的地址一样定时去拉它的会话列表。
+     * 没装 tailscale / 不在 tailnet 里时它什么都不做，也不报错。
+     */
+    public startPeerDiscovery(): void {
+        if (this.peerDiscoveryTimer || this.disposed) { return; }
+        const tick = async (): Promise<void> => {
+            if (this.disposed) { return; }
+            let peers;
+            try { peers = await discoverTailscalePeers(); } catch { return; }
+            let added = false;
+            for (const peer of peers) {
+                if (!this.remotePeers.has(peer.label)) { added = true; }
+                this.rememberPeer(peer.label, peer.address, peer.pageUrl);
+            }
+            if (added) {
+                this.log(`[发现] 同一 tailnet 里还有 ${peers.length} 台 Pi Chat：${peers.map((peer) => peer.label).join("、")}`);
+                void this.pollRemotePeers();
+            }
+        };
+        this.peerDiscoveryTimer = setInterval(() => { void tick(); }, ChatHost.PEER_DISCOVERY_MS);
+        this.peerDiscoveryTimer.unref?.();
+        // 起来以后先找一遍，别让人干等半分钟
+        const first = setTimeout(() => { void tick(); }, 2000);
+        first.unref?.();
+    }
+
+    /** 挨台去拉一次：拉到了就把那台的会话换成本次的，拉不到就留住上一次的。 */
+    private async pollRemotePeers(): Promise<void> {
+        if (this.disposed || this.remotePeers.size === 0) { return; }
+        let changed = false;
+        for (const [label, peer] of [...this.remotePeers]) {
+            const list = await this.fetchPeerSessions(peer);
+            if (!list) {
+                const misses = (this.remoteFailures.get(label) ?? 0) + 1;
+                this.remoteFailures.set(label, misses);
+                // 连着几次都不通：那台的会话已经从列表里拿掉（人看到的不会是好几小时前的陈旧状态）
+                if (misses >= 3) { changed = this.dropRemoteSessions(label) || changed; }
+                continue;
+            }
+            this.remoteFailures.set(label, 0);
+            changed = this.replaceRemoteSessions(label, list, peer) || changed;
+        }
+        // 列表变了就让手机 / 桌面那个小窗口跟上（它自己一秒内只发一次）
+        if (changed) { this.pushPhoneSessionsSoon(); }
+    }
+
+    /** 去问一台的会话列表；连不上就给 undefined（试过的地址会在日志里留一笔，排错靠它）。 */
+    private async fetchPeerSessions(
+        peer: { address?: string; pageUrl?: string },
+    ): Promise<Array<Record<string, unknown>> | undefined> {
+        for (const base of remoteBaseUrls(peer)) {
+            try {
+                const res = await fetch(base + "/phone/sessions", {
+                    headers: { accept: "application/json" },
+                    signal: AbortSignal.timeout(2500),
+                });
+                if (!res.ok) { continue; }
+                const body = (await res.json()) as { sessions?: unknown };
+                if (!body || !Array.isArray(body.sessions)) { continue; }
+                return body.sessions.filter((item): item is Record<string, unknown> => !!item && typeof item === "object");
+            } catch {
+                continue;
+            }
+        }
+        return undefined;
+    }
+
+    /**
+     * 把那台的会话换成本次拉到的这一批。
+     * 对方列表里已经标了 remote 的那些跳过：那是它从别台（包括我们）拉来的，再转发一遍就绕圈了。
+     * 每个会话同时把回话那笔账建好（pageUrl、名字），不然点进去能看、一回话就说“没记着”。
+     */
+    private replaceRemoteSessions(
+        label: string,
+        list: Array<Record<string, unknown>>,
+        peer: { address?: string; pageUrl?: string },
+    ): boolean {
+        const fresh = new Map<string, PhoneSessionInfo>();
+        const base = remoteBaseUrls(peer)[0] ?? "";
+        for (const item of list) {
+            const id = typeof item.id === "string" ? item.id : "";
+            if (!id || item.remote === true) { continue; }
+            const name = typeof item.name === "string" && item.name ? item.name : "会话";
+            const remoteId = `remote:${label}:${id}`;
+            const last = readPeerLast(item.last);
+            fresh.set(remoteId, {
+                id: remoteId,
+                name: `${label} · ${name}`,
+                machine: label,
+                remote: true,
+                running: item.running === true,
+                activity: typeof item.activity === "string" ? item.activity : "idle",
+                ...(typeof item.activityDetail === "string" ? { activityDetail: item.activityDetail } : {}),
+                ...(last ? { last } : {}),
+            });
+            // 回话那笔账：跟收到推送时记的是一个位置（见 phoneSend 的 remote 分支）
+            if (base) {
+                this.remoteNotes.set(remoteId, {
+                    pageUrl: base,
+                    sessionId: id,
+                    name: `${label} · ${name}`,
+                    ...(peer.address ? { fromAddress: peer.address } : {}),
+                });
+            }
+        }
+        let changed = this.dropRemoteSessions(label);
+        for (const [id, item] of fresh) {
+            const before = this.remoteSessions.get(id);
+            if (!before || JSON.stringify(before) !== JSON.stringify(item)) { changed = true; }
+            this.remoteSessions.set(id, item);
+        }
+        return changed;
+    }
+
+    /** 把这台的会话从列表里拿掉；真的有东西被拿掉才返回 true。 */
+    private dropRemoteSessions(label: string): boolean {
+        const prefix = `remote:${label}:`;
+        let changed = false;
+        for (const id of [...this.remoteSessions.keys()]) {
+            if (!id.startsWith(prefix)) { continue; }
+            this.remoteSessions.delete(id);
+            changed = true;
+        }
+        return changed;
     }
 
     /** 每一轮跑完时记下的原文（问 pi 要一次要花一趟 RPC，而且它正在跑的时候问不到东西）。 */
@@ -2057,6 +2275,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
 
     /** 别的机器上的后端推来一条“有事”（网页服务那条 /notify 收到、口令核对过了）。 */
     public acceptRemoteNotice(notice: RemoteNotice, fromAddress?: string): void {
+        // 记住这台：以后定时去问它开着的会话（见 pollRemotePeers）
+        this.rememberPeer(notice.label, fromAddress, notice.pageUrl);
         this.trayNoteRemote(notice, fromAddress);
     }
 
@@ -2130,6 +2350,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     public dispose(): void {
         if (this.disposed) { return; }
         this.disposed = true;
+        if (this.remotePollTimer) { clearInterval(this.remotePollTimer); this.remotePollTimer = undefined; }
+        if (this.peerDiscoveryTimer) { clearInterval(this.peerDiscoveryTimer); this.peerDiscoveryTimer = undefined; }
         this.desktopLive.stop();
         this.disposeAllPickers();
         this.disposeAllCards();

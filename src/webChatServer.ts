@@ -426,6 +426,11 @@ export interface PhoneSessionInfo {
     activityDetail?: string;
     /** 别的机器上的会话（这台已经没有那个会话了，只剩推过来的通知）。 */
     remote?: boolean;
+    /**
+     * 列表上那一行要的最后一条（本机的由 phoneInbox 补；从别台拉回来的直接带对方的）。
+     * 见 chatHost 的 remoteSessions。
+     */
+    last?: PhoneNoteRecord;
 }
 
 export interface WebServerHooks {
@@ -1857,7 +1862,7 @@ export class PiChatWebServer {
      */
     private phoneSessionsPayload(): Array<PhoneSessionInfo & { last?: PhoneNoteRecord }> {
         const items: Array<PhoneSessionInfo & { last?: PhoneNoteRecord }> = this.host.phoneSessions().map((item) => {
-            const last = this.phoneInbox.last(item.id);
+            const last = this.phoneInbox.last(item.id) ?? item.last;
             return last ? { ...item, last } : { ...item };
         });
         const known = new Set(items.map((item) => item.id));
@@ -1902,7 +1907,7 @@ export class PiChatWebServer {
         }
         // 最近一条回复的原话：点开会话时先看一眼它说到哪儿了（跑着的时候这个会跟着变）
         let lastReply = "";
-        try { lastReply = await this.host.phoneLastReply(sessionId); } catch { /* 取不到就算了 */ }
+        try { lastReply = session.remote ? (session.last?.text ?? "") : await this.host.phoneLastReply(sessionId); } catch { /* 取不到就算了 */ }
         // 把它也解析成「怎么画」：这一轮的原话在两端都按 markdown 画，跟「有事」里的那些一个待遇
         const replyDoc = parseMarkdown(lastReply);
         this.sendJson(req, res, 200, {
