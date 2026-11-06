@@ -101,11 +101,11 @@ internal sealed class MainWindow : Window
     {
         try
         {
-            await _host.EnsureAsync(_config.Url, text => Dispatcher.InvokeAsync(() => OnStatus(text, false)));
+            await _host.EnsureAsync(_config.Url, text => { _ = Dispatcher.InvokeAsync(() => OnStatus(text, false)); });
         }
         catch (Exception err)
         {
-            Dispatcher.InvokeAsync(() => OnStatus(err.Message, false));
+            _ = Dispatcher.InvokeAsync(() => OnStatus(err.Message, false));
             AppLog.Write("后端没起来：" + err.Message);
         }
     }

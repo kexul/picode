@@ -1,0 +1,2 @@
+# 编时由 scripts/build-payload.mjs 生成、再嵌进 exe 里的那一份后端（不进版本库）
+payload/

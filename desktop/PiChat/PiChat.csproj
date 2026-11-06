@@ -23,4 +23,30 @@
     <Using Remove="System.Windows.Forms" />
   </ItemGroup>
 
+  <!--
+    后端也在这个 exe 里：payload/ 那一棵（后端 bundle + 界面文件 + 两支小程序）整棵嵌进来，
+    运行时由 Payload.cs 解到缓存目录、用本机 Node 跑起来。
+    那一棵由 scripts/build-payload.mjs 生成，所以只能等生成完再把它列进来（这个 Target 跑在
+    收资源（PrepareResources）之前）—— 写在文件顶上的 <ItemGroup> 会在目录还不存在时就求值，等于没加。
+    没装 Node 就跳过，那时这个 exe 里没有后端，只能连已经在跑的那个。
+  -->
+  <ItemGroup Condition="Exists('payload')">
+    <EmbeddedResource Include="payload\**\*"
+                      LogicalName="payload/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!--
+    上面那份 payload 由 scripts/build-payload.mjs 生成（后端 bundle + 界面文件 + 两支小程序）。
+    这里每次编之前重跑一次，保证里面的内容是最新的；但**这一次**编进去的还是上一次留下的那份
+    （MSBuild 在开始时就定好了要嵌哪些文件）。所以平时用 build.bat / npm run desktop 编：
+    它们先把 payload 生成好、再 dotnet build，一次就对。
+  -->
+  <Target Name="BuildPayload" BeforeTargets="BeforeBuild">
+    <Exec Command="node &quot;..\..\scripts\build-payload.mjs&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          ContinueOnError="WarnAndContinue" />
+    <Warning Condition="!Exists('payload/out/server/bundle.cjs')"
+             Text="没有生成 payload/（多半是没装 Node，或者后端还没编）：这个 exe 里不会带后端，只能连已经在跑的那个。请再编一次。" />
+  </Target>
+
 </Project>

@@ -24,7 +24,6 @@ import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase, type ViewOptionItem, type WorkspacePage, desktopAppPath } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
-import { isPackaged } from "./appAssets";
 import { hostOfUrl, isOwnPage, pushRemoteNotice, pushWeixinReply, type RemoteNotice } from "./remoteNotice";
 import { getAskAssets, getBashAssets, getEnvAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
@@ -1497,9 +1496,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 label: "重启后端",
                 section: "维护",
                 desc: can
-                    ? (isPackaged()
-                        ? "先拉最新代码、重新打包 exe，然后重启（正在跑的回复会断）"
-                        : "先拉最新代码再编，然后重启（正在跑的回复会断）")
+                    ? "先拉最新代码再编，然后重启（正在跑的回复会断）"
                     : (able.reason ?? "这个后端不能从这里重启。"),
                 check: null,
                 kind: "button",

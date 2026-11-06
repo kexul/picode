@@ -5,13 +5,15 @@ using System.Net.Http;
 namespace PiChat;
 
 /// <summary>
-/// 后端那一头「由谁来起」：这个程序是入口，双击它就等于以前双击 <c>dist\pichat.exe</c> ——
-/// 后端没在跑就自己拉一个；已经在跑（上次拉起的、VS Code 起的、终端里起的）就直接接上去。
+/// 后端那一头「由谁来起」：这个程序是唯一入口 —— 后端没在跑就自己拉一个；
+/// 已经在跑（上次拉起的、VS Code 起的、终端里起的）就直接接上去。
 ///
-/// 找后端按这个顺序：
-///   1. 环境变量 `PICHAT_SERVER`（指到 pichat.exe，或者 serverMain.js 都行，调试时方便）；
-///   2. 从本程序所在目录往上找 <c>dist\pichat.exe</c>（仓库里 npm run exe 编出来的那个单文件）；
-///   3. 从本程序所在目录往上找 <c>out\server\serverMain.js</c>，用本机的 node 跑它。
+/// 后端从哪儿来，按这个顺序：
+///   1. 环境变量 `PICHAT_SERVER`（指到 serverMain.js 也行，调试时方便）；
+///   2. 从本程序所在目录往上找 <c>out\server\serverMain.js</c> —— 在仓库里的时候走这条：
+///      改完后端只要 `npm run compile`（再重启后端）就生效，不用重新编这个 exe；
+///   3. **这个 exe 里嵌着的那一份**（`dotnet build` 时装进去的，见 Payload.cs）——
+///      把 exe 拷到别的机器 / 别的目录时走这条，自带后端。
 /// 都找不到就报一句人话（界面上写出来），不去猜。
 /// </summary>
 internal sealed class BackendHost
@@ -48,9 +50,9 @@ internal sealed class BackendHost
         if (launch is null)
         {
             throw new InvalidOperationException(
-                "找不到后端：程序旁边没有 dist\\pichat.exe，也没有 out\\server\\serverMain.js。"
-                + "先在仓库里跑一次 build.bat（或者 npm run build），"
-                + "或者把环境变量 PICHAT_SERVER 指到 pichat.exe。");
+                "找不到后端：这个 exe 里没有嵌后端，旁边也没有 out\\server\\serverMain.js。"
+                + "在仓库里跑一次 build.bat（它先把后端编好、再嵌进这个 exe），"
+                + "或者把环境变量 PICHAT_SERVER 指到 out\\server\\serverMain.js。");
         }
 
         var port = PortOf(url);
@@ -169,25 +171,34 @@ internal sealed class BackendHost
         return 51883;
     }
 
-    /// <summary>去哪里找后端：单文件 exe 优先，其次仓库里那套（用本机的 node 跑）。</summary>
-    private static (string FileName, string[] Args, string WorkDir)? FindServer()
+    /// <summary>去哪里找后端：环境变量 → 这个 exe 里嵌着的 → 仓库里那套（都用本机的 node 跑）。</summary>
+    private static (string FileName, string[] Args, string WorkDir) ? FindServer()
     {
-        var root = AppDirectory();
         var fromEnv = Environment.GetEnvironmentVariable("PICHAT_SERVER");
         if (!string.IsNullOrWhiteSpace(fromEnv) && File.Exists(fromEnv))
         {
-            return fromEnv.EndsWith(".js", StringComparison.OrdinalIgnoreCase)
-                ? ("node", new[] { fromEnv }, System.IO.Path.GetDirectoryName(fromEnv)!)
-                : (fromEnv, Array.Empty<string>(), System.IO.Path.GetDirectoryName(fromEnv)!);
+            return ("node", new[] { fromEnv }, System.IO.Path.GetDirectoryName(fromEnv)!);
         }
 
-        for (var dir = root; dir is not null; dir = System.IO.Path.GetDirectoryName(dir))
+        // 在仓库里：用仓库里刚编出来的那份（改完代码不用重新编 exe）
+        for (var dir = AppDirectory(); dir is not null; dir = System.IO.Path.GetDirectoryName(dir))
         {
-            var exe = System.IO.Path.Combine(dir, "dist", "pichat.exe");
-            if (File.Exists(exe)) { return (exe, Array.Empty<string>(), System.IO.Path.GetDirectoryName(exe)!); }
-
             var script = System.IO.Path.Combine(dir, "out", "server", "serverMain.js");
             if (File.Exists(script)) { return ("node", new[] { script }, dir); }
+        }
+
+        // 不在仓库里（exe 被拷到别处）：用嵌在这个 exe 里的那份
+        if (Payload.Present)
+        {
+            try
+            {
+                var bundle = Payload.Unpack();
+                return ("node", new[] { bundle }, System.IO.Path.GetDirectoryName(bundle)!);
+            }
+            catch (Exception err)
+            {
+                AppLog.Write("内嵌的后端解不出来：" + err.Message);
+            }
         }
         return null;
     }

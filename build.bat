@@ -2,9 +2,9 @@
 REM ============================================================
 REM    Outputs:
 REM      1. VSCode extension -> pi-chat-*.vsix
-REM      2. single-file backend -> dist\pichat.exe (double-click to run, see README)
-REM      3. desktop window -> desktop\PiChat\bin\Release\net8.0-windows\PiChat.exe
-REM      4. android app -> android\app\build\outputs\apk\debug\app-debug.apk
+REM      2. desktop window -> desktop\PiChat\bin\Release\net8.0-windows\PiChat.exe
+REM         (it carries the backend inside: double-click it to run everything)
+REM      3. android app -> android\app\build\outputs\apk\debug\app-debug.apk
 REM    Usage: build.bat [skip] [skip-pichat] [skip-desktop] [skip-android]
 REM              skip          - skip npm install
 REM              skip-pichat   - skip the global pichat install
@@ -80,15 +80,14 @@ if not defined VSIX (
     exit /b 1
 )
 
-REM ---- build single-file backend -> dist\pichat.exe ----
-REM Not `npm run exe`: that runs npm run build first, whose clean step deletes the vsix made above.
-REM out\ and bin\tray.exe / bin\shot.exe are fresh from npm run package, so pack them directly.
-REM A running pichat.exe holds that file and blocks the rebuild; the error says so, close it and rerun.
+REM ---- backend payload for the desktop window -> desktop\PiChat\payload\ ----
+REM The desktop window (PiChat.exe) is the one program: the backend lives inside it.
+REM This packs out/ + media/ + bin\*.exe into that payload folder; the C# build embeds it.
 REM (Keep this file ASCII-only: cmd reads it in the OEM code page, UTF-8 bytes can swallow a CRLF.)
 echo.
-echo [build] building single-file backend (dist\pichat.exe)...
-call node scripts/build-exe.mjs
-if errorlevel 1 ( echo [err] exe packaging failed & exit /b 1 )
+echo [build] packing backend payload for the desktop window...
+call node scripts/build-payload.mjs
+if errorlevel 1 ( echo [err] payload packing failed & exit /b 1 )
 
 REM ---- install global pichat command (backend + media, see package.json files) ----
 REM out/ was just compiled, install straight from it; the panel html comes from the backend.
@@ -157,7 +156,6 @@ REM ---- summary ----
 echo.
 echo [build] === build done ===
 echo   VSIX: %VSIX%
-echo   EXE : dist\pichat.exe
 if not "%SKIP_DESKTOP%"=="1" if exist "desktop\PiChat\bin\Release\net8.0-windows\PiChat.exe" echo   DESKTOP: desktop\PiChat\bin\Release\net8.0-windows\PiChat.exe
 if not "%SKIP_ANDROID%"=="1" if exist "android\app\build\outputs\apk\debug\app-debug.apk" echo   APK : android\app\build\outputs\apk\debug\app-debug.apk
 if not "%SKIP_PICHAT%"=="1" echo   pichat: installed (if one is running, restart it to pick up the new build)

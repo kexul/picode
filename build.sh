@@ -67,11 +67,8 @@ if ! npm i -g .; then
 fi
 
 echo
-echo "[build] 打一个单文件可执行（dist/pichat，自带界面文件，借本机的 Node）..."
-node scripts/build-exe.mjs
-
-echo
 echo "[build] === 好了 ==="
 echo "  起后端：pichat --cwd ~/你的项目目录"
-echo "  或者直接跑那个单文件：./dist/pichat            （双击也行，会自动打开浏览器）"
+echo "  Windows 上那个桌面小窗口（带托盘和主界面，后端也嵌在它里面）不在这条路上编："
+echo "  在 Windows 里跑 build.bat，或者 npm run desktop。"
 echo "  已经在跑的后端要重启一次才会用上新编的代码。"

@@ -13,7 +13,7 @@
 import * as cp from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import { appVersion, isPackaged, mediaDir } from "./appAssets";
+import { appVersion, mediaDir } from "./appAssets";
 import { PiChatWebServer, type WebServerSettings } from "./webChatServer";
 import { ChatHost } from "./chatHost";
 import { readServerConfig, updateServerConfig, seedPrompts } from "./serverConfig";import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
@@ -125,10 +125,6 @@ function stamp(): string {
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
-    // 被单文件 exe（壳）起来的：日志由壳写进文件，双击时的默认参数（家目录 + 开浏览器）
-    // 也由壳给，这里只管一件事 —— 撞上“已经有一个在跑”时把界面打开，别报错了事。
-    const packaged = isPackaged();
-
     const args = parseServerArgs(argv);
     if (args.help) { console.log(usageText()); return; }
     if (args.version) { console.log(VERSION); return; }
@@ -137,14 +133,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     const log = (text: string) => console.log(`[${stamp()}] ${text}`);
 
     // 单实例：已经在跑就报出它的地址，不再起第二个（两个后端会让手机分不清连哪个）。
-    // 双击 exe 撞上这种情况是常态（人以为没开）：那就只把那个界面打开，不再报错退出。
     const running = await findRunningServer();
     if (running) {
-        if (packaged) {
-            log(`已经有一个 Pi Chat 在跑了：${running.url}（这次只把界面打开）`);
-            openInDefaultBrowser(running.url);
-            return;
-        }
         console.error(`已经有一个 Pi Chat 后端在跑了：${running.url}`);
         console.error("（想再起一个就先停掉它；一个后端就能同时接手机、电脑浏览器。）");
         process.exitCode = 1;
