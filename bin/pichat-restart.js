@@ -13,7 +13,9 @@
  *      单文件 exe（计划里 mode = "exe"）是 `npm run exe`（重新打包那个 exe）。
  *      成功才起后端；失败就停在这儿（后端不再起来，修好后再手工起一次）。
  *   4. 照老后端当初的命令行把后端起回来：同一个端口、同一个会话目录 —— 页面在原来的
- *      地址上一连就回来了。新后端放后台跑，自己退出。
+ *      地址上一连就回来了。新后端放后台跑。
+ *   5. 顺手把桌面那个小窗口与安卓 app 也编了（有源码、有工具才编；编不过只记日志，
+ *      不影响已经跑着的后端）。
  *
  * 编译输出与新后端的日志都追加到计划里的 logFile（默认 ~/.pi/pichat/restart.log）：
  * 重启之后原来那个终端就看不到什么了，出问题只能看这份日志。
@@ -37,6 +39,8 @@ const START_VERIFY_MS = 2000;
 const PULL_TIMEOUT_MS = 120000;
 /** 重新打包 exe 最多等多久（编译 + 打包）。 */
 const BUILD_TIMEOUT_MS = 15 * 60 * 1000;
+/** 顺手编桌面窗口 / 安卓 app 最多等多久（gradle 第一次跑可能要几分钟）。 */
+const CLIENT_BUILD_TIMEOUT_MS = 10 * 60 * 1000;
 
 function stamp() {
     const d = new Date();
@@ -164,6 +168,33 @@ function startBackend(plan, logFd) {
     return child;
 }
 
+/**
+ * 顺手把桌面那个小窗口和安卓 app 也编了。
+ *
+ * 这两样不是后端的一部分：编不过只在日志里记一笔，后端照常起来（跟 build.bat 那边一个规矩：
+ * 缺工具 / 缺 SDK 都是跳过，不是失败）。没装 .NET SDK、没装 JDK、没配 Android SDK 都会走到这里。
+ */
+async function buildClients(plan, logFd) {
+    // 桌面小窗口：WPF，只有 Windows 有
+    const desktopProject = path.join(plan.repoDir, "desktop", "PiChat", "PiChat.csproj");
+    if (process.platform === "win32" && fs.existsSync(desktopProject)) {
+        const code = await run(`dotnet build -c Release "${desktopProject}"`, plan.repoDir, logFd, CLIENT_BUILD_TIMEOUT_MS);
+        write(logFd, code === 0
+            ? "桌面小窗口编好了（desktop/PiChat/bin/Release/net8.0-windows/PiChat.exe）。"
+            : "桌面小窗口没编过（不影响后端；多半是没装 .NET 8 SDK）。");
+    }
+
+    // 安卓 app：跟着仓库里那个 Gradle 工程编（要 JDK 17+ 和 Android SDK）
+    const androidDir = path.join(plan.repoDir, "android");
+    const gradlew = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
+    if (fs.existsSync(path.join(androidDir, gradlew))) {
+        const code = await run(`"${path.join(androidDir, gradlew)}" assembleDebug`, androidDir, logFd, CLIENT_BUILD_TIMEOUT_MS);
+        write(logFd, code === 0
+            ? "安卓 app 编好了（android/app/build/outputs/apk/debug/app-debug.apk）。"
+            : "安卓 app 没编过（不影响后端；多半是没装 JDK / Android SDK，见 android/README.md）。");
+    }
+}
+
 async function main() {
     const planPath = process.argv[2];
     if (!planPath) {
@@ -234,7 +265,11 @@ async function main() {
     } else {
         write(logFd, "后端起来就退了，看上面几行的输出。");
         process.exitCode = 1;
+        return;
     }
+
+    // 5. 顺手编桌面那个小窗口与安卓 app（编不过只记一笔，后端已经在跑了）
+    await buildClients(plan, logFd);
 }
 
 main().catch((err) => {
