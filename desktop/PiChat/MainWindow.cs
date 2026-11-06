@@ -131,11 +131,13 @@ internal sealed class MainWindow : Window
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         var settingsButton = new Button
         {
-            Content = "\u2699",
-            Width = 26,
-            Height = 26,
-            FontSize = 14,
+            // 跟界面上那颗「设置」同一个图标（media/chat.js 里 ICONS.sliders：三条滑杆）
+            Content = SlidersIcon(Gray),
+            Width = 28,
+            Height = 28,
             Padding = new Thickness(0),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
             ToolTip = "设置（后端地址）",
         };
         settingsButton.Click += (_, _) => ShowSettings();
@@ -891,6 +893,51 @@ internal sealed class MainWindow : Window
     }
 
     // ---------------------------------------------------------------- 小工具
+
+    /// <summary>
+    /// 设置那颗按钮上的图标：跟界面上那颗「设置」一模一样（三条滑杆，见 media/chat.js 的 ICONS.sliders）。
+    /// 那个是 16×16 的 SVG（fill:none、描边 1.4）；这里用一丘 Canvas 把同样的几笔画出来。
+    /// </summary>
+    private static FrameworkElement SlidersIcon(Brush color)
+    {
+        const double stroke = 1.4;
+        var canvas = new Canvas { Width = 16, Height = 16 };
+
+        void Bar(double x1, double y1, double x2, double y2)
+        {
+            canvas.Children.Add(new Line
+            {
+                X1 = x1, Y1 = y1, X2 = x2, Y2 = y2,
+                Stroke = color,
+                StrokeThickness = stroke,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+            });
+        }
+        void Knob(double cx, double cy, double r)
+        {
+            var circle = new Ellipse
+            {
+                Width = r * 2,
+                Height = r * 2,
+                Stroke = color,
+                StrokeThickness = stroke,
+                Fill = null,
+            };
+            Canvas.SetLeft(circle, cx - r);
+            Canvas.SetTop(circle, cy - r);
+            canvas.Children.Add(circle);
+        }
+
+        Bar(2, 4.5, 8.2, 4.5);
+        Bar(11.8, 4.5, 14, 4.5);
+        Bar(2, 11.5, 3.7, 11.5);
+        Bar(7.3, 11.5, 14, 11.5);
+        Knob(10, 4.5, 1.8);
+        Knob(5.5, 11.5, 1.8);
+
+        return new Viewbox { Width = 19, Height = 19, Child = canvas };
+    }
 
     /// <summary>
     /// 左下角那颗齿轮：弹一个小窗口换后端地址（不在主界面上占地方）。
