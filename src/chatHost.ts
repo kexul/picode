@@ -17,11 +17,10 @@
  */
 import * as crypto from "crypto";
 import * as path from "path";
-import { spawn } from "child_process";
 import type { AskRequest } from "./askProtocol";
 import { writeAskAnswer } from "./askProtocol";
 import type { MessageSink } from "./sessionRuntime";
-import { ChatControllerBase, type ViewOptionItem, type WorkspacePage, desktopAppPath } from "./chatControllerBase";
+import { ChatControllerBase, type ViewOptionItem, type WorkspacePage } from "./chatControllerBase";
 import type { TurnEndInfo } from "./runtimeTypes";
 import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig, type ServerPairing } from "./serverConfig";
@@ -51,6 +50,7 @@ import type { BashTaskInfo } from "./bashProtocol";
 import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { DesktopLive } from "./desktopLive";
+import { DesktopNotice, openInBrowser } from "./desktopNotice";
 import { describeRestart } from "./serverRestart";
 import type { SessionRuntime } from "./sessionRuntime";
 import { clipText } from "./messageUtils";
@@ -111,11 +111,6 @@ export interface ChatHostOptions {
      * 推给别的后端时要用它认出“这条别推给自己”。不知道就不推。
      */
     selfPageUrl?: () => string | undefined;
-    /**
-     * 通知区域那颗图标的菜单里点了「退出」时调它（由 serverMain 那边实现：停网页服务、
-     * 收掉会话，然后这个进程自己退）。不给就是点了没反应。
-     */
-    quitBackend?: () => void;
 }
 
 /**
@@ -289,6 +284,13 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private readonly desktopLive = new DesktopLive();
     /** 直连那几路（`/live`）的编号：一条请求一个号，新旧两条不会互相误杀。 */
     private desktopLiveSeq = 0;
+    /** 右下角那张提醒卡片（见 bin/notice.cs）：有事才起它，没有托盘、没有主界面。 */
+    private readonly notice = new DesktopNotice({
+        log: (text) => this.log(text),
+        onClick: (key) => this.openNotice(key),
+    });
+    /** 卡片点开要去哪儿（卡片标识 → 地址）：跟卡片一起留，最多几十条。 */
+    private readonly noticeLinks = new Map<string, string>();
 
     constructor(private readonly options: ChatHostOptions) {
         super("server");
@@ -297,38 +299,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         // 「项目与会话」下半那份目录清单这时先扫出来（见 sessionStore 的 listProjectDirs）：
         // 扫一次就定下来，第一条打开面板就不用再等这一趟
         void listProjectDirs();
-    }
-
-    /**
-     * 后端起来、地址也有了以后调一次：把桌面那个小窗口拉起来。
-     *
-     * 它起来只待在托盘里（`--hidden`），左键点那颗图标才开主界面。拉的是 desktop/PiChat
-     * 编出来的那个 exe（见 desktopAppPath）；没编出来就什么都不做 —— 这台机器上就没有
-     * 托盘和提醒卡片了，其余照常（浏览器页面、手机 app 都不受影响）。
-     */
-    public startDesktopApp(url: string | undefined): void {
-        const exe = desktopAppPath();
-        if (!exe) { return; }
-        const args = ["--hidden"];
-        if (url) { args.push("--url", url); }
-        try {
-            spawn(exe, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
-            this.log(`桌面那个小窗口已经叫起来了：${exe}`);
-        } catch (err: any) {
-            this.log(`叫不起桌面那个小窗口（${exe}）：${err?.message ?? String(err)}`);
-        }
-    }
-
-    /**
-     * 桌面那个小窗口的托盘菜单里点了「退出」：把整个后端关掉（见 ChatHostOptions.quitBackend）。
-     */
-    public requestQuit(): void {
-        const quit = this.options.quitBackend;
-        if (!quit) {
-            this.log("那个小窗口里点了「退出」，但这边不知道该怎么退（不是 pichat 起的？）。");
-            return;
-        }
-        quit();
     }
 
     // ========================================================================
@@ -851,36 +821,97 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /**
      * 会话有事了（跑完一轮 / 模型在等你答选择题）。
      *
-     * 推给了别的机器就到此为止：这台也不弹（桌面那个小窗口与连在这台上的手机都走 /phone 那条，
-     * 一起安静下来 —— 人只盯得了那台，两个地方同时弹没意义）。
-     * 没推出去（没填别处、或者填的就是这台自己的地址）才在这台弹。
+     * 推给了别的机器就到此为止：这台也不弹（人只盯得了那台，两个地方同时弹没意义）。
+     * 没推出去（没填别处、或者填的就是这台自己的地址）才在这台右下角弹一张卡片。
      *
-     * @returns 同基类：是不是推给别处了（推了这台连手机 / 小窗口都不推）
+     * @returns 同基类：是不是推给别处了（推了这台就不弹）
      */
     protected override trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done", ask?: PhoneAsk): boolean {
         if (super.trayNote(sessionId, name, summary, kind)) { return true; }
-        this.pushPhoneNote(sessionId, name, summary, kind, undefined, ask);
+        // 基类返回 false 有两种情况：推给别处了、以及“这个会话 / 这个开关不弹”。
+        // 后一种在这台也不弹，别再往下走到卡片那儿。
+        if (!sessionId || !this.notifyTurnEndEnabled()) { return false; }
+        this.showNotice(
+            sessionId,
+            (name || "").trim() || "会话",
+            clipText(summary, PHONE_TEXT_CHARS),
+            kind === "ask",
+            this.localPageUrl(sessionId),
+        );
+        this.log(`[提醒] 弹了一张（${kind === "ask" ? "等你答一句" : "跑完一轮"}）：${(name || "").trim() || "会话"}`);
         return false;
     }
 
     /**
      * 别的机器推来一条“有事”（已经配对的那台推过来的，见 pushRemoteNote）。
      *
-     * 这台也要弹：桌面那个小窗口与连在这台上的手机都靠 /phone 那条，所以照本机那一条的样子
-     * 推进去；标识用 /phone 那边的 `remote:` 写法（哪台 + 哪个会话），这样在那台上回话时
-     * 会照 {@link remoteNotes} 记的那笔转回原来那台（见 phoneSend）。
+     * 在这台照弹一张（人不会只坐一台前面），点了打开那台的页面并切到那个会话。
      */
     protected override trayNoteRemote(notice: RemoteNotice, fromAddress?: string): void {
-        // 这台根本没有那个会话：手机上那条拿“哪台 + 会话”当标识，回话会照它转回去
-        this.pushPhoneNote(
-            "remote:" + notice.label + ":" + notice.sessionId,
-            notice.label + " · " + notice.name,
-            notice.text ?? "",
-            notice.kind === "ask" ? "ask" : "done",
-            notice.label,
-        );
+        const key = "remote:" + notice.label + ":" + notice.sessionId;
+        if (this.notifyTurnEndEnabled()) {
+            const base = (notice.pageUrl ?? "").replace(/\/+$/, "");
+            this.showNotice(
+                key,
+                notice.label + " · " + notice.name,
+                notice.text ?? "",
+                notice.kind === "ask",
+                base ? base + "/?session=" + encodeURIComponent(notice.sessionId) : "",
+            );
+            this.log(`[提醒] 弹了一张（别的机器推来的）：${notice.label} · ${notice.name}`);
+        }
         // 回话要的那笔账照旧（摆在后头：旧版本推来的没 pageUrl，卡片照样得弹）
         super.trayNoteRemote(notice, fromAddress);
+    }
+
+    /**
+     * 弹一张提醒卡片。
+     * @param url 点它的时候打开哪儿（空串 = 点了没处去，就只是关掉）
+     */
+    private showNotice(key: string, title: string, body: string, ask: boolean, url: string): void {
+        if (url) {
+            this.noticeLinks.delete(key);
+            this.noticeLinks.set(key, url);
+            while (this.noticeLinks.size > 30) {
+                const oldest = this.noticeLinks.keys().next().value;
+                if (oldest === undefined) { break; }
+                this.noticeLinks.delete(oldest);
+            }
+        }
+        this.notice.show(key, title, body, ask);
+    }
+
+    /** 收走某个会话那一张卡片（它说上话了、被关掉了、那道题答完了）。 */
+    private closeNotice(key: string): void {
+        this.noticeLinks.delete(key);
+        this.notice.close(key);
+    }
+
+    /** 人点了卡片：打开那个会话的页面（本机的是这台后端的地址，别处推来的是那台的地址）。 */
+    private openNotice(key: string): void {
+        const url = this.noticeLinks.get(key);
+        this.noticeLinks.delete(key);
+        if (url) { openInBrowser(url); }
+    }
+
+    /** 这台后端的页面地址，带着要切到哪个会话（页面自己会照它切过去）。 */
+    private localPageUrl(sessionId: string): string {
+        const base = this.options.selfPageUrl?.();
+        if (!base) { return ""; }
+        return base.replace(/\/+$/, "") + "/?session=" + encodeURIComponent(sessionId);
+    }
+
+    /**
+     * 用户在某个会话里说了一句（任何一块屏上敲的、别处转过来的）：那个会话的提醒已经过时了，收走。
+     */
+    public override onUserMessage(panelId: string): void {
+        this.closeNotice(panelId);
+    }
+
+    /** 关掉一个会话：它的提醒卡片跟着收走（那个会话都不在了）。 */
+    public override closeSession(panelId: string): void {
+        this.closeNotice(panelId);
+        super.closeSession(panelId);
     }
 
     /**
@@ -2282,6 +2313,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         state.settled = true;
         if (state.timer) { clearTimeout(state.timer); state.timer = undefined; }
         this.openCards.delete(id);
+        // 这道题有眉目了（答了 / 没得答了）：那个会话的提醒也跟着收走
+        if (state.sessionId) { this.closeNotice(state.sessionId); }
         for (const target of Array.from(state.screens)) {
             this.sendOverlayTo(target, { type: "askCardDone", id, answer: answer ?? null });
         }
@@ -2487,6 +2520,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         this.disposed = true;
         if (this.remotePollTimer) { clearInterval(this.remotePollTimer); this.remotePollTimer = undefined; }
         this.desktopLive.stop();
+        this.notice.dispose();
         this.disposeAllPickers();
         this.disposeAllCards();
         this.disposeAllConversations();

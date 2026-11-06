@@ -758,6 +758,9 @@ export class SessionRuntime {
         }
         // 插件代发的消息：不当命令解析、也不按「人打的」那种猜法走，投递方式由调用方指定。
         const fromPlugin = opts?.followUp === true || opts?.steer === true;
+        // 人在这会话里说上话了：那个会话的提醒（跑完一轮 / 在等你答一句）已经过时，收走。
+        // steer 也算（那也是人刚敲的一句话）；插件自己代发的不算（子会话结果、自动接着干那些）。
+        if (opts?.followUp !== true) { this.host.onUserMessage?.(this.id); }
         // pi 的内置斜杠命令只在终端界面里处理，走 RPC 发过去只会当成普通文字交给模型。
         // 其中 /compact 插件自己接手：改发 pi 的 compact 命令（pi 的 prompt 里做不了这个）。
         // /auto 同样由插件接手（开关状态、判官那一轮的提示都在宿主那边）。

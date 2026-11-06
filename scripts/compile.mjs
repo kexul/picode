@@ -1,5 +1,5 @@
 /*
- * 把三份编译配置一次跑完，外加两支小程序（桌面截图、通知区域那颗图标）。
+ * 把三份编译配置一次跑完，外加三支小程序（桌面截图、桌面实时画面、右下角提醒卡片）。
  *
  * 为什么要分三份：插件那侧（一屏界面 + 一双打开文件的手）与后端那侧（会话、网页服务）
  * 编到不同目录，打进插件包里的只有插件那侧；第三份不产出文件，只把 src 下全部源码
@@ -8,7 +8,7 @@
  *
  *   node scripts/compile.mjs           挨个跑一遍，哪份错了就停在那里（npm run compile）
  *   node scripts/compile.mjs --watch   三份各起一个 tsc -w，改一下就编一下（npm run watch；
- *                                      两支小程序不在里面，改过 bin/shot.cs 或 bin/live.cs
+ *                                      三支小程序不在里面，改过 bin/*.cs
  *                                      就跑一次 npm run compile）
  */
 import { spawn, spawnSync } from "node:child_process";
@@ -33,12 +33,14 @@ const projects = [
     { label: "全量检查", config: "tsconfig.json" },
 ];
 
-// 两支小程序的源码与产物（见 bin/shot.cs、bin/live.cs）：
+// 三支小程序的源码与产物（见 bin/shot.cs、bin/live.cs、bin/notice.cs）：
 // 都用系统自带的 csc.exe 编，随 npm 包一起装到后端那边。
 const SHOT_SOURCE = path.join(repoRoot, "bin", "shot.cs");
 const SHOT_EXE = path.join(repoRoot, "bin", "shot.exe");
 const LIVE_SOURCE = path.join(repoRoot, "bin", "live.cs");
 const LIVE_EXE = path.join(repoRoot, "bin", "live.exe");
+const NOTICE_SOURCE = path.join(repoRoot, "bin", "notice.cs");
+const NOTICE_EXE = path.join(repoRoot, "bin", "notice.exe");
 
 const watch = process.argv.includes("--watch");
 
@@ -71,6 +73,7 @@ async function compileOnce() {
     }
     compileShotExe();
     compileLiveExe();
+    compileNoticeExe();
     process.stdout.write("都编完了。\n");
 }
 
@@ -106,6 +109,23 @@ function compileLiveExe() {
         references: ["System.Drawing.dll"],
         whySkip: "桌面实时画面只在 Windows 上能用，没必要编",
         whyFail: "长按截图按钮看桌面实时画面就用不了",
+    });
+}
+
+/**
+ * 编右下角那张提醒卡片（bin/notice.cs → bin/notice.exe）。
+ *
+ * 跟截屏那支一样不算构建失败：没有它只是这台机器上不弹提醒（浏览器页面里照样看得到）。
+ */
+function compileNoticeExe() {
+    runCsc({
+        label: "提醒卡片小程序",
+        source: NOTICE_SOURCE,
+        output: NOTICE_EXE,
+        target: "winexe",
+        references: [],
+        whySkip: "提醒卡片只在 Windows 上弹，没必要编",
+        whyFail: "这台机器上就不弹提醒了（浏览器页面里照样看得到）",
     });
 }
 

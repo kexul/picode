@@ -10,12 +10,12 @@
  * 参数：--cwd 会话目录、--port / --host 监听、--open 起完打开浏览器、--help / --version。
  * 设置文件的路径会打在屏幕上；配置项的默认值见 serverConfig.ts。
  */
-import * as cp from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import { appVersion, mediaDir } from "./appAssets";
 import { PiChatWebServer, type WebServerSettings } from "./webChatServer";
 import { ChatHost } from "./chatHost";
+import { openInBrowser } from "./desktopNotice";
 import { displayName } from "./pageHtml";
 import { readServerConfig, updateServerConfig, seedPrompts } from "./serverConfig";
 import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
@@ -100,26 +100,19 @@ export function usageText(): string {
         "  --version     看版本号",
         "",
         `设置文件：${serverConfigFile()}（第一次启动会写一份默认的出来，改完重启生效）`,
-        "停止：回到这个终端按 Ctrl+C，或在通知区域那颗 Pi Chat 图标上右键点「退出」",
+        "停止：回到这个终端按 Ctrl+C",
     ].join("\n");
 }
 
 /**
  * 收摊完了才退，而且隔一拍再退。
  *
- * 为什么不在 stop 完了当场 process.exit：通知区域那颗图标是个子进程，收摊时刚把它关掉，
- * 它那两根管道的收尾还没走完；这时候硬退，Windows 上会撞进一个 libuv 断言
- * （`!(handle->flags & UV_HANDLE_CLOSING)`，Node 的老毛病）。隔一拍就没事，也不耽误什么。
+ * 为什么不在 stop 完了当场 process.exit：会话进程、那支画提醒卡片的小程序都是子进程，
+ * 收摊时刚把它们关掉，它们那几根管道的收尾还没走完；这时候硬退，Windows 上会撞进一个
+ * libuv 断言（`!(handle->flags & UV_HANDLE_CLOSING)`，Node 的老毛病）。隔一拍就没事。
  */
 function exitSoon(): void {
     setTimeout(() => process.exit(0), 150);
-}
-
-/** 用系统默认浏览器打开地址（打不开也不影响：地址已经打在屏幕上了）。 */
-function openInDefaultBrowser(url: string): void {
-    const command = process.platform === "win32" ? "cmd" : process.platform === "darwin" ? "open" : "xdg-open";
-    const cmdArgs = process.platform === "win32" ? ["/c", "start", "", url] : [url];
-    try { cp.spawn(command, cmdArgs, { detached: true, stdio: "ignore" }).unref(); } catch { /* 打不开算了 */ }
 }
 
 function stamp(): string {
@@ -234,7 +227,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         console.log("       只想自己用就加 --host 127.0.0.1，或把设置文件里的 webServer.host 改成 127.0.0.1。");
         console.log("");
     }
-    if (args.open) { openInDefaultBrowser(started.url); }
+    if (args.open) { openInBrowser(started.url); }
 
     let stopping = false;
     const onSignal = (signal: string): void => {
@@ -289,14 +282,11 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
     // 设置浮层里那颗「编译并重启」：按钮点下去要的是「怎么起的、起在哪儿」，所以由这一层接；
     // 收摊（停网页服务、杀掉 pi 进程）也在这一层，见下面给 restartBackend 赋值那块。
     let restartBackend = (): { ok: boolean; reason?: string } => ({ ok: false, reason: "后端还没起来，不能重启。" });
-    // 桌面那个小窗口里那颗「退出」：也是这一层接（要先停网页服务、再收会话，最后自己退）
-    let quitBackend = (): void => { /* 还没起来：没什么可退的 */ };
     // 推给别的后端时要认出“这条别推给自己”，可地址要等服务起来才知道：先留个口子，起来后插进去
     let pageUrl: string | undefined;
     const host = new ChatHost({
         cwd, log,
         restartBackend: () => restartBackend(),
-        quitBackend: () => quitBackend(),
         selfPageUrl: () => pageUrl,
     });
     const server = new PiChatWebServer(MEDIA_DIR, host, {
@@ -332,8 +322,6 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
         throw new Error("网页服务没起来（端口 / 监听地址可能不对）");
     }
     pageUrl = url;
-    // 地址有了就把桌面那个小窗口拉起来（托盘图标、提醒卡片、主界面都在它那儿）
-    host.startDesktopApp(url);
 
     // 地址文件：单实例判断与"插件找后端"（第二步）都靠它。
     const parsed = new URL(url);
@@ -374,14 +362,6 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
             setTimeout(() => { void stop(true).finally(() => exitSoon()); }, 500);
         }
         return result;
-    };
-
-    // 那个小窗口里点了「退出」：跟终端里按 Ctrl+C 一样 —— 停网页服务、收掉会话、清地址文件，然后退。
-    // 不静悄悄退：页面该知道是后端关了（不是网络断开），省得它一直重连。
-    quitBackend = () => {
-        if (stopped) { return; }
-        log("桌面那个小窗口里点了「退出」：收摊退出。");
-        void stop().finally(() => exitSoon());
     };
 
     return { url, cwd, host0: bindHost, host, server, stop };

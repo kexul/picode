@@ -72,7 +72,6 @@ import {
 import { promptText } from "./promptText";
 import { dropAuto, readAuto, writeAuto } from "./autoFiles";
 import type { RpcSessionState } from "./piRpc";
-import { appRoot } from "./appAssets";
 import { clipText } from "./messageUtils";
 import { REMOTE_TEXT_CHARS, type RemoteNotice } from "./remoteNotice";
 import type { PhoneAsk } from "./phoneInbox";
@@ -155,24 +154,6 @@ export interface WorkspacePage {
     offset: number;
     /** 已经列过的目录（按真实路径归一，见 dirKey）：同一个项目只占一行。 */
     seen: Set<string>;
-}
-
-/**
- * 桌面那个小窗口的程序在哪儿（见 desktop/README.md）：托盘的「打开」与点卡片都开它。
- *
- * 没编出来就没有（那就照旧开浏览器）。先看环境变量 PICHAT_DESKTOP_APP，
- * 再看看这个跟仓库放在一起的默认位置。
- */
-export function desktopAppPath(): string | undefined {
-    const candidates = [
-        process.env.PICHAT_DESKTOP_APP,
-        path.join(appRoot(), "desktop", "PiChat", "bin", "Release", "net8.0-windows", "PiChat.exe"),
-    ];
-    for (const candidate of candidates) {
-        if (!candidate) { continue; }
-        try { if (fs.existsSync(candidate)) { return candidate; } } catch { /* 看一下就行 */ }
-    }
-    return undefined;
 }
 
 export abstract class ChatControllerBase implements RuntimeHost {
@@ -1895,11 +1876,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         }
     }
 
-    /**
-     * 人在桌面那个小窗口的托盘菜单里点了「退出」：跟终端里按 Ctrl+C 一样收拾掉整个后端。
-     * 默认什么也不做：插件那边没有“整个退出”这回事，后端自己起的那个（见 ChatHost）会接手。
-     */
-    public requestQuit(): void { /* 默认不管 */ }
 
     /**
      * 把这条“有事”推给别的后端（设置里「消息推送」填了别处的地址才有这回事）。
@@ -1946,6 +1922,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     protected onKnownFilesChangedByHost(): void { /* 默认无操作 */ }
+
+    /**
+     * 用户在某个会话里说上话了（见 {@link RuntimeHost.onUserMessage}）。
+     * 默认什么也不做；独立后端那层拿它把右下角那张提醒卡片收掉（见 ChatHost.onUserMessage）。
+     */
+    public onUserMessage(_panelId: string): void { /* 默认不管 */ }
 
     // ========================================================================
     //  发送 / 中止（一个会话一个目标）

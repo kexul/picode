@@ -34,6 +34,7 @@ function parseArgs(argv, options = {}) {
         if (arg === "--help" || arg === "-h") { parsed.help = true; continue; }
         if (arg === "--open") { parsed.open = true; continue; }
         if (arg === "--fake-pi") { parsed.fakePi = true; continue; }
+        if (arg === "--notify-turn-end") { parsed.notifyTurnEnd = true; continue; }
         if (arg === "--headed") { parsed.headed = true; continue; }
         if (arg === "--keep") { parsed.keep = true; continue; }
         if (arg === "--skip-ready") { parsed.skipReady = true; continue; }
@@ -89,6 +90,7 @@ function usage() {
         "  --piPath PATH      覆盖 pi 可执行文件路径",
         "  --theme light|dark 界面颜色（默认 light）",
         "  --fake-pi          用假模型（dev/fakePi.js）：不调真模型，按剧本秒回，验界面不用等",
+        "  --notify-turn-end  跑完一轮照常弹右下角那张提醒卡片（默认关掉：自动化跑一遍会一直弹，太吵）",
         "  --headed           显示浏览器窗口（默认无头）；配合 --keep 可以留在现场点",
         "  --chrome PATH      浏览器可执行文件（默认自动找 Chrome / Edge）",
         "  --width / --height 视口像素（默认 420x900，手机大小）",
