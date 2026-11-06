@@ -235,29 +235,7 @@ public class SessionActivity extends Activity {
         params.bottomMargin = dp(8);
         box.setLayoutParams(params);
 
-        // 头一行：状态点 + 现在在干什么
-        LinearLayout head = new LinearLayout(this);
-        head.setOrientation(LinearLayout.HORIZONTAL);
-        head.setGravity(Gravity.CENTER_VERTICAL);
-
-        TextView dot = new TextView(this);
-        dot.setText("●");
-        dot.setTextSize(10);
-        dot.setTextColor(running ? 0xFF2F7BE0 : 0xFF2E7D32);
-        head.addView(dot);
-        if (running) { breathe(dot); }
-
-        TextView state = new TextView(this);
-        String detail = session == null ? "" : session.activityDetail;
-        String label = running ? (detail.isEmpty() ? "正在跑…" : detail) : "这一轮已经跑完了";
-        state.setText(" " + label);
-        state.setTextSize(13);
-        state.setSingleLine(true);
-        state.setEllipsize(TextUtils.TruncateAt.END);
-        state.setTextColor(running ? 0xFF2F7BE0 : 0xFF2E7D32);
-        head.addView(state, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        box.addView(head);
-
+        // 只有正文，不另写一行「正在跑」：头顶那行状态字不要了
         JSONObject reply = Store.lastReply(sessionId);
         String text = reply == null ? "" : reply.optString("text", "");
         if (text.trim().isEmpty()) {
@@ -265,26 +243,15 @@ public class SessionActivity extends Activity {
             hint.setText(running ? "（还没开始说话）" : "（这个会话还没有跑完过一轮）");
             hint.setTextSize(13);
             hint.setTextColor(0xFF9A9A9A);
-            hint.setPadding(0, dp(6), 0, 0);
             box.addView(hint);
             return box;
         }
 
         LinearLayout body = new LinearLayout(this);
         body.setOrientation(LinearLayout.VERTICAL);
-        body.setPadding(0, dp(6), 0, 0);
         Markdown.render(this, body, reply.optJSONArray("blocks"), text, 14, 0xFF202020, 0xFF7A7A7A);
         box.addView(body);
         return box;
-    }
-
-    /** 在跑的那颗蓝点：一明一暗地呼吸（跟网页端那颗点一个意思）。 */
-    private void breathe(View dot) {
-        android.animation.ObjectAnimator anim = android.animation.ObjectAnimator.ofFloat(dot, "alpha", 1f, 0.3f);
-        anim.setDuration(700);
-        anim.setRepeatMode(android.animation.ValueAnimator.REVERSE);
-        anim.setRepeatCount(android.animation.ValueAnimator.INFINITE);
-        anim.start();
     }
 
     /** 一条：对方发的靠左、底色浅灰；自己发的靠右、底色浅蓝。 */

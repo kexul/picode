@@ -590,10 +590,35 @@ internal sealed class MainWindow : Window
     private void RebuildSessionList()
     {
         _sessionList.Children.Clear();
-        foreach (var state in OrderedSessions())
+        // 按哪台机器分组：同一台排一块（组内照旧按最后一条的时间倒序），
+        // 组与组之间，最近有事的那个组排前面（GroupBy 保持原顺序，而原顺序就是按时间排的）。
+        foreach (var group in OrderedSessions().GroupBy(state => MachineOf(state.Info)))
         {
-            _sessionList.Children.Add(MakeSessionRow(state));
+            _sessionList.Children.Add(MakeGroupHead(group.Key));
+            foreach (var state in group) { _sessionList.Children.Add(MakeSessionRow(state)); }
         }
+    }
+
+    /// <summary>这个会话在哪台机器上（后端没给就当本机）。</summary>
+    private static string MachineOf(SessionInfo info) =>
+        string.IsNullOrWhiteSpace(info.Machine) ? "本机" : info.Machine!;
+
+    /// <summary>组头：这一组是哪台机器上的会话。</summary>
+    private TextBlock MakeGroupHead(string machine) => new()
+    {
+        Text = machine,
+        FontSize = 12,
+        FontWeight = FontWeights.SemiBold,
+        Foreground = Gray,
+        Margin = new Thickness(12, 10, 12, 4),
+        TextTrimming = TextTrimming.CharacterEllipsis,
+    };
+
+    /// <summary>会话名：机器名已经写在组头上了，名字开头那个「家里 · 」就不必再带一遍。</summary>
+    private static string RowName(SessionInfo info)
+    {
+        var prefix = MachineOf(info) + " · ";
+        return info.Name.StartsWith(prefix, StringComparison.Ordinal) ? info.Name[prefix.Length..] : info.Name;
     }
 
     private Border MakeSessionRow(SessionState state)
@@ -621,7 +646,7 @@ internal sealed class MainWindow : Window
         title.Children.Add(dot);
         var nameBlock = new TextBlock
         {
-            Text = info.Name,
+            Text = RowName(info),
             FontSize = 13,
             FontWeight = FontWeights.SemiBold,
             Foreground = Ink,
@@ -668,7 +693,7 @@ internal sealed class MainWindow : Window
             BorderThickness = new Thickness(0, 0, 0, 1),
             Cursor = Cursors.Hand,
             Child = box,
-            ToolTip = info.Name,
+            ToolTip = RowName(info),
         };
         border.MouseLeftButtonDown += (_, _) => SelectSession(info.Id);
         return border;
@@ -687,15 +712,6 @@ internal sealed class MainWindow : Window
         };
         dot.BeginAnimation(OpacityProperty, fade);
     }
-
-    /// <summary>activity 那几个词说成人话（后端给的是 thinking / working / idle 这些）。</summary>
-    private static string ActivityLabel(string? activity) => activity switch
-    {
-        "thinking" => "在想",
-        "working" => "在干",
-        "idle" => "",
-        _ => activity ?? "",
-    };
 
     private static Border Badge(string text, Brush foreground, Brush background) => new()
     {
@@ -898,35 +914,11 @@ internal sealed class MainWindow : Window
         };
     }
 
-    /// <summary>「这一轮」那张卡：正在跑就在这儿看它说到哪儿了。</summary>
+    /// <summary>「这一轮」那张卡：正在跑就在这儿看它说到哪儿了（只有正文，不另写一行「正在跑」）。</summary>
     private FrameworkElement MakeLiveCard(SessionState state)
     {
         var info = state.Info;
         var stack = new StackPanel();
-
-        var head = new StackPanel { Orientation = Orientation.Horizontal };
-        var dot = new Ellipse
-        {
-            Width = 8,
-            Height = 8,
-            Fill = info.Running ? Blue : Green,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 6, 0),
-        };
-        if (info.Running) { Breathe(dot); }
-        head.Children.Add(dot);
-        var what = info.Running
-            ? (string.IsNullOrWhiteSpace(info.ActivityDetail) ? (ActivityLabel(info.Activity) is { Length: > 0 } label ? label + "…" : "正在跑…") : info.ActivityDetail!)
-            : "这一轮已经跑完了";
-        head.Children.Add(new TextBlock
-        {
-            Text = what,
-            FontSize = 12,
-            FontWeight = FontWeights.SemiBold,
-            Foreground = info.Running ? Blue : Green,
-            VerticalAlignment = VerticalAlignment.Center,
-        });
-        stack.Children.Add(head);
 
         var reply = _lastReply;
         if (reply is null || string.IsNullOrWhiteSpace(reply.Text))
@@ -936,14 +928,12 @@ internal sealed class MainWindow : Window
                 Text = info.Running ? "（还没开始说话）" : "（这个会话还没有跑完过一轮）",
                 FontSize = 12,
                 Foreground = Gray,
-                Margin = new Thickness(0, 6, 0, 0),
             });
         }
         else
         {
             stack.Children.Add(new Border
             {
-                Margin = new Thickness(0, 6, 0, 0),
                 Child = Markdown.Render(reply.Blocks, reply.Text ?? "", 13, Ink, Gray),
             });
         }

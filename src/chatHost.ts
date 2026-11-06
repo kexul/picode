@@ -847,6 +847,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             items.push({
                 id: rt.id,
                 name: this.sessionDisplayName(rt),
+                // 这台后端跑的会话都算「本机」：别的机器推来的那些走不到这里（见 webChatServer 的 phoneSessionsPayload）
+                machine: "本机",
                 // 跟网页端一个规矩：后台还有命令没跑完（bashRunning）也算「正在跑」
                 running: !!rt.streaming || rt.hasRunningBashTasks(),
                 activity: rt.activity || "idle",

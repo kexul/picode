@@ -79,6 +79,8 @@ internal sealed class SessionInfo
 {
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
+    /// <summary>哪台机器上的会话：左边列表按它分组（同一台排一块，组头写它）。</summary>
+    public string? Machine { get; set; }
     public bool Running { get; set; }
     /// <summary>正在干什么（thinking / working / idle）。</summary>
     public string? Activity { get; set; }

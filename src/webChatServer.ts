@@ -413,6 +413,11 @@ export interface PhoneNote {
 export interface PhoneSessionInfo {
     id: string;
     name: string;
+    /**
+     * 哪台机器上的会话：列表按它分组（同一台排一块，组头写它）。
+     * 本机的写「本机」，别的机器推来的写那台的名字（它就是名字开头那个「家里 · 」）。
+     */
+    machine: string;
     /** 这一轮正在跑。 */
     running: boolean;
     /** 正在干什么（网页顶条上那颗点旁边那句也是这个：thinking / 工具名 / idle）。 */
@@ -1861,7 +1866,9 @@ export class PiChatWebServer {
             if (known.has(sessionId) || !sessionId.startsWith("remote:")) { continue; }
             const last = this.phoneInbox.last(sessionId);
             if (!last) { continue; }
-            items.push({ id: sessionId, name: last.name, running: false, remote: true, last });
+            // 那台的名字就写在 last.from 里（旧记录没带就从标识里取：`remote:哪台:会话`）
+            const machine = last.from || sessionId.split(":")[1] || "另一台";
+            items.push({ id: sessionId, name: last.name, machine, running: false, remote: true, last });
             known.add(sessionId);
         }
         // 不在了的那些会话，留着的那几条也没人看得见了

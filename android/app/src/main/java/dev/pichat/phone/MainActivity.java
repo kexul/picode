@@ -27,7 +27,10 @@ import android.widget.Toast;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 一屏会话列表：一行一个会话，有事的排前面，点一行进去看那个会话。
@@ -255,9 +258,37 @@ public class MainActivity extends Activity {
             return;
         }
         emptyBox.setVisibility(View.GONE);
+        // 按哪台机器分组：同一台排一块（组内照旧按最后一条的时间倒序），
+        // 组与组之间，最近有事的那个组排前面（先出现的那一组就是最近的）。
+        Map<String, List<Store.Session>> groups = new LinkedHashMap<>();
         for (Store.Session session : sessions) {
-            list.addView(row(session));
+            List<Store.Session> group = groups.get(session.machine);
+            if (group == null) {
+                group = new ArrayList<>();
+                groups.put(session.machine, group);
+            }
+            group.add(session);
         }
+        for (Map.Entry<String, List<Store.Session>> group : groups.entrySet()) {
+            list.addView(groupHead(group.getKey()));
+            for (Store.Session session : group.getValue()) { list.addView(row(session)); }
+        }
+    }
+
+    /** 组头：这一组是哪台机器上的会话。 */
+    private View groupHead(String machine) {
+        TextView head = new TextView(this);
+        head.setText(machine);
+        head.setTextSize(13);
+        head.setTextColor(0xFF8A8A8A);
+        head.setPadding(dp(10), dp(10), dp(10), dp(2));
+        return head;
+    }
+
+    /** 会话名：机器名已经写在组头上了，名字开头那个「家里 · 」就不必再带一遍。 */
+    private static String rowName(Store.Session session) {
+        String prefix = session.machine + " · ";
+        return session.name.startsWith(prefix) ? session.name.substring(prefix.length()) : session.name;
     }
 
     /** 列表上一行：状态点、会话名、最后一条的一两句、时间。 */
@@ -298,7 +329,7 @@ public class MainActivity extends Activity {
         row.addView(middle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         TextView name = new TextView(this);
-        name.setText(session.name);
+        name.setText(rowName(session));
         name.setTextSize(16);
         name.setTextColor(0xFF1E1E1E);
         name.setSingleLine(true);

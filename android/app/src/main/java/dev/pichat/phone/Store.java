@@ -96,6 +96,8 @@ final class Store {
     static final class Session {
         final String id;
         final String name;
+        /** 哪台机器上的会话：列表按它分组（同一台排一块，组头写它）。 */
+        final String machine;
         final boolean running;
         final boolean remote;
         /** 正在干什么（thinking / working / idle）。 */
@@ -108,6 +110,8 @@ final class Store {
             id = json.optString("id", "");
             String raw = json.optString("name", "");
             name = raw.isEmpty() ? "会话" : raw;
+            String given = json.optString("machine", "");
+            machine = given.isEmpty() ? machineFor(id) : given;
             running = json.optBoolean("running", false);
             remote = json.optBoolean("remote", false);
             activity = json.optString("activity", "");
@@ -119,6 +123,7 @@ final class Store {
         private Session(String id, String name, boolean running, boolean remote, Note last) {
             this.id = id;
             this.name = name;
+            this.machine = machineFor(id);
             this.running = running;
             this.remote = remote;
             this.activity = "";
@@ -126,20 +131,30 @@ final class Store {
             this.last = last;
         }
 
-        private Session(String id, String name, boolean running, boolean remote,
-                        String activity, String activityDetail, Note last) {
-            this.id = id;
-            this.name = name;
-            this.running = running;
-            this.remote = remote;
-            this.activity = activity == null ? "" : activity;
-            this.activityDetail = activityDetail == null ? "" : activityDetail;
+        private Session(Session base, Note last) {
+            this.id = base.id;
+            this.name = base.name;
+            this.machine = base.machine;
+            this.running = base.running;
+            this.remote = base.remote;
+            this.activity = base.activity;
+            this.activityDetail = base.activityDetail;
             this.last = last;
         }
 
         Session withLast(Note note) {
-            return new Session(id, name, running, remote, activity, activityDetail, note);
+            return new Session(this, note);
         }
+    }
+
+    /** 后端没给「哪台」时自己认（旧版本、或者刚推来的一条）：`remote:哪台:会话` 那种就是其他机器的。 */
+    private static String machineFor(String id) {
+        if (id != null && id.startsWith("remote:")) {
+            String[] parts = id.split(":");
+            if (parts.length > 2 && !parts[1].isEmpty()) { return parts[1]; }
+            return "另一台";
+        }
+        return "本机";
     }
 
     private static final Map<String, Session> sessions = new LinkedHashMap<>();
