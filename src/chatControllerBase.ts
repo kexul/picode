@@ -72,8 +72,10 @@ import { promptText } from "./promptText";
 import { dropAuto, readAuto, writeAuto } from "./autoFiles";
 import type { RpcSessionState } from "./piRpc";
 import { TrayIcon } from "./trayIcon";
+import { appRoot } from "./appAssets";
 import { plainPreview } from "./messageUtils";
 import { REMOTE_TEXT_CHARS, pushSwitchSession, type RemoteNotice } from "./remoteNotice";
+import type { PhoneAsk } from "./phoneInbox";
 import { machineName } from "./pageHtml";
 import type { ProjectDirEntry } from "./sessionStore";
 
@@ -158,6 +160,24 @@ export interface WorkspacePage {
     offset: number;
     /** 已经列过的目录（按真实路径归一，见 dirKey）：同一个项目只占一行。 */
     seen: Set<string>;
+}
+
+/**
+ * 桌面那个小窗口的程序在哪儿（见 desktop/README.md）：托盘的「打开」与点卡片都开它。
+ *
+ * 没编出来就没有（那就照旧开浏览器）。先看环境变量 PICHAT_DESKTOP_APP，
+ * 再看看这个跟仓库放在一起的默认位置。
+ */
+function desktopAppPath(): string | undefined {
+    const candidates = [
+        process.env.PICHAT_DESKTOP_APP,
+        path.join(appRoot(), "desktop", "PiChat", "bin", "Release", "net8.0-windows", "PiChat.exe"),
+    ];
+    for (const candidate of candidates) {
+        if (!candidate) { continue; }
+        try { if (fs.existsSync(candidate)) { return candidate; } } catch { /* 看一下就行 */ }
+    }
+    return undefined;
 }
 
 export abstract class ChatControllerBase implements RuntimeHost {
@@ -951,8 +971,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
     //  判官起不来、或者答不出个所以然，一律当"继续" —— 这是个无情的继续机器：
     //  宁可多跑一轮，也不让人回来手动打一句「继续」。
     //
-    //  后台还有命令在跑时不叫判官：那条命令跑完的结果本来就会当一条新消息交回这个会话，
-    //  等它进来、那一轮跑完再判（见 autoLoopOnTurnEnd）。
+    //  后台还有命令在跑时不叫判官（也不往对话里写话）：那条命令跑完的结果本来就会当一条新消息
+    //  交回这个会话，等它进来、那一轮跑完再判（见 autoLoopOnTurnEnd）。
     //
     //  判官走的是派子会话同一条路（tabaSpawn + hidden）：不写名录、不给模型看见、
     //  跑完不交回结果；它跑完了在这里读最后那条回复（见 autoJudgeOnTurnEnd）。
@@ -1071,15 +1091,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (this.autoJudgeRun.has(info.panelId)) { return; }   // 上一个判官还在（正常不会）：不叠着开
         const rt = this.panels.get(info.panelId);
         if (!rt) { return; }
-        // 后台还有命令在跑：这一轮先不叫判官。它跑完的结果本来就当一条新消息交回这个会话，
-        // 那一轮跑完再看要不要继续 —— 两边一起催，同一个会话就撞在一处了。
-        if (rt.hasRunningBashTasks()) {
-            this.postToSession(info.panelId, {
-                type: "system",
-                text: "后台还有命令在跑，这一轮先不叫判官：等它跑完的结果交回来，那一轮跑完再看要不要继续。",
-            });
-            return;
-        }
+        // 后台还有命令在跑：这一轮先不叫判官，也不往对话里写话。它跑完的结果本来就当一条新消息
+        // 交回这个会话，那一轮跑完再看要不要继续 —— 两边一起催，同一个会话就撞在一处了。
+        if (rt.hasRunningBashTasks()) { return; }
         if (auto.rounds >= MAX_AUTO_ROUNDS) {
             this.autoOff(rt, `连着跑了 ${auto.rounds} 轮，先停下（要接着跑就再点一下那颗按钮）。`);
             return;
@@ -1803,7 +1817,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * @param summary 面板上显示的一句话摘要（跑完一轮是回复的头几句，选择题是题干）
      * @param kind 这一条算跑完一轮，还是模型在等你答一句
      */
-    protected trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): void {
+    protected trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done", _ask?: PhoneAsk): void {
         if (!sessionId || !this.notifyTurnEndEnabled()) { return; }
         const label = (name || "").trim() || "会话";
         // 面板上那条摘要照旧短（一块小弹窗，两行就够）；推给别处的那份留长一点：

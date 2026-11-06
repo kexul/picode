@@ -4,7 +4,7 @@
  *
  * 要验的几件事：
  *   1. 一轮跑完、后台命令还在跑：不派判官（轮数还是 0、列表里没有判官），
- *      只留一行说明「等它跑完的结果交回来再看」；
+ *      也不往对话里写话（悄悄跳过）；
  *   2. 那条命令跑完、结果当一条新消息交回来、这一轮也跑完：这时候才派判官
  *      （judge 那一轮该说「继续」就继续、该说「结束」就关开关）；
  *   3. 界面上「后台任务」那一块照常在（不是把后台命令当没看见）。
@@ -104,6 +104,8 @@ module.exports = async (page) => {
   await page.click("#autoBtn");
   await page.sleep(600);
   check("（前提）自动模式点开了", (await ind()).on, await ind());
+  // 开开关会往消息流里写一句说明：这一跑的「安静跳过」就跟着这个基线比
+  const sysAfterOn = await systemSays();
   await page.send("后台跑一会");
   await page.waitAnswer("我把活扔到后台了");
   const bg = await bgBlock();
@@ -125,7 +127,8 @@ module.exports = async (page) => {
   check("后台命令还在跑的时候不叫判官（那颗按钮上一直没提判官）", !sawJudge, sawJudge);
   check("后台命令还在跑的时候不叫判官（轮数还是 0）", !roundsMoved, roundsMoved);
   const saidSkip = await systemSays();
-  check("系统提示说清了为什么这一轮没叫判官", saidSkip.includes("后台还有命令在跑"), saidSkip.slice(-160));
+  check("安静地跳过：不往对话里写任何说明（消息流里还是只有开开关那一句）",
+    saidSkip === sysAfterOn && !saidSkip.includes("后台还有命令"), { sys: saidSkip.slice(-160) });
   const rowsWhileBg = await openRows();
   check("后台命令还在跑的时候列表里只有主会话（没有判官）",
     rowsWhileBg.length === 1 && !rowsWhileBg.some((r) => r.includes("判官")), rowsWhileBg);

@@ -175,7 +175,7 @@ FAKEPI_THINK_MS=4000 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script de
 # 直接替你点它推荐的那一项（不然会话就卡在那张卡片上）。判官循环就在这个脚本里跑完，不用另外配参数：
 npm run web:shot -- --fake-pi --script dev/autoLoop.js
 
-# 验「自动模式遇上后台命令」：这一轮跑完了、后台还有命令在跑时不叫判官（只留一行说明），
+# 验「自动模式遇上后台命令」：这一轮跑完了、后台还有命令在跑时不叫判官（悄悄跳过，不写话），
 # 等那条命令跑完、结果交回会话、那一轮也跑完了才叫；后台命令由假模型照真扩展的发暗号演：
 npm run web:shot -- --fake-pi --script dev/autoBg.js
 
