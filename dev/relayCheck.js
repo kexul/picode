@@ -390,6 +390,30 @@ function sessionFrom(list, id) {
     // 新后端起手就该知道"还有一条在跑"（中转给了一份快照），不用等下一次事件
     const backRunning = await page5.waitFor((m) => m.type === "bashTask" && m.task && m.task.status === "running", 20000);
     check(!!backRunning, "重启以后界面立刻知道还有一条在跑（中转给的快照）");
+    // 重启以后点开提示框要的那几样（工具参数 / 工具输出）：内存里的账空了，得回 pi 现取
+    const treeLink2 = await RelayLink.connect(readAddr());
+    const pi5 = treeLink2 ? (await treeLink2.list()).find((p) => p.panelId === longId) : undefined;
+    let toolCallId = "";
+    if (treeLink2 && pi5) {
+        const msgs = JSON.parse((await askPiMessages(treeLink2, pi5.key, 20000)) || "{}");
+        const list = msgs && msgs.messages ? msgs.messages : [];
+        for (const m of list) {
+            if (!m || m.role !== "assistant" || !Array.isArray(m.content)) { continue; }
+            for (const c of m.content) {
+                if (c && c.type === "toolCall" && typeof c.id === "string") { toolCallId = c.id; break; }
+            }
+            if (toolCallId) { break; }
+        }
+        treeLink2.close();
+    }
+    check(!!toolCallId, "消息树里挑得到一条工具调用（" + toolCallId + "）");
+    if (toolCallId) {
+        await page5.post({ type: "loadDetails", sessionId: longId, keys: ["args:" + toolCallId, "result:" + toolCallId] });
+        const got = await page5.waitFor((m) => m.type === "details", 20000);
+        const items = (got && got.items) || {};
+        check(Object.keys(items).length > 0, "重启以后点开提示框照样取得到（现问 pi 一份再裁）");
+    }
+
     const handed = await page5.waitFor((m) => JSON.stringify(m).includes("跑完了"), 40000);
     check(!!handed, "跑完的结果照样交回了会话（重启窗口里发生的也没丢）");
     page5.close();

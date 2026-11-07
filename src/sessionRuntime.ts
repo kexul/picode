@@ -1878,15 +1878,61 @@ export class SessionRuntime {
      * 已经挤掉了（留得太久）的进 missing，界面上把那行“正在取…”换成“取不到了”。
      */
     public loadDetails(keys: string[]): void {
+        // 上限只防着乱来：一屏里的条目再多也就几百个，取前 200 个够
+        const wanted = keys.slice(0, 200).filter((key) => typeof key === "string" && key !== "");
         const items: Record<string, string> = {};
-        const missing: string[] = [];
-        // 上限只防着乱来：一屏里的条目再多也就几百个，取前 200 个够了
-        for (const key of keys.slice(0, 200)) {
-            if (typeof key !== "string" || !key) { continue; }
+        let missing: string[] = [];
+        for (const key of wanted) {
             const text = this.omittedText.get(key);
             if (text === undefined) { missing.push(key); } else { items[key] = text; }
         }
-        this.post({ type: "details", items, missing });
+        if (missing.length === 0) {
+            this.post({ type: "details", items, missing });
+            return;
+        }
+        // 有取不到的：先去 pi 那儿把消息树要一份，把工具参数 / 工具输出那几样重新裁一遍
+        //（重启过以后这些内存里的账就空了）。思考全文那个键是按"第几段"编的，换了进程就对不上，
+        // 那种照旧算取不到 —— 不过重画一遍就会重新有新的键。
+        void (async () => {
+            await this.refillToolDetails();
+            missing = [];
+            for (const key of wanted) {
+                const text = this.omittedText.get(key);
+                if (text === undefined) { missing.push(key); } else { items[key] = text; }
+            }
+            this.post({ type: "details", items, missing });
+        })();
+    }
+
+    /**
+     * 去 pi 那儿把消息树要一份，只为把「工具参数 / 工具输出」的全文重新裁一遍、记回内存
+     * （重启后端以后这些内存里的账是空的，界面上点开提示框会显示"取不到了"）。
+     * 用的就是重放历史时那几个同一个函数，所以裁出来的东西跟原来一模一样。
+     */
+    private async refillToolDetails(): Promise<void> {
+        if (!this.client || !this.client.isRunning()) { return; }
+        const resp = await this.request<{ messages: any[] }>({ type: "get_messages" });
+        const messages: any[] = resp?.data?.messages ?? [];
+        if (messages.length === 0) { return; }
+        const toolResults = new Map<string, any>();
+        for (const m of messages) {
+            if (m && m.role === "toolResult" && typeof m.toolCallId === "string") {
+                toolResults.set(m.toolCallId, m);
+            }
+        }
+        for (const m of messages) {
+            if (!m || m.role !== "assistant" || !Array.isArray(m.content)) { continue; }
+            for (const c of m.content) {
+                if (!c || c.type !== "toolCall") { continue; }
+                const id = typeof c.id === "string" ? c.id : "";
+                if (!id) { continue; }
+                this.summaryArgs(id, c.arguments);
+                const res = toolResults.get(id);
+                if (res) {
+                    this.clipDetail(`result:${id}`, extractResultText(res.content ?? res) ?? "");
+                }
+            }
+        }
     }
 
     /** 一条消息的指纹：优先用 pi 带回的 id；没有就用角色 + 正文开头（反正在同一会话里足够独特）。 */
