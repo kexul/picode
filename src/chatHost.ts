@@ -1100,14 +1100,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return machineName();
     }
 
-    /** 设置面板里「有事也推到别的机器」那一行现在填着什么（设置文件里的 notify.pushTo）。 */
-    protected override notifyPushTargets(): string[] {
-        return [...readServerConfig().config.notify.pushTo];
+    /** 设置面板里「远程机器」那一行现在填着什么（设置文件里的 machines）。 */
+    protected override remoteMachineTargets(): string[] {
+        return [...readServerConfig().config.machines];
     }
 
-    /** 「消息推送」空着时那句灰字例子：这台机器自己的地址。 */
-    protected override notifyPushExample(): string {
-        return this.options.selfPageUrl?.()?.replace(/\/+$/, "") ?? super.notifyPushExample();
+    /** 「远程机器」空着时那句灰字例子：这台机器自己的地址。 */
+    protected override remoteMachineExample(): string {
+        return this.options.selfPageUrl?.()?.replace(/\/+$/, "") ?? super.remoteMachineExample();
     }
 
     /**
@@ -1192,7 +1192,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             }
         } else if (action === "machineLabel") {
             updateServerConfig({ label: String(value ?? "").trim() });
-        } else if (action === "notifyPushTo") {
+        } else if (action === "machines") {
             // 填的是给人看的写法：逗号 / 空格 / 换行都算分隔；没写 http:// 的补上，
             // 没写端口的补上 Pi Chat 出厂那个（51883）——否则按 http 的默认端口 80 算，打不通。
             // 地址合不合法由设置文件那层把关（不合适的会被丢掉，面板上就看不见它们了）。
@@ -1203,7 +1203,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 .map((item) => withDefaultPort(/^https?:\/\//i.test(item) ? item : "http://" + item))
                 // 填本机自己的地址等于没填（面板上照样显示它，但设置文件里不留这行废话）
                 .filter((item) => !isOwnPage(item, this.options.selfPageUrl?.()));
-            updateServerConfig({ notify: { pushTo: urls } });
+            updateServerConfig({ machines: urls });
         } else if (action === "theme") {
             const next = value === "dark" || value === "light"
                 ? value
@@ -1842,17 +1842,17 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
-     * 把这条“有事”推给别的后端（设置里「消息推送」填了别处的地址才有这回事）。
+     * 把这条“有事”推给别的后端（设置里「远程机器」填了别处的地址才有这回事）。
      * 推的是一条最小的通知：哪台、哪个会话、叫什么、说了什么。
      * 推不过去就算了（对方没起、网断了都一样：不重试、不攒着）。
      * @returns 推给了别处没有（推了这台就不自己弹：一个人只盯得了一台机器）
      */
     protected override pushRemoteNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): boolean {
-        const notify = readServerConfig().config.notify;
+        const machines = readServerConfig().config.machines;
         const base = this.options.selfPageUrl?.();
         if (!base) { return false; }
         // 填的是这台自己的地址（面板上默认就显示它）等于“提醒还在这台”：不推给自己，本机自己弹
-        const targets = notify.pushTo.filter((target) => !isOwnPage(target, base));
+        const targets = machines.filter((target) => !isOwnPage(target, base));
         if (targets.length === 0) { return false; }
         const notice = {
             // 那边卡片上写的就是这台的「标签」

@@ -76,7 +76,7 @@ export function webAppManifest(): Record<string, unknown> {
 }
 
 /**
- * 页面允许连到哪些“别的机器”：设置里「消息推送」那栏填的地址（多台 pichat 互联）。
+ * 页面允许连到哪些“别的机器”：设置里「远程机器」那栏填的地址（多台 pichat 互联）。
  *
  * 浏览器页面的安全策略默认只放本站（`'self'`），页面去问另一台的 `/health`、`/sessions`、
  * 把消息发到它的 `/api` 时会被浏览器直接拦掉。这里把人自己写下的那些地址原样放行。
@@ -84,7 +84,7 @@ export function webAppManifest(): Record<string, unknown> {
  */
 function peerSources(): string {
     const origins: string[] = [];
-    for (const item of readServerConfig().config.notify.pushTo ?? []) {
+    for (const item of readServerConfig().config.machines ?? []) {
         let url: URL;
         try {
             url = new URL(String(item));

@@ -335,13 +335,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract mutateViewOption(action: string, value?: string): void;
     /** 有事（跑完一轮 / 模型在等你答题）时要不要弹提醒（各平台的子类去读自己的存储）。 */
     protected abstract notifyTurnEndEnabled(): boolean;
-    /** 设置面板里「消息推送」那一行现在填着什么（没有就是空表）。 */
-    protected notifyPushTargets(): string[] { return []; }
+    /** 设置面板里「远程机器」那一行现在填着什么（没有就是空表）。 */
+    protected remoteMachineTargets(): string[] { return []; }
     /**
-     * 设置面板里「消息推送」那一行空着时显示的例子：一般就是这台机器自己的地址，
-     * 人一看就知道“留着它”是什么意思（提醒还在这台）。
+     * 设置面板里「远程机器」那一行空着时显示的例子：就是这台机器自己的地址，
+     * 人一看就知道该填什么形状（填别的电脑上 pichat 的地址）。
      */
-    protected notifyPushExample(): string { return "http://10.0.0.2:51883"; }
+    protected remoteMachineExample(): string { return "http://10.0.0.2:51883"; }
     /** 设置里「标签」现在填着什么（空 = 用机器名）。 */
     protected machineLabel(): string { return ""; }
     /** 「标签」空着时那句灰字提示：就是机器名，人一眼知道空着会用哪个。 */
@@ -516,15 +516,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 value: this.machineLabel(),
             },
             {
-                action: "notifyPushTo",
-                label: "消息推送",
-                desc: "",
-                section: "通知",
+                action: "machines",
+                label: "远程机器",
+                desc: "填别的电脑上 pichat 的地址：填上就能在这台看到它的会话，那边跑完一轮也会提醒到这台。",
+                section: "连接",
                 check: null,
                 kind: "text",
-                placeholder: this.notifyPushExample(),
-                // 没填过就显示这台机器自己的地址：留着它 = 提醒还在这台，改成别的机器 = 挪过去
-                value: (this.notifyPushTargets().length > 0 ? this.notifyPushTargets() : [this.notifyPushExample()]).join(", "),
+                placeholder: this.remoteMachineExample(),
+                value: (this.remoteMachineTargets().length > 0
+                    ? this.remoteMachineTargets()
+                    : [this.remoteMachineExample()]).join(", "),
             },
         ];
     }
@@ -1779,7 +1780,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /**
      * 某个会话有事了（跑完一轮、模型在等你答一道选择题）。
      *
-     * 提醒送到哪台是二选一（一个人只盯得了一台机器）：设置里「消息推送」填了别处的地址，
+     * 提醒送到哪台是二选一（一个人只盯得了一台机器）：设置里「远程机器」填了别处的地址，
      * 就只推到那边，这台不弹；没填（或者填的就是这台自己的地址）就在这台弹。
      *
      * 这一层只办“推给别处”那一半；“在这台弹”那一半由子类接着办（见 ChatHost.trayNote），
@@ -1798,7 +1799,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /**
-     * 把这条“有事”推给别的后端（设置里「消息推送」填了别处的地址才有这回事）。
+     * 把这条“有事”推给别的后端（设置里「远程机器」填了别处的地址才有这回事）。
      * 默认不推：只有知道自己地址的宿主才推得出去（见 ChatHost）。
      * @returns 是不是推给“别处”了（推了的话，这台就不再自己弹）
      */

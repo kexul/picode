@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * 验「消息推送」这一路：设置文件里 notify.pushTo 填了别处的地址，跑完一轮就往那儿推一条。
+ * 验「远程机器」这一路：设置文件里 machines 填了别处的地址，跑完一轮就往那儿推一条。
  *
  *   npm run web:shot -- --fake-pi --script dev/remotePush.js
  *
@@ -32,7 +32,7 @@ module.exports = async (page) => {
         try { config = JSON.parse(before || "{}"); } catch { config = {}; }
         // 标签写成写下的那个，收到的通知里带的就是它
         config.label = "公司那台";
-        config.notify = { ...(config.notify || {}), pushTo: [`http://127.0.0.1:${port}`] };
+        config.machines = [`http://127.0.0.1:${port}`];
         fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), "utf8");
 
