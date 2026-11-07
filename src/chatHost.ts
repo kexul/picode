@@ -16,6 +16,7 @@
  * 本类不引用 `vscode`。插件那一侧是纯客户端（跟浏览器页面一样，走 HTTP 连后端），不继承这份。
  */
 import * as crypto from "crypto";
+import * as fs from "fs";
 import * as path from "path";
 import type { AskRequest } from "./askProtocol";
 import { writeAskAnswer } from "./askProtocol";
@@ -2110,8 +2111,16 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const current = this.currentExtensions();
         const fresh = list.filter((item) => {
             if (!item.panelId || !item.sessionFile) { return false; }
-            const stale = (item.extensions ?? [])
-                .filter((file) => current.size > 0 && !current.has(path.resolve(file)));
+            const stale = (item.extensions ?? []).filter((file) => {
+                const abs = path.resolve(file);
+                if (current.size > 0 && !current.has(abs)) { return true; }
+                // 文件名里带的是插件版本号：版本没变、内容变了（刚 git pull 下来的那种）时，
+                // 只看路径是看不出来的。桥文件在 pi 起来之后又被写过 = 那只是旧代码。
+                if (item.startedAt > 0) {
+                    try { return fs.statSync(abs).mtimeMs > item.startedAt + 1000; } catch { return false; }
+                }
+                return false;
+            });
             if (stale.length === 0) { return true; }
             this.log(`这个会话的 pi 跑的是旧版桥接扩展（${path.basename(stale[0])}），不认回来了，让它重开一只`);
             return false;
