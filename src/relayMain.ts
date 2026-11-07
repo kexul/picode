@@ -423,7 +423,7 @@ function serveEvents(req: http.IncomingMessage, res: http.ServerResponse): void 
         const replyId = url.searchParams.get("replyId") ?? "";
         const wait = Math.min(Math.max(Number(url.searchParams.get("wait") ?? 20000) || 20000, 0), 60000);
         const ev = Array.from(bridgeEvents.values()).find((item) => item.replyId === replyId);
-        if (!ev) { sendJson(res, 404, { state: "unknown" }); return; }
+        if (!ev) { log(`长轮询 ${replyId}：不认识（unknown）`); sendJson(res, 404, { state: "unknown" }); return; }
         if (ev.answered) { sendJson(res, 200, { state: "answered", value: ev.value ?? null }); return; }
         let done = false;
         const finish = (hit: BridgeEvent) => {
@@ -580,6 +580,7 @@ function handle(
         }
         case "reply": {
             const ev = Array.from(bridgeEvents.values()).find((item) => item.replyId === msg.replyId);
+            log(`收到回执 ${msg.replyId}：${ev ? "命中（kind=" + ev.kind + " id=" + ev.id + "）" : "没找到这个 replyId"}`);
             if (!ev) { return; }
             ev.answered = true;
             ev.value = msg.value;
