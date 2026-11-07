@@ -126,6 +126,19 @@ function joinedText(page, only) {
         .join("");
 }
 
+/** 拿状态码（不解析正文）。 */
+function postStatus(baseUrl, pageId, msg) {
+    return new Promise((done) => {
+        const body = JSON.stringify(msg);
+        const r = http.request(new URL("api?pageId=" + pageId, baseUrl), {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
+        }, (res) => { res.resume(); res.on("end", () => done(res.statusCode)); });
+        r.on("error", () => done(0));
+        r.end(body);
+    });
+}
+
 /** 会话表里那个会话（后端推的 sessionList）。 */
 function sessionFrom(list, id) {
     const msg = [...list.messages].reverse().find((m) => m.type === "sessionList");
@@ -182,6 +195,9 @@ function sessionFrom(list, id) {
     // ---- 三、起新后端：会话该被认回来 ----
     console.log("三、新后端把会话认回来");
     back = await startBackend({ cwd: workDir, port: 0, host: "127.0.0.1" });
+    // 刚重启时页面手里还是上一份服务发的标识、推送流还在重连：这时发一条不该被 409 顶回去
+    const early = await postStatus(back.url, "page-from-before-restart", { type: "switchSession", sessionId });
+    check(early === 204 || early === 200, "刚重启时拿旧标识发消息也照收（不是 409，实际 " + early + "）");
     page = openPage(back.url, "probe-2");
     const list2 = await page.waitFor((m) => m.type === "sessionList" && (m.sessions || []).length > 0);
     check(!!list2, "会话表回来了");

@@ -1800,9 +1800,17 @@ export class PiChatWebServer {
 
     private async handleApi(req: http.IncomingMessage, res: http.ServerResponse, pageId: string): Promise<void> {
         const broadcaster = this.host.getBroadcaster();
-        if (!broadcaster.isKnown(pageId)) {
-            this.sendText(req, res, 409, "此页面不是当前这个网页服务发出的（服务可能重启过）。刷新页面就好。");
+        if (!pageId) {
+            this.sendText(req, res, 409, "缺页面标识。刷新页面就好。");
             return;
+        }
+        if (!broadcaster.isKnown(pageId)) {
+            // 后端刚重启过（「编译并重启」现在不掐会话）时，页面手里还是上一份服务发的标识，
+            // 而它的推送流多半正在重连。以前这里一律 409，页面就停在"刷新一下"那一屏；
+            // 现在照收：把标识认下来、消息照常处理，回话等它的推送流连上再送。
+            // （/shot、/live 那两个口子还留着这道检查：那是"别的网站猜不到这个串"的凭据。）
+            this.hooks.log(`[页面 ${pageId}] 这个标识不是本服务发出的（多半刚重启过），照收`);
+            broadcaster.markIssued(pageId);
         }
         const text = await readBody(req, MAX_REQUEST_BYTES);
         if (text === undefined) {
