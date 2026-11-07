@@ -14,8 +14,9 @@
  * 这台机器上弹不出来（不是 Windows、那支小程序没编出来、被杀软拦了）就一路静悄悄地不发，
  * 浏览器页面里照样看得到，不该为这个拦路。
  */
-import { spawn, type ChildProcess } from "child_process";
+import { execFileSync, spawn, type ChildProcess } from "child_process";
 import * as fs from "fs";
+import * as path from "path";
 import { appBin } from "./appAssets";
 
 /** 画卡片那支小程序。 */
@@ -26,13 +27,74 @@ export function desktopNoticeSupported(): boolean {
     return process.platform === "win32" && fs.existsSync(NOTICE_EXE());
 }
 
-/** 用系统默认浏览器打开地址（打不开也不影响什么）。 */
+/**
+ * 开这个网页：默认浏览器是 Chromium 系的话，开成「应用窗口」（没有标签条、没有地址栏，
+ * 窗口里只有这一页）；其余情况交给系统默认浏览器开标签页。打不开也不影响什么。
+ *
+ * 为什么要应用窗口：浏览器不给外部程序切标签，标签开一堆时把窗口提到前面也未必看得到
+ * 我们这一页（人点了提醒卡片就是撞这个）；应用窗口里只有这一页，提上来就一定是它。
+ */
 export function openInBrowser(url: string): void {
+    const browser = findAppWindowBrowser();
+    try {
+        if (browser) {
+            spawn(browser, ["--app=" + url], { detached: true, stdio: "ignore" }).unref();
+            return;
+        }
+    } catch { /* 起不来就退回下面那条老路 */ }
     const command = process.platform === "win32" ? "cmd" : process.platform === "darwin" ? "open" : "xdg-open";
     const cmdArgs = process.platform === "win32" ? ["/c", "start", "", url] : [url];
     try {
         spawn(command, cmdArgs, { detached: true, stdio: "ignore" }).unref();
     } catch { /* 打不开算了 */ }
+}
+
+/**
+ * 吃 `--app=<地址>` 的那些浏览器：照 exe 的名字认。套壳的一般也叫 chrome.exe（比如 Helium），
+ * 所以认名字就够了，不用一支支去试。
+ */
+const APP_WINDOW_EXES = new Set(["chrome.exe", "msedge.exe", "chromium.exe", "brave.exe", "vivaldi.exe", "thorium.exe"]);
+
+/** 问过没有：undefined = 还没问过，null = 没有能开应用窗口的。 */
+let appWindowBrowser: string | null | undefined;
+
+/** 默认浏览器那支能不能开应用窗口：能就给出它的路径，不能就是 null。 */
+function findAppWindowBrowser(): string | null {
+    if (appWindowBrowser !== undefined) { return appWindowBrowser; }
+    appWindowBrowser = null;
+    // 只管 Windows（提醒卡片本身也只在 Windows 上有）；别的系统上退回开标签页那条路
+    if (process.platform === "win32") {
+        const exe = defaultBrowserExe();
+        if (exe && APP_WINDOW_EXES.has(path.basename(exe).toLowerCase()) && fs.existsSync(exe)) {
+            appWindowBrowser = exe;
+        }
+    }
+    return appWindowBrowser;
+}
+
+/** 系统默认浏览器那支的路径（问注册表；问不出来给空串）。 */
+function defaultBrowserExe(): string {
+    const progId = regValue("HKCU\\Software\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\http\\UserChoice", "ProgId");
+    if (!progId) { return ""; }
+    const command = regValue("HKCR\\" + progId + "\\shell\\open\\command", "");
+    if (!command) { return ""; }
+    // 形如 `"C:\…\chrome.exe" --single-argument %1`
+    const quoted = /^"([^"]+)"/.exec(command);
+    return quoted ? quoted[1] : (command.split(/\s+/)[0] || "");
+}
+
+/** 读一个注册表值（读不到给空串）。 */
+function regValue(key: string, value: string): string {
+    try {
+        const args = ["query", key, ...(value ? ["/v", value] : ["/ve"])];
+        const text = execFileSync("reg", args, { encoding: "utf8", windowsHide: true, timeout: 4000 });
+        const line = text.split(/\r?\n/).find((one) => /\s+REG_SZ\s+/.test(one));
+        if (!line) { return ""; }
+        const match = /\s+REG_SZ\s+/.exec(line);
+        return line.slice((match ? match.index + match[0].length : 0)).trim();
+    } catch {
+        return "";
+    }
 }
 
 export interface DesktopNoticeOptions {

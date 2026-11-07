@@ -182,31 +182,49 @@ static class Hub
     /// <summary>
     /// 把标题里带着这段字的窗口提到前面。
     ///
-    /// 找的时候从上往下数（EnumWindows 就是这个顺序），第一个对上的算数：几台浏览器都开着
-    /// 这个网页时，人最后用的那个在最上面。一个都没对上（浏览器关了、标签关了）就什么也不做。
+    /// 先找标题正正好好就是它的那个：那是「应用窗口」（开页面时用 `--app=…`，没有标签条），
+    /// 窗口里只有这一页。普通标签里的那个窗口，标题是 `<网页标题> - <浏览器名>`，排在后面找。
+    /// 两个都在时提前者：标签开一堆的时候，提到普通窗口也未必看得到我们这一页。
+    /// 一个都没对上（浏览器关了、标签关了）就什么也不做。
     /// </summary>
     private static void Raise(string title)
     {
         if (title == null || title.Length == 0) { return; }
-        found = IntPtr.Zero;
-        EnumProc proc = delegate(IntPtr hwnd, IntPtr lparam)
-        {
-            if (!IsWindowVisible(hwnd)) { return true; }
-            var text = new StringBuilder(512);
-            GetWindowText(hwnd, text, text.Capacity);
-            if (text.ToString().IndexOf(title, StringComparison.OrdinalIgnoreCase) < 0) { return true; }
-            found = hwnd;
-            return false;
-        };
-        EnumWindows(proc, IntPtr.Zero);
-        GC.KeepAlive(proc);
-        var target = found;
+        var target = Find(title, true);
+        if (target == IntPtr.Zero) { target = Find(title, false); }
         if (target == IntPtr.Zero) { return; }
         if (IsIconic(target)) { ShowWindow(target, SW_RESTORE); }
         SetForegroundWindow(target);
         // 不是前台程序叫它到前面来，Windows 一般不给办（人在别的窗口里打字时就这样）。
         // 老办法：把自己的线程和前台那个窗口的线程临时拴在一起，再叫一次。
         if (GetForegroundWindow() != target) { ForceForeground(target); }
+    }
+
+    /// <summary>
+    /// 照标题找一个窗口。从上往下数（EnumWindows 就是这个顺序），第一个对上的算数：
+    /// 几台浏览器都开着这个网页时，人最后用的那个在最上面。
+    /// </summary>
+    /// <param name="exact">标题（去掉两头空白）就是它，而不是标题里带着它</param>
+    private static IntPtr Find(string title, bool exact)
+    {
+        found = IntPtr.Zero;
+        var want = title.Trim();
+        EnumProc proc = delegate(IntPtr hwnd, IntPtr lparam)
+        {
+            if (!IsWindowVisible(hwnd)) { return true; }
+            var text = new StringBuilder(512);
+            GetWindowText(hwnd, text, text.Capacity);
+            var got = text.ToString().Trim();
+            var hit = exact
+                ? string.Equals(got, want, StringComparison.OrdinalIgnoreCase)
+                : got.IndexOf(want, StringComparison.OrdinalIgnoreCase) >= 0;
+            if (!hit) { return true; }
+            found = hwnd;
+            return false;
+        };
+        EnumWindows(proc, IntPtr.Zero);
+        GC.KeepAlive(proc);
+        return found;
     }
 
     /// <summary>拴到前台那个窗口的线程上再叫一次（不行就算了，不折腾）。</summary>
