@@ -132,7 +132,10 @@ function createHarness(options = {}) {
 
     // 后端与插件两侧都靠这个环境变量找同一份地址文件（客户端照它连后端）；
     // 指到调试目录，调试时写的设置、状态、地址都不会碰到用户真正的 ~/.pi/pichat。
-    process.env.PICHAT_HOME = SCRATCH_PICHAT_DIR;
+    // 调用方自己给了 PICHAT_HOME 就听调用方的：`dev/reconnect.js` 并行跑场景时每个场景
+    // 一个子进程、各带一份（各有各的中转与后端），这里再盖回来就全撞在一个目录上了。
+    const pichatDir = (process.env.PICHAT_HOME || "").trim() || SCRATCH_PICHAT_DIR;
+    process.env.PICHAT_HOME = pichatDir;
 
     const fake = installFakeVscode({
         cwd,
@@ -162,18 +165,18 @@ function createHarness(options = {}) {
     // 调试目录本来就是一次性的，直接重写这份存档，让每次调试都从这下面这几项开始。
     // “有事弹不弹提醒”现在只在存档里（面板里那一行），调试时默认关掉：自动化跑一遍会一直弹，太吵。
     try {
-        fs.writeFileSync(path.join(SCRATCH_PICHAT_DIR, "state.json"), JSON.stringify({
+        fs.writeFileSync(path.join(pichatDir, "state.json"), JSON.stringify({
             "piChat.notifyTurnEnd": options.notifyTurnEnd === true,
         }, null, 2));
     } catch { /* 写不进去就按默认跑 */ }
     // 子会话清单也一样：假 pi 给每个会话报的 .jsonl 是同一个文件（见 fakePi.js），
     // 留着上一跑记下的那份，下一跑里那个文件就整个被当成子会话藏起来（历史列表、自动开最近会话都受影响）。
-    try { fs.rmSync(path.join(SCRATCH_PICHAT_DIR, "child-sessions.json"), { force: true }); } catch { /* 同上 */ }
-    updateServerConfig(patch, SCRATCH_PICHAT_DIR);
+    try { fs.rmSync(path.join(pichatDir, "child-sessions.json"), { force: true }); } catch { /* 同上 */ }
+    updateServerConfig(patch, pichatDir);
     // 提示词：调试目录也要走真后端那条路（第一次把内置原文写进 config.json），
     // 不然调试会话里的提示词跟真跑起来的不一样。
-    seedPrompts(SCRATCH_PICHAT_DIR);
-    const prompts = readServerConfig(SCRATCH_PICHAT_DIR).config.prompts;
+    seedPrompts(pichatDir);
+    const prompts = readServerConfig(pichatDir).config.prompts;
 
     // 派子会话要用的文件：真后端启动器会写，这里也得写一份（不然调试时派子会话是坏的）
     ensureTabaAssets(version, prompts);

@@ -233,7 +233,9 @@ FAKEPI_THINK_MS=2500 npm run web:shot -- --fake-pi --script dev/endHint.js
 #   场景七 断线那段里模型问的选择题（连接悄悄死掉、卡片没送到），回来重连后卡片要补上、能答、
 #   场景八 补不上、只能整屏重画时（序号对不上）：只发最后一轮，更早的挂在顶上那颗
 #         「加载更早的消息」后面（按钮上写着还有多少条，点一下取回来）
-node dev/reconnect.js                    # 全部
+node dev/reconnect.js                    # 全部：每场一个子进程、并行跑（默认 3 个一起，约 1 分多钟）
+RECON_PARALLEL=5 node dev/reconnect.js    # 并行几个自己定
+node dev/reconnect.js --serial            # 一场一场跑（输出不折叠，查问题时用）
 node dev/reconnect.js --scene taillost    # 只跑某一个（逗号可写多个）
 node dev/reconnect.js --scene askcard     # 只跑场景七（断线期间问的选择题）
 RECON_HOLD_MS=60000 node dev/reconnect.js --scene both   # 锁屏时长自己定（毫秒）

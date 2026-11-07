@@ -34,14 +34,16 @@
  */
 const fs = require("fs");
 const path = require("path");
-const { createHarness } = require("./harness.js");
+const { spawn } = require("node:child_process");
+const { createHarness, SCRATCH_DIR } = require("./harness.js");
 const { openPage, sleep } = require("./cdp.js");
 
-// 假模型：慢一点，让"正在输出"的那几秒足够长（每轮思考 1200ms、文字每 6 个字 60ms）
-process.env.FAKEPI_THINK_MS = process.env.FAKEPI_THINK_MS || "1200";
-process.env.FAKEPI_TICK_MS = process.env.FAKEPI_TICK_MS || "60";
-/** 冻住 / 断网一次停多久（毫秒）：默认够假模型把一整轮跑完。 */
-const HOLD_MS = Number(process.env.RECON_HOLD_MS || 12000);
+// 假模型：节奏要慢到“正在输出”看得见，但别慢得像真的在等模型 —— 每个场景都要等它跑完一轮，
+// 节奏一慢整套就拖到好几分钟（原来是 1200ms/60ms，整套 3 分半）。
+process.env.FAKEPI_THINK_MS = process.env.FAKEPI_THINK_MS || "500";
+process.env.FAKEPI_TICK_MS = process.env.FAKEPI_TICK_MS || "25";
+/** 冻住 / 断网一次停多久（毫秒）：要够假模型把一整轮跑完（一轮约 3~4 秒，留一倍余量）。 */
+const HOLD_MS = Number(process.env.RECON_HOLD_MS || 7000);
 
 let failed = 0;
 function ok(text) { console.log("  ✔ " + text); }
@@ -335,7 +337,16 @@ async function sceneAskCard(page, harness) {
     await page.sleep(800);
     await page.shot("recon-7-askcard-done.png");
     check(done, "补回来的卡片答得下去（点完就定住）");
-    check(/用户选了|选的是/.test(await page.text()), "答案送到了模型那边（工具结果里写着你选的哪一项）");
+    // 答案在模型那一侧还要跑一小会儿（并排跑的时候更慢）：等它落到正文里再说，别用固定等待
+    {
+        const sentAt = Date.now() + 25000;
+        let said = false;
+        while (Date.now() < sentAt) {
+            if (/用户选了|选的是/.test(await page.text())) { said = true; break; }
+            await sleep(250);
+        }
+        check(said, "答案送到了模型那边（工具结果里写着你选的哪一项）");
+    }
 
     // 顺带验一下：页面手上本来就有的卡片，重连对账重发时不该被动
     // （动它就等于把人打了一半的字捎掉、把滚动位置抖一下）
@@ -763,6 +774,74 @@ async function sceneWindowed(page, harness) {
     }
 }
 
+/**
+ * 一个场景（在子进程里跑）：自己起一份后端与一块屏，跑完收摊。
+ * 每个场景一个子进程是必须的：`PICHAT_HOME` 是环境变量，而"中转"是按它找的 ——
+ * 一个进程里多份后端只能共用同一支中转，一个场景启动时会把别人正在用的收掉（并行就打架）。
+ */
+async function runOneScene(name, run) {
+    const harness = createHarness({
+        fakePi: true,
+        port: 0,                                  // 端口自己挑：并行的几场不能撞
+        log: (text) => { if (/错误|error|失败/.test(text)) { console.log("  [日志] " + text); } },
+    });
+    let open;
+    try {
+        const url = await harness.start();
+        open = await openPage({
+            url,
+            shotDir: path.join(__dirname, "shots"),
+            timeoutMs: 60000,
+        });
+        open.page.cdp.on("Runtime.consoleAPICalled", (params) => {
+            if (!params || (params.type !== "warning" && params.type !== "error")) { return; }
+            const text = (params.args || []).map((a) => (a && (a.value ?? a.description)) || "").join(" ");
+            console.log("  [页面] " + text);
+        });
+        await open.page.waitReady();
+        await watchMessages(open.page);
+        await run(open.page, harness);
+        const errs = open.page.pageErrors || [];
+        if (errs.length) {
+            console.log("页面报错（" + errs.length + " 条）：");
+            for (const e of errs.slice(0, 10)) { console.log("  ! " + e); }
+        }
+    } finally {
+        if (open) { try { await open.close(); } catch { /* 收摊出错不拦路 */ } }
+        try { await harness.stop(); } catch { /* 收摊出错不拦路 */ }
+    }
+}
+
+/**
+ * 起一个子进程跑某个场景：它有自己的 PICHAT_HOME（因此有自己的中转与后端），
+ * 输出按行收下来，跑完整块交回去。返回退出码与那几行字。
+ */
+function runSceneChild(name) {
+    const dir = path.join(SCRATCH_DIR, "reconnect", name);
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 删不掉就接着用 */ }
+    fs.mkdirSync(path.join(dir, "pichat"), { recursive: true });
+    return new Promise((resolve) => {
+        const child = spawn(process.execPath, [__filename, "--one", name], {
+            cwd: __dirname,
+            env: { ...process.env, PICHAT_HOME: path.join(dir, "pichat") },
+            stdio: ["ignore", "pipe", "pipe"],
+        });
+        const output = [];
+        const eat = (chunk) => {
+            for (const line of chunk.toString("utf8").split(/\r?\n/)) {
+                if (!line) { continue; }
+                // 假 pi / 中转那些诊断行不进每场的报告（全量噪声，看 --serial 那一路）
+                if (line.startsWith("[pi stderr]") || line.startsWith("[pi spare stderr]")) { continue; }
+                output.push(line);
+            }
+        };
+        child.stdout.on("data", eat);
+        child.stderr.on("data", eat);
+        child.on("error", (err) => { output.push("起不来：" + err.message); resolve({ code: -1, output }); });
+        child.on("close", (code) => resolve({ code: code ?? -1, output }));
+    });
+}
+
 // ============================================================================
 //  入口
 // ============================================================================
@@ -787,39 +866,63 @@ async function main() {
         if (!scenes[name]) { throw new Error(`不认识这个场景：${name}（可用的：${Object.keys(scenes).join(" / ")} / all）`); }
     }
 
-    const quiet = (text) => { if (/错误|error|失败/.test(text)) { console.log("  [日志] " + text); } };
-    // 每个场景一份干净的后端 + 一块干净的屏。
-    // 以前十场共用一个（harness 提到循环外面）：前一场留在“还在跑”的会话、留在页面上的消息、
-    // 留在补发账里的序号，都会串到下一场。单跑每个场景都过、整套连跑就崩，原因就在这里。
-    for (const name of chosen) {
-    const harness = createHarness({ fakePi: true, log: quiet });
-    const url = await harness.start();
-    console.log("调试后端：" + url);
-    let open;
-    try {
-        open = await openPage({ url, shotDir: path.join(__dirname, "shots"), timeoutMs: 60000 });
-        // 页面里的 console 都收下来（重连、看门狗那几条 warn 是判断走了哪条路的关键）
-        open.page.cdp.on("Runtime.consoleAPICalled", (params) => {
-            if (!params || (params.type !== "warning" && params.type !== "error")) { return; }
-            const text = (params.args || []).map((a) => (a && (a.value ?? a.description)) || "").join(" ");
-            console.log("  [页面] " + text);
-        });
-        await open.page.waitReady();
-        console.log("界面已就绪");
-        await watchMessages(open.page);
-
-        await scenes[name](open.page, harness);
-
-        const errs = open.page.pageErrors || [];
-        if (errs.length) {
-            console.log("\n页面报错（" + errs.length + " 条）：");
-            for (const e of errs.slice(0, 10)) { console.log("  ! " + e); }
+    // 一个场景、单跑（父进程会带着 --one 起一个子进程来跑它）。
+    // 每个场景一个子进程是必须的：`PICHAT_HOME` 是环境变量，而"中转"按它找 ——
+    // 一个进程里多份后端只能共用同一支中转，并行时一个场景启动就会把别人正在用的收掉。
+    const oneAt = process.argv.indexOf("--one");
+    if (oneAt >= 0) {
+        const one = process.argv[oneAt + 1] || "";
+        if (!scenes[one]) {
+            console.error(`不认识这个场景：${one}`);
+            process.exit(2);
         }
-    } finally {
-        if (open) { try { await open.close(); } catch { /* 收摊出错不拦路 */ } }
-        try { await harness.stop(); } catch { /* 收摊出错不拦路 */ }
+        try {
+            await runOneScene(one, scenes[one]);
+        } catch (err) {
+            failed += 1;
+            console.error("出错了：" + (err?.stack || err?.message || err));
+        }
+        console.log(failed === 0 ? "结果：全部通过" : `结果：${failed} 项没过`);
+        process.exit(failed === 0 ? 0 : 1);
     }
+
+    // 串行跑（--serial，或者只挑了一场）：本进程里直接跑，不折腾子进程
+    const serial = process.argv.includes("--serial") || chosen.length === 1;
+    if (serial) {
+        for (const name of chosen) {
+            console.log(`
+【${name}】`);
+            try {
+                await runOneScene(name, scenes[name]);
+            } catch (err) {
+                failed += 1;
+                console.log("出错了：" + (err?.stack || err?.message || err));
+            }
+        }
+        console.log("");
+        console.log(failed === 0 ? "结果：全部通过" : `结果：${failed} 项没过`);
+        process.exit(failed === 0 ? 0 : 1);
     }
+
+    // 并行跑：每场一个子进程（各自一份 PICHAT_HOME、各自一支中转、各自一个端口），
+    // 输出先攒着，跑完再整块打出来 —— 不然十条时间线交织在一起，读不出来。
+    const PARALLEL = Math.max(1, Math.min(8, Number(process.env.RECON_PARALLEL || 3)));
+    const queue = chosen.slice();
+    const workers = Array.from({ length: Math.min(PARALLEL, queue.length) }, async () => {
+        for (;;) {
+            const name = queue.shift();
+            if (!name) { return; }
+            const began = Date.now();
+            const { code, output } = await runSceneChild(name);
+            const cost = Math.round((Date.now() - began) / 1000);
+            console.log(`
+【${name}】（${cost} 秒）`);
+            for (const line of output) { console.log(line); }
+            if (code !== 0) { failed += 1; }
+        }
+    });
+    await Promise.all(workers);
+
     console.log("");
     console.log(failed === 0 ? "结果：全部通过" : `结果：${failed} 项没过`);
     process.exit(failed === 0 ? 0 : 1);
