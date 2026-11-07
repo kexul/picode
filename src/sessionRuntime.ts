@@ -740,6 +740,11 @@ export class SessionRuntime {
             this.host.onTabaRequest?.(this.id, req);
             return;
         }
+        if (ev.kind === "ask-cancel") {
+            // 桥不等了（这一轮被停 / 超时）：把界面上还开着的那张卡片收掉（按没作答交回去）
+            this.host.cancelAsk?.(ev.id);
+            return;
+        }
         if (ev.kind === "bash-state") {
             // 换后端时中转给的快照：还在跑的那几条后台命令（界面那块清单与那颗蓝点立刻就有）
             this.restoreBashTasks((ev.payload as any)?.tasks);

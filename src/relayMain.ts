@@ -413,10 +413,19 @@ function serveEvents(req: http.IncomingMessage, res: http.ServerResponse): void 
             const payload = msg?.payload && typeof msg.payload === "object" ? msg.payload : {};
             if (!key || !kind || !id) { sendJson(res, 400, { ok: false, reason: "少了 key / kind / id" }); return; }
 
-            // 桥不等了（超时 / 这一轮被停）：那道题从"还等着的"里摘掉，别再推给下一个后端
+            // 桥不等了（超时 / 这一轮被停）：那道题从"还等着的"里摘掉（别再推给下一个后端），
+            // 同时告诉连着的后端一声 —— 界面上那张卡片得收掉，不然它就挂在那儿等着一个不会来的答案
             if (kind === "ask-cancel") {
                 const pending = bridgeEvents.get(key + "|" + id);
                 if (pending) { pending.answered = true; }
+                broadcast({
+                    ev: "bevent",
+                    seq: seqCounter,
+                    key,
+                    kind: "ask-cancel",
+                    id,
+                    payload: {},
+                });
                 sendJson(res, 200, { ok: true });
                 return;
             }
