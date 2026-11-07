@@ -5028,6 +5028,11 @@
   function requestSwitch(sessionId) {
     if (!sessionId) { return; }
     const st = sessions.get(sessionId);
+    // 别的机器上的会话：本机后端不认识它，不用发那条 switchSession，切画面就行
+    if (st && st.remote) {
+      if (sessionId !== activeId) { activateSessionView(sessionId); }
+      return;
+    }
     // 壳已经在、也没在加载：先切过去。没壳（没到 / 以前关掉的）就先发请求，等后端把列表推回来
     if (st && !st.loading && sessionId !== activeId) { activateSessionView(sessionId); }
     switchAsked += 1;
@@ -6045,6 +6050,13 @@
   /** 关一个会话：这一下就走（会话文件留着，历史列表里能重新打开；
    *  关掉的正是正在看的那个，后端会把这块屏切到别的会话去）。 */
   function closeSession(id) {
+    // 别的机器上的会话：关掉只是本屏不收这一格了，那边照旧跑着（下一回从清单里点还能回来）
+    const st = sessions.get(id);
+    if (st && st.remote) {
+      removeSession(id);
+      renderSessionBar();
+      return;
+    }
     // 列表不关：关掉一条后马上就能接着关下一条（那一行会跟着会话列表自己消失）
     vscode.postMessage({ type: "closeSession", sessionId: id });
   }
@@ -10362,7 +10374,7 @@
     if (st.kind === "model") { submitModelPicker(view); return; }
     if (!item) { return; }
     // 「别的机器」：点机器那一行 = 重问一遍；点它会话那一行 = 现在还不能打开（只看得见）
-    if (item.__section === "machineSession") { return; }
+    if (item.__section === "machineSession") { openRemoteSession(item); return; }
     if (item.__section === "remoteSpace") {
       // 别的机器上的工作区：展开 / 收起（跟本机那个组头一样，只是不跟宿主要数据）
       if (!item.remoteEmpty && item.remoteKey) {
@@ -10625,7 +10637,7 @@
         for (const one of project.sessions || []) {
           out.push({
             __section: "machineSession", section,
-            id: one.id, title: one.title, cwd: one.cwd, lastActivity: one.lastActivity,
+            id: one.id, title: one.title, cwd: one.cwd, file: one.file, lastActivity: one.lastActivity,
             hostUrl: host.url, hostName: host.name,
           });
         }
@@ -10647,6 +10659,101 @@
       rebuildWorkspaceItems(view, false);
       repaintPickerPanel(view);
     });
+  }
+
+  // ---- 远程会话：点开、切过去、看历史 ----
+  // 会话号：别台那些 panel 号跟本机是两套（本机是 `工作区:panel-序号`），直接混在一起会撞。
+  // 本机这份壳统一用 `remote:<那台的地址>:<它那边的号>`，再记着一张对照表。
+  /** localId -> { host, hostId, file } */
+  const remoteSessions = new Map();
+  /** 开着的远程会话（localId），按打开顺序：本机会话清单推过来时接在后面，别把它挤掉 */
+  let remoteOrder = [];
+  /** 正在等那台把某个会话文件开出来（那边回 sessionList 时靠 file 认领） */
+  let pendingRemoteOpen = null;
+
+  function remoteLocalId(host, hostId) { return "remote:" + host + ":" + hostId; }
+
+  function findRemoteLocalId(host, hostId) {
+    for (const [localId, info] of remoteSessions) {
+      if (info.host === host && info.hostId === hostId) { return localId; }
+    }
+    return "";
+  }
+
+  /**
+   * 点一条别的机器上的会话：那边没开着就请它开（workspaceOpenSession），开好了再切过去。
+   *
+   * 为什么要请它开：点开历史会话这条路上，后端会把历史消息推给“发起的那块屏”；
+   * 我们就是那一块屏（给那台用的页面标识），于是历史自然就流到这边来了。
+   */
+  function openRemoteSession(item) {
+    if (!item || !item.hostUrl || !item.id) { return; }
+    const existing = findRemoteLocalId(item.hostUrl, item.id);
+    if (existing) { requestSwitch(existing); return; }
+    const hosts = window.pichatHosts;
+    if (!hosts) { return; }
+    pendingRemoteOpen = {
+      host: item.hostUrl, file: item.file || "",
+      cwd: item.cwd, title: item.title, hostName: item.hostName,
+    };
+    hosts.connect(item.hostUrl);
+    hosts.post(item.hostUrl, { type: "workspaceOpenSession", path: item.file || "", cwd: item.cwd || "" })
+      .catch(() => { if (pendingRemoteOpen && pendingRemoteOpen.host === item.hostUrl) { pendingRemoteOpen = null; } });
+  }
+
+  /**
+   * 那台推来的会话清单：已开的远程会话把状态补一遍；正在等的那一个（按会话文件认）认领下来、
+   * 造壳、接进顶条、切过去。其余一概不进本机这份清单（那是那台自己的会话，不是本机的）。
+   */
+  function mergeRemoteSessionList(base, msg) {
+    const list = Array.isArray(msg.sessions) ? msg.sessions : [];
+    for (const s of list) {
+      if (!s || typeof s.id !== "string" || !s.id) { continue; }
+      const known = findRemoteLocalId(base, s.id);
+      if (known) {
+        const st = sessions.get(known);
+        if (st) {
+          if (s.name) { st.title = s.name; }
+          if (typeof s.title === "string") { st.piTitle = s.title; }
+          st.streaming = !!s.streaming;
+          st.bashRunning = !!s.bashRunning;
+          st.piReady = s.piReady !== false;
+          st.loading = !!s.loading;
+          if (typeof s.cwd === "string" && s.cwd) { st.cwd = s.cwd; }
+          syncSessionLoading(st);
+        }
+        continue;
+      }
+      const wait = pendingRemoteOpen;
+      if (!wait || wait.host !== base) { continue; }
+      if (!s.file || !wait.file || s.file !== wait.file) { continue; }
+      pendingRemoteOpen = null;
+      const localId = remoteLocalId(base, s.id);
+      const st = createSession(localId, s.name || wait.title || "新会话");
+      st.remote = { host: base, hostId: s.id, file: s.file };
+      st.cwd = (typeof s.cwd === "string" && s.cwd) || wait.cwd || "";
+      st.sessionFile = s.file;
+      st.piReady = s.piReady !== false;
+      st.streaming = !!s.streaming;
+      remoteSessions.set(localId, st.remote);
+      if (remoteOrder.indexOf(localId) < 0) { remoteOrder.push(localId); }
+      sessionOrder = sessionOrder.filter((id) => id !== localId).concat([localId]);
+      renderSessionBar();
+      activateSessionView(localId);
+    }
+  }
+
+  /** 那台推来的一条消息：认得就翻译成本机那个会话号，剩下的照原样交给界面。 */
+  function translateRemoteMessage(msg) {
+    const base = msg.__host;
+    if (msg.type === "sessionList") { mergeRemoteSessionList(base, msg); return null; }
+    if (msg.type === "sessionActivated") { return null; }   // 那台自己切会话，跟本屏无关
+    if (!msg.sessionId) { return null; }
+    const localId = findRemoteLocalId(base, msg.sessionId);
+    if (!localId) { return null; }   // 还没认领的（或那台上别的会话）不管
+    const copy = Object.assign({}, msg, { sessionId: localId });
+    delete copy.__host;
+    return copy;
   }
 
   /**
@@ -11524,10 +11631,16 @@
 
   // ==================== 来自扩展的消息 ====================
   window.addEventListener("message", (event) => {
-    const msg = event.data;
+    let msg = event.data;
     // VSCode webview 宿主会投递非业务消息（视图聚焦/状态同步等），event.data 可能为 null
     // 或非 {type:string} 结构。直接忽略，避免 msg.type 崩溃导致后续消息被跳过。
     if (!msg || typeof msg.type !== "string") { return; }
+    // 别的机器推来的（browserBridge 挂了 __host）：把会话号翻译成本机这一壳的号再往下走；
+    // 那台的会话清单不进本机这份清单（只认领我们正等的那一个，见 mergeRemoteSessionList）。
+    if (msg.__host) {
+      msg = translateRemoteMessage(msg);
+      if (!msg) { return; }
+    }
     const type = msg.type;
 
     if (type === "fetchChatResult") { applyFetchChatResult(msg); return; }
@@ -11594,7 +11707,7 @@
         // 整屏重画收尾也走这儿：重放出来末尾那颗「补来的思考」跟当场生成时一样并回去
         foldTailThinking(st);
       });
-      sessionOrder = order;
+      sessionOrder = order.concat(remoteOrder.filter((id) => sessions.has(id)));
       // 已经不在列表里的会话（被关掉了）：壳和草稿一起丢掉。
       // 本屏正在看的那个例外：画面留在原地（后端那头还认着它，接着往里发消息会自动把它重开），
       // 不硬生生把这边拽到别的会话去——别的窗口关掉它时会这样（自己点的那颗 × 不在此列）。
@@ -11604,6 +11717,8 @@
         // 关掉的这个会话的文件还在盘上，它该出现在那个工作区的历史清单里：
         // 记下它的目录，下面把那一组作废（画面还留在本屏的那个也算）。
         const gone = sessions.get(id);
+        // 别的机器上的会话不归本机这份清单管（本机会话关了不能把那边那一格也拆了）
+        if (gone && gone.remote) { return; }
         if (gone && gone.cwd) { touchedCwds.push(gone.cwd); }
         if (incoming.length > 0 && id === activeId && pendingCloseId !== id) { return; }
         if (pendingCloseId === id) { pendingCloseId = null; }
@@ -12810,6 +12925,8 @@
     st.viewEl.remove();
     sessions.delete(id);
     sessionDrafts.delete(id);
+    remoteSessions.delete(id);
+    remoteOrder = remoteOrder.filter((one) => one !== id);
     if (activeId === id) { activeId = null; syncJumpBottom(st); syncComposerButtons(); }
   }
 
@@ -13352,6 +13469,13 @@
   // 常驻的项目与会话侧边栏：摆好版面（宽窗且没收起 → 右边留出那一列），把开关接口交给顶条那颗 <<<。
   // 面板内容不在这一步要：等宿主把会话列表送来再要（见 sessionList 那段里的 ensureSidebarPanel）。
   window.pichatSidebar = { toggle: toggleSidebar };
+  // 告诉桥：哪些会话号跑在别的机器上 —— 那些消息要发到那台去（会话号换成它那边的）
+  if (window.pichatHosts && typeof window.pichatHosts.setRouter === "function") {
+    window.pichatHosts.setRouter((sessionId) => {
+      const info = sessionId ? remoteSessions.get(sessionId) : null;
+      return info ? { base: info.host, sessionId: info.hostId } : null;
+    });
+  }
   syncSidebarLayout();
 
   vscode.postMessage({ type: "ready" });

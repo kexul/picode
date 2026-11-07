@@ -1444,7 +1444,8 @@ export class PiChatWebServer {
      *
      * 给“另一台 pichat”拿的：那台的页面要在这边列出这台有哪些会话、工作目录在哪，好让人点开。
      * 只报最近这些（项目按最近活动、每个项目取前几条）：清单是给人扫一眼的，不是把全部历史倒出去。
-     * 形状：`{ projects: [{ name, cwd, lastActivity, sessions: [{ id, title, cwd, lastActivity }] }] }`。
+     * 形状：`{ projects: [{ name, cwd, lastActivity, sessions: [{ id, title, cwd, file, lastActivity }] }] }`。
+     * file 是那边的会话文件绝对路径：另一台要请这边“打开这一个”时带的就是它（见 workspaceOpenSession）。
      */
     private async sendSessions(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         const projects: Array<Record<string, unknown>> = [];
@@ -1457,7 +1458,7 @@ export class PiChatWebServer {
             const scanned = await Promise.all(files.map((file) => scanSessionInfo(file.file)));
             const sessions = scanned
                 .filter((item): item is SessionListItem => !!item && !item.child)
-                .map((item) => ({ id: item.id, title: item.title, cwd: item.cwd, lastActivity: item.lastActivity }));
+                .map((item) => ({ id: item.id, title: item.title, cwd: item.cwd, file: item.file, lastActivity: item.lastActivity }));
             if (sessions.length === 0) { continue; }
             projects.push({
                 name: project.name,
