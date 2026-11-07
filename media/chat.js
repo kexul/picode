@@ -10635,7 +10635,7 @@
     if (!row) { return ""; }
     const path = typeof row === "string" ? row : String((row.file !== undefined ? row.file : row.path) || "");
     const machine = typeof row === "string" ? "" : String(row.machine || "");
-    return (machine ? machine + " " : "") + path;
+    return (machine ? machine + "\u0000" : "") + path;
   }
 
   /** 这一组是别台那台的（要让后端去问那台）。 */
@@ -10690,12 +10690,12 @@
    * 面板一画就是整的 —— 不至于先只出现文件夹，过一会儿才冒出里面的会话。
    */
   function expandedDirsForHost() {
-    // 只报本机那些（钥匙里没有   的）：别台的组展开时按“那台 + 目录”单独去要
+    // 只报本机那些（钥匙里没有 \u0000 的）：别台的组展开时按“那台 + 目录”单独去要
     if (expandedDirs === null) {
       const cur = activeSessionCwd();
       return cur ? [cur] : [];
     }
-    return Array.from(expandedDirs).filter((one) => one.indexOf(" ") < 0);
+    return Array.from(expandedDirs).filter((one) => one.indexOf("\u0000") < 0);
   }
 
   /** 点一下组头：展开 / 收起，并把结果记住。 */
@@ -10738,7 +10738,7 @@
     armGroupTimer(view, key, g);
     groupWaits.push({ path: normPathKey(key), view });
     // 消息里给的是真路径 + 那一台的地址（本机那些 machine 是空串）
-    const realPath = typeof row === "string" ? String(row.split(" ").pop() || "") : String(row.file || "");
+    const realPath = typeof row === "string" ? String(row.split("\u0000").pop() || "") : String(row.file || "");
     vscode.postMessage({ type: "workspaceSessions", path: realPath, offset, machine: typeof row === "string" ? "" : groupMachineOf(row) });
   }
 

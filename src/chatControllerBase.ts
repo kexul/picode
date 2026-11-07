@@ -2190,7 +2190,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
      */
     public async loadHistorySession(file: string, folder?: string, clientId: string = this.currentPageId): Promise<void> {
         const already = this.sessionRunningFile(file);
-        if (already) { this.setActiveSession(already.id, clientId); return; }
+        if (already) {
+            // 那个会话已经开着：切过去就好。但它要是内存里一条内容都没有（进程活着、这个会话却
+            // 没读进来：比如号是从项目清单里认过来的那种），就得按文件读一遍 —— 不然“点开它”
+            // 会是一片空白，而它明明在盘上有一整段对话。
+            this.setActiveSession(already.id, clientId);
+            const rt = this.panels.get(already.id);
+            if (rt && rt.isConversationEmpty() && !rt.loading) {
+                void rt.loadSession(file).catch(() => { /* 读不动就照旧空着，别把界面挂在这儿 */ });
+            }
+            return;
+        }
         const cwd = folder ? path.resolve(folder) : (this.getActive(clientId)?.cwd ?? this.getCwd());
         const active = this.getActive(clientId);
         // 优先复用当前空会话（目录也得对）；已有对话时新建一个会话，避免历史选择覆盖正在进行的对话。
