@@ -357,12 +357,13 @@
   function fixMdImages(root, sessionId, baseDir) {
     if (!root || IN_WEBVIEW || !sessionId) { return; }
     const base = baseDir ? String(baseDir).replace(/\/$/, "") + "/" : "";
+    const p = sessionUrlParts(sessionId);
     for (const el of root.querySelectorAll("img")) {
       const target = mdImageTarget(el.getAttribute("src") || "", base);
       if (!target) { continue; }
       el.setAttribute("src", target.site !== undefined
-        ? "/site/" + encodeURIComponent(sessionId) + "/" + base + target.site
-        : "/file?session=" + encodeURIComponent(sessionId) + "&anywhere=1&path=" + encodeURIComponent(target.anywhere));
+        ? p.base + "/site/" + encodeURIComponent(p.sessionId) + "/" + base + target.site
+        : p.base + "/file?session=" + encodeURIComponent(p.sessionId) + "&anywhere=1&path=" + encodeURIComponent(target.anywhere));
     }
   }
 
@@ -7130,8 +7131,11 @@
     tab.err = "";
     syncFileBar();
     syncFileEditNote(tab);
-    const url = "/file?session=" + encodeURIComponent(activeId || "")
+    const url = (() => {
+      const p = sessionUrlParts(activeId);
+      return p.base + "/file?session=" + encodeURIComponent(p.sessionId)
         + "&path=" + encodeURIComponent(draft.real || tab.path);
+    })();
     fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -8370,8 +8374,23 @@
    * 现在这个标签该取哪条地址：文件走 `/file`（带 mtime 就是「没变就别给正文」那问法），
    * 「目录」那一格走 `/dir`；两条都是只读的、边界也同一套（见后端）。
    */
+  /** 这个会话号要发给哪台（远程会话）——不是远程就 null。 */
+  function remoteRouteOf(sessionId) {
+    const info = sessionId ? remoteSessions.get(sessionId) : null;
+    return info ? { base: info.host, sessionId: info.hostId } : null;
+  }
+
+  /**
+   * 地址里的会话参数：本地会话照旧（空前缀 + 本机号），远程会话换成那台的地址前缀 + 它那边的号。
+   * 文件侧边栏那几个口子（/file /dir /site /changes …）都会带会话号，全都走这一个判断。
+   */
+  function sessionUrlParts(sessionId) {
+    return remoteRouteOf(sessionId) || { base: "", sessionId: sessionId || "" };
+  }
+
   function sidebarUrl(tab, mtime) {
-    const base = (tab.proj ? "/dir?" : "/file?") + "session=" + encodeURIComponent(activeId || "")
+    const p = sessionUrlParts(activeId);
+    const base = p.base + (tab.proj ? "/dir?" : "/file?") + "session=" + encodeURIComponent(p.sessionId)
         + "&path=" + encodeURIComponent(tab.path);
     return mtime ? base + "&mtime=" + encodeURIComponent(mtime) : base;
   }
@@ -8394,7 +8413,8 @@
   function siteUrl(tab) { return siteUrlOf(tab.path); }
   function siteUrlOf(path) {
     const segs = String(path || "").split("/").map(encodeURIComponent).join("/");
-    return "/site/" + encodeURIComponent(activeId || "") + "/" + segs;
+    const p = sessionUrlParts(activeId);
+    return p.base + "/site/" + encodeURIComponent(p.sessionId) + "/" + segs;
   }
 
   /**
@@ -8510,12 +8530,14 @@
 
   /** 问清单的地址：会话目录跟最后一次提交差了什么（相对写法 + 增删行数）。 */
   function changesUrl() {
-    return "/changes?session=" + encodeURIComponent(activeId || "");
+    const p = sessionUrlParts(activeId);
+    return p.base + "/changes?session=" + encodeURIComponent(p.sessionId);
   }
 
   /** 问一段 diff 的地址：一个文件本会话的合计 diff。 */
   function changeDiffUrl(path) {
-    return "/changes/diff?session=" + encodeURIComponent(activeId || "") + "&path=" + encodeURIComponent(path);
+    const p = sessionUrlParts(activeId);
+    return p.base + "/changes/diff?session=" + encodeURIComponent(p.sessionId) + "&path=" + encodeURIComponent(path);
   }
 
   /**
