@@ -10,6 +10,7 @@
  */
 import { TABA_FRAME_PREFIX } from "./tabaProtocol";
 import { promptText, type PromptOverrides } from "./promptText";
+import { relayClientCode } from "./relayBridgeSource";
 
 export function tabaBridgeSource(over?: PromptOverrides): string {
     return String.raw`/**
@@ -29,6 +30,9 @@ export function tabaBridgeSource(over?: PromptOverrides): string {
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import * as http from "node:http";
+
+${relayClientCode("http")}
 
 const FRAME_PREFIX = ${JSON.stringify(TABA_FRAME_PREFIX)};
 
@@ -206,7 +210,7 @@ export default function tabaBridge(pi: any): void {
             const thinking = text(params?.thinking, 40);
             if (model) { payload.model = model; }
             if (thinking) { payload.thinking = thinking; }
-            emit(payload);
+            if (relayReady()) { void relayPost("taba", id, payload); } else { emit(payload); }
             const lines = [
                 "已派出子会话「" + name + "」（编号 " + id + "）。它会在插件里新开一个 tab 跑。",
                 "它跑完第一轮后，最后一条回复会自动交回到本会话，然后插件会把那个 tab 关掉（出错、或者用户当时正看着它除外）。",
@@ -234,7 +238,8 @@ export default function tabaBridge(pi: any): void {
             const payload: Record<string, unknown> = { kind: "stop" };
             if (id) { payload.id = id; }
             if (name) { payload.name = name; }
-            emit(payload);
+            if (relayReady()) { void relayPost("taba", "stop-" + randomBytes(4).toString("hex"), payload); }
+            else { emit(payload); }
             return {
                 content: [{ type: "text", text: "已发出停止请求（只停它当前这一轮，tab 还留着）。" }],
                 details: payload,

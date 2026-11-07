@@ -705,6 +705,15 @@ export class SessionRuntime {
      * 换后端时这道题还在中转的"还等着的"里，新后端接上就会再走一遍这里 —— 卡片照旧画回来。
      */
     private onBridgeEvent(ev: { kind: string; id: string; payload: Record<string, unknown>; replyId?: string }): void {
+        if (ev.kind === "taba") {
+            // 派子活 / 停子会话：跟 stderr 那条路交给同一个处理（见 chatControllerBase 的 onTabaRequest）
+            const req = ev.payload as unknown as TabaRequest;
+            console.error(req.kind === "spawn"
+                ? `[派子会话] 收到派活请求：「${req.name}」（${req.id}，任务 ${String(req.task ?? "").length} 字）`
+                : `[派子会话] 收到停止请求：「${req.name || req.id || ""}」`);
+            this.host.onTabaRequest?.(this.id, req);
+            return;
+        }
         if (ev.kind !== "ask") { return; }
         const req = ev.payload as unknown as AskRequest;
         if (!req || typeof req.id !== "string") { return; }

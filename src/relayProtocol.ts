@@ -80,7 +80,11 @@ export type RelayEvent =
     | { ev: "bevent"; seq: number; key: string; kind: string; id: string; payload: Record<string, unknown>; replyId?: string }
     | { ev: "exit"; key: string; code: number | null };
 
-/** 需要回执的那几种事件（桥那边拿 replyId 去长轮询等答案）。 */
-export const RELAY_REPLY_KINDS = new Set(["ask", "taba"]);
+/**
+ * 需要回执的那几种事件（桥那边拿 replyId 去长轮询等答案）。
+ * 派子活不算：它是"发了就返回"——子会话跑完以后，结果是当成一条 steer 消息交回会话的，
+ * 不走回执。所以那种事件算"当场了结"，换后端时不重推（重推会把子会话派两次）。
+ */
+export const RELAY_REPLY_KINDS = new Set(["ask"]);
 
 export const RELAY_TOKEN_HEADER = "token";
