@@ -47,6 +47,12 @@ interface PiEntry {
     sessionFile?: string;
     /** 这个进程已经用掉的请求编号（看到的 `req-N` 里最大的那个） */
     maxReq: number;
+    /** 最后一条已经交给过某个后端的输出序号（换后端时从这里往后补） */
+    lastSeen: number;
+    /** 正在长的那条助手消息从第几条开始（没提交的消息没有历史可重画，得从这儿补回去） */
+    messageStartSeq?: number;
+    /** 它那条消息的编号（收尾时认一下是不是同一条） */
+    messageId?: string;
     alive: boolean;
     exitCode: number | null;
 }
@@ -112,6 +118,32 @@ function noteRequestId(key: string, line: string): void {
     if (entry && Number.isFinite(n) && n > entry.maxReq) { entry.maxReq = n; }
 }
 
+/**
+ * 盯一下这条输出是不是"消息开始 / 结束"：正在长的那条助手消息还没落盘，
+ * 历史里没有它 —— 换后端时只能从它开始的那一条补回去（见 attach）。
+ */
+function noteMessageWindow(entry: PiEntry, line: string, seq: number): void {
+    if (line.indexOf('"message_start"') >= 0) {
+        let msg: any;
+        try { msg = JSON.parse(line); } catch { return; }
+        const m = msg && msg.message;
+        if (m && m.role === "assistant") {
+            entry.messageStartSeq = seq;
+            entry.messageId = typeof m.id === "string" ? m.id : undefined;
+        }
+        return;
+    }
+    if (line.indexOf('"message_end"') >= 0) {
+        let msg: any;
+        try { msg = JSON.parse(line); } catch { return; }
+        const m = msg && msg.message;
+        if (m && typeof m.id === "string" && m.id === entry.messageId) {
+            entry.messageStartSeq = undefined;
+            entry.messageId = undefined;
+        }
+    }
+}
+
 function info(entry: PiEntry): RelayPiInfo {
     return {
         key: entry.key,
@@ -140,6 +172,7 @@ function spawnOne(key: string, spec: Parameters<typeof spawnPi>[0]): PiEntry {
         cwd: spec.cwd,
         startedAt: Date.now(),
         maxReq: 0,
+        lastSeen: 0,
         alive: true,
         exitCode: null,
     };
@@ -151,6 +184,8 @@ function spawnOne(key: string, spec: Parameters<typeof spawnPi>[0]): PiEntry {
         splitOut(chunk.toString("utf8"), (line) => {
             if (!line.trim()) { return; }
             const seq = remember(key, "out", line);
+            noteMessageWindow(entry, line, seq);
+            if (clients.size > 0) { entry.lastSeen = seq; }
             broadcast({ ev: "frame", seq, key, ch: "out", line });
         });
     });
@@ -159,6 +194,7 @@ function spawnOne(key: string, spec: Parameters<typeof spawnPi>[0]): PiEntry {
     child.stderr.on("data", (chunk: Buffer) => {
         splitErr(chunk.toString("utf8"), (line) => {
             const seq = remember(key, "err", line);
+            if (clients.size > 0) { entry.lastSeen = seq; }
             broadcast({ ev: "frame", seq, key, ch: "err", line });
         });
     });
@@ -304,13 +340,20 @@ function handle(
                 return;
             }
             if (msg.replay !== false) {
-                const since = typeof msg.since === "number" ? msg.since : 0;
+                // 从哪儿补：
+                //   - 正在长的那条助手消息还没提交（历史里没有它）：从它的开头补，整段正文才接得上；
+                //   - 没在长什么：从"上一个后端最后听到的那条"往后补，别把历史里已经画过的东西再来一遍。
+                const from = typeof msg.since === "number"
+                    ? msg.since
+                    : (entry.messageStartSeq !== undefined ? entry.messageStartSeq - 1 : entry.lastSeen);
                 for (const frame of frames) {
-                    if (frame.key === msg.key && frame.seq > since) {
+                    if (frame.key === msg.key && frame.seq > from) {
                         answer({ ev: "frame", seq: frame.seq, key: frame.key, ch: frame.ch, line: frame.line });
                     }
                 }
             }
+            // 这些它都有了：下一次换后端从这儿往后补
+            entry.lastSeen = seqCounter;
             answer({ ev: "reply", n: msg.n, ok: true, pi: info(entry), maxReq: entry.maxReq });
             return;
         }

@@ -27,6 +27,8 @@ fs.mkdirSync(workDir, { recursive: true });
 process.env.PICHAT_PI = path.join(__dirname, process.platform === "win32" ? "fake-pi.cmd" : "fake-pi.sh");
 process.env.FAKEPI_THINK_MS = process.env.FAKEPI_THINK_MS || "1500";
 process.env.FAKEPI_TICK_MS = process.env.FAKEPI_TICK_MS || "40";
+// 「长话」那一场要慢慢吐够几秒，好在中间重启（见下面四之三）
+process.env.FAKEPI_LONG_PIECES = process.env.FAKEPI_LONG_PIECES || "80";
 
 const { startBackend } = require(path.join(repoRoot, "out", "server", "serverMain.js"));
 const { relayLink } = require(path.join(repoRoot, "out", "server", "relayClient.js"));
@@ -70,18 +72,44 @@ function openPage(baseUrl, pageId) {
         r.on("error", resolve);
         r.end(body);
     });
-    /** 等一条满足条件的消息（已经在手上的也算）。 */
+    /**
+     * 等"下一条"满足条件的消息（从上次等到的那条往后找）。
+     * 不能扫全部历史：会话表那种消息一路都在推，旧的一条（当时还没在跑）会让断言当场通过。
+     */
+    state.cursor = 0;
     state.waitFor = async (pred, timeoutMs = 20000) => {
         const limit = Date.now() + timeoutMs;
         while (Date.now() < limit) {
-            const found = state.messages.find(pred);
-            if (found) { return found; }
+            for (let i = state.cursor; i < state.messages.length; i++) {
+                if (pred(state.messages[i], i)) {
+                    state.cursor = i + 1;
+                    return state.messages[i];
+                }
+            }
             await sleep(80);
         }
         return undefined;
     };
     state.last = (type) => [...state.messages].reverse().find((m) => m.type === type);
     return state;
+}
+
+/**
+ * 页面收到的正文增量接起来（正文是逐字推的，一条只有几个字）。
+ * @param from 从第几条消息起算（默认全部）
+ * @param only 只看这个会话（默认全都算：一个页面会同时收到好几个会话的消息）
+ */
+function joinedText(page, only) {
+    // 从最后一次 streamStart 往后算：前面那几轮的正文也在同一个页面里
+    let start = 0;
+    page.messages.forEach((m, i) => {
+        if (m.type === "streamStart" && (only === undefined || m.sessionId === only)) { start = i + 1; }
+    });
+    return page.messages.slice(start)
+        .filter((m) => (m.type === "assistantDelta" || m.type === "assistantFull")
+            && (only === undefined || m.sessionId === only))
+        .map((m) => (typeof m.delta === "string" ? m.delta : (typeof m.text === "string" ? m.text : "")))
+        .join("");
 }
 
 /** 会话表里那个会话（后端推的 sessionList）。 */
@@ -187,6 +215,50 @@ function sessionFrom(list, id) {
     };
     const replied = await waitText("子会话工具回话");
     check(!!replied, "派活的回话也回来了");
+
+    // ---- 四之三、正在写的那半句话，重启以后接得上 ----
+    console.log("四之三、流式当中重启：正在写的那半句接得上");
+    // 开一个干净的新会话演这一段：前面那些会话的尾巴（子会话那几轮）还在收尾，
+    // 混进来就分不清哪句是"正在写的那半句"了。
+    await page.post({ type: "newSession" });
+    const withTwo = await page.waitFor((m) => m.type === "sessionList" && (m.sessions || []).length >= 2, 30000);
+    const longId = withTwo && (withTwo.sessions || []).map((s) => s.id).find((id) => id !== sessionId);
+    check(!!longId, "又开了一个新会话（" + longId + "）");
+    await page.post({ type: "send", sessionId: longId, text: "说段长话", images: [] });
+    const firstDelta = await page.waitFor((m) => m.type === "assistantDelta", 20000);
+    check(!!firstDelta, "长话开始往外吐了");
+    await sleep(600);                    // 多攒一会儿，好确认"前面那截"确实在屏幕上
+    const partial = joinedText(page, longId);
+    check(partial.length > 6, "已经吐出来一截（" + partial.length + " 字）");
+
+    page.close();
+    await back.stop(true, true);         // 重启（pi 留着）
+    back = await startBackend({ cwd: workDir, port: 0, host: "127.0.0.1" });
+    const page3 = openPage(back.url, "probe-3");
+    const adopted3 = await page3.waitFor((m) => m.type === "sessionList" && (m.sessions || []).some((s) => s.id === longId), 30000);
+    check(!!adopted3, "会话又认回来了");
+    // 等这一段吐完（末尾那句"再接着说下去。"到了就是到齐了）
+    const tail = "再接着说下去。";
+    const endBy = Date.now() + 60000;
+    let resumed = "";
+    while (Date.now() < endBy) {
+        resumed = joinedText(page3, longId);
+        if (resumed.length >= partial.length && resumed.endsWith(tail)) { break; }
+        await sleep(100);
+    }
+    console.log("  · 重启前：" + JSON.stringify(partial.slice(0, 60)) + "（共 " + partial.length + " 字）");
+    console.log("  · 重启后：" + JSON.stringify(resumed.slice(0, 60)) + "（共 " + resumed.length + " 字）");
+    const partialKept = resumed.startsWith(partial);
+    check(partialKept, "重启前吐出来的那截还接在前面（" + partial.length + " 字 → 共 " + resumed.length + " 字）");
+    check(resumed.length > partial.length, "后面那截也接着写完了");
+    const finished = await page3.waitFor((m) => m.type === "sessionList" && (m.sessions || []).some((s) => s.id === longId && !s.streaming), 30000);
+    check(!!finished, "这一轮在会话表里回到不跑了");
+
+    // 接着用：再来一句，证明认回来的这只 pi 还在正常干活
+    await page3.post({ type: "send", sessionId: longId, text: "收尾那句", images: [] });
+    const again = await page3.waitFor((m) => m.type === "sessionList" && (m.sessions || []).some((s) => s.id === longId && !s.streaming && !!s.tps), 60000);
+    check(!!again, "认回来以后照常能接着聊");
+    page3.close();
 
     // ---- 五、Ctrl+C 是全收 ----
     console.log("五、正常收摊：连 pi 一起收");

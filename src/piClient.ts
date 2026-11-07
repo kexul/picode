@@ -66,6 +66,13 @@ export class PiClient extends EventEmitter {
     private link?: RelayLink;
     private offFrame?: () => void;
     private offExit?: () => void;
+    /**
+     * 接管一只正在跑的 pi 时，先把它补发过来的那些行攒着（见 releaseReplay）。
+     * 为什么要攒：新后端得先把历史画完（replayHistory），再接着画"正在长的这一条"，
+     * 不然先到的字会被随后的整屏重画清掉。
+     */
+    private buffering = false;
+    private bufferedFrames: Array<{ ch: "out" | "err"; line: string }> = [];
 
     constructor(opts: PiClientOptions) {
         super();
@@ -91,6 +98,8 @@ export class PiClient extends EventEmitter {
 
     /** 走中转：先挂好听筒，再请它起一只 / 接管一只。 */
     private startViaRelay(link: RelayLink): void {
+        // 接管：中转会把它没听到的那些行补过来，先攒着，等上层把历史画完再放（见 releaseReplay）
+        if (this.opts.adoptKey) { this.buffering = true; }
         this.offFrame = link.onFrame(this.key, (frame) => {
             if (frame.ch === "out") {
                 this.handleLine(frame.line);
@@ -101,7 +110,7 @@ export class PiClient extends EventEmitter {
         this.offExit = link.onExit(this.key, (code) => this.onGone(code));
 
         const ready: Promise<{ ok: boolean; reason?: string; maxReq?: number }> = this.opts.adoptKey
-            ? link.attach(this.opts.adoptKey, { replay: false })
+            ? link.attach(this.opts.adoptKey, { replay: true })
             : link.spawn(this.key, this.spawnSpec());
         void ready.then((result) => {
             if (this.state === "stopped") {
@@ -295,8 +304,34 @@ export class PiClient extends EventEmitter {
             try { this.proc.kill(); } catch { /* ignore */ }
             this.proc = null;
         }
+        this.buffering = false;
+        this.bufferedFrames = [];
         this.rejectAllPending();
         if (wasRunning && !opts?.keep) { /* 进程退出的事件由 onGone / child.on("exit") 给 */ }
+    }
+
+    /**
+     * 接管完成：把补发攒着的那些行按顺序放出去（上层这会儿已经把历史画完了）。
+     * 放完就恢复"实时"：后面的行一到就交给上层。
+     */
+    releaseReplay(): void {
+        if (!this.buffering) { return; }
+        this.buffering = false;
+        const frames = this.bufferedFrames;
+        this.bufferedFrames = [];
+        for (const frame of frames) {
+            if (frame.ch === "err") {
+                this.emit("stderr", frame.line);
+                continue;
+            }
+            let msg: any;
+            try {
+                msg = JSON.parse(frame.line);
+            } catch {
+                continue;
+            }
+            this.dispatch(msg);
+        }
     }
 
     /** 让所有在途 request 立刻以 undefined 结束。 */
@@ -323,6 +358,17 @@ export class PiClient extends EventEmitter {
             this.emit("error", new Error("无法解析 pi 输出: " + trimmed));
             return;
         }
+        // 补发来的那些里面，只有"应答"必须当场交给等它的人（比如 waitReady 的 get_state）；
+        // 其余（agent 事件、弹窗请求）攒到 releaseReplay 再按顺放出去。
+        if (this.buffering && msg.type !== "response") {
+            this.bufferedFrames.push({ ch: "out", line: trimmed });
+            return;
+        }
+        this.dispatch(msg);
+    }
+
+    /** 把一行已经解析好的 pi 输出交出去。 */
+    private dispatch(msg: any): void {
         switch (msg.type) {
             case "response": {
                 const id = typeof msg.id === "string" ? msg.id : undefined;

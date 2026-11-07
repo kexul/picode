@@ -1443,6 +1443,15 @@ export class SessionRuntime {
         }
         this.captureSessionName(state?.data);
         await this.replayHistory({ note: "" });
+        // 历史画完了，接着把"正在长的这一条"补回去：补发来的那些字先攒在 PiClient 里
+        // （见 releaseReplay），这里先给界面开一条正在写的气泡，再把攒着的放出——
+        // 于是屏幕上看到的就是"那半句话一直在写"，而不是断一下再整段冒出来。
+        if (this.streaming) {
+            this.runStarted = true;
+            this.streamingReply = "";
+            this.post({ type: "streamStart", activity: "working", detail: "" });
+        }
+        this.client?.releaseReplay();
         this.loading = false;
         this.host.broadcastSessionList();
         this.refreshStats();

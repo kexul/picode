@@ -473,6 +473,16 @@ async function runScript(userText) {
         return;
     }
 
+    // ---- 长话：一整段只说话、不调工具，慢慢往外吐（一句话里带「长话」就演这一场）----
+    // 验「流式当中后端重启，正在写的那半句接不接得上」时用（见 dev/relayCheck.js）：
+    // 工具那几步太短，来不及在中间下手；这一段按 FAKEPI_TICK_MS 一格六个字地吐，好下手得多。
+    if (!isChildTask && /长话/.test(userText)) {
+        const pieces = Number(process.env.FAKEPI_LONG_PIECES || 20);
+        await say("（假模型）长话：" + "再接着说下去。".repeat(pieces));
+        finish();
+        return;
+    }
+
     // ---- 后台命令：一句话演一条「放到后台以后还在跑」的命令（见 dev/autoBg.js）----
     // 真的 bash 桥在这儿起不来（它要 pi 自己那份 bash 实现），所以照它写的那两行暗号直接发：
     // 先把 start 报上去（后端记进清单，消息流末尾那一块就有了），过一会儿再报 end
