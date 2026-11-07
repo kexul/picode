@@ -355,7 +355,7 @@
     var copy = {};
     for (var k in msg) { if (Object.prototype.hasOwnProperty.call(msg, k)) { copy[k] = msg[k]; } }
     copy.sessionId = route.sessionId;
-    return fetch(route.base + "/api?pageId=" + encodeURIComponent(h.pageId), {
+    return fetch(wireOf(route.base) + "/api?pageId=" + encodeURIComponent(h.pageId), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(copy),
@@ -599,6 +599,17 @@
   // 这些连接不参与本机那条流的序号、也不影响“连不上插件”那条提示：某台断了就是那台那几行的事。
   var hosts = Object.create(null);
 
+  /**
+   * 那台机器的地址在这台服务上怎么写：`/m/<编码过的地址>`（见 webChatServer 的 proxyToMachine）。
+   *
+   * 页面不直接连那台：手机上打开页面靠的是手机能到的那个地址（局域网、或者 tailscale 上这台），
+   * 而别的那台往往只在它自己那个网里（tailscale 的 100.x 之类）—— 手机不一定到得了。
+   * 都写成这个前缀交给本机后端去转，手机只要连得到本机就行；也不再磨跨源、跨 https。
+   */
+  function wireOf(base) {
+    return "/m/" + encodeURIComponent(String(base || "").replace(/\/+$/, ""));
+  }
+
   function hostOf(base) {
     var h = hosts[base];
     if (h) { return h; }
@@ -622,7 +633,7 @@
     if (h.source) { return; }
     clearTimeout(h.retryTimer);
     h.retryTimer = null;
-    var url = base + "/events?pageId=" + encodeURIComponent(h.pageId)
+    var url = wireOf(base) + "/events?pageId=" + encodeURIComponent(h.pageId)
       + (h.openedOnce ? "&since=" + h.lastSeq : "");
     var mine;
     try {
@@ -681,7 +692,7 @@
   function postToHost(base, msg) {
     var h = hostOf(base);
     connectHost(base);
-    return fetch(base + "/api?pageId=" + encodeURIComponent(h.pageId), {
+    return fetch(wireOf(base) + "/api?pageId=" + encodeURIComponent(h.pageId), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(msg === undefined ? null : msg)

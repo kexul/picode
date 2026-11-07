@@ -60,6 +60,12 @@ npm run web:shot -- --fake-pi --send "随便说点什么" --shot fake.png
 node dev/remoteNote.mjs
 node dev/remoteNote.mjs http://127.0.0.1:51999 ask
 
+# 验「别台的会话由这台后端转过去」（设置里「远程机器」那一栏）：起两台真后端，B 写进 A 的名单，
+# 验 /m/<B 的地址>/… 转过去的 health 与 sessions 跟直接问 B 一个字节都不差、名单外的地址 403、
+# 往那台发消息能送到、那台推来的东西能转回来、到不了时 8 秒给一句「连不上那台」而不是一直挂着、
+# 页面自己的 connect-src 只剩本站（页面不再直接连那台）：
+node dev/machineProxy.js
+
 # 验“一批工具调用全挤在同一条线上”（往页面里投一批工具消息，前后加正文，截图）：
 # 同一个名字只出一个标签（标签停在第一次调用的位置），不同名的各占一个，一条线上还是能排好几个
 npm run web:shot -- --width 1000 --height 620 --script dev/toolRow.js

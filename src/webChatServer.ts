@@ -2,6 +2,7 @@ import * as crypto from "crypto";
 import * as fs from "fs";
 import * as zlib from "zlib";
 import * as http from "http";
+import * as https from "https";
 import * as os from "os";
 import * as path from "path";
 import { getBrowserChatHtml, getPanelChatHtml, PAGE_ICON_SVG, webAppManifest } from "./pageHtml";
@@ -18,6 +19,7 @@ import {
     isSameOrigin,
     isWildcardHost,
     localHostnames,
+    normalizeOrigin,
     originHostnames,
     PAGE_DROPPABLE_MESSAGE_TYPES,
     splitHostHeader,
@@ -80,6 +82,23 @@ const BROTLI_QUALITY = 9;
  */
 const SESSIONS_PAGE = 4;
 const SESSIONS_PER_PROJECT = 10;
+/**
+ * 转发给别的机器时最多等多久回音：到点还没动静就当那台不在（界面上一句「连不上」，不再干等）。
+ * 手机上往一个根本到不了的地址（比如没连 tailscale 时的 100.x）发请求会一直挂着，
+ * 挂多久界面就多久不出现那一节 —— 这个数就是给那种情况兜底的。
+ */
+const PROXY_CONNECT_MS = 8000;
+/** 转发时不带过去的请求头：Host 要按对方重写，来源 / Referer 那边不认，压缩让两边自己谈。 */
+const PROXY_DROP_REQ_HEADERS = new Set([
+    "host", "origin", "referer", "cookie", "accept-encoding",
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade",
+]);
+/** 转发回页面时去掉的响应头：逐跳的那几个，加上上游自己加的跨源放行（页面已经只跟本机打交道了）。 */
+const PROXY_DROP_RES_HEADERS = new Set([
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade",
+    "access-control-allow-origin", "access-control-allow-credentials", "access-control-allow-headers",
+    "access-control-allow-methods", "access-control-expose-headers", "access-control-max-age",
+]);
 
 /**
  * 请求方说它收哪些压缩方式（名字 → q 值；没提就是没有，q=0 当作不收）。
@@ -612,6 +631,12 @@ export class PiChatWebServer {
             // 别的 pichat 后端推来的“有事”（机器对机器，见 src/remoteNotice.ts）
             if (pathname === "/notify") {
                 void this.handleRemoteNotice(req, res);
+                return;
+            }
+            // 页面要看别的机器上的东西（清单、会话的推送流、文件）：这条替它转过去（见 proxyToMachine）。
+            // 按**没解码**的地址切段：那一段里编码着对方的地址，`%2F` 不能被解开，所以拿 url.pathname。
+            if (url.pathname.startsWith("/m/")) {
+                this.proxyToMachine(req, res, url.pathname.slice("/m/".length));
                 return;
             }
             if (pathname === "/" || pathname === "/index.html") {
@@ -1496,6 +1521,110 @@ export class PiChatWebServer {
             });
         }
         this.sendJson(req, res, 200, { projects, offset, hasMore: offset + page.length < dirs.length });
+    }
+
+    /**
+     * 替页面去问别的机器：`/m/<编码过的对方地址>/<它那边的路径>`（页面那边见 media/chat.js 的 remoteWire）。
+     *
+     * 为什么要转这一下：页面是拿手机能到的那个地址打开的，而「远程机器」那栏里填的往往是别的机器
+     * 自己那套网内的地址（比如 tailscale 的 100.x）—— 手机没连那个网就到不了它，手机上连“哪台有哪些
+     * 会话”这一节都出不来。转到后端这边以后，能不能连上只取决于这台后端（它本来就要连那几台去推提醒），
+     * 手机只要连得到这台就行；顺带也不用再跟那台套 CORS、不用怕 https 页面去连 http 的那台。
+     *
+     * 只转给设置里「远程机器」那栏填的那几台（跟 `/health` 报的是同一份，`machineTargets`），
+     * 别的一律 403：不然这就成了一个谁都能用的中转，网页里一段脚本能把任意地址读成自己的。
+     *
+     * 正文原样往后接，不攒起来：`/events` 那条推送流是一段一段写的，攒一下就等于卡住。
+     * 等回音有时限（PROXY_CONNECT_MS），到点就回一句「连不上那台」。
+     *
+     * @param rest 地址里 `/m/` 后面那一段（没解码）：`<编码过的对方地址>/<它那边的路径>?<查询>`
+     */
+    private proxyToMachine(req: http.IncomingMessage, res: http.ServerResponse, rest: string): void {
+        const slash = rest.indexOf("/");
+        const rawOrigin = slash < 0 ? rest : rest.slice(0, slash);
+        const tail = slash < 0 ? "/" : rest.slice(slash);
+        const decoded = decodeSegment(rawOrigin);
+        const target = decoded ? normalizeOrigin(decoded) : undefined;
+        if (!target) { this.sendText(req, res, 400, "转发地址不合法。"); return; }
+        if (!this.machineTargets().includes(target)) {
+            this.sendText(req, res, 403, "这台不替它转：设置里「远程机器」里没有这个地址。");
+            return;
+        }
+        const raw = req.url ?? "/";
+        const q = raw.indexOf("?");
+        const search = q >= 0 ? raw.slice(q) : "";
+        let parsed: URL;
+        try {
+            parsed = new URL(target + tail + search);
+        } catch {
+            this.sendText(req, res, 400, "转发地址不合法。");
+            return;
+        }
+        const headers: http.OutgoingHttpHeaders = {};
+        for (const [name, value] of Object.entries(req.headers)) {
+            if (value === undefined || PROXY_DROP_REQ_HEADERS.has(name)) { continue; }
+            headers[name] = value;
+        }
+        const secure = parsed.protocol === "https:";
+        const upstream = (secure ? https : http).request({
+            protocol: parsed.protocol,
+            hostname: parsed.hostname,
+            port: parsed.port || (secure ? 443 : 80),
+            method: req.method,
+            path: parsed.pathname + parsed.search,
+            headers,
+        });
+        /** 已经回过话了没有（回过就不再回第二条，防止超时与回包赛跑）。 */
+        let answered = false;
+        const timer = setTimeout(() => {
+            if (answered) { return; }
+            answered = true;
+            this.hooks.log(`[转发] ${target}${parsed.pathname} ${PROXY_CONNECT_MS} 毫秒没回应，算它连不上`);
+            upstream.destroy();
+            this.sendText(req, res, 504, `连不上那台（${PROXY_CONNECT_MS / 1000} 秒没回应）。`);
+        }, PROXY_CONNECT_MS);
+        upstream.on("response", (up) => {
+            if (answered) { up.resume(); return; }
+            answered = true;
+            clearTimeout(timer);
+            const out: http.OutgoingHttpHeaders = {};
+            for (const [name, value] of Object.entries(up.headers)) {
+                if (value === undefined || PROXY_DROP_RES_HEADERS.has(name)) { continue; }
+                out[name] = value;
+            }
+            res.writeHead(up.statusCode ?? 502, out);
+            res.flushHeaders();
+            up.pipe(res);
+            up.on("error", () => { try { res.end(); } catch { /* 已经断了 */ } });
+        });
+        upstream.on("error", (err: any) => {
+            clearTimeout(timer);
+            if (answered) { try { res.end(); } catch { /* 同上 */ } return; }
+            answered = true;
+            const code = String(err?.code ?? "");
+            const why = code === "ECONNREFUSED" ? "那台的端口没开着"
+                : code === "ENOTFOUND" || code === "EAI_AGAIN" ? "那个地址解析不了"
+                : code === "EHOSTUNREACH" || code === "ENETUNREACH" ? "这台到不了那个地址"
+                : code === "ECONNRESET" ? "那台把连接断了"
+                : (err?.message || "请求没发出去");
+            this.hooks.log(`[转发] ${target}${parsed.pathname} 失败：${why}`);
+            this.sendText(req, res, 502, `连不上那台（${why}）。`);
+        });
+        // 页面那头断了（关页面、锁屏、那台把这屏摘了）：上游这条也别留着，不然那台的推送流会一直挂着
+        res.on("close", () => { clearTimeout(timer); try { upstream.destroy(); } catch { /* 已经断了 */ } });
+        req.pipe(upstream);
+    }
+
+    /** 设置里「远程机器」那几台的地址（跟 `/health` 报的是同一份）。 */
+    private machineTargets(): string[] {
+        const info = this.hooks.info?.() ?? {};
+        const list = Array.isArray(info.machines) ? info.machines : [];
+        const out: string[] = [];
+        for (const one of list) {
+            const origin = typeof one === "string" ? normalizeOrigin(one) : undefined;
+            if (origin && !out.includes(origin)) { out.push(origin); }
+        }
+        return out;
     }
 
     private sendJson(req: http.IncomingMessage, res: http.ServerResponse, status: number, value: unknown): void {

@@ -8418,9 +8418,12 @@
   /**
    * 地址里的会话参数：本地会话照旧（空前缀 + 本机号），远程会话换成那台的地址前缀 + 它那边的号。
    * 文件侧边栏那几个口子（/file /dir /site /changes …）都会带会话号，全都走这一个判断。
+   * 远程那台的地址前缀是 `/m/<编码过的地址>`：这一趟由本机后端转过去（见 remoteWire），
+   * 页面不直接连它（手机不一定到得了那台）。
    */
   function sessionUrlParts(sessionId) {
-    return remoteRouteOf(sessionId) || { base: "", sessionId: sessionId || "" };
+    const route = remoteRouteOf(sessionId);
+    return route ? { base: remoteWire(route.base), sessionId: route.sessionId } : { base: "", sessionId: sessionId || "" };
   }
 
   function sidebarUrl(tab, mtime) {
@@ -10239,12 +10242,9 @@
           const a = document.createElement("span"); a.className = "pk-history-age"; a.textContent = pickerRelTime(item.lastActivity);
           right.appendChild(a);
         } else if (item.remoteEmpty && item.remoteHost) {
-          // 连不上的原因也写一行小字（完整那句在悬停里）：一眼知道是“没发出去”还是“那边不让读”
-          const why = String(item.remoteHost.error || "");
-          const short = why.indexOf("mixed" ) >= 0 || why.indexOf("混合内容") >= 0 ? "https 连不了 http"
-            : why.indexOf("不让读") >= 0 ? "那台不让读"
-            : why.indexOf("没发出去") >= 0 ? "请求没发出去"
-            : "";
+          // 连不上是为什么：这一趟是本机后端去连的，它说得清（没回应 / 端口没开 / 那台回了句错）。
+          // 手机上没法悬停，所以那句短的就直接写在行尾（完整那句仍旧在悬停里）。
+          const short = shortRemoteReason(String(item.remoteHost.error || ""));
           if (short) {
             const info = document.createElement("span"); info.className = "pk-history-age"; info.textContent = short;
             right.appendChild(info);
@@ -10262,7 +10262,7 @@
         }
       } else if (st.kind === "workspace" && item.__section === "machineSession") {
         // 别的机器上的会话：跟历史会话那一行长得一样（来源已经写在上面那个工作区行上了）。
-        // 现在只看得见，还不能点开（见下面 confirmPicker 里那一条）。
+        // 点它就在这台看、在这台发消息（见 confirmPicker 与 openRemoteSession）。
         el.classList.add("pk-history", "pk-machine-session");
         const main = document.createElement("div"); main.className = "pk-history-main";
         const title = document.createElement("span"); title.className = "pk-history-title";
@@ -10454,7 +10454,8 @@
     const st = view.state; if (!st) { return; }
     if (st.kind === "model") { submitModelPicker(view); return; }
     if (!item) { return; }
-    // 「别的机器」：点机器那一行 = 重问一遍；点它会话那一行 = 现在还不能打开（只看得见）
+    // 「别的机器」：点那台的一个工作区 = 展开 / 收起（连不上的那一行是重问一遍）；
+    // 点它会话那一行 = 在这台看、在这台发消息（见 openRemoteSession）
     if (item.__section === "machineSession") { openRemoteSession(item); return; }
     if (item.__section === "remoteSpace") {
       // 连不上的那一行：点一下重问一遍（那边可能是刚起来）
@@ -10636,11 +10637,19 @@
   // ========================================================================
   //  别的机器（多台 pichat 互联）
   //
-  //  清单是页面自己去问的，不经过本机后端：先问本机 /health（它报 machines：设置里「远程机器」
-  //  那栏填的地址），再对每台问 /health（名字、在不在）和 /sessions（它有哪些项目、会话）。
+  //  先问本机 /health（它报 machines：设置里「远程机器」那栏填的地址），再对每台问 /health（名字、
+  //  在不在）和 /sessions（它有哪些项目、会话）。
+  //  每一趟都不是页面直接连那台，而是写成 `/m/<那边的地址>/…` 交给本机后端去转（见 remoteWire 与
+  //  webChatServer 的 proxyToMachine）：手机只要连得到本机就行，不必自己也连在对方那个网里。
   //  每台一节（「工作区-<那台的名字>」），节里是那台的项目；点开项目展开它的会话，
   //  点会话就在这台看、在这台发消息（见 openRemoteSession）。
   // ========================================================================
+
+  /**
+   * 那台机器的地址在这台服务上怎么写：`/m/<编码过的地址>`（后端那条转发认这个前缀）。
+   * 后面照旧接 `/health`、`/sessions`、`/events`、`/file` 这些——跟直接连那台时一模一样。
+   */
+  function remoteWire(url) { return "/m/" + encodeURIComponent(String(url || "").replace(/\/+$/, "")); }
 
   /** 别人的机器多久重问一次（侧边栏重推、切面板都会顺手刷新，这里只是兜底）。 */
   const REMOTE_HOSTS_REFRESH_MS = 15000;
@@ -10676,8 +10685,17 @@
   /** 问一台：它在不在、叫什么、有哪些会话。连不上也有这一行（写着“连不上”）。 */
   /** 问那台要一页工作区（从第 offset 个往后数一批，跟本机一样一批 5 个）。 */
   function fetchRemoteSessions(base, offset) {
-    const url = base + "/sessions" + (offset > 0 ? "?offset=" + offset : "");
-    return fetch(url, { cache: "no-store" }).then((r) => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)));
+    const url = remoteWire(base) + "/sessions" + (offset > 0 ? "?offset=" + offset : "");
+    return fetch(url, { cache: "no-store" }).then((r) => r.ok ? r.json() : failedResponse(r));
+  }
+
+  /** 那台没答好：把本机后端给的那句人话（比如「连不上那台（8 秒没回应）」）拿来当错。 */
+  function failedResponse(resp) {
+    const fallback = "HTTP " + resp.status;
+    return resp.text().then((text) => {
+      const said = String(text || "").trim();
+      return Promise.reject(new Error(said && said.length <= 120 ? said : fallback));
+    }, () => Promise.reject(new Error(fallback)));
   }
 
   function probeRemoteHost(url) {
@@ -10685,7 +10703,7 @@
     if (!base) { return Promise.resolve(null); }
     if (base === location.origin) { return Promise.resolve(null); }
     return Promise.all([
-      fetch(base + "/health", { cache: "no-store" }).then((r) => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))),
+      fetch(remoteWire(base) + "/health", { cache: "no-store" }).then((r) => r.ok ? r.json() : failedResponse(r)),
       fetchRemoteSessions(base, 0),
     ]).then(([health, sessions]) => {
       const projects = sessions && Array.isArray(sessions.projects) ? sessions.projects : [];
@@ -10693,8 +10711,13 @@
       let count = 0;
       for (const project of projects) { count += (project.sessions || []).length; }
       return { url: base, name: hostName, online: true, count, projects, hasMore: !!(sessions && sessions.hasMore) };
-    }).catch(async (err) => {
-      return { url: base, name: base, online: false, count: 0, projects: [], hasMore: false, error: await describeRemoteFailure(base, err) };
+    }).catch((err) => {
+      // 那台的名字拿不到：节标题就写地址（见 remoteHostLabel）。原因照本机后端说的写（它去连的，
+      // 说得出是没回应、端口没开，还是那台回了句错）。
+      return {
+        url: base, name: base, online: false, count: 0, projects: [], hasMore: false,
+        error: (err && err.message) || "连不上那台",
+      };
     });
   }
 
@@ -10717,25 +10740,6 @@
     });
   }
 
-  /**
-   * 连不上到底是哪一步卡住了：再发一次 `no-cors` 的请求试试。
-   *   - 这次能送到（浏览器不报错）→ 那台是活的，只是它没回跨源的响应头（版本旧 / 来源没放行）；
-   *   - 这次也报错 → 请求根本没出去：页面的安全策略拦了（CSP）、或者网络不通。
-   * 两种在普通 fetch 的报错里长得一模一样（都是 Failed to fetch），只能这么分。
-   */
-  function describeRemoteFailure(base, err) {
-    const first = err && err.message ? "（" + err.message + "）" : "";
-    // https 页面去连 http 的那台：浏览器按“混合内容”直接拦，怎么改配置都没用
-    if (location.protocol === "https:" && !/^https:/i.test(base)) {
-      return "这页是 https 打开的，浏览器不让它去连 http 的那台（混合内容）。"
-        + "用 http 打开这页，或者把那一台也挂上 https（比如 tailscale serve）。";
-    }
-    return fetch(base + "/health", { cache: "no-store", mode: "no-cors" }).then(
-      () => "那台回话了，但浏览器不让读" + first + "：多半是那台没回跨源的响应头（版本旧），或者它的来源放行没认到这台。",
-      () => "请求没发出去" + first + "：可能被本页的安全策略拦了（CSP，重启后端再刷新），或者网络不通。",
-    );
-  }
-
   /** 别的机器上的工作区展开状态（键是 地址|目录）。本机那份展开记忆走宿主的 expandedDirs，这里另存。 */
   const remoteExpanded = new Set();
   function remoteKey(hostUrl, cwd) { return hostUrl + "|" + cwd; }
@@ -10753,6 +10757,17 @@
     const info = now && now.remote;
     if (!info || !cwd) { return false; }
     return info.host === host.url && samePath(cwd, now.cwd || "");
+  }
+
+  /**
+   * 连不上的原因压成行尾那一小句（手机上没有悬停，只能写出来）。
+   * 本机后端给的是「连不上那台（8 秒没回应）。」这种，括号里那句最要紧；拿不到就整句短才用。
+   */
+  function shortRemoteReason(why) {
+    const inner = /[（(]([^（）()]{1,18})[）)]\s*。?$/.exec(why);
+    if (inner) { return inner[1].replace(/。$/, ""); }
+    const text = why.replace(/。$/, "");
+    return text && text.length <= 16 ? text : "";
   }
 
   /** 那台在界面上叫什么：它的标签；连不上（拿不到标签）就用主机:端口，别把 http:// 也写进节名。 */
