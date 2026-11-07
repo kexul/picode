@@ -210,6 +210,11 @@ export function isPrivateOrigin(originHeader: string | undefined): boolean {
     if (url.protocol !== "http:" && url.protocol !== "https:") { return false; }
     const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
     if (host === "localhost" || host.endsWith(".localhost")) { return true; }
+    // 局域网里的机器名：很多人是用 `http://<计算机名>:51883` 打开页面的。
+    // 单段主机名（不带点的）和这几个本地区域后缀都算自己人；公网站点基本都带域名后缀，
+    // 外网网页的 Origin 仍然被拒。
+    if (host.indexOf(".") < 0) { return true; }
+    if (/\.(local|lan|home|internal|corp|localdomain)$/i.test(host)) { return true; }
     // tailscale 的 MagicDNS 名字：页面可能就是从 `https://xxx.ts.net` 打开的
     if (host.endsWith(".ts.net")) { return true; }
     if (host.includes(":")) {
