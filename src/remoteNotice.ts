@@ -13,7 +13,7 @@
  * 塞不进东西来（带 Origin 的请求过不了那道关），机器对机器发的请求没有 Origin，照收。
  */
 export interface RemoteNotice {
-    /** 哪台机器推来的：它那台的名字（设置里「这台叫什么」，见 pageHtml 的 displayName）。 */
+    /** 哪台机器推来的：它那台的名字（设置里那行「标签」，见 pageHtml 的 displayName）。 */
     label: string;
     /** 推送方那边的会话标识。 */
     sessionId: string;

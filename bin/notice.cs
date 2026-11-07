@@ -11,7 +11,7 @@
  * 后端就静悄悄地不弹，其余照常（浏览器页面里照样看得到）。
  *
  * 那张卡片是一扇「分层窗口」（WS_EX_LAYERED + UpdateLayeredWindow）：自己画一张 32 位带透明度的图
- * 贴到屏幕上，所以左上角那颗「这台叫什么」的小标签能一半挑到卡片外面、边缘还是干净的抗锯齿，
+ * 贴到屏幕上，所以左上角那颗「标签」的小标签能一半挑到卡片外面、边缘还是干净的抗锯齿，
  * 底下透出来的是真的桌面（不是拿某个颜色冒充透明 —— 那样抗锯齿的那几个像素会跟透明色混成一圈杂边）。
  * 窗口形状又按“卡片本体 + 那颗标签”裁过（见 NoticeCard.Shape）：鼠标只在这两处归它管，
  * 标签周围那几条透明地带鼠标和点击都穿过去。
@@ -23,7 +23,7 @@
  * 协议（一行一条，字段之间拿制表符隔开；标题、正文、标签是 UTF-8 码的 base64，省得跟制表符打架）：
  *   后端写进来：
  *     show<TAB>标识<TAB>0|1<TAB>标题<TAB>正文<TAB>标签     0 = 跑完一轮，1 = 在等你答一句
- *                                                    标签（可省，旧后端不带）= 这台叫什么（设置里那项）
+ *                                                    标签（可省，旧后端不带）= 设置里那行「标签」
  *     close<TAB>标识                              把那一张收走（那个会话已经说上话了 / 关掉了）
  *     closeall                                    全收走
  *   它写出去：
@@ -234,7 +234,7 @@ sealed class NoticeCard : Form
     private static readonly Color DoneColor = Color.FromArgb(0x2E, 0x7D, 0x32);
     private static readonly Color AskColor = Color.FromArgb(0xB2, 0x6A, 0x00);
 
-    // 左上角那颗小标签（这台叫什么）
+    // 左上角那颗小标签（设置里那行「标签」）
     private static readonly Color TagBg = Color.FromArgb(0xEE, 0xF1, 0xF5);
     private static readonly Color TagColor = Color.FromArgb(0x4B, 0x55, 0x63);
     private static readonly Color TagBorderColor = Color.FromArgb(0xCF, 0xD5, 0xDD);
@@ -250,7 +250,7 @@ sealed class NoticeCard : Form
     private Rectangle closeRect;
     private bool hoverClose;
 
-    /// <summary>左上角那颗小标签写的字（这台叫什么）；空着就没有它。</summary>
+    /// <summary>左上角那颗小标签写的字（设置里那行「标签」）；空着就没有它。</summary>
     private readonly string tag;
     /// <summary>标签太长时切过一刀的那个写法（画的是它）。</summary>
     private readonly string tagText;

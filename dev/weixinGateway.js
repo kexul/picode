@@ -158,12 +158,12 @@ async function watchNotify(page) {
     try {
         let config = {};
         try { config = JSON.parse(configBefore || "{}"); } catch { config = {}; }
-        // 把临时收件口填成推送地址，有事就推到这儿
+        // 把临时收件口填成推送地址，有事就推到这儿；标签临时改成认得的那个
         const notify = config.notify && typeof config.notify === "object" ? config.notify : {};
+        config.label = OTHER_LABEL;
         config.notify = {
             ...notify,
             pushTo: [`http://127.0.0.1:${port}`],
-            pushLabel: OTHER_LABEL,
         };
         fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), "utf8");

@@ -337,16 +337,14 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract notifyTurnEndEnabled(): boolean;
     /** 设置面板里「消息推送」那一行现在填着什么（没有就是空表）。 */
     protected notifyPushTargets(): string[] { return []; }
-    /** 设置面板里「推到那边时叫它什么」那一行现在填着什么。 */
-    protected notifyPushLabel(): string { return ""; }
     /**
      * 设置面板里「消息推送」那一行空着时显示的例子：一般就是这台机器自己的地址，
      * 人一看就知道“留着它”是什么意思（提醒还在这台）。
      */
     protected notifyPushExample(): string { return "http://10.0.0.2:51883"; }
-    /** 设置里「这台叫什么」现在填着什么（空 = 用机器名）。 */
+    /** 设置里「标签」现在填着什么（空 = 用机器名）。 */
     protected machineLabel(): string { return ""; }
-    /** 「这台叫什么」空着时那句灰字提示：就是机器名，人一眼知道空着会用哪个。 */
+    /** 「标签」空着时那句灰字提示：就是机器名，人一眼知道空着会用哪个。 */
     protected machineLabelExample(): string { return ""; }
     // ---- 文件列表 / 文件打开（来自 webview 的 listFiles / openFile）----
     protected abstract sendFileList(): void;
@@ -509,7 +507,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             },
             {
                 action: "machineLabel",
-                label: "这台叫什么",
+                label: "标签",
                 desc: "",
                 section: "通知",
                 check: null,
@@ -527,16 +525,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 placeholder: this.notifyPushExample(),
                 // 没填过就显示这台机器自己的地址：留着它 = 提醒还在这台，改成别的机器 = 挪过去
                 value: (this.notifyPushTargets().length > 0 ? this.notifyPushTargets() : [this.notifyPushExample()]).join(", "),
-            },
-            {
-                action: "notifyPushLabel",
-                label: "推送标签",
-                desc: "",
-                section: "通知",
-                check: null,
-                kind: "text",
-                placeholder: "家里那台",
-                value: this.notifyPushLabel(),
             },
         ];
     }

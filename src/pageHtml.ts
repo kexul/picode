@@ -61,7 +61,7 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
         `form-action 'none';`;
 
     // 浏览器 tab 的标题用这台的名字（形如 `家里-pi`）：同时开着几台机器的页面时，
-    // 光看标题分不出谁是谁。名字是设置里那项「这台叫什么」，空着就用机器名；都取不到就只剩 `pi`。
+    // 光看标题分不出谁是谁。名字是设置里那行「标签」，空着就用机器名；都取不到就只剩 `pi`。
     const host = displayName();
     // 按需加载的脚本（现在只有 pele，画 mermaid 图用的）不排进首屏，地址写进 meta，主脚本真要用时自己去拉。
     // 地址放这儿而不是写死在 chat.js 里，是为了让它带着内容指纹（见 mediaVersion.ts）。
@@ -146,11 +146,7 @@ export function getPanelChatHtml(
 }
 
 /**
- * 这台机器的名字（系统里的主机名）。取不到就空串。
- * 主机名可能带引号、尖括号这类字符，写进 HTML 前照样 {@link escapeAttr} 转义。
- */
-/**
- * 这台叫什么：设置里那项「这台叫什么」（浏览器标题、别人那边的列表与提醒卡片都用它），
+ * 设置里那行「标签」（浏览器标题、提醒卡片左上角那颗小标签都用它），
  * 没写就用机器名（`GIH-D-26741` 这种）。
  */
 export function displayName(): string {
@@ -161,6 +157,10 @@ export function displayName(): string {
     return machineName();
 }
 
+/**
+ * 这台机器的名字（系统里的主机名）。取不到就空串。
+ * 主机名可能带引号、尖括号这类字符，写进 HTML 前照样 {@link escapeAttr} 转义。
+ */
 export function machineName(): string {
     try {
         return os.hostname();

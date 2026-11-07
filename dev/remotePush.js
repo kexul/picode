@@ -30,7 +30,9 @@ module.exports = async (page) => {
     try {
         let config = {};
         try { config = JSON.parse(before || "{}"); } catch { config = {}; }
-        config.notify = { ...(config.notify || {}), pushTo: [`http://127.0.0.1:${port}`], pushLabel: "公司那台" };
+        // 标签写成写下的那个，收到的通知里带的就是它
+        config.label = "公司那台";
+        config.notify = { ...(config.notify || {}), pushTo: [`http://127.0.0.1:${port}`] };
         fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), "utf8");
 
@@ -42,7 +44,7 @@ module.exports = async (page) => {
         if (!got.length) { throw new Error("跑完一轮了，推送地址那边一条也没收到"); }
         const notice = got[got.length - 1];
         console.log("  · 收到推送：" + JSON.stringify(notice));
-        if (notice.label !== "公司那台") { throw new Error("推送标签没带上：" + notice.label); }
+        if (notice.label !== "公司那台") { throw new Error("推送里没带上这台的标签：" + notice.label); }
         if (!notice.sessionId || !notice.pageUrl) { throw new Error("推送缺 sessionId / pageUrl"); }
     } finally {
         server.close();

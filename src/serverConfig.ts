@@ -44,7 +44,7 @@ export interface ServerWebSettings {
 /**
  * 跨机器的“有事”提醒（另一台机器上的后端跑完一轮，往这台推一条）。
  *
- * 只改推送方那一台：notify.pushTo（推到哪儿去）+ notify.pushLabel（自己是哪台）。
+ * 只改推送方那一台：notify.pushTo（推到哪儿去）。
  * 接收方什么都不用写（收到了就收）。不写 pushTo 就谁也不推。详见 src/remoteNotice.ts。
  *
  * 没有口令：这个后端本来就没有登录（README 里写着“只在信得过的网络里用”），
@@ -54,8 +54,6 @@ export interface ServerWebSettings {
 export interface ServerNotifySettings {
     /** 推到这些地址（对方网页服务的地址，比如 `http://10.0.0.2:51883`）；一个都没有 = 不推。 */
     pushTo: string[];
-    /** 推到对方那边时显示的名字（空 = 用这台的「这台叫什么」）。 */
-    pushLabel: string;
 }
 
 export interface ServerConfig {
@@ -70,7 +68,8 @@ export interface ServerConfig {
     fontSize: string;
     themeMode: "light" | "dark";
     /**
-     * 这台叫什么：提醒卡片左上角那颗小标签、以及浏览器标签页标题都用它。
+     * 标签：这台叫什么（设置面板里那行「标签」）。
+     * 提醒卡片左上角那颗小标签、以及浏览器标签页标题都用它。
      * 空着就用机器名（`GIH-D-26741` 这种，不好看但总是有的）。
      */
     label: string;
@@ -103,7 +102,7 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = deepFreeze({
     // 第一次启动后端会把内置原文填进来，人照着改就行
     prompts: {},
     // 跨机器的提醒默认谁也不推：得人自己在设置面板「消息推送」里填对方地址
-    notify: { pushTo: [], pushLabel: "" },
+    notify: { pushTo: [] },
     // 默认对所有网卡开放（手机等设备打开地址就能用）；只给自己用就改 127.0.0.1，或启动时加 --host 127.0.0.1
     webServer: { port: 51883, host: "0.0.0.0", trustedOrigins: [] },
 });
@@ -379,7 +378,7 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
         }
     }
 
-    // ---- 这台叫什么（浏览器标题、提醒卡片左上角那颗小标签都用它）----
+    // ---- 标签（设置里的「标签」：浏览器标题、提醒卡片左上角那颗小标签都用它）----
     config.label = pickText(raw.label, "label", warnings);
 
     // ---- 提示词（config.json 的 prompts 一节）----
@@ -412,8 +411,8 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
             warnings.push("notify 不是一个对象，已全部用默认值");
         } else {
             config.notify.pushTo = pickUrlList(notify.pushTo, "notify.pushTo", warnings);
-            config.notify.pushLabel = pickText(notify.pushLabel, "notify.pushLabel", warnings);
-            const knownNotifyKeys = new Set(Object.keys(DEFAULT_SERVER_CONFIG.notify));
+            // 早先那项 notify.pushLabel（推过去时单独叫个名字）并进了那行「标签」：老文件里还写着就安静丢掉
+            const knownNotifyKeys = new Set([...Object.keys(DEFAULT_SERVER_CONFIG.notify), "pushLabel"]);
             const unknownNotifyKeys = Object.keys(notify).filter((key) => !knownNotifyKeys.has(key));
             if (unknownNotifyKeys.length > 0) {
                 warnings.push(`配置里有不认识的项：notify.${unknownNotifyKeys.join("、notify.")}`);

@@ -772,7 +772,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 this.noticeLinks.delete(oldest);
             }
         }
-        // 左上角那颗小标签写的是「这台叫什么」（空着就是电脑名）：一眼看出这张是这台弹的
+        // 左上角那颗小标签写的是设置里那项「标签」（空着就是电脑名）：一眼看出这张是这台弹的
         this.notice.show(key, title, body, ask, displayName());
     }
 
@@ -1060,12 +1060,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     //  跨机器的提醒（设置面板里填对方地址，推过去）
     // ========================================================================
 
-    /** 设置里「这台叫什么」现在填着什么（空 = 用机器名，见 pageHtml 的 displayName）。 */
+    /** 设置里「标签」现在填着什么（空 = 用机器名，见 pageHtml 的 displayName）。 */
     protected override machineLabel(): string {
         return readServerConfig().config.label;
     }
 
-    /** 「这台叫什么」空着时那句灰字提示：就是电脑名。 */
+    /** 「标签」空着时那句灰字提示：就是电脑名。 */
     protected override machineLabelExample(): string {
         return machineName();
     }
@@ -1073,11 +1073,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 设置面板里「有事也推到别的机器」那一行现在填着什么（设置文件里的 notify.pushTo）。 */
     protected override notifyPushTargets(): string[] {
         return [...readServerConfig().config.notify.pushTo];
-    }
-
-    /** 设置面板里「推到那边时叫它什么」那一行现在填着什么（设置文件里的 notify.pushLabel）。 */
-    protected override notifyPushLabel(): string {
-        return readServerConfig().config.notify.pushLabel;
     }
 
     /** 「消息推送」空着时那句灰字例子：这台机器自己的地址。 */
@@ -1179,8 +1174,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 // 填本机自己的地址等于没填（面板上照样显示它，但设置文件里不留这行废话）
                 .filter((item) => !isOwnPage(item, this.options.selfPageUrl?.()));
             updateServerConfig({ notify: { pushTo: urls } });
-        } else if (action === "notifyPushLabel") {
-            updateServerConfig({ notify: { pushLabel: String(value ?? "").trim() } });
         } else if (action === "theme") {
             const next = value === "dark" || value === "light"
                 ? value
@@ -1832,8 +1825,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const targets = notify.pushTo.filter((target) => !isOwnPage(target, base));
         if (targets.length === 0) { return false; }
         const notice = {
-            // 推过去那边卡片上写的名字：设置里的「推送标签」，空着就用「这台叫什么」
-            label: notify.pushLabel || displayName(),
+            // 那边卡片上写的就是这台的「标签」
+            label: displayName(),
             sessionId,
             name,
             // 正文也推过去：那台弹卡片时才不会只剩一个名字
