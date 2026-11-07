@@ -339,44 +339,10 @@
    * 发不出去就一直重试；只有服务明确回了"不认识这个页面"（409，多半是插件重启过）
    * 或"来源不被接受"（403）才认输。
    */
-  /** 把“这个会话号归哪台”告诉我的人（chat.js 装上来的）：远程会话的消息得发到那台去。 */
-  var routeFor = null;
-  /** 消息带着的会话号映射到别的机器上（本机那些返回 null = 照旧走本机）。 */
-  function remoteRoute(msg) {
-    if (!routeFor || !msg || !msg.sessionId) { return null; }
-    var route = routeFor(msg.sessionId);
-    return route && route.base ? route : null;
-  }
-
-  /** 发到那台机器去（用那边自己的页面标识；会话号换回它那边的）。 */
-  function postRemote(route, msg) {
-    var h = hostOf(route.base);
-    connectHost(route.base);
-    var copy = {};
-    for (var k in msg) { if (Object.prototype.hasOwnProperty.call(msg, k)) { copy[k] = msg[k]; } }
-    copy.sessionId = route.sessionId;
-    return fetch(wireOf(route.base) + "/api?pageId=" + encodeURIComponent(h.pageId), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(copy),
-    }).then(function (resp) {
-      if (!resp.ok) {
-        bannerText("这条消息没能发到那台机器（HTTP " + resp.status + "），可以重发一次。", false);
-        return;
-      }
-      hideBanner();
-    }).catch(function () {
-      bannerText("连不上那台机器，这条消息没发出去。", false);
-    });
-  }
-
   function post(msg, attempt) {
     // 已经认输了（服务停了 / 插件不认识这个页面）：这条消息发不出去了，别再重试，
     // 更别把“服务已停止”那条提示条改成“正在重试…”
     if (stopped) { return Promise.resolve(); }
-    // 这个会话跑在别的机器上：消息得发到那台去（那边自己会当它就是一块屏）
-    var route = remoteRoute(msg);
-    if (route) { return postRemote(route, msg); }
     return fetch("/api?" + query, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -591,118 +557,6 @@
       openedOnce = true;
     };
   }
-
-  // ==================== 多台 pichat：连到别的机器 ====================
-  // 页面是从 A 打开的，但会话可能跑在 B 上：B 那边把这一页当成另一块屏（有它自己的页面标识），
-  // 各给一条推送流、各记各的序号。收到的消息原样投给界面，只多一个 __host 字段（chat.js 靠它
-  // 认出这是哪台，把会话号翻译回本机那份）。发消息走 postToHost，用同一个页面标识。
-  // 这些连接不参与本机那条流的序号、也不影响“连不上插件”那条提示：某台断了就是那台那几行的事。
-  var hosts = Object.create(null);
-
-  /**
-   * 那台机器的地址在这台服务上怎么写：`/m/<编码过的地址>`（见 webChatServer 的 proxyToMachine）。
-   *
-   * 页面不直接连那台：手机上打开页面靠的是手机能到的那个地址（局域网、或者 tailscale 上这台），
-   * 而别的那台往往只在它自己那个网里（tailscale 的 100.x 之类）—— 手机不一定到得了。
-   * 都写成这个前缀交给本机后端去转，手机只要连得到本机就行；也不再磨跨源、跨 https。
-   */
-  function wireOf(base) {
-    return "/m/" + encodeURIComponent(String(base || "").replace(/\/+$/, ""));
-  }
-
-  function hostOf(base) {
-    var h = hosts[base];
-    if (h) { return h; }
-    h = hosts[base] = {
-      base: base,
-      pageId: (pageId || "p") + "@" + base,
-      source: null,
-      lastSeq: 0,
-      openedOnce: false,
-      online: false,
-      retryIndex: 0,
-      retryTimer: null,
-      lastTickAt: 0,
-    };
-    return h;
-  }
-
-  /** 开始（或重启）连到那台：同一个页面标识重连时带上 since，只补漏掉的。 */
-  function connectHost(base) {
-    var h = hostOf(base);
-    if (h.source) { return; }
-    clearTimeout(h.retryTimer);
-    h.retryTimer = null;
-    var url = wireOf(base) + "/events?pageId=" + encodeURIComponent(h.pageId)
-      + (h.openedOnce ? "&since=" + h.lastSeq : "");
-    var mine;
-    try {
-      mine = new EventSource(url);
-    } catch (e) {
-      scheduleHostReconnect(h);
-      return;
-    }
-    h.source = mine;
-    mine.addEventListener("msg", function (ev) {
-      if (h.source !== mine) { return; }
-      var data;
-      try { data = JSON.parse(ev.data); } catch (e) { return; }
-      if (!data || typeof data.type !== "string") { return; }
-      if (data.type === "hello") {
-        // 那台重启过：序号从头算，手里这个进度不适用了
-        if (typeof data.seq === "number" && data.seq < h.lastSeq) { h.lastSeq = 0; }
-        return;
-      }
-      if (typeof data.seq === "number" && data.seq > h.lastSeq) { h.lastSeq = data.seq; }
-      data.__host = base;
-      deliver(data);
-    });
-    mine.addEventListener("tick", function () {
-      if (h.source !== mine) { return; }
-      h.lastTickAt = Date.now();
-    });
-    mine.addEventListener("error", function () {
-      if (h.source !== mine) { return; }
-      try { mine.close(); } catch (e) { /* 已经断了 */ }
-      h.source = null;
-      // 那台断了：告诉界面一声（它好在会话格上标灰、在消息流里说一句）
-      if (h.online) { h.online = false; deliver({ type: "hostStatus", __host: base, online: false }); }
-      scheduleHostReconnect(h);
-    });
-    mine.addEventListener("open", function () {
-      if (h.source !== mine) { return; }
-      h.openedOnce = true;
-      h.retryIndex = 0;
-      h.lastTickAt = Date.now();
-      if (!h.online) { h.online = true; deliver({ type: "hostStatus", __host: base, online: true }); }
-    });
-  }
-
-  function scheduleHostReconnect(h) {
-    if (h.retryTimer) { return; }
-    var delay = [1000, 2000, 4000, 8000, 15000][Math.min(h.retryIndex, 4)];
-    h.retryIndex += 1;
-    h.retryTimer = setTimeout(function () {
-      h.retryTimer = null;
-      connectHost(h.base);
-    }, delay);
-  }
-
-  /** 往那台发一条消息（用它自己的页面标识）。失败时抛错，由调用的那一头自己报。 */
-  function postToHost(base, msg) {
-    var h = hostOf(base);
-    connectHost(base);
-    return fetch(wireOf(base) + "/api?pageId=" + encodeURIComponent(h.pageId), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(msg === undefined ? null : msg)
-    }).then(function (resp) {
-      if (!resp.ok) { throw new Error("HTTP " + resp.status); }
-      return resp;
-    });
-  }
-
-  window.pichatHosts = { connect: connectHost, post: postToHost, setRouter: function (fn) { routeFor = fn; } };
 
   function closeSource() {
     if (!source) { return; }

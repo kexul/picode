@@ -16,6 +16,7 @@
  * 本类不引用 `vscode`。插件那一侧是纯客户端（跟浏览器页面一样，走 HTTP 连后端），不继承这份。
  */
 import * as crypto from "crypto";
+import * as http from "http";
 import * as path from "path";
 import type { AskRequest } from "./askProtocol";
 import { writeAskAnswer } from "./askProtocol";
@@ -34,7 +35,7 @@ import {
     rememberProjectDir,
     type ProjectDirEntry,
 } from "./sessionStore";
-import { listDirectories } from "./dirBrowse";
+import { listDirectories, type DirListing } from "./dirBrowse";
 import { findFileContents, findFileNames, findPathCandidates } from "./fileSearch";
 import { ChatBroadcaster } from "./chatBroadcaster";
 import { displayName, machineName } from "./pageHtml";
@@ -42,6 +43,7 @@ import { MessageBuffer, PAGE_TRANSIENT_MESSAGE_TYPES } from "./webTransport";
 import { pickOverlayClient } from "./overlayTarget";
 import { ScreenRegistry } from "./screenRegistry";
 import { dirInsideAny, dirKey } from "./pathRules";
+import { MachineHub } from "./machineHub";
 import type { WebServerHost } from "./webChatServer";
 import type { SessionChanges } from "./gitChanges";
 import type { BashTaskInfo } from "./bashProtocol";
@@ -150,6 +152,13 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private static readonly USE_DIR_ROW = "\u0000pichat:use-dir";
     /** 文件夹列表里“换一个盘 / 回到最上层”那一行的标识。 */
     private static readonly ROOTS_ROW = "\u0000pichat:roots";
+    /** 刚请别台开的新会话最多等多久（那台没装 pi 之类就等不到，别拿后来的清单去乱认）。 */
+    private static readonly MACHINE_NEW_WAIT_MS = 30000;
+
+    /** 别台那几台：连接、清单、会话号映射、转发（见 machineHub.ts）。 */
+    private machineHub!: MachineHub;
+    /** 刚请别台开了一个会话，等它报清单时认领（见 adoptPendingMachineNew）。 */
+    private pendingMachineNew: { machine: string; cwd: string; clientId: string; before: string[]; at: number } | null = null;
 
     // ---- 浏览器页面（接在本工作区上的“额外的屏”，可以有多个）----
     /** 页面连接登记簿 + 推送序号：所有浏览器页面共用同一份会话的出口。 */
@@ -214,9 +223,98 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         super("server");
         this.log = options.log ?? ((text) => console.log(text));
         this.state = new ServerStateStore(serverStateFile());
+        // 别台那几台：连接、清单、会话号映射、转发都在这一层（见 machineHub.ts）。
+        // 页面只跟这台说话；要跟别台打的交道全在这里做。
+        this.machineHub = new MachineHub({
+            log: (text) => this.log(text),
+            machines: () => readServerConfig().config.machines ?? [],
+            broadcast: (msg) => this.postToWebview(msg),
+            onSessionsChanged: () => this.onMachinesChanged(),
+            onSessionAdopted: (oldId, newId) => this.adoptForeignSessionId(oldId, newId),
+        });
+        this.machineHub.start();
         // 「项目与会话」下半那份目录清单这时先扫出来（见 sessionStore 的 listProjectDirs）：
         // 扫一次就定下来，第一条打开面板就不用再等这一趟
         void listProjectDirs();
+    }
+
+    // ========================================================================
+    //  别的机器（多台 pichat 互联）
+    //
+    //  页面（手机 / 浏览器 / 插件面板）只跟这台后端说话。别台的会话在这台当成“一种本机没有进程的
+    //  会话”看：清单里多摆一条（`foreignSessionEntries`）、能像本机那样被某块屏看着（`clientSessions`
+    //  里存它那个号），发过去的每一句都由 machineHub 转给那台。
+    // ========================================================================
+
+    /** 这个号是不是别台那台的（本机没有对应的 pi 进程）。 */
+    protected override isForeignSessionId(id: string): boolean {
+        return !!this.machineHub.ownerOf(id);
+    }
+
+    /** 本机清单里要给别台那些会话多摆的那几条（只算“这台认下的”那几个）。 */
+    protected override foreignSessionEntries(): Record<string, unknown>[] {
+        const out: Record<string, unknown>[] = [];
+        for (const id of this.machineHub.openedIds()) {
+            const machine = this.machineHub.ownerOf(id);
+            const one = this.machineHub.sessionOf(id);
+            if (!machine || !one) { continue; }
+            out.push({
+                ...one,
+                id,
+                // 名字、会话文件这些那台已经报过了；这里补的是“这台界面上要知道的那几样”
+                name: one.name || one.title || "会话",
+                // 界面靠这三个知道它跑在谁身上、那台在不在（会话格上的灰点、列表里那句“连不上”）
+                machine,
+                machineName: this.machineHub.nameOf(machine),
+                machineOnline: this.machineHub.isOnline(machine),
+                // 子会话、自动接着干这两样是那台自己的事：别台的会话在这一台上不画这两个
+                parentId: null,
+                taba: null,
+                auto: null,
+                autoTitle: null,
+            });
+        }
+        return out;
+    }
+
+    /** 那台报了新的会话清单 / 掉线 / 回来了：重推一份合并后的清单，顺手看新会话认不认得下来。 */
+    private onMachinesChanged(): void {
+        if (this.disposed) { return; }
+        this.adoptPendingMachineNew();
+        this.broadcastSessionList(true);
+        void this.refreshWorkspacePanels();
+    }
+
+    /**
+     * 刚请别台开的新会话：等它把会话清单报上来，里面多出来的那个、目录又对得上的，就是我让它开的。
+     * （那台自己已经把这会话当成那块“虚拟屏”要看的了，这边跟着认下、切过去就好。）
+     */
+    private adoptPendingMachineNew(): void {
+        const want = this.pendingMachineNew;
+        if (!want) { return; }
+        if (Date.now() - want.at > ChatHost.MACHINE_NEW_WAIT_MS) {
+            this.pendingMachineNew = null;
+            return;
+        }
+        const fresh = this.machineHub.findNewSession(want.machine, want.before, want.cwd);
+        if (!fresh) { return; }
+        this.pendingMachineNew = null;
+        const id = this.machineHub.toLocalId(want.machine, fresh.id);
+        this.machineHub.markOpened(id);
+        this.setActiveSession(id, want.clientId);
+    }
+
+    /**
+     * 在那台上开一个会话（工作区行尾那颗加号、或“在新工作区里开”挑完目录）。
+     * 先记下那台现在有哪些会话：等它报上新的清单，多出来的那个就是这一个（见 adoptPendingMachineNew）。
+     */
+    private startMachineSession(machine: string, cwd: string, clientId: string): void {
+        this.pendingMachineNew = {
+            machine, cwd, clientId,
+            before: this.machineHub.sessionIdsOf(machine),
+            at: Date.now(),
+        };
+        this.machineHub.newSession(machine, cwd);
     }
 
     // ========================================================================
@@ -427,6 +525,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const payload = await this.buildWorkspacePanel(clientId, expandedDirs);
         const choice = await this.openPicker("workspace", payload, clientId);
         if (!choice || typeof choice.file !== "string") { return; }
+        // 别台那一行：会话号是那边的写法，叫那台打开它，再切过去
+        if (typeof choice.machine === "string" && choice.machine && typeof choice.sessionId === "string" && choice.sessionId) {
+            this.machineHub.openSession(choice.sessionId);
+            this.setActiveSession(choice.sessionId, clientId);
+            return;
+        }
         // 目录是那一行自己带过来的（列表里混着好几个目录的会话）
         await this.openWorkspaceSession(choice.file, typeof choice.cwd === "string" ? choice.cwd : undefined, clientId);
     }
@@ -504,9 +608,116 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         await this.loadHistorySession(file, cwd, clientId);
     }
 
-    /** 面板里点了“打开文件夹…”（工作区标题右边那颗加号）：走原来逛文件夹那条路（挑一个目录、就在那里新建会话）。 */
-    private async browseFromWorkspacePanel(clientId: string): Promise<void> {
+    /**
+     * 别台那几台的项目行：接在工作区那一栏后面（每台一节，节名就是「工作区-<那台的名字>」）。
+     *
+     * 行的形状跟本机那些一模一样（`label` / `file` / `folderPath` / `lastActivity`），只多两个字段：
+     *   - `section`：这一行归哪一节（本机那些不写，界面默认就是「工作区」）；
+     *   - `machine`：那一台的地址 —— 展开、行尾加号都靠它知道要跟谁打交道。
+     * 连不上 / 那边一个项目都没有也给它一行（人知道清单里还有这台）。
+     */
+    private appendMachineRows(items: any[]): void {
+        const machines = this.machineHub.list();
+        // 有别台的时候，本机那些行也带上节名：免得界面把它们跟别台那一节混在一段里
+        if (machines.length > 0) {
+            for (const row of items) {
+                if (!row.section) { row.section = "工作区-本机"; }
+            }
+        }
+        for (const machine of machines) {
+            const section = "工作区-" + this.machineHub.nameOf(machine.url);
+            if (machine.projects.length === 0) {
+                items.push({
+                    label: machine.online ? "那边还没有会话" : "连不上",
+                    file: machine.url, folderPath: "", section, machine: machine.url,
+                    machineEmpty: machine.online ? "empty" : "offline",
+                    machineError: machine.error || "",
+                });
+                continue;
+            }
+            for (const one of machine.projects) {
+                items.push({
+                    label: one.name, file: one.cwd, folderPath: one.cwd,
+                    lastActivity: one.lastActivity, section, machine: machine.url,
+                });
+            }
+            if (machine.hasMore) {
+                items.push({ label: "加载更多工作区", section, machine: machine.url, machineMore: true });
+            }
+        }
+    }
+
+    /** 面板里点了“打开文件夹…”（工作区标题右边那颗加号）：走原来逛文件夹那条路（挑一个目录、就在那里新建会话）。
+     *  带 machine = 挑的是那台机器上的目录，挑完在那台上开新会话（见 startMachineSession）。 */
+    private async browseFromWorkspacePanel(clientId: string, machine = ""): Promise<void> {
+        if (machine) {
+            // 从那台最近聊过的目录开始翻（跟本机那颗从当前目录开始一个道理）
+            const info = this.machineHub.list().find((one) => one.url === machine);
+            const start = info && info.projects[0] ? info.projects[0].cwd : "";
+            await this.showFolderPicker(start, clientId, machine);
+            return;
+        }
         await this.showFolderPicker(this.getActive(clientId)?.cwd ?? this.getCwd(), clientId);
+    }
+
+    /** 问那台列一个目录（挑工作区用）。问不着就把原因放在 error 里（跟 listDirectories 一个形状）。 */
+    private async machineFolderListing(machine: string, dir: string): Promise<DirListing> {
+        try {
+            const raw = (await this.machineHub.listDirs(machine, dir)) as any;
+            const dirs = Array.isArray(raw?.dirs)
+                ? raw.dirs
+                    .filter((one: any) => one && typeof one.path === "string")
+                    .map((one: any) => ({ name: String(one.name || one.path), path: String(one.path) }))
+                : [];
+            return {
+                path: typeof raw?.path === "string" ? raw.path : "",
+                ...(typeof raw?.parent === "string" && raw.parent ? { parent: raw.parent } : {}),
+                dirs,
+                roots: raw?.roots === true,
+                ...(typeof raw?.error === "string" && raw.error ? { error: raw.error } : {}),
+            };
+        } catch (err: any) {
+            const why = String((err && err.message) || "").trim() || "列不出来";
+            return { path: String(dir || ""), dirs: [], roots: false, error: why };
+        }
+    }
+
+    /** 那台报过来几个项目（「加载更多工作区」从第几个往后要）。 */
+    private machineProjectCount(machineUrl: string): number {
+        const info = this.machineHub.list().find((one) => one.url === machineUrl);
+        return info ? info.projects.length : 0;
+    }
+
+    /**
+     * 别台上某个项目里的会话：那台的 `/sessions` 里现成就有（每个项目最多报前十条），
+     * 按界面要的那一批切出来，形状跟本机那一组一样（见 scanGroupPage）。
+     * 「当前」按这块屏正在看的那个会话号认（别台的会话号这台也认得）。
+     */
+    private machineGroupPage(machineUrl: string, cwd: string, offset: number, clientId: string): Record<string, unknown> {
+        const info = this.machineHub.list().find((one) => one.url === machineUrl);
+        const project = info ? info.projects.find((one) => this.samePath(one.cwd, cwd)) : undefined;
+        const all = project ? project.sessions : [];
+        const slice = all.slice(offset, offset + ChatHost.GROUP_PAGE_SIZE);
+        const focused = this.focusedIdFor(clientId) || "";
+        const currentId = focused && this.machineHub.ownerOf(focused) === machineUrl ? focused : "";
+        return {
+            path: cwd,
+            // 界面按“那台 + 目录”认这一批该挂到哪一组（见 media/chat.js 的 groupKeyOf）
+            machine: machineUrl,
+            offset,
+            items: slice.map((one) => ({
+                id: this.machineHub.toLocalId(machineUrl, one.id),
+                machine: machineUrl,
+                title: one.title || one.name || "",
+                name: one.name || one.title || "",
+                file: one.file || "",
+                cwd: one.cwd || cwd,
+                lastActivity: one.lastActivity,
+                current: !!currentId && currentId === this.machineHub.toLocalId(machineUrl, one.id),
+            })),
+            nextOffset: offset + slice.length,
+            hasMore: offset + slice.length < all.length,
+        };
     }
 
     /**
@@ -527,12 +738,18 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         // 两份一起往前走，某一页就会少几行、顺序也乱（看着就是“工作区排来排去”）
         const page = this.newWorkspacePage(await listProjectDirs());
         const items = await this.takeWorkspacePage(page);
+        // 别台那几台的项目行（每台一节）：跟本机这些行摆在同一份清单里
+        this.appendMachineRows(items);
+        // 顺手把那几台的项目清单问一遍（不等着：问回来会重推一份，见 onMachinesChanged）
+        void this.machineHub.refreshProjects();
         state.workspacePage = page;
         const payload: Record<string, unknown> = {
             title: "项目与会话",
             spaces: {
                 items,
                 hasMore: page.offset < page.dirs.length,
+                // 本机那一节叫什么：有别台的时候叫「工作区-本机」（界面按这个给本机那些行归节）
+                localSection: this.machineHub.list().length > 0 ? "工作区-本机" : "工作区",
             },
         };
         // 界面展开着的那几组：第一批会话跟着工作区一块送过去（见 media/chat.js 的 expandedDirsForHost）。
@@ -556,6 +773,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const current = this.getActive(clientId)?.currentSessionPath;
         return {
             path: dir,
+            machine: "",
             offset,
             items: page.items.map((s) => ({ ...s, current: this.samePath(s.file, current) })),
             nextOffset: page.nextOffset,
@@ -568,9 +786,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      *
      * 宿主这边不留状态，面板重推一份时自然就从每组的第一条重新开始。
      */
-    private async sendWorkspaceSessions(dir: string, offset: number): Promise<void> {
+    private async sendWorkspaceSessions(dir: string, offset: number, machine = ""): Promise<void> {
         const clientId = this.currentPageId;
         if (!dir) { return; }
+        if (machine) {
+            // 别台那一行展开：会话清单那台已经报过来了（见 /sessions），这里直接切一批给它
+            this.sendOverlayTo(clientId, { type: "workspaceSessionsPage", ...this.machineGroupPage(machine, dir, offset, clientId) });
+            return;
+        }
         try {
             this.sendOverlayTo(clientId, { type: "workspaceSessionsPage", ...(await this.scanGroupPage(dir, offset, clientId)) });
         } catch {
@@ -646,8 +869,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      *
      * @param clientId 这个浮层是哪块屏开的（它自己收自己的回复）。
      */
-    public async showFolderPicker(dir: string, clientId: string = this.currentPageId): Promise<void> {
-        const listing = await listDirectories(dir);
+    public async showFolderPicker(dir: string, clientId: string = this.currentPageId, machine = ""): Promise<void> {
+        // 挑别台那台的目录：清单问那台（出错就把它那一句写进标题里，跟本机读不动一个样子）
+        const listing = machine ? await this.machineFolderListing(machine, dir) : await listDirectories(dir);
         // 判"这是盘符列表"只认空路径：dirBrowse 把盘根（D:\）也标成 roots，
         // 但那是个真目录（可以选它当项目目录，也是上一层能到的地方），不能跟盘符列表混为一谈。
         const driveList = !listing.path;
@@ -676,23 +900,27 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         // 列不出来的原因（没权限、目录没了）写进标题里，人一眼知道为什么是空的。
         // 正在看的目录写在标题下面那行小字（subtitle）里：标题只报“在干啥”，
         // 路径再长也不会把标题顶成两行。
-        const title = driveList
-            ? "选择盘"
-            : (listing.error ? `选择文件夹（${listing.error}）` : "选择文件夹");
+        // 列不出来的原因写进标题里：本机读不动、那台连不上都在这句里
+        const title = listing.error
+            ? `选择文件夹（${listing.error}）`
+            : (driveList ? "选择盘" : "选择文件夹");
+        // 一行都列不出来时给一条收摊的路（别让人对着一块空浮层找叉）
+        if (listing.error && items.length === 0) { items.push({ label: "关掉", file: "", icon: "up" }); }
         // 盘符列表没有路径可报，写一句“此电脑”——跟 Windows 资源管理器里那一层的叫法一致。
         const subtitle = driveList ? "此电脑" : listing.path;
         // 不给筛选框：一层目录就几行，用上下键挑名字比打字快，框还占一截地方。
         const choice = await this.openPicker("folders", { items, searchable: false, title, subtitle }, clientId);
         if (!choice || typeof choice.file !== "string" || !choice.file) { return; }
         if (choice.file === ChatHost.USE_DIR_ROW) {
-            this.newSessionInDir(listing.path, { clientId });
+            if (machine) { this.startMachineSession(machine, listing.path, clientId); }
+            else { this.newSessionInDir(listing.path, { clientId }); }
             return;
         }
         if (choice.file === ChatHost.ROOTS_ROW) {
-            await this.showFolderPicker("", clientId);
+            await this.showFolderPicker("", clientId, machine);
             return;
         }
-        await this.showFolderPicker(choice.file, clientId);
+        await this.showFolderPicker(choice.file, clientId, machine);
     }
 
     // ========================================================================
@@ -716,6 +944,16 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 页面连接的登记簿 + 推送序号（网页服务开连接 / 收发消息时用）。 */
     public getBroadcaster(): ChatBroadcaster { return this.broadcaster; }
 
+    /** 这个会话跑在别台那台上（是就给那台的地址）：文件 / 目录 / 改动那几个口子照它转发。 */
+    public sessionMachine(sessionId: string): string | undefined {
+        return this.machineHub.ownerOf(sessionId);
+    }
+
+    /** 把这一条请求原样转给那台（会话号换回它那边的写法）。 */
+    public proxySessionToMachine(machine: string, sessionId: string, req: http.IncomingMessage, res: http.ServerResponse): void {
+        this.machineHub.proxy(machine, sessionId, req, res);
+    }
+
     /**
      * 页面发来一条消息（网页服务的 /api POST 转交）。
      * 处理期间记下是哪块屏发来的，浮层才知道该回给谁。
@@ -728,10 +966,39 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const previous = this.currentPageId;
         this.currentPageId = pageId;
         try {
+            // 带着别台会话号的消息：那一套协议跟本机一模一样，原样转给那台；
+            // 本机这边只管“这块屏在看它”这本账（不转的话它会落到一个无关的本机会话上）
+            if (this.routeToMachine(msg)) { return; }
             this.processMessage(msg);
         } finally {
             this.currentPageId = previous;
         }
+    }
+
+    /**
+     * 这条消息是关于别台那个会话的吗？是就交给那边（见 machineHub），本机不再自己处理。
+     *
+     * 除了“切过去 / 关掉”这两件要在这边记账的，其余一律原样转过去：发消息、停一轮、换模型、
+     * 要更早的历史、问命令清单、找文件……两边说的是同一套话，没必要再写一遍
+     * （这正是把跨机器收到后端的好处：页面只当自己在用一台机器）。
+     */
+    private routeToMachine(msg: any): boolean {
+        const sessionId = typeof msg.sessionId === "string" ? msg.sessionId : "";
+        if (!sessionId || !this.machineHub.ownerOf(sessionId)) { return false; }
+        if (msg.type === "switchSession" || msg.type === "workspaceOpenSession") {
+            // 认下它（那边的消息从下一句开始往这儿推），再像切本机会话那样切过去。
+            // 两条都走这里：顶条上点一格是 switchSession，列表里点一行是 workspaceOpenSession。
+            this.machineHub.openSession(sessionId, { file: typeof msg.path === "string" ? msg.path : "", cwd: typeof msg.cwd === "string" ? msg.cwd : "" });
+            this.setActiveSession(sessionId, this.currentPageId, msg.switchId);
+            return true;
+        }
+        if (msg.type === "closeSession") {
+            this.machineHub.closeSession(sessionId);
+            this.clearClientSession(this.currentPageId);
+            return true;
+        }
+        this.machineHub.post(sessionId, msg);
+        return true;
     }
 
     /**
@@ -1395,9 +1662,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             case "repaintSession":
                 // 页面刷新后回来，手里什么都没有：请这边把它正在看的那个会话重画一遍。
                 // 跨机器时那台的页面就是靠这条把历史拿回去的（见 media/chat.js 的恢复流程）。
+                // full：整段都发（别台那台刚被这边点开时用：人点开就是要看它，不是刷新以后补最后一段）
                 if (typeof msg.sessionId === "string" && msg.sessionId) {
-                    this.log(`[远程] 页面 ${this.currentPageId} 请我重画会话 ${msg.sessionId}`);
-                    void this.resyncPage(this.currentPageId, "", { onlyPanelId: msg.sessionId, lastRound: true });
+                    const full = msg.full === true;
+                    this.log(`[远程] 页面 ${this.currentPageId} 请我重画会话 ${msg.sessionId}${full ? "（整段）" : ""}`);
+                    void this.resyncPage(this.currentPageId, "", { onlyPanelId: msg.sessionId, lastRound: !full, fullHistory: full });
                 }
                 return true;
             case "openHistory":
@@ -1415,6 +1684,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             case "workspaceOpenSession":
                 // 常驻那一列里点了一行会话（那一列不关，所以不走 pickerChoice）；
                 // cwd = 那一行自己的目录（列表里混着好几个目录的会话）。
+                // 带 machine = 那是别台那一行（会话号也就是那边的写法）：叫那台打开它，再切过去。
+                if (typeof msg.machine === "string" && msg.machine && typeof msg.sessionId === "string" && msg.sessionId) {
+                    this.machineHub.openSession(msg.sessionId);
+                    this.setActiveSession(msg.sessionId, this.currentPageId);
+                    return true;
+                }
                 if (typeof msg.path === "string") {
                     void this.openWorkspaceSession(
                         msg.path,
@@ -1424,14 +1699,26 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 }
                 return true;
             case "workspaceBrowse":
-                // 工作区标题右边那颗加号（“打开文件夹…”，现在不占一行了）
-                void this.browseFromWorkspacePanel(this.currentPageId);
+                // 工作区标题右边那颗加号（“打开文件夹…”，现在不占一行了）。
+                // 带 machine = 别台那一节的加号：挑的是那台的目录，挑完在那台开新会话。
+                void this.browseFromWorkspacePanel(this.currentPageId, typeof msg.machine === "string" ? msg.machine : "");
+                return true;
+            case "machineProjects":
+                // 别台那一节末尾那颗「加载更多工作区」：再向那台要一页项目
+                if (typeof msg.machine === "string" && msg.machine) {
+                    const machine = msg.machine;
+                    void this.machineHub.loadProjects(machine, this.machineProjectCount(machine)).then(() => {
+                        void this.refreshWorkspacePanels();
+                    });
+                }
                 return true;
             case "workspaceSessions":
                 // 界面展开某个工作区 / 点那一组的「加载更多」：读那个目录，接着往下扫几条会话。
+                // 带 machine = 别台那一行：那台的会话清单里现成就有（不用再去读盘）
                 void this.sendWorkspaceSessions(
                     typeof msg.path === "string" ? msg.path : "",
                     typeof msg.offset === "number" && msg.offset > 0 ? msg.offset : 0,
+                    typeof msg.machine === "string" ? msg.machine : "",
                 );
                 return true;
             case "workspaceLoadMore":
@@ -1442,6 +1729,13 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             case "newSessionInWorkspace":
                 // 工作区那一行行尾的加号：就在那一行的目录里开新会话。
                 // 目录明写在消息里：面板可能同时在几块屏上开着，那一行写的是哪个目录就是哪个。
+                // 带 machine = 别台那一行：请那台在它那个目录里开（这边等它报清单时认领）。
+                if (typeof msg.machine === "string" && msg.machine) {
+                    if (typeof msg.path === "string" && msg.path) {
+                        this.startMachineSession(msg.machine, msg.path, this.currentPageId);
+                    }
+                    return true;
+                }
                 this.newSessionInDir(
                     typeof msg.path === "string" && msg.path ? msg.path : this.activeCwd(),
                 );
@@ -1916,6 +2210,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         if (this.disposed) { return; }
         this.disposed = true;
         this.desktopLive.stop();
+        this.machineHub.dispose();
         this.notice.dispose();
         this.disposeAllPickers();
         this.disposeAllCards();

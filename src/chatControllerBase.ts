@@ -301,6 +301,19 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 某块屏看的会话变了（宿主可以记下来：VSCode 窗口重连领了新的页面标识时，接着看原来那个）。 */
     protected onClientSessionChanged(_clientId: string, _panelId: string): void { /* 默认不用做 */ }
 
+    // ---- 别台的会话（多台 pichat 互联）----
+    //
+    // 会话可能跑在另一台机器上（见 machineHub）。那一种“会话”在本机没有 pi 进程，也就没有
+    // SessionRuntime：它只存在于那边的推送里。下面这几个钩子让这块屏能像看本机会话一样看着它：
+    //   - 本机那份会话清单里给它多摆一条（`foreignSessionEntries`）；
+    //   - “这块屏看的是哪一个”能记成那边的号（`focusedIdFor` / `getActive` 两个都改了口）。
+    // 不把那边的东西硬塞进 `panels`：那里每一条都对应一只真进程。
+    /** 这个会话号是不是别台那台的（默认：不是，本类只服务本机会话）。 */
+    protected isForeignSessionId(_id: string): boolean { return false; }
+
+    /** 本机清单里要额外摆上的那几条（别台那台认下的会话）；没有就是空表。 */
+    protected foreignSessionEntries(): Record<string, unknown>[] { return []; }
+
     /** 把“谁在看哪个会话”的账本清空（宿主收摊 / 会话全部没了）。 */
     protected forgetAllClients(): void {
         this.clientSessions.clear();
@@ -716,6 +729,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
     public getActive(clientId: string = this.currentPageId): SessionRuntime | undefined {
         const own = this.clientSessions.get(clientId);
         if (own && this.panels.has(own)) { return this.panels.get(own); }
+        // 它正看着的是别台那台的一个会话（本机没有对应的进程）：别拿本机“最近那个”顶上去，
+        // 不然接下来的动作（发消息、关会话、读文件）会落到一个跟这块屏无关的会话上。
+        if (own && this.isForeignSessionId(own)) { return undefined; }
         // 它还没挑过、或者它看的那个刚被关掉：先按“最近有人切过去的那个”顶一下（不记档）
         return this.lastFocusedPanelId ? this.panels.get(this.lastFocusedPanelId) : undefined;
     }
@@ -723,7 +739,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 这块屏自己挑的是哪个会话（没挑过、或挑的那个已经被关掉就是 undefined）。 */
     public focusedIdFor(clientId: string): string | undefined {
         const id = this.clientSessions.get(clientId);
-        return id && this.panels.has(id) ? id : undefined;
+        if (id && this.panels.has(id)) { return id; }
+        return id && this.isForeignSessionId(id) ? id : undefined;
     }
 
     /**
@@ -731,7 +748,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 用在“这块屏换了个新标识、但它原来就是在看这个会话”的场合（VSCode 窗口重连）。
      */
     public adoptClientSession(clientId: string, panelId: string): void {
-        if (!this.panels.has(panelId)) { return; }
+        if (!this.panels.has(panelId) && !this.isForeignSessionId(panelId)) { return; }
         this.clientSessions.set(clientId, panelId);
         // 换了个新标识但还看原来那个会话（窗口重连）：跟“切过去”一样走一遍通知
         this.onClientSessionChanged(clientId, panelId);
@@ -839,11 +856,15 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 界面靠这个号认出“这条说的是我上一下要的，已经过时了”。
      */
     public setActiveSession(panelId: string, clientId: string = this.currentPageId, switchId?: unknown): void {
-        if (!this.panels.has(panelId)) { return; }
+        const foreign = !this.panels.has(panelId) && this.isForeignSessionId(panelId);
+        if (!this.panels.has(panelId) && !foreign) { return; }
         if (this.clientSessions.get(clientId) === panelId) { return; }
         this.clientSessions.set(clientId, panelId);
-        this.lastFocusedPanelId = panelId;
-        this.panelUsedAt.set(panelId, Date.now());
+        // 别台的会话在这台没有进程：只记“这块屏在看它”，不挤进“最近切过去的那个”那份账里
+        if (!foreign) {
+            this.lastFocusedPanelId = panelId;
+            this.panelUsedAt.set(panelId, Date.now());
+        }
         this.onClientSessionChanged(clientId, panelId);
         // 先发列表，再说“你看的是哪一个”：界面上要先生出这个会话的壳，才认得这个标识
         this.broadcastSessionList(true);
@@ -851,6 +872,34 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.postToOneClient(clientId, typeof switchId === "number"
             ? { type: "sessionActivated", sessionId: panelId, switchId }
             : { type: "sessionActivated", sessionId: panelId });
+    }
+
+    /**
+     * 别台那个会话换了号（那台刚把它开出来、或者那台重启过）：
+     * 哪块屏在看它，就跟着改到新号上（不然那一格会突然“没了”，人还得再点一次）。
+     */
+    protected adoptForeignSessionId(oldId: string, newId: string): void {
+        const touched: string[] = [];
+        for (const [clientId, id] of this.clientSessions) {
+            if (id !== oldId) { continue; }
+            this.clientSessions.set(clientId, newId);
+            touched.push(clientId);
+        }
+        if (touched.length === 0) { return; }
+        this.onClientSessionChanged(touched[0], newId);
+        this.broadcastSessionList(true);
+        for (const clientId of touched) {
+            this.postToOneClient(clientId, { type: "sessionActivated", sessionId: newId });
+        }
+    }
+
+    /**
+     * 把“这块屏在看哪个会话”清掉（它看的那个没了：本机的被关掉、别台的那台不要了）。
+     * 接下来这块屏自己会重新挑一个（见 ensureClientSession）。
+     */
+    public clearClientSession(clientId: string): void {
+        if (!this.clientSessions.delete(clientId)) { return; }
+        this.broadcastSessionList(true);
     }
 
     // ---- 某块屏该看哪个会话（它刚连上时挑 / 开一个）----
@@ -1749,7 +1798,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
             // 判官（hidden 子会话）也要列出来：一轮一个，但它跑的时候人得看得到在干什么；
             // 报完结论就关，所以不会越攒越多（用户正看着它时会留着，那是他自己关）。
             sessions: Array.from(this.panels.values())
-                .map((rt) => this.serializeSession(rt)),
+                .map((rt) => this.serializeSession(rt))
+                .concat(this.foreignSessionEntries()),
             // 这块屏自己看的是哪一个（它还没挑过就是 null）。界面以本地那一份为准，
             // 别的屏切会话不会牵动它（后端也不再广播“大家切到哪一个”这件事）。
             activeId: this.focusedIdFor(clientId) ?? null,
@@ -1882,8 +1932,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const rt = this.getActive(clientId);
         if (!rt) { return; }
         const items = await rt.getSlashCommandItems();
-        // 命令列表是这个会话自己的（技能 / 提示模板），只回给问它的那块屏
-        this.postToOneClient(clientId, { type: "commandList", items });
+        // 命令列表是这个会话自己的（技能 / 提示模板），只回给问它的那块屏。
+        // 带会话号：那块屏看的是别台那台的一个会话时，这条要经过本机后端转发回去（见 machineHub）。
+        this.postToOneClient(clientId, { type: "commandList", sessionId: rt.id, items });
     }
 
     // ========================================================================

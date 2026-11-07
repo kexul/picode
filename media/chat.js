@@ -5058,11 +5058,6 @@
   function requestSwitch(sessionId) {
     if (!sessionId) { return; }
     const st = sessions.get(sessionId);
-    // 别的机器上的会话：本机后端不认识它，不用发那条 switchSession，切画面就行
-    if (st && st.remote) {
-      if (sessionId !== activeId) { activateSessionView(sessionId); }
-      return;
-    }
     // 壳已经在、也没在加载：先切过去。没壳（没到 / 以前关掉的）就先发请求，等后端把列表推回来
     if (st && !st.loading && sessionId !== activeId) { activateSessionView(sessionId); }
     switchAsked += 1;
@@ -6054,10 +6049,10 @@
    * @param items 宿主给的那些工作区行
    */
   function spaceRowsWithCurrent(items) {
-    // 当前看的是别的机器上的会话：它的目录不在这台的工作区清单里，别拿它去比，
-    // 更别在本机那一节里补出一行“当前目录”（那本来就不是本机的目录）
+    // 当前看的是别的机器上的会话：它的目录不在这一台的工作区清单里，别拿它去比，
+    // 更别在本机那一节里补出一行“当前目录”（那本来就不是这一台的目录）
     const now = activeId ? sessions.get(activeId) : null;
-    if (now && now.remote) { return items; }
+    if (now && now.remoteMachine) { return items; }
     const cwd = activeSessionCwd();
     if (!cwd) { return items; }
     let hit = false;
@@ -6067,10 +6062,13 @@
       return Object.assign({}, it, { current: true });
     });
     if (!hit) {
-      out.push({
-        __section: "space", section: "工作区", current: true,
+      // 补的那一行归本机那一节：插在本机那些行后面（别台那几节要留在它们自己那一堆里）
+      const row = {
+        __section: "space", section: localWorkSectionName(), current: true,
         label: baseNameOfPath(cwd), file: cwd, folderPath: cwd,
-      });
+      };
+      const at = out.findIndex((one) => !!one.machine);
+      if (at < 0) { out.push(row); } else { out.splice(at, 0, row); }
     }
     return out;
   }
@@ -6086,13 +6084,6 @@
   /** 关一个会话：这一下就走（会话文件留着，历史列表里能重新打开；
    *  关掉的正是正在看的那个，后端会把这块屏切到别的会话去）。 */
   function closeSession(id) {
-    // 别的机器上的会话：关掉只是本屏不收这一格了，那边照旧跑着（下一回从清单里点还能回来）
-    const st = sessions.get(id);
-    if (st && st.remote) {
-      removeSession(id);
-      renderSessionBar();
-      return;
-    }
     // 列表不关：关掉一条后马上就能接着关下一条（那一行会跟着会话列表自己消失）
     vscode.postMessage({ type: "closeSession", sessionId: id });
   }
@@ -8406,24 +8397,14 @@
   }
 
   /**
-   * 现在这个标签该取哪条地址：文件走 `/file`（带 mtime 就是「没变就别给正文」那问法），
-   * 「目录」那一格走 `/dir`；两条都是只读的、边界也同一套（见后端）。
-   */
-  /** 这个会话号要发给哪台（远程会话）——不是远程就 null。 */
-  function remoteRouteOf(sessionId) {
-    const info = sessionId ? remoteSessions.get(sessionId) : null;
-    return info ? { base: info.host, sessionId: info.hostId } : null;
-  }
-
-  /**
-   * 地址里的会话参数：本地会话照旧（空前缀 + 本机号），远程会话换成那台的地址前缀 + 它那边的号。
-   * 文件侧边栏那几个口子（/file /dir /site /changes …）都会带会话号，全都走这一个判断。
-   * 远程那台的地址前缀是 `/m/<编码过的地址>`：这一趟由本机后端转过去（见 remoteWire），
-   * 页面不直接连它（手机不一定到得了那台）。
+   * 地址里的会话参数。
+   *
+   * 现在只有一种写法：`/file?session=<会话号>`，会话号可能是本机的，也可能是别台那台的
+   * （`remote:<那台>:<号>`，页面自己不用管它是哪种）。要去那台上取的文件由后端转发，
+   * 页面拿到的还是自己这台的地址（见 src/machineHub.ts）——所以这里没有前缀这回事了。
    */
   function sessionUrlParts(sessionId) {
-    const route = remoteRouteOf(sessionId);
-    return route ? { base: remoteWire(route.base), sessionId: route.sessionId } : { base: "", sessionId: sessionId || "" };
+    return { base: "", sessionId: sessionId || "" };
   }
 
   function sidebarUrl(tab, mtime) {
@@ -10082,7 +10063,10 @@
         const sep = document.createElement("div"); sep.className = "pk-section";
         // 「工作区」那一行右边摆一颗加号（原来是列表里的一行「打开文件夹…」）：
         // 挑一个别的文件夹当工作区，就在那里开新会话（见 chatHost.ts 的 workspaceBrowse 那条）。
+        // 别台那一节也有这一颗：在那台上挑一个目录开新工作区（见 openRemoteFolderPicker）。
         const spaceHead = st.kind === "workspace" && item.__section === "space";
+        // 别台那一节：行上带着 machine（节标题本身只有节名，拿不到是哪台）
+        const machineHead = st.kind === "workspace" && item.machine ? String(item.machine) : "";
         const label = document.createElement("span"); label.className = "pk-section-text";
         label.textContent = item.section;
         sep.appendChild(label);
@@ -10090,11 +10074,15 @@
           sep.classList.add("pk-section-with-add");
           const add = document.createElement("button");
           add.type = "button"; add.className = "pk-section-add-btn";
-          add.title = "打开文件夹…"; add.setAttribute("aria-label", "打开文件夹");
+          // 别台那一节：在那台上挑一个目录开新工作区（挑目录那一趟由后端去问那台）
+          add.title = machineHead
+            ? "在" + String(item.section || "").replace(/^工作区-/, "") + "上开一个新工作区…"
+            : "打开文件夹…";
+          add.setAttribute("aria-label", machineHead ? "在那台上开新工作区" : "打开文件夹");
           add.innerHTML = ICONS.add;
           add.addEventListener("click", (e) => {
             e.stopPropagation();
-            vscode.postMessage({ type: "workspaceBrowse" });
+            vscode.postMessage({ type: "workspaceBrowse", machine: machineHead });
           });
           sep.appendChild(add);
         }
@@ -10111,16 +10099,6 @@
         sectionPane.appendChild(buildLoadMoreBtn(view, st, "spaces"));
         return;
       }
-      if (item.__section === "remoteMore") {
-        // 那台还有工作区没列出来：跟本机那块「加载更多」同一副样子
-        const btn = document.createElement("button");
-        btn.type = "button"; btn.className = "pk-loadmore";
-        btn.textContent = item.loading ? "加载中…" : "加载更多工作区";
-        btn.disabled = !!item.loading;
-        btn.addEventListener("click", (e) => { e.stopPropagation(); loadMoreRemoteProjects(item.remoteHost); });
-        sectionPane.appendChild(btn);
-        return;
-      }
       if (item.__section === "groupMore") {
         // 那一组的「加载更多」：卡在组里末尾，点它接着加这一组的
         const g = groupState(st, item.groupPath);
@@ -10130,7 +10108,7 @@
         btn.disabled = !!g.loading;
         btn.addEventListener("click", () => {
           if (g.loading) { return; }
-          requestGroupPage(view, item.groupPath, g.nextOffset);
+          requestGroupPage(view, item.groupRow || item.groupPath, g.nextOffset);
           repaintPickerPanel(view);
         });
         sectionPane.appendChild(btn);
@@ -10216,74 +10194,41 @@
         t.appendChild(document.createTextNode(item.label || ""));
         el.appendChild(t);
         if (item.desc) { const d = document.createElement("div"); d.className = "pk-desc"; d.style.paddingLeft = "20px"; d.textContent = item.desc; el.appendChild(d); }
-      } else if (st.kind === "workspace" && item.__section === "remoteSpace") {
-        // 别的机器上的一个工作区：长得跟本机那个工作区行一样（节标题已经写了是哪台）。
-        // 点整行展开 / 收起（展开状态在 remoteExpanded 里，不经过宿主）。
-        el.classList.add("pk-history", "pk-space-head", "pk-remote-space");
-        if (item.remoteEmpty) { el.classList.add("offline"); }
-        const main = document.createElement("div"); main.className = "pk-history-main";
-        const caret = document.createElement("span"); caret.className = "pk-space-caret";
-        if (!item.remoteEmpty) { caret.innerHTML = CHEVRON_SVG; }
-        main.appendChild(caret);
-        if (!item.remoteEmpty) {
-          const icon = document.createElement("span"); icon.className = "pk-row-icon"; icon.innerHTML = ICONS.folder;
-          main.appendChild(icon);
-        }
-        const title = document.createElement("span"); title.className = "pk-history-title";
-        title.textContent = item.label || "";
-        if (item.current) { title.classList.add("pk-space-current"); }
-        main.appendChild(title);
-        if (item.folderPath) {
-          const p = document.createElement("span"); p.className = "pk-space-path-inline"; p.textContent = item.folderPath;
-          main.appendChild(p);
-        }
-        const right = document.createElement("span"); right.className = "pk-history-right";
-        if (!item.remoteEmpty && item.lastActivity) {
-          const a = document.createElement("span"); a.className = "pk-history-age"; a.textContent = pickerRelTime(item.lastActivity);
-          right.appendChild(a);
-        } else if (item.remoteEmpty && item.remoteHost) {
-          // 连不上是为什么：这一趟是本机后端去连的，它说得清（没回应 / 端口没开 / 那台回了句错）。
-          // 手机上没法悬停，所以那句短的就直接写在行尾（完整那句仍旧在悬停里）。
-          const short = shortRemoteReason(String(item.remoteHost.error || ""));
-          if (short) {
-            const info = document.createElement("span"); info.className = "pk-history-age"; info.textContent = short;
-            right.appendChild(info);
-          }
-        }
-        if (right.childNodes.length) { main.appendChild(right); }
-        el.appendChild(main);
-        // 连不上的那行：鼠标停上去看原因（是请求没出去，还是对方不让读）
-        el.title = item.remoteEmpty
-          ? ((item.remoteHost && item.remoteHost.error) || item.folderPath || item.label || "")
-          : (item.folderPath || item.label || "");
-        if (!item.remoteEmpty) {
-          // 展开状态要在重画后能恢复：el.className 是重建的，这里按当前那份补上
-          if (remoteExpanded.has(item.remoteKey)) { el.classList.add("expanded"); }
-        }
-      } else if (st.kind === "workspace" && item.__section === "machineSession") {
-        // 别的机器上的会话：跟历史会话那一行长得一样（来源已经写在上面那个工作区行上了）。
-        // 点它就在这台看、在这台发消息（见 confirmPicker 与 openRemoteSession）。
-        el.classList.add("pk-history", "pk-machine-session");
-        const main = document.createElement("div"); main.className = "pk-history-main";
-        const title = document.createElement("span"); title.className = "pk-history-title";
-        title.textContent = item.title || "(无消息)";
-        main.appendChild(title);
-        const right = document.createElement("span"); right.className = "pk-history-right";
-        if (item.lastActivity) {
-          const age = document.createElement("span"); age.className = "pk-history-age";
-          age.textContent = pickerRelTime(item.lastActivity);
-          right.appendChild(age);
-        }
-        main.appendChild(right);
-        el.appendChild(main);
-        el.title = (item.hostName || "") + " · " + (item.cwd || "") + "\n" + (item.title || "");
+      } else if (st.kind === "workspace" && item.machineMore) {
+        // 别台那一节末尾那颗「加载更多工作区」：再向那台要一页项目
+        const btn = document.createElement("button");
+        btn.type = "button"; btn.className = "pk-loadmore";
+        btn.textContent = item.loading ? "加载中…" : "加载更多工作区";
+        btn.disabled = !!item.loading;
+        btn.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "machineProjects", machine: item.machine }); });
+        sectionPane.appendChild(btn);
+        return;
       } else if (st.kind === "workspace" && item.__section === "space") {
         // 工作区行：就是个组头——小三角、文件夹图标、名字 + 目录路径一行。
         // 点整行展开 / 收起；行尾那颗加号是在这个目录里开新会话。
+        // 别台那台的目录行也走这里（行上带 machine），只是点开 / 新建都要跟那一台打交道。
         el.classList.add("pk-history", "pk-space-head");
+        if (item.machine) { el.classList.add("pk-remote-space"); }
+        // 连不上（或者那边一个项目都没有）的那一行：只有名字，点一下重问一遍
+        if (item.machineEmpty) {
+          el.classList.add("offline");
+          const main = document.createElement("div"); main.className = "pk-history-main";
+          const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.label || "";
+          main.appendChild(title);
+          const why = shortMachineReason(item.machineError || "");
+          if (why) {
+            const right = document.createElement("span"); right.className = "pk-history-right";
+            const info = document.createElement("span"); info.className = "pk-history-age"; info.textContent = why;
+            right.appendChild(info); main.appendChild(right);
+          }
+          el.appendChild(main);
+          el.title = item.machineError || item.label || "";
+          sectionPane.appendChild(el);
+          return;
+        }
         // 当前会话所在的那个目录把名字写成蓝色（它不因此挪位置：清单的顺序一直是宿主那份，
         // 见 spaceRowsWithCurrent）—— 切会话时一行都不动，只有那颗蓝跟着走。
-        const expanded = groupExpanded(item.file);
+        const expanded = groupExpanded(groupKeyOf(item));
         if (expanded) { el.classList.add("expanded"); }
         const main = document.createElement("div"); main.className = "pk-history-main";
         // 行首那个小三角（画的是朝右，展开时 CSS 转 90° 成朝下）
@@ -10317,7 +10262,8 @@
           // 不然新会话开好了它还挡在上面，还得再划一次才能打字。
           if (!view.keepOpen) { cancelPicker(view); }
           focusAfterNewSessionUntil = Date.now() + 15000;
-          vscode.postMessage({ type: "newSessionInWorkspace", path: item.file });
+          // machine：这一行是别台的（后端据此请那台去开；本机那些行没有这个字段）
+          vscode.postMessage({ type: "newSessionInWorkspace", path: item.file, machine: item.machine || "" });
         });
         main.appendChild(add);
         el.appendChild(main);
@@ -10454,21 +10400,10 @@
     const st = view.state; if (!st) { return; }
     if (st.kind === "model") { submitModelPicker(view); return; }
     if (!item) { return; }
-    // 「别的机器」：点那台的一个工作区 = 展开 / 收起（连不上的那一行是重问一遍）；
-    // 点它会话那一行 = 在这台看、在这台发消息（见 openRemoteSession）
-    if (item.__section === "machineSession") { openRemoteSession(item); return; }
-    if (item.__section === "remoteSpace") {
-      // 连不上的那一行：点一下重问一遍（那边可能是刚起来）
-      if (item.remoteEmpty) { refreshRemoteHosts(true); return; }
-      // 别的机器上的工作区：展开 / 收起（跟本机那个组头一样，只是不跟宿主要数据）
-      if (!item.remoteEmpty && item.remoteKey) {
-        if (remoteExpanded.has(item.remoteKey)) { remoteExpanded.delete(item.remoteKey); }
-        else { remoteExpanded.add(item.remoteKey); }
-        rebuildWorkspaceItems(view, false);
-        paintWorkspacePanel(view);
-      }
-      return;
-    }
+    // 连不上那台的那一行：点一下重问一遍（后端会重新连、再推一份清单过来）
+    if (item.machineEmpty) { vscode.postMessage({ type: "machineProjects", machine: item.machine }); return; }
+    // 别台的“加载更多工作区”
+    if (item.machineMore) { vscode.postMessage({ type: "machineProjects", machine: item.machine }); return; }
     const kind = st.kind;
     // 常驻那一列里点一行 = “用一下”，不是“选完就走”：面板留着接着点下一行
     const closeFirst = () => { if (!view.keepOpen) { hidePicker(view); } };
@@ -10486,16 +10421,20 @@
     }
     // 工作区那一行：展开 / 收起（面板留着重画，不关）
     if (kind === "workspace" && item.__section === "space") {
-      toggleGroupIn(view, item.file);
+      toggleGroupIn(view, item);
       return;
     }
+    // 别台那台的会话行：带着那台的地址与会话号（后端据此请那台打开它、再切过来）
+    const machineFields = item.machine
+      ? { machine: String(item.machine), sessionId: typeof item.id === "string" ? item.id : "" }
+      : {};
     if (view.keepOpen) {
       // 常驻那一列不关，所以不能走“选完就走”那条路（pickerChoice 是“挑好了、结束这次挑”）：
       // 会话直接切过去，目录用那一行自己带过来的（组头的目录）。
-      vscode.postMessage({ type: "workspaceOpenSession", path: item.file, cwd: item.cwd || "" });
+      vscode.postMessage(Object.assign({ type: "workspaceOpenSession", path: item.file, cwd: item.cwd || "" }, machineFields));
       return;
     }
-    const payload = { file: item.file };
+    const payload = Object.assign({ file: item.file }, machineFields);
     // 组里那些会话行带着自己的目录（“历史会话”是按工作区分组的）；别的列表没有这一项。
     if (item.cwd) { payload.cwd = item.cwd; }
     hidePicker(view);
@@ -10571,6 +10510,9 @@
     // 宿主给的工作区行（没动过的原样一份）：组头排序、挂会话都从它算起
     st.spaceItems = workspaceFlatItems(msg);
     st.spacesHasMore = !!(msg.spaces && msg.spaces.hasMore);
+    // 本机那一节叫什么（有别台时是「工作区-本机」，后端定的）：本机那些行按它归节
+    st.localSection = (msg.spaces && typeof msg.spaces.localSection === "string" && msg.spaces.localSection)
+      ? msg.spaces.localSection : "工作区";
     st.current = msg.current || null;
     // 宿主那份还在路上（先摆出来的空壳，见 showWorkspaceShell）：
     // 面板里一行都列不出来时那句写“正在读取”，不写“列表为空”
@@ -10598,472 +10540,64 @@
   /**
    * 工作区那一块的行：顺序就是宿主给的顺序（切会话也不重排，只在当前那个目录那一行标一颗
    * 「当前」，见 spaceRowsWithCurrent），展开了的组把它的会话行挂在组头下面，
-   * 「加载更多」卡在那一组的末尾。最后再挂上「别的机器」那一节（见 refreshRemoteHosts）。
+   * 「加载更多」卡在那一组的末尾（别台那几节的工作区行也是后端给的，见 chatHost 的 appendMachineRows）。
    */
   function buildSpaceRows(view, fetch) {
     const st = view.state;
     const out = [];
-    const localSection = localWorkSection();
+    // 本机那一节叫什么：有别台的时候叫「工作区-本机」（免得跟「工作区-公司」摆在一块儿分不清）
+    const localSection = st.localSection || "工作区";
     for (const it of spaceRowsWithCurrent(st.spaceItems)) {
-      // 组头、它展开的会话行、末尾的「加载更多」都用同一个分节名：只出现一次「工作区-本机」，
-      // 不会每个项目都重开一节、也不会在项目下面又冒出个「工作区」
-      out.push(it.section === localSection ? it : Object.assign({}, it, { section: localSection }));
-      if (!groupExpanded(it.file)) { continue; }
-      const g = groupState(st, it.file);
+      // 节名跟着行自己走（本机那些没有，用本机这一节那个名字）
+      const section = it.section || localSection;
+      const push = it.section ? it : Object.assign({}, it, { section });
+      out.push(push);
+      if (!push.__section || push.__section !== "space") { continue; }
+      // 组按“那台 + 目录”认：同一个目录两台都有的时候才分得开
+      const key = groupKeyOf(push);
+      (window.__grp = window.__grp || []).push({ key: key, on: groupExpanded(key), file: push.file, machine: push.machine, all: Array.from(expandedDirs || []) });
+      if (!groupExpanded(key)) { continue; }
+      const g = groupState(st, key);
       // 这一组还没取过（刚展开、或者面板刚重推一份）：现在去要第一条
-      if (fetch && !g.loaded && !g.loading) { requestGroupPage(view, it.file, 0); }
+      if (fetch && !g.loaded && !g.loading) { requestGroupPage(view, push, 0); }
       for (const row of g.items) {
         // 不标「当前会话」：这些会话可以同时开着好几个，行尾的「已打开」胶囊已经说明它开着；
         // 画一个“当前”出来，看着像是只能有一个。宿主给的那批里带着 current（它按“这块屏在看哪个”
         // 算的），这里得抹掉，不然画的时候又照它加上了。
         const copy = Object.assign({}, row, {
           __section: "groupSession",
-          section: localSection,
-          groupPath: it.file,
+          section,
+          groupPath: key,
         });
         delete copy.current;
         out.push(copy);
       }
-      if (g.hasMore) { out.push({ __section: "groupMore", section: localSection, groupPath: it.file }); }
+      if (g.hasMore) { out.push({ __section: "groupMore", section, groupPath: key, groupRow: push }); }
     }
     // 本机的工作区也分批：那颗「加载更多工作区」挂在本机这一节的末尾
-    //（以前它挂在整块面板末尾，远程那台一插进来就跑到了人家底下）
+    //（不是整块面板末尾：别台那几节接在本机后面，挂到末尾就成了人家那一节里的东西）
     if (st.spacesHasMore) {
-      out.push({ __section: "localMore", section: localSection, loading: !!st.spacesLoading });
+      const more = { __section: "localMore", section: localSection, loading: !!st.spacesLoading };
+      const at = out.findIndex((one) => !!one.machine);
+      if (at < 0) { out.push(more); } else { out.splice(at, 0, more); }
     }
-    return out.concat(remoteSpaceRows());
+    return out;
   }
 
   // ========================================================================
   //  别的机器（多台 pichat 互联）
   //
-  //  先问本机 /health（它报 machines：设置里「远程机器」那栏填的地址），再对每台问 /health（名字、
-  //  在不在）和 /sessions（它有哪些项目、会话）。
-  //  每一趟都不是页面直接连那台，而是写成 `/m/<那边的地址>/…` 交给本机后端去转（见 remoteWire 与
-  //  webChatServer 的 proxyToMachine）：手机只要连得到本机就行，不必自己也连在对方那个网里。
-  //  每台一节（「工作区-<那台的名字>」），节里是那台的项目；点开项目展开它的会话，
-  //  点会话就在这台看、在这台发消息（见 openRemoteSession）。
+  //  这一栏里别台那些行（「工作区-<那台的名字>」一节）跟本机那些行长得一样，也都是后端给的：
+  //  连接那几台、翻译会话号、把消息转过去、列那台的目录，全在后端做（见 src/machineHub.ts）。
+  //  页面因此不必知道"这条会话跑在谁身上"—— 它只跟本机那一台说话。
+  //  行上带的 `machine`（那台的地址）是唯一要回传给后端的东西：展开、行尾加号、节标题那颗加号
+  //  都把它原样带回去，后端据此知道该跟哪台打交道。
   // ========================================================================
 
-  /**
-   * 那台机器的地址在这台服务上怎么写：`/m/<编码过的地址>`（后端那条转发认这个前缀）。
-   * 后面照旧接 `/health`、`/sessions`、`/events`、`/file` 这些——跟直接连那台时一模一样。
-   */
-  function remoteWire(url) { return "/m/" + encodeURIComponent(String(url || "").replace(/\/+$/, "")); }
-
-  /** 别人的机器多久重问一次（侧边栏重推、切面板都会顺手刷新，这里只是兜底）。 */
-  const REMOTE_HOSTS_REFRESH_MS = 15000;
-  /** [{ url, name, online, count, projects: [{name,cwd,lastActivity,sessions:[{id,title,cwd,lastActivity}]}] }] */
-  let remoteHosts = [];
-  let remoteHostsAt = 0;
-  let remoteHostsBusy = false;
-
-  /**
-   * 问一圈别的机器（节流；force 是真要重问）。
-   * 问完把侧边栏里那份「项目与会话」重拼一遍 —— 机器行是本地拼出来的，不经过宿主。
-   */
-  function refreshRemoteHosts(force) {
-    if (IN_WEBVIEW) { return; }          // 插件面板里没有这一栏（跟文件侧边栏一样只在网页里搭）
-    if (remoteHostsBusy) { return; }
-    if (!force && Date.now() - remoteHostsAt < REMOTE_HOSTS_REFRESH_MS) { return; }
-    remoteHostsAt = Date.now();
-    remoteHostsBusy = true;
-    fetch("/health", { cache: "no-store" })
-      .then((resp) => resp.ok ? resp.json() : Promise.reject(new Error("HTTP " + resp.status)))
-      .then((me) => {
-        const urls = me && Array.isArray(me.machines) ? me.machines : [];
-        return Promise.all(urls.map((url) => probeRemoteHost(String(url))));
-      })
-      .then((hosts) => {
-        remoteHosts = hosts.filter(Boolean);
-        remoteHostsBusy = false;
-        paintRemoteHosts();
-      })
-      .catch(() => { remoteHostsBusy = false; });
-  }
-
-  /** 问一台：它在不在、叫什么、有哪些会话。连不上也有这一行（写着“连不上”）。 */
-  /** 问那台要一页工作区（从第 offset 个往后数一批，跟本机一样一批 5 个）。 */
-  function fetchRemoteSessions(base, offset) {
-    const url = remoteWire(base) + "/sessions" + (offset > 0 ? "?offset=" + offset : "");
-    return fetch(url, { cache: "no-store" }).then((r) => r.ok ? r.json() : failedResponse(r));
-  }
-
-  /** 那台没答好：把本机后端给的那句人话（比如「连不上那台（8 秒没回应）」）拿来当错。 */
-  function failedResponse(resp) {
-    const fallback = "HTTP " + resp.status;
-    return resp.text().then((text) => {
-      const said = String(text || "").trim();
-      return Promise.reject(new Error(said && said.length <= 120 ? said : fallback));
-    }, () => Promise.reject(new Error(fallback)));
-  }
-
-  function probeRemoteHost(url) {
-    const base = url.replace(/\/+$/, "");
-    if (!base) { return Promise.resolve(null); }
-    if (base === location.origin) { return Promise.resolve(null); }
-    return Promise.all([
-      fetch(remoteWire(base) + "/health", { cache: "no-store" }).then((r) => r.ok ? r.json() : failedResponse(r)),
-      fetchRemoteSessions(base, 0),
-    ]).then(([health, sessions]) => {
-      const projects = sessions && Array.isArray(sessions.projects) ? sessions.projects : [];
-      const hostName = (health && health.name) || base;
-      let count = 0;
-      for (const project of projects) { count += (project.sessions || []).length; }
-      return { url: base, name: hostName, online: true, count, projects, hasMore: !!(sessions && sessions.hasMore) };
-    }).catch((err) => {
-      // 那台的名字拿不到：节标题就写地址（见 remoteHostLabel）。原因照本机后端说的写（它去连的，
-      // 说得出是没回应、端口没开，还是那台回了句错）。
-      return {
-        url: base, name: base, online: false, count: 0, projects: [], hasMore: false,
-        error: (err && err.message) || "连不上那台",
-      };
-    });
-  }
-
-  /** 那台再给一页工作区：接在后面（跟本机那块「加载更多工作区」一个意思）。 */
-  function loadMoreRemoteProjects(host) {
-    if (!host || !host.online || host.loadingMore || !host.hasMore) { return; }
-    host.loadingMore = true;
-    paintRemoteHosts();
-    fetchRemoteSessions(host.url, (host.projects || []).length).then((sessions) => {
-      const more = sessions && Array.isArray(sessions.projects) ? sessions.projects : [];
-      host.projects = (host.projects || []).concat(more);
-      host.hasMore = !!(sessions && sessions.hasMore);
-      host.count = host.projects.reduce((n, project) => n + (project.sessions || []).length, 0);
-    }, () => {
-      // 这一下没拉到：先把按钮收掉，免得停在那儿一直点不动（下次刷新会重问）
-      host.hasMore = false;
-    }).then(() => {
-      host.loadingMore = false;
-      paintRemoteHosts();
-    });
-  }
-
-  /** 别的机器上的工作区展开状态（键是 地址|目录）。本机那份展开记忆走宿主的 expandedDirs，这里另存。 */
-  const remoteExpanded = new Set();
-  function remoteKey(hostUrl, cwd) { return hostUrl + "|" + cwd; }
-
-  /**
-   * 工作区那一节里，别的机器那些行：一台机器的每个项目一行，展开后在下面挂它的会话。
-   *
-   * 为什么不另开一节「别的机器」：会话要看的时候是混着看的，多一层“先找机器再找项目”
-   * 为什么另开一节（每台一节）：会话要看的时候是混着看的，但工作区（目录）分不清是哪台的；
-   * 一节一台，项目行就不必再挂机器名了。
-   */
-  /** 当前看的是这台机器上的这个目录吗（侧边栏里那一行该写成蓝色）。 */
-  function isCurrentRemoteDir(host, cwd) {
-    const now = activeId ? sessions.get(activeId) : null;
-    const info = now && now.remote;
-    if (!info || !cwd) { return false; }
-    return info.host === host.url && samePath(cwd, now.cwd || "");
-  }
-
-  /**
-   * 连不上的原因压成行尾那一小句（手机上没有悬停，只能写出来）。
-   * 本机后端给的是「连不上那台（8 秒没回应）。」这种，括号里那句最要紧；拿不到就整句短才用。
-   */
-  function shortRemoteReason(why) {
-    const inner = /[（(]([^（）()]{1,18})[）)]\s*。?$/.exec(why);
-    if (inner) { return inner[1].replace(/。$/, ""); }
-    const text = why.replace(/。$/, "");
-    return text && text.length <= 16 ? text : "";
-  }
-
-  /** 那台在界面上叫什么：它的标签；连不上（拿不到标签）就用主机:端口，别把 http:// 也写进节名。 */
-  function remoteHostLabel(host) {
-    const name = (host && host.name) || "";
-    if (name && name !== host.url) { return name; }
-    try {
-      const u = new URL(host.url);
-      return u.host || String(host.url);
-    } catch (e) {
-      return String(host.url || "").replace(/^https?:\/\//i, "").replace(/\/+$/, "");
-    }
-  }
-
-  function remoteSpaceRows() {
-    const out = [];
-    for (const host of remoteHosts) {
-      // 每台机器一节（方案二）：节标题写「工作区-公司」，下面只放这台自己的项目；
-      // 会话行跟着所属项目同一个 section，不再单独开头。
-      const section = "工作区-" + remoteHostLabel(host);
-      const projects = host.online && Array.isArray(host.projects) ? host.projects : [];
-      if (projects.length === 0) {
-        // 连不上、或者那边一个项目都没有：也占一行，人知道清单里还有这台
-        out.push({
-          __section: "remoteSpace", section, remoteHost: host, remoteEmpty: true,
-          label: host.online ? "那边还没有会话" : "连不上", file: host.url, lastActivity: 0,
-        });
-        continue;
-      }
-      for (const project of projects) {
-        const key = remoteKey(host.url, project.cwd || "");
-        out.push({
-          __section: "remoteSpace", section, remoteHost: host, remoteKey: key,
-          label: project.name, folderPath: project.cwd, file: project.cwd,
-          lastActivity: project.lastActivity,
-          // 当前看的就是这台上的这个目录：名字写成蓝色（跟本机那行的「当前」一个样子）
-          current: isCurrentRemoteDir(host, project.cwd),
-        });
-        if (!remoteExpanded.has(key)) { continue; }
-        for (const one of project.sessions || []) {
-          out.push({
-            __section: "machineSession", section,
-            id: one.id, title: one.title, cwd: one.cwd, file: one.file, lastActivity: one.lastActivity,
-            hostUrl: host.url, hostName: host.name,
-          });
-        }
-      }
-      if (host.hasMore) {
-        out.push({ __section: "remoteMore", section, remoteHost: host, loading: !!host.loadingMore });
-      }
-    }
-    return out;
-  }
-
-  /**
-   * 本机那一段的标题：有别的机器时叫「工作区-本机」（跟别台那一节一个写法），
-   * 只有一台时还是原来的「工作区」。
-   */
-  function localWorkSection() { return remoteHosts.length > 0 ? "工作区-本机" : "工作区"; }
-
-  /** 远程那份回来了：开着的那块侧边栏重拼、重画（机器行是本地拼的，不走宿主那份）。 */
-  function paintRemoteHosts() {
-    [dockView, modalView].forEach((view) => {
-      if (!view.state || view.state.kind !== "workspace") { return; }
-      rebuildWorkspaceItems(view, false);
-      repaintPickerPanel(view);
-    });
-  }
-
-  // ---- 远程会话：点开、切过去、看历史 ----
-  // 会话号：别台那些 panel 号跟本机是两套（本机是 `工作区:panel-序号`），直接混在一起会撞。
-  // 本机这份壳统一用 `remote:<那台的地址>:<它那边的号>`，再记着一张对照表。
-  /** localId -> { host, hostId, file } */
-  const remoteSessions = new Map();
-  /** 开着的远程会话（localId），按打开顺序：本机会话清单推过来时接在后面，别把它挤掉 */
-  let remoteOrder = [];
-  /** 正在等那台把某个会话文件开出来（那边回 sessionList 时靠 file 认领） */
-  let pendingRemoteOpen = null;
-
-  function remoteLocalId(host, hostId) { return "remote:" + host + ":" + hostId; }
-
-  function findRemoteLocalId(host, hostId) {
-    for (const [localId, info] of remoteSessions) {
-      if (info.host === host && info.hostId === hostId) { return localId; }
-    }
-    return "";
-  }
-
-  /**
-   * 点一条别的机器上的会话：那边没开着就请它开（workspaceOpenSession），开好了再切过去。
-   *
-   * 为什么要请它开：点开历史会话这条路上，后端会把历史消息推给“发起的那块屏”；
-   * 我们就是那一块屏（给那台用的页面标识），于是历史自然就流到这边来了。
-   */
-  function openRemoteSession(item) {
-    if (!item || !item.hostUrl || !item.id) { return; }
-    const existing = findRemoteLocalId(item.hostUrl, item.id);
-    if (existing) { requestSwitch(existing); return; }
-    const hosts = window.pichatHosts;
-    if (!hosts) { return; }
-    pendingRemoteOpen = {
-      host: item.hostUrl, file: item.file || "",
-      cwd: item.cwd, title: item.title, hostName: item.hostName,
-    };
-    hosts.connect(item.hostUrl);
-    hosts.post(item.hostUrl, { type: "workspaceOpenSession", path: item.file || "", cwd: item.cwd || "" })
-      .catch(() => { if (pendingRemoteOpen && pendingRemoteOpen.host === item.hostUrl) { pendingRemoteOpen = null; } });
-  }
-
-  /** 打开着的远程会话记在这台设备里：刷新页面之后那几格要自己回来。 */
-  const REMOTE_STORE_KEY = "pichat.remoteSessions";
-  /** 刷新后等着“请那台重画”的那几格（localId）：等它回了会话清单、号确认了再请。 */
-  const remoteNeedRepaint = new Set();
-
-  function saveRemoteSessions() {
-    try {
-      const items = [];
-      for (const localId of remoteOrder) {
-        const info = remoteSessions.get(localId);
-        const st = sessions.get(localId);
-        if (!info || !st) { continue; }
-        items.push({
-          host: info.host, hostId: info.hostId, file: info.file || st.sessionFile || "",
-          name: st.title || "", cwd: st.cwd || "",
-        });
-      }
-      localStorage.setItem(REMOTE_STORE_KEY, JSON.stringify(items));
-    } catch (e) { /* 存不进去就算了（隐私模式之类） */ }
-  }
-
-  function readRemoteStore() {
-    try {
-      const raw = localStorage.getItem(REMOTE_STORE_KEY);
-      const arr = raw ? JSON.parse(raw) : [];
-      return Array.isArray(arr)
-        ? arr.filter((it) => it && typeof it.host === "string" && it.host && typeof it.hostId === "string")
-        : [];
-    } catch (e) { return []; }
-  }
-
-  /**
-   * 刷新后把上次开着的远程会话摆回来：先按上次记的号建壳（先标成“还没连上”），
-   * 再请那台打开它——那边回会话清单时认领、必要时换成它那边的号（那边重启过就变了），
-   * 最后请它把这一段历史重画过来（见 requestRemoteRepaint）。
-   */
-  function restoreRemoteSessions() {
-    if (IN_WEBVIEW) { return; }
-    const items = readRemoteStore();
-    if (items.length === 0) { return; }
-    const hosts = window.pichatHosts;
-    for (const item of items) {
-      const localId = remoteLocalId(item.host, item.hostId);
-      if (sessions.has(localId)) { continue; }
-      const st = createSession(localId, item.name || "会话");
-      st.remote = { host: item.host, hostId: item.hostId, file: item.file || "" };
-      st.cwd = item.cwd || "";
-      st.sessionFile = item.file || "";
-      st.remoteOffline = true;
-      st.piReady = true;      // 等那台回话；先别让输入框卡在“等 pi”
-      remoteSessions.set(localId, st.remote);
-      if (remoteOrder.indexOf(localId) < 0) { remoteOrder.push(localId); }
-      sessionOrder = sessionOrder.filter((id) => id !== localId).concat([localId]);
-      remoteNeedRepaint.add(localId);
-      if (hosts) {
-        hosts.connect(item.host);
-        hosts.post(item.host, { type: "workspaceOpenSession", path: item.file || "", cwd: item.cwd || "" })
-          .catch(() => { /* 那台连不上：壳先留着，等它回来自动接上 */ });
-      }
-    }
-    // 刷新前在看的就是远程会话：摆回来以后仍然停在这一格上（本机会话那边会各挑各的）
-    const last = remoteOrder[remoteOrder.length - 1];
-    if (last && sessions.has(last)) { activateSessionView(last); }
-    renderSessionBar();
-  }
-
-  /** 这个会话文件在已开的远程会话里是哪一个（那台重启过、号变了时靠它接上）。 */
-  function findRemoteByFile(host, file) {
-    if (!file) { return ""; }
-    for (const [localId, info] of remoteSessions) {
-      if (info.host === host && info.file && samePath(info.file, file)) { return localId; }
-    }
-    return "";
-  }
-
-  /** 刷新回来那几格：号确认了，请那台把这一段历史重画一遍（只画这一个会话）。 */
-  function requestRemoteRepaint(base, localId) {
-    if (!remoteNeedRepaint.has(localId)) { return; }
-    remoteNeedRepaint.delete(localId);
-    const info = remoteSessions.get(localId);
-    const hosts = window.pichatHosts;
-    if (!info || !hosts) { return; }
-    hosts.post(base, { type: "repaintSession", sessionId: info.hostId }).catch(() => { /* 下一回再说 */ });
-  }
-
-  /**
-   * 那台推来的会话清单：已开的远程会话把状态补一遍；正在等的那一个（按会话文件认）认领下来、
-   * 造壳、接进顶条、切过去。其余一概不进本机这份清单（那是那台自己的会话，不是本机的）。
-   */
-  function mergeRemoteSessionList(base, msg) {
-    const list = Array.isArray(msg.sessions) ? msg.sessions : [];
-    for (const s of list) {
-      if (!s || typeof s.id !== "string" || !s.id) { continue; }
-      const known = findRemoteLocalId(base, s.id);
-      if (known) {
-        const st = sessions.get(known);
-        if (st) {
-          if (s.name) { st.title = s.name; }
-          if (typeof s.title === "string") { st.piTitle = s.title; }
-          st.streaming = !!s.streaming;
-          st.bashRunning = !!s.bashRunning;
-          st.piReady = s.piReady !== false;
-          st.loading = !!s.loading;
-          st.remoteOffline = false;
-          if (typeof s.cwd === "string" && s.cwd) { st.cwd = s.cwd; }
-          // 输入框底下那颗胶囊（模型名）刷新后靠这份补回来
-          if (typeof s.modelId === "string") { st.modelId = s.modelId; }
-          if (typeof s.provider === "string") { st.provider = s.provider; }
-          if (typeof s.thinkingLevel === "string") { st.thinkingLevel = s.thinkingLevel; }
-          if (typeof s.percent === "number") { st.percent = s.percent; }
-          syncSessionLoading(st);
-        }
-        requestRemoteRepaint(base, known);
-        continue;
-      }
-      // 号对不上、但文件对得上：那台重启过（panel 换了号），把这一格接到新号上
-      const byFile = findRemoteByFile(base, s.file || "");
-      if (byFile) {
-        const info = { host: base, hostId: s.id, file: s.file };
-        remoteSessions.set(byFile, info);
-        const st = sessions.get(byFile);
-        if (st) {
-          st.remote = info;
-          st.sessionFile = s.file || "";
-          st.remoteOffline = false;
-          st.piReady = s.piReady !== false;
-          if (s.name) { st.title = s.name; }
-        }
-        requestRemoteRepaint(base, byFile);
-        saveRemoteSessions();
-        continue;
-      }
-      const wait = pendingRemoteOpen;
-      if (!wait || wait.host !== base) { continue; }
-      if (!s.file || !wait.file || s.file !== wait.file) { continue; }
-      pendingRemoteOpen = null;
-      const localId = remoteLocalId(base, s.id);
-      const st = createSession(localId, s.name || wait.title || "新会话");
-      st.remote = { host: base, hostId: s.id, file: s.file };
-      st.cwd = (typeof s.cwd === "string" && s.cwd) || wait.cwd || "";
-      st.sessionFile = s.file;
-      st.piReady = s.piReady !== false;
-      st.streaming = !!s.streaming;
-      remoteSessions.set(localId, st.remote);
-      if (remoteOrder.indexOf(localId) < 0) { remoteOrder.push(localId); }
-      sessionOrder = sessionOrder.filter((id) => id !== localId).concat([localId]);
-      remoteNeedRepaint.delete(localId);
-      saveRemoteSessions();
-      renderSessionBar();
-      activateSessionView(localId);
-    }
-  }
-
-  /** 那台断线了：顶条那几格标灰、正在看的那一个在消息流里说一句。 */
-  function applyHostStatus(base, online) {
-    let changed = false;
-    for (const [localId, info] of remoteSessions) {
-      if (info.host !== base) { continue; }
-      const st = sessions.get(localId);
-      if (!st) { continue; }
-      if (!!st.remoteOffline === !online) { continue; }
-      st.remoteOffline = !online;
-      changed = true;
-      // 正看着这一个：在消息流末尾说一句，别让人以为是自己的键盘或网络卡了
-      if (activeId === localId) {
-        applyPanelMessage({
-          type: online ? "system" : "systemError",
-          sessionId: localId,
-          text: online ? "又连上那台了。" : "连不上那台了，正在自动重连；这一段先看不了，也发不出去。",
-        });
-      }
-    }
-    if (changed) { renderSessionBar(); }
-  }
-
-  /** 那台推来的一条消息：认得就翻译成本机那个会话号，剩下的照原样交给界面。 */
-  function translateRemoteMessage(msg) {
-    const base = msg.__host;
-    if (msg.type === "hostStatus") { applyHostStatus(base, msg.online === true); return null; }
-    if (msg.type === "sessionList") { mergeRemoteSessionList(base, msg); return null; }
-    if (msg.type === "sessionActivated") { return null; }   // 那台自己切会话，跟本屏无关
-    if (!msg.sessionId) { return null; }
-    const localId = findRemoteLocalId(base, msg.sessionId);
-    if (!localId) { return null; }   // 还没认领的（或那台上别的会话）不管
-    const copy = Object.assign({}, msg, { sessionId: localId });
-    delete copy.__host;
-    return copy;
+  /** 那台连不上的原因压成一小句（手机上没有悬停，只能写出来）。 */
+  function shortMachineReason(why) {
+    const text = String(why || "").replace(/。$/, "");
+    return text && text.length <= 18 ? text : "";
   }
 
   /**
@@ -11084,6 +10618,29 @@
       if (!g) { return; }
       g.loaded = false;
     });
+  }
+
+  /** 本机那一节叫什么：有成对的机器时后端给的是「工作区-本机」（见 chatHost 的 buildWorkspacePanel）。 */
+  function localWorkSectionName() {
+    const st = viewShowing("workspace");
+    const name = st && st.state && st.state.localSection;
+    return name || "工作区";
+  }
+
+  /**
+   * 一组会话的钥匙：本机那些就是那个目录；别台的加上那台（同一个目录两台都有的时候才分得开）。
+   * 面板里“展开了哪几组”“这一批行回来该挂到哪一组”都按它认。
+   */
+  function groupKeyOf(row) {
+    if (!row) { return ""; }
+    const path = typeof row === "string" ? row : String((row.file !== undefined ? row.file : row.path) || "");
+    const machine = typeof row === "string" ? "" : String(row.machine || "");
+    return (machine ? machine + " " : "") + path;
+  }
+
+  /** 这一组是别台那台的（要让后端去问那台）。 */
+  function groupMachineOf(row) {
+    return row && typeof row.machine === "string" ? row.machine : "";
   }
 
   /** 某一组的那一摊（展开 / 收起之间留着已经取回的行，再展开就不用等）。 */
@@ -11133,11 +10690,12 @@
    * 面板一画就是整的 —— 不至于先只出现文件夹，过一会儿才冒出里面的会话。
    */
   function expandedDirsForHost() {
+    // 只报本机那些（钥匙里没有   的）：别台的组展开时按“那台 + 目录”单独去要
     if (expandedDirs === null) {
       const cur = activeSessionCwd();
       return cur ? [cur] : [];
     }
-    return Array.from(expandedDirs);
+    return Array.from(expandedDirs).filter((one) => one.indexOf(" ") < 0);
   }
 
   /** 点一下组头：展开 / 收起，并把结果记住。 */
@@ -11152,11 +10710,14 @@
     rememberExpandedDirs();
   }
 
-  /** 面板里点了一个工作区：展开 / 收起（行尾那颗加号是新建会话，它自己吞掉点击）。 */
-  function toggleGroupIn(view, path) {
+  /** 面板里点了一个工作区：展开 / 收起（行尾那颗加号是新建会话，它自己吞掉点击）。
+   *  row 是那一行（别台的带上 machine：同一个目录两台都有的时候要分得开）。 */
+  function toggleGroupIn(view, row) {
     const st = view.state;
     if (!st || st.kind !== "workspace") { return; }
-    toggleGroup(path);
+    const key = groupKeyOf(row);
+    if (!key) { return; }
+    toggleGroup(key);
     rebuildWorkspaceItems(view);
     paintWorkspacePanel(view);
   }
@@ -11165,15 +10726,20 @@
    * 跟宿主要某一组会话（offset = 从第几个文件接着扫；第一次是 0）。
    * “想找哪个组”按先来后到记一笔，回来的那批从那里认领（跟两颗「加载更多」一个路子）。
    */
-  function requestGroupPage(view, path, offset) {
+  function requestGroupPage(view, row, offset) {
     const st = view.state;
     if (!st || st.kind !== "workspace") { return; }
-    const g = groupState(st, path);
+    // 钥匙 = “那台 + 目录”（本机那些没有 machine）。传一行过来也行、传钥匙也行
+    const key = typeof row === "string" ? row : groupKeyOf(row);
+    if (!key) { return; }
+    const g = groupState(st, key);
     if (g.loading) { return; }
     g.loading = true;
-    armGroupTimer(view, path, g);
-    groupWaits.push({ path: normPathKey(path), view });
-    vscode.postMessage({ type: "workspaceSessions", path, offset });
+    armGroupTimer(view, key, g);
+    groupWaits.push({ path: normPathKey(key), view });
+    // 消息里给的是真路径 + 那一台的地址（本机那些 machine 是空串）
+    const realPath = typeof row === "string" ? String(row.split(" ").pop() || "") : String(row.file || "");
+    vscode.postMessage({ type: "workspaceSessions", path: realPath, offset, machine: typeof row === "string" ? "" : groupMachineOf(row) });
   }
 
   /**
@@ -11231,17 +10797,17 @@
     return sp.map((it) => {
       const copy = {};
       for (const k in it) { if (Object.prototype.hasOwnProperty.call(it, k)) { copy[k] = it[k]; } }
-      copy.__section = "space";
-      copy.section = "工作区";
+      // 「加载更多工作区」那一行不是工作区本身（它没有目录），单独一类
+      copy.__section = it.machineMore ? "machineMore" : "space";
+      // 本机那些行不带节名（归「工作区」）；别台那几台的行自己带着「工作区-<那台的名字>」
+      copy.section = typeof it.section === "string" && it.section ? it.section : "工作区";
       return copy;
     });
   }
 
   function renderPicker(msg, view = null) {
     const kind = msg.kind;
-    // 「项目与会话」每推一次顺手问一下别的机器（节流在 refreshRemoteHosts 里，问过一次的
-    // 十几秒内不再问）；机器行的变化不经过宿主，只能由这里触发重拼。
-    if (kind === "workspace") { refreshRemoteHosts(false); }
+
     // 这张抽屉是替“一个会话都没有”摊开的：拼出来的时候会话已经开好了就别弹了
     if (kind === "workspace" && msg.dock !== true && emptyWorkspace === "asked") {
       if (sessions.size > 0) {
@@ -11595,7 +11161,8 @@
     const now = Date.now();
     if (commandListReqAt && now - commandListReqAt < 5000) { return; }
     commandListReqAt = now;
-    vscode.postMessage({ type: "listCommands" });
+    // 带上会话号：那台会话的命令清单是它自己的（技能 / 提示模板），后端按号转过去问
+    vscode.postMessage({ type: "listCommands", sessionId: activeId || "" });
   }
   function closeSlashMenu() { slashOpen = false; slashMatches = []; }
   function maybeShowSlashMenu() {
@@ -11953,12 +11520,6 @@
     // VSCode webview 宿主会投递非业务消息（视图聚焦/状态同步等），event.data 可能为 null
     // 或非 {type:string} 结构。直接忽略，避免 msg.type 崩溃导致后续消息被跳过。
     if (!msg || typeof msg.type !== "string") { return; }
-    // 别的机器推来的（browserBridge 挂了 __host）：把会话号翻译成本机这一壳的号再往下走；
-    // 那台的会话清单不进本机这份清单（只认领我们正等的那一个，见 mergeRemoteSessionList）。
-    if (msg.__host) {
-      msg = translateRemoteMessage(msg);
-      if (!msg) { return; }
-    }
     const type = msg.type;
 
     if (type === "fetchChatResult") { applyFetchChatResult(msg); return; }
@@ -12013,6 +11574,11 @@
         if (typeof s.tps === "number") { st.tps = s.tps; }
         // 派子会话：这个会话是子会话、或者它派过子会话（列表里据此画标记与缩进）
         st.taba = s.taba || null;
+        // 跑在别台那台身上（本机会话没有这三个字段）：那台的名字进悬停提示，
+        // 那台连不上时会话格变灰、发消息时先拦一下（跟从前一个样子）
+        st.machineName = typeof s.machineName === "string" ? s.machineName : "";
+        st.remoteOffline = s.machine === undefined ? false : s.machineOnline === false;
+        st.remoteMachine = typeof s.machine === "string" ? s.machine : "";
         // 当前用的会话文件（用来把列表里的历史行标成“已打开”）；路径比法两边同归一化
         const fileBefore = st.sessionFile || "";
         st.sessionFile = typeof s.file === "string" ? s.file : "";
@@ -12025,7 +11591,7 @@
         // 整屏重画收尾也走这儿：重放出来末尾那颗「补来的思考」跟当场生成时一样并回去
         foldTailThinking(st);
       });
-      sessionOrder = order.concat(remoteOrder.filter((id) => sessions.has(id)));
+      sessionOrder = order;
       // 已经不在列表里的会话（被关掉了）：壳和草稿一起丢掉。
       // 本屏正在看的那个例外：画面留在原地（后端那头还认着它，接着往里发消息会自动把它重开），
       // 不硬生生把这边拽到别的会话去——别的窗口关掉它时会这样（自己点的那颗 × 不在此列）。
@@ -12035,8 +11601,6 @@
         // 关掉的这个会话的文件还在盘上，它该出现在那个工作区的历史清单里：
         // 记下它的目录，下面把那一组作废（画面还留在本屏的那个也算）。
         const gone = sessions.get(id);
-        // 别的机器上的会话不归本机这份清单管（本机会话关了不能把那边那一格也拆了）
-        if (gone && gone.remote) { return; }
         if (gone && gone.cwd) { touchedCwds.push(gone.cwd); }
         if (incoming.length > 0 && id === activeId && pendingCloseId !== id) { return; }
         if (pendingCloseId === id) { pendingCloseId = null; }
@@ -12171,10 +11735,12 @@
     }
     if (type === "workspaceSessionsPage") {
       // 某一个工作区那一组会话回来了（展开时 / 点那一组的「加载更多」时）：挂到那一组下面。
-      const view = takeGroupView(msg.path);
+      // 认的钥匙是“那台 + 目录”（后端把 machine 一起回过来，见 chatHost 的 machineGroupPage）。
+      const pageKey = groupKeyOf({ file: msg.path, machine: msg.machine });
+      const view = takeGroupView(pageKey);
       const st = view ? view.state : null;
       if (st && st.kind === "workspace") {
-        const g = groupState(st, msg.path);
+        const g = groupState(st, pageKey);
         const rows = Array.isArray(msg.items) ? msg.items : [];
         g.items = msg.offset > 0 ? g.items.concat(rows) : rows.slice();
         g.nextOffset = typeof msg.nextOffset === "number" ? msg.nextOffset : g.nextOffset;
@@ -13254,10 +12820,6 @@
     st.viewEl.remove();
     sessions.delete(id);
     sessionDrafts.delete(id);
-    remoteSessions.delete(id);
-    remoteOrder = remoteOrder.filter((one) => one !== id);
-    remoteNeedRepaint.delete(id);
-    saveRemoteSessions();
     if (activeId === id) { activeId = null; syncJumpBottom(st); syncComposerButtons(); }
   }
 
@@ -13800,19 +13362,8 @@
   // 常驻的项目与会话侧边栏：摆好版面（宽窗且没收起 → 右边留出那一列），把开关接口交给顶条那颗 <<<。
   // 面板内容不在这一步要：等宿主把会话列表送来再要（见 sessionList 那段里的 ensureSidebarPanel）。
   window.pichatSidebar = { toggle: toggleSidebar };
-  // 告诉桥：哪些会话号跑在别的机器上 —— 那些消息要发到那台去（会话号换成它那边的）
-  if (window.pichatHosts && typeof window.pichatHosts.setRouter === "function") {
-    window.pichatHosts.setRouter((sessionId) => {
-      const info = sessionId ? remoteSessions.get(sessionId) : null;
-      return info ? { base: info.host, sessionId: info.hostId } : null;
-    });
-  }
   syncSidebarLayout();
 
   vscode.postMessage({ type: "ready" });
-  // 上次开着的远程会话先摆回来（壳先出来，那台连上再补内容）
-  restoreRemoteSessions();
-  // 页面一打开就问一圈别的机器：侧边栏还没摊开也先备着，摊开时机器那一节就在那儿了
-  refreshRemoteHosts(true);
   activateSessionFromUrl();
 })();
