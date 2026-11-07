@@ -29,6 +29,26 @@ function readMedia(mediaDir: string, name: string): string {
 }
 
 /**
+ * 标签页与窗口上那颗图标：以前 exe 和托盘用的那个标记 —— 浅色圆角方底、深色标记、
+ * 右下那根竖线是红的（画它的 bin/makeicon.cs 跟着桌面程序一起退休了，坐标照那份搬过来）。
+ *
+ * 画成内联 SVG 的 data 地址：不用带图片文件，改颜色改形状就在这一段里。
+ * 用 SVG 而不是预生成几张 PNG，是因为浏览器、任务栏、Alt+Tab 各要各的尺寸，矢量一劳永逸。
+ */
+const PAGE_ICON = "data:image/svg+xml," + encodeURIComponent([
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 560">',
+    // 方底：radius = 边长 × 0.22，边线宽 = 边长 / 48（跟原来那份画法一致）
+    '<rect x="0.5" y="0.5" width="559" height="559" rx="123" fill="#F6F6F6" stroke="#303030" stroke-width="11.7"/>',
+    // 标记：在方底里留一圈边距（16%），三块里右下那根用红
+    '<g transform="translate(89.6 89.6) scale(0.68)">',
+    '<polygon points="420,280 280,280 280,140 0,140 0,0 420,0" fill="#111111"/>',
+    '<polygon points="560,560 420,560 420,280 560,280" fill="#E53935"/>',
+    '<polygon points="140,560 0,560 0,140 140,140 140,280 280,280 280,420 140,420" fill="#111111"/>',
+    '</g>',
+    '</svg>',
+].join(""));
+
+/**
  * 生成浏览器页面的 HTML 全文。
  * @param mediaDir 插件安装目录下的 media 目录（读样式与脚本用）
  * @param pageId 本页面的标识：服务靠它认出"当前是哪一个页面"，
@@ -71,6 +91,8 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
             Object.fromEntries(lazyScripts.map((file) => [file.name, mediaUrl(file.name)]))))}" />`;
     const extraHead =
         `<title>${host ? `${escapeAttr(host)}-pi` : "pi"}</title>\n` +
+        // 图标：标签页、应用窗口的窗口图标（Windows 任务栏、Alt+Tab）都用它
+        `  <link rel="icon" type="image/svg+xml" href="${escapeAttr(PAGE_ICON)}" />\n` +
         `  <meta name="pichat-page" content="${escapeAttr(pageId)}" />\n` +
         `  <meta name="pichat-theme" content="${themeMode}" />${lazyMeta}\n` +
         `  <style id="browser-theme">${browserCss}</style>`;
