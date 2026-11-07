@@ -577,7 +577,7 @@ export class PiChatWebServer {
             // 跨源的自己人（另一台 pichat 的页面来问这台）：浏览器要读回应，就得先给它这几个头。
             // 同源不用：浏览器根本不看 CORS。
             const origin = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
-            if (origin && !this.originIsSelf(origin)) {
+            if (origin && !this.originIsSelf(origin, req)) {
                 res.setHeader("Access-Control-Allow-Origin", origin);
                 this.addVary(res, "Origin");
             }
@@ -756,9 +756,29 @@ export class PiChatWebServer {
         return isPrivateOrigin(origin);
     }
 
-    /** 这个来源是不是本服务自己（同源）：是就不必回 CORS 头。 */
-    private originIsSelf(origin: string): boolean {
-        return isSameOrigin(origin, this.boundPort, this.ownHostnames, this.trustedOrigins);
+    /**
+     * 这个来源是不是本服务自己（同源）：是就不必回 CORS 头。
+     *
+     * 为什么不能拿 `isSameOrigin` 判：它是“放不放行”那一道关，认的是一批本机地址
+     * （localhost、127.0.0.1、本机各网卡）加端口。可另一台机器上的页面也可能从它自己的
+     * `localhost:51883` 打开，端口正好也是 51883，同名同端口——在那边看着是另一台，
+     * 在这里就被当成自己，于是不回跨源头，浏览器就把回应挡住了。
+     * 同源与否只能看这一条请求的 Host 头：Origin 的 `主机:端口` 跟它一模一样才算。
+     */
+    private originIsSelf(origin: string, req?: http.IncomingMessage): boolean {
+        const target = splitHostHeader(req?.headers.host);
+        if (!target) { return isSameOrigin(origin, this.boundPort, this.ownHostnames, this.trustedOrigins); }
+        let url: URL;
+        try {
+            url = new URL(origin);
+        } catch {
+            return false;
+        }
+        const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+        const port = url.port !== "" ? Number(url.port) : (url.protocol === "https:" ? 443 : 80);
+        const wantName = target.name.replace(/^\[|\]$/g, "");
+        const wantPort = target.port ?? (url.protocol === "https:" ? 443 : this.boundPort);
+        return host === wantName && port === wantPort;
     }
 
     /**
