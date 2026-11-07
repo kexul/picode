@@ -438,11 +438,17 @@ function serveEvents(req: http.IncomingMessage, res: http.ServerResponse): void 
         }, wait);
         let set = replyWaiters.get(replyId);
         if (!set) { set = new Set(); replyWaiters.set(replyId, set); }
-        set.add((hit) => { clearTimeout(timer); finish(hit); });
+        const waiter = (hit: BridgeEvent) => { clearTimeout(timer); finish(hit); };
+        set.add(waiter);
+        // 这条请求结束只摘它自己那一个 waiter。以前是整条 replyId 的 waiter 一起清：
+        // 请求体一读完、或者连接抖一下就会走到这儿，把别的还在等的长轮询一起摘了 ——
+        // 表现就是“题答了、回执也到了中转，可 pi 那边一直没等到”。
         req.on("close", () => {
             clearTimeout(timer);
-            const waiters = replyWaiters.get(replyId);
-            if (waiters) { waiters.clear(); replyWaiters.delete(replyId); }
+            const current = replyWaiters.get(replyId);
+            if (!current) { return; }
+            current.delete(waiter);
+            if (current.size === 0) { replyWaiters.delete(replyId); }
         });
         return;
     }
