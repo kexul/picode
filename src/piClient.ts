@@ -175,7 +175,10 @@ export class PiClient extends EventEmitter {
             piPath: this.opts.piPath,
             args,
             cwd: this.opts.cwd,
-            ...(this.opts.env ? { env: this.opts.env } : {}),
+            // 把后端**现在**这份环境变量一起交过去（中转按它起 pi），而不是让中转用自己的那一份：
+            // 中转是常驻的，环境早就冻在它启动那一刻了 —— 那之后改了 PATH、加了调试开关
+            // （比如假 pi 的 FAKEPI_*），新起的 pi 就吃不到。后端换人也一样：新后端的环境说了算。
+            env: { ...process.env, ...(this.opts.env ?? {}) },
         };
     }
 

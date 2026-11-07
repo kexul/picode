@@ -815,7 +815,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 adoptKey: item.key,
             };
             const rt = this.createPanelRuntime(undefined, launch, item.panelId);
-            void rt.adoptLiveSession(item.sessionFile);
+            // 认回来以后：这个会话开着自动模式、而现在又闲着 —— 把那一轮接着跑起来
+            //（判官在重启窗口里跑完的那一下，它的收尾落在旧后端内存里，已经没地方去了）
+            void rt.adoptLiveSession(item.sessionFile).then(() => this.resumeAutoLoop(rt.id));
         }
     }
 
@@ -1114,6 +1116,26 @@ export abstract class ChatControllerBase implements RuntimeHost {
             return;
         }
         void this.autoSpawnJudge(info.panelId, auto, info.lastReplyText ?? "");
+    }
+
+    /**
+     * 重启以后把自动模式那一轮接着跑起来（认回一个会话时调用）。
+     *
+     * 只在三种情况下动手，别的都交给正常路径：这个会话开着自动模式、现在没在跑、
+     * 而且没有判官正在跑。动手的方式跟"这一轮刚跑完"一样：叫一个判官去看最后那条回复，
+     * 它说继续就继续、说结束就关掉 —— 所以最多多花一次短会话，不会自己绕圈
+     * （轮数上限照旧管着，见 MAX_AUTO_ROUNDS）。
+     */
+    protected async resumeAutoLoop(panelId: string): Promise<void> {
+        const auto = this.autos.get(panelId);
+        if (!auto) { return; }
+        if (this.autoJudgeRun.has(panelId)) { return; }
+        const rt = this.panels.get(panelId);
+        if (!rt || rt.streaming) { return; }
+        if (rt.hasRunningBashTasks()) { return; }
+        if (this.taba.hasRunningChildren(panelId)) { return; }
+        const said = await rt.getLastAssistantText().catch(() => "");
+        this.autoLoopOnTurnEnd({ panelId, status: "done", lastReplyText: said });
     }
 
     /**
