@@ -580,11 +580,38 @@
         const box = document.createElement("div");
         box.className = "md-mermaid";
         box.innerHTML = out;
+        // 跟正文里的图片一样：点一下打开看图那一层，能放大、拖动、双指缩放
+        box.title = "点一下看大图";
+        box.addEventListener("click", () => { openLightbox(mermaidLightboxSrc(out, box), "mermaid 图"); });
         pre.replaceWith(box);
       } else {
         showMermaidNote(code, out.error);
       }
     }
+  }
+
+  /**
+   * 把画好的 SVG 包成看图那一层能吃的地址（`<img src>`）。
+   *
+   * SVG 里的颜色写的是 `var(--pele-bg, #fff)` 这种：它靠页面上那几个 CSS 变量。放进 `<img>`
+   * 的 data 地址以后就脱离了这页，变量取不到，只能用默认的浅色。所以先把当前这几个变量的值
+   * 抄进 SVG 自己的一段 `<style>` 里——深色界面打开大图也是深色，跟正文里看到的一样。
+   */
+  function mermaidLightboxSrc(svgText, box) {
+    const want = ["--pele-bg", "--pele-fg", "--pele-muted", "--pele-line", "--pele-surface",
+      "--pele-surface-alt", "--pele-border", "--pele-accent", "--pele-error", "--pele-font", "--pele-font-mono"];
+    const cs = box && window.getComputedStyle ? window.getComputedStyle(box) : null;
+    const decls = [];
+    if (cs) {
+      for (const name of want) {
+        const value = String(cs.getPropertyValue(name) || "").trim();
+        if (value) { decls.push(name + ":" + value); }
+      }
+    }
+    const withVars = decls.length
+      ? svgText.replace(/(<svg[^>]*>)/, "$1<style>svg{" + decls.join(";") + "}</style>")
+      : svgText;
+    return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(withVars);
   }
 
   /** 画不出来时在代码块底下补一行说明（已经有了就改那行字，不叠第二行）。 */
@@ -10080,7 +10107,7 @@
       if (item.__section === "remoteMore") {
         // 那台还有工作区没列出来：跟本机那块「加载更多」同一副样子
         const btn = document.createElement("button");
-        btn.type = "button"; btn.className = "pk-loadmore pk-group-more";
+        btn.type = "button"; btn.className = "pk-loadmore";
         btn.textContent = item.loading ? "加载中…" : "加载更多工作区";
         btn.disabled = !!item.loading;
         btn.addEventListener("click", (e) => { e.stopPropagation(); loadMoreRemoteProjects(item.remoteHost); });

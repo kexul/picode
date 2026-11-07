@@ -415,7 +415,7 @@
   .md :not(pre) > code { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)); color: var(--vscode-textPreformat-foreground, var(--vscode-foreground)); padding: 1px 0; margin: 0 2px; border-radius: 3px; box-shadow: 0.25em 0 0 var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)), -0.25em 0 0 var(--vscode-textCodeBlock-background, rgba(128,128,128,0.25)); }
   .md pre code { background: none; padding: 0; color: var(--hl-base, var(--vscode-editor-foreground, var(--vscode-foreground, #d4d4d4))); }
   /* mermaid 图（pele 画的）：SVG 自带像素宽高，窄屏按正文宽度缩（图里的字跟着缩，整张能看全）。 */
-  .md-mermaid { margin: 13px 0; }
+  .md-mermaid { margin: 13px 0; cursor: zoom-in; }
   .md-mermaid svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
   /* pele 的颜色与字体都从下面这套变量来（SVG 里存的是 var(...)，不是当场算死的色值）：
      切深浅色不用重画，图自己就跟着变——跟 browserTheme.js 在 body 上设的是同一份 --vscode-*。 */
