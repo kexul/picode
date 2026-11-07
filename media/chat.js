@@ -10228,6 +10228,7 @@
         }
         const title = document.createElement("span"); title.className = "pk-history-title";
         title.textContent = item.label || "";
+        if (item.current) { title.classList.add("pk-space-current"); }
         main.appendChild(title);
         if (item.folderPath) {
           const p = document.createElement("span"); p.className = "pk-space-path-inline"; p.textContent = item.folderPath;
@@ -10746,6 +10747,14 @@
    * 为什么另开一节（每台一节）：会话要看的时候是混着看的，但工作区（目录）分不清是哪台的；
    * 一节一台，项目行就不必再挂机器名了。
    */
+  /** 当前看的是这台机器上的这个目录吗（侧边栏里那一行该写成蓝色）。 */
+  function isCurrentRemoteDir(host, cwd) {
+    const now = activeId ? sessions.get(activeId) : null;
+    const info = now && now.remote;
+    if (!info || !cwd) { return false; }
+    return info.host === host.url && samePath(cwd, now.cwd || "");
+  }
+
   /** 那台在界面上叫什么：它的标签；连不上（拿不到标签）就用主机:端口，别把 http:// 也写进节名。 */
   function remoteHostLabel(host) {
     const name = (host && host.name) || "";
@@ -10779,6 +10788,8 @@
           __section: "remoteSpace", section, remoteHost: host, remoteKey: key,
           label: project.name, folderPath: project.cwd, file: project.cwd,
           lastActivity: project.lastActivity,
+          // 当前看的就是这台上的这个目录：名字写成蓝色（跟本机那行的「当前」一个样子）
+          current: isCurrentRemoteDir(host, project.cwd),
         });
         if (!remoteExpanded.has(key)) { continue; }
         for (const one of project.sessions || []) {
