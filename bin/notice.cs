@@ -10,13 +10,20 @@
  * 它自己不会退；后端一退（标准输入关掉）它跟着收摊。没在 Windows 上、或者这支没编出来，
  * 后端就静悄悄地不弹，其余照常（浏览器页面里照样看得到）。
  *
+ * 那张卡片是一扇「分层窗口」（WS_EX_LAYERED + UpdateLayeredWindow）：自己画一张 32 位带透明度的图
+ * 贴到屏幕上，所以左上角那颗「这台叫什么」的小标签能一半挑到卡片外面、边缘还是干净的抗锯齿，
+ * 底下透出来的是真的桌面（不是拿某个颜色冒充透明 —— 那样抗锯齿的那几个像素会跟透明色混成一圈杂边）。
+ * 窗口形状又按“卡片本体 + 那颗标签”裁过（见 NoticeCard.Shape）：鼠标只在这两处归它管，
+ * 标签周围那几条透明地带鼠标和点击都穿过去。
+ *
  * 编法见 scripts/compile.mjs：用 Windows 自带的 csc.exe（.NET Framework）编成 bin/notice.exe，
  * 编译时带上 /codepage:65001（本文件是 UTF-8，不指明白 csc 会按系统代码页读，中文注释会乱）。
  * 这支用的是系统自带的 WinForms，一个第三方包都不引。
  *
- * 协议（一行一条，字段之间拿制表符隔开；标题、正文是 UTF-8 码的 base64，省得跟制表符打架）：
+ * 协议（一行一条，字段之间拿制表符隔开；标题、正文、标签是 UTF-8 码的 base64，省得跟制表符打架）：
  *   后端写进来：
- *     show<TAB>标识<TAB>0|1<TAB>标题<TAB>正文     0 = 跑完一轮，1 = 在等你答一句
+ *     show<TAB>标识<TAB>0|1<TAB>标题<TAB>正文<TAB>标签     0 = 跑完一轮，1 = 在等你答一句
+ *                                                    标签（可省，旧后端不带）= 这台叫什么（设置里那项）
  *     close<TAB>标识                              把那一张收走（那个会话已经说上话了 / 关掉了）
  *     closeall                                    全收走
  *   它写出去：
@@ -127,6 +134,8 @@ static class Hub
         var title = Decode(parts[3]);
         var body = Decode(parts[4]);
 
+        var tag = parts.Length > 5 ? Decode(parts[5]) : "";
+
         // 同一个会话反复推过来：换掉旧的（人看的是最新的那条）
         CloseKey(key);
         if (Cards.Count >= MaxCards)
@@ -135,7 +144,7 @@ static class Hub
             Cards.RemoveAt(0);
         }
 
-        var card = new NoticeCard(key, title, body, ask);
+        var card = new NoticeCard(key, title, body, ask, tag);
         card.Clicked += OnClicked;
         Cards.Add(card);
         card.Show();
@@ -210,16 +219,25 @@ sealed class NoticeCard : Form
     private const int TitleGap = 4;
     private const int MaxBodyLines = 3;
     private const int AccentWidth = 3;
+    private const int TagHeight = 18;
+    /// <summary>标签再长也不宽过这个数（卡片只有这么宽，一颗标签不该顶掉整个标题）。</summary>
+    private const int TagMaxWidth = 220;
 
     private static readonly Font TitleFont = new Font("Microsoft YaHei UI", 9.75f, FontStyle.Bold);
     private static readonly Font BodyFont = new Font("Microsoft YaHei UI", 9f);
     private static readonly Font CloseFont = new Font("Segoe UI", 12f);
+    private static readonly Font TagFont = new Font("Microsoft YaHei UI", 8.25f);
     private static readonly Color TitleColor = Color.FromArgb(0x11, 0x18, 0x27);
     private static readonly Color BodyColor = Color.FromArgb(0x4B, 0x55, 0x63);
     private static readonly Color BorderColor = Color.FromArgb(0xD8, 0xDB, 0xE0);
     private static readonly Color CloseColor = Color.FromArgb(0x9A, 0xA3, 0xAF);
     private static readonly Color DoneColor = Color.FromArgb(0x2E, 0x7D, 0x32);
     private static readonly Color AskColor = Color.FromArgb(0xB2, 0x6A, 0x00);
+
+    // 左上角那颗小标签（这台叫什么）
+    private static readonly Color TagBg = Color.FromArgb(0xEE, 0xF1, 0xF5);
+    private static readonly Color TagColor = Color.FromArgb(0x4B, 0x55, 0x63);
+    private static readonly Color TagBorderColor = Color.FromArgb(0xCF, 0xD5, 0xDD);
 
     /// <summary>量正文高度时的上限（够放下三行以外的东西，量出来再截到三行）。</summary>
     private const int MeasureHeight = 4000;
@@ -232,48 +250,116 @@ sealed class NoticeCard : Form
     private Rectangle closeRect;
     private bool hoverClose;
 
+    /// <summary>左上角那颗小标签写的字（这台叫什么）；空着就没有它。</summary>
+    private readonly string tag;
+    /// <summary>标签太长时切过一刀的那个写法（画的是它）。</summary>
+    private readonly string tagText;
+    /// <summary>卡片本体从窗口顶上让出来多少：小标签挑出去的那一截（不挑出去就是 0）。</summary>
+    private readonly int cardTop;
+    private readonly Rectangle tagRect;
+
     public string Key { get; private set; }
     public event Action<string> Clicked;
 
-    public NoticeCard(string key, string title, string body, bool ask)
+    public NoticeCard(string key, string title, string body, bool ask, string label)
     {
         Key = key;
         heading = title ?? "";
         detail = body ?? "";
         asking = ask;
+        tag = label ?? "";
+        // 小标签一半在卡片外面、一半压在卡片上沿——不是全装在条子里，看着才像“这颗标签挑出来了”
+        cardTop = tag.Length == 0 ? 0 : TagHeight / 2;
 
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         TopMost = true;
         StartPosition = FormStartPosition.Manual;
-        BackColor = Color.White;
-        SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint
-            | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
 
         var textWidth = CardWidth - AccentWidth - PadX - PadX;
-        headingHeight = TextRenderer.MeasureText(heading, TitleFont,
-            new Size(textWidth, 1000), TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix).Height;
-        var lineHeight = TextRenderer.MeasureText("国A", BodyFont).Height;
-        var wanted = TextRenderer.MeasureText(detail, BodyFont,
-            new Size(textWidth, MeasureHeight), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height;
-        detailHeight = Math.Min(wanted, lineHeight * MaxBodyLines);
-        // TextRenderer 自动折行时不会替你加那个省略号（只把超出三行的截掉），自己截一刀补上
-        if (wanted > detailHeight) { detail = Fit(detail, textWidth, detailHeight); }
-        Size = new Size(CardWidth, PadY + headingHeight + TitleGap + detailHeight + PadY);
-        closeRect = new Rectangle(Width - 26, 6, 18, 18);
+        heading = Clip(heading, TitleFont, textWidth);
+        tagText = Clip(tag, TagFont, TagMaxWidth - 12);
+        int tagWidth;
+        using (var oneLine = OneLine())
+        using (var wrapped = Wrapped())
+        {
+            headingHeight = Measure(heading, TitleFont, textWidth, oneLine).Height;
+            var lineHeight = Measure("国A", BodyFont, textWidth, wrapped).Height;
+            var wanted = Measure(detail, BodyFont, textWidth, wrapped).Height;
+            detailHeight = Math.Min(wanted, lineHeight * MaxBodyLines);
+            // 折行时 GDI+ 不替你补那个省略号（只把超出三行的截掉），自己截一刀补上
+            if (wanted > detailHeight) { detail = Fit(detail, textWidth, detailHeight); }
+            // 量的时候留出标签自己的左右内边距，不然挨到上限时字会被再切一刀、连省略号都看不见
+            tagWidth = tag.Length == 0 ? 0
+                : Math.Min(TagMaxWidth, Measure(tagText, TagFont, TagMaxWidth, oneLine).Width + 12);
+        }
+
+        Size = new Size(CardWidth, PadY + headingHeight + TitleGap + detailHeight + PadY + cardTop);
+        closeRect = new Rectangle(Width - 26, cardTop + 6, 18, 18);
+        tagRect = new Rectangle(AccentWidth + PadX, 0, tagWidth, TagHeight);
+        Cursor = Cursors.Hand;
+    }
+
+    /// <summary>单行、上下居中（放不下时靠 Clip 先收成省略号，这里的 Trimming 只是兜底）。</summary>
+    private static StringFormat OneLine()
+    {
+        var format = new StringFormat();
+        format.FormatFlags |= StringFormatFlags.NoWrap;
+        format.Trimming = StringTrimming.EllipsisCharacter;
+        format.LineAlignment = StringAlignment.Center;
+        return format;
+    }
+
+    /// <summary>照宽度折行（正文用）。</summary>
+    private static StringFormat Wrapped()
+    {
+        var format = new StringFormat();
+        format.Trimming = StringTrimming.None;
+        return format;
+    }
+
+    /// <summary>一句话占多宽多高（跟 Draw 里画它用同一套排法，量出来才准）。</summary>
+    private static Size Measure(string text, Font font, int maxWidth, StringFormat format)
+    {
+        using (var bitmap = new Bitmap(1, 1))
+        using (var g = Graphics.FromImage(bitmap))
+        {
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            var size = g.MeasureString(text, font, new SizeF(Math.Max(1, maxWidth), MeasureHeight), format);
+            return new Size((int)Math.Ceiling(size.Width), (int)Math.Ceiling(size.Height));
+        }
     }
 
     /// <summary>把一段话截到装得进这么多高的地方，末尾加个省略号（截到只剩一个字也不再缩）。</summary>
+    /// <summary>单行放不下时收成「……」，剩下的宽度装得进多少留多少。</summary>
+    private static string Clip(string text, Font font, int width)
+    {
+        if (width <= 0) { return ""; }
+        using (var oneLine = OneLine())
+        {
+            if (Measure(text, font, width, oneLine).Width <= width) { return text; }
+            var cut = text.Length;
+            while (cut > 1)
+            {
+                cut = cut * 3 / 4;
+                var candidate = text.Substring(0, cut).TrimEnd() + "…";
+                if (Measure(candidate, font, width, oneLine).Width <= width) { return candidate; }
+            }
+        }
+        return text.Substring(0, 1) + "…";
+    }
+
     private static string Fit(string text, int width, int height)
     {
-        var cut = text.Length;
-        while (cut > 1)
+        using (var wrapped = Wrapped())
         {
-            cut = cut * 3 / 4;
-            var candidate = text.Substring(0, cut).TrimEnd() + "…";
-            var measured = TextRenderer.MeasureText(candidate, BodyFont,
-                new Size(width, MeasureHeight), TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix).Height;
-            if (measured <= height) { return candidate; }
+            var cut = text.Length;
+            while (cut > 1)
+            {
+                cut = cut * 3 / 4;
+                var candidate = text.Substring(0, cut).TrimEnd() + "…";
+                if (Measure(candidate, BodyFont, width, wrapped).Height <= height) { return candidate; }
+            }
         }
         return text.Substring(0, 1) + "…";
     }
@@ -287,43 +373,234 @@ sealed class NoticeCard : Form
         {
             var cp = base.CreateParams;
             // WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW（后者让它不出现在 Alt+Tab 里）
-            cp.ExStyle |= 0x08000000 | 0x00000080;
+            // | WS_EX_LAYERED（下面自己按像素贴上去，小标签挑出去那半截才是真透明的）
+            cp.ExStyle |= 0x08000000 | 0x00000080 | 0x00080000;
             return cp;
         }
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        // 形状得等窗口真有了再定一次：构造时设的那份不一定落到窗口上
+        Region = Shape();
+        Redraw();
     }
 
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
-        closeRect = new Rectangle(Width - 26, 6, 18, 18);
+        closeRect = new Rectangle(Width - 26, cardTop + 6, 18, 18);
+        Redraw();
     }
 
-    protected override void OnPaint(PaintEventArgs e)
+    // ==================== 分层窗口：自己画一张图，按像素贴上去 ====================
+    //
+    // 为什么不用 TransparencyKey（“某个颜色 = 透明”）：小标签的圆角是抗锯齿画的，边缘那几个像素
+    // 是灰和“透明色”的混合，混出来的东西不等于那个透明色，于是留在屏幕上成了标签外面一圈粉边。
+    // 自己贴一张 32 位带透明度的图就没这回事：边缘那几个像素本来就是半透明的，跟底下正常混。
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Point32 { public int X; public int Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Size32 { public int Cx; public int Cy; }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    private struct BlendFunction { public byte BlendOp; public byte BlendFlags; public byte SourceConstantAlpha; public byte AlphaFormat; }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr hdcDst, ref Point32 pptDst, ref Size32 psize,
+        IntPtr hdcSrc, ref Point32 pptSrc, int crKey, ref BlendFunction pblend, int dwFlags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetDC(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteDC(IntPtr hdc);
+
+    [DllImport("gdi32.dll")]
+    private static extern IntPtr SelectObject(IntPtr hdc, IntPtr hObject);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(IntPtr hObject);
+
+    private const int UlwAlpha = 0x02;
+    private const byte AcSrcOver = 0x00;
+    private const byte AcSrcAlpha = 0x01;
+
+    /// <summary>画一遍、贴上去（位置跟着 Left/Top 走）。</summary>
+    private void Redraw()
     {
-        var g = e.Graphics;
-        var outline = new Rectangle(0, 0, Width - 1, Height - 1);
+        if (!IsHandleCreated) { return; }
+        using (var bitmap = new Bitmap(Width, Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+        {
+            using (var g = Graphics.FromImage(bitmap))
+            {
+                // 透明画布上不能用 ClearType（那要拿底下的像素来混），用灰度抗锯齿
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+                g.Clear(Color.Transparent);
+                Draw(g);
+            }
+            Premultiply(bitmap);
+
+            var screen = GetDC(IntPtr.Zero);
+            var memory = CreateCompatibleDC(screen);
+            var handle = bitmap.GetHbitmap(Color.FromArgb(0));
+            var previous = SelectObject(memory, handle);
+            try
+            {
+                // UpdateLayeredWindow 要的是“已经乘过透明度的颜色”，GDI+ 画出来的是没乘过的，
+                // 所以上面先过一遍 Premultiply。
+                var target = new Point32();
+                target.X = Left;
+                target.Y = Top;
+                var size = new Size32();
+                size.Cx = Width;
+                size.Cy = Height;
+                var source = new Point32();
+                var blend = new BlendFunction();
+                blend.BlendOp = AcSrcOver;
+                blend.SourceConstantAlpha = 255;
+                blend.AlphaFormat = AcSrcAlpha;
+                UpdateLayeredWindow(Handle, screen, ref target, ref size, memory, ref source, 0, ref blend, UlwAlpha);
+            }
+            finally
+            {
+                SelectObject(memory, previous);
+                DeleteObject(handle);
+                DeleteDC(memory);
+                ReleaseDC(IntPtr.Zero, screen);
+            }
+        }
+    }
+
+    /// <summary>把颜色乘上自己的透明度（32 位图里每 4 个字节一组，最后一组那个是透明度）。</summary>
+    private static void Premultiply(Bitmap bitmap)
+    {
+        var area = new Rectangle(0, 0, bitmap.Width, bitmap.Height);
+        var data = bitmap.LockBits(area, System.Drawing.Imaging.ImageLockMode.ReadWrite,
+            System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        try
+        {
+            var bytes = new byte[data.Stride * bitmap.Height];
+            Marshal.Copy(data.Scan0, bytes, 0, bytes.Length);
+            for (var i = 0; i + 3 < bytes.Length; i += 4)
+            {
+                var alpha = bytes[i + 3];
+                if (alpha == 255 || alpha == 0) { continue; }
+                bytes[i] = (byte)(bytes[i] * alpha / 255);
+                bytes[i + 1] = (byte)(bytes[i + 1] * alpha / 255);
+                bytes[i + 2] = (byte)(bytes[i + 2] * alpha / 255);
+            }
+            Marshal.Copy(bytes, 0, data.Scan0, bytes.Length);
+        }
+        finally
+        {
+            bitmap.UnlockBits(data);
+        }
+    }
+
+    /// <summary>一个两头圆的标签底（坐标就是外面那个矩形）。</summary>
+    private static System.Drawing.Drawing2D.GraphicsPath Pill(Rectangle r)
+    {
+        var path = new System.Drawing.Drawing2D.GraphicsPath();
+        var d = r.Height;
+        path.AddArc(r.Left, r.Top, d, d, 90, 180);
+        path.AddArc(r.Right - d, r.Top, d, d, 270, 180);
+        path.CloseFigure();
+        return path;
+    }
+
+    private void Draw(Graphics g)
+    {
+        var card = new Rectangle(0, cardTop, Width, Height - cardTop);
+        var outline = new Rectangle(card.Left, card.Top, card.Width - 1, card.Height - 1);
         using (var fill = new SolidBrush(Color.White)) { g.FillRectangle(fill, outline); }
         using (var pen = new Pen(BorderColor)) { g.DrawRectangle(pen, outline); }
 
         // 左边那条竖线：一整条，从头到底，两头是平的（卡片没有圆角，不用担心被裁）
         using (var accent = new SolidBrush(asking ? AskColor : DoneColor))
         {
-            g.FillRectangle(accent, 0, 0, AccentWidth + 1, Height);
+            g.FillRectangle(accent, card.Left, card.Top, AccentWidth + 1, card.Height);
         }
 
         var textX = AccentWidth + PadX;
         var textWidth = Width - textX - PadX;
-        TextRenderer.DrawText(g, heading, TitleFont,
-            new Rectangle(textX, PadY, textWidth, headingHeight), TitleColor,
-            TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix
-            | TextFormatFlags.VerticalCenter);
-        TextRenderer.DrawText(g, detail, BodyFont,
-            new Rectangle(textX, PadY + headingHeight + TitleGap, textWidth, detailHeight), BodyColor,
-            TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+        var titleY = cardTop + PadY;
+        if (tag.Length > 0)
+        {
+            // 小标签压在卡片上沿上。挑出去那半截没有白底衬着，所以给一圈描边，
+            // 不然浅灰的标签糊在桌面壁纸上就看不出来了。
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using (var path = Pill(tagRect))
+            {
+                using (var fill = new SolidBrush(TagBg)) { g.FillPath(fill, path); }
+                using (var pen = new Pen(TagBorderColor)) { g.DrawPath(pen, path); }
+            }
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.Default;
+            using (var centered = OneLine())
+            using (var tagBrush = new SolidBrush(TagColor))
+            {
+                centered.Alignment = StringAlignment.Center;
+                var at = new RectangleF(tagRect.X, tagRect.Y, tagRect.Width, tagRect.Height);
+                g.DrawString(tagText, TagFont, tagBrush, at, centered);
+            }
+        }
 
-        TextRenderer.DrawText(g, "×", CloseFont, closeRect,
-            hoverClose ? TitleColor : CloseColor,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        using (var oneLine = OneLine())
+        using (var wrapped = Wrapped())
+        using (var titleBrush = new SolidBrush(TitleColor))
+        using (var bodyBrush = new SolidBrush(BodyColor))
+        using (var markBrush = new SolidBrush(hoverClose ? TitleColor : CloseColor))
+        {
+            g.DrawString(heading, TitleFont, titleBrush,
+                new RectangleF(textX, titleY, textWidth, headingHeight), oneLine);
+            g.DrawString(detail, BodyFont, bodyBrush,
+                new RectangleF(textX, titleY + headingHeight + TitleGap, textWidth, detailHeight), wrapped);
+            var centered = OneLine();
+            centered.Alignment = StringAlignment.Center;
+            try
+            {
+                g.DrawString("×", CloseFont, markBrush,
+                    new RectangleF(closeRect.X, closeRect.Y, closeRect.Width, closeRect.Height), centered);
+            }
+            finally { centered.Dispose(); }
+        }
+    }
+
+    /// <summary>
+    /// 窗口的形状：卡片本体 + 那颗小标签（比标签画的边多留 2 像素，好让它的抗锯齿边不被切掉）。
+    ///
+    /// 为什么窗口要照形状裁：不裁的话，标签挑出去留下那条透明地带仍旧算在窗口里 ——
+    /// 鼠标走到那儿光标就变成卡片的手形（底下的编辑器、浏览器那边的形状被“抢”掉了），
+    /// 点一下也落在卡片上。裁掉以后那几条真的不属于这个窗口，鼠标从那穿过去。
+    /// </summary>
+    private Region Shape()
+    {
+        var path = new System.Drawing.Drawing2D.GraphicsPath();
+        // 两块是叠着的：默认的 Alternate 规则会把叠的那一小块挖成洞（标签压住卡片的那半截就没了），
+        // Winding 才是“叠着就算在内”
+        path.FillMode = System.Drawing.Drawing2D.FillMode.Winding;
+        path.AddRectangle(new Rectangle(0, cardTop, Width, Height - cardTop));
+        if (tag.Length > 0)
+        {
+            var grown = tagRect;
+            grown.Inflate(2, 2);
+            var d = grown.Height;
+            path.AddArc(grown.Left, grown.Top, d, d, 90, 180);
+            path.AddArc(grown.Right - d, grown.Top, d, d, 270, 180);
+            path.CloseFigure();
+        }
+        var shape = new Region(path);
+        path.Dispose();
+        return shape;
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
@@ -334,11 +611,7 @@ sealed class NoticeCard : Form
         {
             hoverClose = over;
             Cursor = over ? Cursors.Default : Cursors.Hand;
-            Invalidate(closeRect);
-        }
-        else if (!over)
-        {
-            Cursor = Cursors.Hand;
+            Redraw();
         }
     }
 
@@ -348,7 +621,7 @@ sealed class NoticeCard : Form
         if (hoverClose)
         {
             hoverClose = false;
-            Invalidate(closeRect);
+            Redraw();
         }
     }
 

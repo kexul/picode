@@ -57,9 +57,12 @@ export class DesktopNotice {
 
     constructor(private readonly options: DesktopNoticeOptions) {}
 
-    /** 弹一张。同一个标识的卡片只换不堆（后来那条顶掉旧的）。 */
-    public show(key: string, title: string, body: string, ask: boolean): void {
-        this.write(["show", key, ask ? "1" : "0", base64(title), base64(body)].join("\t"));
+    /**
+     * 弹一张。同一个标识的卡片只换不堆（后来那条顶掉旧的）。
+     * @param tag 卡片左上角那颗小标签写的字（这台叫什么，空着就不挂标签）
+     */
+    public show(key: string, title: string, body: string, ask: boolean, tag = ""): void {
+        this.write(["show", key, ask ? "1" : "0", base64(title), base64(body), base64(tag)].join("\t"));
     }
 
     /** 收走某一标识的那一张（没有就什么也不做）。 */

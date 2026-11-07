@@ -782,7 +782,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 this.noticeLinks.delete(oldest);
             }
         }
-        this.notice.show(key, title, body, ask);
+        // 左上角那颗小标签写的是「这台叫什么」（空着就是电脑名）：一眼看出这张是这台弹的
+        this.notice.show(key, title, body, ask, displayName());
     }
 
     /** 收走某个会话那一张卡片（它说上话了、被关掉了、那道题答完了）。 */
