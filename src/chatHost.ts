@@ -989,7 +989,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * @param opts.lastRound 只发最后一轮（见 sessionRuntime 的 replayHistory）：页面重连后
      *        补不上、只能整屏重画时用它，顶上一颗「加载更早的消息」补更早那些。
      */
-    private resyncPage(pageId: string, note: string, opts?: { fullHistory?: boolean; lastRound?: boolean }): Promise<void> {
+    private resyncPage(pageId: string, note: string, opts?: { fullHistory?: boolean; lastRound?: boolean; onlyPanelId?: string }): Promise<void> {
         if (pageId && !this.broadcaster.hasPage(pageId)) {
             // 页面的重画请求到得比它的推送连接还早（刚刷新的那一瞬间）：现在送也是白送，
             // 先记下来，它一连上就画（见 onPageConnected）。
@@ -1003,6 +1003,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         if (pageId) { this.resyncingPages.set(pageId, { lastRound: opts?.lastRound === true }); }
         const replays: Array<Promise<void>> = [];
         for (const rt of this.panels.values()) {
+            // 只要重画一个会话（另一台机器的页面刷新后回来，只要它自己那一格）
+            if (opts?.onlyPanelId && rt.id !== opts.onlyPanelId) { continue; }
             // 刚建的空会话不用重画：newSession 已经把它需要的东西发过去了
             if (rt.isConversationEmpty()) { continue; }
             replays.push(rt.replayHistory({ note, sink, full: opts?.fullHistory, lastRound: opts?.lastRound }));
@@ -1438,6 +1440,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 }
                 return true;
             }
+            case "repaintSession":
+                // 页面刷新后回来，手里什么都没有：请这边把它正在看的那个会话重画一遍。
+                // 跨机器时那台的页面就是靠这条把历史拿回去的（见 media/chat.js 的恢复流程）。
+                if (typeof msg.sessionId === "string" && msg.sessionId) {
+                    this.log(`[远程] 页面 ${this.currentPageId} 请我重画会话 ${msg.sessionId}`);
+                    void this.resyncPage(this.currentPageId, "", { onlyPanelId: msg.sessionId, lastRound: true });
+                }
+                return true;
             case "openHistory":
                 // 顶条最右边那颗“<<<”按钮（以及命令面板的历史入口）：列表从右侧滑入，
                 // 只弹在点它的那块屏上（别的浏览器页面不跟着弹）。
@@ -1520,6 +1530,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return false;
     }
 
+    /** 页面消息里带着会话号时，就用它找那个会话（跨机器时靠这个把搜索落到正确的目录）。 */
+    private panelForMessage(msg: any): SessionRuntime | undefined {
+        const id = msg && typeof msg.sessionId === "string" ? msg.sessionId : "";
+        return id ? this.panels.get(id) : undefined;
+    }
+
     /**
      * 跑一次文件搜索。
      *
@@ -1532,13 +1548,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const seq = typeof msg.seq === "number" && Number.isFinite(msg.seq) ? msg.seq : 0;
         const mode: "files" | "text" = msg.mode === "text" ? "text" : "files";
         const query = typeof msg.query === "string" ? msg.query.slice(0, 200) : "";
+        // 页面带着会话号来的就按它找（跨机器时，这块屏看的是那台上的会话）；
+        // 没带就退回“这块屏正在看的那个”（本机页面一直是这样）
+        const active = this.panelForMessage(msg) ?? this.getActive(clientId);
         const reply = (extra: Record<string, unknown>) => {
-            this.postToOneClient(clientId, { type: "findResults", seq, mode, query, ...extra });
+            // 回话也带上会话号：跨机器时那头发消息的页面靠它认出这是哪个会话的结果
+            this.postToOneClient(clientId, { type: "findResults", seq, mode, query, sessionId: active ? active.id : "", ...extra });
         };
-        const cwd = (() => {
-            const active = this.getActive(clientId);
-            return active ? (this.resolveSessionDir(active.id) ?? active.cwd) : undefined;
-        })();
+        const cwd = active ? (this.resolveSessionDir(active.id) ?? active.cwd) : undefined;
         // 上一次还在跑的先掐掉（哪怕这一次因为没目录而直接回话）
         this.fileSearches.get(clientId)?.abort();
         if (!cwd) {
@@ -1572,10 +1589,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const clientId = this.currentPageId;
         const requestId = typeof msg.requestId === "number" && Number.isFinite(msg.requestId) ? msg.requestId : 0;
         const want = typeof msg.path === "string" ? msg.path.slice(0, 500) : "";
-        const active = this.getActive(clientId);
+        const active = this.panelForMessage(msg) ?? this.getActive(clientId);
         const cwd = active ? (this.resolveSessionDir(active.id) ?? active.cwd) : undefined;
         const reply = (candidates: string[]) => {
-            this.postToOneClient(clientId, { type: "pathCandidatesResult", requestId, path: want, candidates });
+            this.postToOneClient(clientId, { type: "pathCandidatesResult", requestId, path: want, candidates, sessionId: active ? active.id : "" });
         };
         if (!cwd || !want) {
             reply([]);

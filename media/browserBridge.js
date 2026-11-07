@@ -608,6 +608,7 @@
       source: null,
       lastSeq: 0,
       openedOnce: false,
+      online: false,
       retryIndex: 0,
       retryTimer: null,
       lastTickAt: 0,
@@ -653,6 +654,8 @@
       if (h.source !== mine) { return; }
       try { mine.close(); } catch (e) { /* 已经断了 */ }
       h.source = null;
+      // 那台断了：告诉界面一声（它好在会话格上标灰、在消息流里说一句）
+      if (h.online) { h.online = false; deliver({ type: "hostStatus", __host: base, online: false }); }
       scheduleHostReconnect(h);
     });
     mine.addEventListener("open", function () {
@@ -660,6 +663,7 @@
       h.openedOnce = true;
       h.retryIndex = 0;
       h.lastTickAt = Date.now();
+      if (!h.online) { h.online = true; deliver({ type: "hostStatus", __host: base, online: true }); }
     });
   }
 

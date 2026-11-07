@@ -1234,6 +1234,8 @@
       // 派出去的子会话还在跑：本会话自己闲着也把那颗点亮出来（一样呼吸），
       // 一眼看得出这一家子还在干活（等的是子会话，不是本会话在答）。
       el.classList.toggle("child-running", kids > 0);
+      // 那台机器连不上：点变灰、不呼吸（内容暂时不会变，也别让人以为它在跑）
+      el.classList.toggle("offline", !!item.remoteOffline);
       // 目录放在这一格身上（顶条上不写目录了；调试脚本要知道“当前会话跑在哪儿”就取这个）
       el.dataset.cwd = item.cwd || "";
       el.title = (item.label || "")
@@ -5086,6 +5088,8 @@
         taba: st.taba || null,
         depth,
         pendingClose: pendingCloseId === st.id,
+        // 那台连不上（远程会话才有这一项）：会话格上那颗点变灰，发消息时也会拦一下
+        remoteOffline: !!st.remoteOffline,
         // 下拉框里第二行显示它跑在哪个目录（同名会话靠它分辨）
         cwd: st.cwd || "",
       });
@@ -8852,7 +8856,7 @@
       openFileDirect(path, line, col);
     }, FILE_CANDIDATES_WAIT_MS);
     pendingFileCandidates.set(requestId, { path: path, line: line, col: col, timer: timer });
-    vscode.postMessage({ type: "pathCandidates", path: path, requestId: requestId });
+    vscode.postMessage({ type: "pathCandidates", path: path, requestId: requestId, sessionId: activeId || "" });
   }
 
   /** 后端回了「这个名字对上了哪几个文件」：一个就开，好几个就弹搜索浮层。 */
@@ -9557,7 +9561,7 @@
       return;
     }
     // 旧结果先留着，新的回来再换：每敲一个字母就闪一下空白不好看
-    vscode.postMessage({ type: "findFiles", mode: mode, query: query, seq: fileSearch.seq });
+    vscode.postMessage({ type: "findFiles", mode: mode, query: query, seq: fileSearch.seq, sessionId: activeId || "" });
   }
 
   /** 后端把这一次的结果送回来了（seq 对不上的——前面发的那几次——直接丢掉）。 */
@@ -10723,6 +10727,91 @@
       .catch(() => { if (pendingRemoteOpen && pendingRemoteOpen.host === item.hostUrl) { pendingRemoteOpen = null; } });
   }
 
+  /** 打开着的远程会话记在这台设备里：刷新页面之后那几格要自己回来。 */
+  const REMOTE_STORE_KEY = "pichat.remoteSessions";
+  /** 刷新后等着“请那台重画”的那几格（localId）：等它回了会话清单、号确认了再请。 */
+  const remoteNeedRepaint = new Set();
+
+  function saveRemoteSessions() {
+    try {
+      const items = [];
+      for (const localId of remoteOrder) {
+        const info = remoteSessions.get(localId);
+        const st = sessions.get(localId);
+        if (!info || !st) { continue; }
+        items.push({
+          host: info.host, hostId: info.hostId, file: info.file || st.sessionFile || "",
+          name: st.title || "", cwd: st.cwd || "",
+        });
+      }
+      localStorage.setItem(REMOTE_STORE_KEY, JSON.stringify(items));
+    } catch (e) { /* 存不进去就算了（隐私模式之类） */ }
+  }
+
+  function readRemoteStore() {
+    try {
+      const raw = localStorage.getItem(REMOTE_STORE_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr)
+        ? arr.filter((it) => it && typeof it.host === "string" && it.host && typeof it.hostId === "string")
+        : [];
+    } catch (e) { return []; }
+  }
+
+  /**
+   * 刷新后把上次开着的远程会话摆回来：先按上次记的号建壳（先标成“还没连上”），
+   * 再请那台打开它——那边回会话清单时认领、必要时换成它那边的号（那边重启过就变了），
+   * 最后请它把这一段历史重画过来（见 requestRemoteRepaint）。
+   */
+  function restoreRemoteSessions() {
+    if (IN_WEBVIEW) { return; }
+    const items = readRemoteStore();
+    if (items.length === 0) { return; }
+    const hosts = window.pichatHosts;
+    for (const item of items) {
+      const localId = remoteLocalId(item.host, item.hostId);
+      if (sessions.has(localId)) { continue; }
+      const st = createSession(localId, item.name || "会话");
+      st.remote = { host: item.host, hostId: item.hostId, file: item.file || "" };
+      st.cwd = item.cwd || "";
+      st.sessionFile = item.file || "";
+      st.remoteOffline = true;
+      st.piReady = true;      // 等那台回话；先别让输入框卡在“等 pi”
+      remoteSessions.set(localId, st.remote);
+      if (remoteOrder.indexOf(localId) < 0) { remoteOrder.push(localId); }
+      sessionOrder = sessionOrder.filter((id) => id !== localId).concat([localId]);
+      remoteNeedRepaint.add(localId);
+      if (hosts) {
+        hosts.connect(item.host);
+        hosts.post(item.host, { type: "workspaceOpenSession", path: item.file || "", cwd: item.cwd || "" })
+          .catch(() => { /* 那台连不上：壳先留着，等它回来自动接上 */ });
+      }
+    }
+    // 刷新前在看的就是远程会话：摆回来以后仍然停在这一格上（本机会话那边会各挑各的）
+    const last = remoteOrder[remoteOrder.length - 1];
+    if (last && sessions.has(last)) { activateSessionView(last); }
+    renderSessionBar();
+  }
+
+  /** 这个会话文件在已开的远程会话里是哪一个（那台重启过、号变了时靠它接上）。 */
+  function findRemoteByFile(host, file) {
+    if (!file) { return ""; }
+    for (const [localId, info] of remoteSessions) {
+      if (info.host === host && info.file && samePath(info.file, file)) { return localId; }
+    }
+    return "";
+  }
+
+  /** 刷新回来那几格：号确认了，请那台把这一段历史重画一遍（只画这一个会话）。 */
+  function requestRemoteRepaint(base, localId) {
+    if (!remoteNeedRepaint.has(localId)) { return; }
+    remoteNeedRepaint.delete(localId);
+    const info = remoteSessions.get(localId);
+    const hosts = window.pichatHosts;
+    if (!info || !hosts) { return; }
+    hosts.post(base, { type: "repaintSession", sessionId: info.hostId }).catch(() => { /* 下一回再说 */ });
+  }
+
   /**
    * 那台推来的会话清单：已开的远程会话把状态补一遍；正在等的那一个（按会话文件认）认领下来、
    * 造壳、接进顶条、切过去。其余一概不进本机这份清单（那是那台自己的会话，不是本机的）。
@@ -10741,9 +10830,33 @@
           st.bashRunning = !!s.bashRunning;
           st.piReady = s.piReady !== false;
           st.loading = !!s.loading;
+          st.remoteOffline = false;
           if (typeof s.cwd === "string" && s.cwd) { st.cwd = s.cwd; }
+          // 输入框底下那颗胶囊（模型名）刷新后靠这份补回来
+          if (typeof s.modelId === "string") { st.modelId = s.modelId; }
+          if (typeof s.provider === "string") { st.provider = s.provider; }
+          if (typeof s.thinkingLevel === "string") { st.thinkingLevel = s.thinkingLevel; }
+          if (typeof s.percent === "number") { st.percent = s.percent; }
           syncSessionLoading(st);
         }
+        requestRemoteRepaint(base, known);
+        continue;
+      }
+      // 号对不上、但文件对得上：那台重启过（panel 换了号），把这一格接到新号上
+      const byFile = findRemoteByFile(base, s.file || "");
+      if (byFile) {
+        const info = { host: base, hostId: s.id, file: s.file };
+        remoteSessions.set(byFile, info);
+        const st = sessions.get(byFile);
+        if (st) {
+          st.remote = info;
+          st.sessionFile = s.file || "";
+          st.remoteOffline = false;
+          st.piReady = s.piReady !== false;
+          if (s.name) { st.title = s.name; }
+        }
+        requestRemoteRepaint(base, byFile);
+        saveRemoteSessions();
         continue;
       }
       const wait = pendingRemoteOpen;
@@ -10760,14 +10873,39 @@
       remoteSessions.set(localId, st.remote);
       if (remoteOrder.indexOf(localId) < 0) { remoteOrder.push(localId); }
       sessionOrder = sessionOrder.filter((id) => id !== localId).concat([localId]);
+      remoteNeedRepaint.delete(localId);
+      saveRemoteSessions();
       renderSessionBar();
       activateSessionView(localId);
     }
   }
 
+  /** 那台断线了：顶条那几格标灰、正在看的那一个在消息流里说一句。 */
+  function applyHostStatus(base, online) {
+    let changed = false;
+    for (const [localId, info] of remoteSessions) {
+      if (info.host !== base) { continue; }
+      const st = sessions.get(localId);
+      if (!st) { continue; }
+      if (!!st.remoteOffline === !online) { continue; }
+      st.remoteOffline = !online;
+      changed = true;
+      // 正看着这一个：在消息流末尾说一句，别让人以为是自己的键盘或网络卡了
+      if (activeId === localId) {
+        applyPanelMessage({
+          type: online ? "system" : "systemError",
+          sessionId: localId,
+          text: online ? "又连上那台了。" : "连不上那台了，正在自动重连；这一段先看不了，也发不出去。",
+        });
+      }
+    }
+    if (changed) { renderSessionBar(); }
+  }
+
   /** 那台推来的一条消息：认得就翻译成本机那个会话号，剩下的照原样交给界面。 */
   function translateRemoteMessage(msg) {
     const base = msg.__host;
+    if (msg.type === "hostStatus") { applyHostStatus(base, msg.online === true); return null; }
     if (msg.type === "sessionList") { mergeRemoteSessionList(base, msg); return null; }
     if (msg.type === "sessionActivated") { return null; }   // 那台自己切会话，跟本屏无关
     if (!msg.sessionId) { return null; }
@@ -11431,6 +11569,11 @@
 
   function send() {
     const st = activeSession();
+    // 那台机器连不上：这条先别发，等它自己重连上来再说
+    if (st && st.remoteOffline) {
+      applyPanelMessage({ type: "systemError", sessionId: st.id, text: "连不上那台机器，这条消息没发出去（正在自动重连）。" });
+      return;
+    }
     const d = draftOfSession();
     const typed = inputEl.value.trim();
     const hasImages = (d.images || []).length > 0;
@@ -12949,6 +13092,8 @@
     sessionDrafts.delete(id);
     remoteSessions.delete(id);
     remoteOrder = remoteOrder.filter((one) => one !== id);
+    remoteNeedRepaint.delete(id);
+    saveRemoteSessions();
     if (activeId === id) { activeId = null; syncJumpBottom(st); syncComposerButtons(); }
   }
 
@@ -13501,6 +13646,8 @@
   syncSidebarLayout();
 
   vscode.postMessage({ type: "ready" });
+  // 上次开着的远程会话先摆回来（壳先出来，那台连上再补内容）
+  restoreRemoteSessions();
   // 页面一打开就问一圈别的机器：侧边栏还没摊开也先备着，摊开时机器那一节就在那儿了
   refreshRemoteHosts(true);
   activateSessionFromUrl();

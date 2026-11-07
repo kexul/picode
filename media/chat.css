@@ -219,6 +219,9 @@
   @media (hover: none) { .sn-tab .sn-close { opacity: 0.6; } }
   .sn-tab.closing { background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 14%, transparent); }
   .sn-tab.closing .sn-close { opacity: 1; color: var(--vscode-charts-green, #3fb950); }
+  /* 那台机器连不上：点变灰、不呼吸，名字也淡一点（这一格的内容暂时不会变） */
+  .sn-tab.offline .sn-dot { background: var(--vscode-disabledForeground, #808080); animation: none; }
+  .sn-tab.offline .sn-text { opacity: 0.6; }
   /* 左右划切会话的时候（见 chat.js 的 tabSwipeBegin）：要进来的那一格把名字露出来、
      宽度跟着手指涨；要退场的那个跟着收。松手弹回去时给宽度补一段过渡。 */
   .sn-tab.strip.tab-growing .sn-text { display: block; }
