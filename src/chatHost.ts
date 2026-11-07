@@ -2016,6 +2016,18 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         }
     }
 
+    /** 用户把这个会话的这一轮停了：还等着的问话卡片当场收掉（按没作答交回去）。
+     *
+     *  以前只靠提问那一方（pi 里的扩展）自己发现这一轮被停、再报一声「不等了」（见 cancelAsk）：
+     *  它正挂在一圈长轮询上，那一圈转完才知道 —— 界面上就是点了「停止生成」也什么反应都没有。
+     *  扩展问的那几种（确认 / 输入 / 选一个）也一并收掉：它们同样在等。 */
+    public abortAsks(sessionId: string): void {
+        if (!sessionId) { return; }
+        for (const [cardId, state] of Array.from(this.openCards.entries())) {
+            if (state.sessionId === sessionId) { this.settleCard(cardId, undefined); }
+        }
+    }
+
     /**
      * 这块屏上该有、而现在可能没有的卡片重发一遍：整屏重画之后（卡片随重画没了），
      * 以及重连对账之后（连接悄悄死掉那段漏掉的卡片，见 onPageConnected）。

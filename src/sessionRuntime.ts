@@ -835,6 +835,10 @@ export class SessionRuntime {
             this.client.send({ type: "abort_bash" });
             this.client.send({ type: "clear_queue" });
             this.client.send({ type: "abort" });
+            // 还等着的问话卡片当场收掉（按没作答交回去）：pi 里那个提问的扩展一直长轮询着答案，
+            // 只发 abort 的话它得等这一圈轮询自己转完才发现（最多二十秒），这期间界面上那张卡片
+            // 照样挂着、这一轮也停不稳 —— 看着就是「点了停止什么也没发生」。
+            this.host.abortAsks?.(this.id);
         }
     }
 

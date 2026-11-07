@@ -200,6 +200,12 @@ export interface RuntimeHost {
     askQuestion?(request: AskRequest, sessionId?: string, deliver?: (answer: AskAnswer) => void): void;
     /** 扩展不等这次提问了（超时/这一轮被停）：把还开着的那个浮层收掉。可选。 */
     cancelAsk?(id: string): void;
+    /**
+     * 用户把这个会话的这一轮停了（点「停止生成」/ Esc /「卡住了」）：把还等着的问话卡片当场收掉
+     * （按没作答交回去）。不收的话，提问那一方（pi 里的扩展）得等它的长轮询自己转一圈才知道，
+     * 这一轮也跟着停不下来 —— 界面上就是「点了停止，卡片照样挂在那儿等」。可选。
+     */
+    abortAsks?(panelId: string): void;
 
     /**
      * 某个会话里的后台命令跑到头了（跑完 / 失败 / 被停；见 bashProtocol.ts）。

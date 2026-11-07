@@ -120,11 +120,17 @@ module.exports = async (page) => {
     await page.shot("ask-card-typed-done.png");
 
     // 四、没答就按“停止生成”（消息流末尾那颗方块）：这一轮被停 → 模型收到「用户没作答」
+    //     得当场收：卡片挂在那儿等着，人不答就只能停这一轮；停下去半天没动静就是「点了没用」
     await page.send("问单选");
     await waitCards(page, 1, 30000);
     await page.sleep(300);
-    await page.click("#messages .session-view:not(.off) .msg-endhint-stop");
-    await waitDone(page, 4, 30000);
+    {
+        const t0 = Date.now();
+        await page.click("#messages .session-view:not(.off) .msg-endhint-stop");
+        await waitDone(page, 4, 30000);
+        const took = Date.now() - t0;
+        check(`点「停止生成」以后卡片当场收掉（${took} 毫秒）`, took < 3000, `${took} 毫秒才收`);
+    }
     await page.sleep(1200);
     await page.shot("ask-card-stopped.png");
 
