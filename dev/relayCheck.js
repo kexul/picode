@@ -110,6 +110,28 @@ function openPage(baseUrl, pageId) {
 }
 
 /**
+ * 等这一只 pi 真的不再吐字（会话表里"不跑"还不够：上一回合的尾巴可能还在流）。
+ * 做法是看这个会话的正文增量安不安静：连续 quietMs 没有新的才算。
+ */
+async function waitQuiet(page, sessionId, quietMs = 700, timeoutMs = 25000) {
+    let last = -1;
+    let quietSince = 0;
+    const end = Date.now() + timeoutMs;
+    while (Date.now() < end) {
+        const count = page.messages.filter((m) => (m.type === "assistantDelta" || m.type === "streamEnd"
+            || m.type === "streamStart") && m.sessionId === sessionId).length;
+        if (count !== last) {
+            last = count;
+            quietSince = Date.now();
+        } else if (Date.now() - quietSince >= quietMs) {
+            return true;
+        }
+        await sleep(100);
+    }
+    return false;
+}
+
+/**
  * 页面收到的正文增量接起来（正文是逐字推的，一条只有几个字）。
  * @param from 从第几条消息起算（默认全部）
  * @param only 只看这个会话（默认全都算：一个页面会同时收到好几个会话的消息）
@@ -279,6 +301,7 @@ function sessionFrom(list, id) {
     const withTwo = await page.waitFor((m) => m.type === "sessionList" && (m.sessions || []).length >= 2, 30000);
     const longId = withTwo && (withTwo.sessions || []).map((s) => s.id).find((id) => id !== sessionId);
     check(!!longId, "又开了一个新会话（" + longId + "）");
+    await waitQuiet(page, longId);   // 上一回合的尾巴流完了再开口
     await page.post({ type: "send", sessionId: longId, text: "说段长话", images: [] });
     const firstDelta = await page.waitFor((m) => m.type === "assistantDelta", 20000);
     check(!!firstDelta, "长话开始往外吐了");
