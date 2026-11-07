@@ -14,6 +14,7 @@ import {
     isAllowedMediaFile,
     isLoopbackHostHeader,
     isLoopbackName,
+    isPrivateOrigin,
     isSameOrigin,
     isWildcardHost,
     localHostnames,
@@ -27,6 +28,7 @@ import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { findListedFile } from "./fileSearch";
 import type { SessionChanges } from "./gitChanges";
 import { readRemoteNotice, type RemoteNotice } from "./remoteNotice";
+import { listProjectDirs, listSessionFiles, readProjectEntry, scanSessionInfo, type SessionListItem } from "./sessionStore";
 import { changedCharRanges, diffRows, type LineRanges } from "./wordDiff";
 
 /**
@@ -72,6 +74,9 @@ const COMPRESS_CACHE_MAX = 64;
  * —— 每个文件编译后第一次被请求就要堵住服务端半秒；9 档是 175 KB、27 ms；gzip 是 213 KB。
  */
 const BROTLI_QUALITY = 9;
+/** `GET /sessions` 报多少个项目（按最近活动取前这些），每个项目再报最近几条会话。 */
+const SESSIONS_MAX_PROJECTS = 40;
+const SESSIONS_PER_PROJECT = 10;
 
 /**
  * 请求方说它收哪些压缩方式（名字 → q 值；没提就是没有，q=0 当作不收）。
@@ -569,6 +574,23 @@ export class PiChatWebServer {
                 this.sendText(req, res, 403, "请求来源不被接受。请直接在浏览器里打开服务给的地址。");
                 return;
             }
+            // 跨源的自己人（另一台 pichat 的页面来问这台）：浏览器要读回应，就得先给它这几个头。
+            // 同源不用：浏览器根本不看 CORS。
+            const origin = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
+            if (origin && !this.originIsSelf(origin)) {
+                res.setHeader("Access-Control-Allow-Origin", origin);
+                this.addVary(res, "Origin");
+            }
+            // 预检：页面发 JSON 的 POST（以及带自定义头的请求）之前，浏览器会先问一句能不能发
+            if (req.method === "OPTIONS") {
+                const asked = req.headers["access-control-request-headers"];
+                res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+                res.setHeader("Access-Control-Allow-Headers", typeof asked === "string" && asked ? asked : "content-type");
+                res.setHeader("Access-Control-Max-Age", "600");
+                res.writeHead(204, { "Cache-Control": "no-store" });
+                res.end();
+                return;
+            }
             const pathname = safeDecode(url.pathname);
             if (pathname === undefined) {
                 this.sendText(req, res, 400, "请求地址不合法。");
@@ -576,6 +598,12 @@ export class PiChatWebServer {
             }
             if (pathname === "/health") {
                 this.sendHealth(req, res);
+                return;
+            }
+            // 这台机器上跑过哪些项目、每个项目最近的几个会话：给别的机器上的 pichat 拿来列清单
+            if (pathname === "/sessions") {
+                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                void this.withFailNote(req, res, this.sendSessions(req, res));
                 return;
             }
             // 别的 pichat 后端推来的“有事”（机器对机器，见 src/remoteNotice.ts）
@@ -715,12 +743,35 @@ export class PiChatWebServer {
      *           （这种请求即使服务只听本机地址也能发到）。
      * 设置里写了 trustedOrigins（页面是从 https 反代那个地址打开的）的，那两个检查都把它当自己人：
      * 它本来就不是本机地址、也不是本服务的端口，不带这一份名单就会被顶回去。
+     *
+     * 另外放开“私网来源”（见 webTransport.isPrivateOrigin）：多台 pichat 互联时，页面是从另一台
+     * 的地址打开的，它要直接问这台的 `/sessions`、把消息发到这台的 `/api`。
      */
     private originAllowed(req: http.IncomingMessage): boolean {
         if (isLoopbackName(this.boundHost) && !this.hostHeaderAllowed(req)) {
             return false;
         }
-        return isSameOrigin(req.headers.origin as string | undefined, this.boundPort, this.ownHostnames, this.trustedOrigins);
+        const origin = req.headers.origin as string | undefined;
+        if (isSameOrigin(origin, this.boundPort, this.ownHostnames, this.trustedOrigins)) { return true; }
+        return isPrivateOrigin(origin);
+    }
+
+    /** 这个来源是不是本服务自己（同源）：是就不必回 CORS 头。 */
+    private originIsSelf(origin: string): boolean {
+        return isSameOrigin(origin, this.boundPort, this.ownHostnames, this.trustedOrigins);
+    }
+
+    /**
+     * 往 `Vary` 里再加一项（已有就什么也不做）。
+     *
+     * 为什么不用 `res.setHeader("Vary", "…")` 直接盖：一条响应上可能同时挂着“按来源变”（跨源
+     * 才回 CORS 头）和“按压缩方式变”，盖掉一个，中间的缓存就会把两种回应混起来。
+     */
+    private addVary(res: http.ServerResponse, extra: string): void {
+        const existing = String(res.getHeader("Vary") ?? "").trim();
+        if (!existing) { res.setHeader("Vary", extra); return; }
+        if (existing.toLowerCase().split(/\s*,\s*/).indexOf(extra.toLowerCase()) >= 0) { return; }
+        res.setHeader("Vary", existing + ", " + extra);
     }
 
     /** Host 头可不可接受：监听在本机地址上时，要么是本机写法，要么是人写下的来源里的域名。 */
@@ -1388,6 +1439,36 @@ export class PiChatWebServer {
         this.sendJson(req, res, 200, payload);
     }
 
+    /**
+     * 这台机器上跑过哪些项目、每个项目最近的几个会话（`GET /sessions`）。
+     *
+     * 给“另一台 pichat”拿的：那台的页面要在这边列出这台有哪些会话、工作目录在哪，好让人点开。
+     * 只报最近这些（项目按最近活动、每个项目取前几条）：清单是给人扫一眼的，不是把全部历史倒出去。
+     * 形状：`{ projects: [{ name, cwd, lastActivity, sessions: [{ id, title, cwd, lastActivity }] }] }`。
+     */
+    private async sendSessions(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        const projects: Array<Record<string, unknown>> = [];
+        // 目录清单是这一趟运行扫一次留着的那份（见 sessionStore.listProjectDirs），这里直接用
+        const dirs = await listProjectDirs();
+        for (const entry of dirs.slice(0, SESSIONS_MAX_PROJECTS)) {
+            const project = await readProjectEntry(entry);
+            if (!project) { continue; }
+            const files = (await listSessionFiles(project.cwd)).slice(0, SESSIONS_PER_PROJECT);
+            const scanned = await Promise.all(files.map((file) => scanSessionInfo(file.file)));
+            const sessions = scanned
+                .filter((item): item is SessionListItem => !!item && !item.child)
+                .map((item) => ({ id: item.id, title: item.title, cwd: item.cwd, lastActivity: item.lastActivity }));
+            if (sessions.length === 0) { continue; }
+            projects.push({
+                name: project.name,
+                cwd: project.cwd,
+                lastActivity: project.lastActivity,
+                sessions,
+            });
+        }
+        this.sendJson(req, res, 200, { projects });
+    }
+
     private sendJson(req: http.IncomingMessage, res: http.ServerResponse, status: number, value: unknown): void {
         const body = Buffer.from(JSON.stringify(value), "utf8");
         this.writeBody(req, res, status, body, {
@@ -1426,7 +1507,8 @@ export class PiChatWebServer {
         const encoding = pickBodyEncoding(req.headers["accept-encoding"]);
         const packed = this.compressFor(encoding, body, cacheKey);
         const out: Record<string, string | number> = { ...headers };
-        if (body.length >= COMPRESS_MIN_BYTES) { out["Vary"] = "Accept-Encoding"; }
+        // Vary 用 setHeader 累加（上面可能已经挂了 CORS 那一项），不能直接盖
+        if (body.length >= COMPRESS_MIN_BYTES) { this.addVary(res, "Accept-Encoding"); }
         if (packed && encoding) {
             out["Content-Encoding"] = encoding;
             out["Content-Length"] = packed.length;
@@ -1618,12 +1700,15 @@ export class PiChatWebServer {
     private openStream(res: http.ServerResponse, accept: string | string[] | undefined): PageStream {
         const pack = (acceptedEncodings(accept).get("gzip") ?? 0) > 0;
         const stream = new PageStream(res, pack, this.backlogBytes);
+        if (pack) {
+            res.setHeader("Content-Encoding", "gzip");
+            this.addVary(res, "Accept-Encoding");
+        }
         res.writeHead(200, {
             "Content-Type": "text/event-stream; charset=utf-8",
             "Cache-Control": "no-store, no-transform",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
-            ...(pack ? { "Content-Encoding": "gzip", "Vary": "Accept-Encoding" } : {}),
         });
         return stream;
     }

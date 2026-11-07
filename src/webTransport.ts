@@ -187,6 +187,48 @@ export function isSameOrigin(originHeader: string | undefined, port: number, own
 }
 
 /**
+ * 这个来源是不是“同一片内网里的自己人”（另一台 pichat 的页面来调这台）。
+ *
+ * 为什么放开它：多台 pichat 互联时，页面是从 A 那台的地址打开的，而它要直接问 B 那台的
+ * `/sessions`、把消息发到 B 的 `/api`、开 B 的推送流。浏览器会把这些请求的 Origin 报成 A 的地址，
+ * 而 A 的地址在 B 眼里不是“自己”，不放开就一律 403。
+ *
+ * 放行范围就是“内网能互相串门的那几个网段 + 本机 + tailscale”，外网网页（Origin 是它自己的
+ * 域名）照旧拒。这跟现在的风险基本持平：内网里任何一台机器本来就能直接打开 B 的页面操作会话，
+ * 这里只是把“浏览器里的另一个页面”也算进同一片内网。
+ *
+ * @param originHeader 请求的 Origin 头
+ */
+export function isPrivateOrigin(originHeader: string | undefined): boolean {
+    if (!originHeader) { return false; }
+    let url: URL;
+    try {
+        url = new URL(originHeader);
+    } catch {
+        return false;
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") { return false; }
+    const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (host === "localhost" || host.endsWith(".localhost")) { return true; }
+    // tailscale 的 MagicDNS 名字：页面可能就是从 `https://xxx.ts.net` 打开的
+    if (host.endsWith(".ts.net")) { return true; }
+    if (host.includes(":")) {
+        // IPv6：本机（::1）、唯一本地地址（fc00::/7）、链路本地（fe80::/10）
+        return host === "::1" || /^f[cd][0-9a-f]{2}:/i.test(host) || /^fe[89ab][0-9a-f]:/i.test(host);
+    }
+    const parts = host.split(".");
+    if (parts.length !== 4) { return false; }
+    const nums = parts.map((one) => Number(one));
+    if (nums.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) { return false; }
+    const [a, b] = nums;
+    return a === 127 || a === 10
+        || (a === 172 && b >= 16 && b <= 31)
+        || (a === 192 && b === 168)
+        || (a === 100 && b >= 64 && b <= 127)   // tailscale / 运营商大内网
+        || (a === 169 && b === 254);
+}
+
+/**
  * 一个连着推送流的页面。
  *
  * 每个页面各占一条推送连接（浏览器打开页面就开一条，手机上退到后台再回来会重开一条）。
