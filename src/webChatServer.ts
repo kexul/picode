@@ -74,8 +74,8 @@ const COMPRESS_CACHE_MAX = 64;
  * —— 每个文件编译后第一次被请求就要堵住服务端半秒；9 档是 175 KB、27 ms；gzip 是 213 KB。
  */
 const BROTLI_QUALITY = 9;
-/** `GET /sessions` 报多少个项目（按最近活动取前这些），每个项目再报最近几条会话。 */
-const SESSIONS_MAX_PROJECTS = 40;
+/** `GET /sessions` 一次报几个项目（跟本机「项目与会话」一批一个数），每个项目再报最近几条会话。 */
+const SESSIONS_PAGE = 5;
 const SESSIONS_PER_PROJECT = 10;
 
 /**
@@ -1464,14 +1464,19 @@ export class PiChatWebServer {
      *
      * 给“另一台 pichat”拿的：那台的页面要在这边列出这台有哪些会话、工作目录在哪，好让人点开。
      * 只报最近这些（项目按最近活动、每个项目取前几条）：清单是给人扫一眼的，不是把全部历史倒出去。
-     * 形状：`{ projects: [{ name, cwd, lastActivity, sessions: [{ id, title, cwd, file, lastActivity }] }] }`。
+     * 形状：`{ projects: [{ name, cwd, lastActivity, sessions: [{ id, title, cwd, file, lastActivity }] }], hasMore }`。
      * file 是那边的会话文件绝对路径：另一台要请这边“打开这一个”时带的就是它（见 workspaceOpenSession）。
+     *
+     * 分批：`?offset=N` 从第 N 个项目往后数一批（跟本机「项目与会话」一批 5 个一个规矩），
+     * `hasMore` 说后面还有没有。一次全列出来，那台项目多的时候侧边栏会拖到看不见底。
      */
     private async sendSessions(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         const projects: Array<Record<string, unknown>> = [];
         // 目录清单是这一趟运行扫一次留着的那份（见 sessionStore.listProjectDirs），这里直接用
         const dirs = await listProjectDirs();
-        for (const entry of dirs.slice(0, SESSIONS_MAX_PROJECTS)) {
+        const offset = Math.max(0, Math.floor(Number(req.url ? new URL(req.url, "http://x").searchParams.get("offset") : 0) || 0));
+        const page = dirs.slice(offset, offset + SESSIONS_PAGE);
+        for (const entry of page) {
             const project = await readProjectEntry(entry);
             if (!project) { continue; }
             const files = (await listSessionFiles(project.cwd)).slice(0, SESSIONS_PER_PROJECT);
@@ -1487,7 +1492,7 @@ export class PiChatWebServer {
                 sessions,
             });
         }
-        this.sendJson(req, res, 200, { projects });
+        this.sendJson(req, res, 200, { projects, offset, hasMore: offset + page.length < dirs.length });
     }
 
     private sendJson(req: http.IncomingMessage, res: http.ServerResponse, status: number, value: unknown): void {

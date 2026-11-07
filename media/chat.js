@@ -9858,10 +9858,7 @@
     const keepScroll = pane.scrollTop;
     pane.innerHTML = "";
     renderPickerRows(view, only);
-    // 下半那一格末尾那颗「加载更多」（两块面板各挂在自己那一格上，这一颗挂在下半）
-    if (pane === view.spacePane && st.kind === "workspace" && st.spacesHasMore) {
-      pane.appendChild(buildLoadMoreBtn(view, st, "spaces"));
-    }
+    // 下半那一格的「加载更多」是行里的一员（见 buildSpaceRows 的 localMore），这里不用再挂
     pane.scrollTop = keepScroll;
   }
 
@@ -9985,9 +9982,7 @@
     if (st.kind === "history" && st.historyHasMore) {
       view.body.appendChild(buildLoadMoreBtn(view, st, "sessions"));
     }
-    if (st.kind === "workspace" && st.spacesHasMore) {
-      view.spacePane.appendChild(buildLoadMoreBtn(view, st, "spaces"));
-    }
+    // 工作区那颗「加载更多」现在是行里的一员（见 buildSpaceRows 的 localMore），不再挂在面板末尾
     if (st.kind === "model") { renderModelFooter(view, st); }
     restoreScroll();
   }
@@ -10077,6 +10072,20 @@
         el.classList.add("pk-space");
       } else if (st.kind === "workspace" && item.__section === "groupSession") {
         el.classList.add("pk-session", "pk-group-session");
+      }
+      if (item.__section === "localMore") {
+        sectionPane.appendChild(buildLoadMoreBtn(view, st, "spaces"));
+        return;
+      }
+      if (item.__section === "remoteMore") {
+        // 那台还有工作区没列出来：跟本机那块「加载更多」同一副样子
+        const btn = document.createElement("button");
+        btn.type = "button"; btn.className = "pk-loadmore pk-group-more";
+        btn.textContent = item.loading ? "加载中…" : "加载更多工作区";
+        btn.disabled = !!item.loading;
+        btn.addEventListener("click", (e) => { e.stopPropagation(); loadMoreRemoteProjects(item.remoteHost); });
+        sectionPane.appendChild(btn);
+        return;
       }
       if (item.__section === "groupMore") {
         // 那一组的「加载更多」：卡在组里末尾，点它接着加这一组的
@@ -10584,6 +10593,11 @@
       }
       if (g.hasMore) { out.push({ __section: "groupMore", section: localSection, groupPath: it.file }); }
     }
+    // 本机的工作区也分批：那颗「加载更多工作区」挂在本机这一节的末尾
+    //（以前它挂在整块面板末尾，远程那台一插进来就跑到了人家底下）
+    if (st.spacesHasMore) {
+      out.push({ __section: "localMore", section: localSection, loading: !!st.spacesLoading });
+    }
     return out.concat(remoteSpaceRows());
   }
 
@@ -10628,21 +10642,46 @@
   }
 
   /** 问一台：它在不在、叫什么、有哪些会话。连不上也有这一行（写着“连不上”）。 */
+  /** 问那台要一页工作区（从第 offset 个往后数一批，跟本机一样一批 5 个）。 */
+  function fetchRemoteSessions(base, offset) {
+    const url = base + "/sessions" + (offset > 0 ? "?offset=" + offset : "");
+    return fetch(url, { cache: "no-store" }).then((r) => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)));
+  }
+
   function probeRemoteHost(url) {
     const base = url.replace(/\/+$/, "");
     if (!base) { return Promise.resolve(null); }
     if (base === location.origin) { return Promise.resolve(null); }
     return Promise.all([
       fetch(base + "/health", { cache: "no-store" }).then((r) => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))),
-      fetch(base + "/sessions", { cache: "no-store" }).then((r) => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))),
+      fetchRemoteSessions(base, 0),
     ]).then(([health, sessions]) => {
       const projects = sessions && Array.isArray(sessions.projects) ? sessions.projects : [];
       const hostName = (health && health.name) || base;
       let count = 0;
       for (const project of projects) { count += (project.sessions || []).length; }
-      return { url: base, name: hostName, online: true, count, projects };
+      return { url: base, name: hostName, online: true, count, projects, hasMore: !!(sessions && sessions.hasMore) };
     }).catch(async (err) => {
-      return { url: base, name: base, online: false, count: 0, projects: [], error: await describeRemoteFailure(base, err) };
+      return { url: base, name: base, online: false, count: 0, projects: [], hasMore: false, error: await describeRemoteFailure(base, err) };
+    });
+  }
+
+  /** 那台再给一页工作区：接在后面（跟本机那块「加载更多工作区」一个意思）。 */
+  function loadMoreRemoteProjects(host) {
+    if (!host || !host.online || host.loadingMore || !host.hasMore) { return; }
+    host.loadingMore = true;
+    paintRemoteHosts();
+    fetchRemoteSessions(host.url, (host.projects || []).length).then((sessions) => {
+      const more = sessions && Array.isArray(sessions.projects) ? sessions.projects : [];
+      host.projects = (host.projects || []).concat(more);
+      host.hasMore = !!(sessions && sessions.hasMore);
+      host.count = host.projects.reduce((n, project) => n + (project.sessions || []).length, 0);
+    }, () => {
+      // 这一下没拉到：先把按钮收掉，免得停在那儿一直点不动（下次刷新会重问）
+      host.hasMore = false;
+    }).then(() => {
+      host.loadingMore = false;
+      paintRemoteHosts();
     });
   }
 
@@ -10718,6 +10757,9 @@
             hostUrl: host.url, hostName: host.name,
           });
         }
+      }
+      if (host.hasMore) {
+        out.push({ __section: "remoteMore", section, remoteHost: host, loading: !!host.loadingMore });
       }
     }
     return out;
