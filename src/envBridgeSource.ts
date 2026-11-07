@@ -25,7 +25,6 @@
  * 里面不要出现 "${"：外层是模板字符串，那样会被当插值。
  */
 import { ENV_FRAME_PREFIX } from "./envProtocol";
-import * as http from "node:http";
 import { relayClientCode } from "./relayBridgeSource";
 
 export const ENV_BRIDGE_SOURCE = String.raw`/**
@@ -36,6 +35,7 @@ export const ENV_BRIDGE_SOURCE = String.raw`/**
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import * as http from "node:http";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 /** 暗号行的前缀（插件那边按它认领这一行）。 */

@@ -42,7 +42,6 @@
  * 用 String.raw 包着：里面的反斜杠原样保留。
  */
 import { BASH_FRAME_PREFIX } from "./bashProtocol";
-import * as http from "node:http";
 import { relayClientCode } from "./relayBridgeSource";
 import { promptText, type PromptOverrides } from "./promptText";
 
@@ -56,6 +55,7 @@ import { createBashTool, getShellConfig } from "@earendil-works/pi-coding-agent"
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
+import * as http from "node:http";
 
 ${relayClientCode("http")}
 
