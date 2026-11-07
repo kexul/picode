@@ -23,7 +23,7 @@ import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase, type ViewOptionItem, type WorkspacePage } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
-import { isOwnPage, pushRemoteNotice, type RemoteNotice } from "./remoteNotice";
+import { isOwnPage, pushRemoteNotice, REMOTE_TEXT_CHARS, type RemoteNotice } from "./remoteNotice";
 import { getAskAssets, getBashAssets, getEnvAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
 import {
@@ -739,25 +739,23 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /**
      * 会话有事了（跑完一轮 / 模型在等你答选择题）。
      *
-     * 推给了别的机器就到此为止：这台也不弹（人只盯得了那台，两个地方同时弹没意义）。
-     * 没推出去（没填别处、或者填的就是这台自己的地址）才在这台右下角弹一张卡片。
-     *
-     * @returns 同基类：是不是推给别处了（推了这台就不弹）
+     * 两边都弹：推给设置里「远程机器」填的那几台，同时这台自己的右下角也弹一张。
+     * 推不过去（那台没起、网断了）也不算事：本机这张照弹。
      */
-    protected override trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): boolean {
-        if (super.trayNote(sessionId, name, summary, kind)) { return true; }
-        // 基类返回 false 有两种情况：推给别处了、以及“这个会话 / 这个开关不弹”。
-        // 后一种在这台也不弹，别再往下走到卡片那儿。
-        if (!sessionId || !this.notifyTurnEndEnabled()) { return false; }
+    protected override trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): void {
+        if (!sessionId || !this.notifyTurnEndEnabled()) { return; }
+        const label = (name || "").trim() || "会话";
+        // 远程那几台：先推（推不出去就算了，不挡着下面本机这张）
+        this.pushRemoteNote(sessionId, label, clipText(summary, REMOTE_TEXT_CHARS), kind);
+        // 本机右下角这张：不管推没推出去都弹
         this.showNotice(
             sessionId,
-            (name || "").trim() || "会话",
+            label,
             clipText(summary, NOTICE_TEXT_CHARS),
             kind === "ask",
             this.localPageUrl(sessionId),
         );
-        this.log(`[提醒] 弹了一张（${kind === "ask" ? "等你答一句" : "跑完一轮"}）：${(name || "").trim() || "会话"}`);
-        return false;
+        this.log(`[提醒] 弹了一张（${kind === "ask" ? "等你答一句" : "跑完一轮"}）：${label}`);
     }
 
     /**

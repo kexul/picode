@@ -2,9 +2,11 @@
 /**
  * 验「远程机器」这一路：设置文件里 machines 填了别处的地址，跑完一轮就往那儿推一条。
  *
- *   npm run web:shot -- --fake-pi --script dev/remotePush.js
+ *   npm run web:shot -- --fake-pi --notify-turn-end --script dev/remotePush.js
  *
- * 起一个本地收件口、把它写成 pushTo，发一句话等假 pi 回完，看收件口有没有收到那条。
+ * （--notify-turn-end 不能少：默认关着提醒开关的话，跑完一轮既不弹本机、也不推。）
+ *
+ * 起一个本地收件口、把它写进 machines，发一句话等假 pi 回完，看收件口有没有收到那条。
  * 跑完把设置文件放回原样。
  */
 const fs = require("fs");

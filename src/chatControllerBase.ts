@@ -1780,28 +1780,27 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /**
      * 某个会话有事了（跑完一轮、模型在等你答一道选择题）。
      *
-     * 提醒送到哪台是二选一（一个人只盯得了一台机器）：设置里「远程机器」填了别处的地址，
-     * 就只推到那边，这台不弹；没填（或者填的就是这台自己的地址）就在这台弹。
+     * 两边都送：设置里「远程机器」填了别处就推给它们，同时这台自己的右下角也弹一张。
+     * 以前是二选一（推了这台就不弹），理由是一个人只盯得了一台；现在几台都能在同一份
+     * 界面里看到，少弹一边反而让人以为“那边没完”。
      *
-     * 这一层只办“推给别处”那一半；“在这台弹”那一半由子类接着办（见 ChatHost.trayNote），
-     * 所以这里要把推没推出去交回去。
+     * 这一层只办“推给别处”那一半；“在这台弹”那一半由子类接着办（见 ChatHost.trayNote）。
      *
      * @param summary 一句话摘要（跑完一轮是回复开头，选择题是题干）
      * @param kind 这一条算跑完一轮，还是模型在等你答一句
-     * @returns 是不是推给别处了（推了这台就不弹）
      */
-    protected trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): boolean {
-        if (!sessionId || !this.notifyTurnEndEnabled()) { return false; }
+    protected trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): void {
+        if (!sessionId || !this.notifyTurnEndEnabled()) { return; }
         const label = (name || "").trim() || "会话";
         // 推给别处的那份留长一点（见 remoteNotice.ts 的 REMOTE_TEXT_CHARS），
         // 但不压成纯文本：markdown 原样过去，收到的那台自己画那张卡片
-        return this.pushRemoteNote(sessionId, label, clipText(summary, REMOTE_TEXT_CHARS), kind);
+        this.pushRemoteNote(sessionId, label, clipText(summary, REMOTE_TEXT_CHARS), kind);
     }
 
     /**
      * 把这条“有事”推给别的后端（设置里「远程机器」填了别处的地址才有这回事）。
      * 默认不推：只有知道自己地址的宿主才推得出去（见 ChatHost）。
-     * @returns 是不是推给“别处”了（推了的话，这台就不再自己弹）
+     * @returns 推给别处没有（推不出去也不影响本机那份，两边各弹各的）
      */
     protected pushRemoteNote(_sessionId: string, _name: string, _summary = "", _kind: "done" | "ask" = "done"): boolean { return false; }
 
