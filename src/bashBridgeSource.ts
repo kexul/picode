@@ -42,6 +42,8 @@
  * 用 String.raw 包着：里面的反斜杠原样保留。
  */
 import { BASH_FRAME_PREFIX } from "./bashProtocol";
+import * as http from "node:http";
+import { relayClientCode } from "./relayBridgeSource";
 import { promptText, type PromptOverrides } from "./promptText";
 
 export function bashBridgeSource(over?: PromptOverrides): string {
@@ -54,6 +56,8 @@ import { createBashTool, getShellConfig } from "@earendil-works/pi-coding-agent"
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
+
+${relayClientCode("http")}
 
 const FRAME_PREFIX = ${JSON.stringify(BASH_FRAME_PREFIX)};
 
@@ -74,6 +78,12 @@ const NO_WAIT_NOTE = "放到后台以后不用等结果：你可以接着去干�
 
 /** 往 stderr 写一行暗号（插件在读）。 */
 function emit(payload: Record<string, unknown>): void {
+    // 有中转就走事件口（另一种是没中转时的老路：stderr 暗号）。两条路互斥。
+    if (relayReady()) {
+        const id = payload && payload.kind === "end" ? "end-" : "start-";
+        void relayPost("bash", id + String((payload && payload.no) ?? ""), payload);
+        return;
+    }
     try {
         process.stderr.write(FRAME_PREFIX + Buffer.from(JSON.stringify(payload), "utf8").toString("base64") + "\n");
     } catch {

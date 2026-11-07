@@ -714,6 +714,16 @@ export class SessionRuntime {
             this.host.onTabaRequest?.(this.id, req);
             return;
         }
+        if (ev.kind === "bash") {
+            // 后台命令的开始 / 结束：跟 stderr 那条路走同一个处理（记清单、推界面；跑完交回会话）
+            this.noteBashTask(ev.payload as unknown as BashTaskEvent);
+            return;
+        }
+        if (ev.kind === "env") {
+            // 「加载了什么」的清单：存着并推给界面（那颗「工具」点开看的）
+            this.noteEnvSnapshot(ev.payload as unknown as EnvSnapshot);
+            return;
+        }
         if (ev.kind !== "ask") { return; }
         const req = ev.payload as unknown as AskRequest;
         if (!req || typeof req.id !== "string") { return; }

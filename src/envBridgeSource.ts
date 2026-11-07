@@ -25,6 +25,8 @@
  * 里面不要出现 "${"：外层是模板字符串，那样会被当插值。
  */
 import { ENV_FRAME_PREFIX } from "./envProtocol";
+import * as http from "node:http";
+import { relayClientCode } from "./relayBridgeSource";
 
 export const ENV_BRIDGE_SOURCE = String.raw`/**
  * 这是 VSCode 插件 Pi Chat 自动生成的文件，不要手改：插件版本一变就会重新生成，改动会丢。
@@ -37,6 +39,8 @@ import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 /** 暗号行的前缀（插件那边按它认领这一行）。 */
+${relayClientCode("http")}
+
 const FRAME_PREFIX = ${JSON.stringify(ENV_FRAME_PREFIX)};
 /** 隔多久比一次清单（变了才报）。 */
 const POLL_MS = 5000;
@@ -49,6 +53,11 @@ const LIMITS = { list: 400, name: 160, path: 600, text: 400 };
 
 /** 往 stderr 写一行暗号。 */
 function emit(snapshot) {
+    // 有中转就走事件口（另一种是没中转时的老路：stderr 暗号）。两条路互斥。
+    if (relayReady()) {
+        void relayPost("env", "env-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6), snapshot);
+        return;
+    }
     try {
         process.stderr.write(FRAME_PREFIX + Buffer.from(JSON.stringify(snapshot), "utf8").toString("base64") + "\n");
     } catch {
