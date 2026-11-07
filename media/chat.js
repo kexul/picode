@@ -1209,7 +1209,7 @@
     return el;
   }
 
-  /** 画一遍这一排格（顺序就是清单的顺序）。 */
+  /** 画一遍这一排格（名字、小点、当前是哪一格；顺序变了才挪节点）。 */
   function renderSessionTabs(items) {
     // 关掉的会话：它那一格从 DOM 里摘掉
     for (const [id, el] of sessionTabEls) {
@@ -1217,6 +1217,7 @@
       if (el.parentElement) { el.parentElement.removeChild(el); }
       sessionTabEls.delete(id);
     }
+    const wanted = [];
     items.forEach((item, i) => {
       const el = sessionTabEl(item.sessionId);
       const st = sessions.get(item.sessionId);
@@ -1243,11 +1244,18 @@
       // 当前这一格就叫 #sessionName（“当前会话叫什么”照旧拿这个名字找）
       if (item.current) { el.id = "sessionName"; }
       else if (el.id) { el.removeAttribute("id"); }
-      // 按会话清单的顺序摆（每次 append 都放到末尾，一路排下来就是那个顺序）。
       // 序号就是清单的顺序（挤了也不变，见 layoutSessionTabs），宽回来照这个序号摆。
       el.dataset.idx = String(i);
-      sessionTabRow.appendChild(el);
+      wanted.push(el);
     });
+    // 顺序照会话清单摆，但顺序没变就一个节点也别碰：把一格从 DOM 里摘下来再插回去，
+    // 浏览器会把“按下在摘之前、松开在插之后”的那一下点击当没点 —— 手底下就是“点了没反应，
+    // 得再点一下”。后端时不时推一遍会话列表（跑完一轮、切换、子会话起落），每推一遍都从头
+    // append 一次，撞在按住那一瞬间就把这一下丢了。
+    const now = Array.prototype.slice.call(sessionTabRow.children);
+    if (now.length !== wanted.length || !wanted.every((el, i) => now[i] === el)) {
+      wanted.forEach((el) => sessionTabRow.appendChild(el));
+    }
     // 上面那一趟会把每一格重写一遍（名字、小点）：哪一格在等第二下确认跟一遍
     refreshSessionTabClose();
   }
