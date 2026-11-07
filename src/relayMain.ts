@@ -117,6 +117,9 @@ const bridgeEvents = new Map<string, BridgeEvent>();
 /** 事件最多记这么多条（老的单条就丢；还没答的不丢）。 */
 const EVENT_LIMIT = 500;
 
+/** 每个会话还在跑的后台命令（编号 → 那条 start 的内容）：换后端时给新后端一份快照。 */
+const runningBash = new Map<string, Map<number, Record<string, unknown>>>();
+
 /** 正在等某个回执的那些 HTTP 长轮询。 */
 const replyWaiters = new Map<string, Set<(ev: BridgeEvent) => void>>();
 
@@ -420,6 +423,16 @@ function serveEvents(req: http.IncomingMessage, res: http.ServerResponse): void 
 
             const ev = rememberEvent(key, kind, id, payload);
             log(`收到桥上报的事件：${kind}（${key}），转给 ${clients.size} 个后端`);
+            if (kind === "bash") {
+                // 记下"还在跑的"：换后端时新后端那张清单得立刻有东西，不能等下一次事件
+                const no = Number((payload as any).no);
+                if (Number.isFinite(no)) {
+                    let mine = runningBash.get(key);
+                    if (!mine) { mine = new Map(); runningBash.set(key, mine); }
+                    if ((payload as any).kind === "end") { mine.delete(no); }
+                    else { mine.set(no, payload as Record<string, unknown>); }
+                }
+            }
             broadcastEvent(ev);
             sendJson(res, 200, { ok: true, ...(ev.replyId ? { replyId: ev.replyId } : {}) });
         });
@@ -585,6 +598,18 @@ function handle(
                     id: ev.id,
                     payload: ev.payload,
                     replyId: ev.replyId,
+                });
+            }
+            // 还在跑的后台命令：给一份快照（界面那块清单、会话上那颗"还有活在跑"的蓝点立刻就有）
+            const mine = runningBash.get(msg.key);
+            if (mine && mine.size > 0) {
+                answer({
+                    ev: "bevent",
+                    seq: seqCounter,
+                    key: msg.key,
+                    kind: "bash-state",
+                    id: "bash-state-" + seqCounter,
+                    payload: { tasks: Array.from(mine.values()) },
                 });
             }
             // 这些它都有了：下一次换后端从这儿往后补

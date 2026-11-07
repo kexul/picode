@@ -387,6 +387,9 @@ function sessionFrom(list, id) {
     const page5 = openPage(back.url, "probe-5");
     await sleep(500);
     await page5.post({ type: "switchSession", sessionId: longId });
+    // 新后端起手就该知道"还有一条在跑"（中转给了一份快照），不用等下一次事件
+    const backRunning = await page5.waitFor((m) => m.type === "bashTask" && m.task && m.task.status === "running", 20000);
+    check(!!backRunning, "重启以后界面立刻知道还有一条在跑（中转给的快照）");
     const handed = await page5.waitFor((m) => JSON.stringify(m).includes("跑完了"), 40000);
     check(!!handed, "跑完的结果照样交回了会话（重启窗口里发生的也没丢）");
     page5.close();

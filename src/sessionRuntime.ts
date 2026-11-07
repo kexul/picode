@@ -654,6 +654,32 @@ export class SessionRuntime {
     }
 
     /**
+     * 把"还在跑的后台命令"填回清单（重启后端以后由中转的快照来）。
+     * 只填 running 的；跑完的那些早就交回会话了，不用再补。
+     */
+    private restoreBashTasks(tasks: unknown): void {
+        if (!Array.isArray(tasks)) { return; }
+        for (const raw of tasks) {
+            const ev = raw as BashTaskEvent;
+            const no = Number(ev?.no);
+            if (!Number.isFinite(no) || this.bashTasks.has(no)) { continue; }
+            const info: BashTaskInfo = {
+                no,
+                toolCallId: ev.toolCallId,
+                cmd: ev.cmd,
+                log: ev.log,
+                pid: ev.pid ?? 0,
+                startedAt: ev.startedAt ?? Date.now(),
+                background: ev.background,
+                status: "running",
+            };
+            this.bashTasks.set(no, info);
+            this.post({ type: "bashTask", task: info });
+        }
+        this.syncBashRunning();
+    }
+
+    /**
      * 界面点「放后台」：给 pi 里那个扩展留一个指令文件，它跑这条命令的时候看着这个目录
      * （见 bashBridgeSource.ts）。会话没了 / 没开这个能力就返回 false。
      */
@@ -712,6 +738,11 @@ export class SessionRuntime {
                 ? `[派子会话] 收到派活请求：「${req.name}」（${req.id}，任务 ${String(req.task ?? "").length} 字）`
                 : `[派子会话] 收到停止请求：「${req.name || req.id || ""}」`);
             this.host.onTabaRequest?.(this.id, req);
+            return;
+        }
+        if (ev.kind === "bash-state") {
+            // 换后端时中转给的快照：还在跑的那几条后台命令（界面那块清单与那颗蓝点立刻就有）
+            this.restoreBashTasks((ev.payload as any)?.tasks);
             return;
         }
         if (ev.kind === "bash") {
