@@ -52,6 +52,7 @@ const ok = (text) => console.log("  ✔ " + text);
 const bad = (text) => { console.log("  ✘ " + text); failed += 1; };
 const check = (cond, text) => (cond ? ok : bad)(text);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const readAddr = () => JSON.parse(fs.readFileSync(path.join(process.env.PICHAT_HOME, "relay.json"), "utf8"));
 
 /** 一条装着"页面"的连接：收后端推来的消息，也能往回发。 */
 function openPage(baseUrl, pageId) {
@@ -137,6 +138,30 @@ function postStatus(baseUrl, pageId, msg) {
         r.on("error", () => done(0));
         r.end(body);
     });
+}
+
+/**
+ * 直接问某只 pi 要它的消息树（经中转发一条 get_messages，收它回的那条）。
+ * 比盯页面硬：页面那边这句话有时是增量、有时是随后来的历史批次，形状不一样。
+ */
+async function askPiMessages(link, key, timeoutMs = 15000) {
+    const seen = [];
+    const off = link.onFrame(key, (frame) => {
+        if (frame.ch !== "out") { return; }
+        try { seen.push(JSON.parse(frame.line)); } catch { /* 不是 JSON 就算了 */ }
+    });
+    try {
+        link.sendLine(key, JSON.stringify({ type: "get_messages", id: "probe-" + Date.now() }));
+        const end = Date.now() + timeoutMs;
+        while (Date.now() < end) {
+            const resp = seen.find((m) => m && m.type === "response" && String(m.id || "").startsWith("probe-") && m.command === "get_messages");
+            if (resp) { return JSON.stringify(resp.data || resp); }
+            await sleep(100);
+        }
+        return "";
+    } finally {
+        off();
+    }
 }
 
 /** 会话表里那个会话（后端推的 sessionList）。 */
@@ -311,12 +336,13 @@ function sessionFrom(list, id) {
     check(!!card2, "重启以后这张卡片又画回来了");
     const answerId = card2 && card2.id;
     if (answerId) { await page4.post({ type: "askCardAnswer", id: answerId, picks: ["A"], text: "" }); }
-    let heard = false;
-    const heardBy = Date.now() + 30000;
-    while (Date.now() < heardBy) {
-        if (joinedText(page4, longId).indexOf("用户选了：A") >= 0) { heard = true; break; }
-        await sleep(120);
-    }
+    // 直接问 pi：它自己的消息树里有没有这句（比盯页面稳 —— 页面那边有时是增量、有时是历史批次）
+    const treeLink = await RelayLink.connect(readAddr());
+    const piKey = treeLink ? (await treeLink.list()).find((p) => p.panelId === longId) : undefined;
+    const tree = treeLink && piKey ? await askPiMessages(treeLink, piKey.key) : "";
+    if (treeLink) { treeLink.close(); }
+    const heard = tree.indexOf("用户选了：A") >= 0;
+    if (!heard) { console.log("  · pi 的消息树里没找到，前 200 字：" + JSON.stringify(tree.slice(0, 200))); }
     check(heard, "点了以后答案交回了模型（它把结果说出来了）");
     page4.close();
 

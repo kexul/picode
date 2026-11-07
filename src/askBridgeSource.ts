@@ -98,6 +98,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 async function askViaRelay(payload: any, id: string, signal: any): Promise<{ answer?: any; why: "answered" | "cancelled" | "timeout" | "offline" } | undefined> {
     if (!relayReady()) { return undefined; }
     const sent = await relayPost("ask", id, payload);
+    console.error("[ask] 报题 " + id + " → " + (sent && sent.ok === true ? "ok replyId=" + sent.replyId : "失败 " + JSON.stringify(sent)));
     if (!sent || sent.ok !== true) {
         return { why: "offline" };
     }
@@ -116,6 +117,7 @@ async function askViaRelay(payload: any, id: string, signal: any): Promise<{ ans
         }
         // 一次等一小段：界面上那道题可能要等很久，长轮询别一口气挂太久（网络设备爱掐这种静默连接）
         const got = await relayWait(replyId, Math.min(left, 20000));
+        console.error("[ask] 长轮询 " + replyId + " → " + (got ? got.state : "没有回应") + (got && got.state === "answered" ? " value=" + JSON.stringify(got.value).slice(0, 120) : ""));
         if (got && got.state === "answered") {
             return { answer: got.value || {}, why: "answered" };
         }
