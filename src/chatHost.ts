@@ -207,8 +207,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         log: (text) => this.log(text),
         onClick: (key) => this.openNotice(key),
     });
-    /** 卡片点开要去哪儿（卡片标识 → 地址）：跟卡片一起留，最多几十条。 */
+    /** 卡片标识 → 点开要去哪儿（地址）：跟卡片一起留，最多几十条。 */
     private readonly noticeLinks = new Map<string, string>();
+    /** 别的机器推来的卡片，标识前面挂这个（本机会话的标识就是会话号本身）。 */
+    private static readonly REMOTE_NOTICE_PREFIX = "remote:";
 
     constructor(private readonly options: ChatHostOptions) {
         super("server");
@@ -782,11 +784,39 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         this.notice.close(key);
     }
 
-    /** 人点了卡片：打开那个会话的页面（本机的是这台后端的地址，别处推来的是那台的地址）。 */
+    /**
+     * 人点了卡片：把那个会话拿到眼前。
+     *
+     * 本机的会话、而且这台还有网页连着（一般情况网页就开着）：不开新标签，叫那块屏切过去，
+     * 再把浏览器窗口提到前面（见 DesktopNotice.raise）。网页没开着、或者这张是别的机器推来的，
+     * 还是用浏览器打开那张地址（本机的是这台后端的地址，别处推来的是那台的地址，都带 ?session=）。
+     */
     private openNotice(key: string): void {
         const url = this.noticeLinks.get(key);
         this.noticeLinks.delete(key);
+        if (!key.startsWith(ChatHost.REMOTE_NOTICE_PREFIX) && this.showSessionOnPages(key)) { return; }
         if (url) { openInBrowser(url); }
+    }
+
+    /**
+     * 叫连着的网页切到某个会话，再把浏览器窗口提到前面。
+     *
+     * 连着几块屏就都切过去：提上来的会是哪个窗口、窗口里露的是哪个标签，这里都管不着，
+     * 都切过去才保证人眼前那一块是这个会话。
+     *
+     * @returns 有没有页面接着（一块都没连着 = false，那就退回开浏览器）
+     */
+    private showSessionOnPages(sessionId: string): boolean {
+        let sent = false;
+        this.forEachClient((_clientId, send) => {
+            send({ type: "switchToSession", sessionId });
+            sent = true;
+        });
+        if (!sent) { return false; }
+        // 网页的标题是 `<标签>-pi`（见 pageHtml）：照它认那个浏览器窗口
+        const label = displayName();
+        this.notice.raise(label ? label + "-pi" : "pi");
+        return true;
     }
 
     /** 这台后端的页面地址，带着要切到哪个会话（页面自己会照它切过去）。 */
@@ -1848,7 +1878,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      */
     public acceptRemoteNotice(notice: RemoteNotice): void {
         if (!this.notifyTurnEndEnabled()) { return; }
-        const key = "remote:" + notice.label + ":" + notice.sessionId;
+        const key = ChatHost.REMOTE_NOTICE_PREFIX + notice.label + ":" + notice.sessionId;
         const base = (notice.pageUrl ?? "").replace(/\/+$/, "");
         this.showNotice(
             key,

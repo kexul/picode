@@ -8,7 +8,8 @@
  * 卡片什么时候没：人点掉它、点右上角那颗 ×、那个会话里有人说上话了（见 ChatHost 的
  * onUserMessage）、那个会话被关掉了、那道选择题答完了。它自己不会到点消失。
  *
- * 点卡片做什么：把这件事交回宿主（onClick），由宿主打开那个会话的页面。
+ * 点卡片做什么：把这件事交回宿主（onClick），由宿主把那个会话拿到眼前（见 ChatHost.openNotice：
+ * 网页开着就叫它切过去、再叫这支小程序把窗口搬到前面；没开着才开浏览器）。
  *
  * 这台机器上弹不出来（不是 Windows、那支小程序没编出来、被杀软拦了）就一路静悄悄地不发，
  * 浏览器页面里照样看得到，不该为这个拦路。
@@ -68,6 +69,16 @@ export class DesktopNotice {
     /** 收走某一标识的那一张（没有就什么也不做）。 */
     public close(key: string): void {
         this.write("close\t" + key);
+    }
+
+    /**
+     * 把标题里带着这段字的窗口提到前面。人点了卡片时叫它：那个会话的网页该到眼前来。
+     * 找不到那个窗口（浏览器关了、标签关了）就什么也不做：那种时候调用方会去开浏览器。
+     * @param title 网页的标题（`<标签>-pi`，见 pageHtml）：浏览器窗口的标题就是它打头
+     */
+    public raise(title: string): void {
+        if (!title) { return; }
+        this.write("raise\t" + base64(title));
     }
 
     /** 后端要走了：把它也收掉（关了标准输入它自己退）。 */
