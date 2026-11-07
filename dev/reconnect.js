@@ -776,8 +776,8 @@ async function sceneWindowed(page, harness) {
 
 /**
  * 一个场景（在子进程里跑）：自己起一份后端与一块屏，跑完收摊。
- * 每个场景一个子进程是必须的：`PICHAT_HOME` 是环境变量，而"中转"是按它找的 ——
- * 一个进程里多份后端只能共用同一支中转，一个场景启动时会把别人正在用的收掉（并行就打架）。
+ * 每个场景一个子进程是必须的：`PICHAT_HOME` 是环境变量，而后端的地址文件（server.json）按它找 ——
+ * 一个进程里多份后端只能共用一份地址文件，一个场景启动时会把别人的顶掉（并行就打架）。
  */
 async function runOneScene(name, run) {
     const harness = createHarness({
@@ -813,7 +813,7 @@ async function runOneScene(name, run) {
 }
 
 /**
- * 起一个子进程跑某个场景：它有自己的 PICHAT_HOME（因此有自己的中转与后端），
+ * 起一个子进程跑某个场景：它有自己的 PICHAT_HOME（因此有自己的地址文件与后端），
  * 输出按行收下来，跑完整块交回去。返回退出码与那几行字。
  */
 function runSceneChild(name) {
@@ -830,7 +830,7 @@ function runSceneChild(name) {
         const eat = (chunk) => {
             for (const line of chunk.toString("utf8").split(/\r?\n/)) {
                 if (!line) { continue; }
-                // 假 pi / 中转那些诊断行不进每场的报告（全量噪声，看 --serial 那一路）
+                // 假 pi 那些诊断行不进每场的报告（全量噪声，看 --serial 那一路）
                 if (line.startsWith("[pi stderr]") || line.startsWith("[pi spare stderr]")) { continue; }
                 output.push(line);
             }
@@ -867,8 +867,8 @@ async function main() {
     }
 
     // 一个场景、单跑（父进程会带着 --one 起一个子进程来跑它）。
-    // 每个场景一个子进程是必须的：`PICHAT_HOME` 是环境变量，而"中转"按它找 ——
-    // 一个进程里多份后端只能共用同一支中转，并行时一个场景启动就会把别人正在用的收掉。
+    // 每个场景一个子进程是必须的：`PICHAT_HOME` 是环境变量，而后端的地址文件按它找 ——
+    // 一个进程里多份后端只能共用一份地址文件，并行时一个场景启动就会把别人的顶掉。
     const oneAt = process.argv.indexOf("--one");
     if (oneAt >= 0) {
         const one = process.argv[oneAt + 1] || "";
@@ -904,7 +904,7 @@ async function main() {
         process.exit(failed === 0 ? 0 : 1);
     }
 
-    // 并行跑：每场一个子进程（各自一份 PICHAT_HOME、各自一支中转、各自一个端口），
+    // 并行跑：每场一个子进程（各自一份 PICHAT_HOME、各自一个后端、各自一个端口），
     // 输出先攒着，跑完再整块打出来 —— 不然十条时间线交织在一起，读不出来。
     const PARALLEL = Math.max(1, Math.min(8, Number(process.env.RECON_PARALLEL || 3)));
     const queue = chosen.slice();

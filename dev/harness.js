@@ -133,7 +133,7 @@ function createHarness(options = {}) {
     // 后端与插件两侧都靠这个环境变量找同一份地址文件（客户端照它连后端）；
     // 指到调试目录，调试时写的设置、状态、地址都不会碰到用户真正的 ~/.pi/pichat。
     // 调用方自己给了 PICHAT_HOME 就听调用方的：`dev/reconnect.js` 并行跑场景时每个场景
-    // 一个子进程、各带一份（各有各的中转与后端），这里再盖回来就全撞在一个目录上了。
+    // 一个子进程、各带一份（各有各的地址文件与后端），这里再盖回来就全撞在一个目录上了。
     const pichatDir = (process.env.PICHAT_HOME || "").trim() || SCRATCH_PICHAT_DIR;
     process.env.PICHAT_HOME = pichatDir;
 
