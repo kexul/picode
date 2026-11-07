@@ -76,6 +76,28 @@ export function webAppManifest(): Record<string, unknown> {
 }
 
 /**
+ * 页面允许连到哪些“别的机器”：设置里「消息推送」那栏填的地址（多台 pichat 互联）。
+ *
+ * 浏览器页面的安全策略默认只放本站（`'self'`），页面去问另一台的 `/health`、`/sessions`、
+ * 把消息发到它的 `/api` 时会被浏览器直接拦掉。这里把人自己写下的那些地址原样放行。
+ * 只收代码块里“协议 + 主机 + 端口”那一段：CSP 的条目就是这种写法。
+ */
+function peerSources(): string {
+    const origins: string[] = [];
+    for (const item of readServerConfig().config.notify.pushTo ?? []) {
+        let url: URL;
+        try {
+            url = new URL(String(item));
+        } catch {
+            continue;
+        }
+        if (url.protocol !== "http:" && url.protocol !== "https:") { continue; }
+        if (!origins.includes(url.origin)) { origins.push(url.origin); }
+    }
+    return origins.join(" ");
+}
+
+/**
  * 生成浏览器页面的 HTML 全文。
  * @param mediaDir 插件安装目录下的 media 目录（读样式与脚本用）
  * @param pageId 本页面的标识：服务靠它认出"当前是哪一个页面"，
@@ -93,16 +115,19 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
     };
 
     // 浏览器页面的安全策略（无内联脚本、不加载外部站点的东西）
+    // 「别的机器」那几个地址也要放行：页面要在侧边栏里列出它们有哪些会话（见 peerSources）。
+    const peers = peerSources();
+    const peerSrc = peers ? " " + peers : "";
     const csp =
         `default-src 'none'; ` +
         // 文件侧边栏里把会话目录里的 html 当网页打开：那个 iframe 吃的是自己的 `/site/…` 地址
         //（它里面的样式、脚本、图片归它自己那份文档管，不受这里管）。
-        `frame-src 'self'; ` +
-        `img-src 'self' data: blob:; ` +
+        `frame-src 'self'${peerSrc}; ` +
+        `img-src 'self' data: blob:${peerSrc}; ` +
         `media-src blob:; ` +
         `style-src 'self' 'unsafe-inline'; ` +
         `script-src 'self'; ` +
-        `connect-src 'self'; ` +
+        `connect-src 'self'${peerSrc}; ` +
         `font-src 'self'; ` +
         `base-uri 'none'; ` +
         // 装成应用那份清单（/manifest.webmanifest）也得放行

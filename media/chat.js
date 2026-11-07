@@ -10135,6 +10135,41 @@
         t.appendChild(document.createTextNode(item.label || ""));
         el.appendChild(t);
         if (item.desc) { const d = document.createElement("div"); d.className = "pk-desc"; d.style.paddingLeft = "20px"; d.textContent = item.desc; el.appendChild(d); }
+      } else if (st.kind === "workspace" && item.__section === "machine") {
+        // 别的机器：一行一台。左边一颗点（在＝绿，连不上＝灰），名字后面跟着地址，行尾是会话数。
+        // 点整行重问一遍（那边新开了会话、刚启动，这里立刻就能看到）。
+        el.classList.add("pk-history", "pk-machine");
+        if (!item.online) { el.classList.add("offline"); }
+        const main = document.createElement("div"); main.className = "pk-history-main";
+        const dot = document.createElement("span"); dot.className = "pk-machine-dot";
+        main.appendChild(dot);
+        const title = document.createElement("span"); title.className = "pk-history-title";
+        title.textContent = item.hostName || item.hostUrl || "";
+        main.appendChild(title);
+        const right = document.createElement("span"); right.className = "pk-history-right";
+        const info = document.createElement("span"); info.className = "pk-history-age";
+        info.textContent = item.online ? (item.count || 0) + " 个会话" : "连不上";
+        right.appendChild(info);
+        main.appendChild(right);
+        el.appendChild(main);
+        el.title = item.hostUrl || "";
+      } else if (st.kind === "workspace" && item.__section === "machineSession") {
+        // 别的机器上的会话：跟历史会话那一行长得一样，行尾多点一个机器名。
+        // 现在只看得见，还不能点开（见下面 confirmPicker 里那一条）。
+        el.classList.add("pk-history", "pk-machine-session");
+        const main = document.createElement("div"); main.className = "pk-history-main";
+        const title = document.createElement("span"); title.className = "pk-history-title";
+        title.textContent = item.title || "(无消息)";
+        main.appendChild(title);
+        const right = document.createElement("span"); right.className = "pk-history-right";
+        if (item.lastActivity) {
+          const age = document.createElement("span"); age.className = "pk-history-age";
+          age.textContent = pickerRelTime(item.lastActivity);
+          right.appendChild(age);
+        }
+        main.appendChild(right);
+        el.appendChild(main);
+        el.title = (item.hostName || "") + " · " + (item.projectCwd || item.cwd || "") + "\n" + (item.title || "");
       } else if (st.kind === "workspace" && item.__section === "space") {
         // 工作区行：就是个组头——小三角、文件夹图标、名字 + 目录路径一行。
         // 点整行展开 / 收起；行尾那颗加号是在这个目录里开新会话。
@@ -10312,6 +10347,9 @@
     const st = view.state; if (!st) { return; }
     if (st.kind === "model") { submitModelPicker(view); return; }
     if (!item) { return; }
+    // 「别的机器」：点机器那一行 = 重问一遍；点它会话那一行 = 现在还不能打开（只看得见）
+    if (item.__section === "machine") { refreshRemoteHosts(true); return; }
+    if (item.__section === "machineSession") { return; }
     const kind = st.kind;
     // 常驻那一列里点一行 = “用一下”，不是“选完就走”：面板留着接着点下一行
     const closeFirst = () => { if (!view.keepOpen) { hidePicker(view); } };
@@ -10441,7 +10479,7 @@
   /**
    * 工作区那一块的行：顺序就是宿主给的顺序（切会话也不重排，只在当前那个目录那一行标一颗
    * 「当前」，见 spaceRowsWithCurrent），展开了的组把它的会话行挂在组头下面，
-   * 「加载更多」卡在那一组的末尾。
+   * 「加载更多」卡在那一组的末尾。最后再挂上「别的机器」那一节（见 refreshRemoteHosts）。
    */
   function buildSpaceRows(view, fetch) {
     const st = view.state;
@@ -10466,7 +10504,101 @@
       }
       if (g.hasMore) { out.push({ __section: "groupMore", section: it.section, groupPath: it.file }); }
     }
+    return out.concat(remoteHostRows());
+  }
+
+  // ========================================================================
+  //  别的机器（多台 pichat 互联）
+  //
+  //  清单是页面自己去问的，不经过本机后端：先问本机 /health（它报 machines：设置里「消息推送」
+  //  那栏填的地址），再对每台问 /health（名字、在不在）和 /sessions（它有哪些项目、会话）。
+  //  这一段现在只“看得见”：在「项目与会话」最下面列出来，点了先不做事 —— 切过去、发消息、
+  //  看那边的文件都还没接（见后续）。
+  // ========================================================================
+
+  /** 别人的机器多久重问一次（侧边栏重推、切面板都会顺手刷新，这里只是兜底）。 */
+  const REMOTE_HOSTS_REFRESH_MS = 15000;
+  /** 每台机器最多列最近几条会话（先给人看个“那边有什么”，不是把整份历史搬过来）。 */
+  const REMOTE_HOSTS_RECENT = 6;
+  /** [{ url, name, online, recent: [{id,title,cwd,lastActivity,project,host,hostName}], count }] */
+  let remoteHosts = [];
+  let remoteHostsAt = 0;
+  let remoteHostsBusy = false;
+
+  /**
+   * 问一圈别的机器（节流；force 是真要重问）。
+   * 问完把侧边栏里那份「项目与会话」重拼一遍 —— 机器行是本地拼出来的，不经过宿主。
+   */
+  function refreshRemoteHosts(force) {
+    if (IN_WEBVIEW) { return; }          // 插件面板里没有这一栏（跟文件侧边栏一样只在网页里搭）
+    if (remoteHostsBusy) { return; }
+    if (!force && Date.now() - remoteHostsAt < REMOTE_HOSTS_REFRESH_MS) { return; }
+    remoteHostsAt = Date.now();
+    remoteHostsBusy = true;
+    fetch("/health", { cache: "no-store" })
+      .then((resp) => resp.ok ? resp.json() : Promise.reject(new Error("HTTP " + resp.status)))
+      .then((me) => {
+        const urls = me && Array.isArray(me.machines) ? me.machines : [];
+        return Promise.all(urls.map((url) => probeRemoteHost(String(url))));
+      })
+      .then((hosts) => {
+        remoteHosts = hosts.filter(Boolean);
+        remoteHostsBusy = false;
+        paintRemoteHosts();
+      })
+      .catch(() => { remoteHostsBusy = false; });
+  }
+
+  /** 问一台：它在不在、叫什么、有哪些会话。连不上也有这一行（写着“连不上”）。 */
+  function probeRemoteHost(url) {
+    const base = url.replace(/\/+$/, "");
+    if (!base) { return Promise.resolve(null); }
+    if (base === location.origin) { return Promise.resolve(null); }
+    return Promise.all([
+      fetch(base + "/health", { cache: "no-store" }).then((r) => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))),
+      fetch(base + "/sessions", { cache: "no-store" }).then((r) => r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status))),
+    ]).then(([health, sessions]) => {
+      const projects = sessions && Array.isArray(sessions.projects) ? sessions.projects : [];
+      const hostName = (health && health.name) || base;
+      const recent = [];
+      let count = 0;
+      for (const project of projects) {
+        for (const one of (project.sessions || [])) {
+          count += 1;
+          recent.push({
+            id: one.id, title: one.title, cwd: one.cwd, lastActivity: one.lastActivity,
+            project: project.name, projectCwd: project.cwd, host: base, hostName,
+          });
+        }
+      }
+      recent.sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0));
+      return { url: base, name: hostName, online: true, count, recent: recent.slice(0, REMOTE_HOSTS_RECENT) };
+    }).catch(() => ({ url: base, name: base, online: false, count: 0, recent: [] }));
+  }
+
+  /** 侧边栏最下面那一节的行：一台机器一行，下面接它最近几条会话。 */
+  function remoteHostRows() {
+    const out = [];
+    if (remoteHosts.length === 0) { return out; }
+    for (const host of remoteHosts) {
+      out.push({
+        __section: "machine", section: "别的机器", hostUrl: host.url,
+        hostName: host.name, online: host.online, count: host.count,
+      });
+      for (const one of host.recent) {
+        out.push({ __section: "machineSession", section: "别的机器", ...one });
+      }
+    }
     return out;
+  }
+
+  /** 远程那份回来了：开着的那块侧边栏重拼、重画（机器行是本地拼的，不走宿主那份）。 */
+  function paintRemoteHosts() {
+    [dockView, modalView].forEach((view) => {
+      if (!view.state || view.state.kind !== "workspace") { return; }
+      rebuildWorkspaceItems(view, false);
+      repaintPickerPanel(view);
+    });
   }
 
   /**
@@ -10642,6 +10774,9 @@
 
   function renderPicker(msg, view = null) {
     const kind = msg.kind;
+    // 「项目与会话」每推一次顺手问一下别的机器（节流在 refreshRemoteHosts 里，问过一次的
+    // 十几秒内不再问）；机器行的变化不经过宿主，只能由这里触发重拼。
+    if (kind === "workspace") { refreshRemoteHosts(false); }
     // 这张抽屉是替“一个会话都没有”摊开的：拼出来的时候会话已经开好了就别弹了
     if (kind === "workspace" && msg.dock !== true && emptyWorkspace === "asked") {
       if (sessions.size > 0) {
@@ -13172,5 +13307,7 @@
   syncSidebarLayout();
 
   vscode.postMessage({ type: "ready" });
+  // 页面一打开就问一圈别的机器：侧边栏还没摊开也先备着，摊开时机器那一节就在那儿了
+  refreshRemoteHosts(true);
   activateSessionFromUrl();
 })();

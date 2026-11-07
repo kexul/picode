@@ -1017,6 +1017,19 @@
   .pk-host.pk-folders .pk-row-icon svg { width: 14px; height: 14px; display: block; }
   /* 工作区是资源树，不显示相对时间；会话仍在右侧保留更新时间。 */
   .pk-host.pk-workspace .pk-space .pk-history-right { display: none; }
+  /* ==== 「别的机器」那一节（多台 pichat 互联）：一台一行，下面接它最近几条会话 ==== */
+  .pk-host.pk-workspace .pk-item.pk-machine { display: flex; align-items: center; gap: 6px; }
+  .pk-host.pk-workspace .pk-item.pk-machine .pk-history-main { flex: 1 1 auto; min-width: 0; }
+  .pk-host.pk-workspace .pk-item.pk-machine .pk-machine-dot {
+    flex: none; width: 7px; height: 7px; border-radius: 50%; align-self: center;
+    background: var(--vscode-charts-green, #89d185);
+  }
+  .pk-host.pk-workspace .pk-item.pk-machine.offline .pk-machine-dot {
+    background: var(--vscode-disabledForeground, #808080);
+  }
+  .pk-host.pk-workspace .pk-item.pk-machine.offline .pk-history-title { opacity: 0.6; }
+  /* 机器下面那几条会话：缩进一点，看着是挂在那台机器下面的 */
+  .pk-host.pk-workspace .pk-item.pk-machine-session .pk-history-main { padding-left: 13px; }
   .pk-host.pk-drawer .pk-history-right { gap: 8px; }
   /* ==== 「工作区」那一节：标题右边一颗加号（原来是列表里的一行「打开文件夹…」） ==== */
   .pk-host.pk-workspace .pk-section.pk-section-with-add {
