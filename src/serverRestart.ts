@@ -4,11 +4,14 @@
  * 后端没法自己重启自己：发起重启的那个进程一退，就没人去编译、也没人把后端起回来了。
  * 所以这里只做两件事：
  *   1. 看清能不能干（代码旁边得有仓库里的 build.bat / build.sh —— 编译要仓库里那份源码）；
- *   2. 把要做的事写进一份 JSON（重启计划），再起一个独立的小进程（bin/pichat-restart.js）
- *      去办：等这个后端退干净 → 在仓库里 npm run build、npm i -g . → 照当初的命令行把
- *      后端起回来（同一个端口、同一个会话目录，页面才能在原地连回来）。
+ *   2. 把要做的事写进一份 JSON（重启计划），然后按是谁起的分两条路（调用方随后照常收摊退出）：
+ *      - 终端里起的（环境变量 PICHAT_SUPERVISED=1）：终端里那一层（bin/pichat-restart.js 的
+ *        supervise）正等着这份计划，它去拉代码、在那个终端里编译，再把后端起回来；
+ *      - 别的（exe 起的、后台跑着的）：起一个独立的小进程（bin/pichat-restart.js）去办：
+ *        等这个后端退干净 → 在仓库里 npm run build、npm i -g . → 照当初的命令行把
+ *        后端起回来（同一个端口、同一个会话目录，页面才能在原地连回来）。
  *
- * 收摊是调用方自己做的（见 serverMain 的 startBackend）：这里只负责起小进程，不杀自己。
+ * 收摊是调用方自己做的（见 serverMain 的 startBackend）：这里只负责写计划、起小进程，不杀自己。
  */
 import * as cp from "child_process";
 import * as fs from "fs";
@@ -20,6 +23,17 @@ const ROOT_DIR = path.join(__dirname, "..", "..");
 
 /** 编译要先有仓库里的脚本来认路：两个平台各一份。 */
 const BUILD_SCRIPTS = ["build.bat", "build.sh"];
+
+/**
+ * 终端里那一层给的重启计划文件（环境变量 PICHAT_RESTART_PLAN）；没在终端里跑就没有它。
+ *
+ * 一上来就把它记下来、再从环境里摘掉：这两个变量只在这一层跟后端之间有用，
+ * pi 会话与它跑的命令不该带上 —— 不然在会话里再敲一次 `pichat`，那个会被当成“已经有
+ * 一层看着了”，重启计划也会写进这一层的文件。
+ */
+const SUPERVISOR_PLAN_FILE = (process.env.PICHAT_RESTART_PLAN ?? "").trim() || undefined;
+delete process.env.PICHAT_SUPERVISED;
+delete process.env.PICHAT_RESTART_PLAN;
 
 /** 还能不能从这里重启、日志写哪儿。 */
 export interface RestartAvailability {
@@ -82,6 +96,14 @@ function planFile(): string {
 }
 
 /**
+ * 重启计划写哪儿：在终端里跑的时候写在那一层给的文件里（它读完就删），
+ * 否则写在 ~/.pi/pichat/restart.json（独立的小进程起来就把它读走）。
+ */
+function supervisorPlanFile(): string | undefined {
+    return SUPERVISOR_PLAN_FILE;
+}
+
+/**
  * 把命令行里「会话目录 / 端口 / 监听地址」这几项摘掉：重启时按这次实际的值重新写一遍。
  * （老后端可能是 --port 0 自己挑的，照抄会换一个端口，页面连的那个地址就成死地址了。）
  */
@@ -101,16 +123,14 @@ function withoutAddressArgs(argv: string[]): string[] {
 let handedOff = false;
 
 /**
- * 把重启交给小进程去办。
+ * 把重启交给接着干的那一头，然后由调用方自己收摊退出。
  *
- * @returns ok = 小进程起来了（调用方随后自己收摊退出）；不成的话 reason 是一句人话。
+ * @returns ok = 交出去了；不成的话 reason 是一句人话。
  */
 export function startRestart(launch: RestartLaunch): { ok: boolean; reason?: string } {
     const able = describeRestart();
     if (!able.ok || !able.repoDir) { return { ok: false, reason: able.reason ?? "不知道仓库在哪，编译不了。" }; }
     if (handedOff) { return { ok: false, reason: "已经在重启了。" }; }
-    const helper = path.join(able.repoDir, "bin", "pichat-restart.js");
-    if (!fs.existsSync(helper)) { return { ok: false, reason: `找不到重启用的小脚本：${helper}` }; }
 
     // 新后端的命令行：照老样子，再把「会话目录 / 端口 / 监听地址」按这次实际的值钉住。
     // 老后端可能是 --port 0 自动挑的端口，照抄会换一个端口，页面连的那个地址就成死地址了。
@@ -130,13 +150,25 @@ export function startRestart(launch: RestartLaunch): { ok: boolean; reason?: str
         argv,
         startCwd: launch.cwd,
     };
-    const file = planFile();
+
+    const supervised = supervisorPlanFile();
+    const file = supervised ?? planFile();
     try {
         fs.mkdirSync(path.dirname(file), { recursive: true });
         fs.writeFileSync(file, JSON.stringify(plan, null, 2) + "\n", "utf8");
     } catch (err: any) {
         return { ok: false, reason: `写不进重启计划（${file}）：${err?.message ?? String(err)}` };
     }
+
+    if (supervised) {
+        // 终端里那一层正等着这份计划：它读完就去拉代码、编译，再把这个终端里的后端起回来。
+        // 这里不需要再起什么，调用方照常收摊退出就是了。
+        handedOff = true;
+        return { ok: true };
+    }
+
+    const helper = path.join(able.repoDir, "bin", "pichat-restart.js");
+    if (!fs.existsSync(helper)) { return { ok: false, reason: `找不到重启用的小脚本：${helper}` }; }
     try {
         // detached：这个后端一会儿就退了，小进程得自己活着把活干完
         cp.spawn(launch.execPath, [helper, file], {

@@ -146,7 +146,7 @@
     "package": "npm run build && vsce package --allow-missing-repository --no-rewrite-relative-links",
     "web:dev": "npm run compile && node dev/browserHost.js",
     "web:shot": "npm run compile && node dev/visit.js",
-    "server": "npm run compile && node out/server/serverMain.js"
+    "server": "npm run compile && node bin/pichat.js"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

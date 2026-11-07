@@ -101,6 +101,7 @@ export function usageText(): string {
         "",
         `设置文件：${serverConfigFile()}（第一次启动会写一份默认的出来，改完重启生效）`,
         "停止：回到这个终端按 Ctrl+C",
+        "重启：设置浮层里那颗「编译并重启」（就在这个终端里拉代码、编译，再把后端起回来）",
     ].join("\n");
 }
 
@@ -350,6 +351,7 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
         if (result.ok) {
             // 先把回话送出去（界面上那句「正在编译并重启」），再按 Ctrl+C 那套收摊退出。
             // 小进程正等着这个进程号消失，看到它没了才动手编译。
+            // （终端里起的后端没有小进程：终端里那一层等它退完，就在那个终端里编译、起回来。）
             // 收摊时不跟页面道别：页面收到道别就不自己重连了，可这个服务几十秒后还会在同一个地址上回来。
             setTimeout(() => { void stop(true).finally(() => exitSoon()); }, 500);
         }

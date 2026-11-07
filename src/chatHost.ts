@@ -100,8 +100,8 @@ export interface ChatHostOptions {
     /** 日志出口（默认打标准输出）。 */
     log?: (text: string) => void;
     /**
-     * 设置浮层里「编译并重启」那颗按钮点下去时调它（由 serverMain 那边实现：起一个独立的小进程
-     * 去编译、收摊以后再照原样把后端起回来）。不给就是不能从这里重启。
+     * 设置浮层里「编译并重启」那颗按钮点下去时调它（由 serverMain 那边实现：写下重启计划，
+     * 剩下的交给终端里那一层或一个独立的小进程，见 serverRestart.ts）。不给就是不能从这里重启。
      */
     restartBackend?: () => { ok: boolean; reason?: string };
     /**
@@ -819,7 +819,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
-     * 设置浮层里那颗「编译并重启」点下去了：交给外面（serverMain 起的那个小进程去编译 + 重启）。
+     * 设置浮层里那颗「编译并重启」点下去了：交给外面（写计划，由终端里那一层或小进程去编译 + 重启）。
      * 成不成都要回一句话给点它的那块屏——成了就是最后一句（后端 0.5 秒后就退），
      * 不成的话设置浮层还开着，人能看到为什么。
      */
