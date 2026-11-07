@@ -788,6 +788,10 @@ async function main() {
     }
 
     const quiet = (text) => { if (/错误|error|失败/.test(text)) { console.log("  [日志] " + text); } };
+    // 每个场景一份干净的后端 + 一块干净的屏。
+    // 以前十场共用一个（harness 提到循环外面）：前一场留在“还在跑”的会话、留在页面上的消息、
+    // 留在补发账里的序号，都会串到下一场。单跑每个场景都过、整套连跑就崩，原因就在这里。
+    for (const name of chosen) {
     const harness = createHarness({ fakePi: true, log: quiet });
     const url = await harness.start();
     console.log("调试后端：" + url);
@@ -804,7 +808,7 @@ async function main() {
         console.log("界面已就绪");
         await watchMessages(open.page);
 
-        for (const name of chosen) { await scenes[name](open.page, harness); }
+        await scenes[name](open.page, harness);
 
         const errs = open.page.pageErrors || [];
         if (errs.length) {
@@ -814,6 +818,7 @@ async function main() {
     } finally {
         if (open) { try { await open.close(); } catch { /* 收摊出错不拦路 */ } }
         try { await harness.stop(); } catch { /* 收摊出错不拦路 */ }
+    }
     }
     console.log("");
     console.log(failed === 0 ? "结果：全部通过" : `结果：${failed} 项没过`);
