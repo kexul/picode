@@ -14,7 +14,10 @@ export interface RelayAddress {
     app: "pichat-relay";
     version: string;
     pid: number;
+    /** 后端跟它说话的那条连接（本机 TCP，一行一条 JSON） */
     port: number;
+    /** pi 里的桥接扩展上报事件的那个口（本机 HTTP，见 relayMain.ts） */
+    eventPort: number;
     token: string;
     startedAt: number;
 }
@@ -51,6 +54,8 @@ export type RelayRequest =
     | { op: "send"; key: string; line: string }
     | { op: "label"; key: string; panelId?: string; sessionFile?: string; cwd?: string }
     | { op: "kill"; key: string }
+    /** 回答一个等着的回执（谁在等：pi 里的那个桥接扩展，见 relayMain 的 /reply） */
+    | { op: "reply"; replyId: string; value: unknown }
     | { op: "shutdown" };
 
 /** 中转 → 后端。 */
@@ -66,6 +71,14 @@ export type RelayEvent =
         maxReq?: number;
     }
     | { ev: "frame"; seq: number; key: string; ch: "out" | "err"; line: string }
+    /**
+     * pi 里的桥接扩展上报的一件事（派子活 / 提问 / 后台命令 / 加载了什么）。
+     * 换后端时，还没答的那些会再推一遍（见 relayMain 的 attach）。
+     */
+    | { ev: "bevent"; seq: number; key: string; kind: string; id: string; payload: Record<string, unknown>; replyId?: string }
     | { ev: "exit"; key: string; code: number | null };
+
+/** 需要回执的那几种事件（桥那边拿 replyId 去长轮询等答案）。 */
+export const RELAY_REPLY_KINDS = new Set(["ask", "taba"]);
 
 export const RELAY_TOKEN_HEADER = "token";

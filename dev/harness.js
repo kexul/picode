@@ -49,6 +49,26 @@ function installFakeVscode(options) {
 }
 
 /**
+ * 把这个调试目录里上一次留下的中转收掉（连同它手里的 pi）。
+ * 调试跟真跑不是一回事（假 pi、临时目录、这一回要的环境变量都不一样），不能接上一回的。
+ */
+async function shutdownStaleRelay() {
+    const { RelayLink } = require(path.join(repoRoot, "out", "server", "relayClient.js"));
+    const file = path.join(SCRATCH_PICHAT_DIR, "relay.json");
+    let addr;
+    try { addr = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return; }
+    if (!addr || typeof addr.port !== "number") { return; }
+    const link = await RelayLink.connect(addr, 1200);
+    if (!link) {
+        try { fs.rmSync(file, { force: true }); } catch { /* 删不掉就算了 */ }
+        return;
+    }
+    console.log("[调试] 把上一次留下的中转收掉了（它手里有 " + (await link.list()).length + " 只 pi）");
+    link.shutdown();
+    await new Promise((r) => setTimeout(r, 300));
+}
+
+/**
  * 再开一个会话，旧的留着（不等后端把它关掉）。量“同时开着好几个会话”的脚本用。
  *
  * 顶条那颗加号现在是 pi 里 /new 那套：旧的闲着就顺手关掉、顶条上只留一格
@@ -207,6 +227,9 @@ function createHarness(options = {}) {
         /** 起后端，返回访问地址。 */
         async start() {
             if (started) { return started.url; }
+            // 上一次调试留下的中转（工具超时 / 被硬杀时没来得及收）：它手里还攥着上一次那份环境变量
+            // 起出来的 pi（比如这回要 FAKEPI_THINK_MS、上次没有），直接接上去会让这一次的行为漂掉。
+            await shutdownStaleRelay();
             started = await startBackend({
                 cwd,
                 port: Number.isInteger(options.port) ? options.port : 51999,

@@ -470,6 +470,8 @@ export class SessionRuntime {
         this.client.on("event", (evt) => this.onPiEvent(evt));
         this.client.on("response", (resp) => this.onPiResponse(resp));
         this.client.on("ui", (req) => this.onPiUiRequest(req));
+        // 中转转来的事件（提问、后台命令、派子活……）：第三笔先接上"提问"这一样
+        this.client.on("bridge", (ev: any) => this.onBridgeEvent(ev));
         this.client.on("stderr", (text: string) => {
             // 两类暗号都写在 stderr 里（一行一帧，base64）：派子会话、问用户选择题。
             // 两种都不能整行打日志（base64 会把控制台刷没）；pi 自己的诊断输出照打 —— 切割器把两样分开。
@@ -694,6 +696,22 @@ export class SessionRuntime {
         if (state && typeof state.sessionName === "string" && state.sessionName.trim()) {
             this.setSessionTitle(state.sessionName);
         }
+    }
+
+    /**
+     * pi 里的桥接扩展报上来一件事（经中转转来）。
+     *
+     * 现在接的是「提问」：画一张卡片等作答，答完把回执交回中转（扩展那边长轮询着）。
+     * 换后端时这道题还在中转的"还等着的"里，新后端接上就会再走一遍这里 —— 卡片照旧画回来。
+     */
+    private onBridgeEvent(ev: { kind: string; id: string; payload: Record<string, unknown>; replyId?: string }): void {
+        if (ev.kind !== "ask") { return; }
+        const req = ev.payload as unknown as AskRequest;
+        if (!req || typeof req.id !== "string") { return; }
+        console.error(`[问话] 收到提问：「${req.question}」（${req.id}，${Array.isArray(req.options) ? req.options.length : 0} 个选项${req.multi ? "，可多选" : ""}）`);
+        this.host.askQuestion?.(req, this.id, (answer) => {
+            this.client?.answerBridgeEvent(ev.replyId, answer);
+        });
     }
 
     /**

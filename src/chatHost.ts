@@ -43,6 +43,7 @@ import { pickOverlayClient } from "./overlayTarget";
 import { ScreenRegistry } from "./screenRegistry";
 import { dirInsideAny, dirKey } from "./pathRules";
 import type { WebServerHost } from "./webChatServer";
+import type { AskAnswer } from "./runtimeTypes";
 import type { SessionChanges } from "./gitChanges";
 import type { BashTaskInfo } from "./bashProtocol";
 import { uniqueNameParts, composeName, type NameParts } from "./names";
@@ -1901,12 +1902,21 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * pi 扩展要问用户一个选择题：把卡片发到正在看这个会话的每一块屏上（后切过去的也算），
      * 谁先答算谁的。用户答完写一份回话文件（扩展在轮询那个文件）；一直没人答就写一份“没作答”。
      */
-    public async askQuestion(req: AskRequest, sessionId?: string): Promise<void> {
+    public async askQuestion(req: AskRequest, sessionId?: string, deliver?: (answer: AskAnswer) => void): Promise<void> {
         const answerDir = this.getConfig().askDir ?? "";
+        /** 答案送回去：给了 deliver 就交给它（中转那条路），否则写回话文件（老路）。 */
+        const respond = (payload: { id: string; cancelled: boolean; picked: string[]; text: string }): void => {
+            if (deliver) {
+                deliver({ picked: payload.picked, text: payload.text, cancelled: payload.cancelled });
+                return;
+            }
+            writeAskAnswer(answerDir, payload);
+        };
         // 自动模式开着：这题没人会来点卡片，替人答（选它推荐的那几项），
         // 答案直接写回话文件，会话里留一句话说选了哪个；卡片不画、也不提醒。
         const autoPicked = this.autoAnswerAsk(req, sessionId);
-        if (autoPicked && writeAskAnswer(answerDir, { id: req.id, cancelled: false, picked: autoPicked, text: "" })) {
+        if (autoPicked) {
+            respond({ id: req.id, cancelled: false, picked: autoPicked, text: "" });
             if (sessionId) {
                 this.postToSession(sessionId, {
                     type: "system",
@@ -1933,7 +1943,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             ? answer.picks.filter((x: unknown) => typeof x === "string")
             : [];
         const text = typeof answer?.text === "string" ? answer.text.trim() : "";
-        writeAskAnswer(answerDir, { id: req.id, cancelled: !answer || (picked.length === 0 && !text), picked, text });
+        respond({ id: req.id, cancelled: !answer || (picked.length === 0 && !text), picked, text });
     }
 
     /**

@@ -35,6 +35,17 @@ export interface RelayFrame {
 type FrameListener = (frame: RelayFrame) => void;
 type ExitListener = (code: number | null) => void;
 
+/** pi 里的桥接扩展上报的一件事（见 relayProtocol.ts 的 bevent）。 */
+export interface RelayBridgeEvent {
+    seq: number;
+    key: string;
+    kind: string;
+    id: string;
+    payload: Record<string, unknown>;
+    replyId?: string;
+}
+type BridgeListener = (ev: RelayBridgeEvent) => void;
+
 const sleep = (ms: number) => new Promise<void>((r) => { setTimeout(r, ms); });
 
 /** 现在连着的那一支中转（后端一整个进程共用一条）。 */
@@ -151,6 +162,7 @@ export class RelayLink {
     private readonly pending = new Map<number, (ev: RelayEvent | undefined) => void>();
     private readonly frameListeners = new Map<string, Set<FrameListener>>();
     private readonly exitListeners = new Map<string, Set<ExitListener>>();
+    private readonly bridgeListeners = new Map<string, Set<BridgeListener>>();
 
     private constructor(socket: net.Socket, version: string, pi: RelayPiInfo[]) {
         this.socket = socket;
@@ -214,6 +226,22 @@ export class RelayLink {
             const set = this.frameListeners.get(ev.key);
             if (set) {
                 for (const fn of set) { fn({ seq: ev.seq, ch: ev.ch, line: ev.line }); }
+            }
+            return;
+        }
+        if (ev.ev === "bevent") {
+            const set = this.bridgeListeners.get(ev.key);
+            if (set) {
+                for (const fn of set) {
+                    fn({
+                        seq: ev.seq,
+                        key: ev.key,
+                        kind: ev.kind,
+                        id: ev.id,
+                        payload: ev.payload,
+                        ...(ev.replyId ? { replyId: ev.replyId } : {}),
+                    });
+                }
             }
             return;
         }
@@ -313,6 +341,7 @@ export class RelayLink {
     detach(key: string): void {
         this.frameListeners.delete(key);
         this.exitListeners.delete(key);
+        this.bridgeListeners.delete(key);
     }
 
     /** 中转这边听 pi 说了什么。返回一个"不听了"的函数。 */
@@ -321,6 +350,19 @@ export class RelayLink {
         if (!set) { set = new Set(); this.frameListeners.set(key, set); }
         set.add(fn);
         return () => { set.delete(fn); };
+    }
+
+    /** 中转转来桥接扩展上报的事件（提问、后台命令、派子活……）。 */
+    onBridgeEvent(key: string, fn: BridgeListener): () => void {
+        let set = this.bridgeListeners.get(key);
+        if (!set) { set = new Set(); this.bridgeListeners.set(key, set); }
+        set.add(fn);
+        return () => { set.delete(fn); };
+    }
+
+    /** 回答一个等着的回执（那道题有人答了 / 派活受理还是拒绝）。 */
+    reply(replyId: string, value: unknown): void {
+        this.tell({ op: "reply", replyId, value });
     }
 
     /** pi 退出了（或者连接断了）。返回一个"不听了"的函数。 */

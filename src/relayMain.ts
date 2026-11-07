@@ -19,11 +19,13 @@
  */
 import * as crypto from "crypto";
 import * as fs from "fs";
+import * as http from "http";
 import * as net from "net";
 import * as path from "path";
 import { appVersion } from "./appAssets";
 import { makeLineSplitter, spawnPi } from "./piSpawn";
 import type { RelayAddress, RelayEvent, RelayPiInfo, RelayRequest } from "./relayProtocol";
+import { RELAY_REPLY_KINDS } from "./relayProtocol";
 import { relayAddressFile } from "./serverPaths";
 
 const VERSION = appVersion();
@@ -31,7 +33,10 @@ const VERSION = appVersion();
 /** 缓存 pi 说过的话的上限（字节）：补发用，超了从老的开始丢。 */
 const FRAME_BUDGET = 8 * 1024 * 1024;
 
-/** 没人连了，再等多久就自己收摊（重启一般几十秒，留足余量）。 */
+/**
+ * 没人连了，再等多久就自己收摊（重启一般几十秒，留足余量）。
+ * 到点连 pi 一起收：后端没回来（编译挂了、人把终端关了）还留着 pi 就是野进程了。
+ */
 const IDLE_EXIT_MS = 10 * 60 * 1000;
 /** 多久看一次"还没人连吗"。 */
 const IDLE_CHECK_MS = 30 * 1000;
@@ -86,6 +91,74 @@ function log(text: string): void {
 // ========================================================================
 //  缓存：pi 说过的话（按序号存一段，新后端要补发时照着念）
 // ========================================================================
+
+/** 桥接扩展上报的一件事（派子活 / 提问 / 后台命令 / 加载了什么）。 */
+interface BridgeEvent {
+    seq: number;
+    key: string;
+    kind: string;
+    /** 桥自己起的幂等键（同一条重发只算一次） */
+    id: string;
+    payload: Record<string, unknown>;
+    /** 要回执的那种（ask / taba）才有 */
+    replyId?: string;
+    /** 回执已经有了（answer 里是答案） */
+    answered: boolean;
+    value?: unknown;
+    at: number;
+}
+
+/** 最近这些事件记着（换后端时，还没答的那些要重推）。 */
+const bridgeEvents = new Map<string, BridgeEvent>();
+/** 事件最多记这么多条（老的单条就丢；还没答的不丢）。 */
+const EVENT_LIMIT = 500;
+
+/** 正在等某个回执的那些 HTTP 长轮询。 */
+const replyWaiters = new Map<string, Set<(ev: BridgeEvent) => void>>();
+
+/** 事件 → 后端：连着的后端都收一份。 */
+function broadcastEvent(ev: BridgeEvent): void {
+    const line = JSON.stringify({
+        ev: "bevent",
+        seq: ev.seq,
+        key: ev.key,
+        kind: ev.kind,
+        id: ev.id,
+        payload: ev.payload,
+        ...(ev.replyId ? { replyId: ev.replyId } : {}),
+    }) + "\n";
+    for (const socket of clients) {
+        try { socket.write(line); } catch { /* 这条断了 */ }
+    }
+}
+
+/** 收下一条事件：同一个桥的同一个编号只算一次。 */
+function rememberEvent(key: string, kind: string, id: string, payload: Record<string, unknown>): BridgeEvent {
+    const mapKey = key + "|" + id;
+    const old = bridgeEvents.get(mapKey);
+    if (old) { return old; }
+    const ev: BridgeEvent = {
+        seq: ++seqCounter,
+        key,
+        kind,
+        id,
+        payload,
+        answered: false,
+        at: Date.now(),
+        ...(RELAY_REPLY_KINDS.has(kind) ? { replyId: "r-" + (seqCounter) } : {}),
+    };
+    bridgeEvents.set(mapKey, ev);
+    // 老的单条就丢；还没答的一条都不丢（重发）—— 后端换人以后还得靠它把题再问一遍
+    if (bridgeEvents.size > EVENT_LIMIT) {
+        const drop = Array.from(bridgeEvents.entries())
+            .filter(([, item]) => item.answered)
+            .sort((a, b) => a[1].seq - b[1].seq);
+        for (const [k] of drop.slice(0, bridgeEvents.size - EVENT_LIMIT)) {
+            bridgeEvents.delete(k);
+        }
+    }
+    return ev;
+}
 
 function remember(key: string, ch: "out" | "err", line: string): number {
     const seq = ++seqCounter;
@@ -164,7 +237,17 @@ function broadcast(ev: RelayEvent): void {
 }
 
 function spawnOne(key: string, spec: Parameters<typeof spawnPi>[0]): PiEntry {
-    const child = spawnPi(spec);
+    // 桥接扩展（派子活 / 提问 / 后台命令 / 加载了什么）照这几个变量把事件报过来：
+    // 报给中转，再由它转给后端（后端换人以后，还没答的那些会重推一遍）。
+    const child = spawnPi({
+        ...spec,
+        env: {
+            ...spec.env,
+            PICHAT_RELAY_URL: eventUrl(),
+            PICHAT_RELAY_TOKEN: token,
+            PICHAT_PI_KEY: key,
+        },
+    });
     const entry: PiEntry = {
         key,
         pid: child.pid ?? 0,
@@ -232,6 +315,12 @@ function killAll(): void {
 //  地址文件
 // ========================================================================
 
+/** 事件口的地址（起 pi 时告诉桥接扩展）。 */
+let eventPort = 0;
+function eventUrl(): string {
+    return eventPort > 0 ? "http://127.0.0.1:" + eventPort + "/" : "";
+}
+
 function writeAddress(port: number): void {
     const file = relayAddressFile();
     const addr: RelayAddress = {
@@ -239,6 +328,7 @@ function writeAddress(port: number): void {
         version: VERSION,
         pid: process.pid,
         port,
+        eventPort,
         token,
         startedAt: Date.now(),
     };
@@ -248,6 +338,103 @@ function writeAddress(port: number): void {
 
 function clearAddress(): void {
     try { fs.unlinkSync(relayAddressFile()); } catch { /* 本来就不在 */ }
+}
+
+// ========================================================================
+//  事件口：pi 里的桥接扩展往这儿报事（本机 HTTP）
+// ========================================================================
+
+/** 一条请求的正文最多收多少（事件都是小 JSON）。 */
+const MAX_EVENT_BYTES = 256 * 1024;
+
+function readBody(req: http.IncomingMessage): Promise<string | undefined> {
+    return new Promise((resolve) => {
+        let text = "";
+        let tooBig = false;
+        req.setEncoding("utf8");
+        req.on("data", (chunk: string) => {
+            text += chunk;
+            if (text.length > MAX_EVENT_BYTES) { tooBig = true; req.destroy(); }
+        });
+        req.on("end", () => resolve(tooBig ? undefined : text));
+        req.on("error", () => resolve(undefined));
+    });
+}
+
+function sendJson(res: http.ServerResponse, status: number, body: unknown): void {
+    const text = JSON.stringify(body);
+    try {
+        res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+        res.end(text);
+    } catch { /* 对方已经断了 */ }
+}
+
+function serveEvents(req: http.IncomingMessage, res: http.ServerResponse): void {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const given = String(req.headers["x-pichat-token"] ?? url.searchParams.get("token") ?? "");
+    if (given !== token) {
+        sendJson(res, 403, { ok: false, reason: "口令不对" });
+        return;
+    }
+
+    // 桥接扩展上报一件事
+    if (req.method === "POST" && url.pathname === "/event") {
+        void readBody(req).then((text) => {
+            if (text === undefined) { sendJson(res, 413, { ok: false, reason: "内容太大" }); return; }
+            let msg: any;
+            try { msg = JSON.parse(text); } catch { sendJson(res, 400, { ok: false, reason: "不是 JSON" }); return; }
+            const key = typeof msg?.key === "string" ? msg.key : "";
+            const kind = typeof msg?.kind === "string" ? msg.kind : "";
+            const id = typeof msg?.id === "string" ? msg.id : "";
+            const payload = msg?.payload && typeof msg.payload === "object" ? msg.payload : {};
+            if (!key || !kind || !id) { sendJson(res, 400, { ok: false, reason: "少了 key / kind / id" }); return; }
+
+            // 桥不等了（超时 / 这一轮被停）：那道题从"还等着的"里摘掉，别再推给下一个后端
+            if (kind === "ask-cancel") {
+                const pending = bridgeEvents.get(key + "|" + id);
+                if (pending) { pending.answered = true; }
+                sendJson(res, 200, { ok: true });
+                return;
+            }
+
+            const ev = rememberEvent(key, kind, id, payload);
+            log(`收到桥上报的事件：${kind}（${key}），转给 ${clients.size} 个后端`);
+            broadcastEvent(ev);
+            sendJson(res, 200, { ok: true, ...(ev.replyId ? { replyId: ev.replyId } : {}) });
+        });
+        return;
+    }
+
+    // 桥等回执（长轮询）：答了就给答案，没答就等一会儿再问
+    if (req.method === "GET" && url.pathname === "/reply") {
+        const replyId = url.searchParams.get("replyId") ?? "";
+        const wait = Math.min(Math.max(Number(url.searchParams.get("wait") ?? 20000) || 20000, 0), 60000);
+        const ev = Array.from(bridgeEvents.values()).find((item) => item.replyId === replyId);
+        if (!ev) { sendJson(res, 404, { state: "unknown" }); return; }
+        if (ev.answered) { sendJson(res, 200, { state: "answered", value: ev.value ?? null }); return; }
+        let done = false;
+        const finish = (hit: BridgeEvent) => {
+            if (done) { return; }
+            done = true;
+            sendJson(res, 200, { state: "answered", value: hit.value ?? null });
+        };
+        const timer = setTimeout(() => {
+            if (done) { return; }
+            done = true;
+            sendJson(res, 200, { state: "pending" });
+        }, wait);
+        let set = replyWaiters.get(replyId);
+        if (!set) { set = new Set(); replyWaiters.set(replyId, set); }
+        set.add((hit) => { clearTimeout(timer); finish(hit); });
+        req.on("close", () => {
+            clearTimeout(timer);
+            const waiters = replyWaiters.get(replyId);
+            if (waiters) { waiters.clear(); replyWaiters.delete(replyId); }
+        });
+        return;
+    }
+
+    sendJson(res, 404, { ok: false, reason: "没有这个地址" });
 }
 
 // ========================================================================
@@ -352,6 +539,20 @@ function handle(
                     }
                 }
             }
+            // 这个进程还有没答的题（/ 还没受理的派活）：再推一遍，新后端把卡片照原样画出来
+            for (const ev of bridgeEvents.values()) {
+                if (ev.key !== msg.key || ev.answered) { continue; }
+                if (!ev.replyId) { continue; }
+                answer({
+                    ev: "bevent",
+                    seq: ev.seq,
+                    key: ev.key,
+                    kind: ev.kind,
+                    id: ev.id,
+                    payload: ev.payload,
+                    replyId: ev.replyId,
+                });
+            }
             // 这些它都有了：下一次换后端从这儿往后补
             entry.lastSeen = seqCounter;
             answer({ ev: "reply", n: msg.n, ok: true, pi: info(entry), maxReq: entry.maxReq });
@@ -362,6 +563,18 @@ function handle(
             if (!entry || !entry.alive) { return; }
             noteRequestId(msg.key, msg.line);
             try { entry.child.stdin.write(msg.line + "\n"); } catch { /* 写不进去就算了 */ }
+            return;
+        }
+        case "reply": {
+            const ev = Array.from(bridgeEvents.values()).find((item) => item.replyId === msg.replyId);
+            if (!ev) { return; }
+            ev.answered = true;
+            ev.value = msg.value;
+            const waiters = replyWaiters.get(msg.replyId);
+            if (waiters) {
+                replyWaiters.delete(msg.replyId);
+                for (const fn of Array.from(waiters)) { fn(ev); }
+            }
             return;
         }
         case "label": {
@@ -406,17 +619,23 @@ function main(): void {
             process.exit(1);
             return;
         }
-        writeAddress(port);
-        log(`中转在这儿：127.0.0.1:${port}（进程 ${process.pid}）`);
+        // 事件口（pi 里的桥接扩展连它）：另开一个本机 HTTP 端口
+        const eventServer = http.createServer(serveEvents);
+        eventServer.on("error", (err) => log(`事件口没起来：${err && err.message ? err.message : err}`));
+        eventServer.listen(0, "127.0.0.1", () => {
+            const eaddr = eventServer.address();
+            eventPort = eaddr && typeof eaddr === "object" ? eaddr.port : 0;
+            writeAddress(port);
+            log(`中转在这儿：127.0.0.1:${port}（事件口 ${eventPort}，进程 ${process.pid}）`);
+        });
     });
 
     // 没人连、也没活着的 pi：自己收摊，别留野进程
     setInterval(() => {
         if (stopping) { return; }
         if (clients.size > 0) { return; }
-        if (entries.size > 0) { return; }
         if (Date.now() - lastClientGoneAt < IDLE_EXIT_MS) { return; }
-        shutdown("十分钟没人连");
+        shutdown("十分钟没人连（连 pi 一起收）");
     }, IDLE_CHECK_MS).unref();
 
     process.on("SIGINT", () => shutdown("收到 SIGINT"));

@@ -66,13 +66,14 @@ export class PiClient extends EventEmitter {
     private link?: RelayLink;
     private offFrame?: () => void;
     private offExit?: () => void;
+    private offBridge?: () => void;
     /**
      * 接管一只正在跑的 pi 时，先把它补发过来的那些行攒着（见 releaseReplay）。
      * 为什么要攒：新后端得先把历史画完（replayHistory），再接着画"正在长的这一条"，
      * 不然先到的字会被随后的整屏重画清掉。
      */
     private buffering = false;
-    private bufferedFrames: Array<{ ch: "out" | "err"; line: string }> = [];
+    private bufferedFrames: Array<{ ch: "out" | "err" | "ev"; line?: string; event?: any }> = [];
 
     constructor(opts: PiClientOptions) {
         super();
@@ -108,6 +109,14 @@ export class PiClient extends EventEmitter {
             }
         });
         this.offExit = link.onExit(this.key, (code) => this.onGone(code));
+        this.offBridge = link.onBridgeEvent(this.key, (ev) => {
+            // 接管时先攒着（跟补发的字一样）：上层把历史画完再一起放出来
+            if (this.buffering) {
+                this.bufferedFrames.push({ ch: "ev", event: ev });
+                return;
+            }
+            this.emit("bridge", ev);
+        });
 
         const ready: Promise<{ ok: boolean; reason?: string; maxReq?: number }> = this.opts.adoptKey
             ? link.attach(this.opts.adoptKey, { replay: true })
@@ -185,6 +194,12 @@ export class PiClient extends EventEmitter {
 
     isRunning(): boolean {
         return this.state === "running" || this.state === "starting";
+    }
+
+    /** 回答桥接扩展在等的一个回执（那道题有人答了、派活受理还是拒绝）。 */
+    answerBridgeEvent(replyId: string | undefined, value: unknown): void {
+        if (!replyId) { return; }
+        this.link?.reply(replyId, value);
     }
 
     /** 告诉中转这只是哪个会话（后端重启以后照它把会话认回来） */
@@ -297,8 +312,10 @@ export class PiClient extends EventEmitter {
         }
         this.offFrame?.();
         this.offExit?.();
+        this.offBridge?.();
         this.offFrame = undefined;
         this.offExit = undefined;
+        this.offBridge = undefined;
         if (this.proc) {
             try { this.proc.stdin.end(); } catch { /* ignore */ }
             try { this.proc.kill(); } catch { /* ignore */ }
@@ -320,13 +337,17 @@ export class PiClient extends EventEmitter {
         const frames = this.bufferedFrames;
         this.bufferedFrames = [];
         for (const frame of frames) {
+            if (frame.ch === "ev") {
+                this.emit("bridge", frame.event);
+                continue;
+            }
             if (frame.ch === "err") {
                 this.emit("stderr", frame.line);
                 continue;
             }
             let msg: any;
             try {
-                msg = JSON.parse(frame.line);
+                msg = JSON.parse(frame.line as string);
             } catch {
                 continue;
             }

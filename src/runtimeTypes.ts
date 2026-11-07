@@ -103,6 +103,16 @@ export interface ModelChoice {
 
 export type RuntimeActivity = "idle" | "working" | "thinking" | "tool";
 
+/** 一道选择题的作答（界面上点了什么；没作答时 cancelled 为真）。 */
+export interface AskAnswer {
+    /** 勾中的选项（原文） */
+    picked: string[];
+    /** 人自己写的那一句（没写就是空串） */
+    text: string;
+    /** 没作答 / 被关掉了 */
+    cancelled: boolean;
+}
+
 /** 一条消息的出口：往一个页面（或一批页面）写一条要显示的消息。 */
 export type MessageSink = (msg: Record<string, unknown>) => void;
 
@@ -181,10 +191,13 @@ export interface RuntimeHost {
      */
     onTabaRequest?(panelId: string, request: TabaRequest): void;
     /**
-     * 某个会话里的 pi 扩展要问用户一个选择题（ask_choice）：弹给正在看这个会话的那块屏，
-     * 用户答完把答案写成回话文件（扩展那边在轮询那个文件）。不必等它结束。可选。
+     * 某个会话里的 pi 扩展要问用户一个选择题（ask_choice）：弹给正在看这个会话的那块屏。
+     * 用户答完以后怎么把答案送回去由调用方定：
+     *   - 给了 deliver 就交给它（中转那条路：回执写回中转，扩展在那儿长轮询）；
+     *   - 没给就写成回话文件（老路：扩展在轮询那个文件）。
+     * 不必等它结束。可选。
      */
-    askQuestion?(request: AskRequest, sessionId?: string): void;
+    askQuestion?(request: AskRequest, sessionId?: string, deliver?: (answer: AskAnswer) => void): void;
     /** 扩展不等这次提问了（超时/这一轮被停）：把还开着的那个浮层收掉。可选。 */
     cancelAsk?(id: string): void;
 

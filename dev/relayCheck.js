@@ -33,6 +33,20 @@ process.env.FAKEPI_LONG_PIECES = process.env.FAKEPI_LONG_PIECES || "80";
 const { startBackend } = require(path.join(repoRoot, "out", "server", "serverMain.js"));
 const { relayLink } = require(path.join(repoRoot, "out", "server", "relayClient.js"));
 
+// 桥接扩展（派子活 / 提问 / 后台命令 / 加载了什么）:真后端的 main() 里会写一份，
+// 这里直接调 startBackend，所以得自己写（跟 dev/harness.js 一个道理），不然问话/后台命令都是坏的。
+const bridgeAssets = require(path.join(repoRoot, "out", "server", "bridgeAssets.js"));
+const { readServerConfig, seedPrompts } = require(path.join(repoRoot, "out", "server", "serverConfig.js"));
+const { appVersion } = require(path.join(repoRoot, "out", "server", "appAssets.js"));
+const VERSION = appVersion();
+seedPrompts();
+const PROMPTS = readServerConfig().config.prompts;
+bridgeAssets.ensureTabaAssets(VERSION, PROMPTS);
+bridgeAssets.ensureAskAssets(VERSION, PROMPTS);
+bridgeAssets.ensureImageAssets(VERSION);
+bridgeAssets.ensureBashAssets(VERSION, PROMPTS);
+bridgeAssets.ensureEnvAssets(VERSION);
+
 let failed = 0;
 const ok = (text) => console.log("  ✔ " + text);
 const bad = (text) => { console.log("  ✘ " + text); failed += 1; };
@@ -259,6 +273,36 @@ function sessionFrom(list, id) {
     const again = await page3.waitFor((m) => m.type === "sessionList" && (m.sessions || []).some((s) => s.id === longId && !s.streaming && !!s.tps), 60000);
     check(!!again, "认回来以后照常能接着聊");
     page3.close();
+
+    // ---- 四之四、等答题的卡片：重启以后还在、点了还能答 ----
+    // 用 longId（页面现在正看着的就是它）：问话卡片只发给"正看着这个会话"的屏
+    console.log("四之四、选择题卡片跨重启还在");
+    // 让 longId 里的假 pi 问一道选择题（走中转的事件口，不是 stderr）。
+    // 卡片只发给"正看着这个会话"的屏，这一趟主要验的是"重启以后它还在、还答得了"，
+    // 所以这里只管把题发出去，不赌这一屏当前盯着谁。
+    await page3.post({ type: "switchSession", sessionId: longId });
+    await page3.post({ type: "send", sessionId: longId, text: "问单选", images: [] });
+    await sleep(1500);
+
+    page3.close();
+    await back.stop(true, true);         // 重启（pi 留着，题还等在中转那儿）
+    back = await startBackend({ cwd: workDir, port: 0, host: "127.0.0.1" });
+    const page4 = openPage(back.url, "probe-4");
+    // 页面重连以后会回到自己原来那个会话（真页面也这么干）：切回去，还等着的卡片才会送到这块屏
+    await sleep(500);
+    await page4.post({ type: "switchSession", sessionId: longId });
+    const card2 = await page4.waitFor((m) => m.type === "askCard" && m.card && m.card.question === "选 A 还是 B？", 30000);
+    check(!!card2, "重启以后这张卡片又画回来了");
+    const answerId = card2 && card2.id;
+    if (answerId) { await page4.post({ type: "askCardAnswer", id: answerId, picks: ["A"], text: "" }); }
+    let heard = false;
+    const heardBy = Date.now() + 30000;
+    while (Date.now() < heardBy) {
+        if (joinedText(page4, longId).indexOf("用户选了：A") >= 0) { heard = true; break; }
+        await sleep(120);
+    }
+    check(heard, "点了以后答案交回了模型（它把结果说出来了）");
+    page4.close();
 
     // ---- 五、Ctrl+C 是全收 ----
     console.log("五、正常收摊：连 pi 一起收");

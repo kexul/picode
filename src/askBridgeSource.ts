@@ -9,6 +9,7 @@
  * 用 String.raw 包着：里面的反斜杠原样保留（比如 "\n" 不能被外层先转义成真换行）。
  */
 import { ASK_FRAME_PREFIX } from "./askProtocol";
+import { relayClientCode } from "./relayBridgeSource";
 import { promptText, type PromptOverrides } from "./promptText";
 
 export function askBridgeSource(over?: PromptOverrides): string {
@@ -18,10 +19,12 @@ export function askBridgeSource(over?: PromptOverrides): string {
  * 作用：给模型一个工具 ask_choice，让它问用户"选一个 / 选几个"的选择题，
  * 用户在这块界面上点几下作答（列表 + 勾选 + 自己写），答案回到模型手里。
  *
- * 工具被调用时：
- *   1. 往本进程的 stderr 写一行暗号：${ASK_FRAME_PREFIX} 后面跟 base64 编码的 JSON（问题、选项都在里面）；
- *   2. 等插件把答案写进 <PICHAT_ASK_DIR>/ask-answers/<提问编号>.json（每 150 毫秒看一次）；
- *   3. 读到就把那个文件删掉，然后把作答内容当作工具结果交回模型。
+ * 工具被调用时，分两条路（有没有「中转」看环境变量，见 src/relayBridgeSource.ts）：
+ *   A. 有中转（正常情况）：把问题报给中转的事件口，拿回一个回执编号，然后长轮询等答案。
+ *      换后端（编译并重启）以后，还没答的题会由中转再推一遍，界面上那张卡片照旧画回来。
+ *   B. 没有中转（PICHAT_NO_RELAY=1 之类）：往本进程的 stderr 写一行暗号，等插件把答案写进
+ *      <PICHAT_ASK_DIR>/ask-answers/<提问编号>.json（每 150 毫秒看一次），读到就删掉。
+ * 两条路的答案都当作工具结果交回模型。
  *
  * 插件不在（没人在看那块界面）时，插件会直接写一份"没作答"的回话过来，不会让这个工具干等。
  * 这一轮被停掉（用户按了停止/Esc）或者等得太久时，这里会写一条"不等了"的暗号，
@@ -30,6 +33,9 @@ export function askBridgeSource(over?: PromptOverrides): string {
 import { readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
+import * as http from "node:http";
+
+${relayClientCode("http")}
 
 const FRAME_PREFIX = ${JSON.stringify(ASK_FRAME_PREFIX)};
 /** 隔多久看一次回话文件。 */
@@ -84,6 +90,40 @@ function dropAnswer(id: string): void {
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * 走中转问这一道题（正常情况走这条）。
+ * @returns 跟 waitAnswer 一样的三选一；连不上中转（没这条路）时返回 undefined，调用方退回老路。
+ */
+async function askViaRelay(payload: any, id: string, signal: any): Promise<{ answer?: any; why: "answered" | "cancelled" | "timeout" | "offline" } | undefined> {
+    if (!relayReady()) { return undefined; }
+    const sent = await relayPost("ask", id, payload);
+    if (!sent || sent.ok !== true) {
+        return { why: "offline" };
+    }
+    const replyId = typeof sent.replyId === "string" ? sent.replyId : "";
+    if (!replyId) { return { why: "offline" }; }
+    const deadline = Date.now() + WAIT_LIMIT_MS;
+    for (;;) {
+        if (signal && signal.aborted) {
+            void relayCancel(id);
+            return { why: "cancelled" };
+        }
+        const left = deadline - Date.now();
+        if (left <= 0) {
+            void relayCancel(id);
+            return { why: "timeout" };
+        }
+        // 一次等一小段：界面上那道题可能要等很久，长轮询别一口气挂太久（网络设备爱掐这种静默连接）
+        const got = await relayWait(replyId, Math.min(left, 20000));
+        if (got && got.state === "answered") {
+            return { answer: got.value || {}, why: "answered" };
+        }
+        if (got && got.state === "unknown") {
+            return { why: "offline" };
+        }
+    }
+}
 
 /** 等插件回话；signal 是这一轮的取消信号（用户按停止）。 */
 async function waitAnswer(id: string, signal: any): Promise<{ answer?: any; why: "answered" | "cancelled" | "timeout" }> {
@@ -205,12 +245,23 @@ export default function askBridge(pi: any): void {
                 toolCallId: typeof toolCallId === "string" ? toolCallId.slice(0, 128) : "",
                 parentSessionFile: sessionFileOf(ctx),
             };
-            emit(payload);
+            // 有中转就走事件口（重启后端以后这题还在）；没有才退回 stderr + 回话文件那条老路
+            let relayed = await askViaRelay(payload, id, signal);
+            if (relayed && relayed.why === "offline") {
+                return {
+                    content: [{ type: "text", text: "问不了：连不上 Pi Chat 那一层（中转没在）。等一会儿再试，或者把这一轮停掉。" }],
+                    details: { id, cancelled: true, reason: "offline" },
+                };
+            }
+            if (!relayed) {
+                emit(payload);
+                relayed = await waitAnswer(id, signal);
+            }
+            const waited = relayed;
 
-            const waited = await waitAnswer(id, signal);
             if (waited.why !== "answered") {
-                // 不等了：跟插件说一声，把界面上还等着的那张卡片收掉
-                emit({ kind: "ask-done", id });
+                // 走老路时得跟插件说一声，把界面上还等着的那张卡片收掉（走中转时中转自己会摘）
+                if (!relayReady()) { emit({ kind: "ask-done", id }); }
                 const why = waited.why === "cancelled"
                     ? "这一轮被停掉了，用户没来得及作答。"
                     : "用户一直没作答。";
