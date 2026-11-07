@@ -6054,6 +6054,10 @@
    * @param items 宿主给的那些工作区行
    */
   function spaceRowsWithCurrent(items) {
+    // 当前看的是别的机器上的会话：它的目录不在这台的工作区清单里，别拿它去比，
+    // 更别在本机那一节里补出一行“当前目录”（那本来就不是本机的目录）
+    const now = activeId ? sessions.get(activeId) : null;
+    if (now && now.remote) { return items; }
     const cwd = activeSessionCwd();
     if (!cwd) { return items; }
     let hit = false;
