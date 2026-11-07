@@ -10547,6 +10547,8 @@
     const out = [];
     const localSection = localWorkSection();
     for (const it of spaceRowsWithCurrent(st.spaceItems)) {
+      // 组头、它展开的会话行、末尾的「加载更多」都用同一个分节名：只出现一次「工作区-本机」，
+      // 不会每个项目都重开一节、也不会在项目下面又冒出个「工作区」
       out.push(it.section === localSection ? it : Object.assign({}, it, { section: localSection }));
       if (!groupExpanded(it.file)) { continue; }
       const g = groupState(st, it.file);
@@ -10558,13 +10560,13 @@
         // 算的），这里得抹掉，不然画的时候又照它加上了。
         const copy = Object.assign({}, row, {
           __section: "groupSession",
-          section: it.section,
+          section: localSection,
           groupPath: it.file,
         });
         delete copy.current;
         out.push(copy);
       }
-      if (g.hasMore) { out.push({ __section: "groupMore", section: it.section, groupPath: it.file }); }
+      if (g.hasMore) { out.push({ __section: "groupMore", section: localSection, groupPath: it.file }); }
     }
     return out.concat(remoteSpaceRows());
   }
@@ -10574,8 +10576,8 @@
   //
   //  清单是页面自己去问的，不经过本机后端：先问本机 /health（它报 machines：设置里「远程机器」
   //  那栏填的地址），再对每台问 /health（名字、在不在）和 /sessions（它有哪些项目、会话）。
-  //  这一段现在只“看得见”：在「项目与会话」最下面列出来，点了先不做事 —— 切过去、发消息、
-  //  看那边的文件都还没接（见后续）。
+  //  每台一节（「工作区-<那台的名字>」），节里是那台的项目；点开项目展开它的会话，
+  //  点会话就在这台看、在这台发消息（见 openRemoteSession）。
   // ========================================================================
 
   /** 别人的机器多久重问一次（侧边栏重推、切面板都会顺手刷新，这里只是兜底）。 */
@@ -10637,12 +10639,24 @@
    * 为什么另开一节（每台一节）：会话要看的时候是混着看的，但工作区（目录）分不清是哪台的；
    * 一节一台，项目行就不必再挂机器名了。
    */
+  /** 那台在界面上叫什么：它的标签；连不上（拿不到标签）就用主机:端口，别把 http:// 也写进节名。 */
+  function remoteHostLabel(host) {
+    const name = (host && host.name) || "";
+    if (name && name !== host.url) { return name; }
+    try {
+      const u = new URL(host.url);
+      return u.host || String(host.url);
+    } catch (e) {
+      return String(host.url || "").replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+    }
+  }
+
   function remoteSpaceRows() {
     const out = [];
     for (const host of remoteHosts) {
       // 每台机器一节（方案二）：节标题写「工作区-公司」，下面只放这台自己的项目；
       // 会话行跟着所属项目同一个 section，不再单独开头。
-      const section = "工作区-" + (host.name || host.url);
+      const section = "工作区-" + remoteHostLabel(host);
       const projects = host.online && Array.isArray(host.projects) ? host.projects : [];
       if (projects.length === 0) {
         // 连不上、或者那边一个项目都没有：也占一行，人知道清单里还有这台
