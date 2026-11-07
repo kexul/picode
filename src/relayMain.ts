@@ -56,6 +56,8 @@ interface PiEntry {
     maxReq: number;
     /** 最后一条已经交给过某个后端的输出序号（换后端时从这里往后补） */
     lastSeen: number;
+    /** 同上，但记的是"事件"（桥上报的那些）的序号：重启窗口里发生的事件也要补给它 */
+    lastEventSeen: number;
     /** 正在长的那条助手消息从第几条开始（没提交的消息没有历史可重画，得从这儿补回去） */
     messageStartSeq?: number;
     /** 它那条消息的编号（收尾时认一下是不是同一条） */
@@ -120,6 +122,11 @@ const replyWaiters = new Map<string, Set<(ev: BridgeEvent) => void>>();
 
 /** 事件 → 后端：连着的后端都收一份。 */
 function broadcastEvent(ev: BridgeEvent): void {
+    // 有人听着就把"事件水位"推上去（换后端时从这往后补）
+    if (clients.size > 0) {
+        const entry = entries.get(ev.key);
+        if (entry) { entry.lastEventSeen = ev.seq; }
+    }
     const line = JSON.stringify({
         ev: "bevent",
         seq: ev.seq,
@@ -269,6 +276,7 @@ function spawnOne(key: string, spec: Parameters<typeof spawnPi>[0]): PiEntry {
         extensions: extensionsOf(spec.args),
         maxReq: 0,
         lastSeen: 0,
+        lastEventSeen: 0,
         alive: true,
         exitCode: null,
     };
@@ -558,10 +566,17 @@ function handle(
                     }
                 }
             }
-            // 这个进程还有没答的题（/ 还没受理的派活）：再推一遍，新后端把卡片照原样画出来
+            // 这个进程要补的事件有两种：
+            //   1. 还没答的（提问）：不管新旧都再推一遍，新后端把卡片照原样画出来；
+            //   2. 它没听到过的（后台命令跑完了、加载了什么）：按"事件水位"往后补 ——
+            //      重启那一小会儿里发生的事，不能就这么没了。
+            const entryForEvents = entries.get(msg.key);
+            const watermark = entryForEvents ? entryForEvents.lastEventSeen : 0;
             for (const ev of bridgeEvents.values()) {
-                if (ev.key !== msg.key || ev.answered) { continue; }
-                if (!ev.replyId) { continue; }
+                if (ev.key !== msg.key) { continue; }
+                const pendingReply = !!ev.replyId && !ev.answered;
+                const missed = !ev.replyId && ev.seq > watermark;
+                if (!pendingReply && !missed) { continue; }
                 answer({
                     ev: "bevent",
                     seq: ev.seq,
@@ -574,6 +589,7 @@ function handle(
             }
             // 这些它都有了：下一次换后端从这儿往后补
             entry.lastSeen = seqCounter;
+            entry.lastEventSeen = seqCounter;
             answer({ ev: "reply", n: msg.n, ok: true, pi: info(entry), maxReq: entry.maxReq });
             return;
         }

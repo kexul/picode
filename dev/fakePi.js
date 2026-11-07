@@ -173,7 +173,39 @@ function appendSession(record) {
 const BASH_FRAME_PREFIX = "##PICHAT_BASH##";
 
 /** 照真扩展的样子往 stderr 写一行后台命令暗号（start / end）。 */
+/**
+ * 报一条后台命令的动静（开始 / 结束）。
+ *
+ * 有中转就走事件口 —— 真扩展现在也这么走（见 src/bashBridgeSource.ts），这里照着来，
+ * 好让后端那一侧“事件 → 清单 / 跑完交回会话”这条路在调试里真跑起来。
+ * 没有中转才写 stderr 暗号（老路）。
+ */
 function emitBash(payload) {
+    const relayUrl = (process.env.PICHAT_RELAY_URL || "").trim();
+    const relayToken = (process.env.PICHAT_RELAY_TOKEN || "").trim();
+    const relayKey = (process.env.PICHAT_PI_KEY || "").trim();
+    if (relayUrl && relayToken && relayKey) {
+        const body = JSON.stringify({
+            key: relayKey,
+            kind: "bash",
+            id: (payload && payload.kind === "end" ? "end-" : "start-") + String((payload && payload.no) ?? ""),
+            payload: payload,
+        });
+        try {
+            const url = new URL("/event", relayUrl);
+            const req = require("node:http").request({
+                host: url.hostname, port: url.port, path: url.pathname, method: "POST",
+                headers: {
+                    "x-pichat-token": relayToken,
+                    "Content-Type": "application/json",
+                    "Content-Length": Buffer.byteLength(body),
+                },
+            }, (res) => { res.resume(); });
+            req.on("error", () => { /* 中转没在就算了，别影响剧本 */ });
+            req.end(body);
+        } catch { /* 同上 */ }
+        return;
+    }
     try {
         process.stderr.write(BASH_FRAME_PREFIX + Buffer.from(JSON.stringify(payload), "utf8").toString("base64") + "\n");
     } catch { /* 写不出去就算了，命令照样跑 */ }

@@ -29,6 +29,8 @@ process.env.FAKEPI_THINK_MS = process.env.FAKEPI_THINK_MS || "1500";
 process.env.FAKEPI_TICK_MS = process.env.FAKEPI_TICK_MS || "40";
 // 「长话」那一场要慢慢吐够几秒，好在中间重启（见下面四之三）
 process.env.FAKEPI_LONG_PIECES = process.env.FAKEPI_LONG_PIECES || "80";
+// 后台命令那条戏跑多久（毫秒）：要在"重启窗口"里跑完，好验它跑完的消息不会丢
+process.env.FAKEPI_BG_MS = process.env.FAKEPI_BG_MS || "2500";
 
 const { startBackend } = require(path.join(repoRoot, "out", "server", "serverMain.js"));
 const { relayLink } = require(path.join(repoRoot, "out", "server", "relayClient.js"));
@@ -366,8 +368,28 @@ function sessionFrom(list, id) {
     if (treeLink) { treeLink.close(); }
     const heard = tree.indexOf("用户选了：A") >= 0;
     if (!heard) { console.log("  · pi 的消息树里没找到，前 200 字：" + JSON.stringify(tree.slice(0, 200))); }
+    await page4.waitFor((m) => m.type === "streamEnd" && m.sessionId === longId, 30000);
     check(heard, "点了以后答案交回了模型（它把结果说出来了）");
     page4.close();
+
+    // ---- 四之五、后台命令在重启窗口里跑完：那条"跑完了"照样交回会话 ----
+    console.log("四之五、后台命令跨重启不丢");
+    const pageBg = openPage(back.url, "probe-bg");
+    await sleep(400);
+    await pageBg.post({ type: "switchSession", sessionId: longId });
+    await pageBg.post({ type: "send", sessionId: longId, text: "放后台跑一会", images: [] });
+    const started = await pageBg.waitFor((m) => m.type === "bashTask" && m.task && m.task.status === "running", 20000);
+    check(!!started, "后台命令报上来了（走事件口）");
+
+    pageBg.close();
+    await back.stop(true, true);         // 重启（命令还在跑，跑完的那一刻多半没人连）
+    back = await startBackend({ cwd: workDir, port: 0, host: "127.0.0.1" });
+    const page5 = openPage(back.url, "probe-5");
+    await sleep(500);
+    await page5.post({ type: "switchSession", sessionId: longId });
+    const handed = await page5.waitFor((m) => JSON.stringify(m).includes("跑完了"), 40000);
+    check(!!handed, "跑完的结果照样交回了会话（重启窗口里发生的也没丢）");
+    page5.close();
 
     // ---- 五、Ctrl+C 是全收 ----
     console.log("五、正常收摊：连 pi 一起收");
