@@ -130,8 +130,13 @@
   const sessionDrafts = new Map();   // sessionId -> { text, selStart, selEnd, height }（输入草稿按会话存）
   let sessionOrder = [];             // 后端给的会话顺序（列表段按它画）
   let activeId = null;               // 当前显示的会话 id
-  // 后端说“你这块屏切到这个会话”但那个会话的壳还没建出来（列表在路上）：记下来等它到了一起用
+  // 后端说“你这块屏切到这个会话”但那个会话的壳还没建出来（列表在路上）：记下来等它到了一起用。
+  // 加一个截止时间：别的会话的壳晚到一小会儿是常事（别台那条要先让那台把它开出来，
+  // 这中间还会来几份“还没有它”的会话清单，那是更早排队的，不能当成“这个号过期了”），
+  // 所以不能在头一份不含它的清单上就扔掉；但也不能一直挂着（万一它永远不出现）。
   let pendingActivateId = null;
+  let pendingActivateUntil = 0;
+  const PENDING_ACTIVATE_MS = 15000;
   // 从「项目与会话」里点加号新开一个会话：新会话挂好后把光标放进输入框（手机上也不等再点一下）。
   // 只认这一小段时间里的那一次切换：新会话一直没开起来（pi 不在、消息丢了）就作废。
   let focusAfterNewSessionUntil = 0;
@@ -707,6 +712,7 @@
     try { wanted = new URLSearchParams(location.search).get("session") || ""; } catch (e) { wanted = ""; }
     if (!wanted) { return; }
     pendingActivateId = wanted;
+    pendingActivateUntil = Date.now() + PENDING_ACTIVATE_MS;
     requestSwitch(wanted);
   }
 
@@ -5001,6 +5007,8 @@
   /** 切到某个会话：把它的壳挂回 #messages，草稿跟着换（打了一半的字留在各自会话里）。 */
   function activateSessionView(id) {
     if (!sessions.has(id) || activeId === id) { return; }
+    // 已经真切了：那条“等着壳”的账作废（不然它下次出现时会把又切走的人拽回去）
+    pendingActivateId = null;
     hideTagTip();
     if (activeId !== null) { saveInputState(); } else { carryComposerToSession(id); }
     // 切走也算看过了：刚看完的那个会话的绿点收掉（绿点只说“这一轮刚跑完，等你回来”）
@@ -6046,17 +6054,27 @@
    * 补一行接在末尾：不然“这一轮在哪个工作区里”就没地方看了。补的那一行照样能展开、能点加号，
    * 等它从清单里冒出来就不再补（免得同一个目录占两行）。
    *
+   * 当前看的是别的机器上的会话：它的目录不在这一台的工作区清单里，所以不补行、本机那些行也都不标；
+   * 蓝的是那台那一节里对应的那一行目录（拿那台的地址跟目录一起比）。
+   *
    * @param items 宿主给的那些工作区行
    */
   function spaceRowsWithCurrent(items) {
-    // 当前看的是别的机器上的会话：它的目录不在这一台的工作区清单里，别拿它去比，
-    // 更别在本机那一节里补出一行“当前目录”（那本来就不是这一台的目录）
     const now = activeId ? sessions.get(activeId) : null;
-    if (now && now.remoteMachine) { return items; }
+    if (now && now.remoteMachine) {
+      const cwd = now.cwd || "";
+      return items.map((it) => {
+        // 本机那些行、那节末尾的「加载更多」、连不上那一行都不掺和
+        if (it.machine !== now.remoteMachine || it.machineMore || it.machineEmpty) { return it; }
+        return cwd && samePath(it.file, cwd) ? Object.assign({}, it, { current: true }) : it;
+      });
+    }
     const cwd = activeSessionCwd();
     if (!cwd) { return items; }
     let hit = false;
     const out = items.map((it) => {
+      // 本机在看的会话：别台那几行一律不标（它们可能还带着上一回算出来的 current）
+      if (it.machine) { return it.current ? Object.assign({}, it, { current: false }) : it; }
       if (!samePath(it.file, cwd)) { return it; }
       hit = true;
       return Object.assign({}, it, { current: true });
@@ -6258,7 +6276,10 @@
     // 得在 settleAskCard 之前问——那一下就把卡片里那行输入框摘掉了。
     const typed = !!rec.input && document.activeElement === rec.input;
     settleAskCard(st, rec.id, answer);
-    const msg = { type: "askCardAnswer", id: rec.id };
+    // 带上会话号：这张卡片是那个会话里的，答案要回到那张卡等着的那个 pi 去。
+    // 不写的话后端只能往“这块屏正在看的本机会话”那儿送 —— 别台那台上问的问题就答不到了
+    //（后端按会话号把这条转给那台，见 src/chatHost.ts 的 routeToMachine）。
+    const msg = { type: "askCardAnswer", sessionId: st.id, id: rec.id };
     if (Array.isArray(answer.picks)) { msg.picks = answer.picks; }
     if (typeof answer.text === "string") { msg.text = answer.text; }
     if (answer.yes !== undefined) { msg.yes = answer.yes; }
@@ -11612,12 +11633,21 @@
       // 当前会话是这块屏自己的事：别的屏切了会话（sessionList 里那个 activeId）不管，
       // 只有后端单发给本屏的 sessionActivated 才会切。这里只把画面重新挂好、状态刷一遍。
       // 后端说的“你看这个”比会话壳先到时先记着（见上面 sessionActivated 那段）：
-      // 这批列表里有了就切过去；这批里也没有就当它已经过时（会话被关了之类），不再压着。
+      // 这批列表里有了就切过去；这一批里还没有就再等一批——别台的会话要先让那台把它开出来，
+      // 这中间排队的不含它的清单可能比那条“切到它”更晚才到（时序对不上，不是它的号过期了）。
+      // 等过一小段时间还没有（见 PENDING_ACTIVATE_MS）才当成过期，回自己原来那个。
       if (pendingActivateId) {
         const pending = pendingActivateId;
-        pendingActivateId = null;
-        if (sessions.has(pending)) { activateSessionView(pending); }
-        else if (activeId && sessions.has(activeId)) { mountActiveSession(); syncStatus(); renderAutoIndicator(); }
+        if (sessions.has(pending)) {
+          pendingActivateId = null;
+          activateSessionView(pending);
+        } else if (Date.now() > pendingActivateUntil) {
+          pendingActivateId = null;
+          if (activeId && sessions.has(activeId)) { mountActiveSession(); syncStatus(); renderAutoIndicator(); }
+        } else if (activeId && sessions.has(activeId)) {
+          mountActiveSession();
+          renderAutoIndicator();
+        }
       } else if (activeId && sessions.has(activeId)) {
         mountActiveSession();
         renderAutoIndicator();
@@ -11658,7 +11688,7 @@
       }
       // 会话壳要先在（列表可能晚一步）：不在就先记着，等它出现在列表里再切
       if (id && sessions.has(id)) { pendingActivateId = null; activateSessionView(id); }
-      else if (id) { pendingActivateId = id; }
+      else if (id) { pendingActivateId = id; pendingActivateUntil = Date.now() + PENDING_ACTIVATE_MS; }
       // 搜索框开着：换成这个会话的目录重搜一次（上一个会话那份结果已经作废）
       if (fileSearch.open) { runFileSearch(); }
       return;
@@ -12245,7 +12275,10 @@
       case "syncPoint":
         // 插件说“这一屏补发 / 重画完了”：对账的重放就此收尾；
         // 清空重画那种则把视野放回原处（不在重画的都是空转）
+        // 带 machine 的是别台那台的重画收尾（见 src/machineHub.ts）：只收那一台的会话，
+        // 本机那几格可能正画着自己的（反过来也一样，本机那声不带 machine，不动别台的）
         for (const st of sessions.values()) {
+          if (msg.machine ? st.remoteMachine !== msg.machine : !!st.remoteMachine) { continue; }
           flushReplayBuf(st);
           if (st.reconcile) { endReconcile(st); }
           else if (st.suppressScroll) { finishRedraw(st); }

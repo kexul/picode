@@ -125,6 +125,8 @@ export class MachineHub {
      * syncPoint，一条消息都没有）。见到正文就划掉；一直没见着，就在它说“画完了”之后补请一次。
      */
     private readonly needContent = new Map<string, boolean>();
+    /** 这些会话的正文已经往这台推过了（切来切去不用再要一遍；页面重连后作废，见 forgetSentContent）。 */
+    private readonly contentSent = new Set<string>();
     /**
      * 从项目清单里点开、那台还没报出它那边的号（面板号）的那些：先按会话文件记着，
      * 等它报了会话清单再认领、换成它那边的号（见 adoptOpen）。
@@ -412,9 +414,17 @@ export class MachineHub {
         if (live) {
             this.opened.add(id);
             if (file) { this.openedFiles.set(id, file); }
-            this.needContent.set(id, true);
             this.post(id, { type: "workspaceOpenSession", path: file, cwd });
-            this.post(id, { type: "repaintSession", sessionId: one.remoteId });
+            // 正文要过一次就够了：这台手上已经有这一格的内容时，切来切去不必再让它整段重发
+            //（重画一遍 = 几百条消息重新摆一次：画面抖一下、滚动位置被推来推去，
+            //  工具行那种“按批次并起来”的东西也容易摆错地方）。
+            // 只有“这块屏还没拿到过它的正文”（刚点开、页面刚刷新）才要一遍。
+            // 也不在这儿挂“等正文”那笔账（needContent）：那笔账是给还没认下的会话用的，
+            // 挂在开着的老会话上，上一趟重放晚到的 syncPoint 会被当成“一条正文都没有”，
+            // 于是每切一次就多请一遍整段重放（一叠两遍、对账到超时才收，视野停在半空）。
+            if (!this.contentSent.has(id)) {
+                this.post(id, { type: "repaintSession", sessionId: one.remoteId, full: true });
+            }
         } else if (file) {
             // 还没开着：请它打开（它一开就会把这个会话报进会话清单里）
             this.pendingOpen.set(fileKey(file), { machine: one.machine, file, localId: id, before: this.sessionIdsOf(one.machine) });
@@ -709,6 +719,14 @@ export class MachineHub {
             return;
         }
         if (msg.type === "sessionActivated") { return; }
+        if (msg.type === "syncPoint" && (typeof msg.sessionId !== "string" || !msg.sessionId)) {
+            // 那台说“这一屏画完了”。这一条是按屏发的、没有会话号，但它管的正是我们刚才
+            // 请它重画的那一遍（见 openSession）：不转过去的话，这边“重放还没收尾”那笔账
+            // 要等 8 秒的兜底才收，那段时间画面不跟着滚，人切回来就停在半空。
+            // 带上那台的地址：界面只拿它收这一台的会话，本机那几格的重画不受影响。
+            this.opts.broadcast({ type: "syncPoint", machine: st.url });
+            return;
+        }
         if (typeof msg.sessionId !== "string" || !msg.sessionId) { return; }
         const id = REMOTE_PREFIX + st.url + ":" + msg.sessionId;
         if (!this.opened.has(id) && !this.adoptByMessage(st, msg.sessionId)) {
@@ -728,9 +746,28 @@ export class MachineHub {
                 this.needContent.delete(id);
             }
         }
+        if (!CONTENTLESS_TYPES.has(msg.type)) { this.contentSent.add(id); }
         const copy: Record<string, unknown> = { ...msg, sessionId: id };
         delete copy.seq;
         this.opts.broadcast(copy);
+    }
+
+    /**
+     * 这块屏刚（重新）连上：之前“正文已经发过”的那笔账作废 —— 新连上来的这块屏手里
+     * 不一定还有那些消息（刷新过就是空的）。它正看着的那个由 chatHost 当场补一份整段重画。
+     */
+    public forgetSentContent(): void {
+        this.contentSent.clear();
+    }
+
+    /** 请那台把这条会话整段重画一遍（页面刚连上、手上还没有它的正文时用）。 */
+    public repaint(id: string): void {
+        const one = this.parseId(id);
+        if (!one) { return; }
+        const st = this.states.get(one.machine);
+        if (!st) { return; }
+        this.contentSent.delete(id);
+        this.post(id, { type: "repaintSession", sessionId: one.remoteId, full: true });
     }
 
     /**

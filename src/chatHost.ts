@@ -1109,7 +1109,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         // （里面带着“每块屏在看哪一个”，补发给别的屏会把人家的画面带偏）。
         // 这条是“再说一遍我记得的”，不是刚刚谁按下的（replay）：网络上它可能比人刚按的那一下还旧。
         const mine = this.focusedIdFor(pageId);
+        // 这块屏刚（重新）连上：之前“正文已经发过”那笔账作废（新连上来的这块屏不一定还留着那些消息，
+        // 刷新过就是空的）。它正看着的是别台那台上的一条会话的话，当场请那台整段重画一遍 ——
+        // 以前是“每切一次就重画一遍”顶替的，那样切来切去画面一直重摆，视野也就跟着跳。
+        this.machineHub.forgetSentContent();
         if (mine) { this.postToOneClient(pageId, { type: "sessionActivated", sessionId: mine, replay: true }); }
+        if (mine && this.machineHub.ownerOf(mine)) { this.machineHub.repaint(mine); }
         this.sendSessionListTo(pageId);
         // 显示选项条目也是一次性要来的数据：浮层开着的时候那块屏刚连上，就重给它一份最新的
         //（「编译并重启」那颗按下去以后一直是灰的、说明停在“正在重启”，靠这条回正）。
