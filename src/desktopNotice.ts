@@ -8,8 +8,9 @@
  * 卡片什么时候没：人点掉它、点右上角那颗 ×、那个会话里有人说上话了（见 ChatHost 的
  * onUserMessage）、那个会话被关掉了、那道选择题答完了。它自己不会到点消失。
  *
- * 点卡片做什么：把这件事交回宿主（onClick），由宿主把那个会话拿到眼前（见 ChatHost.openNotice：
- * 网页开着就叫它切过去、再叫这支小程序把窗口搬到前面；没开着才开浏览器）。
+ * 点卡片做什么：把这件事交回宿主（onClick），由宿主叫连着的网页切到那个会话
+ * （见 ChatHost.openNotice）。它自己不碰浏览器窗口：不提窗口，也不新开浏览器。
+ * （下面那个 openInBrowser 是另一回事：后端带 --open 起来时，给这台开一下页面。）
  *
  * 这台机器上弹不出来（不是 Windows、那支小程序没编出来、被杀软拦了）就一路静悄悄地不发，
  * 浏览器页面里照样看得到，不该为这个拦路。
@@ -30,9 +31,6 @@ export function desktopNoticeSupported(): boolean {
 /**
  * 开这个网页：默认浏览器是 Chromium 系的话，开成「应用窗口」（没有标签条、没有地址栏，
  * 窗口里只有这一页）；其余情况交给系统默认浏览器开标签页。打不开也不影响什么。
- *
- * 为什么要应用窗口：浏览器不给外部程序切标签，标签开一堆时把窗口提到前面也未必看得到
- * 我们这一页（人点了提醒卡片就是撞这个）；应用窗口里只有这一页，提上来就一定是它。
  */
 export function openInBrowser(url: string): void {
     const browser = findAppWindowBrowser();
@@ -131,16 +129,6 @@ export class DesktopNotice {
     /** 收走某一标识的那一张（没有就什么也不做）。 */
     public close(key: string): void {
         this.write("close\t" + key);
-    }
-
-    /**
-     * 把标题里带着这段字的窗口提到前面。人点了卡片时叫它：那个会话的网页该到眼前来。
-     * 找不到那个窗口（浏览器关了、标签关了）就什么也不做：那种时候调用方会去开浏览器。
-     * @param title 网页的标题（`<标签>-pi`，见 pageHtml）：浏览器窗口的标题就是它打头
-     */
-    public raise(title: string): void {
-        if (!title) { return; }
-        this.write("raise\t" + base64(title));
     }
 
     /** 后端要走了：把它也收掉（关了标准输入它自己退）。 */

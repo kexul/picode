@@ -2,8 +2,8 @@
  * notice —— 右下角那张「有事」的提醒卡片（Windows）。
  *
  * 干什么：哪个会话跑完了一轮、或者模型在那儿等你答一句，后端就把一条 show 写进它的标准输入，
- * 它在这台机器右下角画一张小卡片（最多三张叠着）。卡片可以点（后端据此把那个会话拿到眼前：
- * 叫开着的网页切过去，再让这里把浏览器窗口搬到前面，见 Raise）、
+ * 它在这台机器右下角画一张小卡片（最多三张叠着）。卡片可以点（这里只把这一下告诉后端：
+ * 后端叫开着的网页切到那个会话；卡片收掉，不碰浏览器窗口）、
  * 可以点右上角那颗 × 顺手关掉，后端也能说「这个会话已经说上话了 / 关掉了」把某一张收走。
  *
  * 为什么单独编一支小程序：安卓 app 与桌面小窗口都退休了，提醒不能跟着一起没。这支没有通知区域
@@ -27,10 +27,8 @@
  *                                                    标签（可省，旧后端不带）= 设置里那行「标签」
  *     close<TAB>标识                              把那一张收走（那个会话已经说上话了 / 关掉了）
  *     closeall                                    全收走
- *     raise<TAB>标题                              把标题里带着这段字的窗口提到前面（人点了卡片：
- *                                                 那个会话的网页该到眼前来；标题是 base64）
  *   它写出去：
- *     click<TAB>标识                              人点了那一张（后端据此打开那个会话）
+ *     click<TAB>标识                              人点了那一张（后端据此叫开着的网页切过去）
  *
  * 用法：notice.exe < 管道
  */
@@ -121,127 +119,12 @@ static class Hub
         if (line.Length == 0) { return; }
         var parts = line.Split('\t');
         if (parts[0] == "show") { Show(parts); return; }
-        if (parts[0] == "raise")
-        {
-            if (parts.Length > 1) { Raise(Decode(parts[1])); }
-            return;
-        }
         if (parts[0] == "close")
         {
             if (parts.Length > 1) { CloseKey(parts[1]); }
             return;
         }
         if (parts[0] == "closeall") { CloseAll(); }
-    }
-
-    // ==================== 把窗口提到前面 ====================
-    //
-    // 人点了卡片，那个会话的网页该到眼前来。可网页自己没那个本事（浏览器不让网页把窗口提到前面），
-    // 只能由这支小程序替它做：照标题找那个窗口，还原（要是收起来了）、搬到前面。
-
-    private const int SW_RESTORE = 9;
-
-    private delegate bool EnumProc(IntPtr hwnd, IntPtr lparam);
-
-    [DllImport("user32.dll")]
-    private static extern bool EnumWindows(EnumProc proc, IntPtr lparam);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int max);
-
-    [DllImport("user32.dll")]
-    private static extern bool IsWindowVisible(IntPtr hwnd);
-
-    [DllImport("user32.dll")]
-    private static extern bool IsIconic(IntPtr hwnd);
-
-    [DllImport("user32.dll")]
-    private static extern bool ShowWindow(IntPtr hwnd, int command);
-
-    [DllImport("user32.dll")]
-    private static extern bool SetForegroundWindow(IntPtr hwnd);
-
-    [DllImport("user32.dll")]
-    private static extern bool BringWindowToTop(IntPtr hwnd);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
-
-    [DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, IntPtr processId);
-
-    [DllImport("user32.dll")]
-    private static extern bool AttachThreadInput(uint attach, uint attachTo, bool on);
-
-    [DllImport("kernel32.dll")]
-    private static extern uint GetCurrentThreadId();
-
-    /// <summary>EnumWindows 回调里记下的那个窗口（只在界面线程上用）。</summary>
-    private static IntPtr found;
-
-    /// <summary>
-    /// 把标题里带着这段字的窗口提到前面。
-    ///
-    /// 先找标题正正好好就是它的那个：那是「应用窗口」（开页面时用 `--app=…`，没有标签条），
-    /// 窗口里只有这一页。普通标签里的那个窗口，标题是 `<网页标题> - <浏览器名>`，排在后面找。
-    /// 两个都在时提前者：标签开一堆的时候，提到普通窗口也未必看得到我们这一页。
-    /// 一个都没对上（浏览器关了、标签关了）就什么也不做。
-    /// </summary>
-    private static void Raise(string title)
-    {
-        if (title == null || title.Length == 0) { return; }
-        var target = Find(title, true);
-        if (target == IntPtr.Zero) { target = Find(title, false); }
-        if (target == IntPtr.Zero) { return; }
-        if (IsIconic(target)) { ShowWindow(target, SW_RESTORE); }
-        SetForegroundWindow(target);
-        // 不是前台程序叫它到前面来，Windows 一般不给办（人在别的窗口里打字时就这样）。
-        // 老办法：把自己的线程和前台那个窗口的线程临时拴在一起，再叫一次。
-        if (GetForegroundWindow() != target) { ForceForeground(target); }
-    }
-
-    /// <summary>
-    /// 照标题找一个窗口。从上往下数（EnumWindows 就是这个顺序），第一个对上的算数：
-    /// 几台浏览器都开着这个网页时，人最后用的那个在最上面。
-    /// </summary>
-    /// <param name="exact">标题（去掉两头空白）就是它，而不是标题里带着它</param>
-    private static IntPtr Find(string title, bool exact)
-    {
-        found = IntPtr.Zero;
-        var want = title.Trim();
-        EnumProc proc = delegate(IntPtr hwnd, IntPtr lparam)
-        {
-            if (!IsWindowVisible(hwnd)) { return true; }
-            var text = new StringBuilder(512);
-            GetWindowText(hwnd, text, text.Capacity);
-            var got = text.ToString().Trim();
-            var hit = exact
-                ? string.Equals(got, want, StringComparison.OrdinalIgnoreCase)
-                : got.IndexOf(want, StringComparison.OrdinalIgnoreCase) >= 0;
-            if (!hit) { return true; }
-            found = hwnd;
-            return false;
-        };
-        EnumWindows(proc, IntPtr.Zero);
-        GC.KeepAlive(proc);
-        return found;
-    }
-
-    /// <summary>拴到前台那个窗口的线程上再叫一次（不行就算了，不折腾）。</summary>
-    private static void ForceForeground(IntPtr target)
-    {
-        var foreground = GetForegroundWindow();
-        if (foreground == IntPtr.Zero) { return; }
-        var theirs = GetWindowThreadProcessId(foreground, IntPtr.Zero);
-        var mine = GetCurrentThreadId();
-        if (theirs == 0 || theirs == mine) { return; }
-        if (!AttachThreadInput(mine, theirs, true)) { return; }
-        try
-        {
-            BringWindowToTop(target);
-            SetForegroundWindow(target);
-        }
-        finally { AttachThreadInput(mine, theirs, false); }
     }
 
     private static void Show(string[] parts)
@@ -270,7 +153,7 @@ static class Hub
         Chime.Play(ask);
     }
 
-    /// <summary>人点了哪一张：告诉后端（它去打开那个会话），这张收走。</summary>
+    /// <summary>人点了哪一张：告诉后端（它叫开着的网页切到那个会话），这张收走。</summary>
     private static void OnClicked(string key)
     {
         try

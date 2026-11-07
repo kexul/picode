@@ -55,7 +55,7 @@ npm run web:dev -- --fake-pi
 npm run web:shot -- --fake-pi --send "随便说点什么" --shot fake.png
 
 # 验右下角那张提醒卡片：往后端塞一条「别的机器推来的有事」，后端就在这台右下角弹一张
-# （真弹，得在 Windows 上；点一下会用浏览器打开那条里的 pageUrl）
+# （真弹，得在 Windows 上；点一下只是把这张收掉——那是别的机器上的会话）
 # 不给地址就用 http://127.0.0.1:51999（npm run web:dev / server 起在本机时）；末尾加 ask 是「等你答一句」那种
 node dev/remoteNote.mjs
 node dev/remoteNote.mjs http://127.0.0.1:51999 ask

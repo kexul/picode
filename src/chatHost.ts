@@ -48,7 +48,7 @@ import type { BashTaskInfo } from "./bashProtocol";
 import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { DesktopLive } from "./desktopLive";
-import { DesktopNotice, openInBrowser } from "./desktopNotice";
+import { DesktopNotice } from "./desktopNotice";
 import { describeRestart } from "./serverRestart";
 import type { SessionRuntime } from "./sessionRuntime";
 import { clipText } from "./messageUtils";
@@ -207,8 +207,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         log: (text) => this.log(text),
         onClick: (key) => this.openNotice(key),
     });
-    /** 卡片标识 → 点开要去哪儿（地址）：跟卡片一起留，最多几十条。 */
-    private readonly noticeLinks = new Map<string, string>();
     /** 别的机器推来的卡片，标识前面挂这个（本机会话的标识就是会话号本身）。 */
     private static readonly REMOTE_NOTICE_PREFIX = "remote:";
 
@@ -748,80 +746,34 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         // 远程那几台：先推（推不出去就算了，不挡着下面本机这张）
         this.pushRemoteNote(sessionId, label, clipText(summary, REMOTE_TEXT_CHARS), kind);
         // 本机右下角这张：不管推没推出去都弹
-        this.showNotice(
-            sessionId,
-            label,
-            clipText(summary, NOTICE_TEXT_CHARS),
-            kind === "ask",
-            this.localPageUrl(sessionId),
-        );
+        this.showNotice(sessionId, label, clipText(summary, NOTICE_TEXT_CHARS), kind === "ask");
         this.log(`[提醒] 弹了一张（${kind === "ask" ? "等你答一句" : "跑完一轮"}）：${label}`);
     }
 
     /**
      * 弹一张提醒卡片。
-     * @param url 点它的时候打开哪儿（空串 = 点了没处去，就只是关掉）
+     * 左上角那颗小标签写的是设置里那项「标签」（空着就是电脑名）：一眼看出这张是这台弹的。
      */
-    private showNotice(key: string, title: string, body: string, ask: boolean, url: string): void {
-        if (url) {
-            this.noticeLinks.delete(key);
-            this.noticeLinks.set(key, url);
-            while (this.noticeLinks.size > 30) {
-                const oldest = this.noticeLinks.keys().next().value;
-                if (oldest === undefined) { break; }
-                this.noticeLinks.delete(oldest);
-            }
-        }
-        // 左上角那颗小标签写的是设置里那项「标签」（空着就是电脑名）：一眼看出这张是这台弹的
+    private showNotice(key: string, title: string, body: string, ask: boolean): void {
         this.notice.show(key, title, body, ask, displayName());
     }
 
     /** 收走某个会话那一张卡片（它说上话了、被关掉了、那道题答完了）。 */
     private closeNotice(key: string): void {
-        this.noticeLinks.delete(key);
         this.notice.close(key);
     }
 
     /**
-     * 人点了卡片：把那个会话拿到眼前。
+     * 人点了卡片：叫连着的网页切到那个会话。
      *
-     * 本机的会话、而且这台还有网页连着（一般情况网页就开着）：不开新标签，叫那块屏切过去，
-     * 再把浏览器窗口提到前面（见 DesktopNotice.raise）。网页没开着、或者这张是别的机器推来的，
-     * 还是用浏览器打开那张地址（本机的是这台后端的地址，别处推来的是那台的地址，都带 ?session=）。
+     * 只切会话：不去把浏览器窗口提到前面，也不新开浏览器。网页没开着、或者这张是别的机器推来的
+     * （本机页面上认不出它的会话号），就只是把这张收掉（notice.exe 自己会收）。
      */
     private openNotice(key: string): void {
-        const url = this.noticeLinks.get(key);
-        this.noticeLinks.delete(key);
-        if (!key.startsWith(ChatHost.REMOTE_NOTICE_PREFIX) && this.showSessionOnPages(key)) { return; }
-        if (url) { openInBrowser(url); }
-    }
-
-    /**
-     * 叫连着的网页切到某个会话，再把浏览器窗口提到前面。
-     *
-     * 连着几块屏就都切过去：提上来的会是哪个窗口、窗口里露的是哪个标签，这里都管不着，
-     * 都切过去才保证人眼前那一块是这个会话。
-     *
-     * @returns 有没有页面接着（一块都没连着 = false，那就退回开浏览器）
-     */
-    private showSessionOnPages(sessionId: string): boolean {
-        let sent = false;
+        if (key.startsWith(ChatHost.REMOTE_NOTICE_PREFIX)) { return; }
         this.forEachClient((_clientId, send) => {
-            send({ type: "switchToSession", sessionId });
-            sent = true;
+            send({ type: "switchToSession", sessionId: key });
         });
-        if (!sent) { return false; }
-        // 网页的标题是 `<标签>-pi`（见 pageHtml）：照它认那个浏览器窗口
-        const label = displayName();
-        this.notice.raise(label ? label + "-pi" : "pi");
-        return true;
-    }
-
-    /** 这台后端的页面地址，带着要切到哪个会话（页面自己会照它切过去）。 */
-    private localPageUrl(sessionId: string): string {
-        const base = this.options.selfPageUrl?.();
-        if (!base) { return ""; }
-        return base.replace(/\/+$/, "") + "/?session=" + encodeURIComponent(sessionId);
     }
 
     /**
@@ -1877,7 +1829,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             // 正文也推过去：那台弹卡片时才不会只剩一个名字
             text: summary,
             kind,
-            // 网页地址：对方点卡片时打开它，拼上 ?session= 就切到这个会话
+            // 这台的网页地址（那台留作回话地址，见 dev/weixinGateway.js）
             pageUrl: base.replace(/\/+$/, ""),
         };
         for (const target of targets) {
@@ -1889,19 +1841,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /**
      * 别的机器上的后端推来一条“有事”（网页服务那条 /notify 收到）。
      *
-     * 在这台照弹一张（人不会只坐一台前面），点了打开那台的页面并切到那个会话。
+     * 在这台照弹一张（人不会只坐一台前面）；点它只是把卡片收掉，本机管不着那台的会话。
      */
     public acceptRemoteNotice(notice: RemoteNotice): void {
         if (!this.notifyTurnEndEnabled()) { return; }
         const key = ChatHost.REMOTE_NOTICE_PREFIX + notice.label + ":" + notice.sessionId;
-        const base = (notice.pageUrl ?? "").replace(/\/+$/, "");
-        this.showNotice(
-            key,
-            notice.label + " · " + notice.name,
-            notice.text ?? "",
-            notice.kind === "ask",
-            base ? base + "/?session=" + encodeURIComponent(notice.sessionId) : "",
-        );
+        this.showNotice(key, notice.label + " · " + notice.name, notice.text ?? "", notice.kind === "ask");
         this.log(`[提醒] 弹了一张（别的机器推来的）：${notice.label} · ${notice.name}`);
     }
 
