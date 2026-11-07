@@ -42,28 +42,20 @@ export interface ServerWebSettings {
 }
 
 /**
- * 配对上的一台机器（见 src/chatHost.ts 的 pairInvite / acceptPair）。
+ * 跨机器的“有事”提醒（另一台机器上的后端跑完一轮，往这台推一条）。
  *
- * 两边都点头了（confirmed）才互相列表、才能互相发话；只点头一边的不算 ——
- * 我发出去还没被接受的、别人求我我还没答的，都是 confirmed=false。
+ * 只改推送方那一台：notify.pushTo（推到哪儿去）+ notify.pushLabel（自己是哪台）。
+ * 接收方什么都不用写（收到了就收）。不写 pushTo 就谁也不推。详见 src/remoteNotice.ts。
+ *
+ * 没有口令：这个后端本来就没有登录（README 里写着“只在信得过的网络里用”），
+ * 再加一道通知口令只是多一处要人对着抄的东西。浏览器那边仍然过 Origin 那道关
+ * （网页脚本没法替你往 /notify 里塞东西），机器对机器发的请求没有 Origin，照收。
  */
-export interface ServerPairing {
-    /** 对方网页服务的地址（`http://100.x:51883`，不带末尾斜杠）。 */
-    address: string;
-    /** 它叫什么（它设置里的「推送标签」，没写就是地址里的主机名）。 */
-    name: string;
-    /** 两边都点头了没有。 */
-    confirmed: boolean;
-    /** 这条是不是别人求我的（我还没答）。 */
-    incoming: boolean;
-}
-
-/** 跨机器配对（config.json 的 pairs 一节）。 */
-export interface ServerPairSettings {
-    /** 配过的那些台：只有 confirmed 的才推提醒过去（见 chatHost 的 pushRemoteNote）。 */
-    peers: ServerPairing[];
-    /** 明确拒绝过的地址：它们再来求也不弹（人不想要的就是不想要）。 */
-    rejected: string[];
+export interface ServerNotifySettings {
+    /** 推到这些地址（对方网页服务的地址，比如 `http://10.0.0.2:51883`）；一个都没有 = 不推。 */
+    pushTo: string[];
+    /** 推到对方那边时显示的名字（空 = 用这台的「这台叫什么」）。 */
+    pushLabel: string;
 }
 
 export interface ServerConfig {
@@ -78,7 +70,7 @@ export interface ServerConfig {
     fontSize: string;
     themeMode: "light" | "dark";
     /**
-     * 这台叫什么：别人那边的列表、提醒卡片、以及浏览器标签页标题都用它。
+     * 这台叫什么：提醒卡片左上角那颗小标签、以及浏览器标签页标题都用它。
      * 空着就用机器名（`GIH-D-26741` 这种，不好看但总是有的）。
      */
     label: string;
@@ -87,7 +79,7 @@ export interface ServerConfig {
      * 哪一项空着、或者根本不存在，就用内置原文（第一次启动会把内置原文写进来当起点）。
      */
     prompts: Record<string, string>;
-    pairs: ServerPairSettings;
+    notify: ServerNotifySettings;
     webServer: ServerWebSettings;
 }
 
@@ -110,8 +102,8 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = deepFreeze({
     // 提示词默认全部空着（空 = 用内置原文）：具体文字在 promptText.ts，
     // 第一次启动后端会把内置原文填进来，人照着改就行
     prompts: {},
-    // 跨机器配对默认一台也没有：得人自己填地址发起（见设置面板的「配对」）
-    pairs: { peers: [], rejected: [] },
+    // 跨机器的提醒默认谁也不推：得人自己在设置面板「消息推送」里填对方地址
+    notify: { pushTo: [], pushLabel: "" },
     // 默认对所有网卡开放（手机等设备打开地址就能用）；只给自己用就改 127.0.0.1，或启动时加 --host 127.0.0.1
     webServer: { port: 51883, host: "0.0.0.0", trustedOrigins: [] },
 });
@@ -132,7 +124,7 @@ function defaults(): ServerConfig {
     return {
         ...DEFAULT_SERVER_CONFIG,
         prompts: {},
-        pairs: { ...DEFAULT_SERVER_CONFIG.pairs, peers: [], rejected: [] },
+        notify: { ...DEFAULT_SERVER_CONFIG.notify, pushTo: [] },
         webServer: { ...DEFAULT_SERVER_CONFIG.webServer, trustedOrigins: [] },
     };
 }
@@ -144,8 +136,8 @@ const RETIRED_KEYS = new Set([
     "piPath", "extraArgs", "trustProject", "tabaEnabled",
     // 现在在设置面板里（存 state.json），不再从这儿读
     "notifyTurnEnd",
-    // 跨机器的提醒改成“配对即订阅”了：以前手填的推送地址不再读（见 README 的配对那段）
-    "notify",
+    // 跨机器那套「配对」撤了：改回手填推送地址（见 notify 一节）
+    "pairs",
 ]);
 /** 同上，webServer 那层里去掉的键。 */
 const RETIRED_WEB_KEYS = new Set(["enabled"]);
@@ -245,7 +237,7 @@ function pickOrigins(value: unknown, warnings: string[]): string[] {
 }
 
 /**
- * 一组地址（比如 pairs.rejected）：只收 http / https 的，规范化成 `http://主机:端口`
+ * 一组地址（比如 notify.pushTo）：只收 http / https 的，规范化成 `http://主机:端口`
  * （去掉末尾斜杠与路径），重复的并掉。
  */
 function pickUrlList(value: unknown, label: string, warnings: string[]): string[] {
@@ -275,42 +267,6 @@ function pickText(value: unknown, label: string, warnings: string[]): string {
         return "";
     }
     return value.trim();
-}
-
-/**
- * 一组配对（pairs.peers）：地址合法的才收，同一个地址只留一条（后来的覆盖先来的）。
- */
-function pickPairList(value: unknown, label: string, warnings: string[]): ServerPairing[] {
-    if (value === undefined) return [];
-    if (!Array.isArray(value)) {
-        warnings.push(`${label} 不是数组，已当成空列表`);
-        return [];
-    }
-    const kept: ServerPairing[] = [];
-    let bad = 0;
-    for (const item of value) {
-        if (!isPlainObject(item)) { bad += 1; continue; }
-        const address = typeof item.address === "string" ? normalizeOrigin(item.address) : undefined;
-        if (!address) { bad += 1; continue; }
-        const name = typeof item.name === "string" ? item.name.trim().slice(0, 60) : "";
-        const entry: ServerPairing = {
-            address,
-            name: name || hostOf(address),
-            confirmed: item.confirmed === true,
-            incoming: item.incoming === true,
-        };
-        const at = kept.findIndex((one) => one.address === address);
-        if (at >= 0) { kept[at] = entry; } else { kept.push(entry); }
-    }
-    if (bad > 0) {
-        warnings.push(`${label} 里有 ${bad} 项不是配对（要有 address），已丢掉`);
-    }
-    return kept;
-}
-
-/** 一个地址里的主机名（`http://100.1.2.3:51883` → `100.1.2.3`）：没写名字的时候拿它当名字。 */
-function hostOf(origin: string): string {
-    try { return new URL(origin).hostname; } catch { return origin; }
 }
 
 /**
@@ -423,13 +379,8 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
         }
     }
 
-    // ---- 这台叫什么（浏览器标题、别人那边的列表和提醒卡片都用它）----
-    // 早先那项「推送标签」（notify.pushLabel）改成了通用的一项：老配置里还写着就搬过来。
-    const legacyNotify = raw.notify;
-    const legacyLabel = isPlainObject(legacyNotify) && typeof legacyNotify.pushLabel === "string"
-        ? legacyNotify.pushLabel.trim()
-        : "";
-    config.label = pickText(raw.label, "label", warnings) || legacyLabel;
+    // ---- 这台叫什么（浏览器标题、提醒卡片左上角那颗小标签都用它）----
+    config.label = pickText(raw.label, "label", warnings);
 
     // ---- 提示词（config.json 的 prompts 一节）----
     // 空字符串 = 用内置原文（跟删掉这一项一个意思）
@@ -454,18 +405,18 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
         }
     }
 
-    // ---- 跨机器配对（config.json 的 pairs 一节）----
-    const pairs = raw.pairs;
-    if (pairs !== undefined) {
-        if (!isPlainObject(pairs)) {
-            warnings.push("pairs 不是一个对象，已全部用默认值");
+    // ---- 跨机器的“有事”提醒（config.json 的 notify 一节）----
+    const notify = raw.notify;
+    if (notify !== undefined) {
+        if (!isPlainObject(notify)) {
+            warnings.push("notify 不是一个对象，已全部用默认值");
         } else {
-            config.pairs.peers = pickPairList(pairs.peers, "pairs.peers", warnings);
-            config.pairs.rejected = pickUrlList(pairs.rejected, "pairs.rejected", warnings);
-            const knownPairKeys = new Set(Object.keys(DEFAULT_SERVER_CONFIG.pairs));
-            const unknownPairKeys = Object.keys(pairs).filter((key) => !knownPairKeys.has(key));
-            if (unknownPairKeys.length > 0) {
-                warnings.push(`配置里有不认识的项：pairs.${unknownPairKeys.join("、pairs.")}`);
+            config.notify.pushTo = pickUrlList(notify.pushTo, "notify.pushTo", warnings);
+            config.notify.pushLabel = pickText(notify.pushLabel, "notify.pushLabel", warnings);
+            const knownNotifyKeys = new Set(Object.keys(DEFAULT_SERVER_CONFIG.notify));
+            const unknownNotifyKeys = Object.keys(notify).filter((key) => !knownNotifyKeys.has(key));
+            if (unknownNotifyKeys.length > 0) {
+                warnings.push(`配置里有不认识的项：notify.${unknownNotifyKeys.join("、notify.")}`);
             }
         }
     }
@@ -597,7 +548,7 @@ function mergeServerConfig(base: ServerConfig, patch: DeepPartial<ServerConfig>)
     const baseRecord = base as unknown as Record<string, unknown>;
     for (const [key, value] of Object.entries(patch)) {
         if (value === undefined) continue;
-        // 一节一节的（webServer、pairs）是“改这一项”，不是“整节换掉”：只覆盖给到的键。
+        // 一节一节的（webServer、notify）是“改这一项”，不是“整节换掉”：只覆盖给到的键。
         const old = baseRecord[key];
         if (isPlainObject(value) && isPlainObject(old)) {
             merged[key] = { ...(old as Record<string, unknown>), ...(value as Record<string, unknown>) };

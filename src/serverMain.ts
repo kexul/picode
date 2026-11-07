@@ -294,7 +294,7 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
         log: (text) => log(`[网页服务] ${text}`),
         onUrlChanged: () => { /* 启动器自己会打印地址，这里不用管 */ },
         info: () => {
-            // name：这台叫什么（配对列表里显示的就是它）
+            // name：这台叫什么（提醒卡片左上角那颗小标签上写的就是它）
             const name = displayName();
             return { version: VERSION, ...(name ? { name } : {}) };
         },

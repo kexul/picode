@@ -1,0 +1,54 @@
+// @ts-nocheck
+/**
+ * 验「消息推送」这一路：设置文件里 notify.pushTo 填了别处的地址，跑完一轮就往那儿推一条。
+ *
+ *   npm run web:shot -- --fake-pi --script dev/remotePush.js
+ *
+ * 起一个本地收件口、把它写成 pushTo，发一句话等假 pi 回完，看收件口有没有收到那条。
+ * 跑完把设置文件放回原样。
+ */
+const fs = require("fs");
+const http = require("http");
+const path = require("path");
+
+const CONFIG_FILE = path.join(__dirname, ".scratch", "pichat", "config.json");
+
+module.exports = async (page) => {
+    const got = [];
+    const server = http.createServer((req, res) => {
+        let body = "";
+        req.on("data", (chunk) => { body += chunk; });
+        req.on("end", () => {
+            try { got.push(JSON.parse(body)); } catch { got.push({}); }
+            res.writeHead(204, { "Cache-Control": "no-store" });
+            res.end();
+        });
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = server.address().port;
+    const before = fs.existsSync(CONFIG_FILE) ? fs.readFileSync(CONFIG_FILE, "utf8") : undefined;
+    try {
+        let config = {};
+        try { config = JSON.parse(before || "{}"); } catch { config = {}; }
+        config.notify = { ...(config.notify || {}), pushTo: [`http://127.0.0.1:${port}`], pushLabel: "公司那台" };
+        fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), "utf8");
+
+        await page.send("你好");
+        for (let i = 0; i < 300; i++) {
+            if (got.length) { break; }
+            await page.sleep(100);
+        }
+        if (!got.length) { throw new Error("跑完一轮了，推送地址那边一条也没收到"); }
+        const notice = got[got.length - 1];
+        console.log("  · 收到推送：" + JSON.stringify(notice));
+        if (notice.label !== "公司那台") { throw new Error("推送标签没带上：" + notice.label); }
+        if (!notice.sessionId || !notice.pageUrl) { throw new Error("推送缺 sessionId / pageUrl"); }
+    } finally {
+        server.close();
+        try {
+            if (before === undefined) { fs.rmSync(CONFIG_FILE, { force: true }); }
+            else { fs.writeFileSync(CONFIG_FILE, before, "utf8"); }
+        } catch { /* 放不回去也别盖住真错误 */ }
+    }
+};

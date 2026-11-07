@@ -42,7 +42,7 @@ import { changedCharRanges, diffRows, type LineRanges } from "./wordDiff";
  *     跑同一样一份界面代码，只有整页交给它时是内联版（`/panel`，见 pageHtml.ts）；
  *   - **屏线**（VS Code 窗口，`/screen` + `/screenapi`）：窗口在后端登记自己是打开着哪些
  *     文件夹的，好让"用编辑器打开这个文件"这类活得有人干。
- *   另外有一个 `/health`，给单实例判断探活用；还有机器对机器那几条（`/notify`、`/pair/*`，见下面）。
+ *   另外有一个 `/health`，给单实例判断探活用；还有机器对机器那一条（`/notify`，见下面）。
  *
  * 方向：后端 → 页面/屏用"服务器推送"（长连接，随时能写）；页面/屏 → 后端用普通请求（POST）。
  * 桌面实时画面是唯一一条例外：页面自己开一条长连接把帧拉下去（一帧一段，
@@ -349,12 +349,8 @@ export interface WebServerHost {
     onServerStopped(): void;
     /** 当前界面颜色（写进页面的初始主题）。 */
     getThemeMode(): "light" | "dark";
-    /** 别处推来一条“有事”（`POST /notify`，口令已经核对过）：在本机右下角弹一条。 */
-    acceptRemoteNotice(notice: RemoteNotice, fromAddress?: string): void;
-    /** 别台请这台配对（`POST /pair/request`）：记下来等人去设置面板点头（拒过的直接回绝）。 */
-    receivePairRequest(address: string, name: string): { ok: boolean; reason?: string };
-    /** 别台回了这台那下配对请求（`POST /pair/reply`）：接受了就配上，拒绝了就把这条拿掉。 */
-    receivePairReply(address: string, accepted: boolean): void;
+    /** 别处推来一条“有事”（`POST /notify`）：在本机右下角弹一条。 */
+    acceptRemoteNotice(notice: RemoteNotice): void;
 }
 
 export interface WebServerHooks {
@@ -585,15 +581,6 @@ export class PiChatWebServer {
             // 别的 pichat 后端推来的“有事”（机器对机器，见 src/remoteNotice.ts）
             if (pathname === "/notify") {
                 void this.handleRemoteNotice(req, res);
-                return;
-            }
-            // 跨机器配对（机器对机器，同一个规矩）：这台请那台点头、那台回了这台一句
-            if (pathname === "/pair/request") {
-                void this.handlePairRequest(req, res);
-                return;
-            }
-            if (pathname === "/pair/reply") {
-                void this.handlePairReply(req, res);
                 return;
             }
             if (pathname === "/" || pathname === "/index.html") {
@@ -1728,72 +1715,9 @@ export class PiChatWebServer {
             this.sendText(req, res, 400, "这条通知缺东西（要 sessionId）。");
             return;
         }
-        // 这条是谁发来的：那台自己报的地址不一定是我们到得了的（多网卡时它可能挑了别的网段），
-        // 记下来，以后连它就用这个地址（见 chatHost 的 rememberPeer）
-        this.host.acceptRemoteNotice(notice, (req.socket.remoteAddress ?? "").replace(/^::ffff:/, ""));
-        res.writeHead(204, { "Cache-Control": "no-store" });
-        res.end();
-    }
-
-    /** 别台请这台配对（`POST /pair/request`）：记下来等人去设置面板点头；拒过的直接回 403。 */
-    private async handlePairRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-        if (req.method !== "POST") {
-            this.sendText(req, res, 405, "只接受 POST。");
-            return;
-        }
-        const text = await readBody(req, MAX_REQUEST_BYTES);
-        if (text === undefined) {
-            this.sendText(req, res, 413, "请求内容过大。");
-            return;
-        }
-        let raw: unknown;
-        try {
-            raw = JSON.parse(text);
-        } catch {
-            this.sendText(req, res, 400, "请求内容不是合法的 JSON。");
-            return;
-        }
-        const body = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-        const address = typeof body.address === "string" ? body.address.trim() : "";
-        const name = typeof body.name === "string" ? body.name.trim().slice(0, 60) : "";
-        if (!address) {
-            this.sendJson(req, res, 400, { ok: false, reason: "要 address（你这台的地址）" });
-            return;
-        }
-        const result = this.host.receivePairRequest(address, name);
-        if (!result.ok) {
-            this.sendJson(req, res, 403, { ok: false, reason: result.reason ?? "不接受。" });
-            return;
-        }
-        res.writeHead(204, { "Cache-Control": "no-store" });
-        res.end();
-    }
-
-    /** 那台回了这台那下配对请求（`POST /pair/reply`）：接受 / 不接受 / 解除都走这条。 */
-    private async handlePairReply(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-        if (req.method !== "POST") {
-            this.sendText(req, res, 405, "只接受 POST。");
-            return;
-        }
-        const text = await readBody(req, MAX_REQUEST_BYTES);
-        if (text === undefined) {
-            this.sendText(req, res, 413, "请求内容过大。");
-            return;
-        }
-        let raw: unknown;
-        try {
-            raw = JSON.parse(text);
-        } catch {
-            this.sendText(req, res, 400, "请求内容不是合法的 JSON。");
-            return;
-        }
-        const body = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-        const address = typeof body.address === "string" ? body.address.trim() : "";
-        if (!address) {
-            this.sendJson(req, res, 400, { ok: false, reason: "要 address（你这台的地址）" });
-            return;
-        }
-        this.host.receivePairReply(address, body.accepted === true);
+        // 这条是谁发来的：那台自己报的地址不一定是我们到得了的（多网卡时它可能挑了别的网段）：
+        // 这次是哪台推来的就按通知里报的名字认，不记地址（要回话是打开它推来的那个网页地址）
+        this.host.acceptRemoteNotice(notice);
         res.writeHead(204, { "Cache-Control": "no-store" });
         res.end();
     }

@@ -99,13 +99,10 @@ export interface ViewOptionItem {
     value?: string;
     options?: Array<{ value: string; label: string }>;
     kind?: string;
-    /** 填字那一行（kind: "text"）里那句灰字提示。 */
-    placeholder?: string;
     /**
-     * 一组行（kind: "pairs"）：配对面板用。
-     * 每行一个地址 + 名字 + 现在什么状态（incoming：它求我点头；confirmed：两边配上了）。
+     * 填字那行（kind: "text"）里那句灰字提示。
      */
-    items?: Array<{ address: string; name: string; incoming?: boolean; confirmed?: boolean }>;
+    placeholder?: string;
     min?: number;
     max?: number;
     step?: number;
@@ -338,13 +335,15 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract mutateViewOption(action: string, value?: string): void;
     /** 有事（跑完一轮 / 模型在等你答题）时要不要弹提醒（各平台的子类去读自己的存储）。 */
     protected abstract notifyTurnEndEnabled(): boolean;
+    /** 设置面板里「消息推送」那一行现在填着什么（没有就是空表）。 */
+    protected notifyPushTargets(): string[] { return []; }
+    /** 设置面板里「推到那边时叫它什么」那一行现在填着什么。 */
+    protected notifyPushLabel(): string { return ""; }
     /**
-     * 设置面板里「配对情况」那一块现在是什么情况：已经配上的、等我点头的（见 chatHost 的 pairRows）。
-     * 默认一台也没有（插件那边没有跨机器这回事）。
+     * 设置面板里「消息推送」那一行空着时显示的例子：一般就是这台机器自己的地址，
+     * 人一看就知道“留着它”是什么意思（提醒还在这台）。
      */
-    protected pairRows(): Array<{ address: string; name: string; incoming: boolean; confirmed: boolean }> {
-        return [];
-    }
+    protected notifyPushExample(): string { return "http://10.0.0.2:51883"; }
     /** 设置里「这台叫什么」现在填着什么（空 = 用机器名）。 */
     protected machineLabel(): string { return ""; }
     /** 「这台叫什么」空着时那句灰字提示：就是机器名，人一眼知道空着会用哪个。 */
@@ -511,36 +510,33 @@ export abstract class ChatControllerBase implements RuntimeHost {
             {
                 action: "machineLabel",
                 label: "这台叫什么",
-                desc: "别人那边的列表、提醒卡片、还有浏览器标签页的标题都用它；空着就用电脑名",
-                section: "配对",
+                desc: "",
+                section: "通知",
                 check: null,
                 kind: "text",
                 placeholder: this.machineLabelExample(),
                 value: this.machineLabel(),
             },
             {
-                action: "pairInvite",
-                label: "配对",
-                desc: "填对方的地址（IP，或者 IP:端口），回车：对方在设置里点「接受」之后，两边就互相看得到对方开着的会话",
-                section: "配对",
+                action: "notifyPushTo",
+                label: "消息推送",
+                desc: "",
+                section: "通知",
                 check: null,
                 kind: "text",
-                placeholder: "100.93.255.114",
-                value: "",
+                placeholder: this.notifyPushExample(),
+                // 没填过就显示这台机器自己的地址：留着它 = 提醒还在这台，改成别的机器 = 挪过去
+                value: (this.notifyPushTargets().length > 0 ? this.notifyPushTargets() : [this.notifyPushExample()]).join(", "),
             },
             {
-                action: "pairList",
-                label: "配对情况",
+                action: "notifyPushLabel",
+                label: "推送标签",
                 desc: "",
-                section: "配对",
+                section: "通知",
                 check: null,
-                kind: "pairs",
-                items: this.pairRows().map((row) => ({
-                    address: row.address,
-                    name: row.name,
-                    incoming: row.incoming,
-                    confirmed: row.confirmed,
-                })),
+                kind: "text",
+                placeholder: "家里那台",
+                value: this.notifyPushLabel(),
             },
         ];
     }

@@ -22,8 +22,8 @@ import { writeAskAnswer } from "./askProtocol";
 import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase, type ViewOptionItem, type WorkspacePage } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
-import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig, type ServerPairing } from "./serverConfig";
-import { hostOfUrl, isOwnPage, pushRemoteNotice, type RemoteNotice } from "./remoteNotice";
+import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
+import { isOwnPage, pushRemoteNotice, type RemoteNotice } from "./remoteNotice";
 import { getAskAssets, getBashAssets, getEnvAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
 import {
@@ -38,7 +38,7 @@ import { listDirectories } from "./dirBrowse";
 import { findFileContents, findFileNames, findPathCandidates } from "./fileSearch";
 import { ChatBroadcaster } from "./chatBroadcaster";
 import { displayName, machineName } from "./pageHtml";
-import { MessageBuffer, PAGE_TRANSIENT_MESSAGE_TYPES, normalizeOrigin } from "./webTransport";
+import { MessageBuffer, PAGE_TRANSIENT_MESSAGE_TYPES } from "./webTransport";
 import { pickOverlayClient } from "./overlayTarget";
 import { ScreenRegistry } from "./screenRegistry";
 import { dirInsideAny, dirKey } from "./pathRules";
@@ -123,16 +123,6 @@ function withDefaultPort(url: string): string {
     } catch {
         return url;   // 不像话的地址原样交上去，那层会把它当无效项丢掉
     }
-}
-
-/**
- * 人填的配对地址 → `http://主机:端口`：没写 `http://` 补上，没写端口按出厂那个（51883）算，
- * 末尾斜杠去掉。不像话的给 undefined（不试、不报错）。
- */
-function pairOriginOf(raw: string): string | undefined {
-    const text = String(raw ?? "").trim();
-    if (!text) { return undefined; }
-    return normalizeOrigin(withDefaultPort(/^https?:\/\//i.test(text) ? text : "http://" + text));
 }
 
 /** 这条消息是不是“一次性界面”（确认框、浮层、跑完提醒）：补发里只有序号位、没有内容。 */
@@ -1067,7 +1057,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     protected notifyTurnEndEnabled(): boolean { return this.getNotifyTurnEnd(); }
 
     // ========================================================================
-    //  跨机器配对（设置面板里填地址发起，对方点接受）
+    //  跨机器的提醒（设置面板里填对方地址，推过去）
     // ========================================================================
 
     /** 设置里「这台叫什么」现在填着什么（空 = 用机器名，见 pageHtml 的 displayName）。 */
@@ -1080,138 +1070,19 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return machineName();
     }
 
-    /** 设置面板里「配对情况」那一块的几行（已配对、等我答的）。 */
-    protected override pairRows(): Array<{ address: string; name: string; incoming: boolean; confirmed: boolean }> {
-        return readServerConfig().config.pairs.peers.map((peer) => ({
-            address: peer.address,
-            name: peer.name,
-            incoming: peer.incoming,
-            confirmed: peer.confirmed,
-        }));
+    /** 设置面板里「有事也推到别的机器」那一行现在填着什么（设置文件里的 notify.pushTo）。 */
+    protected override notifyPushTargets(): string[] {
+        return [...readServerConfig().config.notify.pushTo];
     }
 
-    /** 这台在配对里叫什么（设置里那项「这台叫什么」，空着就是机器名；对方那张卡片上写的就是它）。 */
-    private pairSelfName(): string {
-        return displayName();
+    /** 设置面板里「推到那边时叫它什么」那一行现在填着什么（设置文件里的 notify.pushLabel）。 */
+    protected override notifyPushLabel(): string {
+        return readServerConfig().config.notify.pushLabel;
     }
 
-    /** 写一条配对（同一个地址覆盖旧的）。 */
-    private savePair(entry: ServerPairing): void {
-        const peers = readServerConfig().config.pairs.peers.filter((peer) => peer.address !== entry.address);
-        peers.push(entry);
-        updateServerConfig({ pairs: { peers } });
-        if (entry.confirmed) { this.forgetRejected(entry.address); }
-    }
-
-    /** 删一条配对；顺手把它从「拒绝过」的名单里擦掉（rejected 为真时把它记进去）。 */
-    private dropPair(address: string, rejected: boolean): void {
-        const cfg = readServerConfig().config.pairs;
-        const peers = cfg.peers.filter((peer) => peer.address !== address);
-        const rejectedList = cfg.rejected.filter((item) => item !== address);
-        updateServerConfig({ pairs: { peers, rejected: rejected ? [...rejectedList, address] : rejectedList } });
-    }
-
-    private forgetRejected(address: string): void {
-        const cfg = readServerConfig().config.pairs;
-        if (!cfg.rejected.includes(address)) { return; }
-        updateServerConfig({ pairs: { rejected: cfg.rejected.filter((item) => item !== address) } });
-    }
-
-    /**
-     * 设置面板里填了个地址、要跟那台配对：先记下“我在等它答”，再请它点头（`POST /pair/request`）。
-     * 它连不上也照记 —— 人家可能只是暂时不在，设置面板里能删。
-     */
-    public pairInvite(raw: string): { ok: boolean; reason?: string } {
-        const address = pairOriginOf(raw);
-        if (!address) { return { ok: false, reason: "地址写得不对（要像 100.93.255.114 或 100.93.255.114:51883 这样）" }; }
-        const self = this.options.selfPageUrl?.()?.replace(/\/+$/, "");
-        if (!self) { return { ok: false, reason: "这台还没有网页服务地址，没法配对" }; }
-        if (isOwnPage(address, self)) { return { ok: false, reason: "这是这台自己" }; }
-        this.savePair({ address, name: hostOfUrl(address) || address, confirmed: false, incoming: false });
-        void this.sendPairRequest(address, self, this.pairSelfName());
-        return { ok: true };
-    }
-
-    /** 设置面板里点「接受」：两边算配上了，它以后有事就推一张过来。 */
-    public acceptPair(address: string): void {
-        const peer = readServerConfig().config.pairs.peers.find((item) => item.address === address);
-        const name = peer?.name || hostOfUrl(address) || address;
-        this.savePair({ address, name, confirmed: true, incoming: false });
-        this.log(`[配对] 跟「${name}」配上了：它那边有事会推一张卡片过来。`);
-        void this.sendPairReply(address, true, this.pairSelfName());
-    }
-
-    /** 设置面板里点「不接受」：记下来，它再来求也不弹。 */
-    public rejectPair(address: string): void {
-        this.dropPair(address, true);
-        this.log(`[配对] 不接受「${address}」：它推来的提醒不收。`);
-        void this.sendPairReply(address, false, this.pairSelfName());
-    }
-
-    /** 解除已经配上的那台（在它那也一并说一声）。 */
-    public removePair(address: string): void {
-        this.dropPair(address, false);
-        this.log(`[配对] 跟「${address}」解除了，不再收它推来的提醒。`);
-        void this.sendPairReply(address, false, this.pairSelfName());
-    }
-
-    /** 别台发来配对请求（`POST /pair/request`）：记下来等人点头；拒过的直接回绝。 */
-    public receivePairRequest(address: string, name: string): { ok: boolean; reason?: string } {
-        const origin = pairOriginOf(address);
-        if (!origin) { return { ok: false, reason: "少了地址" }; }
-        if (readServerConfig().config.pairs.rejected.includes(origin)) {
-            return { ok: false, reason: "这台不接受跟你的配对" };
-        }
-        const existing = readServerConfig().config.pairs.peers.find((item) => item.address === origin);
-        if (existing?.confirmed) { return { ok: true }; }
-        this.savePair({ address: origin, name: name || hostOfUrl(origin) || origin, confirmed: false, incoming: true });
-        this.log(`[配对] 「${name || origin}」想跟你配对：去设置面板里点接受或拒绝。`);
-        return { ok: true };
-    }
-
-    /** 别台回了那一下（`POST /pair/reply`）：接受了就配上，拒绝了就把这条拿掉。 */
-    public receivePairReply(address: string, accepted: boolean): void {
-        const origin = pairOriginOf(address);
-        if (!origin) { return; }
-        if (accepted) {
-            const peer = readServerConfig().config.pairs.peers.find((item) => item.address === origin);
-            this.savePair({ address: origin, name: peer?.name || hostOfUrl(origin) || origin, confirmed: true, incoming: false });
-            this.log(`[配对] 「${origin}」接受了：它那边有事会推一张卡片过来。`);
-            return;
-        }
-        this.dropPair(origin, false);
-        this.log(`[配对] 「${origin}」那边不配对了，这条拿掉了。`);
-    }
-
-    /** 请那台点头（机器对机器，跟 /notify 一个规矩：没口令，只在信得过的网络里用）。 */
-    private async sendPairRequest(address: string, self: string, name: string): Promise<void> {
-        try {
-            const res = await fetch(address + "/pair/request", {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({ address: self, name }),
-                signal: AbortSignal.timeout(5000),
-            });
-            if (res.ok) {
-                this.log(`[配对] 已经请「${address}」点头：它接受之后，它开着的会话就会出现在列表里。`);
-                return;
-            }
-            this.log(`[配对] 「${address}」没接这个请求（${res.status}）`);
-        } catch {
-            this.log(`[配对] 连不上「${address}」：这台机器在不在、地址对不对、端口是不是 51883？`);
-        }
-    }
-
-    /** 把结果回给对方（接受 / 不接受 / 解除都用它）。 */
-    private async sendPairReply(address: string, accepted: boolean, name: string): Promise<void> {
-        try {
-            await fetch(address + "/pair/reply", {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({ address: this.options.selfPageUrl?.()?.replace(/\/+$/, "") ?? "", accepted, name }),
-                signal: AbortSignal.timeout(5000),
-            });
-        } catch { /* 对方不在也就算了：下次配对时会重来 */ }
+    /** 「消息推送」空着时那句灰字例子：这台机器自己的地址。 */
+    protected override notifyPushExample(): string {
+        return this.options.selfPageUrl?.()?.replace(/\/+$/, "") ?? super.notifyPushExample();
     }
 
     /**
@@ -1296,19 +1167,20 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             }
         } else if (action === "machineLabel") {
             updateServerConfig({ label: String(value ?? "").trim() });
-        } else if (action === "pairInvite") {
-            // 填了一下地址就请人家点头（填空什么都不做：面板上那行永远是空的，靠它“提交”）
-            const text = String(value ?? "").trim();
-            if (text) {
-                const result = this.pairInvite(text);
-                this.log(result.ok ? `[配对] 已经请「${text}」点头。` : `[配对] 没发出去：${result.reason ?? "不知道什么原因"}`);
-            }
-        } else if (action === "pairAccept") {
-            if (value) { this.acceptPair(value); }
-        } else if (action === "pairReject") {
-            if (value) { this.rejectPair(value); }
-        } else if (action === "pairRemove") {
-            if (value) { this.removePair(value); }
+        } else if (action === "notifyPushTo") {
+            // 填的是给人看的写法：逗号 / 空格 / 换行都算分隔；没写 http:// 的补上，
+            // 没写端口的补上 Pi Chat 出厂那个（51883）——否则按 http 的默认端口 80 算，打不通。
+            // 地址合不合法由设置文件那层把关（不合适的会被丢掉，面板上就看不见它们了）。
+            const urls = String(value ?? "")
+                .split(/[\s,;]+/)
+                .map((item) => item.trim())
+                .filter((item) => item.length > 0)
+                .map((item) => withDefaultPort(/^https?:\/\//i.test(item) ? item : "http://" + item))
+                // 填本机自己的地址等于没填（面板上照样显示它，但设置文件里不留这行废话）
+                .filter((item) => !isOwnPage(item, this.options.selfPageUrl?.()));
+            updateServerConfig({ notify: { pushTo: urls } });
+        } else if (action === "notifyPushLabel") {
+            updateServerConfig({ notify: { pushLabel: String(value ?? "").trim() } });
         } else if (action === "theme") {
             const next = value === "dark" || value === "light"
                 ? value
@@ -1947,23 +1819,21 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
-     * 把这条“有事”推给别的后端（已经配上的那几台，见 pairInvite）。
+     * 把这条“有事”推给别的后端（设置里「消息推送」填了别处的地址才有这回事）。
      * 推的是一条最小的通知：哪台、哪个会话、叫什么、说了什么。
      * 推不过去就算了（对方没起、网断了都一样：不重试、不攒着）。
      * @returns 推给了别处没有（推了这台就不自己弹：一个人只盯得了一台机器）
      */
     protected override pushRemoteNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): boolean {
+        const notify = readServerConfig().config.notify;
         const base = this.options.selfPageUrl?.();
         if (!base) { return false; }
-        // 推给谁：已经配上的那几台（配对就是订阅，见 pairInvite）。
-        // 推出去一台以后这台就不弹了（返回 true）：人只盯得了一台。
-        const targets = readServerConfig().config.pairs.peers
-            .filter((peer) => peer.confirmed)
-            .map((peer) => peer.address)
-            .filter((target) => !isOwnPage(target, base));
+        // 填的是这台自己的地址（面板上默认就显示它）等于“提醒还在这台”：不推给自己，本机自己弹
+        const targets = notify.pushTo.filter((target) => !isOwnPage(target, base));
         if (targets.length === 0) { return false; }
         const notice = {
-            label: this.pairSelfName(),
+            // 推过去那边卡片上写的名字：设置里的「推送标签」，空着就用「这台叫什么」
+            label: notify.pushLabel || displayName(),
             sessionId,
             name,
             // 正文也推过去：那台弹卡片时才不会只剩一个名字
@@ -1979,7 +1849,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
-     * 别的机器上的后端推来一条“有事”（网页服务那条 /notify 收到、口令核对过了）。
+     * 别的机器上的后端推来一条“有事”（网页服务那条 /notify 收到）。
      *
      * 在这台照弹一张（人不会只坐一台前面），点了打开那台的页面并切到那个会话。
      */
