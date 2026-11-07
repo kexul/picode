@@ -8,5 +8,7 @@
   },
   // src/diffMatchPatch.js 是照抄来的 JS（Google 的 diff-match-patch）：后端要用它，
   // 但它从 serverMain.ts 那里 import 到的是旁边的 .d.ts（类型），所以得单独列进来才编得出。
-  "include": ["src/serverMain.ts", "src/diffMatchPatch.js"]
+  // relayMain.ts 是另一个进程的入口（「中转」，见 relayMain.ts）：它不被 serverMain import，
+  // 但一样要编到 out/server 里 —— 后端会 detached 起它。
+  "include": ["src/serverMain.ts", "src/relayMain.ts", "src/diffMatchPatch.js"]
 }

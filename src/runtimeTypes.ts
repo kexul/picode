@@ -73,6 +73,11 @@ export interface PanelLaunch {
     noTaba?: boolean;
     /** 覆盖工作目录（角色文件里指定的时候）。 */
     cwd?: string;
+    /**
+     * 接管「中转」里一只正在跑的 pi（重启后端以后把会话认回来）：中转那边认这个名字，
+     * 这里不再起新的进程。见 relayMain.ts。
+     */
+    adoptKey?: string;
 }
 
 /** 可选模型信息（来自 pi get_available_models）。 */

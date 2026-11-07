@@ -20,6 +20,7 @@ import { displayName } from "./pageHtml";
 import { readServerConfig, updateServerConfig, seedPrompts } from "./serverConfig";
 import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
 import { startRestart } from "./serverRestart";
+import { ensureRelay, forgetRelay, type RelayLink } from "./relayClient";
 import { ensureAskAssets, ensureImageAssets, ensureTabaAssets, ensureTitleAssets, ensureBashAssets, ensureEnvAssets } from "./bridgeAssets";
 import { serverConfigFile } from "./serverPaths";
 
@@ -235,6 +236,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         if (stopping) { return; }
         stopping = true;
         console.log(`\n[${stamp()}] 收到 ${signal}，正在收摊（停网页服务、杀掉所有 pi 进程）…`);
+        // 这是“我不干了”：连中转手里的 pi 一起收（跟「编译并重启」不是一回事）
         void started.stop().then(() => exitSoon());
     };
     process.on("SIGINT", () => onSignal("SIGINT"));
@@ -267,8 +269,11 @@ export interface StartedBackend {
     host0: string;
     host: ChatHost;
     server: PiChatWebServer;
-    /** 收摊：停网页服务、清地址文件、杀掉所有 pi 进程。quiet = 不跟页面道别（重启后端时用）。 */
-    stop: (quiet?: boolean) => Promise<void>;
+    /**
+     * 收摊：停网页服务、清地址文件、杀掉所有 pi 进程。quiet = 不跟页面道别（重启后端时用）。
+     * keepPi = 只把这边放手、pi 留着（「编译并重启」走这条：新后端马上会连上中转把它们接回去）。
+     */
+    stop: (quiet?: boolean, keepPi?: boolean) => Promise<void>;
 }
 
 /**
@@ -280,8 +285,13 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
     const cwd = path.resolve(options.cwd);
     const bindHost = options.host ?? "0.0.0.0";
 
+    // 「中转」：拿着 pi 管道的那支常驻进程（见 relayMain.ts）。起手先找它 / 起一支：
+    // 有了它，pi 就不归这个后端养，后端自己编译、重启都掐不到它们。
+    // 拿不到（起不来、或被 PICHAT_NO_RELAY 关掉）就返回 undefined，退回"自己起 pi"那条老路。
+    const relay: RelayLink | undefined = await ensureRelay((text) => log(text));
+
     // 设置浮层里那颗「编译并重启」：按钮点下去要的是「怎么起的、起在哪儿」，所以由这一层接；
-    // 收摊（停网页服务、杀掉 pi 进程）也在这一层，见下面给 restartBackend 赋值那块。
+    // 收摊（停网页服务、放手 / 杀掉 pi 进程）也在这一层，见下面给 restartBackend 赋值那块。
     let restartBackend = (): { ok: boolean; reason?: string } => ({ ok: false, reason: "后端还没起来，不能重启。" });
     // 推给别的后端时要认出“这条别推给自己”，可地址要等服务起来才知道：先留个口子，起来后插进去
     let pageUrl: string | undefined;
@@ -316,6 +326,9 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
     }
     pageUrl = url;
 
+    // 起手认回还在跑的会话（重启后端时它们在中转那边一直没死）：不阻塞启动，认回来就推给页面。
+    void host.restoreLiveSessions();
+
     // 地址文件：单实例判断与"插件找后端"（第二步）都靠它。
     const parsed = new URL(url);
     writeServerAddress({
@@ -329,12 +342,20 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
     });
 
     let stopped = false;
-    const stop = async (quiet = false): Promise<void> => {
+    const stop = async (quiet = false, keepPi = false): Promise<void> => {
         if (stopped) { return; }
         stopped = true;
         try { await server.stop(quiet); } catch { /* 已经停了 */ }
-        try { host.dispose(); } catch { /* 收摊出错不拦路 */ }
+        // keepPi：只把这边放手（会话运行时不再听 pi 的话，但也别结果它们）；
+        // 否则就是"我不干了"：连中转手里的 pi 一起收，中转自己也退。
+        try { host.dispose(keepPi); } catch { /* 收摊出错不拦路 */ }
         try { clearServerAddress(); } catch { /* 清不掉也只是留个过期文件，下次启动会接管 */ }
+        if (keepPi) {
+            relay?.close();
+        } else if (relay) {
+            relay.shutdown();
+        }
+        forgetRelay();
     };
 
     restartBackend = () => {
@@ -353,7 +374,8 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
             // 小进程正等着这个进程号消失，看到它没了才动手编译。
             // （终端里起的后端没有小进程：终端里那一层等它退完，就在那个终端里编译、起回来。）
             // 收摊时不跟页面道别：页面收到道别就不自己重连了，可这个服务几十秒后还会在同一个地址上回来。
-            setTimeout(() => { void stop(true).finally(() => exitSoon()); }, 500);
+            // keepPi：这次走人的只是这个后端，pi 留在中转手里，过几十秒新后端连上来接着用。
+            setTimeout(() => { void stop(true, true).finally(() => exitSoon()); }, 500);
         }
         return result;
     };

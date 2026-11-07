@@ -33,3 +33,16 @@ export function autoFile(dir: string = pichatDir()): string {
     return path.join(dir, "auto.json");
 }
 
+/**
+ * 「中转」的地址文件：它监听的端口与口令（见 relayMain.ts）。
+ * 后端起手时先看这份：能连上就直接用，不是自己起的就另起一支。
+ */
+export function relayAddressFile(dir: string = pichatDir()): string {
+    return path.join(dir, "relay.json");
+}
+
+/** 中转自己的输出（它跟后端不共用终端，出错只能看这份）。 */
+export function relayLogFile(dir: string = pichatDir()): string {
+    return path.join(dir, "relay.log");
+}
+

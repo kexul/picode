@@ -50,6 +50,7 @@ import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { DesktopLive } from "./desktopLive";
 import { DesktopNotice, openInBrowser } from "./desktopNotice";
 import { describeRestart } from "./serverRestart";
+import { relayLink } from "./relayClient";
 import type { SessionRuntime } from "./sessionRuntime";
 import { clipText } from "./messageUtils";
 import {
@@ -2041,10 +2042,13 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return this.confirmDialog("回滚修改", message, sessionId);
     }
 
-    /** 停掉本工作区的所有 pi 进程（页面与界面的生死与此无关）。 */
-    protected disposeAllConversations(): void {
+    /**
+     * 停掉本工作区的所有 pi 进程（页面与界面的生死与此无关）。
+     * @param keepPi 别杀它们，只是这边放手（重启后端时用：pi 留在中转手里，新后端接着用）
+     */
+    protected disposeAllConversations(keepPi = false): void {
         for (const rt of this.panels.values()) {
-            rt.stopClient();
+            rt.stopClient(keepPi);
             this.releasePanelName(rt.nameParts);
         }
         this.panels.clear();
@@ -2058,14 +2062,38 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 那两样各自都挂着一根很长的定时器（浮层 2 分钟、问话卡片 25 分钟）：不收掉的话
      * 宿主没了它们还活着，进程非要等到那时候才退（调试用的脚手架里就是这么“卡住”的）。
      */
-    public dispose(): void {
+    public dispose(keepPi = false): void {
         if (this.disposed) { return; }
         this.disposed = true;
         this.desktopLive.stop();
         this.notice.dispose();
         this.disposeAllPickers();
         this.disposeAllCards();
-        this.disposeAllConversations();
+        this.disposeAllConversations(keepPi);
+        // 备用进程是一只还没主的 pi：重启后端以后谁也认不回它，一律收掉（它本来就是随用随领的）
+        if (keepPi) { this.disposeSpare(); }
+    }
+
+    /**
+     * 起手把「中转」里还在跑的会话认回来（重启后端以后立刻调一次）。
+     *
+     * 会话 id、会话文件都在中转那边记着（见 PiClient.label）：照它们把会话建回来、
+     * 挂上同一只 pi。页面重连时拿到的还是原来那几个会话，跟刷新了一下浏览器一样。
+     */
+    public async restoreLiveSessions(): Promise<void> {
+        const link = relayLink();
+        if (!link) { return; }
+        let list;
+        try { list = await link.list(); } catch { return; }
+        const live = list.filter((item) => !!item.panelId && !!item.sessionFile);
+        if (live.length === 0) { return; }
+        this.log(`把 ${live.length} 个还在跑的会话认回来（pi 一直没死）`);
+        this.adoptLiveSessions(live.map((item) => ({
+            panelId: item.panelId!,
+            sessionFile: item.sessionFile!,
+            ...(item.cwd ? { cwd: item.cwd } : {}),
+            key: item.key,
+        })));
     }
 
     /** 还挂着的问话卡片一律按“没作答”收掉（连它们那根定时器一起放掉）。 */

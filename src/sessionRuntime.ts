@@ -219,6 +219,8 @@ export class SessionRuntime {
     /** 正在加载会话 / 分叉（pi 冷启动 + 切换会话期间为 true，供宿主展示加载态）。 */
     public loading = false;
     public currentSessionPath: string | undefined;
+    /** 已经告诉过中转的会话文件（同一个不用反复报） */
+    private labeledFile: string | undefined;
     /** 当前界面是否已有用户或助手消息；用于历史会话打开时复用空会话。 */
     private hasConversation = false;
     /** pi 上报的会话标题；来源是 session_info_changed 事件与 get_state 响应里的 sessionName。 */
@@ -382,6 +384,16 @@ export class SessionRuntime {
 
         const want = modelOverride ?? this.currentModel();
 
+        // 接管一只正在跑的 pi（重启后端后认回会话）：不领备用进程、也不新起一个
+        if (this.launch?.adoptKey) {
+            this.attachClient(new PiClient({
+                piPath: this.host.getConfig().piPath,
+                cwd: this.cwd,
+                adoptKey: this.launch.adoptKey,
+            }));
+            return;
+        }
+
         // 备用进程已就绪：直接挂上，避免 pi 冷启动等待（子会话不行：它的启动参数不一样）
         const spare = this.launch?.skipSpare ? undefined : this.host.claimSpareClient?.();
         if (spare) {
@@ -531,9 +543,13 @@ export class SessionRuntime {
         }
     }
 
-    public stopClient(): void {
+    /**
+     * 这个会话不再跟它的 pi 说话了。
+     * @param keepPi 别杀那只 pi，只是这边放手（重启后端时用：pi 留在中转手里，新后端接着用）
+     */
+    public stopClient(keepPi = false): void {
         if (this.client) {
-            this.client.stop();
+            this.client.stop({ keep: keepPi });
             this.client = undefined;
         }
         // 会话关掉：「改动」那一格不用清（它每次都现问 git，见 gitChanges.ts），
@@ -680,6 +696,22 @@ export class SessionRuntime {
         }
     }
 
+    /**
+     * 告诉中转"这只是哪个会话、哪个文件"：重启后端时照它把会话认回来（见 relayMain.ts）。
+     * 新会话的会话文件要等第一条消息落盘才有，所以这里既在已知时上报、也在每一轮前后补问一次。
+     */
+    private noteSessionFileLabel(file: string | undefined): void {
+        if (!file || file === this.labeledFile) { return; }
+        this.labeledFile = file;
+        this.client?.label({ panelId: this.id, sessionFile: file, cwd: this.cwd });
+    }
+
+    /** 问一次 pi 现在的会话文件（新会话的头一轮会把它造出来）。 */
+    private async refreshSessionFileLabel(): Promise<void> {
+        const resp = await this.request<RpcSessionState>({ type: "get_state" });
+        this.noteSessionFileLabel(resp?.data?.sessionFile);
+    }
+
     /** 主动问 pi 一次当前会话标题（切换到已有会话后用）。 */
     private async refreshSessionTitle(): Promise<void> {
         const resp = await this.request<RpcSessionState>({ type: "get_state" });
@@ -703,7 +735,10 @@ export class SessionRuntime {
         // 会话文件也顺手记下来：界面上“这个会话被关掉了，重新打开”要靠它；
         // 另外“这个历史会话是不是已经开着”也是比这个路径（见 sessionRunningFile）。
         const sessionFile = resp?.data?.sessionFile;
-        if (sessionFile) { this.currentSessionPath = sessionFile; }
+        if (sessionFile) {
+            this.currentSessionPath = sessionFile;
+            this.noteSessionFileLabel(sessionFile);
+        }
         const model = resp?.data?.model;
         if (model && model.id) {
             this.statusModelId = model.id;
@@ -1211,6 +1246,8 @@ export class SessionRuntime {
                     // 界面上的花费统计照旧刷新。
                     void this.refreshStats();
                 }
+                // 这一轮跑完：会话文件这会儿一定有了（新会话的头一轮才落盘），报给中转
+                void this.refreshSessionFileLabel();
                 this.runStarted = false;
                 this.abortRequested = false;
                 // 点过「卡住了」：这一轮停稳了，把那句补上（点的那一下只负责终止这一轮）
@@ -1369,8 +1406,43 @@ export class SessionRuntime {
         // 一直攒到下一次消息才画。
         this.post({ type: "syncPoint" });
         this.currentSessionPath = file;
+        this.noteSessionFileLabel(file);
         // 已有会话的标题不会走 session_info_changed，得主动问一次
         void this.refreshSessionTitle();
+        this.loading = false;
+        this.host.broadcastSessionList();
+        this.refreshStats();
+    }
+
+    /**
+     * 接管一只还在跑的会话（重启后端以后）：pi 没死，所以不 switch_session、也不重开进程，
+     * 只把它现在这份历史再画一遍，然后接着听它说话。
+     *
+     * 这是「编译并重启不掐 pi」收尾的那一半：中转把 pi 留着，新后端照中转登记的名字认回来。
+     */
+    public async adoptLiveSession(file: string): Promise<void> {
+        // 会话文件是认回来的那一半里的"老实话"：先记上，会话表第一次推出去就带着它
+        //（页面上的会话格、历史清单都认这个路径，晚一步就会看着像"换了个会话"）
+        this.currentSessionPath = file;
+        this.noteSessionFileLabel(file);
+        this.loading = true;
+        this.host.broadcastSessionList();
+
+        const ready = await this.waitReady();
+        if (!ready) {
+            this.loading = false;
+            this.host.broadcastSessionList();
+            this.post({ type: "systemError", text: "这个会话的 pi 进程没接上（可能刚退出了）。发送消息会自动重启。" });
+            return;
+        }
+        // 这一轮还在跑的话，界面得照样显示「在跑」（那半句话第二笔再补回来）
+        const state = await this.request<RpcSessionState>({ type: "get_state" });
+        if (state?.data?.isStreaming) {
+            this.streaming = true;
+            this.setActivity("working");
+        }
+        this.captureSessionName(state?.data);
+        await this.replayHistory({ note: "" });
         this.loading = false;
         this.host.broadcastSessionList();
         this.refreshStats();

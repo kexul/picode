@@ -780,12 +780,43 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     // ---- 创建 ----
     /** 新建一个会话运行时（随机命名，启动 pi 进程）；不设为当前会话，由调用方决定。 */
-    protected createPanelRuntime(inherited?: { provider?: string; modelId?: string }, launch?: PanelLaunch): SessionRuntime {
-        const id = `${this.workspaceId}:panel-${++this.panelSeq}`;
+    protected createPanelRuntime(
+        inherited?: { provider?: string; modelId?: string },
+        launch?: PanelLaunch,
+        fixedId?: string,
+    ): SessionRuntime {
+        // fixedId：重启后端以后把会话认回来时用（沿用原来的会话 id，页面上的会话格才对得上）
+        const id = fixedId ?? `${this.workspaceId}:panel-${++this.panelSeq}`;
+        if (fixedId) {
+            const n = /panel-(\d+)$/.exec(fixedId);
+            if (n) { this.panelSeq = Math.max(this.panelSeq, Number(n[1])); }
+        }
         const rt = new SessionRuntime(id, this.allocatePanelName(), this);
         this.panels.set(id, rt);
         rt.startClient(inherited, launch);
         return rt;
+    }
+
+    /**
+     * 把「中转」里还跑着的会话认回来（重启后端以后）：同一个会话 id、同一只 pi。
+     *
+     * 为什么要有这一步：pi 归中转养，后端重启时它们没死；可新后端这边一张会话表都没有，
+     * 不认回来就成了"有进程、没人看"（页面上会话格也没了）。认回来以后页面重连，看到的
+     * 还是那几个会话、那几只 pi —— 跟刷新了一下浏览器一模一样。
+     */
+    public adoptLiveSessions(items: Array<{ panelId: string; sessionFile: string; cwd?: string; key: string }>): void {
+        for (const item of items) {
+            if (!item.panelId || !item.sessionFile) { continue; }
+            if (this.panels.has(item.panelId)) { continue; }
+            const here = item.cwd ? path.resolve(item.cwd) : undefined;
+            const launch: PanelLaunch = {
+                ...(here && !sameDir(here, this.getCwd()) ? { cwd: here } : {}),
+                skipSpare: true,
+                adoptKey: item.key,
+            };
+            const rt = this.createPanelRuntime(undefined, launch, item.panelId);
+            void rt.adoptLiveSession(item.sessionFile);
+        }
     }
 
     /** 新建一个会话并切过去（成为这块屏现在看的会话）。只建新的，不动旧的那个
