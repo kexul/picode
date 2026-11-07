@@ -10197,10 +10197,24 @@
         if (!item.remoteEmpty && item.lastActivity) {
           const a = document.createElement("span"); a.className = "pk-history-age"; a.textContent = pickerRelTime(item.lastActivity);
           right.appendChild(a);
+        } else if (item.remoteEmpty && item.remoteHost) {
+          // 连不上的原因也写一行小字（完整那句在悬停里）：一眼知道是“没发出去”还是“那边不让读”
+          const why = String(item.remoteHost.error || "");
+          const short = why.indexOf("mixed" ) >= 0 || why.indexOf("混合内容") >= 0 ? "https 连不了 http"
+            : why.indexOf("不让读") >= 0 ? "那台不让读"
+            : why.indexOf("没发出去") >= 0 ? "请求没发出去"
+            : "";
+          if (short) {
+            const info = document.createElement("span"); info.className = "pk-history-age"; info.textContent = short;
+            right.appendChild(info);
+          }
         }
         if (right.childNodes.length) { main.appendChild(right); }
         el.appendChild(main);
-        el.title = item.folderPath || item.label || "";
+        // 连不上的那行：鼠标停上去看原因（是请求没出去，还是对方不让读）
+        el.title = item.remoteEmpty
+          ? ((item.remoteHost && item.remoteHost.error) || item.folderPath || item.label || "")
+          : (item.folderPath || item.label || "");
         if (!item.remoteEmpty) {
           // 展开状态要在重画后能恢复：el.className 是重建的，这里按当前那份补上
           if (remoteExpanded.has(item.remoteKey)) { el.classList.add("expanded"); }
@@ -10402,6 +10416,8 @@
     // 「别的机器」：点机器那一行 = 重问一遍；点它会话那一行 = 现在还不能打开（只看得见）
     if (item.__section === "machineSession") { openRemoteSession(item); return; }
     if (item.__section === "remoteSpace") {
+      // 连不上的那一行：点一下重问一遍（那边可能是刚起来）
+      if (item.remoteEmpty) { refreshRemoteHosts(true); return; }
       // 别的机器上的工作区：展开 / 收起（跟本机那个组头一样，只是不跟宿主要数据）
       if (!item.remoteEmpty && item.remoteKey) {
         if (remoteExpanded.has(item.remoteKey)) { remoteExpanded.delete(item.remoteKey); }
@@ -10625,7 +10641,28 @@
       let count = 0;
       for (const project of projects) { count += (project.sessions || []).length; }
       return { url: base, name: hostName, online: true, count, projects };
-    }).catch(() => ({ url: base, name: base, online: false, count: 0, projects: [] }));
+    }).catch(async (err) => {
+      return { url: base, name: base, online: false, count: 0, projects: [], error: await describeRemoteFailure(base, err) };
+    });
+  }
+
+  /**
+   * 连不上到底是哪一步卡住了：再发一次 `no-cors` 的请求试试。
+   *   - 这次能送到（浏览器不报错）→ 那台是活的，只是它没回跨源的响应头（版本旧 / 来源没放行）；
+   *   - 这次也报错 → 请求根本没出去：页面的安全策略拦了（CSP）、或者网络不通。
+   * 两种在普通 fetch 的报错里长得一模一样（都是 Failed to fetch），只能这么分。
+   */
+  function describeRemoteFailure(base, err) {
+    const first = err && err.message ? "（" + err.message + "）" : "";
+    // https 页面去连 http 的那台：浏览器按“混合内容”直接拦，怎么改配置都没用
+    if (location.protocol === "https:" && !/^https:/i.test(base)) {
+      return "这页是 https 打开的，浏览器不让它去连 http 的那台（混合内容）。"
+        + "用 http 打开这页，或者把那一台也挂上 https（比如 tailscale serve）。";
+    }
+    return fetch(base + "/health", { cache: "no-store", mode: "no-cors" }).then(
+      () => "那台回话了，但浏览器不让读" + first + "：多半是那台没回跨源的响应头（版本旧），或者它的来源放行没认到这台。",
+      () => "请求没发出去" + first + "：可能被本页的安全策略拦了（CSP，重启后端再刷新），或者网络不通。",
+    );
   }
 
   /** 别的机器上的工作区展开状态（键是 地址|目录）。本机那份展开记忆走宿主的 expandedDirs，这里另存。 */
