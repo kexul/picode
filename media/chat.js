@@ -11906,6 +11906,9 @@
 
   function setStreaming(st, on) {
     st.streaming = on;
+    // 这一轮跑完：生成中不补的那一截（见 syncViewport）现在补上——人要是正停在那片空白里，
+    // 不该非得再滚一下才看见东西
+    if (!on && st.older && st.older.length) { scheduleViewportCheck(st); }
     // 又开始跑下一轮：上一轮那颗绿点收掉（绿点只说“这一轮跑完了”）
     if (on) { st.turnDone = false; }
     // 这一轮跑完：还在留的那条位置到此为止（一轮里最后调的是工具、后面没再出正文时，就靠这一下收）
@@ -12894,21 +12897,22 @@
   }
 
   /**
-   * 已经画出来的消息平均多高（占位按它估；画出来的太少就按 120 像素）。
-   * 先摸一个把排版逼出来，后面那些读的就是现成的版面了——不这么做，每读一个孩子都
+   * 已经画出来的每一轮平均多高：这一轮的开头（用户气泡）量到下一轮的开头。
+   * 最后一轮还在长（或者就是眼下这一轮），它的高度不算——量进去等于把它当“已经排好版了”。
+   * 不到两轮量不出来，给 0（见 olderHeight 的退路）。
+   * 先摸一把把排版逼出来，后面那些读的就是现成的版面了——不这么做，每读一个孩子都
    * 会触发一次“看看排版脏没脏”，首屏收尾那一下量出来 112 毫秒几乎全耗在这儿。
    */
-  function avgMessageHeight(pane) {
-    let sum = 0;
-    let n = 0;
+  function avgTurnHeight(pane) {
+    const tops = [];
     let forced = false;
     for (const el of pane.children) {
-      if (!el.classList || !el.classList.contains("msg")) { continue; }
+      if (!isTurnStart(el)) { continue; }
       if (!forced) { pane.offsetHeight; forced = true; }
-      const h = el.offsetHeight;
-      if (h > 0) { sum += h; n += 1; }
+      tops.push(el.offsetTop);
     }
-    return n >= 3 ? sum / n : 120;
+    if (tops.length < 2) { return 0; }
+    return (tops[tops.length - 1] - tops[0]) / (tops.length - 1);
   }
 
   /** 这一截里还有几轮（一轮 = 一条用户消息起头）：占位上那个数字用它。
@@ -12921,13 +12925,16 @@
   }
 
   /**
-   * st.older 一共顶着多长：占位的高度按它估。
-   * 一截搬出来的节点按里面的节点个数算，一条待画的消息按一块算（跟以前只有事件时一个意思）。
+   * 顶上那截还没画的大概多高（像素）：已经画出来的每轮平均高度 × 还有几轮。
+   *
+   * 不按“块”估。攒着的多半是重放里的消息事件，一轮能摊成七八块（正文、think、每条工具），
+   * 块里还掺着工具行、图块这些十几像素的小东西，平均下来再乘回去就差得远：量过一份 17 轮的
+   * 对话估成 48280 像素、实际只有两万五，人要在一片空白里多滚好几屏。
+   * 一轮都量不出来（窗格里压根没两轮）就按 120 像素一轮。
    */
-  function olderBlockCount(older) {
-    let n = 0;
-    for (const item of older || []) { n += item && item.nodes ? item.nodes.length : 1; }
-    return n;
+  function olderHeight(pane, turns) {
+    const per = turns > 0 ? avgTurnHeight(pane) : 0;
+    return Math.round((per > 0 ? per : 120) * Math.max(1, turns));
   }
 
   /** 一项里有几轮。 */
@@ -13011,7 +13018,7 @@
     }
     // 刚搬出去的这几轮比 st.older 里现有的都新：接在末尾（往上补时也是从末尾往回画）
     st.older = (st.older || []).concat([{ nodes: nodes }]);
-    mountOlderHint(st, olderBlockCount(st.older));
+    mountOlderHint(st);
     if (st.stickToBottom) { scrollToBottom(st, true); }
   }
 
@@ -13024,9 +13031,11 @@
     }, 400);
   }
 
-  /** 顶上那条占位：写还剩几轮，高度按平均高度估。估不准不影响内容，只影响滚动条长短。 */
-  function mountOlderHint(st, count) {
+  /** 顶上那条占位：写还剩几轮，高度按已经画出来的每轮平均高度估（见 olderHeight）。
+   *  估不准不影响内容，只影响滚动条长短、以及人要在一片空白里滚多久。 */
+  function mountOlderHint(st) {
     const pane = st.paneEl;
+    const turns = countTurns(st.older || []);
     let el = st.olderHint;
     if (!el) {
       el = document.createElement("div");
@@ -13037,8 +13046,8 @@
       st.olderHint = el;
     }
     // 那行字粘在视野顶上（见 chat.css）：这块占位可能几十屏高，滚到中间也得看得见那句话
-    el.firstChild.textContent = "往上还有 " + countTurns(st.older || []) + " 轮（往上滑就画）";
-    el.style.height = Math.max(90, Math.round(avgMessageHeight(pane) * count)) + "px";
+    el.firstChild.textContent = "往上还有 " + turns + " 轮（往上滑就画）";
+    el.style.height = Math.max(90, olderHeight(pane, turns)) + "px";
     // 摆在窗格最上面，但让着「加载更早」那颗：那颗管的是窗口外面更早的，比这儿还早
     const btn = st._historyBtn && st._historyBtn.parentNode === pane ? st._historyBtn : null;
     const at = btn ? btn.nextSibling : pane.firstChild;
@@ -13065,7 +13074,7 @@
     for (let i = cut; i < events.length; i += 1) { applyPanelMessage(events[i]); }
     if (older.length) {
       st.older = older;
-      mountOlderHint(st, olderBlockCount(older));
+      mountOlderHint(st);
     }
     // 窗格是空的、刚才什么也没滚：贴底的人直接到底（非重画那条路没有人帮忙滚，见 case "clear"）
     if (st.stickToBottom) { scrollToBottom(st, true); }
@@ -13136,7 +13145,7 @@
         node = next;
       }
       // 占位跟着缩（高度按这会儿量出来的平均高度重估：一开始估得不准，补一轮就准一轮）
-      if (st.older.length) { mountOlderHint(st, olderBlockCount(st.older)); } else { dropOlderHint(st); }
+      if (st.older.length) { mountOlderHint(st); } else { dropOlderHint(st); }
       if (inside || !ruler || ruler.parentNode !== pane) {
         st.lastScrollTop = pane.scrollTop;
       } else {
@@ -13185,11 +13194,16 @@
   function syncViewport(st) {
     st.viewRaf = 0;
     const pane = st.paneEl;
-    if (!paneShown(pane) || st.suppressScroll || st.streaming || st.olderBusy) { return; }
+    if (!paneShown(pane) || st.suppressScroll || st.olderBusy) { return; }
     if (!olderLeft(st)) { return; }
     const fast = Date.now() < st.scrollFastUntil;
     const near = fast ? FAST_NEAR_PX : OLDER_NEAR_PX;
-    if (pane.scrollTop >= headBottom(st.olderHint) + near) { return; }
+    const head = headBottom(st.olderHint);
+    if (pane.scrollTop >= head + near) { return; }
+    // 正在生成：只补“人已经划进那片空白里”的那一截，快到空白但还没进去的先放着，别跟流式输出抢帧。
+    // 一律不补的那一版试过：生成中往上翻到那片空白，它一直空着（顶上写着「往上还有 3 轮」），
+    // 就是一片空白——人这会儿看的是老消息，补一截的排版卡顿影响不到他，该补。
+    if (st.streaming && pane.scrollTop >= head) { return; }
     // 一帧只补一截：一截是几轮（十几条消息），四倍降速下已经一百毫秒上下了，
     // 一帧补两三截就是几百毫秒的卡（量过：一帧补三截最长一帧 482 毫秒，补一截 214，补五轮 109）。
     fillOlder(st, CHUNK_TURNS);

@@ -201,6 +201,10 @@ npm run web:shot -- --fake-pi --script dev/thinkTipPerf.js
 # 不能被甩到底部（ROUNDS 攒消息轮数，AT_BOTTOM=1 是“贴底时点”那种）：
 npm run web:shot -- --fake-pi --script dev/historyScroll.js
 
+# 验「往上滑到顶上那片空白（占位）跟前，它自己会补出来」——生成中也一样（以前生成中一律不补，
+# 人往上翻就撞见一大片空白，顶上写着「往上还有 3 轮」）。FAKEPI_THINK_MS 给假模型留出“正在生成”那几秒：
+FAKEPI_THINK_MS=8000 npm run web:shot -- --fake-pi --script dev/olderHintFill.js
+
 # 验“每块屏各看各的会话”（两块浏览器页面各开会话互不牵动；模拟的 VSCode 窗口
 # 会不会认自己工作区里的会话；别的屏把会话关了，这块屏留在原地、发消息就自动重开）：
 node dev/focusCheck.js
@@ -435,6 +439,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `fileEdit.js` | 验在「看文件的弹窗」里改一个代码文件、存回磁盘：铅笔只在会语法上色的那几种代码上露面（纯文本 / markdown / html 都没有）、点它换成一块文本框（行号与上色都没了）、敲字后「存」亮起来且标签挂一颗圆点、`Ctrl+S` 与点「存」都真写进磁盘并重画、「改动」那一格跟着长出这一份、没存的话关弹窗 / 切会话都不丢（再打开直接是编辑态）、点「放弃」才回到盘上那份、盘上被别人改过时不默默盖上去（提示 + 那两颗变成「覆盖」「用盘上的」）、行尾（CRLF）与 BOM 不会被顺手改掉、以及写地址自己那几种拒绝（目录外 403、没有 404、非文本 415、没给 text 400、旧 mtime 409）：`npm run web:shot -- --fake-pi --script dev/fileEdit.js` |
 | `htmlPreview.js` | 验文件侧边栏里把 html 当网页打开（点 `.html` 链接摆出的是渲染好的页面，不是源码：页面里的相对样式与脚本真生效、链接里带的行号等于没带、文件改过这一列自己重载那张网页；以及 `/site/` 那条地址的规矩：HEAD 只给头与修改时间、没这个文件 404、会话目录外的 403）：`npm run web:shot -- --fake-pi --script dev/htmlPreview.js` |
 | `mdImagePaths.js` | 验正文里的图片路径放宽到整机（会话目录里的相对写法走 `/site/`；`../x.png`、`C:/…`、`file:///…` 走 `/file?anywhere=1`；外站地址照旧不加载；文件侧边栏那份 `.md` 里同样；那条放宽的地址只认图片——非图片 403、带 `download=1` 403、不带开关时会话目录外照旧 403）：`npm run web:shot -- --fake-pi --script dev/mdImagePaths.js` |
+| `olderHintFill.js` | 验顶上那条「往上还有 N 轮」的占位在“人划到跟前”时自己补出来（生成中也要补：以前生成中一律不补，往上翻就是一大片空白，一直空到这一轮跑完），补完占位要收掉：`FAKEPI_THINK_MS=8000 npm run web:shot -- --fake-pi --script dev/olderHintFill.js` |
 | `options.js` | 两条命令共用的命令行参数 |
 | `tabaTools.js` | 验子会话的「停掉」与「查看」两个工具（派活那条在 `tabaFlow.js`）：`FAKEPI_THINK_MS=4000 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaTools.js` |
 | `fakePi.js` | 假的 pi（`--fake-pi` 用）：协议跟真 pi 一样，模型换成按剧本演戏，界面调试秒回。说一句「问单选 / 问多选 / 问确认 / 问输入 / 问选项」就演一次问话；说一句「碰文件」就 read 几个铺好的文件（让后端那份「这个会话碰过的文件」清单里有东西）。**派子会话与问话那几个工具，它加载的是宿主写下的真扩展**（见 src/bridgeAssets.ts），所以那两段代码每跑一次 dev 脚本就真跑一遍。它还会照真 pi 的样子往会话目录里记一份 `fake-session-<进程号>.jsonl`（一行一条消息）——要读会话文件的那几条路（`#` 引用、派子会话带上父会话的路径）才验得到 |
