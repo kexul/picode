@@ -48,6 +48,8 @@ interface PiEntry {
     child: ReturnType<typeof spawnPi>;
     cwd: string;
     startedAt: number;
+    /** 起它时带的桥接扩展（`-e` 后面那些文件） */
+    extensions: string[];
     panelId?: string;
     sessionFile?: string;
     /** 这个进程已经用掉的请求编号（看到的 `req-N` 里最大的那个） */
@@ -217,6 +219,15 @@ function noteMessageWindow(entry: PiEntry, line: string, seq: number): void {
     }
 }
 
+/** 从 pi 的启动参数里挑出 `-e <文件>` 那些（桥接扩展）。 */
+function extensionsOf(args: string[]): string[] {
+    const out: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+        if (args[i] === "-e" && typeof args[i + 1] === "string") { out.push(args[i + 1]); }
+    }
+    return out;
+}
+
 function info(entry: PiEntry): RelayPiInfo {
     return {
         key: entry.key,
@@ -226,6 +237,7 @@ function info(entry: PiEntry): RelayPiInfo {
         ...(entry.sessionFile ? { sessionFile: entry.sessionFile } : {}),
         startedAt: entry.startedAt,
         maxReq: entry.maxReq,
+        extensions: entry.extensions,
     };
 }
 
@@ -254,6 +266,7 @@ function spawnOne(key: string, spec: Parameters<typeof spawnPi>[0]): PiEntry {
         child,
         cwd: spec.cwd,
         startedAt: Date.now(),
+        extensions: extensionsOf(spec.args),
         maxReq: 0,
         lastSeen: 0,
         alive: true,

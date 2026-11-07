@@ -2084,6 +2084,16 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         if (keepPi) { this.disposeSpare(); }
     }
 
+    /** 现在这套桥接扩展的路径（认回会话时比"旧不旧"用）。 */
+    private currentExtensions(): Set<string> {
+        const cfg = this.getConfig();
+        const files = [
+            cfg.tabaExtension, cfg.askExtension, cfg.titleExtension,
+            cfg.imageExtension, cfg.bashExtension, cfg.envExtension,
+        ].filter((file): file is string => !!file);
+        return new Set(files.map((file) => path.resolve(file)));
+    }
+
     /**
      * 起手把「中转」里还在跑的会话认回来（重启后端以后立刻调一次）。
      *
@@ -2095,10 +2105,25 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         if (!link) { return; }
         let list;
         try { list = await link.list(); } catch { return; }
-        const live = list.filter((item) => !!item.panelId && !!item.sessionFile);
-        if (live.length === 0) { return; }
-        this.log(`把 ${live.length} 个还在跑的会话认回来（pi 一直没死）`);
-        this.adoptLiveSessions(live.map((item) => ({
+        // 桥接扩展是起 pi 那一刻加载的（文件名里带版本号）：插件更新过以后，还活着的那只 pi
+        // 跑的是旧桥代码。这种别认回来 —— 宁可让它重开一只，也别拿旧代码接着干活。
+        const current = this.currentExtensions();
+        const fresh = list.filter((item) => {
+            if (!item.panelId || !item.sessionFile) { return false; }
+            const stale = (item.extensions ?? [])
+                .filter((file) => current.size > 0 && !current.has(path.resolve(file)));
+            if (stale.length === 0) { return true; }
+            this.log(`这个会话的 pi 跑的是旧版桥接扩展（${path.basename(stale[0])}），不认回来了，让它重开一只`);
+            return false;
+        });
+        for (const item of list) {
+            if (fresh.includes(item)) { continue; }
+            if (!item.panelId && !item.sessionFile) { continue; }
+            try { relayLink()?.kill(item.key); } catch { /* 收不掉就算了 */ }
+        }
+        if (fresh.length === 0) { return; }
+        this.log(`把 ${fresh.length} 个还在跑的会话认回来（pi 一直没死）`);
+        this.adoptLiveSessions(fresh.map((item) => ({
             panelId: item.panelId!,
             sessionFile: item.sessionFile!,
             ...(item.cwd ? { cwd: item.cwd } : {}),

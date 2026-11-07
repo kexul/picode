@@ -37,6 +37,8 @@ export interface RelayPiInfo {
     startedAt: number;
     /** 这个进程已经用掉的请求编号（新后端接着往下数，免得跟旧答复撞号） */
     maxReq: number;
+    /** 起它的时候带的那些 `-e <文件>`（桥接扩展的路径里带版本号：认回会话时靠它判断代码是不是旧的） */
+    extensions: string[];
 }
 
 /** 后端 → 中转。带 n 的要一条 reply（中转原样把 n 带回来）。 */
