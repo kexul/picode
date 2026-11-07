@@ -134,12 +134,15 @@ export function startRestart(launch: RestartLaunch): { ok: boolean; reason?: str
 
     // 新后端的命令行：照老样子，再把「会话目录 / 端口 / 监听地址」按这次实际的值钉住。
     // 老后端可能是 --port 0 自动挑的端口，照抄会换一个端口，页面连的那个地址就成死地址了。
+    // --no-open：重启是后端自己在起，人已经有一个窗口开着了（那个窗口会自己连回来），
+    // 再弹一个新的只是多一个冤枉窗口。
     const argv = [
         path.resolve(launch.cwd, launch.argv[0] ?? ""),
         ...withoutAddressArgs(launch.argv.slice(1)),
         "--cwd", launch.dir,
         "--port", String(launch.port),
         "--host", launch.host,
+        "--no-open",
     ];
     const plan = {
         pid: launch.pid,

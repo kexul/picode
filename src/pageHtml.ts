@@ -29,13 +29,13 @@ function readMedia(mediaDir: string, name: string): string {
 }
 
 /**
- * 标签页与窗口上那颗图标：以前 exe 和托盘用的那个标记 —— 浅色圆角方底、深色标记、
- * 右下那根竖线是红的（画它的 bin/makeicon.cs 跟着桌面程序一起退休了，坐标照那份搬过来）。
+ * 那个标记：以前 exe 和托盘用的那一枚 —— 浅色圆角方底、深色标记、右下那根竖线是红的
+ * （画它的 bin/makeicon.cs 跟着桌面程序一起退休了，坐标照那份搬过来）。
  *
- * 画成内联 SVG 的 data 地址：不用带图片文件，改颜色改形状就在这一段里。
- * 用 SVG 而不是预生成几张 PNG，是因为浏览器、任务栏、Alt+Tab 各要各的尺寸，矢量一劳永逸。
+ * 只存这一份 SVG：标签页的图标用它（下面转成 data 地址内联），
+ * 浏览器「安装成应用」那份清单里的图标也用它（/icon.svg）。
  */
-const PAGE_ICON = "data:image/svg+xml," + encodeURIComponent([
+export const PAGE_ICON_SVG = [
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 560">',
     // 方底：radius = 边长 × 0.22，边线宽 = 边长 / 48（跟原来那份画法一致）
     '<rect x="0.5" y="0.5" width="559" height="559" rx="123" fill="#F6F6F6" stroke="#303030" stroke-width="11.7"/>',
@@ -46,7 +46,34 @@ const PAGE_ICON = "data:image/svg+xml," + encodeURIComponent([
     '<polygon points="140,560 0,560 0,140 140,140 140,280 280,280 280,420 140,420" fill="#111111"/>',
     '</g>',
     '</svg>',
-].join(""));
+].join("");
+
+/** 标签页上那颗图标（内联的 data 地址：不用再多一次请求）。 */
+const PAGE_ICON = "data:image/svg+xml," + encodeURIComponent(PAGE_ICON_SVG);
+
+/**
+ * 浏览器「安装成应用」用的清单（见 webChatServer 的 `/manifest.webmanifest`）。
+ *
+ * 有了它，Chrome / Edge 地址栏或菜单里就会出现「安装」（Edge 叫「应用 → 安装此站点」），
+ * 装出来的东西是一个没有标签条、没有地址栏的独立窗口，跟用 `--app=` 开出来的那个一样。
+ * 注意：浏览器只给「安全来源」装（https，或者本机的 127.0.0.1 / localhost）；
+ * 同一网络上 http://别的机器:端口 这种不会出现「安装」（那条路用 `pichat --open` 或提醒卡片）。
+ */
+export function webAppManifest(): Record<string, unknown> {
+    const name = displayName();
+    const title = name ? `${name}-pi` : "pi";
+    return {
+        name: title,
+        short_name: title,
+        // 开出来落在最近那个会话上（跟直接打开地址一样）
+        start_url: "/",
+        scope: "/",
+        display: "standalone",
+        background_color: "#F6F6F6",
+        theme_color: "#F6F6F6",
+        icons: [{ src: "/icon.svg", type: "image/svg+xml", sizes: "any", purpose: "any" }],
+    };
+}
 
 /**
  * 生成浏览器页面的 HTML 全文。
@@ -78,6 +105,8 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
         `connect-src 'self'; ` +
         `font-src 'self'; ` +
         `base-uri 'none'; ` +
+        // 装成应用那份清单（/manifest.webmanifest）也得放行
+        `manifest-src 'self'; ` +
         `form-action 'none';`;
 
     // 浏览器 tab 的标题用这台的名字（形如 `家里-pi`）：同时开着几台机器的页面时，
@@ -91,8 +120,10 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
             Object.fromEntries(lazyScripts.map((file) => [file.name, mediaUrl(file.name)]))))}" />`;
     const extraHead =
         `<title>${host ? `${escapeAttr(host)}-pi` : "pi"}</title>\n` +
-        // 图标：标签页、应用窗口的窗口图标（Windows 任务栏、Alt+Tab）都用它
+        // 图标：标签页、装成应用以后那个窗口的图标（Windows 任务栏、Alt+Tab）都用它
         `  <link rel="icon" type="image/svg+xml" href="${escapeAttr(PAGE_ICON)}" />\n` +
+        // 浏览器「安装成应用」那份清单：装出来的就是一个没有标签条的独立窗口
+        `  <link rel="manifest" href="/manifest.webmanifest" />\n` +
         `  <meta name="pichat-page" content="${escapeAttr(pageId)}" />\n` +
         `  <meta name="pichat-theme" content="${themeMode}" />${lazyMeta}\n` +
         `  <style id="browser-theme">${browserCss}</style>`;

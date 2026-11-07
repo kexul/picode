@@ -4,7 +4,7 @@ import * as zlib from "zlib";
 import * as http from "http";
 import * as os from "os";
 import * as path from "path";
-import { getBrowserChatHtml, getPanelChatHtml } from "./pageHtml";
+import { getBrowserChatHtml, getPanelChatHtml, PAGE_ICON_SVG, webAppManifest } from "./pageHtml";
 import { mediaStamp, mediaVersion } from "./mediaVersion";
 import { HEARTBEAT_MS, PAGE_STALE_MS, PING_MS, TICK_TIMEOUT_MS } from "./chatProtocol";
 import type { ChatBroadcaster } from "./chatBroadcaster";
@@ -594,6 +594,23 @@ export class PiChatWebServer {
             }
             if (pathname.startsWith("/media/")) {
                 this.sendMedia(req, res, pathname.slice("/media/".length), url.searchParams.get("v") ?? "");
+                return;
+            }
+            // 浏览器「安装成应用」要的两样：那份清单与它引用的图标（见 pageHtml 的 webAppManifest）
+            if (pathname === "/manifest.webmanifest") {
+                if (req.method !== "GET" && req.method !== "HEAD") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                this.writeBody(req, res, 200, Buffer.from(JSON.stringify(webAppManifest()), "utf8"), {
+                    "Content-Type": "application/manifest+json; charset=utf-8",
+                    "Cache-Control": "no-store",
+                });
+                return;
+            }
+            if (pathname === "/icon.svg") {
+                if (req.method !== "GET" && req.method !== "HEAD") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                this.writeBody(req, res, 200, Buffer.from(PAGE_ICON_SVG, "utf8"), {
+                    "Content-Type": "image/svg+xml; charset=utf-8",
+                    "Cache-Control": "no-store",
+                });
                 return;
             }
             // 站内页面（文件侧边栏里当网页打开的那个 html）：地址里带着路径本身，见 sendSite。

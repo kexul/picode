@@ -7,7 +7,8 @@
  * 一个后端只跑一个（单实例）：地址记在 `~/.pi/pichat/server.json`，启动前先看有没有
  * 已经在跑的，有就打印它的地址然后退出；文件是上一个没收拾干净留下的（探不通）就接管。
  *
- * 参数：--cwd 会话目录、--port / --host 监听、--open 起完打开浏览器、--help / --version。
+ * 参数：--cwd 会话目录、--port / --host 监听、--open 起完打开界面（不写就不开）、
+ * --help / --version。
  * 设置文件的路径会打在屏幕上；配置项的默认值见 serverConfig.ts。
  */
 import * as fs from "fs";
@@ -32,6 +33,7 @@ export interface ServerArgs {
     cwd?: string;
     port?: number;
     host?: string;
+    /** 起完打不打开界面（不写就不开；--no-open 跟 --open 一起写时以它为准，重启时用）。 */
     open?: boolean;
     help?: boolean;
     version?: boolean;
@@ -75,6 +77,7 @@ export function parseServerArgs(argv: string[]): ServerArgs {
                 break;
             }
             case "--open": args.open = true; break;
+            case "--no-open": args.open = false; break;
             case "--help": case "-h": args.help = true; break;
             case "--version": case "-v": args.version = true; break;
             default:
@@ -89,13 +92,14 @@ export function usageText(): string {
         "pichat —— 起一个 Pi Chat 后端（浏览器 / 手机上对话，关掉 VSCode 也还活着）",
         "",
         "用法：",
-        "  pichat [--cwd 目录] [--port 端口] [--host 地址] [--open]",
+        "  pichat [--cwd 目录] [--port 端口] [--host 地址] [--open | --no-open]",
         "",
         "参数：",
         "  --cwd 目录    会话默认跑在哪个目录（默认：你敲命令时所在的目录）",
         "  --port 端口   监听端口（默认取设置文件里的值，出厂 51883；写 0 = 自动挑空闲端口）",
         "  --host 地址   监听地址（默认 0.0.0.0：同一网络里的设备都能访问；只给自己用就写 127.0.0.1）",
         "  --open        起完打开界面（默认浏览器是 Chromium 系的话开成独立窗口，没有标签条）",
+        "  --no-open     起完不打开界面（跟 --open 一起写时以它为准；「编译并重启」起回来的那个自带它）",
         "  --help        看这段说明",
         "  --version     看版本号",
         "",
@@ -228,7 +232,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         console.log("       只想自己用就加 --host 127.0.0.1，或把设置文件里的 webServer.host 改成 127.0.0.1。");
         console.log("");
     }
-    if (args.open) { openInBrowser(started.url); }
+    // 起完要不要把界面打开：写了 --open 才开（默认不开：多数时候人用浏览器里那个自己开着的页面，
+    // 或者把它装成了应用，见 pageHtml 里的 manifest）。默认浏览器是 Chromium 系时开成独立窗口，见 openInBrowser。
+    // 「编译并重启」起回来的那个后端带 --no-open：人已经有一个窗口开着了（见 serverRestart）。
+    if (args.open === true) { openInBrowser(started.url); }
 
     let stopping = false;
     const onSignal = (signal: string): void => {
