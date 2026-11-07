@@ -74,8 +74,11 @@ const COMPRESS_CACHE_MAX = 64;
  * —— 每个文件编译后第一次被请求就要堵住服务端半秒；9 档是 175 KB、27 ms；gzip 是 213 KB。
  */
 const BROTLI_QUALITY = 9;
-/** `GET /sessions` 一次报几个项目（跟本机「项目与会话」一批一个数），每个项目再报最近几条会话。 */
-const SESSIONS_PAGE = 5;
+/**
+ * `GET /sessions` 一次报几个项目：跟本机「项目与会话」一批一个数（chatHost 的
+ * WORKSPACE_BATCH = 4），点一次「加载更多工作区」再接一批。每个项目再报最近几条会话。
+ */
+const SESSIONS_PAGE = 4;
 const SESSIONS_PER_PROJECT = 10;
 
 /**
