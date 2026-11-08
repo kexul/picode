@@ -22,6 +22,7 @@ import type { AskRequest } from "./askProtocol";
 import { writeAskAnswer } from "./askProtocol";
 import type { MessageSink } from "./sessionRuntime";
 import type { RemoteSessionRef, SessionRef } from "./runtimeTypes";
+import type { SessionListItem } from "./sessionStore";
 import { ChatControllerBase, type ViewOptionItem, type WorkspacePage } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
@@ -651,6 +652,37 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
+     * 历史浮窗那一页：看的是别台那台的一条会话，就按它的目录问那台要（那台从它自己的盘上扫）。
+     * 本机的照旧从这台盘上扫。
+     */
+    protected override async historyPage(
+        ref: SessionRef | undefined,
+        dir: string,
+        offset: number,
+        size: number,
+    ): Promise<{ items: SessionListItem[]; nextOffset: number; hasMore: boolean }> {
+        const machine = ref ? this.machineHub.ownerOf(ref.id) : undefined;
+        if (!machine) { return super.historyPage(ref, dir, offset, size); }
+        return this.machineHub.history(machine, dir, offset, size);
+    }
+
+    /**
+     * 历史浮窗里点了一条别台的会话：跟“在项目与会话里点那一行”走同一条路 ——
+     * 请那台把它打开，这边先按会话文件记着，等它报上清单认领成它那边的号再切过去。
+     */
+    protected override async openHistoryFile(
+        ref: SessionRef | undefined,
+        item: SessionListItem,
+        dir: string,
+        clientId: string,
+    ): Promise<void> {
+        const machine = ref ? this.machineHub.ownerOf(ref.id) : undefined;
+        if (!machine) { await super.openHistoryFile(ref, item, dir, clientId); return; }
+        const id = this.machineHub.openFileSession(machine, item.file, item.cwd || dir, item.id);
+        this.setActiveSession(id, clientId);
+    }
+
+    /**
      * 别台那几台的项目行：接在工作区那一栏后面（每台一节，节名就是「工作区-<那台的名字>」）。
      *
      * 行的形状跟本机那些一模一样（`label` / `file` / `folderPath` / `lastActivity`），只多两个字段：
@@ -764,7 +796,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
 
     /**
      * 面板的内容：上半是所有目录混一份的会话（最近聊过的在前），下半是工作区。
-     * 会话那份复用历史列表那套机器（pickerState 里的 historyFiles / historyOffset / scanHistoryBatch），
+     * 会话那份复用历史列表那套机器（pickerState 里的 historyDir / historyOffset / scanHistoryBatch），
      * 工作区那份自己分页：当前工作区固定显示，另外一次取 4 个，总共显示 5 个工作区；下面留一颗“加载更多”。
      *
      * 两半都只碰最前面那几个（要显示的那些）：会话那份只扫要画的十个文件，

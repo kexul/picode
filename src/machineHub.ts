@@ -23,6 +23,7 @@ import * as https from "https";
 import { listDirectories } from "./dirBrowse";
 import { PING_MS, TICK_TIMEOUT_MS } from "./chatProtocol";
 import type { RemoteSessionRef } from "./runtimeTypes";
+import type { SessionListItem } from "./sessionStore";
 
 /** 会话号的写法：`remote:<那台的地址>:<它那边的号>`（跟从前页面用的写法一致）。 */
 const REMOTE_PREFIX = "remote:";
@@ -529,6 +530,40 @@ export class MachineHub {
         const st = this.states.get(machineUrl);
         if (!st) { throw new Error("设置里没有这台机器"); }
         return this.getJson(st.url + "/dirs?path=" + encodeURIComponent(path || ""), st);
+    }
+
+    /**
+     * 那台上一条会话的历史清单里点开了一条：把它当成“这台界面上的一个号”交回来。
+     *
+     * 手里只有会话文件与目录（那台这时候还没把它开出来，它那边的面板号也就还不认识）：
+     * 先按号记下这一笔，等那台报上清单时按会话文件认领、换成它那边的号（见 adoptPending）。
+     * @returns 这台界面上的写法（先拿它切过去，认领了会自动改成新号）
+     */
+    public openFileSession(machineUrl: string, file: string, cwd: string, remoteId: string): string {
+        const id = this.toLocalId(machineUrl, remoteId || fileKey(file) || "file");
+        this.openSession(id, { file, cwd });
+        return id;
+    }
+
+    /**
+     * 那台上某个目录的历史会话，一页一批（本机历史浮窗问的那一份）。
+     * 那台没起 / 没回话就抛（调用方按“列不出来”处理，跟本机读盘出错一个待遇）。
+     */
+    public async history(
+        machineUrl: string,
+        dir: string,
+        offset: number,
+        size: number,
+    ): Promise<{ items: SessionListItem[]; nextOffset: number; hasMore: boolean }> {
+        const st = this.states.get(machineUrl);
+        if (!st) { throw new Error("设置里没有这台机器"); }
+        const query = "/history?dir=" + encodeURIComponent(dir) + "&offset=" + offset + "&size=" + size;
+        const body = (await this.getJson(st.url + query, st)) as any;
+        return {
+            items: Array.isArray(body?.items) ? body.items : [],
+            nextOffset: typeof body?.nextOffset === "number" ? body.nextOffset : offset,
+            hasMore: body?.hasMore === true,
+        };
     }
 
     /**

@@ -231,6 +231,41 @@ export async function scanSessionInfo(file: string): Promise<SessionListItem | n
 }
 
 /**
+ * 从一份会话文件清单（按改动时间倒序）里往下扫，凑一页要显示的会话。
+ *
+ * 历史浮窗、工作区那一组会话都用它（两处都是“把文件清单按页扫成一行一行”）。
+ * 子会话（第一条用户消息是派活那套文字，见本文件的 child 判定）不显示：碰上一个就跳过接着扫，
+ * 所以这一页可能要多扫几个文件才凑得满。这里不设“最多往下扫多少个文件”的上限：
+ * 派活多的目录里子会话常常连成几十上百个，一设上限，正撞上那一串的这一页就是 0 条 ——
+ * 点了「加载更多」什么都不出来，看着像按钮坏了。扫到凑满这一页或者文件到头为止。
+ * 扫完在这一页里按“最后说话时间”再排一遍：屏幕上这一屏看上去是最近聊过的在前面。
+ *
+ * @param files 会话文件清单（新的在前面）
+ * @param offset 从清单里第几个文件接着扫（不是“第几条会话”：跳过的子会话也占游标）
+ * @param size 这一页最多要几条
+ * @returns 这一页的条目、停在清单第几个、后面还有没有
+ */
+export async function scanHistoryPage(
+    files: readonly string[],
+    offset: number,
+    size: number,
+): Promise<{ items: SessionListItem[]; nextOffset: number; hasMore: boolean }> {
+    const items: SessionListItem[] = [];
+    let at = offset;
+    while (items.length < size && at < files.length) {
+        const batch = files.slice(at, at + (size - items.length));
+        if (batch.length === 0) { break; }
+        at += batch.length;
+        const scanned = await Promise.all(batch.map((file) => scanSessionInfo(file)));
+        for (const one of scanned) {
+            if (one && !one.child) { items.push(one); }
+        }
+    }
+    items.sort((a, b) => b.lastActivity - a.lastActivity);
+    return { items, nextOffset: at, hasMore: at < files.length };
+}
+
+/**
  * 给出扫描结果时重算一次“是不是子会话”：子会话清单（childSessions）可能是在这次扫描之后
  * 才记下这个文件的（派活的那一头拿到 .jsonl 路径得等 pi 落盘），内存里这份缓存不能把它盖掉。
  */

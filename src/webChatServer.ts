@@ -29,7 +29,14 @@ import { findListedFile } from "./fileSearch";
 import { listDirectories } from "./dirBrowse";
 import type { SessionChanges } from "./gitChanges";
 import { readRemoteNotice, type RemoteNotice } from "./remoteNotice";
-import { listProjectDirs, listSessionFiles, readProjectEntry, scanSessionInfo, type SessionListItem } from "./sessionStore";
+import {
+    listProjectDirs,
+    listSessionFiles,
+    readProjectEntry,
+    scanHistoryPage,
+    scanSessionInfo,
+    type SessionListItem,
+} from "./sessionStore";
 import { changedCharRanges, diffRows, type LineRanges } from "./wordDiff";
 
 /**
@@ -81,6 +88,9 @@ const BROTLI_QUALITY = 9;
  */
 const SESSIONS_PAGE = 4;
 const SESSIONS_PER_PROJECT = 10;
+/** 历史清单一次给几条（对方没说要多少时）、最多给几条。 */
+const HISTORY_PAGE = 10;
+const HISTORY_PAGE_MAX = 50;
 /**
  * 请求方说它收哪些压缩方式（名字 → q 值；没提就是没有，q=0 当作不收）。
  * 浏览器都会发 `gzip, deflate, br`；手工 curl 不带这个头时什么都不收，照旧发原文。
@@ -614,6 +624,13 @@ export class PiChatWebServer {
             if (pathname === "/sessions") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
                 void this.withFailNote(req, res, this.sendSessions(req, res));
+                return;
+            }
+            // 某个目录里有哪些历史会话（一页一页要）：别的 pichat 的历史浮窗就是这么问的 ——
+            // 在那台上一条会话里点顶条那颗 <<<，列出来的得是那台那个目录的会话。
+            if (pathname === "/history") {
+                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                void this.withFailNote(req, res, this.sendHistory(req, res));
                 return;
             }
             // 别的 pichat 后端推来的“有事”（机器对机器，见 src/remoteNotice.ts）
@@ -1544,6 +1561,24 @@ export class PiChatWebServer {
             });
         }
         this.sendJson(req, res, 200, { projects, offset, hasMore: offset + page.length < dirs.length });
+    }
+
+    /**
+     * 某个目录的历史会话，一页一批（历史浮窗那一份）。
+     * 扫法跟本机历史浮窗同一处（sessionStore.scanHistoryPage）：子会话跳过、按最后说话时间排。
+     */
+    private async sendHistory(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        const params = new URL(req.url ?? "/", "http://x").searchParams;
+        const dir = params.get("dir") ?? "";
+        const offset = Math.max(0, Math.floor(Number(params.get("offset")) || 0));
+        const size = Math.min(HISTORY_PAGE_MAX, Math.max(1, Math.floor(Number(params.get("size")) || HISTORY_PAGE)));
+        if (!dir) {
+            this.sendJson(req, res, 400, { error: "没说要哪个目录（dir）。" });
+            return;
+        }
+        const files = (await listSessionFiles(dir)).map((one) => one.file);
+        const page = await scanHistoryPage(files, offset, size);
+        this.sendJson(req, res, 200, { dir, offset, ...page });
     }
 
     private sendJson(req: http.IncomingMessage, res: http.ServerResponse, status: number, value: unknown): void {

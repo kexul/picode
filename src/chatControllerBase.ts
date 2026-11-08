@@ -27,7 +27,7 @@ import { PiClient } from "./piClient";
 import {
     isChildSessionFile,
     listSessionFiles,
-    scanSessionInfo,
+    scanHistoryPage,
     type HistoryPickerItem,
     type SessionListItem,
 } from "./sessionStore";
@@ -126,11 +126,15 @@ export interface PickerState {
     resolve: ((v: any | undefined) => void) | null;
     /** 没人答就收掉，这个定时器在挂着。 */
     timer?: ReturnType<typeof setTimeout>;
-    /** 这个浮层列的是哪些会话文件（历史列表 / 项目面板上半段）；开列表时重建。
-     *  顺序 = 最近聊过的在前（按文件改动时间倒序，见 sessionStore.listSessionFiles）。 */
-    historyFiles: string[];
+    /** 历史列表这一份扫的是哪条会话的目录（别台那条也算：靠它知道要问哪台要清单）。
+     *  开列表时定下来，「加载更多」接着用它。 */
+    historyRef?: SessionRef;
+    /** 历史列表扫的是哪个目录（历史列表 / 项目面板上半段）。 */
+    historyDir: string;
     /** 已经扫到第几个文件（「加载更多」接着往后扫）。 */
     historyOffset: number;
+    /** 后面还有没有（上一页之后说的；「加载更多」拿它回话）。 */
+    historyHasMore: boolean;
     /** 这个面板是不是常驻在右边那一列（常驻的不等人选、收起是界面自己说了算）。 */
     workspaceDock: boolean;
     /** 「项目与会话」面板在这块屏上开着（常驻那一列或滑出来的抽屉都算）。
@@ -200,7 +204,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!st) {
             st = {
                 kind: "", resolve: null,
-                historyFiles: [], historyOffset: 0, workspaceDock: false, workspaceOpen: false,
+                historyDir: "", historyOffset: 0, historyHasMore: false,
+                workspaceDock: false, workspaceOpen: false,
                 workspacePage: null,
             };
             this.pickers.set(clientId, st);
@@ -2301,16 +2306,27 @@ export abstract class ChatControllerBase implements RuntimeHost {
         opts?: { folder?: string },
     ): Promise<void> {
         const clientId = target || this.currentPageId;
-        const cwd = opts?.folder ? path.resolve(opts.folder) : (this.getActive(clientId)?.cwd ?? this.getCwd());
+        // 这块屏现在看的那条会话：本机的、别台的都算 —— 目录与“问谁要清单”都跟它走
+        const active = this.getActiveRef(clientId);
+        const cwd = opts?.folder ? path.resolve(opts.folder) : (active?.cwd || this.getCwd());
         const state = this.pickerStateOf(clientId);
-        state.historyFiles = (await listSessionFiles(cwd)).map((e) => e.file);
+        // 明写了目录（项目面板里展开的另一组）就按本机那个目录扫，不跟别台那条会话走
+        state.historyRef = opts?.folder ? undefined : active;
+        state.historyDir = cwd;
         state.historyOffset = 0;
-        if (state.historyFiles.length === 0) { return; }
-        const items = await this.scanHistoryBatch(clientId);
-        if (items.length === 0) { return; }
-        const choice = await this.promptHistoryPicker(items, state.historyOffset < state.historyFiles.length, clientId);
+        let page: { items: SessionListItem[]; nextOffset: number; hasMore: boolean };
+        try {
+            page = await this.historyPage(state.historyRef, cwd, 0, ChatControllerBase.HISTORY_BATCH_SIZE);
+        } catch {
+            return;
+        }
+        state.historyOffset = page.nextOffset;
+        state.historyHasMore = page.hasMore;
+        if (page.items.length === 0) { return; }
+        const items = await this.withCurrentOf(clientId, page.items);
+        const choice = await this.promptHistoryPicker(items, state.historyHasMore, clientId);
         if (!choice || typeof choice.file !== "string") { return; }
-        await this.loadHistorySession(choice.file, cwd, clientId);
+        await this.openHistoryFile(state.historyRef, choice, cwd, clientId);
     }
 
     /** 「加载更多」：扫描下一批文件，把新条目追加进开着的列表（只发给开列表的那一块屏）。 */
@@ -2324,7 +2340,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 this.sendOverlayTo(clientId, { type: "historyPageEnd" });
                 return;
             }
-            this.sendOverlayTo(clientId, { type: "historyPageAppend", items, hasMore: state.historyOffset < state.historyFiles.length });
+            this.sendOverlayTo(clientId, { type: "historyPageAppend", items, hasMore: state.historyHasMore });
         } catch {
             // 扫出错也得回一句：界面那颗按钮正等着它把“加载中”放掉
             this.sendOverlayTo(clientId, { type: "historyPageEnd" });
@@ -2348,28 +2364,47 @@ export abstract class ChatControllerBase implements RuntimeHost {
         offset: number,
         size: number,
     ): Promise<{ items: SessionListItem[]; nextOffset: number; hasMore: boolean }> {
-        const items: SessionListItem[] = [];
-        let at = offset;
-        while (items.length < size && at < files.length) {
-            const batch = files.slice(at, at + (size - items.length));
-            if (batch.length === 0) { break; }
-            at += batch.length;
-            const scannedItems = await Promise.all(batch.map((f) => scanSessionInfo(f)));
-            for (const s of scannedItems) {
-                if (s && !s.child) { items.push(s); }
-            }
-        }
-        items.sort((a, b) => b.lastActivity - a.lastActivity);
-        return { items, nextOffset: at, hasMore: at < files.length };
+        return scanHistoryPage(files, offset, size);
+    }
+
+    /**
+     * 历史浮窗的一页：本机从盘上扫（会话文件清单 + 一页一页扫过去），别台的由子类去问那台。
+     * @param ref 这一份清单属于哪条会话（别台的靠它知道问哪台；本机的不看它）
+     * @param dir 扫哪个目录
+     */
+    protected async historyPage(
+        _ref: SessionRef | undefined,
+        dir: string,
+        offset: number,
+        size: number,
+    ): Promise<{ items: SessionListItem[]; nextOffset: number; hasMore: boolean }> {
+        const files = (await listSessionFiles(dir)).map((one) => one.file);
+        return scanHistoryPage(files, offset, size);
+    }
+
+    /** 历史浮窗里选了一条：打开它（本机在那个目录里开 / 复用会话读文件；别台的由子类请那台打开）。 */
+    protected async openHistoryFile(
+        _ref: SessionRef | undefined,
+        item: SessionListItem,
+        dir: string,
+        clientId: string,
+    ): Promise<void> {
+        await this.loadHistorySession(item.file, dir, clientId);
+    }
+
+    /** 给这一页标上“哪一条是当前正在看的”（别台的也能标）。 */
+    private async withCurrentOf(clientId: string, items: SessionListItem[]): Promise<HistoryPickerItem[]> {
+        const current = this.getActiveRef(clientId)?.currentSessionPath;
+        return items.map((one) => ({ ...one, current: this.samePath(one.file, current) }));
     }
 
     /** 扫下一批（历史会话浮层那一份）：游标记在这块屏的浮层状态里。 */
     protected async scanHistoryBatch(clientId: string = this.currentPageId): Promise<HistoryPickerItem[]> {
         const state = this.pickerStateOf(clientId);
-        const page = await this.scanSessionPage(state.historyFiles, state.historyOffset, ChatControllerBase.HISTORY_BATCH_SIZE);
+        const page = await this.historyPage(state.historyRef, state.historyDir, state.historyOffset, ChatControllerBase.HISTORY_BATCH_SIZE);
         state.historyOffset = page.nextOffset;
-        const current = this.getActive(clientId)?.currentSessionPath;
-        return page.items.map((s) => ({ ...s, current: this.samePath(s.file, current) }));
+        state.historyHasMore = page.hasMore;
+        return this.withCurrentOf(clientId, page.items);
     }
 
     /** 推送历史列表浮层并等待选择（取消返回 undefined）。@param target 指定弹给哪个界面。 */
