@@ -28,11 +28,16 @@ export interface EditTrackerHost {
  * 从 SessionRuntime 拆出，降低编排类体积。
  */
 export class EditTracker {
+    /** 跑完的调用最多记着多少次用时（重放历史时用；再多就不记了，老的那些干脆不算）。 */
+    private static readonly MAX_REMEMBERED_DURATIONS = 400;
     private pendingEdits = new Map<string, { path: string; before: string }>();
     private editSnapshots = new Map<string, { path: string; before: string; after: string }>();
     /** 工具调用的开始时间戳（toolCallId → ms）：结果回来时算这次跑了多久，
      *  随结果一起发给界面，汇总进统计弹窗（见 media/chat.js 的 noteToolDuration）。 */
     private toolStartedAt = new Map<string, number>();
+    /** 已经跑完的那些各花了多久（toolCallId → ms）。重放历史时结果里也带上它，
+     *  这样刷新页面 / 重连之后统计弹窗里的数还是真的、不是从零算（定个上限，老的不再留）。 */
+    private toolDurations = new Map<string, number>();
     /** pi 本会话工具调用触及过的文件绝对路径。 */
     private knownFiles = new Set<string>();
 
@@ -48,10 +53,35 @@ export class EditTracker {
         return this.toolStartedAt.has(toolCallId);
     }
 
+    /** 这条工具是什么时候开始跑的（毫秒；表里没有就是没在跑，返回 0）。
+     *  重放历史时发给页面：那条「正在跑」后面的耗时得从真开始那一刻数，
+     *  不能按页面打开 / 重连的那一刻。 */
+    public toolStartedAtOf(toolCallId: string): number {
+        return this.toolStartedAt.get(toolCallId) ?? 0;
+    }
+
+    /** 这条跑完的调用当时用了多久（毫秒；没记着就是 undefined）。重放历史时带上它
+     *  （见下面的 rememberDuration）。 */
+    public toolDurationMsOf(toolCallId: string): number | undefined {
+        return this.toolDurations.get(toolCallId);
+    }
+
+    /** 记下这次跑完的用时（只留最近的一批：老的那些重放时算不出来就不算，不编数字）。 */
+    private rememberDuration(toolCallId: string, ms: number | undefined): void {
+        if (!toolCallId || typeof ms !== "number" || !isFinite(ms) || ms < 0) { return; }
+        this.toolDurations.delete(toolCallId);
+        this.toolDurations.set(toolCallId, ms);
+        if (this.toolDurations.size > EditTracker.MAX_REMEMBERED_DURATIONS) {
+            const oldest = this.toolDurations.keys().next();
+            if (!oldest.done) { this.toolDurations.delete(oldest.value); }
+        }
+    }
+
     public reset(): void {
         this.pendingEdits.clear();
         this.editSnapshots.clear();
         this.toolStartedAt.clear();
+        this.toolDurations.clear();
         const hadKnown = this.knownFiles.size > 0;
         this.knownFiles.clear();
         if (hadKnown) {
@@ -72,6 +102,8 @@ export class EditTracker {
         if (evt.toolCallId) {
             this.toolStartedAt.set(evt.toolCallId, Date.now());
         }
+        // 开始时刻随消息一起发给页面：「正在跑」那一行后面的耗时按它算（见 media/chat.js 的 toolStartedAt）
+        const startedAt = evt.toolCallId ? this.toolStartedAt.get(evt.toolCallId) : 0;
         this.collectKnownFile(toolName, evt.args);
         if (p && evt.toolCallId) {
             this.host.post({
@@ -80,6 +112,7 @@ export class EditTracker {
                 toolName,
                 path: p,
                 label: this.host.relativeTo(this.host.getCwd(), p),
+                startedAt,
                 ...this.summaryArgs(evt.toolCallId, evt.args),
             });
         } else {
@@ -87,6 +120,7 @@ export class EditTracker {
                 type: "tool",
                 toolCallId: evt.toolCallId,
                 toolName,
+                startedAt,
                 ...this.summaryArgs(evt.toolCallId, evt.args),
             });
         }
@@ -132,13 +166,15 @@ export class EditTracker {
             if (evt.toolCallId) {
                 const started = this.toolStartedAt.get(evt.toolCallId);
                 this.toolStartedAt.delete(evt.toolCallId);
+                const durationMs = typeof started === "number" ? Date.now() - started : undefined;
+                this.rememberDuration(evt.toolCallId, durationMs);
                 const truncation = extractTruncation(evt.result);
                 this.host.post({
                     type: "toolResult",
                     toolCallId: evt.toolCallId,
                     isError: !!evt.isError,
                     ...this.clippedResult(evt.toolCallId, extractResultText(evt.result) ?? ""),
-                    durationMs: typeof started === "number" ? Date.now() - started : undefined,
+                    durationMs,
                     truncation,
                     images: extractResultImages(evt.result),
                 });
@@ -150,6 +186,8 @@ export class EditTracker {
         }
         const started = this.toolStartedAt.get(evt.toolCallId);
         this.toolStartedAt.delete(evt.toolCallId);
+        const durationMs = typeof started === "number" ? Date.now() - started : undefined;
+        this.rememberDuration(evt.toolCallId, durationMs);
         const details = !evt.isError ? evt.result?.details : undefined;
         const errorText = evt.isError ? extractErrorText(evt.result) : undefined;
         this.host.post({
@@ -159,7 +197,7 @@ export class EditTracker {
             isError: !!evt.isError,
             errorText,
             canRevert: !evt.isError && this.editSnapshots.has(evt.toolCallId),
-            durationMs: typeof started === "number" ? Date.now() - started : undefined,
+            durationMs,
         });
     }
 

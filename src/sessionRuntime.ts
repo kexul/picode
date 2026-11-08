@@ -2022,6 +2022,8 @@ export class SessionRuntime {
                                     toolCallId: id,
                                     diff: this.edits.historyDiff(c, toolResults.get(id)),
                                     canRevert: revertable && this.edits.hasSnapshot(id),
+                                    // 这次当时用了多久（进程里还记着就给：统计弹窗重放后照旧算得上）
+                                    durationMs: this.edits.toolDurationMsOf(id),
                                 });
                             } else {
                                 const id = c.id || `${mid}:c${blockNo++}`;
@@ -2037,7 +2039,9 @@ export class SessionRuntime {
                                     toolName: c.name,
                                     ...summary,
                                     toolCallId: id,
-                                    ...(interrupted ? { interrupted: true } : {}),
+                                    // 还在跑的那一条：把它真开始的那一刻给界面（不然「正在跑」后面的
+                                    // 耗时只能从页面打开那一刻数，见 media/chat.js 的 toolStartedAt）
+                                    ...(interrupted ? { interrupted: true } : { startedAt: this.edits.toolStartedAtOf(id) || undefined }),
                                 });
                                 if (res) {
                                     const result = this.clipDetail(`result:${id}`, extractResultText(res.content ?? res) ?? "");
@@ -2050,6 +2054,8 @@ export class SessionRuntime {
                                         detailKey: result.detailKey,
                                         truncation: extractTruncation(res),
                                         images: this.prepareResultImages(id, extractResultImages(res.content ?? res), opts?.inlineImages),
+                                        // 这次当时用了多久（进程里还记着就给）
+                                        durationMs: this.edits.toolDurationMsOf(id),
                                     });
                                 }
                             }

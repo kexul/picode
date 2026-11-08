@@ -190,7 +190,7 @@ ${chatColumnClose}  <div id="sidebarDock" class="pk-host pk-drawer pk-workspace"
   <div id="toolStatsOverlay" class="hidden">
     <div id="toolStatsPanel">
       <div id="toolStatsHead">
-        <span id="toolStatsTitle" title="只算这次打开页面之后跑过的调用（刷新页面从头再算）；同一时刻并行跑的几条各算各的，合计会比实际过去的时间多。">工具调用耗时</span>
+        <span id="toolStatsTitle" title="整个会话的：刷新页面、重连都不重算（历史里的那些用当时记下的用时，进程重开过就只算之后跑过的）；同一时刻并行跑的几条各算各的，合计会比实际过去的时间多。">工具调用耗时</span>
         <span class="ts-spacer"></span>
         <button id="toolStatsClose" type="button" title="关闭" aria-label="关闭">${ICON_CLOSE}</button>
       </div>

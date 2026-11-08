@@ -984,9 +984,10 @@
       // autoTitle 是那颗按钮指上去说什么（后端拼好，见 auto.ts 的 autoIndicatorTitle）。
       auto: null,
       autoTitle: null,
-      // 工具调用耗时（见 noteToolDuration / renderToolStats）：只算这次打开页面之后跑过的调用。
-      // byTool：工具名 → { count, totalMs, maxMs }；slowest：跑得最久的那几次（最多 TOOL_STATS_SLOWEST 条）。
-      toolStats: { calls: 0, totalMs: 0, byTool: new Map(), slowest: [] },
+      // 工具调用耗时（见 noteToolDuration / renderToolStats）：整个会话的，重连重画不重算。
+      // byTool：工具名 → { count, totalMs, maxMs }；slowest：跑得最久的那几次（最多 TOOL_STATS_SLOWEST 条）；
+      // seen：已经记过的调用编号（同一条重放一遍不再算）。
+      toolStats: { calls: 0, totalMs: 0, byTool: new Map(), slowest: [], seen: new Set() },
       queuedSteering: [],
       pendingSteerRestore: null,
       autoLoadHinted: false,
@@ -2677,10 +2678,19 @@
   /** 模型的思考也算这一批里的一种条目：名字固定叫这个（不并进 NO_MERGE_TOOLS：同名照常合并）。 */
   const THINKING_NAME = "think";
 
-  function addTool(st, toolName, argStr, toolCallId, interrupted) {
+  /** 这条工具调用从什么时候开始跑的（毫秒；0 = 不知道，那种不写耗时，见 runningCalls）。
+   *  后端给得出来就用它的（`startedAt`）：那是工具事件到后端那一刻，页面没开、刷新过、重连过都一样，
+   *  重放历史时对「还在跑的那一条」也照给（见 src/sessionRuntime.ts 的 renderMessages）。
+   *  没给（老后端）就沿用老规矩：当场新长出来的按页面收到的那一刻算，重放出来的老调用记 0。 */
+  function toolStartedAt(st, startedAt) {
+    if (typeof startedAt === "number" && startedAt > 0) { return startedAt; }
+    return st && st.fromHistory ? 0 : Date.now();
+  }
+
+  function addTool(st, toolName, argStr, toolCallId, interrupted, startedAt) {
     hideEmptyHint(st);
     if (!NO_MERGE_TOOLS.has(toolName)) {
-      return addToolToGroup(st, toolName, argStr, toolCallId, null, interrupted);
+      return addToolToGroup(st, toolName, argStr, toolCallId, null, interrupted, startedAt);
     }
     const tag = document.createElement("span");
     // 还在跑的才转圈：没有 id 的静态调用没有结果事件；被中断的那条结果永远不会来（见 settleInterruptedTools）
@@ -2696,8 +2706,8 @@
     tag._resultMeta = {};
     tag._isError = false;
     tag._done = !running;
-    // 开始时刻（重放历史里的老调用记 0，不写耗时，见 runningCalls）
-    tag._startedAt = st.fromHistory ? 0 : Date.now();
+    // 开始时刻（见 toolStartedAt）
+    tag._startedAt = toolStartedAt(st, startedAt);
     // 提示内容：先只写调用那行（输入）；结果到了也只是记下来，点开那行才铺开（输出）
     // 带图片的结果（read 读图这类）不走提示框：结果到了会把这个标签整个换成对话里的一块图，
     // 见 mountToolImageBlock。
@@ -2719,7 +2729,7 @@
    *  没见过的名字新开一个标签。tipFill（可选）：这一条在提示框里怎么画，不传就按默认的
    *  「调用一行 + 结果一块」画（write / edit 自带一块，见 buildEditCard）。
    *  interrupted：这条已经中断了、结果永远不会来（重放历史时由后端标出来）。 */
-  function addToolToGroup(st, toolName, argStr, toolCallId, tipFill, interrupted) {
+  function addToolToGroup(st, toolName, argStr, toolCallId, tipFill, interrupted, startedAt) {
     const row = toolTagHost(st);
     let batch = st.toolGroups;
     if (!batch || batch.row !== row) {
@@ -2760,9 +2770,8 @@
       expanded: false,
       // 无 id 的静态调用无结果事件；被中断的那条也是——结果永远不会来（见 settleInterruptedTools）
       done: !toolCallId || !!interrupted,
-      // 这条从什么时候开始跑的（毫秒）：「正在跑的那一条」后面那个耗时拿它算（见 runningCalls）。
-      // 重放历史里的老调用（fromHistory）不知道它当时什么时候开始的：记 0，那种就不写耗时。
-      startedAt: st.fromHistory ? 0 : Date.now(),
+      // 这条从什么时候开始跑的（毫秒）：「正在跑的那一条」后面那个耗时拿它算（见 runningCalls）
+      startedAt: toolStartedAt(st, startedAt),
     };
     g.entries.push(entry);
     if (toolCallId && !interrupted) { st.toolGroupEntries.set(toolCallId, entry); }
@@ -4409,7 +4418,7 @@
    * 一条调用一块（见 fillEntry）。调用方拿到的是这一条自己的把手：结果回来、回滚了各调一下
    * （见 editCardResult / editReverted）。
    */
-  function buildEditCard(st, toolName, label, filePath, toolCallId, argStr, argsClipped) {
+  function buildEditCard(st, toolName, label, filePath, toolCallId, argStr, argsClipped, startedAt) {
     hideEmptyHint(st);
     let pendingResult = null;   // 结果（含 diff）：提示框随取随画
     let resultDone = false;
@@ -4476,7 +4485,7 @@
       }
     }
     // 挂进那一批（同名收成一个标签）：提示框里那一块交给上面 fillEntry 画
-    entry = addToolToGroup(st, toolName, argStr, toolCallId, fillEntry);
+    entry = addToolToGroup(st, toolName, argStr, toolCallId, fillEntry, false, startedAt);
 
     // 参数取回来了：换掉那一份，并把“只带了开头”改成实话
     entry.applyArgs = (json) => {
@@ -11984,7 +11993,7 @@
       case "tool": {
             finalizeCurrentAssistant(t);
         const argStr = msg.args ? JSON.stringify(msg.args) : "";
-        const item = addTool(t, msg.toolName, argStr, msg.toolCallId, !!msg.interrupted);
+        const item = addTool(t, msg.toolName, argStr, msg.toolCallId, !!msg.interrupted, msg.startedAt);
         // 参数一点没带过来（后端只留了“一共多少字 + 编号”）：点开提示框时再取（见 pumpClipDetails）
         if (item && typeof msg.argsOmitted === "number" && msg.detailKey) {
           const clip = { key: msg.detailKey, omitted: msg.argsOmitted, loaded: false, failed: false };
@@ -11996,7 +12005,7 @@
       case "editCardStart": {
             finalizeCurrentAssistant(t);
         const card = buildEditCard(t, msg.toolName, msg.label, msg.path, msg.toolCallId,
-          msg.args ? JSON.stringify(msg.args) : "", typeof msg.argsOmitted === "number");
+          msg.args ? JSON.stringify(msg.args) : "", typeof msg.argsOmitted === "number", msg.startedAt);
         // 参数没带过来：记在卡片那条 entry 上，点开提示框时取回来（写入预览要它）
         if (typeof msg.argsOmitted === "number" && msg.detailKey) {
           card.entry.argsClip = { key: msg.detailKey, omitted: msg.argsOmitted, loaded: false, failed: false };
@@ -12008,7 +12017,7 @@
       case "editCardResult": {
         const card = t.pendingToolCards.get(msg.toolCallId);
         if (card) {
-          noteToolDuration(t, card.toolName, card.callText, msg.durationMs);
+          noteToolDuration(t, card.toolName, card.callText, msg.durationMs, msg.toolCallId);
           card.setResult(msg);
           scrollToBottom(t);
           if (!msg.canRevert) { t.pendingToolCards.delete(msg.toolCallId); }
@@ -12152,7 +12161,7 @@
       case "toolResult": {
         const groupEntry = t.toolGroupEntries.get(msg.toolCallId);
         if (groupEntry) {
-          noteToolDuration(t, groupEntry.name, groupEntry.tipCall, msg.durationMs);
+          noteToolDuration(t, groupEntry.name, groupEntry.tipCall, msg.durationMs, msg.toolCallId);
           // 合并组里的那一条：结果填回组里（提示框里那条的结果），标签上的条数/转圈跟着重算
           if (Array.isArray(msg.images) && msg.images.length > 0) {
             removeEntryFromGroup(t, groupEntry, msg.images);
@@ -12170,7 +12179,7 @@
         }
         const tagEl = t.pendingToolTags.get(msg.toolCallId);
         if (tagEl) {
-          noteToolDuration(t, tagEl._toolName, tagEl._tipCall, msg.durationMs);
+          noteToolDuration(t, tagEl._toolName, tagEl._tipCall, msg.durationMs, msg.toolCallId);
           tagEl.classList.remove("running");
           syncRunningLine(t);   // 这条不跑了：末尾那行跟着少一条
           // 记录结果：文字结果供提示框用（见 setTagTip），带图的走另一条路
@@ -12864,8 +12873,8 @@
   // ==================== 工具调用耗时（侧边栏底部那颗「统计」）====================
   // 这个会话里每个工具调了几次、总共花了多久，以及花得最久的那几次调用。
   // 数从哪来：后端在每次工具结束时就算好了这一条跑了多久（src/editTracker.ts），随结果一起发过来
-  // （toolResult / editCardResult 的 durationMs）——工具标签上不写它，都汇总到这张弹窗里看。
-  // 所以只算这次打开页面之后真跑过的调用：刷新 / 重连后重放的历史不带这个数，统计从零重来。
+  // （toolResult / editCardResult 的 durationMs）；重放历史时，后端把当时记下的用时一并带上
+  // （见 src/sessionRuntime.ts 的 renderMessages），所以这张表是整个会话的，刷新页面、重连都不重算。
   const TOOL_STATS_SLOWEST = 6;   // 「最慢的几次」最多列几条
   // 「最慢的几次」里点开看全文的那几条（键 = 工具名 + 那一行的文字）：弹窗开着时又来结果会重画一遍，
   // 重画后要保持原样开着。存着不清，下回再打开还是展开——反正点一下就能收起。
@@ -12878,11 +12887,17 @@
     return !!toolStatsOverlay && !toolStatsOverlay.classList.contains("hidden");
   }
 
-  /** 记一笔：这个会话里某条工具调用跑完了，用了多久（durationMs 不在就不记：历史重放、被中断的都没这个数）。
-   *  text 是这条调用在提示框里写的那一行（bash 就是「$ 命令」），「最慢的几次」直接拿它给人看。 */
-  function noteToolDuration(st, toolName, text, durationMs) {
+  /** 记一笔：这个会话里某条工具调用跑完了，用了多久（durationMs 不在就不记：老后端、被中断的都没这个数）。
+   *  text 是这条调用在提示框里写的那一行（bash 就是「$ 命令」），「最慢的几次」直接拿它给人看。
+   *  id 是这条调用的编号：同一条只记一次（重连、刷新、整屏重画会把这批调用重新发一遍，
+   *  编号是稳定的，见 src/sessionRuntime.ts 的 renderMessages）——不然重画一次就多算一遍。 */
+  function noteToolDuration(st, toolName, text, durationMs, id) {
     if (!st || typeof durationMs !== "number" || !isFinite(durationMs) || durationMs < 0) { return; }
     const stats = st.toolStats;
+    if (id) {
+      if (stats.seen.has(id)) { return; }
+      stats.seen.add(id);
+    }
     const name = toolName || "?";
     const row = stats.byTool.get(name) || { count: 0, totalMs: 0, maxMs: 0 };
     row.count += 1;
@@ -12919,7 +12934,7 @@
 
   /** 画一遍统计弹窗的内容：上面一句汇总（一共几次 / 合计多久），下面按工具名一张表，
    *  再下面是花得最久的那几次调用（工具名 + 那次在干什么 + 耗时）。
-   *  那些“刷新页面就从头再算”“并行跑的几条各算各的”写在弹窗标题的悬停提示里（见 renderHtml 的 toolStatsTitle），
+   *  “并行跑的几条各算各的”写在弹窗标题的悬停提示里（见 renderHtml 的 toolStatsTitle），
    *  不在正文里另占几行小字。 */
   function renderToolStats() {
     if (!toolStatsBody) { return; }
