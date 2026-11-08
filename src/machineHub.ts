@@ -313,6 +313,15 @@ export class MachineHub {
         return !!this.states.get(machineUrl)?.online;
     }
 
+    /**
+     * 那个远程会话这会儿是不是还在跑（正在生成 / 后台命令没跑完）。
+     * 在那台新开一个会话时，旧的要还在跑就留着，不把没跑完的活掐掉（跟本机一个规矩）。
+     */
+    public isBusy(id: string): boolean {
+        const one = this.sessionOf(id);
+        return !!one && (one.streaming === true || one.bashRunning === true);
+    }
+
     // ========================================================================
     //  清单（界面「项目与会话」那一栏要的）
     // ========================================================================

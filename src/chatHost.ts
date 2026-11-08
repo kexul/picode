@@ -158,7 +158,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 别台那几台：连接、清单、会话号映射、转发（见 machineHub.ts）。 */
     private machineHub!: MachineHub;
     /** 刚请别台开了一个会话，等它报清单时认领（见 adoptPendingMachineNew）。 */
-    private pendingMachineNew: { machine: string; cwd: string; clientId: string; before: string[]; at: number } | null = null;
+    private pendingMachineNew: {
+        machine: string; cwd: string; clientId: string; before: string[]; at: number;
+        /** 新会话认下来以后要顺手关掉的那个（这台界面上的写法）：加号那条路才带它。 */
+        closeOld?: string;
+    } | null = null;
 
     // ---- 浏览器页面（接在本工作区上的“额外的屏”，可以有多个）----
     /** 页面连接登记簿 + 推送序号：所有浏览器页面共用同一份会话的出口。 */
@@ -302,17 +306,35 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const id = this.machineHub.toLocalId(want.machine, fresh.id);
         this.machineHub.markOpened(id);
         this.setActiveSession(id, want.clientId);
+        // 加号那条路：新的挂好了再关旧的（跟本机一个规矩）；这会儿它要还在跑就留着，不把没跑完的活掐掉
+        if (want.closeOld && want.closeOld !== id && !this.machineHub.isBusy(want.closeOld)) {
+            this.machineHub.closeSession(want.closeOld);
+        }
+    }
+
+    /**
+     * 这块屏正看着别台那台的一条会话、人点了加号：请那台在同一个目录里开一个新的。
+     * 本机开不出来 —— 那个目录长在人家盘上，开出来的会是个跟当前会话无关的本机会话。
+     */
+    protected override newSessionOnForeign(localId: string, clientId: string): boolean {
+        const machine = this.machineHub.ownerOf(localId);
+        const one = this.machineHub.sessionOf(localId);
+        if (!machine || !one?.cwd) { return false; }
+        this.startMachineSession(machine, one.cwd, clientId, localId);
+        return true;
     }
 
     /**
      * 在那台上开一个会话（工作区行尾那颗加号、或“在新工作区里开”挑完目录）。
      * 先记下那台现在有哪些会话：等它报上新的清单，多出来的那个就是这一个（见 adoptPendingMachineNew）。
+     * @param closeOld 它认下来以后顺手关掉的那个（这台界面上的写法；加号那条路传，新开一个就只留一格）
      */
-    private startMachineSession(machine: string, cwd: string, clientId: string): void {
+    private startMachineSession(machine: string, cwd: string, clientId: string, closeOld?: string): void {
         this.pendingMachineNew = {
             machine, cwd, clientId,
             before: this.machineHub.sessionIdsOf(machine),
             at: Date.now(),
+            ...(closeOld ? { closeOld } : {}),
         };
         this.machineHub.newSession(machine, cwd);
     }

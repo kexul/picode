@@ -314,6 +314,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 本机清单里要额外摆上的那几条（别台那台认下的会话）；没有就是空表。 */
     protected foreignSessionEntries(): Record<string, unknown>[] { return []; }
 
+    /**
+     * 这块屏看的是别台那台的一条会话、人点了加号：要开的新会话在那边
+     * （目录长在人家盘上，本机开出来的只会是个跑在本机默认目录里的会话）。
+     * 宿主要请那台在同一个目录里开一个：办成了返回 true，本机这边就不再开。
+     */
+    protected newSessionOnForeign(_foreignId: string, _clientId: string): boolean { return false; }
+
     /** 把“谁在看哪个会话”的账本清空（宿主收摊 / 会话全部没了）。 */
     protected forgetAllClients(): void {
         this.clientSessions.clear();
@@ -2425,8 +2432,14 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 // 旧的那个关掉（它已经在盘上了，去「项目与会话」里的历史会话点得回来）。
                 // 例外：旧的那个还在跑（正在生成 / 跑工具），那就留着，不把没跑完的活掐掉。
                 // 先建新的、再关旧的：新会话要继承旧会话的目录与模型，关早了就只剩宿主自己的默认目录了。
-                const old = this.getActive();
-                const rt = this.newSession();
+                const clientId = this.currentPageId;
+                // 看的是别台那台的一条会话：新会话得开在那边同一个目录里，本机开不出来
+                const focused = this.focusedIdFor(clientId);
+                if (focused && this.isForeignSessionId(focused) && this.newSessionOnForeign(focused, clientId)) {
+                    return;
+                }
+                const old = this.getActive(clientId);
+                const rt = this.newSession(0, clientId);
                 if (old && old.id !== rt.id && !old.streaming && !old.hasRunningBashTasks()) {
                     this.closeSession(old.id);
                 }
