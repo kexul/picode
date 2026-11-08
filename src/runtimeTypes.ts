@@ -101,6 +101,42 @@ export type RuntimeActivity = "idle" | "working" | "thinking" | "tool";
 /** 一条消息的出口：往一个页面（或一批页面）写一条要显示的消息。 */
 export type MessageSink = (msg: Record<string, unknown>) => void;
 
+/**
+ * 编排层眼里的一条会话。
+ *
+ * 本机的那种就是 SessionRuntime（一只 pi 进程）；别台的会话由后端转过来（machineHub 的
+ * RemoteSession），也一样是 SessionRef。于是“这块屏现在看的是哪条、它在哪个目录、用的什么模型”
+ * 这类事只有一种写法，不必分两种（以前每碰一处就要补一句“我看的是别台的”）。
+ *
+ * 真正只有本机进程才干得了的事（发话、停、读文件、派子会话）不在这一层：那几样要么找
+ * SessionRuntime，要么按会话号转发到那台（见 machineHub）。
+ */
+export interface SessionRef {
+    readonly id: string;
+    /** 这条会话跑在哪个目录（历史、相对路径、新会话继承目录都看它）。 */
+    readonly cwd: string;
+    /** 在跑（正在生成 / 正在干活）。 */
+    readonly streaming: boolean;
+    /** pi 自己给的会话标题（还没有就是空串）。 */
+    readonly sessionTitle: string;
+    /** 现在用的会话文件；还没落盘时是空串 / undefined。 */
+    readonly currentSessionPath: string | undefined;
+    readonly modelId: string | undefined;
+    readonly provider: string | undefined;
+    readonly thinkingLevel: string | undefined;
+    /** 还没承载任何对话内容（打开历史会话时可以顶掉它）。 */
+    isConversationEmpty(): boolean;
+    /** 现在用的模型（新会话继承它）。 */
+    currentModel(): { provider?: string; modelId?: string } | undefined;
+    /** 后台还有命令没跑完。 */
+    hasRunningBashTasks(): boolean;
+}
+
+/** 别台代理过来的会话：多一个“那台现在还报着它吗”（本机进程那种永远算在）。 */
+export interface RemoteSessionRef extends SessionRef {
+    readonly known: boolean;
+}
+
 /** 一轮对话收尾时的结果状态。 */
 export type TurnEndStatus =
     /** 正常跑完 */

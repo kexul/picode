@@ -35,7 +35,7 @@ import { randomNameParts, composeName } from "./names";
 import { pathCaseKey, relativeTo as pathRelativeTo, sameDir } from "./pathRules";
 import { desktopScreenshotSupported } from "./desktopScreenshot";
 import { desktopLiveSupported } from "./desktopLive";
-import type { PanelLaunch, TurnEndStatus } from "./runtimeTypes";
+import type { PanelLaunch, RemoteSessionRef, SessionRef, TurnEndStatus } from "./runtimeTypes";
 import type { TabaRequest, TabaSpawnRequest, TabaStopRequest } from "./tabaProtocol";
 import { TABA_DECODER } from "./tabaProtocol";
 import { ASK_DECODER } from "./askProtocol";
@@ -165,6 +165,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
     private readonly clientSessions = new Map<string, string>();
     /** 最近有人切过去的那个会话：某块屏还没挑过时先给它看这个（它还没开口，只能这么猜）。 */
     private lastFocusedPanelId: string | undefined;
+    /**
+     * 同一个意思，但别台那台的会话也算进来：浏览器页面一刷新就换了新标识，后端不记得它原来在看哪个，
+     * 靠这一条接回去（见 ensureClientSession）。只记本机那些的话，刷新后就跳回一个本机会话。
+     */
+    private lastViewedId: string | undefined;
     /** 每个会话最近一次“成了某块屏正在看的那个”的时刻（一个目录里开着好几个时挑最近用过的）。 */
     private readonly panelUsedAt = new Map<string, number>();
     /** 正在说话的那块屏（页面标识）：处理某块屏发来的消息期间才有值，平时是空串。 */
@@ -315,11 +320,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected foreignSessionEntries(): Record<string, unknown>[] { return []; }
 
     /**
-     * 这块屏看的是别台那台的一条会话、人点了加号：要开的新会话在那边
-     * （目录长在人家盘上，本机开出来的只会是个跑在本机默认目录里的会话）。
-     * 宿主要请那台在同一个目录里开一个：办成了返回 true，本机这边就不再开。
+     * 这块屏看的是别台那台上的一条、人点了加号（新建会话）：新会话得开在那边同一个目录里，
+     * 本机开出来的只会是个跑在本机默认目录、跟当前工作区无关的会话。
+     * 宿主要请那台开一个：办成了返回 true，本机这边就不再开。
      */
-    protected newSessionOnForeign(_foreignId: string, _clientId: string): boolean { return false; }
+    protected newSessionOnRemote(_current: SessionRef, _clientId: string): boolean { return false; }
 
     /** 把“谁在看哪个会话”的账本清空（宿主收摊 / 会话全部没了）。 */
     protected forgetAllClients(): void {
@@ -328,6 +333,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.panelUsedAt.clear();
         this.closedSessions.clear();
         this.lastFocusedPanelId = undefined;
+        this.lastViewedId = undefined;
     }
 
     // ---- RuntimeHost：配置 / cwd ----
@@ -732,7 +738,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     public wantsTrimmedHistory(): boolean { return false; }
 
     // ---- 查找 ----
-    /** 这块屏现在显示的会话（不传 = 正在说话的那块屏）。 */
+    /** 这块屏现在显示的会话（不传 = 正在说话的那块屏）。只交本机的（有 pi 进程的那种）。 */
     public getActive(clientId: string = this.currentPageId): SessionRuntime | undefined {
         const own = this.clientSessions.get(clientId);
         if (own && this.panels.has(own)) { return this.panels.get(own); }
@@ -743,6 +749,23 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return this.lastFocusedPanelId ? this.panels.get(this.lastFocusedPanelId) : undefined;
     }
 
+    /**
+     * 这块屏现在看的那条会话：本机的就是那个运行时，别台的由子类给一份代理（见 remoteSessionRef）。
+     * 要的是“哪条 / 哪个目录 / 什么模型 / 在不在跑”这类事就用它，不必先分“是不是别台的”。
+     */
+    public getActiveRef(clientId: string = this.currentPageId): SessionRef | undefined {
+        const own = this.clientSessions.get(clientId);
+        if (own && this.panels.has(own)) { return this.panels.get(own); }
+        if (own) {
+            const ref = this.remoteSessionRef(own);
+            if (ref) { return ref; }
+        }
+        return this.lastFocusedPanelId ? this.panels.get(this.lastFocusedPanelId) : undefined;
+    }
+
+    /** 别台那条会话当成一条会话看（子类把 machineHub 那一份代理交出来；本机没有这种）。 */
+    protected remoteSessionRef(_id: string): RemoteSessionRef | undefined { return undefined; }
+
     /** 这块屏自己挑的是哪个会话（没挑过、或挑的那个已经被关掉就是 undefined）。 */
     public focusedIdFor(clientId: string): string | undefined {
         const id = this.clientSessions.get(clientId);
@@ -750,12 +773,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
         return id && this.isForeignSessionId(id) ? id : undefined;
     }
 
+    /** 这个号是不是一条会话（本机那个运行时在，或者别台那台上认得这个号）。 */
+    private isSessionId(id: string): boolean {
+        return this.panels.has(id) || !!this.remoteSessionRef(id);
+    }
+
     /**
      * 直接把某块屏记成在看某个会话（不发消息、不广播）。
      * 用在“这块屏换了个新标识、但它原来就是在看这个会话”的场合（VSCode 窗口重连）。
      */
     public adoptClientSession(clientId: string, panelId: string): void {
-        if (!this.panels.has(panelId) && !this.isForeignSessionId(panelId)) { return; }
+        if (!this.isSessionId(panelId)) { return; }
         this.clientSessions.set(clientId, panelId);
         // 换了个新标识但还看原来那个会话（窗口重连）：跟“切过去”一样走一遍通知
         this.onClientSessionChanged(clientId, panelId);
@@ -780,7 +808,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 当前会话还没承载任何对话内容时，才算可以顶掉它（打开历史会话时复用）。 */
     protected isActiveSessionEmpty(clientId: string = this.currentPageId): boolean {
-        return this.getActive(clientId)?.isConversationEmpty() === true;
+        return this.getActiveRef(clientId)?.isConversationEmpty() === true;
     }
 
     /** 子类可接入跨工作区的全局唯一名字池。 */
@@ -827,10 +855,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
         launch: PanelLaunch,
         spareDelayMs = 0,
         clientId: string = this.currentPageId,
+        inherited?: { provider?: string; modelId?: string },
     ): SessionRuntime | undefined {
         const cfg = this.getConfig();
         if (!this.resolveExecutable(cfg.piPath)) { return undefined; }
-        const rt = this.createPanelRuntime(this.getActive(clientId)?.currentModel(), launch);
+        const rt = this.createPanelRuntime(inherited ?? this.getActiveRef(clientId)?.currentModel(), launch);
         this.activateSession(rt, clientId);
         this.ensureSpare(spareDelayMs);
         return rt;
@@ -842,11 +871,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
      */
     public newSessionInDir(
         dir: string,
-        opts?: { clientId?: string; spareDelayMs?: number },
+        opts?: { clientId?: string; spareDelayMs?: number; inherited?: { provider?: string; modelId?: string } },
     ): SessionRuntime | undefined {
         const target = path.resolve(dir);
         const launch: PanelLaunch = sameDir(target, this.getCwd()) ? {} : { cwd: target, skipSpare: true };
-        return this.newSessionWithLaunch(launch, opts?.spareDelayMs ?? 0, opts?.clientId ?? this.currentPageId);
+        return this.newSessionWithLaunch(
+            launch, opts?.spareDelayMs ?? 0, opts?.clientId ?? this.currentPageId, opts?.inherited,
+        );
     }
 
     /** 把一个会话设为某块屏（默认正在说话的那块）现在看的会话。 */
@@ -863,10 +894,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 界面靠这个号认出“这条说的是我上一下要的，已经过时了”。
      */
     public setActiveSession(panelId: string, clientId: string = this.currentPageId, switchId?: unknown): void {
-        const foreign = !this.panels.has(panelId) && this.isForeignSessionId(panelId);
-        if (!this.panels.has(panelId) && !foreign) { return; }
+        const local = this.panels.has(panelId);
+        const foreign = !local && !!this.remoteSessionRef(panelId);
+        if (!local && !foreign) { return; }
         if (this.clientSessions.get(clientId) === panelId) { return; }
         this.clientSessions.set(clientId, panelId);
+        this.lastViewedId = panelId;
         // 别台的会话在这台没有进程：只记“这块屏在看它”，不挤进“最近切过去的那个”那份账里
         if (!foreign) {
             this.lastFocusedPanelId = panelId;
@@ -892,6 +925,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
             this.clientSessions.set(clientId, newId);
             touched.push(clientId);
         }
+        // 记着的“最近有人切过去的那个”也是这个旧号的话，跟着换掉（不然刷新后按旧号接不上）
+        if (this.lastViewedId === oldId) { this.lastViewedId = newId; }
         if (touched.length === 0) { return; }
         this.onClientSessionChanged(touched[0], newId);
         this.broadcastSessionList(true);
@@ -936,10 +971,24 @@ export abstract class ChatControllerBase implements RuntimeHost {
             // pi 不在（没装 / 路径不对）就没有会话可看：界面那边自己会报“找不到 pi”
             return !!created;
         }
+        // 有人切到过别台那台上的一条：那也算“最近在看的那个”。浏览器页面刷新换了新标识时，
+        // 后端只能靠这一条把它接回原来那一条（不然它跳到本机某个会话上，别台那条就“不见了”）。
+        const viewed = this.recentlyViewedSession();
         const last = this.lastFocusedPanelId ? this.panels.get(this.lastFocusedPanelId) : undefined;
-        const pick = last ?? this.panels.values().next().value;
+        const pick = viewed ?? last ?? this.panels.values().next().value;
         if (pick) { this.setActiveSession(pick.id, clientId); }
         return false;
+    }
+
+    /** 最近有人切过去的那个会话（本机的是进程还在；别台的要那台还报着它）。 */
+    private recentlyViewedSession(): { id: string } | undefined {
+        const id = this.lastViewedId;
+        if (!id) { return undefined; }
+        if (this.panels.has(id)) { return this.panels.get(id); }
+        const ref = this.remoteSessionRef(id);
+        if (!ref) { return undefined; }
+        // 别台那条已经不在清单里了（那台上关掉了）：当作没记过，别把这块屏派到一个不存在的会话上
+        return ref.known ? { id } : undefined;
     }
 
     /** 某个目录里已经开着的会话：同一个目录开着好几个时，挑最近用过的那个（子会话排在后面）。 */
@@ -977,6 +1026,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             else { this.clientSessions.delete(requester); }
         }
         if (this.lastFocusedPanelId === panelId) { this.lastFocusedPanelId = this.panels.keys().next().value; }
+        if (this.lastViewedId === panelId) { this.lastViewedId = this.panels.keys().next().value; }
         this.broadcastSessionList(true);
     }
 
@@ -2433,11 +2483,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 // 例外：旧的那个还在跑（正在生成 / 跑工具），那就留着，不把没跑完的活掐掉。
                 // 先建新的、再关旧的：新会话要继承旧会话的目录与模型，关早了就只剩宿主自己的默认目录了。
                 const clientId = this.currentPageId;
-                // 看的是别台那台的一条会话：新会话得开在那边同一个目录里，本机开不出来
-                const focused = this.focusedIdFor(clientId);
-                if (focused && this.isForeignSessionId(focused) && this.newSessionOnForeign(focused, clientId)) {
-                    return;
-                }
+                // 看的是别台那台上的一条：新会话得开在那边同一个目录里（本机开不出来）
+                const current = this.getActiveRef(clientId);
+                if (current && this.newSessionOnRemote(current, clientId)) { return; }
                 const old = this.getActive(clientId);
                 const rt = this.newSession(0, clientId);
                 if (old && old.id !== rt.id && !old.streaming && !old.hasRunningBashTasks()) {

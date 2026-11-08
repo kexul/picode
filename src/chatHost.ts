@@ -21,6 +21,7 @@ import * as path from "path";
 import type { AskRequest } from "./askProtocol";
 import { writeAskAnswer } from "./askProtocol";
 import type { MessageSink } from "./sessionRuntime";
+import type { RemoteSessionRef, SessionRef } from "./runtimeTypes";
 import { ChatControllerBase, type ViewOptionItem, type WorkspacePage } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
@@ -125,6 +126,14 @@ function withDefaultPort(url: string): string {
     } catch {
         return url;   // 不像话的地址原样交上去，那层会把它当无效项丢掉
     }
+}
+
+/** 一条消息里带的新会话要继承的模型（那边请这边开的时候带上；没带就按本机平时的规矩）。 */
+function newSessionModelOf(msg: any): { provider?: string; modelId?: string } | undefined {
+    const provider = typeof msg?.provider === "string" ? msg.provider : "";
+    const modelId = typeof msg?.modelId === "string" ? msg.modelId : "";
+    if (!provider && !modelId) { return undefined; }
+    return { ...(provider ? { provider } : {}), ...(modelId ? { modelId } : {}) };
 }
 
 /** 这条消息是不是“一次性界面”（确认框、浮层、跑完提醒）：补发里只有序号位、没有内容。 */
@@ -255,6 +264,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return !!this.machineHub.ownerOf(id);
     }
 
+    /** 别台那条会话当成一条会话看（编排层里的“当前会话”就是那一条时用这个，见 SessionRef）。 */
+    protected override remoteSessionRef(id: string): RemoteSessionRef | undefined {
+        return this.machineHub.sessionRef(id);
+    }
+
     /** 本机清单里要给别台那些会话多摆的那几条（只算“这台认下的”那几个）。 */
     protected override foreignSessionEntries(): Record<string, unknown>[] {
         const out: Record<string, unknown>[] = [];
@@ -313,14 +327,13 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
-     * 这块屏正看着别台那台的一条会话、人点了加号：请那台在同一个目录里开一个新的。
-     * 本机开不出来 —— 那个目录长在人家盘上，开出来的会是个跟当前会话无关的本机会话。
+     * 这块屏看的是别台那台上的一条、人点了加号（新建会话）：跟本机一个规矩——
+     * 在同一个目录里开一个新的、模型也跟着过去，旧的没在跑就一起关掉。
      */
-    protected override newSessionOnForeign(localId: string, clientId: string): boolean {
-        const machine = this.machineHub.ownerOf(localId);
-        const one = this.machineHub.sessionOf(localId);
-        if (!machine || !one?.cwd) { return false; }
-        this.startMachineSession(machine, one.cwd, clientId, localId);
+    protected override newSessionOnRemote(current: SessionRef, clientId: string): boolean {
+        const machine = this.machineHub.ownerOf(current.id);
+        if (!machine || !current.cwd) { return false; }
+        this.startMachineSession(machine, current.cwd, clientId, current.id, current.currentModel());
         return true;
     }
 
@@ -328,15 +341,22 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 在那台上开一个会话（工作区行尾那颗加号、或“在新工作区里开”挑完目录）。
      * 先记下那台现在有哪些会话：等它报上新的清单，多出来的那个就是这一个（见 adoptPendingMachineNew）。
      * @param closeOld 它认下来以后顺手关掉的那个（这台界面上的写法；加号那条路传，新开一个就只留一格）
+     * @param inherited 新会话继承的模型（跟本机一个规矩：跟当前会话的模型走）
      */
-    private startMachineSession(machine: string, cwd: string, clientId: string, closeOld?: string): void {
+    private startMachineSession(
+        machine: string,
+        cwd: string,
+        clientId: string,
+        closeOld?: string,
+        inherited?: { provider?: string; modelId?: string },
+    ): void {
         this.pendingMachineNew = {
             machine, cwd, clientId,
             before: this.machineHub.sessionIdsOf(machine),
             at: Date.now(),
             ...(closeOld ? { closeOld } : {}),
         };
-        this.machineHub.newSession(machine, cwd);
+        this.machineHub.newSession(machine, cwd, inherited);
     }
 
     // ========================================================================
@@ -1524,6 +1544,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     protected override onClientSessionChanged(clientId: string, panelId: string): void {
         const screenId = this.pageScreen.get(clientId);
         if (screenId) { this.screenSession.set(screenId, panelId); }
+        // 这块屏开始看别台那条会话了：请那台把它重画一遍（它手上已经有这段正文就不做，见 machineHub）。
+        // 页面刷新过时走的就是这条路：新标识什么都不知道，正文得从那边再要一份。
+        this.machineHub.openSession(panelId);
         // 这个会话正有问话在等：卡片也发给这块屏（新开的页面、切过去的窗口都走这里）
         for (const [id, state] of this.openCards) {
             if (state.sessionId === panelId) { this.sendCardToScreen(id, state, clientId); }
@@ -1757,6 +1780,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 // 工作区那一行行尾的加号：就在那一行的目录里开新会话。
                 // 目录明写在消息里：面板可能同时在几块屏上开着，那一行写的是哪个目录就是哪个。
                 // 带 machine = 别台那一行：请那台在它那个目录里开（这边等它报清单时认领）。
+                // provider / modelId = 那台（或这台）请它开的时候指定了新会话要继承的模型。
                 if (typeof msg.machine === "string" && msg.machine) {
                     if (typeof msg.path === "string" && msg.path) {
                         this.startMachineSession(msg.machine, msg.path, this.currentPageId);
@@ -1765,6 +1789,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 }
                 this.newSessionInDir(
                     typeof msg.path === "string" && msg.path ? msg.path : this.activeCwd(),
+                    { inherited: newSessionModelOf(msg) },
                 );
                 return true;
             case "requestDesktopScreenshot":

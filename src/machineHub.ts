@@ -22,6 +22,7 @@ import * as http from "http";
 import * as https from "https";
 import { listDirectories } from "./dirBrowse";
 import { PING_MS, TICK_TIMEOUT_MS } from "./chatProtocol";
+import type { RemoteSessionRef } from "./runtimeTypes";
 
 /** 会话号的写法：`remote:<那台的地址>:<它那边的号>`（跟从前页面用的写法一致）。 */
 const REMOTE_PREFIX = "remote:";
@@ -44,7 +45,41 @@ export interface MachineSession {
     percent?: number;
 }
 
-/** 那台上的一个项目（`/sessions` 回报的那一份）。 */
+/**
+ * 别台上的一个会话，编排层当它是一条普通会话看（见 runtimeTypes 的 SessionRef）。
+ *
+ * 它自己不跑东西：要什么数据都现从那台推来的会话清单里读（那台每次报清单都会换一份，
+ * 这里就不必跟着更新）。要“动”它的（发话、停、读文件）照旧经 machineHub 转发。
+ */
+export class RemoteSession implements RemoteSessionRef {
+    constructor(private readonly hub: MachineHub, public readonly id: string) {}
+
+    /** 那台现在还报着这条会话吗（报过才有内容可看；后端刚起来、还没问回清单时是 false）。 */
+    public get known(): boolean { return !!this.data; }
+
+    public get cwd(): string { return this.data?.cwd ?? ""; }
+    public get streaming(): boolean { return this.data?.streaming === true; }
+    public get sessionTitle(): string { return this.data?.title ?? ""; }
+    public get currentSessionPath(): string | undefined { return this.data?.file || undefined; }
+    public get modelId(): string | undefined { return this.data?.modelId; }
+    public get provider(): string | undefined { return this.data?.provider; }
+    public get thinkingLevel(): string | undefined { return this.data?.thinkingLevel; }
+
+    /** 那台那边一条对话有没有内容这边看不见：一律当“有”，不拿它去顶掉一条历史会话。 */
+    public isConversationEmpty(): boolean { return false; }
+
+    public currentModel(): { provider?: string; modelId?: string } | undefined {
+        const one = this.data;
+        if (!one || (!one.provider && !one.modelId)) { return undefined; }
+        return { provider: one.provider, modelId: one.modelId };
+    }
+
+    public hasRunningBashTasks(): boolean { return this.data?.bashRunning === true; }
+
+    private get data(): MachineSession | undefined { return this.hub.sessionOf(this.id); }
+}
+
+/** 那台上一个项目（`/sessions` 回报的那一份）。 */
 export interface MachineProject {
     name: string;
     cwd: string;
@@ -254,6 +289,11 @@ export class MachineHub {
         return one ? one.machine : undefined;
     }
 
+    /** 一个别台的会话当成一条会话看（本机的号、设置里没有的地址都给 undefined）。 */
+    public sessionRef(id: string): RemoteSession | undefined {
+        return this.parseId(id) ? new RemoteSession(this, id) : undefined;
+    }
+
     /** 这台后端认下的远程会话（页面要看到的那几格）。 */
     public openedIds(): string[] { return Array.from(this.opened); }
 
@@ -455,11 +495,14 @@ export class MachineHub {
         this.post(id, { type: "switchToSession", sessionId: one.remoteId });
     }
 
-    /** 在那台的一个目录里开新会话。 */
-    public newSession(machineUrl: string, cwd: string): void {
+    /** 在那台的一个目录里开新会话（模型跟过去就跟本机新会话一个规矩：继承现在看的这条）。 */
+    public newSession(machineUrl: string, cwd: string, inherited?: { provider?: string; modelId?: string }): void {
         const st = this.states.get(machineUrl);
         if (!st) { return; }
-        this.postTo(st, { type: "newSessionInWorkspace", path: cwd });
+        const model: Record<string, string> = {};
+        if (inherited?.provider) { model.provider = inherited.provider; }
+        if (inherited?.modelId) { model.modelId = inherited.modelId; }
+        this.postTo(st, { type: "newSessionInWorkspace", path: cwd, ...model });
     }
 
     /** 那台的会话关掉（这台界面上点 × 关了一格别台的会话）。 */

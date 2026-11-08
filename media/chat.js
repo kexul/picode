@@ -8919,7 +8919,8 @@
   function openFileDirect(path, line, col, dir) {
     if (!path) { return; }
     if (fileSidebar.root) { openSidebarLink(path, line, dir); return; }
-    vscode.postMessage({ type: "openFile", path, line, col });
+    // 带上会话号：看的是别台那台的一条会话时，这个文件在那台盘上，由后端转给那台去开
+    vscode.postMessage({ type: "openFile", path, line, col, sessionId: activeId || "" });
   }
 
   let fileCandidatesSeq = 0;
