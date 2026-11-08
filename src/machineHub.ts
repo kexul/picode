@@ -44,6 +44,16 @@ export interface MachineSession {
     provider?: string;
     thinkingLevel?: string;
     percent?: number;
+    tps?: number;
+    activity?: string;
+    activityDetail?: string;
+    /** 子会话挂在哪个会话下面（那台那边的写法） */
+    parentId?: string | null;
+    /** 这条会话自己是派活的子会话时那一条（见 chatControllerBase 的 tabaPanelInfo） */
+    taba?: unknown;
+    /** 自动接着干开着没有（那台的开关，这边只是显示） */
+    auto?: unknown;
+    autoTitle?: string | null;
 }
 
 /**

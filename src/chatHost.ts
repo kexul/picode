@@ -286,11 +286,15 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 machine,
                 machineName: this.machineHub.nameOf(machine),
                 machineOnline: this.machineHub.isOnline(machine),
-                // 子会话、自动接着干这两样是那台自己的事：别台的会话在这一台上不画这两个
-                parentId: null,
-                taba: null,
-                auto: null,
-                autoTitle: null,
+                // 子会话、自动接着干这两样那台自己算好了（它的会话清单里就带着）：原样搬过来，
+                // 界面用同一套规矩画（开关点了会转给那台，见 routeToMachine）。子会话挂的那个父会话号
+                // 要换成这台的写法 —— 跟别的会话号一个规矩。
+                parentId: typeof one.parentId === "string" && one.parentId
+                    ? this.machineHub.toLocalId(machine, one.parentId)
+                    : null,
+                taba: one.taba ?? null,
+                auto: one.auto ?? null,
+                autoTitle: typeof one.autoTitle === "string" ? one.autoTitle : null,
             });
         }
         return out;
