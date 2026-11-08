@@ -24,6 +24,7 @@ import { listDirectories } from "./dirBrowse";
 import { PING_MS, TICK_TIMEOUT_MS } from "./chatProtocol";
 import type { RemoteSessionRef } from "./runtimeTypes";
 import type { SessionListItem } from "./sessionStore";
+import { JpegFrameSplitter } from "./desktopLive";
 
 /** 会话号的写法：`remote:<那台的地址>:<它那边的号>`（跟从前页面用的写法一致）。 */
 const REMOTE_PREFIX = "remote:";
@@ -573,6 +574,75 @@ export class MachineHub {
             items: Array.isArray(body?.items) ? body.items : [],
             nextOffset: typeof body?.nextOffset === "number" ? body.nextOffset : offset,
             hasMore: body?.hasMore === true,
+        };
+    }
+
+    // ========================================================================
+    //  那台的桌面（截图按钮 / 按住不放的实时画面）
+    // ========================================================================
+
+    /**
+     * 要一张那台的桌面截图。那台没起 / 那台不是 Windows 就把原因写在 error 里（不抛）。
+     */
+    public async deskShot(machineUrl: string): Promise<{ ok: boolean; data?: Buffer; mimeType?: string; error?: string }> {
+        const st = this.states.get(machineUrl);
+        if (!st) { return { ok: false, error: "设置里没有这台机器" }; }
+        this.opts.log(`[别台] 问 ${this.nameOf(machineUrl)} 要一张桌面截图`);
+        return new Promise((resolve) => {
+            const secure = st.url.startsWith("https:");
+            const req = (secure ? https : http).get(st.url + "/desk", { timeout: REQUEST_TIMEOUT_MS }, (res) => {
+                const chunks: Buffer[] = [];
+                res.on("data", (chunk: Buffer) => { chunks.push(chunk); });
+                res.on("end", () => {
+                    const body = Buffer.concat(chunks);
+                    if (res.statusCode !== 200) {
+                        const why = body.toString("utf8").trim() || `那台回 ${res.statusCode}`;
+                        resolve({ ok: false, error: why });
+                        return;
+                    }
+                    resolve({ ok: true, data: body, mimeType: String(res.headers["content-type"] || "image/jpeg") });
+                });
+            });
+            req.on("timeout", () => { req.destroy(new Error("那台没回应")); });
+            req.on("error", (err) => { resolve({ ok: false, error: String(err?.message || err || "连不上那台") }); });
+        });
+    }
+
+    /**
+     * 看那台的桌面实时画面：那台一条 `/desk/live` 一直吐帧，这里拆开交给 onFrame。
+     * @returns 不看了
+     */
+    public deskLive(machineUrl: string, onFrame: (jpeg: Buffer) => void, onFail: (note: string) => void): () => void {
+        const st = this.states.get(machineUrl);
+        if (!st) { onFail("设置里没有这台机器"); return () => { /* 没开起来 */ }; }
+        this.opts.log(`[别台] 看 ${this.nameOf(machineUrl)} 的桌面实时画面`);
+        const splitter = new JpegFrameSplitter();
+        let closed = false;
+        let req: http.ClientRequest | undefined;
+        const fail = (note: string) => {
+            if (closed) { return; }
+            closed = true;
+            try { req?.destroy(); } catch { /* 已经断了 */ }
+            onFail(note);
+        };
+        const secure = st.url.startsWith("https:");
+        req = (secure ? https : http).get(st.url + "/desk/live", (res) => {
+            if (res.statusCode !== 200) {
+                fail(`那台没能给桌面画面（回 ${res.statusCode}）`);
+                res.resume();
+                return;
+            }
+            res.on("data", (chunk: Buffer) => {
+                splitter.push(chunk, (jpeg) => { if (!closed) { onFrame(jpeg); } });
+                if (splitter.broken) { fail("那台给的桌面画面帧长不对劲。"); }
+            });
+            res.on("end", () => { fail("那台的桌面画面断了。"); });
+            res.on("error", (err) => { fail(String((err as any)?.message || err || "那台的桌面画面断了。")); });
+        });
+        req.on("error", (err) => { fail(String(err?.message || err || "连不上那台")); });
+        return () => {
+            closed = true;
+            try { req?.destroy(); } catch { /* 已经断了 */ }
         };
     }
 

@@ -225,6 +225,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private readonly desktopLive = new DesktopLive();
     /** 直连那几路（`/live`）的编号：一条请求一个号，新旧两条不会互相误杀。 */
     private desktopLiveSeq = 0;
+    /** 那块屏正在看**别台**那台的桌面实时画面（屏标识 → 停掉它）。本机那一路不在这里。 */
+    private readonly machineLive = new Map<string, () => void>();
     /** 右下角那张提醒卡片（见 bin/notice.cs）：有事才起它，没有托盘、没有主界面。 */
     private readonly notice = new DesktopNotice({
         log: (text) => this.log(text),
@@ -1242,8 +1244,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     public onPageDisconnected(pageId: string): void {
         this.dropCardsForClient(pageId);
         this.dropPickerForClient(pageId);
-        // 这块屏还在看桌面实时画面的话，它这一走就别再拍了
+        // 这块屏还在看桌面实时画面的话，它这一走就别再拍了（本机那支 / 别台那一条都停）
         this.desktopLive.removeViewer(pageId);
+        this.stopMachineLive(pageId);
         // 整屏重画画到一半页面走了：重画的内容不进补发暂存，它回来对账时会“看似不缺”，
         // 内容却缺一截。记下来，它一连上就照原来那一种重画一遍。
         const inflight = this.resyncingPages.get(pageId);
@@ -1873,6 +1876,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             case "stopDesktopLive":
                 // 那块屏把那一层收掉了：不看了就别再拍（别的一块屏还在看就照旧拍）
                 this.desktopLive.removeViewer(this.currentPageId);
+                this.stopMachineLive(this.currentPageId);
                 return true;
             case "openSettingsPanel":
                 // 弹设置界面的请求：只回给请求它的那块屏。
@@ -1979,6 +1983,17 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      */
     private sendDesktopScreenshot(): void {
         const target = this.currentPageId;
+        // 看的是别台上一条会话：要拍的是**那台**的桌面（跟本机这条一样，只是图从那边来）
+        const machine = this.machineHub.ownerOf(this.focusedIdFor(target) || "");
+        if (machine) {
+            void this.machineHub.deskShot(machine).then((shot) => {
+                const msg = shot.ok && shot.data
+                    ? { type: "desktopScreenshot", data: shot.data.toString("base64"), mimeType: shot.mimeType || "image/jpeg" }
+                    : { type: "desktopScreenshotResult", ok: false, error: shot.error || "那台没能截图。" };
+                this.sendToOneClient(target, msg);
+            });
+            return;
+        }
         void captureDesktopScreenshot().then((result) => {
             const msg = result.ok
                 ? { type: "desktopScreenshot", data: result.data, mimeType: result.mimeType }
@@ -1999,6 +2014,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private startDesktopLive(): void {
         const target = this.currentPageId;
         if (!target) { return; }
+        // 看的是别台上一条会话：帧从那边来（还是这条消息那条道，只是拍的是那台）
+        const machine = this.machineHub.ownerOf(this.focusedIdFor(target) || "");
+        if (machine) {
+            this.watchMachineLive(target, machine);
+            return;
+        }
         this.desktopLive.addViewer(target, {
             onFrame: (frame) => {
                 const sent = this.sendToOneClient(target, {
@@ -2026,6 +2047,45 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * @param onFrame 来了一帧（一张完整的 JPEG）
      * @returns 不看了（页面关掉那一层 / 连接断了）
      */
+    /**
+     * 看别台那台的桌面实时画面（面板那条路：帧还是套成消息发给那一块屏）。
+     * 关掉 / 那块屏断了要停：登记在这份账上，见 stopMachineLive。
+     */
+    private watchMachineLive(pageId: string, machine: string): void {
+        this.stopMachineLive(pageId);
+        const stop = this.machineHub.deskLive(machine, (jpeg) => {
+            const sent = this.sendToOneClient(pageId, {
+                type: "desktopLiveFrame", data: jpeg.toString("base64"), mimeType: "image/jpeg",
+            });
+            // 那块屏不在了就别再拉了（正常情况 onPageDisconnected 会停掉）
+            if (!sent) { this.stopMachineLive(pageId); }
+        }, (note) => {
+            this.stopMachineLive(pageId);
+            this.sendToOneClient(pageId, { type: "desktopLiveResult", ok: false, error: note });
+        });
+        this.machineLive.set(pageId, stop);
+    }
+
+    /** 那块屏不看别台那台的实时画面了（收弹窗 / 断开 / 又换了一条）。 */
+    private stopMachineLive(pageId: string): void {
+        const stop = this.machineLive.get(pageId);
+        if (!stop) { return; }
+        this.machineLive.delete(pageId);
+        stop();
+    }
+
+    /** 这块屏要看那台的桌面实时画面（浏览器页面那条 `/live` 走这里）。 */
+    public machineDeskLive(machine: string, onFrame: (jpeg: Buffer) => void): () => void {
+        return this.machineHub.deskLive(machine, onFrame, (note) => {
+            this.onNotice(note);
+        });
+    }
+
+    /** 要一张那台的桌面截图（网页服务那条 `/shot?session=…` 走这里）。 */
+    public machineDeskShot(machine: string): Promise<{ ok: boolean; data?: Buffer; mimeType?: string; error?: string }> {
+        return this.machineHub.deskShot(machine);
+    }
+
     public watchDesktopLive(pageId: string, onFrame: (jpeg: Buffer) => void): () => void {
         // 一条请求一个号：同一个页面重开一次时新旧两条不会互相误杀（旧的那条自己会断）
         const key = `live:${pageId}:${++this.desktopLiveSeq}`;

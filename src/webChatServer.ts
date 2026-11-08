@@ -340,6 +340,13 @@ export interface WebServerHost {
      */
     watchDesktopLive(pageId: string, onFrame: (jpeg: Buffer) => void): () => void;
     /**
+     * 要一张**那台**的桌面截图（正在看别台上一条会话时点那颗截图按钮）。
+     * 拿不到就把原因写在 error 里（那台没起、那台不是 Windows……）。
+     */
+    machineDeskShot?(machine: string): Promise<{ ok: boolean; data?: Buffer; mimeType?: string; error?: string }>;
+    /** 看**那台**的桌面实时画面：来一帧调一次 onFrame；返回“不看了”。 */
+    machineDeskLive?(machine: string, onFrame: (jpeg: Buffer) => void): () => void;
+    /**
      * 一个会话跑在哪个目录（只读的文件地址按它解路径）。
      * 跑着的会话、以及刚关掉还记着的会话都认；两条都对不上返回 undefined（页面拿不到内容）。
      */
@@ -731,12 +738,32 @@ export class PiChatWebServer {
             }
             if (pathname === "/shot") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                // 带会话号：那一份跑在别台那台上，要拍的是那台的桌面（见 sendMachineShot）
+                const shotMachine = this.machineOfSession(url.searchParams.get("session") ?? "");
+                if (shotMachine) {
+                    void this.withFailNote(req, res, this.sendMachineShot(req, res, url.searchParams.get("pageId") ?? "", shotMachine));
+                    return;
+                }
                 void this.withFailNote(req, res, this.sendDesktopShot(req, res, url.searchParams.get("pageId") ?? ""));
                 return;
             }
             if (pathname === "/live") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                this.openDesktopLive(req, res, url.searchParams.get("pageId") ?? "");
+                this.openDesktopLive(req, res, url.searchParams.get("pageId") ?? "",
+                    url.searchParams.get("session") ?? "");
+                return;
+            }
+            // 这台电脑的桌面（给别的 pichat 来要：正在看别台上一条会话时点截图按钮，要拍的是那一台）。
+            // 跟 /sessions、/dirs 一个待遇：不要页面标识（那是防别的网站猜的，机器对机器没有这一说），
+            // 靠的是服务本身只监听本机 / 信得过的私网。
+            if (pathname === "/desk") {
+                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                void this.withFailNote(req, res, this.sendDeskShot(req, res));
+                return;
+            }
+            if (pathname === "/desk/live") {
+                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                this.openDeskLive(req, res);
                 return;
             }
             if (pathname === "/events") {
@@ -1581,6 +1608,82 @@ export class PiChatWebServer {
         this.sendJson(req, res, 200, { dir, offset, ...page });
     }
 
+    /** 这一条请求（或这个地址上的会话）跑在别台那台上吗：是就给那台的地址。 */
+    private machineOfSession(sessionId: string): string | undefined {
+        if (!sessionId) { return undefined; }
+        return this.host.sessionMachine?.(sessionId);
+    }
+
+    /**
+     * 别台的桌面截图：问那台要（`GET <那台>/desk`），拿回来原样给这一条请求。
+     * 照旧先认页面标识（跟本机那张一个规矩：别的网站猜不到这个串）。
+     */
+    private async sendMachineShot(req: http.IncomingMessage, res: http.ServerResponse, pageId: string, machine: string): Promise<void> {
+        if (!this.host.getBroadcaster().isKnown(pageId)) {
+            this.sendText(req, res, 409, "此页面不是当前这个网页服务发出的（服务可能重启过）。刷新页面就好。");
+            return;
+        }
+        const shot = await this.host.machineDeskShot?.(machine);
+        if (!shot) {
+            this.sendText(req, res, 503, "这个后端不会去问那台要截图。");
+            return;
+        }
+        if (!shot.ok || !shot.data) {
+            this.sendText(req, res, 503, shot.error || "那台没能截图。");
+            return;
+        }
+        res.writeHead(200, {
+            "Content-Type": shot.mimeType || "image/jpeg",
+            "Content-Length": shot.data.length,
+            "Cache-Control": "no-store",
+        });
+        res.end(shot.data);
+    }
+
+    /** 这台电脑的桌面截图（别的 pichat 来要的那一条，见 `/desk` 路由）。 */
+    private async sendDeskShot(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        const result = await captureDesktopScreenshot();
+        if (!result.ok) {
+            this.sendText(req, res, 503, result.error ?? "桌面截图失败。");
+            return;
+        }
+        const jpeg = Buffer.from(result.data, "base64");
+        res.writeHead(200, {
+            "Content-Type": result.mimeType || "image/jpeg",
+            "Content-Length": jpeg.length,
+            "Cache-Control": "no-store",
+        });
+        res.end(jpeg);
+    }
+
+    /**
+     * 这台电脑桌面实时画面的机器对机器那一路（`GET /desk/live`）：问的那台拿这条去转发给它的页面。
+     *
+     * 帧的写法跟本机那支小程序吐的一模一样（「4 字节大端长度 + JPEG 原文」），
+     * 这样那台拆帧用的是同一个 JpegFrameSplitter，一条规矩两边都认。
+     */
+    private openDeskLive(req: http.IncomingMessage, res: http.ServerResponse): void {
+        res.writeHead(200, {
+            "Content-Type": "application/octet-stream",
+            "Cache-Control": "no-store, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        });
+        res.socket?.setNoDelay(true);
+        const stop = this.host.watchDesktopLive(`desk:${crypto.randomUUID()}`, (jpeg) => {
+            // 那头读得慢（网卡、退到后台）：这一帧不写了，隔壁本来就有下一帧
+            if (res.writableLength > STREAM_STALE_BYTES) { return; }
+            const head = Buffer.alloc(4);
+            head.writeUInt32BE(jpeg.length, 0);
+            res.write(head);
+            res.write(jpeg);
+        });
+        const done = () => { stop(); };
+        req.on("close", done);
+        res.on("close", done);
+        res.on("error", done);
+    }
+
     private sendJson(req: http.IncomingMessage, res: http.ServerResponse, status: number, value: unknown): void {
         const body = Buffer.from(JSON.stringify(value), "utf8");
         this.writeBody(req, res, status, body, {
@@ -1699,7 +1802,7 @@ export class PiChatWebServer {
      * 页面关掉那一层 = 浏览器把这边的地址摘掉、这条请求跟着断，这儿就不看了；
      * 拍画面的小程序什么时候起停由 DesktopLive 管（还有人看就接着拍）。
      */
-    private openDesktopLive(req: http.IncomingMessage, res: http.ServerResponse, pageId: string): void {
+    private openDesktopLive(req: http.IncomingMessage, res: http.ServerResponse, pageId: string, sessionId = ""): void {
         // 只认本服务发出过的页面标识：别的网站里放一张 <img> 猜不到这个串，也就拉不起这一路
         if (!this.host.getBroadcaster().isKnown(pageId)) {
             this.sendText(req, res, 409, "此页面不是当前这个网页服务发出的（服务可能重启过）。刷新页面就好。");
@@ -1714,15 +1817,21 @@ export class PiChatWebServer {
             "X-Accel-Buffering": "no",
         });
         res.socket?.setNoDelay(true);
-        const stop = this.host.watchDesktopLive(pageId, (jpeg) => {
+        // 看的是别台上一条会话：这一路拍的是**那台**的桌面（见 machineDeskLive），本机这支不用起
+        const machine = this.machineOfSession(sessionId);
+        const onFrame = (jpeg: Buffer) => {
             // 这块屏读得慢（网卡、退到后台）：这一帧不写了。画面本来就有下一帧，
             // 塞进去只会让它越落越远（跟推送流那边丢帧是同一条规矩，见 STREAM_STALE_BYTES）
             if (res.writableLength > STREAM_STALE_BYTES) { return; }
             res.write(`--${boundary}\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\n\r\n`);
             res.write(jpeg);
             res.write("\r\n");
-        });
+        };
         // 页面走了 / 关掉那一层 / 服务停了：不看了（还有别人看就接着拍，DesktopLive 自己算）
+        // 拍本机这支小程序，还是问那台要（看的是别台那条会话就是后者）
+        const stop = machine
+            ? (this.host.machineDeskLive?.(machine, onFrame) ?? (() => { /* 没这门手艺 */ }))
+            : this.host.watchDesktopLive(pageId, onFrame);
         const done = () => { stop(); };
         req.on("close", done);
         res.on("close", done);

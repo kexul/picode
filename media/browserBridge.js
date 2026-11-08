@@ -464,8 +464,27 @@
     } catch (e) { /* 同上 */ }
   }
 
+  /** 这块屏现在看的是哪条会话（后端单发给本屏的那一声“切到它”记下来的）：
+   *  截图 / 实时画面要按它决定拍哪一台 —— 看的是别台上一条会话时，拍的是那台的桌面。 */
+  var currentSessionId = "";
+  /** 那条会话跑在哪台机器上（本机的就是空串）：按钮的悬停提示里写明白拍的是哪一台。 */
+  var currentMachineName = "";
+
   function dispatch(data) {
     var type = data && data.type;
+    if (type === "sessionActivated" && data && typeof data.sessionId === "string") {
+      currentSessionId = data.sessionId;
+      refreshShotTitle();
+    }
+    if (type === "sessionList" && Array.isArray(data.sessions)) {
+      // 会话清单里带着“跑在哪台”（本机那几条没有）：换会话、那台改名都要跟着更新
+      var one = null;
+      for (var i = 0; i < data.sessions.length; i++) {
+        if (data.sessions[i] && data.sessions[i].id === currentSessionId) { one = data.sessions[i]; }
+      }
+      var next = (one && typeof one.machineName === "string") ? one.machineName : "";
+      if (next !== currentMachineName) { currentMachineName = next; refreshShotTitle(); }
+    }
     if (inspectIncoming(data)) { return; }
     if (type === "hello") {
       // 连接建立：先于一切带序号的消息到达（插件那头保证顺序）。
@@ -759,10 +778,19 @@
   /** 后端说这台机器没有实时画面那一路：长按不比点一下多做什么，提示也跟着改回去。 */
   function setDesktopLiveEnabled(enabled) {
     desktopLiveEnabled = enabled !== false;
+    refreshShotTitle();
+  }
+
+  /**
+   * 那颗截图按钮的悬停提示：拍的是**哪一台**的桌面。
+   * 看的是别台上一条会话时拍的是那台（后端去问那台要），所以这里把名字写出来，别让人以为拍的是本机。
+   */
+  function refreshShotTitle() {
     if (!shotBtn) { return; }
+    var whose = currentMachineName ? ("那台「" + currentMachineName + "」的桌面") : "这台电脑的桌面";
     shotBtn.title = desktopLiveEnabled
-      ? "点一下看桌面截图，按住不放看桌面实时画面（截的是运行 VSCode 的这台电脑）"
-      : "查看桌面截图（截的是运行 VSCode 的这台电脑）";
+      ? ("点一下看桌面截图，按住不放看桌面实时画面（截的是" + whose + "）")
+      : ("查看桌面截图（截的是" + whose + "）");
   }
 
   /** 截屏从点击到图推回来要一两秒：期间按钮压暗并暂时点不动。 */
@@ -808,6 +836,11 @@
     window.alert(error);
   }
 
+  /** 截图 / 实时画面地址上那个会话号：看的是别台的会话时后端据此去问那台要（本机的不影响）。 */
+  function sessionQuery() {
+    return currentSessionId ? "&session=" + encodeURIComponent(currentSessionId) : "";
+  }
+
   function requestDesktopScreenshot() {
     if (shotBtn && shotBtn.classList.contains("busy")) { return; }   // 上一张还没回来，别连点
     setShotBusy(true);
@@ -817,7 +850,7 @@
       // 浏览器页面：直接跟后端要那张图的字节（`/shot`，JPEG 原样）——不走消息那条道，
       // 也不用把几十万个字符拼成 base64 再解回来（手机 CPU 慢，那一道是白做的）。
       // 失败时后端把原因写在正文里，直接拿去弹。
-      fetch("/shot?pageId=" + encodeURIComponent(pageId))
+      fetch("/shot?pageId=" + encodeURIComponent(pageId) + sessionQuery())
         .then(function (resp) {
           if (!resp.ok) {
             return resp.text().then(function (text) { throw new Error((text || "").trim()); });
@@ -953,7 +986,7 @@
       enqueue({ type: "requestDesktopLive" });
     } else {
       // 浏览器页面：自己去拉那条直连（地址只认自己这个页面标识，帧不回消息那条道）
-      liveImg.src = "/live?pageId=" + encodeURIComponent(pageId);
+      liveImg.src = "/live?pageId=" + encodeURIComponent(pageId) + sessionQuery();
     }
     // 一直等不到画面（锁屏、远程会话断开、后端那头没起来）：别让人对着“正在连…”干等
     if (liveWaitTimer) { clearTimeout(liveWaitTimer); }
@@ -1025,7 +1058,7 @@
     shotBtn.type = "button";
     shotBtn.id = "browserScreenshotBtn";
     shotBtn.innerHTML = ICON_CAMERA;
-    shotBtn.title = "点一下看桌面截图，按住不放看桌面实时画面（截的是运行 VSCode 的这台电脑）";
+    // 提示先按“本机”写，等会话清单到了 refreshShotTitle 会改成实际那一台
     shotBtn.setAttribute("aria-label", "截图");
     shotBtn.style.setProperty("--hold-ms", LONG_PRESS_MS + "ms");
     // 按住时那一圈进度（样式见 browserTheme.css）：viewBox 24 里画个半径 10 的圈，
