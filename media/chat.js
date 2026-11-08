@@ -12876,6 +12876,9 @@
   // （toolResult / editCardResult 的 durationMs）；重放历史时，后端把当时记下的用时一并带上
   // （见 src/sessionRuntime.ts 的 renderMessages），所以这张表是整个会话的，刷新页面、重连都不重算。
   const TOOL_STATS_SLOWEST = 6;   // 「最慢的几次」最多列几条
+  // 不算进这张表的工具：ask_choice（问活卡片）那些时间全是在等你回答，不是工具在干活，
+  // 算进去就像“这个工具好慢”，其实是你自己在想。
+  const TOOL_STATS_SKIP = new Set(["ask_choice"]);
   // 「最慢的几次」里点开看全文的那几条（键 = 工具名 + 那一行的文字）：弹窗开着时又来结果会重画一遍，
   // 重画后要保持原样开着。存着不清，下回再打开还是展开——反正点一下就能收起。
   const toolStatsExpanded = new Set();
@@ -12893,6 +12896,7 @@
    *  编号是稳定的，见 src/sessionRuntime.ts 的 renderMessages）——不然重画一次就多算一遍。 */
   function noteToolDuration(st, toolName, text, durationMs, id) {
     if (!st || typeof durationMs !== "number" || !isFinite(durationMs) || durationMs < 0) { return; }
+    if (TOOL_STATS_SKIP.has(toolName)) { return; }
     const stats = st.toolStats;
     if (id) {
       if (stats.seen.has(id)) { return; }
