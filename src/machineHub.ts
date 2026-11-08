@@ -69,6 +69,26 @@ export class RemoteSession implements RemoteSessionRef {
     /** 那台现在还报着这条会话吗（报过才有内容可看；后端刚起来、还没问回清单时是 false）。 */
     public get known(): boolean { return !!this.data; }
 
+    public get machine(): string { return this.hub.ownerOf(this.id) ?? ""; }
+    public get machineName(): string { return this.hub.nameOf(this.machine); }
+    public get machineOnline(): boolean { return this.hub.isOnline(this.machine); }
+    public get name(): string { return this.data?.name ?? ""; }
+    public get parentId(): string | null {
+        const one = this.data?.parentId;
+        return typeof one === "string" && one ? one : null;
+    }
+    public get activity(): string { return this.data?.activity ?? ""; }
+    public get activityDetail(): string { return this.data?.activityDetail ?? ""; }
+    public get piReady(): boolean { return this.data?.piReady !== false; }
+    public get loading(): boolean { return this.data?.loading === true; }
+    public get percent(): number | undefined { return this.data?.percent; }
+    public get tps(): number | undefined { return this.data?.tps; }
+    public get taba(): unknown { return this.data?.taba ?? null; }
+    public get auto(): unknown { return this.data?.auto ?? null; }
+    public get autoTitle(): string | null {
+        const one = this.data?.autoTitle;
+        return typeof one === "string" ? one : null;
+    }
     public get cwd(): string { return this.data?.cwd ?? ""; }
     public get streaming(): boolean { return this.data?.streaming === true; }
     public get sessionTitle(): string { return this.data?.title ?? ""; }

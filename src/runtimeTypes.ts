@@ -132,9 +132,30 @@ export interface SessionRef {
     hasRunningBashTasks(): boolean;
 }
 
-/** 别台代理过来的会话：多一个“那台现在还报着它吗”（本机进程那种永远算在）。 */
+/** 别台代理过来的会话：多几样“跑在谁身上”的信息（本机进程那种没有这些）。 */
 export interface RemoteSessionRef extends SessionRef {
+    /** 那台现在还报着它吗（本机进程那种永远算在）。 */
     readonly known: boolean;
+    /** 那台的地址（会话号的 `remote:<这台>:<号>` 里那一段）。 */
+    readonly machine: string;
+    /** 那台的名字（界面上写节名、悬停提示用）。 */
+    readonly machineName: string;
+    /** 那台现在连得上吗（会话格上的灰点、列表里那句“连不上”）。 */
+    readonly machineOnline: boolean;
+    /** 那台报来的名字（pi 还没起标题时界面就用它）。 */
+    readonly name: string;
+    // 下面这些是那台会话清单里带着的（界面要画的东西，本机那份由 serializeSession 现算）
+    /** 子会话挂在哪个会话下面（那台那边的写法：`server:panel-3` 这种）。 */
+    readonly parentId?: string | null;
+    readonly activity?: string;
+    readonly activityDetail?: string;
+    readonly piReady?: boolean;
+    readonly loading?: boolean;
+    readonly percent?: number;
+    readonly tps?: number;
+    readonly taba?: unknown;
+    readonly auto?: unknown;
+    readonly autoTitle?: string | null;
 }
 
 /** 一轮对话收尾时的结果状态。 */

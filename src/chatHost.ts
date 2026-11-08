@@ -54,7 +54,7 @@ import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { DesktopLive } from "./desktopLive";
 import { DesktopNotice } from "./desktopNotice";
 import { describeRestart } from "./serverRestart";
-import type { SessionRuntime } from "./sessionRuntime";
+import { SessionRuntime } from "./sessionRuntime";
 import { clipText } from "./messageUtils";
 import {
     DEFAULT_AUTO_LOAD_LAST,
@@ -257,9 +257,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     // ========================================================================
     //  别的机器（多台 pichat 互联）
     //
-    //  页面（手机 / 浏览器 / 插件面板）只跟这台后端说话。别台的会话在这台当成“一种本机没有进程的
-    //  会话”看：清单里多摆一条（`foreignSessionEntries`）、能像本机那样被某块屏看着（`clientSessions`
-    //  里存它那个号），发过去的每一句都由 machineHub 转给那台。
+    //  页面（手机 / 浏览器 / 插件面板）只跟这台后端说话。别台的会话在这台的账里是一条**代理**
+    //  （machineHub 的 RemoteSession，跟本机那只运行时摆在同一个 `panels` 里，见 syncRemotePanels）：
+    //  清单、查找、“那条还在吗”只有一处；发过去的每一句由 machineHub 转给那台，回来的消息按号翻过来。
     // ========================================================================
 
     /** 这个号是不是别台那台的（本机没有对应的 pi 进程）。 */
@@ -267,74 +267,45 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return !!this.machineHub.ownerOf(id);
     }
 
-    /** 别台那条会话当成一条会话看（编排层里的“当前会话”就是那一条时用这个，见 SessionRef）。 */
-    protected override remoteSessionRef(id: string): RemoteSessionRef | undefined {
-        return this.machineHub.sessionRef(id);
-    }
-
-    /** 本机清单里要给别台那些会话多摆的那几条（只算“这台认下的”那几个）。 */
-    protected override foreignSessionEntries(): Record<string, unknown>[] {
-        const out: Record<string, unknown>[] = [];
-        for (const id of this.machineHub.openedIds()) {
-            const machine = this.machineHub.ownerOf(id);
-            const one = this.machineHub.sessionOf(id);
-            if (!machine || !one) { continue; }
-            out.push({
-                ...one,
-                id,
-                // 名字、会话文件这些那台已经报过了；这里补的是“这台界面上要知道的那几样”
-                name: one.name || one.title || "会话",
-                // 界面靠这三个知道它跑在谁身上、那台在不在（会话格上的灰点、列表里那句“连不上”）
-                machine,
-                machineName: this.machineHub.nameOf(machine),
-                machineOnline: this.machineHub.isOnline(machine),
-                // 子会话、自动接着干这两样那台自己算好了（它的会话清单里就带着）：原样搬过来，
-                // 界面用同一套规矩画（开关点了会转给那台，见 routeToMachine）。子会话挂的那个父会话号
-                // 要换成这台的写法 —— 跟别的会话号一个规矩。
-                parentId: typeof one.parentId === "string" && one.parentId
-                    ? this.machineHub.toLocalId(machine, one.parentId)
-                    : null,
-                taba: one.taba ?? null,
-                auto: one.auto ?? null,
-                autoTitle: typeof one.autoTitle === "string" ? one.autoTitle : null,
-            });
-        }
-        return out;
-    }
-
-    /** # 引用目录里把别台那些开着的会话也列上（模型在那边跑，那个路径它读得到）。 */
-    protected override foreignReferenceItems(excludePanelId?: string): ChatReferenceItem[] {
-        const items: ChatReferenceItem[] = [];
-        for (const id of this.machineHub.openedIds()) {
-            if (id === excludePanelId) { continue; }
-            const machine = this.machineHub.ownerOf(id);
-            const one = this.machineHub.sessionOf(id);
-            if (!machine || !one) { continue; }
-            items.push({ id, label: one.title || one.name || "会话", sub: this.machineHub.nameOf(machine) });
-        }
-        return items;
+    /** 关掉别台那条会话：请那台关（本机没有进程可杀）。 */
+    protected override closeForeignSession(panelId: string): void {
+        if (!this.machineHub.ownerOf(panelId)) { return; }
+        this.machineHub.closeSession(panelId);
+        this.clearClientSession(this.currentPageId);
     }
 
     /**
-     * 别台那台的一条会话的 # 引用：会话文件在那台盘上，路径照它报来的写（模型在那边读得到）。
-     * 大小这边看不见，就不写。
+     * 别台那条会话的号换成这台界面的写法：`remote:<那台>:<它那边的号>`（跟别的会话号一个规矩）。
      */
-    protected override async chatReferenceSource(
-        id: string,
-    ): Promise<{ title: string; file: string; size?: number; streaming: boolean } | undefined> {
-        if (!this.machineHub.ownerOf(id)) { return super.chatReferenceSource(id); }
-        const one = this.machineHub.sessionOf(id);
-        if (!one?.file) { return undefined; }
-        return {
-            title: one.title || one.name || "会话",
-            file: String(one.file).replace(/\\/g, "/"),
-            streaming: one.streaming === true,
-        };
+    protected override toSessionIdOnMachine(machine: string, remoteId: string): string {
+        return this.machineHub.toLocalId(machine, remoteId);
+    }
+
+    /**
+     * 把“这边认下的别台会话”跟 `panels` 这本账对齐：新认下的放进去（一条代理，数据现读现取），
+     * 不再认的（那台关掉了 / 父会话关了、子会话跟着走）拿掉。
+     *
+     * 从前别台的会话另立一份（foreignSessionEntries），于是“当前看的是哪条 / 有哪些”有两套写法；
+     * 现在合成一本，清单、查找、“那条还在吗”只有一处。
+     */
+    private syncRemotePanels(): void {
+        const wanted = new Set(this.machineHub.openedIds());
+        for (const id of wanted) {
+            if (this.panels.has(id)) { continue; }
+            const ref = this.machineHub.sessionRef(id);
+            if (ref) { this.panels.set(id, ref); }
+        }
+        for (const [id, one] of Array.from(this.panels)) {
+            if (one instanceof SessionRuntime) { continue; }
+            if (wanted.has(id)) { continue; }
+            this.panels.delete(id);
+        }
     }
 
     /** 那台报了新的会话清单 / 掉线 / 回来了：重推一份合并后的清单，顺手看新会话认不认得下来。 */
     private onMachinesChanged(): void {
         if (this.disposed) { return; }
+        this.syncRemotePanels();
         this.adoptPendingMachineNew();
         this.broadcastSessionList(true);
         void this.refreshWorkspacePanels();
@@ -356,6 +327,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         this.pendingMachineNew = null;
         const id = this.machineHub.toLocalId(want.machine, fresh.id);
         this.machineHub.markOpened(id);
+        // 认下了就赶紧进这本账（清单与“切过去”都靠它）
+        this.syncRemotePanels();
         this.setActiveSession(id, want.clientId);
         // 加号那条路：新的挂好了再关旧的（跟本机一个规矩）；这会儿它要还在跑就留着，不把没跑完的活掐掉
         if (want.closeOld && want.closeOld !== id && !this.machineHub.isBusy(want.closeOld)) {
@@ -493,7 +466,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 已经关掉、只在登记簿里记着的会话没有这份清单（它跟着会话运行的那份内存走），给空数组。
      */
     public knownSessionFiles(sessionId: string): string[] {
-        return this.panels.get(sessionId)?.getKnownFiles() ?? [];
+        return this.runtimeOf(sessionId)?.getKnownFiles() ?? [];
     }
 
     /**
@@ -501,13 +474,13 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 每次都现问 git（见 gitChanges.ts）；会话目录不在 git 仓库里时 vcs=false（那一格整格收起来）。
      */
     public async sessionChanges(sessionId: string): Promise<SessionChanges> {
-        const panel = this.panels.get(sessionId);
+        const panel = this.runtimeOf(sessionId);
         return panel ? await panel.getChanges() : { vcs: false, changes: [] };
     }
 
     /** 一个文件的合计 diff（相对写法 = 清单里那一行）；没改出差别就不给。 */
     public async sessionChangeDiff(sessionId: string, relPath: string): Promise<string | undefined> {
-        return await this.panels.get(sessionId)?.changeDiff(relPath);
+        return await this.runtimeOf(sessionId)?.changeDiff(relPath);
     }
 
     public getCwd(): string {
@@ -1342,7 +1315,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             : undefined;
         if (pageId) { this.resyncingPages.set(pageId, { lastRound: opts?.lastRound === true }); }
         const replays: Array<Promise<void>> = [];
-        for (const rt of this.panels.values()) {
+        for (const one of this.panels.values()) {
+            // 重画是本机的活（别台那条的正文由 machineHub 请那台重画，见 openSession / repaint）
+            if (!(one instanceof SessionRuntime)) { continue; }
+            const rt = one;
             // 只要重画一个会话（另一台机器的页面刷新后回来，只要它自己那一格）
             if (opts?.onlyPanelId && rt.id !== opts.onlyPanelId) { continue; }
             // 刚建的空会话不用重画：newSession 已经把它需要的东西发过去了
@@ -1701,7 +1677,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 目录落在这些文件夹里的会话读写过哪些文件（一个窗口只该管它自己工作区那摊）。 */
     private sessionFilesForFolders(folders: readonly string[]): string[] {
         const set = new Set<string>();
-        for (const rt of this.panels.values()) {
+        for (const one of this.panels.values()) {
+            // 这是一份给 VSCode 窗口算符号表用的清单：别台那条的文件不在这台盘上
+            const rt = one instanceof SessionRuntime ? one : undefined;
+            if (!rt) { continue; }
             if (!dirInsideAny(rt.cwd, folders)) { continue; }
             for (const f of rt.getKnownFiles()) { set.add(f); }
         }
@@ -1734,7 +1713,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             path: p,
             line,
             col,
-            knownFiles: this.getActive()?.getKnownFiles() ?? [],
+            knownFiles: this.getActiveRuntime()?.getKnownFiles() ?? [],
         }, `打开 ${p}`);
     }
 
@@ -1906,7 +1885,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 页面消息里带着会话号时，就用它找那个会话（跨机器时靠这个把搜索落到正确的目录）。 */
     private panelForMessage(msg: any): SessionRuntime | undefined {
         const id = msg && typeof msg.sessionId === "string" ? msg.sessionId : "";
-        return id ? this.panels.get(id) : undefined;
+        return this.runtimeOf(id);
     }
 
     /**
@@ -2280,7 +2259,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 提醒走右下角那块面板（人在别的会话 / 别的窗口 / 根本就在别的屋里时，靠它知道要回来答一句）。
      */
     private broadcastAskWaiting(sessionId: string | undefined, question: string): void {
-        const rt = sessionId ? this.panels.get(sessionId) : undefined;
+        const rt = this.runtimeOf(sessionId);
         // 题干就是面板上那句话：光说“有人问你”的话，还得切过去才知道问的是什么
         this.trayNote(sessionId ?? "", rt ? this.sessionDisplayName(rt) : "", question, "ask");
     }
@@ -2374,7 +2353,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
 
     /** 停掉本工作区的所有 pi 进程（页面与界面的生死与此无关）。 */
     protected disposeAllConversations(): void {
-        for (const rt of this.panels.values()) {
+        for (const one of this.panels.values()) {
+            const rt = one instanceof SessionRuntime ? one : undefined;
+            if (!rt) { continue; }
             rt.stopClient();
             this.releasePanelName(rt.nameParts);
         }

@@ -156,10 +156,20 @@ export interface WorkspacePage {
     seen: Set<string>;
 }
 
+/**
+ * 会话这本账里的一条：本机的那个运行时（一只 pi 进程），或者别台那条的代理
+ * （见 machineHub 的 RemoteSession / runtimeTypes 的 RemoteSessionRef）。
+ *
+ * 为什么要合成一本：从前别台的会话另立一份（foreignSessionEntries），于是“当前看的是哪条 / 有哪些”
+ * 这两件事有两套写法，每加一个功能都得想两遍。合成一本以后，清单、查找、“那条会话还在吗”只有一处；
+ * 真正只有本机进程才干得了的事（发话、重画、派子会话、读写文件）由 runtimeOf 挡在门口。
+ */
+export type SessionEntry = SessionRuntime | RemoteSessionRef;
+
 export abstract class ChatControllerBase implements RuntimeHost {
     protected constructor(public readonly workspaceId: string) {}
-    // ---- 会话（一个 SessionRuntime = 一个 pi 进程）----
-    protected panels = new Map<string, SessionRuntime>();
+    // ---- 会话（本机的一条 = 一个 pi 进程；别台的一条 = 那边报来的代理）----
+    protected panels = new Map<string, SessionEntry>();
     protected panelSeq = 0;
     /**
      * 每块屏各自在看哪个会话（屏标识 → 会话标识）。
@@ -167,13 +177,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * （同一个后端里可以同时开着好几个项目聊）。
      */
     private readonly clientSessions = new Map<string, string>();
-    /** 最近有人切过去的那个会话：某块屏还没挑过时先给它看这个（它还没开口，只能这么猜）。 */
-    private lastFocusedPanelId: string | undefined;
     /**
-     * 同一个意思，但别台那台的会话也算进来：浏览器页面一刷新就换了新标识，后端不记得它原来在看哪个，
-     * 靠这一条接回去（见 ensureClientSession）。只记本机那些的话，刷新后就跳回一个本机会话。
+     * 最近有人切过去的那个会话（别台那条也算）：某块屏还没挑过时先给它看这个（它还没开口，只能这么猜），
+     * 浏览器页面刷了新标识时也靠它接回原来那条。
      */
-    private lastViewedId: string | undefined;
+    private lastFocusedPanelId: string | undefined;
     /** 每个会话最近一次“成了某块屏正在看的那个”的时刻（一个目录里开着好几个时挑最近用过的）。 */
     private readonly panelUsedAt = new Map<string, number>();
     /** 正在说话的那块屏（页面标识）：处理某块屏发来的消息期间才有值，平时是空串。 */
@@ -313,16 +321,15 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     // ---- 别台的会话（多台 pichat 互联）----
     //
-    // 会话可能跑在另一台机器上（见 machineHub）。那一种“会话”在本机没有 pi 进程，也就没有
-    // SessionRuntime：它只存在于那边的推送里。下面这几个钩子让这块屏能像看本机会话一样看着它：
-    //   - 本机那份会话清单里给它多摆一条（`foreignSessionEntries`）；
-    //   - “这块屏看的是哪一个”能记成那边的号（`focusedIdFor` / `getActive` 两个都改了口）。
-    // 不把那边的东西硬塞进 `panels`：那里每一条都对应一只真进程。
+    // 会话可能跑在另一台机器上（见 machineHub）。那一种在这本账里是一条**代理**（RemoteSessionRef，
+    // 数据现读现取），跟本机那只运行时放在同一个 `panels` 里：清单、查找、“那条还在吗”只有一处。
+    // 真正只有本机进程干得了的事（发话、重画、派子会话、读写文件）由 runtimeOf 挡在门口；
+    // 别台那条该转发就转发（见宿主的 routeToMachine / machineHub）。
     /** 这个会话号是不是别台那台的（默认：不是，本类只服务本机会话）。 */
     protected isForeignSessionId(_id: string): boolean { return false; }
 
-    /** 本机清单里要额外摆上的那几条（别台那台认下的会话）；没有就是空表。 */
-    protected foreignSessionEntries(): Record<string, unknown>[] { return []; }
+    /** 关掉别台那条会话（本机没有进程可杀：请那台关；默认不管）。 */
+    protected closeForeignSession(_panelId: string): void { /* 本类只服务本机会话 */ }
 
     /**
      * 这块屏看的是别台那台上的一条、人点了加号（新建会话）：新会话得开在那边同一个目录里，
@@ -338,7 +345,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.panelUsedAt.clear();
         this.closedSessions.clear();
         this.lastFocusedPanelId = undefined;
-        this.lastViewedId = undefined;
     }
 
     // ---- RuntimeHost：配置 / cwd ----
@@ -743,33 +749,34 @@ export abstract class ChatControllerBase implements RuntimeHost {
     public wantsTrimmedHistory(): boolean { return false; }
 
     // ---- 查找 ----
-    /** 这块屏现在显示的会话（不传 = 正在说话的那块屏）。只交本机的（有 pi 进程的那种）。 */
-    public getActive(clientId: string = this.currentPageId): SessionRuntime | undefined {
+    /** 这块屏现在显示的会话（不传 = 正在说话的那块屏）：本机的、别台的都算。 */
+    public getActive(clientId: string = this.currentPageId): SessionEntry | undefined {
         const own = this.clientSessions.get(clientId);
         if (own && this.panels.has(own)) { return this.panels.get(own); }
-        // 它正看着的是别台那台的一个会话（本机没有对应的进程）：别拿本机“最近那个”顶上去，
-        // 不然接下来的动作（发消息、关会话、读文件）会落到一个跟这块屏无关的会话上。
-        if (own && this.isForeignSessionId(own)) { return undefined; }
-        // 它还没挑过、或者它看的那个刚被关掉：先按“最近有人切过去的那个”顶一下（不记档）
+        // 它还没挑过、或者它看的那个刚被关掉：先按“最近有人切过去的那个”顶一下（不记档）。
+        // 要动这条会话的地方（发话、重画、读文件）自己会走 runtimeOf 或转发，这里给整条即可。
         return this.lastFocusedPanelId ? this.panels.get(this.lastFocusedPanelId) : undefined;
     }
 
-    /**
-     * 这块屏现在看的那条会话：本机的就是那个运行时，别台的由子类给一份代理（见 remoteSessionRef）。
-     * 要的是“哪条 / 哪个目录 / 什么模型 / 在不在跑”这类事就用它，不必先分“是不是别台的”。
-     */
+    /** getActive 的那一条，但只在本机进程还在时给出（发话 / 重画 / 派子会话这些只能本机干的活）。 */
+    protected getActiveRuntime(clientId: string = this.currentPageId): SessionRuntime | undefined {
+        const own = this.clientSessions.get(clientId);
+        const one = own && this.panels.has(own) ? this.runtimeOf(own)
+            : (this.lastFocusedPanelId ? this.runtimeOf(this.lastFocusedPanelId) : undefined);
+        return one instanceof SessionRuntime ? one : undefined;
+    }
+
+    // 旧名字：这一轮把两本账合成一本之后，它就是 getActive（留着是为了别处少改几处）
     public getActiveRef(clientId: string = this.currentPageId): SessionRef | undefined {
-        const own = this.clientSessions.get(clientId);
-        if (own && this.panels.has(own)) { return this.panels.get(own); }
-        if (own) {
-            const ref = this.remoteSessionRef(own);
-            if (ref) { return ref; }
-        }
-        return this.lastFocusedPanelId ? this.panels.get(this.lastFocusedPanelId) : undefined;
+        return this.getActive(clientId);
     }
 
-    /** 别台那条会话当成一条会话看（子类把 machineHub 那一份代理交出来；本机没有这种）。 */
-    protected remoteSessionRef(_id: string): RemoteSessionRef | undefined { return undefined; }
+    /** 这个号在本机有没有进程（`panels` 里那一条是运行时）：本机才敢往上挂的那些活先问它。 */
+    protected runtimeOf(id: string | undefined): SessionRuntime | undefined {
+        if (!id) { return undefined; }
+        const one = this.panels.get(id);
+        return one instanceof SessionRuntime ? one : undefined;
+    }
 
     /** 这块屏自己挑的是哪个会话（没挑过、或挑的那个已经被关掉就是 undefined）。 */
     public focusedIdFor(clientId: string): string | undefined {
@@ -780,7 +787,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 这个号是不是一条会话（本机那个运行时在，或者别台那台上认得这个号）。 */
     private isSessionId(id: string): boolean {
-        return this.panels.has(id) || !!this.remoteSessionRef(id);
+        return this.panels.has(id) || this.isForeignSessionId(id);
     }
 
     /**
@@ -801,6 +808,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         }
         return false;
     }
+
+    /** 那台上的一条会话号换成“这台界面上”的写法（子类覆盖；本机原样）。 */
+    protected toSessionIdOnMachine(_machine: string, remoteId: string): string { return remoteId; }
 
     /** 现在正看着这个会话的屏（一个都没在看就是空表）。 */
     public clientsViewing(panelId: string): string[] {
@@ -899,17 +909,14 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 界面靠这个号认出“这条说的是我上一下要的，已经过时了”。
      */
     public setActiveSession(panelId: string, clientId: string = this.currentPageId, switchId?: unknown): void {
-        const local = this.panels.has(panelId);
-        const foreign = !local && !!this.remoteSessionRef(panelId);
+        const local = this.panels.has(panelId) && !!this.runtimeOf(panelId);
+        const foreign = !local && (this.panels.has(panelId) || this.isForeignSessionId(panelId));
         if (!local && !foreign) { return; }
         if (this.clientSessions.get(clientId) === panelId) { return; }
         this.clientSessions.set(clientId, panelId);
-        this.lastViewedId = panelId;
-        // 别台的会话在这台没有进程：只记“这块屏在看它”，不挤进“最近切过去的那个”那份账里
-        if (!foreign) {
-            this.lastFocusedPanelId = panelId;
-            this.panelUsedAt.set(panelId, Date.now());
-        }
+        this.lastFocusedPanelId = panelId;
+        // “最近用过”那份账只管本机的：一个目录里开着好几个时按它挑，别台那条不在本机盘上
+        if (!foreign) { this.panelUsedAt.set(panelId, Date.now()); }
         this.onClientSessionChanged(clientId, panelId);
         // 先发列表，再说“你看的是哪一个”：界面上要先生出这个会话的壳，才认得这个标识
         this.broadcastSessionList(true);
@@ -931,7 +938,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             touched.push(clientId);
         }
         // 记着的“最近有人切过去的那个”也是这个旧号的话，跟着换掉（不然刷新后按旧号接不上）
-        if (this.lastViewedId === oldId) { this.lastViewedId = newId; }
+        if (this.lastFocusedPanelId === oldId) { this.lastFocusedPanelId = newId; }
         if (touched.length === 0) { return; }
         this.onClientSessionChanged(touched[0], newId);
         this.broadcastSessionList(true);
@@ -978,29 +985,29 @@ export abstract class ChatControllerBase implements RuntimeHost {
         }
         // 有人切到过别台那台上的一条：那也算“最近在看的那个”。浏览器页面刷新换了新标识时，
         // 后端只能靠这一条把它接回原来那一条（不然它跳到本机某个会话上，别台那条就“不见了”）。
-        const viewed = this.recentlyViewedSession();
-        const last = this.lastFocusedPanelId ? this.panels.get(this.lastFocusedPanelId) : undefined;
-        const pick = viewed ?? last ?? this.panels.values().next().value;
+        const pick = this.recentlyViewedSession() ?? this.panels.values().next().value;
         if (pick) { this.setActiveSession(pick.id, clientId); }
         return false;
     }
 
     /** 最近有人切过去的那个会话（本机的是进程还在；别台的要那台还报着它）。 */
-    private recentlyViewedSession(): { id: string } | undefined {
-        const id = this.lastViewedId;
+    private recentlyViewedSession(): SessionEntry | undefined {
+        const id = this.lastFocusedPanelId;
         if (!id) { return undefined; }
-        if (this.panels.has(id)) { return this.panels.get(id); }
-        const ref = this.remoteSessionRef(id);
-        if (!ref) { return undefined; }
+        const one = this.panels.get(id);
+        if (!one) { return undefined; }
         // 别台那条已经不在清单里了（那台上关掉了）：当作没记过，别把这块屏派到一个不存在的会话上
-        return ref.known ? { id } : undefined;
+        return one instanceof SessionRuntime || one.known ? one : undefined;
     }
 
     /** 某个目录里已经开着的会话：同一个目录开着好几个时，挑最近用过的那个（子会话排在后面）。 */
     public sessionInDir(dir: string): SessionRuntime | undefined {
         const target = path.resolve(dir);
         const cands: SessionRuntime[] = [];
-        for (const rt of this.panels.values()) {
+        // 只管本机的进程：这个口子是给“在这块屏该用哪个目录”挑本地会话用的（别台那条不在本机盘上）
+        for (const one of this.panels.values()) {
+            const rt = one instanceof SessionRuntime ? one : undefined;
+            if (!rt) { continue; }
             // 判官（hidden 子会话）不能把一块屏派到它那儿去：它不是给人干活用的会话
             if (this.taba.byChildPanel(rt.id)?.hidden) { continue; }
             if (sameDir(rt.cwd, target)) { cands.push(rt); }
@@ -1022,6 +1029,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
      */
     public closeSession(panelId: string): void {
         if (!this.panels.has(panelId)) { return; }
+        // 别台那条：本机没有进程可杀，请那台关掉（清单回来时这本账跟着对齐，见宿主的 syncRemotePanels）
+        if (!this.runtimeOf(panelId)) { this.closeForeignSession(panelId); return; }
         const requester = this.currentPageId;
         this.noteClosedSession(panelId);
         this.disposePanelRuntime(panelId);
@@ -1031,7 +1040,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
             else { this.clientSessions.delete(requester); }
         }
         if (this.lastFocusedPanelId === panelId) { this.lastFocusedPanelId = this.panels.keys().next().value; }
-        if (this.lastViewedId === panelId) { this.lastViewedId = this.panels.keys().next().value; }
         this.broadcastSessionList(true);
     }
 
@@ -1067,7 +1075,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** RuntimeHost.onAutoCommand：输入框右下角那颗小开关按下去时，以及有人打了 `/auto` 这几个字时。 */
     public onAutoCommand(panelId: string, cmd: AutoCommand): void {
-        const rt = this.panels.get(panelId);
+        const rt = this.runtimeOf(panelId);
         if (!rt) { return; }
         switch (cmd.kind) {
             case "on": this.autoOn(rt); return;
@@ -1147,7 +1155,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 把这个会话的开关推给所有屏（null = 关了）。内存里没有的先从存档接回来。 */
     protected autoBroadcast(panelId: string): void {
-        const rt = this.panels.get(panelId);
+        const rt = this.runtimeOf(panelId);
         const auto = (rt ? this.autoGet(rt) : this.autos.get(panelId)) ?? null;
         this.postToSession(panelId, {
             type: "auto",
@@ -1167,7 +1175,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const auto = this.autos.get(info.panelId);
         if (!auto) { return; }
         if (this.autoJudgeRun.has(info.panelId)) { return; }   // 上一个判官还在（正常不会）：不叠着开
-        const rt = this.panels.get(info.panelId);
+        const rt = this.runtimeOf(info.panelId);
         if (!rt) { return; }
         // 后台还有命令在跑、或者派出去的子会话还有没跑完的：这一轮先不叫判官，也不往对话里写话。
         // 它们的结果本来就会当一条新消息交回这个会话，那一轮跑完再看要不要继续 —— 两边一起催，
@@ -1188,7 +1196,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 只是不写名录、不给模型看见、跑完不交回父会话 —— 结论从它最后一条回复里读。
      */
     protected autoSpawnJudge(workerPanelId: string, auto: AutoState, report: string): void {
-        const workerRt = this.panels.get(workerPanelId);
+        const workerRt = this.runtimeOf(workerPanelId);
         if (!workerRt) { return; }
         const round = auto.rounds + 1;
         const req: TabaSpawnRequest = {
@@ -1225,7 +1233,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.autoJudgeRun.delete(workerPanelId);
         this.taba.noteTurnEnd(judge.id, info.status, Date.now());
         const auto = this.autos.get(workerPanelId);
-        const workerRt = this.panels.get(workerPanelId);
+        const workerRt = this.runtimeOf(workerPanelId);
         if (ours && auto && workerRt) {
             // 判官这一轮没正常跑完就当它什么都没说：一个字都没有，也是"继续"
             const said = info.status === "done" ? (info.lastReplyText ?? "").trim() : "";
@@ -1252,7 +1260,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 判官说接着干：给主会话发一句「继续」。中途开关关掉了就不催了。 */
     protected autoContinue(workerPanelId: string): void {
-        const rt = this.panels.get(workerPanelId);
+        const rt = this.runtimeOf(workerPanelId);
         if (!rt) { return; }
         if (!this.autoGet(rt)) { return; }
         rt.handleSend(AUTO_CONTINUE_TEXT, undefined, { followUp: true });
@@ -1261,7 +1269,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 判官起不来 / 没起来：当这一轮没有判官，直接继续（不往卡住人的方向倒）。 */
     protected autoJudgeFailed(workerPanelId: string, reason: string): void {
         this.autoJudgeRun.delete(workerPanelId);
-        const rt = this.panels.get(workerPanelId);
+        const rt = this.runtimeOf(workerPanelId);
         if (!rt) { return; }
         this.autoBroadcast(workerPanelId);
         this.postToSession(workerPanelId, { type: "system", text: `判官没起来（${reason}），这一轮就当继续。` });
@@ -1273,7 +1281,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 没开自动模式、或者没选项就返回 undefined —— 那还是走正常的问话卡片。
      */
     protected autoAnswerAsk(req: AskRequest, sessionId?: string): string[] | undefined {
-        const rt = sessionId ? this.panels.get(sessionId) : undefined;
+        const rt = sessionId ? this.runtimeOf(sessionId) : undefined;
         if (!rt || !this.autoGet(rt)) { return undefined; }
         const picks = autoAskPicks(req);
         return picks.length > 0 ? picks : undefined;
@@ -1313,7 +1321,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * 下一次请求模型之前投递（那条命令是它自己脱手出去的，等着这个结果），空闲时就是普通的新一轮。
      */
     public onBashTask(panelId: string, task: BashTaskInfo): void {
-        const rt = this.panels.get(panelId);
+        const rt = this.runtimeOf(panelId);
         if (!rt) { return; }
         const text = buildBashTaskDelivery({
             no: task.no,
@@ -1358,7 +1366,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         req: TabaSpawnRequest,
         opts: TabaSpawnOptions = {}
     ): Promise<void> {
-        const parentRt = this.panels.get(parentPanelId);
+        const parentRt = this.runtimeOf(parentPanelId);
         if (!parentRt) { return; }
         // 子会话不能再往下派：它那个会话本来就不加载这个扩展，这里再挡一道（判官也不许）
         if (this.taba.byChildPanel(parentPanelId)) {
@@ -1529,7 +1537,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 模型指名停某个子会话当前这一轮（会话都留着）。 */
     protected tabaStopByRef(parentPanelId: string, req: TabaStopRequest): void {
-        const parentRt = this.panels.get(parentPanelId);
+        const parentRt = this.runtimeOf(parentPanelId);
         const child = this.taba.findByRef(parentPanelId, { id: req.id, name: req.name });
         if (!child) {
             parentRt?.handleSend(
@@ -1539,7 +1547,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             );
             return;
         }
-        const rt = child.childPanelId ? this.panels.get(child.childPanelId) : undefined;
+        const rt = child.childPanelId ? this.runtimeOf(child.childPanelId) : undefined;
         if (!rt) { return; }
         rt.abortActiveRun();
         this.postToSession(rt.id, { type: "system", text: "派活给你的那个会话让你停下当前这一轮。" });
@@ -1588,7 +1596,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         child: TabaChild,
         opts: { resultText?: string; status?: TurnEndStatus; tabWillClose?: boolean }
     ): boolean {
-        const parentRt = child.parentPanelId ? this.panels.get(child.parentPanelId) : undefined;
+        const parentRt = child.parentPanelId ? this.runtimeOf(child.parentPanelId) : undefined;
         const result = (opts.resultText ?? child.result ?? "").trim();
         child.result = result;
         if (!parentRt) {
@@ -1601,7 +1609,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             this.tabaWriteRun(child);
             return false;
         }
-        const childRt = child.childPanelId ? this.panels.get(child.childPanelId) : undefined;
+        const childRt = child.childPanelId ? this.runtimeOf(child.childPanelId) : undefined;
         const text = buildDeliveryText({
             child,
             result,
@@ -1650,7 +1658,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             // 判官被关掉（给完结论、或者整轮被取消）：不在两边说话，也不写名录
             this.taba.forgetChildPanel(panelId);
         } else if (child) {
-            const parentRt = child.parentPanelId ? this.panels.get(child.parentPanelId) : undefined;
+            const parentRt = child.parentPanelId ? this.runtimeOf(child.parentPanelId) : undefined;
             const undelivered = child.deliveries === 0 && child.endedAt === undefined;
             // 名录里留下最后一条（写成已关闭）：事后模型还能读到那个 .jsonl。
             // 跑完了才关的说“跑完了”，跟“没跑完就被关掉”分开。
@@ -1675,7 +1683,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 会话被删掉时释放运行时（杀进程、放名字；登记关系由 notePanelGoneForTaba 处理）。 */
     protected disposePanelRuntime(panelId: string): void {
-        const rt = this.panels.get(panelId);
+        const rt = this.runtimeOf(panelId);
         if (!rt) { return; }
         this.notePanelGoneForTaba(panelId);
         rt.stopClient();
@@ -1702,7 +1710,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 合并所有 panel 中 pi 工具调用触及过的文件绝对路径（供宿主收集符号等）。 */
     public getAllKnownFiles(): string[] {
         const set = new Set<string>();
-        for (const rt of this.panels.values()) {
+        for (const one of this.panels.values()) {
+            const rt = one instanceof SessionRuntime ? one : undefined;
+            if (!rt) { continue; }
             for (const p of rt.getKnownFiles()) { set.add(p); }
         }
         return Array.from(set);
@@ -1748,7 +1758,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /** 一个会话 → webview 可渲染结构（附带显示状态与父子关系）。 */
-    private serializeSession(rt: SessionRuntime): Record<string, unknown> {
+    private serializeSession(one: SessionEntry): Record<string, unknown> {
+        if (!(one instanceof SessionRuntime)) { return this.serializeRemoteSession(one); }
+        const rt = one;
         const child = this.taba.byChildPanel(rt.id);
         const cwd = rt.cwd;
         // 判官（hidden 子会话）就用我们自己起的名字「判官 · 第 N 轮」：pi 给它起的标题
@@ -1795,6 +1807,40 @@ export abstract class ChatControllerBase implements RuntimeHost {
         };
     }
 
+    /**
+     * 别台那条会话在清单里的样子：字段跟本机那条一模一样（界面只认这一套），
+     * 数据是那台报来的（见 machineHub 的 RemoteSession，现读现取）。
+     * 子会话挂的父会话号换成这台的写法（跟别的会话号一个规矩）。
+     */
+    private serializeRemoteSession(one: RemoteSessionRef): Record<string, unknown> {
+        return {
+            id: one.id,
+            cwd: one.cwd,
+            name: one.sessionTitle || one.name || "会话",
+            title: one.sessionTitle,
+            file: one.currentSessionPath || "",
+            parentId: one.parentId ? this.toSessionIdOnMachine(one.machine, one.parentId) : null,
+            streaming: one.streaming,
+            bashRunning: one.hasRunningBashTasks(),
+            activity: one.activity || (one.streaming ? "working" : "idle"),
+            activityDetail: one.activityDetail || "",
+            piReady: one.piReady !== false,
+            loading: one.loading === true,
+            modelId: one.modelId,
+            provider: one.provider,
+            thinkingLevel: one.thinkingLevel,
+            percent: one.percent,
+            tps: one.tps ?? null,
+            taba: one.taba ?? null,
+            auto: one.auto ?? null,
+            autoTitle: one.autoTitle ?? null,
+            // 界面靠这三个知道它跑在谁身上、那台在不在（会话格上的灰点、列表里那句“连不上”）
+            machine: one.machine,
+            machineName: one.machineName,
+            machineOnline: one.machineOnline,
+        };
+    }
+
     /** 随机名部分（不带 pi 标题）：子会话用任务名，其余用“形容词的noun”。 */
     private randomSessionName(rt: SessionRuntime): string {
         const child = this.taba.byChildPanel(rt.id);
@@ -1828,19 +1874,24 @@ export abstract class ChatControllerBase implements RuntimeHost {
             // 名字用界面上那一份（pi 标题优先）：菜单里看到的跟顶条 / 列表一致
             items.push({ id: rt.id, label: this.sessionDisplayName(rt), sub });
             for (const child of kidsByParent.get(rt.id) || []) {
-                const kidRt = child.childPanelId ? this.panels.get(child.childPanelId) : undefined;
+                const kidRt = child.childPanelId ? this.runtimeOf(child.childPanelId) : undefined;
                 if (kidRt && kidRt.id !== excludePanelId) {
                     items.push({ id: kidRt.id, label: this.sessionDisplayName(kidRt), sub: "子会话 · " + this.sessionDisplayName(rt) });
                 }
             }
         };
-        for (const rt of this.panels.values()) {
+        for (const one of this.panels.values()) {
+            if (!(one instanceof SessionRuntime)) {
+                // 别台那些开着的会话：引用它的道理跟本机一样（模型在那边跑，那个路径它读得到），
+                // 附注写那台的名字（本机那些写目录名）
+                if (one.id === excludePanelId) { continue; }
+                items.push({ id: one.id, label: one.sessionTitle || one.name || "会话", sub: one.machineName });
+                continue;
+            }
             // 子会话已在它父会话下面列过了，这里跳过（判官是 hidden 子会话，同样跳过）
-            if (this.taba.byChildPanel(rt.id)) { continue; }
-            push(rt, sameDir(rt.cwd, this.getCwd()) ? "" : (path.basename(rt.cwd) || rt.cwd));
+            if (this.taba.byChildPanel(one.id)) { continue; }
+            push(one, sameDir(one.cwd, this.getCwd()) ? "" : (path.basename(one.cwd) || one.cwd));
         }
-        // 别台那些开着的会话：引用它的道理跟本机一样（模型在那边跑，那个路径它读得到）
-        items.push(...this.foreignReferenceItems(excludePanelId));
         return items;
     }
 
@@ -1848,9 +1899,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     public updateChatReferences(items: ChatReferenceItem[]): void {
         this.postToWebview({ type: "chatReferences", items });
     }
-
-    /** # 引用目录里别台那些会话（子类把这台认下的报出来；本机没有这种）。 */
-    protected foreignReferenceItems(_excludePanelId?: string): ChatReferenceItem[] { return []; }
 
     /** 会话结构或当前会话发生变化后，让子类刷新跨工作区引用目录。 */
     protected onChatStructureChanged(): void { /* default: no global registry */ }
@@ -1864,9 +1912,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             type: "sessionList",
             // 判官（hidden 子会话）也要列出来：一轮一个，但它跑的时候人得看得到在干什么；
             // 报完结论就关，所以不会越攒越多（用户正看着它时会留着，那是他自己关）。
-            sessions: Array.from(this.panels.values())
-                .map((rt) => this.serializeSession(rt))
-                .concat(this.foreignSessionEntries()),
+            sessions: Array.from(this.panels.values()).map((one) => this.serializeSession(one)),
             // 这块屏自己看的是哪一个（它还没挑过就是 null）。界面以本地那一份为准，
             // 别的屏切会话不会牵动它（后端也不再广播“大家切到哪一个”这件事）。
             activeId: this.focusedIdFor(clientId) ?? null,
@@ -1945,7 +1991,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.tabaOnTurnEnd(info);
         // 每条屏都收到：界面据此把那个会话名字旁边那颗点变绿（不看这块屏当时看着的是哪一个）。
         // 弹提醒不走这条路，走右下角那张卡片（见 trayNote）。
-        const rt = this.panels.get(info.panelId);
+        const rt = this.runtimeOf(info.panelId);
         const name = rt ? this.sessionDisplayName(rt) : "";
         const msg = {
             type: "turnEnd",
@@ -1977,26 +2023,26 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 向指定会话发送（对照实验/旧入口都走这里）。 */
     protected broadcastSendToTab(panelId: string, text: string, images?: Array<{ data: string; mimeType: string }>): void {
         for (const pid of this.panelIdsOf(panelId)) {
-            this.panels.get(pid)?.handleSend(text, images);
+            this.runtimeOf(pid)?.handleSend(text, images);
         }
     }
 
     /** 中止指定会话正在跑的那一轮。 */
     protected broadcastAbortToTab(panelId: string): void {
-        for (const pid of this.panelIdsOf(panelId)) { this.panels.get(pid)?.abortActiveRun(); }
+        for (const pid of this.panelIdsOf(panelId)) { this.runtimeOf(pid)?.abortActiveRun(); }
     }
 
     /** 「卡住了」那条路：终止这一轮，等它停稳再由运行时把这句发出去
      *  （为什么不当下就发，见 SessionRuntime.abortThenSend）。 */
     protected broadcastAbortThenSendToTab(panelId: string, text: string): void {
-        for (const pid of this.panelIdsOf(panelId)) { this.panels.get(pid)?.abortThenSend(text); }
+        for (const pid of this.panelIdsOf(panelId)) { this.runtimeOf(pid)?.abortThenSend(text); }
     }
 
     /** webview / 命令菜单取数：问焦点 panel 的 pi 进程要命令列表
      *  （技能 / 提示模板 / 扩展命令），返回可直接渲染的菜单条目。 */
     protected async handleListCommands(): Promise<void> {
         const clientId = this.currentPageId;
-        const rt = this.getActive(clientId);
+        const rt = this.getActiveRuntime(clientId);
         if (!rt) { return; }
         const items = await rt.getSlashCommandItems();
         // 命令列表是这个会话自己的（技能 / 提示模板），只回给问它的那块屏。
@@ -2051,8 +2097,20 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected async chatReferenceSource(
         id: string,
     ): Promise<{ title: string; file: string; size?: number; streaming: boolean } | undefined> {
-        const rt = this.panels.get(id);
-        if (!rt) { return undefined; }
+        const entry = this.panels.get(id);
+        if (!entry) { return undefined; }
+        if (!(entry instanceof SessionRuntime)) {
+            // 别台那条：会话文件在那台的盘上，路径照它报来的写（模型在那边跑，读得到）；
+            // 大小这边看不见就不写
+            const file = entry.currentSessionPath;
+            if (!file) { return undefined; }
+            return {
+                title: entry.sessionTitle || entry.name || "会话",
+                file: file.replace(/\\/g, "/"),
+                streaming: entry.streaming,
+            };
+        }
+        const rt = entry;
         let sessionFile = rt.currentSessionPath;
         if (!sessionFile) {
             const state = await rt.request<RpcSessionState>({ type: "get_state" });
@@ -2253,7 +2311,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 哪个开着的会话正在用这份会话文件（没人在用就返回 undefined）。 */
     protected sessionRunningFile(file: string): SessionRuntime | undefined {
-        for (const rt of this.panels.values()) {
+        for (const one of this.panels.values()) {
+            const rt = one instanceof SessionRuntime ? one : undefined;
+            if (!rt) { continue; }
             if (this.samePath(rt.currentSessionPath, file)) { return rt; }
         }
         return undefined;
@@ -2272,14 +2332,14 @@ export abstract class ChatControllerBase implements RuntimeHost {
             // 没读进来：比如号是从项目清单里认过来的那种），就得按文件读一遍 —— 不然“点开它”
             // 会是一片空白，而它明明在盘上有一整段对话。
             this.setActiveSession(already.id, clientId);
-            const rt = this.panels.get(already.id);
+            const rt = this.runtimeOf(already.id);
             if (rt && rt.isConversationEmpty() && !rt.loading) {
                 void rt.loadSession(file).catch(() => { /* 读不动就照旧空着，别把界面挂在这儿 */ });
             }
             return;
         }
         const cwd = folder ? path.resolve(folder) : (this.getActive(clientId)?.cwd ?? this.getCwd());
-        const active = this.getActive(clientId);
+        const active = this.getActiveRuntime(clientId);
         // 优先复用当前空会话（目录也得对）；已有对话时新建一个会话，避免历史选择覆盖正在进行的对话。
         let rt = active && this.isActiveSessionEmpty(clientId) && sameDir(active.cwd, cwd) ? active : undefined;
         if (!rt) {
@@ -2435,7 +2495,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (this.autoLoadTried.has(clientId)) { return; }
         this.autoLoadTried.add(clientId);
         if (!this.getAutoLoadLast()) { return; }
-        const rt = this.getActive(clientId);
+        const rt = this.getActiveRuntime(clientId);
         if (!rt || !rt.isConversationEmpty()) { return; }
         const files = await listSessionFiles(rt.cwd);
         if (files.length === 0) { return; }
@@ -2456,7 +2516,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     // ========================================================================
     /** 记下“这个会话刚被关掉”：还看着它的屏接着往里发消息时，靠这份记录重新打开它。 */
     private noteClosedSession(panelId: string): void {
-        const rt = this.panels.get(panelId);
+        const rt = this.runtimeOf(panelId);
         if (!rt) { return; }
         this.closedSessions.set(panelId, { cwd: rt.cwd, file: rt.currentSessionPath });
         while (this.closedSessions.size > ChatControllerBase.CLOSED_REMEMBER_MAX) {
@@ -2487,7 +2547,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 // 从没往盘上写过东西的会话：没有可以接着聊的记录，只能在同一目录开一个空会话顶上
                 this.newSessionInDir(closed.cwd, { clientId });
             }
-            const rt = this.getActive(clientId);
+            const rt = this.getActiveRuntime(clientId);
             if (!rt) { return; }
             rt.handleSend(text, Array.isArray(images) ? images as Array<{ data: string; mimeType: string }> : undefined);
         })();
@@ -2592,7 +2652,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 if (typeof msg.sessionId === "string" && this.panels.has(msg.sessionId)) {
                     this.postToSession(msg.sessionId, {
                         type: "envInfo",
-                        env: this.panels.get(msg.sessionId)?.envInfo() ?? null,
+                        env: this.runtimeOf(msg.sessionId)?.envInfo() ?? null,
                     });
                 }
                 return;
@@ -2602,7 +2662,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 const id = typeof msg.sessionId === "string" && this.panels.has(msg.sessionId)
                     ? msg.sessionId
                     : this.getActive()?.id;
-                const tasks = id ? (this.panels.get(id)?.listBashTasks() ?? []) : [];
+                const tasks = id ? (this.runtimeOf(id)?.listBashTasks() ?? []) : [];
                 this.postToOneClient(this.currentPageId, { type: "bashTasks", sessionId: id ?? "", tasks });
                 return;
             }
@@ -2618,14 +2678,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
         // ---- 公共会话级消息 ----
         const panelId: string | undefined = typeof msg.sessionId === "string" ? msg.sessionId : msg.tabId;
-        const rt = panelId ? this.panels.get(panelId) : undefined;
+        const rt = panelId ? this.runtimeOf(panelId) : undefined;
         // 会话已经被关掉了，但界面那头还留着它的画面（别的窗口关的）：往它里头发消息，
         // 就把那个会话重新打开，再把这句话送过去（跟“进程退出、发消息会自动重启”一个路子）。
         if (!rt && panelId && msg.type === "send") {
             if (this.reopenClosedSession(panelId, this.currentPageId, msg.text, msg.images)) { return; }
         }
-        // 命令型消息（pickModel 等）回退到当前会话
-        const target = rt ?? (msg.type === "pickModel" ? this.getActive() : undefined);
+        // 命令型消息（pickModel 等）回退到当前会话；这一层后面挂的全是本机进程的活
+        // （别台那条会话的消息带着号，早在宿主的 routeToMachine 转给那台了，走不到这儿）
+        const target = rt instanceof SessionRuntime ? rt
+            : (msg.type === "pickModel" ? this.getActiveRuntime() : undefined);
         if (!target) { return; }
 
         switch (msg.type) {
