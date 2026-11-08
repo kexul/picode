@@ -1208,7 +1208,7 @@
   let spareTabEl = sessionNameBtn;
   const sessionTabEls = new Map();     // sessionId -> 它那一格的元素
 
-  /** 取某一格（没有就造一个）：一格 = 小点（底下挂子会话个数）+ 名字 + 一颗 ×。 */
+  /** 取某一格（没有就造一个）：一格 = 小点（底下挂子会话个数）+ 名字（底下挂一行工作区名）+ 一颗 ×。 */
   function sessionTabEl(sessionId) {
     let el = sessionTabEls.get(sessionId);
     if (el) { return el; }
@@ -1217,7 +1217,7 @@
       el = document.createElement("button");
       el.type = "button";
       el.innerHTML = '<span class="sn-mark"><span class="sn-dot"></span><span class="sn-count"></span></span>'
-        + '<span class="sn-text"></span>';
+        + '<span class="sn-lines"><span class="sn-text"></span><span class="sn-cwd"></span></span>';
     }
     el.classList.add("sn-tab");
     // 骨架里那一格一开始是藏着的（没会话时不许孤零零挂在顶条中间，见 renderHtml）：
@@ -1260,6 +1260,10 @@
       const doneKids = st ? doneChildCount(st.id) : 0;
       const nameEl = el.querySelector(".sn-text");
       if (nameEl) { nameEl.textContent = item.label || ""; }
+      // 名字底下那一行：这个会话跑在哪个工作区（只写目录名的最后一段，跟「项目与会话」里那一行同名；
+      // 整条路径在下面那条悬停提示里）。没给目录就空着，CSS 把那一行整个收掉。
+      const cwdEl = el.querySelector(".sn-cwd");
+      if (cwdEl) { cwdEl.textContent = item.cwd ? baseNameOfPath(item.cwd) : ""; }
       const countEl = el.querySelector(".sn-count");
       if (countEl) { countEl.textContent = kids > 0 ? String(kids) : ""; }
       el.classList.toggle("current", !!item.current);
@@ -1316,7 +1320,7 @@
   /**
    * 摆这一排格：开着的会话全在条上，一个也不藏。
    * ① 每格都写名字，放得下就这样（整排居中）；
-   * ② 放不下：除了当前这一格，别的收成一条窄块，只露那颗点（见 chat.css 的 .strip）。
+   * ② 放不下：除了当前这一格，别的收成一条窄块，只露那颗点（名字与目录都不写了，见 chat.css 的 .strip）。
    *    顺序一直是会话清单的顺序（当前这一张在哪就在哪：最左那个会话就在最左边，
    *    不为了让它站中间把别的会话搬到它左边去 —— 那样看着就像旁边还有个能划过去的会话），
    *    越往外越窄（紧挨着的那张 STRIP_W_MAX，最外那张收到 STRIP_W_MIN，只剩一颗点）；
@@ -1337,7 +1341,7 @@
     if (!tabs.every((el, i) => kids[i] === el)) { tabs.forEach((el) => { sessionTabRow.appendChild(el); }); }
     const room = sessionTabRow.clientWidth;
     if (sessionTabsWidth(tabs) <= room) { return; }
-    // 挤了：除了当前这一张，别的收成窄块（名字进悬停提示）。顺序不动（就是会话清单的顺序），
+    // 挤了：除了当前这一张，别的收成窄块（名字与目录进悬停提示）。顺序不动（就是会话清单的顺序），
     // 紧挨当前这一张的算近、越往外越窄。
     const row = Array.prototype.filter.call(sessionTabRow.children, (el) => el.classList.contains("sn-tab") && !el.classList.contains("hidden"));
     const curIdx = row.findIndex((el) => el.classList.contains("current"));

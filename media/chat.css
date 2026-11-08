@@ -149,14 +149,18 @@
      一个会话都没有时这一排是空的，可也得留出一格那么高：不然开第一个会话那一下顶条会
      突然长高 8 像素（右边那一列的面板头跟着跳）。所以这里给一条最小高：
      5px 是格子上面那点空（格子的底边要贴着顶条底下那条线，所以空全留在上边），
-     11px 是一格上下的内边距（6 + 5），1.1875em 是名字那一行（.sn-text 是 0.95em 的字、行高 1.25），
-     14px 是名字后面那颗 ×——字号再小就轮到它定高。这几个数跟 .sn-tab 那几条规则是一份，
-     改这边就得同步改那边（不然有会话 / 没会话两种高度又对不上了）。 */
+     4px 是一格上下的内边距（3 + 1），剩下的是格子里那两行：名字那一行 0.9775em
+     （.sn-text 是 0.85em 的字、行高 1.15）、底下目录那一行 0.7em（.sn-cwd 是 0.7em 的字、
+     行高 1），14px 是名字后面那颗 ×——字号再小就轮到它定高。这几个数跟 .sn-tab 那几条规则
+     是一份，改这边就得同步改那边（不然有会话 / 没会话两种高度又对不上了）。
+     两行加起来（1.6775em）比原先那一行（0.95em 的字、行高 1.25 = 1.1875em）高半行左右，
+     省下来的那点从上下内边距里出（11px 收到 4px）：一格照旧跟原先一样高，顶条不该因为
+     多写一行目录就长高一截。 */
   #sessionTabs {
     flex: 1 1 auto; min-width: 0; display: flex; align-items: stretch; justify-content: center; gap: 2px;
     box-sizing: border-box;
     padding-top: 5px;
-    min-height: calc(16px + max(1.1875em, 14px));
+    min-height: calc(9px + max(0.9775em + 0.7em, 14px));
     overflow: hidden;
   }
   /* 一格：像浏览器顶上的一张标签页 —— 上边两角圆、淡底，当前这一张是正文色、
@@ -167,7 +171,7 @@
   .sn-tab {
     flex: 0 0 auto; min-width: 0; max-width: min(200px, 50vw);
     display: flex; align-items: center; justify-content: center; gap: 5px;
-    padding: 6px 10px 5px; border: none; background: transparent;
+    padding: 3px 10px 1px; border: none; background: transparent;
     border-radius: 8px 8px 0 0;
     color: var(--vscode-foreground); font-family: inherit;
     /* 按钮自带 13.33px 的字号（浏览器给的），这里要跟外头一档；名字再按 em 缩。 */
@@ -183,15 +187,36 @@
   /* 正在看的这一张：正文的底色，底边压过那道分隔线（负的 1px 正好盖掉它）。 */
   .sn-tab.current {
     background: var(--vscode-editor-background);
-    margin-bottom: -1px; padding-bottom: 6px;
+    margin-bottom: -1px; padding-bottom: 2px;
   }
+  /* 名字与它底下那行目录摞成一列。两行靠左对齐：目录名从左头起，正好顶在名字底下
+     （各中心各自居中就错开了）；按钮默认 text-align: center，这里得改回来。
+     右边那颗 × 对这一列居中（见 .sn-close 的 align-self）。 */
+  .sn-tab .sn-lines { flex: 0 1 auto; min-width: 0; display: flex; flex-direction: column; text-align: left; }
   .sn-tab .sn-text {
     flex: 0 1 auto;
-    font-size: 0.95em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.85;
+    font-size: 0.85em; line-height: 1.15; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.85;
   }
+  /* 名字底下那一行：这个会话跑在哪个工作区（只写目录名的最后一段，整条路径还在悬停提示里）。
+     原先顶条上一个目录都不写，几格摆在一起看着都像同一个地方的会话；一行小字就把它们分开了。 */
+  .sn-tab .sn-cwd {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 0.7em; line-height: 1; opacity: 0.5;
+  }
+  /* 后端没给目录（会话还没起来、或者别台那条还没报上来）：这一行整个收掉，不留一条空行 */
+  .sn-tab .sn-cwd:empty { display: none; }
   .sn-tab.current .sn-text,
   .sn-tab.streaming .sn-text { opacity: 1; }
-  .sn-tab .sn-mark { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 1px; align-self: center; }
+  .sn-tab.current .sn-cwd,
+  .sn-tab.streaming .sn-cwd { opacity: 0.68; }
+  /* 小点（底下挂着子会话个数）对齐的是名字那一行，不是整格的中间：一格现在两行，
+     整格中间落在两行之间，看着像这颗点在盯底下的目录。偏移量 = (名字那一行的高度 - 小点高度) / 2，
+     名字那一行的高度见 .sn-text（0.85em × 1.15）。数字照旧挂在点底下。 */
+  .sn-tab .sn-mark {
+    flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 1px;
+    align-self: flex-start; margin-top: calc((0.9775em - 7px) / 2);
+  }
   /* 状态点：每一格身上常驻一颗。没在跑 = 绿点（不闪）；在跑 = 蓝点、呼吸（见下面 .streaming）。
      所以一眼能看出谁在干活、谁闲着了。 */
   .sn-tab .sn-dot {
@@ -222,27 +247,28 @@
   /* 那台机器连不上：点变灰、不呼吸，名字也淡一点（这一格的内容暂时不会变） */
   .sn-tab.offline .sn-dot { background: var(--vscode-disabledForeground, #808080); animation: none; }
   .sn-tab.offline .sn-text { opacity: 0.6; }
+  .sn-tab.offline .sn-cwd { opacity: 0.35; }
   /* 左右划切会话的时候（见 chat.js 的 tabSwipeBegin）：要进来的那一格把名字露出来、
      宽度跟着手指涨；要退场的那个跟着收。松手弹回去时给宽度补一段过渡。 */
-  .sn-tab.strip.tab-growing .sn-text { display: block; }
+  .sn-tab.strip.tab-growing .sn-lines { display: flex; }
   /* 弹回去那一段的过渡时长由 chat.js 按甩的速度写进 inline（见 tabSwipeEnd）。 */
   /* 滑动的那两格宽度完全由手指说了算：别让当前 / 普通两种上限（240 / 200）卡住它 */
   .sn-tab.tab-growing, .sn-tab.tab-shrinking { max-width: none; }
   /* 顶条挤了（见 chat.js 的 layoutSessionTabs）：除了当前这一格，别的收成一条窄块，
-     只留那颗点 —— 名字、×、子会话个数都收起（名字在悬停提示里）。
+     只留那颗点 —— 名字、名字底下那行目录、×、子会话个数都收起（名字与路径在悬停提示里）。
      窄块一样宽、点靠左摆；每张往左压一点（压多少由 chat.js 一张一张给），
      越往外压得越多 —— 叠成一摞牌那样，各位只露出左边那一截。
      底色跟着前景色混（浅色主题的前景是暗的、深色主题是亮的），窄块才会比顶条底暗一点或亮一点，
      所以背景留 color-mix；左边那道阴影本来就是个黑，直接写 rgba 就行——少一层 color-mix 的计算，
      重画（里面那颗点会呼吸）时不用再算一遍颜色。 */
   .sn-tab.strip {
-    box-sizing: border-box; width: 21px; padding: 6px 0 5px 8px; gap: 0; justify-content: flex-start;
+    box-sizing: border-box; width: 21px; padding: 3px 0 1px 8px; gap: 0; justify-content: flex-start;
     background: color-mix(in srgb, var(--vscode-foreground) 9%, var(--vscode-editor-background));
     box-shadow: -2px 0 3px rgba(0, 0, 0, 0.12);
     border-radius: 6px 6px 0 0;
   }
   .sn-tab.strip:hover { background: color-mix(in srgb, var(--vscode-foreground) 16%, var(--vscode-editor-background)); }
-  .sn-tab.strip .sn-text,
+  .sn-tab.strip .sn-lines,
   .sn-tab.strip .sn-close,
   .sn-tab.strip .sn-count { display: none; }
   /* 在跑（本会话，或者它派出去的子会话）：那颗点换成蓝的、呼吸一下。

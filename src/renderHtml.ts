@@ -96,7 +96,7 @@ export function renderHTML(opts: RenderHTMLOpts): string {
     // 右边几颗网页端按钮（左边那颗文件侧边栏开关只有浏览器页面里有，由 browserBridge.js 插在最前头）。
     // 「新建会话」那颗加号在输入框底下那条小横排里，见下面的 #composer。
     // 骨架里先摆当前这一格，其余由 chat.js 按会话列表补上（见 renderSessionTabs）。
-    // 会话跑在哪个目录不放顶条上（太挤）：在每格的悬停提示里。
+    // 一格两行：上面是会话名，底下一行小字是它跑在哪个工作区（只写目录名的最后一段，整条路径在悬停提示里）。
     // 这一格先藏着（hidden）：一个会话都没有时它会孤零零挂在顶条中间、底下那条“当前”的
     // 下划线看着像一条莫名其妙的白/蓝线（骨架里没名字，谁都指不出它是什么）。
     // 真开了会话，chat.js 把它拿去做第一格时会把 hidden 摘掉（见 sessionTabEl）。
@@ -106,7 +106,7 @@ export function renderHTML(opts: RenderHTMLOpts): string {
     `      <div id="sessionTabs">\n` +
     `        <button id="sessionName" class="sn-tab current hidden" title="当前会话" aria-label="当前会话">\n` +
     `          <span class="sn-mark"><span class="sn-dot"></span><span class="sn-count"></span></span>\n` +
-    `          <span class="sn-text"></span>\n` +
+    `          <span class="sn-lines"><span class="sn-text"></span><span class="sn-cwd"></span></span>\n` +
     `        </button>\n` +
     `      </div>\n` +
     `    </div>\n` +
