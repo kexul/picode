@@ -1839,6 +1839,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
             if (this.taba.byChildPanel(rt.id)) { continue; }
             push(rt, sameDir(rt.cwd, this.getCwd()) ? "" : (path.basename(rt.cwd) || rt.cwd));
         }
+        // 别台那些开着的会话：引用它的道理跟本机一样（模型在那边跑，那个路径它读得到）
+        items.push(...this.foreignReferenceItems(excludePanelId));
         return items;
     }
 
@@ -1846,6 +1848,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
     public updateChatReferences(items: ChatReferenceItem[]): void {
         this.postToWebview({ type: "chatReferences", items });
     }
+
+    /** # 引用目录里别台那些会话（子类把这台认下的报出来；本机没有这种）。 */
+    protected foreignReferenceItems(_excludePanelId?: string): ChatReferenceItem[] { return []; }
 
     /** 会话结构或当前会话发生变化后，让子类刷新跨工作区引用目录。 */
     protected onChatStructureChanged(): void { /* default: no global registry */ }
@@ -2018,40 +2023,50 @@ export abstract class ChatControllerBase implements RuntimeHost {
      * pi 对这份文件即时追加，模型读到的是它读取那一刻的内容。
      */
     public async buildChatReference(msg: any): Promise<{ title: string; text: string } | undefined> {
-        const collect = async (pid: string) => {
-            const rt = this.panels.get(pid);
-            if (!rt) { return undefined; }
-            let sessionFile = rt.currentSessionPath;
-            if (!sessionFile) {
-                const state = await rt.request<RpcSessionState>({ type: "get_state" });
-                sessionFile = state?.data?.sessionFile;
-                if (sessionFile) { rt.currentSessionPath = sessionFile; }
-            }
-            if (!sessionFile) { return undefined; }
-            const abs = this.resolvePath(sessionFile);
-            let size = 0;
-            try { size = fs.statSync(abs).size; } catch { return undefined; }   // 尚未落盘 / 已被清理
-            if (size <= 0) { return undefined; }
-            return { title: this.sessionDisplayName(rt), file: abs.replace(/\\/g, "/"), size, streaming: rt.streaming };
-        };
-
         const sourceId = typeof msg.sessionId === "string" ? msg.sessionId
             : (typeof msg.panelId === "string" ? msg.panelId
                 : (typeof msg.tabId === "string" ? msg.tabId : ""));
         if (!sourceId) { return undefined; }
-        const rt = this.panels.get(sourceId);
-        if (!rt) { return undefined; }
-        const one = await collect(rt.id);
+        const one = await this.chatReferenceSource(sourceId);
         if (!one) { return undefined; }
-        const sections = [one];
-        const cardTitle = `💬 ${this.sessionDisplayName(rt)}`;
 
-        const lines = sections.map((s) =>
-            `- 会话「${s.title}」：${s.file}（约 ${this.formatSize(s.size)}${s.streaming ? "，仍在持续追加" : ""}）`);
+        const lines = [`- 会话「${one.title}」：${one.file}${this.chatReferenceSizeText(one.size, one.streaming)}`];
         const body = promptText(this.getConfig().prompts, "chatReference", { 会话: lines.join("\n") });
-        const totalSize = sections.reduce((n, s) => n + s.size, 0);
-        return { title: `${cardTitle} · ${this.formatSize(totalSize)}`, text: body };
+        const sizeText = typeof one.size === "number" && one.size > 0 ? ` · ${this.formatSize(one.size)}` : "";
+        return { title: `💬 ${one.title}${sizeText}`, text: body };
     }
+
+    /** 引用那一行末尾那句：多大、还在不在往下写（大小不知道就不写大小）。 */
+    private chatReferenceSizeText(size: number | undefined, streaming: boolean): string {
+        const bits: string[] = [];
+        if (typeof size === "number" && size > 0) { bits.push(`约 ${this.formatSize(size)}`); }
+        if (streaming) { bits.push("仍在持续追加"); }
+        return bits.length > 0 ? `（${bits.join("，")}）` : "";
+    }
+
+    /**
+     * 一个会话的 # 引用要看的那几样：会话文件（给模型的是它读得到的那个路径）、多大、还在不在写。
+     * 本机的问它那个 pi 进程（文件可能还没落盘，落盘了才好引用）；别台的由子类拿那台报来的那一份。
+     */
+    protected async chatReferenceSource(
+        id: string,
+    ): Promise<{ title: string; file: string; size?: number; streaming: boolean } | undefined> {
+        const rt = this.panels.get(id);
+        if (!rt) { return undefined; }
+        let sessionFile = rt.currentSessionPath;
+        if (!sessionFile) {
+            const state = await rt.request<RpcSessionState>({ type: "get_state" });
+            sessionFile = state?.data?.sessionFile;
+            if (sessionFile) { rt.currentSessionPath = sessionFile; }
+        }
+        if (!sessionFile) { return undefined; }
+        const abs = this.resolvePath(sessionFile);
+        let size = 0;
+        try { size = fs.statSync(abs).size; } catch { return undefined; }   // 尚未落盘 / 已被清理
+        if (size <= 0) { return undefined; }
+        return { title: this.sessionDisplayName(rt), file: abs.replace(/\\/g, "/"), size, streaming: rt.streaming };
+    }
+
 
     /** 将来源生成的快照回传给发起 # 引用的 webview。 */
     public receiveChatReference(

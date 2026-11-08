@@ -23,7 +23,7 @@ import { writeAskAnswer } from "./askProtocol";
 import type { MessageSink } from "./sessionRuntime";
 import type { RemoteSessionRef, SessionRef } from "./runtimeTypes";
 import type { SessionListItem } from "./sessionStore";
-import { ChatControllerBase, type ViewOptionItem, type WorkspacePage } from "./chatControllerBase";
+import { ChatControllerBase, type ChatReferenceItem, type ViewOptionItem, type WorkspacePage } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
 import { isOwnPage, pushRemoteNotice, REMOTE_TEXT_CHARS, type RemoteNotice } from "./remoteNotice";
@@ -294,6 +294,36 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             });
         }
         return out;
+    }
+
+    /** # 引用目录里把别台那些开着的会话也列上（模型在那边跑，那个路径它读得到）。 */
+    protected override foreignReferenceItems(excludePanelId?: string): ChatReferenceItem[] {
+        const items: ChatReferenceItem[] = [];
+        for (const id of this.machineHub.openedIds()) {
+            if (id === excludePanelId) { continue; }
+            const machine = this.machineHub.ownerOf(id);
+            const one = this.machineHub.sessionOf(id);
+            if (!machine || !one) { continue; }
+            items.push({ id, label: one.title || one.name || "会话", sub: this.machineHub.nameOf(machine) });
+        }
+        return items;
+    }
+
+    /**
+     * 别台那台的一条会话的 # 引用：会话文件在那台盘上，路径照它报来的写（模型在那边读得到）。
+     * 大小这边看不见，就不写。
+     */
+    protected override async chatReferenceSource(
+        id: string,
+    ): Promise<{ title: string; file: string; size?: number; streaming: boolean } | undefined> {
+        if (!this.machineHub.ownerOf(id)) { return super.chatReferenceSource(id); }
+        const one = this.machineHub.sessionOf(id);
+        if (!one?.file) { return undefined; }
+        return {
+            title: one.title || one.name || "会话",
+            file: String(one.file).replace(/\\/g, "/"),
+            streaming: one.streaming === true,
+        };
     }
 
     /** 那台报了新的会话清单 / 掉线 / 回来了：重推一份合并后的清单，顺手看新会话认不认得下来。 */
@@ -1055,10 +1085,15 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 除了“切过去 / 关掉”这两件要在这边记账的，其余一律原样转过去：发消息、停一轮、换模型、
      * 要更早的历史、问命令清单、找文件……两边说的是同一套话，没必要再写一遍
      * （这正是把跨机器收到后端的好处：页面只当自己在用一台机器）。
+     *
+     * 例外是“# 引用”（fetchChat）：引用一条会话读的是它的会话文件，结果要变成**这块屏**草稿里的
+     * 一张卡片。转过去的话，那台回的那份是以它那边一个“页面”为收件人的，绕一圈到这里就丢了；
+     * 所以这一条在这边办（别台那条的路径由那台报来的清单里拿，模型在那边跑，那个路径它读得到）。
      */
     private routeToMachine(msg: any): boolean {
         const sessionId = typeof msg.sessionId === "string" ? msg.sessionId : "";
         if (!sessionId || !this.machineHub.ownerOf(sessionId)) { return false; }
+        if (msg.type === "fetchChat") { return false; }
         if (msg.type === "switchSession" || msg.type === "workspaceOpenSession") {
             // 认下它（那边的消息从下一句开始往这儿推），再像切本机会话那样切过去。
             // 两条都走这里：顶条上点一格是 switchSession，列表里点一行是 workspaceOpenSession。
