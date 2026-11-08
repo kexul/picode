@@ -195,6 +195,23 @@ export class MachineHub {
     /** 这些会话的正文已经往这台推过了（切来切去不用再要一遍；页面重连后作废，见 forgetSentContent）。 */
     private readonly contentSent = new Set<string>();
     /**
+     * 这台正在看的那几条（顶条上那些里，正文要往这边推的）。
+     *
+     * 从前“顶条上摆什么”和“正文推什么”是同一份账（`opened`）：那台自己开着、这边没点开的
+     * 会话连格子都不给，于是多台用起来跟本机差一截。现在顶条照本机的规矩来 —— 那台开着的
+     * 主会话全摆着（见 adoptOpen），正文仍旧按需：头一回切到某一格才请那台整段重放一遍
+     * （见 watch），之后就在这一份里，跟本地那几格一样一直活着
+     * （不然那台开十条，十条正文一起往这边灌）。
+     */
+    private readonly watching = new Set<string>();
+    /**
+     * 这边替人点过 × 的那些（那台真关掉它之前，清单里它还在）。
+     *
+     * 不记这一笔，那颗 × 点下去等于白点：那台下一次报清单又把它摆回顶条上。
+     * 那台不再报它了，这一笔就撤掉（见 dropClosed）。
+     */
+    private readonly closedByUs = new Set<string>();
+    /**
      * 从项目清单里点开、那台还没报出它那边的号（面板号）的那些：先按会话文件记着，
      * 等它报了会话清单再认领、换成它那边的号（见 adoptOpen）。
      */
@@ -289,6 +306,13 @@ export class MachineHub {
             if (this.ownerOf(id) !== st.url) { continue; }
             this.opened.delete(id);
             this.openedFiles.delete(id);
+        }
+        for (const id of Array.from(this.watching)) {
+            if (this.ownerOf(id) !== st.url) { continue; }
+            this.watching.delete(id);
+            this.contentSent.delete(id);
+            this.needContent.delete(id);
+            this.closedByUs.delete(id);
         }
         for (const [key, wait] of Array.from(this.pendingOpen)) {
             if (wait.machine === st.url) { this.pendingOpen.delete(key); }
@@ -479,7 +503,7 @@ export class MachineHub {
      *
      * 从项目清单里点开一条**还没开着**的会话时，手里的号是那边会话文件里的号，
      * 跟那台真正用的面板号（`server:panel-3` 这种）不是一回事：这种先按会话文件挂着，
-     * 等它把会话清单报上来再认领、换成它那边的号（见 adoptOpen）。
+     * 等它把会话清单报上来再认领、换成它那边的号（见 adoptPending）。
      */
     public openSession(id: string, hint?: { file?: string; cwd?: string }): void {
         const one = this.parseId(id);
@@ -494,6 +518,8 @@ export class MachineHub {
         const cwd = info?.cwd || hint?.cwd || "";
         if (live) {
             this.opened.add(id);
+            // 正文从此往这边推（切到哪一格就要哪一格，见 watcher 那份账的注释）
+            this.watching.add(id);
             if (file) { this.openedFiles.set(id, file); }
             this.post(id, { type: "workspaceOpenSession", path: file, cwd });
             // 正文要过一次就够了：这台手上已经有这一格的内容时，切来切去不必再让它整段重发
@@ -514,10 +540,28 @@ export class MachineHub {
         this.opts.onSessionsChanged();
     }
 
-    /** 不用了（页面把这一格关了）：从“认下的”里划掉。 */
+    /** 不用了（页面把这一格关了）：从“认下的”里划掉，并记下“这一下是这边点的”。 */
     public forget(id: string): void {
         this.openedFiles.delete(id);
+        this.watching.delete(id);
+        this.contentSent.delete(id);
+        this.needContent.delete(id);
+        this.closedByUs.add(id);
         if (this.opened.delete(id)) { this.opts.onSessionsChanged(); }
+    }
+
+    /**
+     * 这块屏要点开这一条了（顶条上点了某一格）：正文从此往这边推。
+     *
+     * 顶条上摆着那台开着的每一格，但正文是按需的（见 `watching`）：这台手上还没有它的正文时
+     * 就请那台整段重放一遍；已经有了（切走又切回来）就不再要，省得画面又白摆一遍。
+     */
+    public watch(id: string): void {
+        const one = this.parseId(id);
+        if (!one) { return; }
+        this.watching.add(id);
+        if (this.contentSent.has(id)) { return; }
+        this.post(id, { type: "repaintSession", sessionId: one.remoteId, full: true });
     }
 
     /** 那台把这块“虚拟屏”切到哪个会话（切会话时叫一下：那边据此决定重画哪一份历史）。 */
@@ -885,7 +929,8 @@ export class MachineHub {
     /**
      * 那台推来的一条：会话号换成这台的写法，再往外推。
      *
-     * 只推“这台认下的那几个会话”的东西（其余的会话在那台自己开着，跟这块屏无关）；
+     * 只推“这台正在看的那几条会话”的东西（顶条上摆着、但这块屏没在看那些，正文不推，
+     * 切过去时再要一遍，见 watch）；
      * 不带会话号的那些（选项、模型清单、命令清单……）一律不推：那些这台自己有自己的一份，
      * 把别台的并进来只会让人对着两个清单发懵（要切模型、要开设置，都是这台的事）。
      */
@@ -898,12 +943,16 @@ export class MachineHub {
                 st.sessions.set(one.id, one);
             }
             if (!st.online) { st.online = true; st.error = undefined; }
+            // 那台开着的主会话全摆到顶条上（跟本机一个规矩）
+            this.adoptOpen(st, list);
             // 刚点开的那些：那台已经把它报上来了，换成它那边的号
             this.adoptPending(st, list);
             // 认下的那些如果换了号（那台重启过），按会话文件接上
             this.renumber(st, list);
             // 那台上派出去的子会话：父会话在这边开着就一并认下（界面按同一套规矩缩进在父会话下面）
             this.adoptChildren(st, list);
+            // 那台不再报的那些（关掉了、重启后没开回来）从顶条上摘掉
+            this.dropClosed(st, list);
             this.opts.onSessionsChanged();
             return;
         }
@@ -918,8 +967,8 @@ export class MachineHub {
         }
         if (typeof msg.sessionId !== "string" || !msg.sessionId) { return; }
         const id = REMOTE_PREFIX + st.url + ":" + msg.sessionId;
-        if (!this.opened.has(id) && !this.adoptByMessage(st, msg.sessionId)) {
-            // 没认下的会话（那台上别的东西在跑）：不往这台推
+        if (!this.watching.has(id) && !this.adoptByMessage(st, msg.sessionId)) {
+            // 这台没在看它的正文（顶条上那一格照样在，只是没要过）：不往这边推
             return;
         }
         if (this.needContent.has(id)) {
@@ -956,6 +1005,7 @@ export class MachineHub {
         const st = this.states.get(one.machine);
         if (!st) { return; }
         this.contentSent.delete(id);
+        this.watching.add(id);
         this.post(id, { type: "repaintSession", sessionId: one.remoteId, full: true });
     }
 
@@ -978,6 +1028,7 @@ export class MachineHub {
             this.pendingOpen.delete(key);
             const id = this.toLocalId(st.url, remoteId);
             this.opened.add(id);
+            this.watching.add(id);
             this.openedFiles.set(id, wait.file);
             this.opts.onSessionAdopted?.(wait.localId, id);
             this.opts.onSessionsChanged();
@@ -998,9 +1049,55 @@ export class MachineHub {
             this.opened.delete(wait.localId);
             const id = this.toLocalId(st.url, hit.id);
             this.opened.add(id);
+            this.watching.add(id);
             this.openedFiles.set(id, wait.file);
             this.needContent.set(id, true);
             this.opts.onSessionAdopted?.(wait.localId, id);
+        }
+    }
+
+    /**
+     * 那台开着的主会话全摆到顶条上（跟本机一个规矩：这台后端开着的都摆着，不管是谁开的、
+     * 闲着不闲着；子会话不占格，另算，见 adoptChildren）。
+     *
+     * 从前只摆这边点开过的：那台自己开着十条，这边一条都看不见，得先去侧边栏里一条条点出来
+     * —— 多台用起来跟本机差一截。
+     */
+    private adoptOpen(st: MachineState, list: any[]): void {
+        for (const item of list) {
+            if (!item || typeof item.id !== "string" || !item.id) { continue; }
+            if (typeof item.parentId === "string" && item.parentId) { continue; }   // 子会话不占格
+            const id = this.toLocalId(st.url, item.id);
+            if (this.closedByUs.has(id)) { continue; }   // 这边刚点过 ×，等那台真关掉它
+            this.opened.add(id);
+            if (typeof item.file === "string" && item.file) { this.openedFiles.set(id, item.file); }
+        }
+    }
+
+    /**
+     * 那台不再报的那些（它关掉了、重启后没开回来）从顶条上摘掉；
+     * × 那笔账也顺手对一下：那台真不报它了，这一笔就撤。
+     */
+    private dropClosed(st: MachineState, list: any[]): void {
+        const live = new Set<string>();
+        for (const item of list) {
+            if (item && typeof item.id === "string" && item.id) { live.add(item.id); }
+        }
+        for (const id of Array.from(this.closedByUs)) {
+            const one = this.parseId(id);
+            if (!one || one.machine !== st.url) { continue; }
+            if (live.has(one.remoteId)) { continue; }
+            this.closedByUs.delete(id);
+        }
+        for (const id of Array.from(this.opened)) {
+            const one = this.parseId(id);
+            if (!one || one.machine !== st.url) { continue; }
+            if (live.has(one.remoteId)) { continue; }
+            this.opened.delete(id);
+            this.openedFiles.delete(id);
+            this.watching.delete(id);
+            this.contentSent.delete(id);
+            this.needContent.delete(id);
         }
     }
 

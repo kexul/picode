@@ -282,6 +282,18 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
+     * 把某块屏切到某个会话。
+     *
+     * 别台那条多一步：顶条上摆着那台开着的每一格（跟本机一个规矩），但正文是按需的，
+     * 所以切过去时要请那台把这一格整段重放一遍（头一回切到它、或者页面重连后那次）。
+     * 本机不用这一步：那几格的正文一直在这台手里。
+     */
+    public override setActiveSession(panelId: string, clientId: string = this.currentPageId, switchId?: unknown): void {
+        super.setActiveSession(panelId, clientId, switchId);
+        if (this.machineHub.ownerOf(panelId)) { this.machineHub.watch(panelId); }
+    }
+
+    /**
      * 把“这边认下的别台会话”跟 `panels` 这本账对齐：新认下的放进去（一条代理，数据现读现取），
      * 不再认的（那台关掉了 / 父会话关了、子会话跟着走）拿掉。
      *
