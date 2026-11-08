@@ -882,6 +882,8 @@ export class MachineHub {
             this.adoptPending(st, list);
             // 认下的那些如果换了号（那台重启过），按会话文件接上
             this.renumber(st, list);
+            // 那台上派出去的子会话：父会话在这边开着就一并认下（界面按同一套规矩缩进在父会话下面）
+            this.adoptChildren(st, list);
             this.opts.onSessionsChanged();
             return;
         }
@@ -979,6 +981,63 @@ export class MachineHub {
             this.openedFiles.set(id, wait.file);
             this.needContent.set(id, true);
             this.opts.onSessionAdopted?.(wait.localId, id);
+        }
+    }
+
+    /**
+     * 那台上派出来的子会话：父会话在这边开着，就把它也认下来（`opened` 里加一条）。
+     *
+     * 本机的子会话本来就占一个 panel（派活那一套起的），清单里带着 `parentId`；别台那边一样，
+     * 只是从前这边只转发“自己点开过的那几条”，子会话压根没有条目 —— 于是界面想缩进也没有东西可缩。
+     * 现在按父会话往下找一层层（派出来的子会话还能再派，但目前只到两三层）。
+     *
+     * 反过来的也顺手做：父会话关掉了 / 那台不再报它了，这些“挂在别人下面的”从 `opened` 里摘掉，
+     * 跟本机关掉父会话就把子会话一起收掉一个道理。
+     */
+    private adoptChildren(st: MachineState, list: any[]): void {
+        const parentOf = new Map<string, string | null>();
+        for (const item of list) {
+            if (!item || typeof item.id !== "string" || !item.id) { continue; }
+            parentOf.set(item.id, typeof item.parentId === "string" && item.parentId ? item.parentId : null);
+        }
+        // 这边认下的（除了子会话自己）：从它们往下找
+        const roots: string[] = [];
+        for (const id of this.opened) {
+            const one = this.parseId(id);
+            if (!one || one.machine !== st.url) { continue; }
+            if (parentOf.get(one.remoteId)) { continue; }   // 自己就是子会话：等父会话往下找它
+            roots.push(one.remoteId);
+        }
+        const wanted = new Set<string>();
+        let level = roots;
+        for (let depth = 0; depth < 3 && level.length > 0; depth += 1) {
+            const next: string[] = [];
+            for (const parentRemote of level) {
+                for (const [childRemote, parent] of parentOf) {
+                    if (parent !== parentRemote) { continue; }
+                    const localId = this.toLocalId(st.url, childRemote);
+                    wanted.add(localId);
+                    const item = list.find((one) => one && one.id === childRemote);
+                    if (item && typeof item.file === "string" && item.file) { this.openedFiles.set(localId, item.file); }
+                    next.push(childRemote);
+                }
+            }
+            level = next;
+        }
+        for (const id of wanted) { this.opened.add(id); }
+        // 挂在别人下面的、这会儿不该要了
+        for (const id of Array.from(this.opened)) {
+            if (wanted.has(id)) { continue; }
+            const one = this.parseId(id);
+            if (!one || one.machine !== st.url) { continue; }
+            const parent = parentOf.get(one.remoteId);
+            if (!parent) { continue; }             // 不是子会话（那台自己点开的主会话）：不动
+            const live = list.find((item) => item && item.id === one.remoteId);
+            if (live && parent) { continue; }      // 那台还报着它、还挂在父会话下面：留着
+            this.opened.delete(id);
+            this.openedFiles.delete(id);
+            this.contentSent.delete(id);
+            this.needContent.delete(id);
         }
     }
 
