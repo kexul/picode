@@ -121,6 +121,16 @@ module.exports = async (page) => {
         await page.eval(`const el = document.getElementById("fileSearchInput"); el.focus(); el.select(); return true;`);
         await page.cdp.send("Input.insertText", { text });
     };
+    /** 真鼠标在某个元素正中点一下（鼠标点会把焦点落在按钮上、把输入框的焦点带走）。 */
+    const mouseClick = async (selector) => {
+        const at = JSON.parse(await page.eval(`
+            const el = document.querySelector(${JSON.stringify(selector)});
+            const r = el.getBoundingClientRect();
+            return JSON.stringify({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) });
+        `));
+        await page.cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: at.x, y: at.y, button: "left", clickCount: 1 });
+        await page.cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: at.x, y: at.y, button: "left", clickCount: 1 });
+    };
     const searchState = async () => JSON.parse(await page.eval(`
         const overlay = document.getElementById("fileSearchOverlay");
         return JSON.stringify({
@@ -203,6 +213,33 @@ module.exports = async (page) => {
     await pressEsc();
     await page.sleep(250);
     check("Esc 也收起来", !(await searchState()).shown);
+
+    // 真鼠标点一下浮层里的东西，焦点就不在输入框里了（点「内容」那颗按钮会落到按钮上，
+    // 点面板空白处会落到 body）：这两种时候 Esc 也得照样收起来，不然它落到「Esc 中止
+    // 正在生成的一轮」那个监听上，浮层还开着、这一轮却被掐了。
+    console.log("点一下「内容」那颗按钮，再按 Esc：");
+    await pressSearchKey();
+    await page.sleep(300);
+    await mouseClick("#fsModeText");
+    await page.sleep(250);
+    const onBtn = await searchState();
+    check("点完焦点在按钮上（不在输入框里）", onBtn.shown && onBtn.focused === "fsModeText", onBtn.focused);
+    await pressEsc();
+    await page.sleep(250);
+    check("焦点不在输入框里，Esc 也收起来", !(await searchState()).shown);
+
+    console.log("点一下面板上的标题，再按 Esc：");
+    await pressSearchKey();
+    await page.sleep(300);
+    await mouseClick("#fileSearchTitle");
+    await page.sleep(200);
+    const onBody = await searchState();
+    check("点完焦点掉到页面本身（不在输入框里）", onBody.shown && onBody.focused !== "fileSearchInput", onBody.focused);
+    await pressEsc();
+    await page.sleep(250);
+    check("焦点在页面本身时，Esc 照样收起来", !(await searchState()).shown);
+    // 上一段把那一档切成了「内容」：回到「文件名」，后面几段照旧按文件名搜
+    await page.eval(`document.getElementById("fsModeFiles").click(); return true;`);
 
     // ==================== 二、按文件名找 ====================
     console.log("搜文件名 gamma：");

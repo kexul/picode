@@ -9640,14 +9640,8 @@
       }
       scheduleFileSearch();
     });
+    // Esc 不在这儿接：那条键由 document 上那个监听统一收（见上面「文件搜索那块浮层也一样」）
     fileSearch.input.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        // 先就地把这条 Esc 吃掉：外面 document 上的监听会拿它去中止正在生成的那一轮
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        closeFileSearch();
-        return;
-      }
       if (e.key === "ArrowDown") { e.preventDefault(); moveFileSearchSel(1); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); moveFileSearchSel(-1); return; }
       if (e.key === "Enter") { e.preventDefault(); chooseFileSearchItem(fileSearch.sel); }
@@ -11092,7 +11086,16 @@
     e.stopImmediatePropagation();
     closePickerAnyway();
   });
-
+  // 文件搜索那块浮层也一样：Esc 收回它，跟点外面、点头上那颗叉一个结果。
+  // 这条监听挂在 document 上、不挂那个输入框：点了「内容」那颗按钮、或者点了面板别处，
+  // 焦点就不在输入框里了，那会儿这条键得照样管用（挂在输入框上的话它会落到下面那个
+  // 「Esc 中止正在生成的一轮」的监听上，浮层还开着，顺手把这一轮掐了）。
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !fileSearch.open) { return; }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    closeFileSearch();
+  });
 
   // ==================== @ 文件引用 ====================
   let fileMatches = [];
@@ -11516,6 +11519,8 @@
       if (pickerModalOpen()) { return; }
       // 看文件（或 diff）的弹窗开着：这条键归那个弹窗（关掉它，见 buildFileSidebar）
       if (fileViewing()) { return; }
+      // 文件搜索那块浮层开着：这条键归浮层（见上面那个监听）；别顺手把这一轮也中止了
+      if (fileSearch.open) { return; }
       if (abortActiveTab()) { e.preventDefault(); }
       return;
     }
