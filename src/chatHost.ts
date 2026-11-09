@@ -1790,6 +1790,17 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
+     * 这块屏现在还连着吗：推送通道还在才算。
+     *
+     * “谁在看哪个会话”那本登记簿只登记不销号（页面断开不会忘了它，因为同一个标识重连回来
+     * 还要接着看原来那个），所以“有人看着这个会话”必须再问一句“那条通道还在不在”——
+     * 不然关掉的标签页会一直算“有人看着”，确认框白白等两分钟才走兜底。
+     */
+    protected override isClientLive(clientId: string): boolean {
+        return !!this.broadcaster.getChannel(clientId);
+    }
+
+    /**
      * 这个会话要不要人管：有一张问话卡片挂着（还没收尾）就是“等你答”。
      *
      * 这是宿主才有的知识（卡片在它手里），所以由这一层回答；阶段本身（进程在干什么）

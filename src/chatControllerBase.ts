@@ -737,19 +737,29 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.onClientSessionChanged(clientId, panelId);
     }
 
+    /**
+     * 这块屏现在还连着吗。
+     *
+     * 默认“连着”。宿主覆写它（见 chatHost 的 broadcaster：通道还在才算）。
+     * 为什么要问这一句：下面的“谁在看”只登记不销号 —— 关掉的标签页、拔掉网的手机
+     * 永远留在表里，于是“有人看着这个会话”永远成立，需要人回答的弹窗
+     *（确认框 / 输入框 / 问答题）会白等到超时，而不是当场走“没人看着”的兜底。
+     */
+    protected isClientLive(_clientId: string): boolean { return true; }
+
     /** 有没有屏在看这个会话（状态上报这类“只跟人正在看的会话走”的事看它）。 */
     protected isFocusedPanel(panelId: string): boolean {
-        for (const id of this.clientSessions.values()) {
-            if (id === panelId) { return true; }
+        for (const [clientId, id] of this.clientSessions) {
+            if (id === panelId && this.isClientLive(clientId)) { return true; }
         }
         return false;
     }
 
-    /** 现在正看着这个会话的屏（一个都没在看就是空表）。 */
+    /** 现在正看着这个会话的屏（一个都没在看就是空表；已断开的屏不算）。 */
     public clientsViewing(panelId: string): string[] {
         const out: string[] = [];
         for (const [clientId, id] of this.clientSessions) {
-            if (id === panelId) { out.push(clientId); }
+            if (id === panelId && this.isClientLive(clientId)) { out.push(clientId); }
         }
         return out;
     }

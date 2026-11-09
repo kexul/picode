@@ -1713,7 +1713,7 @@ export class PiChatWebServer {
             this.hooks.log(`屏 ${id} 已经 ${Math.round(this.pageStaleMs / 1000)} 秒没有任何动静，` +
                 "把它从登记簿里拿掉（插件会自己重连）。");
             const res = this.screenStreams.get(id);
-            this.dropScreen(id);
+            this.dropScreen(id, res);
             if (res) { this.endStream(res, ""); }
         }
         for (const screen of screens.list()) {
@@ -1848,7 +1848,7 @@ export class PiChatWebServer {
         const old = this.screenStreams.get(id);
         this.screenStreams.set(id, res);
         if (old && old !== res) { try { old.destroy(); } catch { /* 已经断了 */ } }
-        const onClose = () => { this.dropScreen(id); };
+        const onClose = () => { this.dropScreen(id, res); };
         res.on("close", onClose);
         res.on("error", onClose);
         this.host.attachScreen(id, folders, (msg) => {
@@ -1858,22 +1858,30 @@ export class PiChatWebServer {
 
     /** 往一条屏连接写一段内容；写不动了就把它注销掉（插件那边会自己重连）。 */
     private writeScreenChunk(id: string, res: http.ServerResponse, chunk: string): void {
-        if (res.writableEnded || res.destroyed) { this.dropScreen(id); return; }
+        if (res.writableEnded || res.destroyed) { this.dropScreen(id, res); return; }
         try {
             const flushed = res.write(chunk);
             if (!flushed && res.writableLength > this.backlogBytes) {
-                this.hooks.log(`屏 ${id} 有一阵子没在读推送流（积压 ${Math.round(res.writableLength / 1024)} KB），" +
-                    "掐掉这条连接，插件会自己重连。`);
-                this.dropScreen(id);
+                this.hooks.log(`屏 ${id} 有一阵子没在读推送流（积压 ${Math.round(res.writableLength / 1024)} KB），` +
+                    "掐掉这条连接，插件会自己重连。");
+                this.dropScreen(id, res);
             }
         } catch {
-            this.dropScreen(id);
+            this.dropScreen(id, res);
         }
     }
 
-    /** 断开一条屏连接（窗口关了 / 网断了 / 积压太多）。 */
-    private dropScreen(id: string): void {
-        if (!this.screenStreams.has(id)) { return; }
+    /**
+     * 断开一条屏连接（窗口关了 / 网断了 / 积压太多）。
+     *
+     * @param res 报关闭的那条连接。同一个窗口重连时，旧连接会换下来、又迟到地报一条关闭：
+     *            那一份不能动新连接的东西（不比对的话，新的那条流和登记会被一起删掉，
+     *            那个窗口就再也收不到推送了）。页面那条早就这么比了（见 dropChannel）。
+     */
+    private dropScreen(id: string, res?: http.ServerResponse): void {
+        const current = this.screenStreams.get(id);
+        if (!current) { return; }
+        if (res && current !== res) { return; }
         this.screenStreams.delete(id);
         this.host.detachScreen(id);
     }
