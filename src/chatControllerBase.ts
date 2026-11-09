@@ -1058,6 +1058,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (this.autoJudgeRun.has(info.panelId)) { return; }   // 上一个判官还在（正常不会）：不叠着开
         const rt = this.panels.get(info.panelId);
         if (!rt) { return; }
+        // 这个收尾是异步送出的（要等最后一条回复的原文），等它到时人可能已经又发了一句、
+        // 下一轮已经开跑：那时候再叫判官就成了“两轮撞在一处”。
+        if (rt.streaming) { return; }
         // 后台还有命令在跑、或者派出去的子会话还有没跑完的：这一轮先不叫判官，也不往对话里写话。
         // 它们的结果本来就会当一条新消息交回这个会话，那一轮跑完再看要不要继续 —— 两边一起催，
         // 同一个会话就撞在一处了。

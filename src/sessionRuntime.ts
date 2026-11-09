@@ -552,6 +552,10 @@ export class SessionRuntime {
             this.post({ type: "streamEnd", activity: "idle" });
             this.setActivity("idle");
             this.setPiReady(true);
+            // 进程没了，这一轮也就到此为止：不会再有 agent_settled 了。
+            // 以前这里什么也不报，于是“这一轮结束了”这件事整个不会发生：不弹提醒、
+            // 子会话的结果交不回派活的会话、自动模式也永远等不到下一轮。
+            this.finishRoundOnExit();
             this.post({
                 type: "system",
                 text: `pi 进程已退出（code=${code}）。发送消息会自动重启。`,
@@ -595,6 +599,30 @@ export class SessionRuntime {
         this.host.broadcastSessionList();
     }
 
+    /**
+     * pi 进程没了，这一轮到这儿为止：不会再有 agent_settled 了。
+     *
+     * 按“出错”收尾（那之前点过中止的算取消），理由跟正常收尾一样：不报的话，这一轮
+     * 永远不算结束 —— 宿主不弹提醒、派出去的子会话结果交不回、自动模式等不到下一轮。
+     * 后台命令也跟着 pi 一起没了：清单还留着会让那颗点一直蓝着（见 hasRunningBashTasks）。
+     */
+    private finishRoundOnExit(): void {
+        this.bashTasks.clear();
+        this.bashEnded.clear();
+        this.bashRunningShown = false;
+        // 让界面把末尾那一块「后台任务」也收掉（它只列还在跑的）
+        this.post({ type: "bashTasks", tasks: [] });
+        this.host.broadcastSessionList();
+        if (!this.runStarted) { return; }
+        const status: TurnEndStatus = this.abortRequested ? "cancelled" : "error";
+        this.runStarted = false;
+        this.abortRequested = false;
+        this.writingText = false;
+        this.postPhase();
+        // 进程没了，最后一条回复的原文取不到了（子会话交回的就是空的）
+        this.host.onTurnEnd({ panelId: this.id, status, lastReplyText: undefined });
+    }
+
     /** 会话被换掉：旧标题作废。 */
     private noteSessionReplaced(): void {
         this.piSessionTitle = "";
@@ -604,6 +632,15 @@ export class SessionRuntime {
         this.bashRunningShown = false;
         // 「加载了什么」同理：新进程会重新报一份
         this.envSnapshot = undefined;
+        // 排队中的那几句、上一轮的速度账：都是上一个会话的事，不跟着搬过去。
+        // （以前只清上面那几样，于是换会话后排队文案、生成速度还挂着上一份。）
+        this.queuedSteering = [];
+        this.queuedFollowUp = [];
+        this.tps = undefined;
+        this.genTokens = 0;
+        this.genMs = 0;
+        this.genCallStart = 0;
+        this.genTpsSyncedAt = 0;
     }
 
     // ---- 后台命令（那个接管了 bash 的扩展报上来的）----
@@ -816,6 +853,10 @@ export class SessionRuntime {
         }
         // 插件代发的消息：不当命令解析、也不按「人打的」那种猜法走，投递方式由调用方指定。
         const fromPlugin = opts?.followUp === true || opts?.steer === true;
+        // 人又开口了：上一轮点的那句「卡住了」作废 —— 它只在那一轮停稳时补发一次。
+        // 以前这里不清，于是点过「卡住了」再自己发一句，停稳之后会多冒出一条“卡住了”。
+        // （插件代发的那些不算：子会话交回结果、后台命令交回结果不该顶掉人点的那一下。）
+        if (!fromPlugin) { this.pendingAfterAbort = ""; }
         // 人在这会话里说上话了：那个会话的提醒（跑完一轮 / 在等你答一句）已经过时，收走。
         // steer 也算（那也是人刚敲的一句话）；插件自己代发的不算（子会话结果、自动接着干那些）。
         if (opts?.followUp !== true) { this.host.onUserMessage?.(this.id); }
@@ -1405,48 +1446,49 @@ export class SessionRuntime {
         this.hasConversation = false;
         this.post({ type: "clear" });
 
-        // 等待 pi 真正就绪（冷启动需数秒），避免命令挤在超时上
-        const ready = await this.waitReady();
-        if (!ready) {
+        // 从头到尾包一层：中途抛错（重画、取消息、切会话）也得把“加载中”复位，
+        // 不然这个会话就永久停在加载态（界面一直在“加载中”，发也发不出去）。
+        try {
+            // 等待 pi 真正就绪（冷启动需数秒），避免命令挤在超时上
+            const ready = await this.waitReady();
+            if (!ready) {
+                this.post({
+                    type: "systemError",
+                    text: "pi 进程未能就绪，无法加载会话。请确认 pi 可正常启动。",
+                });
+                return;
+            }
+
+            const switchResp = await this.request({ type: "switch_session", sessionPath: file });
+            if (!switchResp || switchResp.success === false) {
+                this.post({
+                    type: "systemError",
+                    text: `加载会话失败: ${switchResp?.error ?? "未知错误"}`,
+                });
+                return;
+            }
+
+            const msgResp = await this.request<{ messages: any[] }>({ type: "get_messages" });
+            const messages: any[] = msgResp?.data?.messages ?? [];
+            this.noteSessionReplaced();
+            // replay：这一批是“把历史再画一遍”，跟 replayHistory 同一种东西：界面不给它们挂进场动画
+            //（重播几百条各跑一遍 250 毫秒的进场，手机上是看得出来的卡）
+            this.renderWindowed(messages, { sink: (msg) => this.post({ ...msg, replay: true }) });
+            // 这一屏画完了（跟 replayHistory 那条路的收尾同一个意思）：界面靠它把攒着的重放
+            // 画出来（只画最后一截，见 media/chat.js 的 flushReplayBuf）。没有这条，界面会
+            // 一直攒到下一次消息才画。
+            this.post({ type: "syncPoint" });
+            this.currentSessionPath = file;
+            // 已有会话的标题不会走 session_info_changed，得主动问一次
+            void this.refreshSessionTitle();
+            this.refreshStats();
+        } catch (e: any) {
+            this.post({ type: "systemError", text: `加载会话失败: ${e?.message ?? String(e)}` });
+        } finally {
             this.loading = false;
             this.postPhase();
             this.host.broadcastSessionList();
-            this.post({
-                type: "systemError",
-                text: "pi 进程未能就绪，无法加载会话。请确认 pi 可正常启动。",
-            });
-            return;
         }
-
-        const switchResp = await this.request({ type: "switch_session", sessionPath: file });
-        if (!switchResp || switchResp.success === false) {
-            this.loading = false;
-            this.postPhase();
-            this.host.broadcastSessionList();
-            this.post({
-                type: "systemError",
-                text: `加载会话失败: ${switchResp?.error ?? "未知错误"}`,
-            });
-            return;
-        }
-
-        const msgResp = await this.request<{ messages: any[] }>({ type: "get_messages" });
-        const messages: any[] = msgResp?.data?.messages ?? [];
-        this.noteSessionReplaced();
-        // replay：这一批是“把历史再画一遍”，跟 replayHistory 同一种东西：界面不给它们挂进场动画
-        //（重播几百条各跑一遍 250 毫秒的进场，手机上是看得出来的卡）
-        this.renderWindowed(messages, { sink: (msg) => this.post({ ...msg, replay: true }) });
-        // 这一屏画完了（跟 replayHistory 那条路的收尾同一个意思）：界面靠它把攒着的重放
-        // 画出来（只画最后一截，见 media/chat.js 的 flushReplayBuf）。没有这条，界面会
-        // 一直攒到下一次消息才画。
-        this.post({ type: "syncPoint" });
-        this.currentSessionPath = file;
-        // 已有会话的标题不会走 session_info_changed，得主动问一次
-        void this.refreshSessionTitle();
-        this.loading = false;
-        this.postPhase();
-        this.host.broadcastSessionList();
-        this.refreshStats();
     }
 
     /**
