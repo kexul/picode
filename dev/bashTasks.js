@@ -163,12 +163,14 @@ module.exports = async (page) => {
         problems.push("针该绕表盘正中转（transform-origin 实际 " + (s1.items[0] || {}).origin + "）");
     }
     if (!/不耽误你说话/.test(s1.items[0].title)) { problems.push("那一行的悬停提示该说清“在后台跑、不耽误你说话”，实际 " + JSON.stringify(s1.items[0].title)); }
-    // 命令也走「正在跑的那一条」那一套：一长串只写核心那一段，后面灰一个「+N」，整条点开看
-    console.log("  核心段：#7 " + JSON.stringify(s1.items[0].cmd) + " 后面 " + JSON.stringify(s1.items[0].more)
+    // 命令也走「正在跑的那一条」那一套：整条摆成一条链、一段不藏（heredoc 的正文写在下面），
+    // 太长就前五段 + 「+N」，整条点开来也能看
+    console.log("  链上：#7 " + JSON.stringify(s1.items[0].cmd) + " 后面 " + JSON.stringify(s1.items[0].more)
         + "；#6 " + JSON.stringify(s1.items[1].cmd) + " 后面 " + JSON.stringify(s1.items[1].more));
-    if (!s1.items[0].cmd.startsWith("$ node dev/visit.js")) { problems.push("长命令该只写核心那一段（实际 " + JSON.stringify(s1.items[0].cmd) + "）"); }
-    if (s1.items[0].more !== "+2") { problems.push("掐掉的那几段该写成一个「+2」（实际 " + JSON.stringify(s1.items[0].more) + "）"); }
-    if (!s1.items[0].tipClick) { problems.push("长命令那一行该点得开（看整条命令）"); }
+    if (!s1.items[0].cmd.startsWith("$ cd dev/.scratch")) { problems.push("长命令该从 cd 那段摆起（整条都摆，不挑核心那一段；实际 " + JSON.stringify(s1.items[0].cmd) + "）"); }
+    if (!/tee run\.log$/.test(s1.items[0].cmd)) { problems.push("长命令末尾那段（| tee run.log）该在链上（实际 " + JSON.stringify(s1.items[0].cmd) + "）"); }
+    if (s1.items[0].more !== "") { problems.push("没裁掉任何一段时不该有「+N」（实际 " + JSON.stringify(s1.items[0].more) + "）"); }
+    if (!s1.items[0].tipClick) { problems.push("那一行该点得开（看整条命令）"); }
     if (s1.items[1].more !== "") { problems.push("只有一段的短命令后面不该挂「+N」（实际 " + JSON.stringify(s1.items[1].more) + "）"); }
     // 一行就是一行：放不下的字自己横向滚（跟「正在跑的那一条」同一套），不折行、不把这一块撑高
     if (!s1.items.every((it) => it.nowrap && it.overY <= 0)) {

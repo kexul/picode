@@ -468,6 +468,96 @@ module.exports = async (page) => {
         problems.push("冻住之后耗时还在涨（该定在跑完那一刻）：" + JSON.stringify(frozen1.times) + " → " + JSON.stringify(frozen2.times));
     }
 
+    // ---- 第十四幕：整条命令摆出来（一段不藏），heredoc 的正文写在链下面 ----
+    // 一条命令切成几段就摆几段：段间的 && | ; 照原样写在链上，打杂的（cd 这种）字淡一点；
+    // heredoc 那种把一整段脚本塞进来的，正文跟在链下面缩进写出来（以前只写 `python - <<'PY'` 那一行，
+    // 后面几行代码一个字都看不到，而那段代码才是真正在跑的东西）。
+    const drawn = () => page.eval(`
+        const item = document.querySelector(".session-view:not(.off) .session-pane .tool-running .tool-running-item");
+        if (!item) { return null; }
+        const line = item.querySelector(".tr-text");
+        // 字放不下时会整条被包进 .tr-run（见 rollRunningText）：拆开看里头那几段
+        const inner = line ? (line.querySelector(".tr-run") || line) : null;
+        const parts = inner ? Array.from(inner.children) : [];
+        const own = (el) => Number(getComputedStyle(el).opacity);
+        const bodyEls = Array.from(item.querySelectorAll(".tr-body > div"));
+        return {
+            parts: parts.map((el) => (el.classList.contains("tr-sep") ? "[" + el.textContent.trim() + "]" : el.textContent)),
+            dim: parts.filter((el) => el.classList.contains("tr-seg-dim")).map(own),
+            plain: parts.filter((el) => el.classList.contains("tr-seg")).map(own),
+            body: bodyEls.map((el) => el.textContent),
+            more: (item.querySelector(".tr-more") || {}).textContent || "",
+            tip: item.classList.contains("tip-click"),
+        };
+    `);
+    console.log("\n第十四幕（整条命令摆出来）：");
+    await post([{ type: "tool", toolName: "bash", toolCallId: "z1", args: { command: "cd /d/projects/picode && git log --oneline -5 ; rm -rf dist ; npm run build" } }]);
+    await page.sleep(200);
+    let d = await drawn();
+    console.log("   四段那条：" + JSON.stringify(d));
+    // 一段都不许藏：`git log; rm -rf dist; npm run build` 以前只写 git log 那一段
+    if (JSON.stringify(d.parts) !== JSON.stringify(["$ ", "cd /d/projects/picode", "[&&]", "git log --oneline -5", "[;]", "rm -rf dist", "[;]", "npm run build"])) {
+        problems.push("这条命令没整条摆出来（链上是这些）：" + JSON.stringify(d.parts));
+    }
+    if (d.dim.length !== 2 || d.plain.length !== 2) {
+        problems.push("只看一眼的两段（cd、git log）该淡，会改东西的两段（rm、npm run build）该是正常字：淡 " + JSON.stringify(d.dim) + " 正常 " + JSON.stringify(d.plain));
+    }
+    if (!(d.dim[0] < d.plain[0])) { problems.push("只看一眼的那段没比会改东西的那段淡：" + JSON.stringify(d.dim) + " vs " + JSON.stringify(d.plain)); }
+
+    // 只读 / 会改 的界线不能只看程序名：带了会改东西的开关（sed -i、find -delete）或者往文件里写（>）
+    // 的不淡；`git log` 这种子命令认得的才淡（`git commit` 不淡）。
+    await post([{ type: "toolResult", toolCallId: "z1", isError: false, resultText: "done", durationMs: 900 }]);
+    await post([{ type: "tool", toolName: "bash", toolCallId: "z1b", args: { command: "git status ; git commit -m x ; sed -n '1,40p' a.txt ; sed -i s/a/b/ a.txt ; cat > /tmp/c.txt" } }]);
+    await page.sleep(200);
+    d = await drawn();
+    console.log("   只读/会改 那条：" + JSON.stringify({ dim: d.dim, plain: d.plain }));
+    if (d.dim.length === d.plain.length) { problems.push("只读与会改没分开：" + JSON.stringify({ dim: d.dim, plain: d.plain })); }
+    if (d.parts.filter((p) => p === "git status").length !== 1 || d.dim.length !== 2) {
+        problems.push("git status / sed -n 这两个只读的该淡（实际淡了 " + JSON.stringify(d.dim) + " 个）：" + JSON.stringify(d.parts));
+    }
+    if (d.plain.length !== 3) {
+        problems.push("git commit / sed -i / cat > 这三个会改东西的该是正常字（实际正常 " + JSON.stringify(d.plain) + " 个）：" + JSON.stringify(d.parts));
+    }
+
+    await post([{ type: "toolResult", toolCallId: "z1", isError: false, resultText: "done", durationMs: 900 }]);
+    await post([{ type: "tool", toolName: "bash", toolCallId: "z2", args: { command: [
+        "cat > /tmp/a.sh <<'EOF'",
+        "#!/bin/bash",
+        "set -e",
+        "for f in *.ts; do npx tsc --noEmit \"$f\"; done",
+        "EOF",
+        "bash /tmp/a.sh | sed -n \"1,40p\"",
+    ].join("\n") } }]);
+    await page.sleep(200);
+    d = await drawn();
+    console.log("   heredoc 那条：" + JSON.stringify(d));
+    if (JSON.stringify(d.parts) !== JSON.stringify(["$ ", "cat > /tmp/a.sh <<'EOF'", "[;]", "bash /tmp/a.sh", "[|]", "sed -n \"1,40p\""])) {
+        problems.push("heredoc 那条的链不对（正文后面那段该仍是链上的一段）：" + JSON.stringify(d.parts));
+    }
+    if (d.body.length !== 4 || d.body[3] !== "EOF") { problems.push("heredoc 的正文没写出来（该四行、末行是收尾标记）：" + JSON.stringify(d.body)); }
+    if (d.more) { problems.push("正文没裁的情况下不该有「+N」：" + d.more); }
+
+    await post([{ type: "toolResult", toolCallId: "z2", isError: false, resultText: "done", durationMs: 900 }]);
+    await post([{ type: "tool", toolName: "bash", toolCallId: "z3", args: { command: "a; b; c; d; e; f; g" } }]);
+    await page.sleep(200);
+    d = await drawn();
+    console.log("   七段那条：" + JSON.stringify(d));
+    if (d.parts.length !== 10 || d.parts.filter((p) => p.startsWith("[")).length !== 4) {
+        problems.push("段太多时该摆前五段（链上的段数与分隔符数对不上）：" + JSON.stringify(d.parts));
+    }
+    if (d.more !== "+2") { problems.push("没摆出来的两段该写成「+2」：" + JSON.stringify(d.more)); }
+    if (!d.tip) { problems.push("有字没写出来时点开这一行该能看到整条（没挂提示框）"); }
+
+    await post([{ type: "toolResult", toolCallId: "z3", isError: false, resultText: "done", durationMs: 900 }]);
+    const longBody = ["cat > /tmp/b.sh <<'EOF'"].concat(Array.from({ length: 10 }, (_, i) => "echo line" + i), ["EOF"]).join("\n");
+    await post([{ type: "tool", toolName: "bash", toolCallId: "z4", args: { command: longBody } }]);
+    await page.sleep(200);
+    d = await drawn();
+    console.log("   正文十行那条：body=" + JSON.stringify(d.body) + " more=" + JSON.stringify(d.more));
+    if (d.body.length !== 6) { problems.push("正文太长时该摆六行：" + JSON.stringify(d.body)); }
+    if (!d.tip) { problems.push("正文被裁了却没挂提示框（点开看不到整条）"); }
+    await page.shot("running-line-chain.png");
+
     if (problems.length) {
         throw new Error("有对不上的地方：\n  - " + problems.join("\n  - "));
     }

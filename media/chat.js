@@ -2264,25 +2264,21 @@
     no.className = "bash-run-no";
     no.textContent = "#" + task.no;
     row.appendChild(no);
-    // 命令原文也跟「正在跑的那一条」用同一套写法：一长串只写核心那一段（见 runningLineText），
-    // 后面灰一个「+N」，整条点开这一行看（见 attachTagTipHandlers）。
+    // 命令原文也跟「正在跑的那一条」用同一套写法：全摆出来、heredoc 正文写在下面（见 runningLineParts），
+    // 太长的算「+N」，整条点开这一行看（见 attachTagTipHandlers）。
     const cmd = task.cmd || "";
-    const shown = runningLineText({ name: "bash", argStr: JSON.stringify({ command: cmd }), text: "$ " + cmd });
-    const text = document.createElement("span");
-    text.className = "tr-text";
-    text.textContent = shown.main;
-    row.appendChild(text);
+    const shown = runningLineParts({ name: "bash", argStr: JSON.stringify({ command: cmd }), text: "$ " + cmd });
+    fillRunningText(row, shown);
     if (shown.more) {
       const more = document.createElement("span");
       more.className = "tr-more";
       more.textContent = shown.more;
       row.appendChild(more);
     }
-    if (shown.trimmed) {
-      row._tipCall = "$ " + cmd;
-      row._tipBody = "";
-      attachTagTipHandlers(row);
-    }
+    // 这一行点得开（跟「正在跑的那一条」一样）：链上放不下时点一下就把整条命令摆出来看。
+    row._tipCall = "$ " + cmd;
+    row._tipBody = "";
+    attachTagTipHandlers(row);
     // 「停」排在耗时左边（跟「正在跑的那一条」上那颗「放后台」一个位置）：字 | 停 | 耗时（靠右）
     const stop = document.createElement("button");
     stop.type = "button";
@@ -2953,11 +2949,11 @@
 
   // ==================== 正在跑的那一条 ====================
   // 工具标签只说得出工具名：命令行、读哪个文件、grep 找什么都在提示框里，不点开就看不见。
-  // 正在跑的那一条不一样：它在当前这批标签下面单占一行，把这一行的摘要直接写出来
-  // （bash 就是「$ 命令」）。一长串命令只写核心那一段、后面灰一个「+N」，整条点开那条才看得到
-  // （怎么挑核心见下面「一长串命令里的核心那一段」）。同时跑几条也只露一条 —— 只露最近开始的那条。
-  // 为什么不排成几行：几条一起跑时，先跑完的那条一收，这一块就矮一行，下面的东西跟着
-  // 上下跳一下（贴着底看的时候特别明显）。行数永远是 0 或 1，就没有这一下。
+  // 正在跑的那一条不一样：它在当前这批标签下面单占一块，把这一条命令直接摆出来
+  // （bash 就是「$ 命令」，cut 成几段摆成一条链，heredoc 的正文写在链下面；见下面
+  // 「一长串命令怎么写」。同时跑几条也只露一条 —— 只露最近开始的那条。
+  // 这一块只装一条：几条一起跑时，先跑完的那条一收，这一块就矮一行，下面的东西跟着
+  // 上下跳一下（贴着底看的时候特别明显）。
   // 不出这行的两种：think（思考，内容在提示框里看）与 ask_choice（问话卡片本来就铺在消息流里，
   // 而且它要等人答完才算跑完，摆一行「正在跑」只会碍事）。
   //
@@ -2968,8 +2964,9 @@
   // 整条（字与位置）在这一批过去时一并收掉：下面出了正文 / 问话卡片，或者这一轮跑完
   // （见 endRunningLine）。
   //
-  // 一行写不完的（长命令行）：字自己慢慢横向滚，只往一个方向（从头滚到末尾，两端各停半秒再从开头来，
+  // 链那一行写不完的（长命令行）：字自己慢慢横向滚，只往一个方向（从头滚到末尾，两端各停半秒再从开头来，
   // 见 rollRunningText 与 chat.css 的 tr-roll），不然一颗「bash」加小半条命令就完了，看不出来在跑什么。
+  // heredoc 的正文不跟着滚：它自己折行，几行都摆在链下面。
   const RUNNING_LINE_SKIP = new Set([THINKING_NAME, "ask_choice"]);
   const RUNNING_ROLL_MIN_PX = 4;    // 溢出这几个像素以内不算「放不下」（末尾省略号那点宽度，不值当滚）
   const RUNNING_ROLL_SPEED = 30;    // 放不下的那行字自己滚动的快慢：每秒 30 像素（慢慢地滚）
@@ -2979,30 +2976,47 @@
   const RUNNING_ROLL_HOLD_MS = 500;
   const RUNNING_CLOCK_MS = 200;     // 后面那个耗时的刷新快慢（一秒里刷五回就够看着在走）
 
-  // ==================== 一长串命令里的核心那一段 ====================
-  // 模型爱写一长串：cd 到某个目录 && 跑个脚本 | sed 看头几行。整条摆在「正在跑」那一行上，
-  // 一眼看不出在干什么（一行放不下还得横着滚半天）。这里只按字面把命令切成几段，把「正经干活」的那段挑出来：
-  //   · 挪位置的（cd / pushd / popd）、打杂的（echo / export / sleep / true …）不算事；
-  //   · 挂在管道后面、只修输出的（sed / head / tail / cut / sort / wc …）不算事；
-  //   · 剩下的头一段就是核心（grep / jq / awk / xargs 不当作修输出的：它们常常就是查的东西本身）。
-  // 分不出核心（只有一段、或者全被打杂的占满）就照原样整条写出来。
-  // 命令只是一行字，这么切只是猜：整条一直留着，点开那一行就能看（见 syncRunningLine）。
+  // ==================== 一长串命令怎么写 ====================
+  // 模型爱写一长串：cd 到某个目录 && 跑个脚本 | sed 看头几行，还有 heredoc 那种把一整段脚本塞进来的。
+  // 这里按字面把命令切成几段，一段都不藏：段间的 && | ; 照原样写在链上（灰一点），
+  // heredoc 的正文跟在它头上那一段下面缩进写出来。整条点开那一行也能看（见 syncRunningLine）。
+  // 以前是从里头挑「正经干活」的那一段写出来，挑错了不少（`git log; rm -rf dist; npm run build`
+  // 摆出来的是 `git log`，删目录和真编译两段全藏了），所以不挑了：藏东西比挑错更害人。
+  // 只把「只看一眼、不改东西」的那几段字调淡：会改东西的那几段（rm / chmod / 写文件 / 跑构建 / 跑脚本）
+  // 保持正常深浅 —— 它们才是该被看见的。认不准一律当「会改」：淡了容易看漏，所以只有认得准的才淡。
   const SEG_PROG_SKIP = new Set(["sudo", "time", "env", "nohup", "command", "exec", "builtin", "nice", "!", "{", "do", "then", "else", "elif", "if", "while", "until"]);
-  const SEG_NOISE = new Set(["cd", "pushd", "popd", "echo", "printf", "export", "unset", "set", "true", "false", ":", "sleep", "wait", "clear", "sync",
-    "continue", "break", "exit", "return", "shift", "local", "declare", "readonly", "umask", "dirs"]);
-  const SEG_PIPE_TAIL = new Set(["sed", "head", "tail", "cut", "sort", "uniq", "wc", "tr", "tee", "column", "less", "more", "nl", "fmt", "tac", "rev", "fold", "paste"]);
-  // 只翻看一眼的（ls / cat / wc / head …）：有正经干活的段时它们不抢核心，
-  // 一条正经活都没有（就 dd 看一眼、数数行）才轮得到它们（见 pickCoreSegment）
-  const SEG_GLANCE = new Set(["ls", "cat", "wc", "head", "tail", "file", "stat", "du", "tree", "pwd", "which", "where", "type", "readlink"]);
-  // 框架词：单独占一段时它就是 for / if 那套的骨头，不是一件活（`done`、`fi` 曾被当成核心写出来过）
+  // 只读的：看一眼、不改文件、不动系统（ls / cat / grep / sed / jq …），以及挪位置、调环境、
+  // 流程控制这些（cd / export / sleep / exit …）。要往里加新词先问一句：它会不会写文件 / 起服务 / 连网？
+  const SEG_READONLY = new Set([
+    // 看一眼
+    "ls", "cat", "head", "tail", "nl", "tac", "rev", "fold", "column", "less", "more", "file", "stat", "du", "df", "tree",
+    "wc", "pwd", "which", "where", "type", "readlink", "realpath", "basename", "dirname", "date", "whoami", "id", "uname", "ps",
+    "grep", "rg", "find", "fd", "cut", "sort", "uniq", "tr", "jq", "awk", "diff", "comm", "cmp", "sed", "echo", "printf", "true", "false", ":", "test", "[", "[[",
+    // 挪位置 / 调环境 / 流程（都不碰文件）
+    "cd", "pushd", "popd", "dirs", "export", "unset", "set", "local", "declare", "readonly", "umask", "sleep", "wait", "clear", "sync",
+    "continue", "break", "exit", "return", "shift",
+  ]);
+  // 这几个平时只读，带了某个开关就会就地改东西：带上了就当它会改（sed -i 写回文件、find -delete 删）。
+  // 测试的是「程序名后面那一段」：匹配写宽一点无所谓，认错的方向要是「显眼」。
+  const SEG_MUTATING_FLAGS = {
+    sed: /(^|\s)-i/,
+    find: /(^|\s)-(delete|exec|execdir|ok|okdir|fprint|fprintf)\b/,
+    sort: /(^|\s)(-o\b|--output)/,
+    awk: /(^|\s)-iinplace/,
+  };
+  // 分两级看的：子命令是只读的才当只读（`git log` 淡、`git commit` 不淡）。
+  // 只收认得准的：`git branch` / `git tag` / `git remote` / `git config` 都会改东西，不收。
+  const SEG_READONLY_SUB = {
+    git: new Set(["log", "status", "diff", "show", "blame", "rev-parse", "rev-list", "ls-files", "shortlog", "describe", "cat-file", "grep", "show-ref", "reflog"]),
+    npm: new Set(["ls", "list", "view", "info", "outdated", "why", "root", "prefix", "bin"]),
+  };
+  // 框架词：单独占一段时它就是 for / if 那套的骨头，不是一件东西（`done`、`fi` 会被当活写出来过）
   const SEG_FRAME = new Set(["do", "then", "else", "elif", "fi", "done", "esac", "in", "{", "}", "(", ")"]);
-  // 条件判断本身（`[ -f "$f" ]` / `test …`）：算「只翻一眼」那档 —— 循环体里它后面往往才是真干活
-  const SEG_CHECK = new Set(["[", "[[", "test"]);
-  // 段首是这些词的（for / if / while 那一套的开头）本身不是一件事
+  // 段首是这些词的（for / if / while 那一套的开头）本身不是一件东西
   const SEG_LOOP_HEAD = new Set(["for", "while", "until", "select"]);
-  const SEG_COND_HEAD = new Set(["if", "case"]);
-  // 显示时从段首剥掉的：框架词（「do python x.py」写成「python x.py」、「if grep …」写成「grep …」）
-  const SEG_DISPLAY_STRIP = new Set(["do", "then", "else", "elif", "!", "{", "if", "while", "until", "for", "case", "select"]);
+  // 显示时从段首剥掉的：纯连接词（「do python x.py」写成「python x.py」、「then echo ok」写成「echo ok」）。
+  // for / if / while / case 这些不剥：它们一句就说明白了这一行在干什么（剥完只剩「f in *.ts」反而看不懂）。
+  const SEG_DISPLAY_STRIP = new Set(["do", "then", "else", "elif", "!", "{"]);
 
   /** 这一行的收尾标记（heredoc 的 `<<EOF`）：`<<` 后面那个词，引号去掉、`<<-` 的前导 tab 也认。
    *  不是 heredoc（`<<<` 是 herestring、或者后面没东西）就返回空。 */
@@ -3037,8 +3051,8 @@
     const out = [];
     const s = String(cmd || "");
     let cur = "", pendingSep = "", quote = "", depth = 0;
-    // 这一行上挂着的 heredoc 收尾标记（`cat <<A <<B` 会有两个，按顺序吃）：
-    // 有它就不能拿换行当分隔符 —— 下面是那段正文，一直到单独一行就是它为止
+    // 这一行上挂着的 heredoc：收尾标记 + 它是哪一段的（那一段在 out 里的下标；
+    // 还没落进 out 就是 out.length —— 那就是手上正在接的这一段）
     const heredocs = [];
     const flush = () => {
       const text = cur.trim();
@@ -3061,21 +3075,30 @@
       if (ch === "(") { depth++; cur += ch; continue; }
       if (ch === ")") { if (depth > 0) { depth--; } cur += ch; continue; }
       if (depth > 0) { cur += ch; continue; }
-      if (ch === "<") {
+      if (ch === "<" && prev !== "<") {
+        // 只在头一个 `<` 上看（`<<EOF` 的第二个也是 `<`，再看一遍就会把这个收尾标记又记一遍，
+        // 于是后一半命令会被当成第二段正文吃掉）
         const delim = heredocDelim(s, i);
-        if (delim) { heredocs.push(delim); }
+        if (delim) { heredocs.push({ delim, owner: out.length }); }
       }
       if (ch === "\n" && heredocs.length) {
-        // 接下来这几块是正文：原样吃进来，一个字都不切
+        // 接下来这几块是正文：原样吃进来，一个字都不切。正文归开它的那一段，
+        // 不是归行尾那一段：`cat <<EOF | grep foo` 的正文是给 cat 的，不是给 grep 的。
         let at = i + 1;
         while (heredocs.length) {
-          const got = takeHeredocBody(s, at, heredocs.shift());
-          cur += (cur.endsWith("\n") ? "" : "\n") + got.text;
+          const h = heredocs.shift();
+          const got = takeHeredocBody(s, at, h.delim);
+          const owner = out[h.owner];
+          if (owner) { owner.text += "\n" + got.text; }
+          else { cur += (cur.endsWith("\n") ? "" : "\n") + got.text; }
           at = got.next;
           if (at >= s.length) { break; }
           at += 1;   // 跳过收尾行的换行，接着吃下一个 heredoc 的正文
         }
-        cut(";");
+        // 正文吃完了：这一行就到这儿为止（后面那些字是另一行 / 另一条命令了）。
+        // 手上这一段该落的落下去（它前面那个分隔符 flush 会自己认）；下一段的开头是换行。
+        flush();
+        pendingSep = ";";
         i = at - 1;
         continue;
       }
@@ -3098,19 +3121,21 @@
     return out;
   }
 
-  /** 这一段跑的是哪个程序：跳过前面的环境变量赋值（FOO=1）与 sudo / time 这类前缀，
-   *  取第一个词，带路径的只留文件名。 */
-  function segmentProgram(text) {
-    for (const raw of String(text || "").trim().split(/\s+/)) {
-      const w = raw.replace(/^["']+|["']+$/g, "");
+  /** 这一段跑的是哪个程序、子命令是哪个：跳过前面的环境变量赋值（FOO=1）与 sudo / time 这类前缀，
+   *  取第一个词（带路径的只留文件名），再给它后面那个词。
+   *  返回 { prog, sub, rest }（rest 是程序名后面那一整段，查开关用）。 */
+  function segmentProg(text) {
+    const words = String(text || "").trim().split(/\s+/);
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i].replace(/^["']+|["']+$/g, "");
       if (!w) { continue; }
       if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) { continue; }
       if (SEG_PROG_SKIP.has(w)) { continue; }
       const base = w.replace(/^.*[\\/]/, "");
       if (SEG_PROG_SKIP.has(base)) { continue; }
-      return base;
+      return { prog: base, sub: words[i + 1] || "", rest: words.slice(i).join(" ") };
     }
-    return "";
+    return { prog: "", sub: "", rest: "" };
   }
 
   /** 这一段开头的那个词（认 do / then / done / fi / if / [ 这些框架用；前面挂的（ { ! 先剥掉）。 */
@@ -3119,50 +3144,56 @@
     return m ? m[1].replace(/[)};]+$/, "") : "";
   }
 
-  /** 这一段值多少（挑核心时用）：2 = 正经干活；1 = 只翻看一眼（ls / cat / wc / [ 这类）；
-   *  0 = 不算事（挪位置的、打杂的、管道后面修输出的、for / if 那套的骨头）。
-   *  判之前先把段首的框架词剥掉：`do if grep …` 里真正干活的是 grep，不是 do。 */
-  function segmentRank(seg, i) {
+  /** 这一段里有没有往文件里写的重定向（`> x` / `>> x`）。`2>&1`、`>&2` 这种把输出换个地方的不算；
+   *  引号里的一律不算（`echo "a > b"`）。带上 heredoc 的 `cat > x <<EOF` 算写文件（它就是在写）。 */
+  function segmentWritesFile(text) {
+    const s = String(text || "").replace(/'[^']*'/g, "''").replace(/"[^"]*"/g, '""');
+    return />>?/.test(s.replace(/\d*>&\d+/g, ""));
+  }
+
+  /** 这一段是不是「只看一眼、不改东西」（只用来把字调淡，不藏东西）。
+   *  认不准一律返回 false（当它会改）：淡了容易看漏，宁可多显眼一点。
+   *  不算数的两种也算进来：for / if 那套的骨头、以及带 heredoc 正文的「cat <<EOF」（它就是看一眼）。 */
+  function isReadOnlySegment(seg) {
     const rawHead = segmentHeadWord(seg.text);
-    // for / while / case 的循环头本身不是一件活（剥掉 for 只剩个变量名）
-    if (SEG_LOOP_HEAD.has(rawHead) || rawHead === "case" || rawHead === "function") { return 0; }
-    const body = segmentDisplay(seg.text);
-    const head = segmentHeadWord(body);
-    if (!body || SEG_FRAME.has(head)) { return 0; }
-    const prog = segmentProgram(body);
-    if (!prog || SEG_NOISE.has(prog)) { return 0; }
-    if (i > 0 && seg.sepBefore === "|" && SEG_PIPE_TAIL.has(prog)) { return 0; }
-    if (SEG_CHECK.has(head) || SEG_GLANCE.has(prog)) { return 1; }
-    return 2;
+    if (SEG_LOOP_HEAD.has(rawHead) || rawHead === "case" || rawHead === "function") { return true; }
+    const text = segmentDisplay(seg.text);
+    const head = segmentHeadWord(text);
+    if (!text || SEG_FRAME.has(head)) { return true; }
+    const { prog, sub, rest } = segmentProg(text);
+    if (!prog) { return false; }
+    if (segmentWritesFile(text)) { return false; }   // `cat > x` / `>> log` 都是在写文件
+    const flag = SEG_MUTATING_FLAGS[prog];
+    if (flag && flag.test(rest)) { return false; }   // sed -i / find -delete / sort -o
+    const subs = SEG_READONLY_SUB[prog];
+    if (subs) { return subs.has(sub); }              // git log 淡、git commit 不淡
+    return SEG_READONLY.has(prog);
   }
 
-  /** 挑核心段：先找正经干活的那段（2 分）；一条都没有，才退到「只翻看一眼」的那段（1 分）。
-   *  同样值的取头一个 —— 所以「ls 一眼、再 grep 真查」挑出来的是 grep，
-   *  「ls 一眼、再 wc -l 数行数」两条都只值一分，还是挑头一个。 */
-  function pickCoreSegment(segs) {
-    let best = -1, bestRank = 0;
-    for (let i = 0; i < segs.length; i++) {
-      const rank = segmentRank(segs[i], i);
-      if (rank > bestRank) {
-        bestRank = rank;
-        best = i;
-        if (rank === 2) { break; }   // 2 分到顶了：头一个正经干活的就够了
-      }
-    }
-    return best < 0 ? null : segs[best];
-  }
-
-  /** 这一段写在那一行上长什么样：剥掉段首那几个连接词（do / then / ! …）；
-   *  带 heredoc 正文的那种只写头一行（下面那一整块是脚本 / 数据，不是命令，整条在提示里看）。 */
+  /** 这一段写在链上长什么样：剥掉段首那几个连接词（do / then / ! …）；
+   *  带 heredoc 正文的那种只写头一行（正文由调用方跟在下面写，见 runningLineParts）。 */
   function segmentDisplay(text) {
     let out = String(text || "").trim();
+    const nl = out.indexOf("\n");
+    if (nl >= 0) { out = out.slice(0, nl).trim(); }
     for (;;) {
       const m = /^(\S+)\s+([\s\S]*)$/.exec(out);
       if (!m || !SEG_DISPLAY_STRIP.has(m[1])) { break; }
       out = m[2].trim();
     }
-    const nl = out.indexOf("\n");
-    return nl < 0 ? out : out.slice(0, nl).trim();
+    return out;
+  }
+
+  /** 段与段之间那个分隔符写在链上长什么样（照原样写，灰一点）：管道就是一根竖线，
+   *  换行在 splitter 里已经归成 `;` 了。 */
+  function segmentSep(sep) {
+    switch (sep) {
+      case "|": return "|";
+      case "||": return "||";
+      case "&&": return "&&";
+      case "&": return "&";
+      default: return ";";
+    }
   }
 
   /** bash 调用里那条命令原文（参数是 JSON 字符串）。 */
@@ -3172,31 +3203,99 @@
       return a && typeof a.command === "string" ? a.command : "";
     } catch (e) { return ""; }
   }
-  /** 「正在跑」那一行写什么：一长串 bash 命令只写核心那一段（后面灰一个「+N」），
-   *  整条留在点开这一行的提示框里（trimmed=true 说明有字没写出来，得给个提示）。分不出来就照原样写。 */
-  function runningLineText(call) {
+
+  // ==================== 这条命令怎么摆 ====================
+  // 一个字的命令都不藏：切成几段摆成一条链（段间的 && | ; 照写），heredoc 的正文跟在
+  // 它头上那一段下面缩进写。太长就截：链上最多 RUNNING_CHAIN_MAX 段（剩下的算「+N」），
+  // 正文最多 RUNNING_BODY_MAX 行（再多的在提示框里看）。
+  const RUNNING_CHAIN_MAX = 5;
+  const RUNNING_BODY_MAX = 6;
+
+  /** 「正在跑」那一行写什么（消息流末尾的后台命令那几行也用这一套）：
+   *  chain —— 链上那几段，每段 { text, sep, dim, prompt }（sep 是它前面那个分隔符，头一段没有；
+   *  prompt 是要不要在前面写个 `$ `；dim 是只看一眼、不改东西的那几段（字淡））；
+   *  body —— heredoc 的正文（照原样，一行一条，缩进写在链下面）；
+   *  more —— 没摆出来的段数（写出来是「+N」，空=全摆上了）；
+   *  trimmed —— 有字没写出来（段太多 / 正文太长 / 多行），点开这一行看整条。
+   *  不是 bash 的（read / edit / grep …）就一行字，照原样写。 */
+  function runningLineParts(call) {
     const whole = call.text || call.name || "";
-    const oneLine = (text) => {
+    const firstLine = (text) => {
       const nl = text.indexOf("\n");
       return nl < 0 ? text : text.slice(0, nl).trim();
     };
-    const asIs = () => {
-      const main = oneLine(whole);   // 多行的那种（heredoc 脚本）只写头一行，其余在提示里
-      return { main, more: "", trimmed: main !== whole };
-    };
+    const asIs = () => ({
+      chain: [{ text: firstLine(whole), sep: "", dim: false, prompt: false }],
+      body: [], more: "", trimmed: firstLine(whole) !== whole,
+    });
     if (call.name !== "bash") { return asIs(); }
     const cmd = bashCommandOf(call.argStr);
     const segs = splitCommandSegments(cmd);
     if (!segs.length) { return asIs(); }
-    // 只有一段就用那一段（哪怕它是 cd / echo）；好几段才挑「正经干活」的那段
-    const core = segs.length > 1 ? pickCoreSegment(segs) : segs[0];
-    if (!core) { return asIs(); }
+    const chain = [], body = [];
+    let hidden = 0;
+    for (let i = 0; i < segs.length; i++) {
+      const seg = segs[i];
+      const lines = seg.text.split("\n");
+      if (chain.length >= RUNNING_CHAIN_MAX) { hidden += 1; continue; }
+      chain.push({ text: segmentDisplay(lines[0]), sep: i === 0 ? "" : segmentSep(seg.sepBefore), dim: isReadOnlySegment(seg), prompt: i === 0 });
+      for (let j = 1; j < lines.length; j++) { body.push(lines[j]); }
+    }
     // 整条摘要里 "$ " + 命令 后面那点尾巴（timeout 这类）照旧跟着写
     const head = "$ " + cmd;
     const tail = whole.startsWith(head) ? whole.slice(head.length).trim() : "";
-    const main = "$ " + segmentDisplay(core.text) + (tail ? " " + tail : "");
-    const more = segs.length > 1 ? "+" + (segs.length - 1) : "";
-    return { main, more, trimmed: !!more || main !== whole };
+    if (tail && chain.length) { chain[chain.length - 1].text += " " + tail; }
+    const shownBody = body.slice(0, RUNNING_BODY_MAX);
+    const bodyCut = body.length > shownBody.length;
+    return {
+      chain, body: shownBody, more: hidden ? "+" + hidden : "",
+      trimmed: !!hidden || bodyCut || firstLine(whole) !== whole,
+    };
+  }
+
+  /** 把 runningLineParts 那份东西画进 host 里（先清空）：一条链 + 缩进的正文。
+   *  链那一行放不下时自己横向滚（见 rollRunningText，量的是返回的那个 .tr-text）。
+   *  返回 { line } —— line 就是链那一行。 */
+  function fillRunningText(host, parts) {
+    // 只换掉上一次画的那一块（齿轮 / 钟 / 编号都还挂在 host 上，不能一起清掉）
+    const old = host.querySelector(":scope > .tr-content");
+    if (old) { old.remove(); }
+    const content = document.createElement("div");
+    content.className = "tr-content";
+    const line = document.createElement("div");
+    line.className = "tr-text";
+    for (const seg of parts.chain) {
+      if (seg.sep) {
+        const s = document.createElement("span");
+        s.className = "tr-sep";
+        s.textContent = seg.sep;
+        line.appendChild(s);
+      }
+      // 头一段前面那个 `$ ` 自己占一个 span（颜色淡一点）
+      if (seg.prompt) {
+        const p = document.createElement("span");
+        p.className = "tr-prompt";
+        p.textContent = "$ ";
+        line.appendChild(p);
+      }
+      const t = document.createElement("span");
+      t.className = seg.dim ? "tr-seg-dim" : "tr-seg";
+      t.textContent = seg.text;
+      line.appendChild(t);
+    }
+    content.appendChild(line);
+    if (parts.body.length) {
+      const box = document.createElement("div");
+      box.className = "tr-body";
+      for (const text of parts.body) {
+        const row = document.createElement("div");
+        row.textContent = text;
+        box.appendChild(row);
+      }
+      content.appendChild(box);
+    }
+    host.appendChild(content);
+    return { line };
   }
 
   /** 现在还有哪些调用在跑、各自那一行摘要与开始时刻（一条一行，按页面上标签的顺序）。
@@ -3268,20 +3367,18 @@
     const item = document.createElement("div");
     item.className = "tool-running-item";
     item.insertAdjacentHTML("afterbegin", GEAR_SVG);
-    const t = document.createElement("span");
-    t.className = "tr-text";
-    const shown = runningLineText(call);
-    t.textContent = shown.main;
-    item.appendChild(t);
-    // 只写了核心那一段：后面灰一个「+N」（这一句不跟着滚，一直看得见）
+    const shown = runningLineParts(call);
+    const drawn = fillRunningText(item, shown);
+    // 段太多 / 正文太长：后面灰一个「+N」（这一句不跟着滚，一直看得见）
     if (shown.more) {
       const more = document.createElement("span");
       more.className = "tr-more";
       more.textContent = shown.more;
       item.appendChild(more);
     }
-    if (shown.trimmed) {
-      // 有字没写出来（只写了核心那一段 / 脚本只写了头一行）：点开这条看整条语句
+    if (shown.trimmed || call.name === "bash") {
+      // 这一行点得开：链上放不下时字自己滚（要等），点开一下就把整条命令摆出来看。
+      // 字没裁的也挂上：一行字看不全的时候（滚到一半）点一下就到手了。
       item._tipCall = call.text;
       item._tipBody = "";
       attachTagTipHandlers(item);
@@ -3316,7 +3413,8 @@
     startRunClock(st);
     // 量「这一行放不放得下」得等它排到页面上（新起一条时上面那一步才把它插进去），
     // 所以挪完位置再看一眼：放不下的改成自己滚（见 rollRunningText）。
-    rollRunningText(t, el);
+    // 量的是链那一行（heredoc 的正文写在它下面，不参合滚）。
+    rollRunningText(drawn.line, el);
   }
 
   /** 那条「正在跑」上后面那个耗时：每 RUNNING_CLOCK_MS 重写一次（只动那几个数字，不动字、
