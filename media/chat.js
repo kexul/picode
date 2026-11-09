@@ -912,6 +912,13 @@
       _stage: null,
       _stageDropped: false,
       streaming: false,
+      // 这个会话此刻处在哪个阶段（见 src/sessionPhase.ts：后端算好推过来，界面只存、不自己拼）。
+      // 顶条那颗点、输入框那颗模型胶囊、顶边那颗小图形、末尾那颗胶囊、关会话要不要问第二遍，
+      // 全读这一个值 —— 以前这五处各挑几个字段自己算，于是同一时刻能得出不同答案。
+      phase: "loading",
+      busy: false,
+      // 要不要人管："" / "answer"（有题挂着等你答）/ "done"（跑完你还没看）。
+      attention: "",
       // 后台还有命令在跑（后端 sessionList 里那份）：这一轮答完了也算没干完，那颗点照旧蓝点呼吸。
       bashRunning: false,
       // 这个会话放到后台、还在跑的命令（后端那份清单里 status 是 running 的，新的排前面）。
@@ -1339,7 +1346,11 @@
       const countEl = el.querySelector(".sn-count");
       if (countEl) { countEl.textContent = kids > 0 ? String(kids) : ""; }
       el.classList.toggle("current", !!item.current);
-      el.classList.toggle("streaming", !!(item.streaming || item.loading || item.bashRunning));
+      el.classList.toggle("streaming", !!(item.busy || item.bashRunning) && item.attention !== "answer");
+      // 有一道题在等你答：那颗点变黄、不呼吸 —— 一眼看得出是在等你，不是在跑。
+      // （以前这一档只有右下角那张提醒卡片看得见，顶条上它跟闲着一样。）
+      // 两档不同时亮：在等你的时候就不该再呼吸（蓝点骗人：它没在跑）。
+      el.classList.toggle("awaiting", item.attention === "answer");
       // 派出去的子会话还在跑：本会话自己闲着也把那颗点亮出来（一样呼吸），
       // 一眼看得出这一家子还在干活（等的是子会话，不是本会话在答）。
       el.classList.toggle("child-running", kids > 0);
@@ -1349,6 +1360,7 @@
         + (kids > 0 ? "，" + kids + " 个子会话在跑" : "")
         + (doneKids > 0 && kids === 0 ? "，" + doneKids + " 个子会话跑完了" : "")
         + (item.bashRunning ? "，后台还有命令在跑" : "")
+        + (item.attention === "answer" ? "，有一道题在等你答" : "")
         + (item.cwd ? "\n" + item.cwd : "")
         + "\n" + (item.current ? "当前会话" : "点这里切过去");
       // 当前这一格就叫 #sessionName（“当前会话叫什么”照旧拿这个名字找）
@@ -4772,9 +4784,19 @@
     // “有没有可接着往下走的对话”只看用户与助手两种消息：会话里那些系统消息
     //（正在压缩、已回滚那一类）不能算 —— 空会话里摆一颗“继续”没意义。
     const touched = st.paneEl.querySelector(".msg.user, .msg.assistant");
+    // 露哪一面只看阶段（见 src/sessionPhase.ts）：
+    //   加载中 / 压缩中：不露面（这会儿“继续”发不出去，也没有可停的一轮）；
+    //   在跑（等字 / 在写 / 在想 / 工具在跑）：「卡住了」；
+    //   闲着有内容：「继续」。
+    const phase = phaseOf(st);
+    // “没配模型”那一档只在后端真给了阶段时才算数（老后端 / 测试里塞进来的会话对象常常没这个字段，
+    // 那时候照老样子给「继续」）
+    const authoritative = typeof st.phase === "string" && st.phase !== "";
+    const hidden = phase === "loading" || phase === "compacting" || phase === "starting"
+        || (authoritative && phase === "nomodel");
     const mode = (!st.piReady || !touched) ? ""
-        : st.streaming ? "stuck"
-            : st.loading ? "" : "continue";
+        : hidden ? ""
+            : busyOf(st) ? "stuck" : "continue";
     const row = st.endHintRow || (st.endHintRow = makeEndHintRow(st));
     const el = st.endHintEl;
     if (el.dataset.mode !== mode) { setEndHintMode(el, mode); }
@@ -4946,6 +4968,39 @@
   // 它说的是当前会话（一次只看一个）：切会话、模型变了、用量变了、速度涨了都调 syncStatus 重刷。
   // 还没就绪的几种状态另挂在模型名那颗按钮的 data-st 上（loading / wait / nomodel / idle / streaming），
   // dev/ 那套调试工具靠它判断“可以发消息了”与“这轮跑完没”。
+  /**
+   * 这个会话的阶段（见 src/sessionPhase.ts）。
+   *
+   * 正常情况下就是后端推来的那一个（sessionList 与 phaseChanged）；这里只在字段缺失时
+   * 按老那套字段兜一下 —— 插件与后端是分开升级的，两边不一定同一版。
+   */
+  function phaseOf(st) {
+    if (!st) { return "none"; }
+    if (typeof st.phase === "string" && st.phase) { return st.phase; }
+    if (st.loading) { return "loading"; }
+    if (!st.piReady) { return "starting"; }
+    if (!st.modelId) { return "nomodel"; }
+    if (!st.streaming) { return "idle"; }
+    if (st.activity === "thinking") { return "thinking"; }
+    if (st.activity === "tool") { return "tool"; }
+    return st.currentAssistant ? "writing" : "waiting";
+  }
+
+  /** 这个阶段算不算“没干完”（顶条那颗点呼吸、关会话要问第二遍、末尾那颗写「卡住了」）。 */
+  function busyOf(st) {
+    if (!st) { return false; }
+    if (typeof st.busy === "boolean") { return st.busy; }
+    if (typeof st.phase === "string" && st.phase) {
+      switch (st.phase) {
+        case "loading": case "compacting": case "waiting": case "writing":
+        case "thinking": case "tool": return true;
+        default: return false;
+      }
+    }
+    // 老后端 / 测试里塞进来的会话对象（什么都没有）：照老那套判 —— 顶条以前就是看这两样
+    return !!(st.streaming || st.loading);
+  }
+
   function ctxPercent(st) {
     if (!st || typeof st.percent !== "number") { return 0; }
     return Math.max(0, Math.min(100, st.percent));
@@ -4953,21 +5008,30 @@
   function ctxState(st) {
     // 一个会话都没有（刚打开页面，还等着在「项目与会话」里挑一个）：胶囊里只写“没有会话”
     if (!st) { return "none"; }
-    if (st.loading) { return "loading"; }
-    if (!st.piReady) { return "wait"; }
-    if (!st.modelId) { return "nomodel"; }
-    return st.streaming ? "streaming" : "idle";
+    // 阶段 → data-st：取值跟以前一模一样（none / loading / wait / nomodel / idle / streaming），
+    // dev/ 那套调试工具靠它判断“可以发消息了”“这轮跑完没”，不许改名。
+    switch (phaseOf(st)) {
+      case "none": return "none";
+      case "loading": return "loading";
+      case "starting": return "wait";
+      case "nomodel": return "nomodel";
+      case "idle": return "idle";
+      default: return "streaming";
+    }
   }
   function ctxTitle(st) {
     if (!st) { return "还没有会话（在右边的「项目与会话」里挑一个工作区开始）"; }
-    const state = ctxState(st);
-    if (state === "loading") { return "加载中…"; }
-    if (state === "wait") { return "等待 pi 启动…"; }
-    if (state === "nomodel") { return "未配置模型（点击选择）"; }
+    const phase = phaseOf(st);
+    if (phase === "loading") { return "加载中…"; }
+    if (phase === "starting") { return "等待 pi 启动…"; }
+    if (phase === "nomodel") { return "未配置模型（点击选择）"; }
+    if (phase === "compacting") { return "正在压缩上下文…"; }
     const parts = [modelFullFor(st)];
     if (typeof st.percent === "number") { parts.push("上下文 " + st.percent.toFixed(1) + "%"); }
     if (typeof st.tps === "number") { parts.push(st.tps.toFixed(1) + " t/s"); }
-    return parts.join(" · ") + "\n点击切换模型";
+    // 有一道题挂着等你答：模型这一轮就停在那儿，说一句免得人以为它卡了
+    const waitingOnYou = st.attention === "answer" ? "\n模型在等你答一句" : "";
+    return parts.join(" · ") + waitingOnYou + "\n点击切换模型";
   }
   /**
    * 顶边那条上写的模型名（状态图右边那条横杠不在这里，它只管名字）。
@@ -4992,16 +5056,14 @@
     const state = ctxState(st);
     ctxIconEl.dataset.st = state;
     // 跑着的时候再细一层，挂到 data-act 上（界面按它换形象，见 chat.css 那几条）：
-    //   thinking 后端说在想；tool 后端说工具在跑；
-    //   剩下那种后端只说 working 的，界面再分两面：正文正在流（写）与还没吐字（等）。
-    //   “正文在流”看 st.currentAssistant：它在第一条正文增量时建、这段吐完就清（见 assistantDelta /
-    //   finalizeCurrentAssistant），所以正好就是“笔在写”的那段时间。
-    const act = st ? st.activity : "";
-    const writing = !!(st && st.currentAssistant);
+    //   以前是界面自己分（activity + 正文有没有在流），现在全看后端算好的阶段；
+    //   多出来两档：compacting（压缩上下文）与 answer（有一道题在等你答）。
+    const phase = phaseOf(st);
     const wantAct = state !== "streaming" ? ""
-        : act === "thinking" ? "thinking"
-            : act === "tool" ? "tool"
-                : writing ? "writing" : "waiting";
+        : st.attention === "answer" ? "answer"
+            : phase === "thinking" ? "thinking"
+                : phase === "tool" ? "tool"
+                    : phase === "writing" ? "writing" : "waiting";
     // 状态至少显示这么久才准换：正文吐完那一下会冒出“等”，几十毫秒后又变成工具；
     // 不挡一下就看着抖。等不到那一下的（本来就是空、或者这一轮停了）立即生效。
     let shown = st ? st.actShown || "" : "";
@@ -5220,7 +5282,9 @@
    * 其余不显示。
    */
   function openDotClass(item) {
-    if (item.streaming || item.loading || item.bashRunning) { return " running"; }
+    // 在跑：只认阶段（见 src/sessionPhase.ts）与后台命令 —— 以前是 streaming / loading 自己拼，
+    // 压缩中漏在外头，看不到“它在忙”。
+    if (item.busy || item.bashRunning) { return " running"; }
     if (item.taba && item.taba.state === "error") { return " error"; }
     if (item.turnDone || (item.taba && item.taba.state === "waiting")) { return " done"; }
     return "";
@@ -5243,6 +5307,9 @@
         section: "正在对话",
         current: st.id === activeId,
         streaming: !!st.streaming,
+        busy: busyOf(st),
+        attention: st.attention || "",
+        phase: phaseOf(st),
         bashRunning: !!st.bashRunning,
         loading: !!st.loading,
         turnDone: !!st.turnDone,
@@ -6208,7 +6275,9 @@
   /** 这个会话算不算“还在干活”（顶条那颗 × 要先问一下）：这一轮在答，或者后台还有命令在跑。 */
   function sessionRunning(id) {
     const st = id ? sessions.get(id) : null;
-    return !!(st && (st.streaming || st.bashRunning));
+    // 跟顶条那颗点同一个判据（阶段 + 后台命令）：以前这里只看 streaming，
+    // 于是“加载中”“压缩中”那一格蓝着、点 × 却一下就关了，不问。
+    return !!(st && (busyOf(st) || st.bashRunning));
   }
 
   /** 关一个会话：这一下就走（会话文件留着，历史列表里能重新打开；
@@ -11666,6 +11735,26 @@
     if (activeId === st.id) { syncStatus(); }
     refreshOpenSessionsInPicker();
   }
+
+  /**
+   * 后端说这个会话的阶段变了（见 src/sessionPhase.ts）：存下来，五个地方跟着刷一遍。
+   *
+   * 界面不再自己从 activity / 正文有没有在流去拼阶段 —— 那些是后端的事，它那边才看得全
+   *（压缩中、有一道题在等你答，这两档界面以前根本看不见）。
+   */
+  function setPhase(st, phase, busy, attention) {
+    if (!st) { return; }
+    const nextAttention = typeof attention === "string" ? attention : st.attention;
+    const nextBusy = typeof busy === "boolean" ? busy : undefined;
+    if (st.phase === phase && st.attention === nextAttention && st.busy === nextBusy) { return; }
+    st.phase = phase;
+    st.busy = nextBusy;
+    st.attention = nextAttention;
+    if (activeId === st.id) { updateSendState(); syncStatus(); }
+    renderSessionBar();
+    syncEndHint(st);
+    refreshOpenSessionsInPicker();
+  }
   function setPiReady(st, on, force) {
     st.piReady = on;
     if (activeId === st.id) { updateSendState(); syncStatus(); }
@@ -11721,6 +11810,11 @@
         st.activityDetail = typeof s.activityDetail === "string" ? s.activityDetail : "";
         st.piReady = s.piReady !== false;
         st.loading = !!s.loading;
+        // 阶段以快照为准（见 src/sessionPhase.ts）：断线重连、刷新页面之后靠它补回来。
+        // 字段缺失时清掉本地那份，下面一律走 phaseOf 的兵底（插件与后端分开升级，不一定同一版）。
+        st.phase = typeof s.phase === "string" ? s.phase : "";
+        st.busy = typeof s.busy === "boolean" ? s.busy : undefined;
+        st.attention = typeof s.attention === "string" ? s.attention : "";
         // 自动模式：每次列表都带一份（跟模型名一样，是一次性推送的补位）——
         // 刷新页面 / 重连后那颗按钮亮不亮就靠它回来。
         st.auto = s.auto || null;
@@ -12065,6 +12159,11 @@
         setActivity(t, msg.activity, msg.detail);
         // 离开「思考中」就说明这一段想完了：个别 provider 不发 thinking_end 时在这里兜底收尾
         if (msg.activity !== "thinking") { endThinking(t, ""); }
+        break;
+      case "phaseChanged":
+        // 后端算好了阶段（见 src/sessionPhase.ts）：存下来，五个地方一起刷
+        //（模型胶囊、顶边那颗小图、顶条那颗点、末尾那颗胶囊、关会话要不要问第二遍）
+        setPhase(t, msg.phase, msg.busy, msg.attention);
         break;
       case "assistantDelta":
         if (!t.currentAssistant) {

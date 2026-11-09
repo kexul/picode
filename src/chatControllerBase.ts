@@ -70,6 +70,7 @@ import {
     type AutoState,
 } from "./auto";
 import { promptText } from "./promptText";
+import { isBusyPhase, type SessionAttention } from "./sessionPhase";
 import { dropAuto, readAuto, writeAuto } from "./autoFiles";
 import type { RpcSessionState } from "./piRpc";
 import { clipText } from "./messageUtils";
@@ -1635,6 +1636,35 @@ export abstract class ChatControllerBase implements RuntimeHost {
         }
     }
 
+    /**
+     * 这个会话要不要人管（见 sessionPhase.ts 的 attention）。
+     *
+     * 默认“不要”。知道“有一道题在等你答”的只有宿主那一层（问话卡片在它手里），
+     * 子类覆写它（见 chatHost 的 openCards；插件里那块对话面板跟浏览器页面走同一个后端，
+     * 所以那边也一并有了）。
+     */
+    protected sessionAttention(_panelId: string): SessionAttention { return ""; }
+
+    /**
+     * 告诉所有屏：这个会话的 phase / attention 变了。
+     *
+     * 只给“宿主独知”的那点事用（比如问话卡片弹出来 / 答完了）：阶段本身的变化由
+     * SessionRuntime 自己推（见 postPhase），不必走这里。
+     */
+    protected broadcastSessionPhase(panelId: string): void {
+        const rt = this.panels.get(panelId);
+        if (!rt) { return; }
+        const phase = rt.phase();
+        const msg = {
+            type: "phaseChanged",
+            sessionId: panelId,
+            phase,
+            busy: isBusyPhase(phase),
+            attention: this.sessionAttention(panelId),
+        };
+        this.forEachClient((_clientId, send) => send(msg));
+    }
+
     /** 一个会话 → webview 可渲染结构（附带显示状态与父子关系）。 */
     private serializeSession(rt: SessionRuntime): Record<string, unknown> {
         const child = this.taba.byChildPanel(rt.id);
@@ -1660,6 +1690,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
             // 子会话挂在哪个会话下面（前端据此缩进）；不是子会话就是 null
             parentId: child?.parentPanelId ?? null,
             streaming: !!rt.streaming,
+            // 这个会话此刻处在哪个阶段（见 sessionPhase.ts）：界面只读这一个值，
+            // 不再各挑几个字段自己拼（压缩中、等你答这两档以前界面根本看不见）
+            phase: rt.phase(),
+            busy: isBusyPhase(rt.phase()),
+            compacting: !!rt.compacting,
+            // 要不要人管："" / "answer"（有题挂着等你答）/ "done"（跑完你还没看）
+            attention: this.sessionAttention(rt.id),
             // 后台还有命令在跑：这一轮答完了也算没干完（会话格、列表行首那颗点照旧蓝点呼吸）。
             bashRunning: rt.hasRunningBashTasks(),
             activity: rt.activity || "idle",

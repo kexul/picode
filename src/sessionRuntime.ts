@@ -7,6 +7,7 @@ import { StderrFrameSplitter } from "./piFrames";
 import { TABA_DECODER, TabaRequest } from "./tabaProtocol";
 import { ENV_DECODER, type EnvSnapshot } from "./envProtocol";
 import { NameParts } from "./names";
+import { isBusyPhase, sessionPhase, type SessionPhase } from "./sessionPhase";
 import { EditTracker } from "./editTracker";
 import { changeDiff as gitChangeDiff, listChanges, revertToHead, type SessionChanges } from "./gitChanges";
 import {
@@ -217,6 +218,13 @@ export class SessionRuntime {
     public activity: RuntimeActivity = "idle";
     /** 当前阶段的附加信息，例如正在执行的工具名。 */
     public activityDetail = "";
+    /**
+     * 这一轮里正文正在流（模型刚吐过字、这条 assistant 消息还没完）：阶段里的“写”靠它。
+     * 只记一个字：真正的判定在 sessionPhase.ts（界面不再自己看正文有没有在流）。
+     */
+    private writingText = false;
+    /** 上一次推给界面的阶段：只有变了才推（见 postPhase）。 */
+    private phaseShown: SessionPhase = "idle";
     /** 这一轮正在写出来的字（agent_start 清空，每个 text_delta 往后接）。 */
     private streamingReply = "";
     public piReady = false;
@@ -239,6 +247,36 @@ export class SessionRuntime {
     /** 当前 panel 是否尚未承载会话内容，且不在加载过程中。 */
     public isConversationEmpty(): boolean {
         return !this.hasConversation && !this.loading;
+    }
+
+    /**
+     * 这个会话此刻处在哪个阶段：全应用只此一处算（见 sessionPhase.ts）。
+     * 界面只读这一个值，不再各挑几个字段自己拼。
+     */
+    public phase(): SessionPhase {
+        return sessionPhase({
+            hasSession: true,
+            piReady: this.piReady,
+            loading: this.loading,
+            hasModel: !!this.modelId,
+            compacting: this.compacting,
+            streaming: this.streaming,
+            activity: this.activity,
+            writing: this.writingText,
+        });
+    }
+
+    /**
+     * 阶段变了就推一条给界面（没变不推）。
+     *
+     * 只推“变了的”那一半：界面收到就存下，不做任何重新推断。会话列表里也带一份
+     * （断线重连、刷新页面之后靠它补回来，见 chatControllerBase 的 serializeSession）。
+     */
+    private postPhase(): void {
+        const phase = this.phase();
+        if (phase === this.phaseShown) { return; }
+        this.phaseShown = phase;
+        this.post({ type: "phaseChanged", phase, busy: isBusyPhase(phase) });
     }
 
     // ---- 当前状态快照（跟着 sessionList 发给界面，界面自己画输入框底下那颗胶囊）----
@@ -501,6 +539,8 @@ export class SessionRuntime {
         });
         this.client.on("exit", (code: number | null) => {
             this.streaming = false;
+            this.writingText = false;
+            this.postPhase();
             // 进程没了，等着的那一下“停稳”就不会再来了：那句“卡住了”作废
             //（留着的话，用户下一轮跑完时它会莫名其妙冒出来）。
             this.pendingAfterAbort = "";
@@ -710,6 +750,7 @@ export class SessionRuntime {
     private setPiReady(ready: boolean): void {
         this.piReady = ready;
         this.post({ type: "piReady", ready });
+        this.postPhase();
         this.host.broadcastSessionList();
     }
 
@@ -910,6 +951,8 @@ export class SessionRuntime {
         this.activity = activity;
         this.activityDetail = detail;
         this.post({ type: "activityChanged", activity, detail });
+        // 阶段（想 / 工具 / 等）跟着这一下变：界面只读它，不再自己从 activity 拼
+        this.postPhase();
         this.host.broadcastSessionList();
     }
 
@@ -1078,6 +1121,9 @@ export class SessionRuntime {
                     case "text_delta":
                         this.setActivity("working");
                         if (a.type === "text_delta") {
+                            // 正文开吐了：阶段从“等”换到“写”（这一下的 activity 没变，得单独推）
+                            this.writingText = true;
+                            this.postPhase();
                             this.noteGenTokens(a.delta);
                             // 攒一份「这一轮已经写出来的字」：消息流那一段流式正文就靠它
                             // （手机上那两处只刷最近一次，攒着就不会只知道最后几个字）
@@ -1103,6 +1149,8 @@ export class SessionRuntime {
                 break;
             }
             case "tool_execution_start":
+                // 这一段正文到此为止（界面上那颗笔也换回扳手）：阶段里“工具在跑”压过“在写”
+                this.writingText = false;
                 this.setActivity("tool", typeof evt.toolName === "string" ? evt.toolName : "");
                 this.edits.trackEditStart(evt);
                 this.edits.onToolStart(evt);
@@ -1183,6 +1231,8 @@ export class SessionRuntime {
                 // 一条 assistant 消息吐完了：这次调用的吐字时间到此为止（之后是工具在跑）
                 const m = evt.message;
                 if (m && m.role === "assistant") {
+                    // 这条正文吐完了：阶段里“写”到此为止（接下来可能是工具、也可能在想）
+                    if (this.writingText) { this.writingText = false; this.postPhase(); }
                     this.endGenCall();
                     // 这条的 usage 出来了：上下文用量该涨一截了，就在这儿刷新
                     this.refreshStatsSoon();
@@ -1196,6 +1246,8 @@ export class SessionRuntime {
                 break;
             case "agent_settled":
                 this.streaming = false;
+                this.writingText = false;
+                this.postPhase();
                 // 这一轮结算速度：没等到 message_end 就停下的（被掐掉、出错的）也在这里封口，
                 // 数发给界面留着，下一轮开始才换掉
                 this.endGenCall();
@@ -1347,6 +1399,7 @@ export class SessionRuntime {
             this.startClient();
         }
         this.loading = true;
+        this.postPhase();
         this.host.broadcastSessionList();
         this.edits.reset();
         this.hasConversation = false;
@@ -1356,6 +1409,7 @@ export class SessionRuntime {
         const ready = await this.waitReady();
         if (!ready) {
             this.loading = false;
+            this.postPhase();
             this.host.broadcastSessionList();
             this.post({
                 type: "systemError",
@@ -1367,6 +1421,7 @@ export class SessionRuntime {
         const switchResp = await this.request({ type: "switch_session", sessionPath: file });
         if (!switchResp || switchResp.success === false) {
             this.loading = false;
+            this.postPhase();
             this.host.broadcastSessionList();
             this.post({
                 type: "systemError",
@@ -1389,6 +1444,7 @@ export class SessionRuntime {
         // 已有会话的标题不会走 session_info_changed，得主动问一次
         void this.refreshSessionTitle();
         this.loading = false;
+        this.postPhase();
         this.host.broadcastSessionList();
         this.refreshStats();
     }
@@ -2270,6 +2326,9 @@ export class SessionRuntime {
             return;
         }
         this.compacting = true;
+        // 先推阶段：压缩中这一档界面要看得见（以前 activity 变 working 但 streaming 是 false，
+        // 界面当它闲着）
+        this.postPhase();
         this.setActivity("working");
         this.post({ type: "system", text: `正在压缩上下文${why}…` });
         try {
@@ -2296,6 +2355,7 @@ export class SessionRuntime {
             this.post({ type: "systemError", text: `压缩失败: ${e.message}` });
         } finally {
             this.compacting = false;
+            this.postPhase();
             if (!this.streaming) {
                 this.setActivity("idle");
             }

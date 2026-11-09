@@ -51,6 +51,7 @@ import { DesktopLive } from "./desktopLive";
 import { DesktopNotice } from "./desktopNotice";
 import { describeRestart } from "./serverRestart";
 import type { SessionRuntime } from "./sessionRuntime";
+import type { SessionAttention } from "./sessionPhase";
 import { clipText } from "./messageUtils";
 import {
     DEFAULT_AUTO_LOAD_LAST,
@@ -1734,6 +1735,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             if (waitMs > 0) { state.timer = setTimeout(() => { this.settleCard(id, undefined); }, waitMs); }
             if (sessionId) {
                 for (const target of this.clientsViewing(sessionId)) { this.sendCardToScreen(id, state, target); }
+                // 这道题一挂上来，这个会话就进入“等你答”那一档（见 sessionPhase.ts 的 attention）：
+                // 顶条那颗点、会话列表那一行跟着变，不用靠右下角那张卡片才发现
+                this.broadcastSessionPhase(sessionId);
             }
         });
     }
@@ -1760,8 +1764,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         state.settled = true;
         if (state.timer) { clearTimeout(state.timer); state.timer = undefined; }
         this.openCards.delete(id);
-        // 这道题有眉目了（答了 / 没得答了）：那个会话的提醒也跟着收走
-        if (state.sessionId) { this.closeNotice(state.sessionId); }
+        // 这道题有眉目了（答了 / 没得答了）：那个会话的提醒跟着收走，“等你答”那一档也跟着退掉
+        if (state.sessionId) {
+            this.closeNotice(state.sessionId);
+            this.broadcastSessionPhase(state.sessionId);
+        }
         for (const target of Array.from(state.screens)) {
             this.sendOverlayTo(target, { type: "askCardDone", id, answer: answer ?? null });
         }
@@ -1780,6 +1787,19 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             yes: msg.yes === true,
             cancelled: msg.cancelled === true,
         });
+    }
+
+    /**
+     * 这个会话要不要人管：有一张问话卡片挂着（还没收尾）就是“等你答”。
+     *
+     * 这是宿主才有的知识（卡片在它手里），所以由这一层回答；阶段本身（进程在干什么）
+     * 在 SessionRuntime 里算，见 sessionPhase.ts。
+     */
+    protected override sessionAttention(panelId: string): SessionAttention {
+        for (const state of this.openCards.values()) {
+            if (!state.settled && state.sessionId === panelId) { return "answer"; }
+        }
+        return "";
     }
 
     /**
