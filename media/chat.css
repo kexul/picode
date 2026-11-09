@@ -352,13 +352,12 @@
      字照旧留着，到新的命令来把它顶掉；整条在这一批过去（下面出正文 / 问话卡片、
      或者这一轮跑完）时收掉。
      摘要本来只在提示框里，这里直接写出来：一颗「bash」看不出它在跑什么。
-     命令整条摆出来（不藏）：切成几段摆成一条链，heredoc 的正文写在链下面缩进（见 chat.js 的
-     runningLineParts）；命令一步一行（有分隔符就换行，分隔符留在行尾），一步太长才在它内部折（最多七行，点开这一行看整条），
-     正文自己折行。
+     命令整条摆出来（不藏）：切成几段摆成一条链（见 chat.js 的 runningLineParts）；一步一行
+     （只有分隔符会换行，别处一律不折），一步太长就在行尾省掉（点开这一行看整条）。
      左内边距 6px 跟工具标签自己的内外边距一样（见 .tool 的 padding）：两处的齿轮要在同一条竖线上。 */
   .tool-running { display: flex; flex-direction: column; gap: 2px; margin: 2px 0; padding: 0 14px; }
   .tool-running-item { display: flex; align-items: flex-start; gap: 4px; min-width: 0; padding-left: 6px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.75; }
-  /* 齿轮跟钟都跟第一行字对齐（这一块可能是好几行：heredoc 的正文写在链下面） */
+  /* 齿轮跟钟都跟第一行字对齐（这一块可能是好几行：一步一行） */
   .tool-running-item .tool-icon { flex: 0 0 auto; margin-top: 2px; animation: tool-spin 1.1s linear infinite; }
   .bash-run .bash-clock { margin-top: 1px; }
   /* 跑完的那一条：齿轮停住（这一条上那颗是「在不在跑」的指示），字与耗时都留着不动 */
@@ -392,9 +391,6 @@
   .tool-running-item .tr-prompt, .bash-run .tr-prompt { flex: 0 0 auto; opacity: 0.45; margin-top: 0; }
   .tool-running-item .tr-sep, .bash-run .tr-sep { opacity: 0.4; }
   .tool-running-item .tr-seg-dim, .bash-run .tr-seg-dim { opacity: 0.55; }
-  /* heredoc 的正文：缩进一格挂在链下面，字淡一点；一行太长就自己折行 */
-  .tool-running-item .tr-body, .bash-run .tr-body { padding-left: 15px; line-height: 1.5; }
-  .tool-running-item .tr-body > div, .bash-run .tr-body > div { opacity: 0.6; white-space: pre-wrap; overflow-wrap: anywhere; }
   /* 一长串命令有没摆出来的段（段太多 / 正文太长）时，后面跟一个「+N」（见 runningLineParts）：
      灰一点、不缩水 —— 一眼就知道还有没写出来的，整条在那个提示框里看。 */
   .tool-running-item .tr-more { flex: 0 0 auto; opacity: 0.6; font-size: 0.92em; }

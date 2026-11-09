@@ -417,9 +417,9 @@ module.exports = async (page) => {
         problems.push("冻住之后耗时还在涨（该定在跑完那一刻）：" + JSON.stringify(frozen1.times) + " → " + JSON.stringify(frozen2.times));
     }
 
-    // ---- 第十四幕：整条命令摆出来（一段不藏），heredoc 的正文写在链下面 ----
+    // ---- 第十四幕：整条命令摆出来（一段不藏），heredoc 的正文也拼在那一步里 ----
     // 一条命令切成几段就摆几段：段间的 && | ; 照原样写在链上，打杂的（cd 这种）字淡一点；
-    // heredoc 那种把一整段脚本塞进来的，正文跟在链下面缩进写出来（以前只写 `python - <<'PY'` 那一行，
+    // heredoc 那种把一整段脚本塞进来的也拼成一步（换行只发生在分隔符上，太长就在行尾省掉；以前只写 `python - <<'PY'` 那一行，
     // 后面几行代码一个字都看不到，而那段代码才是真正在跑的东西）。
     const drawn = () => page.eval(`
         const item = document.querySelector(".session-view:not(.off) .session-pane .tool-running .tool-running-item");
@@ -488,11 +488,12 @@ module.exports = async (page) => {
     await page.sleep(200);
     d = await drawn();
     console.log("   heredoc 那条：" + JSON.stringify(d));
-    if (JSON.stringify(d.parts) !== JSON.stringify(["$ ", "cat > /tmp/a.sh <<'EOF'", "[;]", "bash /tmp/a.sh", "[|]", "sed -n \"1,40p\""])) {
-        problems.push("heredoc 那条的链不对（正文后面那段该仍是链上的一段）：" + JSON.stringify(d.parts));
+    // heredoc 的正文也拼回一步（换行只发生在分隔符上），那一步会长、由行尾省掉
+    if (JSON.stringify(d.parts) !== JSON.stringify(["$ ", "cat > /tmp/a.sh <<'EOF' #!/bin/bash set -e for f in *.ts; do npx tsc --noEmit \"$f\"; done EOF", "[;]", "bash /tmp/a.sh", "[|]", "sed -n \"1,40p\""])) {
+        problems.push("heredoc 那条的链不对（heredoc 那段该拼成一步，后面两段仍在链上）：" + JSON.stringify(d.parts));
     }
-    if (d.body.length !== 4 || d.body[3] !== "EOF") { problems.push("heredoc 的正文没写出来（该四行、末行是收尾标记）：" + JSON.stringify(d.body)); }
-    if (d.more) { problems.push("正文没裁的情况下不该有「+N」：" + d.more); }
+    if (d.body.length) { problems.push("不该另起一块正文（换行只发生在分隔符上）：" + JSON.stringify(d.body)); }
+    if (d.more) { problems.push("没裁的情况下不该有「+N」：" + d.more); }
 
     await post([{ type: "toolResult", toolCallId: "z2", isError: false, resultText: "done", durationMs: 900 }]);
     await post([{ type: "tool", toolName: "bash", toolCallId: "z3", args: { command: "a; b; c; d; e; f; g" } }]);
@@ -510,9 +511,9 @@ module.exports = async (page) => {
     await post([{ type: "tool", toolName: "bash", toolCallId: "z4", args: { command: longBody } }]);
     await page.sleep(200);
     d = await drawn();
-    console.log("   正文十行那条：body=" + JSON.stringify(d.body) + " more=" + JSON.stringify(d.more));
-    if (d.body.length !== 6) { problems.push("正文太长时该摆六行：" + JSON.stringify(d.body)); }
-    if (!d.tip) { problems.push("正文被裁了却没挂提示框（点开看不到整条）"); }
+    console.log("   正文十行那条：parts=" + JSON.stringify(d.parts.map((p) => p.slice(0, 24))) + " body=" + JSON.stringify(d.body));
+    if (d.parts.length !== 2 || d.body.length) { problems.push("长 heredoc 也只占一步（不另起正文、不折行）：" + JSON.stringify(d.parts)); }
+    if (!d.tip) { problems.push("有字没写出来（行尾省掉）却没挂提示框"); }
     await page.shot("running-line-chain.png");
 
     // 不是 heredoc 的多行命令（`&& \` 续行那种）：拼回一条链，不多出第二行，也不留一个孤零零的「\」

@@ -2943,7 +2943,7 @@
   // ==================== 正在跑的那一条 ====================
   // 工具标签只说得出工具名：命令行、读哪个文件、grep 找什么都在提示框里，不点开就看不见。
   // 正在跑的那一条不一样：它在当前这批标签下面单占一块，把这一条命令直接摆出来
-  // （bash 就是「$ 命令」，cut 成几段摆成一条链，heredoc 的正文写在链下面；见下面
+  // （bash 就是「$ 命令」，切成几段摆成一条链、一步一行；见下面
   // 「一长串命令怎么写」。同时跑几条也只露一条 —— 只露最近开始的那条。
   // 这一块只装一条：几条一起跑时，先跑完的那条一收，这一块就矮一行，下面的东西跟着
   // 上下跳一下（贴着底看的时候特别明显）。
@@ -2965,7 +2965,7 @@
   // ==================== 一长串命令怎么写 ====================
   // 模型爱写一长串：cd 到某个目录 && 跑个脚本 | sed 看头几行，还有 heredoc 那种把一整段脚本塞进来的。
   // 这里按字面把命令切成几段，一段都不藏：段间的 && | ; 照原样写在链上（灰一点），
-  // heredoc 的正文跟在它头上那一段下面缩进写出来。整条点开那一行也能看（见 syncRunningLine）。
+  // 换行只发生在分隔符上（heredoc 的正文也拼回那一行里，太长就在行尾省掉）。整条点开那一行也能看（见 syncRunningLine）。
   // 以前是从里头挑「正经干活」的那一段写出来，挑错了不少（`git log; rm -rf dist; npm run build`
   // 摆出来的是 `git log`，删目录和真编译两段全藏了），所以不挑了：藏东西比挑错更害人。
   // 只把「只看一眼、不改东西」的那几段字调淡：会改东西的那几段（rm / chmod / 写文件 / 跑构建 / 跑脚本）
@@ -3191,11 +3191,9 @@
   }
 
   // ==================== 这条命令怎么摆 ====================
-  // 一个字的命令都不藏：切成几段摆成一条链（段间的 && | ; 照写），heredoc 的正文跟在
-  // 它头上那一段下面缩进写。太长就截：链上最多 RUNNING_CHAIN_MAX 段（剩下的算「+N」），
-  // 正文最多 RUNNING_BODY_MAX 行（再多的在提示框里看）。
+  // 一个字的命令都不藏：切成几段摆成一条链（段间的 && | ; 照写），一步一行，一步太长就在行尾省掉。
+  // 换行只发生在分隔符上（不按宽度折行、也不给 heredoc 另起一块正文）：一行一步，简单好认。
   const RUNNING_CHAIN_MAX = 5;
-  const RUNNING_BODY_MAX = 6;
   // 一整块参数（`node -e '…'`、`git commit -m "…"`、`curl -d '{…}'`）超过这么多字，
   // 就把中间省掉、两头各留一截：折行也改不了那一块字就是一个个转义符的事实，
   // 与其摆三四行转义，不如一句话说清「这里有一大块没摆」。两头留的是「用什么跑」与「往哪写」。
@@ -3222,7 +3220,7 @@
   /** 「正在跑」那一行写什么（消息流末尾的后台命令那几行也用这一套）：
    *  chain —— 链上那几段，每段 { text, sep, dim, prompt }（sep 是它前面那个分隔符，头一段没有；
    *  prompt 是要不要在前面写个 `$ `；dim 是只看一眼、不改东西的那几段（字淡））；
-   *  body —— heredoc 的正文（照原样，一行一条，缩进写在链下面）；
+
    *  more —— 没摆出来的段数（写出来是「+N」，空=全摆上了）；
    *  trimmed —— 有字没写出来（段太多 / 正文太长 / 多行），点开这一行看整条。
    *  不是 bash 的（read / edit / grep …）就一行字，照原样写。 */
@@ -3240,16 +3238,14 @@
     const cmd = bashCommandOf(call.argStr);
     const segs = splitCommandSegments(cmd);
     if (!segs.length) { return asIs(); }
-    const chain = [], body = [];
+    const chain = [];
     let hidden = 0, blobCut = false;
     for (let i = 0; i < segs.length; i++) {
       const seg = segs[i];
       const lines = seg.text.split("\n");
       if (chain.length >= RUNNING_CHAIN_MAX) { hidden += 1; continue; }
-      // 只有开了 heredoc 的那一段才带正文（下面那几行是脚本 / 数据）。其余多行的（`&& \` 续行那种）
-      // 拼回一行：链永远是一条，不多出第二行。
-      const opensHeredoc = lines.length > 1 && /<<-?\s*['"\\]?[A-Za-z_]/.test(lines[0]);
-      const text = opensHeredoc ? lines[0] : lines.join(" ");
+      // 多行的（heredoc 正文、`&& \` 续行）也拼回一行：换行只发生在分隔符上，别处一律不折。
+      const text = lines.join(" ");
       // 续行的那个反斜杠连它后面的空白一起去掉；再一大块参数（一段内联脚本那种）折起来
       const folded = foldLongBlobs(segmentDisplay(text.replace(/\\\s+/g, " ")));
       if (folded.folded) { blobCut = true; }
@@ -3257,22 +3253,19 @@
         text: folded.text,
         sep: i === 0 ? "" : segmentSep(seg.sepBefore), dim: isReadOnlySegment(seg), prompt: i === 0,
       });
-      if (opensHeredoc) { for (let j = 1; j < lines.length; j++) { body.push(lines[j]); } }
     }
     // 整条摘要里 "$ " + 命令 后面那点尾巴（timeout 这类）照旧跟着写
     const head = "$ " + cmd;
     const tail = whole.startsWith(head) ? whole.slice(head.length).trim() : "";
     if (tail && chain.length) { chain[chain.length - 1].text += " " + tail; }
-    const shownBody = body.slice(0, RUNNING_BODY_MAX);
-    const bodyCut = body.length > shownBody.length;
     return {
-      chain, body: shownBody, hidden, more: hidden ? "+" + hidden : "",
-      trimmed: !!hidden || bodyCut || blobCut || firstLine(whole) !== whole,
+      chain, hidden, more: hidden ? "+" + hidden : "",
+      trimmed: !!hidden || blobCut || firstLine(whole) !== whole,
     };
   }
 
-  /** 把 runningLineParts 那份东西画进 host 里（先清空）：一条链 + 缩进的正文。
-   *  链是一步一行（有分隔符就换行）；一步太长就在行尾省掉（看 chat.css 的 .tr-step）。 */
+  /** 把 runningLineParts 那份东西画进 host 里（先清空）：一步一行，一步太长就在行尾省掉
+   *  （看 chat.css 的 .tr-step）。 */
   function fillRunningText(host, parts) {
     // 只换掉上一次画的那一块（齿轮 / 钟 / 编号都还挂在 host 上，不能一起清掉）
     const old = host.querySelector(":scope > .tr-content");
@@ -3304,16 +3297,6 @@
       line.appendChild(step);
     }
     content.appendChild(line);
-    if (parts.body.length) {
-      const box = document.createElement("div");
-      box.className = "tr-body";
-      for (const text of parts.body) {
-        const row = document.createElement("div");
-        row.textContent = text;
-        box.appendChild(row);
-      }
-      content.appendChild(box);
-    }
     host.appendChild(content);
     // `$ ` 摆在链外面（链的左边）：折行后第二行起自然就跟第一行「$ 」后面那个字对齐（见 chat.css）。
     if (parts.chain[0] && parts.chain[0].prompt) {
