@@ -2,9 +2,10 @@
 /**
  * 验「消息推送」这一路：设置文件里 notify.pushTo 填了别处的地址，跑完一轮就往那儿推一条。
  *
- *   npm run web:shot -- --fake-pi --script dev/remotePush.js
+ *   npm run web:shot -- --fake-pi --notify-turn-end --script dev/remotePush.js
  *
- * 起一个本地收件口、把它写成 pushTo，发一句话等假 pi 回完，看收件口有没有收到那条。
+ * 起一个本地收件口、把它写成 pushTo，发一句话等假 pi 回完，看收件口有没有收到那条；
+ * 再敲一句，看推方有没有再推一条“收掉”（那边手上那张记的是推方的钥匙，只能靠这一条收）。
  * 跑完把设置文件放回原样。
  */
 const fs = require("fs");
@@ -46,6 +47,23 @@ module.exports = async (page) => {
         console.log("  · 收到推送：" + JSON.stringify(notice));
         if (notice.label !== "公司那台") { throw new Error("推送里没带上这台的标签：" + notice.label); }
         if (!notice.sessionId || !notice.pageUrl) { throw new Error("推送缺 sessionId / pageUrl"); }
+
+        // 那边再敲一句：推方该再推一条“收掉”过来。
+        // 收到那台上的那张记的是“推方的标签 + 推方的会话号”，本机这些动作碰不到它
+        // （见 chatHost 的 closeNotice、remoteNotice 的 pushRemoteClose）
+        const asked = got.length;
+        await page.send("再说一句");
+        let recall;
+        for (let i = 0; i < 100 && !recall; i++) {
+            recall = got.slice(asked).find((one) => one.close === true);
+            if (!recall) { await page.sleep(100); }
+        }
+        if (!recall) { throw new Error("那边又说话了，一条“收掉”也没推过来"); }
+        console.log("  · 收到“收掉”：" + JSON.stringify(recall));
+        // 收到那台照这两样拼钥匙：对不上就收不掉那张
+        if (recall.label !== "公司那台" || recall.sessionId !== notice.sessionId) {
+            throw new Error("“收掉”那条的标签 / 会话号对不上：" + JSON.stringify(recall));
+        }
     } finally {
         server.close();
         try {

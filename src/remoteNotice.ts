@@ -6,6 +6,10 @@
  * 收到的那台也弹一张卡片（哪台、哪个会话、说了什么）；点它只是把这张卡片收掉
  * （那是别的机器上的会话，本机只管弹，不去开那台网页）。
  *
+ * 那边已经有人说话了（或者会话被关掉、那道题答完了）时，推方再推一条“收掉过来”
+ * （close：见 chatHost 的 closeNotice）：收到的那台手上那张记的是推方的钥匙，
+ * 本机这些动作碰不到它，不推这一条就只能用手点掉。
+ *
  * 为什么不反过来（收到的那台去连推送方）：那样要常年维持连接、断了要重连、还得处理断线
  * 期间漏掉的事件。一次 POST 失败就当没发生，简单得多。
  *
@@ -27,6 +31,11 @@ export interface RemoteNotice {
     text?: string;
     /** 哪种事：跑完一轮 / 等你答一句。 */
     kind?: "done" | "ask";
+    /**
+     * 这条是“把那张收掉”（那边已经有人答过了 / 会话关掉了 / 那道题答完了）：
+     * 收到的那台只收卡片，不弹新的。不带这个字段的照旧是有事（旧版本推来的都没有）。
+     */
+    close?: boolean;
     /**
      * 推送方那个后端的网页地址（`http://10.0.0.2:51883`）：那台的地址，拼上 `?session=`
      * 就是那个会话的页面（留着当回话地址，见 dev/weixinGateway.js；提醒卡片不打开它）。
@@ -70,7 +79,8 @@ export function readRemoteNotice(raw: unknown, fallbackLabel: string): RemoteNot
     const kind = body.kind === "ask" ? "ask" : "done";
     // 回话地址也是可选的（旧版本不带）：带了才能把一句话送回原来那台
     const pageUrl = typeof body.pageUrl === "string" ? body.pageUrl.trim().slice(0, 200) : "";
-    return { label, sessionId, name, text, kind, ...(pageUrl ? { pageUrl } : {}) };
+    const close = body.close === true;
+    return { label, sessionId, name, text, kind, ...(pageUrl ? { pageUrl } : {}), ...(close ? { close: true } : {}) };
 }
 
 /**
@@ -79,12 +89,27 @@ export function readRemoteNotice(raw: unknown, fallbackLabel: string): RemoteNot
  * @returns 对方收下了没有（收下 = 2xx）；推不过去只返回 false，不抛
  */
 export async function pushRemoteNotice(target: string, notice: RemoteNotice): Promise<boolean> {
+    return postNotice(target, notice);
+}
+
+/**
+ * 推一条“把那张收掉”过去：那边已经有人说话了 / 会话关掉了 / 那道题答完了
+ * （见 chatHost 的 closeNotice）。收不到就算了，那张卡片人自己点一下也能收。
+ * @param label 推方那台的「标签」（跟当初推“有事”那条一模一样，收到的那台照它认钥匙）
+ * @param sessionId 推方那边的会话标识（同上）
+ */
+export async function pushRemoteClose(target: string, label: string, sessionId: string): Promise<boolean> {
+    return postNotice(target, { label, sessionId, close: true });
+}
+
+/** 往那台的 /notify 丢一条过去；对方没回应就当这条丢了（不重试、不攒着）。 */
+async function postNotice(target: string, body: unknown): Promise<boolean> {
     const url = target.replace(/\/+$/, "") + "/notify";
     try {
         const res = await fetch(url, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify(notice),
+            body: JSON.stringify(body),
             signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
         });
         return res.ok;

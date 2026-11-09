@@ -23,7 +23,7 @@ import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase, type ViewOptionItem, type WorkspacePage } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
-import { isOwnPage, pushRemoteNotice, REMOTE_TEXT_CHARS, type RemoteNotice } from "./remoteNotice";
+import { isOwnPage, pushRemoteClose, pushRemoteNotice, REMOTE_TEXT_CHARS, type RemoteNotice } from "./remoteNotice";
 import { getAskAssets, getBashAssets, getEnvAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
 import {
@@ -209,6 +209,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     });
     /** 别的机器推来的卡片，标识前面挂这个（本机会话的标识就是会话号本身）。 */
     private static readonly REMOTE_NOTICE_PREFIX = "remote:";
+    /**
+     * 往别处推过“有事”的会话号：这些会话有事了、关掉了时还要再推一条“收掉”过去
+     * （那几台手上那张记的是这边的钥匙，这边怎么动都碰不到它，见 closeNotice）。
+     */
+    private readonly pushedNoticeSessions = new Set<string>();
 
     constructor(private readonly options: ChatHostOptions) {
         super("server");
@@ -765,6 +770,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 收走某个会话那一张卡片（它说上话了、被关掉了、那道题答完了）。 */
     private closeNotice(key: string): void {
         this.notice.close(key);
+        // 推给别处的那几台也收掉：它们那张记的是“别台的标签 + 这边的会话号”，
+        // 这边这几件动作碰不到它，只能推一条“收掉”过去（见 remoteNotice 的 pushRemoteClose）
+        if (key.startsWith(ChatHost.REMOTE_NOTICE_PREFIX)) { return; }
+        if (!this.pushedNoticeSessions.delete(key)) { return; }
+        for (const target of this.remoteTargets()) { void pushRemoteClose(target, displayName(), key); }
     }
 
     /**
@@ -1802,12 +1812,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * @returns 推给了别处没有（推了这台就不自己弹：一个人只盯得了一台机器）
      */
     protected override pushRemoteNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): boolean {
-        const notify = readServerConfig().config.notify;
         const base = this.options.selfPageUrl?.();
-        if (!base) { return false; }
-        // 填的是这台自己的地址（面板上默认就显示它）等于“提醒还在这台”：不推给自己，本机自己弹
-        const targets = notify.pushTo.filter((target) => !isOwnPage(target, base));
-        if (targets.length === 0) { return false; }
+        const targets = this.remoteTargets();
+        if (!base || targets.length === 0) { return false; }
         const notice = {
             // 那边卡片上写的就是这台的「标签」
             label: displayName(),
@@ -1822,7 +1829,19 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         for (const target of targets) {
             void pushRemoteNotice(target, notice);
         }
+        // 记着这个会话：它有事了、关掉了时，这几台上那张还得再推一条“收掉”
+        this.pushedNoticeSessions.add(sessionId);
         return true;
+    }
+
+    /**
+     * 设置里「消息推送」填的那几台（去掉这台自己的地址）。
+     * 填的是本机地址（设置面板上默认就显示它）等于“提醒还在这台”：不推给自己。
+     */
+    private remoteTargets(): string[] {
+        const base = this.options.selfPageUrl?.();
+        if (!base) { return []; }
+        return readServerConfig().config.notify.pushTo.filter((target) => !isOwnPage(target, base));
     }
 
     /**
@@ -1831,8 +1850,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 在这台照弹一张（人不会只坐一台前面）；点它只是把卡片收掉，本机管不着那台的会话。
      */
     public acceptRemoteNotice(notice: RemoteNotice): void {
-        if (!this.notifyTurnEndEnabled()) { return; }
         const key = ChatHost.REMOTE_NOTICE_PREFIX + notice.label + ":" + notice.sessionId;
+        // 那边已经有人说话了 / 会话关掉了 / 那道题答完了：把这张收掉（本机没有那个会话，别的动作碰不到它）
+        if (notice.close) {
+            this.notice.close(key);
+            this.log(`[提醒] 收了一张（别的机器说那边没事了）：${notice.label} · ${notice.name}`);
+            return;
+        }
+        if (!this.notifyTurnEndEnabled()) { return; }
         // 标签写来源那台（家里），标题就只是那个会话的名字：标签与标题各说一件事，不重复
         this.showNotice(key, notice.name, notice.text ?? "", notice.kind === "ask", notice.label);
         this.log(`[提醒] 弹了一张（别的机器推来的）：${notice.label} · ${notice.name}`);
