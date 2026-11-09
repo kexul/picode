@@ -1,6 +1,6 @@
 import type { PiClient } from "./piClient";
 import type { AskRequest } from "./askProtocol";
-import type { BashTaskInfo } from "./bashProtocol";
+import type { BashTaskEvent, BashTaskInfo } from "./bashProtocol";
 import type { AutoCommand } from "./auto";
 import type { TabaRequest } from "./tabaProtocol";
 
@@ -188,6 +188,12 @@ export interface RuntimeHost {
      * 宿主接着：把结果当成一条新消息交回这个会话。可选。
      */
     onBashTask?(panelId: string, task: BashTaskInfo): void;
+
+    /**
+     * 某个会话里「盯着看」的那条命令打出了一批新行（见 bashProtocol.ts）。
+     * 宿主接着：把这一批当成一条新消息交回这个会话。可选。
+     */
+    onBashWatch?(panelId: string, ev: BashTaskEvent): void;
 
     // ---- UI 弹窗（对应当 pi 的 extension_ui_request）----
     /** @param sessionId 这是哪个会话问的：优先弹给正在看这个会话的那块屏（没人看才找“人最近动的”）。 */

@@ -30,14 +30,17 @@ const LIMITS = {
 };
 
 /**
- * 后台任务的开始 / 结束。
+ * 后台任务的开始 / 结束，以及「盯着看」那条命令打出的新行。
  *
  * start 有两种来路：
  *   - 模型调用 bash 时带了 background：命令一开始就在后台跑（background=true）；
- *   - 前台正跑着，用户在界面上点了"放后台"（background=false，说明是中途转的）。
+ *   - 前台正跑着，用户在界面上点了"放后台"，或者前台撑过 20 秒自己撤的手（background=false）。
+ *
+ * watch 是「盯着看」专用的那种：任务本身跟 start/end 一样在清单里，只是它每打出一批新行
+ * 就多报一条，宿主拿它当一条新消息交回会话。
  */
 export interface BashTaskEvent {
-    kind: "start" | "end";
+    kind: "start" | "end" | "watch";
     /** 任务编号（扩展在本进程内从 1 往上排）。 */
     no: number;
     /** 是 pi 给的这次工具调用的编号（中途切后台时插件靠它对上号）。 */
@@ -48,6 +51,8 @@ export interface BashTaskEvent {
     log: string;
     /** 一开始就在后台跑（true）还是前台中途转过去的（false）。 */
     background: boolean;
+    /** 这条是「盯着看」起的（清单里标出来，界面与 bash_tasks 靠它区分）。 */
+    watch?: boolean;
     /** 进程号（拿不到就不带）。 */
     pid?: number;
     /** 这条命令是什么时候开始跑的（毫秒时间戳）：中途转后台时，界面上的用时从这个时刻算。 */
@@ -58,7 +63,16 @@ export interface BashTaskEvent {
     status?: BashTaskInfo["status"];
     /** 跑了多久（毫秒）。end 才有。 */
     elapsedMs?: number;
+    /** 这一批新行（原样的行，不含换行）。watch 才有。 */
+    lines?: string[];
+    /** 这一批里还有多少行没列出来（超过上限的部分）。watch 才有。 */
+    skipped?: number;
 }
+
+/** 一批新行最多带多少（接一行上限）。 */
+export const WATCH_LINES_MAX = 40;
+/** 一行最多多长（超了就截断）。 */
+export const WATCH_LINE_CHARS_MAX = 1000;
 
 /** 一条后台命令在插件这边长什么样（清单、界面、「停」都用它）。 */
 export interface BashTaskInfo {
@@ -81,6 +95,8 @@ export interface BashTaskInfo {
     exitCode?: number | null;
     /** 跑了多久（毫秒），结束事件才有。 */
     elapsedMs?: number;
+    /** 「盯着看」起的那些（清单里带个记号）。 */
+    watch?: boolean;
 }
 
 function str(raw: unknown, limit: number): string | undefined {
@@ -98,7 +114,7 @@ function num(raw: unknown): number | undefined {
 export function normalizeBashTaskEvent(raw: unknown): BashTaskEvent | undefined {
     if (!raw || typeof raw !== "object") { return undefined; }
     const o = raw as Record<string, unknown>;
-    if (o.kind !== "start" && o.kind !== "end") { return undefined; }
+    if (o.kind !== "start" && o.kind !== "end" && o.kind !== "watch") { return undefined; }
     const no = num(o.no);
     const toolCallId = str(o.toolCallId, LIMITS.id);
     const cmd = str(o.cmd, LIMITS.cmd);
@@ -106,8 +122,7 @@ export function normalizeBashTaskEvent(raw: unknown): BashTaskEvent | undefined 
     if (!no || no < 1 || !toolCallId || !cmd || !log) { return undefined; }
     const ev: BashTaskEvent = { kind: o.kind, no, toolCallId, cmd, log, background: o.background === true };
     const pid = num(o.pid);
-    if (pid) { ev.pid = pid; }
-    const startedAt = num(o.startedAt);
+    if (pid) { ev.pid = pid; }    const startedAt = num(o.startedAt);
     if (startedAt) { ev.startedAt = startedAt; }
     if (o.kind === "end") {
         if (o.status === "done" || o.status === "failed" || o.status === "stopped") { ev.status = o.status; }
@@ -119,6 +134,20 @@ export function normalizeBashTaskEvent(raw: unknown): BashTaskEvent | undefined 
         }
         const elapsed = num(o.elapsedMs);
         if (elapsed !== undefined) { ev.elapsedMs = elapsed; }
+    }
+    if (o.watch === true) { ev.watch = true; }
+    if (o.kind === "watch") {
+        const lines = Array.isArray(o.lines) ? o.lines : [];
+        const kept: string[] = [];
+        for (const raw of lines.slice(0, WATCH_LINES_MAX)) {
+            if (typeof raw !== "string") { continue; }
+            const line = raw.length > WATCH_LINE_CHARS_MAX ? raw.slice(0, WATCH_LINE_CHARS_MAX) + "…（后面还有，看日志）" : raw;
+            kept.push(line);
+        }
+        if (kept.length === 0) { return undefined; }
+        ev.lines = kept;
+        const skipped = num(o.skipped);
+        if (skipped && skipped > 0) { ev.skipped = skipped; }
     }
     return ev;
 }
@@ -203,5 +232,32 @@ export function buildBashTaskDelivery(p: {
         输出: p.tail.trim() || "（没有输出）",
         日志: p.log,
         编号: String(p.no),
+    });
+}
+
+/**
+ * 「盯着看」那条命令打出一批新行，交回会话的那段文字（跟上面跑完那条一个用法）。
+ * @param lines 这一批新行（已经截过长度，见 WATCH_LINE_CHARS_MAX）
+ * @param skipped 这一批里没列出来的行数
+ */
+export function buildBashWatchDelivery(p: {
+    no: number;
+    cmd: string;
+    lines: string[];
+    skipped?: number;
+    log: string;
+    /** 这条命令还活着没有（最后一批之后可能就退了）。 */
+    running: boolean;
+}, over?: PromptOverrides): string {
+    const more = p.skipped && p.skipped > 0 ? `（还有 ${p.skipped} 行没列出来，用 bash_tasks ${p.no} 看）` : "";
+    const tail = p.running
+        ? `#${p.no} 还在跑。看完这行该干什么就干什么；要接着等就这一轮说完结束，打出新的行会再交回来。`
+        : `#${p.no} 已经退出了（在后台任务里看它怎么收的场）。`;
+    return promptText(over, "watchDelivery", {
+        编号: String(p.no),
+        命令: p.cmd,
+        输出: p.lines.join("\n") + (more ? "\n" + more : ""),
+        日志: p.log,
+        尾巴: tail,
     });
 }

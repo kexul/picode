@@ -41,7 +41,7 @@ import { TABA_DECODER } from "./tabaProtocol";
 import { ASK_DECODER } from "./askProtocol";
 import type { AskRequest } from "./askProtocol";
 import { StderrFrameSplitter } from "./piFrames";
-import { BASH_DECODER, BashTaskInfo, buildBashTaskDelivery, readBashLogTail } from "./bashProtocol";
+import { BASH_DECODER, BashTaskEvent, BashTaskInfo, buildBashTaskDelivery, buildBashWatchDelivery, readBashLogTail } from "./bashProtocol";
 import { ENV_DECODER } from "./envProtocol";
 import {
     TabaRegistry,
@@ -1231,6 +1231,24 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 交回会话时最多带多长一段输出（字节）：再长的让模型自己去 bash_tasks 取。 */
     protected static readonly BASH_DELIVERY_TAIL_BYTES = 4000;
+
+    /**
+     * RuntimeHost.onBashWatch：「盯着看」的那条命令打出了一批新行（扩展按行攒的，一批一次）。
+     * 跟「跑完了」那条同一个路子交回会话：按 steer 排队，会话正忙就在下一次请求模型之前投递。
+     */
+    public onBashWatch(panelId: string, ev: BashTaskEvent): void {
+        const rt = this.panels.get(panelId);
+        if (!rt || !ev.lines || ev.lines.length === 0) { return; }
+        const text = buildBashWatchDelivery({
+            no: ev.no,
+            cmd: ev.cmd,
+            lines: ev.lines,
+            skipped: ev.skipped,
+            log: ev.log,
+            running: rt.bashTaskRunning(ev.no),
+        }, this.getConfig().prompts);
+        rt.handleSend(text, undefined, { steer: true });
+    }
 
     /** RuntimeHost.onTabaRequest：某个会话里的 pi 扩展要派子会话 / 停子会话。 */
     public onTabaRequest(panelId: string, request: TabaRequest): void {

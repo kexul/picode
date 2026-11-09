@@ -682,8 +682,18 @@ export class SessionRuntime {
         this.post({ type: "envInfo", env: snapshot });
     }
 
-    /** 扩展报来一条后台命令的开始 / 结束（见 bashProtocol.ts）。 */
+    /** 某条后台任务还在跑吗（「盯着看」交回那一批时，末尾那句要说清它还在不在）。 */
+    public bashTaskRunning(no: number): boolean {
+        return this.bashTasks.get(no)?.status === "running";
+    }
+
+    /** 扩展报来一条后台命令的开始 / 结束、或者「盯着看」打出的新行（见 bashProtocol.ts）。 */
     private noteBashTask(ev: BashTaskEvent): void {
+        // 「盯着看」的新行只管交回会话：清单、界面那一块、状态点都跟 start/end 一条路，这里不另记
+        if (ev.kind === "watch") {
+            this.host.onBashWatch?.(this.id, ev);
+            return;
+        }
         // 同一编号的结尾只认第一次：不然「停掉」和「进程退出」会各交回会话一次（模型就收到两遍同一件事）
         if (ev.kind === "end") {
             if (this.bashEnded.has(ev.no)) { return; }
@@ -703,6 +713,7 @@ export class SessionRuntime {
             pid: ev.pid ?? prev?.pid ?? 0,
             startedAt: ev.startedAt ?? prev?.startedAt ?? Date.now(),
             background: ev.background,
+            watch: ev.watch === true || prev?.watch === true,
             status,
             exitCode: ev.exitCode,
             elapsedMs: ev.elapsedMs,

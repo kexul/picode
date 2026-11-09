@@ -82,7 +82,8 @@ const NO_WAIT_NOTE = "放到后台以后不用等结果：你可以接着去干�
     + "别用 sleep 之类的命令干等，也别反复用 bash_tasks 查 —— 你干等的时候结果只能排在后面，等多久就白等多久。"
     + "真在命令里干等的（sleep 10 秒以上、或者循环里带 sleep）、以及把进程丢到背影里跑的（末尾孤零零的 &、nohup、setsid）会被挡回来，这一条不会跑；"
     + "刚看过一次、它又没出新东西的时候再查，也会被挡回来。"
-    + "前台命令撑过 20 秒还没跑完会自己转到后台（不用你管，也不用再发一遍），跑完照常交回来。";
+    + "前台命令撑过 20 秒还没跑完会自己转到后台（不用你管，也不用再发一遍），跑完照常交回来。"
+    + "要等一个条件（服务起来、日志里出现某个字样）：用 watch 把那条命令本身盯着，别在命令里等、也别自己起一条再 tail 它的日志。";
 
 /**
  * 命令里干等的那一关：认出来就不跑。
@@ -322,6 +323,8 @@ interface Task {
     exitCode: number | null;
     /** 是不是一开始就在后台跑（false = 前台中途转过去的）。 */
     background: boolean;
+    /** 是不是「盯着看」起的（清单与界面靠它区分）。 */
+    watch?: boolean;
     /** 报给过插件没有（前台正常跑完的不报：插件从工具事件流里已经知道了）。 */
     announced: boolean;
     /** 结尾报给过插件没有：一条任务只报一次结尾（停掉之后进程退出、两份回调都会走到，别报两遍）。 */
@@ -511,9 +514,10 @@ function announce(task: Task, background: boolean): void {
         toolCallId: task.id,
         cmd: task.cmd,
         log: task.log,
-        background,
+        background: task.background,
         pid: task.pid,
         startedAt: task.startedAt,
+        watch: task.watch === true,
     });
 }
 
@@ -531,7 +535,101 @@ function reportEnd(task: Task): void {
         status: task.status,
         exitCode: task.exitCode,
         elapsedMs: elapsedMs(task),
+        watch: task.watch === true,
     });
+}
+
+// ---- 「盯着看」：把输出按行切成一批一批交回去 ----
+
+/** 一批新行攒多久就交（毫秒）：太短会一句一行地叫醒模型，太长就不实时了。 */
+const WATCH_FLUSH_MS = 300;
+/** 一批最多带多少行（多出来的计入 skipped，让人用 bash_tasks 去看）。 */
+const WATCH_LINES_PER_FLUSH = 40;
+/** 同一行这么久之内又出现，就不再叫一遍（心跳类输出全靠它压住）。 */
+const WATCH_DEDUP_MS = 60000;
+/** 一行最多多长。 */
+const WATCH_LINE_MAX = 1000;
+
+interface Watcher {
+    /** 新到的原始字节（跟日志那份一模一样）；自己按行切。 */
+    push(chunk: Buffer): void;
+    /** 收尾：把没交出去的半行 / 一批一并交出去。 */
+    finish(): void;
+}
+
+/**
+ * 盯着一条任务打出的行。切行用的是 Buffer：多字节的字可能被切在两个 chunk 中间，
+ * 所以不完整的尾巴留着，等到下一段再拼起来，别先转字符串。
+ */
+function makeWatcher(task: Task, match: RegExp | null): Watcher {
+    let rest = Buffer.alloc(0);
+    let queued: string[] = [];
+    let skipped = 0;
+    let timer: any = undefined;
+    const seen = new Map<string, number>();
+
+    const send = () => {
+        if (timer) { clearTimeout(timer); timer = undefined; }
+        if (queued.length === 0 && skipped === 0) { return; }
+        const lines = queued;
+        queued = [];
+        const dropped = skipped;
+        skipped = 0;
+        emit({
+            kind: "watch",
+            no: task.no,
+            toolCallId: task.id,
+            cmd: task.cmd,
+            log: task.log,
+            background: true,
+            watch: true,
+            lines,
+            skipped: dropped,
+        });
+    };
+    const schedule = () => {
+        if (timer) { return; }
+        timer = setTimeout(send, WATCH_FLUSH_MS);
+        if (typeof timer.unref === "function") { timer.unref(); }
+    };
+    const accept = (raw: string) => {
+        const line = raw.replace(/\r$/, "");
+        if (!line.trim()) { return; }
+        if (match && !match.test(line)) { return; }
+        const now = Date.now();
+        const last = seen.get(line);
+        if (last !== undefined && now - last < WATCH_DEDUP_MS) { skipped += 1; return; }
+        seen.set(line, now);
+        if (seen.size > 400) {
+            for (const [key, at] of seen) { if (now - at >= WATCH_DEDUP_MS) { seen.delete(key); } }
+        }
+        if (queued.length >= WATCH_LINES_PER_FLUSH) { skipped += 1; return; }
+        queued.push(line.length > WATCH_LINE_MAX ? line.slice(0, WATCH_LINE_MAX) + "…（这行后面还长，看日志）" : line);
+        schedule();
+    };
+
+    return {
+        push(chunk: Buffer) {
+            rest = rest.length ? Buffer.concat([rest, chunk]) : chunk;
+            let from = 0;
+            let at = rest.indexOf(10);
+            while (at >= 0) {
+                accept(rest.toString("utf8", from, at));
+                from = at + 1;
+                at = rest.indexOf(10, from);
+            }
+            rest = Buffer.from(rest.subarray(from));
+            // 一直没有换行的输出（进度条那种）也要有个头：攒到 64KB 就整段当一行
+            if (rest.length > 64 * 1024) {
+                accept(rest.toString("utf8"));
+                rest = Buffer.alloc(0);
+            }
+        },
+        finish() {
+            if (rest.length) { accept(rest.toString("utf8")); rest = Buffer.alloc(0); }
+            send();
+        },
+    };
 }
 
 // ---- 工具 ----
@@ -742,6 +840,78 @@ export default function bashBridge(pi: any): void {
     });
 
     pi.registerTool({
+        name: "watch",
+        label: "盯着看",
+        description:
+            ${JSON.stringify(promptText(over, "toolWatch"))},
+        promptSnippet: "盯一条命令的输出：它打出新行就交回会话（等条件用它，不 sleep）。",
+        parameters: {
+            type: "object",
+            properties: {
+                command: { type: "string", description: "盯着跑的命令（它本身就是那条会产生输出的东西）。" },
+                match: { type: "string", description: "只看匹配这个正则的行（可选；日志里照样留全部）。" },
+                timeout: { type: "number", description: "最多盯多少秒（可选）；不给就一直盯到它自己退出或被停掉。" },
+            },
+            required: ["command"],
+            additionalProperties: false,
+        },
+        async execute(id: string, params: any) {
+            const command = params && typeof params.command === "string" ? params.command.trim() : "";
+            if (!command) {
+                return {
+                    content: [{ type: "text", text: "盯着看得先给一条命令：拿什么去盯？（比如「npm test」、「tail -n +1 -F 日志文件」）" }],
+                    details: { error: "no command" },
+                };
+            }
+            const matchText = params && typeof params.match === "string" ? params.match.trim() : "";
+            let match: RegExp | null = null;
+            if (matchText) {
+                try {
+                    match = new RegExp(matchText);
+                } catch (err) {
+                    return {
+                        content: [{ type: "text", text: "match 这个正则写不成（" + String((err && (err as Error).message) || err) + "），这条没盯。" }],
+                        details: { error: "bad match" },
+                    };
+                }
+            }
+            let watcher: Watcher | null = null;
+            const started = startTask(
+                command,
+                process.cwd(),
+                process.env,
+                id,
+                true,
+                (chunk: Buffer) => { if (watcher) { watcher.push(chunk); } }
+            );
+            const task = started.task;
+            task.watch = true;
+            watcher = makeWatcher(task, match);
+            announce(task, true);
+            started.onExit(() => {
+                if (watcher) { watcher.finish(); }
+                task.status = task.exitCode === 0 ? "done" : "failed";
+                reportEnd(task);
+            });
+            const sec = Number(params && params.timeout);
+            if (sec > 0) {
+                const timer = setTimeout(() => { started.kill(); }, sec * 1000);
+                if (typeof timer.unref === "function") { timer.unref(); }
+            }
+            const lines: string[] = [];
+            lines.push("盯上了（编号 " + task.no + "）。");
+            lines.push("命令：" + task.cmd);
+            lines.push(match ? "只认匹配这些的行：" + matchText : "它打出的新行都会交回来。");
+            lines.push("它打出新的行会当成一条新消息交进来（开头是「盯着看 #" + task.no + " 有新动静」）。");
+            lines.push("不用等它：这一轮该干什么干什么，说完结束也行；要看已有的输出用 bash_tasks " + task.no + "，要停用 bash_tasks " + task.no + " stop。");
+            return {
+                content: [{ type: "text", text: lines.join("\n") }],
+                details: { watchNo: task.no, log: task.log, pid: task.pid },
+            };
+        },
+    });
+
+    pi.registerTool({
         name: "bash_tasks",
         label: "后台命令",
         description:
@@ -765,7 +935,7 @@ export default function bashBridge(pi: any): void {
                     };
                 }
                 const list = Array.from(tasks.values()).sort((a, b) => b.no - a.no);
-                const lines = list.map((t) => "#" + t.no + "  " + statusText(t) + "，跑了 " + elapsedText(elapsedMs(t))
+                const lines = list.map((t) => "#" + t.no + "  " + statusText(t) + (t.watch ? "（盯着看）" : "") + "，跑了 " + elapsedText(elapsedMs(t))
                     + "\n    命令：" + t.cmd
                     + "\n    输出：" + t.log);
                 return {
@@ -810,7 +980,7 @@ export default function bashBridge(pi: any): void {
             }
             const tail = readTail(task.log, 16 * 1024);
             const lines: string[] = [];
-            lines.push("#" + no + "  " + statusText(task) + "，跑了 " + elapsedText(elapsedMs(task)));
+            lines.push("#" + no + "  " + statusText(task) + (task.watch ? "（盯着看）" : "") + "，跑了 " + elapsedText(elapsedMs(task)));
             lines.push("命令：" + task.cmd);
             lines.push("输出：" + (tail || "（还没有输出）"));
             return {
