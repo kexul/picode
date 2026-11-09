@@ -66,9 +66,8 @@
     // 停止小方块：跟上面两颗一样大（12px），不然它看着比暂停粗一圈
     "stop-small": '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="3.4" y="3.4" width="9.2" height="9.2" rx="1.2"/></svg>',
   };
-  /** 文件夹选择器里行首那颗图标：名字由宿主给（见 chatHost.ts 里 showFolderPicker 的 items）。
-   *  newfolder = 「新建文件夹」那一行（用那颗加号，不另画一张图）。 */
-  const FOLDER_ROW_ICONS = { check: ICONS.check, up: ICONS["arrow-up"], folder: ICONS.folder, newfolder: ICONS.add };
+  /** 文件夹选择器里行首那颗图标：名字由宿主给（见 chatHost.ts 里 showFolderPicker 的 items）。 */
+  const FOLDER_ROW_ICONS = { check: ICONS.check, up: ICONS["arrow-up"], folder: ICONS.folder };
   /** 「新建文件夹」那个输入框最多收几个字（跟后端 dirBrowse.ts 那道上限同一个数）。 */
   const NEW_FOLDER_MAX_CHARS = 100;
   /** 抽屉列表里“磁盘上存着的会话”那一段的标题：历史抽屉与「项目与会话」上半共用。 */
@@ -6621,6 +6620,9 @@
     view.footer.classList.remove("pk-history-footer");
     const leftoverClose = view.root.querySelector(".pk-header-close");
     if (leftoverClose) { leftoverClose.remove(); }
+    // 文件夹那一层顶上那条工具条也一起摘（重开时由 paintFolderChrome 重新画）
+    const leftoverTools = view.panel ? view.panel.querySelector(".pk-folder-tools") : null;
+    if (leftoverTools) { leftoverTools.remove(); }
     // 筛选框收起来（骨架里默认就是藏着的，见 renderHtml）：只有真要筛的面板（选模型）画的时候才露
     if (view.searchWrap) { view.searchWrap.classList.add("hidden"); }
     // “关闭会话”的确认条只在列表里有效：列表一关就撤销（下次打开不要停在确认态）
@@ -10354,11 +10356,13 @@
         el.appendChild(main);
         el.title = item.folderPath || item.label || "";
       } else if (st.kind === "folders") {
+        // 这一层里只有目录是“清单上的一行”。宿主要求的那三件事（往上一层 / 新建文件夹 /
+        // 就用这个目录）不往清单里摆：往上走与新建是工具（画在顶上那条工具条里），
+        // “就用这个目录”是这一层的确认（画在底部主按钮上，见 paintFolderChrome）。
+        if (item.newFolder || item.icon === "up" || item.icon === "check") { return; }
         // 文件夹行按资源管理器的样子画：行首一格图标 + 名字一行。
         // 正在看的是哪个目录写在标题下面那行小字里（宿主的 subtitle），行里不再重复。
         el.classList.add("pk-history");
-        // 「新建文件夹」那一行：点它不是选什么，是就地摊一个输入框（见 showNewFolderInput）
-        if (item.newFolder) { el.classList.add("pk-newfolder"); }
         const main = document.createElement("div"); main.className = "pk-history-main";
         const iconHtml = FOLDER_ROW_ICONS[item.icon];
         if (iconHtml) {
@@ -10484,19 +10488,18 @@
     vscode.postMessage({ type: "pickerChoice", kind: "model", payload });
   }
   /**
-   * 「新建文件夹」那一行底下就地摊一个输入框（不关面板、不另开一层）：名字敲好回车才交给宿主去建
-   *（见 chatHost.ts 的 createFolderThenPick），Esc 或者点到别处就收起来，那一行自己留着随时能再点。
+   * 工具条上那颗「新建文件夹」：在清单最上面就地摊一个输入框（不关面板、不另开一层），
+   * 名字敲好回车才交给宿主去建（见 chatHost.ts 的 createFolderThenPick），Esc 或者点到别处就收起来。
    *
-   * 建在哪个目录跟着那一行走（item.folderPath，宿主给的绝对路径），界面不去解析标题下面那行小字。
+   * 建在哪个目录跟着宿主那一行走（item.folderPath，绝对路径），界面不去解析标题下面那行小字。
    * 输入框里那几下键不许冒到 document 上：面板那一层认 Esc 是“收起整个浮层”，在这里 Esc 只收这个框。
    * 建好 / 没建成时宿主都会重新列一遍这一层，面板整份重画，这个框跟着没了。
    */
   function showNewFolderInput(view, item) {
-    const row = view.body.querySelector(".pk-item.pk-newfolder");
-    if (!row) { return; }
-    // 已经摊着了：把光标放回去就行（再点一下那一行不该多摊一个框）
-    const there = row.nextElementSibling;
-    if (there && there.classList.contains("pk-newfolder-input-row")) { there.querySelector("input").focus(); return; }
+    if (!view.body) { return; }
+    // 已经摊着了：把光标放回去就行（再点一下那颗按钮不该多摊一个框）
+    const there = view.body.querySelector(".pk-newfolder-input-row input");
+    if (there) { there.focus(); return; }
     const holder = document.createElement("div");
     holder.className = "pk-item pk-history pk-newfolder-input-row";
     const main = document.createElement("div"); main.className = "pk-history-main";
@@ -10531,8 +10534,53 @@
     input.addEventListener("blur", dismiss);
     main.appendChild(input);
     holder.appendChild(main);
-    row.parentNode.insertBefore(holder, row.nextSibling);
+    // 摊在清单最上面（就在那条工具条底下）：新建出来的目录也在这一层里，眼睛不用找
+    view.body.insertBefore(holder, view.body.firstChild);
     input.focus();
+  }
+
+  /**
+   * 「选择文件夹」这一层的工具条与底部那两颗按钮（清单里只有目录，见 renderPickerRows）。
+   *
+   * 宿主照旧把「上一层 / 新建文件夹 / 就用这个目录」当三行发过来，这里只换它们长在哪儿：
+   *   · 上一层（包括 Windows 上回到盘符列表那一行）→ 工具条左边那颗 `↑`，悬停提示用宿主给的那句话；
+   *     最上层没有这一行，那颗就不露面；
+   *   · 新建文件夹 → 工具条右边那颗（加号 + 名字）；
+   *   · 就用这个目录 → 底部那颗主按钮（这一层读不出来时没有那一行，就只剩「取消」）。
+   * 三样都没有（盘符那一层）时整条工具条不画，免得白留一道线。
+   */
+  function paintFolderChrome(view) {
+    const st = view.state;
+    const panel = view.panel;
+    if (!panel) { return; }
+    const old = panel.querySelector(".pk-folder-tools");
+    if (old) { old.remove(); }
+    if (!st || st.kind !== "folders") { return; }
+    const up = st.items.find((it) => it.icon === "up") || null;
+    const add = st.items.find((it) => it.newFolder) || null;
+    if (!up && !add) { return; }
+    const tools = document.createElement("div");
+    tools.className = "pk-folder-tools";
+    if (up) {
+      const btn = document.createElement("button");
+      btn.type = "button"; btn.className = "pk-folder-up";
+      btn.title = up.label || "上一层";
+      btn.setAttribute("aria-label", up.label || "上一层");
+      btn.innerHTML = ICONS["arrow-up"];
+      btn.addEventListener("click", () => confirmPicker(up, view));
+      tools.appendChild(btn);
+    } else {
+      tools.appendChild(document.createElement("span"));   // 占着左边这一块，新建那颗仍然靠右
+    }
+    if (add) {
+      const btn = document.createElement("button");
+      btn.type = "button"; btn.className = "pk-folder-new";
+      btn.title = "在这个目录里新建一个文件夹";
+      btn.innerHTML = ICONS.add + "<span>新建文件夹</span>";
+      btn.addEventListener("click", () => showNewFolderInput(view, add));
+      tools.appendChild(btn);
+    }
+    panel.insertBefore(tools, view.subtitle.nextSibling);
   }
 
   function confirmPicker(item, view = modalView) {
@@ -10540,7 +10588,8 @@
     if (st.kind === "model") { submitModelPicker(view); return; }
     if (!item) { return; }
     const kind = st.kind;
-    // 「新建文件夹」那一行：点它就地摊一个输入框（不关面板、不另开一层），名字敲好回车才发给宿主。
+    // 工具条上那颗「新建文件夹」（清单里已经没有那一行了，见 paintFolderChrome）：
+    // 点它就摊一个输入框，名字敲好回车才发给宿主。
     if (item.newFolder) { showNewFolderInput(view, item); return; }
     // 常驻那一列里点一行 = “用一下”，不是“选完就走”：面板留着接着点下一行
     const closeFirst = () => { if (!view.keepOpen) { hidePicker(view); } };
@@ -11042,6 +11091,22 @@
         openEnv();
       });
       view.footer.appendChild(envBtn);
+    } else if (kind === "folders") {
+      // 文件夹那一层：底部就是这一层的两个决定 ——「取消」与「就在这里新建会话」。
+      // 后者用的还是宿主发来的「就用这个目录」那一行；这一层读不出来时没那一行，就只剩取消。
+      view.footer.classList.remove("hidden");
+      const cancelBtn = document.createElement("button");
+      cancelBtn.type = "button"; cancelBtn.className = "secondary"; cancelBtn.textContent = "取消";
+      cancelBtn.addEventListener("click", () => cancelPicker(view));
+      view.footer.appendChild(cancelBtn);
+      const use = view.state.items.find((it) => it.icon === "check");
+      if (use) {
+        const useBtn = document.createElement("button");
+        useBtn.type = "button"; useBtn.className = "primary"; useBtn.textContent = "就在这里新建会话";
+        useBtn.title = use.label || "";
+        useBtn.addEventListener("click", () => confirmPicker(use, view));
+        view.footer.appendChild(useBtn);
+      }
     } else if (toggle) {
       view.footer.classList.remove("hidden");
       const closeBtn = document.createElement("button"); closeBtn.className = "secondary"; closeBtn.textContent = "关闭";
@@ -11062,6 +11127,9 @@
     }
     if (toDock) { sidebarAsked = false; }
     syncSidebarLayout();
+    // 文件夹那一层的工具条（往上走 / 新建文件夹）：清单里只有目录，那两件事画在顶上（见 paintFolderChrome）；
+    // 换成别的浮层时顺手把它摘掉
+    paintFolderChrome(view);
     // 「项目与会话」按格画：两格都在时只动真的变了的那一格（见 paintWorkspacePanel）；其余面板整份画
     if (kind === "workspace") { paintWorkspacePanel(view); } else { renderPickerItems(view); }
     // 计时：若宿主回显了 t0，输出点击 → picker 可见的往返耗时（多 panel 卡顿排查用）

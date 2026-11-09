@@ -646,8 +646,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 起点给空串就是列盘符（Windows）/ 根目录。
      *
      * 每一项都带一个图标名（icon），界面照名字在行首画一颗（见 media/chat.js 的 FOLDER_ROW_ICONS）：
-     * "folder" 子目录、"up" 上一层（换一个盘也一样是往上走）、"check" 用这个目录、
-     * "newfolder" 新建文件夹（那一行不往回送选择，界面就地摊一个输入框，见 createFolderThenPick）。
+     * "folder" 子目录、"up" 上一层（换一个盘也一样是往上走）、"check" 用这个目录。
+     * 这三样并不都摆成清单行：`up` 与「新建文件夹」（newFolder: true、没有图标）是顶上工具条那两颗，
+     * `check` 是底部那颗主按钮，清单里只剩 `folder`（见 media/chat.js 的 paintFolderChrome）。
      * 图标写在数据里、不在文字前面拼符号：符号在有的字体下对不齐，也没法按名字换。
      *
      * @param clientId 这个浮层是哪块屏开的（它自己收自己的回复）。
@@ -675,7 +676,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 label: "新建文件夹",
                 file: "",
                 folderPath: listing.path,
-                icon: "newfolder",
                 newFolder: true,
             });
         }
@@ -689,6 +689,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             }
         }
         for (const d of listing.dirs) { items.push({ label: d.name, file: d.path, icon: "folder" }); }
+        // 这一层一个子目录都没有：清单里明说一句（上面那几件事现在画在工具条与底部，不在清单里，
+        // 这一格不说就是一片空白）。盘符那一层不算（它不是“某个目录里有什么”）。
+        if (!driveList && listing.dirs.length === 0) {
+            items.push({ label: "（这里没有子文件夹）", file: "" });
+        }
         if (items.length === 0) { items.push({ label: "（这里没有子文件夹）", file: "" }); }
         // 列不出来的原因（没权限、目录没了）写进标题里，人一眼知道为什么是空的。
         // 正在看的目录写在标题下面那行小字（subtitle）里：标题只报“在干啥”，

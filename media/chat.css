@@ -982,16 +982,36 @@
   .pk-host.pk-folders #pickerPanel { width: min(560px, 94vw); max-height: 76vh; }
   .pk-host.pk-folders .pk-header { align-items: center; padding: 8px 12px 2px; border-bottom: 0; }
   .pk-host.pk-folders .pk-header .pk-header-title { font-size: 13px; }
-  /* 这一格的分割线改挂在目录那条下面（标题与目录之间不再画线） */
+  /* 这一格的分割线改挂在目录那条下面（标题与目录之间不再画线）；
+     底下还跟着一条工具条时那条线由工具条来画（两条挨着就成了两道线） */
   .pk-host.pk-folders .pk-subtitle { padding-bottom: 8px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2)); }
+  .pk-host.pk-folders .pk-subtitle:has(+ .pk-folder-tools) { border-bottom: 0; }
+  /* 顶上那条工具条：左边一颗往上走，右边「新建文件夹」。清单里只有目录，这两件事是工具
+     （真正要“就这么定了”的那一下在底部那颗主按钮上，跟别的浮层一个规矩）。 */
+  .pk-host.pk-folders .pk-folder-tools {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 6px 12px; border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
+  }
+  .pk-host.pk-folders .pk-folder-tools button {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 8px; border-radius: 4px; cursor: pointer;
+    font: inherit; font-size: 12px; line-height: 1.3;
+    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.35));
+    background: transparent; color: var(--vscode-foreground, inherit);
+  }
+  .pk-host.pk-folders .pk-folder-tools button:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
+  /* 往上走那颗只有图标，两边少留一点（跟右边那颗带字的摆在一起时看着一样高） */
+  .pk-host.pk-folders .pk-folder-tools .pk-folder-up { padding: 3px 5px; }
+  .pk-host.pk-folders .pk-folder-tools button svg { width: 13px; height: 13px; display: block; opacity: 0.85; }
   .pk-host.pk-folders .pk-body { padding: 4px 0 8px; font-size: 13px; }
   .pk-host.pk-folders .pk-item { padding: 3px 12px; border-radius: 0; }
   /* 图标与名字挨得比抽屉里紧一点（抽屉的一行里还有颗状态点，这一行只有图标加名字） */
   .pk-host.pk-folders .pk-history-main { gap: 6px; }
-  /* 「新建文件夹」那一行底下摊开的输入框：这一层行矮（上下各 3px），框自己撑高一点才不夹着字；
-     左边也缩进到跟上面那些名字对齐（行首那颗图标 14px + 图标与名字之间 6px） */
-  .pk-host.pk-folders .pk-item.pk-newfolder-input-row { padding-left: 32px; }
-  .pk-host.pk-folders .pk-item.pk-newfolder-input-row .sn-rename { height: 20px; }
+  /* 工具条那颗「新建文件夹」摊出来的输入框：这一层行矮（上下各 3px），框自己撑高一点才不夹着字；
+     框往左探出去一点（比图标那列还往左 6px），里头的字才“跟下面那些名字对齐”
+     （行首图标 14px + 图标与名字之间 6px），字也没紧贴着边框 */
+  .pk-host.pk-folders .pk-item.pk-newfolder-input-row { padding-left: 26px; }
+  .pk-host.pk-folders .pk-item.pk-newfolder-input-row .sn-rename { height: 20px; padding: 0 6px; }
   /* ---- 列表上半段「正在对话」：现在开着的会话 ---- */
   /* 一行里：小点 · 名字 · 标记 · 关闭叉（叉在最右边，不会跟名字挤在一起）。 */
   .pk-host.pk-drawer .pk-item.pk-open { display: flex; align-items: center; gap: 4px; }
