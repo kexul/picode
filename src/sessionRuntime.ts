@@ -301,8 +301,6 @@ export class SessionRuntime {
      *
      *  想改回“带开头一小段”（点开就不用等那一下）把这个数调大就行，界面那一套两边都认。 */
     private static readonly DETAIL_PREVIEW_CHARS = 0;
-    /** 工具参数摘要里单个字段最多带多少字（够那行字用；整行还会再省略一次）。 */
-    private static readonly ARGS_SUMMARY_CHARS = 160;
     /** 裁下来的全文最多在内存里留多少（字符数）：超过就从最早留的开始丢（丢了的那段点开时取不到）。
      *  留得住长会话里最近几十轮就够：点开的是刚看到的那些，很久以前的点开时会说“取不到了”。 */
     private static readonly DETAIL_KEEP_CHARS = 4 * 1024 * 1024;
@@ -1605,9 +1603,12 @@ export class SessionRuntime {
     //   - 思考全文、工具输出：一个字都不发（只留“一共多少字 + 编号”），全文留在这边，
     //     界面上点开提示框时一次问回来
     //     （键是 `think:<名字>` 与 `result:<toolCallId>`，见 media/chat.js 的 clipOf / pumpClipDetails）；
-    //   - 工具参数：只带“一行字那么多”的摘要字段（命令、路径这些，每个字段最多 160 字，
-    //     write / edit 的正文整个不带），整份留在内存里、点开提示框再取（键是
-    //     `args:<toolCallId>`）——那行一直看得见的调用摘要（`$ 命令`）要用它。
+    //   - 工具参数：整份带上（命令要一个字不差：界面上那行一直看得见的调用摘要
+    //     `$ 命令` 就是它摆出来的），只有 write / edit 的正文与嵌套结构不带；
+    //     带不全的那一份整份留在内存里、点开提示框再取（键是 `args:<toolCallId>`）。
+    //     要省的是“看不见的输出”，输入本身不大（最大的那几样就是 write / edit 的正文，
+    //     已经整个不带了），按字数裁输入只会把命令裁成半截：界面上那行看着还有地方，
+    //     字却断在半路（截断发生在半路上，界面连省略号都没得写）。
     // 实时流与历史重放走的是同一套（实时在 onPiEvent / EditTracker，重放在 renderMessages）。
 
     /**
@@ -1622,14 +1623,16 @@ export class SessionRuntime {
     }
 
     /**
-     * 工具参数：只带“一行字那么多”的摘要字段，整份不发（全文留在内存里，点开提示框再取，
-     * 见 rememberDetail / loadDetails）。
+     * 工具参数：整份带上，一个字都不裁（点开提示框时就不用再取一遍）。
      *
-     * 为什么不能一个字段都不带：界面上那行**一直看得见**的调用摘要（正在跑的那一行
-     * `$ 命令`、标签提示里那一行、文件名）就是从参数里取出来的，不带就只剩一个工具名了。
-     * 所以按“一行字能放下的量”带：短字段原样，长字段裁到一行，嵌套结构不带；
-     * write / edit 的正文（content / oldText / newText）整个不带 —— 那些是几十上百 KB 的大头，
-     * 卡片上本来也有自己的 diff / 预览（预览要等点开提示框取回参数才画）。
+     * 界面上那行**一直看得见**的调用摘要（正在跑的那一行 `$ 命令`、标签提示里那一行、文件名）
+     * 就是从这些参数里取出来的：裁一半就是那行命令断在半路。要省的是看不见的输出
+     * （见上面的说明），输入不大，整份发。
+     *
+     * 带不全的只有两种：write / edit 的正文（content / oldText / newText，几十上百 KB，
+     * 卡片上本来也有自己的 diff / 预览）与嵌套结构（摘要那一行用不上）。
+     * 遇到这两种就把整份留在内存里、带上 `argsOmitted` 与 `detailKey`，界面点开提示框再取
+     * （见 rememberDetail / loadDetails）；一样都没落下的就不留，界面也不用再问。
      */
     public summaryArgs(toolCallId: string, args: unknown): {
         args?: Record<string, unknown>; argsOmitted?: number; detailKey?: string;
@@ -1637,21 +1640,20 @@ export class SessionRuntime {
         let full = "";
         try { full = JSON.stringify(args ?? {}); } catch { return {}; }
         if (!full || full === "{}") { return {}; }   // 没有参数：什么都不用带
-        const detailKey = `args:${toolCallId}`;
-        this.rememberDetail(detailKey, full);
         const summary: Record<string, unknown> = {};
+        let dropped = false;   // 有字段没带上（write / edit 的正文、嵌套结构）
         for (const [key, value] of Object.entries((args ?? {}) as Record<string, unknown>)) {
             // write / edit 的正文：几十上百 KB，界面上这两处都用不到（卡片有 diff / 预览）
-            if (SummaryOmittedArgKeys.has(key)) { continue; }
-            if (typeof value === "string") {
-                summary[key] = value.length > SessionRuntime.ARGS_SUMMARY_CHARS
-                    ? value.slice(0, SessionRuntime.ARGS_SUMMARY_CHARS)
-                    : value;
-            } else if (typeof value === "number" || typeof value === "boolean") {
+            if (SummaryOmittedArgKeys.has(key)) { dropped = true; continue; }
+            if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
                 summary[key] = value;
+            } else {
+                dropped = true;   // 嵌套结构（数组 / 对象）不带：摘要那一行用不上
             }
-            // 嵌套结构（数组 / 对象）不带：摘要那一行用不上
         }
+        if (!dropped) { return { args: summary }; }
+        const detailKey = `args:${toolCallId}`;
+        this.rememberDetail(detailKey, full);
         return { args: summary, argsOmitted: full.length, detailKey };
     }
 
