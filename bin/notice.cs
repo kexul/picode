@@ -138,11 +138,14 @@ static class Hub
         var tag = parts.Length > 5 ? Decode(parts[5]) : "";
 
         // 同一个会话反复推过来：换掉旧的（人看的是最新的那条）
-        CloseKey(key);
+        CloseKey(key, false);
         if (Cards.Count >= MaxCards)
         {
-            Cards[0].CloseNow();
+            // 挤掉最老的那张：告诉后端一声（它那边存着一份“屏幕上现在有哪几张”的镜像）
+            var oldest = Cards[0];
             Cards.RemoveAt(0);
+            oldest.CloseNow();
+            EmitClosed(oldest.Key);
         }
 
         var card = new NoticeCard(key, title, body, ask, tag);
@@ -166,7 +169,8 @@ static class Hub
     }
 
     /// <summary>收走某一标识的那一张（没有就什么也不做）。</summary>
-    private static void CloseKey(string key)
+    /// <param name="notify">后端要不要知道（人点叉 / 挤掉最老时要；后端自己下命令关时不要）。</param>
+    private static void CloseKey(string key, bool notify = false)
     {
         for (var i = 0; i < Cards.Count; i++)
         {
@@ -175,8 +179,26 @@ static class Hub
             Cards.RemoveAt(i);
             card.CloseNow();
             Arrange();
+            if (notify) { EmitClosed(key); }
             return;
         }
+    }
+
+    /// <summary>告诉后端：这张自己没了（点了叉 / 被挤掉）。</summary>
+    private static void EmitClosed(string key)
+    {
+        try
+        {
+            Console.Out.WriteLine("closed\t" + key);
+            Console.Out.Flush();
+        }
+        catch { /* 后端不在了：也不影响什么 */ }
+    }
+
+    /// <summary>卡片自己被点掉了（那颗叉）：跟后端说一声。</summary>
+    public static void CloseKeyFromCard(string key)
+    {
+        CloseKey(key, true);
     }
 
     public static void CloseAll()
@@ -632,7 +654,8 @@ sealed class NoticeCard : Form
         if (e.Button != MouseButtons.Left) { return; }
         if (closeRect.Contains(e.Location))
         {
-            Hub.Command("close\t" + Key);
+            // 人点了右上角那颗叉：这张自己没了，告诉后端一声（它那份镜像跟着删）
+            Hub.CloseKeyFromCard(Key);
             return;
         }
         var handler = Clicked;

@@ -115,33 +115,68 @@ export class DesktopNotice {
     private dead = false;
     /** 标准输出攒到这儿，一行一行拆（一段数据里可能是半行、也可能好几行）。 */
     private rest = "";
+    /**
+     * 屏幕上现在有哪几张：真事实在那支小程序里（它自己会因点叉、三张挤掉最老而收卡），
+     * 这里存一份镜像 —— 好让后端知道该不该写 close（没有那张还去写，会把已经退了的
+     * 小程序又拉起来），也好把屏幕上这几张一下全收掉。
+     * 键与顺序都跟那边一致：同一个标识再来一条是“换掉旧的”（删了再插到末尾），
+     * 超过三张时挤掉最老的那张。
+     */
+    private readonly shown = new Map<string, { ask: boolean; title: string }>();
+    /** 跟 bin/notice.cs 的 Hub.MaxCards 一个数：屏幕上最多同时几张。 */
+    private static readonly MAX_CARDS = 3;
 
-    constructor(private readonly options: DesktopNoticeOptions) {}
+    constructor(private readonly options: DesktopNoticeOptions = { log: () => { /* 默认不记 */ }, onClick: () => { /* 默认不管 */ } }) {}
 
     /**
      * 弹一张。同一个标识的卡片只换不堆（后来那条顶掉旧的）。
      * @param tag 卡片左上角那颗小标签写的字（设置里那行「标签」，空着就不挂标签）
      */
     public show(key: string, title: string, body: string, ask: boolean, tag = ""): void {
-        this.write(["show", key, ask ? "1" : "0", base64(title), base64(body), base64(tag)].join("\t"));
+        // 镜像先更新：同一个标识是“换掉旧的”（跟那边一样），超过三张挤掉最老的
+        this.shown.delete(key);
+        this.shown.set(key, { ask, title });
+        while (this.shown.size > DesktopNotice.MAX_CARDS) {
+            const oldest = this.shown.keys().next();
+            if (oldest.done) { break; }
+            this.shown.delete(oldest.value);
+        }
+        this.write(["show", key, ask ? "1" : "0", base64(title), base64(body), base64(tag)].join("\t"), true);
     }
 
-    /** 收走某一标识的那一张（没有就什么也不做）。 */
+    /**
+     * 收走某一标识的那一张（屏幕上本来就没有就什么也不做）。
+     *
+     * “本来就没有”这一条是故意的：没有那张还写过去的话，write 会把已经退了的小程序
+     * 又拉起来一支（它平时不在后台待着）。
+     */
     public close(key: string): void {
-        this.write("close\t" + key);
+        if (!this.shown.delete(key)) { return; }
+        this.write("close\t" + key, false);
     }
+
+    /** 把屏幕上还开着的全收掉（设置里关掉「弹窗通知」时用）。 */
+    public closeAll(): void {
+        if (this.shown.size === 0) { return; }
+        this.shown.clear();
+        this.write("closeall", false);
+    }
+
+    /** 屏幕上现在有哪几张（调试与验证用；键就是 show 时的那个）。 */
+    public shownKeys(): string[] { return Array.from(this.shown.keys()); }
 
     /** 后端要走了：把它也收掉（关了标准输入它自己退）。 */
     public dispose(): void {
+        this.shown.clear();
         const child = this.child;
         this.child = undefined;
         if (!child) { return; }
         try { child.stdin?.end(); } catch { /* 已经没了 */ }
     }
 
-    /** 写一行过去；还没起来就先把它起起来。 */
-    private write(line: string): void {
-        const child = this.ensure();
+    /** 写一行过去。@param spawn 没起来时要不要现在把它起起来（只有 show 要）。 */
+    private write(line: string, spawn: boolean): void {
+        const child = spawn ? this.ensure() : this.child;
         if (!child) { return; }
         try {
             child.stdin?.write(line + "\n");
@@ -198,7 +233,9 @@ export class DesktopNotice {
     }
 
     /**
-     * 收它说的话：一行一条 `click\t<标识>`（人点了卡片）。
+     * 收它说的话：一行一条。
+     *   click\t<标识>    人点了那张卡片（后端据此叫开着的网页切过去）
+     *   closed\t<标识>   那张自己没了（点了右上角那颗叉、或者三张挤掉最老）—— 后端那份镜像跟着删
      */
     private read(chunk: Buffer): void {
         this.rest += chunk.toString("utf8");
@@ -209,6 +246,7 @@ export class DesktopNotice {
             index = this.rest.indexOf("\n");
             const parts = line.split("\t");
             if (parts[0] === "click" && parts[1]) { this.options.onClick(parts[1]); }
+            if (parts[0] === "closed" && parts[1]) { this.shown.delete(parts[1]); }
         }
     }
 }

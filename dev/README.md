@@ -386,6 +386,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `visit.js` | `npm run web:shot` 的入口：按动作跑一遍并截图 |
 | `focusCheck.js` | 验“每块屏各看各的会话”（两块浏览页面 + 模拟的 VSCode 窗口）：`node dev/focusCheck.js` |
 | `trustedOrigin.js` | 验“页面是从 https 反代的地址打开的”（设置里 `webServer.trustedOrigins` 写下的来源放行、别人的照旧 403、反代后面页面照常收发、现签证书 + 本机起一个 https 反代来跑）：`node dev/trustedOrigin.js` |
+| `noticeMirror.js` | 验右下角那张提醒卡片在后端的这一份账：收一张“屏幕上本来就没有”的卡不许把已经退了的小程序再拉起来；收卡时推给别台的“收掉”要用**推的那一刻**的标签（中途改了设置里的标签也收得掉）；小程序自己收掉一张（三张挤掉最老；点叉得人去点，脚本点不了）要回报给后端，那份镜像跟着删。真起后端、真弹卡片（要 Windows + bin/notice.exe）：`node dev/noticeMirror.js` |
 | `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接 / 断线期间问的选择题 / 补不上时整屏重画只发最后一轮）：`node dev/reconnect.js` |
 | `deadScreen.js` | 验「谁在看这个会话」那一条：已经走掉的屏（标签页关了、页面离开了）不算在看 —— 页面还开着时 `clientsViewing` 里有它，离开以后立刻没了；问一句“要不要”当场按“否”回来，而不是让确认框白等满 2 分钟。走的是真后端后端与真页面（推送通道断开那一下）：`node dev/deadScreen.js` |
 | `mermaidCheck.js` | 验消息流里的 ```mermaid 画成图（各种图都出图、写坏的留代码块加一行说明、画图那个脚本出现图才去拉、中文节点名不被吞、换深色不重画就跟着变、面板那一份也画得出、页面不报错）：`node dev/mermaidCheck.js` |

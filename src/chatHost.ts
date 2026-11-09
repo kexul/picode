@@ -211,10 +211,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 别的机器推来的卡片，标识前面挂这个（本机会话的标识就是会话号本身）。 */
     private static readonly REMOTE_NOTICE_PREFIX = "remote:";
     /**
-     * 往别处推过“有事”的会话号：这些会话有事了、关掉了时还要再推一条“收掉”过去
-     * （那几台手上那张记的是这边的钥匙，这边怎么动都碰不到它，见 closeNotice）。
+     * 往别处推过“有事”的会话号 → 推的时候用的那个标签。
+     *
+     * 这些会话有事了、关掉了时还要再推一条“收掉”过去（那几台手上那张记的是
+     * “推方的标签 + 这边的会话号”，这边怎么动都碰不到它，见 closeNotice）。
+     * 标签要存推的那一刻的：那张卡片左上角挂的就是它，收的时候得用同一个 ——
+     * 中途在设置里改了标签，拿新的去收就永远对不上。
      */
-    private readonly pushedNoticeSessions = new Set<string>();
+    private readonly pushedNoticeSessions = new Map<string, string>();
 
     constructor(private readonly options: ChatHostOptions) {
         super("server");
@@ -808,10 +812,13 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private closeNotice(key: string): void {
         this.notice.close(key);
         // 推给别处的那几台也收掉：它们那张记的是“别台的标签 + 这边的会话号”，
-        // 这边这几件动作碰不到它，只能推一条“收掉”过去（见 remoteNotice 的 pushRemoteClose）
+        // 这边这几件动作碰不到它，只能推一条“收掉”过去（见 remoteNotice 的 pushRemoteClose）。
+        // 标签用推的时候那个（存着的），不能用现在的：中途改过设置里的标签就对不上了。
         if (key.startsWith(ChatHost.REMOTE_NOTICE_PREFIX)) { return; }
-        if (!this.pushedNoticeSessions.delete(key)) { return; }
-        for (const target of this.remoteTargets()) { void pushRemoteClose(target, displayName(), key); }
+        const label = this.pushedNoticeSessions.get(key);
+        if (label === undefined) { return; }
+        this.pushedNoticeSessions.delete(key);
+        for (const target of this.remoteTargets()) { void pushRemoteClose(target, label, key); }
     }
 
     /**
@@ -1193,6 +1200,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             }
         } else if (action === "machineLabel") {
             updateServerConfig({ label: String(value ?? "").trim() });
+        } else if (action === "notifyTurnEnd") {
+            // 这一行以前没接住，落到最后那个 else 去了：点「弹窗通知」实际拨的是
+            // 「启动时自动打开最近会话」，通知却一直是开的。
+            this.writeOption(ChatHost.KEY_NOTIFY_TURN_END, !this.getNotifyTurnEnd());
         } else if (action === "notifyPushTo") {
             // 填的是给人看的写法：逗号 / 空格 / 换行都算分隔；没写 http:// 的补上，
             // 没写端口的补上 Pi Chat 出厂那个（51883）——否则按 http 的默认端口 80 算，打不通。
@@ -1213,6 +1224,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         } else {
             this.writeOption(ChatHost.KEY_AUTO_LOAD_LAST, !this.getAutoLoadLast());
         }
+        // 「弹窗通知」关掉了：屏幕上已经弹着的几张也收掉。
+        //（以前关掉只管下一张，已经弹着的得等人自己点；卡片本来就不会到点自己消失。）
+        if (!this.getNotifyTurnEnd()) { this.notice.closeAll(); }
     }
 
     // ========================================================================
@@ -1900,8 +1914,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         for (const target of targets) {
             void pushRemoteNotice(target, notice);
         }
-        // 记着这个会话：它有事了、关掉了时，这几台上那张还得再推一条“收掉”
-        this.pushedNoticeSessions.add(sessionId);
+        // 记着这个会话：它有事了、关掉了时，这几台上那张还得再推一条“收掉”（标签也存这时候的）
+        this.pushedNoticeSessions.set(sessionId, notice.label);
         return true;
     }
 
@@ -2001,6 +2015,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         this.disposed = true;
         this.desktopLive.stop();
         this.notice.dispose();
+        this.pushedNoticeSessions.clear();
         this.disposeAllPickers();
         this.disposeAllCards();
         this.disposeAllConversations();
