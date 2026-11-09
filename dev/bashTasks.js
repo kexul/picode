@@ -107,7 +107,7 @@ module.exports = async (page) => {
                     stopLeft: stop ? Math.round(stop.getBoundingClientRect().left) : 0,
                     timeLeft: time ? Math.round(time.getBoundingClientRect().left) : 0,
                     tipClick: el.classList.contains("tip-click"),
-                    // 折了几行（按步折行，最多七行）+ 横向溢不溢出
+                    // 几行（一步一行）+ 横向溢不溢出
                     rows: text ? Math.round(text.offsetHeight / (parseFloat(getComputedStyle(text).lineHeight) || 13)) : 0,
                     overX: text ? text.scrollWidth - text.clientWidth : 0,
                     h: Math.round(r.height),
@@ -171,9 +171,9 @@ module.exports = async (page) => {
     if (s1.items[0].more && !/^\+\d+$/.test(s1.items[0].more)) { problems.push("「+N」的写法不对（实际 " + JSON.stringify(s1.items[0].more) + "）"); }
     if (!s1.items[0].tipClick) { problems.push("那一行该点得开（看整条命令）"); }
     if (s1.items[1].more !== "") { problems.push("只有一段的短命令后面不该挂「+N」（实际 " + JSON.stringify(s1.items[1].more) + "）"); }
-    // 写不完就按「步」折行（整步挪到下一行），最多七行，不横向溢出
+    // 一步一行（只有分隔符换行），一步太长就在行尾省掉，不横向溢出
     if (!s1.items.every((it) => it.rows >= 1 && it.rows <= 7 && it.overX <= 1)) {
-        problems.push("每行该按步折行、最多七行、不横向溢出（折了 " + s1.items.map((it) => it.rows).join("/") + " 行，横向多出来 " + s1.items.map((it) => it.overX).join("/") + "）");
+        problems.push("每行该一步一行、不横向溢出（折了 " + s1.items.map((it) => it.rows).join("/") + " 行，横向多出来 " + s1.items.map((it) => it.overX).join("/") + "）");
     }
     if (s1.items[1].rows !== 1) { problems.push("短命令该就一行（实际 " + s1.items[1].rows + " 行：" + s1.items[1].cmd + "）"); }
     if (!(s1.items[0].h > s1.items[1].h)) { problems.push("折成几行的那条该比一行的短命令高（" + s1.items[0].h + " vs " + s1.items[1].h + "）"); }
@@ -241,7 +241,7 @@ module.exports = async (page) => {
         + " 高 " + w.h + "，折了 " + w.rows + " 行，横向多出来 " + w.overX + "px");
     if (phone.rows !== 2) { problems.push("手机上也该有两条，实际 " + phone.rows); }
     if (w.right > phone.winW + 1) { problems.push("手机上那一块出屏了：最右 " + w.right + "、屏宽 " + phone.winW); }
-    if (!(w.rows >= 1 && w.rows <= 7) || w.overX > 1) { problems.push("手机上也该按步折行、最多七行、不横向溢出（折了 " + w.rows + " 行，横向多出来 " + w.overX + "px）"); }
+    if (!(w.rows >= 1 && w.rows <= 7) || w.overX > 1) { problems.push("手机上也该一步一行、不横向溢出（折了 " + w.rows + " 行，横向多出来 " + w.overX + "px）"); }
     if (w.h < 14) { problems.push("手机上那一行太矮了：高 " + w.h); }
     await page.shot("bash-6-phone.png");
 

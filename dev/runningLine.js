@@ -270,7 +270,7 @@ module.exports = async (page) => {
     console.log("   这一轮跑完（streamEnd）：" + show(s));
     if (s.hasNode) { problems.push("这一轮跑完了，这条的位置还留着：" + JSON.stringify(s)); }
 
-    // ---- 第十二幕：写不完的长命令折行（分隔符留在行尾，最多七行），不横向溢出；再长就切字、点得开看整条 ----
+    // ---- 第十二幕：只有分隔符换行（一步一行），一步太长就在行尾省掉（不折行）----
     // 同时跑几条也只露一条，所以分两步看：先投长命令（该折成两行）→ 又来一条短的（换成它、一行）。
     const LONG_CMD = "git log --oneline --all --graph --decorate --date=short --pretty=format:'%h %ad %an %s' -- media src | head -200 && npm run compile && npm run web:shot -- --width 900 --height 700";
     const wrapState = () => page.eval(`

@@ -367,12 +367,8 @@
      下面这几条 .tr-* 两处共用：「正在跑的那一条」（.tool-running-item）与消息流末尾的后台命令
      （.bash-run，见上面的 .bash-running）。 */
   .tool-running-item .tr-time, .bash-run .tr-time { flex: 0 0 auto; margin-left: auto; padding-left: 8px; opacity: 0.8; font-variant-numeric: tabular-nums; }
-  /* 这一条的字：一条链（命令那几段）下面再接正文（heredoc 里那段脚本）。
-     折行按「步」来：每一步（前面那个分隔符 + 那一段命令）整个装在一个 .tr-step 里，
-     一行装不下就把整步挪到下一行（不会把一段命令拆成两半）；只有某一步自己比一整行还长，
-     才在它内部折（flex 里 min-width: 0 让它可以缩）。
-     最多五行，多出来的由 chat.js 的 clampRunningText 收掉（从最后一步开始收，算进「+N」；
-     只剩一步还放不下就把它的字切掉补一个「…」），整条点开看。 */
+  /* 这一条的字：一条链，一步一块（.tr-step）。
+     只有分隔符会换行：每步是块级元素，所以下一个分隔符一来就另起一行；没有行数上限。 */
   .tool-running-item .tr-content, .bash-run .tr-content { flex: 1 1 auto; min-width: 0; }
   .tool-running-item .tr-text, .bash-run .tr-text { display: block; line-height: 1.45; min-width: 0; }
   /* 一步一行：有分隔符就换行（每步是一个块）。一步自己太长**不折行**，直接在行尾省掉（「…」），
