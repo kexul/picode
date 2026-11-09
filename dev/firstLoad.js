@@ -2,11 +2,17 @@
 /**
  * firstLoad —— 量“第一次打开页面”到底下了多少字节、花了多久（手机上第一次打开就是这条量法）。
  *
- *   node dev/firstLoad.js --session <某个 .jsonl> [--cpu 4]
+ *   node dev/firstLoad.js --session <某个 .jsonl> [--cpu 4] [--net 4g|fast3g|slow3g] [--warm]
+ *
+ * 加 --warm：先用同一份浏览器打开一次把缓存填上，再真打开一次记账 —— 量的是手机
+ * “第二次以后打开”（界面文件已经在缓存里）。
  *
  * 做法：把那个会话文件复制进一个临时会话目录，起真后端（真 pi，不发消息），
  * 先让后端把会话装进来，再用一个全新的浏览器 profile 打开页面（等于手机上第一次打开），
  * 用 CDP 的 Network 域记下每一个请求的字节数，记下到“能打字 / 历史画完”的时间。
+ *
+ * 不给 --net 时走本机 loopback，传输时间等于 0：那时报的字节还是真的，秒数只算 CPU 那一段。
+ * 要看“网速也占进去”的秒数就加 --net（见下面的 NET_PROFILES）。
  */
 const fs = require("fs");
 const os = require("os");
@@ -25,6 +31,26 @@ if (!session) {
     process.exit(1);
 }
 const cpu = Number(arg("cpu", 1));
+
+/**
+ * 限速档位（单位照 CDP 的规矩：吞吐是字节/秒，延迟是毫秒）。
+ * 数取自浏览器开发者工具那几档，加一档常见的 4G：
+ *   4g      下载 9 Mbps、上传 1.5 Mbps、延迟 85 ms
+ *   fast3g  下载 1.6 Mbps、上传 750 kbps、延迟 562 ms
+ *   slow3g  下载 400 kbps、上传 400 kbps、延迟 2000 ms
+ * 手机多半走 tailscale 之类的隧道过来，真实延迟比这几档还高一点。
+ */
+const NET_PROFILES = {
+    "4g": { latency: 85, down: 9e6 / 8, up: 1.5e6 / 8 },
+    "fast3g": { latency: 562, down: 1.6e6 / 8, up: 750e3 / 8 },
+    "slow3g": { latency: 2000, down: 400e3 / 8, up: 400e3 / 8 },
+};
+const netName = arg("net", "");
+const net = netName ? NET_PROFILES[netName.toLowerCase()] : null;
+if (netName && !net) {
+    console.error(`不认识的 --net ${netName}：可选 ${Object.keys(NET_PROFILES).join(" / ")}`);
+    process.exit(1);
+}
 
 const scratch = path.join(__dirname, ".scratch", "firstload");
 const work = path.join(scratch, "work");
@@ -144,11 +170,28 @@ async function main() {
     await warm.close();
 
     // 第二趟：全新浏览器（没有缓存）+ 网络记账，等于手机上第一次打开
+    // 给 --warm 时：先用同一份浏览器把缓存填上（这一次不记账），再真打开一次并记账
+    // —— 量的是“手机已经存过界面文件、又打开一次”那一趟。
     const open = await openPage({ url: "about:blank", width: 412, height: 915, timeoutMs: 90000 });
     const { page, cdp } = open;
     await cdp.send("Network.enable");
-    await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
+    const cacheWarm = flag("warm");
+    if (!cacheWarm) { await cdp.send("Network.setCacheDisabled", { cacheDisabled: true }); }
+    // 第一趟（把会话装进后端那趟）不限速：限速只管这一趟量的时候。
+    if (net) {
+        await cdp.send("Network.emulateNetworkConditions", {
+            offline: false,
+            latency: net.latency,
+            downloadThroughput: Math.round(net.down),
+            uploadThroughput: Math.round(net.up),
+        });
+    }
     if (cpu > 1) { await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpu }); }
+    if (cacheWarm) {
+        // 把界面文件先存进浏览器缓存（这一趟不记账：量的是下一次打开）
+        await cdp.send("Page.navigate", { url });
+        await page.waitReady(180000);
+    }
     // 记下每条推送消息的体量（按类型、按工具输出文字 / 图片分开算）：开了新页面再注入，
     // 保证在 chat.js 之前挂上监听。
     await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `
@@ -210,7 +253,10 @@ async function main() {
     const live = summarize(rows);
     const total = rows.reduce((n, r) => n + r.bytes, 0);
     console.log("");
-    console.log(`—— 第一次打开（全新浏览器、不走缓存${cpu > 1 ? "、CPU 降速 " + cpu + " 倍" : ""}）——`);
+    const netNote = net
+        ? `、限速 ${netName}（下 ${(net.down * 8 / 1e6).toFixed(1)} Mbps / 上 ${(net.up * 8 / 1e6).toFixed(1)} Mbps / 延迟 ${net.latency} ms）`
+        : "、不限速（本机 loopback：传输时间算 0）";
+    console.log(`—— 第一次打开（${cacheWarm ? "浏览器已经有缓存（手机第二次以后打开就是这条）" : "全新浏览器、不走缓存"}${cpu > 1 ? "、CPU 降速 " + cpu + " 倍" : ""}${netNote}）——`);
     console.log(`  从点开到能打字（输入框底下的胶囊 idle）：${(readyMs / 1000).toFixed(2)} 秒`);
     console.log(`  从点开到历史画完（${perf.msgs} 条气泡）：${(paintedMs / 1000).toFixed(2)} 秒`);
     console.log(`  HTML 解析完 ${perf.dcl} ms，load 事件 ${perf.load} ms，首屏绘制 ${perf.paints.join(" / ") || "无"}`);
