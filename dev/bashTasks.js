@@ -142,13 +142,13 @@ module.exports = async (page) => {
     if (!s1.items.every((it) => it.hasClock && it.handCount === 2)) {
         problems.push("每行头上该有一只钟（两根针，实际 " + JSON.stringify(s1.items.map((it) => it.handCount)) + " 根）");
     }
-    // 长针三十秒一圈、一格 12 度（steps(60)）：这个尺寸上慢慢扫看不出来，非得跳着走才看得出
-    if (!s1.items.every((it) => it.minName === "bash-clock-min" && it.minDur === "30s" && /steps\(60/.test(it.minTiming))) {
-        problems.push("长针该半秒跳一格、三十秒一圈（实际 " + (s1.items[0] || {}).minName + " / "
+    // 长针十五秒一圈、一格 12 度（steps(60)）：这个尺寸上慢慢扫看不出来，非得跳着走才看得出
+    if (!s1.items.every((it) => it.minName === "bash-clock-min" && it.minDur === "15s" && /steps\(60/.test(it.minTiming))) {
+        problems.push("长针该四分之一秒跳一格、十五秒一圈（实际 " + (s1.items[0] || {}).minName + " / "
             + (s1.items[0] || {}).minDur + " / " + (s1.items[0] || {}).minTiming + "）");
     }
-    if (!s1.items.every((it) => it.hourDur === "720s")) {
-        problems.push("短针该十二小时一圈（实际 " + (s1.items[0] || {}).hourDur + "）");
+    if (!s1.items.every((it) => it.hourDur === "360s")) {
+        problems.push("短针该六分钟一圈（实际 " + (s1.items[0] || {}).hourDur + "）");
     }
     // 针尖不沾圆：分针 4.2（笔帽再占 0.6），离圆内沿（5.8）还留着一截
     if (!s1.items.every((it) => it.minLen === 4.2 && it.hourLen === 2.1)) {
