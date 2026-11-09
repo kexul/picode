@@ -353,7 +353,7 @@
      或者这一轮跑完）时收掉。
      摘要本来只在提示框里，这里直接写出来：一颗「bash」看不出它在跑什么。
      命令整条摆出来（不藏）：切成几段摆成一条链，heredoc 的正文写在链下面缩进（见 chat.js 的
-     runningLineParts）；链写不完就在分隔符那儿折行（分隔符留在行尾，最多五行，点开这一行看整条），
+     runningLineParts）；命令一步一行（有分隔符就换行，分隔符留在行尾），一步太长才在它内部折（最多七行，点开这一行看整条），
      正文自己折行。
      左内边距 6px 跟工具标签自己的内外边距一样（见 .tool 的 padding）：两处的齿轮要在同一条竖线上。 */
   .tool-running { display: flex; flex-direction: column; gap: 2px; margin: 2px 0; padding: 0 14px; }
@@ -375,11 +375,12 @@
      最多五行，多出来的由 chat.js 的 clampRunningText 收掉（从最后一步开始收，算进「+N」；
      只剩一步还放不下就把它的字切掉补一个「…」），整条点开看。 */
   .tool-running-item .tr-content, .bash-run .tr-content { flex: 1 1 auto; min-width: 0; }
-  .tool-running-item .tr-text, .bash-run .tr-text {
-    display: flex; flex-wrap: wrap; align-items: baseline; line-height: 1.45;
-    min-width: 0; max-height: calc(1.45em * 7); overflow: hidden; overflow-wrap: anywhere;
+  .tool-running-item .tr-text, .bash-run .tr-text { display: block; line-height: 1.45; min-width: 0; }
+  /* 一步一行：有分隔符就换行（每步是一个块）。一步自己太长**不折行**，直接在行尾省掉（「…」），
+     整条在那个提示框里看 —— 一长串参数折成三四行比省掉更难认。 */
+  .tool-running-item .tr-step, .bash-run .tr-step {
+    display: block; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .tool-running-item .tr-step, .bash-run .tr-step { min-width: 0; white-space: normal; }
   /* 一步里的命令部分不自己缩到没有：放不下就整步换行（上面那条 min-width: 0 只管「一步比一行还长」那种） */
   .tool-running-item .tr-step > .tr-seg, .bash-run .tr-step > .tr-seg,
   .tool-running-item .tr-step > .tr-seg-dim, .bash-run .tr-step > .tr-seg-dim { overflow-wrap: anywhere; }

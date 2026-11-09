@@ -2142,7 +2142,7 @@
 
   // ==================== 后台命令（消息流末尾那几条）====================
   // 放到后台跑的命令写在消息流最末尾（末尾那颗胶囊上面），一条一行、就长成「正在跑的那一条」那样：
-  // 一只走着的钟 + 编号 + 命令 + 一颗「停」+ 已经跑了多久（耗时靠右），写不完的命令折行（分隔符留在行尾，最多七行，再多点开看整条）。
+  // 一只走着的钟 + 编号 + 命令 + 一颗「停」+ 已经跑了多久（耗时靠右），命令一步一行（有分隔符就换行，分隔符留在行尾），一步太长才在它内部折，最多七行，再多点开看整条。
   // 钟跟齿轮是两回事：齿轮转（「正在跑的那一条」上那颗）是「模型这会儿正忙着」；
   // 钟的针在走是「这条命令在后台自己跑，不挡你说话，跑完它自己把结果交回这个会话」。
   // 跑完的不列：那条结果会当成一条新消息交回会话，去消息流里看。
@@ -2227,7 +2227,6 @@
     }
     placeBashBlock(st);
     // 排到页面上以后才知道每条折了几行：裁到七行以内（多出来的算进「+N」）
-    for (const row of block.children) { clampRunningText(row); }
     startBashClock(st);
   }
 
@@ -2245,7 +2244,7 @@
 
   /**
    * 一块里的那一行：钟 + 编号 + 命令 + 一颗「停」+ 已经跑了多久，就一行。
-   * 跟「正在跑的那一条」同一个样子（齿轮换成钟，前面多一个编号）：写不完的命令折行（分隔符留在行尾，最多七行），
+   * 跟「正在跑的那一条」同一个样子（齿轮换成钟，前面多一个编号）：命令一步一行（有分隔符就换行，分隔符留在行尾）、一步太长才在它内部折（最多七行），
    * 耗时钉在右头不动（见 chat.css 里那几条 .tr-*）。
    */
   function bashRunRow(st, task) {
@@ -2263,7 +2262,13 @@
     const cmd = task.cmd || "";
     const shown = runningLineParts({ name: "bash", argStr: JSON.stringify({ command: cmd }), text: "$ " + cmd });
     fillRunningText(row, shown);
-    // 这一行点得开（跟「正在跑的那一条」一样）：折行之后点一下就把整条命令摆出来看。
+    if (shown.more) {
+      const more = document.createElement("span");
+      more.className = "tr-more";
+      more.textContent = shown.more;
+      row.appendChild(more);
+    }
+    // 这一行点得开（跟「正在跑的那一条」一样）：行尾省掉的那截点开就能看整条。
     row._tipCall = "$ " + cmd;
     row._tipBody = "";
     attachTagTipHandlers(row);
@@ -2952,7 +2957,7 @@
   // 整条（字与位置）在这一批过去时一并收掉：下面出了正文 / 问话卡片，或者这一轮跑完
   // （见 endRunningLine）。
   //
-  // 链写不完的（长命令行）：折行排出来（分隔符留在行尾，见 chat.css 的 .tr-text），最多七行，
+  // 链是一步一行（有分隔符就换行，分隔符留在行尾，见 chat.css 的 .tr-step）；一步太长就在行尾省掉，不折行，
   // 再多的就截断、末尾「…」，点开这一行看整条。heredoc 的正文自己折行，几行都摆在链下面。
   const RUNNING_LINE_SKIP = new Set([THINKING_NAME, "ask_choice"]);
   const RUNNING_CLOCK_MS = 200;     // 后面那个耗时的刷新快慢（一秒里刷五回就够看着在走）
@@ -3267,7 +3272,7 @@
   }
 
   /** 把 runningLineParts 那份东西画进 host 里（先清空）：一条链 + 缩进的正文。
-   *  链写不完时自己折行（分隔符留在行尾，最多七行，见 chat.css 的 .tr-text 与 clampRunningText）。 */
+   *  链是一步一行（有分隔符就换行）；一步太长就在行尾省掉（看 chat.css 的 .tr-step）。 */
   function fillRunningText(host, parts) {
     // 只换掉上一次画的那一块（齿轮 / 钟 / 编号都还挂在 host 上，不能一起清掉）
     const old = host.querySelector(":scope > .tr-content");
@@ -3317,68 +3322,6 @@
       p.textContent = "$ ";
       host.insertBefore(p, content);
     }
-    host._hiddenSteps = parts.hidden || 0;
-  }
-
-  // ==================== 最多摆几行 ====================
-  // 写了 5 步以上本来就已经算进「+N」了（见 RUNNING_CHAIN_MAX）；这里再管一道高度：
-  // 折行之后最多摆 RUNNING_TEXT_ROWS 行，再多就从末尾往前收（收掉的算进「+N」）——
-  // 命令总是从头看起，收了哪几步点开这一行就能看全。
-  // 只剩一步还是太高，就把那一步的字切掉、末尾补一个「…」。
-  // 为什么用 JS 量而不是 CSS 的 line-clamp：折行是按「步」摆的（flex），line-clamp 只管得了纯文字。
-  const RUNNING_TEXT_ROWS = 7;
-
-  /** 把这一条裁到最多 RUNNING_TEXT_ROWS 行（调用的时候它得已经排到页面上：量的是真高度）。 */
-  function clampRunningText(item) {
-    const line = item ? item.querySelector(".tr-text") : null;
-    if (!line) { return; }
-    const lh = parseFloat(getComputedStyle(line).lineHeight) || 13;
-    const maxH = lh * RUNNING_TEXT_ROWS;
-    let cut = 0;
-    for (;;) {
-      if (line.scrollHeight <= maxH + 1) { break; }
-      const steps = Array.from(line.querySelectorAll(".tr-step"));
-      if (!steps.length) { break; }
-      if (steps.length > 1) {
-        steps[steps.length - 1].remove();   // 从末往前收（先露开头那几步）
-        cut += 1;
-        continue;
-      }
-      chopStepToFit(steps[0], line, maxH);   // 就一步，还是太高：切字补「…」
-      break;
-    }
-    const total = (item._hiddenSteps || 0) + cut;
-    let more = item.querySelector(".tr-more");
-    if (total > 0) {
-      if (!more) {
-        more = document.createElement("span");
-        more.className = "tr-more";
-        const anchor = item.querySelector(".tr-act") || item.querySelector(".tr-time");
-        item.insertBefore(more, anchor);
-      }
-      more.textContent = "+" + total;
-    } else if (more) {
-      more.remove();
-    }
-  }
-
-  /** 只剩一步还比七行高：把它的字从末尾切掉，末尾补一个「…」（整条点开看）。
-   *  二分一下要留多少个字（一条两千字的命令也不会切两千次）。 */
-  function chopStepToFit(step, line, maxH) {
-    const t = step.querySelector(".tr-seg, .tr-seg-dim");
-    if (!t) { return; }
-    const full = t.textContent;
-    const fits = (n) => {
-      t.textContent = full.slice(0, n) + "…";
-      return line.scrollHeight <= maxH + 1;
-    };
-    if (!fits(0)) { return; }
-    let lo = 0, hi = full.length;
-    while (lo < hi) {
-      const mid = Math.ceil((lo + hi) / 2);
-      if (fits(mid)) { lo = mid; } else { hi = mid - 1; }
-    }
-    t.textContent = full.slice(0, lo) + "…";
   }
 
   /** 现在还有哪些调用在跑、各自那一行摘要与开始时刻（一条一行，按页面上标签的顺序）。
@@ -3452,6 +3395,13 @@
     item.insertAdjacentHTML("afterbegin", GEAR_SVG);
     const shown = runningLineParts(call);
     fillRunningText(item, shown);
+    // 超过 RUNNING_CHAIN_MAX 步的就是「+N」（完整命令点开这一行看）
+    if (shown.more) {
+      const more = document.createElement("span");
+      more.className = "tr-more";
+      more.textContent = shown.more;
+      item.appendChild(more);
+    }
     if (shown.trimmed || call.name === "bash") {
       // 这一行点得开：折行最多七行，被收掉的那几步点开一下就能看全。
       // 字没裁的也挂上：一行字看不全的时候（滚到一半）点一下就到手了。
@@ -3486,8 +3436,6 @@
     }
     el.appendChild(item);
     placeRunningLine(st, el);
-    // 排到页面上以后才知道折了几行：裁到七行以内（多出来的算进「+N」，见 clampRunningText）
-    clampRunningText(item);
     startRunClock(st);
   }
 

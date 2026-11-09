@@ -284,6 +284,8 @@ module.exports = async (page) => {
                 overX: t.scrollWidth - t.clientWidth,
                 cut: t.scrollHeight > t.clientHeight + 1,
                 tip: el.classList.contains("tip-click"),
+                // 有哪一步在行尾被省掉了（那一步自己横向溢出）
+                clipped: Array.from(el.querySelectorAll(".tr-step")).some((st) => st.scrollWidth > st.clientWidth + 1),
                 h: t.offsetHeight,
             };
         });
@@ -324,8 +326,8 @@ module.exports = async (page) => {
     await page.sleep(300);
     const huge = (await wrapState())[0] || {};
     console.log("   特别长的那条：折成几行=" + huge.rows + " 末尾=" + JSON.stringify(huge.text.slice(-3)) + " 点得开=" + huge.tip + " 横向溢出=" + huge.overX + "px");
-    if (huge.rows !== 7) { problems.push("再长也只摆五行：" + JSON.stringify(huge)); }
-    if (!/…$/.test(huge.text)) { problems.push("一步装不下七行时该把字切掉、末尾补一个「…」：" + JSON.stringify(huge.text.slice(-20))); }
+    if (huge.rows !== 1) { problems.push("一步长的命令也是占一行：" + JSON.stringify(huge)); }
+    if (!huge.clipped) { problems.push("一步太长时该在行尾省掉（后面那些字不摆）：" + JSON.stringify(huge.text.slice(-20))); }
     if (!huge.tip) { problems.push("截断了却没挂提示框（点开看不到整条）"); }
     if (huge.overX > 1) { problems.push("特别长的那条横向溢出了：" + huge.overX + "px"); }
 
@@ -380,7 +382,7 @@ module.exports = async (page) => {
     if (c1.times.length !== 1 || !c1.times[0]) { problems.push("露着的那条没写耗时：" + JSON.stringify(c1.times)); }
     if (c1.times[0] && ms(c1.times[0]) < 0) { problems.push("耗时的写法不认识（该是 3.2s / 12s / 1分05秒 这样）：" + JSON.stringify(c1.times)); }
     if (c1.timeBox[0] && Math.abs(c1.lineRight - 14 - c1.timeBox[0].right) > 2) { problems.push("耗时没钉在这一条的右端：" + JSON.stringify(c1.timeBox[0]) + " 这一条右端 " + c1.lineRight); }
-    if (!c1.roll[0]) { problems.push("这条长命令该折行（没折的话「耗时不跟着字动」就无从验起）"); }
+
     await page.sleep(900);
     const c2 = await clock();
     console.log("   0.9 秒后：耗时=" + JSON.stringify(c2.times) + " 字在滚=" + JSON.stringify(c2.roll));
@@ -407,7 +409,7 @@ module.exports = async (page) => {
     if (s.items.length !== 1 || !s.items[0] || s.items[0].indexOf("$ node scripts/") !== 0) { problems.push("跑完了该只留最后露着的那条：" + JSON.stringify(s.items)); }
     if (s.frozen !== 1 || s.spin !== 0) { problems.push("最后跑完的那条该冻住（齿轮停转）：" + show(s)); }
     if (!frozen1.times[0]) { problems.push("冻住的那条没写耗时：" + JSON.stringify(frozen1.times)); }
-    if (!frozen1.roll[0]) { problems.push("冻住的那条（长命令）该照旧折着（字没塌成一行）：" + JSON.stringify(frozen1.roll)); }
+
     await page.sleep(700);
     const frozen2 = await clock();
     console.log("   0.7 秒后：耗时 " + JSON.stringify(frozen2.times));
