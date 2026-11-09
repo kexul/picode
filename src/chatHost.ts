@@ -755,10 +755,11 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
 
     /**
      * 弹一张提醒卡片。
-     * 左上角那颗小标签写的是设置里那项「标签」（空着就是电脑名）：一眼看出这张是这台弹的。
+     * 左上角那颗小标签默认写设置里那项「标签」（空着就是电脑名）：一眼看出这张是这台弹的。
+     * @param tag 换个标签写（别的机器推来的那张写来源那台，见 acceptRemoteNotice）
      */
-    private showNotice(key: string, title: string, body: string, ask: boolean): void {
-        this.notice.show(key, title, body, ask, displayName());
+    private showNotice(key: string, title: string, body: string, ask: boolean, tag = displayName()): void {
+        this.notice.show(key, title, body, ask, tag);
     }
 
     /** 收走某个会话那一张卡片（它说上话了、被关掉了、那道题答完了）。 */
@@ -1832,7 +1833,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     public acceptRemoteNotice(notice: RemoteNotice): void {
         if (!this.notifyTurnEndEnabled()) { return; }
         const key = ChatHost.REMOTE_NOTICE_PREFIX + notice.label + ":" + notice.sessionId;
-        this.showNotice(key, notice.label + " · " + notice.name, notice.text ?? "", notice.kind === "ask");
+        // 标签写来源那台（家里），标题就只是那个会话的名字：标签与标题各说一件事，不重复
+        this.showNotice(key, notice.name, notice.text ?? "", notice.kind === "ask", notice.label);
         this.log(`[提醒] 弹了一张（别的机器推来的）：${notice.label} · ${notice.name}`);
     }
 
