@@ -13116,10 +13116,21 @@
     if (st.redrawTimer) { clearTimeout(st.redrawTimer); st.redrawTimer = null; }
     dropRunningLine(st);   // 那条「正在跑」的定时器与耗时那只钟（见 startRunClock）一并停掉
     for (const tg of st.pendingToolTags.values()) { clearInterval(tg._timer); }
+    const wasActive = activeId === id;
     st.viewEl.remove();
     sessions.delete(id);
     sessionDrafts.delete(id);
-    if (activeId === id) { activeId = null; syncJumpBottom(st); syncComposerButtons(); }
+    if (wasActive) {
+      // 这个会话没了（别的窗口关的 / 自己点的叉）：长在它身上的那两块也跟着收起来。
+      // 不收的话屏幕上就留着一份“这个会话的文件”：看文件的弹窗、改动层，点回滚没人接
+      // （那个会话在后端已经不在了，消息被丢掉，看着就是“点了没反应”）。
+      closeFileViewer();
+      closeChangeSheet();
+      fileTabsBySession.delete(id);
+      activeId = null;
+      syncJumpBottom(st);
+      syncComposerButtons();
+    }
   }
 
   // ==================== 工具调用耗时（侧边栏底部那颗「统计」）====================

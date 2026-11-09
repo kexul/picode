@@ -386,6 +386,7 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 | `visit.js` | `npm run web:shot` 的入口：按动作跑一遍并截图 |
 | `focusCheck.js` | 验“每块屏各看各的会话”（两块浏览页面 + 模拟的 VSCode 窗口）：`node dev/focusCheck.js` |
 | `trustedOrigin.js` | 验“页面是从 https 反代的地址打开的”（设置里 `webServer.trustedOrigins` 写下的来源放行、别人的照旧 403、反代后面页面照常收发、现签证书 + 本机起一个 https 反代来跑）：`node dev/trustedOrigin.js` |
+| `closeSessionFiles.js` | 验「会话没了，长在它身上的那两块跟着收起来」：开着看文件的弹窗时把会话关掉（别的窗口关的、或自己点的叉），弹窗跟着收 —— 不收的话屏幕上留着一份点不动的它，尤其那份 diff 横条上的「回滚」：那个会话在后端已经不在了，点下去没人接：`npm run web:shot -- --fake-pi --script dev/closeSessionFiles.js` |
 | `escPriority.js` | 验「Esc 归谁」那张表（现在只有 media/chat.js 的 escTopLayer 一处写）：设置面板开着时 Esc 只收设置、工具耗时 / 工具两个弹窗开着时 Esc 只收弹窗（这两个以前会顺手中止正在跑的那一轮），文件搜索叠在浮层上时第一下收搜索、第二下收浮层，什么也没开着时照旧中止这一轮：`FAKEPI_THINK_MS=5000 npm run web:shot -- --fake-pi --width 1200 --height 800 --script dev/escPriority.js` |
 | `stateApply.js` | 验页面上那份会话状态更新时的三条正经路（都是“只有一个入口”的事）：会话列表说“在跑”时要跟“这一轮开始”走同一个入口、把上一轮那颗绿点清掉；补完更早的历史以后“这是老消息”的标记要复位（不然之后新长出来的工具调用被当成老消息，「正在跑的那一条」末尾不写耗时）；关掉一个还挂着「后台任务」的会话，它那只每半秒走一次的钟要跟着停（以前没清，一直空转）：`npm run web:shot -- --fake-pi --script dev/stateApply.js` |
 | `pickerStray.js` | 验浮层在两件“没人应答”的事上不再各说各话：窄窗里收一份「项目与会话」推送时界面会顺手回一句 `pickerCancel kind:"workspace"`，以前它能把这块屏上正开着的**别的**浮层（模型选择器）一并放掉 —— 选择器还摆着、点下去没人接；现在回复要对得上它自己开的那一个。另一件：断线时后端把浮层按取消放行（不然等的人干等 120 秒），界面上那块还摆着，重连时后端说一句它才真的收：`node dev/pickerStray.js` |
