@@ -10532,6 +10532,7 @@
             hasMore: !!g.hasMore,
             loading: false,
             loaded: true,
+            healed: new Set(),
           });
         }
       }
@@ -10575,6 +10576,10 @@
       out.push(it);
       if (!groupExpanded(it.file)) { continue; }
       const g = groupState(st, it.file);
+      // 自检：这一组里开着的会话，只要有一个已经有会话文件、手上的清单里却没有，就说明这份清单
+      // 是它落盘之前取的（那会儿它还没有文件），重扫一遍——不然那个会话在「正在对话」里有、
+      // 在这一组里永远没有（重开面板才看得到）。
+      if (fetch && g.loaded && !g.loading && groupMissesOpenSession(it.file, g)) { g.loaded = false; }
       // 这一组还没取过（刚展开、或者面板刚重推一份）：现在去要第一条
       if (fetch && !g.loaded && !g.loading) { requestGroupPage(view, it.file, 0); }
       for (const row of g.items) {
@@ -10592,6 +10597,25 @@
       if (g.hasMore) { out.push({ __section: "groupMore", section: it.section, groupPath: it.file }); }
     }
     return out;
+  }
+
+  /**
+   * 这一组里有没有“开着、已经有会话文件、手上的清单里却没有”的会话。
+   * 有：说明这份清单比那个会话文件还早（或者这一屏漏看了“它落盘”那一下），得重扫一遍。
+   * 同一条（组 + 文件）只自愈一次：那一行也可能只是排在第二页、还没取回来，不能一直重取。
+   */
+  function groupMissesOpenSession(dir, g) {
+    if (!g.healed) { g.healed = new Set(); }
+    const have = new Set((g.items || []).map((row) => normPathKey(row.file || "")).filter(Boolean));
+    for (const s of sessions.values()) {
+      const file = s.sessionFile || "";
+      if (!file || !s.cwd || !samePath(s.cwd, dir)) { continue; }
+      const key = normPathKey(file);
+      if (!key || have.has(key) || g.healed.has(key)) { continue; }
+      g.healed.add(key);
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -10619,7 +10643,7 @@
     const key = normPathKey(path);
     let g = st.groups.get(key);
     if (!g) {
-      g = { items: [], nextOffset: 0, hasMore: false, loading: false, loaded: false, timer: null };
+      g = { items: [], nextOffset: 0, hasMore: false, loading: false, loaded: false, timer: null, healed: new Set() };
       st.groups.set(key, g);
     }
     return g;
@@ -11499,6 +11523,9 @@
         } else if (s.name) {
           st.title = s.name;
         }
+        // 这一批之前它在界面上叫什么：改了名 / 自动起了标题的话，右边那一组里那一行的字也得跟着换
+        //（那一行的名字是扫会话文件读的，得让那一组重扫一遍，见下面 touchedCwds）
+        const labelBefore = sessionLabel(st);
         st.parentId = s.parentId || null;
         // pi 起的标题（没有就空串）；界面上显示名字的地方一律走 sessionLabel()
         st.piTitle = typeof s.title === "string" ? s.title : "";
@@ -11534,6 +11561,8 @@
         st.cwd = typeof s.cwd === "string" ? s.cwd : "";
         // 新会话 / 头一回落盘 / 换了会话文件：它所在那个工作区那一组的历史清单得重扫了
         if (fileBefore !== st.sessionFile) { touchedCwds.push(st.cwd); }
+        // 名字变了（手动改名、自动起标题）：那一行上写的字是扫会话文件读的，不重扫还是旧的
+        if (labelBefore !== sessionLabel(st)) { touchedCwds.push(st.cwd); }
         // 这一批状态是权威的（重连 / 刷新 / 别的窗口动过）：末尾那颗胶囊跟着重算一次
         syncEndHint(st);
         // 整屏重画收尾也走这儿：重放出来末尾那颗「补来的思考」跟当场生成时一样并回去
