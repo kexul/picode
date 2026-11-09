@@ -28,6 +28,7 @@ import { findListedFile } from "./fileSearch";
 import type { SessionChanges } from "./gitChanges";
 import { readRemoteNotice, type RemoteNotice } from "./remoteNotice";
 import { changedCharRanges, diffRows, type LineRanges } from "./wordDiff";
+import { isStrippable, stripForWire } from "./stripText";
 
 /**
  * PiChatWebServer —— 独立后端的网页服务：一个地址，手机和电脑都看这一份会话。
@@ -395,6 +396,8 @@ export class PiChatWebServer {
     private readonly backlogBytes = STREAM_BACKLOG_BYTES;
     /** 压缩结果缓存：界面文件的内容没变时不用重压（键是"压缩方式@文件名@修改标记"，见 sendMedia）。 */
     private readonly compressCache = new Map<string, Buffer>();
+    /** 去过注释的那份界面文件（文件没变就一直用它，见 wireBytes）。 */
+    private readonly wireCache = new Map<string, { stamp: string; data: Buffer }>();
     /** 本次监听开始服务的时刻（`/health` 报出去；重启会更新）。 */
     private startedAt = 0;
     private settings: WebServerSettings = { enabled: false, port: 0, host: "0.0.0.0", trustedOrigins: [] };
@@ -826,11 +829,28 @@ export class PiChatWebServer {
         const stamp = mediaStamp(this.mediaDir, name);
         fs.readFile(path.join(this.mediaDir, name), (err, data) => {
             if (err) { this.sendText(req, res, 404, "没有这个资源。"); return; }
-            this.writeBody(req, res, 200, data, {
+            this.writeBody(req, res, 200, this.wireBytes(name, data, stamp), {
                 "Content-Type": contentTypeOf(name),
                 "Cache-Control": cacheable ? "public, max-age=31536000, immutable" : "no-store",
             }, stamp ? `${name}@${stamp}` : undefined);
         });
+    }
+
+    /**
+     * 发出去的这份字节：界面文件里的脚本与样式先去掉注释（理由与规则见 src/stripText.ts）。
+     * 同一个文件只去一次（内存里留着）；文件变了就重新去。
+     */
+    private wireBytes(name: string, data: Buffer, stamp: string): Buffer {
+        if (!isStrippable(name)) { return data; }
+        const cached = this.wireCache.get(name);
+        if (cached && cached.stamp === stamp) { return cached.data; }
+        const text = data.toString("utf8");
+        const out = Buffer.from(stripForWire(name, text), "utf8");
+        // 去完反倒变大（不可能，但真出怪事就别用）：照原样发
+        const result = out.length < data.length ? out : data;
+        if (this.wireCache.size > 16) { this.wireCache.clear(); }
+        this.wireCache.set(name, { stamp, data: result });
+        return result;
     }
 
     /**

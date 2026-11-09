@@ -6,6 +6,7 @@ import { renderHTML } from "./renderHtml";
 import { mediaVersion } from "./mediaVersion";
 import { chatUiFileOfRole, chatUiFilesOfRole } from "./chatUiFiles";
 import { readServerConfig } from "./serverConfig";
+import { stripForWire } from "./stripText";
 
 /**
  * pageHtml —— 生成对话界面的整页 HTML：同一份骨架、同一份清单，两种装法。
@@ -23,7 +24,8 @@ import { readServerConfig } from "./serverConfig";
 /** 读 media/ 下某个文件的文本；读不到就当空（只少一块样式/脚本，界面仍旧起得来）。 */
 function readMedia(mediaDir: string, name: string): string {
     try {
-        return fs.readFileSync(path.join(mediaDir, name), "utf8");
+        // 发出去的都先去掉注释（源码不动；理由与规则见 src/stripText.ts）
+        return stripForWire(name, fs.readFileSync(path.join(mediaDir, name), "utf8"));
     } catch { /* 见上 */ }
     return "";
 }
