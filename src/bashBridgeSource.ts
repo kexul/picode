@@ -39,6 +39,11 @@
  * 模型要是写个 sleep 60 干等，结果就被压在队列里陪着一起等（2026-10-31 踩过：
  * 后台命令 21 秒就跑完了，模型 sleep 60 硬等到第 66 秒才拿到结果）。
  *
+ * 话说了两遍它照旧干等（2026-11-09 又碰到：起了后台任务，又发一条 sleep 150; tail 日志），
+ * 所以现在有两道关，认出来就不给跑（判据与措辞照 pi-famulus 那套）：
+ *   命令里干等（sleep 10 秒以上、或循环体里带 sleep）、以及「刚看过又没新东西」的空查。
+ * 挡下来只回一句话，不结束这一轮：它该把这一轮说完，等结果自己交回来。
+ *
  * 用 String.raw 包着：里面的反斜杠原样保留。
  */
 import { BASH_FRAME_PREFIX } from "./bashProtocol";
@@ -70,7 +75,58 @@ const BACKGROUND_NOTE = ${JSON.stringify(promptText(over, "toolBash"))};
  */
 const NO_WAIT_NOTE = "放到后台以后不用等结果：你可以接着去干别的，或者直接把这一轮说完结束；"
     + "它跑完的结果会当成一条新消息交回本会话（开头是「后台命令 #编号 跑完了」）。"
-    + "别用 sleep 之类的命令干等，也别反复用 bash_tasks 查 —— 你干等的时候结果只能排在后面，等多久就白等多久。";
+    + "别用 sleep 之类的命令干等，也别反复用 bash_tasks 查 —— 你干等的时候结果只能排在后面，等多久就白等多久。"
+    + "真在命令里干等的（sleep 10 秒以上、或者循环里带 sleep）会被挡回来，这一条不会跑；"
+    + "刚看过一次、它又没出新东西的时候再查，也会被挡回来。";
+
+/**
+ * 命令里干等的那一关：认出来就不跑。
+ *
+ * 光靠说明书没用（这一条已在上面 NO_WAIT_NOTE 与工具说明里写过两遍，模型照旧拿 sleep 凑时间），
+ * 只能不给它跑。判据照 pi-famulus 的 wait-guard：sleep 秒数到 10，或者循环体里带 sleep；
+ * 引号里、heredoc 正文里、注释里的不算（先剥掉再判），免得 python - <<EOF … EOF 或者
+ * ansible -a '…' 这种被误伤。那边还拦「甩手」（孤零零的 &、nohup、setsid），咱这次不管。
+ */
+const WAIT_SLEEP_MIN_S = 10;
+const WAIT_SLEEP = /\bsleep\s+(\d+(?:\.\d+)?)/g;
+const WAIT_SLEEP_LOOP = /\b(while|until|for)\b[\s\S]*?\bdo\b(?:(?!\bdone\b)[\s\S])*\bsleep\b/;
+
+/** 把本地 shell 不当命令执行的部分去掉：heredoc 正文、引号里的、注释。 */
+function shellWords(command: string): string {
+    let s = command.replace(/<<-?\s*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n\s*\2\s*(?=\n|$)/g, "<<heredoc");
+    s = s.replace(/'[^']*'/g, "''").replace(/"(?:\\.|[^"\\])*"/g, '""');
+    s = s.replace(/(^|\s)#[^\n]*/g, "$1");
+    return s;
+}
+
+/** 这条命令是在干等吗？是的话回「等的是什么」，不是就空串。 */
+function waitReason(command: string): string {
+    const words = shellWords(command);
+    if (WAIT_SLEEP_LOOP.test(words)) { return "循环里带 sleep"; }
+    for (const m of words.matchAll(WAIT_SLEEP)) {
+        if (Number(m[1]) >= WAIT_SLEEP_MIN_S) { return "sleep " + m[1] + " 秒"; }
+    }
+    return "";
+}
+
+/** 拦下来的那两句话（原文在 promptText.ts 的 guardWait / guardPoll，人能改）。 */
+const GUARD_WAIT_TEXT = ${JSON.stringify(promptText(over, "guardWait"))};
+const GUARD_POLL_TEXT = ${JSON.stringify(promptText(over, "guardPoll"))};
+
+/** 把模板里的 {{名字}} 换成值（跟 promptText.ts 的 renderPrompt 一个意思，这边没法 import 那边）。 */
+function fillText(template: string, vars: Record<string, string>): string {
+    return template.replace(/\{\{\s*([^{}\s]+)\s*\}\}/g, (whole, name: string) => {
+        const value = vars[name];
+        return value === undefined ? whole : value;
+    });
+}
+
+/** 上次用 bash_tasks 看某条任务时它的日志多大（认出「空查」用）。 */
+const lookedAt = new Map<number, number>();
+
+function logSize(log: string): number {
+    try { return statSync(log).size; } catch { return 0; }
+}
 
 /** 往 stderr 写一行暗号（插件在读）。 */
 function emit(payload: Record<string, unknown>): void {
@@ -456,6 +512,11 @@ const launched = new Map<string, Task>();
 
 export default function bashBridge(pi: any): void {
     settings = loadSettings(pi);
+    // 用户新说了一句话：之前看过的就不再算「刚看过」，让它能再查一次（人可能就是在问「怎么样了」）
+    pi.on("message_end", (event: any) => {
+        const role = event && event.message ? event.message.role : "";
+        if (role === "user") { lookedAt.clear(); }
+    });
     const cwd = process.cwd();
     const base = createBashTool(cwd, {
         operations: {
@@ -565,6 +626,16 @@ export default function bashBridge(pi: any): void {
         },
         async execute(id: string, params: any, signal: any, onUpdate: any, ctx: any) {
             const background = params && params.background === true;
+            const command = params && typeof params.command === "string" ? params.command : "";
+            const waited = waitReason(command);
+            if (waited) {
+                // 不跑：这条命令的意义就是等，而等是白等（见文件开头那段）。也不进 pending：
+                // 没起进程，就没什么可"转到后台"的
+                return {
+                    content: [{ type: "text", text: fillText(GUARD_WAIT_TEXT, { 原因: waited }) }],
+                    details: { blocked: "wait", reason: waited },
+                };
+            }
             pending.push({ id, background });
             let result: any;
             try {
@@ -661,6 +732,19 @@ export default function bashBridge(pi: any): void {
                     content: [{ type: "text", text: "#" + no + " 停掉了（连它派出来的进程一起）。" }],
                     details: { id: no, status: "stopped" },
                 };
+            }
+            // 空查那一关：还在跑、且从上次看它到现在日志一个字节都没长，就不给看（见文件开头那段）。
+            // 第一次看、出过新东西、以及跑完的，都照常给。
+            if (task.status === "running") {
+                const nowSize = logSize(task.log);
+                const before = lookedAt.get(no);
+                if (before !== undefined && nowSize === before) {
+                    return {
+                        content: [{ type: "text", text: fillText(GUARD_POLL_TEXT, { 编号: String(no) }) }],
+                        details: { blocked: "poll", id: no, status: task.status },
+                    };
+                }
+                lookedAt.set(no, nowSize);
             }
             const tail = readTail(task.log, 16 * 1024);
             const lines: string[] = [];
