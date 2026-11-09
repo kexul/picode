@@ -988,6 +988,10 @@
   .pk-host.pk-folders .pk-item { padding: 3px 12px; border-radius: 0; }
   /* 图标与名字挨得比抽屉里紧一点（抽屉的一行里还有颗状态点，这一行只有图标加名字） */
   .pk-host.pk-folders .pk-history-main { gap: 6px; }
+  /* 「新建文件夹」那一行底下摊开的输入框：这一层行矮（上下各 3px），框自己撑高一点才不夹着字；
+     左边也缩进到跟上面那些名字对齐（行首那颗图标 14px + 图标与名字之间 6px） */
+  .pk-host.pk-folders .pk-item.pk-newfolder-input-row { padding-left: 32px; }
+  .pk-host.pk-folders .pk-item.pk-newfolder-input-row .sn-rename { height: 20px; }
   /* ---- 列表上半段「正在对话」：现在开着的会话 ---- */
   /* 一行里：小点 · 名字 · 标记 · 关闭叉（叉在最右边，不会跟名字挤在一起）。 */
   .pk-host.pk-drawer .pk-item.pk-open { display: flex; align-items: center; gap: 4px; }

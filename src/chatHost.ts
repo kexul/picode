@@ -34,7 +34,7 @@ import {
     rememberProjectDir,
     type ProjectDirEntry,
 } from "./sessionStore";
-import { listDirectories } from "./dirBrowse";
+import { createSubdirectory, listDirectories } from "./dirBrowse";
 import { findFileContents, findFileNames, findPathCandidates } from "./fileSearch";
 import { ChatBroadcaster } from "./chatBroadcaster";
 import { displayName, machineName } from "./pageHtml";
@@ -646,12 +646,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 起点给空串就是列盘符（Windows）/ 根目录。
      *
      * 每一项都带一个图标名（icon），界面照名字在行首画一颗（见 media/chat.js 的 FOLDER_ROW_ICONS）：
-     * "folder" 子目录、"up" 上一层（换一个盘也一样是往上走）、"check" 用这个目录。
+     * "folder" 子目录、"up" 上一层（换一个盘也一样是往上走）、"check" 用这个目录、
+     * "newfolder" 新建文件夹（那一行不往回送选择，界面就地摊一个输入框，见 createFolderThenPick）。
      * 图标写在数据里、不在文字前面拼符号：符号在有的字体下对不齐，也没法按名字换。
      *
      * @param clientId 这个浮层是哪块屏开的（它自己收自己的回复）。
+     * @param problem 上一趟没办成的那件事（比如新建文件夹没建成）：写在标题里的那句原因。
      */
-    public async showFolderPicker(dir: string, clientId: string = this.currentPageId): Promise<void> {
+    public async showFolderPicker(dir: string, clientId: string = this.currentPageId, problem?: string): Promise<void> {
         const listing = await listDirectories(dir);
         // 判"这是盘符列表"只认空路径：dirBrowse 把盘根（D:\）也标成 roots，
         // 但那是个真目录（可以选它当项目目录，也是上一层能到的地方），不能跟盘符列表混为一谈。
@@ -665,6 +667,16 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 file: ChatHost.USE_DIR_ROW,
                 folderPath: listing.path,
                 icon: "check",
+            });
+            // 新建文件夹：点这一行，界面在它底下就地摊一个输入框（不另开一层也不占别处），
+            // 名字敲好回车才发 `newFolder` 回来（见 createFolderThenPick）。
+            // 目录跟着这一行走（folderPath），界面不用去解析标题下面那行小字。
+            items.push({
+                label: "新建文件夹",
+                file: "",
+                folderPath: listing.path,
+                icon: "newfolder",
+                newFolder: true,
             });
         }
         if (listing.parent) {
@@ -683,7 +695,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         // 路径再长也不会把标题顶成两行。
         const title = driveList
             ? "选择盘"
-            : (listing.error ? `选择文件夹（${listing.error}）` : "选择文件夹");
+            : (problem ? `新建文件夹（${problem}）`
+                : (listing.error ? `选择文件夹（${listing.error}）` : "选择文件夹"));
         // 盘符列表没有路径可报，写一句“此电脑”——跟 Windows 资源管理器里那一层的叫法一致。
         const subtitle = driveList ? "此电脑" : listing.path;
         // 不给筛选框：一层目录就几行，用上下键挑名字比打字快，框还占一截地方。
@@ -698,6 +711,24 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             return;
         }
         await this.showFolderPicker(choice.file, clientId);
+    }
+
+    /**
+     * 「选择文件夹」那一层里新建一个目录（界面发来 `newFolder`：名字是在那一行里现敲的）。
+     *
+     * 建好就进到那个新目录里去：人建它多半就是要拿它当工作目录，进去以后第一行就是
+     * 「就用这个目录」。没建成（重名、名字不能用、没权限）就还留在原处、把原因写在标题上，
+     * 人再点一次那一行重敲。两条路都重新列一遍（跟点一个目录进去一样：浮层收掉再开一份新的）。
+     */
+    private async createFolderThenPick(msg: any, clientId: string): Promise<void> {
+        const parent = typeof msg.path === "string" ? msg.path : "";
+        const name = typeof msg.name === "string" ? msg.name : "";
+        const made = await createSubdirectory(parent, name);
+        if (!made.path) {
+            await this.showFolderPicker(parent, clientId, made.error);
+            return;
+        }
+        await this.showFolderPicker(made.path, clientId);
     }
 
     // ========================================================================
@@ -1442,6 +1473,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 // 工作区那块的「加载更多」：再送一批（一次 4 个）。
                 // dock = 点它的那颗在不在常驻那一列（掉了就照原样重摊一份）。
                 void this.loadMoreWorkspaces(msg.dock === true);
+                return true;
+            case "newFolder":
+                // 「选择文件夹」那一层里新建一个目录：名字在那一行里现敲，目录（path）也跟着那一行。
+                void this.createFolderThenPick(msg, this.currentPageId);
                 return true;
             case "newSessionInWorkspace":
                 // 工作区那一行行尾的加号：就在那一行的目录里开新会话。

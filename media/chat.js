@@ -66,8 +66,11 @@
     // 停止小方块：跟上面两颗一样大（12px），不然它看着比暂停粗一圈
     "stop-small": '<svg width="12" height="12" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><rect x="3.4" y="3.4" width="9.2" height="9.2" rx="1.2"/></svg>',
   };
-  /** 文件夹选择器里行首那颗图标：名字由宿主给（见 chatHost.ts 里 showFolderPicker 的 items）。 */
-  const FOLDER_ROW_ICONS = { check: ICONS.check, up: ICONS["arrow-up"], folder: ICONS.folder };
+  /** 文件夹选择器里行首那颗图标：名字由宿主给（见 chatHost.ts 里 showFolderPicker 的 items）。
+   *  newfolder = 「新建文件夹」那一行（用那颗加号，不另画一张图）。 */
+  const FOLDER_ROW_ICONS = { check: ICONS.check, up: ICONS["arrow-up"], folder: ICONS.folder, newfolder: ICONS.add };
+  /** 「新建文件夹」那个输入框最多收几个字（跟后端 dirBrowse.ts 那道上限同一个数）。 */
+  const NEW_FOLDER_MAX_CHARS = 100;
   /** 抽屉列表里“磁盘上存着的会话”那一段的标题：历史抽屉与「项目与会话」上半共用。 */
   const HISTORY_SECTION = "历史会话";
   const inputEl = document.getElementById("input");
@@ -10354,6 +10357,8 @@
         // 文件夹行按资源管理器的样子画：行首一格图标 + 名字一行。
         // 正在看的是哪个目录写在标题下面那行小字里（宿主的 subtitle），行里不再重复。
         el.classList.add("pk-history");
+        // 「新建文件夹」那一行：点它不是选什么，是就地摊一个输入框（见 showNewFolderInput）
+        if (item.newFolder) { el.classList.add("pk-newfolder"); }
         const main = document.createElement("div"); main.className = "pk-history-main";
         const iconHtml = FOLDER_ROW_ICONS[item.icon];
         if (iconHtml) {
@@ -10478,11 +10483,65 @@
     hidePicker(view);
     vscode.postMessage({ type: "pickerChoice", kind: "model", payload });
   }
+  /**
+   * 「新建文件夹」那一行底下就地摊一个输入框（不关面板、不另开一层）：名字敲好回车才交给宿主去建
+   *（见 chatHost.ts 的 createFolderThenPick），Esc 或者点到别处就收起来，那一行自己留着随时能再点。
+   *
+   * 建在哪个目录跟着那一行走（item.folderPath，宿主给的绝对路径），界面不去解析标题下面那行小字。
+   * 输入框里那几下键不许冒到 document 上：面板那一层认 Esc 是“收起整个浮层”，在这里 Esc 只收这个框。
+   * 建好 / 没建成时宿主都会重新列一遍这一层，面板整份重画，这个框跟着没了。
+   */
+  function showNewFolderInput(view, item) {
+    const row = view.body.querySelector(".pk-item.pk-newfolder");
+    if (!row) { return; }
+    // 已经摊着了：把光标放回去就行（再点一下那一行不该多摊一个框）
+    const there = row.nextElementSibling;
+    if (there && there.classList.contains("pk-newfolder-input-row")) { there.querySelector("input").focus(); return; }
+    const holder = document.createElement("div");
+    holder.className = "pk-item pk-history pk-newfolder-input-row";
+    const main = document.createElement("div"); main.className = "pk-history-main";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "sn-rename";        // 跟那一行改名共用一个样子（见 chat.css 的 .sn-rename）
+    input.placeholder = "新文件夹的名字";
+    input.maxLength = NEW_FOLDER_MAX_CHARS;
+    input.spellcheck = false;
+    // 框里点、选字、双击都不算“选了那一行”
+    ["click", "dblclick", "mousedown", "pointerdown"].forEach((type) => {
+      input.addEventListener(type, (e) => { e.stopPropagation(); });
+    });
+    // 收起这个框（Esc、点到别处、宿主重画这一层都走这里）。那个输入框正拿着焦点，
+    // 把它从树上摘下来这一下本身会触发 blur，又回到这里一次：记一笔，只收一次。
+    let closed = false;
+    const dismiss = () => {
+      if (closed) { return; }
+      closed = true;
+      if (holder.parentNode) { holder.parentNode.removeChild(holder); }
+    };
+    let sent = false;
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); dismiss(); return; }
+      if (e.key !== "Enter" || sent) { return; }
+      e.preventDefault(); e.stopPropagation();
+      const name = input.value.trim();
+      if (!name) { return; }   // 空着回车 = 什么也不做（框还在这儿，接着敲）
+      sent = true;             // 宿主回来以前不再发：一格名字不该建出两个目录
+      vscode.postMessage({ type: "newFolder", path: item.folderPath || "", name });
+    });
+    input.addEventListener("blur", dismiss);
+    main.appendChild(input);
+    holder.appendChild(main);
+    row.parentNode.insertBefore(holder, row.nextSibling);
+    input.focus();
+  }
+
   function confirmPicker(item, view = modalView) {
     const st = view.state; if (!st) { return; }
     if (st.kind === "model") { submitModelPicker(view); return; }
     if (!item) { return; }
     const kind = st.kind;
+    // 「新建文件夹」那一行：点它就地摊一个输入框（不关面板、不另开一层），名字敲好回车才发给宿主。
+    if (item.newFolder) { showNewFolderInput(view, item); return; }
     // 常驻那一列里点一行 = “用一下”，不是“选完就走”：面板留着接着点下一行
     const closeFirst = () => { if (!view.keepOpen) { hidePicker(view); } };
     if (st.toggle || item.behavior === "toggle") {

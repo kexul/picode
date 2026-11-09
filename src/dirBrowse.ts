@@ -1,5 +1,5 @@
 /**
- * 列目录：给"选工作目录"那套界面用。
+ * 列目录、新建一个子目录：给"选工作目录"那套界面用。
  *
  * 这一层故意不碰 vscode、也不碰网页服务，只认文件系统，于是 VS Code 里、
  * 独立后端里也能直接用同一份逻辑。
@@ -121,6 +121,46 @@ async function listChildren(target: string): Promise<DirListing> {
     if (!atTop) listing.parent = path.dirname(resolved);
     if (truncated) listing.error = `子目录太多了，只列出前 ${MAX_DIRS} 个`;
     return listing;
+}
+
+/** 新建一个子目录的结果：建好了给它的绝对路径，没建成给一句能读的话。 */
+export interface NewDirResult {
+    path?: string;
+    error?: string;
+}
+
+/** 一个名字最多这么长（整条路径的上限另有系统管，这里只挡一眼就知道不对的超长名字）。 */
+const MAX_NAME_CHARS = 100;
+
+/**
+ * 在一个目录下新建一个子目录（「选择文件夹」那一层里那颗「新建文件夹」）。
+ *
+ * 名字只认"一层目录名"：空白的、`.` / `..`、带斜杠的（想一次建两层）都不收——
+ * 这一颗等于资源管理器里那颗「新建文件夹」，不是 mkdir -p。只建这一层、不递归：
+ * 父目录刚才还在、这会儿没了就老实报错，别顺手替人补出一整条路来。
+ *
+ * 出错不往外抛，跟列目录一个规矩：对界面来说"这个名字用不了"是正常结果，
+ * 那句话写在 error 里，界面把它写在浮层标题上。
+ */
+export async function createSubdirectory(parent: string, rawName: string): Promise<NewDirResult> {
+    const name = rawName.trim();
+    if (!parent.trim()) { return { error: "得先有一个目录" }; }
+    if (!name) { return { error: "名字不能是空的" }; }
+    if (name === "." || name === "..") { return { error: "这个名字不能用" }; }
+    if (/[\\/]/.test(name)) { return { error: "名字里不能有斜杠" }; }
+    if (name.length > MAX_NAME_CHARS) { return { error: `名字太长了（最多 ${MAX_NAME_CHARS} 个字）` }; }
+
+    const target = path.join(parent, name);
+    try {
+        await fs.promises.mkdir(target);
+    } catch (err: any) {
+        const code = err && err.code;
+        if (code === "EEXIST") { return { error: "这里有同名的了" }; }
+        if (code === "EACCES" || code === "EPERM") { return { error: "没有权限在这里建目录" }; }
+        if (code === "ENOENT") { return { error: "这个目录已经不在了" }; }
+        return { error: `没有建成（${reasonText(err)}）` };
+    }
+    return { path: target };
 }
 
 /** 列出某个目录下的子目录；target 传空串表示列这台机器的根（Windows 是各个盘，其它系统是 /）。 */
