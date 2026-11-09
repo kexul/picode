@@ -11801,7 +11801,11 @@
         st.parentId = s.parentId || null;
         // pi 起的标题（没有就空串）；界面上显示名字的地方一律走 sessionLabel()
         st.piTitle = typeof s.title === "string" ? s.title : "";
-        st.streaming = !!s.streaming;
+        // 这一轮在不在跑：变了就走 setStreaming —— 它顺带收掉「正在跑的那一条」、
+        // 灭掉那颗绿点、补上这一轮没画的那一截。以前这里直接赋值，断线期间跑完再回来，
+        // 那条冻住的命令还挂在消息流末尾。
+        const incomingStreaming = !!s.streaming;
+        if (st.streaming !== incomingStreaming) { setStreaming(st, incomingStreaming); }
         st.bashRunning = !!s.bashRunning;
         const incomingActivity = s.activity;
         st.activity = incomingActivity === "working" || incomingActivity === "thinking" || incomingActivity === "tool" || incomingActivity === "idle"
@@ -12579,6 +12583,10 @@
       }
       case "historyBatchEnd":
         flushHistoryBatch(t, msg.hasMore === true, typeof msg.hidden === "number" ? msg.hidden : 0);
+        // 补完了：这个会话又回到“眼下正在跑”的那一边。不回复这一句的话，fromHistory 就一直
+        // 是 true——之后新长出来的工具调用会被当作老消息（不记开始时刻，「正在跑的那一条」
+        // 末尾不写耗时，几条同时跑时也认不准该露哪一条）。
+        t.fromHistory = false;
         // 历史补完：末尾那颗胶囊重新算一次（补进来的老消息在顶上，不影响它）
         syncEndHint(t);
         break;
@@ -13072,6 +13080,14 @@
     cancelFlush(st);
     if (st.viewRaf) { cancelAnimationFrame(st.viewRaf); st.viewRaf = 0; }
     if (st.viewTimer) { clearTimeout(st.viewTimer); st.viewTimer = 0; }
+    // 这几只定时器以前没清：后台命令那只看“那一块还在不在”，而 viewEl.remove() 只把整棵树
+    // 从文档上摘下来、它爸还在 —— 于是关掉一个带后台命令的会话，那只钟每半秒空转一辈子；
+    // 整屏重画那只 8 秒后会把已经关掉的会话重新造出来（见 finishRedraw → flushReplayBuf）；
+    // 搬老消息、换那颗小图形形象的两只同理。
+    stopBashClock(st);
+    if (st.trimTimer) { clearTimeout(st.trimTimer); st.trimTimer = 0; }
+    if (st.actTimer) { clearTimeout(st.actTimer); st.actTimer = 0; }
+    if (st.redrawTimer) { clearTimeout(st.redrawTimer); st.redrawTimer = null; }
     dropRunningLine(st);   // 那条「正在跑」的定时器与耗时那只钟（见 startRunClock）一并停掉
     for (const tg of st.pendingToolTags.values()) { clearInterval(tg._timer); }
     st.viewEl.remove();
