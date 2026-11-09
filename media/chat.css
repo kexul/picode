@@ -98,7 +98,7 @@
 
   /* 后台命令那一块（消息流最末尾，见 chat.js 的 renderBashBlock）：一条一行，就长成
      「正在跑的那一条」那样 —— 钟 + 编号 + 命令 + 一颗「停」+ 已经跑了多久（耗时靠右），
-     一行放不下的字自己横向滚（那几条 .tr-* 见下面「正在跑的那一条」那一节，两处共用一套）。
+     写不完的命令折行（那几条 .tr-* 见下面「正在跑的那一条」那一节，两处共用一套）。
      钟跟齿轮是两件事：齿轮转 = 模型这会儿正忙着，你插不进话；钟的针在走 = 这条命令在后台
      自己跑，不挡你说话，跑完它自己把结果交回这个会话。 */
   .bash-running { display: flex; flex-direction: column; gap: 2px; margin: 2px 0; padding: 0 14px; }
@@ -353,7 +353,8 @@
      或者这一轮跑完）时收掉。
      摘要本来只在提示框里，这里直接写出来：一颗「bash」看不出它在跑什么。
      命令整条摆出来（不藏）：切成几段摆成一条链，heredoc 的正文写在链下面缩进（见 chat.js 的
-     runningLineParts）；链那一行放不下的字自己横向滚（见下面），正文自己折行。
+     runningLineParts）；链写不完就在分隔符那儿折行（分隔符留在行尾，最多五行，点开这一行看整条），
+     正文自己折行。
      左内边距 6px 跟工具标签自己的内外边距一样（见 .tool 的 padding）：两处的齿轮要在同一条竖线上。 */
   .tool-running { display: flex; flex-direction: column; gap: 2px; margin: 2px 0; padding: 0 14px; }
   .tool-running-item { display: flex; align-items: flex-start; gap: 4px; min-width: 0; padding-left: 6px; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; opacity: 0.75; }
@@ -362,28 +363,39 @@
   .bash-run .bash-clock { margin-top: 1px; }
   /* 跑完的那一条：齿轮停住（这一条上那颗是「在不在跑」的指示），字与耗时都留着不动 */
   .tool-running-item.done .tool-icon { animation: none; }
-  /* 字自己滚的时候，后面那个耗时不跟着动：它钉在这一条的末尾（margin-left: auto 推到右边），
-     不缩水（flex: 0 0 auto），所以字滚它的、数字坐它的。
+  /* 耗时不跟着字动：它钉在这一条的末尾（margin-left: auto 推到右边），不缩水（flex: 0 0 auto），
+     所以字折行它的、数字坐在右上角。
      下面这几条 .tr-* 两处共用：「正在跑的那一条」（.tool-running-item）与消息流末尾的后台命令
      （.bash-run，见上面的 .bash-running）。 */
   .tool-running-item .tr-time, .bash-run .tr-time { flex: 0 0 auto; margin-left: auto; padding-left: 8px; opacity: 0.8; font-variant-numeric: tabular-nums; }
   /* 这一条的字：一条链（命令那几段）下面再接正文（heredoc 里那段脚本）。
-     链那一行只有一行，放不下时自己横向滚（见下面）；正文自己折行，不参合滚。 */
+     折行按「步」来：每一步（前面那个分隔符 + 那一段命令）整个装在一个 .tr-step 里，
+     一行装不下就把整步挪到下一行（不会把一段命令拆成两半）；只有某一步自己比一整行还长，
+     才在它内部折（flex 里 min-width: 0 让它可以缩）。
+     最多五行，多出来的由 chat.js 的 clampRunningText 收掉（从最后一步开始收，算进「+N」；
+     只剩一步还放不下就把它的字切掉补一个「…」），整条点开看。 */
   .tool-running-item .tr-content, .bash-run .tr-content { flex: 1 1 auto; min-width: 0; }
-  .tool-running-item .tr-text, .bash-run .tr-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tool-running-item .tr-text, .bash-run .tr-text {
+    display: flex; flex-wrap: wrap; align-items: baseline; line-height: 1.45;
+    min-width: 0; max-height: calc(1.45em * 7); overflow: hidden; overflow-wrap: anywhere;
+  }
+  .tool-running-item .tr-step, .bash-run .tr-step { min-width: 0; white-space: normal; }
+  /* 一步里的命令部分不自己缩到没有：放不下就整步换行（上面那条 min-width: 0 只管「一步比一行还长」那种） */
+  .tool-running-item .tr-step > .tr-seg, .bash-run .tr-step > .tr-seg,
+  .tool-running-item .tr-step > .tr-seg-dim, .bash-run .tr-step > .tr-seg-dim { overflow-wrap: anywhere; }
   /* 链上的几段：`$` 提示符、段与段之间的分隔符（&& | ; 照原样写）、只看一眼不改东西的那几段（字淡）。
      淡只改深浅、一个字也不藏：以前是拿这套判断把「不重要的那几段」藏起来的，藏错过好几回
      （`git log; rm -rf dist; npm run build` 只写了 git log），现在判错了也就是深浅不对。
      分的是「只读 / 会改东西」（见 chat.js 的 isReadOnlySegment）：会改的那些才该被看见，
      认不准的一律不淡（淡了容易看漏）。 */
-  .tool-running-item .tr-prompt, .bash-run .tr-prompt { opacity: 0.45; }
-  .tool-running-item .tr-sep, .bash-run .tr-sep { opacity: 0.4; padding: 0 3px; }
+  .tool-running-item .tr-prompt, .bash-run .tr-prompt { flex: 0 0 auto; opacity: 0.45; margin-top: 0; }
+  .tool-running-item .tr-sep, .bash-run .tr-sep { opacity: 0.4; }
   .tool-running-item .tr-seg-dim, .bash-run .tr-seg-dim { opacity: 0.55; }
   /* heredoc 的正文：缩进一格挂在链下面，字淡一点；一行太长就自己折行 */
   .tool-running-item .tr-body, .bash-run .tr-body { padding-left: 15px; line-height: 1.5; }
   .tool-running-item .tr-body > div, .bash-run .tr-body > div { opacity: 0.6; white-space: pre-wrap; overflow-wrap: anywhere; }
   /* 一长串命令有没摆出来的段（段太多 / 正文太长）时，后面跟一个「+N」（见 runningLineParts）：
-     灰一点、不跟着字横向滚，也不缩水 —— 一眼就知道还有没写出来的，整条在那个提示框里看。 */
+     灰一点、不缩水 —— 一眼就知道还有没写出来的，整条在那个提示框里看。 */
   .tool-running-item .tr-more { flex: 0 0 auto; opacity: 0.6; font-size: 0.92em; }
   /* 这一条是 bash 命令时，右边多出来那颗「放后台」（见 chat.js 的 syncRunningLine）：
      点了就把这条命令转到后台，不在这儿等它跑完。它排在耗时左边：字 | 按钮 | 耗时（靠右）。 */
@@ -395,22 +407,6 @@
   }
   .tool-running-item .tr-act:hover, .bash-run .tr-act:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.2)); }
   .tool-running-item .tr-act:disabled, .bash-run .tr-act:disabled { opacity: 0.45; cursor: default; }
-  /* 一行放不下的（长命令行）：字自己横向滚，只往一个方向 —— 从头滚到末尾，到末尾停一下、
-     再从开头来（不回程）。滚多远（--tr-shift）、一趟多久（--tr-dur）由 chat.js 量出来现算
-     （见 rollRunningText）。两头的停顿是固定半秒，写在一条一份的 keyframes 里（叫 tr-roll-<编号>，
-     由 chat.js 插进来）—— 下面这份只当兜底：停顿在 keyframes 里只能写成百分比，按百分比算的话
-     命令越长开头死得越久（一千字的命令头六秒不动）。
-     滚起来就不要末尾省略号了（那个「…」会钉在右边不动，字从底下过）。
-     系统里开了「减少动态效果」也照旧滚：这一条滚的就是一行字、又是慢慢走的，不碍事；
-     停下来就只剩截断（下面那条 clip 把省略号也去掉了），后面那半条命令在界面上就再也看不全
-     ——真机上撞到过：人看到的是半截命令一动不动，以为界面卡住了。 */
-  .tool-running-item .tr-text.roll, .bash-run .tr-text.roll { text-overflow: clip; }
-  .tool-running-item .tr-run, .bash-run .tr-run { display: block; }
-  .tool-running-item .tr-text.roll .tr-run, .bash-run .tr-text.roll .tr-run { animation: tr-roll var(--tr-dur, 6s) linear infinite; }
-  @keyframes tr-roll {
-    0%, 3% { transform: translateX(0); }
-    94%, 100% { transform: translateX(var(--tr-shift, 0px)); }
-  }
   /* 合并标签（连着来的同名调用收成一个）：工具名 + 次数小方块（只调一次就不写数字）。
      次数不用乘号：标签字号是正文的 0.8 倍，乘号在这个尺寸只剩几个像素，两条斜线
      怎么画都发虚；改成一个小色块把数字框住，一眼看得出这是"几次"。
@@ -1550,7 +1546,7 @@
      它们就是用来表明“还在跑”的，停了就跟没了一样（这条跟以前一样，是有意不理那个设置）。 */
   @media (prefers-reduced-motion: reduce) { /* 用量那条现在没有过渡（渐变换不了），这条留着占个位 */ }
 
-  /* 剩下那几样“一直动”的小东西（顶条那颗点的呼吸、齿轮、那行命令自己横向滚）单独量下来
+  /* 剩下那几样“一直动”的小东西（顶条那颗点的呼吸、齿轮）单独量下来
      每一样都在 1 个点以内（吐字时），丢了反而让人觉得“怎么不动了”，都留着，电脑和手机一样。
      两头都不动的只有这几样：排队那条上的黄点、顶边框上那条用量、输入框那圈流光
      （黄点与横杠这两样没有信息、只是装饰，早先删了；流光 13 个点，删了换成一根绿边）。 */

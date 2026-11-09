@@ -2142,7 +2142,7 @@
 
   // ==================== 后台命令（消息流末尾那几条）====================
   // 放到后台跑的命令写在消息流最末尾（末尾那颗胶囊上面），一条一行、就长成「正在跑的那一条」那样：
-  // 一只走着的钟 + 编号 + 命令 + 一颗「停」+ 已经跑了多久（耗时靠右），一行放不下的字自己横向滚。
+  // 一只走着的钟 + 编号 + 命令 + 一颗「停」+ 已经跑了多久（耗时靠右），写不完的命令折行（分隔符留在行尾，最多七行，再多点开看整条）。
   // 钟跟齿轮是两回事：齿轮转（「正在跑的那一条」上那颗）是「模型这会儿正忙着」；
   // 钟的针在走是「这条命令在后台自己跑，不挡你说话，跑完它自己把结果交回这个会话」。
   // 跑完的不列：那条结果会当成一条新消息交回会话，去消息流里看。
@@ -2201,7 +2201,6 @@
     if (!tasks.length) {
       stopBashClock(st);
       if (st.bashBlock) {
-        for (const el of st.bashBlock.children) { dropRollKeyframes(el); }
         st.bashBlock.remove();
         st.bashBlock = null;
       }
@@ -2216,7 +2215,6 @@
     // 看着像又从头开始走了一遍。
     const key = tasks.map((it) => it.no).join(",");
     if (block.dataset.nos !== key) {
-      for (const el of block.children) { dropRollKeyframes(el); }
       block.dataset.nos = key;
       block.textContent = "";
       for (const task of tasks) { block.appendChild(bashRunRow(st, task)); }
@@ -2228,12 +2226,8 @@
       }
     }
     placeBashBlock(st);
-    // 量「放不放得下」得等它排到页面上（上面那一步才把它摆进去），所以摆好位置以后再量：
-    // 放不下的那条字自己横向滚（跟「正在跑的那一条」一模一样，见 rollRunningText）。
-    for (const el of block.children) {
-      const text = el.querySelector(".tr-text");
-      if (text) { rollRunningText(text, el); }
-    }
+    // 排到页面上以后才知道每条折了几行：裁到七行以内（多出来的算进「+N」）
+    for (const row of block.children) { clampRunningText(row); }
     startBashClock(st);
   }
 
@@ -2251,7 +2245,7 @@
 
   /**
    * 一块里的那一行：钟 + 编号 + 命令 + 一颗「停」+ 已经跑了多久，就一行。
-   * 跟「正在跑的那一条」同一个样子（齿轮换成钟，前面多一个编号）：一行放不下的字自己横向滚，
+   * 跟「正在跑的那一条」同一个样子（齿轮换成钟，前面多一个编号）：写不完的命令折行（分隔符留在行尾，最多七行），
    * 耗时钉在右头不动（见 chat.css 里那几条 .tr-*）。
    */
   function bashRunRow(st, task) {
@@ -2269,13 +2263,7 @@
     const cmd = task.cmd || "";
     const shown = runningLineParts({ name: "bash", argStr: JSON.stringify({ command: cmd }), text: "$ " + cmd });
     fillRunningText(row, shown);
-    if (shown.more) {
-      const more = document.createElement("span");
-      more.className = "tr-more";
-      more.textContent = shown.more;
-      row.appendChild(more);
-    }
-    // 这一行点得开（跟「正在跑的那一条」一样）：链上放不下时点一下就把整条命令摆出来看。
+    // 这一行点得开（跟「正在跑的那一条」一样）：折行之后点一下就把整条命令摆出来看。
     row._tipCall = "$ " + cmd;
     row._tipBody = "";
     attachTagTipHandlers(row);
@@ -2964,16 +2952,9 @@
   // 整条（字与位置）在这一批过去时一并收掉：下面出了正文 / 问话卡片，或者这一轮跑完
   // （见 endRunningLine）。
   //
-  // 链那一行写不完的（长命令行）：字自己慢慢横向滚，只往一个方向（从头滚到末尾，两端各停半秒再从开头来，
-  // 见 rollRunningText 与 chat.css 的 tr-roll），不然一颗「bash」加小半条命令就完了，看不出来在跑什么。
-  // heredoc 的正文不跟着滚：它自己折行，几行都摆在链下面。
+  // 链写不完的（长命令行）：折行排出来（分隔符留在行尾，见 chat.css 的 .tr-text），最多七行，
+  // 再多的就截断、末尾「…」，点开这一行看整条。heredoc 的正文自己折行，几行都摆在链下面。
   const RUNNING_LINE_SKIP = new Set([THINKING_NAME, "ask_choice"]);
-  const RUNNING_ROLL_MIN_PX = 4;    // 溢出这几个像素以内不算「放不下」（末尾省略号那点宽度，不值当滚）
-  const RUNNING_ROLL_SPEED = 30;    // 放不下的那行字自己滚动的快慢：每秒 30 像素（慢慢地滚）
-  // 两头各停多久（毫秒）：固定时间，不随命令长短变。以前是按「一趟的百分之几」算的，
-  // 一趟多长又按长度算（每秒 30 像素），于是命令越长开头死得越久：一千字的命令一趟三分钟，
-  // 前六秒多一个像素都不走（真机上就是这个「一动不动」）。量法与数据见 dev/runningLine.js。
-  const RUNNING_ROLL_HOLD_MS = 500;
   const RUNNING_CLOCK_MS = 200;     // 后面那个耗时的刷新快慢（一秒里刷五回就够看着在走）
 
   // ==================== 一长串命令怎么写 ====================
@@ -3210,6 +3191,28 @@
   // 正文最多 RUNNING_BODY_MAX 行（再多的在提示框里看）。
   const RUNNING_CHAIN_MAX = 5;
   const RUNNING_BODY_MAX = 6;
+  // 一整块参数（`node -e '…'`、`git commit -m "…"`、`curl -d '{…}'`）超过这么多字，
+  // 就把中间省掉、两头各留一截：折行也改不了那一块字就是一个个转义符的事实，
+  // 与其摆三四行转义，不如一句话说清「这里有一大块没摆」。两头留的是「用什么跑」与「往哪写」。
+  const RUNNING_BLOB_MAX = 120;
+  const RUNNING_BLOB_KEEP = 48;   // 两头各留多少字
+
+  /** 把一段文字里太长的那几块（引号里的一整段，或不带空白的长词）从中间折起来。
+   *  返回 { text, folded }：folded 说明有东西没写出来（得挂提示框）。最多折两块，再多的扫不到就是脏。 */
+  function foldLongBlobs(text) {
+    let folded = 0;
+    const out = String(text || "").replace(/'[^']*'|"[^"]*"|`[^`]*`|[^\s'"`]+/g, (whole) => {
+      if (folded >= 2) { return whole; }
+      const quote = /^['"`]/.test(whole) ? whole[0] : "";
+      const body = quote ? whole.slice(1, -1) : whole;
+      if (body.length <= RUNNING_BLOB_MAX) { return whole; }
+      folded += 1;
+      const keep = Math.min(RUNNING_BLOB_KEEP, Math.max(8, Math.floor(body.length / 4)));
+      const cut = body.length - keep * 2;
+      return quote + body.slice(0, keep) + " …（省 " + cut + " 字）… " + body.slice(-keep) + quote;
+    });
+    return { text: out, folded: folded > 0 };
+  }
 
   /** 「正在跑」那一行写什么（消息流末尾的后台命令那几行也用这一套）：
    *  chain —— 链上那几段，每段 { text, sep, dim, prompt }（sep 是它前面那个分隔符，头一段没有；
@@ -3233,7 +3236,7 @@
     const segs = splitCommandSegments(cmd);
     if (!segs.length) { return asIs(); }
     const chain = [], body = [];
-    let hidden = 0;
+    let hidden = 0, blobCut = false;
     for (let i = 0; i < segs.length; i++) {
       const seg = segs[i];
       const lines = seg.text.split("\n");
@@ -3242,8 +3245,11 @@
       // 拼回一行：链永远是一条，不多出第二行。
       const opensHeredoc = lines.length > 1 && /<<-?\s*['"\\]?[A-Za-z_]/.test(lines[0]);
       const text = opensHeredoc ? lines[0] : lines.join(" ");
+      // 续行的那个反斜杠连它后面的空白一起去掉；再一大块参数（一段内联脚本那种）折起来
+      const folded = foldLongBlobs(segmentDisplay(text.replace(/\\\s+/g, " ")));
+      if (folded.folded) { blobCut = true; }
       chain.push({
-        text: segmentDisplay(text.replace(/\\\s+/g, " ")),   // 续行的那个反斜杠连它后面的空白一起去掉
+        text: folded.text,
         sep: i === 0 ? "" : segmentSep(seg.sepBefore), dim: isReadOnlySegment(seg), prompt: i === 0,
       });
       if (opensHeredoc) { for (let j = 1; j < lines.length; j++) { body.push(lines[j]); } }
@@ -3255,40 +3261,42 @@
     const shownBody = body.slice(0, RUNNING_BODY_MAX);
     const bodyCut = body.length > shownBody.length;
     return {
-      chain, body: shownBody, more: hidden ? "+" + hidden : "",
-      trimmed: !!hidden || bodyCut || firstLine(whole) !== whole,
+      chain, body: shownBody, hidden, more: hidden ? "+" + hidden : "",
+      trimmed: !!hidden || bodyCut || blobCut || firstLine(whole) !== whole,
     };
   }
 
   /** 把 runningLineParts 那份东西画进 host 里（先清空）：一条链 + 缩进的正文。
-   *  链那一行放不下时自己横向滚（见 rollRunningText，量的是返回的那个 .tr-text）。
-   *  返回 { line } —— line 就是链那一行。 */
+   *  链写不完时自己折行（分隔符留在行尾，最多七行，见 chat.css 的 .tr-text 与 clampRunningText）。 */
   function fillRunningText(host, parts) {
     // 只换掉上一次画的那一块（齿轮 / 钟 / 编号都还挂在 host 上，不能一起清掉）
     const old = host.querySelector(":scope > .tr-content");
     if (old) { old.remove(); }
+    const oldPrompt = host.querySelector(":scope > .tr-prompt");
+    if (oldPrompt) { oldPrompt.remove(); }
     const content = document.createElement("div");
     content.className = "tr-content";
     const line = document.createElement("div");
     line.className = "tr-text";
-    for (const seg of parts.chain) {
-      if (seg.sep) {
-        const s = document.createElement("span");
-        s.className = "tr-sep";
-        s.textContent = seg.sep;
-        line.appendChild(s);
-      }
-      // 头一段前面那个 `$ ` 自己占一个 span（颜色淡一点）
-      if (seg.prompt) {
-        const p = document.createElement("span");
-        p.className = "tr-prompt";
-        p.textContent = "$ ";
-        line.appendChild(p);
-      }
+    // 一步一个 .tr-step：那一段命令 + 它后面那个分隔符（分隔符跟在行尾，跟人写多行命令一个样子：
+    // `cd x &&` 换行 `npm test`）。折行时整步一起挪到下一行，不会把一段命令拆成两半。
+    for (let i = 0; i < parts.chain.length; i++) {
+      const seg = parts.chain[i];
+      const step = document.createElement("span");
+      step.className = "tr-step";
       const t = document.createElement("span");
       t.className = seg.dim ? "tr-seg-dim" : "tr-seg";
       t.textContent = seg.text;
-      line.appendChild(t);
+      step.appendChild(t);
+      // 分隔符属于它前面那一段（下一段开头那个 && / | / ;），所以跟在队尾
+      const next = parts.chain[i + 1];
+      if (next && next.sep) {
+        const s = document.createElement("span");
+        s.className = "tr-sep";
+        s.textContent = " " + next.sep + " ";
+        step.appendChild(s);
+      }
+      line.appendChild(step);
     }
     content.appendChild(line);
     if (parts.body.length) {
@@ -3302,7 +3310,75 @@
       content.appendChild(box);
     }
     host.appendChild(content);
-    return { line };
+    // `$ ` 摆在链外面（链的左边）：折行后第二行起自然就跟第一行「$ 」后面那个字对齐（见 chat.css）。
+    if (parts.chain[0] && parts.chain[0].prompt) {
+      const p = document.createElement("span");
+      p.className = "tr-prompt";
+      p.textContent = "$ ";
+      host.insertBefore(p, content);
+    }
+    host._hiddenSteps = parts.hidden || 0;
+  }
+
+  // ==================== 最多摆几行 ====================
+  // 写了 5 步以上本来就已经算进「+N」了（见 RUNNING_CHAIN_MAX）；这里再管一道高度：
+  // 折行之后最多摆 RUNNING_TEXT_ROWS 行，再多就从末尾往前收（收掉的算进「+N」）——
+  // 命令总是从头看起，收了哪几步点开这一行就能看全。
+  // 只剩一步还是太高，就把那一步的字切掉、末尾补一个「…」。
+  // 为什么用 JS 量而不是 CSS 的 line-clamp：折行是按「步」摆的（flex），line-clamp 只管得了纯文字。
+  const RUNNING_TEXT_ROWS = 7;
+
+  /** 把这一条裁到最多 RUNNING_TEXT_ROWS 行（调用的时候它得已经排到页面上：量的是真高度）。 */
+  function clampRunningText(item) {
+    const line = item ? item.querySelector(".tr-text") : null;
+    if (!line) { return; }
+    const lh = parseFloat(getComputedStyle(line).lineHeight) || 13;
+    const maxH = lh * RUNNING_TEXT_ROWS;
+    let cut = 0;
+    for (;;) {
+      if (line.scrollHeight <= maxH + 1) { break; }
+      const steps = Array.from(line.querySelectorAll(".tr-step"));
+      if (!steps.length) { break; }
+      if (steps.length > 1) {
+        steps[steps.length - 1].remove();   // 从末往前收（先露开头那几步）
+        cut += 1;
+        continue;
+      }
+      chopStepToFit(steps[0], line, maxH);   // 就一步，还是太高：切字补「…」
+      break;
+    }
+    const total = (item._hiddenSteps || 0) + cut;
+    let more = item.querySelector(".tr-more");
+    if (total > 0) {
+      if (!more) {
+        more = document.createElement("span");
+        more.className = "tr-more";
+        const anchor = item.querySelector(".tr-act") || item.querySelector(".tr-time");
+        item.insertBefore(more, anchor);
+      }
+      more.textContent = "+" + total;
+    } else if (more) {
+      more.remove();
+    }
+  }
+
+  /** 只剩一步还比七行高：把它的字从末尾切掉，末尾补一个「…」（整条点开看）。
+   *  二分一下要留多少个字（一条两千字的命令也不会切两千次）。 */
+  function chopStepToFit(step, line, maxH) {
+    const t = step.querySelector(".tr-seg, .tr-seg-dim");
+    if (!t) { return; }
+    const full = t.textContent;
+    const fits = (n) => {
+      t.textContent = full.slice(0, n) + "…";
+      return line.scrollHeight <= maxH + 1;
+    };
+    if (!fits(0)) { return; }
+    let lo = 0, hi = full.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (fits(mid)) { lo = mid; } else { hi = mid - 1; }
+    }
+    t.textContent = full.slice(0, lo) + "…";
   }
 
   /** 现在还有哪些调用在跑、各自那一行摘要与开始时刻（一条一行，按页面上标签的顺序）。
@@ -3356,7 +3432,7 @@
     const call = shownRunningCall(calls);
     const line = st.runningLine;
     // 露的还是同一条（同行里别的跑完了、或者又起了一条都不管）：一个字都不动。
-    // 重画一遍会把字横向滚的动画从头开始，这一块的高度也会抖一下 —— 正是要躲的。
+    // 重画一遍这一块的高度会抖一下 —— 正是要躲的。
     const key = (call.startedAt || 0) + "\u0000" + call.text;
     const shownItem = line ? line.firstElementChild : null;
     if (shownItem && st.runningKey === key && !shownItem.classList.contains("done")) {
@@ -3375,16 +3451,9 @@
     item.className = "tool-running-item";
     item.insertAdjacentHTML("afterbegin", GEAR_SVG);
     const shown = runningLineParts(call);
-    const drawn = fillRunningText(item, shown);
-    // 段太多 / 正文太长：后面灰一个「+N」（这一句不跟着滚，一直看得见）
-    if (shown.more) {
-      const more = document.createElement("span");
-      more.className = "tr-more";
-      more.textContent = shown.more;
-      item.appendChild(more);
-    }
+    fillRunningText(item, shown);
     if (shown.trimmed || call.name === "bash") {
-      // 这一行点得开：链上放不下时字自己滚（要等），点开一下就把整条命令摆出来看。
+      // 这一行点得开：折行最多七行，被收掉的那几步点开一下就能看全。
       // 字没裁的也挂上：一行字看不全的时候（滚到一半）点一下就到手了。
       item._tipCall = call.text;
       item._tipBody = "";
@@ -3406,7 +3475,7 @@
       });
       item.appendChild(detach);
     }
-    // 这条跑了多久：钉在这一条末尾（字自己滚的时候它不动，见 chat.css 的 tr-time）。
+    // 这条跑了多久：钉在这一条末尾（字折行的时候它不动，见 chat.css 的 tr-time）。
     // 重放出来的老调用没有开始时刻：干脆不添那个位置（see runningCalls）
     if (call.startedAt) {
       const time = document.createElement("span");
@@ -3417,15 +3486,13 @@
     }
     el.appendChild(item);
     placeRunningLine(st, el);
+    // 排到页面上以后才知道折了几行：裁到七行以内（多出来的算进「+N」，见 clampRunningText）
+    clampRunningText(item);
     startRunClock(st);
-    // 量「这一行放不放得下」得等它排到页面上（新起一条时上面那一步才把它插进去），
-    // 所以挪完位置再看一眼：放不下的改成自己滚（见 rollRunningText）。
-    // 量的是链那一行（heredoc 的正文写在它下面，不参合滚）。
-    rollRunningText(drawn.line, el);
   }
 
   /** 那条「正在跑」上后面那个耗时：每 RUNNING_CLOCK_MS 重写一次（只动那几个数字，不动字、
-   *  不重排这一条），所以字自己横向滚的时候耗时不动。 */
+   *  不重排这一条），所以字折行的时候耗时不动。 */
   function startRunClock(st) {
     if (st.runClock) { return; }
     st.runClock = setInterval(() => {
@@ -3454,58 +3521,8 @@
     return Math.floor(min / 60) + "时" + (min % 60 < 10 ? "0" : "") + (min % 60) + "分";
   }
 
-  /** 这一条的字一行放得下就不动（末尾不够就省略号）；放不下就让它自己慢慢横向滚：
-   *  滚的距离就是溢出的那些像素（--tr-shift），一趟多长由「走的那段每秒 30 像素 + 两头各停
-   *  RUNNING_ROLL_HOLD_MS」算出来（--tr-dur），停顿的写法见下一条。
-   *  进来时 .tr-text 里已经写好了（可能还带一个灰色小尾巴以外的东西，见 syncRunningLine）：
-   *  这里只把它那几块整体挪进滚动那一层，一个字的样式都不变。 */
-  function rollRunningText(t, line) {
-    t.classList.remove("roll");
-    t.style.removeProperty("--tr-shift");
-    t.style.removeProperty("--tr-dur");
-    dropRollKeyframes(line);   // 上一条命令那份 keyframes（换一条就不用了）
-    const over = t.scrollWidth - t.clientWidth;
-    if (over < RUNNING_ROLL_MIN_PX) { return; }
-    const run = document.createElement("span");
-    run.className = "tr-run";
-    while (t.firstChild) { run.appendChild(t.firstChild); }
-    t.appendChild(run);
-    t.classList.add("roll");
-    const dur = over / RUNNING_ROLL_SPEED * 1000 + RUNNING_ROLL_HOLD_MS * 2;
-    t.style.setProperty("--tr-shift", -over + "px");
-    t.style.setProperty("--tr-dur", dur / 1000 + "s");
-    run.style.animationName = writeRollKeyframes(line, RUNNING_ROLL_HOLD_MS, dur);
-  }
-
-  // 页面上一时只露着一条「正在跑」（每会话一条），但几个会话各自都可能有：所以 keyframes
-  // 一条一份、名字带编号，换命令 / 收掉这条时把自己那份删了，页面上不会攒一堆。
-  let runningRollKeySeq = 0;
-
-  /** 给这一条写一份 keyframes：两头的停顿在 keyframes 里只能写成「一趟的百分之几」，
-   *  要停固定的毫秒数就得按这一条的一趟时长换算（所以要一条一份）。
-   *  三格：0% 与 X% 都停在开头（= 停顿），到 (100-X)% 走到末尾，之后一直停在那里直到 100%。
-   *  返回这份 keyframes 的名字（调用方把它挂到滚字的那层上）。 */
-  function writeRollKeyframes(line, holdMs, durMs) {
-    const pct = Math.min(45, Math.max(0.001, holdMs / durMs * 100));
-    const name = "tr-roll-" + (++runningRollKeySeq);
-    const style = document.createElement("style");
-    style.textContent = "@keyframes " + name + "{0%{transform:translateX(0)}"
-        + pct.toFixed(3) + "%{transform:translateX(0)}"
-        + (100 - pct).toFixed(3) + "%{transform:translateX(var(--tr-shift,0px))}}";
-    document.head.appendChild(style);
-    if (line) { line._rollKeys = style; }
-    return name;
-  }
-
-  /** 把这一条那份 keyframes 收掉（这条不再需要滚了 / 换了一条命令 / 整条收掉了）。 */
-  function dropRollKeyframes(line) {
-    if (!line || !line._rollKeys) { return; }
-    line._rollKeys.remove();
-    line._rollKeys = null;
-  }
-
   /** 一条都不在跑了：把留在页面上的这条冻住 —— 齿轮停转、耗时定在跑完那一刻，字留着
-   *  （长命令照旧自己滚：滚是为了看全命令，跟还在不在跑是两回事）。
+   *  （长命令写不完照样把折的那几行留着）。
    *  这一行只有一条，不用挑：几条几乎同时跑完时，页面上的就是最后露着的那条。
    *  已经冻住的再来一遍什么都不动：耗时记的是这条跑了多久，不能跟着后面发生的事继续往上涨。 */
   function freezeRunningLine(st) {
@@ -3527,7 +3544,6 @@
     stopRunClock(st);
     st.runningKey = "";
     if (st.runningLine) {
-      dropRollKeyframes(st.runningLine);
       st.runningLine.remove();
       st.runningLine = null;
     }

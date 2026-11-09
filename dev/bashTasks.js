@@ -89,7 +89,7 @@ module.exports = async (page) => {
                 return {
                     no: (el.querySelector(".bash-run-no") || {}).textContent || "",
                     time: time ? time.textContent : "",
-                    cmd: text ? text.textContent : "",
+                    cmd: (el.querySelector(".tr-prompt") ? "$ " : "") + (text ? text.textContent : ""),
                     hasClock: !!el.querySelector(".bash-clock svg"),
                     handCount: hands.length,
                     minName: min ? getComputedStyle(min).animationName : "",
@@ -106,12 +106,10 @@ module.exports = async (page) => {
                     more: more ? more.textContent : "",
                     stopLeft: stop ? Math.round(stop.getBoundingClientRect().left) : 0,
                     timeLeft: time ? Math.round(time.getBoundingClientRect().left) : 0,
-                    roll: !!text && text.classList.contains("roll"),
-                    rollAnim: run ? getComputedStyle(run).animationName : "",
                     tipClick: el.classList.contains("tip-click"),
-                    // 折没折行：一行字该不折（nowrap），也不会在竖着多出一截
-                    nowrap: !!text && getComputedStyle(text).whiteSpace === "nowrap",
-                    overY: text ? text.scrollHeight - text.clientHeight : 0,
+                    // 折了几行（按步折行，最多七行）+ 横向溢不溢出
+                    rows: text ? Math.round(text.offsetHeight / (parseFloat(getComputedStyle(text).lineHeight) || 13)) : 0,
+                    overX: text ? text.scrollWidth - text.clientWidth : 0,
                     h: Math.round(r.height),
                     right: Math.round(r.right),
                     title: el.title || "",
@@ -132,7 +130,7 @@ module.exports = async (page) => {
     await feed(tasksAt(Date.now()));
     const s1 = await blockState();
     console.log("\n第二幕（两条在跑、一条跑完）：\n  行数=" + s1.rows + " 在最末尾=" + s1.atEnd
-        + "\n  " + s1.items.map((it) => it.no + " " + it.time + " 停=" + it.stop + " 滚=" + it.roll
+        + "\n  " + s1.items.map((it) => it.no + " " + it.time + " 停=" + it.stop + " 折了 " + it.rows + " 行"
             + " 字行数=" + it.lines + " 高=" + it.h + " " + it.cmd).join("\n  "));
     if (s1.none) { problems.push("有命令在后台跑，消息流末尾该出现那一块"); }
     if (s1.rows !== 2) { problems.push("该只列还在跑的两条，实际 " + s1.rows + " 行"); }
@@ -168,19 +166,17 @@ module.exports = async (page) => {
     console.log("  链上：#7 " + JSON.stringify(s1.items[0].cmd) + " 后面 " + JSON.stringify(s1.items[0].more)
         + "；#6 " + JSON.stringify(s1.items[1].cmd) + " 后面 " + JSON.stringify(s1.items[1].more));
     if (!s1.items[0].cmd.startsWith("$ cd dev/.scratch")) { problems.push("长命令该从 cd 那段摆起（整条都摆，不挑核心那一段；实际 " + JSON.stringify(s1.items[0].cmd) + "）"); }
-    if (!/tee run\.log$/.test(s1.items[0].cmd)) { problems.push("长命令末尾那段（| tee run.log）该在链上（实际 " + JSON.stringify(s1.items[0].cmd) + "）"); }
-    if (s1.items[0].more !== "") { problems.push("没裁掉任何一段时不该有「+N」（实际 " + JSON.stringify(s1.items[0].more) + "）"); }
+    // 七行装不下才往后收（收掉的算进「+N」）：末尾那段看不到是允许的，点开那一行能看到整条
+    if (s1.items[0].rows > 7) { problems.push("一条最多摆七行（实际 " + s1.items[0].rows + " 行）"); }
+    if (s1.items[0].more && !/^\+\d+$/.test(s1.items[0].more)) { problems.push("「+N」的写法不对（实际 " + JSON.stringify(s1.items[0].more) + "）"); }
     if (!s1.items[0].tipClick) { problems.push("那一行该点得开（看整条命令）"); }
     if (s1.items[1].more !== "") { problems.push("只有一段的短命令后面不该挂「+N」（实际 " + JSON.stringify(s1.items[1].more) + "）"); }
-    // 一行就是一行：放不下的字自己横向滚（跟「正在跑的那一条」同一套），不折行、不把这一块撑高
-    if (!s1.items.every((it) => it.nowrap && it.overY <= 0)) {
-        problems.push("每行都该是一行字、不折行（不折=" + s1.items.map((it) => it.nowrap).join("/") + "，竖着多出来=" + s1.items.map((it) => it.overY).join("/") + "）");
+    // 写不完就按「步」折行（整步挪到下一行），最多七行，不横向溢出
+    if (!s1.items.every((it) => it.rows >= 1 && it.rows <= 7 && it.overX <= 1)) {
+        problems.push("每行该按步折行、最多七行、不横向溢出（折了 " + s1.items.map((it) => it.rows).join("/") + " 行，横向多出来 " + s1.items.map((it) => it.overX).join("/") + "）");
     }
-    if (!s1.items[0].roll || !/^tr-roll-/.test(s1.items[0].rollAnim)) {
-        problems.push("放不下的那条命令该跑马灯（滚=" + s1.items[0].roll + " 动画=" + s1.items[0].rollAnim + "）");
-    }
-    if (s1.items[1].roll) { problems.push("放得下的那条命令不该滚（" + s1.items[1].cmd + "）"); }
-    if (s1.items[0].h !== s1.items[1].h) { problems.push("长命令与短命令那两行该一样高（" + s1.items[0].h + " vs " + s1.items[1].h + "）"); }
+    if (s1.items[1].rows !== 1) { problems.push("短命令该就一行（实际 " + s1.items[1].rows + " 行：" + s1.items[1].cmd + "）"); }
+    if (!(s1.items[0].h > s1.items[1].h)) { problems.push("折成几行的那条该比一行的短命令高（" + s1.items[0].h + " vs " + s1.items[1].h + "）"); }
     if (s1.items.some((it) => it.right > s1.paneRight + 1)) { problems.push("那一块出窗格了（右 " + s1.items[0].right + " > 窗格右 " + s1.paneRight + "）"); }
     await page.shot("bash-2-running.png");
 
@@ -242,11 +238,10 @@ module.exports = async (page) => {
     const phone = await blockState();
     const w = phone.items[0] || {};
     console.log("\n第六幕（手机 400 宽）：\n  行数=" + phone.rows + " 最右=" + w.right + "（屏宽 " + phone.winW + "）"
-        + " 高 " + w.h + "，滚=" + w.roll + "，不折=" + w.nowrap);
+        + " 高 " + w.h + "，折了 " + w.rows + " 行，横向多出来 " + w.overX + "px");
     if (phone.rows !== 2) { problems.push("手机上也该有两条，实际 " + phone.rows); }
     if (w.right > phone.winW + 1) { problems.push("手机上那一块出屏了：最右 " + w.right + "、屏宽 " + phone.winW); }
-    if (!w.nowrap || w.overY > 0) { problems.push("手机上也该是一行字、不折行（不折=" + w.nowrap + "，竖着多出来=" + w.overY + "）"); }
-    if (!w.roll) { problems.push("手机上放不下的命令也该滚起来"); }
+    if (!(w.rows >= 1 && w.rows <= 7) || w.overX > 1) { problems.push("手机上也该按步折行、最多七行、不横向溢出（折了 " + w.rows + " 行，横向多出来 " + w.overX + "px）"); }
     if (w.h < 14) { problems.push("手机上那一行太矮了：高 " + w.h); }
     await page.shot("bash-6-phone.png");
 

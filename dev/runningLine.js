@@ -44,7 +44,7 @@ module.exports = async (page) => {
         const next = line ? line.nextElementSibling : null;
         return {
             hasNode: Boolean(line),
-            items: items.map((el) => { const t = el.querySelector(".tr-text"); return (t || el).textContent.trim(); }),
+            items: items.map((el) => { const t = el.querySelector(".tr-text"); return ((el.querySelector(".tr-prompt") ? "$ " : "") + (t || el).textContent).trim(); }),
             times: items.map((el) => { const t = el.querySelector(".tr-time"); return t ? t.textContent.trim() : ""; }),
             spin: items.filter(spinning).length,
             frozen: items.filter((el) => el.classList.contains("done")).length,
@@ -250,7 +250,9 @@ module.exports = async (page) => {
     console.log("   这条被挂上页面 " + flick.add + " 次、被摘掉 " + flick.remove + " 次；滚动高度变了 " + moves + " 次");
     console.log("   每一步写着：" + JSON.stringify(written));
     if (flick.add !== 1 || flick.remove !== 0) { problems.push("一串快调用把这条挂上 / 摘下了好几回（一闪一闪）：挂上 " + flick.add + " 次、摘下 " + flick.remove + " 次"); }
-    if (moves !== 0) { problems.push("一串快调用让下面的内容上下跳了 " + moves + " 次（位置该一直不动）：滚动高度出现过 " + JSON.stringify(Array.from(new Set(flick.h))) + "）"); }
+    // 折行之后这一块的高矮跟命令长短有关（一个像素的取整差不算「一闪」），只挡那种明显的跳动
+    const heights = Array.from(new Set(flick.h));
+    if (Math.max(...heights) - Math.min(...heights) > 2) { problems.push("一串快调用让下面的内容上下跳了 " + moves + " 次（位置该一直不动）：滚动高度出现过 " + JSON.stringify(heights) + "）"); }
     const wantWritten = ["read 文件0.ts", "read 文件1.ts", "read 文件2.ts", "read 文件3.ts", "read 文件4.ts", "read 文件5.ts"];
     if (JSON.stringify(written) !== JSON.stringify(wantWritten)) { problems.push("这条没跟着一条条换名字（该一直写着当前那条）：" + JSON.stringify(written)); }
     await page.shot("running-line-burst.png");
@@ -268,27 +270,21 @@ module.exports = async (page) => {
     console.log("   这一轮跑完（streamEnd）：" + show(s));
     if (s.hasNode) { problems.push("这一轮跑完了，这条的位置还留着：" + JSON.stringify(s)); }
 
-    // ---- 第十二幕：一行放不下的字自己横向滚，只往一个方向；放得下的那条一动不动 ----
-    // 同时跑几条也只露一条，所以分三步看：先投长命令（该滚）→ 又来一条短的（换成它、不动、
-    // 这一块还是那么高）→ 短的那条跑完（换回长的那条，照旧滚）。
+    // ---- 第十二幕：写不完的长命令折行（分隔符留在行尾，最多七行），不横向溢出；再长就切字、点得开看整条 ----
+    // 同时跑几条也只露一条，所以分两步看：先投长命令（该折成两行）→ 又来一条短的（换成它、一行）。
     const LONG_CMD = "git log --oneline --all --graph --decorate --date=short --pretty=format:'%h %ad %an %s' -- media src | head -200 && npm run compile && npm run web:shot -- --width 900 --height 700";
-    const rolls = () => page.eval(`
+    const wrapState = () => page.eval(`
         const items = Array.from(document.querySelectorAll(".session-view:not(.off) .session-pane .tool-running .tool-running-item"));
         return items.map((el) => {
             const t = el.querySelector(".tr-text");
-            const run = el.querySelector(".tr-run");
-            const box = t.getBoundingClientRect();
-            const cs = run ? getComputedStyle(run) : null;
+            const lh = parseFloat(getComputedStyle(t).lineHeight) || 13;
             return {
-                text: (run || t).textContent,
-                roll: t.classList.contains("roll"),
-                anim: cs ? cs.animationName : "none",
-                dir: cs ? cs.animationDirection : "-",
-                left: run ? Math.round(run.getBoundingClientRect().left - box.left) : 0,
-                shift: parseFloat(t.style.getPropertyValue("--tr-shift")) || 0,
-                dur: parseFloat(t.style.getPropertyValue("--tr-dur")) || 0,
-                over: t.scrollWidth - t.clientWidth,
-                h: el.offsetHeight,
+                text: (el.querySelector(".tr-prompt") ? "$ " : "") + t.textContent,
+                rows: Math.round(t.offsetHeight / lh),
+                overX: t.scrollWidth - t.clientWidth,
+                cut: t.scrollHeight > t.clientHeight + 1,
+                tip: el.classList.contains("tip-click"),
+                h: t.offsetHeight,
             };
         });
     `);
@@ -297,93 +293,45 @@ module.exports = async (page) => {
         { type: "tool", toolName: "bash", args: { command: LONG_CMD }, toolCallId: "r1" },
     ]);
     await page.sleep(300);
-    const rl = await rolls();
+    const rl = await wrapState();
     const long = rl[0] || {};
-    console.log("\n第十二幕（一行放不下的命令）：");
-    console.log("   行数=" + rl.length + " 滚=" + long.roll + " 动画=" + long.anim + " 位移=" + long.shift + "px 溢出=" + long.over + "px 一趟=" + long.dur + "s");
+    console.log("\n第十二幕（写不完的长命令）：");
+    console.log("   行数=" + rl.length + " 折成几行=" + long.rows + " 横向溢出=" + long.overX + "px 截断=" + long.cut + " 高=" + long.h + "px");
     if (rl.length !== 1) { problems.push("这一块该只有一条：" + JSON.stringify(rl.map((x) => x.text))); }
-    if (!long.roll || !/^tr-roll/.test(long.anim)) { problems.push("长命令没自己滚起来：" + JSON.stringify(long)); }
-    if (long.dir !== "normal") { problems.push("滚是来回滚的（该只往一个方向）：" + long.dir); }
-    // 一趟 = 走的那段（每秒 30 像素）+ 两头各停 0.5 秒
-    if (Math.abs(long.dur - (Math.abs(long.shift) / 30 + 1)) > 0.05) { problems.push("一趟的时长不对（该是「走完每秒 30 像素 + 两头各停半秒」）：一趟 " + long.dur + " 秒、位移 " + long.shift + "px"); }
-    // 两头的停顿是固定的半秒，不能像以前那样按一趟的百分之几算（那会让长命令开头死很久）
-    const hold = await page.eval(`
-        const t = document.querySelector(".session-view:not(.off) .session-pane .tool-running .tool-running-item .tr-text");
-        const run = t.querySelector(".tr-run");
-        const name = run ? getComputedStyle(run).animationName : "";
-        let pct = null;
-        for (const sheet of document.styleSheets) {
-            let rules = [];
-            try { rules = Array.from(sheet.cssRules); } catch { continue; }
-            for (const rule of rules) {
-                if (rule.type === CSSRule.KEYFRAMES_RULE && rule.name === name) {
-                    // 0%、X%、(100-X)% 三格：第二格的百分比就是「两头各停多久」占一趟的多少
-                    pct = parseFloat(rule.cssRules[1].keyText);
-                }
-            }
-        }
-        const dur = parseFloat(t.style.getPropertyValue("--tr-dur")) || 0;
-        return { name: name, pct: pct, dur: dur, holdMs: pct === null ? null : Math.round(pct / 100 * dur * 1000) };
-    `);
-    console.log("   两头停：" + hold.holdMs + " 毫秒（keyframes 「" + hold.name + "」第一格 " + hold.pct + "%，一趟 " + hold.dur + " 秒）");
-    if (hold.holdMs === null || Math.abs(hold.holdMs - 500) > 15) { problems.push("两头的停顿不是固定的半秒：" + JSON.stringify(hold)); }
-    // 滚到底能看到末尾：把位移直接当作静态位置量一次（不然得等它慢慢滚到头）。
-    const tail = await page.eval(`
-        const t = document.querySelector(".session-view:not(.off) .session-pane .tool-running .tool-running-item .tr-text");
-        const run = t.querySelector(".tr-run");
-        if (!run) { return { ok: false, why: "没滚起来" }; }
-        const box = t.getBoundingClientRect();
-        const range = document.createRange();
-        range.selectNodeContents(run);
-        const textW = range.getBoundingClientRect().width;
-        const shift = parseFloat(t.style.getPropertyValue("--tr-shift")) || 0;
-        run.style.animation = "none";
-        run.style.transform = "translateX(" + shift + "px)";
-        const end = run.getBoundingClientRect();
-        const ok = end.right <= box.right + 1;
-        run.style.animation = ""; run.style.transform = "";
-        return { textW: Math.round(textW), boxW: Math.round(box.width), shift, ok };
-    `);
-    console.log("   滚到底：字宽 " + tail.textW + "、框 " + tail.boxW + "、位移 " + tail.shift + " → 末尾" + (tail.ok ? "整条都在框里" : "还露在框外"));
-    if (!tail.ok) { problems.push("滚到底也看不到命令的末尾：" + JSON.stringify(tail)); }
-    await page.sleep(2000);
-    const moved = (await rolls())[0] || {};
-    console.log("   2 秒后：位移 " + moved.left + "（刚才是 " + long.left + "）");
-    if (!(moved.left < long.left - 20)) { problems.push("字没在动（位移该一直往左走）：" + long.left + " → " + moved.left); }
-    // 只往一个方向：接着量一会儿，位移只能一直变小（有一点误差），不能倒回去（倒回去就是往右滚了）
-    const steps = [];
-    for (let i = 0; i < 8; i++) { await page.sleep(300); steps.push(((await rolls())[0] || {}).left); }
-    const back = steps.filter((x, i) => i > 0 && x > steps[i - 1] + 1);
-    console.log("   接着的 2.4 秒：位移 " + JSON.stringify(steps) + (back.length ? "（有往回走的）" : "（一直往一个方向走）"));
-    if (back.length) { problems.push("字滚到头又倒回来了（该只往一个方向）：" + JSON.stringify(steps)); }
-    await page.shot("running-line-roll.png");
+    if (!(long.rows >= 2 && long.rows <= 7)) { problems.push("这条长命令该折行（两行到七行之间），实际折成 " + long.rows + " 行：" + JSON.stringify(long)); }
+    if (long.overX > 1) { problems.push("折行之后不该再横向溢出（多出 " + long.overX + "px）：" + JSON.stringify(long)); }
+    await page.shot("running-line-wrap.png");
 
-    // 又来一条放得下的：换成它、一动不动，这一块还是那么高（高度不变，下面就不跳）
+    // 又来一条短的：换成它、只有一行、不横向溢出（这一块的高矮会变，折行的代价，不再强求不变）
     await post([{ type: "tool", toolName: "bash", args: { command: "npm test" }, toolCallId: "r2" }]);
     await page.sleep(300);
-    const shortLine = (await rolls())[0] || {};
-    console.log("   又来一条放得下的（" + shortLine.text + "）：滚=" + shortLine.roll + " 动画=" + shortLine.anim + " 位移=" + shortLine.left + " 高 " + shortLine.h + "px");
-    if (shortLine.text !== "$ npm test" || shortLine.roll || shortLine.anim !== "none" || shortLine.left !== 0) { problems.push("放得下的那条不该动，而且该换成它（最近开始的）：" + JSON.stringify(shortLine)); }
-    if (shortLine.h !== long.h) { problems.push("换成短的那条时这一块变高了 / 变矮了：" + long.h + " → " + shortLine.h); }
+    const shortLine = (await wrapState())[0] || {};
+    console.log("   又来一条短的（" + shortLine.text + "）：折成几行=" + shortLine.rows + " 横向溢出=" + shortLine.overX + "px");
+    if (shortLine.text !== "$ npm test" || shortLine.rows !== 1 || shortLine.overX > 1) { problems.push("短的那条该就一行、不横向溢出，而且该换成它（最近开始的）：" + JSON.stringify(shortLine)); }
 
-    // 短的那条跑完：露回还在跑的长命令，照旧滚
+    // 短的那条跑完：露回还在跑的长命令，照旧折行
     await post([{ type: "toolResult", toolCallId: "r2", isError: false, resultText: "53 个测试都过了", durationMs: 900 }]);
     await page.sleep(400);
-    const backLong = (await rolls())[0] || {};
-    console.log("   短的那条跑完，露回来的是：" + backLong.text + "（滚=" + backLong.roll + "）");
-    if (!backLong.text || backLong.text.indexOf("$ git log") !== 0 || !backLong.roll) { problems.push("短的那条跑完之后该换回还在跑的长命令（它该照旧滚）：" + JSON.stringify(backLong)); }
-    // 系统里开了「减少动态效果」：照旧慢慢滚（停下来就只剩截断，后半条命令在界面上看不全）
-    await page.cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
-    await page.sleep(100);
-    const reduced = (await rolls())[0] || {};
-    await page.sleep(600);
-    const reducedLater = (await rolls())[0] || {};
-    await page.cdp.send("Emulation.setEmulatedMedia", { features: [] });
-    console.log("   开了「减少动态效果」：动画=" + reduced.anim + " 位移 " + reduced.left + " → " + reducedLater.left);
-    if (!/^tr-roll/.test(reduced.anim)) { problems.push("开了「减少动态效果」字就不滚了（该照旧慢慢滚）：" + JSON.stringify(reduced)); }
-    if (!(reducedLater.left < reduced.left - 5)) { problems.push("开了「减少动态效果」字没在动：" + reduced.left + " → " + reducedLater.left); }
+    const backLong = (await wrapState())[0] || {};
+    console.log("   短的那条跑完，露回来的是：" + backLong.text.slice(0, 24) + "…（折成 " + backLong.rows + " 行）");
+    if (!backLong.text || backLong.text.indexOf("$ git log") !== 0 || !(backLong.rows >= 2)) { problems.push("短的那条跑完之后该换回还在跑的长命令（照旧折行）：" + JSON.stringify(backLong)); }
 
-    // ---- 第十三幕：末尾钉一个耗时（自己往上走；字滚它不滚）----
+    // 七行还不够：切字（末尾「…」）且点得开看整条
+    await post([{ type: "toolResult", toolCallId: "r1", isError: false, resultText: "…", durationMs: 900 }]);
+    await post([{ type: "tool", toolName: "bash", toolCallId: "r3", args: {
+        command: "node scripts/build.js " + Array.from({ length: 80 }, (_, i) => "--flag-number-" + i).join(" "),
+    } }]);
+    await page.sleep(300);
+    const huge = (await wrapState())[0] || {};
+    console.log("   特别长的那条：折成几行=" + huge.rows + " 末尾=" + JSON.stringify(huge.text.slice(-3)) + " 点得开=" + huge.tip + " 横向溢出=" + huge.overX + "px");
+    if (huge.rows !== 7) { problems.push("再长也只摆五行：" + JSON.stringify(huge)); }
+    if (!/…$/.test(huge.text)) { problems.push("一步装不下七行时该把字切掉、末尾补一个「…」：" + JSON.stringify(huge.text.slice(-20))); }
+    if (!huge.tip) { problems.push("截断了却没挂提示框（点开看不到整条）"); }
+    if (huge.overX > 1) { problems.push("特别长的那条横向溢出了：" + huge.overX + "px"); }
+
+    await post([{ type: "toolResult", toolCallId: "r3", isError: false, resultText: "好了", durationMs: 900 }]);
+
+    // ---- 第十三幕：末尾钉一个耗时（自己往上走；折行的时候它不动）----
     // 两条一起跑时露的是最近开始的那条：把长命令放后投，露着的这条既在滚、又带着耗时。
     await post([{ type: "toolResult", toolCallId: "r1", isError: false, resultText: "…", durationMs: 900 }]);
     await page.sleep(300);
@@ -402,10 +350,10 @@ module.exports = async (page) => {
         const box = (el) => { const r = el.getBoundingClientRect(); return { left: Math.round(r.left), right: Math.round(r.right) }; };
         return {
             lineRight: line ? Math.round(line.getBoundingClientRect().right) : null,
-            texts: items.map((el) => { const t = el.querySelector(".tr-text"); return t ? t.textContent.trim() : ""; }),
+            texts: items.map((el) => { const t = el.querySelector(".tr-text"); return ((el.querySelector(".tr-prompt") ? "$ " : "") + (t ? t.textContent : "")).trim(); }),
             times: items.map((el) => { const t = el.querySelector(".tr-time"); return t ? t.textContent.trim() : null; }),
             timeBox: items.map((el) => { const t = el.querySelector(".tr-time"); return t ? box(t) : null; }),
-            roll: items.map((el) => { const t = el.querySelector(".tr-text"); return !!t && t.classList.contains("roll"); }),
+            roll: items.map((el) => { const t = el.querySelector(".tr-text"); return !!t && t.offsetHeight > (parseFloat(getComputedStyle(t).lineHeight) || 13) * 1.5; }),
             shift: items.map((el) => {
                 const t = el.querySelector(".tr-text");
                 const run = el.querySelector(".tr-run");
@@ -432,16 +380,15 @@ module.exports = async (page) => {
     if (c1.times.length !== 1 || !c1.times[0]) { problems.push("露着的那条没写耗时：" + JSON.stringify(c1.times)); }
     if (c1.times[0] && ms(c1.times[0]) < 0) { problems.push("耗时的写法不认识（该是 3.2s / 12s / 1分05秒 这样）：" + JSON.stringify(c1.times)); }
     if (c1.timeBox[0] && Math.abs(c1.lineRight - 14 - c1.timeBox[0].right) > 2) { problems.push("耗时没钉在这一条的右端：" + JSON.stringify(c1.timeBox[0]) + " 这一条右端 " + c1.lineRight); }
-    if (!c1.roll[0]) { problems.push("这条长命令没滚起来（要验的「字滚它不滚」就无从验起）"); }
+    if (!c1.roll[0]) { problems.push("这条长命令该折行（没折的话「耗时不跟着字动」就无从验起）"); }
     await page.sleep(900);
     const c2 = await clock();
     console.log("   0.9 秒后：耗时=" + JSON.stringify(c2.times) + " 字在滚=" + JSON.stringify(c2.roll));
     if (!(ms(c2.times[0]) > ms(c1.times[0]))) { problems.push("耗时没往上走：" + JSON.stringify(c1.times) + " → " + JSON.stringify(c2.times)); }
-    // 字在滚（位移在变），耗时的位置一动不动
+    // 这一条的字折着（长命令摆不下），耗时钉在右上角不动
     const c3 = await clock();
-    console.log("   再隔 0.9 秒（字的位置 " + c1.shift[0] + " → " + c3.shift[0] + "）：耗时左边 " + (c1.timeBox[0] && c1.timeBox[0].left) + " → " + (c3.timeBox[0] && c3.timeBox[0].left));
-    if (c3.shift[0] === c1.shift[0]) { problems.push("字没在滚（量不到「滚的时候耗时不跟着动」）"); }
-    if (c1.timeBox[0] && c3.timeBox[0] && c3.timeBox[0].left !== c1.timeBox[0].left) { problems.push("字滚的时候耗时跟着动了（该钉住）：" + c1.timeBox[0].left + " → " + c3.timeBox[0].left); }
+    console.log("   再隔 0.9 秒：耗时 " + JSON.stringify(c3.times) + " 折成 " + JSON.stringify(c3.rows) + " 行？耗时左边 " + (c1.timeBox[0] && c1.timeBox[0].left) + " → " + (c3.timeBox[0] && c3.timeBox[0].left));
+    if (c1.timeBox[0] && c3.timeBox[0] && c3.timeBox[0].top !== c1.timeBox[0].top) { problems.push("字折行的时候耗时跟着上下动了（该钉在右上角）：" + c1.timeBox[0].top + " → " + c3.timeBox[0].top); }
     await page.shot("running-line-clock.png");
     // 先跑完那条没露着的（npm test）：露着的那条一个字都不动
     await post([{ type: "toolResult", toolCallId: "k2", isError: false, resultText: "53 个测试都过了", durationMs: 900 }]);
@@ -460,7 +407,7 @@ module.exports = async (page) => {
     if (s.items.length !== 1 || !s.items[0] || s.items[0].indexOf("$ node scripts/") !== 0) { problems.push("跑完了该只留最后露着的那条：" + JSON.stringify(s.items)); }
     if (s.frozen !== 1 || s.spin !== 0) { problems.push("最后跑完的那条该冻住（齿轮停转）：" + show(s)); }
     if (!frozen1.times[0]) { problems.push("冻住的那条没写耗时：" + JSON.stringify(frozen1.times)); }
-    if (!frozen1.roll[0]) { problems.push("冻住的那条（长命令）不滚了（滚是为了看全命令，跟还在不在跑无关）：" + JSON.stringify(frozen1.roll)); }
+    if (!frozen1.roll[0]) { problems.push("冻住的那条（长命令）该照旧折着（字没塌成一行）：" + JSON.stringify(frozen1.roll)); }
     await page.sleep(700);
     const frozen2 = await clock();
     console.log("   0.7 秒后：耗时 " + JSON.stringify(frozen2.times));
@@ -476,15 +423,23 @@ module.exports = async (page) => {
         const item = document.querySelector(".session-view:not(.off) .session-pane .tool-running .tool-running-item");
         if (!item) { return null; }
         const line = item.querySelector(".tr-text");
-        // 字放不下时会整条被包进 .tr-run（见 rollRunningText）：拆开看里头那几段
-        const inner = line ? (line.querySelector(".tr-run") || line) : null;
-        const parts = inner ? Array.from(inner.children) : [];
+        // 一步一个 .tr-step（分隔符 + 那一段命令）：摊开来数那几段
         const own = (el) => Number(getComputedStyle(el).opacity);
+        const parts = [];
+        // 那个 $ 提示符现在摆在链外面（折行时第二行起跟第一个字对齐），数起来补上当开头那一截
+        if (item.querySelector(".tr-prompt")) { parts.push("$ "); }
+        for (const step of (line ? line.querySelectorAll(".tr-step") : [])) {
+            for (const el of step.children) {
+                if (el.classList.contains("tr-sep")) { parts.push("[" + el.textContent.trim() + "]"); }
+                else if (el.classList.contains("tr-prompt")) { parts.push("$ "); }
+                else { parts.push(el.textContent); }
+            }
+        }
         const bodyEls = Array.from(item.querySelectorAll(".tr-body > div"));
         return {
-            parts: parts.map((el) => (el.classList.contains("tr-sep") ? "[" + el.textContent.trim() + "]" : el.textContent)),
-            dim: parts.filter((el) => el.classList.contains("tr-seg-dim")).map(own),
-            plain: parts.filter((el) => el.classList.contains("tr-seg")).map(own),
+            parts: parts,
+            dim: Array.from(line ? line.querySelectorAll(".tr-seg-dim") : []).map(own),
+            plain: Array.from(line ? line.querySelectorAll(".tr-seg") : []).map(own),
             body: bodyEls.map((el) => el.textContent),
             more: (item.querySelector(".tr-more") || {}).textContent || "",
             tip: item.classList.contains("tip-click"),
