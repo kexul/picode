@@ -784,7 +784,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /** 新建一个会话并切过去（成为这块屏现在看的会话）。只建新的，不动旧的那个
-     *  （顶条那颗加号那条路会顺手把没在跑的旧的关掉，见 processMessage 的 newSession）。
+     *  （顶条那颗加号那条路会顺手把没在忙的旧的关掉，见 processMessage 的 newSession）。
      *  跑在哪个目录：跟这块屏现在看的会话走（顶条上那个会话在别的项目里，新会话也开在那个项目里）。
      *  一个会话都没有时（刚启动、刚把最后几个会话关完）用宿主自己的默认目录。
      *  @param spareDelayMs 备用进程预热的延迟毫秒数（启动路径传 SPARE_PREWARM_DELAY_MS）。
@@ -2101,10 +2101,18 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.dropPicker(target, false);
     }
 
-    /** 界面那头回了一条（选了 / 取消了）：把正在等的那一块屏放行。 */
-    protected resolvePicker(payload: any | undefined): void {
+    /**
+     * 界面那头回了一条（选了 / 取消了）：把正在等的那一块屏放行。
+     *
+     * @param fromKind 界面说它回的是哪一个浮层。对不上就不理：窄窗里收一份“项目与会话”的
+     *        推送时会顺手回一句 `pickerCancel kind:"workspace"`（见 media/chat.js 的
+     *        closePickerAnyway / renderPicker），以前这一句能把这块屏上正开着的别的浮层
+     *        （选模型、选文件夹）一并放掉 —— 模型选择器还摆在屏幕上，点下去却没人接。
+     */
+    protected resolvePicker(payload: any | undefined, fromKind?: string): void {
         const st = this.pickers.get(this.currentPageId);
         if (!st || !st.resolve) { return; }
+        if (fromKind !== undefined && fromKind !== st.kind) { return; }
         const r = st.resolve;
         const kind = st.kind;
         st.resolve = null;
@@ -2409,11 +2417,14 @@ export abstract class ChatControllerBase implements RuntimeHost {
             case "newSession": {
                 // 跟 pi 的 /new 一样：随手换一个干净的会话接着干，顶条上就留一格 ——
                 // 旧的那个关掉（它已经在盘上了，去「项目与会话」里的历史会话点得回来）。
-                // 例外：旧的那个还在跑（正在生成 / 跑工具），那就留着，不把没跑完的活掐掉。
+                // 例外：旧的那个还有活没干完，那就留着，不把没跑完的活掐掉。三种都算没干完：
+                // 这一轮正在生成 / 跑工具、后台还有命令在跑（那些命令跟着会话走，会话关掉就跑不下去了）、
+                // 派出去的子会话还在跑（关掉它，那些子会话就跟它断了，跑完的结果也交不回来）。
                 // 先建新的、再关旧的：新会话要继承旧会话的目录与模型，关早了就只剩宿主自己的默认目录了。
                 const old = this.getActive();
                 const rt = this.newSession();
-                if (old && old.id !== rt.id && !old.streaming && !old.hasRunningBashTasks()) {
+                if (old && old.id !== rt.id && !old.streaming && !old.hasRunningBashTasks()
+                    && !this.taba.hasRunningChildren(old.id)) {
                     this.closeSession(old.id);
                 }
                 return;
@@ -2443,10 +2454,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 }
                 return;
             case "pickerChoice":
-                this.resolvePicker(msg.payload);
+                this.resolvePicker(msg.payload, typeof msg.kind === "string" ? msg.kind : undefined);
                 return;
             case "pickerCancel":
-                this.resolvePicker(undefined);
+                this.resolvePicker(undefined, typeof msg.kind === "string" ? msg.kind : undefined);
                 return;
             case "askCardAnswer":
                 // 界面上答了一张开在消息流里的问话卡片（见 ChatHost.askOnScreens）

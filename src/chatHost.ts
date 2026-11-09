@@ -380,6 +380,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 人最近在动的那一块屏。“最近”只看人做的动作，报活不算。
      */
     protected override pickOverlayTarget(): string {
+        // 挑人的两个来源都已经只认“通道还连着”的屏（见 chatBroadcaster 的
+        // recentActionPage / recentPage），断开的不可能被挑中，这里不用再过一道。
         return pickOverlayClient(this.broadcaster.recentActionPage(), this.broadcaster.recentPage()?.id);
     }
 
@@ -872,6 +874,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * @param since 页面在连接地址上报的「我处理到第几条」；刚打开的页面不报。
      */
     public onPageConnected(pageId: string, since?: number): void {
+        // 断线前屏幕上还开着的浮层：后端在断开那一刻已经按取消放行过了（见 dropPickerForClient），
+        // 界面上那一块却还摆着，点下去没人接（看着就是“点了没反应”）。重连第一件事让它收起来。
+        // 没开着的时候这一句什么也不做（界面上 hidePicker 对一份空状态直接返回）。
+        this.sendToOneClient(pageId, { type: "pickerCancel" });
         // 这条连接是新的，旧那条上"卡片已送到"的记录不再作数：手机锁屏之后旧连接常常是
         // 悄悄死的（网络那头把会话收了，浏览器不报错），卡片写进去看着成功、对方其实没收到；
         // 页面重开一条连接回来时，这边也没法知道它手里到底有哪几张卡片。
