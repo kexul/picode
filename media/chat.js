@@ -911,6 +911,7 @@
       _historyBtn: null,
       _stage: null,
       _stageDropped: false,
+      _stageCursors: null,   // 往暂存区里画更早的历史时，暂存的“现在这一批”游标（见 STAGE_CURSORS）
       streaming: false,
       // 这个会话此刻处在哪个阶段（见 src/sessionPhase.ts：后端算好推过来，界面只存、不自己拼）。
       // 顶条那颗点、输入框那颗模型胶囊、顶边那颗小图形、末尾那颗胶囊、关会话要不要问第二遍，
@@ -2067,7 +2068,7 @@
     st.suppressScroll = true;
     st.fromHistory = true;
     // 正插到一半的「加载更早」那批作废：它插进来的是旧节点，会跟这一遍对账打架
-    if (st._stage) { st._stage = null; st._stageDropped = true; }
+    if (st._stage) { st._stage = null; st._stageDropped = true; dropStageCursors(st); }
     st._historyBtn = null;
     // 这些东西重放里没有，是“现在这个状态”算出来的：先收掉，重放完按真实状态重算
     dropRunningLine(st);
@@ -3575,16 +3576,17 @@
   }
 
   /** 想完一段：整段文本补上、标签停住。历史重放只来一条全文（没有开始事件），这里现开一个再收尾。
-   *  forceNew：往暂存区补更早的历史时用（正在想的那一条在真的窗格里，别动它）。 */
-  function endThinking(st, text, forceNew, msg) {
+   *  往暂存区补更早的历史时不再需要“强制新开”：那会儿“正在想的那一条”已经整组存起来了
+   *  （见 STAGE_CURSORS），暂存区里的 `st.thinkingEntry` 本来就只指它自己的。 */
+  function endThinking(st, text, msg) {
     // 后端现在一字不传（正文只在点开提示框时取），所以“没有文本”不等于“没有这一段”：
     // 只要消息里带着“还有多少字没带过来”，这一段照样要出一颗标签（重放历史全靠这一条）。
     const clip = msg ? clipOf(msg) : null;
-    let entry = forceNew ? null : st.thinkingEntry;
+    let entry = st.thinkingEntry;
     // 收尾（thinking_end）比正文晚到的 provider（openai-completions 那一路：正文边流边给，
     // 收尾整条流跑完才发）会先被“正文开始了”那颗兜底收掉，全文这时才到：补进那一条，
     // 别再新开一颗 —— 不然同一段思考在界面上成了两颗，前一颗还写着空的。
-    if (!entry && clip && !forceNew) { entry = pendingThinkOf(st, clip.key); }
+    if (!entry && clip) { entry = pendingThinkOf(st, clip.key); }
     if (!entry) {
       if (!text && !clip) { return; }   // 没在想的、又没有文本（重复收尾）：不用管
       entry = addToolToGroup(st, THINKING_NAME, "", "");
@@ -12230,8 +12232,7 @@
       }
       case "thinkingFull":
         // 想完一段：整段文本随 pi 的 thinking_end 过来（历史重放也只来这一条），见 endThinking。
-        // 正在往暂存区补更早的历史（t._stage）时另开一条，别动手头正在想的那一条。
-        endThinking(t, msg.text, !!t._stage, msg);
+        endThinking(t, msg.text, msg);
         break;
       case "tool": {
             finalizeCurrentAssistant(t);
@@ -12336,7 +12337,7 @@
         // 「加载更早」那批也作废（会话已换，再插进去就串了），置个丢弃标记等 End 来清
         t._historyBtn = null;
         t.hasMoreHistory = false;
-        if (t._stage) { t._stage = null; t._stageDropped = true; }
+        if (t._stage) { t._stage = null; t._stageDropped = true; dropStageCursors(t); }
         // 后端可能在 loading 状态中再次 clear（例如切换完成后重绘消息），
         // 不能因此把进行中的加载反馈一并清掉。
         syncSessionLoading(t);
@@ -12594,14 +12595,12 @@
         inner.sessionId = msg.sessionId;
         const realPane = t.paneEl;
         const savedStick = t.stickToBottom;
-        const savedSegmentThink = t.segmentThinking;   // 暂存区自己算自己的，别动本段那颗与末尾候选
-        const savedTailThink = t.tailThinking;
         t.paneEl = t._stage;
+        // 一整批只存一次游标：第一条进来时存，historyBatchEnd 时还（见 STAGE_CURSORS）
+        if (!t._stageCursors) { t._stageCursors = takeStageCursors(t); }
         try { applyPanelMessage(inner); }
         finally {
           t.paneEl = realPane;
-          t.segmentThinking = savedSegmentThink;
-          t.tailThinking = savedTailThink;
           // 渲染进暂存区时的滚动状态调整（scrollToBottom 等）不该影响真实窗格
           t.stickToBottom = savedStick;
         }
@@ -12620,6 +12619,16 @@
   }
 
   // ==================== 历史窗口（网页端「只发最近一段历史」） ====================
+
+  /**
+   * 往暂存区（"加载更早"那一批、见 case "historyBatchEvent"）里画的时候，把“现在这一批”那几样游标
+   * 整组存起来、换成空的（见 STAGE_CURSORS），画完再还（见 flushHistoryBatch）。
+   * 批开到一半就作废了（中途整屏重画 / 换会话）也走这个：不还的话，这批存的那份就永远挂在会话上了。
+   */
+  function dropStageCursors(st) {
+    putStageCursors(st, st && st._stageCursors);
+    if (st) { st._stageCursors = null; }
+  }
 
   /**
    * 顶部「加载更早的消息」按钮。
@@ -12659,6 +12668,31 @@
   }
 
   /**
+   * 往暂存区里画更早的历史时，这几样要整组存起来、换成空的，画完再还（两条道共用：
+   * 「加载更早」那批（见 case "historyBatchEvent"）与窗格顶上那截搬出来的（见 fillOlder））。
+   *
+   * 为什么一样都不能少：这几样都是“现在这一批落在哪儿 / 这一批各叫了几次 / 正在写的正文 /
+   * 正在想的那条”，它们不是按窗格找的 —— 不存还的话，暂存区里画出来的东西会把它们抢走：
+   * 更早那批画完被插到窗格顶上以后，后面实时长出来的调用就全接到顶上那行去了
+   *（上面那行的次数越攒越多、「正在跑」那条也跟着跑到上面，看着就是“命令顺序乱了”）。
+   * 以后再加这种游标，加到这张表里就行，别再回到各存各的。
+   */
+  const STAGE_CURSORS = ["currentToolTail", "toolGroups", "currentAssistant", "thinkingEntry", "pendingThink", "segmentThinking", "tailThinking"];
+
+  /** 存下这几样、现场换成空的（暂存区自己从头算）。 */
+  function takeStageCursors(st) {
+    const saved = {};
+    for (const k of STAGE_CURSORS) { saved[k] = st[k]; st[k] = null; }
+    return saved;
+  }
+
+  /** 画完了（或者半路作废了）：把这几个游标交回“现在这一批”。 */
+  function putStageCursors(st, saved) {
+    if (!st || !saved) { return; }
+    for (const k of STAGE_CURSORS) { st[k] = saved[k]; }
+  }
+
+  /**
    * 「加载更早」那批消息渲染完了：把暂存区的内容整体插到按钮下方，
    * 并把滚动位置补回去，让视野还停在原来那几条消息上。
    * 会话在加载途中被切换过（clear 已把暂存区作废）就不插了。
@@ -12666,6 +12700,9 @@
   function flushHistoryBatch(t, hasMore, hidden) {
     const stage = t._stage;
     t._stage = null;
+    // 这批画完了：游标交回“现在这一批”（见 STAGE_CURSORS；一整批只存一次，见 case "historyBatchEvent"）
+    putStageCursors(t, t._stageCursors);
+    t._stageCursors = null;
     const dropped = t._stageDropped === true;
     t._stageDropped = false;
     if (dropped) {
@@ -12967,17 +13004,14 @@
       const take = split.take;
       st.older = split.rest;
       // 这几个说的是“窗格末尾那一批”的落脚点（工具行 / 图块 / 那段思考），画老消息时
-      // 不能让它们被改掉：另存一份，画完还回去。currentToolTail 置空让老消息自己另起一行。
+      // 不能让它们被改掉：整组存下来、换成空的，画完还回去（见 STAGE_CURSORS）。
       const stage = document.createElement("div");
-      const saved = {
-        pane: st.paneEl, stage: st._stage, stick: st.stickToBottom,
-        tail: st.currentToolTail, asst: st.currentAssistant, think: st.thinkingEntry,
-        seg: st.segmentThinking, tailThink: st.tailThinking, groups: st.toolGroups,
-      };
+      const savedPane = st.paneEl;
+      const savedStage = st._stage;
+      const savedStick = st.stickToBottom;
+      const savedCursors = takeStageCursors(st);
       st._stage = stage;
       st.paneEl = stage;
-      st.currentToolTail = null;
-      st.toolGroups = null;
       try {
         for (const item of take) {
           // 搬出来收着的那一截：原样挂回去（不重画）
@@ -12988,15 +13022,10 @@
           }
         }
       } finally {
-        st.paneEl = saved.pane;
-        st._stage = saved.stage;
-        st.stickToBottom = saved.stick;
-        st.currentToolTail = saved.tail;
-        st.currentAssistant = saved.asst;
-        st.thinkingEntry = saved.think;
-        st.segmentThinking = saved.seg;
-        st.tailThinking = saved.tailThink;
-        st.toolGroups = saved.groups;
+        st.paneEl = savedPane;
+        st._stage = savedStage;
+        st.stickToBottom = savedStick;
+        putStageCursors(st, savedCursors);
       }
       if (!stage.childNodes.length) { dropOlderHintIfEmpty(st); return; }
       // 尺子：原来最上面那条消息现在在视野里的位置。补完按它放回去（同 flushHistoryBatch）。

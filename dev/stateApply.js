@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * stateApply —— 验「页面上那份会话状态」更新时的三条正经路（都是“只有一个入口”的事）：
+ * stateApply —— 验「页面上那份会话状态」更新时的四条正经路（都是“只有一个入口”的事）：
  *
  *   npm run web:shot -- --fake-pi --script dev/stateApply.js
  *
@@ -12,6 +12,10 @@
  * 三、关掉一个还挂着「后台任务」的会话，它那只每半秒走一次的钟要跟着停：以前没清，
  *     钟的退出条件看“那一块还有没有父节点”，而整棵树只是从文档上摘下来、父节点还在，
  *     于是那只钟会一直空转下去。
+ * 四、补完更早的历史以后，后面新来的调用还得落在“现在这一批”那一行里、思考的段数不能被多算：
+ *     往暂存区里画的时候要是没把“这批落在哪一行 / 这批的名字计数表 / 正在想的那条”存还掉，
+ *     新调用会接进顶上那一行（次数越攒越多、命令跑到上面去）；而「收尾时强制新开一段思考」
+ *     会让顶上那行多出一颗空的 think（手机上断线重连、加载更早之后“命令顺序乱了”就是这个）。
  */
 module.exports = async (page) => {
     await page.waitReady();
@@ -101,6 +105,56 @@ module.exports = async (page) => {
     // 收掉这条在跑的，免得挡着下面关会话
     await post([{ type: "toolResult", toolCallId: "a2", resultText: "hi" }]);
     await page.sleep(200);
+
+    // ---- 四、补完更早的历史 → 后面新来的调用还落在“现在这一批”，不该塞进顶上那一批 ----
+    // 以前往暂存区里画的时候，只存还了“本段那颗思考”，没存还“这批工具落在哪一行 / 这批的名字计数表 /
+    // 正在写的正文 / 正在想的那条”。于是更早那批画完、节点被插到窗格顶上以后，这几样还指着那批里的行，
+    // 后面实时来的调用全塞进顶上那行：上面那行的次数越攒越多，「正在跑」那条也跟着跑到上面去
+    //（手机上断线重连、点一下「加载更早」之后，就是“命令的顺序乱了”那个样子）。
+    const pair = (id, cmd) => [
+        { type: "tool", sessionId: sid, toolName: "bash", args: { command: cmd }, toolCallId: id },
+        { type: "toolResult", sessionId: sid, toolCallId: id, resultText: "ok" },
+    ];
+    await post([
+        { type: "userMessage", sessionId: sid, text: "四·第一段" },
+        ...pair("f1", "echo a"),
+        { type: "userMessage", sessionId: sid, text: "四·第二段" },
+        ...pair("f2", "echo b"),
+    ]);
+    await page.sleep(400);
+    // 往上补一截更早的历史（里面也有一条工具调用：它那一行会落在窗格顶上）：这条道以前会把
+    // “这批落在哪一行”丢在暂存区里，之后新来的调用全接进顶上那一行
+    await post([
+        { type: "historyBatchEvent", sessionId: sid, event: { type: "assistantFull", text: "更早的一段" } },
+        { type: "historyBatchEvent", sessionId: sid, event: { type: "thinkingStart" } },
+        { type: "historyBatchEvent", sessionId: sid, event: { type: "thinkingFull", text: "更早的那一段思考" } },
+        { type: "historyBatchEvent", sessionId: sid, event: { type: "tool", toolName: "bash", args: { command: "echo 早" }, toolCallId: "old1" } },
+        { type: "historyBatchEvent", sessionId: sid, event: { type: "toolResult", toolCallId: "old1", resultText: "ok" } },
+        { type: "historyBatchEnd", sessionId: sid, hasMore: false, hidden: 0 },
+    ]);
+    await page.sleep(400);
+    // 补完以后又来了一条新调用：它该落在「四·第二段」下面那一行（那一行变成 2 条）
+    await post(pair("f3", "echo c"));
+    await page.sleep(400);
+    const rows = await page.eval(`
+        const pane = document.querySelector(".session-view:not(.off) .session-pane");
+        const out = [];
+        let at = "";
+        for (const el of pane.children) {
+            if (el.classList.contains("user")) { at = (el.textContent || "").trim().slice(0, 6); }
+            if (el.classList.contains("tool-row")) {
+                out.push({ at: at, chips: Array.from(el.children).map((t) => (t.textContent || "").trim()) });
+            }
+        }
+        return out;
+    `);
+    const A = rows.find((r) => r.at === "");                    // 顶上那行：更早那批自己的
+    const B = rows.find((r) => r.at === "四·第二段");
+    const show = rows.map((r) => (r.at || "（顶上）") + ":" + r.chips.join("+")).join(" / ");
+    // 顶上那行不该多出东西；第一段下面那行只有 1 条（标签不写数字）；第二段下面那行该是 2 条（bash2）
+    check(!!A && A.chips.join("+") === "think+bash", `补完更早的历史以后，顶上那行不对（思考该是一段、命令该是一条；现在是：${show}）`);
+    check(!!B && B.chips.length === 1 && B.chips[0] === "bash2", `补完更早的历史以后，新来的调用没落在下面那行（各行现在是：${show}）`);
+    console.log("  四、补完更早历史后新调用落在：" + show);
 
     // ---- 三、关掉带「后台任务」的会话 → 那只钟停掉 ----
     await page.eval(`
