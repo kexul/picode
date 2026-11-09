@@ -3238,8 +3238,15 @@
       const seg = segs[i];
       const lines = seg.text.split("\n");
       if (chain.length >= RUNNING_CHAIN_MAX) { hidden += 1; continue; }
-      chain.push({ text: segmentDisplay(lines[0]), sep: i === 0 ? "" : segmentSep(seg.sepBefore), dim: isReadOnlySegment(seg), prompt: i === 0 });
-      for (let j = 1; j < lines.length; j++) { body.push(lines[j]); }
+      // 只有开了 heredoc 的那一段才带正文（下面那几行是脚本 / 数据）。其余多行的（`&& \` 续行那种）
+      // 拼回一行：链永远是一条，不多出第二行。
+      const opensHeredoc = lines.length > 1 && /<<-?\s*['"\\]?[A-Za-z_]/.test(lines[0]);
+      const text = opensHeredoc ? lines[0] : lines.join(" ");
+      chain.push({
+        text: segmentDisplay(text.replace(/\\\s+/g, " ")),   // 续行的那个反斜杠连它后面的空白一起去掉
+        sep: i === 0 ? "" : segmentSep(seg.sepBefore), dim: isReadOnlySegment(seg), prompt: i === 0,
+      });
+      if (opensHeredoc) { for (let j = 1; j < lines.length; j++) { body.push(lines[j]); } }
     }
     // 整条摘要里 "$ " + 命令 后面那点尾巴（timeout 这类）照旧跟着写
     const head = "$ " + cmd;

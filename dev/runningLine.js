@@ -558,6 +558,17 @@ module.exports = async (page) => {
     if (!d.tip) { problems.push("正文被裁了却没挂提示框（点开看不到整条）"); }
     await page.shot("running-line-chain.png");
 
+    // 不是 heredoc 的多行命令（`&& \` 续行那种）：拼回一条链，不多出第二行，也不留一个孤零零的「\」
+    await post([{ type: "toolResult", toolCallId: "z4", isError: false, resultText: "done", durationMs: 900 }]);
+    await post([{ type: "tool", toolName: "bash", toolCallId: "z5", args: { command: "npm test 2>&1 && \\\n  npx tsc --noEmit" } }]);
+    await page.sleep(200);
+    d = await drawn();
+    console.log("   续行那条：parts=" + JSON.stringify(d.parts) + " body=" + JSON.stringify(d.body));
+    if (JSON.stringify(d.parts) !== JSON.stringify(["$ ", "npm test 2>&1", "[&&]", "npx tsc --noEmit"])) {
+        problems.push("续行的命令该拼回一条链（不留反斜杠、不多出一段）：" + JSON.stringify(d.parts));
+    }
+    if (d.body.length) { problems.push("不是 heredoc 的命令不该在链下面多出正文行：" + JSON.stringify(d.body)); }
+
     if (problems.length) {
         throw new Error("有对不上的地方：\n  - " + problems.join("\n  - "));
     }
