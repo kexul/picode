@@ -80,7 +80,14 @@ const SAMPLE_PNG_BASE64 =
 const messages = [{ role: "system", content: [{ type: "text", text: "初始提示 + 工具清单（假 pi 的占位）" }], timestamp: 0 }];
 let seq = 0;
 /** 剧本自己的状态（比如“标题已经报过了”）：不进行消息历史。 */
-const scriptState = {};
+const scriptState = {
+    titleSent: false,
+    /** 当前会话名（真 pi 的会话名 / get_state 报的就是这个）。手动改过以后就是改的那个，
+     *  第一轮跑完那个“假标题”不盖它（真 pi 里那个自动命名扩展也会让着手改的名字）。 */
+    sessionName: "假会话（fakePi）",
+    /** 这个名字是脚本自己起的（不是“用户手改的”） */
+    namedByScript: false,
+};
 const nextId = (prefix) => `${prefix}-${++seq}-${Date.now().toString(36)}`;
 const sleep = (ms) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
 
@@ -423,7 +430,14 @@ async function runScript(userText) {
                 : "";
             const title = "假标题：" + String(firstText || "新会话").replace(/s+/g, " ").trim().slice(0, 12);
             messages.push({ role: "system", content: [{ type: "text", text: "会话标题已设置" }], sessionName: title });
-            emit({ type: "session_info_changed", name: title });
+            // 手动改过的名字永远老大（跟真 pi 里那个扩展一条规矩：现在的名字不是自己起的就不动它）
+            const stillOurs = !scriptState.sessionName || scriptState.namedByScript
+                || scriptState.sessionName === "假会话（fakePi）";
+            if (stillOurs) {
+                scriptState.sessionName = title;
+                scriptState.namedByScript = true;
+                emit({ type: "session_info_changed", name: title });
+            }
         }
         emit({ type: "agent_settled" });
     };
@@ -680,10 +694,20 @@ async function handle(cmd) {
                 isStreaming: false,
                 sessionFile,
                 sessionId: "fake-session",
-                sessionName: "假会话（fakePi）",
+                sessionName: scriptState.sessionName,
                 messageCount: messages.length,
             });
             return;
+        case "set_session_name": {
+            // 手动改名字：跟真 pi 一样，改名后发一条 session_info_changed（界面靠它换名字）
+            const name = String(cmd.name || "").trim();
+            if (!name) { write({ id, type: "response", command: cmd.type, success: false, error: "Session name cannot be empty" }); return; }
+            scriptState.sessionName = name;
+            scriptState.namedByScript = false;
+            respond(id, cmd.type);
+            write({ type: "session_info_changed", name });
+            return;
+        }
         case "get_available_models":
             respond(id, "get_available_models", { models: [{ ...MODEL, reasoning: false, cost: { input: 0, output: 0 } }] });
             return;
@@ -692,7 +716,12 @@ async function handle(cmd) {
             return;
         case "set_thinking_level":
         case "new_session":
-            if (cmd.type === "new_session") { messages.length = 0; }
+            if (cmd.type === "new_session") {
+                messages.length = 0;
+                scriptState.titleSent = false;
+                scriptState.sessionName = "假会话（fakePi）";
+                scriptState.namedByScript = false;
+            }
             respond(id, cmd.type, {});
             return;
         case "get_session_stats":

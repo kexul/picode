@@ -1195,6 +1195,77 @@
     return n;
   }
 
+  // ==================== 双击名字改名 ====================
+  // 顶条那一格、「项目与会话」里「正在对话」那一行：双击名字，名字就地变成输入框。
+  // 回车或点到别处算改好，Esc 不算，空着不算。名字交给后端 → pi 写进会话文件，
+  // 界面不自己改手上这份：新名字靠后端推来的会话列表带回来（几十毫秒）。
+  // 手机上不挂这一套：触屏上双击不可靠（会被当成缩放）。
+  const RENAME_MAX_CHARS = 40;      // 跟 src/sessionRuntime.ts 里那个上限同一个数
+  /** 正在改名的地方：会话号 → 那个输入框 + 它原来写名字的那块。
+   *  后端随时会推新的会话列表重画，重画时要认出来别把人家打了一半的字冲掉。 */
+  const renaming = new Map();
+  /** 上一次切会话是什么时候：双击别的格会把会话先切过去，再轮到 dblclick，靠它区分“本来就看这个” */
+  let lastSwitchAt = 0;
+
+  /**
+   * 给一块名字挂上“双击改名”。
+   * @param textEl 写名字的那个元素（改名时先把它藏起来）
+   * @param holderEl 输入框塞在谁里面
+   * @param onlyWhenCurrent 只认当前会话（顶条那一格用：双击别的格还是切过去）
+   */
+  function wireRenameOnName(textEl, sessionId, holderEl, onlyWhenCurrent) {
+    textEl.addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      if (onlyWhenCurrent) {
+        if (activeId !== sessionId) { return; }
+        // 双击别的格：第一下已经把它切过来了（浏览器先发两次 click、再发 dblclick），
+        // 到这里 activeId 已经等于它。所以看“刚刚是不是切过会话”：刚切过来的那一下不算改名。
+        if (Date.now() - lastSwitchAt < 600) { return; }
+      }
+      startRename(sessionId, textEl, holderEl);
+    });
+  }
+
+  /** 把名字换成输入框：会话进程还没就绪（刚打开那一两秒）就不给改，发了 pi 也接不着。 */
+  function startRename(sessionId, textEl, holderEl) {
+    if (renaming.has(sessionId)) { return; }
+    const st = sessions.get(sessionId);
+    if (!st || !st.piReady) { return; }
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "sn-rename";
+    input.maxLength = RENAME_MAX_CHARS;
+    input.value = textEl.textContent || "";
+    // 输入框上的点、双击都不许冒泡：那一格 / 那一行点一下是切会话，在框里点会白切一下
+    ["click", "dblclick", "mousedown", "pointerdown"].forEach((type) => {
+      input.addEventListener(type, (e) => { e.stopPropagation(); });
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); finishRename(sessionId, true); }
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finishRename(sessionId, false); }
+    });
+    input.addEventListener("blur", () => { finishRename(sessionId, true); });
+    textEl.style.display = "none";
+    // 塞在名字原来待的地方（顶条那一格下面还有一行「跑在哪个目录」，别把输入框甩到它底下去）
+    if (textEl.parentElement) { textEl.parentElement.insertBefore(input, textEl.nextSibling); }
+    else { holderEl.appendChild(input); }
+    renaming.set(sessionId, { input, textEl });
+    input.focus();
+    input.select();
+  }
+
+  /** 收起输入框：改好了才把名字发出去（没变、空的都不发，也不发“什么都没改”）。 */
+  function finishRename(sessionId, commit) {
+    const live = renaming.get(sessionId);
+    if (!live) { return; }
+    renaming.delete(sessionId);
+    const name = live.input.value.trim().slice(0, RENAME_MAX_CHARS);
+    if (live.input.parentElement) { live.input.parentElement.removeChild(live.input); }
+    live.textEl.style.display = "";
+    if (!commit || !name || name === (live.textEl.textContent || "")) { return; }
+    vscode.postMessage({ type: "rename", sessionId, name });
+  }
+
   // ==================== 顶条那一排会话格 ====================
   // 一格一个主会话（主会话，加上本屏正在看的那个子会话）。
   // 点别的格直接切过去；点当前这一格什么也不做（关会话点每格自己那颗 ×）。
@@ -1228,9 +1299,13 @@
       close.addEventListener("click", (e) => { e.stopPropagation(); askCloseSession(sessionId); });
       el.appendChild(close);
     }
+    // 双击名字改名字（只认当前那一格：双击别的格还是老样子——切过去）
+    const nameTextEl = el.querySelector(".sn-text");
+    if (nameTextEl) { wireRenameOnName(nameTextEl, sessionId, nameTextEl.parentElement || el, true); }
     // 点这一格：不是当前这个就切过去（一下就换了）；就是当前这个什么也不做
     el.addEventListener("click", () => {
       if (activeId === sessionId) { return; }
+      lastSwitchAt = Date.now();
       requestSwitch(sessionId);
     });
     sessionTabEls.set(sessionId, el);
@@ -1253,7 +1328,8 @@
       const kids = st ? runningChildCount(st.id) : 0;
       const doneKids = st ? doneChildCount(st.id) : 0;
       const nameEl = el.querySelector(".sn-text");
-      if (nameEl) { nameEl.textContent = item.label || ""; }
+      // 正在改名的这一格不碰它的字：右端推来新列表会把每一格重写一遍，不能把人家打了一半的字冲掉
+      if (nameEl && !renaming.has(item.sessionId)) { nameEl.textContent = item.label || ""; }
       // 名字底下那一行：这个会话跑在哪个工作区（只写目录名的最后一段，跟「项目与会话」里那一行同名；
       // 整条路径在下面那条悬停提示里）。没给目录就空着，CSS 把那一行整个收掉。
       const cwdEl = el.querySelector(".sn-cwd");
@@ -10115,6 +10191,15 @@
         main.appendChild(dot);
         const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.label || "";
         main.appendChild(title);
+        // 双击名字改名（跟顶条那一格一个手势）。正在改名的那行：名字先藏着，把那个输入框接回来
+        //（后端推新列表会把这几行整行重画，输入框得跟着走，不然打到一半的字就丢了）。
+        wireRenameOnName(title, item.sessionId, main, false);
+        if (renaming.has(item.sessionId)) {
+          const live = renaming.get(item.sessionId);
+          title.style.display = "none";
+          live.textEl = title;
+          main.insertBefore(live.input, title.nextSibling);
+        }
         // 行尾不再挂「当前」/「在跑」：当前那条靠整行的底色认，在跑 / 跑完了靠行首那颗小点。
         el.appendChild(main);
         if (item.pendingClose) {

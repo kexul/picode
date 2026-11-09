@@ -155,6 +155,10 @@ export function expandSlashCommand(text: string, commands: RpcCommandInfo[]): st
 /** 工具参数里这几项整个不带（write / edit 的正文：几十上百 KB，界面上那两处都用不到）。 */
 const SummaryOmittedArgKeys: ReadonlySet<string> = new Set(["content", "oldText", "newText"]);
 
+/** 手改的会话名字最多这么多字（多了切掉）：跟自动起标题的上限一样，界面上的输入框也限这个数
+ *  （media/chat.js 里那个 RENAME_MAX_CHARS 与它同一个数，那边改这边也要改）。 */
+const RENAME_MAX_CHARS = 40;
+
 /**
  * 一段模型输出大概是多少 token（真 token 数只有模型自己知道）：
  * 中日韩文字一个字算一个，其余四个字符算一个。生成速度（t/s）用它合计出来的数。
@@ -684,6 +688,21 @@ export class SessionRuntime {
     private async refreshSessionTitle(): Promise<void> {
         const resp = await this.request<RpcSessionState>({ type: "get_state" });
         this.captureSessionName(resp?.data);
+    }
+
+    /**
+     * 给这个会话改名字（顶条那一格、「项目与会话」里那一行双击名字）。
+     *
+     * 名字交给 pi 写进会话文件：顶条 / 列表 / 历史会话随后都靠 pi 发来的 session_info_changed
+     * 跟着换（见上面 setSessionTitle），这里不碰本地那份标题——名字只有一个准头：pi。
+     * 顺带的好处是 pi 那边的自动起标题从此不再动这个名字（那边认得出来这不是它起的）。
+     * 返回有没有真发出去：名字空着、会话进程还没就绪，都算没改。
+     */
+    public async renameSession(name: string): Promise<boolean> {
+        const next = typeof name === "string" ? name.trim().slice(0, RENAME_MAX_CHARS) : "";
+        if (!next || !this.piReady) { return false; }
+        const resp = await this.request({ type: "set_session_name", name: next });
+        return !!resp?.success;
     }
 
     public isRunning(): boolean {

@@ -21,6 +21,7 @@ export type RpcCommand =
     | { type: "get_session_stats" }
     | { type: "compact"; customInstructions?: string }
     | { type: "switch_session"; sessionPath: string }
+    | { type: "set_session_name"; name: string }
     | { type: "get_messages" }
     | { type: "get_commands" }
     | { type: "extension_ui_response"; id: string; [k: string]: unknown };

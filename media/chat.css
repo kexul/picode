@@ -210,6 +210,19 @@
   .sn-tab.streaming .sn-text { opacity: 1; }
   .sn-tab.current .sn-cwd,
   .sn-tab.streaming .sn-cwd { opacity: 0.68; }
+  /* 双击名字改名时那个输入框（顶条那一格、「项目与会话」里那一行共用）。
+     跟名字一样大、待在原来那一行上，把那一格撑高就不会了：格子高度是被 .sn-text 那一行定着的。 */
+  .sn-rename {
+    flex: 1 1 auto; min-width: 4em; max-width: 14em;
+    font-family: inherit; font-size: inherit; line-height: inherit;
+    color: var(--vscode-input-foreground, inherit);
+    background: var(--vscode-input-background, transparent);
+    border: 1px solid var(--vscode-focusBorder, currentColor); border-radius: 4px;
+    padding: 0 3px; margin: 0; outline: none;
+  }
+  .sn-tab .sn-rename { font-size: 0.85em; line-height: 1.15; }
+  /* 那一行里名字是 flex: 1 1 auto 的，输入框接替它的位置就需要撑满剩下的宽 */
+  .pk-history-main .sn-rename { max-width: none; }
   /* 小点（底下挂着子会话个数）对齐的是名字那一行，不是整格的中间：一格现在两行，
      整格中间落在两行之间，看着像这颗点在盯底下的目录。偏移量 = (名字那一行的高度 - 小点高度) / 2，
      名字那一行的高度见 .sn-text（0.85em × 1.15）。数字照旧挂在点底下。 */

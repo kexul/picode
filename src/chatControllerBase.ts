@@ -2505,6 +2505,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 // 「改动」里那份 diff 横条上的「回滚」：把这个文件撤到它最近一次提交的样子
                 if (typeof msg.path === "string" && msg.path) { void target.revertChange(msg.path); }
                 break;
+            case "rename": {
+                // 界面双击名字改的：只改点它的那一格那个会话。找不到、或者它是子会话
+                //（名字是派活时给的任务名），都当没说。这里也不用上面那个 target 回落：
+                //改名字改错人比没改成更麻烦。
+                const named = typeof msg.sessionId === "string" ? this.panels.get(msg.sessionId) : undefined;
+                if (named && !this.taba.byChildPanel(named.id) && typeof msg.name === "string") {
+                    void named.renameSession(msg.name);
+                }
+                break;
+            }
             case "loadOlderHistory":
                 // 网页端顶部的「加载更早的消息」按钮：把当前窗口之前的一段补发过来。
                 // 只在开过历史窗口的会话上有意义；没开过窗口时运行时自己会忽略。
