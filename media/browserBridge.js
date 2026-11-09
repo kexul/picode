@@ -335,6 +335,15 @@
   }
 
   /**
+   * 这块屏有多宽（CSS 像素）。
+   * 连推送时把它写在地址上：后端按它判断“这块屏是不是手机”，决定首屏那些图要不要
+   * 跟着一起发过来（窄屏只发占位，点开再取；宽屏照旧全发）。用户把窗口拉窄了也一样看待。
+   */
+  function screenWidth() {
+    return Math.round(window.innerWidth || document.documentElement.clientWidth || 0);
+  }
+
+  /**
    * 发一条消息给插件（网页模式：POST /api）。
    * 发不出去就一直重试；只有服务明确回了"不认识这个页面"（409，多半是插件重启过）
    * 或"来源不被接受"（403）才认输。
@@ -515,7 +524,7 @@
     var mine;
     try {
       // 重连的那一次把“我处理到第几条”带上：插件从那一条往后接着补（见上面的 advanceSeq）
-      mine = new EventSource("/events?" + query + (openedOnce ? "&since=" + lastSeq : ""));
+      mine = new EventSource("/events?" + query + "&w=" + screenWidth() + (openedOnce ? "&since=" + lastSeq : ""));
     } catch (e) {
       console.warn("[pi-chat] 推送连接建不起来：", e);
       scheduleReconnect("与插件的连接中断，正在重连…");

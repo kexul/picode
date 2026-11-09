@@ -347,8 +347,10 @@ export interface WebServerHost {
     /**
      * 一条推送连接建立（页面连上 / 重连）。
      * @param since 页面报上来的「我处理到第几条」（连接地址上的 since），没报就是 undefined。
+     * @param width 页面报上来的屏宽（连接地址上的 w，CSS 像素），没报就是 undefined：
+     *        宿主按它决定首屏的图要不要一起发（窄屏只发占位，见 chatHost 的 inlineImageBudget）。
      */
-    onPageConnected(pageId: string, since?: number): void;
+    onPageConnected(pageId: string, since?: number, width?: number): void;
     /** 一条推送连接断了（页面关掉 / 死连接被掐掉）。 */
     onPageDisconnected(pageId: string): void;
     /** 服务起来了（缓冲可以开始攒：页面可能马上要来）。 */
@@ -677,7 +679,8 @@ export class PiChatWebServer {
             }
             if (pathname === "/events") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                this.openChannel(req, res, url.searchParams.get("pageId") ?? "", url.searchParams.get("since") ?? "");
+                this.openChannel(req, res, url.searchParams.get("pageId") ?? "", url.searchParams.get("since") ?? "",
+                    url.searchParams.get("w") ?? "");
                 return;
             }
             if (pathname === "/api") {
@@ -1577,8 +1580,12 @@ export class PiChatWebServer {
      *
      * 重连时页面会在地址上多带一个 `since`（它处理到第几条）。断线期间漏掉的那几条由
      * 宿主按这个数接着往下发（见 ChatBroadcaster.resume），页面不用再发一条消息来对账。
+     *
+     * 再带一个 `w`（这块屏多宽）：宿主靠它认“这块屏是不是手机”，首屏的图只给它发占位
+     * （见 chatHost 的 inlineImageBudget）。不带（旧的页面、或者别的东西来连）就当宽屏。
      */
-    private openChannel(req: http.IncomingMessage, res: http.ServerResponse, pageId: string, sinceText: string): void {
+    private openChannel(req: http.IncomingMessage, res: http.ServerResponse, pageId: string, sinceText: string,
+        widthText: string): void {
         // 页面标识正常都是服务发出页面时写进去的那个；万一没有就自己编一个，别把好几个页面混成一条
         const id = pageId || `p-anon-${crypto.randomUUID()}`;
         const broadcaster = this.host.getBroadcaster();
@@ -1614,7 +1621,7 @@ export class PiChatWebServer {
         res.on("error", onClose);
         // 断线这段时间广播出去的消息按页面报的序号补给这个页面（补不上、或者序号对不上时，
         // 宿主那头会整屏重画一次）。
-        this.host.onPageConnected(id, parseSince(sinceText));
+        this.host.onPageConnected(id, parseSince(sinceText), parseSince(widthText));
     }
 
     /**

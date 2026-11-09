@@ -169,6 +169,13 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private readonly pendingResyncPages = new Map<string, { note: string; full: boolean; lastRound: boolean }>();
     /** 正在整屏重画的页面：重画没画完页面就断了的话，得等它回来重新整画一遍（怎么画照旧）。 */
     private readonly resyncingPages = new Map<string, { lastRound: boolean }>();
+    /** 每块屏多宽（CSS 像素；页面连上来时写在连接地址上，见 webChatServer 的 openChannel）。
+     *  只在“首屏要不要把图一起发”这一件事上用：窄屏只发占位（见 inlineImageBudget）。 */
+    private readonly pageWidths = new Map<string, number>();
+    /** 屏宽不超过这么多（CSS 像素）就当手机：首屏只发图片占位，点开再取
+     *  （见 inlineImageBudget）。竖屏手机 360～430，平板 768 往上；横屏手机（800 多）按宽屏看待
+     *  —— 屏幕那么宽的时候图本来就装得下，也就不必为省流量把图拆开。 */
+    private static readonly PHONE_MAX_WIDTH = 640;
     /** 还等着的问话卡片：卡片编号（宿主自己发）→ 这一摊。 */
     private readonly openCards = new Map<string, OpenCard>();
     /** 卡片编号发到几了（界面上只拿它认领"哪张卡"、并把答案送回来）。 */
@@ -872,8 +879,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 一条推送连接建立（页面连上 / 重连）：把等着的重画补上、把断线期间漏掉的消息接着发，
      * 再把攒着的消息冲出去。
      * @param since 页面在连接地址上报的「我处理到第几条」；刚打开的页面不报。
+     * @param width 页面在连接地址上报的屏宽；旧页面 / 别的东西来连时没有。
      */
-    public onPageConnected(pageId: string, since?: number): void {
+    public onPageConnected(pageId: string, since?: number, width?: number): void {
+        if (typeof width === "number" && width > 0) { this.pageWidths.set(pageId, width); }
         // 断线前屏幕上还开着的浮层：后端在断开那一刻已经按取消放行过了（见 dropPickerForClient），
         // 界面上那一块却还摆着，点下去没人接（看着就是“点了没反应”）。重连第一件事让它收起来。
         // 没开着的时候这一句什么也不做（界面上 hidePicker 对一份空状态直接返回）。
@@ -919,6 +928,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 一条推送连接断了（页面关掉 / 死连接被掐掉）：它上面等着的问话卡片摘掉，
      *  它上面开着的浮层也按取消收掉（等的人不用干等）。 */
     public onPageDisconnected(pageId: string): void {
+        this.pageWidths.delete(pageId);
         this.dropCardsForClient(pageId);
         this.dropPickerForClient(pageId);
         // 这块屏还在看桌面实时画面的话，它这一走就别再拍了
@@ -1021,7 +1031,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         for (const rt of this.panels.values()) {
             // 刚建的空会话不用重画：newSession 已经把它需要的东西发过去了
             if (rt.isConversationEmpty()) { continue; }
-            replays.push(rt.replayHistory({ note, sink, full: opts?.fullHistory, lastRound: opts?.lastRound }));
+            replays.push(rt.replayHistory({ note, sink, full: opts?.fullHistory, lastRound: opts?.lastRound,
+                imageBudget: this.inlineImageBudget(pageId) }));
         }
         return Promise.all(replays).then(() => {
             // 重画把还等着的问话卡片也抹掉了：重发给这块屏（见 resendCardsTo）
@@ -1039,10 +1050,23 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         });
     }
 
+    /**
+     * 这块屏首屏的图片预算（base64 字符数）：undefined = 用运行时默认那一份（400 KB）。
+     *
+     * 只有“这块屏是手机”（屏宽不超过 PHONE_MAX_WIDTH）时给 0：首屏里的图一张都不带，
+     * 界面上只摆占位，点开再取（见 sessionRuntime 的 planInlineImages / loadResultImage）。
+     * 图片的 base64 是整份首屏里唯一几乎压不动的东西，手机走流量时这一笔最疼。
+     * 别的屏（电脑上的浏览器窗口、插件里那块面板）不受影响。
+     */
+    public override inlineImageBudget(pageId: string): number | undefined {
+        const width = pageId ? this.pageWidths.get(pageId) : undefined;
+        if (typeof width !== "number") { return undefined; }   // 没报屏宽（旧页面 / 别的东西连的）：当宽屏
+        return width <= ChatHost.PHONE_MAX_WIDTH ? 0 : undefined;
+    }
+
     // ========================================================================
     //  名字池 / # 引用目录
     // ========================================================================
-
     public allocateChatName(): NameParts {
         const parts = uniqueNameParts(this.usedChatNames);
         this.usedChatNames.add(composeName(parts));

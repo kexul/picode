@@ -711,6 +711,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** RuntimeHost.wantsTrimmedHistory：VSCode 这两家整屏重画照旧全量；网页端那份覆写成 true。 */
     public wantsTrimmedHistory(): boolean { return false; }
 
+    /** 这块屏首屏的图片预算：undefined = 用运行时默认那一份（见 ChatHost 的同名方法）。
+     *  VSCode 这两家（面板、编辑器那边）都是宽屏，照旧全发。 */
+    public inlineImageBudget(_clientId: string): number | undefined { return undefined; }
+
     // ---- 查找 ----
     /** 这块屏现在显示的会话（不传 = 正在说话的那块屏）。 */
     public getActive(clientId: string = this.currentPageId): SessionRuntime | undefined {
@@ -2597,7 +2601,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
             case "loadOlderHistory":
                 // 网页端顶部的「加载更早的消息」按钮：把当前窗口之前的一段补发过来。
                 // 只在开过历史窗口的会话上有意义；没开过窗口时运行时自己会忽略。
-                void target.loadOlderHistory();
+                // 图片预算按点这颗按钮的那块屏算（手机上仍旧只发占位）。
+                void target.loadOlderHistory(this.inlineImageBudget(this.currentPageId));
                 break;
             case "loadResultImage":
                 // 界面上点开一张"首屏没带过来"的图（见 sessionRuntime 的图片预算）：把那张单发回去。

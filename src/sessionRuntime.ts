@@ -1517,8 +1517,13 @@ export class SessionRuntime {
      *                  留一颗「加载更早的消息」按钮，点一下再取。重连后补不上、只能整屏
      *                  重画时用它：那时断线可能已经很久，把整个会话再发一遍、再对一遍账
      *                  在手机上很重，而人看的多半也就是眼下这一轮。
+     * @param opts.imageBudget 这一屏首屏的图片预算（base64 字符数）：undefined 用默认那一份，
+     *                  给 0 就一张图都不带（只发占位，点开再取）。手机上就是这一种（见 chatHost 的
+     *                  inlineImageBudget）。
      */
-    public async replayHistory(opts?: { note?: string; sink?: MessageSink; full?: boolean; lastRound?: boolean }): Promise<void> {
+    public async replayHistory(opts?: {
+        note?: string; sink?: MessageSink; full?: boolean; lastRound?: boolean; imageBudget?: number;
+    }): Promise<void> {
         // 缺省出口是这个会话的常规广播；传了 sink 就是"只给某一个页面重画"。
         // 两条路都要带上 sessionId：界面靠它认出消息属于哪一个会话。
         const sink = opts?.sink;
@@ -1569,7 +1574,7 @@ export class SessionRuntime {
             // 编号基数：窗口模式下窗口不是从第一条开始的，用绝对下标，重放两次的编号才一样
             indexBase: win ? win.start : 0,
             // 网页端这一份只带最近的图（更早的界面上点开再取），否则首屏要传的字节数会很大
-            inlineImages: win ? this.planInlineImages(win.list) : (opts?.full ? this.planInlineImages(messages) : undefined),
+            inlineImages: win || opts?.full ? this.planInlineImages(win ? win.list : messages, opts?.imageBudget) : undefined,
         });
         const count = messages.filter((m) => m && (m.role === "user" || m.role === "assistant")).length;
         const note = opts?.note === undefined
@@ -1596,11 +1601,13 @@ export class SessionRuntime {
      * 定下这一屏里哪些图真带数据（其余的只发占位，界面上点开再取）。
      *
      * 从最新一条往前数，累计到预算为止；最新那一张无论多大都带（不然打开来一张图都没有，
-     * 反而像坏了）。返回值是 toolCallId 的集合——一张工具结果里的图要么全带、要么全不带。
+     * 反而像坏了）—— 除非预算给的是 0（手机上就是这样：图全发占位，点开再取）。
+     * 返回值是 toolCallId 的集合——一张工具结果里的图要么全带、要么全不带。
+     * @param budget 这一屏的预算（base64 字符数）；不给就用默认那一份。
      */
-    private planInlineImages(list: any[]): Set<string> {
-        const budget = SessionRuntime.WEB_INLINE_IMAGE_CHARS;
+    private planInlineImages(list: any[], budget: number = SessionRuntime.WEB_INLINE_IMAGE_CHARS): Set<string> {
         const inline = new Set<string>();
+        if (budget <= 0) { return inline; }   // 0 = 一张都不带：整屏都是占位
         let used = 0;
         for (let i = list.length - 1; i >= 0; i -= 1) {
             const m = list[i];
@@ -1880,6 +1887,8 @@ export class SessionRuntime {
     /**
      * 首屏窗口：默认最多 60 条 user/assistant 消息、或者 250 KB（UTF-8），哪个先到算哪个。
      *
+     * 字节按“真会发出去的量”算（见 messageBytes）：思考全文与工具输出全文不发，也就不占预算。
+     *
      * 这两个数是量出来定的（`dev/firstLoad.js --cpu 4`，4 倍降速 ≈ 手机，一个 919 条消息的
      * 真会话）：200 条 / 700 KB 时首屏要下 782 KB 消息、从点开到画完 4.1 秒（其中约 87% 是
      * 界面上收起着的思考全文、工具参数与工具输出）；压到 40 条 / 150 KB 时只剩 127 KB、3.2 秒。
@@ -1947,7 +1956,8 @@ export class SessionRuntime {
     } {
         // 从最新一条往前装，装到“条数上限”或“字节预算”哪个先到为止。
         // 两个都要：条数管住 DOM 的规模（一堆「哦」能塞几千条），字节管住真实体量
-        // （一条 bash 输出几十 KB，十条就顶几百条普通消息）。
+        // （一条贴了几十 KB 正文的消息、一条长命令参数就顶几百条普通消息）。
+        // 字节按“真会发出去的量”算（见 messageBytes）：思考与工具输出全文不算在内。
         const cap = this.historyWindowSize();
         const budget = this.historyWindowBudget();
         let start = endBefore;
@@ -2032,8 +2042,10 @@ export class SessionRuntime {
      *
      * 会话在底下换过（换会话 / 换分支后长度变短或第一条对不上）时，旧下标作废，
      * 不往前补了，直接整屏重画一遍重置窗口。
+     * @param imageBudget 点这颗按钮的那块屏的图像预算（同 replayHistory：手机上给 0，只发占位）。
+     *        补发的这批是广播给所有页面的，所以拿发起的那个来算：手机上点的就都不带图。
      */
-    public async loadOlderHistory(): Promise<void> {
+    public async loadOlderHistory(imageBudget?: number): Promise<void> {
         if (this.historyWindowStart <= 0) { return; }  // 没开过窗口 / 窗口正好从头开始（非网页端、全量发过）：按钮不该出现
         const msgResp = await this.request<{ messages: any[] }>({ type: "get_messages" });
         if (!msgResp) {
@@ -2047,7 +2059,7 @@ export class SessionRuntime {
         ) {
             // 窗口记的那份会话已经不在了（压缩过 / 换过分支）：不往前补，整屏重画一遍。
             // 发全量：页面手上本来就有更早的那些，裁成“最近一段”会当场把它们收掉。
-            await this.replayHistory({ note: "", full: true });
+            await this.replayHistory({ note: "", full: true, imageBudget });
             return;
         }
         const win = this.sliceHistoryWindow(messages, this.historyWindowStart);
@@ -2056,7 +2068,7 @@ export class SessionRuntime {
             // replay：这批是“往上补更早的历史”，界面不给它们挂进场动画（见 media/chat.js 的 enterCls）
             this.host.postToSession(this.id, { type: "historyBatchEvent", event: { ...msg, replay: true } });
         };
-        this.renderMessages(win.list, { sink: emit, inlineImages: this.planInlineImages(win.list), indexBase: win.start });
+        this.renderMessages(win.list, { sink: emit, inlineImages: this.planInlineImages(win.list, imageBudget), indexBase: win.start });
         this.post({ type: "historyBatchEnd", hasMore: win.hasMore, hidden: win.hidden });
     }
 
@@ -2483,20 +2495,58 @@ export class SessionRuntime {
  *   · 不用 `JSON.stringify(整条)`：一条 20 MB 的消息那么干就是造一个 20 MB 字符串。
  *     只把文字部分按 UTF-8 累加，再给消息本身加一个小常数。
  */
+/**
+ * 一条消息在首屏上会占多少字节（UTF-8）。
+ *
+ * **按“真会发出去的量”算，不是原文**：首屏窗口那个 250 KB 预算拿它当尺子
+ * （见 sliceHistoryWindow）。思考全文与工具输出全文在界面上是收起的，发出去只剩
+ * “一共多少字 + 编号”那一句（见 DETAIL_PREVIEW_CHARS / clipDetail）；工具参数也只发
+ * 一行摘要（见 summaryArgs）。按原文算的话，一份工具调用多的会话里，这笔预算会被
+ * “一个字都不发”的东西吃光，能装的条数白白变少（实测一个 622 条的会话：老口径 52 条就撞顶，
+ * 其中 212 KB 是永远不发的思考与工具输出）。
+ */
 function messageBytes(m: any): number {
     if (!m) { return 0; }
     const content = m.content;
-    let bytes = 64;
+    let bytes = 64;   // 消息对象本身的骨头（角色、编号、时间这些）
     if (typeof content === "string") { return bytes + Buffer.byteLength(content, "utf8"); }
     if (!Array.isArray(content)) { return bytes; }
+    // 工具结果：输出全文一个字都不发（界面上点开再取），只留“多少字 + 编号”
+    if (m.role === "toolResult") { return bytes + 96; }
     for (const block of content) {
         if (!block) { continue; }
-        if (typeof block.text === "string") { bytes += Buffer.byteLength(block.text, "utf8"); }
-        else if (typeof block.thinking === "string") { bytes += Buffer.byteLength(block.thinking, "utf8"); }
-        else if (block.type === "toolCall") {
-            try { bytes += Buffer.byteLength(JSON.stringify(block.arguments ?? {}), "utf8"); } catch { bytes += 32; }
-        } else if (block.type === "image") { bytes += 128; }   // 占位的大小，不是 base64 的
-        else { bytes += 32; }
+        switch (block.type) {
+            case "text":
+                // 正文是全发的，照 UTF-8 实算
+                bytes += Buffer.byteLength(block.text ?? "", "utf8");
+                break;
+            case "thinking":
+                bytes += 96;   // 发的是“省略 N 字”那一句，不是全文
+                break;
+            case "toolCall":
+                bytes += toolArgBytes(block.arguments);
+                break;
+            case "image":
+                bytes += 128;   // 占位的大小，不是 base64 的（图另有自己的预算）
+                break;
+            default:
+                bytes += 32;
+        }
+    }
+    return bytes;
+}
+
+/**
+ * 工具参数发出去的那点有多大：跟 {@link SessionRuntime.summaryArgs} 一个口径
+ * ——字符串 / 数字 / 布尔留下（命令、路径这些界面上要看），write / edit 的正文与嵌套结构丢掉。
+ */
+function toolArgBytes(args: unknown): number {
+    if (!args || typeof args !== "object") { return 32; }
+    let bytes = 48;
+    for (const [key, value] of Object.entries(args as Record<string, unknown>)) {
+        if (SummaryOmittedArgKeys.has(key)) { continue; }   // 不发的那几样
+        if (typeof value === "string") { bytes += Buffer.byteLength(value, "utf8") + Buffer.byteLength(key, "utf8") + 8; }
+        else if (typeof value === "number" || typeof value === "boolean") { bytes += 24 + Buffer.byteLength(key, "utf8"); }
     }
     return bytes;
 }
