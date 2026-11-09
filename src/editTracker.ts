@@ -7,6 +7,7 @@ import {
     historyEditInfo,
     toolFilePath,
 } from "./messageUtils";
+import { fitResultImages } from "./imageFit";
 /** EditTracker 对外依赖（由 SessionRuntime 注入，避免环依赖）。 */
 export interface EditTrackerHost {
     getCwd(): string;
@@ -176,7 +177,9 @@ export class EditTracker {
                     ...this.clippedResult(evt.toolCallId, extractResultText(evt.result) ?? ""),
                     durationMs,
                     truncation,
-                    images: extractResultImages(evt.result),
+                    // 当场推给页面的图也先缩一缩（截图两三 MB 一张，手机上边跑边下很难受；
+                    // 只在 Windows 上生效，别的系统上照原样发，见 src/imageFit.ts）
+                    images: fitResultImages(extractResultImages(evt.result)),
                 });
             }
             return;

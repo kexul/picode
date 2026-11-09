@@ -7,10 +7,11 @@ dev/shots/
 # 调试脚本跑的假会话文件（dev/fakePi.js 落盘的，名子带进程号）
 dev/fake-session-*.jsonl
 .scratch/
-# 构建产物：四支小程序，源码是 bin/tray.cs、bin/shot.cs、bin/live.cs、bin/notice.cs（npm run compile 时现编）
+# 构建产物：五支小程序，源码是 bin/tray.cs、bin/shot.cs、bin/live.cs、bin/notice.cs、bin/resize.cs（npm run compile 时现编）
 bin/tray.exe
 bin/shot.exe
 bin/live.exe
 bin/notice.exe
+bin/resize.exe
 # 单文件 exe（npm run build 时打出来，双击就能起后端）
 dist/

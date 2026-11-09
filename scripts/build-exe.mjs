@@ -140,7 +140,7 @@ function collectPayload(version) {
         const full = path.join(repoRoot, "media", name);
         if (fs.statSync(full).isFile()) { add(`media/${name}`, full); }
     }
-    for (const name of ["tray.exe", "shot.exe", "live.exe", "notice.exe"]) {
+    for (const name of ["tray.exe", "shot.exe", "live.exe", "notice.exe", "resize.exe", "cwebp.exe"]) {
         const full = path.join(repoRoot, "bin", name);
         if (!fs.existsSync(full)) { fail(`找不到 bin/${name}：先跑 npm run compile（它顺手编这几支小程序）`); }
         add(`bin/${name}`, full);

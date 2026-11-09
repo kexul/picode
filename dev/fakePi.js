@@ -29,6 +29,12 @@
  * 用法（不用记参数，插件的 piPath 指过来就行）：
  *   node dev/fakePi.js --mode rpc          # 参数收下但不看，照常演戏
  *
+ * 两个验图相关的开关（默认都不开）：
+ *   FAKEPI_IMAGE=<某张 png/jpg 的路径>   把剧本里 read 的那张图换成它（验“发给页面前先缩一缩”
+ *                                      要一张真的大图，见 dev/.scratch/verify-fit*.js）
+ *   FAKEPI_LIVE_IMAGE=1                 让 read 的**实时**结果里也带上图（真 pi 就是这样：页面上当场
+ *                                      就画出来）。默认不带：别的脚本断言的是“只有历史里有图”。
+ *
  * 配合调试工具（PICHAT_HOME 指到调试目录，不动真配置）：
  *   npm run web:dev -- --fake-pi
  *   npm run web:shot -- --fake-pi --send "随便" --shot x.png   # 秒回
@@ -65,10 +71,19 @@ function padTo(text, n) {
     while (parts.join("").length < n) { parts.push("\n第 " + i + " 段：" + text); i += 1; }
     return parts.join("").slice(0, n);
 }
-/** 单张图片的结果（base64 的小 png）：走 read 读图那条渲染路。 */
-const SAMPLE_PNG_BASE64 =
-    "iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEUlEQVR4nGP8z0AswAKTQNYA" +
-    "AEGYAVfrEXvAAAAAAElFTkSuQmCC";
+/**
+ * 单张图片的结果（base64 的小 png）：走 read 读图那条渲染路。
+ * 验“图发给页面前先缩一缩”那条路时要一张真的大图（两三 MB 的截图），给
+ * `FAKEPI_IMAGE=<某个 png>` 就换成它（读不到就用这份小的）。
+ */
+const SAMPLE_PNG_BASE64 = (function () {
+    const want = process.env.FAKEPI_IMAGE || "";
+    if (want) {
+        try { return require("fs").readFileSync(want).toString("base64"); } catch (e) { /* 读不到用小的 */ }
+    }
+    return "iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAAEUlEQVR4nGP8z0AswAKTQNYA" +
+        "AEGYAVfrEXvAAAAAAElFTkSuQmCC";
+})();
 
 // ---------------------------------------------------------------------------
 // 状态
@@ -617,7 +632,14 @@ async function runScript(userText) {
             { type: "text", text: "Read image file [image/png]" },
             { type: "image", data: SAMPLE_PNG_BASE64, mimeType: "image/png" },
         ],
-        raw: { content: [{ type: "text", text: "Read image file [image/png]" }], details: { dims: "10x10" } },
+        // 真 pi 的工具结果里就带着这张图（tool_execution_end 的 result），页面上「当场」就要画出来；
+        // 要看这条实时路，给 FAKEPI_LIVE_IMAGE=1（默认不写：别的脚本断言的是“只有历史里有图”）。
+        raw: {
+            content: process.env.FAKEPI_LIVE_IMAGE === "1"
+                ? [{ type: "text", text: "Read image file [image/png]" }, { type: "image", data: SAMPLE_PNG_BASE64, mimeType: "image/png" }]
+                : [{ type: "text", text: "Read image file [image/png]" }],
+            details: { dims: "10x10" },
+        },
     });
     const bashText = padTo("示例.js\n示例图片.png\n说明.md", LONG_TEXT_CHARS);
     await act("bash", { command: "ls" }, {

@@ -43,6 +43,8 @@ const LIVE_SOURCE = path.join(repoRoot, "bin", "live.cs");
 const LIVE_EXE = path.join(repoRoot, "bin", "live.exe");
 const NOTICE_SOURCE = path.join(repoRoot, "bin", "notice.cs");
 const NOTICE_EXE = path.join(repoRoot, "bin", "notice.exe");
+const RESIZE_SOURCE = path.join(repoRoot, "bin", "resize.cs");
+const RESIZE_EXE = path.join(repoRoot, "bin", "resize.exe");
 
 const watch = process.argv.includes("--watch");
 
@@ -77,6 +79,7 @@ async function compileOnce() {
     compileShotExe();
     compileLiveExe();
     compileNoticeExe();
+    compileResizeExe();
     process.stdout.write("都编完了。\n");
 }
 
@@ -146,6 +149,24 @@ function compileNoticeExe() {
         references: [],
         whySkip: "提醒卡片只在 Windows 上弹，没必要编",
         whyFail: "这台机器上就不弹提醒了（浏览器页面里照样看得到）",
+    });
+}
+
+/**
+ * 编缩图那支小程序（bin/resize.cs → bin/resize.exe）。
+ *
+ * 编不出来不算构建失败：运行时不缩图，照原样把图发过去（见 src/imageFit.ts）——
+ * 只是手机上多下几百 KB，不会坏。
+ */
+function compileResizeExe() {
+    runCsc({
+        label: "缩图小程序",
+        source: RESIZE_SOURCE,
+        output: RESIZE_EXE,
+        target: "exe",
+        references: ["System.Drawing.dll"],
+        whySkip: "缩图只在 Windows 上用，没必要编",
+        whyFail: "运行时不缩图，照原样把图发过去（手机上多下几百 KB）",
     });
 }
 

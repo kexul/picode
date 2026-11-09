@@ -22,6 +22,7 @@ import {
     textOf,
     type ResultImageBlock,
 } from "./messageUtils";
+import { fitResultImages } from "./imageFit";
 import {
     type RpcCommandInfo,
     type RpcCompactionResult,
@@ -1635,12 +1636,14 @@ export class SessionRuntime {
     ): ResultImageBlock[] {
         const wanted = !inline || inline.has(toolCallId);
         if (wanted) {
-            // 挪出会话文件的图（只有路径）：这一屏要真带过去的，现在读进内存
-            return images.map((img) => {
+            // 挪出会话文件的图（只有路径）：这一屏要真带过去的，现在读进内存。
+            // 读完 / 本来就在内存里的，缩一缩再发：截图动不动两三 MB，界面上显示出来就几百像素宽
+            // （缩图只在 Windows 上生效，别的系统上照原样发，见 src/imageFit.ts）。
+            return fitResultImages(images.map((img) => {
                 if (!img.path || img.data) { return img; }
                 const data = readStoredImage(img.path);
                 return data ? { data, mimeType: img.mimeType } : { data: "", mimeType: img.mimeType, onDemand: true, bytes: img.bytes, path: img.path };
-            });
+            }));
         }
         if (!images.some((img) => !!img.data || !!img.path)) {
             return images;
