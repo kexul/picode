@@ -41,8 +41,12 @@
  *
  * 话说了两遍它照旧干等（2026-11-09 又碰到：起了后台任务，又发一条 sleep 150; tail 日志），
  * 所以现在有两道关，认出来就不给跑（判据与措辞照 pi-famulus 那套）：
- *   命令里干等（sleep 10 秒以上、或循环体里带 sleep）、以及「刚看过又没新东西」的空查。
+ *   命令里干等（sleep 10 秒以上、或循环体里带 sleep）、“甩手”（命令末尾一个孤零零的 &、
+ *   nohup、setsid），以及「刚看过又没新东西」的空查。
  * 挡下来只回一句话，不结束这一轮：它该把这一轮说完，等结果自己交回来。
+ *
+ * 还有一条路是不让它堵：前台撑过 FOREGROUND_BUDGET_MS（照 pi-famulus 的 20 秒）就自己撒手到后台，
+ * 命令照跑、输出照进日志，跑完照常交回来。走的是现成的「中途转后台」那条路（announce 里 background=false）。
  *
  * 用 String.raw 包着：里面的反斜杠原样保留。
  */
@@ -76,8 +80,9 @@ const BACKGROUND_NOTE = ${JSON.stringify(promptText(over, "toolBash"))};
 const NO_WAIT_NOTE = "放到后台以后不用等结果：你可以接着去干别的，或者直接把这一轮说完结束；"
     + "它跑完的结果会当成一条新消息交回本会话（开头是「后台命令 #编号 跑完了」）。"
     + "别用 sleep 之类的命令干等，也别反复用 bash_tasks 查 —— 你干等的时候结果只能排在后面，等多久就白等多久。"
-    + "真在命令里干等的（sleep 10 秒以上、或者循环里带 sleep）会被挡回来，这一条不会跑；"
-    + "刚看过一次、它又没出新东西的时候再查，也会被挡回来。";
+    + "真在命令里干等的（sleep 10 秒以上、或者循环里带 sleep）、以及把进程丢到背影里跑的（末尾孤零零的 &、nohup、setsid）会被挡回来，这一条不会跑；"
+    + "刚看过一次、它又没出新东西的时候再查，也会被挡回来。"
+    + "前台命令撑过 20 秒还没跑完会自己转到后台（不用你管，也不用再发一遍），跑完照常交回来。";
 
 /**
  * 命令里干等的那一关：认出来就不跑。
@@ -85,7 +90,7 @@ const NO_WAIT_NOTE = "放到后台以后不用等结果：你可以接着去干�
  * 光靠说明书没用（这一条已在上面 NO_WAIT_NOTE 与工具说明里写过两遍，模型照旧拿 sleep 凑时间），
  * 只能不给它跑。判据照 pi-famulus 的 wait-guard：sleep 秒数到 10，或者循环体里带 sleep；
  * 引号里、heredoc 正文里、注释里的不算（先剥掉再判），免得 python - <<EOF … EOF 或者
- * ansible -a '…' 这种被误伤。那边还拦「甩手」（孤零零的 &、nohup、setsid），咱这次不管。
+ * ansible -a '…' 这种被误伤。
  */
 const WAIT_SLEEP_MIN_S = 10;
 const WAIT_SLEEP = /\bsleep\s+(\d+(?:\.\d+)?)/g;
@@ -109,8 +114,23 @@ function waitReason(command: string): string {
     return "";
 }
 
-/** 拦下来的那两句话（原文在 promptText.ts 的 guardWait / guardPoll，人能改）。 */
+/**
+ * 「拜手」那一关：把进程丢到背影里跑了、这一截命令马上就完了，它的输出和退出码谁也拿不到
+ * （判据照 pi-famulus）：命令末尾一个孤零零的 &，或者 nohup / setsid / disown。
+ * 2>&1 、&& 、&> 这些重定向与连接符不算（前面后面紧贴着 & 或 > 的排除掉）。
+ */
+const DETACH_SHAPE = /(^|[^&>|])&(?![&>])|\b(nohup|setsid|disown)\b/m;
+
+function detachReason(command: string): string {
+    const words = shellWords(command);
+    const m = DETACH_SHAPE.exec(words);
+    if (!m) { return ""; }
+    return m[2] ? m[2] : "末尾那个 &";
+}
+
+/** 拦下来的那三句话（原文在 promptText.ts 的 guardWait / guardDetach / guardPoll，人能改）。 */
 const GUARD_WAIT_TEXT = ${JSON.stringify(promptText(over, "guardWait"))};
+const GUARD_DETACH_TEXT = ${JSON.stringify(promptText(over, "guardDetach"))};
 const GUARD_POLL_TEXT = ${JSON.stringify(promptText(over, "guardPoll"))};
 
 /** 把模板里的 {{名字}} 换成值（跟 promptText.ts 的 renderPrompt 一个意思，这边没法 import 那边）。 */
@@ -126,6 +146,19 @@ const lookedAt = new Map<number, number>();
 
 function logSize(log: string): number {
     try { return statSync(log).size; } catch { return 0; }
+}
+
+/**
+ * 前台命令跑多久就自己撒手到后台（毫秒），照 pi-famulus 的 20 秒。
+ * 想改就在启动 pi 的环境里设 PICHAT_BASH_FOREGROUND_MS —— 插件现在没往这个口子传东西，
+ * 所以正常人看到的就是 20 秒。设成 0 或负数就不自动撒手（回到以前那样一直等到跑完）。
+ */
+function foregroundBudgetMs(): number {
+    const raw = process.env.PICHAT_BASH_FOREGROUND_MS;
+    if (raw === undefined || raw === "") { return 20000; }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) { return 0; }
+    return n;
 }
 
 /** 往 stderr 写一行暗号（插件在读）。 */
@@ -505,8 +538,8 @@ function reportEnd(task: Task): void {
 
 /** 前台调用时「这次是哪个编号、要不要后台」的排队：execute 与 exec 之间没有别的东西插进来。 */
 const pending: Array<{ id: string; background: boolean }> = [];
-/** 哪些调用被中途转到了后台（execute 收尾时要改口）。 */
-const detached = new Map<string, Task>();
+/** 哪些调用被中途转到了后台（execute 收尾时要改口）：记着那条任务、以及是用户点的还是自己撒的。 */
+const detached = new Map<string, { task: Task; by: "user" | "budget" }>();
 /** 哪些调用是一开始就放到后台的（execute 要把「空输出」换成一句说明）。 */
 const launched = new Map<string, Task>();
 
@@ -554,9 +587,11 @@ export default function bashBridge(pi: any): void {
                     let settled = false;
                     let timer: any = undefined;
                     let poll: any = undefined;
+                    let budget: any = undefined;
                     const cleanup = () => {
                         if (timer) { clearTimeout(timer); timer = undefined; }
                         if (poll) { clearInterval(poll); poll = undefined; }
+                        if (budget) { clearTimeout(budget); budget = undefined; }
                     };
                     started.onExit((code: number | null) => {
                         if (task.announced) { reportEnd(task); }
@@ -596,12 +631,28 @@ export default function bashBridge(pi: any): void {
                             try { unlinkSync(file); } catch { /* 删不掉也不影响 */ }
                             started.mute();
                             announce(task, false);
-                            detached.set(id, task);
+                            detached.set(id, { task, by: "user" });
                             settled = true;
                             cleanup();
                             resolve({ exitCode: 0 });
                         }, 500);
                         if (typeof poll.unref === "function") { poll.unref(); }
+                    }
+                    // 前台撑过预算就自己撒手：命令照跑、输出照进日志，这一轮接着往下走，
+                    // 跑完照常交回来。给了更短的 timeout 的话，那是硬上限，先到先算。
+                    // 预算设成 0（PICHAT_BASH_FOREGROUND_MS=0）就不装这个计时器。
+                    const budgetMs = foregroundBudgetMs();
+                    if (budgetMs > 0) {
+                        budget = setTimeout(() => {
+                            if (settled) { return; }
+                            started.mute();
+                            announce(task, false);
+                            detached.set(id, { task, by: "budget" });
+                            settled = true;
+                            cleanup();
+                            resolve({ exitCode: 0 });
+                        }, budgetMs);
+                        if (typeof budget.unref === "function") { budget.unref(); }
                     }
                 });
             },
@@ -636,6 +687,14 @@ export default function bashBridge(pi: any): void {
                     details: { blocked: "wait", reason: waited },
                 };
             }
+            const detachedAway = detachReason(command);
+            if (detachedAway) {
+                // 不跑：丢到背影里跑的那些，输出与退出码都回不来（见上面 DETACH_SHAPE）
+                return {
+                    content: [{ type: "text", text: fillText(GUARD_DETACH_TEXT, { 原因: detachedAway }) }],
+                    details: { blocked: "detach", reason: detachedAway },
+                };
+            }
             pending.push({ id, background });
             let result: any;
             try {
@@ -661,11 +720,14 @@ export default function bashBridge(pi: any): void {
                     details: { backgroundNo: bgTask.no, log: bgTask.log, pid: bgTask.pid },
                 };
             }
-            const task = detached.get(id);
-            if (!task) { return result; }
+            const gone = detached.get(id);
+            if (!gone) { return result; }
             detached.delete(id);
+            const task = gone.task;
             const lines: string[] = [];
-            lines.push("这条命令在跑的时候被转到后台了（编号 " + task.no + "），现在还在后台接着跑。");
+            lines.push(gone.by === "user"
+                ? "这条命令在跑的时候被转到后台了（编号 " + task.no + "），现在还在后台接着跑。"
+                : "这条命令撑了 " + Math.max(1, Math.round(foregroundBudgetMs() / 1000)) + " 秒还没跑完，已经转到后台接着跑了（编号 " + task.no + "）。");
             lines.push("命令：" + task.cmd);
             lines.push("输出写在这儿：" + task.log);
             lines.push("接下来不用等它：你可以接着去干别的，或者直接把这一轮说完结束。");
