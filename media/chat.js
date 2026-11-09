@@ -6760,6 +6760,35 @@
     return !!modalView.state && !modalView.root.classList.contains("hidden");
   }
 
+  /**
+   * Esc 归谁：从上往下数，第一个开着的就是它。
+   *
+   * 这条键以前只靠“谁先注册监听”排先后，而且每个监听里各自再写一遍 if：于是有两处打架
+   * 一直没人发现 —— 设置面板压根没接这条键（在里面按 Esc 落到“中止这一轮”那条去，
+   * 正在跑的生成被掐），工具耗时 / 工具两个弹窗的监听注册在中止那条之后（那一按既关弹窗
+   * 又中止这一轮）。现在所有跟 Esc 有关的监听都问这一句，顺序只在这一处写：
+   *
+   *   看图那一层（整页黑底，最上面）
+   *   设置面板
+   *   工具调用耗时 / 工具（两个弹窗）
+   *   文件搜索（它可能开在浮层上面：先收它，再按一下才收浮层）
+   *   浮层（选模型 / 选文件夹 / 历史 / 项目与会话 / 确认框）
+   *   看文件的弹窗
+   *   空串：谁也没开着（那一按归“中止这一轮”，跟 pi 的 TUI 一样）
+   *
+   * 写坏的输入框（改名 / 新建文件夹 / 设置里那两行）在自己身上把键吃掉，走不到这儿。
+   */
+  function escTopLayer() {
+    if (lightboxEl && !lightboxEl.classList.contains("hidden")) { return "lightbox"; }
+    if (settingsOverlay && !settingsOverlay.classList.contains("hidden")) { return "settings"; }
+    if (toolStatsOpen()) { return "stats"; }
+    if (envOpen()) { return "env"; }
+    if (fileSearch.open) { return "search"; }
+    if (pickerModalOpen()) { return "picker"; }
+    if (fileViewing()) { return "viewer"; }
+    return "";
+  }
+
   /** 按“要不要常驻”摆版面：宽窗且没收起时，右边留出那一列（CSS 看 body.dock-sidebar）。 */
   function syncSidebarLayout() {
     const on = sidebarEnabled();
@@ -9537,11 +9566,12 @@
       syncFileBar();
       vscode.postMessage({ type: "revertChange", sessionId: activeId, path: entry.path });
     });
-    // Esc 也能关掉弹窗（浮层、清单开着的时候不接：那会儿 Esc 是收那一层）
+    // Esc 也能关掉弹窗（从下往上数：上面还开着别的东西时先收那一个，见 escTopLayer）
     document.addEventListener("keydown", (e) => {
-      if (e.key !== "Escape" || !fileViewing()) { return; }
-      if (pickerModalOpen() || fileSearch.open) { return; }
+      if (e.key !== "Escape") { return; }
+      if (escTopLayer() !== "viewer") { return; }
       e.preventDefault();
+      e.stopImmediatePropagation();
       closeFileViewer();
     });
     // 电脑上那一块浮在页面上：点它外面（对话、顶条、输入框……）就收起来，跟那颗叉、Esc 一个结果。
@@ -11226,11 +11256,10 @@
   });
   // 浮层的列表只用鼠标 / 触摸点：没有「方向键上下选行、回车打开那一行」那一套，
   // 「切换模型」那层里的左右键换推理档位也一并去了。这里只剩 Esc：收回这一层。
-  // 收之前得先把这条按键就地处掉：后面那个 document 上的监听会用 Esc 中止正在生成的那一轮，
-  // 它开头那句“浮层开着就跳开”的判断这会儿已经被 cancelPicker 改掉了
-  // （两个监听都在 document 上，按注册顺序跑，靠 stopImmediatePropagation 拦下来才管用）。
+  // 收之前得先把这条按键就地处掉：后面那个 document 上的监听会用 Esc 中止正在生成的那一轮。
+  // 谁在上面谁先收，顺序只在 escTopLayer 里写（搜索开在浮层上面时，先收搜索）。
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape" || !pickerModalOpen()) { return; }
+    if (e.key !== "Escape" || escTopLayer() !== "picker") { return; }
     e.preventDefault();
     e.stopImmediatePropagation();
     closePickerAnyway();
@@ -11240,7 +11269,7 @@
   // 焦点就不在输入框里了，那会儿这条键得照样管用（挂在输入框上的话它会落到下面那个
   // 「Esc 中止正在生成的一轮」的监听上，浮层还开着，顺手把这一轮掐了）。
   document.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape" || !fileSearch.open) { return; }
+    if (e.key !== "Escape" || escTopLayer() !== "search") { return; }
     e.preventDefault();
     e.stopImmediatePropagation();
     closeFileSearch();
@@ -11635,7 +11664,8 @@
 
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") { return; }
-    if (pickerModalOpen()) { return; }
+    // 屏幕上还开着谁（浮层 / 设置 / 两个弹窗 / 看文件 / 看图）：这一条键归它，这里不中止
+    if (escTopLayer()) { return; }
     // 输入框聚焦时由 inputEl 的 keydown 处理（含文件菜单关闭 / 中止）
     if (document.activeElement === inputEl) { return; }
     // 消息流或其他区域聚焦 → 中止流式生成
@@ -11663,13 +11693,9 @@
     }
     // 复刻 pi TUI：流式生成中按 ESC 中止（文件菜单关闭时生效）
     if (e.key === "Escape") {
-      // 浮层开着的时候这条键归浮层（收回它）：别顺手把正在生成的那一轮也中止了。
-      // 这里只管“不中止”，收回浮层由 document 上那个监听做。
-      if (pickerModalOpen()) { return; }
-      // 看文件（或 diff）的弹窗开着：这条键归那个弹窗（关掉它，见 buildFileSidebar）
-      if (fileViewing()) { return; }
-      // 文件搜索那块浮层开着：这条键归浮层（见上面那个监听）；别顺手把这一轮也中止了
-      if (fileSearch.open) { return; }
+      // 屏幕上还开着谁（浮层 / 设置 / 两个弹窗 / 看文件 / 看图）：这一条键归它，这里不中止。
+      // 以前这里一条一条列着判（而且漏了设置、工具耗时、工具这三块），顺序靠“谁先注册”。
+      if (escTopLayer()) { return; }
       if (abortActiveTab()) { e.preventDefault(); }
       return;
     }
@@ -13234,9 +13260,9 @@
     // 点外面收起来；右上角那颗叉同理
     toolStatsOverlay.addEventListener("click", (e) => { if (e.target === toolStatsOverlay) { closeToolStats(); } });
     if (toolStatsCloseBtn) { toolStatsCloseBtn.addEventListener("click", closeToolStats); }
-    // Esc 收起来：捕获阶段就地处掉，别让它顺手中止正在生成的那一轮（跟别的浮层一个道理）
+    // Esc 收起来：谁在上面谁先收（见 escTopLayer），就地处掉，别让它顺手中止正在生成的那一轮
     document.addEventListener("keydown", (e) => {
-      if (e.key !== "Escape" || !toolStatsOpen()) { return; }
+      if (e.key !== "Escape" || escTopLayer() !== "stats") { return; }
       e.preventDefault();
       e.stopImmediatePropagation();
       closeToolStats();
@@ -13397,9 +13423,9 @@
     // 点外面收起来；右上角那颗叉同理
     envOverlay.addEventListener("click", (e) => { if (e.target === envOverlay) { closeEnv(); } });
     if (envCloseBtn) { envCloseBtn.addEventListener("click", closeEnv); }
-    // Esc 收起来：跟别的浮层一样在捕获阶段就地处掉，别顺手中止正在生成的那一轮
+    // Esc 收起来：谁在上面谁先收（见 escTopLayer），别顺手中止正在生成的那一轮
     document.addEventListener("keydown", (e) => {
-      if (e.key !== "Escape" || !envOpen()) { return; }
+      if (e.key !== "Escape" || escTopLayer() !== "env") { return; }
       e.preventDefault();
       e.stopImmediatePropagation();
       closeEnv();
@@ -13639,6 +13665,13 @@
     settingsOverlay.classList.add("hidden");
   }
   settingsOverlay.addEventListener("click", (e) => { if (e.target === settingsOverlay) { closeSettings(); } });
+  // Esc 也能关掉设置（以前这一块没接这条键：在里面按一下会落到“中止正在生成的一轮”那条上）
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || escTopLayer() !== "settings") { return; }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    closeSettings();
+  });
   const settingsCloseBtn = document.getElementById("settingsClose");
   if (settingsCloseBtn) { settingsCloseBtn.addEventListener("click", closeSettings); }
 
