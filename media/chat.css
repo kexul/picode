@@ -244,10 +244,6 @@
   @media (hover: none) { .sn-tab .sn-close { opacity: 0.6; } }
   .sn-tab.closing { background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 14%, transparent); }
   .sn-tab.closing .sn-close { opacity: 1; color: var(--vscode-charts-green, #3fb950); }
-  /* 那台机器连不上：点变灰、不呼吸，名字也淡一点（这一格的内容暂时不会变） */
-  .sn-tab.offline .sn-dot { background: var(--vscode-disabledForeground, #808080); animation: none; }
-  .sn-tab.offline .sn-text { opacity: 0.6; }
-  .sn-tab.offline .sn-cwd { opacity: 0.35; }
   /* 左右划切会话的时候（见 chat.js 的 tabSwipeBegin）：要进来的那一格把名字露出来、
      宽度跟着手指涨；要退场的那个跟着收。松手弹回去时给宽度补一段过渡。 */
   .sn-tab.strip.tab-growing .sn-lines { display: flex; }
@@ -1046,11 +1042,6 @@
   .pk-host.pk-folders .pk-row-icon svg { width: 14px; height: 14px; display: block; }
   /* 工作区是资源树，不显示相对时间；会话仍在右侧保留更新时间。 */
   .pk-host.pk-workspace .pk-space .pk-history-right { display: none; }
-  /* ==== 「别的机器」的工作区行（多台 pichat 互联）：跟本机那行长得一样，名字后面挂着那台的名字 ==== */
-  .pk-host.pk-workspace .pk-item.pk-remote-space.offline .pk-history-title { opacity: 0.6; }
-  .pk-host.pk-workspace .pk-item.pk-remote-space.offline .pk-space-caret { opacity: 0; }
-  /* 那台机器下面挂的会话：缩进一点，看着是挂在工作区下面的 */
-  .pk-host.pk-workspace .pk-item.pk-machine-session .pk-history-main { padding-left: 22px; }
   .pk-host.pk-drawer .pk-history-right { gap: 8px; }
   /* ==== 「工作区」那一节：标题右边一颗加号（原来是列表里的一行「打开文件夹…」） ==== */
   .pk-host.pk-workspace .pk-section.pk-section-with-add {

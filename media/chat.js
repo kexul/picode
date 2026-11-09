@@ -130,13 +130,8 @@
   const sessionDrafts = new Map();   // sessionId -> { text, selStart, selEnd, height }（输入草稿按会话存）
   let sessionOrder = [];             // 后端给的会话顺序（列表段按它画）
   let activeId = null;               // 当前显示的会话 id
-  // 后端说“你这块屏切到这个会话”但那个会话的壳还没建出来（列表在路上）：记下来等它到了一起用。
-  // 加一个截止时间：别的会话的壳晚到一小会儿是常事（别台那条要先让那台把它开出来，
-  // 这中间还会来几份“还没有它”的会话清单，那是更早排队的，不能当成“这个号过期了”），
-  // 所以不能在头一份不含它的清单上就扔掉；但也不能一直挂着（万一它永远不出现）。
+  // 后端说“你这块屏切到这个会话”但那个会话的壳还没建出来（列表在路上）：记下来等它到了一起用
   let pendingActivateId = null;
-  let pendingActivateUntil = 0;
-  const PENDING_ACTIVATE_MS = 15000;
   // 从「项目与会话」里点加号新开一个会话：新会话挂好后把光标放进输入框（手机上也不等再点一下）。
   // 只认这一小段时间里的那一次切换：新会话一直没开起来（pi 不在、消息丢了）就作废。
   let focusAfterNewSessionUntil = 0;
@@ -362,13 +357,12 @@
   function fixMdImages(root, sessionId, baseDir) {
     if (!root || IN_WEBVIEW || !sessionId) { return; }
     const base = baseDir ? String(baseDir).replace(/\/$/, "") + "/" : "";
-    const p = sessionUrlParts(sessionId);
     for (const el of root.querySelectorAll("img")) {
       const target = mdImageTarget(el.getAttribute("src") || "", base);
       if (!target) { continue; }
       el.setAttribute("src", target.site !== undefined
-        ? p.base + "/site/" + encodeURIComponent(p.sessionId) + "/" + base + target.site
-        : p.base + "/file?session=" + encodeURIComponent(p.sessionId) + "&anywhere=1&path=" + encodeURIComponent(target.anywhere));
+        ? "/site/" + encodeURIComponent(sessionId) + "/" + base + target.site
+        : "/file?session=" + encodeURIComponent(sessionId) + "&anywhere=1&path=" + encodeURIComponent(target.anywhere));
     }
   }
 
@@ -712,7 +706,6 @@
     try { wanted = new URLSearchParams(location.search).get("session") || ""; } catch (e) { wanted = ""; }
     if (!wanted) { return; }
     pendingActivateId = wanted;
-    pendingActivateUntil = Date.now() + PENDING_ACTIVATE_MS;
     requestSwitch(wanted);
   }
 
@@ -1272,8 +1265,6 @@
       // 派出去的子会话还在跑：本会话自己闲着也把那颗点亮出来（一样呼吸），
       // 一眼看得出这一家子还在干活（等的是子会话，不是本会话在答）。
       el.classList.toggle("child-running", kids > 0);
-      // 那台机器连不上：点变灰、不呼吸（内容暂时不会变，也别让人以为它在跑）
-      el.classList.toggle("offline", !!item.remoteOffline);
       // 目录放在这一格身上（顶条上不写目录了；调试脚本要知道“当前会话跑在哪儿”就取这个）
       el.dataset.cwd = item.cwd || "";
       el.title = (item.label || "")
@@ -5020,8 +5011,6 @@
   /** 切到某个会话：把它的壳挂回 #messages，草稿跟着换（打了一半的字留在各自会话里）。 */
   function activateSessionView(id) {
     if (!sessions.has(id) || activeId === id) { return; }
-    // 已经真切了：那条“等着壳”的账作废（不然它下次出现时会把又切走的人拽回去）
-    pendingActivateId = null;
     hideTagTip();
     if (activeId !== null) { saveInputState(); } else { carryComposerToSession(id); }
     // 切走也算看过了：刚看完的那个会话的绿点收掉（绿点只说“这一轮刚跑完，等你回来”）
@@ -5131,8 +5120,6 @@
         taba: st.taba || null,
         depth,
         pendingClose: pendingCloseId === st.id,
-        // 那台连不上（远程会话才有这一项）：会话格上那颗点变灰，发消息时也会拦一下
-        remoteOffline: !!st.remoteOffline,
         // 下拉框里第二行显示它跑在哪个目录（同名会话靠它分辨）
         cwd: st.cwd || "",
       });
@@ -6067,39 +6054,22 @@
    * 补一行接在末尾：不然“这一轮在哪个工作区里”就没地方看了。补的那一行照样能展开、能点加号，
    * 等它从清单里冒出来就不再补（免得同一个目录占两行）。
    *
-   * 当前看的是别的机器上的会话：它的目录不在这一台的工作区清单里，所以不补行、本机那些行也都不标；
-   * 蓝的是那台那一节里对应的那一行目录（拿那台的地址跟目录一起比）。
-   *
    * @param items 宿主给的那些工作区行
    */
   function spaceRowsWithCurrent(items) {
-    const now = activeId ? sessions.get(activeId) : null;
-    if (now && now.remoteMachine) {
-      const cwd = now.cwd || "";
-      return items.map((it) => {
-        // 本机那些行、那节末尾的「加载更多」、连不上那一行都不掺和
-        if (it.machine !== now.remoteMachine || it.machineMore || it.machineEmpty) { return it; }
-        return cwd && samePath(it.file, cwd) ? Object.assign({}, it, { current: true }) : it;
-      });
-    }
     const cwd = activeSessionCwd();
     if (!cwd) { return items; }
     let hit = false;
     const out = items.map((it) => {
-      // 本机在看的会话：别台那几行一律不标（它们可能还带着上一回算出来的 current）
-      if (it.machine) { return it.current ? Object.assign({}, it, { current: false }) : it; }
       if (!samePath(it.file, cwd)) { return it; }
       hit = true;
       return Object.assign({}, it, { current: true });
     });
     if (!hit) {
-      // 补的那一行归本机那一节：插在本机那些行后面（别台那几节要留在它们自己那一堆里）
-      const row = {
-        __section: "space", section: localWorkSectionName(), current: true,
+      out.push({
+        __section: "space", section: "工作区", current: true,
         label: baseNameOfPath(cwd), file: cwd, folderPath: cwd,
-      };
-      const at = out.findIndex((one) => !!one.machine);
-      if (at < 0) { out.push(row); } else { out.splice(at, 0, row); }
+      });
     }
     return out;
   }
@@ -6289,10 +6259,7 @@
     // 得在 settleAskCard 之前问——那一下就把卡片里那行输入框摘掉了。
     const typed = !!rec.input && document.activeElement === rec.input;
     settleAskCard(st, rec.id, answer);
-    // 带上会话号：这张卡片是那个会话里的，答案要回到那张卡等着的那个 pi 去。
-    // 不写的话后端只能往“这块屏正在看的本机会话”那儿送 —— 别台那台上问的问题就答不到了
-    //（后端按会话号把这条转给那台，见 src/chatHost.ts 的 routeToMachine）。
-    const msg = { type: "askCardAnswer", sessionId: st.id, id: rec.id };
+    const msg = { type: "askCardAnswer", id: rec.id };
     if (Array.isArray(answer.picks)) { msg.picks = answer.picks; }
     if (typeof answer.text === "string") { msg.text = answer.text; }
     if (answer.yes !== undefined) { msg.yes = answer.yes; }
@@ -7191,11 +7158,8 @@
     tab.err = "";
     syncFileBar();
     syncFileEditNote(tab);
-    const url = (() => {
-      const p = sessionUrlParts(activeId);
-      return p.base + "/file?session=" + encodeURIComponent(p.sessionId)
+    const url = "/file?session=" + encodeURIComponent(activeId || "")
         + "&path=" + encodeURIComponent(draft.real || tab.path);
-    })();
     fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -8431,19 +8395,11 @@
   }
 
   /**
-   * 地址里的会话参数。
-   *
-   * 现在只有一种写法：`/file?session=<会话号>`，会话号可能是本机的，也可能是别台那台的
-   * （`remote:<那台>:<号>`，页面自己不用管它是哪种）。要去那台上取的文件由后端转发，
-   * 页面拿到的还是自己这台的地址（见 src/machineHub.ts）——所以这里没有前缀这回事了。
+   * 现在这个标签该取哪条地址：文件走 `/file`（带 mtime 就是「没变就别给正文」那问法），
+   * 「目录」那一格走 `/dir`；两条都是只读的、边界也同一套（见后端）。
    */
-  function sessionUrlParts(sessionId) {
-    return { base: "", sessionId: sessionId || "" };
-  }
-
   function sidebarUrl(tab, mtime) {
-    const p = sessionUrlParts(activeId);
-    const base = p.base + (tab.proj ? "/dir?" : "/file?") + "session=" + encodeURIComponent(p.sessionId)
+    const base = (tab.proj ? "/dir?" : "/file?") + "session=" + encodeURIComponent(activeId || "")
         + "&path=" + encodeURIComponent(tab.path);
     return mtime ? base + "&mtime=" + encodeURIComponent(mtime) : base;
   }
@@ -8466,8 +8422,7 @@
   function siteUrl(tab) { return siteUrlOf(tab.path); }
   function siteUrlOf(path) {
     const segs = String(path || "").split("/").map(encodeURIComponent).join("/");
-    const p = sessionUrlParts(activeId);
-    return p.base + "/site/" + encodeURIComponent(p.sessionId) + "/" + segs;
+    return "/site/" + encodeURIComponent(activeId || "") + "/" + segs;
   }
 
   /**
@@ -8583,14 +8538,12 @@
 
   /** 问清单的地址：会话目录跟最后一次提交差了什么（相对写法 + 增删行数）。 */
   function changesUrl() {
-    const p = sessionUrlParts(activeId);
-    return p.base + "/changes?session=" + encodeURIComponent(p.sessionId);
+    return "/changes?session=" + encodeURIComponent(activeId || "");
   }
 
   /** 问一段 diff 的地址：一个文件本会话的合计 diff。 */
   function changeDiffUrl(path) {
-    const p = sessionUrlParts(activeId);
-    return p.base + "/changes/diff?session=" + encodeURIComponent(p.sessionId) + "&path=" + encodeURIComponent(path);
+    return "/changes/diff?session=" + encodeURIComponent(activeId || "") + "&path=" + encodeURIComponent(path);
   }
 
   /**
@@ -8905,7 +8858,7 @@
       openFileDirect(path, line, col);
     }, FILE_CANDIDATES_WAIT_MS);
     pendingFileCandidates.set(requestId, { path: path, line: line, col: col, timer: timer });
-    vscode.postMessage({ type: "pathCandidates", path: path, requestId: requestId, sessionId: activeId || "" });
+    vscode.postMessage({ type: "pathCandidates", path: path, requestId: requestId });
   }
 
   /** 后端回了「这个名字对上了哪几个文件」：一个就开，好几个就弹搜索浮层。 */
@@ -8932,8 +8885,7 @@
   function openFileDirect(path, line, col, dir) {
     if (!path) { return; }
     if (fileSidebar.root) { openSidebarLink(path, line, dir); return; }
-    // 带上会话号：看的是别台那台的一条会话时，这个文件在那台盘上，由后端转给那台去开
-    vscode.postMessage({ type: "openFile", path, line, col, sessionId: activeId || "" });
+    vscode.postMessage({ type: "openFile", path, line, col });
   }
 
   let fileCandidatesSeq = 0;
@@ -9611,7 +9563,7 @@
       return;
     }
     // 旧结果先留着，新的回来再换：每敲一个字母就闪一下空白不好看
-    vscode.postMessage({ type: "findFiles", mode: mode, query: query, seq: fileSearch.seq, sessionId: activeId || "" });
+    vscode.postMessage({ type: "findFiles", mode: mode, query: query, seq: fileSearch.seq });
   }
 
   /** 后端把这一次的结果送回来了（seq 对不上的——前面发的那几次——直接丢掉）。 */
@@ -9908,7 +9860,10 @@
     const keepScroll = pane.scrollTop;
     pane.innerHTML = "";
     renderPickerRows(view, only);
-    // 下半那一格的「加载更多」是行里的一员（见 buildSpaceRows 的 localMore），这里不用再挂
+    // 下半那一格末尾那颗「加载更多」（两块面板各挂在自己那一格上，这一颗挂在下半）
+    if (pane === view.spacePane && st.kind === "workspace" && st.spacesHasMore) {
+      pane.appendChild(buildLoadMoreBtn(view, st, "spaces"));
+    }
     pane.scrollTop = keepScroll;
   }
 
@@ -10032,7 +9987,9 @@
     if (st.kind === "history" && st.historyHasMore) {
       view.body.appendChild(buildLoadMoreBtn(view, st, "sessions"));
     }
-    // 工作区那颗「加载更多」现在是行里的一员（见 buildSpaceRows 的 localMore），不再挂在面板末尾
+    if (st.kind === "workspace" && st.spacesHasMore) {
+      view.spacePane.appendChild(buildLoadMoreBtn(view, st, "spaces"));
+    }
     if (st.kind === "model") { renderModelFooter(view, st); }
     restoreScroll();
   }
@@ -10098,10 +10055,7 @@
         const sep = document.createElement("div"); sep.className = "pk-section";
         // 「工作区」那一行右边摆一颗加号（原来是列表里的一行「打开文件夹…」）：
         // 挑一个别的文件夹当工作区，就在那里开新会话（见 chatHost.ts 的 workspaceBrowse 那条）。
-        // 别台那一节也有这一颗：在那台上挑一个目录开新工作区（见 openRemoteFolderPicker）。
         const spaceHead = st.kind === "workspace" && item.__section === "space";
-        // 别台那一节：行上带着 machine（节标题本身只有节名，拿不到是哪台）
-        const machineHead = st.kind === "workspace" && item.machine ? String(item.machine) : "";
         const label = document.createElement("span"); label.className = "pk-section-text";
         label.textContent = item.section;
         sep.appendChild(label);
@@ -10109,15 +10063,11 @@
           sep.classList.add("pk-section-with-add");
           const add = document.createElement("button");
           add.type = "button"; add.className = "pk-section-add-btn";
-          // 别台那一节：在那台上挑一个目录开新工作区（挑目录那一趟由后端去问那台）
-          add.title = machineHead
-            ? "在" + String(item.section || "").replace(/^工作区-/, "") + "上开一个新工作区…"
-            : "打开文件夹…";
-          add.setAttribute("aria-label", machineHead ? "在那台上开新工作区" : "打开文件夹");
+          add.title = "打开文件夹…"; add.setAttribute("aria-label", "打开文件夹");
           add.innerHTML = ICONS.add;
           add.addEventListener("click", (e) => {
             e.stopPropagation();
-            vscode.postMessage({ type: "workspaceBrowse", machine: machineHead });
+            vscode.postMessage({ type: "workspaceBrowse" });
           });
           sep.appendChild(add);
         }
@@ -10130,10 +10080,6 @@
       } else if (st.kind === "workspace" && item.__section === "groupSession") {
         el.classList.add("pk-session", "pk-group-session");
       }
-      if (item.__section === "localMore") {
-        sectionPane.appendChild(buildLoadMoreBtn(view, st, "spaces"));
-        return;
-      }
       if (item.__section === "groupMore") {
         // 那一组的「加载更多」：卡在组里末尾，点它接着加这一组的
         const g = groupState(st, item.groupPath);
@@ -10143,7 +10089,7 @@
         btn.disabled = !!g.loading;
         btn.addEventListener("click", () => {
           if (g.loading) { return; }
-          requestGroupPage(view, item.groupRow || item.groupPath, g.nextOffset);
+          requestGroupPage(view, item.groupPath, g.nextOffset);
           repaintPickerPanel(view);
         });
         sectionPane.appendChild(btn);
@@ -10229,41 +10175,13 @@
         t.appendChild(document.createTextNode(item.label || ""));
         el.appendChild(t);
         if (item.desc) { const d = document.createElement("div"); d.className = "pk-desc"; d.style.paddingLeft = "20px"; d.textContent = item.desc; el.appendChild(d); }
-      } else if (st.kind === "workspace" && item.machineMore) {
-        // 别台那一节末尾那颗「加载更多工作区」：再向那台要一页项目
-        const btn = document.createElement("button");
-        btn.type = "button"; btn.className = "pk-loadmore";
-        btn.textContent = item.loading ? "加载中…" : "加载更多工作区";
-        btn.disabled = !!item.loading;
-        btn.addEventListener("click", (e) => { e.stopPropagation(); vscode.postMessage({ type: "machineProjects", machine: item.machine }); });
-        sectionPane.appendChild(btn);
-        return;
       } else if (st.kind === "workspace" && item.__section === "space") {
         // 工作区行：就是个组头——小三角、文件夹图标、名字 + 目录路径一行。
         // 点整行展开 / 收起；行尾那颗加号是在这个目录里开新会话。
-        // 别台那台的目录行也走这里（行上带 machine），只是点开 / 新建都要跟那一台打交道。
         el.classList.add("pk-history", "pk-space-head");
-        if (item.machine) { el.classList.add("pk-remote-space"); }
-        // 连不上（或者那边一个项目都没有）的那一行：只有名字，点一下重问一遍
-        if (item.machineEmpty) {
-          el.classList.add("offline");
-          const main = document.createElement("div"); main.className = "pk-history-main";
-          const title = document.createElement("span"); title.className = "pk-history-title"; title.textContent = item.label || "";
-          main.appendChild(title);
-          const why = shortMachineReason(item.machineError || "");
-          if (why) {
-            const right = document.createElement("span"); right.className = "pk-history-right";
-            const info = document.createElement("span"); info.className = "pk-history-age"; info.textContent = why;
-            right.appendChild(info); main.appendChild(right);
-          }
-          el.appendChild(main);
-          el.title = item.machineError || item.label || "";
-          sectionPane.appendChild(el);
-          return;
-        }
         // 当前会话所在的那个目录把名字写成蓝色（它不因此挪位置：清单的顺序一直是宿主那份，
         // 见 spaceRowsWithCurrent）—— 切会话时一行都不动，只有那颗蓝跟着走。
-        const expanded = groupExpanded(groupKeyOf(item));
+        const expanded = groupExpanded(item.file);
         if (expanded) { el.classList.add("expanded"); }
         const main = document.createElement("div"); main.className = "pk-history-main";
         // 行首那个小三角（画的是朝右，展开时 CSS 转 90° 成朝下）
@@ -10297,8 +10215,7 @@
           // 不然新会话开好了它还挡在上面，还得再划一次才能打字。
           if (!view.keepOpen) { cancelPicker(view); }
           focusAfterNewSessionUntil = Date.now() + 15000;
-          // machine：这一行是别台的（后端据此请那台去开；本机那些行没有这个字段）
-          vscode.postMessage({ type: "newSessionInWorkspace", path: item.file, machine: item.machine || "" });
+          vscode.postMessage({ type: "newSessionInWorkspace", path: item.file });
         });
         main.appendChild(add);
         el.appendChild(main);
@@ -10435,10 +10352,6 @@
     const st = view.state; if (!st) { return; }
     if (st.kind === "model") { submitModelPicker(view); return; }
     if (!item) { return; }
-    // 连不上那台的那一行：点一下重问一遍（后端会重新连、再推一份清单过来）
-    if (item.machineEmpty) { vscode.postMessage({ type: "machineProjects", machine: item.machine }); return; }
-    // 别台的“加载更多工作区”
-    if (item.machineMore) { vscode.postMessage({ type: "machineProjects", machine: item.machine }); return; }
     const kind = st.kind;
     // 常驻那一列里点一行 = “用一下”，不是“选完就走”：面板留着接着点下一行
     const closeFirst = () => { if (!view.keepOpen) { hidePicker(view); } };
@@ -10456,20 +10369,16 @@
     }
     // 工作区那一行：展开 / 收起（面板留着重画，不关）
     if (kind === "workspace" && item.__section === "space") {
-      toggleGroupIn(view, item);
+      toggleGroupIn(view, item.file);
       return;
     }
-    // 别台那台的会话行：带着那台的地址与会话号（后端据此请那台打开它、再切过来）
-    const machineFields = item.machine
-      ? { machine: String(item.machine), sessionId: typeof item.id === "string" ? item.id : "" }
-      : {};
     if (view.keepOpen) {
       // 常驻那一列不关，所以不能走“选完就走”那条路（pickerChoice 是“挑好了、结束这次挑”）：
       // 会话直接切过去，目录用那一行自己带过来的（组头的目录）。
-      vscode.postMessage(Object.assign({ type: "workspaceOpenSession", path: item.file, cwd: item.cwd || "" }, machineFields));
+      vscode.postMessage({ type: "workspaceOpenSession", path: item.file, cwd: item.cwd || "" });
       return;
     }
-    const payload = Object.assign({ file: item.file }, machineFields);
+    const payload = { file: item.file };
     // 组里那些会话行带着自己的目录（“历史会话”是按工作区分组的）；别的列表没有这一项。
     if (item.cwd) { payload.cwd = item.cwd; }
     hidePicker(view);
@@ -10545,9 +10454,6 @@
     // 宿主给的工作区行（没动过的原样一份）：组头排序、挂会话都从它算起
     st.spaceItems = workspaceFlatItems(msg);
     st.spacesHasMore = !!(msg.spaces && msg.spaces.hasMore);
-    // 本机那一节叫什么（有别台时是「工作区-本机」，后端定的）：本机那些行按它归节
-    st.localSection = (msg.spaces && typeof msg.spaces.localSection === "string" && msg.spaces.localSection)
-      ? msg.spaces.localSection : "工作区";
     st.current = msg.current || null;
     // 宿主那份还在路上（先摆出来的空壳，见 showWorkspaceShell）：
     // 面板里一行都列不出来时那句写“正在读取”，不写“列表为空”
@@ -10575,64 +10481,32 @@
   /**
    * 工作区那一块的行：顺序就是宿主给的顺序（切会话也不重排，只在当前那个目录那一行标一颗
    * 「当前」，见 spaceRowsWithCurrent），展开了的组把它的会话行挂在组头下面，
-   * 「加载更多」卡在那一组的末尾（别台那几节的工作区行也是后端给的，见 chatHost 的 appendMachineRows）。
+   * 「加载更多」卡在那一组的末尾。
    */
   function buildSpaceRows(view, fetch) {
     const st = view.state;
     const out = [];
-    // 本机那一节叫什么：有别台的时候叫「工作区-本机」（免得跟「工作区-公司」摆在一块儿分不清）
-    const localSection = st.localSection || "工作区";
     for (const it of spaceRowsWithCurrent(st.spaceItems)) {
-      // 节名跟着行自己走（本机那些没有，用本机这一节那个名字）
-      const section = it.section || localSection;
-      const push = it.section ? it : Object.assign({}, it, { section });
-      out.push(push);
-      if (!push.__section || push.__section !== "space") { continue; }
-      // 组按“那台 + 目录”认：同一个目录两台都有的时候才分得开
-      const key = groupKeyOf(push);
-      (window.__grp = window.__grp || []).push({ key: key, on: groupExpanded(key), file: push.file, machine: push.machine, all: Array.from(expandedDirs || []) });
-      if (!groupExpanded(key)) { continue; }
-      const g = groupState(st, key);
+      out.push(it);
+      if (!groupExpanded(it.file)) { continue; }
+      const g = groupState(st, it.file);
       // 这一组还没取过（刚展开、或者面板刚重推一份）：现在去要第一条
-      if (fetch && !g.loaded && !g.loading) { requestGroupPage(view, push, 0); }
+      if (fetch && !g.loaded && !g.loading) { requestGroupPage(view, it.file, 0); }
       for (const row of g.items) {
         // 不标「当前会话」：这些会话可以同时开着好几个，行尾的「已打开」胶囊已经说明它开着；
         // 画一个“当前”出来，看着像是只能有一个。宿主给的那批里带着 current（它按“这块屏在看哪个”
         // 算的），这里得抹掉，不然画的时候又照它加上了。
         const copy = Object.assign({}, row, {
           __section: "groupSession",
-          section,
-          groupPath: key,
+          section: it.section,
+          groupPath: it.file,
         });
         delete copy.current;
         out.push(copy);
       }
-      if (g.hasMore) { out.push({ __section: "groupMore", section, groupPath: key, groupRow: push }); }
-    }
-    // 本机的工作区也分批：那颗「加载更多工作区」挂在本机这一节的末尾
-    //（不是整块面板末尾：别台那几节接在本机后面，挂到末尾就成了人家那一节里的东西）
-    if (st.spacesHasMore) {
-      const more = { __section: "localMore", section: localSection, loading: !!st.spacesLoading };
-      const at = out.findIndex((one) => !!one.machine);
-      if (at < 0) { out.push(more); } else { out.splice(at, 0, more); }
+      if (g.hasMore) { out.push({ __section: "groupMore", section: it.section, groupPath: it.file }); }
     }
     return out;
-  }
-
-  // ========================================================================
-  //  别的机器（多台 pichat 互联）
-  //
-  //  这一栏里别台那些行（「工作区-<那台的名字>」一节）跟本机那些行长得一样，也都是后端给的：
-  //  连接那几台、翻译会话号、把消息转过去、列那台的目录，全在后端做（见 src/machineHub.ts）。
-  //  页面因此不必知道"这条会话跑在谁身上"—— 它只跟本机那一台说话。
-  //  行上带的 `machine`（那台的地址）是唯一要回传给后端的东西：展开、行尾加号、节标题那颗加号
-  //  都把它原样带回去，后端据此知道该跟哪台打交道。
-  // ========================================================================
-
-  /** 那台连不上的原因压成一小句（手机上没有悬停，只能写出来）。 */
-  function shortMachineReason(why) {
-    const text = String(why || "").replace(/。$/, "");
-    return text && text.length <= 18 ? text : "";
   }
 
   /**
@@ -10653,29 +10527,6 @@
       if (!g) { return; }
       g.loaded = false;
     });
-  }
-
-  /** 本机那一节叫什么：有成对的机器时后端给的是「工作区-本机」（见 chatHost 的 buildWorkspacePanel）。 */
-  function localWorkSectionName() {
-    const st = viewShowing("workspace");
-    const name = st && st.state && st.state.localSection;
-    return name || "工作区";
-  }
-
-  /**
-   * 一组会话的钥匙：本机那些就是那个目录；别台的加上那台（同一个目录两台都有的时候才分得开）。
-   * 面板里“展开了哪几组”“这一批行回来该挂到哪一组”都按它认。
-   */
-  function groupKeyOf(row) {
-    if (!row) { return ""; }
-    const path = typeof row === "string" ? row : String((row.file !== undefined ? row.file : row.path) || "");
-    const machine = typeof row === "string" ? "" : String(row.machine || "");
-    return (machine ? machine + "\u0000" : "") + path;
-  }
-
-  /** 这一组是别台那台的（要让后端去问那台）。 */
-  function groupMachineOf(row) {
-    return row && typeof row.machine === "string" ? row.machine : "";
   }
 
   /** 某一组的那一摊（展开 / 收起之间留着已经取回的行，再展开就不用等）。 */
@@ -10725,12 +10576,11 @@
    * 面板一画就是整的 —— 不至于先只出现文件夹，过一会儿才冒出里面的会话。
    */
   function expandedDirsForHost() {
-    // 只报本机那些（钥匙里没有 \u0000 的）：别台的组展开时按“那台 + 目录”单独去要
     if (expandedDirs === null) {
       const cur = activeSessionCwd();
       return cur ? [cur] : [];
     }
-    return Array.from(expandedDirs).filter((one) => one.indexOf("\u0000") < 0);
+    return Array.from(expandedDirs);
   }
 
   /** 点一下组头：展开 / 收起，并把结果记住。 */
@@ -10745,14 +10595,11 @@
     rememberExpandedDirs();
   }
 
-  /** 面板里点了一个工作区：展开 / 收起（行尾那颗加号是新建会话，它自己吞掉点击）。
-   *  row 是那一行（别台的带上 machine：同一个目录两台都有的时候要分得开）。 */
-  function toggleGroupIn(view, row) {
+  /** 面板里点了一个工作区：展开 / 收起（行尾那颗加号是新建会话，它自己吞掉点击）。 */
+  function toggleGroupIn(view, path) {
     const st = view.state;
     if (!st || st.kind !== "workspace") { return; }
-    const key = groupKeyOf(row);
-    if (!key) { return; }
-    toggleGroup(key);
+    toggleGroup(path);
     rebuildWorkspaceItems(view);
     paintWorkspacePanel(view);
   }
@@ -10761,20 +10608,15 @@
    * 跟宿主要某一组会话（offset = 从第几个文件接着扫；第一次是 0）。
    * “想找哪个组”按先来后到记一笔，回来的那批从那里认领（跟两颗「加载更多」一个路子）。
    */
-  function requestGroupPage(view, row, offset) {
+  function requestGroupPage(view, path, offset) {
     const st = view.state;
     if (!st || st.kind !== "workspace") { return; }
-    // 钥匙 = “那台 + 目录”（本机那些没有 machine）。传一行过来也行、传钥匙也行
-    const key = typeof row === "string" ? row : groupKeyOf(row);
-    if (!key) { return; }
-    const g = groupState(st, key);
+    const g = groupState(st, path);
     if (g.loading) { return; }
     g.loading = true;
-    armGroupTimer(view, key, g);
-    groupWaits.push({ path: normPathKey(key), view });
-    // 消息里给的是真路径 + 那一台的地址（本机那些 machine 是空串）
-    const realPath = typeof row === "string" ? String(row.split("\u0000").pop() || "") : String(row.file || "");
-    vscode.postMessage({ type: "workspaceSessions", path: realPath, offset, machine: typeof row === "string" ? "" : groupMachineOf(row) });
+    armGroupTimer(view, path, g);
+    groupWaits.push({ path: normPathKey(path), view });
+    vscode.postMessage({ type: "workspaceSessions", path, offset });
   }
 
   /**
@@ -10832,17 +10674,14 @@
     return sp.map((it) => {
       const copy = {};
       for (const k in it) { if (Object.prototype.hasOwnProperty.call(it, k)) { copy[k] = it[k]; } }
-      // 「加载更多工作区」那一行不是工作区本身（它没有目录），单独一类
-      copy.__section = it.machineMore ? "machineMore" : "space";
-      // 本机那些行不带节名（归「工作区」）；别台那几台的行自己带着「工作区-<那台的名字>」
-      copy.section = typeof it.section === "string" && it.section ? it.section : "工作区";
+      copy.__section = "space";
+      copy.section = "工作区";
       return copy;
     });
   }
 
   function renderPicker(msg, view = null) {
     const kind = msg.kind;
-
     // 这张抽屉是替“一个会话都没有”摊开的：拼出来的时候会话已经开好了就别弹了
     if (kind === "workspace" && msg.dock !== true && emptyWorkspace === "asked") {
       if (sessions.size > 0) {
@@ -11196,8 +11035,7 @@
     const now = Date.now();
     if (commandListReqAt && now - commandListReqAt < 5000) { return; }
     commandListReqAt = now;
-    // 带上会话号：那台会话的命令清单是它自己的（技能 / 提示模板），后端按号转过去问
-    vscode.postMessage({ type: "listCommands", sessionId: activeId || "" });
+    vscode.postMessage({ type: "listCommands" });
   }
   function closeSlashMenu() { slashOpen = false; slashMatches = []; }
   function maybeShowSlashMenu() {
@@ -11321,11 +11159,6 @@
 
   function send() {
     const st = activeSession();
-    // 那台机器连不上：这条先别发，等它自己重连上来再说
-    if (st && st.remoteOffline) {
-      applyPanelMessage({ type: "systemError", sessionId: st.id, text: "连不上那台机器，这条消息没发出去（正在自动重连）。" });
-      return;
-    }
     const d = draftOfSession();
     const typed = inputEl.value.trim();
     const hasImages = (d.images || []).length > 0;
@@ -11551,7 +11384,7 @@
 
   // ==================== 来自扩展的消息 ====================
   window.addEventListener("message", (event) => {
-    let msg = event.data;
+    const msg = event.data;
     // VSCode webview 宿主会投递非业务消息（视图聚焦/状态同步等），event.data 可能为 null
     // 或非 {type:string} 结构。直接忽略，避免 msg.type 崩溃导致后续消息被跳过。
     if (!msg || typeof msg.type !== "string") { return; }
@@ -11609,11 +11442,6 @@
         if (typeof s.tps === "number") { st.tps = s.tps; }
         // 派子会话：这个会话是子会话、或者它派过子会话（列表里据此画标记与缩进）
         st.taba = s.taba || null;
-        // 跑在别台那台身上（本机会话没有这三个字段）：那台的名字进悬停提示，
-        // 那台连不上时会话格变灰、发消息时先拦一下（跟从前一个样子）
-        st.machineName = typeof s.machineName === "string" ? s.machineName : "";
-        st.remoteOffline = s.machine === undefined ? false : s.machineOnline === false;
-        st.remoteMachine = typeof s.machine === "string" ? s.machine : "";
         // 当前用的会话文件（用来把列表里的历史行标成“已打开”）；路径比法两边同归一化
         const fileBefore = st.sessionFile || "";
         st.sessionFile = typeof s.file === "string" ? s.file : "";
@@ -11647,21 +11475,12 @@
       // 当前会话是这块屏自己的事：别的屏切了会话（sessionList 里那个 activeId）不管，
       // 只有后端单发给本屏的 sessionActivated 才会切。这里只把画面重新挂好、状态刷一遍。
       // 后端说的“你看这个”比会话壳先到时先记着（见上面 sessionActivated 那段）：
-      // 这批列表里有了就切过去；这一批里还没有就再等一批——别台的会话要先让那台把它开出来，
-      // 这中间排队的不含它的清单可能比那条“切到它”更晚才到（时序对不上，不是它的号过期了）。
-      // 等过一小段时间还没有（见 PENDING_ACTIVATE_MS）才当成过期，回自己原来那个。
+      // 这批列表里有了就切过去；这批里也没有就当它已经过时（会话被关了之类），不再压着。
       if (pendingActivateId) {
         const pending = pendingActivateId;
-        if (sessions.has(pending)) {
-          pendingActivateId = null;
-          activateSessionView(pending);
-        } else if (Date.now() > pendingActivateUntil) {
-          pendingActivateId = null;
-          if (activeId && sessions.has(activeId)) { mountActiveSession(); syncStatus(); renderAutoIndicator(); }
-        } else if (activeId && sessions.has(activeId)) {
-          mountActiveSession();
-          renderAutoIndicator();
-        }
+        pendingActivateId = null;
+        if (sessions.has(pending)) { activateSessionView(pending); }
+        else if (activeId && sessions.has(activeId)) { mountActiveSession(); syncStatus(); renderAutoIndicator(); }
       } else if (activeId && sessions.has(activeId)) {
         mountActiveSession();
         renderAutoIndicator();
@@ -11702,7 +11521,7 @@
       }
       // 会话壳要先在（列表可能晚一步）：不在就先记着，等它出现在列表里再切
       if (id && sessions.has(id)) { pendingActivateId = null; activateSessionView(id); }
-      else if (id) { pendingActivateId = id; pendingActivateUntil = Date.now() + PENDING_ACTIVATE_MS; }
+      else if (id) { pendingActivateId = id; }
       // 搜索框开着：换成这个会话的目录重搜一次（上一个会话那份结果已经作废）
       if (fileSearch.open) { runFileSearch(); }
       return;
@@ -11779,12 +11598,10 @@
     }
     if (type === "workspaceSessionsPage") {
       // 某一个工作区那一组会话回来了（展开时 / 点那一组的「加载更多」时）：挂到那一组下面。
-      // 认的钥匙是“那台 + 目录”（后端把 machine 一起回过来，见 chatHost 的 machineGroupPage）。
-      const pageKey = groupKeyOf({ file: msg.path, machine: msg.machine });
-      const view = takeGroupView(pageKey);
+      const view = takeGroupView(msg.path);
       const st = view ? view.state : null;
       if (st && st.kind === "workspace") {
-        const g = groupState(st, pageKey);
+        const g = groupState(st, msg.path);
         const rows = Array.isArray(msg.items) ? msg.items : [];
         g.items = msg.offset > 0 ? g.items.concat(rows) : rows.slice();
         g.nextOffset = typeof msg.nextOffset === "number" ? msg.nextOffset : g.nextOffset;
@@ -12289,10 +12106,7 @@
       case "syncPoint":
         // 插件说“这一屏补发 / 重画完了”：对账的重放就此收尾；
         // 清空重画那种则把视野放回原处（不在重画的都是空转）
-        // 带 machine 的是别台那台的重画收尾（见 src/machineHub.ts）：只收那一台的会话，
-        // 本机那几格可能正画着自己的（反过来也一样，本机那声不带 machine，不动别台的）
         for (const st of sessions.values()) {
-          if (msg.machine ? st.remoteMachine !== msg.machine : !!st.remoteMachine) { continue; }
           flushReplayBuf(st);
           if (st.reconcile) { endReconcile(st); }
           else if (st.suppressScroll) { finishRedraw(st); }

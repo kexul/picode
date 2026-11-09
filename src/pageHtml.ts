@@ -92,9 +92,7 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
         return version ? `/media/${name}?v=${version}` : `/media/${name}`;
     };
 
-    // 浏览器页面的安全策略（无内联脚本、不加载外部站点的东西）：只有本站。别的机器那几台
-    // 不在这里放行 —— 页面不直接连它们，去别台的东西都交回本机后端转过去（见 webChatServer 的
-    // proxyToMachine），所以手机只要连得到本机就行，不用自己也连在对方那个网里。
+    // 浏览器页面的安全策略（无内联脚本、不加载外部站点的东西）
     const csp =
         `default-src 'none'; ` +
         // 文件侧边栏里把会话目录里的 html 当网页打开：那个 iframe 吃的是自己的 `/site/…` 地址

@@ -39,34 +39,6 @@ export interface DesktopLiveFrame {
     jpeg: Buffer;
 }
 
-/**
- * 把“4 字节大端长度 + JPEG 原文”接着来的那一路，拆成一帧一帧。
- *
- * 两支东西吐这种格式：本机这支小程序（bin/live.exe），以及别台后端那条 `/desk/live`
- * （它把同一支小程序吐的东西原样转出来）。所以拆帧只写这一份，两边各 new 一个用。
- */
-export class JpegFrameSplitter {
-    private pending: Buffer = Buffer.alloc(0);
-    /** 读到的长度不对劲（流对不齐了）：调用方该把这一路整条重来。 */
-    public broken = false;
-
-    /** 喂一段数据，把里面收齐的那几帧交出去（JPEG 原文）。 */
-    public push(chunk: Buffer, onFrame: (jpeg: Buffer) => void): void {
-        if (this.broken) { return; }
-        this.pending = this.pending.length === 0 ? chunk : Buffer.concat([this.pending, chunk]);
-        while (this.pending.length >= 4) {
-            const length = this.pending.readUInt32BE(0);
-            if (length <= 0 || length > 8 * 1024 * 1024) { this.broken = true; return; }
-            if (this.pending.length < 4 + length) { return; }
-            const jpeg = this.pending.subarray(4, 4 + length);
-            this.pending = this.pending.subarray(4 + length);
-            // JPEG 头是 FF D8（base64 里写成 /9j/）：不是的话这一帧不要
-            if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8) { continue; }
-            onFrame(jpeg);
-        }
-    }
-}
-
 /** 一块要看实时画面的屏。 */
 export interface DesktopLiveViewer {
     /** 来了一帧（一张完整的 JPEG）。 */
@@ -84,8 +56,8 @@ export function desktopLiveSupported(): boolean {
 export class DesktopLive {
     private readonly viewers = new Map<string, DesktopLiveViewer>();
     private child?: ChildProcess;
-    /** 标准输出是一段一段到的：拆帧那一份（跟别台转来的那条流共用）。 */
-    private frames = new JpegFrameSplitter();
+    /** 还没收齐的那一帧（标准输出是会一段一段到的）。 */
+    private pending: Buffer = Buffer.alloc(0);
     /** 小程序自己说的失败原因（它退出时拿来报给页面）。 */
     private stderr = "";
 
@@ -111,7 +83,7 @@ export class DesktopLive {
         this.viewers.clear();
         const child = this.child;
         this.child = undefined;
-        this.frames = new JpegFrameSplitter();
+        this.pending = Buffer.alloc(0);
         if (!child) { return; }
         // 把标准输入关掉它会自己退（见 bin/live.cs）；退不掉就掐掉，别留一支在后台一直拍
         try { child.stdin?.end(); } catch { /* 已经没了 */ }
@@ -126,7 +98,7 @@ export class DesktopLive {
             this.fail("桌面实时画面目前只在 Windows 上可用。");
             return;
         }
-        this.frames = new JpegFrameSplitter();
+        this.pending = Buffer.alloc(0);
         this.stderr = "";
         const child = spawn(
             LIVE_EXE(),
@@ -157,20 +129,32 @@ export class DesktopLive {
     private forget(child: ChildProcess): void {
         if (this.child !== child) { return; }
         this.child = undefined;
-        this.frames = new JpegFrameSplitter();
+        this.pending = Buffer.alloc(0);
         try { child.stdout?.removeAllListeners(); } catch { /* 已经没了 */ }
     }
 
-    /** 收一帧算一帧（拆帧的规矩见 JpegFrameSplitter）：帧原样交给看着的那几方。 */
+    /**
+     * 收一帧算一帧：标准输出上是「4 字节大端长度 + JPEG 原文」接着来，一段数据里可能是半帧、
+     * 也可能好几帧。帧原样交给看着的那几方（转 base64 还是直接写字节，由它们自己定）。
+     */
     private readFrames(chunk: Buffer): void {
-        this.frames.push(chunk, (jpeg) => {
+        this.pending = this.pending.length === 0 ? chunk : Buffer.concat([this.pending, chunk]);
+        while (this.pending.length >= 4) {
+            const length = this.pending.readUInt32BE(0);
+            if (length <= 0 || length > 8 * 1024 * 1024) {
+                // 对上不齐（不该发生）：整支重来，别把后面的帧越读越歪
+                this.stderr = "读到的帧长度不对劲。";
+                try { this.child?.kill(); } catch { /* 已经没了 */ }
+                return;
+            }
+            if (this.pending.length < 4 + length) { return; }
+            const jpeg = this.pending.subarray(4, 4 + length);
+            this.pending = this.pending.subarray(4 + length);
+            // JPEG 头是 FF D8（base64 里写成 /9j/）：不是的话这一帧不要
+            if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8) { continue; }
             const frame: DesktopLiveFrame = { jpeg };
             for (const viewer of this.viewers.values()) { viewer.onFrame(frame); }
-        });
-        if (!this.frames.broken) { return; }
-        // 对上不齐（不该发生）：整支重来，别把后面的帧越读越歪
-        this.stderr = "读到的帧长度不对劲。";
-        try { this.child?.kill(); } catch { /* 已经没了 */ }
+        }
     }
 
     /** 这一路没法再拍了：告诉每一块看着的屏，然后把这一支收掉。 */

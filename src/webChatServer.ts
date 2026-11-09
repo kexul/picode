@@ -14,7 +14,6 @@ import {
     isAllowedMediaFile,
     isLoopbackHostHeader,
     isLoopbackName,
-    isPrivateOrigin,
     isSameOrigin,
     isWildcardHost,
     localHostnames,
@@ -26,17 +25,8 @@ import {
 import { insideFolder, pathCaseKey, relativeTo } from "./pathRules";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { findListedFile } from "./fileSearch";
-import { listDirectories } from "./dirBrowse";
 import type { SessionChanges } from "./gitChanges";
 import { readRemoteNotice, type RemoteNotice } from "./remoteNotice";
-import {
-    listProjectDirs,
-    listSessionFiles,
-    readProjectEntry,
-    scanHistoryPage,
-    scanSessionInfo,
-    type SessionListItem,
-} from "./sessionStore";
 import { changedCharRanges, diffRows, type LineRanges } from "./wordDiff";
 
 /**
@@ -82,15 +72,15 @@ const COMPRESS_CACHE_MAX = 64;
  * —— 每个文件编译后第一次被请求就要堵住服务端半秒；9 档是 175 KB、27 ms；gzip 是 213 KB。
  */
 const BROTLI_QUALITY = 9;
-/**
- * `GET /sessions` 一次报几个项目：跟本机「项目与会话」一批一个数（chatHost 的
- * WORKSPACE_BATCH = 4），点一次「加载更多工作区」再接一批。每个项目再报最近几条会话。
- */
-const SESSIONS_PAGE = 4;
-const SESSIONS_PER_PROJECT = 10;
-/** 历史清单一次给几条（对方没说要多少时）、最多给几条。 */
-const HISTORY_PAGE = 10;
-const HISTORY_PAGE_MAX = 50;
+
+/** 局域网里那种机器名（`my-pc` 这种单段名字，或者 `.local` / `.lan` 这几个后缀）。
+ *  用来分辨“页面是从这台机器自己的名字打开的”，见 `originIsOwnHostName`。 */
+const LAN_NAME_SUFFIXES = [".local", ".lan", ".home", ".internal", ".corp", ".localdomain"];
+function isLanHostName(name: string): boolean {
+    const n = name.toLowerCase();
+    return n.indexOf(".") < 0 || LAN_NAME_SUFFIXES.some((suffix) => n.endsWith(suffix));
+}
+
 /**
  * 请求方说它收哪些压缩方式（名字 → q 值；没提就是没有，q=0 当作不收）。
  * 浏览器都会发 `gzip, deflate, br`；手工 curl 不带这个头时什么都不收，照旧发原文。
@@ -327,25 +317,11 @@ export interface WebServerHost {
     /** 页面发来一条消息（/api POST）。 */
     processPageMessage(msg: any, pageId: string): void;
     /**
-     * 这个会话跑在别台那台上吗（是就给那台的地址）。
-     * 文件 / 目录 / 改动 / 站内页面这几个只读口子照它转发 —— 页面只跟这台说话，那些东西在后端之间走。
-     */
-    sessionMachine?(sessionId: string): string | undefined;
-    /** 把这一条请求原样转给那台（会话号换回它那边的写法）。 */
-    proxySessionToMachine?(machine: string, sessionId: string, req: http.IncomingMessage, res: http.ServerResponse): void;
-    /**
      * 一块屏要看这台电脑的桌面实时画面（浏览器页面按住「截图」按钮那一下）。
      * 来一帧叫一次 onFrame；这一路起不来 / 断了照旧给这块屏发一条 desktopLiveResult。
      * @returns 不看了（页面关掉那一层 / 连接断了）
      */
     watchDesktopLive(pageId: string, onFrame: (jpeg: Buffer) => void): () => void;
-    /**
-     * 要一张**那台**的桌面截图（正在看别台上一条会话时点那颗截图按钮）。
-     * 拿不到就把原因写在 error 里（那台没起、那台不是 Windows……）。
-     */
-    machineDeskShot?(machine: string): Promise<{ ok: boolean; data?: Buffer; mimeType?: string; error?: string }>;
-    /** 看**那台**的桌面实时画面：来一帧调一次 onFrame；返回“不看了”。 */
-    machineDeskLive?(machine: string, onFrame: (jpeg: Buffer) => void): () => void;
     /**
      * 一个会话跑在哪个目录（只读的文件地址按它解路径）。
      * 跑着的会话、以及刚关掉还记着的会话都认；两条都对不上返回 undefined（页面拿不到内容）。
@@ -601,23 +577,6 @@ export class PiChatWebServer {
                 this.sendText(req, res, 403, "请求来源不被接受。请直接在浏览器里打开服务给的地址。");
                 return;
             }
-            // 跨源的自己人（另一台 pichat 的页面来问这台）：浏览器要读回应，就得先给它这几个头。
-            // 同源不用：浏览器根本不看 CORS。
-            const origin = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
-            if (origin && !this.originIsSelf(origin, req)) {
-                res.setHeader("Access-Control-Allow-Origin", origin);
-                this.addVary(res, "Origin");
-            }
-            // 预检：页面发 JSON 的 POST（以及带自定义头的请求）之前，浏览器会先问一句能不能发
-            if (req.method === "OPTIONS") {
-                const asked = req.headers["access-control-request-headers"];
-                res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-                res.setHeader("Access-Control-Allow-Headers", typeof asked === "string" && asked ? asked : "content-type");
-                res.setHeader("Access-Control-Max-Age", "600");
-                res.writeHead(204, { "Cache-Control": "no-store" });
-                res.end();
-                return;
-            }
             const pathname = safeDecode(url.pathname);
             if (pathname === undefined) {
                 this.sendText(req, res, 400, "请求地址不合法。");
@@ -625,19 +584,6 @@ export class PiChatWebServer {
             }
             if (pathname === "/health") {
                 this.sendHealth(req, res);
-                return;
-            }
-            // 这台机器上跑过哪些项目、每个项目最近的几个会话：给别的机器上的 pichat 拿来列清单
-            if (pathname === "/sessions") {
-                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                void this.withFailNote(req, res, this.sendSessions(req, res));
-                return;
-            }
-            // 某个目录里有哪些历史会话（一页一页要）：别的 pichat 的历史浮窗就是这么问的 ——
-            // 在那台上一条会话里点顶条那颗 <<<，列出来的得是那台那个目录的会话。
-            if (pathname === "/history") {
-                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                void this.withFailNote(req, res, this.sendHistory(req, res));
                 return;
             }
             // 别的 pichat 后端推来的“有事”（机器对机器，见 src/remoteNotice.ts）
@@ -682,15 +628,10 @@ export class PiChatWebServer {
                     this.sendText(req, res, 405, "只接受 GET。");
                     return;
                 }
-                const raw = url.pathname.slice("/site/".length);
-                const cut = raw.indexOf("/");
-                const siteSession = decodeSegment(cut < 0 ? raw : raw.slice(0, cut)) ?? "";
-                if (this.proxyIfMachine(req, res, siteSession)) { return; }
-                void this.withFailNote(req, res, this.sendSite(req, res, raw));
+                void this.withFailNote(req, res, this.sendSite(req, res, url.pathname.slice("/site/".length)));
                 return;
             }
             if (pathname === "/file") {
-                if (this.proxyIfMachine(req, res, url.searchParams.get("session") ?? "")) { return; }
                 if (req.method === "POST") {
                     void this.withFailNote(req, res, this.writeFile(req, res, url.searchParams.get("session") ?? "",
                         url.searchParams.get("path") ?? ""));
@@ -703,29 +644,17 @@ export class PiChatWebServer {
                 return;
             }
             if (pathname === "/dir") {
-                if (this.proxyIfMachine(req, res, url.searchParams.get("session") ?? "")) { return; }
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
                 void this.withFailNote(req, res, this.sendDir(req, res, url.searchParams.get("session") ?? "", url.searchParams.get("path") ?? ""));
                 return;
             }
-            // 列目录（只列子文件夹）：挑一个工作区时用（见 media/chat.js 的目录浏览 / chatHost 的 showFolderPicker）。
-            // 跟 `/dir` 不一样，这一条不限在某个会话的目录里 —— 挑新工作区本来就是在这一台机器的盘上随便挑
-            // （VS Code 里那个「打开文件夹…」也是这个自由度）。只给目录名与路径，不给文件内容；
-            // 服务本来就没有登录，只该在信得过的网络里用。别的 pichat 也是通过这一条来问的。
-            if (pathname === "/dirs") {
-                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                void this.withFailNote(req, res, this.sendDirs(req, res, url.searchParams.get("path") ?? ""));
-                return;
-            }
             // 「改动」那一格：会话目录跟最后一次提交差了什么（清单），以及其中一个文件的合计 diff
             if (pathname === "/changes") {
-                if (this.proxyIfMachine(req, res, url.searchParams.get("session") ?? "")) { return; }
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
                 void this.withFailNote(req, res, this.sendChanges(req, res, url.searchParams.get("session") ?? ""));
                 return;
             }
             if (pathname === "/changes/diff") {
-                if (this.proxyIfMachine(req, res, url.searchParams.get("session") ?? "")) { return; }
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
                 void this.withFailNote(req, res, this.sendChangeDiff(req, res, url.searchParams.get("session") ?? "",
                     url.searchParams.get("path") ?? ""));
@@ -738,32 +667,12 @@ export class PiChatWebServer {
             }
             if (pathname === "/shot") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                // 带会话号：那一份跑在别台那台上，要拍的是那台的桌面（见 sendMachineShot）
-                const shotMachine = this.machineOfSession(url.searchParams.get("session") ?? "");
-                if (shotMachine) {
-                    void this.withFailNote(req, res, this.sendMachineShot(req, res, url.searchParams.get("pageId") ?? "", shotMachine));
-                    return;
-                }
                 void this.withFailNote(req, res, this.sendDesktopShot(req, res, url.searchParams.get("pageId") ?? ""));
                 return;
             }
             if (pathname === "/live") {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                this.openDesktopLive(req, res, url.searchParams.get("pageId") ?? "",
-                    url.searchParams.get("session") ?? "");
-                return;
-            }
-            // 这台电脑的桌面（给别的 pichat 来要：正在看别台上一条会话时点截图按钮，要拍的是那一台）。
-            // 跟 /sessions、/dirs 一个待遇：不要页面标识（那是防别的网站猜的，机器对机器没有这一说），
-            // 靠的是服务本身只监听本机 / 信得过的私网。
-            if (pathname === "/desk") {
-                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                void this.withFailNote(req, res, this.sendDeskShot(req, res));
-                return;
-            }
-            if (pathname === "/desk/live") {
-                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
-                this.openDeskLive(req, res);
+                this.openDesktopLive(req, res, url.searchParams.get("pageId") ?? "");
                 return;
             }
             if (pathname === "/events") {
@@ -814,55 +723,37 @@ export class PiChatWebServer {
      *           （这种请求即使服务只听本机地址也能发到）。
      * 设置里写了 trustedOrigins（页面是从 https 反代那个地址打开的）的，那两个检查都把它当自己人：
      * 它本来就不是本机地址、也不是本服务的端口，不带这一份名单就会被顶回去。
-     *
-     * 另外放开“私网来源”（见 webTransport.isPrivateOrigin）：多台 pichat 互联时，页面是从另一台
-     * 的地址打开的，它要直接问这台的 `/sessions`、把消息发到这台的 `/api`。
      */
     private originAllowed(req: http.IncomingMessage): boolean {
         if (isLoopbackName(this.boundHost) && !this.hostHeaderAllowed(req)) {
             return false;
         }
-        const origin = req.headers.origin as string | undefined;
-        if (isSameOrigin(origin, this.boundPort, this.ownHostnames, this.trustedOrigins)) { return true; }
-        return isPrivateOrigin(origin);
+        // 人常常是用 http://<计算机名>:端口 打开的页面（手机上尤其）：那个名字不在本机地址
+        // 那一批里（见 localHostnames），照下面那条比就会被自己人挡在外面。
+        if (this.originIsOwnHostName(req)) { return true; }
+        return isSameOrigin(req.headers.origin as string | undefined, this.boundPort, this.ownHostnames, this.trustedOrigins);
     }
 
     /**
-     * 这个来源是不是本服务自己（同源）：是就不必回 CORS 头。
+     * 这条请求是不是“这个网站自己发的”：Origin 的「主机:端口」跟它的 Host 头一模一样，
+     * 而且那个主机是个局域网机器名（单段名字，或者 .local / .lan 这几个后缀）。
      *
-     * 为什么不能拿 `isSameOrigin` 判：它是“放不放行”那一道关，认的是一批本机地址
-     * （localhost、127.0.0.1、本机各网卡）加端口。可另一台机器上的页面也可能从它自己的
-     * `localhost:51883` 打开，端口正好也是 51883，同名同端口——在那边看着是另一台，
-     * 在这里就被当成自己，于是不回跨源头，浏览器就把回应挡住了。
-     * 同源与否只能看这一条请求的 Host 头：Origin 的 `主机:端口` 跟它一模一样才算。
+     * 只认机器名：随便一个域名都放行的话，域名解析到这台机器（DNS rebinding）就能进来了。
      */
-    private originIsSelf(origin: string, req?: http.IncomingMessage): boolean {
-        const target = splitHostHeader(req?.headers.host);
-        if (!target) { return isSameOrigin(origin, this.boundPort, this.ownHostnames, this.trustedOrigins); }
+    private originIsOwnHostName(req: http.IncomingMessage): boolean {
+        const origin = typeof req.headers.origin === "string" ? req.headers.origin.trim() : "";
+        const target = splitHostHeader(req.headers.host);
+        if (!origin || !target || !isLanHostName(target.name)) { return false; }
         let url: URL;
         try {
             url = new URL(origin);
         } catch {
             return false;
         }
-        const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-        const port = url.port !== "" ? Number(url.port) : (url.protocol === "https:" ? 443 : 80);
-        const wantName = target.name.replace(/^\[|\]$/g, "");
-        const wantPort = target.port ?? (url.protocol === "https:" ? 443 : this.boundPort);
-        return host === wantName && port === wantPort;
-    }
-
-    /**
-     * 往 `Vary` 里再加一项（已有就什么也不做）。
-     *
-     * 为什么不用 `res.setHeader("Vary", "…")` 直接盖：一条响应上可能同时挂着“按来源变”（跨源
-     * 才回 CORS 头）和“按压缩方式变”，盖掉一个，中间的缓存就会把两种回应混起来。
-     */
-    private addVary(res: http.ServerResponse, extra: string): void {
-        const existing = String(res.getHeader("Vary") ?? "").trim();
-        if (!existing) { res.setHeader("Vary", extra); return; }
-        if (existing.toLowerCase().split(/\s*,\s*/).indexOf(extra.toLowerCase()) >= 0) { return; }
-        res.setHeader("Vary", existing + ", " + extra);
+        if (url.protocol !== "http:") { return false; }
+        const port = url.port !== "" ? Number(url.port) : 80;
+        return url.hostname.toLowerCase().replace(/^\[|\]$/g, "") === target.name.toLowerCase()
+            && port === (target.port ?? this.boundPort);
     }
 
     /** Host 头可不可接受：监听在本机地址上时，要么是本机写法，要么是人写下的来源里的域名。 */
@@ -1516,30 +1407,6 @@ export class PiChatWebServer {
         stream.pipe(res);
     }
 
-    /**
-     * 这一条请求的会话跑在别台那台上：整条转给那台（文件、目录、改动、站内页面都一样），
-     * 本机不再自己解。回 true = 已经接手了，调用方直接 return。
-     */
-    private proxyIfMachine(req: http.IncomingMessage, res: http.ServerResponse, sessionId: string): boolean {
-        if (!sessionId) { return false; }
-        const machine = this.host.sessionMachine?.(sessionId);
-        if (!machine) { return false; }
-        this.host.proxySessionToMachine?.(machine, sessionId, req, res);
-        return true;
-    }
-
-    /**
-     * 列目录（`GET /dirs?path=…`）：只列子文件夹，给“挑一个工作区”那套用。
-     *
-     * 网页那边用它的是「在别台开新工作区」：这台的后端直接把请求发给别台（见 machineHub），
-     * 页面拿到的还是自己这台的地址。不限在某个会话的目录里，只给目录名与路径。
-     * 出错也不抛，放在 `error` 里回去（跟 dirBrowse 一个规矩）。
-     */
-    private async sendDirs(req: http.IncomingMessage, res: http.ServerResponse, target: string): Promise<void> {
-        const listing = await listDirectories(target);
-        this.sendJson(req, res, 200, listing);
-    }
-
     private sendHealth(req: http.IncomingMessage, res: http.ServerResponse): void {
         if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
         // info 先铺、本服务的身份后压：即使 info 里凑巧带了同名键，
@@ -1552,136 +1419,6 @@ export class PiChatWebServer {
             startedAt: this.startedAt,
         };
         this.sendJson(req, res, 200, payload);
-    }
-
-    /**
-     * 这台机器上跑过哪些项目、每个项目最近的几个会话（`GET /sessions`）。
-     *
-     * 给“另一台 pichat”拿的：那台的页面要在这边列出这台有哪些会话、工作目录在哪，好让人点开。
-     * 只报最近这些（项目按最近活动、每个项目取前几条）：清单是给人扫一眼的，不是把全部历史倒出去。
-     * 形状：`{ projects: [{ name, cwd, lastActivity, sessions: [{ id, title, cwd, file, lastActivity }] }], hasMore }`。
-     * file 是那边的会话文件绝对路径：另一台要请这边“打开这一个”时带的就是它（见 workspaceOpenSession）。
-     *
-     * 分批：`?offset=N` 从第 N 个项目往后数一批（跟本机「项目与会话」一批 5 个一个规矩），
-     * `hasMore` 说后面还有没有。一次全列出来，那台项目多的时候侧边栏会拖到看不见底。
-     */
-    private async sendSessions(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-        const projects: Array<Record<string, unknown>> = [];
-        // 目录清单是这一趟运行扫一次留着的那份（见 sessionStore.listProjectDirs），这里直接用
-        const dirs = await listProjectDirs();
-        const offset = Math.max(0, Math.floor(Number(req.url ? new URL(req.url, "http://x").searchParams.get("offset") : 0) || 0));
-        const page = dirs.slice(offset, offset + SESSIONS_PAGE);
-        for (const entry of page) {
-            const project = await readProjectEntry(entry);
-            if (!project) { continue; }
-            const files = (await listSessionFiles(project.cwd)).slice(0, SESSIONS_PER_PROJECT);
-            const scanned = await Promise.all(files.map((file) => scanSessionInfo(file.file)));
-            const sessions = scanned
-                .filter((item): item is SessionListItem => !!item && !item.child)
-                .map((item) => ({ id: item.id, title: item.title, cwd: item.cwd, file: item.file, lastActivity: item.lastActivity }));
-            if (sessions.length === 0) { continue; }
-            projects.push({
-                name: project.name,
-                cwd: project.cwd,
-                lastActivity: project.lastActivity,
-                sessions,
-            });
-        }
-        this.sendJson(req, res, 200, { projects, offset, hasMore: offset + page.length < dirs.length });
-    }
-
-    /**
-     * 某个目录的历史会话，一页一批（历史浮窗那一份）。
-     * 扫法跟本机历史浮窗同一处（sessionStore.scanHistoryPage）：子会话跳过、按最后说话时间排。
-     */
-    private async sendHistory(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-        const params = new URL(req.url ?? "/", "http://x").searchParams;
-        const dir = params.get("dir") ?? "";
-        const offset = Math.max(0, Math.floor(Number(params.get("offset")) || 0));
-        const size = Math.min(HISTORY_PAGE_MAX, Math.max(1, Math.floor(Number(params.get("size")) || HISTORY_PAGE)));
-        if (!dir) {
-            this.sendJson(req, res, 400, { error: "没说要哪个目录（dir）。" });
-            return;
-        }
-        const files = (await listSessionFiles(dir)).map((one) => one.file);
-        const page = await scanHistoryPage(files, offset, size);
-        this.sendJson(req, res, 200, { dir, offset, ...page });
-    }
-
-    /** 这一条请求（或这个地址上的会话）跑在别台那台上吗：是就给那台的地址。 */
-    private machineOfSession(sessionId: string): string | undefined {
-        if (!sessionId) { return undefined; }
-        return this.host.sessionMachine?.(sessionId);
-    }
-
-    /**
-     * 别台的桌面截图：问那台要（`GET <那台>/desk`），拿回来原样给这一条请求。
-     * 照旧先认页面标识（跟本机那张一个规矩：别的网站猜不到这个串）。
-     */
-    private async sendMachineShot(req: http.IncomingMessage, res: http.ServerResponse, pageId: string, machine: string): Promise<void> {
-        if (!this.host.getBroadcaster().isKnown(pageId)) {
-            this.sendText(req, res, 409, "此页面不是当前这个网页服务发出的（服务可能重启过）。刷新页面就好。");
-            return;
-        }
-        const shot = await this.host.machineDeskShot?.(machine);
-        if (!shot) {
-            this.sendText(req, res, 503, "这个后端不会去问那台要截图。");
-            return;
-        }
-        if (!shot.ok || !shot.data) {
-            this.sendText(req, res, 503, shot.error || "那台没能截图。");
-            return;
-        }
-        res.writeHead(200, {
-            "Content-Type": shot.mimeType || "image/jpeg",
-            "Content-Length": shot.data.length,
-            "Cache-Control": "no-store",
-        });
-        res.end(shot.data);
-    }
-
-    /** 这台电脑的桌面截图（别的 pichat 来要的那一条，见 `/desk` 路由）。 */
-    private async sendDeskShot(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-        const result = await captureDesktopScreenshot();
-        if (!result.ok) {
-            this.sendText(req, res, 503, result.error ?? "桌面截图失败。");
-            return;
-        }
-        const jpeg = Buffer.from(result.data, "base64");
-        res.writeHead(200, {
-            "Content-Type": result.mimeType || "image/jpeg",
-            "Content-Length": jpeg.length,
-            "Cache-Control": "no-store",
-        });
-        res.end(jpeg);
-    }
-
-    /**
-     * 这台电脑桌面实时画面的机器对机器那一路（`GET /desk/live`）：问的那台拿这条去转发给它的页面。
-     *
-     * 帧的写法跟本机那支小程序吐的一模一样（「4 字节大端长度 + JPEG 原文」），
-     * 这样那台拆帧用的是同一个 JpegFrameSplitter，一条规矩两边都认。
-     */
-    private openDeskLive(req: http.IncomingMessage, res: http.ServerResponse): void {
-        res.writeHead(200, {
-            "Content-Type": "application/octet-stream",
-            "Cache-Control": "no-store, no-transform",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        });
-        res.socket?.setNoDelay(true);
-        const stop = this.host.watchDesktopLive(`desk:${crypto.randomUUID()}`, (jpeg) => {
-            // 那头读得慢（网卡、退到后台）：这一帧不写了，隔壁本来就有下一帧
-            if (res.writableLength > STREAM_STALE_BYTES) { return; }
-            const head = Buffer.alloc(4);
-            head.writeUInt32BE(jpeg.length, 0);
-            res.write(head);
-            res.write(jpeg);
-        });
-        const done = () => { stop(); };
-        req.on("close", done);
-        res.on("close", done);
-        res.on("error", done);
     }
 
     private sendJson(req: http.IncomingMessage, res: http.ServerResponse, status: number, value: unknown): void {
@@ -1722,8 +1459,7 @@ export class PiChatWebServer {
         const encoding = pickBodyEncoding(req.headers["accept-encoding"]);
         const packed = this.compressFor(encoding, body, cacheKey);
         const out: Record<string, string | number> = { ...headers };
-        // Vary 用 setHeader 累加（上面可能已经挂了 CORS 那一项），不能直接盖
-        if (body.length >= COMPRESS_MIN_BYTES) { this.addVary(res, "Accept-Encoding"); }
+        if (body.length >= COMPRESS_MIN_BYTES) { out["Vary"] = "Accept-Encoding"; }
         if (packed && encoding) {
             out["Content-Encoding"] = encoding;
             out["Content-Length"] = packed.length;
@@ -1802,7 +1538,7 @@ export class PiChatWebServer {
      * 页面关掉那一层 = 浏览器把这边的地址摘掉、这条请求跟着断，这儿就不看了；
      * 拍画面的小程序什么时候起停由 DesktopLive 管（还有人看就接着拍）。
      */
-    private openDesktopLive(req: http.IncomingMessage, res: http.ServerResponse, pageId: string, sessionId = ""): void {
+    private openDesktopLive(req: http.IncomingMessage, res: http.ServerResponse, pageId: string): void {
         // 只认本服务发出过的页面标识：别的网站里放一张 <img> 猜不到这个串，也就拉不起这一路
         if (!this.host.getBroadcaster().isKnown(pageId)) {
             this.sendText(req, res, 409, "此页面不是当前这个网页服务发出的（服务可能重启过）。刷新页面就好。");
@@ -1817,21 +1553,15 @@ export class PiChatWebServer {
             "X-Accel-Buffering": "no",
         });
         res.socket?.setNoDelay(true);
-        // 看的是别台上一条会话：这一路拍的是**那台**的桌面（见 machineDeskLive），本机这支不用起
-        const machine = this.machineOfSession(sessionId);
-        const onFrame = (jpeg: Buffer) => {
+        const stop = this.host.watchDesktopLive(pageId, (jpeg) => {
             // 这块屏读得慢（网卡、退到后台）：这一帧不写了。画面本来就有下一帧，
             // 塞进去只会让它越落越远（跟推送流那边丢帧是同一条规矩，见 STREAM_STALE_BYTES）
             if (res.writableLength > STREAM_STALE_BYTES) { return; }
             res.write(`--${boundary}\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\n\r\n`);
             res.write(jpeg);
             res.write("\r\n");
-        };
+        });
         // 页面走了 / 关掉那一层 / 服务停了：不看了（还有别人看就接着拍，DesktopLive 自己算）
-        // 拍本机这支小程序，还是问那台要（看的是别台那条会话就是后者）
-        const stop = machine
-            ? (this.host.machineDeskLive?.(machine, onFrame) ?? (() => { /* 没这门手艺 */ }))
-            : this.host.watchDesktopLive(pageId, onFrame);
         const done = () => { stop(); };
         req.on("close", done);
         res.on("close", done);
@@ -1921,15 +1651,12 @@ export class PiChatWebServer {
     private openStream(res: http.ServerResponse, accept: string | string[] | undefined): PageStream {
         const pack = (acceptedEncodings(accept).get("gzip") ?? 0) > 0;
         const stream = new PageStream(res, pack, this.backlogBytes);
-        if (pack) {
-            res.setHeader("Content-Encoding", "gzip");
-            this.addVary(res, "Accept-Encoding");
-        }
         res.writeHead(200, {
             "Content-Type": "text/event-stream; charset=utf-8",
             "Cache-Control": "no-store, no-transform",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+            ...(pack ? { "Content-Encoding": "gzip", "Vary": "Accept-Encoding" } : {}),
         });
         return stream;
     }

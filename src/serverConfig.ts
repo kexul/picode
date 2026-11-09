@@ -42,20 +42,19 @@ export interface ServerWebSettings {
 }
 
 /**
- * 远程机器（config.json 的 machines 一项）：这台认识的别的电脑。
+ * 跨机器的“有事”提醒（另一台机器上的后端跑完一轮，往这台推一条）。
  *
- * 两个用途，共用这一份地址：
- *   - 看得见：页面先问本机 /health（它报这一份），再对每台问 /sessions，
- *     就能把它们的项目与会话列在「工作区-<那台的名字>」那一节里；
- *   - 提醒：这边跑完一轮、或者模型在等你答一句时，往这些地址推一条卡片（见 src/remoteNotice.ts）。
- *
- * 只改这一台：被访问的那台什么都不用写（收到请求就收）。详见 README 与 src/webChatServer.ts 的 /sessions。
+ * 只改推送方那一台：notify.pushTo（推到哪儿去）。
+ * 接收方什么都不用写（收到了就收）。不写 pushTo 就谁也不推。详见 src/remoteNotice.ts。
  *
  * 没有口令：这个后端本来就没有登录（README 里写着“只在信得过的网络里用”），
- * 再加一道口令只是多一处要人对着抄的东西。浏览器那边过 Origin 那道关（外网网站的 Origin 被拒，
- * 私网地址放行，见 webTransport.isPrivateOrigin）。
+ * 再加一道通知口令只是多一处要人对着抄的东西。浏览器那边仍然过 Origin 那道关
+ * （网页脚本没法替你往 /notify 里塞东西），机器对机器发的请求没有 Origin，照收。
  */
-export type RemoteMachineSettings = string[];
+export interface ServerNotifySettings {
+    /** 推到这些地址（对方网页服务的地址，比如 `http://10.0.0.2:51883`）；一个都没有 = 不推。 */
+    pushTo: string[];
+}
 
 export interface ServerConfig {
     provider: string;
@@ -79,8 +78,7 @@ export interface ServerConfig {
      * 哪一项空着、或者根本不存在，就用内置原文（第一次启动会把内置原文写进来当起点）。
      */
     prompts: Record<string, string>;
-    /** 这台认识的别的电脑（它们的 pichat 地址）：看得见它们的会话，有事也提醒过去。 */
-    machines: RemoteMachineSettings;
+    notify: ServerNotifySettings;
     webServer: ServerWebSettings;
 }
 
@@ -103,8 +101,8 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = deepFreeze({
     // 提示词默认全部空着（空 = 用内置原文）：具体文字在 promptText.ts，
     // 第一次启动后端会把内置原文填进来，人照着改就行
     prompts: {},
-    // 远程机器默认一台也没有：得人自己在设置面板「远程机器」里填对方地址。
-    machines: [],
+    // 跨机器的提醒默认谁也不推：得人自己在设置面板「消息推送」里填对方地址
+    notify: { pushTo: [] },
     // 默认对所有网卡开放（手机等设备打开地址就能用）；只给自己用就改 127.0.0.1，或启动时加 --host 127.0.0.1
     webServer: { port: 51883, host: "0.0.0.0", trustedOrigins: [] },
 });
@@ -125,7 +123,7 @@ function defaults(): ServerConfig {
     return {
         ...DEFAULT_SERVER_CONFIG,
         prompts: {},
-        machines: [],
+        notify: { ...DEFAULT_SERVER_CONFIG.notify, pushTo: [] },
         webServer: { ...DEFAULT_SERVER_CONFIG.webServer, trustedOrigins: [] },
     };
 }
@@ -137,10 +135,10 @@ const RETIRED_KEYS = new Set([
     "piPath", "extraArgs", "trustProject", "tabaEnabled",
     // 现在在设置面板里（存 state.json），不再从这儿读
     "notifyTurnEnd",
-    // 跨机器那套「配对」撤了：改回手填地址（见 machines 一项）
+    // 跨机器那套「配对」撤了：改回手填推送地址（见 notify 一节）
     "pairs",
-    // 早先叫 notify（里面是 pushTo）：现在就叫 machines，读到那段就搬过去（见下面的解析）
-    "notify",
+    // 前一版把推送地址挪到了顶层 machines（多台互联那阵子）：读到就搬进 notify.pushTo（见下面那一段）
+    "machines",
 ]);
 /** 同上，webServer 那层里去掉的键。 */
 const RETIRED_WEB_KEYS = new Set(["enabled"]);
@@ -240,7 +238,7 @@ function pickOrigins(value: unknown, warnings: string[]): string[] {
 }
 
 /**
- * 一组地址（比如 machines）：只收 http / https 的，规范化成 `http://主机:端口`
+ * 一组地址（比如 notify.pushTo）：只收 http / https 的，规范化成 `http://主机:端口`
  * （去掉末尾斜杠与路径），重复的并掉。
  */
 function pickUrlList(value: unknown, label: string, warnings: string[]): string[] {
@@ -408,15 +406,30 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
         }
     }
 
-    // ---- 远程机器（config.json 的 machines 一项）----
-    // 老文件里还写着 notify.pushTo 的，搬进来（人不用重填）；两者都有就合起来去重。
-    const legacyNotify = raw.notify;
-    const legacyPush = isPlainObject(legacyNotify) ? legacyNotify.pushTo : undefined;
-    const machines = pickUrlList(raw.machines, "machines", warnings);
-    for (const one of pickUrlList(legacyPush, "machines", [])) {
-        if (machines.indexOf(one) < 0) { machines.push(one); }
+    // ---- 跨机器的“有事”提醒（config.json 的 notify 一节）----
+    const notify = raw.notify;
+    // 前一版把这几台地址写在顶层 machines 一项里（那阵子它还兼着“看别台的会话”）：
+    // 读到就搬进 notify.pushTo，人不用重填；两者都有就合起来去重。
+    const movedPushTo = pickUrlList(raw.machines, "machines", []);
+    if (notify !== undefined) {
+        if (!isPlainObject(notify)) {
+            warnings.push("notify 不是一个对象，已全部用默认值");
+        } else {
+            config.notify.pushTo = pickUrlList(notify.pushTo, "notify.pushTo", warnings);
+            for (const one of movedPushTo) {
+                if (config.notify.pushTo.indexOf(one) < 0) { config.notify.pushTo.push(one); }
+            }
+            // 早先那项 notify.pushLabel（推过去时单独叫个名字）并进了那行「标签」：老文件里还写着就安静丢掉
+            const knownNotifyKeys = new Set([...Object.keys(DEFAULT_SERVER_CONFIG.notify), "pushLabel"]);
+            const unknownNotifyKeys = Object.keys(notify).filter((key) => !knownNotifyKeys.has(key));
+            if (unknownNotifyKeys.length > 0) {
+                warnings.push(`配置里有不认识的项：notify.${unknownNotifyKeys.join("、notify.")}`);
+            }
+        }
     }
-    config.machines = machines;
+
+    // 老文件里只有顶层那一份（没有 notify 一节）：搬进来
+    if (notify === undefined && movedPushTo.length > 0) { config.notify.pushTo = movedPushTo; }
 
     // ---- 网页服务（config.json 的 webServer 一节）----
     const web = raw.webServer;

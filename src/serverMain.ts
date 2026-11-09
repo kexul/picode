@@ -16,7 +16,6 @@ import * as path from "path";
 import { appVersion, mediaDir } from "./appAssets";
 import { PiChatWebServer, type WebServerSettings } from "./webChatServer";
 import { ChatHost } from "./chatHost";
-import { isOwnPage } from "./remoteNotice";
 import { openInBrowser } from "./desktopNotice";
 import { displayName } from "./pageHtml";
 import { readServerConfig, updateServerConfig, seedPrompts } from "./serverConfig";
@@ -304,12 +303,7 @@ export async function startBackend(options: StartBackendOptions): Promise<Starte
         info: () => {
             // name：这台的名字（设置里那行「标签」，提醒卡片左上角那颗小标签上写的就是它）
             const name = displayName();
-            // machines：这台认识的别的电脑（设置面板里「远程机器」那一栏的地址）。
-            // 页面拿它去问对方的 /health 和 /sessions，就能把几台的清单列在一起看。
-            // 填的是这台自己的地址（面板上默认显示的那个）不算“别的机器”。
-            const machines = readServerConfig().config.machines
-                .filter((target) => !isOwnPage(target, pageUrl));
-            return { version: VERSION, ...(name ? { name } : {}), machines };
+            return { version: VERSION, ...(name ? { name } : {}) };
         },
     });
 

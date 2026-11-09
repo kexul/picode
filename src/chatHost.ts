@@ -16,14 +16,11 @@
  * 本类不引用 `vscode`。插件那一侧是纯客户端（跟浏览器页面一样，走 HTTP 连后端），不继承这份。
  */
 import * as crypto from "crypto";
-import * as http from "http";
 import * as path from "path";
 import type { AskRequest } from "./askProtocol";
 import { writeAskAnswer } from "./askProtocol";
 import type { MessageSink } from "./sessionRuntime";
-import type { RemoteSessionRef, SessionRef } from "./runtimeTypes";
-import type { SessionListItem } from "./sessionStore";
-import { ChatControllerBase, type ChatReferenceItem, type ViewOptionItem, type WorkspacePage } from "./chatControllerBase";
+import { ChatControllerBase, type ViewOptionItem, type WorkspacePage } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
 import { isOwnPage, pushRemoteNotice, REMOTE_TEXT_CHARS, type RemoteNotice } from "./remoteNotice";
@@ -37,7 +34,7 @@ import {
     rememberProjectDir,
     type ProjectDirEntry,
 } from "./sessionStore";
-import { listDirectories, type DirListing } from "./dirBrowse";
+import { listDirectories } from "./dirBrowse";
 import { findFileContents, findFileNames, findPathCandidates } from "./fileSearch";
 import { ChatBroadcaster } from "./chatBroadcaster";
 import { displayName, machineName } from "./pageHtml";
@@ -45,7 +42,6 @@ import { MessageBuffer, PAGE_TRANSIENT_MESSAGE_TYPES } from "./webTransport";
 import { pickOverlayClient } from "./overlayTarget";
 import { ScreenRegistry } from "./screenRegistry";
 import { dirInsideAny, dirKey } from "./pathRules";
-import { MachineHub } from "./machineHub";
 import type { WebServerHost } from "./webChatServer";
 import type { SessionChanges } from "./gitChanges";
 import type { BashTaskInfo } from "./bashProtocol";
@@ -54,7 +50,7 @@ import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { DesktopLive } from "./desktopLive";
 import { DesktopNotice } from "./desktopNotice";
 import { describeRestart } from "./serverRestart";
-import { SessionRuntime } from "./sessionRuntime";
+import type { SessionRuntime } from "./sessionRuntime";
 import { clipText } from "./messageUtils";
 import {
     DEFAULT_AUTO_LOAD_LAST,
@@ -129,14 +125,6 @@ function withDefaultPort(url: string): string {
     }
 }
 
-/** 一条消息里带的新会话要继承的模型（那边请这边开的时候带上；没带就按本机平时的规矩）。 */
-function newSessionModelOf(msg: any): { provider?: string; modelId?: string } | undefined {
-    const provider = typeof msg?.provider === "string" ? msg.provider : "";
-    const modelId = typeof msg?.modelId === "string" ? msg.modelId : "";
-    if (!provider && !modelId) { return undefined; }
-    return { ...(provider ? { provider } : {}), ...(modelId ? { modelId } : {}) };
-}
-
 /** 这条消息是不是“一次性界面”（确认框、浮层、跑完提醒）：补发里只有序号位、没有内容。 */
 function isTransientPageMessage(msg: Record<string, unknown>): boolean {
     return typeof msg.type === "string" && PAGE_TRANSIENT_MESSAGE_TYPES.has(msg.type);
@@ -162,17 +150,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private static readonly USE_DIR_ROW = "\u0000pichat:use-dir";
     /** 文件夹列表里“换一个盘 / 回到最上层”那一行的标识。 */
     private static readonly ROOTS_ROW = "\u0000pichat:roots";
-    /** 刚请别台开的新会话最多等多久（那台没装 pi 之类就等不到，别拿后来的清单去乱认）。 */
-    private static readonly MACHINE_NEW_WAIT_MS = 30000;
-
-    /** 别台那几台：连接、清单、会话号映射、转发（见 machineHub.ts）。 */
-    private machineHub!: MachineHub;
-    /** 刚请别台开了一个会话，等它报清单时认领（见 adoptPendingMachineNew）。 */
-    private pendingMachineNew: {
-        machine: string; cwd: string; clientId: string; before: string[]; at: number;
-        /** 新会话认下来以后要顺手关掉的那个（这台界面上的写法）：加号那条路才带它。 */
-        closeOld?: string;
-    } | null = null;
 
     // ---- 浏览器页面（接在本工作区上的“额外的屏”，可以有多个）----
     /** 页面连接登记簿 + 推送序号：所有浏览器页面共用同一份会话的出口。 */
@@ -225,8 +202,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private readonly desktopLive = new DesktopLive();
     /** 直连那几路（`/live`）的编号：一条请求一个号，新旧两条不会互相误杀。 */
     private desktopLiveSeq = 0;
-    /** 那块屏正在看**别台**那台的桌面实时画面（屏标识 → 停掉它）。本机那一路不在这里。 */
-    private readonly machineLive = new Map<string, () => void>();
     /** 右下角那张提醒卡片（见 bin/notice.cs）：有事才起它，没有托盘、没有主界面。 */
     private readonly notice = new DesktopNotice({
         log: (text) => this.log(text),
@@ -239,146 +214,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         super("server");
         this.log = options.log ?? ((text) => console.log(text));
         this.state = new ServerStateStore(serverStateFile());
-        // 别台那几台：连接、清单、会话号映射、转发都在这一层（见 machineHub.ts）。
-        // 页面只跟这台说话；要跟别台打的交道全在这里做。
-        this.machineHub = new MachineHub({
-            log: (text) => this.log(text),
-            machines: () => readServerConfig().config.machines ?? [],
-            broadcast: (msg) => this.postToWebview(msg),
-            onSessionsChanged: () => this.onMachinesChanged(),
-            onSessionAdopted: (oldId, newId) => this.adoptForeignSessionId(oldId, newId),
-        });
-        this.machineHub.start();
         // 「项目与会话」下半那份目录清单这时先扫出来（见 sessionStore 的 listProjectDirs）：
         // 扫一次就定下来，第一条打开面板就不用再等这一趟
         void listProjectDirs();
-    }
-
-    // ========================================================================
-    //  别的机器（多台 pichat 互联）
-    //
-    //  页面（手机 / 浏览器 / 插件面板）只跟这台后端说话。别台的会话在这台的账里是一条**代理**
-    //  （machineHub 的 RemoteSession，跟本机那只运行时摆在同一个 `panels` 里，见 syncRemotePanels）：
-    //  清单、查找、“那条还在吗”只有一处；发过去的每一句由 machineHub 转给那台，回来的消息按号翻过来。
-    // ========================================================================
-
-    /** 这个号是不是别台那台的（本机没有对应的 pi 进程）。 */
-    protected override isForeignSessionId(id: string): boolean {
-        return !!this.machineHub.ownerOf(id);
-    }
-
-    /** 关掉别台那条会话：请那台关（本机没有进程可杀）。 */
-    protected override closeForeignSession(panelId: string): void {
-        if (!this.machineHub.ownerOf(panelId)) { return; }
-        this.machineHub.closeSession(panelId);
-        this.clearClientSession(this.currentPageId);
-    }
-
-    /**
-     * 别台那条会话的号换成这台界面的写法：`remote:<那台>:<它那边的号>`（跟别的会话号一个规矩）。
-     */
-    protected override toSessionIdOnMachine(machine: string, remoteId: string): string {
-        return this.machineHub.toLocalId(machine, remoteId);
-    }
-
-    /**
-     * 把某块屏切到某个会话。
-     *
-     * 别台那条多一步：顶条上摆着那台开着的每一格（跟本机一个规矩），但正文是按需的，
-     * 所以切过去时要请那台把这一格整段重放一遍（头一回切到它、或者页面重连后那次）。
-     * 本机不用这一步：那几格的正文一直在这台手里。
-     */
-    public override setActiveSession(panelId: string, clientId: string = this.currentPageId, switchId?: unknown): void {
-        super.setActiveSession(panelId, clientId, switchId);
-        if (this.machineHub.ownerOf(panelId)) { this.machineHub.watch(panelId); }
-    }
-
-    /**
-     * 把“这边认下的别台会话”跟 `panels` 这本账对齐：新认下的放进去（一条代理，数据现读现取），
-     * 不再认的（那台关掉了 / 父会话关了、子会话跟着走）拿掉。
-     *
-     * 从前别台的会话另立一份（foreignSessionEntries），于是“当前看的是哪条 / 有哪些”有两套写法；
-     * 现在合成一本，清单、查找、“那条还在吗”只有一处。
-     */
-    private syncRemotePanels(): void {
-        const wanted = new Set(this.machineHub.openedIds());
-        for (const id of wanted) {
-            if (this.panels.has(id)) { continue; }
-            const ref = this.machineHub.sessionRef(id);
-            if (ref) { this.panels.set(id, ref); }
-        }
-        for (const [id, one] of Array.from(this.panels)) {
-            if (one instanceof SessionRuntime) { continue; }
-            if (wanted.has(id)) { continue; }
-            this.panels.delete(id);
-        }
-    }
-
-    /** 那台报了新的会话清单 / 掉线 / 回来了：重推一份合并后的清单，顺手看新会话认不认得下来。 */
-    private onMachinesChanged(): void {
-        if (this.disposed) { return; }
-        this.syncRemotePanels();
-        this.adoptPendingMachineNew();
-        this.broadcastSessionList(true);
-        void this.refreshWorkspacePanels();
-    }
-
-    /**
-     * 刚请别台开的新会话：等它把会话清单报上来，里面多出来的那个、目录又对得上的，就是我让它开的。
-     * （那台自己已经把这会话当成那块“虚拟屏”要看的了，这边跟着认下、切过去就好。）
-     */
-    private adoptPendingMachineNew(): void {
-        const want = this.pendingMachineNew;
-        if (!want) { return; }
-        if (Date.now() - want.at > ChatHost.MACHINE_NEW_WAIT_MS) {
-            this.pendingMachineNew = null;
-            return;
-        }
-        const fresh = this.machineHub.findNewSession(want.machine, want.before, want.cwd);
-        if (!fresh) { return; }
-        this.pendingMachineNew = null;
-        const id = this.machineHub.toLocalId(want.machine, fresh.id);
-        this.machineHub.markOpened(id);
-        // 认下了就赶紧进这本账（清单与“切过去”都靠它）
-        this.syncRemotePanels();
-        this.setActiveSession(id, want.clientId);
-        // 加号那条路：新的挂好了再关旧的（跟本机一个规矩）；这会儿它要还在跑就留着，不把没跑完的活掐掉
-        if (want.closeOld && want.closeOld !== id && !this.machineHub.isBusy(want.closeOld)) {
-            this.machineHub.closeSession(want.closeOld);
-        }
-    }
-
-    /**
-     * 这块屏看的是别台那台上的一条、人点了加号（新建会话）：跟本机一个规矩——
-     * 在同一个目录里开一个新的、模型也跟着过去，旧的没在跑就一起关掉。
-     */
-    protected override newSessionOnRemote(current: SessionRef, clientId: string): boolean {
-        const machine = this.machineHub.ownerOf(current.id);
-        if (!machine || !current.cwd) { return false; }
-        this.startMachineSession(machine, current.cwd, clientId, current.id, current.currentModel());
-        return true;
-    }
-
-    /**
-     * 在那台上开一个会话（工作区行尾那颗加号、或“在新工作区里开”挑完目录）。
-     * 先记下那台现在有哪些会话：等它报上新的清单，多出来的那个就是这一个（见 adoptPendingMachineNew）。
-     * @param closeOld 它认下来以后顺手关掉的那个（这台界面上的写法；加号那条路传，新开一个就只留一格）
-     * @param inherited 新会话继承的模型（跟本机一个规矩：跟当前会话的模型走）
-     */
-    private startMachineSession(
-        machine: string,
-        cwd: string,
-        clientId: string,
-        closeOld?: string,
-        inherited?: { provider?: string; modelId?: string },
-    ): void {
-        this.pendingMachineNew = {
-            machine, cwd, clientId,
-            before: this.machineHub.sessionIdsOf(machine),
-            at: Date.now(),
-            ...(closeOld ? { closeOld } : {}),
-        };
-        this.machineHub.newSession(machine, cwd, inherited);
     }
 
     // ========================================================================
@@ -478,7 +316,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 已经关掉、只在登记簿里记着的会话没有这份清单（它跟着会话运行的那份内存走），给空数组。
      */
     public knownSessionFiles(sessionId: string): string[] {
-        return this.runtimeOf(sessionId)?.getKnownFiles() ?? [];
+        return this.panels.get(sessionId)?.getKnownFiles() ?? [];
     }
 
     /**
@@ -486,13 +324,13 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 每次都现问 git（见 gitChanges.ts）；会话目录不在 git 仓库里时 vcs=false（那一格整格收起来）。
      */
     public async sessionChanges(sessionId: string): Promise<SessionChanges> {
-        const panel = this.runtimeOf(sessionId);
+        const panel = this.panels.get(sessionId);
         return panel ? await panel.getChanges() : { vcs: false, changes: [] };
     }
 
     /** 一个文件的合计 diff（相对写法 = 清单里那一行）；没改出差别就不给。 */
     public async sessionChangeDiff(sessionId: string, relPath: string): Promise<string | undefined> {
-        return await this.runtimeOf(sessionId)?.changeDiff(relPath);
+        return await this.panels.get(sessionId)?.changeDiff(relPath);
     }
 
     public getCwd(): string {
@@ -589,12 +427,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const payload = await this.buildWorkspacePanel(clientId, expandedDirs);
         const choice = await this.openPicker("workspace", payload, clientId);
         if (!choice || typeof choice.file !== "string") { return; }
-        // 别台那一行：会话号是那边的写法，叫那台打开它，再切过去
-        if (typeof choice.machine === "string" && choice.machine && typeof choice.sessionId === "string" && choice.sessionId) {
-            this.machineHub.openSession(choice.sessionId);
-            this.setActiveSession(choice.sessionId, clientId);
-            return;
-        }
         // 目录是那一行自己带过来的（列表里混着好几个目录的会话）
         await this.openWorkspaceSession(choice.file, typeof choice.cwd === "string" ? choice.cwd : undefined, clientId);
     }
@@ -672,152 +504,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         await this.loadHistorySession(file, cwd, clientId);
     }
 
-    /**
-     * 历史浮窗那一页：看的是别台那台的一条会话，就按它的目录问那台要（那台从它自己的盘上扫）。
-     * 本机的照旧从这台盘上扫。
-     */
-    protected override async historyPage(
-        ref: SessionRef | undefined,
-        dir: string,
-        offset: number,
-        size: number,
-    ): Promise<{ items: SessionListItem[]; nextOffset: number; hasMore: boolean }> {
-        const machine = ref ? this.machineHub.ownerOf(ref.id) : undefined;
-        if (!machine) { return super.historyPage(ref, dir, offset, size); }
-        return this.machineHub.history(machine, dir, offset, size);
-    }
-
-    /**
-     * 历史浮窗里点了一条别台的会话：跟“在项目与会话里点那一行”走同一条路 ——
-     * 请那台把它打开，这边先按会话文件记着，等它报上清单认领成它那边的号再切过去。
-     */
-    protected override async openHistoryFile(
-        ref: SessionRef | undefined,
-        item: SessionListItem,
-        dir: string,
-        clientId: string,
-    ): Promise<void> {
-        const machine = ref ? this.machineHub.ownerOf(ref.id) : undefined;
-        if (!machine) { await super.openHistoryFile(ref, item, dir, clientId); return; }
-        const id = this.machineHub.openFileSession(machine, item.file, item.cwd || dir, item.id);
-        this.setActiveSession(id, clientId);
-    }
-
-    /**
-     * 别台那几台的项目行：接在工作区那一栏后面（每台一节，节名就是「工作区-<那台的名字>」）。
-     *
-     * 行的形状跟本机那些一模一样（`label` / `file` / `folderPath` / `lastActivity`），只多两个字段：
-     *   - `section`：这一行归哪一节（本机那些不写，界面默认就是「工作区」）；
-     *   - `machine`：那一台的地址 —— 展开、行尾加号都靠它知道要跟谁打交道。
-     * 连不上 / 那边一个项目都没有也给它一行（人知道清单里还有这台）。
-     */
-    private appendMachineRows(items: any[]): void {
-        const machines = this.machineHub.list();
-        // 有别台的时候，本机那些行也带上节名：免得界面把它们跟别台那一节混在一段里
-        if (machines.length > 0) {
-            for (const row of items) {
-                if (!row.section) { row.section = "工作区-本机"; }
-            }
-        }
-        for (const machine of machines) {
-            const section = "工作区-" + this.machineHub.nameOf(machine.url);
-            if (machine.projects.length === 0) {
-                items.push({
-                    label: machine.online ? "那边还没有会话" : "连不上",
-                    file: machine.url, folderPath: "", section, machine: machine.url,
-                    machineEmpty: machine.online ? "empty" : "offline",
-                    machineError: machine.error || "",
-                });
-                continue;
-            }
-            for (const one of machine.projects) {
-                items.push({
-                    label: one.name, file: one.cwd, folderPath: one.cwd,
-                    lastActivity: one.lastActivity, section, machine: machine.url,
-                });
-            }
-            if (machine.hasMore) {
-                items.push({ label: "加载更多工作区", section, machine: machine.url, machineMore: true });
-            }
-        }
-    }
-
-    /** 面板里点了“打开文件夹…”（工作区标题右边那颗加号）：走原来逛文件夹那条路（挑一个目录、就在那里新建会话）。
-     *  带 machine = 挑的是那台机器上的目录，挑完在那台上开新会话（见 startMachineSession）。 */
-    private async browseFromWorkspacePanel(clientId: string, machine = ""): Promise<void> {
-        if (machine) {
-            // 从那台最近聊过的目录开始翻（跟本机那颗从当前目录开始一个道理）
-            const info = this.machineHub.list().find((one) => one.url === machine);
-            const start = info && info.projects[0] ? info.projects[0].cwd : "";
-            await this.showFolderPicker(start, clientId, machine);
-            return;
-        }
+    /** 面板里点了“打开文件夹…”（工作区标题右边那颗加号）：走原来逛文件夹那条路（挑一个目录、就在那里新建会话）。 */
+    private async browseFromWorkspacePanel(clientId: string): Promise<void> {
         await this.showFolderPicker(this.getActive(clientId)?.cwd ?? this.getCwd(), clientId);
-    }
-
-    /** 问那台列一个目录（挑工作区用）。问不着就把原因放在 error 里（跟 listDirectories 一个形状）。 */
-    private async machineFolderListing(machine: string, dir: string): Promise<DirListing> {
-        try {
-            const raw = (await this.machineHub.listDirs(machine, dir)) as any;
-            const dirs = Array.isArray(raw?.dirs)
-                ? raw.dirs
-                    .filter((one: any) => one && typeof one.path === "string")
-                    .map((one: any) => ({ name: String(one.name || one.path), path: String(one.path) }))
-                : [];
-            return {
-                path: typeof raw?.path === "string" ? raw.path : "",
-                ...(typeof raw?.parent === "string" && raw.parent ? { parent: raw.parent } : {}),
-                dirs,
-                roots: raw?.roots === true,
-                ...(typeof raw?.error === "string" && raw.error ? { error: raw.error } : {}),
-            };
-        } catch (err: any) {
-            const why = String((err && err.message) || "").trim() || "列不出来";
-            return { path: String(dir || ""), dirs: [], roots: false, error: why };
-        }
-    }
-
-    /** 那台报过来几个项目（「加载更多工作区」从第几个往后要）。 */
-    private machineProjectCount(machineUrl: string): number {
-        const info = this.machineHub.list().find((one) => one.url === machineUrl);
-        return info ? info.projects.length : 0;
-    }
-
-    /**
-     * 别台上某个项目里的会话：那台的 `/sessions` 里现成就有（每个项目最多报前十条），
-     * 按界面要的那一批切出来，形状跟本机那一组一样（见 scanGroupPage）。
-     * 「当前」按这块屏正在看的那个会话号认（别台的会话号这台也认得）。
-     */
-    private machineGroupPage(machineUrl: string, cwd: string, offset: number, clientId: string): Record<string, unknown> {
-        const info = this.machineHub.list().find((one) => one.url === machineUrl);
-        const project = info ? info.projects.find((one) => this.samePath(one.cwd, cwd)) : undefined;
-        const all = project ? project.sessions : [];
-        const slice = all.slice(offset, offset + ChatHost.GROUP_PAGE_SIZE);
-        const focused = this.focusedIdFor(clientId) || "";
-        const currentId = focused && this.machineHub.ownerOf(focused) === machineUrl ? focused : "";
-        return {
-            path: cwd,
-            // 界面按“那台 + 目录”认这一批该挂到哪一组（见 media/chat.js 的 groupKeyOf）
-            machine: machineUrl,
-            offset,
-            items: slice.map((one) => ({
-                id: this.machineHub.toLocalId(machineUrl, one.id),
-                machine: machineUrl,
-                title: one.title || one.name || "",
-                name: one.name || one.title || "",
-                file: one.file || "",
-                cwd: one.cwd || cwd,
-                lastActivity: one.lastActivity,
-                current: !!currentId && currentId === this.machineHub.toLocalId(machineUrl, one.id),
-            })),
-            nextOffset: offset + slice.length,
-            hasMore: offset + slice.length < all.length,
-        };
     }
 
     /**
      * 面板的内容：上半是所有目录混一份的会话（最近聊过的在前），下半是工作区。
-     * 会话那份复用历史列表那套机器（pickerState 里的 historyDir / historyOffset / scanHistoryBatch），
+     * 会话那份复用历史列表那套机器（pickerState 里的 historyFiles / historyOffset / scanHistoryBatch），
      * 工作区那份自己分页：当前工作区固定显示，另外一次取 4 个，总共显示 5 个工作区；下面留一颗“加载更多”。
      *
      * 两半都只碰最前面那几个（要显示的那些）：会话那份只扫要画的十个文件，
@@ -833,18 +527,12 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         // 两份一起往前走，某一页就会少几行、顺序也乱（看着就是“工作区排来排去”）
         const page = this.newWorkspacePage(await listProjectDirs());
         const items = await this.takeWorkspacePage(page);
-        // 别台那几台的项目行（每台一节）：跟本机这些行摆在同一份清单里
-        this.appendMachineRows(items);
-        // 顺手把那几台的项目清单问一遍（不等着：问回来会重推一份，见 onMachinesChanged）
-        void this.machineHub.refreshProjects();
         state.workspacePage = page;
         const payload: Record<string, unknown> = {
             title: "项目与会话",
             spaces: {
                 items,
                 hasMore: page.offset < page.dirs.length,
-                // 本机那一节叫什么：有别台的时候叫「工作区-本机」（界面按这个给本机那些行归节）
-                localSection: this.machineHub.list().length > 0 ? "工作区-本机" : "工作区",
             },
         };
         // 界面展开着的那几组：第一批会话跟着工作区一块送过去（见 media/chat.js 的 expandedDirsForHost）。
@@ -868,7 +556,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const current = this.getActive(clientId)?.currentSessionPath;
         return {
             path: dir,
-            machine: "",
             offset,
             items: page.items.map((s) => ({ ...s, current: this.samePath(s.file, current) })),
             nextOffset: page.nextOffset,
@@ -881,14 +568,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      *
      * 宿主这边不留状态，面板重推一份时自然就从每组的第一条重新开始。
      */
-    private async sendWorkspaceSessions(dir: string, offset: number, machine = ""): Promise<void> {
+    private async sendWorkspaceSessions(dir: string, offset: number): Promise<void> {
         const clientId = this.currentPageId;
         if (!dir) { return; }
-        if (machine) {
-            // 别台那一行展开：会话清单那台已经报过来了（见 /sessions），这里直接切一批给它
-            this.sendOverlayTo(clientId, { type: "workspaceSessionsPage", ...this.machineGroupPage(machine, dir, offset, clientId) });
-            return;
-        }
         try {
             this.sendOverlayTo(clientId, { type: "workspaceSessionsPage", ...(await this.scanGroupPage(dir, offset, clientId)) });
         } catch {
@@ -964,9 +646,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      *
      * @param clientId 这个浮层是哪块屏开的（它自己收自己的回复）。
      */
-    public async showFolderPicker(dir: string, clientId: string = this.currentPageId, machine = ""): Promise<void> {
-        // 挑别台那台的目录：清单问那台（出错就把它那一句写进标题里，跟本机读不动一个样子）
-        const listing = machine ? await this.machineFolderListing(machine, dir) : await listDirectories(dir);
+    public async showFolderPicker(dir: string, clientId: string = this.currentPageId): Promise<void> {
+        const listing = await listDirectories(dir);
         // 判"这是盘符列表"只认空路径：dirBrowse 把盘根（D:\）也标成 roots，
         // 但那是个真目录（可以选它当项目目录，也是上一层能到的地方），不能跟盘符列表混为一谈。
         const driveList = !listing.path;
@@ -995,27 +676,23 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         // 列不出来的原因（没权限、目录没了）写进标题里，人一眼知道为什么是空的。
         // 正在看的目录写在标题下面那行小字（subtitle）里：标题只报“在干啥”，
         // 路径再长也不会把标题顶成两行。
-        // 列不出来的原因写进标题里：本机读不动、那台连不上都在这句里
-        const title = listing.error
-            ? `选择文件夹（${listing.error}）`
-            : (driveList ? "选择盘" : "选择文件夹");
-        // 一行都列不出来时给一条收摊的路（别让人对着一块空浮层找叉）
-        if (listing.error && items.length === 0) { items.push({ label: "关掉", file: "", icon: "up" }); }
+        const title = driveList
+            ? "选择盘"
+            : (listing.error ? `选择文件夹（${listing.error}）` : "选择文件夹");
         // 盘符列表没有路径可报，写一句“此电脑”——跟 Windows 资源管理器里那一层的叫法一致。
         const subtitle = driveList ? "此电脑" : listing.path;
         // 不给筛选框：一层目录就几行，用上下键挑名字比打字快，框还占一截地方。
         const choice = await this.openPicker("folders", { items, searchable: false, title, subtitle }, clientId);
         if (!choice || typeof choice.file !== "string" || !choice.file) { return; }
         if (choice.file === ChatHost.USE_DIR_ROW) {
-            if (machine) { this.startMachineSession(machine, listing.path, clientId); }
-            else { this.newSessionInDir(listing.path, { clientId }); }
+            this.newSessionInDir(listing.path, { clientId });
             return;
         }
         if (choice.file === ChatHost.ROOTS_ROW) {
-            await this.showFolderPicker("", clientId, machine);
+            await this.showFolderPicker("", clientId);
             return;
         }
-        await this.showFolderPicker(choice.file, clientId, machine);
+        await this.showFolderPicker(choice.file, clientId);
     }
 
     // ========================================================================
@@ -1039,16 +716,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 页面连接的登记簿 + 推送序号（网页服务开连接 / 收发消息时用）。 */
     public getBroadcaster(): ChatBroadcaster { return this.broadcaster; }
 
-    /** 这个会话跑在别台那台上（是就给那台的地址）：文件 / 目录 / 改动那几个口子照它转发。 */
-    public sessionMachine(sessionId: string): string | undefined {
-        return this.machineHub.ownerOf(sessionId);
-    }
-
-    /** 把这一条请求原样转给那台（会话号换回它那边的写法）。 */
-    public proxySessionToMachine(machine: string, sessionId: string, req: http.IncomingMessage, res: http.ServerResponse): void {
-        this.machineHub.proxy(machine, sessionId, req, res);
-    }
-
     /**
      * 页面发来一条消息（网页服务的 /api POST 转交）。
      * 处理期间记下是哪块屏发来的，浮层才知道该回给谁。
@@ -1061,9 +728,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const previous = this.currentPageId;
         this.currentPageId = pageId;
         try {
-            // 带着别台会话号的消息：那一套协议跟本机一模一样，原样转给那台；
-            // 本机这边只管“这块屏在看它”这本账（不转的话它会落到一个无关的本机会话上）
-            if (this.routeToMachine(msg)) { return; }
             this.processMessage(msg);
         } finally {
             this.currentPageId = previous;
@@ -1071,50 +735,22 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
-     * 这条消息是关于别台那个会话的吗？是就交给那边（见 machineHub），本机不再自己处理。
-     *
-     * 除了“切过去 / 关掉”这两件要在这边记账的，其余一律原样转过去：发消息、停一轮、换模型、
-     * 要更早的历史、问命令清单、找文件……两边说的是同一套话，没必要再写一遍
-     * （这正是把跨机器收到后端的好处：页面只当自己在用一台机器）。
-     *
-     * 例外是“# 引用”（fetchChat）：引用一条会话读的是它的会话文件，结果要变成**这块屏**草稿里的
-     * 一张卡片。转过去的话，那台回的那份是以它那边一个“页面”为收件人的，绕一圈到这里就丢了；
-     * 所以这一条在这边办（别台那条的路径由那台报来的清单里拿，模型在那边跑，那个路径它读得到）。
-     */
-    private routeToMachine(msg: any): boolean {
-        const sessionId = typeof msg.sessionId === "string" ? msg.sessionId : "";
-        if (!sessionId || !this.machineHub.ownerOf(sessionId)) { return false; }
-        if (msg.type === "fetchChat") { return false; }
-        if (msg.type === "switchSession" || msg.type === "workspaceOpenSession") {
-            // 认下它（那边的消息从下一句开始往这儿推），再像切本机会话那样切过去。
-            // 两条都走这里：顶条上点一格是 switchSession，列表里点一行是 workspaceOpenSession。
-            this.machineHub.openSession(sessionId, { file: typeof msg.path === "string" ? msg.path : "", cwd: typeof msg.cwd === "string" ? msg.cwd : "" });
-            this.setActiveSession(sessionId, this.currentPageId, msg.switchId);
-            return true;
-        }
-        if (msg.type === "closeSession") {
-            this.machineHub.closeSession(sessionId);
-            this.clearClientSession(this.currentPageId);
-            return true;
-        }
-        this.machineHub.post(sessionId, msg);
-        return true;
-    }
-
-    /**
      * 会话有事了（跑完一轮 / 模型在等你答选择题）。
      *
-     * 两边都弹：推给设置里「远程机器」填的那几台，同时这台自己的右下角也弹一张。
-     * 推不过去（那台没起、网断了）也不算事：本机这张照弹。
+     * 两边都来：推给别的机器那几台，同时这台自己的右下角也弹一张
+     * （几台都看得见才不会错过，少弹一边反而让人以为“那边没完”）。
+     *
+     * @returns 同基类：是不是推给别处了
      */
-    protected override trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): void {
-        if (!sessionId || !this.notifyTurnEndEnabled()) { return; }
+    protected override trayNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): boolean {
+        if (!sessionId || !this.notifyTurnEndEnabled()) { return false; }
         const label = (name || "").trim() || "会话";
-        // 远程那几台：先推（推不出去就算了，不挡着下面本机这张）
-        this.pushRemoteNote(sessionId, label, clipText(summary, REMOTE_TEXT_CHARS), kind);
-        // 本机右下角这张：不管推没推出去都弹
+        // 别的机器那几台：先推（推不出去就算了，不挡着下面本机这张）
+        const pushed = this.pushRemoteNote(sessionId, label, clipText(summary, REMOTE_TEXT_CHARS), kind);
+        // 本机右下角这张：不管推没推出去都弹（几台都看得见才不会错过）
         this.showNotice(sessionId, label, clipText(summary, NOTICE_TEXT_CHARS), kind === "ask");
         this.log(`[提醒] 弹了一张（${kind === "ask" ? "等你答一句" : "跑完一轮"}）：${label}`);
+        return pushed;
     }
 
     /**
@@ -1209,12 +845,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         // （里面带着“每块屏在看哪一个”，补发给别的屏会把人家的画面带偏）。
         // 这条是“再说一遍我记得的”，不是刚刚谁按下的（replay）：网络上它可能比人刚按的那一下还旧。
         const mine = this.focusedIdFor(pageId);
-        // 这块屏刚（重新）连上：之前“正文已经发过”那笔账作废（新连上来的这块屏不一定还留着那些消息，
-        // 刷新过就是空的）。它正看着的是别台那台上的一条会话的话，当场请那台整段重画一遍 ——
-        // 以前是“每切一次就重画一遍”顶替的，那样切来切去画面一直重摆，视野也就跟着跳。
-        this.machineHub.forgetSentContent();
         if (mine) { this.postToOneClient(pageId, { type: "sessionActivated", sessionId: mine, replay: true }); }
-        if (mine && this.machineHub.ownerOf(mine)) { this.machineHub.repaint(mine); }
         this.sendSessionListTo(pageId);
         // 显示选项条目也是一次性要来的数据：浮层开着的时候那块屏刚连上，就重给它一份最新的
         //（「编译并重启」那颗按下去以后一直是灰的、说明停在“正在重启”，靠这条回正）。
@@ -1229,9 +860,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     public onPageDisconnected(pageId: string): void {
         this.dropCardsForClient(pageId);
         this.dropPickerForClient(pageId);
-        // 这块屏还在看桌面实时画面的话，它这一走就别再拍了（本机那支 / 别台那一条都停）
+        // 这块屏还在看桌面实时画面的话，它这一走就别再拍了
         this.desktopLive.removeViewer(pageId);
-        this.stopMachineLive(pageId);
         // 整屏重画画到一半页面走了：重画的内容不进补发暂存，它回来对账时会“看似不缺”，
         // 内容却缺一截。记下来，它一连上就照原来那一种重画一遍。
         const inflight = this.resyncingPages.get(pageId);
@@ -1314,7 +944,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * @param opts.lastRound 只发最后一轮（见 sessionRuntime 的 replayHistory）：页面重连后
      *        补不上、只能整屏重画时用它，顶上一颗「加载更早的消息」补更早那些。
      */
-    private resyncPage(pageId: string, note: string, opts?: { fullHistory?: boolean; lastRound?: boolean; onlyPanelId?: string }): Promise<void> {
+    private resyncPage(pageId: string, note: string, opts?: { fullHistory?: boolean; lastRound?: boolean }): Promise<void> {
         if (pageId && !this.broadcaster.hasPage(pageId)) {
             // 页面的重画请求到得比它的推送连接还早（刚刷新的那一瞬间）：现在送也是白送，
             // 先记下来，它一连上就画（见 onPageConnected）。
@@ -1327,12 +957,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             : undefined;
         if (pageId) { this.resyncingPages.set(pageId, { lastRound: opts?.lastRound === true }); }
         const replays: Array<Promise<void>> = [];
-        for (const one of this.panels.values()) {
-            // 重画是本机的活（别台那条的正文由 machineHub 请那台重画，见 openSession / repaint）
-            if (!(one instanceof SessionRuntime)) { continue; }
-            const rt = one;
-            // 只要重画一个会话（另一台机器的页面刷新后回来，只要它自己那一格）
-            if (opts?.onlyPanelId && rt.id !== opts.onlyPanelId) { continue; }
+        for (const rt of this.panels.values()) {
             // 刚建的空会话不用重画：newSession 已经把它需要的东西发过去了
             if (rt.isConversationEmpty()) { continue; }
             replays.push(rt.replayHistory({ note, sink, full: opts?.fullHistory, lastRound: opts?.lastRound }));
@@ -1428,14 +1053,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return machineName();
     }
 
-    /** 设置面板里「远程机器」那一行现在填着什么（设置文件里的 machines）。 */
-    protected override remoteMachineTargets(): string[] {
-        return [...readServerConfig().config.machines];
+    /** 设置面板里「有事也推到别的机器」那一行现在填着什么（设置文件里的 notify.pushTo）。 */
+    protected override notifyPushTargets(): string[] {
+        return [...readServerConfig().config.notify.pushTo];
     }
 
-    /** 「远程机器」空着时那句灰字例子：这台机器自己的地址。 */
-    protected override remoteMachineExample(): string {
-        return this.options.selfPageUrl?.()?.replace(/\/+$/, "") ?? super.remoteMachineExample();
+    /** 「消息推送」空着时那句灰字例子：这台机器自己的地址。 */
+    protected override notifyPushExample(): string {
+        return this.options.selfPageUrl?.()?.replace(/\/+$/, "") ?? super.notifyPushExample();
     }
 
     /**
@@ -1520,7 +1145,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             }
         } else if (action === "machineLabel") {
             updateServerConfig({ label: String(value ?? "").trim() });
-        } else if (action === "machines") {
+        } else if (action === "notifyPushTo") {
             // 填的是给人看的写法：逗号 / 空格 / 换行都算分隔；没写 http:// 的补上，
             // 没写端口的补上 Pi Chat 出厂那个（51883）——否则按 http 的默认端口 80 算，打不通。
             // 地址合不合法由设置文件那层把关（不合适的会被丢掉，面板上就看不见它们了）。
@@ -1531,7 +1156,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 .map((item) => withDefaultPort(/^https?:\/\//i.test(item) ? item : "http://" + item))
                 // 填本机自己的地址等于没填（面板上照样显示它，但设置文件里不留这行废话）
                 .filter((item) => !isOwnPage(item, this.options.selfPageUrl?.()));
-            updateServerConfig({ machines: urls });
+            updateServerConfig({ notify: { pushTo: urls } });
         } else if (action === "theme") {
             const next = value === "dark" || value === "light"
                 ? value
@@ -1606,9 +1231,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     protected override onClientSessionChanged(clientId: string, panelId: string): void {
         const screenId = this.pageScreen.get(clientId);
         if (screenId) { this.screenSession.set(screenId, panelId); }
-        // 这块屏开始看别台那条会话了：请那台把它重画一遍（它手上已经有这段正文就不做，见 machineHub）。
-        // 页面刷新过时走的就是这条路：新标识什么都不知道，正文得从那边再要一份。
-        this.machineHub.openSession(panelId);
         // 这个会话正有问话在等：卡片也发给这块屏（新开的页面、切过去的窗口都走这里）
         for (const [id, state] of this.openCards) {
             if (state.sessionId === panelId) { this.sendCardToScreen(id, state, clientId); }
@@ -1689,10 +1311,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     /** 目录落在这些文件夹里的会话读写过哪些文件（一个窗口只该管它自己工作区那摊）。 */
     private sessionFilesForFolders(folders: readonly string[]): string[] {
         const set = new Set<string>();
-        for (const one of this.panels.values()) {
-            // 这是一份给 VSCode 窗口算符号表用的清单：别台那条的文件不在这台盘上
-            const rt = one instanceof SessionRuntime ? one : undefined;
-            if (!rt) { continue; }
+        for (const rt of this.panels.values()) {
             if (!dirInsideAny(rt.cwd, folders)) { continue; }
             for (const f of rt.getKnownFiles()) { set.add(f); }
         }
@@ -1725,7 +1344,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             path: p,
             line,
             col,
-            knownFiles: this.getActiveRuntime()?.getKnownFiles() ?? [],
+            knownFiles: this.getActive()?.getKnownFiles() ?? [],
         }, `打开 ${p}`);
     }
 
@@ -1774,16 +1393,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 }
                 return true;
             }
-            case "repaintSession":
-                // 页面刷新后回来，手里什么都没有：请这边把它正在看的那个会话重画一遍。
-                // 跨机器时那台的页面就是靠这条把历史拿回去的（见 media/chat.js 的恢复流程）。
-                // full：整段都发（别台那台刚被这边点开时用：人点开就是要看它，不是刷新以后补最后一段）
-                if (typeof msg.sessionId === "string" && msg.sessionId) {
-                    const full = msg.full === true;
-                    this.log(`[远程] 页面 ${this.currentPageId} 请我重画会话 ${msg.sessionId}${full ? "（整段）" : ""}`);
-                    void this.resyncPage(this.currentPageId, "", { onlyPanelId: msg.sessionId, lastRound: !full, fullHistory: full });
-                }
-                return true;
             case "openHistory":
                 // 顶条最右边那颗“<<<”按钮（以及命令面板的历史入口）：列表从右侧滑入，
                 // 只弹在点它的那块屏上（别的浏览器页面不跟着弹）。
@@ -1799,12 +1408,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             case "workspaceOpenSession":
                 // 常驻那一列里点了一行会话（那一列不关，所以不走 pickerChoice）；
                 // cwd = 那一行自己的目录（列表里混着好几个目录的会话）。
-                // 带 machine = 那是别台那一行（会话号也就是那边的写法）：叫那台打开它，再切过去。
-                if (typeof msg.machine === "string" && msg.machine && typeof msg.sessionId === "string" && msg.sessionId) {
-                    this.machineHub.openSession(msg.sessionId);
-                    this.setActiveSession(msg.sessionId, this.currentPageId);
-                    return true;
-                }
                 if (typeof msg.path === "string") {
                     void this.openWorkspaceSession(
                         msg.path,
@@ -1814,26 +1417,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
                 }
                 return true;
             case "workspaceBrowse":
-                // 工作区标题右边那颗加号（“打开文件夹…”，现在不占一行了）。
-                // 带 machine = 别台那一节的加号：挑的是那台的目录，挑完在那台开新会话。
-                void this.browseFromWorkspacePanel(this.currentPageId, typeof msg.machine === "string" ? msg.machine : "");
-                return true;
-            case "machineProjects":
-                // 别台那一节末尾那颗「加载更多工作区」：再向那台要一页项目
-                if (typeof msg.machine === "string" && msg.machine) {
-                    const machine = msg.machine;
-                    void this.machineHub.loadProjects(machine, this.machineProjectCount(machine)).then(() => {
-                        void this.refreshWorkspacePanels();
-                    });
-                }
+                // 工作区标题右边那颗加号（“打开文件夹…”，现在不占一行了）
+                void this.browseFromWorkspacePanel(this.currentPageId);
                 return true;
             case "workspaceSessions":
                 // 界面展开某个工作区 / 点那一组的「加载更多」：读那个目录，接着往下扫几条会话。
-                // 带 machine = 别台那一行：那台的会话清单里现成就有（不用再去读盘）
                 void this.sendWorkspaceSessions(
                     typeof msg.path === "string" ? msg.path : "",
                     typeof msg.offset === "number" && msg.offset > 0 ? msg.offset : 0,
-                    typeof msg.machine === "string" ? msg.machine : "",
                 );
                 return true;
             case "workspaceLoadMore":
@@ -1844,17 +1435,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             case "newSessionInWorkspace":
                 // 工作区那一行行尾的加号：就在那一行的目录里开新会话。
                 // 目录明写在消息里：面板可能同时在几块屏上开着，那一行写的是哪个目录就是哪个。
-                // 带 machine = 别台那一行：请那台在它那个目录里开（这边等它报清单时认领）。
-                // provider / modelId = 那台（或这台）请它开的时候指定了新会话要继承的模型。
-                if (typeof msg.machine === "string" && msg.machine) {
-                    if (typeof msg.path === "string" && msg.path) {
-                        this.startMachineSession(msg.machine, msg.path, this.currentPageId);
-                    }
-                    return true;
-                }
                 this.newSessionInDir(
                     typeof msg.path === "string" && msg.path ? msg.path : this.activeCwd(),
-                    { inherited: newSessionModelOf(msg) },
                 );
                 return true;
             case "requestDesktopScreenshot":
@@ -1867,7 +1449,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             case "stopDesktopLive":
                 // 那块屏把那一层收掉了：不看了就别再拍（别的一块屏还在看就照旧拍）
                 this.desktopLive.removeViewer(this.currentPageId);
-                this.stopMachineLive(this.currentPageId);
                 return true;
             case "openSettingsPanel":
                 // 弹设置界面的请求：只回给请求它的那块屏。
@@ -1894,12 +1475,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return false;
     }
 
-    /** 页面消息里带着会话号时，就用它找那个会话（跨机器时靠这个把搜索落到正确的目录）。 */
-    private panelForMessage(msg: any): SessionRuntime | undefined {
-        const id = msg && typeof msg.sessionId === "string" ? msg.sessionId : "";
-        return this.runtimeOf(id);
-    }
-
     /**
      * 跑一次文件搜索。
      *
@@ -1912,14 +1487,13 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const seq = typeof msg.seq === "number" && Number.isFinite(msg.seq) ? msg.seq : 0;
         const mode: "files" | "text" = msg.mode === "text" ? "text" : "files";
         const query = typeof msg.query === "string" ? msg.query.slice(0, 200) : "";
-        // 页面带着会话号来的就按它找（跨机器时，这块屏看的是那台上的会话）；
-        // 没带就退回“这块屏正在看的那个”（本机页面一直是这样）
-        const active = this.panelForMessage(msg) ?? this.getActive(clientId);
         const reply = (extra: Record<string, unknown>) => {
-            // 回话也带上会话号：跨机器时那头发消息的页面靠它认出这是哪个会话的结果
-            this.postToOneClient(clientId, { type: "findResults", seq, mode, query, sessionId: active ? active.id : "", ...extra });
+            this.postToOneClient(clientId, { type: "findResults", seq, mode, query, ...extra });
         };
-        const cwd = active ? (this.resolveSessionDir(active.id) ?? active.cwd) : undefined;
+        const cwd = (() => {
+            const active = this.getActive(clientId);
+            return active ? (this.resolveSessionDir(active.id) ?? active.cwd) : undefined;
+        })();
         // 上一次还在跑的先掐掉（哪怕这一次因为没目录而直接回话）
         this.fileSearches.get(clientId)?.abort();
         if (!cwd) {
@@ -1953,10 +1527,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const clientId = this.currentPageId;
         const requestId = typeof msg.requestId === "number" && Number.isFinite(msg.requestId) ? msg.requestId : 0;
         const want = typeof msg.path === "string" ? msg.path.slice(0, 500) : "";
-        const active = this.panelForMessage(msg) ?? this.getActive(clientId);
+        const active = this.getActive(clientId);
         const cwd = active ? (this.resolveSessionDir(active.id) ?? active.cwd) : undefined;
         const reply = (candidates: string[]) => {
-            this.postToOneClient(clientId, { type: "pathCandidatesResult", requestId, path: want, candidates, sessionId: active ? active.id : "" });
+            this.postToOneClient(clientId, { type: "pathCandidatesResult", requestId, path: want, candidates });
         };
         if (!cwd || !want) {
             reply([]);
@@ -1974,17 +1548,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      */
     private sendDesktopScreenshot(): void {
         const target = this.currentPageId;
-        // 看的是别台上一条会话：要拍的是**那台**的桌面（跟本机这条一样，只是图从那边来）
-        const machine = this.machineHub.ownerOf(this.focusedIdFor(target) || "");
-        if (machine) {
-            void this.machineHub.deskShot(machine).then((shot) => {
-                const msg = shot.ok && shot.data
-                    ? { type: "desktopScreenshot", data: shot.data.toString("base64"), mimeType: shot.mimeType || "image/jpeg" }
-                    : { type: "desktopScreenshotResult", ok: false, error: shot.error || "那台没能截图。" };
-                this.sendToOneClient(target, msg);
-            });
-            return;
-        }
         void captureDesktopScreenshot().then((result) => {
             const msg = result.ok
                 ? { type: "desktopScreenshot", data: result.data, mimeType: result.mimeType }
@@ -2005,12 +1568,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private startDesktopLive(): void {
         const target = this.currentPageId;
         if (!target) { return; }
-        // 看的是别台上一条会话：帧从那边来（还是这条消息那条道，只是拍的是那台）
-        const machine = this.machineHub.ownerOf(this.focusedIdFor(target) || "");
-        if (machine) {
-            this.watchMachineLive(target, machine);
-            return;
-        }
         this.desktopLive.addViewer(target, {
             onFrame: (frame) => {
                 const sent = this.sendToOneClient(target, {
@@ -2038,45 +1595,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * @param onFrame 来了一帧（一张完整的 JPEG）
      * @returns 不看了（页面关掉那一层 / 连接断了）
      */
-    /**
-     * 看别台那台的桌面实时画面（面板那条路：帧还是套成消息发给那一块屏）。
-     * 关掉 / 那块屏断了要停：登记在这份账上，见 stopMachineLive。
-     */
-    private watchMachineLive(pageId: string, machine: string): void {
-        this.stopMachineLive(pageId);
-        const stop = this.machineHub.deskLive(machine, (jpeg) => {
-            const sent = this.sendToOneClient(pageId, {
-                type: "desktopLiveFrame", data: jpeg.toString("base64"), mimeType: "image/jpeg",
-            });
-            // 那块屏不在了就别再拉了（正常情况 onPageDisconnected 会停掉）
-            if (!sent) { this.stopMachineLive(pageId); }
-        }, (note) => {
-            this.stopMachineLive(pageId);
-            this.sendToOneClient(pageId, { type: "desktopLiveResult", ok: false, error: note });
-        });
-        this.machineLive.set(pageId, stop);
-    }
-
-    /** 那块屏不看别台那台的实时画面了（收弹窗 / 断开 / 又换了一条）。 */
-    private stopMachineLive(pageId: string): void {
-        const stop = this.machineLive.get(pageId);
-        if (!stop) { return; }
-        this.machineLive.delete(pageId);
-        stop();
-    }
-
-    /** 这块屏要看那台的桌面实时画面（浏览器页面那条 `/live` 走这里）。 */
-    public machineDeskLive(machine: string, onFrame: (jpeg: Buffer) => void): () => void {
-        return this.machineHub.deskLive(machine, onFrame, (note) => {
-            this.onNotice(note);
-        });
-    }
-
-    /** 要一张那台的桌面截图（网页服务那条 `/shot?session=…` 走这里）。 */
-    public machineDeskShot(machine: string): Promise<{ ok: boolean; data?: Buffer; mimeType?: string; error?: string }> {
-        return this.machineHub.deskShot(machine);
-    }
-
     public watchDesktopLive(pageId: string, onFrame: (jpeg: Buffer) => void): () => void {
         // 一条请求一个号：同一个页面重开一次时新旧两条不会互相误杀（旧的那条自己会断）
         const key = `live:${pageId}:${++this.desktopLiveSeq}`;
@@ -2271,23 +1789,23 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 提醒走右下角那块面板（人在别的会话 / 别的窗口 / 根本就在别的屋里时，靠它知道要回来答一句）。
      */
     private broadcastAskWaiting(sessionId: string | undefined, question: string): void {
-        const rt = this.runtimeOf(sessionId);
+        const rt = sessionId ? this.panels.get(sessionId) : undefined;
         // 题干就是面板上那句话：光说“有人问你”的话，还得切过去才知道问的是什么
         this.trayNote(sessionId ?? "", rt ? this.sessionDisplayName(rt) : "", question, "ask");
     }
 
     /**
-     * 把这条“有事”推给别的后端（设置里「远程机器」填了别处的地址才有这回事）。
+     * 把这条“有事”推给别的后端（设置里「消息推送」填了别处的地址才有这回事）。
      * 推的是一条最小的通知：哪台、哪个会话、叫什么、说了什么。
      * 推不过去就算了（对方没起、网断了都一样：不重试、不攒着）。
      * @returns 推给了别处没有（推了这台就不自己弹：一个人只盯得了一台机器）
      */
     protected override pushRemoteNote(sessionId: string, name: string, summary = "", kind: "done" | "ask" = "done"): boolean {
-        const machines = readServerConfig().config.machines;
+        const notify = readServerConfig().config.notify;
         const base = this.options.selfPageUrl?.();
         if (!base) { return false; }
         // 填的是这台自己的地址（面板上默认就显示它）等于“提醒还在这台”：不推给自己，本机自己弹
-        const targets = machines.filter((target) => !isOwnPage(target, base));
+        const targets = notify.pushTo.filter((target) => !isOwnPage(target, base));
         if (targets.length === 0) { return false; }
         const notice = {
             // 那边卡片上写的就是这台的「标签」
@@ -2365,9 +1883,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
 
     /** 停掉本工作区的所有 pi 进程（页面与界面的生死与此无关）。 */
     protected disposeAllConversations(): void {
-        for (const one of this.panels.values()) {
-            const rt = one instanceof SessionRuntime ? one : undefined;
-            if (!rt) { continue; }
+        for (const rt of this.panels.values()) {
             rt.stopClient();
             this.releasePanelName(rt.nameParts);
         }
@@ -2386,7 +1902,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         if (this.disposed) { return; }
         this.disposed = true;
         this.desktopLive.stop();
-        this.machineHub.dispose();
         this.notice.dispose();
         this.disposeAllPickers();
         this.disposeAllCards();

@@ -137,7 +137,7 @@ return hit ? !!hit.querySelector(".vo-check.on") : null;`);
 }
 
 /**
- * 假装成一台“要收提醒”的机器（在设置文件的 machines 里塞一条），跑一轮，看它推过来的那条。
+ * 假装成一台“要收提醒”的机器（在设置文件的 notify.pushTo 里塞一条），跑一轮，看它推过来的那条。
  * 跑完把设置文件放回原样。
  */
 async function watchNotify(page) {
@@ -158,10 +158,13 @@ async function watchNotify(page) {
     try {
         let config = {};
         try { config = JSON.parse(configBefore || "{}"); } catch { config = {}; }
-        // 把临时收件口填成远程机器，有事就推到这儿；标签临时改成认得的那个
-        const known = Array.isArray(config.machines) ? config.machines : [];
+        // 把临时收件口填成推送地址，有事就推到这儿；标签临时改成认得的那个
+        const notify = config.notify && typeof config.notify === "object" ? config.notify : {};
         config.label = OTHER_LABEL;
-        config.machines = known.concat([`http://127.0.0.1:${port}`]);
+        config.notify = {
+            ...notify,
+            pushTo: [`http://127.0.0.1:${port}`],
+        };
         fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), "utf8");
 
@@ -270,7 +273,7 @@ module.exports = async (page) => {
         console.log("  · ④ 对得上就接：", good.status);
         if (good.status !== 204) { throw new Error(`该回 204，实际 ${good.status}`); }
 
-        // ⑤ 反方向：这台当“干活的那台”，设置里把「远程机器」指向网关，跑完一轮该把
+        // ⑤ 反方向：这台当“干活的那台”，设置里把「消息推送」指向网关，跑完一轮该把
         //    「哪台 · 哪个会话 · 摘要 · 回话地址 · 会话文件」推过去
         const got = await watchNotify(page);
         console.log("  · ⑤ 推给网关的通知：", JSON.stringify(got));

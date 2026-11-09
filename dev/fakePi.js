@@ -165,8 +165,6 @@ if (allowedTools) {
  *  （# 引用、派子会话时把父会话的文件交给子会话）；这里照写一份，那些路才验得到。
  *  每个进程一个名字（真 pi 里也是一个会话一个文件），会话一多也不会互相盖掉。 */
 const sessionFile = path.join(process.cwd(), "fake-session-" + process.pid + ".jsonl");
-/** 当前这个会话的 .jsonl：switch_session 换了会话文件就跟着换（真 pi 也是这么回事）。 */
-let currentSessionFile = sessionFile;
 function appendSession(record) {
     try { fs.appendFileSync(sessionFile, JSON.stringify(record) + "\n", "utf8"); } catch { /* 写不进去就算了 */ }
 }
@@ -680,7 +678,7 @@ async function handle(cmd) {
                 model: MODEL,
                 thinkingLevel: "off",
                 isStreaming: false,
-                sessionFile: currentSessionFile,
+                sessionFile,
                 sessionId: "fake-session",
                 sessionName: "假会话（fakePi）",
                 messageCount: messages.length,
@@ -727,8 +725,6 @@ async function handle(cmd) {
         }
         case "switch_session":
             messages.length = 0;
-            // 真 pi 会切到指定的那个会话文件；这里记下来，get_state 才能报对（调试时“已打开”那类要靠它）
-            if (typeof cmd.sessionPath === "string" && cmd.sessionPath) { currentSessionFile = cmd.sessionPath; }
             respond(id, "switch_session", { cancelled: false });
             return;
         case "abort":
