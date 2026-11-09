@@ -363,6 +363,9 @@ SIDEBAR_BATCHES=40 SIDEBAR_ROUNDS=5 npm run web:shot -- --script dev/sidebarPerf
 - `npm run server`（等于全局装好后的 `pichat`）起的是**真独立后端**：`chatHost.ts`，
   不换任何接口，它就是特意不碰 vscode 的那一层。要验它不用假 VSCode：
   `PICHAT_HOME=/tmp/x npm run server -- --cwd /tmp/x/work --port 0`，再用 `web:shot --url <地址>` 链上去。
+  Windows 上它会拉起一支托盘小程序（`bin/tray.exe`，通知区域里那颗图标）：右键「打开 / 退出」，
+  后端一退它跟着退；调试时蹭出一排图标的话，把那些后端停掉它们就都没了。
+  （`dev/` 的 harness 走的是 `startBackend()`，不起托盘。）
 - `dev/` 这套工具验的是 **插件这一侧 + 真后端**（同一个进程里跑）：插件这侧的代码（`chatViewProvider.ts`、
   `backendClient.ts`、`vscodeScreen.ts`）全是真的，只有它们调 VS Code 的接口是假的；
   会话与网页服务是真后端（`startBackend()`）。改完界面 / 派活 / 会话行为用它最快。

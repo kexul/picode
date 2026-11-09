@@ -8,6 +8,20 @@ import * as path from "path";
 
 let cachedRoot: string | undefined;
 
+/**
+ * 这个后端是不是被那个单文件 exe（壳，见 bin/launcher.cs）起的。
+ * 壳会把自己的路径放进环境变量 PICHAT_LAUNCHER。
+ */
+export function isPackaged(): boolean {
+    return typeof process.env.PICHAT_LAUNCHER === "string" && process.env.PICHAT_LAUNCHER.length > 0;
+}
+
+/** 那个 exe 的完整路径（不是从 exe 起的就没有）。 */
+export function launcherPath(): string | undefined {
+    const value = process.env.PICHAT_LAUNCHER;
+    return value && value.length > 0 ? value : undefined;
+}
+
 /** 界面文件与小程序所在的那个目录（它下面有 media/ 与 bin/）。 */
 export function appRoot(): string {
     if (cachedRoot) { return cachedRoot; }

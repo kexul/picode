@@ -17,6 +17,7 @@ import { appVersion, mediaDir } from "./appAssets";
 import { PiChatWebServer, type WebServerSettings } from "./webChatServer";
 import { ChatHost } from "./chatHost";
 import { openInBrowser } from "./desktopNotice";
+import { DesktopTray } from "./desktopTray";
 import { displayName } from "./pageHtml";
 import { readServerConfig, updateServerConfig, seedPrompts } from "./serverConfig";
 import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
@@ -104,7 +105,7 @@ export function usageText(): string {
         "  --version     看版本号",
         "",
         `设置文件：${serverConfigFile()}（第一次启动会写一份默认的出来，改完重启生效）`,
-        "停止：回到这个终端按 Ctrl+C",
+        "停止：回到这个终端按 Ctrl+C（Windows 上也可以右键通知区域里那颗图标 → 退出）",
         "重启：设置浮层里那颗「编译并重启」（就在这个终端里拉代码、编译，再把后端起回来）",
     ].join("\n");
 }
@@ -237,15 +238,26 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     // 「编译并重启」起回来的那个后端带 --no-open：人已经有一个窗口开着了（见 serverRestart）。
     if (args.open === true) { openInBrowser(started.url); }
 
+    // 通知区域里那颗图标（Windows，见 src/desktopTray.ts）：菜单里「打开」交给这里开页面，
+    // 「退出」跟下面收到 SIGINT 走同一条路。非 Windows / 小程序没编出来时它什么也不做。
+    let tray: DesktopTray | undefined;
+
     let stopping = false;
-    const onSignal = (signal: string): void => {
+    const shutdown = (reason: string): void => {
         if (stopping) { return; }
         stopping = true;
-        console.log(`\n[${stamp()}] 收到 ${signal}，正在收摊（停网页服务、杀掉所有 pi 进程）…`);
+        console.log(`\n[${stamp()}] ${reason}，正在收摊（停网页服务、杀掉所有 pi 进程）…`);
+        tray?.dispose();
         void started.stop().then(() => exitSoon());
     };
-    process.on("SIGINT", () => onSignal("SIGINT"));
-    process.on("SIGTERM", () => onSignal("SIGTERM"));
+    process.on("SIGINT", () => shutdown("收到 SIGINT"));
+    process.on("SIGTERM", () => shutdown("收到 SIGTERM"));
+    tray = new DesktopTray({
+        log,
+        onOpen: () => { openInBrowser(started.url); },
+        onExit: () => shutdown("托盘里点了退出"),
+    });
+    tray.show(started.url);
 }
 
 /** 起后端时用的东西（调试工具直接用它，不用碰信号与打印那套）。 */

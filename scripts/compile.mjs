@@ -1,5 +1,5 @@
 /*
- * 把三份编译配置一次跑完，外加三支小程序（桌面截图、桌面实时画面、右下角提醒卡片）。
+ * 把三份编译配置一次跑完，外加四支小程序（托盘图标、桌面截图、桌面实时画面、右下角提醒卡片）。
  *
  * 为什么要分三份：插件那侧（一屏界面 + 一双打开文件的手）与后端那侧（会话、网页服务）
  * 编到不同目录，打进插件包里的只有插件那侧；第三份不产出文件，只把 src 下全部源码
@@ -8,7 +8,7 @@
  *
  *   node scripts/compile.mjs           挨个跑一遍，哪份错了就停在那里（npm run compile）
  *   node scripts/compile.mjs --watch   三份各起一个 tsc -w，改一下就编一下（npm run watch；
- *                                      三支小程序不在里面，改过 bin/*.cs
+ *                                      四支小程序不在里面，改过 bin/*.cs
  *                                      就跑一次 npm run compile）
  */
 import { spawn, spawnSync } from "node:child_process";
@@ -33,8 +33,10 @@ const projects = [
     { label: "全量检查", config: "tsconfig.json" },
 ];
 
-// 三支小程序的源码与产物（见 bin/shot.cs、bin/live.cs、bin/notice.cs）：
+// 四支小程序的源码与产物（见 bin/tray.cs、bin/shot.cs、bin/live.cs、bin/notice.cs）：
 // 都用系统自带的 csc.exe 编，随 npm 包一起装到后端那边。
+const TRAY_SOURCE = path.join(repoRoot, "bin", "tray.cs");
+const TRAY_EXE = path.join(repoRoot, "bin", "tray.exe");
 const SHOT_SOURCE = path.join(repoRoot, "bin", "shot.cs");
 const SHOT_EXE = path.join(repoRoot, "bin", "shot.exe");
 const LIVE_SOURCE = path.join(repoRoot, "bin", "live.cs");
@@ -71,10 +73,28 @@ async function compileOnce() {
             process.exit(code);
         }
     }
+    compileTrayExe();
     compileShotExe();
     compileLiveExe();
     compileNoticeExe();
     process.stdout.write("都编完了。\n");
+}
+
+/**
+ * 编通知区域里那颗图标（bin/tray.cs → bin/tray.exe）。
+ *
+ * 编不出来不算构建失败：没有它只是托盘里没有那颗图标（后端照常跑）。
+ */
+function compileTrayExe() {
+    runCsc({
+        label: "托盘小程序",
+        source: TRAY_SOURCE,
+        output: TRAY_EXE,
+        target: "winexe",
+        references: ["System.Drawing.dll"],
+        whySkip: "托盘图标只在 Windows 上有，没必要编",
+        whyFail: "通知区域里就没有那颗图标了（后端照常跑）",
+    });
 }
 
 /**

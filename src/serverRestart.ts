@@ -7,15 +7,18 @@
  *   2. 把要做的事写进一份 JSON（重启计划），然后按是谁起的分两条路（调用方随后照常收摊退出）：
  *      - 终端里起的（环境变量 PICHAT_SUPERVISED=1）：终端里那一层（bin/pichat-restart.js 的
  *        supervise）正等着这份计划，它去拉代码、在那个终端里编译，再把后端起回来；
- *      - 别的（exe 起的、后台跑着的）：起一个独立的小进程（bin/pichat-restart.js）去办：
- *        等这个后端退干净 → 在仓库里 npm run build、npm i -g . → 照当初的命令行把
- *        后端起回来（同一个端口、同一个会话目录，页面才能在原地连回来）。
+ *      - 别的：起一个独立的小进程（bin/pichat-restart.js）去办：
+ *        等这个后端退干净 → 在仓库里 npm run build → 照当初的命令行把后端起回来
+ *        （同一个端口、同一个会话目录，页面才能在原地连回来）。
+ *        双击 exe 起的那种再多两样：先等壳（exe）也退掉，再把 exe 重新打出来、起回来
+ *        （它占着 exe 文件，不退就重打不了）。
  *
  * 收摊是调用方自己做的（见 serverMain 的 startBackend）：这里只负责写计划、起小进程，不杀自己。
  */
 import * as cp from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { isPackaged, launcherPath } from "./appAssets";
 import { pichatDir } from "./serverPaths";
 
 /** 仓库根目录（这个文件编译后在 out/server 里）。 */
@@ -60,6 +63,19 @@ export function restartLogFile(): string {
  */
 export function describeRestart(): RestartAvailability {
     const logFile = restartLogFile();
+    // 双击 exe 起的那种：没有 __dirname 那套源码树，只能指望 exe 就放在仓库的 dist 里。
+    if (isPackaged()) {
+        const repoDir = repoNextToExe();
+        if (!repoDir) {
+            return {
+                ok: false,
+                logFile,
+                reason: "这个 exe 不在仓库的 dist 文件夹里，旁边没有源码可编。"
+                    + "要这颗按钮能点，就把它放回 <仓库>\\dist\\ 再运行。",
+            };
+        }
+        return { ok: true, repoDir, logFile };
+    }
     const found = BUILD_SCRIPTS.find((name) => fs.existsSync(path.join(ROOT_DIR, name)));
     if (!found) {
         return {
@@ -70,6 +86,26 @@ export function describeRestart(): RestartAvailability {
         };
     }
     return { ok: true, repoDir: ROOT_DIR, logFile };
+}
+
+/**
+ * exe 起的那种：从 exe 所在目录往上找仓库（我们打出来的是 <仓库>\dist\PiChat.exe，
+ * 但人可能把 exe 放在仓库里别的一层，所以往上找几层，认 build.bat / build.sh 和 package.json）。
+ */
+function repoNextToExe(): string | undefined {
+    try {
+        const exe = launcherPath();
+        if (!exe) { return undefined; }
+        let dir = path.dirname(exe);
+        for (let i = 0; i < 4 && dir; i++) {
+            const hasScript = BUILD_SCRIPTS.some((name) => fs.existsSync(path.join(dir, name)));
+            if (hasScript && fs.existsSync(path.join(dir, "package.json"))) { return dir; }
+            const up = path.dirname(dir);
+            if (up === dir) { break; }
+            dir = up;
+        }
+    } catch { /* 取不到就当没有 */ }
+    return undefined;
 }
 
 /** 重启时要照原样接着用的东西：怎么起的、起在哪儿。 */
@@ -88,6 +124,23 @@ export interface RestartLaunch {
     /** 实际监听的端口与地址。 */
     port: number;
     host: string;
+}
+
+/** 重启计划：小进程（或者终端里那一层）照它办事。 */
+export interface RestartPlan {
+    /** repo = 照原来的 node 命令行起后端；exe = 重新打包 exe，再把它起回来。 */
+    mode: "repo" | "exe";
+    pid: number;
+    url: string;
+    repoDir: string;
+    logFile: string;
+    /** 起什么：repo 是 node.exe，exe 是那个 exe 自己。 */
+    execPath: string;
+    /** 跟 execPath 一起的参数。 */
+    argv: string[];
+    startCwd: string;
+    /** exe 模式：壳（exe）的进程号。它也占着 exe 文件，重打之前得等它退出。 */
+    launcherPid?: number;
 }
 
 /** 重启计划的文件名（写在上一次上面；小进程起来就把它读走）。 */
@@ -134,8 +187,9 @@ export function startRestart(launch: RestartLaunch): { ok: boolean; reason?: str
 
     // 新后端的命令行：照老样子，再把「会话目录 / 端口 / 监听地址」按这次实际的值钉住。
     // 老后端可能是 --port 0 自动挑的端口，照抄会换一个端口，页面连的那个地址就成死地址了。
-    // --no-open：重启是后端自己在起，人已经有一个窗口开着了（那个窗口会自己连回来），
+    // --no-open：重启是自己在起，人已经有一个窗口开着了（那个窗口会自己连回来），
     // 再弹一个新的只是多一个冤枉窗口。
+    // exe 模式：exe 收的参数跟后端一样（壳转手交给后端），所以还是这一串。
     const argv = [
         path.resolve(launch.cwd, launch.argv[0] ?? ""),
         ...withoutAddressArgs(launch.argv.slice(1)),
@@ -144,14 +198,22 @@ export function startRestart(launch: RestartLaunch): { ok: boolean; reason?: str
         "--host", launch.host,
         "--no-open",
     ];
-    const plan = {
+    const packaged = isPackaged();
+    const exePath = launcherPath();
+    const plan: RestartPlan = {
+        mode: packaged ? "exe" : "repo",
         pid: launch.pid,
         url: launch.url,
         repoDir: able.repoDir,
         logFile: able.logFile,
-        execPath: launch.execPath,
-        argv,
-        startCwd: launch.cwd,
+        // exe 模式：重新打出来的还是那个 exe；参数里第 0 项是 bundle 的路径，exe 不要它。
+        // 起它时的工作目录用 exe 自己所在的目录：不要接着用在旧缓存目录里
+        // （进程的当前目录会把那个目录锁着，新 exe 想清掉上一版解出来的东西就删不动）。
+        execPath: packaged ? (exePath ?? launch.execPath) : launch.execPath,
+        argv: packaged ? argv.slice(1) : argv,
+        startCwd: packaged && exePath ? path.dirname(exePath) : launch.cwd,
+        // 壳也在跑（它就占着那个 exe），重打之前得等它也退出
+        launcherPid: packaged ? process.ppid : undefined,
     };
 
     const supervised = supervisorPlanFile();

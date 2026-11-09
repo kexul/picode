@@ -139,9 +139,10 @@
     }
   },
   "scripts": {
-    "clean": "node -e \"const fs=require('fs');const soft=(f)=>{try{fs.rmSync(f,{recursive:true,force:true})}catch(e){}};soft('out');soft('bin/shot.exe');soft('bin/live.exe');for(const f of fs.readdirSync('.').filter(f=>/^pi-chat.*\\.vsix$/.test(f)))soft(f)\"",
+    "clean": "node -e \"const fs=require('fs');const soft=(f)=>{try{fs.rmSync(f,{recursive:true,force:true})}catch(e){}};soft('out');soft('bin/tray.exe');soft('bin/shot.exe');soft('bin/live.exe');for(const f of fs.readdirSync('.').filter(f=>/^pi-chat.*\\.vsix$/.test(f)))soft(f)\"",
     "compile": "node scripts/compile.mjs",
-    "build": "npm run clean && npm run compile",
+    "build": "npm run clean && npm run compile && node scripts/build-exe.mjs",
+    "exe": "node scripts/build-exe.mjs",
     "watch": "node scripts/compile.mjs --watch",
     "package": "npm run build && vsce package --allow-missing-repository --no-rewrite-relative-links",
     "web:dev": "npm run compile && node dev/browserHost.js",

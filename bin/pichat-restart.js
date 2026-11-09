@@ -17,10 +17,14 @@
  *   1. 等老后端退干净（它收到重启请求后会停网页服务、杀掉所有 pi 进程）；
  *      15 秒还没退就直接杀掉（那种情况下它自己那几个 pi 进程可能留在那儿）。
  *   2. 拉最新代码（git pull --ff-only）；拉不到就拿现在的代码接着编，日志里记一笔。
- *   3. 在仓库里编译后端：`npm run build` + `npm i -g .`（装全局 pichat 命令）。
- *      成功才起后端；失败就停在这儿（后端不再起来，修好后再手工起一次）。
+ *   3. 在仓库里编译后端：`npm run build`（Windows 上它顺手把 exe 也重打一遍）。
+ *      不是 exe 起的那种再 `npm i -g .`（装全局 pichat 命令）；成功才起后端，
+ *      失败就停在这儿（后端不再起来，修好后再手工起一次）。
  *   4. 照老后端当初的命令行把后端起回来：同一个端口、同一个会话目录 —— 页面在原来的
  *      地址上一连就回来了。新后端放后台跑。
+ *
+ * 双击 exe 起的那种多两步：动手编译前先等壳（exe）也退掉（它占着 exe 文件，
+ * 不退就重打不了），第 4 步起的是重新打出来的那个 exe（不是 node）。
  *
  * B 这一头的编译输出与新后端的日志都追加到计划里的 logFile（默认 ~/.pi/pichat/restart.log）：
  * 那一头没有终端可看，出问题只能看这份日志。
@@ -45,6 +49,8 @@ const START_VERIFY_MS = 2000;
 
 /** 拉代码最多等多久：网络不通时 git 会磨很久，不能让它把重启卡在这儿。 */
 const PULL_TIMEOUT_MS = 120000;
+/** 编译（含重新打 exe）最多等多久：打 exe 比纯编译慢，但也不该到几分钟。 */
+const BUILD_TIMEOUT_MS = 300000;
 
 function stamp() {
     const d = new Date();
@@ -267,9 +273,13 @@ async function main() {
     }
 
     const logFd = openLog(plan.logFile);
+    // 不要攥着后端那个工作目录（exe 起的时候它就是解出来的缓存目录）：
+    // 进程的当前目录会把那个目录锁着，新 exe 想清掉上一版解出来的东西就删不动。
+    try { process.chdir(os.tmpdir()); } catch { /* 换不过去也接着干 */ }
     write(logFd, "");
     write(logFd, `===== 重启后端：${plan.url}（进程 ${plan.pid}） =====`);
     write(logFd, `仓库：${plan.repoDir}`);
+    if (plan.mode === "exe") { write(logFd, `exe：${plan.execPath}`); }
 
     // 1. 等老后端退干净
     if (!(await waitForExit(plan.pid, EXIT_WAIT_MS))) {
@@ -279,22 +289,36 @@ async function main() {
     }
     write(logFd, "老后端已停。");
 
+    // 1b. exe 起的那种：壳（后端一退它也跟着退）还占着 exe 文件，不先让它退就重打不了。
+    if (plan.mode === "exe" && plan.launcherPid) {
+        if (!(await waitForExit(plan.launcherPid, KILL_WAIT_MS))) {
+            write(logFd, "壳（exe）还没退，硬关它（不然 exe 文件被占着，重打不了）。");
+            forceKill(plan.launcherPid);
+            await waitForExit(plan.launcherPid, KILL_WAIT_MS);
+        }
+        write(logFd, "壳（exe）已停，exe 文件可以重打了。");
+    }
+
     // 2. 拉最新代码（拉不到就拿现在的代码接着走，只记一笔）
     await pullLatest(plan.repoDir, logFd);
 
-    // 3. 编译（顺带装一次全局命令）
-    if (await run("npm run build", plan.repoDir, logFd) !== 0) {
-        write(logFd, "编译失败，后端没有重新起来。修好以后再在终端里敲一次 pichat。");
+    // 3. 编译。exe 模式那一步也会顺手把 exe 重新打出来（见 scripts/build-exe.mjs）。
+    if (await run("npm run build", plan.repoDir, logFd, BUILD_TIMEOUT_MS) !== 0) {
+        write(logFd, plan.mode === "exe"
+            ? "编译（或者打 exe）失败，后端没有重新起来。修好以后再双击一次 dist\\PiChat.exe。"
+            : "编译失败，后端没有重新起来。修好以后再在终端里敲一次 pichat。");
         process.exitCode = 1;
         return;
     }
-    if (await run("npm i -g .", plan.repoDir, logFd) !== 0) {
-        write(logFd, "装全局 pichat 命令失败，后端没有重新起来。修好以后再在终端里敲一次 pichat。");
-        process.exitCode = 1;
-        return;
+    if (plan.mode !== "exe") {
+        if (await run("npm i -g .", plan.repoDir, logFd) !== 0) {
+            write(logFd, "装全局 pichat 命令失败，后端没有重新起来。修好以后再在终端里敲一次 pichat。");
+            process.exitCode = 1;
+            return;
+        }
     }
 
-    // 4. 照老命令行起回来
+    // 4. 照老命令行起回来（exe 模式起的就是重新打出来的那个 exe）
     const child = startBackend(plan, logFd);
     await sleep(START_VERIFY_MS);
     if (alive(child.pid)) {

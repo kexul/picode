@@ -3,6 +3,7 @@ REM ============================================================
 REM    Outputs:
 REM      1. VSCode extension -> pi-chat-*.vsix
 REM      2. global pichat command (the standalone backend)
+REM      3. dist\PiChat.exe (double-click to start the backend, tray icon included)
 REM    Usage: build.bat [skip] [skip-pichat]
 REM              skip          - skip npm install
 REM              skip-pichat   - skip the global pichat install
@@ -10,7 +11,7 @@ REM              env SKIP_INSTALL=1 also skips npm install
 REM    Examples:
 REM              build.bat                 build + install pichat
 REM              build.bat skip            skip npm install
-REM              build.bat skip-pichat     build vsix only
+REM              build.bat skip-pichat     build vsix + exe only
 REM ============================================================
 setlocal enabledelayedexpansion
 
@@ -86,6 +87,7 @@ REM ---- summary ----
 echo.
 echo [build] === build done ===
 echo   VSIX: %VSIX%
+echo   exe:  dist\PiChat.exe (double-click it to start Pi Chat)
 if not "%SKIP_PICHAT%"=="1" echo   pichat: installed (if one is running, restart it to pick up the new build)
 echo.
 endlocal
