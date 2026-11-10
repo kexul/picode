@@ -2,8 +2,8 @@
  * notice —— 右下角那张「有事」的提醒卡片（Windows）。
  *
  * 干什么：哪个会话跑完了一轮、或者模型在那儿等你答一句，后端就把一条 show 写进它的标准输入，
- * 它在这台机器右下角画一张小卡片（最多三张叠着）。卡片可以点（这里只把这一下告诉后端：
- * 后端叫开着的网页切到那个会话；卡片收掉，不碰浏览器窗口）、
+ * 它在这台机器右下角画一张小卡片（最多三张叠着）。卡片可以点（这里把这一下告诉后端，
+ * 后端叫开着的网页切到那个会话，再回一条 raise 过来说“把开着那个页面的窗口提到前面”）、
  * 可以点右上角那颗 × 顺手关掉，后端也能说「这个会话已经说上话了 / 关掉了」把某一张收走。
  *
  * 为什么单独编一支小程序：安卓 app 与桌面小窗口都退休了，提醒不能跟着一起没。这支没有通知区域
@@ -26,6 +26,7 @@
  *     show<TAB>标识<TAB>0|1<TAB>标题<TAB>正文<TAB>标签     0 = 跑完一轮，1 = 在等你答一句
  *                                                    标签（可省，旧后端不带）= 设置里那行「标签」
  *     close<TAB>标识                              把那一张收走（那个会话已经说上话了 / 关掉了）
+ *     raise<TAB>窗口标题                           把标题对得上的那个窗口提到前面（人点了卡片以后发，见 Raiser）
  *     closeall                                    全收走
  *   它写出去：
  *     click<TAB>标识                              人点了那一张（后端据此叫开着的网页切过去）
@@ -122,6 +123,11 @@ static class Hub
         if (parts[0] == "close")
         {
             if (parts.Length > 1) { CloseKey(parts[1]); }
+            return;
+        }
+        if (parts[0] == "raise")
+        {
+            if (parts.Length > 1) { Raiser.BringToFront(Decode(parts[1])); }
             return;
         }
         if (parts[0] == "closeall") { CloseAll(); }
@@ -668,6 +674,110 @@ sealed class NoticeCard : Form
     {
         try { Close(); }
         catch { /* 已经关了 */ }
+    }
+}
+
+/// <summary>
+/// 把一个窗口提到前面：人点了提醒卡片以后，后端回一条 raise 过来，带的是那个页面的标题
+/// （标题那份拼法只在后端一处，见 src/pageHtml.ts 的 pageTitle）。
+///
+/// 为什么靠标题找：后端在外面，能看见的只有窗口标题，没别的把柄。两种情况对得上：
+/// 标题正好相等（`--app=` 开的、浏览器「安装成应用」装出来的那种窗口，标题就是页面标题本身）；
+/// 以「标题 + " - "」开头（普通浏览器窗口，它标题是「活动那张 tab 的标题 + 浏览器名字」，
+/// 所以只有那张贴在前面的时候才对得上；停在背景 tab 里就对不上——实测过的，那种窗口的标题
+/// 已经换成别的 tab 了，提不起来也认不出来，那就什么也不做）。
+/// 几个窗口都对得上时提 Z 序最上面那个（EnumWindows 就是从最上面往下走）：
+/// 连着后端的那些页面都会切到那个会话，提哪扇看到的都是对的。
+///
+/// 提前面有时候会被 Windows 拦下（前台锁定）：这支刚收到那一下鼠标点击，按规矩是
+/// “收到最后一次输入事件的进程”，一般拦不住；真被拦住就让任务栏上那一格闪几下，人还看得见是哪个窗口。
+/// </summary>
+static class Raiser
+{
+    /// <summary>还原（最小化过的回到它原来的样子，原来最大化的还是最大化）。</summary>
+    private const int SW_RESTORE = 9;
+    private const uint FLASHW_ALL = 0x3;
+    private const uint FLASHW_TIMERNOFG = 0xC;
+
+    private delegate bool EnumProc(IntPtr handle, IntPtr unused);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FlashInfo
+    {
+        public int Size;
+        public IntPtr Handle;
+        public uint Flags;
+        public uint Count;
+        public uint Timeout;
+        public IntPtr UnusedHandle;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumProc callback, IntPtr unused);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr handle, StringBuilder text, int max);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr handle);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr handle);
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr handle, int command);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr handle);
+
+    [DllImport("user32.dll")]
+    private static extern bool FlashWindowEx(ref FlashInfo info);
+
+    /// <summary>把标题对得上的那个窗口还原并提到前面。找不到、或者它已经在最前面，就什么也不做。</summary>
+    public static void BringToFront(string title)
+    {
+        if (string.IsNullOrEmpty(title)) { return; }
+        try
+        {
+            var handle = Find(title);
+            if (handle == IntPtr.Zero || handle == GetForegroundWindow()) { return; }
+            // 最小化了先还原；没最小化时不碰它的大小（拿 SW_RESTORE 会把最大化的窗口缩回去），只提前面
+            if (IsIconic(handle)) { ShowWindow(handle, SW_RESTORE); }
+            SetForegroundWindow(handle);
+            if (GetForegroundWindow() != handle) { Flash(handle); }
+        }
+        catch { /* 提不起来就算了：那张卡片已经收了，会话也切过去了 */ }
+    }
+
+    /// <summary>按标题找窗口：正好相等，或者以「标题 + " - "」开头（浏览器名字跟在后面那种）。拿最上面那个。</summary>
+    private static IntPtr Find(string title)
+    {
+        var found = IntPtr.Zero;
+        var prefix = title + " - ";
+        EnumProc callback = delegate(IntPtr handle, IntPtr unused)
+        {
+            if (!IsWindowVisible(handle)) { return true; }
+            var text = new StringBuilder(512);
+            if (GetWindowText(handle, text, text.Capacity) == 0) { return true; }
+            var name = text.ToString();
+            if (name == title || name.StartsWith(prefix, StringComparison.Ordinal)) { found = handle; return false; }
+            return true;
+        };
+        EnumWindows(callback, IntPtr.Zero);
+        return found;
+    }
+
+    /// <summary>提前面被拦下了：让它任务栏上那一格闪几下。</summary>
+    private static void Flash(IntPtr handle)
+    {
+        var info = new FlashInfo();
+        info.Size = Marshal.SizeOf(info);
+        info.Handle = handle;
+        info.Flags = FLASHW_ALL | FLASHW_TIMERNOFG;
+        FlashWindowEx(ref info);
     }
 }
 

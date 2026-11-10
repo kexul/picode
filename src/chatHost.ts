@@ -37,7 +37,7 @@ import {
 import { createSubdirectory, listDirectories } from "./dirBrowse";
 import { findFileContents, findFileNames, findPathCandidates } from "./fileSearch";
 import { ChatBroadcaster } from "./chatBroadcaster";
-import { displayName, machineName } from "./pageHtml";
+import { displayName, machineName, pageTitle } from "./pageHtml";
 import { MessageBuffer, PAGE_TRANSIENT_MESSAGE_TYPES } from "./webTransport";
 import { pickOverlayClient } from "./overlayTarget";
 import { ScreenRegistry } from "./screenRegistry";
@@ -831,13 +831,18 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
-     * 人点了卡片：叫连着的网页切到那个会话。
+     * 人点了卡片：叫连着的网页切到那个会话，并把开着那个页面的窗口提到前面。
      *
-     * 只切会话：不去把浏览器窗口提到前面，也不新开浏览器。网页没开着、或者这张是别的机器推来的
-     * （本机页面上认不出它的会话号），就只是把这张收掉（notice.exe 自己会收）。
+     * 提窗口那件事交给画卡片的小程序去干（Node 这边没有调 Windows 接口的路子）：
+     * 按页面标题找（拼法只有 pageHtml.pageTitle 一份，网页标题、安装成应用那个窗口的标题都是它）。
+     * 找得到才提，找不到就光是把这张收掉（notice.exe 自己会收）、切会话照旧发生：
+     * 页面没开着、页面只停在浏览器的背景 tab 里（那种窗口的标题跟着活动 tab 走，认不出来）、
+     * 只在插件的对话面板里开着——这几种都不提。也不新开浏览器。
+     * 别的机器推来的那张（本机页面上认不出它的会话号）就只是收掉。
      */
     private openNotice(key: string): void {
         if (key.startsWith(ChatHost.REMOTE_NOTICE_PREFIX)) { return; }
+        this.notice.raise(pageTitle());
         this.forEachClient((_clientId, send) => {
             send({ type: "switchToSession", sessionId: key });
         });

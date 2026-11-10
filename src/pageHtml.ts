@@ -62,8 +62,7 @@ const PAGE_ICON = "data:image/svg+xml," + encodeURIComponent(PAGE_ICON_SVG);
  * 同一网络上 http://别的机器:端口 这种不会出现「安装」（那条路用 `pichat --open` 或提醒卡片）。
  */
 export function webAppManifest(): Record<string, unknown> {
-    const name = displayName();
-    const title = name ? `${name}-pi` : "pi";
+    const title = pageTitle();
     return {
         name: title,
         short_name: title,
@@ -111,9 +110,6 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
         `manifest-src 'self'; ` +
         `form-action 'none';`;
 
-    // 浏览器 tab 的标题用这台的名字（形如 `家里-pi`）：同时开着几台机器的页面时，
-    // 光看标题分不出谁是谁。名字是设置里那行「标签」，空着就用机器名；都取不到就只剩 `pi`。
-    const host = displayName();
     // 按需加载的脚本（现在只有 pele，画 mermaid 图用的）不排进首屏，地址写进 meta，主脚本真要用时自己去拉。
     // 地址放这儿而不是写死在 chat.js 里，是为了让它带着内容指纹（见 mediaVersion.ts）。
     const lazyScripts = chatUiFilesOfRole("lazy-script");
@@ -121,7 +117,7 @@ export function getBrowserChatHtml(mediaDir: string, pageId: string, themeMode: 
         `\n  <meta name="pichat-lazy-scripts" content="${escapeAttr(JSON.stringify(
             Object.fromEntries(lazyScripts.map((file) => [file.name, mediaUrl(file.name)]))))}" />`;
     const extraHead =
-        `<title>${host ? `${escapeAttr(host)}-pi` : "pi"}</title>\n` +
+        `<title>${escapeAttr(pageTitle())}</title>\n` +
         // 图标：标签页、装成应用以后那个窗口的图标（Windows 任务栏、Alt+Tab）都用它
         `  <link rel="icon" type="image/svg+xml" href="${escapeAttr(PAGE_ICON)}" />\n` +
         // 浏览器「安装成应用」那份清单：装出来的就是一个没有标签条的独立窗口
@@ -201,7 +197,19 @@ export function getPanelChatHtml(
 }
 
 /**
- * 设置里那行「标签」（浏览器标题、提醒卡片左上角那颗小标签都用它），
+ * 这个页面的标题（`<标签>-pi`）：浏览器 tab 上写的、「安装成应用」装出来那个窗口上写的、
+ * 任务栏与 Alt+Tab 里写的，都是它。
+ *
+ * 人点右下角那张提醒卡片时，画卡片的那支小程序也按它去 Windows 上找那个窗口
+ * （见 desktopNotice 的 raise）。所以这份拼法只有这一处，别在别的地方再写一遍。
+ */
+export function pageTitle(): string {
+    const host = displayName();
+    return host ? `${host}-pi` : "pi";
+}
+
+/**
+ * 设置里那行「标签」（页面标题、提醒卡片左上角那颗小标签都用它），
  * 没写就用机器名（`GIH-D-26741` 这种）。
  */
 export function displayName(): string {
