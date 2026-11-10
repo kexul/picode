@@ -197,15 +197,18 @@ export function getPanelChatHtml(
 }
 
 /**
- * 这个页面的标题（`<标签>-pi`）：浏览器 tab 上写的、「安装成应用」装出来那个窗口上写的、
- * 任务栏与 Alt+Tab 里写的，都是它。
+ * 某一个标签对应的页面标题（`<标签>-pi`；标签空着就只剩 `pi`）。
  *
- * 人点右下角那张提醒卡片时，画卡片的那支小程序也按它去 Windows 上找那个窗口
- * （见 desktopNotice 的 raise）。所以这份拼法只有这一处，别在别的地方再写一遍。
+ * 拼法只有这一处：页面自己的 `<title>`、「安装成应用」那份清单、
+ * 点提醒卡片时找窗口或找标签页，都拿它去对（见 desktopNotice 的 raise 与 browserJump）。
  */
-export function pageTitle(): string {
-    const host = displayName();
+export function pageTitleFor(host: string): string {
     return host ? `${host}-pi` : "pi";
+}
+
+/** 这台自己的页面标题（名字取设置里那行「标签」，空着就用机器名）。 */
+export function pageTitle(): string {
+    return pageTitleFor(displayName());
 }
 
 /**

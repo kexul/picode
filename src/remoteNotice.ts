@@ -37,6 +37,12 @@ export interface RemoteNotice {
      */
     close?: boolean;
     /**
+     * 这条是“把你自己那些页面切到这个会话上”：人在**这台**点了你推来的那张卡片，
+     * 会话在那台上，只有那台叫得动它自己的页面（见 chatHost 的 openRemoteNotice）。
+     * 收到的那台只切页面，不弹卡片也不收卡片；旧版本推来的没有这个字段。
+     */
+    activate?: boolean;
+    /**
      * 推送方那个后端的网页地址（`http://10.0.0.2:51883`）：那台的地址，拼上 `?session=`
      * 就是那个会话的页面（留着当回话地址，见 dev/weixinGateway.js；提醒卡片不打开它）。
      * 旧版本推来的没这个字段。
@@ -80,7 +86,8 @@ export function readRemoteNotice(raw: unknown, fallbackLabel: string): RemoteNot
     // 回话地址也是可选的（旧版本不带）：带了才能把一句话送回原来那台
     const pageUrl = typeof body.pageUrl === "string" ? body.pageUrl.trim().slice(0, 200) : "";
     const close = body.close === true;
-    return { label, sessionId, name, text, kind, ...(pageUrl ? { pageUrl } : {}), ...(close ? { close: true } : {}) };
+    const activate = body.activate === true;
+    return { label, sessionId, name, text, kind, ...(pageUrl ? { pageUrl } : {}), ...(close ? { close: true } : {}), ...(activate ? { activate: true } : {}) };
 }
 
 /**
@@ -100,6 +107,16 @@ export async function pushRemoteNotice(target: string, notice: RemoteNotice): Pr
  */
 export async function pushRemoteClose(target: string, label: string, sessionId: string): Promise<boolean> {
     return postNotice(target, { label, sessionId, close: true });
+}
+
+/**
+ * 请那台把它自己那些页面切到某个会话上：人在这台点了它推来的那张卡片。
+ * 送不到就算了（那台的页面还停在原来那个会话上，人自己切一下也行）。
+ * @param target 那台网页服务的地址（推“有事”那条时它自己带过来的，见 RemoteNotice.pageUrl）
+ * @param label 这台的「标签」（跟当初推过去那条一样，好让那台认得出是谁在说）
+ */
+export async function pushRemoteActivate(target: string, label: string, sessionId: string): Promise<boolean> {
+    return postNotice(target, { label, sessionId, activate: true });
 }
 
 /** 往那台的 /notify 丢一条过去；对方没回应就当这条丢了（不重试、不攒着）。 */

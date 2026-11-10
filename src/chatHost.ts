@@ -23,7 +23,7 @@ import type { MessageSink } from "./sessionRuntime";
 import { ChatControllerBase, type ViewOptionItem, type WorkspacePage } from "./chatControllerBase";
 import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
-import { isOwnPage, pushRemoteClose, pushRemoteNotice, REMOTE_TEXT_CHARS, type RemoteNotice } from "./remoteNotice";
+import { isOwnPage, pushRemoteActivate, pushRemoteClose, pushRemoteNotice, REMOTE_TEXT_CHARS, type RemoteNotice } from "./remoteNotice";
 import { getAskAssets, getBashAssets, getEnvAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
 import {
@@ -37,7 +37,7 @@ import {
 import { createSubdirectory, listDirectories } from "./dirBrowse";
 import { findFileContents, findFileNames, findPathCandidates } from "./fileSearch";
 import { ChatBroadcaster } from "./chatBroadcaster";
-import { displayName, machineName, pageTitle } from "./pageHtml";
+import { displayName, machineName, pageTitle, pageTitleFor } from "./pageHtml";
 import { MessageBuffer, PAGE_TRANSIENT_MESSAGE_TYPES } from "./webTransport";
 import { pickOverlayClient } from "./overlayTarget";
 import { ScreenRegistry } from "./screenRegistry";
@@ -49,6 +49,7 @@ import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { DesktopLive } from "./desktopLive";
 import { DesktopNotice } from "./desktopNotice";
+import { activatePageByTitle } from "./browserJump";
 import { describeRestart } from "./serverRestart";
 import type { SessionRuntime } from "./sessionRuntime";
 import type { SessionAttention } from "./sessionPhase";
@@ -226,6 +227,16 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * 中途在设置里改了标签，拿新的去收就永远对不上。
      */
     private readonly pushedNoticeSessions = new Map<string, string>();
+    /**
+     * 别台推来的那几张卡片：屏上那张的钥匙 → 点它的时候要用的东西。
+     *
+     * 点这种卡片要办两件事，都得靠这里存的两样（只有当初那条推送里带过来，不存就没了）：
+     * 那台的网页地址（请那台把它自己那些页面切过去）、那台的标签
+     * （那张标签页在浏览器里的标题是 `<那台的标签>-pi`，见 pageHtml 的 pageTitleFor）。
+     * 那台推来一条“收掉”的时候把这份抹掉（点完卡片没人来抹，多留一条也不占什么：
+     * 一个会话最多一条，后来那条顶掉旧的）。
+     */
+    private readonly remoteNoticePages = new Map<string, { label: string; sessionId: string; pageUrl: string }>();
 
     constructor(private readonly options: ChatHostOptions) {
         super("server");
@@ -831,21 +842,50 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
-     * 人点了卡片：叫连着的网页切到那个会话，并把开着那个页面的窗口提到前面。
+     * 人点了卡片：叫连着的网页切到那个会话，并把那张标签页（或者那扇窗口）弄到人眼前。
      *
-     * 提窗口那件事交给画卡片的小程序去干（Node 这边没有调 Windows 接口的路子）：
-     * 按页面标题找（拼法只有 pageHtml.pageTitle 一份，网页标题、安装成应用那个窗口的标题都是它）。
-     * 找得到才提，找不到就光是把这张收掉（notice.exe 自己会收）、切会话照旧发生：
-     * 页面没开着、页面只停在浏览器的背景 tab 里（那种窗口的标题跟着活动 tab 走，认不出来）、
-     * 只在插件的对话面板里开着——这几种都不提。也不新开浏览器。
-     * 别的机器推来的那张（本机页面上认不出它的会话号）就只是收掉。
+     * 别台推来的那张走另一段（见 openRemoteNotice）：会话不在这台，这台切不了它的页面。
      */
     private openNotice(key: string): void {
-        if (key.startsWith(ChatHost.REMOTE_NOTICE_PREFIX)) { return; }
-        this.notice.raise(pageTitle());
+        if (key.startsWith(ChatHost.REMOTE_NOTICE_PREFIX)) { this.openRemoteNotice(key); return; }
         this.forEachClient((_clientId, send) => {
             send({ type: "switchToSession", sessionId: key });
         });
+        void this.bringPageToFront(pageTitle());
+    }
+
+    /**
+     * 人点了别台推来的那张卡片。
+     *
+     * 会话在那台上，这台什么也切不了，所以分两头办：
+     *   一、请那台叫它自己那些页面切到那个会话（见 remoteNotice 的 pushRemoteActivate）：
+     *       地址是当初推过来的那条带的；没带（旧版本）就送不到，那台的页面还停在原来的会话上；
+     *   二、把那张标签页弄到人眼前：它多半就在这台的浏览器里开着（网址是那台的页面，
+     *       标题是那台的标签 + `-pi`，跟这台自己页面的标题不是一回事：两台标签相同时会认错，
+     *       所以两台的标签别取一样的）。
+     * 两头都不中就什么也不做（也不新开浏览器）：卡片收掉完事。
+     */
+    private openRemoteNotice(key: string): void {
+        const memo = this.remoteNoticePages.get(key);
+        if (!memo) { return; }
+        // 带过去的是**这台**的名字：那台记下日志时才知道是谁点了卡片（见 pushRemoteActivate）
+        void pushRemoteActivate(memo.pageUrl, displayName(), memo.sessionId);
+        void this.bringPageToFront(pageTitleFor(memo.label));
+        this.log(`[提醒] 点了别台推来的那张：请 ${memo.label} 把页面切过去，这边把那张标签页弄到眼前`);
+    }
+
+    /**
+     * 把标题是 `title` 的那张页面弄到人眼前。两层，先试第一层：
+     *   一、浏览器带调试端口起着的（见 browserJump）：按标题在“开着哪些页面”那份清单里
+     *       认出那一张，叫浏览器把它切到前面 —— 压在别的标签页后面、窗口最小化了都跳得到；
+     *   二、退回按窗口标题在 Windows 上找那扇窗口提上来（见 desktopNotice 的 raise）：
+     *       只认得到独立窗口（`--app=` 开的、「安装成应用」装出来的），或者页面正是活动的那张标签页。
+     * 两层都不中就是找不到（页面没开着、只在插件的对话面板里开着、在别的虚拟桌面上），
+     * 那就什么也不做 —— 切会话那一下照旧已经发生了。
+     */
+    private async bringPageToFront(title: string): Promise<void> {
+        if (await activatePageByTitle(title)) { return; }
+        this.notice.raise(title);
     }
 
     /**
@@ -1965,19 +2005,32 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     }
 
     /**
-     * 别的机器上的后端推来一条“有事”（网页服务那条 /notify 收到）。
+     * 别的机器上的后端推来一条消息（网页服务那条 /notify 收到）。
      *
-     * 在这台照弹一张（人不会只坐一台前面）；点它只是把卡片收掉，本机管不着那台的会话。
+     * 三种：“有事”就在这台照弹一张（人不会只坐一台前面）；
+     * “把那张收掉”就收掉；“把页面切过去”（那台点了这张卡片）就把这台连着的页面都切过去。
      */
     public acceptRemoteNotice(notice: RemoteNotice): void {
         const key = ChatHost.REMOTE_NOTICE_PREFIX + notice.label + ":" + notice.sessionId;
+        // 那台点了这台推过去的卡片：会话在这台，这边把自己的页面都切过去
+        //（那台的标签页上跑的就是这台的页面）。这一条不看「弹窗通知」开没开。
+        if (notice.activate) {
+            this.forEachClient((_clientId, send) => {
+                send({ type: "switchToSession", sessionId: notice.sessionId });
+            });
+            this.log(`[提醒] 那台点了卡片（${notice.label}），这边把页面切到那个会话`);
+            return;
+        }
         // 那边已经有人说话了 / 会话关掉了 / 那道题答完了：把这张收掉（本机没有那个会话，别的动作碰不到它）
         if (notice.close) {
             this.notice.close(key);
+            this.remoteNoticePages.delete(key);
             this.log(`[提醒] 收了一张（别的机器说那边没事了）：${notice.label} · ${notice.name}`);
             return;
         }
         if (!this.notifyTurnEndEnabled()) { return; }
+        // 点这张的时候要用的东西先存起来：那台的网页地址（回头请它切页面）与标签（拼那张标签页的标题）
+        this.remoteNoticePages.set(key, { label: notice.label, sessionId: notice.sessionId, pageUrl: notice.pageUrl ?? "" });
         // 标签写来源那台（家里），标题就只是那个会话的名字：标签与标题各说一件事，不重复
         this.showNotice(key, notice.name, notice.text ?? "", notice.kind === "ask", notice.label);
         this.log(`[提醒] 弹了一张（别的机器推来的）：${notice.label} · ${notice.name}`);
