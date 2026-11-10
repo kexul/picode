@@ -1,6 +1,5 @@
 import type { PiClient } from "./piClient";
 import type { AskRequest } from "./askProtocol";
-import type { BashTaskInfo } from "./bashProtocol";
 import type { AutoCommand } from "./auto";
 import type { TabaRequest } from "./tabaProtocol";
 
@@ -182,14 +181,6 @@ export interface RuntimeHost {
     askQuestion?(request: AskRequest, sessionId?: string): void;
     /** 扩展不等这次提问了（超时/这一轮被停）：把还开着的那个浮层收掉。可选。 */
     cancelAsk?(id: string): void;
-
-    /**
-     * 某个会话里的后台命令跑到头了（跑完 / 失败 / 被停；见 bashProtocol.ts）。
-     * 宿主接着：把结果当成一条新消息交回这个会话。可选。
-     */
-    onBashTask?(panelId: string, task: BashTaskInfo): void;
-    /** 模型空闲时，把多条后台命令尚未交回的输出合成一条通知。 */
-    onBashOutput?(panelId: string, tasks: BashTaskInfo[]): void;
 
     // ---- UI 弹窗（对应当 pi 的 extension_ui_request）----
     /** @param sessionId 这是哪个会话问的：优先弹给正在看这个会话的那块屏（没人看才找“人最近动的”）。 */

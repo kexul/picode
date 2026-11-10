@@ -50,7 +50,10 @@
  *
  * 用 String.raw 包着：里面的反斜杠原样保留。
  */
-import { BASH_FRAME_PREFIX, BASH_OUTPUT_MAX_CHARS } from "./bashProtocol";
+import {
+    BASH_FRAME_PREFIX, BASH_OUTPUT_MAX_CHARS, BASH_NOTICE_TYPE, BASH_CLEAR_NOTICE_COMMAND,
+    mergeBashOutput, createBashNoticeFormatter,
+} from "./bashProtocol";
 import { promptText, type PromptOverrides } from "./promptText";
 
 export function bashBridgeSource(over?: PromptOverrides): string {
@@ -61,12 +64,20 @@ export function bashBridgeSource(over?: PromptOverrides): string {
  */
 import { createBashTool, getShellConfig } from "@earendil-works/pi-coding-agent";
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 const FRAME_PREFIX = ${JSON.stringify(BASH_FRAME_PREFIX)};
 const OUTPUT_MAX_CHARS = ${BASH_OUTPUT_MAX_CHARS};
+const NOTICE_TYPE = ${JSON.stringify(BASH_NOTICE_TYPE)};
+const CLEAR_NOTICE_COMMAND = ${JSON.stringify(BASH_CLEAR_NOTICE_COMMAND)};
+const mergeOutput = (${mergeBashOutput.toString()});
+const formatNotice = (${createBashNoticeFormatter.toString()})(
+    ${JSON.stringify(promptText(over, "bashOutputDelivery"))},
+    ${JSON.stringify(promptText(over, "bashDelivery"))}
+);
 
 /** bash 工具说明里插件加的那一段（人可以在 config.json 的 prompts.toolBash 里改）。 */
 const BACKGROUND_NOTE = ${JSON.stringify(promptText(over, "toolBash"))};
@@ -145,9 +156,6 @@ function fillText(template: string, vars: Record<string, string>): string {
         return value === undefined ? whole : value;
     });
 }
-
-/** 上次用 bash_tasks 看某条任务时它的日志多大（认出「空查」用）。 */
-const lookedAt = new Map<number, number>();
 
 function logSize(log: string): number {
     try { return statSync(log).size; } catch { return 0; }
@@ -311,7 +319,10 @@ function withPrefix(cmd: string): string {
     return prefix ? prefix + "\n" + cmd : cmd;
 }
 
-// ---- 任务表 ----
+export default function bashBridge(pi: any): void {
+    settings = loadSettings(pi);
+
+// ---- 任务表（只属于这次扩展实例）----
 
 type TaskStatus = "running" | "done" | "failed" | "stopped";
 
@@ -342,64 +353,23 @@ interface Task {
     /** 停止或进程退出后不再单发输出，剩余输出随结束通知交回。 */
     ending: boolean;
     output?: TaskOutput;
-    outputTimer?: ReturnType<typeof setTimeout>;
+    /** 真正结束的时刻，交回通知的等待时间不算命令耗时。 */
+    endedAt?: number;
+    /** 没开启进度通知时，结束就保存日志尾部，不能排队之后再读其它命令覆盖的日志。 */
+    endTail?: string;
+    /** 模型已收到这条任务的结束结果。 */
+    endNotified: boolean;
 }
 
 const tasks = new Map<number, Task>();
 let seq = 0;
 
-function clearOutputTimer(task: Task): void {
-    if (task.outputTimer === undefined) { return; }
-    clearTimeout(task.outputTimer);
-    task.outputTimer = undefined;
-}
-
-/** 只攒转到后台后的新输出；保留最初 2000 和最新 2000 个字符，不按行发消息。 */
+/** 只攒转到后台后的新输出，模型消费通知前一直保留；原文仍在日志里。 */
 function collectOutput(task: Task, text: string): void {
-    if (!text || !task.notifyOutput || !task.announced || task.reported) { return; }
+    if (!text || !task.notifyOutput || !task.announced || task.reported || tasks.get(task.no) !== task) { return; }
     const now = Date.now();
-    const before = task.output;
-    const size = (before?.text.length || 0) + text.length;
-    if (size <= OUTPUT_MAX_CHARS) {
-        task.output = {
-            text: (before?.text || "") + text,
-            firstAt: before?.firstAt ?? now,
-            lastAt: now,
-            ...(before?.omittedChars ? { omittedChars: before.omittedChars } : {}),
-        };
-    } else {
-        const half = OUTPUT_MAX_CHARS / 2;
-        let head = ((before?.text || "") + text.slice(0, half)).slice(0, half);
-        let tail = text.length >= half
-            ? text.slice(-half)
-            : ((before?.text || "").slice(-half) + text).slice(-half);
-        if (/[\uD800-\uDBFF]$/.test(head)) { head = head.slice(0, -1); }
-        if (/^[\uDC00-\uDFFF]/.test(tail)) { tail = tail.slice(1); }
-        task.output = {
-            text: head + tail,
-            firstAt: before?.firstAt ?? now,
-            lastAt: now,
-            omittedChars: (before?.omittedChars || 0) + size - head.length - tail.length,
-        };
-    }
-    if (task.ending || task.outputTimer !== undefined) { return; }
-    task.outputTimer = setTimeout(() => {
-        task.outputTimer = undefined;
-        if (task.reported || task.ending || !task.announced || !task.notifyOutput) { return; }
-        const output = task.output;
-        task.output = undefined;
-        if (!output) { return; }
-        emit({
-            kind: "output",
-            no: task.no,
-            toolCallId: task.id,
-            cmd: task.cmd,
-            log: task.log,
-            background: task.background,
-            output,
-        });
-    }, 500);
-    if (typeof task.outputTimer.unref === "function") { task.outputTimer.unref(); }
+    task.output = mergeOutput(task.output, { text, firstAt: now, lastAt: now }, OUTPUT_MAX_CHARS);
+    scheduleNotice();
 }
 
 function outputNotice(task: Task): string {
@@ -409,7 +379,7 @@ function outputNotice(task: Task): string {
 }
 
 function elapsedMs(task: Task): number {
-    return Math.max(0, Date.now() - task.startedAt);
+    return Math.max(0, (task.endedAt ?? Date.now()) - task.startedAt);
 }
 
 function elapsedText(ms: number): string {
@@ -525,6 +495,7 @@ function startTask(
         background,
         announced: false,
         reported: false,
+        endNotified: false,
         notifyOutput,
         ending: false,
     };
@@ -569,7 +540,7 @@ function startTask(
         finished = true;
         if (closeTimer !== undefined) { clearTimeout(closeTimer); closeTimer = undefined; }
         task.ending = true;
-        clearOutputTimer(task);
+        task.endedAt ??= Date.now();
         const stdoutTail = stdoutDecoder.end();
         const stderrTail = stderrDecoder.end();
         if (muted) {
@@ -593,7 +564,7 @@ function startTask(
     };
     child.on("exit", (code: number | null) => {
         task.ending = true;
-        clearOutputTimer(task);
+        task.endedAt ??= Date.now();
         // 正常先等 close 读完尾部；后代持着管道不关时，不能永远卡着工具和结束通知。
         closeTimer = setTimeout(() => finish(code, true), 1000);
         if (typeof closeTimer.unref === "function") { closeTimer.unref(); }
@@ -615,6 +586,7 @@ function detachFileName(id: string): string {
 
 /** 把一条任务报给插件（只在它真的要露面时调）。 */
 function announce(task: Task, background: boolean): void {
+    if (tasks.get(task.no) !== task) { return; }
     task.announced = true;
     task.background = background;
     emit({
@@ -631,11 +603,9 @@ function announce(task: Task, background: boolean): void {
 }
 
 function reportEnd(task: Task): void {
-    if (task.reported) { return; }
+    if (task.reported || tasks.get(task.no) !== task) { return; }
     task.reported = true;
-    clearOutputTimer(task);
-    const output = task.output;
-    task.output = undefined;
+    if (!task.notifyOutput) { task.endTail = readTail(task.log, OUTPUT_MAX_CHARS); }
     emit({
         kind: "end",
         no: task.no,
@@ -648,8 +618,8 @@ function reportEnd(task: Task): void {
         exitCode: task.exitCode,
         elapsedMs: elapsedMs(task),
         notifyOutput: task.notifyOutput,
-        ...(output ? { output } : {}),
     });
+    scheduleNotice();
 }
 
 // ---- 工具 ----
@@ -661,13 +631,193 @@ const detached = new Map<string, { task: Task; by: "user" | "budget" }>();
 /** 哪些调用是一开始就放到后台的（execute 要把「空输出」换成一句说明）。 */
 const launched = new Map<string, Task>();
 
-export default function bashBridge(pi: any): void {
-    settings = loadSettings(pi);
-    // 用户新说了一句话：之前看过的就不再算「刚看过」，让它能再查一次（人可能就是在问「怎么样了」）
-    pi.on("message_end", (event: any) => {
-        const role = event && event.message ? event.message.role : "";
-        if (role === "user") { lookedAt.clear(); }
-    });
+/** 上次看任务时的日志大小，只用来拦下没有新输出的重复查询。 */
+const lookedAt = new Map<number, number>();
+const owner = randomUUID();
+let noticeSeq = 0;
+let currentCtx: any;
+let sessionActive = false;
+let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+let noticeTimerAt = 0;
+let lastNoticeAt = 0;
+let pendingNotice: { noticeId: number; tasks: Set<number>; startedOwnRun: boolean } | undefined;
+
+function clearNoticeTimer(): void {
+    if (noticeTimer !== undefined) { clearTimeout(noticeTimer); }
+    noticeTimer = undefined;
+    noticeTimerAt = 0;
+}
+
+function resetNotices(): void {
+    clearNoticeTimer();
+    pendingNotice = undefined;
+    lastNoticeAt = 0;
+    currentCtx = undefined;
+    sessionActive = false;
+    tasks.clear();
+    lookedAt.clear();
+    pending.length = 0;
+    detached.clear();
+    launched.clear();
+}
+
+/** reported 才算真正结束；kill 已成功但 close 还没收场时，继续等尾部。 */
+function noticeTasks(): Task[] {
+    return Array.from(tasks.values()).filter((task) => task.announced && !task.endNotified
+        && (task.reported || (task.notifyOutput && task.output && !task.ending)))
+        .sort((a, b) => Number(b.reported) - Number(a.reported) || a.no - b.no);
+}
+
+function addPendingTasks(): void {
+    if (!pendingNotice) { return; }
+    for (const task of noticeTasks()) {
+        if (pendingNotice.tasks.size >= 4) { break; }
+        pendingNotice.tasks.add(task.no);
+    }
+}
+
+/** 同一实例只有一个计时器；完成结果可以把原本等待输出的计时器提前。 */
+function armNoticeTimer(delay: number): void {
+    const at = Date.now() + delay;
+    if (noticeTimer !== undefined && noticeTimerAt <= at) { return; }
+    clearNoticeTimer();
+    noticeTimerAt = at;
+    noticeTimer = setTimeout(() => {
+        noticeTimer = undefined;
+        noticeTimerAt = 0;
+        flushNotice();
+    }, delay);
+    noticeTimer.unref?.();
+}
+
+function scheduleNotice(): void {
+    if (!sessionActive || !currentCtx) { return; }
+    if (pendingNotice) {
+        addPendingTasks();
+        // custom 通知不在用户文字队列计数里，不能据此猜它丢失；保留到真正消费。
+        return;
+    }
+    const ready = noticeTasks();
+    if (ready.some((task) => task.reported)) { armNoticeTimer(0); return; }
+    if (ready.length === 0 || !currentCtx.isIdle()) { return; }
+    armNoticeTimer(Math.max(300, 2000 - (Date.now() - lastNoticeAt)));
+}
+
+function flushNotice(): void {
+    if (!sessionActive || !currentCtx) { return; }
+    if (pendingNotice) { addPendingTasks(); return; }
+    const now = Date.now();
+    const progressAllowed = currentCtx.isIdle() && now - lastNoticeAt >= 2000;
+    const selected = noticeTasks().filter((task) => task.reported || progressAllowed).slice(0, 4);
+    if (selected.length === 0) { scheduleNotice(); return; }
+    const notice = { noticeId: ++noticeSeq, tasks: new Set(selected.map((task) => task.no)), startedOwnRun: false };
+    pendingNotice = notice;
+    lastNoticeAt = now;
+    const failed = () => {
+        if (pendingNotice !== notice || !sessionActive) { return; }
+        pendingNotice = undefined;
+        armNoticeTimer(2000);
+    };
+    try {
+        const sent = pi.sendMessage({
+            customType: NOTICE_TYPE,
+            content: "后台命令通知，交回时会填入最新输出。",
+            display: false,
+            details: { owner, noticeId: notice.noticeId, ready: false },
+        }, { triggerTurn: true, deliverAs: "steer" });
+        // 也兼容返回 Promise 的调用方；发送失败不丢输出，下次再交。
+        Promise.resolve(sent).catch(failed);
+    } catch {
+        failed();
+    }
+}
+
+pi.on("session_start", (_event: any, ctx: any) => {
+    resetNotices();
+    currentCtx = ctx;
+    sessionActive = true;
+    scheduleNotice();
+});
+pi.on("session_shutdown", () => { resetNotices(); });
+pi.registerCommand(CLEAR_NOTICE_COMMAND, {
+    description: "后端内部：界面已按用户要求清空队列",
+    handler: (_args: string, ctx: any) => {
+        currentCtx = ctx;
+        if (pendingNotice) {
+            for (const no of pendingNotice.tasks) {
+                const task = tasks.get(no);
+                if (!task) { continue; }
+                task.output = undefined;
+                task.endTail = undefined;
+                if (task.reported) { task.endNotified = true; }
+            }
+        }
+        pendingNotice = undefined;
+        clearNoticeTimer();
+        // 只取消已清掉的那份通知。未来的新输出仍可通知，不发模型消息，不清 pi 队列。
+    },
+});
+pi.on("before_agent_start", (event: any) => {
+    const details = event.message?.details;
+    if (pendingNotice && event.messageType === "custom" && event.message?.customType === NOTICE_TYPE
+        && details?.owner === owner && details.noticeId === pendingNotice.noticeId) {
+        pendingNotice.startedOwnRun = true;
+    }
+});
+pi.on("agent_start", (_event: any, ctx: any) => {
+    if (!sessionActive) { return; }
+    currentCtx = ctx;
+    scheduleNotice();
+});
+pi.on("agent_settled", (event: any, ctx: any) => {
+    if (!sessionActive) { return; }
+    currentCtx = ctx;
+    // 只释放已启动自己的回复、却没能交回起始通知的失败；忙时排队的通知可能仍在队列里。
+    if (pendingNotice?.startedOwnRun) { pendingNotice = undefined; return; }
+    scheduleNotice();
+});
+pi.on("message_end", (event: any) => {
+    const message = event?.message;
+    // 用户新说了一句话，只重置重复查询的判据，不改这条消息。
+    if (message?.role === "user") { lookedAt.clear(); return; }
+    const details = message?.details;
+    if (!sessionActive || message?.role !== "custom" || message.customType !== NOTICE_TYPE
+        || details?.owner !== owner || details.noticeId !== pendingNotice?.noticeId
+        || details.ready !== false || !pendingNotice) { return; }
+    addPendingTasks();
+    const selected = Array.from(pendingNotice.tasks).map((no) => tasks.get(no))
+        .filter((task): task is Task => !!task && !task.endNotified);
+    const completed = selected.filter((task) => task.reported);
+    const running = selected.filter((task) => !task.reported && task.output);
+    const content = [
+        ...completed.map((task) => formatNotice.completion({
+            ...task,
+            toolCallId: task.id,
+            elapsedMs: elapsedMs(task),
+            tail: task.endTail ?? "",
+        })),
+        ...(running.length ? [formatNotice.progress(running.map((task) => ({ ...task, toolCallId: task.id })))] : []),
+    ].join("\n\n");
+    const summary = selected.map((task) => ({
+        no: task.no, toolCallId: task.id,
+        status: task.reported ? task.status : "running",
+        elapsedMs: elapsedMs(task), notifyOutput: task.notifyOutput,
+    }));
+    // 到这一步才是真正消费通知：已填好的消息不会再修改，也不会重放已交回的结束结果。
+    for (const task of selected) {
+        task.output = undefined;
+        task.endTail = undefined;
+        if (task.reported) { task.endNotified = true; }
+    }
+    pendingNotice = undefined;
+    lastNoticeAt = Date.now();
+    clearNoticeTimer();
+    scheduleNotice();
+    return { message: {
+        ...message, content, display: true,
+        details: { ...details, ready: true, tasks: summary },
+    } };
+});
     const cwd = process.cwd();
     const base = createBashTool(cwd, {
         operations: {
@@ -798,6 +948,7 @@ export default function bashBridge(pi: any): void {
             additionalProperties: false,
         },
         async execute(id: string, params: any, signal: any, onUpdate: any, ctx: any) {
+            if (sessionActive) { currentCtx = ctx; scheduleNotice(); }
             const background = params && params.background === true;
             const notifyOutput = params && params.notifyOutput === true;
             const command = params && typeof params.command === "string" ? params.command : "";
@@ -880,7 +1031,8 @@ export default function bashBridge(pi: any): void {
             },
             additionalProperties: false,
         },
-        async execute(_toolCallId: string, params: any) {
+        async execute(_toolCallId: string, params: any, _signal: any, _onUpdate: any, ctx: any) {
+            if (sessionActive) { currentCtx = ctx; scheduleNotice(); }
             const no = typeof params?.id === "number" ? params.id : 0;
             if (!no) {
                 if (tasks.size === 0) {
@@ -920,7 +1072,6 @@ export default function bashBridge(pi: any): void {
                 }
                 task.status = "stopped";
                 task.ending = true;
-                clearOutputTimer(task);
                 // close 读完日志尾部再 reportEnd，未发送输出只随结尾交回一次。
                 return {
                     content: [{ type: "text", text: "#" + no + " 停掉了（连它派出来的进程一起）。" }],

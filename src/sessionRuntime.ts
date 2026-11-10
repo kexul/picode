@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import { PiClient } from "./piClient";
 import { ASK_DECODER, AskDoneNotice, AskRequest } from "./askProtocol";
-import { BASH_DECODER, BashTaskEvent, BashTaskInfo, BashOutputInfo, mergeBashOutput } from "./bashProtocol";
+import { BASH_DECODER, BashTaskEvent, BashTaskInfo, BASH_CLEAR_NOTICE_COMMAND, isBashNoticeMessage, bashNoticeMessageId } from "./bashProtocol";
 import { parseAutoCommand } from "./auto";
 import { StderrFrameSplitter } from "./piFrames";
 import { TABA_DECODER, TabaRequest } from "./tabaProtocol";
@@ -131,7 +131,7 @@ export function commandMenuItems(commands: RpcCommandInfo[]): SlashCommandItem[]
                 : "other",
         }))
         // 同名时别盖掉插件自己认下的那一条（/compact）；/auto 不再进菜单（开关改成按钮了）
-        .filter((it) => it.name !== BUILTIN_COMPACT_ITEM.name && it.name !== BUILTIN_AUTO_ITEM.name)
+        .filter((it) => it.name !== BUILTIN_COMPACT_ITEM.name && it.name !== BUILTIN_AUTO_ITEM.name && it.name !== BASH_CLEAR_NOTICE_COMMAND)
         .concat([BUILTIN_COMPACT_ITEM])
         .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -189,6 +189,11 @@ function killTaskTree(pid: number): boolean {
     } catch {
         try { process.kill(pid, "SIGKILL"); return true; } catch { return false; }
     }
+}
+
+/** 页面会显示的正文；自己的已填好通知也参与历史窗口计数。 */
+function isConversationMessage(message: any): boolean {
+    return !!message && (message.role === "user" || message.role === "assistant" || isBashNoticeMessage(message));
 }
 
 /**
@@ -308,13 +313,6 @@ export class SessionRuntime {
     private readonly bashTasks = new Map<number, BashTaskInfo>();
     /** 已经收过结尾的那几条：同一编号的结尾只算一次（停掉 + 进程退出会各报一份，旧版脚本还会两份都发）。 */
     private readonly bashEnded = new Set<number>();
-    /** 模型忙时只留每条命令的一份有上限的输出，不把每批都塞进 pi 的消息队列。 */
-    private readonly bashOutputPending = new Map<number, BashOutputInfo>();
-    private bashOutputTimer?: ReturnType<typeof setTimeout>;
-    private lastBashOutputAt = 0;
-    /** 发了 prompt、但 agent_start 尚未回来时，也不能继续交回输出。 */
-    private readonly promptsPending = new Map<string, "sent" | "accepted">();
-    private promptSeq = 0;
     /** 上一次推给界面的「后台还有命令在跑」是哪种说法：只有它变了才重推会话清单（见 syncBashRunning）。 */
     private bashRunningShown = false;
     // ---- 网页端「只发最近一段历史」的窗口（宿主 wantsTrimmedHistory 为 true 时启用）----
@@ -521,7 +519,7 @@ export class SessionRuntime {
                     continue;
                 }
                 if (frame.kind === "bash") {
-                    // 后台命令的状态记进清单；新输出先合并，跑完的交给宿主补一条消息
+                    // 这里只更新后台命令清单；模型通知由 pi 在交回前填入最新内容
                     this.noteBashTask(frame.value as BashTaskEvent);
                     continue;
                 }
@@ -586,7 +584,6 @@ export class SessionRuntime {
     }
 
     public stopClient(): void {
-        this.clearBashOutput();
         if (this.client) {
             this.client.stop();
             this.client = undefined;
@@ -616,7 +613,6 @@ export class SessionRuntime {
      * 后台命令也跟着 pi 一起没了：清单还留着会让那颗点一直蓝着（见 hasRunningBashTasks）。
      */
     private finishRoundOnExit(): void {
-        this.clearBashOutput();
         this.bashTasks.clear();
         this.bashEnded.clear();
         this.bashRunningShown = false;
@@ -635,7 +631,6 @@ export class SessionRuntime {
 
     /** 会话被换掉：旧标题作废。 */
     private noteSessionReplaced(): void {
-        this.clearBashOutput();
         this.piSessionTitle = "";
         // 后台命令清单也跟着会话走：换会话 / 换进程以后旧的那些都不认了
         this.bashTasks.clear();
@@ -693,65 +688,8 @@ export class SessionRuntime {
         this.post({ type: "envInfo", env: snapshot });
     }
 
-    private clearBashOutput(): void {
-        if (this.bashOutputTimer) { clearTimeout(this.bashOutputTimer); this.bashOutputTimer = undefined; }
-        this.bashOutputPending.clear();
-        this.lastBashOutputAt = 0;
-        this.promptsPending.clear();
-    }
-
-    /** 只清掉 pi 已确认收下的请求；尚未回响应的新请求不能被上一轮的结束清掉。 */
-    private clearAcceptedPrompts(): void {
-        for (const [id, state] of this.promptsPending) {
-            if (state === "accepted") { this.promptsPending.delete(id); }
-        }
-    }
-
-    private bashOutputBusy(): boolean {
-        return this.streaming || this.promptsPending.size > 0 || this.compacting
-            || this.queuedSteering.length > 0 || this.queuedFollowUp.length > 0
-            || !this.client?.isRunning();
-    }
-
-    /** 同一会话共用计时器：先攒 300 毫秒，通知之间至少隔两秒。 */
-    private scheduleBashOutput(): void {
-        if (this.bashOutputTimer || this.bashOutputPending.size === 0 || this.bashOutputBusy()) { return; }
-        const delay = Math.max(300, 2000 - (Date.now() - this.lastBashOutputAt));
-        this.bashOutputTimer = setTimeout(() => {
-            this.bashOutputTimer = undefined;
-            this.flushBashOutput();
-        }, delay);
-        this.bashOutputTimer.unref?.();
-    }
-
-    private flushBashOutput(): void {
-        if (this.bashOutputBusy() || !this.host.onBashOutput) { return; }
-        const tasks: BashTaskInfo[] = [];
-        for (const [no, output] of this.bashOutputPending) {
-            const task = this.bashTasks.get(no);
-            if (!task || this.bashEnded.has(no)) { this.bashOutputPending.delete(no); continue; }
-            if (task.status !== "running") { continue; }
-            this.bashOutputPending.delete(no);
-            tasks.push({ ...task, output });
-            // 每次最多四条命令，避免一条通知太大；其余在下一次空闲时交回。
-            if (tasks.length >= 4) { break; }
-        }
-        if (tasks.length === 0) { return; }
-        this.lastBashOutputAt = Date.now();
-        this.host.onBashOutput(this.id, tasks);
-        this.scheduleBashOutput();
-    }
-
-    /** 扩展报来后台命令的开始 / 新输出 / 结束（见 bashProtocol.ts）。 */
+    /** 扩展报来后台命令的开始 / 结束；模型通知由 pi 在交回前填入最新内容。 */
     private noteBashTask(ev: BashTaskEvent): void {
-        if (ev.kind === "output") {
-            const task = this.bashTasks.get(ev.no);
-            if (!ev.output || this.bashEnded.has(ev.no) || !task) { return; }
-            task.notifyOutput = true;
-            this.bashOutputPending.set(ev.no, mergeBashOutput(this.bashOutputPending.get(ev.no), ev.output));
-            this.scheduleBashOutput();
-            return;
-        }
         // 同一编号的结尾只认第一次：不然「停掉」和「进程退出」会各交回会话一次（模型就收到两遍同一件事）
         if (ev.kind === "end") {
             if (this.bashEnded.has(ev.no)) { return; }
@@ -763,16 +701,6 @@ export class SessionRuntime {
         const status: BashTaskInfo["status"] = ev.kind === "start"
             ? "running"
             : (stopped ? "stopped" : (ev.status ?? (ev.exitCode === 0 ? "done" : "failed")));
-        let output: BashOutputInfo | undefined;
-        if (ev.kind === "end") {
-            const pending = this.bashOutputPending.get(ev.no);
-            output = ev.output ? mergeBashOutput(pending, ev.output) : pending;
-            this.bashOutputPending.delete(ev.no);
-            if (this.bashOutputPending.size === 0 && this.bashOutputTimer) {
-                clearTimeout(this.bashOutputTimer);
-                this.bashOutputTimer = undefined;
-            }
-        }
         const info: BashTaskInfo = {
             no: ev.no,
             toolCallId: ev.toolCallId,
@@ -790,8 +718,6 @@ export class SessionRuntime {
         console.error(`[后台命令] #${ev.no} ${ev.kind === "start" ? "转到后台" : status === "done" ? "跑完" : "结束（" + status + "）"}：${ev.cmd.slice(0, 80)}`);
         this.post({ type: "bashTask", task: info });
         this.syncBashRunning();
-        // 输出只交给这次完成通知，不留在任务清单里，也不重复推给界面。
-        if (ev.kind === "end") { this.host.onBashTask?.(this.id, output ? { ...info, output } : info); }
     }
 
     /**
@@ -905,6 +831,10 @@ export class SessionRuntime {
             this.abortRequested = true;
             this.client.send({ type: "abort_bash" });
             this.client.send({ type: "clear_queue" });
+            // 用户已清空队列，通知 pi 内部只取消自己的旧记录；不是模型的新一轮输入。
+            if (this.bashTasks.size > 0) {
+                this.client.send({ type: "prompt", message: "/" + BASH_CLEAR_NOTICE_COMMAND, streamingBehavior: "steer" });
+            }
             this.client.send({ type: "abort" });
         }
     }
@@ -1005,8 +935,7 @@ export class SessionRuntime {
             : opts?.followUp
                 ? "followUp"
                 : this.streaming ? "steer" : "followUp";
-        const promptId = `pichat-prompt-${this.id}-${++this.promptSeq}`;
-        const cmd: Record<string, unknown> = { id: promptId, type: "prompt", message, streamingBehavior };
+        const cmd: Record<string, unknown> = { type: "prompt", message, streamingBehavior };
         if (hasImages) {
             cmd.images = images!.map((img) => ({
                 type: "image",
@@ -1015,10 +944,8 @@ export class SessionRuntime {
             }));
         }
         try {
-            this.promptsPending.set(promptId, "sent");
             this.client!.send(cmd);
         } catch (e: any) {
-            this.promptsPending.delete(promptId);
             this.post({ type: "systemError", text: `发送失败: ${e.message}` });
         }
     }
@@ -1141,7 +1068,6 @@ export class SessionRuntime {
                     steering: this.queuedSteering.slice(),
                     followUp: this.queuedFollowUp.slice(),
                 });
-                this.scheduleBashOutput();
                 break;
             case "message_start": {
                 // pi 推送 user 消息开始（含 steer 投递的排队消息）：统一在此渲染 user 气泡，
@@ -1149,7 +1075,7 @@ export class SessionRuntime {
                 // 话题里多了一条（用户这句 / 上次调用的结果），上下文用量这会儿就变了：
                 // 问一下，别等到这一轮跑完才亮（见 refreshStatsSoon）。
                 const m = evt.message;
-                if (m && (m.role === "user" || m.role === "assistant")) {
+                if (isConversationMessage(m)) {
                     this.hasConversation = true;
                     this.refreshStatsSoon();
                 }
@@ -1178,7 +1104,6 @@ export class SessionRuntime {
                 break;
             }
             case "agent_start":
-                this.clearAcceptedPrompts();
                 this.streaming = true;
                 this.streamingReply = "";
                 this.runStarted = true;
@@ -1360,7 +1285,12 @@ export class SessionRuntime {
             case "message_end": {
                 // 一条 assistant 消息吐完了：这次调用的吐字时间到此为止（之后是工具在跑）
                 const m = evt.message;
-                if (m && m.role === "assistant") {
+                if (isBashNoticeMessage(m)) {
+                    // pi 的 message_end 替换已完成：只显示模型实际收到的最终内容。
+                    this.hasConversation = true;
+                    this.post({ type: "userMessage", id: bashNoticeMessageId(m), text: m.content });
+                    this.refreshStatsSoon();
+                } else if (m && m.role === "assistant") {
                     // 这条正文吐完了：阶段里“写”到此为止（接下来可能是工具、也可能在想）
                     if (this.writingText) { this.writingText = false; this.postPhase(); }
                     this.endGenCall();
@@ -1375,7 +1305,6 @@ export class SessionRuntime {
                 this.setActivity("working");
                 break;
             case "agent_settled":
-                this.clearAcceptedPrompts();
                 this.streaming = false;
                 this.writingText = false;
                 this.postPhase();
@@ -1419,26 +1348,12 @@ export class SessionRuntime {
                     this.pendingAfterAbort = "";
                     this.handleSend(afterAbort);
                 }
-                this.scheduleBashOutput();
                 break;
         }
     }
 
     /** 未被 request() 认领的响应（例如无 id 的错误）。带 id 的响应已在 PiClient 内消化。 */
     private onPiResponse(resp: RpcResponse): void {
-        if (resp.command === "prompt" && resp.id && this.promptsPending.has(resp.id)) {
-            const disposition = (resp.data as { disposition?: string } | undefined)?.disposition;
-            if (resp.success === false || disposition === "handled") {
-                // 命令被处理器接手或请求失败，没有 agent_start / agent_settled 可等。
-                this.promptsPending.delete(resp.id);
-            } else if (disposition === "started" || disposition === "queued") {
-                this.promptsPending.set(resp.id, "accepted");
-            } else if (resp.success === true) {
-                // 旧版 pi 的成功响应没有 disposition，按旧协议继续由运行事件判断。
-                this.promptsPending.delete(resp.id);
-            }
-            this.scheduleBashOutput();
-        }
         if (resp.success === false && resp.error) {
             this.post({ type: "systemError", text: `pi: ${resp.error}` });
         }
@@ -1669,7 +1584,7 @@ export class SessionRuntime {
             // 网页端这一份只带最近的图（更早的界面上点开再取），否则首屏要传的字节数会很大
             inlineImages: win || opts?.full ? this.planInlineImages(win ? win.list : messages, opts?.imageBudget) : undefined,
         });
-        const count = messages.filter((m) => m && (m.role === "user" || m.role === "assistant")).length;
+        const count = messages.filter(isConversationMessage).length;
         const note = opts?.note === undefined
             ? "会话已迁入本工作区（{count} 条消息，pi 进程与上下文原样保留）。"
             : opts.note;
@@ -2020,12 +1935,12 @@ export class SessionRuntime {
         let start = 0;
         for (let i = messages.length - 1; i >= 0; i -= 1) {
             const m = messages[i];
-            if (m && m.role === "user") { start = i; break; }
+            if (m && (m.role === "user" || isBashNoticeMessage(m))) { start = i; break; }
         }
         let hidden = 0;
         for (let i = 0; i < start; i += 1) {
             const m = messages[i];
-            if (m && (m.role === "user" || m.role === "assistant")) { hidden += 1; }
+            if (isConversationMessage(m)) { hidden += 1; }
         }
         return {
             list: messages.slice(start),
@@ -2065,20 +1980,19 @@ export class SessionRuntime {
             if (start !== endBefore && (count >= cap || bytes + size > budget)) { break; }
             start = i;
             bytes += size;
-            if (m && (m.role === "user" || m.role === "assistant")) { count += 1; }
+            if (isConversationMessage(m)) { count += 1; }
         }
-        // 起点只能落在 user / assistant 上（跟以前一样）：落在一条工具结果上时，它那条调用
+        // 起点只能落在正文或自己的已填好通知上：落在一条工具结果上时，它那条调用
         // 被切到了上一段里——这一屏里落单的结果没人认，往前补的那一批里又只有调用没有结果，
         // 界面上那颗工具标签就永远转圈、输出也看不见了。
-        while (start < endBefore && messages[start]
-            && messages[start].role !== "user" && messages[start].role !== "assistant") {
+        while (start < endBefore && messages[start] && !isConversationMessage(messages[start])) {
             start += 1;
         }
         let hidden = 0;
         for (let i = 0; i < start; i++) {
             const m = messages[i];
             if (!m) { continue; }
-            if (m.role === "user" || m.role === "assistant") { hidden++; }
+            if (isConversationMessage(m)) { hidden++; }
         }
         return {
             list: messages.slice(start, endBefore),
@@ -2182,9 +2096,7 @@ export class SessionRuntime {
         // 缺省还是走这个会话的常规广播；给了 sink 就只发给那一个页面（消息已经带了 sessionId）
         const emit: MessageSink = opts?.sink ?? ((msg) => this.post(msg));
         const revertable = opts?.revertable === true;
-        this.hasConversation = messages.some((m) =>
-            m && (m.role === "user" || m.role === "assistant")
-        );
+        this.hasConversation = messages.some(isConversationMessage);
         // 消息在历史里的绝对下标（窗口模式下加上基数）：重放出来的编号跨次数稳定，
         // 界面靠它认“这条画过了、原地留着”（见 media/chat.js 的 placeNode）。
         const base = opts?.indexBase ?? 0;
@@ -2201,6 +2113,11 @@ export class SessionRuntime {
             // 别的消息上，而界面是按编号原地复用节点的——那就把助手正文塞进用户气泡里了。
             const mid = typeof m.id === "string" && m.id ? `m${m.id}` : `h${base + mi}`;
             switch (m.role) {
+                case "custom":
+                    if (isBashNoticeMessage(m)) {
+                        emit({ type: "userMessage", id: bashNoticeMessageId(m), text: m.content });
+                    }
+                    break;
                 case "user":
                     emit({
                         type: "userMessage",
@@ -2519,7 +2436,6 @@ export class SessionRuntime {
             if (!this.streaming) {
                 this.setActivity("idle");
             }
-            this.scheduleBashOutput();
             // 上下文用量变了：输入框底下那颗胶囊的横条跟上
             void this.refreshStats();
         }
@@ -2602,7 +2518,7 @@ export class SessionRuntime {
  * 其中 212 KB 是永远不发的思考与工具输出）。
  */
 function messageBytes(m: any): number {
-    if (!m) { return 0; }
+    if (!m || (m.role === "custom" && !isBashNoticeMessage(m))) { return 0; }
     const content = m.content;
     let bytes = 64;   // 消息对象本身的骨头（角色、编号、时间这些）
     if (typeof content === "string") { return bytes + Buffer.byteLength(content, "utf8"); }

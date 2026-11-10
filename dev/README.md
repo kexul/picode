@@ -49,8 +49,8 @@ npm run web:shot -- --headed --keep
 # 动作复杂时写个脚本：module.exports = async (page) => { … }
 npm run web:shot -- --script dev/myFlow.js
 
-# 验 bash 的 notifyOutput（不调用模型）：忙时合并、限频、结束合并、清理，
-# 以及生成扩展的后台输出、默认关闭、中文跨块与停止回报：
+# 验 bash 的 notifyOutput（不调用真模型）：排队期间更新、结束升级、已读不改、清理，
+# 并用真 SDK + 假生成检查模型收到的内容、公开事件、页面和历史一致，用户文字/图片不变：
 npm run compile && node dev/bashOutput.js
 
 # 用假模型验界面：不调真模型，按剧本秒回（会话/历史/重放全真，只是“模型”是假的）

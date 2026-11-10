@@ -41,7 +41,7 @@ import { TABA_DECODER } from "./tabaProtocol";
 import { ASK_DECODER } from "./askProtocol";
 import type { AskRequest } from "./askProtocol";
 import { StderrFrameSplitter } from "./piFrames";
-import { BASH_DECODER, BashTaskInfo, buildBashTaskDelivery, buildBashOutputDelivery, readBashLogTail } from "./bashProtocol";
+import { BASH_DECODER } from "./bashProtocol";
 import { ENV_DECODER } from "./envProtocol";
 import {
     TabaRegistry,
@@ -1212,37 +1212,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 会话名里子会话名字最多占多长。 */
     private static readonly TABA_TAB_NAME_MAX = 28;
 
-
-    /**
-     * RuntimeHost.onBashTask：某个会话里的后台命令跑到头了（跑完 / 失败 / 被停）。
-     * 把结果当成一条新消息交回这个会话：按 steer 排队，会话正忙就在当前这轮工具跑完之后、
-     * 下一次请求模型之前投递（那条命令是它自己脱手出去的，等着这个结果），空闲时就是普通的新一轮。
-     */
-    public onBashTask(panelId: string, task: BashTaskInfo): void {
-        const rt = this.panels.get(panelId);
-        if (!rt) { return; }
-        const text = buildBashTaskDelivery({
-            no: task.no,
-            cmd: task.cmd,
-            status: task.status,
-            exitCode: task.exitCode,
-            elapsedMs: task.elapsedMs,
-            log: task.log,
-            tail: task.notifyOutput ? "" : readBashLogTail(task.log, ChatControllerBase.BASH_DELIVERY_TAIL_BYTES),
-            output: task.output,
-            notifyOutput: task.notifyOutput,
-        }, this.getConfig().prompts);
-        rt.handleSend(text, undefined, { steer: true });
-    }
-
-    public onBashOutput(panelId: string, tasks: BashTaskInfo[]): void {
-        const rt = this.panels.get(panelId);
-        if (!rt || tasks.length === 0) { return; }
-        rt.handleSend(buildBashOutputDelivery(tasks, this.getConfig().prompts), undefined, { steer: true });
-    }
-
-    /** 交回会话时最多带多长一段输出（字节）：再长的让模型自己去 bash_tasks 取。 */
-    protected static readonly BASH_DELIVERY_TAIL_BYTES = 4000;
 
     /** RuntimeHost.onTabaRequest：某个会话里的 pi 扩展要派子会话 / 停子会话。 */
     public onTabaRequest(panelId: string, request: TabaRequest): void {
