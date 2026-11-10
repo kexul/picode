@@ -41,7 +41,7 @@ import { TABA_DECODER } from "./tabaProtocol";
 import { ASK_DECODER } from "./askProtocol";
 import type { AskRequest } from "./askProtocol";
 import { StderrFrameSplitter } from "./piFrames";
-import { BASH_DECODER, BashTaskInfo, buildBashTaskDelivery, readBashLogTail } from "./bashProtocol";
+import { BASH_DECODER, BashTaskInfo, buildBashTaskDelivery, buildBashOutputDelivery, readBashLogTail } from "./bashProtocol";
 import { ENV_DECODER } from "./envProtocol";
 import {
     TabaRegistry,
@@ -1228,9 +1228,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
             exitCode: task.exitCode,
             elapsedMs: task.elapsedMs,
             log: task.log,
-            tail: readBashLogTail(task.log, ChatControllerBase.BASH_DELIVERY_TAIL_BYTES),
+            tail: task.notifyOutput ? "" : readBashLogTail(task.log, ChatControllerBase.BASH_DELIVERY_TAIL_BYTES),
+            output: task.output,
+            notifyOutput: task.notifyOutput,
         }, this.getConfig().prompts);
         rt.handleSend(text, undefined, { steer: true });
+    }
+
+    public onBashOutput(panelId: string, tasks: BashTaskInfo[]): void {
+        const rt = this.panels.get(panelId);
+        if (!rt || tasks.length === 0) { return; }
+        rt.handleSend(buildBashOutputDelivery(tasks, this.getConfig().prompts), undefined, { steer: true });
     }
 
     /** 交回会话时最多带多长一段输出（字节）：再长的让模型自己去 bash_tasks 取。 */

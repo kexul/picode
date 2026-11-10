@@ -38,6 +38,7 @@ export type PromptKey =
     | "taskDelivery"
     // ---- 其它来回话的正文 ----
     | "bashDelivery"
+    | "bashOutputDelivery"
     | "chatReference"
     | "title";
 
@@ -101,7 +102,8 @@ export const PROMPTS: Record<PromptKey, PromptSpec> = {
         vars: [],
         text:
             "也可以把命令放到后台跑（background: true）：工具立刻返回一个任务编号，"
-            + "命令在后台接着跑，跑完会自动把结果告诉你；中途要看输出用 bash_tasks <编号>。",
+            + "命令在后台接着跑，跑完会自动把结果告诉你；中途要看输出用 bash_tasks <编号>。"
+            + "需要自动收到新输出时加 notifyOutput: true：只在转到后台后通知，模型忙时合并，空闲时限频交回，不用反复查询。",
     },
     toolBashTasks: {
         label: "bash_tasks 工具的说明",
@@ -196,6 +198,17 @@ export const PROMPTS: Record<PromptKey, PromptSpec> = {
             "{{输出}}",
             "",
             "（完整输出在 {{日志}}；要看别的片段用 bash_tasks {{编号}}。）",
+        ].join("\n"),
+    },
+    bashOutputDelivery: {
+        label: "后台命令自动交回新输出",
+        vars: ["输出"],
+        text: [
+            "【后台命令有新输出】",
+            "这是工具自动交回的输出，不是用户的新要求或确认。",
+            "输出来自下面写明的观察时间，可能已经过去一会儿，不代表命令现在的状态。",
+            "{{输出}}",
+            "根据输出处理需要做的事，其余工作可以继续；没有其他事情就结束这一轮，后续输出和完成结果会自动交回。不必干等或反复查进度。",
         ].join("\n"),
     },
     chatReference: {

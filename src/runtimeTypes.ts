@@ -188,6 +188,8 @@ export interface RuntimeHost {
      * 宿主接着：把结果当成一条新消息交回这个会话。可选。
      */
     onBashTask?(panelId: string, task: BashTaskInfo): void;
+    /** 模型空闲时，把多条后台命令尚未交回的输出合成一条通知。 */
+    onBashOutput?(panelId: string, tasks: BashTaskInfo[]): void;
 
     // ---- UI 弹窗（对应当 pi 的 extension_ui_request）----
     /** @param sessionId 这是哪个会话问的：优先弹给正在看这个会话的那块屏（没人看才找“人最近动的”）。 */

@@ -50,7 +50,7 @@
  *
  * 用 String.raw 包着：里面的反斜杠原样保留。
  */
-import { BASH_FRAME_PREFIX } from "./bashProtocol";
+import { BASH_FRAME_PREFIX, BASH_OUTPUT_MAX_CHARS } from "./bashProtocol";
 import { promptText, type PromptOverrides } from "./promptText";
 
 export function bashBridgeSource(over?: PromptOverrides): string {
@@ -63,8 +63,10 @@ import { createBashTool, getShellConfig } from "@earendil-works/pi-coding-agent"
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 
 const FRAME_PREFIX = ${JSON.stringify(BASH_FRAME_PREFIX)};
+const OUTPUT_MAX_CHARS = ${BASH_OUTPUT_MAX_CHARS};
 
 /** bash 工具说明里插件加的那一段（人可以在 config.json 的 prompts.toolBash 里改）。 */
 const BACKGROUND_NOTE = ${JSON.stringify(promptText(over, "toolBash"))};
@@ -82,7 +84,10 @@ const NO_WAIT_NOTE = "放到后台以后不用等结果：你可以接着去干�
     + "别用 sleep 之类的命令干等，也别反复用 bash_tasks 查 —— 你干等的时候结果只能排在后面，等多久就白等多久。"
     + "真在命令里干等的（sleep 10 秒以上、或者循环里带 sleep）、以及把进程丢到背影里跑的（末尾孤零零的 &、nohup、setsid）会被挡回来，这一条不会跑；"
     + "刚看过一次、它又没出新东西的时候再查，也会被挡回来。"
-    + "前台命令撑过 20 秒还没跑完会自己转到后台（不用你管，也不用再发一遍），跑完照常交回来。";
+    + "前台命令撑过 20 秒还没跑完会自己转到后台（不用你管，也不用再发一遍），跑完照常交回来。"
+    + "bash 的 notifyOutput 默认是 false：后台只在跑完时通知，中途要看输出用 bash_tasks；"
+    + "设成 true 后，命令转到后台才会自动通知新输出，前台输出仍只走正常工具结果；"
+    + "模型忙时合并，空闲时同一会话的输出通知至少隔两秒，没有新输出就不通知，结束时剩余输出和结果一起交回。";
 
 /**
  * 命令里干等的那一关：认出来就不跑。
@@ -310,6 +315,13 @@ function withPrefix(cmd: string): string {
 
 type TaskStatus = "running" | "done" | "failed" | "stopped";
 
+interface TaskOutput {
+    text: string;
+    firstAt: number;
+    lastAt: number;
+    omittedChars?: number;
+}
+
 interface Task {
     no: number;
     /** 这次工具调用的编号（pi 给的；中途切后台时插件靠它对上号）。 */
@@ -324,12 +336,77 @@ interface Task {
     background: boolean;
     /** 报给过插件没有（前台正常跑完的不报：插件从工具事件流里已经知道了）。 */
     announced: boolean;
-    /** 结尾报给过插件没有：一条任务只报一次结尾（停掉之后进程退出、两份回调都会走到，别报两遍）。 */
+    /** 结尾报给过插件没有：一条任务只报一次结尾（停止与退出可能挨在一起，别报两遍）。 */
     reported: boolean;
+    notifyOutput: boolean;
+    /** 停止或进程退出后不再单发输出，剩余输出随结束通知交回。 */
+    ending: boolean;
+    output?: TaskOutput;
+    outputTimer?: ReturnType<typeof setTimeout>;
 }
 
 const tasks = new Map<number, Task>();
 let seq = 0;
+
+function clearOutputTimer(task: Task): void {
+    if (task.outputTimer === undefined) { return; }
+    clearTimeout(task.outputTimer);
+    task.outputTimer = undefined;
+}
+
+/** 只攒转到后台后的新输出；保留最初 2000 和最新 2000 个字符，不按行发消息。 */
+function collectOutput(task: Task, text: string): void {
+    if (!text || !task.notifyOutput || !task.announced || task.reported) { return; }
+    const now = Date.now();
+    const before = task.output;
+    const size = (before?.text.length || 0) + text.length;
+    if (size <= OUTPUT_MAX_CHARS) {
+        task.output = {
+            text: (before?.text || "") + text,
+            firstAt: before?.firstAt ?? now,
+            lastAt: now,
+            ...(before?.omittedChars ? { omittedChars: before.omittedChars } : {}),
+        };
+    } else {
+        const half = OUTPUT_MAX_CHARS / 2;
+        let head = ((before?.text || "") + text.slice(0, half)).slice(0, half);
+        let tail = text.length >= half
+            ? text.slice(-half)
+            : ((before?.text || "").slice(-half) + text).slice(-half);
+        if (/[\uD800-\uDBFF]$/.test(head)) { head = head.slice(0, -1); }
+        if (/^[\uDC00-\uDFFF]/.test(tail)) { tail = tail.slice(1); }
+        task.output = {
+            text: head + tail,
+            firstAt: before?.firstAt ?? now,
+            lastAt: now,
+            omittedChars: (before?.omittedChars || 0) + size - head.length - tail.length,
+        };
+    }
+    if (task.ending || task.outputTimer !== undefined) { return; }
+    task.outputTimer = setTimeout(() => {
+        task.outputTimer = undefined;
+        if (task.reported || task.ending || !task.announced || !task.notifyOutput) { return; }
+        const output = task.output;
+        task.output = undefined;
+        if (!output) { return; }
+        emit({
+            kind: "output",
+            no: task.no,
+            toolCallId: task.id,
+            cmd: task.cmd,
+            log: task.log,
+            background: task.background,
+            output,
+        });
+    }, 500);
+    if (typeof task.outputTimer.unref === "function") { task.outputTimer.unref(); }
+}
+
+function outputNotice(task: Task): string {
+    return task.notifyOutput
+        ? "notifyOutput 已开启：转到后台后的新输出会自动交回本会话，模型忙时先合并，不用反复查。"
+        : "notifyOutput 默认关闭：中途输出不会自动通知，要看输出用 bash_tasks；下次设 notifyOutput: true 可开启。";
+}
 
 function elapsedMs(task: Task): number {
     return Math.max(0, Date.now() - task.startedAt);
@@ -350,18 +427,18 @@ function statusText(task: Task): string {
 }
 
 /** 杀掉整棵进程树。 */
-function killTree(pid: number): void {
-    if (!pid) { return; }
+function killTree(pid: number): boolean {
+    if (!pid) { return false; }
     if (process.platform === "win32") {
         try {
-            spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true });
-        } catch { /* 进程可能已经没了 */ }
-        return;
+            return spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }).status === 0;
+        } catch { return false; }
     }
     try {
         process.kill(-pid, "SIGKILL");
+        return true;
     } catch {
-        try { process.kill(pid, "SIGKILL"); } catch { /* 同上 */ }
+        try { process.kill(pid, "SIGKILL"); return true; } catch { return false; }
     }
 }
 
@@ -392,16 +469,16 @@ function readTail(file: string, want: number): string {
 
 interface Started {
     task: Task;
-    /** 改成只写日志、不再喂给 pi（转到后台后调）。 */
+    /** 不再喂给 pi，日志照写；开启通知时另攒后台新输出。 */
     mute(): void;
-    /** 进程退出（或者被我们杀掉）：回调一次，参数是退出码。 */
+    /** 主进程退出后等尾部输出（最多一秒）：回调一次，参数是退出码。 */
     onExit(cb: (code: number | null) => void): void;
     /** 杀掉整棵树。 */
     kill(): void;
 }
 
 /**
- * 起命令，输出一路写日志文件；feed 是"同一份输出喂给 pi"的那一头（后台任务传空函数）。
+ * 起命令，输出一路写日志文件；feed 把同一份字节交给当前工具调用，转后台后不再调用它。
  * detached：脱离本进程的进程组 —— 这样 pi 退出、会话关掉，命令还接着跑。
  */
 function startTask(
@@ -410,6 +487,7 @@ function startTask(
     env: NodeJS.ProcessEnv | undefined,
     toolCallId: string,
     background: boolean,
+    notifyOutput: boolean,
     feed: (chunk: Buffer) => void
 ): Started {
     const dir = tasksDir();
@@ -447,6 +525,8 @@ function startTask(
         background,
         announced: false,
         reported: false,
+        notifyOutput,
+        ending: false,
     };
     tasks.set(no, task);
     if (shell.viaStdin && child.stdin) {
@@ -465,28 +545,60 @@ function startTask(
      * 断、自己用 TextDecoder 解码，给字符串会当场抛 ERR_INVALID_ARG_TYPE，把整个
      * pi 进程带死（2026-10-28 踩过：会话里一跑命令，pi 就没了）。
      */
-    const onData = (chunk: Buffer) => {
+    const stdoutDecoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
+    const onData = (chunk: Buffer, decoder: StringDecoder) => {
         writeLog(chunk);
-        if (muted) { return; }
+        // 两路分别解码，前台也喂给 decoder，但不攒前台已交给 pi 的输出。
+        const text = task.notifyOutput ? decoder.write(chunk) : "";
+        if (muted) { collectOutput(task, text); return; }
         try { feed(chunk); } catch { /* 交回 pi 那边出错不该把会话带死 */ }
     };
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
+    child.stdout?.on("data", (chunk: Buffer) => onData(chunk, stdoutDecoder));
+    child.stderr?.on("data", (chunk: Buffer) => onData(chunk, stderrDecoder));
     child.on("error", (err: Error) => {
         const text = "\n[起不来：" + String((err && err.message) || err) + "]\n";
         writeLog(text);
-        if (!muted) { try { feed(Buffer.from(text, "utf8")); } catch { /* 同上 */ } }
+        if (muted) { collectOutput(task, text); }
+        else { try { feed(Buffer.from(text, "utf8")); } catch { /* 同上 */ } }
     });
-    child.on("exit", (code: number | null) => {
+    let finished = false;
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (code: number | null, pipesOpen = false) => {
+        if (finished) { return; }
+        finished = true;
+        if (closeTimer !== undefined) { clearTimeout(closeTimer); closeTimer = undefined; }
+        task.ending = true;
+        clearOutputTimer(task);
+        const stdoutTail = stdoutDecoder.end();
+        const stderrTail = stderrDecoder.end();
+        if (muted) {
+            collectOutput(task, stdoutTail);
+            collectOutput(task, stderrTail);
+        }
+        if (pipesOpen) {
+            const notice = "\n[主进程已退出，输出管道尚未关闭；这里只包含目前读到的输出，后代进程可能仍在运行]\n";
+            writeLog(notice);
+            if (muted) { collectOutput(task, notice); }
+            else { try { feed(Buffer.from(notice, "utf8")); } catch { /* 同上 */ } }
+        }
         task.exitCode = code;
-        task.status = code === 0 ? "done" : "failed";
+        if (task.status !== "stopped") { task.status = code === 0 ? "done" : "failed"; }
         writeLog("\n[退出码 " + code + "，用了 " + elapsedText(elapsedMs(task)) + "]\n");
         if (fd >= 0) {
             try { closeSync(fd); } catch { /* 算了 */ }
             fd = -1;
         }
         for (const cb of exitCbs) { cb(code); }
+    };
+    child.on("exit", (code: number | null) => {
+        task.ending = true;
+        clearOutputTimer(task);
+        // 正常先等 close 读完尾部；后代持着管道不关时，不能永远卡着工具和结束通知。
+        closeTimer = setTimeout(() => finish(code, true), 1000);
+        if (typeof closeTimer.unref === "function") { closeTimer.unref(); }
     });
+    child.on("close", (code: number | null) => finish(code));
     child.unref();
     return {
         task,
@@ -514,12 +626,16 @@ function announce(task: Task, background: boolean): void {
         background: task.background,
         pid: task.pid,
         startedAt: task.startedAt,
+        notifyOutput: task.notifyOutput,
     });
 }
 
 function reportEnd(task: Task): void {
     if (task.reported) { return; }
     task.reported = true;
+    clearOutputTimer(task);
+    const output = task.output;
+    task.output = undefined;
     emit({
         kind: "end",
         no: task.no,
@@ -531,13 +647,15 @@ function reportEnd(task: Task): void {
         status: task.status,
         exitCode: task.exitCode,
         elapsedMs: elapsedMs(task),
+        notifyOutput: task.notifyOutput,
+        ...(output ? { output } : {}),
     });
 }
 
 // ---- 工具 ----
 
 /** 前台调用时「这次是哪个编号、要不要后台」的排队：execute 与 exec 之间没有别的东西插进来。 */
-const pending: Array<{ id: string; background: boolean }> = [];
+const pending: Array<{ id: string; background: boolean; notifyOutput: boolean }> = [];
 /** 哪些调用被中途转到了后台（execute 收尾时要改口）：记着那条任务、以及是用户点的还是自己撒的。 */
 const detached = new Map<string, { task: Task; by: "user" | "budget" }>();
 /** 哪些调用是一开始就放到后台的（execute 要把「空输出」换成一句说明）。 */
@@ -557,24 +675,23 @@ export default function bashBridge(pi: any): void {
                 const slot = pending.shift();
                 const id = slot ? slot.id : "";
                 const background = slot ? slot.background : false;
+                const notifyOutput = slot ? slot.notifyOutput : false;
                 const started = startTask(
                     command,
                     execCwd,
                     options.env,
                     id,
                     background,
+                    notifyOutput,
                     (chunk: Buffer) => { options.onData(chunk); }
                 );
                 const task = started.task;
-                // 一开始就放到后台：立刻返回，输出只进日志，跑完报一声
+                // 一开始就放到后台：立刻返回，输出进日志，开启通知时另报新输出
                 if (background) {
                     started.mute();
                     launched.set(id, task);
                     announce(task, true);
-                    started.onExit(() => {
-                        task.status = task.exitCode === 0 ? "done" : "failed";
-                        reportEnd(task);
-                    });
+                    started.onExit(() => { reportEnd(task); });
                     // 放到后台也照 timeout 掐（模型给了才掐）
                     const bgTimeout = Number(options.timeout);
                     if (bgTimeout > 0) {
@@ -671,12 +788,18 @@ export default function bashBridge(pi: any): void {
                     type: "boolean",
                     description: "放到后台跑：立刻返回，不挡当前这一轮。",
                 },
+                notifyOutput: {
+                    type: "boolean",
+                    default: false,
+                    description: "自动通知后台新输出（可选，默认关闭）。只在显式放后台、手动转后台或前台超过 20 秒后生效；模型忙时合并，空闲时输出通知至少隔两秒。前台输出不重复通知。",
+                },
             },
             required: ["command"],
             additionalProperties: false,
         },
         async execute(id: string, params: any, signal: any, onUpdate: any, ctx: any) {
             const background = params && params.background === true;
+            const notifyOutput = params && params.notifyOutput === true;
             const command = params && typeof params.command === "string" ? params.command : "";
             const waited = waitReason(command);
             if (waited) {
@@ -695,7 +818,7 @@ export default function bashBridge(pi: any): void {
                     details: { blocked: "detach", reason: detachedAway },
                 };
             }
-            pending.push({ id, background });
+            pending.push({ id, background, notifyOutput });
             let result: any;
             try {
                 result = await base.execute(id, params, signal, onUpdate, ctx);
@@ -711,6 +834,7 @@ export default function bashBridge(pi: any): void {
                 lines2.push("已经在后台跑了（编号 " + bgTask.no + "）。");
                 lines2.push("命令：" + bgTask.cmd);
                 lines2.push("输出写在这儿：" + bgTask.log);
+                lines2.push(outputNotice(bgTask));
                 lines2.push("不用等它：你可以接着去干别的，或者直接把这一轮说完结束。");
                 lines2.push("它跑完的结果会当成一条新消息交进来（开头是「后台命令 #" + bgTask.no + " 跑完了」）。");
                 lines2.push("别用 sleep 之类的命令干等，也别反复用 bash_tasks 查 —— 你干等的时候结果只能排在后面，等多久就白等多久。");
@@ -730,6 +854,7 @@ export default function bashBridge(pi: any): void {
                 : "这条命令撑了 " + Math.max(1, Math.round(foregroundBudgetMs() / 1000)) + " 秒还没跑完，已经转到后台接着跑了（编号 " + task.no + "）。");
             lines.push("命令：" + task.cmd);
             lines.push("输出写在这儿：" + task.log);
+            lines.push(outputNotice(task));
             lines.push("接下来不用等它：你可以接着去干别的，或者直接把这一轮说完结束。");
             lines.push("它跑完的结果会当成一条新消息交进来（开头是「后台命令 #" + task.no + " 跑完了」）。");
             lines.push("别用 sleep 之类的命令干等，也别反复用 bash_tasks 查 —— 你干等的时候结果只能排在后面，等多久就白等多久。");
@@ -787,9 +912,16 @@ export default function bashBridge(pi: any): void {
                         details: { id: no, status: task.status },
                     };
                 }
-                killTree(task.pid);
+                if (!killTree(task.pid)) {
+                    return {
+                        content: [{ type: "text", text: "#" + no + " 没能确认停止，命令可能已经退出或停止请求失败；仍按实际输出和退出结果通知，可以稍后再试。" }],
+                        details: { id: no, status: task.status, error: "stop failed" },
+                    };
+                }
                 task.status = "stopped";
-                if (task.announced) { reportEnd(task); }
+                task.ending = true;
+                clearOutputTimer(task);
+                // close 读完日志尾部再 reportEnd，未发送输出只随结尾交回一次。
                 return {
                     content: [{ type: "text", text: "#" + no + " 停掉了（连它派出来的进程一起）。" }],
                     details: { id: no, status: "stopped" },

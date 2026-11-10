@@ -29,15 +29,46 @@ const LIMITS = {
     log: 4096,
 };
 
+/** 每条命令待交回的输出最多保留这么多字符；长的留开头和末尾，原文在日志里。 */
+export const BASH_OUTPUT_MAX_CHARS = 4000;
+
+export interface BashOutputInfo {
+    text: string;
+    /** 输出被观察到的时间，不是模型收到消息的时间。 */
+    firstAt: number;
+    lastAt: number;
+    omittedChars?: number;
+}
+
+/** 合并尚未交回的输出，不随命令输出量无限增长。 */
+export function mergeBashOutput(previous: BashOutputInfo | undefined, next: BashOutputInfo): BashOutputInfo {
+    const joined = (previous?.text ?? "") + next.text;
+    let text = joined;
+    if (joined.length > BASH_OUTPUT_MAX_CHARS) {
+        let head = joined.slice(0, BASH_OUTPUT_MAX_CHARS / 2);
+        let tail = joined.slice(-BASH_OUTPUT_MAX_CHARS / 2);
+        if (/[\uD800-\uDBFF]$/.test(head)) { head = head.slice(0, -1); }
+        if (/^[\uDC00-\uDFFF]/.test(tail)) { tail = tail.slice(1); }
+        text = head + tail;
+    }
+    const omittedChars = (previous?.omittedChars ?? 0) + (next.omittedChars ?? 0) + joined.length - text.length;
+    return {
+        text,
+        firstAt: Math.min(previous?.firstAt ?? next.firstAt, next.firstAt),
+        lastAt: Math.max(previous?.lastAt ?? next.lastAt, next.lastAt),
+        ...(omittedChars > 0 ? { omittedChars } : {}),
+    };
+}
+
 /**
- * 后台任务的开始 / 结束。
+ * 后台任务的开始 / 新输出 / 结束。
  *
  * start 有两种来路：
  *   - 模型调用 bash 时带了 background：命令一开始就在后台跑（background=true）；
  *   - 前台正跑着，用户在界面上点了"放后台"，或者前台撑过 20 秒自己撤的手（background=false）。
  */
 export interface BashTaskEvent {
-    kind: "start" | "end";
+    kind: "start" | "output" | "end";
     /** 任务编号（扩展在本进程内从 1 往上排）。 */
     no: number;
     /** 是 pi 给的这次工具调用的编号（中途切后台时插件靠它对上号）。 */
@@ -58,6 +89,10 @@ export interface BashTaskEvent {
     status?: BashTaskInfo["status"];
     /** 跑了多久（毫秒）。end 才有。 */
     elapsedMs?: number;
+    /** output 是这一批新输出；end 是结束时尚未交回的输出。 */
+    output?: BashOutputInfo;
+    /** 开启通知但没有剩余输出时，不能退回重读已经通知过的日志。 */
+    notifyOutput?: boolean;
 }
 
 /** 一条后台命令在插件这边长什么样（清单、界面、「停」都用它）。 */
@@ -81,6 +116,9 @@ export interface BashTaskInfo {
     exitCode?: number | null;
     /** 跑了多久（毫秒），结束事件才有。 */
     elapsedMs?: number;
+    /** 只给通知用的输出，不存进任务清单。 */
+    output?: BashOutputInfo;
+    notifyOutput?: boolean;
 }
 
 function str(raw: unknown, limit: number): string | undefined {
@@ -98,13 +136,14 @@ function num(raw: unknown): number | undefined {
 export function normalizeBashTaskEvent(raw: unknown): BashTaskEvent | undefined {
     if (!raw || typeof raw !== "object") { return undefined; }
     const o = raw as Record<string, unknown>;
-    if (o.kind !== "start" && o.kind !== "end") { return undefined; }
+    if (o.kind !== "start" && o.kind !== "output" && o.kind !== "end") { return undefined; }
     const no = num(o.no);
     const toolCallId = str(o.toolCallId, LIMITS.id);
     const cmd = str(o.cmd, LIMITS.cmd);
     const log = str(o.log, LIMITS.log);
     if (!no || no < 1 || !toolCallId || !cmd || !log) { return undefined; }
     const ev: BashTaskEvent = { kind: o.kind, no, toolCallId, cmd, log, background: o.background === true };
+    if (typeof o.notifyOutput === "boolean") { ev.notifyOutput = o.notifyOutput; }
     const pid = num(o.pid);
     if (pid) { ev.pid = pid; }    const startedAt = num(o.startedAt);
     if (startedAt) { ev.startedAt = startedAt; }
@@ -118,6 +157,22 @@ export function normalizeBashTaskEvent(raw: unknown): BashTaskEvent | undefined 
         }
         const elapsed = num(o.elapsedMs);
         if (elapsed !== undefined) { ev.elapsedMs = elapsed; }
+    }
+    if (o.kind === "output" || o.kind === "end") {
+        const output = o.output as Record<string, unknown> | undefined;
+        if (output && typeof output.text === "string") {
+            const firstAt = num(output.firstAt);
+            const lastAt = num(output.lastAt);
+            const omittedChars = num(output.omittedChars);
+            if (output.text.length > 0 && firstAt !== undefined && lastAt !== undefined
+                && firstAt >= 0 && lastAt >= firstAt && lastAt <= 8640000000000000) {
+                ev.output = mergeBashOutput(undefined, {
+                    text: output.text, firstAt, lastAt,
+                    ...(omittedChars !== undefined && omittedChars > 0 ? { omittedChars: Math.floor(omittedChars) } : {}),
+                });
+            }
+        }
+        if (o.kind === "output" && !ev.output) { return undefined; }
     }
     return ev;
 }
@@ -177,6 +232,25 @@ function elapsedText(ms: number): string {
     return min + " 分 " + (sec % 60 < 10 ? "0" : "") + (sec % 60) + " 秒";
 }
 
+/** 输出附带观察时间，不能把晚到的旧进度说成当前状态。 */
+function outputPreview(output: BashOutputInfo): string {
+    let text = output.text;
+    if (output.omittedChars) {
+        let mid = Math.floor(text.length / 2);
+        if (/[\uD800-\uDBFF]/.test(text.charAt(mid - 1))) { mid -= 1; }
+        text = text.slice(0, mid) + `\n…中间省略 ${output.omittedChars} 个字符，完整内容在日志里…\n` + text.slice(mid);
+    }
+    return `输出观察时间：${new Date(output.firstAt).toISOString()} — ${new Date(output.lastAt).toISOString()}\n${text}`;
+}
+
+/** 同一会话的多条后台命令合在一条通知里，不逐行开新的一轮。 */
+export function buildBashOutputDelivery(tasks: BashTaskInfo[], over?: PromptOverrides): string {
+    const output = tasks.filter((task) => task.output).map((task) =>
+        `#${task.no}\n命令：${task.cmd}\n${outputPreview(task.output!)}\n日志：${task.log}`
+    ).join("\n\n");
+    return promptText(over, "bashOutputDelivery", { 输出: output });
+}
+
 /**
  * 后台命令跑到头了，交回会话的那段文字（当成一条新消息发过去，模型据此接着干）。
  * @param tail 日志最后一段（见 readBashLogTail）
@@ -189,6 +263,8 @@ export function buildBashTaskDelivery(p: {
     elapsedMs?: number;
     log: string;
     tail: string;
+    output?: BashOutputInfo;
+    notifyOutput?: boolean;
 }, over?: PromptOverrides): string {
     const used = elapsedText(p.elapsedMs ?? 0);
     const head = p.status === "done"
@@ -199,7 +275,9 @@ export function buildBashTaskDelivery(p: {
     return promptText(over, "bashDelivery", {
         标题: head,
         命令: p.cmd,
-        输出: p.tail.trim() || "（没有输出）",
+        输出: p.output ? outputPreview(p.output) : p.notifyOutput
+            ? "（没有尚未交回的新输出；完整日志仍可按需查看）"
+            : p.tail.trim() || "（没有输出）",
         日志: p.log,
         编号: String(p.no),
     });
