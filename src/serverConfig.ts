@@ -397,12 +397,18 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
             // 改过名的旧键（toolTaba → toolTask）：按新名字收下，人改过的字句不丢
             const name = currentPromptKey(rawName);
             if (!isPromptKey(name)) {
-                // /goal 那一套是以前写进去的：不报错、也不读，留着让人自己删
+                // 已删除的功能以前写进去过：不报错，也不读
                 if (!isRetiredPromptKey(rawName)) { warnings.push(`配置里有不认识的项：prompts.${rawName}`); }
                 continue;
             }
-            const text = pickPromptValue(value, `prompts.${rawName}`, warnings);
-            if (text !== undefined) { config.prompts[name] = text; }
+            let text = pickPromptValue(value, `prompts.${rawName}`, warnings);
+            if (text !== undefined) {
+                // 旧设置里这两段可能还在推荐已删除的 watch 工具，只去掉提到它的行。
+                if (name === "guardWait" || name === "guardDetach") {
+                    text = text.split("\n").filter((line) => !/\bwatch\b/.test(line)).join("\n");
+                }
+                config.prompts[name] = text;
+            }
         }
     }
 

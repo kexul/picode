@@ -27,7 +27,6 @@ export type PromptKey =
     | "toolTaskPeek"
     | "toolBash"
     | "toolBashTasks"
-    | "toolWatch"
     | "toolAsk"
     // ---- 拦下来的那两种（不跑这条命令，回一句话）----
     | "guardWait"
@@ -39,7 +38,6 @@ export type PromptKey =
     | "taskDelivery"
     // ---- 其它来回话的正文 ----
     | "bashDelivery"
-    | "watchDelivery"
     | "chatReference"
     | "title";
 
@@ -113,18 +111,6 @@ export const PROMPTS: Record<PromptKey, PromptSpec> = {
             + "带编号：看这条命令输出的最后一段；带编号再加 stop: true：把它和它派出来的进程一起停掉。"
             + "刚看过一次、它又没出新东西的时候再查，会被挡回来（它跑完会自动交回来）。",
     },
-    toolWatch: {
-        label: "「盯着看」那个 watch 工具的说明",
-        vars: [],
-        text:
-            "让一条命令在这一轮之外一直跑着：它每打出新的行，就当成一条新消息交回来（开头是「盯着看 #编号 有新动静」），"
-            + "你不用等、不用 sleep、不用反复查。"
-            + "要等一个条件（服务起来了、日志里出现某个字样、测试跑出了结果）就用这个，别在 bash 里 sleep 着等。"
-            + "命令本身必须是那个会产生输出的东西：`node app.js`、`npm test`、`node app.js 2>&1 | grep --line-buffered ERROR`；别人起的进程用 `tail -n +1 -F 日志文件`。"
-            + "别自己起一条后台命令、再拿这个去 tail 它的日志。"
-            + "match 只让匹配这个正则的行叫你（日志里照样全留着）；一直有输出的服务一定要给 match，不然每一行都会叫你一次。"
-            + "不用了要停掉：bash_tasks <编号> stop。不给 timeout 就一直盯到命令自己退出或者被停。",
-    },
     toolAsk: {
         label: "ask_choice（问用户选择题）工具的说明",
         vars: [],
@@ -145,7 +131,6 @@ export const PROMPTS: Record<PromptKey, PromptSpec> = {
             "",
             "要怎么办：",
             "- 只是在等后台那条命令跑完：把这一截等待去掉，剩下的照原样重发一遍；要是这条命令的全部意义就是等，那这一轮直接说完结束就行 —— 它跑完会当成一条新消息交回来（开头是「后台命令 #编号 跑完了」）。",
-            "- 在等一个条件（服务起来、日志里出现某个字样）：用 watch 让它盯着那条命令，打出新行会交回来，比在里干等强。",
             "- 真必须歇一会儿（比如等一个服务起来）：不到十秒的可以过；更久就别在命令里等，先把它放到后台跑。",
         ].join("\n"),
     },
@@ -156,7 +141,6 @@ export const PROMPTS: Record<PromptKey, PromptSpec> = {
             "这条命令没跑：它把活丢到背影里就完事了（{{原因}}），跑了什么、什么输出、退没退出，谁都拿不回来。",
             "",
             "要跑一条长的（服务、看日志、跑测试）：给 bash 加 background: true，让它整条放到后台 —— 它会出现后台任务里，输出写进日志，跑完自动把结果交回来，中途也能用 bash_tasks 看、用 bash_tasks stop 停。",
-            "要等它的某一句输出（或者一个服务起来）：用 watch 把那条命令本身盯着，打出新行会交回来。",
             "只想让这半截立刻结束、接着做别的：拆成两条命令发。",
         ].join("\n"),
     },
@@ -214,20 +198,6 @@ export const PROMPTS: Record<PromptKey, PromptSpec> = {
             "（完整输出在 {{日志}}；要看别的片段用 bash_tasks {{编号}}。）",
         ].join("\n"),
     },
-    watchDelivery: {
-        label: "「盯着看」那条打出新行、交回会话那段",
-        vars: ["编号", "命令", "输出", "日志", "尾巴"],
-        text: [
-            "【盯着看 #{{编号}} 有新动静】",
-            "命令：{{命令}}",
-            "",
-            "新的行：",
-            "{{输出}}",
-            "",
-            "{{尾巴}}",
-            "（全部输出在 {{日志}}。不要为了再看一眼去反复查；要看全就用 bash_tasks {{编号}} 一次。）",
-        ].join("\n"),
-    },
     chatReference: {
         label: "# 引用另一个会话时发给模型的那段（只给记录文件路径）",
         vars: ["会话"],
@@ -265,11 +235,12 @@ export function isPromptKey(name: string): name is PromptKey {
 }
 
 /**
- * 以前有过、现在已经没有的项（`/goal` 那一套）。设置文件里还留着这些键是正常的：
+ * 以前有过、现在已经没有的项。设置文件里还留着这些键是正常的：
  * 不要把它当成"写错了名字"报出来，悄悄地不管它就行。
  */
 const RETIRED_PROMPT_KEYS = [
     "goalNegotiate", "goalStart", "goalResume", "goalJudge", "goalFeedback", "toolUpdateGoal",
+    "toolWatch", "watchDelivery",
 ];
 
 export function isRetiredPromptKey(name: string): boolean {
