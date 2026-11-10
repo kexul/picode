@@ -76,7 +76,8 @@ const CLEAR_NOTICE_COMMAND = ${JSON.stringify(BASH_CLEAR_NOTICE_COMMAND)};
 const mergeOutput = (${mergeBashOutput.toString()});
 const formatNotice = (${createBashNoticeFormatter.toString()})(
     ${JSON.stringify(promptText(over, "bashOutputDelivery"))},
-    ${JSON.stringify(promptText(over, "bashDelivery"))}
+    ${JSON.stringify(promptText(over, "bashDelivery"))},
+    ${JSON.stringify(promptText(over, "bashBeatDelivery"))}
 );
 
 /** bash 工具说明里插件加的那一段（人可以在 config.json 的 prompts.toolBash 里改）。 */
@@ -97,6 +98,7 @@ const NO_WAIT_NOTE = "放到后台以后不用等结果：你可以接着去干�
     + "刚看过一次、它又没出新东西的时候再查，也会被挡回来。"
     + "前台命令撑过 20 秒还没跑完会自己转到后台（不用你管，也不用再发一遍），跑完照常交回来。"
     + "bash 的 notifyOutput 默认是 false：后台只在跑完时通知，中途要看输出用 bash_tasks；"
+    + "这种没开通知的后台命令每 10 分钟会主动汇报一次状态（还在跑、多久没有新输出、日志最后一段），不用你自己定时去查；"
     + "设成 true 后，命令转到后台才会自动通知新输出，前台输出仍只走正常工具结果；"
     + "模型忙时合并，空闲时同一会话的输出通知至少隔两秒，没有新输出就不通知，结束时剩余输出和结果一起交回。";
 
@@ -352,6 +354,12 @@ interface Task {
     notifyOutput: boolean;
     /** 停止或进程退出后不再单发输出，剩余输出随结束通知交回。 */
     ending: boolean;
+    /** 最近一次读到新输出的时刻；一直没输出过就没有。汇报状态时用它算“多久没动静”。 */
+    lastOutputAt?: number;
+    /** 该汇报状态了（没开输出通知的任务，每 10 分钟一次）。 */
+    beat: boolean;
+    /** 下次汇报状态的计时器。 */
+    beatTimer?: ReturnType<typeof setTimeout>;
     output?: TaskOutput;
     /** 真正结束的时刻，交回通知的等待时间不算命令耗时。 */
     endedAt?: number;
@@ -364,6 +372,9 @@ interface Task {
 const tasks = new Map<number, Task>();
 let seq = 0;
 
+/** 没开输出通知的后台命令，每隔这么久主动汇报一次状态（不然卡住了看不出来）。 */
+const BEAT_MS = 10 * 60 * 1000;
+
 /** 只攒转到后台后的新输出，模型消费通知前一直保留；原文仍在日志里。 */
 function collectOutput(task: Task, text: string): void {
     if (!text || !task.notifyOutput || !task.announced || task.reported || tasks.get(task.no) !== task) { return; }
@@ -375,7 +386,7 @@ function collectOutput(task: Task, text: string): void {
 function outputNotice(task: Task): string {
     return task.notifyOutput
         ? "notifyOutput 已开启：转到后台后的新输出会自动交回本会话，模型忙时先合并，不用反复查。"
-        : "notifyOutput 默认关闭：中途输出不会自动通知，要看输出用 bash_tasks；下次设 notifyOutput: true 可开启。";
+        : "notifyOutput 默认关闭：中途输出不会自动交回，要看输出用 bash_tasks；每 10 分钟会主动汇报一次状态（还在跑、多久没有新输出、日志最后一段），下次设 notifyOutput: true 可以换成有新输出就交回。";
 }
 
 function elapsedMs(task: Task): number {
@@ -498,6 +509,7 @@ function startTask(
         endNotified: false,
         notifyOutput,
         ending: false,
+        beat: false,
     };
     tasks.set(no, task);
     if (shell.viaStdin && child.stdin) {
@@ -520,6 +532,7 @@ function startTask(
     const stderrDecoder = new StringDecoder("utf8");
     const onData = (chunk: Buffer, decoder: StringDecoder) => {
         writeLog(chunk);
+        if (chunk.length) { task.lastOutputAt = Date.now(); }
         // 两路分别解码，前台也喂给 decoder，但不攒前台已交给 pi 的输出。
         const text = task.notifyOutput ? decoder.write(chunk) : "";
         if (muted) { collectOutput(task, text); return; }
@@ -600,11 +613,14 @@ function announce(task: Task, background: boolean): void {
         startedAt: task.startedAt,
         notifyOutput: task.notifyOutput,
     });
+    armBeat(task);
 }
 
 function reportEnd(task: Task): void {
     if (task.reported || tasks.get(task.no) !== task) { return; }
     task.reported = true;
+    task.beat = false;
+    clearBeat(task);
     if (!task.notifyOutput) { task.endTail = readTail(task.log, OUTPUT_MAX_CHARS); }
     emit({
         kind: "end",
@@ -650,6 +666,7 @@ function clearNoticeTimer(): void {
 
 function resetNotices(): void {
     clearNoticeTimer();
+    for (const task of tasks.values()) { clearBeat(task); }
     pendingNotice = undefined;
     lastNoticeAt = 0;
     currentCtx = undefined;
@@ -664,7 +681,8 @@ function resetNotices(): void {
 /** reported 才算真正结束；kill 已成功但 close 还没收场时，继续等尾部。 */
 function noticeTasks(): Task[] {
     return Array.from(tasks.values()).filter((task) => task.announced && !task.endNotified
-        && (task.reported || (task.notifyOutput && task.output && !task.ending)))
+        && (task.reported || (task.notifyOutput && task.output && !task.ending)
+            || (task.beat && task.status === "running")))
         .sort((a, b) => Number(b.reported) - Number(a.reported) || a.no - b.no);
 }
 
@@ -674,6 +692,27 @@ function addPendingTasks(): void {
         if (pendingNotice.tasks.size >= 4) { break; }
         pendingNotice.tasks.add(task.no);
     }
+}
+
+function clearBeat(task: Task): void {
+    if (task.beatTimer === undefined) { return; }
+    clearTimeout(task.beatTimer);
+    task.beatTimer = undefined;
+}
+
+/** 没开输出通知的任务：从现在起每 BEAT_MS 醒一次，该汇报就交给通知那条路。 */
+function armBeat(task: Task): void {
+    if (task.notifyOutput || task.beatTimer !== undefined || task.reported || task.status !== "running"
+        || tasks.get(task.no) !== task) { return; }
+    const timer = setTimeout(() => {
+        task.beatTimer = undefined;
+        if (task.reported || task.status !== "running" || tasks.get(task.no) !== task) { return; }
+        task.beat = true;
+        scheduleNotice();
+        armBeat(task);
+    }, BEAT_MS);
+    timer.unref?.();
+    task.beatTimer = timer;
 }
 
 /** 同一实例只有一个计时器；完成结果可以把原本等待输出的计时器提前。 */
@@ -749,6 +788,7 @@ pi.registerCommand(CLEAR_NOTICE_COMMAND, {
                 if (!task) { continue; }
                 task.output = undefined;
                 task.endTail = undefined;
+                task.beat = false;
                 if (task.reported) { task.endNotified = true; }
             }
         }
@@ -789,6 +829,7 @@ pi.on("message_end", (event: any) => {
         .filter((task): task is Task => !!task && !task.endNotified);
     const completed = selected.filter((task) => task.reported);
     const running = selected.filter((task) => !task.reported && task.output);
+    const beating = selected.filter((task) => !task.reported && task.beat);
     const content = [
         ...completed.map((task) => formatNotice.completion({
             ...task,
@@ -797,6 +838,13 @@ pi.on("message_end", (event: any) => {
             tail: task.endTail ?? "",
         })),
         ...(running.length ? [formatNotice.progress(running.map((task) => ({ ...task, toolCallId: task.id })))] : []),
+        ...beating.map((task) => formatNotice.beat({
+            ...task,
+            toolCallId: task.id,
+            elapsedMs: elapsedMs(task),
+            silentMs: task.lastOutputAt ? Date.now() - task.lastOutputAt : elapsedMs(task),
+            tail: readTail(task.log, OUTPUT_MAX_CHARS),
+        })),
     ].join("\n\n");
     const summary = selected.map((task) => ({
         no: task.no, toolCallId: task.id,
@@ -807,6 +855,7 @@ pi.on("message_end", (event: any) => {
     for (const task of selected) {
         task.output = undefined;
         task.endTail = undefined;
+        task.beat = false;
         if (task.reported) { task.endNotified = true; }
     }
     pendingNotice = undefined;

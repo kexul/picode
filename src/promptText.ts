@@ -39,6 +39,7 @@ export type PromptKey =
     // ---- 其它来回话的正文 ----
     | "bashDelivery"
     | "bashOutputDelivery"
+    | "bashBeatDelivery"
     | "chatReference"
     | "title";
 
@@ -103,7 +104,8 @@ export const PROMPTS: Record<PromptKey, PromptSpec> = {
         text:
             "也可以把命令放到后台跑（background: true）：工具立刻返回一个任务编号，"
             + "命令在后台接着跑，跑完会自动把结果告诉你；中途要看输出用 bash_tasks <编号>。"
-            + "需要自动收到新输出时加 notifyOutput: true：只在转到后台后通知，模型忙时合并，空闲时限频交回，不用反复查询。",
+            + "需要自动收到新输出时加 notifyOutput: true：只在转到后台后通知，模型忙时合并，空闲时限频交回，不用反复查询。"
+            + "不加（默认）也不会看不到：这种任务每 10 分钟主动汇报一次状态（还在跑、多久没有新输出、日志最后一段）。",
     },
     toolBashTasks: {
         label: "bash_tasks 工具的说明",
@@ -209,6 +211,22 @@ export const PROMPTS: Record<PromptKey, PromptSpec> = {
             "输出来自下面写明的观察时间，可能已经过去一会儿，不代表命令现在的状态。",
             "{{输出}}",
             "根据输出处理需要做的事，其余工作可以继续；没有其他事情就结束这一轮，后续输出和完成结果会自动交回。不必干等或反复查进度。",
+        ].join("\n"),
+    },
+    bashBeatDelivery: {
+        label: "后台命令每 10 分钟汇报一次状态",
+        vars: ["标题", "命令", "输出", "日志", "编号"],
+        text: [
+            "{{标题}}",
+            "这是每 10 分钟一条的定时汇报，不是用户的新要求或确认。",
+            "命令：{{命令}}",
+            "",
+            "最后一段输出：",
+            "{{输出}}",
+            "",
+            "（完整输出在 {{日志}}；要看别的片段用 bash_tasks {{编号}}。"
+                + "真像卡住了就 bash_tasks {{编号}} stop: true 停掉，或者先跟用户说一声；"
+                + "还在正常干活就什么也不用做，跑完会自动把结果交回来。）",
         ].join("\n"),
     },
     chatReference: {

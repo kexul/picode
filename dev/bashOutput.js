@@ -504,6 +504,54 @@ async function checkSdk() {
 }
 
 
+/**
+ * 没开输出通知的后台命令：每 10 分钟主动汇报一次状态，跑完就停。
+ *
+ * 卡住的任务本来一声不吐，只有靠这个才能看出来（“多久没有新输出”比“还在跑”有用得多）。
+ */
+async function checkBeats() {
+    const f = fixture();
+    const job = await f.start({ notifyOutput: false });
+    job.output('FIRST-LINE\n');
+    f.advance(9 * 60 * 1000);
+    assert.equal(f.notices.length, 0, '不满 10 分钟不汇报');
+    job.output('LATEST-LINE\n');
+    f.advance(60 * 1000 + 1000);
+    assert.equal(f.notices.length, 1, '到了 10 分钟汇报一次');
+    const first = await f.consume();
+    assert(first.content.includes('还在跑') && first.content.includes('没有新输出'), '要说清还在跑、多久没动静');
+    assert(/1 分 0\d 秒没有新输出/.test(first.content), '静默时长从最后一次新输出算：' + first.content);
+    assert(first.content.includes('LATEST-LINE') && first.content.includes('FIRST-LINE'), '要带日志最后一段');
+    assert(first.content.includes('bash_tasks 1'), '要给出看全量、停掉的编号');
+    assert(!first.content.includes('输出观察时间'), '不是交回新输出那一条');
+
+    // 模型正忙：先排着，等这一轮落地再交（跟别的通知一条路）
+    f.advance(10 * 60 * 1000);
+    assert.equal(f.notices.length, 1, '忙时不另开消息');
+    await f.settled();
+    f.advance(1000);
+    assert.equal(f.notices.length, 2, '空闲了补交一条');
+    const queued = await f.consume();
+    assert(queued.content.includes('已跑 20 分'), '汇报的是到那一刻的真实用时：' + queued.content);
+
+    job.finish();
+    f.advance(1000);
+    const done = await f.consume();
+    assert(done.content.includes('跑完了'), '结束时那条还是结束通知');
+    const before = f.notices.length;
+    f.advance(60 * 60 * 1000);
+    assert.equal(f.notices.length, before, '跑完了不再汇报状态');
+    await f.dispose();
+
+    // 开了输出通知的任务照旧：有新输出才交回，不另发状态
+    const plain = fixture();
+    const watched = await plain.start();
+    plain.advance(60 * 60 * 1000);
+    assert.equal(plain.notices.length, 0, 'notifyOutput 开着时不另发状态');
+    await plain.dispose();
+    console.log('通过：没开输出通知的后台命令每 10 分钟汇报一次（含静默时长与日志尾巴），忙时排队，跑完就停。');
+}
+
 (async () => {
-    await checkQueued(); checkDisplay(); await checkSdk();
+    await checkQueued(); checkDisplay(); await checkBeats(); await checkSdk();
 })().catch(error => { console.error(error); process.exitCode = 1; });

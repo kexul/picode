@@ -201,7 +201,7 @@ export function bashNoticeMessageId(raw: any): string {
  * 生成扩展与测试共用的消息拼接。函数完全自包含，生成脚本时内嵌 toString()，
  * 不再在 pi 进程与后端各维护一份输出通知格式。
  */
-export function createBashNoticeFormatter(outputTemplate: string, endTemplate: string) {
+export function createBashNoticeFormatter(outputTemplate: string, endTemplate: string, beatTemplate: string) {
     function fill(template: string, vars: Record<string, string>): string {
         return template.replace(/\{\{\s*([^{}\s]+)\s*\}\}/g, (whole, name: string) => vars[name] ?? whole);
     }
@@ -245,6 +245,18 @@ export function createBashNoticeFormatter(outputTemplate: string, endTemplate: s
                 输出: task.output ? preview(task.output) : task.notifyOutput
                     ? "（没有尚未交回的新输出；完整日志仍可按需查看）"
                     : task.tail?.trim() || "（没有输出）",
+                日志: clip(task.log, 4096),
+                编号: String(task.no),
+            });
+        },
+        /** 没开输出通知的任务：跑到第 10、20、30… 分钟时的那一条状态汇报。 */
+        beat(task: BashTaskInfo & { tail?: string; silentMs?: number }): string {
+            const head = "【后台命令 #" + task.no + " 还在跑（已跑 " + elapsed(task.elapsedMs ?? 0)
+                + "，" + elapsed(task.silentMs ?? 0) + "没有新输出）】";
+            return fill(beatTemplate, {
+                标题: head,
+                命令: clip(task.cmd, 2000),
+                输出: task.tail?.trim() || "（到现在还没有输出）",
                 日志: clip(task.log, 4096),
                 编号: String(task.no),
             });
