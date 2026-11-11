@@ -738,7 +738,15 @@
     caseSensitivePaths = opts.caseSensitivePaths === true;
   }
 
+  // 输入法正在拼字、字还没上屏时按回车/上下键，是在挑候选字，不是在「确认」。这一下得留给输入法：
+  // 不认、也不拦（preventDefault 会把候选字卡在框里）。Safari 上 isComposing 会提前变回 false，
+  // 那时 keyCode 还是 229，所以两个一起看。
+  function imeBusy(e) {
+    return e.isComposing === true || e.keyCode === 229;
+  }
+
   function isSendKey(e) {
+    if (imeBusy(e)) { return false; }
     if (e.key !== "Enter") { return false; }
     switch (sendKeyCombo) {
       case "shift+enter": return e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey;
@@ -1251,6 +1259,7 @@
       input.addEventListener(type, (e) => { e.stopPropagation(); });
     });
     input.addEventListener("keydown", (e) => {
+      if (imeBusy(e)) { return; }
       if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); finishRename(sessionId, true); }
       else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finishRename(sessionId, false); }
     });
@@ -6587,6 +6596,7 @@
       input.setAttribute("enterkeyhint", "enter");
       // 回车 = 交答案（不是"发送"）：拦住别往上冒到输入框那层
       input.addEventListener("keydown", (e) => {
+        if (imeBusy(e)) { return; }
         if (e.key !== "Enter") { return; }
         e.preventDefault();
         e.stopPropagation();
@@ -6640,6 +6650,7 @@
         // 按下去只是把光标挪到下一个能输入的地方（就是下面那个大输入框），答案交不出去。
         input.setAttribute("enterkeyhint", "enter");
         input.addEventListener("keydown", (e) => {
+          if (imeBusy(e)) { return; }
           if (e.key !== "Enter") { return; }
           e.preventDefault();
           e.stopPropagation();
@@ -9701,6 +9712,7 @@
     });
     // Esc 不在这儿接：那条键由 document 上那个监听统一收（见上面「文件搜索那块浮层也一样」）
     fileSearch.input.addEventListener("keydown", (e) => {
+      if (imeBusy(e)) { return; }
       if (e.key === "ArrowDown") { e.preventDefault(); moveFileSearchSel(1); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); moveFileSearchSel(-1); return; }
       if (e.key === "Enter") { e.preventDefault(); chooseFileSearchItem(fileSearch.sel); }
@@ -10624,6 +10636,7 @@
     };
     let sent = false;
     input.addEventListener("keydown", (e) => {
+      if (imeBusy(e)) { return; }
       if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); dismiss(); return; }
       if (e.key !== "Enter" || sent) { return; }
       e.preventDefault(); e.stopPropagation();
@@ -11675,6 +11688,8 @@
   });
 
   inputEl.addEventListener("keydown", (e) => {
+    // 拼字中（回车选字、上下挑候选）：这一下归输入法，别当发送/选菜单
+    if (imeBusy(e)) { return; }
     if (!fileMenuEl.classList.contains("hidden")) {
       if (slashOpen) {
         if (e.key === "ArrowDown") { e.preventDefault(); moveSlashSel(1); return; }
@@ -13639,6 +13654,7 @@
     // 在设置里打字就是打字：别让这些键冒出去触发“发送”“切会话”“收起浮层”那些
     input.addEventListener("keydown", (e) => {
       e.stopPropagation();
+      if (imeBusy(e)) { return; }
       if (e.key === "Enter") { e.preventDefault(); input.blur(); }
       else if (e.key === "Escape") { e.preventDefault(); input.value = it.value || ""; input.blur(); }
     });
@@ -13679,6 +13695,7 @@
     if (it.unit) { const unit = document.createElement("span"); unit.className = "vo-number-unit"; unit.textContent = it.unit; ctrl.appendChild(unit); }
     input.addEventListener("keydown", (e) => {
       e.stopPropagation();
+      if (imeBusy(e)) { return; }
       if (e.key === "Enter") { e.preventDefault(); input.blur(); }
       else if (e.key === "Escape") { e.preventDefault(); input.value = String(shown); input.blur(); }
     });
