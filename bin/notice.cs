@@ -60,6 +60,19 @@ class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
+        // 跟后端说话一律走 UTF-8，自己包一层管道：这支小程序没有控制台（winexe），
+        // Console.In / Console.Out 用的是系统代码页（中文 Windows 上是 GB2312），
+        // 而后端两头都是 UTF-8。拿 GB2312 按双字节切 UTF-8 的字节，末尾落单的那个会变成问号，
+        // 卡片标识里的中文台名就这么坏掉 —— 后端认不出是哪一张，人点了它当没这回事，还一声不响。
+        //（实测：「家里」六个字节凑成整对、递得回去，所以一直没露馅；
+        //  「93服务器」是「93」加三个汉字共十一个字节（奇数），最后一个字节被吞，坏。
+        //  另外 Console.InputEncoding = ... 在这支程序里会抛“句柄无效”，设不了，只能自己包。）
+        // UTF8Encoding(false)：不写 BOM（管道第一行带 BOM 会把第一个字段弄脏）。
+        var utf8 = new UTF8Encoding(false);
+        Hub.In = new StreamReader(Console.OpenStandardInput(), utf8);
+        Hub.Out = new StreamWriter(Console.OpenStandardOutput(), utf8);
+        Hub.Out.AutoFlush = true;
+
         // 后端起它的时候标准输入是根管道，读到的每一行就是一条命令。
         var pump = new Pump();
         var context = new ApplicationContext();
@@ -68,7 +81,7 @@ class Program
             try
             {
                 string line;
-                while ((line = Console.In.ReadLine()) != null)
+                while ((line = Hub.In.ReadLine()) != null)
                 {
                     var copy = line;
                     pump.Post(delegate { Hub.Command(copy); });
@@ -110,6 +123,10 @@ sealed class Pump : Control
 /// <summary>卡片那一摞：谁进来了、谁走了、各摆在哪。</summary>
 static class Hub
 {
+    /// <summary>跟后端说话那两条管道（UTF-8；由 Program.Main 打开，为什么不用 Console 见那边）。</summary>
+    public static StreamReader In;
+    public static StreamWriter Out;
+
     private const int MaxCards = 3;
     private const int Gap = 8;
     private const int Edge = 12;
@@ -132,7 +149,7 @@ static class Hub
         if (parts[0] == "raise")
         {
             var result = parts.Length > 1 ? Raiser.BringToFront(Decode(parts[1])) : "miss";
-            Console.Out.WriteLine("raised\t" + result);
+            Out.WriteLine("raised\t" + result);
             return;
         }
         if (parts[0] == "closeall") { CloseAll(); }
@@ -172,8 +189,7 @@ static class Hub
     {
         try
         {
-            Console.Out.WriteLine("click\t" + key);
-            Console.Out.Flush();
+            Out.WriteLine("click\t" + key);
         }
         catch { /* 后端不在了：点了也没处说 */ }
         CloseKey(key);
@@ -200,8 +216,7 @@ static class Hub
     {
         try
         {
-            Console.Out.WriteLine("closed\t" + key);
-            Console.Out.Flush();
+            Out.WriteLine("closed\t" + key);
         }
         catch { /* 后端不在了：也不影响什么 */ }
     }
