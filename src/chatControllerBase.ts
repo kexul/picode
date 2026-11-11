@@ -61,7 +61,6 @@ import { buildRunRecord, closedRunState, tabaRunsDir, writeRunRecord, type TabaR
 import { noteChildSession } from "./childSessions";
 import {
     AUTO_CONTINUE_TEXT,
-    MAX_AUTO_ROUNDS,
     autoAskPicks,
     autoIndicatorTitle,
     buildAutoJudgePrompt,
@@ -948,7 +947,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     //  把这一轮最后那条回复交给它，问「还要不要接着干」。说继续就发一句「继续」；
     //  说不继续就把开关关掉。
     //
-    //  只有一条自己停的条件：轮数到了 MAX_AUTO_ROUNDS（防一个永远说"还差一点"的会话烧钱）。
+    //  插件这边不设轮数上限（以前到 30 轮会自己停）：只有判官说不用继续、或者人再点一下那颗按钮才停。
     //  判官起不来、或者答不出个所以然，一律当"继续" —— 这是个无情的继续机器：
     //  宁可多跑一轮，也不让人回来手动打一句「继续」。
     //
@@ -1014,7 +1013,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         });
     }
 
-    /** 关掉开关（再点一下那颗按钮，以及判官说不用继续、轮数到顶）。盘上那一份也一并抹掉。 */
+    /** 关掉开关（再点一下那颗按钮，以及判官说不用继续）。盘上那一份也一并抹掉。 */
     protected autoOff(rt: SessionRuntime, reason?: string): void {
         this.autoCancelJudge(rt.id);
         this.autos.delete(rt.id);
@@ -1080,10 +1079,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         // 同一个会话就撞在一处了。
         if (rt.hasRunningBashTasks()) { return; }
         if (this.taba.hasRunningChildren(info.panelId)) { return; }
-        if (auto.rounds >= MAX_AUTO_ROUNDS) {
-            this.autoOff(rt, `连着跑了 ${auto.rounds} 轮，先停下（要接着跑就再点一下那颗按钮）。`);
-            return;
-        }
         void this.autoSpawnJudge(info.panelId, auto, info.lastReplyText ?? "");
     }
 

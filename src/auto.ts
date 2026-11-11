@@ -41,9 +41,6 @@ export function parseAutoCommand(text: string): AutoCommand | null {
     return /^\/auto(?:[ \t]|$)/i.test(text) ? { kind: "silent" } : null;
 }
 
-/** 一路都答不出个所以然时最多连多少轮：防一个永远说"还差一点"的会话把钱烧光。 */
-export const MAX_AUTO_ROUNDS = 30;
-
 /** 判官说接着干时，发给主会话的那句话。 */
 export const AUTO_CONTINUE_TEXT = "继续";
 
