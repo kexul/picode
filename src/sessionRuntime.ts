@@ -814,6 +814,10 @@ export class SessionRuntime {
             this.statusModelId = model.id;
             this.statusProvider = model.provider;
             this.post({ type: "modelChanged", modelId: model.id, provider: model.provider });
+            // 模型到账也会改变阶段：刚起进程时先算过一次（那时还没模型，是 nomodel），
+            // 这条 get_state 回来才拿到模型。不重算的话界面就一直停在“选模型”，
+            // 直到下一件别的事顺带重推一次（等它等不到，输入框就一直是那个样子）。
+            this.postPhase();
         }
         const thinkingLevel = resp?.data?.thinkingLevel;
         if (thinkingLevel) {
