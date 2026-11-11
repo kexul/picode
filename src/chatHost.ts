@@ -49,7 +49,7 @@ import { uniqueNameParts, composeName, type NameParts } from "./names";
 import { captureDesktopScreenshot } from "./desktopScreenshot";
 import { DesktopLive } from "./desktopLive";
 import { DesktopNotice } from "./desktopNotice";
-import { activatePageByTitle } from "./browserJump";
+import { activatePageByTitle, browserDebugPort } from "./browserJump";
 import { describeRestart } from "./serverRestart";
 import type { SessionRuntime } from "./sessionRuntime";
 import type { SessionAttention } from "./sessionPhase";
@@ -894,9 +894,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      *       只认得到独立窗口（`--app=` 开的、「安装成应用」装出来的），或者页面正是活动的那张标签页。
      * 两层都不中就是找不到（页面没开着、只在插件的对话面板里开着、在别的虚拟桌面上），
      * 那就什么也不做 —— 切会话那一下照旧已经发生了。
+     *
+     * “什么也不做”是看不见的：人点了卡片只会觉得“没反应”。所以每一步没中都写一行日志
+     * （第二层的结果由小程序的 raised 那条报回来，见 desktopNotice 的 onRaised）：
+     * 下次再看“点了卡片页面没反应”，日志里就能看出是卡在哪一层、为什么。
      */
     private async bringPageToFront(title: string): Promise<void> {
         if (await activatePageByTitle(title)) { return; }
+        this.log(`[提醒] 浏览器调试端口 ${browserDebugPort()} 上没有「${title}」这张页面（浏览器没带 --remote-debugging-port 起？），改按窗口标题找`);
         this.notice.raise(title);
     }
 

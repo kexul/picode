@@ -30,6 +30,10 @@
  *     closeall                                    全收走
  *   它写出去：
  *     click<TAB>标识                              人点了那一张（后端据此叫开着的网页切过去）
+ *     raised<TAB>ok|front|miss|error               上一条 raise 办成了没有：
+ *                                                 ok = 还原/提前面办好了；front = 它本来就在最前面，不用动；
+ *                                                 miss = 按标题一个窗口都没对得上；error = 试了但出错
+ *                                                 （后端拿它写日志：点了卡片页面没反应时好查是怎么没反应的）
  *
  * 用法：notice.exe < 管道
  */
@@ -127,7 +131,8 @@ static class Hub
         }
         if (parts[0] == "raise")
         {
-            if (parts.Length > 1) { Raiser.BringToFront(Decode(parts[1])); }
+            var result = parts.Length > 1 ? Raiser.BringToFront(Decode(parts[1])) : "miss";
+            Console.Out.WriteLine("raised\t" + result);
             return;
         }
         if (parts[0] == "closeall") { CloseAll(); }
@@ -736,20 +741,26 @@ static class Raiser
     [DllImport("user32.dll")]
     private static extern bool FlashWindowEx(ref FlashInfo info);
 
-    /// <summary>把标题对得上的那个窗口还原并提到前面。找不到、或者它已经在最前面，就什么也不做。</summary>
-    public static void BringToFront(string title)
+    /// <summary>
+    /// 把标题对得上的那个窗口还原并提到前面。找不到、或者它已经在最前面，就什么也不做。
+    /// </summary>
+    /// <returns>办成什么样，后端拿它写日志（见文件头的协议说明）：ok / front / miss / error。</returns>
+    public static string BringToFront(string title)
     {
-        if (string.IsNullOrEmpty(title)) { return; }
+        if (string.IsNullOrEmpty(title)) { return "miss"; }
         try
         {
             var handle = Find(title);
-            if (handle == IntPtr.Zero || handle == GetForegroundWindow()) { return; }
+            if (handle == IntPtr.Zero) { return "miss"; }
+            if (handle == GetForegroundWindow()) { return "front"; }
             // 最小化了先还原；没最小化时不碰它的大小（拿 SW_RESTORE 会把最大化的窗口缩回去），只提前面
             if (IsIconic(handle)) { ShowWindow(handle, SW_RESTORE); }
             SetForegroundWindow(handle);
             if (GetForegroundWindow() != handle) { Flash(handle); }
+            return "ok";
         }
         catch { /* 提不起来就算了：那张卡片已经收了，会话也切过去了 */ }
+        return "error";
     }
 
     /// <summary>按标题找窗口：正好相等，或者以「标题 + " - "」开头（浏览器名字跟在后面那种）。拿最上面那个。</summary>

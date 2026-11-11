@@ -116,6 +116,8 @@ export class DesktopNotice {
     private dead = false;
     /** 标准输出攒到这儿，一行一行拆（一段数据里可能是半行、也可能好几行）。 */
     private rest = "";
+    /** 上一次 raise 那个标题：小程序回报结果时不带标题，靠这个对上是哪一扇窗口（见 onRaised）。 */
+    private raiseTitle = "";
     /**
      * 屏幕上现在有哪几张：真事实在那支小程序里（它自己会因点叉、三张挤掉最老而收卡），
      * 这里存一份镜像 —— 好让后端知道该不该写 close（没有那张还去写，会把已经退了的
@@ -176,12 +178,19 @@ export class DesktopNotice {
      * **找不到就什么也不做**（也不新开浏览器），这几种都找不到：页面没开着、
      * 页面只停在普通浏览器窗口的背景 tab 里（那种窗口的标题跟着活动的那张贴走，提不起来也认不出来）、
      * 页面只在插件的对话面板里开着。别台机器推来的那张卡片也一样：本机没有那个页面。
+     * 找不到（或者小程序没在跑）都写一行日志：人在屏幕上看到的是“点了没反应”，日志里得看得出为什么
+     * （结果由小程序的 raised 那条报回来，见 onRaised）。
      *
      * 没弹过卡片就不起小程序（那会儿屏幕上本来也没东西要看）。
      */
     public raise(title: string): void {
         if (!title) { return; }
-        this.write(["raise", base64(title)].join("\t"), false);
+        this.raiseTitle = title;
+        if (!this.write(["raise", base64(title)].join("\t"), false)) {
+            // 小程序没在跑（这个后端没见过一条提醒，或者它起不来）：这一步就没人办了，
+            // 写一行日志，不然人点完卡片看到的就是“什么也没发生”
+            this.options.log(`[提醒] 提不到前面：这张卡片的小程序没在跑，按窗口标题找不到「${title}」`);
+        }
     }
 
     /** 屏幕上现在有哪几张（调试与验证用；键就是 show 时的那个）。 */
@@ -196,14 +205,17 @@ export class DesktopNotice {
         try { child.stdin?.end(); } catch { /* 已经没了 */ }
     }
 
-    /** 写一行过去。@param spawn 没起来时要不要现在把它起起来（只有 show 要）。 */
-    private write(line: string, spawn: boolean): void {
+    /** 写一行过去。@param spawn 没起来时要不要现在把它起起来（只有 show 要）。
+     *  @returns 写进去了没有（小程序没起来、已经没了，都给 undefined，调用方据此报一声） */
+    private write(line: string, spawn: boolean): ChildProcess | undefined {
         const child = spawn ? this.ensure() : this.child;
-        if (!child) { return; }
+        if (!child) { return undefined; }
         try {
             child.stdin?.write(line + "\n");
+            return child;
         } catch (err: any) {
             this.options.log(`[提醒] 那张卡片没写进去：${err?.message ?? String(err)}`);
+            return undefined;
         }
     }
 
@@ -258,6 +270,7 @@ export class DesktopNotice {
      * 收它说的话：一行一条。
      *   click\t<标识>    人点了那张卡片（后端据此叫开着的网页切过去）
      *   closed\t<标识>   那张自己没了（点了右上角那颗叉、或者三张挤掉最老）—— 后端那份镜像跟着删
+     *   raised\t<结果>   上一条 raise 办成了没有（ok / front / miss / error，见 bin/notice.cs）
      */
     private read(chunk: Buffer): void {
         this.rest += chunk.toString("utf8");
@@ -269,7 +282,22 @@ export class DesktopNotice {
             const parts = line.split("\t");
             if (parts[0] === "click" && parts[1]) { this.options.onClick(parts[1]); }
             if (parts[0] === "closed" && parts[1]) { this.shown.delete(parts[1]); }
+            if (parts[0] === "raised") { this.onRaised(parts[1] ?? ""); }
         }
+    }
+
+    /**
+     * “把窗口提到前面”那一步办成什么样了：没办成就写一行日志。
+     *
+     * 人点了卡片、页面的会话也切过去了，可要是这一扇窗口没找到，看着就是“点了没反应”。
+     * 以前这一步是静悄悄的，事后只能猜（见 ChatHost 的 bringPageToFront）。
+     */
+    private onRaised(result: string): void {
+        const title = this.raiseTitle;
+        if (!title || result === "ok" || result === "front") { return; }
+        this.options.log(result === "miss"
+            ? `[提醒] 按窗口标题没找到「${title}」：页面没开着，或者只停在普通浏览器窗口的背景标签页里`
+            : `[提醒] 按窗口标题提前面时出错了（「${title}」）`);
     }
 }
 
