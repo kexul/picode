@@ -738,11 +738,14 @@
     caseSensitivePaths = opts.caseSensitivePaths === true;
   }
 
-  // 输入法正在拼字、字还没上屏时按回车/上下键，是在挑候选字，不是在「确认」。这一下得留给输入法：
-  // 不认、也不拦（preventDefault 会把候选字卡在框里）。Safari 上 isComposing 会提前变回 false，
-  // 那时 keyCode 还是 229，所以两个一起看。
+  // 输入法正在拼字、字还没上屏时按回车/上下键/Esc，是在挑候选字、取消拼音，不是在「确认」。
+  // 这一下得留给输入法：不 preventDefault（拦了候选字会卡在框里），但也不许它冒到 document 上去：
+  // 外头还挂着「Esc 中止正在跑的一轮」那些，拼字中按 Esc 会把跑着的生成掐了。
+  // Safari 上 isComposing 会提前变回 false，那时 keyCode 还是 229，所以两个一起看。
   function imeBusy(e) {
-    return e.isComposing === true || e.keyCode === 229;
+    if (e.isComposing !== true && e.keyCode !== 229) { return false; }
+    e.stopPropagation();
+    return true;
   }
 
   function isSendKey(e) {
