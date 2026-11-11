@@ -13,6 +13,7 @@
 | `media/clusterize.js` | [Clusterize.js](https://github.com/NeXTs/Clusterize.js)（看文件的弹窗里只摆看得见的那一段） | 1.0.0 | MIT |
 | `bin/cwebp.exe` | [libwebp](https://chromium.googlesource.com/webm/libwebp) 的 `cwebp` 命令（把发给页面的图压成 WebP，见 `src/imageFit.ts`） | 1.6.0（Google 官方 Windows 构建，静态链接） | BSD-3-Clause |
 | `media/highlight.js` | [highlight.js](https://github.com/highlightjs/highlight.js)（代码上色） | 11.x（当初是从 npm 上打包拿的，文件里没留版本号） | BSD-3-Clause |
+| `bin/es.exe` | Everything 官方的命令行工具 [es](https://www.voidtools.com/downloads/)（文件搜索浮层空着时列「最近改过的文件」靠它，见 `src/fileSearch.ts`） | 1.1.0.38（原样取自 `ES-1.1.0.38.x64.zip`，包里就这一个文件） | MIT 式（voidtools），里面链的 PCRE 是 BSD-3-Clause |
 
 ## diff-match-patch（Apache-2.0）
 
@@ -248,6 +249,27 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Everything 的命令行工具 es（MIT 式，voidtools）
+
+`bin/es.exe` 自己不会扫盘：它只是去问本机正在跑的 Everything（因此还得装 Everything），
+拿到结果再按修改时间排。法定上它跟 Everything 一份许可，下面这份正文取自 Everything 的
+`License.txt`（Copyright (c) 2023 voidtools；`es.exe` 自己的版本信息里写的是 2026）。
+
+```
+Everything
+
+Copyright (c) 2023 voidtools
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+`es.exe` 里链着 PCRE（Copyright (c) 1997-2012 University of Cambridge），按 BSD-3-Clause 走；
+正文就是下面「BSD-3-Clause」那一份，只是版权行换成 Cambridge 那一行。
 
 ## BSD-3-Clause（libwebp 的 cwebp / highlight.js）
 

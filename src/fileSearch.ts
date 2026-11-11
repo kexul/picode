@@ -9,9 +9,10 @@
  * 这台机器上没有那份、PATH 里也没有时，退回自己在 Node 里走一遍目录——慢一点，但功能不缺席。
  * 搜内容同理：有 rg 就 `rg --vimgrep`，没有就自己逐个文件读。
  *
- * 文件搜索浮层还空着（还没输入关键词）时列的是「最近改过的文件」：Windows 上装了 Everything
- * 那条命令行（`es.exe`）就问它要——它读的是 NTFS 自己那份索引，一个目录几万个文件也是
- * 两百毫秒的事；没有它就不列（按名字排的头两百个既不是人想找的，还挡着视线）。
+ * 文件搜索浮层还空着（还没输入关键词）时列的是「最近改过的文件」：Windows 上有 Everything
+ * 那条命令行（`es.exe`：先用我们随 exe 分发的那份，再找 PATH 里的）就问它要——它读的是
+ * NTFS 自己那份索引，一个目录几万个文件也是两百毫秒的事；没有它就不列（按名字排的头两百个
+ * 既不是人想找的，还挡着视线）。
  *
  * 这一层不碰 vscode、不碰网页服务，只认文件系统：后端、以后的命令行都能直接用。
  */
@@ -19,6 +20,7 @@ import { spawn, type ChildProcess } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { appBin } from "./appAssets";
 
 /** 内容搜索里一条命中：哪个文件、第几行、那一行长什么样。 */
 export interface TextHit {
@@ -211,29 +213,38 @@ function runRg(exe: string, args: string[], cwd: string,
 // ==================== Everything：最近改过的那一批（Windows 上的快路）====================
 
 /**
- * Everything 的命令行工具 `es.exe`：PATH 里有它、并且 Everything 正在跑，就能一条命令要到
- * 「这个目录下按修改时间倒序」的文件。
+ * Everything 的命令行工具 `es.exe` 在哪儿：**先认我们自带的那份**（`bin/es.exe`，跟 exe 一起分发，
+ * 见 THIRD-PARTY-NOTICES），没有再扫 PATH 里那些目录。
  *
- * 为什么它快：它读的是 NTFS 自己那份索引（建好以后常驻，改动用变更日志补），排序在内存里做；
- * 而「自己按修改时间排」要一个个去问磁盘，几万个文件就是一两秒。本机同一个目录（2.9 万个文件）
- * 实测：es 0.25 秒，`rg --files --sortr modified` 3 秒。
+ * 它只是客户端：真正干活的是用户机器上装着的 Everything（读 NTFS 自己那份索引），所以带了这份
+ * 也省不掉装 Everything —— 但能省掉「去官网下 es.exe + 配 PATH」这一步。
  *
- * 它是可选的东西：没有它就没有这条快路，空输入时什么都不列。
+ * 为什么它快：Everything 的索引建好就常驻，改动用变更日志补，排序在内存里做；而「自己按修改时间排」
+ * 要一个个去问磁盘，几万个文件就是一两秒。本机同一个目录（2.9 万个文件）实测：es 0.25 秒，
+ * `rg --files --sortr modified` 3 秒。
+ *
+ * 都没有就没有这条快路：空输入时什么都不列。
  */
 let esCommand: string | null | undefined;
 
-/** PATH 里找 `es.exe`（找过就记住；没有也记住）。 */
+/** 找到一份能用的 es.exe 就记住；没有也记住（这个进程里不再试）。 */
 function resolveEs(): string | null {
     if (esCommand !== undefined) { return esCommand; }
     esCommand = null;
     if (process.platform === "win32") {
-        // Windows 上 process.env 的键不分大小写，这里写的 PATH 就够了
-        for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
-            if (!dir) { continue; }
-            const full = path.join(dir, "es.exe");
-            try {
-                if (fs.statSync(full).isFile()) { esCommand = full; break; }
-            } catch { /* 这个目录里没有 */ }
+        const bundled = appBin("es.exe");
+        try {
+            if (fs.statSync(bundled).isFile()) { esCommand = bundled; }
+        } catch { /* 没有自带那份（比如从 VS Code 扩展里跑）：接着扫 PATH */ }
+        if (!esCommand) {
+            // Windows 上 process.env 的键不分大小写，这里写的 PATH 就够了
+            for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+                if (!dir) { continue; }
+                const full = path.join(dir, "es.exe");
+                try {
+                    if (fs.statSync(full).isFile()) { esCommand = full; break; }
+                } catch { /* 这个目录里没有 */ }
+            }
         }
     }
     return esCommand;

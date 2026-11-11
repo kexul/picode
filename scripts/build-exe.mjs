@@ -5,7 +5,7 @@
  * 打进去的东西：
  *   - 一份壳（bin/launcher.cs，编出来是个窗口程序，天生没有黑框）；
  *   - 后端打成一个 CommonJS 文件（我们零运行时依赖，相对路径自己接一下就行）；
- *   - 界面文件（media/）与那几支小程序（bin/tray.exe、shot.exe、live.exe、notice.exe）；
+ *   - 界面文件（media/）与那几支小程序（bin/tray.exe、shot.exe、live.exe、notice.exe、es.exe）；
  *   - 一枚图标（bin/makeicon.cs 画的那个标记）。
  * **不带 Node 运行时**：跑的时候用这台机器上装好的 Node（PICHAT_NODE → PATH → 常见位置）。
  * 所以产物只有几 MB；代价是目标机器得有 Node 20 或以上（找不到时壳会弹一句人话）。
@@ -140,7 +140,9 @@ function collectPayload(version) {
         const full = path.join(repoRoot, "media", name);
         if (fs.statSync(full).isFile()) { add(`media/${name}`, full); }
     }
-    for (const name of ["tray.exe", "shot.exe", "live.exe", "notice.exe", "resize.exe", "cwebp.exe"]) {
+    // bin/es.exe 是第三方那份 Everything 的命令行（许可见 THIRD-PARTY-NOTICES）：文件搜索浮层
+    // 空着列「最近改过的文件」靠它，随包带着就不用让人自己去下、自己去配 PATH。
+    for (const name of ["tray.exe", "shot.exe", "live.exe", "notice.exe", "resize.exe", "cwebp.exe", "es.exe"]) {
         const full = path.join(repoRoot, "bin", name);
         if (!fs.existsSync(full)) { fail(`找不到 bin/${name}：先跑 npm run compile（它顺手编这几支小程序）`); }
         add(`bin/${name}`, full);
