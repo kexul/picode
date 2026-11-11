@@ -43,6 +43,16 @@ export interface RemoteNotice {
      */
     activate?: boolean;
     /**
+     * 推送方那个后端的网页**端口**（它监听的那个号）。
+     *
+     * 为什么不靠 pageUrl 回话：那台自己报的地址是它挑的第一个网卡（`192.168.x.x` 这种），
+     * 两台走的不一定是同一条网络（实测：一台报 10.61.x，而两台实际是经 100.x 那条通的），
+     * 拿它回话就发到一个连不通的地方去了。收到的那台知道“这次请求是从哪个地址进来的”，
+     * 再拼上这个端口，就是一条确定回得去的路（见 chatHost 的 callbackBase）。
+     * 旧版本推来的没有这个字段，那只能回退用 pageUrl。
+     */
+    pagePort?: number;
+    /**
      * 推送方那个后端的网页地址（`http://10.0.0.2:51883`）：那台的地址，拼上 `?session=`
      * 就是那个会话的页面（留着当回话地址，见 dev/weixinGateway.js；提醒卡片不打开它）。
      * 旧版本推来的没这个字段。
@@ -85,9 +95,17 @@ export function readRemoteNotice(raw: unknown, fallbackLabel: string): RemoteNot
     const kind = body.kind === "ask" ? "ask" : "done";
     // 回话地址也是可选的（旧版本不带）：带了才能把一句话送回原来那台
     const pageUrl = typeof body.pageUrl === "string" ? body.pageUrl.trim().slice(0, 200) : "";
+    const portWanted = Number(body.pagePort);
+    const pagePort = Number.isInteger(portWanted) && portWanted > 0 && portWanted < 65536 ? portWanted : undefined;
     const close = body.close === true;
     const activate = body.activate === true;
-    return { label, sessionId, name, text, kind, ...(pageUrl ? { pageUrl } : {}), ...(close ? { close: true } : {}), ...(activate ? { activate: true } : {}) };
+    return {
+        label, sessionId, name, text, kind,
+        ...(pageUrl ? { pageUrl } : {}),
+        ...(pagePort ? { pagePort } : {}),
+        ...(close ? { close: true } : {}),
+        ...(activate ? { activate: true } : {}),
+    };
 }
 
 /**

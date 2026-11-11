@@ -360,8 +360,8 @@ export interface WebServerHost {
     onServerStopped(): void;
     /** 当前界面颜色（写进页面的初始主题）。 */
     getThemeMode(): "light" | "dark";
-    /** 别处推来一条“有事”（`POST /notify`）：在本机右下角弹一条。 */
-    acceptRemoteNotice(notice: RemoteNotice): void;
+    /** 别处推来一条消息（`POST /notify`）：弹卡片 / 收卡片 / 切页面，见 ChatHost.acceptRemoteNotice。 */
+    acceptRemoteNotice(notice: RemoteNotice, fromAddress?: string): void;
 }
 
 export interface WebServerHooks {
@@ -1769,6 +1769,12 @@ export class PiChatWebServer {
      * 这条是机器对机器发的：没有 Origin 头（浏览器的脚本发的有，过不了 originAllowed 那道关，
      * 到不了这里），也没有口令——这个后端本来就没有登录，只在信得过的网络里用。
      */
+    /**
+     * 别的 pichat 后端推来一条消息。
+     *
+     * 这条是机器对机器发的：没有 Origin 头（浏览器的脚本发的有，过不了 originAllowed 那道关，
+     * 到不了这里），也没有口令——这个后端本来就没有登录，只在信得过的网络里用。
+     */
     private async handleRemoteNotice(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (req.method !== "POST") {
             this.sendText(req, res, 405, "只接受 POST。");
@@ -1792,9 +1798,10 @@ export class PiChatWebServer {
             this.sendText(req, res, 400, "这条通知缺东西（要 sessionId）。");
             return;
         }
-        // 这条是谁发来的：那台自己报的地址不一定是我们到得了的（多网卡时它可能挑了别的网段）：
-        // 这次是哪台推来的就按通知里报的名字认，不记地址（要回话是打开它推来的那个网页地址）
-        this.host.acceptRemoteNotice(notice);
+        // 这条是谁发来的：那台自己报的地址不一定是我们到得了的（多网卡时它可能挑了别的网段），
+        // 所以把“这条请求实际是从哪个地址进来的”一并带过去：本机回头请它切页面时用
+        // 这个地址 + 它报的端口（见 chatHost 的 callbackBase）。
+        this.host.acceptRemoteNotice(notice, remoteAddressOf(req));
         res.writeHead(204, { "Cache-Control": "no-store" });
         res.end();
     }
@@ -1955,6 +1962,18 @@ export class PiChatWebServer {
  * 解析不了返回 undefined（调用方回 400）。
  */
 /** 地址上的 `since`（页面报的「我处理到第几条」）：不是非负整数就当没报。 */
+/**
+ * 这条请求是从哪个地址进来的（拿它回话才确定到得了那台）。
+ *
+ * Node 对 IPv4 的连接常常给成 `::ffff:10.0.0.2` 这种写法，把那个前缀去掉；
+ * 拿不到就是 undefined（那就只能回退用对方自己报的地址）。
+ */
+function remoteAddressOf(req: http.IncomingMessage): string | undefined {
+    const raw = req.socket && req.socket.remoteAddress;
+    if (!raw) { return undefined; }
+    return raw.startsWith("::ffff:") ? raw.slice("::ffff:".length) : raw;
+}
+
 function parseSince(text: string): number | undefined {
     if (!/^\d+$/.test(text)) { return undefined; }
     const n = Number(text);

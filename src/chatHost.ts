@@ -238,6 +238,15 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      */
     private readonly remoteNoticePages = new Map<string, { label: string; sessionId: string; pageUrl: string }>();
 
+    /**
+     * 回头请别台办事时用哪个地址。
+     *
+     * 优先用“这条推送实际是从哪个地址进来的”（{@link callbackBase}）：那台自己报的地址
+     * 是它挑的第一个网卡，两台走的不一定是同一条网络（实测踩过：一台报 10.61.x，而两台
+     * 实际是经 100.x 那条通的），拿它回话就发到一个连不通的地方去，而且不报错。
+     * 进来的地址只有 TCP 那一头知道，所以由网页服务把它传下来（旧版本推来的没端口，只能回退）。
+     */
+
     constructor(private readonly options: ChatHostOptions) {
         super("server");
         this.log = options.log ?? ((text) => console.log(text));
@@ -869,7 +878,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const memo = this.remoteNoticePages.get(key);
         if (!memo) { return; }
         // 带过去的是**这台**的名字：那台记下日志时才知道是谁点了卡片（见 pushRemoteActivate）
-        void pushRemoteActivate(memo.pageUrl, displayName(), memo.sessionId);
+        void pushRemoteActivate(memo.pageUrl, displayName(), memo.sessionId).then((ok) => {
+            // 没送到就把地址写进日志：以前这里是静悄悄失败，看着就是“点了卡片页面没切”
+            if (!ok) { this.log(`[提醒] 请 ${memo.label} 把它那边页面切过去没送成（地址 ${memo.pageUrl || "没给"}）`); }
+        });
         void this.bringPageToFront(pageTitleFor(memo.label));
         this.log(`[提醒] 点了别台推来的那张：请 ${memo.label} 把页面切过去，这边把那张标签页弄到眼前`);
     }
@@ -1983,8 +1995,10 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             // 正文也推过去：那台弹卡片时才不会只剩一个名字
             text: summary,
             kind,
-            // 这台的网页地址（那台留作回话地址，见 dev/weixinGateway.js）
+            // 这台的网页地址与端口（那台回头请这台的页面切会话时用；地址它那边会换成
+            // “这条请求从哪儿进来的”，所以这里报的那个地址不准也不要紧，端口得准）
             pageUrl: base.replace(/\/+$/, ""),
+            ...(ChatHost.portOf(base) ? { pagePort: ChatHost.portOf(base) } : {}),
         };
         for (const target of targets) {
             void pushRemoteNotice(target, notice);
@@ -2004,13 +2018,42 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         return readServerConfig().config.notify.pushTo.filter((target) => !isOwnPage(target, base));
     }
 
+    /** 一个网页地址里的端口号（拼不成地址就给 undefined）。 */
+    private static portOf(url: string): number | undefined {
+        try {
+            const port = Number(new URL(url).port);
+            return Number.isInteger(port) && port > 0 ? port : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * 回头请别台办事时用哪个地址：**这条请求是从哪儿进来的** + 那台报的端口。
+     *
+     * 为什么不直接用对方报的地址（`pageUrl`）：那是它挑的第一个网卡地址，两台之间通的
+     * 未必是那条路（多网卡、局域网 + 另一条隧道并存时尤其容易错），拿它回话就发到
+     * 一个连不通的地方，而且发不出去也不报错（只想让人看到“点了卡片，会话没切”）。
+     * 这次是哪个地址连进来的，反过来往那个地址发就一定回得去；端口它自己报了。
+     * 两个缺一个（旧版本推来的没端口）就只能回退到它报的那个地址。
+     * @param fromAddress 这条请求进来的地址（见 webChatServer 的 remoteAddressOf）
+     */
+    private static callbackBase(fromAddress: string | undefined, pagePort: number | undefined, pageUrl: string | undefined): string {
+        if (fromAddress && pagePort) {
+            // IPv6 写法拼地址时要包方括号
+            const host = fromAddress.includes(":") ? `[${fromAddress}]` : fromAddress;
+            return `http://${host}:${pagePort}`;
+        }
+        return pageUrl ?? "";
+    }
+
     /**
      * 别的机器上的后端推来一条消息（网页服务那条 /notify 收到）。
      *
      * 三种：“有事”就在这台照弹一张（人不会只坐一台前面）；
      * “把那张收掉”就收掉；“把页面切过去”（那台点了这张卡片）就把这台连着的页面都切过去。
      */
-    public acceptRemoteNotice(notice: RemoteNotice): void {
+    public acceptRemoteNotice(notice: RemoteNotice, fromAddress?: string): void {
         const key = ChatHost.REMOTE_NOTICE_PREFIX + notice.label + ":" + notice.sessionId;
         // 那台点了这台推过去的卡片：会话在这台，这边把自己的页面都切过去
         //（那台的标签页上跑的就是这台的页面）。这一条不看「弹窗通知」开没开。
@@ -2029,8 +2072,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             return;
         }
         if (!this.notifyTurnEndEnabled()) { return; }
-        // 点这张的时候要用的东西先存起来：那台的网页地址（回头请它切页面）与标签（拼那张标签页的标题）
-        this.remoteNoticePages.set(key, { label: notice.label, sessionId: notice.sessionId, pageUrl: notice.pageUrl ?? "" });
+        // 点这张的时候要用的东西先存起来：那台的地址（回头请它切页面）、那台的标签
+        // （拼那张标签页的标题）。地址优先用“这条请求是从哪儿进来的” + 它报的端口，
+        // 拿它自己报的那个地址不一定到得了（见上面 callbackBase）。
+        this.remoteNoticePages.set(key, {
+            label: notice.label,
+            sessionId: notice.sessionId,
+            pageUrl: ChatHost.callbackBase(fromAddress, notice.pagePort, notice.pageUrl),
+        });
         // 标签写来源那台（家里），标题就只是那个会话的名字：标签与标题各说一件事，不重复
         this.showNotice(key, notice.name, notice.text ?? "", notice.kind === "ask", notice.label);
         this.log(`[提醒] 弹了一张（别的机器推来的）：${notice.label} · ${notice.name}`);
