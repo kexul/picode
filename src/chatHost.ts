@@ -876,7 +876,14 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      */
     private openRemoteNotice(key: string): void {
         const memo = this.remoteNoticePages.get(key);
-        if (!memo) { return; }
+        if (!memo) {
+            // 找不到账 = 这张卡片点下去什么反应都不会有（页面不切、也不回话），而且以前这里
+            // 一声不响 —— 实踩过：卡片小程序跟后端编码对不上，标识别里中文坏了一个字节，
+            // 看着就是“点了卡片没反应”。所以这里把收到的那把钥匙和手上有哪几把都写出来。
+            const mine = [...this.remoteNoticePages.keys()].map((one) => JSON.stringify(one)).join("、");
+            this.log(`[提醒] 点了卡片，但找不到它对应的账：收到 ${JSON.stringify(key)}（${key.length} 个字），手上有 ${mine || "一个都没有"}`);
+            return;
+        }
         // 带过去的是**这台**的名字：那台记下日志时才知道是谁点了卡片（见 pushRemoteActivate）
         void pushRemoteActivate(memo.pageUrl, displayName(), memo.sessionId).then((ok) => {
             // 没送到就把地址写进日志：以前这里是静悄悄失败，看着就是“点了卡片页面没切”
