@@ -471,7 +471,8 @@ export async function findFileNames(cwd: string, query: string, limit = 200): Pr
     if (!q) {
         // 还没输入关键词：给最近改过的那一批（装了 Everything 才有）。
         // 没有就什么都不列，让人直接打字。
-        return { files: (await findRecentFiles(cwd)) ?? [], hits: [], truncated: false, slow: false };
+        const recent = await findRecentFiles(cwd);
+        return { files: recent ? recent.slice(0, limit) : [], hits: [], truncated: false, slow: false };
     }
     const list = await listSessionFiles(cwd);
     const scored: Array<{ rel: string; score: number }> = [];
