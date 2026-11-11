@@ -9,6 +9,10 @@
  * 这台机器上没有那份、PATH 里也没有时，退回自己在 Node 里走一遍目录——慢一点，但功能不缺席。
  * 搜内容同理：有 rg 就 `rg --vimgrep`，没有就自己逐个文件读。
  *
+ * 文件搜索浮层还空着（还没输入关键词）时列的是「最近改过的文件」：Windows 上装了 Everything
+ * 那条命令行（`es.exe`）就问它要——它读的是 NTFS 自己那份索引，一个目录几万个文件也是
+ * 两百毫秒的事；没有它就不列（按名字排的头两百个既不是人想找的，还挡着视线）。
+ *
  * 这一层不碰 vscode、不碰网页服务，只认文件系统：后端、以后的命令行都能直接用。
  */
 import { spawn, type ChildProcess } from "child_process";
@@ -66,6 +70,16 @@ const MAX_TEXT_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_HIT_TEXT = 300;
 /** 一个文件最多算几条命中（同一行有好几处也只算一条）。 */
 const MAX_HITS_PER_FILE = 2;
+/** 空输入时列多少个「最近改过的文件」。 */
+const RECENT_LIMIT = 200;
+/** 向 Everything 要多少条再筛（node_modules 之类会被筛掉，多要一些才够 200 个）。 */
+const RECENT_ASK = 1000;
+/** 这份「最近改过」顺序的缓存寿命：这期间再打开直接用（清空输入框会连着问好几次）。 */
+const RECENT_CACHE_MS = 10_000;
+/** 跑 es 最多等这么久：Everything 没在跑时别把弹窗卡在这儿。 */
+const RECENT_TIMEOUT_MS = 3_000;
+/** 同时留几个目录的这份顺序（跟文件清单那个对齐）。 */
+const RECENT_CACHE_DIRS = 4;
 
 // ==================== ripgrep 在哪儿 ====================
 
@@ -194,6 +208,151 @@ function runRg(exe: string, args: string[], cwd: string,
     });
 }
 
+// ==================== Everything：最近改过的那一批（Windows 上的快路）====================
+
+/**
+ * Everything 的命令行工具 `es.exe`：PATH 里有它、并且 Everything 正在跑，就能一条命令要到
+ * 「这个目录下按修改时间倒序」的文件。
+ *
+ * 为什么它快：它读的是 NTFS 自己那份索引（建好以后常驻，改动用变更日志补），排序在内存里做；
+ * 而「自己按修改时间排」要一个个去问磁盘，几万个文件就是一两秒。本机同一个目录（2.9 万个文件）
+ * 实测：es 0.25 秒，`rg --files --sortr modified` 3 秒。
+ *
+ * 它是可选的东西：没有它就没有这条快路，空输入时什么都不列。
+ */
+let esCommand: string | null | undefined;
+
+/** PATH 里找 `es.exe`（找过就记住；没有也记住）。 */
+function resolveEs(): string | null {
+    if (esCommand !== undefined) { return esCommand; }
+    esCommand = null;
+    if (process.platform === "win32") {
+        // Windows 上 process.env 的键不分大小写，这里写的 PATH 就够了
+        for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+            if (!dir) { continue; }
+            const full = path.join(dir, "es.exe");
+            try {
+                if (fs.statSync(full).isFile()) { esCommand = full; break; }
+            } catch { /* 这个目录里没有 */ }
+        }
+    }
+    return esCommand;
+}
+
+const recentCache = new Map<string, { at: number; files: string[] | null }>();
+const pendingRecent = new Map<string, Promise<string[] | null>>();
+
+/**
+ * 空输入时那一屏：会话目录里最近改过的那些文件（相对写法、`/` 分隔、最多 RECENT_LIMIT 个）。
+ * 没有 Everything 时给 null（调用方当「没东西可列」）。
+ */
+async function findRecentFiles(cwd: string): Promise<string[] | null> {
+    const exe = resolveEs();
+    if (!exe) { return null; }
+    const key = path.resolve(cwd);
+    const hit = recentCache.get(key);
+    if (hit && Date.now() - hit.at < RECENT_CACHE_MS) { return hit.files; }
+    const running = pendingRecent.get(key);
+    if (running) { return running; }
+    const loading = loadRecent(exe, key).finally(() => { pendingRecent.delete(key); });
+    pendingRecent.set(key, loading);
+    return loading;
+}
+
+/** 真去问一遍 Everything，回来记进缓存。 */
+async function loadRecent(exe: string, key: string): Promise<string[] | null> {
+    const paths = await runEs(exe, key);
+    const files = paths ? pickRecentFiles(key, paths) : null;
+    recentCache.set(key, { at: Date.now(), files });
+    if (recentCache.size > RECENT_CACHE_DIRS) {
+        let oldestKey = key;
+        let oldestAt = Infinity;
+        for (const [k, v] of recentCache) {
+            if (v.at < oldestAt) { oldestAt = v.at; oldestKey = k; }
+        }
+        if (oldestKey !== key) { recentCache.delete(oldestKey); }
+    }
+    return files;
+}
+
+/**
+ * 跑一遍 es：`-p 目录` 限定在这个目录里，`file:` 只要文件（目录会混进来），
+ * 按修改时间倒序（新的在前）。
+ *
+ * 起不来、Everything 没在跑、超时，都算「没这条快路」，给 null。
+ */
+function runEs(exe: string, cwd: string): Promise<string[] | null> {
+    return new Promise((resolve) => {
+        let child: ChildProcess;
+        try {
+            child = spawn(exe, [
+                "-p", cwd,
+                "file:",
+                "-sort", "date-modified-descending",
+                "-n", String(RECENT_ASK),
+            ], { cwd, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+        } catch {
+            resolve(null);
+            return;
+        }
+        const lines: string[] = [];
+        let buffer = "";
+        let settled = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const finish = (value: string[] | null) => {
+            if (settled) { return; }
+            settled = true;
+            if (timer) { clearTimeout(timer); }
+            resolve(value);
+        };
+        timer = setTimeout(() => {
+            try { child.kill(); } catch { /* 收不掉就算了 */ }
+            finish(null);
+        }, RECENT_TIMEOUT_MS);
+        const take = (line: string) => {
+            const text = line.replace(/\r$/, "").trim();
+            if (text) { lines.push(text); }
+        };
+        child.stdout?.setEncoding("utf8");
+        child.stdout?.on("data", (chunk: string) => {
+            if (settled) { return; }
+            buffer += chunk;
+            let at = buffer.indexOf("\n");
+            while (at >= 0) {
+                take(buffer.slice(0, at));
+                buffer = buffer.slice(at + 1);
+                at = buffer.indexOf("\n");
+            }
+        });
+        child.on("error", () => { finish(null); });
+        child.on("close", (code) => {
+            if (buffer) { take(buffer); }
+            finish(code === 0 ? lines : null);
+        });
+    });
+}
+
+/**
+ * 把 es 给的绝对路径筛成「会话目录里的相对写法」。
+ * Everything 的 `-p` 是「路径里含有这一段」，兄弟目录（`picode-old`）也会跟着来，
+ * 所以还得真按前缀比一遍（Windows 不分大小写）；版本库和 node_modules 照旧不要。
+ */
+function pickRecentFiles(cwd: string, paths: readonly string[]): string[] {
+    const root = cwd.split("\\").join("/").replace(/\/+$/, "") + "/";
+    const lowerRoot = root.toLowerCase();
+    const out: string[] = [];
+    for (const raw of paths) {
+        const full = raw.split("\\").join("/");
+        if (!full.toLowerCase().startsWith(lowerRoot)) { continue; }
+        const rel = full.slice(root.length);
+        if (!rel) { continue; }
+        if (rel.split("/").some((part) => part === ".git" || part === "node_modules")) { continue; }
+        out.push(rel);
+        if (out.length >= RECENT_LIMIT) { break; }
+    }
+    return out;
+}
+
 // ==================== 文件清单（带缓存）====================
 
 const listCache = new Map<string, { at: number; list: FileList }>();
@@ -308,16 +467,13 @@ async function walkFiles(cwd: string): Promise<FileList> {
 
 /** 按文件名（也认路径里的字、也认「按顺序都出现」的模糊写法）挑一批，越像越靠前。 */
 export async function findFileNames(cwd: string, query: string, limit = 200): Promise<SearchOutcome> {
-    const list = await listSessionFiles(cwd);
     const q = query.trim().toLowerCase();
     if (!q) {
-        return {
-            files: list.files.slice(0, limit),
-            hits: [],
-            truncated: list.truncated || list.files.length > limit,
-            slow: list.slow,
-        };
+        // 还没输入关键词：给最近改过的那一批（装了 Everything 才有）。
+        // 没有就什么都不列，让人直接打字。
+        return { files: (await findRecentFiles(cwd)) ?? [], hits: [], truncated: false, slow: false };
     }
+    const list = await listSessionFiles(cwd);
     const scored: Array<{ rel: string; score: number }> = [];
     for (const rel of list.files) {
         const score = nameScore(rel, q);

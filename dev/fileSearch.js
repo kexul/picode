@@ -199,7 +199,14 @@ module.exports = async (page) => {
         JSON.stringify({ shown: opened.shown, focused: opened.focused }));
     check("默认是「文件名」那一档", opened.mode === "fsModeFiles" && opened.placeholder.indexOf("文件名") >= 0,
         opened.mode + " / " + opened.placeholder);
-    check("空着先把文件列出来（不是空白一张）", opened.rows.length > 0, String(opened.rows.length));
+    // 空着列的是「最近改过的文件」：头一条得是刚刚动过的（按名字排的头一批不会是这样）。
+    // 没装 Everything 时这一屏是空的、只留一句「输入关键词找文件」—— 那也算对。
+    const firstRel = opened.rows.length > 0 ? opened.rows[0].text : "";
+    let firstAge = Infinity;
+    try { firstAge = Date.now() - fs.statSync(path.join(cwd, firstRel)).mtimeMs; } catch (e) { /* 不是真文件 */ }
+    check("空着先列最近改过的文件（头一条是刚动过的，不是按名字排的头一批）",
+        opened.rows.length === 0 || firstAge < 10 * 60 * 1000,
+        JSON.stringify({ rows: opened.rows.length, first: firstRel, ageSec: Math.round(firstAge / 1000) }));
     await page.shot("search-1-open.png");
 
     console.log("再按一次 Ctrl+Shift+F：");
@@ -213,6 +220,18 @@ module.exports = async (page) => {
     await pressEsc();
     await page.sleep(250);
     check("Esc 也收起来", !(await searchState()).shown);
+
+    // 输入框里有字的时候也得一下收掉：不能变成「第一下先丢焦点、第二下才关」。
+    console.log("输入框里打着字，按一次 Esc：");
+    await pressSearchKey();
+    await page.sleep(400);
+    await typeSearch("gamma");
+    await page.sleep(400);
+    await pressEsc();
+    await page.sleep(250);
+    const afterTypedEsc = await searchState();
+    check("有字的时候一次 Esc 就收起来（不是先丢焦点）",
+        !afterTypedEsc.shown, JSON.stringify({ shown: afterTypedEsc.shown, focused: afterTypedEsc.focused }));
 
     // 真鼠标点一下浮层里的东西，焦点就不在输入框里了（点「内容」那颗按钮会落到按钮上，
     // 点面板空白处会落到 body）：这两种时候 Esc 也得照样收起来，不然它落到「Esc 中止
@@ -246,7 +265,7 @@ module.exports = async (page) => {
     await pressSearchKey();
     await page.sleep(400);
     await typeSearch("gamma");
-    const named = await waitSearch("按名字搜到 gamma", (s) => s.rows.some((r) => r.text.indexOf("find/deep/gamma.txt") >= 0));
+    const named = await waitSearch("按名字搜到 gamma", (s) => s.rows.some((r) => r.text.indexOf("find/deep/gamma.txt") >= 0 && r.marks.length > 0));
     const gammaRow = named.rows.find((r) => r.text.indexOf("find/deep/gamma.txt") >= 0);
     check("按文件名搜到子目录里的那个文件", !!gammaRow, JSON.stringify(named.rows.slice(0, 4)));
     check("命中的那几个字母标出来了", !!gammaRow && gammaRow.marks.join("").toLowerCase() === "gamma",
