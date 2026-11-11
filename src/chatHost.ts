@@ -170,6 +170,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private readonly pendingResyncPages = new Map<string, { note: string; full: boolean; lastRound: boolean }>();
     /** 正在整屏重画的页面：重画没画完页面就断了的话，得等它回来重新整画一遍（怎么画照旧）。 */
     private readonly resyncingPages = new Map<string, { lastRound: boolean }>();
+    /** 这些页面连上的那一刻已经替它把首屏送过了（见 bootPageNow）：收到它的 ready 就不再重复一遍。 */
+    private readonly bootedPages = new Set<string>();
     /** 每块屏多宽（CSS 像素；页面连上来时写在连接地址上，见 webChatServer 的 openChannel）。
      *  只在“首屏要不要把图一起发”这一件事上用：窄屏只发占位（见 inlineImageBudget）。 */
     private readonly pageWidths = new Map<string, number>();
@@ -992,12 +994,50 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             type: "viewOptionItems",
             items: [...this.buildViewOptionItems(), ...this.viewOptionItemsExtra()],
         });
+        // 这一条连接是刚打开的页面（不带序号），不是重连：不用等它发 ready，现在就把首屏
+        // 该有的东西送过去（见 bootPageNow）。
+        if (typeof since !== "number" && pending === undefined) { this.bootPageNow(pageId); }
+    }
+
+    /**
+     * 一块屏刚打开：挑好它要看哪个会话，把首屏直接送过去，不等它发 ready。
+     *
+     * 为什么要提前：手机上（走流量 / 隧道时）每多一次来回就是一两秒，而 ready 那一趟
+     * 纯粹是“你好了吗——我好了”，后端其实已经知道该给什么了。实测手机流量下打开一次
+     * 8.5 秒，其中 2.4 秒就花在等这一趟上（见 dev/README.md）。
+     *
+     * 提前送不会丢：页面那边的桥会把 chat.js 起来之前收到的消息先攒着，起来以后按原顺序
+     * 交出去（见 media/browserBridge.js 的 deliver）。
+     */
+    private bootPageNow(pageId: string): void {
+        if (this.bootedPages.has(pageId)) { return; }
+        this.bootedPages.add(pageId);
+        // 跟 ready 那条路做同一串事（顺序也一样），只是不等它开口：
+        // 挑会话 → 会话列表 → 各会话的 piReady → 引用清单 → 整屏重画历史。
+        const fresh = this.ensureClientSession(pageId);
+        this.sendSessionListTo(pageId);
+        for (const rt of this.panels.values()) {
+            this.postToSession(rt.id, { type: "piReady", ready: rt.piReady });
+        }
+        this.broadcastChatReferences();
+        void this.resyncPage(pageId, "");
+        // 刚给它新开了一个会话：这条路上也得走“启动时自动打开最近会话”那件事，
+        // 跟 ready 那条路一样（不然手机打开就不是上次那一条）。
+        if (fresh) { void this.maybeAutoLoadLastSession(pageId); }
+        // 备用进程照旧延后预热（理由见 ready 那段）。
+        this.ensureSpare(ChatControllerBase.SPARE_PREWARM_DELAY_MS);
+    }
+
+    /** 这块屏连上时是不是已经把首屏送过了（省掉页面那趟 ready 的重复活）。 */
+    protected override pageBootedByConnect(clientId: string): boolean {
+        return this.bootedPages.has(clientId);
     }
 
     /** 一条推送连接断了（页面关掉 / 死连接被掐掉）：它上面等着的问话卡片摘掉，
      *  它上面开着的浮层也按取消收掉（等的人不用干等）。 */
     public onPageDisconnected(pageId: string): void {
         this.pageWidths.delete(pageId);
+        this.bootedPages.delete(pageId);
         this.dropCardsForClient(pageId);
         this.dropPickerForClient(pageId);
         // 这块屏还在看桌面实时画面的话，它这一走就别再拍了

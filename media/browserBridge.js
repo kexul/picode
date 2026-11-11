@@ -229,6 +229,9 @@
   var sendFailures = 0;
 
   function enqueue(msg) {
+    // 界面第一次往外发消息，说明 chat.js 已经跑起来了（它一跑完就发 ready）：
+    // 攒着的入站消息可以按原顺序交给它了（见 deliver / openInbound）。
+    openInbound();
     if (IN_WEBVIEW) {
       // 网页视图的 postMessage 本来就保序可靠，直接发
       realApi.postMessage(msg);
@@ -444,12 +447,29 @@
   var pingTimer = null;
   var watchdogTimer = null;
 
+  /** 攒着的入站消息（chat.js 还没起来时收到的）。 */
+  var pendingInbound = [];
+  /** 入站开闸了没有：chat.js 第一次往外发消息就说明它起来了（它一跑完就发 ready）。 */
+  var inboundOpen = false;
+
+  /** 入站开闸：把攒着的那几条按原顺序交出去。 */
+  function openInbound() {
+    if (inboundOpen) { return; }
+    inboundOpen = true;
+    var list = pendingInbound;
+    pendingInbound = [];
+    for (var i = 0; i < list.length; i++) { deliver(list[i]); }
+  }
+
   /**
    * 把一条消息交给界面（chat.js），顺手把两件事记到后端日志里：
    * 界面处理这条消息时抛了错（手机上没法开控制台，这种静默异常只能这么看）。
    * 别的什么都不改：序号照旧往前记（账本先走，页面出错也不能让补发重复画）。
    */
   function deliver(data) {
+    // chat.js 起来之前先攒着：后端现在一看见推送连接建好就把首屏送过来（不等页面 ready），
+    // 而 chat.js 比这条连接晚几毫秒才装上监听（它整份脚本要先解析）。早到的直接投出去就丢了。
+    if (!inboundOpen) { pendingInbound.push(data); return; }
     try {
       window.dispatchEvent(new MessageEvent("message", { data: data }));
     } catch (e) {
@@ -1165,5 +1185,149 @@
 
     startTimers();
     connect();
+
+    installOpenTiming();
+  }
+
+  /**
+   * 打开一次要多久（只在地址后面带 `?profile=1` 时开）。
+   *
+   * 为什么要有它：手机上打开一次慢在哪，隔着调试接口量不出来 —— 模拟出来的数和实际
+   * 差得远（见 dev/README.md 里那几份量法）。带上这个参数打开，页面自己把几个时间点
+   * 记下来，收尾时当成一句日志送回后端（pageLog）：手机上没人看得到控制台，在电脑这边
+   * 读日志就行。不带这个参数什么都不做。
+   *
+   * 记的东西：从本文件开始跑到「HTML 解析完 / 首次绘制 / 能打字（胶囊变 idle）/ 第一颗
+   * 气泡 / 历史画完」各是几毫秒；主线程被长任务占了多少；这次下下来多少字节；屏宽与 UA。
+   */
+  function installOpenTiming() {
+    if (!/[?&]profile=1\b/.test(location.search)) { return; }
+    var t0 = performance.now();
+    // marks：每一件事第一次发生的时刻（从页面起步算）
+    // cycle：上一次报告之后发生的时刻（从上次报告算）—— 一个页面里可能先后开几个会话，
+    //        第二次以后看这一段才有意义
+    var marks = {};
+    var cycle = {};
+    var cycleStart = t0;
+    var reports = 0;
+    var longTasks = [];
+    var settleTimer = 0;
+    var idleTimer = 0;
+    var seenBubbles = 0;
+
+    // 所有时刻都按“从点地址那一刻算”记（performance.now() 就从那时候起算），
+    // 这样手机上的数和浏览器自己那几条（首字节 / HTML 下完）直接对得上，不用换算。
+    function mark(name) {
+      var now = performance.now();
+      if (marks[name] === undefined) { marks[name] = Math.round(now); }
+      if (cycle[name] === undefined) { cycle[name] = Math.round(now); }
+    }
+
+    try {
+      new PerformanceObserver(function (list) {
+        for (var i = 0; i < list.getEntries().length; i++) { longTasks.push(Math.round(list.getEntries()[i].duration)); }
+      }).observe({ entryTypes: ["longtask"] });
+    } catch (e) { /* 老浏览器没有这一项 */ }
+    try {
+      new PerformanceObserver(function (list) {
+        list.getEntries().forEach(function (e) {
+          mark(e.name === "first-paint" ? "首次绘制" : "首次内容绘制");
+        });
+      }).observe({ entryTypes: ["paint"] });
+    } catch (e) { /* 见上 */ }
+
+    // 页面脚本开始跑之前的那些步数（都相对“点地址”那一刻，见 navigation 那条）：
+    // 请求发出 / 首字节回来 / HTML 下完。手机走隧道时，慢常常就慢在这几段上，
+    // 而本文件开始跑的时候它们已经过去了 —— 不单独记就看不见。
+    var nav = performance.getEntriesByType("navigation")[0];
+    if (nav) {
+      if (nav.requestStart) { marks["请求发出"] = Math.round(nav.requestStart); }
+      if (nav.responseStart) { marks["首字节"] = Math.round(nav.responseStart); }
+      if (nav.responseEnd) { marks["HTML下完"] = Math.round(nav.responseEnd); }
+      if (nav.domContentLoadedEventEnd) { marks["HTML解析完(浏览器给的)"] = Math.round(nav.domContentLoadedEventEnd); }
+      mark("页面到脚本开跑");
+    }
+    document.addEventListener("DOMContentLoaded", function () { mark("HTML解析完"); });
+    window.addEventListener("load", function () { mark("load事件"); });
+
+    // 输入框底下那颗胶囊换成 idle / streaming = 能接着打字了（阶段是后端推过来的，见 chat.js）
+    var icon = document.getElementById("ctxIcon");
+    if (icon) {
+      var watchIcon = function () {
+        var st = icon.dataset.st || "";
+        if (!st || marks["阶段=" + st] !== undefined) { return; }
+        mark("阶段=" + st);
+        if (st === "idle" || st === "streaming") {
+          mark("能打字");
+          // 能打字以后 6 秒还没有历史（空会话）就先报一次：那种情况恰恰最需要看到数
+          clearTimeout(idleTimer);
+          idleTimer = setTimeout(report, 6000);
+        }
+      };
+      watchIcon();
+      new MutationObserver(watchIcon).observe(icon, { attributes: true, attributeFilter: ["data-st"] });
+    }
+
+    // 消息流：气泡数变了就重记一笔；静下来 900 毫秒算“这一段画完了”，报一次
+    var messagesEl = document.getElementById("messages");
+    if (messagesEl) {
+      new MutationObserver(function () {
+        var n = messagesEl.querySelectorAll(".msg").length;
+        if (n === seenBubbles) { return; }
+        seenBubbles = n;
+        mark("气泡");
+        clearTimeout(settleTimer);
+        settleTimer = setTimeout(function () { mark("历史画完"); report(); }, 900);
+      }).observe(messagesEl, { childList: true, subtree: true });
+    }
+
+    function report() {
+      if (!Object.keys(cycle).length) { return; }   // 这一段什么也没发生，不啰嗦
+      reports += 1;
+      var now = performance.now();
+      var downloads = [];
+      try {
+        performance.getEntriesByType("resource").forEach(function (r) {
+          var rest = r.name.slice(r.name.indexOf("://") + 3);
+          var path = rest.slice(rest.indexOf("/")).split("?")[0];
+          downloads.push(path + "=" + Math.round((r.transferSize || 0) / 1024) + "K");
+        });
+      } catch (e) { /* 取不到就不报字节 */ }
+      var busy = longTasks.length
+        ? longTasks.reduce(function (a, b) { return a + b; }, 0) + " ms（" + longTasks.length + " 次）"
+        : "没有";
+      var text = "打开耗时#" + reports + "：距上一次 " + Math.round(now - cycleStart) + " ms；"
+        + "气泡 " + seenBubbles + " 条；这一段 " + JSON.stringify(cycle)
+        + "；从头 " + JSON.stringify(marks)
+        + "；这一段主线程长任务 " + busy
+        + (reports === 1 ? "；下载 " + downloads.join(" ") : "")
+        + "；屏宽 " + window.innerWidth;
+      reportPageLog(text);
+      showTiming(text);
+      cycle = {};
+      cycleStart = now;
+      longTasks = [];
+    }
+
+    /**
+     * 把这一份数摆到屏幕上（左上角一小块，能选中复制）。
+     * 手机上没法开控制台，日志又在电脑那边；直接摆出来最省事：看一眼、或者截个图。
+     */
+    function showTiming(text) {
+      var box = document.getElementById("pichat-timing");
+      if (!box) {
+        box = document.createElement("div");
+        box.id = "pichat-timing";
+        box.style.cssText = "position:fixed;left:6px;top:6px;z-index:2147483647;max-width:96vw;"
+          + "padding:6px 8px;border-radius:6px;background:rgba(0,0,0,.78);color:#fff;"
+          + "font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;"
+          + "word-break:break-all;user-select:text;-webkit-user-select:text;";
+        (document.body || document.documentElement).appendChild(box);
+      }
+      box.textContent = text;
+    }
+
+    // 兜底：一直什么也没发生（比如卡在连不上）也得报一次，不然最该看的那种情况反而没数
+    setTimeout(report, 30000);
   }
 })();

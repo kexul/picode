@@ -353,6 +353,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** webview 首次就绪时调用（默认空，平台子类可覆盖以推送初始化数据）。 */
     protected onWebviewReady(): void {}
 
+    /**
+     * 这块屏连上时，后端是不是已经把首屏送过了（见 chatHost 的 bootPageNow）。
+     * 只有浏览器页面那条路会返回 true：插件里那块面板照旧等它自己的 ready。
+     */
+    protected pageBootedByConnect(_clientId: string): boolean { return false; }
+
     /** 处理平台独有的 webview 消息；已在公共分发中匹配的不会进来。返回是否已处理。 */
     protected abstract handlePlatformMessage(msg: any): boolean;
 
@@ -2367,6 +2373,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
             case "ready": {
                 const clientId = this.currentPageId;
                 this.sendViewOptions();
+                // 这块屏连上的那一刻，后端已经把首屏（会话 / 状态 / 历史）直接送过去了
+                //（见 chatHost 的 bootPageNow）：这里不必再把同一批东西重发一遍 ——
+                // 手机上那是一个几百毫秒到两秒的来回，白等。
+                if (this.pageBootedByConnect(clientId)) { return; }
                 // 这块屏本来就看着的那个（网页视图重建时靠它把画面接回去）
                 const had = this.focusedIdFor(clientId);
                 // 这块屏还没挑过会话（刚连上 / 它看的那个被关过）：按它自己的规矩挑一个或开一个
