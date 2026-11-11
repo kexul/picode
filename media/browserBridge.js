@@ -229,6 +229,9 @@
   var sendFailures = 0;
 
   function enqueue(msg) {
+    // 「点了会话」：从这一下到历史画出来多久，才是真正的等待 ——
+    // 不掺人自己找会话、点几下花掉的时间（见 installOpenTiming）。
+    if (openTimingMark && msg && msg.type === "switchSession") { openTimingMark("点了会话"); }
     // 界面第一次往外发消息，说明 chat.js 已经跑起来了（它一跑完就发 ready）：
     // 攒着的入站消息可以按原顺序交给它了（见 deliver / openInbound）。
     openInbound();
@@ -446,6 +449,9 @@
   var connectAt = Date.now();
   var pingTimer = null;
   var watchdogTimer = null;
+
+  /** 计时器给的一个“打点”函数（只在 ?profile=1 时有值，别处要打点就调它）。 */
+  var openTimingMark = null;
 
   /** 攒着的入站消息（chat.js 还没起来时收到的）。 */
   var pendingInbound = [];
@@ -1222,6 +1228,7 @@
       if (marks[name] === undefined) { marks[name] = Math.round(now); }
       if (cycle[name] === undefined) { cycle[name] = Math.round(now); }
     }
+    openTimingMark = mark;
 
     try {
       new PerformanceObserver(function (list) {
