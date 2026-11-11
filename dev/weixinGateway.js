@@ -234,7 +234,8 @@ module.exports = async (page) => {
             name: record.name,
             text: longText,
             kind: "done",
-            pageUrl: base,
+            // 假装成一台只报端口的新版本（回话地址由后端按“连进来的地址 + 端口”拼）
+            pagePort: Number(new URL(base).port) || 80,
         };
         const res = await fetch(`${base}/notify`, {
             method: "POST",
@@ -277,7 +278,10 @@ module.exports = async (page) => {
         //    「哪台 · 哪个会话 · 摘要 · 回话地址 · 会话文件」推过去
         const got = await watchNotify(page);
         console.log("  · ⑤ 推给网关的通知：", JSON.stringify(got));
-        if (!got.pageUrl) { throw new Error("推进去的通知里没有回话地址（网关就没法把话送回来）"); }
+        // 回话地址的规矩：只报端口，地址那半由收的那台按“这条请求从哪儿进来”拼
+        //（自报地址是猜的：多网卡时经常是错的，见 src/remoteNotice.ts 的 pagePort）
+        if (!got.pagePort) { throw new Error("推进去的通知里没有端口（网关就没法把话送回来）"); }
+        if (got.pageUrl) { throw new Error("推进去的通知里还带着自报的地址：该只报端口，地址由收的那台拼"); }
         if (!got.sessionFile) { throw new Error("推进去的通知里没有会话文件"); }
         if (!got.sessionId || !got.name) { throw new Error("推进去的通知缺会话标识或名字"); }
         // 推出去的那段摘要也放宽了（FAKEPI_REPLY_LONG 把假模型的收尾那句撑长时看得到）

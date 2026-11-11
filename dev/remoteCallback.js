@@ -4,16 +4,19 @@
  *
  *   node dev/remoteCallback.js
  *
- * 为什么单独验这一条：那台推过来的消息里自己带着一个网页地址（`pageUrl`），可那是它挑的
- * 第一个网卡；两台之间真正通的那条路未必是它（实测踩过：一台报 10.61.x，而两台实际是
- * 经 100.x 那条通的）。拿错的地址回话，请求发不出去也不报错，看着就是“点了卡片，
- * 浏览器的那张标签页切到前面了，可那边的会话没换”。
+ * 这件事的规矩就一条：**别信对方自报的地址，用它连进来的那个地址**。
+ * 对方自报的是它挑的第一个网卡，两台之间真正通的那条未必是它（实测踩过：一台报 10.61.x，
+ * 而两台实际是经 100.x 那条通的）。用错的地址回话，请求发不出去也不报错，看着就是
+ * “点了卡片，浏览器那张标签页切到前面了，可那边的会话没换”。
  *
- * 所以回话地址要用“这条推送实际是从哪个地址进来的” + 那台报的端口。这条脚本就验这个：
- * 假的那台故意把 pageUrl 报成一个连不通的地址，只把 pagePort 报对，
- * 然后点卡片，看那条 activate 有没有落到假的那台身上、带的是哪个会话。
+ * 所以推送里只报端口（`pagePort`），地址那半由收到的那台按 TCP 连接进来的地址拼。
+ * 这条脚本分三种推法各验一遍（都走真 HTTP，落到真后端的 /notify 上）：
  *
- * 真后端、真卡片、真 HTTP；只有假的那台是个本地小服务。
+ *   一、**新版本**：只报 pagePort —— 回话地址该是“连进来的地址 + 这个端口”；
+ *   二、**旧版本**：还带着一个连不通的 pageUrl（10.255.255.1）—— 不许用它，仍按第一种算；
+ *   三、**更老的版本**：只带 pageUrl、没端口 —— 没别的可用，只能回退用 pageUrl（发不出去）。
+ *
+ * 真后端、真卡片、真 HTTP；只有“那台”是个本地小服务。
  */
 const fs = require("fs");
 const http = require("http");
@@ -22,6 +25,8 @@ const { createHarness } = require("./harness.js");
 const { openPage, sleep } = require("./cdp.js");
 
 const CONFIG_FILE = path.join(__dirname, ".scratch", "pichat", "config.json");
+/** 路由不到的地址：用它假装“那台挑错了网卡”。 */
+const UNREACHABLE = "10.255.255.1";
 
 main().catch((err) => {
     console.error("出错了：" + (err && err.message ? err.message : String(err)));
@@ -36,6 +41,7 @@ async function main() {
     const harness = createHarness({ fakePi: true, port: 0, log: () => { /* 安静跑 */ } });
     let open;
     let notifyWas = true;
+    let fakeHome;
     try {
         fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
         fs.writeFileSync(CONFIG_FILE, JSON.stringify({ label: "公司这台", notify: {} }, null, 2), "utf8");
@@ -44,9 +50,9 @@ async function main() {
         notifyWas = host.getNotifyTurnEnd();
         if (!notifyWas) { host.mutateViewOption("notifyTurnEnd"); }
 
-        // 假的那台：收这边回头发的请求，记下来
+        // 假的“那台”：收这边回头发的请求，记下来
         const got = [];
-        const fakeHome = http.createServer((req, res) => {
+        fakeHome = http.createServer((req, res) => {
             let body = "";
             req.on("data", (chunk) => { body += chunk; });
             req.on("end", () => {
@@ -57,6 +63,7 @@ async function main() {
         });
         await new Promise((resolve) => fakeHome.listen(0, "127.0.0.1", resolve));
         const homePort = fakeHome.address().port;
+        const notifyUrl = url.replace(/\/+$/, "") + "/notify";
 
         open = await openPage({ url, timeoutMs: 60000 });
         const page = open.page;
@@ -65,52 +72,56 @@ async function main() {
         const sessionId = host.clientSessions.get(pageId);
         check(!!sessionId, "这个页面还没对上会话，后面没法验");
 
-        // 那台推一条“有事”过来：地址故意报成连不通的（10.255.255.1 是保留的、路由不到的），
-        // 端口报对（它真正在听的那个）。这正是真机上会发生的：地址挑错网卡、端口没错。
-        const badUrl = "http://10.255.255.1:" + homePort;
-        const posted = await fetch(url.replace(/\/+$/, "") + "/notify", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-                label: "家里那台", sessionId: "home-session-7", name: "家里那个会话",
-                text: "跑完了", kind: "done", pageUrl: badUrl, pagePort: homePort,
-            }),
-        });
-        check(posted.status === 204, `推一条过去，响应应当是 204，实际 ${posted.status}`);
-        const remoteKey = "remote:家里那台:home-session-7";
-        for (let i = 0; i < 40 && !host.notice.shownKeys().includes(remoteKey); i++) { await sleep(100); }
-        check(host.notice.shownKeys().includes(remoteKey), "推过来的那张卡片没弹出来，后面验不了");
+        /** 推一条过来，返回那张卡片在账上的东西。 */
+        const push = async (body) => {
+            const res = await fetch(notifyUrl, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            check(res.status === 204, `推一条过去，响应应当是 204，实际 ${res.status}`);
+            const key = "remote:" + body.label + ":" + body.sessionId;
+            for (let i = 0; i < 40 && !host.notice.shownKeys().includes(key); i++) { await sleep(100); }
+            check(host.notice.shownKeys().includes(key), `${body.label} 那张卡片没弹出来，后面验不了`);
+            return { key, memo: host.remoteNoticePages.get(key) };
+        };
 
-        // 这边存下来的回话地址应当是“这次请求从哪儿进来的 + 它报的端口”，不是那个连不通的地址
-        const memo = host.remoteNoticePages.get(remoteKey);
-        check(!!memo, "那张卡片的账没存下来（点它的时候就没地址可用了）");
-        if (memo) {
-            check(!memo.pageUrl.includes("10.255.255.1"),
-                `回话地址还是那台自己报的那个（${memo.pageUrl}）：多网卡时就会发到不通的地方去`);
-            check(memo.pageUrl === "http://127.0.0.1:" + homePort,
-                `回话地址应当是这次连接进来的地址 + 它报的端口（http://127.0.0.1:${homePort}），实际 ${memo.pageUrl}`);
-            console.log(`  存下来的回话地址：${memo.pageUrl}（那台自己报的是 ${badUrl}，连不通）`);
-        }
+        const stdout = () => host.notice.child && host.notice.child.stdout;
 
-        // 点那张卡片（真鼠标点不了别的进程的窗口，推一行它点了以后会写的那条）
-        const stdout = host.notice.child && host.notice.child.stdout;
-        check(!!stdout, "画卡片那支小程序没起来，这一段验不了");
-        if (stdout) { stdout.push(Buffer.from("click\t" + remoteKey + "\n", "utf8")); }
+        // ---- 一、新版本：只报端口 ----
+        const one = await push({ label: "新版本那台", sessionId: "s-new", name: "会话 A", text: "跑完了", kind: "done", pagePort: homePort });
+        check(one.memo && one.memo.pageUrl === `http://127.0.0.1:${homePort}`,
+            `只报端口时，回话地址该是“连进来的地址 + 那个端口”（http://127.0.0.1:${homePort}），实际 ${one.memo && one.memo.pageUrl}`);
+        if (stdout()) { stdout().push(Buffer.from("click\t" + one.key + "\n", "utf8")); }
         let asked;
         for (let i = 0; i < 60 && !asked; i++) {
-            asked = got.find((one) => one.activate === true);
+            asked = got.find((o) => o.activate === true && o.sessionId === "s-new");
             if (!asked) { await sleep(100); }
         }
-        check(!!asked, `点了卡片，那条“请那台切会话”没落到它身上（收到 ${got.length} 条：${JSON.stringify(got)}）`);
-        if (asked) {
-            check(asked.sessionId === "home-session-7", `带过去的会话是 ${JSON.stringify(asked.sessionId)}，应当是那张卡片说的那个`);
-            check(asked.label === "公司这台", `带过去的标签是 ${JSON.stringify(asked.label)}，应当是这台的「公司这台」`);
-            console.log(`  那条请求落到了那台上：会话 ${asked.sessionId}、标签 ${asked.label}`);
-        }
-        // 这边的页面不跟着切（那不是这台的会话）
+        check(!!asked, `点了卡片，那条“请那台切会话”没落到它身上（收到 ${JSON.stringify(got)}）`);
+        if (asked) { check(asked.label === "公司这台", `带过去的标签是 ${JSON.stringify(asked.label)}，应当是这台的「公司这台」`); }
+        console.log("  一、新版本只报端口：回话地址 " + (one.memo && one.memo.pageUrl) + "，请求落到了那台上");
+
+        // ---- 二、旧版本：还带着一个连不通的地址，不许用它 ----
+        const two = await push({
+            label: "旧版本那台", sessionId: "s-old", name: "会话 B", text: "跑完了", kind: "done",
+            pageUrl: `http://${UNREACHABLE}:${homePort}`, pagePort: homePort,
+        });
+        check(two.memo && !String(two.memo.pageUrl).includes(UNREACHABLE),
+            `旧版本自报的那个地址（${UNREACHABLE}）不许拿来回话，实际存成了 ${two.memo && two.memo.pageUrl}`);
+        check(two.memo && two.memo.pageUrl === `http://127.0.0.1:${homePort}`,
+            `旧版本带了错地址时，也该按“连进来的地址 + 端口”算，实际 ${two.memo && two.memo.pageUrl}`);
+        console.log("  二、旧版本带错地址：回话地址仍是 " + (two.memo && two.memo.pageUrl) + "（那个错的没被用）");
+
+        // ---- 三、更老的版本：只带 pageUrl、没有端口 —— 只能回退，且失败会写日志 ----
+        const three = await push({ label: "更老那台", sessionId: "s-oldest", name: "会话 C", text: "跑完了", kind: "done", pageUrl: `http://${UNREACHABLE}:9` });
+        check(three.memo && three.memo.pageUrl === `http://${UNREACHABLE}:9`,
+            `没报端口时只能回退用它自报的地址，实际 ${three.memo && three.memo.pageUrl}`);
+        console.log("  三、更老的版本（没报端口）：只能回退用它自报的地址（发不出去，但那是旧版本的账）");
+
+        // 这边的页面不跟着切（那些会话都不在这台）
         check(host.clientSessions.get(pageId) === sessionId, "点了别台推来的卡片，这边的页面竟然自己切走了");
 
-        fakeHome.close();
         if (problems.length) {
             console.log("");
             console.log(`有问题（${problems.length} 条）：`);
@@ -118,8 +129,9 @@ async function main() {
             throw new Error(`别台推来的卡片回话地址没对上：${problems.length} 条`);
         }
         console.log("");
-        console.log("点别台推来的卡片：回话地址用的是“这条请求从哪儿进来的 + 它报的端口”，不是它自己报的那个地址；请求确实落到了那台上。");
+        console.log("点别台推来的卡片：回话地址按“这条请求从哪儿进来的 + 那台报的端口”算，那台自报的地址一个都不信；只报端口的、带错地址的、老到没端口的三种都验过了。");
     } finally {
+        if (fakeHome) { try { fakeHome.close(); } catch { /* 已经关了 */ } }
         if (open) { try { await open.close(); } catch { /* 收摊出错不拦路 */ } }
         try { await harness.stop(); } catch { /* 收摊出错不拦路 */ }
         try {

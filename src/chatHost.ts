@@ -1995,9 +1995,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             // 正文也推过去：那台弹卡片时才不会只剩一个名字
             text: summary,
             kind,
-            // 这台的网页地址与端口（那台回头请这台的页面切会话时用；地址它那边会换成
-            // “这条请求从哪儿进来的”，所以这里报的那个地址不准也不要紧，端口得准）
-            pageUrl: base.replace(/\/+$/, ""),
+            // 只报端口，不自报地址：地址那半由收的那台用“这条请求从哪儿进来的”拼
+            //（见 callbackBase）。自报的那个是猜的（取第一个网卡），多网卡时经常是错的。
             ...(ChatHost.portOf(base) ? { pagePort: ChatHost.portOf(base) } : {}),
         };
         for (const target of targets) {
