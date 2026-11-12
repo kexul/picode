@@ -139,7 +139,8 @@ export interface RuntimeHost {
     postToSession(sessionId: string, msg: Record<string, unknown>): void;
     /**
      * 宿主是否要「整屏重画 / 加载会话时只发最近一段历史」。
-     * 网页端是 true：长会话全量发下来太慢，只发最近一段（默认 60 条）消息，
+     * 网页端是 true：长会话全量发下来太慢，只发最近一段（默认 60 条正文消息；工具调用与
+     * 工具结果不单独算一条），
      * 更早的由页面点「加载更早的消息」按钮再取。VSCode 两家维持全量。
      * 可选：缺省当 false。
      */

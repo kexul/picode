@@ -197,6 +197,28 @@ function isConversationMessage(message: any): boolean {
 }
 
 /**
+ * 首屏窗口 / 「加载更早」按“条数”算时，什么样的一条算一条。
+ *
+ * 跟 isConversationMessage 只差一处：模型为了调工具吐出来的那条助手消息（content 里只有
+ * thinking / toolCall、一个字正文都没有）不算。真会话里一次工具往返就是一条这样的消息、
+ * 一条基本只装一个工具调用；拿它当一条算，工具多的会话点一次「加载更早」只多出十来个
+ * 工具标签（同名的还并成一个，见 media/chat.js 的 addToolToGroup），按钮上「还有 N 条」
+ * 也涨得跟肉眼看到的对不上（实测一个 1043 条的会话：正文只有几十条，其余几乎全是这种）。
+ * 工具结果本来就不算（见 isConversationMessage），这里只是把工具调用那条一起摘掉。
+ *
+ * 起点能不能落在这条消息上另有一套讲究（见 sliceHistoryWindow 里那段 while），
+ * 那里要用的还是 isConversationMessage（宽的那个）。
+ */
+function countsAsHistoryMessage(message: any): boolean {
+    if (!isConversationMessage(message)) { return false; }
+    if (message.role !== "assistant") { return true; }
+    const content = message.content;
+    if (typeof content === "string") { return content.trim().length > 0; }
+    if (!Array.isArray(content)) { return false; }
+    return content.some((block: any) => block && block.type === "text" && String(block.text ?? "").trim().length > 0);
+}
+
+/**
  * 一个会话的全部运行时状态：独立的 pi 进程 + 独立的会话/编辑追踪。
  * 多个 SessionRuntime 各自持有自己的 PiClient，因此可以真正并行流式生成。
  *
@@ -322,7 +344,7 @@ export class SessionRuntime {
     private historyWindowFingerprint = "";
     /** 开窗口时完整消息数组的长度；长度变短说明底下换过会话，旧下标作废。 */
     private historyWindowLength = 0;
-    /** 开窗口时窗口前还有多少条 user/assistant 消息（按钮上「还有 N 条」用）。 */
+    /** 开窗口时窗口前还有多少条正文消息（按钮上「还有 N 条」用；口径见 countsAsHistoryMessage）。 */
     private historyWindowHidden = 0;
     /** 网页端首屏一次最多内联多少图片数据（base64 字符数）。
      *
@@ -1604,10 +1626,18 @@ export class SessionRuntime {
     //  网页端「只发最近一段历史」（历史窗口）
     // ========================================================================
 
-    /** 首屏窗口的条数上限（默认值；理由与字节预算一起见 historyWindowSize）。 */
+    /** 首屏窗口的正文条数上限（默认值；理由与字节预算一起见 historyWindowSize）。 */
     private static readonly WEB_HISTORY_WINDOW = 60;
     /** 首屏窗口的字节预算（UTF-8，默认 250 KB）：长工具输出（一条 bash 几十 KB）靠它挡住。 */
     private static readonly WEB_HISTORY_BUDGET = 250 * 1024;
+    /**
+     * 一屏里最多装多少条真消息（不分类别，工具调用与工具结果也算），只防着工具极密的会话。
+     *
+     * 条数上限只数正文（见 countsAsHistoryMessage），可那些工具调用照样得占字节：一轮几十个
+     * 短命令时，250 KB 能装下一千多条消息（实测一个 6120 条的构造会话，一屏装了 1273 条）。
+     * 一屏几百条就够看了，再多只是白画。
+     */
+    private static readonly WEB_HISTORY_RAW_LIMIT = 400;
 
     /**
      * 定下这一屏里哪些图真带数据（其余的只发占位，界面上点开再取）。
@@ -1899,7 +1929,10 @@ export class SessionRuntime {
     }
 
     /**
-     * 首屏窗口：默认最多 60 条 user/assistant 消息、或者 250 KB（UTF-8），哪个先到算哪个。
+     * 首屏窗口：默认最多 60 条正文消息、或者 250 KB（UTF-8），哪个先到算哪个。
+     *
+     * “一条”的含义见 countsAsHistoryMessage：工具调用那条助手消息不算（工具结果本来也不算），
+     * 不然一个工具多的会话“60 条”只够装十来个工具标签。
      *
      * 字节按“真会发出去的量”算（见 messageBytes）：思考全文与工具输出全文不发，也就不占预算。
      *
@@ -1944,7 +1977,7 @@ export class SessionRuntime {
         let hidden = 0;
         for (let i = 0; i < start; i += 1) {
             const m = messages[i];
-            if (isConversationMessage(m)) { hidden += 1; }
+            if (countsAsHistoryMessage(m)) { hidden += 1; }
         }
         return {
             list: messages.slice(start),
@@ -1968,23 +2001,27 @@ export class SessionRuntime {
         hasMore: boolean;
         hidden: number;
     } {
-        // 从最新一条往前装，装到“条数上限”或“字节预算”哪个先到为止。
-        // 两个都要：条数管住 DOM 的规模（一堆「哦」能塞几千条），字节管住真实体量
-        // （一条贴了几十 KB 正文的消息、一条长命令参数就顶几百条普通消息）。
+        // 从最新一条往前装，装到“正文条数上限”“字节预算”“总条数上限”哪个先到为止。
+        // 三个都要：正文条数管住“点一下看到多少东西”，字节管住真实体量（一条贴了几十 KB
+        // 正文的消息、一条长命令参数就顶几百条普通消息），总条数防着工具极密的会话
+        // （见 WEB_HISTORY_RAW_LIMIT）。
         // 字节按“真会发出去的量”算（见 messageBytes）：思考与工具输出全文不算在内。
         const cap = this.historyWindowSize();
         const budget = this.historyWindowBudget();
+        const rawLimit = SessionRuntime.WEB_HISTORY_RAW_LIMIT;
         let start = endBefore;
         let count = 0;
         let bytes = 0;
+        let raw = 0;
         for (let i = endBefore - 1; i >= 0; i -= 1) {
             const m = messages[i];
             const size = messageBytes(m);
             // 最新那一条无论多大都带上：不然打开来一条都没有，反而像坏了
-            if (start !== endBefore && (count >= cap || bytes + size > budget)) { break; }
+            if (start !== endBefore && (count >= cap || bytes + size > budget || raw >= rawLimit)) { break; }
             start = i;
+            raw += 1;
             bytes += size;
-            if (isConversationMessage(m)) { count += 1; }
+            if (countsAsHistoryMessage(m)) { count += 1; }
         }
         // 起点只能落在正文或自己的已填好通知上：落在一条工具结果上时，它那条调用
         // 被切到了上一段里——这一屏里落单的结果没人认，往前补的那一批里又只有调用没有结果，
@@ -1996,7 +2033,7 @@ export class SessionRuntime {
         for (let i = 0; i < start; i++) {
             const m = messages[i];
             if (!m) { continue; }
-            if (isConversationMessage(m)) { hidden++; }
+            if (countsAsHistoryMessage(m)) { hidden++; }
         }
         return {
             list: messages.slice(start, endBefore),
