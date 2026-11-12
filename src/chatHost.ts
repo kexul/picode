@@ -329,7 +329,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             tabaDir: taba?.ok ? taba.resourceDir : "",
             askExtension: ask?.ok ? ask.extensionPath : "",
             askDir: ask?.ok ? ask.resourceDir : "",
-            // 自动起标题：只给主会话加载（子会话、判官不带）
+            // 自动起标题：只给主会话加载（子会话不带）
             titleExtension: title?.ok ? title.extensionPath : "",
             // 会话里的截图挪出会话文件：每个会话都带
             imageExtension: image?.ok ? image.extensionPath : "",

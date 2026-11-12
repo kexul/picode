@@ -42,15 +42,6 @@ export interface TabaChild {
     sessionFile?: string;
     /** 派活那个会话的会话文件路径（名录文件里用：按名字找子会话时靠它确认是不是本会话派的）。 */
     parentSessionFile?: string;
-    /**
-     * 不给模型看见、不写名录的子会话（现在只有目标验收的判官）。
-     * 这类会话照样登记在这里（关它、找它、算它是不是还在跑都走同一张表），只是：
-     *   - 模型按名字找不到（`findByRef` 跳过），不能自己把正在验它的判官停掉；
-     *   - 跑完不把结果交回父会话（结论写在最后那条回复里，由派它的那边自己读）；
-     *   - 不写名录文件（task_peek 读的那些）。
-     * 会话列表里照样有它：人在等判官验的时候要看得到它验到哪一步（见 sessionListMessage）。
-     */
-    hidden?: boolean;
 }
 export class TabaRegistry {
     private byId = new Map<string, TabaChild>();
@@ -78,13 +69,9 @@ export class TabaRegistry {
         return this.all().filter((c) => c.parentPanelId === panelId);
     }
 
-    /**
-     * 这个会话派出去的子会话里还有没有在跑的（刚派出、任务还没发出去也算）。
-     * 判官那种 hidden 子会话不算：它不是替人干的活，也不是结果要交回来的那些。
-     */
+    /** 这个会话派出去的子会话里还有没有在跑的（刚派出、任务还没发出去也算）。 */
     public hasRunningChildren(panelId: string): boolean {
-        return this.childrenOf(panelId).some((c) =>
-            !c.hidden && (c.state === "starting" || c.state === "running"));
+        return this.childrenOf(panelId).some((c) => c.state === "starting" || c.state === "running");
     }
 
     public noteTaskSent(id: string): void {
@@ -128,9 +115,9 @@ export class TabaRegistry {
         return child;
     }
 
-    /** 按编号或名字在本会话派出去的子会话里找（模型指名停止时用）。判官不给模型看见。 */
+    /** 按编号或名字在本会话派出去的子会话里找（模型指名停止时用）。 */
     public findByRef(parentPanelId: string, ref: { id?: string; name?: string }): TabaChild | undefined {
-        const kids = this.childrenOf(parentPanelId).filter((c) => !c.hidden);
+        const kids = this.childrenOf(parentPanelId);
         if (ref.id) {
             const exact = kids.find((c) => c.id === ref.id);
             if (exact) { return exact; }

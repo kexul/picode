@@ -19,8 +19,6 @@
 
 /** 能覆盖的提示词。加一项就要在下面 PROMPTS 里写它的原文。 */
 export type PromptKey =
-    // ---- 自动接着干（/auto）----
-    | "autoJudge"
     // ---- 工具说明（模型挑工具时看的）----
     | "toolTask"
     | "toolTaskStop"
@@ -57,20 +55,6 @@ export interface PromptSpec {
  * 只是想让自己的机器上换个说法，请改 config.json 里的覆盖，不要改这里。
  */
 export const PROMPTS: Record<PromptKey, PromptSpec> = {
-    autoJudge: {
-        label: "自动接着干（/auto）里判官那一轮",
-        vars: ["轮次", "最后一条回复"],
-        text: [
-            "【第 {{轮次}} 轮】你只做一件事：判断主会话还要不要接着干。别动手干活，也别去读文件。",
-            "",
-            "【主会话这一轮最后说的话】",
-            "{{最后一条回复}}",
-            "",
-            "【怎么判断】事情没做完就继续，做完了就停。看不出来的时候按继续算。",
-            "",
-            "【怎么回】第一行只写两个字：「继续」或者「结束」。要说明理由就在第二行写一句，别多写。",
-        ].join("\n"),
-    },
     toolTask: {
         label: "派子会话那个 task 工具的说明",
         vars: [],
@@ -270,6 +254,7 @@ export function isPromptKey(name: string): name is PromptKey {
  * 不要把它当成"写错了名字"报出来，悄悄地不管它就行。
  */
 const RETIRED_PROMPT_KEYS = [
+    "autoJudge",
     "goalNegotiate", "goalStart", "goalResume", "goalJudge", "goalFeedback", "toolUpdateGoal",
     "toolWatch", "watchDelivery",
 ];

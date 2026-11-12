@@ -9,7 +9,7 @@
  *
  * 验的几条：
  *   - 同一个会话文件第二次扫不再读文件（缓存命中），文件改过以后结果跟着变；
- *   - 子会话两种认法：清单里记过（判官那种不走那套文案的也认得出来）、
+ *   - 子会话两种认法：清单里记过（新写的派活没有那句收尾要求也认得出来）、
  *     老会话靠第一条用户消息里那句收尾要求（兜底还在）；
  *   - 已经扫过、记了缓存的条目，清单后来才记上它时也要立刻改口；
  *   - “启动时自动打开最近会话”那条路查清单就够，不读文件；
@@ -71,8 +71,8 @@ const dispatched = writeSession(
     "【任务】\n\n摸一下认证模块\n\n---\n\n【收尾要求】\n\n你跑完这一轮以后，你的最后一条回复会被自动送回去。",
     2
 );
-// 判官：任务说明不走那套文案（rawTask），所以只能靠清单认
-const judge = writeSession("判官", "【验收第 1 轮】你是判官：验工人这一轮的活，别自己动手改。", 1);
+// 新写法的子会话：第一条用户消息里没有那句收尾要求（只剩【任务】那一段），只能靠清单认
+const newChild = writeSession("新写法的子会话", "【任务】\n\n摸一下认证模块", 1);
 // 后面才改过名的：标题要取最新那一次（不是第一条用户消息）
 const renamed = writeSession("改过名的", "第一句", 2, {
     append: [{ type: "session_info", name: "后来起的名字", timestamp: new Date().toISOString() }],
@@ -141,24 +141,24 @@ fs.writeFileSync(notSession, JSON.stringify({ type: "message", message: { role: 
     const textChild = await sessionStore.scanSessionInfo(dispatched);
     checks.push(["文案里有收尾要求的老会话：认得出来（兜底还在）", textChild.child === true]);
 
-    const judgeBefore = await sessionStore.scanSessionInfo(judge);
-    checks.push(["判官那种不走那套文案的：清单里没记过就分不出来", judgeBefore.child === false]);
+    const newChildBefore = await sessionStore.scanSessionInfo(newChild);
+    checks.push(["新写法那种没有收尾要求的：清单里没记过就分不出来", newChildBefore.child === false]);
 
-    checks.push(["记进清单：第一次算新条目", childSessions.noteChildSession(judge) === true]);
-    checks.push(["记第二次：不重复写", childSessions.noteChildSession(judge) === false]);
+    checks.push(["记进清单：第一次算新条目", childSessions.noteChildSession(newChild) === true]);
+    checks.push(["记第二次：不重复写", childSessions.noteChildSession(newChild) === false]);
     checks.push(["清单文件落在 PICHAT_HOME 里", fs.existsSync(path.join(process.env.PICHAT_HOME, "child-sessions.json"))]);
 
     opens = 0;
-    const judgeAfter = await sessionStore.scanSessionInfo(judge);
-    checks.push(["已经缓存过的条目：记进清单后立刻改口（不被缓存盖住）", judgeAfter.child === true]);
+    const newChildAfter = await sessionStore.scanSessionInfo(newChild);
+    checks.push(["已经缓存过的条目：记进清单后立刻改口（不被缓存盖住）", newChildAfter.child === true]);
     checks.push(["这一趟没读文件", opens === 0]);
 
     opens = 0;
-    const childByHelper = await sessionStore.isChildSessionFile(judge);
+    const childByHelper = await sessionStore.isChildSessionFile(newChild);
     checks.push(["自动打开最近会话那条路：查清单就够，不读文件", childByHelper === true && opens === 0]);
 
     if (process.platform === "win32") {
-        checks.push(["路径大小写不同也认（Windows）", childSessions.isKnownChildSession(judge.toUpperCase()) === true]);
+        checks.push(["路径大小写不同也认（Windows）", childSessions.isKnownChildSession(newChild.toUpperCase()) === true]);
     }
 
     // ---- 文件没了 ----

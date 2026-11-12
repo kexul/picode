@@ -42,7 +42,7 @@ async function main() {
         }
 
         const host = harness.host();
-        // 主会话：子会话（判官 / 派活的）不占屏
+        // 主会话：子会话（派活的）不占屏
         const sessionId = [...host.panels.keys()].find((id) => !host.taba.byChildPanel(id));
         check(!!sessionId, "后端一个会话都没有（假 pi 那一轮没跑起来？）");
         if (!sessionId) { throw new Error("没法验：没有会话"); }

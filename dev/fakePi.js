@@ -483,21 +483,11 @@ async function runScript(userText) {
         return;
     }
 
-    // ---- 自动接着干（/auto）的判官那一轮（见 auto.ts 的 autoJudge）：一句话判"继不继续" ----
-    // 判官是另起的 pi 进程，每轮一份：轮数记在会话目录里的一个文件上，跨进程才数得对。
-    //   FAKEPI_AUTO_STOP_ON=n  第 n 轮开始说「结束」（默认 2：前一轮继续、后一轮收工）
-    if (/判断主会话还要不要接着干/.test(userText)) {
-        // 判官一般要跑一会儿；这里可以把它拖慢一点，好让「判官正在看」在界面上露出来
-        await pause(Number(process.env.FAKEPI_JUDGE_MS || 0));
-        const counterFile = path.join(process.cwd(), ".judge-rounds");
-        let round = 1;
-        try { round = (Number(fs.readFileSync(counterFile, "utf8")) || 0) + 1; } catch { round = 1; }
-        try { fs.writeFileSync(counterFile, String(round), "utf8"); } catch { /* 写不进去就当第一轮 */ }
-        const stopOn = Number(process.env.FAKEPI_AUTO_STOP_ON || 2);
-        const stop = round >= stopOn;
-        await say(stop
-            ? "结束\n（假判官）它说活干完了。"
-            : "继续\n（假判官）它说还有没做完的。");
+    // ---- 自动模式催「继续」：主会话每轮跑完收到的那一句 ----
+    // 回短一点、带一点停顿：不点开关的话它会一轮接一轮地来，别每次都演一整套
+    if (/^继续$/.test(userText)) {
+        await pause(Number(process.env.FAKEPI_CONTINUE_MS || 800));
+        await say("（假模型）接着干一点。");
         finish();
         return;
     }
@@ -622,6 +612,15 @@ async function runScript(userText) {
             },
         });
         await say("写完了。");
+        finish();
+        return;
+    }
+
+    // ---- 自动模式催「别闲着」：主会话跑完一轮、子会话还在跑时发来的那一句 ----
+    // 回短一点、带一点停顿：子会话还在跑的那几秒里会来好几遍，别每次都演一整套
+    if (/别闲着/.test(userText)) {
+        await pause(Number(process.env.FAKEPI_NUDGE_MS || 1500));
+        await say("（假模型）那我趁等结果的工夫先把说明.md 再看一遍。");
         finish();
         return;
     }

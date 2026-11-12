@@ -4,30 +4,25 @@
  *
  * 要验的几件事：
  *   1. 开关是输入框右下角最右边那颗圆圈按钮：没开时也在（暗着），点一下开始——
- *      不往对话里发东西、按钮变绿转圈、存档里记下“开着”；
- *   2. 主会话跑完一轮 → 插件自动派判官 → 判官说「继续」→ 主会话收到一句「继续」又跑一轮；
- *   3. 判官说「结束」→ 开关自己关掉、按钮回到暗色（不消失）、系统提示说清为什么；
- *   4. 开着时再点一下就是停；刷新页面后那颗按钮还亮着；
+ *      不往对话里发东西、按钮变绿、存档里记下“开着”（不记轮数）；
+ *   2. 主会话跑完一轮 → 插件直接发一句「继续」→ 又跑一轮（不再另起判官会话）；
+ *   3. 开着时再点一下就是停（停下以后不再发「继续」）；
+ *   4. 刷新页面后那颗按钮还亮着；
  *   5. 打 `/auto` 这几个字：吞掉（不发给模型、不回话、也不把开关关掉），菜单里也不再列它；
  *   6. 开着的时候模型问的选择题（ask_choice）不弹卡片：直接替你点它推荐的那一项。
  *
- * 模型那头是假的（`--fake-pi`）：假 pi 看到判官提示词就按轮数说「继续」/「结束」
- * （见 dev/fakePi.js 与 FAKEPI_AUTO_STOP_ON，默认第 2 轮收工）。
+ * 模型那头是假的（`--fake-pi`）：看到「继续」就回一句短的，不点开关就会一轮接一轮地跑
+ * （见 dev/fakePi.js）。
  *
  *   npm run web:shot -- --fake-pi --script dev/autoLoop.js
  */
 const fs = require("fs");
 const path = require("path");
 
-// 判官要跑一会儿才看得到「判官正在看」：没指定就把假判官拖慢一点
-process.env.FAKEPI_JUDGE_MS = process.env.FAKEPI_JUDGE_MS || "2500";
-
 module.exports = async (page) => {
   const scratch = path.join(__dirname, ".scratch");
-  // 判官的轮数记在会话目录里，开关存在 pichat 目录里：上一次跑剩的会让这一跑从第二轮开始
-  for (const name of [path.join(scratch, ".judge-rounds"), path.join(scratch, "pichat", "auto.json")]) {
-    try { fs.rmSync(name, { force: true }); } catch { /* 没有就算了 */ }
-  }
+  const autoFilePath = path.join(process.env.PICHAT_HOME || path.join(scratch, "pichat"), "auto.json");
+  try { fs.rmSync(autoFilePath, { force: true }); } catch { /* 没有就算了 */ }
 
   await page.waitReady();
   const problems = [];
@@ -36,12 +31,9 @@ module.exports = async (page) => {
     console.log((ok ? "✓ " : "✗ ") + what + (detail ? "  " + JSON.stringify(detail) : ""));
   };
 
-  /** 开关存档（跟后端同一个目录：调试时 PICHAT_HOME 指到 dev/.scratch/pichat）。 */
-  const autoFilePath = path.join(process.env.PICHAT_HOME || path.join(scratch, "pichat"), "auto.json");
   const autos = () => {
     try { return JSON.parse(fs.readFileSync(autoFilePath, "utf8")).autos || {}; } catch { return {}; }
   };
-  /** 存档里那一份（只有一个会话开着的时候才有意义）。 */
   const onlyAuto = () => {
     const all = autos();
     const keys = Object.keys(all);
@@ -68,6 +60,7 @@ module.exports = async (page) => {
   const systemSays = () => page.eval(`
     return Array.from(document.querySelectorAll(".msg.system")).map((el) => el.textContent.trim()).join(" | ");
   `);
+  const continues = async () => (await userSays()).filter((t) => t === "继续").length;
   /** 面板现在看得见吗：常驻那一列（宽窗，display 不是 none）或者浮层（窄窗，没盖着 hidden）。 */
   const panelShown = () => page.eval(`
     const dock = document.getElementById("sidebarDock");
@@ -75,7 +68,7 @@ module.exports = async (page) => {
     const overlay = document.getElementById("pickerOverlay");
     return dockShown || (!!overlay && !overlay.classList.contains("hidden"));
   `);
-  /** 「项目与会话」里「正在对话」那几行（判官在跑的时候也在里面）。 */
+  /** 「项目与会话」里「正在对话」那几行。 */
   const openRows = async () => {
     const opened = !(await panelShown());
     if (opened) { await page.click("#browserMenuBtn"); await page.sleep(400); }
@@ -90,7 +83,6 @@ module.exports = async (page) => {
     if (opened) { await page.press("Escape"); await page.sleep(250); }
     return rows;
   };
-  /** 等某件事发生（最多等 ms 毫秒）；返回等到时那一条要看的读数。 */
   const until = async (fn, ms) => {
     const limit = Date.now() + (ms || 60000);
     let last = null;
@@ -111,53 +103,43 @@ module.exports = async (page) => {
   await page.sleep(800);
   i = await ind();
   check("点一下：小开关拨到右边（开着）、输入框外面那圈边框变绿", i.on && i.flow, i);
-  check("指上去写着「自动模式」（点一下停止）", i.title === "自动模式（点一下停止）", i.title);
+  check("指上去写着「自动模式（点一下停止）」", i.title === "自动模式（点一下停止）", i.title);
   check("点一下不多出一条对话消息",
     (await page.eval(`return document.querySelectorAll(".msg.user").length;`)) === 0);
   const a1 = onlyAuto();
-  check("存档：这个会话的开关是「开着」、还没跑过轮", !!a1 && a1.rounds === 0, a1 && { rounds: a1.rounds });
+  check("存档：这个会话的开关是「开着」、不记轮数",
+    !!a1 && typeof a1.updatedAt === "number" && !("rounds" in a1), a1);
   await page.shot("auto-on.png");
 
-  // ---- 2. 第一轮跑完 → 判官说「继续」→ 主会话收到一句「继续」再跑一轮 ----
+  // ---- 2. 第一轮跑完 → 直接发一句「继续」→ 再跑一轮 ----
   await page.send("随便干点活，演示一下");
   await page.waitAnswer("三个工具都跑过");
-  const judged = await until(async () => {
-    const now = await ind();
-    return { ok: now.title.includes("判官正在看") && now.title.includes("第 1 轮"), title: now.title };
-  }, 20000);
-  check("判官在跑的时候按钮写着「第 1 轮 · 判官正在看」", judged && judged.ok, judged);
-  const judgingRows = await openRows();
-  check("判官在跑的时候在「项目与会话」列表里看得见", judgingRows.some((r) => r.includes("判官")), judgingRows);
-  await page.shot("auto-judging.png");
-
   const continued = await until(async () => {
-    const said = await userSays();
-    return { ok: said.some((t) => t.trim() === "继续"), said };
-  }, 90000);
-  check("判官说继续：主会话收到一句「继续」", continued && continued.ok, continued && continued.said);
-  // 主会话收到「继续」马上又跑完一轮、下一个判官就派出来了：这里只认"轮数记上了"
-  check("存档：轮数记上了", ((onlyAuto() || {}).rounds || 0) >= 1, onlyAuto() && onlyAuto().rounds);
+    const n = await continues();
+    return { ok: n >= 1, n };
+  }, 30000);
+  check("这一轮跑完：主会话收到一句「继续」（没有判官那一层）", continued && continued.ok, continued);
+  const rows = await openRows();
+  check("不再另起判官会话：列表里只有主会话", rows.length === 1 && !rows.some((r) => r.includes("判官")), rows);
+  await page.sleep(1500);
+  check("不点开关就一直接着跑（还会再来「继续」）", (await continues()) >= 1, await continues());
+  await page.shot("auto-looping.png");
 
-  // ---- 3. 第二轮判官说「结束」→ 开关自己关掉、按钮回到暗色 ----
-  const stopped = await until(async () => {
-    const now = await ind();
-    return { ok: now.exists && now.on === false, ...now };
-  }, 90000);
-  check("判官说结束：那颗按钮回到暗色（不消失）、绿边也收掉",
-    stopped && stopped.ok && stopped.title === "自动模式（点一下开始）" && stopped.flow === false, stopped);
-  const said2 = await systemSays();
-  check("系统提示说清了为什么停", said2.includes("判官说不用继续了"), said2.slice(-160));
-  check("存档：关掉以后那条也没了", Object.keys(autos()).length === 0, autos());
-  const rowsAfter = await openRows();
-  check("判官给完结论就把自己关掉：列表里只剩主会话",
-    !rowsAfter.some((r) => r.includes("判官")) && rowsAfter.length === 1, rowsAfter);
-  await page.shot("auto-stopped.png");
-
-  // ---- 4. 再点一下又开；刷新页面后还亮着；开着时再点一下就是停 ----
+  // ---- 3. 开着时再点一下：停；停下以后不再发「继续」----
   await page.click("#autoBtn");
   await page.sleep(600);
   i = await ind();
-  check("再点一下那颗按钮又开了", i.on, i);
+  check("开着时再点一下：自动模式关掉、按钮回到暗色", i.exists && !i.on, i);
+  check("关掉以后存档里也没了", Object.keys(autos()).length === 0, autos());
+  const stoppedAt = await continues();
+  await page.sleep(3500);
+  check("停下以后不再发「继续」", (await continues()) === stoppedAt, { before: stoppedAt, after: await continues() });
+  check("停下以后绿边也收掉", (await ind()).flow === false, await ind());
+
+  // ---- 4. 再点一下又开；刷新页面后还亮着 ----
+  await page.click("#autoBtn");
+  await page.sleep(600);
+  check("再点一下那颗按钮又开了", (await ind()).on, await ind());
 
   await page.eval("location.reload(); return true;");
   await page.sleep(1200);
@@ -170,11 +152,10 @@ module.exports = async (page) => {
 
   await page.click("#autoBtn");
   await page.sleep(500);
-  i = await ind();
-  check("开着时再点一下：自动模式关掉、按钮回到暗色", i.exists && !i.on, i);
-  check("开着时再点一下：存档里也没了", Object.keys(autos()).length === 0, autos());
+  check("开着时再点一下：自动模式关掉、存档里也没了",
+    !(await ind()).on && Object.keys(autos()).length === 0, autos());
 
-  // ---- 5. 打 /auto 这几个字：吞掉（不发给模型、不回话、也不改开关） ----
+  // ---- 5. 打 /auto 这几个字：吞掉（不发给模型、不回话、也不改开关）----
   const userCount = await page.eval(`return document.querySelectorAll(".msg.user").length;`);
   const sysBefore = await systemSays();
   await page.send("/auto 把测试跑一下");
@@ -201,6 +182,8 @@ module.exports = async (page) => {
     { cardsBefore, cardsAfter, said: saidAsk.slice(-200) });
   check("模型拿到的是「用户选了：A」", askedReply.includes("用户选了：A"), askedReply.slice(-160));
   await page.shot("auto-ask.png");
+  await page.click("#autoBtn");
+  await page.sleep(500);
 
   // ---- 7. 命令菜单里不再列 /auto（开关改成那颗按钮了） ----
   await page.type("/");

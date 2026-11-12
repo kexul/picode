@@ -55,16 +55,13 @@ import { buildTaskText } from "./tabaTask";
 import {
     buildTabaLaunch,
     resolveTabaSpawn,
-    type TabaSpawnOptions,
 } from "./tabaLaunch";
 import { buildRunRecord, closedRunState, tabaRunsDir, writeRunRecord, type TabaRunState } from "./tabaRunFiles";
 import { noteChildSession } from "./childSessions";
 import {
+    AUTO_CHILDREN_RUNNING_TEXT,
     AUTO_CONTINUE_TEXT,
     autoAskPicks,
-    autoIndicatorTitle,
-    buildAutoJudgePrompt,
-    parseAutoVerdict,
     type AutoCommand,
     type AutoState,
 } from "./auto";
@@ -910,8 +907,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         const target = path.resolve(dir);
         const cands: SessionRuntime[] = [];
         for (const rt of this.panels.values()) {
-            // 判官（hidden 子会话）不能把一块屏派到它那儿去：它不是给人干活用的会话
-            if (this.taba.byChildPanel(rt.id)?.hidden) { continue; }
             if (sameDir(rt.cwd, target)) { cands.push(rt); }
         }
         if (cands.length === 0) { return undefined; }
@@ -945,36 +940,24 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     // ---- Fork（原生克隆会话到新 panel）----
     // ========================================================================
-    //  自动接着干：每轮跑完让判官看一眼，决定要不要再发一句「继续」
+    //  自动接着干：每轮跑完直接再发一句「继续」
     // ========================================================================
     //
     //  开关就是输入框右下角那颗小开关：点一下拨开，再点一下停；开了不往对话里发话。
-    //  开着的时候，每一轮正常跑完，插件另起一个短会话当判官（一个工具都不给，只回一句话），
-    //  把这一轮最后那条回复交给它，问「还要不要接着干」。说继续就发一句「继续」；
-    //  说不继续就把开关关掉。
+    //  开着的时候，每一轮正常跑完就发一句「继续」（有子会话在跑时换成那句「别闲着」）。
     //
-    //  插件这边不设轮数上限（以前到 30 轮会自己停）：只有判官说不用继续、或者人再点一下那颗按钮才停。
-    //  判官起不来、或者答不出个所以然，一律当"继续" —— 这是个无情的继续机器：
-    //  宁可多跑一轮，也不让人回来手动打一句「继续」。
+    //  插件这边不设轮数上限：只有人再点一下那颗按钮才停。
     //
-    //  后台还有命令在跑、或者派出去的子会话还有没跑完的时候不叫判官（也不往对话里写话）：那些结果
-    //  本来就会当一条新消息交回这个会话，等它们进来、那一轮跑完再判（见 autoLoopOnTurnEnd）。
+    //  后台还有命令在跑的时候先不发（也不往对话里写话）：那些结果本来就会当一条新消息
+    //  交回这个会话，等它们进来、那一轮跑完再发（见 autoLoopOnTurnEnd）。
     //
-    //  判官走的是派子会话同一条路（tabaSpawn + hidden）：不写名录、不给模型看见、
-    //  跑完不交回结果；它跑完了在这里读最后那条回复（见 autoJudgeOnTurnEnd）。
+    //  派出去的子会话还在跑的时候发「现在有子任务在跑着，你这边也别闲着」：主会话别停着等。
+    //  每次跑完、子会话还在跑就再发一句（人定的）。
 
     /** 每个会话的开关（panel id → 开关）。内存里这份是热的，盘上那份按会话文件存。 */
     protected readonly autos = new Map<string, AutoState>();
     /** 已经问过存档的会话：问过一次没有就是没有，不必每推一次会话列表就去读盘。 */
     private readonly autoChecked = new Set<string>();
-    /**
-     * 主会话 → 正在跑的那个判官（判官是 hidden 子会话，会话关掉就没了）；
-     * report 是主会话这一轮最后那条回复（判官说做完了、弹提醒时拿它当摘要，见 autoJudgeOnTurnEnd）。
-     */
-    private readonly autoJudgeRun = new Map<string, { id: string; report: string }>();
-
-    /** 判官的启动参数：一个工具都不给（它只读一段文字回一句话，给了工具只会慢、还会乱跑）。 */
-    private static readonly AUTO_JUDGE_ARGS = ["--no-tools", "--no-mcp"];
 
     /** RuntimeHost.onAutoCommand：输入框右下角那颗小开关按下去时，以及有人打了 `/auto` 这几个字时。 */
     public onAutoCommand(panelId: string, cmd: AutoCommand): void {
@@ -1007,30 +990,27 @@ export abstract class ChatControllerBase implements RuntimeHost {
             this.autoBroadcast(rt.id);
             this.postToSession(rt.id, {
                 type: "system",
-                text: `自动模式已经开着（第 ${running.rounds} 轮）。要停就再点一下那颗按钮。`,
+                text: "自动模式已经开着。要停就再点一下那颗按钮。",
             });
             return;
         }
-        this.autos.set(rt.id, { rounds: 0, updatedAt: Date.now() });
+        this.autos.set(rt.id, { updatedAt: Date.now() });
         this.autoChecked.add(rt.id);
         this.autoSave(rt);
         this.autoBroadcast(rt.id);
         this.postToSession(rt.id, {
             type: "system",
-            text: "自动模式开了：之后每一轮跑完，判官看一眼要不要接着干，要就发一句「继续」。"
-                + "要停就再点一下那颗按钮。",
+            text: "自动模式开了：之后每一轮跑完都直接发一句「继续」。要停就再点一下那颗按钮。",
         });
     }
 
-    /** 关掉开关（再点一下那颗按钮，以及判官说不用继续）。盘上那一份也一并抹掉。 */
-    protected autoOff(rt: SessionRuntime, reason?: string): void {
-        this.autoCancelJudge(rt.id);
+    /** 关掉开关（再点一下那颗按钮）。盘上那一份也一并抹掉。 */
+    protected autoOff(rt: SessionRuntime): void {
         this.autos.delete(rt.id);
         this.autoChecked.add(rt.id);   // 刚删掉的那份别再读回来
         const file = rt.currentSessionPath;
         if (file) { dropAuto(file); }
         this.autoBroadcast(rt.id);
-        if (reason) { this.postToSession(rt.id, { type: "system", text: reason }); }
     }
 
     /** 这个会话的开关：内存里没有就问存档要（会话重开、插件重启后接回来）。 */
@@ -1060,111 +1040,29 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected autoBroadcast(panelId: string): void {
         const rt = this.panels.get(panelId);
         const auto = (rt ? this.autoGet(rt) : this.autos.get(panelId)) ?? null;
-        this.postToSession(panelId, {
-            type: "auto",
-            auto,
-            title: auto ? autoIndicatorTitle(auto, this.autoJudgeRun.has(panelId)) : null,
-        });
+        this.postToSession(panelId, { type: "auto", auto });
     }
 
-    /** 这个会话现在是不是正有判官在看（那颗图标指上去要写出来，不然看着像卡住了）。 */
-    protected autoIsJudging(panelId: string): boolean {
-        return this.autoJudgeRun.has(panelId);
-    }
-
-    /** 一轮跑完了：该叫判官就叫（判官自己的收尾走 autoJudgeOnTurnEnd）。 */
+    /** 一轮跑完了：该催就催（有子会话在跑就催它别闲着，后台命令在跑就等结果交回）。 */
     protected autoLoopOnTurnEnd(info: TurnEndInfo): void {
         if (info.status !== "done") { return; }   // 被打断 / 出错的一轮：不算，等下一轮
-        const auto = this.autos.get(info.panelId);
-        if (!auto) { return; }
-        if (this.autoJudgeRun.has(info.panelId)) { return; }   // 上一个判官还在（正常不会）：不叠着开
         const rt = this.panels.get(info.panelId);
-        if (!rt) { return; }
+        if (!rt || !this.autoGet(rt)) { return; }
         // 这个收尾是异步送出的（要等最后一条回复的原文），等它到时人可能已经又发了一句、
-        // 下一轮已经开跑：那时候再叫判官就成了“两轮撞在一处”。
+        // 下一轮已经开跑：那时候再催就成了“两轮撞在一处”。
         if (rt.streaming) { return; }
-        // 后台还有命令在跑、或者派出去的子会话还有没跑完的：这一轮先不叫判官，也不往对话里写话。
-        // 它们的结果本来就会当一条新消息交回这个会话，那一轮跑完再看要不要继续 —— 两边一起催，
-        // 同一个会话就撞在一处了。
-        if (rt.hasRunningBashTasks()) { return; }
-        if (this.taba.hasRunningChildren(info.panelId)) { return; }
-        void this.autoSpawnJudge(info.panelId, auto, info.lastReplyText ?? "");
-    }
-
-    /**
-     * 派一个判官去看这一轮值不值得接着干。
-     *
-     * 走的是派子会话同一条路（`tabaSpawn` + `hidden`）：同样的起会话、登记、收尾；
-     * 只是不写名录、不给模型看见、跑完不交回父会话 —— 结论从它最后一条回复里读。
-     */
-    protected autoSpawnJudge(workerPanelId: string, auto: AutoState, report: string): void {
-        const workerRt = this.panels.get(workerPanelId);
-        if (!workerRt) { return; }
-        const round = auto.rounds + 1;
-        const req: TabaSpawnRequest = {
-            kind: "spawn",
-            // 判官编号自己起（普通子会话的编号是模型那边给的）；要能当文件名用，所以只留字母数字
-            id: "judge" + Date.now().toString(36),
-            name: `判官 · 第 ${round} 轮`,
-            task: buildAutoJudgePrompt({ round, said: report }, this.getConfig().prompts),
-            cwd: workerRt.cwd,
-        };
-        this.autoJudgeRun.set(workerPanelId, { id: req.id, report });
-        auto.rounds = round;
-        delete auto.note;   // 这一轮的结论还没出来
-        this.autoSave(workerRt);
-        this.autoBroadcast(workerPanelId);
-        void this.tabaSpawn(workerPanelId, req, {
-            hidden: true,
-            // 判官这一轮的提示词自己就是完整的一轮：不用再拼「任务 + 收尾要求」
-            rawTask: true,
-            extraArgs: [...ChatControllerBase.AUTO_JUDGE_ARGS],
-        });
-    }
-
-    /**
-     * 判官会话跑完了一轮。
-     * @returns 这是判官会话（这一轮的 onTurnEnd 就到此为止，不弹提醒、不当普通会话处理）
-     */
-    protected autoJudgeOnTurnEnd(info: TurnEndInfo): boolean {
-        const judge = this.taba.byChildPanel(info.panelId);
-        if (!judge || !judge.hidden) { return false; }
-        const workerPanelId = judge.parentPanelId;
-        if (!workerPanelId) { return false; }
-        const run = this.autoJudgeRun.get(workerPanelId);
-        const ours = run?.id === judge.id;
-        this.autoJudgeRun.delete(workerPanelId);
-        this.taba.noteTurnEnd(judge.id, info.status, Date.now());
-        const auto = this.autos.get(workerPanelId);
-        const workerRt = this.panels.get(workerPanelId);
-        if (ours && auto && workerRt) {
-            // 判官这一轮没正常跑完就当它什么都没说：一个字都没有，也是"继续"
-            const said = info.status === "done" ? (info.lastReplyText ?? "").trim() : "";
-            if (!said) {
-                this.postToSession(workerPanelId, { type: "system", text: "判官这一轮没说出个所以然，就当继续。" });
-                this.autoContinue(workerPanelId);
-            } else {
-                const verdict = parseAutoVerdict(said);
-                if (verdict.go) {
-                    auto.note = verdict.note;
-                    this.autoSave(workerRt);
-                    this.autoBroadcast(workerPanelId);
-                    this.autoContinue(workerPanelId);
-                } else {
-                    // 自动模式开着的时候每一轮跑完都不弹提醒，因为那还不算“完事了”；
-                    // 判官说这一轮就是最后了，才在这里弹一张，摘要还是主会话最后那条回复。
-                    this.autoOff(workerRt, `第 ${auto.rounds} 轮：判官说不用继续了。要再开就点一下右下角那颗按钮。`);
-                    this.trayNote(workerPanelId, this.sessionDisplayName(workerRt), run?.report ?? "");
-                }
-            }
+        // 派出去的子会话还在跑：催主会话别停着。这一条排在后台命令前头：两边都在跑时也照样催。
+        if (this.taba.hasRunningChildren(info.panelId)) {
+            this.autoNudgeWhileChildrenRun(info.panelId);
+            return;
         }
-        // 判官这一轮收尾了：没人看着就关掉；用户正看着它（在里面翻它说了什么）就留着，
-        // 别把人家正在看的画面抽走，什么时候关由他自己点。
-        if (!this.isFocusedPanel(info.panelId)) { this.closeAutoJudge(info.panelId); }
-        return true;
+        // 后台还有命令在跑：先不发。它们的结果本来就会当一条新消息交回这个会话，
+        // 等它们进来、那一轮跑完再催 —— 两边一起催，同一个会话就撞在一处了。
+        if (rt.hasRunningBashTasks()) { return; }
+        this.autoContinue(info.panelId);
     }
 
-    /** 判官说接着干：给主会话发一句「继续」。中途开关关掉了就不催了。 */
+    /** 给主会话发一句「继续」。中途开关关掉了就不催了。 */
     protected autoContinue(workerPanelId: string): void {
         const rt = this.panels.get(workerPanelId);
         if (!rt) { return; }
@@ -1172,14 +1070,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
         rt.handleSend(AUTO_CONTINUE_TEXT, undefined, { followUp: true });
     }
 
-    /** 判官起不来 / 没起来：当这一轮没有判官，直接继续（不往卡住人的方向倒）。 */
-    protected autoJudgeFailed(workerPanelId: string, reason: string): void {
-        this.autoJudgeRun.delete(workerPanelId);
+    /**
+     * 子会话还在跑、主会话这一轮先跑完了：叫它去干别的，别停着等。
+     *
+     * 每次跑完、子会话还在跑就再发一句；中途开关关掉了就不发。
+     */
+    protected autoNudgeWhileChildrenRun(workerPanelId: string): void {
         const rt = this.panels.get(workerPanelId);
         if (!rt) { return; }
-        this.autoBroadcast(workerPanelId);
-        this.postToSession(workerPanelId, { type: "system", text: `判官没起来（${reason}），这一轮就当继续。` });
-        this.autoContinue(workerPanelId);
+        if (!this.autoGet(rt)) { return; }
+        rt.handleSend(AUTO_CHILDREN_RUNNING_TEXT, undefined, { followUp: true });
     }
 
     /**
@@ -1191,20 +1091,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!rt || !this.autoGet(rt)) { return undefined; }
         const picks = autoAskPicks(req);
         return picks.length > 0 ? picks : undefined;
-    }
-
-    /** 关掉某个主会话正在跑的那个判官（暂停 / 关掉开关 / 主会话被关掉时用）。 */
-    protected autoCancelJudge(workerPanelId: string): void {
-        const run = this.autoJudgeRun.get(workerPanelId);
-        if (!run) { return; }
-        this.autoJudgeRun.delete(workerPanelId);
-        const judge = this.taba.get(run.id);
-        if (judge?.childPanelId) { this.closeAutoJudge(judge.childPanelId); }
-    }
-
-    /** 关掉一个判官会话（它已经给出结论 / 用不着了）。登记表那边由关会话时的 forgetChildPanel 收拾。 */
-    private closeAutoJudge(judgePanelId: string): void {
-        if (this.panels.has(judgePanelId)) { this.closeSession(judgePanelId); }
     }
 
     // ========================================================================
@@ -1239,23 +1125,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /**
      * 派一个子会话：新开一个会话（不抢当前显示的那一个），把任务发过去。
      * 它跑完第一轮后，最后一条回复会自动交回这个会话（见 tabaOnTurnEnd）。
-     *
-     * 自动接着干（/auto）的判官也走这一条路（`hidden: true`）：同样的起会话、同样的登记表、
-     * 同样的收尾，只是不写名录、不给模型看见、跑完不交回（它的结论从最后那条回复里读）。
-     * 两边的差别全部收在 opts 里，别再另写一份"开后台会话"的路子。
      */
-    protected async tabaSpawn(
-        parentPanelId: string,
-        req: TabaSpawnRequest,
-        opts: TabaSpawnOptions = {}
-    ): Promise<void> {
+    protected async tabaSpawn(parentPanelId: string, req: TabaSpawnRequest): Promise<void> {
         const parentRt = this.panels.get(parentPanelId);
         if (!parentRt) { return; }
-        // 子会话不能再往下派：它那个会话本来就不加载这个扩展，这里再挡一道（判官也不许）
+        // 子会话不能再往下派：它那个会话本来就不加载这个扩展，这里再挡一道
         if (this.taba.byChildPanel(parentPanelId)) {
-            if (!opts.hidden) {
-                this.postToSession(parentPanelId, { type: "system", text: "子会话不能再派子会话。" });
-            }
+            this.postToSession(parentPanelId, { type: "system", text: "子会话不能再派子会话。" });
             return;
         }
         if (this.taba.has(req.id) || this.tabaInFlight.has(req.id)) { return; }
@@ -1274,15 +1150,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
             const { cwd } = plan;
 
             // 工具不另传：不带 --tools 起，子会话就跟配置里的 defaultTools 一样（codemode / powershell / MCP 都在）
-            const extraArgs = [...(opts.extraArgs ?? [])];
-
-            const created = this.createBackgroundSession(buildTabaLaunch(extraArgs, cwd), plan.modelOverride);
+            const created = this.createBackgroundSession(buildTabaLaunch(cwd), plan.modelOverride);
             if (!created) {
-                if (opts.hidden) {
-                    this.autoJudgeFailed(parentPanelId, "判官会话开不出来（pi 可执行文件没找到？）");
-                } else {
-                    this.tabaFailSpawn(parentRt, req.name, "子会话开不出来（pi 可执行文件没找到？）");
-                }
+                this.tabaFailSpawn(parentRt, req.name, "子会话开不出来（pi 可执行文件没找到？）");
                 return;
             }
             const rt = created;
@@ -1296,22 +1166,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 state: "starting",
                 startedAt: Date.now(),
                 deliveries: 0,
-                ...(opts.hidden ? { hidden: true } : {}),
             };
             if (!this.taba.add(child)) {
                 // 同一个编号又来了一次（理论上不会）：把刚开的会话收回去
                 this.closeSession(rt.id);
                 return;
             }
-            // 判官不写名录、不往两边的消息流里插话（没人看着它那个会话）
-            if (!opts.hidden) {
-                this.tabaWriteRun(child);
-            }
+            this.tabaWriteRun(child);
             this.broadcastSessionList(true);
 
-            // 判官那一轮就是它这一轮的全部：不用拼「任务 + 收尾要求」（那是给 taba 子会话的），
-            // 也不带派活那个会话的记录文件（判官要看的只有这一轮的回复，见 autoJudgeOnTurnEnd）
-            const taskText = opts.rawTask === true ? req.task : buildTaskText({
+            // 子会话开起来以后把「任务 + 收尾要求」发过去；派活那个会话的记录文件也带上当背景
+            const taskText = buildTaskText({
                 task: req.task,
                 parentSessionFile: this.tabaParentSessionFile(parentRt, req),
                 parentSessionName: this.sessionDisplayName(parentRt),
@@ -1321,11 +1186,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
             if (!this.panels.has(rt.id)) { return; }
             if (!ready) {
                 this.taba.noteTurnEnd(req.id, "error", Date.now());
-                if (opts.hidden) {
-                    this.closeAutoJudge(rt.id);
-                    this.autoJudgeFailed(parentPanelId, "pi 冷启动超时");
-                    return;
-                }
                 this.postToSession(rt.id, { type: "systemError", text: "子会话的 pi 没起来（等超时了）。" });
                 this.tabaDeliver(child, { resultText: "", status: "error" });
                 return;
@@ -1333,11 +1193,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
             rt.handleSend(taskText, undefined, { followUp: true });
             this.taba.noteTaskSent(req.id);
             this.broadcastSessionList();
-            if (!opts.hidden) {
-                this.tabaWriteRun(this.taba.get(req.id));
-                // 问出子会话与父会话的 .jsonl 路径写到名录里（全新会话要等 pi 落盘才有）
-                void this.tabaResolveSessionFiles(req.id, rt, parentRt);
-            }
+            this.tabaWriteRun(this.taba.get(req.id));
+            // 问出子会话与父会话的 .jsonl 路径写到名录里（全新会话要等 pi 落盘才有）
+            void this.tabaResolveSessionFiles(req.id, rt, parentRt);
         } finally {
             this.tabaInFlight.delete(req.id);
         }
@@ -1345,7 +1203,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 把某个子会话的情况写到名录文件里（模型那边 task_peek 读的就是它）。 */
     protected tabaWriteRun(child: TabaChild | undefined, state?: TabaRunState): void {
-        if (!child || child.hidden) { return; }   // 判官不给模型看见（task_peek 读的就是这份名录）
+        if (!child) { return; }
         const cfg = this.getConfig();
         if (!cfg.tabaDir) { return; }
         writeRunRecord(tabaRunsDir(cfg.tabaDir), buildRunRecord({ child, state }));
@@ -1446,8 +1304,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
      */
     protected tabaOnTurnEnd(info: TurnEndInfo): void {
         const child = this.taba.byChildPanel(info.panelId);
-        // 判官的收尾归自动接着干（见 autoJudgeOnTurnEnd），不走"交回父会话"这一套
-        if (!child || child.hidden) { return; }
+        if (!child) { return; }
         // 第一轮：记下结束时间，把结果交回去（tabaDeliver 里会重写名录）
         if (child.endedAt === undefined && child.deliveries === 0) {
             this.taba.noteTurnEnd(child.id, info.status, Date.now());
@@ -1521,11 +1378,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
      *  @param quiet 搬到另一个工作区时传 true：会话并没有被关掉，不发那些“关掉了”的提示
      *  （两边的会话编号会变，登记本来就对不上了，清掉就行）。 */
     protected notePanelGoneForTaba(panelId: string, opts?: { quiet?: boolean }): void {
-        // 判官（hidden 子会话）没有"变成独立会话"这一说：主会话关了，它也没用了，直接收掉
-        for (const c of this.taba.childrenOf(panelId)) {
-            if (!c.hidden || c.state === "detached") { continue; }
-            if (c.childPanelId) { this.closeAutoJudge(c.childPanelId); }
-        }
         const detached = this.taba.detachChildrenOf(panelId);
         for (const c of detached) {
             if (!opts?.quiet && c.childPanelId && this.panels.has(c.childPanelId)) {
@@ -1537,10 +1389,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             this.tabaWriteRun(c);
         }
         const child = this.taba.byChildPanel(panelId);
-        if (child && child.hidden) {
-            // 判官被关掉（给完结论、或者整轮被取消）：不在两边说话，也不写名录
-            this.taba.forgetChildPanel(panelId);
-        } else if (child) {
+        if (child) {
             const parentRt = child.parentPanelId ? this.panels.get(child.parentPanelId) : undefined;
             const undelivered = child.deliveries === 0 && child.endedAt === undefined;
             // 名录里留下最后一条（写成已关闭）：事后模型还能读到那个 .jsonl。
@@ -1573,19 +1422,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.releasePanelName(rt.nameParts);
         this.autos.delete(panelId);   // 盘上那份留着：重新打开这份会话，开关还在
         this.autoChecked.delete(panelId);
-        // 关掉的是判官（hidden 子会话）：把主会话那边"有判官在跑"的账清掉
-        const judge = this.taba.byChildPanel(panelId);
-        if (judge && judge.hidden && judge.parentPanelId
-            && this.autoJudgeRun.get(judge.parentPanelId)?.id === judge.id) {
-            this.autoJudgeRun.delete(judge.parentPanelId);
-        }
-        // 关掉的是主会话：正在跑的判官一并关掉
-        const run = this.autoJudgeRun.get(panelId);
-        this.autoJudgeRun.delete(panelId);
-        if (run) {
-            const running = this.taba.get(run.id);
-            if (running?.childPanelId) { this.closeAutoJudge(running.childPanelId); }
-        }
         this.panels.delete(panelId);
         this.panelUsedAt.delete(panelId);
     }
@@ -1624,11 +1460,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /**
-     * 把派出去的子会话（含判官）的 .jsonl 路径记进子会话清单（见 childSessions）。
+     * 把派出去的子会话的 .jsonl 路径记进子会话清单（见 childSessions）。
      *
      * 挂在这里是因为它是“会话状态一变就走一遍”的唯一出口：子会话文件是 pi 落盘以后才知道的，
      * 而那时这边一定广播过列表。已经在清单里的会直接返回，所以反复调不要紧。
-     * 判官（hidden 子会话）也要记：它同样不该出现在历史列表里。
      */
     private noteChildSessionFiles(): void {
         for (const rt of this.panels.values()) {
@@ -1671,10 +1506,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     private serializeSession(rt: SessionRuntime): Record<string, unknown> {
         const child = this.taba.byChildPanel(rt.id);
         const cwd = rt.cwd;
-        // 判官（hidden 子会话）就用我们自己起的名字「判官 · 第 N 轮」：pi 给它起的标题
-        // 看不出来它是在验收，列表里会认不出来（跑完就关的那一行，认不出等于白列）。
-        const judgeName = child?.hidden ? this.tabaTabNameOf(child.name) : undefined;
-        const name = judgeName ?? this.sessionDisplayName(rt);
+        const name = this.sessionDisplayName(rt);
         const auto = this.autoGet(rt);
         return {
             id: rt.id,
@@ -1686,7 +1518,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             name,
             // pi 那边给会话起的标题（自动命名扩展 / /name 写的）；还没起就是空串，
             // 界面拿它当会话名，空的时候回落 name。
-            title: judgeName ? "" : (rt.sessionTitle || ""),
+            title: rt.sessionTitle || "",
             // 当前用的会话文件（列表里用它把“已打开”那些历史行标出来；新会话可能还没落盘）
             file: rt.currentSessionPath || "",
             // 子会话挂在哪个会话下面（前端据此缩进）；不是子会话就是 null
@@ -1718,7 +1550,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
             // 自动接着干（/auto）：跟 modelChanged 一样是一次性推送，所以每次列表都带一份 ——
             // 页面刷新 / 重连后界面重建，那颗按钮亮不亮就靠它补回来。
             auto: auto ?? null,
-            autoTitle: auto ? autoIndicatorTitle(auto, this.autoIsJudging(rt.id)) : null,
         };
     }
 
@@ -1762,7 +1593,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             }
         };
         for (const rt of this.panels.values()) {
-            // 子会话已在它父会话下面列过了，这里跳过（判官是 hidden 子会话，同样跳过）
+            // 子会话已在它父会话下面列过了，这里跳过
             if (this.taba.byChildPanel(rt.id)) { continue; }
             push(rt, sameDir(rt.cwd, this.getCwd()) ? "" : (path.basename(rt.cwd) || rt.cwd));
         }
@@ -1784,8 +1615,6 @@ export abstract class ChatControllerBase implements RuntimeHost {
     private sessionListMessage(clientId: string): Record<string, unknown> {
         return {
             type: "sessionList",
-            // 判官（hidden 子会话）也要列出来：一轮一个，但它跑的时候人得看得到在干什么；
-            // 报完结论就关，所以不会越攒越多（用户正看着它时会留着，那是他自己关）。
             sessions: Array.from(this.panels.values())
                 .map((rt) => this.serializeSession(rt)),
             // 这块屏自己看的是哪一个（它还没挑过就是 null）。界面以本地那一份为准，
@@ -1850,12 +1679,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
      *      带上 status：被中止的一轮不算跑完、也不会绿；
      *   3. 让 Windows 那边弹一条提醒（见 trayNote）：被中止的一轮，
      *      别人派的子会话也不弹 —— 它的结果会交回派它的会话，那边跑完再提醒；
-     *      自动模式开着的时候也不弹，那一张等判官说不用继续了才弹（见 autoJudgeOnTurnEnd）。
+     *      自动模式开着的时候也不弹（它自己会接着跑）。
      */
     public onTurnEnd(info: TurnEndInfo): void {
-        // 判官会话跑完了一轮：这一轮的账归它（不弹提醒、不当普通会话处理）
-        if (this.autoJudgeOnTurnEnd(info)) { return; }
-        // 自动接着干开着：这一轮跑完就叫判官看一眼要不要接着干
+        // 自动接着干开着：这一轮跑完就再发一句「继续」
         this.autoLoopOnTurnEnd(info);
         // 先记下这个会话是不是「别人派的、结果还要交回去」的子会话：tabaOnTurnEnd 可能紧接着
         // 就把它关掉、名录也摘了，要赶在它前面看。
@@ -1875,7 +1702,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         };
         this.forEachClient((_clientId, send) => { send({ ...msg }); });
         // 弹一条提醒：被中止的那一轮不算跑完；子会话的结果会交回派它的会话，那边跑完再提醒；
-        // 自动模式开着的时候这一轮也不一定就“完事了”，等判官说不用继续了再弹（见 autoJudgeOnTurnEnd）
+        // 自动模式开着的时候每一轮都不弹（它自己会接着跑）
         const auto = rt ? this.autoGet(rt) : undefined;
         if (!auto && info.status !== "cancelled" && !handedBack) {
             this.trayNote(info.panelId, name, info.lastReplyText ?? "");

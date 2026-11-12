@@ -994,10 +994,8 @@
       // 生成速度（t/s）：后端算好了推过来（只算模型真在吐字的那段时间，见 sessionRuntime 的
       // noteGenTokens）；停了就挂着这一轮最后的数，下一轮开始清空
       tps: undefined,
-      // 自动模式：auto 是这个会话的开关状态（后端推来，见 case "auto"），
-      // autoTitle 是那颗按钮指上去说什么（后端拼好，见 auto.ts 的 autoIndicatorTitle）。
+      // 自动模式：auto 是这个会话的开关状态（后端推来，见 case "auto"）。
       auto: null,
-      autoTitle: null,
       // 工具调用耗时（见 noteToolDuration / renderToolStats）：整个会话的，重连重画不重算。
       // byTool：工具名 → { count, totalMs, maxMs }；slowest：跑得最久的那几次（最多 TOOL_STATS_SLOWEST 条）；
       // seen：已经记过的调用编号（同一条重放一遍不再算）。
@@ -4663,7 +4661,6 @@
   // ==================== 自动模式那颗按钮（输入框右下角最右边）====================
   // 长成一颗小开关（圆角胶囊里一颗滑块）：滑块在左、灰着 = 没开，拨到右、变绿 = 开着。
   // 点一下就是拨一下：开的时候再点就是停。
-  // 指上去写着现在第几轮、判官是不是正在看，字都由后端拼好（见 auto.ts 的 autoIndicatorTitle）。
   let autoBtn = null;
   (function buildAutoButton() {
     const row = document.getElementById("inputRow");
@@ -4689,7 +4686,7 @@
     if (!autoBtn) { return; }
     const st = activeSession();
     const auto = st ? st.auto : null;
-    const title = auto ? ((st && st.autoTitle) || "自动模式（点一下停止）") : "自动模式（点一下开始）";
+    const title = auto ? "自动模式（点一下停止）" : "自动模式（点一下开始）";
     autoBtn.title = title;
     autoBtn.setAttribute("aria-label", title);
     autoBtn.classList.toggle("on", !!auto);
@@ -11901,7 +11898,6 @@
         // 自动模式：每次列表都带一份（跟模型名一样，是一次性推送的补位）——
         // 刷新页面 / 重连后那颗按钮亮不亮就靠它回来。
         st.auto = s.auto || null;
-        st.autoTitle = s.autoTitle || null;
         syncSessionLoading(st);
         // 界面重建（网页重连、视图隐藏重开、窗口重载）后 sessionList 是唯一信源：
         // modelChanged 是一次性推送，不在此恢复会导致输入框底下那颗胶囊的模型名丢失。
@@ -12574,7 +12570,6 @@
       case "auto":
         // 开关状态（自动模式）：界面上只是那颗按钮亮不亮，不往消息流里写
         t.auto = msg.auto || null;
-        t.autoTitle = msg.title || null;
         if (activeId === t.id) { renderAutoIndicator(); }
         break;
       case "thinkingChanged":

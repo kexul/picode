@@ -60,7 +60,7 @@ export function writeAuto(auto: AutoState, sessionFile: string, file: string = a
     return writeAll(file, data);
 }
 
-/** 清掉一个会话的开关（点那颗按钮、判官说不用继续，都走这里）。 */
+/** 清掉一个会话的开关（点那颗按钮走这里）。 */
 export function dropAuto(sessionFile: string, file: string = autoFile()): void {
     if (!sessionFile) { return; }
     const data = readAll(file);
@@ -73,10 +73,5 @@ export function dropAuto(sessionFile: string, file: string = autoFile()): void {
 function normalizeAuto(raw: any): AutoState | undefined {
     if (!raw || typeof raw !== "object") { return undefined; }
     const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : 0);
-    const note = typeof raw.note === "string" && raw.note.trim() ? raw.note.trim() : undefined;
-    return {
-        rounds: num(raw.rounds),
-        ...(note ? { note } : {}),
-        updatedAt: num(raw.updatedAt),
-    };
+    return { updatedAt: num(raw.updatedAt) };
 }

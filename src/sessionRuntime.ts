@@ -486,12 +486,12 @@ export class SessionRuntime {
         if (tabaExtension) { extraArgs.push("-e", tabaExtension); }
         // “问话”那个扩展（ask_choice）：每个会话都带（子会话也可能要问用户）
         if (cfg.askExtension) { extraArgs.push("-e", cfg.askExtension); }
-        // “自动起标题”：只给主会话带（子会话、判官的名字由派活那边给，不用再花一次请求）
+        // “自动起标题”：只给主会话带（子会话的名字由派活那边给，不用再花一次请求）
         const titleExtension = this.launch?.noTaba ? "" : cfg.titleExtension || "";
         if (titleExtension) { extraArgs.push("-e", titleExtension); }
         // “会话里的截图挪出会话文件”：每个会话都带（子会话读图一样要挪）
         if (cfg.imageExtension) { extraArgs.push("-e", cfg.imageExtension); }
-        // “后台命令”：接管 bash，每个会话都带（子会话、判官也要能跑命令）
+        // “后台命令”：接管 bash，每个会话都带（子会话也要能跑命令）
         if (cfg.bashExtension) { extraArgs.push("-e", cfg.bashExtension); }
         // “加载了什么”（工具 / 技能 / MCP）：每个会话都带，界面那颗「工具」看的就是它报上来的
         if (cfg.envExtension) { extraArgs.push("-e", cfg.envExtension); }
@@ -902,7 +902,7 @@ export class SessionRuntime {
         if (!fromPlugin) { this.host.onUserMessage?.(this.id); }
         // pi 的内置斜杠命令只在终端界面里处理，走 RPC 发过去只会当成普通文字交给模型。
         // 其中 /compact 插件自己接手：改发 pi 的 compact 命令（pi 的 prompt 里做不了这个）。
-        // /auto 同样由插件接手（开关状态、判官那一轮的提示都在宿主那边）。
+        // /auto 同样由插件接手（开关状态、每轮跑完怎么催都在宿主那边）。
         // 带图片、或者是插件代发的（子会话结果交回这类）不当命令看。
         if (!hasImages && !fromPlugin) {
             const instructions = parseCompactCommand(text || "");

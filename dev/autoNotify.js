@@ -1,14 +1,13 @@
 // @ts-nocheck
 /**
- * autoNotify —— 验「自动模式开着的时候，提醒只在判官说结束时弹，不是每轮跑完都弹」。
+ * autoNotify —— 验「自动模式开着的时候每轮跑完都不弹提醒」。
  *
  * 要验的两件事：
- *   1. 自动模式开着、判官还在说「继续」的这几轮跑完，一条提醒都不发；
- *   2. 判官说「结束」那一下弹一张，正文还是主会话最后那条回复的开头。
+ *   1. 自动模式开着、一轮接一轮地跑，一条提醒都不发；
+ *   2. 关掉开关以后再跑完一轮，提醒照常弹一张，正文还是主会话最后那条回复的开头。
  *
  * 提醒那头走「消息推送」：这里起一个本地收件口当 pushTo（同 dev/remotePush.js），
- * 看它一共收到几条、什么时候收到的。假判官第 3 轮才说结束（FAKEPI_AUTO_STOP_ON=3），
- * 这样前两轮都是「判官说继续」，有地方可以先看一眼“这会儿一条都没推”。
+ * 看它一共收到几条、什么时候收到的。
  *
  *   npm run web:shot -- --fake-pi --notify-turn-end --script dev/autoNotify.js
  */
@@ -16,18 +15,11 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 
-// 判官跑慢一点：不然一轮到下一轮太快，看不出“这几轮没推”
-process.env.FAKEPI_JUDGE_MS = process.env.FAKEPI_JUDGE_MS || "1200";
-process.env.FAKEPI_AUTO_STOP_ON = process.env.FAKEPI_AUTO_STOP_ON || "3";
-
 const SCRATCH = path.join(__dirname, ".scratch");
 const CONFIG_FILE = path.join(process.env.PICHAT_HOME || path.join(SCRATCH, "pichat"), "config.json");
 
 module.exports = async (page) => {
-    // 判官轮数记在会话目录里：上一次跑剩的会让这一跑从第二轮开始
-    for (const name of [path.join(SCRATCH, ".judge-rounds"), path.join(SCRATCH, "pichat", "auto.json")]) {
-        try { fs.rmSync(name, { force: true }); } catch { /* 没有就算了 */ }
-    }
+    try { fs.rmSync(path.join(process.env.PICHAT_HOME || path.join(SCRATCH, "pichat"), "auto.json"), { force: true }); } catch { /* 没有就算了 */ }
 
     const got = [];
     const server = http.createServer((req, res) => {
@@ -60,7 +52,6 @@ module.exports = async (page) => {
       const list = Array.from(document.querySelectorAll(".msg.assistant"));
       return list.length ? list[list.length - 1].textContent.trim() : "";
     `);
-    /** 等某件事发生（最多等 ms 毫秒）。 */
     const until = async (fn, ms) => {
         const limit = Date.now() + (ms || 60000);
         let last = null;
@@ -71,11 +62,10 @@ module.exports = async (page) => {
         }
         return last;
     };
-    /** 攒着「继续」的条数（判官每说一次继续，主会话就多一条这个）。 */
-    const continues = async () => {
-        const said = await userSays();
-        return said.filter((t) => t === "继续").length;
-    };
+    /** 主会话收到过几句「继续」= 自动模式自己跑了几轮。 */
+    const continues = async () => (await userSays()).filter((t) => t === "继续").length;
+    /** 收件口收到的“有事”那几条（同一台还会推“把卡片收掉”，那种没有 kind、也没正文）。 */
+    const notes = () => got.filter((n) => n && n.kind);
 
     try {
         let config = {};
@@ -93,31 +83,39 @@ module.exports = async (page) => {
 
         await page.send("随便干点活，演示一下");
 
-        // ---- 第 1、2 轮：判官都还说「继续」，这会儿一条提醒都不该有 ----
+        // ---- 第 1、2 轮：一轮接一轮地跑，这会儿一条提醒都不该有 ----
         const first = await until(async () => {
             const n = await continues();
             return { ok: n >= 1, n };
-        }, 90000);
-        check("（前提）判官第 1 轮说继续：主会话收到一句「继续」", first && first.ok, first);
-        check("第 1 轮跑完不弹提醒（判官还没说结束）", got.length === 0, got.length);
+        }, 30000);
+        check("（前提）第 1 轮跑完：主会话收到一句「继续」", first && first.ok, first);
+        check("自动模式开着跑完一轮：不弹提醒", notes().length === 0, notes().length);
 
         const second = await until(async () => {
             const n = await continues();
             return { ok: n >= 2, n };
-        }, 90000);
-        check("（前提）判官第 2 轮说继续：主会话又收到一句「继续」", second && second.ok, second);
-        check("第 2 轮跑完还是不弹提醒，开关也还开着",
-            got.length === 0 && (await autoOn()), { pushes: got.length, on: await autoOn() });
+        }, 30000);
+        check("（前提）又跑完一轮：主会话又收到一句「继续」", second && second.ok, second);
+        check("自动模式开着跑完两轮：还是不弹提醒，开关也还开着",
+            notes().length === 0 && (await autoOn()), { pushes: notes().length, on: await autoOn() });
         await page.shot("auto-notify-quiet.png");
 
-        // ---- 第 3 轮：判官说「结束」→ 这时候才弹 ----
-        const stopped = await until(async () => ({ ok: !(await autoOn()) }), 120000);
-        check("判官第 3 轮说结束：开关自己关掉", !!stopped && stopped.ok, stopped);
-        const pushed = await until(async () => ({ ok: got.length > 0 }), 15000);
-        check("判官说结束：这才推了一条提醒出去", !!pushed && pushed.ok, got.length);
-        const notice = got[got.length - 1] || {};
-        check("只推了这一条（前面几轮跑完都没推）", got.length === 1, got.map((n) => n.text && n.text.slice(0, 20)));
+        // ---- 关掉开关，等手上那一轮跑完（它跑完会弹一张），从那儿重新数 ----
+        await page.click("#autoBtn");
+        await page.sleep(500);
+        check("（前提）开关关掉了", !(await autoOn()));
+        await page.sleep(4000);
+        got.length = 0;   // 关开关时手上那一轮跑完弹的那张不算在这一段里
+
+        // ---- 关着的时候再跑完一轮：这才弹一张 ----
+        await page.send("收工了");
+        const pushed = await until(async () => ({ ok: notes().length > 0 }), 30000);
+        check("自动模式关着：跑完一轮弹了一张提醒", !!pushed && pushed.ok, notes().length);
+        const notice = notes()[notes().length - 1] || {};
+        check("只推了这一条", notes().length === 1, notes().map((n) => n.text && n.text.slice(0, 20)));
         check("这条是「跑完一轮」那种", notice.kind === "done", notice.kind);
+        // 推送比界面快一步：等最后那条回复画出来再比
+        await page.sleep(800);
         const reply = await lastReply();
         const opened = (reply || "").trim().split(/\r?\n/)[0].slice(0, 12);
         check("正文是主会话最后那条回复",

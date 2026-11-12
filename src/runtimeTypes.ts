@@ -33,7 +33,7 @@ export interface PiConfig {
     /**
      * 自动起标题那个 pi 扩展文件的路径（插件写在 pichat 目录里）。
      * 只有主会话加载它：第一轮跑完让模型起个短标题写进会话名。
-     * 子会话、判官不带（它们的名字由派活那边给）。空串或缺省表示不起标题。
+     * 子会话不带（它们的名字由派活那边给）。空串或缺省表示不起标题。
      */
     titleExtension?: string;
     /**
@@ -43,7 +43,7 @@ export interface PiConfig {
     imageExtension?: string;
     /**
      * 「把 bash 换成能脱手到后台的版本」那个扩展的路径（插件写在 pichat 目录里）。
-     * 每个会话都带（子会话、判官也跑命令）。空串或缺省表示用 pi 自己的 bash（没有后台命令）。
+     * 每个会话都带（子会话也跑命令）。空串或缺省表示用 pi 自己的 bash（没有后台命令）。
      */
     bashExtension?: string;
     /** 上面那个扩展的资源目录：后台命令的日志在它的 tasks/ 下，“放后台”的指令写在 detach/ 下。 */
@@ -64,7 +64,7 @@ export interface PiConfig {
  */
 export interface PanelLaunch {
     /** 额外命令行参数（--session / --append-system-prompt / --tools 之类）。
-     *  --tools 只在要限制工具时用（目标验收的判官），普通子会话不传。 */
+     *  --tools 只在要限制工具时用，普通子会话不传。 */
     extraArgs?: string[];
     /** 不领取预热好的备用进程（参数不一样，必须新起一个）。 */
     skipSpare?: boolean;
@@ -165,7 +165,7 @@ export interface RuntimeHost {
 
     /**
      * 某个会话里用户点了输入框右下角那颗自动模式的按钮（= 开 / 关）。
-     * 开关状态、判官那一轮的提示都归宿主管（见 chatControllerBase 里 auto 那段）。
+     * 开关状态、每轮跑完怎么催都归宿主管（见 chatControllerBase 里 auto 那段）。
      * 不实现就当没这个功能：/auto 会当成普通消息发给模型。可选。
      */
     onAutoCommand?(panelId: string, cmd: AutoCommand): void;

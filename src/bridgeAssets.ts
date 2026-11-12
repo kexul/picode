@@ -190,7 +190,7 @@ export function ensureAskAssets(version: string, over?: PromptOverrides): Bridge
     return ensureBridge(BRIDGES.ask, version, over);
 }
 
-/** 同上，自动起标题那套：只有主会话加载它（子会话、判官不带）。 */
+/** 同上，自动起标题那套：只有主会话加载它（子会话不带）。 */
 export function ensureTitleAssets(version: string, over?: PromptOverrides): BridgeAssets {
     return ensureBridge(BRIDGES.title, version, over);
 }
@@ -200,7 +200,7 @@ export function ensureImageAssets(version: string): BridgeAssets {
     return ensureBridge(BRIDGES.image, version);
 }
 
-/** 同上，接管 bash 那一套：每个会话都带（子会话、判官也跑命令）。 */
+/** 同上，接管 bash 那一套：每个会话都带（子会话也跑命令）。 */
 export function ensureBashAssets(version: string, over?: PromptOverrides): BridgeAssets {
     return ensureBridge(BRIDGES.bash, version, over);
 }
