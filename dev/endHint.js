@@ -131,7 +131,7 @@ module.exports = async (page) => {
         q[1].click();
         return true;
     `);
-    const bro = await waitFor((s) => s.lastUser.startsWith("Restate your last message"));
+    const bro = await waitFor((s) => s.lastUser.startsWith("把上一条消息重说一遍"));
     console.log("⑧ 点「啊？」（发出去的是 bro 技能的正文）：", JSON.stringify(bro));
     await page.shot("endhint-7-bro.png");
     // 等这一轮跑完（跑着的时候那颗「压缩」点不动，跟那颗「继续」一个规矩）

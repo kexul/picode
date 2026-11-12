@@ -4773,8 +4773,8 @@
    *  - 「啊？」发 bro 技能的正文：让 ai 用大白话把上一条重说一遍。正文照技能文件抄在代码里，
    *    不去读磁盘上的 SKILL.md（网页端读不到，也不该为这一句多开一条读文件的路）。 */
   const QUICK_COMPACT_TEXT = "/compact";
-  const QUICK_BRO_TEXT = "Restate your last message. Stop using jargon and speak coherently." +
-    " State it more simply and concisely, like one human talking to another.";
+  const QUICK_BRO_TEXT = "把上一条消息重说一遍。别用行话和术语，说连贯；说得更简单、更短，" +
+    "像一个人跟另一个人说话那样。";
 
   /**
    * 消息流末尾那颗胶囊 —— 按当前会话的状态换脸：
