@@ -286,13 +286,34 @@ async function loadRecent(exe: string, key: string): Promise<string[] | null> {
     return files;
 }
 
+/** 每次问一遍 es 用一个临时文件，读完就删（按进程 + 序号起名，不会撞上）。 */
+let esSeq = 0;
+
 /**
  * 跑一遍 es：`-p 目录` 限定在这个目录里，`file:` 只要文件（目录会混进来），
  * 按修改时间倒序（新的在前）。
  *
+ * 结果让它**导出成一份 UTF-8 的文件**再读，不从管子里收：es 往管子里写的是系统那个
+ * 「ANSI 代码页」的字（中文 Windows 上是 GBK），按 UTF-8 收就把中文路径收成一串「�」。
+ * 导出那份文件指定 UTF-8（`-utf8-bom`），开头的 BOM 读的时候去掉。
+ *
  * 起不来、Everything 没在跑、超时，都算「没这条快路」，给 null。
  */
 function runEs(exe: string, cwd: string): Promise<string[] | null> {
+    const out = path.join(os.tmpdir(), `pichat-es-${process.pid}-${++esSeq}.txt`);
+    /** 读导出的那份（有一行算一行：同一个文件里中文路径不会再乱）。读完删掉。 */
+    const readOut = async (): Promise<string[] | null> => {
+        try {
+            const text = await fs.promises.readFile(out, "utf8");
+            return text.replace(/^\uFEFF/, "").split("\n")
+                .map((line) => line.replace(/\r$/, "").trim())
+                .filter((line) => line !== "");
+        } catch {
+            return null;
+        } finally {
+            fs.promises.unlink(out).catch(() => { /* 删不掉就留在临时目录里 */ });
+        }
+    };
     return new Promise((resolve) => {
         let child: ChildProcess;
         try {
@@ -301,13 +322,13 @@ function runEs(exe: string, cwd: string): Promise<string[] | null> {
                 "file:",
                 "-sort", "date-modified-descending",
                 "-n", String(RECENT_ASK),
-            ], { cwd, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+                "-export-txt", out,
+                "-utf8-bom",
+            ], { cwd, windowsHide: true, stdio: "ignore" });
         } catch {
             resolve(null);
             return;
         }
-        const lines: string[] = [];
-        let buffer = "";
         let settled = false;
         let timer: ReturnType<typeof setTimeout> | undefined;
         const finish = (value: string[] | null) => {
@@ -320,25 +341,12 @@ function runEs(exe: string, cwd: string): Promise<string[] | null> {
             try { child.kill(); } catch { /* 收不掉就算了 */ }
             finish(null);
         }, RECENT_TIMEOUT_MS);
-        const take = (line: string) => {
-            const text = line.replace(/\r$/, "").trim();
-            if (text) { lines.push(text); }
-        };
-        child.stdout?.setEncoding("utf8");
-        child.stdout?.on("data", (chunk: string) => {
-            if (settled) { return; }
-            buffer += chunk;
-            let at = buffer.indexOf("\n");
-            while (at >= 0) {
-                take(buffer.slice(0, at));
-                buffer = buffer.slice(at + 1);
-                at = buffer.indexOf("\n");
-            }
+        child.on("error", () => {
+            void readOut();
+            finish(null);
         });
-        child.on("error", () => { finish(null); });
         child.on("close", (code) => {
-            if (buffer) { take(buffer); }
-            finish(code === 0 ? lines : null);
+            void readOut().then((lines) => { finish(code === 0 ? lines : null); });
         });
     });
 }

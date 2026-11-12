@@ -39,6 +39,9 @@ const FIX = {
     /** 同名的那两个：点 `same.js` 这种链接时该停下来问一声。 */
     sameA: "find/a/same.js",
     sameB: "find/nested/same.js",
+    /** 中文名字的那一个：列出来、搜出来都得是原样，不能变成一串「�」（es 那条快路最容易在这儿栽）。 */
+    cnDir: "find/中文目录",
+    cn: "find/中文目录/青鸟.txt",
 };
 /** 内容那一档搜的那个词：alpha 与 beta 里有（big、hidden 里也有，但它们不该出现）。 */
 const MARK = "青鸟标记";
@@ -83,6 +86,8 @@ function prepareFiles(cwd) {
     fs.writeFileSync(path.join(cwd, FIX.sameA), "same A 第 1 行\nsame A 第 2 行\n", "utf8");
     fs.writeFileSync(path.join(cwd, FIX.sameB), "same B 第 1 行\nsame B 第 2 行\n", "utf8");
     fs.writeFileSync(path.join(cwd, FIX.big), MARK + "\n" + "x".repeat(BIG_BYTES) + "\n", "utf8");
+    fs.mkdirSync(path.join(cwd, FIX.cnDir), { recursive: true });
+    fs.writeFileSync(path.join(cwd, FIX.cn), "青鸟 第 1 行\n", "utf8");
 }
 
 module.exports = async (page) => {
@@ -207,6 +212,25 @@ module.exports = async (page) => {
     check("空着先列最近改过的文件（头一条是刚动过的，不是按名字排的头一批）",
         opened.rows.length === 0 || firstAge < 10 * 60 * 1000,
         JSON.stringify({ rows: opened.rows.length, first: firstRel, ageSec: Math.round(firstAge / 1000) }));
+    // 中文名字的路径得原样出来。这条快路（Everything 的 es）曾经把中文路径收成一串「�」：
+    // 它往管子里写的是系统那个代码页（中文 Windows 上是 GBK），按 UTF-8 收就全乱了。
+    const garbled = opened.rows.filter((r) => r.text.indexOf("\uFFFD") >= 0).map((r) => r.text);
+    check("列出来的路径里没有乱码（没有「�」）", garbled.length === 0, JSON.stringify(garbled.slice(0, 3)));
+    // 刚写进去的那个中文名字：Everything 的索引要一两秒才跟上，那份「最近改过」的清单又缓 10 秒，
+    // 所以这里只能等一会儿再问一遍（没装 Everything 时这一屏是空的，那也算对）。
+    let cnRows = opened;
+    const cnStarted = Date.now();
+    while (cnRows.rows.length > 0 && cnRows.rows.every((r) => r.text.indexOf(FIX.cn) < 0)
+        && Date.now() - cnStarted < 14_000) {
+        await pressEsc();
+        await page.sleep(1200);
+        await pressSearchKey();
+        await page.sleep(400);
+        cnRows = await searchState();
+    }
+    check("中文名字的路径原样列出来（没装 Everything 时这一屏是空的，也算对）",
+        cnRows.rows.length === 0 || cnRows.rows.some((r) => r.text.indexOf(FIX.cn) >= 0),
+        JSON.stringify(cnRows.rows.slice(0, 5).map((r) => r.text)));
     await page.shot("search-1-open.png");
 
     console.log("再按一次 Ctrl+Shift+F：");
@@ -271,6 +295,16 @@ module.exports = async (page) => {
     check("命中的那几个字母标出来了", !!gammaRow && gammaRow.marks.join("").toLowerCase() === "gamma",
         gammaRow ? JSON.stringify(gammaRow.marks) : "");
     await page.shot("search-2-name.png");
+
+    console.log("按中文名字搜：");
+    await typeSearch("青鸟");
+    const cnNamed = await waitSearch("按中文名字搜到青鸟.txt", (s) => s.rows.some((r) => r.text.indexOf(FIX.cn) >= 0));
+    check("中文关键词搜得到、路径原样（不乱码）",
+        cnNamed.rows.some((r) => r.text.indexOf(FIX.cn) >= 0)
+        && cnNamed.rows.every((r) => r.text.indexOf("\uFFFD") < 0),
+        JSON.stringify(cnNamed.rows.map((r) => r.text)));
+    await typeSearch("gamma");
+    await waitSearch("回到 gamma", (s) => s.rows.some((r) => r.text.indexOf("find/deep/gamma.txt") >= 0));
 
     console.log("回车打开第一条：");
     await page.cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 });
