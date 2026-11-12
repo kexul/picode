@@ -967,8 +967,11 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected readonly autos = new Map<string, AutoState>();
     /** 已经问过存档的会话：问过一次没有就是没有，不必每推一次会话列表就去读盘。 */
     private readonly autoChecked = new Set<string>();
-    /** 主会话 → 正在跑的那个判官的编号（判官是 hidden 子会话，会话关掉就没了）。 */
-    private readonly autoJudgeRun = new Map<string, string>();
+    /**
+     * 主会话 → 正在跑的那个判官（判官是 hidden 子会话，会话关掉就没了）；
+     * report 是主会话这一轮最后那条回复（判官说做完了、弹提醒时拿它当摘要，见 autoJudgeOnTurnEnd）。
+     */
+    private readonly autoJudgeRun = new Map<string, { id: string; report: string }>();
 
     /** 判官的启动参数：一个工具都不给（它只读一段文字回一句话，给了工具只会慢、还会乱跑）。 */
     private static readonly AUTO_JUDGE_ARGS = ["--no-tools", "--no-mcp"];
@@ -1106,7 +1109,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
             task: buildAutoJudgePrompt({ round, said: report }, this.getConfig().prompts),
             cwd: workerRt.cwd,
         };
-        this.autoJudgeRun.set(workerPanelId, req.id);
+        this.autoJudgeRun.set(workerPanelId, { id: req.id, report });
         auto.rounds = round;
         delete auto.note;   // 这一轮的结论还没出来
         this.autoSave(workerRt);
@@ -1128,7 +1131,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (!judge || !judge.hidden) { return false; }
         const workerPanelId = judge.parentPanelId;
         if (!workerPanelId) { return false; }
-        const ours = this.autoJudgeRun.get(workerPanelId) === judge.id;
+        const run = this.autoJudgeRun.get(workerPanelId);
+        const ours = run?.id === judge.id;
         this.autoJudgeRun.delete(workerPanelId);
         this.taba.noteTurnEnd(judge.id, info.status, Date.now());
         const auto = this.autos.get(workerPanelId);
@@ -1147,7 +1151,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
                     this.autoBroadcast(workerPanelId);
                     this.autoContinue(workerPanelId);
                 } else {
+                    // 自动模式开着的时候每一轮跑完都不弹提醒，因为那还不算“完事了”；
+                    // 判官说这一轮就是最后了，才在这里弹一张，摘要还是主会话最后那条回复。
                     this.autoOff(workerRt, `第 ${auto.rounds} 轮：判官说不用继续了。要再开就点一下右下角那颗按钮。`);
+                    this.trayNote(workerPanelId, this.sessionDisplayName(workerRt), run?.report ?? "");
                 }
             }
         }
@@ -1188,10 +1195,10 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
     /** 关掉某个主会话正在跑的那个判官（暂停 / 关掉开关 / 主会话被关掉时用）。 */
     protected autoCancelJudge(workerPanelId: string): void {
-        const judgeRunId = this.autoJudgeRun.get(workerPanelId);
-        if (!judgeRunId) { return; }
+        const run = this.autoJudgeRun.get(workerPanelId);
+        if (!run) { return; }
         this.autoJudgeRun.delete(workerPanelId);
-        const judge = this.taba.get(judgeRunId);
+        const judge = this.taba.get(run.id);
         if (judge?.childPanelId) { this.closeAutoJudge(judge.childPanelId); }
     }
 
@@ -1569,14 +1576,14 @@ export abstract class ChatControllerBase implements RuntimeHost {
         // 关掉的是判官（hidden 子会话）：把主会话那边"有判官在跑"的账清掉
         const judge = this.taba.byChildPanel(panelId);
         if (judge && judge.hidden && judge.parentPanelId
-            && this.autoJudgeRun.get(judge.parentPanelId) === judge.id) {
+            && this.autoJudgeRun.get(judge.parentPanelId)?.id === judge.id) {
             this.autoJudgeRun.delete(judge.parentPanelId);
         }
         // 关掉的是主会话：正在跑的判官一并关掉
-        const judgeRunId = this.autoJudgeRun.get(panelId);
+        const run = this.autoJudgeRun.get(panelId);
         this.autoJudgeRun.delete(panelId);
-        if (judgeRunId) {
-            const running = this.taba.get(judgeRunId);
+        if (run) {
+            const running = this.taba.get(run.id);
             if (running?.childPanelId) { this.closeAutoJudge(running.childPanelId); }
         }
         this.panels.delete(panelId);
@@ -1842,7 +1849,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
      *      （跑完了，不管当时有没有在看它）；这条不管开关都发，关了提醒那颗绿点还得看得见；
      *      带上 status：被中止的一轮不算跑完、也不会绿；
      *   3. 让 Windows 那边弹一条提醒（见 trayNote）：被中止的一轮，
-     *      别人派的子会话也不弹 —— 它的结果会交回派它的会话，那边跑完再提醒。
+     *      别人派的子会话也不弹 —— 它的结果会交回派它的会话，那边跑完再提醒；
+     *      自动模式开着的时候也不弹，那一张等判官说不用继续了才弹（见 autoJudgeOnTurnEnd）。
      */
     public onTurnEnd(info: TurnEndInfo): void {
         // 判官会话跑完了一轮：这一轮的账归它（不弹提醒、不当普通会话处理）
@@ -1866,8 +1874,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
             child: handedBack,
         };
         this.forEachClient((_clientId, send) => { send({ ...msg }); });
-        // 弹一条提醒：被中止的那一轮不算跑完；子会话的结果会交回派它的会话，那边跑完再提醒
-        if (info.status !== "cancelled" && !handedBack) { this.trayNote(info.panelId, name, info.lastReplyText ?? ""); }
+        // 弹一条提醒：被中止的那一轮不算跑完；子会话的结果会交回派它的会话，那边跑完再提醒；
+        // 自动模式开着的时候这一轮也不一定就“完事了”，等判官说不用继续了再弹（见 autoJudgeOnTurnEnd）
+        const auto = rt ? this.autoGet(rt) : undefined;
+        if (!auto && info.status !== "cancelled" && !handedBack) {
+            this.trayNote(info.panelId, name, info.lastReplyText ?? "");
+        }
     }
 
     protected onKnownFilesChangedByHost(): void { /* 默认无操作 */ }

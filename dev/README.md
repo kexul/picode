@@ -192,6 +192,10 @@ npm run web:shot -- --fake-pi --script dev/autoLoop.js
 # 后台命令由假模型照真扩展的样子发暗号演，子会话调的是真扩展那个 task 工具：
 npm run web:shot -- --fake-pi --script dev/autoSkip.js
 
+# 验「自动模式开着的时候提醒只在判官说结束时弹」：前面几轮判官说「继续」，一轮提醒都不发（那一轮不一定就完事了）；
+# 判官说「结束」那一下才推一张，正文还是主会话最后那条回复。推送地址写成本地一个收件口当 pushTo：
+npm run web:shot -- --fake-pi --notify-turn-end --script dev/autoNotify.js
+
 # 验顶条中间那颗小点（本会话闲着、派出去的子会话还在跑时也亮着呼吸，点下面写着还有几个在跑；
 # 小点与箭头是落在“会话名 + 目录两行”中间，不是只对着会话名那一行；投假会话列表，不真派活）：
 npm run web:shot -- --width 900 --height 620 --script dev/childDot.js
@@ -513,6 +517,7 @@ HTML 解析完       851 ms
 | `dirSwipe.js` | 验文件侧边栏里「往右划退到上一层」：在子目录的清单上往右划，清单跟着手指往右挪、底下露出上一层那份真清单（不跟手走），过四成松手就换到那一层、从顶上列起；不到线滑回原处；竖着划是滚清单、往左划还是收这一列、已在会话目录那一层划不动，都不留下临时那块：`npm run web:shot -- --fake-pi --width 420 --height 900 --script dev/dirSwipe.js` |
 | `fileSearch.js` | 验 `Ctrl+Shift+F` 那块文件搜索浮层：弹出来 / 再按一次或 Esc 收起、输入框自己拿到焦点；「文件名」一档边打边出、命中处标出来、回车在左边那一列打开；「内容」一档搜文件里的文字（路径:行号 + 那一行）、只在 node_modules 里的不出现、超过 2 MB 的不当正文搜；文件侧边栏头上那颗放大镜也能开；同名不止一个时点链接会弹它出来让人挑（预填名字、挑中的停在链接说的那一行）；消息流里光名字 / 路径写岔了的链接也从同一份文件清单里挑；最后按插件里的对话面板再跑一遍（点一条结果是给插件发 openFile）：`npm run web:shot -- --fake-pi --script dev/fileSearch.js` |
 | `weixinInbox.js` | 验「微信里回一句，落进对的会话」（假模型 + 假服务）：先在微信里说一句（后端带着来信里那份**回信凭据**回一句怎么用）→ 跑一轮推到微信 → **引用那条**回一句（落进同一个会话）→ **不引用**直接回（落进最近那个会话）→ 别人发来的不理 → 对账表里几条都指着同一个会话，凭据也存到 `weixin/context.json` 了。假服务跟真服务一条规矩：`sendmessage` 不带（或带旧的）凭据就回 `ret=-2 prepare failed`，所以凭据没存下来、没带上这一遍就过不去：`npm run web:shot -- --fake-pi --script dev/weixinInbox.js` |
+| `autoNotify.js` | 验「自动模式开着的时候提醒只在判官说结束时弹」（前面几轮判官说「继续」，一条都不发；判官说「结束」那一下才推一张，正文是主会话最后那条回复）：推送地址写成本地一个收件口当 pushTo（同 `remotePush.js`），假判官第 3 轮才说结束，好先看一眼“这会儿一条都没推”：`npm run web:shot -- --fake-pi --notify-turn-end --script dev/autoNotify.js` |
 | `remotePush.js` | 验设置里那行「消息推送」：把推送地址写成本地一个收件口、这台的标签也临时改成一个认得的，发一句话等假 pi 回完，看那边收到的通知里有没有会话标识、网页地址、标签是不是写下的那个；跑完把设置文件放回原样：`npm run web:shot -- --fake-pi --notify-turn-end --script dev/remotePush.js` |
 | `weixinGateway.js` | 验「一台机器收发微信，别的机器的事由它代发」（假模型 + 假服务）：本机跑一轮 → 假装另一台往 `/notify` 推一条 → 网关把它也发到微信（正文带「哪台 · 」）→ 引用那条回一句 → 转回那台的 `/weixinReply` 并接进会话 → 跑完再推一条；另外验替别人推的摘要不会被掐到 200 字（这边收到 300 多字得原样留着）、会话标识 / 会话文件对不上时回 409，以及这台自己当“干活的那台”时推出去的通知里带没带回话地址与会话文件：`npm run web:shot -- --fake-pi --script dev/weixinGateway.js` |
 | `weixinPush.js` | 验“会话跑完一轮就往微信里推一条”（假模型 + 假 iLink 服务）：把登录态临时换成假的，看那头收到的几条：头一条是会话名 + 空行 + 这一轮的回复原文（markdown 原样、不截、不带“跑完了一轮”/地址），`weixin/sent.json` 里每条都记下了“这是为了哪个会话发的”（大整数编号要原样当字符串收下）；跑完把真登录态放回去。要验长回复分块（每块不超过 4000 字、拼起来与原文一字不差、每条都记账）就 `FAKEPI_REPLY_LONG=9000 npm run web:shot -- --fake-pi --script dev/weixinPush.js`。要真发到自己微信上就加 `PICHAT_WEIXIN_REAL=1`（用你扫出来的那份真令牌）：`npm run web:shot -- --fake-pi --script dev/weixinPush.js` |
