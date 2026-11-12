@@ -53,6 +53,8 @@ const WELCOME_LINE = "这是 Pi Chat 插件的调试用工作目录（dev/.scrat
 const SCRIPT_BASE = WELCOME_LINE + "\n调试时起的会话就跑在这里，随便改，它不进版本库，也不会碰到插件自己的代码。\n";
 /** 假 pi 把它的会话文件也写在会话目录里（真 pi 不会）：拿 .gitignore 挡在清单外面。 */
 const GITIGNORE = "fake-session-*.jsonl\n";
+/** 上格「文件」那份清单得能滚起来（验「原地重列不清到顶」）：先铺这么多份垫着。 */
+const PAD_FILES = Array.from({ length: 30 }, (_, i) => "铺-" + String(i + 1).padStart(2, "0") + ".txt");
 
 /** 把这一份铺好的东西提交上去（那就是“最后一次提交”）；同样的配置跟后端问 git 时一样。 */
 function commitBase(dir) {
@@ -193,6 +195,20 @@ async function reopenSidebar(page) {
     await page.sleep(700);
 }
 
+/** 上格「文件」那一格现在列着哪几个（相对写法）、停在哪一层、滚到哪儿了。 */
+function dirNow(page) {
+    return page.eval(`
+        const pane = document.getElementById("dirPane");
+        if (!pane) { return "{}"; }
+        return JSON.stringify({
+            paths: Array.from(pane.querySelectorAll(".file-entry"))
+                .map(function (el) { return el.getAttribute("data-path") || ""; }),
+            top: Math.round(pane.scrollTop),
+            layer: pane.getAttribute("title") || "",
+        });
+    `);
+}
+
 /** 点「改动」清单里某个文件那一行（点写法那一截）。 */
 function clickRow(page, file) {
     return page.eval(`
@@ -227,6 +243,7 @@ module.exports = async (page) => {
     fs.writeFileSync(path.join(WORK, SCRIPT_FILE), SCRIPT_BASE, "utf8");
     fs.writeFileSync(path.join(WORK, EOL_FILE), EOL_BASE, "utf8");   // 行尾那一段就改这一份
     fs.writeFileSync(path.join(WORK, ".gitignore"), GITIGNORE, "utf8");
+    PAD_FILES.forEach((name) => { fs.writeFileSync(path.join(WORK, name), name + "\n", "utf8"); });
     fs.rmSync(path.join(WORK, NEW_FILE), { force: true });
     commitBase(WORK);
     await page.eval(`
@@ -374,11 +391,28 @@ module.exports = async (page) => {
     await page.shot("changes-6-empty-again.png");
 
     // ---- 8. 新写一个文件：整份都是新加的行（write 那条路）----
+    // 顺手验上格「文件」：后端一推「改动变了」，那一格也原地重列一遍（不用点进点出），
+    // 而且人读到哪儿还停在哪儿（不清回顶上）、还停在原来那一层。
+    await page.eval(`
+        const pane = document.getElementById("dirPane");
+        pane.scrollTop = pane.scrollHeight;
+        return true;
+    `);
+    await page.sleep(200);
+    const dirBefore = JSON.parse(await dirNow(page));
     await page.send("写新文件");
     await page.waitAnswer("写完了。");
     await page.sleep(800);
     rows = await waitFor(page, "新写那个文件进清单", rowsNow,
         (x) => !!(x[0] && x[0].path === NEW_FILE));
+    const dirAfter = await waitFor(page, "上格清单里也长出新建的那个文件", dirNow,
+        (x) => (x.paths || []).indexOf(NEW_FILE) >= 0);
+    console.log("上格清单：" + JSON.stringify({ 行数: dirAfter.paths.length, 滚到: dirAfter.top, 这一层: dirAfter.layer }));
+    check("上格「文件」也跟着重列了一遍：新建的那个文件自己冒出来了",
+        (dirAfter.paths || []).indexOf(NEW_FILE) >= 0);
+    check("重列是原地做的：还停在原来那一层、滚到哪儿还停在哪儿",
+        dirAfter.layer === dirBefore.layer && dirBefore.top > 0 && dirAfter.top === dirBefore.top,
+        JSON.stringify({ 前: dirBefore.top, 后: dirAfter.top, 层: dirAfter.layer }));
     console.log("写了个新文件之后：" + JSON.stringify(rows));
     check("新建的文件也进清单", !!(rows[0] && rows[0].path === NEW_FILE));
     check("新建的文件是 +3 −0", !!(rows[0] && countsAre(rows[0].counts, 3, 0)), rows[0] && rows[0].counts);

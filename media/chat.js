@@ -7477,6 +7477,7 @@
       mtime: "", loading: false, imageUrl: "",
       page: null,    // 这一格自己那一块正文（见 fileTabPage）
       drawn: false,  // 那一块里已经有画好的内容了
+      listing: null, // 列清单时画上去的那一份（原地重列时拿它比「变了没」，见 refreshDirListing）
       // 改这个文件那一摊（见 startFileEdit）：text 是刚读进来那一份的原文（能不能改看它有没有），
       // real 是后端说的「这个文件到底在会话目录哪儿」（写回去照它写），剩下几项是编辑态与卡在哪儿。
       text: undefined, real: "", editing: false, saving: false, conflict: false, err: "",
@@ -8384,12 +8385,16 @@
    * 把取回来的清单画到「目录」那一格里（换了一层之后就走这里）。
    * @param tab 正看着的「目录」那一格
    */
-  function renderDirListing(listing, tab) {
+  function renderDirListing(listing, tab, keepScroll) {
     const page = fileTabPage(tab);
     if (!page) { return; }
+    tab.listing = listing;   // 画上去的这一份：原地重列时拿它比「变了没」（见 refreshDirListing）
+    const body = fileSidebar.dirBody;
+    const top = body ? body.scrollTop : 0;
     page.innerHTML = "";
-    if (fileSidebar.dirBody) { fileSidebar.dirBody.scrollTop = 0; }   // 换到这一层：清单从头看（不是停在上一层读到的地方）
     fillDirListing(page, listing, tab, tab.path);
+    // 换到这一层：清单从头看（不是停在上一层读到的地方）；原地重列：读到哪儿还停在哪儿
+    if (body) { body.scrollTop = keepScroll ? top : 0; }
   }
 
   /**
@@ -8918,6 +8923,33 @@
     const tab = fileSidebar.changeTab;
     if (tab) { fetchChanges(tab); }
     if (changeSheet.open) { fetchSheetChanges(); }
+    refreshDirListing();   // 后端刚说改动变了：多半刚动过文件，上面那格也重列一遍
+  }
+
+  let dirRefreshing = false;
+
+  /**
+   * 「文件」那一格原地重列一遍（后端说改动变了时顺手做，见 refreshChangesTab）。
+   * 还停在原来那一层、清单读到哪儿还停在哪儿：不闪「正在读取…」，回来的那份跟手上一样就
+   * 一个字节都不动。这一列收着的时候不问，等打开时再说（见 setFileSidebarOpen）。
+   */
+  function refreshDirListing() {
+    if (!fileSidebar.open || dirRefreshing) { return; }
+    const tab = fileSidebar.fileTab;
+    if (!tab || !tab.proj || !tab.drawn || !tab.page || tab.loading) { return; }   // 没在列清单 / 还在取：这一轮不问
+    const token = fileSidebar.token;
+    const seq = tab.seq;
+    dirRefreshing = true;
+    fetch(sidebarUrl(tab, "")).then(async (resp) => {
+      // 换了层 / 切了会话 / 这一列收起了：这条回应丢掉
+      if (token !== fileSidebar.token || seq !== tab.seq || !tab.proj || !isTabShown(tab)) { return; }
+      if (resp.status !== 200) { return; }   // 取不到就留着手上那份，别换成一句报错
+      const listing = await resp.json().catch(() => null);
+      if (!listing || JSON.stringify(listing) === JSON.stringify(tab.listing)) { return; }
+      renderDirListing(listing, tab, true);
+    }).catch(() => {
+      // 这一轮没连上就算了：清单留着，下一轮再说
+    }).then(() => { dirRefreshing = false; });
   }
 
   /**
@@ -9005,6 +9037,7 @@
       // 收起那阵子文件可能改过了：马上问一次，别等下一个节拍
       pollActiveFile();
       if (fileSidebar.changeTab) { fetchChanges(fileSidebar.changeTab); }
+      refreshDirListing();   // 上面那格的清单也一样：收起那阵子可能建过 / 删过文件
     }
   }
 
