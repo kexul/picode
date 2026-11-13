@@ -71,6 +71,7 @@ import { dropAuto, readAuto, writeAuto } from "./autoFiles";
 import type { RpcSessionState } from "./piRpc";
 import { clipText } from "./messageUtils";
 import { REMOTE_TEXT_CHARS, type RemoteNotice } from "./remoteNotice";
+import { DEFAULT_MESSAGE_DISPLAY } from "./viewOptions";
 import type { ProjectDirEntry } from "./sessionStore";
 
 /** # 引用菜单里的一行：一个会话（或其某个子会话）。 */
@@ -328,6 +329,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
     protected abstract getFocusInputKey(): string;
     /** 字号（px 字符串，如 "13"；空串表示跟随 VSCode 设置）。 */
     protected abstract getFontSize(): string;
+    /** 消息怎么显示：brief = 简洁，full = 完整（子类去读自己的存储）。 */
+    protected getMessageDisplay(): string { return DEFAULT_MESSAGE_DISPLAY; }
     /** 变更显示选项的存储（仅改存储，UI 推送由基类统一完成）。value 为按钮组点选的明确值。 */
     protected abstract mutateViewOption(action: string, value?: string): void;
     /** 有事（跑完一轮 / 模型在等你答题）时要不要弹提醒（各平台的子类去读自己的存储）。 */
@@ -422,7 +425,16 @@ export abstract class ChatControllerBase implements RuntimeHost {
     //  显示选项
     // ========================================================================
     protected sendViewOptions(): void {
-        this.postToWebview({
+        this.postToWebview(this.viewOptionsMessage());
+    }
+
+    /**
+     * 显示选项那条消息本身（见 sendViewOptions）。单独一份是给"页面刚连上"那条路用的：
+     * 网页那边 ready 可能比推送连接登记得还早，ready 时广播出去的这一条会发到旧连接上、
+     * 新页面什么都没收到（刷新之后字号 / 消息显示就回到默认值了）。见 chatHost 的 onPageConnected。
+     */
+    protected viewOptionsMessage(): Record<string, unknown> {
+        return {
             type: "viewOptions",
             autoLoadLastSession: this.getAutoLoadLast(),
             sendKey: this.getSendKey(),
@@ -431,6 +443,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
             tabSwitchKey: this.getTabSwitchKey(),
             focusInputKey: this.getFocusInputKey(),
             fontSize: this.getFontSize(),
+            // 完整模式：思考和工具调用的内容铺在消息流里（见 media/chat.js 的 fullMode）
+            fullMode: this.getMessageDisplay() === "full",
             // 这台机器的路径分不分大小写（Linux / macOS 上 /a/B 与 /a/b 是两个目录）：
             // 界面拿它当键比较目录与会话文件（见 media/chat.js 的 pathCaseKey）
             caseSensitivePaths: process.platform !== "win32",
@@ -439,7 +453,12 @@ export abstract class ChatControllerBase implements RuntimeHost {
             // 能不能长按它看桌面实时画面（要那支“一直拍”的小程序在）：不在的话长按什么也不做
             desktopLive: desktopLiveSupported(),
             ...this.viewOptionsExtra(),
-        });
+        };
+    }
+
+    /** 把显示选项单发一块屏（页面刚连上时用，见 viewOptionsMessage）。 */
+    protected sendViewOptionsTo(clientId: string): void {
+        this.postToOneClient(clientId, this.viewOptionsMessage());
     }
 
     /** 子类往 viewOptions 消息里附带的额外字段（缺省无）。 */
@@ -507,6 +526,19 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 kind: "number",
                 value: this.getFontSize(),
                 min: 11, max: 22, step: 1, unit: "px",
+            },
+            {
+                action: "messageDisplay",
+                label: "消息显示",
+                // 说清两个档的差别：简洁就是现在的样子（内容收着），完整把内容摊在消息流里
+                desc: "简洁：思考和工具的内容收着，点开才看。完整：直接铺在消息流里。",
+                section: "外观",
+                check: null,
+                value: this.getMessageDisplay(),
+                options: [
+                    { value: "brief", label: "简洁" },
+                    { value: "full", label: "完整" },
+                ],
             },
             {
                 action: "machineLabel",

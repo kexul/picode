@@ -78,6 +78,13 @@ npm run web:shot -- --width 1000 --height 760 --script dev/toolMerge.js
 # write / edit 点标题行才画 diff / 写入预览；关掉再点开又是只画输入）：
 npm run web:shot -- --width 1000 --height 760 --script dev/toolTipExpand.js
 
+# 验设置里的「消息显示 → 完整」（思考和工具调用的内容铺在消息流里；长的在块里自己滚；
+# 切回「简洁」那些块收掉，标签照旧）：
+npm run web:shot -- --width 980 --height 760 --script dev/fullMode.js
+
+# 同上，但走真链路（假模型真跑一轮，再刷新页面看历史重放；后端一个字都不发、界面问回来那条路）：
+npm run web:shot -- --fake-pi --script dev/fullModeLive.js
+
 # 验看图那一层（点开带图的工具结果后还能放大缩小）：滚轮定点缩放、手机上两指捏合、
 # 放大后按住拖动、双击还原、Esc 关掉（且不顺手停掉正在生成的那一轮）、没放大时点图本身照旧关：
 npm run web:shot -- --width 1000 --height 760 --script dev/lightboxZoom.js

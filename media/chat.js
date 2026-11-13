@@ -736,6 +736,8 @@
     if (typeof opts.closeSessionKey === "string") { closeSessionKey = opts.closeSessionKey; }
     if (typeof opts.tabSwitchKey === "string") { tabSwitchKey = opts.tabSwitchKey; }
     caseSensitivePaths = opts.caseSensitivePaths === true;
+    // 消息怎么显示（简洁 / 完整）：已经画出来的那些也跟着换（见 applyFullMode）
+    if (typeof opts.fullMode === "boolean") { applyFullMode(opts.fullMode); }
   }
 
   // 输入法正在拼字、字还没上屏时按回车/上下键/Esc，是在挑候选字、取消拼音，不是在「确认」。
@@ -2801,6 +2803,8 @@
     // 问话卡片有时候比这条工具行先到（两条通道各有快慢）：把它挪到这一行下面
     dockAskCardToRow(st, toolCallId, tag.parentElement);
     if (running) { st.pendingToolTags.set(toolCallId, tag); }
+    // 完整模式：这条调用也铺一块（一行摘要 + 输出）
+    syncFullSingle(st, tag);
     syncRunningLine(st);   // 这条在跑：末尾那行跟着写上它
     scrollToBottom(st);
     return tag;
@@ -2872,6 +2876,8 @@
     g.tag.classList.toggle("running", g.entries.some((e) => !e.done));
     // 一组里的改动都回滚了，整颗标签才划掉（只有 write / edit 会被回滚，见 buildEditCard）
     g.tag.classList.toggle("reverted", g.entries.length > 0 && g.entries.every((e) => e.reverted));
+    // 完整模式：这一组的内容块跟着重画（简洁模式下这一句把块收掉）
+    syncFullBlock(st, g);
     refreshTagTipIfShowing(g.tag);
     syncRunningLine(st);   // 这组里有在跑的：末尾那行跟着变
   }
@@ -2928,6 +2934,7 @@
     st.toolGroupEntries.delete(entry.id);
     if (g.entries.length === 0) {
       g.tag.remove();
+      dropFullBlock(g);   // 完整模式：这一组空了，内容块也跟着收掉
       const batch = st.toolGroups;
       if (batch && batch.byName.get(g.name) === g) { batch.byName.delete(g.name); }
       syncRunningLine(st);
@@ -2961,6 +2968,7 @@
       tag._resultMeta = {};
       st.pendingToolTags.delete(id);
       setTagTip(tag, INTERRUPTED_NOTE, "");
+      syncFullSingle(st, tag);
     }
     syncRunningLine(st);
   }
@@ -3537,6 +3545,9 @@
   /** 收掉一个工具标签；它所在那条工具行空了就连行一起收掉（不留空行）。 */
   function dropToolTag(st, tag) {
     const row = tag.parentElement;
+    // 完整模式下这一组的内容块跟着收掉（标签都没了）
+    if (tag._tipGroup) { dropFullBlock(tag._tipGroup); }
+    else if (tag._fullEl) { tag._fullEl.remove(); tag._fullEl = null; }
     tag.remove();
     dropToolRow(st, row);
   }
@@ -3789,6 +3800,275 @@
       ? "（这段内容已经取不到了，重新打开这个会话会重新带过来）"
       : "（还有 " + clip.omitted + " 字没带过来，正在取…）";
     content.appendChild(note);
+  }
+
+  // ==================== 完整模式：思考和工具的内容铺在消息流里 ====================
+  // 设置面板的「消息显示」选「完整」（见 src/viewOptions.ts）：简洁模式就是原来那一套 ——
+  // 标签上只有工具名，思考与工具的正文都收着，点开提示框才看；完整模式把它们直接铺出来
+  // （跟 pi 的终端界面一样）。
+  //
+  // 每个工具标签下面铺一块（.tc-full）：一条调用一行摘要（跟提示框里那一行同一套写法，见
+  // buildToolCallEl），下面接它的输出；write / edit 接着画 diff / 写入预览（跟提示框里那一块一样）。
+  // 思考整段摆出来，淡一点。正在想的、正在跑的命令跟着长，不用点开。
+  //
+  // 内容长了就在块里自己滚（见 chat.css 的 .tc-full-out）：一屏里几条长命令不该把消息流撑成几十屏。
+  // 全文照旧留在后端（见 src/sessionRuntime.ts 的 clipDetail）：这里铺开时按同一套编号问回来
+  //（见 pumpFullDetails），还在长（正在想的思考、还在跑的命令）的每秒再问一次。
+  let fullMode = false;
+  const FULL_PAINT_MS = 300;        // 还在长的块多久重画一次（跟提示框那个节流一个数，见 TAG_TIP_STREAM_INTERVAL_MS）
+
+  /** 这一组在完整模式下的内容块：就在它那条工具行下面。 */
+  function fullBlockOf(st, g) {
+    const row = g.row;
+    const host = row && row.parentElement;
+    if (!host) { return null; }
+    let el = g.fullEl;
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "tc-full" + enterCls(st);
+      g.fullEl = el;
+    }
+    // 只在新块还没上页面时摆位置：重画时再摆一次会把它挪到其余几块的后面（顺序就乱了）
+    if (el.parentElement !== host) { placeFullBlock(st, el, row); }
+    return el;
+  }
+
+  /** 把一块内容摆在它那条工具行下面（同一行里几组时按组的先后接在已有的块后面）。
+   *  重放历史（对账）时这一块也是“重放出来的一条”：走游标（见 placeUnit），不然收尾时会被
+   *  当成没人认领的旧节点收掉，后面重放出来的节点也会挤到它前面。 */
+  function placeFullBlock(st, el, row) {
+    const host = row.parentElement;
+    if (!host) { return; }
+    const rec = st && st.reconcile;
+    if (rec && rec.pane === host) { placeUnit(st, el, true); row._fullTail = el; return; }
+    // 接在这一行已有的块后面，不扫兄弟节点：「正在跑的那一条」、问话卡片也会插在这一行下面，
+    // 扫到它们就断了，后建的块会插到前面去（内容块的顺序就反了）。
+    const tail = row._fullTail && row._fullTail.parentElement === host ? row._fullTail : null;
+    if (tail) {
+      if (el.previousElementSibling !== tail) { tail.after(el); }
+    } else if (el.previousElementSibling !== row) {
+      row.after(el);
+    }
+    row._fullTail = el;
+  }
+
+  function dropFullBlock(g) {
+    if (!g) { return; }
+    if (g.fullTimer) { clearTimeout(g.fullTimer); g.fullTimer = 0; }
+    if (g.fullEl) { g.fullEl.remove(); g.fullEl = null; }
+  }
+
+  /** 完整模式下这一组该怎么铺；简洁模式（或这一组空了）就把块收掉。内容一变就调它。 */
+  function syncFullBlock(st, g) {
+    if (!g) { return; }
+    if (!fullMode || g.entries.length === 0) { dropFullBlock(g); return; }
+    const el = fullBlockOf(st, g);
+    if (!el) { dropFullBlock(g); return; }
+    paintFullBlock(st, g, el);
+  }
+
+  /** 还在长的时候按固定间隔重画：一条增量重排一次，长内容会把主线程占满（同提示框那一套）。 */
+  function scheduleFullBlock(st, g) {
+    if (!g) { return; }
+    if (!fullMode || g.entries.length === 0) { dropFullBlock(g); return; }
+    const wait = FULL_PAINT_MS - (performance.now() - (g.fullPaintAt || 0));
+    if (wait <= 0) { syncFullBlock(st, g); return; }
+    if (g.fullTimer) { return; }
+    g.fullTimer = setTimeout(() => { g.fullTimer = 0; syncFullBlock(st, g); }, wait);
+  }
+
+  function paintFullBlock(st, g, el) {
+    g.fullPaintAt = performance.now();
+    // 块里自己在滚（长命令的输出、长思考）：重画前记下滚到哪儿，画完放回去，别每秒跳回开头
+    const scrolled = Array.from(el.children).map((c) => (c._out ? c._out.scrollTop : 0));
+    el.textContent = "";
+    const think = g.name === THINKING_NAME;
+    const sources = [];
+    g.entries.forEach((e, i) => {
+      if (think) {
+        el.appendChild(thinkNode(e));
+      } else if (e.tipFill) {
+        // write / edit：那一块自己画（标题行 + diff / 写入预览 + 「跳转 / 回滚」，见 buildEditCard）
+        e.inline = true;              // 不收起、不挂“点标题行展开”（见 buildEditCard 的 fillEntry）
+        e.tipFill(el, i > 0);
+        e.inline = false;
+      } else {
+        el.appendChild(fullEntryNode(e, i > 0));
+      }
+      if (e.clip) { sources.push({ clip: e.clip, entry: e }); }
+      if (e.argsClip) { sources.push({ argsClip: e.argsClip, entry: e }); }
+    });
+    el._clipSources = sources;
+    Array.from(el.children).forEach((c, i) => { if (c._out && scrolled[i]) { c._out.scrollTop = scrolled[i]; } });
+    startFullPump(st);
+  }
+
+  /** 思考那一段：整段摆出来（淡一点、缩进一点），不再收在提示框里。 */
+  function thinkNode(e) {
+    const body = document.createElement("div");
+    body.className = "tc-full-think" + (e.done ? "" : " tc-full-running");
+    const text = (e.resultText || "").trim();
+    body.textContent = text || (e.clip && !e.clip.failed && !e.clip.loaded
+      ? "（正在取这段思考…）"
+      : (e.done ? "（这段思考没有文字）" : "（正在想…）"));
+    body._out = body;   // 长思考也在块里自己滚（重画时接着从刚才那儿看）
+    if (e.clip) { appendClipNote(body, e.clip); }
+    return body;
+  }
+
+  /** 一条调用：一行摘要（跟提示框里那一行同一套写法）+ 它的输出。 */
+  function fullEntryNode(e, isNext) {
+    const wrap = document.createElement("div");
+    wrap.className = "tc-full-entry" + (isNext ? " tc-full-entry-next" : "");
+    if (e.isError) { wrap.classList.add("err"); }
+    const call = buildMediumSummary(e.name, e.argStr || "");
+    call.className = "tc-call";
+    wrap.appendChild(call);
+    const text = e.resultText || "";
+    const out = document.createElement("div");
+    out.className = "tc-full-out";
+    out._out = out;
+    if (e.done) {
+      if (text) { out.textContent = text; }
+      else if (!e.clip) { out.textContent = e.name === THINKING_NAME ? "（这段思考没有文字）" : "（没有输出）"; }
+    } else {
+      out.classList.add("tc-full-loading");
+      out.textContent = text || GROUP_RUNNING_TEXT;
+    }
+    if (out.textContent) { wrap.appendChild(out); }
+    appendClipNote(wrap, e.clip);
+    return wrap;
+  }
+
+  /** 不合并的那种标签（task 那几个）也铺一块：同样一行摘要 + 输出。 */
+  function syncFullSingle(st, tag) {
+    if (!tag) { return; }
+    const row = tag.parentElement;
+    if (!fullMode || !row) {
+      if (tag._fullEl) { tag._fullEl.remove(); tag._fullEl = null; }
+      return;
+    }
+    let el = tag._fullEl;
+    if (!el) {
+      el = document.createElement("div");
+      el.className = "tc-full" + enterCls(st);
+      tag._fullEl = el;
+    }
+    if (el.parentElement !== row.parentElement) { placeFullBlock(st, el, row); }
+    el.textContent = "";
+    el.appendChild(fullEntryNode({
+      name: tag._toolName,
+      argStr: tag._argStr || "",
+      done: tag._done === true,
+      resultText: tag._resultText || "",
+      clip: tag._resultClip || null,
+      isError: tag._isError === true,
+    }, false));
+    el._clipSources = [];
+    if (tag._resultClip) { el._clipSources.push({ clip: tag._resultClip, tag: tag }); }
+    if (tag._argsClip) { el._clipSources.push({ argsClip: tag._argsClip, tag: tag }); }
+    startFullPump(st);
+  }
+
+  /** 完整模式下还没问全 / 还在长的那些编号（一条消息问一把，别一条一个来回）。 */
+  function fullClipKeys(st) {
+    const keys = [];
+    for (const root of [st.paneEl, st._stage]) {
+      if (!root) { continue; }
+      for (const el of root.querySelectorAll(".tc-full")) {
+        for (const src of el._clipSources || []) {
+          const done = src.entry ? src.entry.done === true : !!(src.tag && src.tag._done === true);
+          if (src.clip && !src.clip.failed && (!src.clip.loaded || !done)) { keys.push(src.clip.key); }
+          if (src.argsClip && !src.argsClip.failed && !src.argsClip.loaded) { keys.push(src.argsClip.key); }
+        }
+      }
+    }
+    return keys;
+  }
+
+  function pumpFullDetails(st) {
+    const keys = fullClipKeys(st);
+    if (keys.length > 0) { vscode.postMessage({ type: "loadDetails", sessionId: st.id, keys: keys }); }
+  }
+
+  /** 铺开的内容还在长 / 还没问全：每秒再问一次（跟提示框那套一样，见 startClipPump）。 */
+  function startFullPump(st) {
+    if (!fullMode || !st || st.fullPump) { return; }
+    pumpFullDetails(st);
+    if (fullClipKeys(st).length === 0) { return; }
+    st.fullPump = setInterval(() => {
+      if (!fullMode || fullClipKeys(st).length === 0) { stopFullPump(st); return; }
+      pumpFullDetails(st);
+    }, DETAIL_REFRESH_MS);
+  }
+
+  function stopFullPump(st) {
+    if (!st || !st.fullPump) { return; }
+    clearInterval(st.fullPump);
+    st.fullPump = 0;
+  }
+
+  /** 后端的全文到了（details）：铺开的那几块换上新内容（提示框那边另有一套，见 case "details"）。 */
+  function applyFullDetails(st, items, missing) {
+    if (!fullMode || !st) { return; }
+    const textOf = (key) => (typeof items[key] === "string" ? items[key] : (missing.indexOf(key) >= 0 ? null : undefined));
+    const groups = new Set();
+    const tags = new Set();
+    for (const root of [st.paneEl, st._stage]) {
+      if (!root) { continue; }
+      for (const el of root.querySelectorAll(".tc-full")) {
+        for (const src of el._clipSources || []) {
+          if (src.clip) {
+            const text = textOf(src.clip.key);
+            if (text !== undefined) {
+              if (text === null) { src.clip.failed = true; }
+              else {
+                src.clip.loaded = true;
+                if (src.entry) { src.entry.resultText = text; groups.add(src.entry.group); }
+                else if (src.tag) { src.tag._resultText = text; tags.add(src.tag); }
+              }
+            }
+          }
+          if (src.argsClip) {
+            const text = textOf(src.argsClip.key);
+            if (text !== undefined) {
+              if (text === null) { src.argsClip.failed = true; }
+              else {
+                src.argsClip.loaded = true;
+                if (src.entry) {
+                  src.entry.argStr = text;
+                  src.entry.tipCall = tagTipCallText(src.entry.name, text);
+                  if (src.entry.applyArgs) { src.entry.applyArgs(text); }
+                  groups.add(src.entry.group);
+                } else if (src.tag) {
+                  src.tag._argStr = text;
+                  src.tag._tipCall = tagTipCallText(src.tag._toolName, text);
+                  tags.add(src.tag);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    for (const g of groups) { if (g) { syncFullBlock(st, g); } }
+    for (const tag of tags) { syncFullSingle(st, tag); }
+  }
+
+  /** 设置里切了「消息显示」：已经画出来的那些也跟着换，不用等人刷新页面。 */
+  function applyFullMode(next) {
+    const on = next === true;
+    if (on === fullMode) { return; }
+    fullMode = on;
+    for (const st of sessions.values()) {
+      if (!st.paneEl) { continue; }
+      if (!fullMode) { stopFullPump(st); }
+      st.paneEl.querySelectorAll(".tool.tool-group").forEach((tag) => {
+        if (!tag._tipGroup) { return; }
+        if (fullMode) { syncFullBlock(st, tag._tipGroup); } else { dropFullBlock(tag._tipGroup); }
+      });
+      st.paneEl.querySelectorAll(".tool:not(.tool-group)").forEach((tag) => { syncFullSingle(st, tag); });
+    }
   }
 
   /** 这一条还有要不要接着问的（铺开了、没取到全文，或者这一条还在长）。 */
@@ -4577,22 +4857,26 @@
      *  标题行就是这一条的输入：点它才铺开下面那些（输出），打开提示框的时候高矮不会自己变。 */
     let entry = null;   // 下面挂进那一批时才有（fillEntry 只在画提示框时才用得到它）
     function fillEntry(content, isNext) {
+      // 完整模式里那一块是铺开的（见 chat.js 的 paintFullBlock）：不收起、也不点标题行展开
+      const pinned = !!(entry && entry.inline);
       const head = document.createElement("div");
-      head.className = "tag-tip-call tag-tip-click tag-tip-head" + (isNext ? " tag-tip-call-next" : "");
+      head.className = "tag-tip-call" + (pinned ? "" : " tag-tip-click") + " tag-tip-head" + (isNext ? " tag-tip-call-next" : "");
       const title = document.createElement("span");
       title.className = "tag-tip-title";
       title.textContent = toolName + " " + (label || filePath || "") + (reverted ? "（已回滚）" : "");
       head.appendChild(title);
-      head.addEventListener("click", (e) => {
-        // 标题行右边那两颗自己管自己（它们本来就不往外冒）
-        if (!entry || (e.target.closest && e.target.closest(".et-jump, .et-revert"))) { return; }
-        e.stopPropagation();
-        entry.expanded = !entry.expanded;
-        startClipPump(entry.group.tag);   // 铺开的这就去取参数（写入预览要它）
-        repaintTagTip(entry.group.tag);
-      });
+      if (!pinned) {
+        head.addEventListener("click", (e) => {
+          // 标题行右边那两颗自己管自己（它们本来就不往外冒）
+          if (!entry || (e.target.closest && e.target.closest(".et-jump, .et-revert"))) { return; }
+          e.stopPropagation();
+          entry.expanded = !entry.expanded;
+          startClipPump(entry.group.tag);   // 铺开的这就去取参数（写入预览要它）
+          repaintTagTip(entry.group.tag);
+        });
+      }
       content.appendChild(head);
-      if (!entry || !entry.expanded) { return; }
+      if (!entry || (!entry.expanded && !pinned)) { return; }
       if (resultDone && pendingResult) {
         if (pendingResult.isError) {
           const err = document.createElement("div");
@@ -12275,6 +12559,7 @@
           thinking.clip = { key: thinking.clipKey, omitted: msg.omitted, loaded: false, failed: false };
         }
         refreshTagTipIfShowing(thinking.group.tag);   // 提示框开着时跟着长大
+        scheduleFullBlock(t, thinking.group);         // 完整模式：铺开的那一段也跟着长
         break;
       }
       case "thinkingFull":
@@ -12434,6 +12719,7 @@
           groupEntry.clip = clipOf(msg);
           groupEntry.meta = { isPartial: true, durationMs: msg.durationMs };
           refreshTagTipIfShowing(groupEntry.group.tag);
+          scheduleFullBlock(t, groupEntry.group);
           break;
         }
         const tagEl = t.pendingToolTags.get(msg.toolCallId);
@@ -12442,6 +12728,7 @@
           tagEl._resultClip = clipOf(msg);
           tagEl._resultMeta = { isPartial: true, durationMs: msg.durationMs };
           setTagTip(tagEl, tagEl._resultText, "");
+          syncFullSingle(t, tagEl);
         }
         break;
       }
@@ -12487,6 +12774,7 @@
             dropToolTag(t, tagEl);
           } else {
             setTagTip(tagEl, tagEl._resultText, "");
+            syncFullSingle(t, tagEl);
           }
         }
         break;
@@ -12494,10 +12782,12 @@
       case "details": {
         // 点开时要的那一批内容回来了（见 startClipPump）：换到打开着的那个提示框里。
         // 提示框已经关了就不管了——下次点开再要一次（后端那边留着，要点很快）。
-        const open = tagTipTag;
-        if (!open) { break; }
         const items = msg.items && typeof msg.items === "object" ? msg.items : {};
         const missing = Array.isArray(msg.missing) ? msg.missing : [];
+        // 完整模式：铺在消息流里的那几块也要换（先换，别被下面那句“提示框没开”挡掉）
+        applyFullDetails(t, items, missing);
+        const open = tagTipTag;
+        if (!open) { break; }
         const textOf = (key) => (typeof items[key] === "string" ? items[key] : (missing.indexOf(key) >= 0 ? null : undefined));
         const apply = (clip, setText) => {
           if (!clip) { return; }
@@ -13190,6 +13480,7 @@
     if (st.actTimer) { clearTimeout(st.actTimer); st.actTimer = 0; }
     if (st.redrawTimer) { clearTimeout(st.redrawTimer); st.redrawTimer = null; }
     dropRunningLine(st);   // 那条「正在跑」的定时器与耗时那只钟（见 startRunClock）一并停掉
+    stopFullPump(st);      // 完整模式那块内容层的定时器（见 startFullPump）
     for (const tg of st.pendingToolTags.values()) { clearInterval(tg._timer); }
     const wasActive = activeId === id;
     st.viewEl.remove();
