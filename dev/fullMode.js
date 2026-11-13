@@ -7,6 +7,7 @@
  *   · 设置面板里能切（点「完整」→ 后端把选项存下来、界面这边跟着换；点「简洁」→ 收回去）；
  *   · 思考整段摆出来（不再收在提示框里），后来补来的全文换上去；
  *   · 工具调用：一行摘要 + 它的输出（writ / edit 那一块带 diff）；
+ *   · 工具标签那一排（齿轮 + 工具名那几颗）在完整模式里不露面（内容已经直接摆出来了）；
  *   · 内容长了在块里自己滚（有高度上限，不把消息流撑成几十屏）；
  *   · 后端把全文送来（details）时块里跟着换上新内容。
  *
@@ -107,6 +108,8 @@ module.exports = async (page) => {
             diffs: document.querySelectorAll(".tc-full .edit-diff").length,
             capped: Array.from(document.querySelectorAll(".tc-full-out, .tc-full-think"))
                 .every((el) => el.scrollHeight > el.clientHeight ? getComputedStyle(el).overflowY === "auto" : true),
+            tagRowShown: !!document.querySelector(".session-view:not(.off) .session-pane > .tool-row:not([hidden])")
+                && getComputedStyle(document.querySelector(".session-view:not(.off) .session-pane > .tool-row")).display !== "none",
         });
     `));
     console.log("  块 " + stats.blocks + "，思考：" + stats.thinks + "，输出 " + stats.outs + " 块，diff " + stats.diffs + " 块，长的能滚 " + stats.capped);
@@ -116,6 +119,7 @@ module.exports = async (page) => {
     need(stats.outs >= 2, "工具输出没铺出来：" + stats.outs);
     need(stats.diffs === 1, "edit 的 diff 没画出来：" + stats.diffs);
     need(stats.capped, "长内容没有在块里自己滚（把消息流撑长了）");
+    need(!stats.tagRowShown, "完整模式里工具标签那一排还露着（该直接摆内容）");
 
     // ---- 三、切回「简洁」：那些块收掉 ----
     await post(page, [{ type: "openSettings" }]);
@@ -128,12 +132,15 @@ module.exports = async (page) => {
         return JSON.stringify({
             blocks: document.querySelectorAll(".session-view:not(.off) .session-pane > .tc-full").length,
             tags: document.querySelectorAll(".session-view:not(.off) .session-pane .tool-row .tool").length,
+            tagRowsShown: Array.from(document.querySelectorAll(".session-view:not(.off) .session-pane > .tool-row"))
+                .filter((el) => getComputedStyle(el).display !== "none").length,
         });
     `));
-    console.log("\n三、切回简洁（内容块收回、标签还在）：块 " + brief.blocks + "，标签 " + brief.tags);
+    console.log("\n三、切回简洁（内容块收回、标签回来）：块 " + brief.blocks + "，标签 " + brief.tags + "，标签行 " + brief.tagRowsShown);
     await page.shot("brief-mode.png");
     need(brief.blocks === 0, "切回简洁之后内容块还在：" + brief.blocks);
     need(brief.tags >= 3, "切回简洁之后工具标签没了：" + brief.tags);
+    need(brief.tagRowsShown >= 1, "切回简洁之后工具标签那一排没回来");
 
     if (problems.length) {
         console.log("\n有问题：");

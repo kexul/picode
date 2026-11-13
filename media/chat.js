@@ -4058,6 +4058,9 @@
   /** 设置里切了「消息显示」：已经画出来的那些也跟着换，不用等人刷新页面。 */
   function applyFullMode(next) {
     const on = next === true;
+    // 完整模式里不摆工具标签那一排（那几颗就是“收着的内容”的入口）：思考和调用直接铺在
+    // 消息流里，标签跟下面的内容块说的是同一件事，两处都摆就重了。见 chat.css 的 .full-mode
+    document.body.classList.toggle("full-mode", on);
     if (on === fullMode) { return; }
     fullMode = on;
     for (const st of sessions.values()) {

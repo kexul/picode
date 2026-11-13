@@ -442,6 +442,9 @@
      syncFullBlock）。每个工具标签下面一块：一条调用一行摘要 + 它的输出；思考整段摆出来。
      内容长了就在块里自己滚（.tc-full-out / .tc-full-think 有高度上限），一屏里几条长命令
      不该把消息流撑成几十屏。简洁模式下这些块根本不存在。 */
+  /* 完整模式里工具标签那一排（齿轮 + 工具名那几颗）不露面：内容和它说的是同一件事。
+     只是不显示，节点都还在（「正在跑的那一条」、图块、问话卡片都认着它定位）。 */
+  .full-mode .tool-row { display: none; }
   .tc-full { margin: 3px 0 2px; padding: 0 14px; }
   .tc-full-entry { margin-top: 6px; }
   .tc-full-entry:first-child { margin-top: 0; }
