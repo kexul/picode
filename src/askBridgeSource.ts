@@ -1,5 +1,5 @@
 /**
- * 问话（ask_choice）：塞进 pi 进程里的那个扩展文件的源码。
+ * 问话（ask_user）：塞进 pi 进程里的那个扩展文件的源码。
  *
  * 插件启动时把下面这份源码写到 <pichatDir>/ask-bridge-<插件版本>.ts，
  * 每个会话的 pi 进程启动时都用 `-e <那个文件>` 加载它。
@@ -15,7 +15,7 @@ export function askBridgeSource(over?: PromptOverrides): string {
     return String.raw`/**
  * 这是 VSCode 插件 Pi Chat 自动生成的文件，不要手改：插件版本一变就会重新生成，改动会丢。
  *
- * 作用：给模型一个工具 ask_choice，让它问用户"选一个 / 选几个"的选择题，
+ * 作用：给模型一个工具 ask_user，让它问用户"选一个 / 选几个"的选择题，
  * 用户在这块界面上点几下作答（列表 + 勾选 + 自己写），答案回到模型手里。
  *
  * 工具被调用时：
@@ -169,7 +169,7 @@ function safeRegister(pi: any, def: any): void {
 
 export default function askBridge(pi: any): void {
     safeRegister(pi, {
-        name: "ask_choice",
+        name: "ask_user",
         label: "问用户选择题",
         description: ASK_DESCRIPTION,
         promptSnippet: "问用户一个选择题（单选 / 多选），让他在界面上点选，不用自己打字。",

@@ -175,10 +175,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         log(`派子会话的功能没开（文件没写成：${tabaAssets.error}）`);
     }
 
-    // 问话（ask_choice）要用的那个 pi 扩展：同样先写好（它不依赖上面那个开关）
+    // 问话（ask_user）要用的那个 pi 扩展：同样先写好（它不依赖上面那个开关）
     const askAssets = ensureAskAssets(VERSION, cfg.prompts);
     if (!askAssets.ok) {
-        log(`问话（ask_choice）这个工具没开（文件没写成：${askAssets.error}）`);
+        log(`问话（ask_user）这个工具没开（文件没写成：${askAssets.error}）`);
     }
 
     // 自动起标题：同样先写好（它只在主会话里加载）

@@ -15,7 +15,7 @@
  */
 
 /** 投进去的调用：[工具名, 参数, 耗时毫秒]；["editCard", 工具名, 参数, 耗时] 是编辑卡片。
- *  最后那条 ask_choice 不该进表（它那段时间是在等用户回答，见 TOOL_STATS_SKIP），拿来卡这一条。 */
+ *  最后那条 ask_user 不该进表（它那段时间是在等用户回答，见 TOOL_STATS_SKIP），拿来卡这一条。 */
 const ITEMS = [
     ["bash", { command: "npm test" }, 12500],
     ["bash", { command: "node scripts/compile.mjs" }, 64200],
@@ -24,7 +24,7 @@ const ITEMS = [
     ["ls", { path: "src" }, 90],
     ["editCard", "edit", { path: "media/chat.css", oldText: "a", newText: "b" }, 2600],
     ["codemode", { code: "await tools.bash({ command: 'git status', timeout: 10 })" }, 8100],
-    ["ask_choice", { question: "先跑哪个？", options: ["全量", "只跑一个"], multi: false }, 40000],
+    ["ask_user", { question: "先跑哪个？", options: ["全量", "只跑一个"], multi: false }, 40000],
 ];
 
 /** 投一批消息：调用 + 结果（带耗时）。 */
@@ -94,16 +94,16 @@ module.exports = async (page) => {
     await page.sleep(400);
     await openStats(page);
     await look(page, "跑过一批之后");
-    // 问话卡片（ask_choice）不进表：那 40 秒是在等用户回答，不是工具在干活
+    // 问话卡片（ask_user）不进表：那 40 秒是在等用户回答，不是工具在干活
     const asked = JSON.parse(await page.eval(`
         const body = document.getElementById("toolStatsBody").innerText || "";
         return JSON.stringify({
-            hasAsk: /ask_choice/.test(body),
+            hasAsk: /ask_user/.test(body),
             calls: Number((body.match(/共 (\\d+) 次调用/) || [])[1] || 0),
         });`));
     console.log("问话卡片算不算进去：" + JSON.stringify(asked));
-    if (asked.hasAsk) { throw new Error("ask_choice 进了统计表（不该算它：那段时间是在等用户回答）"); }
-    if (asked.calls !== 7) { throw new Error("次数该是 7 次（Ask Choice 不算），实际 " + asked.calls); }
+    if (asked.hasAsk) { throw new Error("ask_user 进了统计表（不该算它：那段时间是在等用户回答）"); }
+    if (asked.calls !== 7) { throw new Error("次数该是 7 次（问话卡片不算），实际 " + asked.calls); }
     await page.shot("tool-stats-2-rows.png");
 
     // 长命令那一行：默认一行截成 …，点一下展开看全文，再点收起

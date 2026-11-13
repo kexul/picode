@@ -74,7 +74,7 @@ import {
 } from "./viewOptions";
 
 /**
- * 一张还等着的问话卡片：模型问的选择题（ask_choice）、扩展问的确认 / 输入 / 选一个。
+ * 一张还等着的问话卡片：模型问的选择题（ask_user）、扩展问的确认 / 输入 / 选一个。
  * 卡片画在那个会话的消息流里（不再弹浮层），这里记的是发给了哪些屏、答案交给谁。
  */
 interface OpenCard {
@@ -82,7 +82,7 @@ interface OpenCard {
     sessionId?: string;
     /** 卡片内容（界面上怎么画，见 media/chat.js 的 renderAskCard）。 */
     card: Record<string, unknown>;
-    /** 提问方的编号（ask_choice 那次提问的编号）：扩展不等了时靠它认领这张卡片。 */
+    /** 提问方的编号（ask_user 那次提问的编号）：扩展不等了时靠它认领这张卡片。 */
     srcId: string;
     /** 现在还挂着这张卡片的屏（答了 / 断开了就摘掉）。 */
     screens: Set<string>;
@@ -1870,7 +1870,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     // ========================================================================
     //  问话卡片：要用户答一句（模型问的选择题、扩展问的确认 / 输入 / 选一个）
     // ========================================================================
-    /** 问答题（ask_choice）卡片等多久：用户可能要想一会儿。扩展那边等 30 分钟，这里稍短：让它先拿到“没作答”。 */
+    /** 问答题（ask_user）卡片等多久：用户可能要想一会儿。扩展那边等 30 分钟，这里稍短：让它先拿到“没作答”。 */
     private static readonly ASK_WAIT_MS = 25 * 60 * 1000;
     /** 扩展问的那几种（确认 / 输入 / 选一个）等多久：跟以前浮层的等待时间一致。 */
     private static readonly DIALOG_WAIT_MS = 2 * 60 * 1000;
@@ -1883,7 +1883,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
      * @param sessionId 哪个会话在问；没给（理论上不会）就没人看得到。
      * @param card 卡片内容：{ kind: "choice" | "confirm" | "prompt", … }。
      * @param waitMs 最多等多久（毫秒）。
-     * @param srcId 提问方的编号（ask_choice 那次提问的编号）：扩展不等了时靠它认领这张卡片。
+     * @param srcId 提问方的编号（ask_user 那次提问的编号）：扩展不等了时靠它认领这张卡片。
      * @param hangOn 一块屏都不剩（都断开了）时还等不等：问答题等（切回来还能答），扩展问的那些不等。
      * @returns 用户答的那几样（picks / text / yes / cancelled）；没作答或到点是 undefined。
      */

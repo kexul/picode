@@ -24,8 +24,8 @@ export interface PiConfig {
     /** 上面那个扩展要用到的资源目录（插件自带的角色文件在里面）。 */
     tabaDir?: string;
     /**
-     * “问话”（ask_choice）要加载的 pi 扩展文件路径（插件写在 pichat 的目录里）。
-     * 空串或缺省表示这个工作区不带这个能力：不给 pi 加载扩展，模型那边就没有 ask_choice 这个工具。
+     * “问话”（ask_user）要加载的 pi 扩展文件路径（插件写在 pichat 的目录里）。
+     * 空串或缺省表示这个工作区不带这个能力：不给 pi 加载扩展，模型那边就没有 ask_user 这个工具。
      */
     askExtension?: string;
     /** 上面那个扩展的资源目录：回话文件写在它的 ask-answers/ 下面。 */
@@ -187,7 +187,7 @@ export interface RuntimeHost {
      */
     onTabaRequest?(panelId: string, request: TabaRequest): void;
     /**
-     * 某个会话里的 pi 扩展要问用户一个选择题（ask_choice）：弹给正在看这个会话的那块屏，
+     * 某个会话里的 pi 扩展要问用户一个选择题（ask_user）：弹给正在看这个会话的那块屏，
      * 用户答完把答案写成回话文件（扩展那边在轮询那个文件）。不必等它结束。可选。
      */
     askQuestion?(request: AskRequest, sessionId?: string): void;

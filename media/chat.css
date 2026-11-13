@@ -1551,7 +1551,7 @@
     background-color: var(--vscode-charts-green, #16a34a);
     animation: ct-appear-tool 0.18s ease-out, ct-wrench 1.2s ease-in-out infinite;
   }
-  /* 有一道题在等你答（ask_choice 那个工具就停在那儿）：同一个沙漏，换成黄的 ——
+  /* 有一道题在等你答（ask_user 那个工具就停在那儿）：同一个沙漏，换成黄的 ——
      跟右下角那张提醒卡片左边那条黄线一个意思（那张卡片也是“等你答”才黄）。
      它不是“在跑”，是“在等你”，所以在会话格上也不呼吸（见下面 .sn-tab.awaiting）。 */
   .ct-cell .ct-act[data-act="answer"] {

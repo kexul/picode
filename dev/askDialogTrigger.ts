@@ -22,7 +22,7 @@ export default function (pi: ExtensionAPI) {
             return { action: "handled" };
         }
 
-        // 普通的“选一个”（别的扩展也会用的那种：不是 ask_choice，走 pi 自己那套 select）
+        // 普通的“选一个”（别的扩展也会用的那种：不是 ask_user，走 pi 自己那套 select）
         if (text === "test-select") {
             const picked = await ctx.ui.select("选一个颜色", ["红灯", "绿灯", "黄灯"]);
             ctx.ui.notify(picked === undefined ? "选择列表答复：（取消）" : `选择列表答复：${picked}`);

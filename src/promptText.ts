@@ -101,7 +101,7 @@ export const PROMPTS: Record<PromptKey, PromptSpec> = {
             + "刚看过一次、它又没出新东西的时候再查，会被挡回来（它跑完会自动交回来）。",
     },
     toolAsk: {
-        label: "ask_choice（问用户选择题）工具的说明",
+        label: "ask_user（问用户选择题）工具的说明",
         vars: [],
         text:
             "问用户一个选择题，让他在界面上点选（不用自己打字）。单选、多选都行，界面上还有一行「自己写」，选项里都不合适时用户可以自己写一句话。"

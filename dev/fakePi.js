@@ -415,11 +415,11 @@ async function runScript(userText) {
     };
 
     /**
-     * 演一次“模型问用户选择题”（ask_choice）：调的是真扩展注册的那个工具 ——
+     * 演一次“模型问用户选择题”（ask_user）：调的是真扩展注册的那个工具 ——
      * 暗号由它写、回话由它去读（界面靠 toolCallId 把卡片挂到这条工具行下面，也是它带的）。
      */
     const askChoice = async (ask) => {
-        return await actReal("ask_choice", {
+        return await actReal("ask_user", {
             question: ask.question,
             options: ask.options,
             multi: ask.multi === true,
@@ -536,7 +536,7 @@ async function runScript(userText) {
     }
 
     // ---- 问话那几种（调试用：一句话就演一类，不用真模型；见 dev/askCards.js）----
-    // 前两种是模型调 ask_choice（走 stderr 暗号 + 回话文件），后三种是扩展在中间问用户
+    // 前两种是模型调 ask_user（走 stderr 暗号 + 回话文件），后三种是扩展在中间问用户
     // （走 extension_ui_request，跟真的扩展提问同一条路）。
     const askKind = /问多选/.test(userText) ? "multi"
         : /问单选/.test(userText) ? "single"

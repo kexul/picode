@@ -1,6 +1,6 @@
 // @ts-nocheck
 /**
- * askQuestion —— 验「ask_choice 这个工具能把问题送到界面上、用户点/勾/写之后答案回到模型手里」。
+ * askQuestion —— 验「ask_user 这个工具能把问题送到界面上、用户点/勾/写之后答案回到模型手里」。
  *
  * 这条是整条真路（工具、协议、卡片、回话文件全是真的）：
  *   真模型 → 真 pi（插件给它 -e 了 ask-bridge-<版本>.ts）→ stderr 暗号 → 真后端
@@ -32,7 +32,7 @@ module.exports = async (page) => {
     await page.waitReady();
 
     // 一、单选：点一行就是答案
-    await page.send("用 ask_choice 问我：选 A 还是 B？options 就写 [\"A\",\"B\"]，recommended 写 1。等我选。");
+    await page.send("用 ask_user 问我：选 A 还是 B？options 就写 [\"A\",\"B\"]，recommended 写 1。等我选。");
     await waitCards(page, 1, 180000);
     await page.sleep(400);
     await page.shot("ask-single.png");
@@ -41,7 +41,7 @@ module.exports = async (page) => {
     await page.shot("ask-single-after.png");
 
     // 二、多选：勾两项，按「确定」
-    await page.send("再用 ask_choice 问我：哪几项要？multi 写 true，options 写 [\"甲\",\"乙\",\"丙\"]，recommended 写 [1,3]。");
+    await page.send("再用 ask_user 问我：哪几项要？multi 写 true，options 写 [\"甲\",\"乙\",\"丙\"]，recommended 写 [1,3]。");
     await waitCards(page, 1, 180000);
     await page.sleep(400);
     await page.shot("ask-multi.png");
@@ -53,7 +53,7 @@ module.exports = async (page) => {
     await page.shot("ask-multi-after.png");
 
     // 三、自己写：在底下那行写字，按「确定」
-    await page.send("再用 ask_choice 问我：选 A 还是 B？options 写 [\"A\",\"B\"]。这回我不勾，我打算自己写。");
+    await page.send("再用 ask_user 问我：选 A 还是 B？options 写 [\"A\",\"B\"]。这回我不勾，我打算自己写。");
     await waitCards(page, 1, 180000);
     await page.sleep(400);
     await page.eval(inLastCard(`c.querySelector(".ask-input").focus();`));

@@ -2,9 +2,9 @@
 /**
  * askCards —— 验「问话卡片长在消息流里」（假数据，不调真模型）。
  *
- * 假 pi 照剧本演：模型调 ask_choice（走真协议：工具调用 → stderr 暗号 → 回话文件 → 工具结果），
+ * 假 pi 照剧本演：模型调 ask_user（走真协议：工具调用 → stderr 暗号 → 回话文件 → 工具结果），
  * 以及扩展在中间问用户（extension_ui_request：确认 / 输入 / 选一个）。
- * 卡片该长在那条 ask_choice 工具行下面；单选点一行就走，多选勾完按「确定」，答完卡片定住、
+ * 卡片该长在那条 ask_user 工具行下面；单选点一行就走，多选勾完按「确定」，答完卡片定住、
  * 选中的那几行留着高亮（见 dev/README.md）。
  *
  *   npm run web:shot -- --fake-pi --script dev/askCards.js

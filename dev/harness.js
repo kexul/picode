@@ -180,7 +180,7 @@ function createHarness(options = {}) {
 
     // 派子会话要用的文件：真后端启动器会写，这里也得写一份（不然调试时派子会话是坏的）
     ensureTabaAssets(version, prompts);
-    // 问话（ask_choice）那个工具要用的扩展：同理
+    // 问话（ask_user）那个工具要用的扩展：同理
     ensureAskAssets(version, prompts);
     // 会话里的截图挪出会话文件那个扩展：同理（每个会话都加载它）
     ensureImageAssets(version);

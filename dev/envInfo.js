@@ -43,7 +43,7 @@ const FAKE = {
     tools: [
         { name: "bash", on: true, exposure: "direct", path: "builtin:bash", scope: "temporary" },
         { name: "read", on: true, exposure: "direct", path: "builtin:read", scope: "temporary" },
-        { name: "ask_choice", on: true, exposure: "direct", path: "C:\\Users\\kk\\.pi\\pichat\\ask-bridge-0.1.0.ts", scope: "user" },
+        { name: "ask_user", on: true, exposure: "direct", path: "C:\\Users\\kk\\.pi\\pichat\\ask-bridge-0.1.0.ts", scope: "user" },
         { name: "mcp__filesystem__read_file", on: true, exposure: "direct", path: "builtin:mcp", scope: "user" },
         { name: "mcp__filesystem__write_file", on: false, exposure: "codemode", path: "builtin:mcp", scope: "user" },
         { name: "tool_search", on: false, exposure: "deferred", path: "builtin:tool_search", scope: "temporary" },

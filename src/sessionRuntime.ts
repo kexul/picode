@@ -484,7 +484,7 @@ export class SessionRuntime {
         // “派子会话”那个扩展：配置里有路径、且本 panel 不是子会话时才加载（子会话不能再派）
         const tabaExtension = this.launch?.noTaba ? "" : cfg.tabaExtension || "";
         if (tabaExtension) { extraArgs.push("-e", tabaExtension); }
-        // “问话”那个扩展（ask_choice）：每个会话都带（子会话也可能要问用户）
+        // “问话”那个扩展（ask_user）：每个会话都带（子会话也可能要问用户）
         if (cfg.askExtension) { extraArgs.push("-e", cfg.askExtension); }
         // “自动起标题”：只给主会话带（子会话的名字由派活那边给，不用再花一次请求）
         const titleExtension = this.launch?.noTaba ? "" : cfg.titleExtension || "";

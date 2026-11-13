@@ -10,7 +10,7 @@
  *   · 同时跑两条 → 一条一行，顺序跟着标签走；先跑完的那条立刻少一条，只留最后跑完的那条冻着；
  *   · 一条都不在跑 → 字不走，齿轮停转、耗时定住（长命令照旧自己滚），位置也不动；
  *   · 一串 60 毫秒跑完的调用连着来 → 这条只出现一次、一次没被摘掉，只是换名字，下面一次都不跳；
- *   · think（思考）与 ask_choice（问话卡片）不出这条；
+ *   · think（思考）与 ask_user（问话卡片）不出这条；
  *   · 跑着的时候又来了正文 → 这条仍在它那批标签下面；之后又开了一批标签 → 跟着挪到新那批下面。
  *   · 整屏重画（刷新页面 / 重连后重放历史）：历史里那条还没结果的调用重放出来后，这条也在（只一条）。
  *   · 一行放不下的字自己横向滚、只往一个方向（跑马灯，不回程）：滚的距离够看到末尾、
@@ -142,18 +142,18 @@ module.exports = async (page) => {
     if (JSON.stringify(s.items) !== JSON.stringify(["grep /tool-running/ in media"])) { problems.push("新一批里的那条没换上来（还是只露一条）：" + JSON.stringify(s.items)); }
     await page.shot("running-line.png");
 
-    // ---- 第六幕：think 与 ask_choice 都不出这条 ----
+    // ---- 第六幕：think 与 ask_user 都不出这条 ----
     await post([
         { type: "toolResult", toolCallId: "a1", isError: false, resultText: "编译完成", durationMs: 3200 },
         { type: "toolResult", toolCallId: "a3", isError: false, resultText: "media/chat.css:212", durationMs: 200 },
         { type: "thinkingStart" },
-        { type: "tool", toolName: "ask_choice", args: { question: "选一个", options: ["甲", "乙"] }, toolCallId: "a4" },
+        { type: "tool", toolName: "ask_user", args: { question: "选一个", options: ["甲", "乙"] }, toolCallId: "a4" },
     ]);
     await page.sleep(500);
     s = await state();
-    console.log("\n第六幕（think 与 ask_choice 都在转圈，别的都跑完了）：\n  " + show(s));
-    // 别的都跑完了：最后跑完的那条（grep）冻着，think / ask_choice 不往这条里写
-    if (JSON.stringify(s.items) !== JSON.stringify(["grep /tool-running/ in media"])) { problems.push("跑完的那条没冻着留着，或者 think / ask_choice 也写进来了：" + JSON.stringify(s.items)); }
+    console.log("\n第六幕（think 与 ask_user 都在转圈，别的都跑完了）：\n  " + show(s));
+    // 别的都跑完了：最后跑完的那条（grep）冻着，think / ask_user 不往这条里写
+    if (JSON.stringify(s.items) !== JSON.stringify(["grep /tool-running/ in media"])) { problems.push("跑完的那条没冻着留着，或者 think / ask_user 也写进来了：" + JSON.stringify(s.items)); }
     if (s.frozen !== 1 || s.spin !== 0) { problems.push("冻住的该是齿轮停转的那一条（转圈的不该还有）：" + show(s)); }
     if (!s.hasNode) { problems.push("这一批还没过去（下面没出别的东西），这条就先没了：" + JSON.stringify(s)); }
 

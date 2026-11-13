@@ -2,7 +2,7 @@
  * 几套 pi 扩展（"桥"）要落盘的东西，以及"写好了没有"。
  *
  *   taba-bridge-<插件版本>.ts   派子会话（taba）那个扩展（源码见 tabaBridgeSource.ts）
- *   ask-bridge-<插件版本>.ts    问话（ask_choice）那个扩展（源码见 askBridgeSource.ts）
+ *   ask-bridge-<插件版本>.ts    问话（ask_user）那个扩展（源码见 askBridgeSource.ts）
  *   title-bridge-<插件版本>.ts  自动起标题那个扩展（源码见 titleBridgeSource.ts）
  *   image-bridge-<插件版本>.ts  会话里的截图挪出会话文件（源码见 imageOffloadBridgeSource.ts）
  *   bash-bridge-<插件版本>.ts  把 bash 换成能「脱手到后台」的版本（源码见 bashBridgeSource.ts）
@@ -193,7 +193,7 @@ export function ensureTabaAssets(version: string, over?: PromptOverrides): Bridg
     return ensureBridge(BRIDGES.taba, version, over);
 }
 
-/** 同上，问话（ask_choice）那套。 */
+/** 同上，问话（ask_user）那套。 */
 export function ensureAskAssets(version: string, over?: PromptOverrides): BridgeAssets {
     return ensureBridge(BRIDGES.ask, version, over);
 }
