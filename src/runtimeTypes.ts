@@ -54,6 +54,17 @@ export interface PiConfig {
      * 空串或缺省表示那份清单一直取不到（那颗按钮会写着还没取到）。
      */
     envExtension?: string;
+    /**
+     * 「问顾问」那个 pi 扩展文件的路径（插件写在 pichat 目录里）。
+     * 每个会话都带；顾问模型没填时扩展什么也不做（模型那边不会出现 ask_advisor）。
+     * 空串或缺省表示这个工具不加载。
+     */
+    advisorExtension?: string;
+    /**
+     * 顾问模型（设置里那行「顾问模型」，provider/model）。空串 = 不用顾问。
+     * 启动 pi 时用环境变量 PICHAT_ADVISOR_MODEL 告诉扩展。
+     */
+    advisorModel?: string;
 }
 
 /**

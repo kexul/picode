@@ -218,7 +218,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
     /** 正在后台预热、尚未就绪的备用进程（防止并发 spawn 多个）。 */
     protected preparingSpare: PiClient | null = null;
     /** 备用进程启动时使用的模型（领取时随进程一起返回，供继承比对）。 */
-    protected spareMeta?: { provider?: string; modelId?: string };
+    protected spareMeta?: { provider?: string; modelId?: string; advisorModel?: string };
     /** 备用进程延迟预热定时器（disposeSpare 清理）。 */
     protected spareTimer?: ReturnType<typeof setTimeout>;
     /** 备用进程连续失败次数（成功就归零）。 */
@@ -615,6 +615,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (cfg.bashExtension) { extraArgs.push("-e", cfg.bashExtension); }
         // 报「加载了什么」（工具 / 技能 / MCP）：同上，每个会话都带
         if (cfg.envExtension) { extraArgs.push("-e", cfg.envExtension); }
+        // 问顾问（ask_advisor）：同上，每个会话都带（顾问模型没填时扩展自己不出现）
+        if (cfg.advisorExtension) { extraArgs.push("-e", cfg.advisorExtension); }
         const client = new PiClient({
             piPath: cfg.piPath,
             cwd: this.getCwd(),
@@ -625,12 +627,15 @@ export abstract class ChatControllerBase implements RuntimeHost {
                 ...(cfg.tabaDir ? { PICHAT_TABA_DIR: cfg.tabaDir } : {}),
                 ...(cfg.askDir ? { PICHAT_ASK_DIR: cfg.askDir } : {}),
                 ...(cfg.bashDir ? { PICHAT_BASH_DIR: cfg.bashDir } : {}),
+                ...(cfg.advisorModel ? { PICHAT_ADVISOR_MODEL: cfg.advisorModel } : {}),
             },
         });
         // 记住备用进程的启动模型：新 panel 领取时按继承目标比对，不符则补发 set_model
         this.spareMeta = {
             provider: cfg.provider || undefined,
             modelId: cfg.model || undefined,
+            // 顾问模型是启动时的环境变量定死的（扩展那时就装好了）：跟现在设置不一样就只能重起一个
+            advisorModel: cfg.advisorModel || "",
         };
         this.preparingSpare = client;
         // 备用进程的 stderr 只记“不是暗号行”的那些（暗号是一大串 base64，整行打出来把日志刷没）。
@@ -697,6 +702,14 @@ export abstract class ChatControllerBase implements RuntimeHost {
         this.spare = null;
         this.spareMeta = undefined;
         if (c) {
+            // 顾问模型是会话的 pi 进程启动时装进去的，领走以后补不了：设置改过就不用这个备用进程了
+            // （不然新会话会拿到旧的顾问，甚至“设置里明明关了、这个会话却还有那个工具”）。
+            const nowAdvisor = String(this.getConfig().advisorModel ?? "").trim();
+            if ((meta?.advisorModel ?? "") !== nowAdvisor) {
+                c.stop();
+                this.ensureSpare();
+                return undefined;
+            }
             this.ensureSpare();
             return { client: c, provider: meta?.provider, modelId: meta?.modelId };
         }

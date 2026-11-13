@@ -24,7 +24,7 @@ import { ChatControllerBase, type ViewOptionItem, type WorkspacePage } from "./c
 import { ServerStateStore } from "./serverState";
 import { DEFAULT_SERVER_CONFIG, readServerConfig, updateServerConfig, type ServerConfig } from "./serverConfig";
 import { isOwnPage, pushRemoteActivate, pushRemoteClose, pushRemoteNotice, REMOTE_TEXT_CHARS, type RemoteNotice } from "./remoteNotice";
-import { getAskAssets, getBashAssets, getEnvAssets, getImageAssets, getTabaAssets, getTitleAssets } from "./bridgeAssets";
+import { getAskAssets, getBashAssets, getEnvAssets, getImageAssets, getTabaAssets, getTitleAssets, getAdvisorAssets } from "./bridgeAssets";
 import { serverConfigFile, serverStateFile } from "./serverPaths";
 import {
     dropSessionFileLists,
@@ -315,6 +315,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const image = getImageAssets();
         const bash = getBashAssets();
         const env = getEnvAssets();
+        const advisor = getAdvisorAssets();
         return {
             // 这三样不让人配了：pi 走 PATH、永远信任项目（启动时带 --approve）、没有额外参数。
             // PICHAT_PI 只给调试用（dev/harness.js 指到假 pi），不给就是 PATH 里的 pi。
@@ -339,6 +340,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             bashDir: bash?.ok ? path.join(bash.resourceDir, "bash") : "",
             // 把「加载了什么」（工具 / 技能 / MCP）报回来：每个会话都带
             envExtension: env?.ok ? env.extensionPath : "",
+            // 问顾问：填了顾问模型才加载（没填的话连这个扩展都不用装）
+            advisorExtension: advisor?.ok && cfg.advisorModel ? advisor.extensionPath : "",
+            advisorModel: cfg.advisorModel,
         };
     }
 
@@ -1287,6 +1291,17 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const can = able.ok && !!this.options.restartBackend;
         const items: ViewOptionItem[] = [
             {
+                action: "advisorModel",
+                label: "顾问模型",
+                section: "模型",
+                desc: "卡住时模型可以问一句（工具 ask_advisor）：它把当前对话交给这个更强的模型看一眼，只要一段计划。"
+                    + "填 provider/model，比如 local/qwen3.8-max；留空 = 不用顾问。新开的会话生效。",
+                check: null,
+                kind: "text",
+                placeholder: "local/qwen3.8-max",
+                value: readServerConfig().config.advisorModel,
+            },
+            {
                 action: "notifyTurnEnd",
                 label: "弹窗通知",
                 section: "通知",
@@ -1343,6 +1358,9 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             }
         } else if (action === "machineLabel") {
             updateServerConfig({ label: String(value ?? "").trim() });
+        } else if (action === "advisorModel") {
+            // 顾问模型：provider/model。写成空的 = 关掉（新开的会话看不到 ask_advisor）
+            updateServerConfig({ advisorModel: String(value ?? "").trim() });
         } else if (action === "notifyTurnEnd") {
             // 这一行以前没接住，落到最后那个 else 去了：点「弹窗通知」实际拨的是
             // 「启动时自动打开最近会话」，通知却一直是开的。

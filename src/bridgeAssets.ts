@@ -7,6 +7,7 @@
  *   image-bridge-<插件版本>.ts  会话里的截图挪出会话文件（源码见 imageOffloadBridgeSource.ts）
  *   bash-bridge-<插件版本>.ts  把 bash 换成能「脱手到后台」的版本（源码见 bashBridgeSource.ts）
  *   env-bridge-<插件版本>.ts   把「加载了什么」（工具 / 技能 / MCP）报给插件（源码见 envBridgeSource.ts）
+ *   advisor-bridge-<插件版本>.ts  卡住时问顾问（源码见 advisorBridgeSource.ts）
  *
  * 几套是同一个套路：文件名、源码、落盘后顺带干的活不一样，其余（内容变了才重写、
  * 清掉旧版本留下的文件、记一份结果）都一样，所以合成一处，差别放在下面的 BRIDGES 里。
@@ -31,6 +32,7 @@ import { askBridgeSource } from "./askBridgeSource";
 import { titleBridgeSource } from "./titleBridgeSource";
 import { IMAGE_BRIDGE_SOURCE } from "./imageOffloadBridgeSource";
 import { bashBridgeSource } from "./bashBridgeSource";
+import { advisorBridgeSource } from "./advisorBridgeSource";
 import { ENV_BRIDGE_SOURCE } from "./envBridgeSource";
 import { type PromptOverrides } from "./promptText";
 import { cleanStaleRunFiles, tabaRunsDir } from "./tabaRunFiles";
@@ -64,7 +66,7 @@ interface BridgeKind {
     afterWrite(rootDir: string): void;
 }
 
-const BRIDGES: Record<"taba" | "ask" | "title" | "image" | "bash" | "env", BridgeKind> = {
+const BRIDGES: Record<"taba" | "ask" | "title" | "image" | "bash" | "env" | "advisor", BridgeKind> = {
     taba: {
         prefix: "taba-bridge",
         source: tabaBridgeSource,
@@ -125,6 +127,12 @@ const BRIDGES: Record<"taba" | "ask" | "title" | "image" | "bash" | "env", Bridg
                 } catch { /* 删不掉不影响用 */ }
             }
         },
+    },
+    advisor: {
+        prefix: "advisor-bridge",
+        source: advisorBridgeSource,
+        // 顾问模型从环境变量里读（启动会话时由后端传）：扩展本身不留文件、不留目录
+        afterWrite(): void { /* 没别的活 */ },
     },
 };
 
@@ -210,6 +218,11 @@ export function ensureEnvAssets(version: string): BridgeAssets {
     return ensureBridge(BRIDGES.env, version);
 }
 
+/** 同上，问顾问（ask_advisor）那套：每个会话都带（顾问没填时它什么也不做）。 */
+export function ensureAdvisorAssets(version: string, over?: PromptOverrides): BridgeAssets {
+    return ensureBridge(BRIDGES.advisor, version, over);
+}
+
 /** 拿记住的结果（还没写过就是 undefined）。 */
 export function getTabaAssets(): BridgeAssets | undefined {
     return cached.get(BRIDGES.taba);
@@ -233,4 +246,8 @@ export function getBashAssets(): BridgeAssets | undefined {
 
 export function getEnvAssets(): BridgeAssets | undefined {
     return cached.get(BRIDGES.env);
+}
+
+export function getAdvisorAssets(): BridgeAssets | undefined {
+    return cached.get(BRIDGES.advisor);
 }

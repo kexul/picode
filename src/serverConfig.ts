@@ -59,6 +59,11 @@ export interface ServerNotifySettings {
 export interface ServerConfig {
     provider: string;
     model: string;
+    /**
+     * 顾问模型（设置里那行「顾问模型」）：`provider/model`，比如 `local/qwen3.8-max`。
+     * 空 = 不用顾问（模型那边不会出现 ask_advisor 这个工具）。
+     */
+    advisorModel: string;
     autoLoadLast: boolean;
     sendKey: string;
     newSessionKey: string;
@@ -88,6 +93,8 @@ export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartia
 export const DEFAULT_SERVER_CONFIG: ServerConfig = deepFreeze({
     provider: "",
     model: "",
+    // 默认不用顾问：填了才开
+    advisorModel: "",
     autoLoadLast: DEFAULT_AUTO_LOAD_LAST,
     sendKey: DEFAULT_SEND_KEY,
     newSessionKey: DEFAULT_NEW_SESSION_KEY,
@@ -356,6 +363,8 @@ export function normalizeServerConfig(raw: unknown): { config: ServerConfig; war
     // ---- 启动 pi 用的参数（config.json 顶层：provider / model）----
     config.provider = pickString(raw.provider, DEFAULT_SERVER_CONFIG.provider, "provider", warnings);
     config.model = pickString(raw.model, DEFAULT_SERVER_CONFIG.model, "model", warnings);
+    // 顾问模型：写成 provider/model；没写 provider 的话，执行器那边会拿当前 provider 去试
+    config.advisorModel = pickText(raw.advisorModel, "advisorModel", warnings);
 
     // ---- 显示选项（默认值都从 viewOptions 取，那边改这里跟着改）----
     config.autoLoadLast = pickBoolean(raw.autoLoadLast, DEFAULT_SERVER_CONFIG.autoLoadLast, "autoLoadLast", warnings);

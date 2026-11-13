@@ -495,6 +495,8 @@ export class SessionRuntime {
         if (cfg.bashExtension) { extraArgs.push("-e", cfg.bashExtension); }
         // “加载了什么”（工具 / 技能 / MCP）：每个会话都带，界面那颗「工具」看的就是它报上来的
         if (cfg.envExtension) { extraArgs.push("-e", cfg.envExtension); }
+        // “问顾问”（ask_advisor）：每个会话都带；顾问模型没填时扩展自己不出现
+        if (cfg.advisorExtension) { extraArgs.push("-e", cfg.advisorExtension); }
         if (this.launch?.extraArgs && this.launch.extraArgs.length > 0) {
             extraArgs.push(...this.launch.extraArgs);
         }
@@ -511,6 +513,8 @@ export class SessionRuntime {
                     ...(cfg.tabaDir ? { PICHAT_TABA_DIR: cfg.tabaDir } : {}),
                     ...(cfg.askDir ? { PICHAT_ASK_DIR: cfg.askDir } : {}),
                     ...(cfg.bashDir ? { PICHAT_BASH_DIR: cfg.bashDir } : {}),
+                    // 顾问模型跟着会话走：改完设置，新开的会话就是新的顾问
+                    ...(cfg.advisorModel ? { PICHAT_ADVISOR_MODEL: cfg.advisorModel } : {}),
                 },
             })
         );

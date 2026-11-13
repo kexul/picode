@@ -22,7 +22,7 @@ import { displayName } from "./pageHtml";
 import { readServerConfig, updateServerConfig, seedPrompts } from "./serverConfig";
 import { clearServerAddress, findRunningServer, writeServerAddress } from "./serverState";
 import { startRestart } from "./serverRestart";
-import { ensureAskAssets, ensureImageAssets, ensureTabaAssets, ensureTitleAssets, ensureBashAssets, ensureEnvAssets } from "./bridgeAssets";
+import { ensureAskAssets, ensureImageAssets, ensureTabaAssets, ensureTitleAssets, ensureBashAssets, ensureEnvAssets, ensureAdvisorAssets } from "./bridgeAssets";
 import { serverConfigFile } from "./serverPaths";
 
 /** 界面资源目录（chat.js / chat.css 这些）：正常跑在仓库根下，单文件 exe 时是解出来的缓存目录。 */
@@ -197,6 +197,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     const bashAssets = ensureBashAssets(VERSION, cfg.prompts);
     if (!bashAssets.ok) {
         log(`后台命令没开（文件没写成：${bashAssets.error}）`);
+    }
+
+    // 卡住时问顾问（ask_advisor）：同样先写好，每个会话都加载（顾问模型没填时它什么也不做）
+    const advisorAssets = ensureAdvisorAssets(VERSION, cfg.prompts);
+    if (!advisorAssets.ok) {
+        log(`问顾问没开（文件没写成：${advisorAssets.error}）`);
     }
 
     // 报「加载了什么」（工具 / 技能 / MCP）：同样先写好（每个会话都加载）
