@@ -3656,7 +3656,10 @@
     st.tailThinking = null;
     if (!tail || st.streaming) { return; }   // 还在生成（或者开了新的一段）：以后可能还有东西
     if (tail.tag.parentElement !== tail.row || tail.row.parentElement !== st.paneEl) { return; }
-    if (!isLastInStream(st, tail.tag)) { return; }
+    // 「后面还有没有东西」从这一组排在最后那个元素看：完整模式下标签后面跟着它自己的内容块
+    //（.tc-full），从标签看永远像后面有东西，末尾那段就永远并不回去。
+    const lastEl = (tail.fullEl && tail.fullEl.parentElement === tail.row.parentElement) ? tail.fullEl : tail.tag;
+    if (!isLastInStream(st, lastEl)) { return; }
     const target = st.segmentThinking;
     const targetAlive = target && target !== tail && target.tag.parentElement === target.row && target.row.parentElement === st.paneEl;
     if (!targetAlive) {
