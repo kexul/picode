@@ -445,6 +445,10 @@
   /* 完整模式里工具标签那一排（齿轮 + 工具名那几颗）不露面：内容和它说的是同一件事。
      只是不显示，节点都还在（「正在跑的那一条」、图块、问话卡片都认着它定位）。 */
   .full-mode .tool-row { display: none; }
+  /* 读图那块的说明行（齿轮 + 「read 文件名」）平时是一颗带底色的标签；完整模式里摆成一行
+     普通调用（跟上面那些 `$ 命令` 一样），不再像一颗胶囊，也不留那颗齿轮。 */
+  .full-mode .tool-image-block .tib-head { margin: 0 0 6px; padding: 0; background: none; opacity: 1; }
+  .full-mode .tool-image-block .tib-head .tool-icon { display: none; }
   .tc-full { margin: 3px 0 2px; padding: 0 14px; }
   .tc-full-entry { margin-top: 6px; }
   .tc-full-entry:first-child { margin-top: 0; }
