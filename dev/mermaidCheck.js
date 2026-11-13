@@ -163,6 +163,47 @@ async function main() {
         await sleep(300);
         await page.shot("mermaid-1-light.png");
 
+        // ==================== 点图看大图 ====================
+        // 用真鼠标事件（Input.dispatchMouseEvent）点在图**没有字**的地方：这是最容易没反应的那种点法
+        // （以前按下那一下被“横划切会话”抓走了指针，click 落到消息区上，图收不到）。
+        const spot = JSON.parse(await page.eval(`
+            const box = document.querySelector(".md-mermaid");
+            if (!box) { return JSON.stringify(null); }
+            const r = box.getBoundingClientRect();
+            const texts = [...box.querySelectorAll("text")].map((t) => t.getBoundingClientRect());
+            for (let y = r.top + 4; y < r.bottom - 2; y += 6) {
+                for (let x = r.left + 4; x < r.right - 2; x += 6) {
+                    const onText = texts.some((b) => x >= b.left - 4 && x <= b.right + 4 && y >= b.top - 4 && y <= b.bottom + 4);
+                    const el = document.elementFromPoint(x, y);
+                    if (!onText && el && box.contains(el)) { return JSON.stringify({ x: Math.round(x), y: Math.round(y) }); }
+                }
+            }
+            return JSON.stringify(null);
+        `));
+        const LB = `const lb = document.querySelector(".lightbox");
+            const img = lb ? lb.querySelector("img") : null;
+            const src = img ? decodeURIComponent((img.src || "").replace(/^data:image\\/svg\\+xml;charset=utf-8,/, "")) : "";
+            return JSON.stringify({
+                open: !!(lb && !lb.classList.contains("hidden")),
+                hasBg: /<rect[^>]*width="100%"[^>]*height="100%"[^>]*fill="var\\(--pele-bg/.test(src),
+                head: src.slice(0, 120),
+            });`;
+        let big = { open: false, hasBg: false, head: "" };
+        if (spot) {
+            await page.cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: spot.x, y: spot.y, button: "left", clickCount: 1 });
+            await page.cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: spot.x, y: spot.y, button: "left", clickCount: 1 });
+            await sleep(400);
+            big = JSON.parse(await page.eval(LB));
+        }
+        bad += check("点图上的空白处也打开大图（那一带没有字，以前会被当成划一下）", !!spot && big.open, JSON.stringify({ spot, open: big.open }));
+        // 大图垫了底色：图自己是透明的，不垫就跟底下那半透明的黑底（还有界面上的字）叠在一起
+        bad += check("大图自己有底色（不是透明的）", big.hasBg === true, big.head);
+        const unreadable = await page.eval(`const img = document.querySelector(".lightbox img"); return !!img && img.naturalWidth > 0;`);
+        bad += check("大图真画出来了（不是空图）", unreadable === true, String(unreadable));
+        await page.shot("mermaid-3-big.png");
+        await page.eval(`const lb = document.querySelector(".lightbox"); if (lb) { lb.classList.add("hidden"); } return true;`);
+        await sleep(200);
+
         // 换深色：切主题那一步就是把深色那套变量行内写到 body 上（见 browserBridge.js 的 applyTheme）。
         // 图里存的是 var(...)，所以不该重画：给每个 SVG 打个记号，换完记号都还在，而颜色（框的底）变了。
         const FILL = `return (() => { const r = document.querySelector(".md-mermaid .pele-node rect"); return r ? getComputedStyle(r).fill : ""; })()`;

@@ -282,7 +282,8 @@ node dev/multiSessionPerf.js --sessions 3 --profile      # 顺便报一份采样
 node dev/markdownBlocksCheck.js
 
 # 验 ```mermaid 代码块画成图（消息流里：流程图/时序图/饼图/甘特图都画得出、中文节点名也行、
-# 写坏的留代码块加一行说明、画图那个脚本是出现图才去拉的、换成深色不重画就跟着变，
+# 写坏的留代码块加一行说明、画图那个脚本是出现图才去拉的、换成深色不重画就跟着变、
+# 点图上的空白处也能打开大图、大图自己有底色（不透明），
 # 顺带把插件里的对话面板那一份也加载一遍看它画不画得出）：
 node dev/mermaidCheck.js
 
@@ -468,7 +469,7 @@ HTML 解析完       851 ms
 | `noticeMirror.js` | 验右下角那张提醒卡片在后端的这一份账：收一张“屏幕上本来就没有”的卡不许把已经退了的小程序再拉起来；收卡时推给别台的“收掉”要用**推的那一刻**的标签（中途改了设置里的标签也收得掉）；小程序自己收掉一张（三张挤掉最老；点叉得人去点，脚本点不了）要回报给后端，那份镜像跟着删。真起后端、真弹卡片（要 Windows + bin/notice.exe）：`node dev/noticeMirror.js` |
 | `reconnect.js` | 验断线重连（冻住 / 断网 / 反复锁屏 / 反复弄断连接 / 断线期间问的选择题 / 补不上时整屏重画只发最后一轮）：`node dev/reconnect.js` |
 | `deadScreen.js` | 验「谁在看这个会话」那一条：已经走掉的屏（标签页关了、页面离开了）不算在看 —— 页面还开着时 `clientsViewing` 里有它，离开以后立刻没了；问一句“要不要”当场按“否”回来，而不是让确认框白等满 2 分钟。走的是真后端后端与真页面（推送通道断开那一下）：`node dev/deadScreen.js` |
-| `mermaidCheck.js` | 验消息流里的 ```mermaid 画成图（各种图都出图、写坏的留代码块加一行说明、画图那个脚本出现图才去拉、中文节点名不被吞、换深色不重画就跟着变、面板那一份也画得出、页面不报错）：`node dev/mermaidCheck.js` |
+| `mermaidCheck.js` | 验消息流里的 ```mermaid 画成图（各种图都出图、写坏的留代码块加一行说明、画图那个脚本出现图才去拉、中文节点名不被吞、换深色不重画就跟着变、点图上的空白处也能打开大图、大图自己有底色、面板那一份也画得出、页面不报错）：`node dev/mermaidCheck.js` |
 | `mermaidFileCheck.js` | 验文件侧边栏里那份 markdown 文档里的 mermaid（同一个播放器，换个地方；甘特图也画得出、写坏的留说明）：`node dev/mermaidFileCheck.js` |
 | `lazyScripts.js` | 验画图的 pele（700 多 KB）没排进首屏（浏览器页面按需加载、地址写在 meta 里带着指纹；面板仍然内联）：`node dev/lazyScripts.js` |
 | `childSessions.js` | 验历史列表那两件事（扫描结果按改动时间 / 大小缓存、子会话靠清单认而不是看第一条用户说了什么）：`node dev/childSessions.js` |

@@ -609,9 +609,12 @@
         if (value) { decls.push(name + ":" + value); }
       }
     }
-    const withVars = decls.length
-      ? svgText.replace(/(<svg[^>]*>)/, "$1<style>svg{" + decls.join(";") + "}</style>")
-      : svgText;
+    // 图自己没涂底色（透明的）：放进看图那一层以后，底下那半透明的黑底透着界面上的字，
+    // 图里没涂色的地方（框与框之间、连线上）就跟底下的东西叠在一起看不清。
+    // 垫一块跟界面底色一样的 rect，图的底跟正文里看到的一个样。颜色走变量，别把算死的色值写进属性里。
+    const underlay = '<rect x="0" y="0" width="100%" height="100%" fill="var(--pele-bg, #fff)"/>';
+    const varsStyle = decls.length ? "<style>svg{" + decls.join(";") + "}</style>" : "";
+    const withVars = svgText.replace(/(<svg[^>]*>)/, "$1" + underlay + varsStyle);
     return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(withVars);
   }
 
@@ -5742,9 +5745,15 @@
     return false;
   }
 
-  /** 鼠标这一下落在按钮 / 链接 / 图这类“按下去有作用”的东西上：别拿它切会话。 */
+  /**
+   * 鼠标这一下落在按钮 / 链接 / 图这类“按下去有作用”的东西上：别拿它切会话。
+   *
+   * .md-mermaid 必须算进来：那块点一下要看大图（见 decorateMermaid），而图上大片地方没字。
+   * 不算的话，按在图的空白处会被当成要切会话、按下那一下就把指针抓走了（setPointerCapture），
+   * click 于是派发到消息区上、图收不到 —— 表现出来就是“点图有时候没反应，得正好点在字上”。
+   */
   function swipeOnControl(el) {
-    return !!(el && el.closest && el.closest("button, a, input, textarea, select, img, video, summary, label, [contenteditable='true']"));
+    return !!(el && el.closest && el.closest("button, a, input, textarea, select, img, video, summary, label, .md-mermaid, [contenteditable='true']"));
   }
 
   // 两种按法走同一套：
