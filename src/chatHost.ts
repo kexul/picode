@@ -64,10 +64,8 @@ import {
     DEFAULT_SEND_KEY,
     DEFAULT_TAB_SWITCH_KEY,
     DEFAULT_THEME_MODE,
-    DEFAULT_MESSAGE_DISPLAY,
     CLOSE_SESSION_KEYS,
     FOCUS_INPUT_KEYS,
-    MESSAGE_DISPLAY_MODES,
     NEW_SESSION_KEYS,
     SEND_KEYS,
     TAB_SWITCH_KEYS,
@@ -195,8 +193,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
     private static readonly KEY_TAB_SWITCH_KEY = "piChat.tabSwitchKey";
     private static readonly KEY_FOCUS_INPUT_KEY = "piChat.focusInputKey";
     private static readonly KEY_FONT_SIZE = "piChat.fontSize";
-    /** 消息怎么显示：brief（简洁）/ full（完整），见 settings 面板的「消息显示」。 */
-    private static readonly KEY_MESSAGE_DISPLAY = "piChat.messageDisplay";
     private static readonly KEY_NOTIFY_TURN_END = "piChat.notifyTurnEnd";
     private static readonly KEY_THEME = "piChat.themeMode";
 
@@ -1000,7 +996,7 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         });
         // 显示选项也单给这块屏一份：网页那边 ready 可能比这条推送连接登记得还早，
         // ready 时广播的那一条发到了旧连接上，新页面就什么都没收到（刷新后字号、
-        // 「消息显示」会回到默认值）。这一步在连接登记之后，铁定到得了。
+        // 界面颜色会回到默认值）。这一步在连接登记之后，铁定到得了。
         this.sendViewOptionsTo(pageId);
         // 这一条连接是刚打开的页面（不带序号），不是重连：不用等它发 ready，现在就把首屏
         // 该有的东西送过去（见 bootPageNow）。
@@ -1234,11 +1230,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const v = this.readOption<string>(ChatHost.KEY_FONT_SIZE, DEFAULT_FONT_SIZE);
         return typeof v === "string" && /^\d+$/.test(v) ? v : DEFAULT_FONT_SIZE;
     }
-    /** 消息怎么显示（简洁 / 完整）：只在界面这一头起作用，值存在 state.json。 */
-    protected override getMessageDisplay(): string {
-        const v = this.readOption<string>(ChatHost.KEY_MESSAGE_DISPLAY, DEFAULT_MESSAGE_DISPLAY);
-        return inList(MESSAGE_DISPLAY_MODES, v) ? v : DEFAULT_MESSAGE_DISPLAY;
-    }
     /** 有事时要不要弹提醒（设置文件里的 notifyTurnEnd：关掉就连那颗图标也不放上去）。 */
     public getNotifyTurnEnd(): boolean {
         return this.readOption<boolean>(ChatHost.KEY_NOTIFY_TURN_END, DEFAULT_NOTIFY_TURN_END) === true;
@@ -1350,9 +1341,6 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
             if (typeof value === "string" && /^\d+$/.test(value)) {
                 this.writeOption(ChatHost.KEY_FONT_SIZE, value);
             }
-        } else if (action === "messageDisplay") {
-            const next = inList(MESSAGE_DISPLAY_MODES, value) ? value : "full";
-            this.writeOption(ChatHost.KEY_MESSAGE_DISPLAY, next);
         } else if (action === "machineLabel") {
             updateServerConfig({ label: String(value ?? "").trim() });
         } else if (action === "notifyTurnEnd") {

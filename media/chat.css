@@ -438,64 +438,6 @@
   /* 「还有 N 字没带过来」那一行小字（思考全文 / 工具输出只带了开头，点开再去取） */
   .tag-tip-clip { margin-top: 6px; opacity: 0.65; font-size: 0.92em; }
   .tag-tip.hidden { display: none; }
-  /* 完整模式：思考和工具调用的内容直接铺在消息流里（设置里的「消息显示 → 完整」，见 chat.js 的
-     syncFullBlock）。每个工具标签下面一块：一条调用一行摘要 + 它的输出；思考整段摆出来。
-     内容长了就在块里自己滚（.tc-full-out / .tc-full-think 有高度上限），一屏里几条长命令
-     不该把消息流撑成几十屏。简洁模式下这些块根本不存在。 */
-  /* 完整模式里工具标签那一排（齿轮 + 工具名那几颗）不露面：内容和它说的是同一件事。
-     只是不显示，节点都还在（「正在跑的那一条」、图块、问话卡片都认着它定位）。 */
-  .full-mode .tool-row { display: none; }
-  /* 读图那块的说明行（齿轮 + 「read 文件名」）平时是一颗带底色的标签；完整模式里摆成一行
-     普通调用（跟上面那些 `$ 命令` 一样），不再像一颗胶囊，也不留那颗齿轮。 */
-  .full-mode .tool-image-block .tib-head { margin: 0 0 6px; padding: 0; background: none; opacity: 1; }
-  .full-mode .tool-image-block .tib-head .tool-icon { display: none; }
-  .tc-full { margin: 3px 0 2px; padding: 0 14px; }
-  .tc-full-entry { margin-top: 6px; }
-  .tc-full-entry:first-child { margin-top: 0; }
-  .tc-full-entry-next { margin-top: 8px; }
-  .tc-full .tc-call { font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--vscode-foreground); }
-  .tc-full .tc-call-name { font-weight: 600; }
-  .tc-full .tc-call-arg, .tc-full .tc-call-param { opacity: 0.75; }
-  .tc-full .tc-call-warn { color: var(--vscode-charts-orange, #d18616); }
-  .tc-full-out {
-    margin: 3px 0 0; padding: 4px 8px; border-radius: 4px;
-    background: var(--vscode-editorWidget-background, rgba(128,128,128,0.1));
-    color: var(--vscode-descriptionForeground, #888);
-    font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em; line-height: 1.45;
-    white-space: pre-wrap; overflow-wrap: anywhere;
-    max-height: 320px; overflow: auto; overscroll-behavior: contain;
-  }
-  .tc-full .tc-full-loading { opacity: 0.7; }
-  .tc-full .err > .tc-full-out { color: var(--vscode-errorForeground, #f48771); }
-  .tc-full-think {
-    margin: 4px 0; padding: 0 0 0 8px;
-    border-left: 2px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
-    color: var(--vscode-descriptionForeground, #888); font-style: italic; font-size: 0.92em; line-height: 1.5;
-    white-space: pre-wrap; overflow-wrap: anywhere;
-    max-height: 320px; overflow: auto; overscroll-behavior: contain;
-  }
-  .tc-full .tag-tip-clip { margin-top: 4px; opacity: 0.65; font-size: 0.92em; }
-  /* write / edit 那一块：跟提示框里是同一套（标题行 + diff / 写入预览 + 「跳转 / 回滚」） */
-  .tc-full .tag-tip-head { display: flex; align-items: center; gap: 8px; }
-  .tc-full .tag-tip-title { margin-right: auto; }
-  .tc-full .et-revert,
-  .tc-full .et-jump {
-    flex: none; padding: 1px 8px; border-radius: 3px; cursor: pointer;
-    font-family: var(--vscode-font-family);
-    background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.25));
-    color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
-    border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.3));
-  }
-  .tc-full .et-revert svg,
-  .tc-full .et-jump svg { width: 1em; height: 1em; display: inline-block; vertical-align: -0.125em; }
-  .tc-full .et-jump svg { margin-left: 2px; }
-  .tc-full .et-revert svg { margin-right: 3px; }
-  .tc-full .et-revert:hover,
-  .tc-full .et-jump:hover { background: var(--vscode-button-hoverBackground, rgba(128,128,128,0.4)); }
-  .tc-full .tc-args { margin: 6px 0 0; max-height: 300px; overflow: auto; color: var(--vscode-descriptionForeground, #808080); }
-  .tc-full .tc-trunc-hint { margin-top: 4px; font-size: 0.8em; opacity: 0.75; color: var(--vscode-descriptionForeground); }
-  .tc-full .tip-err { margin-top: 6px; color: var(--vscode-errorForeground, #f48771); }
-  .tc-full .tip-loading { margin-top: 6px; opacity: 0.7; }
   .role { font-weight: bold; font-size: 0.8em; opacity: 0.7; margin-bottom: 2px; }
   /* markdown */
   .md p { margin: 13px 0; line-height: 1.6; text-wrap: pretty; }
