@@ -9,7 +9,6 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
-import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
@@ -116,7 +115,8 @@ class MainActivity : Activity() {
         })
         settingsPanel.addView(TextView(this).apply {
             text = "连接状态看通知栏那条常驻提示；收到的提醒要是没弹出来，\n" +
-                "到系统的设置里把这个 app 的电池优化关掉（各品牌叫法不一，多在「省电」或「应用管理」里）。"
+                "到系统的设置里把这个 app 的电池优化关掉（各品牌叫法不一，多在「省电」或「应用管理」里）。\n" +
+                "看对话时按返回键（或返回手势）回到这一屏。"
             textSize = 12f
             setTextColor(Color.GRAY)
             setPadding(0, dp(16), 0, 0)
@@ -124,30 +124,18 @@ class MainActivity : Activity() {
         root.addView(settingsPanel)
 
         // —— 网页画面（默认收起来）——
+        // 顶上不挂横条：手机上那一整条白占地方，回设置用系统的返回键 / 返回手势（见 onBackPressed）。
         webPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
         }
-        webPanel.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.rgb(30, 111, 92))
-            setPadding(dp(8), dp(6), dp(8), dp(6))
-            addView(Button(this@MainActivity).apply {
-                text = "← 设置"
-                setBackgroundColor(Color.TRANSPARENT)
-                setTextColor(Color.WHITE)
-                setOnClickListener { showSettings() }
-            })
-        })
         web = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             webViewClient = WebViewClient()
-            layoutParams = LinearLayout.LayoutParams(0, 0)   // 占满余下空间，见下面的 weight
         }
         webPanel.addView(web, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         root.addView(webPanel, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
