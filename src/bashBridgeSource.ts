@@ -98,7 +98,7 @@ const NO_WAIT_NOTE = "放到后台以后不用等结果：你可以接着去干�
     + "刚看过一次、它又没出新东西的时候再查，也会被挡回来。"
     + "前台命令撑过 20 秒还没跑完会自己转到后台（不用你管，也不用再发一遍），跑完照常交回来。"
     + "bash 的 notifyOutput 默认是 false：后台只在跑完时通知，中途要看输出用 bash_tasks；"
-    + "这种没开通知的后台命令每 10 分钟会主动汇报一次状态（还在跑、多久没有新输出、日志最后一段），不用你自己定时去查；"
+    + "这种没开通知的后台命令每 3 分钟会主动汇报一次状态（还在跑、多久没有新输出、日志最后一段），不用你自己定时去查；"
     + "设成 true 后，命令转到后台才会自动通知新输出，前台输出仍只走正常工具结果；"
     + "模型忙时合并，空闲时同一会话的输出通知至少隔两秒，没有新输出就不通知，结束时剩余输出和结果一起交回。";
 
@@ -356,7 +356,7 @@ interface Task {
     ending: boolean;
     /** 最近一次读到新输出的时刻；一直没输出过就没有。汇报状态时用它算“多久没动静”。 */
     lastOutputAt?: number;
-    /** 该汇报状态了（没开输出通知的任务，每 10 分钟一次）。 */
+    /** 该汇报状态了（没开输出通知的任务，每 3 分钟一次）。 */
     beat: boolean;
     /** 下次汇报状态的计时器。 */
     beatTimer?: ReturnType<typeof setTimeout>;
@@ -373,7 +373,7 @@ const tasks = new Map<number, Task>();
 let seq = 0;
 
 /** 没开输出通知的后台命令，每隔这么久主动汇报一次状态（不然卡住了看不出来）。 */
-const BEAT_MS = 10 * 60 * 1000;
+const BEAT_MS = 3 * 60 * 1000;
 
 /** 只攒转到后台后的新输出，模型消费通知前一直保留；原文仍在日志里。 */
 function collectOutput(task: Task, text: string): void {
@@ -386,7 +386,7 @@ function collectOutput(task: Task, text: string): void {
 function outputNotice(task: Task): string {
     return task.notifyOutput
         ? "notifyOutput 已开启：转到后台后的新输出会自动交回本会话，模型忙时先合并，不用反复查。"
-        : "notifyOutput 默认关闭：中途输出不会自动交回，要看输出用 bash_tasks；每 10 分钟会主动汇报一次状态（还在跑、多久没有新输出、日志最后一段），下次设 notifyOutput: true 可以换成有新输出就交回。";
+        : "notifyOutput 默认关闭：中途输出不会自动交回，要看输出用 bash_tasks；每 3 分钟会主动汇报一次状态（还在跑、多久没有新输出、日志最后一段），下次设 notifyOutput: true 可以换成有新输出就交回。";
 }
 
 function elapsedMs(task: Task): number {
