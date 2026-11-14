@@ -179,8 +179,9 @@ static class Hub
         var card = new NoticeCard(key, title, body, ask, tag);
         card.Clicked += OnClicked;
         Cards.Add(card);
-        card.Show();
+        // 先摆到右下角再露脸：反过来的话它会先在左上角（窗口默认位置）现一下，再飞到该去的地方。
         Arrange();
+        card.Show();
         Chime.Play(ask);
     }
 
