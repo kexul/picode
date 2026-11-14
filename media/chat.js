@@ -10749,7 +10749,10 @@
     // 点它就摊一个输入框，名字敲好回车才发给宿主。
     if (item.newFolder) { showNewFolderInput(view, item); return; }
     // 常驻那一列里点一行 = “用一下”，不是“选完就走”：面板留着接着点下一行
-    const closeFirst = () => { if (!view.keepOpen) { hidePicker(view); } };
+    // 窄窗里那张抽屉要跟着收起来：收的是自己这一份，得跟宿主说一声（cancelPicker 里的那句
+    // pickerCancel）。不说的话宿主那边还记着这张抽屉开着、还在等它回话，下一回再点 <<< 时
+    // 宿主先来一句“收起来”，新摆上的抽屉当场就被这一句收掉 —— 手机上看着是闪一下、没出来。
+    const closeFirst = () => { if (!view.keepOpen) { cancelPicker(view); } };
     if (st.toggle || item.behavior === "toggle") {
       vscode.postMessage({ type: "pickerToggle", kind, action: item.action, value: item.value });
       return;
