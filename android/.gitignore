@@ -1,0 +1,6 @@
+# 构建产物与本地配置（不进版本库）
+.gradle/
+.gradle-home/
+build/
+local.properties
+.idea/

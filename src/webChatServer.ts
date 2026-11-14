@@ -362,6 +362,12 @@ export interface WebServerHost {
     getThemeMode(): "light" | "dark";
     /** 别处推来一条消息（`POST /notify`）：弹卡片 / 收卡片 / 切页面，见 ChatHost.acceptRemoteNotice。 */
     acceptRemoteNotice(notice: RemoteNotice, fromAddress?: string): void;
+    /**
+     * 记下一个「手机提醒」的收听者（手机 app 连上来后，宿主有事就往这儿喊一声）。
+     * @param cb 收到就办（通知 / 收掉）；一家抛错不拦别家
+     * @returns 不听了就调这个把它摘下来
+     */
+    onPhoneNotice(cb: (msg: Record<string, unknown>) => void): () => void;
 }
 
 export interface WebServerHooks {
@@ -390,6 +396,10 @@ export class PiChatWebServer {
     private readonly streams = new Map<string, PageStream>();
     /** 屏标识 → 它那条连接的响应对象。 */
     private readonly screenStreams = new Map<string, http.ServerResponse>();
+    /** 手机 app 的提醒流（/phone-notice）：几条连着就往几条里推，断了由 close 事件摘掉。 */
+    private readonly phoneStreams = new Set<PageStream>();
+    /** 宿主那边的监听把手（第一条手机连上时记下，全走光时摘掉）。 */
+    private phoneNoticeUnlisten?: () => void;
     private heartbeat?: ReturnType<typeof setInterval>;
     private readonly heartbeatMs = HEARTBEAT_MS;
     private readonly pageStaleMs = PAGE_STALE_MS;
@@ -684,6 +694,13 @@ export class PiChatWebServer {
                 if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
                 this.openChannel(req, res, url.searchParams.get("pageId") ?? "", url.searchParams.get("since") ?? "",
                     url.searchParams.get("w") ?? "");
+                return;
+            }
+            // 手机 app 的提醒流（SSE）：连上就挂着，宿主有「有事 / 收掉」就推一条过去（见 chatHost 的 onPhoneNotice）。
+            // 不带页面标识：app 不是页面，不收补发、不收整屏重画，只收提醒。
+            if (pathname === "/phone-notice") {
+                if (req.method !== "GET") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                this.openPhoneNotice(req, res);
                 return;
             }
             if (pathname === "/api") {
@@ -1645,6 +1662,40 @@ export class PiChatWebServer {
     }
 
     /**
+     * 开一条手机提醒流（`GET /phone-notice`）。
+     *
+     * 跟页面那条推送流同一个写法（同一条压缩、同一份积压上限、同一个心跳）；
+     * 差别是不登记页面标识：不补发、不整屏重画，断线由 app 自己重连，
+     * 断线期间的提醒本来就过时了（右下角那张卡片都收走了），不用给。
+     */
+    private openPhoneNotice(req: http.IncomingMessage, res: http.ServerResponse): void {
+        const stream = this.openStream(res, req.headers["accept-encoding"]);
+        // retry 是给手机看的：连接断了隔 3 秒重连一次（app 那头自己还会带退避地重连）
+        stream.write("retry: 3000\n\n");
+        stream.write(`event: msg\ndata: ${JSON.stringify({ type: "hello" })}\n\n`);
+        res.socket?.setNoDelay(true);
+        const first = this.phoneStreams.size === 0;
+        this.phoneStreams.add(stream);
+        // 第一条连上才登记监听（宿主那边喊一声才会真的往流里写）；全走光了就摘下来
+        if (first) { this.phoneNoticeUnlisten = this.host.onPhoneNotice((msg) => this.broadcastPhoneNotice(msg)); }
+        const drop = () => {
+            if (!this.phoneStreams.delete(stream)) { return; }
+            if (this.phoneStreams.size === 0) { this.phoneNoticeUnlisten?.(); this.phoneNoticeUnlisten = undefined; }
+        };
+        req.on("close", drop);
+        res.on("close", drop);
+        res.on("error", drop);
+    }
+
+    /** 往每条手机提醒流推一条（写不动的当场摘掉，app 会自己重连）。 */
+    private broadcastPhoneNotice(msg: Record<string, unknown>): void {
+        const chunk = `event: msg\ndata: ${JSON.stringify(msg)}\n\n`;
+        for (const stream of [...this.phoneStreams]) {
+            if (stream.write(chunk) !== "ok") { this.phoneStreams.delete(stream); }
+        }
+    }
+
+    /**
      * 往一条推送连接写一段内容。
      *
      * 写不动了就把它注销掉：页面那头（手机屏黑了、退到后台、网络断了）多半已经收不到，
@@ -1733,6 +1784,13 @@ export class PiChatWebServer {
             if (!stream) { return; }
             this.writeChunk(channel, stream, `event: tick\ndata: ${JSON.stringify({ t: now })}\n\n`);
         });
+        // 手机提醒流同样发一个 tick：一来让 app 那头知道连接还活着，二来写不动了（手机退后台被冻住）
+        // 在这头看得见，好把死连接摘掉
+        for (const stream of [...this.phoneStreams]) {
+            if (stream.write(`event: tick\ndata: ${JSON.stringify({ t: now })}\n\n`) !== "ok") {
+                this.phoneStreams.delete(stream);
+            }
+        }
         // 屏那边同样收一遍：VS Code 窗口半天没动静（死机、网断了没通知到）就别留在登记簿里，
         // 否则点文件会被派给一个已经不在的窗口。
         const screens = this.host.getScreens();

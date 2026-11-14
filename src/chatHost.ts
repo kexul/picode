@@ -830,8 +830,29 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         const pushed = this.pushRemoteNote(sessionId, label, clipText(summary, REMOTE_TEXT_CHARS), kind);
         // 本机右下角这张：不管推没推出去都弹（几台都看得见才不会错过）
         this.showNotice(sessionId, label, clipText(summary, NOTICE_TEXT_CHARS), kind === "ask");
+        // 连着的手机 app 也推一条（见 webChatServer 的 /phone-notice）：手机上没有右下角那张卡片，
+        // 就靠这条弹系统通知；文本跟推给别的机器的那份一样长，手机那头自己截
+        this.sendPhoneNotice({ type: "notice", kind, sessionId, name: label, text: clipText(summary, REMOTE_TEXT_CHARS) });
         this.log(`[提醒] 弹了一张（${kind === "ask" ? "等你答一句" : "跑完一轮"}）：${label}`);
         return pushed;
+    }
+
+    /**
+     * 连着的手机 app 听「有事」的那一半（网页服务 `/phone-notice` 的背后）：
+     * 服务把它那几条流登记进来，宿主弹卡 / 收卡时顺便往这儿喊一声。
+     */
+    private readonly phoneNoticeListeners = new Set<(msg: Record<string, unknown>) => void>();
+
+    public onPhoneNotice(cb: (msg: Record<string, unknown>) => void): () => void {
+        this.phoneNoticeListeners.add(cb);
+        return () => { this.phoneNoticeListeners.delete(cb); };
+    }
+
+    /** 往连着的手机喊一声（没有就什么也不做）；一家抛错不拦别家。 */
+    private sendPhoneNotice(msg: Record<string, unknown>): void {
+        for (const cb of [...this.phoneNoticeListeners]) {
+            try { cb(msg); } catch { /* 一家坏不拦别家 */ }
+        }
     }
 
     /**
@@ -850,6 +871,8 @@ export class ChatHost extends ChatControllerBase implements WebServerHost {
         // 这边这几件动作碰不到它，只能推一条“收掉”过去（见 remoteNotice 的 pushRemoteClose）。
         // 标签用推的时候那个（存着的），不能用现在的：中途改过设置里的标签就对不上了。
         if (key.startsWith(ChatHost.REMOTE_NOTICE_PREFIX)) { return; }
+        // 连着的手机也收掉那条通知：这边已经有人说话了，手机上那张不用再留着
+        this.sendPhoneNotice({ type: "close", sessionId: key });
         const label = this.pushedNoticeSessions.get(key);
         if (label === undefined) { return; }
         this.pushedNoticeSessions.delete(key);
