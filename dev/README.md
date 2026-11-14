@@ -181,6 +181,12 @@ FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev
 # 所以要慢一点儿的假 pi，才来得及在它还在跑的时候停掉：
 FAKEPI_THINK_MS=4000 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaTools.js
 
+# 验「平级派活」（task 加 separate: true：同一个项目另外几个分支各占一个文件夹时用得到）：
+# 另开一个会话、开在另一个目录里、不算子会话（派活那边的小点底下不挂数）、跑完不交回也不自动关、
+# 它自己还能再往下派。新会话开在系统临时目录的 pichat-apart-work 里；
+# 那个会话得慢一点收工，才能来得及看“它还在跑的时候”派活那边是什么样：
+FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaApart.js
+
 # 验「自动模式」：右下角那颗小开关（点一下拨开、再点一下停）、刷新后还开着 →
 # 一轮跑完直接发一句「继续」、再来一轮，不点开关就一直跑；
 # 打 /auto 会被吞掉（不发出去、不回话）；开着的时候模型问的选择题（ask_user）不弹卡片、
@@ -534,6 +540,7 @@ HTML 解析完       851 ms
 | `olderHintFill.js` | 验顶上那条「往上还有 N 轮」的占位在“人划到跟前”时自己补出来（生成中也要补：以前生成中一律不补，往上翻就是一大片空白，一直空到这一轮跑完），补完占位要收掉：`FAKEPI_THINK_MS=8000 npm run web:shot -- --fake-pi --script dev/olderHintFill.js` |
 | `options.js` | 两条命令共用的命令行参数 |
 | `tabaTools.js` | 验子会话的「停掉」与「查看」两个工具（派活那条在 `tabaFlow.js`）：`FAKEPI_THINK_MS=4000 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaTools.js` |
+| `tabaApart.js` | 验「平级派活」（`task` 加 `separate: true`）：回话不是子会话那一套、新会话真开在另一个目录里、不算子会话（派活那边不挂数也不亮着）、跑完不交回也不被自动关掉、会话文件里没有子会话那个记号（历史列表不会藏它）、它自己还能再往下派一层：`FAKEPI_THINK_MS=900 FAKEPI_TICK_MS=40 npm run web:shot -- --fake-pi --script dev/tabaApart.js` |
 | `newSessionChild.js` | 验派出去的子会话还在跑时点顶条那颗加号（新建会话）不关掉派活那个会话：顶条上从一格变成两格、旧那一格上还写着有几个子会话在跑，子会话跑完结果照旧交回没被关掉的那个会话：`FAKEPI_CHILD_SLOW_MS=8000 npm run web:shot -- --fake-pi --script dev/newSessionChild.js` |
 | `fakePi.js` | 假的 pi（`--fake-pi` 用）：协议跟真 pi 一样，模型换成按剧本演戏，界面调试秒回。说一句「问单选 / 问多选 / 问确认 / 问输入 / 问选项」就演一次问话；说一句「碰文件」就 read 几个铺好的文件（让后端那份「这个会话碰过的文件」清单里有东西）。**派子会话与问话那几个工具，它加载的是宿主写下的真扩展**（见 src/bridgeAssets.ts），所以那两段代码每跑一次 dev 脚本就真跑一遍。它还会照真 pi 的样子往会话目录里记一份 `fake-session-<进程号>.jsonl`（一行一条消息）——要读会话文件的那几条路（`#` 引用、派子会话带上父会话的路径）才验得到 |
 | `fake-pi.cmd` / `.sh` | 上面那个的包装：Windows 上 piPath 得是 .cmd 才能被 shell 起来 |

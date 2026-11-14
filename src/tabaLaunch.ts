@@ -51,8 +51,13 @@ export function resolveTabaSpawn(input: TabaSpawnResolutionInput): TabaSpawnReso
     return { cwd, modelSpec, modelOverride };
 }
 
-/** 子会话的启动要求：不领备用进程（参数不一样）、不加载"派子会话"那个扩展（不能再往下派）。 */
-export function buildTabaLaunch(cwd: string): PanelLaunch {
-    return { extraArgs: [], skipSpare: true, noTaba: true, cwd };
+/**
+ * 派出去的那个会话的启动要求：不领备用进程（那个进程是按宿主默认目录起的，参数也对不上）。
+ *
+ * @param separate 平级派活（见 chatControllerBase.tabaSpawnApart）：它自己也是普通会话，所以要加载“派活”那个扩展
+ *                 （能再往下派、也能自动起标题）；子会话不加载，那就不能再往下派。
+ */
+export function buildTabaLaunch(cwd: string, separate = false): PanelLaunch {
+    return { extraArgs: [], skipSpare: true, noTaba: !separate, cwd };
 }
 

@@ -1121,7 +1121,8 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     // ========================================================================
-    //  派子会话（taba）：一个会话把活派给另一个会话，子会话开在新 tab 里
+    //  派子会话（taba）：一个会话把活派给另一个会话，开在新 tab 里
+    //  平级那种（task 的 separate）不登记成子会话，见 tabaSpawnApart
     // ========================================================================
 
     /** 子会话登记表。 */
@@ -1144,14 +1145,19 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /** 派活没成：界面上打一行，同时把原因交给模型（它那边的工具已经回了“已派出”）。 */
-    protected tabaFailSpawn(parentRt: SessionRuntime, name: string, reason: string): void {
-        this.postToSession(parentRt.id, { type: "system", text: buildSpawnFailure({ name, reason }) });
-        parentRt.handleSend(`【派子会话没成】「${name}」：${reason}`, undefined, { followUp: true });
+    protected tabaFailSpawn(parentRt: SessionRuntime, name: string, reason: string, separate = false): void {
+        this.postToSession(parentRt.id, { type: "system", text: buildSpawnFailure({ name, reason, separate }) });
+        parentRt.handleSend(
+            `【${separate ? "另开会话" : "派子会话"}没成】「${name}」：${reason}`,
+            undefined,
+            { followUp: true }
+        );
     }
 
     /**
      * 派一个子会话：新开一个会话（不抢当前显示的那一个），把任务发过去。
      * 它跑完第一轮后，最后一条回复会自动交回这个会话（见 tabaOnTurnEnd）。
+     * 平级那种（req.separate）走 tabaSpawnApart。
      */
     protected async tabaSpawn(parentPanelId: string, req: TabaSpawnRequest): Promise<void> {
         const parentRt = this.panels.get(parentPanelId);
@@ -1164,7 +1170,7 @@ export abstract class ChatControllerBase implements RuntimeHost {
         if (this.taba.has(req.id) || this.tabaInFlight.has(req.id)) { return; }
         this.tabaInFlight.add(req.id);
         try {
-            // 子会话怎么起：工作目录 / 模型 都在这里面算（子会话一律全新会话，pi 自己建会话文件）
+            // 子会话怎么起：工作目录 / 模型 都在这里面算（派出去的会话一律全新会话，pi 自己建会话文件）
             const plan = resolveTabaSpawn({
                 req,
                 // 子会话默认跑在"派活那个会话自己的目录"里：那个会话可能是在别的项目里开的
@@ -1177,9 +1183,13 @@ export abstract class ChatControllerBase implements RuntimeHost {
             const { cwd } = plan;
 
             // 工具不另传：不带 --tools 起，子会话就跟配置里的 defaultTools 一样（codemode / powershell / MCP 都在）
-            const created = this.createBackgroundSession(buildTabaLaunch(cwd), plan.modelOverride);
+            const created = this.createBackgroundSession(buildTabaLaunch(cwd, !!req.separate), plan.modelOverride);
             if (!created) {
-                this.tabaFailSpawn(parentRt, req.name, "子会话开不出来（pi 可执行文件没找到？）");
+                this.tabaFailSpawn(parentRt, req.name, "会话开不出来（pi 可执行文件没找到？）", !!req.separate);
+                return;
+            }
+            if (req.separate) {
+                await this.tabaSpawnApart(parentRt, req, created, cwd);
                 return;
             }
             const rt = created;
@@ -1226,6 +1236,44 @@ export abstract class ChatControllerBase implements RuntimeHost {
         } finally {
             this.tabaInFlight.delete(req.id);
         }
+    }
+
+    /**
+     * 平级派活（task 的 separate: true）：在那边另开一个普通会话，把任务发过去，然后撒手。
+     *
+     * 跟子会话的差别全在“不登记”这一件事上：不进 taba 那张表，于是没有结果交回、没有跑完自动关、
+     * 不会缩进挂在谁下面、也不会让派活的会话一直亮着蓝点；它占自己的会话格、进历史会话列表、
+     * 自己也能再往下派（它加载了同一个扩展，见 buildTabaLaunch）。
+     * 代价是 task_peek / task_stop 找不到它 —— 要看、要停，去点它那一格就行。
+     */
+    protected async tabaSpawnApart(
+        parentRt: SessionRuntime,
+        req: TabaSpawnRequest,
+        rt: SessionRuntime,
+        cwd: string
+    ): Promise<void> {
+        const ready = await rt.waitReady(ChatControllerBase.TABA_CHILD_READY_TIMEOUT_MS);
+        // 等待期间会话被关掉了：什么都不用做
+        if (!this.panels.has(rt.id)) { return; }
+        if (!ready) {
+            this.postToSession(rt.id, { type: "systemError", text: "这个会话的 pi 没起来（等超时了）。" });
+            this.tabaFailSpawn(parentRt, req.name, "那边的会话没起来（等超时了）", true);
+            return;
+        }
+        // 名字用派活时给的那个（跟子会话一个待遇：自己起的名字不会被自动标题盖掉）。
+        // 不给也不是错：那边会自己起一个标题。
+        await rt.renameSession(req.name);
+        rt.handleSend(buildTaskText({
+            task: req.task,
+            parentSessionFile: this.tabaParentSessionFile(parentRt, req),
+            parentSessionName: this.sessionDisplayName(parentRt),
+            separate: true,
+        }, this.getConfig().prompts), undefined, { followUp: true });
+        this.broadcastSessionList();
+        this.postToSession(parentRt.id, {
+            type: "system",
+            text: `已在 ${cwd} 另开一个会话「${req.name}」，任务发过去了；那边跑完不会回来找你。`,
+        });
     }
 
     /** 把某个子会话的情况写到名录文件里（模型那边 task_peek 读的就是它）。 */

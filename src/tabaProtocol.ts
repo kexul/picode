@@ -49,8 +49,13 @@ export interface TabaSpawnRequest {
     thinking?: string;
     /** 子会话的工作目录，可空（空则跟父会话一样）。 */
     cwd?: string;
-    /** 父会话文件路径（扩展从它自己的进程里拿到的），可空。 */
+    /** 父会话文件路径（扩展从它自己进程里拿到的），可空。 */
     parentSessionFile?: string;
+    /**
+     * 平级派活：不算子会话，结果不交回、跑完也不关（见 chatControllerBase.tabaSpawnApart）。
+     * 没这一项就是老样子（子会话）。
+     */
+    separate?: boolean;
 }
 
 /** 停止请求：只停子会话当前这一轮，tab 留着。 */
@@ -94,6 +99,7 @@ export function normalizeTabaRequest(raw: unknown): TabaRequest | undefined {
         if (thinking) { req.thinking = thinking; }
         if (cwd) { req.cwd = cwd; }
         if (parentSessionFile) { req.parentSessionFile = parentSessionFile; }
+        if (o.separate === true) { req.separate = true; }
         return req;
     }
     if (o.kind === "stop") {

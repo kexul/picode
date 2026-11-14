@@ -35,13 +35,19 @@ export function buildParentContextText(p: {
 }
 
 /**
- * 发给子会话的第一条消息：任务原文 + 派活那个会话的记录文件 + 收尾要求。
- * 三段文字都在 promptText.ts（可被 config.json 覆盖）。
+ * 发给派出去的那个会话的第一条消息：任务原文 + 派活那个会话的记录文件 + 收尾要求。
+ * 两段文字都在 promptText.ts（可被 config.json 覆盖）。
+ *
+ * @param separate 平级派活（见 chatControllerBase.tabaSpawnApart）：改用 taskApartClosing。
+ *                 那一段里不能出现「【收尾要求】」（TABA_CLOSING_MARK）—— 带了那个记号，
+ *                 这个会话就会被当成子会话、从历史会话列表里藏起来（见 sessionStore），
+ *                 跟“平级”正好相反。
  */
 export function buildTaskText(p: {
     task: string;
     parentSessionFile?: string;
     parentSessionName?: string;
+    separate?: boolean;
 }, over?: PromptOverrides): string {
     const parts = [`【任务】\n\n${p.task.trim()}`];
     if (p.parentSessionFile) {
@@ -50,6 +56,6 @@ export function buildTaskText(p: {
             parentSessionName: p.parentSessionName,
         }, over));
     }
-    parts.push(promptText(over, "taskClosing"));
+    parts.push(promptText(over, p.separate ? "taskApartClosing" : "taskClosing"));
     return parts.join("\n\n---\n\n");
 }

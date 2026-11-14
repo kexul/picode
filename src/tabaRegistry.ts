@@ -212,6 +212,6 @@ export function buildChildClosedNotice(p: { child: TabaChild }): string {
 }
 
 /** 派活失败时在父会话界面上打的一行提示。 */
-export function buildSpawnFailure(p: { name: string; reason: string }): string {
-    return `子会话「${p.name}」没派出去：${p.reason}`;
+export function buildSpawnFailure(p: { name: string; reason: string; separate?: boolean }): string {
+    return `${p.separate ? "另开的会话" : "子会话"}「${p.name}」没派出去：${p.reason}`;
 }

@@ -149,6 +149,7 @@ const TABA_PARAMS = {
         model: { type: "string", description: "指定模型，例如 local/glm-5.3-flash。不填跟随你这边的模型。" },
         thinking: { type: "string", description: "指定思考强度：minimal / low / medium / high / xhigh / max。" },
         cwd: { type: "string", description: "子会话的工作目录。不填跟你这边一样。" },
+        separate: { type: "boolean", description: "true = 平级派活：在那个目录里另开一个普通会话，它不是你的子会话 —— 跑完不把结果交回来、也不会被自动关掉，占自己那一格、进历史会话列表。用在“同一个项目另外几个分支各占一个文件夹，一个文件夹派一个”这种：派完就不归你管了，你接着干自己的。" },
     },
     required: ["name", "task"],
     additionalProperties: false,
@@ -194,19 +195,38 @@ export default function tabaBridge(pi: any): void {
                 };
             }
             const id = randomBytes(4).toString("hex");
+            const separate = params?.separate === true;
+            // 跑在哪个目录：派活时指定的 > 本会话自己的（以前这里死写成本会话那个，
+            // cwd 参数写进参数表了却没真用上——派到别的分支那个文件夹里就必须用它）
+            const wantCwd = text(params?.cwd, 4096) || cwdOf(ctx);
             const payload: Record<string, unknown> = {
                 kind: "spawn",
                 id,
                 name,
                 task,
-                cwd: cwdOf(ctx),
+                cwd: wantCwd,
                 parentSessionFile: sessionFileOf(ctx),
             };
             const model = text(params?.model, 120);
             const thinking = text(params?.thinking, 40);
             if (model) { payload.model = model; }
             if (thinking) { payload.thinking = thinking; }
+            if (separate) { payload.separate = true; }
             emit(payload);
+            if (separate) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: [
+                            "已在那边另开了一个会话去干这件事（平级派活，编号 " + id + "）。",
+                            "它不是你的子会话：跑完不会把结果交回来，也不会被自动关掉，这件事到这儿就不归你管了。",
+                            "所以不要在这儿等它、也不要猜它干得怎么样：用户会自己在界面上打开那一格看、自己去合并。",
+                            "接着做你自己这边的活，没有别的事就直接结束这一轮。",
+                        ].join("\n"),
+                    }],
+                    details: { id, name, separate: true },
+                };
+            }
             const lines = [
                 "已派出子会话「" + name + "」（编号 " + id + "）。它会在插件里新开一个 tab 跑。",
                 "它跑完第一轮后，最后一条回复会自动交回到本会话，然后插件会把那个 tab 关掉（出错、或者用户当时正看着它除外）。",
