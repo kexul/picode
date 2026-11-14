@@ -166,7 +166,6 @@ class NoticeService : Service() {
     private fun showNotice(message: JSONObject) {
         val sessionId = message.optString("sessionId")
         val name = message.optString("name").ifEmpty { "会话" }
-        val ask = message.optString("kind") == "ask"
         // 通知栏是纯文本：markdown 原样塞进去会带一堆星号井号，压成一行再截短
         val body = message.optString("text")
             .replace(Regex("\\s+"), " ")
@@ -180,7 +179,8 @@ class NoticeService : Service() {
         val pending = PendingIntent.getActivity(
             this, sessionId.hashCode(), open,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val title = (if (ask) "等你答一句 · " else "跑完一轮 · ") + name
+        // 标题只放会话名：跑完一轮还是等你答题，看正文就够了
+        val title = name
         val text = body.ifEmpty { title }
         val notification = Notification.Builder(this, CHANNEL_NOTICES)
             .setSmallIcon(R.drawable.ic_stat)
