@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
 import android.view.View
@@ -18,13 +19,15 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONArray
 import java.net.URLEncoder
 
 /**
  * MainActivity —— app 的唯一一屏，两种画面：
  *
- * - 设置画面：填后端地址（网页里那个，比如 `192.168.1.40:1867`）、保存并重连、
- *   顺手也能把对话页面打开看看；
+ * - 设置画面：一个地址输入框、一颗「打开」按钮、底下是用过的地址清单。
+ *   点「打开」（或者点历史里的一条）就规范化地址、记下来、叫常驻服务重连、进网页看对话；
+ *   打开过的地址自动记入清单（最新的排最上，最多留几条），每条边上有一颗 × 单独删。
  * - 网页画面：一个 WebView 装着后端的对话页面，点通知跳进来时直接带到那个会话上
  *   （`?session=<会话号>`，网页本来就认这个参数）。
  *
@@ -37,12 +40,19 @@ class MainActivity : Activity() {
         /** 通知点开时带的那个会话号。 */
         const val EXTRA_SESSION = "session"
         const val PREFS = "pichat"
+        /** 现在用的那个地址。 */
         const val KEY_SERVER = "server"
+        /** 打开过的地址（JSON 数组，最新的在前）。 */
+        const val KEY_HISTORY = "history"
+        /** 历史最多留几条（满了挤掉最老的）。 */
+        private const val HISTORY_LIMIT = 8
     }
 
     private lateinit var prefs: SharedPreferences
     private lateinit var settingsPanel: LinearLayout
     private lateinit var addressInput: EditText
+    private lateinit var historyHeader: TextView
+    private lateinit var historyList: LinearLayout
     private lateinit var webPanel: LinearLayout
     private lateinit var web: WebView
 
@@ -95,7 +105,7 @@ class MainActivity : Activity() {
             setPadding(0, 0, 0, dp(12))
         })
         settingsPanel.addView(TextView(this).apply {
-            text = "填电脑上后端的地址（浏览器里打开的那个，比如 192.168.1.40:1867）。手机要跟电脑连同一个网络。"
+            text = "填电脑上后端的地址（浏览器里打开的那个，比如 192.168.1.40:1867），点「打开」就连过去看对话。手机要跟电脑连同一个网络。"
             textSize = 14f
             setPadding(0, 0, 0, dp(12))
         })
@@ -106,13 +116,21 @@ class MainActivity : Activity() {
         }
         settingsPanel.addView(addressInput)
         settingsPanel.addView(Button(this).apply {
-            text = "保存并重连"
-            setOnClickListener { saveAddress() }
+            text = "打开"
+            setOnClickListener { openAddress(addressInput.text.toString()) }
         })
-        settingsPanel.addView(Button(this).apply {
-            text = "打开对话页面"
-            setOnClickListener { openPage(null) }
-        })
+        // 用过的地址：点一条就换那个地址打开；× 把那条从清单里删掉
+        historyHeader = TextView(this).apply {
+            text = "用过的地址"
+            textSize = 14f
+            setTextColor(Color.GRAY)
+            setPadding(0, dp(16), 0, 0)
+        }
+        settingsPanel.addView(historyHeader)
+        historyList = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        settingsPanel.addView(historyList)
         settingsPanel.addView(TextView(this).apply {
             text = "连接状态看通知栏那条常驻提示；收到的提醒要是没弹出来，\n" +
                 "到系统的设置里把这个 app 的电池优化关掉（各品牌叫法不一，多在「省电」或「应用管理」里）。\n" +
@@ -140,20 +158,65 @@ class MainActivity : Activity() {
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         setContentView(root)
+        renderHistory()
     }
 
-    /** 填的地址存下来（规范化成 `http://主机:端口` 的样子），并叫服务重连。 */
-    private fun saveAddress() {
-        val normalized = normalize(addressInput.text.toString())
+    /** 把「用过的地址」那一节重摆一遍（刚打开、打开了一个新地址、删了一条时都叫它）。 */
+    private fun renderHistory() {
+        historyList.removeAllViews()
+        val items = history()
+        historyHeader.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
+        historyList.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
+        val current = savedAddress()
+        for (address in items) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+            }
+            row.addView(TextView(this).apply {
+                text = address
+                textSize = 15f
+                typeface = if (address == current) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                setPadding(0, dp(12), 0, dp(12))
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                // 整行都能点：换那个地址打开
+                setOnClickListener { openAddress(address) }
+            })
+            row.addView(TextView(this).apply {
+                text = "×"
+                textSize = 20f
+                setTextColor(Color.GRAY)
+                setPadding(dp(16), dp(12), 0, dp(12))
+                setOnClickListener {
+                    forget(address)
+                    renderHistory()
+                }
+            })
+            historyList.addView(row)
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // 地址（输入框那一格 + 用过的地址清单）
+    // ------------------------------------------------------------------------
+
+    /**
+     * 用一个地址打开对话：规范化、记进清单、叫服务重连、切到网页画面。
+     * 输入框里的、历史清单里点来的，都走这一条。
+     */
+    private fun openAddress(raw: String) {
+        val normalized = normalize(raw)
         if (normalized == null) {
             Toast.makeText(this, "地址不像话：填个「主机:端口」，或者带上 http:// 开头", Toast.LENGTH_LONG).show()
             return
         }
-        prefs.edit().putString(KEY_SERVER, normalized).apply()
-        Toast.makeText(this, "已保存：$normalized", Toast.LENGTH_SHORT).show()
+        addressInput.setText(normalized)
+        remember(normalized)
+        renderHistory()
         startService(Intent(this, NoticeService::class.java).apply {
             action = NoticeService.ACTION_RECONNECT
         })
+        openPage(null)
     }
 
     /**
@@ -176,6 +239,37 @@ class MainActivity : Activity() {
     /** 现在存着的地址（没填过给 null）。 */
     private fun savedAddress(): String? =
         prefs.getString(KEY_SERVER, null)?.takeIf { it.isNotBlank() }
+
+    /** 用过的地址（最新的在最前）。 */
+    private fun history(): List<String> {
+        val raw = prefs.getString(KEY_HISTORY, null) ?: return emptyList()
+        return try {
+            val array = JSONArray(raw)
+            (0 until array.length()).map { array.optString(it) }.filter { it.isNotBlank() }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /** 记下一个打开过的地址：去重、排到最前、挤掉太老的；它同时就是现在用的地址。 */
+    private fun remember(address: String) {
+        val rest = history().filter { it != address }
+        val list = (listOf(address) + rest).take(HISTORY_LIMIT)
+        prefs.edit()
+            .putString(KEY_SERVER, address)
+            .putString(KEY_HISTORY, JSONArray(list).toString())
+            .apply()
+    }
+
+    /** 从清单里删掉一条（现在连着的那个地址不跟着动：删记录不掐连接）。 */
+    private fun forget(address: String) {
+        val list = history().filter { it != address }
+        prefs.edit().putString(KEY_HISTORY, JSONArray(list).toString()).apply()
+    }
+
+    // ------------------------------------------------------------------------
+    // 两种画面之间切
+    // ------------------------------------------------------------------------
 
     /** 切到网页画面并加载。session 给了就带上参数，让网页直接切到那个会话。 */
     private fun openPage(session: String?) {
