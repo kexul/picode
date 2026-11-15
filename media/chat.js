@@ -862,6 +862,7 @@
     view.appendChild(rail);
     pane.addEventListener("scroll", () => {
       if (!paneShown(pane)) { return; }
+      scheduleRailCurrent(st);   // 用户消息导航上那根「正读着的」跟着换（往上往下都要跟）
       const prevTop = st.lastScrollTop;
       st.lastScrollTop = pane.scrollTop; // 滚动位置缓存：布局重建后恢复用
       // 滚得多快（见 syncViewport）：一帧里走了多少像素 / 这帧多长
@@ -891,7 +892,6 @@
         // 回到贴底：往上翻的那阵子攒着没搬的几轮，现在可以搬了（见 trimLiveTurns）
         scheduleTrimLive(st);
       }
-      scheduleRailCurrent(st);   // 用户消息导航上那根「正读着的」跟着换
     });
     st = {
       id,
@@ -13553,6 +13553,15 @@
     if (st.actTimer) { clearTimeout(st.actTimer); st.actTimer = 0; }
     if (st.redrawTimer) { clearTimeout(st.redrawTimer); st.redrawTimer = null; }
     dropRunningLine(st);   // 那条「正在跑」的定时器与耗时那只钟（见 startRunClock）一并停掉
+    // 用户消息导航那两只观察者：不放掉的话，关掉的会话那块窗格一直被它们按着（见 attachUserRail）
+    if (st.railTimer) { clearTimeout(st.railTimer); st.railTimer = 0; }
+    if (st.railBuildRaf) { cancelAnimationFrame(st.railBuildRaf); st.railBuildRaf = 0; }
+    if (st.railCurRaf) { cancelAnimationFrame(st.railCurRaf); st.railCurRaf = 0; }
+    if (st.paneEl._railSt) {
+      st.paneEl._railSt = null;
+      if (railObserver) { railObserver.unobserve(st.paneEl); }
+      if (railMutant) { railMutant.unobserve(st.paneEl); }
+    }
     for (const tg of st.pendingToolTags.values()) { clearInterval(tg._timer); }
     const wasActive = activeId === id;
     st.viewEl.remove();
