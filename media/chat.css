@@ -137,8 +137,10 @@
   }
   .user-rail:hover .rail-row .rr-dash { opacity: 0.75; }
   /* 鼠标停着的那一行 / 正读着的那一条：长一截、换色 */
+  /* 停着的那一行只是“亮起来”（字变正常色、短线变实），不换蓝：蓝是“正读着的那一句”的记号，
+     两个都蓝、都变长，看着就像有两处“当前”（这话被提过一次）。 */
   .rail-row:hover .rr-text { color: var(--vscode-foreground, #ccc); }
-  .rail-row:hover .rr-dash { width: 12px; opacity: 1; background: var(--vscode-focusBorder, #007acc); }
+  .rail-row:hover .rr-dash { width: 12px; opacity: 1; background: var(--vscode-foreground); }
   .rail-row.current .rr-text { color: var(--vscode-textLink-foreground, #3794ff); }
   .rail-row.current .rr-dash { width: 12px; opacity: 1; background: var(--vscode-textLink-foreground, #3794ff); }
   /* 手机上不要这一条：屏窄，它正压在正文最右边那几个字上，手指也点不准一根两像素高的线 */

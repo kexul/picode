@@ -160,6 +160,17 @@ module.exports = async (page) => {
     if (open.current !== 8) { problems.push("贴着底时「正读着」该是最后一行，实际第 " + (open.current + 1) + " 行"); }
     if (open.gap !== s.gap || open.first !== s.first) { problems.push("开卡片之后行距或位置变了（线该一根都不动）：开前 " + s.gap + "/" + s.first + "，开后 " + open.gap + "/" + open.first); }
     if (open.dashX !== dashXClosed) { problems.push("开卡片之后短线的横坐标变了（该一动不动）：开前 " + dashXClosed + "，开后 " + open.dashX); }
+    // 蓝的只能有一根：「正读着的那一句」那一根。鼠标停着的那一行只是亮起来（字变正常色、线变实），
+    // 不换蓝 —— 两个都蓝、都变长，看着就像有两处“当前”。
+    const blueCount = await page.eval(`
+        const rows = Array.from(document.querySelectorAll(".session-view .user-rail .rail-row"));
+        const cur = rows.find((r) => r.classList.contains("current"));
+        if (!cur) { return -1; }
+        const want = getComputedStyle(cur.querySelector(".rr-dash")).backgroundColor;
+        return rows.filter((r) => getComputedStyle(r.querySelector(".rr-dash")).backgroundColor === want).length;
+    `);
+    console.log("  变蓝的短线有几根=" + blueCount + "（只能有一根：正读着的那一句）");
+    if (blueCount !== 1) { problems.push("蓝色的短横线该只有一根（正读着的那一句），实际 " + blueCount + " 根"); }
     const onRow = await under(mid.x, mid.y);
     console.log("  鼠标底下是第 " + (onRow.row + 1) + " 行（" + onRow.cls + "）");
     if (onRow.row !== 4) { problems.push("停在第五根上，鼠标底下该是第 5 行，实际第 " + (onRow.row + 1) + " 行"); }
