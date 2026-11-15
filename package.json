@@ -147,6 +147,7 @@
     "package": "npm run build && vsce package --allow-missing-repository --no-rewrite-relative-links",
     "web:dev": "npm run compile && node dev/browserHost.js",
     "web:shot": "npm run compile && node dev/visit.js",
+    "apk": "node dev/serve-apk.js",
     "server": "npm run compile && node bin/pichat.js"
   },
   "devDependencies": {
