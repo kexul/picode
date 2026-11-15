@@ -278,7 +278,22 @@ function checkDisplay() {
     assert.equal(history[0].text, live.text);
     assert.equal(history[0].id, live.id);
     assert(runtime.hasConversation);
-    assert.equal(runtime.sliceLastRound([pending, final]).start, 1);
+    // 历史窗口（只发最近一段）：条数按“正文一条”算，但最后一轮要完整——
+    // 起点切在眼下这一轮中间时往前推到那句问话，剩下的留给顶上那颗「加载更早」。
+    process.env.PICHAT_HISTORY_WINDOW = "1";
+    try {
+        const u = { role: "user", content: "问一句" };
+        const a1 = { role: "assistant", content: [{ type: "text", text: "先答一句" }] };
+        const a2 = { role: "assistant", content: [{ type: "text", text: "再补一句" }] };
+        const single = runtime.sliceHistoryWindow([u, a1, a2]);
+        assert.equal(single.start, 0, "窗口只装得下一条时也从最后一轮起，这一轮是完整的");
+        const two = runtime.sliceHistoryWindow([u, a1, pending, final]);
+        assert.equal(two.start, 3, "只留最后那一条（通知自己也算一轮的起头）");
+        assert.equal(two.list.length, 1);
+        assert.equal(two.hidden, 2, "顶上那颗按钮数的是裁掉的那几条正文");
+    } finally {
+        delete process.env.PICHAT_HISTORY_WINDOW;
+    }
     const sent = [];
     runtime.client = { isRunning: () => true, send: command => sent.push(command), stop() {} };
     runtime.streaming = true;
@@ -288,7 +303,7 @@ function checkDisplay() {
     assert.equal(sent[2].message, '/' + protocol.BASH_CLEAR_NOTICE_COMMAND);
     assert(!commandMenuItems([{name:protocol.BASH_CLEAR_NOTICE_COMMAND,source:'extension'}]).some(command=>command.insert==='/' + protocol.BASH_CLEAR_NOTICE_COMMAND));
     runtime.stopClient();
-    console.log('通过：排队占位不显示；当场、历史重放和稳定编号一致，通知参与历史窗口；界面清空后的内部信号不出现在命令菜单。');
+    console.log('通过：排队占位不显示；当场、历史重放和稳定编号一致，通知参与历史窗口（最后一轮保证完整）；界面清空后的内部信号不出现在命令菜单。');
 }
 
 // 真 SDK 排队检查由下方 checkSdk 实现；没有网络模型调用。
@@ -508,16 +523,17 @@ async function checkSdk() {
  * 没开输出通知的后台命令：每 10 分钟主动汇报一次状态，跑完就停。
  *
  * 卡住的任务本来一声不吐，只有靠这个才能看出来（“多久没有新输出”比“还在跑”有用得多）。
+ * 每 3 分钟汇报一次（见 src/bashBridgeSource.ts 的 BEAT_MS）。
  */
 async function checkBeats() {
     const f = fixture();
     const job = await f.start({ notifyOutput: false });
     job.output('FIRST-LINE\n');
-    f.advance(9 * 60 * 1000);
-    assert.equal(f.notices.length, 0, '不满 10 分钟不汇报');
+    f.advance(2 * 60 * 1000);
+    assert.equal(f.notices.length, 0, '不满 3 分钟不汇报');
     job.output('LATEST-LINE\n');
     f.advance(60 * 1000 + 1000);
-    assert.equal(f.notices.length, 1, '到了 10 分钟汇报一次');
+    assert.equal(f.notices.length, 1, '到了 3 分钟汇报一次');
     const first = await f.consume();
     assert(first.content.includes('还在跑') && first.content.includes('没有新输出'), '要说清还在跑、多久没动静');
     assert(/1 分 0\d 秒没有新输出/.test(first.content), '静默时长从最后一次新输出算：' + first.content);
@@ -526,13 +542,13 @@ async function checkBeats() {
     assert(!first.content.includes('输出观察时间'), '不是交回新输出那一条');
 
     // 模型正忙：先排着，等这一轮落地再交（跟别的通知一条路）
-    f.advance(10 * 60 * 1000);
+    f.advance(3 * 60 * 1000 + 5000);
     assert.equal(f.notices.length, 1, '忙时不另开消息');
     await f.settled();
     f.advance(1000);
     assert.equal(f.notices.length, 2, '空闲了补交一条');
     const queued = await f.consume();
-    assert(queued.content.includes('已跑 20 分'), '汇报的是到那一刻的真实用时：' + queued.content);
+    assert(/已跑 [67] 分/.test(queued.content), '汇报的是到那一刻的真实用时：' + queued.content);
 
     job.finish();
     f.advance(1000);
@@ -549,7 +565,7 @@ async function checkBeats() {
     plain.advance(60 * 60 * 1000);
     assert.equal(plain.notices.length, 0, 'notifyOutput 开着时不另发状态');
     await plain.dispose();
-    console.log('通过：没开输出通知的后台命令每 10 分钟汇报一次（含静默时长与日志尾巴），忙时排队，跑完就停。');
+    console.log('通过：没开输出通知的后台命令每 3 分钟汇报一次（含静默时长与日志尾巴），忙时排队，跑完就停。');
 }
 
 (async () => {

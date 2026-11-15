@@ -27,8 +27,8 @@
  * 场景六验的是“锁屏期间连接悄悄断了、回来时页面该自己重开一次连接并补回丢掉的消息”。
  * 场景七验的是同一件事的第二面：断线那段里后端发出的问话卡片（定向发、不带走序号的那套补发账）
  * 回来之后不该丢，且页面手上已经有的那张不该被重发打扰。
- * 场景八验的是“补不上、只能整屏重画”那一档（断得太久 / 后端重启过）：这时只发最后一轮，
- * 更早的那些挂在顶上那颗「加载更早的消息」后面（点一下取回来）。
+ * 场景八验的是“补不上、只能整屏重画”那一档（断得太久 / 后端重启过）：重画跟打开会话
+ * 同一套裁法（最近一段），装得下就全发，装不下才在顶上挂那颗「加载更早的消息」。
  * 还留了一个小口子（故意没堵）：离开不到 3 秒就回来的不重开，
  * 那点时间里丢的尾部消息要等“75 秒没收到心跳”的看门狗才能补上。
  */
@@ -302,7 +302,8 @@ async function sceneAskCard(page, harness) {
     channel.send = original;
     if (!card) { bad("后端没挂出卡片，后面没法验"); return; }
     console.log(`  · 卡片 ${card.id} 已问出、后端以为发给了：${JSON.stringify(card.screens)}（页面其实没收到）`);
-    check(card.screens.length === 1, "卡片发出时后端以为页面收到了（正是那条死连接骗过它的地方）");
+    // 在看这个会话的屏可能不止这一块（调试时编辑器那块面板也连在后端上）：只要这块屏在里面就行。
+    check(card.screens.includes(pageId), "卡片发出时后端以为这块屏收到了（正是那条死连接骗过它的地方）");
 
     // 人回到前台：网络通一下、旧连接被收掉，页面自己重开一条连接回来
     console.log("  · 模拟人回到前台（旧连接收掉、页面重连对账）");
@@ -527,33 +528,26 @@ async function scrollState(page) {
     `);
 }
 
-/** 页面上那颗「加载更早的消息」写着什么（没有就是空串）。 */
-async function moreBtnText(page) {
-    return page.eval(`
-        const b = document.querySelector('#messages .session-view:not(.off) .history-more');
-        return b ? b.textContent : '';
-    `);
-}
-
 /**
  * 断线回来补不上、只能“整屏重画”那一档。
  *
- * 现在重画只发最后一轮：断线可能已经很久，把整个会话再发一遍、再对一遍账在手机上很重，
- * 而人这会儿多半只看得到眼下这一轮。更早的那些挂在顶上那颗「加载更早的消息」后面，
- * 按钮上写着还有多少条；点一下就把它们取回来（一道不多、一道不少）。
+ * 重画跟打开会话是同一套裁法（最近一段：60 条正文 / 250 KB / 400 条，见
+ * sessionRuntime 的 sliceHistoryWindow）：装得下就全发，装不下才在顶上挂那颗
+ * 「加载更早的消息」。以前这里另有一条“只发最后一轮”的裁法，两套同时存在，已经并掉了。
+ * 这个场景就验：默认窗口下重画把六轮都发过来，不再只剩最后一轮。
  *
  * “对不上”怎么造：让后端以为页面重连时报了一个它压根没到过的序号
  *（onPageConnected + since=很大一个数，等于“后端重启过、两边的号对不上”），
  * 后端就退回整屏重画——跟断得太久、暂存里早就没有它要的那些消息时走的是同一条路。
  */
 async function sceneRedrawLastRound(page, harness) {
-    console.log("\n【场景八】断线回来整屏重画：只发最后一轮，更早的挂在顶上那颗按钮后面");
+    console.log("\n【场景八】断线回来整屏重画：跟打开会话同一套窗口（不再只发最后一轮）");
     const pageId = await pageIdOf(page);
     // 开一个干净的会话：前面几个场景留下的那些（排过队的话、重连补回来的半句）不掺进来。
     await page.click("#newSessionBtn");
     await page.sleep(1500);
     await waitIdle(page, 20000);
-    // 先聊够几轮，才看得出“只留最后一轮”这一刀切在哪儿
+    // 先聊够几轮，才看得出这一刀切在哪儿
     // 一轮真的跑完再发下一句：轮子还在转就发，会被当成排队插话，会话历史里就多出一份
     // 一模一样的“第 N 轮”，这一场就验不清了。
     const ROUNDS = 6;
@@ -595,33 +589,34 @@ async function sceneRedrawLastRound(page, harness) {
     const redrew = await waitForType(page, logBefore, "syncPoint", 30000);
     await page.sleep(800);
     const after = await scrollState(page);
-    const btnText = await moreBtnText(page);
-    await page.shot("recon-8-lastround-after.png");
+    await page.shot("recon-8-window-after.png");
     console.log(`  · 重画后：用户消息 ${after.userCount} 条、助手消息 ${after.assistantCount} 条，` +
-        `按钮="${btnText}"，贴底=${after.atBottom}`);
+        `顶上「加载更早」=${after.moreBtn ? "有" : "没有"}，贴底=${after.atBottom}`);
     if (!redrew) { bad("没等到整屏重画画完（syncPoint），后面验不了"); return; }
-    check(after.userCount === 1, `只发了最后一轮（用户消息 ${after.userCount} 条，应为 1）`);
-    check(after.assistantCount >= 1, `最后一轮的回答也在（助手消息 ${after.assistantCount} 条）`);
-    check(after.moreBtn, "顶上冒出一颗「加载更早的消息」");
-    const hiddenCount = Number((btnText.match(/还有 (\d+) 条/) || [])[1] || 0);
-    check(hiddenCount === (ROUNDS - 1) * 2,
-        `按钮上写着还有多少条（"${btnText}"，应为 ${(ROUNDS - 1) * 2} 条）`);
-    check(after.atBottom, "视野落回末尾（重画只画了最后一轮）");
+    check(after.userCount === ROUNDS, `重画发的是最近一段，${ROUNDS} 轮都在（用户消息 ${after.userCount} 条）`);
+    check(!after.moreBtn, "窗口装得下，顶上不冒「加载更早」");
+    check(after.firstUser === before.firstUser, "最开头那句还是原来那句（没重复、没错位）");
+    check(after.atBottom, "视野落回末尾");
 
-    // 点一下：更早那些按原样取回来，一道不多、一道不少
-    await page.eval(`
-        const b = document.querySelector('#messages .session-view:not(.off) .history-more');
-        if (b) { b.click(); }
-        return true;
-    `);
-    await page.sleep(2500);
-    const back = await scrollState(page);
-    await page.shot("recon-8-lastround-loaded.png");
-    console.log(`  · 点完之后：用户消息 ${back.userCount} 条、助手消息 ${back.assistantCount} 条，` +
-        `最开头那句="${back.firstUser}"`);
-    check(back.userCount === ROUNDS, `点一下把更早的都取回来了（用户消息 ${back.userCount} 条，应为 ${ROUNDS}）`);
-    check(back.firstUser === before.firstUser, "最开头那句还是原来那句（没重复、没错位）");
-    check(!back.moreBtn, "取回来之后按钮收掉了");
+    // 再压一次窗口（只装得下一条）：起点也不许切在最后一轮中间——那句问话必须在上面，
+    // 剩下的交给顶上那颗「加载更早」。这是并掉“只发最后一轮”时顺手加的那道兜底。
+    process.env.PICHAT_HISTORY_WINDOW = "1";
+    try {
+        const tightAt = await page.eval("return window.__msgLog.length");
+        harness.host().onPageConnected(pageId, 9999999);
+        const tightRedrew = await waitForType(page, tightAt, "syncPoint", 30000);
+        await page.sleep(800);
+        const tight = await scrollState(page);
+        await page.shot("recon-8-window-tight.png");
+        console.log(`  · 窗口压到 1 条再重画：用户消息 ${tight.userCount} 条、助手消息 ${tight.assistantCount} 条，` +
+            `顶上「加载更早」=${tight.moreBtn ? "有" : "没有"}`);
+        check(tightRedrew, "压窗口后重画完了（等到 syncPoint）");
+        check(tight.userCount === 1, `起点推到了最后一轮的问话上（用户消息 ${tight.userCount} 条，应为 1）`);
+        check(tight.assistantCount === 2, `最后一轮的回答整段都在（助手消息 ${tight.assistantCount} 条，应为 2）`);
+        check(tight.moreBtn, "更早的那些挂在顶上那颗「加载更早」后面");
+    } finally {
+        delete process.env.PICHAT_HISTORY_WINDOW;
+    }
 }
 
 /** 页面上从第 from 条起收到的消息类型（诊断与断言都用它）。 */
@@ -716,7 +711,10 @@ async function sceneWindowed(page, harness) {
         }
         await waitIdle(page, 20000);
 
-        // 让这块屏重发一次 ready：后端按窗口（最近 20 条）重画一遍
+        // 让这块屏重发一次 ready：后端按窗口（最近 20 条）重画一遍。
+        // 这块屏连上时后端已经把首屏送过了（见 chatHost 的 bootPageNow），这时再发 ready
+        // 会被跳过、什么也不画——要验的正是“重画”这条路，先把它那一笔清掉。
+        harness.host().bootedPages.delete(await pageIdOf(page));
         const at = await page.eval("return window.__msgLog.length");
         await page.eval("window.acquireVsCodeApi().postMessage({ type: 'ready' }); return true;");
         const done = await waitForType(page, at, "syncPoint", 30000);

@@ -218,6 +218,15 @@ function countsAsHistoryMessage(message: any): boolean {
     return content.some((block: any) => block && block.type === "text" && String(block.text ?? "").trim().length > 0);
 }
 
+/** 最后一轮的起点：最后一条用户消息（或自己的已填好通知）的下标；一条都没有就是 0。 */
+function lastTurnStart(messages: any[]): number {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const m = messages[i];
+        if (m && (m.role === "user" || isBashNoticeMessage(m))) { return i; }
+    }
+    return 0;
+}
+
 /**
  * 一个会话的全部运行时状态：独立的 pi 进程 + 独立的会话/编辑追踪。
  * 多个 SessionRuntime 各自持有自己的 PiClient，因此可以真正并行流式生成。
@@ -1551,16 +1560,12 @@ export class SessionRuntime {
      *                  传了 sink 就不再广播会话列表（那份数据每个页面都一样，
      *                  重连的页面本来就有；刚加载的页面由 ready 那条路统一发）。
      * @param opts.full 网页端也发全部历史，不裁成「最近一段」（会话搬家的那条路）。
-     * @param opts.lastRound 网页端只发最后一轮（最后一条用户消息往后的那些），更早的
-     *                  留一颗「加载更早的消息」按钮，点一下再取。重连后补不上、只能整屏
-     *                  重画时用它：那时断线可能已经很久，把整个会话再发一遍、再对一遍账
-     *                  在手机上很重，而人看的多半也就是眼下这一轮。
      * @param opts.imageBudget 这一屏首屏的图片预算（base64 字符数）：undefined 用默认那一份，
      *                  给 0 就一张图都不带（只发占位，点开再取）。手机上就是这一种（见 chatHost 的
      *                  inlineImageBudget）。
      */
     public async replayHistory(opts?: {
-        note?: string; sink?: MessageSink; full?: boolean; lastRound?: boolean; imageBudget?: number;
+        note?: string; sink?: MessageSink; full?: boolean; imageBudget?: number;
     }): Promise<void> {
         // 缺省出口是这个会话的常规广播；传了 sink 就是"只给某一个页面重画"。
         // 两条路都要带上 sessionId：界面靠它认出消息属于哪一个会话。
@@ -1596,10 +1601,9 @@ export class SessionRuntime {
         const messages: any[] = msgResp.data?.messages ?? [];
         // 快照随运行时一起迁过来了：迁移前的 edit/write 仍可回滚
         // 网页端只发最近一段历史：先裁窗口、告诉页面还有没有更早的，再渲染窗口里那几条
-        const win = !this.host.wantsTrimmedHistory?.() ? null
-            : opts?.lastRound === true ? this.sliceLastRound(messages)
-                : opts?.full === true ? null
-                    : this.sliceHistoryWindow(messages);
+        const win = !this.host.wantsTrimmedHistory?.() || opts?.full === true
+            ? null
+            : this.sliceHistoryWindow(messages);
         if (win) {
             this.noteHistoryWindow(win, messages);
             emit({ type: "historyWindow", hasMore: win.hasMore, hidden: win.hidden });
@@ -1960,38 +1964,6 @@ export class SessionRuntime {
     }
 
     /**
-     * 从完整消息数组里裁出「最后一轮」：最后一条用户消息往后那些（含它自己）。
-     *
-     * 重连后只能整屏重画时用它（见 replayHistory 的 opts.lastRound）：人这会儿多半
-     * 只看得到眼下这一轮，断线期间漏掉的那些整轮整轮地发过来太贵。更早的留给页面上
-     * 那颗「加载更早的消息」按钮，点一下再取（还是按 sliceHistoryWindow 一段段往前补）。
-     * 最后一条用户消息之前没有别的消息时（一轮就是整个会话）窗口就从头发起，那颗按钮不露面。
-     */
-    private sliceLastRound(messages: any[]): {
-        list: any[];
-        start: number;
-        hasMore: boolean;
-        hidden: number;
-    } {
-        let start = 0;
-        for (let i = messages.length - 1; i >= 0; i -= 1) {
-            const m = messages[i];
-            if (m && (m.role === "user" || isBashNoticeMessage(m))) { start = i; break; }
-        }
-        let hidden = 0;
-        for (let i = 0; i < start; i += 1) {
-            const m = messages[i];
-            if (countsAsHistoryMessage(m)) { hidden += 1; }
-        }
-        return {
-            list: messages.slice(start),
-            start,
-            hasMore: hidden > 0,
-            hidden,
-        };
-    }
-
-    /**
      * 从完整消息数组里裁出「最近一段」窗口。
      *
      * 起点落在哪条消息上不讲究（可能是一条工具结果）：渲染时工具结果只跟着它自己那条
@@ -2032,6 +2004,13 @@ export class SessionRuntime {
         // 界面上那颗工具标签就永远转圈、输出也看不见了。
         while (start < endBefore && messages[start] && !isConversationMessage(messages[start])) {
             start += 1;
+        }
+        // 最后一轮要完整：起点切在眼下这一轮中间，人看到的就是半轮（开头那句问话没在上面）。
+        // 只从末尾算（首屏、刷新、重连重画）时管；往前补更早某一批时不管，那批本来就是一段。
+        // 为它越过了上面的条数与字节上限也认：大不了多花一点，缺一半比多几 KB 难解释。
+        if (endBefore === messages.length) {
+            const tail = lastTurnStart(messages);
+            if (start > tail) { start = tail; }
         }
         let hidden = 0;
         for (let i = 0; i < start; i++) {
