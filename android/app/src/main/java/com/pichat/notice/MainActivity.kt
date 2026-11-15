@@ -10,6 +10,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebResourceRequest
@@ -50,7 +51,12 @@ class MainActivity : Activity() {
         const val KEY_HISTORY = "history"
         /** 历史最多留几条（满了挤掉最老的）。 */
         private const val HISTORY_LIMIT = 8
+        /** 连按两下返回才回设置：这两下的间隔上限（毫秒）。 */
+        private const val BACK_TWICE_MS = 2000L
     }
+
+    /** 上一回按返回键的时刻（SystemClock.uptimeMillis；0 = 眼下不算连按）。 */
+    private var lastBackAt = 0L
 
     private lateinit var prefs: SharedPreferences
     private lateinit var settingsPanel: LinearLayout
@@ -138,7 +144,7 @@ class MainActivity : Activity() {
         settingsPanel.addView(TextView(this).apply {
             text = "连接状态看通知栏那条常驻提示；收到的提醒要是没弹出来，\n" +
                 "到系统的设置里把这个 app 的电池优化关掉（各品牌叫法不一，多在「省电」或「应用管理」里）。\n" +
-                "看对话时按返回键（或返回手势）回到这一屏。"
+                "看对话时连按两下返回键（或返回手势，两下不超过两秒）回到这一屏。"
             textSize = 12f
             setTextColor(Color.GRAY)
             setPadding(0, dp(16), 0, 0)
@@ -294,6 +300,7 @@ class MainActivity : Activity() {
         }
         settingsPanel.visibility = View.GONE
         webPanel.visibility = View.VISIBLE
+        lastBackAt = 0L
         web.loadUrl(url)
     }
 
@@ -305,14 +312,24 @@ class MainActivity : Activity() {
         settingsPanel.visibility = View.VISIBLE
     }
 
-    /** 返回键：网页画面时先回设置，不退出 app。 */
+    /**
+     * 返回键：网页画面时要连按两下才回设置，不退出 app。
+     * 只按一下容易误触（手一滑就离开对话、网页还被清掉了），所以第一下只提一句。
+     */
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (webPanel.visibility == View.VISIBLE) {
-            showSettings()
-        } else {
+        if (webPanel.visibility != View.VISIBLE) {
             super.onBackPressed()
+            return
         }
+        val now = SystemClock.uptimeMillis()
+        if (lastBackAt != 0L && now - lastBackAt <= BACK_TWICE_MS) {
+            lastBackAt = 0L
+            showSettings()
+            return
+        }
+        lastBackAt = now
+        Toast.makeText(this, "再按一次回设置", Toast.LENGTH_SHORT).show()
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
