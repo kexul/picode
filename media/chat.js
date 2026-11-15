@@ -2438,8 +2438,39 @@
     // 清单里每行自己就有一根短杠：右边那一排短横线先藏起来（见 chat.css），不要两列一样的
     st.railEl.classList.add("open");
     railListOwner = st;
+    st.railMetrics = null;   // 刚摆出来 / 刚重摆：行高与高度重新量（见 placeRailList）
     syncRailRowCurrent(st);
     syncRailHover(st);
+  }
+
+  /**
+   * 清单摆在哪儿：让鼠标指着的那一行正好落在鼠标那个高度上（一行一句，高度都一样），
+   * 再上下夹一下别出屏幕。
+   *
+   * 为什么非得跟着鼠标走：清单紧贴着导航条左边，鼠标从那一竖条往左一挑就进清单；
+   * 若清单是“整列上下居中”的，指着最上头那根时清单其实在屏幕中间，往左一挑就落到空白处（
+   * 那一下算离开导航条，清单当场收了，根本点不到）。现在指着哪一行，哪一行就在鼠标这个高度，
+   * 往左横着一挪就落在它上面。
+   */
+  function placeRailList(st, clientY) {
+    const list = st.railListEl;
+    const rows = list && list.children;
+    if (!rows || !rows.length) { return; }
+    let m = st.railMetrics;
+    if (!m) {
+      // 行高与“第一行在清单里多高”只量一次：鼠标在这条上来回挑的时候不能每次都读版面（那是逼重排）
+      const first = rows[0].offsetTop;
+      const rowH = rows.length > 1 ? rows[1].offsetTop - first : rows[0].offsetHeight;
+      m = st.railMetrics = { first, rowH, height: list.offsetHeight };
+    }
+    const i = Math.max(0, Math.min(rows.length - 1, st.railHover));
+    const railTop = st.railEl.getBoundingClientRect().top;
+    // 那一行的正中对着鼠标：清单顶边该在哪儿（换成导航条里面的坐标）
+    const want = clientY - railTop - m.first - m.rowH * i - m.rowH / 2;
+    // 上下都别出屏幕（清单是挂在导航条里面的，夹范围时把导航条的位置算进去）
+    const min = 4 - railTop;
+    const max = window.innerHeight - 4 - railTop - m.height;
+    list.style.top = Math.round(Math.max(min, Math.min(want, Math.max(min, max)))) + "px";
   }
 
   /** 收起来（鼠标离开、点了某一根 / 某一行、会话换了一批消息）。 */
@@ -2450,6 +2481,7 @@
     if (st.railListEl) { st.railListEl.classList.add("hidden"); }
     st.railEl.classList.remove("open");
     st.railHover = -1;
+    st.railMetrics = null;
     syncRailHover(st);
   }
 
@@ -2490,12 +2522,18 @@
     }
     // 停上去弹出整张清单、点一行（或直接点那一根）跳过去
     rail.addEventListener("mousemove", (e) => {
-      if (st.railListEl && st.railListEl.contains(e.target)) { return; }   // 鼠标已经在清单上了
+      if (st.railListEl && st.railListEl.contains(e.target)) {
+        // 鼠标已经在清单上了：亮哪一行交给 CSS 的 :hover，别在清单外面又亮一行
+        if (st.railHover !== -1) { st.railHover = -1; syncRailHover(st); }
+        return;
+      }
       const i = railIndexAt(st, e.clientY);
       if (i < 0) { return; }
       // 一进这一条就整张弹出来（不用先对准某一根），之后沿着它上下挪只换亮着哪一行
       if (!st.railListEl || st.railListEl.classList.contains("hidden")) { showRailList(st); }
       if (i !== st.railHover) { st.railHover = i; syncRailHover(st); }
+      // 清单跟着鼠标上下走：指着的那一行正好在鼠标这个高度，往左一挪就落在它上面
+      placeRailList(st, e.clientY);
     });
     rail.addEventListener("mouseleave", hideRailList);
     rail.addEventListener("click", (e) => {

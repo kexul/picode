@@ -107,14 +107,6 @@ module.exports = async (page) => {
         const r = t.getBoundingClientRect();
         return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
     `);
-    /** 清单里第 i 行在屏幕上的位置。 */
-    const rowAt = (i) => page.eval(`
-        const list = document.querySelector(".session-view .rail-list");
-        const row = list && list.querySelectorAll(".rail-row")[${i}];
-        if (!row) { return null; }
-        const r = row.getBoundingClientRect();
-        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
-    `);
     /** 清单此刻的样子：开着没、几行、各行写的字、哪行亮着、哪行是“正读着的那一句”、出没出屏。 */
     const listNow = () => page.eval(`
         const list = document.querySelector(".session-view .rail-list");
@@ -172,9 +164,24 @@ module.exports = async (page) => {
     if (whileOpen.tickVis !== "hidden") { problems.push("清单开着时右边那一排短横线还露着（会跟清单里那根短杠重复一份）：" + whileOpen.tickVis); }
     await page.shot("rail-2-list.png");
 
+    // ---- 第二幕之二：从那一根横着往左挪一点，就落在清单上（不能一挪就收，不然根本点不到） ----
+    const into = mid.x - 20;   // 导航条往左 20 像素：这是清单里面
+    await move(into, mid.y);
+    await page.sleep(250);
+    const hoveredList = await listNow();
+    const under = await page.eval(`
+        const el = document.elementFromPoint(${Math.round(into)}, ${Math.round(mid.y)});
+        const row = el && el.closest ? el.closest(".rail-row") : null;
+        return { row: row ? Number(row.dataset.idx) : -1, cls: el ? String(el.className || el.tagName) : "" };
+    `);
+    console.log("\n第二幕之二（从第五根往左挑进清单）：\n  清单还开着=" + hoveredList.shown
+        + " 鼠标底下是第 " + (under.row + 1) + " 行（" + under.cls + "）");
+    if (!hoveredList.shown) { problems.push("鼠标从导航条往左一挪清单就收了（这样根本点不到）"); }
+    if (under.row !== 4) { problems.push("往左挪到的那一行该是第 5 行（指着哪行哪行就在鼠标这个高度），实际是第 " + (under.row + 1) + " 行，底下是 " + under.cls); }
+    await page.shot("rail-2b-into-list.png");
+
     // ---- 第三幕：点清单里的第五行：那一条滚到窗格顶上，闪一下底色，清单收起来 ----
-    const row4 = await rowAt(4);
-    await clickAt(row4.x, row4.y);
+    await clickAt(into, mid.y);
     await page.sleep(140);
     const jumped = await topUser();
     const flashing = await page.eval(`
@@ -183,8 +190,7 @@ module.exports = async (page) => {
     `);
     const afterClick = await listNow();
     console.log("\n第三幕（点清单第五行）：\n  顶上这条是第 " + (jumped.idx + 1) + " 句（离窗格顶 " + jumped.at + " 像素）在闪=" + JSON.stringify(flashing)
-        + " 清单还开着=" + afterClick.shown);
-    if (jumped.idx !== 4) { problems.push("点第五行该跳到第五句，实际顶上这条是第 " + (jumped.idx + 1) + " 句"); }
+        + " 清单还开着=" + afterClick.shown);    if (jumped.idx !== 4) { problems.push("点第五行该跳到第五句，实际顶上这条是第 " + (jumped.idx + 1) + " 句"); }
     if (jumped.at < 0 || jumped.at > 20) { problems.push("跳过去之后那条没贴到窗格顶上，离着 " + jumped.at + " 像素"); }
     if (!flashing.startsWith("把")) { problems.push("跳过去的那条没在闪：" + JSON.stringify(flashing)); }
     if (afterClick.shown) { problems.push("点完一行清单该收起来"); }
