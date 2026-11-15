@@ -12,6 +12,8 @@ import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
@@ -20,6 +22,8 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONArray
+import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.net.URLEncoder
 
 /**
@@ -150,7 +154,13 @@ class MainActivity : Activity() {
         web = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
-            webViewClient = WebViewClient()
+            // 界面文件（各种 js / css）包里带着一份，第一次打开时不用从电脑上下（见 bundledMedia）
+            webViewClient = object : WebViewClient() {
+                override fun shouldInterceptRequest(
+                    view: WebView?,
+                    request: WebResourceRequest?,
+                ): WebResourceResponse? = bundledMedia(request)
+            }
         }
         webPanel.addView(web, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -306,4 +316,59 @@ class MainActivity : Activity() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    // ------------------------------------------------------------------------
+    // 界面文件：包里那份（assets/media/，由 app/build.gradle 的 bundleMedia 生成）
+    // ------------------------------------------------------------------------
+
+    /** 包里的界面文件各自的内容指纹（assets/media-manifest.json）。读一次就留着。读不到就是空表。 */
+    private var bundledHashesCache: Map<String, String>? = null
+
+    /**
+     * 拦下 `/media/xxx?v=指纹`：包里那份的指纹跟地址上的对得上，就直接把包里的读出来给网页，
+     * 一个字节都不走网络。对不上（没带指纹、插件升级过了、包里没有这个文件）返回 null，
+     * 照旧走网络 —— 手机上永远不会看到跟电脑上不一样的旧界面。
+     *
+     * 这条只在第一次打开时省那 600 KB 上下；之后的打开本来就有网页缓存。
+     * 这里不算 gzip：包里的字节是磁盘上现成的，读出来就发，压一遍反倒多花时间。
+     */
+    private fun bundledMedia(request: WebResourceRequest?): WebResourceResponse? {
+        val url = request?.url ?: return null
+        val path = url.path ?: return null
+        if (!path.startsWith("/media/")) { return null }
+        val name = path.substring("/media/".length)
+        if (name.isEmpty() || name.contains('/')) { return null }
+        val want = url.getQueryParameter("v") ?: return null
+        if (bundledHashes()[name] != want) { return null }
+        val bytes = try {
+            assets.open("media/$name").use { it.readBytes() }
+        } catch (_: Exception) {
+            return null
+        }
+        val mime = when {
+            name.endsWith(".css", ignoreCase = true) -> "text/css"
+            name.endsWith(".js", ignoreCase = true) -> "application/javascript"
+            else -> return null
+        }
+        return WebResourceResponse(
+            mime, "utf-8", 200, "OK",
+            mapOf("Cache-Control" to "public, max-age=31536000, immutable"),
+            ByteArrayInputStream(bytes),
+        )
+    }
+
+    private fun bundledHashes(): Map<String, String> {
+        bundledHashesCache?.let { return it }
+        val map = try {
+            val text = assets.open("media-manifest.json").use {
+                it.readBytes().toString(Charsets.UTF_8)
+            }
+            val json = JSONObject(text)
+            json.keys().asSequence().associateWith { key -> json.optString(key) }
+        } catch (_: Exception) {
+            emptyMap()
+        }
+        bundledHashesCache = map
+        return map
+    }
 }

@@ -1,6 +1,41 @@
+import java.security.MessageDigest
+
 plugins {
     id "com.android.application"
     id "org.jetbrains.kotlin.android"
+}
+
+/**
+ * 界面文件（仓库根 media/ 里那些 js / css）塞进 APK：手机上第一次打开对话时
+ * 本来要下大约 600 KB（压过之后），装上包以后直接从本地读。
+ *
+ * 什么时候用包里这份、什么时候照旧走网络，由 MainActivity 的 bundledMedia 判断：
+ * 地址上的内容指纹（`/media/chat.js?v=4f2a…`）跟包里这份的一致才用。
+ * 所以这儿算的指纹必须跟后端一模一样 —— 照 src/mediaVersion.ts 的算法：
+ * sha1 的前 10 个十六进制字符。两边算法一错，手机上就只剩「永远走网络」（还算安全，
+ * 但白塞）；反过来要是漏了这道判断，才会出现「插件升级了手机还是旧界面」。
+ */
+def mediaDir = file("$rootDir/../media")
+def bundledMediaDir = layout.buildDirectory.dir("bundledMedia")
+
+def bundleMedia = tasks.register("bundleMedia", Sync) {
+    description = "把仓库 media/ 里的界面文件拷进 APK 的 assets，并写下每份的指纹"
+    from(mediaDir) {
+        include "*.js", "*.css"
+    }
+    into(bundledMediaDir.map { it.dir("media") })
+    // 指纹清单跟 media/ 平级放着（assets/media-manifest.json）。
+    // 放在这个目录里是被 Sync 连目录一起重建的：清单永远跟边上这几份文件对得上。
+    doLast {
+        def files = bundledMediaDir.get().dir("media").asFile.listFiles()
+        def hashes = new TreeMap()
+        files.each { file ->
+            def digest = MessageDigest.getInstance("SHA-1").digest(file.bytes)
+            hashes[file.name] = digest.collect { String.format("%02x", it) }.join("").take(10)
+        }
+        bundledMediaDir.get().file("media-manifest.json").asFile
+            .setText(groovy.json.JsonOutput.toJson(hashes), "UTF-8")
+    }
 }
 
 android {
@@ -25,6 +60,13 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+
+    sourceSets {
+        main {
+            // 上面那个任务生成的 assets（media/ 与 media-manifest.json）
+            assets.srcDir(bundledMediaDir)
+        }
+    }
     kotlinOptions {
         jvmTarget = "17"
     }
@@ -33,3 +75,6 @@ android {
 dependencies {
     implementation "com.squareup.okhttp3:okhttp:4.12.0"
 }
+
+// assets 是从生成目录来的，Gradle 自己看不出来，得把这条依赖补上
+preBuild.dependsOn bundleMedia
