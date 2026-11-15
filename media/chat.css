@@ -96,37 +96,48 @@
   #jumpBottom.hidden { display: none; }
   #jumpBottom svg { width: 14px; height: 14px; display: block; }
 
-  /* 用户消息导航（消息流右边那一条）：一根短横线代表用户自己发的一条消息，停上去出一行字，
-     点一下跳到那一条。贴在消息流右边、不占对话的地方；平时淡淡的，鼠标扫上去才变明显。
-     右边留出 7px 让开窗格自己那根滚动条（6px 宽），短横线会压在文字最右边几个像素上（贴着右边的代价）。 */
+  /* 用户消息导航（消息流右边那一条）：一根短横线代表用户自己发的一条消息，停上去在它左边弹出整张
+     清单（你发过的每一句一行），点一行跳到那一句。贴在消息流右边、不占对话的地方：平时淡淡的，
+     鼠标扫上去才变明显。右边留出 7px 让开窗格自己那根滚动条（6px 宽），短横线会压在文字最右边几个像素上（贴着右边的代价）。
+     淡的是那几根短线（见 .rail-tick）：这一层自己不能淡，不然弹出来的清单也跟着半透明。 */
   .user-rail {
     position: absolute; right: 7px; top: 8px; bottom: 52px; width: 14px; z-index: 15;
-    opacity: 0.45; transition: opacity 120ms ease;
   }
-  .user-rail:hover { opacity: 1; }
   /* 空会话、只有一条用户消息：不露面，也不许它挡住消息流右边那一条的鼠标 */
   .user-rail.empty { pointer-events: none; }
   .rail-tick {
     position: absolute; right: 0; width: 10px; height: 2px; border-radius: 1px;
-    background: var(--vscode-foreground); opacity: 0.75;
-    transition: width 100ms ease, background-color 100ms ease;
+    background: var(--vscode-foreground); opacity: 0.45;
+    transition: width 100ms ease, background-color 100ms ease, opacity 120ms ease;
   }
-  .user-rail:hover .rail-tick { opacity: 1; }
+  .user-rail:hover .rail-tick { opacity: 0.75; }
   /* 鼠标停着的那一根 / 正读着的那一条：长一截、换色 */
   .rail-tick.hover { width: 14px; opacity: 1; background: var(--vscode-focusBorder, #007acc); }
   .rail-tick.current { width: 14px; opacity: 1; background: var(--vscode-textLink-foreground, #3794ff); }
   /* 手机上不要这一条：屏窄，它正压在正文最右边那几个字上，手指也点不准一根两像素高的线 */
   @media (hover: none) and (pointer: coarse) { .user-rail { display: none; } }
-  /* 停上去出的那行字：贴着导航条左边、跟着那一根上下居中（位置由 chat.js 算，出不了屏幕） */
-  .rail-tip {
-    position: fixed; z-index: 900; max-width: 320px; padding: 4px 8px; border-radius: 4px;
+  /* 停上去弹出来的清单：贴在导航条左边、上下居中（条数多就自己滚），一行一句 ——
+     开头几个字，一行放不下就在行尾省掉；右边跟着一根短杠，正读着的那一句蓝字、蓝杠长一截。 */
+  .rail-list {
+    position: absolute; right: 100%; top: 50%; transform: translateY(-50%); margin-right: 8px;
+    min-width: 180px; max-width: 320px; max-height: 60vh; overflow-y: auto; overscroll-behavior: contain;
+    padding: 6px; border-radius: 10px;
     border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-panel-border, rgba(128,128,128,0.35)));
     background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, #252526));
-    color: var(--vscode-editorHoverWidget-foreground, var(--vscode-editor-foreground, inherit));
-    font-size: 0.85em; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none;
+    color: var(--vscode-descriptionForeground, #999);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+    font-family: var(--vscode-font-family); font-size: 0.85em;
   }
-  .rail-tip.hidden { display: none; }
+  .rail-list.hidden { display: none; }
+  .rail-row {
+    display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-radius: 6px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .rail-row .rr-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .rail-row .rr-dash { flex: none; width: 10px; height: 2px; border-radius: 1px; background: currentColor; opacity: 0.45; }
+  .rail-row.hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); color: var(--vscode-foreground, #ccc); }
+  .rail-row.current { color: var(--vscode-textLink-foreground, #3794ff); }
+  .rail-row.current .rr-dash { opacity: 1; width: 14px; }
   /* 跳过去的那一条闪一下底色（才知道跳到哪儿了）。底色从高亮回到用户气泡本来的那个色。 */
   .msg.user.msg-flash { animation: msg-flash 1.3s ease-out; }
   @keyframes msg-flash {

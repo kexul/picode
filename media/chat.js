@@ -2197,8 +2197,10 @@
 
   // ==================== 用户消息导航 ====================
   // 消息流右边一条细导航：一根短横线代表用户自己发的一条消息（按先后等分排下来，整列上下居中；
-  // 条数多了就挤紧、铺满这一条）。鼠标停上去出一行字（那条消息的开头），点一下跳到那一条；
-  // 正读着的那一条亮着。空会话、只有一条用户消息时不出现（一根线孤零零的没意义）。
+  // 条数多了就挤紧、铺满这一条）。鼠标停上去，在它左边弹出整张清单 —— 你发过的每一句一行
+  // （开头那几个字，一行放不下的省略）；沿着那一条上下挑，清单里对应那行跟着亮；
+  // 点一行（或者直接点那一根）就跳到那一条。正读着的那一行蓝着。
+  // 空会话、只有一条用户消息时整条不出现（一条线孤零零的没意义）。
   //
   // 只在电脑上露面：手机屏幕窄，这一条正好压在正文最右边那几个字上；手指也点不准一根
   // 两像素高的线。触屏那一路（.user-rail 那条 @media，见 chat.css）直接就看不见。
@@ -2207,9 +2209,10 @@
   // （pane.innerHTML），「加载更早」那批消息也是先渲染进暂存区 —— 挂进窗格就会被一起抹掉。
   // 每一根的位置只按窗格的高矮算（不读每条消息的量）：所以条数变了重画也不贵。
   const RAIL_SPREAD_MAX = 26;      // 相邻两根之间最松留几个像素：再宽就整列居中，不把一列散满整屏
-  const RAIL_TIP_CHARS = 60;       // 停上去那行字取开头多少个字
+  const RAIL_ROW_CHARS = 200;      // 清单里一行放多少字（再多也看不见：一行放不下就省略号，见 chat.css）
   let railObserver = null;         // 那一块地方高矮变了（拖窗口的边、输入框长高、从藏着的壳露出来）
   let railMutant = null;           // 窗格里的东西变了（来了消息 / 重画 / 「加载更早」补进来 / 搬走几轮）
+  let railListOwner = null;        // 这会儿开着清单的是哪个会话（关掉时要把它那几根的高亮一并收掉）
 
   /**
    * 一个会话现在的用户消息节点（按消息流里的先后顺序）。
@@ -2238,6 +2241,7 @@
       rail.classList.add("empty");
       rail.textContent = "";
       st.railMsgs = null; st.railTicks = null; st.railCurrent = -1;
+      hideRailList();
       return;
     }
     // 这一条现在有多高就现量：刚挂上页面那一会儿量出来是 0（还没排上版），
@@ -2269,6 +2273,7 @@
     rail.appendChild(frag);
     st.railMsgs = msgs; st.railTicks = ticks; st.railGap = gap; st.railTop = top;
     st.railCurrent = -1; st.railHover = -1;
+    hideRailList();   // 条数变了：旧清单上那些行对不上号了，收起来，下次停上去重摆
     cacheRailOffsets(st);
     syncRailCurrent(st);
   }
@@ -2326,6 +2331,7 @@
     if (idx === st.railCurrent) { return; }
     st.railCurrent = idx;
     ticks.forEach((tick, i) => tick.classList.toggle("current", i === idx));
+    syncRailRowCurrent(st);   // 清单开着的话，那一行也跟着换
   }
 
   /** 滚动事件里调：一帧最多算一次。 */
@@ -2366,36 +2372,82 @@
     el._flashTimer = setTimeout(() => el.classList.remove("msg-flash"), 1400);
   }
 
-  let railTipEl = null;
-  /** 那条消息的开头一行（停上去出的字）。 */
-  function railTipText(el) {
+  /** 那一行写的字：那条消息的开头一行（换行、连续空白都抹成空格）。 */
+  function railRowText(el) {
     const raw = el.dataset.raw || el.textContent || "";
     const one = raw.replace(/\s+/g, " ").trim();
     if (!one) { return "（空消息）"; }
-    return one.length > RAIL_TIP_CHARS ? one.slice(0, RAIL_TIP_CHARS) + "…" : one;
+    return one.length > RAIL_ROW_CHARS ? one.slice(0, RAIL_ROW_CHARS) : one;
   }
-  /** 停上去出的那行字：贴着导航条左边、跟着那一根上下居中，出不了屏幕。 */
-  function showRailTip(st, i) {
-    const el = (st.railMsgs || [])[i];
-    if (!el) { return; }
-    if (!railTipEl) {
-      railTipEl = document.createElement("div");
-      railTipEl.className = "rail-tip hidden";
-      document.body.appendChild(railTipEl);
+
+  /** 清单这会儿开着的话，那几行节点（没开就是 null）。 */
+  function railRows(st) {
+    const list = st.railListEl;
+    if (!list || list.classList.contains("hidden")) { return null; }
+    return list.children;
+  }
+
+  /** 把「正读着的那一句」那一行点亮（跟短横线用同一个号）。 */
+  function syncRailRowCurrent(st) {
+    const rows = railRows(st);
+    if (!rows) { return; }
+    for (let i = 0; i < rows.length; i++) { rows[i].classList.toggle("current", i === st.railCurrent); }
+  }
+
+  /** 鼠标停在哪一根上：那一根与清单里对应那一行一起亮。 */
+  function syncRailHover(st) {
+    if (st.railTicks) { st.railTicks.forEach((tick, k) => tick.classList.toggle("hover", k === st.railHover)); }
+    const rows = railRows(st);
+    if (!rows) { return; }
+    for (let i = 0; i < rows.length; i++) { rows[i].classList.toggle("hover", i === st.railHover); }
+  }
+
+  /**
+   * 鼠标停到导航条上：在它左边弹出整张清单 —— 你发过的每一句一行（开头那几个字，一行放不下的省略），
+   * 正读着的那一行蓝着。点一行就跳到那一句。
+   * 清单挂在导航条里面（贴着它左边）：这样鼠标从短横线挪到清单上不算“离开”，清单不会一碰就收。
+   */
+  function showRailList(st) {
+    const msgs = st.railMsgs || [];
+    if (!msgs.length) { return; }
+    let list = st.railListEl;
+    if (!list) {
+      list = document.createElement("div");
+      list.className = "rail-list hidden";
+      st.railListEl = list;
     }
-    railTipEl.textContent = railTipText(el);
-    railTipEl.classList.remove("hidden");
-    const railBox = st.railEl.getBoundingClientRect();
-    const box = railTipEl.getBoundingClientRect();
-    const tickY = railBox.top + (st.railTop || 0) + (st.railGap || 0) * i;
-    let left = railBox.left - box.width - 8;
-    if (left < 4) { left = 4; }   // 窗口很窄时盖在消息上，也总比出屏幕强
-    const top = Math.max(6, Math.min(tickY - box.height / 2, window.innerHeight - box.height - 6));
-    railTipEl.style.left = Math.round(left) + "px";
-    railTipEl.style.top = Math.round(top) + "px";
+    // 行数对不上（第一次开 / 中间又发了一句）就整张重摆；对得上就只改亮着的那一行
+    if (list.childElementCount !== msgs.length) {
+      list.textContent = "";
+      for (let i = 0; i < msgs.length; i++) {
+        const row = document.createElement("div");
+        row.className = "rail-row";
+        row.dataset.idx = String(i);
+        const text = document.createElement("span");
+        text.className = "rr-text";
+        text.textContent = railRowText(msgs[i]);
+        const dash = document.createElement("span");
+        dash.className = "rr-dash";
+        row.appendChild(text);
+        row.appendChild(dash);
+        list.appendChild(row);
+      }
+    }
+    if (list.parentNode !== st.railEl) { st.railEl.appendChild(list); }
+    list.classList.remove("hidden");
+    railListOwner = st;
+    syncRailRowCurrent(st);
+    syncRailHover(st);
   }
-  function hideRailTip() {
-    if (railTipEl) { railTipEl.classList.add("hidden"); }
+
+  /** 收起来（鼠标离开、点了某一根 / 某一行、会话换了一批消息）。 */
+  function hideRailList() {
+    const st = railListOwner;
+    railListOwner = null;
+    if (!st) { return; }
+    if (st.railListEl) { st.railListEl.classList.add("hidden"); }
+    st.railHover = -1;
+    syncRailHover(st);
   }
 
   /**
@@ -2433,28 +2485,21 @@
       st.paneEl._railSt = st;
       railMutant.observe(st.paneEl, { childList: true });
     }
-    // 停上去出一行字、点一下跳过去
+    // 停上去弹出整张清单、点一行（或直接点那一根）跳过去
     rail.addEventListener("mousemove", (e) => {
+      if (st.railListEl && st.railListEl.contains(e.target)) { return; }   // 鼠标已经在清单上了
       const i = railIndexAt(st, e.clientY);
       if (i < 0) { return; }
-      if (i !== st.railHover) {
-        st.railHover = i;
-        if (st.railTicks) { st.railTicks.forEach((tick, k) => tick.classList.toggle("hover", k === i)); }
-        showRailTip(st, i);   // 从一根挪到另一根：那行字得换成这一条的开头
-        return;
-      }
-      // 滚动 / 点过一下会把那行字收起来：鼠标还在这一根上（或者又移回来了）就把它拿出来
-      if (!railTipEl || railTipEl.classList.contains("hidden")) { showRailTip(st, i); }
+      // 一进这一条就整张弹出来（不用先对准某一根），之后沿着它上下挪只换亮着哪一行
+      if (!st.railListEl || st.railListEl.classList.contains("hidden")) { showRailList(st); }
+      if (i !== st.railHover) { st.railHover = i; syncRailHover(st); }
     });
-    rail.addEventListener("mouseleave", () => {
-      st.railHover = -1;
-      if (st.railTicks) { st.railTicks.forEach((tick) => tick.classList.remove("hover")); }
-      hideRailTip();
-    });
+    rail.addEventListener("mouseleave", hideRailList);
     rail.addEventListener("click", (e) => {
-      const i = railIndexAt(st, e.clientY);
-      hideRailTip();
-      if (i >= 0) { railJumpTo(st, i); }
+      const row = e.target && e.target.closest ? e.target.closest(".rail-row") : null;
+      const i = row ? Number(row.dataset.idx) : railIndexAt(st, e.clientY);
+      hideRailList();
+      if (Number.isFinite(i) && i >= 0) { railJumpTo(st, i); }
     });
   }
 
@@ -4309,10 +4354,8 @@
   document.addEventListener("scroll", (e) => {
     if (tagTipEl && tagTipEl.contains(e.target)) { return; }
     hideTagTip();
-    hideRailTip();
   }, true);
   window.addEventListener("resize", hideTagTip);
-  window.addEventListener("resize", hideRailTip);
   // 点提示框和当前标签以外任何地方关闭提示框（触屏主要靠这个和右上角 × 收）。
   document.addEventListener("click", (e) => {
     if (!tagTipEl || tagTipEl.classList.contains("hidden")) { return; }
@@ -13554,6 +13597,7 @@
     if (st.redrawTimer) { clearTimeout(st.redrawTimer); st.redrawTimer = null; }
     dropRunningLine(st);   // 那条「正在跑」的定时器与耗时那只钟（见 startRunClock）一并停掉
     // 用户消息导航那两只观察者：不放掉的话，关掉的会话那块窗格一直被它们按着（见 attachUserRail）
+    if (railListOwner === st) { hideRailList(); }
     if (st.railTimer) { clearTimeout(st.railTimer); st.railTimer = 0; }
     if (st.railBuildRaf) { cancelAnimationFrame(st.railBuildRaf); st.railBuildRaf = 0; }
     if (st.railCurRaf) { cancelAnimationFrame(st.railCurRaf); st.railCurRaf = 0; }

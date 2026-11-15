@@ -4,8 +4,9 @@
  *
  * 真让模型攒出几十轮对话不好凑，这里直接往页面里投假消息（跟后端推的是同一种消息）；一次验：
  *   · 条数与位置：一句一根，第 1 根在最上头、最后一条在最下头，中间等分；条数多了整列挤紧；
- *   · 停上去出一行字（那条消息的开头），字在导航条左边、不出屏幕；
- *   · 点一根：那一条滚到窗格顶上、闪一下底色；
+ *   · 停上去在它左边弹出整张清单：你发过的每一句一行（开头那几个字，一行放不下的省略），
+ *     正读着的那一行蓝着；沿着这一条上下挑，清单里对应那行跟着亮；鼠标走开就收起来；
+ *   · 点清单里一行 / 直接点一根：那一条滚到窗格顶上、闪一下底色；
  *   · 往回滚：亮着的是「正读着的那一条」；贴底时永远亮最后一根；
  *   · 空会话、只有一条用户消息：整条不出现，而且那一条不挡消息流右边的鼠标；
  *   · 三十句：整列挤紧、铺满这一条；点最上面那根回到第一句；
@@ -105,6 +106,32 @@ module.exports = async (page) => {
         const r = t.getBoundingClientRect();
         return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
     `);
+    /** 清单里第 i 行在屏幕上的位置。 */
+    const rowAt = (i) => page.eval(`
+        const list = document.querySelector(".session-view .rail-list");
+        const row = list && list.querySelectorAll(".rail-row")[${i}];
+        if (!row) { return null; }
+        const r = row.getBoundingClientRect();
+        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    `);
+    /** 清单此刻的样子：开着没、几行、各行写的字、哪行亮着、哪行是“正读着的那一句”、出没出屏。 */
+    const listNow = () => page.eval(`
+        const list = document.querySelector(".session-view .rail-list");
+        const rail = document.querySelector(".session-view .user-rail");
+        if (!list || list.classList.contains("hidden")) { return { shown: false }; }
+        const rows = Array.from(list.querySelectorAll(".rail-row"));
+        const b = list.getBoundingClientRect();
+        return {
+            shown: true,
+            n: rows.length,
+            texts: rows.map((r) => r.querySelector(".rr-text").textContent),
+            hovered: rows.findIndex((r) => r.classList.contains("hover")),
+            current: rows.findIndex((r) => r.classList.contains("current")),
+            left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top), bottom: Math.round(b.bottom),
+            railLeft: Math.round(rail.getBoundingClientRect().left),
+            vh: window.innerHeight, vw: window.innerWidth,
+        };
+    `);
     const show = (s) => "根数=" + s.n + " 间距=" + s.gap + " 第一根=" + s.first + " 最后一根=" + s.last + " 亮着=" + s.current;
 
     // ---- 第一幕：九句话：一句一根，整列居中（每根之间最松 26 像素） ----
@@ -120,36 +147,42 @@ module.exports = async (page) => {
     if (s.current !== 8) { problems.push("贴着底的时候该亮最后一根，实际亮第 " + (s.current + 1) + " 根"); }
     await page.shot("rail-1-overview.png");
 
-    // ---- 第二幕：停在第五根上：左边出一行字 ----
+    // ---- 第二幕：停到这一条上：左边弹出整张清单（你发过的每一句一行） ----
     const mid = await tickAt(4);
     await move(mid.x, mid.y);
     await page.sleep(300);
-    const tip = await page.eval(`
-        const el = document.querySelector(".rail-tip");
-        const rail = document.querySelector(".session-view .user-rail");
-        if (!el || el.classList.contains("hidden")) { return { shown: false }; }
-        const b = el.getBoundingClientRect();
-        return { shown: true, text: el.textContent, left: Math.round(b.left), right: Math.round(b.right), railLeft: Math.round(rail.getBoundingClientRect().left), top: Math.round(b.top) };
-    `);
-    console.log("\n第二幕（停在第五根上）：\n  出了一行字=" + tip.shown + " 写的=" + JSON.stringify(tip.text));
-    if (!tip.shown) { problems.push("停在那一根上没出那行字"); }
-    if (tip.shown && !tip.text.startsWith("把")) { problems.push("那行字不是那一条消息的开头：" + JSON.stringify(tip.text)); }
-    if (tip.shown && tip.right > tip.railLeft + 1) { problems.push("那行字压到导航条上了：右 " + tip.right + " > 条左 " + tip.railLeft); }
-    if (tip.shown && tip.left < 4) { problems.push("那行字出屏幕了：左 " + tip.left); }
-    await page.shot("rail-2-tip.png");
+    const list = await listNow();
+    console.log("\n第二幕（停到第五根上）：\n  清单开着=" + list.shown + " 行数=" + list.n
+        + " 亮着第 " + (list.hovered + 1) + " 行、正读着第 " + (list.current + 1) + " 行"
+        + "\n  第一行=" + JSON.stringify(list.texts && list.texts[0])
+        + "\n  第五行=" + JSON.stringify(list.texts && list.texts[4]));
+    if (!list.shown) { problems.push("停到这一条上没弹出清单"); }
+    if (list.shown && list.n !== 9) { problems.push("清单里该是九行，实际 " + list.n + " 行"); }
+    if (list.shown && !list.texts[0].startsWith("消息流右边")) { problems.push("第一行不是第一句的开头：" + JSON.stringify(list.texts[0])); }
+    if (list.shown && !list.texts[4].startsWith("把我这几句话")) { problems.push("第五行不是第五句的开头：" + JSON.stringify(list.texts[4])); }
+    if (list.shown && list.hovered !== 4) { problems.push("鼠标停在第 5 根，该亮第 5 行，实际第 " + (list.hovered + 1) + " 行"); }
+    if (list.shown && list.current !== 8) { problems.push("贴着底时「正读着」该是最后一行，实际第 " + (list.current + 1) + " 行"); }
+    if (list.shown && list.right > list.railLeft + 1) { problems.push("清单压到导航条上了：右 " + list.right + " > 条左 " + list.railLeft); }
+    if (list.shown && list.left < 4) { problems.push("清单出屏幕了：左 " + list.left); }
+    if (list.shown && (list.top < 0 || list.bottom > list.vh)) { problems.push("清单上下一头出屏幕了：上 " + list.top + "、下 " + list.bottom + "、屏高 " + list.vh); }
+    await page.shot("rail-2-list.png");
 
-    // ---- 第三幕：点这一根：那一条滚到窗格顶上，闪一下底色 ----
-    await clickAt(mid.x, mid.y);
+    // ---- 第三幕：点清单里的第五行：那一条滚到窗格顶上，闪一下底色，清单收起来 ----
+    const row4 = await rowAt(4);
+    await clickAt(row4.x, row4.y);
     await page.sleep(140);
     const jumped = await topUser();
     const flashing = await page.eval(`
         const el = document.querySelector(".session-view .session-pane .msg.user.msg-flash");
         return el ? (el.dataset.raw || "").slice(0, 10) : "";
     `);
-    console.log("\n第三幕（点第五根）：\n  顶上这条是第 " + (jumped.idx + 1) + " 句（离窗格顶 " + jumped.at + " 像素）在闪=" + JSON.stringify(flashing));
-    if (jumped.idx !== 4) { problems.push("点第五根该跳到第五句，实际顶上这条是第 " + (jumped.idx + 1) + " 句"); }
+    const afterClick = await listNow();
+    console.log("\n第三幕（点清单第五行）：\n  顶上这条是第 " + (jumped.idx + 1) + " 句（离窗格顶 " + jumped.at + " 像素）在闪=" + JSON.stringify(flashing)
+        + " 清单还开着=" + afterClick.shown);
+    if (jumped.idx !== 4) { problems.push("点第五行该跳到第五句，实际顶上这条是第 " + (jumped.idx + 1) + " 句"); }
     if (jumped.at < 0 || jumped.at > 20) { problems.push("跳过去之后那条没贴到窗格顶上，离着 " + jumped.at + " 像素"); }
     if (!flashing.startsWith("把")) { problems.push("跳过去的那条没在闪：" + JSON.stringify(flashing)); }
+    if (afterClick.shown) { problems.push("点完一行清单该收起来"); }
     await page.shot("rail-3-jumped.png");
     await page.sleep(1500);
 
@@ -207,20 +240,27 @@ module.exports = async (page) => {
     if (!cleared.empty || cleared.n) { problems.push("清空之后导航条该收着"); }
     if (s.n !== 9) { problems.push("重放完该还是九根，实际 " + s.n + " 根"); }
 
-    // ---- 第八幕：从那行字跟着鼠标换（停在别的一根上，写的就是那一条的开头） ----
+    // ---- 第八幕：沿着这一条上下挑：清单里对应那行跟着亮；鼠标走开就收起来 ----
+    //（鼠标沿着导航条挪时清单是开着的：先停第一根，再停第九根，亮的行跟着换）
     const first2 = await tickAt(0);
     await move(first2.x, first2.y);
     await page.sleep(250);
-    const tipA = await page.eval(`const el = document.querySelector(".rail-tip"); return el && !el.classList.contains("hidden") ? el.textContent : "（收着）";`);
+    const hoverA = await listNow();
     const last2 = await tickAt(8);
     await move(last2.x, last2.y);
     await page.sleep(250);
-    const tipB = await page.eval(`const el = document.querySelector(".rail-tip"); return el && !el.classList.contains("hidden") ? el.textContent : "（收着）";`);
-    console.log("\n第八幕（从那行字跟着鼠标换）：\n  停第一根：" + JSON.stringify(tipA) + "\n  再停第九根：" + JSON.stringify(tipB));
-    if (!tipA.startsWith("消息流右边") || !tipB.startsWith("最后一句")) {
-        problems.push("从那行字没跟着换：第一根 " + JSON.stringify(tipA) + "、第九根 " + JSON.stringify(tipB));
-    }
-    await page.shot("rail-8-tip-moved.png");
+    const hoverB = await listNow();
+    console.log("\n第八幕（沿着这一条挪）：\n  停第一根：亮第 " + (hoverA.hovered + 1) + " 行（" + JSON.stringify(hoverA.texts && hoverA.texts[0]) + "）"
+        + "\n  再停第九根：亮第 " + (hoverB.hovered + 1) + " 行（" + JSON.stringify(hoverB.texts && hoverB.texts[8]) + "）");
+    if (!hoverA.shown || hoverA.hovered !== 0) { problems.push("停第一根时该亮第一行，实际 " + (hoverA.shown ? hoverA.hovered + 1 : "清单没开") + " 行"); }
+    if (!hoverB.shown || hoverB.hovered !== 8) { problems.push("停第九根时该亮第九行，实际 " + (hoverB.shown ? hoverB.hovered + 1 : "清单没开") + " 行"); }
+    if (hoverB.shown && !hoverB.texts[8].startsWith("最后一句")) { problems.push("第九行不是最后一句的开头：" + JSON.stringify(hoverB.texts[8])); }
+    await page.shot("rail-8-hover-row.png");
+    await move(20, 20);   // 鼠标离开这一条
+    await page.sleep(250);
+    const left = await listNow();
+    console.log("  鼠标走开：清单还开着=" + left.shown);
+    if (left.shown) { problems.push("鼠标走开后清单该收起来"); }
 
     // ---- 第九幕：画的那一下还没排上版（量出来 0 高）：露出来以后它该自己补画 ----
     await feed(9);
