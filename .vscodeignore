@@ -24,3 +24,13 @@ build.bat
 .github/**
 dev/**
 AGENTS.md
+
+# 安卓 app：源码、自己的 gradle 缓存、编出来的 APK 都不进插件包
+# （少了这一条，gradle 的锁文件会让 vsce 打包直接报 EBUSY）
+android/**
+
+# exe 的产物
+dist/**
+
+# 随手留在仓库根的那些会话文件
+fake-session-*.jsonl
