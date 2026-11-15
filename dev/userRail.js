@@ -79,6 +79,7 @@ module.exports = async (page) => {
             first: ticks.length ? rel(ticks[0]) : 0,
             last: ticks.length ? rel(ticks[ticks.length - 1]) : 0,
             current,
+            tickVis: ticks.length ? getComputedStyle(ticks[0]).visibility : "",
         };
     `);
     /** 窗格顶上第一条露出来的用户消息是第几条（0 起）与它离窗格顶多远。 */
@@ -165,6 +166,10 @@ module.exports = async (page) => {
     if (list.shown && list.right > list.railLeft + 1) { problems.push("清单压到导航条上了：右 " + list.right + " > 条左 " + list.railLeft); }
     if (list.shown && list.left < 4) { problems.push("清单出屏幕了：左 " + list.left); }
     if (list.shown && (list.top < 0 || list.bottom > list.vh)) { problems.push("清单上下一头出屏幕了：上 " + list.top + "、下 " + list.bottom + "、屏高 " + list.vh); }
+    // 清单里每行自己就有一根短杠：右边那一排短横线这会儿得藏起来（不然两头各一列一堆一模一样的短线）
+    const whileOpen = await look();
+    console.log("  清单开着时右边那一排短横线：" + whileOpen.tickVis + "（该是 hidden）");
+    if (whileOpen.tickVis !== "hidden") { problems.push("清单开着时右边那一排短横线还露着（会跟清单里那根短杠重复一份）：" + whileOpen.tickVis); }
     await page.shot("rail-2-list.png");
 
     // ---- 第三幕：点清单里的第五行：那一条滚到窗格顶上，闪一下底色，清单收起来 ----
@@ -259,8 +264,10 @@ module.exports = async (page) => {
     await move(20, 20);   // 鼠标离开这一条
     await page.sleep(250);
     const left = await listNow();
-    console.log("  鼠标走开：清单还开着=" + left.shown);
+    const afterLeave = await look();
+    console.log("  鼠标走开：清单还开着=" + left.shown + "，右边那一排短横线=" + afterLeave.tickVis);
     if (left.shown) { problems.push("鼠标走开后清单该收起来"); }
+    if (afterLeave.tickVis !== "visible") { problems.push("清单收起后右边那一排短横线该露回来：" + afterLeave.tickVis); }
 
     // ---- 第九幕：画的那一下还没排上版（量出来 0 高）：露出来以后它该自己补画 ----
     await feed(9);

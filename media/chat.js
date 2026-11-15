@@ -2435,6 +2435,8 @@
     }
     if (list.parentNode !== st.railEl) { st.railEl.appendChild(list); }
     list.classList.remove("hidden");
+    // 清单里每行自己就有一根短杠：右边那一排短横线先藏起来（见 chat.css），不要两列一样的
+    st.railEl.classList.add("open");
     railListOwner = st;
     syncRailRowCurrent(st);
     syncRailHover(st);
@@ -2446,6 +2448,7 @@
     railListOwner = null;
     if (!st) { return; }
     if (st.railListEl) { st.railListEl.classList.add("hidden"); }
+    st.railEl.classList.remove("open");
     st.railHover = -1;
     syncRailHover(st);
   }
