@@ -25,7 +25,12 @@ app 连上去就挂着，弹桌面卡片的同时会往这条流里推一条（`
    （依赖走阿里云镜像，见 settings.gradle；`gradle` 没在 PATH 里就用
    `~/.gradle/wrapper/dists/gradle-8.14-all/*/gradle-8.14/bin/gradle` 那支。）
 
+   也可以直接跑仓库根目录的 `build.bat`：它除了插件、exe，顺手把这个 APK 也打一份
+   （没装 Android SDK 的机器上会跳过这一步，不影响其它产物）。
+
    编出来的是 `app/build/outputs/apk/debug/app-debug.apk`，传到手机装上。
+   懒得传文件就在仓库根目录跑 `npm run apk`：它会自己找到编出来的 APK，打印一条手机能开的地址，
+   手机上打开那一页点一下就能下（下完 Ctrl+C 关掉）。
 2. 手机上打开 app，填后端地址（浏览器里打开的那个，比如 `192.168.1.40:1867`），点「保存并重连」。
 3. 通知栏那条常驻提示变成「已连接」就是通了。
 
