@@ -2154,6 +2154,12 @@
     border-color: var(--vscode-errorForeground, #f14c4c);
     background: color-mix(in srgb, var(--vscode-errorForeground, #f14c4c) 12%, transparent);
   }
+  /* 横条左边那颗「复制路径」（见 chat.js 的 copyTextToClipboard）：里面是字、宽度自己涨（.wide），
+     抄完换成「已复制」、过一秒多再变回来，所以那一态带一点绿灯色。 */
+  #fileCopyPath.done {
+    opacity: 1; color: var(--vscode-charts-green, #89d185);
+    border-color: currentColor;
+  }
   /* 那颗铅笔 / 存 / 放弃 只在该露面时露面（这条写了 display: flex，就得自己刷掉 [hidden]） */
   .file-bar-btn[hidden] { display: none; }
 

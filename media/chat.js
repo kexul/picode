@@ -852,6 +852,11 @@
     pane.dataset.sessionId = id;
     pane.innerHTML = '<div class="empty-hint">输入消息开始对话…</div>';
     view.appendChild(pane);
+    // 用户消息导航（消息流右边那一排短横线，见下面那一段）：挂在壳上、不进窗格 ——
+    // 整屏重画要重写窗格的内容，「加载更早」那批也是先画进暂存区，挂进窗格就会被一起抹掉
+    const rail = document.createElement("div");
+    rail.className = "user-rail empty";
+    view.appendChild(rail);
     pane.addEventListener("scroll", () => {
       if (!paneShown(pane)) { return; }
       const prevTop = st.lastScrollTop;
@@ -883,12 +888,27 @@
         // 回到贴底：往上翻的那阵子攒着没搬的几轮，现在可以搬了（见 trimLiveTurns）
         scheduleTrimLive(st);
       }
+      scheduleRailCurrent(st);   // 用户消息导航上那根「正读着的」跟着换
     });
     st = {
       id,
       title: title || "新会话",
       paneEl: pane,
       viewEl: view,
+      // 用户消息导航（右边那一排短横线）：那一层壳、上面那几根、以及它这会儿排成什么样
+      railEl: rail,
+      railMsgs: null,        // 画的那一下手上是哪些用户消息（顺序与短横线一一对应）
+      railTicks: null,
+      railGap: 0,            // 相邻两根之间几个像素
+      railTop: 0,            // 第一根离条顶几个像素
+      railTries: 0,          // 「画的时候还没排上版」补画了几回（见 railDrawLater）
+      railTimer: 0,
+      railBuildRaf: 0,
+      railCurRaf: 0,
+      railOffsets: null,     // 每条用户消息在窗格里的纵向位置（「正读着哪一条」用）
+      railScrollH: -1,       // 量这些位置时窗格多高（内容长高了就重量）
+      railCurrent: -1,
+      railHover: -1,
       // 后端给的会话元信息（sessionList 每推一次覆盖一次）
       parentId: null,
       taba: null,
@@ -1008,6 +1028,7 @@
       autoLoadHinted: false,
     };
     sessions.set(id, st);
+    attachUserRail(st);
     return st;
   }
 
@@ -1052,6 +1073,9 @@
     }
     // 重挂载会让 CSS 动画重播：剥掉历史气泡的入场动画，避免整窗“抖一下”
     st.viewEl.querySelectorAll(".msg-enter").forEach((el) => { el.classList.remove("msg-enter"); });
+    // 刚露出来的这一层这会儿才排上版：用户消息导航按真高矮重画一次
+    //（藏着的那些壳里量不出高矮，画不了，见 syncUserRail）
+    syncUserRail(st);
   }
 
   /**
@@ -7270,6 +7294,32 @@
     return base.replace(/[\\/]+$/, "") + sep + String(relPath).replace(/\//g, sep);
   }
 
+  /**
+   * 把一串字放进剪贴板：先试浏览器那个接口，它不给用（插件里那块面板、老浏览器）就退回老办法 ——
+   * 摆一块看不见的文本框选中、让浏览器抄了再撤掉。成没成回一句实话，好让那颗按钮知道要不要变勾。
+   */
+  function copyTextToClipboard(text) {
+    const legacy = () => {
+      try {
+        const box = document.createElement("textarea");
+        box.value = text;
+        box.setAttribute("readonly", "");
+        box.style.position = "fixed";
+        box.style.top = "-1000px";
+        box.style.opacity = "0";
+        document.body.appendChild(box);
+        box.select();
+        const ok = document.execCommand("copy");
+        document.body.removeChild(box);
+        return !!ok;
+      } catch { return false; }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(() => true, legacy);
+    }
+    return Promise.resolve(legacy());
+  }
+
   /** 一格标签悬停提示上的全路径：目录那一格是它现在待的那一层。 */
   function fileSidebarTabFullPath(tab) {
     if (tab.change) { return FILE_SIDEBAR_CHANGES_NAME; }
@@ -7935,6 +7985,14 @@
           : `${diffEntry.path} 回到最近一次提交（这之后的改动全都丢掉）`);
     }
     if (editing) { syncFileEditNote(fileTab); }
+    // 那颗「复制路径」：开着一份就抄这一条，开着几份就全抄（一份一行，见那颗按钮上的点击）
+    const copyPathBtn = document.getElementById("fileCopyPath");
+    if (copyPathBtn) {
+      copyPathBtn.hidden = !viewing;
+      const count = viewing ? fileSidebar.view.tabs.length : 0;
+      copyPathBtn.title = count > 1 ? `复制这 ${count} 份文件的路径` : "复制这个文件的路径";
+      copyPathBtn.setAttribute("aria-label", copyPathBtn.title);
+    }
     bar.hidden = !viewing;
     const many = viewing && fileSidebar.view.tabs.length > 1;
     if (fileSidebar.tabs) { fileSidebar.tabs.hidden = !many; }
@@ -9552,6 +9610,8 @@
           '<span class="file-bar-name"></span>' +
           // 改这个文件那颗铅笔（只在能改的代码文件上露面，见 syncFileBar / canEditFile），
           // 以及改的时候那两颗：存（Ctrl+S）与放弃（盘上变了时这两颗变成「覆盖」「用盘上的」）
+          // 它前面那颗「复制路径」是把开着的那几份的完整路径抄进剪贴板（一份一行），见 syncFileBar
+          '<button id="fileCopyPath" class="file-bar-btn wide" type="button" title="复制路径" aria-label="复制路径">复制路径</button>' +
           '<button id="fileEdit" class="file-bar-btn" type="button" title="改一下这个文件" aria-label="改一下这个文件">' + ICONS.edit + '</button>' +
           '<button id="fileSave" class="file-bar-btn" type="button" title="存到磁盘（Ctrl+S）" aria-label="存到磁盘">' + ICONS.save + '</button>' +
           '<button id="fileRevert" class="file-bar-btn" type="button" title="放弃这次改动" aria-label="放弃这次改动">' + ICONS.discard + '</button>' +
@@ -9605,6 +9665,25 @@
     stage.querySelector("#fileRevert").addEventListener("click", () => {
       const entry = viewTab();
       if (entry && entry.kind === "file" && entry.file.editing) { discardFileEdit(entry.file); }
+    });
+    // 那颗「复制路径」：开着一份就抄这一条的完整路径，开着几份就一份一行全抄进去。
+    // 抄完那颗按钮上的字换成「已复制」、过一会儿再变回来（不弹提示：这个动作没什么要解释的）
+    const copyPathBtn = stage.querySelector("#fileCopyPath");
+    let copyPathTimer = 0;
+    copyPathBtn.addEventListener("click", () => {
+      const tabs = fileSidebar.view.tabs;
+      if (tabs.length === 0) { return; }
+      const text = tabs.map((entry) => fileSidebarFullPathOf(entry.path)).join("\n");
+      copyTextToClipboard(text).then((ok) => {
+        if (!ok) { return; }
+        copyPathBtn.classList.add("done");
+        copyPathBtn.textContent = "已复制";
+        clearTimeout(copyPathTimer);
+        copyPathTimer = setTimeout(() => {
+          copyPathBtn.classList.remove("done");
+          copyPathBtn.textContent = "复制路径";
+        }, 1200);
+      });
     });
     // 看一份 diff 时那颗「回滚」：把这个文件撤到它最近一次提交的样子（见 src/gitChanges.ts）。
     // 点第一下只是把按钮变成「确定回滚」（这步会丢掉东西，得再点一下），点第二下才真发；
