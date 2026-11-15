@@ -2539,7 +2539,7 @@
     rail.addEventListener("click", (e) => {
       const row = e.target && e.target.closest ? e.target.closest(".rail-row") : null;
       const i = row ? Number(row.dataset.idx) : railIndexAt(st, e.clientY);
-      hideRailList();
+      // 点完不收起清单：鼠标还在这一条 / 清单上，还接着挑下一句（人一挪开它自己就收）
       if (Number.isFinite(i) && i >= 0) { railJumpTo(st, i); }
     });
   }

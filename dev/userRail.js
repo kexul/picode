@@ -180,7 +180,7 @@ module.exports = async (page) => {
     if (under.row !== 4) { problems.push("往左挪到的那一行该是第 5 行（指着哪行哪行就在鼠标这个高度），实际是第 " + (under.row + 1) + " 行，底下是 " + under.cls); }
     await page.shot("rail-2b-into-list.png");
 
-    // ---- 第三幕：点清单里的第五行：那一条滚到窗格顶上，闪一下底色，清单收起来 ----
+    // ---- 第三幕：点清单里的第五行：那一条滚到窗格顶上，闪一下底色，清单留着（还能接着挑下一句） ----
     await clickAt(into, mid.y);
     await page.sleep(140);
     const jumped = await topUser();
@@ -190,10 +190,12 @@ module.exports = async (page) => {
     `);
     const afterClick = await listNow();
     console.log("\n第三幕（点清单第五行）：\n  顶上这条是第 " + (jumped.idx + 1) + " 句（离窗格顶 " + jumped.at + " 像素）在闪=" + JSON.stringify(flashing)
-        + " 清单还开着=" + afterClick.shown);    if (jumped.idx !== 4) { problems.push("点第五行该跳到第五句，实际顶上这条是第 " + (jumped.idx + 1) + " 句"); }
+        + " 清单还开着=" + afterClick.shown + "，蓝着的第 " + (afterClick.current + 1) + " 行");
+    if (jumped.idx !== 4) { problems.push("点第五行该跳到第五句，实际顶上这条是第 " + (jumped.idx + 1) + " 句"); }
     if (jumped.at < 0 || jumped.at > 20) { problems.push("跳过去之后那条没贴到窗格顶上，离着 " + jumped.at + " 像素"); }
     if (!flashing.startsWith("把")) { problems.push("跳过去的那条没在闪：" + JSON.stringify(flashing)); }
-    if (afterClick.shown) { problems.push("点完一行清单该收起来"); }
+    if (!afterClick.shown) { problems.push("点完一行清单不该马上收起来（鼠标还在这一条上）"); }
+    if (afterClick.shown && afterClick.current !== 4) { problems.push("跳过去之后蓝着的该是第 5 行，实际第 " + (afterClick.current + 1) + " 行"); }
     await page.shot("rail-3-jumped.png");
     await page.sleep(1500);
 
