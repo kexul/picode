@@ -96,55 +96,53 @@
   #jumpBottom.hidden { display: none; }
   #jumpBottom svg { width: 14px; height: 14px; display: block; }
 
-  /* 用户消息导航（消息流右边那一条）：一根短横线代表用户自己发的一条消息，停上去在它左边弹出整张
-     清单（你发过的每一句一行），点一行跳到那一句。贴在消息流右边、不占对话的地方：平时淡淡的，
-     鼠标扫上去才变明显。右边留出 7px 让开窗格自己那根滚动条（6px 宽），短横线会压在文字最右边几个像素上（贴着右边的代价）。
-     淡的是那几根短线（见 .rail-tick）：这一层自己不能淡，不然弹出来的清单也跟着半透明。 */
+  /* 用户消息导航（消息流右边那一条）：你发过的每一句在上面就是一行 —— 右边一根短横线，
+     左边那句话的开头。平时只看得见右边那一列短横线；鼠标停到这一条上，字与卡片底一起淡进来，
+     点一行就跳到那一句。贴在消息流右边、不占对话的地方（右边留出 7px 让开窗格自己那根滚动条）。
+     一行就是那一根短线（照 DeepSeek 的滚动导航做的）：打开卡片只让字与底色出现，线一根都不动。 */
   .user-rail {
     position: absolute; right: 7px; top: 8px; bottom: 52px; width: 14px; z-index: 15;
   }
   /* 空会话、只有一条用户消息：不露面，也不许它挡住消息流右边那一条的鼠标 */
   .user-rail.empty { pointer-events: none; }
-  .rail-tick {
-    position: absolute; right: 0; width: 10px; height: 2px; border-radius: 1px;
+  /* 卡片底：盖住整列行（上下左右由 chat.js 按行算），鼠标进了这一条才淡出来 */
+  .rail-bg {
+    position: absolute; right: 0; width: 248px; border-radius: 12px;
+    border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-panel-border, rgba(128,128,128,0.35)));
+    background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, #252526));
+    box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+    opacity: 0; pointer-events: none; transition: opacity 120ms ease;
+  }
+  /* 开着的时候卡片底也接鼠标：鼠标落在卡片边上那 8 像素里不算“离开”（不算的话卡片会一闪就收） */
+  .user-rail.open .rail-bg { opacity: 1; pointer-events: auto; }
+  /* 一行 = 右边那根短横线 + 左边那句话的开头。平时只有线：字是透明的、也不接鼠标
+     （不然一片看不见的字会把消息流右边挡住），鼠标进了这一条才把字淡进来 —— 行本身一个像素都不动。 */
+  .rail-row {
+    position: absolute; right: 8px; width: 232px;
+    display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+    pointer-events: none; cursor: pointer; overflow: hidden;
+  }
+  .user-rail.open .rail-row { pointer-events: auto; }
+  .rail-row .rr-text {
+    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-family: var(--vscode-font-family); font-size: 0.85em; line-height: 1.15;
+    color: var(--vscode-descriptionForeground, #999);
+    opacity: 0; transition: opacity 100ms ease, color 120ms ease;
+  }
+  .user-rail.open .rail-row .rr-text { opacity: 1; }
+  .rail-row .rr-dash {
+    flex: none; width: 8px; height: 2px; border-radius: 1px;
     background: var(--vscode-foreground); opacity: 0.45;
     transition: width 100ms ease, background-color 100ms ease, opacity 120ms ease;
   }
-  .user-rail:hover .rail-tick { opacity: 0.75; }
-  /* 鼠标停着的那一根 / 正读着的那一条：长一截、换色 */
-  .rail-tick.hover { width: 14px; opacity: 1; background: var(--vscode-focusBorder, #007acc); }
-  .rail-tick.current { width: 14px; opacity: 1; background: var(--vscode-textLink-foreground, #3794ff); }
+  .user-rail:hover .rail-row .rr-dash { opacity: 0.75; }
+  /* 鼠标停着的那一行 / 正读着的那一条：长一截、换色 */
+  .rail-row:hover .rr-text { color: var(--vscode-foreground, #ccc); }
+  .rail-row:hover .rr-dash { width: 12px; opacity: 1; background: var(--vscode-focusBorder, #007acc); }
+  .rail-row.current .rr-text { color: var(--vscode-textLink-foreground, #3794ff); }
+  .rail-row.current .rr-dash { width: 12px; opacity: 1; background: var(--vscode-textLink-foreground, #3794ff); }
   /* 手机上不要这一条：屏窄，它正压在正文最右边那几个字上，手指也点不准一根两像素高的线 */
   @media (hover: none) and (pointer: coarse) { .user-rail { display: none; } }
-  /* 停上去弹出来的清单：紧贴着导航条左边（不留缝 —— 中间空一截的话，鼠标往左一挑就落到那个缝里，
-     清单当场收起来，根本点不到），上下位置由 chat.js 跟着鼠标算（指着的那一行就在鼠标那个高度上）。
-     一行一句 —— 开头几个字，一行放不下就在行尾省掉；右边跟着一根短杠，正读着的那一句蓝字、蓝杠长一截。 */
-  .rail-list {
-    position: absolute; right: 100%; top: 0;
-    min-width: 180px; max-width: 320px; max-height: 60vh; overflow-y: auto; overscroll-behavior: contain;
-    padding: 6px; border-radius: 10px;
-    border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-panel-border, rgba(128,128,128,0.35)));
-    background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, #252526));
-    color: var(--vscode-descriptionForeground, #999);
-    box-shadow: 0 6px 20px rgba(0,0,0,0.35);
-    font-family: var(--vscode-font-family); font-size: 0.85em;
-  }
-  .rail-list.hidden { display: none; }
-  .rail-row {
-    display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-radius: 6px;
-    cursor: pointer; white-space: nowrap;
-  }
-  .rail-row .rr-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .rail-row .rr-dash { flex: none; width: 10px; height: 2px; border-radius: 1px; background: currentColor; opacity: 0.45; }
-  /* 亮着的那一行：沿着导航条挑时是「鼠标那个高度上那一行」，鼠标已经进清单之后就是手指底下那一行 */
-  .rail-row.hover,
-  .rail-row:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.12)); color: var(--vscode-foreground, #ccc); }
-  .rail-row.current { color: var(--vscode-textLink-foreground, #3794ff); }
-  .rail-row.current .rr-dash { opacity: 1; width: 14px; }
-  /* 清单开着的时候把右边那一排短横线藏起来：清单里每行自己就有一根短杠，
-     两头都露着就是两列一模一样的短线（看着像重了一份）。用 visibility 而不是 opacity：
-     上头的 .hover / .current 那两条只改 opacity，不会把它又露出来。 */
-  .user-rail.open .rail-tick { visibility: hidden; }
   /* 跳过去的那一条闪一下底色（才知道跳到哪儿了）。底色从高亮回到用户气泡本来的那个色。 */
   .msg.user.msg-flash { animation: msg-flash 1.3s ease-out; }
   @keyframes msg-flash {

@@ -900,10 +900,10 @@
       viewEl: view,
       // 用户消息导航（右边那一排短横线）：那一层壳、上面那几根、以及它这会儿排成什么样
       railEl: rail,
-      railMsgs: null,        // 画的那一下手上是哪些用户消息（顺序与短横线一一对应）
-      railTicks: null,
-      railGap: 0,            // 相邻两根之间几个像素
-      railTop: 0,            // 第一根离条顶几个像素
+      railMsgs: null,        // 画的那一下手上是哪些用户消息（顺序与行一一对应）
+      railRows: null,        // 每一行（行里就是那句话 + 右边一根短线）
+      railGap: 0,            // 相邻两行之间几个像素（也是行高）
+      railTop: 0,            // 第一行离条顶几个像素
       railTries: 0,          // 「画的时候还没排上版」补画了几回（见 railDrawLater）
       railTimer: 0,
       railBuildRaf: 0,
@@ -911,7 +911,6 @@
       railOffsets: null,     // 每条用户消息在窗格里的纵向位置（「正读着哪一条」用）
       railScrollH: -1,       // 量这些位置时窗格多高（内容长高了就重量）
       railCurrent: -1,
-      railHover: -1,
       // 后端给的会话元信息（sessionList 每推一次覆盖一次）
       parentId: null,
       taba: null,
@@ -2196,23 +2195,30 @@
   }
 
   // ==================== 用户消息导航 ====================
-  // 消息流右边一条细导航：一根短横线代表用户自己发的一条消息（按先后等分排下来，整列上下居中；
-  // 条数多了就挤紧、铺满这一条）。鼠标停上去，在它左边弹出整张清单 —— 你发过的每一句一行
-  // （开头那几个字，一行放不下的省略）；沿着那一条上下挑，清单里对应那行跟着亮；
-  // 点一行（或者直接点那一根）就跳到那一条。正读着的那一行蓝着。
-  // 空会话、只有一条用户消息时整条不出现（一条线孤零零的没意义）。
+  // 消息流右边一条细导航：你发过的每一句在上面就是一行 —— 右边一根短横线，左边那句话的开头。
+  // 平时只看得见右边那一列短横线；鼠标停到这一条上，左边的字连着卡片底一起淡进来；
+  // 点一行（或者直接点那一根）就跳到那一句。正读着的那一行蓝着，那根短线也蓝、长一截。
+  // 空会话、只有一条用户消息时整条不出现（一行孤零零的没意义）。
+  //
+  // 为什么“一行就是那一根短横线”（跟 DeepSeek 网页版的滚动导航一个做法）：它每一项就是
+  // 标题 + 右边一根短杠，标题平时 opacity:0，鼠标进了导航才淡进来 —— 打开卡片只是让字和底色
+  // 出现，短线一根都不动。换成“一排短线 + 一张另画的清单”，打开时两列线对不齐，看着就是整列跳了一下。
+  //
+  // 还有一件：文字是有宽度的（232 像素），平时看不见但也占着那一片 —— 所以平时给行
+  // pointer-events:none，别让看不见的东西挡住消息流；开着卡片（.open）才接鼠标，
+  // 鼠标从短线往左挪进字里不算“离开”，卡片不会一碰就收。
   //
   // 只在电脑上露面：手机屏幕窄，这一条正好压在正文最右边那几个字上；手指也点不准一根
   // 两像素高的线。触屏那一路（.user-rail 那条 @media，见 chat.css）直接就看不见。
   //
   // 为什么挂在会话壳（.session-view）上、不挂进消息窗格：整屏重画要重写窗格的内容
   // （pane.innerHTML），「加载更早」那批消息也是先渲染进暂存区 —— 挂进窗格就会被一起抹掉。
-  // 每一根的位置只按窗格的高矮算（不读每条消息的量）：所以条数变了重画也不贵。
-  const RAIL_SPREAD_MAX = 26;      // 相邻两根之间最松留几个像素：再宽就整列居中，不把一列散满整屏
-  const RAIL_ROW_CHARS = 200;      // 清单里一行放多少字（再多也看不见：一行放不下就省略号，见 chat.css）
+  // 每一行的位置只按窗格的高矮算（不读每条消息的量）：所以条数变了重画也不贵。
+  const RAIL_SPREAD_MAX = 26;      // 相邻两行之间最松 26 像素：再多就整列居中，不把一列散满整屏
+  const RAIL_ROW_CHARS = 200;      // 行里放多少字（再多也看不见：一行放不下就省略号，见 chat.css）
+  const RAIL_CARD_PAD = 8;         // 卡片底比那列行四周各多出几个像素
   let railObserver = null;         // 那一块地方高矮变了（拖窗口的边、输入框长高、从藏着的壳露出来）
   let railMutant = null;           // 窗格里的东西变了（来了消息 / 重画 / 「加载更早」补进来 / 搬走几轮）
-  let railListOwner = null;        // 这会儿开着清单的是哪个会话（关掉时要把它那几根的高亮一并收掉）
 
   /**
    * 一个会话现在的用户消息节点（按消息流里的先后顺序）。
@@ -2237,11 +2243,11 @@
     // 不在看的会话（壳盖着 .off）、往「加载更早」的暂存区里画的时候都不画：那时候量不出高矮
     if (!paneShown(st.paneEl) || isStageRender(st)) { return; }
     const msgs = railMessages(st);
-    if (msgs.length < 2) {   // 一根短横线不成一条路：不露面，也不许它挡住右边那一条的鼠标
+    if (msgs.length < 2) {   // 一行不成一条路：不露面，也不许它挡住右边那一条的鼠标
       rail.classList.add("empty");
+      rail.classList.remove("open");
       rail.textContent = "";
-      st.railMsgs = null; st.railTicks = null; st.railCurrent = -1;
-      hideRailList();
+      st.railMsgs = null; st.railRows = null; st.railCurrent = -1;
       return;
     }
     // 这一条现在有多高就现量：刚挂上页面那一会儿量出来是 0（还没排上版），
@@ -2249,7 +2255,7 @@
     const height = rail.clientHeight;
     if (height <= 0) { railDrawLater(st); return; }
     // 条数与节点都没变（吐字、工具行往下长也会走到这儿）：一帧只比一下，不重画
-    if (st.railMsgs && st.railMsgs.length === msgs.length && st.railTicks && st.railTicks.length === msgs.length
+    if (st.railMsgs && st.railRows && st.railMsgs.length === msgs.length
       && st.railMsgs.every((el, i) => el === msgs[i])) {
       st.railTries = 0;
       syncRailCurrent(st);
@@ -2257,25 +2263,52 @@
     }
     st.railTries = 0;
     const n = msgs.length;
-    const gap = Math.min(height / (n - 1), RAIL_SPREAD_MAX);
+    const gap = Math.min(height / (n - 1), RAIL_SPREAD_MAX);   // 也是行高：行与行正好挨着，不漏缝
     const top = (height - gap * (n - 1)) / 2;   // 没铺满时整列居中（条数少才有富余）
-    const frag = document.createDocumentFragment();
-    const ticks = [];
-    for (let i = 0; i < n; i++) {
-      const tick = document.createElement("span");
-      tick.className = "rail-tick";
-      tick.style.top = Math.round(top + gap * i) + "px";
-      frag.appendChild(tick);
-      ticks.push(tick);
-    }
     rail.classList.remove("empty");
+    rail.classList.remove("open");
     rail.textContent = "";
-    rail.appendChild(frag);
-    st.railMsgs = msgs; st.railTicks = ticks; st.railGap = gap; st.railTop = top;
-    st.railCurrent = -1; st.railHover = -1;
-    hideRailList();   // 条数变了：旧清单上那些行对不上号了，收起来，下次停上去重摆
+    // 卡片底：把那列行整个包起来，四周各多留 RAIL_CARD_PAD（上下夹在这一条里）
+    const cardTop = Math.max(0, Math.round(top - gap / 2) - RAIL_CARD_PAD);
+    const cardBottom = Math.min(height, Math.round(top + gap * (n - 1) + gap / 2) + RAIL_CARD_PAD);
+    const bg = document.createElement("div");
+    bg.className = "rail-bg";
+    bg.style.top = cardTop + "px";
+    bg.style.height = Math.max(0, cardBottom - cardTop) + "px";
+    rail.appendChild(bg);
+    const rows = [];
+    for (let i = 0; i < n; i++) {
+      const row = document.createElement("div");
+      row.className = "rail-row";
+      row.dataset.idx = String(i);
+      row.style.top = Math.round(top + gap * i - gap / 2) + "px";
+      row.style.height = Math.round(gap) + "px";
+      const text = document.createElement("span");
+      text.className = "rr-text";
+      const dash = document.createElement("span");
+      dash.className = "rr-dash";
+      row.appendChild(text);
+      row.appendChild(dash);
+      rail.appendChild(row);
+      rows.push(row);
+    }
+    st.railMsgs = msgs; st.railRows = rows;
+    st.railGap = gap; st.railTop = top;
+    st.railCurrent = -1;
+    fillRailRows(st);
     cacheRailOffsets(st);
     syncRailCurrent(st);
+  }
+
+  /** 每一行写那句消息的开头（开卡片时再补一次：重放里同一条消息的文字可能变了）。 */
+  function fillRailRows(st) {
+    const msgs = st.railMsgs || [];
+    const rows = st.railRows || [];
+    for (let i = 0; i < rows.length; i++) {
+      const text = rows[i].firstElementChild;
+      const want = railRowText(msgs[i]);
+      if (text && text.textContent !== want) { text.textContent = want; }
+    }
   }
 
   /** 一帧只重画一次（整屏重画是几百条消息一条条落进来的）。 */
@@ -2307,9 +2340,9 @@
 
   /** 正读着的那一条：窗格最上头露出来的那条用户消息；贴着底时永远算最后一条。 */
   function railCurrentIndex(st) {
-    const ticks = st.railTicks;
-    if (!ticks || !ticks.length) { return -1; }
-    if (st.stickToBottom) { return ticks.length - 1; }
+    const rows = st.railRows;
+    if (!rows || !rows.length) { return -1; }
+    if (st.stickToBottom) { return rows.length - 1; }
     const offs = st.railOffsets;
     if (!offs || !offs.length) { return -1; }
     const top = st.paneEl.scrollTop + 12;   // 一点余量：刚露出个边也算它
@@ -2321,37 +2354,36 @@
     return best;
   }
 
-  /** 把「正读着的那一条」那根点亮（条数没变就不重量位置，只比一比缓存里的数）。 */
+  /** 把「正读着的那一条」那一行点亮（条数没变就不重量位置，只比一比缓存里的数）。 */
   function syncRailCurrent(st) {
-    const ticks = st.railTicks;
-    if (!ticks || !ticks.length) { return; }
+    const rows = st.railRows;
+    if (!rows || !rows.length) { return; }
     // 内容长高 / 矮了（图片来了、正文还在往外吐、高亮重排）：缓存的位置对不上了，重量一次
     if (!st.stickToBottom && st.railScrollH !== st.paneEl.scrollHeight) { cacheRailOffsets(st); }
     const idx = railCurrentIndex(st);
     if (idx === st.railCurrent) { return; }
     st.railCurrent = idx;
-    ticks.forEach((tick, i) => tick.classList.toggle("current", i === idx));
-    syncRailRowCurrent(st);   // 清单开着的话，那一行也跟着换
+    rows.forEach((row, i) => row.classList.toggle("current", i === idx));
   }
 
   /** 滚动事件里调：一帧最多算一次。 */
   function scheduleRailCurrent(st) {
-    if (!st || st.railCurRaf || !st.railTicks) { return; }
+    if (!st || st.railCurRaf || !st.railRows) { return; }
     st.railCurRaf = requestAnimationFrame(() => { st.railCurRaf = 0; syncRailCurrent(st); });
   }
 
-  /** 鼠标落在哪一根上：按上一次画出来的格子算，离哪根近就算哪根（挤得再密也点得中）。 */
+  /** 鼠标落在哪一行上：按上一次画出来的格子算，离哪行近就算哪行（挤得再密也点得中）。 */
   function railIndexAt(st, clientY) {
-    const ticks = st.railTicks;
-    if (!ticks || !ticks.length) { return -1; }
+    const rows = st.railRows;
+    if (!rows || !rows.length) { return -1; }
     const gap = st.railGap || 0;
-    if (ticks.length === 1 || gap <= 0) { return 0; }
+    if (rows.length === 1 || gap <= 0) { return 0; }
     const y = clientY - st.railEl.getBoundingClientRect().top;
     const i = Math.round((y - st.railTop) / gap);
-    return Math.max(0, Math.min(ticks.length - 1, i));
+    return Math.max(0, Math.min(rows.length - 1, i));
   }
 
-  /** 点了一根短横线：那一条用户消息滚到窗格顶上，闪一下底色（好认跳到了哪儿）。 */
+  /** 点了一行：那一条用户消息滚到窗格顶上，闪一下底色（好认跳到了哪儿）。 */
   function railJumpTo(st, i) {
     const el = (st.railMsgs || [])[i];
     if (!el || !el.isConnected) { return; }
@@ -2363,7 +2395,7 @@
     syncRailCurrent(st);
   }
 
-  /** 跳过去的那一条闪一下底色（连着点同一根也再闪一次）。 */
+  /** 跳过去的那一条闪一下底色（连着点同一行也再闪一次）。 */
   function flashMessage(el) {
     el.classList.remove("msg-flash");
     void el.offsetWidth;   // 逼一次重排：去掉再加同一个类，动画不会重放
@@ -2380,117 +2412,28 @@
     return one.length > RAIL_ROW_CHARS ? one.slice(0, RAIL_ROW_CHARS) : one;
   }
 
-  /** 清单这会儿开着的话，那几行节点（没开就是 null）。 */
-  function railRows(st) {
-    const list = st.railListEl;
-    if (!list || list.classList.contains("hidden")) { return null; }
-    return list.children;
-  }
-
-  /** 把「正读着的那一句」那一行点亮（跟短横线用同一个号）。 */
-  function syncRailRowCurrent(st) {
-    const rows = railRows(st);
-    if (!rows) { return; }
-    for (let i = 0; i < rows.length; i++) { rows[i].classList.toggle("current", i === st.railCurrent); }
-  }
-
-  /** 鼠标停在哪一根上：那一根与清单里对应那一行一起亮。 */
-  function syncRailHover(st) {
-    if (st.railTicks) { st.railTicks.forEach((tick, k) => tick.classList.toggle("hover", k === st.railHover)); }
-    const rows = railRows(st);
-    if (!rows) { return; }
-    for (let i = 0; i < rows.length; i++) { rows[i].classList.toggle("hover", i === st.railHover); }
-  }
-
   /**
-   * 鼠标停到导航条上：在它左边弹出整张清单 —— 你发过的每一句一行（开头那几个字，一行放不下的省略），
-   * 正读着的那一行蓝着。点一行就跳到那一句。
-   * 清单挂在导航条里面（贴着它左边）：这样鼠标从短横线挪到清单上不算“离开”，清单不会一碰就收。
+   * 鼠标进了这一条：把字与卡片底淡进来（行本身不动，见上面那段注释）。
+   * 行是一直摆在那儿的，这儿只补一遍字（重放里同一条消息的文字可能变了）。
    */
   function showRailList(st) {
-    const msgs = st.railMsgs || [];
-    if (!msgs.length) { return; }
-    let list = st.railListEl;
-    if (!list) {
-      list = document.createElement("div");
-      list.className = "rail-list hidden";
-      st.railListEl = list;
-    }
-    // 行数对不上（第一次开 / 中间又发了一句）就整张重摆；对得上就只改亮着的那一行
-    if (list.childElementCount !== msgs.length) {
-      list.textContent = "";
-      for (let i = 0; i < msgs.length; i++) {
-        const row = document.createElement("div");
-        row.className = "rail-row";
-        row.dataset.idx = String(i);
-        const text = document.createElement("span");
-        text.className = "rr-text";
-        text.textContent = railRowText(msgs[i]);
-        const dash = document.createElement("span");
-        dash.className = "rr-dash";
-        row.appendChild(text);
-        row.appendChild(dash);
-        list.appendChild(row);
-      }
-    }
-    if (list.parentNode !== st.railEl) { st.railEl.appendChild(list); }
-    list.classList.remove("hidden");
-    // 清单里每行自己就有一根短杠：右边那一排短横线先藏起来（见 chat.css），不要两列一样的
+    if (!st.railRows || !st.railRows.length) { return; }
+    fillRailRows(st);
     st.railEl.classList.add("open");
-    railListOwner = st;
-    st.railMetrics = null;   // 刚摆出来 / 刚重摆：行高与高度重新量（见 placeRailList）
-    syncRailRowCurrent(st);
-    syncRailHover(st);
+    syncRailCurrent(st);
+  }
+
+  /** 收起来（鼠标离开这一条、会话换了一批消息）。 */
+  function hideRailList(st) {
+    if (st && st.railEl) { st.railEl.classList.remove("open"); }
   }
 
   /**
-   * 清单摆在哪儿：让鼠标指着的那一行正好落在鼠标那个高度上（一行一句，高度都一样），
-   * 再上下夹一下别出屏幕。
-   *
-   * 为什么非得跟着鼠标走：清单紧贴着导航条左边，鼠标从那一竖条往左一挑就进清单；
-   * 若清单是“整列上下居中”的，指着最上头那根时清单其实在屏幕中间，往左一挑就落到空白处（
-   * 那一下算离开导航条，清单当场收了，根本点不到）。现在指着哪一行，哪一行就在鼠标这个高度，
-   * 往左横着一挪就落在它上面。
-   */
-  function placeRailList(st, clientY) {
-    const list = st.railListEl;
-    const rows = list && list.children;
-    if (!rows || !rows.length) { return; }
-    let m = st.railMetrics;
-    if (!m) {
-      // 行高与“第一行在清单里多高”只量一次：鼠标在这条上来回挑的时候不能每次都读版面（那是逼重排）
-      const first = rows[0].offsetTop;
-      const rowH = rows.length > 1 ? rows[1].offsetTop - first : rows[0].offsetHeight;
-      m = st.railMetrics = { first, rowH, height: list.offsetHeight };
-    }
-    const i = Math.max(0, Math.min(rows.length - 1, st.railHover));
-    const railTop = st.railEl.getBoundingClientRect().top;
-    // 那一行的正中对着鼠标：清单顶边该在哪儿（换成导航条里面的坐标）
-    const want = clientY - railTop - m.first - m.rowH * i - m.rowH / 2;
-    // 上下都别出屏幕（清单是挂在导航条里面的，夹范围时把导航条的位置算进去）
-    const min = 4 - railTop;
-    const max = window.innerHeight - 4 - railTop - m.height;
-    list.style.top = Math.round(Math.max(min, Math.min(want, Math.max(min, max)))) + "px";
-  }
-
-  /** 收起来（鼠标离开、点了某一根 / 某一行、会话换了一批消息）。 */
-  function hideRailList() {
-    const st = railListOwner;
-    railListOwner = null;
-    if (!st) { return; }
-    if (st.railListEl) { st.railListEl.classList.add("hidden"); }
-    st.railEl.classList.remove("open");
-    st.railHover = -1;
-    st.railMetrics = null;
-    syncRailHover(st);
-  }
-
-  /**
-   * 用户消息导航问“该画几根”的两条路：
+   * 用户消息导航问“该画几行”的两条路：
    *   · 窗格里多了一条 / 少了一条（发了一句、整屏重画、补进来一批、搬走几轮）：MutationObserver 看一眼，
    *     一帧最多重画一次。盯窗格的直接孩子就够了（用户消息就是直接孩子），不往下看；
    *     整屏重画与「加载更早」都是把节点挂进窗格，照样看得见。
-   *   · 那一块高矮变了（拖窗口的边、藏着的壳露出来、手机上转屏）：ResizeObserver 盯窗格 ——
+   *   · 那一块高矮变了（拖窗口的边、藏着的壳露出来、转屏）：ResizeObserver 盯窗格 ——
    *     壳藏起来（content-visibility: hidden）的时候窗格量出来是 0，露出来才又有高矮。
    */
   function attachUserRail(st) {
@@ -2520,26 +2463,16 @@
       st.paneEl._railSt = st;
       railMutant.observe(st.paneEl, { childList: true });
     }
-    // 停上去弹出整张清单、点一行（或直接点那一根）跳过去
-    rail.addEventListener("mousemove", (e) => {
-      if (st.railListEl && st.railListEl.contains(e.target)) {
-        // 鼠标已经在清单上了：亮哪一行交给 CSS 的 :hover，别在清单外面又亮一行
-        if (st.railHover !== -1) { st.railHover = -1; syncRailHover(st); }
-        return;
-      }
-      const i = railIndexAt(st, e.clientY);
-      if (i < 0) { return; }
-      // 一进这一条就整张弹出来（不用先对准某一根），之后沿着它上下挪只换亮着哪一行
-      if (!st.railListEl || st.railListEl.classList.contains("hidden")) { showRailList(st); }
-      if (i !== st.railHover) { st.railHover = i; syncRailHover(st); }
-      // 清单跟着鼠标上下走：指着的那一行正好在鼠标这个高度，往左一挪就落在它上面
-      placeRailList(st, e.clientY);
+    // 一进这一条就把字与卡片底淡进来（不用先对准某一行）；亮哪一行交给 CSS 的 :hover
+    rail.addEventListener("mousemove", () => {
+      if (rail.classList.contains("open")) { return; }
+      showRailList(st);
     });
-    rail.addEventListener("mouseleave", hideRailList);
+    rail.addEventListener("mouseleave", () => { hideRailList(st); });
     rail.addEventListener("click", (e) => {
       const row = e.target && e.target.closest ? e.target.closest(".rail-row") : null;
       const i = row ? Number(row.dataset.idx) : railIndexAt(st, e.clientY);
-      // 点完不收起清单：鼠标还在这一条 / 清单上，还接着挑下一句（人一挪开它自己就收）
+      // 点完不收起：鼠标还在这一条上，还接着挑下一句（人一挪开它自己就收）
       if (Number.isFinite(i) && i >= 0) { railJumpTo(st, i); }
     });
   }
@@ -13638,7 +13571,6 @@
     if (st.redrawTimer) { clearTimeout(st.redrawTimer); st.redrawTimer = null; }
     dropRunningLine(st);   // 那条「正在跑」的定时器与耗时那只钟（见 startRunClock）一并停掉
     // 用户消息导航那两只观察者：不放掉的话，关掉的会话那块窗格一直被它们按着（见 attachUserRail）
-    if (railListOwner === st) { hideRailList(); }
     if (st.railTimer) { clearTimeout(st.railTimer); st.railTimer = 0; }
     if (st.railBuildRaf) { cancelAnimationFrame(st.railBuildRaf); st.railBuildRaf = 0; }
     if (st.railCurRaf) { cancelAnimationFrame(st.railCurRaf); st.railCurRaf = 0; }
