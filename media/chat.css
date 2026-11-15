@@ -96,6 +96,44 @@
   #jumpBottom.hidden { display: none; }
   #jumpBottom svg { width: 14px; height: 14px; display: block; }
 
+  /* 用户消息导航（消息流右边那一条）：一根短横线代表用户自己发的一条消息，停上去出一行字，
+     点一下跳到那一条。贴在消息流右边、不占对话的地方；平时淡淡的，鼠标扫上去才变明显。
+     右边留出 7px 让开窗格自己那根滚动条（6px 宽），短横线会压在文字最右边几个像素上（贴着右边的代价）。 */
+  .user-rail {
+    position: absolute; right: 7px; top: 8px; bottom: 52px; width: 14px; z-index: 15;
+    opacity: 0.45; transition: opacity 120ms ease;
+  }
+  .user-rail:hover { opacity: 1; }
+  /* 空会话、只有一条用户消息：不露面，也不许它挡住消息流右边那一条的鼠标 */
+  .user-rail.empty { pointer-events: none; }
+  .rail-tick {
+    position: absolute; right: 0; width: 10px; height: 2px; border-radius: 1px;
+    background: var(--vscode-foreground); opacity: 0.75;
+    transition: width 100ms ease, background-color 100ms ease;
+  }
+  .user-rail:hover .rail-tick { opacity: 1; }
+  /* 鼠标停着的那一根 / 正读着的那一条：长一截、换色 */
+  .rail-tick.hover { width: 14px; opacity: 1; background: var(--vscode-focusBorder, #007acc); }
+  .rail-tick.current { width: 14px; opacity: 1; background: var(--vscode-textLink-foreground, #3794ff); }
+  /* 手机上不要这一条：屏窄，它正压在正文最右边那几个字上，手指也点不准一根两像素高的线 */
+  @media (hover: none) and (pointer: coarse) { .user-rail { display: none; } }
+  /* 停上去出的那行字：贴着导航条左边、跟着那一根上下居中（位置由 chat.js 算，出不了屏幕） */
+  .rail-tip {
+    position: fixed; z-index: 900; max-width: 320px; padding: 4px 8px; border-radius: 4px;
+    border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-panel-border, rgba(128,128,128,0.35)));
+    background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background, #252526));
+    color: var(--vscode-editorHoverWidget-foreground, var(--vscode-editor-foreground, inherit));
+    font-size: 0.85em; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none;
+  }
+  .rail-tip.hidden { display: none; }
+  /* 跳过去的那一条闪一下底色（才知道跳到哪儿了）。底色从高亮回到用户气泡本来的那个色。 */
+  .msg.user.msg-flash { animation: msg-flash 1.3s ease-out; }
+  @keyframes msg-flash {
+    0% { background-color: color-mix(in srgb, var(--vscode-focusBorder, #007acc) 45%, transparent); }
+    100% { background-color: color-mix(in srgb, var(--vscode-button-background) 18%, transparent); }
+  }
+
   /* 后台命令那一块（消息流最末尾，见 chat.js 的 renderBashBlock）：一条一行，就长成
      「正在跑的那一条」那样 —— 钟 + 编号 + 命令 + 一颗「停」+ 已经跑了多久（耗时靠右），
      写不完的命令折行（那几条 .tr-* 见下面「正在跑的那一条」那一节，两处共用一套）。
@@ -2154,8 +2192,9 @@
     border-color: var(--vscode-errorForeground, #f14c4c);
     background: color-mix(in srgb, var(--vscode-errorForeground, #f14c4c) 12%, transparent);
   }
-  /* 横条左边那颗「复制路径」（见 chat.js 的 copyTextToClipboard）：里面是字、宽度自己涨（.wide），
-     抄完换成「已复制」、过一秒多再变回来，所以那一态带一点绿灯色。 */
+  /* 横条最前面那颗「复制路径」（见 chat.js 的 copyTextToClipboard）：抄完那颗图标换成一颗勾、
+     过一秒多再变回来，所以「勾」这一态带一点绿灯色。 */
+  #fileCopyPath svg { width: 16px; height: 16px; display: block; }
   #fileCopyPath.done {
     opacity: 1; color: var(--vscode-charts-green, #89d185);
     border-color: currentColor;

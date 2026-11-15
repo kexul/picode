@@ -6,11 +6,11 @@
  *
  * 验的是外面看得见的行为：
  *   · 开着一份文件时那颗按钮在横条上：排在右边那堆按钮的最前面（写作名 / 标签条之后、铅笔之前），
- *     上面写着「复制路径」，悬停提示写着「复制这个文件的路径」；
+ *     上面是 VS Code 那颗「复制」图标（切了角的一张纸 + 背后错开的一张），悬停提示写着「复制这个文件的路径」；
  *   · 点它，剪贴板里就是这一份的**完整路径**（会话目录 + 写法），不是文件名、也不是相对写法；
  *   · 再点开第二份（多一格标签），提示变成「复制这 2 份文件的路径」，点一下一次抄两条、
  *     一份一行，顺序跟标签上摆的一样；
- *   · 抄完那四处字变成「已复制」（1.2 秒）再自己变回来；
+ *   · 抄完那颗图标变成一颗勾（1.2 秒）再自己变回复制；
  *   · 弹窗关了它不露面；正在改文件（横条上是「存」「放弃」）时照样在。
  *
  * 剪贴板是真的：页面是 127.0.0.1（算安全来源），浏览器里 navigator.clipboard 能用；
@@ -106,15 +106,15 @@ module.exports = async (page) => {
         return JSON.stringify({
             hidden: btn.hidden,
             title: btn.title,
-            label: btn.textContent,
             beforeEdit: btn.nextElementSibling ? btn.nextElementSibling.id : "",
             afterName: btn.previousElementSibling ? (btn.previousElementSibling.id || btn.previousElementSibling.className) : "",
             order: order,
+            icon: btn.innerHTML.indexOf("M4 4l1-1h5.414") >= 0 ? "copy" : "other",
         });
     `));
     check("开着一份时「复制路径」那颗按钮在横条上露面", !layout.missing && layout.hidden === false, JSON.stringify(layout.title));
     check("它排在右边那堆按钮的最前面（写法后面、铅笔前面）", layout.beforeEdit === "fileEdit" && layout.afterName === "file-bar-name", layout.order && layout.order.join(" | "));
-    check("上面写着「复制路径」四个字", layout.label === "复制路径", layout.label);
+    check("上面是 VS Code 那颗「复制」图标", layout.icon === "copy", layout.icon);
     check("悬停提示写着「复制这个文件的路径」", layout.title === "复制这个文件的路径", layout.title);
     await page.shot("copy-path-one.png");
 
@@ -127,16 +127,16 @@ module.exports = async (page) => {
     check("抄的不是文件名本身", gotOne !== FILE_A);
     const afterOne = JSON.parse(await page.eval(`
         const btn = document.getElementById("fileCopyPath");
-        return JSON.stringify({ done: btn.classList.contains("done"), label: btn.textContent });
+        return JSON.stringify({ done: btn.classList.contains("done"), icon: btn.innerHTML.indexOf("M13.6572") >= 0 ? "check" : "other" });
     `));
-    check("抄完那四个字变成「已复制」", afterOne.done && afterOne.label === "已复制", JSON.stringify(afterOne));
+    check("抄完那颗图标变成一颗勾", afterOne.done && afterOne.icon === "check", JSON.stringify(afterOne));
     await page.shot("copy-path-done.png");
     await page.sleep(1500);
     const restored = JSON.parse(await page.eval(`
         const btn = document.getElementById("fileCopyPath");
-        return JSON.stringify({ done: btn.classList.contains("done"), label: btn.textContent });
+        return JSON.stringify({ done: btn.classList.contains("done"), icon: btn.innerHTML.indexOf("M4 4l1-1h5.414") >= 0 ? "copy" : "other" });
     `));
-    check("过一会儿自己变回「复制路径」", !restored.done && restored.label === "复制路径", JSON.stringify(restored));
+    check("过一会儿自己变回复制图标", !restored.done && restored.icon === "copy", JSON.stringify(restored));
 
     // —— 多开一份：一次抄两条，一份一行 ——
     await open(FILE_B);

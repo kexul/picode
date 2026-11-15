@@ -30,6 +30,9 @@
     discard: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M3.00098 2.5C3.00098 2.22386 3.22483 2 3.50098 2C3.77712 2 4.00098 2.22386 4.00098 2.5V6.34262L7.17202 3.17157C8.73412 1.60948 11.2668 1.60948 12.8289 3.17157C14.391 4.73367 14.391 7.26633 12.8289 8.82843L7.80375 13.8536C7.60849 14.0488 7.2919 14.0488 7.09664 13.8536C6.90138 13.6583 6.90138 13.3417 7.09664 13.1464L12.1218 8.12132C13.2933 6.94975 13.2933 5.05025 12.1218 3.87868C10.9502 2.70711 9.0507 2.70711 7.87913 3.87868L4.75781 7H8.50098C8.77712 7 9.00098 7.22386 9.00098 7.5C9.00098 7.77614 8.77712 8 8.50098 8H3.60098C3.26961 8 3.00098 7.73137 3.00098 7.4V2.5Z"/></svg>',
     check: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13.6572 3.13573C13.8583 2.9465 14.175 2.95614 14.3643 3.15722C14.5535 3.35831 14.5438 3.675 14.3428 3.86425L5.84277 11.8642C5.64597 12.0494 5.33756 12.0446 5.14648 11.8535L1.64648 8.35351C1.45121 8.15824 1.45121 7.84174 1.64648 7.64647C1.84174 7.45121 2.15825 7.45121 2.35351 7.64647L5.50976 10.8027L13.6572 3.13573Z"/></svg>',
     clippy: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M5.08535 2.00049C5.29127 1.41789 5.84689 1.00049 6.5 1.00049H9.5C10.1531 1.00049 10.7087 1.41789 10.9146 2.00049H11.5C12.3284 2.00049 13 2.67206 13 3.50049V8.10026C12.919 8.12889 12.8402 8.16457 12.7646 8.20715C12.4603 8.37833 12.2253 8.65027 12.1 8.97611L12 8.87618V3.50049C12 3.22435 11.7761 3.00049 11.5 3.00049H10.9146C10.7087 3.58308 10.1531 4.00049 9.5 4.00049H6.5C5.84689 4.00049 5.29127 3.58308 5.08535 3.00049H4.5C4.22386 3.00049 4 3.22435 4 3.50049V13.5005C4 13.7766 4.22386 14.0005 4.5 14.0005H8V14.5001C8.00164 14.6722 8.03284 14.8413 8.09101 15.0005H4.5C3.67157 15.0005 3 14.3289 3 13.5005V3.50049C3 2.67206 3.67157 2.00049 4.5 2.00049H5.08535ZM6.5 2.00049C6.22386 2.00049 6 2.22435 6 2.50049C6 2.77663 6.22386 3.00049 6.5 3.00049H9.5C9.77614 3.00049 10 2.77663 10 2.50049C10 2.22435 9.77614 2.00049 9.5 2.00049H6.5Z"/><path d="M11.916 10.7783C11.971 10.6959 12.0002 10.599 12 10.5C11.9998 10.4345 11.9869 10.3696 11.962 10.309C11.937 10.2484 11.9003 10.1934 11.854 10.147L9.85401 8.147C9.80801 8.09999 9.75288 8.0629 9.69201 8.038C9.63109 8.01296 9.56587 8.00005 9.50001 8C9.36766 8.00003 9.24071 8.05253 9.14701 8.146L7.14701 10.146C7.10043 10.1924 7.06346 10.2476 7.03824 10.3084C7.01301 10.3691 7.00002 10.4342 7.00001 10.5C6.99943 10.5993 7.02844 10.6965 7.08334 10.7793C7.13824 10.8621 7.21655 10.9266 7.30827 10.9647C7.39999 11.0028 7.50098 11.0127 7.59835 10.9931C7.69572 10.9736 7.78507 10.9255 7.85501 10.855L9.00001 9.708L9.00001 14.5C9.00001 14.6326 9.05269 14.7598 9.14645 14.8536C9.24022 14.9473 9.3674 15 9.50001 15C9.63262 15 9.75979 14.9473 9.85356 14.8536C9.94733 14.7598 10 14.6326 10 14.5L10 9.708L11.146 10.854C11.2159 10.9241 11.3051 10.9719 11.4022 10.9912C11.4993 11.0106 11.6 11.0007 11.6915 10.9628C11.7829 10.9249 11.8611 10.8606 11.916 10.7783Z"/><path d="M11.084 13.2217C11.0291 13.3041 10.9998 13.401 11 13.5C11.0002 13.5655 11.0131 13.6304 11.038 13.691C11.063 13.7516 11.0997 13.8066 11.146 13.853L13.146 15.853C13.192 15.9 13.2471 15.9371 13.308 15.962C13.3689 15.987 13.4341 16 13.5 16C13.6324 16 13.7593 15.9475 13.853 15.854L15.853 13.854C15.8996 13.8076 15.9365 13.7524 15.9618 13.6916C15.987 13.6309 16 13.5658 16 13.5C16.0006 13.4007 15.9716 13.3035 15.9167 13.2207C15.8618 13.1379 15.7835 13.0734 15.6917 13.0353C15.6 12.9972 15.499 12.9873 15.4017 13.0069C15.3043 13.0264 15.2149 13.0745 15.145 13.145L14 14.292V9.5C14 9.36739 13.9473 9.24021 13.8536 9.14645C13.7598 9.05268 13.6326 9 13.5 9C13.3674 9 13.2402 9.05268 13.1464 9.14645C13.0527 9.24021 13 9.36739 13 9.5V14.292L11.854 13.146C11.7841 13.0759 11.6949 13.0281 11.5978 13.0088C11.5007 12.9894 11.4 12.9993 11.3085 13.0372C11.2171 13.0751 11.1389 13.1394 11.084 13.2217Z"/></svg>',
+    // VS Code 自己那颗「复制」（资源管理器右键菜单里那颗）：一块切了角的纸 + 背后错开的一张。
+    // 看文件的弹窗横条上那颗「复制路径」用它（比上面那颗带箭头的 clippy 更像「复制」）。
+    copy: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M4 4l1-1h5.414L14 6.586V14l-1 1H5l-1-1V4zm9 3l-3-3H5v10h8V7z"/><path fill-rule="evenodd" clip-rule="evenodd" d="M3 1L2 2v10l1 1V2h6.414l-1-1H3z"/></svg>',
     comment: '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M1 4.5C1 3.11929 2.11929 2 3.5 2H12.5C13.8807 2 15 3.11929 15 4.5V9.5C15 10.8807 13.8807 12 12.5 12H8.68787L5.62533 14.6797C4.99168 15.2342 4 14.7842 4 13.9422V12H3.5C2.11929 12 1 10.8807 1 9.5V4.5ZM3.5 3C2.67157 3 2 3.67157 2 4.5V9.5C2 10.3284 2.67157 11 3.5 11H5V13.8981L8.31213 11H12.5C13.3284 11 14 10.3284 14 9.5V4.5C14 3.67157 13.3284 3 12.5 3H3.5Z"/></svg>',
     files: '<svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M7.5 22.5H17.595C17.07 23.4 16.11 24 15 24H7.5C4.185 24 1.5 21.315 1.5 18V6C1.5 4.89 2.1 3.93 3 3.405V18C3 20.475 5.025 22.5 7.5 22.5ZM21 8.121V18C21 19.6545 19.6545 21 18 21H7.5C5.8455 21 4.5 19.6545 4.5 18V3C4.5 1.3455 5.8455 0 7.5 0H12.879C13.4715 0 14.0505 0.24 14.4705 0.6585L20.3415 6.5295C20.766 6.954 21 7.5195 21 8.121ZM13.5 6.75C13.5 7.164 13.8375 7.5 14.25 7.5H19.1895L13.5 1.8105V6.75ZM19.5 18V9H14.25C13.0095 9 12 7.9905 12 6.75V1.5H7.5C6.672 1.5 6 2.1735 6 3V18C6 18.8265 6.672 19.5 7.5 19.5H18C18.828 19.5 19.5 18.8265 19.5 18Z"/></svg>',
     "arrow-left": '<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M13.5 8.00023H3.70701L7.85301 3.85423C8.04801 3.65923 8.04801 3.34223 7.85301 3.14723C7.65801 2.95223 7.34101 2.95223 7.14601 3.14723L2.14601 8.14723C1.95101 8.34223 1.95101 8.65923 2.14601 8.85423L7.14601 13.8542C7.24401 13.9522 7.37201 14.0002 7.50001 14.0002C7.62801 14.0002 7.75601 13.9512 7.85401 13.8542C8.04901 13.6592 8.04901 13.3422 7.85401 13.1472L3.70801 9.00123H13.501C13.777 9.00123 14.001 8.77723 14.001 8.50123C14.001 8.22523 13.777 8.00123 13.501 8.00123L13.5 8.00023Z"/></svg>',
@@ -1097,6 +1100,7 @@
     }
     // 重挂载会让 CSS 动画重播：剥掉历史气泡的入场动画，避免整窗“抖一下”
     to.querySelectorAll(".msg-enter").forEach((el) => { el.classList.remove("msg-enter"); });
+    syncUserRail(target);   // 刚露出来：用户消息导航按真高矮重画（同 mountActiveSession）
     slideTo(to, 0, SWIPE_FINISH_MS);
     slideTo(slide.fromView, slide.endX, SWIPE_FINISH_MS);
     afterSlide(to, () => { slide.landed = true; });
@@ -2189,6 +2193,269 @@
     if (!jumpBottomBtn) { return; }
     const show = st.hasNewContent && !st.stickToBottom && activeId === st.id;
     jumpBottomBtn.classList.toggle("hidden", !show);
+  }
+
+  // ==================== 用户消息导航 ====================
+  // 消息流右边一条细导航：一根短横线代表用户自己发的一条消息（按先后等分排下来，整列上下居中；
+  // 条数多了就挤紧、铺满这一条）。鼠标停上去出一行字（那条消息的开头），点一下跳到那一条；
+  // 正读着的那一条亮着。空会话、只有一条用户消息时不出现（一根线孤零零的没意义）。
+  //
+  // 只在电脑上露面：手机屏幕窄，这一条正好压在正文最右边那几个字上；手指也点不准一根
+  // 两像素高的线。触屏那一路（.user-rail 那条 @media，见 chat.css）直接就看不见。
+  //
+  // 为什么挂在会话壳（.session-view）上、不挂进消息窗格：整屏重画要重写窗格的内容
+  // （pane.innerHTML），「加载更早」那批消息也是先渲染进暂存区 —— 挂进窗格就会被一起抹掉。
+  // 每一根的位置只按窗格的高矮算（不读每条消息的量）：所以条数变了重画也不贵。
+  const RAIL_SPREAD_MAX = 26;      // 相邻两根之间最松留几个像素：再宽就整列居中，不把一列散满整屏
+  const RAIL_TIP_CHARS = 60;       // 停上去那行字取开头多少个字
+  let railObserver = null;         // 那一块地方高矮变了（拖窗口的边、输入框长高、从藏着的壳露出来）
+  let railMutant = null;           // 窗格里的东西变了（来了消息 / 重画 / 「加载更早」补进来 / 搬走几轮）
+
+  /**
+   * 一个会话现在的用户消息节点（按消息流里的先后顺序）。
+   * 只扫窗格的直接孩子（一条用户消息就是一个 .msg.user）：条数变了就得重画，这条路上
+   * 每次滚动、每次吐字都会问一遍，别拿 querySelectorAll 去整棵子树里找。
+   */
+  function railMessages(st) {
+    const out = [];
+    for (const el of st.paneEl.children) {
+      if (el.classList && el.classList.contains("msg") && el.classList.contains("user")) { out.push(el); }
+    }
+    return out;
+  }
+
+  /**
+   * 重画（或者清空）某个会话的用户消息导航。条数变了（发了一条 / 「加载更早」补进来一批 /
+   * 搬走几轮 / 整屏重画）、那块地方大小变了、刚露出来，都走这里。
+   */
+  function syncUserRail(st) {
+    const rail = st && st.railEl;
+    if (!rail || IS_TOUCH_DEVICE) { return; }
+    // 不在看的会话（壳盖着 .off）、往「加载更早」的暂存区里画的时候都不画：那时候量不出高矮
+    if (!paneShown(st.paneEl) || isStageRender(st)) { return; }
+    const msgs = railMessages(st);
+    if (msgs.length < 2) {   // 一根短横线不成一条路：不露面，也不许它挡住右边那一条的鼠标
+      rail.classList.add("empty");
+      rail.textContent = "";
+      st.railMsgs = null; st.railTicks = null; st.railCurrent = -1;
+      return;
+    }
+    // 这一条现在有多高就现量：刚挂上页面那一会儿量出来是 0（还没排上版），
+    // 把那 0 记下来一直用，就一直画不出来了（见下面的 railDrawLater）。
+    const height = rail.clientHeight;
+    if (height <= 0) { railDrawLater(st); return; }
+    // 条数与节点都没变（吐字、工具行往下长也会走到这儿）：一帧只比一下，不重画
+    if (st.railMsgs && st.railMsgs.length === msgs.length && st.railTicks && st.railTicks.length === msgs.length
+      && st.railMsgs.every((el, i) => el === msgs[i])) {
+      st.railTries = 0;
+      syncRailCurrent(st);
+      return;
+    }
+    st.railTries = 0;
+    const n = msgs.length;
+    const gap = Math.min(height / (n - 1), RAIL_SPREAD_MAX);
+    const top = (height - gap * (n - 1)) / 2;   // 没铺满时整列居中（条数少才有富余）
+    const frag = document.createDocumentFragment();
+    const ticks = [];
+    for (let i = 0; i < n; i++) {
+      const tick = document.createElement("span");
+      tick.className = "rail-tick";
+      tick.style.top = Math.round(top + gap * i) + "px";
+      frag.appendChild(tick);
+      ticks.push(tick);
+    }
+    rail.classList.remove("empty");
+    rail.textContent = "";
+    rail.appendChild(frag);
+    st.railMsgs = msgs; st.railTicks = ticks; st.railGap = gap; st.railTop = top;
+    st.railCurrent = -1; st.railHover = -1;
+    cacheRailOffsets(st);
+    syncRailCurrent(st);
+  }
+
+  /** 一帧只重画一次（整屏重画是几百条消息一条条落进来的）。 */
+  function scheduleUserRail(st) {
+    if (!st || st.railBuildRaf) { return; }
+    st.railBuildRaf = requestAnimationFrame(() => { st.railBuildRaf = 0; syncUserRail(st); });
+  }
+
+  /**
+   * 画的那一下还没排上版（量出来是 0 高）：过一会儿自己再来一次。
+   * 不然这一下白画、又没人重画，就卡在那儿直到人再发一条消息。
+   * 最多连着补几回（窗格真收起来时别配上定时器一直空跑）。
+   */
+  function railDrawLater(st) {
+    if ((st.railTries || 0) > 8) { return; }
+    st.railTries = (st.railTries || 0) + 1;
+    if (st.railTimer) { return; }
+    st.railTimer = setTimeout(() => { st.railTimer = 0; syncUserRail(st); }, 150);
+  }
+
+  /** 每条用户消息在窗格里的纵向位置：「正读着哪一条」用（只在内容高矮变了时才重量）。 */
+  function cacheRailOffsets(st) {
+    const msgs = st.railMsgs || [];
+    const offs = new Array(msgs.length);
+    for (let i = 0; i < msgs.length; i++) { offs[i] = msgs[i].offsetTop; }
+    st.railOffsets = offs;
+    st.railScrollH = st.paneEl.scrollHeight;
+  }
+
+  /** 正读着的那一条：窗格最上头露出来的那条用户消息；贴着底时永远算最后一条。 */
+  function railCurrentIndex(st) {
+    const ticks = st.railTicks;
+    if (!ticks || !ticks.length) { return -1; }
+    if (st.stickToBottom) { return ticks.length - 1; }
+    const offs = st.railOffsets;
+    if (!offs || !offs.length) { return -1; }
+    const top = st.paneEl.scrollTop + 12;   // 一点余量：刚露出个边也算它
+    let lo = 0, hi = offs.length - 1, best = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (offs[mid] <= top) { best = mid; lo = mid + 1; } else { hi = mid - 1; }
+    }
+    return best;
+  }
+
+  /** 把「正读着的那一条」那根点亮（条数没变就不重量位置，只比一比缓存里的数）。 */
+  function syncRailCurrent(st) {
+    const ticks = st.railTicks;
+    if (!ticks || !ticks.length) { return; }
+    // 内容长高 / 矮了（图片来了、正文还在往外吐、高亮重排）：缓存的位置对不上了，重量一次
+    if (!st.stickToBottom && st.railScrollH !== st.paneEl.scrollHeight) { cacheRailOffsets(st); }
+    const idx = railCurrentIndex(st);
+    if (idx === st.railCurrent) { return; }
+    st.railCurrent = idx;
+    ticks.forEach((tick, i) => tick.classList.toggle("current", i === idx));
+  }
+
+  /** 滚动事件里调：一帧最多算一次。 */
+  function scheduleRailCurrent(st) {
+    if (!st || st.railCurRaf || !st.railTicks) { return; }
+    st.railCurRaf = requestAnimationFrame(() => { st.railCurRaf = 0; syncRailCurrent(st); });
+  }
+
+  /** 鼠标落在哪一根上：按上一次画出来的格子算，离哪根近就算哪根（挤得再密也点得中）。 */
+  function railIndexAt(st, clientY) {
+    const ticks = st.railTicks;
+    if (!ticks || !ticks.length) { return -1; }
+    const gap = st.railGap || 0;
+    if (ticks.length === 1 || gap <= 0) { return 0; }
+    const y = clientY - st.railEl.getBoundingClientRect().top;
+    const i = Math.round((y - st.railTop) / gap);
+    return Math.max(0, Math.min(ticks.length - 1, i));
+  }
+
+  /** 点了一根短横线：那一条用户消息滚到窗格顶上，闪一下底色（好认跳到了哪儿）。 */
+  function railJumpTo(st, i) {
+    const el = (st.railMsgs || [])[i];
+    if (!el || !el.isConnected) { return; }
+    userTookOverScroll(st);   // 跟用户自己往回滚一样：停掉追底；正在生成时把「跳到最新」亮起来
+    if (st.scrollRafId) { cancelAnimationFrame(st.scrollRafId); st.scrollRafId = 0; }
+    st.paneEl.scrollTop = Math.max(0, el.offsetTop - 6);
+    st.lastScrollTop = st.paneEl.scrollTop;
+    flashMessage(el);
+    syncRailCurrent(st);
+  }
+
+  /** 跳过去的那一条闪一下底色（连着点同一根也再闪一次）。 */
+  function flashMessage(el) {
+    el.classList.remove("msg-flash");
+    void el.offsetWidth;   // 逼一次重排：去掉再加同一个类，动画不会重放
+    el.classList.add("msg-flash");
+    clearTimeout(el._flashTimer);
+    el._flashTimer = setTimeout(() => el.classList.remove("msg-flash"), 1400);
+  }
+
+  let railTipEl = null;
+  /** 那条消息的开头一行（停上去出的字）。 */
+  function railTipText(el) {
+    const raw = el.dataset.raw || el.textContent || "";
+    const one = raw.replace(/\s+/g, " ").trim();
+    if (!one) { return "（空消息）"; }
+    return one.length > RAIL_TIP_CHARS ? one.slice(0, RAIL_TIP_CHARS) + "…" : one;
+  }
+  /** 停上去出的那行字：贴着导航条左边、跟着那一根上下居中，出不了屏幕。 */
+  function showRailTip(st, i) {
+    const el = (st.railMsgs || [])[i];
+    if (!el) { return; }
+    if (!railTipEl) {
+      railTipEl = document.createElement("div");
+      railTipEl.className = "rail-tip hidden";
+      document.body.appendChild(railTipEl);
+    }
+    railTipEl.textContent = railTipText(el);
+    railTipEl.classList.remove("hidden");
+    const railBox = st.railEl.getBoundingClientRect();
+    const box = railTipEl.getBoundingClientRect();
+    const tickY = railBox.top + (st.railTop || 0) + (st.railGap || 0) * i;
+    let left = railBox.left - box.width - 8;
+    if (left < 4) { left = 4; }   // 窗口很窄时盖在消息上，也总比出屏幕强
+    const top = Math.max(6, Math.min(tickY - box.height / 2, window.innerHeight - box.height - 6));
+    railTipEl.style.left = Math.round(left) + "px";
+    railTipEl.style.top = Math.round(top) + "px";
+  }
+  function hideRailTip() {
+    if (railTipEl) { railTipEl.classList.add("hidden"); }
+  }
+
+  /**
+   * 用户消息导航问“该画几根”的两条路：
+   *   · 窗格里多了一条 / 少了一条（发了一句、整屏重画、补进来一批、搬走几轮）：MutationObserver 看一眼，
+   *     一帧最多重画一次。盯窗格的直接孩子就够了（用户消息就是直接孩子），不往下看；
+   *     整屏重画与「加载更早」都是把节点挂进窗格，照样看得见。
+   *   · 那一块高矮变了（拖窗口的边、藏着的壳露出来、手机上转屏）：ResizeObserver 盯窗格 ——
+   *     壳藏起来（content-visibility: hidden）的时候窗格量出来是 0，露出来才又有高矮。
+   */
+  function attachUserRail(st) {
+    const rail = st.railEl;
+    if (IS_TOUCH_DEVICE) { return; }   // 手机不上这一条（CSS 那边也挡着，见 chat.css 那段）
+    if (typeof ResizeObserver !== "undefined") {
+      if (!railObserver) {
+        railObserver = new ResizeObserver((entries) => {
+          for (const entry of entries) {
+            const owner = entry.target._railSt;
+            if (owner) { scheduleUserRail(owner); }
+          }
+        });
+      }
+      st.paneEl._railSt = st;
+      railObserver.observe(st.paneEl);
+    }
+    if (typeof MutationObserver !== "undefined") {
+      if (!railMutant) {
+        railMutant = new MutationObserver((records) => {
+          for (const rec of records) {
+            const owner = rec.target._railSt;
+            if (owner) { scheduleUserRail(owner); }
+          }
+        });
+      }
+      st.paneEl._railSt = st;
+      railMutant.observe(st.paneEl, { childList: true });
+    }
+    // 停上去出一行字、点一下跳过去
+    rail.addEventListener("mousemove", (e) => {
+      const i = railIndexAt(st, e.clientY);
+      if (i < 0) { return; }
+      if (i !== st.railHover) {
+        st.railHover = i;
+        if (st.railTicks) { st.railTicks.forEach((tick, k) => tick.classList.toggle("hover", k === i)); }
+        showRailTip(st, i);   // 从一根挪到另一根：那行字得换成这一条的开头
+        return;
+      }
+      // 滚动 / 点过一下会把那行字收起来：鼠标还在这一根上（或者又移回来了）就把它拿出来
+      if (!railTipEl || railTipEl.classList.contains("hidden")) { showRailTip(st, i); }
+    });
+    rail.addEventListener("mouseleave", () => {
+      st.railHover = -1;
+      if (st.railTicks) { st.railTicks.forEach((tick) => tick.classList.remove("hover")); }
+      hideRailTip();
+    });
+    rail.addEventListener("click", (e) => {
+      const i = railIndexAt(st, e.clientY);
+      hideRailTip();
+      if (i >= 0) { railJumpTo(st, i); }
+    });
   }
 
   // ==================== 后台命令（消息流末尾那几条）====================
@@ -4042,8 +4309,10 @@
   document.addEventListener("scroll", (e) => {
     if (tagTipEl && tagTipEl.contains(e.target)) { return; }
     hideTagTip();
+    hideRailTip();
   }, true);
   window.addEventListener("resize", hideTagTip);
+  window.addEventListener("resize", hideRailTip);
   // 点提示框和当前标签以外任何地方关闭提示框（触屏主要靠这个和右上角 × 收）。
   document.addEventListener("click", (e) => {
     if (!tagTipEl || tagTipEl.classList.contains("hidden")) { return; }
@@ -5775,9 +6044,12 @@
    * .md-mermaid 必须算进来：那块点一下要看大图（见 decorateMermaid），而图上大片地方没字。
    * 不算的话，按在图的空白处会被当成要切会话、按下那一下就把指针抓走了（setPointerCapture），
    * click 于是派发到消息区上、图收不到 —— 表现出来就是“点图有时候没反应，得正好点在字上”。
+   *
+   * .user-rail 也是：点一根短横线要跳到那一句，而那一竖条大半没有字。同样不算的话，
+   * 按下就把指针抓走了，click 落到消息区上，导航条收不到。
    */
   function swipeOnControl(el) {
-    return !!(el && el.closest && el.closest("button, a, input, textarea, select, img, video, summary, label, .md-mermaid, [contenteditable='true']"));
+    return !!(el && el.closest && el.closest("button, a, input, textarea, select, img, video, summary, label, .md-mermaid, .user-rail, [contenteditable='true']"));
   }
 
   // 两种按法走同一套：
@@ -9611,7 +9883,7 @@
           // 改这个文件那颗铅笔（只在能改的代码文件上露面，见 syncFileBar / canEditFile），
           // 以及改的时候那两颗：存（Ctrl+S）与放弃（盘上变了时这两颗变成「覆盖」「用盘上的」）
           // 它前面那颗「复制路径」是把开着的那几份的完整路径抄进剪贴板（一份一行），见 syncFileBar
-          '<button id="fileCopyPath" class="file-bar-btn wide" type="button" title="复制路径" aria-label="复制路径">复制路径</button>' +
+          '<button id="fileCopyPath" class="file-bar-btn" type="button" title="复制路径" aria-label="复制路径">' + ICONS.copy + '</button>' +
           '<button id="fileEdit" class="file-bar-btn" type="button" title="改一下这个文件" aria-label="改一下这个文件">' + ICONS.edit + '</button>' +
           '<button id="fileSave" class="file-bar-btn" type="button" title="存到磁盘（Ctrl+S）" aria-label="存到磁盘">' + ICONS.save + '</button>' +
           '<button id="fileRevert" class="file-bar-btn" type="button" title="放弃这次改动" aria-label="放弃这次改动">' + ICONS.discard + '</button>' +
@@ -9667,7 +9939,7 @@
       if (entry && entry.kind === "file" && entry.file.editing) { discardFileEdit(entry.file); }
     });
     // 那颗「复制路径」：开着一份就抄这一条的完整路径，开着几份就一份一行全抄进去。
-    // 抄完那颗按钮上的字换成「已复制」、过一会儿再变回来（不弹提示：这个动作没什么要解释的）
+    // 抄完那颗图标换成一颗勾、过一会儿再变回来（不弹提示：这个动作没什么要解释的）
     const copyPathBtn = stage.querySelector("#fileCopyPath");
     let copyPathTimer = 0;
     copyPathBtn.addEventListener("click", () => {
@@ -9677,11 +9949,11 @@
       copyTextToClipboard(text).then((ok) => {
         if (!ok) { return; }
         copyPathBtn.classList.add("done");
-        copyPathBtn.textContent = "已复制";
+        copyPathBtn.innerHTML = ICONS.check;
         clearTimeout(copyPathTimer);
         copyPathTimer = setTimeout(() => {
           copyPathBtn.classList.remove("done");
-          copyPathBtn.textContent = "复制路径";
+          copyPathBtn.innerHTML = ICONS.copy;
         }, 1200);
       });
     });
