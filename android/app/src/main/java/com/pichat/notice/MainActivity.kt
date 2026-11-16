@@ -24,6 +24,7 @@ import android.webkit.WebViewClient
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -37,8 +38,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.io.IOException
-import java.io.InputStream
+import java.io.OutputStream
 import java.net.URLEncoder
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
@@ -73,6 +75,10 @@ class MainActivity : Activity() {
         private const val STALE_COLOR = 0xFFB45309.toInt()
         /** 等电脑打包最多等多久（毫秒）：第一次装依赖会慢，但也不能一直等下去。 */
         private const val APK_BUILD_WAIT_MS = 20 * 60 * 1000
+        /** 下载最多试几次（含第一次）：断了停一会儿，从已经下到的那个字节接着要。 */
+        private const val APK_DOWNLOAD_TRIES = 5
+        /** 每断一回先停多久（毫秒）：第一次重试停这么久，之后一次次加长。 */
+        private const val APK_RETRY_WAIT_MS = 1500L
     }
 
     /** 上一回按返回键的时刻（SystemClock.uptimeMillis；0 = 眼下不算连按）。 */
@@ -86,9 +92,10 @@ class MainActivity : Activity() {
     private lateinit var historyHeader: TextView
     private lateinit var historyList: LinearLayout
     private lateinit var bundleCheckText: TextView
-    /** 「打包并安装新版」那颗按钮与它底下的那行进展。 */
+    /** 「打包并安装新版」那颗按钮与它底下的那行进展、那根横条。 */
     private lateinit var apkInstallButton: Button
     private lateinit var apkBuildText: TextView
+    private lateinit var apkProgress: ProgressBar
     /** 这一轮「打包并安装」还在跑（跑的时候按钮置灰，免得点出第二份）。 */
     private var apkBusy = false
     private lateinit var webPanel: LinearLayout
@@ -200,6 +207,13 @@ class MainActivity : Activity() {
             setTextColor(Color.GRAY)
         }
         settingsPanel.addView(apkBuildText)
+        // 跑起来时才有的一条横条：打包那段转圈（给不出百分比），下载那段按下了多少字节画
+        apkProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000
+            visibility = View.GONE
+        }
+        settingsPanel.addView(apkProgress, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         settingsPanel.addView(TextView(this).apply {
             text = "连接状态看通知栏那条常驻提示；收到的提醒要是没弹出来，\n" +
                 "到系统的设置里把这个 app 的电池优化关掉（各品牌叫法不一，多在「省电」或「应用管理」里）。\n" +
@@ -519,6 +533,8 @@ class MainActivity : Activity() {
         apkBusy = true
         syncApkControls()
         showApkNote("正在叫电脑打包…")
+        // 打包那一段只知道 “还在跑” 和跑了多少秒，给不出百分比：横条转圈
+        showApkProgress(null, 0)
         Thread {
             try {
                 runApkBuild(base)
@@ -566,48 +582,51 @@ class MainActivity : Activity() {
         downloadAndInstallApk(base)
     }
 
-    /** 把编好的包拉下来，一边拉一边写进系统安装会话（不落磁盘：省得留一份装完没用的文件）。 */
+    /**
+     * 把编好的包拉下来，一边拉一边写进系统安装会话（不落磁盘：省得留一份装完没用的文件）。
+     *
+     * 下载这条路断了不从头再来：记着已经下到第几个字节，隔一会儿带上 `Range: bytes=N-`
+     * 再要一次，接着往同一个安装会话里写（服务端认这个，见 webChatServer 的 sendApk）。
+     * 进度条按 HEAD 问到的总大小画。
+     */
     private fun downloadAndInstallApk(base: String) {
-        apkClient.newCall(Request.Builder().url("$base/apk").build()).execute().use { response ->
-            if (!response.isSuccessful) {
-                showApkNote("拿不到包：HTTP ${response.code}" + if (response.code == 404) "（电脑上还没打好）" else "")
-                return
-            }
-            val body = response.body
-            val size = body?.contentLength() ?: -1L
-            if (body == null || size <= 0) {
-                showApkNote("拿到的包没写多大（Content-Length 没有），装不了")
-                return
-            }
-            showApkNote("正在下载新版（${(size + 1024 * 1024 - 1) / (1024 * 1024)} MB）…")
-            installFromStream(body.byteStream(), size)
-        }
-    }
-
-    /** 把流里的字节写进一次安装会话，然后让系统弹那张「安装」确认框（回话落到 ApkInstallReceiver）。 */
-    private fun installFromStream(input: InputStream, size: Long) {
-        if (!packageManager.canRequestPackageInstalls()) {
-            onMain {
-                showApkNote("得先在系统里允许这个 app「安装未知应用」，回来再点一次")
-                try {
-                    startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                        Uri.parse("package:$packageName")))
-                } catch (_: Exception) {
-                    Toast.makeText(this, "到系统设置里找「安装未知应用」", Toast.LENGTH_LONG).show()
-                }
-            }
-            return
-        }
+        val size = apkSize(base) ?: return
+        if (!canInstall()) { return }
+        showApkNote("正在下载新版（${megabytes(size)}）…")
+        showApkProgress(0, size)
+        // 一次安装会话从头用到尾：断的那几次也接着往这一个里写（不另开一份）
         val installer = packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
         val sessionId = installer.createSession(params)
         val session = installer.openSession(sessionId)
         try {
-            input.use { source ->
-                session.openWrite("pi-chat.apk", 0, size).use { sink ->
-                    source.copyTo(sink)
-                    session.fsync(sink)
+            session.openWrite("pi-chat.apk", 0, size).use { sink ->
+                var done = 0L
+                var attempt = 0
+                while (done < size) {
+                    attempt += 1
+                    if (attempt > 1) {
+                        // 每断一回多停一会儿（第一次 1.5 秒，之后一次次加长）
+                        val wait = APK_RETRY_WAIT_MS * (attempt - 1)
+                        showApkNote("断了（下了 ${megabytes(done)} / ${megabytes(size)}），" +
+                            "${(wait + 999) / 1000} 秒后接着下…")
+                        Thread.sleep(wait)
+                        showApkNote("接着下（已下 ${megabytes(done)} / ${megabytes(size)}）…")
+                    }
+                    try {
+                        // 每写一块就把“下到哪儿了”记下来：断在半路也接得上
+                        downloadPiece(base, done, size, sink) { now ->
+                            done = now
+                            showApkProgress(now, size)
+                        }
+                    } catch (error: Exception) {
+                        if (attempt >= APK_DOWNLOAD_TRIES) {
+                            throw IOException("下了 ${megabytes(done)} 断了 ${attempt} 次，点一下再试（电脑上那个包还在）")
+                        }
+                        // 下一次循环带着 Range 接着要（这里不重报错，上面那行字已经写着断了）
+                    }
                 }
+                session.fsync(sink)
             }
         } catch (error: Exception) {
             session.abandon()
@@ -623,6 +642,75 @@ class MainActivity : Activity() {
         session.close()
         showApkNote("下好了，等系统那张安装确认框…")
     }
+
+    /**
+     * 下一段：从第 `from` 个字节开始要（0 就是整份），写进安装会话；
+     * 每写一块就通过 `land` 报一次“现在一共下到多少”（断了也还在，外面接着要下一段）。
+     * 连接断了这里抛出去。
+     */
+    private fun downloadPiece(base: String, from: Long, size: Long, sink: OutputStream, land: (Long) -> Unit) {
+        val request = Request.Builder().url("$base/apk").apply {
+            if (from > 0) { header("Range", "bytes=$from-") }
+        }.build()
+        apkClient.newCall(request).execute().use { response ->
+            // 续传时服务端必须真按 Range 回（206）：回 200 就是把整份从头发，
+            // 那一段字节再接在已经写过的后面就是一个环包，宁可当这次没成
+            if (from > 0 && response.code != 206) {
+                throw IOException("电脑那边没按从中间接着发（HTTP ${response.code}）")
+            }
+            if (from == 0L && !response.isSuccessful) {
+                throw IOException("HTTP ${response.code}" + if (response.code == 404) "（电脑上还没打好）" else "")
+            }
+            val body = response.body ?: throw IOException("没有正文")
+            val buffer = ByteArray(64 * 1024)
+            var done = from
+            body.byteStream().use { input ->
+                while (done < size) {
+                    val read = input.read(buffer)
+                    if (read < 0) { break }   // 没收到头就断了：交给外面再要一段
+                    sink.write(buffer, 0, read)
+                    done += read
+                    land(done)
+                }
+            }
+        }
+    }
+
+    /** 问一句包有多大（HEAD，只回个头）：进度条按它画。拿不到就写一行字、给 null。 */
+    private fun apkSize(base: String): Long? {
+        apkClient.newCall(Request.Builder().url("$base/apk").head().build()).execute().use { response ->
+            if (!response.isSuccessful) {
+                showApkNote("拿不到包：HTTP ${response.code}" +
+                    if (response.code == 404) "（电脑上还没打好）" else "")
+                return null
+            }
+            val size = response.body?.contentLength() ?: -1L
+            if (size <= 0) {
+                showApkNote("拿到的包没写多大（Content-Length 没有），装不了")
+                return null
+            }
+            return size
+        }
+    }
+
+    /** 能不能装：没允许「安装未知应用」就先带人去掉那一步，回去再点一遍（返回 false）。 */
+    private fun canInstall(): Boolean {
+        if (packageManager.canRequestPackageInstalls()) { return true }
+        onMain {
+            showApkNote("得先在系统里允许这个 app「安装未知应用」，回来再点一次")
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName")))
+            } catch (_: Exception) {
+                Toast.makeText(this, "到系统设置里找「安装未知应用」", Toast.LENGTH_LONG).show()
+            }
+        }
+        return false
+    }
+
+    /** 一个数字带单位（进度条旁边那行字用）：1.4 MB。 */
+    private fun megabytes(bytes: Long): String =
+        String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
 
     /** 问一句后端那三条口（/apk/build），回来的 JSON 原样给调用方。 */
     private fun apkRequest(request: Request): JSONObject {
@@ -640,10 +728,29 @@ class MainActivity : Activity() {
         onMain { apkBuildText.text = text }
     }
 
+    /**
+     * 那根横条：`done` 给 null = 不知道进度（打包那段，转圈）；
+     * 给了数就按 done / total 画（下载那段，每写一块就动一格）。
+     * 后台线程叫的，自己负责回主线程。
+     */
+    private fun showApkProgress(done: Long?, total: Long) {
+        onMain {
+            apkProgress.visibility = View.VISIBLE
+            if (done == null || total <= 0) {
+                apkProgress.isIndeterminate = true
+                return@onMain
+            }
+            apkProgress.isIndeterminate = false
+            apkProgress.progress = ((done * 1000) / total).toInt().coerceIn(0, 1000)
+        }
+    }
+
     /** 按钮的字与能不能点跟着「正在跑」走。 */
     private fun syncApkControls() {
         apkInstallButton.isEnabled = !apkBusy
         apkInstallButton.text = if (apkBusy) "正在打包…" else "打包并安装新版"
+        // 跑完了把横条收起来（不管最后是成功还是写了一句错）
+        if (!apkBusy) { apkProgress.visibility = View.GONE }
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
