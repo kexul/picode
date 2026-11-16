@@ -147,7 +147,7 @@ class MainActivity : Activity() {
             setPadding(dp(20), dp(28), dp(20), dp(28))
         }
         settingsPanel.addView(TextView(this).apply {
-            text = "Pi 提醒"
+            text = "Pi Chat"
             textSize = 24f
             setPadding(0, 0, 0, dp(12))
         })

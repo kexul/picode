@@ -208,7 +208,7 @@ class NoticeService : Service() {
     private fun statusNote(text: String): Notification =
         Notification.Builder(this, CHANNEL_STATUS)
             .setSmallIcon(R.drawable.ic_stat)
-            .setContentTitle("Pi 提醒")
+            .setContentTitle("Pi Chat")
             .setContentText(text)
             .setOngoing(true)
             .build()
