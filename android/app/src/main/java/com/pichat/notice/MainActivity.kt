@@ -50,7 +50,7 @@ import java.util.concurrent.TimeUnit
  *   点「打开」（或者点历史里的一条）就规范化地址、记下来、叫常驻服务重连、进网页看对话；
  *   打开过的地址自动记入清单（最新的排最上，最多留几条），每条边上有一颗 × 单独删。
  * - 网页画面：一个 WebView 装着后端的对话页面，点通知跳进来时直接带到那个会话上
- *   （`?session=<会话号>`，网页本来就认这个参数）。
+ *   （页面已经在就只在页面里切一格，见 openPage）。
  *
  * 收提醒不在这屏上干（那是 NoticeService 的事）：这屏退到后台 WebView 会被冻住，
  * 但常驻服务照旧连着、照旧弹通知。
@@ -93,6 +93,8 @@ class MainActivity : Activity() {
     private var apkBusy = false
     private lateinit var webPanel: LinearLayout
     private lateinit var web: WebView
+    /** 网页里现在装着哪个地址（null = 还没有 / 已经清成 about:blank，见 openPage 与 showSettings）。 */
+    private var loadedBase: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -350,20 +352,44 @@ class MainActivity : Activity() {
     // 两种画面之间切
     // ------------------------------------------------------------------------
 
-    /** 切到网页画面并加载。session 给了就带上参数，让网页直接切到那个会话。 */
+    /**
+     * 切到网页画面。session 给了就带到那个会话上。
+     *
+     * 页面已经在（同一个地址，上一次打开过、没被清掉）就不再整页重来：点一下通知就整页重载
+     * 很扎眼 —— 会话列表、连着的长连接、滚动位置全重新来过。这会儿只叫页面自己切到那个会话
+     * （`window.pichatSwitchSession`，就是顶条上点一格那一下）。页面不在、或者是旧的界面文件
+     * 没有那颗接口，才照旧带上 `?session=` 整个加载一遍。
+     */
     private fun openPage(session: String?) {
         val base = savedAddress()
         if (base == null) {
             Toast.makeText(this, "先填后端地址", Toast.LENGTH_SHORT).show()
             return
         }
+        settingsScroll.visibility = View.GONE
+        webPanel.visibility = View.VISIBLE
+        lastBackAt = 0L
+        if (loadedBase == base && !session.isNullOrEmpty()) {
+            val result = JSONObject.quote(session)
+            web.evaluateJavascript(
+                "(function(){if(typeof window.pichatSwitchSession!=='function'){return false;}" +
+                    "window.pichatSwitchSession($result);return true;})()"
+            ) { answer ->
+                // 回来的不是 "true"：页面还停在错误页上、或者是旧版界面没有那颗接口 —— 退回整个加载一遍
+                if (answer != "true") { loadPage(base, session) }
+            }
+            return
+        }
+        loadPage(base, session)
+    }
+
+    /** 整个加载一遍网页（页面还没装过、换了地址、或者页面那边没法就地切会话时）。 */
+    private fun loadPage(base: String, session: String?) {
         var url = "$base/"
         if (!session.isNullOrEmpty()) {
             url += "?session=" + URLEncoder.encode(session, "UTF-8")
         }
-        settingsScroll.visibility = View.GONE
-        webPanel.visibility = View.VISIBLE
-        lastBackAt = 0L
+        loadedBase = base
         web.loadUrl(url)
     }
 
@@ -371,6 +397,7 @@ class MainActivity : Activity() {
     private fun showSettings() {
         web.stopLoading()
         web.loadUrl("about:blank")
+        loadedBase = null
         webPanel.visibility = View.GONE
         settingsScroll.visibility = View.VISIBLE
         // 回到这一屏就对一次包里那份界面旧没旧

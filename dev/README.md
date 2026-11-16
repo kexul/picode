@@ -167,6 +167,11 @@ npm run web:shot -- --width 1000 --height 760 --fake-pi --script dev/dragSession
 # 点一下就该切过去，按下那一瞬间后端正推会话列表（跑完一轮、切换、子会话起落时都会推）也照样算数
 npm run web:shot -- --fake-pi --width 900 --height 500 --script dev/tabClick.js
 
+# 验手机 app 点通知进来那一下（app 那边见 android/ 里 MainActivity 的 openPage）：
+# 页面已经在时不再整页重来，只调 window.pichatSwitchSession 切一格 —— 切过去了、
+# 页面没重载（事先留在 window 上的记号还在）、来回都这样：
+npm run web:shot -- --fake-pi --script dev/phoneSwitch.js
+
 # 验「消息滑到底再往上拖，把改动清单拖出来」（底下那一块跟着手指长起来、有阻尼；松手过线留下、
 # 按内容占高最多 45%；两块各占一块不互相盖、贴底拖时最后一行没被顶出去；点一行看那份 diff；
 # 拖着它头上那一条往下拉 / 清单滚到最上头再往下拉 / 点叉都能收起来（清单没到顶时往下拉是翻清单）；

@@ -14184,6 +14184,10 @@
   window.pichatSidebar = { toggle: toggleSidebar };
   syncSidebarLayout();
 
+  // 手机 app 点通知进来时用这颗（整页不重载，只切到一个会话；见 android/ 里 MainActivity 的 openPage）。
+  // 就是顶条上点一格那一下，跟人手点没有分别。
+  window.pichatSwitchSession = requestSwitch;
+
   vscode.postMessage({ type: "ready" });
   activateSessionFromUrl();
 })();
