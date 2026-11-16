@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_bg">#1E6F5C</color>
+    <!-- 图标那圈底：跟网页那颗标记的浅底一个颜色（见 drawable/ic_launcher_fg.xml） -->
+    <color name="ic_launcher_bg">#F6F6F6</color>
 </resources>
