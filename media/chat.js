@@ -2228,7 +2228,11 @@
   function railMessages(st) {
     const out = [];
     for (const el of st.paneEl.children) {
-      if (el.classList && el.classList.contains("msg") && el.classList.contains("user")) { out.push(el); }
+      if (el.classList && el.classList.contains("msg") && el.classList.contains("user")) {
+        // 插件代发的那几条（后台命令结果、子会话交回、自动的「继续」）不算“我说过的话”
+        if (el.dataset.injected === "1") { continue; }
+        out.push(el);
+      }
     }
     return out;
   }
@@ -2931,7 +2935,17 @@
    */
   function enterCls(st) { return st.replayNow ? "" : " msg-enter"; }
 
-  function addPlain(st, cls, role, text, id) {
+  /**
+   * 这一条是不是插件代发的（后台命令结果、子会话交回、自动模式的「继续」这类）：不是人打的，
+   * 界面上的导航条（消息流右边那一列短横线）不拿它们计数。见 src/sessionRuntime.ts 的 noteInjected。
+   * 气泡本身跟人打的一样，照旧显示。
+   */
+  function setInjectedMark(el, injected) {
+    if (!el || !el.dataset) { return; }
+    if (injected) { el.dataset.injected = "1"; } else if (el.dataset.injected) { delete el.dataset.injected; }
+  }
+
+  function addPlain(st, cls, role, text, id, injected) {
     hideEmptyHint(st);
     st.currentToolTail = null; // 新消息块：工具标签另起一行，不往上一段后面续
     endRunningLine(st);       // 这一批工具过去了：还在留的那条位置到此为止（见 endRunningLine）
@@ -2954,6 +2968,8 @@
           known.appendChild(body2);
         }
       }
+      // 插件代发的那几条（后台命令结果 / 子会话交回）：重放时这一笔跟着重算一遍
+      setInjectedMark(known, injected);
       placeUnit(st, known);
       scrollToBottom(st);
       return known.firstElementChild;
@@ -2961,6 +2977,7 @@
     const div = document.createElement("div");
     div.className = "msg " + cls + enterCls(st);
     div.dataset.raw = content;
+    setInjectedMark(div, injected);
     if (cls === "user" && shouldFoldText(content)) {
       div.appendChild(makeLongTextBody(content));
     } else {
@@ -12584,7 +12601,7 @@
         foldTailThinking(t);
         t.segmentThinking = null;
         const label = msg.imageCount ? "[" + msg.imageCount + " 张图片] " : "";
-        addPlain(t, "user", "你", label + (msg.text || ""), msg.id);
+        addPlain(t, "user", "你", label + (msg.text || ""), msg.id, msg.injected);
         endThinking(t, "");
         scrollToBottom(t, true);
         // 新一轮开始了：窗格里的轮数超了就把最老的几轮搬去顶上那条占位（见 trimLiveTurns）
@@ -13577,7 +13594,16 @@
     if (st.paneEl._railSt) {
       st.paneEl._railSt = null;
       if (railObserver) { railObserver.unobserve(st.paneEl); }
-      if (railMutant) { railMutant.unobserve(st.paneEl); }
+      // MutationObserver 没有“摘掉某一个目标”这回事（只有 disconnect 全部）：整只断掉，
+      // 再把还开着的会话重新盯上（只关会话时走这一下，不贵）
+      if (railMutant) {
+        railMutant.disconnect();
+        for (const other of sessions.values()) {
+          if (other !== st && other.paneEl && other.paneEl._railSt === other) {
+            railMutant.observe(other.paneEl, { childList: true });
+          }
+        }
+      }
     }
     for (const tg of st.pendingToolTags.values()) { clearInterval(tg._timer); }
     const wasActive = activeId === id;

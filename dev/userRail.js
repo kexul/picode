@@ -13,6 +13,7 @@
  *   · 空会话、只有一条用户消息：整条不出现，也不挡消息流的鼠标；
  *   · 三十句：整列挤紧；点最上面那行回到第一句；
  *   · 整屏重画（刷新 / 切会话 / 重连）之后跟着重画，条数还是对的；
+ *   · 插件代发的那些（后台命令结果、子会话交回）不进这一条：只数人自己说过的话；
  *   · 画的那一下还没排上版（量出来 0 高）：露出来以后自己补画；
  *   · 轮数超了、老几轮被搬到顶上那条占位里：只画窗格里摆着的那几条；
  *   · 手机上（触屏 + 窄屏）这一条不露面。
@@ -260,6 +261,24 @@ module.exports = async (page) => {
     console.log("\n第七幕（整屏重画）：\n  清空时：" + show(cleared) + " 收着=" + cleared.empty + "\n  重放完：" + show(s));
     if (!cleared.empty || cleared.n) { problems.push("清空之后导航条该收着"); }
     if (s.n !== 9) { problems.push("重放完该还是九行，实际 " + s.n + " 行"); }
+
+    // ---- 第七幕之二：插件代发的那些（后台命令结果 / 子会话交回）不算“我说过的话” ----
+    await page.eval(`
+        const msg = (o) => window.postMessage(o, "*");
+        msg({ type: "userMessage", text: "【后台命令 #3 跑完了（退出码 0，用了 2 分 12 秒）】", injected: true });
+        msg({ type: "userMessage", text: "【子会话「侦察」跑完了，用时 1 分 2 秒】结果在这。", injected: true });
+        msg({ type: "assistantFull", text: "收到。" });
+        return true;
+    `);
+    await page.sleep(500);
+    s = await look();
+    const bubbles = await page.eval(`return document.querySelectorAll(".session-view .session-pane > .msg.user").length;`);
+    console.log("");
+    console.log("第七幕之二（又来两条插件代发的）：");
+    console.log("  窗格里的用户气泡=" + bubbles + " 条，导航条=" + s.n + " 行");
+    if (bubbles !== 11) { problems.push("窗格里该有 11 条用户气泡（九句 + 两条插件代发的），实际 " + bubbles); }
+    if (s.n !== 9) { problems.push("导航条只该数人自己说的那九句，实际 " + s.n + " 行"); }
+    await page.shot("rail-7b-injected.png");
 
     // ---- 第八幕：沿着这一条上下挑：鼠标底下换行、亮的就是那一行；鼠标走开就收起 ----
     const first2 = await tickAt(0);

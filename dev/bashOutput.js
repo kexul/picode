@@ -302,8 +302,32 @@ function checkDisplay() {
     assert.deepEqual(sent.map(command => command.type), ['abort_bash', 'clear_queue', 'prompt', 'abort']);
     assert.equal(sent[2].message, '/' + protocol.BASH_CLEAR_NOTICE_COMMAND);
     assert(!commandMenuItems([{name:protocol.BASH_CLEAR_NOTICE_COMMAND,source:'extension'}]).some(command=>command.insert==='/' + protocol.BASH_CLEAR_NOTICE_COMMAND));
+    // 不是人打的那几条：导航条（消息流右边那一列短横线）只数人说过的话，所以要标出来
+    assert.equal(live.injected, true, '后台命令结果那条要标成“不是人打的”');
+    assert.equal(history[0].injected, true, '重放时后台命令结果也要标出来');
+    const injectedSent = [];
+    runtime.client = { isRunning: () => true, send: command => injectedSent.push(command), stop() {} };
+    runtime.streaming = false;
+    events.length = 0;
+    runtime.handleSend('接着干吧', undefined, { followUp: true });
+    assert.equal(injectedSent.length, 1);
+    runtime.onPiEvent({ type: 'message_start', message: { role: 'user', content: '接着干吧' } });
+    const injectedLive = events.find(event => event.type === 'userMessage');
+    assert.equal(injectedLive.text, '接着干吧');
+    assert.equal(injectedLive.injected, true, '插件代发的那条要标出来');
+    events.length = 0;
+    runtime.onPiEvent({ type: 'message_start', message: { role: 'user', content: '接着干吧' } });
+    const humanLive = events.find(event => event.type === 'userMessage');
+    assert(!humanLive.injected, '人自己打的同样一句话不算插件代发（队列里那一个已经被领走了）');
+    events.length = 0;
+    const replayUser = [{ role: 'user', content: '接着干吧', id: 'u-injected' }];
+    runtime.renderMessages(replayUser, { sink: event => events.push(event) });
+    runtime.renderMessages(replayUser, { sink: event => events.push(event) });
+    const replayMarks = events.filter(event => event.type === 'userMessage').map(event => event.injected);
+    assert.equal(replayMarks.length, 2);
+    assert(replayMarks.every(mark => mark === true), '重放时那一条也要标出来，重放两遍也一样');
     runtime.stopClient();
-    console.log('通过：排队占位不显示；当场、历史重放和稳定编号一致，通知参与历史窗口（最后一轮保证完整）；界面清空后的内部信号不出现在命令菜单。');
+    console.log('通过：排队占位不显示；当场、历史重放和稳定编号一致，通知参与历史窗口（最后一轮保证完整）；界面清空后的内部信号不出现在命令菜单；插件代发的那几条标成“不是人打的”（人或自己打的同样一句话照旧算人说的）。');
 }
 
 // 真 SDK 排队检查由下方 checkSdk 实现；没有网络模型调用。

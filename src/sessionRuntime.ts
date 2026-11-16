@@ -406,6 +406,40 @@ export class SessionRuntime {
     private abortRequested = false;
     /** 「卡住了」点了之后等着补发的那句话：这一轮停稳（agent_settled）时发出去，见 abortThenSend。 */
     private pendingAfterAbort = "";
+    /**
+     * 插件代发出去的那些“用户消息”（后台命令结果、子会话交回、自动模式的「继续」这类）的全文：
+     * 它们不是人打的，界面上的导航条（消息流右边那一列短横线）不拿它们计数。
+     *
+     * 为什么要按文本认：pi 的 message_start 里只有角色与正文，没有“谁发的”这个字段，而插件代发的
+     * 消息是同一条 stdin 递进去的，回头只能靠“这段字就是我刚发的那段”认领。
+     * 当场收消息时按队列领一个销一个（人自己真打一句同样的话也不受影响）；整屏重画时没有队列可领
+     * （同一条会被重放好几遍），改用一份“见过的”名单 —— 后果是后端重启之后老历史里那几条不再认得出。
+     */
+    private injectedSeen = new Set<string>();
+    private injectedQueue: string[] = [];
+
+    /** 插件代发了一条：记下来，等 pi 把这条回传时认领（见 takeInjected）。 */
+    private noteInjected(text: string): void {
+        const t = String(text || "").trim();
+        if (!t) { return; }
+        this.injectedSeen.add(t);
+        if (this.injectedSeen.size > 60) {
+            // 只留最近那一批：更老的早就交回完了，认不出也无妨
+            this.injectedSeen = new Set(Array.from(this.injectedSeen).slice(-40));
+        }
+        this.injectedQueue.push(t);
+        if (this.injectedQueue.length > 20) { this.injectedQueue.shift(); }
+    }
+
+    /** 这条“用户消息”是不是插件刚代发的（是的话从待认领的队列里销掉一个）。 */
+    private takeInjected(text: string): boolean {
+        const t = String(text || "").trim();
+        if (!t) { return false; }
+        const i = this.injectedQueue.indexOf(t);
+        if (i < 0) { return false; }
+        this.injectedQueue.splice(i, 1);
+        return true;
+    }
 
     constructor(id: string, name: NameParts, private host: RuntimeHost) {
         this.id = id;
@@ -983,6 +1017,9 @@ export class SessionRuntime {
             }));
         }
         try {
+            // 插件代发的那些（子会话交回、后台命令结果、自动模式的「继续」）：记一笔，
+            // 等 pi 把它当用户消息回传时认出来（界面上的导航条不拿它们计数，见 noteInjected）
+            if (fromPlugin) { this.noteInjected(message); }
             this.client!.send(cmd);
         } catch (e: any) {
             this.post({ type: "systemError", text: `发送失败: ${e.message}` });
@@ -1129,6 +1166,8 @@ export class SessionRuntime {
                         type: "userMessage",
                         text,
                         imageCount: imgs > 0 ? imgs : 0,
+                        // 插件代发的（后台命令结果 / 子会话交回 / 自动的「继续」）不算“人说过的话”
+                        injected: this.takeInjected(text) || undefined,
                     });
                     // panel 名字：创建时命名后终身保留，不随用户消息更新。
                 } else if (
@@ -1327,7 +1366,8 @@ export class SessionRuntime {
                 if (isBashNoticeMessage(m)) {
                     // pi 的 message_end 替换已完成：只显示模型实际收到的最终内容。
                     this.hasConversation = true;
-                    this.post({ type: "userMessage", id: bashNoticeMessageId(m), text: m.content });
+                    // 后台命令结果：不是人打的（导航条不拿它计数）
+                    this.post({ type: "userMessage", id: bashNoticeMessageId(m), text: m.content, injected: true });
                     this.refreshStatsSoon();
                 } else if (m && m.role === "assistant") {
                     // 这条正文吐完了：阶段里“写”到此为止（接下来可能是工具、也可能在想）
@@ -2139,16 +2179,21 @@ export class SessionRuntime {
             switch (m.role) {
                 case "custom":
                     if (isBashNoticeMessage(m)) {
-                        emit({ type: "userMessage", id: bashNoticeMessageId(m), text: m.content });
+                        // 后台命令结果：不是人打的（导航条不拿它计数）
+                        emit({ type: "userMessage", id: bashNoticeMessageId(m), text: m.content, injected: true });
                     }
                     break;
-                case "user":
+                case "user": {
+                    const body = textOf(m.content);
                     emit({
                         type: "userMessage",
                         id: mid,
-                        text: textOf(m.content),
+                        text: body,
+                        // 重放没有队列可领（同一条会被重放好几遍）：按“插件发过的那些字”认
+                        injected: this.injectedSeen.has(body.trim()) || undefined,
                     });
                     break;
+                }
                 case "assistant": {
                     const parts = Array.isArray(m.content) ? m.content : [];
                     // 一条助手消息里的各块（正文 / 思考 / 工具调用）各得一个编号，
