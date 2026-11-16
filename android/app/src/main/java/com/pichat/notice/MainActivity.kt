@@ -676,7 +676,13 @@ class MainActivity : Activity() {
         }
     }
 
-    /** 问一句包有多大（HEAD，只回个头）：进度条按它画。拿不到就写一行字、给 null。 */
+    /**
+     * 问一句包有多大（HEAD，只回个头）：进度条按它画。拿不到就写一行字、给 null。
+     *
+     * 大小得从 `Content-Length` 那个头里读，不能用 `body.contentLength()`：
+     * OkHttp 对 HEAD 的正文一律当成 0 字节（量过：头里 2109749，body.contentLength() 是 0），
+     * 照着它判断就是“永远没写多大”。
+     */
     private fun apkSize(base: String): Long? {
         apkClient.newCall(Request.Builder().url("$base/apk").head().build()).execute().use { response ->
             if (!response.isSuccessful) {
@@ -684,7 +690,7 @@ class MainActivity : Activity() {
                     if (response.code == 404) "（电脑上还没打好）" else "")
                 return null
             }
-            val size = response.body?.contentLength() ?: -1L
+            val size = response.header("Content-Length")?.trim()?.toLongOrNull() ?: -1L
             if (size <= 0) {
                 showApkNote("拿到的包没写多大（Content-Length 没有），装不了")
                 return null
