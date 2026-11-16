@@ -6,6 +6,8 @@ import * as os from "os";
 import * as path from "path";
 import { getBrowserChatHtml, getPanelChatHtml, PAGE_ICON_SVG, webAppManifest } from "./pageHtml";
 import { mediaStamp, mediaVersion } from "./mediaVersion";
+import { CHAT_UI_FILE_NAMES } from "./chatUiFiles";
+import { createApkBuilder, type ApkBuilder } from "./apkBuild";
 import { HEARTBEAT_MS, PAGE_STALE_MS, PING_MS, TICK_TIMEOUT_MS } from "./chatProtocol";
 import type { ChatBroadcaster } from "./chatBroadcaster";
 import type { ScreenRegistry } from "./screenRegistry";
@@ -56,6 +58,8 @@ import { isStrippable, stripForWire } from "./stripText";
 
 /** 页面发来的单个请求允许的最大字节数（粘贴图片会是好几 MB）。 */
 const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
+/** 安卓包的类型（手机拿到这个类型才认得出该交给安装器）。 */
+const APK_TYPE = "application/vnd.android.package-archive";
 // 心跳间隔与"多久没动静算死"这两个数在 chatProtocol.ts：两个客户端也要按它们办事。
 /** 一条推送连接最多积压多少字节：页面不读了（屏黑了 / 网络卡住）就别再往里塞，
  *  掐掉让它重连重画。不掐的话这些字节全堆在插件进程里，回来时也不会被 GC 回收。 */
@@ -410,6 +414,8 @@ export class PiChatWebServer {
     private readonly wireCache = new Map<string, { stamp: string; data: Buffer }>();
     /** 本次监听开始服务的时刻（`/health` 报出去；重启会更新）。 */
     private startedAt = 0;
+    /** 安卓包的打包器（手机那头的「打包并安装新版」，见 src/apkBuild.ts）。 */
+    private readonly apkBuilder: ApkBuilder = createApkBuilder();
     private settings: WebServerSettings = { enabled: false, port: 0, host: "0.0.0.0", trustedOrigins: [] };
 
     constructor(
@@ -540,6 +546,8 @@ export class PiChatWebServer {
      */
     private teardown(quiet = false): void {
         if (this.heartbeat) { clearInterval(this.heartbeat); this.heartbeat = undefined; }
+        // 正在打的 gradle 一并收掉：留着它会锁住 android/app/build，下一次打包就编不动了
+        this.apkBuilder.stop();
         const broadcaster = this.host.getBroadcaster();
         for (const channel of broadcaster.removeAllChannels()) {
             // 告别话要给：页面收到 end 就不再重连（服务真的停了，重连也没用）
@@ -617,6 +625,41 @@ export class PiChatWebServer {
             }
             if (pathname.startsWith("/media/")) {
                 this.sendMedia(req, res, pathname.slice("/media/".length), url.searchParams.get("v") ?? "");
+                return;
+            }
+            // 界面文件的当前指纹，一份清单（跟安卓 APK 包里 assets/media-manifest.json 同一个样子：
+            // 文件名 → 指纹）。手机 app 拿自己对一下，就知道包里带的那份界面是不是已经旧了
+            // （见 android/README）。
+            if (pathname === "/media-manifest.json") {
+                if (req.method !== "GET" && req.method !== "HEAD") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                const manifest: Record<string, string> = {};
+                for (const name of CHAT_UI_FILE_NAMES) { manifest[name] = mediaVersion(this.mediaDir, name); }
+                this.writeBody(req, res, 200, Buffer.from(JSON.stringify(manifest), "utf8"), {
+                    "Content-Type": "application/json; charset=utf-8",
+                    "Cache-Control": "no-store",
+                });
+                return;
+            }
+            if (pathname === "/apk/build") {
+                // 手机设置里那颗「打包并安装新版」：POST 一下开始打（正在打就报当前进度），
+                // GET 问进度（见 src/apkBuild.ts）。打完再从 /apk 把包下走。
+                if (req.method === "POST") {
+                    this.writeBody(req, res, 200, Buffer.from(JSON.stringify(this.apkBuilder.start()), "utf8"), {
+                        "Content-Type": "application/json; charset=utf-8",
+                        "Cache-Control": "no-store",
+                    });
+                    return;
+                }
+                if (req.method !== "GET" && req.method !== "HEAD") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                this.writeBody(req, res, 200, Buffer.from(JSON.stringify(this.apkBuilder.status()), "utf8"), {
+                    "Content-Type": "application/json; charset=utf-8",
+                    "Cache-Control": "no-store",
+                });
+                return;
+            }
+            if (pathname === "/apk") {
+                if (req.method !== "GET" && req.method !== "HEAD") { this.sendText(req, res, 405, "只接受 GET。"); return; }
+                this.sendApk(req, res);
                 return;
             }
             // 浏览器「安装成应用」要的两样：那份清单与它引用的图标（见 pageHtml 的 webAppManifest）
@@ -1532,6 +1575,44 @@ export class PiChatWebServer {
             this.compressCache.set(key, out);
         }
         return out;
+    }
+
+    /**
+     * 发那个安卓包（/apk）：手机设置里点「打包并安装新版」时下走它。
+     *
+     * 不压（包里已经压过了）、不走缓存；认 Range，手机上下到一半断了能从中间接着下。
+     */
+    private sendApk(req: http.IncomingMessage, res: http.ServerResponse): void {
+        const file = this.apkBuilder.apkFile();
+        if (!file) {
+            this.sendText(req, res, 404, "这台机器上还没有编好的 APK：先在手机上点一次「打包并安装新版」。");
+            return;
+        }
+        let size = 0;
+        try { size = fs.statSync(file).size; } catch { /* 包刚被删了：按没有办 */ }
+        if (!size) {
+            this.sendText(req, res, 404, "那个包读不到（不见了？）。");
+            return;
+        }
+        const name = { "Content-Disposition": "attachment; filename=\"pi-chat-android.apk\"" };
+        const range = /bytes=(\d+)-(\d*)/.exec(req.headers.range ?? "");
+        if (range) {
+            const start = Math.min(Number(range[1]) || 0, size - 1);
+            const asked = range[2] ? Number(range[2]) : size - 1;
+            const end = Math.min(Math.max(asked, start), size - 1);
+            res.writeHead(206, {
+                "Content-Type": APK_TYPE,
+                "Content-Range": `bytes ${start}-${end}/${size}`,
+                "Content-Length": end - start + 1,
+                ...name,
+            });
+            if (req.method === "HEAD") { res.end(); return; }
+            fs.createReadStream(file, { start, end }).on("error", () => res.destroy()).pipe(res);
+            return;
+        }
+        res.writeHead(200, { "Content-Type": APK_TYPE, "Content-Length": size, ...name });
+        if (req.method === "HEAD") { res.end(); return; }
+        fs.createReadStream(file).on("error", () => res.destroy()).pipe(res);
     }
 
     // ========================================================================

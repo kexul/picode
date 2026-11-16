@@ -485,6 +485,8 @@ HTML 解析完       851 ms
 | `mermaidCheck.js` | 验消息流里的 ```mermaid 画成图（各种图都出图、写坏的留代码块加一行说明、画图那个脚本出现图才去拉、中文节点名不被吞、换深色不重画就跟着变、点图上的空白处也能打开大图、大图自己有底色、面板那一份也画得出、页面不报错）：`node dev/mermaidCheck.js` |
 | `mermaidFileCheck.js` | 验文件侧边栏里那份 markdown 文档里的 mermaid（同一个播放器，换个地方；甘特图也画得出、写坏的留说明）：`node dev/mermaidFileCheck.js` |
 | `lazyScripts.js` | 验画图的 pele（700 多 KB）没排进首屏（浏览器页面按需加载、地址写在 meta 里带着指纹；面板仍然内联）：`node dev/lazyScripts.js` |
+| `apkBuild.js` | 验手机那颗「打包并安装新版」背后的三条口（`POST /apk/build` 现跑一次 gradle、`GET /apk/build` 问进度、`GET /apk` 把包发出去）：没源码的机器上不谎称能打包、正在打时再 POST 不起第二份、打完版本号跟着抬、发出去的字节跟磁盘上那个包一模一样且认 Range。会真跑一次 gradle（几十秒）：`node dev/apkBuild.js` |
+| `apkBundle.js` | 验手机 app 设置画面那行「包里的界面是不是旧的」靠的那条 `GET /media-manifest.json`（键跟界面清单一致、值就是原样文件的 sha1 前 10 位、跟页面里 `?v=` 一模一样、文件改了就认得出是旧的、只认 GET / HEAD、不缓存）：`node dev/apkBundle.js` |
 | `childSessions.js` | 验历史列表那两件事（扫描结果按改动时间 / 大小缓存、子会话靠清单认而不是看第一条用户说了什么）：`node dev/childSessions.js` |
 | `diffCheck.js` | 验「改动」那一格背后的逐行比较（大文件改两处不报成整段换掉、挨得近的两段不叠、按 diff 拼得回原文）：`node dev/diffCheck.js` |
 | `linkCandidates.js` | 验点文件链接时后端怎么挑文件（写清楚的直接开、会话读写过的同名文件先认且不扫仓库、没碰过的才列清单、目录外的不认）：`node dev/linkCandidates.js` |

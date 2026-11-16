@@ -42,12 +42,27 @@ android {
     namespace "com.pichat.notice"
     compileSdk 35
 
+    // 版本号：拿打包那一刻的时间算（秒做 versionCode、日期做 versionName），不写死。
+    // 道理：
+    //   - 手机设置里那颗「打包并安装新版」会隔三差五重打一个，系统安装器往下装一个
+    //     版本号不息的包会直接拒（“降级”），所以任何时候打出来的包都得比上一次大；
+    //   - 倒过来也一样：以前手打的那个版本号是 1，用手机打过一次就追不上了 ——
+    //     两路都按时间算，谁先打谁小。
+    // 想自己指定就 -PapkVersionCode=… / -PapkVersionName=…（平常不用）。
+    def stamp = new Date()
+    def apkVersionCode = project.hasProperty("apkVersionCode")
+        ? project.property("apkVersionCode").toString().toInteger()
+        : (int) (stamp.getTime() / 1000L)
+    def apkVersionName = project.hasProperty("apkVersionName")
+        ? project.property("apkVersionName").toString()
+        : String.format("1.0.%1\$tY%1\$tm%1\$td%1\$tH%1\$tM", stamp)
+
     defaultConfig {
         applicationId "com.pichat.notice"
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode apkVersionCode
+        versionName apkVersionName
     }
 
     buildTypes {

@@ -5,6 +5,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 设置画面那颗「打包并安装新版」：新包是 app 自己从电脑上拿下来、交给系统安装器的
+         （见 MainActivity 的 installApk、ApkInstallReceiver）。第一次装之前得在系统里
+         允许这个 app 安装未知来源的应用（系统会自己弹那一步）。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:label="Pi 提醒"
@@ -21,6 +25,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 装新包的结果（系统安装会话答的话）：见 ApkInstallReceiver -->
+        <receiver
+            android:name=".ApkInstallReceiver"
+            android:exported="false" />
 
         <!-- 常驻服务：连着后端的提醒流（/phone-notice）。
              specialUse 是留给自装 app 的前台服务类型：系统对它没有运行时长限制，
