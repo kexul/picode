@@ -24,6 +24,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 
 class Live
@@ -62,8 +63,24 @@ class Live
         }
         catch (Exception err)
         {
-            Console.Error.Write("桌面实时画面失败：" + err.Message);
+            WriteError("桌面实时画面失败：" + err.Message);
             return 1;
+        }
+    }
+
+    /**
+     * 把一句人话写到标准错误上，按 UTF-8 写字节。
+     *
+     * 为什么不用 Console.Error.Write：它按控制台的代码页编码（中文 Windows 上是 936），
+     * 而后端那边按 UTF-8 读（见 src/desktopLive.ts），一句话到了手机上就成了乱码。
+     */
+    private static void WriteError(string message)
+    {
+        byte[] bytes = new UTF8Encoding(false).GetBytes(message);
+        using (Stream stderr = Console.OpenStandardError())
+        {
+            stderr.Write(bytes, 0, bytes.Length);
+            stderr.Flush();
         }
     }
 

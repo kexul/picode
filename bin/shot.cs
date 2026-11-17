@@ -21,6 +21,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 
 class Shot
 {
@@ -54,8 +55,25 @@ class Shot
         }
         catch (Exception err)
         {
-            Console.Error.Write("桌面截图失败：" + err.Message);
+            WriteError("桌面截图失败：" + err.Message);
             return 1;
+        }
+    }
+
+    /**
+     * 把一句人话写到标准错误上，按 UTF-8 写字节。
+     *
+     * 为什么不用 Console.Error.Write：它按控制台的代码页编码（中文 Windows 上是 936），
+     * 而后端那边按 UTF-8 读（见 src/desktopScreenshot.ts 的 encoding: "utf8"），
+     * 一句话到了手机上就成了“����”这种乱码——屏幕锁着时点截图按钮弹出来的那一条就是它。
+     */
+    private static void WriteError(string message)
+    {
+        byte[] bytes = new UTF8Encoding(false).GetBytes(message);
+        using (Stream stderr = Console.OpenStandardError())
+        {
+            stderr.Write(bytes, 0, bytes.Length);
+            stderr.Flush();
         }
     }
 
