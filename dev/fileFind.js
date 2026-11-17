@@ -24,6 +24,24 @@ const { SCRATCH_DIR } = require("./harness.js");
 const FILE = "0-find.js";
 const TOTAL_LINES = 900;
 const HITS = [40, 150, 260];
+/** markdown 那一份（排好版那份文档里也能找）：三处 NEEDLE 分别落在段落、列表项、代码块里。 */
+const MD_FILE = "0-find.md";
+/** 换行的写法（不写 "\n" 是因为这一份脚本本身就是在外面拼出来再落盘的，转义容易岔） */
+const NL = String.fromCharCode(10);
+const MD_TEXT = [
+    "# 标题",
+    "",
+    "第一段里有一个 NEEDLE。",
+    "",
+    "- 列表里也有 NEEDLE",
+    "- 这一行没有",
+    "",
+    "```",
+    "NEEDLE 在代码块里也算",
+    "```",
+    "",
+    "最后一行没有。",
+].join(NL) + NL;
 
 /** 那一份 900 行的测试文件：三行里带 NEEDLE，其余都是普通的一行。
  *  @param changeLine 非 0 就把那一行改写掉（造一处改动，给“一份 diff 里也能找”那一遍用） */
@@ -65,6 +83,7 @@ module.exports = async (page) => {
     fs.rmSync(WORK, { recursive: true, force: true });
     fs.mkdirSync(WORK, { recursive: true });
     fs.writeFileSync(path.join(WORK, FILE), makeText(0), "utf8");
+    fs.writeFileSync(path.join(WORK, MD_FILE), MD_TEXT, "utf8");
     initRepo(WORK);
     const dir = WORK;
 
@@ -228,6 +247,69 @@ module.exports = async (page) => {
     check("对不上一个字：写「没有」，上下两颗按不动",
         none.count === "没有" && none.prev && none.next, JSON.stringify(none));
     await typeFind("NEEDLE");
+
+    // 4b. markdown（排好版的那一份）：也走这根条，在排好版的字上包 <mark>；
+    //     一处一处跳；收起来时把那几个 <mark> 拆掉、把字还回去。
+    await esc();
+    await page.sleep(150);
+    const mdOpen = await page.eval(`
+        document.getElementById("fileCloseFile").click();
+        const row = Array.from(document.querySelectorAll("#dirPane .file-entry"))
+            .find(function (r) { return r.getAttribute("data-path") === ${JSON.stringify(MD_FILE)}; });
+        if (!row) { return "没找到那一行"; }
+        row.click();
+        return "点了";
+    `);
+    await page.sleep(1000);
+    await page.eval(`window.__findPrevented = false; return true;`);
+    await ctrlF();
+    await page.sleep(250);
+    await typeFind("NEEDLE");
+    const md = JSON.parse(await page.eval(`
+        const root = document.querySelector("#fileBody .file-page.active .file-md");
+        return JSON.stringify({
+            rendered: !!root,
+            shown: !document.getElementById("fileFind").hidden,
+            prevented: !!window.__findPrevented,
+            count: (document.getElementById("fileFindCount") || {}).textContent || "",
+            marks: root ? root.querySelectorAll("mark.file-find-mark").length : 0,
+            cur: root ? root.querySelectorAll("mark.file-find-mark.cur").length : 0,
+        });
+    `));
+    check("markdown 也归这根查找条（不是浏览器那个）", mdOpen === "点了" && md.rendered && md.shown && md.prevented,
+        JSON.stringify(md));
+    check("排好版的字上一共有三处（写「1/3」，三处都涂了、停的那一处再深一点）",
+        md.count === "1/3" && md.marks === 3 && md.cur === 1,
+        JSON.stringify({ count: md.count, marks: md.marks, cur: md.cur }));
+    await page.shot("find-5-markdown.png");
+    await enter(false);
+    await page.sleep(250);
+    const mdNext = JSON.parse(await page.eval(`
+        const root = document.querySelector("#fileBody .file-page.active .file-md");
+        const cur = root ? root.querySelector("mark.file-find-mark.cur") : null;
+        const br = document.getElementById("fileBody").getBoundingClientRect();
+        const cr = cur ? cur.getBoundingClientRect() : null;
+        return JSON.stringify({
+            count: (document.getElementById("fileFindCount") || {}).textContent || "",
+            cur: cur ? (cur.textContent || "") : "",
+            visible: !!cr && cr.top >= br.top - 2 && cr.bottom <= br.bottom + 2,
+        });
+    `));
+    check("回车：跳到第二处（那一段字滚到了眼前）",
+        mdNext.count === "2/3" && mdNext.cur === "NEEDLE" && mdNext.visible,
+        JSON.stringify(mdNext));
+    await esc();
+    await page.sleep(200);
+    const mdClean = JSON.parse(await page.eval(`
+        const root = document.querySelector("#fileBody .file-page.active .file-md");
+        return JSON.stringify({
+            marks: root ? root.querySelectorAll("mark.file-find-mark").length : 0,
+            text: root ? root.textContent : "",
+        });
+    `));
+    check("收起来：那几个 <mark> 拆干净了，字还是原来那些",
+        mdClean.marks === 0 && mdClean.text.indexOf("NEEDLE") >= 0 && mdClean.text.indexOf("列表里也有") >= 0,
+        JSON.stringify({ marks: mdClean.marks }));
 
     // 5. 换成一份 diff：也能找，而且同一句在左右两栏都有时只算一处。
     //    造一处改动：把第 149 行改掉（第 150 行那句 NEEDLE 就成了“没变的那行”，左右两栏都有）

@@ -1989,6 +1989,15 @@
   .diff2-cell .file-text.find.cur {
     background: rgba(234, 140, 0, 0.45); border-radius: 2px;
   }
+  /* markdown 里对上的那几段字（找字，见 chat.js 的「弹窗里找字」）：只涂字、不动排版；
+     整段包成 <mark>，收起来时拆掉把字还回去 */
+  .file-md mark.file-find-mark {
+    background: rgba(234, 140, 0, 0.28); color: inherit;
+    padding: 0; border-radius: 2px;
+  }
+  .file-md mark.file-find-mark.cur {
+    background: rgba(234, 140, 0, 0.55);
+  }
   /* markdown 文件：排好版渲染成文档（样式就是消息流里那一套 .md），不留行号。 */
   .file-md { padding: 2px 14px 6px; }
   .file-note { padding: 12px 14px; line-height: 1.6; opacity: 0.75; }

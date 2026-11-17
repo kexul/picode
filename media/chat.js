@@ -826,8 +826,9 @@
     }
     // 看文件的弹窗里 Ctrl+F / Cmd+F：在这一份里找字（见「弹窗里找字」那一段）。
     // 拦下来的理由：弹窗正文是分窗口摆的，页面里只有看得见的那几百行，
-    // 浏览器自己那个查找只能搜到那几行，滚出去的就悄悄漏了，也不会跳过去。
-    // 找不了的那几页（markdown 排版、网页、图、正在改的文本框里）不拦，照旧归浏览器。
+    // 浏览器自己那个查找只能搜到那几行，滚出去的就悄悄漏了，也不会跳过去；markdown 排好版那一块
+    // 虽然整篇都在页面里，但浏览器那个搜的是整个页面（左那列、消息流都算），不会一处一处跳。
+    // 找不了的那几页（当网页渲染的 html、图、正在改的文本框里）不拦，照旧归浏览器。
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key || "").toLowerCase() === "f") {
       if (fileViewing() && !fileSearch.open && fileFindAvailable()) {
         e.preventDefault();
@@ -8981,6 +8982,10 @@
     fixMdImages(doc, activeId, dirOfPath(tab.path));
     decorateMermaid(doc);
     page.appendChild(doc);
+    // 这一份刚（重）画过：找着的那些处重算一道（同一份跟着刷新重画时停在原处，见 runFileFind 的 "keep"）。
+    // 只在这份就是现在看着的那一份时算
+    const viewing = viewTab();
+    if (fileFind.open && viewing && viewing.file === tab) { runFileFind("keep"); }
   }
 
   /** 一个相对写法里上一层目录怎么写（`docs/a.md` → `docs`，`a.md` → 空串）。 */
@@ -9127,29 +9132,46 @@
   //
   // 为什么不用浏览器自己那个查找：弹窗正文是分窗口摆的（见 mountFileRows），页面里只有看得见的那几百行，
   // 浏览器只能搜到那几行，滚出去的就悄悄漏了，也不会跳过去。所以这一份得自己找：
-  // 正文在 tab.text 里，一份 diff 就一格一格看那几格的字（见 fileFindMatches）。
+  // 正文在 tab.text 里，一份 diff 就一格一格看那几格的字，markdown 那一片就在排好版的字上包 <mark>
+  //（见 fileFindMatches）。
   //
-  // 只在「一行一行的正文」与「一份 diff」上有：markdown 排版、当网页渲染的 html、图、
-  // 以及正在改文件的那个文本框里没有行这回事（那里 Ctrl+F 照旧归浏览器）。
+  // 只在「一行一行的正文」、「一份 diff」、「markdown 排好版」上有：当网页渲染的 html、图、
+  // 以及正在改文件的那个文本框里没有字可包（那里 Ctrl+F 照旧归浏览器）。
   const fileFind = {
     open: false,
     query: "",
     at: -1,        // 现在停在第几处（从 0 数）
     count: 0,
+    kind: "",      // 这一份是哪种："text"（一行一行的正文）/ "diff" / "md"（markdown 排好版的）
     lines: [],     // 一行一行的正文：对上的是哪几行（从 1 数）
     cells: [],     // 一份 diff：对上的那几处（一处一组：同一行左右两栏都有就把那一组的几格都列上）
+    md: [],        // markdown：对上的那几段字（{ node, start, end }，涂的时候再包成 <mark>）
+    marks: [],     // markdown：上回包出来的那几个 <mark>（收起来时拆掉、把字还回去）
     tab: null,     // 这几处是哪一个文件的（正文那一条靠它决定涂哪一份，见 fileViewRows）
     paintedTab: null,   // 上一回涂过的那一份正文（换了一份要把它的擦掉重摆）
     painted: null,      // 上一回涂过的那几格 diff
   };
 
-  /** 现在看着的这一份能不能在里面找字（见上面那段：只认一行一行的正文与一份 diff）。 */
-  function fileFindAvailable() {
-    const entry = viewTab();
-    if (!entry) { return false; }
-    if (entry.kind === "diff") { return !!entry.page && !!entry.page.querySelector(".diff2-cell"); }
+  /** 现在看着的这一份属于哪一种（不能找就给空串）。 */
+  function fileFindKind(entry) {
+    if (!entry) { return ""; }
+    if (entry.kind === "diff") {
+      return entry.page && entry.page.querySelector(".diff2-cell") ? "diff" : "";
+    }
     const tab = entry.file;
-    return !!(tab && tab.rows && !tab.editing && typeof tab.text === "string");
+    if (!tab || tab.editing) { return ""; }
+    if (tab.rows && typeof tab.text === "string") { return "text"; }
+    // markdown：排好版的那一块（见 renderFileMarkdown）。整篇都在页面里，按字找、涂在字上。
+    return markdownFindRoot(tab) ? "md" : "";
+  }
+
+  /** 现在看着的这一份能不能在里面找字。 */
+  function fileFindAvailable() { return fileFindKind(viewTab()) !== ""; }
+
+  /** markdown 排好版的那一块（没有就是 null）。 */
+  function markdownFindRoot(tab) {
+    const page = tab && tab.page;
+    return page ? page.querySelector(".file-md") : null;
   }
 
   /** 开查找条（Ctrl+F、或者横条上那颗放大镜）：已经开着就只把光标放回框里。 */
@@ -9171,27 +9193,42 @@
     clearFileFindMarks();
     fileFind.at = -1;
     fileFind.count = 0;
+    fileFind.kind = "";
     fileFind.lines = [];
     fileFind.cells = [];
+    fileFind.md = [];
     fileFind.tab = null;
     if (fileFind.root) { fileFind.root.hidden = true; }
     if (fileFind.input) { fileFind.input.blur(); }
     syncFileFindBar();
   }
 
-  /** 把涂上的那几处擦掉：正文重摆一道（fileViewRows 那边已经不计它了），diff 那几格去掉 class。 */
+  /** 把涂上的那几处擦掉：正文重摆一道（fileViewRows 那边已经不计它了），diff 那几格去掉 class，markdown 那几个 <mark> 拆掉。 */
   function clearFileFindMarks() {
     const tab = fileFind.paintedTab;
     if (tab && tab.cluster) { tab.cluster.update(fileViewRows(tab)); }
     (fileFind.painted || []).forEach((el) => el.classList.remove("find", "cur"));
     fileFind.paintedTab = null;
     fileFind.painted = null;
+    clearMdFindMarks();
   }
 
-  /** 这个关键词在这一份里对上了哪些地方（一行一行的正文给行号，一份 diff 给那几格的 .file-text）。 */
+  /** markdown 里包出来的那几个 <mark> 拆掉、把字还回原处（相邻的文字并回去，下次找的还是整段原文）。 */
+  function clearMdFindMarks() {
+    (fileFind.marks || []).forEach((mark) => {
+      const parent = mark.parentNode;
+      if (!parent) { return; }
+      while (mark.firstChild) { parent.insertBefore(mark.firstChild, mark); }
+      parent.removeChild(mark);
+      parent.normalize();
+    });
+    fileFind.marks = [];
+  }
+
+  /** 这个关键词在这一份里对上了哪些地方（一行一行的正文给行号，一份 diff 给那几格，markdown 给那几段字）。 */
   function fileFindMatches(entry, query) {
     const q = String(query || "").toLowerCase();
-    const out = { lines: [], cells: [] };
+    const out = { lines: [], cells: [], md: [] };
     if (!entry || !q) { return out; }
     if (entry.kind === "diff") {
       const page = entry.page;
@@ -9215,14 +9252,81 @@
       return out;
     }
     const tab = entry.file;
-    if (!tab || !tab.rows || typeof tab.text !== "string") { return out; }
-    const lines = String(tab.text).split("\n");
-    // 末尾那个换行不算一行（跟 renderFileText 那一刀一样）
-    if (tab.rowCount > 0 && lines.length > tab.rowCount) { lines.length = tab.rowCount; }
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].toLowerCase().indexOf(q) >= 0) { out.lines.push(i + 1); }
+    if (!tab) { return out; }
+    if (tab.rows && typeof tab.text === "string") {
+      const lines = String(tab.text).split("\n");
+      // 末尾那个换行不算一行（跟 renderFileText 那一刀一样）
+      if (tab.rowCount > 0 && lines.length > tab.rowCount) { lines.length = tab.rowCount; }
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].toLowerCase().indexOf(q) >= 0) { out.lines.push(i + 1); }
+      }
+      return out;
+    }
+    out.md = collectMdMatches(markdownFindRoot(tab), q);
+    return out;
+  }
+
+  /**
+   * markdown 排好版的那一块里，这个关键词对上了哪几段字。
+   * 一段一段文字看（不走 innerHTML）：图里的 <svg> 与 <script> / <style> 跳过 ——
+   * 那几处包不了 <mark>（svg 里放一个 html 标签是画不出来的）。
+   */
+  function collectMdMatches(root, q) {
+    const out = [];
+    if (!root || !q) { return out; }
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    let node = walker.nextNode();
+    while (node) {
+      if (!inMdFindableNode(node)) {
+        node = walker.nextNode();
+        continue;
+      }
+      const text = String(node.nodeValue || "");
+      const lower = text.toLowerCase();
+      let at = lower.indexOf(q);
+      while (at >= 0) {
+        out.push({ node: node, start: at, end: at + q.length });
+        at = lower.indexOf(q, at + q.length);
+      }
+      node = walker.nextNode();
     }
     return out;
+  }
+
+  /** 这段字能不能包 <mark>（svg 里、脚本样式里不行）。 */
+  function inMdFindableNode(node) {
+    let el = node.parentNode;
+    while (el && el.nodeType === 1) {
+      const tag = String(el.nodeName || "").toLowerCase();
+      if (tag === "svg" || tag === "script" || tag === "style") { return false; }
+      if (el.classList && el.classList.contains("file-md")) { return true; }
+      el = el.parentNode;
+    }
+    return true;
+  }
+
+  /** 把一处对上来的字包成 <mark>（同一段里的几处要从后往前包：前面那几处的偏移才还是对的）。 */
+  function wrapMdMatch(match) {
+    const node = match.node;
+    if (!node.parentNode) { return null; }
+    const len = String(node.nodeValue || "").length;
+    if (match.end < len) { node.splitText(match.end); }
+    const mid = match.start > 0 ? node.splitText(match.start) : node;
+    const mark = document.createElement("mark");
+    mark.className = "file-find-mark";
+    mid.parentNode.insertBefore(mark, mid);
+    mark.appendChild(mid);
+    return mark;
+  }
+
+  /** 一处 markdown 命中的位置（挑“眼下看着的地方往下最近那一处”时用）。 */
+  function mdMatchRect(match) {
+    const range = document.createRange();
+    try {
+      range.setStart(match.node, match.start);
+      range.setEnd(match.node, match.end);
+      return range.getBoundingClientRect();
+    } catch (e) { return null; }
   }
 
   /**
@@ -9232,14 +9336,19 @@
    */
   function runFileFind(mode) {
     if (!fileFind.open) { return; }
-    if (!fileFindAvailable()) { closeFileFind(); return; }
     const entry = viewTab();
+    const kind = fileFindKind(entry);
+    if (!kind) { closeFileFind(); return; }
     const oldTab = fileFind.paintedTab;
+    // markdown 那几处是包在字上的：先拆掉上一回的，再按原文重找（不然找到的是 <mark> 里的那几段）
+    if (fileFind.kind === "md" || kind === "md") { clearMdFindMarks(); }
     const got = fileFindMatches(entry, fileFind.query);
-    const count = got.lines.length || got.cells.length;
-    fileFind.tab = entry.kind === "file" ? entry.file : null;
+    const count = got.lines.length || got.cells.length || got.md.length;
+    fileFind.kind = kind;
+    fileFind.tab = kind === "text" ? entry.file : null;
     fileFind.lines = got.lines;
     fileFind.cells = got.cells;
+    fileFind.md = got.md;
     fileFind.count = count;
     if (count === 0) {
       fileFind.at = -1;
@@ -9250,25 +9359,33 @@
     } else if (mode === "keep" && fileFind.at >= 0) {
       fileFind.at = Math.min(fileFind.at, count - 1);
     } else {
-      fileFind.at = fileFindNear(entry, got);
+      fileFind.at = fileFindNear(got);
     }
     paintFileFind(oldTab);
     syncFileFindBar();
-    scrollToFileFind(entry);
+    scrollToFileFind();
   }
 
   /** 从眼下看着的那一段往下，最近的一处在第几个（都过了就到第一处）。 */
-  function fileFindNear(entry, got) {
+  function fileFindNear(got) {
     const body = fileSidebar.body;
-    if (entry.kind === "diff") {
+    const top = body ? body.getBoundingClientRect().top : 0;
+    if (fileFind.kind === "diff") {
       if (!body) { return 0; }
-      const top = body.getBoundingClientRect().top;
       for (let i = 0; i < got.cells.length; i++) {
         if (got.cells[i][0].getBoundingClientRect().top >= top - 4) { return i; }
       }
       return 0;
     }
-    const tab = fileFind.tab;   // 已经设成这一份了（见 runFileFind）
+    if (fileFind.kind === "md") {
+      if (!body) { return 0; }
+      for (let i = 0; i < got.md.length; i++) {
+        const rect = mdMatchRect(got.md[i]);
+        if (rect && rect.top >= top - 4) { return i; }
+      }
+      return 0;
+    }
+    const tab = fileFind.tab;
     const h = tab && tab.cluster ? (tab.cluster.options.item_height || 0) : 0;
     const topLine = h > 0 && body ? Math.round(body.scrollTop / h) + 1 : 1;
     for (let i = 0; i < got.lines.length; i++) {
@@ -9277,7 +9394,7 @@
     return 0;
   }
 
-  /** 涂上：正文重摆一道（见 fileViewRows），diff 那几格直接改 class。 */
+  /** 涂上：正文重摆一道（见 fileViewRows），diff 那几格改 class，markdown 那几段字包成 <mark>。 */
   function paintFileFind(oldTab) {
     // 正文：上一回涂过的那一份（多半是换了一份文件）也要重摆一道 —— 它已经不计在里头了
     [oldTab, fileFind.tab].forEach((tab) => {
@@ -9286,20 +9403,45 @@
     fileFind.paintedTab = fileFind.tab;
     (fileFind.painted || []).forEach((el) => el.classList.remove("find", "cur"));
     fileFind.painted = null;
-    if (fileFind.cells.length === 0) { return; }
-    const flat = [];
-    fileFind.cells.forEach((cells) => cells.forEach((el) => { el.classList.add("find"); flat.push(el); }));
-    const cur = fileFind.cells[fileFind.at];
-    if (cur) { cur.forEach((el) => el.classList.add("cur")); }
-    fileFind.painted = flat;
+    if (fileFind.kind === "diff") {
+      if (fileFind.cells.length === 0) { return; }
+      const flat = [];
+      fileFind.cells.forEach((cells) => cells.forEach((el) => { el.classList.add("find"); flat.push(el); }));
+      const cur = fileFind.cells[fileFind.at];
+      if (cur) { cur.forEach((el) => el.classList.add("cur")); }
+      fileFind.painted = flat;
+      return;
+    }
+    if (fileFind.kind === "md") {
+      // 一段字一段字地包：同一段里的几处从后往前包（不然前面那几处的偏移就偏了）。
+      // 包完按页面里的先后重取一遍（querySelectorAll 给的就是先后顺序）。
+      const byNode = new Map();
+      fileFind.md.forEach((m) => {
+        if (!byNode.has(m.node)) { byNode.set(m.node, []); }
+        byNode.get(m.node).push(m);
+      });
+      byNode.forEach((list) => {
+        for (let i = list.length - 1; i >= 0; i--) { wrapMdMatch(list[i]); }
+      });
+      const entry = viewTab();
+      const root = markdownFindRoot(entry ? entry.file : null);
+      fileFind.marks = root ? Array.from(root.querySelectorAll("mark.file-find-mark")) : [];
+      const cur = fileFind.marks[fileFind.at];
+      if (cur) { cur.classList.add("cur"); }
+    }
   }
 
-  /** 滚到停的那一处：正文按“第几行 × 行高”算（那一行多半还不在页面上），diff 直接让它露出来。 */
-  function scrollToFileFind(entry) {
-    if (!entry || fileFind.at < 0) { return; }
-    if (entry.kind === "diff") {
+  /** 滚到停的那一处：正文按“第几行 × 行高”算（那一行多半还不在页面上），diff / markdown 让它露出来。 */
+  function scrollToFileFind() {
+    if (fileFind.at < 0) { return; }
+    if (fileFind.kind === "diff") {
       const group = fileFind.cells[fileFind.at];
       const el = group && group[0];
+      if (el && el.scrollIntoView) { el.scrollIntoView({ block: "center" }); }
+      return;
+    }
+    if (fileFind.kind === "md") {
+      const el = fileFind.marks[fileFind.at];
       if (el && el.scrollIntoView) { el.scrollIntoView({ block: "center" }); }
       return;
     }
