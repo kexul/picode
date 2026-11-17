@@ -25,9 +25,15 @@
  * 调用在界面上不再一直转圈（那一颗标签会被收掉）。
  * 用户这句话里带「碰文件」时演另一段（见 runScript 里那一段）：read 几个特意铺好的文件，
  * 好让后端那份「这个会话碰过的文件」清单里有子目录里的文件、也有会话目录外面的。
+ * 用户这句话里带「慢慢来」时：先说一句，停一会儿（`FAKEPI_SLOW_MS`，默认 6000）再收尾 ——
+ * 给「这一轮跑的时候插入、点击排着的那一条」留出时间（见 dev/queueSwitch.js）。
  *
  * 用法（不用记参数，插件的 piPath 指过来就行）：
  *   node dev/fakePi.js --mode rpc          # 参数收下但不看，照常演戏
+ *
+ * FAKEPI_QUEUE=1：像真 pi 那样，在自己跑着的时候把发来的 prompt 排起来（插话 / 排队两队、
+ *   发 queue_update、clear_queue 把文字还回来），这一轮跑完再依次投放。默认不开：
+ *   开了以后“跑着时再发一句”不再当场开播，别的脚本靠这个的会变（见 dev/queueSwitch.js）。
  *
  * 两个验图相关的开关（默认都不开）：
  *   FAKEPI_IMAGE=<某张 png/jpg 的路径>   把剧本里 read 的那张图换成它（验“发给页面前先缩一缩”
@@ -633,6 +639,16 @@ async function runScript(userText) {
         return;
     }
 
+    // ---- 「这一轮慢慢来」：说一句短的，然后停一会儿再收尾 ----
+    // 验排着的消息用（插入、点一条换发法）：这一轮得跑得够久，人才来得及插两句进去（见 dev/queueSwitch.js）。
+    if (/慢慢来/.test(userText)) {
+        await say("（假模型）这一轮慢慢来，先不动手。");
+        await pause(Number(process.env.FAKEPI_SLOW_MS || 6000));
+        await say("（假模型）慢慢来这一轮跑完了。");
+        finish();
+        return;
+    }
+
     await think(padTo("用户要的是演示，那就按老剧本走一遍：先读图，再 bash，再改一下文件。", LONG_TEXT_CHARS));
     await say("好，我用三个工具给你演示一遍（假模型秒回）：");    await act("read", { path: "示例图片.png" }, {
         content: [
@@ -695,6 +711,58 @@ function applyFakeEdit(args) {
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// 排队（FAKEPI_QUEUE=1）：让假 pi 像真 pi 一样，在跑着的时候把发来的消息排起来
+// 真 pi 只在自己正跑着的时候排队：steering 等这一轮的工具边界投递，followUp 等整轮
+// 跑完再交给它；clear_queue 把两队原样还回来。假 pi 这里简化一处：两队在“这一轮
+// 跑完”时依次投递（插话那队先），不再细分工具边界 —— 验界面上「排着的消息」那一块
+// 用不着那么细（见 dev/queueSwitch.js）。不开这个开关时一切照旧（每条 prompt 当场播）。
+// ---------------------------------------------------------------------------
+const QUEUE_MODE = !!process.env.FAKEPI_QUEUE;
+/** 这一轮还在跑：后头来的 prompt 先排队。 */
+let busy = false;
+/** 排着的两句（真 pi 那边是两份字符串数组）。 */
+const queued = { steer: [], follow: [] };
+
+function emitQueue() {
+    if (!QUEUE_MODE) { return; }
+    write({ type: "queue_update", steering: queued.steer.slice(), followUp: queued.follow.slice() });
+}
+
+/** 把两队都清掉（投递出去 / 被中止 / 被 clear_queue 拿走）。 */
+function dropQueues() {
+    queued.steer.length = 0;
+    queued.follow.length = 0;
+    emitQueue();
+}
+
+/** 这一轮跑完了：接着投递排着的下一条；一条都不剩就把“在跑”收掉。 */
+function afterTurn() {
+    const text = queued.steer.length ? queued.steer.shift() : queued.follow.shift();
+    if (text === undefined) {
+        busy = false;
+        emitQueue();
+        return;
+    }
+    emitQueue();
+    runTurn(text);
+}
+
+/** 播一条（开着排队开关时走这条）：播完接着投递下一条。 */
+function runTurn(text) {
+    busy = true;
+    void runScript(text).then(afterTurn, (e) => {
+        if (e !== ABORTED) {
+            console.error("[假 pi] 剧本跑岔了：" + String((e && e.stack) || e));
+        }
+        // 被中止：排着的那些跟真 pi 一样不再投递
+        queued.steer.length = 0;
+        queued.follow.length = 0;
+        busy = false;
+        emitQueue();
+    });
+}
+
 async function handle(cmd) {
     const id = cmd.id;
     switch (cmd.type) {
@@ -708,7 +776,19 @@ async function handle(cmd) {
         // 用户这句话里带“派活”时，先往 stderr 写一行暗号（假扮模型调了 task）。
         case "prompt": {
             // 真 pi：preflight 成功先回一次 response，然后事件流，最后 agent_settled
-            respond(id, "prompt", { disposition: "handled" });
+            if (QUEUE_MODE && busy) {
+                // 这一轮正跑着：照 streamingBehavior 排进哪一队（跟真 pi 一样）
+                const text = String(cmd.message || "");
+                (cmd.streamingBehavior === "followUp" ? queued.follow : queued.steer).push(text);
+                emitQueue();
+                respond(id, "prompt", { disposition: "queued" });
+                return;
+            }
+            respond(id, "prompt", { disposition: QUEUE_MODE ? "started" : "handled" });
+            if (QUEUE_MODE) {
+                runTurn(String(cmd.message || ""));
+                return;
+            }
             void runScript(String(cmd.message || "")).catch((e) => {
                 // 这一轮被 abort 打断：收尾事件剧本里已经发过了（见 pause），这里只是把这条链收干净
                 if (e === ABORTED) { return; }
@@ -785,13 +865,26 @@ async function handle(cmd) {
             messages.length = 0;
             respond(id, "switch_session", { cancelled: false });
             return;
-        case "abort":
         case "abort_bash":
-        case "clear_queue":
-            // 停掉这一轮：正等着的问话也当没作答（真扩展那边是工具的 signal 触发的）
-            if (cmd.type === "abort") { aborted = true; }
             respond(id, cmd.type, {});
             return;
+        // 停掉这一轮：正等着的问话也当没作答（真扩展那边是工具的 signal 触发的）
+        case "abort":
+            aborted = true;
+            if (QUEUE_MODE) { dropQueues(); }
+            respond(id, cmd.type, {});
+            return;
+        // 整队清掉、把文字还回来（插件用它给排着的那条换发法，见 dev/queueSwitch.js）
+        case "clear_queue": {
+            if (QUEUE_MODE) {
+                const data = { steering: queued.steer.slice(), followUp: queued.follow.slice() };
+                dropQueues();
+                respond(id, cmd.type, data);
+                return;
+            }
+            respond(id, cmd.type, {});
+            return;
+        }
         case "bash":
             respond(id, "bash", { content: [{ type: "text", text: "（假模型不执行 bash）" }], exitCode: 0 });
             return;

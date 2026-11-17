@@ -1812,10 +1812,15 @@ export abstract class ChatControllerBase implements RuntimeHost {
         for (const pid of this.panelIdsOf(panelId)) { this.panels.get(pid)?.abortActiveRun(); }
     }
 
-    /** 「卡住了」那条路：终止这一轮，等它停稳再由运行时把这句发出去
+    /** 「卡住了」那条路：终止这一轮，等它真正停稳之后把这句发出去
      *  （为什么不当下就发，见 SessionRuntime.abortThenSend）。 */
     protected broadcastAbortThenSendToTab(panelId: string, text: string): void {
         for (const pid of this.panelIdsOf(panelId)) { this.panels.get(pid)?.abortThenSend(text); }
+    }
+
+    /** 输入框上头那条排着的消息被点了一下：把这一条换一种发法（见 SessionRuntime.switchQueuedMessage）。 */
+    protected broadcastQueueSwitchToTab(panelId: string, kind: "steer" | "follow", index: number, text: string): void {
+        for (const pid of this.panelIdsOf(panelId)) { this.panels.get(pid)?.switchQueuedMessage(kind, index, text); }
     }
 
     /** webview / 命令菜单取数：问焦点 panel 的 pi 进程要命令列表
@@ -2416,9 +2421,17 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
         switch (msg.type) {
             case "send": {
-                // followUp：页面上那条发送方式选的是「排队」（或者敲的 Alt+Enter）。
+                // followUp：这一句按「排队」发（敲的 Alt+Enter）。
                 // 它只是人选的投递方式，不算插件代发：人打的字照旧当人说的话算（见 handleSend）。
                 this.broadcastSendToTab(target.id, msg.text, msg.images, msg.followUp === true);
+                break;
+            }
+            case "queueSwitch": {
+                // 输入框上头那条排着的消息被点了一下：把这一条在插话 / 排队之间换一次
+                const kind = msg.kind === "follow" ? "follow" : "steer";
+                if (typeof msg.text === "string") {
+                    this.broadcastQueueSwitchToTab(target.id, kind, typeof msg.index === "number" ? msg.index : -1, msg.text);
+                }
                 break;
             }
             case "autoAct": {

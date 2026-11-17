@@ -280,6 +280,8 @@ export class SessionRuntime {
      *  回来就还照着旧的样子写着“在排队”，实际上早就发出去了。 */
     private queuedSteering: string[] = [];
     private queuedFollowUp: string[] = [];
+    /** 排着的那一条正在换发法（中间要等 clear_queue 回来）：同一时刻只放一次。 */
+    private queueSwitchInFlight = false;
 
     /** 当前 panel 是否尚未承载会话内容，且不在加载过程中。 */
     public isConversationEmpty(): boolean {
@@ -859,6 +861,44 @@ export class SessionRuntime {
         return !!resp?.success;
     }
 
+    /** 界面上点了排着的一条消息：把这一条在「插话」（steering）和「排队」（followUp）之间换一次。
+     *
+     *  pi 只有 clear_queue（整队清掉、把文字还回来），没有“挪某一条”的接口，所以只能：
+     *  先清空，再拿还回来的那两份文字按新顺序一条条重新排回去。
+     *  拿还回来的那两份（而不是插件这边记着的镜像）来排：清空跟投递抢线路时，
+     *  已经投递出去的那条不在还回来的名单里，就不会被重排一遍、不会多出一条重复的话。
+     *  代价：排队那一队 pi 只还文字，带着的图片会丢（插件这边没留那份图）。
+     *
+     *  index / text 是用来认出“点的是哪一条”：text 对不上（队列刚变过）时全文找一回，
+     *  找不到就当这条已经投递出去，什么也不做。同一时刻只放一次（中间要等 clear_queue 回来）。
+     */
+    public switchQueuedMessage(kind: "steer" | "follow", index: number, text: string): void {
+        if (this.queueSwitchInFlight) { return; }
+        if (!this.client || !this.client.isRunning()) { return; }
+        const fromQueue = kind === "steer" ? this.queuedSteering : this.queuedFollowUp;
+        if (fromQueue[index] !== text && fromQueue.lastIndexOf(text) < 0) { return; }
+        this.queueSwitchInFlight = true;
+        void (async () => {
+            try {
+                const resp = await this.request<{ steering?: string[]; followUp?: string[] }>({ type: "clear_queue" });
+                if (!resp) { return; }
+                const steer = Array.isArray(resp.data?.steering) ? resp.data!.steering!.slice() : [];
+                const follow = Array.isArray(resp.data?.followUp) ? resp.data!.followUp!.slice() : [];
+                const from = kind === "steer" ? steer : follow;
+                let at = from.indexOf(text);
+                if (at < 0) { at = from.lastIndexOf(text); }
+                if (at < 0) { return; }   // 这一条在清空之前就已经投递出去了
+                const moved = from.splice(at, 1)[0];
+                (kind === "steer" ? follow : steer).push(moved);
+                // 照新顺序排回去：插话那队先排（它下一次工具调完就交出去），排队的跟在后面
+                for (const t of steer) { this.client?.send({ type: "prompt", message: t, streamingBehavior: "steer" }); }
+                for (const t of follow) { this.client?.send({ type: "prompt", message: t, streamingBehavior: "followUp" }); }
+            } finally {
+                this.queueSwitchInFlight = false;
+            }
+        })();
+    }
+
     public isRunning(): boolean {
         return !!this.client && this.client.isRunning();
     }
@@ -1003,7 +1043,7 @@ export class SessionRuntime {
         // - 人打的消息、会话看着在跑：prompt + steer。pi 真在忙就排进 steering 队列（当前轮工具
         //   执行完就投递，与原来发 steer 命令等效）；其实已经跑完（结束事件还没送到）就直接开
         //   新轮次，消息不会卡在队列里。
-        // - 例外：人自己选了「排队」（opts.deliverAfterTurn，页面那条发送方式 / Alt+Enter）：
+        // - 例外：人自己选了「排队」（opts.deliverAfterTurn，页面上敲的 Alt+Enter）：
         //   一律 followUp，pi 在忙就排着、等这一轮整个跑完再交给它。它跟 fromPlugin 那两档不是一回事：
         //   这是人说的话，只是投递方式由人选。
         const streamingBehavior: "steer" | "followUp" = opts?.steer

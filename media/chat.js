@@ -1039,9 +1039,6 @@
       toolStats: { calls: 0, totalMs: 0, byTool: new Map(), slowest: [], seen: new Set() },
       queuedSteering: [],
       queuedFollowUp: [],
-      // 下一句怎么发：false = 插话（半路插进去，默认），true = 排队（等这一轮跑完再交给它）。
-      // 只对下一句管用，发出去就回默认（见 send）。
-      nextFollowUp: false,
       pendingSteerRestore: null,
       autoLoadHinted: false,
     };
@@ -5050,84 +5047,56 @@
     if (composer) { composer.classList.toggle("auto", !!auto); }
   }
 
-  // ==================== 发送方式那一条（输入框上头）====================
+  // ==================== 正排着的消息（输入框上头）====================
   /**
-   * 输入框上头那一条（#queueBar）：会话跑着的时候露面。
-   * 第一行是**发送方式**：插话（黄点）＝这一句半路插进去；排队（绿点呼吸）＝这一句等这一轮跑完再交给它。
-   * 点这一行就切过去切回来，只对下一句管用（发出去就回默认的插话）。
-   * 下面接着列正排着的消息：插话排着的用黄点、排队排着的用绿点，跟上面那一档一个颜色。
-   * 会话闲着的时候整条收掉：那会儿两种发法没区别，都是开新的一轮。
+   * 输入框上头那一条（#queueBar）：把正排着的消息一条一行列出来，一条都没有时整条收掉。
+   * 点一条 = 把这一条在「插话」和「排队」之间挪一次（见 SessionRuntime.switchQueuedMessage）：
+   *   插话（黄点）＝半路插进去，它下一次工具调完就交出去；
+   *   排队（绿点）＝等这一轮整个跑完再交给它。
+   * 一行只放首行预览，全文在鼠标停上去的那句话里。
    */
   function renderQueueBar(st) {
     if (activeId !== st.id) { return; }
     const steering = st.queuedSteering || [];
     const followUp = st.queuedFollowUp || [];
-    if (!st.streaming && !steering.length && !followUp.length) {
+    if (!steering.length && !followUp.length) {
       queueBarEl.classList.add("hidden"); queueBarEl.innerHTML = ""; return;
     }
     queueBarEl.classList.remove("hidden");
     queueBarEl.innerHTML = "";
-    queueBarEl.appendChild(queueModeRow(st));
-    steering.forEach((text) => queueBarEl.appendChild(queueCard(text, "steer")));
-    followUp.forEach((text) => queueBarEl.appendChild(queueCard(text, "follow")));
+    steering.forEach((text, i) => queueBarEl.appendChild(queueCard(st, text, "steer", i)));
+    followUp.forEach((text, i) => queueBarEl.appendChild(queueCard(st, text, "follow", i)));
   }
 
-  /** 那一条的头一行：一颗点 + 当前这一档，点它换一档。 */
-  function queueModeRow(st) {
-    const queued = st.nextFollowUp === true;
-    const row = document.createElement("div");
-    row.className = "qb-mode" + (queued ? " queued" : "");
-    row.id = "queueMode";
-    row.setAttribute("role", "button");
-    row.setAttribute("tabindex", "0");
-    row.setAttribute("aria-pressed", String(queued));
-    const dot = document.createElement("span"); dot.className = "qb-dot";
-    const label = document.createElement("span"); label.className = "qb-mode-label";
-    label.textContent = queued ? "排队" : "插话";
-    row.title = queued
-      ? "下一句排在这一轮后头（这一轮跑完再交给它）—— 点一下改回插话"
-      : "下一句半路插进去（它下一次工具调完就交给它）—— 点一下改成排队";
-    row.setAttribute("aria-label", row.title);
-    const toggle = () => {
-      st.nextFollowUp = !queued;
-      renderQueueBar(st);
-    };
-    row.addEventListener("click", toggle);
-    row.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); }
-    });
-    row.appendChild(dot); row.appendChild(label);
-    return row;
-  }
-
-  /** 正排着的一条：一行首行预览，点开看全文。kind 决定那颗点的颜色（steer 黄 / follow 绿）。 */
-  function queueCard(text, kind) {
+  /**
+   * 正排着的一条：一行首行预览，全文在 title 里。kind 决定那颗点的颜色（steer 黄 / follow 绿）。
+   * 点它（或者键盘回车 / 空格）= 换一种发法：插话改排队、排队改插话。
+   */
+  function queueCard(st, text, kind, index) {
     const full = typeof text === "string" ? text : "";
-    const lines = full.split("\n");
-    const preview = lines.slice(0, 3).join("\n") + (lines.length > 3 ? "\n…" : "");
+    const firstLine = (full.split("\n")[0] || "").trim();
     const card = document.createElement("div");
-    card.className = "qb-block collapsed" + (kind === "follow" ? " follow" : "");
+    card.className = "qb-block" + (kind === "follow" ? " follow" : "");
     const head = document.createElement("div");
     head.className = "qb-head";
-    head.title = kind === "follow" ? "点击展开或收起排着的消息（这一轮跑完再交给它）" : "点击展开或收起排着的消息（马上插进去）";
+    const what = kind === "follow"
+      ? "点一下改成插话（半路插进去，它下一次工具调完就交出去）"
+      : "点一下改成排队（等这一轮整个跑完再交给它）";
+    head.title = what + "\n\n" + full;
     head.setAttribute("role", "button");
     head.setAttribute("tabindex", "0");
-    head.setAttribute("aria-expanded", "false");
+    head.setAttribute("aria-label", what + "：" + firstLine);
     const dot = document.createElement("span"); dot.className = "qb-dot";
     const previewLine = document.createElement("span"); previewLine.className = "qb-preview";
-    previewLine.textContent = (lines[0] || "").trim();
-    const body = document.createElement("pre"); body.className = "qb-body";
-    body.textContent = preview;
-    const toggle = () => {
-      const collapsed = card.classList.toggle("collapsed");
-      head.setAttribute("aria-expanded", String(!collapsed));
-      body.textContent = collapsed ? preview : full;
+    previewLine.textContent = firstLine;
+    const flip = () => {
+      vscode.postMessage({ type: "queueSwitch", sessionId: st.id, kind, index, text: full });
     };
     head.appendChild(dot); head.appendChild(previewLine);
-    card.appendChild(head); card.appendChild(body);
-    head.addEventListener("click", toggle);
+    card.appendChild(head);
+    head.addEventListener("click", flip);
     head.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); }
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); flip(); }
     });
     return card;
   }
@@ -12480,15 +12449,13 @@
 
   /**
    * 把输入框里这一句发出去。
-   * opts.followUp：这一句按「排队」发（等这一轮跑完再交给它）——
-   * 来源有两处：输入框上头那一条点出来的那一档（st.nextFollowUp），或者 Alt+Enter。
-   * 排队是一次性的：发完这一句就回默认的插话。
+   * opts.followUp：这一句按「排队」发（等这一轮跑完再交给它）—— 只有 Alt+Enter 这一条路。
    */
   function send(opts) {
     const st = activeSession();
     const d = draftOfSession();
     const typed = inputEl.value.trim();
-    const wantFollowUp = !!(opts && opts.followUp === true) || !!(st && st.nextFollowUp === true);
+    const wantFollowUp = !!(opts && opts.followUp === true);
     const hasImages = (d.images || []).length > 0;
     const hasTextBlocks = (d.textBlocks || []).length > 0;
     if (!typed && !hasImages && !hasTextBlocks) { return; }
@@ -12507,8 +12474,6 @@
     }
     pendingAutoSend = null;
     vscode.postMessage({ type: "send", sessionId: st.id, text, images: d.images, followUp: wantFollowUp });
-    // 排队只管这一句：发出去就回默认的插话（上头那一条跟着换回黄点）
-    if (st.nextFollowUp) { st.nextFollowUp = false; renderQueueBar(st); }
     resetComposer(d);
   }
 
@@ -12708,7 +12673,7 @@
     // 这一轮跑完：还在留的那条位置到此为止（一轮里最后调的是工具、后面没再出正文时，就靠这一下收）
     if (!on) { endRunningLine(st); }
     if (activeId === st.id) { updateSendState(); syncStatus(); }
-    // 发送方式那一条只在跑着的时候露面：这一下的收尾/露面靠重画一遍（见 renderQueueBar）
+    // 排着的那几条跟着这一下重画一遍（跑完了队列可能已经空了，见 renderQueueBar）
     renderQueueBar(st);
     renderSessionBar();
     syncEndHint(st);

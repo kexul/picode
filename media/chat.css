@@ -574,32 +574,16 @@
   #imgPreview:empty { display: none; }
   #queueBar { display: flex; flex-direction: column; gap: 2px; padding: 0; border: none; background: transparent; font-size: var(--vscode-font-size); color: var(--vscode-descriptionForeground, inherit); }
   #queueBar:empty, #queueBar.hidden { display: none; }
-  /* 输入框上头那一条（#queueBar）：两会 = 发送方式的头一行（.qb-mode） + 正排着的那些（.qb-block）。
-     会话闲着的时候整条收掉（见 chat.js 的 renderQueueBar）。 */
+  /* 输入框上头那一条（#queueBar）：正排着的消息，一条一行。一条都没有时整条收掉
+     （见 chat.js 的 renderQueueBar）。 */
   #queueBar .qb-block { overflow: hidden; }
   #queueBar .qb-head { display: flex; align-items: center; gap: 6px; padding: 2px 0; border-radius: 3px; cursor: pointer; user-select: none; }
   #queueBar .qb-head:hover { background: color-mix(in srgb, var(--vscode-list-hoverBackground, rgba(128,128,128,0.1)) 50%, transparent); }
   #queueBar .qb-head:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
-  /* —— 那一条的头一行：发送方式（点它换一档）——
-     插话：黄点、不呼吸（这一句要半路插进去，马上就走）；
-     排队：绿点、慢慢呼吸（这一句排着，等这一轮跑完再交给它）。
-     跟会话格那颗点一个呼吸法（pi-pulse），能呼吸的只有真正“在等”的那一档。 */
-  #queueBar .qb-mode { display: flex; align-items: center; gap: 6px; padding: 2px 0; border-radius: 3px; cursor: pointer; user-select: none; }
-  #queueBar .qb-mode:hover { background: color-mix(in srgb, var(--vscode-list-hoverBackground, rgba(128,128,128,0.1)) 50%, transparent); }
-  #queueBar .qb-mode:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
-  #queueBar .qb-mode-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground, inherit); }
-  #queueBar .qb-mode.queued .qb-dot {
-    background: var(--vscode-charts-green, #89d185);
-    animation: pi-pulse 1.2s ease-in-out infinite;
-    will-change: opacity;
-  }
-  /* 排队那一条前头那颗点：一颗黄点，不呼吸（它是“这条排着、马上插进去”的记号）。 */
+  /* 前头那颗小点：插话排着的黄点、排队排着的绿点。点那条消息本身就能在两种发法之间换一次。 */
   #queueBar .qb-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--vscode-charts-yellow, #cca700); flex-shrink: 0; }
-  /* 排着的消息自己也换颜色：插话排着的黄点、排队排着的绿点，跟上面那一档一个色 */
   #queueBar .qb-block.follow .qb-dot { background: var(--vscode-charts-green, #89d185); }
   #queueBar .qb-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground, inherit); }
-  #queueBar .qb-body { margin: 1px 0 3px 12px; padding: 0; font-family: inherit; font-size: 0.9em; white-space: pre-wrap; word-break: break-word; color: var(--vscode-foreground); max-height: 160px; overflow: auto; }
-  #queueBar .qb-block.collapsed .qb-body { display: none; }
   .img-thumb { position: relative; }
   .img-thumb img { height: 48px; border-radius: 4px; border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.4)); display: block; transition: transform 200ms; }
   .img-thumb:hover img { transform: scale(1.05); }
