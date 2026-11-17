@@ -3,6 +3,7 @@ package com.pichat.notice
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.SharedPreferences
@@ -15,8 +16,12 @@ import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.Settings
+import android.text.InputType
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -46,11 +51,11 @@ import java.util.concurrent.TimeUnit
 /**
  * MainActivity —— app 的唯一一屏，两种画面：
  *
- * - 设置画面：一个地址输入框、一颗「打开」按钮、底下是用过的地址清单，再下面两行：
- *   「包里这份界面是不是最新的」（拿 APK 包里带的那份指纹跟后端现在发的比，见 checkBundledMedia）
- *   和「打包并安装新版」（叫电脑现打一个包、下下来装上，见 buildAndInstallApk）。
- *   点「打开」（或者点历史里的一条）就规范化地址、记下来、叫常驻服务重连、进网页看对话；
- *   打开过的地址自动记入清单（最新的排最上，最多留几条），每条边上有一颗 × 单独删。
+ * - 设置画面：一张「连到哪台电脑」的清单 —— 一行一台连过的电脑，点一行只是选中它、
+ *   顺手查一下那台的界面文件旧没旧（右边出勾 / 一颗向下箭头，见 checkBundledMedia），
+ *   点底下那颗「打开」才真连过去；长按一行把它从清单里删掉。
+ *   清单底下「＋ 另一台电脑」才展开填地址那一行（回车＝打开）；一台都没连过时那一行就直接摆着。
+ *   界面对不上时，那一行右边的向下箭头就是「现打一个包装上」（见 buildAndInstallApk）。
  * - 网页画面：一个 WebView 装着后端的对话页面，点通知跳进来时直接带到那个会话上
  *   （页面已经在就只在页面里切一格，见 openPage）。
  *
@@ -73,6 +78,16 @@ class MainActivity : Activity() {
         private const val BACK_TWICE_MS = 2000L
         /** 「包里这份界面是旧的」那行字的颜色（橙，不是报错那种红）。 */
         private const val STALE_COLOR = 0xFFB45309.toInt()
+        /** 能点的字（「另一台电脑」、选中的那个圆点）的颜色。 */
+        private const val ACCENT_COLOR = 0xFF00796B.toInt()
+        /** 一致的勾。 */
+        private const val OK_COLOR = 0xFF1B8A3F.toInt()
+        /** 不当眼的字：标题上头那行小字、「打包并安装新版」平时就这样。 */
+        private const val QUIET_COLOR = 0xFF607D8B.toInt()
+        /** 还没选中的那个圆点、以及灰着的字。 */
+        private const val DIM_COLOR = 0xFFB0BEC5.toInt()
+        /** 清单行与行之间那条细线的颜色。 */
+        private const val DIVIDER_COLOR = 0xFFECEFF1.toInt()
         /** 等电脑打包最多等多久（毫秒）：第一次装依赖会慢，但也不能一直等下去。 */
         private const val APK_BUILD_WAIT_MS = 20 * 60 * 1000
         /** 下载最多试几次（含第一次）：断了停一会儿，从已经下到的那个字节接着要。 */
@@ -81,22 +96,35 @@ class MainActivity : Activity() {
         private const val APK_RETRY_WAIT_MS = 1500L
     }
 
+    /** 清单里每一行右边那块结论是这么来的：拿包里带的那份界面指纹，跟那台电脑现在发的比。 */
+    private enum class BundleState { CHECKING, OK, STALE, UNKNOWN }
+
+    /** 一次检查的结论：state 决定右边画勾还是画下载按钮，detail 是没查成的原因 / 对不上的文件名。 */
+    private class BundleResult(val state: BundleState, val detail: String = "")
+
     /** 上一回按返回键的时刻（SystemClock.uptimeMillis；0 = 眼下不算连按）。 */
     private var lastBackAt = 0L
 
     private lateinit var prefs: SharedPreferences
     private lateinit var settingsPanel: LinearLayout
-    /** 装设置画面那一整列的外壳：手机上塞不下时能上下滚（包里界面那一行就不会被挤到屏幕外）。 */
+    /** 装设置画面那一整列的外壳：手机上塞不下时能上下滚（清单长了不会被挤到屏幕外）。 */
     private lateinit var settingsScroll: ScrollView
+    private lateinit var sectionTitle: TextView
+    /** 填新地址那一行（平时收着）与它里面的输入框。 */
+    private lateinit var addressRow: LinearLayout
     private lateinit var addressInput: EditText
-    private lateinit var historyHeader: TextView
-    private lateinit var historyList: LinearLayout
-    private lateinit var bundleCheckText: TextView
-    /** 「打包并安装新版」那颗按钮与它底下的那行进展、那根横条。 */
-    private lateinit var apkInstallButton: Button
+    /** 连过的电脑那一张清单、清单底下的「＋ 另一台电脑」、以及底下那颗「打开」。 */
+    private lateinit var listBox: LinearLayout
+    private lateinit var addRow: LinearLayout
+    private lateinit var openSelectedButton: Button
+    /** 现在选中的那台（null = 清单是空的）。 */
+    private var selectedAddress: String? = null
+    /** 每台查过的结论（地址 → 结论）：重摆清单时照这个画右边的勾 / 下载按钮。 */
+    private val bundleResults = mutableMapOf<String, BundleResult>()
+    /** 打包 / 下载时那行进展字，以及那根横条。 */
     private lateinit var apkBuildText: TextView
     private lateinit var apkProgress: ProgressBar
-    /** 这一轮「打包并安装」还在跑（跑的时候按钮置灰，免得点出第二份）。 */
+    /** 这一轮「打包并安装」还在跑（跑的时候那颗箭头换成「…」，免得点出第二份）。 */
     private var apkBusy = false
     private lateinit var webPanel: LinearLayout
     private lateinit var web: WebView
@@ -146,65 +174,81 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(28), dp(20), dp(28))
         }
+        // 平时就一张「连到哪台电脑」的清单：点一行只换选中、顺手查那台的界面旧没旧，
+        // 点底下那颗「打开」才真连过去（见 renderSettings）。
         settingsPanel.addView(TextView(this).apply {
             text = "Pi Chat"
-            textSize = 24f
-            setPadding(0, 0, 0, dp(12))
+            textSize = 22f
         })
-        settingsPanel.addView(TextView(this).apply {
-            text = "填电脑上后端的地址（浏览器里打开的那个，比如 192.168.1.40:1867），点「打开」就连过去看对话。手机要跟电脑连同一个网络。"
-            textSize = 14f
-            setPadding(0, 0, 0, dp(12))
-        })
+        sectionTitle = TextView(this).apply {
+            text = "连到哪台电脑"
+            textSize = 13f
+            setTextColor(QUIET_COLOR)
+            setPadding(0, dp(14), 0, 0)
+        }
+        settingsPanel.addView(sectionTitle)
+
+        // 填一个没连过的地址：点清单底下「＋ 另一台电脑」才展开。
+        // 一台都还没连过的时候直接就摆着，省得先去找那颗「另一台电脑」。
+        addressRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+        }
         addressInput = EditText(this).apply {
             hint = "192.168.1.40:1867"
-            setText(prefs.getString(KEY_SERVER, ""))
             setSingleLine(true)
+            // 网址那种键盘：不自动大写、不按句子联想
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            imeOptions = EditorInfo.IME_ACTION_GO
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            // 键盘右下角那颗「前往」就是「打开」：填完直接按，不用再挪手指上去点按钮。
+            // 这一行是单行的地址，回车/前往都只有「打开」一个意思，所以不管报上来的是哪种动作都当它。
+            setOnEditorActionListener { _, _, _ ->
+                !addressInput.text.isBlank() && openAddress(addressInput.text.toString())
+            }
         }
-        settingsPanel.addView(addressInput)
-        settingsPanel.addView(Button(this).apply {
+        addressRow.addView(addressInput)
+        addressRow.addView(Button(this).apply {
             text = "打开"
             setOnClickListener { openAddress(addressInput.text.toString()) }
         })
-        // 用过的地址：点一条就换那个地址打开；× 把那条从清单里删掉
-        historyHeader = TextView(this).apply {
-            text = "用过的地址"
-            textSize = 14f
-            setTextColor(Color.GRAY)
-            setPadding(0, dp(16), 0, 0)
-        }
-        settingsPanel.addView(historyHeader)
-        historyList = LinearLayout(this).apply {
+        settingsPanel.addView(addressRow)
+
+        listBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
-        settingsPanel.addView(historyList)
-        // 包里带的那份界面是不是最新的：拿 APK 里那份指纹清单跟后端现在发的一比（见 checkBundledMedia）
-        settingsPanel.addView(LinearLayout(this).apply {
+        settingsPanel.addView(listBox)
+        addRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER_VERTICAL
-            setPadding(0, dp(16), 0, 0)
-            bundleCheckText = TextView(this@MainActivity).apply {
-                text = "包里的界面：还没检查"
-                textSize = 14f
-                setTextColor(Color.GRAY)
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            addView(bundleCheckText)
-            addView(Button(this@MainActivity).apply {
-                text = "检查"
-                setOnClickListener { checkBundledMedia() }
-            })
-        })
-        // 包旧了（或者 app 自己改过了）就叫电脑现打一个：打完自己下下来、交给系统安装器装上
-        apkInstallButton = Button(this).apply {
-            text = "打包并安装新版"
-            setOnClickListener { buildAndInstallApk() }
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(14), 0, dp(14))
+            setOnClickListener { showAddressRow(true) }
         }
-        settingsPanel.addView(apkInstallButton)
+        addRow.addView(TextView(this).apply {
+            text = "＋"
+            textSize = 17f
+            setTextColor(ACCENT_COLOR)
+            width = dp(28)
+        })
+        addRow.addView(TextView(this).apply {
+            text = "另一台电脑"
+            textSize = 15f
+            setTextColor(ACCENT_COLOR)
+        })
+        settingsPanel.addView(addRow)
+        // 真去连：连选中的那台
+        openSelectedButton = Button(this).apply {
+            text = "打开"
+            setOnClickListener { selectedAddress?.let { openAddress(it) } }
+        }
+        settingsPanel.addView(openSelectedButton)
+        // 进展那行字（打包、下载、出错都写这儿）与那条横条：平时都收着
         apkBuildText = TextView(this).apply {
-            text = "包旧了、或者电脑上改过 app 本身，就在这里点一下：电脑现打一个包，手机自动下载并弹安装。"
             textSize = 12f
             setTextColor(Color.GRAY)
+            setPadding(0, dp(10), 0, 0)
+            visibility = View.GONE
         }
         settingsPanel.addView(apkBuildText)
         // 跑起来时才有的一条横条：打包那段转圈（给不出百分比），下载那段按下了多少字节画
@@ -214,14 +258,6 @@ class MainActivity : Activity() {
         }
         settingsPanel.addView(apkProgress, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        settingsPanel.addView(TextView(this).apply {
-            text = "连接状态看通知栏那条常驻提示；收到的提醒要是没弹出来，\n" +
-                "到系统的设置里把这个 app 的电池优化关掉（各品牌叫法不一，多在「省电」或「应用管理」里）。\n" +
-                "看对话时连按两下返回键（或返回手势，两下不超过两秒）回到这一屏。"
-            textSize = 12f
-            setTextColor(Color.GRAY)
-            setPadding(0, dp(16), 0, 0)
-        })
         settingsScroll = ScrollView(this).apply {
             addView(settingsPanel)
         }
@@ -251,67 +287,190 @@ class MainActivity : Activity() {
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         setContentView(root)
-        renderHistory()
-        // 一进来就先对一次：包里那份界面旧没旧，不用人特意去点
-        checkBundledMedia()
+        renderSettings()
+        // 一进来就把选中那台对一次：界面旧没旧，不用人特意去点
+        selectedAddress?.let { checkBundledMedia(it) }
     }
 
-    /** 把「用过的地址」那一节重摆一遍（刚打开、打开了一个新地址、删了一条时都叫它）。 */
-    private fun renderHistory() {
-        historyList.removeAllViews()
-        val items = history()
-        historyHeader.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
-        historyList.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
-        val current = savedAddress()
+    /**
+     * 把这一屏重摆一遍：清单每一行（圆点、地址、右边的结论）、底下那颗「打开」、
+     * 填地址那一行来不来。选中变了、删了一条、从网页退回来、打包跑完都叫它。
+     */
+    private fun renderSettings() {
+        val items = listAddresses()
+        if (items.none { it == selectedAddress }) { selectedAddress = items.firstOrNull() }
+        // 一台都没连过：直接把填地址那一行摆出来
+        if (items.isEmpty()) { addressRow.visibility = View.VISIBLE }
+        val typing = addressRow.visibility == View.VISIBLE
+
+        sectionTitle.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
+        listBox.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
+        addRow.visibility = if (items.isEmpty() || typing) View.GONE else View.VISIBLE
+        openSelectedButton.visibility = if (items.isEmpty() || typing) View.GONE else View.VISIBLE
+
+        listBox.removeAllViews()
+        val current = selectedAddress
         for (address in items) {
+            val selected = address == current
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
-                gravity = android.view.Gravity.CENTER_VERTICAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(14), 0, dp(14))
             }
             row.addView(TextView(this).apply {
-                text = address
-                textSize = 15f
-                typeface = if (address == current) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-                setPadding(0, dp(12), 0, dp(12))
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                // 整行都能点：换那个地址打开
-                setOnClickListener { openAddress(address) }
+                text = if (selected) "●" else "○"
+                textSize = 16f
+                setTextColor(if (selected) ACCENT_COLOR else DIM_COLOR)
+                width = dp(28)
             })
             row.addView(TextView(this).apply {
-                text = "×"
-                textSize = 20f
-                setTextColor(Color.GRAY)
-                setPadding(dp(16), dp(12), 0, dp(12))
-                setOnClickListener {
-                    forget(address)
-                    renderHistory()
-                }
+                text = hostOf(address)
+                textSize = 15f
+                typeface = if (selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             })
-            historyList.addView(row)
+            row.addView(statusView(address))
+            // 点一行 = 选它、顺手查它（界面文件旧没旧）；已经选中的再点一下就是重查
+            row.setOnClickListener { selectAddress(address) }
+            // 删一条藏得深一点：长按那行（点一下就删太容易误触）
+            row.setOnLongClickListener {
+                confirmForget(address)
+                true
+            }
+            listBox.addView(row)
+            listBox.addView(View(this).apply {
+                setBackgroundColor(DIVIDER_COLOR)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1)
+            })
         }
     }
 
+    /** 清单里要摆的地址：用过的那些；一条都没记过但存着地址时（升级上来的老安装），把存着的摆上。 */
+    private fun listAddresses(): List<String> {
+        val items = history()
+        if (items.isNotEmpty()) { return items }
+        return listOfNotNull(savedAddress())
+    }
+
+    /** 清单里那台只写「主机:端口」：协议几乎总是 http，写出来只是多占地方。 */
+    private fun hostOf(address: String): String =
+        address.removePrefix("http://").removePrefix("https://")
+
+    /**
+     * 一行右边那块结论：一致是一颗绿勾；旧了就是一颗下载按钮（点一下就叫电脑现打一个、下下来装上）；
+     * 正在查写「查…」，没查成写「没查成」。
+     */
+    private fun statusView(address: String): View {
+        val result = bundleResults[address]
+        return when (result?.state) {
+            BundleState.STALE -> TextView(this).apply {
+                text = if (apkBusy) "…" else "↓"
+                textSize = 18f
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                setTextColor(STALE_COLOR)
+                background = ring(0xFFFFF3E0.toInt(), 0xFFFFCC80.toInt())
+                if (!apkBusy) { setOnClickListener { buildAndInstallApk(address) } }
+                layoutParams = LinearLayout.LayoutParams(dp(34), dp(34))
+            }
+            BundleState.OK -> TextView(this).apply {
+                text = "✓"
+                textSize = 18f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(OK_COLOR)
+                setPadding(dp(8), 0, dp(4), 0)
+            }
+            BundleState.CHECKING -> TextView(this).apply {
+                text = "查…"
+                textSize = 13f
+                setTextColor(QUIET_COLOR)
+                setPadding(dp(8), 0, dp(4), 0)
+            }
+            BundleState.UNKNOWN -> TextView(this).apply {
+                text = "没查成"
+                textSize = 12f
+                setTextColor(DIM_COLOR)
+                setPadding(dp(8), 0, dp(4), 0)
+            }
+            null -> View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 0) }
+        }
+    }
+
+    /** 一颗圆底的小按钮（背景画出来，不另加图片资源）。 */
+    private fun ring(fill: Int, stroke: Int): android.graphics.drawable.GradientDrawable =
+        android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.OVAL
+            setColor(fill)
+            setStroke(dp(1), stroke)
+        }
+
+    /** 点清单里一行：换成选中它，顺手查一下那台的界面旧没旧。 */
+    private fun selectAddress(address: String) {
+        selectedAddress = address
+        renderSettings()
+        checkBundledMedia(address)
+    }
+
+    /** 展开 / 收起填地址那一行（展开时把键盘叫出来，填完直接回车）。 */
+    private fun showAddressRow(show: Boolean) {
+        addressRow.visibility = if (show) View.VISIBLE else View.GONE
+        renderSettings()
+        if (!show) {
+            hideKeyboard()
+            return
+        }
+        addressInput.setText("")
+        addressInput.requestFocus()
+        addressInput.post {
+            val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+            imm.showSoftInput(addressInput, InputMethodManager.SHOW_IMPLICIT)
+        }
+    }
+
+    private fun hideKeyboard() {
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+        imm.hideSoftInputFromWindow(addressInput.windowToken, 0)
+    }
+
+    /** 长按一行：问一声再把它从清单里删掉（删的是记下的地址，不掐已经连着的连接）。 */
+    private fun confirmForget(address: String) {
+        AlertDialog.Builder(this)
+            .setMessage("从清单里删掉 ${hostOf(address)} ？")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("删掉") { _, _ ->
+                forget(address)
+                bundleResults.remove(address)
+                if (selectedAddress == address) { selectedAddress = null }
+                renderSettings()
+                selectedAddress?.let { checkBundledMedia(it) }
+            }
+            .show()
+    }
+
     // ------------------------------------------------------------------------
-    // 地址（输入框那一格 + 用过的地址清单）
+    // 地址（清单里那些 + 填地址那一行）
     // ------------------------------------------------------------------------
 
     /**
      * 用一个地址打开对话：规范化、记进清单、叫服务重连、切到网页画面。
-     * 输入框里的、历史清单里点来的，都走这一条。
+     * 清单里选中那台、和填地址那一行来的，都走这一条。地址不像话就写一句、返回 false。
      */
-    private fun openAddress(raw: String) {
+    private fun openAddress(raw: String): Boolean {
         val normalized = normalize(raw)
         if (normalized == null) {
             Toast.makeText(this, "地址不像话：填个「主机:端口」，或者带上 http:// 开头", Toast.LENGTH_LONG).show()
-            return
+            return false
         }
-        addressInput.setText(normalized)
         remember(normalized)
-        renderHistory()
+        selectedAddress = normalized
+        addressRow.visibility = View.GONE
+        hideKeyboard()
+        renderSettings()
         startService(Intent(this, NoticeService::class.java).apply {
             action = NoticeService.ACTION_RECONNECT
         })
         openPage(null)
+        return true
     }
 
     /**
@@ -414,8 +573,10 @@ class MainActivity : Activity() {
         loadedBase = null
         webPanel.visibility = View.GONE
         settingsScroll.visibility = View.VISIBLE
-        // 回到这一屏就对一次包里那份界面旧没旧
-        checkBundledMedia()
+        // 回到这一屏：选中回到刚连的那台，再对一次它的界面旧没旧
+        selectedAddress = savedAddress()
+        renderSettings()
+        selectedAddress?.let { checkBundledMedia(it) }
     }
 
     /**
@@ -443,25 +604,19 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------------
 
     /**
-     * 拿包里带着的那份界面指纹（assets/media-manifest.json）跟后端现在发的一比：
-     * 对得上就是「包里这份就是电脑上现在用的」；对不上就把新的 APK 打一个装上。
+     * 查这一台（`base`）的界面文件旧没旧：拿包里带着的那份指纹（assets/media-manifest.json）
+     * 跟它后端现在发的一比（`GET /media-manifest.json`，就是电脑上 media/ 里那几份 js / css
+     * 此刻的指纹，跟页面地址里的 `?v=` 同一套算法）。结论记在 bundleResults 里、行右边跟着画。
      *
-     * 两边问的是后端那条 `GET /media-manifest.json`（就是电脑上 media/ 里那几份 js / css
-     * 此刻的指纹，跟页面地址里的 `?v=` 同一套算法），形状跟包里那份一样。
      * 只比界面文件：app 自己的改动（通知、返回键这些）不在这份清单里，那种只能看仓库里改没改。
      */
-    private fun checkBundledMedia() {
-        val base = savedAddress()
-        if (base == null) {
-            showBundleCheck(null, "还没填后端地址")
-            return
-        }
-        bundleCheckText.text = "包里的界面：检查中…"
-        bundleCheckText.setTextColor(Color.GRAY)
+    private fun checkBundledMedia(base: String) {
+        bundleResults[base] = BundleResult(BundleState.CHECKING)
+        renderSettings()
         bundleCheckClient.newCall(Request.Builder().url("$base/media-manifest.json").build())
             .enqueue(object : Callback {
                 override fun onFailure(call: Call, error: IOException) {
-                    onMain { showBundleCheck(null, "连不上 $base") }
+                    onMain { applyBundleResult(base, null, "连不上") }
                 }
 
                 override fun onResponse(call: Call, response: Response) {
@@ -476,31 +631,31 @@ class MainActivity : Activity() {
                         }
                     }
                     onMain {
-                        showBundleCheck(remote, if (remote == null) "后端没给这份清单（HTTP $code）" else "")
+                        applyBundleResult(base, remote, if (remote == null) "后端没给这份清单（HTTP $code）" else "")
                     }
                 }
             })
     }
 
     /**
-     * 把那一行的结论摆上去。remote 是后端那份清单（文件名 → 指纹），取不到给 null 并说明原因。
-     * 两边对不上的文件名一个都不漏（后端新加了、包里没有的也算旧的，那同样是该重打一个包）。
+     * 把一次检查的结果记下来、重摆那一行。remote 是后端那份清单（文件名 → 指纹），
+     * 取不到给 null 并说明原因。两边对不上的文件名一个都不漏
+     * （后端新加了、包里没有的也算旧的，那同样是该重打一个包）。
      */
-    private fun showBundleCheck(remote: Map<String, String>?, reason: String) {
+    private fun applyBundleResult(base: String, remote: Map<String, String>?, reason: String) {
         if (remote == null) {
-            bundleCheckText.text = "包里的界面：没查成（$reason）"
-            bundleCheckText.setTextColor(Color.GRAY)
+            bundleResults[base] = BundleResult(BundleState.UNKNOWN, reason)
+            renderSettings()
             return
         }
         val bundled = bundledHashes()
         val stale = (remote.keys + bundled.keys).filter { remote[it] != bundled[it] }.sorted()
-        if (stale.isEmpty()) {
-            bundleCheckText.text = "包里的界面：跟电脑上的一致"
-            bundleCheckText.setTextColor(Color.GRAY)
+        bundleResults[base] = if (stale.isEmpty()) {
+            BundleResult(BundleState.OK)
         } else {
-            bundleCheckText.text = "包里的界面是旧的（${stale.joinToString("、")}），重打一个 APK 装上"
-            bundleCheckText.setTextColor(STALE_COLOR)
+            BundleResult(BundleState.STALE, stale.joinToString("、"))
         }
+        renderSettings()
     }
 
     /** 后台那一头回来时回主线程改界面（这屏已经没了就别动了）。 */
@@ -514,24 +669,20 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------------
 
     /**
-     * 「打包并安装新版」：叫电脑现打一个包 → 隔一会儿问一次打好没 → 下下来 → 交给系统安装器。
+     * 清单右边那颗下载按钮：叫电脑现打一个包 → 隔一会儿问一次打好没 → 下下来 → 交给系统安装器。
      *
      * 为什么得在电脑上打：界面文件（`media/` 那几份）是打包那一刻从电脑上拷进 APK 的，
      * 手机手边没有它们。三条口都在后端那边：`POST /apk/build`（开始）、`GET /apk/build`
      * （进度）、`GET /apk`（把包发过来），见 src/apkBuild.ts。
      *
-     * 整串在后台线程里跑（打包要几十秒到几分钟），界面上只换那行字；
+     * 整串在后台线程里跑（打包要几十秒到几分钟），界面上只换那行进展；
      * 正在跑的时候再点不会再起一份（gradle 两个进程同时写一个 build 目录会互相踩）。
      */
-    private fun buildAndInstallApk() {
-        val base = savedAddress()
-        if (base == null) {
-            Toast.makeText(this, "先填后端地址", Toast.LENGTH_SHORT).show()
-            return
-        }
+    private fun buildAndInstallApk(base: String) {
         if (apkBusy) { return }
         apkBusy = true
-        syncApkControls()
+        // 那颗下载按钮先变成「…」：再点也没用，免得看成没反应
+        renderSettings()
         showApkNote("正在叫电脑打包…")
         // 打包那一段只知道 “还在跑” 和跑了多少秒，给不出百分比：横条转圈
         showApkProgress(null, 0)
@@ -729,9 +880,12 @@ class MainActivity : Activity() {
         }
     }
 
-    /** 换那行进展（后台线程叫的，自己负责回主线程）。 */
+    /** 换那行进展（后台线程叫的，自己负责回主线程）。给空串就把那行收起来。 */
     private fun showApkNote(text: String) {
-        onMain { apkBuildText.text = text }
+        onMain {
+            apkBuildText.text = text
+            apkBuildText.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
+        }
     }
 
     /**
@@ -751,12 +905,13 @@ class MainActivity : Activity() {
         }
     }
 
-    /** 按钮的字与能不能点跟着「正在跑」走。 */
+    /**
+     * 打包 / 下载跑完了：把横条收起来，清单重摆一遍
+     * （那颗下载按钮带着「…」跑完要变回去 / 变回一颗勾）。
+     */
     private fun syncApkControls() {
-        apkInstallButton.isEnabled = !apkBusy
-        apkInstallButton.text = if (apkBusy) "正在打包…" else "打包并安装新版"
-        // 跑完了把横条收起来（不管最后是成功还是写了一句错）
         if (!apkBusy) { apkProgress.visibility = View.GONE }
+        renderSettings()
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
