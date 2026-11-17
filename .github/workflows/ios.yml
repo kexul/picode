@@ -11,7 +11,9 @@ on:
 
 jobs:
   ipa:
-    runs-on: macos-14
+    # 用 Intel 那台（macos-14 是 arm64，有些账号的 runner 组不认那个配置：
+    # The configuration 'macos-14-arm64-us-default' is not supported）
+    runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
       - name: 打 ipa
