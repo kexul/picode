@@ -824,6 +824,17 @@
       toggleFileSearch();
       return;
     }
+    // 看文件的弹窗里 Ctrl+F / Cmd+F：在这一份里找字（见「弹窗里找字」那一段）。
+    // 拦下来的理由：弹窗正文是分窗口摆的，页面里只有看得见的那几百行，
+    // 浏览器自己那个查找只能搜到那几行，滚出去的就悄悄漏了，也不会跳过去。
+    // 找不了的那几页（markdown 排版、网页、图、正在改的文本框里）不拦，照旧归浏览器。
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key || "").toLowerCase() === "f") {
+      if (fileViewing() && !fileSearch.open && fileFindAvailable()) {
+        e.preventDefault();
+        openFileFind();
+        return;
+      }
+    }
     if (tag === "INPUT" || tag === "TEXTAREA") {
       // Alt+ 类组合在输入框里也应允许（不输入字符）
       const combos = tabSwitchCombos(tabSwitchKey);
@@ -4827,13 +4838,16 @@
     };
     body.appendChild(label("最近一次提交"));
     body.appendChild(label("现在"));
-    /** 一行两格：左边是「之前」那一行，右边是「之后」那一行（哪边没有就给一格空位）。 */
+    /** 一行两格：左边是「之前」那一行，右边是「之后」那一行（哪边没有就给一格空位）。
+     *  两栏穿同一个号：找字时同一行在左右两边都有也只算一处（见 fileFindMatches）。 */
+    let lineNo = 0;
     const pair = (left, right) => {
+      lineNo += 1;
       body.appendChild(left
-        ? diffCell(left.kind, left.before, left.text, left.hl)
+        ? diffCell(left.kind, left.before, left.text, left.hl, "before", lineNo)
         : emptyDiffCell(right ? right.kind : "ctx"));
       body.appendChild(right
-        ? diffCell(right.kind, right.after, right.text, right.hl)
+        ? diffCell(right.kind, right.after, right.text, right.hl, "after", lineNo)
         : emptyDiffCell(left ? left.kind : "ctx"));
     };
     let i = 0;
@@ -4864,10 +4878,16 @@
     return wrap;
   }
 
-  /** 两栏里的一格：行号 + 这一行的原文（变了的字涂深）。 */
-  function diffCell(kind, no, text, ranges) {
+  /**
+   * 两栏里的一格：行号 + 这一行的原文（变了的字涂深）。
+   * @param side "before"（左边「最近一次提交」）/ "after"（右边「现在」）
+   * @param pairNo 同一行那两格穿的号：找字时靠它把两栏算成一处（见 fileFindMatches）
+   */
+  function diffCell(kind, no, text, ranges, side, pairNo) {
     const cell = document.createElement("div");
     cell.className = "diff2-cell " + kind;
+    if (side) { cell.dataset.side = side; }
+    if (pairNo) { cell.dataset.line = String(pairNo); }
     const num = document.createElement("span");
     num.className = "file-num";
     num.textContent = no ? String(no) : "";
@@ -7125,6 +7145,7 @@
    *   工具调用耗时 / 工具（两个弹窗）
    *   文件搜索（它可能开在浮层上面：先收它，再按一下才收浮层）
    *   浮层（选模型 / 选文件夹 / 历史 / 项目与会话 / 确认框）
+   *   看文件的弹窗里那条找字条（再按一下才收弹窗）
    *   看文件的弹窗
    *   空串：谁也没开着（那一按归“中止这一轮”，跟 pi 的 TUI 一样）
    *
@@ -7137,6 +7158,7 @@
     if (envOpen()) { return "env"; }
     if (fileSearch.open) { return "search"; }
     if (pickerModalOpen()) { return "picker"; }
+    if (fileFind.open) { return "find"; }
     if (fileViewing()) { return "viewer"; }
     return "";
   }
@@ -7702,6 +7724,8 @@
     tab.editing = true;
     tab.conflict = false;
     tab.err = "";
+    // 进了改字那一态：没有行这回事了，找字条收起来（见「弹窗里找字」）
+    closeFileFind();
     renderFileEditor(tab);
     syncFileBar();
   }
@@ -8027,6 +8051,8 @@
     const next = viewTab();
     if (next && next.file && next.file.rows && !next.file.cluster) { mountFileRows(next.file); }
     if (body) { body.scrollTop = next ? (Number(next.top) > 0 ? Number(next.top) : 0) : 0; }
+    // 找字条开着时换了标签：把关键词拿到这一份里重找一道（停在眼下看着的地方最近的那一处）
+    if (fileFind.open) { runFileFind("new"); }
   }
 
   /**
@@ -8291,6 +8317,11 @@
           : `${diffEntry.path} 回到最近一次提交（这之后的改动全都丢掉）`);
     }
     if (editing) { syncFileEditNote(fileTab); }
+    // 找字那颗放大镜：只有能找的那几页（一行一行的正文 / 一份 diff）才露面（见 fileFindAvailable）
+    const findBtn = document.getElementById("fileFindBtn");
+    if (findBtn) { findBtn.hidden = !viewing || !fileFindAvailable(); }
+    // 正找着的那一页不能找了（进了改字那一态、换成了图）：把查找条收掉
+    if (fileFind.open && !fileFindAvailable()) { closeFileFind(); }
     // 那颗「复制路径」：开着一份就抄这一条，开着几份就全抄（一份一行，见那颗按钮上的点击）
     const copyPathBtn = document.getElementById("fileCopyPath");
     if (copyPathBtn) {
@@ -8377,6 +8408,7 @@
   function closeFileViewer() {
     const v = fileSidebar.view;
     if (v.tabs.length === 0) { return; }
+    closeFileFind();
     v.tabs.forEach(dropEntryPage);
     v.tabs = [];
     v.at = -1;
@@ -8396,20 +8428,35 @@
   }
 
   /**
-   * 把点亮的那一行换成这一行：只改 tab.rows 里那两行再让它重摆（那一行这会儿多半不在页面上，
-   * 得等滚到它那儿才看得见）。
+   * 把点亮的那一行换成这一行：亮的那一层是摆的时候叠上去的（见 fileViewRows），所以只记下行号再重摆一道。
+   * 那一行这会儿多半不在页面上，得等滚到它那儿才看得见（这不碍事：Clusterize 只摆看得见的那一段）。
    */
   function markFileHitLine(tab, line) {
     if (!tab || !tab.rows || tab.hitLine === line) { return; }
-    const old = tab.hitLine;
-    if (old > 0 && tab.rows[old - 1]) {
-      tab.rows[old - 1] = tab.rows[old - 1].replace('class="file-line hit"', 'class="file-line"');
-    }
-    if (line > 0 && tab.rows[line - 1]) {
-      tab.rows[line - 1] = tab.rows[line - 1].replace('class="file-line"', 'class="file-line hit"');
-    }
     tab.hitLine = line > 0 ? line : 0;
-    if (tab.cluster) { tab.cluster.update(tab.rows); }
+    if (tab.cluster) { tab.cluster.update(fileViewRows(tab)); }
+  }
+
+  /**
+   * 这一份正文现在该摆的那几行：底稿是 tab.rows（一直不动），摆的时候叠上两层临时的高亮——
+   * 从外头跳过来的那一行（tab.hitLine，见 markFileHitLine）、找字对上的那几行（见「弹窗里找字」）。
+   * 两样都没有就把底稿原样交回去（不另抄一份）。
+   */
+  function fileViewRows(tab) {
+    if (!tab || !tab.rows) { return null; }
+    const find = fileFind.open && fileFind.tab === tab ? fileFind : null;
+    const seek = find && find.at >= 0 ? find.lines[find.at] : 0;
+    const hit = seek > 0 ? seek : (Number(tab.hitLine) > 0 ? Number(tab.hitLine) : 0);
+    const marks = new Map();
+    if (find) { find.lines.forEach((line) => marks.set(line, "find")); }
+    if (hit > 0) { marks.set(hit, marks.has(hit) ? "find hit" : "hit"); }
+    if (marks.size === 0) { return tab.rows; }
+    const rows = tab.rows.slice();
+    marks.forEach((cls, line) => {
+      const row = rows[line - 1];
+      if (row) { rows[line - 1] = row.replace('class="file-line"', 'class="file-line ' + cls + '"'); }
+    });
+    return rows;
   }
 
   /**
@@ -8532,6 +8579,9 @@
         return;
       }
       page.appendChild(renderDiffPanes(rows));
+      // 找字条开着时重画了这份 diff：重找一道（停在原处，见 runFileFind 的 "keep"）；
+      // 只在这份就是现在看着的那一份时算
+      if (fileFind.open && viewTab() === entry) { runFileFind("keep"); }
     }).catch(() => {
       if (!v.tabs.includes(entry)) { return; }
       page.innerHTML = "";
@@ -8897,9 +8947,9 @@
   }
 
   /** 正文里的一行：行号加那一行的原文（colored 是上过色的那几行，没上色就是 null）。 */
-  function fileLineHtml(line, num, colored, index, hit) {
+  function fileLineHtml(line, num, colored, index) {
     const body = colored ? colored[index] : escapeHtmlText(line);
-    return '<div class="file-line' + (hit ? ' hit' : '') + '">'
+    return '<div class="file-line">'
         + '<span class="file-num">' + num + '</span>'
         + '<span class="file-text">' + body + '</span>'
         + '</div>';
@@ -8912,6 +8962,9 @@
    * 先把全文化成一行一段的 HTML 存在标签上（tab.rows），再交给 Clusterize 摆（见 mountFileRows）：
    * 页面里只留看得见的那一段。不这么做的话，一份两万行的文件光建行元素就要一两秒，
    * 手机上更久（这就是当初靠 content-visibility 顶住的那一下）。
+   *
+   * tab.rows 里存的是**底稿**（一行一个 class="file-line"，不带任何临时高亮）：
+   * 点亮那一行、找字对上的那几行都在摆的时候叠上去（见 fileViewRows）。
    * 只摆，不管滚到哪儿（那是 scrollFileBody 的事）。
    * @param text 文件全文（后端按 UTF-8 给回来的）
    * @param tab 那个文件的标签（按它的写法认语言、上色）
@@ -8925,12 +8978,16 @@
     const hit = Number(hitLine) > 0 && Number(hitLine) <= lines.length ? Number(hitLine) : 0;
     const rows = new Array(lines.length);
     for (let i = 0; i < lines.length; i++) {
-      rows[i] = fileLineHtml(lines[i], i + 1, colored, i, hit === i + 1);
+      rows[i] = fileLineHtml(lines[i], i + 1, colored, i);
     }
     tab.rows = rows;
     tab.rowCount = rows.length;
     tab.hitLine = hit;
     mountFileRows(tab);
+    // 这一份刚（重）读过：找着的那些处重算一道（同一份文件跟着刷新重读时停在原处，见 runFileFind 的 "keep"）。
+    // 只在这份就是现在看着的那一份时算（藏在后面的那几份不许动当前的查找条）
+    const viewing = viewTab();
+    if (fileFind.open && viewing && viewing.file === tab) { runFileFind("keep"); }
   }
 
   /**
@@ -8946,11 +9003,11 @@
     const Clusterize = globalThis.Clusterize;
     if (!Clusterize) {
       // 这个文件没取到（理论上不该发生）：行还是给出来，只是全部摆上，不再分窗口
-      page.innerHTML = tab.rows.join("");
+      page.innerHTML = (fileViewRows(tab) || tab.rows).join("");
       return;
     }
     tab.cluster = new Clusterize({
-      rows: tab.rows,
+      rows: fileViewRows(tab),
       scrollElem: fileSidebar.body,
       contentElem: page,
       rows_in_block: FILE_ROWS_IN_BLOCK,
@@ -9013,6 +9070,205 @@
       return;
     }
     body.scrollTop = Number(savedTop) > 0 ? Number(savedTop) : 0;
+  }
+
+  // ==================== 弹窗里找字（Ctrl+F）====================
+  //
+  // 在弹窗现在看着的这一份里找文字：顶条底下一条窄的查找条（输入框 + 「3/17」+ 上下两颗 + 收起），
+  // 对上的那几行涂一层淡底、现在停的那一处再亮一层；回车下一处、Shift+回车上一处。
+  //
+  // 为什么不用浏览器自己那个查找：弹窗正文是分窗口摆的（见 mountFileRows），页面里只有看得见的那几百行，
+  // 浏览器只能搜到那几行，滚出去的就悄悄漏了，也不会跳过去。所以这一份得自己找：
+  // 正文在 tab.text 里，一份 diff 就一格一格看那几格的字（见 fileFindMatches）。
+  //
+  // 只在「一行一行的正文」与「一份 diff」上有：markdown 排版、当网页渲染的 html、图、
+  // 以及正在改文件的那个文本框里没有行这回事（那里 Ctrl+F 照旧归浏览器）。
+  const fileFind = {
+    open: false,
+    query: "",
+    at: -1,        // 现在停在第几处（从 0 数）
+    count: 0,
+    lines: [],     // 一行一行的正文：对上的是哪几行（从 1 数）
+    cells: [],     // 一份 diff：对上的那几处（一处一组：同一行左右两栏都有就把那一组的几格都列上）
+    tab: null,     // 这几处是哪一个文件的（正文那一条靠它决定涂哪一份，见 fileViewRows）
+    paintedTab: null,   // 上一回涂过的那一份正文（换了一份要把它的擦掉重摆）
+    painted: null,      // 上一回涂过的那几格 diff
+  };
+
+  /** 现在看着的这一份能不能在里面找字（见上面那段：只认一行一行的正文与一份 diff）。 */
+  function fileFindAvailable() {
+    const entry = viewTab();
+    if (!entry) { return false; }
+    if (entry.kind === "diff") { return !!entry.page && !!entry.page.querySelector(".diff2-cell"); }
+    const tab = entry.file;
+    return !!(tab && tab.rows && !tab.editing && typeof tab.text === "string");
+  }
+
+  /** 开查找条（Ctrl+F、或者横条上那颗放大镜）：已经开着就只把光标放回框里。 */
+  function openFileFind() {
+    if (!fileFindAvailable()) { return; }
+    fileFind.open = true;
+    if (fileFind.root) { fileFind.root.hidden = false; }
+    if (fileFind.input) {
+      fileFind.input.focus();
+      try { fileFind.input.select(); } catch (e) { /* 不管 */ }
+    }
+    runFileFind("new");
+  }
+
+  /** 收起来：涂上的那几处擦掉，正文回到原来的样子（关键词留着，下次打开接着找）。 */
+  function closeFileFind() {
+    if (!fileFind.open) { return; }
+    fileFind.open = false;
+    clearFileFindMarks();
+    fileFind.at = -1;
+    fileFind.count = 0;
+    fileFind.lines = [];
+    fileFind.cells = [];
+    fileFind.tab = null;
+    if (fileFind.root) { fileFind.root.hidden = true; }
+    if (fileFind.input) { fileFind.input.blur(); }
+    syncFileFindBar();
+  }
+
+  /** 把涂上的那几处擦掉：正文重摆一道（fileViewRows 那边已经不计它了），diff 那几格去掉 class。 */
+  function clearFileFindMarks() {
+    const tab = fileFind.paintedTab;
+    if (tab && tab.cluster) { tab.cluster.update(fileViewRows(tab)); }
+    (fileFind.painted || []).forEach((el) => el.classList.remove("find", "cur"));
+    fileFind.paintedTab = null;
+    fileFind.painted = null;
+  }
+
+  /** 这个关键词在这一份里对上了哪些地方（一行一行的正文给行号，一份 diff 给那几格的 .file-text）。 */
+  function fileFindMatches(entry, query) {
+    const q = String(query || "").toLowerCase();
+    const out = { lines: [], cells: [] };
+    if (!entry || !q) { return out; }
+    if (entry.kind === "diff") {
+      const page = entry.page;
+      if (!page) { return out; }
+      // 一份 diff 摆成两栏：同一行在左右两边都可能有一格（没变的那种一行两边都有）。
+      // 按行分组：同组里对上的那几格一起涂，但只算一处。
+      const groups = new Map();
+      page.querySelectorAll(".diff2-cell").forEach((cell) => {
+        const key = cell.dataset.line || ("one-" + groups.size);
+        if (!groups.has(key)) { groups.set(key, []); }
+        groups.get(key).push(cell);
+      });
+      groups.forEach((cells) => {
+        const hit = [];
+        cells.forEach((cell) => {
+          const text = cell.querySelector(".file-text");
+          if (text && String(text.textContent || "").toLowerCase().indexOf(q) >= 0) { hit.push(text); }
+        });
+        if (hit.length > 0) { out.cells.push(hit); }
+      });
+      return out;
+    }
+    const tab = entry.file;
+    if (!tab || !tab.rows || typeof tab.text !== "string") { return out; }
+    const lines = String(tab.text).split("\n");
+    // 末尾那个换行不算一行（跟 renderFileText 那一刀一样）
+    if (tab.rowCount > 0 && lines.length > tab.rowCount) { lines.length = tab.rowCount; }
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].toLowerCase().indexOf(q) >= 0) { out.lines.push(i + 1); }
+    }
+    return out;
+  }
+
+  /**
+   * 找一遍、把该亮的那一处亮起来。
+   * @param mode "new" = 关键词改了 / 换了一份文件（从眼下看着的地方往下挑最近的一处），
+   *             "next" / "prev" = 下一处 / 上一处，"keep" = 这一份重读过（停在原处）
+   */
+  function runFileFind(mode) {
+    if (!fileFind.open) { return; }
+    if (!fileFindAvailable()) { closeFileFind(); return; }
+    const entry = viewTab();
+    const oldTab = fileFind.paintedTab;
+    const got = fileFindMatches(entry, fileFind.query);
+    const count = got.lines.length || got.cells.length;
+    fileFind.tab = entry.kind === "file" ? entry.file : null;
+    fileFind.lines = got.lines;
+    fileFind.cells = got.cells;
+    fileFind.count = count;
+    if (count === 0) {
+      fileFind.at = -1;
+    } else if (mode === "next" && fileFind.at >= 0) {
+      fileFind.at = (fileFind.at + 1) % count;
+    } else if (mode === "prev" && fileFind.at >= 0) {
+      fileFind.at = (fileFind.at - 1 + count) % count;
+    } else if (mode === "keep" && fileFind.at >= 0) {
+      fileFind.at = Math.min(fileFind.at, count - 1);
+    } else {
+      fileFind.at = fileFindNear(entry, got);
+    }
+    paintFileFind(oldTab);
+    syncFileFindBar();
+    scrollToFileFind(entry);
+  }
+
+  /** 从眼下看着的那一段往下，最近的一处在第几个（都过了就到第一处）。 */
+  function fileFindNear(entry, got) {
+    const body = fileSidebar.body;
+    if (entry.kind === "diff") {
+      if (!body) { return 0; }
+      const top = body.getBoundingClientRect().top;
+      for (let i = 0; i < got.cells.length; i++) {
+        if (got.cells[i][0].getBoundingClientRect().top >= top - 4) { return i; }
+      }
+      return 0;
+    }
+    const tab = fileFind.tab;   // 已经设成这一份了（见 runFileFind）
+    const h = tab && tab.cluster ? (tab.cluster.options.item_height || 0) : 0;
+    const topLine = h > 0 && body ? Math.round(body.scrollTop / h) + 1 : 1;
+    for (let i = 0; i < got.lines.length; i++) {
+      if (got.lines[i] >= topLine) { return i; }
+    }
+    return 0;
+  }
+
+  /** 涂上：正文重摆一道（见 fileViewRows），diff 那几格直接改 class。 */
+  function paintFileFind(oldTab) {
+    // 正文：上一回涂过的那一份（多半是换了一份文件）也要重摆一道 —— 它已经不计在里头了
+    [oldTab, fileFind.tab].forEach((tab) => {
+      if (tab && tab.cluster) { tab.cluster.update(fileViewRows(tab)); }
+    });
+    fileFind.paintedTab = fileFind.tab;
+    (fileFind.painted || []).forEach((el) => el.classList.remove("find", "cur"));
+    fileFind.painted = null;
+    if (fileFind.cells.length === 0) { return; }
+    const flat = [];
+    fileFind.cells.forEach((cells) => cells.forEach((el) => { el.classList.add("find"); flat.push(el); }));
+    const cur = fileFind.cells[fileFind.at];
+    if (cur) { cur.forEach((el) => el.classList.add("cur")); }
+    fileFind.painted = flat;
+  }
+
+  /** 滚到停的那一处：正文按“第几行 × 行高”算（那一行多半还不在页面上），diff 直接让它露出来。 */
+  function scrollToFileFind(entry) {
+    if (!entry || fileFind.at < 0) { return; }
+    if (entry.kind === "diff") {
+      const group = fileFind.cells[fileFind.at];
+      const el = group && group[0];
+      if (el && el.scrollIntoView) { el.scrollIntoView({ block: "center" }); }
+      return;
+    }
+    const tab = fileFind.tab;
+    if (tab && tab.cluster) { scrollFileBody(tab, fileFind.lines[fileFind.at], 0); }
+  }
+
+  /** 查找条上那个「3/17」（没对上就写「没有」），以及上下两颗的灰亮。 */
+  function syncFileFindBar() {
+    if (!fileFind.root) { return; }
+    fileFind.root.hidden = !fileFind.open;
+    const count = fileFind.count;
+    if (fileFind.countEl) {
+      fileFind.countEl.textContent = !fileFind.query ? "" : (count === 0 ? "没有" : (fileFind.at + 1) + "/" + count);
+    }
+    if (fileFind.prevBtn) { fileFind.prevBtn.disabled = count === 0; }
+    if (fileFind.nextBtn) { fileFind.nextBtn.disabled = count === 0; }
   }
 
   /**
@@ -9916,7 +10172,9 @@
           '<span class="file-bar-name"></span>' +
           // 改这个文件那颗铅笔（只在能改的代码文件上露面，见 syncFileBar / canEditFile），
           // 以及改的时候那两颗：存（Ctrl+S）与放弃（盘上变了时这两颗变成「覆盖」「用盘上的」）
-          // 它前面那颗「复制路径」是把开着的那几份的完整路径抄进剪贴板（一份一行），见 syncFileBar
+          // 前面那两颗：放大镜 = 在这个文件里找字（Ctrl+F；手机触屏没这个键，就点它，见「弹窗里找字」），
+          // 复制路径 = 把开着的那几份的完整路径抄进剪贴板（一份一行，见 syncFileBar）
+          '<button id="fileFindBtn" class="file-bar-btn" type="button" title="在这个文件里找字（Ctrl+F）" aria-label="在这个文件里找字">' + SEARCH_ICON + '</button>' +
           '<button id="fileCopyPath" class="file-bar-btn" type="button" title="复制路径" aria-label="复制路径">' + ICONS.copy + '</button>' +
           '<button id="fileEdit" class="file-bar-btn" type="button" title="改一下这个文件" aria-label="改一下这个文件">' + ICONS.edit + '</button>' +
           '<button id="fileSave" class="file-bar-btn" type="button" title="存到磁盘（Ctrl+S）" aria-label="存到磁盘">' + ICONS.save + '</button>' +
@@ -9927,6 +10185,15 @@
           '<button id="fileFontMinus" class="file-bar-btn" type="button" title="字小一点" aria-label="字小一点">A−</button>' +
           '<button id="fileFontPlus" class="file-bar-btn" type="button" title="字大一点" aria-label="字大一点">A+</button>' +
           '<button id="fileCloseFile" type="button" title="关掉（Esc）" aria-label="关掉">' + ICONS["close-bold"] + '</button>' +
+        '</div>' +
+        // 找字那一条（Ctrl+F，见「弹窗里找字」那一段）：挂在顶条底下、正文外头（不跟着滚）。
+        // 没打开时整条收起来（hidden），正文照旧从顶条底下开始。
+        '<div id="fileFind" hidden>' +
+          '<input id="fileFindInput" type="text" placeholder="在这个文件里找字…" autocomplete="off" spellcheck="false" aria-label="在这个文件里找字" />' +
+          '<span id="fileFindCount" class="file-find-count"></span>' +
+          '<button id="fileFindPrev" class="file-bar-btn" type="button" title="上一处（Shift+回车）" aria-label="上一处">' + ICONS["arrow-up"] + '</button>' +
+          '<button id="fileFindNext" class="file-bar-btn" type="button" title="下一处（回车）" aria-label="下一处">' + ICONS["arrow-down"] + '</button>' +
+          '<button id="fileFindClose" type="button" title="收起（Esc）" aria-label="收起">' + ICONS["close-bold"] + '</button>' +
         '</div>' +
         '<div id="fileBody" class="pk-body"></div>' +
         // 手机上往下拉收起时浮在顶上那句话（钉着不跟手走，见 wireFilePullDown）
@@ -9958,6 +10225,29 @@
     fileSidebar.box = readFileViewerBox();
     fileSidebar.closeFile = stage.querySelector("#fileCloseFile");
     fileSidebar.closeFile.addEventListener("click", () => closeFileViewer());
+    // 找字那一条（见「弹窗里找字」那一段）：横条上那颗放大镜开 / 收，框里回车下一处、Shift+回车上一处。
+    // Esc 不在这儿接：那条键由 document 上那个监听统一收（见 escTopLayer 的「find」那一层）。
+    fileFind.root = stage.querySelector("#fileFind");
+    fileFind.input = stage.querySelector("#fileFindInput");
+    fileFind.countEl = stage.querySelector("#fileFindCount");
+    fileFind.prevBtn = stage.querySelector("#fileFindPrev");
+    fileFind.nextBtn = stage.querySelector("#fileFindNext");
+    stage.querySelector("#fileFindBtn").addEventListener("click", () => {
+      if (fileFind.open) { closeFileFind(); } else { openFileFind(); }
+    });
+    stage.querySelector("#fileFindClose").addEventListener("click", () => closeFileFind());
+    fileFind.prevBtn.addEventListener("click", () => runFileFind("prev"));
+    fileFind.nextBtn.addEventListener("click", () => runFileFind("next"));
+    fileFind.input.addEventListener("input", () => {
+      fileFind.query = fileFind.input.value;
+      runFileFind("new");
+    });
+    fileFind.input.addEventListener("keydown", (e) => {
+      if (imeBusy(e)) { return; }
+      if (e.key !== "Enter") { return; }
+      e.preventDefault();
+      runFileFind(e.shiftKey ? "prev" : "next");
+    });
     // 铅笔 / 存 / 放弃 三颗：改一个文件那一摊都在这一块（见 startFileEdit / saveFileEdit）
     stage.querySelector("#fileEdit").addEventListener("click", () => {
       const entry = viewTab();
@@ -10013,6 +10303,14 @@
       e.preventDefault();
       e.stopImmediatePropagation();
       closeFileViewer();
+    });
+    // 找字条开着时 Esc 先收它，弹窗还留着（再按一下才收弹窗）
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") { return; }
+      if (escTopLayer() !== "find") { return; }
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      closeFileFind();
     });
     // 电脑上那一块浮在页面上：点它外面（对话、顶条、输入框……）就收起来，跟那颗叉、Esc 一个结果。
     // 挑文件的那几处不算外面 —— 左边那一列（文件清单、「改动」）、消息里的文件链接、

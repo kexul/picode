@@ -1958,6 +1958,22 @@
   .file-line.hit {
     background: color-mix(in srgb, var(--vscode-focusBorder, #007acc) 18%, transparent);
   }
+  /* 找字对上的那几行（Ctrl+F，见 chat.js 的「弹窗里找字」）：一层淡橙底；
+     现在停的那一处再压深一点（它同时带着 .hit，但底子得更亮：一眼看得出停在哪儿）。
+     不用主题色：主题色那个跟上面「链接说到的那一行」的底色分不开。 */
+  .file-line.find {
+    background: rgba(234, 140, 0, 0.18);
+  }
+  .file-line.find.hit {
+    background: rgba(234, 140, 0, 0.38);
+  }
+  /* 一份 diff 里对上的那一句：只涂字那一层，不盖掉这一格本来的加 / 删底色 */
+  .diff2-cell .file-text.find {
+    background: rgba(234, 140, 0, 0.22); border-radius: 2px;
+  }
+  .diff2-cell .file-text.find.cur {
+    background: rgba(234, 140, 0, 0.45); border-radius: 2px;
+  }
   /* markdown 文件：排好版渲染成文档（样式就是消息流里那一套 .md），不留行号。 */
   .file-md { padding: 2px 14px 6px; }
   .file-note { padding: 12px 14px; line-height: 1.6; opacity: 0.75; }
@@ -2123,6 +2139,41 @@
     color: var(--vscode-descriptionForeground, inherit);
   }
   #fileBar[hidden] { display: none; }
+  /* 顶条底下那一根找字条（Ctrl+F，见 chat.js 的「弹窗里找字」）：一个输入框 + 「3/17」+
+     上下两颗 + 收起。跟顶条一个长相、矮一点，一看就是挂在它底下的；它也在正文外头（不跟着滚）。 */
+  #fileFind {
+    flex: 0 0 auto; box-sizing: border-box;
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
+    background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  }
+  #fileFind[hidden] { display: none; }
+  #fileFindInput {
+    flex: 1 1 auto; min-width: 0; box-sizing: border-box; height: 24px;
+    padding: 0 8px; border-radius: 4px; outline: none;
+    border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, rgba(128,128,128,0.4)));
+    background: var(--vscode-input-background, var(--vscode-editor-background));
+    color: var(--vscode-input-foreground, inherit);
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: calc(var(--vscode-font-size, 13px) - 1px);
+  }
+  #fileFindInput:focus { border-color: var(--vscode-focusBorder, #007acc); }
+  .file-find-count {
+    flex: 0 0 auto; min-width: 3.4em; text-align: right;
+    font-size: calc(var(--vscode-font-size, 13px) - 2px);
+    color: var(--vscode-descriptionForeground, inherit); opacity: 0.85;
+    font-variant-numeric: tabular-nums;
+  }
+  /* 收起那根找字条（跟顶条上关掉弹窗那颗叉一个长相，只是小一点点） */
+  #fileFindClose {
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; padding: 0; cursor: pointer;
+    border: 0; border-radius: 4px; background: none;
+    color: var(--vscode-foreground); opacity: 0.7;
+  }
+  #fileFindClose svg { width: 12px; height: 12px; display: block; }
+  #fileFindClose:hover { opacity: 1; background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.18)); }
   #fileBar .file-bar-name {
     flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-family: var(--vscode-editor-font-family, monospace);
