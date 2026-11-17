@@ -1,0 +1,23 @@
+name: ios
+
+# 打一个没签名的 iOS 包（ios/build/PiChat.ipa），当成 artifact 下下来。
+# 这台机器是 Windows、编不了 iOS，所以交给 GitHub 的 macOS 机器干（见 ios/README.md）。
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios.yml"
+
+jobs:
+  ipa:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: 打 ipa
+        run: bash ios/build-ipa.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PiChat-ipa
+          path: ios/build/PiChat.ipa
+          if-no-files-found: error
