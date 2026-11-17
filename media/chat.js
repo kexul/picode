@@ -1037,6 +1037,10 @@
       // seen：已经记过的调用编号（同一条重放一遍不再算）。
       toolStats: { calls: 0, totalMs: 0, byTool: new Map(), slowest: [], seen: new Set() },
       queuedSteering: [],
+      queuedFollowUp: [],
+      // 下一句怎么发：false = 插话（半路插进去，默认），true = 排队（等这一轮跑完再交给它）。
+      // 只对下一句管用，发出去就回默认（见 send）。
+      nextFollowUp: false,
       pendingSteerRestore: null,
       autoLoadHinted: false,
     };
@@ -5045,42 +5049,86 @@
     if (composer) { composer.classList.toggle("auto", !!auto); }
   }
 
+  // ==================== 发送方式那一条（输入框上头）====================
+  /**
+   * 输入框上头那一条（#queueBar）：会话跑着的时候露面。
+   * 第一行是**发送方式**：插话（黄点）＝这一句半路插进去；排队（绿点呼吸）＝这一句等这一轮跑完再交给它。
+   * 点这一行就切过去切回来，只对下一句管用（发出去就回默认的插话）。
+   * 下面接着列正排着的消息：插话排着的用黄点、排队排着的用绿点，跟上面那一档一个颜色。
+   * 会话闲着的时候整条收掉：那会儿两种发法没区别，都是开新的一轮。
+   */
   function renderQueueBar(st) {
     if (activeId !== st.id) { return; }
-    const items = st.queuedSteering || [];
-    if (!items.length) { queueBarEl.classList.add("hidden"); queueBarEl.innerHTML = ""; return; }
+    const steering = st.queuedSteering || [];
+    const followUp = st.queuedFollowUp || [];
+    if (!st.streaming && !steering.length && !followUp.length) {
+      queueBarEl.classList.add("hidden"); queueBarEl.innerHTML = ""; return;
+    }
     queueBarEl.classList.remove("hidden");
     queueBarEl.innerHTML = "";
-    items.forEach((text) => {
-      const full = typeof text === "string" ? text : "";
-      const lines = full.split("\n");
-      const preview = lines.slice(0, 3).join("\n") + (lines.length > 3 ? "\n…" : "");
-      const card = document.createElement("div");
-      card.className = "qb-block collapsed";
-      const head = document.createElement("div");
-      head.className = "qb-head";
-      head.title = "点击展开或收起排队消息";
-      head.setAttribute("role", "button");
-      head.setAttribute("tabindex", "0");
-      head.setAttribute("aria-expanded", "false");
-      const dot = document.createElement("span"); dot.className = "qb-dot";
-      const previewLine = document.createElement("span"); previewLine.className = "qb-preview";
-      previewLine.textContent = (lines[0] || "").trim();
-      const body = document.createElement("pre"); body.className = "qb-body";
-      body.textContent = preview;
-      const toggle = () => {
-        const collapsed = card.classList.toggle("collapsed");
-        head.setAttribute("aria-expanded", String(!collapsed));
-        body.textContent = collapsed ? preview : full;
-      };
-      head.appendChild(dot); head.appendChild(previewLine);
-      card.appendChild(head); card.appendChild(body);
-      head.addEventListener("click", toggle);
-      head.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); }
-      });
-      queueBarEl.appendChild(card);
+    queueBarEl.appendChild(queueModeRow(st));
+    steering.forEach((text) => queueBarEl.appendChild(queueCard(text, "steer")));
+    followUp.forEach((text) => queueBarEl.appendChild(queueCard(text, "follow")));
+  }
+
+  /** 那一条的头一行：一颗点 + 当前这一档，点它换一档。 */
+  function queueModeRow(st) {
+    const queued = st.nextFollowUp === true;
+    const row = document.createElement("div");
+    row.className = "qb-mode" + (queued ? " queued" : "");
+    row.id = "queueMode";
+    row.setAttribute("role", "button");
+    row.setAttribute("tabindex", "0");
+    row.setAttribute("aria-pressed", String(queued));
+    const dot = document.createElement("span"); dot.className = "qb-dot";
+    const label = document.createElement("span"); label.className = "qb-mode-label";
+    label.textContent = queued ? "排队" : "插话";
+    row.title = queued
+      ? "下一句排在这一轮后头（这一轮跑完再交给它）—— 点一下改回插话"
+      : "下一句半路插进去（它下一次工具调完就交给它）—— 点一下改成排队";
+    row.setAttribute("aria-label", row.title);
+    const toggle = () => {
+      st.nextFollowUp = !queued;
+      renderQueueBar(st);
+    };
+    row.addEventListener("click", toggle);
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); }
     });
+    row.appendChild(dot); row.appendChild(label);
+    return row;
+  }
+
+  /** 正排着的一条：一行首行预览，点开看全文。kind 决定那颗点的颜色（steer 黄 / follow 绿）。 */
+  function queueCard(text, kind) {
+    const full = typeof text === "string" ? text : "";
+    const lines = full.split("\n");
+    const preview = lines.slice(0, 3).join("\n") + (lines.length > 3 ? "\n…" : "");
+    const card = document.createElement("div");
+    card.className = "qb-block collapsed" + (kind === "follow" ? " follow" : "");
+    const head = document.createElement("div");
+    head.className = "qb-head";
+    head.title = kind === "follow" ? "点击展开或收起排着的消息（这一轮跑完再交给它）" : "点击展开或收起排着的消息（马上插进去）";
+    head.setAttribute("role", "button");
+    head.setAttribute("tabindex", "0");
+    head.setAttribute("aria-expanded", "false");
+    const dot = document.createElement("span"); dot.className = "qb-dot";
+    const previewLine = document.createElement("span"); previewLine.className = "qb-preview";
+    previewLine.textContent = (lines[0] || "").trim();
+    const body = document.createElement("pre"); body.className = "qb-body";
+    body.textContent = preview;
+    const toggle = () => {
+      const collapsed = card.classList.toggle("collapsed");
+      head.setAttribute("aria-expanded", String(!collapsed));
+      body.textContent = collapsed ? preview : full;
+    };
+    head.appendChild(dot); head.appendChild(previewLine);
+    card.appendChild(head); card.appendChild(body);
+    head.addEventListener("click", toggle);
+    head.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); }
+    });
+    return card;
   }
 
   // ==================== UI 同步（当前会话驱动全局控件）====================
@@ -12274,11 +12322,11 @@
     if (pendingAutoSend === null) { return; }
     const st = activeSession();
     if (!st || !st.piReady) { return; }
-    const text = pendingAutoSend;
+    const pending = pendingAutoSend;
     pendingAutoSend = null;
     // 等待期间用户又改了输入框内容：那是他新的意思，不替他发
-    if (inputEl.value.trim() !== text.trim()) { return; }
-    send();
+    if (inputEl.value.trim() !== pending.text.trim()) { return; }
+    send({ followUp: pending.followUp === true });
   }
 
   /** 宿主替用户发一条（命令入口用）：跟输入框回车完全同一条路。 */
@@ -12288,10 +12336,17 @@
     send();
   }
 
-  function send() {
+  /**
+   * 把输入框里这一句发出去。
+   * opts.followUp：这一句按「排队」发（等这一轮跑完再交给它）——
+   * 来源有两处：输入框上头那一条点出来的那一档（st.nextFollowUp），或者 Alt+Enter。
+   * 排队是一次性的：发完这一句就回默认的插话。
+   */
+  function send(opts) {
     const st = activeSession();
     const d = draftOfSession();
     const typed = inputEl.value.trim();
+    const wantFollowUp = !!(opts && opts.followUp === true) || !!(st && st.nextFollowUp === true);
     const hasImages = (d.images || []).length > 0;
     const hasTextBlocks = (d.textBlocks || []).length > 0;
     if (!typed && !hasImages && !hasTextBlocks) { return; }
@@ -12305,11 +12360,13 @@
     }
     // 会话还没就绪（刚打开界面那一两秒）：记下这次回车，字留在输入框里，就绪后自动补发
     if (!st || !st.piReady) {
-      pendingAutoSend = text;
+      pendingAutoSend = { text, followUp: wantFollowUp };
       return;
     }
     pendingAutoSend = null;
-    vscode.postMessage({ type: "send", sessionId: st.id, text, images: d.images });
+    vscode.postMessage({ type: "send", sessionId: st.id, text, images: d.images, followUp: wantFollowUp });
+    // 排队只管这一句：发出去就回默认的插话（上头那一条跟着换回黄点）
+    if (st.nextFollowUp) { st.nextFollowUp = false; renderQueueBar(st); }
     resetComposer(d);
   }
 
@@ -12400,7 +12457,13 @@
   function abortActiveTab() {
     if (!activeSessionStreaming()) { return false; }
     const focus = sessions.get(activeId);
-    if (focus) { focus.pendingSteerRestore = (focus.queuedSteering || []).slice(); }
+    if (focus) {
+      // 中止会把两队的没投递的都被丢掉：先记下来，等后端报空队列时写回输入框（见 queueUpdate）
+      focus.pendingSteerRestore = {
+        steer: (focus.queuedSteering || []).slice(),
+        follow: (focus.queuedFollowUp || []).slice(),
+      };
+    }
     vscode.postMessage({ type: "abort", sessionId: activeId });
     return true;
   }
@@ -12442,6 +12505,13 @@
       // 以前这里一条一条列着判（而且漏了设置、工具耗时、工具这三块），顺序靠“谁先注册”。
       if (escTopLayer()) { return; }
       if (abortActiveTab()) { e.preventDefault(); }
+      return;
+    }
+    // Alt+Enter：这一句排在这一轮后头（排队），普通回车还是插话 —— 跟 pi 终端一个规矩。
+    // 发送键自己就设成 alt+enter 的时候不管这一下（那是发送键）。
+    if (e.key === "Enter" && e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey && sendKeyCombo !== "alt+enter") {
+      e.preventDefault();
+      send({ followUp: true });
       return;
     }
     if (isSendKey(e)) { e.preventDefault(); send(); }
@@ -12496,6 +12566,8 @@
     // 这一轮跑完：还在留的那条位置到此为止（一轮里最后调的是工具、后面没再出正文时，就靠这一下收）
     if (!on) { endRunningLine(st); }
     if (activeId === st.id) { updateSendState(); syncStatus(); }
+    // 发送方式那一条只在跑着的时候露面：这一下的收尾/露面靠重画一遍（见 renderQueueBar）
+    renderQueueBar(st);
     renderSessionBar();
     syncEndHint(st);
     refreshOpenSessionsInPicker();
@@ -13301,15 +13373,27 @@
       }
       case "queueUpdate":
         t.queuedSteering = Array.isArray(msg.steering) ? msg.steering : [];
-        // abort 后队列被清空：把未投递的 steer 文本合并写回输入框（与 TUI 一致）
-        if (t.pendingSteerRestore && t.pendingSteerRestore.length && t.queuedSteering.length === 0) {
-          const texts = t.pendingSteerRestore.filter((s) => typeof s === "string" && s);
-          t.pendingSteerRestore = null;
-          if (texts.length && activeId === t.id) {
-            const joined = texts.join("\n\n");
-            inputEl.value = inputEl.value ? (inputEl.value.replace(/\s+$/, "") + "\n\n" + joined) : joined;
-            autoResize();
-            inputEl.focus();
+        t.queuedFollowUp = Array.isArray(msg.followUp) ? msg.followUp : [];
+        // abort 后队列被清空：把那时还没投递的那些合并写回输入框（与 TUI 一致）。
+        // 两种队列各算各的：哪一队在这儿清空了，就把那一队当时排着的写回去。
+        if (t.pendingSteerRestore) {
+          const restore = t.pendingSteerRestore;
+          const back = [];
+          if (restore.steer && restore.steer.length && t.queuedSteering.length === 0) {
+            back.push(...restore.steer); restore.steer = [];
+          }
+          if (restore.follow && restore.follow.length && t.queuedFollowUp.length === 0) {
+            back.push(...restore.follow); restore.follow = [];
+          }
+          if (!(restore.steer || []).length && !(restore.follow || []).length) { t.pendingSteerRestore = null; }
+          if (back.length && activeId === t.id) {
+            const texts = back.filter((s) => typeof s === "string" && s);
+            if (texts.length) {
+              const joined = texts.join("\n\n");
+              inputEl.value = inputEl.value ? (inputEl.value.replace(/\s+$/, "") + "\n\n" + joined) : joined;
+              autoResize();
+              inputEl.focus();
+            }
           }
         }
         if (activeId === t.id) { renderQueueBar(t); }

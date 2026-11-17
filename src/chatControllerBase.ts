@@ -1801,9 +1801,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
     }
 
     /** 向指定会话发送（对照实验/旧入口都走这里）。 */
-    protected broadcastSendToTab(panelId: string, text: string, images?: Array<{ data: string; mimeType: string }>): void {
+    protected broadcastSendToTab(panelId: string, text: string, images?: Array<{ data: string; mimeType: string }>, followUp?: boolean): void {
         for (const pid of this.panelIdsOf(panelId)) {
-            this.panels.get(pid)?.handleSend(text, images);
+            this.panels.get(pid)?.handleSend(text, images, followUp ? { deliverAfterTurn: true } : undefined);
         }
     }
 
@@ -2416,7 +2416,9 @@ export abstract class ChatControllerBase implements RuntimeHost {
 
         switch (msg.type) {
             case "send": {
-                this.broadcastSendToTab(target.id, msg.text, msg.images);
+                // followUp：页面上那条发送方式选的是「排队」（或者敲的 Alt+Enter）。
+                // 它只是人选的投递方式，不算插件代发：人打的字照旧当人说的话算（见 handleSend）。
+                this.broadcastSendToTab(target.id, msg.text, msg.images, msg.followUp === true);
                 break;
             }
             case "autoAct": {

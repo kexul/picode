@@ -932,7 +932,7 @@ export class SessionRuntime {
     public handleSend(
         text: string,
         images?: Array<{ data: string; mimeType: string }>,
-        opts?: { followUp?: boolean; steer?: boolean }
+        opts?: { followUp?: boolean; steer?: boolean; deliverAfterTurn?: boolean }
     ): void {
         const hasImages = Array.isArray(images) && images.length > 0;
         if ((!text || !text.trim()) && !hasImages) {
@@ -1003,9 +1003,12 @@ export class SessionRuntime {
         // - 人打的消息、会话看着在跑：prompt + steer。pi 真在忙就排进 steering 队列（当前轮工具
         //   执行完就投递，与原来发 steer 命令等效）；其实已经跑完（结束事件还没送到）就直接开
         //   新轮次，消息不会卡在队列里。
+        // - 例外：人自己选了「排队」（opts.deliverAfterTurn，页面那条发送方式 / Alt+Enter）：
+        //   一律 followUp，pi 在忙就排着、等这一轮整个跑完再交给它。它跟 fromPlugin 那两档不是一回事：
+        //   这是人说的话，只是投递方式由人选。
         const streamingBehavior: "steer" | "followUp" = opts?.steer
             ? "steer"
-            : opts?.followUp
+            : opts?.followUp || opts?.deliverAfterTurn
                 ? "followUp"
                 : this.streaming ? "steer" : "followUp";
         const cmd: Record<string, unknown> = { type: "prompt", message, streamingBehavior };

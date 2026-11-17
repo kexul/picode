@@ -574,14 +574,29 @@
   #imgPreview:empty { display: none; }
   #queueBar { display: flex; flex-direction: column; gap: 2px; padding: 0; border: none; background: transparent; font-size: var(--vscode-font-size); color: var(--vscode-descriptionForeground, inherit); }
   #queueBar:empty, #queueBar.hidden { display: none; }
-  /* 目标条：输入框上头那一条「目标」的账（只在有目标时出现）。
-     平时一行；展开是点开的正文（目标原文 + 验收清单）。 */
+  /* 输入框上头那一条（#queueBar）：两会 = 发送方式的头一行（.qb-mode） + 正排着的那些（.qb-block）。
+     会话闲着的时候整条收掉（见 chat.js 的 renderQueueBar）。 */
   #queueBar .qb-block { overflow: hidden; }
   #queueBar .qb-head { display: flex; align-items: center; gap: 6px; padding: 2px 0; border-radius: 3px; cursor: pointer; user-select: none; }
   #queueBar .qb-head:hover { background: color-mix(in srgb, var(--vscode-list-hoverBackground, rgba(128,128,128,0.1)) 50%, transparent); }
   #queueBar .qb-head:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
-  /* 排队那一条前头那颗点：一颗黄点，不呼吸（它是“这条排着”的记号，动不动都不多说什么）。 */
+  /* —— 那一条的头一行：发送方式（点它换一档）——
+     插话：黄点、不呼吸（这一句要半路插进去，马上就走）；
+     排队：绿点、慢慢呼吸（这一句排着，等这一轮跑完再交给它）。
+     跟会话格那颗点一个呼吸法（pi-pulse），能呼吸的只有真正“在等”的那一档。 */
+  #queueBar .qb-mode { display: flex; align-items: center; gap: 6px; padding: 2px 0; border-radius: 3px; cursor: pointer; user-select: none; }
+  #queueBar .qb-mode:hover { background: color-mix(in srgb, var(--vscode-list-hoverBackground, rgba(128,128,128,0.1)) 50%, transparent); }
+  #queueBar .qb-mode:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+  #queueBar .qb-mode-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground, inherit); }
+  #queueBar .qb-mode.queued .qb-dot {
+    background: var(--vscode-charts-green, #89d185);
+    animation: pi-pulse 1.2s ease-in-out infinite;
+    will-change: opacity;
+  }
+  /* 排队那一条前头那颗点：一颗黄点，不呼吸（它是“这条排着、马上插进去”的记号）。 */
   #queueBar .qb-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--vscode-charts-yellow, #cca700); flex-shrink: 0; }
+  /* 排着的消息自己也换颜色：插话排着的黄点、排队排着的绿点，跟上面那一档一个色 */
+  #queueBar .qb-block.follow .qb-dot { background: var(--vscode-charts-green, #89d185); }
   #queueBar .qb-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground, inherit); }
   #queueBar .qb-body { margin: 1px 0 3px 12px; padding: 0; font-family: inherit; font-size: 0.9em; white-space: pre-wrap; word-break: break-word; color: var(--vscode-foreground); max-height: 160px; overflow: auto; }
   #queueBar .qb-block.collapsed .qb-body { display: none; }
@@ -1635,9 +1650,9 @@
      它们就是用来表明“还在跑”的，停了就跟没了一样（这条跟以前一样，是有意不理那个设置）。 */
   @media (prefers-reduced-motion: reduce) { /* 用量那条现在没有过渡（渐变换不了），这条留着占个位 */ }
 
-  /* 剩下那几样“一直动”的小东西（顶条那颗点的呼吸、齿轮）单独量下来
+  /* 剩下那几样“一直动”的小东西（顶条那颗点的呼吸、齿轮、排队那一档的绿点）单独量下来
      每一样都在 1 个点以内（吐字时），丢了反而让人觉得“怎么不动了”，都留着，电脑和手机一样。
-     两头都不动的只有这几样：排队那条上的黄点、顶边框上那条用量、输入框那圈流光
+     两头都不动的只有这几样：插话那一档的黄点、顶边框上那条用量、输入框那圈流光
      （黄点与横杠这两样没有信息、只是装饰，早先删了；流光 13 个点，删了换成一根绿边）。 */
   /* 工具结果内联图片（read 读图等）：缩略图 + 点击放大 */
   .tc-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 2px; }
