@@ -586,13 +586,25 @@ sealed class NoticeCard : Form
         var titleY = cardTop + PadY;
         if (tag.Length > 0)
         {
-            // 小标签压在卡片上沿上。挑出去那半截没有白底衬着，所以给一圈描边，
+            // 小标签压在卡片上沿上。挑出去那半截没有白底衬着，所以给一圈边框，
             // 不然浅灰的标签糊在桌面壁纸上就看不出来了。
+            //
+            // 边框是「整颗先铺边框色、再往里一圈铺底色」铺出来的，不是拿笔描的：
+            // 描出来的那圈是半透明的，背后壁纸深的地方它就跟着发黑发暗，一颗标签上的边
+            // 深浅还不一样（截图里就是这样）。这么铺出来的那圈是不透明的，背后是深是浅都一个色，
+            // 只剩最外面那条抗锯齿过渡会跟背后混一下——那是形状本身的边，躲不掉。
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            using (var path = Pill(tagRect))
+            using (var outer = Pill(tagRect))
             {
-                using (var fill = new SolidBrush(TagBg)) { g.FillPath(fill, path); }
-                using (var pen = new Pen(TagBorderColor)) { g.DrawPath(pen, path); }
+                using (var fill = new SolidBrush(TagBorderColor)) { g.FillPath(fill, outer); }
+            }
+            var innerRect = new Rectangle(tagRect.X + 1, tagRect.Y + 1, tagRect.Width - 2, tagRect.Height - 2);
+            if (innerRect.Width > 2 && innerRect.Height > 2)
+            {
+                using (var inner = Pill(innerRect))
+                {
+                    using (var fill = new SolidBrush(TagBg)) { g.FillPath(fill, inner); }
+                }
             }
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.Default;
             using (var centered = OneLine())
